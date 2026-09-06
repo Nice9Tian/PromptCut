@@ -52,6 +52,7 @@ export function Inspector({ tab }: { tab: "form" | "code" }) {
   const cardDef = getCard(clip.cardId);
   const magic = allCards().filter(c => c.source === "magicui");
   const native = allCards().filter(c => c.source === "native");
+  const user = allCards().filter(c => c.source === "user");
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
@@ -66,6 +67,11 @@ export function Inspector({ tab }: { tab: "form" | "code" }) {
               onChange={e => actions.setClipCard(clip.id, e.target.value)}
               className="h-6 text-xs bg-neutral-900 border border-neutral-800 rounded px-1 text-neutral-200 outline-none w-24 shrink-0"
             >
+              {user.length > 0 && (
+                <optgroup label="新建">
+                  {user.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </optgroup>
+              )}
               <optgroup label="Magic UI">
                 {magic.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
               </optgroup>

@@ -30,6 +30,8 @@ export const numberTickerCard: CardDef<Params> = {
   id: "mu-number-ticker",
   name: "数字滚动",
   description: "数字从0滚动到目标值",
+  useWhen: "全屏居中的单个大数字弹簧滚动,自带单位和一行说明,数字带千位逗号(12,480)。要机械翻牌滚轮手感用 odometer;要中英引导字加数据来源注脚的实证版式用 stat-proof。",
+  tags: ["数字","滚动"],
   source: "magicui",
   defaults: { value: 100, label: "已完成目标", unit: "%", accent: "" },
   controls: [

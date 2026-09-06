@@ -27,6 +27,8 @@ export const wordRotateCard: CardDef<Params> = {
   id: "mu-word-rotate",
   name: "文字轮换",
   description: "多个词语循环轮换",
+  useWhen: "一个固定前缀后面跟多个同级词循环轮换(如「你是」+「优秀|卓越|完美」),适合并列排比。每词停留 1 秒且写死不可调,循环播放不会停在最后一个词。做不了「不只是 A,更是 B」这种前后半句都变的递进句。",
+  tags: ["轮换","排比","词语"],
   source: "magicui",
   defaults: { words: "优秀|卓越|完美|无瑕", prefix: "你是" },
   controls: [

@@ -1,6 +1,6 @@
 export interface EditorApi {
   backgroundJobStatus(args: { jobId: string }): any;
-  listCards(): any;
+  listCards(args?: { cardId?: string; detail?: string }): any;
   getProject(): any;
   listMedia(): any;
   getSelection(): any;
@@ -22,6 +22,9 @@ export interface EditorApi {
   getTranscript(args: { mediaId: string }): any;
   autoWorkflow(args: { mediaId: string; style?: string; maxCards?: number }): Promise<any>;
   autoWorkflowStatus(args: { jobId: string }): any;
+  fillCaptions(args: { clipId?: string; mediaId?: string; showEn?: boolean }): any;
+  createCard(args: { id: string; source: string; overwrite?: boolean }): Promise<any>;
+  cardAuthoringGuide(): Promise<any>;
 }
 
 export function connectMcpExecutor(getApi: () => EditorApi, onStatus?: (s: { connected: boolean }) => void): () => void {
@@ -63,7 +66,7 @@ export function connectMcpExecutor(getApi: () => EditorApi, onStatus?: (s: { con
 
         try {
           if (tool === "background_job_status") result = api.backgroundJobStatus(args);
-          else if (tool === "list_cards") result = api.listCards();
+          else if (tool === "list_cards") result = api.listCards(args);
           else if (tool === "get_project") result = api.getProject();
           else if (tool === "list_media") result = api.listMedia();
           else if (tool === "get_selection") result = api.getSelection();
@@ -84,6 +87,9 @@ export function connectMcpExecutor(getApi: () => EditorApi, onStatus?: (s: { con
           else if (tool === "get_transcript") result = api.getTranscript(args);
           else if (tool === "auto_workflow") result = await api.autoWorkflow(args);
           else if (tool === "auto_workflow_status") result = api.autoWorkflowStatus(args);
+          else if (tool === "fill_captions") result = api.fillCaptions(args);
+          else if (tool === "create_card") result = await api.createCard(args);
+          else if (tool === "card_authoring_guide") result = await api.cardAuthoringGuide();
           else throw new Error(`未知工具: ${tool}`);
         } catch (err: unknown) {
           ok = false;

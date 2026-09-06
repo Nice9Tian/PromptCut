@@ -76,6 +76,8 @@ export const statProof: CardDef<Params> = {
   id: "stat-proof",
   name: "数字实证",
   description: "巨型数字滚动及中英注脚",
+  useWhen: "口播里出现要当证据用的核心数字(+80%、3 倍、2 万)时,用巨型数字配前后缀、中英引导字和中英数据来源注脚做实证版式。数值取整显示。只想要机械翻牌滚轮手感的大整数计数用 odometer。",
+  tags: ["数字","实证","数据","注脚"],
   source: "native",
   defaults: {
     ...hudDefaults,

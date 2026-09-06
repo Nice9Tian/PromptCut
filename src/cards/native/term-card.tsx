@@ -54,6 +54,8 @@ export const termCard: CardDef<Params> = {
   id: "term-card",
   name: "术语解释卡",
   description: "带拼音或英文小注的名词解释",
+  useWhen: "口播在下定义、解释名词(「所谓」「叫做」「是指」「指的是」)时,把术语和解释做成卡片。**en 小注会被强制大写**,所以只适合放英文,别放拼音。",
+  tags: ["术语","定义","名词","解释"],
   source: "native",
   defaults: {
     ...hudDefaults,

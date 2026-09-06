@@ -25,6 +25,8 @@ export const blurFadeCard: CardDef<Params> = {
   id: "mu-blur-fade",
   name: "模糊浮现",
   description: "文字从模糊中浮现",
+  useWhen: "Magic UI 的整块模糊浮现。要词块逐个浮现的节奏感优先用 blur-text。",
+  tags: ["浮现","模糊","文字"],
   source: "magicui",
   defaults: { text: "你好世界", accent: "", position: "center" },
   controls: [

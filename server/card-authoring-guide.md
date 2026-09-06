@@ -1,31 +1,46 @@
-# PromptCut 自定义卡片开发指南 (Card Authoring Guide)
+# PromptCut 建卡规则
 
-PromptCut 基于 React 架构和 Motion 动画库。你可以为项目编写自定义的动效卡片。
+这份规则通过 `card_authoring_guide` 工具取得。**调 `create_card` 之前必须先读它**，不要凭印象写。
 
-## 卡片契约 (CardDef)
+## 0. 先别急着建卡
 
-每个卡片都是一个独立的 React 组件,并导出一个实现了 `CardDef` 接口的定义对象。
+新建卡片是最后手段，理由：
 
-```typescript
+- 现有卡已经调过版式、动效节奏和主题适配，直接用效果更好；
+- 每多一张卡，以后选卡就多一分噪音。
+
+所以先走这三步：
+
+1. `list_cards()` —— 拿到所有卡的摘要，重点看每张的 `useWhen`（什么时候该选它）和 `tags`。
+2. 找到候选后 `list_cards({ cardId })` —— 拿这张卡的完整 `controls` 和 `defaults`，确认参数够用。
+3. 只有确认**没有任何一张卡能通过调参数达成需求**时，才 `create_card`。
+
+「颜色不对」「文案要换」「位置要挪」都是调参数的事，不要为此建新卡。
+
+## 1. CardDef 契约
+
+每张卡是一个文件，导出一个 `CardDef`：
+
+```tsx
 import { motion } from "motion/react";
 import type { CardDef, CardProps } from "../../kernel/types";
 
-// 定义卡片的参数结构
-interface Params { 
-  text: string; 
+/** 这张卡认哪些参数 */
+interface Params {
+  text: string;
   accent: string;
+  size: number;
 }
 
-// 卡片组件
-function MyCard({ params, playToken }: CardProps<Params>) {
-  // 组件挂载即播放开始。不要用 IntersectionObserver。
-  // playToken 变化时,Stage 会重新挂载本组件,所以它总是能从头播放。
+function PriceTagCard({ params }: CardProps<Params>) {
+  // 挂载即开始播放。不要写「进入视口才播」这类逻辑。
   return (
     <div className="absolute inset-0 grid place-items-center">
-      <motion.div 
-        initial={{ opacity: 0, y: 20 }} 
-        animate={{ opacity: 1, y: 0 }} 
-        style={{ color: params.accent }}
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
+        style={{ color: params.accent, fontSize: params.size }}
       >
         {params.text}
       </motion.div>
@@ -33,103 +48,149 @@ function MyCard({ params, playToken }: CardProps<Params>) {
   );
 }
 
-// 导出卡片定义
-export const myCard: CardDef<Params> = {
-  id: "my-card", 
-  name: "我的标题卡", 
-  description: "一段简单的渐显文字动效", 
-  source: "native",
-  defaults: { text: "Hello", accent: "#ffffff" },
-  // 必须在此定义控件,AI 和界面面板会据此生成参数 schema:
+export const priceTag: CardDef<Params> = {
+  id: "price-tag",              // 小写 kebab-case，全局唯一，必须和 create_card 传的 id 一致
+  name: "价格标签",              // 界面上显示的名字
+  description: "价格数字带弹跳浮现",  // 一句话说清长什么样
+  source: "user",               // AI/用户建的卡一律填 "user"
+  useWhen: "口播报价格、报价区间时，把价格做成主视觉。只是陈述普通数字用 stat-proof。",
+  tags: ["价格", "数字", "标签"],
+  defaults: { text: "¥199", accent: "#ffd166", size: 96 },
   controls: [
-    { key: "text", label: "文字", type: "text" }, 
-    { key: "accent", label: "主色", type: "color" }
+    { key: "text", label: "文字", type: "text", required: true, hint: "要显示的价格，含货币符号" },
+    { key: "accent", label: "主色", type: "color" },
+    { key: "size", label: "字号", type: "number", min: 24, max: 240, step: 4 },
   ],
-  Component: MyCard,
+  Component: PriceTagCard,
 };
 ```
 
-## UI 控件类型
-`CardDef.controls` 支持四种类型的属性控件:
-- `text`: `{ type: "text" }`
-- `number`: `{ type: "number", min?: 0, max?: 100, step?: 1 }`
-- `select`: `{ type: "select", options: [{ value: "v1", label: "Option 1" }] }`
-- `color`: `{ type: "color" }`
+### 字段说明
 
-## 约束与建议
-1. 你的卡片将作为透明层绝对定位(absolute inset-0)放置在 1920x1080 舞台上。
-2. 动画应依赖于 `motion/react` 或纯 CSS。
-3. 请使用项目的 `--pc-*` CSS 变量来适配主题(如 `--pc-accent`, `--pc-fg`)。
-4. **绝对不要**使用 setTimeout 驱动动画,也不要读 `Date.now()`,因为导出时使用的是虚拟时间,须用 `performance.now()`(由内核的 clock 代理)。
+| 字段 | 必填 | 说明 |
+|---|---|---|
+| `id` | ✓ | 小写 kebab-case。不能用 `mu-` 前缀（留给 Magic UI），不能和现有卡重名 |
+| `name` | ✓ | 中文短名，显示在卡片库里 |
+| `description` | ✓ | 一句话说清**外观和动效** |
+| `source` | ✓ | 建新卡固定填 `"user"` |
+| `useWhen` | 强烈建议 | **什么时候该选这张卡**，写给以后的 AI 看。写清触发条件，以及和近义卡怎么区分（「XX 情况用这张，YY 情况用另一张」）。不写的话这张卡以后基本不会被选中 |
+| `tags` | 建议 | 检索关键词 |
+| `defaults` | ✓ | 每个参数的默认值。见下面「默认值规则」 |
+| `controls` | ✓ | 参数控件表。界面面板和 AI 都靠它了解 schema |
+| `Component` | ✓ | React 组件 |
 
-## 用转写结果生成卡片
+### 默认值规则（重要）
 
-素材转写完之后(`transcribe_media` → `get_transcript`),你会拿到:
+`clip.params` 是**稀疏覆盖层**，渲染时才和 `defaults` 合并。所以默认值必须是「不填也说得过去」的东西。
+
+- 能给出合理默认的参数：给一个像样的默认值，让卡片一加上去就有效果。
+- **内容只能来自外部、给不出有意义默认值的参数**（比如字幕正文、转写文本）：
+  默认值留空 **并且** 在 control 上标 `required: true`。
+
+  别放演示文案当默认值。曾经字幕卡的 `lines` 默认放了三行样例，结果 AI 建卡时漏传 `lines`，
+  画面照播那三行与视频无关的文案，看上去像「字幕加好了」——失败被默认值盖住，没有任何一处报错。
+
+标了 `required` 的参数，`add_clip` / `update_clip` 会在写入前校验，为空直接报错。
+`hint` 会一起返回给 AI，写清格式和取值范围。
+
+## 2. 控件类型
+
+只有这四种：
+
+```ts
+{ key, label, type: "text",   required?, hint? }
+{ key, label, type: "number", required?, hint?, min?, max?, step? }
+{ key, label, type: "select", required?, hint?, options: [{ value, label }] }
+{ key, label, type: "color",  required?, hint? }
+```
+
+要一个「列表」参数就用 `text`，自己定一个分隔格式，并在 `hint` 里写清楚
+（例如字幕轨的 `lines` 用换行分条、`|` 分列）。
+
+## 3. 硬性约束
+
+违反前三条的源码 `create_card` 会直接拒绝。
+
+1. **不要用 `Date.now()`**。导出走的是虚拟时间，读真实时间会和画面对不上。
+2. **不要用 `setTimeout` / `setInterval` 驱动动画**。同上，它们不受虚拟时钟控制。
+   动画交给 `motion/react`，需要按时间推进就读组件收到的 `t`。
+3. **不要用 `IntersectionObserver`**。卡片挂载即播放，不存在「滚动进入视口」。
+4. **卡片是 1920×1080 舞台上的透明层**，根元素用 `absolute inset-0`，背景保持透明
+   （除非这张卡就是要铺满底色）。
+5. 字号、间距按 1920×1080 写死像素即可，舞台会整体缩放。
+
+### 可以用的依赖
+
+- `react`
+- `motion/react`（`motion`、`AnimatePresence`、`useTransform` 等）
+- Tailwind class（项目已装 Tailwind）
+- `import type { CardDef, CardProps } from "../../kernel/types"`
+- 复用 HUD 那套位置/主色约定：`import { hudControls, hudDefaults, getPositionClass, accentOf, easeExpoOut, type HudParams } from "../native/hud"`，
+  然后 `interface Params extends HudParams`、`defaults: { ...hudDefaults, ... }`、`controls: [...hudControls, ...]`。
+  这样卡片自动获得「位置」和「主色」两个参数，和内置卡保持一致。
+
+别引其他第三方库——没装的会直接编译失败。
+
+## 4. 组件收到什么
+
+```ts
+interface CardProps<P> {
+  params: P;        // defaults 和 clip.params 合并后的完整参数
+  playToken: number; // 每次重播 +1；Stage 用它作 key 重新挂载，组件里通常不用读
+  t?: number;        // 自 clip 起点起的秒数，逐帧传入
+  duration?: number; // clip 总时长（秒）
+}
+```
+
+**绝大多数卡不需要 `t`**——挂载即播，`motion` 自己会把动画走完。
+只有「跟着时间轴走」的卡才读 `t`：字幕轨（按时间切换当前句）、章节导航（按时间高亮当前章节）。
+如果你的卡要读 `t`，在 `useWhen` 里说明它需要 clip 覆盖整段时间，而不是一小截。
+
+## 5. 建卡流程
+
+```
+card_authoring_guide()                     ← 先读规则（就是这份）
+create_card({ id, source })                ← 落盘 + 热更新 + 自动注册
+list_cards({ cardId: "price-tag" })        ← 确认注册成功、schema 是你想要的
+add_clip({ cardId: "price-tag", start, duration, params })   ← 放上时间轴
+seek({ t: start + 0.5 })                   ← 把播放头挪过去，让用户直接看到效果
+```
+
+源码写到 `src/cards/user/<id>.tsx`，**不需要**改任何注册表文件——该目录是自动扫描的。
+
+`create_card` 落盘前会校验：id 合法且不重名、确实导出了 `CardDef`、
+源码里的 `id` 和参数里的 `id` 一致、必需字段齐全、没用禁用 API、TypeScript 语法能过。
+不合格会返回**具体哪一条不过**，照着改再调一次即可。
+
+改自己刚建的卡：同一个 id 加 `overwrite: true`。想改内置卡请改参数，不要用 create_card 覆盖。
+
+## 6. 用转写结果做卡
+
+素材转写完（`transcribe_media` → `get_transcript`）后拿到：
 
 ```json
-{
-  "engine": "faster-whisper", "model": "small", "language": "zh",
-  "segments": [
-    { "start": 0.0, "end": 1.6, "text": "大家好，欢迎收看本期节目。" },
-    { "start": 1.6, "end": 3.2, "text": "今天我们聊聊视频剪辑。" }
-  ]
-}
+{ "segments": [ { "start": 0.0, "end": 1.6, "text": "大家好，欢迎收看本期节目。" } ] }
 ```
 
 `start` / `end` 是**素材内**的秒数。
 
-### 路子一:铺一条字幕轨
+### 铺字幕轨
 
-`caption-track` 卡的 `lines` 是一段文本,一行一条,格式 `起|止|中文|英文`(英文可省)。
-时间是**相对这张 clip 起点**的秒数,所以要减去 clip 的 `start`:
+**用 `fill_captions`，不要自己拼 `lines` 字符串。**
 
-```js
-const clipStart = 0;
-const lines = transcript.segments
-  .map(s => `${(s.start - clipStart).toFixed(2)}|${(s.end - clipStart).toFixed(2)}|${s.text}|`)
-  .join("\n");
-
-await add_clip({
-  cardId: "caption-track",
-  start: clipStart,
-  duration: transcript.segments.at(-1).end - clipStart,
-  params: { lines, showEn: "false" }
-});
+```
+add_clip({ cardId: "caption-track", start: 0, duration: 整段时长, params: { lines: "占位" } })
+fill_captions({ clipId })
 ```
 
-一整段字幕用**一张**卡就够,不要每句话建一张。
+`fill_captions` 在本地一次算完时间对齐和裁切，几十上百条字幕不用逐条重打，
+既不会错行错时间，也不烧 token。一整段字幕**一张卡**就够，不要每句话建一张。
 
-### 路子二:按段落配动效
+### 按内容配动效
 
-顺着文字稿找可视化的点,在对应时间点插卡。先 `list_cards` 确认参数 schema,再:
+`auto_workflow` 已经把这条路自动化了（切段 + 选卡 + 铺字幕），用户说「自动做」「一键配特效」
+就直接调它，不要自己一张张 `add_clip`。
 
-```js
-for (const s of transcript.segments) {
-  if (/\d+%|增长|涨/.test(s.text)) {
-    await add_clip({ cardId: "growth-curve", start: s.start, duration: s.end - s.start, params: { /* ... */ } });
-  } else if (/第一|第二|首先|其次/.test(s.text)) {
-    await add_clip({ cardId: "checklist", start: s.start, duration: s.end - s.start, params: { /* ... */ } });
-  }
-}
-```
-
-注意别让同一条轨上的 clip 重叠(store 会自动挪开,但结果可能不是你想要的);
-需要并排显示就先 `add_track` 建新的 overlay 轨。
-
-### 什么内容配什么卡（auto_workflow 用的规则）
-
-`auto_workflow` 工具会将文字稿切割成 5 到 15 秒的段落，常驻字幕卡会单独放在一条名为 `字幕` 的 overlay 轨上。每段文字会按以下确定性规则的顺序匹配，先命中先用：
-
-- **数字与增长**（含数字及增长/提升等词汇） → `odometer`
-- **纯数字实证**（数字紧跟 %/倍/万/亿等单位） → `stat-proof`
-- **对比**（对比/相比/vs 等） → `versus-card`
-- **步骤流程**（第一/第二/首先/步骤等） → `step-timeline`
-- **要点清单**（要点/清单/包括等） → `checklist`
-- **引号金句**（含引号或书名号） → `quote-lockup`
-- **强调句**（记住/关键在于/核心是等） → `blur-text`
-- **短感叹句**（小于等于 14 字符且以叹号结尾） → `punch-pill`
-- **术语定义**（所谓/叫做/定义/指的是等） → `term-card`
-- **都不命中** → 不加动效卡（只靠常驻字幕）
-
-## 注册卡片
-将写好的卡片文件保存在 `src/cards/native/` 下,并在 `src/cards/native/index.ts` 中汇总导出即可。注册表会自动加载它,AI 也会通过 `list_cards` 工具立刻知道新卡片的存在。
+要手动精修时，顺着文字稿找可视化的点，用每张卡的 `useWhen` 决定选哪张，
+在对应 segment 的时间点 `add_clip`。注意同一条轨上的 clip 不能重叠
+（store 会自动挪开，但结果多半不是你想要的）；需要并排显示就先 `add_track` 建新的 overlay 轨。

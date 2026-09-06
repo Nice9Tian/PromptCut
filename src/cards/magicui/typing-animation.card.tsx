@@ -23,6 +23,8 @@ export const typingAnimationCard: CardDef<Params> = {
   id: "mu-typing",
   name: "打字机",
   description: "逐字打印动画",
+  useWhen: "逐字打印一行普通文字。**播放时长等于字数乘以每字毫秒数**(默认 120ms,20 字就要 2.4 秒),clip 给短了会打不完。要终端/代码风格用 terminal-3d。",
+  tags: ["打字机","逐字","文字"],
   source: "magicui",
   defaults: { text: "这是一段打字机测试文字", duration: 120 },
   controls: [

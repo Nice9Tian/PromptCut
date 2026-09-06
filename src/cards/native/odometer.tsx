@@ -63,6 +63,8 @@ export const odometer: CardDef<Params> = {
   id: "odometer",
   name: "翻牌计数器",
   description: "大数字翻牌效果",
+  useWhen: "大整数累计量(播放量、用户数、粉丝数)做成机械滚轮翻牌主视觉,配小字 kicker 和一行说明。只支持非负整数,小数会被截断,也没有涨跌符号。要打出带正负号的涨跌幅(+80%、-30%)或需要中英注脚背书,用 stat-proof;百分比进度用 ring-metric。",
+  tags: ["数字","增长","翻牌","变化"],
   source: "native",
   defaults: {
     ...hudDefaults,

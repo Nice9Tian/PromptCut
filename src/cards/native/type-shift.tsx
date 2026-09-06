@@ -76,6 +76,8 @@ export const typeShift: CardDef<Params> = {
   id: "type-shift",
   name: "排版流",
   description: "草稿感自动重排版",
+  useWhen: "做标题过渡、想要文字自动重排的草稿感时用。**内容必须多行且有层级**:首行是主标题、`*` 开头是次重点、`—` 开头是署名。单行标题体现不出重排效果。",
+  tags: ["排版","转场","标题","重排"],
   source: "native",
   defaults: {
     ...hudDefaults,

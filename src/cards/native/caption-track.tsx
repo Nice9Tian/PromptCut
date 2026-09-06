@@ -82,18 +82,39 @@ export const captionTrack: CardDef<Params> = {
   name: "常驻双语字幕",
   description: "根据时间显示双语字幕",
   source: "native",
+  useWhen: "给一整段口播铺常驻字幕。一张卡覆盖整段时间即可,不要每句话建一张;lines 必填,通常用 fill_captions 从文字稿直接灌进来。",
+  tags: ["字幕", "caption", "subtitle", "转写", "双语"],
   defaults: {
     ...hudDefaults,
     position: "bottom",
-    lines: "0|2|好内容的核心是*选题精准*|A sharp topic beats everything else\n2|4|脚本要在前三秒*钩住观众*|Hook your viewer in the first three seconds\n4|6|剪辑节奏决定*完播率*|Editing pace drives completion rate",
+    // 默认留空:字幕内容只能来自文字稿,给不出有意义的默认值。
+    // 以前这里放三行演示文案,缺 lines 时会照播,看上去像"字幕加好了",
+    // 实际显示的是跟视频无关的样例 —— 失败被默认值盖住了。现在缺了就是空的,
+    // 并且 lines 标了 required,建卡时就会被拦下来。
+    lines: "",
     showEn: "true",
     strokeOn: "true",
     strokeW: 4,
     strokeColor: "#000000",
   },
   controls: [
-    ...hudControls,
-    { key: "lines", label: "字幕(起|止|中|英)", type: "text" },
+    // 组件内联写死了 alignItems: flex-end 和 paddingBottom,字幕永远贴底 ——
+    // 通用的 hudControls 里那个「位置」有「居中」选项,但在这张卡上垂直方向根本不生效,
+    // 只有水平方向(靠左/靠右)会变。所以这里换掉标签和选项,只给真能生效的三种,
+    // 免得用户选了「居中」以为字幕会挪到画面中间、AI 也照着填。
+    {
+      key: "position", label: "水平位置", type: "select",
+      options: [
+        { value: "bottom", label: "底部居中" },
+        { value: "left", label: "底部靠左" },
+        { value: "right", label: "底部靠右" },
+      ],
+    },
+    ...hudControls.filter((c) => c.key !== "position"),
+    {
+      key: "lines", label: "字幕(起|止|中|英)", type: "text", required: true,
+      hint: "一行一条字幕,格式 `起|止|中文|英文`(英文可留空),秒数相对本 clip 起点。中文里用 *星号* 包住的词会用主色高亮。可以用 fill_captions 从素材文字稿自动灌入。",
+    },
     { key: "showEn", label: "显示英文", type: "select", options: [{ value: "true", label: "是" }, { value: "false", label: "否" }] },
     { key: "strokeOn", label: "开启描边", type: "select", options: [{ value: "true", label: "是" }, { value: "false", label: "否" }] },
     { key: "strokeW", label: "描边宽度", type: "number" },

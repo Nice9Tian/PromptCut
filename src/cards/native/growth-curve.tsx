@@ -172,6 +172,8 @@ export const growthCurve: CardDef<Params> = {
   id: "growth-curve",
   name: "增长曲线",
   description: "带有动画的平滑折线图",
+  useWhen: "有一串随时间变化的数值要画成走势时用折线。底板固定横屏宽度;**只有最高点会标出数值**,其余点只显示标签名。只有单个数字用 odometer 或 stat-proof,多项比大小用 rank-bars。",
+  tags: ["折线","走势","增长","图表"],
   source: "native",
   defaults: {
     ...hudDefaults,

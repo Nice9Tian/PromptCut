@@ -91,6 +91,8 @@ export const rankBars: CardDef<Params> = {
   id: "rank-bars",
   name: "排名条",
   description: "柱状条形排名及滚动数值",
+  useWhen: "3 到 5 个项目比大小、排榜单时用条形图,条长和整数数值一起滚动,最大值那条自动高亮。**卡片不会自动排序**,rows 要按数值从大到小传进来;项目名不超过 5 字,超出会被截断。单个数字不要用,两项对决用 versus-card,时间走势用 growth-curve。",
+  tags: ["排名","条形图","对比","榜单"],
   source: "native",
   defaults: {
     ...hudDefaults,

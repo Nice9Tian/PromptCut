@@ -65,6 +65,8 @@ export const quoteLockup: CardDef<Params> = {
   id: "quote-lockup",
   name: "金句定格",
   description: "逐行揭示的金句引言",
+  useWhen: "口播里出现引号包起来的原话、名人名言时,定格成引言版式,带左侧主色竖线和 author 署名。正文用 `|` 分成 2 到 3 行短句。极短口号用 punch-pill,强调句用 blur-text。",
+  tags: ["金句","引言","引号","定格"],
   source: "native",
   defaults: {
     ...hudDefaults,

@@ -42,6 +42,8 @@ export const punchPill: CardDef<Params> = {
   id: "punch-pill",
   name: "金句药丸",
   description: "强调核心信息的胶囊设计",
+  useWhen: "极短的重点词、卖点标签或口号(2 到 8 字,不要求感叹号)做成发光胶囊弹入。字号很大且单行不折行,太长会撑破圆角。完整的强调句用 blur-text,引述原话用 quote-lockup。",
+  tags: ["金句","标语","短句","感叹"],
   source: "native",
   defaults: {
     ...hudDefaults,

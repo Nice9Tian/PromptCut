@@ -70,6 +70,8 @@ export const checklist: CardDef<Params> = {
   id: "checklist",
   name: "清单打勾",
   description: "逐条划入并打勾",
+  useWhen: "口播在罗列并列要点(「要点」「包括」「分别是」「三点」「需要」),条目之间没有先后依赖时用它逐条打勾。有先后顺序的步骤用 step-timeline。",
+  tags: ["清单","要点","打勾","罗列"],
   source: "native",
   defaults: {
     ...hudDefaults,

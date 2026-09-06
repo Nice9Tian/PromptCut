@@ -76,6 +76,8 @@ export const versusCard: CardDef<Params> = {
   id: "versus-card",
   name: "对比卡",
   description: "左右对比面板，可高亮胜出者",
+  useWhen: "口播在做对比(「相比」「而不是」「区别在于」「vs」)时,用左右两栏对照,可以高亮胜出的一方。",
+  tags: ["对比","versus","左右","对照"],
   source: "native",
   defaults: {
     ...hudDefaults,

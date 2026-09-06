@@ -2,8 +2,14 @@ export const tools = [
   { name: "background_job_status", description: "查询 stt_install 或 transcribe_media 返回的 jobId，得到 done、ok、error 和进度；done=true 且 ok=false 表示失败，不要继续轮询。", inputSchema: { type: "object", properties: { jobId: { type: "string" } }, required: ["jobId"] }, side: "browser" },
   {
     name: "list_cards",
-    description: "获取系统支持的所有卡片样式(包含 id, name, description, source, controls, defaults)。建卡前必看以了解参数 schema。",
-    inputSchema: { type: "object", properties: {} },
+    description: "列出可用卡片。不带参数返回摘要（id、name、description、useWhen 什么时候用这张卡、tags、参数名列表，带 * 的是必填），一次就能扫完所有卡并选定用哪张。选定之后带 cardId 再调一次拿这张卡的完整 controls 和 defaults，然后才 add_clip。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        cardId: { type: "string", description: "只要这一张卡的完整 schema" },
+        detail: { type: "string", enum: ["summary", "full"], description: "full 表示所有卡都要完整 schema，通常不需要" }
+      }
+    },
     side: "browser"
   },
   {
@@ -26,7 +32,7 @@ export const tools = [
   },
   {
     name: "add_clip",
-    description: "在时间轴上添加一张新卡片。需要提供 cardId 和 start 时间。其他参数可选。返回 clip 对象。",
+    description: "在时间轴上添加一张新卡片。需要提供 cardId 和 start 时间。params 会和卡片 defaults 合并，只写你要改的项即可；但键名必须是该卡真有的参数、标了必填的参数不能为空，否则直接报错——先用 list_cards({cardId}) 看清 schema 再建。字幕卡不要手写 lines，用 fill_captions。",
     inputSchema: {
       type: "object",
       properties: {
@@ -216,6 +222,39 @@ export const tools = [
         jobId: { type: "string" }
       },
       required: ["jobId"]
+    },
+    side: "browser"
+  },
+  {
+    name: "fill_captions",
+    description: "把素材文字稿直接灌进一张 caption-track 字幕卡的 lines，本地按时间裁切对齐，不要自己拼 `起|止|文字` 字符串。clipId 不传时自动找时间轴上唯一那张字幕卡，mediaId 不传时用第一个有文字稿的素材。返回填了多少条。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        clipId: { type: "string", description: "要填的字幕卡；时间轴上有多张时必须指明" },
+        mediaId: { type: "string", description: "文字稿来源素材" },
+        showEn: { type: "boolean", description: "是否显示英文行，默认 false" }
+      }
+    },
+    side: "browser"
+  },
+  {
+    name: "card_authoring_guide",
+    description: "取建卡规则全文（CardDef 契约、控件类型、硬性约束、可用依赖、完整示例）。要用 create_card 新建卡片前**必须先调它**，不要凭印象写。",
+    inputSchema: { type: "object", properties: {} },
+    side: "browser"
+  },
+  {
+    name: "create_card",
+    description: "新建一张动效卡片，源码写入 src/cards/user/<id>.tsx，热更新后自动注册，list_cards 立刻可见。只在现有卡片都满足不了需求时才建新卡——先用 list_cards 确认没有能用的。调用前必须先调 card_authoring_guide 看规则。落盘前会校验 id、CardDef 结构、禁用 API 和语法，不合格直接报错并说明原因。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "小写 kebab-case，全局唯一，例如 price-tag" },
+        source: { type: "string", description: "完整的 .tsx 源码，必须含 `export const xxx: CardDef<Params> = {...}`" },
+        overwrite: { type: "boolean", description: "改写自己之前建的同名卡时传 true" }
+      },
+      required: ["id", "source"]
     },
     side: "browser"
   }

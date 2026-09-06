@@ -78,6 +78,8 @@ export const ringMetric: CardDef<Params> = {
   id: "ring-metric",
   name: "环形指标",
   description: "环形进度与数字同步增加",
+  useWhen: "单个百分比或完成度指标,用环形进度加中心数字表现。",
+  tags: ["百分比","环形","进度","指标"],
   source: "native",
   defaults: {
     ...hudDefaults,
