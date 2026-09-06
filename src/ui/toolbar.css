@@ -386,3 +386,38 @@
   color: var(--ui-fg-faint);
   letter-spacing: 0.02em;
 }
+
+/* ── 顶栏项目名:点一下就地改名 ─────────────────────────
+   展示态是个 button(键盘能 Tab 到、能回车触发),但长得和原来的纯文本标签
+   一模一样;编辑态换成同宽同字号的 input,不让顶栏在两态之间跳一下。 */
+.pc-projname--btn {
+  border: 0;
+  background: transparent;
+  padding: 2px 4px;
+  margin: 0 -4px;
+  border-radius: var(--ui-radius, 4px);
+  font: inherit;
+  color: inherit;
+  letter-spacing: inherit;
+  cursor: text;
+  text-align: left;
+}
+.pc-projname--btn:hover {
+  background: var(--ui-panel-2);
+  color: var(--ui-fg);
+}
+.pc-projname--btn:focus-visible {
+  outline: 1px solid var(--ui-accent);
+  outline-offset: 0;
+}
+.pc-projname--editing {
+  padding: 2px 4px;
+  margin: 0 -4px;
+  border: 1px solid var(--ui-accent);
+  border-radius: var(--ui-radius, 4px);
+  background: var(--ui-panel-2);
+  color: var(--ui-fg);
+  font: inherit;
+  letter-spacing: inherit;
+  outline: none;
+}

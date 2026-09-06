@@ -94,6 +94,66 @@ export function TopBar() {
   const dirty = useStore((s) => s.dirty);
   const projectInput = useRef<HTMLInputElement>(null);
 
+  /** 顶栏项目名就地改名:点一下标签变输入框 */
+  const [renaming, setRenaming] = useState(false);
+  const [draftName, setDraftName] = useState("");
+  const renameInputRef = useRef<HTMLInputElement>(null);
+
+  /**
+   * 用 ref 而不是 renaming 这个 state 当闸门:按 Esc 关掉编辑态时,正在卸载的
+   * input 还会再冒一次 blur,而那个 blur 处理函数捕获的是上一次渲染的
+   * renaming(仍然是 true)——只看 state 的话,取消会被 blur 又提交回来。
+   */
+  const renamingRef = useRef(false);
+
+  const startRename = () => {
+    setDraftName(name);
+    renamingRef.current = true;
+    setRenaming(true);
+  };
+
+  const cancelRename = () => {
+    renamingRef.current = false;
+    setRenaming(false);
+  };
+
+  /**
+   * 收尾改名。Enter 和失焦都走这里,闸门保证只生效一次。
+   * 名字留空退回「未命名」,和项目设置对话框里那条规则保持一致。
+   */
+  const commitRename = () => {
+    if (!renamingRef.current) return;
+    renamingRef.current = false;
+    setRenaming(false);
+    const next = draftName.trim() || "未命名";
+    if (next !== name) actions.setProjectMeta({ name: next });
+  };
+
+  // 进入编辑态就把光标放进去并全选,省得用户自己再点一次、删一遍
+  useEffect(() => {
+    if (!renaming) return;
+    const el = renameInputRef.current;
+    el?.focus();
+    el?.select();
+  }, [renaming]);
+
+  /**
+   * 点到别处就收尾。
+   *
+   * 光靠 onBlur 不够:预览和时间线在 mousedown 里 preventDefault(挡文字选中),
+   * 那会连焦点转移一起挡掉,输入框就一直开着。所以照「⋯」菜单那套,额外在
+   * window 上听 mousedown,点在输入框外面就提交。两条路都进 commitRename,
+   * 由 renamingRef 保证只生效一次。
+   */
+  useEffect(() => {
+    if (!renaming) return;
+    const onDown = (e: MouseEvent) => {
+      if (!renameInputRef.current?.contains(e.target as Node)) commitRename();
+    };
+    window.addEventListener("mousedown", onDown);
+    return () => window.removeEventListener("mousedown", onDown);
+  });
+
   const { skinId, setSkin } = useSkin();
   const layoutMode = useLayoutMode();
 
@@ -264,10 +324,31 @@ export function TopBar() {
   return (
     <div ref={barRef} className="pc-bar pc-bar--main">
       <Logo size={22} />
-      <span className="pc-projname">
-        {name}
-        {dirty && <span className="pc-dirty"> *</span>}
-      </span>
+      {renaming ? (
+        <input
+          ref={renameInputRef}
+          className="pc-projname pc-projname--editing"
+          value={draftName}
+          maxLength={80}
+          placeholder="未命名"
+          onChange={(e) => setDraftName(e.target.value)}
+          onBlur={commitRename}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") commitRename();
+            else if (e.key === "Escape") cancelRename();
+          }}
+        />
+      ) : (
+        <button
+          type="button"
+          className="pc-projname pc-projname--btn"
+          title="点击重命名项目"
+          onClick={startRename}
+        >
+          {name}
+          {dirty && <span className="pc-dirty"> *</span>}
+        </button>
+      )}
       <span className="pc-bar-sep" />
 
       {/* A · 编辑控制:撤销与重做恒为纯图标态 */}
