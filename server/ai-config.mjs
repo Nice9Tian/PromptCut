@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { sealKey, openKey } from './runners/config-crypt.mjs';
 
 function getConfigPath() {
   if (process.env.PROMPTCUT_AI_CONFIG) {
@@ -36,6 +37,8 @@ export function readConfig() {
     if (!merged.api || typeof merged.api !== 'object' || Array.isArray(merged.api)) {
       merged.api = defs.api;
     }
+    // 落盘的是密文,进程内一律用明文:下游(providers、publicConfig)都不用改
+    merged.api.apiKey = openKey(merged.api.apiKey);
     return merged;
   } catch {
     return defs;
@@ -109,8 +112,10 @@ export function writeConfig(partial) {
 
   const p = getConfigPath();
   fs.mkdirSync(path.dirname(p), { recursive: true });
-  fs.writeFileSync(p, JSON.stringify(newConfig, null, 2), 'utf8');
-  
+  // Key 只以密文落盘;返回给调用方的仍是明文那份(publicConfig 会再脱敏一次)
+  const onDisk = { ...newConfig, api: { ...newConfig.api, apiKey: sealKey(newConfig.api.apiKey) } };
+  fs.writeFileSync(p, JSON.stringify(onDisk, null, 2), 'utf8');
+
   return newConfig;
 }
 

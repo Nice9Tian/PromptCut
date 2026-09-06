@@ -148,6 +148,45 @@ export default function vitePluginAi(): Plugin {
         });
       }
 
+      // 排查信息:用户点「诊断」时一次性拿全,复制给我们看。
+      // 里面绝不能有明文 Key —— publicConfig() 已经把它换成 { set, last4 }。
+      server.middlewares.use('/api/ai/diagnostics', async (req, res) => {
+        if (req.method !== 'GET') return sendJson(res, 405, { ok: false, error: 'GET only' });
+        try {
+          const [{ publicConfig }, { setupRoot }, { machineCode }, runners] = await Promise.all([
+            import(new URL('./ai-config.mjs', import.meta.url).href),
+            import(new URL('./runners/cli-runtime.mjs', import.meta.url).href),
+            import(new URL('./runners/machine-id.mjs', import.meta.url).href),
+            getRunner(),
+          ]);
+          res.setHeader('Cache-Control', 'no-store');
+          sendJson(res, 200, {
+            ok: true,
+            generatedAt: new Date().toISOString(),
+            app: {
+              platform: process.platform,
+              arch: process.arch,
+              node: process.version,
+              cliHome: setupRoot(),
+              configPath: process.env.PROMPTCUT_AI_CONFIG || '(默认 %LOCALAPPDATA%\\promptcut\\ai.json)',
+            },
+            machineCode: machineCode(),
+            providers: await runners.listProviders({ refresh: true }),
+            config: publicConfig(),
+          });
+        } catch (e: any) { sendJson(res, 500, { ok: false, error: e.message }); }
+      });
+
+      // 本机识别码:分发 API 配置时当加密口令用。只给摘要后的码,原始指纹不出服务端。
+      server.middlewares.use('/api/ai/machine-code', async (req, res) => {
+        if (req.method !== 'GET') return sendJson(res, 405, { ok: false, error: 'GET only' });
+        try {
+          const { machineCode } = await import(new URL('./runners/machine-id.mjs', import.meta.url).href);
+          res.setHeader('Cache-Control', 'no-store');
+          sendJson(res, 200, { ok: true, code: machineCode() });
+        } catch (e: any) { sendJson(res, 500, { ok: false, error: e.message }); }
+      });
+
       server.middlewares.use('/api/ai/config', async (req, res) => {
         try {
           const { publicConfig, writeConfig } = await import(new URL('./ai-config.mjs', import.meta.url).href);
