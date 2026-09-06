@@ -1,3 +1,8 @@
 @import "tailwindcss";
 
 html, body, #root { height: 100%; margin: 0; background: #111; color: #eee; font-family: system-ui, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
+
+/* 拖面板时别让预览的 iframe 抢走鼠标(见 editor/ResizeHandle.tsx) */
+body[data-pc-resizing] iframe {
+  pointer-events: none;
+}

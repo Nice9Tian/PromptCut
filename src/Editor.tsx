@@ -1,32 +1,98 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import "./cards";
 import { TopBar } from "./editor/TopBar";
 import { Preview } from "./editor/Preview";
 import { LeftPanel } from "./editor/left";
 import { RightPanel } from "./editor/right";
 import { TimelineView } from "./editor/timeline";
+import { ResizeHandle } from "./editor/ResizeHandle";
 import { actions, getState } from "./store/project";
 import { magicuiDemoClips } from "./cards/magicui";
 import { nativeDemoClips } from "./cards/native";
 import { useSkin } from "./skins/useSkin";
 import { motion } from "motion/react";
 
+/** 拖杆宽度(px),和 ResizeHandle 里的 w-1.5 / h-1.5 对应 */
+const HANDLE_W = 6;
+const DEFAULT_LEFT_W = 300;
+const DEFAULT_RIGHT_W = 360;
+const DEFAULT_FOOTER_H = 224;
+const MIN_LEFT_W = 200;
+const MIN_RIGHT_W = 240;
+const MIN_PREVIEW_W = 320;
+const MIN_FOOTER_H = 120;
+
 /**
- * 编辑器布局:顶栏 / 左栏 · 预览 · 右栏 / 底部时间轴。
+ * 面板尺寸:拖动时改 state,松手才写 localStorage(拖一次不写几百条)。
+ */
+function usePanelSize(key: string, initial: number, min: number) {
+  const [value, setValue] = useState(() => {
+    try {
+      const v = Number(localStorage.getItem(key));
+      if (Number.isFinite(v) && v >= min) return v;
+    } catch {}
+    return initial;
+  });
+  const latest = useRef(value);
+  latest.current = value;
+  const api = useMemo(
+    () => ({
+      set: setValue,
+      commit() {
+        try {
+          localStorage.setItem(key, String(Math.round(latest.current)));
+        } catch {}
+      },
+      reset() {
+        setValue(initial);
+        try {
+          localStorage.setItem(key, String(initial));
+        } catch {}
+      },
+    }),
+    [key, initial],
+  );
+  return { value, ...api };
+}
+
+/**
+ * 编辑器布局:顶栏 / 左栏 · 预览 · 右栏 / 底部时间轴。左右栏和时间轴都能拖着改大小(双击复位)。
  * 首次打开时把 10 张演示卡铺到第一条动效轨上,方便测试。
  * 主题变量只挂在预览舞台上(Preview.tsx),编辑器自身的界面不读 --pc-*。
  */
 export default function Editor() {
   useSkin(); // mount data-skin
-  const [footerH, setFooterH] = useState(() => {
-    try {
-      const v = Number(localStorage.getItem("pc.timeline.h"));
-      if (v >= 120) return v;
-    } catch {}
-    return 224;
-  });
-  const footerRef = useRef(footerH);
-  footerRef.current = footerH;
+  const gridRef = useRef<HTMLDivElement>(null);
+  /** 这一行里能分的总宽度(拿不到就退回窗口宽) */
+  const room = () => gridRef.current?.clientWidth ?? window.innerWidth;
+
+  const left = usePanelSize("pc.left.w", DEFAULT_LEFT_W, MIN_LEFT_W);
+  const right = usePanelSize("pc.right.w", DEFAULT_RIGHT_W, MIN_RIGHT_W);
+  const footer = usePanelSize("pc.timeline.h", DEFAULT_FOOTER_H, MIN_FOOTER_H);
+
+  // 可用宽度变小(窗口拉窄、上次存的宽度放不下)时按比例收两侧,给预览留住 MIN_PREVIEW_W。
+  // 用 ResizeObserver 而不是 window resize 事件:布局宽度变化的原因不止窗口大小一种。
+  useEffect(() => {
+    const el = gridRef.current;
+    if (!el) return;
+    const clamp = () => {
+      const room = el.clientWidth - MIN_PREVIEW_W - HANDLE_W * 2;
+      const total = left.value + right.value;
+      if (room <= 0 || total <= room) return;
+      const scale = room / total;
+      left.set(Math.max(MIN_LEFT_W, Math.floor(left.value * scale)));
+      right.set(Math.max(MIN_RIGHT_W, Math.floor(right.value * scale)));
+    };
+    clamp();
+    const ro = new ResizeObserver(clamp);
+    ro.observe(el);
+    // 两条路都留着:窗口缩放走 resize 事件,布局本身变宽变窄走 ResizeObserver
+    window.addEventListener("resize", clamp);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", clamp);
+    };
+  }, [left.value, right.value, left.set, right.set]);
 
   useEffect(() => {
     const p = getState().project;
@@ -56,19 +122,44 @@ export default function Editor() {
   return (
     <div className="h-full flex flex-col bg-neutral-950 text-neutral-100">
       <TopBar />
-      <div className="flex-1 min-h-0 grid" style={{ gridTemplateColumns: "300px 1fr 360px" }}>
+      <div
+        ref={gridRef}
+        className="flex-1 min-h-0 grid"
+        style={{ gridTemplateColumns: `${left.value}px ${HANDLE_W}px minmax(0, 1fr) ${HANDLE_W}px ${right.value}px` }}
+      >
         <motion.aside 
           initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.28, delay: 0, ease: [0.16, 1, 0.3, 1] }}
           className="min-h-0 border-r border-neutral-800 overflow-hidden"
         >
           <LeftPanel />
         </motion.aside>
+        <ResizeHandle
+          axis="x"
+          value={left.value}
+          min={MIN_LEFT_W}
+          max={() => room() - right.value - MIN_PREVIEW_W - HANDLE_W * 2}
+          onChange={left.set}
+          onCommit={left.commit}
+          onReset={left.reset}
+          title="拖动调整左栏宽度,双击复位"
+        />
         <motion.main 
           initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.28, delay: 0.04, ease: [0.16, 1, 0.3, 1] }}
           className="min-h-0 min-w-0 p-2"
         >
           <Preview />
         </motion.main>
+        <ResizeHandle
+          axis="x"
+          value={right.value}
+          min={MIN_RIGHT_W}
+          max={() => room() - left.value - MIN_PREVIEW_W - HANDLE_W * 2}
+          invert
+          onChange={right.set}
+          onCommit={right.commit}
+          onReset={right.reset}
+          title="拖动调整右栏宽度,双击复位"
+        />
         <motion.aside 
           initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.28, delay: 0.08, ease: [0.16, 1, 0.3, 1] }}
           className="min-h-0 border-l border-neutral-800 overflow-hidden"
@@ -76,29 +167,20 @@ export default function Editor() {
           <RightPanel />
         </motion.aside>
       </div>
-      <div
-        className="h-1.5 shrink-0 cursor-row-resize bg-neutral-800 hover:bg-neutral-600"
-        title="拖动调整时间轴高度"
-        onPointerDown={(e) => {
-          const startY = e.clientY;
-          const startH = footerH;
-          const el = e.currentTarget;
-          el.setPointerCapture(e.pointerId);
-          const onMove = (ev: PointerEvent) => setFooterH(Math.max(120, Math.min(window.innerHeight * 0.7, startH + (startY - ev.clientY))));
-          const onUp = () => {
-            el.removeEventListener("pointermove", onMove);
-            el.removeEventListener("pointerup", onUp);
-            try {
-              localStorage.setItem("pc.timeline.h", String(footerRef.current));
-            } catch {}
-          };
-          el.addEventListener("pointermove", onMove);
-          el.addEventListener("pointerup", onUp);
-        }}
+      <ResizeHandle
+        axis="y"
+        value={footer.value}
+        min={MIN_FOOTER_H}
+        max={() => window.innerHeight * 0.7}
+        invert
+        onChange={footer.set}
+        onCommit={footer.commit}
+        onReset={footer.reset}
+        title="拖动调整时间轴高度,双击复位"
       />
       <motion.footer 
         initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.28, delay: 0.12, ease: [0.16, 1, 0.3, 1] }}
-        className="border-t border-neutral-800 overflow-hidden shrink-0 flex flex-col" style={{ height: footerH }}
+        className="border-t border-neutral-800 overflow-hidden shrink-0 flex flex-col" style={{ height: footer.value }}
       >
         <TimelineView />
       </motion.footer>
