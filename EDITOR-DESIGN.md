@@ -25,6 +25,13 @@
 
 ## 左栏:两级分页(src/editor/left/)
 
+> 二级分页栏**下面**还有一条统一导航条 `AssetToolbar.tsx`(素材下的三档共用):左边「+」按分页分流
+> (卡片=清空搜索回顶、视频=导入视频文件、字幕=选 .srt),右边搜索框(三档各记各的搜索词)。
+> 素材下第一档是 `StyleTab.tsx`「全局风格」——主题卡列表,切换调 `setProjectMeta({ themeId })`,
+> 顶栏不再有主题下拉。视频卡右键多一项「以视频比例作为项目比例」。
+> 参数表里 key 命中 speaker/talking/口播 之类的 text 控件会多一个「…」按钮,
+> 打开 `SpeakerPicker.tsx` 从素材或本地文件选口播视频。
+
 ```
 顶级   素材 | 编辑
 二级   素材 → 卡片 / 视频 / 字幕        编辑 → 参数 / 代码
@@ -94,18 +101,35 @@ MIME 常量和拖动载荷都在 `src/editor/dnd.ts`:
 - **时间 ↔ 像素一律走 `xOfTime()` / `timeOfX()`**,不要直接乘 `pxPerSec`,否则会整体偏掉一个间距。
   卡尺刻度、片段、播放头、落点预览、插入缝、内容宽度、缩放锚点、落区提示都走这两个函数。
 - 顶部 `RangeBar`(`RANGE_H = 20`,吸顶,在卡尺上面)是「开始 — 结束」范围卡标:
-  左边那枚钉在 0,右边那枚显示总时长、**可以拖**——拖动时只动本地状态,松手才 `setProjectMeta({ duration })`,
+  左边那枚钉在 0,右边那枚显示总时长、**可以拖**——拖动时只动本地状态,松手才 `setDurationManual(sec)`(见下面「总时长」一节),
   所以一次拖动只占一步撤销。播放头从卡尺开始画(`<Playhead top={RANGE_H} />`),不压住卡标。
 
 ## 序列换序(拖行头)
 
 - `timeline/useReorder.ts`:按住行头上下拖就能调顺序,不用 HTML5 拖放(那套没法做预览和动画)。
 - 拖动过程中**不改文档**,只在 context 里放一份 `reorder = { id, from, to, dy }`:
-  被拖的那条跟着指针走(不带过渡),让位的那几条平移一个 `TRACK_H`、带 150ms 过渡——
+  被拖的那条跟着指针走(不带过渡),让位的那几条平移一个行高(可变 `trackH`,见「行高三档」)、带 150ms 过渡——
   于是松手前就能看到排完之后的样子。
 - 行头(`TrackHeader`)和轨道行(`TrackRow`)读的是同一个 `useRowOffset(index, trackId)`,所以整条序列一起动。
 - 松手先把被拖的那条滑到目标格(140ms),动画走完才 `actions.moveTrack`,落位不会闪。
 - 位移不足 3px 当成点击(不进换序态);`button` / `input` 上按下不触发拖动,所以改名、显隐、锁定照常。
+
+## 时间轴的布局、行高与总时长
+
+- **行头列宽可调**:`utils.ts` 只留 `HEADER_W_DEFAULT = 180 / MIN = 120 / MAX = 420`,当前值在 `TimelineContext`
+  (localStorage `promptcut.timeline.headerW`),行头右缘嵌一根 `ResizeHandle axis="x"`,双击复位。
+  **凡是要用行头宽的地方都读 context,不要再写死 200**(滚轮缩放锚点、播放头自动滚动、拖动自动横滚都在用)。
+- **行高三档**:`ROW_SIZE_H = { small: 28, medium: 44, large: 72 }`,默认 medium,档位记 localStorage,
+  由 `timeline/Toolbar.tsx` 切换。`TRACK_H` 常量已经没有了——`TrackRow / TrackHeader / InsertZones /
+  NewTrackZone / useReorder` 一律从 context 读 `trackH`。中/大档片段里显示摘要(卡片段取第一个 text 控件的值,
+  没有就用卡片描述;素材段显示文件名 + 时长),小档保持单行。
+- **总时长**:store 里多了 `durationManual`(null = 从没手动设过)和两个 action——
+  `setDurationManual(sec)`(RangeBar 拖动用,进撤销栈)、`syncDuration(sec)`(自动跟随用,不进撤销栈)。
+  规则:没手动设过就跟着内容走(最后一个片段的 end + 2 秒,只伸不缩);手动设过就以手动值为底,
+  内容超出继续伸、内容缩回退回手动值。
+- **底部自定义滚动条**(`timeline/Scrollbar.tsx`):条身 = `[0, duration]`,滑块 = 当前可视区间;
+  拖滑块中间平移(改 scrollLeft),拖两端把手改 `pxPerSec`(缩放),双击复位。原生横条用 CSS 隐藏了(竖条保留),
+  Ctrl+滚轮缩放行为不变。
 
 ## 播放头 / 卡尺(scrub)
 
@@ -142,9 +166,46 @@ MIME 常量和拖动载荷都在 `src/editor/dnd.ts`:
 - 只改卡片参数不重挂载(免得每敲一个字画面闪一下);片段的位置/时长/用哪张卡/画布尺寸变了才重算这一帧。
 - 于是「同一个 t = 同一帧」:反复跳到同一秒画面完全一致,和导出用的是同一份卡片代码和同一套钉时间的办法。
 
+### 预览窗口的外壳(src/editor/preview/)
+
+- `ControlBar.tsx` 底部控制栏:播放/暂停、重播(纯图标),时间显示「当前 / 总时长」,点当前时间就地变输入框,
+  支持 `12.5` 和 `0:12.5` 两种写法,回车生效、Esc 取消。播放控制原来在顶栏,已经搬到这里,顶栏不再有。
+- `ToolBar.tsx` 顶部工具条:箭头(选择) / T(文字) / 十字(移动),`ToolType = "select" | "text" | "move"`。
+- 画布交互:`kernel/Stage.tsx` 给每个 clip 的包装 div 加了 `data-pc-clip`(**只加了这一个属性,接口没动**),
+  `StageView` 增加 `rects()` 返回活跃卡片在舞台坐标里的矩形;Preview 在 iframe 上盖一层覆盖层做命中测试。
+  移动工具只在 pointerup 写一次 `setClipParams(id, {x, y})`(拖动中写会冲垮撤销栈);
+  文字工具双击改第一个 text 控件;右键菜单两项:引用到 AI、删除。
+- 引用契约:预览派发 `window` 上的 `CustomEvent("pc-quote-clip", { detail: { clipId, cardId, label } })`,
+  AI 栏监听并插进输入框。
+- `MiniScrubber.tsx`:只在对话式布局下出现的播放器式进度条(点击/拖动 seek,按 duration 画片段分布)。
+
+## 布局模式与项目设置
+
+- `src/editor/layoutMode.ts`:`"classic" | "chat"`,localStorage `pc.layout.mode`,`useLayoutMode()` 订阅。
+  对话式(chat)下 `Editor.tsx` 只渲染预览 + AI 栏,左栏、时间轴、竖拖杆都不渲染;
+  三个 `usePanelSize` 和 clamp 的 effect 仍然无条件调用,hooks 顺序不能因模式而变。
+- 顶栏(`src/ui/toolbar.css` 的 `.pc-bar`)**永不换行**:`ResizeObserver` 量顶栏自身宽度,
+  按 wide ≥1180 / icon ≥880 / narrow 三档降级(带 40px 滞回)。文字标签始终留在 DOM 里,
+  靠 `.pc-btn-label` 的 max-width + opacity 收起,**不要卸载节点**,否则没有过渡。
+  窄档把「皮肤 + 布局 + 项目设置」整组收进 ⋯ 菜单(portal + fixed,因为 `.pc-bar` 现在裁切溢出)。
+- `src/editor/ProjectSettingsDialog.tsx`:16:9 / 4:3 × 横版 / 竖版 → 1920x1080 / 1080x1920 / 1440x1080 / 1080x1440,
+  确定后 `setProjectMeta({ width, height })`。
+
 ## 主题契约(src/themes/index.ts)
 
 `themes: Theme[]`、`getTheme(id)`、`themeStyle(id)` → 一组 `--pc-*` CSS 变量,Editor 和 Preview 已经把它挂到根元素和舞台上。卡片只读变量:`--pc-accent`、`--pc-fg`、`--pc-fg-muted`、`--pc-fg-faint`、`--pc-glass-bg`、`--pc-glass-border`、`--pc-glass-blur`、`--pc-radius`、`--pc-font`、`--pc-font-mono`、`--pc-shadow`。
+
+## AI 栏:会话历史与附件
+
+- 历史存在服务端:`server/vite-plugin-chats.ts` 提供 list/get/save/delete,落盘 `<项目根>/.pc-chats/<id>.json`
+  (原子写;list 只返元信息,搜索在标题+正文里做)。localStorage 只存**当前会话 id**,不存正文。
+- 附件:每个会话一个 `<项目根>/.pc-work/<conversationId>/`。选文件后前端**先同步插入 importing 占位卡片**
+  (在任何 await 之前),再走两条通道之一——桌面壳拿得到 `file.path` 就交给 `server/runners/copy-attachment.mjs`
+  子进程复制、立即返回 jobId 前端轮询;浏览器就用 `stream/promises.pipeline` 直写磁盘(512MB 上限)。
+  失败变红可重试。删会话连带递归删 `.pc-work/<id>/`。
+- `.pc-chats/` 和 `.pc-work/` 已进 `.gitignore`。
+- 遗留:`useAiChat.ts` 里旧的 `localStorage.aiChat:<provider>` 历史仍与服务端历史并存,切 provider 会覆盖 messages;
+  会话 json 的 `sessionId` 目前还传 undefined。要彻底统一得改 `useAiChat.ts`。
 
 ## MCP / AI 契约
 
