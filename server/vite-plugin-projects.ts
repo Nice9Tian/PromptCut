@@ -17,6 +17,11 @@ const EXT = ".proc";
 /** 草稿 id 只允许这些字符:直接当文件名用,不能让 ../ 之类跑出目录 */
 const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 
+/** 导出给测试用:这道校验是唯一挡住路径穿越的东西,值得单独钉住 */
+export function isValidDraftId(id: string): boolean {
+  return ID_RE.test(id);
+}
+
 function projectsDir(root: string): string {
   const dir = path.join(root, DIR);
   fs.mkdirSync(dir, { recursive: true });
@@ -24,7 +29,7 @@ function projectsDir(root: string): string {
 }
 
 function fileFor(root: string, id: string): string | null {
-  if (!ID_RE.test(id)) return null;
+  if (!isValidDraftId(id)) return null;
   return path.join(projectsDir(root), id + EXT);
 }
 

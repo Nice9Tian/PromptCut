@@ -10,6 +10,13 @@ import { exportProjectJson } from "./index";
  * 兼容读入旧的 `.promptcut.json`(那时候是裸的 Project),所以 `parseProc` 两种都吃。
  *
  * 素材本身不进 .proc,只记文件名 —— 一份编排几十 KB,塞进视频就没法发给别人了。
+ *
+ * 一条不变量:**读回来的 clip.params 必须原样保留,这里绝不补默认值。**
+ * clip.params 现在是写入时物化的(store 的 addCardClip / setClipCard 会把 defaults
+ * 展开成全量存进 clip),所以文件里存的就是全套真值;这里再合一次 defaults 只会
+ * 把用户改过的值悄悄盖回去。Stage 里那层 {...defaults, ...params} 只是给
+ * 「卡片后来新增了参数、老 clip 缺这个键」兜底,不是这里的职责。
+ * 已验证:内存往返和过磁盘往返,params 都逐字节相同。
  */
 
 export const PROC_EXT = ".proc";
