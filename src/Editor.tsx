@@ -129,97 +129,92 @@ export default function Editor() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  const isChat = layoutMode === "chat";
+
+  // 两种布局共用同一棵元素树,只把左栏、两个横向把手和时间轴按模式开关。
+  // 不能写成 `isChat ? <整棵 A> : <整棵 B>`:那样 React 认为右栏换了位置,
+  // 会把 RightPanel 连同里面的 AiPanel 卸载重建——正在跑的对话会当场断掉
+  // (运行中的回复丢失、runId 丢了连「停止」都点不了)。
+  // 这里用 `{!isChat && …}` 逐个开关:JSX 的兄弟槽位是定长的,false 也占位,
+  // 所以右栏在两种模式下始终是同一个槽位,组件实例得以保留。
   return (
     <div className="h-full flex flex-col bg-neutral-950 text-neutral-100">
       <TopBar />
-      {layoutMode === "chat" ? (
-        <div
-          ref={gridRef}
-          className="flex-1 min-h-0 grid"
-          style={{ gridTemplateColumns: `minmax(0, 1fr) ${right.value}px` }}
-        >
-          <motion.main
-            initial={{ opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.28, delay: 0.04, ease: [0.16, 1, 0.3, 1] }}
-            className="min-h-0 min-w-0 p-2"
-          >
-            <Preview />
-          </motion.main>
+      <div
+        ref={gridRef}
+        className="flex-1 min-h-0 grid"
+        style={{
+          gridTemplateColumns: isChat
+            ? `minmax(0, 1fr) ${right.value}px`
+            : `${left.value}px ${HANDLE_W}px minmax(0, 1fr) ${HANDLE_W}px ${right.value}px`,
+        }}
+      >
+        {!isChat && (
           <motion.aside
-            initial={{ opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.28, delay: 0.08, ease: [0.16, 1, 0.3, 1] }}
-            className="min-h-0 border-l border-neutral-800 overflow-hidden"
+            initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.28, delay: 0, ease: [0.16, 1, 0.3, 1] }}
+            className="min-h-0 border-r border-neutral-800 overflow-hidden"
           >
-            <RightPanel />
+            <LeftPanel />
           </motion.aside>
-        </div>
-      ) : (
-        <>
-          <div
-            ref={gridRef}
-            className="flex-1 min-h-0 grid"
-            style={{ gridTemplateColumns: `${left.value}px ${HANDLE_W}px minmax(0, 1fr) ${HANDLE_W}px ${right.value}px` }}
-          >
-            <motion.aside 
-              initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.28, delay: 0, ease: [0.16, 1, 0.3, 1] }}
-              className="min-h-0 border-r border-neutral-800 overflow-hidden"
-            >
-              <LeftPanel />
-            </motion.aside>
-            <ResizeHandle
-              axis="x"
-              value={left.value}
-              min={MIN_LEFT_W}
-              max={() => room() - right.value - MIN_PREVIEW_W - HANDLE_W * 2}
-              onChange={left.set}
-              onCommit={left.commit}
-              onReset={left.reset}
-              title="拖动调整左栏宽度,双击复位"
-            />
-            <motion.main 
-              initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.28, delay: 0.04, ease: [0.16, 1, 0.3, 1] }}
-              className="min-h-0 min-w-0 p-2"
-            >
-              <Preview />
-            </motion.main>
-            <ResizeHandle
-              axis="x"
-              value={right.value}
-              min={MIN_RIGHT_W}
-              max={() => room() - left.value - MIN_PREVIEW_W - HANDLE_W * 2}
-              invert
-              onChange={right.set}
-              onCommit={right.commit}
-              onReset={right.reset}
-              title="拖动调整右栏宽度,双击复位"
-            />
-            <motion.aside 
-              initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.28, delay: 0.08, ease: [0.16, 1, 0.3, 1] }}
-              className="min-h-0 border-l border-neutral-800 overflow-hidden"
-            >
-              <RightPanel />
-            </motion.aside>
-          </div>
+        )}
+        {!isChat && (
           <ResizeHandle
-            axis="y"
-            value={footer.value}
-            min={MIN_FOOTER_H}
-            max={() => window.innerHeight * 0.7}
-            invert
-            onChange={footer.set}
-            onCommit={footer.commit}
-            onReset={footer.reset}
-            title="拖动调整时间轴高度,双击复位"
+            axis="x"
+            value={left.value}
+            min={MIN_LEFT_W}
+            max={() => room() - right.value - MIN_PREVIEW_W - HANDLE_W * 2}
+            onChange={left.set}
+            onCommit={left.commit}
+            onReset={left.reset}
+            title="拖动调整左栏宽度,双击复位"
           />
-          <motion.footer 
-            initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.28, delay: 0.12, ease: [0.16, 1, 0.3, 1] }}
-            className="border-t border-neutral-800 overflow-hidden shrink-0 flex flex-col" style={{ height: footer.value }}
-          >
-            <TimelineView />
-          </motion.footer>
-        </>
+        )}
+        <motion.main
+          initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.28, delay: 0.04, ease: [0.16, 1, 0.3, 1] }}
+          className="min-h-0 min-w-0 p-2"
+        >
+          <Preview />
+        </motion.main>
+        {!isChat && (
+          <ResizeHandle
+            axis="x"
+            value={right.value}
+            min={MIN_RIGHT_W}
+            max={() => room() - left.value - MIN_PREVIEW_W - HANDLE_W * 2}
+            invert
+            onChange={right.set}
+            onCommit={right.commit}
+            onReset={right.reset}
+            title="拖动调整右栏宽度,双击复位"
+          />
+        )}
+        <motion.aside
+          initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.28, delay: 0.08, ease: [0.16, 1, 0.3, 1] }}
+          className="min-h-0 border-l border-neutral-800 overflow-hidden"
+        >
+          <RightPanel />
+        </motion.aside>
+      </div>
+      {!isChat && (
+        <ResizeHandle
+          axis="y"
+          value={footer.value}
+          min={MIN_FOOTER_H}
+          max={() => window.innerHeight * 0.7}
+          invert
+          onChange={footer.set}
+          onCommit={footer.commit}
+          onReset={footer.reset}
+          title="拖动调整时间轴高度,双击复位"
+        />
+      )}
+      {!isChat && (
+        <motion.footer
+          initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.28, delay: 0.12, ease: [0.16, 1, 0.3, 1] }}
+          className="border-t border-neutral-800 overflow-hidden shrink-0 flex flex-col" style={{ height: footer.value }}
+        >
+          <TimelineView />
+        </motion.footer>
       )}
     </div>
   );
