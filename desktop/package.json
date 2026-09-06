@@ -12,7 +12,8 @@
     "build": "tauri build",
     "smoke": "node scripts/smoke-all.mjs",
     "make-patch": "node scripts/make-patch.mjs",
-    "release": "node scripts/build-release.mjs"
+    "release": "node scripts/build-release.mjs",
+    "make-extension": "node scripts/make-extension.mjs"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2"

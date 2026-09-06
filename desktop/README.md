@@ -41,11 +41,11 @@ npm run build
 > - Rust 首次编译 Tauri 及其依赖约 5–15 分钟，后续增量编译很快。
 > - 构建产物在 `src-tauri/target/release/bundle/nsis/` 下。
 
-## 发布：安装包 + 更新补丁
+## 发布：安装包 + 更新补丁 + 拓展库包
 
 日常改动绝大多数只落在 Node 那一半（`src/`、`server/`、`dist/`），Rust 壳和
 Chrome / ffmpeg / Python 三个大块一动不动。完整安装包压出来 320 MB（装开约 1 GB），
-而这些改动本身通常只有几 MB，所以每次发布产出两个东西：
+而这些改动本身通常只有几 MB。加上可选能力那些几十 MB 的依赖和模型，一共三种产物：
 
 ```powershell
 cd desktop
@@ -58,12 +58,13 @@ commit，而不是把工作区里未提交的东西一起发出去（多人同�
 要紧）。被排除的文件会在日志里逐条列出来。只有源码走 worktree，Chrome /
 ffmpeg / Python / Rust 编译缓存还是用 `desktop/` 下原来那份，不会因此变慢。
 
-| 产物                                 | 大小      | 什么时候用                                   |
-| ------------------------------------ | --------- | -------------------------------------------- |
-| `release/PromptCut-<版本>-setup.exe` | ~320 MB   | 第一次安装；内核代次变了；补丁装不上时的兜底 |
-| `release/PromptCut-patch-<版本>.exe` | 几 MB起   | 已经装过，只是更新 Node 那半边               |
+| 产物                                     | 大小    | 什么时候用                                   |
+| ---------------------------------------- | ------- | -------------------------------------------- |
+| `release/PromptCut-<版本>-setup.exe`     | ~320 MB | 第一次安装；内核代次变了；补丁装不上时的兜底 |
+| `release/PromptCut-patch-<版本>.exe`     | 几 MB起 | 已经装过，只是更新 Node 那半边               |
+| `release/PromptCut-ext-<名字>-<版本>.exe` | 几十 MB | 可选能力（语音识别、镜头识别），按需装       |
 
-两个都是 exe，用户双击就装，不用先解压。补丁那个是 NSIS 自解压壳：把内容解到
+前两个都是 exe，用户双击就装，不用先解压。补丁那个是 NSIS 自解压壳：把内容解到
 `$PLUGINSDIR`（NSIS 退出时自动清，不会在 `%TEMP%` 留几百 MB 残骸），然后运行
 `apply-patch.ps1`。它会核对安装位置和内核代次、关掉正在运行的程序（只认可执行
 文件在目标目录下的那些）、备份当前版本再覆盖，逐个文件校验 SHA-256，任何一步
@@ -121,6 +122,34 @@ npm run make-patch                  # 只跑打补丁这一步
 ```powershell
 release\PromptCut-patch-0.2.3.exe -WhatIf
 ```
+
+### 拓展库包
+
+语音识别和镜头识别要额外的 Python 依赖和模型。默认是运行时 `pip install` 现下载，
+断网、内网或者国内网络不通就装不上，而且每台机器都要重下一遍。拓展库包把 wheel
+和模型预先打好，**安装过程全程离线**（`pip --no-index`，明确禁掉 PyPI）。
+
+```powershell
+npm run make-extension -- shots --model <transnetv2.onnx 的路径>
+npm run make-extension -- stt
+```
+
+`transnetv2.onnx` 怎么来见 [`tools/transnetv2/README.md`](../tools/transnetv2/README.md)。
+产物约 52 MB（26 MB wheel + 30 MB 模型）。
+
+几个要点：
+
+- **wheel 用自带解释器 `pip download`**，不是开发机的 Python。wheel 的 ABI 标签
+  （`cp311`）必须和用户机器上那个解释器对得上，否则装上去 import 不了。
+- **拓展只带依赖和模型，用到它们的代码在应用里**。所以每个拓展声明 `requiresApp`，
+  安装器读 `runtime/VERSIONS.json` 比对，版本太旧**在动手之前**就拒绝——不然用户
+  白等一分钟，盘上还多出一堆没人用的 wheel。
+- **模型落在 `%APPDATA%\com.promptcut.desktop\models`**，不在安装目录里，卸载软件
+  不会把它删掉。依赖落在 `<安装目录>\runtime\pylibs`。
+- 装完会让程序自己跑一次 `status` 自检，**只有它回报 `ready: true` 才算成功**；
+  文件到位但代码不认，同样算失败。
+
+拓展有自己的版本号，和应用版本、外壳版本三者独立。
 
 ## 开发期
 
@@ -196,6 +225,9 @@ desktop/
     apply-patch.ps1               补丁安装器（随补丁包发给用户，不在这里运行）
     apply-patch.cmd               补丁包里的「安装更新.cmd」
     patch-installer.nsi           补丁 exe 的自解压外壳(NSIS,须带 UTF-8 BOM)
+    make-extension.mjs            打拓展库包(离线依赖 + 模型)
+    apply-extension.ps1           拓展包安装器(随包发给用户)
+    extension-installer.nsi       拓展 exe 的自解压外壳(同样须带 BOM)
     smoke-procs.mjs               进程树工具（共用）
     smoke-boot.mjs                启动冒烟
     smoke-shutdown.mjs            关闭冒烟
@@ -220,4 +252,6 @@ desktop/
     PromptCut-<版本>-setup.exe    完整安装包
     PromptCut-patch-<版本>.exe    更新补丁(双击即装)
     manifest-<版本>.json          该版本的文件清单，下一次发布拿它算差异
+    PromptCut-ext-<名字>-<版本>.exe  拓展库包
+    ext-<名字>-<版本>.json        拓展包清单
 ```
