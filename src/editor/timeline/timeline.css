@@ -11,3 +11,6 @@
 .clip-playhead {
   clip-path: polygon(0 0, 100% 0, 50% 100%);
 }
+
+/* 自定义横向滚动条接管后隐藏原生横条，竖条保留。 */
+.pc-tl-scroll::-webkit-scrollbar:horizontal { height: 0; }

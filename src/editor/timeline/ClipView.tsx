@@ -2,17 +2,29 @@ import { useState } from "react";
 import { useTimelineContext } from "./TimelineContext";
 import { actions, useStore, getState } from "../../store/project";
 import { getCard } from "../../kernel/registry";
-import { snapTime, isOccupied, getGap, xOfTime } from "./utils";
+import { snapTime, isOccupied, getGap, xOfTime, formatTime } from "./utils";
 import { TrackClip, Track } from "../../kernel/project";
 import { useDrag } from "./useDrag";
 import { ContextMenu } from "./ContextMenu";
 
 export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
-  const { pxPerSec, trackAreaRef, setDraggingClipId, setDraggingTrackId } = useTimelineContext();
+  const { pxPerSec, trackAreaRef, setDraggingClipId, setDraggingTrackId, rowSize } = useTimelineContext();
   const selection = useStore((s) => s.selection);
   const isSelected = selection.includes(clip.id);
   const cardDef = clip.cardId ? getCard(clip.cardId) : null;
   const label = clip.cardId ? (cardDef ? cardDef.name : "未知卡片") : clip.label;
+
+  let subtitle = "";
+  if (clip.cardId && cardDef) {
+    const textControl = cardDef.controls.find((c) => c.type === "text");
+    if (textControl) {
+      const val = clip.params[textControl.key] ?? cardDef.defaults[textControl.key];
+      subtitle = val != null ? String(val).trim() : "";
+    }
+    if (!subtitle) subtitle = cardDef.description || "";
+  } else if (clip.mediaId) {
+    subtitle = "时长 " + formatTime(clip.end - clip.start);
+  }
 
   const [dragState, setDragState] = useState<{ start: number; end: number; trackId: string; forbidden: boolean } | null>(null);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
@@ -191,7 +203,18 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
           className={`absolute left-0 top-0 bottom-0 w-2 z-30 ${track.locked ? "" : "cursor-col-resize hover:bg-white/30"}`}
         />
         
-        <span className="truncate pointer-events-none font-medium drop-shadow-md">{label}</span>
+        {rowSize === "small" ? (
+          <span className="truncate pointer-events-none font-medium drop-shadow-md w-full">{label}</span>
+        ) : (
+          <div className="flex flex-col items-start justify-center overflow-hidden pointer-events-none min-w-0 w-full leading-tight">
+            <span className="truncate font-medium drop-shadow-md w-full">{label}</span>
+            {subtitle && (
+              <span className={`truncate text-[10px] opacity-70 w-full ${rowSize === 'large' ? 'mt-0.5' : ''}`}>
+                {subtitle}
+              </span>
+            )}
+          </div>
+        )}
         
         <div
           ref={resizeRightRef}

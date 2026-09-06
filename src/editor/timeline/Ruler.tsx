@@ -11,10 +11,22 @@ export function Ruler() {
   const ticks = [];
   // dynamically choose tick interval based on pxPerSec
   let step = 1;
-  if (pxPerSec < 20) step = 5;
   if (pxPerSec < 10) step = 10;
-  if (pxPerSec > 200) step = 0.5;
-  if (pxPerSec > 400) step = 0.1;
+  else if (pxPerSec < 20) step = 5;
+  else if (pxPerSec <= 200) step = 1;
+  else if (pxPerSec <= 400) step = 0.5;
+  else step = 0.1;
+
+  // 防止 duration 被内容撑得极大（比如几万秒），导致生成数万个刻度 DOM 节点卡死页面
+  // 强制限制刻度数量不超过 1200 个，超了就往上一档跳
+  while (duration / step > 1200) {
+    if (step === 1) step = 2;
+    else if (step === 2) step = 5;
+    else if (step === 5) step = 10;
+    else if (step === 10) step = 30;
+    else if (step === 30) step = 60;
+    else step *= 2;
+  }
 
   for (let i = 0; i <= duration; i += step) {
     ticks.push(Math.round(i * 1000) / 1000);

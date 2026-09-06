@@ -2,10 +2,11 @@ import { useState } from "react";
 import { Track } from "../../kernel/project";
 import { actions } from "../../store/project";
 import { ContextMenu } from "./ContextMenu";
-import { TRACK_H } from "./utils";
+import { useTimelineContext } from "./TimelineContext";
 import { useReorderDrag, useRowOffset } from "./useReorder";
 
 export function TrackHeader({ track, index }: { track: Track; index: number }) {
+  const { trackH } = useTimelineContext();
   const { start: startReorder } = useReorderDrag();
   const offset = useRowOffset(index, track.id);
   const [isEditing, setIsEditing] = useState(false);
@@ -42,7 +43,7 @@ export function TrackHeader({ track, index }: { track: Track; index: number }) {
             : "hover:bg-neutral-800 cursor-grab"
         }`}
         style={{
-          height: TRACK_H,
+          height: trackH,
           transform: offset.y ? `translateY(${offset.y}px)` : undefined,
           transition: offset.animated ? "transform 150ms cubic-bezier(0.2, 0, 0, 1)" : "none",
         }}

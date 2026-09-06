@@ -2,12 +2,11 @@ import { Track } from "../../kernel/project";
 import { ClipView } from "./ClipView";
 import { DropGhost } from "./DropGhost";
 import { useTimelineContext } from "./TimelineContext";
-import { TRACK_H } from "./utils";
 import { useDropTarget } from "./useDropTarget";
 import { useRowOffset } from "./useReorder";
 
 export function TrackRow({ track, index }: { track: Track; index: number }) {
-  const { draggingTrackId } = useTimelineContext();
+  const { draggingTrackId, trackH } = useTimelineContext();
   const offset = useRowOffset(index, track.id);
   const { onDragOver, onDragLeave, onDrop, plan } = useDropTarget({ trackId: track.id });
 
@@ -25,7 +24,7 @@ export function TrackRow({ track, index }: { track: Track; index: number }) {
       data-track-id={track.id}
       className={`relative border-b border-neutral-800/50 box-border ${bgClass} ${offset.dragging ? "z-40 opacity-90" : ""}`}
       style={{
-        height: TRACK_H,
+        height: trackH,
         transform: offset.y ? `translateY(${offset.y}px)` : undefined,
         transition: offset.animated ? "transform 150ms cubic-bezier(0.2, 0, 0, 1)" : "none",
       }}

@@ -42,7 +42,7 @@ export function RangeBar() {
       el.removeEventListener("pointercancel", onUp);
       const next = secAt(ev.clientX);
       setDragEnd(null);
-      if (Math.abs(next - getState().project.duration) > 1e-6) actions.setProjectMeta({ duration: next });
+      if (Math.abs(next - getState().project.duration) > 1e-6) actions.setDurationManual(next);
     };
     el.addEventListener("pointermove", onMove);
     el.addEventListener("pointerup", onUp);

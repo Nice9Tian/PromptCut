@@ -1,10 +1,24 @@
 import { Project, Track } from "../../kernel/project";
 
-/** 轨道行高(px)。轨道行、左侧行头、新建轨落区、插入缝都按它算,改这里就整体改。 */
-export const TRACK_H = 40;
+/** 轨道行高配置 */
+export type RowSize = "small" | "medium" | "large";
+export const ROW_SIZE_H: Record<RowSize, number> = {
+  small: 28,
+  medium: 44,
+  large: 72,
+};
+export const DEFAULT_ROW_SIZE: RowSize = "medium";
 
-/** 左侧行头列宽(px) */
-export const HEADER_W = 200;
+/** 左侧行头列宽(px)配置 */
+export const HEADER_W_DEFAULT = 180;
+export const HEADER_W_MIN = 120;
+export const HEADER_W_MAX = 420;
+
+/** 内容层右边的拖动余量(px) */
+export const TAIL_SLACK_PX = 200;
+
+/** 内容变长时，总时长自动伸长的预留余量(秒) */
+export const CONTENT_TAIL_MARGIN = 2;
 
 /**
  * 0 秒前面留的一点间距(px,和缩放无关)。纯粹是留白,不代表时间——时间没有负数。

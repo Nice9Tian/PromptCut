@@ -2,7 +2,7 @@ import { useStore } from "../../store/project";
 import { useDragPayload } from "../dnd";
 import { useTimelineContext } from "./TimelineContext";
 import { DropGhost } from "./DropGhost";
-import { TRACK_H, xOfTime } from "./utils";
+import { xOfTime } from "./utils";
 import { useDropTarget } from "./useDropTarget";
 
 /**
@@ -12,7 +12,7 @@ import { useDropTarget } from "./useDropTarget";
 export function NewTrackZone() {
   const trackCount = useStore((s) => s.project.tracks.length);
   const payload = useDragPayload();
-  const { pxPerSec } = useTimelineContext();
+  const { pxPerSec, trackH } = useTimelineContext();
   const { onDragOver, onDragLeave, onDrop, plan } = useDropTarget({ newTrackIndex: trackCount });
 
   const tone = plan
@@ -25,7 +25,7 @@ export function NewTrackZone() {
     <div
       data-pc="new-track-zone"
       className={`relative my-1 rounded border border-dashed transition-colors ${tone}`}
-      style={{ height: TRACK_H - 8 }}
+      style={{ height: trackH - 8 }}
       onDragOver={onDragOver}
       onDragLeave={onDragLeave}
       onDrop={onDrop}

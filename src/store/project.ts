@@ -20,6 +20,8 @@ export interface EditorState {
   /** 项目文件路径(未保存为 null) */
   filePath: string | null;
   dirty: boolean;
+  /** 用户手动拖范围卡标设定的总时长，没设过就是 null */
+  durationManual: number | null;
 }
 
 type Listener = () => void;
@@ -32,6 +34,7 @@ let state: EditorState = {
   selection: [],
   filePath: null,
   dirty: false,
+  durationManual: null,
 };
 const listeners = new Set<Listener>();
 const history: Project[] = [];
@@ -126,13 +129,23 @@ export const actions = {
   loadProject(p: Project, filePath: string | null = null) {
     history.length = 0;
     future.length = 0;
-    set({ project: p, filePath, dirty: false, t: 0, playing: false, selection: [], playToken: state.playToken + 1 });
+    set({ project: p, filePath, dirty: false, t: 0, playing: false, selection: [], playToken: state.playToken + 1, durationManual: null });
   },
   newProject(name?: string) {
     actions.loadProject(createEmptyProject(name));
   },
   setProjectMeta(patch: Partial<Pick<Project, "name" | "width" | "height" | "fps" | "duration" | "themeId">>) {
     setProject({ ...state.project, ...patch });
+  },
+  setDurationManual(sec: number) {
+    const val = Math.max(1, sec);
+    setProject({ ...state.project, duration: val });
+    set({ durationManual: val });
+  },
+  syncDuration(sec: number) {
+    const val = Math.max(1, sec);
+    if (Math.abs(val - state.project.duration) < 1e-6) return;
+    setProject({ ...state.project, duration: val }, { undoable: false });
   },
   markSaved(filePath: string | null) {
     set({ filePath, dirty: false });

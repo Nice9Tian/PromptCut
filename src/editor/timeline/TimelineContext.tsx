@@ -1,8 +1,8 @@
-import { createContext, useContext, useState, useRef, useEffect, type ReactNode } from "react";
+import { createContext, useContext, useState, useRef, useEffect, useCallback, type ReactNode } from "react";
 import type React from "react";
 import { useStore } from "../../store/project";
 import { useDragPayload } from "../dnd";
-import { HEADER_W, timeOfX, xOfTime } from "./utils";
+import { HEADER_W_DEFAULT, HEADER_W_MIN, HEADER_W_MAX, type RowSize, DEFAULT_ROW_SIZE, ROW_SIZE_H, timeOfX, xOfTime } from "./utils";
 import type { DropPlan } from "./dropPlan";
 import type { ReorderState } from "./useReorder";
 
@@ -21,6 +21,14 @@ interface TimelineContextState {
   /** 正在拖行头换序(没在换 = null);行头和轨道行按它一起平移 */
   reorder: ReorderState | null;
   setReorder: React.Dispatch<React.SetStateAction<ReorderState | null>>;
+  
+  headerW: number;
+  setHeaderW: (val: number) => void;
+  commitHeaderW: () => void;
+  resetHeaderW: () => void;
+  rowSize: RowSize;
+  setRowSize: (val: RowSize) => void;
+  trackH: number;
 }
 
 const TimelineContext = createContext<TimelineContextState | null>(null);
@@ -33,6 +41,53 @@ export function TimelineProvider({ children }: { children: ReactNode }) {
   const [draggingTrackId, setDraggingTrackId] = useState<string | null>(null);
   const [dropPlan, setDropPlan] = useState<DropPlan | null>(null);
   const [reorder, setReorder] = useState<ReorderState | null>(null);
+
+  const [headerW, setHeaderWState] = useState(() => {
+    try {
+      const stored = localStorage.getItem("promptcut.timeline.headerW");
+      if (stored) {
+        const val = parseInt(stored, 10);
+        if (!isNaN(val) && val >= HEADER_W_MIN && val <= HEADER_W_MAX) return val;
+      }
+    } catch {}
+    return HEADER_W_DEFAULT;
+  });
+  const headerWRef = useRef(headerW);
+  headerWRef.current = headerW;
+
+  const setHeaderW = useCallback((val: number) => {
+    setHeaderWState(val);
+  }, []);
+
+  const commitHeaderW = useCallback(() => {
+    try {
+      localStorage.setItem("promptcut.timeline.headerW", Math.round(headerWRef.current).toString());
+    } catch {}
+  }, []);
+
+  const resetHeaderW = useCallback(() => {
+    setHeaderWState(HEADER_W_DEFAULT);
+    try {
+      localStorage.setItem("promptcut.timeline.headerW", HEADER_W_DEFAULT.toString());
+    } catch {}
+  }, []);
+
+  const [rowSize, setRowSizeState] = useState<RowSize>(() => {
+    try {
+      const stored = localStorage.getItem("promptcut.timeline.rowSize") as RowSize;
+      if (stored === "small" || stored === "medium" || stored === "large") return stored;
+    } catch {}
+    return DEFAULT_ROW_SIZE;
+  });
+  
+  const setRowSize = useCallback((val: RowSize) => {
+    setRowSizeState(val);
+    try {
+      localStorage.setItem("promptcut.timeline.rowSize", val);
+    } catch {}
+  }, []);
+  
+  const trackH = ROW_SIZE_H[rowSize];
 
   // 拖动一结束(松手、按 Esc、拖出窗口)就把落点预演清掉,免得预览留在屏幕上
   const dragPayload = useDragPayload();
@@ -54,7 +109,7 @@ export function TimelineProvider({ children }: { children: ReactNode }) {
     };
     const onOver = (e: DragEvent) => {
       const r = el.getBoundingClientRect();
-      const inner = r.left + HEADER_W; // 行头列不算轨道区
+      const inner = r.left + headerWRef.current; // 行头列不算轨道区
       if (e.clientX < inner + EDGE) {
         vx = -Math.min(MAX, Math.ceil(((inner + EDGE - e.clientX) / EDGE) * MAX));
       } else if (e.clientX > r.right - EDGE) {
@@ -79,7 +134,7 @@ export function TimelineProvider({ children }: { children: ReactNode }) {
       if (e.ctrlKey) {
         e.preventDefault();
         const rect = el.getBoundingClientRect();
-        const pointerX = e.clientX - rect.left + el.scrollLeft - 200; // 200 is header width
+        const pointerX = e.clientX - rect.left + el.scrollLeft - headerWRef.current;
         if (pointerX < 0) return;
         
         const timeAtPointer = timeOfX(pointerX, pxPerSec);
@@ -88,7 +143,7 @@ export function TimelineProvider({ children }: { children: ReactNode }) {
         
         setPxPerSec(newPxPerSec);
         
-        const newScrollLeft = xOfTime(timeAtPointer, newPxPerSec) - (e.clientX - rect.left - 200);
+        const newScrollLeft = xOfTime(timeAtPointer, newPxPerSec) - (e.clientX - rect.left - headerWRef.current);
         setTimeout(() => {
            if (scrollRef.current) scrollRef.current.scrollLeft = Math.max(0, newScrollLeft);
         }, 0);
@@ -145,14 +200,14 @@ export function TimelineProvider({ children }: { children: ReactNode }) {
     if (playing && scrollRef.current) {
        const pos = xOfTime(t, pxPerSec);
        const el = scrollRef.current;
-       if (pos > el.scrollLeft + el.clientWidth - 200 - 50) {
-           el.scrollLeft = pos - el.clientWidth + 200 + 50;
+       if (pos > el.scrollLeft + el.clientWidth - headerWRef.current - 50) {
+           el.scrollLeft = pos - el.clientWidth + headerWRef.current + 50;
        }
     }
   }, [t, playing, pxPerSec]);
 
   return (
-    <TimelineContext.Provider value={{ pxPerSec, setPxPerSec, scrollRef, trackAreaRef, draggingClipId, setDraggingClipId, draggingTrackId, setDraggingTrackId, dropPlan, setDropPlan, reorder, setReorder }}>
+    <TimelineContext.Provider value={{ pxPerSec, setPxPerSec, scrollRef, trackAreaRef, draggingClipId, setDraggingClipId, draggingTrackId, setDraggingTrackId, dropPlan, setDropPlan, reorder, setReorder, headerW, setHeaderW, commitHeaderW, resetHeaderW, rowSize, setRowSize, trackH }}>
       {children}
     </TimelineContext.Provider>
   );

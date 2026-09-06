@@ -1,7 +1,7 @@
 import { useStore } from "../../store/project";
 import { useDragPayload } from "../dnd";
 import { useTimelineContext } from "./TimelineContext";
-import { TRACK_H, xOfTime } from "./utils";
+import { xOfTime } from "./utils";
 import { useDropTarget } from "./useDropTarget";
 
 /**
@@ -22,14 +22,14 @@ export function InsertZones() {
 }
 
 function InsertZone({ index }: { index: number }) {
-  const { pxPerSec } = useTimelineContext();
+  const { pxPerSec, trackH } = useTimelineContext();
   const { onDragOver, onDragLeave, onDrop, plan } = useDropTarget({ newTrackIndex: index });
 
   return (
     <div
       data-pc-insert={index}
       className="absolute inset-x-0 z-40"
-      style={{ top: Math.max(0, index * TRACK_H - 5), height: 10 }}
+      style={{ top: Math.max(0, index * trackH - 5), height: 10 }}
       onDragOver={onDragOver}
       onDragLeave={onDragLeave}
       onDrop={onDrop}

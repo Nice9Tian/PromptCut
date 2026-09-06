@@ -1,11 +1,10 @@
 import { actions, getState } from "../../store/project";
 import { useTimelineContext } from "./TimelineContext";
-import { TRACK_H } from "./utils";
 
 /**
  * 序列换序。拖行头的时候:
  * - 被拖的那条跟着指针走(不带过渡,手感是「粘在手上」)
- * - 让位的那几条按 TRACK_H 平移,带过渡 → 这就是「提前预览 + 滑动动画」
+ * - 让位的那几条按 trackH 平移,带过渡 → 这就是「提前预览 + 滑动动画」
  * - 松手先把被拖的那条滑到目标格再提交,避免落位时闪一下
  *
  * 行头和轨道行用的是同一份偏移(useRowOffset),所以整条序列一起动。
@@ -24,7 +23,7 @@ export interface ReorderState {
 export const SETTLE_MS = 140;
 
 export function useReorderDrag() {
-  const { reorder, setReorder } = useTimelineContext();
+  const { reorder, setReorder, trackH } = useTimelineContext();
 
   const start = (e: React.PointerEvent, index: number, trackId: string) => {
     if (e.button !== 0) return;
@@ -38,7 +37,7 @@ export function useReorderDrag() {
 
     const compute = (clientY: number) => {
       const dy = clientY - startY;
-      const to = Math.max(0, Math.min(count - 1, Math.round((index * TRACK_H + dy) / TRACK_H)));
+      const to = Math.max(0, Math.min(count - 1, Math.round((index * trackH + dy) / trackH)));
       return { dy, to };
     };
 
@@ -69,7 +68,7 @@ export function useReorderDrag() {
       if (!moved) return;
       const { to } = compute(ev.clientY);
       // 先滑到目标格(带过渡),动画走完再改文档
-      setReorder({ id: trackId, from: index, to, dy: (to - index) * TRACK_H, settling: true });
+      setReorder({ id: trackId, from: index, to, dy: (to - index) * trackH, settling: true });
       window.setTimeout(() => {
         if (to !== index) actions.moveTrack(trackId, to);
         setReorder(null);
@@ -86,7 +85,7 @@ export function useReorderDrag() {
 
 /** 这一行现在该偏移多少(行头和轨道行共用) */
 export function useRowOffset(index: number, trackId: string) {
-  const { reorder } = useTimelineContext();
+  const { reorder, trackH } = useTimelineContext();
   if (!reorder) return { y: 0, dragging: false, animated: true };
 
   if (reorder.id === trackId) {
@@ -94,7 +93,7 @@ export function useRowOffset(index: number, trackId: string) {
   }
   const { from, to } = reorder;
   let y = 0;
-  if (from < to && index > from && index <= to) y = -TRACK_H;
-  else if (from > to && index >= to && index < from) y = TRACK_H;
+  if (from < to && index > from && index <= to) y = -trackH;
+  else if (from > to && index >= to && index < from) y = trackH;
   return { y, dragging: false, animated: true };
 }
