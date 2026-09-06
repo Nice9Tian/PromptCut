@@ -11,6 +11,7 @@ import { magicuiDemoClips } from "./cards/magicui";
 import { nativeDemoClips } from "./cards/native";
 import { useSkin } from "./skins/useSkin";
 import { useLayoutMode } from "./editor/layoutMode";
+import { DependencyPrompt } from "./editor/DependencyPrompt";
 import { motion } from "motion/react";
 
 /** 拖杆宽度(px),和 ResizeHandle 里的 w-1.5 / h-1.5 对应 */
@@ -140,6 +141,7 @@ export default function Editor() {
   return (
     <div className="h-full flex flex-col bg-neutral-950 text-neutral-100">
       <TopBar />
+      <DependencyPrompt />
       <div
         ref={gridRef}
         className="flex-1 min-h-0 grid"

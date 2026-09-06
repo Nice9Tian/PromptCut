@@ -7,6 +7,8 @@ import { validateCardParams, findCard } from "../../kernel/cardParams";
 import { findClip } from "../../kernel/project";
 import { sttStatus, sttInstall, transcribeMedia } from "../io/stt";
 import { runAutoWorkflow, getAutoWorkflowStatus } from "./autoWorkflow";
+import { getJob as getInstallJob } from "../../ai/sttInstallStore";
+import { runSttInstall } from "../io/runSttInstall";
 
 /** 后台 STT 任务的状态(MCP 工具立即返回 jobId,结果靠轮询) */
 interface SttJob { done: boolean; ok: boolean; error?: string; logTail?: string[]; segments?: number }
@@ -132,18 +134,18 @@ export function RightPanel() {
       // 安装可能远超 MCP 桥的 60 秒调用超时,所以立刻返回 jobId,
       // 让 AI 用 stt_status 轮询 engines.<engine>.installed 判断是否装完。
       sttInstall: async (args) => {
-        const jobId = `install-${args.engine}-${Date.now().toString(36)}`;
-        const log: string[] = [];
-        sttInstall(args.engine, (line) => {
-          log.push(line);
-          if (log.length > 200) log.shift();
-        })
-          .then((r) => { sttJobs.set(jobId, { done: true, ok: r.ok, logTail: r.log.slice(-20) }); })
-          .catch((e: unknown) => {
-            sttJobs.set(jobId, { done: true, ok: false, error: e instanceof Error ? e.message : String(e), logTail: log.slice(-20) });
-          });
+        // 和启动时那个缺依赖提示走同一条路径(含「同时只许一个安装」的互斥),
+        // 所以不管谁发起的,界面上的进度控件表现完全一致。
+        const { jobId, engine, finished } = runSttInstall(args.engine || "faster-whisper");
         sttJobs.set(jobId, { done: false, ok: false, logTail: [] });
-        return { jobId, started: true, hint: "安装已在后台开始,请用 stt_status 轮询 engines 里该引擎的 installed 字段" };
+        finished.then(({ ok, error }) => {
+          const job = getInstallJob(jobId);
+          sttJobs.set(jobId, { done: true, ok, error, logTail: job?.logTail.slice(-20) ?? [] });
+        });
+        return {
+          jobId, started: true, engine,
+          hint: "安装已在后台开始,用户界面上会显示带进度的安装动画。用 background_job_status 查这个 jobId,或用 stt_status 看该引擎的 installed 字段。不要重复启动。",
+        };
       },
 
       // 同理:转写通常超过 60 秒,立刻返回 jobId,结果用 get_transcript 轮询。

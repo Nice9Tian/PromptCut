@@ -8,6 +8,8 @@ import type { ChatAttachment, ChatMessage, MessagePart, ToolCallInfo } from "../
 import { conversationReport, copyDebugReport } from "../../ai/debug";
 import { AiSetupDialog } from "./AiSetupDialog";
 import { useChatHistory } from "../../ai/useChatHistory";
+import { SttInstallProgress } from "./SttInstallProgress";
+import { useInstallJobs, matchInstallJob } from "../../ai/sttInstallStore";
 import { useToolbarLayout, MORE_KEY } from "./useToolbarLayout";
 import { ToolbarOverflowMenu } from "./ToolbarOverflowMenu";
 import type { OverflowEntry } from "./ToolbarOverflowMenu";
@@ -112,6 +114,7 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
   })();
   const { messages, providers, sttInfo, provider, setProvider, streaming, send, abort, newChat, error, setMessages, login, loginState, setupJobs, cancelSetup, install, installState, installError, config, saveConfig, setupOpen, openSetup, closeSetup } = useAiChat({ mock });
   const history = useChatHistory({ provider, messages, sessionId: undefined });
+  const installJobs = useInstallJobs();
   const [historyOpen, setHistoryOpen] = useState(false);
   const [inputText, setInputText] = useState("");
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
@@ -537,6 +540,13 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
             const renderTool = (t: ToolCallInfo, key: string) => {
               const open = expanded.has(key);
               const done = t.ok !== undefined;
+              // 装引擎要下好几百 MB、可能跑几分钟。折成一行「stt_install ✓」的话,
+              // 用户看到的就是聊天框里一个转圈的小字,不知道在干什么、还要多久。
+              // 这里换成带进度的控件,和启动时那个缺依赖提示用的是同一个。
+              const installJob = t.name === "stt_install" ? matchInstallJob(t, installJobs) : undefined;
+              if (installJob) {
+                return <SttInstallProgress key={key} job={installJob} compact />;
+              }
               return (
                 <div key={key} className="ai-tool-block">
                   <div
