@@ -2,6 +2,10 @@ import type { JSX } from "react";
 import { createPortal } from "react-dom";
 import { useEffect, useState } from "react";
 import "./AiSetupDialog.css";
+import { ApiSharePanel } from "./ApiSharePanel";
+import { SETUP_ENTRIES, isCliEntry, readFace, writeFace } from "./setupEntries";
+import type { SetupEntry, SetupEntryId } from "./setupEntries";
+import { copyDebugReport, redactDebug } from "../../ai/debug";
 import type { ProviderInfo, AiProvider, SttInfo, PublicAiConfig, AiConfigPatch, ApiVendor, CliSetupJob, LoginState } from "../../ai/types";
 
 export function AiSetupDialog(props: {
@@ -20,7 +24,9 @@ export function AiSetupDialog(props: {
 }): JSX.Element | null {
   const { open, onClose, providers, stt, current, onChoose, onLogin, loginState, setupJobs, onCancelSetup, onInstall, installState, installError, config, onSaveConfig } = props;
 
-  const [selected, setSelected] = useState<AiProvider | null>(current);
+  /** null = 停在第一级的选择页;有值 = 进了那一项的配置页 */
+  const [openedEntry, setOpenedEntry] = useState<SetupEntryId | null>(null);
+
   const [apiVendor, setApiVendor] = useState<ApiVendor>("anthropic");
   const [apiBaseUrl, setApiBaseUrl] = useState("");
   const [apiModel, setApiModel] = useState("");
@@ -32,58 +38,64 @@ export function AiSetupDialog(props: {
 
   /** provider → 安装方式:能一键装的给命令,不能的给一句人话 */
   const [installPlans, setInstallPlans] = useState<Partial<Record<string, { command?: string; hint?: string }>>>({});
-  const [agyPerms, setAgyPerms] = useState<{path: string, total: number, granted: string[], missing: string[]} | null>(null);
+  const [agyPerms, setAgyPerms] = useState<{ path: string; total: number; granted: string[]; missing: string[] } | null>(null);
   const [agyPermError, setAgyPermError] = useState("");
   const [granting, setGranting] = useState(false);
   const [toolProtocol, setToolProtocol] = useState(false);
+  const [diagState, setDiagState] = useState("");
+  /** 剪贴板写不进去时,把报告摆出来让用户自己复制 */
+  const [diagReport, setDiagReport] = useState("");
 
   useEffect(() => {
-    if (open) {
-      setSelected(current);
-      if (config) {
-        setApiVendor(config.api.vendor);
-        setApiBaseUrl(config.api.baseUrl);
-        setApiModel(config.api.model);
-        setReplaceKey(!config.api.apiKey.set);
-        setApiKeyInput("");
-        setSaveSuccess(false);
-        setSaveError(null);
-        setToolProtocol(!!config.toolProtocol);
-      }
-      fetch('/api/ai/agy-permissions').then(r => r.json()).then(data => {
-        if (data.ok) setAgyPerms(data);
-      }).catch(() => {});
-
+    if (!open) return;
+    // 每次打开都回到第一级:上次配到哪儿了不该影响这次想看什么
+    setOpenedEntry(null);
+    setDiagState("");
+    setDiagReport("");
+    if (config) {
+      setApiVendor(config.api.vendor);
+      setApiBaseUrl(config.api.baseUrl);
+      setApiModel(config.api.model);
+      setReplaceKey(!config.api.apiKey.set);
+      setApiKeyInput("");
+      setSaveSuccess(false);
+      setSaveError(null);
+      setToolProtocol(!!config.toolProtocol);
     }
+    fetch("/api/ai/agy-permissions")
+      .then((r) => r.json())
+      .then((data) => { if (data.ok) setAgyPerms(data); })
+      .catch(() => {});
   }, [open, current, config]);
 
   useEffect(() => {
     if (!open) return;
-      // 未安装的那几项:问服务端能不能一键装、命令是什么(dryRun 只回答不执行)
-      for (const p of providers) {
-        if (p.available) continue;
-        fetch('/api/ai/install', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ provider: p.id, dryRun: true }),
-        })
-          .then(r => r.json())
-          .then(d => setInstallPlans(prev => ({ ...prev, [p.id]: d.ok ? { command: d.command } : { hint: d.hint || d.error } })))
-          .catch(() => {});
-      }
+    // 未安装的那几项:问服务端能不能一键装、命令是什么(dryRun 只回答不执行)
+    for (const p of providers) {
+      if (p.available) continue;
+      fetch("/api/ai/install", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: p.id, dryRun: true }),
+      })
+        .then((r) => r.json())
+        .then((d) => setInstallPlans((prev) => ({ ...prev, [p.id]: d.ok ? { command: d.command } : { hint: d.hint || d.error } })))
+        .catch(() => {});
+    }
   }, [open, providers]);
 
   useEffect(() => {
     if (!open) return;
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        onClose();
-      }
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      // Esc 先退回上一级,再按一次才关掉整个对话框
+      if (openedEntry) goTo(null);
+      else onClose();
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [open, onClose]);
+  }, [open, onClose, openedEntry]);
 
   if (!open) return null;
 
@@ -91,14 +103,14 @@ export function AiSetupDialog(props: {
     setGranting(true);
     setAgyPermError("");
     try {
-      const r = await fetch('/api/ai/agy-permissions', { method: 'POST' });
+      const r = await fetch("/api/ai/agy-permissions", { method: "POST" });
       const data = await r.json();
       if (data.ok) {
-        setAgyPerms(prev => prev ? { ...prev, granted: [...prev.granted, ...data.added], missing: [] } : null);
+        setAgyPerms((prev) => (prev ? { ...prev, granted: [...prev.granted, ...data.added], missing: [] } : null));
       } else {
-        setAgyPermError(data.error || '授权失败');
+        setAgyPermError(data.error || "授权失败");
       }
-    } catch(e) {
+    } catch (e) {
       setAgyPermError(String(e));
     } finally {
       setGranting(false);
@@ -109,29 +121,15 @@ export function AiSetupDialog(props: {
     setSaving(true);
     setSaveError(null);
     setSaveSuccess(false);
-    
-    const patch: AiConfigPatch = {
-      api: {
-        vendor: apiVendor,
-        baseUrl: apiBaseUrl,
-        model: apiModel,
-      }
-    };
-    if (replaceKey && apiKeyInput.trim()) {
-      patch.api!.apiKey = apiKeyInput.trim();
-    }
-
+    const patch: AiConfigPatch = { api: { vendor: apiVendor, baseUrl: apiBaseUrl, model: apiModel } };
+    if (replaceKey && apiKeyInput.trim()) patch.api!.apiKey = apiKeyInput.trim();
     try {
       await onSaveConfig(patch);
       setSaveSuccess(true);
       setApiKeyInput("");
       setReplaceKey(false);
     } catch (e: unknown) {
-      if (e instanceof Error) {
-        setSaveError(e.message || "保存失败");
-      } else {
-        setSaveError("保存失败");
-      }
+      setSaveError(e instanceof Error ? e.message || "保存失败" : "保存失败");
     } finally {
       setSaving(false);
     }
@@ -142,229 +140,300 @@ export function AiSetupDialog(props: {
     await onSaveConfig({ toolProtocol: checked });
   };
 
-  const currentProviderData = providers.find(p => p.id === selected);
-  const isApi = selected === "api";
-  
-  let canUse = false;
-  let useHint = "";
-  if (!selected) {
-    useHint = "先选一种";
-  } else if (!isApi) {
-    if (!currentProviderData?.available) {
-      useHint = `${currentProviderData?.label || selected} 没装`;
-    } else if (currentProviderData?.auth?.loggedIn === false) {
-      useHint = `${currentProviderData?.label || selected} 还没登录`;
-    } else if (currentProviderData?.auth?.loggedIn !== true) {
-      useHint = '请先登录并确认连接';
-    } else {
-      canUse = true;
+  /**
+   * 排查信息:服务端那份(平台、CLI 路径、各家安装/登录状态、脱敏后的配置)
+   * 加上浏览器这边的一点上下文,一起复制走。密钥在服务端就已经换成 last4,
+   * redactDebug 再兜一道底。
+   */
+  const copyDiagnostics = async () => {
+    setDiagState("正在收集…");
+    setDiagReport("");
+    let report: string;
+    try {
+      const res = await fetch("/api/ai/diagnostics");
+      const server = await res.json();
+      report = JSON.stringify(
+        redactDebug({
+          format: "PromptCut AI setup diagnostics v1",
+          copiedAt: new Date().toISOString(),
+          browser: { userAgent: navigator.userAgent, language: navigator.language },
+          openedEntry,
+          currentProvider: current,
+          setupJobs: setupJobs.map((j) => ({ ...j, logs: j.logs.slice(-8) })),
+          server,
+        }),
+        null,
+        2,
+      );
+    } catch (e) {
+      setDiagState(e instanceof Error ? `收集失败:${e.message}` : "收集失败");
+      return;
     }
-  } else {
-    if (config?.api.apiKey.set !== true) {
-      useHint = "先填并保存 API Key";
-    } else {
-      canUse = true;
+    // 收集成功了,剪贴板能不能写是另一回事:写不进去就把内容摆出来让用户自己复制,
+    // 别只丢一句「请手动复制下面的内容」却没有下面的内容。
+    try {
+      await copyDebugReport(report);
+      setDiagState("已复制到剪贴板,可以直接粘贴给我们");
+    } catch {
+      setDiagReport(report);
+      setDiagState("剪贴板不可用,请手动复制下面这段");
     }
-  }
+  };
 
-  const renderCliRow = (p: ProviderInfo) => {
-    const isChecked = selected === p.id;
+  /** 切换入口时把上一项的诊断输出清掉,免得看着像是当前这项的 */
+  const goTo = (id: SetupEntryId | null) => {
+    setOpenedEntry(id);
+    setDiagState("");
+    setDiagReport("");
+  };
+
+  /** 这一项现在能不能用,以及不能用的话缺什么 */
+  const readiness = (entry: SetupEntry): { ok: boolean; label: string; tone: "ok" | "warn" | "idle" } => {
+    if (isCliEntry(entry.id)) {
+      const p = providers.find((x) => x.id === entry.provider);
+      if (!p?.available) return { ok: false, label: "未安装", tone: "warn" };
+      if (p.auth?.loggedIn === true) return { ok: true, label: "已登录", tone: "ok" };
+      if (p.auth?.loggedIn === false) return { ok: false, label: "未登录", tone: "warn" };
+      return { ok: false, label: "登录状态待确认", tone: "idle" };
+    }
+    if (config?.api.apiKey.set) return { ok: true, label: `已配置 ••••${config.api.apiKey.last4}`, tone: "ok" };
+    return { ok: false, label: "未配置", tone: "idle" };
+  };
+
+  const renderCliBody = (entry: SetupEntry) => {
+    const p = providers.find((x) => x.id === entry.provider);
+    if (!p) return <div className="ais-detail">这一项在本机上没有检测到。</div>;
     const st = loginState[p.id];
-    const job = setupJobs.find(j => j.provider === p.id);
-    
+    const job = setupJobs.find((j) => j.provider === p.id);
+    const plan = installPlans[p.id];
+    const ist = installState[p.id] || "idle";
+    const err = installError[p.id];
+
     return (
-      <div key={p.id}>
-      <label className={`ais-row ${!p.available ? "disabled" : ""}`}>
-        <input 
-          type="radio" 
-          name="ais-provider" 
-          checked={isChecked}
-          disabled={!p.available}
-          onChange={() => setSelected(p.id)} 
-        />
-        <div className="ais-row-content">
-          <div className="ais-row-header">
-            <span className="ais-row-name">{p.label}</span>
-            <span className="ais-row-version">
-              {p.available ? p.version || "版本未知" : "未安装"}
+      <>
+        <section className="ais-step">
+          <div className="ais-step-head">
+            <span className="ais-step-no">1</span>
+            <span className="ais-step-title">安装</span>
+            <span className={p.available ? "ais-status-ok" : "ais-status-err"}>
+              {p.available ? p.version || "已安装(版本未知)" : "未安装"}
             </span>
           </div>
-          {!p.available && (() => {
-            const plan = installPlans[p.id];
-            const ist = installState[p.id] || "idle";
-            const err = installError[p.id];
-            return (
-              <div className="ais-row-auth">
-                {plan?.command ? (
-                  <div className="ais-auth-action">
-                    <button
-                      className="ais-btn"
-                      disabled={ist === "installing"}
-                      onClick={(e) => { e.preventDefault(); onInstall(p.id); }}
-                    >
-                      {ist === "installing" ? "安装中…" : ist === "ok" ? "已安装" : ist === "timeout" ? "等太久了,重试" : ist === "failed" ? "重试安装" : "安装"}
-                    </button>
-                    <span className="ais-detail">{ist === "installing" ? "正在后台安装，完成后会自动检测" : plan.command}</span>
-                  </div>
-                ) : (
-                  <div className="ais-auth-hint">
-                    <div className="ais-detail">{plan?.hint || "这一项需要按官方说明手动安装。"}</div>
-                  </div>
-                )}
-                {err && <div className="ais-fixhint">{err}</div>}
+          {!p.available && (
+            plan?.command ? (
+              <div className="ais-auth-action">
+                <button className="ais-btn ais-primary-btn" disabled={ist === "installing"} onClick={(e) => { e.preventDefault(); onInstall(p.id); }}>
+                  {ist === "installing" ? "安装中…" : ist === "ok" ? "已安装" : ist === "timeout" ? "等太久了,重试" : ist === "failed" ? "重试安装" : "安装"}
+                </button>
+                <span className="ais-detail">{ist === "installing" ? "正在后台安装，完成后会自动检测" : plan.command}</span>
               </div>
-            );
-          })()}
-          {p.available && p.auth !== undefined && (
-            <div className="ais-row-auth">
-              {p.auth.loggedIn === true ? (
-                <span className="ais-status-ok">已登录</span>
-              ) : (
-                <div className="ais-auth-action">
-                  <span>{p.auth.loggedIn === false ? "未登录" : "登录状态待确认"}</span>
-                  <button 
-                    className="ais-btn"
-                    disabled={st === "waiting"}
-                    onClick={(e) => { e.preventDefault(); onLogin(p.id); }}
-                  >
-                    {st === "waiting" ? "等待登录…" : st === "ok" ? "已登录" : st === "timeout" || st === "failed" ? "重试登录" : "登录"}
-                  </button>
-                </div>
+            ) : (
+              <div className="ais-detail">{plan?.hint || "这一项需要按官方说明手动安装。"}</div>
+            )
+          )}
+          {err && <div className="ais-fixhint">{err}</div>}
+        </section>
+
+        <section className="ais-step">
+          <div className="ais-step-head">
+            <span className="ais-step-no">2</span>
+            <span className="ais-step-title">登录</span>
+            {p.auth?.loggedIn === true
+              ? <span className="ais-status-ok">已登录</span>
+              : <span className="ais-status-err">{p.auth?.loggedIn === false ? "未登录" : "待确认"}</span>}
+          </div>
+          {p.auth?.loggedIn !== true && (
+            <div className="ais-auth-action">
+              <button className="ais-btn ais-primary-btn" disabled={!p.available || st === "waiting"} onClick={(e) => { e.preventDefault(); onLogin(p.id); }}>
+                {st === "waiting" ? "等待登录…" : st === "timeout" || st === "failed" ? "重试登录" : "登录"}
+              </button>
+              {!p.available && <span className="ais-detail">先装好再登录</span>}
+            </div>
+          )}
+          {p.id === "codex" && <div className="ais-detail">PromptCut 使用独立登录，不受 Codex 桌面应用配置影响。</div>}
+          {p.auth?.loggedIn === null && p.auth.detail && <div className="ais-detail">{p.auth.detail}</div>}
+          {p.auth?.fixHint && <div className="ais-fixhint">{p.auth.fixHint}</div>}
+          {job && (
+            <div className="ais-setup-progress" role="status" aria-live="polite">
+              <div className={job.state === "failed" ? "ais-fixhint" : "ais-detail"}>{job.message}</div>
+              {job.state === "running" && <button className="ais-btn" onClick={(e) => { e.preventDefault(); onCancelSetup(p.id); }}>取消</button>}
+              {job.url && <a className="ais-btn" href={job.url} target="_blank" rel="noreferrer">打开登录网页 ↗</a>}
+              {job.deviceCode && <div>登录验证码：<strong>{job.deviceCode}</strong></div>}
+              {job.kind === "install" && job.logs.length > 0 && <details><summary>查看安装详情</summary><pre>{job.logs.join("")}</pre></details>}
+              {p.id === "codex" && job.kind === "login" && job.state === "failed" && (
+                <button className="ais-btn" onClick={(e) => { e.preventDefault(); onLogin(p.id, true); }}>改用设备码登录</button>
               )}
             </div>
           )}
-          {p.id === 'codex' && <div className="ais-detail">PromptCut 使用独立登录，不受 Codex 桌面应用配置影响。</div>}
-          {p.auth?.loggedIn === null && <div className="ais-detail">{p.auth.detail}</div>}
-          {job && <div className="ais-setup-progress" role="status" aria-live="polite">
-            <div className={job.state === 'failed' ? 'ais-fixhint' : 'ais-detail'}>{job.message}</div>
-            {job.state === 'running' && <button className="ais-btn" onClick={e => { e.preventDefault(); onCancelSetup(p.id); }}>取消</button>}
-            {job.url && <a className="ais-btn" href={job.url} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()}>打开登录网页 ↗</a>}
-            {job.deviceCode && <div>登录验证码：<strong>{job.deviceCode}</strong></div>}
-            {job.kind === 'install' && job.logs.length > 0 && <details><summary>查看安装详情</summary><pre>{job.logs.join('')}</pre></details>}
-            {p.id === 'codex' && job.kind === 'login' && job.state === 'failed' && <button className="ais-btn" onClick={e => { e.preventDefault(); onLogin(p.id, true); }}>改用设备码登录</button>}
-          </div>}
-        </div>
-      </label>
-      {p.id === 'agy' && agyPerms && (
-        <div className="ais-agy-perms">
-           <div className="ais-agy-perms-title">
-             授权 PromptCut 工具
-             <button className="ais-btn ais-primary-btn ais-small-btn" disabled={granting || agyPerms.missing.length === 0} onClick={handleGrant}>
-               {agyPerms.missing.length === 0 ? "已授权" : granting ? "授权中..." : "点击授权"}
-             </button>
-           </div>
-           <div className="ais-agy-perms-desc">
-             {agyPerms.missing.length === 0 ? `已授权 ${agyPerms.total} 个工具。` : `已授权 ${agyPerms.granted.length}/${agyPerms.total} 个工具。`}
-             会在 <code>{agyPerms.path}</code> 的 permissions.allow 里加 {agyPerms.missing.length} 条 mcp(promptcut/...) 规则；已有的规则不会动。
-           </div>
-           {agyPermError && <div className="ais-status-err">{agyPermError}</div>}
-        </div>
-      )}
-      </div>
+        </section>
+
+        {entry.id === "agy" && agyPerms && (
+          <section className="ais-step">
+            <div className="ais-step-head">
+              <span className="ais-step-no">3</span>
+              <span className="ais-step-title">授权 PromptCut 工具</span>
+              <button className="ais-btn ais-primary-btn ais-small-btn" disabled={granting || agyPerms.missing.length === 0} onClick={handleGrant}>
+                {agyPerms.missing.length === 0 ? "已授权" : granting ? "授权中..." : "点击授权"}
+              </button>
+            </div>
+            <div className="ais-agy-perms-desc">
+              {agyPerms.missing.length === 0 ? `已授权 ${agyPerms.total} 个工具。` : `已授权 ${agyPerms.granted.length}/${agyPerms.total} 个工具。`}
+              会在 <code>{agyPerms.path}</code> 的 permissions.allow 里加 {agyPerms.missing.length} 条 mcp(promptcut/...) 规则；已有的规则不会动。
+            </div>
+            {agyPermError && <div className="ais-status-err">{agyPermError}</div>}
+          </section>
+        )}
+      </>
     );
   };
 
-  const cliProviders = providers.filter(p => p.id !== "api");
+  const renderRouterBody = () => (
+    <section className="ais-step">
+      <div className="ais-detail">
+        分发方用你的本机识别码把 API 配置加密成一段密文。粘进来就自动解开并保存，
+        密钥全程不以明文出现在聊天记录或磁盘上。
+      </div>
+      <ApiSharePanel onSaveConfig={onSaveConfig} />
+    </section>
+  );
+
+  const renderCustomBody = () => (
+    <section className="ais-step">
+      <div className="ais-api-field">
+        <label>厂商</label>
+        <select value={apiVendor} onChange={(e) => setApiVendor(e.target.value as ApiVendor)}>
+          <option value="anthropic">Anthropic</option>
+          <option value="openai">OpenAI 兼容</option>
+          <option value="gemini">Gemini</option>
+        </select>
+      </div>
+      <div className="ais-api-field">
+        <label>API 地址</label>
+        <input
+          type="text"
+          value={apiBaseUrl}
+          onChange={(e) => setApiBaseUrl(e.target.value)}
+          placeholder={apiVendor === "anthropic" ? "https://api.anthropic.com" : apiVendor === "openai" ? "https://api.openai.com" : "https://generativelanguage.googleapis.com"}
+        />
+      </div>
+      <div className="ais-api-field">
+        <label>模型</label>
+        <input
+          type="text"
+          value={apiModel}
+          onChange={(e) => setApiModel(e.target.value)}
+          placeholder={apiVendor === "anthropic" ? "claude-sonnet-4-5" : apiVendor === "openai" ? "gpt-4o" : "gemini-2.0-flash"}
+        />
+      </div>
+      <div className="ais-api-field">
+        <label>API Key</label>
+        {config?.api.apiKey.set && !replaceKey ? (
+          <div className="ais-api-saved-key">
+            <span>已保存 ••••{config.api.apiKey.last4}</span>
+            <button className="ais-btn" onClick={(e) => { e.preventDefault(); setReplaceKey(true); }}>更换</button>
+          </div>
+        ) : (
+          <input type="password" value={apiKeyInput} onChange={(e) => setApiKeyInput(e.target.value)} placeholder="粘贴 API Key" />
+        )}
+      </div>
+      <div className="ais-api-actions">
+        <button className="ais-btn ais-primary-btn" onClick={(e) => { e.preventDefault(); handleSaveApi(); }} disabled={saving}>
+          {saving ? "保存中…" : "保存"}
+        </button>
+        {saveSuccess && <span className="ais-status-ok">已保存</span>}
+        {saveError && <span className="ais-status-err">{saveError}</span>}
+      </div>
+      <div className="ais-detail">
+        Key 落盘时用本机指纹加密（<code>ai.json</code> 里存的是密文），不会明文躺在配置文件里；
+        它挡的是备份、同步盘、误提交这类外泄，挡不住能在这台机器上跑代码的人。
+      </div>
+    </section>
+  );
+
+  const entry = openedEntry ? SETUP_ENTRIES.find((e) => e.id === openedEntry) : null;
 
   return createPortal(
     <div className="ais-backdrop" onClick={onClose}>
       <div className="ais-dialog" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
-        <div className="ais-title">选择 AI 助手的驱动方式</div>
-        
-        <div className="ais-providers">
-          {cliProviders.map(renderCliRow)}
-          
-          <label className="ais-row ais-api-row">
-            <input 
-              type="radio" 
-              name="ais-provider" 
-              checked={selected === "api"}
-              onChange={() => setSelected("api")} 
-            />
-            <div className="ais-row-content">
-              <div className="ais-row-header">
-                <span className="ais-row-name">API 直连</span>
+        {!entry ? (
+          <>
+            <div className="ais-title">选择 AI 助手的驱动方式</div>
+            <div className="ais-grid">
+              {SETUP_ENTRIES.map((item) => {
+                const state = readiness(item);
+                const isCurrent = current === item.provider && (isCliEntry(item.id) || readFace() === item.id);
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    className={`ais-card${isCurrent ? " is-current" : ""}`}
+                    onClick={() => goTo(item.id)}
+                  >
+                    <span className="ais-card-icon">{item.icon}</span>
+                    <span className="ais-card-name">{item.name}</span>
+                    <span className="ais-card-tagline">{item.tagline}</span>
+                    <span className={`ais-card-state is-${state.tone}`}>{state.label}</span>
+                    {isCurrent && <span className="ais-card-current">正在使用</span>}
+                  </button>
+                );
+              })}
+            </div>
+            <div className="ais-protocol-mode">
+              <label>
+                <input type="checkbox" checked={toolProtocol} onChange={(e) => handleSaveProtocol(e.target.checked)} />
+                文本协议模式（CLI 原生工具被拒时用）
+              </label>
+            </div>
+            <div className="ais-footer">
+              <div className="ais-footer-actions">
+                <button className="ais-btn" onClick={onClose}>关闭</button>
+              </div>
+              {stt && <div className="ais-stt-info">语音识别: {stt.engine} - {stt.available ? "可用" : `不可用 (${stt.hint})`}</div>}
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="ais-detail-head">
+              <button className="ais-btn ais-back-btn" onClick={() => goTo(null)}>← 返回</button>
+              <span className="ais-card-icon ais-detail-icon">{entry.icon}</span>
+              <div className="ais-detail-titles">
+                <div className="ais-title">{entry.name}</div>
+                <div className="ais-detail">{entry.tagline}</div>
               </div>
             </div>
-          </label>
-          
-          {selected === "api" && (
-            <div className="ais-api">
-              <div className="ais-api-field">
-                <select value={apiVendor} onChange={e => setApiVendor(e.target.value as ApiVendor)}>
-                  <option value="anthropic">Anthropic</option>
-                  <option value="openai">OpenAI 兼容</option>
-                  <option value="gemini">Gemini</option>
-                </select>
-              </div>
-              <div className="ais-api-field">
-                <input 
-                  type="text" 
-                  value={apiBaseUrl} 
-                  onChange={e => setApiBaseUrl(e.target.value)} 
-                  placeholder={apiVendor === "anthropic" ? "https://api.anthropic.com" : apiVendor === "openai" ? "https://api.openai.com" : "https://generativelanguage.googleapis.com"}
+
+            <div className="ais-detail-body">
+              {isCliEntry(entry.id) ? renderCliBody(entry) : entry.id === "router" ? renderRouterBody() : renderCustomBody()}
+              {diagReport && (
+                <textarea
+                  className="ais-share-blob"
+                  readOnly
+                  rows={6}
+                  value={diagReport}
+                  onFocus={(e) => e.currentTarget.select()}
                 />
-              </div>
-              <div className="ais-api-field">
-                <input 
-                  type="text" 
-                  value={apiModel} 
-                  onChange={e => setApiModel(e.target.value)} 
-                  placeholder={apiVendor === "anthropic" ? "claude-sonnet-4-5" : apiVendor === "openai" ? "gpt-4o" : "gemini-2.0-flash"}
-                />
-              </div>
-              <div className="ais-api-field">
-                {config?.api.apiKey.set && !replaceKey ? (
-                  <div className="ais-api-saved-key">
-                    <span>已保存 ••••{config.api.apiKey.last4}</span>
-                    <button className="ais-btn" onClick={(e) => { e.preventDefault(); setReplaceKey(true); }}>更换</button>
-                  </div>
-                ) : (
-                  <input 
-                    type="password" 
-                    value={apiKeyInput} 
-                    onChange={e => setApiKeyInput(e.target.value)} 
-                    placeholder="粘贴 API Key"
-                  />
-                )}
-              </div>
-              <div className="ais-api-actions">
-                <button className="ais-btn ais-primary-btn" onClick={(e) => { e.preventDefault(); handleSaveApi(); }} disabled={saving}>
-                  {saving ? "保存中…" : "保存"}
+              )}
+            </div>
+
+            <div className="ais-footer">
+              <div className="ais-footer-actions">
+                <button className="ais-btn" onClick={copyDiagnostics} title="把本机环境、安装与登录状态复制成 JSON（不含密钥）">
+                  Debugger
                 </button>
-                {saveSuccess && <span className="ais-status-ok">已保存</span>}
-                {saveError && <span className="ais-status-err">{saveError}</span>}
+                <span className="ais-use-hint">{diagState || (readiness(entry).ok ? "" : readiness(entry).label)}</span>
+                <button
+                  className="ais-btn ais-primary-btn"
+                  disabled={!readiness(entry).ok}
+                  onClick={() => { writeFace(entry.id); onChoose(entry.provider); }}
+                >
+                  使用这一项
+                </button>
               </div>
             </div>
-          )}
-        </div>
-
-        <div className="ais-protocol-mode">
-           <label>
-              <input type="checkbox" checked={toolProtocol} onChange={e => handleSaveProtocol(e.target.checked)} />
-              文本协议模式（CLI 原生工具被拒时用）
-           </label>
-        </div>
-
-        <div className="ais-footer">
-          <div className="ais-footer-actions">
-            <span className="ais-use-hint">{!canUse ? useHint : ""}</span>
-            <button className="ais-btn" onClick={onClose}>以后再说</button>
-            <button 
-              className="ais-btn ais-primary-btn" 
-              disabled={!canUse} 
-              onClick={() => { if(selected) onChoose(selected); }}
-            >
-              使用所选方案
-            </button>
-          </div>
-          {stt && (
-            <div className="ais-stt-info">
-              语音识别: {stt.engine} - {stt.available ? "可用" : `不可用 (${stt.hint})`}
-            </div>
-          )}
-        </div>
+          </>
+        )}
       </div>
-    </div>, document.body
+    </div>,
+    document.body,
   );
 }
