@@ -383,3 +383,182 @@ html.skin-swapping * {
 /* 时间轴刻度区与轨道头 */
 [data-skin] footer .bg-neutral-900 { background: var(--ui-bg-2); }
 [data-skin] footer .bg-neutral-800 { background: var(--ui-panel); }
+
+/* ============================================================
+ * 5. 设计稿色卡:语义色 / 轨道色 / 悬浮层 / 强调色状态
+ *    先给所有皮肤一组默认值,再定义「暗室」「亮室」两套完整取值
+ * ============================================================ */
+[data-skin] {
+  --ui-float: var(--ui-panel-2);
+  --ui-accent-hover: color-mix(in oklab, var(--ui-accent) 80%, white);
+  --ui-accent-press: color-mix(in oklab, var(--ui-accent) 75%, black);
+  --ui-danger: #e2564d;
+  --ui-warn: #e0a13a;
+  --ui-success: #4f9e5c;
+  --ui-info: var(--ui-accent);
+  --ui-track-video: #37a39b;
+  --ui-track-audio: #57a55f;
+  --ui-track-image: #9182dd;
+  --ui-track-text: #d6a03f;
+  --ui-track-fx: #cc6aa8;
+  --ui-track-transition: #6f8ce0;
+  --ui-track-sticker: #d2764f;
+}
+[data-skin="mist"] {
+  --ui-danger: #c0433b; --ui-warn: #a5762a; --ui-success: #3d7f45;
+  --ui-track-video: #1f7d76; --ui-track-audio: #3d7f45; --ui-track-image: #6656b8; --ui-track-text: #a5762a;
+  --ui-track-fx: #a44583; --ui-track-transition: #4a63b8; --ui-track-sticker: #a75531;
+}
+
+[data-skin="cutroom-dark"] {
+  --ui-bg: #0A0C0E;
+  --ui-bg-2: #14171A;
+  --ui-panel: #1B1F23;
+  --ui-panel-2: #23282D;
+  --ui-float: #2E343A;
+  --ui-border: #262C32;
+  --ui-border-strong: #3C444C;
+  --ui-fg: #E9EDF1;
+  --ui-fg-muted: #9BA5AF;
+  --ui-fg-faint: #6A737C;
+  --ui-accent: #7FA8D4;
+  --ui-accent-hover: #99BDE0;
+  --ui-accent-press: #5F8AB8;
+  --ui-accent-fg: #0A0C0E;
+  --ui-accent-soft: #1D2A38;
+  --ui-danger: #E2564D;
+  --ui-warn: #E0A13A;
+  --ui-success: #4F9E5C;
+  --ui-info: #7FA8D4;
+  --ui-track-video: #37A39B;
+  --ui-track-audio: #57A55F;
+  --ui-track-image: #9182DD;
+  --ui-track-text: #D6A03F;
+  --ui-track-fx: #CC6AA8;
+  --ui-track-transition: #6F8CE0;
+  --ui-track-sticker: #D2764F;
+  --ui-radius: 4px;
+  --ui-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+  --ui-glow: 0 0 10px rgba(127, 168, 212, 0.45);
+  --ui-font: ui-sans-serif, system-ui, sans-serif;
+  --ui-font-mono: ui-monospace, SFMono-Regular, monospace;
+  --ui-backdrop: rgba(10, 12, 14, 0.7);
+  --ui-scroll-thumb: #3C444C;
+  --ui-scroll-thumb-hover: #6A737C;
+
+  --bg-canvas: var(--ui-bg);
+  --bg-panel: var(--ui-panel);
+  --ink: var(--ui-fg);
+  --ink-muted: var(--ui-fg-muted);
+  --ink-faint: var(--ui-fg-faint);
+  --hairline: var(--ui-border);
+  --hairline-strong: var(--ui-border-strong);
+  --accent: var(--ui-accent);
+  --on-accent: var(--ui-accent-fg);
+  --danger: var(--ui-danger);
+  --fill-subtle: var(--ui-panel-2);
+  --fill-hover: var(--ui-float);
+  --font-sans: var(--ui-font);
+  --font-mono: var(--ui-font-mono);
+}
+
+[data-skin="cutroom-light"] {
+  --ui-bg: #DCDEE1;
+  --ui-bg-2: #ECEEF0;
+  --ui-panel: #FFFFFF;
+  --ui-panel-2: #E4E6E9;
+  --ui-float: #FFFFFF;
+  --ui-border: #E2E5E8;
+  --ui-border-strong: #CBD0D6;
+  --ui-fg: #1D1F20;
+  --ui-fg-muted: #5C6268;
+  --ui-fg-faint: #8D939A;
+  --ui-accent: #5980A6;
+  --ui-accent-hover: #749DC4;
+  --ui-accent-press: #416180;
+  --ui-accent-fg: #FFFFFF;
+  --ui-accent-soft: #EAF1F8;
+  --ui-danger: #C0433B;
+  --ui-warn: #A5762A;
+  --ui-success: #3D7F45;
+  --ui-info: #5980A6;
+  --ui-track-video: #1F7D76;
+  --ui-track-audio: #3D7F45;
+  --ui-track-image: #6656B8;
+  --ui-track-text: #A5762A;
+  --ui-track-fx: #A44583;
+  --ui-track-transition: #4A63B8;
+  --ui-track-sticker: #A75531;
+  --ui-radius: 4px;
+  --ui-shadow: 0 8px 24px rgba(29, 31, 32, 0.14);
+  --ui-glow: 0 0 8px rgba(89, 128, 166, 0.35);
+  --ui-font: ui-sans-serif, system-ui, sans-serif;
+  --ui-font-mono: ui-monospace, SFMono-Regular, monospace;
+  --ui-backdrop: rgba(29, 31, 32, 0.35);
+  --ui-scroll-thumb: #CBD0D6;
+  --ui-scroll-thumb-hover: #8D939A;
+
+  --bg-canvas: var(--ui-bg);
+  --bg-panel: var(--ui-panel);
+  --ink: var(--ui-fg);
+  --ink-muted: var(--ui-fg-muted);
+  --ink-faint: var(--ui-fg-faint);
+  --hairline: var(--ui-border);
+  --hairline-strong: var(--ui-border-strong);
+  --accent: var(--ui-accent);
+  --on-accent: var(--ui-accent-fg);
+  --danger: var(--ui-danger);
+  --fill-subtle: var(--ui-panel-2);
+  --fill-hover: var(--ui-bg-2);
+  --font-sans: var(--ui-font);
+  --font-mono: var(--ui-font-mono);
+}
+/* 亮室:浅色皮肤不需要底部径向光,面板靠阴影分层(设计稿:L4 = 白 + 阴影) */
+[data-skin="cutroom-light"] .bg-neutral-950 { background-image: none; }
+[data-skin="cutroom-light"] aside.border-r, [data-skin="cutroom-light"] aside.border-l, [data-skin="cutroom-light"] footer.border-t {
+  background: var(--ui-bg-2);
+}
+
+/* 悬浮层 L4:菜单、弹窗、悬浮态 */
+[data-skin] .ais-dialog { background: var(--ui-float); box-shadow: var(--ui-shadow); }
+[data-skin] .hover\:bg-neutral-800:hover { background-color: var(--ui-float); }
+
+/* 语义色:状态反馈,不进入常态界面 */
+[data-skin] .text-red-500, [data-skin] .text-red-400 { color: var(--ui-danger); }
+[data-skin] .bg-red-500, [data-skin] .bg-red-600 { background-color: var(--ui-danger); }
+[data-skin] .text-amber-400, [data-skin] .text-yellow-400 { color: var(--ui-warn); }
+[data-skin] .text-emerald-400, [data-skin] .text-green-400 { color: var(--ui-success); }
+[data-skin] .text-sky-400, [data-skin] .text-blue-400 { color: var(--ui-info); }
+
+/* 强调色状态:悬浮 / 按下(主操作按钮与选中) */
+[data-skin] .bg-sky-600, [data-skin] .bg-blue-500.rounded, [data-skin] button.bg-blue-600 {
+  background: var(--ui-accent); color: var(--ui-accent-fg); border-color: var(--ui-accent-press);
+}
+[data-skin] button.bg-blue-600:hover { background: var(--ui-accent-hover); }
+[data-skin] button.bg-blue-600:active { background: var(--ui-accent-press); }
+
+/* 轨道色:片段填充用基础色,悬浮 ±8%,选中加 2px 强调色描边;轨道槽用同色 12% 叠加 */
+[data-skin] .bg-blue-600:not(button) {
+  background: linear-gradient(180deg, color-mix(in oklab, var(--ui-track-fx) 92%, white), color-mix(in oklab, var(--ui-track-fx) 88%, black));
+  border: 1px solid color-mix(in oklab, var(--ui-track-fx) 70%, black);
+  color: #fff;
+}
+[data-skin] .hover\:bg-blue-500:hover:not(button) {
+  background: linear-gradient(180deg, color-mix(in oklab, var(--ui-track-fx) 84%, white), var(--ui-track-fx));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.3), 0 0 10px color-mix(in oklab, var(--ui-track-fx) 50%, transparent);
+}
+[data-skin] .bg-emerald-600 {
+  background: linear-gradient(180deg, color-mix(in oklab, var(--ui-track-video) 92%, white), color-mix(in oklab, var(--ui-track-video) 88%, black));
+  border: 1px solid color-mix(in oklab, var(--ui-track-video) 70%, black);
+  color: #fff;
+}
+[data-skin] .hover\:bg-emerald-500:hover {
+  background: linear-gradient(180deg, color-mix(in oklab, var(--ui-track-video) 84%, white), var(--ui-track-video));
+}
+[data-skin] .ring-2, [data-skin] .ring-white, [data-skin] .outline-white { --tw-ring-color: var(--ui-accent); outline-color: var(--ui-accent); }
+[data-skin] footer .bg-neutral-900 { background: var(--ui-bg-2); }
+[data-skin] footer .bg-neutral-800 { background: var(--ui-panel); }
+
+/* 播放头:设计稿里播放头与选中用强调色,不用录制红(红只留给状态反馈) */
+[data-skin] [data-pc="playhead"] .bg-red-500 { background-color: var(--ui-accent); box-shadow: var(--ui-glow); }
+[data-skin] [data-pc="playhead"] .clip-playhead { background-color: var(--ui-accent); }

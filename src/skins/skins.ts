@@ -1,4 +1,6 @@
 // 注意：这里的变量值必须和 skins.css 中的变量块保持完全同步！
+// 暗室 / 亮室 两套取自设计稿「视频剪辑软件 UI 色卡」:五级表面 L0–L4、三级文字、强弱描边、
+// 强调色(基础/悬浮/按下/弱底)、四个语义色、七类素材轨道色。其余皮肤只定义基础变量,语义色和轨道色走 skins.css 的默认值。
 export interface Skin {
   id: string;
   name: string;
@@ -7,6 +9,88 @@ export interface Skin {
 }
 
 export const skins: Skin[] = [
+  {
+    id: "cutroom-dark",
+    name: "暗室 (Cutroom Dark)",
+    description: "设计稿默认深色主题:五级表面、钢蓝强调、按素材类型的轨道色",
+    vars: {
+      "ui-bg": "#0A0C0E",
+      "ui-bg-2": "#14171A",
+      "ui-panel": "#1B1F23",
+      "ui-panel-2": "#23282D",
+      "ui-float": "#2E343A",
+      "ui-border": "#262C32",
+      "ui-border-strong": "#3C444C",
+      "ui-fg": "#E9EDF1",
+      "ui-fg-muted": "#9BA5AF",
+      "ui-fg-faint": "#6A737C",
+      "ui-accent": "#7FA8D4",
+      "ui-accent-hover": "#99BDE0",
+      "ui-accent-press": "#5F8AB8",
+      "ui-accent-fg": "#0A0C0E",
+      "ui-accent-soft": "#1D2A38",
+      "ui-danger": "#E2564D",
+      "ui-warn": "#E0A13A",
+      "ui-success": "#4F9E5C",
+      "ui-info": "#7FA8D4",
+      "ui-track-video": "#37A39B",
+      "ui-track-audio": "#57A55F",
+      "ui-track-image": "#9182DD",
+      "ui-track-text": "#D6A03F",
+      "ui-track-fx": "#CC6AA8",
+      "ui-track-transition": "#6F8CE0",
+      "ui-track-sticker": "#D2764F",
+      "ui-radius": "4px",
+      "ui-shadow": "0 6px 18px rgba(0, 0, 0, 0.45)",
+      "ui-glow": "0 0 10px rgba(127, 168, 212, 0.45)",
+      "ui-font": "ui-sans-serif, system-ui, sans-serif",
+      "ui-font-mono": "ui-monospace, SFMono-Regular, monospace",
+      "ui-backdrop": "rgba(10, 12, 14, 0.7)",
+      "ui-scroll-thumb": "#3C444C",
+      "ui-scroll-thumb-hover": "#6A737C",
+    },
+  },
+  {
+    id: "cutroom-light",
+    name: "亮室 (Cutroom Light)",
+    description: "设计稿浅色主题:协作与轻量编辑,靠阴影分层",
+    vars: {
+      "ui-bg": "#DCDEE1",
+      "ui-bg-2": "#ECEEF0",
+      "ui-panel": "#FFFFFF",
+      "ui-panel-2": "#E4E6E9",
+      "ui-float": "#FFFFFF",
+      "ui-border": "#E2E5E8",
+      "ui-border-strong": "#CBD0D6",
+      "ui-fg": "#1D1F20",
+      "ui-fg-muted": "#5C6268",
+      "ui-fg-faint": "#8D939A",
+      "ui-accent": "#5980A6",
+      "ui-accent-hover": "#749DC4",
+      "ui-accent-press": "#416180",
+      "ui-accent-fg": "#FFFFFF",
+      "ui-accent-soft": "#EAF1F8",
+      "ui-danger": "#C0433B",
+      "ui-warn": "#A5762A",
+      "ui-success": "#3D7F45",
+      "ui-info": "#5980A6",
+      "ui-track-video": "#1F7D76",
+      "ui-track-audio": "#3D7F45",
+      "ui-track-image": "#6656B8",
+      "ui-track-text": "#A5762A",
+      "ui-track-fx": "#A44583",
+      "ui-track-transition": "#4A63B8",
+      "ui-track-sticker": "#A75531",
+      "ui-radius": "4px",
+      "ui-shadow": "0 8px 24px rgba(29, 31, 32, 0.14)",
+      "ui-glow": "0 0 8px rgba(89, 128, 166, 0.35)",
+      "ui-font": "ui-sans-serif, system-ui, sans-serif",
+      "ui-font-mono": "ui-monospace, SFMono-Regular, monospace",
+      "ui-backdrop": "rgba(29, 31, 32, 0.35)",
+      "ui-scroll-thumb": "#CBD0D6",
+      "ui-scroll-thumb-hover": "#8D939A",
+    },
+  },
   {
     id: "graphite",
     name: "石墨 (Graphite)",
@@ -144,4 +228,4 @@ export const skins: Skin[] = [
   },
 ];
 
-export const DEFAULT_SKIN = "graphite";
+export const DEFAULT_SKIN = "cutroom-dark";
