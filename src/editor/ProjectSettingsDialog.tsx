@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { actions, useStore } from "../store/project";
+import "./ProjectSettingsDialog.css";
 
 export interface ProjectSettingsDialogProps {
   open: boolean;
@@ -46,14 +47,21 @@ function inferSettings(w: number, h: number): { ratio: AspectRatio; orientation:
 export function ProjectSettingsDialog({ open, onClose }: ProjectSettingsDialogProps) {
   const curW = useStore((s) => s.project.width);
   const curH = useStore((s) => s.project.height);
+  const curName = useStore((s) => s.project.name);
 
+  const [name, setName] = useState("");
   const [ratio, setRatio] = useState<AspectRatio>("16:9");
   const [orientation, setOrientation] = useState<Orientation>("horizontal");
 
   const currentRes = RESOLUTION_MAP[ratio][orientation];
 
   const handleConfirm = () => {
-    actions.setProjectMeta({ width: currentRes.width, height: currentRes.height });
+    // 名字允许留空,但不允许真的变成空标题——空了就退回「未命名」
+    actions.setProjectMeta({
+      name: name.trim() || "未命名",
+      width: currentRes.width,
+      height: currentRes.height,
+    });
     onClose();
   };
 
@@ -75,8 +83,9 @@ export function ProjectSettingsDialog({ open, onClose }: ProjectSettingsDialogPr
       const initial = inferSettings(curW, curH);
       setRatio(initial.ratio);
       setOrientation(initial.orientation);
+      setName(curName);
     }
-  }, [open, curW, curH]);
+  }, [open, curW, curH, curName]);
 
   useEffect(() => {
     if (!open) return;
@@ -108,6 +117,18 @@ export function ProjectSettingsDialog({ open, onClose }: ProjectSettingsDialogPr
           项目设置
         </div>
         <div className="pc-dialog-body">
+          <div className="pc-dialog-row">
+            <label className="pc-dialog-label" htmlFor="pc-proj-name">项目名称</label>
+            <input
+              id="pc-proj-name"
+              className="pc-dialog-input"
+              type="text"
+              value={name}
+              maxLength={80}
+              placeholder="未命名"
+              onChange={(e) => setName(e.target.value)}
+            />
+          </div>
           <div className="pc-dialog-row">
             <span className="pc-dialog-label">画幅比例</span>
             <div className="pc-dialog-options">
