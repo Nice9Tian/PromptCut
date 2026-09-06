@@ -15,6 +15,8 @@ import { ToolbarOverflowMenu } from "./ToolbarOverflowMenu";
 import { IconHistory, IconSettings } from "../../ui/icons";
 import type { OverflowEntry } from "./ToolbarOverflowMenu";
 import { ChatHistoryDrawer } from "./ChatHistoryDrawer";
+import { ScriptDialog } from "./ScriptDialog";
+import { useScript } from "../../ai/script";
 import {
   kindOfName,
   newAttachmentId,
@@ -65,7 +67,7 @@ type ToolbarControl = OverflowEntry;
  * 顶栏放不下时往「⋯」菜单里收的顺序:排在前面的先收。
  * provider 不在表里——当前用哪个驱动是这个面板的身份,再窄也留在栏上。
  */
-const OVERFLOW_ORDER = ["diag", "auto", "thinking", "view", "new"] as const;
+const OVERFLOW_ORDER = ["diag", "thinking", "view", "new", "script", "auto"] as const;
 
 /**
  * 小方块的颜色分类。
@@ -166,10 +168,12 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
       return false;
     }
   })();
-  const { messages, providers, sttInfo, provider, setProvider, streaming, send, abort, newChat, error, setMessages, login, loginState, setupJobs, cancelSetup, install, installState, installError, config, saveConfig, setupOpen, openSetup, closeSetup } = useAiChat({ mock });
+  const { messages, providers, sttInfo, provider, setProvider, streaming, send, runWorkflow, workflowRoles, abort, newChat, error, setMessages, login, loginState, setupJobs, cancelSetup, install, installState, installError, config, saveConfig, setupOpen, openSetup, closeSetup } = useAiChat({ mock });
   const history = useChatHistory({ provider, messages, sessionId: undefined });
   const installJobs = useInstallJobs();
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [scriptOpen, setScriptOpen] = useState(false);
+  const script = useScript();
   const [inputText, setInputText] = useState("");
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
   const [uploading, setUploading] = useState(false);
@@ -497,10 +501,32 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
       ),
     },
     {
+      key: "script",
+      label: "剧本",
+      node: (
+        <button
+          key="script"
+          data-key="script"
+          className="ai-new-chat-btn"
+          title={script ? `剧本已写 ${script.length} 字，每轮都会附给 AI` : "写下这条片子要讲什么，AI 每轮都会照着它做"}
+          onClick={() => setScriptOpen(true)}
+        >
+          剧本{script ? " ●" : ""}
+        </button>
+      ),
+    },
+    {
       key: "auto",
       label: "一键配特效",
       node: (
-        <button key="auto" data-key="auto" className="ai-new-chat-btn" title="让 AI 自动给素材库第一个视频配动效" disabled={streaming} onClick={() => send("对素材库第一个视频执行 auto_workflow")}>
+        <button
+          key="auto"
+          data-key="auto"
+          className="ai-new-chat-btn"
+          title={`依次跑：${workflowRoles.map((r) => r.name).join(" → ")}`}
+          disabled={streaming}
+          onClick={() => void runWorkflow()}
+        >
           一键配特效
         </button>
       ),
@@ -886,6 +912,7 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
         config={config}
         onSaveConfig={saveConfig}
       />
+      <ScriptDialog open={scriptOpen} onClose={() => setScriptOpen(false)} />
       <ChatHistoryDrawer
         open={historyOpen}
         onClose={() => setHistoryOpen(false)}

@@ -2,6 +2,34 @@ import { recordTrace } from './debug';
 import { useState, useEffect, useRef, useCallback } from "react";
 import type { AiProvider, ChatMessage, ChatAttachment, MessagePart, ProviderInfo, RunEvent, SttInfo, LoginState, PublicAiConfig, AiConfigPatch, CliSetupJob } from "./types";
 import { parseSseChunks } from "./sse";
+import { getScript } from "./script";
+import { WORKFLOW_ROLES } from "./roles";
+import { getState } from "../store/project";
+
+/**
+ * 把素材库里的素材整理成附件清单的形状,跟着每次发送一起带上。
+ *
+ * 用 path(服务端和外部命令行都能读的绝对磁盘路径)而不是 url ——
+ * 导入的素材 url 是 blob: 开头的浏览器内部地址,对模型和工具都没有意义。
+ * 还没上传完、拿不到 path 的先不列,免得给出一个用不了的地址。
+ */
+function mediaAsAttachments(): ChatAttachment[] {
+  try {
+    return getState().project.media
+      .filter((m) => m.path)
+      .map((m) => ({
+        id: m.id,
+        name: m.name,
+        kind: m.kind,
+        path: m.path,
+        url: "",
+        status: "ready" as const,
+        durationSec: m.duration,
+      })) as unknown as ChatAttachment[];
+  } catch {
+    return [];
+  }
+}
 
 /** 往有序片段里追加文字(接在末尾的文字片段后面,不新开一段) */
 function appendTextPart(parts: MessagePart[] | undefined, delta: string): MessagePart[] {
@@ -417,7 +445,12 @@ export function useAiChat(opts?: { mock?: boolean }) {
           provider,
           prompt: text,
           sessionId,
-          attachments,
+          // 素材库里的东西一并列进附件清单:模型不用先花一轮 list_media 才知道
+          // 手上有哪些素材,「给每个视频配字幕」这类要求也才有确定的对象。
+          attachments: [...(attachments ?? []), ...mediaAsAttachments()],
+          // 剧本每一轮都带上,由服务端拼进系统提示词 —— 多轮跑下来最容易跑偏,
+          // 只在第一条消息里说一次是拉不住的。
+          script: getScript(),
         }),
         signal: ac.signal,
       });
@@ -553,6 +586,21 @@ export function useAiChat(opts?: { mock?: boolean }) {
     }
   };
 
+  /**
+   * 一键配特效:按顺序把 src/ai/roles/ 里的角色各跑一轮。
+   *
+   * 串行而不是拼成一段长提示词 —— 剪辑导演要先看齐全部素材才排得了片,
+   * 特效助理要先有文字稿才配得了字幕和动效,合在一轮里模型会顾此失彼。
+   * 每一轮都是完整的一次 send,所以中途出错或被用户停掉,后面的角色不会再跑。
+   */
+  const runWorkflow = useCallback(async () => {
+    for (const role of WORKFLOW_ROLES) {
+      await send(role.prompt);
+      // 用户按了停止就别继续下一个角色了
+      if (abortControllerRef.current?.signal.aborted) break;
+    }
+  }, [provider, sessionIds]);
+
   return {
     messages,
     providers,
@@ -560,6 +608,8 @@ export function useAiChat(opts?: { mock?: boolean }) {
     provider,
     setProvider: handleProviderChange,
     sessionIds,
+    runWorkflow,
+    workflowRoles: WORKFLOW_ROLES,
     streaming,
     send,
     abort,

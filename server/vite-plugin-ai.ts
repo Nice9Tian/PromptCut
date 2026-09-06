@@ -236,13 +236,21 @@ export default function vitePluginAi(): Plugin {
           try {
             const runners = await getRunner();
             const data = JSON.parse(body);
-            const { provider, prompt, sessionId, model, attachments } = data;
-            
+            const { provider, prompt, sessionId, model, attachments, script } = data;
+
             let systemPrompt = '';
             try {
               systemPrompt = fs.readFileSync(new URL('./ai-system-prompt.md', import.meta.url), 'utf-8');
             } catch {
               systemPrompt = 'System prompt missing.';
+            }
+
+            // 剧本每一轮都拼进系统提示词,而不是只在第一条用户消息里说一次:
+            // 多轮执行最容易顺着中间结果越走越偏,摆在系统提示里才拉得住。
+            if (typeof script === 'string' && script.trim()) {
+              systemPrompt += `\n\n## 本片剧本(用户写的,每一步都要照它来)\n\n${script.trim()}\n\n` +
+                '这是这条片子的主线。做任何编排、配字幕、配动效的决定时都要对照它;' +
+                '和它冲突的做法不要做,拿不准就按剧本写的来。剧本没写到的细节可以自己判断。';
             }
 
             let finalPrompt = prompt;
