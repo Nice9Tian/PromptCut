@@ -8,6 +8,9 @@ import type { ChatAttachment, ChatMessage, MessagePart, ToolCallInfo } from "../
 import { conversationReport, copyDebugReport } from "../../ai/debug";
 import { AiSetupDialog } from "./AiSetupDialog";
 import { useChatHistory } from "../../ai/useChatHistory";
+import { useToolbarLayout, MORE_KEY } from "./useToolbarLayout";
+import { ToolbarOverflowMenu } from "./ToolbarOverflowMenu";
+import type { OverflowEntry } from "./ToolbarOverflowMenu";
 import { ChatHistoryDrawer } from "./ChatHistoryDrawer";
 import {
   kindOfName,
@@ -49,6 +52,15 @@ function partsOf(m: ChatMessage): MessagePart[] {
   for (const t of m.tools || []) legacy.push({ kind: "tool", ...t });
   return legacy;
 }
+
+/** 顶栏上的一个控件。栏上和「⋯」菜单里渲染的是同一个 node */
+type ToolbarControl = OverflowEntry;
+
+/**
+ * 顶栏放不下时往「⋯」菜单里收的顺序:排在前面的先收。
+ * provider 不在表里——当前用哪个驱动是这个面板的身份,再窄也留在栏上。
+ */
+const OVERFLOW_ORDER = ["diag", "auto", "history", "setup", "view", "new"] as const;
 
 /** 正在执行、还没有结果的那个工具(有就说明这一刻在跑它) */
 function runningTool(parts: MessagePart[]): ToolCallInfo | null {
@@ -285,6 +297,11 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
   const toggleTool = toggleIn(expanded, setExpanded);
   const toggleSteps = toggleIn(showSteps, setShowSteps);
 
+  // 顶栏按实测宽度排布:窄了先换行、再收文字,还不够就把低优先级的收进「⋯」
+  const controlsRef = useRef<HTMLDivElement>(null);
+  const measureRef = useRef<HTMLDivElement>(null);
+  const toolbar = useToolbarLayout(controlsRef, measureRef, OVERFLOW_ORDER);
+
   /**
    * 把这段对话连同每一步的执行事件复制成一份 JSON,出问题时直接贴给别人看。
    * 密钥和模型私有思考在 conversationReport 里已经剔掉,这里不用再处理。
@@ -331,6 +348,103 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
     );
   }
 
+  /**
+   * 顶栏控件。列成数组是为了让「留在栏上」还是「收进 ⋯ 菜单」由测量结果决定,
+   * 两处渲染的是同一个 node,行为完全一致。data-key 供镜像行按 key 索引宽度。
+   * 以后加按钮:往这里加一项,再在 OVERFLOW_ORDER 里排个位置就行。
+   */
+  const controls: ToolbarControl[] = [
+    {
+      key: "view",
+      label: "显示模式",
+      showLabel: true,
+      node: (
+        <div className="ai-mode-toggle" role="group" aria-label="显示模式" key="view" data-key="view">
+          <button className={view === "simple" ? "is-on" : ""} onClick={() => changeView("simple")} title="只看 AI 的回复">
+            简洁
+          </button>
+          <button className={view === "verbose" ? "is-on" : ""} onClick={() => changeView("verbose")} title="连每一步操作一起看">
+            详细
+          </button>
+        </div>
+      ),
+    },
+    {
+      key: "diag",
+      label: "复制诊断报告",
+      node: (
+        <button
+          key="diag"
+          data-key="diag"
+          className="ai-gear-btn"
+          title="把这段对话和每一步执行事件复制成 JSON(不含密钥)"
+          aria-label="复制诊断报告"
+          onClick={copyDiagnostics}
+          disabled={messages.length === 0}
+        >
+          <span aria-hidden="true">⎘</span><span className="ai-btn-label">诊断</span>
+        </button>
+      ),
+    },
+    {
+      key: "setup",
+      label: "AI 设置",
+      node: (
+        <button key="setup" data-key="setup" className="ai-gear-btn" title="AI 设置" aria-label="AI 设置" onClick={openSetup}>
+          <span aria-hidden="true">⚙</span><span className="ai-btn-label">AI 设置</span>
+        </button>
+      ),
+    },
+    {
+      key: "provider",
+      label: "驱动方式",
+      showLabel: true,
+      node: (
+        <select
+          key="provider"
+          data-key="provider"
+          className="ai-provider-select"
+          aria-label="AI 驱动方式"
+          value={provider || ""}
+          onChange={e => setProvider(e.target.value as any)}
+        >
+          {providers.map(p => (
+            <option key={p.id} value={p.id} disabled={!p.available} title={p.available ? "" : "未安装"}>
+              {p.label || (p.id === "claude" ? "Claude Code" : p.id === "agy" ? "Antigravity" : p.id === "codex" ? "Codex" : p.id)}
+            </option>
+          ))}
+        </select>
+      ),
+    },
+    {
+      key: "auto",
+      label: "一键配特效",
+      node: (
+        <button key="auto" data-key="auto" className="ai-new-chat-btn" title="让 AI 自动给素材库第一个视频配动效" disabled={streaming} onClick={() => send("对素材库第一个视频执行 auto_workflow")}>
+          一键配特效
+        </button>
+      ),
+    },
+    {
+      key: "history",
+      label: "历史对话",
+      node: (
+        <button key="history" data-key="history" className="ai-new-chat-btn" title="查看历史对话" onClick={() => { setHistoryOpen(true); history.refresh(); }}>
+          历史
+        </button>
+      ),
+    },
+    {
+      key: "new",
+      label: "新对话",
+      node: (
+        <button key="new" data-key="new" className="ai-new-chat-btn" onClick={() => { newChat(); history.startNewChat(); }}>
+          新对话
+        </button>
+      ),
+    },
+  ];
+
   return (
     <aside className="panel panel-right ai-panel">
       <div className="ai-panel-header">
@@ -341,46 +455,29 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
             title={props.mcpConnected ? "已连接编辑台 MCP" : "未连接编辑台 MCP"}
           />
         </div>
-        <div className="ai-panel-controls">
-          <div className="ai-mode-toggle" role="group" aria-label="显示模式">
-            <button
-              className={view === "simple" ? "is-on" : ""}
-              onClick={() => changeView("simple")}
-              title="只看 AI 的回复"
-            >
-              简洁
-            </button>
-            <button
-              className={view === "verbose" ? "is-on" : ""}
-              onClick={() => changeView("verbose")}
-              title="连每一步操作一起看"
-            >
-              详细
-            </button>
-          </div>
-          <button
-            className="ai-gear-btn"
-            title="把这段对话和每一步执行事件复制成 JSON(不含密钥)"
-            onClick={copyDiagnostics}
-            disabled={messages.length === 0}
-          >
-            <span aria-hidden="true">⎘</span><span>诊断</span>
+        <div
+          className={`ai-panel-controls${toolbar.compact ? " is-compact" : ""}`}
+          ref={controlsRef}
+          data-rows={toolbar.rows}
+        >
+          {controls.filter(c => !toolbar.hidden.has(c.key)).map(c => c.node)}
+          <ToolbarOverflowMenu entries={controls.filter(c => toolbar.hidden.has(c.key))} />
+        </div>
+        {/*
+          量宽度用的镜像行:始终渲染全部控件(包括此刻待在「⋯」菜单里的),
+          所以面板一变宽就知道谁放得回去。它 aria-hidden + inert,不进无障碍树、
+          不抢焦点,position:absolute 不占布局。
+        */}
+        <div
+          className={`ai-panel-controls ai-toolbar-measure${toolbar.compact ? " is-compact" : ""}`}
+          ref={measureRef}
+          aria-hidden="true"
+          inert
+        >
+          {controls.map(c => c.node)}
+          <button type="button" className="ai-gear-btn ai-more-btn" data-key={MORE_KEY}>
+            <span aria-hidden="true">⋯</span>
           </button>
-          <button className="ai-gear-btn" title="AI 设置" aria-label="AI 设置" onClick={openSetup}><span aria-hidden="true">⚙</span><span>AI 设置</span></button>
-          <select
-            className="ai-provider-select"
-            value={provider || ""}
-            onChange={e => setProvider(e.target.value as any)}
-          >
-            {providers.map(p => (
-              <option key={p.id} value={p.id} disabled={!p.available} title={p.available ? "" : "未安装"}>
-                {p.label || (p.id === "claude" ? "Claude Code" : p.id === "agy" ? "Antigravity" : p.id === "codex" ? "Codex" : p.id)}
-              </option>
-            ))}
-          </select>
-          <button className="ai-new-chat-btn" title="让 AI 自动给素材库第一个视频配动效" disabled={streaming} onClick={() => send("对素材库第一个视频执行 auto_workflow")}>一键配特效</button>
-          <button className="ai-new-chat-btn" title="查看历史对话" onClick={() => { setHistoryOpen(true); history.refresh(); }}>历史</button>
-          <button className="ai-new-chat-btn" onClick={() => { newChat(); history.startNewChat(); }}>新对话</button>
         </div>
       </div>
 

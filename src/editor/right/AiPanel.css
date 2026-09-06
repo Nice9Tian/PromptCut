@@ -5,7 +5,15 @@
   min-width: 0;
 }
 
+/*
+ * 顶栏的排布规则只有一条:控件一律不压缩,放不下就换行。
+ *
+ * header 和 controls 都开 flex-wrap,里面每个控件都是 flex: 0 0 auto ——
+ * 宽度不够时挤掉的是行数,不是控件本身。行数由 flex 自己长,以后往工具栏里加
+ * 按钮也不用改这里;useToolbarRows 只负责在行数太多时把带图标按钮的文字收起来。
+ */
 .ai-panel-header {
+  position: relative; /* 给量宽度的镜像行当定位参照 */
   flex: 0 0 auto;
   display: flex;
   align-items: center;
@@ -14,15 +22,17 @@
   border-bottom: 1px solid var(--hairline);
   background: var(--bg-panel);
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 6px 8px;
 }
 
 .ai-panel-title {
+  flex: 0 0 auto;
   font-weight: bold;
   font-size: 14px;
   display: flex;
   align-items: center;
   gap: 6px;
+  white-space: nowrap;
 }
 
 .ai-status-dot {
@@ -35,11 +45,108 @@
   background-color: var(--accent);
 }
 
+/* min-width:0 让它在放不下时整块换到下一行,而不是把自己压窄 */
 .ai-panel-controls {
+  flex: 1 1 auto;
+  min-width: 0;
   display: flex;
   align-items: center;
-  gap: 8px;
+  justify-content: flex-end;
+  gap: 6px 8px;
   flex-wrap: wrap;
+}
+
+/*
+ * 控件本体:绝不压缩、绝不折行,保住原本的形状。
+ * 高度统一,换行之后每一行才是齐的(否则 23/28/34px 混排,看着像错位)。
+ */
+.ai-panel-controls > * {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  max-width: 100%;
+  height: 28px;
+  box-sizing: border-box;
+}
+
+/* 窄到要三行才放得下:带图标的按钮收起文字,只留图标(title / aria-label 还在) */
+.ai-panel-controls.is-compact .ai-btn-label {
+  display: none;
+}
+.ai-panel-controls.is-compact .ai-gear-btn {
+  padding: 0 8px;
+  gap: 0;
+}
+/* 顶栏里的齿轮按钮跟着统一高度走,别再自己撑到 32px */
+.ai-panel-controls .ai-gear-btn {
+  min-height: 0;
+  padding: 0 10px;
+}
+.ai-more-btn {
+  padding: 0 8px;
+  font-size: 15px;
+  line-height: 1;
+}
+
+/*
+ * 量宽度用的镜像行:始终渲染全部控件(含此刻待在「⋯」里的),不换行,
+ * 这样量到的就是每个控件的自然宽度。绝对定位 + 隐藏,不占布局也不可见。
+ */
+.ai-toolbar-measure {
+  position: absolute;
+  top: 0;
+  left: 0;
+  flex-wrap: nowrap;
+  visibility: hidden;
+  pointer-events: none;
+  z-index: -1;
+}
+/* 镜像里不夹宽度,否则量到的是被裁过的值 */
+.ai-toolbar-measure > * {
+  max-width: none;
+}
+
+/* 「⋯」菜单:portal 挂在 body 上,不受右栏 overflow:hidden 裁剪 */
+.ai-overflow-menu {
+  position: fixed;
+  z-index: 60;
+  width: 200px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  background: var(--bg-panel);
+  border: 1px solid var(--hairline-strong);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.35);
+}
+.ai-overflow-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.ai-overflow-label {
+  font-size: 12px;
+  color: var(--ink-muted);
+  white-space: nowrap;
+}
+/* 自己就带文字的按钮独占一行,拉满宽度、文字左对齐,菜单项该有的样子 */
+.ai-overflow-row > :only-child {
+  flex: 1 1 auto;
+  justify-content: flex-start;
+  text-align: left;
+}
+/* 菜单里空间管够,图标按钮把文字放回来 */
+.ai-overflow-menu .ai-btn-label {
+  display: inline;
+}
+.ai-overflow-menu .ai-gear-btn,
+.ai-overflow-menu .ai-new-chat-btn,
+.ai-overflow-menu .ai-provider-select {
+  height: 28px;
+  box-sizing: border-box;
+  white-space: nowrap;
 }
 
 .ai-provider-select {
@@ -49,6 +156,8 @@
   color: var(--ink);
   border: 1px solid var(--hairline);
   border-radius: 4px;
+  /* 原生 select 默认会被压窄并把选项文字截断,这里锁住最小宽度 */
+  min-width: 88px;
 }
 
 .ai-new-chat-btn {
@@ -59,6 +168,8 @@
   border-radius: 4px;
   color: var(--ink);
   cursor: pointer;
+  white-space: nowrap;
+  flex: 0 0 auto;
 }
 
 .ai-messages {
@@ -355,6 +466,11 @@
   border: 1px solid var(--hairline);
   border-radius: 5px;
   overflow: hidden;
+  flex: 0 0 auto;
+}
+.ai-mode-toggle button {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 .ai-mode-toggle button {
   border: 0;
