@@ -3,6 +3,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import type { AiProvider, ChatMessage, ChatAttachment, MessagePart, ProviderInfo, RunEvent, SttInfo, LoginState, PublicAiConfig, AiConfigPatch, CliSetupJob } from "./types";
 import { parseSseChunks } from "./sse";
 import { getScript } from "./script";
+import { useChatMessages, setMessages } from "./liveChat";
 import { WORKFLOW_ROLES } from "./roles";
 import { getState } from "../store/project";
 
@@ -67,7 +68,8 @@ function completeToolPart(
 }
 
 export function useAiChat(opts?: { mock?: boolean }) {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  // 对话归项目所有(要随 .proc 存取、随项目切换),所以放在组件外的 store 里
+  const messages = useChatMessages();
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [sttInfo, setSttInfo] = useState<SttInfo | null>(null);
   const [provider, setProvider] = useState<AiProvider | null>(null);
@@ -288,30 +290,12 @@ export function useAiChat(opts?: { mock?: boolean }) {
 
   useEffect(() => {
     if (!provider) return;
-    const history = localStorage.getItem(`aiChat:${provider}`);
-    if (history) {
-      try {
-        const parsed = JSON.parse(history);
-        setMessages(parsed.slice(-50));
-      } catch {
-        setMessages([]);
-      }
-    } else {
-      setMessages([]);
-    }
+    // 换模型不动对话:对话属于这个项目,换个模型接着聊是合理的
     const sess = localStorage.getItem(`aiSession:${provider}`);
     if (sess) {
       setSessionIds((prev) => ({ ...prev, [provider]: sess }));
     }
   }, [provider]);
-
-  useEffect(() => {
-    if (provider && messages.length > 0) {
-      const toSave = messages.filter(m => !m.pending);
-      try { localStorage.setItem(`aiChat:${provider}`, JSON.stringify(toSave.slice(-50))); }
-      catch { /* Full execution traces are also saved by useChatHistory. */ }
-    }
-  }, [messages, provider]);
 
   const handleProviderChange = (newP: AiProvider) => {
     setProvider(newP);
@@ -320,7 +304,6 @@ export function useAiChat(opts?: { mock?: boolean }) {
 
   const newChat = () => {
     if (!provider) return;
-    localStorage.removeItem(`aiChat:${provider}`);
     localStorage.removeItem(`aiSession:${provider}`);
     setMessages([]);
     setSessionIds((prev) => {

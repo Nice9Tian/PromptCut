@@ -1,4 +1,4 @@
-import { parseProc, serializeProc, forgetSaveTarget } from "./proc";
+import { loadProc, serializeProc, forgetSaveTarget } from "./proc";
 import { actions } from "../../store/project";
 import type { Project } from "../../kernel/project";
 
@@ -47,7 +47,7 @@ export async function saveDraft(id: string, thumbnail: string | null = null): Pr
 export async function openDraft(id: string): Promise<Project> {
   const res = await fetch(`/api/projects/${encodeURIComponent(id)}`);
   if (!res.ok) throw new Error(`打不开这份草稿(${res.status})`);
-  const project = parseProc(await res.text());
+  const project = loadProc(await res.text());
   // 换了草稿就换了落点,不能再覆盖上一个项目的文件
   forgetSaveTarget();
   actions.loadProject(project, `${project.name}.proc`);

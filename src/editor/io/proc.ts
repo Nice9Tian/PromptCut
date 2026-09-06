@@ -2,6 +2,7 @@ import { actions, getState } from "../../store/project";
 import { createEmptyProject } from "../../kernel/project";
 import type { Project } from "../../kernel/project";
 import { exportProjectJson } from "./index";
+import { collectProjectAi, applyProjectAi, resetProjectAi, type ProjectAi } from "../../ai/projectAi";
 
 /**
  * `.proc` —— PromptCut 自己的项目文件。
@@ -30,6 +31,12 @@ export interface ProcFile {
   /** 列表里的封面,留给以后填;现在一律 null */
   thumbnail: string | null;
   project: Project;
+  /**
+   * 剧本和这段 AI 对话。和 project 平级而不是塞进 project 里 ——
+   * project 会被 get_project 原样返回给模型,把对话记录放进去等于每次调用
+   * 都让它把自己说过的话再读一遍。旧文件没有这一段,读的时候按空处理。
+   */
+  ai?: ProjectAi;
 }
 
 /** 当前项目 → .proc 文本 */
@@ -41,6 +48,7 @@ export function serializeProc(thumbnail: string | null = null): string {
     savedAt: new Date().toISOString(),
     thumbnail,
     project,
+    ai: collectProjectAi(),
   };
   return JSON.stringify(doc, null, 2);
 }
@@ -55,6 +63,26 @@ export function parseProc(text: string): Project {
   return { ...createEmptyProject(), ...project };
 }
 
+/**
+ * .proc 文本 → Project,**并把里面的剧本和对话灌回去**。
+ *
+ * 打开项目走这个,不要直接用 parseProc:后者只解析文档本身,AI 那一段会被漏掉,
+ * 于是新打开的项目里还留着上一个项目的对话。旧的 .proc 没有 ai 段,按空处理 ——
+ * 也就是会清掉当前对话,这正是「每个项目一份对话」该有的样子。
+ */
+export function loadProc(text: string): Project {
+  const project = parseProc(text);
+  let ai: unknown = null;
+  try {
+    const doc = JSON.parse(text);
+    if (doc?.format === PROC_FORMAT) ai = doc.ai;
+  } catch {
+    /* parseProc 已经验过一遍,走到这儿说明是裸 Project,没有 ai 段 */
+  }
+  applyProjectAi(ai);
+  return project;
+}
+
 /** 当前项目名,拿来当默认文件名 */
 export function currentProjectName(): string {
   return getState().project.name || "未命名";
@@ -64,6 +92,8 @@ export function currentProjectName(): string {
 export function newProject(name = "未命名"): Project {
   // 新项目还没有落点,别让它覆盖上一个项目的文件
   forgetSaveTarget();
+  // 新项目从空白开始,剧本和对话都不该跟过来
+  resetProjectAi();
   const project = createEmptyProject(name);
   actions.loadProject(project, `${name}${PROC_EXT}`);
   return project;

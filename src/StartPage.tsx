@@ -4,7 +4,7 @@ import "./StartPage.css";
 import { Logo } from "./ui/Logo";
 import { listDrafts, openDraft, deleteDraft, newDraftId, setActiveDraftId } from "./editor/io/drafts";
 import type { DraftInfo } from "./editor/io/drafts";
-import { newProject, parseProc, PROC_EXT } from "./editor/io/proc";
+import { newProject, loadProc, PROC_EXT } from "./editor/io/proc";
 import { actions } from "./store/project";
 import { sttStatus } from "./editor/io/stt";
 import { runSttInstall } from "./editor/io/runSttInstall";
@@ -97,7 +97,7 @@ export function StartPage(props: { onEnterEditor: () => void }): JSX.Element {
   const openFile = async (file: File) => {
     setError("");
     try {
-      const project = parseProc(await file.text());
+      const project = loadProc(await file.text());
       actions.loadProject(project, file.name);
       // 从文件打开的不属于任何草稿,保存时再新建一份
       setActiveDraftId(null);
