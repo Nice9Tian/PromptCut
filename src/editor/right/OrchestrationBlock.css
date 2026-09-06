@@ -145,3 +145,17 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+
+/*
+ * 被上游连累而没跑的任务：整行压暗，状态标成中性的「跳过」而不是红色的
+ * 「失败」。它本身没有错，红色会把用户的注意力引到错误的地方去。
+ */
+.pc-orch-task.is-skipped .pc-orch-task-title { color: var(--ink-faint); }
+.pc-orch-status.is-skipped { color: var(--ink-faint); border-style: dashed; }
+.pc-orch-task-skipped {
+  margin: 2px 0 0 22px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--ink-faint);
+  overflow-wrap: anywhere;
+}

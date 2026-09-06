@@ -21,6 +21,18 @@ const STATUS_TEXT: Record<string, string> = {
   error: "失败",
 };
 
+/**
+ * 「自己失败」和「被上游连累」都是 status: "error"，但对用户是两件事：
+ * 前者要看这条任务本身出了什么问题，后者根本没跑过、该去看它依赖的那个。
+ * 编排器给被跳过的任务写的是「依赖的任务 X 没成功，跳过」，据此区分。
+ *
+ * 不改成两个 status 值，是因为那是编排器的对外契约，我这边单方面加值会
+ * 让两个模块对不上；靠文案区分是它建议的做法。
+ */
+function isSkipped(run: TaskRun): boolean {
+  return run.status === "error" && !!run.error && run.error.includes("跳过");
+}
+
 const PHASE_TEXT: Record<string, string> = {
   planning: "正在拆解任务…",
   cancelled: "编排已取消",
@@ -33,28 +45,40 @@ function summarize(s: OrchestrationState): string {
   if (n === 0) return "没有拆出任务";
   const widest = Math.max(1, ...s.waves.map((w) => w.length));
   const done = s.tasks.filter((t) => t.status === "done").length;
-  const failed = s.tasks.filter((t) => t.status === "error").length;
+  const errored = s.tasks.filter((t) => t.status === "error");
+  const skipped = errored.filter(isSkipped).length;
+  const failed = errored.length - skipped;
   const head = `已拆成 ${n} 个任务，分 ${s.waves.length} 批跑${widest > 1 ? `，最多 ${widest} 个并行` : ""}`;
   if (s.phase === "running") return `${head} · 完成 ${done}/${n}`;
-  return failed > 0 ? `${head} · ${failed} 个失败` : head;
+  const tail = [
+    failed > 0 ? `${failed} 个失败` : "",
+    skipped > 0 ? `${skipped} 个因依赖未执行` : "",
+  ].filter(Boolean).join("，");
+  return tail ? `${head} · ${tail}` : head;
 }
 
 /** 一个任务一行：头像 + 指令 + 状态。失败时把原因跟在下面。 */
 function TaskRow({ run }: { run: TaskRun }) {
-  const secs = run.startedAt && run.finishedAt
+  // != null 而不是真值判断：两个都是时间戳，0 是合法值（真值判断会把它当没有）。
+  const secs = run.startedAt != null && run.finishedAt != null
     ? Math.round((run.finishedAt - run.startedAt) / 1000)
     : null;
+  const skipped = isSkipped(run);
   return (
-    <div className="pc-orch-task">
+    <div className={`pc-orch-task${skipped ? " is-skipped" : ""}`}>
       <div className="pc-orch-task-line">
         <RoleAvatar roleId={run.task.roleId} size={16} />
         <span className="pc-orch-task-title" title={run.task.instruction}>
           {run.task.instruction}
         </span>
         {secs !== null && <span className="pc-orch-secs">{secs}s</span>}
-        <span className={`pc-orch-status is-${run.status}`}>{STATUS_TEXT[run.status]}</span>
+        <span className={`pc-orch-status is-${skipped ? "skipped" : run.status}`}>
+          {skipped ? "跳过" : STATUS_TEXT[run.status]}
+        </span>
       </div>
-      {run.error && <div className="pc-orch-task-error">{run.error}</div>}
+      {run.error && (
+        <div className={skipped ? "pc-orch-task-skipped" : "pc-orch-task-error"}>{run.error}</div>
+      )}
     </div>
   );
 }

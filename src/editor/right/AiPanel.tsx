@@ -667,6 +667,22 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
         return null;
       })()}
 
+      {/*
+        分工模式勾上了、但没配 API 直连。
+        编排那三步走的是 /api/ai/plan（无工具无历史的最小补全），只有 API 直连
+        支持；CLI 驱动光起进程就要几秒，做这种小调用是净亏损。所以这时勾了也
+        不会生效 —— 必须说出来，不然用户以为开了并行，实际一直在走单线。
+      */}
+      {teamMode && config && !config.api.apiKey.set && (
+        <div className="ai-banner">
+          <span>
+            分工模式需要「API 直连」才能用：拆任务那几步走的是轻量接口，
+            CLI 驱动做不了。现在提问仍然按单线处理。
+          </span>
+          <button className="ai-banner-btn" onClick={openSetup}>去配置</button>
+        </div>
+      )}
+
       <div className="ai-messages" ref={messagesScrollRef} onScroll={onMessagesScroll}>
         {messages.length === 0 ? (
           <div className="ai-empty-state">
