@@ -10,6 +10,7 @@ declare global {
     __pcClockRate?: number;
     __pcSetT?: (sec: number) => void;
     __pcReady?: boolean;
+    __pcTimeline?: unknown;
   }
 }
 

@@ -9,5 +9,7 @@ export const demoTimeline: Timeline = {
   height: 1080,
   fps: 30,
   duration: 20,
-  clips: [],
+  clips: [
+    { id: "probe", cardId: "probe", start: 0, end: 2, params: {} }
+  ],
 };

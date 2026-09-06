@@ -1,0 +1,95 @@
+import { motion } from "motion/react";
+import type { CardDef, CardProps } from "../../kernel/types";
+import { HudParams, hudControls, hudDefaults, getPositionClass, easeExpoOut } from "./hud";
+import "./hud.css";
+
+interface Params extends HudParams {
+  steps: string;
+  stepMs: number;
+}
+
+function StepTimelineCard({ params }: CardProps<Params>) {
+  const steps = params.steps.split("|").filter(Boolean);
+  const numSteps = steps.length;
+  if (numSteps === 0) return null;
+
+  const width = 1500;
+  const lineDuration = (numSteps - 1) * (params.stepMs / 1000);
+
+  return (
+    <div className={`hud-wrapper ${getPositionClass(params.position)}`}>
+      <div className="hud-glass" style={{ width: width + 240, padding: "80px 120px" }} data-theme={params.theme}>
+        <div className="relative h-48" style={{ width }}>
+          <div className="absolute top-8 left-0 right-0 h-4 bg-current opacity-20 rounded" />
+          <motion.div
+            className="absolute top-8 left-0 right-0 h-4 origin-left rounded"
+            style={{ backgroundColor: params.accent }}
+            initial={{ scaleX: 0 }}
+            animate={{ scaleX: 1 }}
+            transition={{ duration: lineDuration, ease: "linear" }}
+          />
+
+          {steps.map((step, i) => {
+            const isLast = i === numSteps - 1;
+            const nodeDelay = i * (params.stepMs / 1000);
+            const left = numSteps > 1 ? i * (width / (numSteps - 1)) : width / 2;
+
+            return (
+              <div
+                key={i}
+                className="absolute flex flex-col items-center"
+                style={{ left, transform: "translateX(-50%)", top: "-12px" }}
+              >
+                <div className="relative">
+                  {isLast && (
+                    <motion.div
+                      className="absolute inset-0"
+                      style={{ borderRadius: "50%", backgroundColor: params.accent }}
+                      initial={{ scale: 1, opacity: 0 }}
+                      animate={{ scale: [1, 2.5], opacity: [0.5, 0] }}
+                      transition={{ duration: 1.5, repeat: Infinity, delay: nodeDelay + 0.3 }}
+                    />
+                  )}
+                  <motion.div
+                    className="w-20 h-20 rounded-full border-8 relative z-10 flex items-center justify-center bg-black"
+                    initial={{ borderColor: "rgba(255,255,255,0.2)", backgroundColor: "transparent", scale: 0.8 }}
+                    animate={{ borderColor: params.accent, backgroundColor: params.accent, scale: 1 }}
+                    transition={{ duration: 0.4, delay: nodeDelay, ease: easeExpoOut }}
+                  >
+                    <span className="text-3xl font-bold text-white">{i + 1}</span>
+                  </motion.div>
+                </div>
+                <motion.div
+                  className="mt-8 text-[56px] font-bold whitespace-nowrap text-center"
+                  initial={{ opacity: 0.4 }}
+                  animate={{ opacity: 1, color: params.accent }}
+                  transition={{ duration: 0.4, delay: nodeDelay }}
+                >
+                  {step}
+                </motion.div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export const stepTimeline: CardDef<Params> = {
+  id: "step-timeline",
+  name: "步骤时间线",
+  description: "横向时间线依次点亮",
+  source: "native",
+  defaults: {
+    ...hudDefaults,
+    steps: "选题|脚本|拍摄|剪辑|发布",
+    stepMs: 250,
+  },
+  controls: [
+    ...hudControls,
+    { key: "steps", label: "步骤(竖线分隔)", type: "text" },
+    { key: "stepMs", label: "步进时间(ms)", type: "number" },
+  ],
+  Component: StepTimelineCard,
+};

@@ -1,0 +1,43 @@
+.hud-wrapper {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  display: flex;
+}
+.hud-pos-center {
+  align-items: center;
+  justify-content: center;
+}
+.hud-pos-bottom {
+  align-items: flex-end;
+  justify-content: center;
+  padding-bottom: 120px;
+}
+.hud-pos-left {
+  align-items: center;
+  justify-content: flex-start;
+  padding-left: 120px;
+}
+.hud-pos-right {
+  align-items: center;
+  justify-content: flex-end;
+  padding-right: 120px;
+}
+
+.hud-glass {
+  pointer-events: auto;
+  background-color: rgba(10, 12, 16, 0.55);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 32px;
+  color: #f3f4f6; /* gray-100 */
+  padding: 48px;
+  box-shadow: 0 24px 48px rgba(0, 0, 0, 0.4);
+}
+.hud-glass[data-theme="light"] {
+  background-color: rgba(255, 255, 255, 0.7);
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  color: #111827; /* gray-900 */
+  box-shadow: 0 24px 48px rgba(0, 0, 0, 0.1);
+}

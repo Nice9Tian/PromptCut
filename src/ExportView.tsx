@@ -20,6 +20,7 @@ export default function ExportView() {
     const url = new URLSearchParams(location.search).get("timeline");
     (url ? fetch(url).then((r) => r.json()) : Promise.resolve(demoTimeline)).then((tl: Timeline) => {
       setTimeline(tl);
+      window.__pcTimeline = tl;
       window.__pcExportMs = 0;
       window.__pcSetT = (sec: number) => {
         window.__pcExportMs = sec * 1000;
