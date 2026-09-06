@@ -12,6 +12,8 @@ import { SttInstallProgress } from "./SttInstallProgress";
 import { useInstallJobs, matchInstallJob } from "../../ai/sttInstallStore";
 import { useToolbarLayout, MORE_KEY } from "./useToolbarLayout";
 import { isTeamMode, setTeamMode, subscribeTeamMode } from "../../ai/teamMode";
+import { RoleHeader } from "./RoleAvatar";
+import { OrchestrationBlock } from "./OrchestrationBlock";
 import { ToolbarOverflowMenu } from "./ToolbarOverflowMenu";
 import { IconHistory, IconSettings } from "../../ui/icons";
 import type { OverflowEntry } from "./ToolbarOverflowMenu";
@@ -169,7 +171,7 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
       return false;
     }
   })();
-  const { messages, providers, sttInfo, provider, setProvider, streaming, send, runWorkflow, workflowRoles, abort, newChat, error, setMessages, login, loginState, setupJobs, cancelSetup, install, installState, installError, config, saveConfig, setupOpen, openSetup, closeSetup } = useAiChat({ mock });
+  const { messages, providers, sttInfo, provider, setProvider, streaming, send, runWorkflow, workflowRoles, abort, newChat, error, setMessages, login, loginState, setupJobs, cancelSetup, install, installState, installError, config, saveConfig, setupOpen, openSetup, closeSetup, orchestration } = useAiChat({ mock });
   const history = useChatHistory({ provider, messages, sessionId: undefined });
   const installJobs = useInstallJobs();
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -394,6 +396,11 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
   // 分工模式的开关放在 ai/teamMode 里:编排器那边也要读它,放这儿会变成两份状态
   const [teamMode, setTeamModeState] = useState(isTeamMode);
   useEffect(() => subscribeTeamMode(setTeamModeState), []);
+
+  // 编排折叠块插在「最后一条用户消息」后面。编排发生在提问之后、角色回复之前，
+  // 放这个位置读下来才是「提问 → 怎么分的工 → 各角色的回复」。挂在消息流末尾的话
+  // 它会排到自己产出的那些回复下面，因果顺序是反的。
+  const lastUserIdx = orchestration ? messages.map((m) => m.role).lastIndexOf("user") : -1;
 
   const controlsRef = useRef<HTMLDivElement>(null);
   const measureRef = useRef<HTMLDivElement>(null);
@@ -781,8 +788,16 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
               );
             };
 
-            return (
+            // 返回数组而不是包一层 Fragment：只为了在某条消息后面多插一个块，
+            // 就把整个气泡往里缩一级、几百行全部重新缩进，blame 会脏得看不出改了什么。
+            return [
               <div key={m.id} className={`ai-message ${m.role}`}>
+                {/*
+                  这条回复是哪个角色产出的。普通对话没有 roleId 就不显示——
+                  每条回复顶上都挂一个「AI 助手」只是噪音，反而让分工模式下
+                  真正的角色名不显眼。
+                */}
+                {m.roleId && <RoleHeader roleId={m.roleId} />}
                 {m.attachments && m.attachments.length > 0 && (
                   <div className="ai-message-attach">[附件: {m.attachments.map((a) => a.name).join(", ")}]</div>
                 )}
@@ -890,8 +905,11 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
                 {!m.pending && outcomeText(m) && (
                   <div className="ai-message-outcome">{outcomeText(m)}</div>
                 )}
-              </div>
-            );
+              </div>,
+              i === lastUserIdx && orchestration
+                ? <OrchestrationBlock key={`${m.id}:orch`} state={orchestration} />
+                : null,
+            ];
           })
         )}
       </div>
