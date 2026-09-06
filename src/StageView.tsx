@@ -42,8 +42,29 @@ export interface PcStageApi {
   render(t: number, opts?: { jump?: boolean; replay?: boolean }): void;
   /** 舞台尺寸,给编辑器算缩放 */
   size(): { width: number; height: number };
-  /** 取活跃卡片的位置 */
+  /** 取活跃卡片的位置(包裹层的外框——每张卡都是整屏的,只能当兜底用) */
   rects(): { clipId: string; left: number; top: number; width: number; height: number }[];
+  /**
+   * 实体命中测试:舞台坐标 (x, y) 处,从最上层往下找第一个「画了东西」的元素——
+   * 文字、图片、视频、有底色 / 描边的盒子——透明的容器一律穿过去。
+   * 返回它属于哪个片段,以及那个实体元素自己的外框;什么都没点到返回 null。
+   */
+  hitTest(x: number, y: number): StageHit | null;
+  /**
+   * 片段的实体范围:它所有实体元素外框的并集。给选中描边用——
+   * 字幕卡包裹层占满整屏,描边要贴着字幕本身而不是绕屏幕一圈。
+   */
+  bounds(clipId: string): StageRect | null;
+}
+
+export interface StageRect {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+export interface StageHit extends StageRect {
+  clipId: string;
 }
 
 declare global {
@@ -120,7 +141,95 @@ export default function StageView() {
       pinner.sync(Math.max(0, target) * 1000);
     };
 
+    /** 舞台左上角在文档里的位置,把元素外框换算成舞台坐标 */
+    const stageOrigin = () => {
+      const stageEl = document.querySelector(".pc-stage");
+      return stageEl ? stageEl.getBoundingClientRect() : null;
+    };
+    const toStage = (r: DOMRect, origin: DOMRect): StageRect => ({
+      left: r.left - origin.left,
+      top: r.top - origin.top,
+      width: r.width,
+      height: r.height,
+    });
+
+    /**
+     * 这个元素在这一点上算不算「实体」。
+     * 实体 = 用户看得见、点下去合理的东西:文字、图片 / 视频 / 画布 / SVG 图形,
+     * 或者自己画了底色、背景图、描边、阴影的盒子。只做布局用的透明容器不算——
+     * 卡片的包裹层是整屏的,不穿过它就永远点不到下面那张卡。
+     */
+    const REPLACED = new Set(["IMG", "VIDEO", "CANVAS", "svg", "path", "rect", "circle", "ellipse", "line", "polygon", "polyline", "text", "use"]);
+    const paintedColor = (v: string) => {
+      // rgba(0,0,0,0) / transparent 都算没画;其余只要 alpha > 0 就算画了
+      if (!v || v === "transparent") return false;
+      const m = /rgba?\(([^)]+)\)/.exec(v);
+      if (!m) return true; // 关键字色、color() 等,当作画了
+      const parts = m[1].split(/[\s,/]+/).filter(Boolean);
+      return parts.length < 4 || parseFloat(parts[3]) > 0;
+    };
+    const isSolid = (el: Element): boolean => {
+      if (el === document.documentElement || el === document.body) return false;
+      if (el.classList.contains("pc-stage") || (el as HTMLElement).hasAttribute?.("data-pc-clip")) return false;
+      const cs = getComputedStyle(el);
+      if (cs.visibility === "hidden" || parseFloat(cs.opacity) === 0 || cs.pointerEvents === "none") return false;
+      if (REPLACED.has(el.tagName)) return true;
+      // 直接持有非空白文本节点 → 是文字本身
+      for (const n of el.childNodes) {
+        if (n.nodeType === Node.TEXT_NODE && (n.textContent ?? "").trim()) return true;
+      }
+      if (paintedColor(cs.backgroundColor)) return true;
+      if (cs.backgroundImage && cs.backgroundImage !== "none") return true;
+      if (cs.boxShadow && cs.boxShadow !== "none") return true;
+      const bw = ["borderTopWidth", "borderRightWidth", "borderBottomWidth", "borderLeftWidth"] as const;
+      const bc = ["borderTopColor", "borderRightColor", "borderBottomColor", "borderLeftColor"] as const;
+      for (let i = 0; i < 4; i++) {
+        if (parseFloat(cs[bw[i]]) > 0 && paintedColor(cs[bc[i]])) return true;
+      }
+      return false;
+    };
+
     const api: PcStageApi = {
+      hitTest(x, y) {
+        const origin = stageOrigin();
+        if (!origin) return null;
+        // elementsFromPoint 按绘制顺序从最上层往下给;透明容器一路穿过去
+        const stack = document.elementsFromPoint(x + origin.left, y + origin.top);
+        for (const el of stack) {
+          if (!isSolid(el)) continue;
+          const wrap = el.closest("[data-pc-clip]");
+          const clipId = wrap?.getAttribute("data-pc-clip");
+          if (!clipId) continue;
+          return { clipId, ...toStage(el.getBoundingClientRect(), origin) };
+        }
+        return null;
+      },
+      bounds(clipId) {
+        const origin = stageOrigin();
+        if (!origin) return null;
+        const wrap = document.querySelector(`[data-pc-clip="${CSS.escape(clipId)}"]`);
+        if (!wrap) return null;
+        let l = Infinity, t = Infinity, r = -Infinity, b = -Infinity;
+        const walk = (el: Element) => {
+          if (isSolid(el)) {
+            const rc = el.getBoundingClientRect();
+            if (rc.width > 0 && rc.height > 0) {
+              l = Math.min(l, rc.left); t = Math.min(t, rc.top);
+              r = Math.max(r, rc.right); b = Math.max(b, rc.bottom);
+            }
+            return; // 实体元素的子孙都在它外框里,不用再往下
+          }
+          for (const c of el.children) walk(c);
+        };
+        for (const c of wrap.children) walk(c);
+        // 一个实体都没有(纯透明卡)退回包裹层外框,至少还能选中
+        const rc = Number.isFinite(l) ? new DOMRect(l, t, r - l, b - t) : wrap.getBoundingClientRect();
+        // 夹回舞台内:文字动画常把元素甩到屏幕外,描边不该跟着跑出去
+        const cl = Math.max(rc.left, origin.left), ct = Math.max(rc.top, origin.top);
+        const cr = Math.min(rc.right, origin.right), cb = Math.min(rc.bottom, origin.bottom);
+        if (cr <= cl || cb <= ct) return toStage(wrap.getBoundingClientRect(), origin);
+        return toStage(new DOMRect(cl, ct, cr - cl, cb - ct), origin);
+      },
       setProject(next) {
         const prevKey = ref.current.layoutKey;
         const nextKey = layoutKeyOf(next);

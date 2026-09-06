@@ -94,12 +94,43 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
     return () => window.removeEventListener("message", onMessage);
   }, []);
 
+  /**
+   * 选中描边用的外框:不用包裹层(每张卡都占满整屏),用片段的实体范围——
+   * 字幕卡的描边贴着字幕本身,而不是绕屏幕一圈。老渲染面没有 bounds 就退回包裹层。
+   */
   const refreshRects = useCallback(() => {
     const s = stage();
-    if (s && s.rects) {
-      setRects(s.rects());
-    }
+    if (!s?.rects) return;
+    const list = s.rects();
+    setRects(
+      s.bounds
+        ? list.map((r) => {
+            const b = s.bounds(r.clipId);
+            return b ? { clipId: r.clipId, ...b } : r;
+          })
+        : list,
+    );
   }, [stage]);
+
+  /** 刚被点中的片段:描边闪一下,让用户看清点到的是谁 */
+  const [flash, setFlash] = useState<{ clipId: string; token: number } | null>(null);
+  const flashClip = (clipId: string) => setFlash({ clipId, token: Date.now() });
+
+  /**
+   * 实体命中:问渲染面这一点上从最上层往下第一个「画了东西」的元素属于哪个片段。
+   * 透明容器穿过去——字幕卡在最上层也不会挡住下面的卡。老渲染面没有 hitTest 时
+   * 退回按包裹层外框找最上层的那个。
+   */
+  const hitAt = (e: { clientX: number; clientY: number; currentTarget: EventTarget & Element }) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = (e.clientX - rect.left) / scale;
+    const y = (e.clientY - rect.top) / scale;
+    const s = stage();
+    const hit = s?.hitTest
+      ? s.hitTest(x, y)
+      : [...rects].reverse().find((r) => x >= r.left && x <= r.left + r.width && y >= r.top && y <= r.top + r.height) ?? null;
+    return { hit, overlayRect: rect };
+  };
 
   // 项目文档变了就整份发过去(渲染面自己判断要不要重跑这一帧)
   useEffect(() => {
@@ -121,16 +152,13 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
   // 命中测试与拖拽逻辑
   const handleOverlayPointerDown = (e: React.PointerEvent) => {
     if (e.button !== 0) return;
-    const rect = e.currentTarget.getBoundingClientRect();
-    const x = (e.clientX - rect.left) / scale;
-    const y = (e.clientY - rect.top) / scale;
-
-    const targetRect = [...rects].reverse().find((r) => x >= r.left && x <= r.left + r.width && y >= r.top && y <= r.top + r.height);
+    const { hit: targetRect } = hitAt(e);
 
     if (tool === "select") {
-      // 选择工具：点在卡片上则选中，点空白则取消选中
+      // 选择工具：点在实体上则选中并闪一下描边，点空白(或透明区域下面没东西)则取消选中
       if (targetRect) {
         actions.select([targetRect.clipId]);
+        flashClip(targetRect.clipId);
       } else {
         actions.select([]);
       }
@@ -138,6 +166,7 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
       // 移动工具：按下开始拖拽，移动时更新本地拖拽状态，松开才写入 store 记录撤销
       if (!targetRect) return;
       actions.select([targetRect.clipId]);
+      flashClip(targetRect.clipId);
       const clipId = targetRect.clipId;
       const startX = e.clientX;
       const startY = e.clientY;
@@ -172,11 +201,9 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
   // 文字工具逻辑
   const handleOverlayDoubleClick = (e: React.MouseEvent) => {
     if (tool !== "text") return;
-    const rect = e.currentTarget.getBoundingClientRect();
-    const x = (e.clientX - rect.left) / scale;
-    const y = (e.clientY - rect.top) / scale;
-    const targetRect = [...rects].reverse().find((r) => x >= r.left && x <= r.left + r.width && y >= r.top && y <= r.top + r.height);
+    const { hit: targetRect, overlayRect: rect } = hitAt(e);
     if (!targetRect) return;
+    flashClip(targetRect.clipId);
 
     const clip = project.tracks.flatMap((tr) => tr.clips).find((c) => c.id === targetRect.clipId);
     if (!clip) return;
@@ -202,13 +229,12 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
 
   const handleOverlayContextMenu = (e: React.MouseEvent) => {
     e.preventDefault();
-    const rect = e.currentTarget.getBoundingClientRect();
-    const x = (e.clientX - rect.left) / scale;
-    const y = (e.clientY - rect.top) / scale;
-    const targetRect = [...rects].reverse().find((r) => x >= r.left && x <= r.left + r.width && y >= r.top && y <= r.top + r.height);
+    const { hit: targetRect } = hitAt(e);
     if (targetRect) {
       const clip = project.tracks.flatMap((tr) => tr.clips).find((c) => c.id === targetRect.clipId);
       if (clip) {
+        actions.select([clip.id]);
+        flashClip(clip.id);
         setContextMenu({ x: e.clientX, y: e.clientY, clipId: clip.id, cardId: clip.cardId });
       }
     }
@@ -284,17 +310,17 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
               const dragDx = (dragPreview?.clipId === r.clipId) ? dragPreview.dx : 0;
               const dragDy = (dragPreview?.clipId === r.clipId) ? dragPreview.dy : 0;
 
+              // 描边贴着实体范围;刚点中的那个用 key 带上 token,每次点击都重新跑一遍脉冲动画
+              const pulsing = flash?.clipId === r.clipId;
               return (
                 <div
-                  key={r.clipId}
+                  key={pulsing ? `${r.clipId}:${flash!.token}` : r.clipId}
+                  className={`pc-pv-hit${pulsing ? " is-pulse" : ""}`}
                   style={{
-                    position: "absolute",
                     left: (r.left + dragDx) * scale,
                     top: (r.top + dragDy) * scale,
                     width: r.width * scale,
                     height: r.height * scale,
-                    border: "2px solid var(--ui-accent)",
-                    pointerEvents: "none",
                   }}
                 />
               );
