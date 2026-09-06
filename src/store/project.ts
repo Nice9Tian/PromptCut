@@ -197,8 +197,22 @@ export const actions = {
   togglePlay() {
     set({ playing: !state.playing });
   },
+  /**
+   * 重播:回到开头从头播一遍。
+   *
+   * 以前这里只加 playToken —— 那只是让「当前时刻活跃的卡片」重新挂载一次,
+   * 用来重看入场动画。可播放到头时循环会 pause 并把 t 停在 duration,
+   * 而 Stage 取的是 t >= start && t < end,末尾一个活跃 clip 都没有,
+   * 于是「播完按重播」= 让零个卡片重新挂载 = 画面纹丝不动,按钮像是坏的。
+   *
+   * 传统式下用户会顺手把播放头拖回去所以不容易撞上;对话式没有时间轴,
+   * 只有一条细的 MiniScrubber,播完就只能按这个按钮 —— 于是问题就显出来了。
+   *
+   * 「在当前位置重看一遍入场动画」这个能力没丢:seek 本身就会加 playToken,
+   * 点一下进度条即可。
+   */
   replay() {
-    set({ playToken: state.playToken + 1 });
+    set({ t: 0, playing: true, playToken: state.playToken + 1 });
   },
   /** 预览音量 0–1;调到非 0 顺手取消静音,和播放器习惯一致 */
   setVolume(v: number) {
