@@ -28,7 +28,7 @@ export function useAiChat(opts?: { mock?: boolean }) {
         { id: "agy", label: "Antigravity", available: true, version: "1.1.27", auth: { loggedIn: true } },
         { id: "api", label: "API 直连", available: false, note: "还没填 API Key", auth: { loggedIn: false, detail: "还没填 API Key" } }
       ]);
-      setConfig({ version: 1, defaultProvider: null, api: { vendor: "anthropic", baseUrl: "", model: "", maxTokens: 4096, apiKey: { set: false, last4: "" } } });
+      setConfig({ version: 1, defaultProvider: null, toolProtocol: true, api: { vendor: "anthropic", baseUrl: "", model: "", maxTokens: 4096, apiKey: { set: false, last4: "" } } });
       setProvider("claude");
       // ?nosetup=1 给自动化脚本用:不弹首启设置对话框
       if (localStorage.getItem("aiSetupDone") === null && !new URLSearchParams(location.search).has("nosetup")) {
@@ -372,6 +372,7 @@ export function useAiChat(opts?: { mock?: boolean }) {
                   if (tools[i].name === ev.name && tools[i].ok === undefined) {
                     tools[i].ok = ev.ok;
                     tools[i].summary = ev.summary;
+                    tools[i].files = ev.files;
                     break;
                   }
                 }

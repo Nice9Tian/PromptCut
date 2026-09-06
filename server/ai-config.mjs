@@ -14,6 +14,7 @@ function getDefaults() {
   return {
     version: 1,
     defaultProvider: null,
+    toolProtocol: false,
     api: {
       vendor: 'anthropic',
       baseUrl: '',
@@ -100,6 +101,10 @@ export function writeConfig(partial) {
     } else {
       newConfig.api.maxTokens = current.api.maxTokens;
     }
+  }
+
+  if (partial.toolProtocol !== undefined) {
+    newConfig.toolProtocol = !!partial.toolProtocol;
   }
 
   const p = getConfigPath();

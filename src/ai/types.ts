@@ -31,6 +31,7 @@ export interface PublicAiConfig {
     maxTokens: number;
     apiKey: { set: boolean; last4: string };
   };
+  toolProtocol: boolean;
 }
 
 export interface AiConfigPatch {
@@ -42,6 +43,7 @@ export interface AiConfigPatch {
     maxTokens?: number;
     apiKey?: string | null;
   };
+  toolProtocol?: boolean;
 }
 
 export interface SttInfo {
@@ -55,7 +57,7 @@ export type RunEvent =
   | { type: "session"; sessionId: string }
   | { type: "text"; delta: string }
   | { type: "tool_call"; name: string; input?: unknown }
-  | { type: "tool_result"; name: string; ok: boolean; summary?: string }
+  | { type: "tool_result"; name: string; ok: boolean; summary?: string; files?: string[] }
   | { type: "status"; text: string }
   | { type: "done"; sessionId?: string; usage?: unknown }
   | { type: "error"; message: string };
@@ -68,18 +70,35 @@ export interface ChatAttachment {
   durationSec?: number;
 }
 
+export interface ToolCallInfo {
+  name: string;
+  input?: unknown;
+  ok?: boolean;
+  summary?: string;
+  files?: string[];
+  expanded?: boolean;
+}
+
+/**
+ * 一条助手消息里按**发生顺序**排列的片段。
+ * 只有 text / tools / statuses 三个数组时,渲染只能把文字全堆在最上面、
+ * 工具调用全堆在下面,时序丢失——一轮里有多次工具调用时,用户滚到底只看得见工具块,
+ * 看不见回复。parts 保留真实顺序,详细模式按它渲染。
+ */
+export type MessagePart =
+  | { kind: "text"; text: string }
+  | { kind: "status"; text: string }
+  | ({ kind: "tool" } & ToolCallInfo);
+
 export interface ChatMessage {
   id: string;
   role: "user" | "assistant";
+  /** 纯文字部分的拼接;简洁模式和会话历史都用它 */
   text: string;
   attachments?: ChatAttachment[];
-  tools?: {
-    name: string;
-    input?: unknown;
-    ok?: boolean;
-    summary?: string;
-    expanded?: boolean;
-  }[];
+  /** 按发生顺序的片段,渲染以它为准;旧历史里没有时由 text/tools/statuses 兜底 */
+  parts?: MessagePart[];
+  tools?: ToolCallInfo[];
   statuses?: string[];
   error?: string;
   pending?: boolean;

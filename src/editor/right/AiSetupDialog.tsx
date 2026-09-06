@@ -24,6 +24,11 @@ export function AiSetupDialog(props: {
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
+  const [agyPerms, setAgyPerms] = useState<{path: string, total: number, granted: string[], missing: string[]} | null>(null);
+  const [agyPermError, setAgyPermError] = useState("");
+  const [granting, setGranting] = useState(false);
+  const [toolProtocol, setToolProtocol] = useState(false);
+
   useEffect(() => {
     if (open) {
       setSelected(current);
@@ -35,7 +40,11 @@ export function AiSetupDialog(props: {
         setApiKeyInput("");
         setSaveSuccess(false);
         setSaveError(null);
+        setToolProtocol(!!config.toolProtocol);
       }
+      fetch('/api/ai/agy-permissions').then(r => r.json()).then(data => {
+        if (data.ok) setAgyPerms(data);
+      }).catch(() => {});
     }
   }, [open, current, config]);
 
@@ -52,6 +61,24 @@ export function AiSetupDialog(props: {
   }, [open, onClose]);
 
   if (!open) return null;
+
+  const handleGrant = async () => {
+    setGranting(true);
+    setAgyPermError("");
+    try {
+      const r = await fetch('/api/ai/agy-permissions', { method: 'POST' });
+      const data = await r.json();
+      if (data.ok) {
+        setAgyPerms(prev => prev ? { ...prev, granted: [...prev.granted, ...data.added], missing: [] } : null);
+      } else {
+        setAgyPermError(data.error || '授权失败');
+      }
+    } catch(e) {
+      setAgyPermError(String(e));
+    } finally {
+      setGranting(false);
+    }
+  };
 
   const handleSaveApi = async () => {
     setSaving(true);
@@ -85,6 +112,11 @@ export function AiSetupDialog(props: {
     }
   };
 
+  const handleSaveProtocol = async (checked: boolean) => {
+    setToolProtocol(checked);
+    await onSaveConfig({ toolProtocol: checked });
+  };
+
   const currentProviderData = providers.find(p => p.id === selected);
   const isApi = selected === "api";
   
@@ -113,7 +145,8 @@ export function AiSetupDialog(props: {
     const st = loginState[p.id];
     
     return (
-      <label key={p.id} className={`ais-row ${!p.available ? "disabled" : ""}`}>
+      <div key={p.id}>
+      <label className={`ais-row ${!p.available ? "disabled" : ""}`}>
         <input 
           type="radio" 
           name="ais-provider" 
@@ -153,6 +186,22 @@ export function AiSetupDialog(props: {
           )}
         </div>
       </label>
+      {p.id === 'agy' && agyPerms && (
+        <div className="ais-agy-perms">
+           <div className="ais-agy-perms-title">
+             授权 PromptCut 工具
+             <button className="ais-btn ais-primary-btn ais-small-btn" disabled={granting || agyPerms.missing.length === 0} onClick={handleGrant}>
+               {agyPerms.missing.length === 0 ? "已授权" : granting ? "授权中..." : "点击授权"}
+             </button>
+           </div>
+           <div className="ais-agy-perms-desc">
+             {agyPerms.missing.length === 0 ? `已授权 ${agyPerms.total} 个工具。` : `已授权 ${agyPerms.granted.length}/${agyPerms.total} 个工具。`}
+             会在 <code>{agyPerms.path}</code> 的 permissions.allow 里加 {agyPerms.missing.length} 条 mcp(promptcut/...) 规则；已有的规则不会动。
+           </div>
+           {agyPermError && <div className="ais-status-err">{agyPermError}</div>}
+        </div>
+      )}
+      </div>
     );
   };
 
@@ -229,6 +278,13 @@ export function AiSetupDialog(props: {
               </div>
             </div>
           )}
+        </div>
+
+        <div className="ais-protocol-mode">
+           <label>
+              <input type="checkbox" checked={toolProtocol} onChange={e => handleSaveProtocol(e.target.checked)} />
+              文本协议模式（CLI 原生工具被拒时用）
+           </label>
         </div>
 
         <div className="ais-footer">

@@ -168,6 +168,7 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
               </option>
             ))}
           </select>
+          <button className="ai-new-chat-btn" title="让 AI 自动给素材库第一个视频配动效" disabled={streaming} onClick={() => send("对素材库第一个视频执行 auto_workflow")}>一键配特效</button>
           <button className="ai-new-chat-btn" onClick={newChat}>新对话</button>
         </div>
       </div>
@@ -248,10 +249,52 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
                       >
                         🔧 {t.name} {t.ok === true ? "✓" : t.ok === false ? "✗" : "..."}
                       </div>
-                      {t.expanded && t.input ? (
-                        <pre style={{ overflowX: "auto", fontSize: 10, background: "var(--bg-canvas)", padding: 6, margin: 0, borderRadius: 4 }}>
-                          {JSON.stringify(t.input, null, 2)}
-                        </pre>
+                      {t.expanded ? (
+                        <>
+                          <div style={{ fontSize: 10, color: "var(--ink-muted)", marginBottom: 2 }}>Input:</div>
+                          <pre style={{ overflowX: "auto", fontSize: 10, background: "var(--bg-canvas)", padding: 6, margin: 0, borderRadius: 4, marginBottom: (t.summary || t.files?.length) ? 4 : 0 }}>
+                            {JSON.stringify(t.input || {}, null, 2)}
+                          </pre>
+                          {t.summary ? (
+                            <>
+                              <div style={{ fontSize: 10, color: "var(--ink-muted)", marginBottom: 2 }}>Result:</div>
+                              <pre style={{ overflowX: "auto", fontSize: 10, background: "var(--bg-canvas)", padding: 6, margin: 0, borderRadius: 4, marginBottom: t.files?.length ? 4 : 0, whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
+                                {t.summary}
+                              </pre>
+                            </>
+                          ) : null}
+                          {t.files && t.files.length > 0 ? (
+                            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                               {t.files.map((f, fidx) => {
+                                  const lower = f.toLowerCase();
+                                  if (lower.endsWith('.png') || lower.endsWith('.jpg') || lower.endsWith('.jpeg')) {
+                                     let url = f;
+                                     if (!f.startsWith('http') && !f.startsWith('data:')) {
+                                         url = `/@fs/${f.replace(/\\/g, '/').replace(/^\/?/, '')}`;
+                                     }
+                                     return (
+                                        <div key={fidx}>
+                                          <img 
+                                            src={url} 
+                                            style={{ maxWidth: "100%", borderRadius: 4 }} 
+                                            alt="tool output" 
+                                            onError={(e) => {
+                                                e.currentTarget.style.display = 'none';
+                                                if (e.currentTarget.nextSibling) return;
+                                                const span = document.createElement('span');
+                                                span.style.fontSize = '10px';
+                                                span.textContent = f;
+                                                e.currentTarget.parentElement?.appendChild(span);
+                                            }}
+                                          />
+                                        </div>
+                                     );
+                                  }
+                                  return <div key={fidx} style={{ fontSize: 10, fontFamily: 'monospace' }}>{f}</div>;
+                               })}
+                            </div>
+                          ) : null}
+                        </>
                       ) : null}
                     </div>
                   ))}

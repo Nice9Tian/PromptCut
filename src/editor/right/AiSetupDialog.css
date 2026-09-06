@@ -196,3 +196,57 @@
   color: var(--ink-muted);
   text-align: center;
 }
+
+.ais-agy-perms {
+  margin-left: 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  background: var(--fill-subtle);
+  border-radius: 6px;
+  border: 1px solid var(--hairline);
+}
+
+.ais-agy-perms-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.ais-agy-perms-desc {
+  font-size: 12px;
+  color: var(--ink-muted);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.ais-small-btn {
+  padding: 4px 8px;
+  border: 1px solid var(--hairline);
+  border-radius: 4px;
+  background: var(--bg-panel);
+  color: var(--ink);
+  cursor: pointer;
+  font-size: 12px;
+}
+.ais-small-btn:hover:not(:disabled) {
+  background: var(--fill-hover);
+}
+.ais-small-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.ais-protocol-mode {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--ink-muted);
+}
+.ais-protocol-mode input[type="checkbox"] {
+  cursor: pointer;
+}

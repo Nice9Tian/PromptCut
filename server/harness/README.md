@@ -14,6 +14,13 @@
 - `tools/index.mjs`: 负责封装 mcp-tools 与内置工具，暴露统一 `execute` 执行切面。
 - `tools/think.mjs`: 思考辅助工具。
 - `tools/textEditor.mjs`: 基于工作区的文本编辑器。
+- `tool-protocol.mjs`: 提供文本协议的 fallback 机制，供三大 CLI 运行器在原生 MCP 被拒时或强制模式下使用。导出的函数包括：
+  - `parseToolBlocks(text)`: 解析出带 ````promptcut-tool```` 围栏的 JSON 工具调用，捕捉坏 JSON 并报错。
+  - `hasToolBlocks(text)`: 判断文本中是否包含围栏。
+  - `executeToolBlocks(blocks, callTool)`: 执行解析出的工具列表，返回带 ok、summary、files 等结果的数组。
+  - `formatResultsAsUserMessage(results)`: 将执行结果组装为供下轮使用的 User Message。
+  - `renderProtocolPrompt()`: 渲染注入给模型的文本协议提示，并拼接好所有可用工具的 Schema。
+  - `runTextProtocolLoop({ startRun, opts, onEvent })`: 核心循环逻辑。返回**同步的** `{ abort, done }` 对象（`done` 是内部 loop 的 Promise）。契约包括：内层每轮的 done 事件会被拦截不往外发；整个循环结束时只发一条总的 done 事件；最多执行 8 轮上限，超过则强行停止并发送文本提示。
 
 ## 2. 与 claude-quickstarts/agents(Python) 的对应关系
 - `agent.py` 对应这里的 `agent.mjs`。

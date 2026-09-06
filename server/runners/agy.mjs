@@ -52,7 +52,46 @@ export async function getAgyProvider() {
   return { id: 'agy', label: 'Antigravity', available, version, path: exePath, note };
 }
 
+import { runTextProtocolLoop } from '../harness/tool-protocol.mjs';
+
 export function startRun(opts) {
+  if (opts.toolProtocol) {
+    return runTextProtocolLoop({ startRun: _startRun, opts, onEvent: opts.onEvent });
+  }
+
+  let abortRef = { abort: () => {} };
+  let rejected = false;
+
+  const interceptOnEvent = (ev) => {
+    if ((ev.type === 'done' || ev.type === 'error') && rejected) {
+        return;
+    }
+    opts.onEvent(ev);
+  };
+
+  const run = _startRun({
+    ...opts,
+    onEvent: interceptOnEvent,
+    onPermissionDenied: () => {
+      rejected = true;
+    }
+  });
+  abortRef.abort = run.abort;
+
+  const donePromise = run.done.then((res) => {
+    if (rejected) {
+      opts.onEvent({ type: 'status', text: '原生工具被拒，改用文本协议重试' });
+      const nextRun = runTextProtocolLoop({ startRun: _startRun, opts, onEvent: opts.onEvent });
+      abortRef.abort = nextRun.abort;
+      return nextRun.done;
+    }
+    return res;
+  });
+
+  return { abort: () => abortRef.abort(), done: donePromise };
+}
+
+function _startRun(opts) {
   const exePath = resolveExe('agy', 'C:\\Users\\admin\\AppData\\Local\\agy\\bin\\agy.exe');
   
   let resolveDone;
@@ -82,7 +121,7 @@ export function startRun(opts) {
       }
   };
 
-  ensureMcpRegistered(exePath, opts.mcp, safeOnEvent).then(() => {
+  const runChild = () => {
     if (isAborted) {
        resolveDone();
        return;
@@ -120,8 +159,8 @@ export function startRun(opts) {
               } else if (su.state === 'ERROR') {
                  const msg = su.tool_info?.error?.message || '';
                  if (msg.includes('permission') || msg.includes('权限') || msg.includes('denied') || msg.includes('not allowed')) {
-                    childController.safeOnEvent({ type: 'error', message: msg });
-                    childController.safeOnEvent({ type: 'status', text: `agy 拒绝了 MCP 工具调用。请在 ~/.gemini/antigravity-cli/settings.json 的 permissions.allow 里加一条 mcp(promptcut/${tName}) 规则（每个工具一条），然后重试。` });
+                    if (opts.onPermissionDenied) opts.onPermissionDenied();
+                    childController.safeOnEvent({ type: 'status', text: `agy 拒绝了 MCP 工具调用。请打开 AI 设置（右栏齿轮），点『授权 PromptCut 工具』，然后重试。` });
                  } else {
                     childController.safeOnEvent({ type: 'tool_result', name: tName, ok: false, summary: msg });
                  }
@@ -155,7 +194,13 @@ export function startRun(opts) {
     }));
 
     childController.donePromise.then(resolveDone);
-  });
+  };
+
+  if (opts.mcp) {
+    ensureMcpRegistered(exePath, opts.mcp, safeOnEvent).then(runChild);
+  } else {
+    runChild();
+  }
   
   const abort = () => {
     isAborted = true;

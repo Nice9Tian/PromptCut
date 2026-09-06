@@ -166,6 +166,21 @@ export default function vitePluginAi(): Plugin {
         }
       });
 
+      server.middlewares.use('/api/ai/agy-permissions', async (req, res) => {
+        try {
+          const { status, grant } = await import(new URL('./agy-permissions.mjs', import.meta.url).href);
+          if (req.method === 'GET') {
+            return sendJson(res, 200, { ok: true, ...status() });
+          } else if (req.method === 'POST') {
+            return sendJson(res, 200, { ok: true, ...grant() });
+          } else {
+            sendJson(res, 405, { ok: false, error: 'GET or POST only' });
+          }
+        } catch (e: any) {
+          sendJson(res, 500, { ok: false, error: String(e) });
+        }
+      });
+
       server.middlewares.use('/api/ai/chat', async (req, res) => {
         if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: 'POST only' });
         let body = '';
@@ -228,6 +243,9 @@ export default function vitePluginAi(): Plugin {
             const runId = Math.random().toString(36).substring(2, 9);
             res.write(`data: ${JSON.stringify({ type: 'run', runId })}\n\n`);
 
+            const { publicConfig } = await import(new URL('./ai-config.mjs', import.meta.url).href);
+            const cfg = publicConfig();
+
             const run = runners.startRun({
               provider,
               prompt: finalPrompt,
@@ -235,6 +253,7 @@ export default function vitePluginAi(): Plugin {
               sessionId,
               cwd,
               model,
+              toolProtocol: cfg.toolProtocol,
               mcp,
               callTool: async (name: string, args: any) => await callToolInternal(name, args),
               onEvent: (ev: any) => {

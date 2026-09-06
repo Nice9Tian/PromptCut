@@ -4,7 +4,15 @@ import os from 'node:os';
 import { spawnCli, resolveExe, lineSplitter } from './index.mjs';
 import { execFileSync } from 'node:child_process';
 
-const ALLOWED_TOOLS_PATTERN = 'mcp__promptcut';
+import { tools } from '../mcp-tools.mjs';
+
+function getAllowedToolsArgv() {
+  const arr = ['mcp__promptcut'];
+  for (const t of tools) {
+    arr.push(`mcp__promptcut__${t.name}`);
+  }
+  return arr;
+}
 
 export async function getClaudeProvider() {
   const exePath = resolveExe('claude', 'C:\\Users\\admin\\.local\\bin\\claude.exe');
@@ -21,35 +29,78 @@ export async function getClaudeProvider() {
   return { id: 'claude', label: 'Claude Code', available, version, path: exePath, note };
 }
 
+import { runTextProtocolLoop } from '../harness/tool-protocol.mjs';
+
 export function startRun(opts) {
+  if (opts.toolProtocol) {
+    return runTextProtocolLoop({ startRun: _startRun, opts, onEvent: opts.onEvent });
+  }
+
+  let abortRef = { abort: () => {} };
+  let rejected = false;
+
+  const interceptOnEvent = (ev) => {
+    if (ev.type === 'status' && ev.text && ev.text.includes('permission_denials')) {
+        // Just in case
+    }
+    if ((ev.type === 'done' || ev.type === 'error') && rejected) {
+        return;
+    }
+    opts.onEvent(ev);
+  };
+
+  const run = _startRun({
+    ...opts,
+    onEvent: interceptOnEvent,
+    onPermissionDenied: () => {
+      rejected = true;
+    }
+  });
+  abortRef.abort = run.abort;
+
+  const donePromise = run.done.then((res) => {
+    if (rejected) {
+      opts.onEvent({ type: 'status', text: '原生工具被拒，改用文本协议重试' });
+      const nextRun = runTextProtocolLoop({ startRun: _startRun, opts, onEvent: opts.onEvent });
+      abortRef.abort = nextRun.abort;
+      return nextRun.done;
+    }
+    return res;
+  });
+
+  return { abort: () => abortRef.abort(), done: donePromise };
+}
+
+function _startRun(opts) {
   const exePath = resolveExe('claude', 'C:\\Users\\admin\\.local\\bin\\claude.exe');
   
-  const tempDir = path.join(os.tmpdir(), 'promptcut');
-  fs.mkdirSync(tempDir, { recursive: true });
-  const mcpConfigPath = path.join(tempDir, 'mcp-claude.json');
-  
-  const mcpConfig = {
-    mcpServers: {
-      "promptcut": {
-        command: opts.mcp.command,
-        args: opts.mcp.args,
-        env: opts.mcp.env
-      }
-    }
-  };
-  fs.writeFileSync(mcpConfigPath, JSON.stringify(mcpConfig), 'utf8');
-
   const args = [
     '-p',
     '--output-format', 'stream-json',
     '--verbose',
     '--include-partial-messages',
-    '--mcp-config', mcpConfigPath,
-    '--strict-mcp-config',
-    '--allowedTools', ALLOWED_TOOLS_PATTERN,
-    '--permission-mode', 'default',
-    '--append-system-prompt', opts.systemPrompt
   ];
+  
+  if (opts.mcp) {
+    const tempDir = path.join(os.tmpdir(), 'promptcut');
+    fs.mkdirSync(tempDir, { recursive: true });
+    const mcpConfigPath = path.join(tempDir, 'mcp-claude.json');
+    
+    const mcpConfig = {
+      mcpServers: {
+        "promptcut": {
+          command: opts.mcp.command,
+          args: opts.mcp.args,
+          env: opts.mcp.env
+        }
+      }
+    };
+    fs.writeFileSync(mcpConfigPath, JSON.stringify(mcpConfig), 'utf8');
+    
+    args.push('--mcp-config', mcpConfigPath, '--strict-mcp-config', '--allowedTools', ...getAllowedToolsArgv());
+  }
+
+  args.push('--append-system-prompt', opts.systemPrompt);
   if (opts.sessionId) {
     args.push('--resume', opts.sessionId);
   }
@@ -93,6 +144,12 @@ export function startRun(opts) {
             }
          }
       } else if (ev.type === 'result') {
+         if (ev.permission_denials && ev.permission_denials.length > 0) {
+             if (opts.onPermissionDenied) opts.onPermissionDenied();
+         }
+         if (ev.result && ev.result.permission_denials && ev.result.permission_denials.length > 0) {
+             if (opts.onPermissionDenied) opts.onPermissionDenied();
+         }
          if (ev.is_error) {
              const message = ev.result || ev.error?.message || ev.terminal_reason || 'Claude 出错';
              finish({ type: 'error', message });

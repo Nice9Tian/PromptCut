@@ -16,7 +16,46 @@ export async function getCodexProvider() {
   return { id: 'codex', label: 'Codex', available, version, path: exePath, note };
 }
 
+import { runTextProtocolLoop } from '../harness/tool-protocol.mjs';
+
 export function startRun(opts) {
+  if (opts.toolProtocol) {
+    return runTextProtocolLoop({ startRun: _startRun, opts, onEvent: opts.onEvent });
+  }
+
+  let abortRef = { abort: () => {} };
+  let rejected = false;
+
+  const interceptOnEvent = (ev) => {
+    if ((ev.type === 'done' || ev.type === 'error') && rejected) {
+        return;
+    }
+    opts.onEvent(ev);
+  };
+
+  const run = _startRun({
+    ...opts,
+    onEvent: interceptOnEvent,
+    onPermissionDenied: () => {
+      rejected = true;
+    }
+  });
+  abortRef.abort = run.abort;
+
+  const donePromise = run.done.then((res) => {
+    if (rejected) {
+      opts.onEvent({ type: 'status', text: '原生工具被拒，改用文本协议重试' });
+      const nextRun = runTextProtocolLoop({ startRun: _startRun, opts, onEvent: opts.onEvent });
+      abortRef.abort = nextRun.abort;
+      return nextRun.done;
+    }
+    return res;
+  });
+
+  return { abort: () => abortRef.abort(), done: donePromise };
+}
+
+function _startRun(opts) {
   const exePath = resolveExe('codex', 'C:\\Users\\admin\\AppData\\Local\\Programs\\OpenAI\\Codex\\bin\\codex.exe');
   
   const args = [];
@@ -30,14 +69,18 @@ export function startRun(opts) {
   if (!opts.sessionId) {
       args.push('-C', opts.cwd);
       args.push('-s', 'read-only');
+      args.push('-c', 'approval_policy="never"');
   } else {
       args.push('-c', 'sandbox_mode="read-only"');
+      args.push('-c', 'approval_policy="never"');
   }
   
-  args.push('-c', `mcp_servers.promptcut.command=${JSON.stringify(opts.mcp.command)}`);
-  args.push('-c', `mcp_servers.promptcut.args=${JSON.stringify(opts.mcp.args)}`);
-  const envPairs = Object.entries(opts.mcp.env).map(([k,v]) => `${k}=${JSON.stringify(String(v))}`).join(', ');
-  args.push('-c', `mcp_servers.promptcut.env={${envPairs}}`);
+  if (opts.mcp) {
+      args.push('-c', `mcp_servers.promptcut.command=${JSON.stringify(opts.mcp.command)}`);
+      args.push('-c', `mcp_servers.promptcut.args=${JSON.stringify(opts.mcp.args)}`);
+      const envPairs = Object.entries(opts.mcp.env).map(([k,v]) => `${k}=${JSON.stringify(String(v))}`).join(', ');
+      args.push('-c', `mcp_servers.promptcut.env={${envPairs}}`);
+  }
   
   if (opts.model) {
       args.push('-m', opts.model);
@@ -90,6 +133,9 @@ export function startRun(opts) {
                  } else if (evType === 'item.completed') {
                      const name = item.tool ?? item.name ?? item.tool_name;
                      const ok = !(item.error) && item.status !== 'failed';
+                     if (!ok && typeof item.error === 'string' && (item.error.toLowerCase().includes('denied') || item.error.toLowerCase().includes('approval'))) {
+                         if (opts.onPermissionDenied) opts.onPermissionDenied();
+                     }
                      const summary = item.result ? JSON.stringify(item.result).substring(0, 300) : (item.error ? String(item.error) : '');
                      safeOnEvent({ type: 'tool_result', name, ok, summary });
                  }
@@ -101,6 +147,9 @@ export function startRun(opts) {
              safeOnEvent({ type: 'tool_call', name: ev.name, input: ev.input || {} });
          } else if (status === 'completed' || status === 'success' || status === 'error' || status === 'done' || ev.result !== undefined) {
              const ok = status === 'completed' || status === 'success' || status === 'done' || (!status && !ev.error);
+             if (!ok && typeof ev.error === 'string' && (ev.error.toLowerCase().includes('denied') || ev.error.toLowerCase().includes('approval'))) {
+                 if (opts.onPermissionDenied) opts.onPermissionDenied();
+             }
              safeOnEvent({ type: 'tool_result', name: ev.name, ok, summary: ev.result ? JSON.stringify(ev.result).substring(0, 300) : '' });
          }
       } else if (evType === 'turn.completed') {

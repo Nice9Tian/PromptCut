@@ -70,9 +70,10 @@ export function startRun(opts: {
 ```bash
 claude -p --output-format stream-json --verbose --include-partial-messages \
   --mcp-config <tmp.json> --strict-mcp-config \
-  --allowedTools mcp__promptcut --permission-mode default \
+  --allowedTools mcp__promptcut mcp__promptcut__get_editor_state mcp__promptcut__list_effects ... \
   --append-system-prompt <systemPrompt> [--model <m>]
 ```
+注意：`allowedTools` 需要逐个列出每个工具（前缀拼接 `mcp__promptcut__`），并且去掉了 `--permission-mode default` 参数。
 续聊（附加参数）：`--resume <sessionId>`
 *(Prompt 通过 stdin 传入)*
 
@@ -86,25 +87,33 @@ agy mcp add -e PROMPTCUT_PORT=<port> promptcut "<node绝对路径>" "<mcp-server
 agy -p <prompt> --output-format stream-json --add-dir <cwd> \
   --print-timeout 20m [--conversation <sessionId>] [--model <m>]
 ```
+注意：Agy 提供了一个设置入口，可在前端界面点击齿轮图标，然后点击「授权 PromptCut 工具」自动配置 `~/.gemini/antigravity-cli/settings.json` 的权限规则。
 *(系统提示拼接在 Prompt 前面)*
 
 ### Codex
 首轮：
 ```bash
-codex exec --json --skip-git-repo-check -C <cwd> -s read-only \
+codex exec --json --skip-git-repo-check -C <cwd> \
+  -c sandbox_mode="read-only" -c approval_policy="never" \
   -c mcp_servers.promptcut.command="<node绝对路径>" \
   -c mcp_servers.promptcut.args=["<mcp-server.mjs绝对路径>"] \
   -c mcp_servers.promptcut.env={PROMPTCUT_PORT="<port>"} \
   [--model <m>] -
 ```
+注意：`approval_policy="never"` 用于禁用 MCP 审批拦截，与 `sandbox_mode` 是两个正交的开关。
 续聊：
 ```bash
 codex exec resume <threadId> --json --skip-git-repo-check \
-  -c sandbox_mode="read-only" \
+  -c sandbox_mode="read-only" -c approval_policy="never" \
   -c mcp_servers.promptcut.command="<node绝对路径>" ... \
   [--model <m>] -
 ```
 *(Prompt 通过 stdin 传入)*
+
+### 文本协议的触发条件
+当以下条件满足时，CLI 运行器会退回或直接使用「文本协议（Text Protocol）」模式（不使用原生 MCP）：
+1. 用户在前端设置对话框中主动勾选了「强制使用文本协议」。
+2. 原生工具调用被拒：运行器在当前轮次中检测到工具调用由于权限或审批被拒绝（例如 Claude 的 `permission_denials` 非空，Codex 审批被拒，agy 权限被拒）。此时会发出 status 提示，并用文本协议重新执行该轮对话。
 
 ---
 

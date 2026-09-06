@@ -16,6 +16,24 @@ export function startRun(opts) {
   const donePromise = new Promise(async (resolve) => {
     abortResolve = resolve;
     
+    if (process.env.PROMPTCUT_TEST_PROTOCOL === '1') {
+       if (isAborted) return resolve();
+       onEvent({ type: "session", sessionId: "fake-protocol-session" });
+       await new Promise(r => setTimeout(r, 10));
+       
+       if (opts.prompt.includes("【第 8 轮】")) {
+          // This should never happen if 8 limit works, but just in case
+          onEvent({ type: "text", delta: "结束了\n" });
+       } else {
+          // Output blocks
+          const txt = "我要调两个工具\n```promptcut-tool\n{\"name\":\"stt_status\"}\n```\n并且还有一个错的工具\n```promptcut-tool\n{\"name\":\"bad_tool\"}\n```\n并且还有一个坏的JSON\n```promptcut-tool\n{\"name\"\n```\n";
+          onEvent({ type: "text", delta: txt });
+       }
+       onEvent({ type: "done", sessionId: "fake-protocol-session" });
+       isFinished = true;
+       return resolve();
+    }
+
     if (isAborted) { isFinished = true; return resolve(); }
     onEvent({ type: "session", sessionId: "fake-session-123" });
     
