@@ -1,8 +1,9 @@
+import { cliEnv } from './cli-runtime.mjs';
 import { spawnCli, resolveExe, lineSplitter, probeVersion } from './index.mjs';
 import { execFileSync } from 'node:child_process';
 
 export async function getCodexProvider() {
-  const exePath = resolveExe('codex', 'C:\\Users\\admin\\AppData\\Local\\Programs\\OpenAI\\Codex\\bin\\codex.exe');
+  const exePath = resolveExe('codex');
   let available = false;
   let version = undefined;
   let note = undefined;
@@ -56,7 +57,7 @@ export function startRun(opts) {
 }
 
 function _startRun(opts) {
-  const exePath = resolveExe('codex', 'C:\\Users\\admin\\AppData\\Local\\Programs\\OpenAI\\Codex\\bin\\codex.exe');
+  const exePath = resolveExe('codex');
   
   const args = [];
   if (opts.sessionId) {
@@ -89,7 +90,7 @@ function _startRun(opts) {
   
   const fullPrompt = `<<<系统说明>>>\n${opts.systemPrompt}\n<<<用户消息>>>\n${opts.prompt}`;
   
-  const { child, safeOnEvent, finish, abort, donePromise } = spawnCli(exePath, args, { cwd: opts.cwd }, opts.onEvent, 'Codex CLI');
+  const { child, safeOnEvent, finish, abort, donePromise } = spawnCli(exePath, args, { cwd: opts.cwd, env: cliEnv('codex') }, opts.onEvent, 'Codex CLI');
 
   let sentLength = 0;
   let threadId = null;
@@ -99,7 +100,7 @@ function _startRun(opts) {
       const str = data.toString('utf8');
       if (!warnedConfig && str.includes('config.toml') && (str.includes('unknown variant') || str.includes('unknown field'))) {
           warnedConfig = true;
-          safeOnEvent({ type: 'status', text: 'Codex 读不了自己的配置：~/.codex/config.toml 里有这个版本不认识的取值（见上一条报错）。请自行修改该配置后重试；本程序不会替你改它。' });
+          safeOnEvent({ type: 'status', text: 'Codex 无法读取 PromptCut 的独立配置，请根据上一条错误检查配置。' });
       }
   });
 

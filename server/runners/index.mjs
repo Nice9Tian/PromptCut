@@ -4,27 +4,9 @@ import { getClaudeProvider, startRun as startClaude } from './claude.mjs';
 import { getAgyProvider, startRun as startAgy } from './agy.mjs';
 import { getCodexProvider, startRun as startCodex } from './codex.mjs';
 
-const exeCache = new Map();
+import { resolveCli, cliCommand, cliEnv } from './cli-runtime.mjs';
 
-export function resolveExe(name, fallback) {
-  if (exeCache.has(name)) return exeCache.get(name);
-  try {
-    const stdout = execFileSync('where.exe', [name], { encoding: 'utf8', stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true });
-    const lines = stdout.trim().split(/\r?\n/).filter(Boolean);
-    if (lines.length > 0) {
-      // where 会把无扩展名的 shell 脚本排在前面(npm 全局装出来的 codex / claude 就是这样),
-      // 那个文件 execFileSync 执行不了,要挑 .exe/.cmd/.bat 那条。
-      const runnable =
-        process.platform === 'win32'
-          ? lines.find((f) => /\.(exe|cmd|bat)$/i.test(f)) || lines[0]
-          : lines[0];
-      exeCache.set(name, runnable);
-      return runnable;
-    }
-  } catch {}
-  exeCache.set(name, fallback);
-  return fallback;
-}
+export const resolveExe = resolveCli;
 
 /**
  * 探测 CLI 版本。npm 全局装出来的是 .cmd 包装器,而 Node 出于安全限制不允许
@@ -33,11 +15,9 @@ export function resolveExe(name, fallback) {
  * 返回版本字符串;跑不起来就抛错,由调用方记进 note。
  */
 export function probeVersion(exePath, args = ['--version']) {
-  const opts = { timeout: 5000, encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] };
-  if (process.platform === 'win32' && /\.(cmd|bat)$/i.test(exePath)) {
-    return execFileSync('cmd.exe', ['/c', exePath, ...args], opts);
-  }
-  return execFileSync(exePath, args, opts);
+  const opts = { timeout: 15000, encoding: 'utf8', windowsHide: true, env: cliEnv(), stdio: ['ignore', 'pipe', 'pipe'] };
+  const invocation = cliCommand(exePath, args);
+  return execFileSync(invocation.command, invocation.args, opts);
 }
 
 let providersCache = null;
@@ -48,10 +28,8 @@ export async function listProviders(opts = {}) {
   if (!opts.refresh && providersCache && now - providersCacheTime < 5000) {
     return providersCache;
   }
-  // refresh 的语义是「重新看一遍这台机器」,所以 exe 的解析结果也要一起作废:
-  // 刚用「安装」按钮装好的 CLI,PATH 上已经有了,但 exeCache 里还留着上一次「没找到」的结果,
-  // 不清的话界面会一直显示未安装。
-  if (opts.refresh) exeCache.clear();
+  // Resolve paths afresh: installers can create launchers without updating this process's PATH.
+
   const baseProviders = await Promise.all([
     getClaudeProvider(),
     getAgyProvider(),
@@ -59,7 +37,7 @@ export async function listProviders(opts = {}) {
   ]);
   
   await Promise.all(baseProviders.map(async (p) => {
-    p.auth = await probeAuth(p.id, { refresh: !!opts.refresh });
+    p.auth = p.available ? await probeAuth(p.id, { refresh: !!opts.refresh }) : { loggedIn: false, detail: '请先安装' };
   }));
 
   const providers = [...baseProviders];
@@ -164,16 +142,11 @@ export function spawnCli(exePath, args, opts, onEvent, providerName) {
     try { onEvent(ev); } catch {}
   };
 
-  let actualCmd = exePath;
-  let actualArgs = args;
-  if (actualCmd.toLowerCase().endsWith('.cmd') || actualCmd.toLowerCase().endsWith('.bat')) {
-    actualCmd = 'cmd.exe';
-    actualArgs = ['/c', exePath, ...args];
-  }
+  const { command: actualCmd, args: actualArgs } = cliCommand(exePath, args);
 
   const child = spawn(actualCmd, actualArgs, {
     cwd: opts.cwd,
-    env: opts.env || process.env,
+    env: cliEnv(undefined, opts.env || process.env),
     windowsHide: true,
     shell: false
   });

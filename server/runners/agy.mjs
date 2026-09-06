@@ -1,5 +1,11 @@
 import { spawnCli, resolveExe, lineSplitter, probeVersion } from './index.mjs';
 import { execFileSync } from 'node:child_process';
+import { cliCommand, cliEnv } from './cli-runtime.mjs';
+
+function runAgy(exe, args, options) {
+  const invocation = cliCommand(exe, args);
+  return execFileSync(invocation.command, invocation.args, { env: cliEnv('agy'), timeout: 15000, ...options });
+}
 
 let registerPromise = null;
 let lastRegisteredPort = null;
@@ -9,7 +15,7 @@ async function ensureMcpRegistered(exePath, mcpOpts, safeOnEvent) {
   
   registerPromise = (async () => {
     try {
-      const listStdout = execFileSync(exePath, ['mcp', 'list'], { encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+      const listStdout = runAgy(exePath, ['mcp', 'list'], { encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
       const lines = listStdout.trim().split(/\r?\n/);
       let found = false;
       for (const l of lines) {
@@ -27,7 +33,7 @@ async function ensureMcpRegistered(exePath, mcpOpts, safeOnEvent) {
     } catch {}
 
     try {
-      execFileSync(exePath, ['mcp', 'add', '-e', `PROMPTCUT_PORT=${mcpOpts.env.PROMPTCUT_PORT}`, 'promptcut', mcpOpts.command, mcpOpts.args[0]], { windowsHide: true, stdio: 'ignore' });
+      runAgy(exePath, ['mcp', 'add', '-e', `PROMPTCUT_PORT=${mcpOpts.env.PROMPTCUT_PORT}`, 'promptcut', mcpOpts.command, mcpOpts.args[0]], { windowsHide: true, stdio: 'ignore' });
       lastRegisteredPort = mcpOpts.env.PROMPTCUT_PORT;
       safeOnEvent({ type: 'status', text: '已把 PromptCut 注册为 agy 的 MCP 服务（agy mcp add promptcut）' });
     } catch (e) {
@@ -38,7 +44,7 @@ async function ensureMcpRegistered(exePath, mcpOpts, safeOnEvent) {
 }
 
 export async function getAgyProvider() {
-  const exePath = resolveExe('agy', 'C:\\Users\\admin\\AppData\\Local\\agy\\bin\\agy.exe');
+  const exePath = resolveExe('agy');
   let available = false;
   let version = undefined;
   let note = undefined;
@@ -92,7 +98,7 @@ export function startRun(opts) {
 }
 
 function _startRun(opts) {
-  const exePath = resolveExe('agy', 'C:\\Users\\admin\\AppData\\Local\\agy\\bin\\agy.exe');
+  const exePath = resolveExe('agy');
   
   let resolveDone;
   const donePromise = new Promise(r => { resolveDone = r; });

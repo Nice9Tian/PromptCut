@@ -15,7 +15,7 @@ function getAllowedToolsArgv() {
 }
 
 export async function getClaudeProvider() {
-  const exePath = resolveExe('claude', 'C:\\Users\\admin\\.local\\bin\\claude.exe');
+  const exePath = resolveExe('claude');
   let available = false;
   let version = undefined;
   let note = undefined;
@@ -72,7 +72,7 @@ export function startRun(opts) {
 }
 
 function _startRun(opts) {
-  const exePath = resolveExe('claude', 'C:\\Users\\admin\\.local\\bin\\claude.exe');
+  const exePath = resolveExe('claude');
   
   const args = [
     '-p',

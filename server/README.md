@@ -4,7 +4,10 @@
 
 ## 端点
 * `GET /api/ai/providers[?refresh=1]` - 返回 `{ ok, providers, stt }`。获取可用的运行器及 STT 状态。`providers` 中的每一项现在多包含一个 `auth` 字段（形状为 `{ loggedIn: true|false|null, detail?, fixHint?, loginCommand? }`，数据来自 `server/runners/auth.mjs` 的 `probeAuth` 探测，结果默认缓存 10 秒）。加上 `refresh=1` 查询参数可跳过 provider 缓存（5 秒）和 auth 缓存（10 秒）。列表除了三大 CLI，还固定包含第四项 `id` 为 `api`（API 直连）；若 `server/runners/api.mjs` 缺失，它是 `available: false` 加 `note` 为 "api runner 缺失" 的占位项。
-* `POST /api/ai/login` - 接收体 `{ provider }`。调用可见的控制台窗口起该 provider 的登录命令（内部通过 `cmd /c start "PromptCut 登录" cmd /k <登录命令>` 拉起，`windowsHide` 为 `false`，是全项目唯一例外）。当 provider 不认识或 CLI 没装时返回 400。调用成功返回 `{ ok: true, hint }`。**注意：本工具只负责把登录窗口打开，实际的登录过程由用户自己在浏览器/控制台中完成。**
+* `POST /api/ai/login` - 接收 `{ provider, deviceAuth? }`，返回 `{ ok, job }`。后台运行官方登录命令，必要时打开浏览器；不弹命令行。Antigravity 使用独立 ConPTY 子进程执行 `models`，不进入 TUI 或 Trust 界面。退出后再次验证认证，只有验证通过才标记成功。
+* `POST /api/ai/install` - 接收 `{ provider, dryRun? }`。Windows 下后台运行三家官方原生安装器，无需用户预装 npm。下载脚本重试、进程超时、退出码和安装后的可执行文件验证均纳入任务状态。
+* `GET /api/ai/setup` - 返回 `{ ok, jobs }`，每家最多一个活动任务。状态为 `running / succeeded / failed`；携带进度、安装日志、必要的官方登录链接或设备码。关闭设置窗口后任务继续，重新打开会恢复进度。原始登录输出不会返回或落盘。
+* `DELETE /api/ai/setup` - 接收 `{ provider }`，停止该任务的进程树，退出后可重试。设置写入端点只接受 JSON，并拒绝跨来源请求。
 * `GET /api/ai/config` / `POST /api/ai/config` - 读写 `%LOCALAPPDATA%\promptcut\ai.json`（测试时可通过环境变量 `PROMPTCUT_AI_CONFIG` 覆盖路径）。**返回值里的 `apiKey` 永远是 `{ set, last4 }` 的脱敏结构，绝不回显原文。** POST 接收部分更新配置对象，进行深合并；`apiKey` 传空串或缺失时保持原值，传 `null` 则清空。其中 `vendor` 仅支持 `anthropic`/`openai`/`gemini`，`baseUrl` 必须是 HTTP/HTTPS 地址或留空，`defaultProvider` 仅支持 `claude`/`agy`/`codex`/`api`/`null`，非法参数返回 400。非 GET/POST 请求返回 405。
 * `GET /api/ai/agy-permissions` / `POST /api/ai/agy-permissions` - 读写 agy 的权限配置文件（默认 `~/.gemini/antigravity-cli/settings.json`，可通过环境变量 `PROMPTCUT_AGY_SETTINGS` 覆盖）。GET 请求返回 `{ path, total, granted, missing }`。POST 请求将 `missing` 列表全部加入 `permissions.allow` 数组并保存，返回 `{ path, added, total }`。非 GET/POST 请求返回 405。
 * `POST /api/ai/chat` - 发送 AI 对话请求（SSE 流式响应）。
@@ -15,10 +18,17 @@
 * `GET /api/mcp/status` - 获取当前 MCP 连接状态（调试用）。
 
 ## 登录状态探测（server/runners/auth.mjs）
-该模块负责对 CLI 提供方进行登录状态探测。以下为实测结论：
-- **Claude**：执行 `claude auth status` 探测。由于退出码是 1 但 `stdout` 仍是有效的 JSON，所以实现直接忽略退出码而采用 JSON 解析验证。实测返回 `loggedIn: false`。对应的 `loginCommand` 为 `['claude', 'auth', 'login']`。
-- **Codex**：执行 `codex login status` 探测。由于本机 `config.toml` 第 5 行的 `model_reasoning_effort` 不兼容导致加载失败，实测返回 `loggedIn: null` 且提示 `fixHint`。我们绝不自动修改用户配置，需由用户自行修复。对应的 `loginCommand` 为 `['codex', 'login']`。
-- **Agy**：由于 agy 没有检查登录状态的命令（且其首次未登录时会自动打开浏览器），因此始终返回 `loggedIn: null`。对应的 `loginCommand` 为 `['agy']`。
+- Claude：以 `claude auth status` 的 JSON 为准。
+- Codex：合并 stdout/stderr 读取 `codex login status`。安装、登录和执行统一使用 `%LOCALAPPDATA%\promptcut\cli\codex-home`，不会修改 Codex 桌面应用的配置或凭据。用户需在 PromptCut 内登录一次。
+- Antigravity：以后台 `agy models` 成功返回模型列表确认连接。未登录时通过隐藏 ConPTY 完成 OAuth，界面只显示浏览器授权入口。
+
+CLI 管理目录默认为 `%LOCALAPPDATA%\promptcut\cli`，测试可通过 `PROMPTCUT_CLI_HOME` 覆盖。检测每次重新解析实际路径，支持用户目录、官方安装路径、npm shim 和 PATH。npm shim 优先由软件自带 Node 直接执行其包入口，以保留含中文、空格和 JSON 的参数。
+
+后台登录依赖 `node-pty`，桌面打包流程会验证其原生组件可用。开发时修改 server/runners 的 mjs 后应完整重启服务（Node 动态 import 存在模块缓存）。
+
+验证：`node --test server/test/cli-setup.test.mjs`、`node server/runners/agy-login.mjs --self-test`、`npm run build`。
+
+官方参考：[Claude 安装](https://code.claude.com/docs/en/setup)、[Codex 命令](https://learn.chatgpt.com/docs/developer-commands?surface=cli)、[Antigravity 安装与认证](https://www.antigravity.google/docs/cli/install/)。
 
 ## 配置文件 ai.json
 默认存储于 `%LOCALAPPDATA%\promptcut\ai.json`。它的完整形状如下：

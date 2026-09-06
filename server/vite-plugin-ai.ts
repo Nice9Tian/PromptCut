@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { spawn } from 'node:child_process';
+
 
 function sendJson(res: ServerResponse, code: number, data: any) {
   if (res.headersSent) return;
@@ -105,94 +105,48 @@ export default function vitePluginAi(): Plugin {
         }
       });
 
-      server.middlewares.use('/api/ai/login', async (req, res) => {
-        if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: 'POST only' });
-        let body = '';
-        req.on('data', c => body += c);
-        req.on('end', async () => {
-          try {
-            const { provider } = JSON.parse(body);
-            const { loginCommandFor } = await import(new URL('./runners/auth.mjs', import.meta.url).href);
-            const loginCommand = loginCommandFor(provider);
-            if (!loginCommand) {
-              return sendJson(res, 400, { ok: false, error: '这个 provider 没有登录命令' });
-            }
-            const runners = await getRunner();
-            const list = await runners.listProviders();
-            const entry = list.find((p: any) => p.id === provider);
-            if (!entry || !entry.available) {
-              return sendJson(res, 400, { ok: false, error: '该 CLI 没装' });
-            }
-
-            try {
-              spawn('cmd.exe', ['/c', 'start', 'PromptCut 登录', 'cmd', '/k', ...loginCommand], {
-                detached: true,
-                stdio: 'ignore',
-                windowsHide: false
-              }).unref();
-            } catch (e: any) {
-              return sendJson(res, 500, { ok: false, error: String(e) });
-            }
-
-            sendJson(res, 200, { ok: true, hint: '已打开登录窗口,完成后回到这里会自动刷新' });
-          } catch (e: any) {
-            sendJson(res, 400, { ok: false, error: String(e) });
-          }
-        });
+      // Keep operations alive across dialog close/reopen and report actual results.
+      const setupService = import(new URL('./runners/setup.mjs', import.meta.url).href)
+        .then(mod => mod.createSetupService());
+      server.httpServer?.once('close', () => { void setupService.then(service => service.dispose()); });
+      server.middlewares.use('/api/ai/setup', async (req, res) => {
+        if (req.method === 'DELETE') {
+          if (!req.headers['content-type']?.startsWith('application/json')) return sendJson(res, 415, { ok: false, error: 'JSON required' });
+          if (req.headers.origin && req.headers.origin !== 'http://' + req.headers.host && req.headers.origin !== 'https://' + req.headers.host) return sendJson(res, 403, { ok: false, error: 'Origin rejected' });
+          let body = '';
+          req.on('data', c => { body += c; if (body.length > 8192) req.destroy(); });
+          req.on('end', async () => {
+            try { (await setupService).cancel(JSON.parse(body).provider); sendJson(res, 200, { ok: true }); }
+            catch (e: any) { sendJson(res, 400, { ok: false, error: e.message }); }
+          });
+          return;
+        }
+        if (req.method !== 'GET') return sendJson(res, 405, { ok: false, error: 'GET only' });
+        res.setHeader('Cache-Control', 'no-store');
+        try { sendJson(res, 200, { ok: true, jobs: (await setupService).list() }); }
+        catch (e: any) { sendJson(res, 500, { ok: false, error: e.message }); }
       });
-
-      // 一键装 CLI:用户不该为了用 AI 助手先去命令行装东西。
-      // dryRun 只返回将要执行的命令(界面用它把命令显示给用户看),不真的装。
-      server.middlewares.use('/api/ai/install', async (req, res) => {
-        if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: 'POST only' });
-        let body = '';
-        req.on('data', c => body += c);
-        req.on('end', async () => {
-          try {
-            const { provider, dryRun } = JSON.parse(body || '{}');
-            const { installPlanFor, manualHintFor, findNpm } = await import(
-              new URL('./runners/install.mjs', import.meta.url).href
-            );
-            const plan = installPlanFor(provider);
-            if (!plan) {
-              return sendJson(res, 400, {
-                ok: false,
-                error: '这一项不能一键安装',
-                hint: manualHintFor(provider) || '请按该工具的官方说明安装。',
-              });
-            }
-            const npm = findNpm();
-            if (!npm) {
-              return sendJson(res, 400, {
-                ok: false,
-                error: '这台机器上没有找到 npm',
-                hint: `装好 Node.js 后再点一次,或者自己执行:${plan.command}`,
-                command: plan.command,
-              });
-            }
-            if (dryRun) {
-              return sendJson(res, 200, { ok: true, dryRun: true, command: plan.command, npm });
-            }
+      for (const kind of ['install', 'login'] as const) {
+        server.middlewares.use('/api/ai/' + kind, async (req, res) => {
+          if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: 'POST only' });
+          if (!req.headers['content-type']?.startsWith('application/json')) return sendJson(res, 415, { ok: false, error: 'JSON required' });
+          if (req.headers.origin && req.headers.origin !== 'http://' + req.headers.host && req.headers.origin !== 'https://' + req.headers.host) return sendJson(res, 403, { ok: false, error: 'Origin rejected' });
+          let body = '';
+          req.on('data', c => { body += c; if (body.length > 8192) req.destroy(); });
+          req.on('end', async () => {
             try {
-              // 和登录一样开一个可见的终端窗口:npm 的进度、报错、需要确认的地方用户都看得到
-              spawn('cmd.exe', ['/c', 'start', `PromptCut 安装 ${plan.label}`, 'cmd', '/k', npm, 'i', '-g', plan.pkg], {
-                detached: true,
-                stdio: 'ignore',
-                windowsHide: false,
-              }).unref();
-            } catch (e: any) {
-              return sendJson(res, 500, { ok: false, error: String(e), command: plan.command });
-            }
-            sendJson(res, 200, {
-              ok: true,
-              command: plan.command,
-              hint: '已打开安装窗口,装完回到这里会自动检测到',
-            });
-          } catch (e: any) {
-            sendJson(res, 400, { ok: false, error: String(e) });
-          }
+              const { provider, dryRun, deviceAuth } = JSON.parse(body || '{}');
+              if (kind === 'install' && dryRun) {
+                const { installPlanFor, manualHintFor } = await import(new URL('./runners/install.mjs', import.meta.url).href);
+                const plan = installPlanFor(provider);
+                return sendJson(res, plan ? 200 : 400, plan ? { ok: true, ...plan } : { ok: false, hint: manualHintFor(provider) });
+              }
+              const job = (await setupService).start(provider, kind, { deviceAuth: deviceAuth === true });
+              sendJson(res, 200, { ok: true, job });
+            } catch (e: any) { sendJson(res, 400, { ok: false, error: e.message }); }
+          });
         });
-      });
+      }
 
       server.middlewares.use('/api/ai/config', async (req, res) => {
         try {

@@ -181,6 +181,11 @@ function stepApp() {
   }
 
   // vite build (not npm run build — skip tsc)
+  const ptyCheck = spawnSync(process.execPath, [path.join(appDir, 'server', 'runners', 'agy-login.mjs'), '--self-test'], {
+    cwd: appDir, windowsHide: true, encoding: 'utf8', timeout: 15000,
+  });
+  assert(ptyCheck.status === 0 && ptyCheck.stdout.includes('PROMPTCUT_PTY_OK'),
+    `Background CLI login component failed verification: ${ptyCheck.stderr || ptyCheck.error || ptyCheck.status}`);
   console.log("  Running vite build…");
   const buildResult = spawnSync("npx.cmd", ["vite", "build"], {
     cwd: appDir,
