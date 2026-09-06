@@ -1,3 +1,29 @@
+// mcp-tools.mjs 是纯数据、没有 node 依赖，前端可以直接引；它没有 .d.ts，
+// 所以在这里就地声明用到的那点形状。
+// @ts-expect-error 无类型声明的 .mjs
+import { tools as RAW_TOOL_SPECS } from "../../server/mcp-tools.mjs";
+const TOOL_SPECS = RAW_TOOL_SPECS as { name: string; inputSchema?: { required?: string[] } }[];
+
+/**
+ * 按工具自己的 inputSchema 校验必填参数。
+ *
+ * 为什么要在这一层拦：inputSchema 里写了 required，但**没有任何一层真的执行它**。
+ * MCP 协议指望客户端自觉，而 CLI 驱动（claude / codex / agy）并不保证会校验。
+ * 于是漏传参数会一路走到实现里：`seek({})` 把 t 设成 null、`set_theme({})` 把
+ * themeId 设成 undefined，还都回 `{ok:true}` —— Agent 以为成功了，项目却已经坏了。
+ * 沉默地改坏状态，比报错难查得多。
+ *
+ * API 直连那条路在 harness/agent.mjs 里已经有同样的校验；这里补的是走 MCP 的那条。
+ * 只查「必填的在不在」，不做类型推断——过度校验会把合法调用也挡掉。
+ */
+function missingRequired(tool: string, args: unknown): string[] {
+  const spec = TOOL_SPECS.find((t) => t.name === tool);
+  const required = spec?.inputSchema?.required ?? [];
+  if (required.length === 0) return [];
+  const bag = (args ?? {}) as Record<string, unknown>;
+  return required.filter((k) => bag[k] === undefined || bag[k] === null);
+}
+
 export interface EditorApi {
   backgroundJobStatus(args: { jobId: string }): any;
   listCards(args?: { cardId?: string; detail?: string }): any;
@@ -70,6 +96,10 @@ export function connectMcpExecutor(getApi: () => EditorApi, onStatus?: (s: { con
         let error: string | undefined;
 
         try {
+          const missing = missingRequired(tool, args);
+          if (missing.length > 0) {
+            throw new Error(`缺少必填参数：${missing.join("、")}。请补齐后重试。`);
+          }
           if (tool === "background_job_status") result = api.backgroundJobStatus(args);
           else if (tool === "list_cards") result = api.listCards(args);
           else if (tool === "get_project") result = api.getProject();
