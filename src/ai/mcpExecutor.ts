@@ -23,6 +23,7 @@ export interface EditorApi {
   autoWorkflow(args: { mediaId: string; style?: string; maxCards?: number }): Promise<any>;
   autoWorkflowStatus(args: { jobId: string }): any;
   fillCaptions(args: { clipId?: string; mediaId?: string; showEn?: boolean }): any;
+  importMedia(args: { url?: string; name?: string }): Promise<any>;
   createCard(args: { id: string; source: string; overwrite?: boolean }): Promise<any>;
   cardAuthoringGuide(): Promise<any>;
 }
@@ -88,6 +89,7 @@ export function connectMcpExecutor(getApi: () => EditorApi, onStatus?: (s: { con
           else if (tool === "auto_workflow") result = await api.autoWorkflow(args);
           else if (tool === "auto_workflow_status") result = api.autoWorkflowStatus(args);
           else if (tool === "fill_captions") result = api.fillCaptions(args);
+          else if (tool === "import_media") result = await api.importMedia(args);
           else if (tool === "create_card") result = await api.createCard(args);
           else if (tool === "card_authoring_guide") result = await api.cardAuthoringGuide();
           else throw new Error(`未知工具: ${tool}`);

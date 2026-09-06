@@ -6,6 +6,7 @@ import { allCards } from "../../kernel/registry";
 import { validateCardParams, findCard } from "../../kernel/cardParams";
 import { findClip } from "../../kernel/project";
 import { sttStatus, sttInstall, transcribeMedia } from "../io/stt";
+import { importVideoFiles } from "../io";
 import { runAutoWorkflow, getAutoWorkflowStatus } from "./autoWorkflow";
 import { getJob as getInstallJob } from "../../ai/sttInstallStore";
 import { runSttInstall } from "../io/runSttInstall";
@@ -129,6 +130,43 @@ export function RightPanel() {
         if (!job) throw new Error('找不到后台任务，可能已重启。');
         return { jobId, ...job };
       },
+      /**
+       * 把用户用「+」发进来的附件装进素材库。
+       *
+       * 附件落在对话的工作目录(.pc-work)里,那和项目素材库是两回事 ——
+       * 模型能在提示词里看到附件的地址和磁盘路径,却没有任何工具能把它搬过去,
+       * 于是 list_media 一直是空的,只能回一句「请你先手动导入」。这个工具补上那一步。
+       *
+       * 实现上取回文件再走 importVideoFiles,也就是用户拖拽导入走的同一条路:
+       * 同样探测时长宽高、同样登记 MediaAsset、同样落到视频轨、同样上传拿到磁盘路径。
+       * 多一次取回的开销,换的是「AI 导入」和「人工导入」结果完全一致。
+       */
+      importMedia: async (args) => {
+        const url = args.url;
+        if (!url) throw new Error("要传附件的站内地址(url,形如 /@pcwork/<会话id>/<文件名>)。用户消息末尾的附件清单里有。");
+        let res: Response;
+        try {
+          res = await fetch(url);
+        } catch (e) {
+          throw new Error(`取附件失败:${e instanceof Error ? e.message : String(e)}`);
+        }
+        if (!res.ok) throw new Error(`取附件失败(HTTP ${res.status}),地址可能不对或附件已过期:${url}`);
+        const blob = await res.blob();
+        const name = args.name || decodeURIComponent(url.split("/").pop() || "attachment.mp4");
+        const file = new File([blob], name, { type: blob.type || "video/mp4" });
+        const ids = await importVideoFiles([file]);
+        if (ids.length === 0) throw new Error("导入失败,没有登记成素材。");
+        const media = getState().project.media.find((m) => m.id === ids[0]);
+        return {
+          mediaId: ids[0],
+          name,
+          duration: media?.duration,
+          width: media?.width,
+          height: media?.height,
+          hint: "已装进素材库并放到视频轨上。要做字幕就先 transcribe_media,再 add_clip 建 caption-track 并用 fill_captions 灌入。",
+        };
+      },
+
       sttStatus: () => sttStatus(),
 
       // 安装可能远超 MCP 桥的 60 秒调用超时,所以立刻返回 jobId,

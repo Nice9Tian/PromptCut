@@ -25,7 +25,7 @@ export async function buildTools({ callTool, workspaceDir, onEvent = () => {}, p
     }
     throw new Error(`后台任务 ${jobId} 等待超时；任务可能仍在运行，请先查询状态，不要重复启动。`);
   }
-  const result = mcpTools.filter(t => t.name !== 'import_video').map(t => ({
+  const result = mcpTools.map(t => ({
     name: t.name,
     description: t.description + (['auto_workflow', 'stt_install', 'transcribe_media'].includes(t.name) ? ' API 模式会自动等待后台作业结束，不要自己密集轮询或重复启动。' : ''),
     // 深拷贝:下面要就地改写 params,而 mcpTools 是整个进程共享的模块级常量

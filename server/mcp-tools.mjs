@@ -239,6 +239,19 @@ export const tools = [
     side: "browser"
   },
   {
+    name: "import_media",
+    description: "把用户用「+」发来的附件装进项目素材库，并放到视频轨上。附件放在对话的工作目录里，和素材库是两回事——`list_media` 看不到它，必须先用本工具导入才能转写、配字幕、配动效。参数 url 就是用户消息末尾附件清单里的「站内地址」（形如 /@pcwork/<会话id>/<文件名>）。返回 mediaId。用户发了视频还让你处理它时，第一步就调它，不要回一句「请先手动导入」。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        url: { type: "string", description: "附件的站内地址，取自用户消息末尾的附件清单" },
+        name: { type: "string", description: "文件名，不传就从地址里取" }
+      },
+      required: ["url"]
+    },
+    side: "browser"
+  },
+  {
     name: "card_authoring_guide",
     description: "取建卡规则全文（CardDef 契约、控件类型、硬性约束、可用依赖、完整示例）。要用 create_card 新建卡片前**必须先调它**，不要凭印象写。",
     inputSchema: { type: "object", properties: {} },
