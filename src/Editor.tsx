@@ -8,12 +8,16 @@ import { TimelineView } from "./editor/timeline";
 import { actions, getState } from "./store/project";
 import { magicuiDemoClips } from "./cards/magicui";
 import { nativeDemoClips } from "./cards/native";
+import { useSkin } from "./skins/useSkin";
+import { motion } from "motion/react";
+
 /**
  * 编辑器布局:顶栏 / 左栏 · 预览 · 右栏 / 底部时间轴。
  * 首次打开时把 10 张演示卡铺到第一条动效轨上,方便测试。
  * 主题变量只挂在预览舞台上(Preview.tsx),编辑器自身的界面不读 --pc-*。
  */
 export default function Editor() {
+  useSkin(); // mount data-skin
   const [footerH, setFooterH] = useState(() => {
     try {
       const v = Number(localStorage.getItem("pc.timeline.h"));
@@ -53,15 +57,24 @@ export default function Editor() {
     <div className="h-full flex flex-col bg-neutral-950 text-neutral-100">
       <TopBar />
       <div className="flex-1 min-h-0 grid" style={{ gridTemplateColumns: "300px 1fr 360px" }}>
-        <aside className="min-h-0 border-r border-neutral-800 overflow-hidden">
+        <motion.aside 
+          initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.28, delay: 0, ease: [0.16, 1, 0.3, 1] }}
+          className="min-h-0 border-r border-neutral-800 overflow-hidden"
+        >
           <LeftPanel />
-        </aside>
-        <main className="min-h-0 min-w-0 p-2">
+        </motion.aside>
+        <motion.main 
+          initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.28, delay: 0.04, ease: [0.16, 1, 0.3, 1] }}
+          className="min-h-0 min-w-0 p-2"
+        >
           <Preview />
-        </main>
-        <aside className="min-h-0 border-l border-neutral-800 overflow-hidden">
+        </motion.main>
+        <motion.aside 
+          initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.28, delay: 0.08, ease: [0.16, 1, 0.3, 1] }}
+          className="min-h-0 border-l border-neutral-800 overflow-hidden"
+        >
           <RightPanel />
-        </aside>
+        </motion.aside>
       </div>
       <div
         className="h-1.5 shrink-0 cursor-row-resize bg-neutral-800 hover:bg-neutral-600"
@@ -83,9 +96,12 @@ export default function Editor() {
           el.addEventListener("pointerup", onUp);
         }}
       />
-      <footer className="border-t border-neutral-800 overflow-hidden shrink-0" style={{ height: footerH }}>
+      <motion.footer 
+        initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.28, delay: 0.12, ease: [0.16, 1, 0.3, 1] }}
+        className="border-t border-neutral-800 overflow-hidden shrink-0 flex flex-col" style={{ height: footerH }}
+      >
         <TimelineView />
-      </footer>
+      </motion.footer>
     </div>
   );
 }
