@@ -228,7 +228,13 @@ export function exportProjectJson(): string {
  * 浏览器里没法直接起 puppeteer,所以走 dev server 的 /api/export 接口(vite 插件,由本任务实现),
  * 返回一个进度回调可订阅的 job。
  */
-export async function exportVideo(opts: { onProgress?: (done: number, total: number) => void } = {}): Promise<{ outDir: string }> {
+export async function exportVideo(
+  opts: {
+    onProgress?: (done: number, total: number) => void;
+    /** 拿到任务 id 就能取消了,所以在开跑那一刻先回给调用方 */
+    onStart?: (id: string) => void;
+  } = {},
+): Promise<{ outDir: string; id: string }> {
   const p = JSON.parse(JSON.stringify(getState().project)) as Project;
   
   for (const m of p.media) {
@@ -259,37 +265,53 @@ export async function exportVideo(opts: { onProgress?: (done: number, total: num
   if (!res.ok) throw new Error(await res.text());
   
   const { id, outDir } = await res.json();
+  opts.onStart?.(id);
 
   return new Promise((resolve, reject) => {
     const es = new EventSource(`/api/export/${id}?sse=1`);
     let settled = false;
+    const finish = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      es.close();
+      fn();
+    };
     es.onmessage = (e) => {
       const data = JSON.parse(e.data);
       if (data.status === "running") {
         opts.onProgress?.(data.done, data.total);
       } else if (data.status === "done") {
-        if (!settled) {
-          settled = true;
+        finish(() => {
           opts.onProgress?.(data.total, data.total);
-          es.close();
-          resolve({ outDir });
-        }
+          resolve({ outDir, id });
+        });
+      } else if (data.status === "cancelled") {
+        finish(() => reject(Object.assign(new Error("已取消导出"), { cancelled: true })));
       } else if (data.status === "error") {
-        if (!settled) {
-          settled = true;
-          es.close();
-          reject(new Error(data.message || "导出错误"));
-        }
+        finish(() => reject(new Error(data.message || "导出错误")));
       }
     };
     es.onerror = () => {
-      if (!settled) {
-        settled = true;
-        es.close();
-        reject(new Error("EventSource error"));
-      }
+      finish(() => reject(new Error("和导出进程的连接断了,导出可能仍在后台进行")));
     };
   });
+}
+
+/** 中止一次导出。渲染进程和它拉起的 Chrome / ffmpeg 都会被结束。 */
+export async function cancelExport(id: string): Promise<void> {
+  await fetch(`/api/export/${id}`, { method: "DELETE" }).catch(() => {});
+}
+
+/** 在文件管理器里打开这次导出的产物目录 */
+export async function revealExport(id: string): Promise<void> {
+  await fetch(`/api/export/${id}/reveal`, { method: "POST" });
+}
+
+/** 取回某个产物(preview.mp4 / overlay.mov),用来写进用户选的位置 */
+export async function fetchExportFile(id: string, name: string): Promise<Blob> {
+  const r = await fetch(`/api/export/${id}/file/${encodeURIComponent(name)}`);
+  if (!r.ok) throw new Error(`取不到 ${name}:${await r.text()}`);
+  return r.blob();
 }
 
 declare global {

@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { actions, useStore } from "../store/project";
-import { exportVideo, importProjectFile } from "./io";
-import { newProject, serializeProc, writeProcToDisk, PROC_EXT } from "./io/proc";
+import { cancelExport, exportVideo, fetchExportFile, revealExport, importProjectFile } from "./io";
+import { newProject, pickSaveTarget, serializeProc, writeProcToDisk, PROC_EXT } from "./io/proc";
+import { ExportDialog, type ExportState } from "./ExportDialog";
 import { ensureActiveDraftId, saveDraft, setActiveDraftId } from "./io/drafts";
 import { useSkin } from "../skins/useSkin";
 import { skinGroups } from "../skins/skins";
@@ -156,6 +157,10 @@ export function TopBar() {
 
   const run = (fn: () => Promise<unknown>) => () => fn().catch((e) => alert(String(e?.message ?? e)));
 
+  const [exportState, setExportState] = useState<ExportState | null>(null);
+  /** 正在跑的导出任务 id,取消要用 */
+  const exportIdRef = useRef<string | null>(null);
+
   /**
    * 保存:弹「另存为」让用户选位置,同时把本地草稿更新掉。
    *
@@ -178,6 +183,61 @@ export function TopBar() {
       }
     } catch (e) {
       alert(String((e as Error).message));
+    }
+  };
+
+  /**
+   * 导出视频。
+   *
+   * 和保存项目同一套路子:showSaveFilePicker 要用户手势,所以先弹「另存为」拿到
+   * 落点,再开始渲染——渲染要几十秒,那之后手势早过期了。用户取消选位置就整个不导出。
+   *
+   * 挑不出位置(WebView 没这个 API)也照样能导:文件留在服务端的产物目录,
+   * 结束时给一个「打开产物目录」。
+   */
+  const exportProject = async () => {
+    const suggested = `${name}.mp4`;
+    let target: FileSystemFileHandle | null = null;
+    try {
+      target = await pickSaveTarget(suggested, "MP4 视频", { "video/mp4": [".mp4"] });
+    } catch (e) {
+      if ((e as Error)?.name === "AbortError") return; // 用户取消,不是错误
+      throw e;
+    }
+
+    setExportState({
+      phase: "running",
+      done: 0,
+      total: 0,
+      target: target ? target.name : "产物目录（本机不支持选择位置）",
+      startedAt: Date.now(),
+    });
+
+    try {
+      const { outDir, id } = await exportVideo({
+        onStart: (jobId) => {
+          exportIdRef.current = jobId;
+          setExportState((st) => (st ? { ...st, id: jobId } : st));
+        },
+        onProgress: (done, total) =>
+          setExportState((s) => (s && s.phase === "running" ? { ...s, done, total } : s)),
+      });
+
+      // 渲染完了才把成品搬到用户选的位置;没选就留在产物目录里
+      if (target) {
+        const blob = await fetchExportFile(id, "preview.mp4");
+        const w = await target.createWritable();
+        await w.write(blob);
+        await w.close();
+      }
+      setExportState((s) => (s ? { ...s, phase: "done", outDir, done: s.total || 1, total: s.total || 1 } : s));
+    } catch (e) {
+      const err = e as Error & { cancelled?: boolean };
+      setExportState((s) =>
+        s ? { ...s, phase: err.cancelled ? "cancelled" : "error", message: err.message } : s,
+      );
+    } finally {
+      exportIdRef.current = null;
     }
   };
 
@@ -348,11 +408,7 @@ export function TopBar() {
           collapsed={tier !== "wide"}
         />
         <Btn
-          onClick={run(() =>
-            exportVideo({ onProgress: (d, n) => console.log(`export ${d}/${n}`) }).then((r) =>
-              alert(`导出完成:${r.outDir}`),
-            ),
-          )}
+          onClick={run(exportProject)}
           label="导出视频"
           icon={<IconExport />}
           primary
@@ -372,6 +428,18 @@ export function TopBar() {
       <ProjectSettingsDialog
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
+      />
+      <ExportDialog
+        state={exportState}
+        onCancel={() => {
+          // 先把界面切成「取消中」的观感,服务端杀进程要一会儿;真正的
+          // cancelled 状态由 SSE 回来时那一路负责写
+          if (exportIdRef.current) void cancelExport(exportIdRef.current);
+        }}
+        onClose={() => setExportState(null)}
+        onReveal={() => {
+          if (exportState?.id) void revealExport(exportState.id);
+        }}
       />
     </div>
   );

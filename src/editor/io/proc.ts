@@ -90,6 +90,22 @@ function pickerFn(): SaveFilePicker | null {
   return typeof fn === "function" ? fn : null;
 }
 
+/**
+ * 通用的「另存为」:让用户挑一个落点,拿不到 API 就返回 null 由调用方兜底。
+ *
+ * 和 writeProcToDisk 共用同一个能力探测,免得项目里出现两套判断。
+ * 一样要在用户手势里**第一个** await 它。用户点取消会抛 AbortError。
+ */
+export async function pickSaveTarget(
+  suggestedName: string,
+  description: string,
+  accept: Record<string, string[]>,
+): Promise<FileSystemFileHandle | null> {
+  const picker = pickerFn();
+  if (!picker) return null;
+  return picker({ suggestedName, types: [{ description, accept }] });
+}
+
 let saveTarget: FileSystemFileHandle | null = null;
 
 /** 换项目、换草稿时调用:下次保存重新问路径 */

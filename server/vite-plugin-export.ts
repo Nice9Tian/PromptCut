@@ -7,12 +7,20 @@ import type { AddressInfo } from "net";
 
 interface ExportJob {
   id: string;
-  status: "running" | "done" | "error";
+  status: "running" | "done" | "error" | "cancelled";
   done: number;
   total: number;
   message?: string;
   outDir: string;
+  /** 绝对路径,给「打开文件夹」和取件用;不回给浏览器以外的地方 */
+  absOutDir: string;
+  /** 渲染子进程,取消时要连它的子孙一起杀(它自己还会拉起 Chrome 和 ffmpeg) */
+  child?: ReturnType<typeof spawn>;
+  cancelled?: boolean;
 }
+
+/** 允许被浏览器取走的产物,白名单挡住任意读盘 */
+const DELIVERABLES = ["preview.mp4", "overlay.mov"] as const;
 
 const jobs = new Map<string, ExportJob>();
 let lastJobId: string | null = null;
@@ -104,7 +112,7 @@ async function handleExportStart(req: Connect.IncomingMessage, res: ServerRespon
       lastJobId = id;
       // 回给浏览器的路径:开发期是相对项目根的 out/export-<id>,桌面版(设了 PROMPTCUT_EXPORT_DIR)给绝对路径
       const relOutDir = process.env.PROMPTCUT_EXPORT_DIR ? outDir : `out/export-${id}`;
-      const job: ExportJob = { id, status: "running", done: 0, total: 1, outDir: relOutDir };
+      const job: ExportJob = { id, status: "running", done: 0, total: 1, outDir: relOutDir, absOutDir: outDir };
       jobs.set(id, job);
       
       // Spawn child process
@@ -132,7 +140,8 @@ async function handleExportStart(req: Connect.IncomingMessage, res: ServerRespon
       }
       
       const child = spawn(process.execPath, args, { cwd: root });
-      
+      job.child = child;
+
       let stderrLog: string[] = [];
       child.stdout.on("data", (data) => {
         const str = data.toString();
@@ -150,11 +159,21 @@ async function handleExportStart(req: Connect.IncomingMessage, res: ServerRespon
       });
       
       child.on("close", (code) => {
-        if (code === 0) {
+        job.child = undefined;
+        if (job.cancelled) {
+          job.status = "cancelled";
+          job.message = "已取消";
+        } else if (code === 0) {
           job.status = "done";
         } else {
           job.status = "error";
-          job.message = stderrLog.join("").trim() || `Exited with code ${code}`;
+          const tail = stderrLog.join("").trim();
+          // 0xC0000142 = STATUS_DLL_INIT_FAILED,子进程连 DLL 都没加载起来,
+          // 所以 stderr 是空的。裸报一个十进制数字没人看得懂,这里给一句人话。
+          job.message = tail
+            || (code === 3221225794
+              ? "渲染进程启动失败(0xC0000142)。通常是同时开了太多浏览器实例,关掉一些再试;若持续出现请重启软件。"
+              : `渲染进程异常退出(代码 ${code})`);
         }
       });
       
@@ -260,6 +279,72 @@ async function serveFile(filePath: string, req: Connect.IncomingMessage, res: Se
   }
 }
 
+/** 把某个产物流给浏览器。只认白名单里的文件名,不接受路径。 */
+async function handleDeliverable(res: ServerResponse, id: string, name: string) {
+  const job = jobs.get(id);
+  if (!job) {
+    res.statusCode = 404;
+    return res.end("Unknown export job");
+  }
+  if (!(DELIVERABLES as readonly string[]).includes(name)) {
+    res.statusCode = 400;
+    return res.end("Not a deliverable");
+  }
+  const file = path.resolve(job.absOutDir, name);
+  // 名字来自白名单,这里再确认一次没跑出产物目录
+  if (!file.startsWith(path.resolve(job.absOutDir) + path.sep)) {
+    res.statusCode = 400;
+    return res.end("Path escaped output dir");
+  }
+  try {
+    const data = await fs.readFile(file);
+    res.setHeader("Content-Type", name.endsWith(".mov") ? "video/quicktime" : "video/mp4");
+    res.setHeader("Content-Length", String(data.length));
+    res.end(data);
+  } catch {
+    res.statusCode = 404;
+    res.end("产物还没生成");
+  }
+}
+
+/** 在文件管理器里定位产物目录。Windows 用 explorer,其余平台各按各的。 */
+function handleReveal(res: ServerResponse, id: string) {
+  const job = jobs.get(id);
+  if (!job) {
+    res.statusCode = 404;
+    return res.end("Unknown export job");
+  }
+  const opener = process.platform === "win32" ? "explorer.exe"
+    : process.platform === "darwin" ? "open" : "xdg-open";
+  // explorer 打开目录时返回码是 1,这不是失败,所以不看退出码
+  spawn(opener, [job.absOutDir], { detached: true, stdio: "ignore" }).unref();
+  res.setHeader("Content-Type", "application/json");
+  res.end(JSON.stringify({ ok: true, dir: job.outDir }));
+}
+
+/**
+ * 取消导出。渲染进程自己还会拉起 Chrome 和 ffmpeg,只杀它会留下孤儿,
+ * 所以 Windows 上走 taskkill /T 把整棵进程树带走。
+ */
+function handleCancel(res: ServerResponse, id: string) {
+  const job = jobs.get(id);
+  if (!job) {
+    res.statusCode = 404;
+    return res.end("Unknown export job");
+  }
+  if (job.status === "running" && job.child) {
+    job.cancelled = true;
+    const pid = job.child.pid;
+    if (process.platform === "win32" && pid) {
+      spawn("taskkill", ["/PID", String(pid), "/T", "/F"], { stdio: "ignore" });
+    } else {
+      job.child.kill("SIGTERM");
+    }
+  }
+  res.setHeader("Content-Type", "application/json");
+  res.end(JSON.stringify({ ok: true }));
+}
+
 export function exportPlugin(): Plugin {
   return {
     name: "vite-plugin-export",
@@ -278,6 +363,25 @@ export function exportPlugin(): Plugin {
           return handleExportStart(req, res, server, root);
         }
         
+        // GET /api/export/<id>/file/<名字> —— 把产物交给浏览器,好让它写到用户
+        // 用「另存为」挑的位置去(和保存项目走同一套 File System Access API)
+        const fileMatch = req.method === "GET" && req.url.match(/^\/api\/export\/([^/]+)\/file\/([^/?]+)$/);
+        if (fileMatch) {
+          return handleDeliverable(res, fileMatch[1], decodeURIComponent(fileMatch[2]));
+        }
+
+        // POST /api/export/<id>/reveal —— 在文件管理器里打开产物目录
+        const revealMatch = req.method === "POST" && req.url.match(/^\/api\/export\/([^/]+)\/reveal$/);
+        if (revealMatch) {
+          return handleReveal(res, revealMatch[1]);
+        }
+
+        // DELETE /api/export/<id> —— 取消
+        const cancelMatch = req.method === "DELETE" && req.url.match(/^\/api\/export\/([^/?]+)$/);
+        if (cancelMatch) {
+          return handleCancel(res, cancelMatch[1]);
+        }
+
         // GET /api/export/<id>
         if (req.method === "GET" && req.url.startsWith("/api/export/")) {
           return handleProgress(req, res);
