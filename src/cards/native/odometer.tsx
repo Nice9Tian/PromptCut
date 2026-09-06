@@ -1,6 +1,6 @@
 import { motion } from "motion/react";
 import type { CardDef, CardProps } from "../../kernel/types";
-import { HudParams, hudControls, hudDefaults, getPositionClass, easeExpoOut } from "./hud";
+import { HudParams, hudControls, hudDefaults, getPositionClass, easeExpoOut, accentOf } from "./hud";
 import "./hud.css";
 
 interface Params extends HudParams {
@@ -41,12 +41,12 @@ function OdometerCard({ params }: CardProps<Params>) {
 
   return (
     <div className={`hud-wrapper ${getPositionClass(params.position)}`}>
-      <div className="hud-glass flex flex-col gap-2" data-theme={params.theme}>
-        <div className="text-3xl font-bold tracking-widest uppercase mb-2" style={{ color: params.accent }}>
+      <div className="hud-glass flex flex-col gap-2">
+        <div className="text-3xl font-bold tracking-widest mb-2" style={{ color: accentOf(params) }}>
           {params.kicker}
         </div>
         <div className="flex items-baseline gap-4">
-          <div className="text-[120px] font-bold flex">
+          <div className="text-[120px] font-bold flex" style={{ fontFamily: "var(--pc-font-mono, ui-monospace, monospace)" }}>
             {strValue.split("").map((c, i) => (
               <OdometerWheel key={i} digit={c} index={i} />
             ))}

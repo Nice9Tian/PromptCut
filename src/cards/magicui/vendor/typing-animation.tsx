@@ -6,6 +6,8 @@
  * - 移除了 setInterval/setTimeout，改用 requestAnimationFrame + performance.now()。
  * - 去除了 clsx/tailwind-merge，使用 cn.ts。
  * - 移除了 text-4xl 和 leading-[5rem] 以避免与传入字号冲突，并暴露 style prop。
+ * - 默认 duration 降低至 120 以匹配时长预算。
+ * - 移除基础样式中的 drop-shadow-sm，由调用方控制。
  */
 import { useEffect, useState } from "react";
 import { cn } from "./cn";
@@ -19,7 +21,7 @@ interface TypingAnimationProps {
 
 export function TypingAnimation({
   text,
-  duration = 200,
+  duration = 120,
   className,
   style,
 }: TypingAnimationProps) {
@@ -53,7 +55,7 @@ export function TypingAnimation({
   return (
     <h1
       className={cn(
-        "font-display text-center font-bold tracking-[-0.02em] drop-shadow-sm",
+        "font-display text-center font-bold tracking-[-0.02em]",
         className,
       )}
       style={style}

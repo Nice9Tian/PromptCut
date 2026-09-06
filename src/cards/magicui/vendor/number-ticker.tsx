@@ -6,8 +6,10 @@
  * - 移除了 framer-motion 的 useInView 和 delay 的 setTimeout，改为使用 requestAnimationFrame + performance.now() 来处理延迟和挂载即播。
  * - 移除了 clsx 和 tailwind-merge，改用本地 cn 函数。
  * - 从 motion/react 导入而非 framer-motion。
+ * - 将 useEffect 替换为 useLayoutEffect 解决首帧空白问题。
+ * - 调整 useSpring 参数以加快收敛，确保1.6秒内完成动画。
  */
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 import { useSpring, motion } from "motion/react";
 import { cn } from "./cn";
 
@@ -30,8 +32,9 @@ export function NumberTicker({
 }) {
   const ref = useRef<HTMLSpanElement>(null);
   const motionValue = useSpring(direction === "down" ? value : 0, {
-    damping: 60,
-    stiffness: 100,
+    damping: 30,
+    stiffness: 200,
+    mass: 1,
   });
 
   useEffect(() => {
@@ -65,7 +68,7 @@ export function NumberTicker({
   }, [motionValue, decimalPlaces]);
 
   // Set initial value to prevent empty first frame
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (ref.current && !ref.current.textContent) {
       ref.current.textContent = Intl.NumberFormat("en-US", {
         minimumFractionDigits: decimalPlaces,

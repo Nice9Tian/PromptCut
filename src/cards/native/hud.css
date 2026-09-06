@@ -26,18 +26,15 @@
 
 .hud-glass {
   pointer-events: auto;
-  background-color: rgba(10, 12, 16, 0.55);
-  backdrop-filter: blur(24px);
-  -webkit-backdrop-filter: blur(24px);
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  border-radius: 32px;
-  color: #f3f4f6; /* gray-100 */
+  background-color: var(--pc-glass-bg, rgba(10, 12, 16, 0.55));
+  backdrop-filter: blur(var(--pc-glass-blur, 24px));
+  -webkit-backdrop-filter: blur(var(--pc-glass-blur, 24px));
+  border: var(--pc-border-width, 1px) solid var(--pc-glass-border, rgba(255, 255, 255, 0.14));
+  border-radius: var(--pc-radius, 32px);
+  color: var(--pc-fg, #f3f4f6);
   padding: 48px;
-  box-shadow: 0 24px 48px rgba(0, 0, 0, 0.4);
+  box-shadow: var(--pc-shadow, 0 24px 48px rgba(0, 0, 0, 0.4));
 }
-.hud-glass[data-theme="light"] {
-  background-color: rgba(255, 255, 255, 0.7);
-  border: 1px solid rgba(0, 0, 0, 0.1);
-  color: #111827; /* gray-900 */
-  box-shadow: 0 24px 48px rgba(0, 0, 0, 0.1);
-}
+
+/* 文字卡批次追加:舞台四角定位(pin-board 用) */
+.hud-corner-bl { align-items: flex-end; justify-content: flex-start; padding: 0 0 100px 120px; }

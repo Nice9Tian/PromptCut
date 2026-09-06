@@ -4,6 +4,9 @@ import { blurText } from "./blur-text";
 import { ringMetric } from "./ring-metric";
 import { checklist } from "./checklist";
 import { stepTimeline } from "./step-timeline";
+import { textCards } from "./batch-text";
+import { dataCards } from "./batch-data";
+import { timelineCards } from "./batch-timeline";
 
 /** 自家用 Motion 写的卡。每张卡一个文件,在这里汇总。 */
 export const nativeCards: CardDef<any>[] = [
@@ -11,7 +14,10 @@ export const nativeCards: CardDef<any>[] = [
   blurText,
   ringMetric,
   checklist,
-  stepTimeline
+  stepTimeline,
+  ...textCards,
+  ...dataCards,
+  ...timelineCards,
 ];
 
 export const nativeDemoClips: Clip[] = [

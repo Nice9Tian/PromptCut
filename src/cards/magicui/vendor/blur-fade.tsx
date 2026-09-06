@@ -6,6 +6,7 @@
  * - 从 motion/react 导入。
  * - 增加 startImmediately 参数跳过 useInView。
  * - 引入本地 cn。
+ * - 移除了写死的 0.04 延迟，完全由参数传入的 delay 控制。
  */
 import { useRef } from "react";
 import { AnimatePresence, motion, Variants } from "motion/react";
@@ -53,7 +54,7 @@ export function BlurFade({
         exit="hidden"
         variants={combinedVariants}
         transition={{
-          delay: 0.04 + delay,
+          delay: delay,
           duration,
           ease: "easeOut",
         }}

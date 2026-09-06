@@ -1,0 +1,13 @@
+.diagonal-stripes {
+  background-image: repeating-linear-gradient(
+    45deg,
+    rgba(255, 255, 255, 0.05),
+    rgba(255, 255, 255, 0.05) 10px,
+    transparent 10px,
+    transparent 20px
+  );
+}
+
+.clip-playhead {
+  clip-path: polygon(0 0, 100% 0, 50% 100%);
+}

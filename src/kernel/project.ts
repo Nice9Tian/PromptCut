@@ -5,7 +5,24 @@ import type { Clip, Timeline } from "./types";
  * 保存到磁盘的 .promptcut.json 就是 Project 的 JSON。
  */
 
+/** 语音转文字的一段 */
+export interface TranscriptSegment {
+  start: number; // 秒(素材内时间)
+  end: number;
+  text: string;
+}
+
+export interface Transcript {
+  engine: string; // "faster-whisper" | "whisper"
+  model: string;
+  language?: string;
+  createdAt: string; // ISO
+  segments: TranscriptSegment[];
+}
+
 export interface MediaAsset {
+  /** 语音转文字结果(可选,由 STT 工具写入) */
+  transcript?: Transcript;
   id: string;
   kind: "video" | "audio" | "image";
   name: string;

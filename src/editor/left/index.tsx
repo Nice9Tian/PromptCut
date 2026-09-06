@@ -1,17 +1,76 @@
-/**
- * 左栏:上半「素材」(卡片库 + 导入的媒体,可拖到时间轴),下半「编辑」(选中 clip 的参数:常规表单 / 代码 JSON)。
- * 【占位实现,左栏任务负责填充。对外只暴露 LeftPanel 一个组件,不要改这个导出名。】
- *
- * 拖放契约(和时间轴约定):
- *   拖卡片:e.dataTransfer.setData("application/x-promptcut-card", cardId)
- *   拖媒体:e.dataTransfer.setData("application/x-promptcut-media", mediaId)
- *   时间轴在 drop 时按类型调 actions.addCardClip / actions.addMediaClip。
- */
+import "./debug";
+import "./left.css";
+import { useState } from "react";
+import { LibraryTab } from "./LibraryTab";
+import { Inspector } from "./Inspector";
+
 export function LeftPanel() {
+  const [ratio, setRatio] = useState(() => {
+    try {
+      const stored = localStorage.getItem("pc.left.split");
+      if (stored !== null) {
+        return Math.max(0.2, Math.min(0.85, parseFloat(stored)));
+      }
+    } catch {}
+    return 0.55;
+  });
+
+  const handlePointerDown = (e: React.PointerEvent) => {
+    const el = e.currentTarget as HTMLDivElement;
+    el.setPointerCapture(e.pointerId);
+    
+    document.body.style.cursor = "row-resize";
+    document.body.style.userSelect = "none";
+
+    const parent = el.parentElement;
+    if (!parent) return;
+    
+    let currentRatio = ratio;
+    
+    const onMove = (moveEvent: PointerEvent) => {
+      const rect = parent.getBoundingClientRect();
+      const y = moveEvent.clientY - rect.top;
+      let newRatio = y / rect.height;
+      newRatio = Math.max(0.2, Math.min(0.85, newRatio));
+      currentRatio = newRatio;
+      setRatio(newRatio);
+    };
+    
+    const onUp = (upEvent: PointerEvent) => {
+      el.releasePointerCapture(upEvent.pointerId);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      el.removeEventListener("pointermove", onMove);
+      el.removeEventListener("pointerup", onUp);
+      localStorage.setItem("pc.left.split", currentRatio.toString());
+    };
+    
+    el.addEventListener("pointermove", onMove);
+    el.addEventListener("pointerup", onUp);
+  };
+
   return (
-    <div className="h-full flex flex-col text-sm text-neutral-400">
-      <div className="p-3 border-b border-neutral-800">素材(待实现)</div>
-      <div className="p-3">编辑(待实现)</div>
+    <div data-pc="left" className="h-full flex flex-col min-h-0 overflow-hidden bg-neutral-950 text-neutral-100">
+      <div data-pc="library" className="flex flex-col min-h-0 overflow-hidden" style={{ flex: `${ratio} 1 0%` }}>
+        <div className="h-8 flex items-center gap-1 px-2 border-b border-neutral-800 text-xs shrink-0">
+          <div className="flex h-full items-center text-neutral-100 border-b-2 border-b-neutral-100 px-1">素材</div>
+        </div>
+        <LibraryTab />
+      </div>
+      
+      <div 
+        data-pc="split"
+        className="h-1.5 cursor-row-resize bg-neutral-800 hover:bg-neutral-600 shrink-0" 
+        title="拖动调整上下比例"
+        onPointerDown={handlePointerDown}
+      />
+      
+      <div data-pc="inspector" className="flex flex-col min-h-0 overflow-hidden" style={{ flex: `${1 - ratio} 1 0%` }}>
+        <div className="h-8 flex items-center gap-1 px-2 border-b border-neutral-800 text-xs shrink-0">
+          <div className="flex h-full items-center text-neutral-100 border-b-2 border-b-neutral-100 px-1">编辑</div>
+        </div>
+        <Inspector />
+      </div>
     </div>
   );
 }

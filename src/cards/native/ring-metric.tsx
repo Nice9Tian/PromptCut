@@ -1,7 +1,7 @@
 import { motion, useMotionValue, animate } from "motion/react";
 import { useEffect, useState } from "react";
 import type { CardDef, CardProps } from "../../kernel/types";
-import { HudParams, hudControls, hudDefaults, getPositionClass, easeExpoOut } from "./hud";
+import { HudParams, hudControls, hudDefaults, getPositionClass, easeExpoOut, accentOf } from "./hud";
 import "./hud.css";
 
 interface Params extends HudParams {
@@ -35,7 +35,7 @@ function RingMetricCard({ params }: CardProps<Params>) {
 
   return (
     <div className={`hud-wrapper ${getPositionClass(params.position)}`}>
-      <div className="hud-glass flex flex-col items-center gap-6" data-theme={params.theme}>
+      <div className="hud-glass flex flex-col items-center gap-6">
         <div className="relative" style={{ width: size, height: size }}>
           <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="transform -rotate-90">
             <circle
@@ -52,7 +52,7 @@ function RingMetricCard({ params }: CardProps<Params>) {
               cy={size / 2}
               r={radius}
               fill="transparent"
-              stroke={params.accent}
+              stroke={accentOf(params)}
               strokeWidth={strokeWidth}
               strokeLinecap="round"
               strokeDasharray={circumference}
@@ -62,7 +62,7 @@ function RingMetricCard({ params }: CardProps<Params>) {
             />
           </svg>
           <div className="absolute inset-0 flex items-center justify-center">
-            <span className="text-[100px] font-bold font-mono">
+            <span className="text-[100px] font-bold" style={{ fontFamily: "var(--pc-font-mono, ui-monospace, monospace)" }}>
               {displayValue}
               <span className="text-5xl ml-2">%</span>
             </span>

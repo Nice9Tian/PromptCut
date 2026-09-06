@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from "react";
-import { createEmptyProject, findClip, newId, type MediaAsset, type Project, type Track, type TrackClip } from "../kernel/project";
+import { createEmptyProject, findClip, newId, type MediaAsset, type Project, type Track, type TrackClip, type Transcript } from "../kernel/project";
 import { getCard } from "../kernel/registry";
 
 /**
@@ -64,22 +64,38 @@ function sortClips(clips: TrackClip[]): TrackClip[] {
   return [...clips].sort((a, b) => a.start - b.start);
 }
 
-/** 轨内不重叠:把 clip 夹到相邻 clip 之间 */
-function resolveOverlap(track: Track, clip: TrackClip): TrackClip {
+/**
+ * 轨内不重叠:把 clip 夹到相邻 clip 之间,时长不变。
+ * 空档放不下整段时返回 null(调用方拒绝这次移动),不再把 clip 压扁。
+ */
+function resolveOverlap(track: Track, clip: TrackClip): TrackClip | null {
   const others = track.clips.filter((c) => c.id !== clip.id);
   let { start, end } = clip;
-  const len = end - start;
-  const prev = others.filter((c) => c.end <= start + len / 2).sort((a, b) => b.end - a.end)[0];
-  const next = others.filter((c) => c.start >= start + len / 2).sort((a, b) => a.start - b.start)[0];
-  if (prev && start < prev.end) {
-    start = prev.end;
-    end = start + len;
+  const len = Math.max(0.1, end - start);
+  const mid = start + len / 2;
+  const prev = others.filter((c) => c.end <= mid).sort((a, b) => b.end - a.end)[0];
+  const next = others.filter((c) => c.start >= mid).sort((a, b) => a.start - b.start)[0];
+  const lo = prev ? prev.end : 0;
+  const hi = next ? next.start : Infinity;
+  if (hi - lo < len - 1e-6) return null;
+  start = Math.max(lo, Math.min(start, hi - len));
+  end = start + len;
+  return { ...clip, start: Math.max(0, start), end };
+}
+
+/** 新增用:原位放不下就往后找第一个放得下的空档(时长不变)。 */
+function placeOrShift(track: Track, clip: TrackClip): TrackClip {
+  const fit = resolveOverlap(track, clip);
+  if (fit) return fit;
+  const len = Math.max(0.1, clip.end - clip.start);
+  const sorted = [...track.clips].filter((c) => c.id !== clip.id).sort((a, b) => a.start - b.start);
+  let cursor = clip.start;
+  for (const c of sorted) {
+    if (c.end <= cursor) continue;
+    if (c.start - cursor >= len) break;
+    cursor = Math.max(cursor, c.end);
   }
-  if (next && end > next.start) {
-    end = next.start;
-    start = Math.max(prev ? prev.end : 0, end - len);
-  }
-  return { ...clip, start: Math.max(0, start), end: Math.max(start + 0.1, end) };
+  return { ...clip, start: cursor, end: cursor + len };
 }
 
 export const actions = {
@@ -170,7 +186,7 @@ export const actions = {
     if (!track) return null;
     const dur = opts.duration ?? 3;
     let clip: TrackClip = { id: newId("c"), cardId, start, end: start + dur, params: opts.params ?? {} };
-    clip = resolveOverlap(track, clip);
+    clip = placeOrShift(track, clip);
     setProject(updateTrack(p, track.id, (t) => ({ ...t, clips: sortClips([...t.clips, clip]) })));
     set({ selection: [clip.id] });
     return clip;
@@ -184,7 +200,7 @@ export const actions = {
     if (!track) return null;
     const dur = opts.duration ?? media.duration ?? 5;
     let clip: TrackClip = { id: newId("v"), cardId: "", mediaId, mediaOffset: opts.mediaOffset ?? 0, start, end: start + dur, params: {}, label: media.name };
-    clip = resolveOverlap(track, clip);
+    clip = placeOrShift(track, clip);
     const duration = Math.max(p.duration, clip.end);
     setProject({ ...updateTrack(p, track.id, (t) => ({ ...t, clips: sortClips([...t.clips, clip]) })), duration });
     set({ selection: [clip.id] });
@@ -198,11 +214,13 @@ export const actions = {
     const targetId = patch.trackId ?? hit.track.id;
     const target = p.tracks.find((t) => t.id === targetId);
     if (!target || target.kind !== hit.track.kind) return;
-    let clip: TrackClip = { ...hit.clip, start: patch.start ?? hit.clip.start, end: patch.end ?? hit.clip.end };
+    let clip: TrackClip | null = { ...hit.clip, start: patch.start ?? hit.clip.start, end: patch.end ?? hit.clip.end };
     if (clip.end - clip.start < 0.1) clip.end = clip.start + 0.1;
     clip = resolveOverlap(target, clip);
+    if (!clip) return; // 目标位置放不下整段:拒绝移动,不压扁
+    const placed = clip;
     let next = updateTrack(p, hit.track.id, (t) => ({ ...t, clips: t.clips.filter((c) => c.id !== clipId) }));
-    next = updateTrack(next, target.id, (t) => ({ ...t, clips: sortClips([...t.clips, clip]) }));
+    next = updateTrack(next, target.id, (t) => ({ ...t, clips: sortClips([...t.clips, placed]) }));
     setProject(next);
   },
   setClipParams(clipId: string, params: Record<string, unknown>, opts: { merge?: boolean } = { merge: true }) {
@@ -212,12 +230,17 @@ export const actions = {
     const merged = opts.merge === false ? params : { ...hit.clip.params, ...params };
     setProject(updateTrack(p, hit.track.id, (t) => ({ ...t, clips: t.clips.map((c) => (c.id === clipId ? { ...c, params: merged } : c)) })));
   },
-  /** 换卡片类型(保留时段) */
-  setClipCard(clipId: string, cardId: string) {
+  /** 换卡片类型(保留时段)。keepParams 为 true 时,保留新卡也有的同名参数。 */
+  setClipCard(clipId: string, cardId: string, opts: { keepParams?: boolean } = {}) {
     const p = state.project;
     const hit = findClip(p, clipId);
-    if (!hit || !getCard(cardId)) return;
-    setProject(updateTrack(p, hit.track.id, (t) => ({ ...t, clips: t.clips.map((c) => (c.id === clipId ? { ...c, cardId, params: {} } : c)) })));
+    const def = getCard(cardId);
+    if (!hit || !def) return;
+    let params: Record<string, unknown> = {};
+    if (opts.keepParams) {
+      for (const k of Object.keys(def.defaults)) if (k in hit.clip.params) params[k] = hit.clip.params[k];
+    }
+    setProject(updateTrack(p, hit.track.id, (t) => ({ ...t, clips: t.clips.map((c) => (c.id === clipId ? { ...c, cardId, params } : c)) })));
   },
   removeClip(clipId: string) {
     const p = state.project;
@@ -232,7 +255,7 @@ export const actions = {
     if (!hit) return null;
     const len = hit.clip.end - hit.clip.start;
     let clip: TrackClip = { ...hit.clip, id: newId("c"), start: hit.clip.end, end: hit.clip.end + len };
-    clip = resolveOverlap(hit.track, clip);
+    clip = placeOrShift(hit.track, clip);
     setProject(updateTrack(p, hit.track.id, (t) => ({ ...t, clips: sortClips([...t.clips, clip]) })));
     set({ selection: [clip.id] });
     return clip;
@@ -253,6 +276,15 @@ export const actions = {
     const m: MediaAsset = { ...asset, id: asset.id ?? newId("m") };
     setProject({ ...state.project, media: [...state.project.media, m] }, { undoable: false });
     return m;
+  },
+  /** 写入 / 清除素材的语音转文字结果(不进撤销栈) */
+  setMediaTranscript(mediaId: string, transcript: Transcript | null) {
+    const p = state.project;
+    if (!p.media.some((m) => m.id === mediaId)) return;
+    setProject(
+      { ...p, media: p.media.map((m) => (m.id === mediaId ? { ...m, transcript: transcript ?? undefined } : m)) },
+      { undoable: false },
+    );
   },
   removeMedia(mediaId: string) {
     const p = state.project;

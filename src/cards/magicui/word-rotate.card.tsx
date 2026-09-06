@@ -14,10 +14,10 @@ function WordRotateCard({ params }: CardProps<Params>) {
   }, [params.words]);
 
   return (
-    <div className="absolute inset-0 flex items-center justify-center bg-transparent">
-      <div className="flex items-center gap-8 text-[96px] font-bold text-white drop-shadow-xl">
+    <div className="absolute inset-0 flex items-center justify-center bg-transparent" style={{ fontFamily: "var(--pc-font, system-ui, sans-serif)" }}>
+      <div className="flex items-center gap-8 text-[96px] font-bold" style={{ color: "var(--pc-fg, #f3f4f6)", textShadow: "var(--pc-text-shadow, 0 4px 24px rgba(0,0,0,0.75))" }}>
         <span>{params.prefix}</span>
-        <WordRotate words={wordsToPass} duration={1000} className="text-white drop-shadow-xl" />
+        <WordRotate words={wordsToPass} duration={1000} className="" />
       </div>
     </div>
   );

@@ -1,6 +1,6 @@
 import { motion } from "motion/react";
 import type { CardDef, CardProps } from "../../kernel/types";
-import { HudParams, hudControls, hudDefaults, getPositionClass, easeExpoOut } from "./hud";
+import { HudParams, hudControls, hudDefaults, getPositionClass, easeExpoOut, accentOf } from "./hud";
 import "./hud.css";
 
 interface Params extends HudParams {
@@ -32,7 +32,8 @@ function CheckItem({ text, i, stepMs, accent }: { text: string; i: number; stepM
         />
         <svg
           viewBox="0 0 24 24"
-          className="w-12 h-12 text-white relative z-10"
+          className="w-12 h-12 relative z-10"
+          style={{ color: "var(--pc-on-accent, #0b1220)" }}
           fill="none"
           stroke="currentColor"
           strokeWidth="4"
@@ -56,9 +57,9 @@ function ChecklistCard({ params }: CardProps<Params>) {
   const items = params.items.split("|").filter(Boolean);
   return (
     <div className={`hud-wrapper ${getPositionClass(params.position)}`}>
-      <div className="hud-glass flex flex-col gap-8" data-theme={params.theme}>
+      <div className="hud-glass flex flex-col gap-8">
         {items.map((item, i) => (
-          <CheckItem key={i} text={item} i={i} stepMs={params.stepMs} accent={params.accent} />
+          <CheckItem key={i} text={item} i={i} stepMs={params.stepMs} accent={accentOf(params)} />
         ))}
       </div>
     </div>

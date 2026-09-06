@@ -1,6 +1,6 @@
 import { motion } from "motion/react";
 import type { CardDef, CardProps } from "../../kernel/types";
-import { HudParams, hudControls, hudDefaults, getPositionClass, easeExpoOut } from "./hud";
+import { HudParams, hudControls, hudDefaults, getPositionClass, easeExpoOut, accentOf } from "./hud";
 import "./hud.css";
 
 interface Params extends HudParams {
@@ -26,7 +26,7 @@ function BlurTextCard({ params }: CardProps<Params>) {
   const chunks = params.text.split("|");
   return (
     <div className={`hud-wrapper ${getPositionClass(params.position)}`}>
-      <div className="hud-glass" data-theme={params.theme}>
+      <div className="hud-glass">
         <div className="text-[80px] font-bold leading-tight flex flex-wrap gap-x-4">
           {chunks.map((chunk, i) => (
             <motion.div
@@ -39,7 +39,7 @@ function BlurTextCard({ params }: CardProps<Params>) {
                 ease: easeExpoOut,
               }}
             >
-              {parseText(chunk, params.accent)}
+              {parseText(chunk, accentOf(params))}
             </motion.div>
           ))}
         </div>
