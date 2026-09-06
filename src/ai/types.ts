@@ -110,6 +110,11 @@ export type MessagePart =
 export interface ChatMessage {
   id: string;
   role: "user" | "assistant";
+  /**
+   * 分工模式下,这条回复是哪个角色产出的(角色卡的 id,如 director)。
+   * 界面用它取头像和角色名;普通对话没有这个字段,退回中性的「AI 助手」。
+   */
+  roleId?: string;
   /** 纯文字部分的拼接;简洁模式和会话历史都用它 */
   text: string;
   attachments?: ChatAttachment[];

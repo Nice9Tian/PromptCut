@@ -4,7 +4,11 @@ import type { AiProvider, ChatMessage, ChatAttachment, MessagePart, ProviderInfo
 import { parseSseChunks } from "./sse";
 import { getScript } from "./script";
 import { useChatMessages, setMessages } from "./liveChat";
-import { WORKFLOW_ROLES } from "./roles";
+import { WORKFLOW_ROLES, ALL_ROLES } from "./roles";
+import { isTeamMode } from "./teamMode";
+import { shouldOrchestrate } from "./triage";
+import { buildPlan, runOrchestration, type OrchestrationState } from "./orchestrate";
+import { runRoleTask } from "./runRoleTask";
 import { getState } from "../store/project";
 
 /**
@@ -81,6 +85,8 @@ export function useAiChat(opts?: { mock?: boolean }) {
   const [loginState, setLoginState] = useState<Partial<Record<AiProvider, LoginState>>>({});
   const [config, setConfig] = useState<PublicAiConfig | null>(null);
 
+  /** 分工模式这一轮的编排状态。界面(OrchestrationBlock)直接读它。 */
+  const [orchestration, setOrchestration] = useState<OrchestrationState | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const currentRunId = useRef<string | null>(null);
   const setupGateRef = useRef(false);
@@ -330,9 +336,76 @@ export function useAiChat(opts?: { mock?: boolean }) {
     setStreaming(false);
   }, [opts?.mock]);
 
+  /**
+   * 分工模式：主管拆活 → 划依赖 → 按 DAG 并行派给各角色。
+   *
+   * 走到这里之前已经过了两道筛（teamMode 开着、shouldOrchestrate 说值得），
+   * 所以这里不再判断划不划算。任何一步出错都**退回普通提问**而不是报错终止——
+   * 编排只是加速手段，它失灵不该让用户连话都问不了。
+   */
+  const runTeamMode = async (text: string): Promise<boolean> => {
+    const manager = ALL_ROLES.find((r) => r.id === "manager");
+    if (!manager || !provider) return false;
+
+    const ac = new AbortController();
+    abortControllerRef.current = ac;
+    setStreaming(true);
+    setOrchestration({
+      phase: "planning", query: text, plan: "", dag: "", tasks: [], waves: [],
+    });
+
+    try {
+      const plan = await buildPlan(text, { managerPrompt: manager.prompt });
+
+      // 用户那句原话要进消息流，否则编排块上面是空的，看不出在回应什么
+      setMessages((prev) => [...prev, { id: Date.now().toString(), role: "user", text }]);
+
+      await runOrchestration(
+        plan,
+        text,
+        async (task, prompt, override) =>
+          runRoleTask({
+            provider: override ?? provider,
+            prompt,
+            roleId: task.roleId,
+            signal: ac.signal,
+            hooks: {
+              createMessage: (roleId) => {
+                const id = `${Date.now()}-${task.id}`;
+                setMessages((prev) => [...prev, {
+                  id, role: "assistant", roleId, text: "",
+                  parts: [], tools: [], statuses: [], pending: true, startedAt: Date.now(),
+                }]);
+                return id;
+              },
+              updateMessage: (id, patch) =>
+                setMessages((prev) => prev.map((m) => (m.id === id ? patch(m) : m))),
+            },
+          }),
+        setOrchestration,
+        ac.signal,
+      );
+      return true;
+    } catch (e) {
+      // 编排本身失败（多半是没配 API 直连）：把原因显示出来，然后照常问一遍
+      setOrchestration((s) =>
+        s ? { ...s, phase: "error", error: e instanceof Error ? e.message : String(e) } : s);
+      return false;
+    } finally {
+      setStreaming(false);
+      if (abortControllerRef.current === ac) abortControllerRef.current = null;
+    }
+  };
+
   const send = async (text: string, attachments?: ChatAttachment[]) => {
     if (!provider) return;
-    
+
+    // 分工模式：先过便宜的闸，值得才编排；编排失败就落回下面的普通流程
+    if (isTeamMode() && !attachments?.length) {
+      const verdict = await shouldOrchestrate(text);
+      if (verdict.parallel && (await runTeamMode(text))) return;
+    }
+
     abort(); 
 
     const userMsg: ChatMessage = {
@@ -591,6 +664,7 @@ export function useAiChat(opts?: { mock?: boolean }) {
     provider,
     setProvider: handleProviderChange,
     sessionIds,
+    orchestration,
     runWorkflow,
     workflowRoles: WORKFLOW_ROLES,
     streaming,
