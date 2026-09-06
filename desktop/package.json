@@ -10,7 +10,11 @@
     "tauri": "tauri",
     "dev": "tauri dev",
     "build": "tauri build",
-    "smoke": "node scripts/smoke-all.mjs"
+    "smoke": "node scripts/smoke-all.mjs",
+    "make-patch": "node scripts/make-patch.mjs",
+    "release": "node scripts/build-release.mjs"
   },
-  "devDependencies": { "@tauri-apps/cli": "^2" }
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
 }

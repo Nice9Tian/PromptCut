@@ -16,7 +16,18 @@ import { fileURLToPath } from "url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DESKTOP_DIR = path.resolve(__dirname, "..");
-const PROJECT_ROOT = path.resolve(DESKTOP_DIR, "..");
+/**
+ * 源码从哪里来。默认是本仓库工作区；发布时由 build-release 传 --source 指向
+ * 一棵 HEAD 的 worktree,好让产物对应一个已提交的状态,而不是把工作区里
+ * 别人没提交完的改动一起打进去。
+ *
+ * 只换源码这一处:Chrome / ffmpeg / Python / Rust 编译缓存仍然用 desktop/ 下
+ * 原来那份,不必为一次发布重下重编。
+ */
+const SOURCE_ARG = process.argv.indexOf("--source");
+const PROJECT_ROOT = SOURCE_ARG >= 0
+  ? path.resolve(process.argv[SOURCE_ARG + 1])
+  : path.resolve(DESKTOP_DIR, "..");
 const RUNTIME_DIR = path.resolve(DESKTOP_DIR, "src-tauri", "runtime");
 const BINARIES_DIR = path.resolve(DESKTOP_DIR, "src-tauri", "binaries");
 

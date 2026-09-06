@@ -41,6 +41,60 @@ npm run build
 > - Rust 首次编译 Tauri 及其依赖约 5–15 分钟，后续增量编译很快。
 > - 构建产物在 `src-tauri/target/release/bundle/nsis/` 下。
 
+## 发布：安装包 + 更新补丁
+
+日常改动绝大多数只落在 Node 那一半（`src/`、`server/`、`dist/`），Rust 壳和
+Chrome / ffmpeg / Python 三个大块一动不动。完整安装包接近 1 GB，而这些改动本身
+通常只有几 MB，所以每次发布产出两个东西：
+
+```powershell
+cd desktop
+npm run release -- --from-head    # 推荐：源码取自 HEAD
+npm run release                   # 源码取自当前工作区
+```
+
+`--from-head` 会先从 HEAD 开一棵临时 worktree 当源码，产物因此一定对应某个
+commit，而不是把工作区里未提交的东西一起发出去（多人同时改一个工作区时尤其
+要紧）。被排除的文件会在日志里逐条列出来。只有源码走 worktree，Chrome /
+ffmpeg / Python / Rust 编译缓存还是用 `desktop/` 下原来那份，不会因此变慢。
+
+| 产物                             | 大小     | 什么时候用                                     |
+| -------------------------------- | -------- | ---------------------------------------------- |
+| `release/PromptCut-<版本>-setup.exe` | ~1 GB    | 第一次安装；外壳版本变了；补丁装不上时的兜底   |
+| `release/PromptCut-patch-<版本>.zip` | 几 MB    | 已经装过，只是更新 Node 那半边                 |
+
+补丁包里带 `安装更新.cmd`，用户双击就行。它会核对安装位置和版本、请用户关掉
+正在运行的程序、备份当前版本再覆盖，逐个文件校验 SHA-256，任何一步出错都回滚。
+`exports`（导出的视频）、`.pc-chats`（AI 会话历史）、`%LOCALAPPDATA%\promptcut`
+（设置和密钥）和下载的语音模型都不在补丁的作用范围内。
+
+**两个版本号是分开的**，这正是补丁能成立的前提：
+
+- **应用版本**（根 `package.json`）—— Node 那半边，补丁负责更新它。
+- **外壳版本**（`src-tauri/tauri.conf.json`）—— Rust 那半边，只有改了 Rust 代码
+  或换了 Chrome / ffmpeg / Python 才需要动。补丁声明自己需要的最低外壳版本，
+  对不上就拒绝安装并让用户改用完整安装包。
+
+**依赖变化**由 `package-lock.json` 的哈希自动判断：和上一次发布一致就不打包
+`node_modules`（补丁几 MB），不一致就整个带上（补丁约 150 MB，仍比完整包小得多）。
+判断基准是 `release/manifest-<版本>.json`，每次发布自动留下一份 —— **别删它**，
+删了下一次就只能保守地把依赖整个带上。
+
+其他用法：
+
+```powershell
+npm run release -- --patch-only     # 只出补丁，跳过 Rust 编译
+npm run release -- --skip-runtime   # runtime 已就绪，直接编译打包
+npm run release -- --with-deps      # 强制把 node_modules 打进补丁
+npm run make-patch                  # 只跑打补丁这一步
+```
+
+在自己机器上验证补丁而不真的写入：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File <解压目录>\apply-patch.ps1 -WhatIf
+```
+
 ## 开发期
 
 开发时不需要每次都跑 `prepare-runtime`。先跑一次组装好 `src-tauri/runtime/`，然后：
@@ -110,6 +164,10 @@ desktop/
   scripts/
     prepare-runtime.mjs           组装 runtime/
     prepare-python.mjs            组装内置 Python（由 python-runtime 任务提供）
+    build-release.mjs             出一个版本：安装包 + 更新补丁
+    make-patch.mjs                只打更新补丁
+    apply-patch.ps1               补丁安装器（随补丁包发给用户，不在这里运行）
+    apply-patch.cmd               补丁包里的「安装更新.cmd」
     smoke-procs.mjs               进程树工具（共用）
     smoke-boot.mjs                启动冒烟
     smoke-shutdown.mjs            关闭冒烟
@@ -125,6 +183,10 @@ desktop/
     icons/icon-source.svg         图标源文件
     binaries/                     (git ignored) node sidecar
     runtime/                      (git ignored) 运行时组件
+  release/                        (git ignored) 发布产物
+    PromptCut-<版本>-setup.exe    完整安装包
+    PromptCut-patch-<版本>.zip    更新补丁
+    manifest-<版本>.json          该版本的文件清单，下一次发布拿它算差异
       app/                        PromptCut 源码副本 + node_modules + dist
       chrome/                     Chrome for Testing
       ffmpeg/                     ffmpeg.exe + ffprobe.exe
