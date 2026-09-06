@@ -146,6 +146,7 @@ export async function exportFrames(opts) {
   await page.evaluate(() => { window.__pcRestartCards && window.__pcRestartCards(); window.__pcResetAnims && window.__pcResetAnims(); });
 
   const totalFrames = endFrame - startFrame + 1;
+  const durationSec = (totalFrames / fps).toFixed(3);
   const startTime = Date.now();
   for (let i = 0; i <= endFrame; i++) {
     const shot = i >= startFrame ? path.join(framesDir, `${String(i).padStart(6, '0')}.png`) : null;
@@ -187,11 +188,13 @@ export async function exportFrames(opts) {
       ]);
       console.log('Creating preview.mp4...');
       await runFfmpeg([
-        '-y', '-f', 'lavfi', '-i', `color=c=#333333:s=${width}x${height}:r=${fps}`,
+        // 灰底是 lavfi 生成的无限流,-shortest 拦不住它(帧序列结束后 overlay 会一直重复最后一帧),
+        // 必须给灰底 d= 时长并用 -t 截断,否则 ffmpeg 永远不退出、文件无限长。
+        '-y', '-f', 'lavfi', '-i', `color=c=#333333:s=${width}x${height}:r=${fps}:d=${durationSec}`,
         '-framerate', String(fps), '-start_number', String(startFrame),
         '-i', path.join(framesDir, '%06d.png'),
-        '-filter_complex', '[0:v][1:v]overlay[out]', '-map', '[out]',
-        '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-shortest',
+        '-filter_complex', '[0:v][1:v]overlay=eof_action=endall[out]', '-map', '[out]',
+        '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-t', String(durationSec),
         path.join(outDir, 'preview.mp4'),
       ]);
       console.log('Video synthesis complete.');
