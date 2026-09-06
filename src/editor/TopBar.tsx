@@ -155,6 +155,34 @@ export function TopBar() {
     return () => window.removeEventListener("mousedown", onDown);
   });
 
+  /**
+   * 桌面版原生菜单栏的「外观 → 皮肤…」点了会派发 pc-open-skin,这里接住它打开
+   * 同一个对话框 —— 两个入口共用一份界面,不做第二套。
+   *
+   * 走 window.__TAURI__(tauri.conf.json 里开了 withGlobalTauri),省得前端为这
+   * 一个监听多装 @tauri-apps/api;浏览器里没有这个全局,整段自然跳过。
+   */
+  useEffect(() => {
+    const api = (window as unknown as {
+      __TAURI__?: { event?: { listen?: (e: string, cb: () => void) => Promise<() => void> } };
+    }).__TAURI__;
+    if (!api?.event?.listen) return;
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    api.event
+      .listen("pc-open-skin", () => setSkinOpen(true))
+      .then((off) => {
+        // 组件可能在 listen 落地之前就卸载了,那就立刻退订
+        if (cancelled) off();
+        else unlisten = off;
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+
   const layoutMode = useLayoutMode();
 
   // ResizeObserver 监听顶栏根元素自身 clientWidth 并带滞回换算档位

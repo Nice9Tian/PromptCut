@@ -11,7 +11,7 @@ use std::time::Duration;
 use serde::Deserialize;
 use tauri::menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder};
 use tauri::webview::WebviewWindowBuilder;
-use tauri::{Manager, RunEvent, WebviewUrl};
+use tauri::{Emitter, Manager, RunEvent, WebviewUrl};
 use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_shell::ShellExt;
 
@@ -429,6 +429,12 @@ fn build_menu(
         .item(&MenuItemBuilder::with_id("reset-pylibs", "重置 Python 库").build(handle)?)
         .build()?;
 
+    // 外观:只有一项,点开前端那个皮肤对话框(预设 + 逐项调色都在里面)。
+    // 菜单里不列皮肤清单——那份清单在前端按调色板生成,抄到 Rust 里迟早跑偏。
+    let view_menu = SubmenuBuilder::with_id(handle, "view-menu", "外观")
+        .item(&MenuItemBuilder::with_id("open-skin", "皮肤…").build(handle)?)
+        .build()?;
+
     let help_menu = SubmenuBuilder::with_id(handle, "help-menu", "帮助")
         .item(&MenuItemBuilder::with_id("open-logs", "查看运行日志").build(handle)?)
         .item(&MenuItemBuilder::with_id("about", "关于").build(handle)?)
@@ -437,6 +443,7 @@ fn build_menu(
     MenuBuilder::new(handle)
         .item(&file_menu)
         .item(&tools_menu)
+        .item(&view_menu)
         .item(&help_menu)
         .build()
 }
@@ -458,6 +465,12 @@ fn handle_menu_event(
         "open-pylibs" => open_in_explorer(pylibs_dir),
         "open-models" => open_in_explorer(models_dir),
         "open-logs" => open_in_explorer(app_log_dir),
+        // 菜单只管喊一声,皮肤对话框本身在前端;失败不影响别的菜单项,记一行日志就够
+        "open-skin" => {
+            if let Err(e) = handle.emit("pc-open-skin", ()) {
+                eprintln!("[menu] 通知前端打开皮肤对话框失败: {e}");
+            }
+        }
         "quit" => {
             kill_sidecar_tree(handle);
             handle.exit(0);
