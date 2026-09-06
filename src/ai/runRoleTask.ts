@@ -29,6 +29,39 @@ function appendText(parts: MessagePart[] | undefined, delta: string): MessagePar
   return next;
 }
 
+/** 从后往前找到那次还没有结果的调用，把结果盖上去 */
+function stampLast<T extends { name: string; callId?: string; ok?: boolean; summary?: string }>(
+  list: T[],
+  callId: string | undefined,
+  name: string | undefined,
+  ok: boolean | undefined,
+  summary: string | undefined,
+): T[] {
+  const next = [...list];
+  for (let i = next.length - 1; i >= 0; i--) {
+    const hit = callId ? next[i].callId === callId : next[i].name === name;
+    if (hit && next[i].ok === undefined) {
+      next[i] = { ...next[i], ok, summary };
+      break;
+    }
+  }
+  return next;
+}
+
+/** parts 是个联合类型，只能盖 kind === "tool" 的那些 */
+function stampLastPart(
+  parts: MessagePart[],
+  callId: string | undefined,
+  name: string | undefined,
+  ok: boolean | undefined,
+  summary: string | undefined,
+): MessagePart[] {
+  const tools = parts.filter((p) => p.kind === "tool");
+  const stamped = stampLast(tools, callId, name, ok, summary);
+  let k = 0;
+  return parts.map((p) => (p.kind === "tool" ? stamped[k++] : p));
+}
+
 /**
  * 发一个角色任务并把流式结果写进它自己的气泡。
  * 出错就抛——编排器接住后会把这个任务标成 error，并跳过依赖它的下游。
@@ -76,16 +109,15 @@ export async function runRoleTask(opts: {
           parts: [...(m.parts ?? []), { kind: "tool", name: ev.name!, input: ev.input, callId: ev.callId }],
         }));
       } else if (ev.type === "tool_result") {
-        hooks.updateMessage(msgId, (m) => {
-          const tools = [...(m.tools ?? [])];
-          for (let i = tools.length - 1; i >= 0; i--) {
-            if ((ev.callId ? tools[i].callId === ev.callId : tools[i].name === ev.name) && tools[i].ok === undefined) {
-              tools[i] = { ...tools[i], ok: ev.ok, summary: ev.summary };
-              break;
-            }
-          }
-          return { ...m, tools };
-        });
+        // tools 和 parts **两处都要打**。气泡上那排小方块是按 parts 渲染的
+        // （见 AiPanel 的 simpleBlocks(parts)），只更新 tools 的话方块会
+        // 永远停在「进行中」——本机端到端跑的时候就是这个样子，工具其实早就
+        // 返回了，界面上却像是卡住了。
+        hooks.updateMessage(msgId, (m) => ({
+          ...m,
+          tools: stampLast(m.tools ?? [], ev.callId, ev.name, ev.ok, ev.summary),
+          parts: stampLastPart(m.parts ?? [], ev.callId, ev.name, ev.ok, ev.summary),
+        }));
       } else if (ev.type === "error" && ev.message) {
         failed = ev.message;
       }

@@ -8,8 +8,9 @@
  *   1. 本地启发式——零成本，只处理**明显**的两端，拿不准就放行到第 2 级。
  *   2. 一次极小的 LLM 调用（/api/ai/triage，无工具、无历史、maxTokens 16）。
  *
- * 判不准的时候一律**当成简单请求**。多跑一次编排的代价是几十秒，
- * 而漏掉一次编排只是少了点并行——前者用户能感觉到，后者感觉不到。
+ * 第 2 级不可用（没配 API 直连，只有 CLI 驱动——大多数用户）时不是直接判「简单」，
+ * 而是退回一个放宽版的本地启发式。理由见 looseTriage：一律判简单会让分工模式
+ * 变成一个勾了等于没勾、还看不出为什么的复选框。
  */
 
 export type TriageVerdict = {
@@ -41,12 +42,43 @@ export function heuristicTriage(query: string): TriageVerdict | null {
   }
 
   // 明确点名要多件事：并列连词 + 多个动词，这种编排几乎总是划算
-  const conj = (q.match(/(并且|然后|同时|以及|接着|再给|还要|另外)/g) || []).length;
+  const conj = countConj(q);
   if (conj >= 2) {
     return { parallel: true, by: "heuristic", reason: `出现 ${conj} 处并列词，明显是多步任务` };
   }
 
   return null; // 拿不准，交给 LLM
+}
+
+/**
+ * 表示「还有下一件事」的词。
+ *
+ * 「分别」也算：它说的是同一件事要对多个对象各做一遍，那正是最值得并行的形状。
+ * 反过来「再」「和」这种没进来——它们太常出现在单步句子里（「再快一点」「音量和亮度」）。
+ */
+const CONJ = /(并且|然后|同时|以及|接着|再给|还要|另外|之后|最后|分别|其次|顺便)/g;
+
+function countConj(q: string): number {
+  return (q.match(CONJ) || []).length;
+}
+
+/**
+ * 放宽版启发式：**只在闸门不可用时**用。
+ *
+ * 严格版拿不准就交给 LLM，可 CLI 用户根本没有那个 LLM 闸（起进程要好几秒，
+ * 拿它做闸是净亏损）。如果这时还按「拿不准 = 不编排」处理，分工模式对大多数
+ * 用户就是个静默失效的复选框——勾了和没勾一模一样，还看不出为什么。
+ *
+ * 所以门槛降到「一处并列词 + 句子不是一句短应答」。判错的代价是白跑一轮编排（几十秒），
+ * 但用户是**主动勾上**分工模式的，这个方向上宁可多跑。
+ */
+export function looseTriage(query: string): TriageVerdict {
+  const q = query.trim();
+  const conj = countConj(q);
+  if (conj >= 1 && q.length >= 10) {
+    return { parallel: true, by: "heuristic", reason: `闸门不可用，本地判断：${conj} 处并列词` };
+  }
+  return { parallel: false, by: "fallback", reason: "闸门不可用，本地看不出是多步任务" };
 }
 
 /** 问一次极小的 LLM 闸。不可用或出错都返回 null，由调用方兜底。 */
@@ -73,8 +105,9 @@ async function askGate(query: string): Promise<TriageVerdict | null> {
 /**
  * 决定这条请求走不走分工编排。
  *
- * 闸门本身不可用（没配 API 直连、超时、报错）时**不编排**：CLI 驱动光启动
- * 进程就要好几秒，拿它做闸是净亏损；而没有闸又全量编排，等于回到最慢的那条路。
+ * 闸门不可用（没配 API 直连、超时、报错）时退回 looseTriage，而不是一律
+ * 不编排——本机实测过：只有 CLI 驱动的时候闸门永远返回 available:false，
+ * 于是勾上分工模式发多步请求，链路会一声不响地走回普通提问。
  */
 export async function shouldOrchestrate(query: string): Promise<TriageVerdict> {
   const local = heuristicTriage(query);
@@ -83,5 +116,5 @@ export async function shouldOrchestrate(query: string): Promise<TriageVerdict> {
   const gate = await askGate(query);
   if (gate) return gate;
 
-  return { parallel: false, by: "fallback", reason: "闸门不可用，按单步处理" };
+  return looseTriage(query);
 }
