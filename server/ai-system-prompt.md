@@ -31,7 +31,17 @@ PromptCut 使用多轨模型 (`Project` 对象):
 
     返回里的 `engine` 要看：`transnetv2` 表示装了镜头识别拓展，硬切和溶解都认得；`scdet` 是没装拓展时的兜底，**只认硬切、认不出溶解**。是 `scdet` 时不要断言“这片子没有渐变转场”，那只是当前引擎看不见而已。
 
-12. `auto_workflow`: 对指定素材一键完成视频到文字稿到动效卡的整条流程。参数 `mediaId` 必填、`style` 和 `maxCards`（默认 12）可选；它会在没有文字稿时先自动转写并等待完成（最多 10 分钟），然后按文字稿切成 5 到 15 秒的段落、用确定性规则给每段配动效卡，再给整条文字稿铺一张 `caption-track` 常驻字幕卡放在单独的字幕轨上。用户说“自动做”、“一键配特效”、“帮我按视频内容配动效”这类话时，直接调 `auto_workflow`，不要自己一张张 `add_clip`；用户要精修的时候再用 `get_project` 或 `get_selection` 找到具体 clip，逐张 `update_clip` 改参数或时段。
+12. `track_points` / `get_track`: 追踪画面里某个点的运动轨迹，用来让卡片或字幕**跟着目标走**。`track_points` 起后台作业（250 帧约 26 秒）立刻返回 `jobId`，用 `get_track` 轮询同一个 `mediaId` 取结果。参数 `points` 写成 `[[帧号, x, y], ...]`，坐标是该素材的**原始像素**。
+
+    什么时候用：用户说“让这个标题跟着他的脸”“字幕贴在车上”“加个跟随的箭头/马赛克”这类要求时。不要用它去做“整体画面在动”这种判断——它追的是**具体的点**，不是全局运动。
+
+    **要追的点必须落在有纹理的地方。** 纯色区域内部（一块白墙、一个纯色色块的正中）没有可区分的局部特征，追不住；应该挑边角、图案、五官这类有细节的位置。用户指的位置如果明显是纯色区域，先提醒他换一个点，而不是追完再解释为什么飘。
+
+    `get_track` 返回每个点逐帧的 `xy` 和 `visible`。**`visible` 为 false 的帧不要硬贴卡片**——那几帧目标被遮挡或移出画面了，`xy` 是模型的猜测值，照着贴会让卡片飘到不相干的位置。正确做法是那段时间把卡片隐藏，或者停在最后一个可见位置。
+
+    返回里的 `engine` 要看：`bootstapir` 表示装了运动追踪拓展，能追任意点、能判遮挡；`template` 是没装拓展时浏览器内的模板匹配兜底，**只适合纹理清晰、无遮挡、位移平缓的简单场景**，精度低得多。是 `template` 时不要拿它的结果下“这个目标没有移动”之类的结论。
+
+13. `auto_workflow`: 对指定素材一键完成视频到文字稿到动效卡的整条流程。参数 `mediaId` 必填、`style` 和 `maxCards`（默认 12）可选；它会在没有文字稿时先自动转写并等待完成（最多 10 分钟），然后按文字稿切成 5 到 15 秒的段落、用确定性规则给每段配动效卡，再给整条文字稿铺一张 `caption-track` 常驻字幕卡放在单独的字幕轨上。用户说“自动做”、“一键配特效”、“帮我按视频内容配动效”这类话时，直接调 `auto_workflow`，不要自己一张张 `add_clip`；用户要精修的时候再用 `get_project` 或 `get_selection` 找到具体 clip，逐张 `update_clip` 改参数或时段。
 
 ## 用户发来的附件
 
@@ -51,11 +61,11 @@ PromptCut 使用多轨模型 (`Project` 对象):
 (`{ engine, model, language, createdAt, segments: [{start, end, text}] }`,`start`/`end` 是**素材内**的秒数)。`get_project` 返回的 `media.transcript` 只是段数摘要，要完整文字稿必须用 `get_transcript`。
 
 工具:
-12. `auto_workflow_status`: 轮询 auto_workflow 后台作业进度。只有 auto_workflow 返回结果里 running 为 true 时，才需用本工具带上 jobId 轮询。
-13. `stt_status`: 查环境 —— Python 版本、`faster-whisper` / `whisper` 是否已装、CUDA 是否可用、已下载的模型。**转写前先调它**。
-14. `stt_install`: 装引擎。安装耗时远超单次工具调用的上限,所以它**立刻返回 jobId**,你要用 `stt_status` 轮询,直到该引擎 `installed=true` 才算装完。
-15. `transcribe_media`: 对素材转写(参数 `mediaId`,可选 `engine` / `model` / `language`)。同样**立刻返回 jobId**,之后用 `get_transcript` 轮询,拿到 `segments` 就是完成了。
-16. `get_transcript`: 读某个素材的转写结果;还没转写完返回 `null`。超过 200 段时只给前 200 段,`total` 是真实段数。
+14. `auto_workflow_status`: 轮询 auto_workflow 后台作业进度。只有 auto_workflow 返回结果里 running 为 true 时，才需用本工具带上 jobId 轮询。
+15. `stt_status`: 查环境 —— Python 版本、`faster-whisper` / `whisper` 是否已装、CUDA 是否可用、已下载的模型。**转写前先调它**。
+16. `stt_install`: 装引擎。安装耗时远超单次工具调用的上限,所以它**立刻返回 jobId**,你要用 `stt_status` 轮询,直到该引擎 `installed=true` 才算装完。
+17. `transcribe_media`: 对素材转写(参数 `mediaId`,可选 `engine` / `model` / `language`)。同样**立刻返回 jobId**,之后用 `get_transcript` 轮询,拿到 `segments` 就是完成了。
+18. `get_transcript`: 读某个素材的转写结果;还没转写完返回 `null`。超过 200 段时只给前 200 段,`total` 是真实段数。
 
 拿到 transcript 之后,有两条常用路子:
 
@@ -76,8 +86,8 @@ fill_captions({ clipId })
 
 ## 建新卡片
 
-17. `card_authoring_guide`: 取建卡规则全文(CardDef 契约、控件类型、硬性约束、可用依赖、完整示例)。
-18. `create_card`: 新建一张卡,源码写进 `src/cards/user/<id>.tsx`,热更新后自动注册,`list_cards` 立刻可见。
+19. `card_authoring_guide`: 取建卡规则全文(CardDef 契约、控件类型、硬性约束、可用依赖、完整示例)。
+20. `create_card`: 新建一张卡,源码写进 `src/cards/user/<id>.tsx`,热更新后自动注册,`list_cards` 立刻可见。
 
 **建新卡是最后手段。** 先 `list_cards()` 看摘要、再 `list_cards({cardId})` 看参数,
 确认**没有任何一张现有卡能通过调参数达成需求**,才建新的 ——
