@@ -6,6 +6,7 @@ import { snapTime, isOccupied, getGap, xOfTime, formatTime } from "./utils";
 import { TrackClip, Track } from "../../kernel/project";
 import { useDrag } from "./useDrag";
 import { ContextMenu } from "./ContextMenu";
+import { clipTrackKind } from "../../kernel/trackKind";
 
 export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
   const { pxPerSec, trackAreaRef, setDraggingClipId, setDraggingTrackId, rowSize } = useTimelineContext();
@@ -13,6 +14,8 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
   const isSelected = selection.includes(clip.id);
   const cardDef = clip.cardId ? getCard(clip.cardId) : null;
   const label = clip.cardId ? (cardDef ? cardDef.name : "未知卡片") : clip.label;
+  // 按素材类型上色:文字 / 视频 / 转场… 各一档,一眼读得出片段是什么
+  const trackKind = clipTrackKind(clip, (id) => getState().project.media.find((m) => m.id === id));
 
   let subtitle = "";
   if (clip.cardId && cardDef) {
@@ -166,11 +169,9 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
   const isCrossTrackDrag = dragState && dragState.trackId !== track.id;
 
   const clipClasses = [
-    "absolute top-1 bottom-1 rounded flex items-center px-2 text-xs text-white overflow-hidden select-none border",
+    "pc-clip absolute top-1 bottom-1 rounded flex items-center px-2 text-xs overflow-hidden select-none border",
     track.locked ? "" : "cursor-pointer",
-    isSelected ? "border-white z-20 shadow-[0_0_0_1px_rgba(255,255,255,1)]" : "border-black/20 z-10",
-    // 颜色分的是片段类型(卡片 / 素材),序列本身不再分种类
-    clip.mediaId ? "bg-emerald-600 hover:bg-emerald-500" : "bg-blue-600 hover:bg-blue-500",
+    isSelected ? "is-selected z-20" : "z-10",
     dragState?.forbidden ? "bg-red-500/50 border-red-500 border-dashed" : "",
   ].join(" ");
 
@@ -189,6 +190,7 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
       <div
         ref={dragRef}
         data-clip-id={clip.id}
+        data-track-kind={trackKind}
         className={clipClasses}
         style={{
           left: `${xOfTime(displayStart, pxPerSec)}px`,

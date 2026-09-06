@@ -19,6 +19,57 @@ export interface Skin {
 
 const mix = (a: string, b: string, pa: number) => `color-mix(in oklab, ${a} ${pa}%, ${b})`;
 
+/** #rrggbb 的相对亮度(WCAG),只用来给片段挑黑字还是白字 */
+function relLuminance(hex: string): number {
+  const m = /^#?([\da-f]{6})$/i.exec(hex.trim());
+  if (!m) return 0.5;
+  const n = parseInt(m[1], 16);
+  const ch = [(n >> 16) & 255, (n >> 8) & 255, n & 255].map((v) => {
+    const s = v / 255;
+    return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+  });
+  return 0.2126 * ch[0] + 0.7152 * ch[1] + 0.0722 * ch[2];
+}
+
+/** 在 sRGB 里把 a 按 pa% 的比例混向 b,返回 #rrggbb */
+function mixHex(a: string, b: string, pa: number): string {
+  const rgb = (h: string) => {
+    const n = parseInt(/^#?([\da-f]{6})$/i.exec(h.trim())![1], 16);
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  };
+  const [ra, ga, ba] = rgb(a);
+  const [rb, gb, bb] = rgb(b);
+  const k = pa / 100;
+  const ch = [ra * k + rb * (1 - k), ga * k + gb * (1 - k), ba * k + bb * (1 - k)];
+  return "#" + ch.map((v) => Math.round(v).toString(16).padStart(2, "0")).join("");
+}
+
+const contrast = (l1: number, l2: number) =>
+  (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05);
+
+/**
+ * 片段上的字用什么颜色。
+ *
+ * 不能按深浅皮肤一刀切:深色皮肤的轨道色是亮色系(黑字更清楚),浅色皮肤的多是
+ * 深色系(白字更清楚),但浅色的琥珀 #A5762A 偏亮,又反过来要黑字。所以逐个色算。
+ *
+ * 片段底色是渐变(顶 8% 提亮、底 12% 压暗),两端对比度不一样,所以取两端里较差的
+ * 那个来判定;先试带一点色相的浓字(好看),不够 4.5:1 就一路退到纯黑 / 纯白。
+ */
+function trackInk(track: string): string {
+  const ends = [mixHex(track, "#ffffff", 92), mixHex(track, "#000000", 88)].map(relLuminance);
+  const worst = (ink: string) => {
+    const li = relLuminance(ink);
+    return Math.min(...ends.map((le) => contrast(le, li)));
+  };
+  const toward = worst("#000000") >= worst("#ffffff") ? "#000000" : "#ffffff";
+  for (const amount of [22, 14, 7]) {
+    const candidate = mixHex(track, toward, amount);
+    if (worst(candidate) >= 4.5) return candidate;
+  }
+  return toward;
+}
+
 function sideToVars(side: PaletteSide, mode: SkinMode): Record<string, string> {
   const [l0, l1, l2, l3, l4] = side.surfaces;
   const dark = mode === "dark";
@@ -52,6 +103,13 @@ function sideToVars(side: PaletteSide, mode: SkinMode): Record<string, string> {
     "ui-track-fx": side.tracks.fx,
     "ui-track-transition": side.tracks.transition,
     "ui-track-sticker": side.tracks.sticker,
+    "ui-track-ink-video": trackInk(side.tracks.video),
+    "ui-track-ink-audio": trackInk(side.tracks.audio),
+    "ui-track-ink-image": trackInk(side.tracks.image),
+    "ui-track-ink-text": trackInk(side.tracks.text),
+    "ui-track-ink-fx": trackInk(side.tracks.fx),
+    "ui-track-ink-transition": trackInk(side.tracks.transition),
+    "ui-track-ink-sticker": trackInk(side.tracks.sticker),
     "ui-radius": "4px",
     "ui-shadow": dark ? "0 6px 18px rgba(0, 0, 0, 0.45)" : "0 8px 24px rgba(20, 22, 24, 0.14)",
     "ui-glow": `0 0 10px ${mix(side.accent, "transparent", 45)}`,

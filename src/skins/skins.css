@@ -234,23 +234,32 @@ html.skin-swapping * {
 [data-skin] button.bg-blue-600:hover { background: var(--ui-accent-hover); }
 [data-skin] button.bg-blue-600:active { background: var(--ui-accent-press); }
 
-/* 轨道色:片段填充用基础色,悬浮 ±8%,选中加 2px 强调色描边;轨道槽用同色 12% 叠加 */
-[data-skin] .bg-blue-600:not(button) {
-  background: linear-gradient(180deg, color-mix(in oklab, var(--ui-track-fx) 92%, white), color-mix(in oklab, var(--ui-track-fx) 88%, black));
-  border: 1px solid color-mix(in oklab, var(--ui-track-fx) 70%, black);
-  color: #fff;
+/* 轨道色:片段按素材类型取色(配色规范 03 条)。
+   之前卡片段全是一个色,颜色占满了却不传递信息;现在 data-track-kind 决定用哪一档,
+   文字 / 视频 / 转场 / 特效 一眼读得出。片段上的字用同色的深色版,保证 4.5:1。 */
+.pc-clip {
+  --clip: var(--ui-track-text);
+  --clip-ink: var(--ui-track-ink-text);
+  background: linear-gradient(180deg, color-mix(in oklab, var(--clip) 92%, white), color-mix(in oklab, var(--clip) 88%, black));
+  border-color: color-mix(in oklab, var(--clip) 70%, black);
+  /* 字色按轨道色亮度挑黑或白(见 skins.ts 的 trackInk),深浅皮肤都过 4.5:1 */
+  color: var(--clip-ink);
 }
-[data-skin] .hover\:bg-blue-500:hover:not(button) {
-  background: linear-gradient(180deg, color-mix(in oklab, var(--ui-track-fx) 84%, white), var(--ui-track-fx));
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.3), 0 0 10px color-mix(in oklab, var(--ui-track-fx) 50%, transparent);
+.pc-clip[data-track-kind="video"] { --clip: var(--ui-track-video); --clip-ink: var(--ui-track-ink-video); }
+.pc-clip[data-track-kind="audio"] { --clip: var(--ui-track-audio); --clip-ink: var(--ui-track-ink-audio); }
+.pc-clip[data-track-kind="image"] { --clip: var(--ui-track-image); --clip-ink: var(--ui-track-ink-image); }
+.pc-clip[data-track-kind="text"] { --clip: var(--ui-track-text); --clip-ink: var(--ui-track-ink-text); }
+.pc-clip[data-track-kind="fx"] { --clip: var(--ui-track-fx); --clip-ink: var(--ui-track-ink-fx); }
+.pc-clip[data-track-kind="transition"] { --clip: var(--ui-track-transition); --clip-ink: var(--ui-track-ink-transition); }
+.pc-clip[data-track-kind="sticker"] { --clip: var(--ui-track-sticker); --clip-ink: var(--ui-track-ink-sticker); }
+.pc-clip:not(.is-selected):hover {
+  background: linear-gradient(180deg, color-mix(in oklab, var(--clip) 84%, white), var(--clip));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.3), 0 0 10px color-mix(in oklab, var(--clip) 50%, transparent);
 }
-[data-skin] .bg-emerald-600 {
-  background: linear-gradient(180deg, color-mix(in oklab, var(--ui-track-video) 92%, white), color-mix(in oklab, var(--ui-track-video) 88%, black));
-  border: 1px solid color-mix(in oklab, var(--ui-track-video) 70%, black);
-  color: #fff;
-}
-[data-skin] .hover\:bg-emerald-500:hover {
-  background: linear-gradient(180deg, color-mix(in oklab, var(--ui-track-video) 84%, white), var(--ui-track-video));
+/* 选中:设计稿是片段内描一圈 2px 主文字色,不动填充 */
+.pc-clip.is-selected {
+  border-color: var(--ui-fg);
+  box-shadow: inset 0 0 0 2px var(--ui-fg);
 }
 [data-skin] .ring-2, [data-skin] .ring-white, [data-skin] .outline-white { --tw-ring-color: var(--ui-accent); outline-color: var(--ui-accent); }
 [data-skin] footer .bg-neutral-900 { background: var(--ui-bg-2); }

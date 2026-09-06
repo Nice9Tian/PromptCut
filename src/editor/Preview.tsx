@@ -228,8 +228,11 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
           style={{
             width: project.width * scale,
             height: project.height * scale,
+            // 透明棋盘格必须比周围画布更暗、更弱(配色规范 04 条):原来是偏亮的中灰,
+            // 在近黑界面里成了最亮的一大块,把注意力从画面本身拽走。跟着皮肤走,不写死。
+            backgroundColor: "color-mix(in srgb, var(--ui-bg-2) 30%, var(--ui-panel))",
             backgroundImage:
-              "linear-gradient(45deg,#1b1b1b 25%,transparent 25%,transparent 75%,#1b1b1b 75%),linear-gradient(45deg,#1b1b1b 25%,#222 25%,#222 75%,#1b1b1b 75%)",
+              "linear-gradient(45deg,var(--ui-bg-2) 25%,transparent 25%,transparent 75%,var(--ui-bg-2) 75%),linear-gradient(45deg,var(--ui-bg-2) 25%,transparent 25%,transparent 75%,var(--ui-bg-2) 75%)",
             backgroundSize: "32px 32px",
             backgroundPosition: "0 0,16px 16px",
           }}

@@ -190,21 +190,29 @@
   min-width: 0;
 }
 
+/*
+ * 气泡不再用整块实心强调色(配色规范 02 / 06 条)。
+ * 原来用户气泡是一整块 accent,比「导出视频」还抢眼,轻重关系是反的——
+ * 全屏只留导出一个实心强调色按钮,气泡降到控件底色,只留一条强调色左边线。
+ */
 .ai-message.user {
   align-self: flex-end;
-  background: var(--accent);
-  color: var(--on-accent);
+  background: var(--fill-subtle);
+  color: var(--ink);
+  border: 1px solid var(--hairline-strong);
+  border-left: 2px solid var(--accent);
   padding: 8px 12px;
-  border-radius: 12px 12px 0 12px;
+  border-radius: 3px;
   overflow-wrap: anywhere;
 }
 
 .ai-message.assistant {
   align-self: flex-start;
-  background: var(--fill-subtle);
+  background: var(--ui-bg-2);
   color: var(--ink);
+  border: 1px solid var(--hairline);
   padding: 8px 12px;
-  border-radius: 12px 12px 12px 0;
+  border-radius: 3px;
   overflow-wrap: anywhere;
 }
 
