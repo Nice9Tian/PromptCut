@@ -37,11 +37,6 @@ html.skin-swapping * {
                     radial-gradient(circle at bottom left, rgba(139, 92, 246, 0.05), transparent 40%);
 }
 
-/* 顶栏特征 */
-[data-skin] .pc-topbar {
-  background-image: linear-gradient(to right, var(--ui-bg-2), var(--ui-bg));
-  box-shadow: inset 0 -1px 0 var(--ui-accent-soft);
-}
 
 /* 2. 工具类映射：覆盖各种 Tailwind 灰阶类 */
 
