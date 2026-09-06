@@ -141,6 +141,59 @@ export default function vitePluginAi(): Plugin {
         });
       });
 
+      // 一键装 CLI:用户不该为了用 AI 助手先去命令行装东西。
+      // dryRun 只返回将要执行的命令(界面用它把命令显示给用户看),不真的装。
+      server.middlewares.use('/api/ai/install', async (req, res) => {
+        if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: 'POST only' });
+        let body = '';
+        req.on('data', c => body += c);
+        req.on('end', async () => {
+          try {
+            const { provider, dryRun } = JSON.parse(body || '{}');
+            const { installPlanFor, manualHintFor, findNpm } = await import(
+              new URL('./runners/install.mjs', import.meta.url).href
+            );
+            const plan = installPlanFor(provider);
+            if (!plan) {
+              return sendJson(res, 400, {
+                ok: false,
+                error: '这一项不能一键安装',
+                hint: manualHintFor(provider) || '请按该工具的官方说明安装。',
+              });
+            }
+            const npm = findNpm();
+            if (!npm) {
+              return sendJson(res, 400, {
+                ok: false,
+                error: '这台机器上没有找到 npm',
+                hint: `装好 Node.js 后再点一次,或者自己执行:${plan.command}`,
+                command: plan.command,
+              });
+            }
+            if (dryRun) {
+              return sendJson(res, 200, { ok: true, dryRun: true, command: plan.command, npm });
+            }
+            try {
+              // 和登录一样开一个可见的终端窗口:npm 的进度、报错、需要确认的地方用户都看得到
+              spawn('cmd.exe', ['/c', 'start', `PromptCut 安装 ${plan.label}`, 'cmd', '/k', npm, 'i', '-g', plan.pkg], {
+                detached: true,
+                stdio: 'ignore',
+                windowsHide: false,
+              }).unref();
+            } catch (e: any) {
+              return sendJson(res, 500, { ok: false, error: String(e), command: plan.command });
+            }
+            sendJson(res, 200, {
+              ok: true,
+              command: plan.command,
+              hint: '已打开安装窗口,装完回到这里会自动检测到',
+            });
+          } catch (e: any) {
+            sendJson(res, 400, { ok: false, error: String(e) });
+          }
+        });
+      });
+
       server.middlewares.use('/api/ai/config', async (req, res) => {
         try {
           const { publicConfig, writeConfig } = await import(new URL('./ai-config.mjs', import.meta.url).href);
@@ -203,7 +256,8 @@ export default function vitePluginAi(): Plugin {
             if (attachments && attachments.length > 0) {
               finalPrompt += '\n\n附件:\n' + attachments.map((a: any) => {
                 let line = `- [${a.kind === 'video' ? '视频' : a.kind}] ${a.name} · 站内地址 ${a.url}`;
-                if (a.url) {
+                if (a.path) line += ` · 磁盘路径 ${a.path}`;
+                if (a.url && !a.path) {
                   const diskPath = path.join(server.config.root, 'public', decodeURIComponent(a.url.split('?')[0]));
                   if (diskPath.startsWith(path.join(server.config.root, 'public'))) {
                     line += ` · 磁盘路径 ${diskPath}`;

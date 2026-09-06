@@ -45,6 +45,10 @@ export function useAiChat(opts?: { mock?: boolean }) {
   const currentRunId = useRef<string | null>(null);
   const setupGateRef = useRef(false);
   const loginTimerRef = useRef<number | null>(null);
+  /** CLI 安装:idle | installing | ok | timeout | failed */
+  const [installState, setInstallState] = useState<Partial<Record<AiProvider, "idle" | "installing" | "ok" | "timeout" | "failed">>>({});
+  const [installError, setInstallError] = useState<Partial<Record<AiProvider, string>>>({});
+  const installTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (opts?.mock) {
@@ -115,10 +119,65 @@ export function useAiChat(opts?: { mock?: boolean }) {
 
   useEffect(() => {
     return () => {
+      if (installTimerRef.current !== null) {
+        window.clearInterval(installTimerRef.current);
+        installTimerRef.current = null;
+      }
       if (loginTimerRef.current !== null) {
         window.clearInterval(loginTimerRef.current);
       }
     };
+  }, []);
+
+  /**
+   * 一键装 CLI。服务端开一个可见终端跑 npm i -g,这里每 3 秒刷一次 providers,
+   * 直到这一项 available(和登录那套一样的节奏)。
+   */
+  const install = useCallback(async (id: AiProvider) => {
+    if (installTimerRef.current !== null) {
+      window.clearInterval(installTimerRef.current);
+      installTimerRef.current = null;
+    }
+    setInstallError(prev => ({ ...prev, [id]: "" }));
+    setInstallState(prev => ({ ...prev, [id]: "installing" }));
+    try {
+      const res = await fetch("/api/ai/install", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: id }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) {
+        setInstallState(prev => ({ ...prev, [id]: "failed" }));
+        setInstallError(prev => ({ ...prev, [id]: [data.error, data.hint].filter(Boolean).join(" — ") || "安装请求失败" }));
+        return;
+      }
+      const startTime = Date.now();
+      installTimerRef.current = window.setInterval(async () => {
+        if (Date.now() - startTime > 600000) {
+          if (installTimerRef.current !== null) window.clearInterval(installTimerRef.current);
+          setInstallState(prev => ({ ...prev, [id]: "timeout" }));
+          return;
+        }
+        try {
+          const r = await fetch("/api/ai/providers?refresh=1");
+          if (!r.ok) return;
+          const d = await r.json();
+          const list: ProviderInfo[] = Array.isArray(d) ? d : (d.providers || []);
+          setProviders(list);
+          const p = list.find(x => x.id === id);
+          if (p && p.available) {
+            if (installTimerRef.current !== null) window.clearInterval(installTimerRef.current);
+            setInstallState(prev => ({ ...prev, [id]: "ok" }));
+          }
+        } catch {
+          // 轮询失败忽略,下一轮再来
+        }
+      }, 3000);
+    } catch {
+      setInstallState(prev => ({ ...prev, [id]: "failed" }));
+      setInstallError(prev => ({ ...prev, [id]: "安装请求失败" }));
+    }
   }, []);
 
   const login = useCallback(async (id: AiProvider) => {
@@ -514,6 +573,9 @@ export function useAiChat(opts?: { mock?: boolean }) {
     setMessages,
     login,
     loginState,
+    install,
+    installState,
+    installError,
     config,
     saveConfig,
     setupOpen,

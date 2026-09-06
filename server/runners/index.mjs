@@ -12,12 +12,32 @@ export function resolveExe(name, fallback) {
     const stdout = execFileSync('where.exe', [name], { encoding: 'utf8', stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true });
     const lines = stdout.trim().split(/\r?\n/).filter(Boolean);
     if (lines.length > 0) {
-      exeCache.set(name, lines[0]);
-      return lines[0];
+      // where 会把无扩展名的 shell 脚本排在前面(npm 全局装出来的 codex / claude 就是这样),
+      // 那个文件 execFileSync 执行不了,要挑 .exe/.cmd/.bat 那条。
+      const runnable =
+        process.platform === 'win32'
+          ? lines.find((f) => /\.(exe|cmd|bat)$/i.test(f)) || lines[0]
+          : lines[0];
+      exeCache.set(name, runnable);
+      return runnable;
     }
   } catch {}
   exeCache.set(name, fallback);
   return fallback;
+}
+
+/**
+ * 探测 CLI 版本。npm 全局装出来的是 .cmd 包装器,而 Node 出于安全限制不允许
+ * execFile 直接执行 .cmd/.bat(要么 shell: true,要么自己走 cmd.exe)——
+ * 不绕这一下的话,用「安装」按钮装好的 CLI 会一直被判成「未安装」。
+ * 返回版本字符串;跑不起来就抛错,由调用方记进 note。
+ */
+export function probeVersion(exePath, args = ['--version']) {
+  const opts = { timeout: 5000, encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] };
+  if (process.platform === 'win32' && /\.(cmd|bat)$/i.test(exePath)) {
+    return execFileSync('cmd.exe', ['/c', exePath, ...args], opts);
+  }
+  return execFileSync(exePath, args, opts);
 }
 
 let providersCache = null;
@@ -28,6 +48,10 @@ export async function listProviders(opts = {}) {
   if (!opts.refresh && providersCache && now - providersCacheTime < 5000) {
     return providersCache;
   }
+  // refresh 的语义是「重新看一遍这台机器」,所以 exe 的解析结果也要一起作废:
+  // 刚用「安装」按钮装好的 CLI,PATH 上已经有了,但 exeCache 里还留着上一次「没找到」的结果,
+  // 不清的话界面会一直显示未安装。
+  if (opts.refresh) exeCache.clear();
   const baseProviders = await Promise.all([
     getClaudeProvider(),
     getAgyProvider(),

@@ -1,4 +1,4 @@
-import { spawnCli, resolveExe, lineSplitter } from './index.mjs';
+import { spawnCli, resolveExe, lineSplitter, probeVersion } from './index.mjs';
 import { execFileSync } from 'node:child_process';
 
 export async function getCodexProvider() {
@@ -7,7 +7,7 @@ export async function getCodexProvider() {
   let version = undefined;
   let note = undefined;
   try {
-    const stdout = execFileSync(exePath, ['--version'], { timeout: 2000, encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+    const stdout = probeVersion(exePath);
     version = stdout.trim();
     available = true;
   } catch (e) {

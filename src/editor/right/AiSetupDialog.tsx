@@ -10,9 +10,12 @@ export function AiSetupDialog(props: {
   current: AiProvider | null; onChoose: (id: AiProvider) => void;
   onLogin: (id: AiProvider) => Promise<void>;
   loginState: Partial<Record<AiProvider, "idle" | "waiting" | "ok" | "timeout">>;
+  onInstall: (id: AiProvider) => Promise<void>;
+  installState: Partial<Record<AiProvider, "idle" | "installing" | "ok" | "timeout" | "failed">>;
+  installError: Partial<Record<AiProvider, string>>;
   config: PublicAiConfig | null; onSaveConfig: (partial: AiConfigPatch) => Promise<void>;
 }): JSX.Element | null {
-  const { open, onClose, providers, stt, current, onChoose, onLogin, loginState, config, onSaveConfig } = props;
+  const { open, onClose, providers, stt, current, onChoose, onLogin, loginState, onInstall, installState, installError, config, onSaveConfig } = props;
 
   const [selected, setSelected] = useState<AiProvider | null>(current);
   const [apiVendor, setApiVendor] = useState<ApiVendor>("anthropic");
@@ -24,6 +27,8 @@ export function AiSetupDialog(props: {
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
+  /** provider → 安装方式:能一键装的给命令,不能的给一句人话 */
+  const [installPlans, setInstallPlans] = useState<Partial<Record<string, { command?: string; hint?: string }>>>({});
   const [agyPerms, setAgyPerms] = useState<{path: string, total: number, granted: string[], missing: string[]} | null>(null);
   const [agyPermError, setAgyPermError] = useState("");
   const [granting, setGranting] = useState(false);
@@ -45,6 +50,18 @@ export function AiSetupDialog(props: {
       fetch('/api/ai/agy-permissions').then(r => r.json()).then(data => {
         if (data.ok) setAgyPerms(data);
       }).catch(() => {});
+      // 未安装的那几项:问服务端能不能一键装、命令是什么(dryRun 只回答不执行)
+      for (const p of providers) {
+        if (p.available) continue;
+        fetch('/api/ai/install', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ provider: p.id, dryRun: true }),
+        })
+          .then(r => r.json())
+          .then(d => setInstallPlans(prev => ({ ...prev, [p.id]: d.ok ? { command: d.command } : { hint: d.hint || d.error } })))
+          .catch(() => {});
+      }
     }
   }, [open, current, config]);
 
@@ -161,6 +178,32 @@ export function AiSetupDialog(props: {
               {p.available ? `v${p.version || "未知"}` : "未安装"}
             </span>
           </div>
+          {!p.available && (() => {
+            const plan = installPlans[p.id];
+            const ist = installState[p.id] || "idle";
+            const err = installError[p.id];
+            return (
+              <div className="ais-row-auth">
+                {plan?.command ? (
+                  <div className="ais-auth-action">
+                    <button
+                      className="ais-btn"
+                      disabled={ist === "installing"}
+                      onClick={(e) => { e.preventDefault(); onInstall(p.id); }}
+                    >
+                      {ist === "installing" ? "安装中…" : ist === "ok" ? "已安装" : ist === "timeout" ? "等太久了,重试" : ist === "failed" ? "重试安装" : "安装"}
+                    </button>
+                    <span className="ais-detail">{ist === "installing" ? "已打开安装窗口,装完这里会自动检测到" : plan.command}</span>
+                  </div>
+                ) : (
+                  <div className="ais-auth-hint">
+                    <div className="ais-detail">{plan?.hint || "这一项需要按官方说明手动安装。"}</div>
+                  </div>
+                )}
+                {err && <div className="ais-fixhint">{err}</div>}
+              </div>
+            );
+          })()}
           {p.available && p.auth !== undefined && (
             <div className="ais-row-auth">
               {p.auth.loggedIn === true ? (

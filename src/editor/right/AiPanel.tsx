@@ -6,6 +6,31 @@ import { useAiChat } from "../../ai/useAiChat";
 import { renderMarkdown } from "../../ai/Markdown";
 import type { ChatAttachment, ChatMessage, MessagePart, ToolCallInfo } from "../../ai/types";
 import { AiSetupDialog } from "./AiSetupDialog";
+import { useChatHistory } from "../../ai/useChatHistory";
+import { ChatHistoryDrawer } from "./ChatHistoryDrawer";
+import {
+  kindOfName,
+  newAttachmentId,
+  pickSrcPath,
+  acceptAttr,
+  importByPath,
+  uploadFile,
+  waitForJob,
+} from "../../ai/attachments";
+
+/** 按附件种类返回展示图标 */
+function attachIcon(kind?: string): string {
+  switch (kind) {
+    case "image": return "🖼";
+    case "video": return "🎥";
+    case "audio": return "🎵";
+    case "pdf": return "📕";
+    case "srt": return "💬";
+    case "json": return "📋";
+    case "text": return "📝";
+    default: return "📎";
+  }
+}
 
 /** 显示模式:简洁只看回复,详细连每一步工具调用一起看 */
 type ViewMode = "simple" | "verbose";
@@ -42,7 +67,9 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
       return false;
     }
   })();
-  const { messages, providers, sttInfo, provider, setProvider, streaming, send, abort, newChat, error, setMessages, login, loginState, config, saveConfig, setupOpen, openSetup, closeSetup } = useAiChat({ mock });
+  const { messages, providers, sttInfo, provider, setProvider, streaming, send, abort, newChat, error, setMessages, login, loginState, install, installState, installError, config, saveConfig, setupOpen, openSetup, closeSetup } = useAiChat({ mock });
+  const history = useChatHistory({ provider, messages, sessionId: undefined });
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [inputText, setInputText] = useState("");
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
   const [uploading, setUploading] = useState(false);
@@ -62,6 +89,8 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
 
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  /** 附件占位 id → 原始 File,失败重试时要用 */
+  const retryFilesRef = useRef<Map<string, File>>(new Map());
   const messagesScrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -87,6 +116,36 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
     return () => window.removeEventListener("ai-chat-error", onAiError);
   }, []);
 
+  // 预览窗口右键卡片时会在 window 上派发 pc-quote-clip,把引用插进输入框
+  useEffect(() => {
+    const onQuote = (ev: Event) => {
+      const d = (ev as CustomEvent).detail || {};
+      const label = d.label || d.cardId || "未命名";
+      const ref = `@卡片 ${label}(${d.clipId})`;
+      const ta = textareaRef.current;
+      const pos = ta ? (ta.selectionStart ?? ta.value.length) : -1;
+      setInputText((prev) => {
+        const at = pos >= 0 ? pos : prev.length;
+        const before = prev.slice(0, at);
+        const after = prev.slice(at);
+        // 前面不是空白也不是开头,就补一个空格,免得和上一个词粘在一起
+        const lead = before.length > 0 && !/\s$/.test(before) ? " " : "";
+        const inserted = lead + ref + " ";
+        // 重渲染之后再摆光标,让它停在引用之后
+        requestAnimationFrame(() => {
+          const el = textareaRef.current;
+          if (!el) return;
+          el.focus();
+          const caret = before.length + inserted.length;
+          el.setSelectionRange(caret, caret);
+        });
+        return before + inserted + after;
+      });
+    };
+    window.addEventListener("pc-quote-clip", onQuote as EventListener);
+    return () => window.removeEventListener("pc-quote-clip", onQuote as EventListener);
+  }, []);
+
   useEffect(() => {
     if (toast) {
       const timer = setTimeout(() => setToast(null), 5000);
@@ -103,7 +162,11 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
     }
     setShowLoginPrompt(false);
     if (!inputText.trim() && attachments.length === 0) return;
-    send(inputText.trim(), attachments);
+    // 还在导入或导入失败的附件这次先不带上,但发送本身任何时候都不许被挡住
+    const usable = attachments.filter((a) => a.status !== "importing" && a.status !== "error");
+    const skipped = attachments.length - usable.length;
+    if (skipped > 0) setToast(`${skipped} 个附件还在导入或导入失败,这次没带上`);
+    send(inputText.trim(), usable);
     setInputText("");
     setAttachments([]);
     if (textareaRef.current) {
@@ -125,34 +188,48 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
     e.target.style.height = Math.min(e.target.scrollHeight, 120) + "px";
   };
 
-  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setUploading(true);
-    setToast(`正在导入 ${file.name}...`);
-    try {
-      if (file.name.endsWith(".json")) {
-        const text = await file.text();
-        setAttachments(prev => [...prev, {
-          url: "",
-          name: file.name,
-          kind: "json",
-          text
-        }]);
-        setToast(null);
+  /** 真正干活的后台导入：不 await 直接丢出去跑,跑完再回填那张卡片 */
+  const runImport = (placeholderId: string, file: File, srcPath: string | null) => {
+    const cid = history.conversationId;
+    (async () => {
+      let job: any;
+      if (srcPath) {
+        const init = await importByPath(cid, srcPath, file.name);
+        job = init.status === "importing" ? await waitForJob(init.id) : init;
       } else {
-        setToast("不支持的文件类型");
+        job = await uploadFile(cid, file);
       }
-    } catch (err: unknown) {
-      if (err instanceof Error) {
-        setToast(err.message || "导入失败");
-      } else {
-        setToast("导入失败");
-      }
-    } finally {
-      setUploading(false);
-      if (fileInputRef.current) fileInputRef.current.value = "";
+      setAttachments((prev) =>
+        prev.map((a) => {
+          if (a.id !== placeholderId) return a;
+          if (job.status === "ready") {
+            // 保留占位卡片的 id,这样重试和删除还能对得上
+            return { ...a, ...job.attachment, id: placeholderId, status: "ready" as const };
+          }
+          return { ...a, status: "error" as const, error: job.error || job.attachment?.error || "导入失败", jobId: job.id };
+        }),
+      );
+    })().catch((err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      setAttachments((prev) => prev.map((a) => (a.id === placeholderId ? { ...a, status: "error" as const, error: msg } : a)));
+    });
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
+    for (const file of files) {
+      const placeholderId = newAttachmentId();
+      const srcPath = pickSrcPath(file);
+      // 先把占位卡片插进去,这一步之前不许有任何 await,输入区一秒都不能卡
+      retryFilesRef.current.set(placeholderId, file);
+      setAttachments((prev) => [
+        ...prev,
+        { id: placeholderId, url: "", name: file.name, kind: kindOfName(file.name), bytes: file.size, srcPath, status: "importing" as const },
+      ]);
+      runImport(placeholderId, file, srcPath);
     }
+    if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
   const removeAttachment = (idx: number) => {
@@ -196,6 +273,9 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
           onChoose={(id) => closeSetup(id)}
           onLogin={login}
           loginState={loginState}
+          onInstall={install}
+          installState={installState}
+          installError={installError}
           config={config}
           onSaveConfig={saveConfig}
         />
@@ -243,7 +323,8 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
             ))}
           </select>
           <button className="ai-new-chat-btn" title="让 AI 自动给素材库第一个视频配动效" disabled={streaming} onClick={() => send("对素材库第一个视频执行 auto_workflow")}>一键配特效</button>
-          <button className="ai-new-chat-btn" onClick={newChat}>新对话</button>
+          <button className="ai-new-chat-btn" title="查看历史对话" onClick={() => { setHistoryOpen(true); history.refresh(); }}>历史</button>
+          <button className="ai-new-chat-btn" onClick={() => { newChat(); history.startNewChat(); }}>新对话</button>
         </div>
       </div>
 
@@ -441,9 +522,24 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
         {attachments.length > 0 && (
           <div className="ai-attachments">
             {attachments.map((a, idx) => (
-              <div key={idx} className="ai-attachment-chip">
-                {a.kind === "video" ? "🎥" : "📝"} {a.name}
-                <span className="ai-attachment-remove" onClick={() => removeAttachment(idx)}>✕</span>
+              <div
+                key={a.id || idx}
+                className={`ai-attachment-chip${a.status === "importing" ? " is-importing" : ""}${a.status === "error" ? " is-error" : ""}`}
+                title={a.status === "error" ? (a.error || "导入失败") : a.name}
+                onClick={() => {
+                  if (a.status !== "error") return;
+                  // 失败的卡片点一下重试:先变回导入中,再重新走一遍导入
+                  const f = retryFilesRef.current.get(a.id || "");
+                  if (!f) return;
+                  setAttachments((prev) => prev.map((x) => (x.id === a.id ? { ...x, status: "importing" as const, error: undefined } : x)));
+                  runImport(a.id!, f, a.srcPath ?? null);
+                }}
+              >
+                {a.status === "importing" ? <span className="ai-spinner" aria-hidden /> : attachIcon(a.kind)}
+                {" "}
+                {a.name}
+                {a.status === "importing" ? " · 导入中…" : a.status === "error" ? " · 导入失败,点击重试" : ""}
+                <span className="ai-attachment-remove" onClick={(e) => { e.stopPropagation(); removeAttachment(idx); }}>✕</span>
               </div>
             ))}
           </div>
@@ -456,7 +552,8 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
           <input 
             type="file" 
             ref={fileInputRef} 
-            accept=".json"
+            multiple
+            accept={acceptAttr()}
             style={{ display: "none" }}
             onChange={handleFileChange}
           />
@@ -484,8 +581,26 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
         onChoose={(id) => closeSetup(id)}
         onLogin={login}
         loginState={loginState}
+        onInstall={install}
+        installState={installState}
+        installError={installError}
         config={config}
         onSaveConfig={saveConfig}
+      />
+      <ChatHistoryDrawer
+        open={historyOpen}
+        onClose={() => setHistoryOpen(false)}
+        items={history.history}
+        loading={history.loading}
+        query={history.query}
+        onQueryChange={history.setQuery}
+        currentId={history.conversationId}
+        onPick={async (id) => {
+          const loaded = await history.openChat(id);
+          if (loaded) setMessages(loaded);
+          setHistoryOpen(false);
+        }}
+        onDelete={(id) => history.removeChat(id)}
       />
     </aside>
   );

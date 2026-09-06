@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { spawnCli, resolveExe, lineSplitter } from './index.mjs';
+import { spawnCli, resolveExe, lineSplitter, probeVersion } from './index.mjs';
 import { execFileSync } from 'node:child_process';
 
 import { tools } from '../mcp-tools.mjs';
@@ -20,7 +20,7 @@ export async function getClaudeProvider() {
   let version = undefined;
   let note = undefined;
   try {
-    const stdout = execFileSync(exePath, ['--version'], { timeout: 2000, encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+    const stdout = probeVersion(exePath);
     version = stdout.trim();
     available = true;
   } catch (e) {
