@@ -366,6 +366,7 @@ export function AiSetupDialog(props: {
                   <button
                     key={item.id}
                     type="button"
+                    data-entry={item.id}
                     className={`ais-card${isCurrent ? " is-current" : ""}`}
                     onClick={() => goTo(item.id)}
                   >

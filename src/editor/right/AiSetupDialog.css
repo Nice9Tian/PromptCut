@@ -467,3 +467,104 @@
   font-size: 12px;
   color: var(--ink-muted);
 }
+
+/* ── Router 卡片:背景动效强调 ─────────────────────────────────────────
+ * 五张卡里要让 Router 一眼被看见。配色规范定了「全屏只留一个实心强调色」,
+ * 所以不给它实心底,改用动效。
+ *
+ * 关键约束:动效不能压低文字对比度。第一版把强调色铺满整张卡,实测最坏相位下
+ * 次要文字只剩 2.14:1(规范 05 条要求 4.5:1),等于把「次要文字读不清」那条又装回去。
+ * 所以动效**一点都不进内容区**:一圈流光走在边框上(空心环,文字底下没有它),
+ * 外加一层画在卡片外侧的呼吸光晕。两者都碰不到文字,对比度和别的卡完全一样。
+ * 内部铺底那版试过又删了 —— 浅色皮肤上次要文字的基准只有 4.58:1,连 6% 的叠加
+ * 都会压到 4.5 以下,没有安全值。
+ *
+ * 动效照自己的语义做 —— 图标是「中心节点向外分发」,所以是一道光绕着边框转,
+ * 像信号在派发。颜色全走 --accent,深浅皮肤都跟着变。
+ */
+
+/* 转角度而不是转元素:元素不动,遮罩才能稳稳框住边框那一圈 */
+@property --ais-router-angle {
+  syntax: "<angle>";
+  initial-value: 0deg;
+  inherits: false;
+}
+
+.ais-card[data-entry="router"] {
+  overflow: hidden; /* 动效裁在圆角里 */
+  isolation: isolate; /* 自成层叠上下文,动效层压不到别的卡 */
+  border-color: color-mix(in oklab, var(--accent) 40%, var(--hairline));
+  /* 光晕画在卡片外侧,不进内容区,所以对文字对比度零影响 */
+  animation: ais-router-halo 3.6s ease-in-out infinite;
+}
+
+/* 边框流光:整层只留最外 1.5px 的一圈(两层遮罩相减挖空中间),所以文字底下没有它 */
+.ais-card[data-entry="router"]::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  padding: 2px;
+  background: conic-gradient(
+    from var(--ais-router-angle),
+    transparent 0deg,
+    var(--accent) 38deg,
+    transparent 104deg,
+    transparent 188deg,
+    color-mix(in oklab, var(--accent) 55%, transparent) 226deg,
+    transparent 286deg
+  );
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  animation: ais-router-sweep 8s linear infinite;
+}
+
+/* 内容压在动效之上。flex 子项不用 position 也吃 z-index,所以不动它们的定位,
+   免得把绝对定位的「正在使用」角标顶偏。 */
+.ais-card[data-entry="router"] > * {
+  z-index: 1;
+}
+.ais-card[data-entry="router"] > .ais-card-current {
+  z-index: 2;
+}
+/* 悬浮时转快一点,反馈这张卡是活的 */
+.ais-card[data-entry="router"]:hover::before {
+  animation-duration: 3.4s;
+}
+
+@keyframes ais-router-halo {
+  0%,
+  100% {
+    box-shadow: 0 0 9px color-mix(in oklab, var(--accent) 16%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 20px color-mix(in oklab, var(--accent) 38%, transparent);
+  }
+}
+@keyframes ais-router-sweep {
+  to {
+    --ais-router-angle: 360deg;
+  }
+}
+
+/* 关掉动画的用户:留一圈静态强调色描边,强调还在,只是不动 */
+@media (prefers-reduced-motion: reduce) {
+  .ais-card[data-entry="router"],
+  .ais-card[data-entry="router"]::before {
+    animation: none;
+  }
+  .ais-card[data-entry="router"] {
+    box-shadow: 0 0 12px color-mix(in oklab, var(--accent) 24%, transparent);
+  }
+  .ais-card[data-entry="router"] {
+    border-color: color-mix(in oklab, var(--accent) 70%, var(--hairline));
+  }
+}
