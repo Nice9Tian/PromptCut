@@ -9,6 +9,8 @@
 .pc-bar {
   display: flex;
   align-items: center;
+  flex-wrap: nowrap;
+  overflow: hidden;
   gap: 6px;
   height: 36px;
   padding: 0 6px;
@@ -49,13 +51,36 @@
   cursor: pointer;
   white-space: nowrap;
   transition: background-color 160ms cubic-bezier(0.16, 1, 0.3, 1),
-    border-color 160ms cubic-bezier(0.16, 1, 0.3, 1), color 160ms cubic-bezier(0.16, 1, 0.3, 1);
+    border-color 160ms cubic-bezier(0.16, 1, 0.3, 1), color 160ms cubic-bezier(0.16, 1, 0.3, 1),
+    padding 160ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 /* 只有图标的按钮:方形,内边距收到 6 */
 .pc-btn--icon {
   padding: 0 6px;
   width: 28px;
   justify-content: center;
+}
+
+/* 顶栏收起态按钮:只缩内边距和间距,不设死宽度,让盒子尺寸随内容平滑过渡 */
+.pc-btn--collapsed {
+  padding: 0 5px;
+  gap: 0;
+  justify-content: center;
+}
+
+/* 按钮文字标签:平滑过渡收缩展开 */
+.pc-btn-label {
+  display: inline-block;
+  overflow: hidden;
+  white-space: nowrap;
+  max-width: 120px;
+  opacity: 1;
+  transition: max-width 160ms cubic-bezier(0.16, 1, 0.3, 1),
+    opacity 120ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.pc-btn--collapsed .pc-btn-label {
+  max-width: 0;
+  opacity: 0;
 }
 .pc-btn svg {
   color: var(--ui-fg-muted);
@@ -190,9 +215,123 @@
   color: var(--ui-warn);
 }
 
+/* ⋯ 更多操作弹出菜单(浮层) */
+.pc-more-menu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 190px;
+  padding: 10px;
+  background: var(--ui-float);
+  border: 1px solid var(--ui-border-strong);
+  border-radius: var(--ui-radius, 4px);
+  box-shadow: var(--ui-shadow, 0 8px 24px rgba(0, 0, 0, 0.35));
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.pc-more-menu-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+/* 项目设置对话框 */
+.pc-dialog-mask {
+  position: fixed;
+  inset: 0;
+  background: var(--ui-backdrop, rgba(0, 0, 0, 0.6));
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+}
+.pc-dialog {
+  width: 360px;
+  border-radius: var(--ui-radius, 6px);
+  border: 1px solid var(--ui-border-strong);
+  background: var(--ui-panel);
+  color: var(--ui-fg);
+  box-shadow: var(--ui-shadow, 0 8px 32px rgba(0, 0, 0, 0.45));
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  font-family: var(--ui-font, inherit);
+}
+.pc-dialog-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ui-fg);
+}
+.pc-dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.pc-dialog-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 13px;
+}
+.pc-dialog-label {
+  color: var(--ui-fg-muted);
+  font-size: 13px;
+}
+.pc-dialog-options {
+  display: flex;
+  gap: 6px;
+}
+/* 对话框画幅与方向选项按钮:常态同次级按钮,选中态淡强调色 */
+.pc-dialog-opt {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 28px;
+  padding: 0 14px;
+  border: 1px solid var(--ui-border-strong);
+  border-radius: var(--ui-radius, 4px);
+  background: var(--ui-panel-2);
+  color: var(--ui-fg);
+  font-size: 13px;
+  font-family: inherit;
+  line-height: 1;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color 160ms cubic-bezier(0.16, 1, 0.3, 1),
+    border-color 160ms cubic-bezier(0.16, 1, 0.3, 1), color 160ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.pc-dialog-opt:hover {
+  background: var(--ui-float);
+  border-color: color-mix(in oklab, var(--ui-border-strong) 70%, var(--ui-fg));
+}
+.pc-dialog-opt--on {
+  background: var(--ui-accent-soft);
+  border-color: var(--ui-accent);
+  color: var(--ui-fg);
+}
+.pc-dialog-opt--on:hover {
+  background: var(--ui-accent-soft);
+  border-color: var(--ui-accent);
+}
+.pc-dialog-res {
+  font-family: var(--ui-font-mono);
+  color: var(--ui-fg);
+  font-size: 13px;
+  font-weight: 500;
+}
+.pc-dialog-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .pc-btn,
-  .pc-btn svg {
+  .pc-btn svg,
+  .pc-btn-label {
     transition: none;
   }
 }
+
