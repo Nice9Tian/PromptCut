@@ -17,8 +17,28 @@ export const HEADER_W_MAX = 420;
 /** 内容层右边的拖动余量(px) */
 export const TAIL_SLACK_PX = 200;
 
-/** 内容变长时，总时长自动伸长的预留余量(秒) */
-export const CONTENT_TAIL_MARGIN = 2;
+/**
+ * 可见内容的末尾:最后一个片段的结束时间。没有任何片段就是 0。
+ *
+ * 播放范围的上界就是它 —— 空无一物的地方不该能播,拖到那里也只会看到黑屏。
+ */
+export function contentEndOf(tracks: Track[]): number {
+  let end = 0;
+  for (const track of tracks) {
+    for (const clip of track.clips) {
+      if (clip.end > end) end = clip.end;
+    }
+  }
+  return end;
+}
+
+/**
+ * 手动拖出来的播放范围下限(秒)。
+ *
+ * 和 store 里 setDurationManual / syncDuration 的 Math.max(1, sec) 保持一致 ——
+ * 写小于 1 也会被那边夹回 1,拖动时就显示 1,免得松手后数字自己跳。
+ */
+export const MIN_RANGE_SEC = 1;
 
 /**
  * 0 秒前面留的一点间距(px,和缩放无关)。纯粹是留白,不代表时间——时间没有负数。

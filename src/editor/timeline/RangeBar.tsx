@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { actions, getState, useStore } from "../../store/project";
 import { useTimelineContext } from "./TimelineContext";
-import { formatTime, timeOfX, xOfTime } from "./utils";
+import { contentEndOf, formatTime, MIN_RANGE_SEC, timeOfX, xOfTime } from "./utils";
 
 /** 范围条高度(px) */
 export const RANGE_H = 20;
@@ -13,8 +13,12 @@ export const RANGE_H = 20;
 export function RangeBar() {
   const { pxPerSec, trackAreaRef } = useTimelineContext();
   const duration = useStore((s) => s.project.duration);
+  const tracks = useStore((s) => s.project.tracks);
   const [dragEnd, setDragEnd] = useState<number | null>(null);
 
+  // 范围的上界。拖过头会被夹在这里，不然松手后 index.tsx 那个 effect 立刻把它拽
+  // 回来，看起来就是「拖了一下又弹回去」。
+  const contentEnd = contentEndOf(tracks);
   const shown = dragEnd ?? duration;
   const x0 = xOfTime(0, pxPerSec);
   const x1 = xOfTime(shown, pxPerSec);
@@ -31,8 +35,10 @@ export function RangeBar() {
     }
     const secAt = (clientX: number) => {
       const left = trackAreaRef.current?.getBoundingClientRect().left ?? 0;
-      // 总时长至少 1 秒,按 0.1 秒对齐
-      return Math.max(1, Math.round(timeOfX(clientX - left, pxPerSec) * 10) / 10);
+      const raw = Math.round(timeOfX(clientX - left, pxPerSec) * 10) / 10; // 按 0.1 秒对齐
+      // 往回拖 = 截断,允许;往右拖最多到内容末尾,再往右也没有东西可播。
+      const upper = contentEnd > 0 ? contentEnd : Infinity;
+      return Math.min(upper, Math.max(MIN_RANGE_SEC, raw));
     };
     setDragEnd(secAt(e.clientX));
     const onMove = (ev: PointerEvent) => setDragEnd(secAt(ev.clientX));

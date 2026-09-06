@@ -6,7 +6,7 @@ import { useEffect } from "react";
 import { useStore, actions, getState } from "../../store/project";
 import { TimelineProvider, useTimelineContext } from "./TimelineContext";
 import { TrackHeader } from "./TrackHeader";
-import { xOfTime, HEADER_W_MIN, HEADER_W_MAX, TAIL_SLACK_PX, CONTENT_TAIL_MARGIN } from "./utils";
+import { xOfTime, HEADER_W_MIN, HEADER_W_MAX, TAIL_SLACK_PX, contentEndOf } from "./utils";
 import { TrackRow } from "./TrackRow";
 import { Ruler } from "./Ruler";
 import { RangeBar, RANGE_H } from "./RangeBar";
@@ -30,16 +30,20 @@ function TimelineInner() {
   const { scrollRef, trackAreaRef, pxPerSec, setDropPlan, headerW, setHeaderW, commitHeaderW, resetHeaderW } = useTimelineContext();
   const t = useStore(s => s.t);
   
-  // 自动伸展总时长
+  // 播放范围跟着可见内容走。
+  //
+  // 以前是只涨不跌(Math.max(duration, 内容末尾 + 余量)):删掉片段范围也不缩,
+  // 新项目一开就是 30 秒,于是范围里总有一大截空的地方能播出黑屏,看起来还像
+  // 有个「最短时长」的限制。现在改成:内容末尾就是范围的上界,手动拖短算截断
+  // (允许),拖长会被夹回内容末尾。
   useEffect(() => {
-    let contentEnd = 0;
-    for (const track of tracks) {
-      for (const clip of track.clips) {
-        if (clip.end > contentEnd) contentEnd = clip.end;
-      }
-    }
-    const need = contentEnd > 0 ? contentEnd + CONTENT_TAIL_MARGIN : 0;
-    const target = durationManual === null ? Math.max(duration, need) : Math.max(durationManual, need);
+    const contentEnd = contentEndOf(tracks);
+    // 空项目没有内容可依,保留文档里那个值,不然时间轴会塌成 0 宽没法往里拖东西。
+    const target = contentEnd <= 0
+      ? duration
+      : durationManual === null
+        ? contentEnd
+        : Math.min(durationManual, contentEnd);
     if (Math.abs(target - duration) > 1e-6) {
       actions.syncDuration(target);
     }

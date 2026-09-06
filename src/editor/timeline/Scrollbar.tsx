@@ -39,7 +39,8 @@ export function Scrollbar() {
   const clamp = (v: number) => Math.max(0, Math.min(1, v));
   const leftPct = duration > 0 ? clamp(visStart / duration) : 0;
   const widthPct = duration > 0 ? clamp((visEnd - visStart) / duration) : 1;
-  const minWidthPx = 24;
+  // 两端把手各 16px，中间还得留一截能抓住平移，所以滑块最窄 48px。
+  const minWidthPx = 48;
 
   const trackRef = useRef<HTMLDivElement>(null);
   const stateRef = useRef({ pxPerSec, viewW });
@@ -107,10 +108,12 @@ export function Scrollbar() {
   };
 
   return (
-    <div className="shrink-0 h-[12px] bg-neutral-950 flex" style={{ paddingLeft: headerW }}>
-      <div 
-        ref={trackRef} 
-        className="flex-1 relative mx-1 my-0.5 bg-neutral-900 rounded-full cursor-pointer"
+    // 这条同时管平移和缩放，两端还各有一个把手，12px 高实在点不中。
+    // 加到 22px：条身 16px，上下各留 3px 让它不贴着轨道和窗口边。
+    <div className="shrink-0 h-[22px] bg-neutral-950 flex items-center" style={{ paddingLeft: headerW }}>
+      <div
+        ref={trackRef}
+        className="flex-1 relative mx-1 h-4 bg-neutral-900 rounded-full cursor-pointer"
         onDoubleClick={handleDoubleClick}
       >
         <div
@@ -124,7 +127,7 @@ export function Scrollbar() {
         >
           {/* 左把手 */}
           <div
-            className="w-2.5 h-full cursor-ew-resize shrink-0 rounded-l-full hover:bg-neutral-500 transition-colors"
+            className="w-4 h-full cursor-ew-resize shrink-0 rounded-l-full hover:bg-neutral-500 transition-colors"
             onPointerDown={(e) => {
               e.stopPropagation();
               handleDrag(e, "left");
@@ -134,7 +137,7 @@ export function Scrollbar() {
           <div className="flex-1 h-full cursor-grab active:cursor-grabbing" />
           {/* 右把手 */}
           <div
-            className="w-2.5 h-full cursor-ew-resize shrink-0 rounded-r-full hover:bg-neutral-500 transition-colors"
+            className="w-4 h-full cursor-ew-resize shrink-0 rounded-r-full hover:bg-neutral-500 transition-colors"
             onPointerDown={(e) => {
               e.stopPropagation();
               handleDrag(e, "right");
