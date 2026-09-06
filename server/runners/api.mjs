@@ -130,7 +130,7 @@ export function startRun(opts) {
     const requestFetch = opts.fetchImpl || globalThis.fetch;
     const provider = providerModule.createProvider(cfg, { fetchImpl: (url, options) => requestFetch(url, { ...options, signal: AbortSignal.any([abortController.signal, AbortSignal.timeout(120000)]) }) });
     safeOnEvent({ type: 'diagnostic', stage: 'configuration', data: { vendor: cfg.vendor, model: cfg.model, maxTokens: cfg.maxTokens, protocol: 'native-tools', maxRounds: 24 } });
-    const tools = buildTools({ callTool: opts.callTool, workspaceDir: opts.cwd, onEvent: safeOnEvent });
+    const tools = await buildTools({ callTool: opts.callTool, workspaceDir: opts.cwd, onEvent: safeOnEvent });
     const agent = new Agent({ 
       provider, 
       system: opts.systemPrompt, 

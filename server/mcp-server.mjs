@@ -3,6 +3,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import * as readline from 'node:readline';
 import { tools } from './mcp-tools.mjs';
+import { injectCardParams } from './card-params-schema.mjs';
 
 function getTargets() {
   let port = 5195;
@@ -132,37 +133,16 @@ async function handleMessage(line) {
 
     // Fetch cards to dynamically update the schema for add_clip and update_clip
     try {
-      const res = await callBridge('list_cards', {});
+      // 这里要按 controls 生成 params 的 anyOf schema,所以必须要完整版;
+      // list_cards 不带参数返回的是摘要(没有 controls)。
+      const res = await callBridge('list_cards', { detail: 'full' });
       if (res.ok) {
         const out = await res.json();
         if (out.ok && out.result) {
-          const cards = out.result;
-          
-          const paramsSchema = {
-            type: "object",
-            description: "卡片的具体参数 (基于 controls)",
-            anyOf: cards.map(c => {
-              const props = {};
-              c.controls.forEach(ctrl => {
-                if (ctrl.type === 'number') props[ctrl.key] = { type: 'number' };
-                else props[ctrl.key] = { type: 'string' };
-              });
-              return {
-                title: c.id,
-                type: "object",
-                properties: props
-              };
-            })
-          };
-
-          const addClip = pubTools.find(t => t.name === 'add_clip');
-          if (addClip) {
-             addClip.inputSchema.properties.params = paramsSchema;
-          }
-          const updateClip = pubTools.find(t => t.name === 'update_clip');
-          if (updateClip) {
-             updateClip.inputSchema.properties.params = paramsSchema;
-          }
+          // 和 API 直连共用同一份构造(server/card-params-schema.mjs),
+          // 免得两条路给模型看的 schema 不一样 —— 以前就是这么分叉的:
+          // 这里注入了真实字段,而 API 直连那边一直是个空壳自由对象。
+          injectCardParams(pubTools, out.result);
         }
       }
     } catch(e) {

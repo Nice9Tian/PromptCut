@@ -22,9 +22,22 @@ export function sanitizeSchema(schema, vendor) {
       delete node.exclusiveMaximum;
     }
 
-    if (node.type === 'object' && !node.properties) {
-      node.properties = {};
+    // 嵌套的自由对象(没写 properties)要保持自由。
+    // 以前这里补一个空的 properties,等于把「任意对象」改写成「没有任何字段的对象」——
+    // 模型照着这个 schema 只能交出 {},卡片参数因此完全传不出去。
+    // 补 additionalProperties: true 把「随便填」这层意思说明白。
+    if (node.type === 'object' && !node.properties && !node.anyOf && !node.oneOf) {
+      if (vendor === 'gemini') {
+        // Gemini 的 schema 子集不认 additionalProperties(上面已经删掉了),
+        // 它要求对象必须有 properties,所以这一家只能退回空对象。
+        node.properties = {};
+      } else {
+        node.additionalProperties = true;
+      }
     }
+
+    if (Array.isArray(node.anyOf)) node.anyOf.forEach(processNode);
+    if (Array.isArray(node.oneOf)) node.oneOf.forEach(processNode);
 
     if (node.properties && typeof node.properties === 'object') {
       for (const key of Object.keys(node.properties)) {

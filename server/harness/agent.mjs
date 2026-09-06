@@ -17,7 +17,7 @@ export class Agent {
     let completed = 0, failed = 0, outcome = 'completed', lastText = '', lastRound = 0;
     const started = Date.now();
     const progress = (round, phase, text) => this.onEvent({ type: 'progress', round, maxRounds: this.maxIterations, phase, completed, failed, elapsedMs: Date.now() - started, text });
-    const system = this.system + '\n\n执行规则：每组操作前用一句简短的话说明将做什么；优先一次返回多个已知参数的工具调用，或用 batch_tools 批量处理。依赖上一步返回值的操作留到下一轮。后台作业由工具自动等待，请勿反复启动或紧密轮询。遇到重复错误应改变方法或说明阻碍。工具返回成功后核对一次即可，完成后向用户总结结果。';
+    const system = this.system + '\n\n执行规则：每组操作前用一句简短的话说明将做什么；需要做多件事时，在同一次回复里一次返回多个工具调用，它们会在同一轮内依次执行。依赖上一步返回值的操作留到下一轮。后台作业由工具自动等待，请勿反复启动或紧密轮询。遇到重复错误应改变方法或说明阻碍。工具返回成功后核对一次即可，完成后向用户总结结果。';
     let summaryReason = '';
 
     // The budget counts model/tool round trips, not individual calls.

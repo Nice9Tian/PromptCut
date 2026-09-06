@@ -1,0 +1,110 @@
+// 工具 schema 送到模型手里长什么样。
+// 这里挡住的是一个真实发生过的失败:add_clip 的 params 被规范成
+// { type:"object", properties:{} },意思变成「这个对象没有任何字段」,
+// 模型因此一个卡片参数都传不出去,建出来的卡永远是 params: {}。
+// 跑法:node --test server/test/tool-schema.test.mjs
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+import { toolToVendor, sanitizeSchema } from '../harness/schema.mjs';
+import { tools as mcpTools } from '../mcp-tools.mjs';
+import { buildParamsSchema, injectCardParams } from '../card-params-schema.mjs';
+
+/** 两张形状不同的卡,够覆盖 text / number / select / required */
+const CARDS = [
+  {
+    id: 'caption-track',
+    controls: [
+      { key: 'lines', label: '字幕', type: 'text', required: true, hint: '一行一条' },
+      { key: 'showEn', label: '显示英文', type: 'select', options: [{ value: 'true' }, { value: 'false' }] },
+      { key: 'strokeW', label: '描边宽度', type: 'number' },
+    ],
+  },
+  {
+    id: 'odometer',
+    controls: [
+      { key: 'value', label: '数值', type: 'number' },
+      { key: 'unit', label: '单位', type: 'text' },
+    ],
+  },
+];
+
+// ── sanitizeSchema:自由对象不能被改写成「没有字段」 ──────────────
+test('嵌套的自由对象保持自由,不再被塞成 properties: {}', () => {
+  const out = sanitizeSchema({ type: 'object', properties: { blob: { type: 'object' } } }, 'openai');
+  assert.notDeepEqual(out.properties.blob.properties, {}, '空 properties 等于告诉模型「没有字段可填」');
+  assert.equal(out.properties.blob.additionalProperties, true);
+});
+
+test('没有参数的工具,顶层仍然是 properties: {}', () => {
+  const out = sanitizeSchema({ type: 'object', properties: {} }, 'openai');
+  assert.deepEqual(out.properties, {}, '「这个工具不接受参数」是真的没有字段,不能改');
+});
+
+test('anyOf 分支会被一起清洗', () => {
+  const out = sanitizeSchema(
+    { type: 'object', properties: { p: { type: 'object', anyOf: [{ type: 'object', properties: { free: { type: 'object' } } }] } } },
+    'openai',
+  );
+  assert.equal(out.properties.p.anyOf[0].properties.free.additionalProperties, true);
+});
+
+test('gemini 不支持 additionalProperties,退回空对象而不是留个非法字段', () => {
+  const out = sanitizeSchema({ type: 'object', properties: { blob: { type: 'object' } } }, 'gemini');
+  assert.equal(out.properties.blob.additionalProperties, undefined);
+  assert.deepEqual(out.properties.blob.properties, {});
+});
+
+// ── buildParamsSchema:每张卡的真实字段 ───────────────────────────
+test('每张卡一个分支,字段名和类型都对得上', () => {
+  const schema = buildParamsSchema(CARDS);
+  const caption = schema.anyOf.find((b) => b.title === 'caption-track');
+  assert.ok(caption, '要能按 cardId 找到分支');
+  assert.equal(caption.properties.lines.type, 'string');
+  assert.equal(caption.properties.strokeW.type, 'number');
+  assert.deepEqual(caption.properties.showEn.enum, ['true', 'false']);
+  assert.deepEqual(caption.required, ['lines'], '必填要传给模型,不然它不知道非填不可');
+  assert.match(caption.properties.lines.description, /一行一条/, 'hint 要透出去');
+});
+
+test('卡片刚加的参数也能传:每个分支都允许额外字段', () => {
+  assert.equal(buildParamsSchema(CARDS).anyOf[0].additionalProperties, true);
+});
+
+test('拿不到卡片时返回 null,由调用方退回自由对象', () => {
+  assert.equal(buildParamsSchema([]), null);
+  assert.equal(buildParamsSchema(undefined), null);
+});
+
+// ── 端到端:模型最终收到的 add_clip ───────────────────────────────
+function sentToModel(cards) {
+  const tools = mcpTools
+    .filter((t) => ['add_clip', 'update_clip'].includes(t.name))
+    .map((t) => ({ ...t, inputSchema: JSON.parse(JSON.stringify(t.inputSchema)) }));
+  if (cards) injectCardParams(tools, cards);
+  return Object.fromEntries(tools.map((t) => [t.name, toolToVendor(t, 'openai').function.parameters]));
+}
+
+test('注入之后,模型能在 add_clip 里看到 lines 这个字段', () => {
+  const params = sentToModel(CARDS).add_clip.properties.params;
+  assert.ok(Array.isArray(params.anyOf), '应该是按 cardId 分支的联合类型');
+  const caption = params.anyOf.find((b) => b.title === 'caption-track');
+  assert.ok('lines' in caption.properties, '这正是以前传不出去的那个参数');
+});
+
+test('update_clip 同样注入', () => {
+  const params = sentToModel(CARDS).update_clip.properties.params;
+  assert.ok(params.anyOf.some((b) => b.title === 'odometer'));
+});
+
+test('回归:没注入时 params 不再是「没有字段的对象」', () => {
+  // 就算注入失败,也不能再退化成 properties:{} —— 那是模型交不出参数的根因
+  const params = sentToModel(null).add_clip.properties.params;
+  assert.notDeepEqual(params.properties, {}, '空 properties 会让模型只能交出 {}');
+  assert.equal(params.additionalProperties, true);
+});
+
+test('注入不会污染共享的 mcpTools 常量', () => {
+  sentToModel(CARDS);
+  const raw = mcpTools.find((t) => t.name === 'add_clip');
+  assert.equal(raw.inputSchema.properties.params.anyOf, undefined, 'mcpTools 是模块级共享的,不能被就地改掉');
+});
