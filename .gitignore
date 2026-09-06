@@ -13,3 +13,6 @@ tsconfig.tsbuildinfo
 # AI 助手:会话历史与每个会话的附件工作文件夹(server/vite-plugin-chats.ts)
 .pc-chats/
 .pc-work/
+
+# 本地草稿(server/vite-plugin-projects.ts):每份草稿一个 .proc 文件
+.pc-projects/

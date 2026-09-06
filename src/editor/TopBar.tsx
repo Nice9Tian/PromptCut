@@ -1,12 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { actions, useStore } from "../store/project";
-import { exportProjectJson, exportVideo, importProjectFile } from "./io";
+import { exportVideo, importProjectFile } from "./io";
+import { newProject, serializeProc, PROC_EXT } from "./io/proc";
+import { ensureActiveDraftId, saveDraft, setActiveDraftId } from "./io/drafts";
 import { useSkin } from "../skins/useSkin";
 import { skinGroups } from "../skins/skins";
 import { Logo } from "../ui/Logo";
 import {
   IconExport,
+  IconHome,
+  IconNew,
   IconMore,
   IconOpen,
   IconRedo,
@@ -152,17 +156,39 @@ export function TopBar() {
 
   const run = (fn: () => Promise<unknown>) => () => fn().catch((e) => alert(String(e?.message ?? e)));
 
-  const saveProject = () => {
+  /**
+   * 保存:先写本地草稿(磁盘上的 .proc),再另存一份到下载目录。
+   * 草稿是给「开始页 → 本地草稿」用的,下载那份是给用户自己收着、发给别人的。
+   */
+  const saveProject = async () => {
     try {
-      const json = exportProjectJson();
-      const blob = new Blob([json], { type: "application/json" });
+      const text = serializeProc();
+      const id = ensureActiveDraftId();
+      await saveDraft(id);
+      // 存完就不脏了,否则「首页」「新建项目」每次都要多问一句
+      actions.markSaved(`${name}${PROC_EXT}`);
+      const blob = new Blob([text], { type: "application/json" });
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
-      a.download = `${name}.promptcut.json`;
+      a.download = `${name}${PROC_EXT}`;
       a.click();
+      URL.revokeObjectURL(a.href);
     } catch (e) {
       alert(String((e as Error).message));
     }
+  };
+
+  /** 新建项目:清空当前编排,并断开草稿绑定(保存时会新开一份) */
+  const createProject = () => {
+    if (dirty && !confirm("当前项目还有未保存的改动，新建会丢掉它们。继续？")) return;
+    newProject();
+    setActiveDraftId(null);
+  };
+
+  /** 回到开始页。Shell 在监听这个事件 */
+  const goHome = () => {
+    if (dirty && !confirm("当前项目还有未保存的改动，回首页会丢掉它们。继续？")) return;
+    window.dispatchEvent(new Event("pc-go-home"));
   };
 
   const toggleMoreMenu = () => {
@@ -304,6 +330,8 @@ export function TopBar() {
       {/* C · 文件操作条:打开/保存参与中档收起,导出为主按钮永远不收起。
           导入视频已迁到左栏「素材 → 视频」的 + 按钮,顶栏不再重复 */}
       <div className="pc-bar-group">
+        <Btn onClick={goHome} label="首页" icon={<IconHome />} collapsed={tier !== "wide"} />
+        <Btn onClick={createProject} label="新建项目" icon={<IconNew />} collapsed={tier !== "wide"} />
         <Btn
           onClick={() => projectInput.current?.click()}
           label="打开项目"
@@ -332,7 +360,7 @@ export function TopBar() {
       <input
         ref={projectInput}
         type="file"
-        accept=".json"
+        accept={`${PROC_EXT},.json`}
         hidden
         onChange={(e) => e.target.files?.[0] && run(() => importProjectFile(e.target.files![0]))()}
       />

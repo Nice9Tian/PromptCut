@@ -183,3 +183,25 @@ export function IconSettings(p: IconProps) {
   );
 }
 
+
+/** 回到开始页 */
+export function IconHome(p: IconProps) {
+  return (
+    <Stroked {...p}>
+      <path d="M4 11l8-6.5 8 6.5" />
+      <path d="M6.5 9.5V19h11V9.5" />
+      <path d="M10 19v-5h4v5" />
+    </Stroked>
+  );
+}
+
+/** 新建项目 */
+export function IconNew(p: IconProps) {
+  return (
+    <Stroked {...p}>
+      <path d="M13 3H6v18h12V8z" />
+      <path d="M13 3v5h5" />
+      <path d="M12 12v6M9 15h6" />
+    </Stroked>
+  );
+}
