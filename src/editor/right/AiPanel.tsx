@@ -67,6 +67,57 @@ type ToolbarControl = OverflowEntry;
  */
 const OVERFLOW_ORDER = ["diag", "auto", "thinking", "view", "new"] as const;
 
+/**
+ * 小方块的颜色分类。
+ *
+ * 按「这一步对项目做了什么」分,不是按工具名字母序 —— 用户扫一眼要能看出
+ * 哪几下是在删东西。读取类故意用最淡的颜色:它们数量最多但最不值得注意,
+ * 满屏一样亮的话反而看不见真正的动作。
+ */
+type ToolKind = "add" | "remove" | "edit" | "read" | "job";
+
+function toolKind(name: string): ToolKind {
+  if (/^(remove|delete|clear)_/.test(name)) return "remove";
+  if (/^(add|create|import|insert)_/.test(name)) return "add";
+  if (/^(set|update|move|rename|reorder|split|trim)_/.test(name)) return "edit";
+  if (/^(list|get|read|detect|search|find)_/.test(name)) return "read";
+  return "job";
+}
+
+const KIND_LABEL: Record<ToolKind, string> = {
+  add: "新增",
+  remove: "删除",
+  edit: "修改",
+  read: "读取",
+  job: "处理",
+};
+
+/** 简洁模式的一段:要么是一段文字,要么是连续的一串工具调用 */
+type SimpleBlock =
+  | { kind: "text"; text: string }
+  | { kind: "tools"; tools: ToolCallInfo[] };
+
+/**
+ * 把有序片段折成简洁模式要显示的块:相邻的文字并成一段,相邻的工具并成一排方块。
+ * 这样方块正好把 AI 每次开口说的话隔开,读起来是「说一句 → 做几件事 → 再说一句」。
+ * status 片段在简洁模式里不显示(它们是过程噪音,详细模式仍然有)。
+ */
+function simpleBlocks(parts: MessagePart[]): SimpleBlock[] {
+  const out: SimpleBlock[] = [];
+  for (const p of parts) {
+    if (p.kind === "text") {
+      const last = out[out.length - 1];
+      if (last?.kind === "text") last.text += p.text;
+      else out.push({ kind: "text", text: p.text });
+    } else if (p.kind === "tool") {
+      const last = out[out.length - 1];
+      if (last?.kind === "tools") last.tools.push(p);
+      else out.push({ kind: "tools", tools: [p] });
+    }
+  }
+  return out;
+}
+
 /** 正在执行、还没有结果的那个工具(有就说明这一刻在跑它) */
 function runningTool(parts: MessagePart[]): ToolCallInfo | null {
   for (let i = parts.length - 1; i >= 0; i--) {
@@ -140,8 +191,6 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
   });
   /** 展开的工具详情,键是 `消息id:片段序号`。纯界面状态,不写进消息里 */
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  /** 简洁模式下手动展开了操作清单的消息 */
-  const [showSteps, setShowSteps] = useState<Set<string>>(new Set());
 
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -317,7 +366,6 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
     apply(next);
   };
   const toggleTool = toggleIn(expanded, setExpanded);
-  const toggleSteps = toggleIn(showSteps, setShowSteps);
 
   // 顶栏按实测宽度排布:窄了先换行、再收文字,还不够就把低优先级的收进「⋯」
   const controlsRef = useRef<HTMLDivElement>(null);
@@ -568,11 +616,6 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
           messages.map((m, i) => {
             const isLastAssistant = m.role === "assistant" && i === messages.length - 1;
             const parts = partsOf(m);
-            const toolParts = parts.filter((p) => p.kind === "tool") as (ToolCallInfo & { kind: "tool" })[];
-            const textOnly = parts
-              .filter((p) => p.kind === "text")
-              .map((p) => (p as { text: string }).text)
-              .join("");
             /** 简洁模式下把几段思考按顺序拼起来一次显示;详细模式仍按原位置逐段渲染 */
             const thinkingText = parts
               .filter((p) => p.kind === "thinking")
@@ -699,20 +742,47 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
                         {thinkingText}
                       </div>
                     )}
-                    {(textOnly || m.role === "user") && (
-                      <div className="ai-message-text">{renderMarkdown(textOnly || m.text)}</div>
-                    )}
-                    {m.role === "assistant" && toolParts.length > 0 && (
-                      <>
-                        <button className="ai-steps-summary" onClick={() => toggleSteps(m.id)}>
-                          {showSteps.has(m.id) ? "▾" : "▸"} 执行了 {toolParts.length} 个操作
-                        </button>
-                        {showSteps.has(m.id) && (
-                          <div className="ai-steps-list">
-                            {toolParts.map((t, tidx) => renderTool(t, `${m.id}:s${tidx}`))}
+                    {m.role === "user" ? (
+                      <div className="ai-message-text">{renderMarkdown(m.text)}</div>
+                    ) : (
+                      // 按发生顺序铺:说一句 → 做几件事(一排小方块)→ 再说一句。
+                      // 方块自然把每次返回的句子隔开,也让用户看见条目在往外冒,
+                      // 不会以为卡住了。
+                      simpleBlocks(parts).map((b, bi) => {
+                        if (b.kind === "text") {
+                          return b.text.trim() ? (
+                            <div key={bi} className="ai-message-text">{renderMarkdown(b.text)}</div>
+                          ) : null;
+                        }
+                        return (
+                          <div key={bi} className="ai-chiprow">
+                            {b.tools.map((t, ti) => {
+                              const key = `${m.id}:c${bi}:${ti}`;
+                              // 装引擎那种几分钟的活儿不折成方块,它有自己的进度条
+                              const job = t.name === "stt_install" ? matchInstallJob(t, installJobs) : undefined;
+                              if (job) return <SttInstallProgress key={key} job={job} compact />;
+                              const state = t.ok === undefined ? "run" : t.ok ? "ok" : "err";
+                              return (
+                                <button
+                                  key={key}
+                                  type="button"
+                                  className={`ai-chip ai-chip--${toolKind(t.name)} is-${state}${expanded.has(key) ? " is-open" : ""}`}
+                                  title={`${KIND_LABEL[toolKind(t.name)]}：${t.name}${t.ok === false ? "（失败）" : t.ok === undefined ? "（进行中）" : ""}`}
+                                  aria-label={`${t.name} ${state === "err" ? "失败" : state === "run" ? "进行中" : "成功"}`}
+                                  onClick={() => toggleTool(key)}
+                                />
+                              );
+                            })}
+                            {/* 点开的那几个把完整详情摊在这一排下面 */}
+                            {b.tools.map((t, ti) => {
+                              const key = `${m.id}:c${bi}:${ti}`;
+                              return expanded.has(key) ? (
+                                <div key={`d${key}`} className="ai-chip-detail">{renderTool(t, key)}</div>
+                              ) : null;
+                            })}
                           </div>
-                        )}
-                      </>
+                        );
+                      })
                     )}
                   </>
                 )}
