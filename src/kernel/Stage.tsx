@@ -23,6 +23,12 @@ export function Stage({ timeline, t, playToken, speed = 1 }: { timeline: Timelin
           const C = def.Component;
           return (
             <div key={`${clip.id}:${playToken}`} data-pc-clip={clip.id} style={{ position: "absolute", inset: 0 }}>
+              {/*
+                clip.params 在写入时就是全量的(见 store 的 addCardClip),
+                这里铺一层 defaults 只是兜底:卡片以后新增参数时,先前存下的 clip
+                里没有那个键,没有这层就会把 undefined 传进组件。
+                正常情况下它一项都不会补 —— 补上了就说明 clip 缺参数。
+              */}
               <C params={{ ...def.defaults, ...clip.params }} playToken={playToken} t={Math.max(0, t - clip.start)} duration={clip.end - clip.start} />
             </div>
           );

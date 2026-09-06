@@ -227,7 +227,10 @@ export const actions = {
     const dur = opts.duration ?? DEFAULT_CARD_DUR;
     const target = opts.trackId ? track : pickTrack(p, start, dur);
     if (!target) return null;
-    let clip: TrackClip = { id: newId("c"), cardId, start, end: start + dur, params: opts.params ?? {} };
+    // 参数在写入时就展开成完整的一份,不留「空 = 用默认值」这种隐式状态。
+    // 调用方(界面、AI)照旧只传要改的项,但存进 clip 的是全量:
+    // 存的和渲染的一致,代码页能直接看,导出的项目也不会因为以后调了卡片默认值而变样。
+    let clip: TrackClip = { id: newId("c"), cardId, start, end: start + dur, params: { ...def.defaults, ...(opts.params ?? {}) } };
     clip = placeOrShift(target, clip);
     setProject(updateTrack(p, target.id, (t) => ({ ...t, clips: sortClips([...t.clips, clip]) })));
     set({ selection: [clip.id] });
@@ -350,10 +353,12 @@ export const actions = {
     const hit = findClip(p, clipId);
     const def = getCard(cardId);
     if (!hit || !def) return;
-    let params: Record<string, unknown> = {};
+    // 同样写全:先铺新卡的默认值,再把旧卡里同名的参数覆盖上去
+    const kept: Record<string, unknown> = {};
     if (opts.keepParams) {
-      for (const k of Object.keys(def.defaults)) if (k in hit.clip.params) params[k] = hit.clip.params[k];
+      for (const k of Object.keys(def.defaults)) if (k in hit.clip.params) kept[k] = hit.clip.params[k];
     }
+    const params: Record<string, unknown> = { ...def.defaults, ...kept };
     setProject(updateTrack(p, hit.track.id, (t) => ({ ...t, clips: t.clips.map((c) => (c.id === clipId ? { ...c, cardId, params } : c)) })));
   },
   removeClip(clipId: string) {
