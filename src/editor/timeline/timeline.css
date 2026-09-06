@@ -296,3 +296,70 @@
 .pc-statusbar-dot.is-dirty {
   background: var(--ui-warn);
 }
+
+/* ── 镜头切换标记 ─────────────────────────────────────────────
+   画在片段内部、内容之上，但不吃鼠标事件：拖片段、改长度都要照常。 */
+.pc-shot-layer {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 12;
+}
+
+.pc-shot-cut,
+.pc-shot-dissolve {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+}
+
+.pc-shot-line {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55);
+}
+.pc-shot-line--end { right: 0; }
+
+/* 溶解是一段区间，底色标出渐变范围；硬切没有跨度，只有一条线 */
+.pc-shot-dissolve {
+  background: linear-gradient(
+    to right,
+    rgba(255, 255, 255, 0) 0%,
+    rgba(255, 255, 255, 0.28) 50%,
+    rgba(255, 255, 255, 0) 100%
+  );
+}
+
+.pc-shot-thumb {
+  height: 22px;
+  width: auto;
+  display: block;
+  border-radius: 2px;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6);
+}
+
+/* 溶解：两张叠着画，后一张半透明压在前一张上 */
+.pc-shot-stack {
+  position: absolute;
+  width: max-content;
+  left: 50%;
+  bottom: 2px;
+  transform: translateX(-50%);
+  display: block;
+}
+.pc-shot-thumb--over {
+  position: absolute;
+  left: 8px;
+  top: 4px;
+  opacity: 0.72;
+}
+
+/* 硬切的缩略图靠在竖线右侧（切换之后那一边），不居中 */
+.pc-shot-stack--cut {
+  left: 2px;
+  transform: none;
+}

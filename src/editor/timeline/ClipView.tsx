@@ -2,7 +2,8 @@ import { useState } from "react";
 import { useTimelineContext } from "./TimelineContext";
 import { actions, useStore, getState } from "../../store/project";
 import { getCard } from "../../kernel/registry";
-import { snapTime, isOccupied, getGap, xOfTime, formatTime } from "./utils";
+import { snapTime, isOccupied, getGap, xOfTime, formatTime, ROW_SIZE_H } from "./utils";
+import { ShotMarkers } from "./ShotMarkers";
 import { TrackClip, Track } from "../../kernel/project";
 import { useDrag } from "./useDrag";
 import { ContextMenu } from "./ContextMenu";
@@ -218,6 +219,9 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
           </div>
         )}
         
+        {/* 镜头切换标记画在文字之上、把手之下:把手要能拖，标记只是看的 */}
+        <ShotMarkers clip={clip} rowHeight={ROW_SIZE_H[rowSize]} />
+
         <div
           ref={resizeRightRef}
           className={`absolute right-0 top-0 bottom-0 w-2 z-30 ${track.locked ? "" : "cursor-col-resize hover:bg-white/30"}`}
