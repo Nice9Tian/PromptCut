@@ -183,6 +183,11 @@ pub fn run() {
                 .min_inner_size(1200.0, 720.0)
                 .center()
                 .maximizable(true)
+                // 必须关掉:开着的话 WebView2 会装上 OS 级文件拖放处理,把页面里的 HTML5
+                // 拖放事件整个吃掉——素材库拖卡片到时间轴在浏览器里正常、装成桌面版就拖不动,
+                // 就是这个原因。本应用不用 Tauri 的文件拖放事件(要接系统拖入文件时,
+                // 关掉之后走网页标准的 dataTransfer.files 即可)。
+                .disable_drag_drop_handler()
                 .on_navigation(move |url| {
                     let host = url.host_str().unwrap_or("");
                     if host == "127.0.0.1"
