@@ -24,13 +24,12 @@ const STATUS_TEXT: Record<string, string> = {
 /**
  * 「自己失败」和「被上游连累」都是 status: "error"，但对用户是两件事：
  * 前者要看这条任务本身出了什么问题，后者根本没跑过、该去看它依赖的那个。
- * 编排器给被跳过的任务写的是「依赖的任务 X 没成功，跳过」，据此区分。
  *
- * 不改成两个 status 值，是因为那是编排器的对外契约，我这边单方面加值会
- * 让两个模块对不上；靠文案区分是它建议的做法。
+ * 判据走 run.skipped 这个字段，不去匹配 error 里的文案 —— 那句话是给人读的，
+ * 编排器哪天改个措辞，这里的判断就会静默失效，而且不报任何错。
  */
 function isSkipped(run: TaskRun): boolean {
-  return run.status === "error" && !!run.error && run.error.includes("跳过");
+  return !!run.skipped;
 }
 
 const PHASE_TEXT: Record<string, string> = {

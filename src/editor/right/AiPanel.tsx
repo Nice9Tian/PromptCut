@@ -676,15 +676,20 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
 
       {/*
         分工模式勾上了、但没配 API 直连。
-        编排那三步走的是 /api/ai/plan（无工具无历史的最小补全），只有 API 直连
-        支持；CLI 驱动光起进程就要几秒，做这种小调用是净亏损。所以这时勾了也
-        不会生效 —— 必须说出来，不然用户以为开了并行，实际一直在走单线。
+
+        编排本身能跑：/api/ai/plan 没有 API 就退回 CLI 驱动。用不了的是前面
+        那道 triage 闸 —— 它必须比 manager 便宜才有意义，CLI 起一次进程要几秒，
+        拿它做闸是净亏损，所以维持 API-only。
+
+        闸不可用时 shouldOrchestrate 退回 heuristicTriage：只认「然后 / 同时」
+        这类并列词够多的请求，拿不准的一律按单线处理。也就是说分工模式还有用，
+        只是漏判变多 —— 说成「用不了」是错的，不说用户又会奇怪为什么有时不分工。
       */}
       {teamMode && config && !config.api.apiKey.set && (
         <div className="ai-banner">
           <span>
-            分工模式需要「API 直连」才能用：拆任务那几步走的是轻量接口，
-            CLI 驱动做不了。现在提问仍然按单线处理。
+            没配「API 直连」，判断「值不值得分工」的那道闸用不了：带「然后」
+            「同时」这类词的明显多步请求照常分工，其余的按单线处理。
           </span>
           <button className="ai-banner-btn" onClick={openSetup}>去配置</button>
         </div>
