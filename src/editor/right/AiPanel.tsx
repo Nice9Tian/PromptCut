@@ -5,6 +5,7 @@ import "katex/dist/katex.min.css";
 import { useAiChat } from "../../ai/useAiChat";
 import { renderMarkdown } from "../../ai/Markdown";
 import type { ChatAttachment, ChatMessage, MessagePart, ToolCallInfo } from "../../ai/types";
+import { conversationReport, copyDebugReport } from "../../ai/debug";
 import { AiSetupDialog } from "./AiSetupDialog";
 import { useChatHistory } from "../../ai/useChatHistory";
 import { ChatHistoryDrawer } from "./ChatHistoryDrawer";
@@ -56,6 +57,36 @@ function runningTool(parts: MessagePart[]): ToolCallInfo | null {
     if (p.kind === "tool") return p.ok === undefined ? p : null;
   }
   return null;
+}
+
+/** 一条没跑完的消息:优先用内核报上来的进度,没有就退回「正在思考 / 正在执行 X」 */
+function activityText(m: ChatMessage, busyTool: ToolCallInfo | null): string {
+  if (m.progress?.text) return m.progress.text;
+  return busyTool ? `正在执行 ${busyTool.name}` : "正在思考";
+}
+
+/** 进度里的轮次和成败,单独放一行小字;没有轮次信息(CLI 驱动)就不显示 */
+function progressMeta(m: ChatMessage): string | null {
+  const p = m.progress;
+  if (!p?.round) return null;
+  const bits = [`第 ${p.round}/${p.maxRounds ?? "?"} 轮`];
+  if (p.completed || p.failed) bits.push(`成功 ${p.completed ?? 0}·失败 ${p.failed ?? 0}`);
+  if (p.elapsedMs) bits.push(`${Math.floor(p.elapsedMs / 1000)} 秒`);
+  return bits.join(" · ");
+}
+
+/**
+ * 跑完之后的结论。completed 不显示(正常结束不用多说一句),
+ * 其余几种都要让用户看见:停下来的原因不同,该做的事也不同。
+ */
+const OUTCOME_TEXT: Record<string, string> = {
+  stalled: "检测到重复操作没有进展,已停下来。上面的总结说明了做到哪一步。",
+  round_limit: "已达到本次模型往返轮数上限。已完成的修改保留,可以补充要求后继续。",
+  aborted: "已由你停止。已完成的修改保留。",
+};
+function outcomeText(m: ChatMessage): string | null {
+  if (!m.outcome || m.outcome === "completed" || m.outcome === "error") return null;
+  return OUTCOME_TEXT[m.outcome] || `本次执行结束于:${m.outcome}`;
 }
 
 export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mock?: boolean; openSetupSignal?: number }) {
@@ -254,6 +285,21 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
   const toggleTool = toggleIn(expanded, setExpanded);
   const toggleSteps = toggleIn(showSteps, setShowSteps);
 
+  /**
+   * 把这段对话连同每一步的执行事件复制成一份 JSON,出问题时直接贴给别人看。
+   * 密钥和模型私有思考在 conversationReport 里已经剔掉,这里不用再处理。
+   */
+  const copyDiagnostics = async () => {
+    if (messages.length === 0) return setToast("还没有对话可以导出");
+    try {
+      await copyDebugReport(conversationReport(messages, provider, config));
+      const truncated = messages.some((m) => m.traceTruncated);
+      setToast(truncated ? "诊断报告已复制(过大的事件已截断)" : "诊断报告已复制到剪贴板");
+    } catch (e) {
+      setToast(e instanceof Error ? e.message : "复制失败");
+    }
+  };
+
   if (providers.length > 0 && !providers.some(p => p.available)) {
     return (
       <aside className="panel panel-right ai-panel">
@@ -312,8 +358,16 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
               详细
             </button>
           </div>
+          <button
+            className="ai-gear-btn"
+            title="把这段对话和每一步执行事件复制成 JSON(不含密钥)"
+            onClick={copyDiagnostics}
+            disabled={messages.length === 0}
+          >
+            <span aria-hidden="true">⎘</span><span>诊断</span>
+          </button>
           <button className="ai-gear-btn" title="AI 设置" aria-label="AI 设置" onClick={openSetup}><span aria-hidden="true">⚙</span><span>AI 设置</span></button>
-          <select 
+          <select
             className="ai-provider-select"
             value={provider || ""}
             onChange={e => setProvider(e.target.value as any)}
@@ -497,11 +551,9 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
                 )}
 
                 {isLastAssistant && m.pending && (
-                  <div className="ai-activity">
+                  <div className="ai-activity" role="status" aria-live="polite">
                     <span className="ai-spinner" aria-hidden />
-                    <span className="ai-activity-text">
-                      {busyTool ? `正在执行 ${busyTool.name}` : "正在思考"}
-                    </span>
+                    <span className="ai-activity-text">{activityText(m, busyTool)}</span>
                     <span className="ai-activity-dots" aria-hidden>
                       <i />
                       <i />
@@ -509,8 +561,14 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
                     </span>
                   </div>
                 )}
+                {isLastAssistant && m.pending && progressMeta(m) && (
+                  <div className="ai-activity-meta">{progressMeta(m)}</div>
+                )}
 
                 {m.error && <div className="ai-message-error">{m.error}</div>}
+                {!m.pending && outcomeText(m) && (
+                  <div className="ai-message-outcome">{outcomeText(m)}</div>
+                )}
               </div>
             );
           })
