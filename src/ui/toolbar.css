@@ -1,0 +1,198 @@
+/*
+ * 工具栏(设计稿「工具栏组件表」第 01/02/05 节)。
+ * 尺寸:条高 36 · 按钮高 28 · 内边距 6/14 · 间距 6 · 圆角 4 · 字号 13。
+ * 层级:条底 L2(--ui-panel),按钮 L3(--ui-panel-2),悬浮 L4(--ui-float);按钮永远比它所在的条亮一级。
+ * 一条里只有一个强调色实心按钮(主按钮),放最右。数值文字用等宽、主文字色、不加容器、左右各 8px。
+ * 颜色全部走 --ui-*,所以五套主题深浅十份取值都能直接换。
+ */
+
+.pc-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 6px;
+  background: var(--ui-panel);
+  border-bottom: 1px solid var(--ui-border);
+  box-shadow: inset 0 -1px 0 var(--ui-accent-soft);
+  font-size: 13px;
+  color: var(--ui-fg);
+}
+
+/* 条内分组:组与组之间一道细分隔,组内保持 6px */
+.pc-bar-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.pc-bar-sep {
+  width: 1px;
+  height: 18px;
+  margin: 0 4px;
+  background: var(--ui-border-strong);
+}
+
+/* 次级按钮:条内默认样式 */
+.pc-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 14px;
+  border: 1px solid var(--ui-border-strong);
+  border-radius: var(--ui-radius, 4px);
+  background: var(--ui-panel-2);
+  color: var(--ui-fg);
+  font-size: 13px;
+  font-family: inherit;
+  line-height: 1;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color 160ms cubic-bezier(0.16, 1, 0.3, 1),
+    border-color 160ms cubic-bezier(0.16, 1, 0.3, 1), color 160ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+/* 只有图标的按钮:方形,内边距收到 6 */
+.pc-btn--icon {
+  padding: 0 6px;
+  width: 28px;
+  justify-content: center;
+}
+.pc-btn svg {
+  color: var(--ui-fg-muted);
+  flex: none;
+  transition: color 160ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.pc-btn:hover {
+  background: var(--ui-float);
+  border-color: color-mix(in oklab, var(--ui-border-strong) 70%, var(--ui-fg));
+}
+.pc-btn:hover svg {
+  color: var(--ui-fg);
+}
+/* 按下:比常态再深一级,描边压深 */
+.pc-btn:active {
+  background: color-mix(in oklab, var(--ui-panel-2) 78%, var(--ui-bg));
+  border-color: color-mix(in oklab, var(--ui-border-strong) 80%, var(--ui-bg));
+}
+.pc-btn:focus-visible {
+  outline: 2px solid var(--ui-accent);
+  outline-offset: 1px;
+}
+.pc-btn:disabled,
+.pc-btn[aria-disabled="true"] {
+  opacity: 0.42;
+  cursor: default;
+  background: var(--ui-panel-2);
+  border-color: var(--ui-border);
+}
+.pc-btn:disabled:hover svg {
+  color: var(--ui-fg-muted);
+}
+
+/* 主按钮:一条里唯一的强调色实心,图标跟随按钮前景色 */
+.pc-btn--primary {
+  background: var(--ui-accent);
+  border-color: var(--ui-accent-press);
+  color: var(--ui-accent-fg);
+  font-weight: 600;
+}
+.pc-btn--primary svg {
+  color: var(--ui-accent-fg);
+}
+.pc-btn--primary:hover {
+  background: var(--ui-accent-hover);
+  border-color: var(--ui-accent);
+}
+.pc-btn--primary:hover svg {
+  color: var(--ui-accent-fg);
+}
+.pc-btn--primary:active {
+  background: var(--ui-accent-press);
+}
+
+/* 数值文字:等宽、主文字色、无容器、左右 8px */
+.pc-num {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 8px;
+  font-family: var(--ui-font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--ui-fg);
+  font-size: 13px;
+}
+.pc-num svg {
+  color: var(--ui-fg-faint);
+}
+
+/* 条内下拉:和次级按钮同一套表面与描边 */
+.pc-select {
+  height: 28px;
+  padding: 0 6px;
+  border: 1px solid var(--ui-border-strong);
+  border-radius: var(--ui-radius, 4px);
+  background: var(--ui-panel-2);
+  color: var(--ui-fg);
+  font-size: 13px;
+  font-family: inherit;
+  outline: none;
+  cursor: pointer;
+}
+.pc-select:hover {
+  background: var(--ui-float);
+}
+.pc-select:focus-visible {
+  outline: 2px solid var(--ui-accent);
+  outline-offset: 1px;
+}
+.pc-bar-label {
+  color: var(--ui-fg-muted);
+  font-size: 12px;
+}
+
+/* 产品标识 */
+.pc-logo {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+}
+.pc-logo-text {
+  display: inline-flex;
+  flex-direction: column;
+  justify-content: center;
+  line-height: 1.05;
+}
+.pc-logo-word {
+  font-family: "Barlow Condensed", "Oswald", "PingFang SC", "Microsoft YaHei", ui-sans-serif, system-ui, sans-serif;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ui-fg);
+}
+.pc-logo-sub {
+  font-family: var(--ui-font-mono);
+  font-size: 9px;
+  letter-spacing: 0.18em;
+  color: var(--ui-fg-faint);
+}
+
+/* 项目名与未保存标记 */
+.pc-projname {
+  color: var(--ui-fg-muted);
+  font-size: 13px;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pc-dirty {
+  color: var(--ui-warn);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pc-btn,
+  .pc-btn svg {
+    transition: none;
+  }
+}

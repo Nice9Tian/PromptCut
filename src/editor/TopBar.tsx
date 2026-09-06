@@ -2,12 +2,48 @@ import { useRef } from "react";
 import { actions, useStore } from "../store/project";
 import { themes } from "../themes";
 import { exportProjectJson, exportVideo, importProjectFile, importVideoFiles } from "./io";
-import { useSkin, skins } from "../skins/useSkin";
+import { useSkin } from "../skins/useSkin";
 import { skinGroups } from "../skins/skins";
+import { Logo } from "../ui/Logo";
+import {
+  IconClock,
+  IconExport,
+  IconImport,
+  IconOpen,
+  IconPause,
+  IconPlay,
+  IconRedo,
+  IconReplay,
+  IconSave,
+  IconUndo,
+} from "../ui/icons";
+import "../ui/toolbar.css";
 
-function Btn({ onClick, children, title }: { onClick: () => void; children: React.ReactNode; title?: string }) {
+/**
+ * 顶栏:按设计稿「工具栏组件表」分成三组——
+ * A 播放控制条(播放/重播/时长/撤销/重做)、B 主题与皮肤、C 文件操作条(导入/打开/保存/导出)。
+ * 导出是这条里唯一的主按钮,放最右。
+ */
+function Btn({
+  onClick,
+  children,
+  title,
+  icon,
+  primary,
+}: {
+  onClick: () => void;
+  children?: React.ReactNode;
+  title?: string;
+  icon?: React.ReactNode;
+  primary?: boolean;
+}) {
   return (
-    <button title={title} onClick={onClick} className="px-2.5 py-1 rounded bg-neutral-800 hover:bg-neutral-700 text-neutral-200 text-xs">
+    <button
+      title={title}
+      onClick={onClick}
+      className={`pc-btn${primary ? " pc-btn--primary" : ""}${children ? "" : " pc-btn--icon"}`}
+    >
+      {icon}
       {children}
     </button>
   );
@@ -26,65 +62,119 @@ export function TopBar() {
 
   const run = (fn: () => Promise<unknown>) => () => fn().catch((e) => alert(String(e?.message ?? e)));
 
+  const saveProject = () => {
+    try {
+      const json = exportProjectJson();
+      const blob = new Blob([json], { type: "application/json" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `${name}.promptcut.json`;
+      a.click();
+    } catch (e) {
+      alert(String((e as Error).message));
+    }
+  };
+
   return (
-    <div className="flex items-center gap-2 px-3 h-11 bg-neutral-950 text-sm pc-topbar">
-      <span 
-        className="font-bold tracking-wide" 
-        style={{
-          backgroundImage: "linear-gradient(100deg, var(--ui-accent) 0%, var(--ui-fg) 100%)",
-          backgroundClip: "text",
-          WebkitBackgroundClip: "text",
-          color: "transparent"
-        }}
-      >
-        PromptCut
+    <div className="pc-bar">
+      <Logo size={22} />
+      <span className="pc-projname">
+        {name}
+        {dirty && <span className="pc-dirty"> *</span>}
       </span>
-      <span className="text-neutral-400">{name}{dirty ? " *" : ""}</span>
-      <span className="mx-2 text-neutral-700">|</span>
-      <Btn onClick={() => actions.togglePlay()}>{playing ? "暂停" : "播放"}</Btn>
-      <Btn onClick={() => actions.replay()} title="重播当前卡片">重播</Btn>
-      <span className="tabular-nums text-neutral-300 w-20">{t.toFixed(2)} s</span>
-      <Btn onClick={() => actions.undo()}>撤销</Btn>
-      <Btn onClick={() => actions.redo()}>重做</Btn>
-      <span className="mx-2 text-neutral-700">|</span>
-      <label className="text-neutral-400 text-xs">主题</label>
-      <select value={themeId} onChange={(e) => actions.setProjectMeta({ themeId: e.target.value })} className="bg-neutral-800 rounded px-2 py-1 text-xs outline-none">
-        {themes.map((th) => (
-          <option key={th.id} value={th.id}>{th.name}</option>
-        ))}
-      </select>
-      <label className="text-neutral-400 text-xs ml-2">皮肤</label>
-      <select value={skinId} onChange={(e) => setSkin(e.target.value)} className="bg-neutral-800 rounded px-2 py-1 text-xs outline-none">
-        {skinGroups().map((g) => (
-          <optgroup key={g.group} label={g.group}>
-            {g.items.map((sk) => (
-              <option key={sk.id} value={sk.id}>{sk.name}</option>
-            ))}
-          </optgroup>
-        ))}
-      </select>
+      <span className="pc-bar-sep" />
+
+      {/* A · 播放控制条 */}
+      <div className="pc-bar-group">
+        <Btn
+          onClick={() => actions.togglePlay()}
+          title={playing ? "暂停" : "播放"}
+          icon={playing ? <IconPause /> : <IconPlay />}
+        >
+          {playing ? "暂停" : "播放"}
+        </Btn>
+        <Btn onClick={() => actions.replay()} title="重播当前卡片" icon={<IconReplay />}>
+          重播
+        </Btn>
+        <span className="pc-num">
+          <IconClock size={14} />
+          {t.toFixed(2)} s
+        </span>
+        <Btn onClick={() => actions.undo()} title="撤销" icon={<IconUndo />} />
+        <Btn onClick={() => actions.redo()} title="重做" icon={<IconRedo />} />
+      </div>
+      <span className="pc-bar-sep" />
+
+      {/* 主题与皮肤 */}
+      <div className="pc-bar-group">
+        <label className="pc-bar-label">主题</label>
+        <select
+          value={themeId}
+          onChange={(e) => actions.setProjectMeta({ themeId: e.target.value })}
+          className="pc-select"
+        >
+          {themes.map((th) => (
+            <option key={th.id} value={th.id}>
+              {th.name}
+            </option>
+          ))}
+        </select>
+        <label className="pc-bar-label">皮肤</label>
+        <select value={skinId} onChange={(e) => setSkin(e.target.value)} className="pc-select">
+          {skinGroups().map((g) => (
+            <optgroup key={g.group} label={g.group}>
+              {g.items.map((sk) => (
+                <option key={sk.id} value={sk.id}>
+                  {sk.name}
+                </option>
+              ))}
+            </optgroup>
+          ))}
+        </select>
+      </div>
+
       <span className="ml-auto" />
-      <Btn onClick={() => videoInput.current?.click()}>导入视频</Btn>
-      <Btn onClick={() => projectInput.current?.click()}>打开项目</Btn>
-      <Btn
-        onClick={() => {
-          try {
-            const json = exportProjectJson();
-            const blob = new Blob([json], { type: "application/json" });
-            const a = document.createElement("a");
-            a.href = URL.createObjectURL(blob);
-            a.download = `${name}.promptcut.json`;
-            a.click();
-          } catch (e) {
-            alert(String((e as Error).message));
-          }
-        }}
-      >
-        保存项目
-      </Btn>
-      <Btn onClick={run(() => exportVideo({ onProgress: (d, n) => console.log(`export ${d}/${n}`) }).then((r) => alert(`导出完成:${r.outDir}`)))}>导出视频</Btn>
-      <input ref={videoInput} type="file" accept="video/*" multiple hidden onChange={(e) => e.target.files && run(() => importVideoFiles(e.target.files!))()} />
-      <input ref={projectInput} type="file" accept=".json" hidden onChange={(e) => e.target.files?.[0] && run(() => importProjectFile(e.target.files![0]))()} />
+
+      {/* C · 文件操作条,导出是唯一的主按钮 */}
+      <div className="pc-bar-group">
+        <Btn onClick={() => videoInput.current?.click()} title="导入视频" icon={<IconImport />}>
+          导入视频
+        </Btn>
+        <Btn onClick={() => projectInput.current?.click()} title="打开项目" icon={<IconOpen />}>
+          打开项目
+        </Btn>
+        <Btn onClick={saveProject} title="保存项目" icon={<IconSave />}>
+          保存项目
+        </Btn>
+        <Btn
+          onClick={run(() =>
+            exportVideo({ onProgress: (d, n) => console.log(`export ${d}/${n}`) }).then((r) =>
+              alert(`导出完成:${r.outDir}`),
+            ),
+          )}
+          title="导出视频"
+          icon={<IconExport />}
+          primary
+        >
+          导出视频
+        </Btn>
+      </div>
+
+      <input
+        ref={videoInput}
+        type="file"
+        accept="video/*"
+        multiple
+        hidden
+        onChange={(e) => e.target.files && run(() => importVideoFiles(e.target.files!))()}
+      />
+      <input
+        ref={projectInput}
+        type="file"
+        accept=".json"
+        hidden
+        onChange={(e) => e.target.files?.[0] && run(() => importProjectFile(e.target.files![0]))()}
+      />
     </div>
   );
 }
