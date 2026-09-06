@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { actions, useStore } from "../store/project";
 import { exportVideo, importProjectFile } from "./io";
-import { newProject, serializeProc, PROC_EXT } from "./io/proc";
+import { newProject, serializeProc, writeProcToDisk, PROC_EXT } from "./io/proc";
 import { ensureActiveDraftId, saveDraft, setActiveDraftId } from "./io/drafts";
 import { useSkin } from "../skins/useSkin";
 import { skinGroups } from "../skins/skins";
@@ -157,22 +157,25 @@ export function TopBar() {
   const run = (fn: () => Promise<unknown>) => () => fn().catch((e) => alert(String(e?.message ?? e)));
 
   /**
-   * 保存:先写本地草稿(磁盘上的 .proc),再另存一份到下载目录。
-   * 草稿是给「开始页 → 本地草稿」用的,下载那份是给用户自己收着、发给别人的。
+   * 保存:弹「另存为」让用户选位置,同时把本地草稿更新掉。
+   *
+   * 顺序有讲究 —— showSaveFilePicker 要用户手势,所以它必须是这里的第一个
+   * await;先去存草稿再弹窗,手势就过期了,浏览器会直接抛 SecurityError。
+   * 用户点取消就整个不算保存:草稿不写、脏标记不清,和「我没保存」一致。
    */
   const saveProject = async () => {
+    const fileName = `${name}${PROC_EXT}`;
     try {
       const text = serializeProc();
-      const id = ensureActiveDraftId();
-      await saveDraft(id);
+      const outcome = await writeProcToDisk(text, fileName);
+      if (outcome.kind === "cancelled") return;
+      await saveDraft(ensureActiveDraftId());
       // 存完就不脏了,否则「首页」「新建项目」每次都要多问一句
-      actions.markSaved(`${name}${PROC_EXT}`);
-      const blob = new Blob([text], { type: "application/json" });
-      const a = document.createElement("a");
-      a.href = URL.createObjectURL(blob);
-      a.download = `${name}${PROC_EXT}`;
-      a.click();
-      URL.revokeObjectURL(a.href);
+      actions.markSaved(fileName);
+      if (outcome.kind === "downloaded") {
+        // 这个 WebView 没有文件选择 API,至少告诉用户文件去哪了
+        alert(`当前环境不支持选择目录，已保存到浏览器的下载位置：${outcome.where}`);
+      }
     } catch (e) {
       alert(String((e as Error).message));
     }

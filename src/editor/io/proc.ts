@@ -62,7 +62,86 @@ export function currentProjectName(): string {
 
 /** 新建一个空项目并载入(顶栏「新建项目」和开始页「开始创作」都走这里) */
 export function newProject(name = "未命名"): Project {
+  // 新项目还没有落点,别让它覆盖上一个项目的文件
+  forgetSaveTarget();
   const project = createEmptyProject(name);
   actions.loadProject(project, `${name}${PROC_EXT}`);
   return project;
+}
+
+/* ── 存到哪儿 ────────────────────────────────────────────────────
+ * 以前是造一个 <a download> 点一下,浏览器不问直接丢进「下载」——用户根本
+ * 没机会选目录,也不知道文件去哪了。改成用文件系统访问 API 弹真正的「另存为」。
+ *
+ * 句柄记住一份:第一次保存问一次路径,之后同一个项目的保存直接覆盖那个文件,
+ * 不再每次都弹窗(和正经编辑器一致)。**换项目时必须清掉**,否则会把新项目
+ * 覆盖到上一个项目的文件上 —— newProject / openDraft 都会调 forgetSaveTarget。
+ */
+
+/** lib.dom 里还没有 showSaveFilePicker,只声明我们用到的这一点 */
+interface SaveFilePickerOptions {
+  suggestedName?: string;
+  types?: { description: string; accept: Record<string, string[]> }[];
+}
+type SaveFilePicker = (options?: SaveFilePickerOptions) => Promise<FileSystemFileHandle>;
+
+function pickerFn(): SaveFilePicker | null {
+  const fn = (window as unknown as { showSaveFilePicker?: SaveFilePicker }).showSaveFilePicker;
+  return typeof fn === "function" ? fn : null;
+}
+
+let saveTarget: FileSystemFileHandle | null = null;
+
+/** 换项目、换草稿时调用:下次保存重新问路径 */
+export function forgetSaveTarget(): void {
+  saveTarget = null;
+}
+
+export type SaveOutcome =
+  | { kind: "saved"; where: string }
+  /** 用户在「另存为」对话框里点了取消 */
+  | { kind: "cancelled" }
+  /** 这个 WebView 没有文件系统访问 API,只能退回浏览器下载 */
+  | { kind: "downloaded"; where: string };
+
+/**
+ * 把 .proc 写到磁盘。
+ *
+ * `askAlways` 为真时强制弹对话框(「另存为」用),否则沿用上次选的位置。
+ * 注意调用时机:showSaveFilePicker 需要用户手势,所以点击处理函数里要**先**
+ * 调它,别先 await 别的东西,不然手势过期会抛 SecurityError。
+ */
+export async function writeProcToDisk(
+  text: string,
+  defaultName: string,
+  { askAlways = false }: { askAlways?: boolean } = {},
+): Promise<SaveOutcome> {
+  const picker = pickerFn();
+  if (!picker) {
+    const blob = new Blob([text], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = defaultName;
+    a.click();
+    URL.revokeObjectURL(a.href);
+    return { kind: "downloaded", where: defaultName };
+  }
+
+  if (askAlways || !saveTarget) {
+    try {
+      saveTarget = await picker({
+        suggestedName: defaultName,
+        types: [{ description: "PromptCut 项目", accept: { "application/json": [PROC_EXT] } }],
+      });
+    } catch (e) {
+      // 用户点取消是正常操作,不是错误,不要弹报错框
+      if ((e as Error)?.name === "AbortError") return { kind: "cancelled" };
+      throw e;
+    }
+  }
+
+  const writable = await saveTarget.createWritable();
+  await writable.write(text);
+  await writable.close();
+  return { kind: "saved", where: saveTarget.name };
 }
