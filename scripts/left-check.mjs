@@ -35,10 +35,10 @@ fs.mkdirSync('out/left', { recursive: true });
   const logPass = (msg) => console.log(`PASS - ${msg}`);
   const logFail = (msg) => { console.log(`FAIL - ${msg}`); hasFail = true; };
 
-  let currentUrl = "http://127.0.0.1:5194/";
+  let currentUrl = "http://127.0.0.1:5194/?nosetup=1";
   
   async function ensureClickable() {
-    if (currentUrl === "http://127.0.0.1:5194/") {
+    if (currentUrl === "http://127.0.0.1:5194/?nosetup=1") {
       await page.evaluate(() => {
         const btns = Array.from(document.querySelectorAll('button'));
         const closeBtn = btns.find(b => {
@@ -109,7 +109,7 @@ fs.mkdirSync('out/left', { recursive: true });
     await page.screenshot({ path: 'out/left/01-initial.png' });
     
     const isMainClickable = await ensureClickable();
-    if (isMainClickable && currentUrl === "http://127.0.0.1:5194/") {
+    if (isMainClickable && currentUrl === "http://127.0.0.1:5194/?nosetup=1") {
       console.log('ENTRY: / (整机)');
     }
     

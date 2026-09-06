@@ -21,6 +21,14 @@ function sanitizeFilename(name: string) {
   return name.replace(/[/\\]/g, "").replace(/\.\./g, "");
 }
 
+/**
+ * 导出根目录。桌面版里 root 是安装目录下的 runtime/app,成品不能落在那里(卸载会一起删),
+ * 所以优先读壳设置的 PROMPTCUT_EXPORT_DIR(默认 %USERPROFILE%VideosPromptCut);开发期回落到 <root>/out。
+ */
+function outRoot(root: string): string {
+  return process.env.PROMPTCUT_EXPORT_DIR || path.resolve(root, "out");
+}
+
 async function handleMediaUpload(req: Connect.IncomingMessage, res: ServerResponse, root: string) {
   const rawName = req.url?.split("/").pop();
   if (!rawName) {
@@ -30,7 +38,7 @@ async function handleMediaUpload(req: Connect.IncomingMessage, res: ServerRespon
   }
   const name = decodeURIComponent(rawName);
   const safeName = sanitizeFilename(name);
-  const stagingDir = path.resolve(root, "out", ".export-staging", "media");
+  const stagingDir = path.resolve(outRoot(root), ".export-staging", "media");
   await fs.mkdir(stagingDir, { recursive: true });
   
   const destPath = path.resolve(stagingDir, safeName);
@@ -63,12 +71,12 @@ async function handleExportStart(req: Connect.IncomingMessage, res: ServerRespon
       
       const now = new Date();
       const id = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}-${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}${String(now.getSeconds()).padStart(2, "0")}`;
-      const outDir = path.resolve(root, "out", `export-${id}`);
+      const outDir = path.resolve(outRoot(root), `export-${id}`);
       const mediaDir = path.resolve(outDir, "media");
       await fs.mkdir(mediaDir, { recursive: true });
       
       // Move staging media
-      const stagingDir = path.resolve(root, "out", ".export-staging", "media");
+      const stagingDir = path.resolve(outRoot(root), ".export-staging", "media");
       try {
         const files = await fs.readdir(stagingDir);
         for (const file of files) {
@@ -94,10 +102,8 @@ async function handleExportStart(req: Connect.IncomingMessage, res: ServerRespon
       await fs.writeFile(projectJsonPath, JSON.stringify(project, null, 2));
       
       lastJobId = id;
-      // return relative path for outDir as specified in docs if preferred, or absolute. 
-      // The requirement says `<绝对或相对路径>`, so I will just return the relative one from project root to be safe and clean, 
-      // actually `out/export-<id>` was used previously. Let's return `out/export-${id}`.
-      const relOutDir = `out/export-${id}`;
+      // 回给浏览器的路径:开发期是相对项目根的 out/export-<id>,桌面版(设了 PROMPTCUT_EXPORT_DIR)给绝对路径
+      const relOutDir = process.env.PROMPTCUT_EXPORT_DIR ? outDir : `out/export-${id}`;
       const job: ExportJob = { id, status: "running", done: 0, total: 1, outDir: relOutDir };
       jobs.set(id, job);
       
@@ -125,7 +131,7 @@ async function handleExportStart(req: Connect.IncomingMessage, res: ServerRespon
         args.push("--no-video");
       }
       
-      const child = spawn("node", args, { cwd: root });
+      const child = spawn(process.execPath, args, { cwd: root });
       
       let stderrLog: string[] = [];
       child.stdout.on("data", (data) => {
@@ -283,24 +289,24 @@ export function exportPlugin(): Plugin {
           let match = url.match(/^\/@export\/([^/]+)\/project\.json$/);
           if (match) {
             const id = match[1];
-            return serveFile(path.resolve(root, "out", `export-${id}`, "project.json"), req, res);
+            return serveFile(path.resolve(outRoot(root), `export-${id}`, "project.json"), req, res);
           }
           if (url === "/@export/project.json") {
             if (!lastJobId) return res.end("{}");
-            return serveFile(path.resolve(root, "out", `export-${lastJobId}`, "project.json"), req, res);
+            return serveFile(path.resolve(outRoot(root), `export-${lastJobId}`, "project.json"), req, res);
           }
           
           match = url.match(/^\/@export\/([^/]+)\/media\/(.+)$/);
           if (match) {
             const id = match[1];
             const name = sanitizeFilename(decodeURIComponent(match[2]));
-            return serveFile(path.resolve(root, "out", `export-${id}`, "media", name), req, res);
+            return serveFile(path.resolve(outRoot(root), `export-${id}`, "media", name), req, res);
           }
           match = url.match(/^\/@export\/media\/(.+)$/);
           if (match) {
             const name = sanitizeFilename(decodeURIComponent(match[1]));
             if (lastJobId) {
-              const checkPath = path.resolve(root, "out", `export-${lastJobId}`, "media", name);
+              const checkPath = path.resolve(outRoot(root), `export-${lastJobId}`, "media", name);
               try {
                 await fs.access(checkPath);
                 return serveFile(checkPath, req, res);
@@ -308,7 +314,7 @@ export function exportPlugin(): Plugin {
                 // fall back to staging
               }
             }
-            return serveFile(path.resolve(root, "out", ".export-staging", "media", name), req, res);
+            return serveFile(path.resolve(outRoot(root), ".export-staging", "media", name), req, res);
           }
         }
         
