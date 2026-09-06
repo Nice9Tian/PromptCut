@@ -119,13 +119,23 @@ https://www.gyan.dev/ffmpeg/builds/#release-builds （选择对应版本的 sour
 | 模型 | 用途 | 许可证 | 来源 |
 | --- | --- | --- | --- |
 | TransNet V2 (`transnetv2.onnx`) | 镜头切换识别 | MIT | https://github.com/soCzech/TransNetV2 |
+| BootsTAPIR (`bootstapir_v2.pt`) | 运动追踪 | Apache-2.0 | https://github.com/google-deepmind/tapnet |
 
 - **TransNet V2**：Copyright (c) Tomáš Souček, Jakub Lokoč。随包的 `.onnx` 由官方
   TensorFlow checkpoint 经官方 `convert_weights.py` 转 PyTorch 后导出，未再训练，
   生成步骤见 [`tools/transnetv2/README.md`](../tools/transnetv2/README.md)。MIT 要求
   保留版权声明和许可证全文，已随包附带。
 
+- **BootsTAPIR**：Copyright (c) Google DeepMind。官方 checkpoint 原样收录，未做
+  转换或再训练；官方仓库明确说明 checkpoints 与代码同为 Apache 2.0。本模型的
+  PyTorch 推理代码也一并收录在 `python/promptcut_track/vendor/tapnet_torch/`
+  （同为 Apache 2.0，仅改了包内 import 路径，模型结构未动，LICENSE 全文在该目录下）。
+  Apache 2.0 要求保留版权声明、许可证全文和改动说明，三者均已附带。
+  **曾评估 CoTracker3 并否决**：其整个仓库为 CC-BY-NC，禁止商用，既不能随包分发，
+  用户拿它做商业剪辑也违约——见下面的检查清单。
+
 拓展包里的 Python 依赖（`wheels/`）各自的许可证见各 wheel 内的 `METADATA`；
+当前运动追踪拓展含 torch（BSD-3-Clause）、numpy（BSD-3-Clause）、einshape（Apache-2.0）、dm-tree（Apache-2.0）及它们的传递依赖。
 当前镜头识别拓展含 onnxruntime（MIT）、numpy（BSD-3-Clause）、protobuf
 （BSD-3-Clause）、flatbuffers（Apache-2.0）、packaging（Apache-2.0 / BSD-2-Clause）。
 **未逐一核实，分发前请确认。**

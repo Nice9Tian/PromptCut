@@ -62,6 +62,26 @@ const EXTENSIONS = {
     }],
     note: "装完后「镜头切换识别」会用 TransNetV2，认得硬切也认得溶解；不装则退回 ffmpeg scdet，只认硬切。",
   },
+  track: {
+    label: "运动追踪",
+    version: "1.0.0",
+    requiresApp: "0.2.6",  // promptcut_track 是这一版加进去的
+    requirements: path.join(PROJECT_ROOT, "python", "promptcut_track", "requirements-track.txt"),
+    // 注意这里是 .pt 不是 .onnx：TAPIR 里有 4 处 5 维 grid_sample，torch 的四条
+    // 导出路径全都导不出 ONNX，所以这个拓展直接带 PyTorch 跑原始权重。
+    // 也因此这个包比镜头识别大得多（torch 194 MB + 权重 208 MB）。
+    models: [{
+      file: "bootstapir_v2.pt",
+      from: option("--model"),
+      title: "BootsTAPIR (TAP-Net)",
+      license: "Apache-2.0",
+      source: "https://github.com/google-deepmind/tapnet",
+      copyright: "Copyright (c) Google DeepMind",
+      note: "官方 checkpoint 原样收录，未做任何转换或再训练。官方说明 checkpoints 与代码同为 Apache 2.0。"
+        + "（曾考虑 CoTracker3，因其全仓库为 CC-BY-NC、禁止商用，不能随包分发，故改用本模型。）",
+    }],
+    note: "装完后「运动追踪」用 BootsTAPIR 做任意点追踪，能判断遮挡；不装则退回浏览器内的模板匹配，只适合简单场景。",
+  },
   stt: {
     label: "语音识别",
     version: "1.0.0",

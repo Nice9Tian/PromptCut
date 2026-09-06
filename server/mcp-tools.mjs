@@ -225,6 +225,36 @@ export const tools = [
     side: "browser"
   },
   {
+    name: "track_points",
+    description: "在素材里追踪一个或多个点的运动轨迹，用来让卡片/字幕跟着画面里的目标走。较慢（250 帧约 26 秒），立即返回 jobId，用 get_track 轮询。装了运动追踪拓展时用 BootsTAPIR，能追任意点并判断目标被遮挡；没装时退回浏览器内的模板匹配，只适合纹理清晰、无遮挡、位移平缓的简单场景（返回的 engine 字段会说明用的是哪个，engineNote 会说明该档的局限）。参数：mediaId 必填；points 必填，写成 [[帧号, x, y], ...]，坐标是该素材的原始像素。注意：**要追的点必须落在有纹理的地方**——纯色区域内部（比如一块白色色块的正中）没有可对应的局部特征，追不住。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        mediaId: { type: "string" },
+        points: {
+          type: "array",
+          description: "[[帧号, x, y], ...]，原始像素坐标",
+          items: { type: "array", items: { type: "number" }, minItems: 3, maxItems: 3 },
+          minItems: 1
+        }
+      },
+      required: ["mediaId", "points"]
+    },
+    side: "browser"
+  },
+  {
+    name: "get_track",
+    description: "读取运动追踪结果，track_points 之后用它轮询和取数（未完成时返回 running:true 和进度百分比）。返回每个点逐帧的 xy 坐标和 visible（该帧目标是否可见——被遮挡或移出画面时为 false）。**把卡片绑到轨迹上时要看 visible**：不可见的帧不要硬贴上去，那几帧的坐标是模型的猜测，贴上去会让卡片飘走。同时会返回 engine 和 engineNote，说明这份轨迹是神经网络算的还是降级的模板匹配算的——降级结果精度低得多，不要据此下「画面里没有运动」这类结论。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        mediaId: { type: "string" }
+      },
+      required: ["mediaId"]
+    },
+    side: "browser"
+  },
+  {
     name: "auto_workflow",
     description: "对指定素材一键完成 视频到文字稿到动效卡 的整条流程 —— 没有文字稿就先自动转写并等待完成（最多 10 分钟），然后按文字稿切成 5 到 15 秒的段落、用确定性规则给每段配一张合适的动效卡，再给整条文字稿铺一张 caption-track 常驻字幕卡（放在单独的字幕轨上）。参数 mediaId 必填，maxCards 默认 12。用户说 自动做 或 一键配特效 时直接用这个工具。素材较长时本工具会在 50 秒后先返回一个带 jobId 且 running 为 true 的对象，流程在后台继续，用 auto_workflow_status 轮询即可，不要重复调用本工具。",
     inputSchema: {

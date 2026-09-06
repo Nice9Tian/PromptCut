@@ -56,7 +56,7 @@ export async function buildEnv(root: string, pythonPath: string): Promise<NodeJS
   // 按包逐个判断,不能只看 promptcut_stt:自带解释器的 site-packages 里有 stt、
   // 却没有后加的 promptcut_shots,一旦只看前者就会整段跳过,镜头识别永远报
   // No module named。
-  const PACKAGES = ["promptcut_stt", "promptcut_shots"];
+  const PACKAGES = ["promptcut_stt", "promptcut_shots", "promptcut_track"];
   const missing = PACKAGES.filter(
     (pkg) => !existsSync(path.join(pythonDir, "Lib", "site-packages", pkg)),
   );
