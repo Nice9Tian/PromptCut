@@ -348,3 +348,15 @@ export function IconClose(p: IconProps) {
     </Stroked>
   );
 }
+
+/** 皮肤/配色(调色盘) */
+export function IconPalette(p: IconProps) {
+  return (
+    <Stroked {...p}>
+      <path d="M12 3a9 9 0 1 0 0 18h1.5a2 2 0 0 0 0-4H13a1.5 1.5 0 0 1 0-3h2.5A4.5 4.5 0 0 0 20 9.5C20 5.9 16.4 3 12 3z" />
+      <circle cx="7.5" cy="11.5" r="1" fill="currentColor" />
+      <circle cx="11" cy="7.5" r="1" fill="currentColor" />
+      <circle cx="15.5" cy="9" r="1" fill="currentColor" />
+    </Stroked>
+  );
+}

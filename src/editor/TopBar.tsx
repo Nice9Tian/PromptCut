@@ -5,14 +5,13 @@ import { cancelExport, exportVideo, fetchExportFile, revealExport, importProject
 import { newProject, pickSaveTarget, serializeProc, writeProcToDisk, PROC_EXT } from "./io/proc";
 import { ExportDialog, type ExportState } from "./ExportDialog";
 import { ensureActiveDraftId, saveDraft, setActiveDraftId } from "./io/drafts";
-import { useSkin } from "../skins/useSkin";
-import { skinGroups } from "../skins/skins";
 import { Logo } from "../ui/Logo";
 import {
   IconExport,
   IconHome,
   IconNew,
   IconMore,
+  IconPalette,
   IconOpen,
   IconRedo,
   IconSave,
@@ -21,6 +20,7 @@ import {
 } from "../ui/icons";
 import { type LayoutMode, setLayoutMode, useLayoutMode } from "./layoutMode";
 import { ProjectSettingsDialog } from "./ProjectSettingsDialog";
+import { SkinDialog } from "./SkinDialog";
 import "../ui/toolbar.css";
 
 /** 顶栏宽度档位:宽档(全部展开)、中档(图标收缩)、窄档(折叠更多菜单) */
@@ -87,6 +87,7 @@ export function TopBar() {
 
   const [tier, setTier] = useState<BarTier>("wide");
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [skinOpen, setSkinOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [moreBtnRect, setMoreBtnRect] = useState<DOMRect | null>(null);
 
@@ -154,7 +155,6 @@ export function TopBar() {
     return () => window.removeEventListener("mousedown", onDown);
   });
 
-  const { skinId, setSkin } = useSkin();
   const layoutMode = useLayoutMode();
 
   // ResizeObserver 监听顶栏根元素自身 clientWidth 并带滞回换算档位
@@ -208,12 +208,9 @@ export function TopBar() {
     };
   }, [menuOpen]);
 
-  // 档位切回 wide/icon 时自动收起更多菜单
-  useEffect(() => {
-    if (tier !== "narrow" && menuOpen) {
-      setMenuOpen(false);
-    }
-  }, [tier, menuOpen]);
+  // 原来这里有条「档位切回 wide/icon 就收起菜单」——那是因为当时「⋯」只在窄档存在,
+  // 变宽后按钮没了、菜单会孤零零留在屏幕上。现在「⋯」任何宽度都在,这条规则会
+  // 在宽档一打开就立刻把菜单关掉,所以去掉了。菜单漂移由下面的 resize 监听负责。
 
   const run = (fn: () => Promise<unknown>) => () => fn().catch((e) => alert(String(e?.message ?? e)));
 
@@ -358,26 +355,12 @@ export function TopBar() {
       </div>
       <span className="pc-bar-sep" />
 
-      {/* B · 外观与布局:宽档/中档在顶栏显示,窄档整组收进 ⋯ 弹出菜单 */}
-      {tier !== "narrow" ? (
+      {/*
+        B · 外观与布局。皮肤已经不在这条上了——它是「⋯」菜单里的一项,点开是
+        带预设和自定义配色的对话框。布局和项目设置在宽档留在栏上,窄档收进「⋯」。
+      */}
+      {tier !== "narrow" && (
         <div className="pc-bar-group">
-          <label className="pc-bar-label" title="皮肤">皮肤</label>
-          <select
-            value={skinId}
-            onChange={(e) => setSkin(e.target.value)}
-            className="pc-select"
-            title="选择皮肤"
-          >
-            {skinGroups().map((g) => (
-              <optgroup key={g.group} label={g.group}>
-                {g.items.map((sk) => (
-                  <option key={sk.id} value={sk.id}>
-                    {sk.name}
-                  </option>
-                ))}
-              </optgroup>
-            ))}
-          </select>
           <label className="pc-bar-label" title="布局">布局</label>
           <select
             value={layoutMode}
@@ -395,76 +378,76 @@ export function TopBar() {
             collapsed={tier !== "wide"}
           />
         </div>
-      ) : (
-        <div className="pc-bar-group">
-          <button
-            ref={moreBtnRef}
-            type="button"
-            className="pc-btn pc-btn--icon"
-            title="更多设置"
-            aria-haspopup="true"
-            aria-expanded={menuOpen}
-            onClick={toggleMoreMenu}
-          >
-            <IconMore />
-          </button>
-        </div>
       )}
+      {/* 「⋯」任何宽度都在:皮肤只住在这里面,收起来就没入口了 */}
+      <div className="pc-bar-group">
+        <button
+          ref={moreBtnRef}
+          type="button"
+          className="pc-btn pc-btn--icon"
+          title="更多设置"
+          aria-haspopup="true"
+          aria-expanded={menuOpen}
+          onClick={toggleMoreMenu}
+        >
+          <IconMore />
+        </button>
+      </div>
 
       {/* ⋯ 弹出浮层菜单 */}
-      {menuOpen && tier === "narrow" && createPortal(
+      {menuOpen && createPortal(
         <div
           ref={menuRef}
           className="pc-more-menu"
           style={{
             top: (moreBtnRect?.bottom ?? 36) + 4,
-            left: Math.max(8, moreBtnRect?.left ?? 0),
+            // 菜单挂在按钮右端往左展开,窄窗口下不会顶出屏幕
+            left: Math.max(8, Math.min((moreBtnRect?.right ?? 0) - 200, window.innerWidth - 208)),
           }}
         >
-          <div className="pc-more-menu-row">
-            <label className="pc-bar-label" title="皮肤">皮肤</label>
-            <select
-              value={skinId}
-              onChange={(e) => setSkin(e.target.value)}
-              className="pc-select"
-              title="选择皮肤"
-            >
-              {skinGroups().map((g) => (
-                <optgroup key={g.group} label={g.group}>
-                  {g.items.map((sk) => (
-                    <option key={sk.id} value={sk.id}>
-                      {sk.name}
-                    </option>
-                  ))}
-                </optgroup>
-              ))}
-            </select>
-          </div>
-          <div className="pc-more-menu-row">
-            <label className="pc-bar-label" title="布局">布局</label>
-            <select
-              value={layoutMode}
-              onChange={(e) => setLayoutMode(e.target.value as LayoutMode)}
-              className="pc-select"
-              title="选择布局模式"
-            >
-              <option value="classic">传统式</option>
-              <option value="chat">对话式</option>
-            </select>
-          </div>
           <button
             type="button"
             className="pc-btn"
             style={{ width: "100%", justifyContent: "flex-start" }}
-            title="项目设置"
+            title="皮肤"
             onClick={() => {
               setMenuOpen(false);
-              setSettingsOpen(true);
+              setSkinOpen(true);
             }}
           >
-            <IconSettings />
-            <span className="pc-btn-label">项目设置</span>
+            <IconPalette />
+            <span className="pc-btn-label">皮肤…</span>
           </button>
+          {/* 布局和项目设置只在窄档收进来,宽档它们还在条上 */}
+          {tier === "narrow" && (
+            <>
+              <div className="pc-more-menu-row">
+                <label className="pc-bar-label" title="布局">布局</label>
+                <select
+                  value={layoutMode}
+                  onChange={(e) => setLayoutMode(e.target.value as LayoutMode)}
+                  className="pc-select"
+                  title="选择布局模式"
+                >
+                  <option value="classic">传统式</option>
+                  <option value="chat">对话式</option>
+                </select>
+              </div>
+              <button
+                type="button"
+                className="pc-btn"
+                style={{ width: "100%", justifyContent: "flex-start" }}
+                title="项目设置"
+                onClick={() => {
+                  setMenuOpen(false);
+                  setSettingsOpen(true);
+                }}
+              >
+                <IconSettings />
+                <span className="pc-btn-label">项目设置</span>
+              </button>
+            </>
+          )}
         </div>,
         document.body,
       )}
@@ -506,6 +489,7 @@ export function TopBar() {
       />
 
       {/* 项目设置对话框 */}
+      <SkinDialog open={skinOpen} onClose={() => setSkinOpen(false)} />
       <ProjectSettingsDialog
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}

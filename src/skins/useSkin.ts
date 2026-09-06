@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from "react";
 import { DEFAULT_SKIN, getSkin, skins } from "./skins";
+import { expandOverrides, subscribeOverrides } from "./overrides";
 
 /**
  * 皮肤状态:选中的 id 存 localStorage(pc.skin);应用时把该皮肤的 --ui-* 变量逐个写到 <html>,
@@ -22,8 +23,11 @@ function applySkin(id: string) {
   const skin = getSkin(id);
   const root = document.documentElement;
   for (const k of appliedVars) root.style.removeProperty(`--${k}`);
-  appliedVars = Object.keys(skin.vars);
-  for (const [k, v] of Object.entries(skin.vars)) root.style.setProperty(`--${k}`, v);
+  // 预设先铺一层,用户的自定义再压上去;两层的键都记进 appliedVars,下次换皮肤好一起撤干净
+  const custom = expandOverrides(skin.mode);
+  const merged = { ...skin.vars, ...custom };
+  appliedVars = Object.keys(merged);
+  for (const [k, v] of Object.entries(merged)) root.style.setProperty(`--${k}`, v);
   root.dataset.skin = skin.id;
   root.dataset.skinMode = skin.mode;
 }
@@ -54,6 +58,12 @@ export function setSkin(id: string) {
 }
 
 applySkin(currentSkin);
+
+// 用户改了自定义配色就地重刷,不用等换皮肤
+subscribeOverrides(() => {
+  applySkin(currentSkin);
+  listeners.forEach((l) => l());
+});
 
 export function useSkin() {
   const skinId = useSyncExternalStore(subscribe, getSnapshot);
