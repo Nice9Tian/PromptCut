@@ -11,6 +11,7 @@ import { useChatHistory } from "../../ai/useChatHistory";
 import { SttInstallProgress } from "./SttInstallProgress";
 import { useInstallJobs, matchInstallJob } from "../../ai/sttInstallStore";
 import { useToolbarLayout, MORE_KEY } from "./useToolbarLayout";
+import { isTeamMode, setTeamMode, subscribeTeamMode } from "../../ai/teamMode";
 import { ToolbarOverflowMenu } from "./ToolbarOverflowMenu";
 import { IconHistory, IconSettings } from "../../ui/icons";
 import type { OverflowEntry } from "./ToolbarOverflowMenu";
@@ -67,7 +68,7 @@ type ToolbarControl = OverflowEntry;
  * 顶栏放不下时往「⋯」菜单里收的顺序:排在前面的先收。
  * provider 不在表里——当前用哪个驱动是这个面板的身份,再窄也留在栏上。
  */
-const OVERFLOW_ORDER = ["diag", "thinking", "view", "new", "script", "auto"] as const;
+const OVERFLOW_ORDER = ["diag", "thinking", "team", "view", "new", "script", "auto"] as const;
 
 /**
  * 小方块的颜色分类。
@@ -390,6 +391,10 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
   const toggleTool = toggleIn(expanded, setExpanded);
 
   // 顶栏按实测宽度排布:窄了先换行、再收文字,还不够就把低优先级的收进「⋯」
+  // 分工模式的开关放在 ai/teamMode 里:编排器那边也要读它,放这儿会变成两份状态
+  const [teamMode, setTeamModeState] = useState(isTeamMode);
+  useEffect(() => subscribeTeamMode(setTeamModeState), []);
+
   const controlsRef = useRef<HTMLDivElement>(null);
   const measureRef = useRef<HTMLDivElement>(null);
   const toolbar = useToolbarLayout(controlsRef, measureRef, OVERFLOW_ORDER);
@@ -477,6 +482,25 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
             onChange={(e) => changeShowThinking(e.target.checked)}
           />
           <span className="ai-btn-label">显示思考</span>
+        </label>
+      ),
+    },
+    {
+      key: "team",
+      label: "分工模式",
+      node: (
+        <label
+          key="team"
+          data-key="team"
+          className="ai-thinking-toggle"
+          title="复杂请求先由制片主管拆成多个任务,能并行的同时跑。简单提问会自动跳过,不多花这道工序"
+        >
+          <input
+            type="checkbox"
+            checked={teamMode}
+            onChange={(e) => setTeamMode(e.target.checked)}
+          />
+          <span className="ai-btn-label">分工模式</span>
         </label>
       ),
     },
