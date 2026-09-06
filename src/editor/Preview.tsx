@@ -1,11 +1,16 @@
-import { useEffect, useRef, useState } from "react";
-import { Stage } from "../kernel/Stage";
-import { flattenOverlay, videoClipAt } from "../kernel/project";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { videoClipAt } from "../kernel/project";
 import { themeStyle } from "../themes";
 import { actions, useStore } from "../store/project";
+import type { PcStageApi } from "../StageView";
 
 /**
- * 中央预览:视频层 + 动效舞台,按容器缩放。播放循环也在这里(rAF 推进 store.t)。
+ * 中央预览:视频层 + 动效渲染面,按容器缩放。播放循环也在这里(rAF 推进 store.t)。
+ *
+ * 动效不在这个文档里播:它跑在下面那个 ?stage=1 的 iframe(渲染面)里,时间被接管,
+ * 这里只下发「现在是时间轴第几秒」,渲染面渲染出那一帧。所以拖播放头到片段中间
+ * 看到的是那一刻该有的画面,而不是把进场动画从头重播一遍。详见 src/StageView.tsx。
+ *
  * 视频层:按 videoClipAt 找当前该播的素材段,src 变了换源,时间对不上(>0.2s)就 seek。
  */
 export function Preview() {
@@ -15,9 +20,17 @@ export function Preview() {
   const playToken = useStore((s) => s.playToken);
   const boxRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const frameRef = useRef<HTMLIFrameElement>(null);
   const [scale, setScale] = useState(0.4);
+  const [stageReady, setStageReady] = useState(false);
   const tRef = useRef(t);
   tRef.current = t;
+  const playingRef = useRef(playing);
+  playingRef.current = playing;
+
+  const stage = useCallback((): PcStageApi | null => {
+    return frameRef.current?.contentWindow?.__pcStage ?? null;
+  }, []);
 
   // 播放循环
   useEffect(() => {
@@ -51,6 +64,28 @@ export function Preview() {
     return () => ro.disconnect();
   }, [project.width, project.height]);
 
+  // 渲染面就绪:它挂载完会 postMessage 过来;刷新顺序不定,onLoad 里再探一次
+  useEffect(() => {
+    const onMessage = (e: MessageEvent) => {
+      if (e.source === frameRef.current?.contentWindow && (e.data as any)?.type === "pc-stage-ready") setStageReady(true);
+    };
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, []);
+
+  // 项目文档变了就整份发过去(渲染面自己判断要不要重跑这一帧)
+  useEffect(() => {
+    if (!stageReady) return;
+    stage()?.setProject(project);
+  }, [stageReady, project, stage]);
+
+  // 时间变了就下发。播放中是连续推进;拖播放头 / 跳转 / 重播(playToken 变)都按跳转处理:
+  // 重挂载 + 从入点补跑到那一刻。两者合在一个 effect 里,一次 seek 只渲染一帧。
+  useEffect(() => {
+    if (!stageReady) return;
+    stage()?.render(t, { jump: !playingRef.current });
+  }, [stageReady, t, playToken, stage]);
+
   // 视频层同步
   const hit = videoClipAt(project, t);
   const videoSrc = hit?.media.url ?? "";
@@ -67,7 +102,6 @@ export function Preview() {
     }
   }, [playing, videoTime, videoSrc]);
 
-  const timeline = flattenOverlay(project);
   return (
     <div ref={boxRef} className="w-full h-full grid place-items-center overflow-hidden">
       <div
@@ -86,9 +120,25 @@ export function Preview() {
             {videoSrc && (
               <video ref={videoRef} src={videoSrc} muted playsInline preload="auto" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }} />
             )}
-            <div style={{ position: "absolute", inset: 0 }}>
-              <Stage timeline={timeline} t={t} playToken={playToken} />
-            </div>
+            <iframe
+              ref={frameRef}
+              data-pc="stage-frame"
+              title="预览舞台"
+              src={`${location.pathname}?stage=1`}
+              onLoad={() => {
+                if (frameRef.current?.contentWindow?.__pcStage) setStageReady(true);
+              }}
+              style={{
+                position: "absolute",
+                inset: 0,
+                width: project.width,
+                height: project.height,
+                border: 0,
+                display: "block",
+                background: "transparent",
+                colorScheme: "normal",
+              }}
+            />
           </div>
         </div>
       </div>

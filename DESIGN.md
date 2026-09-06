@@ -14,6 +14,11 @@
 - `src/cards/native/` 自家 Motion 卡(每卡一个文件,`index.ts` 汇总导出 `nativeCards`)
 - `src/demo.ts` 演示时间轴 `demoTimeline`,预览和导出共用
 - `src/ExportView.tsx` 导出视图(`?export=1`),暴露 `window.__pcSetT(sec)`、`window.__pcReady`
+- `src/StageView.tsx` 预览渲染面(`?stage=1`),编辑器用 iframe 装着,暴露 `window.__pcStage`;
+  时间由 `src/render/stageClock.ts` 接管(驱动式 rAF + `performance.now`),CSS/WAAPI 动画由
+  `src/render/pinAnimations.ts` 钉住。预览显示的是「时间轴 t 那一帧」,不按墙上时钟自己播。
+  时钟必须比 motion 先装,所以 `src/main.tsx` 第一行 import 的是 `./render/stageClockEntry`。
+  详见 EDITOR-DESIGN.md「预览契约」
 - `scripts/export-frames.mjs` 导出脚本;`scripts/verify-determinism.mjs` 导两遍比对
 
 ## 卡片怎么写
