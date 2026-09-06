@@ -50,12 +50,15 @@ fs.mkdirSync('out/left', { recursive: true });
       await new Promise(r => setTimeout(r, 500));
     }
     
+    // 探「有没有被弹窗盖住」:用顶级分页按钮当探针。
+    // 卡片网格现在藏在「素材 → 卡片」分页里,切到别的分页时它 display:none,拿它当探针会永远判成被盖住。
     const clickable = await page.evaluate(() => {
-      const cell = document.querySelector('[data-pc-card]');
-      if (!cell) return false;
-      const r = cell.getBoundingClientRect();
-      const top = document.elementFromPoint(r.left + r.width/2, r.top + r.height/2);
-      return !!(top && cell.contains(top));
+      const probe = document.querySelector('[data-pc-top-tab="assets"]') || document.querySelector('[data-pc-card]');
+      if (!probe) return false;
+      const r = probe.getBoundingClientRect();
+      if (r.width === 0 || r.height === 0) return false;
+      const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      return !!(top && (probe === top || probe.contains(top)));
     });
     
     if (clickable) {
@@ -87,6 +90,7 @@ fs.mkdirSync('out/left', { recursive: true });
       await ensureClickable();
       await fn();
     } catch(e) {
+      console.log(`  (${name} 首次抛错: ${e.message})`);
       if (currentUrl !== "http://127.0.0.1:5194/left-probe.html") {
         currentUrl = "http://127.0.0.1:5194/left-probe.html";
         console.log('ENTRY: /left-probe.html (隔离 · 整机被别的任务的遮罩挡住)');
@@ -126,7 +130,22 @@ fs.mkdirSync('out/left', { recursive: true });
       logFail('01-initial: 没找到对应的文字或结构');
     }
 
+    // 左栏是两级分页了(素材:卡片/视频/字幕;编辑:参数/代码),每步先切到自己要的那页
+    const showAssets = async (sub) => {
+      await page.click('[data-pc-top-tab="assets"]');
+      await new Promise(r => setTimeout(r, 80));
+      await page.click(`[data-pc-tab="${sub}"]`);
+      await new Promise(r => setTimeout(r, 120));
+    };
+    const showEdit = async (sub) => {
+      await page.click('[data-pc-top-tab="edit"]');
+      await new Promise(r => setTimeout(r, 80));
+      await page.click(`[data-pc-tab="${sub}"]`);
+      await new Promise(r => setTimeout(r, 120));
+    };
+
     await runStep('02-hover', async () => {
+      await showAssets('cards');
       await page.hover('[data-pc-card="mu-number-ticker"]');
       await new Promise(r => setTimeout(r, 900));
       await page.screenshot({ path: 'out/left/02-hover.png' });
@@ -148,6 +167,7 @@ fs.mkdirSync('out/left', { recursive: true });
     });
 
     await runStep('03-added', async () => {
+      await showAssets('cards');
       await page.evaluate(() => window.__pcStoreLeft.actions.seek(24.5));
       const clipCountBefore = await page.evaluate(() => window.__pcStoreLeft.getState().project.tracks.flatMap(t=>t.clips).length);
       
@@ -171,6 +191,7 @@ fs.mkdirSync('out/left', { recursive: true });
     });
 
     await runStep('04-form', async () => {
+      await showEdit('form');
       await ensureSelection();
       await page.screenshot({ path: 'out/left/04-form.png' });
       const firstInput = await page.$('[data-pc-param]');
@@ -191,6 +212,7 @@ fs.mkdirSync('out/left', { recursive: true });
     });
 
     await runStep('05-switched', async () => {
+      await showEdit('form');
       await ensureSelection();
       const selectElem = await page.$('[data-pc="switch-card"]');
       if (selectElem) {
@@ -209,6 +231,7 @@ fs.mkdirSync('out/left', { recursive: true });
     });
 
     await runStep('06-code', async () => {
+      await showEdit('form');
       await ensureSelection();
       await page.click('[data-pc-tab="code"]');
       await new Promise(r => setTimeout(r, 100));
@@ -241,6 +264,12 @@ fs.mkdirSync('out/left', { recursive: true });
            const r = parseInt(m[1]), g = parseInt(m[2]), b = parseInt(m[3]);
            return r > g + 50 && r > b + 50;
         }
+        // Tailwind v4 输出的是 oklch(L C H):红色在色相 10-50 且有饱和度
+        const ok = color.match(new RegExp("oklch\\(([0-9.]+)\\s+([0-9.]+)\\s+([0-9.]+)"));
+        if (ok) {
+          const c = parseFloat(ok[2]), h = parseFloat(ok[3]);
+          return c > 0.1 && h > 10 && h < 50;
+        }
         return el.classList.contains('border-red-500');
       });
       if (hasRedBorder) logPass('06-code-invalid: borderColor R 明显大于 G/B');
@@ -269,25 +298,48 @@ fs.mkdirSync('out/left', { recursive: true });
       await page.screenshot({ path: 'out/left/08-code-valid.png' });
     });
 
-    await runStep('07-split', async () => {
-      const splitBar = await page.$('[data-pc="split"]');
-      const upperPanel = await page.$('[data-pc="library"]');
-      const boxBefore = await upperPanel.boundingBox();
-      const barBox = await splitBar.boundingBox();
-      
-      await page.mouse.move(barBox.x + 10, barBox.y + 2);
-      await page.mouse.down();
-      await page.mouse.move(barBox.x + 10, barBox.y + 82, { steps: 10 });
-      await page.mouse.up();
-      await new Promise(r => setTimeout(r, 200));
-      
-      const boxAfter = await upperPanel.boundingBox();
-      if (boxAfter.height > boxBefore.height) logPass(`07-split: 高度变大了 (${boxBefore.height} -> ${boxAfter.height})`);
-      else logFail(`07-split: 高度没变大 (${boxBefore.height} -> ${boxAfter.height})`);
-      await page.screenshot({ path: 'out/left/09-split.png' });
+    await runStep('07-tabs', async () => {
+      // 以前这里验的是上下分屏拖动;左栏改成两级分页后分屏没有了,改验分页切换
+      const shown = (sel) => page.evaluate((s) => {
+        const el = document.querySelector(s);
+        return !!el && el.getClientRects().length > 0;
+      }, sel);
+
+      await showAssets('cards');
+      const cardsOk = (await shown('[data-pc="search"]')) && !(await shown('[data-pc="inspector"]'));
+      if (cardsOk) logPass('07-tabs: 素材 → 卡片,编辑面板隐藏');
+      else logFail('07-tabs: 素材 → 卡片 状态不对');
+
+      await showAssets('videos');
+      const videosOk = !(await shown('[data-pc="search"]'));
+      if (videosOk) logPass('07-tabs: 素材 → 视频,卡片网格隐藏');
+      else logFail('07-tabs: 素材 → 视频 状态不对');
+
+      await showAssets('captions');
+      const captionsOk = !(await shown('[data-pc="search"]'));
+      if (captionsOk) logPass('07-tabs: 素材 → 字幕');
+      else logFail('07-tabs: 素材 → 字幕 状态不对');
+
+      await showEdit('form');
+      const editOk = (await shown('[data-pc="inspector"]')) && !(await shown('[data-pc="library"]'));
+      if (editOk) logPass('07-tabs: 编辑 → 参数,素材面板隐藏');
+      else logFail('07-tabs: 编辑 → 参数 状态不对');
+
+      const remembered = await page.evaluate(() => [
+        localStorage.getItem('pc.left.tab'),
+        localStorage.getItem('pc.left.assetTab'),
+        localStorage.getItem('pc.left.editTab'),
+      ]);
+      if (remembered[0] === 'edit' && remembered[1] === 'captions' && remembered[2] === 'form') {
+        logPass('07-tabs: 分页选择写进了 localStorage');
+      } else {
+        logFail('07-tabs: localStorage 没记住分页 ' + JSON.stringify(remembered));
+      }
+      await page.screenshot({ path: 'out/left/09-tabs.png' });
     });
 
     await runStep('08-media', async () => {
+      await showAssets('videos');
       await page.evaluate(() => {
         window.__pcStoreLeft.actions.addMedia({ kind: "video", name: "测试片.mp4", url: "blob:fake", duration: 12.5 });
       });

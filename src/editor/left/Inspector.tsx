@@ -1,14 +1,13 @@
-import { useState } from "react";
 import { useStore, actions } from "../../store/project";
 import { findClip } from "../../kernel/project";
 import { getCard, allCards } from "../../kernel/registry";
 import { ParamsForm } from "./ParamsForm";
 import { CodeTab } from "./CodeTab";
 
-export function Inspector() {
+/** 编辑分页的内容。参数 / 代码这一级由左栏的二级分页栏控制,这里只按 tab 渲染。 */
+export function Inspector({ tab }: { tab: "form" | "code" }) {
   const selId = useStore(s => s.selection[0]);
   const project = useStore(s => s.project);
-  const [tab, setTab] = useState<"form" | "code">("form");
 
   const hit = selId ? findClip(project, selId) : null;
 
@@ -98,23 +97,6 @@ export function Inspector() {
         </div>
       </div>
       
-      <div className="h-8 flex items-center gap-1 px-2 border-b border-neutral-800 text-xs shrink-0">
-        <button 
-          data-pc-tab="form"
-          className={`flex h-full items-center px-1 ${tab === 'form' ? 'text-neutral-100 border-b-2 border-b-neutral-100' : 'text-neutral-500 hover:text-neutral-300'}`}
-          onClick={() => setTab("form")}
-        >
-          常规
-        </button>
-        <button 
-          data-pc-tab="code"
-          className={`flex h-full items-center px-1 ${tab === 'code' ? 'text-neutral-100 border-b-2 border-b-neutral-100' : 'text-neutral-500 hover:text-neutral-300'}`}
-          onClick={() => setTab("code")}
-        >
-          代码
-        </button>
-      </div>
-
       <div className="flex-1 min-h-0 overflow-y-auto pc-l-scroll">
         {tab === "form" && <ParamsForm clip={clip} cardDef={cardDef} />}
         {tab === "code" && <CodeTab clip={clip} />}
