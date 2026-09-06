@@ -791,3 +791,193 @@
   color: var(--danger);
   cursor: pointer;
 }
+
+/* ── 右栏(配色诊断与修正 v2 整屏) ─────────────────────────────────────
+ * 整块 L2(见 editor/shell.css)。
+ * 标题行:名字 13px + 6px 状态点 + 「已连接」弱文字,右侧两个 26 方图标钮。
+ * 控件行:统一 11px 胶囊,L3 底,选中强调色描边 + 主文字,未选控件描边 + 次文字。 */
+.ai-panel-header {
+  padding: 12px 14px 10px;
+  gap: 10px 8px;
+  border-bottom: 0;
+}
+.ai-panel-title {
+  font-size: 13px;
+  font-weight: 500;
+  gap: 8px;
+}
+.ai-status-dot {
+  width: 6px;
+  height: 6px;
+  background-color: var(--ui-fg-faint);
+}
+.ai-status-dot.is-connected {
+  background-color: var(--ui-success);
+}
+.ai-status-text {
+  font-size: 10.5px;
+  font-weight: 400;
+  color: var(--ui-fg-faint);
+}
+.ai-title-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+}
+.ai-icon-btn {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  background: var(--ui-panel-2);
+  border: 1px solid var(--ui-border-strong);
+  border-radius: 4px;
+  color: var(--ui-fg-muted);
+  cursor: pointer;
+}
+.ai-icon-btn:hover {
+  color: var(--ui-fg);
+  background: var(--ui-float);
+}
+.ai-icon-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* 控件行改成胶囊行:靠左排、可换行、5px 间距,和标题行之间有一道 hairline */
+.ai-panel-controls {
+  justify-content: flex-start;
+  gap: 5px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--ui-border);
+}
+.ai-panel-controls > * {
+  height: 24px;
+}
+.ai-chip,
+.ai-panel-controls .ai-gear-btn,
+.ai-panel-controls .ai-new-chat-btn,
+.ai-panel-controls .ai-provider-select,
+.ai-panel-controls .ai-thinking-toggle,
+.ai-panel-controls .ai-mode-toggle button {
+  font-size: 11px;
+  font-weight: 400;
+  padding: 0 9px;
+  border-radius: 3px;
+  background: var(--ui-panel-2);
+  border: 1px solid var(--ui-border-strong);
+  color: var(--ui-fg-muted);
+  line-height: 1;
+}
+.ai-panel-controls .ai-gear-btn:hover,
+.ai-panel-controls .ai-new-chat-btn:hover,
+.ai-panel-controls .ai-thinking-toggle:hover,
+.ai-panel-controls .ai-mode-toggle button:hover {
+  color: var(--ui-fg);
+  border-color: var(--ui-border-strong);
+  background: var(--ui-float);
+}
+.ai-panel-controls .ai-mode-toggle {
+  border: 0;
+  border-radius: 0;
+  overflow: visible;
+  gap: 5px;
+}
+.ai-panel-controls .ai-mode-toggle button {
+  height: 24px;
+}
+.ai-panel-controls .ai-mode-toggle button.is-on,
+.ai-chip.is-on {
+  color: var(--ui-fg);
+  border-color: var(--ui-accent);
+  background: var(--ui-panel-2);
+}
+.ai-panel-controls .ai-provider-select {
+  min-width: 0;
+  padding-right: 22px;
+  appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, var(--ui-fg-faint) 50%), linear-gradient(135deg, var(--ui-fg-faint) 50%, transparent 50%);
+  background-position: calc(100% - 12px) 10px, calc(100% - 8px) 10px;
+  background-size: 4px 4px;
+  background-repeat: no-repeat;
+  color: var(--ui-fg);
+}
+.ai-panel-controls .ai-thinking-toggle input {
+  width: 11px;
+  height: 11px;
+}
+.ai-panel-controls.is-compact .ai-gear-btn {
+  padding: 0 7px;
+}
+.ai-more-btn {
+  height: 24px;
+}
+
+/* 输入行:「+」30 方钮、输入框 L3、发送键 30 方实心强调色 */
+.ai-input-area {
+  padding: 10px 14px 12px;
+  gap: 7px;
+  background: transparent;
+}
+.ai-input-row {
+  gap: 7px;
+}
+.ai-plus-btn,
+.ai-send-btn {
+  width: 30px;
+  height: 30px;
+  border-radius: 4px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  font-size: 14px;
+  line-height: 1;
+}
+.ai-plus-btn {
+  background: var(--ui-panel-2);
+  border: 1px solid var(--ui-border-strong);
+  color: var(--ui-fg-muted);
+}
+.ai-plus-btn:hover {
+  color: var(--ui-fg);
+  background: var(--ui-float);
+}
+.ai-send-btn {
+  background: var(--ui-accent);
+  border: 1px solid var(--ui-accent);
+  color: var(--ui-accent-fg);
+  font-weight: 600;
+}
+.ai-send-btn:hover {
+  background: var(--ui-accent-hover);
+}
+.ai-input-area textarea {
+  min-height: 30px;
+  padding: 6px 10px;
+  background: var(--ui-panel-2);
+  border: 1px solid var(--ui-border-strong);
+  border-radius: 4px;
+  color: var(--ui-fg);
+  font-size: 12px;
+}
+.ai-input-area textarea::placeholder {
+  color: var(--ui-fg-faint);
+}
+.ai-input-area textarea:focus {
+  border-color: var(--ui-accent);
+}
+/* 消息区的时间戳与助手署名行 */
+.ai-msg-stamp {
+  text-align: center;
+  font-family: var(--ui-font-mono);
+  font-size: 10px;
+  color: var(--ui-fg-faint);
+}
+.ai-msg-byline {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 10.5px;
+  color: var(--ui-fg-faint);
+}

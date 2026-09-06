@@ -262,7 +262,7 @@ export function TopBar() {
   };
 
   return (
-    <div ref={barRef} className="pc-bar">
+    <div ref={barRef} className="pc-bar pc-bar--main">
       <Logo size={22} />
       <span className="pc-projname">
         {name}

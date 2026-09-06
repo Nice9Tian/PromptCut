@@ -12,6 +12,7 @@ import { nativeDemoClips } from "./cards/native";
 import { useSkin } from "./skins/useSkin";
 import { useLayoutMode } from "./editor/layoutMode";
 import "./editor/shell.css";
+import { StatusBar } from "./editor/StatusBar";
 import { DependencyPrompt } from "./editor/DependencyPrompt";
 import { motion } from "motion/react";
 
@@ -225,6 +226,7 @@ export default function Editor() {
           <TimelineView />
         </motion.footer>
       )}
+      <StatusBar />
     </div>
   );
 }

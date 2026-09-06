@@ -335,3 +335,54 @@
   }
 }
 
+
+/* ── 配色诊断与修正 v2 整屏:顶栏 52 · 按钮 30 · 字号 12 ─────────────────
+ * 组件表那一节定的是 36/28/13;整屏 mock 把顶栏放大到 52 高、控件 30 高、字号 12,
+ * 分隔线不再叠强调色内阴影,只留一条 hairline。预览区和时间线的小条另有各自的类,
+ * 不跟着这里的 --main 走。 */
+.pc-bar--main {
+  height: 52px;
+  padding: 0 14px;
+  gap: 14px;
+  font-size: 12px;
+  box-shadow: none;
+  border-bottom: 1px solid var(--ui-border);
+}
+.pc-bar--main .pc-bar-group {
+  gap: 7px;
+}
+.pc-bar--main .pc-btn,
+.pc-bar--main .pc-select {
+  height: 30px;
+  font-size: 12px;
+}
+.pc-bar--main .pc-btn {
+  padding: 0 12px;
+}
+.pc-bar--main .pc-btn--icon,
+.pc-bar--main .pc-btn--collapsed {
+  width: 30px;
+  padding: 0;
+}
+.pc-bar--main .pc-btn--primary {
+  padding: 0 13px;
+}
+.pc-bar--main .pc-select {
+  padding: 0 10px;
+}
+.pc-bar--main .pc-bar-sep {
+  height: 22px;
+  margin: 0;
+  background: var(--ui-float);
+}
+.pc-bar--main .pc-bar-label {
+  font-size: 11.5px;
+}
+.pc-bar--main .pc-logo-word {
+  letter-spacing: 0.15em;
+}
+.pc-bar--main .pc-projname {
+  font-size: 11.5px;
+  color: var(--ui-fg-faint);
+  letter-spacing: 0.02em;
+}

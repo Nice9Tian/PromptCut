@@ -1,0 +1,223 @@
+/*
+ * 预览区(配色诊断与修正 v2 整屏,中栏)。
+ * 整块画布 L0;工具行直接铺在画布上,没有条底;播放栏是一张 L1 卡片带 hairline。
+ * 工具按钮 28 方:选中 L3 底 + 强调色描边,未选 L2 底 + hairline。
+ */
+.pc-pv {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 18px;
+  height: 100%;
+  min-height: 0;
+  background: var(--ui-bg);
+}
+
+/* ── 工具行 ─────────────────────────────────────────────────────────── */
+.pc-pv-tools {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-shrink: 0;
+}
+.pc-pv-tool {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  background: var(--ui-panel);
+  border: 1px solid var(--ui-border);
+  border-radius: 4px;
+  color: var(--ui-fg-muted);
+  cursor: pointer;
+}
+.pc-pv-tool:hover {
+  color: var(--ui-fg);
+  border-color: var(--ui-border-strong);
+}
+.pc-pv-tool.is-on {
+  background: var(--ui-panel-2);
+  border-color: var(--ui-accent);
+  color: var(--ui-accent);
+}
+.pc-pv-meta {
+  margin-left: auto;
+  font-family: var(--ui-font-mono);
+  font-size: 11px;
+  color: var(--ui-fg-faint);
+  white-space: nowrap;
+}
+.pc-pv-badge {
+  background: var(--ui-accent-soft);
+  color: color-mix(in oklab, var(--ui-accent) 80%, var(--ui-fg));
+  font-size: 10.5px;
+  padding: 3px 8px;
+  border-radius: 3px;
+  white-space: nowrap;
+}
+
+/* ── 画面 ───────────────────────────────────────────────────────────── */
+.pc-pv-stage {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  place-items: center;
+  position: relative;
+  overflow: hidden;
+}
+.pc-pv-frame {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--ui-border);
+}
+/* 四角标记:16 方,hairline 强一档 */
+.pc-pv-corner {
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  pointer-events: none;
+  z-index: 11;
+  border-color: var(--ui-border-strong);
+  border-style: solid;
+  border-width: 0;
+}
+.pc-pv-corner.tl { left: 10px; top: 10px; border-left-width: 1px; border-top-width: 1px; }
+.pc-pv-corner.tr { right: 10px; top: 10px; border-right-width: 1px; border-top-width: 1px; }
+.pc-pv-corner.bl { left: 10px; bottom: 10px; border-left-width: 1px; border-bottom-width: 1px; }
+.pc-pv-corner.br { right: 10px; bottom: 10px; border-right-width: 1px; border-bottom-width: 1px; }
+
+/* ── 播放栏:L1 卡片 ─────────────────────────────────────────────────── */
+.pc-pv-ctrl {
+  flex-shrink: 0;
+  background: var(--ui-bg-2);
+  border: 1px solid var(--ui-border);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.pc-pv-progress {
+  position: relative;
+  height: 3px;
+  background: var(--ui-panel-2);
+  cursor: pointer;
+}
+.pc-pv-progress-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: var(--ui-accent);
+}
+.pc-pv-progress-knob {
+  position: absolute;
+  top: -4px;
+  width: 11px;
+  height: 11px;
+  margin-left: -5px;
+  background: var(--ui-fg);
+  border-radius: 50%;
+  pointer-events: none;
+}
+.pc-pv-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.pc-pv-btns {
+  display: flex;
+  gap: 7px;
+}
+.pc-pv-btn {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  background: var(--ui-panel-2);
+  border: 1px solid var(--ui-border-strong);
+  border-radius: 4px;
+  color: var(--ui-fg-muted);
+  cursor: pointer;
+}
+.pc-pv-btn:hover {
+  color: var(--ui-fg);
+  background: var(--ui-float);
+}
+.pc-pv-btn.is-on {
+  border-color: var(--ui-accent);
+  color: var(--ui-accent);
+}
+/* 播放键是这张卡片里唯一的实心强调色 */
+.pc-pv-btn--play {
+  background: var(--ui-accent);
+  border-color: var(--ui-accent);
+  color: var(--ui-accent-fg);
+}
+.pc-pv-btn--play:hover {
+  background: var(--ui-accent-hover);
+  color: var(--ui-accent-fg);
+}
+.pc-pv-time {
+  font-family: var(--ui-font-mono);
+  font-weight: 500;
+  font-size: 15px;
+  letter-spacing: 0.02em;
+  color: var(--ui-fg);
+  font-variant-numeric: tabular-nums;
+  cursor: text;
+}
+.pc-pv-time input {
+  width: 62px;
+  background: transparent;
+  color: inherit;
+  border: 0;
+  outline: none;
+  font: inherit;
+  text-align: right;
+}
+.pc-pv-time-total {
+  font-family: var(--ui-font-mono);
+  font-size: 13px;
+  color: var(--ui-fg-faint);
+  font-variant-numeric: tabular-nums;
+}
+/* 音量:扬声器 + 64×3 的滑条,滑条用次文字色而不是强调色(它不是主操作) */
+.pc-pv-vol {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.pc-pv-vol-btn {
+  background: none;
+  border: 0;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  color: var(--ui-fg-muted);
+  cursor: pointer;
+}
+.pc-pv-vol-btn:hover {
+  color: var(--ui-fg);
+}
+.pc-pv-vol-track {
+  position: relative;
+  width: 64px;
+  height: 3px;
+  background: var(--ui-panel-2);
+  cursor: pointer;
+}
+.pc-pv-vol-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: var(--ui-fg-muted);
+}
+.pc-pv-vol input[type="range"] {
+  position: absolute;
+  inset: -8px 0;
+  width: 100%;
+  height: 19px;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}

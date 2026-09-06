@@ -16,6 +16,7 @@ import { Playhead } from "./Playhead";
 import { Toolbar } from "./Toolbar";
 import { Scrollbar } from "./Scrollbar";
 import { ResizeHandle } from "../ResizeHandle";
+import { IconPlus } from "../../ui/icons";
 import "./timeline.css";
 
 // 仅供调试和自动化测试使用，不是正式接口
@@ -60,22 +61,17 @@ function TimelineInner() {
         {/* Left Headers Column */}
         <div className="relative flex-shrink-0 border-r border-neutral-800 sticky left-0 bg-neutral-900 z-30 flex flex-col shadow-[4px_0_12px_rgba(0,0,0,0.5)]" style={{ width: headerW }}>
           <div className="flex-shrink-0 sticky top-0 z-40 bg-neutral-950" style={{ height: RANGE_H }} />
-          <div
-            className="h-8 flex-shrink-0 sticky bg-neutral-950 border-b border-neutral-800 z-40 flex items-center justify-between px-2"
-            style={{ top: RANGE_H }}
-          >
-            <span className="text-xs font-bold text-neutral-500">序列</span>
+          <div className="pc-tl-hdr flex-shrink-0 sticky bg-neutral-950 z-40" style={{ top: RANGE_H }}>
+            序列
           </div>
           <div className="flex-1 flex flex-col">
             {tracks.map((track, i) => (
               <TrackHeader key={track.id} track={track} index={i} />
             ))}
-            <div className="p-2 mt-2">
-              <button
-                onClick={() => actions.addTrack()}
-                className="w-full bg-neutral-800 hover:bg-neutral-700 py-1.5 rounded border border-neutral-700 text-xs font-medium"
-              >
-                ＋ 序列
+            <div className="pc-tl-addtrack-wrap">
+              <button type="button" className="pc-tl-addtrack" onClick={() => actions.addTrack()}>
+                <IconPlus size={12} />
+                序列
               </button>
             </div>
           </div>
@@ -98,7 +94,7 @@ function TimelineInner() {
           <div className="flex-shrink-0 sticky top-0 z-20" style={{ height: RANGE_H }}>
             <RangeBar />
           </div>
-          <div className="h-8 flex-shrink-0 sticky bg-neutral-950 border-b border-neutral-800 z-20" style={{ top: RANGE_H }}>
+          <div className="flex-shrink-0 sticky bg-neutral-950 z-20" style={{ top: RANGE_H, height: 26 }}>
             <Ruler />
           </div>
           <div

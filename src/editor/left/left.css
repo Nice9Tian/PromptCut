@@ -11,3 +11,170 @@
 .pc-l-scroll::-webkit-scrollbar-track {
   background-color: transparent;
 }
+
+/* ── 素材库(配色诊断与修正 v2 整屏,左栏) ─────────────────────────────
+ * 整块 L1(见 editor/shell.css),控件 L3。
+ * 顶级分页:12.5px,选中主文字 + 2px 强调色下划线,未选弱文字。
+ * 二级分页:11.5px 胶囊,选中 L3 底 + 控件描边,未选次文字,可换行。 */
+.pc-l-tabs {
+  display: flex;
+  gap: 20px;
+  padding: 11px 14px 0;
+  font-size: 12.5px;
+  flex-shrink: 0;
+}
+.pc-l-tab {
+  padding: 0 0 9px;
+  color: var(--ui-fg-faint);
+  background: none;
+  border: 0;
+  font: inherit;
+  cursor: pointer;
+  line-height: 1.2;
+}
+.pc-l-tab:hover {
+  color: var(--ui-fg-muted);
+}
+.pc-l-tab.is-on {
+  color: var(--ui-fg);
+  box-shadow: inset 0 -2px 0 var(--ui-accent);
+}
+.pc-l-subtabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 9px 12px;
+  border-top: 1px solid var(--ui-border);
+  flex-shrink: 0;
+}
+.pc-l-pill {
+  font-size: 11.5px;
+  color: var(--ui-fg-muted);
+  padding: 3px 7px;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  background: none;
+  font-family: inherit;
+  cursor: pointer;
+  line-height: 1.3;
+  white-space: nowrap;
+}
+.pc-l-pill:hover {
+  color: var(--ui-fg);
+}
+.pc-l-pill.is-on {
+  color: var(--ui-fg);
+  background: var(--ui-panel-2);
+  border-color: var(--ui-border-strong);
+}
+
+/* 工具行:「+」28 方钮 + 搜索框,都是 L3 + 控件描边 + 4 圆角 */
+.pc-l-tools {
+  display: flex;
+  gap: 7px;
+  padding: 4px 12px 12px;
+  flex-shrink: 0;
+}
+.pc-l-add {
+  width: 28px;
+  height: 28px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  background: var(--ui-panel-2);
+  border: 1px solid var(--ui-border-strong);
+  border-radius: 4px;
+  color: var(--ui-fg-muted);
+  cursor: pointer;
+  padding: 0;
+}
+.pc-l-add:hover {
+  color: var(--ui-fg);
+  background: var(--ui-float);
+}
+.pc-l-search {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 9px;
+  background: var(--ui-panel-2);
+  border: 1px solid var(--ui-border-strong);
+  border-radius: 4px;
+  color: var(--ui-fg-faint);
+}
+.pc-l-search:focus-within {
+  border-color: var(--ui-accent);
+}
+.pc-l-search svg {
+  flex: none;
+}
+.pc-l-search input {
+  flex: 1;
+  min-width: 0;
+  background: none;
+  border: 0;
+  outline: none;
+  font: inherit;
+  font-size: 11.5px;
+  color: var(--ui-fg);
+}
+.pc-l-search input::placeholder {
+  color: var(--ui-fg-faint);
+}
+.pc-l-search-clear {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  display: grid;
+  place-items: center;
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--ui-fg-faint);
+  cursor: pointer;
+}
+.pc-l-search-clear:hover {
+  color: var(--ui-fg);
+}
+
+/* 空态:虚线方框图标 + 两三行说明 + 一个 L3 按钮,整体居中 */
+.pc-l-empty {
+  flex: 1;
+  min-height: 240px;
+  display: grid;
+  place-items: center;
+  padding: 24px 22px;
+  text-align: center;
+}
+.pc-l-empty-icon {
+  width: 52px;
+  height: 52px;
+  margin: 0 auto 14px;
+  border: 1px dashed var(--ui-border-strong);
+  display: grid;
+  place-items: center;
+  color: color-mix(in oklab, var(--ui-fg-faint) 70%, var(--ui-bg-2));
+}
+.pc-l-empty-text {
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--ui-fg-muted);
+}
+.pc-l-empty-btn {
+  display: inline-block;
+  margin-top: 14px;
+  background: var(--ui-panel-2);
+  border: 1px solid var(--ui-border-strong);
+  border-radius: 4px;
+  padding: 5px 12px;
+  color: var(--ui-fg);
+  font-size: 11.5px;
+  font-family: inherit;
+  cursor: pointer;
+}
+.pc-l-empty-btn:hover {
+  background: var(--ui-float);
+}

@@ -11,10 +11,13 @@ export function CaptionsTab({
   search,
   mediaId,
   onPick,
+  onGoImport,
 }: {
   search: string;
   mediaId: string | null;
   onPick: (id: string | null) => void;
+  /** 空态里「前往导入」:切到「视频」分页 */
+  onGoImport?: () => void;
 }) {
   const project = useStore((s) => s.project);
   const t = useStore((s) => s.t);
@@ -28,8 +31,27 @@ export function CaptionsTab({
 
   if (project.media.length === 0) {
     return (
-      <div className="flex-1 flex items-center justify-center p-4 text-center text-xs text-neutral-500">
-        还没有素材。先在「视频」分页导入,再回来转字幕。
+      <div className="pc-l-empty">
+        <div>
+          <div className="pc-l-empty-icon" aria-hidden="true">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+              <rect x="3" y="5" width="18" height="14" />
+              <path d="M7 15h7M7 11h4" />
+            </svg>
+          </div>
+          <div className="pc-l-empty-text">
+            还没有素材。
+            <br />
+            先在「视频」分页导入,
+            <br />
+            再回来转字幕。
+          </div>
+          {onGoImport && (
+            <button type="button" className="pc-l-empty-btn" onClick={onGoImport}>
+              前往导入
+            </button>
+          )}
+        </div>
       </div>
     );
   }

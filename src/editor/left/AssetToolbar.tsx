@@ -1,5 +1,6 @@
 import { useRef } from "react";
 import { importSrtFile, importVideoFiles } from "../io";
+import { IconClose, IconPlus, IconSearch } from "../../ui/icons";
 
 export interface AssetToolbarProps {
   assetTab: "cards" | "transitions" | "videos" | "music" | "captions";
@@ -74,41 +75,27 @@ export function AssetToolbar({
     assetTab === "cards" ? "清空搜索并回顶" : assetTab === "videos" ? "导入视频" : "导入字幕 (.srt)";
 
   return (
-    <div
-      data-pc="asset-toolbar"
-      className="h-8 flex items-center gap-1.5 px-2 border-b border-neutral-800 shrink-0 bg-neutral-950"
-    >
-      <button
-        type="button"
-        data-pc-add={assetTab}
-        onClick={handleAddClick}
-        title={addTitle}
-        className="h-7 w-7 shrink-0 flex items-center justify-center rounded border border-neutral-800 bg-neutral-900 hover:bg-neutral-800 hover:border-neutral-700 text-neutral-300 text-sm font-medium transition-colors"
-      >
-        +
+    <div data-pc="asset-toolbar" className="pc-l-tools">
+      <button type="button" data-pc-add={assetTab} onClick={handleAddClick} title={addTitle} className="pc-l-add">
+        <IconPlus size={13} />
       </button>
 
-      <div className="flex-1 relative">
+      <label className="pc-l-search">
+        <IconSearch size={12} />
         <input
           ref={searchInputRef}
           data-pc={searchDataPc}
           type="text"
-          className="w-full h-7 px-2 rounded bg-neutral-900 border border-neutral-800 text-xs text-neutral-100 placeholder:text-neutral-600 outline-none focus:border-neutral-600 pr-6"
           placeholder={placeholder}
           value={search}
           onChange={(e) => onSearchChange(e.target.value)}
         />
         {search && (
-          <button
-            type="button"
-            className="absolute right-1 top-1/2 -translate-y-1/2 w-5 h-5 flex items-center justify-center text-neutral-500 hover:text-neutral-300"
-            onClick={onClearSearch}
-            title="清空"
-          >
-            ✕
+          <button type="button" className="pc-l-search-clear" onClick={onClearSearch} title="清空">
+            <IconClose size={11} />
           </button>
         )}
-      </div>
+      </label>
 
       <input
         ref={videoInputRef}

@@ -9,6 +9,7 @@ import { MiniScrubber } from "./preview/MiniScrubber";
 import { PreviewContextMenu } from "./preview/PreviewContextMenu";
 import { getCard } from "../kernel/registry";
 import { useLayoutMode } from "./layoutMode";
+import "./preview/preview.css";
 
 /**
  * 中央预览:视频层 + 动效渲染面,按容器缩放。播放循环也在这里(rAF 推进 store.t)。
@@ -221,12 +222,12 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
   };
 
   return (
-    <div className="w-full h-full flex flex-col overflow-hidden bg-[var(--ui-bg)]">
+    <div className="pc-pv" data-pc="preview">
       <ToolBar tool={tool} onToolChange={setTool} />
-      
-      <div ref={boxRef} className="flex-1 w-full grid place-items-center overflow-hidden relative">
+
+      <div ref={boxRef} className="pc-pv-stage">
         <div
-          className="relative overflow-hidden shadow-2xl"
+          className="pc-pv-frame"
           style={{
             width: project.width * scale,
             height: project.height * scale,
@@ -264,6 +265,12 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
             </div>
           </div>
           
+          {/* 四角标记:设计稿画面四角各一个 16 方的 L 形,提示这是可编辑画布 */}
+          <span className="pc-pv-corner tl" aria-hidden="true" />
+          <span className="pc-pv-corner tr" aria-hidden="true" />
+          <span className="pc-pv-corner bl" aria-hidden="true" />
+          <span className="pc-pv-corner br" aria-hidden="true" />
+
           {/* 画布覆盖层，处理命中测试以及拖拽绘制 */}
           <div
             style={{ position: "absolute", inset: 0, zIndex: 10 }}

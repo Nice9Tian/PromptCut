@@ -12,6 +12,7 @@ import { SttInstallProgress } from "./SttInstallProgress";
 import { useInstallJobs, matchInstallJob } from "../../ai/sttInstallStore";
 import { useToolbarLayout, MORE_KEY } from "./useToolbarLayout";
 import { ToolbarOverflowMenu } from "./ToolbarOverflowMenu";
+import { IconHistory, IconSettings } from "../../ui/icons";
 import type { OverflowEntry } from "./ToolbarOverflowMenu";
 import { ChatHistoryDrawer } from "./ChatHistoryDrawer";
 import {
@@ -64,7 +65,7 @@ type ToolbarControl = OverflowEntry;
  * 顶栏放不下时往「⋯」菜单里收的顺序:排在前面的先收。
  * provider 不在表里——当前用哪个驱动是这个面板的身份,再窄也留在栏上。
  */
-const OVERFLOW_ORDER = ["diag", "auto", "history", "thinking", "setup", "view", "new"] as const;
+const OVERFLOW_ORDER = ["diag", "auto", "thinking", "view", "new"] as const;
 
 /** 正在执行、还没有结果的那个工具(有就说明这一刻在跑它) */
 function runningTool(parts: MessagePart[]): ToolCallInfo | null {
@@ -427,15 +428,6 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
       ),
     },
     {
-      key: "setup",
-      label: "AI 设置",
-      node: (
-        <button key="setup" data-key="setup" className="ai-gear-btn" title="AI 设置" aria-label="AI 设置" onClick={openSetup}>
-          <span aria-hidden="true">⚙</span><span className="ai-btn-label">AI 设置</span>
-        </button>
-      ),
-    },
-    {
       key: "provider",
       label: "驱动方式",
       showLabel: true,
@@ -466,15 +458,6 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
       ),
     },
     {
-      key: "history",
-      label: "历史对话",
-      node: (
-        <button key="history" data-key="history" className="ai-new-chat-btn" title="查看历史对话" onClick={() => { setHistoryOpen(true); history.refresh(); }}>
-          历史
-        </button>
-      ),
-    },
-    {
       key: "new",
       label: "新对话",
       node: (
@@ -490,10 +473,29 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
       <div className="ai-panel-header">
         <div className="ai-panel-title">
           <span>AI 助手</span>
-          <div 
+          <div
             className={`ai-status-dot ${props.mcpConnected ? "is-connected" : ""}`}
             title={props.mcpConnected ? "已连接编辑台 MCP" : "未连接编辑台 MCP"}
           />
+          <span className="ai-status-text">{props.mcpConnected ? "已连接" : "未连接"}</span>
+        </div>
+        {/* 标题行右侧两个图标钮(配色诊断与修正 v2):历史对话、AI 设置。它们不再挤在胶囊行里 */}
+        <div className="ai-title-actions">
+          <button
+            type="button"
+            className="ai-icon-btn"
+            title="历史对话"
+            aria-label="历史对话"
+            onClick={() => {
+              setHistoryOpen(true);
+              history.refresh();
+            }}
+          >
+            <IconHistory size={13} />
+          </button>
+          <button type="button" className="ai-icon-btn" title="AI 设置" aria-label="AI 设置" onClick={openSetup}>
+            <IconSettings size={13} />
+          </button>
         </div>
         <div
           className={`ai-panel-controls${toolbar.compact ? " is-compact" : ""}`}

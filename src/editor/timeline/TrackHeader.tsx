@@ -4,7 +4,13 @@ import { actions } from "../../store/project";
 import { ContextMenu } from "./ContextMenu";
 import { useTimelineContext } from "./TimelineContext";
 import { useReorderDrag, useRowOffset } from "./useReorder";
+import { IconDrag, IconEye, IconEyeOff, IconLock, IconUnlock } from "../../ui/icons";
 
+/**
+ * 序列行头(配色诊断与修正 v2 整屏)。
+ * 左边拖动把手,中间名字(双击改名),右边「可见 / 锁定」两个图标——**常驻显示**,
+ * 不再悬停才出现:用户要一眼看出哪条被锁了、哪条被藏了,悬停才显示等于藏起了状态。
+ */
 export function TrackHeader({ track, index }: { track: Track; index: number }) {
   const { trackH } = useTimelineContext();
   const { start: startReorder } = useReorderDrag();
@@ -12,8 +18,7 @@ export function TrackHeader({ track, index }: { track: Track; index: number }) {
   const [isEditing, setIsEditing] = useState(false);
   const [name, setName] = useState(track.name);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
-  
-  const handleDoubleClick = () => setIsEditing(true);
+
   const handleBlur = () => {
     setIsEditing(false);
     if (name.trim() !== track.name) {
@@ -27,7 +32,6 @@ export function TrackHeader({ track, index }: { track: Track; index: number }) {
       setName(track.name);
     }
   };
-
   const handleContextMenu = (e: React.MouseEvent) => {
     e.preventDefault();
     setContextMenu({ x: e.clientX, y: e.clientY });
@@ -37,11 +41,7 @@ export function TrackHeader({ track, index }: { track: Track; index: number }) {
     <>
       <div
         data-pc-track-header={track.id}
-        className={`border-b border-neutral-800 flex items-center px-2 gap-2 group select-none touch-none ${
-          offset.dragging
-            ? "z-40 bg-neutral-800 shadow-[0_6px_16px_rgba(0,0,0,0.55)] cursor-grabbing relative"
-            : "hover:bg-neutral-800 cursor-grab"
-        }`}
+        className={`pc-tl-row select-none touch-none${offset.dragging ? " is-dragging z-40 relative" : ""}`}
         style={{
           height: trackH,
           transform: offset.y ? `translateY(${offset.y}px)` : undefined,
@@ -51,50 +51,49 @@ export function TrackHeader({ track, index }: { track: Track; index: number }) {
         onContextMenu={handleContextMenu}
         onPointerDown={(e) => startReorder(e, index, track.id)}
       >
-        <div className="text-neutral-500 px-1 flex-shrink-0">≡</div>
-        <div className="flex-1 overflow-hidden" onDoubleClick={handleDoubleClick}>
+        <IconDrag size={12} />
+        <div className={`pc-tl-row-name${track.hidden ? " is-muted" : ""}`} onDoubleClick={() => setIsEditing(true)}>
           {isEditing ? (
             <input
               autoFocus
-              className="w-full bg-neutral-950 text-white outline-none px-1 text-xs"
               value={name}
               onChange={(e) => setName(e.target.value)}
               onBlur={handleBlur}
               onKeyDown={handleKeyDown}
+              onPointerDown={(e) => e.stopPropagation()}
             />
           ) : (
-            <div className="truncate text-xs font-medium">{track.name}</div>
+            track.name
           )}
         </div>
-        <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+        <div className="pc-tl-row-acts" onPointerDown={(e) => e.stopPropagation()}>
           <button
-            className={`w-5 h-5 flex items-center justify-center rounded ${track.hidden ? "text-red-400" : "text-neutral-400 hover:text-white"}`}
+            type="button"
+            className={track.hidden ? "is-active" : ""}
             onClick={() => actions.updateTrack(track.id, { hidden: !track.hidden })}
-            title="隐藏"
+            title={track.hidden ? "已隐藏,点击显示" : "隐藏这条序列"}
+            aria-pressed={!!track.hidden}
           >
-            {track.hidden ? "👁‍🗨" : "👁"}
+            {track.hidden ? <IconEyeOff size={12} /> : <IconEye size={12} />}
           </button>
           <button
-            className={`w-5 h-5 flex items-center justify-center rounded ${track.locked ? "text-red-400" : "text-neutral-400 hover:text-white"}`}
+            type="button"
+            className={track.locked ? "is-active" : ""}
             onClick={() => actions.updateTrack(track.id, { locked: !track.locked })}
-            title="锁定"
+            title={track.locked ? "已锁定,点击解锁" : "锁定这条序列"}
+            aria-pressed={!!track.locked}
           >
-            {track.locked ? "🔒" : "🔓"}
+            {track.locked ? <IconLock size={12} /> : <IconUnlock size={12} />}
           </button>
         </div>
       </div>
-      
+
       {contextMenu && (
         <ContextMenu
           x={contextMenu.x}
           y={contextMenu.y}
           onClose={() => setContextMenu(null)}
-          items={[
-            {
-              label: "删除序列",
-              action: () => actions.removeTrack(track.id),
-            },
-          ]}
+          items={[{ label: "删除序列", action: () => actions.removeTrack(track.id) }]}
         />
       )}
     </>

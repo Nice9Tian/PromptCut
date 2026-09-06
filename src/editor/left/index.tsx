@@ -104,15 +104,14 @@ export function LeftPanel() {
 
   return (
     <div data-pc="left" className="h-full flex flex-col min-h-0 overflow-hidden bg-neutral-950 text-neutral-100">
-      {/* 顶级分页 */}
-      <div className="h-8 flex items-center gap-1 px-2 border-b border-neutral-800 text-xs shrink-0">
+      {/* 顶级分页:选中主文字 + 强调色下划线(配色诊断与修正 v2 左栏) */}
+      <div className="pc-l-tabs">
         {TOP_TABS.map((tab) => (
           <button
             key={tab.key}
+            type="button"
             data-pc-top-tab={tab.key}
-            className={`flex h-full items-center px-1.5 ${
-              top === tab.key ? "text-neutral-100 border-b-2 border-b-neutral-100" : "text-neutral-500 hover:text-neutral-300"
-            }`}
+            className={`pc-l-tab${top === tab.key ? " is-on" : ""}`}
             onClick={() => pickTop(tab.key)}
           >
             {tab.label}
@@ -120,15 +119,14 @@ export function LeftPanel() {
         ))}
       </div>
 
-      {/* 二级分页 */}
-      <div className="h-7 flex items-center gap-1 px-2 border-b border-neutral-800 text-[11px] shrink-0 bg-neutral-900/40">
+      {/* 二级分页:胶囊,可换行 */}
+      <div className="pc-l-subtabs">
         {subTabs.map((tab) => (
           <button
             key={tab.key}
+            type="button"
             data-pc-tab={tab.key}
-            className={`flex h-full items-center px-1.5 ${
-              subActive === tab.key ? "text-neutral-100 border-b-2 border-b-neutral-300" : "text-neutral-500 hover:text-neutral-300"
-            }`}
+            className={`pc-l-pill${subActive === tab.key ? " is-on" : ""}`}
             onClick={() => pickSub(tab.key)}
           >
             {tab.label}
@@ -171,7 +169,12 @@ export function LeftPanel() {
           <MediaTab search={musicSearch} onOpenCaptions={openCaptions} kinds={AUDIO_KINDS} />
         </div>
         <div className="flex-1 min-h-0 flex flex-col" style={{ display: assetTab === "captions" ? "flex" : "none" }}>
-          <CaptionsTab search={captionsSearch} mediaId={captionMediaId} onPick={setCaptionMediaId} />
+          <CaptionsTab
+            search={captionsSearch}
+            mediaId={captionMediaId}
+            onPick={setCaptionMediaId}
+            onGoImport={() => pickAsset("videos")}
+          />
         </div>
       </div>
 

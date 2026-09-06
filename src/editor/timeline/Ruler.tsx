@@ -3,13 +3,15 @@ import { useStore } from "../../store/project";
 import { useScrub } from "./useScrub";
 import { xOfTime } from "./utils";
 
+/**
+ * 时间标尺(配色诊断与修正 v2 整屏):26 高,主刻度每 5 格一条 L4 竖线并标秒数,
+ * 次刻度 L3 竖线。数字用次文字色,不再是弱文字——它是读时间用的。
+ */
 export function Ruler() {
   const { pxPerSec } = useTimelineContext();
   const duration = useStore((s) => Math.max(s.project.duration, s.t + 10));
   const startScrub = useScrub();
 
-  const ticks = [];
-  // dynamically choose tick interval based on pxPerSec
   let step = 1;
   if (pxPerSec < 10) step = 10;
   else if (pxPerSec < 20) step = 5;
@@ -17,8 +19,7 @@ export function Ruler() {
   else if (pxPerSec <= 400) step = 0.5;
   else step = 0.1;
 
-  // 防止 duration 被内容撑得极大（比如几万秒），导致生成数万个刻度 DOM 节点卡死页面
-  // 强制限制刻度数量不超过 1200 个，超了就往上一档跳
+  // 防止 duration 被内容撑得极大(几万秒)生成数万个刻度节点卡死页面:超 1200 个就往上一档跳
   while (duration / step > 1200) {
     if (step === 1) step = 2;
     else if (step === 2) step = 5;
@@ -28,15 +29,13 @@ export function Ruler() {
     else step *= 2;
   }
 
-  for (let i = 0; i <= duration; i += step) {
-    ticks.push(Math.round(i * 1000) / 1000);
-  }
+  const ticks: number[] = [];
+  for (let i = 0; i <= duration; i += step) ticks.push(Math.round(i * 1000) / 1000);
 
   return (
     <div
       data-pc="ruler"
-      className="relative h-8 bg-neutral-900 border-b border-neutral-800 cursor-ew-resize overflow-hidden select-none touch-none"
-      // 按下即定位,按住可以一路拖(以前只有 onClick,拖不动)
+      className="pc-tl-ruler relative cursor-ew-resize overflow-hidden select-none touch-none"
       onPointerDown={(e) => startScrub(e, { jumpToPointer: true })}
       title="按住拖动 = 移动播放头(按 Alt 不吸附)"
     >
@@ -45,11 +44,15 @@ export function Ruler() {
         return (
           <div
             key={tick}
-            className="absolute top-0 flex flex-col items-center pointer-events-none"
-            style={{ left: `${xOfTime(tick, pxPerSec)}px`, transform: "translateX(-50%)" }}
+            className="absolute bottom-0 flex flex-col items-start pointer-events-none"
+            style={{ left: `${xOfTime(tick, pxPerSec)}px`, height: isMajor ? "100%" : "40%" }}
           >
-            <div className={`w-[1px] bg-neutral-600 ${isMajor ? "h-3" : "h-2"}`} />
-            {isMajor && <span className="text-[10px] text-neutral-400 mt-1">{tick}s</span>}
+            <div className={`pc-tl-tick flex-1${isMajor ? " is-major" : ""}`} />
+            {isMajor && (
+              <span className="pc-tl-tick-label absolute" style={{ left: 5, bottom: 5 }}>
+                {tick}s
+              </span>
+            )}
           </div>
         );
       })}

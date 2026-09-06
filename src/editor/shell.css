@@ -15,41 +15,43 @@
  */
 
 /* ── 素材库(左栏)整块 L1,控件 L3 ─────────────────────────────── */
-[data-pc="left"] {
+[data-skin] [data-pc="left"],
+[data-skin] [data-pc="left"].bg-neutral-950 {
   background-color: var(--ui-bg-2);
 }
-[data-pc="left"] .bg-neutral-950,
-[data-pc="left"] .bg-neutral-950\/60 {
+[data-skin] [data-pc="left"] .bg-neutral-950,
+[data-skin] [data-pc="left"] .bg-neutral-950\/60 {
   background-color: var(--ui-bg-2);
 }
-[data-pc="left"] .bg-neutral-900,
-[data-pc="left"] .bg-neutral-900\/60,
-[data-pc="left"] .bg-neutral-900\/40 {
+[data-skin] [data-pc="left"] .bg-neutral-900,
+[data-skin] [data-pc="left"] .bg-neutral-900\/60,
+[data-skin] [data-pc="left"] .bg-neutral-900\/40 {
   background-color: var(--ui-panel-2);
 }
-[data-pc="left"] .bg-neutral-800,
-[data-pc="left"] .bg-neutral-800\/60 {
+[data-skin] [data-pc="left"] .bg-neutral-800,
+[data-skin] [data-pc="left"] .bg-neutral-800\/60 {
   background-color: var(--ui-float);
 }
-[data-pc="left"] .hover\:bg-neutral-800:hover {
+[data-skin] [data-pc="left"] .hover\:bg-neutral-800:hover {
   background-color: var(--ui-float);
 }
 
 /* ── 时间线整块 L1;选中 / 悬浮的行升到 L2 ────────────────────────── */
-[data-pc="timeline"] {
+[data-skin] [data-pc="timeline"],
+[data-skin] [data-pc="timeline"].bg-neutral-900 {
   background-color: var(--ui-bg-2);
 }
-[data-pc="timeline"] .bg-neutral-950,
-[data-pc="timeline"] .bg-neutral-900 {
+[data-skin] [data-pc="timeline"] .bg-neutral-950,
+[data-skin] [data-pc="timeline"] .bg-neutral-900 {
   background-color: var(--ui-bg-2);
 }
-[data-pc="timeline"] .bg-neutral-800,
-[data-pc="timeline"] .hover\:bg-neutral-800:hover {
+[data-skin] [data-pc="timeline"] .bg-neutral-800,
+[data-skin] [data-pc="timeline"] .hover\:bg-neutral-800:hover {
   background-color: var(--ui-panel);
 }
 
 /* ── 右栏(AI 助手)整块 L2 ───────────────────────────────────────── */
-.ai-panel {
+[data-skin] .ai-panel {
   background-color: var(--ui-panel);
 }
 
@@ -73,8 +75,8 @@ body[data-pc-resizing] .pc-gutter {
   background-color: var(--ui-accent-soft);
 }
 /* 有了缝线,面板自己的边线就多余了(否则 2px) */
-[data-pc="editor"] > .grid > aside,
-[data-pc="editor"] > .grid > main {
+[data-skin] [data-pc="editor"] > .grid > aside,
+[data-skin] [data-pc="editor"] > .grid > main {
   border-left: 0;
   border-right: 0;
 }

@@ -108,7 +108,21 @@ export function MediaTab({
     <div className="flex-1 min-h-0 flex flex-col pc-l-scroll">
       <div className="flex-1 overflow-y-auto pc-l-scroll py-1">
         {media.length === 0 ? (
-          <div className="px-3 py-4 text-xs text-neutral-500">还没有导入的视频。点上面的 + 加进来。</div>
+          <div className="pc-l-empty">
+            <div>
+              <div className="pc-l-empty-icon" aria-hidden="true">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                  <rect x="3" y="5" width="18" height="14" />
+                  <path d="M10 9l5 3-5 3z" />
+                </svg>
+              </div>
+              <div className="pc-l-empty-text">
+                还没有导入的素材。
+                <br />
+                点上面的 + 加进来。
+              </div>
+            </div>
+          </div>
         ) : filteredMedia.length === 0 ? (
           <div className="px-3 py-4 text-xs text-neutral-500">没有匹配的视频</div>
         ) : (

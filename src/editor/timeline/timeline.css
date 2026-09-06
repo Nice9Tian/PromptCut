@@ -14,3 +14,285 @@
 
 /* 自定义横向滚动条接管后隐藏原生横条，竖条保留。 */
 .pc-tl-scroll::-webkit-scrollbar:horizontal { height: 0; }
+
+/* ── 时间线(配色诊断与修正 v2 整屏,底部) ───────────────────────────────
+ * 整块 L1(见 editor/shell.css);选中的序列行 L2;控件 L3。 */
+
+/* 顶部工具行:9/14 内边距,hairline 分隔 */
+.pc-tl-bar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--ui-border);
+  flex-shrink: 0;
+  font-size: 11.5px;
+}
+/* 行高分段(小/中/大):一圈控件描边,选中格实心强调色 */
+.pc-tl-seg {
+  display: flex;
+  border: 1px solid var(--ui-border-strong);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.pc-tl-seg button {
+  padding: 3px 11px;
+  font-size: 11.5px;
+  font-family: inherit;
+  color: var(--ui-fg-muted);
+  background: var(--ui-panel-2);
+  border: 0;
+  cursor: pointer;
+  line-height: 1.4;
+}
+.pc-tl-seg button:hover {
+  color: var(--ui-fg);
+}
+.pc-tl-seg button.is-on {
+  color: var(--ui-accent-fg);
+  background: var(--ui-accent);
+}
+.pc-tl-meta {
+  font-family: var(--ui-font-mono);
+  font-size: 11px;
+  color: var(--ui-fg-faint);
+  white-space: nowrap;
+}
+.pc-tl-sep {
+  width: 1px;
+  height: 18px;
+  background: var(--ui-float);
+}
+.pc-tl-iconbtn {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  background: var(--ui-panel-2);
+  border: 1px solid var(--ui-border-strong);
+  border-radius: 4px;
+  color: var(--ui-fg-muted);
+  cursor: pointer;
+}
+.pc-tl-iconbtn:hover {
+  color: var(--ui-fg);
+}
+.pc-tl-iconbtn.is-on {
+  border-color: var(--ui-accent);
+  color: var(--ui-accent);
+}
+.pc-tl-zoom {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.pc-tl-zoom-track {
+  position: relative;
+  width: 96px;
+  height: 3px;
+  background: var(--ui-panel-2);
+}
+.pc-tl-zoom-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: var(--ui-fg-muted);
+}
+.pc-tl-zoom-knob {
+  position: absolute;
+  top: -4px;
+  width: 10px;
+  height: 10px;
+  margin-left: -5px;
+  background: var(--ui-fg);
+  border-radius: 50%;
+  pointer-events: none;
+}
+.pc-tl-zoom input[type="range"] {
+  position: absolute;
+  inset: -8px 0;
+  width: 100%;
+  height: 19px;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+/* 序列列表头:26 高,等宽小字,字距拉开 */
+.pc-tl-hdr {
+  height: 26px;
+  padding: 0 12px;
+  display: flex;
+  align-items: center;
+  font-family: var(--ui-font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.1em;
+  color: var(--ui-fg-faint);
+  border-bottom: 1px solid var(--ui-border);
+}
+/* 序列行:拖动把手 + 名字 + 右侧常驻的两个图标(不再悬停才出现) */
+.pc-tl-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--ui-border);
+  color: var(--ui-fg-faint);
+  cursor: grab;
+}
+.pc-tl-row:hover,
+.pc-tl-row.is-on {
+  background: var(--ui-panel);
+}
+.pc-tl-row.is-dragging {
+  background: var(--ui-panel);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.55);
+  cursor: grabbing;
+}
+.pc-tl-row-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--ui-fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pc-tl-row-name.is-muted {
+  color: var(--ui-fg-muted);
+}
+.pc-tl-row-name input {
+  width: 100%;
+  background: var(--ui-bg-2);
+  color: var(--ui-fg);
+  border: 1px solid var(--ui-accent);
+  outline: none;
+  padding: 1px 4px;
+  font: inherit;
+  font-size: 12.5px;
+}
+.pc-tl-row-acts {
+  display: flex;
+  gap: 8px;
+  color: var(--ui-fg-faint);
+}
+.pc-tl-row-acts button {
+  background: none;
+  border: 0;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  color: inherit;
+  cursor: pointer;
+}
+.pc-tl-row-acts button:hover {
+  color: var(--ui-fg);
+}
+.pc-tl-row-acts button.is-active {
+  color: var(--ui-danger);
+}
+.pc-tl-addtrack-wrap {
+  padding: 11px 12px;
+}
+.pc-tl-addtrack {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--ui-panel-2);
+  border: 1px solid var(--ui-border-strong);
+  border-radius: 4px;
+  padding: 5px 11px;
+  color: var(--ui-fg);
+  font-size: 11.5px;
+  font-family: inherit;
+  cursor: pointer;
+}
+.pc-tl-addtrack:hover {
+  background: var(--ui-float);
+}
+
+/* 标尺:26 高,主刻度每 5 格一条 L4 线,次刻度 L3 线,数字次文字色 */
+.pc-tl-ruler {
+  height: 26px;
+  border-bottom: 1px solid var(--ui-border);
+}
+.pc-tl-tick {
+  background: var(--ui-panel-2);
+  width: 1px;
+}
+.pc-tl-tick.is-major {
+  background: var(--ui-float);
+}
+.pc-tl-tick-label {
+  font-family: var(--ui-font-mono);
+  font-size: 10px;
+  color: var(--ui-fg-muted);
+}
+
+/* 新建序列落区:26 高,虚线控件描边,淡强调色底 */
+.pc-tl-newzone {
+  height: 26px;
+  background: color-mix(in oklab, var(--ui-accent) 7%, transparent);
+  border: 1px dashed var(--ui-border-strong);
+  border-radius: 2px;
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  font-size: 11.5px;
+  color: var(--ui-fg-faint);
+}
+.pc-tl-newzone.is-armed {
+  border-color: var(--ui-fg-muted);
+  background: color-mix(in oklab, var(--ui-fg-muted) 10%, transparent);
+}
+.pc-tl-newzone.is-target {
+  border-color: var(--ui-accent);
+  background: var(--ui-accent-soft);
+}
+
+/* 播放头上的时间标签:红底深字,等宽 600 */
+.pc-tl-playhead-label {
+  position: absolute;
+  top: -1px;
+  left: -24px;
+  background: var(--ui-danger);
+  color: #1a0503;
+  font-family: var(--ui-font-mono);
+  font-weight: 600;
+  font-size: 10px;
+  padding: 2px 6px;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* 底部状态栏:28 高,窗口栏同色,等宽小字 */
+.pc-statusbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  height: 28px;
+  padding: 0 14px;
+  flex-shrink: 0;
+  background: color-mix(in oklab, var(--ui-bg) 55%, var(--ui-bg-2));
+  border-top: 1px solid color-mix(in oklab, var(--ui-border) 70%, var(--ui-bg));
+  font-family: var(--ui-font-mono);
+  font-size: 10.5px;
+  color: var(--ui-fg-faint);
+}
+.pc-statusbar-right {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.pc-statusbar-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ui-success);
+}
+.pc-statusbar-dot.is-dirty {
+  background: var(--ui-warn);
+}
