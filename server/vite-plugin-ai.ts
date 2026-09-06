@@ -13,6 +13,39 @@ function sendJson(res: ServerResponse, code: number, data: any) {
   res.end(JSON.stringify(data));
 }
 
+/**
+ * 一次「无工具、无历史」的最小补全。分工模式的编排阶段全都走它。
+ *
+ * 为什么不走 /api/ai/chat：那条路会带上 30 个工具的 schema 和整段历史，而
+ * 编排阶段(拆任务、划依赖、分角色)一个工具都不需要用。省下的不只是 token，
+ * 还有模型「看到工具就想调一下」而多花的那几轮往返。
+ *
+ * 只支持 API 直连：CLI 驱动每次都要起进程，做这种小调用是净亏损。
+ * 拿不到配置就抛，由调用方决定怎么降级。
+ */
+async function oneShotCompletion(
+  system: string, prompt: string, maxTokens: number, timeoutMs = 60000,
+): Promise<string> {
+  const configModule = await import(new URL('./ai-config.mjs', import.meta.url).href);
+  const cfg = (configModule as any).readConfig()?.api || {};
+  if (!cfg.apiKey || !String(cfg.apiKey).trim()) throw new Error('没有配置 API 直连');
+  const providerModule = await import(
+    new URL(`./harness/providers/${cfg.vendor || 'anthropic'}.mjs`, import.meta.url).href
+  );
+  const provider = (providerModule as any).createProvider(
+    { ...cfg, maxTokens },
+    { fetchImpl: (u: string, o: RequestInit) => fetch(u, { ...o, signal: AbortSignal.timeout(timeoutMs) }) },
+  );
+  let text = '';
+  for await (const ev of provider.stream(
+    [{ role: 'user', content: [{ type: 'text', text: prompt }] }], [], system, undefined,
+  )) {
+    if (ev.type === 'text_delta') text += ev.text;
+  }
+  return text;
+}
+
+
 export default function vitePluginAi(): Plugin {
   let editorRes: ServerResponse | null = null;
   let nextCallId = 1;
@@ -210,39 +243,51 @@ export default function vitePluginAi(): Plugin {
             if (typeof query !== 'string' || !query.trim()) {
               return sendJson(res, 400, { ok: false, error: 'query 必填' });
             }
-            const configModule = await import(new URL('./ai-config.mjs', import.meta.url).href);
-            const cfg = configModule.readConfig()?.api || {};
-            if (!cfg.apiKey || !String(cfg.apiKey).trim()) {
-              return sendJson(res, 200, { ok: true, available: false, reason: '没有配置 API 直连' });
-            }
-            const providerModule = await import(
-              new URL(`./harness/providers/${cfg.vendor || 'anthropic'}.mjs`, import.meta.url).href
-            );
-            const provider = providerModule.createProvider(
-              { ...cfg, maxTokens: 16 },
-              { fetchImpl: (u: string, o: RequestInit) =>
-                  fetch(u, { ...o, signal: AbortSignal.timeout(15000) }) },
-            );
-
             const system = '你是一个分类器。只回一个词，不要解释。';
-            const prompt =
-              '下面这句话是用户对视频编辑软件提的要求。判断它能不能拆成多个'
-              + '互不依赖、可以同时进行的子任务。\n'
-              + '能拆并且确实值得并行 → 回 PARALLEL\n'
-              + '只是一句提问、一个小改动、或者天然只能一步步来 → 回 SIMPLE\n\n'
-              + `用户：${query.slice(0, 500)}`;
-
-            let text = '';
-            for await (const ev of provider.stream(
-              [{ role: 'user', content: [{ type: 'text', text: prompt }] }], [], system, undefined,
-            )) {
-              if (ev.type === 'text_delta') text += ev.text;
-            }
+            const prompt = [
+              '下面这句话是用户对视频编辑软件提的要求。判断它能不能拆成多个',
+              '互不依赖、可以同时进行的子任务。',
+              '能拆并且确实值得并行 → 回 PARALLEL',
+              '只是一句提问、一个小改动、或者天然只能一步步来 → 回 SIMPLE',
+              '',
+              `用户：${query.slice(0, 500)}`,
+            ].join('\n');
+            const text = await oneShotCompletion(system, prompt, 16, 15000);
             const parallel = /PARALLEL/i.test(text);
             sendJson(res, 200, { ok: true, available: true, parallel, raw: text.trim().slice(0, 40) });
           } catch (e: any) {
             // 闸门失败不该拖垮提问：回 available:false，前端退回本地启发式
             sendJson(res, 200, { ok: true, available: false, reason: String(e?.message ?? e) });
+          }
+        });
+      });
+
+      /**
+       * POST /api/ai/plan —— 编排阶段用的通用「无工具单次补全」。
+       *
+       * 分工模式的三步(拆任务 / 划依赖 / 分角色)都打这里。之所以不复用
+       * /api/ai/chat：那条路带 30 个工具的 schema 和整段历史，而这三步一个
+       * 工具都不用。省的不只是 token，还有模型「看见工具就想调一下」多花的往返。
+       */
+      server.middlewares.use('/api/ai/plan', async (req, res) => {
+        if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: 'POST only' });
+        let body = '';
+        req.on('data', (c) => { body += c; if (body.length > 200_000) req.destroy(); });
+        req.on('end', async () => {
+          try {
+            const { system, prompt, maxTokens } = JSON.parse(body || '{}');
+            if (typeof prompt !== 'string' || !prompt.trim()) {
+              return sendJson(res, 400, { ok: false, error: 'prompt 必填' });
+            }
+            const text = await oneShotCompletion(
+              typeof system === 'string' ? system : '',
+              prompt,
+              Number.isFinite(maxTokens) ? Math.min(Math.max(maxTokens, 16), 4096) : 1500,
+            );
+            sendJson(res, 200, { ok: true, text });
+          } catch (e: any) {
+            // 没配 API 直连是最常见的一种，调用方要能区分出来好降级
+            sendJson(res, 200, { ok: false, error: String(e?.message ?? e) });
           }
         });
       });
