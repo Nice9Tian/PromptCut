@@ -136,7 +136,14 @@ export function createProvider(cfg, { fetchImpl = globalThis.fetch } = {}) {
           if (choice.delta?.content) {
             yield { type: 'text_delta', text: choice.delta.content };
           }
-          
+
+          // 各家兼容接口给推理过程起的名字不一样,常见这三个,取到哪个算哪个
+          const reasoning =
+            choice.delta?.reasoning_content ?? choice.delta?.reasoning ?? choice.delta?.thinking;
+          if (typeof reasoning === 'string' && reasoning) {
+            yield { type: 'thinking_delta', text: reasoning };
+          }
+
           if (Array.isArray(choice.delta?.tool_calls)) {
             for (const tc of choice.delta.tool_calls) {
               const idx = tc.index;

@@ -90,6 +90,8 @@ export function createProvider(cfg, { fetchImpl = globalThis.fetch } = {}) {
         } else if (event === 'content_block_delta') {
           if (parsed.delta?.type === 'text_delta') {
             yield { type: 'text_delta', text: parsed.delta.text };
+          } else if (parsed.delta?.type === 'thinking_delta') {
+            yield { type: 'thinking_delta', text: parsed.delta.thinking };
           } else if (parsed.delta?.type === 'input_json_delta') {
             if (partialTools[parsed.index]) {
               partialTools[parsed.index].partialJson += parsed.delta.partial_json;

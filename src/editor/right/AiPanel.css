@@ -216,6 +216,52 @@
   overflow-wrap: anywhere;
 }
 
+/*
+ * 思考块。按配色规范「全屏只留一个实心强调色」(导出按钮),这里绝不能用
+ * --accent 做背景,否则又是两个强调色打架。思考是过程不是结论,所以比助手
+ * 气泡再退一档:L1 底 + 虚线描边 + 弱化文字,一眼看出它不是回复本身。
+ */
+.ai-thinking {
+  background: var(--ui-bg-2);
+  border: 1px dashed var(--hairline);
+  border-radius: 3px;
+  padding: 8px 12px;
+  color: var(--ink-faint);
+  font-size: 12px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.ai-thinking-head {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  color: var(--ink-faint);
+  opacity: 0.75;
+  margin-bottom: 4px;
+}
+
+/* 顶栏那个勾选框:高度和别的控件一样 28px,窄栏时文字跟着 is-compact 收起 */
+.ai-thinking-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 8px;
+  font-size: 12px;
+  color: var(--ink);
+  background: var(--fill-subtle);
+  border: 1px solid var(--hairline);
+  border-radius: 4px;
+  cursor: pointer;
+  user-select: none;
+}
+.ai-thinking-toggle input {
+  cursor: pointer;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
 .ai-message-text {
   min-width: 0;
 }

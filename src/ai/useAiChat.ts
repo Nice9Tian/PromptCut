@@ -12,6 +12,15 @@ function appendTextPart(parts: MessagePart[] | undefined, delta: string): Messag
   return next;
 }
 
+/** 同上,但追加的是思考片段。思考和正文各自成段,不会互相吞并 */
+function appendThinkingPart(parts: MessagePart[] | undefined, delta: string): MessagePart[] {
+  const next = parts ? [...parts] : [];
+  const last = next[next.length - 1];
+  if (last && last.kind === "thinking") next[next.length - 1] = { kind: "thinking", text: last.text + delta };
+  else next.push({ kind: "thinking", text: delta });
+  return next;
+}
+
 /** 给最近一个同名、还没有结果的工具片段补上结果 */
 function completeToolPart(
   parts: MessagePart[] | undefined,
@@ -444,6 +453,13 @@ export function useAiChat(opts?: { mock?: boolean }) {
                 m.id === asstMsgId
                   ? { ...m, text: m.text + ev.delta!, parts: appendTextPart(m.parts, ev.delta!) }
                   : m
+              )
+            );
+          } else if (ev.type === "thinking" && ev.delta) {
+            // 只进 parts,不进 m.text:m.text 是「回复正文」,会存进历史、也是简洁模式显示的内容
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === asstMsgId ? { ...m, parts: appendThinkingPart(m.parts, ev.delta!) } : m
               )
             );
           } else if (ev.type === "tool_call" && ev.name) {

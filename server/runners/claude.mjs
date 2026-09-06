@@ -125,6 +125,9 @@ function _startRun(opts) {
          }
       } else if (ev.type === 'stream_event' && ev.event?.type === 'content_block_delta' && ev.event?.delta?.type === 'text_delta') {
         safeOnEvent({ type: 'text', delta: ev.event.delta.text });
+      } else if (ev.type === 'stream_event' && ev.event?.type === 'content_block_delta' && ev.event?.delta?.type === 'thinking_delta') {
+        // 思考内容单独走一路,默认不展示;界面上勾了「显示思考」才渲染出来
+        safeOnEvent({ type: 'thinking', delta: ev.event.delta.thinking });
       } else if (ev.type === 'assistant' && ev.message?.content) {
          for (const c of ev.message.content) {
             if (c.type === 'tool_use') {

@@ -56,6 +56,8 @@ export type RunEvent =
   | { type: "run"; runId: string }
   | { type: "session"; sessionId: string }
   | { type: "text"; delta: string }
+  /** 模型的思考过程。和正文分开走,默认不显示,勾了「显示思考」才渲染 */
+  | { type: "thinking"; delta: string; round?: number }
   | { type: "tool_call"; name: string; input?: unknown; callId?: string; round?: number }
   | { type: "tool_result"; name: string; ok: boolean; summary?: string; files?: string[]; callId?: string; output?: unknown; durationMs?: number; round?: number }
   | ({ type: "progress" } & RunProgress)
@@ -100,6 +102,8 @@ export interface ToolCallInfo {
  */
 export type MessagePart =
   | { kind: "text"; text: string }
+  /** 思考片段:和 text 一样按发生顺序插在 parts 里,渲染时由「显示思考」开关决定显不显示 */
+  | { kind: "thinking"; text: string }
   | { kind: "status"; text: string }
   | ({ kind: "tool" } & ToolCallInfo);
 

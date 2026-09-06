@@ -41,6 +41,8 @@ function attachIcon(kind?: string): string {
 /** 显示模式:简洁只看回复,详细连每一步工具调用一起看 */
 type ViewMode = "simple" | "verbose";
 const VIEW_KEY = "aiViewMode";
+/** 「显示思考」是长期偏好,记在本地;默认关——思考是过程,不是结论 */
+const THINKING_KEY = "aiShowThinking";
 
 /**
  * 取一条消息的有序片段。新消息自带 parts;旧会话历史里没有,
@@ -62,7 +64,7 @@ type ToolbarControl = OverflowEntry;
  * 顶栏放不下时往「⋯」菜单里收的顺序:排在前面的先收。
  * provider 不在表里——当前用哪个驱动是这个面板的身份,再窄也留在栏上。
  */
-const OVERFLOW_ORDER = ["diag", "auto", "history", "setup", "view", "new"] as const;
+const OVERFLOW_ORDER = ["diag", "auto", "history", "thinking", "setup", "view", "new"] as const;
 
 /** 正在执行、还没有结果的那个工具(有就说明这一刻在跑它) */
 function runningTool(parts: MessagePart[]): ToolCallInfo | null {
@@ -126,6 +128,13 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
       return localStorage.getItem(VIEW_KEY) === "verbose" ? "verbose" : "simple";
     } catch {
       return "simple";
+    }
+  });
+  const [showThinking, setShowThinking] = useState(() => {
+    try {
+      return localStorage.getItem(THINKING_KEY) === "1";
+    } catch {
+      return false;
     }
   });
   /** 展开的工具详情,键是 `消息id:片段序号`。纯界面状态,不写进消息里 */
@@ -291,6 +300,15 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
     }
   };
 
+  const changeShowThinking = (next: boolean) => {
+    setShowThinking(next);
+    try {
+      localStorage.setItem(THINKING_KEY, next ? "1" : "0");
+    } catch {
+      /* 隐私模式下写不了,忽略 */
+    }
+  };
+
   const toggleIn = (set: Set<string>, apply: (s: Set<string>) => void) => (key: string) => {
     const next = new Set(set);
     if (next.has(key)) next.delete(key);
@@ -370,6 +388,25 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
             详细
           </button>
         </div>
+      ),
+    },
+    {
+      key: "thinking",
+      label: "显示思考",
+      node: (
+        <label
+          key="thinking"
+          data-key="thinking"
+          className="ai-thinking-toggle"
+          title="显示模型的思考过程(有的驱动方式不产出思考,勾了也不会有内容)"
+        >
+          <input
+            type="checkbox"
+            checked={showThinking}
+            onChange={(e) => changeShowThinking(e.target.checked)}
+          />
+          <span className="ai-btn-label">显示思考</span>
+        </label>
       ),
     },
     {
@@ -534,6 +571,11 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
               .filter((p) => p.kind === "text")
               .map((p) => (p as { text: string }).text)
               .join("");
+            /** 简洁模式下把几段思考按顺序拼起来一次显示;详细模式仍按原位置逐段渲染 */
+            const thinkingText = parts
+              .filter((p) => p.kind === "thinking")
+              .map((p) => (p as { text: string }).text)
+              .join("\n\n");
             const busyTool = m.pending ? runningTool(parts) : null;
 
             /** 一个工具片段:标题行 + 可展开的入参 / 结果 / 文件 */
@@ -634,11 +676,27 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
                         </div>
                       );
                     }
+                    if (p.kind === "thinking") {
+                      return showThinking ? (
+                        <div key={pidx} className="ai-thinking">
+                          <div className="ai-thinking-head">思考</div>
+                          {p.text}
+                        </div>
+                      ) : null;
+                    }
                     return renderTool(p, `${m.id}:${pidx}`);
                   })
                 ) : (
                   // 简洁模式:只给回复正文;做过的操作折成一行,想看再展开
                   <>
+                    {/* 勾了「显示思考」的话简洁模式也要看得到,否则等于开关在这个模式下失灵。
+                        这里按发生顺序拼成一段放在回复之前——先想后答,读起来是顺的。 */}
+                    {showThinking && thinkingText && (
+                      <div className="ai-thinking">
+                        <div className="ai-thinking-head">思考</div>
+                        {thinkingText}
+                      </div>
+                    )}
                     {(textOnly || m.role === "user") && (
                       <div className="ai-message-text">{renderMarkdown(textOnly || m.text)}</div>
                     )}

@@ -38,6 +38,9 @@ export class Agent {
           if (ev.type === 'text_delta') {
             current += ev.text; text += ev.text;
             this.onEvent({ type: 'text', delta: ev.text });
+          } else if (ev.type === 'thinking_delta') {
+            // 只往界面转发,不并进 assistant 正文——思考不该混进回复,也不回灌给模型
+            this.onEvent({ type: 'thinking', delta: ev.text, round });
           } else if (ev.type === 'tool_use') {
             if (summarizing) continue; // Never execute tools once the safety stop fired.
             flush();
