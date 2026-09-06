@@ -187,6 +187,66 @@ export default function vitePluginAi(): Plugin {
         } catch (e: any) { sendJson(res, 500, { ok: false, error: e.message }); }
       });
 
+      /**
+       * POST /api/ai/triage —— 一句话分类：这个请求值不值得走分工编排。
+       *
+       * 「分工模式」勾上以后每条提问都要过 manager，可 manager → DAG → JSON 是
+       * 三轮模型往返。给「现在几点了」也走一遍，这个本来为了提速的功能反而更慢。
+       * 所以先花一次**极便宜**的调用把简单请求筛掉。
+       *
+       * 便宜体现在三处，缺一不可：不带任何工具（正常对话要带 30 个工具的 schema）、
+       * 不带历史、maxTokens 压到 16。答案只要一个词。
+       *
+       * 只走 API 直连：CLI 驱动光启动进程就要好几秒，用它做这道闸是净亏损。
+       * 没配 API 就返回 available:false，由前端退回本地启发式。
+       */
+      server.middlewares.use('/api/ai/triage', async (req, res) => {
+        if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: 'POST only' });
+        let body = '';
+        req.on('data', (c) => { body += c; if (body.length > 8192) req.destroy(); });
+        req.on('end', async () => {
+          try {
+            const { query } = JSON.parse(body || '{}');
+            if (typeof query !== 'string' || !query.trim()) {
+              return sendJson(res, 400, { ok: false, error: 'query 必填' });
+            }
+            const configModule = await import(new URL('./ai-config.mjs', import.meta.url).href);
+            const cfg = configModule.readConfig()?.api || {};
+            if (!cfg.apiKey || !String(cfg.apiKey).trim()) {
+              return sendJson(res, 200, { ok: true, available: false, reason: '没有配置 API 直连' });
+            }
+            const providerModule = await import(
+              new URL(`./harness/providers/${cfg.vendor || 'anthropic'}.mjs`, import.meta.url).href
+            );
+            const provider = providerModule.createProvider(
+              { ...cfg, maxTokens: 16 },
+              { fetchImpl: (u: string, o: RequestInit) =>
+                  fetch(u, { ...o, signal: AbortSignal.timeout(15000) }) },
+            );
+
+            const system = '你是一个分类器。只回一个词，不要解释。';
+            const prompt =
+              '下面这句话是用户对视频编辑软件提的要求。判断它能不能拆成多个'
+              + '互不依赖、可以同时进行的子任务。\n'
+              + '能拆并且确实值得并行 → 回 PARALLEL\n'
+              + '只是一句提问、一个小改动、或者天然只能一步步来 → 回 SIMPLE\n\n'
+              + `用户：${query.slice(0, 500)}`;
+
+            let text = '';
+            for await (const ev of provider.stream(
+              [{ role: 'user', content: [{ type: 'text', text: prompt }] }], [], system, undefined,
+            )) {
+              if (ev.type === 'text_delta') text += ev.text;
+            }
+            const parallel = /PARALLEL/i.test(text);
+            sendJson(res, 200, { ok: true, available: true, parallel, raw: text.trim().slice(0, 40) });
+          } catch (e: any) {
+            // 闸门失败不该拖垮提问：回 available:false，前端退回本地启发式
+            sendJson(res, 200, { ok: true, available: false, reason: String(e?.message ?? e) });
+          }
+        });
+      });
+
       server.middlewares.use('/api/ai/config', async (req, res) => {
         try {
           const { publicConfig, writeConfig } = await import(new URL('./ai-config.mjs', import.meta.url).href);
