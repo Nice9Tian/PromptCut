@@ -33,11 +33,14 @@ export interface OrchestrationPlan {
   waves: OrchestrationTask[][];
 }
 
-async function planCall(system: string, prompt: string, maxTokens = 1500): Promise<string> {
+async function planCall(
+  system: string, prompt: string, maxTokens = 1500, provider?: string,
+): Promise<string> {
   const r = await fetch("/api/ai/plan", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ system, prompt, maxTokens }),
+    // provider 是给服务端兜底用的：没配 API 直连时它会退回这个 CLI 驱动
+    body: JSON.stringify({ system, prompt, maxTokens, provider }),
     signal: AbortSignal.timeout(90000),
   });
   const d = await r.json().catch(() => ({}));
@@ -58,7 +61,7 @@ function roleRoster(roles: Role[]): string {
 /** 三步编排。roles 默认用全部角色，manager 自己不参与执行。 */
 export async function buildPlan(
   query: string,
-  opts: { roles?: Role[]; managerPrompt: string } = { managerPrompt: "" },
+  opts: { roles?: Role[]; managerPrompt: string; provider?: string } = { managerPrompt: "" },
 ): Promise<OrchestrationPlan> {
   const all = opts.roles ?? ALL_ROLES;
   const workers = all.filter((r) => r.id !== "manager");
@@ -69,6 +72,7 @@ export async function buildPlan(
     opts.managerPrompt,
     `可用角色：\n${roster}\n\n用户这次的要求：\n${query}`,
     1200,
+    opts.provider,
   );
 
   // 第二步：划依赖
@@ -78,6 +82,7 @@ export async function buildPlan(
     `这是拆解方案：\n${plan}\n\n请逐个任务说明它依赖哪些任务、为什么。`
       + `没有依赖的要明确写「无依赖，可与其他任务同时进行」。`,
     900,
+    opts.provider,
   );
 
   // 第三步：落成 JSON
@@ -89,6 +94,7 @@ export async function buildPlan(
       + `{"id":"2","roleId":"fx-assistant","instruction":"...","dependsOn":["1"]}]}\n\n`
       + `roleId 必须是上面列出的 id 之一。dependsOn 只填真正的数据依赖。`,
     1500,
+    opts.provider,
   );
 
   const tasks = normalizeTasks(extractJson(jsonText), workers);

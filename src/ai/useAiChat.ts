@@ -355,7 +355,7 @@ export function useAiChat(opts?: { mock?: boolean }) {
     });
 
     try {
-      const plan = await buildPlan(text, { managerPrompt: manager.prompt });
+      const plan = await buildPlan(text, { managerPrompt: manager.prompt, provider });
 
       // 用户那句原话要进消息流，否则编排块上面是空的，看不出在回应什么
       setMessages((prev) => [...prev, { id: Date.now().toString(), role: "user", text }]);

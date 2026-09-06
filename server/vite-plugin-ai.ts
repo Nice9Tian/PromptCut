@@ -46,6 +46,42 @@ async function oneShotCompletion(
 }
 
 
+/**
+ * 用 CLI 驱动做一次一问一答。给 /api/ai/plan 在没有 API 直连时兜底。
+ *
+ * **不给 callTool**：规划阶段一个工具都不该调，不接 MCP 桥就从根上断了这个念头，
+ * 顺带也不需要编辑台开着。CLI 起进程要几秒，所以这条路只用于规划那三次
+ * （用户已经决定要编排了），不用于 triage 闸（那个必须极便宜）。
+ */
+function oneShotViaCli(
+  runners: any, provider: string, system: string, prompt: string, timeoutMs = 120000,
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let text = '';
+    let settled = false;
+    const finish = (fn: () => void) => { if (!settled) { settled = true; fn(); } };
+    let run: any;
+    const timer = setTimeout(
+      () => finish(() => { try { run?.abort(); } catch {} reject(new Error('规划调用超时')); }),
+      timeoutMs,
+    );
+    try {
+      run = runners.startRun({
+        provider,
+        prompt,
+        systemPrompt: system,
+        onEvent: (ev: any) => {
+          if (ev.type === 'text' && ev.delta) text += ev.delta;
+          else if (ev.type === 'error') finish(() => { clearTimeout(timer); reject(new Error(ev.message || '规划调用失败')); });
+          else if (ev.type === 'done') finish(() => { clearTimeout(timer); resolve(text); });
+        },
+      });
+    } catch (e: any) {
+      finish(() => { clearTimeout(timer); reject(e); });
+    }
+  });
+}
+
 export default function vitePluginAi(): Plugin {
   let editorRes: ServerResponse | null = null;
   let nextCallId = 1;
@@ -279,12 +315,26 @@ export default function vitePluginAi(): Plugin {
             if (typeof prompt !== 'string' || !prompt.trim()) {
               return sendJson(res, 400, { ok: false, error: 'prompt 必填' });
             }
-            const text = await oneShotCompletion(
-              typeof system === 'string' ? system : '',
-              prompt,
-              Number.isFinite(maxTokens) ? Math.min(Math.max(maxTokens, 16), 4096) : 1500,
-            );
-            sendJson(res, 200, { ok: true, text });
+            const cap = Number.isFinite(maxTokens) ? Math.min(Math.max(maxTokens, 16), 4096) : 1500;
+            const sys = typeof system === 'string' ? system : '';
+            let text: string;
+            let via: string;
+            try {
+              text = await oneShotCompletion(sys, prompt, cap);
+              via = 'api';
+            } catch (apiErr) {
+              // 没配 API 直连就退回 CLI。
+              //
+              // 起进程要几秒，做 triage 那种「必须极便宜」的闸确实不划算，
+              // 但规划这三次是用户已经决定要编排之后的事，几秒占比小得多。
+              // 一开始我把 triage 的理由套到了这里，结果是 CLI 用户根本用不了
+              // 分工模式——而那是大多数用户。
+              const { provider } = JSON.parse(body || '{}');
+              if (!provider) throw apiErr;
+              text = await oneShotViaCli(await getRunner(), provider, sys, prompt);
+              via = provider;
+            }
+            sendJson(res, 200, { ok: true, text, via });
           } catch (e: any) {
             // 没配 API 直连是最常见的一种，调用方要能区分出来好降级
             sendJson(res, 200, { ok: false, error: String(e?.message ?? e) });
