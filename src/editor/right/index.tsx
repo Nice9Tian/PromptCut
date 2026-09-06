@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { startShotDetection, waitForShots } from "../../ai/shots";
+import { startTracking, waitForTrack, type TrackResult } from "../../ai/track";
 import { AiPanel } from "./AiPanel";
 import { connectMcpExecutor, EditorApi } from "../../ai/mcpExecutor";
 import { getState, actions } from "../../store/project";
@@ -18,6 +19,9 @@ const sttJobs = new Map<string, SttJob>();
 
 /** 正在跑的镜头识别作业,按 mediaId 索引。结果落进 store 后就删掉。 */
 const shotJobs = new Map<string, { jobId: string; percent: number; engine: string; error?: string }>();
+/** 进行中的追踪作业,以及跑完的轨迹。都只在内存里,刷新页面就没了 */
+const trackJobs = new Map<string, { jobId: string; percent: number; engine: string; error?: string }>();
+const trackResults = new Map<string, TrackResult>();
 
 export function RightPanel() {
   const [mcpConnected, setMcpConnected] = useState(false);
@@ -252,6 +256,62 @@ export function RightPanel() {
             : "TransNetV2,硬切和溶解都认得",
           shots: media.shots.shots,
           transitions: media.shots.transitions.map(({ thumbs, ...rest }) => rest),
+        };
+      },
+
+      // 运动追踪:250 帧约 26 秒,同样立刻返回 jobId,结果用 get_track 轮询。
+      // 结果不写进项目文档——查询点是每次现指的,同一段素材能追很多组,
+      // 塞进 project 只会让工程文件无限膨胀,所以只留在内存里。
+      trackPoints: async (args) => {
+        const media = getState().project.media.find((m) => m.id === args.mediaId);
+        if (!media) throw new Error(`找不到素材 ${args.mediaId}`);
+        if (media.kind !== "video") throw new Error(`${media.name} 不是视频,没有运动可追`);
+        if (!media.path) throw new Error(`${media.name} 没有服务端可读的路径,重新导入一次再试`);
+        if (!Array.isArray(args.points) || args.points.length === 0) {
+          throw new Error("points 至少要有一个点,写成 [[帧号, x, y], ...]");
+        }
+
+        const jobId = await startTracking(media.path, media.id, args.points);
+        trackJobs.set(args.mediaId, { jobId, percent: 0, engine: "bootstapir" });
+        waitForTrack(jobId, (percent, engine) =>
+          trackJobs.set(args.mediaId, { jobId, percent, engine }))
+          .then((result) => {
+            trackResults.set(args.mediaId, result);
+            trackJobs.delete(args.mediaId);
+          })
+          .catch((e: unknown) => {
+            trackJobs.set(args.mediaId, {
+              jobId, percent: 0, engine: "bootstapir",
+              error: e instanceof Error ? e.message : String(e),
+            });
+          });
+        return {
+          jobId, started: true, mediaId: args.mediaId, points: args.points.length,
+          hint: "运动追踪已在后台开始,请用 get_track 轮询该 mediaId",
+        };
+      },
+
+      getTrack: (args) => {
+        const media = getState().project.media.find((m) => m.id === args.mediaId);
+        if (!media) throw new Error(`找不到素材 ${args.mediaId}`);
+        const pending = trackJobs.get(args.mediaId);
+        if (pending?.error) throw new Error(pending.error);
+        const result = trackResults.get(args.mediaId);
+        if (!result) {
+          if (pending) return { running: true, percent: pending.percent, engine: pending.engine };
+          return null;
+        }
+        return {
+          running: false,
+          engine: result.engine,
+          // 降级档要让模型看见,否则它会拿模板匹配的粗结果当准数据下判断
+          engineNote: result.engine === "bootstapir"
+            ? "BootsTAPIR,任意点追踪,visible 为 false 表示该帧被遮挡或移出画面"
+            : "当前是浏览器内的模板匹配兜底,只适合纹理清晰、无遮挡、位移平缓的场景,精度低得多",
+          width: result.width,
+          height: result.height,
+          frames: result.frames,
+          points: result.points,
         };
       },
 
