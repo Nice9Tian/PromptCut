@@ -706,7 +706,12 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
           </div>
         ) : (
           messages.map((m, i) => {
-            const isLastAssistant = m.role === "assistant" && i === messages.length - 1;
+            // 「转圈 + 正在做什么」跟着 m.pending 走，不再要求它是最后一条。
+            // 分工模式下同一批角色的气泡是同时 pending 的，按「最后一条」判的话
+            // 只有最下面那个有动静，上面几个看着像卡死了。
+            //
+            // 单线模式下同时只可能有一条 pending，两种写法等价；abort() 会把所有
+            // pending 一起清掉(useAiChat.ts:335)，不会留下永远转圈的旧气泡。
             const parts = partsOf(m);
             /** 简洁模式下把几段思考按顺序拼起来一次显示;详细模式仍按原位置逐段渲染 */
             const thinkingText = parts
@@ -887,7 +892,7 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
                   </>
                 )}
 
-                {isLastAssistant && m.pending && (
+                {m.pending && (
                   <div className="ai-activity" role="status" aria-live="polite">
                     <span className="ai-spinner" aria-hidden />
                     <span className="ai-activity-text">{activityText(m, busyTool)}</span>
@@ -898,7 +903,7 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
                     </span>
                   </div>
                 )}
-                {isLastAssistant && m.pending && progressMeta(m) && (
+                {m.pending && progressMeta(m) && (
                   <div className="ai-activity-meta">{progressMeta(m)}</div>
                 )}
 
