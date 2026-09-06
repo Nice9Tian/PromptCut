@@ -22,7 +22,7 @@ export function Stage({ timeline, t, playToken, speed = 1 }: { timeline: Timelin
           if (!def) return null;
           const C = def.Component;
           return (
-            <div key={`${clip.id}:${playToken}`} style={{ position: "absolute", inset: 0 }}>
+            <div key={`${clip.id}:${playToken}`} data-pc-clip={clip.id} style={{ position: "absolute", inset: 0 }}>
               <C params={{ ...def.defaults, ...clip.params }} playToken={playToken} t={Math.max(0, t - clip.start)} duration={clip.end - clip.start} />
             </div>
           );

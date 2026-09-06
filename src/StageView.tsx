@@ -42,6 +42,8 @@ export interface PcStageApi {
   render(t: number, opts?: { jump?: boolean; replay?: boolean }): void;
   /** 舞台尺寸,给编辑器算缩放 */
   size(): { width: number; height: number };
+  /** 取活跃卡片的位置 */
+  rects(): { clipId: string; left: number; top: number; width: number; height: number }[];
 }
 
 declare global {
@@ -139,6 +141,28 @@ export default function StageView() {
       size() {
         const p = ref.current.project;
         return { width: p?.width ?? 1920, height: p?.height ?? 1080 };
+      },
+      rects() {
+        const stageEl = document.querySelector(".pc-stage");
+        if (!stageEl) return [];
+        const stageRect = stageEl.getBoundingClientRect();
+        const els = document.querySelectorAll("[data-pc-clip]");
+        const result: { clipId: string; left: number; top: number; width: number; height: number }[] = [];
+        for (let i = 0; i < els.length; i++) {
+          const el = els[i] as HTMLElement;
+          const rect = el.getBoundingClientRect();
+          const clipId = el.getAttribute("data-pc-clip");
+          if (clipId) {
+            result.push({
+              clipId,
+              left: rect.left - stageRect.left,
+              top: rect.top - stageRect.top,
+              width: rect.width,
+              height: rect.height,
+            });
+          }
+        }
+        return result;
       },
     };
     window.__pcStage = api;
