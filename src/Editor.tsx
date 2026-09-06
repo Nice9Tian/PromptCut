@@ -81,7 +81,7 @@ export default function Editor() {
     if (!el) return;
     const clamp = () => {
       if (layoutMode === "chat") {
-        const maxRight = el.clientWidth - MIN_PREVIEW_W;
+        const maxRight = el.clientWidth - MIN_PREVIEW_W - HANDLE_W;
         if (maxRight > 0 && right.value > maxRight) {
           right.set(Math.max(MIN_RIGHT_W, maxRight));
         }
@@ -147,7 +147,7 @@ export default function Editor() {
         className="flex-1 min-h-0 grid"
         style={{
           gridTemplateColumns: isChat
-            ? `minmax(0, 1fr) ${right.value}px`
+            ? `minmax(0, 1fr) ${HANDLE_W}px ${right.value}px`
             : `${left.value}px ${HANDLE_W}px minmax(0, 1fr) ${HANDLE_W}px ${right.value}px`,
         }}
       >
@@ -177,19 +177,25 @@ export default function Editor() {
         >
           <Preview />
         </motion.main>
-        {!isChat && (
-          <ResizeHandle
-            axis="x"
-            value={right.value}
-            min={MIN_RIGHT_W}
-            max={() => room() - left.value - MIN_PREVIEW_W - HANDLE_W * 2}
-            invert
-            onChange={right.set}
-            onCommit={right.commit}
-            onReset={right.reset}
-            title="拖动调整右栏宽度,双击复位"
-          />
-        )}
+        {/*
+          右栏拖杆两种布局都要有:对话式下右栏就是 AI 面板,没有拖杆就等于宽度写死。
+          可让出的空间两种模式不一样——传统式要扣掉左栏和两根拖杆,对话式只有这一根。
+        */}
+        <ResizeHandle
+          axis="x"
+          value={right.value}
+          min={MIN_RIGHT_W}
+          max={() =>
+            isChat
+              ? room() - MIN_PREVIEW_W - HANDLE_W
+              : room() - left.value - MIN_PREVIEW_W - HANDLE_W * 2
+          }
+          invert
+          onChange={right.set}
+          onCommit={right.commit}
+          onReset={right.reset}
+          title="拖动调整右栏宽度,双击复位"
+        />
         <motion.aside
           initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.28, delay: 0.08, ease: [0.16, 1, 0.3, 1] }}
           className="min-h-0 border-l border-neutral-800 overflow-hidden"
