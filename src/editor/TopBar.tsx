@@ -3,6 +3,7 @@ import { actions, useStore } from "../store/project";
 import { themes } from "../themes";
 import { exportProjectJson, exportVideo, importProjectFile, importVideoFiles } from "./io";
 import { useSkin, skins } from "../skins/useSkin";
+import { skinGroups } from "../skins/skins";
 
 function Btn({ onClick, children, title }: { onClick: () => void; children: React.ReactNode; title?: string }) {
   return (
@@ -54,8 +55,12 @@ export function TopBar() {
       </select>
       <label className="text-neutral-400 text-xs ml-2">皮肤</label>
       <select value={skinId} onChange={(e) => setSkin(e.target.value)} className="bg-neutral-800 rounded px-2 py-1 text-xs outline-none">
-        {skins.map((sk) => (
-          <option key={sk.id} value={sk.id}>{sk.name}</option>
+        {skinGroups().map((g) => (
+          <optgroup key={g.group} label={g.group}>
+            {g.items.map((sk) => (
+              <option key={sk.id} value={sk.id}>{sk.name}</option>
+            ))}
+          </optgroup>
         ))}
       </select>
       <span className="ml-auto" />
