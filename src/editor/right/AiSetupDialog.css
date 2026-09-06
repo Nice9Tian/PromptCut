@@ -47,8 +47,7 @@
   background: var(--bg-canvas);
 }
 .ais-row.disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
+  cursor: default;
 }
 .ais-row:hover:not(.disabled) {
   border-color: var(--hairline-strong);
@@ -217,10 +216,8 @@
 .ais-agy-perms-desc {
   font-size: 12px;
   color: var(--ink-muted);
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 12px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
 }
 
 .ais-small-btn {
@@ -250,3 +247,6 @@
 .ais-protocol-mode input[type="checkbox"] {
   cursor: pointer;
 }
+.ais-setup-progress { margin-top: 8px; display: grid; gap: 8px; overflow-wrap: anywhere; }
+.ais-setup-progress pre { max-height: 140px; overflow: auto; white-space: pre-wrap; font-size: 11px; }
+.ais-setup-progress a { width: fit-content; text-decoration: none; }

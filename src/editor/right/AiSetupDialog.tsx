@@ -1,21 +1,24 @@
 import type { JSX } from "react";
+import { createPortal } from "react-dom";
 import { useEffect, useState } from "react";
 import "./AiSetupDialog.css";
-import type { ProviderInfo, AiProvider, SttInfo, PublicAiConfig, AiConfigPatch, ApiVendor } from "../../ai/types";
+import type { ProviderInfo, AiProvider, SttInfo, PublicAiConfig, AiConfigPatch, ApiVendor, CliSetupJob, LoginState } from "../../ai/types";
 
 export function AiSetupDialog(props: {
   open: boolean; onClose: () => void;
   providers: ProviderInfo[];
   stt?: SttInfo;
   current: AiProvider | null; onChoose: (id: AiProvider) => void;
-  onLogin: (id: AiProvider) => Promise<void>;
-  loginState: Partial<Record<AiProvider, "idle" | "waiting" | "ok" | "timeout">>;
+  onLogin: (id: AiProvider, deviceAuth?: boolean) => Promise<void>;
+  loginState: Partial<Record<AiProvider, LoginState>>;
+  setupJobs: CliSetupJob[];
+  onCancelSetup: (id: AiProvider) => Promise<void>;
   onInstall: (id: AiProvider) => Promise<void>;
   installState: Partial<Record<AiProvider, "idle" | "installing" | "ok" | "timeout" | "failed">>;
   installError: Partial<Record<AiProvider, string>>;
   config: PublicAiConfig | null; onSaveConfig: (partial: AiConfigPatch) => Promise<void>;
 }): JSX.Element | null {
-  const { open, onClose, providers, stt, current, onChoose, onLogin, loginState, onInstall, installState, installError, config, onSaveConfig } = props;
+  const { open, onClose, providers, stt, current, onChoose, onLogin, loginState, setupJobs, onCancelSetup, onInstall, installState, installError, config, onSaveConfig } = props;
 
   const [selected, setSelected] = useState<AiProvider | null>(current);
   const [apiVendor, setApiVendor] = useState<ApiVendor>("anthropic");
@@ -50,6 +53,12 @@ export function AiSetupDialog(props: {
       fetch('/api/ai/agy-permissions').then(r => r.json()).then(data => {
         if (data.ok) setAgyPerms(data);
       }).catch(() => {});
+
+    }
+  }, [open, current, config]);
+
+  useEffect(() => {
+    if (!open) return;
       // 未安装的那几项:问服务端能不能一键装、命令是什么(dryRun 只回答不执行)
       for (const p of providers) {
         if (p.available) continue;
@@ -62,8 +71,7 @@ export function AiSetupDialog(props: {
           .then(d => setInstallPlans(prev => ({ ...prev, [p.id]: d.ok ? { command: d.command } : { hint: d.hint || d.error } })))
           .catch(() => {});
       }
-    }
-  }, [open, current, config]);
+  }, [open, providers]);
 
   useEffect(() => {
     if (!open) return;
@@ -146,6 +154,8 @@ export function AiSetupDialog(props: {
       useHint = `${currentProviderData?.label || selected} 没装`;
     } else if (currentProviderData?.auth?.loggedIn === false) {
       useHint = `${currentProviderData?.label || selected} 还没登录`;
+    } else if (currentProviderData?.auth?.loggedIn !== true) {
+      useHint = '请先登录并确认连接';
     } else {
       canUse = true;
     }
@@ -160,6 +170,7 @@ export function AiSetupDialog(props: {
   const renderCliRow = (p: ProviderInfo) => {
     const isChecked = selected === p.id;
     const st = loginState[p.id];
+    const job = setupJobs.find(j => j.provider === p.id);
     
     return (
       <div key={p.id}>
@@ -175,7 +186,7 @@ export function AiSetupDialog(props: {
           <div className="ais-row-header">
             <span className="ais-row-name">{p.label}</span>
             <span className="ais-row-version">
-              {p.available ? `v${p.version || "未知"}` : "未安装"}
+              {p.available ? p.version || "版本未知" : "未安装"}
             </span>
           </div>
           {!p.available && (() => {
@@ -193,7 +204,7 @@ export function AiSetupDialog(props: {
                     >
                       {ist === "installing" ? "安装中…" : ist === "ok" ? "已安装" : ist === "timeout" ? "等太久了,重试" : ist === "failed" ? "重试安装" : "安装"}
                     </button>
-                    <span className="ais-detail">{ist === "installing" ? "已打开安装窗口,装完这里会自动检测到" : plan.command}</span>
+                    <span className="ais-detail">{ist === "installing" ? "正在后台安装，完成后会自动检测" : plan.command}</span>
                   </div>
                 ) : (
                   <div className="ais-auth-hint">
@@ -208,25 +219,30 @@ export function AiSetupDialog(props: {
             <div className="ais-row-auth">
               {p.auth.loggedIn === true ? (
                 <span className="ais-status-ok">已登录</span>
-              ) : p.auth.loggedIn === false ? (
+              ) : (
                 <div className="ais-auth-action">
-                  <span>未登录</span>
+                  <span>{p.auth.loggedIn === false ? "未登录" : "登录状态待确认"}</span>
                   <button 
                     className="ais-btn"
                     disabled={st === "waiting"}
                     onClick={(e) => { e.preventDefault(); onLogin(p.id); }}
                   >
-                    {st === "waiting" ? "等待登录…" : st === "ok" ? "已登录" : st === "timeout" ? "登录超时,重试" : "登录"}
+                    {st === "waiting" ? "等待登录…" : st === "ok" ? "已登录" : st === "timeout" || st === "failed" ? "重试登录" : "登录"}
                   </button>
-                </div>
-              ) : (
-                <div className="ais-auth-hint">
-                  <div className="ais-detail">{p.auth.detail}</div>
-                  {p.auth.fixHint && <div className="ais-fixhint">{p.auth.fixHint}</div>}
                 </div>
               )}
             </div>
           )}
+          {p.id === 'codex' && <div className="ais-detail">PromptCut 使用独立登录，不受 Codex 桌面应用配置影响。</div>}
+          {p.auth?.loggedIn === null && <div className="ais-detail">{p.auth.detail}</div>}
+          {job && <div className="ais-setup-progress" role="status" aria-live="polite">
+            <div className={job.state === 'failed' ? 'ais-fixhint' : 'ais-detail'}>{job.message}</div>
+            {job.state === 'running' && <button className="ais-btn" onClick={e => { e.preventDefault(); onCancelSetup(p.id); }}>取消</button>}
+            {job.url && <a className="ais-btn" href={job.url} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()}>打开登录网页 ↗</a>}
+            {job.deviceCode && <div>登录验证码：<strong>{job.deviceCode}</strong></div>}
+            {job.kind === 'install' && job.logs.length > 0 && <details><summary>查看安装详情</summary><pre>{job.logs.join('')}</pre></details>}
+            {p.id === 'codex' && job.kind === 'login' && job.state === 'failed' && <button className="ais-btn" onClick={e => { e.preventDefault(); onLogin(p.id, true); }}>改用设备码登录</button>}
+          </div>}
         </div>
       </label>
       {p.id === 'agy' && agyPerms && (
@@ -250,7 +266,7 @@ export function AiSetupDialog(props: {
 
   const cliProviders = providers.filter(p => p.id !== "api");
 
-  return (
+  return createPortal(
     <div className="ais-backdrop" onClick={onClose}>
       <div className="ais-dialog" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
         <div className="ais-title">选择 AI 助手的驱动方式</div>
@@ -349,6 +365,6 @@ export function AiSetupDialog(props: {
           )}
         </div>
       </div>
-    </div>
+    </div>, document.body
   );
 }

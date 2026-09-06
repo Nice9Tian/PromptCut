@@ -19,7 +19,7 @@ export interface ProviderInfo {
 
 export type ApiVendor = "anthropic" | "openai" | "gemini";
 
-export type LoginState = "idle" | "waiting" | "ok" | "timeout";
+export type LoginState = "idle" | "waiting" | "ok" | "timeout" | "failed";
 
 export interface PublicAiConfig {
   version: number;
@@ -111,4 +111,15 @@ export interface ChatMessage {
   statuses?: string[];
   error?: string;
   pending?: boolean;
+}
+
+export interface CliSetupJob {
+  id: string;
+  provider: AiProvider;
+  kind: "install" | "login";
+  state: "running" | "succeeded" | "failed";
+  message: string;
+  logs: string[];
+  url?: string;
+  deviceCode?: string;
 }

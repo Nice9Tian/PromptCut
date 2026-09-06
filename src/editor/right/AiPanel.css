@@ -13,6 +13,8 @@
   padding: 8px 12px;
   border-bottom: 1px solid var(--hairline);
   background: var(--bg-panel);
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .ai-panel-title {
@@ -37,6 +39,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
 }
 
 .ai-provider-select {
@@ -278,19 +281,27 @@
 }
 
 .ai-gear-btn {
-  font-size: 14px;
-  background: transparent;
-  border: none;
-  color: var(--ink-muted);
+  font-size: 13px;
+  font-weight: 600;
+  background: var(--fill-subtle);
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+  color: var(--ink);
   cursor: pointer;
-  padding: 4px;
+  padding: 6px 10px;
+  min-height: 32px;
+  gap: 6px;
+  white-space: nowrap;
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: center;
 }
 .ai-gear-btn:hover {
   color: var(--ink);
+  border-color: currentColor;
 }
+.ai-gear-btn:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
 
 .ai-banner {
   background: var(--fill-subtle);

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import type { AiProvider, ChatMessage, ChatAttachment, MessagePart, ProviderInfo, RunEvent, SttInfo, LoginState, PublicAiConfig, AiConfigPatch } from "./types";
+import type { AiProvider, ChatMessage, ChatAttachment, MessagePart, ProviderInfo, RunEvent, SttInfo, LoginState, PublicAiConfig, AiConfigPatch, CliSetupJob } from "./types";
 import { parseSseChunks } from "./sse";
 
 /** 往有序片段里追加文字(接在末尾的文字片段后面,不新开一段) */
@@ -44,11 +44,11 @@ export function useAiChat(opts?: { mock?: boolean }) {
   const abortControllerRef = useRef<AbortController | null>(null);
   const currentRunId = useRef<string | null>(null);
   const setupGateRef = useRef(false);
-  const loginTimerRef = useRef<number | null>(null);
+  const [setupJobs, setSetupJobs] = useState<CliSetupJob[]>([]);
   /** CLI 安装:idle | installing | ok | timeout | failed */
   const [installState, setInstallState] = useState<Partial<Record<AiProvider, "idle" | "installing" | "ok" | "timeout" | "failed">>>({});
   const [installError, setInstallError] = useState<Partial<Record<AiProvider, string>>>({});
-  const installTimerRef = useRef<number | null>(null);
+
 
   useEffect(() => {
     if (opts?.mock) {
@@ -117,120 +117,88 @@ export function useAiChat(opts?: { mock?: boolean }) {
     }
   }, [providers, opts?.mock]);
 
+  // A single non-overlapping poll follows all providers and survives dialog reopen.
   useEffect(() => {
-    return () => {
-      if (installTimerRef.current !== null) {
-        window.clearInterval(installTimerRef.current);
-        installTimerRef.current = null;
-      }
-      if (loginTimerRef.current !== null) {
-        window.clearInterval(loginTimerRef.current);
+    if (opts?.mock) return;
+    let stopped = false;
+    let timer: number;
+    let lastFinished = '';
+    const poll = async () => {
+      try {
+        const res = await fetch('/api/ai/setup', { signal: AbortSignal.timeout(15000) });
+        if (!res.ok) throw new Error('无法获取安装和登录进度');
+        const data = await res.json();
+        if (stopped) return;
+        const jobs: CliSetupJob[] = data.jobs || [];
+        setSetupJobs(jobs);
+        for (const job of jobs) {
+          if (job.kind === 'install') {
+            setInstallState(prev => ({ ...prev, [job.provider]: job.state === 'running' ? 'installing' : job.state === 'succeeded' ? 'ok' : 'failed' }));
+            setInstallError(prev => ({ ...prev, [job.provider]: job.state === 'failed' ? job.message : '' }));
+          } else {
+            setLoginState(prev => ({ ...prev, [job.provider]: job.state === 'running' ? 'waiting' : job.state === 'succeeded' ? 'ok' : 'failed' }));
+          }
+        }
+        const finished = jobs.filter(j => j.state !== 'running').map(j => j.id + j.state).join(',');
+        if (finished !== lastFinished) {
+          const r = await fetch('/api/ai/providers?refresh=1', { signal: AbortSignal.timeout(30000) });
+          if (r.ok) {
+            const d = await r.json();
+            if (!stopped) setProviders(d.providers || []);
+            lastFinished = finished;
+          }
+        }
+      } catch (e) {
+        if (!stopped) setSetupJobs(prev => prev.map(j => j.state === 'running' ? { ...j, message: '连接中断，正在重新获取进度…' } : j));
+      } finally {
+        if (!stopped) timer = window.setTimeout(poll, 2000);
       }
     };
-  }, []);
+    void poll();
+    return () => { stopped = true; window.clearTimeout(timer); };
+  }, [opts?.mock]);
 
-  /**
-   * 一键装 CLI。服务端开一个可见终端跑 npm i -g,这里每 3 秒刷一次 providers,
-   * 直到这一项 available(和登录那套一样的节奏)。
-   */
-  const install = useCallback(async (id: AiProvider) => {
-    if (installTimerRef.current !== null) {
-      window.clearInterval(installTimerRef.current);
-      installTimerRef.current = null;
-    }
-    setInstallError(prev => ({ ...prev, [id]: "" }));
-    setInstallState(prev => ({ ...prev, [id]: "installing" }));
+  const startSetup = useCallback(async (id: AiProvider, kind: 'install' | 'login', deviceAuth = false) => {
+    if (kind === 'install') {
+      setInstallState(prev => ({ ...prev, [id]: 'installing' }));
+      setInstallError(prev => ({ ...prev, [id]: '' }));
+    } else setLoginState(prev => ({ ...prev, [id]: 'waiting' }));
     try {
-      const res = await fetch("/api/ai/install", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ provider: id }),
+      const res = await fetch('/api/ai/' + kind, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider: id, deviceAuth }), signal: AbortSignal.timeout(30000),
       });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok || !data.ok) {
-        setInstallState(prev => ({ ...prev, [id]: "failed" }));
-        setInstallError(prev => ({ ...prev, [id]: [data.error, data.hint].filter(Boolean).join(" — ") || "安装请求失败" }));
-        return;
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data.error || '请求失败');
+      setSetupJobs(prev => [...prev.filter(j => j.provider !== id), data.job]);
+    } catch (e) {
+      const message = e instanceof Error ? e.message : '请求失败';
+      if (kind === 'install') {
+        setInstallState(prev => ({ ...prev, [id]: 'failed' }));
+        setInstallError(prev => ({ ...prev, [id]: message }));
+      } else {
+        setLoginState(prev => ({ ...prev, [id]: 'failed' }));
+        setSetupJobs(prev => [...prev.filter(j => j.provider !== id), { id: 'request-failed', provider: id, kind, state: 'failed', message, logs: [] }]);
+        setError(message);
       }
-      const startTime = Date.now();
-      installTimerRef.current = window.setInterval(async () => {
-        if (Date.now() - startTime > 600000) {
-          if (installTimerRef.current !== null) window.clearInterval(installTimerRef.current);
-          setInstallState(prev => ({ ...prev, [id]: "timeout" }));
-          return;
-        }
-        try {
-          const r = await fetch("/api/ai/providers?refresh=1");
-          if (!r.ok) return;
-          const d = await r.json();
-          const list: ProviderInfo[] = Array.isArray(d) ? d : (d.providers || []);
-          setProviders(list);
-          const p = list.find(x => x.id === id);
-          if (p && p.available) {
-            if (installTimerRef.current !== null) window.clearInterval(installTimerRef.current);
-            setInstallState(prev => ({ ...prev, [id]: "ok" }));
-          }
-        } catch {
-          // 轮询失败忽略,下一轮再来
-        }
-      }, 3000);
-    } catch {
-      setInstallState(prev => ({ ...prev, [id]: "failed" }));
-      setInstallError(prev => ({ ...prev, [id]: "安装请求失败" }));
     }
   }, []);
-
-  const login = useCallback(async (id: AiProvider) => {
-    if (loginTimerRef.current !== null) {
-      window.clearInterval(loginTimerRef.current);
-      loginTimerRef.current = null;
-    }
-
-    setLoginState(prev => ({ ...prev, [id]: "waiting" }));
-
+  const install = useCallback((id: AiProvider) => startSetup(id, 'install'), [startSetup]);
+  const login = useCallback(async (id: AiProvider, deviceAuth = false) => {
     if (opts?.mock) {
-      setTimeout(() => {
-        setLoginState(prev => ({ ...prev, [id]: "ok" }));
-        setProviders(prev => prev.map(p => p.id === id ? { ...p, auth: { ...p.auth, loggedIn: true } } : p));
-      }, 1500);
+      setLoginState(prev => ({ ...prev, [id]: 'ok' }));
+      setProviders(prev => prev.map(p => p.id === id ? { ...p, auth: { ...p.auth, loggedIn: true } } : p));
       return;
     }
+    await startSetup(id, 'login', deviceAuth);
+  }, [opts?.mock, startSetup]);
 
+  const cancelSetup = useCallback(async (id: AiProvider) => {
     try {
-      const res = await fetch("/api/ai/login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ provider: id }),
-      });
-      if (!res.ok) throw new Error("login failed");
-      
-      const startTime = Date.now();
-      loginTimerRef.current = window.setInterval(async () => {
-        if (Date.now() - startTime > 180000) {
-          if (loginTimerRef.current !== null) window.clearInterval(loginTimerRef.current);
-          setLoginState(prev => ({ ...prev, [id]: "timeout" }));
-          return;
-        }
-        try {
-          const r = await fetch("/api/ai/providers?refresh=1");
-          if (!r.ok) return;
-          const data = await r.json();
-          let list: ProviderInfo[] = Array.isArray(data) ? data : (data.providers || []);
-          setProviders(list);
-          const p = list.find(x => x.id === id);
-          if (p && p.auth?.loggedIn === true) {
-            if (loginTimerRef.current !== null) window.clearInterval(loginTimerRef.current);
-            setLoginState(prev => ({ ...prev, [id]: "ok" }));
-          }
-        } catch {
-          // ignore error in polling
-        }
-      }, 3000);
-    } catch {
-      setLoginState(prev => ({ ...prev, [id]: "timeout" }));
-      setError("登录请求失败");
-    }
-  }, [opts?.mock]);
+      const res = await fetch('/api/ai/setup', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ provider: id }), signal: AbortSignal.timeout(15000) });
+      if (!res.ok) throw new Error('取消失败，请重试');
+    } catch (e) { setError(e instanceof Error ? e.message : '取消失败'); }
+  }, []);
 
   const saveConfig = useCallback(async (patch: AiConfigPatch) => {
     if (opts?.mock) {
@@ -573,6 +541,8 @@ export function useAiChat(opts?: { mock?: boolean }) {
     setMessages,
     login,
     loginState,
+    setupJobs,
+    cancelSetup,
     install,
     installState,
     installError,

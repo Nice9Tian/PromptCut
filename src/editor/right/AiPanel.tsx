@@ -67,7 +67,7 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
       return false;
     }
   })();
-  const { messages, providers, sttInfo, provider, setProvider, streaming, send, abort, newChat, error, setMessages, login, loginState, install, installState, installError, config, saveConfig, setupOpen, openSetup, closeSetup } = useAiChat({ mock });
+  const { messages, providers, sttInfo, provider, setProvider, streaming, send, abort, newChat, error, setMessages, login, loginState, setupJobs, cancelSetup, install, installState, installError, config, saveConfig, setupOpen, openSetup, closeSetup } = useAiChat({ mock });
   const history = useChatHistory({ provider, messages, sessionId: undefined });
   const [historyOpen, setHistoryOpen] = useState(false);
   const [inputText, setInputText] = useState("");
@@ -259,7 +259,7 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
       <aside className="panel panel-right ai-panel">
         <div className="ai-panel-header">
           <div className="ai-panel-title">AI 助手</div>
-          <button className="ai-gear-btn" title="AI 设置" aria-label="AI 设置" onClick={openSetup}>⚙</button>
+          <button className="ai-gear-btn" title="AI 设置" aria-label="AI 设置" onClick={openSetup}><span aria-hidden="true">⚙</span><span>AI 设置</span></button>
         </div>
         <div className="ai-empty-state">
           没找到 Claude Code / agy / Codex,装好任意一个后重启本地服务
@@ -273,6 +273,8 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
           onChoose={(id) => closeSetup(id)}
           onLogin={login}
           loginState={loginState}
+          setupJobs={setupJobs}
+          onCancelSetup={cancelSetup}
           onInstall={install}
           installState={installState}
           installError={installError}
@@ -310,7 +312,7 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
               详细
             </button>
           </div>
-          <button className="ai-gear-btn" title="AI 设置" aria-label="AI 设置" onClick={openSetup}>⚙</button>
+          <button className="ai-gear-btn" title="AI 设置" aria-label="AI 设置" onClick={openSetup}><span aria-hidden="true">⚙</span><span>AI 设置</span></button>
           <select 
             className="ai-provider-select"
             value={provider || ""}
@@ -581,6 +583,8 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
         onChoose={(id) => closeSetup(id)}
         onLogin={login}
         loginState={loginState}
+          setupJobs={setupJobs}
+          onCancelSetup={cancelSetup}
         onInstall={install}
         installState={installState}
         installError={installError}
