@@ -9,3 +9,7 @@ desktop/src-tauri/runtime
 __pycache__/
 *.pyc
 tsconfig.tsbuildinfo
+
+# AI 助手:会话历史与每个会话的附件工作文件夹(server/vite-plugin-chats.ts)
+.pc-chats/
+.pc-work/

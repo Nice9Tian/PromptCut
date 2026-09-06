@@ -1,0 +1,166 @@
+import { useState, useEffect, useRef, useCallback } from "react";
+import type { ChatMessage } from "./types";
+import {
+  ChatSummary,
+  newChatId,
+  listChats,
+  getChat,
+  saveChat,
+  deleteChat,
+} from "./chatStore";
+
+export function useChatHistory(opts: {
+  provider: string | null;
+  messages: ChatMessage[];
+  sessionId?: string;
+}) {
+  // 当前会话 ID，初值从 localStorage 读，没有就创建并写回
+  const [conversationId, setConversationId] = useState<string>(() => {
+    try {
+      const stored = localStorage.getItem("pcChatId");
+      if (stored && /^[A-Za-z0-9_-]{1,64}$/.test(stored)) {
+        return stored;
+      }
+      const fresh = newChatId();
+      localStorage.setItem("pcChatId", fresh);
+      return fresh;
+    } catch {
+      return newChatId();
+    }
+  });
+
+  const [history, setHistory] = useState<ChatSummary[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [query, setQuery] = useState("");
+
+  const saveTimerRef = useRef<number | null>(null);
+  const conversationIdRef = useRef(conversationId);
+  conversationIdRef.current = conversationId;
+  const messagesRef = useRef(opts.messages);
+  messagesRef.current = opts.messages;
+  const optsRef = useRef(opts);
+  optsRef.current = opts;
+  const queryRef = useRef(query);
+  queryRef.current = query;
+
+  // 立即将当前会话存盘（如果有非 pending 的消息），并清理防抖计时器
+  const flush = useCallback(() => {
+    if (saveTimerRef.current !== null) {
+      window.clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+    const toSave = messagesRef.current.filter((m) => !m.pending);
+    if (toSave.length > 0) {
+      saveChat({
+        id: conversationIdRef.current,
+        provider: optsRef.current.provider || undefined,
+        sessionId: optsRef.current.sessionId,
+        messages: toSave,
+      });
+    }
+  }, []);
+
+  // 监听 messages 变化，防抖 800ms 自动存盘；messages 为空时不存
+  useEffect(() => {
+    const toSave = opts.messages.filter((m) => !m.pending);
+    if (toSave.length === 0) return;
+
+    if (saveTimerRef.current !== null) {
+      window.clearTimeout(saveTimerRef.current);
+    }
+    const currentId = conversationId;
+    saveTimerRef.current = window.setTimeout(() => {
+      saveChat({
+        id: currentId,
+        provider: opts.provider || undefined,
+        sessionId: opts.sessionId,
+        messages: toSave,
+      });
+      saveTimerRef.current = null;
+    }, 800);
+
+    return () => {
+      if (saveTimerRef.current !== null) {
+        window.clearTimeout(saveTimerRef.current);
+        saveTimerRef.current = null;
+      }
+    };
+  }, [opts.messages, conversationId, opts.provider, opts.sessionId]);
+
+  // 刷新会话历史列表
+  const refresh = useCallback(async (customQuery?: string) => {
+    const q = customQuery !== undefined ? customQuery : queryRef.current;
+    setLoading(true);
+    try {
+      const items = await listChats(q);
+      setHistory(items);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  // query 变化防抖 250ms 自动刷新
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      refresh(query);
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [query, refresh]);
+
+  // 打开历史会话：切换前先 flush 当前会话
+  const openChat = useCallback(
+    async (id: string): Promise<ChatMessage[] | null> => {
+      flush();
+      const chat = await getChat(id);
+      if (chat) {
+        setConversationId(id);
+        try {
+          localStorage.setItem("pcChatId", id);
+        } catch {
+          /* 忽略本地存储写入失败 */
+        }
+        return chat.messages;
+      }
+      return null;
+    },
+    [flush]
+  );
+
+  // 开始新会话：切换前先 flush 当前会话
+  const startNewChat = useCallback((): string => {
+    flush();
+    const nextId = newChatId();
+    setConversationId(nextId);
+    try {
+      localStorage.setItem("pcChatId", nextId);
+    } catch {
+      /* 忽略本地存储写入失败 */
+    }
+    return nextId;
+  }, [flush]);
+
+  // 删除指定会话：若删除的是当前会话则顺手 startNewChat
+  const removeChat = useCallback(
+    async (id: string) => {
+      await deleteChat(id);
+      if (id === conversationIdRef.current) {
+        startNewChat();
+      }
+      await refresh();
+    },
+    [refresh, startNewChat]
+  );
+
+  return {
+    conversationId,
+    history,
+    loading,
+    query,
+    setQuery,
+    refresh,
+    openChat,
+    startNewChat,
+    removeChat,
+    flush,
+  };
+}

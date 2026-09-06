@@ -5,9 +5,10 @@ import { exportPlugin } from "./server/vite-plugin-export";
 import vitePluginAi from "./server/vite-plugin-ai";
 import { sttPlugin } from "./server/vite-plugin-stt";
 import { mediaPlugin } from "./server/vite-plugin-media";
+import { chatsPlugin } from "./server/vite-plugin-chats";
 
 export default defineConfig({
-  plugins: [react(), tailwindcss(), exportPlugin(), vitePluginAi(), sttPlugin(), mediaPlugin()],
+  plugins: [react(), tailwindcss(), exportPlugin(), vitePluginAi(), sttPlugin(), mediaPlugin(), chatsPlugin()],
   server: {
     watch: {
       // 桌面壳的二进制、导出产物、内置 Python 都不是源码;watch 到 exe 会 EBUSY 把 dev server 崩掉

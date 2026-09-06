@@ -65,9 +65,18 @@ export type RunEvent =
 export interface ChatAttachment {
   url: string;
   name: string;
-  kind: "video" | "srt" | "json" | "other";
+  kind: "video" | "srt" | "json" | "other" | "image" | "audio" | "text" | "pdf";
   text?: string;
   durationSec?: number;
+  id?: string;
+  mime?: string;
+  bytes?: number;
+  srcPath?: string | null;
+  path?: string;
+  status?: "importing" | "ready" | "error";
+  error?: string;
+  jobId?: string;
+  conversationId?: string;
 }
 
 export interface ToolCallInfo {

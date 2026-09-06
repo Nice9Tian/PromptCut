@@ -578,3 +578,15 @@
   font-family: var(--font-mono);
   overflow-wrap: anywhere;
 }
+
+/* ── AI 附件卡片的导入中 / 失败两态 ────────────────────────── */
+.ai-attachment-chip.is-importing {
+  opacity: 0.7;
+  border-color: var(--hairline);
+}
+
+.ai-attachment-chip.is-error {
+  border-color: var(--danger);
+  color: var(--danger);
+  cursor: pointer;
+}
