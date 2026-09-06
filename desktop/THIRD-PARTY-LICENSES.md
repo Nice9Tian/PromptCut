@@ -107,6 +107,29 @@ https://www.gyan.dev/ffmpeg/builds/#release-builds （选择对应版本的 sour
 
 由于这些组件由用户主动下载，不构成安装包的一部分，其许可证义务由用户自行承担。
 
+## 9. 拓展库包内的模型权重（随拓展包分发）
+
+拓展库包（`PromptCut-ext-<名字>-<版本>.exe`）是独立于安装包的可选下载，但它**确实
+把模型权重分发给了用户**，所以每一份权重都要在这里列清楚。
+
+`desktop/scripts/make-extension.mjs` 里每个模型必须写齐 `title` / `license` /
+`source`，缺一项就打不出包——这是硬闸，不指望发布前有人记得回头补文档。打包时还会
+把同样的信息写成 `THIRD-PARTY-LICENSES.txt` 放进包里，让拿到包的人不必回仓库查。
+
+| 模型 | 用途 | 许可证 | 来源 |
+| --- | --- | --- | --- |
+| TransNet V2 (`transnetv2.onnx`) | 镜头切换识别 | MIT | https://github.com/soCzech/TransNetV2 |
+
+- **TransNet V2**：Copyright (c) Tomáš Souček, Jakub Lokoč。随包的 `.onnx` 由官方
+  TensorFlow checkpoint 经官方 `convert_weights.py` 转 PyTorch 后导出，未再训练，
+  生成步骤见 [`tools/transnetv2/README.md`](../tools/transnetv2/README.md)。MIT 要求
+  保留版权声明和许可证全文，已随包附带。
+
+拓展包里的 Python 依赖（`wheels/`）各自的许可证见各 wheel 内的 `METADATA`；
+当前镜头识别拓展含 onnxruntime（MIT）、numpy（BSD-3-Clause）、protobuf
+（BSD-3-Clause）、flatbuffers（Apache-2.0）、packaging（Apache-2.0 / BSD-2-Clause）。
+**未逐一核实，分发前请确认。**
+
 ---
 
 ## 分发前检查清单
@@ -118,4 +141,7 @@ https://www.gyan.dev/ffmpeg/builds/#release-builds （选择对应版本的 sour
 - [ ] 确认 Chrome for Testing 的再分发条款允许捆绑分发
 - [ ] 确认 WebView2 SDK 许可条款允许 downloadBootstrapper 模式
 - [ ] 确认内置 Python 版本的 PSF License 条款
+- [ ] 每加一个随拓展包分发的模型权重，在第 9 节登记，并核实其许可证允许再分发
+      （注意有的模型是 CC-BY-NC 之类的非商业授权，**不能**随包发）
+- [ ] 核实拓展包内各 wheel 的许可证
 - [ ] 若要签名发布，获取代码签名证书并配置 Tauri 签名

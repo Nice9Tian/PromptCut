@@ -49,7 +49,17 @@ const EXTENSIONS = {
     requiresApp: "0.2.5",  // promptcut_shots 是这一版加进去的
     requirements: path.join(PROJECT_ROOT, "python", "promptcut_shots", "requirements-shots.txt"),
     // 没有官方 ONNX，这份是从官方 TF 权重自己转的，见 tools/transnetv2/README.md
-    models: [{ file: "transnetv2.onnx", from: option("--model") }],
+    models: [{
+      file: "transnetv2.onnx",
+      from: option("--model"),
+      // 模型权重要随包分发给用户，许可证必须逐个记清楚，并同步到
+      // desktop/THIRD-PARTY-LICENSES.md
+      title: "TransNet V2",
+      license: "MIT",
+      source: "https://github.com/soCzech/TransNetV2",
+      copyright: "Copyright (c) Tomáš Souček, Jakub Lokoč",
+      note: "权重由官方 TensorFlow checkpoint 经官方 convert_weights.py 转 PyTorch 后导出 ONNX，未再训练。",
+    }],
     note: "装完后「镜头切换识别」会用 TransNetV2，认得硬切也认得溶解；不装则退回 ffmpeg scdet，只认硬切。",
   },
   stt: {
@@ -57,7 +67,7 @@ const EXTENSIONS = {
     version: "1.0.0",
     requiresApp: "0.1.0",  // 语音识别很早就有了
     requirements: path.join(PROJECT_ROOT, "python", "requirements-faster-whisper.txt"),
-    models: [],
+    models: [],  // 语音模型按需下载，不随包发，所以这里没有要声明许可证的权重
     note: "装完后语音转文字不再需要联网下载依赖；模型仍按需下载。",
   },
 };
@@ -130,6 +140,14 @@ function main() {
 
   // ── 模型 ───────────────────────────────────────────────────────────
   for (const m of ext.models) {
+    // 权重要随包发给用户，没写清楚许可证就不许出包 —— 这一步是硬闸，
+    // 别指望发布前有人记得回头补 THIRD-PARTY-LICENSES.md
+    for (const field of ["title", "license", "source"]) {
+      if (!m[field]) {
+        fail(`模型 ${m.file} 缺少 ${field}：随包分发的权重必须写清楚许可证，`
+           + `并同步到 desktop/THIRD-PARTY-LICENSES.md`);
+      }
+    }
     if (!m.from) fail(`${ext.label} 需要模型文件 ${m.file}，用 --model <路径> 指定（生成方法见 tools/transnetv2/README.md）`);
     if (!fs.existsSync(m.from)) fail(`模型文件不存在：${m.from}`);
     fs.copyFileSync(m.from, path.join(modelDir, m.file));
@@ -145,11 +163,31 @@ function main() {
     builtAgainstApp: APP_VERSION,
     builtAt: new Date().toISOString(),
     wheels,
-    models: ext.models.map((m) => m.file),
+    models: ext.models.map(({ from, ...rest }) => rest),
     note: ext.note,
   };
   fs.writeFileSync(path.join(root, "extension.json"), JSON.stringify(manifest, null, 2));
   fs.copyFileSync(path.join(__dirname, "apply-extension.ps1"), path.join(root, "apply-extension.ps1"));
+
+  // 许可证跟着权重走：拿到这个包的人不该还要回仓库翻文档才知道里面是什么授权
+  if (ext.models.length) {
+    const text = [
+      `PromptCut ${ext.label} 拓展库 ${ext.version} — 第三方许可证`,
+      "",
+      "本包内含以下第三方模型权重。",
+      "",
+      ...ext.models.flatMap((m) => [
+        `## ${m.title}（${m.file}）`,
+        `- 许可证：${m.license}`,
+        `- 来源：${m.source}`,
+        ...(m.copyright ? [`- 版权：${m.copyright}`] : []),
+        ...(m.note ? [`- 说明：${m.note}`] : []),
+        "",
+      ]),
+      "Python 依赖（wheels/ 目录）各自的许可证见各 wheel 内的 METADATA。",
+    ].join("\r\n");
+    fs.writeFileSync(path.join(root, "THIRD-PARTY-LICENSES.txt"), text);
+  }
 
   // ── 打包 ───────────────────────────────────────────────────────────
   mkdirp(RELEASE_DIR);
