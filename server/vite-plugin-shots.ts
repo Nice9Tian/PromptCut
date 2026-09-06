@@ -204,8 +204,26 @@ async function runDetection(root: string, job: ShotsJob, video: string): Promise
           } catch { /* 不是 JSON 的行忽略 */ }
         }
       });
+      // stderr 也要留着。Python 侧的 emit_error 走 stdout，但解释器自己崩了
+      // (import 失败、段错误、被杀) 只会往 stderr 吐 traceback；只读 stdout 的话
+      // 用户拿到的就是一个空 message，什么都查不出来。
+      const stderrTail: string[] = [];
+      child.stderr?.on("data", (d) => {
+        for (const line of d.toString().split(/\r?\n/)) {
+          if (!line.trim()) continue;
+          stderrTail.push(line);
+          if (stderrTail.length > 20) stderrTail.shift();
+        }
+      });
       child.on("error", (e) => { job.status = "error"; job.message = e.message; resolve(); });
-      child.on("close", () => resolve());
+      child.on("close", (code) => {
+        // 没拿到结果、也没收到 error 事件，就靠退出码和 stderr 说明发生了什么
+        if (code !== 0 && job.status !== "error" && !job.transitions) {
+          job.status = "error";
+          job.message = stderrTail.join("\n").trim() || `镜头识别进程异常退出（代码 ${code}）`;
+        }
+        resolve();
+      });
     });
   } else {
     const times: number[] = [];
