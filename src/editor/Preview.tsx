@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { videoClipAt } from "../kernel/project";
+import { MediaLayers } from "./preview/MediaLayers";
 import { themeStyle } from "../themes";
 import { actions, useStore } from "../store/project";
 import type { PcStageApi } from "../StageView";
@@ -30,7 +30,6 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
   const playToken = useStore((s) => s.playToken);
   const selection = useStore((s) => s.selection);
   const boxRef = useRef<HTMLDivElement>(null);
-  const videoRef = useRef<HTMLVideoElement>(null);
   const frameRef = useRef<HTMLIFrameElement>(null);
   const [scale, setScale] = useState(0.4);
   const [stageReady, setStageReady] = useState(false);
@@ -114,21 +113,7 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
     refreshRects();
   }, [stageReady, t, playToken, stage, refreshRects]);
 
-  // 视频层同步
-  const hit = videoClipAt(project, t);
-  const videoSrc = hit?.media.url ?? "";
-  const videoTime = hit ? (hit.clip.mediaOffset ?? 0) + (t - hit.clip.start) : 0;
-  useEffect(() => {
-    const v = videoRef.current;
-    if (!v || !videoSrc) return;
-    if (playing) {
-      if (Math.abs(v.currentTime - videoTime) > 0.2) v.currentTime = videoTime;
-      if (v.paused) v.play().catch(() => {});
-    } else {
-      if (!v.paused) v.pause();
-      if (Math.abs(v.currentTime - videoTime) > 0.03) v.currentTime = videoTime;
-    }
-  }, [playing, videoTime, videoSrc]);
+  // 画面层和声音层都由 MediaLayers 管:可以同时有多条画面(重叠+淡化=交叉溶解),音频段单独出声
 
   // 命中测试与拖拽逻辑
   const handleOverlayPointerDown = (e: React.PointerEvent) => {
@@ -251,9 +236,7 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
         >
           <div style={{ transform: `scale(${scale})`, transformOrigin: "0 0", position: "absolute", left: 0, top: 0, ...themeStyle(project.themeId) }}>
             <div style={{ position: "relative", width: project.width, height: project.height }}>
-              {videoSrc && (
-                <video ref={videoRef} src={videoSrc} muted playsInline preload="auto" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }} />
-              )}
+              <MediaLayers project={project} t={t} playing={playing} />
               <iframe
                 ref={frameRef}
                 data-pc="stage-frame"

@@ -4,6 +4,8 @@ import { useRef, useState } from "react";
 import { CardsTab, type CardsTabHandle } from "./CardsTab";
 import { MediaTab } from "./MediaTab";
 import { CaptionsTab } from "./CaptionsTab";
+import { TransitionsTab } from "./TransitionsTab";
+import type { MediaAsset } from "../../kernel/project";
 import { StyleTab } from "./StyleTab";
 import { AssetToolbar } from "./AssetToolbar";
 import { Inspector } from "./Inspector";
@@ -15,7 +17,7 @@ import { Inspector } from "./Inspector";
  * 分页选择记在 localStorage;各分页都常驻挂载(只是隐藏),切来切去不丢滚动位置和输入。
  */
 type TopTab = "assets" | "edit";
-type AssetTab = "style" | "cards" | "videos" | "captions";
+type AssetTab = "style" | "cards" | "transitions" | "videos" | "music" | "captions";
 type EditTab = "form" | "code";
 
 const TOP_TABS: { key: TopTab; label: string }[] = [
@@ -25,9 +27,15 @@ const TOP_TABS: { key: TopTab; label: string }[] = [
 const ASSET_TABS: { key: AssetTab; label: string }[] = [
   { key: "style", label: "全局风格" },
   { key: "cards", label: "卡片" },
+  { key: "transitions", label: "转场" },
   { key: "videos", label: "视频" },
+  { key: "music", label: "配乐" },
   { key: "captions", label: "字幕" },
 ];
+/** 视频页看画面,配乐页看声音 */
+const VISUAL_KINDS: MediaAsset["kind"][] = ["video", "image"];
+const AUDIO_KINDS: MediaAsset["kind"][] = ["audio"];
+
 const EDIT_TABS: { key: EditTab; label: string }[] = [
   { key: "form", label: "参数" },
   { key: "code", label: "代码" },
@@ -44,7 +52,7 @@ function stored<T extends string>(key: string, allowed: readonly T[], fallback: 
 export function LeftPanel() {
   const [top, setTop] = useState<TopTab>(() => stored("pc.left.tab", ["assets", "edit"] as const, "assets"));
   const [assetTab, setAssetTab] = useState<AssetTab>(() =>
-    stored("pc.left.assetTab", ["style", "cards", "videos", "captions"] as const, "cards"),
+    stored("pc.left.assetTab", ["style", "cards", "transitions", "videos", "music", "captions"] as const, "cards"),
   );
   const [editTab, setEditTab] = useState<EditTab>(() => stored("pc.left.editTab", ["form", "code"] as const, "form"));
   const [captionMediaId, setCaptionMediaId] = useState<string | null>(null);
@@ -54,6 +62,7 @@ export function LeftPanel() {
   const [videosSearch, setVideosSearch] = useState("");
   const [captionsSearch, setCaptionsSearch] = useState("");
 
+  const [musicSearch, setMusicSearch] = useState("");
   const cardsTabRef = useRef<CardsTabHandle>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
@@ -77,17 +86,19 @@ export function LeftPanel() {
   const pickSub = (key: string) => (top === "assets" ? pickAsset(key as AssetTab) : pickEdit(key as EditTab));
 
   const currentSearch =
-    assetTab === "cards" ? cardsSearch : assetTab === "videos" ? videosSearch : captionsSearch;
+    assetTab === "cards" ? cardsSearch : assetTab === "videos" ? videosSearch : assetTab === "music" ? musicSearch : captionsSearch;
 
   const handleSearchChange = (val: string) => {
     if (assetTab === "cards") setCardsSearch(val);
     else if (assetTab === "videos") setVideosSearch(val);
+    else if (assetTab === "music") setMusicSearch(val);
     else if (assetTab === "captions") setCaptionsSearch(val);
   };
 
   const handleClearSearch = () => {
     if (assetTab === "cards") setCardsSearch("");
     else if (assetTab === "videos") setVideosSearch("");
+    else if (assetTab === "music") setMusicSearch("");
     else if (assetTab === "captions") setCaptionsSearch("");
   };
 
@@ -150,8 +161,14 @@ export function LeftPanel() {
         <div className="flex-1 min-h-0 flex flex-col" style={{ display: assetTab === "cards" ? "flex" : "none" }}>
           <CardsTab ref={cardsTabRef} search={cardsSearch} />
         </div>
+        <div className="flex-1 min-h-0 flex flex-col" style={{ display: assetTab === "transitions" ? "flex" : "none" }}>
+          <TransitionsTab />
+        </div>
         <div className="flex-1 min-h-0 flex flex-col" style={{ display: assetTab === "videos" ? "flex" : "none" }}>
-          <MediaTab search={videosSearch} onOpenCaptions={openCaptions} />
+          <MediaTab search={videosSearch} onOpenCaptions={openCaptions} kinds={VISUAL_KINDS} />
+        </div>
+        <div className="flex-1 min-h-0 flex flex-col" style={{ display: assetTab === "music" ? "flex" : "none" }}>
+          <MediaTab search={musicSearch} onOpenCaptions={openCaptions} kinds={AUDIO_KINDS} />
         </div>
         <div className="flex-1 min-h-0 flex flex-col" style={{ display: assetTab === "captions" ? "flex" : "none" }}>
           <CaptionsTab search={captionsSearch} mediaId={captionMediaId} onPick={setCaptionMediaId} />

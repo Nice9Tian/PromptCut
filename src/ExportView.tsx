@@ -3,7 +3,7 @@ import { flushSync } from "react-dom";
 import { Stage } from "./kernel/Stage";
 import { installExportClock } from "./kernel/exportClock";
 import type { Timeline } from "./kernel/types";
-import { flattenOverlay, videoClipAt, type Project } from "./kernel/project";
+import { flattenOverlay, videoLayersAt, type Project } from "./kernel/project";
 import { demoTimeline } from "./demo";
 import "./cards";
 
@@ -103,7 +103,8 @@ export default function ExportView() {
   const [mediaWarm, setMediaWarm] = useState(false);
 
   const projectRef = useRef<Project | null>(null);
-  const videoRef = useRef<HTMLVideoElement>(null);
+  /** 素材 id → <video> 元素。导出要同时管多层,不能只有一个 ref */
+  const videoEls = useRef<Map<string, HTMLVideoElement>>(new Map());
   const pendingSeekRef = useRef<Promise<void> | null>(null);
 
   useEffect(() => {
@@ -144,20 +145,17 @@ export default function ExportView() {
         setT(sec);
 
         const p = projectRef.current;
-        const v = videoRef.current;
-        
-        if (p && v) {
-          const hit = videoClipAt(p, sec);
-          if (hit && hit.media.url) {
-            // Ensure src is correct in case React hasn't updated it yet
-            if (!v.src.endsWith(hit.media.url)) {
-              v.src = hit.media.url;
-            }
-            v.currentTime = (hit.clip.mediaOffset ?? 0) + (sec - hit.clip.start);
-            pendingSeekRef.current = waitForVideoSeek(v);
-          } else {
-            pendingSeekRef.current = null;
+        if (p) {
+          // 这一刻可能同时有多层画面(交叉溶解),每一层各自 seek,全部就位才算这一帧准备好
+          const waits: Promise<void>[] = [];
+          for (const l of videoLayersAt(p, sec)) {
+            if (l.media.kind === "image") continue;
+            const v = videoEls.current.get(l.media.id);
+            if (!v) continue;
+            v.currentTime = (l.clip.mediaOffset ?? 0) + (sec - l.clip.start);
+            waits.push(waitForVideoSeek(v));
           }
+          pendingSeekRef.current = waits.length ? Promise.all(waits).then(() => undefined) : null;
         } else {
           pendingSeekRef.current = null;
         }
@@ -212,60 +210,82 @@ export default function ExportView() {
   // 否则导出脚本一进 pauseIfNetworkFetchesPending 就会因为媒体流还挂着而永远等不到 budget expired。
   useEffect(() => {
     if (!mediaWarm || window.__pcReady) return;
-    const v = videoRef.current;
-    if (!v) return;
-    if (v.readyState >= 4) {
+    const els = [...videoEls.current.values()];
+    if (els.length === 0) return;
+    const allReady = () => els.every((e) => e.readyState >= 4);
+    if (allReady()) {
       window.__pcReady = true;
       return;
     }
+    // 每个元素都要听:只听第一个的话,后就绪的那一段永远不会再触发检查,导出会一直等下去
     const on = () => {
-      if (v.readyState >= 4) {
+      if (allReady()) {
         window.__pcReady = true;
-        v.removeEventListener("canplaythrough", on);
+        for (const e of els) e.removeEventListener("canplaythrough", on);
       }
     };
-    v.addEventListener("canplaythrough", on);
-    return () => v.removeEventListener("canplaythrough", on);
+    for (const e of els) e.addEventListener("canplaythrough", on);
+    return () => {
+      for (const e of els) e.removeEventListener("canplaythrough", on);
+    };
   }, [mediaWarm, project]);
 
-  // 视频元素一旦确定要用就常驻挂载(不只在命中时才挂),这样它能在 __pcReady 之前把整段缓冲完。
-  let videoSrc = "";
-  let videoActive = false;
-  if (project) {
-    const hit = videoClipAt(project, t);
-    videoActive = !!hit?.media.url;
-    videoSrc = hit?.media.url || project.media.find((m) => m.kind === "video" && m.url)?.url || "";
-  }
+  // 画面素材(视频/图片)常驻挂载:每个素材一个元素,这样它们能在 __pcReady 之前整段缓冲完;
+  // 当前时刻谁该出现、以多大不透明度出现,由 videoLayersAt 决定——两段重叠+淡化就是交叉溶解。
+  // 音频不在这里出声,导出的音轨由服务端用 ffmpeg 合成。
+  const visualMedia = (project?.media || []).filter((m) => m.url && m.kind !== "audio");
+  const layers = project ? videoLayersAt(project, t) : [];
+  const layerOf = (mediaId: string) => layers.find((l) => l.media.id === mediaId);
 
   useEffect(() => {
     const p = projectRef.current;
-    const v = videoRef.current;
-    if (p && v && videoActive) {
-      const hit = videoClipAt(p, t);
-      if (hit) {
-        const targetTime = (hit.clip.mediaOffset ?? 0) + (t - hit.clip.start);
-        if (Math.abs(v.currentTime - targetTime) > 0.001) {
-          v.currentTime = targetTime;
-          pendingSeekRef.current = waitForVideoSeek(v);
-        }
+    if (!p) return;
+    const waits: Promise<void>[] = [];
+    for (const l of videoLayersAt(p, t)) {
+      if (l.media.kind === "image") continue;
+      const v = videoEls.current.get(l.media.id);
+      if (!v) continue;
+      const targetTime = (l.clip.mediaOffset ?? 0) + (t - l.clip.start);
+      if (Math.abs(v.currentTime - targetTime) > 0.001) {
+        v.currentTime = targetTime;
+        waits.push(waitForVideoSeek(v));
       }
     }
-  }, [t, videoSrc]);
+    pendingSeekRef.current = waits.length ? Promise.all(waits).then(() => undefined) : null;
+  }, [t, project]);
 
   if (!timeline) return null;
 
   return (
     <div style={{ position: "relative", width: timeline.width, height: timeline.height, overflow: "hidden", background: "transparent" }}>
-      {videoSrc && (
-        <video
-          ref={videoRef}
-          src={videoSrc}
-          muted
-          playsInline
-          preload="auto"
-          style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", visibility: videoActive ? "visible" : "hidden" }}
-        />
-      )}
+      {visualMedia.map((m) => {
+        const l = layerOf(m.id);
+        const common = {
+          position: "absolute" as const,
+          inset: 0,
+          width: "100%",
+          height: "100%",
+          objectFit: "cover" as const,
+          opacity: l ? l.opacity : 0,
+          visibility: (l ? "visible" : "hidden") as "visible" | "hidden",
+        };
+        return m.kind === "image" ? (
+          <img key={m.id} src={m.url} alt="" style={common} />
+        ) : (
+          <video
+            key={m.id}
+            ref={(el) => {
+              if (el) videoEls.current.set(m.id, el);
+              else videoEls.current.delete(m.id);
+            }}
+            src={m.url}
+            muted
+            playsInline
+            preload="auto"
+            style={common}
+          />
+        );
+      })}
       <div style={{ position: "absolute", inset: 0 }}>
         <Stage timeline={timeline} t={t} playToken={playToken} />
       </div>

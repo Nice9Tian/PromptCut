@@ -55,6 +55,15 @@ export interface TrackClip extends Clip {
   /** 视频段从素材的第几秒开始播(默认 0) */
   mediaOffset?: number;
   label?: string;
+  /**
+   * 淡入 / 淡出时长(秒)。两段素材在时间上重叠、各自带上淡出淡入,就是交叉溶解——
+   * 转场不是独立的对象,而是「重叠 + 淡化」的结果,所以不用往模型里塞 transition 类型。
+   * 同一条序列内不允许重叠,所以交叉溶解必然发生在两条序列之间。
+   */
+  fadeIn?: number;
+  fadeOut?: number;
+  /** 整体不透明度(0-1,默认 1)。音频段用它当音量。 */
+  opacity?: number;
 }
 
 export interface Project {
@@ -109,16 +118,68 @@ export function flattenOverlay(p: Project): Timeline {
 }
 
 /** 某时刻该播哪一段素材(按序列顺序找第一条命中的素材段) */
-export function videoClipAt(p: Project, t: number): { clip: TrackClip; media: MediaAsset } | null {
+/** 片段在 t 时刻的不透明度:淡入淡出算进去。超出区间返回 0。 */
+export function opacityAt(clip: TrackClip, t: number): number {
+  if (t < clip.start || t >= clip.end) return 0;
+  let a = clip.opacity ?? 1;
+  const fin = clip.fadeIn ?? 0;
+  const fout = clip.fadeOut ?? 0;
+  if (fin > 0 && t < clip.start + fin) a *= (t - clip.start) / fin;
+  if (fout > 0 && t > clip.end - fout) a *= (clip.end - t) / fout;
+  return Math.max(0, Math.min(1, a));
+}
+
+/**
+ * 某时刻画面上的所有素材层,按序列顺序排(数组靠后 = 画在上面),带算好的不透明度。
+ * 两段重叠且各自带淡化时,这里会同时返回它们 —— 交叉溶解就是这么来的。
+ * 音频段不在其中(它们走 audioClipsAt)。
+ */
+export function videoLayersAt(
+  p: Project,
+  t: number,
+): Array<{ clip: TrackClip; media: MediaAsset; opacity: number }> {
+  const layers: Array<{ clip: TrackClip; media: MediaAsset; opacity: number }> = [];
   for (const tr of p.tracks) {
     if (tr.hidden) continue;
-    const c = tr.clips.find((c) => t >= c.start && t < c.end && c.mediaId);
-    if (c) {
+    for (const c of tr.clips) {
+      if (!c.mediaId || t < c.start || t >= c.end) continue;
       const media = p.media.find((m) => m.id === c.mediaId);
-      if (media) return { clip: c, media };
+      if (!media || media.kind === "audio") continue;
+      const opacity = opacityAt(c, t);
+      if (opacity <= 0) continue;
+      layers.push({ clip: c, media, opacity });
     }
   }
-  return null;
+  return layers;
+}
+
+/** 某时刻该出声的所有音频段(opacity 当音量用) */
+export function audioClipsAt(
+  p: Project,
+  t: number,
+): Array<{ clip: TrackClip; media: MediaAsset; volume: number }> {
+  const out: Array<{ clip: TrackClip; media: MediaAsset; volume: number }> = [];
+  for (const tr of p.tracks) {
+    if (tr.hidden) continue;
+    for (const c of tr.clips) {
+      if (!c.mediaId || t < c.start || t >= c.end) continue;
+      const media = p.media.find((m) => m.id === c.mediaId);
+      if (!media || media.kind !== "audio") continue;
+      out.push({ clip: c, media, volume: opacityAt(c, t) });
+    }
+  }
+  return out;
+}
+
+/**
+ * 某时刻最上面那一层画面。只认视频/图片——以前它把音频段也当画面返回,
+ * 拖一首曲子进序列就会让 <video> 去 seek 一个 mp3。
+ */
+export function videoClipAt(p: Project, t: number): { clip: TrackClip; media: MediaAsset } | null {
+  const layers = videoLayersAt(p, t);
+  if (layers.length === 0) return null;
+  const top = layers[layers.length - 1];
+  return { clip: top.clip, media: top.media };
 }
 
 export function findClip(p: Project, clipId: string): { track: Track; clip: TrackClip; index: number } | null {

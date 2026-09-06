@@ -60,11 +60,15 @@ async function measureVideoDimensions(url: string): Promise<{ width: number; hei
 export function MediaTab({
   search,
   onOpenCaptions,
+  kinds,
 }: {
   search: string;
   onOpenCaptions: (mediaId: string) => void;
+  /** 只显示这些种类的素材(不给就全显示)。视频页给 video/image,配乐页给 audio。 */
+  kinds?: MediaAsset["kind"][];
 }) {
-  const media = useStore((s) => s.project.media);
+  const allMedia = useStore((s) => s.project.media);
+  const media = useMemo(() => (kinds ? allMedia.filter((m) => kinds.includes(m.kind)) : allMedia), [allMedia, kinds]);
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; media: MediaAsset } | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<{ mediaId: string; name: string } | null>(null);
 

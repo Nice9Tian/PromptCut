@@ -2,7 +2,7 @@ import { useRef } from "react";
 import { importSrtFile, importVideoFiles } from "../io";
 
 export interface AssetToolbarProps {
-  assetTab: "cards" | "videos" | "captions";
+  assetTab: "cards" | "transitions" | "videos" | "music" | "captions";
   search: string;
   onSearchChange: (value: string) => void;
   onClearSearch: () => void;

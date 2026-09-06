@@ -1,6 +1,7 @@
 import puppeteer from 'puppeteer';
 import path from 'path';
 import fs from 'fs/promises';
+import fsSync from 'node:fs';
 import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
 
@@ -197,6 +198,28 @@ export async function exportFrames(opts) {
         '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-t', String(durationSec),
         path.join(outDir, 'preview.mp4'),
       ]);
+      // 音轨:逐帧截图只有画面,声音在这里拼回去(配乐 + 视频自带的声音)
+      try {
+        const { buildAudioPlan, buildFfmpegArgs, hasAudioStream } = await import('./mux-audio.mjs');
+        const projectJsonPath = path.join(outDir, 'project.json');
+        if (fsSync.existsSync(projectJsonPath)) {
+          const proj = JSON.parse(fsSync.readFileSync(projectJsonPath, 'utf8'));
+          const ffprobeCmd = ffmpegCmd.replace(/ffmpeg(.exe)?$/i, (m) => m.toLowerCase().startsWith('ffmpeg.exe') ? 'ffprobe.exe' : 'ffprobe');
+          const plan = buildAudioPlan(proj, outDir).filter((c) => hasAudioStream(c.file, ffprobeCmd));
+          if (plan.length > 0) {
+            const withAudio = path.join(outDir, 'preview-audio.mp4');
+            console.log(`Muxing ${plan.length} audio clip(s)...`);
+            await runFfmpeg(buildFfmpegArgs(path.join(outDir, 'preview.mp4'), plan, withAudio, durationSec));
+            fsSync.rmSync(path.join(outDir, 'preview.mp4'));
+            fsSync.renameSync(withAudio, path.join(outDir, 'preview.mp4'));
+            console.log('Audio muxed into preview.mp4');
+          } else {
+            console.log('No audio clips; preview.mp4 stays silent.');
+          }
+        }
+      } catch (e) {
+        console.error('Audio mux failed (video is still fine):', e.message);
+      }
       console.log('Video synthesis complete.');
     } catch (e) {
       console.error('FFmpeg failed:', e.message);

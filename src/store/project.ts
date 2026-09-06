@@ -294,6 +294,49 @@ export const actions = {
     next = updateTrack(next, target.id, (t) => ({ ...t, clips: sortClips([...t.clips, placed]) }));
     setProject(next);
   },
+  /**
+   * 改片段自身的属性(不是卡片参数):淡入淡出、整体不透明度、显示名。
+   * 两段素材重叠 + 各自淡化 = 交叉溶解,所以「转场」不需要单独的对象,改这几个字段就够。
+   */
+  updateClip(clipId: string, patch: Partial<Pick<TrackClip, "fadeIn" | "fadeOut" | "opacity" | "label">>) {
+    const p = state.project;
+    const hit = findClip(p, clipId);
+    if (!hit) return;
+    setProject(updateTrack(p, hit.track.id, (t) => ({
+      ...t,
+      clips: t.clips.map((c) => (c.id === clipId ? { ...c, ...patch } : c)),
+    })));
+  },
+  /**
+   * 把两段相接的素材接成交叉溶解:后一段往前拉出 dur 秒的重叠,两边各加 dur 秒的淡化。
+   * 同一条序列内不允许重叠,所以后一段必须落在别的序列上——现有序列都放不下就新建一条。
+   * 返回是否成功。
+   */
+  applyCrossfade(aId: string, bId: string, dur: number): boolean {
+    if (!(dur > 0)) return false;
+    const A = findClip(state.project, aId);
+    const B = findClip(state.project, bId);
+    if (!A || !B) return false;
+
+    const len = B.clip.end - B.clip.start;
+    const newStart = Math.max(0, B.clip.start - dur);
+    const fits = (tr: Track) =>
+      !tr.locked &&
+      !tr.clips.some((c) => c.id !== bId && Math.max(newStart, c.start) < Math.min(newStart + len, c.end));
+
+    // 优先原地(它自己那条序列放得下就不用挪),其次别的序列,最后新建
+    const candidates = [
+      ...(B.track.id !== A.track.id && fits(B.track) ? [B.track] : []),
+      ...state.project.tracks.filter((t) => t.id !== A.track.id && t.id !== B.track.id && fits(t)),
+    ];
+    const target = candidates[0] ?? actions.addTrack();
+
+    actions.moveClip(bId, { start: newStart, end: newStart + len, trackId: target.id });
+    if (!findClip(state.project, bId)) return false;
+    actions.updateClip(aId, { fadeOut: dur });
+    actions.updateClip(bId, { fadeIn: dur });
+    return true;
+  },
   setClipParams(clipId: string, params: Record<string, unknown>, opts: { merge?: boolean } = { merge: true }) {
     const p = state.project;
     const hit = findClip(p, clipId);
