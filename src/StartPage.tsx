@@ -6,6 +6,10 @@ import { listDrafts, openDraft, deleteDraft, newDraftId, setActiveDraftId } from
 import type { DraftInfo } from "./editor/io/drafts";
 import { newProject, parseProc, PROC_EXT } from "./editor/io/proc";
 import { actions } from "./store/project";
+import { sttStatus } from "./editor/io/stt";
+import { runSttInstall } from "./editor/io/runSttInstall";
+import { useInstallJobs } from "./ai/sttInstallStore";
+import { SttInstallProgress } from "./editor/right/SttInstallProgress";
 
 /** 字节数写成人看的样子 */
 function humanSize(bytes: number): string {
@@ -188,28 +192,37 @@ export function StartPage(props: { onEnterEditor: () => void }): JSX.Element {
 /** 拓展功能里的听写识别:显示装没装,没装就地装 */
 function SttCard(): JSX.Element {
   const [status, setStatus] = useState<{ ready: boolean; detail: string } | null>(null);
-  const [installing, setInstalling] = useState(false);
+  const [startError, setStartError] = useState<string | null>(null);
+  const jobs = useInstallJobs();
+  const job = jobs.at(-1);
+  const running = !!job && job.phase !== "done" && job.phase !== "failed";
 
   const load = useCallback(async () => {
     try {
-      const d = await (await fetch("/api/stt/status")).json();
-      setStatus({ ready: !!(d.ready ?? d.installed ?? d.available), detail: d.hint || d.detail || d.engine || "" });
-    } catch {
-      setStatus({ ready: false, detail: "读不到状态" });
+      const s = await sttStatus();
+      // 状态在 engines.<引擎>.installed 里,顶层没有 ready / installed / available 这些字段;
+      // 以前读顶层,取到的永远是 undefined,所以装好了也一直显示「未安装」。
+      const ready = Object.values(s.engines).some((e) => e.installed);
+      const engine = Object.entries(s.engines).find(([, e]) => e.installed);
+      setStatus({ ready, detail: engine ? `${engine[0]} ${engine[1].version ?? ""}`.trim() : "未安装" });
+    } catch (e) {
+      // 内置 Python 没就绪时 sttStatus 会抛,这时装不了,把原因说出来
+      setStatus({ ready: false, detail: e instanceof Error ? e.message : "读不到状态" });
     }
   }, []);
 
   useEffect(() => { void load(); }, [load]);
+  // 装完自动把状态刷新到位,不用用户自己再点一次
+  useEffect(() => { if (job?.phase === "done") void load(); }, [job?.phase, load]);
 
-  const install = async () => {
-    setInstalling(true);
-    try {
-      await fetch("/api/stt/install", { method: "POST" });
-      // 安装是后台跑的,这里只负责把状态刷新到位
-      await load();
-    } finally {
-      setInstalling(false);
-    }
+  const install = () => {
+    setStartError(null);
+    // 走和编辑器里那个缺依赖提示完全相同的路径:流式读 pip 输出、解析进度、
+    // 互斥防重复。以前这里是 POST /api/stt/install 且不带 body,
+    // 服务端 JSON.parse("") 直接抛错返回 500,安装根本没启动过,
+    // 而这段代码既不看返回码也不读那条 SSE 流,所以按钮闪一下就回到「安装」。
+    try { runSttInstall("faster-whisper"); }
+    catch (e) { setStartError(e instanceof Error ? e.message : String(e)); }
   };
 
   return (
@@ -229,10 +242,18 @@ function SttCard(): JSX.Element {
             ? <span className="sp-ok">已就绪{status.detail ? ` · ${status.detail}` : ""}</span>
             : <span className="sp-muted">{status.detail || "未安装"}</span>}
         </div>
+        {/* 装的过程要看得见:下几百 MB、跑几分钟,没有进度就和没反应一样。
+            失败的也留着显示,否则用户只看到按钮变回「安装」,不知道为什么没装上。 */}
+        {(running || job?.phase === "failed") && (
+          <div className="sp-ext-progress"><SttInstallProgress job={job!} compact /></div>
+        )}
+        {startError && <div className="sp-ext-error">{startError}</div>}
       </div>
-      {status && !status.ready && (
-        <button className="sp-ghost-btn" disabled={installing} onClick={() => void install()}>
-          {installing ? "安装中…" : "安装"}
+      {/* 判断依据是「有没有在跑」,不是「有没有任务」—— 装完一次之后 store 里会一直留着
+          那条已完成的记录,拿它当条件会让卡片再也出不来按钮,变成死胡同。 */}
+      {status && !status.ready && !running && (
+        <button className="sp-ghost-btn" onClick={install}>
+          {job?.phase === "failed" ? "重试" : "安装"}
         </button>
       )}
     </div>
