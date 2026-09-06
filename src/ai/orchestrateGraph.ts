@@ -90,3 +90,138 @@ export function normalizeTasks(parsed: unknown, roles: Role[]): OrchestrationTas
   if (out.length === 0) throw new Error("JSON 里没有可执行的任务");
   return out;
 }
+
+export type TaskStatus = "pending" | "running" | "done" | "error";
+
+/** 一个任务的运行时状态。界面按它渲染每个角色气泡的进度。 */
+export interface TaskRun {
+  task: OrchestrationTask;
+  status: TaskStatus;
+  /** 这个任务产生的那条消息的 id，界面据此把气泡和任务对上 */
+  messageId?: string;
+  error?: string;
+  startedAt?: number;
+  finishedAt?: number;
+}
+
+/**
+ * 整次编排的状态。这是界面唯一需要读的东西。
+ *
+ * plan / dag / tasks 三段都留着而不是只留最终结果：界面要把它们放进
+ * 默认折叠的块里。分工分错的时候，用户得能展开看是哪一步判断错了——
+ * 全隐藏的话只能看着结果猜。
+ */
+export interface OrchestrationState {
+  phase: "planning" | "running" | "done" | "error" | "cancelled";
+  /** 用户原始的那句话 */
+  query: string;
+  /** 第一步：主管的散文计划 */
+  plan: string;
+  /** 第二步：依赖关系说明 */
+  dag: string;
+  /** 第三步的产物，带运行时状态 */
+  tasks: TaskRun[];
+  /** 拓扑分层，元素是任务 id。界面想显示「第几批」时用得上 */
+  waves: string[][];
+  error?: string;
+}
+
+/**
+ * 界面注入的「怎么真的把一个任务发出去」。
+ *
+ * 编排器不碰 send()、不碰 messages —— 那是界面的地盘。这里只负责按 DAG
+ * 决定谁什么时候能跑，具体怎么发、气泡怎么建，由调用方实现这个函数。
+ * 返回这条任务对应的消息 id（可选），好让界面把气泡和任务对上。
+ */
+export type TaskExecutor = (
+  task: OrchestrationTask,
+  prompt: string,
+  provider: string | null,
+) => Promise<string | void>;
+
+
+/**
+ * 按 DAG 跑完整个计划。同一层里的任务用 Promise.all 并发。
+ *
+ * 失败不连坐：一个任务挂了，同层的其他任务照跑完（它们本来就互不依赖）。
+ * 但**依赖它的后续任务会被跳过**并标成 error —— 拿着上游没产出的东西往下做，
+ * 只会产生一堆看起来完成了、其实建立在空气上的结果。
+ *
+ * 每次状态变化都回调 onUpdate，界面据此实时更新气泡。
+ */
+export async function runOrchestration(
+  plan: { plan: string; dag: string; tasks: OrchestrationTask[]; waves: OrchestrationTask[][] },
+  query: string,
+  exec: TaskExecutor,
+  onUpdate: (state: OrchestrationState) => void,
+  signal: AbortSignal | undefined,
+  /**
+   * 角色相关的两件事由调用方注入，本模块不 import roles ——
+   * roles/index.ts 用了 vite 专有的 import.meta.glob，一旦引进来，
+   * 这个模块就没法用 node 直接跑单测了，而并发调度恰恰最该测。
+   */
+  deps: {
+    promptFor: (t: OrchestrationTask) => string;
+    providerFor: (t: OrchestrationTask) => string | null;
+  },
+): Promise<OrchestrationState> {
+  const state: OrchestrationState = {
+    phase: "running",
+    query,
+    plan: plan.plan,
+    dag: plan.dag,
+    tasks: plan.tasks.map((task) => ({ task, status: "pending" as TaskStatus })),
+    waves: plan.waves.map((w) => w.map((t) => t.id)),
+  };
+  const byId = new Map(state.tasks.map((r) => [r.task.id, r]));
+  const push = () => onUpdate({ ...state, tasks: state.tasks.map((t) => ({ ...t })) });
+  push();
+
+  const failed = new Set<string>();
+
+  for (const wave of plan.waves) {
+    if (signal?.aborted) {
+      state.phase = "cancelled";
+      for (const r of state.tasks) if (r.status === "pending") r.status = "error", (r.error = "已取消");
+      push();
+      return state;
+    }
+
+    await Promise.all(
+      wave.map(async (task) => {
+        const run = byId.get(task.id)!;
+
+        // 上游挂了就别跑：基于空气的产出比没有产出更糟
+        const blocked = task.dependsOn.filter((d) => failed.has(d));
+        if (blocked.length > 0) {
+          run.status = "error";
+          run.error = `依赖的任务 ${blocked.join("、")} 没成功，跳过`;
+          failed.add(task.id);
+          push();
+          return;
+        }
+
+        run.status = "running";
+        run.startedAt = Date.now();
+        push();
+        try {
+          const messageId = await exec(task, deps.promptFor(task), deps.providerFor(task));
+          if (typeof messageId === "string") run.messageId = messageId;
+          run.status = "done";
+        } catch (e) {
+          run.status = "error";
+          run.error = e instanceof Error ? e.message : String(e);
+          failed.add(task.id);
+        } finally {
+          run.finishedAt = Date.now();
+          push();
+        }
+      }),
+    );
+  }
+
+  state.phase = state.tasks.every((t) => t.status === "done") ? "done" : "error";
+  push();
+  return state;
+}
+

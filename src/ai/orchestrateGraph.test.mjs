@@ -93,3 +93,76 @@ test("兼容 role / deps / prompt 这几种别名", () => {
   assert.equal(out[0].instruction, "配字幕");
   assert.deepEqual(out[0].dependsOn, ["0"]);
 });
+
+// ── runOrchestration：并发调度与失败传播 ──────────────────────────────
+
+import { runOrchestration } from "./orchestrateGraph.ts";
+
+const DEPS = { promptFor: (t) => t.instruction, providerFor: () => null };
+const plan = (tasks) => ({ plan: "p", dag: "d", tasks, waves: topoWaves(tasks) });
+
+test("同一层的任务真的是并发跑的，不是一个接一个", async () => {
+  let running = 0, peak = 0;
+  const exec = async () => {
+    running++; peak = Math.max(peak, running);
+    await new Promise((r) => setTimeout(r, 30));
+    running--;
+  };
+  await runOrchestration(plan([T("1"), T("2"), T("3")]), "q", exec, () => {}, undefined, DEPS);
+  assert.equal(peak, 3, "三个无依赖任务应当同时在跑");
+});
+
+test("有依赖的不会提前跑", async () => {
+  const order = [];
+  const exec = async (t) => { order.push(t.id); await new Promise((r) => setTimeout(r, 5)); };
+  await runOrchestration(plan([T("1"), T("2", ["1"])]), "q", exec, () => {}, undefined, DEPS);
+  assert.deepEqual(order, ["1", "2"]);
+});
+
+test("一个任务失败，同层的其他任务照常跑完", async () => {
+  const done = [];
+  const exec = async (t) => { if (t.id === "1") throw new Error("炸了"); done.push(t.id); };
+  const st = await runOrchestration(plan([T("1"), T("2"), T("3")]), "q", exec, () => {}, undefined, DEPS);
+  assert.deepEqual(done.sort(), ["2", "3"]);
+  assert.equal(st.tasks.find((r) => r.task.id === "1").status, "error");
+  assert.equal(st.tasks.find((r) => r.task.id === "2").status, "done");
+});
+
+test("依赖失败任务的后续被跳过，而不是拿着空气往下做", async () => {
+  const ran = [];
+  const exec = async (t) => { if (t.id === "1") throw new Error("炸了"); ran.push(t.id); };
+  const st = await runOrchestration(plan([T("1"), T("2", ["1"])]), "q", exec, () => {}, undefined, DEPS);
+  assert.deepEqual(ran, [], "下游不该执行");
+  const t2 = st.tasks.find((r) => r.task.id === "2");
+  assert.equal(t2.status, "error");
+  assert.match(t2.error, /没成功，跳过/);
+});
+
+test("整体状态：全成功是 done，有失败是 error", async () => {
+  const ok = await runOrchestration(plan([T("1")]), "q", async () => {}, () => {}, undefined, DEPS);
+  assert.equal(ok.phase, "done");
+  const bad = await runOrchestration(plan([T("1")]), "q", async () => { throw new Error("x"); }, () => {}, undefined, DEPS);
+  assert.equal(bad.phase, "error");
+});
+
+test("已中止的信号：不执行任何任务，全标记为已取消", async () => {
+  const ac = new AbortController(); ac.abort();
+  let called = 0;
+  const st = await runOrchestration(plan([T("1")]), "q", async () => { called++; }, () => {}, ac.signal, DEPS);
+  assert.equal(called, 0);
+  assert.equal(st.phase, "cancelled");
+});
+
+test("onUpdate 会推送中间状态，界面才能实时更新", async () => {
+  const seen = [];
+  await runOrchestration(plan([T("1")]), "q", async () => {}, (s) => {
+    seen.push(s.tasks[0].status);
+  }, undefined, DEPS);
+  assert.ok(seen.includes("running"), "应当推送过 running");
+  assert.equal(seen.at(-1), "done");
+});
+
+test("exec 返回的 messageId 会被记下来，界面据此对上气泡", async () => {
+  const st = await runOrchestration(plan([T("1")]), "q", async () => "msg-42", () => {}, undefined, DEPS);
+  assert.equal(st.tasks[0].messageId, "msg-42");
+});

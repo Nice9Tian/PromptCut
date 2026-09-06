@@ -14,9 +14,13 @@
  * 一个为了提速的功能反而更慢。
  */
 import { ALL_ROLES, resolveModelFor, type Role } from "./roles";
-import { topoWaves, extractJson, normalizeTasks, type OrchestrationTask } from "./orchestrateGraph";
+import {
+  topoWaves, extractJson, normalizeTasks, runOrchestration as runWaves,
+  type OrchestrationTask, type OrchestrationState, type TaskRun, type TaskStatus, type TaskExecutor,
+} from "./orchestrateGraph";
 
-export { topoWaves, normalizeTasks, type OrchestrationTask };
+export { topoWaves, normalizeTasks };
+export type { OrchestrationTask, OrchestrationState, TaskRun, TaskStatus, TaskExecutor };
 
 export interface OrchestrationPlan {
   /** 第一步：主管的散文计划，界面折叠里显示 */
@@ -89,6 +93,24 @@ export async function buildPlan(
 
   const tasks = normalizeTasks(extractJson(jsonText), workers);
   return { plan, dag, tasks, waves: topoWaves(tasks) };
+}
+
+/**
+ * 按 DAG 跑完计划。真正的调度在 orchestrateGraph 里（那边不依赖 vite，能单测），
+ * 这里只负责把「角色 → 提示词 / provider」这两件事绑上去。
+ */
+export function runOrchestration(
+  plan: OrchestrationPlan,
+  query: string,
+  exec: TaskExecutor,
+  onUpdate: (state: OrchestrationState) => void,
+  signal?: AbortSignal,
+  roles: Role[] = ALL_ROLES,
+): Promise<OrchestrationState> {
+  return runWaves(plan, query, exec, onUpdate, signal, {
+    promptFor: (t) => promptForTask(t, roles),
+    providerFor: (t) => providerForTask(t, roles),
+  });
 }
 
 /** 每个任务实际要发给模型的提示词：角色卡 + 这次的具体指令 */
