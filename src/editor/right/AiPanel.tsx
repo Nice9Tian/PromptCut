@@ -397,6 +397,22 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
   const [teamMode, setTeamModeState] = useState(isTeamMode);
   useEffect(() => subscribeTeamMode(setTeamModeState), []);
 
+  /*
+   * 没配 API 直连时的降级说明，折在勾选框的 tooltip 里，不再单独占一条横幅。
+   *
+   * 这个降级的实际后果是「该并行的偶尔没并行」：不阻断操作、不产生错误结果，
+   * 用户甚至察觉不到——本来就没人知道那一次「本可以更快」。横幅是界面上最重的
+   * 一档提示，该留给「挡住你做事」或「结果可能是错的」。拿它说一件「有时会慢
+   * 一点」的事，代价是用户学会忽略横幅，等哪天编排真失败了那条也会被一起忽略。
+   *
+   * 能跑的和不能跑的要分清：/api/ai/plan 没 API 会退回 CLI，编排照跑；
+   * API-only 的只有前面那道 triage 闸，它必须比 manager 便宜才有存在意义。
+   * 闸不可用时退回 heuristicTriage，只认并列词够多的请求，拿不准的走单线。
+   */
+  const teamModeHint = config && !config.api.apiKey.set
+    ? "复杂请求先由制片主管拆成多个任务,能并行的同时跑。没配「API 直连」时,判断值不值得分工的那道闸用不了:带「然后」「同时」这类词的明显多步请求照常分工,其余的按单线处理。"
+    : "复杂请求先由制片主管拆成多个任务,能并行的同时跑。简单提问会自动跳过,不多花这道工序";
+
   // 编排折叠块插在「最后一条用户消息」后面。编排发生在提问之后、角色回复之前，
   // 放这个位置读下来才是「提问 → 怎么分的工 → 各角色的回复」。挂在消息流末尾的话
   // 它会排到自己产出的那些回复下面，因果顺序是反的。
@@ -500,7 +516,7 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
           key="team"
           data-key="team"
           className="ai-thinking-toggle"
-          title="复杂请求先由制片主管拆成多个任务,能并行的同时跑。简单提问会自动跳过,不多花这道工序"
+          title={teamModeHint}
         >
           <input
             type="checkbox"
@@ -674,26 +690,6 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
         return null;
       })()}
 
-      {/*
-        分工模式勾上了、但没配 API 直连。
-
-        编排本身能跑：/api/ai/plan 没有 API 就退回 CLI 驱动。用不了的是前面
-        那道 triage 闸 —— 它必须比 manager 便宜才有意义，CLI 起一次进程要几秒，
-        拿它做闸是净亏损，所以维持 API-only。
-
-        闸不可用时 shouldOrchestrate 退回 heuristicTriage：只认「然后 / 同时」
-        这类并列词够多的请求，拿不准的一律按单线处理。也就是说分工模式还有用，
-        只是漏判变多 —— 说成「用不了」是错的，不说用户又会奇怪为什么有时不分工。
-      */}
-      {teamMode && config && !config.api.apiKey.set && (
-        <div className="ai-banner">
-          <span>
-            没配「API 直连」，判断「值不值得分工」的那道闸用不了：带「然后」
-            「同时」这类词的明显多步请求照常分工，其余的按单线处理。
-          </span>
-          <button className="ai-banner-btn" onClick={openSetup}>去配置</button>
-        </div>
-      )}
 
       <div className="ai-messages" ref={messagesScrollRef} onScroll={onMessagesScroll}>
         {messages.length === 0 ? (
