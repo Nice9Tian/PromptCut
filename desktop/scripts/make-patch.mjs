@@ -222,7 +222,9 @@ function main() {
   const manifest = {
     format: "promptcut-patch/1",
     appVersion,
-    // 补丁不重编 Rust，所以只声明它需要的最低壳版本；壳没动时这一版和上一版一样。
+    // 补丁只换 Node 那一半。内核代次（外壳版本的前两段）不同就一定装不了 ——
+    // Chrome / ffmpeg / Python / Rust 外壳都在完整安装包里，补丁碰不到。
+    shellGeneration: shellVersion.split(".").slice(0, 2).join("."),
     minShellVersion: shellVersion,
     builtAt: new Date().toISOString(),
     includesDeps,
@@ -247,39 +249,58 @@ function main() {
   mkdirp(RELEASE_DIR);
   const zipPath = path.join(RELEASE_DIR, `${stem}.zip`);
   rmrf(zipPath);
-  console.log("  打包 zip…");
-  // Windows 自带的 bsdtar 比 Compress-Archive 快得多，node_modules 那种
-  // 几万个小文件的情况差距尤其明显。
-  // hdrcharset=UTF-8 不能省：默认按 CP437 存文件名，「安装更新.cmd」会被直接
-  // 丢掉（只在 stderr 留一行警告），用户拿到的补丁包就没有那个双击入口了。
-  const tarExe = path.join(process.env.SystemRoot || "C:\\Windows", "System32", "tar.exe");
-  const zip = spawnSync(fs.existsSync(tarExe) ? tarExe : "tar",
-    ["-a", "-c", "--options", "hdrcharset=UTF-8", "-f", zipPath, stem], {
-      cwd: STAGE_DIR, stdio: ["ignore", "inherit", "pipe"], encoding: "utf8", timeout: 1_800_000,
-    });
-  if (zip.status !== 0) fail(`打包失败（退出码 ${zip.status}）${zip.stderr || ""}`);
-  // bsdtar 遇到存不下的文件名只警告不报错，静默漏文件比打包失败更难发现。
-  if (zip.stderr && zip.stderr.trim()) fail(`打包时有文件被跳过：\n${zip.stderr.trim()}`);
+  // 打包前先核对暂存目录：该进去的都在，才轮得到压缩。
+  const mustHave = ["patch.json", "apply-patch.ps1", "安装更新.cmd", "README.txt",
+    ...files.map((rel) => `payload/${rel}`)];
+  const missing = mustHave.filter((p) => !fs.existsSync(path.join(root, p)));
+  if (missing.length) fail(`补丁内容少了 ${missing.length} 项，例如 ${missing[0]}`);
+  console.log(`  内容核对通过：${mustHave.length} 项`);
 
-  // 逐个核对压缩包内容，确认该进去的都进去了。
-  const listed = spawnSync(fs.existsSync(tarExe) ? tarExe : "tar", ["-tf", zipPath], {
-    cwd: STAGE_DIR, encoding: "utf8", timeout: 600_000,
-  });
-  if (listed.status !== 0) fail("压缩包读不出来，打包结果不可信");
-  const inZip = new Set(listed.stdout.split(/\r?\n/).map((l) => l.replace(/\/$/, "")).filter(Boolean));
-  const mustHave = [`${stem}/patch.json`, `${stem}/apply-patch.ps1`, `${stem}/安装更新.cmd`, `${stem}/README.txt`,
-    ...files.map((rel) => `${stem}/payload/${rel}`)];
-  const missing = mustHave.filter((p) => !inZip.has(p));
-  if (missing.length) fail(`压缩包里少了 ${missing.length} 个文件，例如 ${missing[0]}`);
-  console.log(`  压缩包核对通过：${inZip.size} 个条目`);
+  // 主产物是 exe：用户双击就装，不用先解压、也不会有人误在压缩包里点 cmd。
+  const exePath = path.join(RELEASE_DIR, `${stem}.exe`);
+  rmrf(exePath);
+  console.log("  用 NSIS 打成 exe…");
+  const nsis = findMakensis();
+  const build = spawnSync(nsis, [
+    `-DVERSION=${appVersion}`,
+    `-DSRCDIR=${root}`,
+    `-DOUTFILE=${exePath}`,
+    `-DICON=${path.join(DESKTOP_DIR, "src-tauri", "icons", "icon.ico")}`,
+    path.join(__dirname, "patch-installer.nsi"),
+  ], { encoding: "utf8", timeout: 1_800_000 });
+  if (build.status !== 0 || !fs.existsSync(exePath)) {
+    fail(`NSIS 打包失败（退出码 ${build.status}）\n${(build.stdout || "").slice(-2000)}${build.stderr || ""}`);
+  }
+
+  // 想看看补丁里到底有什么就加 --zip，日常发布用不到。
+  if (flag("--zip")) {
+    console.log("  额外打一份 zip…");
+    // hdrcharset=UTF-8 不能省：默认按 CP437 存文件名，「安装更新.cmd」会被
+    // 直接丢掉，只在 stderr 留一行警告。
+    const tarExe = path.join(process.env.SystemRoot || "C:\\Windows", "System32", "tar.exe");
+    const zip = spawnSync(fs.existsSync(tarExe) ? tarExe : "tar",
+      ["-a", "-c", "--options", "hdrcharset=UTF-8", "-f", zipPath, stem], {
+        cwd: STAGE_DIR, stdio: ["ignore", "inherit", "pipe"], encoding: "utf8", timeout: 1_800_000,
+      });
+    if (zip.status !== 0) fail(`zip 打包失败（退出码 ${zip.status}）${zip.stderr || ""}`);
+    if (zip.stderr && zip.stderr.trim()) fail(`zip 里有文件被跳过：\n${zip.stderr.trim()}`);
+  }
 
   // 清单单独放一份，下一次构建拿它当基准算差异
   fs.writeFileSync(path.join(RELEASE_DIR, `manifest-${appVersion}.json`), JSON.stringify(manifest, null, 2));
   rmrf(STAGE_DIR);
 
-  const zipMB = mb(fs.statSync(zipPath).size);
-  console.log(`\n  补丁：${zipPath}（${zipMB} MB）`);
-  return { zipPath, manifest };
+  console.log(`\n  补丁：${exePath}（${mb(fs.statSync(exePath).size)} MB）`);
+  return { exePath, manifest };
+}
+
+/** Tauri 自己装的那份 NSIS；没有就退回 PATH。 */
+function findMakensis() {
+  const bundled = path.join(process.env.LOCALAPPDATA || "", "tauri", "NSIS", "Bin", "makensis.exe");
+  if (fs.existsSync(bundled)) return bundled;
+  const probe = spawnSync("makensis", ["/VERSION"], { encoding: "utf8" });
+  if (probe.status === 0 || probe.stdout) return "makensis";
+  fail("找不到 makensis。跑一次 npm run build 让 Tauri 把 NSIS 装下来，或者自己装 NSIS 并加进 PATH。");
 }
 
 function readmeText(m) {

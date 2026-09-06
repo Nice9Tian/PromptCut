@@ -44,8 +44,8 @@ npm run build
 ## 发布：安装包 + 更新补丁
 
 日常改动绝大多数只落在 Node 那一半（`src/`、`server/`、`dist/`），Rust 壳和
-Chrome / ffmpeg / Python 三个大块一动不动。完整安装包接近 1 GB，而这些改动本身
-通常只有几 MB，所以每次发布产出两个东西：
+Chrome / ffmpeg / Python 三个大块一动不动。完整安装包压出来 320 MB（装开约 1 GB），
+而这些改动本身通常只有几 MB，所以每次发布产出两个东西：
 
 ```powershell
 cd desktop
@@ -58,25 +58,52 @@ commit，而不是把工作区里未提交的东西一起发出去（多人同�
 要紧）。被排除的文件会在日志里逐条列出来。只有源码走 worktree，Chrome /
 ffmpeg / Python / Rust 编译缓存还是用 `desktop/` 下原来那份，不会因此变慢。
 
-| 产物                             | 大小     | 什么时候用                                     |
-| -------------------------------- | -------- | ---------------------------------------------- |
-| `release/PromptCut-<版本>-setup.exe` | ~1 GB    | 第一次安装；外壳版本变了；补丁装不上时的兜底   |
-| `release/PromptCut-patch-<版本>.zip` | 几 MB    | 已经装过，只是更新 Node 那半边                 |
+| 产物                                 | 大小      | 什么时候用                                   |
+| ------------------------------------ | --------- | -------------------------------------------- |
+| `release/PromptCut-<版本>-setup.exe` | ~320 MB   | 第一次安装；内核代次变了；补丁装不上时的兜底 |
+| `release/PromptCut-patch-<版本>.exe` | 几 MB起   | 已经装过，只是更新 Node 那半边               |
 
-补丁包里带 `安装更新.cmd`，用户双击就行。它会核对安装位置和版本、请用户关掉
-正在运行的程序、备份当前版本再覆盖，逐个文件校验 SHA-256，任何一步出错都回滚。
-`exports`（导出的视频）、`.pc-chats`（AI 会话历史）、`%LOCALAPPDATA%\promptcut`
-（设置和密钥）和下载的语音模型都不在补丁的作用范围内。
+两个都是 exe，用户双击就装，不用先解压。补丁那个是 NSIS 自解压壳：把内容解到
+`$PLUGINSDIR`（NSIS 退出时自动清，不会在 `%TEMP%` 留几百 MB 残骸），然后运行
+`apply-patch.ps1`。它会核对安装位置和内核代次、关掉正在运行的程序（只认可执行
+文件在目标目录下的那些）、备份当前版本再覆盖，逐个文件校验 SHA-256，任何一步
+出错都回滚。`exports`（导出的视频）、`.pc-chats`（AI 会话历史）、
+`%LOCALAPPDATA%\promptcut`（设置和密钥）和下载的语音模型都不在作用范围内。
+
+补丁 exe 接受和脚本一样的参数，装在非默认位置时用得上：
+
+```powershell
+PromptCut-patch-0.2.3.exe -InstallDir "D:\PromptCut"
+PromptCut-patch-0.2.3.exe -WhatIf          # 只检查，不写入
+```
+
+### 版本号怎么排
 
 **两个版本号是分开的**，这正是补丁能成立的前提：
 
 - **应用版本**（根 `package.json`）—— Node 那半边，补丁负责更新它。
-- **外壳版本**（`src-tauri/tauri.conf.json`）—— Rust 那半边，只有改了 Rust 代码
-  或换了 Chrome / ffmpeg / Python 才需要动。补丁声明自己需要的最低外壳版本，
-  对不上就拒绝安装并让用户改用完整安装包。
+- **外壳版本**（`src-tauri/tauri.conf.json`）—— 内核：Rust 外壳、Chrome、ffmpeg、
+  内置 Python。这些东西只在完整安装包里，补丁碰不到。
+
+写成 `0.<内核代次>.<修订>`，**中间那一位就是内核代次**：
+
+| 改了什么 | 怎么进位 | 用户怎么升级 |
+| --- | --- | --- |
+| 只改 Node 那半边（界面、后端逻辑、依赖） | 应用版本末位 +1，如 `0.2.3 → 0.2.4` | 更新补丁 |
+| 动了 Rust、Chrome、ffmpeg 或内置 Python | 两个版本号的**中间位**一起 +1，如 `0.2.x → 0.3.0` | 必须用完整安装包 |
+
+所以一眼就能判断：**中间那位一样，补丁能用；不一样，得用完整安装包。**
+
+补丁在 `patch.json` 里记下 `shellGeneration`（外壳版本的前两段，如 `0.2`）和
+`minShellVersion`。安装时读已装 `promptcut.exe` 的 ProductVersion：代次不同直接
+拒绝，代次相同但外壳比补丁要求的还旧也拒绝。两种情况都会告诉用户改用完整安装包，
+并且不会动已装的任何东西。
+
+同一代次里外壳出了小修（Rust 改了但不影响 runtime 布局），只进外壳版本的末位，
+之前的补丁照样能装。
 
 **依赖变化**由 `package-lock.json` 的哈希自动判断：和上一次发布一致就不打包
-`node_modules`（补丁几 MB），不一致就整个带上（补丁约 150 MB，仍比完整包小得多）。
+`node_modules`（补丁几 MB），不一致就整个带上（本例 48 MB，仍远小于完整包）。
 判断基准是 `release/manifest-<版本>.json`，每次发布自动留下一份 —— **别删它**，
 删了下一次就只能保守地把依赖整个带上。
 
@@ -92,7 +119,7 @@ npm run make-patch                  # 只跑打补丁这一步
 在自己机器上验证补丁而不真的写入：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File <解压目录>\apply-patch.ps1 -WhatIf
+release\PromptCut-patch-0.2.3.exe -WhatIf
 ```
 
 ## 开发期
@@ -168,6 +195,7 @@ desktop/
     make-patch.mjs                只打更新补丁
     apply-patch.ps1               补丁安装器（随补丁包发给用户，不在这里运行）
     apply-patch.cmd               补丁包里的「安装更新.cmd」
+    patch-installer.nsi           补丁 exe 的自解压外壳(NSIS,须带 UTF-8 BOM)
     smoke-procs.mjs               进程树工具（共用）
     smoke-boot.mjs                启动冒烟
     smoke-shutdown.mjs            关闭冒烟
@@ -183,13 +211,13 @@ desktop/
     icons/icon-source.svg         图标源文件
     binaries/                     (git ignored) node sidecar
     runtime/                      (git ignored) 运行时组件
-  release/                        (git ignored) 发布产物
-    PromptCut-<版本>-setup.exe    完整安装包
-    PromptCut-patch-<版本>.zip    更新补丁
-    manifest-<版本>.json          该版本的文件清单，下一次发布拿它算差异
       app/                        PromptCut 源码副本 + node_modules + dist
       chrome/                     Chrome for Testing
       ffmpeg/                     ffmpeg.exe + ffprobe.exe
       python/                     内置 Python
       VERSIONS.json               各组件版本
+  release/                        (git ignored) 发布产物
+    PromptCut-<版本>-setup.exe    完整安装包
+    PromptCut-patch-<版本>.exe    更新补丁(双击即装)
+    manifest-<版本>.json          该版本的文件清单，下一次发布拿它算差异
 ```

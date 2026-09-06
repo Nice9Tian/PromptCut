@@ -80,11 +80,23 @@ Write-Step "安装位置：$InstallDir"
 $installed = $null
 if (Test-Path $versionsPath) { $installed = Get-Content -Raw -LiteralPath $versionsPath | ConvertFrom-Json }
 
+# 内核代次 = 外壳版本的前两段（0.2.x 里的 0.2）。内核（Rust 外壳、Chrome、
+# ffmpeg、内置 Python）动了就进位中间那一位，于是「中间那位不一样 = 必须用
+# 完整安装包」，用户扫一眼版本号就知道补丁能不能用。同一代次内的外壳小修
+# 只进最后一位，补丁照样能装，但不能装到比补丁更旧的外壳上。
+function Get-Generation { param([string] $Version) ($Version -split '[.\-+]')[0..1] -join '.' }
+
 $shellExe = Join-Path $InstallDir 'promptcut.exe'
 if (Test-Path $shellExe) {
     $shellVersion = (Get-Item -LiteralPath $shellExe).VersionInfo.ProductVersion
-    if ($shellVersion -and (Compare-Version $shellVersion $patch.minShellVersion) -lt 0) {
-        Fail "这台机器上的 PromptCut 外壳是 $shellVersion，本补丁需要 $($patch.minShellVersion) 或更新。这一版改动了需要重新编译的部分，请用完整安装包。"
+    if ($shellVersion) {
+        $mine = Get-Generation $shellVersion
+        if ($patch.shellGeneration -and $mine -ne $patch.shellGeneration) {
+            Fail "内核代次对不上：这台机器是 $mine.x，本补丁针对 $($patch.shellGeneration).x。内核（外壳、Chrome、ffmpeg、内置 Python）换代了，补丁改不了这部分，请用完整安装包。"
+        }
+        if ((Compare-Version $shellVersion $patch.minShellVersion) -lt 0) {
+            Fail "这台机器上的 PromptCut 外壳是 $shellVersion，本补丁需要 $($patch.minShellVersion) 或更新。请先用完整安装包升到该版本。"
+        }
     }
 }
 

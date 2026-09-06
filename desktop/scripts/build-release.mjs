@@ -107,6 +107,7 @@ const patchArgs = ["scripts/make-patch.mjs"];
 if (has("--with-deps")) patchArgs.push("--with-deps");
 if (has("--no-deps")) patchArgs.push("--no-deps");
 if (has("--from-head")) patchArgs.push("--skip-source-check");
+if (has("--zip")) patchArgs.push("--zip");
 run("打更新补丁", "node", patchArgs);
 
 // ── 收集产物 ──────────────────────────────────────────────────────────
@@ -126,8 +127,10 @@ if (!has("--patch-only")) {
   results.push(dest);
 }
 
-const patchZip = path.join(RELEASE_DIR, `PromptCut-patch-${appVersion}.zip`);
-if (fs.existsSync(patchZip)) results.push(patchZip);
+for (const ext of ["exe", "zip"]) {
+  const p = path.join(RELEASE_DIR, `PromptCut-patch-${appVersion}.${ext}`);
+  if (fs.existsSync(p)) results.push(p);
+}
 
 const manifest = JSON.parse(
   fs.readFileSync(path.join(RELEASE_DIR, `manifest-${appVersion}.json`), "utf-8")
