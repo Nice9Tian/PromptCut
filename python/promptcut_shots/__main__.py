@@ -88,9 +88,14 @@ def cmd_install(_args: argparse.Namespace) -> int:
         return 2
     os.makedirs(pylibs, exist_ok=True)
 
-    req = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), REQUIREMENTS)
+    # 清单放在包内部：这个包会被镜像到 pylibs 下运行，放在包外面就跟丢了
+    here = os.path.dirname(os.path.abspath(__file__))
+    req = os.path.join(here, REQUIREMENTS)
     if not os.path.isfile(req):
-        emit_error(f"找不到依赖清单 {req}")
+        # 兼容早期把清单放在 python/ 根下的布局
+        req = os.path.join(os.path.dirname(here), REQUIREMENTS)
+    if not os.path.isfile(req):
+        emit_error(f"找不到依赖清单 {REQUIREMENTS}")
         return 2
 
     # 必须用 sys.executable：写死 "python" 会装进系统解释器

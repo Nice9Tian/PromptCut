@@ -20,7 +20,32 @@ export interface Transcript {
   segments: TranscriptSegment[];
 }
 
+export type TransitionKind = "cut" | "dissolve";
+
+/** 一次转场。硬切的 start/end 几乎相等；溶解是整段渐变的起止 */
+export interface ShotTransition {
+  kind: TransitionKind;
+  start: number;
+  end: number;
+  /** 置信度最高的那一帧的时间，画标记时对准它 */
+  time: number;
+  confidence: number;
+  /** 缩略图文件名。溶解有两张（渐变前后各一），时间轴上叠着画 */
+  thumbs?: string[];
+}
+
+/** 镜头划分结果，由镜头识别工具写入 */
+export interface Shots {
+  /** transnetv2 认得溶解；scdet 是没装拓展时的兜底，只认硬切 */
+  engine: "transnetv2" | "scdet";
+  createdAt: string;
+  transitions: ShotTransition[];
+  shots: { start: number; end: number; inTransition: TransitionKind | null; outTransition: TransitionKind | null }[];
+}
+
 export interface MediaAsset {
+  /** 镜头切换识别结果(可选,由 detect_shots 写入) */
+  shots?: Shots;
   /** 语音转文字结果(可选,由 STT 工具写入) */
   transcript?: Transcript;
   id: string;

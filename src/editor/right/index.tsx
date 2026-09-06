@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { startShotDetection, waitForShots } from "../../ai/shots";
 import { AiPanel } from "./AiPanel";
 import { connectMcpExecutor, EditorApi } from "../../ai/mcpExecutor";
 import { getState, actions } from "../../store/project";
@@ -14,6 +15,9 @@ import { runSttInstall } from "../io/runSttInstall";
 /** 后台 STT 任务的状态(MCP 工具立即返回 jobId,结果靠轮询) */
 interface SttJob { done: boolean; ok: boolean; error?: string; logTail?: string[]; segments?: number }
 const sttJobs = new Map<string, SttJob>();
+
+/** 正在跑的镜头识别作业,按 mediaId 索引。结果落进 store 后就删掉。 */
+const shotJobs = new Map<string, { jobId: string; percent: number; engine: string; error?: string }>();
 
 export function RightPanel() {
   const [mcpConnected, setMcpConnected] = useState(false);
@@ -196,6 +200,59 @@ export function RightPanel() {
           });
         sttJobs.set(jobId, { done: false, ok: false });
         return { jobId, started: true, mediaId: args.mediaId, hint: "转写已在后台开始,请用 get_transcript 轮询该 mediaId" };
+      },
+
+      // 镜头识别:5 分钟素材约 36 秒,同样立刻返回 jobId,结果用 list_shots 轮询。
+      detectShots: async (args) => {
+        const media = getState().project.media.find((m) => m.id === args.mediaId);
+        if (!media) throw new Error(`找不到素材 ${args.mediaId}`);
+        if (media.kind !== "video") throw new Error(`${media.name} 不是视频,没有镜头可分`);
+        if (!media.path) throw new Error(`${media.name} 没有服务端可读的路径,重新导入一次再试`);
+        if (media.shots && !args.force) {
+          return {
+            reused: true, mediaId: args.mediaId, engine: media.shots.engine,
+            shots: media.shots.shots.length, transitions: media.shots.transitions.length,
+            hint: "这个素材已经检测过了,直接用 list_shots 取结果;要重测传 force:true",
+          };
+        }
+        const jobId = await startShotDetection(media.path, media.id);
+        shotJobs.set(args.mediaId, { jobId, percent: 0, engine: "scdet" });
+        waitForShots(jobId, (percent, engine) => shotJobs.set(args.mediaId, { jobId, percent, engine }))
+          .then((result) => {
+            actions.setMediaShots(args.mediaId, result);
+            shotJobs.delete(args.mediaId);
+          })
+          .catch((e: unknown) => {
+            shotJobs.set(args.mediaId, {
+              jobId, percent: 0, engine: "scdet",
+              error: e instanceof Error ? e.message : String(e),
+            });
+          });
+        return {
+          jobId, started: true, mediaId: args.mediaId,
+          hint: "镜头识别已在后台开始,请用 list_shots 轮询该 mediaId",
+        };
+      },
+
+      listShots: (args) => {
+        const media = getState().project.media.find((m) => m.id === args.mediaId);
+        if (!media) throw new Error(`找不到素材 ${args.mediaId}`);
+        const pending = shotJobs.get(args.mediaId);
+        if (pending?.error) throw new Error(pending.error);
+        if (!media.shots) {
+          if (pending) return { running: true, percent: pending.percent, engine: pending.engine };
+          return null;
+        }
+        return {
+          running: false,
+          engine: media.shots.engine,
+          // 没装拓展时只有硬切,这一句要让模型看见,免得它以为片子里真的没有溶解
+          engineNote: media.shots.engine === "scdet"
+            ? "当前用的是 ffmpeg scdet 兜底,只认硬切,溶解等渐变转场检测不出来"
+            : "TransNetV2,硬切和溶解都认得",
+          shots: media.shots.shots,
+          transitions: media.shots.transitions.map(({ thumbs, ...rest }) => rest),
+        };
       },
 
       getTranscript: (args) => {

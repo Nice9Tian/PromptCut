@@ -20,6 +20,8 @@ export interface EditorApi {
   sttInstall(args: { engine: string }): Promise<any>;
   transcribeMedia(args: { mediaId: string; engine?: string; model?: string; language?: string }): Promise<any>;
   getTranscript(args: { mediaId: string }): any;
+  detectShots(args: { mediaId: string; force?: boolean }): Promise<any>;
+  listShots(args: { mediaId: string }): any;
   autoWorkflow(args: { mediaId: string; style?: string; maxCards?: number }): Promise<any>;
   autoWorkflowStatus(args: { jobId: string }): any;
   fillCaptions(args: { clipId?: string; mediaId?: string; showEn?: boolean }): any;
@@ -86,6 +88,8 @@ export function connectMcpExecutor(getApi: () => EditorApi, onStatus?: (s: { con
           else if (tool === "stt_install") result = await api.sttInstall(args);
           else if (tool === "transcribe_media") result = await api.transcribeMedia(args);
           else if (tool === "get_transcript") result = api.getTranscript(args);
+          else if (tool === "detect_shots") result = await api.detectShots(args);
+          else if (tool === "list_shots") result = api.listShots(args);
           else if (tool === "auto_workflow") result = await api.autoWorkflow(args);
           else if (tool === "auto_workflow_status") result = api.autoWorkflowStatus(args);
           else if (tool === "fill_captions") result = api.fillCaptions(args);

@@ -200,6 +200,31 @@ export const tools = [
     side: "browser"
   },
   {
+    name: "detect_shots",
+    description: "识别素材的镜头切换（转场）。检测较慢（5 分钟素材约 36 秒），所以立即返回 jobId，用 list_shots 轮询结果。装了镜头识别拓展时用 TransNetV2，硬切和溶解都认得，溶解还能给出渐变的起止时间；没装拓展时自动退回 ffmpeg scdet，只认硬切、认不出溶解（返回的 engine 字段会说明用的是哪个）。参数 mediaId 必填，force 可选（默认 false，已经检测过就直接复用结果）。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        mediaId: { type: "string" },
+        force: { type: "boolean", description: "true 表示忽略已有结果，重新检测一遍" }
+      },
+      required: ["mediaId"]
+    },
+    side: "browser"
+  },
+  {
+    name: "list_shots",
+    description: "读取素材的镜头划分结果，detect_shots 之后用它轮询和取数（未完成时返回 running:true 和进度百分比）。返回 shots（每个镜头的 start/end 秒，以及进出各是什么转场）和 transitions（每个转场的 kind: cut 硬切 / dissolve 溶解、start/end 跨度、置信度）。**给素材配动效卡时应当先看这个**：把卡片起止对齐到镜头边界，不要让一张卡横跨两个镜头；溶解区间内不要放强调类动效，那段画面本身在交融。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        mediaId: { type: "string" }
+      },
+      required: ["mediaId"]
+    },
+    side: "browser"
+  },
+  {
     name: "auto_workflow",
     description: "对指定素材一键完成 视频到文字稿到动效卡 的整条流程 —— 没有文字稿就先自动转写并等待完成（最多 10 分钟），然后按文字稿切成 5 到 15 秒的段落、用确定性规则给每段配一张合适的动效卡，再给整条文字稿铺一张 caption-track 常驻字幕卡（放在单独的字幕轨上）。参数 mediaId 必填，maxCards 默认 12。用户说 自动做 或 一键配特效 时直接用这个工具。素材较长时本工具会在 50 秒后先返回一个带 jobId 且 running 为 true 的对象，流程在后台继续，用 auto_workflow_status 轮询即可，不要重复调用本工具。",
     inputSchema: {

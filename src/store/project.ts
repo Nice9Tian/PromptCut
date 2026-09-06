@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from "react";
-import { createEmptyProject, DEFAULT_CARD_DUR, DEFAULT_MEDIA_DUR, findClip, newId, type MediaAsset, type Project, type Track, type TrackClip, type Transcript } from "../kernel/project";
+import { createEmptyProject, DEFAULT_CARD_DUR, DEFAULT_MEDIA_DUR, findClip, newId, type MediaAsset, type Project, type Track, type TrackClip, type Transcript, type Shots } from "../kernel/project";
 import { getCard } from "../kernel/registry";
 
 /**
@@ -424,6 +424,13 @@ export const actions = {
     return m;
   },
   /** 写入 / 清除素材的语音转文字结果(不进撤销栈) */
+  setMediaShots(mediaId: string, shots: Shots | null) {
+    const p = state.project;
+    setProject(
+      { ...p, media: p.media.map((m) => (m.id === mediaId ? { ...m, shots: shots ?? undefined } : m)) },
+      { undoable: false },
+    );
+  },
   setMediaTranscript(mediaId: string, transcript: Transcript | null) {
     const p = state.project;
     if (!p.media.some((m) => m.id === mediaId)) return;

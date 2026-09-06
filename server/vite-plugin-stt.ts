@@ -14,7 +14,7 @@ function sanitizeName(name: string) {
 }
 
 /** 按文档顺序查找内置 Python 解释器路径;找不到返回 null */
-function findPython(root: string): string | null {
+export function findPython(root: string): string | null {
   if (process.env.PROMPTCUT_PYTHON) {
     if (existsSync(process.env.PROMPTCUT_PYTHON)) return process.env.PROMPTCUT_PYTHON;
   }
@@ -30,7 +30,7 @@ function findPython(root: string): string | null {
  * Node 18.20+/20+ 在 Windows 上拒绝直接 spawn .cmd/.bat(EINVAL),
  * 这类解释器要经 cmd.exe /c 转一手。参数仍按数组传,不拼命令行,避免注入。
  */
-function spawnPython(pythonPath: string, args: string[], env: NodeJS.ProcessEnv): ChildProcess {
+export function spawnPython(pythonPath: string, args: string[], env: NodeJS.ProcessEnv): ChildProcess {
   const lower = pythonPath.toLowerCase();
   if (process.platform === "win32" && (lower.endsWith(".cmd") || lower.endsWith(".bat"))) {
     return spawn("cmd.exe", ["/c", pythonPath, ...args], { env, windowsHide: true });
@@ -39,12 +39,12 @@ function spawnPython(pythonPath: string, args: string[], env: NodeJS.ProcessEnv)
 }
 
 /** 数据目录(stt job 文件落盘位置) */
-function dataDir(root: string): string {
+export function dataDir(root: string): string {
   return process.env.PROMPTCUT_DATA_DIR ?? path.join(root, "out");
 }
 
 /** 组装子进程的环境变量 */
-async function buildEnv(root: string, pythonPath: string): Promise<NodeJS.ProcessEnv> {
+export async function buildEnv(root: string, pythonPath: string): Promise<NodeJS.ProcessEnv> {
   const pyLibs = process.env.PROMPTCUT_PYLIBS ?? path.join(root, "out", "pylibs");
   const models = process.env.PROMPTCUT_MODELS ?? path.join(root, "out", "models");
 
@@ -53,11 +53,16 @@ async function buildEnv(root: string, pythonPath: string): Promise<NodeJS.Proces
 
   // 判断 promptcut_stt 是否已在 site-packages 里
   const pythonDir = path.dirname(pythonPath);
-  const sitePackagesStt = path.join(pythonDir, "Lib", "site-packages", "promptcut_stt");
-  const hasStt = existsSync(sitePackagesStt);
+  // 按包逐个判断,不能只看 promptcut_stt:自带解释器的 site-packages 里有 stt、
+  // 却没有后加的 promptcut_shots,一旦只看前者就会整段跳过,镜头识别永远报
+  // No module named。
+  const PACKAGES = ["promptcut_stt", "promptcut_shots"];
+  const missing = PACKAGES.filter(
+    (pkg) => !existsSync(path.join(pythonDir, "Lib", "site-packages", pkg)),
+  );
 
   let pythonPathEnv = pyLibs;
-  if (!hasStt) {
+  if (missing.length > 0) {
     // 普通 venv 解释器认 PYTHONPATH,追加源码目录即可。
     pythonPathEnv = pyLibs + path.delimiter + path.join(root, "python");
 
@@ -67,14 +72,17 @@ async function buildEnv(root: string, pythonPath: string): Promise<NodeJS.Proces
     // PROMPTCUT_PYLIBS 指向的目录挂到 sys.path。而 PROMPTCUT_PYLIBS 又要
     // 原样交给 pip 的 --target,不能塞成多段路径。
     // 所以开发期把源码包镜像一份到 pylibs 里,让钩子顺带把它带上。
-    // 正式包里 prepare-python 会把 promptcut_stt 复制进 site-packages,走不到这里。
+    // 正式包里 prepare-python 会把这些包复制进 site-packages,走不到这里。
     const hasPthFile = (await fs.readdir(pythonDir).catch(() => [] as string[]))
       .some((f) => f.toLowerCase().endsWith("._pth"));
     if (hasPthFile) {
-      const src = path.join(root, "python", "promptcut_stt");
-      if (existsSync(src)) {
+      // 只镜像缺的那些。镜头识别还 import 了 promptcut_stt.jsonl,所以哪怕
+      // 只缺 shots,stt 不在 site-packages 时也得一起搬。
+      for (const pkg of missing) {
+        const src = path.join(root, "python", pkg);
+        if (!existsSync(src)) continue;
         try {
-          await fs.cp(src, path.join(pyLibs, "promptcut_stt"), {
+          await fs.cp(src, path.join(pyLibs, pkg), {
             recursive: true,
             force: true,
             filter: (s) => !s.includes("__pycache__"),
@@ -116,7 +124,7 @@ async function buildEnv(root: string, pythonPath: string): Promise<NodeJS.Proces
 }
 
 /** 把 Python 的 JSONL stdout + stderr 转成 SSE 流 */
-function pipeToSse(child: ChildProcess, res: ServerResponse): void {
+export function pipeToSse(child: ChildProcess, res: ServerResponse): void {
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
@@ -177,7 +185,7 @@ function pipeToSse(child: ChildProcess, res: ServerResponse): void {
 }
 
 /** 从 req body 读取全部字节 */
-function readBody(req: Connect.IncomingMessage): Promise<Buffer> {
+export function readBody(req: Connect.IncomingMessage): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     req.on("data", (c: Buffer) => chunks.push(c));
