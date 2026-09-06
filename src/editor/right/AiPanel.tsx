@@ -1,4 +1,4 @@
-import React, { useRef, useState, useEffect } from "react";
+import React, { useRef, useState, useEffect, useLayoutEffect } from "react";
 import "./AiPanel.css";
 // 公式样式表:renderMarkdown 用 KaTeX 渲染数学,样式在这里一次性引入
 import "katex/dist/katex.min.css";
@@ -209,15 +209,33 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
     }
   }, [props.openSetupSignal, openSetup]);
 
-  useEffect(() => {
+  /**
+   * 贴底跟随。
+   *
+   * 原来是在内容长出来之后才量「离底部还有多远」——那时候 scrollHeight 已经包含
+   * 新内容了,只要这一批比阈值高,就会被判成「用户自己滚上去了」,于是再也不跟随。
+   * 所以要在**内容变化之前**就把「当时在不在底部」记下来:onScroll 里维护 stickRef,
+   * 那是用户最后一次表态。
+   *
+   * 不贴底时什么都不做 —— 内容追加在下方,scrollTop 不动,看的那一段就不动,
+   * 相对位置自然保住,不会弹跳。
+   */
+  const stickRef = useRef(true);
+  const BOTTOM_SLACK = 40;
+
+  const onMessagesScroll = () => {
     const el = messagesScrollRef.current;
-    if (el) {
-      const isAtBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
-      if (isAtBottom) {
-        el.scrollTop = el.scrollHeight;
-      }
-    }
-  }, [messages, streaming]);
+    if (!el) return;
+    stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight <= BOTTOM_SLACK;
+  };
+
+  // 用 layout 效果:在浏览器绘制这一帧之前就挪好,不会看到先跳后回的闪动。
+  // 不给依赖数组 —— 流式输出每来一段都是一次提交,每次提交都要重新贴住。
+  useLayoutEffect(() => {
+    if (!stickRef.current) return;
+    const el = messagesScrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  });
 
   useEffect(() => {
     const onAiError = (e: any) => setToast(e.detail);
@@ -625,7 +643,7 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
         return null;
       })()}
 
-      <div className="ai-messages" ref={messagesScrollRef}>
+      <div className="ai-messages" ref={messagesScrollRef} onScroll={onMessagesScroll}>
         {messages.length === 0 ? (
           <div className="ai-empty-state">
             <div className="ai-empty-example" onClick={() => setInputText("时间轴上现在有什么?")}>
