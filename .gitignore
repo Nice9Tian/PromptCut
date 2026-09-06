@@ -6,3 +6,5 @@ out
 AGY-TASK-*.md
 desktop/.cache
 desktop/src-tauri/runtime
+__pycache__/
+*.pyc
