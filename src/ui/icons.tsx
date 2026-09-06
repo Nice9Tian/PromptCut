@@ -205,3 +205,146 @@ export function IconNew(p: IconProps) {
     </Stroked>
   );
 }
+
+/* ── 配色诊断与修正 v2 整屏用到、之前没有的图标 ─────────────────────────
+ * 规格同上:24 画幅、1.5 描边、currentColor。 */
+
+/** 上一段 / 跳到开头 */
+export function IconSkipBack(p: IconProps) {
+  return (
+    <Stroked {...p}>
+      <path d="M11 5L5 12l6 7M19 5l-6 7 6 7" />
+    </Stroked>
+  );
+}
+/** 下一段 / 跳到结尾 */
+export function IconSkipForward(p: IconProps) {
+  return (
+    <Stroked {...p}>
+      <path d="M13 5l6 7-6 7M5 5l6 7-6 7" />
+    </Stroked>
+  );
+}
+/** 循环播放 */
+export function IconLoop(p: IconProps) {
+  return (
+    <Stroked {...p}>
+      <path d="M3 12a9 9 0 1 0 3-6.7" />
+      <path d="M3 4v5h5" />
+    </Stroked>
+  );
+}
+/** 扬声器 */
+export function IconVolume(p: IconProps) {
+  return (
+    <Stroked {...p}>
+      <path d="M11 5L6 9H3v6h3l5 4z" />
+      <path d="M15.5 9.5a3.5 3.5 0 0 1 0 5" />
+    </Stroked>
+  );
+}
+/** 静音 */
+export function IconVolumeMute(p: IconProps) {
+  return (
+    <Stroked {...p}>
+      <path d="M11 5L6 9H3v6h3l5 4z" />
+      <path d="M16 9l5 6M21 9l-5 6" />
+    </Stroked>
+  );
+}
+/** 锁定 */
+export function IconLock(p: IconProps) {
+  return (
+    <Stroked {...p}>
+      <rect x="5" y="11" width="14" height="9" />
+      <path d="M8 11V7a4 4 0 0 1 8 0v4" />
+    </Stroked>
+  );
+}
+/** 未锁定 */
+export function IconUnlock(p: IconProps) {
+  return (
+    <Stroked {...p}>
+      <rect x="5" y="11" width="14" height="9" />
+      <path d="M8 11V7a4 4 0 0 1 7.5-2" />
+    </Stroked>
+  );
+}
+/** 可见 */
+export function IconEye(p: IconProps) {
+  return (
+    <Stroked {...p}>
+      <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12z" />
+      <circle cx="12" cy="12" r="3" />
+    </Stroked>
+  );
+}
+/** 隐藏 */
+export function IconEyeOff(p: IconProps) {
+  return (
+    <Stroked {...p}>
+      <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12z" />
+      <path d="M4 4l16 16" />
+    </Stroked>
+  );
+}
+/** 拖动把手(三横) */
+export function IconDrag(p: IconProps) {
+  return (
+    <Stroked {...p}>
+      <path d="M4 7h16M4 12h16M4 17h16" />
+    </Stroked>
+  );
+}
+/** 加号 */
+export function IconPlus(p: IconProps) {
+  return (
+    <Stroked {...p}>
+      <path d="M12 5v14M5 12h14" />
+    </Stroked>
+  );
+}
+/** 搜索 */
+export function IconSearch(p: IconProps) {
+  return (
+    <Stroked {...p}>
+      <circle cx="11" cy="11" r="7" />
+      <path d="M16 16l4 4" />
+    </Stroked>
+  );
+}
+/** 下拉箭头 */
+export function IconChevronDown(p: IconProps) {
+  return (
+    <Stroked {...p}>
+      <path d="M6 9l6 6 6-6" />
+    </Stroked>
+  );
+}
+/** 历史 / 刷新 */
+export function IconHistory(p: IconProps) {
+  return (
+    <Stroked {...p}>
+      <path d="M3 12a9 9 0 1 0 3-6.7" />
+      <path d="M3 4v5h5" />
+      <path d="M12 8v4l3 2" />
+    </Stroked>
+  );
+}
+/** 向上发送 */
+export function IconSend(p: IconProps) {
+  return (
+    <Stroked {...p}>
+      <path d="M12 20V5" />
+      <path d="M6 11l6-6 6 6" />
+    </Stroked>
+  );
+}
+/** 搜索图标旁的清空 */
+export function IconClose(p: IconProps) {
+  return (
+    <Stroked {...p}>
+      <path d="M6 6l12 12M18 6L6 18" />
+    </Stroked>
+  );
+}

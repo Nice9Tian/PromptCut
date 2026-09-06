@@ -74,8 +74,9 @@ function sideToVars(side: PaletteSide, mode: SkinMode): Record<string, string> {
   const [l0, l1, l2, l3, l4] = side.surfaces;
   const dark = mode === "dark";
   const sem = semantic[mode];
-  const borderStrong = side.border ?? mix(l4, side.fg, 84);
-  const border = dark ? mix(l3, l4, 45) : mix(borderStrong, "#ffffff", 55);
+  // 设计稿单独标了值的主题(钢蓝·深)直接用,其余照旧由表面推导
+  const borderStrong = side.borderStrong ?? side.border ?? mix(l4, side.fg, 84);
+  const border = side.hairline ?? (dark ? mix(l3, l4, 45) : mix(borderStrong, "#ffffff", 55));
   return {
     "ui-bg": l0,
     "ui-bg-2": l1,
@@ -86,7 +87,7 @@ function sideToVars(side: PaletteSide, mode: SkinMode): Record<string, string> {
     "ui-border-strong": borderStrong,
     "ui-fg": side.fg,
     "ui-fg-muted": side.fgMuted,
-    "ui-fg-faint": mix(side.fgMuted, l1, 62),
+    "ui-fg-faint": side.fgFaint ?? mix(side.fgMuted, l1, 62),
     "ui-accent": side.accent,
     "ui-accent-hover": mix(side.accent, "#ffffff", dark ? 82 : 78),
     "ui-accent-press": mix(side.accent, "#000000", dark ? 78 : 74),

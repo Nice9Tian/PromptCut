@@ -28,6 +28,8 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
   const t = useStore((s) => s.t);
   const playing = useStore((s) => s.playing);
   const playToken = useStore((s) => s.playToken);
+  const volume = useStore((s) => s.volume);
+  const muted = useStore((s) => s.muted);
   const selection = useStore((s) => s.selection);
   const boxRef = useRef<HTMLDivElement>(null);
   const frameRef = useRef<HTMLIFrameElement>(null);
@@ -239,7 +241,7 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
         >
           <div style={{ transform: `scale(${scale})`, transformOrigin: "0 0", position: "absolute", left: 0, top: 0, ...themeStyle(project.themeId) }}>
             <div style={{ position: "relative", width: project.width, height: project.height }}>
-              <MediaLayers project={project} t={t} playing={playing} />
+              <MediaLayers project={project} t={t} playing={playing} masterVolume={muted ? 0 : volume} />
               <iframe
                 ref={frameRef}
                 data-pc="stage-frame"

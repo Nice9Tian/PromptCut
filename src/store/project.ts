@@ -22,9 +22,23 @@ export interface EditorState {
   dirty: boolean;
   /** 用户手动拖范围卡标设定的总时长，没设过就是 null */
   durationManual: number | null;
+  /** 预览总音量 0–1(只影响预览,不写进项目;导出由 ffmpeg 合成原音) */
+  volume: number;
+  /** 预览静音开关,和 volume 分开记,取消静音能回到原音量 */
+  muted: boolean;
 }
 
 type Listener = () => void;
+
+/** 预览音量记在本机,跟项目无关 */
+const VOLUME_KEY = "pc.volume";
+function readVolume(): number {
+  try {
+    const v = parseFloat(localStorage.getItem(VOLUME_KEY) ?? "");
+    if (Number.isFinite(v)) return Math.max(0, Math.min(1, v));
+  } catch {}
+  return 0.7;
+}
 
 let state: EditorState = {
   project: createEmptyProject(),
@@ -35,6 +49,8 @@ let state: EditorState = {
   filePath: null,
   dirty: false,
   durationManual: null,
+  volume: readVolume(),
+  muted: false,
 };
 const listeners = new Set<Listener>();
 const history: Project[] = [];
@@ -183,6 +199,17 @@ export const actions = {
   },
   replay() {
     set({ playToken: state.playToken + 1 });
+  },
+  /** 预览音量 0–1;调到非 0 顺手取消静音,和播放器习惯一致 */
+  setVolume(v: number) {
+    const volume = Math.max(0, Math.min(1, v));
+    try {
+      localStorage.setItem(VOLUME_KEY, String(volume));
+    } catch {}
+    set({ volume, muted: volume === 0 ? state.muted : false });
+  },
+  toggleMute() {
+    set({ muted: !state.muted });
   },
 
   /* ---------- 选择 ---------- */

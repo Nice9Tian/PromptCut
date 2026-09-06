@@ -11,6 +11,14 @@ export interface PaletteSide {
   accent: string;
   /** 浅色一档设计稿给的描边(强);深色留空,由表面推导 */
   border?: string;
+  /**
+   * 「配色诊断与修正 v2」给钢蓝·深单独标了三个值,推导公式凑不准,所以允许显式给:
+   * hairline 面板之间的分隔线、borderStrong 控件描边、fgFaint 弱文字下限。
+   * 没给的主题照旧由表面推导。
+   */
+  hairline?: string;
+  borderStrong?: string;
+  fgFaint?: string;
   tracks: Record<TrackKind, string>;
 }
 
@@ -37,6 +45,8 @@ export const palettes: Palette[] = [
     dark: {
       surfaces: ["#0A0C0E", "#14171A", "#1B1F23", "#23282D", "#2E343A"],
       fg: "#E9EDF1", fgMuted: "#9BA5AF", accent: "#7FA8D4",
+      // 配色诊断与修正 v2 实测值:分隔线 / 控件描边 / 弱文字下限
+      hairline: "#262C32", borderStrong: "#3C444C", fgFaint: "#6A737C",
       tracks: T("#37A39B", "#57A55F", "#9182DD", "#D6A03F", "#CC6AA8", "#6F8CE0", "#D2764F"),
     },
     light: {

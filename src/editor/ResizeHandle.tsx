@@ -80,7 +80,7 @@ export function ResizeHandle({
       data-pc-resize={axis}
       role="separator"
       aria-orientation={axis === "x" ? "vertical" : "horizontal"}
-      className={`shrink-0 bg-neutral-800 hover:bg-neutral-600 transition-colors touch-none ${
+      className={`pc-gutter shrink-0 touch-none ${
         axis === "x" ? "w-1.5 h-full cursor-col-resize" : "h-1.5 w-full cursor-row-resize"
       }`}
       title={title ?? (onReset ? "拖动调整大小,双击复位" : "拖动调整大小")}

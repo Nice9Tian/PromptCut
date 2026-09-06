@@ -38,6 +38,7 @@ function VideoLayer({
   t,
   playing,
   muted,
+  gain = 1,
 }: {
   clip: TrackClip;
   media: MediaAsset;
@@ -45,13 +46,15 @@ function VideoLayer({
   t: number;
   playing: boolean;
   muted: boolean;
+  /** 预览总音量,叠在淡入淡出之上 */
+  gain?: number;
 }) {
   const ref = useRef<HTMLVideoElement>(null);
   const target = targetTimeOf(clip, t);
   useEffect(() => {
     // 画面淡下去的同时声音也跟着淡:交叉溶解时两段的声音不会重叠成双倍
-    syncMediaEl(ref.current, target, playing, muted ? 0 : opacity);
-  }, [target, playing, opacity, muted]);
+    syncMediaEl(ref.current, target, playing, muted ? 0 : opacity * gain);
+  }, [target, playing, opacity, muted, gain]);
 
   if (media.kind === "image") {
     return (
@@ -88,22 +91,26 @@ export function MediaLayers({
   t,
   playing,
   muted = false,
+  masterVolume = 1,
 }: {
   project: Project;
   t: number;
   playing: boolean;
   /** 导出时用:画面照旧,声音一律不出(音轨由 ffmpeg 合成) */
   muted?: boolean;
+  /** 预览总音量 0–1,叠在每段自己的淡入淡出音量之上;静音就传 0 */
+  masterVolume?: number;
 }) {
   const layers = videoLayersAt(project, t);
   const audios = muted ? [] : audioClipsAt(project, t);
+  const master = Math.max(0, Math.min(1, masterVolume));
   return (
     <>
       {layers.map((l) => (
-        <VideoLayer key={l.clip.id} clip={l.clip} media={l.media} opacity={l.opacity} t={t} playing={playing} muted={muted} />
+        <VideoLayer key={l.clip.id} clip={l.clip} media={l.media} opacity={l.opacity} t={t} playing={playing} muted={muted} gain={master} />
       ))}
       {audios.map((a) => (
-        <AudioLayer key={a.clip.id} clip={a.clip} media={a.media} volume={a.volume} t={t} playing={playing} />
+        <AudioLayer key={a.clip.id} clip={a.clip} media={a.media} volume={a.volume * master} t={t} playing={playing} />
       ))}
     </>
   );

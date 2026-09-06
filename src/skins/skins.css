@@ -92,8 +92,9 @@ html.skin-swapping * {
   box-shadow: var(--ui-shadow);
   color: var(--ui-fg);
 }
+/* 右栏整块是 L2(见 editor/shell.css),头部不再单独压到 L1 */
 [data-skin] .ai-panel-header {
-  background-color: var(--ui-bg-2);
+  background-color: var(--ui-panel);
   border-bottom-color: var(--ui-border);
 }
 
@@ -265,6 +266,7 @@ html.skin-swapping * {
 [data-skin] footer .bg-neutral-900 { background: var(--ui-bg-2); }
 [data-skin] footer .bg-neutral-800 { background: var(--ui-panel); }
 
-/* 播放头:设计稿里播放头与选中用强调色,不用录制红(红只留给状态反馈) */
-[data-skin] [data-pc="playhead"] .bg-red-500 { background-color: var(--ui-accent); box-shadow: var(--ui-glow); }
-[data-skin] [data-pc="playhead"] .clip-playhead { background-color: var(--ui-accent); }
+/* 播放头:配色诊断与修正 v2 改回语义红(#E2564D)——它是全屏唯一的红,
+   一眼能在一片钢蓝里找到播放位置;强调色留给操作和选中。 */
+[data-skin] [data-pc="playhead"] .bg-red-500 { background-color: var(--ui-danger); box-shadow: none; }
+[data-skin] [data-pc="playhead"] .clip-playhead { background-color: var(--ui-danger); }

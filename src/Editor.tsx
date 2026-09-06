@@ -11,6 +11,7 @@ import { magicuiDemoClips } from "./cards/magicui";
 import { nativeDemoClips } from "./cards/native";
 import { useSkin } from "./skins/useSkin";
 import { useLayoutMode } from "./editor/layoutMode";
+import "./editor/shell.css";
 import { DependencyPrompt } from "./editor/DependencyPrompt";
 import { motion } from "motion/react";
 
@@ -139,7 +140,7 @@ export default function Editor() {
   // 这里用 `{!isChat && …}` 逐个开关:JSX 的兄弟槽位是定长的,false 也占位,
   // 所以右栏在两种模式下始终是同一个槽位,组件实例得以保留。
   return (
-    <div className="h-full flex flex-col bg-neutral-950 text-neutral-100">
+    <div data-pc="editor" className="h-full flex flex-col bg-neutral-950 text-neutral-100">
       <TopBar />
       <DependencyPrompt />
       <div
