@@ -1,18 +1,78 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useStore, actions } from "../../store/project";
 import { DEFAULT_MEDIA_DUR, type MediaAsset } from "../../kernel/project";
 import { clearDragPayload, MIME_MEDIA, setDragPayload } from "../dnd";
 import { ContextMenu } from "./ContextMenu";
 import { ConfirmDialog } from "./ConfirmDialog";
 
+async function measureVideoDimensions(url: string): Promise<{ width: number; height: number }> {
+  if (!url) {
+    throw new Error("视频 URL 为空");
+  }
+  return new Promise((resolve, reject) => {
+    const video = document.createElement("video");
+    video.preload = "metadata";
+    video.muted = true;
+    video.style.display = "none";
+    document.body.appendChild(video);
+
+    let finished = false;
+    const cleanup = () => {
+      if (!finished) {
+        finished = true;
+        if (video.parentNode) {
+          video.parentNode.removeChild(video);
+        }
+      }
+    };
+
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error("读取视频元数据超时"));
+    }, 5000);
+
+    video.onloadedmetadata = () => {
+      clearTimeout(timer);
+      const width = video.videoWidth;
+      const height = video.videoHeight;
+      cleanup();
+      if (width > 0 && height > 0) {
+        resolve({ width, height });
+      } else {
+        reject(new Error("未能读取到有效的视频尺寸"));
+      }
+    };
+
+    video.onerror = () => {
+      clearTimeout(timer);
+      cleanup();
+      reject(new Error("加载视频元数据失败"));
+    };
+
+    video.src = url;
+  });
+}
+
 /**
- * 素材 → 视频:导入进来的素材列表。拖到时间轴落成素材段(拖放契约见 EDITOR-DESIGN.md),
- * 右键删除。转写和字幕不在这里,点「字幕」按钮跳到字幕分页。
+ * 素材 → 视频: 导入进来的素材列表。
+ * 支持搜索过滤、拖拽到时间轴、右键菜单（取视频比例作为项目比例、删除素材）。
  */
-export function MediaTab({ onOpenCaptions }: { onOpenCaptions: (mediaId: string) => void }) {
+export function MediaTab({
+  search,
+  onOpenCaptions,
+}: {
+  search: string;
+  onOpenCaptions: (mediaId: string) => void;
+}) {
   const media = useStore((s) => s.project.media);
-  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; mediaId: string; name: string } | null>(null);
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; media: MediaAsset } | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<{ mediaId: string; name: string } | null>(null);
+
+  const filteredMedia = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return media;
+    return media.filter((m) => m.name.toLowerCase().includes(q));
+  }, [media, search]);
 
   const handleDragStart = (e: React.DragEvent, m: MediaAsset) => {
     e.dataTransfer.setData(MIME_MEDIA, m.id);
@@ -20,14 +80,36 @@ export function MediaTab({ onOpenCaptions }: { onOpenCaptions: (mediaId: string)
     setDragPayload({ kind: "media", mediaId: m.id, name: m.name, duration: m.duration ?? DEFAULT_MEDIA_DUR });
   };
 
+  const handleApplyAspectRatio = async (m: MediaAsset) => {
+    try {
+      let width = m.width;
+      let height = m.height;
+      if (!width || !height || width <= 0 || height <= 0) {
+        const measured = await measureVideoDimensions(m.url);
+        width = measured.width;
+        height = measured.height;
+      }
+      if (width > 0 && height > 0) {
+        actions.setProjectMeta({ width, height });
+      } else {
+        alert("未能获取视频的有效分辨率");
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      alert(`获取视频分辨率失败: ${msg}`);
+    }
+  };
+
   return (
     <div className="flex-1 min-h-0 flex flex-col pc-l-scroll">
       <div className="flex-1 overflow-y-auto pc-l-scroll py-1">
         {media.length === 0 ? (
-          <div className="px-3 py-4 text-xs text-neutral-500">还没有导入的视频。用顶栏的「导入视频」加进来。</div>
+          <div className="px-3 py-4 text-xs text-neutral-500">还没有导入的视频。点上面的 + 加进来。</div>
+        ) : filteredMedia.length === 0 ? (
+          <div className="px-3 py-4 text-xs text-neutral-500">没有匹配的视频</div>
         ) : (
           <div className="px-1">
-            {media.map((m) => (
+            {filteredMedia.map((m) => (
               <div
                 key={m.id}
                 data-pc-media={m.id}
@@ -36,7 +118,7 @@ export function MediaTab({ onOpenCaptions }: { onOpenCaptions: (mediaId: string)
                 onDragEnd={clearDragPayload}
                 onContextMenu={(e) => {
                   e.preventDefault();
-                  setCtxMenu({ x: e.clientX, y: e.clientY, mediaId: m.id, name: m.name });
+                  setCtxMenu({ x: e.clientX, y: e.clientY, media: m });
                 }}
                 className="flex items-center gap-2 px-2 py-1 rounded hover:bg-neutral-800 cursor-grab text-xs"
               >
@@ -71,9 +153,17 @@ export function MediaTab({ onOpenCaptions }: { onOpenCaptions: (mediaId: string)
           y={ctxMenu.y}
           items={[
             {
+              label: "以视频比例作为项目比例",
+              hint:
+                ctxMenu.media.width && ctxMenu.media.height && ctxMenu.media.width > 0 && ctxMenu.media.height > 0
+                  ? `${ctxMenu.media.width}x${ctxMenu.media.height}`
+                  : undefined,
+              onClick: () => handleApplyAspectRatio(ctxMenu.media),
+            },
+            {
               label: "删除素材",
               danger: true,
-              onClick: () => setConfirmDelete({ mediaId: ctxMenu.mediaId, name: ctxMenu.name }),
+              onClick: () => setConfirmDelete({ mediaId: ctxMenu.media.id, name: ctxMenu.media.name }),
             },
           ]}
           onClose={() => setCtxMenu(null)}

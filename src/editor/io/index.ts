@@ -1,4 +1,4 @@
-import type { Project } from "../../kernel/project";
+import type { Project, TranscriptSegment } from "../../kernel/project";
 import { actions, getState } from "../../store/project";
 import { createEmptyProject } from "../../kernel/project";
 import { getCard } from "../../kernel/registry";
@@ -134,6 +134,80 @@ export async function importProjectFile(file: File): Promise<Project> {
   }
 }
 
+/** 时间码转秒:00:01:02,500 / 00:01:02.500 / 01:02,500(小时可省) */
+function parseTimecode(raw: string): number | null {
+  const m = raw.trim().match(/^(?:(\d+):)?(\d{1,2}):(\d{1,2})[,.](\d{1,3})$/);
+  if (!m) return null;
+  const [, h, mm, ss, ms] = m;
+  return (h ? Number(h) * 3600 : 0) + Number(mm) * 60 + Number(ss) + Number(ms.padEnd(3, "0")) / 1000;
+}
+
+/**
+ * 解析 SRT(顺带兼容 WebVTT)。宽松处理:BOM、CRLF、可省的序号行、WEBVTT 头、
+ * 结束时间后面的 cue 设置、<i> 和 {\an8} 这类标记都能吃掉。解析不出来的块跳过,不抛错。
+ */
+export function parseSrt(text: string): TranscriptSegment[] {
+  const clean = text.replace(/^﻿/, "").replace(/\r\n?/g, "\n");
+  const segments: TranscriptSegment[] = [];
+
+  for (const block of clean.split(/\n{2,}/)) {
+    const lines = block.split("\n").map((l) => l.trim()).filter(Boolean);
+    if (lines.length === 0) continue;
+    if (/^WEBVTT/i.test(lines[0])) lines.shift();
+
+    // 序号行可有可无
+    let i = 0;
+    if (/^\d+$/.test(lines[i] ?? "") && (lines[i + 1] ?? "").includes("-->")) i += 1;
+
+    const timeLine = lines[i];
+    if (!timeLine || !timeLine.includes("-->")) continue;
+    const [rawStart, rawEnd] = timeLine.split("-->");
+    const start = parseTimecode(rawStart ?? "");
+    // WebVTT 的结束时间后面可能跟 align / position 之类的设置,只取第一段
+    const end = parseTimecode((rawEnd ?? "").trim().split(/\s+/)[0] ?? "");
+    if (start === null || end === null || end <= start) continue;
+
+    const body = lines
+      .slice(i + 1)
+      .join("\n")
+      .replace(/<[^>]+>/g, "")
+      .replace(/\{[^}]*\}/g, "")
+      .trim();
+    if (!body) continue;
+
+    segments.push({ start, end, text: body });
+  }
+
+  return segments.sort((a, b) => a.start - b.start);
+}
+
+/**
+ * 导入 .srt / .vtt,挂到某条素材上当它的字幕稿(结构和语音转文字的结果一样,
+ * 所以「素材 → 字幕」分页和 autoWorkflow 的字幕卡都能直接用)。
+ * 不给 mediaId 就挂到第一条素材;一条素材都没有时报错——字幕的时间轴是相对素材的。
+ */
+export async function importSrtFile(
+  file: File,
+  opts: { mediaId?: string } = {},
+): Promise<{ mediaId: string; count: number }> {
+  const segments = parseSrt(await file.text());
+  if (segments.length === 0) {
+    throw new Error(`${file.name} 里没解析出字幕段,检查是不是 SRT / VTT 格式`);
+  }
+  const p = getState().project;
+  const mediaId = opts.mediaId && p.media.some((m) => m.id === opts.mediaId) ? opts.mediaId : p.media[0]?.id;
+  if (!mediaId) {
+    throw new Error("还没有素材:先在「视频」分页导入视频,再导入它的字幕");
+  }
+  actions.setMediaTranscript(mediaId, {
+    engine: "srt",
+    model: file.name,
+    createdAt: new Date().toISOString(),
+    segments,
+  });
+  return { mediaId, count: segments.length };
+}
+
 /** 把当前项目序列化成 JSON 字符串(blob URL 换成相对路径) */
 export function exportProjectJson(): string {
   const p = JSON.parse(JSON.stringify(getState().project)) as Project & { _note?: string };
@@ -226,5 +300,5 @@ declare global {
 
 if (typeof window !== "undefined") {
   // 临时验证出口：puppeteer 无头验证时直接调用这四个函数（不用模拟 <input type=file>）。
-  window.__pcIo = { importVideoFiles, importProjectFile, exportProjectJson, exportVideo, setMediaTranscript: (mediaId: string, transcript: any) => actions.setMediaTranscript(mediaId, transcript) };
+  window.__pcIo = { importVideoFiles, importProjectFile, importSrtFile, parseSrt, exportProjectJson, exportVideo, setMediaTranscript: (mediaId: string, transcript: any) => actions.setMediaTranscript(mediaId, transcript) };
 }

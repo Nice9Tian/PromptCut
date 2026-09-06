@@ -4,10 +4,18 @@ import type { Project } from "../../kernel/project";
 import { TranscribePanel } from "./TranscribePanel";
 
 /**
- * 素材 → 字幕:某个素材的语音转文字结果。没转写过就在这里转,转写过就列出每一段,
- * 点一段把播放头挪到时间轴上对应的位置(素材时间 → 时间轴时间要经过它所在片段的偏移)。
+ * 素材 → 字幕: 某个素材的语音转文字结果。
+ * 支持按文本搜索字幕片段，点一段把播放头挪到时间轴上对应的位置。
  */
-export function CaptionsTab({ mediaId, onPick }: { mediaId: string | null; onPick: (id: string | null) => void }) {
+export function CaptionsTab({
+  search,
+  mediaId,
+  onPick,
+}: {
+  search: string;
+  mediaId: string | null;
+  onPick: (id: string | null) => void;
+}) {
   const project = useStore((s) => s.project);
   const t = useStore((s) => s.t);
   const [transcribing, setTranscribing] = useState(false);
@@ -27,6 +35,15 @@ export function CaptionsTab({ mediaId, onPick }: { mediaId: string | null; onPic
   }
 
   const transcript = media?.transcript;
+
+  const filteredSegments = transcript?.segments
+    ? transcript.segments
+        .map((seg, originalIndex) => ({ seg, originalIndex }))
+        .filter(({ seg }) => {
+          if (!search.trim()) return true;
+          return seg.text.toLowerCase().includes(search.trim().toLowerCase());
+        })
+    : [];
 
   return (
     <div className="flex-1 min-h-0 flex flex-col">
@@ -72,28 +89,32 @@ export function CaptionsTab({ mediaId, onPick }: { mediaId: string | null; onPic
                 重新转写
               </button>
             </div>
-            <div className="py-1">
-              {transcript.segments.map((seg, i) => {
-                const tl = timelineTimeOf(project, media.id, seg.start);
-                const active = tl != null && t >= tl && t < tl + Math.max(0.1, seg.end - seg.start);
-                return (
-                  <button
-                    key={i}
-                    data-pc-caption-seg={i}
-                    className={`w-full text-left flex gap-2 px-2 py-1 text-xs ${
-                      active ? "bg-neutral-800 text-neutral-100" : "text-neutral-300 hover:bg-neutral-800/60"
-                    } ${tl == null ? "opacity-50" : ""}`}
-                    title={tl == null ? "这段素材还没放到时间轴上" : "点一下把播放头挪过去"}
-                    onClick={() => {
-                      if (tl != null) actions.seek(tl);
-                    }}
-                  >
-                    <span className="shrink-0 tabular-nums text-neutral-500 w-10">{fmt(seg.start)}</span>
-                    <span className="flex-1 whitespace-pre-wrap break-words">{seg.text}</span>
-                  </button>
-                );
-              })}
-            </div>
+            {filteredSegments.length === 0 ? (
+              <div className="p-4 text-center text-xs text-neutral-500">没有匹配的字幕</div>
+            ) : (
+              <div className="py-1">
+                {filteredSegments.map(({ seg, originalIndex }) => {
+                  const tl = timelineTimeOf(project, media.id, seg.start);
+                  const active = tl != null && t >= tl && t < tl + Math.max(0.1, seg.end - seg.start);
+                  return (
+                    <button
+                      key={originalIndex}
+                      data-pc-caption-seg={originalIndex}
+                      className={`w-full text-left flex gap-2 px-2 py-1 text-xs ${
+                        active ? "bg-neutral-800 text-neutral-100" : "text-neutral-300 hover:bg-neutral-800/60"
+                      } ${tl == null ? "opacity-50" : ""}`}
+                      title={tl == null ? "这段素材还没放到时间轴上" : "点一下把播放头挪过去"}
+                      onClick={() => {
+                        if (tl != null) actions.seek(tl);
+                      }}
+                    >
+                      <span className="shrink-0 tabular-nums text-neutral-500 w-10">{fmt(seg.start)}</span>
+                      <span className="flex-1 whitespace-pre-wrap break-words">{seg.text}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </>
         )}
       </div>

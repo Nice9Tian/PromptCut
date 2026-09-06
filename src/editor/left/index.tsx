@@ -1,19 +1,21 @@
 import "./debug";
 import "./left.css";
-import { useState } from "react";
-import { CardsTab } from "./CardsTab";
+import { useRef, useState } from "react";
+import { CardsTab, type CardsTabHandle } from "./CardsTab";
 import { MediaTab } from "./MediaTab";
 import { CaptionsTab } from "./CaptionsTab";
+import { StyleTab } from "./StyleTab";
+import { AssetToolbar } from "./AssetToolbar";
 import { Inspector } from "./Inspector";
 
 /**
  * 左栏:两级分页。
  *   顶级  素材 | 编辑
- *   二级  素材 → 卡片 / 视频 / 字幕     编辑 → 参数 / 代码
+ *   二级  素材 → 全局风格 / 卡片 / 视频 / 字幕     编辑 → 参数 / 代码
  * 分页选择记在 localStorage;各分页都常驻挂载(只是隐藏),切来切去不丢滚动位置和输入。
  */
 type TopTab = "assets" | "edit";
-type AssetTab = "cards" | "videos" | "captions";
+type AssetTab = "style" | "cards" | "videos" | "captions";
 type EditTab = "form" | "code";
 
 const TOP_TABS: { key: TopTab; label: string }[] = [
@@ -21,6 +23,7 @@ const TOP_TABS: { key: TopTab; label: string }[] = [
   { key: "edit", label: "编辑" },
 ];
 const ASSET_TABS: { key: AssetTab; label: string }[] = [
+  { key: "style", label: "全局风格" },
   { key: "cards", label: "卡片" },
   { key: "videos", label: "视频" },
   { key: "captions", label: "字幕" },
@@ -41,10 +44,18 @@ function stored<T extends string>(key: string, allowed: readonly T[], fallback: 
 export function LeftPanel() {
   const [top, setTop] = useState<TopTab>(() => stored("pc.left.tab", ["assets", "edit"] as const, "assets"));
   const [assetTab, setAssetTab] = useState<AssetTab>(() =>
-    stored("pc.left.assetTab", ["cards", "videos", "captions"] as const, "cards"),
+    stored("pc.left.assetTab", ["style", "cards", "videos", "captions"] as const, "cards"),
   );
   const [editTab, setEditTab] = useState<EditTab>(() => stored("pc.left.editTab", ["form", "code"] as const, "form"));
   const [captionMediaId, setCaptionMediaId] = useState<string | null>(null);
+
+  // 搜索词按分页各记各的，切分页时各自保持不变
+  const [cardsSearch, setCardsSearch] = useState("");
+  const [videosSearch, setVideosSearch] = useState("");
+  const [captionsSearch, setCaptionsSearch] = useState("");
+
+  const cardsTabRef = useRef<CardsTabHandle>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   const pick = <T extends string>(key: string, set: (v: T) => void) => (v: T) => {
     set(v);
@@ -64,6 +75,21 @@ export function LeftPanel() {
   const subTabs = top === "assets" ? ASSET_TABS : EDIT_TABS;
   const subActive: string = top === "assets" ? assetTab : editTab;
   const pickSub = (key: string) => (top === "assets" ? pickAsset(key as AssetTab) : pickEdit(key as EditTab));
+
+  const currentSearch =
+    assetTab === "cards" ? cardsSearch : assetTab === "videos" ? videosSearch : captionsSearch;
+
+  const handleSearchChange = (val: string) => {
+    if (assetTab === "cards") setCardsSearch(val);
+    else if (assetTab === "videos") setVideosSearch(val);
+    else if (assetTab === "captions") setCaptionsSearch(val);
+  };
+
+  const handleClearSearch = () => {
+    if (assetTab === "cards") setCardsSearch("");
+    else if (assetTab === "videos") setVideosSearch("");
+    else if (assetTab === "captions") setCaptionsSearch("");
+  };
 
   return (
     <div data-pc="left" className="h-full flex flex-col min-h-0 overflow-hidden bg-neutral-950 text-neutral-100">
@@ -102,17 +128,33 @@ export function LeftPanel() {
       {/* 素材 */}
       <div
         data-pc="library"
-        className="flex-1 min-h-0 flex-col overflow-hidden"
+        className="flex-1 min-h-0 flex flex-col overflow-hidden"
         style={{ display: top === "assets" ? "flex" : "none" }}
       >
-        <div className="flex-1 min-h-0 flex-col" style={{ display: assetTab === "cards" ? "flex" : "none" }}>
-          <CardsTab />
+        {/* 统一导航条: 仅在素材且二级分页为卡片/视频/字幕时显示 */}
+        {assetTab !== "style" && (
+          <AssetToolbar
+            captionMediaId={captionMediaId}
+            assetTab={assetTab}
+            search={currentSearch}
+            onSearchChange={handleSearchChange}
+            onClearSearch={handleClearSearch}
+            onScrollCardsToTop={() => cardsTabRef.current?.scrollToTop()}
+            searchInputRef={searchInputRef}
+          />
+        )}
+
+        <div className="flex-1 min-h-0 flex flex-col" style={{ display: assetTab === "style" ? "flex" : "none" }}>
+          <StyleTab />
         </div>
-        <div className="flex-1 min-h-0 flex-col" style={{ display: assetTab === "videos" ? "flex" : "none" }}>
-          <MediaTab onOpenCaptions={openCaptions} />
+        <div className="flex-1 min-h-0 flex flex-col" style={{ display: assetTab === "cards" ? "flex" : "none" }}>
+          <CardsTab ref={cardsTabRef} search={cardsSearch} />
         </div>
-        <div className="flex-1 min-h-0 flex-col" style={{ display: assetTab === "captions" ? "flex" : "none" }}>
-          <CaptionsTab mediaId={captionMediaId} onPick={setCaptionMediaId} />
+        <div className="flex-1 min-h-0 flex flex-col" style={{ display: assetTab === "videos" ? "flex" : "none" }}>
+          <MediaTab search={videosSearch} onOpenCaptions={openCaptions} />
+        </div>
+        <div className="flex-1 min-h-0 flex flex-col" style={{ display: assetTab === "captions" ? "flex" : "none" }}>
+          <CaptionsTab search={captionsSearch} mediaId={captionMediaId} onPick={setCaptionMediaId} />
         </div>
       </div>
 

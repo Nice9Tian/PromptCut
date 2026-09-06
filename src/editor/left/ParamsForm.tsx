@@ -2,8 +2,19 @@ import { useState, useEffect } from "react";
 import { actions } from "../../store/project";
 import type { CardDef, Control } from "../../kernel/types";
 import type { TrackClip } from "../../kernel/project";
+import { SpeakerPicker } from "./SpeakerPicker";
 
-export function ParamsForm({ clip, cardDef }: { clip: TrackClip, cardDef: CardDef<any> | undefined }) {
+function isSpeakerVideoControl(ctrl: Control): boolean {
+  if (ctrl.type !== "text") return false;
+  const keyLower = ctrl.key.toLowerCase();
+  const keyMatch = /speaker|speech|talking|talkinghead|cam|video|口播/.test(keyLower);
+  const labelMatch = ctrl.label.includes("口播") || ctrl.label.includes("视频");
+  return keyMatch || labelMatch;
+}
+
+export function ParamsForm({ clip, cardDef }: { clip: TrackClip; cardDef: CardDef<any> | undefined }) {
+  const [pickerCtrlKey, setPickerCtrlKey] = useState<string | null>(null);
+
   if (!cardDef || !cardDef.controls || cardDef.controls.length === 0) {
     return (
       <div className="p-4 text-center text-xs text-neutral-500">
@@ -75,13 +86,34 @@ export function ParamsForm({ clip, cardDef }: { clip: TrackClip, cardDef: CardDe
             
             <div className="flex-1 min-w-0 flex items-center gap-2">
               {ctrl.type === "text" && (
-                <input
-                  data-pc-param={ctrl.key}
-                  type="text"
-                  value={String(val ?? "")}
-                  onChange={e => actions.setClipParams(clip.id, { [ctrl.key]: e.target.value })}
-                  className="w-full h-6 px-1.5 bg-neutral-900 border border-neutral-800 rounded text-xs text-neutral-200 outline-none focus:border-neutral-600"
-                />
+                isSpeakerVideoControl(ctrl) ? (
+                  <div className="flex w-full items-center gap-1">
+                    <input
+                      data-pc-param={ctrl.key}
+                      type="text"
+                      value={String(val ?? "")}
+                      onChange={e => actions.setClipParams(clip.id, { [ctrl.key]: e.target.value })}
+                      className="flex-1 min-w-0 h-6 px-1.5 bg-neutral-900 border border-neutral-800 rounded text-xs text-neutral-200 outline-none focus:border-neutral-600"
+                    />
+                    <button
+                      type="button"
+                      data-pc-pick={ctrl.key}
+                      onClick={() => setPickerCtrlKey(ctrl.key)}
+                      title="选择口播视频"
+                      className="h-6 w-6 shrink-0 flex items-center justify-center rounded border border-neutral-800 bg-neutral-900 hover:bg-neutral-800 hover:border-neutral-700 text-xs text-neutral-300 transition-colors"
+                    >
+                      …
+                    </button>
+                  </div>
+                ) : (
+                  <input
+                    data-pc-param={ctrl.key}
+                    type="text"
+                    value={String(val ?? "")}
+                    onChange={e => actions.setClipParams(clip.id, { [ctrl.key]: e.target.value })}
+                    className="w-full h-6 px-1.5 bg-neutral-900 border border-neutral-800 rounded text-xs text-neutral-200 outline-none focus:border-neutral-600"
+                  />
+                )
               )}
               
               {ctrl.type === "number" && (
@@ -131,6 +163,16 @@ export function ParamsForm({ clip, cardDef }: { clip: TrackClip, cardDef: CardDe
           重置为默认
         </button>
       </div>
+
+      {pickerCtrlKey && (
+        <SpeakerPicker
+          open={true}
+          onClose={() => setPickerCtrlKey(null)}
+          onSelect={(url) => {
+            actions.setClipParams(clip.id, { [pickerCtrlKey]: url });
+          }}
+        />
+      )}
     </div>
   );
 }
