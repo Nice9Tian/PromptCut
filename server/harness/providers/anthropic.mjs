@@ -23,6 +23,8 @@ export function createProvider(cfg, { fetchImpl = globalThis.fetch } = {}) {
           for (const block of msg.content) {
             if (block.type === 'text' || block.type === 'tool_use') {
               newMsg.content.push(block);
+            } else if (block.type === 'image') {
+              newMsg.content.push({ type: 'image', source: { type: 'base64', media_type: block.mime || 'image/png', data: block.data } });
             } else if (block.type === 'tool_result') {
               newMsg.content.push({
                 type: 'tool_result',

@@ -33,18 +33,28 @@ export function createProvider(cfg, { fetchImpl = globalThis.fetch } = {}) {
           
           let hasToolResult = false;
           let textBuffer = '';
-          
+          // 图片只能挂在 role:"user" 上——role:"tool" 的 content 只收字符串
+          const parts = [];
+
           for (const block of msg.content) {
             if (block.type === 'tool_result') {
               hasToolResult = true;
             } else if (block.type === 'text') {
               textBuffer += block.text;
+              parts.push({ type: 'text', text: block.text });
+            } else if (block.type === 'image') {
+              parts.push({ type: 'image_url', image_url: { url: `data:${block.mime || 'image/png'};base64,${block.data}` } });
             }
           }
-          
+
           if (!hasToolResult) {
-             openaiMessages.push({ role: 'user', content: textBuffer });
+             // 没有图片时仍旧发纯字符串:多模态数组的形式不是每个兼容端点都吃
+             const hasImage = parts.some(p => p.type === 'image_url');
+             openaiMessages.push({ role: 'user', content: hasImage ? parts : textBuffer });
           } else {
+             // 同一条消息里既有工具结果又有图片时：工具结果各自变成 role:"tool"，
+             // 图片只能另起一条 role:"user" 跟在后面——role:"tool" 装不下图片块。
+             // 顺序仍是 assistant(tool_calls) → tool(...) → user(图)，合法。
              for (const block of msg.content) {
                if (block.type === 'tool_result') {
                  openaiMessages.push({
@@ -52,9 +62,13 @@ export function createProvider(cfg, { fetchImpl = globalThis.fetch } = {}) {
                    tool_call_id: block.tool_use_id,
                    content: typeof block.content === 'string' ? block.content : JSON.stringify(block.content)
                  });
-               } else if (block.type === 'text') {
-                 openaiMessages.push({ role: 'user', content: block.text });
                }
+             }
+             // 工具结果全部发完之后，图片和随行文字合成一条 user 消息。
+             // 图片必须和它的说明文字在一起，所以文字也一并挪到这里，而不是各发一条。
+             if (parts.length) {
+               const hasImage = parts.some(p => p.type === 'image_url');
+               openaiMessages.push({ role: 'user', content: hasImage ? parts : textBuffer });
              }
           }
         } else if (msg.role === 'assistant') {

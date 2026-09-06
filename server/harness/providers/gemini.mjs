@@ -37,6 +37,8 @@ export function createProvider(cfg, { fetchImpl = globalThis.fetch } = {}) {
           for (const block of msg.content) {
             if (block.type === 'text') {
               parts.push({ text: block.text });
+            } else if (block.type === 'image') {
+              parts.push({ inlineData: { mimeType: block.mime || 'image/png', data: block.data } });
             } else if (block.type === 'tool_result') {
               const name = toolUseIdToName.get(block.tool_use_id) || 'unknown';
               parts.push({

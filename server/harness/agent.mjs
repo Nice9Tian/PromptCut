@@ -74,6 +74,11 @@ export class Agent {
       }
       progress(round, 'executing', `本轮收到 ${calls.length} 个工具调用，正在执行…`);
       const results = [];
+      // 工具返回的图片不留在 tool_result 里，改挂到同一条 user 消息的末尾。
+      // 原因是可移植性：Anthropic 的 tool_result 装得下图片块，OpenAI 的 role:"tool"
+      // 只收字符串，装不了。要让同一套 history 在三家 API 上都成立，图片就只能作为
+      // 跟在工具结果后面的普通内容块出现（下面 append 处还有一段说明为什么不另起一条）。
+      const images = [];
       // Preserve declared order for edits: two mutations must not race in the store.
       // Multiple calls still share one model round trip.
       for (const call of calls) {
@@ -95,12 +100,27 @@ export class Agent {
           checkAbort(this.signal);
           ok = false; result = { error: err.message || String(err) };
         } finally { clearInterval(toolHeartbeat); }
+        // 图片从工具结果里摘出来。留在 JSON 里的话，base64 会被当成普通文本灌进历史：
+        // 模型看不见画面，几十万字符还会立刻把上下文撑爆并触发截断。摘出来还有个好处是
+        // 转发给界面的 tool_result 事件也就不带 base64 了，存档不会被撑大。
+        if (ok && result && typeof result === 'object' && result.__image?.base64) {
+          images.push({ ...result.__image, name: call.name });
+          const { __image, ...rest } = result;
+          result = { ...rest, image: '画面见本条消息末尾的图片' };
+        }
         const output = typeof result === 'string' ? result : JSON.stringify(result ?? null);
         ok ? completed++ : failed++;
         this.onEvent({ type: 'tool_result', callId: call.id, round, name: call.name, ok, summary: output.slice(0, 1000), output: result, durationMs: Date.now() - begin });
         results.push({ type: 'tool_result', tool_use_id: call.id, content: output, is_error: !ok });
       }
-      this.history.append({ role: 'user', content: results });
+      // 图片跟工具结果放在同一条 user 消息里、排在所有 tool_result 之后。
+      // 不另起一条的原因：那会造成两条连着的 user 消息，而三家 API 对连续同角色
+      // 消息的容忍度不一样。挂在同一条上是三家都明确支持的形状。
+      this.history.append({ role: 'user', content: images.length ? [
+        ...results,
+        ...images.map(im => ({ type: 'image', mime: im.mime || 'image/png', data: im.base64 })),
+        { type: 'text', text: `以上是 ${images.map(i => i.name).join('、')} 截到的画面。照着画面判断，不要凭源码想象效果。` },
+      ] : results });
       const fingerprint = canonical(calls.map((c, index) => ({ name: c.name, input: c.input, result: results[index].content })));
       recent.push(fingerprint);
       if (recent.length > 6) recent.shift();
@@ -110,6 +130,7 @@ export class Agent {
       } else if (round === this.maxIterations) {
         outcome = 'round_limit'; summaryReason = `已达到 ${this.maxIterations} 轮模型往返上限`;
       }
+      this.history.pruneImages();
       this.history.truncate();
     }
     progress(lastRound, outcome === 'completed' ? 'completed' : 'paused', outcome === 'completed' ? `本次完成：${completed} 次成功，${failed} 次失败。` : summaryReason);
