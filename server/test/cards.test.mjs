@@ -37,7 +37,7 @@ const pluginUrl = compile('server/vite-plugin-cards.ts', 'cards-plugin.mjs', [["
 
 const { registerCards } = await import(registryUrl);
 const { validateCardParams, findCard } = await import(cardParamsUrl);
-const { checkCardSource } = await import(pluginUrl);
+const { checkCardSource, applyCardPatch } = await import(pluginUrl);
 
 // 一张最小的假卡,形状和真卡一致
 registerCards([{
@@ -167,4 +167,58 @@ test('语法错误 → 拒绝并给出行号', () => {
 test('缺 controls 字段 → 拒绝', () => {
   const src = GOOD.replace('  controls: [{ key: "text", label: "文字", type: "text" }],\n', '');
   assert.match(checkCardSource('price-tag', src, []).errors.join('\n'), /缺少 controls/);
+});
+
+// ── applyCardPatch:局部改卡 ────────────────────────────────────────
+// 下面这几种情形出错时都不会报错,只会静静地把文件改成别的样子 ——
+// 而「改卡时别处莫名其妙也变了」正是这个功能要根治的毛病,所以逐条钉住。
+
+test('唯一命中时只换那一处', () => {
+  const r = applyCardPatch('a\nsize: 120\nb', 'size: 120', 'size: 64');
+  assert.equal(r.ok, true);
+  assert.equal(r.after, 'a\nsize: 64\nb');
+  assert.equal(r.replaced, 1);
+});
+
+test('replace 里的 $& 不该被当成替换记号展开', () => {
+  // String.replace(str, str) 会把 $& 换成刚匹配到的内容;split/join 不会。
+  // 这里的 replace 是模型逐字写好的源码,必须原样落盘。
+  const r = applyCardPatch('x AAA y', 'AAA', 'cost = "$&"');
+  assert.equal(r.after, 'x cost = "$&" y');
+});
+
+test('replace 里的 $1 和 $` 一样原样落盘', () => {
+  assert.equal(applyCardPatch('[T]', 'T', '.replace(/x/, "$1")').after, '[.replace(/x/, "$1")]');
+  assert.equal(applyCardPatch('[T]', 'T', 'a$`b').after, '[a$`b]');
+});
+
+test('find 里带正则元字符按字面处理,不当成模式', () => {
+  const r = applyCardPatch('const a = arr.map(x => x)', 'arr.map(x => x)', 'arr');
+  assert.equal(r.after, 'const a = arr');
+});
+
+test('一次都没命中 → 报错并指路 get_card_source', () => {
+  const r = applyCardPatch('abc', 'xyz', 'q');
+  assert.equal(r.ok, false);
+  assert.match(r.error, /get_card_source/);
+});
+
+test('命中多处又没说 replaceAll → 报错并说清命中几处', () => {
+  const r = applyCardPatch('p p p', 'p', 'q');
+  assert.equal(r.ok, false);
+  assert.match(r.error, /匹配到 3 处/);
+});
+
+test('replaceAll 时全换掉,并如实回报换了几处', () => {
+  const r = applyCardPatch('p p p', 'p', 'q', true);
+  assert.equal(r.after, 'q q q');
+  assert.equal(r.replaced, 3);
+});
+
+test('replace 与 find 相同 → 报错,不留一次什么都没干的「成功」', () => {
+  assert.equal(applyCardPatch('abc', 'b', 'b').ok, false);
+});
+
+test('空 find → 报错(否则会匹配到每一个位置)', () => {
+  assert.equal(applyCardPatch('abc', '', 'x').ok, false);
 });
