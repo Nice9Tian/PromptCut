@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useTimelineContext } from "./TimelineContext";
 import { actions, useStore, getState } from "../../store/project";
 import { getCard } from "../../kernel/registry";
-import { snapTime, isOccupied, getGap } from "./utils";
+import { snapTime, isOccupied, getGap, xOfTime } from "./utils";
 import { TrackClip, Track } from "../../kernel/project";
 import { useDrag } from "./useDrag";
 import { ContextMenu } from "./ContextMenu";
@@ -48,7 +48,7 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
         if (row) {
           const hoverTrackId = row.getAttribute("data-track-id")!;
           const hoverTrack = state.project.tracks.find((t) => t.id === hoverTrackId);
-          if (hoverTrack && hoverTrack.kind === track.kind && !hoverTrack.locked) {
+          if (hoverTrack && !hoverTrack.locked) {
             newTrackId = hoverTrackId;
           }
         }
@@ -157,7 +157,8 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
     "absolute top-1 bottom-1 rounded flex items-center px-2 text-xs text-white overflow-hidden select-none border",
     track.locked ? "" : "cursor-pointer",
     isSelected ? "border-white z-20 shadow-[0_0_0_1px_rgba(255,255,255,1)]" : "border-black/20 z-10",
-    track.kind === "overlay" ? "bg-blue-600 hover:bg-blue-500" : "bg-emerald-600 hover:bg-emerald-500",
+    // 颜色分的是片段类型(卡片 / 素材),序列本身不再分种类
+    clip.mediaId ? "bg-emerald-600 hover:bg-emerald-500" : "bg-blue-600 hover:bg-blue-500",
     dragState?.forbidden ? "bg-red-500/50 border-red-500 border-dashed" : "",
   ].join(" ");
 
@@ -178,7 +179,7 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
         data-clip-id={clip.id}
         className={clipClasses}
         style={{
-          left: `${displayStart * pxPerSec}px`,
+          left: `${xOfTime(displayStart, pxPerSec)}px`,
           width: `${(displayEnd - displayStart) * pxPerSec}px`,
           transform: `translateY(${translateY}px)`,
           transition: dragState ? 'none' : 'width 0.1s, left 0.1s',
@@ -213,7 +214,7 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
             {
               label: "置顶",
               action: () => {
-                const tracks = getState().project.tracks.filter(t => t.kind === track.kind);
+                const tracks = getState().project.tracks;
                 if (tracks.length > 0) {
                   const topTrack = tracks[tracks.length - 1]; // later in array = higher z-index
                   actions.moveClip(clip.id, { trackId: topTrack.id });
@@ -223,7 +224,7 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
             {
               label: "置底",
               action: () => {
-                const tracks = getState().project.tracks.filter(t => t.kind === track.kind);
+                const tracks = getState().project.tracks;
                 if (tracks.length > 0) {
                   const bottomTrack = tracks[0];
                   actions.moveClip(clip.id, { trackId: bottomTrack.id });

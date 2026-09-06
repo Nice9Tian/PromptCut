@@ -1,56 +1,31 @@
-import { useState } from "react";
 import { useTimelineContext } from "./TimelineContext";
-import { useStore, actions, getState } from "../../store/project";
-import { snapTime } from "./utils";
+import { useStore } from "../../store/project";
+import { useScrub } from "./useScrub";
+import { xOfTime } from "./utils";
 
-export function Playhead() {
+/**
+ * 播放头。竖线从卡尺一直贯到最后一条轨,抓手(三角)落在卡尺里,
+ * 所以卡尺和竖线之间没有拖不动的空档:卡尺上按下能拖,竖线上按下也能拖。
+ */
+export function Playhead({ top = 0 }: { top?: number }) {
   const t = useStore((s) => s.t);
   const { pxPerSec } = useTimelineContext();
-  const [dragT, setDragT] = useState<number | null>(null);
-
-  const displayT = dragT !== null ? dragT : t;
-  const left = displayT * pxPerSec;
-
-  const handlePointerDown = (e: React.PointerEvent) => {
-    if (e.button !== 0) return;
-    const el = e.currentTarget as HTMLElement;
-    el.setPointerCapture(e.pointerId);
-    let startX = e.clientX;
-    let startT = displayT;
-
-    const onMove = (ev: PointerEvent) => {
-      const dx = ev.clientX - startX;
-      let newT = startT + dx / pxPerSec;
-      const state = getState();
-      newT = snapTime(newT, ev.altKey, state.project, state.t, undefined, pxPerSec);
-      setDragT(Math.max(0, newT));
-    };
-
-    const onUp = (ev: PointerEvent) => {
-      el.removeEventListener("pointermove", onMove);
-      el.removeEventListener("pointerup", onUp);
-      el.releasePointerCapture(e.pointerId);
-      
-      const finalDx = ev.clientX - startX;
-      let newT = startT + finalDx / pxPerSec;
-      const state = getState();
-      newT = snapTime(newT, ev.altKey, state.project, state.t, undefined, pxPerSec);
-      setDragT(null);
-      actions.seek(Math.max(0, newT));
-    };
-
-    el.addEventListener("pointermove", onMove);
-    el.addEventListener("pointerup", onUp);
-  };
+  const startScrub = useScrub();
 
   return (
     <div
-      className="absolute top-0 bottom-0 z-40 flex justify-center cursor-ew-resize w-[9px]"
-      style={{ left: `${left}px`, transform: "translateX(-50%)" }}
-      onPointerDown={handlePointerDown}
+      data-pc="playhead"
+      className="absolute bottom-0 z-40 flex justify-center cursor-ew-resize w-[11px] touch-none"
+      style={{ left: `${xOfTime(t, pxPerSec)}px`, top, transform: "translateX(-50%)" }}
+      onPointerDown={(e) => startScrub(e, { jumpToPointer: false })}
+      title="拖动 = 移动播放头(按 Alt 不吸附)"
     >
       <div className="absolute top-0 bottom-0 w-[1px] bg-red-500 pointer-events-none" />
-      <div className="absolute top-0 w-3 h-3 bg-red-500 clip-playhead pointer-events-none" style={{ clipPath: "polygon(0 0, 100% 0, 50% 100%)" }} />
+      {/* 抓手:卡尺那一格里的三角,拖它最顺手 */}
+      <div
+        className="clip-playhead absolute top-0 w-[11px] h-4 bg-red-500 pointer-events-none"
+        style={{ clipPath: "polygon(0 0, 100% 0, 50% 100%)" }}
+      />
     </div>
   );
 }

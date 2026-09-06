@@ -48,14 +48,12 @@ async function pipeline(args: { mediaId: string; style?: string; maxCards?: numb
   let clipEnd = Infinity;
 
   for (const track of getState().project.tracks) {
-    if (track.kind === "video") {
-      const clip = track.clips.find(c => c.mediaId === mediaId);
-      if (clip) {
-        clipStart = clip.start;
-        mediaOffset = clip.mediaOffset ?? 0;
-        clipEnd = clip.end;
-        break;
-      }
+    const clip = track.clips.find(c => c.mediaId === mediaId);
+    if (clip) {
+      clipStart = clip.start;
+      mediaOffset = clip.mediaOffset ?? 0;
+      clipEnd = clip.end;
+      break;
     }
   }
 
@@ -238,9 +236,9 @@ async function pipeline(args: { mediaId: string; style?: string; maxCards?: numb
 
   let captionClipId: string | null = null;
   if (mappedSegments.length > 0) {
-    let captionTrack = getState().project.tracks.find(t => t.kind === "overlay" && t.name === "字幕");
+    let captionTrack = getState().project.tracks.find(t => t.name === "字幕");
     if (!captionTrack) {
-      captionTrack = actions.addTrack("overlay", "字幕");
+      captionTrack = actions.addTrack("字幕");
     }
     
     const globalStart = Math.min(...mappedSegments.map(s => s.start));

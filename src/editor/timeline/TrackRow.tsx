@@ -1,64 +1,21 @@
-import { useState } from "react";
 import { Track } from "../../kernel/project";
 import { ClipView } from "./ClipView";
+import { DropGhost } from "./DropGhost";
 import { useTimelineContext } from "./TimelineContext";
-import { actions } from "../../store/project";
+import { TRACK_H } from "./utils";
+import { useDropTarget } from "./useDropTarget";
+import { useRowOffset } from "./useReorder";
 
-export function TrackRow({ track }: { track: Track }) {
-  const { pxPerSec, draggingTrackId } = useTimelineContext();
-  const [dragOver, setDragOver] = useState(false);
-  const [forbidden, setForbidden] = useState(false);
-
-  const handleDragOver = (e: React.DragEvent) => {
-    const hasCard = e.dataTransfer.types.includes("application/x-promptcut-card");
-    const hasMedia = e.dataTransfer.types.includes("application/x-promptcut-media");
-    if (!hasCard && !hasMedia) return;
-
-    e.preventDefault();
-    let isForbidden = false;
-    if (track.locked) isForbidden = true;
-    if (track.kind === "overlay" && !hasCard) isForbidden = true;
-    if (track.kind === "video" && !hasMedia) isForbidden = true;
-
-    setDragOver(true);
-    setForbidden(isForbidden);
-    e.dataTransfer.dropEffect = isForbidden ? "none" : "copy";
-  };
-
-  const handleDragLeave = () => {
-    setDragOver(false);
-    setForbidden(false);
-  };
-
-  const handleDrop = (e: React.DragEvent) => {
-    setDragOver(false);
-    setForbidden(false);
-    
-    if (track.locked) return;
-
-    const hasCard = e.dataTransfer.types.includes("application/x-promptcut-card");
-    const hasMedia = e.dataTransfer.types.includes("application/x-promptcut-media");
-    
-    if (track.kind === "overlay" && hasCard) {
-      const cardId = e.dataTransfer.getData("application/x-promptcut-card");
-      const rect = e.currentTarget.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const start = Math.max(0, x / pxPerSec);
-      actions.addCardClip(cardId, start, { trackId: track.id });
-    } else if (track.kind === "video" && hasMedia) {
-      const mediaId = e.dataTransfer.getData("application/x-promptcut-media");
-      const rect = e.currentTarget.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const start = Math.max(0, x / pxPerSec);
-      actions.addMediaClip(mediaId, start, { trackId: track.id });
-    }
-  };
+export function TrackRow({ track, index }: { track: Track; index: number }) {
+  const { draggingTrackId } = useTimelineContext();
+  const offset = useRowOffset(index, track.id);
+  const { onDragOver, onDragLeave, onDrop, plan } = useDropTarget({ trackId: track.id });
 
   const isDraggingTarget = draggingTrackId === track.id;
 
   let bgClass = "bg-neutral-900";
-  if (dragOver) {
-    bgClass = forbidden ? "bg-red-950 border-red-500 border border-dashed" : "bg-neutral-800 border-blue-500 border border-dashed";
+  if (plan) {
+    bgClass = plan.status === "forbidden" ? "bg-red-950/60" : "bg-neutral-800";
   } else if (isDraggingTarget) {
     bgClass = "bg-neutral-800";
   }
@@ -66,15 +23,22 @@ export function TrackRow({ track }: { track: Track }) {
   return (
     <div
       data-track-id={track.id}
-      className={`h-10 relative border-b border-neutral-800/50 box-border ${bgClass}`}
-      onDragOver={handleDragOver}
-      onDragLeave={handleDragLeave}
-      onDrop={handleDrop}
+      className={`relative border-b border-neutral-800/50 box-border ${bgClass} ${offset.dragging ? "z-40 opacity-90" : ""}`}
+      style={{
+        height: TRACK_H,
+        transform: offset.y ? `translateY(${offset.y}px)` : undefined,
+        transition: offset.animated ? "transform 150ms cubic-bezier(0.2, 0, 0, 1)" : "none",
+      }}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
     >
       {!track.hidden && track.clips.map((clip) => (
         <ClipView key={clip.id} clip={clip} track={track} />
       ))}
-      
+
+      {plan && <DropGhost plan={plan} />}
+
       {track.locked && (
         <div className="absolute inset-0 bg-black/20 pointer-events-none z-50 diagonal-stripes" />
       )}

@@ -8,7 +8,7 @@ export interface EditorApi {
   removeClip(args: { clipId: string }): any;
   duplicateClip(args: { clipId: string }): any;
   splitClip(args: { clipId: string; t: number }): any;
-  addTrack(args: { kind?: "overlay" | "video"; name?: string }): any;
+  addTrack(args: { name?: string }): any;
   seek(args: { t: number }): any;
   play(): any;
   pause(): any;

@@ -3,6 +3,8 @@ import { useStore, actions, getState } from "../../store/project";
 import { AnimClock } from "../../kernel/AnimClock";
 import { themeStyle } from "../../themes";
 import type { CardDef } from "../../kernel/types";
+import { DEFAULT_CARD_DUR } from "../../kernel/project";
+import { clearDragPayload, MIME_CARD, setDragPayload } from "../dnd";
 
 export function CardCell({ def }: { def: CardDef<any> }) {
   const [hot, setHot] = useState(false);
@@ -35,13 +37,15 @@ export function CardCell({ def }: { def: CardDef<any> }) {
   const onDragStart = (e: React.DragEvent) => {
     if (timerRef.current) clearTimeout(timerRef.current);
     setHot(false);
-    e.dataTransfer.setData("application/x-promptcut-card", def.id);
+    e.dataTransfer.setData(MIME_CARD, def.id);
     e.dataTransfer.effectAllowed = "copy";
+    setDragPayload({ kind: "card", cardId: def.id, name: def.name, duration: DEFAULT_CARD_DUR });
     (e.target as HTMLElement).classList.add("opacity-50");
   };
 
   const onDragEnd = (e: React.DragEvent) => {
     (e.target as HTMLElement).classList.remove("opacity-50");
+    clearDragPayload();
   };
 
   const onClick = () => {

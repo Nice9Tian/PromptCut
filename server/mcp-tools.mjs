@@ -90,11 +90,10 @@ export const tools = [
   },
   {
     name: "add_track",
-    description: "添加一条新的轨道(overlay 或 video)。",
+    description: "添加一条新的序列(序列不分种类,卡片段和素材段都能放)。",
     inputSchema: {
       type: "object",
       properties: {
-        kind: { type: "string", enum: ["overlay", "video"] },
         name: { type: "string" }
       }
     },

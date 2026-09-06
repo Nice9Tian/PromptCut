@@ -82,7 +82,7 @@ export function RightPanel() {
       removeClip: (args) => { actions.removeClip(args.clipId); return { ok: true }; },
       duplicateClip: (args) => { const c = actions.duplicateClip(args.clipId); if (!c) throw new Error("复制失败"); return c; },
       splitClip: (args) => { const c = actions.splitClip(args.clipId, args.t); if (!c) throw new Error("切分失败"); return c; },
-      addTrack: (args) => { const t = actions.addTrack(args.kind, args.name); return t; },
+      addTrack: (args) => { const t = actions.addTrack(args.name); return t; },
       seek: (args) => { actions.seek(args.t); return { ok: true }; },
       play: () => { actions.play(); return { ok: true }; },
       pause: () => { actions.pause(); return { ok: true }; },

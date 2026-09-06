@@ -95,7 +95,7 @@ async function main() {
 
     console.log("Testing get_project (before)...");
     let proj = await callMcp('get_project', {});
-    let overlayTrack = proj.tracks.find(t => t.kind === "overlay");
+    let overlayTrack = proj.tracks[0];
     const initialClips = overlayTrack ? overlayTrack.clips.length : 0;
     console.log(`Initial overlay clips: ${initialClips}`);
 

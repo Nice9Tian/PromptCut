@@ -2,8 +2,12 @@ import { useState } from "react";
 import { Track } from "../../kernel/project";
 import { actions } from "../../store/project";
 import { ContextMenu } from "./ContextMenu";
+import { TRACK_H } from "./utils";
+import { useReorderDrag, useRowOffset } from "./useReorder";
 
 export function TrackHeader({ track, index }: { track: Track; index: number }) {
+  const { start: startReorder } = useReorderDrag();
+  const offset = useRowOffset(index, track.id);
   const [isEditing, setIsEditing] = useState(false);
   const [name, setName] = useState(track.name);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
@@ -28,36 +32,25 @@ export function TrackHeader({ track, index }: { track: Track; index: number }) {
     setContextMenu({ x: e.clientX, y: e.clientY });
   };
 
-  // HTML5 DnD for reordering
-  const handleDragStart = (e: React.DragEvent) => {
-    e.dataTransfer.setData("application/x-promptcut-track", track.id);
-    e.dataTransfer.effectAllowed = "move";
-  };
-  const handleDragOver = (e: React.DragEvent) => {
-    if (e.dataTransfer.types.includes("application/x-promptcut-track")) {
-      e.preventDefault();
-      e.dataTransfer.dropEffect = "move";
-    }
-  };
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    const draggedId = e.dataTransfer.getData("application/x-promptcut-track");
-    if (draggedId && draggedId !== track.id) {
-      actions.moveTrack(draggedId, index);
-    }
-  };
-
   return (
     <>
       <div
-        className="h-10 border-b border-neutral-800 flex items-center px-2 gap-2 group hover:bg-neutral-800"
+        data-pc-track-header={track.id}
+        className={`border-b border-neutral-800 flex items-center px-2 gap-2 group select-none touch-none ${
+          offset.dragging
+            ? "z-40 bg-neutral-800 shadow-[0_6px_16px_rgba(0,0,0,0.55)] cursor-grabbing relative"
+            : "hover:bg-neutral-800 cursor-grab"
+        }`}
+        style={{
+          height: TRACK_H,
+          transform: offset.y ? `translateY(${offset.y}px)` : undefined,
+          transition: offset.animated ? "transform 150ms cubic-bezier(0.2, 0, 0, 1)" : "none",
+        }}
+        title="按住上下拖 = 调整序列顺序"
         onContextMenu={handleContextMenu}
-        draggable
-        onDragStart={handleDragStart}
-        onDragOver={handleDragOver}
-        onDrop={handleDrop}
+        onPointerDown={(e) => startReorder(e, index, track.id)}
       >
-        <div className="text-neutral-500 cursor-grab px-1 select-none flex-shrink-0">≡</div>
+        <div className="text-neutral-500 px-1 flex-shrink-0">≡</div>
         <div className="flex-1 overflow-hidden" onDoubleClick={handleDoubleClick}>
           {isEditing ? (
             <input
@@ -97,7 +90,7 @@ export function TrackHeader({ track, index }: { track: Track; index: number }) {
           onClose={() => setContextMenu(null)}
           items={[
             {
-              label: "删除轨道",
+              label: "删除序列",
               action: () => actions.removeTrack(track.id),
             },
           ]}

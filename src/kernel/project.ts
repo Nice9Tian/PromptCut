@@ -35,15 +35,17 @@ export interface MediaAsset {
   height?: number;
 }
 
-export type TrackKind = "overlay" | "video";
-
+/**
+ * 序列(以前分「动效轨 / 视频轨」两种,现在不分了):
+ * 一条序列里既能放卡片段(cardId),也能放素材段(mediaId),不重叠、按 start 排序。
+ * 叠放顺序看数组:靠后的画在上面。旧项目文件里的 kind 字段读进来就忽略掉。
+ */
 export interface Track {
   id: string;
   name: string;
-  kind: TrackKind;
   hidden?: boolean;
   locked?: boolean;
-  /** 同一轨内 clip 不重叠,按 start 排序 */
+  /** 同一条序列内 clip 不重叠,按 start 排序 */
   clips: TrackClip[];
 }
 
@@ -84,29 +86,32 @@ export function createEmptyProject(name = "未命名"): Project {
     themeId: "midnight",
     media: [],
     tracks: [
-      { id: "t-video", name: "视频", kind: "video", clips: [] },
-      { id: "t-1", name: "动效 1", kind: "overlay", clips: [] },
+      { id: "t-1", name: "序列 1", clips: [] },
+      { id: "t-2", name: "序列 2", clips: [] },
     ],
   };
 }
 
 /**
- * 把多轨项目压平成 Stage 需要的 Timeline(只含 overlay 轨、跳过 hidden 轨)。
- * 轨道顺序 = 叠放顺序:tracks 数组靠后的轨画在上面。
+ * 把项目压平成 Stage 需要的 Timeline(所有序列里的卡片段,跳过 hidden 的序列)。
+ * 序列顺序 = 叠放顺序:tracks 数组靠后的画在上面。素材段(有 mediaId)不进舞台,走视频层。
  */
 export function flattenOverlay(p: Project): Timeline {
   const clips: Clip[] = [];
   for (const tr of p.tracks) {
-    if (tr.kind !== "overlay" || tr.hidden) continue;
-    for (const c of tr.clips) clips.push({ id: c.id, cardId: c.cardId, start: c.start, end: c.end, params: c.params });
+    if (tr.hidden) continue;
+    for (const c of tr.clips) {
+      if (!c.cardId) continue; // 素材段交给视频层
+      clips.push({ id: c.id, cardId: c.cardId, start: c.start, end: c.end, params: c.params });
+    }
   }
   return { width: p.width, height: p.height, fps: p.fps, duration: p.duration, clips };
 }
 
-/** 某时刻视频轨上该播哪一段(第一条命中的 video 轨) */
+/** 某时刻该播哪一段素材(按序列顺序找第一条命中的素材段) */
 export function videoClipAt(p: Project, t: number): { clip: TrackClip; media: MediaAsset } | null {
   for (const tr of p.tracks) {
-    if (tr.kind !== "video" || tr.hidden) continue;
+    if (tr.hidden) continue;
     const c = tr.clips.find((c) => t >= c.start && t < c.end && c.mediaId);
     if (c) {
       const media = p.media.find((m) => m.id === c.mediaId);

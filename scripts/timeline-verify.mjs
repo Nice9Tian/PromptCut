@@ -69,7 +69,8 @@ async function run() {
   }
 
   let state = await getStoreState();
-  const overlayTrackIndex = state.tracks.findIndex(t => t.kind === 'overlay');
+  // 序列不分种类了,演示片段都在第一条有内容的序列上
+  const overlayTrackIndex = Math.max(0, state.tracks.findIndex(t => t.clips.length > 0));
   
   try {
     // 1. 拖动改时段（能动的情形）
@@ -227,12 +228,10 @@ async function run() {
     // 7. 新增轨道
     console.log('7. Add tracks...');
     const trackCountBefore = state.tracks.length;
+    // 序列统一后只剩一个「＋ 序列」按钮，点两次
     await page.evaluate(() => {
-      const btns = Array.from(document.querySelectorAll('button'));
-      const btnO = btns.find(b => b.textContent && b.textContent.includes('+ 动效轨'));
-      const btnV = btns.find(b => b.textContent && b.textContent.includes('+ 视频轨'));
-      if (btnO) btnO.click();
-      if (btnV) btnV.click();
+      const btn = Array.from(document.querySelectorAll('button')).find(b => b.textContent && b.textContent.includes('序列'));
+      if (btn) { btn.click(); btn.click(); }
     });
     await new Promise(r => setTimeout(r, 500));
     let img7 = await takeScreenshot('07-add-tracks');
@@ -303,8 +302,7 @@ async function run() {
 
     // 10. 接收卡片 drop
     console.log('10. Drop card (Match)...');
-    // 注意：tracks[0] 是 id 为 t-video 的视频轨，不是 overlay 轨。必须按 kind 找。
-    const overlayTrackForDrop = state.tracks.find(t => t.kind === 'overlay');
+    const overlayTrackForDrop = state.tracks.find(t => t.clips.length > 0) || state.tracks[0];
     const overlayTrackId = overlayTrackForDrop.id;
     const overlayClipsBefore = overlayTrackForDrop.clips.length;
     const cardToDrop = firstClip.cardId;
@@ -332,9 +330,12 @@ async function run() {
     assert(overlayTrackAfter.clips.length === overlayClipsBefore + 1, "Drop match should add 1 clip");
     addSummary("Drop Match", img10, { count: overlayClipsBefore }, { count: overlayTrackAfter.clips.length }, true);
 
-    // 11. kind 不匹配的 drop
-    console.log('11. Drop card (Mismatch)...');
-    const videoTrack = state.tracks.find(t => t.kind === 'video');
+    // 11. 锁定的序列不接受落卡（以前这一步验的是 overlay/video kind 不匹配，序列统一后那条规则没有了）
+    console.log('11. Drop card onto locked sequence...');
+    const lockedTrack = state.tracks.find(t => t.id !== overlayTrackForDrop.id) || state.tracks[0];
+    await page.evaluate((id) => window.__pcStore.actions.updateTrack(id, { locked: true }), lockedTrack.id);
+    await new Promise(r => setTimeout(r, 100));
+    const videoTrack = lockedTrack;
     const videoClipsBefore = videoTrack.clips.length;
     await page.evaluate((trackId, cardId) => {
       const trackEl = document.querySelector(`[data-track-id="${trackId}"]`);
@@ -357,12 +358,13 @@ async function run() {
     
     state = await getStoreState();
     const videoTrackAfter = state.tracks.find(t => t.id === videoTrack.id);
-    assert(videoTrackAfter.clips.length === videoClipsBefore, "Drop mismatch should NOT add clip");
-    addSummary("Drop Mismatch", img11, { count: videoClipsBefore }, { count: videoTrackAfter.clips.length }, true);
+    assert(videoTrackAfter.clips.length === videoClipsBefore, "锁定的序列不该接受落卡");
+    await page.evaluate((id) => window.__pcStore.actions.updateTrack(id, { locked: false }), videoTrack.id);
+    addSummary("Drop onto locked", img11, { count: videoClipsBefore }, { count: videoTrackAfter.clips.length }, true);
 
     // 12. 性能
     console.log('12. Performance (100+ clips)...');
-    // addCardClip 不传 trackId 时落在「第一条 overlay 轨」，所以待会儿要去第一条 overlay 轨上找，
+    // addCardClip 不传 trackId 时落在第一条序列，所以待会儿要去第一条序列上找，
     // 不是最后一条（最后一条是第 7 步新建的空轨）。
     // 间隔 5 秒、时长 3 秒，故意留出 2 秒空档，这样被测的 clip 是真的能拖动的。
     await page.evaluate((cardId) => {
@@ -373,7 +375,7 @@ async function run() {
     await new Promise(r => setTimeout(r, 1000));
 
     state = await getStoreState();
-    const perfTrack = state.tracks.find(t => t.kind === 'overlay');
+    const perfTrack = state.tracks[0];
     assert(perfTrack.clips.length >= 100, `性能用例需要 100+ clip，实际只有 ${perfTrack.clips.length}`);
     console.log(`Clips on track for perf test: ${perfTrack.clips.length}`);
     // 取中间偏后的一张，保证它左右都有空档

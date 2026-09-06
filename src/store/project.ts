@@ -110,6 +110,17 @@ export function planPlacement(track: Track, start: number, dur: number): { start
   return { start: placed.start, end: placed.end, shifted: Math.abs(placed.start - from) > 1e-6 };
 }
 
+/**
+ * 不指定序列时该落在哪条:挑第一条这个时间段空着的序列(序列不分种类了,所以只看占没占)。
+ * 都放不下就用第一条没锁的,由 placeOrShift 往后顺延。
+ */
+function pickTrack(p: Project, start: number, dur: number): Track | undefined {
+  const free = p.tracks.find(
+    (t) => !t.locked && !t.clips.some((c) => Math.max(start, c.start) < Math.min(start + dur, c.end)),
+  );
+  return free ?? p.tracks.find((t) => !t.locked) ?? p.tracks[0];
+}
+
 export const actions = {
   /* ---------- 文档 ---------- */
   loadProject(p: Project, filePath: string | null = null) {
@@ -167,10 +178,10 @@ export const actions = {
   },
 
   /* ---------- 轨道 ---------- */
-  /** 加一条轨。opts.index 给了就插在那个位置(时间轴上「拖到轨道之间」新建轨用),不给就加在数组末尾。 */
-  addTrack(kind: Track["kind"] = "overlay", name?: string, opts: { index?: number } = {}): Track {
-    const n = state.project.tracks.filter((t) => t.kind === kind).length + 1;
-    const track: Track = { id: newId("t"), name: name ?? (kind === "overlay" ? `动效 ${n}` : `视频 ${n}`), kind, clips: [] };
+  /** 加一条序列。opts.index 给了就插在那个位置(时间轴上「拖到序列之间」新建用),不给就加在数组末尾。 */
+  addTrack(name?: string, opts: { index?: number } = {}): Track {
+    const n = state.project.tracks.length + 1;
+    const track: Track = { id: newId("t"), name: name ?? `序列 ${n}`, clips: [] };
     const tracks = [...state.project.tracks];
     const at = opts.index == null ? tracks.length : Math.max(0, Math.min(tracks.length, opts.index));
     tracks.splice(at, 0, track);
@@ -193,75 +204,74 @@ export const actions = {
   },
 
   /* ---------- clip ---------- */
-  /** 往 overlay 轨加一张卡。不给 trackId 就放第一条 overlay 轨。返回 clip。 */
+  /** 往序列里加一张卡。不给 trackId 就挑一条这段时间空着的序列。返回 clip。 */
   addCardClip(cardId: string, start: number, opts: { trackId?: string; duration?: number; params?: Record<string, unknown> } = {}): TrackClip | null {
     const def = getCard(cardId);
     if (!def) return null;
     const p = state.project;
-    const track = opts.trackId ? p.tracks.find((t) => t.id === opts.trackId) : p.tracks.find((t) => t.kind === "overlay");
+    const track = opts.trackId ? p.tracks.find((t) => t.id === opts.trackId) : p.tracks[0];
     if (!track) return null;
     const dur = opts.duration ?? DEFAULT_CARD_DUR;
+    const target = opts.trackId ? track : pickTrack(p, start, dur);
+    if (!target) return null;
     let clip: TrackClip = { id: newId("c"), cardId, start, end: start + dur, params: opts.params ?? {} };
-    clip = placeOrShift(track, clip);
-    setProject(updateTrack(p, track.id, (t) => ({ ...t, clips: sortClips([...t.clips, clip]) })));
+    clip = placeOrShift(target, clip);
+    setProject(updateTrack(p, target.id, (t) => ({ ...t, clips: sortClips([...t.clips, clip]) })));
     set({ selection: [clip.id] });
     return clip;
   },
-  /** 往 video 轨加一段素材 */
+  /** 往序列里加一段素材。不给 trackId 就挑一条这段时间空着的序列。 */
   addMediaClip(mediaId: string, start: number, opts: { trackId?: string; duration?: number; mediaOffset?: number } = {}): TrackClip | null {
     const p = state.project;
     const media = p.media.find((m) => m.id === mediaId);
     if (!media) return null;
-    const track = opts.trackId ? p.tracks.find((t) => t.id === opts.trackId) : p.tracks.find((t) => t.kind === "video");
+    const track = opts.trackId ? p.tracks.find((t) => t.id === opts.trackId) : p.tracks[0];
     if (!track) return null;
     const dur = opts.duration ?? media.duration ?? DEFAULT_MEDIA_DUR;
+    const target = opts.trackId ? track : pickTrack(p, start, dur);
+    if (!target) return null;
     let clip: TrackClip = { id: newId("v"), cardId: "", mediaId, mediaOffset: opts.mediaOffset ?? 0, start, end: start + dur, params: {}, label: media.name };
-    clip = placeOrShift(track, clip);
+    clip = placeOrShift(target, clip);
     const duration = Math.max(p.duration, clip.end);
-    setProject({ ...updateTrack(p, track.id, (t) => ({ ...t, clips: sortClips([...t.clips, clip]) })), duration });
+    setProject({ ...updateTrack(p, target.id, (t) => ({ ...t, clips: sortClips([...t.clips, clip]) })), duration });
     set({ selection: [clip.id] });
     return clip;
   },
   /**
-   * 新建一条轨,并把片段直接落上去。一次手势 = 一步撤销(时间轴上「拖到轨道之间」和「拖到新建轨落区」用)。
-   * 新轨是空的,所以片段一定落在 start 上,不会被顺延。
+   * 新建一条序列,并把片段直接落上去。一次手势 = 一步撤销(时间轴上「拖到序列之间」和「拖到新建落区」用)。
+   * 新序列是空的,所以片段一定落在 start 上,不会被顺延。
    */
-  addClipOnNewTrack(spec: { kind: Track["kind"]; index?: number; cardId?: string; mediaId?: string; start: number; duration?: number }): TrackClip | null {
+  addClipOnNewTrack(spec: { index?: number; cardId?: string; mediaId?: string; start: number; duration?: number }): TrackClip | null {
     const p = state.project;
     const start = Math.max(0, spec.start);
     let clip: TrackClip;
-    if (spec.kind === "overlay") {
-      if (!spec.cardId || !getCard(spec.cardId)) return null;
+    const isCard = !!spec.cardId;
+    if (isCard) {
+      if (!getCard(spec.cardId!)) return null;
       const dur = spec.duration ?? DEFAULT_CARD_DUR;
-      clip = { id: newId("c"), cardId: spec.cardId, start, end: start + dur, params: {} };
+      clip = { id: newId("c"), cardId: spec.cardId!, start, end: start + dur, params: {} };
     } else {
       const media = p.media.find((m) => m.id === spec.mediaId);
       if (!media) return null;
       const dur = spec.duration ?? media.duration ?? DEFAULT_MEDIA_DUR;
       clip = { id: newId("v"), cardId: "", mediaId: media.id, mediaOffset: 0, start, end: start + dur, params: {}, label: media.name };
     }
-    const n = p.tracks.filter((t) => t.kind === spec.kind).length + 1;
-    const track: Track = {
-      id: newId("t"),
-      name: spec.kind === "overlay" ? `动效 ${n}` : `视频 ${n}`,
-      kind: spec.kind,
-      clips: [clip],
-    };
+    const track: Track = { id: newId("t"), name: `序列 ${p.tracks.length + 1}`, clips: [clip] };
     const tracks = [...p.tracks];
     const at = spec.index == null ? tracks.length : Math.max(0, Math.min(tracks.length, spec.index));
     tracks.splice(at, 0, track);
-    setProject({ ...p, tracks, duration: spec.kind === "video" ? Math.max(p.duration, clip.end) : p.duration });
+    setProject({ ...p, tracks, duration: isCard ? p.duration : Math.max(p.duration, clip.end) });
     set({ selection: [clip.id] });
     return clip;
   },
-  /** 移动 / 缩放 clip(可跨轨)。 */
+  /** 移动 / 缩放 clip(可跨序列)。 */
   moveClip(clipId: string, patch: { start?: number; end?: number; trackId?: string }) {
     const p = state.project;
     const hit = findClip(p, clipId);
     if (!hit) return;
     const targetId = patch.trackId ?? hit.track.id;
     const target = p.tracks.find((t) => t.id === targetId);
-    if (!target || target.kind !== hit.track.kind) return;
+    if (!target || target.locked) return;
     let clip: TrackClip | null = { ...hit.clip, start: patch.start ?? hit.clip.start, end: patch.end ?? hit.clip.end };
     if (clip.end - clip.start < 0.1) clip.end = clip.start + 0.1;
     clip = resolveOverlap(target, clip);
