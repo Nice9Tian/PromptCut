@@ -99,6 +99,14 @@ export interface TaskRun {
   status: TaskStatus;
   /** 这个任务产生的那条消息的 id，界面据此把气泡和任务对上 */
   messageId?: string;
+  /**
+   * 自己没跑，是因为上游失败被跳过的。
+   *
+   * status 同为 error，但两者对用户的含义完全不同：失败要看原因，跳过只是
+   * 连带。界面**用这个字段区分，别去匹配 error 里的文案** —— 那句话是给人
+   * 读的，改个措辞就会让判断静默失效。
+   */
+  skipped?: boolean;
   error?: string;
   startedAt?: number;
   finishedAt?: number;
@@ -195,6 +203,7 @@ export async function runOrchestration(
         const blocked = task.dependsOn.filter((d) => failed.has(d));
         if (blocked.length > 0) {
           run.status = "error";
+          run.skipped = true;
           run.error = `依赖的任务 ${blocked.join("、")} 没成功，跳过`;
           failed.add(task.id);
           push();

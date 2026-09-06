@@ -166,3 +166,14 @@ test("exec 返回的 messageId 会被记下来，界面据此对上气泡", asyn
   const st = await runOrchestration(plan([T("1")]), "q", async () => "msg-42", () => {}, undefined, DEPS);
   assert.equal(st.tasks[0].messageId, "msg-42");
 });
+
+test("被跳过的任务带 skipped 标记，界面不必去匹配中文文案", async () => {
+  const exec = async (t) => { if (t.id === "1") throw new Error("炸了"); };
+  const st = await runOrchestration(plan([T("1"), T("2", ["1"])]), "q", exec, () => {}, undefined, DEPS);
+  const failed = st.tasks.find((r) => r.task.id === "1");
+  const skipped = st.tasks.find((r) => r.task.id === "2");
+  assert.equal(failed.status, "error");
+  assert.notEqual(failed.skipped, true, "自己失败的不算跳过");
+  assert.equal(skipped.status, "error");
+  assert.equal(skipped.skipped, true, "被连带的要标 skipped");
+});
