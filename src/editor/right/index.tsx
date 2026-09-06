@@ -90,6 +90,11 @@ export function RightPanel() {
       setProjectMeta: (args) => { actions.setProjectMeta(args); return { ok: true }; },
 
       // ── 语音转文字 ────────────────────────────────────────────────
+      backgroundJobStatus: ({ jobId }) => {
+        const job = sttJobs.get(jobId);
+        if (!job) throw new Error('找不到后台任务，可能已重启。');
+        return { jobId, ...job };
+      },
       sttStatus: () => sttStatus(),
 
       // 安装可能远超 MCP 桥的 60 秒调用超时,所以立刻返回 jobId,

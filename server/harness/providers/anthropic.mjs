@@ -74,6 +74,7 @@ export function createProvider(cfg, { fetchImpl = globalThis.fetch } = {}) {
           continue;
         }
 
+        if (event === 'error' || parsed.type === 'error') throw new Error(parsed.error?.message || 'API 流返回错误');
         if (event === 'message_start') {
           if (parsed.message?.usage?.input_tokens) {
             inputTokens = parsed.message.usage.input_tokens;
@@ -100,8 +101,13 @@ export function createProvider(cfg, { fetchImpl = globalThis.fetch } = {}) {
             let input = {};
             try {
               input = JSON.parse(tool.partialJson || '{}');
-            } catch {}
+            } catch (error) {
+              yield { type: 'tool_use', id: tool.id, name: tool.name, input: {}, inputError: `工具参数 JSON 不完整：${error.message}` };
+              delete partialTools[parsed.index];
+              continue;
+            }
             yield { type: 'tool_use', id: tool.id, name: tool.name, input };
+            delete partialTools[parsed.index];
           }
         } else if (event === 'message_delta') {
           if (parsed.delta?.stop_reason) {

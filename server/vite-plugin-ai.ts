@@ -273,7 +273,7 @@ export default function vitePluginAi(): Plugin {
             const runState = { abort: run.abort, finished: false };
             activeRuns.set(runId, runState);
 
-            req.on('close', () => {
+            res.on('close', () => {
               if (!runState.finished) run.abort();
               activeRuns.delete(runId);
               clearInterval(keepAlive);

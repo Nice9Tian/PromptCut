@@ -1,4 +1,5 @@
 export interface EditorApi {
+  backgroundJobStatus(args: { jobId: string }): any;
   listCards(): any;
   getProject(): any;
   listMedia(): any;
@@ -61,7 +62,8 @@ export function connectMcpExecutor(getApi: () => EditorApi, onStatus?: (s: { con
         let error: string | undefined;
 
         try {
-          if (tool === "list_cards") result = api.listCards();
+          if (tool === "background_job_status") result = api.backgroundJobStatus(args);
+          else if (tool === "list_cards") result = api.listCards();
           else if (tool === "get_project") result = api.getProject();
           else if (tool === "list_media") result = api.listMedia();
           else if (tool === "get_selection") result = api.getSelection();

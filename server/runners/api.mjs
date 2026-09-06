@@ -65,7 +65,8 @@ export function startRun(opts) {
   const safeOnEvent = (ev) => {
     if (isAborted && ev.type !== 'status') return;
     try {
-      opts.onEvent(ev);
+      const safe = currentApiKey ? JSON.parse(JSON.stringify(ev).split(currentApiKey).join('[REDACTED]')) : ev;
+      opts.onEvent(safe);
     } catch {}
   };
 
@@ -126,8 +127,10 @@ export function startRun(opts) {
       return;
     }
 
-    const provider = providerModule.createProvider(cfg, { fetchImpl: opts.fetchImpl });
-    const tools = buildTools({ callTool: opts.callTool, workspaceDir: opts.cwd });
+    const requestFetch = opts.fetchImpl || globalThis.fetch;
+    const provider = providerModule.createProvider(cfg, { fetchImpl: (url, options) => requestFetch(url, { ...options, signal: AbortSignal.any([abortController.signal, AbortSignal.timeout(120000)]) }) });
+    safeOnEvent({ type: 'diagnostic', stage: 'configuration', data: { vendor: cfg.vendor, model: cfg.model, maxTokens: cfg.maxTokens, protocol: 'native-tools', maxRounds: 24 } });
+    const tools = buildTools({ callTool: opts.callTool, workspaceDir: opts.cwd, onEvent: safeOnEvent });
     const agent = new Agent({ 
       provider, 
       system: opts.systemPrompt, 
@@ -155,7 +158,7 @@ export function startRun(opts) {
         output: typeof rawUsage.output === 'number' ? rawUsage.output : 0
       };
       
-      safeOnEvent({ type: 'done', sessionId, usage });
+      safeOnEvent({ type: 'done', sessionId, usage, outcome: result.outcome, completed: result.completed, failed: result.failed });
     } catch (err) {
       if (err.name === 'AbortError' || abortController.signal.aborted) {
         safeOnEvent({ type: 'status', text: '已中止' });

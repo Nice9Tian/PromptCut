@@ -130,6 +130,7 @@ export function createProvider(cfg, { fetchImpl = globalThis.fetch } = {}) {
           completionTokens = parsed.usage.completion_tokens || 0;
         }
 
+        if (parsed.error) throw new Error(parsed.error.message || 'API 流返回错误');
         const choice = parsed.choices?.[0];
         if (choice) {
           if (choice.delta?.content) {
@@ -158,7 +159,10 @@ export function createProvider(cfg, { fetchImpl = globalThis.fetch } = {}) {
                let input = {};
                try {
                  input = JSON.parse(pt.args || '{}');
-               } catch {}
+               } catch (error) {
+                 yield { type: 'tool_use', id: pt.id, name: pt.name, input: {}, inputError: `工具参数 JSON 不完整：${error.message}。请缩小批量或提高输出长度后重试。` };
+                 continue;
+               }
                yield { type: 'tool_use', id: pt.id, name: pt.name, input };
             }
             partialToolCalls = {}; // clear
@@ -166,6 +170,8 @@ export function createProvider(cfg, { fetchImpl = globalThis.fetch } = {}) {
         }
       }
 
+      if (!stopReason) throw new Error('API 响应流提前结束或未返回 SSE 数据，请检查接口协议。');
+      if (stopReason === 'length' && Object.keys(partialToolCalls).length) throw new Error('模型输出达到长度上限，工具参数未完成。');
       yield { type: 'usage', input: promptTokens, output: completionTokens };
       yield { type: 'stop', reason: stopReason || 'stop' };
     }

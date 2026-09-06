@@ -1,3 +1,4 @@
+import { recordTrace } from './debug';
 import { useState, useEffect, useRef, useCallback } from "react";
 import type { AiProvider, ChatMessage, ChatAttachment, MessagePart, ProviderInfo, RunEvent, SttInfo, LoginState, PublicAiConfig, AiConfigPatch, CliSetupJob } from "./types";
 import { parseSseChunks } from "./sse";
@@ -14,13 +15,13 @@ function appendTextPart(parts: MessagePart[] | undefined, delta: string): Messag
 /** 给最近一个同名、还没有结果的工具片段补上结果 */
 function completeToolPart(
   parts: MessagePart[] | undefined,
-  ev: { name: string; ok: boolean; summary?: string; files?: string[] },
+  ev: { name: string; ok: boolean; summary?: string; files?: string[]; callId?: string; durationMs?: number },
 ): MessagePart[] {
   const next = parts ? [...parts] : [];
   for (let i = next.length - 1; i >= 0; i--) {
     const p = next[i];
-    if (p.kind === "tool" && p.name === ev.name && p.ok === undefined) {
-      next[i] = { ...p, ok: ev.ok, summary: ev.summary, files: ev.files };
+    if (p.kind === "tool" && (ev.callId ? p.callId === ev.callId : p.name === ev.name) && p.ok === undefined) {
+      next[i] = { ...p, ok: ev.ok, summary: ev.summary, files: ev.files, durationMs: ev.durationMs };
       return next;
     }
   }
@@ -270,7 +271,8 @@ export function useAiChat(opts?: { mock?: boolean }) {
   useEffect(() => {
     if (provider && messages.length > 0) {
       const toSave = messages.filter(m => !m.pending);
-      localStorage.setItem(`aiChat:${provider}`, JSON.stringify(toSave.slice(-50)));
+      try { localStorage.setItem(`aiChat:${provider}`, JSON.stringify(toSave.slice(-50))); }
+      catch { /* Full execution traces are also saved by useChatHistory. */ }
     }
   }, [messages, provider]);
 
@@ -304,6 +306,7 @@ export function useAiChat(opts?: { mock?: boolean }) {
       }).catch(() => {});
       currentRunId.current = null;
     }
+    setMessages(prev => prev.map(m => m.pending ? { ...m, pending: false, outcome: 'aborted', finishedAt: Date.now() } : m));
     setStreaming(false);
   }, [opts?.mock]);
 
@@ -328,6 +331,8 @@ export function useAiChat(opts?: { mock?: boolean }) {
       tools: [],
       statuses: [],
       pending: true,
+      startedAt: Date.now(),
+      trace: [],
     };
 
     setMessages((prev) => [...prev, userMsg, asstMsg]);
@@ -427,6 +432,7 @@ export function useAiChat(opts?: { mock?: boolean }) {
         buffer = rest;
 
         for (const ev of events as RunEvent[]) {
+          setMessages(prev => prev.map(m => m.id === asstMsgId ? recordTrace(m, ev) : m));
           if (ev.type === "run" && ev.runId) {
             currentRunId.current = ev.runId;
           } else if (ev.type === "session" && ev.sessionId) {
@@ -445,10 +451,10 @@ export function useAiChat(opts?: { mock?: boolean }) {
               prev.map((m) => {
                 if (m.id !== asstMsgId) return m;
                 const tools = m.tools ? [...m.tools] : [];
-                tools.push({ name: ev.name!, input: ev.input, expanded: false });
+                tools.push({ name: ev.name!, input: ev.input, callId: ev.callId, expanded: false });
                 const parts: MessagePart[] = [
                   ...(m.parts || []),
-                  { kind: "tool", name: ev.name!, input: ev.input },
+                  { kind: "tool", name: ev.name!, input: ev.input, callId: ev.callId },
                 ];
                 return { ...m, tools, parts };
               })
@@ -459,10 +465,11 @@ export function useAiChat(opts?: { mock?: boolean }) {
                 if (m.id !== asstMsgId) return m;
                 const tools = m.tools ? [...m.tools] : [];
                 for (let i = tools.length - 1; i >= 0; i--) {
-                  if (tools[i].name === ev.name && tools[i].ok === undefined) {
+                  if ((ev.callId ? tools[i].callId === ev.callId : tools[i].name === ev.name) && tools[i].ok === undefined) {
                     tools[i].ok = ev.ok;
                     tools[i].summary = ev.summary;
                     tools[i].files = ev.files;
+                    tools[i].durationMs = ev.durationMs;
                     break;
                   }
                 }
@@ -471,10 +478,14 @@ export function useAiChat(opts?: { mock?: boolean }) {
                   ok: ev.ok,
                   summary: ev.summary,
                   files: ev.files,
+                  callId: ev.callId,
+                  durationMs: ev.durationMs,
                 });
                 return { ...m, tools, parts };
               })
             );
+          } else if (ev.type === "progress") {
+            setMessages(prev => prev.map(m => m.id === asstMsgId ? { ...m, progress: { ...m.progress, ...ev } } : m));
           } else if (ev.type === "status" && ev.text) {
             setMessages((prev) =>
               prev.map((m) => {
@@ -488,13 +499,13 @@ export function useAiChat(opts?: { mock?: boolean }) {
           } else if (ev.type === "error" && ev.message) {
             setMessages((prev) =>
               prev.map((m) =>
-                m.id === asstMsgId ? { ...m, error: ev.message, pending: false } : m
+                m.id === asstMsgId ? { ...m, error: ev.message, pending: false, finishedAt: Date.now(), outcome: "error" } : m
               )
             );
           } else if (ev.type === "done") {
             setMessages((prev) =>
               prev.map((m) =>
-                m.id === asstMsgId ? { ...m, pending: false } : m
+                m.id === asstMsgId ? { ...m, pending: false, finishedAt: Date.now(), outcome: ev.outcome || m.outcome || "completed", usage: ev.usage } : m
               )
             );
           }
@@ -512,7 +523,7 @@ export function useAiChat(opts?: { mock?: boolean }) {
         setMessages((prev) =>
           prev.map((m) =>
             m.id === asstMsgId
-              ? { ...m, error: "发生错误: " + e.message, pending: false }
+              ? { ...m, error: "发生错误: " + e.message, pending: false, finishedAt: Date.now(), outcome: "error" }
               : m
           )
         );

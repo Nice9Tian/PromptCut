@@ -83,7 +83,7 @@ export async function* readSse(response, { signal } = {}) {
         yield ev;
       }
     }
-    const finalEvs = parser(decoder.decode());
+    const finalEvs = parser(decoder.decode() + '\n\n');
     for (const ev of finalEvs) {
        yield ev;
     }
@@ -100,7 +100,7 @@ export async function* readSse(response, { signal } = {}) {
           yield ev;
         }
       }
-      const finalEvs = parser(decoder.decode());
+      const finalEvs = parser(decoder.decode() + '\n\n');
       for (const ev of finalEvs) {
          yield ev;
       }

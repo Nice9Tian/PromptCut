@@ -36,7 +36,10 @@ export class MessageHistory {
     while (this.messages.length > 2 && JSON.stringify(this.messages).length > this.maxChars) {
       // 检查如果要删除第一条及关联的记录后，是否至少还剩 2 条消息
       let nextMessages = JSON.parse(JSON.stringify(this.messages));
-      const msg = nextMessages.shift();
+      // Keep the latest actual user request while removing complete old tool pairs.
+      const pinned = this.messages.findLastIndex(m => m.role === 'user' && m.content?.some(b => b.type === 'text') && !m.content?.some(b => b.type === 'tool_result'));
+      const removeIndex = pinned === 0 ? 1 : 0;
+      const [msg] = nextMessages.splice(removeIndex, 1);
       
       if (msg && msg.role === 'assistant' && Array.isArray(msg.content)) {
         const toolUseIds = new Set();

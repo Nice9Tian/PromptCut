@@ -1,4 +1,5 @@
 export const tools = [
+  { name: "background_job_status", description: "查询 stt_install 或 transcribe_media 返回的 jobId，得到 done、ok、error 和进度；done=true 且 ok=false 表示失败，不要继续轮询。", inputSchema: { type: "object", properties: { jobId: { type: "string" } }, required: ["jobId"] }, side: "browser" },
   {
     name: "list_cards",
     description: "获取系统支持的所有卡片样式(包含 id, name, description, source, controls, defaults)。建卡前必看以了解参数 schema。",

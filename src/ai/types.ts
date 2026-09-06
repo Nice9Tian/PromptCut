@@ -56,10 +56,12 @@ export type RunEvent =
   | { type: "run"; runId: string }
   | { type: "session"; sessionId: string }
   | { type: "text"; delta: string }
-  | { type: "tool_call"; name: string; input?: unknown }
-  | { type: "tool_result"; name: string; ok: boolean; summary?: string; files?: string[] }
+  | { type: "tool_call"; name: string; input?: unknown; callId?: string; round?: number }
+  | { type: "tool_result"; name: string; ok: boolean; summary?: string; files?: string[]; callId?: string; output?: unknown; durationMs?: number; round?: number }
+  | ({ type: "progress" } & RunProgress)
+  | { type: "diagnostic"; stage: string; data?: unknown; callId?: string }
   | { type: "status"; text: string }
-  | { type: "done"; sessionId?: string; usage?: unknown }
+  | { type: "done"; sessionId?: string; usage?: unknown; outcome?: string; completed?: number; failed?: number }
   | { type: "error"; message: string };
 
 export interface ChatAttachment {
@@ -80,6 +82,8 @@ export interface ChatAttachment {
 }
 
 export interface ToolCallInfo {
+  callId?: string;
+  durationMs?: number;
   name: string;
   input?: unknown;
   ok?: boolean;
@@ -111,6 +115,26 @@ export interface ChatMessage {
   statuses?: string[];
   error?: string;
   pending?: boolean;
+  startedAt?: number;
+  finishedAt?: number;
+  progress?: RunProgress;
+  outcome?: string;
+  usage?: unknown;
+  trace?: { at: string; event: RunEvent }[];
+  traceTruncated?: boolean;
+  traceBytes?: number;
+}
+
+export interface RunProgress {
+  phase: string;
+  text: string;
+  round?: number;
+  maxRounds?: number;
+  completed?: number;
+  failed?: number;
+  elapsedMs?: number;
+  callId?: string;
+  jobId?: string;
 }
 
 export interface CliSetupJob {
