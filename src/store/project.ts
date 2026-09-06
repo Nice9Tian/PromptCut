@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from "react";
-import { createEmptyProject, findClip, newId, type MediaAsset, type Project, type Track, type TrackClip, type Transcript } from "../kernel/project";
+import { createEmptyProject, DEFAULT_CARD_DUR, DEFAULT_MEDIA_DUR, findClip, newId, type MediaAsset, type Project, type Track, type TrackClip, type Transcript } from "../kernel/project";
 import { getCard } from "../kernel/registry";
 
 /**
@@ -98,6 +98,18 @@ function placeOrShift(track: Track, clip: TrackClip): TrackClip {
   return { ...clip, start: cursor, end: cursor + len };
 }
 
+/**
+ * 落点预演:用和落卡完全相同的规则算一遍新片段会落在哪,但不改文档。
+ * 时间轴的落点预览用它,保证「拖动时看到的位置」和松手后真正落下的位置一致。
+ * shifted = 原位放不下、被顺延到了后面的空档。
+ */
+export function planPlacement(track: Track, start: number, dur: number): { start: number; end: number; shifted: boolean } {
+  const from = Math.max(0, start);
+  const probe: TrackClip = { id: "__probe", cardId: "", start: from, end: from + dur, params: {} };
+  const placed = placeOrShift(track, probe);
+  return { start: placed.start, end: placed.end, shifted: Math.abs(placed.start - from) > 1e-6 };
+}
+
 export const actions = {
   /* ---------- 文档 ---------- */
   loadProject(p: Project, filePath: string | null = null) {
@@ -155,10 +167,14 @@ export const actions = {
   },
 
   /* ---------- 轨道 ---------- */
-  addTrack(kind: Track["kind"] = "overlay", name?: string): Track {
+  /** 加一条轨。opts.index 给了就插在那个位置(时间轴上「拖到轨道之间」新建轨用),不给就加在数组末尾。 */
+  addTrack(kind: Track["kind"] = "overlay", name?: string, opts: { index?: number } = {}): Track {
     const n = state.project.tracks.filter((t) => t.kind === kind).length + 1;
     const track: Track = { id: newId("t"), name: name ?? (kind === "overlay" ? `动效 ${n}` : `视频 ${n}`), kind, clips: [] };
-    setProject({ ...state.project, tracks: [...state.project.tracks, track] });
+    const tracks = [...state.project.tracks];
+    const at = opts.index == null ? tracks.length : Math.max(0, Math.min(tracks.length, opts.index));
+    tracks.splice(at, 0, track);
+    setProject({ ...state.project, tracks });
     return track;
   },
   removeTrack(trackId: string) {
@@ -184,7 +200,7 @@ export const actions = {
     const p = state.project;
     const track = opts.trackId ? p.tracks.find((t) => t.id === opts.trackId) : p.tracks.find((t) => t.kind === "overlay");
     if (!track) return null;
-    const dur = opts.duration ?? 3;
+    const dur = opts.duration ?? DEFAULT_CARD_DUR;
     let clip: TrackClip = { id: newId("c"), cardId, start, end: start + dur, params: opts.params ?? {} };
     clip = placeOrShift(track, clip);
     setProject(updateTrack(p, track.id, (t) => ({ ...t, clips: sortClips([...t.clips, clip]) })));
@@ -198,11 +214,43 @@ export const actions = {
     if (!media) return null;
     const track = opts.trackId ? p.tracks.find((t) => t.id === opts.trackId) : p.tracks.find((t) => t.kind === "video");
     if (!track) return null;
-    const dur = opts.duration ?? media.duration ?? 5;
+    const dur = opts.duration ?? media.duration ?? DEFAULT_MEDIA_DUR;
     let clip: TrackClip = { id: newId("v"), cardId: "", mediaId, mediaOffset: opts.mediaOffset ?? 0, start, end: start + dur, params: {}, label: media.name };
     clip = placeOrShift(track, clip);
     const duration = Math.max(p.duration, clip.end);
     setProject({ ...updateTrack(p, track.id, (t) => ({ ...t, clips: sortClips([...t.clips, clip]) })), duration });
+    set({ selection: [clip.id] });
+    return clip;
+  },
+  /**
+   * 新建一条轨,并把片段直接落上去。一次手势 = 一步撤销(时间轴上「拖到轨道之间」和「拖到新建轨落区」用)。
+   * 新轨是空的,所以片段一定落在 start 上,不会被顺延。
+   */
+  addClipOnNewTrack(spec: { kind: Track["kind"]; index?: number; cardId?: string; mediaId?: string; start: number; duration?: number }): TrackClip | null {
+    const p = state.project;
+    const start = Math.max(0, spec.start);
+    let clip: TrackClip;
+    if (spec.kind === "overlay") {
+      if (!spec.cardId || !getCard(spec.cardId)) return null;
+      const dur = spec.duration ?? DEFAULT_CARD_DUR;
+      clip = { id: newId("c"), cardId: spec.cardId, start, end: start + dur, params: {} };
+    } else {
+      const media = p.media.find((m) => m.id === spec.mediaId);
+      if (!media) return null;
+      const dur = spec.duration ?? media.duration ?? DEFAULT_MEDIA_DUR;
+      clip = { id: newId("v"), cardId: "", mediaId: media.id, mediaOffset: 0, start, end: start + dur, params: {}, label: media.name };
+    }
+    const n = p.tracks.filter((t) => t.kind === spec.kind).length + 1;
+    const track: Track = {
+      id: newId("t"),
+      name: spec.kind === "overlay" ? `动效 ${n}` : `视频 ${n}`,
+      kind: spec.kind,
+      clips: [clip],
+    };
+    const tracks = [...p.tracks];
+    const at = spec.index == null ? tracks.length : Math.max(0, Math.min(tracks.length, spec.index));
+    tracks.splice(at, 0, track);
+    setProject({ ...p, tracks, duration: spec.kind === "video" ? Math.max(p.duration, clip.end) : p.duration });
     set({ selection: [clip.id] });
     return clip;
   },
@@ -283,6 +331,14 @@ export const actions = {
     if (!p.media.some((m) => m.id === mediaId)) return;
     setProject(
       { ...p, media: p.media.map((m) => (m.id === mediaId ? { ...m, transcript: transcript ?? undefined } : m)) },
+      { undoable: false },
+    );
+  },
+  setMediaPath(mediaId: string, path: string) {
+    const p = state.project;
+    if (!p.media.some((m) => m.id === mediaId)) return;
+    setProject(
+      { ...p, media: p.media.map((m) => (m.id === mediaId ? { ...m, path } : m)) },
       { undoable: false },
     );
   },

@@ -5,6 +5,7 @@ import { getState, actions } from "../../store/project";
 import { allCards } from "../../kernel/registry";
 import { findClip } from "../../kernel/project";
 import { sttStatus, sttInstall, transcribeMedia } from "../io/stt";
+import { runAutoWorkflow, getAutoWorkflowStatus } from "./autoWorkflow";
 
 /** 后台 STT 任务的状态(MCP 工具立即返回 jobId,结果靠轮询) */
 interface SttJob { done: boolean; ok: boolean; error?: string; logTail?: string[]; segments?: number }
@@ -18,7 +19,43 @@ export function RightPanel() {
       listCards: () => allCards().map(c => ({ 
         id: c.id, name: c.name, description: c.description, source: c.source, controls: c.controls, defaults: c.defaults 
       })),
-      getProject: () => getState().project,
+      getProject: () => {
+        const p = getState().project;
+        return {
+          ...p,
+          media: p.media.map(m => {
+            if (m.transcript) {
+              return {
+                ...m,
+                transcript: {
+                  engine: m.transcript.engine,
+                  model: m.transcript.model,
+                  language: m.transcript.language,
+                  createdAt: m.transcript.createdAt,
+                  segments: m.transcript.segments.length,
+                  hint: "完整文字稿请用 get_transcript"
+                }
+              };
+            }
+            return m;
+          })
+        };
+      },
+      listMedia: () => {
+        const p = getState().project;
+        return p.media.map(m => ({
+          id: m.id,
+          name: m.name,
+          kind: m.kind,
+          duration: m.duration,
+          width: m.width,
+          height: m.height,
+          path: m.path,
+          url: m.url,
+          hasTranscript: !!m.transcript,
+          transcriptSegments: m.transcript ? m.transcript.segments.length : 0
+        }));
+      },
       getSelection: () => {
         const state = getState();
         if (state.selection.length === 0) return null;
@@ -94,7 +131,9 @@ export function RightPanel() {
           return { ...t, segments: t.segments.slice(0, 200), total: t.segments.length, truncated: true };
         }
         return { ...t, total: t.segments.length, truncated: false };
-      }
+      },
+      autoWorkflow: (args) => runAutoWorkflow(args),
+      autoWorkflowStatus: (args) => getAutoWorkflowStatus(args)
     };
     
     const cleanup = connectMcpExecutor(() => api, (s) => setMcpConnected(s.connected));

@@ -28,6 +28,8 @@ export interface MediaAsset {
   name: string;
   /** 浏览器里可播的 URL(blob: 或 /media/xxx);保存项目时存相对路径 */
   url: string;
+  /** 服务端可读的绝对磁盘路径，由导入时上传得到，可能不存在 */
+  path?: string;
   duration?: number; // 秒
   width?: number;
   height?: number;
@@ -64,6 +66,12 @@ export interface Project {
   media: MediaAsset[];
   tracks: Track[];
 }
+
+/** 新拖上时间轴的卡片默认时长(秒);落点预览和真正落卡用的是同一个值 */
+export const DEFAULT_CARD_DUR = 3;
+
+/** 素材没有时长信息时,视频段的兜底时长(秒) */
+export const DEFAULT_MEDIA_DUR = 5;
 
 export function createEmptyProject(name = "未命名"): Project {
   return {

@@ -1,6 +1,7 @@
 export interface EditorApi {
   listCards(): any;
   getProject(): any;
+  listMedia(): any;
   getSelection(): any;
   addClip(args: { cardId: string; start: number; duration?: number; trackId?: string; params?: any }): any;
   updateClip(args: { clipId: string; start?: number; end?: number; cardId?: string; params?: any }): any;
@@ -18,6 +19,8 @@ export interface EditorApi {
   sttInstall(args: { engine: string }): Promise<any>;
   transcribeMedia(args: { mediaId: string; engine?: string; model?: string; language?: string }): Promise<any>;
   getTranscript(args: { mediaId: string }): any;
+  autoWorkflow(args: { mediaId: string; style?: string; maxCards?: number }): Promise<any>;
+  autoWorkflowStatus(args: { jobId: string }): any;
 }
 
 export function connectMcpExecutor(getApi: () => EditorApi, onStatus?: (s: { connected: boolean }) => void): () => void {
@@ -60,6 +63,7 @@ export function connectMcpExecutor(getApi: () => EditorApi, onStatus?: (s: { con
         try {
           if (tool === "list_cards") result = api.listCards();
           else if (tool === "get_project") result = api.getProject();
+          else if (tool === "list_media") result = api.listMedia();
           else if (tool === "get_selection") result = api.getSelection();
           else if (tool === "add_clip") result = api.addClip(args);
           else if (tool === "update_clip") result = api.updateClip(args);
@@ -76,6 +80,8 @@ export function connectMcpExecutor(getApi: () => EditorApi, onStatus?: (s: { con
           else if (tool === "stt_install") result = await api.sttInstall(args);
           else if (tool === "transcribe_media") result = await api.transcribeMedia(args);
           else if (tool === "get_transcript") result = api.getTranscript(args);
+          else if (tool === "auto_workflow") result = await api.autoWorkflow(args);
+          else if (tool === "auto_workflow_status") result = api.autoWorkflowStatus(args);
           else throw new Error(`未知工具: ${tool}`);
         } catch (err: unknown) {
           ok = false;

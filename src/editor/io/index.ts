@@ -55,6 +55,23 @@ export async function importVideoFiles(files: FileList | File[]): Promise<string
     } else {
       console.warn(`[io] addMediaClip 返回 null, mediaId: ${media.id}`);
     }
+
+    try {
+      const res = await fetch(`/api/media/upload/${encodeURIComponent(file.name)}`, {
+        method: "POST",
+        body: file,
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.ok && data.path) {
+          actions.setMediaPath(media.id, data.path);
+        }
+      } else {
+        console.warn(`[io] 上传素材失败: ${file.name}`);
+      }
+    } catch (err) {
+      console.warn(`[io] 上传素材异常: ${file.name}`, err);
+    }
   }
 
   return mediaIds;
@@ -77,7 +94,10 @@ export async function importProjectFile(file: File): Promise<Project> {
 
     if (project.media) {
       for (const m of project.media) {
-        if (m.url.startsWith("blob:") || m.url.startsWith("http:") || m.url.startsWith("https:") || m.url.startsWith("data:") || m.url.startsWith("/")) {
+        if (m.path) {
+          const basename = m.path.split(/[/\\]/).pop();
+          m.url = `/@media/${encodeURIComponent(basename || "")}`;
+        } else if (m.url.startsWith("blob:") || m.url.startsWith("http:") || m.url.startsWith("https:") || m.url.startsWith("data:") || m.url.startsWith("/")) {
           // keep
         } else {
           console.warn(`[io] 缺失素材: ${m.name} (${m.url})`);
@@ -206,5 +226,5 @@ declare global {
 
 if (typeof window !== "undefined") {
   // 临时验证出口：puppeteer 无头验证时直接调用这四个函数（不用模拟 <input type=file>）。
-  window.__pcIo = { importVideoFiles, importProjectFile, exportProjectJson, exportVideo };
+  window.__pcIo = { importVideoFiles, importProjectFile, exportProjectJson, exportVideo, setMediaTranscript: (mediaId: string, transcript: any) => actions.setMediaTranscript(mediaId, transcript) };
 }

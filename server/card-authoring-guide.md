@@ -116,5 +116,20 @@ for (const s of transcript.segments) {
 注意别让同一条轨上的 clip 重叠(store 会自动挪开,但结果可能不是你想要的);
 需要并排显示就先 `add_track` 建新的 overlay 轨。
 
+### 什么内容配什么卡（auto_workflow 用的规则）
+
+`auto_workflow` 工具会将文字稿切割成 5 到 15 秒的段落，常驻字幕卡会单独放在一条名为 `字幕` 的 overlay 轨上。每段文字会按以下确定性规则的顺序匹配，先命中先用：
+
+- **数字与增长**（含数字及增长/提升等词汇） → `odometer`
+- **纯数字实证**（数字紧跟 %/倍/万/亿等单位） → `stat-proof`
+- **对比**（对比/相比/vs 等） → `versus-card`
+- **步骤流程**（第一/第二/首先/步骤等） → `step-timeline`
+- **要点清单**（要点/清单/包括等） → `checklist`
+- **引号金句**（含引号或书名号） → `quote-lockup`
+- **强调句**（记住/关键在于/核心是等） → `blur-text`
+- **短感叹句**（小于等于 14 字符且以叹号结尾） → `punch-pill`
+- **术语定义**（所谓/叫做/定义/指的是等） → `term-card`
+- **都不命中** → 不加动效卡（只靠常驻字幕）
+
 ## 注册卡片
 将写好的卡片文件保存在 `src/cards/native/` 下,并在 `src/cards/native/index.ts` 中汇总导出即可。注册表会自动加载它,AI 也会通过 `list_cards` 工具立刻知道新卡片的存在。

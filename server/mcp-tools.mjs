@@ -7,7 +7,13 @@ export const tools = [
   },
   {
     name: "get_project",
-    description: "获取整个多轨 Project 对象,了解项目配置、素材和时间轴上的所有轨道与 clip。",
+    description: "获取整个多轨 Project 对象,了解项目配置、素材和时间轴上的所有轨道与 clip。返回里 media 的 transcript 只是段数摘要，完整文字稿请用 get_transcript。",
+    inputSchema: { type: "object", properties: {} },
+    side: "browser"
+  },
+  {
+    name: "list_media",
+    description: "列出素材库里所有素材，返回每条素材的 id、name、kind、duration、width、height、path（服务端可直接读取的绝对磁盘路径）、url、hasTranscript、transcriptSegments（文字稿段数）；想拿完整文字稿要用 get_transcript。需要素材的 mediaId 时优先用本工具，不要为了找 mediaId 去调 get_project。",
     inputSchema: { type: "object", properties: {} },
     side: "browser"
   },
@@ -184,6 +190,32 @@ export const tools = [
         mediaId: { type: "string" }
       },
       required: ["mediaId"]
+    },
+    side: "browser"
+  },
+  {
+    name: "auto_workflow",
+    description: "对指定素材一键完成 视频到文字稿到动效卡 的整条流程 —— 没有文字稿就先自动转写并等待完成（最多 10 分钟），然后按文字稿切成 5 到 15 秒的段落、用确定性规则给每段配一张合适的动效卡，再给整条文字稿铺一张 caption-track 常驻字幕卡（放在单独的字幕轨上）。参数 mediaId 必填，maxCards 默认 12。用户说 自动做 或 一键配特效 时直接用这个工具。素材较长时本工具会在 50 秒后先返回一个带 jobId 且 running 为 true 的对象，流程在后台继续，用 auto_workflow_status 轮询即可，不要重复调用本工具。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        mediaId: { type: "string" },
+        style: { type: "string" },
+        maxCards: { type: "number" }
+      },
+      required: ["mediaId"]
+    },
+    side: "browser"
+  },
+  {
+    name: "auto_workflow_status",
+    description: "轮询 auto_workflow 后台作业的进度；auto_workflow 在 50 秒内跑完会直接返回完整结果，只有返回里 running 为 true 时才需要用本工具轮询，done 变成 true 后 result 里就是完整结果。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        jobId: { type: "string" }
+      },
+      required: ["jobId"]
     },
     side: "browser"
   }
