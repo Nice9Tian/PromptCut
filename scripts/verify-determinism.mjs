@@ -16,9 +16,11 @@ async function verify() {
   const outB = 'out/verify-b';
   
   console.log('--- Exporting First Pass ---');
+  fs.rmSync(outA, { recursive: true, force: true });
   await exportFrames({ ...opts, out: outA, noVideo: true });
   
   console.log('\n--- Exporting Second Pass ---');
+  fs.rmSync(outB, { recursive: true, force: true });
   await exportFrames({ ...opts, out: outB, noVideo: true });
 
   console.log('\n--- Comparing Frames ---');

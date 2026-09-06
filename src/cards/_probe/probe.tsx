@@ -2,12 +2,19 @@ import { motion } from "motion/react";
 import { useEffect, useRef } from "react";
 import type { CardDef, CardProps } from "../../kernel/types";
 
+declare global {
+  interface Window {
+    __pcProbeMs?: number;
+  }
+}
+
 function ProbeCard({ playToken }: CardProps<Record<string, never>>) {
   const timeRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     let startMs = -1;
-    let frame = requestAnimationFrame(function loop(ms) {
+    let frame = requestAnimationFrame(function loop() {
+      const ms = performance.now();
       if (startMs < 0) startMs = ms;
       const elapsed = ms - startMs;
       window.__pcProbeMs = elapsed;
@@ -20,7 +27,7 @@ function ProbeCard({ playToken }: CardProps<Record<string, never>>) {
   }, []);
 
   return (
-    <div className="absolute inset-0 grid grid-cols-3 place-items-center bg-black/50 text-white pointer-events-none" key={playToken}>
+    <div className="absolute inset-0 grid grid-cols-3 place-items-center text-white pointer-events-none" key={playToken}>
       <style>{`
         @keyframes pcSpin {
           from { transform: rotate(0deg) }

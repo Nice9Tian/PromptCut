@@ -11,6 +11,14 @@ declare global {
     __pcSetT?: (sec: number) => void;
     __pcReady?: boolean;
     __pcTimeline?: unknown;
+    /** 导出:重新挂载全部卡片(playToken+1) */
+    __pcRestartCards?: () => void;
+    /** 导出:每帧推进完虚拟时间后,把所有 Web Animations 的 currentTime 钉到导出时间 */
+    __pcSyncAnims?: () => void;
+    /** 导出:清空动画锚点(正式计帧前调一次) */
+    __pcResetAnims?: () => void;
+    /** 导出:本帧素材(视频 seek 等)就绪 */
+    __pcFrameReady?: () => Promise<void>;
   }
 }
 

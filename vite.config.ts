@@ -7,4 +7,10 @@ import { sttPlugin } from "./server/vite-plugin-stt";
 
 export default defineConfig({
   plugins: [react(), tailwindcss(), exportPlugin(), vitePluginAi(), sttPlugin()],
+  server: {
+    watch: {
+      // 桌面壳的二进制、导出产物、内置 Python 都不是源码;watch 到 exe 会 EBUSY 把 dev server 崩掉
+      ignored: ["**/desktop/**", "**/out/**", "**/python/**", "**/node_modules/**"],
+    },
+  },
 });

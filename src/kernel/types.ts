@@ -11,6 +11,13 @@ export interface CardProps<P> {
   params: P;
   /** 每次重播 +1。卡片组件用 key={playToken} 挂载,所以组件内部不需要读它;保留给需要手动重置的卡。 */
   playToken: number;
+  /**
+   * 自 clip 起点起的秒数(舞台每帧传入)。绝大多数卡不需要它(挂载即播);
+   * 只有「跟着时间轴走」的卡(章节导航、字幕轨、口播视频 seek)才读它。
+   */
+  t?: number;
+  /** clip 总时长(秒) */
+  duration?: number;
 }
 
 /** 卡片契约。所有卡片(自家写的、Magic UI 适配的)都长这样。 */

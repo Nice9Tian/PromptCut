@@ -46,6 +46,8 @@ export const myCard: CardDef<Params> = {
 };
 ```
 
+`CardProps` 还带两个可选字段:`t`(自 clip 起点起的秒数,舞台每帧传入)和 `duration`(clip 总时长)。绝大多数卡不读它们(挂载即播);只有跟着时间轴走的常驻卡(章节导航、字幕轨、口播视频 seek)才用,而且显示状态必须是 `t` 的纯函数,拖时间轴和导出才一致。
+
 硬约束:
 
 1. 卡片是 1920×1080 舞台上的绝对定位层,自己决定落在哪(居中 / 底部 / 左上等),背景透明。
@@ -57,13 +59,15 @@ export const myCard: CardDef<Params> = {
 
 ## 导出脚本契约(scripts/export-frames.mjs)
 
-- 用 `puppeteer`(已装,Chrome for Testing 在 `%USERPROFILE%\.cache\puppeteer`)打开 `http://127.0.0.1:5190/?export=1`(dev server 由调用者先起,`npm run dev`),或 `--url` 指定。
-- 视口 = timeline 宽高,`omitBackground` 透明 PNG。
-- CDP `Emulation.setVirtualTimePolicy` 先 `pause`,等 `window.__pcReady`,然后每帧:`__pcSetT(i/fps)` → `setVirtualTimePolicy({policy:'pauseIfNetworkFetchesPending', budget: 1000/fps})` 等 `virtualTimeBudgetExpired` → 等一次 rAF → `page.screenshot`。
-- 截图前 `await Promise.all([...document.images].map(i=>i.decode().catch(()=>{})))`,避免空白帧。
-- 帧写到 `out/frames/%06d.png`,最后 ffmpeg(路径:`%LOCALAPPDATA%\Microsoft\WinGet\Packages\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\ffmpeg-9.0.1-full_build\bin\ffmpeg.exe`,PATH 里有就直接用)合成 `out/overlay.mov`(prores_ks profile 4444 带 alpha)和 `out/preview.mp4`(叠在 #333 灰底上,给人看)。
-- `--frames a-b` 只导一段;`--out <dir>` 指定输出目录;`--fps` 覆盖。
-- `scripts/verify-determinism.mjs`:同一段导两遍到不同目录,逐帧比对 PNG 像素(可以装 `pngjs`),输出:相同帧数 / 不同帧数 / 最差帧的差异像素占比。目标:全部相同。
+细节和实测数据见 `scripts/README.md`。要点:
+
+- 页面侧(`src/ExportView.tsx`)暴露 `__pcReady`、`__pcTimeline`、`__pcSetT(sec)`、`__pcSyncAnims()`、`__pcResetAnims()`、`__pcRestartCards()`、`__pcFrameReady()`,类型声明在 `src/kernel/clock.ts`。
+- 导出视图一进入就装 `installExportClock()`(`src/kernel/exportClock.ts`):`performance.now` 和 rAF 时间戳量化到当前帧的导出毫秒。
+- 每帧:`__pcSetT` → 推进一格虚拟时间(rAF 等待先挂再推进)→ `__pcSyncAnims` 把所有 Web Animations pause 并钉 currentTime → 等图片 decode / 视频 seek → 截图(截图期间虚拟时间切 advance,截完切回 pause)。
+- `AnimClock` 只在预览里做倍速;导出时不碰 playbackRate。
+- Chrome 启动参数固定带软件光栅化(`--disable-gpu` 等)和窗口移出屏幕。
+- 输出 `<out>/frames/%06d.png`,ffmpeg 合成 `overlay.mov`(ProRes 4444 alpha)和 `preview.mp4`。
+- `scripts/verify-determinism.mjs` 导两遍逐像素比对,目标全部相同(2026-09-06 三段各 60/60)。
 
 ## 注意
 
