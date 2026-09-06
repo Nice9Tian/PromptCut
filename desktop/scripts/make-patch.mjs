@@ -24,6 +24,23 @@ const DESKTOP_DIR = path.resolve(__dirname, "..");
 const PROJECT_ROOT = path.resolve(DESKTOP_DIR, "..");
 const RUNTIME_DIR = path.join(DESKTOP_DIR, "src-tauri", "runtime");
 const APP_DIR = path.join(RUNTIME_DIR, "app");
+
+/**
+ * Node 这半边最低要求的外壳版本 —— 手动声明,**不要**用「这次顺手一起编的外壳版本」。
+ *
+ * 这两件事很容易混:发布时一起编出来的外壳版本,和 Node 这半边真正依赖的外壳能力。
+ * 拿前者当门槛的话,外壳每动一次(哪怕只是加个菜单项)就会把所有老外壳的用户挡在
+ * 补丁外面,逼他们下三百多 MB 的完整包,只为换一个 11 MB 的 exe —— 而那些用户
+ * 本来只是想拿 Node 这半边的更新。
+ *
+ * 什么时候才该抬高它:Node 这半边开始**硬依赖**某个新外壳能力,缺了就报错或整个
+ * 功能不可用。「有了更好、没有也能降级」不算 —— 那种留在门槛下面,让老外壳照样能打补丁。
+ *
+ * 现在是 0.2.0:0.2.x 的任何外壳都跑得起来。0.2.3 新加的原生「外观 → 皮肤…」
+ * 属于可降级项(前端读 window.__TAURI__ 走的是可选链,皮肤对话框在顶栏「⋯」里
+ * 还有一个入口),所以不抬门槛。
+ */
+const MIN_SHELL_VERSION = "0.2.0";
 const RELEASE_DIR = path.join(DESKTOP_DIR, "release");
 const STAGE_DIR = path.join(DESKTOP_DIR, ".cache", "patch-stage");
 
@@ -155,6 +172,15 @@ function main() {
     fs.readFileSync(path.join(DESKTOP_DIR, "src-tauri", "tauri.conf.json"), "utf-8")
   ).version;
 
+  // 门槛必须和这次外壳同一代次,否则清单自相矛盾:代次校验先过、门槛却指向另一代
+  const gen = (v) => v.split(".").slice(0, 2).join(".");
+  if (gen(MIN_SHELL_VERSION) !== gen(shellVersion)) {
+    fail(
+      `MIN_SHELL_VERSION(${MIN_SHELL_VERSION})和本次外壳(${shellVersion})不是同一代次。` +
+        `外壳换代时要把它一起挪到新代次的起点。`
+    );
+  }
+
   const lockHash = sha256File(path.join(APP_DIR, "package-lock.json"));
   const base = findBaseManifest(appVersion);
   if (base) console.log(`  基准清单：${path.basename(base.path)}（app ${base.data.appVersion}）`);
@@ -225,7 +251,7 @@ function main() {
     // 补丁只换 Node 那一半。内核代次（外壳版本的前两段）不同就一定装不了 ——
     // Chrome / ffmpeg / Python / Rust 外壳都在完整安装包里，补丁碰不到。
     shellGeneration: shellVersion.split(".").slice(0, 2).join("."),
-    minShellVersion: shellVersion,
+    minShellVersion: MIN_SHELL_VERSION,
     builtAt: new Date().toISOString(),
     includesDeps,
     depsReason,
