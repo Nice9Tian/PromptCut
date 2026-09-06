@@ -49,7 +49,7 @@
   letter-spacing: 0.04em;
 }
 
-.pc-orch-plan {
+.pc-orch-prose {
   margin: 0;
   line-height: 1.7;
   white-space: pre-wrap;
@@ -77,11 +77,33 @@
 }
 
 .pc-orch-task {
+  padding: 3px 0;
+  min-width: 0;
+}
+.pc-orch-task-line {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 3px 0;
   min-width: 0;
+}
+/* 失败原因缩进到头像右侧，一眼看出是属于上面那条任务的 */
+.pc-orch-task-error {
+  margin: 2px 0 0 22px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--danger);
+  overflow-wrap: anywhere;
+}
+.pc-orch-task-missing {
+  padding: 3px 0;
+  font-size: 11px;
+  color: var(--danger);
+}
+.pc-orch-secs {
+  flex: 0 0 auto;
+  font-size: 10px;
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
 }
 
 .pc-orch-task-title {
