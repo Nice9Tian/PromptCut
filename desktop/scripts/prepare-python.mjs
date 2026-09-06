@@ -387,6 +387,24 @@ function pipVersion() {
   return m ? m[1] : r.stdout.trim();
 }
 
+/**
+ * 把 python/requirements-<engine>.txt 复制到 runtime/python/。
+ *
+ * promptcut_stt 的 find_requirements() 按四个位置找:开发期是包目录的上一级(python/),
+ * 装进 site-packages 之后上一级就不是 python/ 了,所以它会去 sys.prefix 找——
+ * 打包后的 sys.prefix 正是 runtime/python。以前只复制了 promptcut_stt 包本身,
+ * 这两个文件一直没进包,于是装好的软件里点「安装引擎」必然报「未找到 requirements 文件」。
+ */
+function copyRequirements() {
+  const srcDir = path.join(ROOT, 'python');
+  if (!fs.existsSync(srcDir)) return [];
+  const files = fs.readdirSync(srcDir).filter((f) => /^requirements-.+.txt$/.test(f));
+  for (const f of files) fs.copyFileSync(path.join(srcDir, f), path.join(RUNTIME_PY, f));
+  if (files.length) log(`[5/6] 复制 ${files.join(', ')} → runtime/python`);
+  else warn('[5/6] python/ 下没有 requirements-*.txt,STT 引擎将无法安装。');
+  return files;
+}
+
 function copySttPackage() {
   if (!fs.existsSync(STT_SRC)) {
     warn(`[5/6] python/promptcut_stt/ 还不存在,跳过复制。`);
@@ -534,6 +552,15 @@ function check() {
     add('import promptcut_stt', false, '跳过(没有 python.exe)');
   }
 
+  const reqs = fs.existsSync(RUNTIME_PY)
+    ? fs.readdirSync(RUNTIME_PY).filter((f) => /^requirements-.+.txt$/.test(f))
+    : [];
+  add(
+    'requirements-*.txt 就位',
+    reqs.length > 0,
+    reqs.length ? reqs.join(', ') + ' @ ' + RUNTIME_PY : 'runtime/python 下没有,装好的软件将无法安装 STT 引擎',
+  );
+
   const v = readVersionFile();
   add('PYTHON-VERSION.json', !!v && v.version === PYTHON_VERSION, v ? JSON.stringify(v) : '缺失');
 
@@ -574,6 +601,7 @@ async function build({ force }) {
   }
 
   copySttPackage();
+  copyRequirements();
   writeVersionFile(pip);
 
   log('');
