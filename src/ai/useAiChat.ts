@@ -1,6 +1,32 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import type { AiProvider, ChatMessage, ChatAttachment, ProviderInfo, RunEvent, SttInfo, LoginState, PublicAiConfig, AiConfigPatch } from "./types";
+import type { AiProvider, ChatMessage, ChatAttachment, MessagePart, ProviderInfo, RunEvent, SttInfo, LoginState, PublicAiConfig, AiConfigPatch } from "./types";
 import { parseSseChunks } from "./sse";
+
+/** 往有序片段里追加文字(接在末尾的文字片段后面,不新开一段) */
+function appendTextPart(parts: MessagePart[] | undefined, delta: string): MessagePart[] {
+  const next = parts ? [...parts] : [];
+  const last = next[next.length - 1];
+  if (last && last.kind === "text") next[next.length - 1] = { kind: "text", text: last.text + delta };
+  else next.push({ kind: "text", text: delta });
+  return next;
+}
+
+/** 给最近一个同名、还没有结果的工具片段补上结果 */
+function completeToolPart(
+  parts: MessagePart[] | undefined,
+  ev: { name: string; ok: boolean; summary?: string; files?: string[] },
+): MessagePart[] {
+  const next = parts ? [...parts] : [];
+  for (let i = next.length - 1; i >= 0; i--) {
+    const p = next[i];
+    if (p.kind === "tool" && p.name === ev.name && p.ok === undefined) {
+      next[i] = { ...p, ok: ev.ok, summary: ev.summary, files: ev.files };
+      return next;
+    }
+  }
+  next.push({ kind: "tool", name: ev.name, ok: ev.ok, summary: ev.summary, files: ev.files });
+  return next;
+}
 
 export function useAiChat(opts?: { mock?: boolean }) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -271,6 +297,7 @@ export function useAiChat(opts?: { mock?: boolean }) {
       id: asstMsgId,
       role: "assistant",
       text: "",
+      parts: [],
       tools: [],
       statuses: [],
       pending: true,
@@ -285,11 +312,21 @@ export function useAiChat(opts?: { mock?: boolean }) {
       const msg = "这是内置假流回复内容。我将调用一个工具看看效果。";
       const timer = setInterval(() => {
         if (i < msg.length) {
-          setMessages(prev => prev.map(m => m.id === asstMsgId ? { ...m, text: m.text + msg[i] } : m));
+          // 每帧写「到目前为止的整段文字」,不做增量拼接:
+          // 第一次 tick 有可能赶在助手消息真正入列之前,那一次增量更新会静默丢掉,
+          // 后面每个字就都错开一位(开头少一个字、结尾多一个 undefined)。
           i++;
+          const soFar = msg.slice(0, i);
+          setMessages(prev => prev.map(m => m.id === asstMsgId
+            ? { ...m, text: soFar, parts: [{ kind: "text", text: soFar }] }
+            : m));
         } else {
           clearInterval(timer);
-          setMessages(prev => prev.map(m => m.id === asstMsgId ? { ...m, tools: [{ name: "get_editor_state", input: {} }] } : m));
+          setMessages(prev => prev.map(m => m.id === asstMsgId ? {
+            ...m,
+            tools: [{ name: "get_editor_state", input: {} }],
+            parts: [...(m.parts || []), { kind: "tool", name: "get_editor_state", input: {} }],
+          } : m));
           setTimeout(() => {
             setMessages(prev => prev.map(m => {
               if (m.id !== asstMsgId) return m;
@@ -298,9 +335,29 @@ export function useAiChat(opts?: { mock?: boolean }) {
                 tools[0].ok = true;
                 tools[0].summary = "获取成功";
               }
-              return { ...m, tools, pending: false };
+              const parts = completeToolPart(m.parts, { name: "get_editor_state", ok: true, summary: "获取成功" });
+              return { ...m, tools, parts };
             }));
-            setStreaming(false);
+            // 工具跑完之后再说一句:详细模式下应当出现「文字 → 工具 → 文字」的真实顺序
+            // 这段同时充当渲染样张:表格、行内公式、独占一行的公式都在里面
+            const tail = [
+              "工具返回了,时间轴现在是空的。建议这样排:",
+              "",
+              "| 卡片 | 起 | 止 |",
+              "| --- | ---: | ---: |",
+              "| 金句卡 | 3.0 | 8.0 |",
+              "| 数字滚动 | 8.0 | 10.5 |",
+              "",
+              "每张卡的时长 \\(d = t_1 - t_0\\),整段导出帧数:",
+              "",
+              "$$N = \\lceil (t_1 - t_0) \\times fps \\rceil$$",
+            ].join("\n");
+            setTimeout(() => {
+              setMessages(prev => prev.map(m => m.id === asstMsgId
+                ? { ...m, text: m.text + "\n" + tail, parts: appendTextPart(m.parts, "\n" + tail), pending: false }
+                : m));
+              setStreaming(false);
+            }, 600);
           }, 1000);
         }
       }, 50);
@@ -351,7 +408,9 @@ export function useAiChat(opts?: { mock?: boolean }) {
           } else if (ev.type === "text" && ev.delta) {
             setMessages((prev) =>
               prev.map((m) =>
-                m.id === asstMsgId ? { ...m, text: m.text + ev.delta! } : m
+                m.id === asstMsgId
+                  ? { ...m, text: m.text + ev.delta!, parts: appendTextPart(m.parts, ev.delta!) }
+                  : m
               )
             );
           } else if (ev.type === "tool_call" && ev.name) {
@@ -360,7 +419,11 @@ export function useAiChat(opts?: { mock?: boolean }) {
                 if (m.id !== asstMsgId) return m;
                 const tools = m.tools ? [...m.tools] : [];
                 tools.push({ name: ev.name!, input: ev.input, expanded: false });
-                return { ...m, tools };
+                const parts: MessagePart[] = [
+                  ...(m.parts || []),
+                  { kind: "tool", name: ev.name!, input: ev.input },
+                ];
+                return { ...m, tools, parts };
               })
             );
           } else if (ev.type === "tool_result" && ev.name) {
@@ -376,7 +439,13 @@ export function useAiChat(opts?: { mock?: boolean }) {
                     break;
                   }
                 }
-                return { ...m, tools };
+                const parts = completeToolPart(m.parts, {
+                  name: ev.name!,
+                  ok: ev.ok,
+                  summary: ev.summary,
+                  files: ev.files,
+                });
+                return { ...m, tools, parts };
               })
             );
           } else if (ev.type === "status" && ev.text) {
@@ -385,7 +454,8 @@ export function useAiChat(opts?: { mock?: boolean }) {
                 if (m.id !== asstMsgId) return m;
                 const statuses = m.statuses ? [...m.statuses] : [];
                 statuses.push(ev.text!);
-                return { ...m, statuses };
+                const parts: MessagePart[] = [...(m.parts || []), { kind: "status", text: ev.text! }];
+                return { ...m, statuses, parts };
               })
             );
           } else if (ev.type === "error" && ev.message) {

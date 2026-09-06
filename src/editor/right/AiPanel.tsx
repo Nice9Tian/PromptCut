@@ -1,18 +1,66 @@
 import React, { useRef, useState, useEffect } from "react";
 import "./AiPanel.css";
+// 公式样式表:renderMarkdown 用 KaTeX 渲染数学,样式在这里一次性引入
+import "katex/dist/katex.min.css";
 import { useAiChat } from "../../ai/useAiChat";
-import { renderLiteMarkdown } from "../../ai/liteMarkdown";
-import type { ChatAttachment } from "../../ai/types";
+import { renderMarkdown } from "../../ai/Markdown";
+import type { ChatAttachment, ChatMessage, MessagePart, ToolCallInfo } from "../../ai/types";
 import { AiSetupDialog } from "./AiSetupDialog";
 
+/** 显示模式:简洁只看回复,详细连每一步工具调用一起看 */
+type ViewMode = "simple" | "verbose";
+const VIEW_KEY = "aiViewMode";
+
+/**
+ * 取一条消息的有序片段。新消息自带 parts;旧会话历史里没有,
+ * 就按「文字 → 状态 → 工具」的老顺序兜底,保证读得出来。
+ */
+function partsOf(m: ChatMessage): MessagePart[] {
+  if (m.parts && m.parts.length > 0) return m.parts;
+  const legacy: MessagePart[] = [];
+  if (m.text) legacy.push({ kind: "text", text: m.text });
+  for (const s of m.statuses || []) legacy.push({ kind: "status", text: s });
+  for (const t of m.tools || []) legacy.push({ kind: "tool", ...t });
+  return legacy;
+}
+
+/** 正在执行、还没有结果的那个工具(有就说明这一刻在跑它) */
+function runningTool(parts: MessagePart[]): ToolCallInfo | null {
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const p = parts[i];
+    if (p.kind === "tool") return p.ok === undefined ? p : null;
+  }
+  return null;
+}
+
 export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mock?: boolean; openSetupSignal?: number }) {
-  const { messages, providers, sttInfo, provider, setProvider, streaming, send, abort, newChat, error, setMessages, login, loginState, config, saveConfig, setupOpen, openSetup, closeSetup } = useAiChat({ mock: props.mock });
+  // ?aimock=1 给界面自测用:走内置假流,不需要装好任何模型后端
+  const mock = props.mock ?? (() => {
+    try {
+      return new URLSearchParams(location.search).has("aimock");
+    } catch {
+      return false;
+    }
+  })();
+  const { messages, providers, sttInfo, provider, setProvider, streaming, send, abort, newChat, error, setMessages, login, loginState, config, saveConfig, setupOpen, openSetup, closeSetup } = useAiChat({ mock });
   const [inputText, setInputText] = useState("");
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
   const [uploading, setUploading] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [showLoginPrompt, setShowLoginPrompt] = useState(false);
-  
+  const [view, setView] = useState<ViewMode>(() => {
+    try {
+      return localStorage.getItem(VIEW_KEY) === "verbose" ? "verbose" : "simple";
+    } catch {
+      return "simple";
+    }
+  });
+  /** 展开的工具详情,键是 `消息id:片段序号`。纯界面状态,不写进消息里 */
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  /** 简洁模式下手动展开了操作清单的消息 */
+  const [showSteps, setShowSteps] = useState<Set<string>>(new Set());
+
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesScrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -48,7 +96,8 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
 
   const handleSend = () => {
     const pInfo = providers.find(p => p.id === provider);
-    if (pInfo && pInfo.auth?.loggedIn === false) {
+    // 假流不经过任何后端,别拿登录状态挡它
+    if (!mock && pInfo && pInfo.auth?.loggedIn === false) {
       setShowLoginPrompt(true);
       return;
     }
@@ -110,14 +159,23 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
     setAttachments(prev => prev.filter((_, i) => i !== idx));
   };
 
-  const toggleTool = (msgId: string, toolIdx: number) => {
-    setMessages(prev => prev.map(m => {
-      if (m.id !== msgId || !m.tools) return m;
-      const tools = [...m.tools];
-      tools[toolIdx] = { ...tools[toolIdx], expanded: !tools[toolIdx].expanded };
-      return { ...m, tools };
-    }));
+  const changeView = (next: ViewMode) => {
+    setView(next);
+    try {
+      localStorage.setItem(VIEW_KEY, next);
+    } catch {
+      /* 隐私模式下写不了,忽略 */
+    }
   };
+
+  const toggleIn = (set: Set<string>, apply: (s: Set<string>) => void) => (key: string) => {
+    const next = new Set(set);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    apply(next);
+  };
+  const toggleTool = toggleIn(expanded, setExpanded);
+  const toggleSteps = toggleIn(showSteps, setShowSteps);
 
   if (providers.length > 0 && !providers.some(p => p.available)) {
     return (
@@ -156,6 +214,22 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
           />
         </div>
         <div className="ai-panel-controls">
+          <div className="ai-mode-toggle" role="group" aria-label="显示模式">
+            <button
+              className={view === "simple" ? "is-on" : ""}
+              onClick={() => changeView("simple")}
+              title="只看 AI 的回复"
+            >
+              简洁
+            </button>
+            <button
+              className={view === "verbose" ? "is-on" : ""}
+              onClick={() => changeView("verbose")}
+              title="连每一步操作一起看"
+            >
+              详细
+            </button>
+          </div>
           <button className="ai-gear-btn" title="AI 设置" aria-label="AI 设置" onClick={openSetup}>⚙</button>
           <select 
             className="ai-provider-select"
@@ -215,94 +289,148 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
             </div>
           </div>
         ) : (
-          messages.map((m, i) => (
-            <div key={m.id} className={`ai-message ${m.role}`}>
-              <div className="ai-message-text">
-                {m.attachments && m.attachments.length > 0 && (
-                  <div style={{ fontSize: 11, opacity: 0.8, marginBottom: 4 }}>
-                    [附件: {m.attachments.map(a => a.name).join(", ")}]
-                  </div>
-                )}
-                {renderLiteMarkdown(m.text)}
-                {m.pending && m.role === "assistant" && i === messages.length - 1 && (
-                  <span className="ai-blink-cursor" />
-                )}
-              </div>
+          messages.map((m, i) => {
+            const isLastAssistant = m.role === "assistant" && i === messages.length - 1;
+            const parts = partsOf(m);
+            const toolParts = parts.filter((p) => p.kind === "tool") as (ToolCallInfo & { kind: "tool" })[];
+            const textOnly = parts
+              .filter((p) => p.kind === "text")
+              .map((p) => (p as { text: string }).text)
+              .join("");
+            const busyTool = m.pending ? runningTool(parts) : null;
 
-              {m.statuses && m.statuses.length > 0 && (
-                <div style={{ marginTop: 4, display: "flex", flexDirection: "column", gap: 4 }}>
-                  {m.statuses.map((st, sidx) => (
-                    <div key={sidx} className="ai-tool-chip" style={{ opacity: 0.8 }}>
-                      信息: {st}
-                    </div>
-                  ))}
-                </div>
-              )}
-              
-              {m.tools && m.tools.length > 0 && (
-                <div style={{ marginTop: 4, display: "flex", flexDirection: "column", gap: 4 }}>
-                  {m.tools.map((t, tidx) => (
-                    <div key={tidx} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                      <div 
-                        className={`ai-tool-chip ${t.ok === true ? "ok" : t.ok === false ? "err" : ""}`}
-                        onClick={() => toggleTool(m.id, tidx)}
-                      >
-                        🔧 {t.name} {t.ok === true ? "✓" : t.ok === false ? "✗" : "..."}
-                      </div>
-                      {t.expanded ? (
+            /** 一个工具片段:标题行 + 可展开的入参 / 结果 / 文件 */
+            const renderTool = (t: ToolCallInfo, key: string) => {
+              const open = expanded.has(key);
+              const done = t.ok !== undefined;
+              return (
+                <div key={key} className="ai-tool-block">
+                  <div
+                    className={`ai-tool-chip ${t.ok === true ? "ok" : t.ok === false ? "err" : ""}`}
+                    onClick={() => toggleTool(key)}
+                  >
+                    {done ? (t.ok ? "✓" : "✗") : <span className="ai-spinner" aria-hidden />}
+                    <span className="ai-tool-name">{t.name}</span>
+                    <span className="ai-tool-caret">{open ? "▾" : "▸"}</span>
+                  </div>
+                  {open && (
+                    <div className="ai-tool-detail">
+                      <div className="ai-tool-label">入参</div>
+                      <pre className="ai-tool-pre">{JSON.stringify(t.input || {}, null, 2)}</pre>
+                      {t.summary ? (
                         <>
-                          <div style={{ fontSize: 10, color: "var(--ink-muted)", marginBottom: 2 }}>Input:</div>
-                          <pre style={{ overflowX: "auto", fontSize: 10, background: "var(--bg-canvas)", padding: 6, margin: 0, borderRadius: 4, marginBottom: (t.summary || t.files?.length) ? 4 : 0 }}>
-                            {JSON.stringify(t.input || {}, null, 2)}
-                          </pre>
-                          {t.summary ? (
-                            <>
-                              <div style={{ fontSize: 10, color: "var(--ink-muted)", marginBottom: 2 }}>Result:</div>
-                              <pre style={{ overflowX: "auto", fontSize: 10, background: "var(--bg-canvas)", padding: 6, margin: 0, borderRadius: 4, marginBottom: t.files?.length ? 4 : 0, whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
-                                {t.summary}
-                              </pre>
-                            </>
-                          ) : null}
-                          {t.files && t.files.length > 0 ? (
-                            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                               {t.files.map((f, fidx) => {
-                                  const lower = f.toLowerCase();
-                                  if (lower.endsWith('.png') || lower.endsWith('.jpg') || lower.endsWith('.jpeg')) {
-                                     let url = f;
-                                     if (!f.startsWith('http') && !f.startsWith('data:')) {
-                                         url = `/@fs/${f.replace(/\\/g, '/').replace(/^\/?/, '')}`;
-                                     }
-                                     return (
-                                        <div key={fidx}>
-                                          <img 
-                                            src={url} 
-                                            style={{ maxWidth: "100%", borderRadius: 4 }} 
-                                            alt="tool output" 
-                                            onError={(e) => {
-                                                e.currentTarget.style.display = 'none';
-                                                if (e.currentTarget.nextSibling) return;
-                                                const span = document.createElement('span');
-                                                span.style.fontSize = '10px';
-                                                span.textContent = f;
-                                                e.currentTarget.parentElement?.appendChild(span);
-                                            }}
-                                          />
-                                        </div>
-                                     );
-                                  }
-                                  return <div key={fidx} style={{ fontSize: 10, fontFamily: 'monospace' }}>{f}</div>;
-                               })}
-                            </div>
-                          ) : null}
+                          <div className="ai-tool-label">结果</div>
+                          <pre className="ai-tool-pre wrap">{t.summary}</pre>
                         </>
                       ) : null}
+                      {t.files && t.files.length > 0 ? (
+                        <div className="ai-tool-files">
+                          {t.files.map((f, fidx) => {
+                            const lower = f.toLowerCase();
+                            const isImg =
+                              lower.endsWith(".png") || lower.endsWith(".jpg") || lower.endsWith(".jpeg");
+                            if (!isImg) {
+                              return (
+                                <div key={fidx} className="ai-tool-file">
+                                  {f}
+                                </div>
+                              );
+                            }
+                            const url =
+                              f.startsWith("http") || f.startsWith("data:")
+                                ? f
+                                : `/@fs/${f.replace(/\\/g, "/").replace(/^\/?/, "")}`;
+                            return (
+                              <div key={fidx}>
+                                <img
+                                  src={url}
+                                  className="ai-tool-img"
+                                  alt={f}
+                                  onError={(e) => {
+                                    e.currentTarget.style.display = "none";
+                                    if (e.currentTarget.nextSibling) return;
+                                    const span = document.createElement("div");
+                                    span.className = "ai-tool-file";
+                                    span.textContent = f;
+                                    e.currentTarget.parentElement?.appendChild(span);
+                                  }}
+                                />
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ) : null}
                     </div>
-                  ))}
+                  )}
                 </div>
-              )}
-              {m.error && <div className="ai-message-error">{m.error}</div>}
-            </div>
-          ))
+              );
+            };
+
+            return (
+              <div key={m.id} className={`ai-message ${m.role}`}>
+                {m.attachments && m.attachments.length > 0 && (
+                  <div className="ai-message-attach">[附件: {m.attachments.map((a) => a.name).join(", ")}]</div>
+                )}
+
+                {view === "verbose" && m.role === "assistant" ? (
+                  // 详细模式:按真实发生顺序渲染,文字和工具交错,回复不会被工具块埋掉
+                  parts.map((p, pidx) => {
+                    if (p.kind === "text") {
+                      if (!p.text) return null;
+                      return (
+                        <div key={pidx} className="ai-message-text">
+                          {renderMarkdown(p.text)}
+                        </div>
+                      );
+                    }
+                    if (p.kind === "status") {
+                      return (
+                        <div key={pidx} className="ai-tool-chip info">
+                          信息: {p.text}
+                        </div>
+                      );
+                    }
+                    return renderTool(p, `${m.id}:${pidx}`);
+                  })
+                ) : (
+                  // 简洁模式:只给回复正文;做过的操作折成一行,想看再展开
+                  <>
+                    {(textOnly || m.role === "user") && (
+                      <div className="ai-message-text">{renderMarkdown(textOnly || m.text)}</div>
+                    )}
+                    {m.role === "assistant" && toolParts.length > 0 && (
+                      <>
+                        <button className="ai-steps-summary" onClick={() => toggleSteps(m.id)}>
+                          {showSteps.has(m.id) ? "▾" : "▸"} 执行了 {toolParts.length} 个操作
+                        </button>
+                        {showSteps.has(m.id) && (
+                          <div className="ai-steps-list">
+                            {toolParts.map((t, tidx) => renderTool(t, `${m.id}:s${tidx}`))}
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </>
+                )}
+
+                {isLastAssistant && m.pending && (
+                  <div className="ai-activity">
+                    <span className="ai-spinner" aria-hidden />
+                    <span className="ai-activity-text">
+                      {busyTool ? `正在执行 ${busyTool.name}` : "正在思考"}
+                    </span>
+                    <span className="ai-activity-dots" aria-hidden>
+                      <i />
+                      <i />
+                      <i />
+                    </span>
+                  </div>
+                )}
+
+                {m.error && <div className="ai-message-error">{m.error}</div>}
+              </div>
+            );
+          })
         )}
       </div>
 

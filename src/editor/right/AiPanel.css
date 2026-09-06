@@ -325,3 +325,256 @@
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+/* ── 显示模式切换(简洁 / 详细) ─────────────────────────── */
+.ai-mode-toggle {
+  display: inline-flex;
+  border: 1px solid var(--hairline);
+  border-radius: 5px;
+  overflow: hidden;
+}
+.ai-mode-toggle button {
+  border: 0;
+  background: transparent;
+  color: var(--ink-muted);
+  font-size: 11px;
+  font-family: inherit;
+  padding: 3px 8px;
+  cursor: pointer;
+  line-height: 1.4;
+}
+.ai-mode-toggle button:hover {
+  background: var(--fill-hover);
+  color: var(--ink);
+}
+.ai-mode-toggle button.is-on {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+/* ── 消息片段 ───────────────────────────────────────── */
+.ai-message-attach {
+  font-size: 11px;
+  color: var(--ink-muted);
+  margin-bottom: 4px;
+}
+/* 详细模式里文字和工具交错出现,段与段之间留点气口 */
+.ai-message.assistant .ai-message-text + .ai-message-text {
+  margin-top: 6px;
+}
+.ai-tool-chip.info {
+  cursor: default;
+}
+.ai-tool-name {
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+.ai-tool-caret {
+  margin-left: auto;
+  padding-left: 6px;
+  opacity: 0.6;
+}
+.ai-tool-block {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.ai-tool-detail {
+  margin-top: 4px;
+  padding-left: 8px;
+  border-left: 2px solid var(--hairline);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.ai-tool-label {
+  font-size: 10px;
+  color: var(--ink-faint);
+}
+.ai-tool-pre {
+  overflow-x: auto;
+  font-size: 10px;
+  font-family: var(--font-mono);
+  background: var(--bg-canvas);
+  padding: 6px;
+  margin: 0 0 4px;
+  border-radius: 4px;
+}
+.ai-tool-pre.wrap {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.ai-tool-files {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 4px;
+}
+.ai-tool-file {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--ink-muted);
+  overflow-wrap: anywhere;
+}
+.ai-tool-img {
+  max-width: 100%;
+  border-radius: 4px;
+  display: block;
+}
+
+/* ── 简洁模式:做过的操作折成一行 ───────────────────────── */
+.ai-steps-summary {
+  align-self: flex-start;
+  margin-top: 6px;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  font-family: inherit;
+  font-size: 11px;
+  color: var(--ink-faint);
+  cursor: pointer;
+}
+.ai-steps-summary:hover {
+  color: var(--ink-muted);
+  text-decoration: underline;
+}
+.ai-steps-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 2px;
+}
+
+/* ── 执行中动画 ─────────────────────────────────────── */
+.ai-activity {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--ink-muted);
+}
+.ai-activity-text {
+  overflow-wrap: anywhere;
+}
+.ai-spinner {
+  width: 11px;
+  height: 11px;
+  flex: 0 0 auto;
+  border: 1.5px solid var(--hairline);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  display: inline-block;
+  animation: ai-spin 0.7s linear infinite;
+}
+@keyframes ai-spin {
+  to { transform: rotate(360deg); }
+}
+.ai-activity-dots {
+  display: inline-flex;
+  gap: 3px;
+}
+.ai-activity-dots i {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.35;
+  animation: ai-dot 1.2s ease-in-out infinite;
+}
+.ai-activity-dots i:nth-child(2) { animation-delay: 0.15s; }
+.ai-activity-dots i:nth-child(3) { animation-delay: 0.3s; }
+@keyframes ai-dot {
+  0%, 60%, 100% { opacity: 0.25; transform: translateY(0); }
+  30% { opacity: 1; transform: translateY(-2px); }
+}
+
+/* 系统设了「减少动态效果」就不要转圈跳点 */
+@media (prefers-reduced-motion: reduce) {
+  .ai-spinner { animation: none; border-top-color: var(--accent); }
+  .ai-activity-dots i { animation: none; opacity: 0.6; }
+}
+
+/* ── 模型回复里的 Markdown ───────────────────────────── */
+.ai-message-text h1,
+.ai-message-text h2,
+.ai-message-text h3,
+.ai-message-text h4 {
+  margin: 10px 0 6px;
+  line-height: 1.35;
+  font-weight: 600;
+}
+.ai-message-text h1 { font-size: 16px; }
+.ai-message-text h2 { font-size: 15px; }
+.ai-message-text h3 { font-size: 14px; }
+.ai-message-text h4 { font-size: 13px; }
+.ai-message-text > :first-child { margin-top: 0; }
+.ai-message-text > :last-child { margin-bottom: 0; }
+
+.ai-message-text ol {
+  margin: 8px 0;
+  padding-left: 20px;
+}
+.ai-message-text li { margin: 2px 0; }
+.ai-message-text li > p { margin: 0; }
+/* 任务列表(- [ ] / - [x])不要项目符号 */
+.ai-message-text li.task-list-item { list-style: none; margin-left: -16px; }
+.ai-message-text li.task-list-item input { margin-right: 6px; }
+
+.ai-message-text blockquote {
+  margin: 8px 0;
+  padding: 2px 0 2px 10px;
+  border-left: 3px solid var(--hairline);
+  color: var(--ink-muted);
+}
+.ai-message-text hr {
+  border: 0;
+  border-top: 1px solid var(--hairline);
+  margin: 10px 0;
+}
+.ai-message-text a {
+  color: var(--accent);
+  overflow-wrap: anywhere;
+}
+
+/* 表格:自己横向滚动,不把面板撑宽 */
+.md-table-wrap {
+  overflow-x: auto;
+  margin: 8px 0;
+  border: 1px solid var(--hairline);
+  border-radius: 4px;
+}
+.md-table-wrap table {
+  border-collapse: collapse;
+  font-size: 12px;
+  width: max-content;
+  min-width: 100%;
+}
+.md-table-wrap th,
+.md-table-wrap td {
+  border-bottom: 1px solid var(--hairline);
+  padding: 4px 8px;
+  text-align: left;
+  vertical-align: top;
+  white-space: nowrap;
+}
+.md-table-wrap th {
+  background: var(--bg-canvas);
+  font-weight: 600;
+}
+.md-table-wrap tr:last-child td { border-bottom: 0; }
+
+/* 公式:独占一行的公式太宽时横向滚动;继承面板文字颜色 */
+.ai-message-text .katex { font-size: 1.02em; }
+.ai-message-text .katex-display {
+  margin: 8px 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 2px;
+}
+/* 公式写错时 KaTeX 会把原样式子标红显示,别让它糊成一团 */
+.ai-message-text .katex-error {
+  color: var(--danger);
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
