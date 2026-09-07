@@ -36,7 +36,7 @@ interface Job {
 }
 
 const PROVIDERS: { id: Provider; name: string; desc: string }[] = [
-  { id: "claude", name: "Claude Code", desc: "打开 Claude 桌面版的 Code 标签,新对话直接落在任务目录,自动发 /promptcut" },
+  { id: "claude", name: "Claude Code", desc: "打开 Claude 桌面版的 Code 标签,新对话直接落在任务目录,输入框里预填好 /promptcut,按回车即可" },
   { id: "codex", name: "Codex", desc: "用 codex app 打开任务目录,再开一条新线程;流程写在 AGENTS.md 里" },
 ];
 
@@ -44,7 +44,8 @@ const STEPS: { phase: Phase; label: string }[] = [
   { phase: "snapshot", label: "快照当前项目" },
   { phase: "booting", label: "起一份无头实例(独立端口,不碰你手里这份)" },
   { phase: "launching", label: "写入说明文件,拉起桌面 app 的新对话" },
-  { phase: "ready", label: "就绪:去桌面 app 里和它说要做什么" },
+  // 深链只把 /promptcut 预填进输入框,不会替用户按回车 —— 实测 Claude 桌面版就是这个行为
+  { phase: "ready", label: "就绪:桌面 app 里已经预填好指令,按回车发送,再告诉它要做什么" },
 ];
 
 const ORDER: Phase[] = ["snapshot", "booting", "launching", "ready"];
