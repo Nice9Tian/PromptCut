@@ -5,6 +5,8 @@
  * transition / WAAPI:它们跑在合成线程上,按浏览器自己的时钟走。
  * 做法和导出视图的 __pcSyncAnims 一样:记下每个动画头一次出现时的舞台时间当锚点,
  * 之后每帧把 currentTime 钉到「现在 − 锚点」并暂停,数值就只由时间决定,和机器快慢无关。
+ * 前提是动画出生时就已经停在 0 —— 由 stageClock 装的 patchAnimate 保证。少了它,动画会按
+ * document.timeline 的真实时间出生即 finished,下面那句「跳过 finished」就把整个入场跳掉了。
  */
 export interface AnimationPinner {
   /** 每跑一帧调一次:nowMs = 当前舞台时间 */

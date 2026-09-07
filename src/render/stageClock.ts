@@ -9,8 +9,16 @@
  * 和导出内核(kernel/exportClock.ts)是同一个思路:那边的时间由 CDP 虚拟时间推,
  * 这边由编辑器下发的 t 推。卡片代码两边一模一样,所以预览所见 = 导出所得。
  *
+ * 但只接管 performance.now 和 rAF 还不够。页面上还有第三个时钟 document.timeline.currentTime
+ * (WAAPI 自己的,真实时间、从不归零),Motion 建 WAAPI 动画时把 startTime 写成被接管的
+ * performance.now(舞台时间,从 0 起),WAAPI 却按第三个时钟解读它 —— 于是动画一出生
+ * currentTime 就是「页面已经打开了多久」,越过 endTime 直接 finished,pinAnimations 又按约定
+ * 跳过 finished,入场动画在预览里一律直接跳到终态。实测拖到 t=0.1s:导出页 20 个动画 paused
+ * 在 100ms,预览页 20 个全部 finished。exportClock 的 patchAnimate 就是治这个的,这里同样要装。
+ *
  * 只能装在渲染面的 iframe 里。装到编辑器主文档上会把编辑器自己的 UI 动画一起冻住。
  */
+import { patchAnimate } from "../kernel/exportClock";
 
 export interface StageClock {
   now(): number;
@@ -33,6 +41,9 @@ const DEFAULT_MAX_CATCH_UP = 6000;
 export function installStageClock(): StageClock {
   const w = window as Window & { __pcStageClock?: StageClock };
   if (w.__pcStageClock) return w.__pcStageClock;
+
+  // WAAPI 动画一出生就停在 0,时间此后完全由 pinAnimations 的锚点决定(见文件头「第三个时钟」)
+  patchAnimate();
 
   let now = 0;
   let nextId = 1;

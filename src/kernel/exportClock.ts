@@ -129,8 +129,16 @@ export function installExportClock(): void {
  * 逻辑、不经过这个访问器,照常收束到 endTime。
  * ⚠ 导出产物会变(变对了):endTime 小于「开烘那一刻 timeline」的动画以前从来没播过入场,
  * 现在会正常淡入。任何逐像素基线快照都要重新生成。
+ *
+ * 渲染面(?stage=1,render/stageClock.ts)也装这一层,理由完全相同:那边 performance.now
+ * 同样被接管成从 0 起的舞台时间,而 document.timeline 照样是真实时间。实测拖到 t=0.1s 时
+ * 导出页 20 个动画全部 paused 在 100ms,预览页 20 个全部 finished(currentTime 1440)——
+ * 入场动画在预览里一律直接跳终态,和导出对不上;装上之后预览与导出的差异回到抗锯齿水平。
  */
-function patchAnimate(): void {
+export function patchAnimate(): void {
+  const w = window as Window & { __pcAnimatePatched?: boolean };
+  if (w.__pcAnimatePatched) return;
+  w.__pcAnimatePatched = true;
   const realAnimate = Element.prototype.animate;
   Element.prototype.animate = function (
     this: Element,
