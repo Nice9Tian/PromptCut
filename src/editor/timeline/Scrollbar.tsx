@@ -110,7 +110,17 @@ export function Scrollbar() {
   return (
     // 这条同时管平移和缩放，两端还各有一个把手，12px 高实在点不中。
     // 加到 22px：条身 16px，上下各留 3px 让它不贴着轨道和窗口边。
-    <div className="shrink-0 h-[22px] bg-neutral-950 flex items-center" style={{ paddingLeft: headerW }}>
+    <div className="shrink-0 h-[22px] bg-neutral-950 flex items-center">
+      {/*
+        左边这一格不是留白,是把序列栏补到时间轴最底部。
+        原来这里只是 paddingLeft: headerW,于是序列栏的右分隔线到滚动区底部就断了,
+        看着像那一栏没接到底。这里用同样的宽度和同样的右边框把它接上去。
+      */}
+      <div
+        className="shrink-0 self-stretch border-r border-neutral-800"
+        style={{ width: headerW }}
+        aria-hidden="true"
+      />
       <div
         ref={trackRef}
         className="flex-1 relative mx-1 h-4 bg-neutral-900 rounded-full cursor-pointer"

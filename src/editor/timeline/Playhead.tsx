@@ -22,7 +22,10 @@ export function Playhead({ top = 0 }: { top?: number }) {
   return (
     <div
       data-pc="playhead"
-      className="absolute bottom-0 z-40 flex justify-center cursor-ew-resize w-[11px] touch-none"
+      // z 必须低于左侧序列栏(那一栏是 sticky z-30)。原来是 z-40,横向滚动时
+      // 播放头会画到贴住左边的序列栏上面去,红线和时间气泡直接穿过行头。
+      // z-20 仍然高于轨道行(auto),也因为在 DOM 里排在标尺之后而盖得住标尺。
+      className="absolute bottom-0 z-20 flex justify-center cursor-ew-resize w-[11px] touch-none"
       style={{ left: `${xOfTime(t, pxPerSec)}px`, top, transform: "translateX(-50%)" }}
       onPointerDown={(e) => startScrub(e, { jumpToPointer: false })}
       title="拖动 = 移动播放头(按 Alt 不吸附)"
