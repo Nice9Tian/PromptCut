@@ -18,8 +18,9 @@ import path from "node:path";
 const fileUrl = (p) => "file:///" + String(p).replace(/\\/g, "/");
 
 /** 三家 CLI 都是在任务目录里起的,路径用绝对的,别指望 cwd */
-export function skillBody({ jobDir, root, port, provider }) {
-  const toolCli = path.join(root, "scripts", "pc-tool.mjs");
+export function skillBody({ jobDir, port, provider }) {
+  // 用任务目录里自己那份:目录在仓库外,引用仓库里的脚本会被 agent 的沙箱挡掉
+  const toolCli = path.join(jobDir, "tools", "pc-tool.mjs");
   const proc = path.join(jobDir, "project.proc");
   const mcpNote = provider === "claude"
     ? `这个目录里的 .mcp.json 已经把 \`promptcut\` MCP 服务指向了这个实例(端口 ${port})。第一次会问你要不要信任这个项目的 MCP 配置,选允许。**优先用 MCP 工具**(名字形如 \`mcp__promptcut__get_project\`)。`
@@ -36,9 +37,8 @@ export function skillBody({ jobDir, root, port, provider }) {
 ${jobDir}
 \`\`\`
 
-下面说「这个目录」都指它。**你的 cwd 可能不在这里**(桌面 app 有时开在仓库根目录),
-所有路径都按上面这个绝对路径来,不要去别处找 —— 仓库里可能还有别的历史任务目录,
-那些不是你的,不要动。
+这是一个**独立目录**,里面只有这次任务要用的东西,和 PromptCut 的源码没有关系
+(桌面 app 的工作区就是它)。下面说「这个目录」都指它,所有路径按上面这个绝对路径来。
 
 ## 这个目录
 
@@ -47,7 +47,8 @@ ${jobDir}
 | \`project.proc\` | **你的工作副本**。你通过工具改项目,改动会在 1 秒内自动写回这个文件。不要用编辑器直接手改它 —— 实例会用自己的状态覆盖回去 |
 | \`base.proc\` | 启动时的快照,用户那边合并时当基线。**不要动** |
 | \`instance.json\` | 实例的端口和写回状态,\`pc-tool.mjs save\` 读它 |
-| \`media/\` 或项目里的 \`out/media/\` | 素材已经就位,\`list_media\` 能看到 |
+| \`tools/\` | 调工具用的脚本。自包含,不依赖 PromptCut 源码 |
+| 素材 | 已经在实例里就位,\`list_media\` 看得到 |
 
 ## 怎么调工具
 
@@ -65,6 +66,12 @@ node "${toolCli}" save                       # 等写回完成,打印 project.pr
 
 带画面的工具(\`see_preview\`)返回里的 \`previewImage\` 是一张 png 的路径,看图请读那个文件。
 
+## 开工第一件事(必做)
+
+先调一次 \`get_project\`,把**项目名**和**每条序列上有几张卡**报出来。这一步是在证明
+「我确实连上了那个无头实例」—— 光读文件不算,必须真调到工具。连不上就照报错排查,
+别接着往下做。
+
 ## 推荐流程
 
 1. \`get_project\` 看整体结构,\`list_media\` 看素材,\`list_cuts\` 看有几条剪辑;
@@ -75,7 +82,7 @@ node "${toolCli}" save                       # 等写回完成,打印 project.pr
 
 ## 边界
 
-- 只改这个目录和 \`out/\` 下的导出产物。**不要**碰 PromptCut 的源码、不要动别的端口上的实例(5190 / 5210 是用户正在用的)。
+- 只改这个目录里的东西。**不要**去找 PromptCut 的源码,也不要动别的端口上的实例(5190 / 5210 是用户正在用的)。
 - 不要修改 \`base.proc\`。
 - 不确定用户想要什么就先问,别猜着做一大堆。
 
@@ -117,13 +124,14 @@ export function agentsMd(ctx) {
 }
 
 /** Claude Code 项目级 MCP 配置 */
-export function mcpJson({ root, port }) {
+export function mcpJson({ jobDir, port }) {
   return JSON.stringify(
     {
       mcpServers: {
         promptcut: {
           command: process.execPath,
-          args: [path.join(root, "server", "mcp-server.mjs")],
+          // 任务目录里自己那份,不依赖仓库
+          args: [path.join(jobDir, "tools", "mcp-server.mjs")],
           env: { PROMPTCUT_PORT: String(port) },
         },
       },

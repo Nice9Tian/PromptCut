@@ -46,15 +46,26 @@ const log = (msg) => {
   process.stdout.write(line);
 };
 
-function freePort() {
+/**
+ * 挑一个空闲端口,**必须避开「坏端口」黑名单**。
+ *
+ * 原来用 listen(0) 让系统随便给,结果给到过 6000(X11)—— 那一整趟就废了:
+ * Node 的 fetch(undici)按 WHATWG 规范直接拒绝这些端口,报 `bad port`,连都不连;
+ * Chrome 也有同一份黑名单(ERR_UNSAFE_PORT),就算 Node 放行,puppeteer 那步也打不开页面。
+ * 黑名单里最大的是 10080,所以直接从 20000 以上随机挑,按构造就绕开了整份名单。
+ */
+function freePort(tries = 50) {
+  const pick = () => 20000 + Math.floor(Math.random() * 40000);
   return new Promise((resolve, reject) => {
-    const srv = net.createServer();
-    srv.unref();
-    srv.on("error", reject);
-    srv.listen(0, "127.0.0.1", () => {
-      const { port } = srv.address();
-      srv.close(() => resolve(port));
-    });
+    const attempt = (left) => {
+      if (left <= 0) return reject(new Error("找不到空闲端口"));
+      const port = pick();
+      const srv = net.createServer();
+      srv.unref();
+      srv.on("error", () => attempt(left - 1));
+      srv.listen(port, "127.0.0.1", () => srv.close(() => resolve(port)));
+    };
+    attempt(tries);
   });
 }
 

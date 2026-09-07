@@ -36,8 +36,8 @@ interface Job {
 }
 
 const PROVIDERS: { id: Provider; name: string; desc: string }[] = [
-  { id: "claude", name: "Claude Code", desc: "打开 Claude 桌面版的 Code 标签,新对话直接落在任务目录,输入框里预填好 /promptcut,按回车即可" },
-  { id: "codex", name: "Codex", desc: "用 codex app 打开任务目录,再开一条新线程,输入框里预填好指令,按回车即可;流程写在 AGENTS.md 里" },
+  { id: "claude", name: "Claude Code", desc: "新建一个独立任务目录,Claude 桌面版的新对话直接落在那儿,预填好 /promptcut 自动发送" },
+  { id: "codex", name: "Codex", desc: "新建一个独立任务目录,把 Codex 冷启动到那儿(会先关掉现有窗口),再开一条新线程;流程写在 AGENTS.md 里" },
 ];
 
 const STEPS: { phase: Phase; label: string }[] = [
@@ -69,8 +69,6 @@ export function SkillDialog(props: { open: boolean; onClose: () => void }): JSX.
   const { open, onClose } = props;
   const dirty = useStore((s) => s.dirty);
   const [provider, setProvider] = useState<Provider>("claude");
-  /** Codex 只在冷启动时定工作区,想让它开在任务目录就得先关掉它 */
-  const [freshWindow, setFreshWindow] = useState(false);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [current, setCurrent] = useState<string | null>(null);
   const [busy, setBusy] = useState("");
@@ -133,7 +131,7 @@ export function SkillDialog(props: { open: boolean; onClose: () => void }): JSX.
       const data = await api<{ job: Job }>("/api/skill/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ provider, proc: serializeProc(), name: currentProjectName(), freshWindow: provider === "codex" && freshWindow }),
+        body: JSON.stringify({ provider, proc: serializeProc(), name: currentProjectName() }),
       });
       setCurrent(data.job.id);
     });
@@ -174,8 +172,9 @@ export function SkillDialog(props: { open: boolean; onClose: () => void }): JSX.
         <div id="pc-dialog-title-skill" className="pc-dialog-title">Skill 模式</div>
 
         <div className="pc-skill-intro">
-          把当前项目交给桌面版的 AI 编程助手去改。它拿到的是一份<b>独立副本</b>,跑在另一份看不见的 PromptCut 里,
-          不会动你正在编辑的这份;改完把结果链接交回来,你再决定合不合进来。
+          把当前项目交给桌面版的 AI 编程助手去改。开始时会新建一个<b>独立的任务目录</b>(在软件的数据目录下,
+          不在源码里),项目副本、工具、说明都在里面;它跑在另一份看不见的 PromptCut 上,不会动你正在编辑的这份。
+          改完把结果链接交回来,你再决定合不合进来。
         </div>
 
         <div className="pc-skill-providers">
@@ -194,10 +193,10 @@ export function SkillDialog(props: { open: boolean; onClose: () => void }): JSX.
         </div>
 
         {provider === "codex" && (
-          <label className="pc-skill-check" title="Codex 只在冷启动时决定工作区。不勾也能用——任务目录就在仓库里面,读得到">
-            <input type="checkbox" checked={freshWindow} onChange={(e) => setFreshWindow(e.target.checked)} disabled={busy !== ""} />
-            <span>先重开 Codex,让工作区就是任务目录(会关掉你现在开着的 Codex 窗口)</span>
-          </label>
+          <div className="pc-skill-check">
+            Codex 只在冷启动时决定工作区,所以开始时会**先温和关掉现在开着的 Codex 窗口**,
+            再让它冷启动到新建的任务目录。
+          </div>
         )}
 
         <div className="pc-skill-actions">

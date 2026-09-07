@@ -77,9 +77,19 @@ function parseArgs(raw) {
   }
 }
 
+/**
+ * 工具清单从哪儿读。
+ *
+ * 先看自己旁边有没有一份 —— Skill 任务目录会把这个脚本连同 mcp-tools.mjs 一起复制到
+ * <任务目录>/tools/ 下,那个目录在仓库外面,agent 的沙箱够不到仓库。找不到再回落到
+ * 仓库里的 server/mcp-tools.mjs(从仓库直接跑这个脚本时走这条)。
+ */
 async function loadTools() {
-  const { tools } = await import(path.join(ROOT, "server", "mcp-tools.mjs").replace(/\\/g, "/").replace(/^([A-Za-z]):/, "file:///$1:"));
-  return tools;
+  const url = (p) => p.replace(/\\/g, "/").replace(/^([A-Za-z]):/, "file:///$1:");
+  for (const candidate of [path.join(__dirname, "mcp-tools.mjs"), path.join(ROOT, "server", "mcp-tools.mjs")]) {
+    if (fs.existsSync(candidate)) return (await import(url(candidate))).tools;
+  }
+  fail("找不到 mcp-tools.mjs(既不在脚本旁边,也不在仓库的 server/ 下)");
 }
 
 const cmd = positional[0];

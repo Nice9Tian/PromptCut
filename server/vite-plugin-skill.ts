@@ -2,6 +2,7 @@ import type { Plugin, ViteDevServer } from "vite";
 import type { ServerResponse, IncomingMessage } from "node:http";
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import { spawn } from "node:child_process";
 
 /**
@@ -31,8 +32,6 @@ interface JobMeta {
   error?: string;
   /** 只起实例、不拉桌面 app(自检和排错用) */
   noLaunch?: boolean;
-  /** Codex 专用:先关掉再冷启动,让工作区就是任务目录 */
-  freshWindow?: boolean;
   /** 最近一次拉起桌面 app 的方式,给对话框显示和排错 */
   launch?: { kind: string; detail: string; at: string; autoSend?: AutoSend };
 }
@@ -77,10 +76,49 @@ function readBody(req: IncomingMessage, limit = 64 * 1024 * 1024): Promise<strin
 
 const ID_RE = /^[A-Za-z0-9_-]{1,80}$/;
 
-function jobsRoot(root: string) {
-  const dir = path.join(root, ".pc-work", "skill");
-  fs.mkdirSync(dir, { recursive: true });
-  return dir;
+/**
+ * 任务目录放哪儿:**仓库外面**,而且**不能放 %LOCALAPPDATA%**。
+ *
+ * 放仓库外的理由:原来在 <仓库>/.pc-work/skill/ 下,Codex 的工作区标签写着仓库名,
+ * 看着就像「它在改我的源码」;而且 agent 的工作区里躺着整个代码库,它随时可能翻进去。
+ * 搬出来之后一个任务目录就是一个干净的独立项目,里面只有这次任务要用的东西。
+ *
+ * 不放 %LOCALAPPDATA% 的理由(踩过):PromptCut 有可能跑在一个 MSIX 打包容器里
+ * (比如从 Claude 桌面版的终端起的 dev server)。那种情况下对 %LOCALAPPDATA% 的写入会被
+ * 重定向进 Packages\<包名>\LocalCache\,**容器外的程序完全看不见** —— Codex 会报
+ * 「这个目录不存在」。Documents 不在虚拟化范围内,两边看到的是同一个真实路径。
+ * 顺带用户自己也能直接打开这个文件夹看结果。
+ *
+ * 目录不在仓库里,agent 也就够不到仓库里的 pc-tool.mjs / mcp-server.mjs ——
+ * 所以下面 copyTools() 把它们复制进来,任务目录彻底自包含。
+ */
+function jobsRoot(_root: string) {
+  const base = process.env.PROMPTCUT_SKILL_DIR
+    || path.join(os.homedir(), "Documents", "PromptCut-Skill");
+  fs.mkdirSync(base, { recursive: true });
+  return base;
+}
+
+/**
+ * 把 agent 要用的工具复制进任务目录的 tools/。
+ *
+ * 任务目录在仓库外,agent 的沙箱只覆盖它自己的工作区 —— 引用仓库里的脚本会被挡。
+ * 这四个文件是一个干净闭包:mcp-server → mcp-tools + card-params-schema(两个都没有
+ * 别的依赖),pc-tool → mcp-tools。复制过来之后这个目录不依赖仓库也能跑。
+ */
+function copyTools(root: string, dir: string): string {
+  const out = path.join(dir, "tools");
+  fs.mkdirSync(out, { recursive: true });
+  const files: [string, string][] = [
+    [path.join(root, "scripts", "pc-tool.mjs"), "pc-tool.mjs"],
+    [path.join(root, "server", "mcp-server.mjs"), "mcp-server.mjs"],
+    [path.join(root, "server", "mcp-tools.mjs"), "mcp-tools.mjs"],
+    [path.join(root, "server", "card-params-schema.mjs"), "card-params-schema.mjs"],
+  ];
+  for (const [src, name] of files) {
+    try { fs.copyFileSync(src, path.join(out, name)); } catch { /* 缺一个不该让整个任务起不来 */ }
+  }
+  return out;
 }
 
 function readJsonSafe<T>(file: string): T | null {
@@ -246,7 +284,7 @@ async function closeCodexApp(dir: string): Promise<boolean> {
  *   agent 的 cwd 天然正确、AGENTS.md 自动被读到。代价是会关掉用户现有的 Codex 窗口,
  *   所以默认不开 —— 任务目录本来就在仓库里面,工作区停在仓库根目录也读得到。
  */
-async function launchDesktop(provider: Provider, dir: string, freshWindow = false): Promise<{ kind: string; detail: string; autoSend: AutoSend }> {
+async function launchDesktop(provider: Provider, dir: string, freshWindow = true): Promise<{ kind: string; detail: string; autoSend: AutoSend }> {
   if (provider === "claude") {
     const url = `claude://code/new?folder=${encodeURIComponent(dir)}&q=${encodeURIComponent("/promptcut")}`;
     openUrl(url);
@@ -268,10 +306,15 @@ async function launchDesktop(provider: Provider, dir: string, freshWindow = fals
   const prompt = [
     `读 ${slash}/AGENTS.md,按它的流程操作这个目录:`,
     slash,
-    "先确认能连上里面 instance.json 写的那个无头 PromptCut 实例,再等我说要做什么。",
+    "按 AGENTS.md 里的办法调一次 get_project,把项目名和每条序列的卡片数报给我,确认环境通了,然后等我说要做什么。",
   ].join("\n");
   const url = `codex://threads/new?prompt=${encodeURIComponent(prompt)}`;
-  // 想要工作区就是任务目录,只能先关掉它再冷启动(见上面 freshWindow 的说明)
+  /*
+   * Codex 必须冷启动到任务目录。
+   *
+   * 任务目录现在在仓库外面,复用一个工作区停在别处的窗口,agent 连 AGENTS.md 都读不到
+   * (沙箱只覆盖工作区)。而 Codex 只在冷启动时定工作区 —— 所以先温和关掉它。
+   */
   const closed = freshWindow ? await closeCodexApp(dir) : false;
   if (process.platform === "win32") {
     // 不能加 detached:Windows 上它会给子进程开一个新控制台,和 windowsHide 打架,
@@ -398,7 +441,7 @@ export function skillPlugin(): Plugin {
           } else {
             // 先标 ready 再去拉 app:拉起 + 自动回车要等十几秒,对话框不该一直显示「拉起中」
             update({ phase: "ready" });
-            const launch = await launchDesktop(meta.provider, dir, meta.freshWindow);
+            const launch = await launchDesktop(meta.provider, dir);
             update({ launch: { ...launch, at: new Date().toISOString() } });
           }
         } catch (e) {
@@ -427,6 +470,7 @@ export function skillPlugin(): Plugin {
             fs.mkdirSync(dir, { recursive: true });
             fs.writeFileSync(path.join(dir, "base.proc"), proc, "utf8");
             fs.writeFileSync(path.join(dir, "project.proc"), proc, "utf8");
+            copyTools(root, dir);
             const meta: JobMeta = {
               id,
               provider,
@@ -434,7 +478,6 @@ export function skillPlugin(): Plugin {
               createdAt: new Date().toISOString(),
               phase: "snapshot",
               noLaunch: body.noLaunch === true,
-              freshWindow: body.freshWindow === true,
             };
             writeMeta(dir, meta);
             void boot(id, meta);
@@ -486,7 +529,7 @@ export function skillPlugin(): Plugin {
             if (action === "relaunch" && req.method === "POST") {
               if (!job.alive) return sendJson(res, 400, { ok: false, error: "实例已经停了,重新开一个任务吧" });
               // 不等它:拉起 + 自动回车要十几秒,结果写进 job.json 由前端轮询
-              void launchDesktop(job.provider, dir, job.freshWindow).then((launch) => {
+              void launchDesktop(job.provider, dir).then((launch) => {
                 const meta = readJsonSafe<JobMeta>(path.join(dir, "job.json"));
                 if (meta) writeMeta(dir, { ...meta, launch: { ...launch, at: new Date().toISOString() } });
               });
