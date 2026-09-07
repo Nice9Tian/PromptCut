@@ -55,6 +55,9 @@ export interface EditorApi {
   fillCaptions(args: { clipId?: string; mediaId?: string; showEn?: boolean }): any;
   importMedia(args: { url?: string; name?: string }): Promise<any>;
   createCard(args: { id: string; source: string; overwrite?: boolean }): Promise<any>;
+  getCardSource(args: { cardId: string }): Promise<any>;
+  editCard(args: { cardId: string; find: string; replace: string; replaceAll?: boolean }): Promise<any>;
+  seePreview(args: { t?: number; clipId?: string }): Promise<any>;
   cardAuthoringGuide(): Promise<any>;
 }
 
@@ -129,6 +132,9 @@ export function connectMcpExecutor(getApi: () => EditorApi, onStatus?: (s: { con
           else if (tool === "fill_captions") result = api.fillCaptions(args);
           else if (tool === "import_media") result = await api.importMedia(args);
           else if (tool === "create_card") result = await api.createCard(args);
+          else if (tool === "get_card_source") result = await api.getCardSource(args);
+          else if (tool === "edit_card") result = await api.editCard(args);
+          else if (tool === "see_preview") result = await api.seePreview(args);
           else if (tool === "card_authoring_guide") result = await api.cardAuthoringGuide();
           else throw new Error(`未知工具: ${tool}`);
         } catch (err: unknown) {

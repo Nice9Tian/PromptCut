@@ -142,14 +142,18 @@ export default function vitePluginAi(): Plugin {
         }
 
         const id = nextCallId++;
+        // 大多数工具是即时的,慢活儿都返回 jobId 让调用方轮询,所以 60 秒够用。
+        // 例外是 see_preview:它当场起一个 Chrome 渲一帧,冷启动加素材预热可能过分钟。
+        // 让工具自己声明上限,而不是把所有工具一起放宽 —— 真卡住的时候还是该早点报错。
+        const limit = toolDef.timeoutMs || 60000;
         const p = new Promise<any>(resolve => {
           pendingCalls.set(id, resolve);
           setTimeout(() => {
             if (pendingCalls.has(id)) {
               pendingCalls.delete(id);
-              resolve({ ok: false, error: 'Timeout' });
+              resolve({ ok: false, error: `${tool} 超过 ${Math.round(limit / 1000)} 秒没有返回,已放弃等待。` });
             }
-          }, 60000);
+          }, limit);
         });
 
         editorRes.write(`data: ${JSON.stringify({ type: 'call', id, tool, args })}\n\n`);

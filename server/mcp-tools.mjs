@@ -313,14 +313,53 @@ export const tools = [
     side: "browser"
   },
   {
+    name: "get_card_source",
+    description: "读回一张自己建的卡的当前源码（只对 create_card 建出来的用户卡有效；内置卡没有可读源码，调整内置卡请改参数）。**要改已有的卡之前必须先调它**：不读回来就改，等于凭记忆重写整张卡，没提到的地方每改一轮就会漂一点。",
+    inputSchema: {
+      type: "object",
+      properties: { cardId: { type: "string", description: "卡片 id" } },
+      required: ["cardId"]
+    },
+    side: "browser"
+  },
+  {
+    name: "edit_card",
+    description: "改一张自己建的卡：把源码里的 find 这一段替换成 replace，只动这一处，别的地方原样不变。**这是修改已有卡片的唯一正确方式**，不要用 create_card + overwrite 整篇重写。用法：先 get_card_source 读回源码，照着它原样复制要改的那几行当 find（缩进空格都要一致），写上改完的样子当 replace。find 必须在源码里唯一命中：命中 0 次说明你手上的版本旧了，命中多次就把 find 写长一点带上周围几行。落盘前会跑和建卡一样的校验。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        cardId: { type: "string" },
+        find: { type: "string", description: "要被替换掉的原文，逐字照抄源码" },
+        replace: { type: "string", description: "替换成的新内容" },
+        replaceAll: { type: "boolean", description: "find 有意匹配多处且都要改时传 true" }
+      },
+      required: ["cardId", "find", "replace"]
+    },
+    side: "browser"
+  },
+  {
+    name: "see_preview",
+    description: "看画面：把时间轴某一刻渲染成图片交回来，用的就是导出那条渲染管线，所以看到的即导出所得。不传参数看整个预览画面（默认播放头所在时刻，也可以用 t 指定第几秒）；传 clipId 则只渲染那一张卡、其余轨道全部不画，用来分辨「这张卡自己不对」还是「被上面别的卡盖住了」（不同时传 t 的话取该片段的中点，避开进出场动画的中间态）。**改完卡片的样式后应当看一眼再下结论**，不要凭源码想象效果。每次要起一个渲染进程，大约几秒到十几秒，别连着刷。画面是叠在深色底上的。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        t: { type: "number", description: "时间轴第几秒；不传就用当前播放头" },
+        clipId: { type: "string", description: "只看这一个片段的画面" }
+      }
+    },
+    side: "browser",
+    // 当场起一个 Chrome 渲一帧,冷启动 + 素材预热可能过分钟,60 秒的默认上限不够
+    timeoutMs: 150000
+  },
+  {
     name: "create_card",
-    description: "新建一张动效卡片，源码写入 src/cards/user/<id>.tsx，热更新后自动注册，list_cards 立刻可见。只在现有卡片都满足不了需求时才建新卡——先用 list_cards 确认没有能用的。调用前必须先调 card_authoring_guide 看规则。落盘前会校验 id、CardDef 结构、禁用 API 和语法，不合格直接报错并说明原因。",
+    description: "新建一张动效卡片，源码写入 src/cards/user/<id>.tsx，热更新后自动注册，list_cards 立刻可见。只在现有卡片都满足不了需求时才建新卡——先用 list_cards 确认没有能用的。调用前必须先调 card_authoring_guide 看规则。落盘前会校验 id、CardDef 结构、禁用 API 和语法，不合格直接报错并说明原因。**只用来建新卡**：想改一张已经建好的卡，用 get_card_source + edit_card，不要用 overwrite 整篇重写。",
     inputSchema: {
       type: "object",
       properties: {
         id: { type: "string", description: "小写 kebab-case，全局唯一，例如 price-tag" },
         source: { type: "string", description: "完整的 .tsx 源码，必须含 `export const xxx: CardDef<Params> = {...}`" },
-        overwrite: { type: "boolean", description: "改写自己之前建的同名卡时传 true" }
+        overwrite: { type: "boolean", description: "只在确实要把同名卡整篇换掉时传 true；改细节请用 edit_card" }
       },
       required: ["id", "source"]
     },

@@ -394,6 +394,48 @@ export function RightPanel() {
         if (!res.ok || !data.ok) throw new Error(data.error || `建卡失败(HTTP ${res.status})`);
         return data;
       },
+      /**
+       * 读回自己建的卡的当前源码。改卡的第一步 —— 不读回来就改,等于凭记忆重写。
+       */
+      getCardSource: async (args) => {
+        const res = await fetch(`/api/cards/source?id=${encodeURIComponent(args.cardId)}`);
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.ok) throw new Error(data.error || `读不到卡片源码(HTTP ${res.status})`);
+        return data;
+      },
+      /** 局部替换式改卡。整篇重写交给 createCard,那条路只该走一次(建卡)。 */
+      editCard: async (args) => {
+        const res = await fetch("/api/cards/edit", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: args.cardId, find: args.find, replace: args.replace, replaceAll: args.replaceAll === true }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.ok) throw new Error(data.error || `改卡失败(HTTP ${res.status})`);
+        return data;
+      },
+      /**
+       * 把画面渲染成图交给模型看。
+       *
+       * project 是从这里带过去的,不是让服务端自己去读:时间轴的真身在浏览器 store 里,
+       * 服务端手上那份(上次保存的)可能已经是旧的 —— 让模型看一张过时的画面,比不给它看更糟。
+       */
+      seePreview: async (args) => {
+        const state = getState();
+        const t = typeof args?.t === "number" ? args.t : undefined;
+        const res = await fetch("/api/vision/snapshot", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            project: state.project,
+            t: t ?? (args?.clipId ? undefined : state.t),
+            clipId: args?.clipId,
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.ok) throw new Error(data.error || `渲染画面失败(HTTP ${res.status})`);
+        return data;
+      },
       cardAuthoringGuide: async () => {
         const res = await fetch("/api/cards/guide");
         if (!res.ok) throw new Error(`拿不到建卡指南(HTTP ${res.status})`);
