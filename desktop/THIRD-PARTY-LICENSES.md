@@ -282,6 +282,18 @@ https://www.gyan.dev/ffmpeg/builds/#release-builds （选择对应版本的 sour
 
 ---
 
+## 10. vendor 进仓库的第三方源码
+
+不是 npm 依赖，是直接复制进仓库的源码。每个文件头各有来源注释，这里是中央清单。
+
+| 内容 | 位置 | 来源 | 许可证 |
+|---|---|---|---|
+| Magic UI 组件：number-ticker、blur-fade、animated-circular-progress-bar、typing-animation、word-rotate | `src/cards/magicui/vendor/*.tsx` | https://github.com/magicuidesign/magicui | MIT |
+| Magic UI 动画样式（22 组 `@keyframes` 与同名 class，抠自 `apps/www/styles/globals.css`） | `src/cards/magicui/vendor/magicui-animations.css` | 同上 | MIT |
+| `cn.ts`（自写的极简替代，不是 shadcn 那份） | `src/cards/magicui/vendor/cn.ts` | 本项目 | — |
+
+`create_card` 的审查门要求每一张搬进来的卡在文件头声明来源和许可证，并拒绝 Commons Clause / Hippocratic / 专有 / GSAP。经它导入的卡落在 `src/cards/user/`，随安装包分发前把它们补进这张表。
+
 ## 分发前检查清单
 
 - [ ] 运行 `cargo deny check licenses` 确认 Rust 依赖许可证兼容
