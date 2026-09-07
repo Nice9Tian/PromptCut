@@ -16,7 +16,7 @@ import sys
 from typing import Any, Dict, List, Optional
 
 # 复用听写那套 JSONL：Windows 控制台的 UTF-8 和换行处理有坑，只想维护一份。
-from promptcut_stt.jsonl import emit, emit_error, emit_log
+from promptcut_stt.jsonl import emit, emit_error, emit_log, warn
 
 from . import __version__
 from .tracker import MODEL_FILENAME
@@ -137,8 +137,14 @@ def cmd_install(_args: argparse.Namespace) -> int:
         return 1
 
     info = probe(paths)
-    emit({"event": "installed", **info})
-    return 0 if info["ready"] else 1
+    needs_model = not info["model"]["exists"]
+    if needs_model:
+        warn(f"依赖装好了，但还缺模型文件 {info['model']['path']}；它由拓展库包提供。")
+    emit({"event": "installed", "needsModel": needs_model, **info})
+    # 同 promptcut_shots:退出码只说 pip 成没成。BootsTAPIR 的权重有 208 MB,
+    # 不在 requirements 里,只随拓展库包发。用 `0 if ready else 1` 的话,用户会
+    # 下完 190 MB 的 torch 再收到一句「进程退出码 1」,而依赖其实装好了。
+    return 0
 
 
 def _parse_points(raw: str) -> List[List[float]]:

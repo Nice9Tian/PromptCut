@@ -404,6 +404,8 @@ function ShotsCard(props: { status: ExtStatusView | null; onReload: () => void |
   const [running, setRunning] = useState(false);
   const [tail, setTail] = useState("");
   const [error, setError] = useState<string | null>(null);
+  /** 依赖装好了,只差模型文件 —— 得靠拓展库包补,不是在线装能解决的 */
+  const [needsPack, setNeedsPack] = useState(false);
 
   const install = () => {
     setRunning(true);
@@ -411,8 +413,12 @@ function ShotsCard(props: { status: ExtStatusView | null; onReload: () => void |
     setTail("");
     // 只留最后一行,理由同运动追踪那张卡
     void installShots((line) => setTail(line))
-      .then(({ ok, log }) => {
+      .then(({ ok, needsModel, log }) => {
+        // 「依赖装好了但还缺模型」不是失败:模型是我们自己转/官方下的权重,
+        // 不在 requirements 里,只随拓展库包发。报成红字会让人以为白装了,
+        // 而真正该说的是「去跑那个 .exe」。
         if (!ok) setError(log.filter((l) => l.startsWith("[error]")).slice(-1)[0] ?? "安装失败");
+        else if (needsModel) setNeedsPack(true);
         return onReload();
       })
       .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
@@ -443,6 +449,11 @@ function ShotsCard(props: { status: ExtStatusView | null; onReload: () => void |
           <span className="sp-muted">安装中…{tail ? ` ${tail}` : ""}</span>
         </div>
       )}
+      {needsPack && !error && (
+        <div className="sp-ext-error">
+          依赖已装好，还差模型文件。它随拓展库包分发，请运行 PromptCut-ext-shots-&lt;版本&gt;.exe
+        </div>
+      )}
       {error && <div className="sp-ext-error">{error}</div>}
     </ExtCard>
   );
@@ -454,6 +465,8 @@ function TrackCard(props: { status: ExtStatusView | null; onReload: () => void |
   const [running, setRunning] = useState(false);
   const [tail, setTail] = useState("");
   const [error, setError] = useState<string | null>(null);
+  /** 依赖装好了,只差模型文件 —— 得靠拓展库包补,不是在线装能解决的 */
+  const [needsPack, setNeedsPack] = useState(false);
 
   const install = () => {
     // 400 MB 走的是用户自己的网,开始之前先问一声 —— 点错了退不掉。
@@ -464,8 +477,12 @@ function TrackCard(props: { status: ExtStatusView | null; onReload: () => void |
     // 只留最后一行:pip 会刷几百行,开始页没有装日志面板的地方,
     // 有一行在动就够说明「还在跑」了。
     void installTrack((line) => setTail(line))
-      .then(({ ok, log }) => {
+      .then(({ ok, needsModel, log }) => {
+        // 「依赖装好了但还缺模型」不是失败:模型是我们自己转/官方下的权重,
+        // 不在 requirements 里,只随拓展库包发。报成红字会让人以为白装了,
+        // 而真正该说的是「去跑那个 .exe」。
         if (!ok) setError(log.filter((l) => l.startsWith("[error]")).slice(-1)[0] ?? "安装失败");
+        else if (needsModel) setNeedsPack(true);
         return onReload();
       })
       .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
@@ -494,6 +511,11 @@ function TrackCard(props: { status: ExtStatusView | null; onReload: () => void |
       {running && (
         <div className="sp-ext-progress">
           <span className="sp-muted">安装中…{tail ? ` ${tail}` : ""}</span>
+        </div>
+      )}
+      {needsPack && !error && (
+        <div className="sp-ext-error">
+          依赖已装好，还差 208 MB 的权重文件。它随拓展库包分发，请运行 PromptCut-ext-track-&lt;版本&gt;.exe
         </div>
       )}
       {error && <div className="sp-ext-error">{error}</div>}

@@ -122,7 +122,7 @@ export async function waitForTrack(
  */
 export async function installTrack(
   onLog?: (line: string) => void,
-): Promise<{ ok: boolean; log: string[] }> {
+): Promise<{ ok: boolean; needsModel: boolean; modelPath?: string; log: string[] }> {
   const res = await fetch("/api/track/install", { method: "POST" });
   if (!res.ok || !res.body) {
     const d = await res.json().catch(() => ({}));
@@ -130,17 +130,31 @@ export async function installTrack(
   }
   const log: string[] = [];
   let ok = true;
+  let needsModel = false;
+  let modelPath: string | undefined;
   await readSseStream(res.body, (ev) => {
     if (ev.event === "log") {
       const line = ev.line ?? ev.data ?? "";
       log.push(line);
       onLog?.(line);
+    } else if (ev.event === "installed") {
+      // 依赖装完了,但BootsTAPIR的权重不在 requirements 里,只随拓展库包发。
+      // 这不是失败,是「还差一步」,得和真正的安装失败分开报。
+      needsModel = !!ev.needsModel;
+      // SttEvent 里的 model 是听写的模型名(string),和这里的对象同名不同型,
+      // 就地窄化一下,不去动那个共用的事件类型
+      modelPath = (ev as unknown as { model?: { path?: string } }).model?.path;
     } else if (ev.event === "error") {
       ok = false;
+      // stderr 里才是有用的那句(pip 的真实报错、缺什么文件),message 往往只是
+      // 「进程退出码 N」。只取 message 的话,用户看到的永远是一句没法照着做的话。
       const msg = ev.message ?? "安装失败";
-      log.push("[error] " + msg);
-      onLog?.("[error] " + msg);
+      const detail = typeof ev.stderr === "string" ? ev.stderr.trim() : "";
+      const full = detail ? `${msg}
+${detail}` : msg;
+      log.push("[error] " + full);
+      onLog?.("[error] " + full);
     }
   });
-  return { ok, log };
+  return { ok, needsModel, modelPath, log };
 }

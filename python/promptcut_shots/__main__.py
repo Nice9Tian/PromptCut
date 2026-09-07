@@ -116,10 +116,18 @@ def cmd_install(_args: argparse.Namespace) -> int:
         return 1
 
     info = probe(env_paths())
-    if not info["model"]["exists"]:
+    needs_model = not info["model"]["exists"]
+    if needs_model:
         warn(f"依赖装好了，但还缺模型文件 {info['model']['path']}；它由拓展库包提供。")
-    emit({"event": "installed", **info})
-    return 0 if info["ready"] else 1
+    emit({"event": "installed", "needsModel": needs_model, **info})
+    # 退出码只反映**这一步**成没成:pip 装完了就是 0。
+    #
+    # 以前是 `0 if ready else 1`,而 ready 还要求模型文件在 —— 可模型是我们自己
+    # 从官方 TF 权重转出来的 ONNX,pip 根本抓不到,只随拓展库包分发。于是在线安装
+    # 这条路**注定**以退出码 1 收尾:依赖明明装好了,界面上却是一句「进程退出码 1」,
+    # 用户既不知道装到哪一步了,也不知道下一步该干什么。
+    # 到底能不能用由 status 回答,不该由 install 的退出码兼职。
+    return 0
 
 
 def cmd_detect(args: argparse.Namespace) -> int:
