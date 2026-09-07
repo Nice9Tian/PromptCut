@@ -5,6 +5,7 @@ import path from "node:path";
 import os from "node:os";
 import { spawn } from "node:child_process";
 import { createCodexTask } from "./codex-desktop";
+import { launchClaudeTask, openUrl, type AutoSend } from "./claude-desktop";
 
 /**
  * Skill 模式:把当前项目交给桌面版的 Claude Code / Codex 去改,改完再合回来。
@@ -34,11 +35,10 @@ interface JobMeta {
   /** 只起实例、不拉桌面 app(自检和排错用) */
   noLaunch?: boolean;
   /** 最近一次拉起桌面 app 的方式,给对话框显示和排错 */
-  launch?: { kind: string; detail: string; at: string; autoSend?: AutoSend; status?: "launching" | "ready" | "failed"; projectId?: string | null; workspaceMode?: "projectless"; threadId?: string; cwd?: string; initialState?: "dispatching" | "completed" };
+  launch?: { kind: string; detail: string; at: string; autoSend?: AutoSend; sessionId?: string; sessionCwd?: string; status?: "launching" | "ready" | "failed"; projectId?: string | null; workspaceMode?: "projectless"; threadId?: string; cwd?: string; initialState?: "dispatching" | "completed" };
 }
 
 /** 替用户按回车的结果:发了 / 桌面 app 没到前台没敢发 / 脚本出错 / 非 Windows 跳过 */
-type AutoSend = "sent" | "nofocus" | "error" | "skipped";
 
 interface Instance {
   ready?: boolean;
@@ -144,17 +144,6 @@ function writeMeta(dir: string, meta: JobMeta) {
   fs.writeFileSync(path.join(dir, "job.json"), JSON.stringify(meta, null, 2), "utf8");
 }
 
-/** 打开一个 URL 协议(claude:// codex://)。rundll32 不经过 cmd,不用操心引号 */
-function openUrl(url: string): Promise<void> {
-  const command = process.platform === "win32" ? "rundll32.exe" : process.platform === "darwin" ? "open" : "xdg-open";
-  const args = process.platform === "win32" ? ["url.dll,FileProtocolHandler", url] : [url];
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { stdio: "ignore", windowsHide: true });
-    const timer = setTimeout(() => { child.kill(); reject(new Error("打开桌面协议超时")); }, 15000);
-    child.on("error", error => { clearTimeout(timer); reject(error); });
-    child.on("exit", code => { clearTimeout(timer); code === 0 ? resolve() : reject(new Error(`打开桌面协议失败 (${code})`)); });
-  });
-}
 
 function revealDir(dir: string) {
   const opener = process.platform === "win32" ? "explorer.exe" : process.platform === "darwin" ? "open" : "xdg-open";
@@ -163,71 +152,6 @@ function revealDir(dir: string) {
   } catch {}
 }
 
-/** 跑一段 PowerShell(脚本落在任务目录里,不走 shell 引号),拿回 stdout */
-function runPs(dir: string, name: string, lines: string[]): Promise<string> {
-  // 内部脚本放 .pc/ 里:任务目录是给 agent 看的,ls 出来一堆 ps1 只会干扰它
-  const scriptDir = path.join(dir, ".pc");
-  fs.mkdirSync(scriptDir, { recursive: true });
-  const file = path.join(scriptDir, name);
-  fs.writeFileSync(file, lines.join("\r\n"), "utf8");
-  return new Promise((resolve) => {
-    let out = "";
-    // -WindowStyle Hidden 是必须的:光给 spawn 传 windowsHide,powershell.exe 照样会
-    // 闪一下黑窗(用户看得见)。两个一起给才干净。
-    const child = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass", "-File", file], {
-      windowsHide: true,
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-    child.stdout.on("data", (c) => (out += c));
-    child.on("error", () => resolve(""));
-    child.on("exit", () => resolve(out));
-  });
-}
-
-/**
- * 替用户按下那一下回车。
- *
- * 两家的深链都只把指令**预填**进输入框,不发送(实测)。用户要的是「打开就发出去,
- * agent 自己把环境配好」,所以拉起之后再补一下 Enter。
- *
- * 安全闸:先等前台窗口真的是那个桌面 app(最多 12 秒),不是就什么都不发 ——
- * 宁可让用户自己按,也不能往别的窗口里敲回车。Claude 的输入框预填斜杠命令时会
- * 弹补全菜单,第一下 Enter 是选中补全、第二下才发送;所以发两下,中间隔半秒。
- * 已经发出去的话,第二下落在空输入框上,没有副作用。
- *
- * 只做 Windows:桌面壳本来就只发 Windows 包。
- */
-async function autoPressEnter(dir: string, processMatch: string): Promise<AutoSend> {
-  if (process.platform !== "win32") return "skipped";
-  const out = await runPs(dir, "press-enter.ps1", [
-    "Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public class PcFg { [DllImport(\"user32.dll\")] public static extern IntPtr GetForegroundWindow(); [DllImport(\"user32.dll\")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid); }'",
-    "$deadline = (Get-Date).AddSeconds(12)",
-    "$ok = $false",
-    "while ((Get-Date) -lt $deadline) {",
-    "  $h = [PcFg]::GetForegroundWindow(); $procId = [uint32]0; [PcFg]::GetWindowThreadProcessId($h, [ref]$procId) | Out-Null",
-    "  $proc = Get-Process -Id $procId -ErrorAction SilentlyContinue",
-    "  if ($proc -and $proc.ProcessName -match '" + processMatch + "') { $ok = $true; break }",
-    "  Start-Sleep -Milliseconds 300",
-    "}",
-    "if (-not $ok) { Write-Output 'NOFOCUS'; exit 2 }",
-    "Start-Sleep -Milliseconds 1500",
-    "Add-Type -AssemblyName System.Windows.Forms",
-    "[System.Windows.Forms.SendKeys]::SendWait('{ENTER}')",
-    "Start-Sleep -Milliseconds 500",
-    "[System.Windows.Forms.SendKeys]::SendWait('{ENTER}')",
-    "Write-Output 'SENT'",
-  ]);
-  return out.includes("SENT") ? "sent" : out.includes("NOFOCUS") ? "nofocus" : "error";
-}
-
-/**
- * 桌面 app 的进程名(前台校验和等窗口都按它匹配,-match 不区分大小写)。
- *
- * Codex 那个坑:桌面版的进程叫 **ChatGPT** —— Codex 住在 ChatGPT 客户端里,不是独立 app。
- * 按 "codex" 匹配前台窗口永远匹配不上,自动回车会一直判成「没到前台」而不发。
- * codex 也留着:命令行那个进程叫 codex,以后真独立成 app 也认得出来。
- */
-const APP_PROCESS: Record<Provider, string> = { claude: "claude", codex: "chatgpt|codex" };
 
 type LaunchResult = Omit<NonNullable<JobMeta["launch"]>, "at">;
 const pendingLaunches = new Map<string, Promise<LaunchResult>>();
@@ -244,10 +168,8 @@ function launchDesktop(provider: Provider, dir: string): Promise<LaunchResult> {
 /** 创建无项目归属的独立线程，再打开已有线程深链。 */
 async function launchDesktopImpl(provider: Provider, dir: string): Promise<Omit<NonNullable<JobMeta["launch"]>, "at">> {
   if (provider === "claude") {
-    const url = `claude://code/new?folder=${encodeURIComponent(dir)}&q=${encodeURIComponent("/promptcut")}`;
-    await openUrl(url);
-    const autoSend = await autoPressEnter(dir, APP_PROCESS.claude);
-    return { kind: "claude-deeplink", detail: url, autoSend };
+    // 预写信任、开深链、等够再回车、拿归档核对 —— 都在 claude-desktop.ts 里,那里有踩坑记录
+    return launchClaudeTask(dir, "/promptcut");
   }
   /*
    * 提示词里必须写**绝对路径**,而且**必须用正斜杠**。
@@ -371,13 +293,19 @@ export function skillPlugin(): Plugin {
 
           update({ phase: "launching" });
           // 实例端口定了才能写 .mcp.json / 说明文件 —— 里面要带端口
-          const tpl = await import(new URL("./skill-templates.mjs", import.meta.url).href);
+          // 带上 mtime 当查询串:Node 的 ESM 缓存按 URL 记,不带的话模板改了要重启 dev server 才生效
+          // (vite 只会热重载插件本身,不会替我们清这个动态 import 的缓存)
+          const tplUrl = new URL("./skill-templates.mjs", import.meta.url);
+          tplUrl.searchParams.set("t", String(fs.statSync(tplUrl).mtimeMs));
+          const tpl = await import(tplUrl.href);
           const ctx = { jobDir: dir, root, port: inst.port!, provider: meta.provider, createdAt: meta.createdAt };
           fs.mkdirSync(path.join(dir, ".claude", "skills", "promptcut"), { recursive: true });
           fs.writeFileSync(path.join(dir, ".claude", "skills", "promptcut", "SKILL.md"), tpl.claudeSkillMd(ctx), "utf8");
           fs.writeFileSync(path.join(dir, "CLAUDE.md"), tpl.claudeMd(ctx), "utf8");
           fs.writeFileSync(path.join(dir, "AGENTS.md"), tpl.agentsMd(ctx), "utf8");
           fs.writeFileSync(path.join(dir, ".mcp.json"), tpl.mcpJson(ctx), "utf8");
+          // 工具权限预先放行:不然桌面版每调一个 MCP 工具都弹一次「Allow Claude to use …?」
+          fs.writeFileSync(path.join(dir, ".claude", "settings.json"), tpl.claudeSettingsJson(ctx), "utf8");
           fs.writeFileSync(path.join(dir, "README.md"), tpl.readmeMd(ctx), "utf8");
 
           if (meta.noLaunch) {

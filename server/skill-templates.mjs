@@ -8,6 +8,7 @@
  *   CLAUDE.md                      Claude Code 进目录就读
  *   .claude/skills/promptcut/SKILL.md   /promptcut 这个 skill
  *   .mcp.json                      Claude Code 的项目级 MCP 配置(指向这个实例的端口)
+ *   .claude/settings.json          Claude Code 的项目级设置:promptcut 的工具全部预先放行
  *   AGENTS.md                      Codex 进目录就读(内容和 SKILL.md 一样,只是入口不同)
  *
  * 收尾协议是最要紧的一段:agent 干完必须把 project.proc 的 file:// 链接放在最后一条回复里,
@@ -23,7 +24,7 @@ export function skillBody({ jobDir, port, provider }) {
   const toolCli = path.join(jobDir, "tools", "pc-tool.mjs");
   const proc = path.join(jobDir, "project.proc");
   const mcpNote = provider === "claude"
-    ? `这个目录里的 .mcp.json 已经把 \`promptcut\` MCP 服务指向了这个实例(端口 ${port})。第一次会问你要不要信任这个项目的 MCP 配置,选允许。**优先用 MCP 工具**(名字形如 \`mcp__promptcut__get_project\`)。`
+    ? `这个目录里的 .mcp.json 已经把 \`promptcut\` MCP 服务指向了这个实例(端口 ${port}),PromptCut 拉起你之前已经把它标成「已启用」;万一还是被问要不要信任这个目录 / 启用这个 MCP,都选允许。**优先用 MCP 工具**(名字形如 \`mcp__promptcut__get_project\`)。`
     : `Codex 桌面版这次会话**没有**接 MCP。请用下面的命令行调工具,效果一样。`;
 
   return `# PromptCut · Skill 模式
@@ -157,6 +158,22 @@ export function mcpJson({ jobDir, port }) {
     null,
     2,
   );
+}
+
+/**
+ * Claude Code 项目级设置:把 promptcut 这个 MCP 服务的所有工具预先放行。
+ *
+ * 实测走到这一步时,技能解析了、MCP 也接上了,但每调一个 MCP 工具都要弹一次
+ * 「Allow Claude to use get project (promptcut)?」—— 用户一走开流程就停。
+ * `mcp__promptcut` 这一条规则匹配这个服务下的全部工具(Claude Code 的规则语法),放行的只是
+ * 打到这个无头实例的调用,碰不到别的东西。
+ *
+ * 注意:**Claude 桌面版不读这份文件**(它起会话时只加载用户级设置),桌面版那条路的放行
+ * 写在 ~/.claude/settings.json 里,见 claude-desktop.ts 的 allowMcpInUserSettings。这份留着是
+ * 给用命令行 `claude` 进这个目录的人用的 —— 命令行会读项目级设置。
+ */
+export function claudeSettingsJson() {
+  return JSON.stringify({ permissions: { allow: ["mcp__promptcut"] } }, null, 2);
 }
 
 /** 给人看的 README */

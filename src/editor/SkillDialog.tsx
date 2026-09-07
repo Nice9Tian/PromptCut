@@ -32,7 +32,7 @@ interface Job {
   instanceError: string | null;
   procUpdatedAt: string | null;
   procUrl: string;
-  launch?: { kind: string; detail: string; at: string; status?: "launching" | "ready" | "failed"; autoSend?: "sent" | "nofocus" | "error" | "skipped" };
+  launch?: { kind: string; detail: string; at: string; status?: "launching" | "ready" | "failed"; autoSend?: "sent" | "nofocus" | "error" | "skipped"; sessionId?: string; sessionCwd?: string };
 }
 
 const PROVIDERS: { id: Provider; name: string; desc: string }[] = [
@@ -219,6 +219,10 @@ export function SkillDialog(props: { open: boolean; onClose: () => void }): JSX.
               {job.phase === "failed" && <div className="pc-skill-step is-failed">失败:{job.error}</div>}
               {job.phase === "ready" && !job.launch && <div className="pc-skill-step is-active">正在拉起桌面 app 并替你按回车…</div>}
               {job.launch?.status !== "failed" && job.launch?.autoSend === "sent" && <div className="pc-skill-step is-done">指令已自动发送,agent 在配环境;配好后直接告诉它要做什么</div>}
+              {/* Claude 那条路会拿桌面版的会话归档核对一遍:落在任务目录里才算数,没核对到就照实说 */}
+              {job.launch?.kind === "claude-deeplink" && job.launch.autoSend === "sent" && job.launch.status !== "failed" && (
+                <div className={`pc-skill-step ${job.launch.sessionId ? "is-done" : "is-active"}`}>{job.launch.detail}</div>
+              )}
               {job.launch?.autoSend === "nofocus" && (
                 <div className="pc-skill-step is-active">桌面 app 的窗口没到前台,指令留在输入框里 —— 切过去按一下回车就行</div>
               )}
