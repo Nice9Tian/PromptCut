@@ -87,7 +87,7 @@ function pidAlive(pid: number): boolean {
  * 创建用 `open(path,'wx')` 而不是「先 existsSync 再写」—— 后者不是原子的,两个实例能同时
  * 通过检查然后都以为自己拿到了锁。wx 是原子的(实测 20 个进程并发抢,恰好 1 个赢)。
  */
-function acquireLock(procPath: string): { ok: boolean; error?: string; stolen?: boolean; by?: "kernel" | "pid" } {
+export function acquireLock(procPath: string, retriesLeft = 3): { ok: boolean; error?: string; stolen?: boolean; by?: "kernel" | "pid" } {
   const file = lockPathFor(procPath);
   const mine = JSON.stringify({ pid: process.pid, at: new Date().toISOString(), host: "promptcut" });
   try {
@@ -111,26 +111,62 @@ function acquireLock(procPath: string): { ok: boolean; error?: string; stolen?: 
       return { ok: false, error: `锁文件读不了:${(e as Error).message}` };
     }
 
-    // 没人握句柄,退到 pid 那条弱判据
-    const cur = JSON.parse(fs.readFileSync(file, "utf8")) as LockFile;
-    if (cur.pid === process.pid) return { ok: true };
-    if (pidAlive(cur.pid)) {
+    // 没人握句柄,退到 pid 那条弱判据。
+    // 读不出内容的锁文件当**无主**处理:0 字节的锁是真会出现的 —— Rust 那边探活时用
+    // 带 create 的方式开过它就会留下一个空文件。以前 JSON.parse 在这里抛出去,被最外层
+    // 那个「锁写不出来不该挡住打开项目」的兜底接住并返回 ok:true —— 于是谁都没真拿到锁,
+    // pid 这层防线对这个项目永久失效,还没有任何提示。
+    let cur: LockFile | null = null;
+    try {
+      const raw = fs.readFileSync(file, "utf8").trim();
+      const parsed = raw ? (JSON.parse(raw) as LockFile) : null;
+      if (parsed && typeof parsed.pid === "number") cur = parsed;
+    } catch { /* 内容非法 → 无主 */ }
+
+    if (cur && cur.pid === process.pid) return { ok: true };
+    if (cur && pidAlive(cur.pid)) {
       return { ok: false, by: "pid", error: `这个项目文件正被另一个 PromptCut 打开(进程 ${cur.pid},自 ${cur.at})` };
     }
-    // 上一个持有者已经不在了(崩溃 / 强杀),接管
-    fs.writeFileSync(file, mine, "utf8");
-    return { ok: true, stolen: true };
+
+    /*
+     * 上一个持有者已经不在了(崩溃 / 强杀),或者这压根是个空壳锁 —— 接管。
+     *
+     * **不能直接 writeFileSync 覆写**:从上面 readFileSync 判活到这一句是三步分离的,
+     * 两个实例能同时读到同一个死 pid、同时判定「可以接管」、然后双双覆写,各自都以为
+     * 自己独占 —— 于是两份 PromptCut 一起往同一个 .proc 上写,后写的整份盖掉先写的。
+     *
+     * 改成「删掉再回头重抢」:真正决定归属的还是开头那个原子的 wx,删除只是把跑道清空。
+     * 两个实例并发时其中一个的 unlink 会失败(文件已经不在了),没关系,它照样回去抢 wx,
+     * 而 wx 只会让一个人赢。retriesLeft 防的是病态情况下两边反复删来删去的活锁。
+     */
+    if (retriesLeft <= 0) {
+      return { ok: false, error: "锁文件反复被别人抢走,请稍后再试" };
+    }
+    try {
+      fs.unlinkSync(file);
+    } catch (e) {
+      // 删不掉多半是这一瞬间被别人(外壳的内核句柄)握住了 —— 那就是别人的锁,不是我的
+      if ((e as NodeJS.ErrnoException).code !== "ENOENT") {
+        return { ok: false, by: "kernel", error: "这个项目文件正被另一个 PromptCut 打开" };
+      }
+    }
+    const again = acquireLock(procPath, retriesLeft - 1);
+    return again.ok ? { ...again, stolen: true } : again;
   } catch (e) {
     // 锁写不出来(只读目录之类)不该把「打开项目」这件事整个挡掉
     return { ok: true, error: (e as Error).message };
   }
 }
 
-function releaseLock(procPath: string): void {
+export function releaseLock(procPath: string): void {
   const file = lockPathFor(procPath);
   try {
-    const cur = JSON.parse(fs.readFileSync(file, "utf8")) as LockFile;
-    if (cur.pid === process.pid) fs.unlinkSync(file);
+    // 空壳锁(Rust 探活留下的 0 字节文件)也顺手清掉:留着它下一次 acquire 又要走一趟
+    // 「无主 → 删 → 重抢」。别人真握着句柄的话 unlink 自己会失败,不会误删。
+    const raw = fs.readFileSync(file, "utf8").trim();
+    let cur: LockFile | null = null;
+    try { cur = raw ? (JSON.parse(raw) as LockFile) : null; } catch { cur = null; }
+    if (!cur || cur.pid === process.pid) fs.unlinkSync(file);
   } catch {
     /* 没有锁、不是我的锁、或者外壳正握着它(删不掉),都不用管 */
   }

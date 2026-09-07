@@ -106,6 +106,27 @@ pub fn release_all(locks: &ProcLocks) {
     }
 }
 
+/// 只**探测**,绝不创建。`open_exclusive` 带 `create(true)`,拿它去探活会在磁盘上凭空
+/// 留下一个 0 字节的 `.lock`——句柄随即 drop、文件却没人删。那个空壳锁会让 Node 那半
+/// 读锁时拿到空串,一路掉进「锁写不出来就别挡着开项目」的兜底里静默放行,pid 那层防线
+/// 对这个项目从此永久失效。所以探测必须用不带 create 的这一份。
+#[cfg(windows)]
+fn probe_exclusive(path: &Path) -> Option<std::io::Result<File>> {
+    use std::os::windows::fs::OpenOptionsExt;
+    if !path.exists() {
+        return None; // 锁文件都没有,自然没人占
+    }
+    Some(OpenOptions::new().read(true).write(true).share_mode(0).open(path))
+}
+
+#[cfg(not(windows))]
+fn probe_exclusive(path: &Path) -> Option<std::io::Result<File>> {
+    if !path.exists() {
+        return None;
+    }
+    Some(OpenOptions::new().read(true).write(true).open(path))
+}
+
 /// 现在有没有别人占着。给 Node 那边查询用 —— 它自己查不到这个信号。
 pub fn is_locked_by_other(locks: &ProcLocks, proc_path: &str) -> bool {
     let target = PathBuf::from(proc_path);
@@ -114,6 +135,9 @@ pub fn is_locked_by_other(locks: &ProcLocks, proc_path: &str) -> bool {
             return false; // 自己持有的不算「别人」
         }
     }
-    // 试着独占一下:开得了就说明没人占,随即 drop 放掉
-    open_exclusive(&lock_path(&target)).is_err()
+    // 试着独占一下:开得了就说明没人占,随即 drop 放掉。文件不存在 = 没人占,不去创建它
+    match probe_exclusive(&lock_path(&target)) {
+        None => false,
+        Some(r) => r.is_err(),
+    }
 }

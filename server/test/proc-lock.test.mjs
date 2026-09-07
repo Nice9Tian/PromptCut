@@ -139,3 +139,79 @@ test("锁的是旁路 .lock,.proc 本体始终可读可写", { skip: process.pla
 test.after(() => {
   try { fs.rmSync(TMP, { recursive: true, force: true }); } catch {}
 });
+
+/*
+ * 下面几条测的是 Node 那半的真身 —— server/vite-plugin-skill-state.ts 里的 acquireLock,
+ * 不是上面那些原语。评审抓到的两个洞都在它里面:
+ *   1. 接管死锁时直接 writeFileSync 覆写 → 读 pid / 判活 / 覆写三步分离,两个实例能双双接管;
+ *   2. 锁文件是 0 字节时 JSON.parse 抛出去,被最外层兜底接住返回 ok:true —— 谁都没拿到锁,
+ *      而且那个空文件永远留着,pid 这层对该项目永久失效。
+ */
+const state = await import(new URL("../vite-plugin-skill-state.ts", import.meta.url).href);
+
+/** 一个确实活着、又不是我自己的 pid */
+function liveOtherPid() {
+  const c = spawn(process.execPath, ["-e", "setInterval(()=>{},1000)"], { stdio: "ignore" });
+  return c;
+}
+
+test("空壳锁(0 字节)不该被当成「写不出来」而静默放行", () => {
+  try { fs.unlinkSync(LOCK); } catch {}
+  fs.writeFileSync(LOCK, "");                       // Rust 探活留下的那种
+  const r = state.acquireLock(PROC);
+  assert.equal(r.ok, true);
+  assert.equal(r.stolen, true, "该是「接管」,不是兜底放行");
+  const cur = JSON.parse(fs.readFileSync(LOCK, "utf8"));
+  assert.equal(cur.pid, process.pid, "锁文件里该写着我的 pid —— 我是真拿到了锁");
+  state.releaseLock(PROC);
+  assert.equal(fs.existsSync(LOCK), false, "放锁该把文件删掉");
+});
+
+test("持有者已经死了 → 接管;还活着 → 拿不到", async () => {
+  try { fs.unlinkSync(LOCK); } catch {}
+  const other = liveOtherPid();
+  fs.writeFileSync(LOCK, JSON.stringify({ pid: other.pid, at: new Date().toISOString(), host: "promptcut" }));
+  const busy = state.acquireLock(PROC);
+  assert.equal(busy.ok, false);
+  assert.equal(busy.by, "pid");
+
+  kill(other);
+  await sleep(500);
+  const took = state.acquireLock(PROC);
+  assert.equal(took.ok, true);
+  assert.equal(took.stolen, true);
+  state.releaseLock(PROC);
+});
+
+test("并发接管同一个死锁:恰好一个赢(不是两个都以为自己独占)", async () => {
+  try { fs.unlinkSync(LOCK); } catch {}
+  // 一个绝不可能活着的 pid:先起一个再杀掉,拿它的号当死锁
+  const dead = liveOtherPid();
+  const deadPid = dead.pid;
+  kill(dead);
+  await sleep(500);
+  fs.writeFileSync(LOCK, JSON.stringify({ pid: deadPid, at: new Date().toISOString(), host: "promptcut" }));
+
+  const child = path.join(TMP, "grab.mjs");
+  fs.writeFileSync(child, [
+    `const s = await import(${JSON.stringify(new URL("../vite-plugin-skill-state.ts", import.meta.url).href)});`,
+    `const r = s.acquireLock(${JSON.stringify(PROC)});`,
+    // 抢到就握住一会儿,不放锁 —— 让「两个都以为自己拿到了」这件事暴露出来
+    `process.stdout.write(r.ok ? "WON" : "LOST");`,
+    `if (r.ok) await new Promise((res) => setTimeout(res, 2500));`,
+  ].join("\n"), "utf8");
+
+  const results = await Promise.all(
+    Array.from({ length: 12 }, () =>
+      new Promise((resolve) => {
+        let out = "";
+        const c = spawn(process.execPath, [child], { stdio: ["ignore", "pipe", "ignore"] });
+        c.stdout.on("data", (b) => (out += b));
+        c.on("exit", () => resolve(out));
+      }),
+    ),
+  );
+  const won = results.filter((r) => r === "WON").length;
+  assert.equal(won, 1, `恰好一个该抢到死锁的接管权,实际 ${won} 个`);
+  try { fs.unlinkSync(LOCK); } catch {}
+});
