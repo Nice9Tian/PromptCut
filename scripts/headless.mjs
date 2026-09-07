@@ -170,9 +170,18 @@ async function main() {
   page.on("console", (m) => { if (m.type() === "error") log(`页面 console.error:${m.text()}`); });
   page.on("response", (r) => { if (r.status() >= 400) log(`页面请求 ${r.status()} ${r.request().method()} ${r.url()}`); });
 
+  /*
+   * ?owner=<令牌> 宣示所有权:带着它连上 MCP 桥之后,服务端会拒绝一切没有同一把钥匙的
+   * 连接。没有这一步,agent 拿自己的浏览器打开这个端口「看一眼」就会把这个页面踢掉,
+   * 之后它自己的所有工具调用全部失败 —— 而被踢的一方不会自己回来。
+   * 令牌写进 instance.json,想只读观察的人可以从那里知道该用 ?observe=1。
+   */
+  const ownerToken = `hl-${process.pid}-${Math.random().toString(36).slice(2, 10)}`;
+  writeInstance({ ownerToken });
+
   // ?draft=project 由 Shell 打开任务目录里的 project.proc 并直接进编辑器;
   // ?headless=1 让页面装上 window.__pcHeadless(自动写回用)
-  await page.goto(`http://127.0.0.1:${port}/?draft=project&headless=1`, { waitUntil: "domcontentloaded", timeout: 60000 });
+  await page.goto(`http://127.0.0.1:${port}/?draft=project&headless=1&owner=${encodeURIComponent(ownerToken)}`, { waitUntil: "domcontentloaded", timeout: 60000 });
   await waitHttp(`http://127.0.0.1:${port}/api/mcp/status`, (d) => d && d.editorConnected === true, 90000, "等编辑器连上 MCP 桥");
   await page.waitForFunction(() => !!window.__pcHeadless, { timeout: 30000 });
   log("编辑器页面已连上 MCP 桥");

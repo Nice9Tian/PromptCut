@@ -99,6 +99,8 @@ function oneShotViaCli(
 
 export default function vitePluginAi(): Plugin {
   let editorRes: ServerResponse | null = null;
+  /** 当前编辑台宣示的所有权令牌。空 = 普通页面,谁都能接管(和以前一样) */
+  let editorOwner = '';
   let nextCallId = 1;
   const pendingCalls = new Map<number, (result: any) => void>();
   const activeRuns = new Map<string, { abort: () => void, finished: boolean }>();
@@ -638,12 +640,37 @@ export default function vitePluginAi(): Plugin {
 
       server.middlewares.use('/api/mcp/events', (req, res) => {
         if (req.method !== 'GET') return sendJson(res, 405, { ok: false, error: 'GET only' });
-        
+
+        /*
+         * 谁能当编辑台:先来后到,但**正在干活的实例不许被踢**。
+         *
+         * 这个位置只有一个(editorRes),后连的会把前一个挤掉。平时这是对的 —— 用户刷新
+         * 页面就得靠它重新接管。但 Skill 模式下会出事:agent 拿自己的浏览器打开编辑台
+         * 想「看一眼」布局,一连上就把无头实例那个页面踢了,之后它的所有工具调用全部失败,
+         * 而被踢的那一方是**永久放弃**的(mcpExecutor 里 active=false),不会自己回来。
+         * 实测过:Claude 桌面版自带的浏览器打开 127.0.0.1 就能接管这个位置。
+         *
+         * 所以给「正在干活的那个」发一把钥匙:无头实例的页面带 owner=<令牌> 连进来,
+         * 之后没有同一把钥匙的连接一律**拒绝**(而不是接管)。普通用户那份不带 owner,
+         * 行为和以前一模一样,刷新照样能接管 —— 这道锁只在有人明确宣示所有权时才生效。
+         */
+        const url = new URL(req.url || '/', 'http://localhost');
+        const owner = url.searchParams.get('owner') || '';
+        if (editorOwner && owner !== editorOwner) {
+          res.writeHead(409, { 'Content-Type': 'application/json; charset=utf-8' });
+          return res.end(JSON.stringify({
+            ok: false,
+            error: '编辑台已被一个正在运行的实例占用',
+            hint: '这个端口上有 Skill 任务在跑。想看画面请用只读方式打开:在地址后面加 ?observe=1,那样不会抢走它的连接。',
+          }));
+        }
+
         if (editorRes) {
           editorRes.write(`data: ${JSON.stringify({ type: "replaced" })}\n\n`);
           editorRes.end();
         }
-        
+
+        editorOwner = owner;
         editorRes = res;
         res.writeHead(200, {
           'Content-Type': 'text/event-stream',
@@ -658,6 +685,8 @@ export default function vitePluginAi(): Plugin {
         req.on('close', () => {
           if (editorRes === res) {
             editorRes = null;
+            // 主人走了,锁跟着放 —— 否则实例崩了之后这个端口永远没人能连上
+            editorOwner = '';
           }
         });
       });
@@ -705,6 +734,8 @@ export default function vitePluginAi(): Plugin {
         const port = (server.httpServer?.address() as any)?.port || 5195;
         sendJson(res, 200, {
           editorConnected: !!editorRes,
+          // 有主 = 这个端口被一个正在跑的实例占着,别的页面连不上(只能 ?observe=1 只读打开)
+          editorOwned: !!editorOwner,
           pending: pendingCalls.size,
           port
         });

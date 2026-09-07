@@ -88,9 +88,34 @@ export function connectMcpExecutor(getApi: () => EditorApi, onStatus?: (s: { con
   let source: EventSource | null = null;
   let active = true;
 
+  /*
+   * 两个 URL 参数决定这个页面和 MCP 桥的关系:
+   *
+   *   ?observe=1     只看不接。页面照常渲染项目,但**不连桥** —— 给「想看一眼画面」的人用。
+   *                  agent 拿自己的浏览器打开编辑台看布局,就该走这条;不走的话它一连上
+   *                  就把无头实例那个页面踢了,之后所有工具调用全失败(实测过)。
+   *   ?owner=<令牌>  宣示所有权。带着它连上之后,服务端会拒绝一切没有同一把钥匙的连接,
+   *                  别人抢不走。无头实例用它保住自己。
+   *
+   * 两个都不带 = 普通用户的编辑台,行为和以前一模一样(先来后到、刷新可接管)。
+   */
+  const params = (() => {
+    try { return new URLSearchParams(location.search); } catch { return new URLSearchParams(); }
+  })();
+  const observeOnly = params.has("observe");
+  const ownerToken = params.get("owner") || "";
+
+  if (observeOnly) {
+    // 明确告诉界面「没连桥」,免得状态点显示成绿的、让人以为工具能用
+    onStatus?.({ connected: false });
+    return () => {};
+  }
+
   const connect = () => {
     if (!active) return;
-    source = new EventSource("/api/mcp/events");
+    source = new EventSource(
+      ownerToken ? `/api/mcp/events?owner=${encodeURIComponent(ownerToken)}` : "/api/mcp/events",
+    );
 
     source.onopen = () => {
       onStatus?.({ connected: true });
@@ -110,8 +135,17 @@ export function connectMcpExecutor(getApi: () => EditorApi, onStatus?: (s: { con
         if (source) source.close();
         source = null;
         onStatus?.({ connected: false });
-        window.dispatchEvent(new CustomEvent("ai-chat-error", { detail: "另一个编辑台页面接管了 AI 连接" }));
-        active = false;
+        if (ownerToken) {
+          /*
+           * 有令牌的页面被踢掉,只可能是同一把钥匙的另一个连接(比如自己刚重载过一次,
+           * 旧连接还没断)。这种情况**要抢回来** —— 无头实例被踢就等于整个任务哑了,
+           * 而它是没人会去手动刷新的那一个。等两秒再连,避开两个连接互相顶的抖动。
+           */
+          window.setTimeout(connect, 2000);
+        } else {
+          window.dispatchEvent(new CustomEvent("ai-chat-error", { detail: "另一个编辑台页面接管了 AI 连接" }));
+          active = false;
+        }
       } else if (ev.type === "call") {
         const id = ev.id;
         const tool = ev.tool;
