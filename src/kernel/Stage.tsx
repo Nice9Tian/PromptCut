@@ -1,5 +1,7 @@
 import { AnimClock } from "./AnimClock";
+import { frameCss } from "./layout";
 import { motionAt } from "./motion";
+import { cardOpacityAt, hasOpacityControls } from "./project";
 import { getCard } from "./registry";
 import type { Timeline } from "./types";
 
@@ -28,14 +30,17 @@ export function Stage({ timeline, t, playToken, speed = 1 }: { timeline: Timelin
           const m = clip.motion ? motionAt(clip.motion, Math.max(0, t - clip.start)) : null;
           if (m && clip.motion!.whenHidden === "hide" && !m.visible) return null;
 
+          // 卡片的框(位置/尺寸/锚点/缩放/旋转)和轨迹平移一样放在外层:卡片不知道自己被摆到了哪儿。
+          // 没有 frame 时 frameCss 输出的就是以前那套 inset:0,老项目逐字节不变。
+          // 不透明度 / 淡入淡出同理放外层,而且只在设了的时候才写 opacity —— 没设的卡 DOM 一个字不变。
+          const op = hasOpacityControls(clip) ? cardOpacityAt(clip, t) : 1;
           return (
             <div
               key={`${clip.id}:${playToken}`}
               data-pc-clip={clip.id}
               style={{
-                position: "absolute",
-                inset: 0,
-                ...(m ? { transform: `translate(${m.dx}px, ${m.dy}px)`, willChange: "transform" } : null),
+                ...frameCss(clip.frame, timeline, m ? { dx: m.dx, dy: m.dy } : undefined),
+                ...(op < 1 ? { opacity: op } : null),
               }}
             >
               {/*

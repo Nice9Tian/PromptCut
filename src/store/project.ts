@@ -1,7 +1,11 @@
 import { useSyncExternalStore } from "react";
 import { createEmptyProject, DEFAULT_CARD_DUR, DEFAULT_MEDIA_DUR, findClip, newId, type MediaAsset, type Project, type Track, type TrackClip, type Transcript, type Shots, type Subjects } from "../kernel/project";
 import { getCard } from "../kernel/registry";
-import type { ClipMotion } from "../kernel/types";
+import type { ClipFrame, ClipMotion } from "../kernel/types";
+import {
+  normalizeCuts, switchCut as switchCutPure, addCut as addCutPure, renameCut as renameCutPure,
+  removeCut as removeCutPure, stripMediaFromCuts,
+} from "../kernel/cuts";
 
 /**
  * 编辑器状态存储(单例)。所有面板、时间轴、MCP 工具都通过这里读写,不直接改 Project 对象。
@@ -146,7 +150,9 @@ export const actions = {
   loadProject(p: Project, filePath: string | null = null) {
     history.length = 0;
     future.length = 0;
-    set({ project: p, filePath, dirty: false, t: 0, playing: false, selection: [], playToken: state.playToken + 1, durationManual: null });
+    // 所有加载路径的唯一入口,在这里把项目补成多剪辑形状:老文件没有 cuts 就补成默认三条
+    const normalized = normalizeCuts(p);
+    set({ project: normalized, filePath, dirty: false, t: 0, playing: false, selection: [], playToken: state.playToken + 1, durationManual: null });
   },
   newProject(name?: string) {
     actions.loadProject(createEmptyProject(name));
@@ -166,6 +172,35 @@ export const actions = {
   },
   markSaved(filePath: string | null) {
     set({ filePath, dirty: false });
+  },
+
+  /* ---------- 剪辑(多条时间轴) ---------- */
+  /**
+   * 切到另一条剪辑。当前的 tracks / duration / 播放头存回它的条目,目标的换进来。
+   * 进撤销栈(整份 project 一起,撤销就是切回去);选中清空、停播、总时长手动值清掉 —— 这些都是
+   * 上一条剪辑的东西。播放头用目标上次离开时的。
+   */
+  switchCut(cutId: string) {
+    const { project, t } = switchCutPure(state.project, cutId, state.t);
+    if (project === state.project) return;
+    setProject(project);
+    set({ t, playing: false, selection: [], playToken: state.playToken + 1, durationManual: null });
+  },
+  /** 新建一条剪辑,默认切过去(和剪辑软件新建序列的习惯一致) */
+  addCut(name?: string, opts: { switchTo?: boolean } = {}) {
+    const { project, cut } = addCutPure(state.project, name);
+    setProject(project);
+    if (opts.switchTo !== false) actions.switchCut(cut.id);
+    return cut;
+  },
+  renameCut(cutId: string, name: string) {
+    setProject(renameCutPure(state.project, cutId, name));
+  },
+  /** 删一条剪辑。删激活那条会先切到相邻的;最后一条不能删(纯逻辑里会抛) */
+  removeCut(cutId: string) {
+    const { project, switchedTo, t } = removeCutPure(state.project, cutId, state.t);
+    setProject(project);
+    if (switchedTo) set({ t, playing: false, selection: [], playToken: state.playToken + 1, durationManual: null });
   },
   undo() {
     const prev = history.pop();
@@ -377,6 +412,29 @@ export const actions = {
     return true;
   },
   /**
+   * 设 / 清卡片的框(位置、尺寸、锚点、缩放、旋转)。传 undefined 就是清掉,恢复铺满全屏。
+   * 传进来的 frame 是**完整的局部坐标**,不做合并 —— 合并(只改传了的字段)和 world→local
+   * 换算都在调用方(kernel/layout.ts 的 framePatchFromArgs)做完了,这里只负责存。
+   * 和 motion 一样单独一个 action,不并进 updateClip 的 patch。
+   */
+  setClipFrame(clipId: string, frame: ClipFrame | undefined) {
+    const p = state.project;
+    const hit = findClip(p, clipId);
+    if (!hit) return false;
+    setProject(updateTrack(p, hit.track.id, (t) => ({
+      ...t,
+      clips: t.clips.map((c) => {
+        if (c.id !== clipId) return c;
+        if (!frame) {
+          const { frame: _drop, ...rest } = c;
+          return rest;
+        }
+        return { ...c, frame };
+      }),
+    })));
+    return true;
+  },
+  /**
    * 把两段相接的素材接成交叉溶解:后一段往前拉出 dur 秒的重叠,两边各加 dur 秒的淡化。
    * 同一条序列内不允许重叠,所以后一段必须落在别的序列上——现有序列都放不下就新建一条。
    * 返回是否成功。
@@ -499,11 +557,12 @@ export const actions = {
   },
   removeMedia(mediaId: string) {
     const p = state.project;
-    setProject({
+    // 素材是项目级的:激活剪辑和停放剪辑里引用它的段都要清,不然切过去会出现指向已删素材的段
+    setProject(stripMediaFromCuts({
       ...p,
       media: p.media.filter((m) => m.id !== mediaId),
       tracks: p.tracks.map((t) => ({ ...t, clips: t.clips.filter((c) => c.mediaId !== mediaId) })),
-    });
+    }, mediaId));
   },
 };
 

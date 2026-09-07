@@ -16,6 +16,68 @@ import {
   type SubjectBox, type SubjectRangeInfo,
 } from "../../kernel/project";
 import { createClipGuard, timelineDigest, lookHint } from "./toolEcho";
+import {
+  framePatchFromArgs, worldOf, rectToFrame, alignToFrame, alignIsInvisible, nudgeFrame, clampToStage, rectForSafeSide,
+  type Size,
+} from "../../kernel/layout";
+import { listCuts, resolveCut } from "../../kernel/cuts";
+import type { ClipFrame } from "../../kernel/types";
+
+/** 舞台尺寸:卡片级 frame 的父坐标系 */
+function stageSize(): Size {
+  const p = getState().project;
+  return { width: p.width, height: p.height };
+}
+
+/**
+ * 卡片的**实体内容**框:文字、图片、有底色的盒子这些真正画了东西的元素的并集,透明容器穿过去。
+ * 判「会不会盖住人」要看它,不是画布框 —— 默认卡的画布 1920 宽,拿画布判永远是"会盖住"。
+ *
+ * 量的是预览 iframe 里真实渲染出来的 DOM(StageView 的 bounds),所以:
+ *   - 先把当前 project 推给预览并同步渲染到播放头时刻(两者都是 flushSync),量到的是改完之后的样子;
+ *   - 卡片此刻不在画面上(播放头不在它的区间)就量不到,返回 null 并说明,别当成"没内容"。
+ */
+function measureContentBox(clipId: string): { contentBox: { left: number; top: number; width: number; height: number } | null; contentNote?: string } {
+  const s = window.__pcPreviewStage?.();
+  if (!s?.bounds) return { contentBox: null, contentNote: "预览窗口没就绪,量不到内容框;稍后再 get_layout" };
+  const st = getState();
+  try {
+    s.setProject(st.project);
+    s.render(st.t, { jump: true });
+  } catch {
+    // 预览没准备好时 render 可能抛,量不到就量不到,别让整个工具失败
+  }
+  const box = s.bounds(clipId);
+  if (!box) {
+    const hit = findClip(st.project, clipId);
+    const range = hit ? `${hit.clip.start}~${hit.clip.end}s` : "?";
+    return { contentBox: null, contentNote: `这张卡此刻不在画面上(播放头 ${st.t}s 不在它的 ${range} 区间内),先 seek 进它的时段再读` };
+  }
+  const r = (v: number) => Math.round(v);
+  return { contentBox: { left: r(box.left), top: r(box.top), width: r(box.width), height: r(box.height) } };
+}
+
+/**
+ * 定位工具返回的布局:local 是存下来的框(没设过为 null),world 是算出来的画面绝对位置
+ * (box 画布、visualBox 缩放旋转后),contentBox 是量出来的实体内容框(见 measureContentBox)。
+ */
+function layoutOf(clipId: string) {
+  const hit = findClip(getState().project, clipId);
+  const frame = (hit?.clip as { frame?: ClipFrame } | undefined)?.frame;
+  return { clipId, local: frame ?? null, world: worldOf(frame, stageSize()), ...measureContentBox(clipId) };
+}
+
+/**
+ * 定位工具的公共骨架:找到 clip → 用现有框算出新框 → 存 → 回 layout + look。
+ * set_position / set_rect / align / nudge 四个只是 next 不同 —— 它们改的是同一个框。
+ */
+function withFrame(clipId: string, next: (prev: ClipFrame | undefined, stage: Size) => ClipFrame | undefined) {
+  const hit = findClip(getState().project, clipId);
+  if (!hit) throw new Error(`找不到 clip ${clipId}`);
+  const prev = (hit.clip as { frame?: ClipFrame }).frame;
+  actions.setClipFrame(clipId, next(prev, stageSize()));
+  return { ok: true, clipId, layout: layoutOf(clipId), look: lookHint(clipId) };
+}
 import { sttStatus, sttInstall, transcribeMedia } from "../io/stt";
 import { importVideoFiles } from "../io";
 import { runAutoWorkflow, getAutoWorkflowStatus } from "./autoWorkflow";
@@ -78,6 +140,10 @@ function subjectDigest(info: SubjectRangeInfo | null) {
   return {
     safeSide: info.safeSide,
     ...sug,
+    // 空的那一侧直接给成矩形,喂给 set_rect 就能把任何卡放过去 —— 不再受卡片自带 position
+    // 档位限制(safeSide 是 top 也能用了,以前 top 没有对应档位只能作罢)。四侧全被占(sug 置 null)
+    // 时这里也 null:那一刻没有不遮人的矩形,别硬放。
+    suggestedRect: sug.suggestedPosition == null ? null : rectForSafeSide(info.safeSide, stageSize(), 40),
     occupancy: {
       left: round2(info.occupancy.left), right: round2(info.occupancy.right),
       top: round2(info.occupancy.top), bottom: round2(info.occupancy.bottom),
@@ -189,10 +255,75 @@ export function RightPanel() {
           validateCardParams(args.cardId ?? clip.cardId!, args.params, switching ? undefined : clip.params);
         }
         if (args.params) actions.setClipParams(args.clipId, args.params);
-        if (args.start !== undefined || args.end !== undefined) actions.moveClip(args.clipId, { start: args.start, end: args.end });
+        // 不透明度 / 淡入淡出 / 标签:store 早就支持,以前只是没暴露给模型 —— 系统提示词让它
+        // 「遮到人就降不透明度」,它却没有工具能做。
+        const patch: { opacity?: number; fadeIn?: number; fadeOut?: number; label?: string } = {};
+        for (const k of ["opacity", "fadeIn", "fadeOut"] as const) {
+          const v = args[k];
+          if (v === undefined) continue;
+          if (typeof v !== "number" || !Number.isFinite(v)) throw new Error(`${k} 必须是有限数字,收到 ${JSON.stringify(v)}`);
+          if (k === "opacity" && (v < 0 || v > 1)) throw new Error(`opacity 是 0~1,收到 ${v}`);
+          if (k !== "opacity" && v < 0) throw new Error(`${k} 是秒数,不能为负,收到 ${v}`);
+          patch[k] = v;
+        }
+        if (args.label !== undefined) patch.label = String(args.label);
+        if (Object.keys(patch).length) actions.updateClip(args.clipId, patch);
+        if (args.trackId !== undefined && !getState().project.tracks.some((t) => t.id === args.trackId)) {
+          throw new Error(`找不到序列 ${args.trackId};get_project 里 tracks 的 id 才是有效值`);
+        }
+        if (args.start !== undefined || args.end !== undefined || args.trackId !== undefined) {
+          actions.moveClip(args.clipId, { start: args.start, end: args.end, trackId: args.trackId });
+        }
         if (args.cardId !== undefined) actions.setClipCard(args.clipId, args.cardId);
         clipGuard.noteMutation();
         return { ok: true, clipId: args.clipId, look: lookHint(args.clipId), timeline: timelineDigest(getState().project) };
+      },
+      setPosition: (args) => {
+        const r = withFrame(args.clipId, (prev, stage) => {
+          if (args.clear) return undefined;
+          // 只改传了的字段,其余保留;world→local 的换算在 framePatchFromArgs 里(卡片级恒等)。
+          // 第一次设且没给 x/y 时补 0,免得存下一个没有位置的框。
+          const next = { x: 0, y: 0, ...prev, ...framePatchFromArgs(args, stage) };
+          return args.clamp ? clampToStage(next, stage) : next;
+        });
+        clipGuard.noteMutation();
+        return r;
+      },
+      setRect: (args) => {
+        const r = withFrame(args.clipId, (prev, stage) =>
+          rectToFrame({ x1: args.x1, y1: args.y1, x2: args.x2, y2: args.y2 }, { mode: args.mode, align: args.align }, prev, stage));
+        clipGuard.noteMutation();
+        return r;
+      },
+      align: (args) => {
+        let invisible = false;
+        const r = withFrame(args.clipId, (prev, stage) => {
+          const next = alignToFrame(args.h, args.v, args.margin ?? 0, prev, stage);
+          invisible = alignIsInvisible(next, stage);
+          return next;
+        });
+        clipGuard.noteMutation();
+        return invisible
+          ? { ...r, note: "这张卡的画布铺满舞台、也没缩小,对齐看不出效果。先 set_rect(放进一个矩形)或 nudge({ scaleBy: 0.6 })缩小,再对齐。" }
+          : r;
+      },
+      nudge: (args) => {
+        const r = withFrame(args.clipId, (prev, stage) => {
+          const next = nudgeFrame(args, prev, stage);
+          return args.clamp ? clampToStage(next, stage) : next;
+        });
+        clipGuard.noteMutation();
+        return r;
+      },
+      getLayout: (args) => {
+        const p = getState().project;
+        if (args?.clipId) {
+          if (!findClip(p, args.clipId)) throw new Error(`找不到 clip ${args.clipId}`);
+          return layoutOf(args.clipId);
+        }
+        const clips: Record<string, ReturnType<typeof layoutOf>> = {};
+        for (const tr of p.tracks) for (const c of tr.clips) if (c.cardId) clips[c.id] = layoutOf(c.id);
+        return { stage: stageSize(), clips };
       },
       removeClip: (args) => {
         // 门槛:删自己刚建的卡、或一口气连删一串,要 force + reason。理由回显给用户。见 toolEcho.ts。
@@ -204,6 +335,46 @@ export function RightPanel() {
       },
       duplicateClip: (args) => { const c = actions.duplicateClip(args.clipId); if (!c) throw new Error("复制失败"); clipGuard.noteCreated(c.id); return c; },
       splitClip: (args) => { const c = actions.splitClip(args.clipId, args.t); if (!c) throw new Error("切分失败"); clipGuard.noteCreated(c.id); return c; },
+      /* ---------- 剪辑(多条时间轴) ---------- */
+      listCuts: () => ({ activeCutId: getState().project.activeCutId, cuts: listCuts(getState().project) }),
+      switchCut: (args) => {
+        const cut = resolveCut(getState().project, args);
+        actions.switchCut(cut.id);
+        clipGuard.noteMutation();
+        const p = getState().project;
+        return { ok: true, activeCutId: p.activeCutId, cuts: listCuts(p), timeline: timelineDigest(p) };
+      },
+      addCut: (args) => {
+        const cut = actions.addCut(args?.name, { switchTo: args?.switch !== false });
+        clipGuard.noteMutation();
+        const p = getState().project;
+        return { ok: true, cut: { id: cut.id, name: cut.name }, activeCutId: p.activeCutId, cuts: listCuts(p) };
+      },
+      renameCut: (args) => {
+        const cut = resolveCut(getState().project, { cutId: args.cutId });
+        actions.renameCut(cut.id, args.name);
+        return { ok: true, cuts: listCuts(getState().project) };
+      },
+      removeCut: (args) => {
+        const p = getState().project;
+        const cut = resolveCut(p, { cutId: args.cutId });
+        const info = listCuts(p).find((c) => c.id === cut.id)!;
+        // 门槛和 remove_clip 一个道理:有内容的剪辑不能一句话删掉,要 force + reason,理由回显给用户
+        if (info.clipCount > 0 && !args.force) {
+          throw new Error(`「${cut.name}」里有 ${info.clipCount} 段内容,不能直接删;确实要删就传 force:true 并在 reason 里写明理由`);
+        }
+        if (args.force && !(args.reason && args.reason.trim())) throw new Error("force 删除必须在 reason 里写明理由");
+        const before = p.activeCutId;
+        actions.removeCut(cut.id);
+        clipGuard.noteMutation();
+        const q = getState().project;
+        return {
+          ok: true, removed: cut.id,
+          ...(before === cut.id ? { switchedTo: q.activeCutId } : null),
+          ...(args.reason ? { reason: args.reason } : null),
+          cuts: listCuts(q),
+        };
+      },
       addTrack: (args) => { const t = actions.addTrack(args.name); clipGuard.noteMutation(); return t; },
       seek: (args) => { actions.seek(args.t); return { ok: true }; },
       play: () => { actions.play(); return { ok: true }; },

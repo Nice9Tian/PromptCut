@@ -70,6 +70,12 @@ export interface StageHit extends StageRect {
 declare global {
   interface Window {
     __pcStage?: PcStageApi;
+    /**
+     * 编辑器主窗口用:拿到预览 iframe 里的 __pcStage(Preview.tsx 挂上去)。
+     * 给 AI 工具量卡片的实体内容框(get_layout 的 contentBox)—— bounds() 只在 iframe 里有,
+     * 而工具跑在主窗口。
+     */
+    __pcPreviewStage?: () => PcStageApi | null;
   }
 }
 

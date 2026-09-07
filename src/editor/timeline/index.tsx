@@ -14,6 +14,7 @@ import { InsertZones } from "./InsertZones";
 import { NewTrackZone } from "./NewTrackZone";
 import { Playhead } from "./Playhead";
 import { Toolbar } from "./Toolbar";
+import { CutTabs } from "./CutTabs";
 import { Scrollbar } from "./Scrollbar";
 import { ResizeHandle } from "../ResizeHandle";
 import { IconPlus } from "../../ui/icons";
@@ -55,6 +56,7 @@ function TimelineInner() {
 
   return (
     <div data-pc="timeline" className="flex flex-col h-full bg-neutral-900 border-t border-neutral-800 text-neutral-300 select-none overflow-hidden text-sm relative">
+      <CutTabs />
       <Toolbar />
       <div className="flex-1 flex min-h-0 overflow-auto pc-tl-scroll" ref={scrollRef}>
         

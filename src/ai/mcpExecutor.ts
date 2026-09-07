@@ -31,11 +31,23 @@ export interface EditorApi {
   listMedia(): any;
   getSelection(): any;
   addClip(args: { cardId: string; start: number; duration?: number; trackId?: string; params?: any }): any;
-  updateClip(args: { clipId: string; start?: number; end?: number; cardId?: string; params?: any }): any;
+  updateClip(args: { clipId: string; start?: number; end?: number; cardId?: string; params?: any; opacity?: number; fadeIn?: number; fadeOut?: number; label?: string; trackId?: string }): any;
+  /** 卡片级定位(场景图的根节点)。部件级接进来时加 node 参数,签名不用改 */
+  setPosition(args: { clipId: string; space?: "world" | "local"; x?: number; y?: number; w?: number; h?: number; anchor?: [number, number]; scale?: number; rotate?: number; clear?: boolean; clamp?: boolean }): any;
+  setRect(args: { clipId: string; x1: number; y1: number; x2: number; y2: number; mode?: "fit" | "canvas"; align?: [number, number] }): any;
+  align(args: { clipId: string; h?: "left" | "center" | "right"; v?: "top" | "center" | "bottom"; margin?: number }): any;
+  nudge(args: { clipId: string; dx?: number; dy?: number; scaleBy?: number; rotateBy?: number; clamp?: boolean }): any;
+  getLayout(args?: { clipId?: string }): any;
   removeClip(args: { clipId: string }): any;
   duplicateClip(args: { clipId: string }): any;
   splitClip(args: { clipId: string; t: number }): any;
   addTrack(args: { name?: string }): any;
+  // 多条剪辑(时间轴)。其余 clip / 序列工具都只作用于当前激活的那条
+  listCuts(): any;
+  switchCut(args: { cutId?: string; name?: string }): any;
+  addCut(args?: { name?: string; switch?: boolean }): any;
+  renameCut(args: { cutId: string; name: string }): any;
+  removeCut(args: { cutId: string; force?: boolean; reason?: string }): any;
   seek(args: { t: number }): any;
   play(): any;
   pause(): any;
@@ -121,6 +133,16 @@ export function connectMcpExecutor(getApi: () => EditorApi, onStatus?: (s: { con
           else if (tool === "get_selection") result = api.getSelection();
           else if (tool === "add_clip") result = api.addClip(args);
           else if (tool === "update_clip") result = api.updateClip(args);
+          else if (tool === "list_cuts") result = api.listCuts();
+          else if (tool === "switch_cut") result = api.switchCut(args);
+          else if (tool === "add_cut") result = api.addCut(args);
+          else if (tool === "rename_cut") result = api.renameCut(args);
+          else if (tool === "remove_cut") result = api.removeCut(args);
+          else if (tool === "set_position") result = api.setPosition(args);
+          else if (tool === "set_rect") result = api.setRect(args);
+          else if (tool === "align") result = api.align(args);
+          else if (tool === "nudge") result = api.nudge(args);
+          else if (tool === "get_layout") result = api.getLayout(args);
           else if (tool === "remove_clip") result = api.removeClip(args);
           else if (tool === "duplicate_clip") result = api.duplicateClip(args);
           else if (tool === "split_clip") result = api.splitClip(args);

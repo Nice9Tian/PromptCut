@@ -48,7 +48,7 @@ export const tools = [
   },
   {
     name: "update_clip",
-    description: "更新某张卡片,可修改参数、时段或更换卡片类型(cardId)。**已经在时间轴上的卡要改就用它**，不要 remove_clip 再 add_clip 重建。返回 `look`（去看这张卡真实画面的 see_preview 调用）和 `timeline`（当前全部 clip 的 id、起止一览）。",
+    description: "更新某张卡片,可修改参数、时段、更换卡片类型(cardId),以及不透明度 / 淡入淡出 / 标签 / 所在序列。**已经在时间轴上的卡要改就用它**，不要 remove_clip 再 add_clip 重建。opacity 0~1(遮到人又挪不开时降它);fadeIn/fadeOut 是秒;trackId 换序列——序列数组里靠后的盖住靠前的,要让一张卡压在另一张上面就把它挪到更靠后的序列(get_project 里 tracks 的顺序)。位置、尺寸、缩放不在这里改,用 set_rect / set_position / align / nudge。返回 `look`（去看这张卡真实画面的 see_preview 调用）和 `timeline`（当前全部 clip 的 id、起止一览）。",
     inputSchema: {
       type: "object",
       properties: {
@@ -56,9 +56,93 @@ export const tools = [
         start: { type: "number" },
         end: { type: "number" },
         cardId: { type: "string" },
-        params: { type: "object" }
+        params: { type: "object" },
+        opacity: { type: "number", description: "0~1,默认 1" },
+        fadeIn: { type: "number", description: "淡入秒数" },
+        fadeOut: { type: "number", description: "淡出秒数" },
+        label: { type: "string", description: "时间轴上显示的名字" },
+        trackId: { type: "string", description: "挪到哪条序列;靠后的序列在上层" }
       },
       required: ["clipId"]
+    },
+    side: "browser"
+  },
+  {
+    name: "set_position",
+    description: "给卡片定位:把它的锚点放到画面上某个坐标,可选尺寸、缩放、旋转。**这是把任何卡片摆到任何位置的正道**——不再受卡片自带 position 档位(center/bottom/…)限制,不用为了位置换卡。坐标系:舞台像素,原点左上角,1920×1080 时中心是 960,540。anchor 决定 x,y 指的是框内哪个点([0,0] 左上、[0.5,0.5] 中心、[1,1] 右下),缩放和旋转也绕它;例如把卡片中心放到左半屏正中:{ x:480, y:540, anchor:[0.5,0.5] }。只传的字段会改,其余保留;传 clear:true 恢复铺满全屏。w/h 是卡片的**画布**尺寸(大多数卡按 1920×1080 设计,缩小画布不等于缩小内容,整体缩小用 scale)。space 对卡片级 world/local 等价(父坐标系就是舞台),将来部件级才有区别。返回 layout(见 get_layout)和 look。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        clipId: { type: "string" },
+        space: { type: "string", enum: ["world", "local"], description: "默认 local;卡片级两者等价" },
+        x: { type: "number", description: "锚点的横坐标(像素)" },
+        y: { type: "number", description: "锚点的纵坐标(像素)" },
+        w: { type: "number", description: "画布宽(像素),省略=舞台宽" },
+        h: { type: "number", description: "画布高(像素),省略=舞台高" },
+        anchor: { type: "array", items: { type: "number" }, minItems: 2, maxItems: 2, description: "[ax, ay],0~1;默认 [0,0]" },
+        scale: { type: "number", description: "绕锚点缩放,默认 1" },
+        rotate: { type: "number", description: "绕锚点旋转,度,顺时针,默认 0" },
+        clear: { type: "boolean", description: "true = 删掉框,恢复铺满全屏" },
+        clamp: { type: "boolean", description: "true = 算完后把可见框夹回舞台内,不让卡片出画" }
+      },
+      required: ["clipId"]
+    },
+    side: "browser"
+  },
+  {
+    name: "set_rect",
+    description: "把卡片放进画面上的一个矩形(两个对角点,顺序随意)。**要把卡放到「空的那一边」首选它**。mode 默认 fit:画布不动,整体缩放到刚好装进矩形、保持比例,按 align 对齐在矩形里(默认居中)——大多数卡按 1920×1080 设计,这样缩放后的内容一定在矩形内。mode:canvas 则画布就是这个矩形(内容按卡片自己的规则重新布局,可能溢出,只在你确实要改画布尺寸时用)。返回 layout(看 world.visualBox 核对)和 look。和 set_position / align / nudge 改的是同一个框,只是说法不同。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        clipId: { type: "string" },
+        x1: { type: "number" }, y1: { type: "number" },
+        x2: { type: "number" }, y2: { type: "number" },
+        mode: { type: "string", enum: ["fit", "canvas"], description: "默认 fit" },
+        align: { type: "array", items: { type: "number" }, minItems: 2, maxItems: 2, description: "在矩形里靠哪:[0,0] 左上、[0.5,0.5] 中心(默认)、[1,1] 右下" }
+      },
+      required: ["clipId", "x1", "y1", "x2", "y2"]
+    },
+    side: "browser"
+  },
+  {
+    name: "align",
+    description: "把卡片贴到画面的边或中心,带边距:h 是 left/center/right,v 是 top/center/bottom,只传一个另一个方向不动。锚点会跟着对齐方式走,缩放过的卡片贴的是可见框的边。**铺满全屏又没缩小的卡片对齐看不出效果**(画布和舞台一样大),返回里会带 note 提醒——先 set_rect 或 nudge scaleBy 缩小再对齐。返回 layout 和 look。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        clipId: { type: "string" },
+        h: { type: "string", enum: ["left", "center", "right"] },
+        v: { type: "string", enum: ["top", "center", "bottom"] },
+        margin: { type: "number", description: "离边的像素,默认 0" }
+      },
+      required: ["clipId"]
+    },
+    side: "browser"
+  },
+  {
+    name: "nudge",
+    description: "在现有位置上微调:dx/dy 加像素(右、下为正),scaleBy 乘倍数(0.8 = 缩小两成),rotateBy 加角度(顺时针)。看完 look 觉得「再往左一点、再小一点」就用它,不用重算绝对坐标。返回 layout 和 look。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        clipId: { type: "string" },
+        dx: { type: "number" }, dy: { type: "number" },
+        scaleBy: { type: "number" }, rotateBy: { type: "number" },
+        clamp: { type: "boolean", description: "true = 算完后把可见框夹回舞台内,不让卡片出画;微调时建议带上" }
+      },
+      required: ["clipId"]
+    },
+    side: "browser"
+  },
+  {
+    name: "get_layout",
+    description: "读卡片的布局:local(存下来的框,没设过为 null 即铺满全屏)、world(算出来的画面绝对位置:锚点坐标、尺寸、box 是画布矩形、visualBox 是缩放旋转之后画布真正占的矩形)和 **contentBox(量出来的实体内容框:文字、图片、有底色的盒子的并集,透明容器不算)**。判断「这张卡会不会盖住人」看 contentBox —— 默认卡的画布铺满全屏,看 box/visualBox 永远是「会盖住」;判断「会不会出画」看 visualBox。contentBox 按当前播放头时刻在预览里实测,卡片此刻不在画面上时为 null 并附 contentNote(先 seek 进它的时段)。不传 clipId 返回全部卡片的加舞台尺寸。set_position / set_rect / align / nudge 四个工具改的都是同一个框,任何一个改完都能在这里读到一致的结果。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        clipId: { type: "string" }
+      }
     },
     side: "browser"
   },
@@ -96,6 +180,63 @@ export const tools = [
         t: { type: "number" }
       },
       required: ["clipId", "t"]
+    },
+    side: "browser"
+  },
+  {
+    name: "list_cuts",
+    description: "列出项目里的全部剪辑(时间轴)。一个项目可以有多条剪辑,时间轴顶部的选项栏切换,默认三条:剪辑1 / 剪辑2 / 剪辑3。**所有 clip / 序列 / 定位 / 导出 / see_preview 工具都只作用于当前激活的那条剪辑**(active:true 的),get_project 的 tracks 也是它的内容;要动别的剪辑先 switch_cut。返回每条的 id、name、active、trackCount、clipCount、duration。",
+    inputSchema: { type: "object", properties: {} },
+    side: "browser"
+  },
+  {
+    name: "switch_cut",
+    description: "切换到另一条剪辑(按 cutId 或 name 二选一)。切换后 get_project / add_clip / update_clip 等看到和改到的都是这条的内容;播放头回到这条上次离开的位置,选中清空。返回切换后的 cuts 列表和这条的 timeline 摘要。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        cutId: { type: "string" },
+        name: { type: "string", description: "剪辑名,和 cutId 二选一" }
+      }
+    },
+    side: "browser"
+  },
+  {
+    name: "add_cut",
+    description: "新建一条剪辑(默认名 剪辑N),带两条空序列、时长 30 秒。默认新建后立刻切过去(switch:false 则只建不切)。用户说「另起一条时间轴 / 再做一版」就是它。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: { type: "string" },
+        switch: { type: "boolean", description: "默认 true" }
+      }
+    },
+    side: "browser"
+  },
+  {
+    name: "rename_cut",
+    description: "给剪辑改名。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        cutId: { type: "string" },
+        name: { type: "string" }
+      },
+      required: ["cutId", "name"]
+    },
+    side: "browser"
+  },
+  {
+    name: "remove_cut",
+    description: "删除一条剪辑。最后一条不能删。里面有内容(clipCount > 0)时会被拒,确实要删就传 force:true 并在 reason 里写明理由(用户会看到)。删的是当前激活那条时会自动切到相邻的一条,返回里 switchedTo 说明切去了哪。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        cutId: { type: "string" },
+        force: { type: "boolean" },
+        reason: { type: "string" }
+      },
+      required: ["cutId"]
     },
     side: "browser"
   },
@@ -292,7 +433,7 @@ export const tools = [
   },
   {
     name: "list_subjects",
-    description: "读取素材的主体检测结果，detect_subjects 之后用它轮询（未完成时返回 running:true 和进度百分比，没检测过返回 null）。返回 engine（light / full）、prompt、width/height（坐标系）和 samples：每个采样给 t（素材内秒数）、boxes（label / x / y / w / h / conf，**原始视频像素**，只列面积最大的 4 个，boxCount 是真实个数）、occupancy（左半屏 / 右半屏 / 上 1/3 带 / 下 1/3 带各被人物覆盖了多少，0~1）、safeSide（占用最小的那一侧）、suggestedPosition（safeSide 换算成卡片能直接用的值，**只有 left / right / bottom，不会返回 center**）和 suggestedOccupancy（被选中那一侧有多少是人）。suggestedPosition 为 null 时看 warning：四个档位都被人物占住，那一刻没有不遮人的位置，缩小卡片或换个镜头，别退回居中——居中正是人脸所在；能不能填这个值以 list_cards({cardId}) 的 controls 为准，卡片不支持就换一张卡。顶层还有 failedCount（抽帧失败的采样个数，那些采样带 failed:true 和 reason，**不是「这一帧没有人」，不要拿它下结论**）和 fellBackFrom（为 full 表示本来要跑 full 档、中途退回了 light，prompt 因此没生效）。**按镜头排卡片时不必调本工具**，list_shots 已经把这些采样按镜头折好了；这里是给「要看某个具体时刻画面里有几个人、人在哪」用的。engine 为 light 时 label 只可能是 person 或 face，不要把「没有 cat」读成画面里真的没有猫。",
+    description: "读取素材的主体检测结果，detect_subjects 之后用它轮询（未完成时返回 running:true 和进度百分比，没检测过返回 null）。返回 engine（light / full）、prompt、width/height（坐标系）和 samples：每个采样给 t（素材内秒数）、boxes（label / x / y / w / h / conf，**原始视频像素**，只列面积最大的 4 个，boxCount 是真实个数）、occupancy（左半屏 / 右半屏 / 上 1/3 带 / 下 1/3 带各被人物覆盖了多少，0~1）、safeSide（占用最小的那一侧）、suggestedPosition（safeSide 换算成卡片能直接用的值，**只有 left / right / bottom，不会返回 center**）、**suggestedRect（空的那一侧直接给成舞台矩形 {x1,y1,x2,y2}，喂给 set_rect 就能把任何卡放过去，不受卡片 position 档位限制，safeSide 是 top 也能用；四侧全被占时为 null）**和 suggestedOccupancy（被选中那一侧有多少是人）。suggestedPosition 为 null 时看 warning：四个档位都被人物占住，那一刻没有不遮人的位置，缩小卡片或换个镜头，别退回居中——居中正是人脸所在；能不能填这个值以 list_cards({cardId}) 的 controls 为准，卡片不支持就换一张卡。顶层还有 failedCount（抽帧失败的采样个数，那些采样带 failed:true 和 reason，**不是「这一帧没有人」，不要拿它下结论**）和 fellBackFrom（为 full 表示本来要跑 full 档、中途退回了 light，prompt 因此没生效）。**按镜头排卡片时不必调本工具**，list_shots 已经把这些采样按镜头折好了；这里是给「要看某个具体时刻画面里有几个人、人在哪」用的。engine 为 light 时 label 只可能是 person 或 face，不要把「没有 cat」读成画面里真的没有猫。",
     inputSchema: {
       type: "object",
       properties: {

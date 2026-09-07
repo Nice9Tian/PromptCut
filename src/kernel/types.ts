@@ -65,6 +65,33 @@ export interface CardDef<P = Record<string, unknown>> {
  * 播放时换算：素材以后可能被替换或改分辨率，那时这条轨迹本来就该重新追，
  * 留着换算参数只会让人以为它还准。
  */
+/**
+ * 一个节点在父坐标系里的框。
+ *
+ * 卡片级的父坐标系就是舞台(原点左上角、单位像素),所以卡片的 frame 既是「组内相对」
+ * 也是「画面绝对」。将来部件级的 frame 相对的是所在卡片的框,画面绝对位置由
+ * kernel/layout.ts 逐级合成出来、**从不落盘** —— 只存一种坐标,另一种永远推导,
+ * 两边才不会漂。
+ *
+ * 位置指的是**锚点**所在的位置,不是左上角:anchor [0.5,0.5] + x,y = 960,540 就是居中。
+ * 缩放和旋转也绕锚点。没有 frame = 铺满父坐标系(向后兼容,老项目一个字节不变)。
+ */
+export interface ClipFrame {
+  /** 锚点所在的父坐标系位置(像素) */
+  x: number;
+  y: number;
+  /** 框的尺寸(像素)。省略 = 父坐标系的尺寸。注意这是卡片的**画布**,大多数卡按 1920×1080 设计,
+   *  缩小画布不等于缩小内容 —— 要整体缩小用 scale */
+  w?: number;
+  h?: number;
+  /** x,y 定位的是框内哪个点:[0,0] 左上、[0.5,0.5] 中心、[1,1] 右下。默认 [0,0] */
+  anchor?: [number, number];
+  /** 默认 1,绕锚点 */
+  scale?: number;
+  /** 度,顺时针,默认 0,绕锚点 */
+  rotate?: number;
+}
+
 export interface ClipMotion {
   /** 轨迹来自哪段素材、哪一个查询点。只用于说明来源，播放时用不到 */
   mediaId: string;
@@ -92,6 +119,18 @@ export interface Clip {
   params: Record<string, unknown>;
   /** 绑定到一条运动轨迹。没绑就是 undefined，卡片位置固定 */
   motion?: ClipMotion;
+  /** 卡片在舞台上的框(位置/尺寸/锚点/缩放/旋转)。没有就铺满舞台。见 ClipFrame */
+  frame?: ClipFrame;
+  /**
+   * 淡入 / 淡出时长(秒)。两段素材在时间上重叠、各自带上淡出淡入,就是交叉溶解——
+   * 转场不是独立的对象,而是「重叠 + 淡化」的结果,所以不用往模型里塞 transition 类型。
+   * 同一条序列内不允许重叠,所以交叉溶解必然发生在两条序列之间。
+   * 卡片 clip 也吃这三个字段(Stage 按 cardOpacityAt 算),以前只有视频层吃。
+   */
+  fadeIn?: number;
+  fadeOut?: number;
+  /** 整体不透明度(0-1,默认 1)。音频段用它当音量。 */
+  opacity?: number;
 }
 
 export interface Timeline {

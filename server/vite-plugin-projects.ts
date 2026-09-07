@@ -64,10 +64,11 @@ function summarize(id: string, file: string) {
   try {
     const doc = JSON.parse(fs.readFileSync(file, "utf8"));
     const project = doc?.project ?? doc;
-    const clips = (project?.tracks ?? []).reduce(
-      (n: number, t: { clips?: unknown[] }) => n + (t.clips?.length ?? 0),
-      0,
-    );
+    // 项目可以有多条剪辑:激活那条在 tracks 里,其余停放在 cuts[].tracks 里,列表里的段数把它们都算上
+    const countTracks = (tracks: unknown) =>
+      (Array.isArray(tracks) ? (tracks as { clips?: unknown[] }[]) : []).reduce((n, t) => n + (t.clips?.length ?? 0), 0);
+    const clips = countTracks(project?.tracks)
+      + (Array.isArray(project?.cuts) ? (project.cuts as { tracks?: unknown }[]).reduce((n, c) => n + countTracks(c.tracks), 0) : 0);
     return {
       ...base,
       name: project?.name || id,

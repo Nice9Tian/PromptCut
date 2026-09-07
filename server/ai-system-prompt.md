@@ -43,7 +43,16 @@ PromptCut 使用多轨模型 (`Project` 对象):
 
     - `suggestedPosition` 有值时原样填进 `params.position`，并顺手看一眼 `suggestedOccupancy`（那是这一侧被人物盖住的比例）。
     - `suggestedPosition` 为 `null` 时（占用率超过 0.5）会附一句 `warning`：这个镜头**没有不遮人的位置**。别硬填一个方向，改成缩小卡片、降低不透明度，或者换一个镜头放。
-    - **能不能填这个值以 `list_cards({cardId})` 的 `controls` 为准。** 26 张卡里有 6 张的 `position` 只有 `center` / `bottom` 两档。卡片没有 `position`、或选项里没有这个值时，换一张支持的卡，**不要退回默认的居中 —— 居中正是人脸所在**。
+    - **能不能填这个值以 `list_cards({cardId})` 的 `controls` 为准。** 26 张卡里有 6 张的 `position` 只有 `center` / `bottom` 两档。卡片没有 `position`、或选项里没有这个值时，**用 `set_position` 直接定位（见下一条），不要退回默认的居中 —— 居中正是人脸所在**。
+    - **位置不够用时不用换卡。** 四个定位工具改的都是同一个框，挑说起来最顺的那个：
+      - `set_rect({ clipId, x1, y1, x2, y2 })`：**把卡放进一个矩形，首选。** 默认 fit——整体缩放到刚好装进去、保持比例，内容一定在矩形内。避开右侧人物就是 `set_rect({ clipId, x1: 0, y1: 270, x2: 960, y2: 810 })`。
+      - `align({ clipId, h: "right", v: "bottom", margin: 40 })`：贴边或居中。铺满全屏又没缩小的卡对齐看不出效果，先 set_rect 或缩小。
+      - `nudge({ clipId, dx: -50, scaleBy: 0.8 })`：看完 look 之后的微调，不用重算绝对坐标。
+      - `set_position({ clipId, x, y, anchor })`：精确把锚点放到某个坐标（`anchor` 决定 x,y 指的是框内哪个点，[0.5,0.5] 是中心）。
+      放完看返回里的 `layout`：**`contentBox`（实测的实体内容框）判会不会盖住人**，`world.visualBox` 判会不会出画；再用 `look` 看画面。`get_layout` 随时能读。微调时给 `nudge` / `set_position` 带 `clamp: true`，卡片不会被推出画。
+    - **别遮人的完整走法**：`list_shots` / `list_subjects` 的 `suggestedRect` 就是空的那一侧的矩形，直接 `set_rect({ clipId, ...suggestedRect })`；`suggestedRect` 为 null（四侧全被占）时不要硬放，改 `update_clip({ clipId, opacity: 0.6 })` 降不透明度、或缩小、或换镜头。
+    - **上下层、淡入淡出、不透明度**都在 `update_clip`：`trackId` 换序列（序列数组里靠后的盖住靠前的），`fadeIn` / `fadeOut` 秒数，`opacity` 0~1。
+    - **一个项目里可以有多条剪辑（时间轴）**，时间轴顶部的选项栏切换，默认「剪辑1 / 剪辑2 / 剪辑3」。**所有 clip、序列、定位、导出、see_preview 工具都只作用于当前激活的那条**，`get_project` 的 `tracks` 也是它的。用户说「换到剪辑2」「另起一条时间轴」「再做一版」时：`list_cuts` 看有哪些、`switch_cut({ name })` 切换、`add_cut` 新建（默认切过去）。切换后选中会清空、播放头回到那条上次离开的位置——切完先 `get_project` 或看返回里的 `timeline` 再动手，别拿上一条的 clipId 去改。
 
     `subject.approximate` 为 true 表示这个镜头里没有采样点、数字来自时间上最近的一次采样 —— 只是近似，别当准数。`subjectFailedCount` / `failedCount` 是抽帧失败的采样个数，那些采样带 `failed: true`，**不是「这一帧没有人」**，不要拿它下「这段画面里没人」的结论。`fellBackFrom` 为 `full` 表示本来要跑 full 档、中途退回了 light，所以 `prompt` 其实没生效。
 

@@ -146,15 +146,28 @@ export interface TrackClip extends Clip {
   /** 视频段从素材的第几秒开始播(默认 0) */
   mediaOffset?: number;
   label?: string;
-  /**
-   * 淡入 / 淡出时长(秒)。两段素材在时间上重叠、各自带上淡出淡入,就是交叉溶解——
-   * 转场不是独立的对象,而是「重叠 + 淡化」的结果,所以不用往模型里塞 transition 类型。
-   * 同一条序列内不允许重叠,所以交叉溶解必然发生在两条序列之间。
-   */
-  fadeIn?: number;
-  fadeOut?: number;
-  /** 整体不透明度(0-1,默认 1)。音频段用它当音量。 */
-  opacity?: number;
+  // fadeIn / fadeOut / opacity 挪到了 kernel/types.ts 的 Clip 上:卡片 clip 现在也吃它们,
+  // 不再是素材段专属。
+}
+
+/**
+ * 一条剪辑(一整条时间轴)。项目里可以有多条,时间轴顶部的选项栏切换。
+ *
+ * 内容只存一份:**当前激活的那条**的 tracks / duration 住在 Project.tracks / Project.duration 里
+ * (和只有一条剪辑的时候一模一样,所以全项目七十来处读 project.tracks 的地方一处不用改),
+ * 它在 cuts 里的条目只有 id 和 name;**停放的**那些各自带着自己的 tracks / duration / t。
+ * 切换 = 把当前内容存回它的条目、把目标条目的内容换进来(kernel/cuts.ts)。
+ *
+ * 命名:代码里 Track 已经叫「序列」了,这一层叫 Cut、界面上叫「剪辑」,别撞名。
+ */
+export interface Cut {
+  id: string;
+  name: string;
+  /** 停放时才有;激活的那条为 undefined,内容在 Project.tracks */
+  tracks?: Track[];
+  duration?: number;
+  /** 上次离开时的播放头,切回来接着看 */
+  t?: number;
 }
 
 export interface Project {
@@ -167,6 +180,10 @@ export interface Project {
   themeId: string;
   media: MediaAsset[];
   tracks: Track[];
+  /** 全部剪辑,按选项栏顺序。老文件没有这个字段,加载时 normalizeCuts 补成三条 */
+  cuts?: Cut[];
+  /** 当前激活的剪辑。tracks / duration 就是它的内容 */
+  activeCutId?: string;
 }
 
 /** 新拖上时间轴的卡片默认时长(秒);落点预览和真正落卡用的是同一个值 */
@@ -207,6 +224,13 @@ export function flattenOverlay(p: Project): Timeline {
       clips.push({
         id: c.id, cardId: c.cardId, start: c.start, end: c.end, params: c.params,
         ...(c.motion ? { motion: c.motion } : null),
+        // frame 同理:它是 Stage 摆卡片时才用的,漏在这里 set_position 就成了写了不生效。
+        ...(c.frame ? { frame: c.frame } : null),
+        // 不透明度 / 淡入淡出也要带过来:以前只有视频层吃这三个字段,卡片 clip 上设了等于没设,
+        // 模型「降不透明度避开人物」这一招在卡片上是空操作。Stage 现在按 cardOpacityAt 应用。
+        ...(c.opacity !== undefined ? { opacity: c.opacity } : null),
+        ...(c.fadeIn ? { fadeIn: c.fadeIn } : null),
+        ...(c.fadeOut ? { fadeOut: c.fadeOut } : null),
       });
     }
   }
@@ -215,7 +239,7 @@ export function flattenOverlay(p: Project): Timeline {
 
 /** 某时刻该播哪一段素材(按序列顺序找第一条命中的素材段) */
 /** 片段在 t 时刻的不透明度:淡入淡出算进去。超出区间返回 0。 */
-export function opacityAt(clip: TrackClip, t: number): number {
+export function opacityAt(clip: Clip, t: number): number {
   if (t < clip.start || t >= clip.end) return 0;
   let a = clip.opacity ?? 1;
   const fin = clip.fadeIn ?? 0;
@@ -223,6 +247,22 @@ export function opacityAt(clip: TrackClip, t: number): number {
   if (fin > 0 && t < clip.start + fin) a *= (t - clip.start) / fin;
   if (fout > 0 && t > clip.end - fout) a *= (clip.end - t) / fout;
   return Math.max(0, Math.min(1, a));
+}
+
+/** 这个 clip 有没有设过不透明度或淡入淡出。没设过的卡片 Stage 一个字都不碰,老项目的导出逐字节不变 */
+export function hasOpacityControls(clip: Clip): boolean {
+  return clip.opacity !== undefined || (clip.fadeIn ?? 0) > 0 || (clip.fadeOut ?? 0) > 0;
+}
+
+/**
+ * 卡片 clip 在 t 时刻的不透明度。和 opacityAt 的区别只有一处:Stage 会把卡片提前 LEAD 秒挂载
+ * (让进场动画的第一帧正卡在 start 上),那几帧 t 还在 start 之前 —— 按 opacityAt 算是 0,
+ * 会把进场动画的头一帧吞掉。所以把 t 夹进 [start, end) 再算:提前挂载期按 start 那一刻的值,
+ * 有淡入就是 0(淡入本来就从 0 起),没淡入就是 opacity 本身。
+ */
+export function cardOpacityAt(clip: Clip, t: number): number {
+  const tt = Math.max(clip.start, Math.min(t, clip.end - 1e-6));
+  return opacityAt(clip, tt);
 }
 
 /**

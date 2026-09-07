@@ -53,6 +53,15 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
     return frameRef.current?.contentWindow?.__pcStage ?? null;
   }, []);
 
+  // 把 getter 挂到主窗口,AI 的定位工具(get_layout 等)靠它量卡片的实体内容框。
+  // 挂的是 getter 不是 api 本身:iframe 重载后 api 会换,getter 每次都取最新的。
+  useEffect(() => {
+    window.__pcPreviewStage = stage;
+    return () => {
+      if (window.__pcPreviewStage === stage) delete window.__pcPreviewStage;
+    };
+  }, [stage]);
+
   // 播放循环
   useEffect(() => {
     if (!playing) return;
