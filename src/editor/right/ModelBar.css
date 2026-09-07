@@ -1,0 +1,66 @@
+/* 输入框上方那条:模型 / 思考 / Fast。窄栏放不下就换行,控件本身不压缩 */
+.ai-modelbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  margin-bottom: 6px;
+}
+.ai-modelbar-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+.ai-modelbar-label {
+  font-size: 11px;
+  color: var(--ink-muted);
+  white-space: nowrap;
+}
+.ai-modelbar-select {
+  font-family: inherit;
+  font-size: 11px;
+  height: 24px;
+  max-width: 130px;
+  padding: 0 4px;
+  border: 1px solid var(--hairline);
+  border-radius: 4px;
+  background: var(--bg-canvas);
+  color: var(--ink);
+  cursor: pointer;
+}
+.ai-modelbar-select:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Fast 是开关不是下拉:开着的时候整块点亮,一眼看得出这次是加速跑 */
+.ai-modelbar-fast {
+  flex: 0 0 auto;
+  height: 24px;
+  padding: 0 10px;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  background: var(--fill-subtle);
+  color: var(--ink-muted);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ai-modelbar-fast:hover:not(:disabled) {
+  border-color: var(--hairline-strong);
+  color: var(--ink);
+}
+.ai-modelbar-fast.is-on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+}
+.ai-modelbar-fast:disabled {
+  opacity: 0.4;
+  cursor: default;
+}

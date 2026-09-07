@@ -6,6 +6,7 @@ import { ApiSharePanel } from "./ApiSharePanel";
 import { SETUP_ENTRIES, isCliEntry, readFace, writeFace } from "./setupEntries";
 import type { SetupEntry, SetupEntryId } from "./setupEntries";
 import { copyDebugReport, redactDebug } from "../../ai/debug";
+import { CAPABILITIES } from "../../ai/modelOptions";
 import type { ProviderInfo, AiProvider, SttInfo, PublicAiConfig, AiConfigPatch, ApiVendor, CliSetupJob, LoginState } from "../../ai/types";
 
 export function AiSetupDialog(props: {
@@ -42,6 +43,11 @@ export function AiSetupDialog(props: {
   const [agyPermError, setAgyPermError] = useState("");
   const [granting, setGranting] = useState(false);
   const [toolProtocol, setToolProtocol] = useState(false);
+  /** 三家 CLI 的可选模型清单(| 分隔),面板上的模型选择器读它 */
+  const [cliModels, setCliModels] = useState<Record<string, string>>({});
+  const [savingModels, setSavingModels] = useState(false);
+  const [loadingAgyModels, setLoadingAgyModels] = useState(false);
+  const [modelsMsg, setModelsMsg] = useState("");
   const [diagState, setDiagState] = useState("");
   /** 剪贴板写不进去时,把报告摆出来让用户自己复制 */
   const [diagReport, setDiagReport] = useState("");
@@ -61,6 +67,8 @@ export function AiSetupDialog(props: {
       setSaveSuccess(false);
       setSaveError(null);
       setToolProtocol(!!config.toolProtocol);
+      setCliModels({ ...(config.cliModels ?? {}) });
+      setModelsMsg("");
     }
     fetch("/api/ai/agy-permissions")
       .then((r) => r.json())
@@ -132,6 +140,37 @@ export function AiSetupDialog(props: {
       setSaveError(e instanceof Error ? e.message || "保存失败" : "保存失败");
     } finally {
       setSaving(false);
+    }
+  };
+
+  const saveCliModels = async () => {
+    setSavingModels(true);
+    setModelsMsg("");
+    try {
+      await onSaveConfig({ cliModels });
+      setModelsMsg("已保存，面板上的模型选择器会立刻用新清单");
+    } catch (e) {
+      setModelsMsg(e instanceof Error ? e.message : "保存失败");
+    } finally {
+      setSavingModels(false);
+    }
+  };
+
+  /** agy 自己能列模型,不用手打。其余两家没有列表命令,只能手填 */
+  const loadAgyModels = async () => {
+    setLoadingAgyModels(true);
+    setModelsMsg("");
+    try {
+      const d = await (await fetch("/api/ai/models?provider=agy")).json();
+      if (!d.ok) throw new Error(d.error || "读不到模型清单");
+      const list: string[] = d.models ?? [];
+      if (list.length === 0) throw new Error("CLI 没有返回任何模型");
+      setCliModels((prev) => ({ ...prev, agy: list.join("|") }));
+      setModelsMsg(`读到 ${list.length} 个模型，确认后点保存`);
+    } catch (e) {
+      setModelsMsg(e instanceof Error ? e.message : "读取失败");
+    } finally {
+      setLoadingAgyModels(false);
     }
   };
 
@@ -265,6 +304,36 @@ export function AiSetupDialog(props: {
               )}
             </div>
           )}
+        </section>
+
+        <section className="ais-step">
+          <div className="ais-step-head">
+            <span className="ais-step-no">${entry.id === "agy" ? 4 : 3}</span>
+            <span className="ais-step-title">可选模型</span>
+          </div>
+          <div className="ais-detail">
+            用 <code>|</code> 分开写几个，面板输入框旁边就能切。{CAPABILITIES[entry.provider].modelsHint}
+          </div>
+          <div className="ais-api-field">
+            <input
+              type="text"
+              value={cliModels[entry.id as "claude" | "codex" | "agy"] ?? ""}
+              placeholder={CAPABILITIES[entry.provider].suggestedModels || "model-a|model-b"}
+              onChange={(e) => setCliModels((prev) => ({ ...prev, [entry.id]: e.target.value }))}
+            />
+            <button className="ais-btn" disabled={savingModels} onClick={(e) => { e.preventDefault(); saveCliModels(); }}>
+              {savingModels ? "保存中…" : "保存"}
+            </button>
+          </div>
+          {entry.id === "agy" && (
+            <div className="ais-api-field">
+              <button className="ais-btn" disabled={loadingAgyModels} onClick={(e) => { e.preventDefault(); loadAgyModels(); }}>
+                {loadingAgyModels ? "读取中…" : "从 CLI 读取"}
+              </button>
+              <span className="ais-detail">跑一次 agy models，把清单填进上面这一栏</span>
+            </div>
+          )}
+          {modelsMsg && <div className="ais-detail">{modelsMsg}</div>}
         </section>
 
         {entry.id === "agy" && agyPerms && (

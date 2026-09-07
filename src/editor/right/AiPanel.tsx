@@ -19,6 +19,7 @@ import { IconHistory, IconSettings } from "../../ui/icons";
 import type { OverflowEntry } from "./ToolbarOverflowMenu";
 import { ChatHistoryDrawer } from "./ChatHistoryDrawer";
 import { ScriptDialog } from "./ScriptDialog";
+import { ModelBar } from "./ModelBar";
 import { useScript } from "../../ai/script";
 import {
   kindOfName,
@@ -952,6 +953,7 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
           </div>
         )}
         
+        <ModelBar provider={provider} config={config} disabled={streaming} />
         <div className="ai-input-row">
           <button className="ai-plus-btn" onClick={() => fileInputRef.current?.click()} disabled={uploading}>
             +

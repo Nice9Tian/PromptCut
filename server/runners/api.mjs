@@ -100,6 +100,12 @@ export function startRun(opts) {
       return;
     }
 
+    // 配置里的 model 允许写成 `a|b|c` 一串备选,面板上让用户挑。
+    // 这一次跑哪个由 opts.model 决定;没挑就用清单里第一个。
+    const modelList = String(cfg.model || '').split('|').map(s => s.trim()).filter(Boolean);
+    const picked = opts.model && modelList.includes(opts.model) ? opts.model : modelList[0] || '';
+    cfg = { ...cfg, model: picked };
+
     const historyDir = path.join(os.tmpdir(), 'promptcut', 'harness-sessions');
     fs.mkdirSync(historyDir, { recursive: true });
     const historyFile = path.join(historyDir, `${sessionId}.json`);

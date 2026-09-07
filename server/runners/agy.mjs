@@ -119,6 +119,10 @@ function _startRun(opts) {
   if (opts.model) {
     args.push('--model', opts.model);
   }
+  // agy 支持 low|medium|high 三档;没有加速档,前端会把那个开关灰掉
+  if (opts.effort) {
+    args.push('--effort', opts.effort);
+  }
 
   const safeOnEvent = (ev) => {
       if (childController) childController.safeOnEvent(ev);

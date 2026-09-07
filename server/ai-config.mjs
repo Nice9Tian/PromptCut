@@ -22,6 +22,13 @@ function getDefaults() {
       apiKey: '',
       model: '',
       maxTokens: 4096
+    },
+    // 三家 CLI 各自的可选模型清单,和 api.model 同一个约定:用 | 分隔。
+    // 面板上的模型选择器就读这里;留空就只有「默认」一项。
+    cliModels: {
+      claude: 'opus|sonnet|haiku',
+      codex: '',
+      agy: ''
     }
   };
 }
@@ -103,6 +110,18 @@ export function writeConfig(partial) {
       newConfig.api.maxTokens = val;
     } else {
       newConfig.api.maxTokens = current.api.maxTokens;
+    }
+  }
+
+  if (partial.cliModels !== undefined) {
+    const incoming = partial.cliModels;
+    if (!incoming || typeof incoming !== 'object' || Array.isArray(incoming)) {
+      throw new Error('cliModels 必须是对象');
+    }
+    for (const key of ['claude', 'codex', 'agy']) {
+      if (incoming[key] === undefined) continue;
+      if (typeof incoming[key] !== 'string') throw new Error(`cliModels.${key} 必须是字符串`);
+      newConfig.cliModels[key] = incoming[key];
     }
   }
 

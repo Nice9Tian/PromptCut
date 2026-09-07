@@ -2,6 +2,7 @@ import { recordTrace } from './debug';
 import { useState, useEffect, useRef, useCallback } from "react";
 import type { AiProvider, ChatMessage, ChatAttachment, MessagePart, ProviderInfo, RunEvent, SttInfo, LoginState, PublicAiConfig, AiConfigPatch, CliSetupJob } from "./types";
 import { parseSseChunks } from "./sse";
+import { readChoice } from "./modelOptions";
 import { getScript } from "./script";
 import { useChatMessages, setMessages } from "./liveChat";
 import { WORKFLOW_ROLES, ALL_ROLES } from "./roles";
@@ -104,7 +105,7 @@ export function useAiChat(opts?: { mock?: boolean }) {
         { id: "agy", label: "Antigravity", available: true, version: "1.1.27", auth: { loggedIn: true } },
         { id: "api", label: "API 直连", available: false, note: "还没填 API Key", auth: { loggedIn: false, detail: "还没填 API Key" } }
       ]);
-      setConfig({ version: 1, defaultProvider: null, toolProtocol: true, api: { vendor: "anthropic", baseUrl: "", model: "", maxTokens: 4096, apiKey: { set: false, last4: "" } } });
+      setConfig({ version: 1, defaultProvider: null, toolProtocol: true, api: { vendor: "anthropic", baseUrl: "", model: "gpt-4o|gpt-4o-mini", maxTokens: 4096, apiKey: { set: false, last4: "" } }, cliModels: { claude: "opus|sonnet|haiku", codex: "", agy: "gemini-3.1-pro-high|gemini-3.8-flash-low" } });
       setProvider("claude");
       // ?nosetup=1 给自动化脚本用:不弹首启设置对话框
       if (localStorage.getItem("aiSetupDone") === null && !new URLSearchParams(location.search).has("nosetup")) {
@@ -501,6 +502,9 @@ export function useAiChat(opts?: { mock?: boolean }) {
           provider,
           prompt: text,
           sessionId,
+          // 模型 / 推理强度 / 加速档:每次发送时现读,用户在面板上换完立刻生效,
+          // 不用等下一次会话。哪家支持哪几样由 runner 端翻译,这里只管把选择传过去。
+          ...readChoice(provider),
           // 素材库里的东西一并列进附件清单:模型不用先花一轮 list_media 才知道
           // 手上有哪些素材,「给每个视频配字幕」这类要求也才有确定的对象。
           attachments: [...(attachments ?? []), ...mediaAsAttachments()],

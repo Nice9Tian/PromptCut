@@ -86,6 +86,11 @@ function _startRun(opts) {
   if (opts.model) {
       args.push('-m', opts.model);
   }
+  // codex 没有 --effort,推理档只能通过 -c 覆盖配置项。codex 没有加速档,
+  // 所以 opts.fast 在这里没有对应物,前端也会把那个开关灰掉。
+  if (opts.effort) {
+      args.push('-c', `model_reasoning_effort="${opts.effort}"`);
+  }
   args.push('-'); // stdin
   
   const fullPrompt = `<<<系统说明>>>\n${opts.systemPrompt}\n<<<用户消息>>>\n${opts.prompt}`;

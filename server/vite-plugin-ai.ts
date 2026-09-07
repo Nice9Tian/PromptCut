@@ -178,6 +178,38 @@ export default function vitePluginAi(): Plugin {
         }
       });
 
+      /**
+       * 列出某家 CLI 能用的模型。
+       *
+       * 目前只有 agy 有列表命令(`agy models`,输出是「名字<TAB>说明」)。
+       * claude / codex 没有对应命令,清单只能在设置里手填 —— 与其编一份可能过期的
+       * 硬编码名单,不如老实说这一家读不到。
+       */
+      server.middlewares.use('/api/ai/models', async (req, res) => {
+        if (req.method !== 'GET') return sendJson(res, 405, { ok: false, error: 'GET only' });
+        const provider = new URL(req.url || '/', 'http://localhost').searchParams.get('provider');
+        if (provider !== 'agy') {
+          return sendJson(res, 400, { ok: false, error: '这一家没有列出模型的命令,请在上面手填' });
+        }
+        try {
+          const { resolveExe } = await getRunner();
+          const { cliCommand, cliEnv } = await import(new URL('./runners/cli-runtime.mjs', import.meta.url).href);
+          const { execFile } = await import('node:child_process');
+          const inv = cliCommand(resolveExe('agy'), ['models']);
+          const out = await new Promise<string>((resolve, reject) => {
+            execFile(inv.command, inv.args, { env: cliEnv('agy'), timeout: 30000, windowsHide: true },
+              (err, stdout) => (err && !stdout ? reject(err) : resolve(stdout || '')));
+          });
+          // 只收「名字<TAB>说明」那些行,把「Fetching available models...」之类的抬头滤掉
+          const models = out.split(/\r?\n/)
+            .map((l) => l.split('\t')[0].trim())
+            .filter((n) => /^[\w.:-]+$/.test(n));
+          sendJson(res, 200, { ok: true, models });
+        } catch (e: any) {
+          sendJson(res, 500, { ok: false, error: e.message || String(e) });
+        }
+      });
+
       // Keep operations alive across dialog close/reopen and report actual results.
       const setupService = import(new URL('./runners/setup.mjs', import.meta.url).href)
         .then(mod => mod.createSetupService());
@@ -395,7 +427,7 @@ export default function vitePluginAi(): Plugin {
           try {
             const runners = await getRunner();
             const data = JSON.parse(body);
-            const { provider, prompt, sessionId, model, attachments, script } = data;
+            const { provider, prompt, sessionId, model, effort, fast, attachments, script } = data;
 
             let systemPrompt = '';
             try {
@@ -467,6 +499,10 @@ export default function vitePluginAi(): Plugin {
               sessionId,
               cwd,
               model,
+              // 推理强度和加速档:哪家支持哪些由各自的 runner 翻译成标志,
+              // 不支持的直接忽略(前端也已经把对应控件灰掉了)
+              effort,
+              fast,
               toolProtocol: cfg.toolProtocol,
               mcp,
               callTool: async (name: string, args: any) => await callToolInternal(name, args),

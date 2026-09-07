@@ -107,6 +107,15 @@ function _startRun(opts) {
   if (opts.model) {
     args.push('--model', opts.model);
   }
+  if (opts.effort) {
+    args.push('--effort', opts.effort);
+  }
+  // 加速档在 Claude Code 里是设置项 fastMode,没有对应的命令行标志;
+  // --settings 收 JSON 字符串,所以直接把这一项塞进去。它和 --effort 是两回事:
+  // effort 调思考多少,fastMode 调出字快慢,可以同时开。
+  if (opts.fast) {
+    args.push('--settings', JSON.stringify({ fastMode: true }));
+  }
 
   const { child, safeOnEvent, finish, abort, donePromise } = spawnCli(exePath, args, { cwd: opts.cwd }, opts.onEvent, 'Claude Code');
   

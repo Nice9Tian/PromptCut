@@ -31,6 +31,8 @@ export interface PublicAiConfig {
     maxTokens: number;
     apiKey: { set: boolean; last4: string };
   };
+  /** 三家 CLI 各自的可选模型清单,用 | 分隔 */
+  cliModels: { claude: string; codex: string; agy: string };
   toolProtocol: boolean;
 }
 
@@ -43,6 +45,7 @@ export interface AiConfigPatch {
     maxTokens?: number;
     apiKey?: string | null;
   };
+  cliModels?: Partial<{ claude: string; codex: string; agy: string }>;
   toolProtocol?: boolean;
 }
 
