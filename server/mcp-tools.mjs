@@ -218,7 +218,7 @@ export const tools = [
   },
   {
     name: "list_shots",
-    description: "读取素材的镜头划分结果，detect_shots 之后用它轮询和取数（未完成时返回 running:true 和进度百分比）。返回 shots（每个镜头的 start/end 秒，以及进出各是什么转场）和 transitions（每个转场的 kind: cut 硬切 / dissolve 溶解、start/end 跨度、置信度）。**给素材配动效卡时应当先看这个**：把卡片起止对齐到镜头边界，不要让一张卡横跨两个镜头；溶解区间内不要放强调类动效，那段画面本身在交融。",
+    description: "读取素材的镜头划分结果，detect_shots 之后用它轮询和取数（未完成时返回 running:true 和进度百分比）。返回 shots（每个镜头的 start/end 秒，以及进出各是什么转场）和 transitions（每个转场的 kind: cut 硬切 / dissolve 溶解、start/end 跨度、置信度）。**给素材配动效卡时应当先看这个**：把卡片起止对齐到镜头边界，不要让一张卡横跨两个镜头；溶解区间内不要放强调类动效，那段画面本身在交融。每个镜头还带一个 subject 字段：做过 detect_subjects 就是这段区间里的人物情况（safeSide 哪一侧是空的、suggestedPosition 可直接填进卡片 params.position、suggestedOccupancy 被选中那一侧有多少是人、occupancy 四侧占用率、boxes 人物框），**要「别遮住脸」就照 suggestedPosition 填**；没做过就是 null，返回里的 subjectHint 会提示去调 detect_subjects。suggestedPosition 的取值只有 left / right / bottom，**不会返回 center**；它是「剩下三档里最不坏的」，不等于保证不遮，所以要看 suggestedOccupancy——超过 0.5 时 suggestedPosition 直接给 null 并带一句 warning，表示四个档位都被人物占住、这个镜头没有不遮人的位置，那就缩小卡片或者换个镜头放，别硬填。能不能填这个值以 list_cards({cardId}) 的 controls 为准；卡片没有 position、或选项里没有这个值时换一张支持的卡，**不要退回默认的居中——居中正是人脸所在**。subject.approximate 为 true 表示这个镜头里没有采样点、数字来自最近的一次采样，只是近似。返回顶层的 subjectFailedCount 是抽帧失败的采样个数，subjectFellBackFrom 为 full 表示本来要跑 full 档、中途退回了 light（prompt 没生效）。",
     inputSchema: {
       type: "object",
       properties: {
@@ -268,6 +268,49 @@ export const tools = [
   {
     name: "track_install",
     description: "安装运动追踪拓展（BootsTAPIR，torch + 权重约 400 MB，要几分钟）。装完追踪会自动从模板匹配兜底切到神经网络档。由于耗时远超调用超时，立即返回 jobId；用 background_job_status 查该 jobId，或用 track_status 看 engine 有没有变成 bootstapir。**不要重复启动**。只在用户明确要更好的追踪效果时才装——兜底档对刚体目标已经够用，别为了追一个纹理清晰的静物就让用户下 400 MB。",
+    inputSchema: { type: "object", properties: {} },
+    side: "browser"
+  },
+  {
+    name: "detect_subjects",
+    description: "检测素材画面里的人物位置，用来决定卡片放哪边不会遮住人。立即返回 jobId，用 list_subjects 轮询；跑完之后 list_shots 的每个镜头会带上 subject 和 suggestedPosition。**用户说「别遮住脸」「避开人物」「放空的那一边」时走这条路，不要靠猜 position。**返回里带 engine（当前档位）和 etaSeconds（预估耗时）：实测 light 约 0.5 秒/帧、full 约 3 秒/帧，20 个镜头 60 个采样 light 半分钟、full 三分多钟——**light 隔 3 秒问一次 list_subjects、full 隔 10 秒问一次就够**，别每秒都问；engine 为 null 说明两档都用不了，这个作业多半会失败，先调 subject_status 确认。采样时刻默认自己算：做过 detect_shots 就每个镜头取 20%/50%/80% 三点（镜头短于 1 秒只取中点），没做过就每 2 秒一点；总数超过 200 会自动降精度（先每镜头只取一个中点，仍超再等距抽稀），降过就在返回里给一句 sampledNote，此时镜头级结论更粗、approximate 的镜头会变多。也可以自己传 times（素材内秒数数组，一次最多 200 个）。prompt 只有 full 档认（能找任意名词），**必须是英文名词短语、用「 . 」分隔、结尾带句点**，例如「person . face . dog .」；用户的中文需求要先自己翻成英文再传。full 档的文本塔是 bert-base-uncased，词表里没有中文，喂中文会被切成 [UNK] 然后返回**看着合法其实是噪声**的框（实测「显示器 . 椅子 .」框住了画面主体、conf 0.44，纯属瞎猜）。light 档忽略 prompt、只认 person 和 face，但会把提示词原样回显。参数：mediaId 必填；times / prompt / force 可选。同一素材测过会自动复用（换了 prompt、传 force:true、或者上一批结果是 light 档跑的而这次带了 prompt——light 答不了提示词，会自动重测并回 staleEngine:true——才重跑）。先用 subject_status 看能跑到哪一档。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        mediaId: { type: "string" },
+        times: {
+          type: "array",
+          description: "自己指定采样时刻（素材内秒数）。不传就按镜头自动算",
+          items: { type: "number" }
+        },
+        prompt: { type: "string", description: "要找什么，**只能是英文名词短语**，用 \" . \" 分隔并以句点结尾，如 \"person . face . dog .\"。只有 full 档生效；中文会被切成 [UNK] 并返回噪声框" },
+        force: { type: "boolean", description: "true 表示忽略已有结果，重新检测一遍" }
+      },
+      required: ["mediaId"]
+    },
+    side: "browser"
+  },
+  {
+    name: "list_subjects",
+    description: "读取素材的主体检测结果，detect_subjects 之后用它轮询（未完成时返回 running:true 和进度百分比，没检测过返回 null）。返回 engine（light / full）、prompt、width/height（坐标系）和 samples：每个采样给 t（素材内秒数）、boxes（label / x / y / w / h / conf，**原始视频像素**，只列面积最大的 4 个，boxCount 是真实个数）、occupancy（左半屏 / 右半屏 / 上 1/3 带 / 下 1/3 带各被人物覆盖了多少，0~1）、safeSide（占用最小的那一侧）、suggestedPosition（safeSide 换算成卡片能直接用的值，**只有 left / right / bottom，不会返回 center**）和 suggestedOccupancy（被选中那一侧有多少是人）。suggestedPosition 为 null 时看 warning：四个档位都被人物占住，那一刻没有不遮人的位置，缩小卡片或换个镜头，别退回居中——居中正是人脸所在；能不能填这个值以 list_cards({cardId}) 的 controls 为准，卡片不支持就换一张卡。顶层还有 failedCount（抽帧失败的采样个数，那些采样带 failed:true 和 reason，**不是「这一帧没有人」，不要拿它下结论**）和 fellBackFrom（为 full 表示本来要跑 full 档、中途退回了 light，prompt 因此没生效）。**按镜头排卡片时不必调本工具**，list_shots 已经把这些采样按镜头折好了；这里是给「要看某个具体时刻画面里有几个人、人在哪」用的。engine 为 light 时 label 只可能是 person 或 face，不要把「没有 cat」读成画面里真的没有猫。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        mediaId: { type: "string" }
+      },
+      required: ["mediaId"]
+    },
+    side: "browser"
+  },
+  {
+    name: "subject_status",
+    description: "查主体检测能跑到哪一档，检测之前先看一眼。engine 为 full 表示装了完整拓展（YuNet 人脸 + RT-DETR 人体 + Grounding DINO 开放词汇，prompt 生效，能找任意名词）；light 表示只装了轻档（YuNet + RT-DETR，只认 person 和 face，prompt 不生效）；null 表示**两档都用不了，没有兜底档**——此时不要假装检测过，位置和遮挡的判断退回 see_preview 看真实画面。用户想要就用 subject_install 装 light 档（约 30 MB）。",
+    inputSchema: { type: "object", properties: {} },
+    side: "browser"
+  },
+  {
+    name: "subject_install",
+    description: "安装主体检测的 light 档（onnxruntime，约 30 MB，一分钟上下）。装完 subject_status 的 engine 会变成 light，就能认 person 和 face 了。耗时可能超过调用超时，所以立即返回 jobId；用 background_job_status 查该 jobId，或用 subject_status 看 engine 有没有变。**不要重复启动**。注意两点：依赖装完还可能缺权重文件（yunet.onnx / rtdetr_r18vd.onnx），那要用户跑拓展库包的 .exe 才有，返回里会说；full 档（Grounding DINO，690 MB）不走在线装，只随拓展库包发，本工具装不了。",
     inputSchema: { type: "object", properties: {} },
     side: "browser"
   },

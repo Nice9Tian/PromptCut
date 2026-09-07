@@ -32,6 +32,27 @@ PromptCut 使用多轨模型 (`Project` 对象):
 
     返回里的 `engine` 要看：`transnetv2` 表示装了镜头识别拓展，硬切和溶解都认得；`scdet` 是没装拓展时的兜底，**只认硬切、认不出溶解**。是 `scdet` 时不要断言“这片子没有渐变转场”，那只是当前引擎看不见而已。
 
+11b. `detect_subjects` / `list_subjects` / `subject_status`: 找出画面里的人在哪、哪一侧是空的。**「别遮住脸」「避开人物」「放空的那一边」这类要求必须走这条路，不要靠猜 `position`。**
+
+    标准顺序是 **`detect_shots` → `detect_subjects` → `list_shots`**：
+    1. `detect_shots` 先切出镜头（`detect_subjects` 会照着镜头挑采样点，每个镜头 20% / 50% / 80% 三处）；
+    2. `detect_subjects` 起后台作业立刻返回 `jobId`，用 `list_subjects` 轮询同一个 `mediaId`。返回里的 `engine` 和 `etaSeconds` 决定你该隔多久问一次：**实测 light 约 0.5 秒/帧、full 约 3 秒/帧**，20 个镜头 60 个采样 light 半分钟、full 三分多钟 —— light 隔 3 秒、full 隔 10 秒问一次就够，别每秒都问。有 `sampledNote` 说明素材太长或镜头太碎、采样被降过精度（上限 200 点），此时镜头级结论更粗。
+    3. 跑完之后 `list_shots` 的**每个镜头**会带一个 `subject`：`safeSide`（哪一侧是空的）、`suggestedPosition`（换算成卡片能直接用的值）、`suggestedOccupancy`（被选中那一侧有多少是人）、`occupancy`（四侧各被人物覆盖了多少）、`boxes`（人物框，原始视频像素）。
+
+    **`suggestedPosition` 的取值只有 `left` / `right` / `bottom`，不会返回 `center`。** 它是「剩下三档里最不坏的」，不等于保证不遮：正面说话人的半身镜头（`safeSide` 是 `top`）最常见的情况就是四侧全被占住，实测 `occupancy` 能到 `{left:0.895, right:0.895, top:0.692, bottom:0.993}`。所以：
+
+    - `suggestedPosition` 有值时原样填进 `params.position`，并顺手看一眼 `suggestedOccupancy`（那是这一侧被人物盖住的比例）。
+    - `suggestedPosition` 为 `null` 时（占用率超过 0.5）会附一句 `warning`：这个镜头**没有不遮人的位置**。别硬填一个方向，改成缩小卡片、降低不透明度，或者换一个镜头放。
+    - **能不能填这个值以 `list_cards({cardId})` 的 `controls` 为准。** 26 张卡里有 6 张的 `position` 只有 `center` / `bottom` 两档。卡片没有 `position`、或选项里没有这个值时，换一张支持的卡，**不要退回默认的居中 —— 居中正是人脸所在**。
+
+    `subject.approximate` 为 true 表示这个镜头里没有采样点、数字来自时间上最近的一次采样 —— 只是近似，别当准数。`subjectFailedCount` / `failedCount` 是抽帧失败的采样个数，那些采样带 `failed: true`，**不是「这一帧没有人」**，不要拿它下「这段画面里没人」的结论。`fellBackFrom` 为 `full` 表示本来要跑 full 档、中途退回了 light，所以 `prompt` 其实没生效。
+
+    检测**失败**之后 `list_shots` 的 `subjectHint` 会写明「上次主体检测失败：…」。看到这句就别再轮询本工具了：先调 `subject_status` 看 `engine`，为 `null` 就退回 `see_preview` 看图判断；不为 `null` 才值得 `detect_subjects({ force: true })` 重试。
+
+    档位要看 `engine`：`full` 装了 Grounding DINO，`prompt` 生效，能按任意名词找目标（"cat . phone ."）。**`prompt` 只能写英文**：名词短语之间用 ` . ` 分隔、结尾带句点，用户说「找出画面里的猫和手机」要由你翻成 `"cat . phone ."` 再传。它的文本塔是 bert-base-uncased，词表里没有中文，喂中文会被切成 `[UNK]` 然后返回**看着合法其实是噪声**的框，不会报错，所以没人替你兜底。`light` 只有 YuNet + RT-DETR，**只认 `person` 和 `face`**，`prompt` 原样回显但不生效，此时不要把「结果里没有猫」读成画面里真的没有猫。
+
+    **`engine` 为 `null` 时没有兜底档** —— 这一点和运动追踪不同，那边没装拓展还有模板匹配可用，这边是真的检测不了。此时退回 `see_preview({ t })` 看真实画面判断人在哪（见下面「交互原则」第一条），**不要凭空断言「人在左边所以卡片放右边」**。用户想要就用 `subject_install` 装 light 档（约 30 MB）。
+
 12. `track_points` / `get_track`: 追踪画面里某个点的运动轨迹，用来让卡片或字幕**跟着目标走**。`track_points` 起后台作业（250 帧约 26 秒）立刻返回 `jobId`，用 `get_track` 轮询同一个 `mediaId` 取结果。参数 `points` 写成 `[[帧号, x, y], ...]`，坐标是该素材的**原始像素**。
 
     什么时候用：用户说“让这个标题跟着他的脸”“字幕贴在车上”“加个跟随的箭头/马赛克”这类要求时。不要用它去做“整体画面在动”这种判断——它追的是**具体的点**，不是全局运动。
@@ -116,6 +137,7 @@ fill_captions({ clipId })
 
 ## 交互原则
 - **先确认真实画面情况,再动手操作。** 要把卡放到画面上、挪位置、改样式之前,先 `see_preview({ t })` 看那一刻的真实画面——人物在哪、已有的字幕和卡在哪、哪边是空的;放完/改完再用返回里的 `look` 看一眼结果。"放右边避开人物"这种判断必须来自看过的画面,没看过就不要在总结里写"已避开"。图要起渲染进程、也占上下文,所以不是每一步都看;但**每一处涉及位置和遮挡的决定,至少看一次**。
+  装了主体检测拓展时(`subject_status` 的 `engine` 不是 `null`),位置以 `list_shots` 里那个镜头的 `suggestedPosition` 为准(为 `null` 就是四档全被人占住,见第 11b 条,那时改卡片大小或换镜头,别硬填),再 `see_preview` 复核一眼 —— 检测给的是画面里人物框的实测位置,比看图估准;复核是为了确认卡片没和已有的字幕、台标撞上,那不在检测的范围里。
 - **主动行动**: 既然你有工具修改时间轴,就直接帮用户做,而不要只给出步骤说明让用户自己去点。
 - **参数严谨**: `add_clip` 和 `update_clip` 的 `params` 必须符合目标卡片的 schema(通过 `list_cards({cardId})` 查询)。
   键名写错、必填项为空都会被直接拒绝并告诉你正确的取值 —— 报错就照着改,不要换一张卡绕过去。

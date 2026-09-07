@@ -10,6 +10,7 @@ import { sttStatus } from "./editor/io/stt";
 import type { SttStatus, SttEngineStatus } from "./editor/io/stt";
 import { shotsStatus, installShots } from "./ai/shots";
 import { trackStatus, installTrack } from "./ai/track";
+import { subjectStatus, installSubject } from "./ai/subject";
 import { runSttInstall } from "./editor/io/runSttInstall";
 import { useInstallJobs } from "./ai/sttInstallStore";
 import { SttInstallProgress } from "./editor/right/SttInstallProgress";
@@ -290,7 +291,38 @@ function viewTrack(s: { ready: boolean; engine: "bootstapir" | "template" | null
   };
 }
 
-/** 拓展卡的壳子。三张卡长得一样,差别只在图标、文案和右边那个按钮 */
+function viewSubject(s: { ready: boolean; engine: "light" | "full" | null; reason?: string }): ExtStatusView {
+  if (s.engine === "full") {
+    return {
+      headline: "已安装",
+      note: "完整档：人脸、人体，还能按任意文字提示找目标（猫、手机、红色的车）",
+      tone: "ok",
+      offerInstall: false,
+    };
+  }
+  if (s.engine === "light") {
+    // light 能用,但和 full 差一整个能力档。写成光秃秃的「已安装」会让人以为
+    // 文字提示也能用,结果每次都只回人和脸。
+    return {
+      headline: "已安装",
+      note: "轻档：认得出人脸和人体，够用来避开人物；按文字提示找目标要装完整档拓展库包",
+      tone: "ok",
+      offerInstall: false,
+    };
+  }
+  if (s.reason) {
+    // 连 Python 都没有这类环境问题,给安装按钮只会让人再撞一次墙
+    return { headline: "用不了", note: s.reason, tone: "danger", offerInstall: false };
+  }
+  return {
+    headline: "未安装",
+    note: "没有兜底档，装上 AI 才知道人在画面哪一边、卡片放哪不挡脸",
+    tone: "muted",
+    offerInstall: true,
+  };
+}
+
+/** 拓展卡的壳子。四张卡长得一样,差别只在图标、文案和右边那个按钮 */
 function ExtCard(props: {
   icon: ReactNode;
   name: string;
@@ -320,20 +352,24 @@ function ExtCard(props: {
   );
 }
 
-/** 拓展功能区:听写、镜头识别、运动追踪三张卡 */
+/** 拓展功能区:听写、镜头识别、运动追踪、主体检测四张卡 */
 function ExtensionCards(): JSX.Element {
   const [stt, setStt] = useState<ExtStatusView | null>(null);
   const [shots, setShots] = useState<ExtStatusView | null>(null);
   const [track, setTrack] = useState<ExtStatusView | null>(null);
+  const [subject, setSubject] = useState<ExtStatusView | null>(null);
 
   const load = useCallback(async () => {
-    // 三个查询各打一个 HTTP,而且都要等 Python 那边应答。串行的话最慢的排在最后,
+    // 四个查询各打一个 HTTP,而且都要等 Python 那边应答。串行的话最慢的排在最后,
     // 开始页会干等着,所以一起发。用 allSettled 不用 all:一个拓展查不到状态
-    // 不该把另外两张卡也永远钉在「检测中…」。
-    const [a, b, c] = await Promise.allSettled([sttStatus(), shotsStatus(), trackStatus()]);
+    // 不该把另外三张卡也永远钉在「检测中…」。
+    const [a, b, c, d] = await Promise.allSettled([
+      sttStatus(), shotsStatus(), trackStatus(), subjectStatus(),
+    ]);
     setStt(toView(a, viewStt));
     setShots(toView(b, viewShots));
     setTrack(toView(c, viewTrack));
+    setSubject(toView(d, viewSubject));
   }, []);
 
   useEffect(() => { void load(); }, [load]);
@@ -343,6 +379,7 @@ function ExtensionCards(): JSX.Element {
       <SttCard status={stt} onReload={load} />
       <ShotsCard status={shots} onReload={load} />
       <TrackCard status={track} onReload={load} />
+      <SubjectCard status={subject} onReload={load} />
     </div>
   );
 }
@@ -516,6 +553,69 @@ function TrackCard(props: { status: ExtStatusView | null; onReload: () => void |
       {needsPack && !error && (
         <div className="sp-ext-error">
           依赖已装好，还差 208 MB 的权重文件。它随拓展库包分发，请运行 PromptCut-ext-track-&lt;版本&gt;.exe
+        </div>
+      )}
+      {error && <div className="sp-ext-error">{error}</div>}
+    </ExtCard>
+  );
+}
+
+/** 主体检测:状态由上面统一查,安装走 installSubject 的 SSE 日志流(只装 light 档) */
+function SubjectCard(props: { status: ExtStatusView | null; onReload: () => void | Promise<void> }): JSX.Element {
+  const { status, onReload } = props;
+  const [running, setRunning] = useState(false);
+  const [tail, setTail] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  /** 依赖装好了,只差模型文件 —— 得靠拓展库包补,不是在线装能解决的 */
+  const [needsPack, setNeedsPack] = useState(false);
+
+  const install = () => {
+    setRunning(true);
+    setError(null);
+    setTail("");
+    // 只留最后一行,理由同另外两张卡:pip 会刷几百行,这里没有装日志面板的地方
+    void installSubject((line) => setTail(line))
+      .then(({ ok, needsModel, log }) => {
+        // 「依赖装好了但还缺模型」不是失败:YuNet 和 RT-DETR 的权重不在
+        // requirements 里,只随拓展库包发。报成红字会让人以为白装了,
+        // 而真正该说的是「去跑那个 .exe」。
+        if (!ok) setError(log.filter((l) => l.startsWith("[error]")).slice(-1)[0] ?? "安装失败");
+        else if (needsModel) setNeedsPack(true);
+        return onReload();
+      })
+      .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setRunning(false));
+  };
+
+  return (
+    <ExtCard
+      icon={
+        // 一个人形加一个取景框:这张卡干的就是「框出画面里的人」
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+          <path d="M4 8V5.5A1.5 1.5 0 0 1 5.5 4H8M16 4h2.5A1.5 1.5 0 0 1 20 5.5V8M20 16v2.5a1.5 1.5 0 0 1-1.5 1.5H16M8 20H5.5A1.5 1.5 0 0 1 4 18.5V16" />
+          <circle cx="12" cy="10" r="2.4" />
+          <path d="M8.2 17c.5-2 1.9-3 3.8-3s3.3 1 3.8 3" />
+        </svg>
+      }
+      name="主体检测"
+      desc="看清人在画面哪一边，卡片自动避开人物的脸。"
+      status={status}
+      action={
+        status?.offerInstall && !running
+          ? <button className="sp-ghost-btn" onClick={install} title="轻档约 30 MB">
+              {error ? "重试" : "安装"}
+            </button>
+          : null
+      }
+    >
+      {running && (
+        <div className="sp-ext-progress">
+          <span className="sp-muted">安装中…{tail ? ` ${tail}` : ""}</span>
+        </div>
+      )}
+      {needsPack && !error && (
+        <div className="sp-ext-error">
+          依赖已装好，还差模型文件。它随拓展库包分发，请运行 PromptCut-ext-light-&lt;版本&gt;.exe
         </div>
       )}
       {error && <div className="sp-ext-error">{error}</div>}

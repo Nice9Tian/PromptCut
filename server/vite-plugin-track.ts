@@ -195,7 +195,7 @@ export function trackPlugin(): Plugin {
           const python = findPython(root);
           if (!python) return sendJson(res, 400, { ok: false, error: "没有可用的 Python" });
           const env = await buildEnv(root, python);
-          return pipeToSse(spawnPython(python, ["-I", "-m", "promptcut_track", "install"], env), res);
+          return pipeToSse(spawnPython(python, ["-m", "promptcut_track", "install"], env), res);
         }
 
         // POST /api/track/track —— 起一个后台作业

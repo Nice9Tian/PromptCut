@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from "react";
-import { createEmptyProject, DEFAULT_CARD_DUR, DEFAULT_MEDIA_DUR, findClip, newId, type MediaAsset, type Project, type Track, type TrackClip, type Transcript, type Shots } from "../kernel/project";
+import { createEmptyProject, DEFAULT_CARD_DUR, DEFAULT_MEDIA_DUR, findClip, newId, type MediaAsset, type Project, type Track, type TrackClip, type Transcript, type Shots, type Subjects } from "../kernel/project";
 import { getCard } from "../kernel/registry";
 import type { ClipMotion } from "../kernel/types";
 
@@ -467,6 +467,17 @@ export const actions = {
     const p = state.project;
     setProject(
       { ...p, media: p.media.map((m) => (m.id === mediaId ? { ...m, shots: shots ?? undefined } : m)) },
+      { undoable: false },
+    );
+  },
+  /** 写入 / 清除素材的主体检测结果(不进撤销栈,和镜头识别同一个道理) */
+  setMediaSubjects(mediaId: string, subjects: Subjects | null) {
+    const p = state.project;
+    // 素材可能在检测跑完之前就被删了。不查一下的话 map 空转一圈、
+    // setProject 白发一次通知,还会把「素材已经不在了」这件事藏起来。
+    if (!p.media.some((m) => m.id === mediaId)) return;
+    setProject(
+      { ...p, media: p.media.map((m) => (m.id === mediaId ? { ...m, subjects: subjects ?? undefined } : m)) },
       { undoable: false },
     );
   },

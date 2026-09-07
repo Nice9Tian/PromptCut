@@ -52,6 +52,11 @@ export interface EditorApi {
   getTrack(args: { mediaId: string; full?: boolean }): any;
   trackStatus(): Promise<any>;
   trackInstall(): Promise<any>;
+  // 主体检测：画面里的人在哪、哪一侧是空的
+  detectSubjects(args: { mediaId: string; times?: number[]; prompt?: string; force?: boolean }): Promise<any>;
+  listSubjects(args: { mediaId: string }): any;
+  subjectStatus(): Promise<any>;
+  subjectInstall(): Promise<any>;
   attachClipMotion(args: {
     clipId: string; mediaId: string; pointIndex?: number; whenHidden?: string;
   }): any;
@@ -135,6 +140,10 @@ export function connectMcpExecutor(getApi: () => EditorApi, onStatus?: (s: { con
           else if (tool === "get_track") result = api.getTrack(args);
           else if (tool === "track_status") result = await api.trackStatus();
           else if (tool === "track_install") result = await api.trackInstall();
+          else if (tool === "detect_subjects") result = await api.detectSubjects(args);
+          else if (tool === "list_subjects") result = api.listSubjects(args);
+          else if (tool === "subject_status") result = await api.subjectStatus();
+          else if (tool === "subject_install") result = await api.subjectInstall();
           else if (tool === "attach_clip_motion") result = api.attachClipMotion(args);
           else if (tool === "detach_clip_motion") result = api.detachClipMotion(args);
           else if (tool === "auto_workflow") result = await api.autoWorkflow(args);

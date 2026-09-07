@@ -43,9 +43,75 @@ export interface Shots {
   shots: { start: number; end: number; inTransition: TransitionKind | null; outTransition: TransitionKind | null }[];
 }
 
+/** 画面里的一个目标框。坐标是**素材原始像素**,和 width/height 同一套 */
+export interface SubjectBox {
+  /** light 档只有 person / face;full 档是提示词里的名词 */
+  label: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  conf: number;
+}
+
+/** 四个方位各被目标框覆盖了多少(0~1)。left/right 是左右半屏,top/bottom 是上下 1/3 带 */
+export interface SubjectOccupancy {
+  left: number;
+  right: number;
+  top: number;
+  bottom: number;
+}
+
+export type SafeSide = "left" | "right" | "top" | "bottom";
+
+/** 某一时刻抽一帧检测出来的结果 */
+export interface SubjectSample {
+  /** 素材内的秒数 */
+  t: number;
+  boxes: SubjectBox[];
+  /** occupancy 最小的那一侧 —— 把卡片放这边最不容易遮住人 */
+  safeSide: SafeSide;
+  occupancy: SubjectOccupancy;
+  /**
+   * true 表示这一帧**没抽出来**(seek 超出时长、文件那一段坏了),上面的 boxes 是空的、
+   * occupancy 四个 0、safeSide 是个占位值。
+   *
+   * 这个标记非有不可:抽帧失败的样本和「这一帧真的没有人」在 JSON 里逐字段相同,
+   * 不标出来的话 subjectForRange 会把一串 0 平均进去,给出「这段没人、right 侧安全」
+   * 的伪结论 —— 恰好是这个功能最该避免的那种错。读取侧一律先过滤掉 failed。
+   */
+  failed?: boolean;
+  /** failed 为 true 时的原因(Python 侧给的那句),用来让人看出是哪一帧、为什么 */
+  reason?: string;
+}
+
+/** 主体检测结果,由 detect_subjects 写入 */
+export interface Subjects {
+  /** light = YuNet + RT-DETR(只认 person/face);full = 再加 Grounding DINO(认提示词) */
+  engine: "light" | "full";
+  createdAt: string;
+  /** 检测时用的提示词。light 档忽略它,但原样存着,免得以后分不清这批结果是怎么来的 */
+  prompt: string;
+  /** 素材原始宽高,boxes 的坐标系 */
+  width: number;
+  height: number;
+  samples: SubjectSample[];
+  /** samples 里 failed 的个数。0 或缺省表示每一帧都抽出来了 */
+  failedCount?: number;
+  /**
+   * 本来该跑 full 档、但中途退回了 light 时填 "full"(比如 DINO 目录缺分词器文件)。
+   * engine 字段记的是**实际**跑的那一档,所以只看 engine 会以为用户本来就只装了 light。
+   */
+  fellBackFrom?: "full";
+  /** fellBackFrom 时的原因,原样透给调用方 —— 不说原因用户没法修 */
+  fallbackReason?: string;
+}
+
 export interface MediaAsset {
   /** 镜头切换识别结果(可选,由 detect_shots 写入) */
   shots?: Shots;
+  /** 主体检测结果(可选,由 detect_subjects 写入) */
+  subjects?: Subjects;
   /** 语音转文字结果(可选,由 STT 工具写入) */
   transcript?: Transcript;
   id: string;
@@ -224,4 +290,277 @@ let seq = 0;
 export function newId(prefix: string): string {
   seq += 1;
   return `${prefix}-${Date.now().toString(36)}-${seq.toString(36)}`;
+}
+
+// ── 主体检测的读取侧 ────────────────────────────────────────────────
+// 检测结果是「一串时刻的采样」,而调用方问的永远是「这个镜头(一段区间)里人在哪」。
+// 这段负责把前者折成后者,纯函数、无副作用,单测在 src/kernel/subject.test.mjs。
+
+/** 一段区间上的主体情况。由 subjectForRange 把区间内的采样合并出来 */
+export interface SubjectRangeInfo {
+  /** 参与合并的采样时刻(素材内秒数),按时间排好 */
+  times: number[];
+  /**
+   * true 表示这段区间里**一个采样都没有**,下面的数字来自时间上最近的那一次采样。
+   * 调用方要把这件事透出去 —— 拿邻近镜头的人物位置当本镜头的结论会出错。
+   */
+  approximate: boolean;
+  /** 区间内所有采样的框合在一起(同一个人在三个采样里就会出现三次) */
+  boxes: SubjectBox[];
+  /** 众数:区间内出现次数最多的那一侧 */
+  safeSide: SafeSide;
+  /** 各侧占用率的平均值 */
+  occupancy: SubjectOccupancy;
+}
+
+/**
+ * safeSide 并列时的取舍顺序。
+ *
+ * 先左右后上下:横向留白是真的能把卡片挪过去(左右半屏各占一半画面),
+ * 而上下只是 1/3 的窄带,同样"空"的情况下放侧边更稳妥。
+ * right 排在 left 前面是因为字幕、台标这类常驻元素习惯占左下,右侧更常是空的。
+ */
+const SAFE_SIDE_PRIORITY: SafeSide[] = ["right", "left", "bottom", "top"];
+
+/**
+ * 取一段区间上的主体情况。
+ *
+ * 优先用落在 [start, end] 内的采样;一个都没有(镜头太短、采样密度不够)就退回
+ * 时间上最近的一次,并把 approximate 标成 true。整份 subjects 为空时返回 null。
+ */
+export function subjectForRange(
+  subjects: Subjects | null | undefined,
+  start: number,
+  end: number,
+): SubjectRangeInfo | null {
+  // 抽帧失败的样本先扔掉。它们的 boxes 是空的、occupancy 四个 0,混进平均里会
+  // 把「这一帧没抽出来」洗成「这一侧是空的」。全都失败时返回 null —— 宁可让调用方
+  // 看到「没检测结果」,也不要给一个凭空造出来的 right。
+  const all = (subjects?.samples ?? []).filter((s) => !s.failed);
+  if (all.length === 0) return null;
+
+  const lo = Math.min(start, end);
+  const hi = Math.max(start, end);
+  let picked = all.filter((s) => s.t >= lo && s.t <= hi);
+  const approximate = picked.length === 0;
+  if (approximate) {
+    // 距离区间最近的那一个。距离相等时取靠前的,保证结果是确定的
+    let best = all[0];
+    let bestD = Infinity;
+    for (const s of all) {
+      const d = s.t < lo ? lo - s.t : s.t > hi ? s.t - hi : 0;
+      if (d < bestD) { best = s; bestD = d; }
+    }
+    picked = [best];
+  }
+  picked = [...picked].sort((a, b) => a.t - b.t);
+
+  const counts = new Map<SafeSide, number>();
+  for (const s of picked) counts.set(s.safeSide, (counts.get(s.safeSide) ?? 0) + 1);
+  let safeSide: SafeSide = SAFE_SIDE_PRIORITY[0];
+  let bestCount = -1;
+  for (const side of SAFE_SIDE_PRIORITY) {
+    const c = counts.get(side) ?? 0;
+    if (c > bestCount) { bestCount = c; safeSide = side; }
+  }
+
+  const n = picked.length;
+  const occupancy: SubjectOccupancy = { left: 0, right: 0, top: 0, bottom: 0 };
+  for (const s of picked) {
+    occupancy.left += s.occupancy?.left ?? 0;
+    occupancy.right += s.occupancy?.right ?? 0;
+    occupancy.top += s.occupancy?.top ?? 0;
+    occupancy.bottom += s.occupancy?.bottom ?? 0;
+  }
+  for (const k of ["left", "right", "top", "bottom"] as const) {
+    occupancy[k] = occupancy[k] / n;
+  }
+
+  return {
+    times: picked.map((s) => s.t),
+    approximate,
+    boxes: picked.flatMap((s) => s.boxes ?? []),
+    safeSide,
+    occupancy,
+  };
+}
+
+/**
+ * 把 safeSide 翻成能直接填进卡片 params.position 的值。
+ *
+ * 卡片那一侧只有 center / bottom / left / right 四档(见 src/cards/native/hud.ts 的
+ * getPositionClass),**没有 top**。所以 safeSide 是 top 时不能原样传 —— 传过去
+ * getPositionClass 会掉进 default 分支变成 center,而 center 正是人脸最常在的地方,
+ * 等于把"上面是空的"这条信息用成了"糊人脸上"。这里改成在剩下三个合法档里挑
+ * 占用率最低的那个,宁可放侧边也不要放中间。
+ */
+export function positionForSafeSide(
+  safeSide: SafeSide,
+  occupancy?: SubjectOccupancy | null,
+): CardPosition {
+  if (safeSide !== "top") return safeSide;
+  const occ = occupancy ?? { left: 1, right: 1, top: 1, bottom: 1 };
+  const legal: CardPosition[] = ["right", "left", "bottom"];
+  let best: CardPosition = "right";
+  let bestV = Infinity;
+  for (const side of legal) {
+    const v = occ[side] ?? 1;
+    if (v < bestV) { bestV = v; best = side; }
+  }
+  return best;
+}
+
+/**
+ * positionForSafeSide 的值域。
+ *
+ * **不含 center**:safeSide 只可能是 right/left/bottom/top(见 safezone.py 的
+ * SIDE_PRIORITY),前三个原样返回,top 又只在这三个里挑 —— center 不可达。
+ * 文档里以前写成 "center/bottom/left/right",会让模型以为居中是个合法建议,
+ * 而居中正是人脸所在。
+ */
+export type CardPosition = "left" | "right" | "bottom";
+
+/** 某一侧被人物盖住多少就算「占住了」。半屏一半以上是人,卡片放上去必然压到 */
+export const OCCUPIED_THRESHOLD = 0.5;
+
+export interface PositionSuggestion {
+  /** 能填进卡片 params.position 的值;四档全被占住时为 null(此时别硬填) */
+  suggestedPosition: CardPosition | null;
+  /** 被选中那一侧的占用率(0~1)。suggestedPosition 为 null 时是那个最不坏档位的占用率 */
+  suggestedOccupancy: number;
+  /** 只在 suggestedPosition 为 null 时有 */
+  warning?: string;
+}
+
+/**
+ * 把 safeSide + occupancy 折成「卡片放哪」的建议,并说清这条建议靠不靠谱。
+ *
+ * 为什么要单独有这一层:positionForSafeSide 是在**剩下三个合法档里挑最不坏的**,
+ * 正面说话人半身镜头(safeSide=top)最常见的情况是四侧都被占住,它照样会返回一个
+ * 侧边,而那一侧实测占用率 0.895 —— 卡片就压在脸上。实测 out/media/talker.mp4
+ * t=2.75:occupancy {left:0.895, right:0.895, top:0.692, bottom:0.993},
+ * safeSide="top",挑出来的 right 有 89.5% 是人。这种时候必须说「这个镜头没有
+ * 不遮人的位置」,而不是给一个看起来言之凿凿的 right。
+ */
+export function suggestPosition(
+  safeSide: SafeSide,
+  occupancy?: SubjectOccupancy | null,
+): PositionSuggestion {
+  const pos = positionForSafeSide(safeSide, occupancy);
+  const occ = occupancy?.[pos] ?? 0;
+  if (occ > OCCUPIED_THRESHOLD) {
+    return {
+      suggestedPosition: null,
+      suggestedOccupancy: Math.round(occ * 100) / 100,
+      warning: `四个档位都被人物占住(最空的 ${pos} 也有 ${Math.round(occ * 100)}% 是人),`
+        + "这个镜头没有不遮人的位置,考虑缩小卡片、降低不透明度,或者换一个镜头放。",
+    };
+  }
+  return { suggestedPosition: pos, suggestedOccupancy: Math.round(occ * 100) / 100 };
+}
+
+/**
+ * 一次检测最多抽多少帧。
+ *
+ * **两处共用**:服务端 /api/subject/detect 拿它当硬上限(超了 400),这边算采样时刻时
+ * 也拿它夹住。以前是服务端一个 200、kernel 这边没有上限,于是「不传 times 就自动算」
+ * 这条默认路径在稍长或稍碎的素材上必然被 400 拒掉 —— 常数只写一份就不会再对不上。
+ * 每帧一次 ffmpeg seek 加一次前向,full 档实测 2.7 s/帧,200 帧已经是 9 分钟。
+ */
+export const MAX_SUBJECT_TIMES = 200;
+
+/**
+ * 给一段素材算主体检测的采样时刻(素材内秒数)。
+ *
+ * 有镜头划分就每个镜头取 20% / 50% / 80% 三点 —— 一个镜头里人物通常会走动,
+ * 只取中点会把「开头在左、结尾在右」压成一个瞬间的结论,而卡片是要覆盖整个镜头的。
+ * 镜头短于 1 秒只取中点:那点时长里三次抽帧抽到的几乎是同一帧,白花三次前向。
+ * 没做过镜头识别就退回每 2 秒一点。
+ *
+ * 结果去重、排序、并夹在素材时长之内 —— ffmpeg seek 到超出时长的位置抽不到帧,
+ * 那条采样白丢,还看不出是为什么。
+ *
+ * 总数硬夹在 max(默认 MAX_SUBJECT_TIMES=200,和服务端同一个常数)以内,分两步降:
+ * 先把每镜头三点降成只取中点(镜头一个不少,只是位置估得糙),仍超再等距抽稀。
+ * 调用方想知道降没降精度,拿 subjectSampleTimes(media, Number.MAX_SAFE_INTEGER)
+ * 的长度和这里的长度一比就有了。
+ */
+export function subjectSampleTimes(
+  media: Pick<MediaAsset, "duration" | "shots">,
+  max: number = MAX_SUBJECT_TIMES,
+): number[] {
+  const dur = media.duration ?? 0;
+  const shots = media.shots?.shots ?? [];
+  const limit = Math.max(1, Math.floor(max));
+
+  /** 夹进时长、保留两位、去重、排序 */
+  const tidy = (raw: number[]): number[] => {
+    const seen = new Set<string>();
+    return raw
+      .map((t) => Math.max(0, dur > 0 ? Math.min(t, Math.max(0, dur - 0.05)) : t))
+      .map((t) => Math.round(t * 100) / 100)
+      .filter((t) => (seen.has(t.toFixed(2)) ? false : (seen.add(t.toFixed(2)), true)))
+      .sort((a, b) => a - b);
+  };
+
+  let out: number[];
+  if (shots.length > 0) {
+    const three: number[] = [];
+    const mid: number[] = [];
+    for (const s of shots) {
+      const len = s.end - s.start;
+      if (len <= 0) continue;
+      mid.push(s.start + len / 2);
+      if (len < 1) three.push(s.start + len / 2);
+      else three.push(s.start + len * 0.2, s.start + len * 0.5, s.start + len * 0.8);
+    }
+    out = tidy(three);
+    // 超限的第一步是**降精度而不是丢镜头**,但也别一步降到底:只超一点点就整体塌成
+    // 每镜头一个中点,会把 240 点砍到 80 点,20%/80% 那两点存在的理由(人物在镜头内走动)
+    // 全丢了(复查实测)。先按镜头分组抽稀 —— 每个镜头保底留中点,剩余名额在各镜头的
+    // 20%/80% 点里等距分;只有中点本身都超限时才退到「每镜头一个中点」,再交给下面的等距抽稀。
+    if (out.length > limit) {
+      if (mid.length > limit) {
+        out = tidy(mid);
+      } else {
+        const extras: number[] = [];
+        for (const s of shots) {
+          const len = s.end - s.start;
+          if (len >= 1) extras.push(s.start + len * 0.2, s.start + len * 0.8);
+        }
+        const room = Math.max(0, limit - mid.length);
+        const picked: number[] = [];
+        if (room > 0 && extras.length > 0) {
+          const stride = extras.length / Math.min(room, extras.length);
+          for (let i = 0; i < Math.min(room, extras.length); i++) picked.push(extras[Math.floor(i * stride)]);
+        }
+        out = tidy([...mid, ...picked]);
+      }
+    }
+  } else {
+    const grid: number[] = [];
+    for (let t = 1; t < dur; t += 2) grid.push(t);
+    // 素材短于 1 秒(或压根没有时长信息)时上面一个点都排不出来,至少给一个中点,
+    // 否则调用方拿到空数组只能报「算不出采样时刻」,而这段素材其实是能检测的。
+    if (grid.length === 0) grid.push(dur > 0 ? dur / 2 : 0);
+    out = tidy(grid);
+  }
+
+  // 还超就等距抽稀。**必须夹在这里**,不能指望调用方分批:setMediaSubjects 是整体
+  // 替换,第二批会把第一批冲掉,所谓「请分批」在客户端根本做不成。
+  // 实测三个会超限的真实场景(校验员的 verify-agent-ux-sampletimes.mjs):
+  // 7 分钟无镜头 210 点、5 分钟 80 镜头 240 点、3 分钟 90 个 2 秒镜头 270 点。
+  if (out.length > limit) {
+    const n = out.length;
+    const seen = new Set<number>();
+    const thinned: number[] = [];
+    for (let i = 0; i < limit; i++) {
+      const idx = limit === 1 ? Math.floor((n - 1) / 2) : Math.round((i * (n - 1)) / (limit - 1));
+      if (seen.has(idx)) continue;
+      seen.add(idx);
+      thinned.push(out[idx]);
+    }
+    out = thinned;
+  }
+  return out;
 }

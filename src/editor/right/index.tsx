@@ -1,13 +1,20 @@
 import { useEffect, useState } from "react";
 import { startShotDetection, waitForShots } from "../../ai/shots";
 import { installTrack, startTracking, trackStatus, waitForTrack, type TrackResult } from "../../ai/track";
+import {
+  installSubject, startSubjectDetection, subjectStatus, waitForSubjects,
+} from "../../ai/subject";
 import { buildClipMotion } from "../../kernel/motion";
 import { AiPanel } from "./AiPanel";
 import { connectMcpExecutor, EditorApi } from "../../ai/mcpExecutor";
 import { getState, actions } from "../../store/project";
 import { allCards } from "../../kernel/registry";
 import { validateCardParams, findCard } from "../../kernel/cardParams";
-import { findClip } from "../../kernel/project";
+import {
+  findClip, subjectForRange, subjectSampleTimes, suggestPosition,
+  MAX_SUBJECT_TIMES,
+  type SubjectBox, type SubjectRangeInfo,
+} from "../../kernel/project";
 import { createClipGuard, timelineDigest, lookHint } from "./toolEcho";
 import { sttStatus, sttInstall, transcribeMedia } from "../io/stt";
 import { importVideoFiles } from "../io";
@@ -37,6 +44,52 @@ const trackJobs = new Map<string, {
   jobId: string; percent: number; engine?: "bootstapir" | "template"; error?: string;
 }>();
 const trackResults = new Map<string, TrackResult>();
+
+/** 正在跑的主体检测作业,按 mediaId 索引。结果落进 store(MediaAsset.subjects)后就删掉。 */
+const subjectJobs = new Map<string, {
+  jobId: string; percent: number; engine?: "light" | "full"; error?: string;
+}>();
+/** 主体检测拓展的安装作业。理由同 trackInstallJobs:jobId 各自生成,不混表 */
+const subjectInstallJobs = new Map<string, {
+  done: boolean; ok: boolean; error?: string; logTail: string[];
+}>();
+
+/** 一段区间上最有代表性的几个框。全量吐给模型太长,一个镜头三次采样就是三份重复的人 */
+function topBoxes(boxes: SubjectBox[], limit = 4): SubjectBox[] {
+  return [...boxes]
+    .sort((a, b) => b.w * b.h - a.w * a.h)
+    .slice(0, limit)
+    .map((b) => ({
+      label: b.label,
+      x: Math.round(b.x), y: Math.round(b.y), w: Math.round(b.w), h: Math.round(b.h),
+      conf: Math.round(b.conf * 100) / 100,
+    }));
+}
+
+/** 把 subjectForRange 的结果折成给模型看的形状:带能直接填进 params.position 的建议 */
+function subjectDigest(info: SubjectRangeInfo | null) {
+  if (!info) return null;
+  const round2 = (v: number) => Math.round(v * 100) / 100;
+  // suggestedPosition 是「剩下三档里最不坏的」,不等于「保证不遮」。把被选中那一侧的
+  // 占用率一并报出来,占过一半就置 null 并给 warning —— 正面说话人半身镜头
+  // (safeSide=top)最常见的情况是四侧全被占,以前这里会给出一个 89.5% 是人的 right,
+  // 模型照着填,卡片正好压在脸上,而返回里没有任何字段透出这件事。
+  const sug = suggestPosition(info.safeSide, info.occupancy);
+  return {
+    safeSide: info.safeSide,
+    ...sug,
+    occupancy: {
+      left: round2(info.occupancy.left), right: round2(info.occupancy.right),
+      top: round2(info.occupancy.top), bottom: round2(info.occupancy.bottom),
+    },
+    sampledAt: info.times,
+    boxCount: info.boxes.length,
+    boxes: topBoxes(info.boxes),
+    ...(info.approximate
+      ? { approximate: true, note: "这段区间里没有采样点,数字来自时间上最近的一次采样,只是近似" }
+      : null),
+  };
+}
 
 export function RightPanel() {
   const [mcpConnected, setMcpConnected] = useState(false);
@@ -160,9 +213,10 @@ export function RightPanel() {
 
       // ── 语音转文字 ────────────────────────────────────────────────
       backgroundJobStatus: ({ jobId }) => {
-        // 听写和运动追踪各有一张作业表。只查前者的话,track_install 返回的
-        // jobId 拿过来一定是「找不到」,而那条消息会把人引向「是不是重启了」。
-        const job = sttJobs.get(jobId) ?? trackInstallJobs.get(jobId);
+        // 听写、运动追踪、主体检测各有一张作业表。只查第一张的话,track_install /
+        // subject_install 返回的 jobId 拿过来一定是「找不到」,而那条消息会把人
+        // 引向「是不是重启了」。
+        const job = sttJobs.get(jobId) ?? trackInstallJobs.get(jobId) ?? subjectInstallJobs.get(jobId);
         if (!job) throw new Error('找不到后台任务，可能已重启。');
         return { jobId, ...job };
       },
@@ -275,6 +329,11 @@ export function RightPanel() {
           if (pending) return { running: true, percent: pending.percent, engine: pending.engine };
           return null;
         }
+        // 每个镜头带上这段区间里的主体情况。**这是「别遮住人脸」那条路的落点**:
+        // 模型拿到 suggestedPosition 就能直接填进卡片的 position,不用靠看图猜。
+        // 没检测过就是 null,并在返回里给一句 hint 指向 detect_subjects ——
+        // 不给这句的话模型只会看到一堆 subject: null,以为「这素材里没有人」。
+        const subjectPending = subjectJobs.get(args.mediaId);
         return {
           running: false,
           engine: media.shots.engine,
@@ -282,8 +341,64 @@ export function RightPanel() {
           engineNote: media.shots.engine === "scdet"
             ? "当前用的是 ffmpeg scdet 兜底,只认硬切,溶解等渐变转场检测不出来"
             : "TransNetV2,硬切和溶解都认得",
-          shots: media.shots.shots,
+          shots: media.shots.shots.map((s) => ({
+            ...s,
+            subject: subjectDigest(subjectForRange(media.subjects, s.start, s.end)),
+          })),
           transitions: media.shots.transitions.map(({ thumbs, ...rest }) => rest),
+          // 顺序有讲究(复查实测):
+          //   1. 上次作业失败 —— 不管手里有没有旧结果都先说。失败的作业留在表里,以前会一直回
+          //      「正在跑(0%)」,模型照着无限轮询一个死掉的作业;有旧结果时以前还会回成功那套话,
+          //      和 list_subjects 抛错的口径对不上。
+          //   2. 作业在跑 —— 有旧结果时下面的 subject 是旧批次的,要说明。
+          //   3. 没检测过。
+          //   4. 有结果但每个镜头都是 null —— 整批采样全抽帧失败,这不是「画面里没有人」。
+          //   5. 有结果。
+          ...(subjectPending?.error
+            ? {
+                subjectHint: `上次主体检测失败:${subjectPending.error}。`
+                  + (media.subjects ? "下面每个镜头的 subject 来自更早成功的那一批,不是这次的。" : "")
+                  + "先调 subject_status 看 engine:为 null 说明这台机器上两档都用不了(没有兜底档),"
+                  + "退回 see_preview({ t }) 看真实画面判断人在哪,**不要继续轮询本工具**;"
+                  + "engine 不为 null 才值得调 detect_subjects 并传 force:true 重试。",
+              }
+            : subjectPending
+              ? {
+                  subjectHint: `主体检测正在跑(${subjectPending.percent}%),跑完再调一次本工具就能看到每个镜头的人物位置`
+                    + (media.subjects ? ";下面的 subject 是上一批的结果,新一批跑完会替换" : ""),
+                }
+              : !media.subjects
+                ? {
+                    subjectHint: "这些镜头还没做主体检测,所以每个 subject 都是 null。要决定卡片放哪边、"
+                      + "别遮住人物的脸,先调 detect_subjects 拿人物位置。",
+                  }
+                : media.shots.shots.every((s) => subjectForRange(media.subjects, s.start, s.end) === null)
+                  ? {
+                      subjectEngine: media.subjects.engine,
+                      subjectFailedCount: media.subjects.failedCount ?? 0,
+                      subjectHint: `主体检测跑完了,但这一批 ${media.subjects.samples.length} 个采样没有一个可用`
+                        + "(全部抽帧失败,见 subjectFailedCount),所以每个 subject 都是 null —— 这不是「画面里没有人」。"
+                        + "换几个时刻用 detect_subjects 传 times 重测,或退回 see_preview({ t }) 看图。",
+                    }
+                  : {
+                      subjectEngine: media.subjects.engine,
+                      ...(media.subjects.failedCount
+                        ? { subjectFailedCount: media.subjects.failedCount }
+                        : null),
+                      ...(media.subjects.fellBackFrom
+                        ? {
+                            subjectFellBackFrom: media.subjects.fellBackFrom,
+                            subjectFallbackNote: `本来要跑 full 档,中途退回了 light:${media.subjects.fallbackReason ?? "原因未知"}。`
+                              + "所以 prompt 没生效,label 只可能是 person / face。",
+                          }
+                        : null),
+                      subjectHint: "每个镜头的 subject.suggestedPosition 可以直接填进卡片的 params.position"
+                        + "(只会是 left / right / bottom,不会返回 center);boxes 是原始视频像素的人物框。"
+                        + "suggestedPosition 为 null 表示四档全被人物占住(看 suggestedOccupancy 和 warning),"
+                        + "那个镜头没有不遮人的位置,别硬填。"
+                        + "能不能填以 list_cards({cardId}) 的 controls 为准,卡片不支持这个值就换一张卡,"
+                        + "不要退回默认的居中 —— 居中正是人脸所在。",
+                    }),
         };
       },
 
@@ -414,6 +529,210 @@ export function RightPanel() {
           jobId, started: true,
           hint: "运动追踪拓展正在后台安装(torch + 权重约 400 MB,要几分钟)。"
             + "用 background_job_status 查这个 jobId,或用 track_status 看 engine 有没有变成 bootstapir。不要重复启动。",
+        };
+      },
+
+      // ── 主体检测 ────────────────────────────────────────────────
+      // 「别让卡片遮住人物的脸」这类要求的正路:抽几帧看人在哪、哪边是空的,
+      // 结果按镜头折进 list_shots 的 suggestedPosition。
+
+      /**
+       * 抽帧检测。采样时刻默认按镜头算(每镜头 20%/50%/80%,短镜头只取中点),
+       * 没做过镜头识别就每 2 秒一点 —— 见 sampleTimesFor。
+       *
+       * 结果写进项目文档,同一素材默认复用,要重测才传 force:true。
+       * 换了 prompt 也当成要重测:提示词变了,上一批结果里根本没有那个类别。
+       */
+      detectSubjects: async (args) => {
+        const media = getState().project.media.find((m) => m.id === args.mediaId);
+        if (!media) throw new Error(`找不到素材 ${args.mediaId}`);
+        if (media.kind === "audio") throw new Error(`${media.name} 是音频,没有画面可看`);
+        if (!media.path) throw new Error(`${media.name} 没有服务端可读的路径,重新导入一次再试`);
+
+        const prompt = typeof args.prompt === "string" ? args.prompt.trim() : "";
+        const promptChanged = !!media.subjects && prompt !== (media.subjects.prompt ?? "");
+        // 复用不能只比 prompt 字符串,还要看已存结果**有没有能力**回答这个 prompt。
+        // light 档带 prompt 跑出来的结果 label 只可能是 person/face;用户之后装上
+        // full 拓展包再问同一句,只比字符串的话仍然 reused:true + engine light,
+        // 模型于是继续拿一份根本没找过猫的结果回答「画面里没有猫」。
+        // 但还要看**这台机器现在**能不能跑到 full。只装了 light 的机器上,已存结果是 light、
+        // 现在也只能跑出 light,重测毫无意义 —— 只看已存结果的档位的话,同一句 prompt 每问
+        // 一次全量重测一次,模型会「重测→还是 light→再重测」地绕圈(复查实测)。
+        // 所以 subjectStatus 提前到这里查:复用判据和后面算 ETA 共用这一次。
+        const st = await subjectStatus().catch(() => null);
+        const staleEngine = !!media.subjects && !!prompt
+          && media.subjects.engine !== "full" && st?.engine === "full";
+        if (media.subjects && !args.force && !promptChanged && !staleEngine) {
+          const cannotAnswerPrompt = !!prompt && media.subjects.engine !== "full";
+          return {
+            reused: true, mediaId: args.mediaId, engine: media.subjects.engine,
+            samples: media.subjects.samples.length,
+            failedCount: media.subjects.failedCount ?? 0,
+            prompt: media.subjects.prompt,
+            ...(cannotAnswerPrompt
+              ? { engineNote: "已有结果是 light 档跑的,label 只有 person / face,答不了提示词里别的名词;"
+                  + "这台机器现在也只能跑 light,所以没有重测。装了 full 拓展包之后再传 force:true 重测。" }
+              : null),
+            hint: "这个素材已经检测过了,直接用 list_subjects 取结果,或用 list_shots 看每个镜头的 suggestedPosition;要重测传 force:true",
+          };
+        }
+
+        // 上限夹在 kernel 里(MAX_SUBJECT_TIMES,和服务端同一个常数)。
+        // 拿「不设限时会排出多少点」一比,就知道这次降没降精度 —— 降过要说出来,
+        // 不然模型会拿一份被抽稀过的结论当满精度用。
+        const autoRaw = subjectSampleTimes(media, Number.MAX_SAFE_INTEGER).length;
+        const times = Array.isArray(args.times) && args.times.length > 0
+          ? args.times.map(Number).filter((t) => Number.isFinite(t) && t >= 0)
+          : subjectSampleTimes(media);
+        if (times.length === 0) throw new Error("算不出采样时刻,素材可能没有时长信息;可以自己传 times");
+        const sampledNote = !args.times && autoRaw > times.length
+          ? `素材偏长或镜头偏碎,采样已从 ${autoRaw} 点降到 ${times.length} 点`
+            + `(上限 ${MAX_SUBJECT_TIMES});镜头级的结论会更粗,approximate 为 true 的镜头会变多。`
+          : undefined;
+
+        // engine 用上面复用判据查到的那一次:轮询之前就让模型知道跑的是哪一档,以及大概要等多久。
+        // 两档差一个数量级(实测 light 约 0.5 s/帧、full 约 3 s/帧),按同一个节奏
+        // 轮询的话不是白问几十次就是等得莫名其妙。查不到不算错,给 undefined。
+        const engine = st?.engine ?? null;
+        const msPerFrame = engine === "full" ? 3000 : engine === "light" ? 500 : 0;
+        const etaSeconds = engine ? Math.ceil((times.length * msPerFrame) / 1000) + 5 : undefined;
+
+        const jobId = await startSubjectDetection(media.path, media.id, times, prompt || undefined);
+        // 旧的 error 记录要先清掉:不清的话新作业和上一次的失败状态串味,
+        // list_shots 会拿着一条陈年错误报「上次主体检测失败」。
+        subjectJobs.delete(args.mediaId);
+        subjectJobs.set(args.mediaId, { jobId, percent: 0 });
+        waitForSubjects(jobId, (percent, engine) =>
+          subjectJobs.set(args.mediaId, { jobId, percent, engine }))
+          .then((result) => {
+            actions.setMediaSubjects(args.mediaId, result);
+            subjectJobs.delete(args.mediaId);
+          })
+          .catch((e: unknown) => {
+            subjectJobs.set(args.mediaId, {
+              jobId, percent: 0,
+              error: e instanceof Error ? e.message : String(e),
+            });
+          });
+        return {
+          jobId, started: true, mediaId: args.mediaId,
+          samples: times.length,
+          sampledFrom: media.shots ? "按镜头(每个镜头 20%/50%/80%)" : "每 2 秒一点(这段素材还没做镜头识别)",
+          ...(sampledNote ? { sampledNote } : null),
+          engine,
+          ...(etaSeconds ? { etaSeconds } : null),
+          ...(staleEngine
+            ? { staleEngine: true, engineNote: "上一批结果是 light 档跑的,答不了提示词,所以这次重测(不是复用)" }
+            : null),
+          hint: "主体检测已在后台开始,用 list_subjects 轮询该 mediaId;"
+            + (etaSeconds
+              ? `预计 ${etaSeconds} 秒左右(engine=${engine},实测 light 约 0.5 秒/帧、full 约 3 秒/帧)。`
+                + `${engine === "full" ? "full 档慢,隔 10 秒问一次就够" : "隔 3 秒问一次就够"},别每秒都问。`
+              : "engine 为 null 表示两档都用不了,这个作业多半会失败;先调 subject_status 确认。")
+            + "跑完之后 list_shots 的每个镜头会带上 subject 和 suggestedPosition。",
+        };
+      },
+
+      listSubjects: (args) => {
+        const media = getState().project.media.find((m) => m.id === args.mediaId);
+        if (!media) throw new Error(`找不到素材 ${args.mediaId}`);
+        const pending = subjectJobs.get(args.mediaId);
+        if (pending?.error) throw new Error(pending.error);
+        // 有作业在跑就先报在跑 —— 哪怕手里还有上一批结果。以前是「有旧结果就直接回旧结果」,
+        // 换了 prompt 重测期间模型读到的是旧 prompt 的样本,还以为新的已经跑完了(复查实测)。
+        if (pending) {
+          return {
+            running: true, percent: pending.percent, engine: pending.engine,
+            ...(media.subjects
+              ? { stale: true, staleNote: "上一批结果还在,但新一次检测正在跑,这里不给样本;跑完再调一次本工具" }
+              : null),
+          };
+        }
+        if (!media.subjects) return null;
+        const s = media.subjects;
+        return {
+          running: false,
+          engine: s.engine,
+          // 哪一档决定了 label 里能出现什么。不说清楚的话,模型会把 light 档
+          // 「只有 person/face」读成「画面里没有猫」。
+          engineNote: s.engine === "full"
+            ? "Grounding DINO,label 是提示词里的名词;prompt 为空时按 person . face . 找"
+            : "YuNet + RT-DETR 的 light 档,只认 person 和 face,提示词不生效(原样回显在 prompt 里)",
+          ...(s.fellBackFrom
+            ? {
+                fellBackFrom: s.fellBackFrom,
+                fallbackNote: `本来要跑 full 档,中途退回了 light:${s.fallbackReason ?? "原因未知"}。`
+                  + "所以 prompt 没生效,label 只可能是 person / face。",
+              }
+            : null),
+          prompt: s.prompt,
+          width: s.width,
+          height: s.height,
+          // 抽帧失败的采样单独报个数。它们在 JSON 里和「这一帧真的没有人」逐字段相同
+          // (boxes 空、occupancy 四个 0),不点出来的话模型会把「没抽到」读成「没有人」。
+          failedCount: s.failedCount ?? s.samples.filter((sm) => sm.failed).length,
+          samples: s.samples.map((sm) => ({
+            t: sm.t,
+            ...(sm.failed
+              ? { failed: true, reason: sm.reason ?? "这一帧没抽出来", boxes: [], boxCount: 0 }
+              : {
+                  safeSide: sm.safeSide,
+                  ...suggestPosition(sm.safeSide, sm.occupancy),
+                  occupancy: sm.occupancy,
+                  boxes: topBoxes(sm.boxes),
+                  boxCount: sm.boxes.length,
+                }),
+          })),
+          hint: "坐标是原始视频像素(和 width/height 同一套)。要按镜头排卡片就直接看 list_shots,"
+            + "那边每个镜头已经把这些采样折好了。suggestedPosition 可直接填进卡片的 params.position"
+            + "(只会是 left / right / bottom,不会返回 center);为 null 表示四档都被人物占住,"
+            + "看 suggestedOccupancy 和 warning,那一刻没有不遮人的位置。"
+            + "failed 为 true 的采样是抽帧失败,不是「这一帧没有人」,不要拿它下结论。",
+        };
+      },
+
+      subjectStatus: async () => {
+        const s = await subjectStatus();
+        return {
+          ...s,
+          hint: s.engine === "full"
+            ? "full 档:YuNet + RT-DETR + Grounding DINO,能按任意文字提示找目标(prompt 生效)。"
+            : s.engine === "light"
+              ? "light 档:YuNet(人脸) + RT-DETR(人体),只认 person 和 face,prompt 不生效。"
+                + "要按任意词找目标(猫、手机、红色的车)得装 full 档拓展库包。"
+              // 这里没有兜底档,和运动追踪不一样 —— 不能让模型以为还有个降级引擎在跑。
+              : "两档都用不了,这台机器上检测不了主体。"
+                + "位置和遮挡的判断退回 see_preview 看图,不要凭空猜「人在左边」。"
+                + "用户想要就用 subject_install 装 light 档(约 30 MB)。",
+        };
+      },
+
+      // 在线装的是 light 档(onnxruntime,约 30 MB)。full 档是 torch + transformers
+      // 加 690 MB 权重,只随拓展库包发,在线装中断一次就得从头来。
+      subjectInstall: async () => {
+        const jobId = `subject-${Date.now().toString(36)}`;
+        subjectInstallJobs.set(jobId, { done: false, ok: false, logTail: [] });
+        void installSubject((line) => {
+          const job = subjectInstallJobs.get(jobId);
+          if (job) job.logTail = [...job.logTail, line].slice(-20);
+        })
+          .then(({ ok }) => {
+            const job = subjectInstallJobs.get(jobId);
+            subjectInstallJobs.set(jobId, { done: true, ok, logTail: job?.logTail ?? [] });
+          })
+          .catch((e: unknown) => {
+            const job = subjectInstallJobs.get(jobId);
+            subjectInstallJobs.set(jobId, {
+              done: true, ok: false,
+              error: e instanceof Error ? e.message : String(e),
+              logTail: job?.logTail ?? [],
+            });
+          });
+        return {
+          jobId, started: true,
+          hint: "主体检测 light 档正在后台安装(onnxruntime,约 30 MB)。"
+            + "用 background_job_status 查这个 jobId,或用 subject_status 看 engine 有没有变成 light。不要重复启动。"
+            + "装完还可能缺权重文件(yunet.onnx / rtdetr_r18vd.onnx),那要跑拓展库包的 .exe 才有。",
         };
       },
 
