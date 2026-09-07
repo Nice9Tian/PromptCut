@@ -37,7 +37,7 @@ interface Job {
 
 const PROVIDERS: { id: Provider; name: string; desc: string }[] = [
   { id: "claude", name: "Claude Code", desc: "打开 Claude 桌面版的 Code 标签,新对话直接落在任务目录,输入框里预填好 /promptcut,按回车即可" },
-  { id: "codex", name: "Codex", desc: "用 codex app 打开任务目录,再开一条新线程;流程写在 AGENTS.md 里" },
+  { id: "codex", name: "Codex", desc: "用 codex app 打开任务目录,再开一条新线程,输入框里预填好指令,按回车即可;流程写在 AGENTS.md 里" },
 ];
 
 const STEPS: { phase: Phase; label: string }[] = [
