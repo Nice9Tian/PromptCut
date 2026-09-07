@@ -77,6 +77,22 @@ function writeInstance(patch = {}) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * 给一个可能永远不返回的 promise 加硬性熔断。
+ *
+ * 收工路径上每一步都得有它:page.evaluate 在 puppeteer 里是**无限期等**的,页面卡死或者
+ * saveDraft 挂在一个不返回的请求上,最后那次 flush 就再也回不来 —— shutdown() 永远走不到,
+ * Node、隐藏的 Chrome、vite 子进程连同端口一起留在系统里,而这个实例是没人会去手动收的
+ * 那一个。宁可丢掉最后一次写回,也不能留一窝僵尸进程。
+ */
+function withTimeout(promise, ms, label) {
+  let timer;
+  return Promise.race([
+    Promise.resolve(promise).finally(() => clearTimeout(timer)),
+    new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`${label} 超时(${ms}ms)`)), ms); }),
+  ]);
+}
+
 async function waitHttp(url, pred, timeoutMs, label) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -110,7 +126,10 @@ async function shutdown(reason) {
   stopping = true;
   log(`收工:${reason}`);
   writeInstance({ ready: false, stopped: true, stopReason: reason });
-  try { if (browser) await browser.close(); } catch {}
+  // browser.close() 也会等页面把 beforeunload 之类跑完,同样可能不返回;超时就直接往下走,
+  // 反正 Chrome 是 puppeteer 起的子进程,killTree 收得掉
+  try { if (browser) await withTimeout(browser.close(), 8000, "关闭浏览器"); } catch (e) { log(`关浏览器没成:${e.message}`); }
+  try { killTree(browser?.process()?.pid); } catch {}
   killTree(vite?.pid);
   // 给 taskkill 一点时间,然后退出
   await sleep(600);
@@ -192,8 +211,9 @@ async function main() {
   let lastFingerprint = "";
   while (!stopping) {
     if (fs.existsSync(STOP)) {
-      // 最后再 flush 一次,别把 agent 最后一步改动丢了
-      try { await page.evaluate(() => window.__pcHeadless.flush()); } catch {}
+      // 最后再 flush 一次,别把 agent 最后一步改动丢了 —— 但收工不能被它拖住,见 withTimeout
+      try { await withTimeout(page.evaluate(() => window.__pcHeadless.flush()), 5000, "收工前最后一次写回"); }
+      catch (e) { log(`收工前的写回没成:${e.message}`); }
       try { fs.unlinkSync(STOP); } catch {}
       return shutdown("收到 stop");
     }
