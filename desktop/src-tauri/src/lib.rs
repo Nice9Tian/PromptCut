@@ -17,6 +17,34 @@ use tauri_plugin_shell::ShellExt;
 
 const EDITOR_URL: &str = "http://127.0.0.1:5210/";
 
+/// 启动参数里的 .proc 文件(双击文件、右键「打开方式」)。只认真实存在的文件。
+fn proc_arg<I: Iterator<Item = String>>(args: I) -> Option<String> {
+    args.filter(|a| a.to_lowercase().ends_with(".proc"))
+        .find(|a| std::path::Path::new(a).is_file())
+}
+
+/// 最小的百分号编码:除了字母数字和 -_.~ 全部转义,前端 URLSearchParams 解得开。
+/// 不引 url 编码的 crate,就这一处用。
+fn percent_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() * 3);
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
+            _ => out.push_str(&format!("%{:02X}", b)),
+        }
+    }
+    out
+}
+
+/// 编辑器地址。带着要打开的 .proc 时挂成 ?open=<路径>:前端 Shell 会让服务端**先复制一份**
+/// 再读副本,原文件不被占用、不被改。
+fn editor_url_with_open(open: Option<String>) -> String {
+    match open {
+        Some(p) => format!("{}?open={}", EDITOR_URL, percent_encode(&p)),
+        None => EDITOR_URL.to_string(),
+    }
+}
+
 /// Holds the sidecar process ID so we can kill the whole tree on exit.
 struct SidecarPid(Mutex<Option<u32>>);
 
@@ -95,12 +123,17 @@ pub fn run() {
 
     // -- Plugins ----------------------------------------------------------
     let builder = builder
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             // Second instance: bring the existing window to front.
             if let Some(w) = app.get_webview_window("main") {
                 let _ = w.unminimize();
                 let _ = w.show();
                 let _ = w.set_focus();
+            }
+            // 第二次启动多半是双击了一个 .proc:交给已经开着的窗口去开
+            // (前端收到 pc-open-file 后走「复制一份再读」那条路)
+            if let Some(p) = proc_arg(args.into_iter().skip(1)) {
+                let _ = app.emit("pc-open-file", p);
             }
         }))
         .plugin(tauri_plugin_window_state::Builder::default().build())
@@ -111,6 +144,9 @@ pub fn run() {
     builder
         .setup(|app| {
             let handle = app.handle().clone();
+
+            // 双击 .proc 启动时,把路径挂在编辑器地址上带给前端
+            let editor_url = editor_url_with_open(proc_arg(env::args().skip(1)));
 
             // ── Port check ──────────────────────────────────────────
             let mut existing_instance = false;
@@ -213,7 +249,7 @@ pub fn run() {
 
             // If there is already an instance running, just navigate to it.
             if existing_instance {
-                let _ = win.navigate(EDITOR_URL.parse().unwrap());
+                let _ = win.navigate(editor_url.parse().unwrap());
                 return Ok(());
             }
 
@@ -342,6 +378,7 @@ pub fn run() {
             let sidecar_dead_poll = sidecar_dead.clone();
             let win_poll = win.clone();
             let log_path_poll = app_log_dir.join("sidecar.log");
+            let editor_url_poll = editor_url.clone();
 
             std::thread::spawn(move || {
                 let start = std::time::Instant::now();
@@ -360,7 +397,7 @@ pub fn run() {
                     }
                     if let Ok(body) = probe_port(Duration::from_secs(2)) {
                         if body.starts_with("HTTP/1.1 200") || body.starts_with("HTTP/1.0 200") {
-                            let _ = win_poll.navigate(EDITOR_URL.parse().unwrap());
+                            let _ = win_poll.navigate(editor_url_poll.parse().unwrap());
                             break;
                         }
                     }

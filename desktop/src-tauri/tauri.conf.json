@@ -15,7 +15,9 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis"],
+    "targets": [
+      "nsis"
+    ],
     "publisher": "PromptCut",
     "icon": [
       "icons/32x32.png",
@@ -24,7 +26,9 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "externalBin": ["binaries/node"],
+    "externalBin": [
+      "binaries/node"
+    ],
     "resources": {
       "runtime/": "runtime/"
     },
@@ -34,10 +38,24 @@
       },
       "nsis": {
         "installMode": "currentUser",
-        "languages": ["SimpChinese", "English"],
+        "languages": [
+          "SimpChinese",
+          "English"
+        ],
         "displayLanguageSelector": false,
         "installerHooks": "./nsis/hooks.nsh"
       }
-    }
+    },
+    "fileAssociations": [
+      {
+        "ext": [
+          "proc"
+        ],
+        "name": "PromptCut Project",
+        "description": "PromptCut 项目文件",
+        "mimeType": "application/json",
+        "role": "Editor"
+      }
+    ]
   }
 }
