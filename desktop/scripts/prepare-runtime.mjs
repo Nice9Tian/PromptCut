@@ -347,6 +347,19 @@ function stepChrome(appDir) {
   const destVersionDir = path.join(chromeDir, "chrome", `win64-${version}`);
   const chromeExe = path.join(destVersionDir, "chrome-win64", "chrome.exe");
 
+  /*
+   * 这一版已经在位就别再拷一遍。
+   *
+   * 目录名里带版本号(win64-<version>),所以「文件在」就等于「正是要的这一版」——
+   * 换版本会走另一个目录,末尾那段清理逻辑会把旧版删掉,不存在拿到陈旧 Chrome 的可能。
+   *
+   * 不跳会出事:开发机上很可能有东西正开着这份 Chrome(dev server 的网页工具就常驻一个,
+   * user-data-dir 落在 out/web-profile),覆盖 chrome.dll 会拿到 EBUSY,整个发布当场中断。
+   * 实测过一次 —— 而那 428 MB 拷过去的内容和已经在的一模一样,纯属白费。
+   * 真要重来就先把 runtime/chrome 删掉。
+   */
+  const already = fs.existsSync(chromeExe);
+
   if (CHECK_ONLY) {
     assert(fs.existsSync(chromeExe), `Chrome exe not found: ${chromeExe}`);
     console.log(`  ✓ Chrome exists (${dirSizeMB(chromeDir)} MB) [${((Date.now() - stepT) / 1000).toFixed(1)}s]`);
@@ -356,9 +369,11 @@ function stepChrome(appDir) {
   // Try copying from puppeteer cache first
   const userProfile = process.env.USERPROFILE || "";
   const cacheDir = path.join(userProfile, ".cache", "puppeteer", "chrome", `win64-${version}`);
-  let copied = false;
+  let copied = already;
 
-  if (fs.existsSync(cacheDir)) {
+  if (already) {
+    console.log(`  已是同一版本,跳过拷贝(下面的旧版本清理照跑)`);
+  } else if (fs.existsSync(cacheDir)) {
     console.log(`  Copying from cache: ${cacheDir}`);
     mkdirp(destVersionDir);
     copyRecursive(cacheDir, destVersionDir, (name, fullPath) => {
