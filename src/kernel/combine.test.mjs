@@ -14,7 +14,7 @@ import assert from "node:assert/strict";
 
 import { createEmptyProject } from "./project.ts";
 import { normalizeCuts } from "./cuts.ts";
-import { combineProjects, describeReport, RESULT_TRACK_NAME } from "./combine.ts";
+import { combineProjects, describeReport, emptyBase, RESULT_TRACK_NAME } from "./combine.ts";
 
 const clip = (id, start = 0, end = 1, extra = {}) => ({ id, cardId: "x", start, end, params: {}, ...extra });
 const clone = (v) => JSON.parse(JSON.stringify(v));
@@ -227,4 +227,86 @@ test("激活的剪辑还是 ours 的那条,停放的条目不带重复内容", (
   assert.equal(project.activeCutId, ours.activeCutId);
   const active = project.cuts.find((c) => c.id === project.activeCutId);
   assert.equal(active.tracks, undefined);
+});
+
+test("没有 base:自己的卡一张都不能少", () => {
+  // 用户随手挑了一份别处来的 .proc(和当前项目毫无关系)来合并。
+  // 曾经把 ours 当 base,结果 a/b/c 全被判成「对方删掉的」,整个项目只剩 z。
+  const ours = normalizeCuts({
+    ...createEmptyProject("我的"),
+    tracks: [{ id: "t-1", name: "序列 1", clips: [clip("a", 0, 2), clip("b", 2, 4), clip("c", 4, 6)] }],
+    duration: 10,
+  });
+  const theirs = normalizeCuts({
+    ...createEmptyProject("外来"),
+    tracks: [{ id: "t-9", name: "别人的序列", clips: [clip("z", 0, 2)] }],
+    duration: 10,
+  });
+  const { project, report } = combineProjects(emptyBase(), ours, theirs);
+  const all = project.tracks.flatMap((t) => t.clips.map((c) => c.id)).sort();
+  assert.deepEqual(all, ["a", "b", "c", "z"]);
+  assert.equal(report.deletedClips, 0);
+  assert.equal(project.name, "我的");
+});
+
+test("没有 base:同一个 id 内容对不上,保留自己的并记冲突", () => {
+  const ours = normalizeCuts({
+    ...createEmptyProject("我的"),
+    tracks: [{ id: "t-1", name: "序列 1", clips: [clip("a", 0, 2, { params: { title: "我写的" } })] }],
+    duration: 10,
+  });
+  const theirs = clone(ours);
+  theirs.tracks[0].clips[0].params = { title: "他写的" };
+  const { project, report } = combineProjects(emptyBase(), ours, theirs);
+  assert.equal(project.tracks[0].clips[0].params.title, "我写的");
+  assert.equal(report.conflicts.length, 1);
+  assert.equal(report.deletedClips, 0);
+});
+
+test("没有 base:对方的空剪辑不会把我的剪辑删掉", () => {
+  const ours = seed();
+  const theirs = normalizeCuts(createEmptyProject("空的"));
+  const { project, report } = combineProjects(emptyBase(), ours, theirs);
+  assert.equal(clipsOf(project, "t-1").length, 1);
+  assert.equal(report.deletedClips, 0);
+  // ours 的三条剪辑一条都没少
+  assert.equal(project.cuts.length, ours.cuts.length);
+});
+
+test("只把卡挪到别的序列,对方删了它 → 记冲突,不静默删", () => {
+  const base = normalizeCuts({
+    ...createEmptyProject("测试"),
+    tracks: [
+      { id: "t-1", name: "序列 1", clips: [clip("a", 0, 2)] },
+      { id: "t-2", name: "序列 2", clips: [] },
+    ],
+    duration: 10,
+  });
+  const ours = clone(base);
+  // 内容一个字节没变,只是换了一条序列
+  ours.tracks[0].clips = [];
+  ours.tracks[1].clips = [clip("a", 0, 2)];
+  const theirs = clone(base);
+  theirs.tracks[0].clips = [];
+  const { project, report } = combineProjects(base, ours, theirs);
+  assert.deepEqual(clipsOf(project, "t-2").map((c) => c.id), ["a"]);
+  assert.equal(report.deletedClips, 0);
+  assert.equal(report.conflicts.length, 1);
+});
+
+test("多条剪辑同时停放 clip:结果序列的 id 不重复", () => {
+  const mk = (cutId) => ({ id: cutId, name: cutId, tracks: [{ id: `tr-${cutId}`, name: "序列 1", clips: [clip(`${cutId}-a`, 0, 5)] }], duration: 10 });
+  const base = { ...createEmptyProject("多剪辑"), tracks: mk("cut-1").tracks, duration: 10, activeCutId: "cut-1",
+    cuts: [{ id: "cut-1", name: "cut-1" }, mk("cut-2")] };
+  const ours = clone(base);
+  const theirs = clone(base);
+  // 两条剪辑各插一张和现有卡重叠的新卡 → 各自新建「Skill 结果」序列
+  theirs.tracks[0].clips.push(clip("cut-1-new", 1, 4));
+  theirs.cuts[1].tracks[0].clips.push(clip("cut-2-new", 1, 4));
+  const { project, report } = combineProjects(base, ours, theirs);
+  assert.equal(report.parkedClips, 2);
+  const ids = [project, ...project.cuts.filter((c) => c.tracks)]
+    .flatMap((c) => (c.tracks ?? []).filter((t) => t.name === RESULT_TRACK_NAME).map((t) => t.id));
+  assert.equal(ids.length, 2);
+  assert.notEqual(ids[0], ids[1]);
 });

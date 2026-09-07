@@ -1,18 +1,21 @@
 import { parseProc } from "./proc";
 import { actions, getState } from "../../store/project";
-import { combineProjects, describeReport, type CombineReport } from "../../kernel/combine";
+import { combineProjects, describeReport, emptyBase, type CombineReport } from "../../kernel/combine";
 import type { Project } from "../../kernel/project";
 
 /**
  * 把一份 Skill 结果(theirs)按三方合并并进当前项目。
  *
- * base 是启动 Skill 时的快照;没有 base(比如用户随手挑了一个别处来的 .proc)就拿
- * 当前项目当 base —— 那时合并退化成「把对方多出来的东西加进来」,不会盖掉自己的。
+ * base 是启动 Skill 时的快照。没有 base(用户随手挑了一份别处来的 .proc)就用**空基线**,
+ * 合并退化成「把对方多出来的东西加进来」,自己的一张不动。
+ *
+ * 这里千万不能拿 ours 当 base —— 那样 ours 相对 base 永远「没改过」,于是「我有、对方
+ * 没有」的每张卡都被判成对方删掉的而静默删除,当前项目会被外来文件整盘替换。
  */
 export function applyCombine(theirsText: string, baseText: string | null): CombineReport {
   const ours = getState().project;
   const theirs = parseProc(theirsText);
-  const base = baseText ? parseProc(baseText) : ours;
+  const base = baseText ? parseProc(baseText) : emptyBase();
   const { project, report } = combineProjects(base, ours, theirs);
   replaceProject(project);
   return report;

@@ -344,14 +344,22 @@ export function TopBar() {
 
   /**
    * 把一份 .proc(通常是 Skill 的结果)三方合并进当前项目。
-   * 没有启动时的快照就拿当前项目当基线 —— 退化成「把对方多出来的加进来」,不会盖掉自己的。
-   * 从 Skill 对话框里合并会带上真正的基线,冲突判断更准;这个入口是给手头只有文件的情况。
+   *
+   * 这个入口**没有基线**(手头只有一个文件,不知道两边是从哪儿分岔的),合并退化成
+   * 「把对方多出来的加进来」:自己的一张卡都不动,同一个 id 上内容对不上就记冲突、保留自己的。
+   * 从 Skill 对话框里合并会带上启动时的真快照,那时才分得清「谁改的」和「谁删的」。
+   *
+   * (曾经这里是拿当前项目当基线的 —— 那样「我有、对方没有」的每张卡都被判成对方删掉的,
+   * 挑一份不相干的 .proc 会把整个项目清空替换。见 io/combineImport.ts。)
    */
   const mergeFromFile = async (file: File) => {
     try {
       const report = applyCombine(await file.text(), null);
       alert(`已把「${file.name}」合并到当前项目(记得保存):
-${summarizeCombine(report)}`);
+${summarizeCombine(report)}
+
+没有基线快照,所以只做了「加进来」:你原有的卡一张都没删。
+两边同一张卡改得不一样时保留的是你的,上面会列成冲突。`);
     } catch (e) {
       alert(e instanceof Error ? e.message : "合并失败");
     }

@@ -51,6 +51,28 @@ export interface CombineResult {
 /** 新建序列的名字。同一条剪辑里多次合并会复用它 */
 export const RESULT_TRACK_NAME = "Skill 结果";
 
+/**
+ * 「没有 base」时用的空基线。
+ *
+ * 用户随手挑了一份别处来的 .proc 来合并,那时并没有共同祖先。**不能拿 ours 当 base** ——
+ * 那样「我有、对方没有」的每张卡都会被判成「对方删掉的」而静默删除,整个项目被外来文件
+ * 整盘替换掉(实测:a,b,c 合一份只有 z 的文件,结果只剩 z)。
+ *
+ * 空基线让三方合并退化成安全的一边:两边有的都算「新加的」—— 对方多出来的加进来,自己的
+ * 一张不动,同一个 id 上内容对不上就记冲突、保留自己的。
+ *
+ * cut 的 id 用一个真实文件里不可能出现的名字:走 normalizeCuts 时不能补出 `cut-1` 这种
+ * 默认 id 去和用户真的剪辑撞上 —— 撞上了那条剪辑就又有 base 了,前面那套误删逻辑会复活。
+ */
+export function emptyBase(): Project {
+  const id = "__pc-no-base__";
+  return {
+    version: 1, name: "", width: 1920, height: 1080, fps: 30, duration: 0,
+    themeId: "default", media: [], tracks: [],
+    cuts: [{ id, name: "" }], activeCutId: id,
+  };
+}
+
 /** 键排序后序列化,用来判断「改没改过」。不看顺序、不看 undefined */
 function fingerprint(v: unknown): string {
   return JSON.stringify(v, (_k, val) => {
@@ -174,7 +196,9 @@ function combineCut(
     if (!resultTrack) {
       resultTrack = out.tracks.find((t) => t.name === RESULT_TRACK_NAME) ?? null;
       if (!resultTrack) {
-        resultTrack = { id: `t-skill-${Date.now().toString(36)}`, name: RESULT_TRACK_NAME, clips: [] };
+        // 后缀不能只有时间戳:一次 combineProjects 是同步跑完的,多条剪辑各自新建结果序列
+        // 时 Date.now() 一模一样,几条序列会拿到同一个 id
+        resultTrack = { id: `t-skill-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`, name: RESULT_TRACK_NAME, clips: [] };
         out.tracks.push(resultTrack);
         report.addedTracks += 1;
       }
@@ -225,7 +249,10 @@ function combineCut(
     }
     if (!t) {
       if (!b) continue; // ours 新加的,theirs 从没见过 → 留着
-      if (same(b.clip, o.clip)) {
+      // 「你没动过」要连它在哪条序列上一起算:只把卡从一条序列拖到另一条,clip 本身
+      // 一个字节都没变,光比 same(b.clip, o.clip) 会判成没动,于是静默同意对方的删除,
+      // 用户排好的层次白排了
+      if (same(b.clip, o.clip) && o.trackId === b.trackId) {
         const tr = trackOf(o.trackId);
         if (tr) tr.clips = tr.clips.filter((c) => c.id !== id);
         report.deletedClips += 1;
