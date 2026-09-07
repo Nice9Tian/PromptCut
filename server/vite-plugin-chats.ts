@@ -512,6 +512,14 @@ export function chatsPlugin(): Plugin {
             sendJson(res, 400, { ok: false, error: "无效的 conversationId" });
             return;
           }
+          /*
+           * srcPath 是**用户自己挑的那个文件**,来自系统文件对话框 —— 磁盘上任何位置都合法,
+           * 所以这里不能设目录白名单(设了「附件」这个功能就没了)。
+           *
+           * 它的防线是 vite-plugin-api-guard 那道同源卡口:跨站页面根本打不进这个接口。
+           * 没有那道卡口的时候,任意网页都能用一个 text/plain 的简单 POST 让服务端把
+           * 用户机器上任意一个文件复制到 web 目录下 —— 0.3.0 评审列的第一条高危就是这个。
+           */
           if (typeof srcPath !== "string" || !srcPath || !existsSync(srcPath)) {
             sendJson(res, 400, { ok: false, error: "源文件路径不存在或不合法" });
             return;

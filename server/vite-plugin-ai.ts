@@ -29,6 +29,21 @@ function sendJson(res: ServerResponse, code: number, data: any) {
 }
 
 /**
+ * 请求体超限时:**先把 413 发出去,再掐断**。返回 true 表示已经回过响应了,调用方别再往下走。
+ *
+ * 原来各处写的是 `if (body.length > max) req.destroy()`,把 413 留给 `req.on('end')` 去发。
+ * 那句 413 是死代码 —— destroy() 直接毁掉底层 socket,`end` **永远不会触发**。结果是
+ * 服务端一声不吭把连接掐了,前端拿到的是「网络错误 / 连接中断」这种看不出所以然的报错,
+ * 而不是「你这个东西太大了」。顺序反过来才对。
+ */
+function overLimit(req: any, res: ServerResponse, len: number, max: number, message: string): boolean {
+  if (len <= max) return false;
+  sendJson(res, 413, { ok: false, error: message });
+  req.destroy();
+  return true;
+}
+
+/**
  * 一次「无工具、无历史」的最小补全。分工模式的编排阶段全都走它。
  *
  * 为什么不走 /api/ai/chat：那条路会带上 30 个工具的 schema 和整段历史，而
@@ -177,9 +192,12 @@ export default function vitePluginAi(): Plugin {
         // 例外是 see_preview:它当场起一个 Chrome 渲一帧,冷启动加素材预热可能过分钟。
         // 让工具自己声明上限,而不是把所有工具一起放宽 —— 真卡住的时候还是该早点报错。
         const limit = toolDef.timeoutMs || 60000;
+        // 定时器句柄要留着:工具正常返回之后不清掉的话,每一次调用都在事件循环里留一个
+        // 最长几十秒的游离定时器。工具调用是高频的,积起来就是白占的内存和唤醒。
+        let timer: ReturnType<typeof setTimeout> | undefined;
         const p = new Promise<any>(resolve => {
-          pendingCalls.set(id, resolve);
-          setTimeout(() => {
+          pendingCalls.set(id, (result: any) => { clearTimeout(timer); resolve(result); });
+          timer = setTimeout(() => {
             if (pendingCalls.has(id)) {
               pendingCalls.delete(id);
               resolve({ ok: false, error: `${tool} 超过 ${Math.round(limit / 1000)} 秒没有返回,已放弃等待。` });
@@ -250,8 +268,10 @@ export default function vitePluginAi(): Plugin {
           if (!req.headers['content-type']?.startsWith('application/json')) return sendJson(res, 415, { ok: false, error: 'JSON required' });
           if (req.headers.origin && req.headers.origin !== 'http://' + req.headers.host && req.headers.origin !== 'https://' + req.headers.host) return sendJson(res, 403, { ok: false, error: 'Origin rejected' });
           let body = '';
-          req.on('data', c => { body += c; if (body.length > 8192) req.destroy(); });
+          let over = false;
+          req.on('data', c => { if (over) return; body += c; over = overLimit(req, res, body.length, 8192, '请求体超过 8KB'); });
           req.on('end', async () => {
+            if (over) return;
             try { (await setupService).cancel(JSON.parse(body).provider); sendJson(res, 200, { ok: true }); }
             catch (e: any) { sendJson(res, 400, { ok: false, error: e.message }); }
           });
@@ -268,8 +288,10 @@ export default function vitePluginAi(): Plugin {
           if (!req.headers['content-type']?.startsWith('application/json')) return sendJson(res, 415, { ok: false, error: 'JSON required' });
           if (req.headers.origin && req.headers.origin !== 'http://' + req.headers.host && req.headers.origin !== 'https://' + req.headers.host) return sendJson(res, 403, { ok: false, error: 'Origin rejected' });
           let body = '';
-          req.on('data', c => { body += c; if (body.length > 8192) req.destroy(); });
+          let over = false;
+          req.on('data', c => { if (over) return; body += c; over = overLimit(req, res, body.length, 8192, '请求体超过 8KB'); });
           req.on('end', async () => {
+            if (over) return;
             try {
               const { provider, dryRun, deviceAuth } = JSON.parse(body || '{}');
               if (kind === 'install' && dryRun) {
@@ -298,9 +320,9 @@ export default function vitePluginAi(): Plugin {
         let body = '';
         let tooBig = false;
         // 报告本身就是大块头,这里的上限只用来挡住明显不正常的请求
-        req.on('data', (c) => { body += c; if (body.length > 64 * 1024 * 1024) { tooBig = true; req.destroy(); } });
+        req.on('data', (c) => { if (tooBig) return; body += c; tooBig = overLimit(req, res, body.length, 64 * 1024 * 1024, '报告超过 64MB,没有保存'); });
         req.on('end', () => {
-          if (tooBig) return sendJson(res, 413, { ok: false, error: '报告超过 64MB,没有保存' });
+          if (tooBig) return;
           try {
             const { text, label } = JSON.parse(body || '{}');
             if (typeof text !== 'string' || !text) return sendJson(res, 400, { ok: false, error: 'text 必填' });
@@ -353,7 +375,13 @@ export default function vitePluginAi(): Plugin {
         } catch (e: any) { sendJson(res, 500, { ok: false, error: e.message }); }
       });
 
-      // 本机识别码:分发 API 配置时当加密口令用。只给摘要后的码,原始指纹不出服务端。
+      /*
+       * 本机识别码:分发 API 配置时当加密口令用。只给摘要后的码,原始指纹不出服务端。
+       *
+       * 这里**故意返回完整码**,不像 /api/ai/diagnostics 那样截断 —— 用户就是要把这一整串
+       * 发给帮他加密配置的人,截了这个功能就没了。它的保护来自 vite-plugin-api-guard 那道
+       * 同源卡口:本机上别的网页(它们都是跨源)打不进这个接口。
+       */
       server.middlewares.use('/api/ai/machine-code', async (req, res) => {
         if (req.method !== 'GET') return sendJson(res, 405, { ok: false, error: 'GET only' });
         try {
@@ -379,8 +407,10 @@ export default function vitePluginAi(): Plugin {
       server.middlewares.use('/api/ai/triage', async (req, res) => {
         if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: 'POST only' });
         let body = '';
-        req.on('data', (c) => { body += c; if (body.length > 8192) req.destroy(); });
+        let over = false;
+        req.on('data', (c) => { if (over) return; body += c; over = overLimit(req, res, body.length, 8192, '请求体超过 8KB'); });
         req.on('end', async () => {
+          if (over) return;
           try {
             const { query } = JSON.parse(body || '{}');
             if (typeof query !== 'string' || !query.trim()) {
@@ -415,8 +445,10 @@ export default function vitePluginAi(): Plugin {
       server.middlewares.use('/api/ai/plan', async (req, res) => {
         if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: 'POST only' });
         let body = '';
-        req.on('data', (c) => { body += c; if (body.length > 200_000) req.destroy(); });
+        let over = false;
+        req.on('data', (c) => { if (over) return; body += c; over = overLimit(req, res, body.length, 200_000, '请求体超过 200KB'); });
         req.on('end', async () => {
+          if (over) return;
           try {
             const { system, prompt, maxTokens } = JSON.parse(body || '{}');
             if (typeof prompt !== 'string' || !prompt.trim()) {

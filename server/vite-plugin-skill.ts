@@ -212,7 +212,23 @@ async function openPath(root: string, req: IncomingMessage, res: ServerResponse)
   if (!/\.(proc|json)$/i.test(src)) return sendJson(res, 400, { ok: false, error: "只认 .proc / .json" });
   if (!fs.existsSync(src)) return sendJson(res, 404, { ok: false, error: `文件不存在:${src}` });
   const text = fs.readFileSync(src, "utf8");
-  JSON.parse(text);
+  /*
+   * 内容必须**长得像一份 PromptCut 项目**才回给调用方。
+   *
+   * 这里不能按目录设白名单 —— 双击磁盘上任意位置的 .proc 本来就是这条路要支持的事。
+   * 但光校验后缀不够:`.json` 什么都能是,而这个接口是把文件内容原样回出去的。
+   * 机器上一堆带凭据的 .json(Codex 的登录态就是其中之一),路径又都是固定的。
+   * 同源卡口(vite-plugin-api-guard)已经挡掉了跨站页面,这一道防的是同源里的注入
+   * (比如聊天记录渲染出来的脚本)—— 它拿这个接口读不到不是项目的东西。
+   */
+  const doc = JSON.parse(text) as Record<string, unknown>;
+  const looksLikeProject =
+    doc?.format === "promptcut-project" ||
+    (doc?.project && typeof doc.project === "object") ||
+    (doc?.version === 1 && Array.isArray(doc?.tracks));
+  if (!looksLikeProject) {
+    return sendJson(res, 400, { ok: false, error: "这个文件不是 PromptCut 项目" });
+  }
   const name = path.basename(src);
   const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\..+$/, "").replace("T", "-");
   const dir = path.join(root, ".pc-work", "opened", `${stamp}-${name.replace(/[\\/:*?"<>|]/g, "")}`);

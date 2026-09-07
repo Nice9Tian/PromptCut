@@ -290,8 +290,17 @@ function runPs(dir: string, name: string, lines: string[]): Promise<string> {
       stdio: ["ignore", "pipe", "ignore"],
     });
     child.stdout.on("data", (c) => (out += c));
-    child.on("error", () => resolve(""));
-    child.on("exit", () => resolve(out));
+    // 脚本卡住(等一个再也不会出现的窗口之类)不能把整条拉起流程吊死
+    const timer = setTimeout(() => { try { child.kill(); } catch { /* 已经没了 */ } resolve(out); }, 120000);
+    const done = (v: string) => { clearTimeout(timer); resolve(v); };
+    child.on("error", () => done(""));
+    /*
+     * 用 close 而不是 exit:exit 只说进程没了,**stdio 管道里可能还有没读完的字节**。
+     * 拿 exit 当信标会把输出读断 —— 末尾那行 SENT / NOFOCUS 正好在缓冲区里没排干,
+     * 上层 autoPressEnter 就把一次本来成功的发送判成 "error"。close 是所有 stdio 都关掉
+     * 之后才发的,那时 out 才是完整的。
+     */
+    child.on("close", () => done(out));
   });
 }
 
@@ -322,6 +331,16 @@ export async function sendPromptViaUia(dir: string, processMatch: string, prompt
     "Add-Type -AssemblyName UIAutomationClient",
     "Add-Type -AssemblyName UIAutomationTypes",
     "Add-Type -AssemblyName System.Windows.Forms",
+    /*
+     * 前台窗口属于谁 —— 退回模拟键盘那条路必须先问这一句。
+     *
+     * SendKeys 是**全局**的:它把回车送给当前拥有焦点的那个窗口,不管那是谁。SetFocus()
+     * 到真正 SendWait 之间有几百毫秒的空档,用户这时候切一下窗口(或者别的程序自己弹到
+     * 前台),这个回车就打进了别人的应用里 —— 可能是一封写了一半的邮件、一个确认对话框。
+     * 所以每一下回车之前都重新核一次前台进程,对不上就不按。
+     */
+    "Add-Type -Namespace PC -Name Win -MemberDefinition '[DllImport(\"user32.dll\")] public static extern IntPtr GetForegroundWindow(); [DllImport(\"user32.dll\")] public static extern int GetWindowThreadProcessId(IntPtr h, out int pid);'",
+    "function Test-Foreground($want) { if (-not $want) { return $false }; $h = [PC.Win]::GetForegroundWindow(); $fp = 0; [void][PC.Win]::GetWindowThreadProcessId($h, [ref]$fp); return ($fp -eq $want) }",
     "$A = [System.Windows.Automation.AutomationElement]",
     "$CT = [System.Windows.Automation.ControlType]",
     "function Find-Named($root, $names, $type) {",
@@ -335,10 +354,15 @@ export async function sendPromptViaUia(dir: string, processMatch: string, prompt
     "}",
     "function Invoke-El($e) { try { $e.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke(); return $true } catch { return $false } }",
     "function Get-Root {",
-    `  $p = Get-Process | Where-Object { $_.ProcessName -match ${psStr(processMatch)} -and $_.MainWindowHandle -ne 0 } | Select-Object -First 1`,
+    // 进程名要**整个**对上。原来是 -match 子串匹配,任何名字里带这个词的进程都算数
+    // (ClaudeHelper、claude-updater、用户自己写的什么 MyClaudeTool),挑错了窗口
+    // 后面的回车就打到别人身上去了。-match 加锚点 = 全名匹配,PowerShell 默认不区分大小写。
+    `  $p = Get-Process | Where-Object { $_.ProcessName -match ${psStr("^" + processMatch + "$")} -and $_.MainWindowHandle -ne 0 } | Select-Object -First 1`,
     "  if (-not $p) { return $null }",
+    "  $script:tpid = $p.Id",
     "  try { return $A::FromHandle($p.MainWindowHandle) } catch { return $null }",
     "}",
+    "$script:tpid = 0",
     // 1. 主窗口
     "$deadline = (Get-Date).AddSeconds(12)",
     "$root = $null",
@@ -369,15 +393,23 @@ export async function sendPromptViaUia(dir: string, processMatch: string, prompt
     // 4. 发送
     `$send = Find-Named $root @(${psList(UIA_NAMES.send)}) ($CT::Button)`,
     "if ($send -and (Invoke-El $send)) { Write-Output 'SENT'; exit 0 }",
+    // 退回模拟键盘。每一下回车之前都重新核一次前台窗口是不是目标进程 —— 核完到按下之间
+    // 仍有极短的空档(这是 SendKeys 这个机制本身的性质,消不掉),但把几百毫秒的窗口
+    // 收成了几毫秒。核不上就什么都不按,宁可回报「没发出去」让用户自己按。
     "try { $edit.SetFocus(); Start-Sleep -Milliseconds 300 } catch {}",
+    "if (-not (Test-Foreground $script:tpid)) { Write-Output 'NOFOCUS'; exit 4 }",
     "[System.Windows.Forms.SendKeys]::SendWait('{ENTER}')",
     "Start-Sleep -Milliseconds 500",
+    // 预填斜杠命令时第一下是选补全,第二下才是发送。第二下之前再核一次
+    "if (-not (Test-Foreground $script:tpid)) { Write-Output 'HALFSENT'; exit 4 }",
     "[System.Windows.Forms.SendKeys]::SendWait('{ENTER}')",
     "Write-Output 'SENT-KEYS'",
   ]);
   const trustDialog: PressResult["trustDialog"] = out.includes("TRUSTED") ? "clicked" : out.includes("TRUSTFAIL") ? "failed" : "none";
+  // 先看失败码再看 SENT:'HALFSENT' 里不含 'SENT' 之外的坑,但顺序错了就会把半截当成功
+  const reason = ["NOWINDOW", "NOPREFILL", "NOFOLDER", "NOFOCUS", "HALFSENT"].find((r) => out.includes(r));
+  if (reason) return { autoSend: reason === "NOFOCUS" || reason === "HALFSENT" ? "nofocus" : "error", trustDialog, reason };
   if (out.includes("SENT")) return { autoSend: "sent", trustDialog };
-  const reason = ["NOWINDOW", "NOPREFILL", "NOFOLDER"].find((r) => out.includes(r)) ?? "UNKNOWN";
-  return { autoSend: "error", trustDialog, reason };
+  return { autoSend: "error", trustDialog, reason: "UNKNOWN" };
 }
 

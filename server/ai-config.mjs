@@ -133,7 +133,11 @@ export function writeConfig(partial) {
   fs.mkdirSync(path.dirname(p), { recursive: true });
   // Key 只以密文落盘;返回给调用方的仍是明文那份(publicConfig 会再脱敏一次)
   const onDisk = { ...newConfig, api: { ...newConfig.api, apiKey: sealKey(newConfig.api.apiKey) } };
-  fs.writeFileSync(p, JSON.stringify(onDisk, null, 2), 'utf8');
+  // 0600:密文的口令是**本机**机器码,同一台机器上的另一个用户推得出来,所以别让他读到密文。
+  // writeFileSync 的 mode 只在新建时生效,已存在的文件要另外 chmod 一次。
+  // (Windows 上 chmod 基本是空操作,这一道是给 POSIX 的。)
+  fs.writeFileSync(p, JSON.stringify(onDisk, null, 2), { encoding: 'utf8', mode: 0o600 });
+  try { fs.chmodSync(p, 0o600); } catch { /* Windows / 权限不够,不影响功能 */ }
 
   return newConfig;
 }

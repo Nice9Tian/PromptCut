@@ -1,6 +1,7 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
+import { apiGuardPlugin } from "./server/vite-plugin-api-guard";
 import { exportPlugin } from "./server/vite-plugin-export";
 import vitePluginAi from "./server/vite-plugin-ai";
 import { sttPlugin } from "./server/vite-plugin-stt";
@@ -21,7 +22,9 @@ const headless = process.env.PROMPTCUT_HEADLESS === "1";
 
 export default defineConfig({
   ...(headless ? { cacheDir: "node_modules/.vite-headless" } : {}),
-  plugins: [react(), tailwindcss(), exportPlugin(), vitePluginAi(), sttPlugin(), shotsPlugin(), trackPlugin(), subjectPlugin(), mediaPlugin(), chatsPlugin(), vitePluginCards(), projectsPlugin(), visionPlugin(), skillPlugin(), skillStatePlugin()],
+  // apiGuardPlugin 必须排在所有接口插件**前面**:它是 /api/** 的同源卡口,
+  // 中间件按 configureServer 的调用顺序注册,排在后面就等于没有。
+  plugins: [apiGuardPlugin(), react(), tailwindcss(), exportPlugin(), vitePluginAi(), sttPlugin(), shotsPlugin(), trackPlugin(), subjectPlugin(), mediaPlugin(), chatsPlugin(), vitePluginCards(), projectsPlugin(), visionPlugin(), skillPlugin(), skillStatePlugin()],
   server: headless
     ? {
         // 无头实例不要热更新:它是给 agent 跑的,源码一改就重载页面,重载期间工具全失败,

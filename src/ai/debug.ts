@@ -3,14 +3,30 @@ import type { ChatMessage, MessageRuntime, PublicAiConfig, RunEvent } from './ty
 // Redact structured secrets and common pasted credentials; never include API
 // headers, raw settings files, or provider reasoning channels in an export.
 export function redactDebug(value: unknown): unknown {
-  const secret = /^(api[_-]?key|authorization|access[_-]?token|refresh[_-]?token|password|client[_-]?secret|cookie|set-cookie)$/i;
+  /*
+   * 键名匹配**不能用首尾锚点**。原来写的是 /^(api[_-]?key|authorization|…)$/,
+   * 于是 `x-api-key`、`anthropic-api-key`、`proxy-authorization` 这些真实请求头
+   * 一个都不匹配 —— 明文 Key 就这么原样进了上传的诊断报告。
+   *
+   * 但也不能放宽成「含 token 就打码」:`max_tokens`、`promptTokens` 这些是排查时
+   * 最有用的数字。所以改成「在词边界(开头或 - _ . 之后)上整段结尾匹配」:
+   * `x-api-key` 命中、`max_tokens` 不命中。
+   */
+  const secret = /(^|[-_.])(api[_-]?key|authorization|access[_-]?token|refresh[_-]?token|id[_-]?token|password|passwd|client[_-]?secret|secret|cookie|credential)s?$/i;
   const walk = (v: unknown): unknown => {
     if (typeof v === 'string') return v.replace(/\bBearer\s+[^\s"'<>]+/gi, 'Bearer [REDACTED]')
       .replace(/\bsk-[A-Za-z0-9_-]{12,}/g, '[REDACTED]')
       // 本机识别码是配置分发的解密口令，整串不能进报告。服务端那份已经先截过了，
       // 这里再兜一道：它也可能从执行日志、错误消息、用户粘进来的文本里溜进来。
       .replace(/\bPCM-[0-9A-HJKMNP-TV-Z]{5}(?:-[0-9A-HJKMNP-TV-Z]{5}){3}\b/gi, (m) => `${m.slice(0, 9)}-…`)
-      .replace(/([?&](?:key|api_key|access_token|refresh_token)=)[^&\s]+/gi, '$1[REDACTED]');
+      // 查询串里的凭据。原来只列了四个固定名字，漏掉了最常见的裸 `token=`；
+      // 改成「参数名里带 key/token/secret/password/auth/sig 就打码」——
+      // 诊断报告这种场合，宁可多打掉几个也不能漏一个。
+      .replace(/([?&][\w.-]*(?:key|token|secret|password|passwd|auth|sig)[\w.-]*=)[^&\s"']+/gi, '$1[REDACTED]')
+      // 用户名是 PII，而本机路径几乎每条日志里都有。只抹掉家目录那一段，
+      // 后面的相对结构留着——排查要靠它看出文件放在哪一层。
+      .replace(/([A-Za-z]:[\\/]Users[\\/])[^\\/"'\s]+/gi, '$1[USER]')
+      .replace(/(\/(?:home|Users)\/)[^/"'\s]+/g, '$1[USER]');
     if (Array.isArray(v)) return v.map(walk);
     if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, secret.test(k) ? '[REDACTED]' : walk(x)]));
     return v;
