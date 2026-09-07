@@ -69,6 +69,8 @@ export function SkillDialog(props: { open: boolean; onClose: () => void }): JSX.
   const { open, onClose } = props;
   const dirty = useStore((s) => s.dirty);
   const [provider, setProvider] = useState<Provider>("claude");
+  /** Codex 只在冷启动时定工作区,想让它开在任务目录就得先关掉它 */
+  const [freshWindow, setFreshWindow] = useState(false);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [current, setCurrent] = useState<string | null>(null);
   const [busy, setBusy] = useState("");
@@ -131,7 +133,7 @@ export function SkillDialog(props: { open: boolean; onClose: () => void }): JSX.
       const data = await api<{ job: Job }>("/api/skill/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ provider, proc: serializeProc(), name: currentProjectName() }),
+        body: JSON.stringify({ provider, proc: serializeProc(), name: currentProjectName(), freshWindow: provider === "codex" && freshWindow }),
       });
       setCurrent(data.job.id);
     });
@@ -190,6 +192,13 @@ export function SkillDialog(props: { open: boolean; onClose: () => void }): JSX.
             </button>
           ))}
         </div>
+
+        {provider === "codex" && (
+          <label className="pc-skill-check" title="Codex 只在冷启动时决定工作区。不勾也能用——任务目录就在仓库里面,读得到">
+            <input type="checkbox" checked={freshWindow} onChange={(e) => setFreshWindow(e.target.checked)} disabled={busy !== ""} />
+            <span>先重开 Codex,让工作区就是任务目录(会关掉你现在开着的 Codex 窗口)</span>
+          </label>
+        )}
 
         <div className="pc-skill-actions">
           <button type="button" className="pc-dialog-opt is-on" disabled={busy !== ""} onClick={start}>

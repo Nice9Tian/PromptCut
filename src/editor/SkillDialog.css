@@ -97,6 +97,17 @@
   gap: 8px;
 }
 
+.pc-skill-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ui-fg-muted);
+  cursor: pointer;
+}
+.pc-skill-check input { margin-top: 2px; flex: 0 0 auto; }
+
 .pc-skill-msg {
   font-size: 12px;
   line-height: 1.6;

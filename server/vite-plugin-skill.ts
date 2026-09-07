@@ -31,6 +31,8 @@ interface JobMeta {
   error?: string;
   /** 只起实例、不拉桌面 app(自检和排错用) */
   noLaunch?: boolean;
+  /** Codex 专用:先关掉再冷启动,让工作区就是任务目录 */
+  freshWindow?: boolean;
   /** 最近一次拉起桌面 app 的方式,给对话框显示和排错 */
   launch?: { kind: string; detail: string; at: string; autoSend?: AutoSend };
 }
@@ -106,7 +108,9 @@ function writeMeta(dir: string, meta: JobMeta) {
 /** 打开一个 URL 协议(claude:// codex://)。rundll32 不经过 cmd,不用操心引号 */
 function openUrl(url: string) {
   if (process.platform === "win32") {
-    spawn("rundll32.exe", ["url.dll,FileProtocolHandler", url], { detached: true, stdio: "ignore", windowsHide: true }).unref();
+    // 不能加 detached:Windows 上它会给子进程开一个新控制台,和 windowsHide 打架,
+    // 用户就会看见一下黑窗闪过
+    spawn("rundll32.exe", ["url.dll,FileProtocolHandler", url], { stdio: "ignore", windowsHide: true }).unref();
   } else if (process.platform === "darwin") {
     spawn("open", [url], { detached: true, stdio: "ignore" }).unref();
   } else {
@@ -121,6 +125,47 @@ function revealDir(dir: string) {
   } catch {}
 }
 
+/** 跑一段 PowerShell(脚本落在任务目录里,不走 shell 引号),拿回 stdout */
+function runPs(dir: string, name: string, lines: string[]): Promise<string> {
+  // 内部脚本放 .pc/ 里:任务目录是给 agent 看的,ls 出来一堆 ps1 只会干扰它
+  const scriptDir = path.join(dir, ".pc");
+  fs.mkdirSync(scriptDir, { recursive: true });
+  const file = path.join(scriptDir, name);
+  fs.writeFileSync(file, lines.join("\r\n"), "utf8");
+  return new Promise((resolve) => {
+    let out = "";
+    // -WindowStyle Hidden 是必须的:光给 spawn 传 windowsHide,powershell.exe 照样会
+    // 闪一下黑窗(用户看得见)。两个一起给才干净。
+    const child = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass", "-File", file], {
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    child.stdout.on("data", (c) => (out += c));
+    child.on("error", () => resolve(""));
+    child.on("exit", () => resolve(out));
+  });
+}
+
+/**
+ * 等桌面 app 的窗口出现。
+ *
+ * Codex 多半是冷启动:`codex app` 只是把请求丢过去,app 自己要几秒才起来,这期间发深链
+ * 会被吞掉。实测冷启动约 4 秒;这里轮询到 45 秒 —— 机器忙的时候固定 sleep 不够用。
+ */
+async function waitForWindow(dir: string, processMatch: string, seconds = 45): Promise<boolean> {
+  if (process.platform !== "win32") return true;
+  const out = await runPs(dir, "wait-window.ps1", [
+    `$deadline = (Get-Date).AddSeconds(${seconds})`,
+    "while ((Get-Date) -lt $deadline) {",
+    `  $p = Get-Process | Where-Object { $_.ProcessName -match '${processMatch}' -and $_.MainWindowTitle -ne '' }`,
+    "  if ($p) { Write-Output 'UP'; exit 0 }",
+    "  Start-Sleep -Milliseconds 500",
+    "}",
+    "Write-Output 'TIMEOUT'",
+  ]);
+  return out.includes("UP");
+}
+
 /**
  * 替用户按下那一下回车。
  *
@@ -132,11 +177,11 @@ function revealDir(dir: string) {
  * 弹补全菜单,第一下 Enter 是选中补全、第二下才发送;所以发两下,中间隔半秒。
  * 已经发出去的话,第二下落在空输入框上,没有副作用。
  *
- * 只做 Windows:桌面壳本来就只发 Windows 包。脚本落在任务目录里,不走 shell 引号。
+ * 只做 Windows:桌面壳本来就只发 Windows 包。
  */
-function autoPressEnter(dir: string, processMatch: string): Promise<AutoSend> {
-  if (process.platform !== "win32") return Promise.resolve("skipped");
-  const script = [
+async function autoPressEnter(dir: string, processMatch: string): Promise<AutoSend> {
+  if (process.platform !== "win32") return "skipped";
+  const out = await runPs(dir, "press-enter.ps1", [
     "Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public class PcFg { [DllImport(\"user32.dll\")] public static extern IntPtr GetForegroundWindow(); [DllImport(\"user32.dll\")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid); }'",
     "$deadline = (Get-Date).AddSeconds(12)",
     "$ok = $false",
@@ -153,44 +198,98 @@ function autoPressEnter(dir: string, processMatch: string): Promise<AutoSend> {
     "Start-Sleep -Milliseconds 500",
     "[System.Windows.Forms.SendKeys]::SendWait('{ENTER}')",
     "Write-Output 'SENT'",
-  ].join("\r\n");
-  const file = path.join(dir, "press-enter.ps1");
-  fs.writeFileSync(file, script, "utf8");
-  return new Promise((resolve) => {
-    let out = "";
-    const child = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", file], { windowsHide: true, stdio: ["ignore", "pipe", "ignore"] });
-    child.stdout.on("data", (c) => (out += c));
-    child.on("error", () => resolve("error"));
-    child.on("exit", () => resolve(out.includes("SENT") ? "sent" : out.includes("NOFOCUS") ? "nofocus" : "error"));
-  });
+  ]);
+  return out.includes("SENT") ? "sent" : out.includes("NOFOCUS") ? "nofocus" : "error";
+}
+
+/**
+ * 桌面 app 的进程名(前台校验和等窗口都按它匹配,-match 不区分大小写)。
+ *
+ * Codex 那个坑:桌面版的进程叫 **ChatGPT** —— Codex 住在 ChatGPT 客户端里,不是独立 app。
+ * 按 "codex" 匹配前台窗口永远匹配不上,自动回车会一直判成「没到前台」而不发。
+ * codex 也留着:命令行那个进程叫 codex,以后真独立成 app 也认得出来。
+ */
+const APP_PROCESS: Record<Provider, string> = { claude: "claude", codex: "chatgpt|codex" };
+
+/**
+ * 关掉 Codex 桌面版,好让下一次 `codex app <目录>` 冷启动到任务目录。
+ *
+ * 为什么需要:Codex **只在冷启动时定工作区**(实测:app 开着时再 `codex app <别的目录>`
+ * 什么都不发生,窗口和标题一动不动)。想让新对话的工作区就是任务目录,只能先关掉它。
+ *
+ * 发 WM_CLOSE 而不是 taskkill:让它自己走正常的退出流程,别把用户没存的东西弄丢。
+ */
+async function closeCodexApp(dir: string): Promise<boolean> {
+  if (process.platform !== "win32") return false;
+  const out = await runPs(dir, "close-codex.ps1", [
+    "$w = Get-Process | Where-Object { $_.ProcessName -match 'chatgpt' -and $_.MainWindowTitle -ne '' }",
+    "if (-not $w) { Write-Output 'NOTRUNNING'; exit 0 }",
+    "$w | ForEach-Object { $_.CloseMainWindow() | Out-Null }",
+    "$deadline = (Get-Date).AddSeconds(15)",
+    "while ((Get-Date) -lt $deadline) {",
+    "  if (-not (Get-Process | Where-Object { $_.ProcessName -match 'chatgpt' -and $_.MainWindowTitle -ne '' })) { Write-Output 'CLOSED'; exit 0 }",
+    "  Start-Sleep -Milliseconds 500",
+    "}",
+    "Write-Output 'STILLUP'",
+  ]);
+  return out.includes("CLOSED") || out.includes("NOTRUNNING");
 }
 
 /**
  * 拉起桌面 app 的新对话。
  *
  * Claude:一条深链搞定,handler 读 folder + q。q 给 /promptcut,skill 在目录里。
- * Codex:先 `codex app <目录>` 把工作区开到任务目录,再用 codex://threads/new?prompt= 开新线程。
- *   两步之间留几秒,app 没起来时深链会被吞掉。
+ * Codex:先 `codex app <目录>` 把工作区开到任务目录,等它的窗口真的出现,
+ *   再用 codex://threads/new?prompt= 开新线程 —— app 没起来时深链会被吞掉。
+ *
+ * freshWindow(只对 Codex 有意义):先把 Codex 关掉再冷启动,这样工作区**就是**任务目录,
+ *   agent 的 cwd 天然正确、AGENTS.md 自动被读到。代价是会关掉用户现有的 Codex 窗口,
+ *   所以默认不开 —— 任务目录本来就在仓库里面,工作区停在仓库根目录也读得到。
  */
-async function launchDesktop(provider: Provider, dir: string): Promise<{ kind: string; detail: string; autoSend: AutoSend }> {
+async function launchDesktop(provider: Provider, dir: string, freshWindow = false): Promise<{ kind: string; detail: string; autoSend: AutoSend }> {
   if (provider === "claude") {
     const url = `claude://code/new?folder=${encodeURIComponent(dir)}&q=${encodeURIComponent("/promptcut")}`;
     openUrl(url);
-    const autoSend = await autoPressEnter(dir, "claude");
+    const autoSend = await autoPressEnter(dir, APP_PROCESS.claude);
     return { kind: "claude-deeplink", detail: url, autoSend };
   }
-  const prompt = "先读这个目录里的 AGENTS.md,按它的流程开始;干完把 project.proc 的链接给我";
+  /*
+   * 提示词里必须写**绝对路径**,而且**必须用正斜杠**。
+   *
+   * 两件事各栽过一次:
+   *   1. codex://threads/new 不带 cwd,而 `codex app <目录>` 在 app 已经开着的时候不会
+   *      把窗口切到新工作区 —— 新线程开在了仓库根目录,agent 找不到 AGENTS.md,只好满盘
+   *      搜,还搜出好几份历史任务来问用户要哪个。所以路径写死在提示词里;
+   *   2. Codex 收深链的 prompt 时会过一层反斜杠转义:`C:\\…\\PromptCut\\.pc-work` 到了模型
+   *      那儿变成 `C:\\…\\PromptCut.pc-work`(`\\.` 被吞了,而 `\\U` `\\D` 这些都活着),
+   *      于是它报「找不到这个目录」。正斜杠没有这个问题,Windows 也照样认。
+   */
+  const slash = dir.replace(/\\/g, "/");
+  const prompt = [
+    `读 ${slash}/AGENTS.md,按它的流程操作这个目录:`,
+    slash,
+    "先确认能连上里面 instance.json 写的那个无头 PromptCut 实例,再等我说要做什么。",
+  ].join("\n");
   const url = `codex://threads/new?prompt=${encodeURIComponent(prompt)}`;
+  // 想要工作区就是任务目录,只能先关掉它再冷启动(见上面 freshWindow 的说明)
+  const closed = freshWindow ? await closeCodexApp(dir) : false;
   if (process.platform === "win32") {
-    spawn("cmd.exe", ["/d", "/s", "/c", `codex app "${dir}"`], { detached: true, stdio: "ignore", windowsHide: true }).unref();
+    // 不能加 detached:Windows 上它会给子进程开一个新控制台,和 windowsHide 打架,
+    // 用户就会看见一下黑窗闪过。这条命令只是给 app 发个信号,几百毫秒就回来。
+    spawn("cmd.exe", ["/d", "/s", "/c", `codex app "${dir}"`], { stdio: "ignore", windowsHide: true }).unref();
   } else {
     spawn("codex", ["app", dir], { detached: true, stdio: "ignore" }).unref();
   }
-  // app 没起来时深链会被吞掉,等它几秒
-  await new Promise((r) => setTimeout(r, 6000));
+  // 轮询等它的窗口出现,别用固定 sleep —— 冷启动实测 4 秒,机器忙的时候更久。
+  // 等不到也照发:也许它已经开着,只是那一刻没有带标题的主窗口
+  await waitForWindow(dir, APP_PROCESS.codex);
   openUrl(url);
-  const autoSend = await autoPressEnter(dir, "codex");
-  return { kind: "codex-app+deeplink", detail: `codex app "${dir}" → ${url}`, autoSend };
+  const autoSend = await autoPressEnter(dir, APP_PROCESS.codex);
+  return {
+    kind: freshWindow ? (closed ? "codex-fresh+deeplink" : "codex-app+deeplink(没关掉,按热启动走)") : "codex-app+deeplink",
+    detail: `codex app "${dir}" → ${url}`,
+    autoSend,
+  };
 }
 
 /**
@@ -299,7 +398,7 @@ export function skillPlugin(): Plugin {
           } else {
             // 先标 ready 再去拉 app:拉起 + 自动回车要等十几秒,对话框不该一直显示「拉起中」
             update({ phase: "ready" });
-            const launch = await launchDesktop(meta.provider, dir);
+            const launch = await launchDesktop(meta.provider, dir, meta.freshWindow);
             update({ launch: { ...launch, at: new Date().toISOString() } });
           }
         } catch (e) {
@@ -335,6 +434,7 @@ export function skillPlugin(): Plugin {
               createdAt: new Date().toISOString(),
               phase: "snapshot",
               noLaunch: body.noLaunch === true,
+              freshWindow: body.freshWindow === true,
             };
             writeMeta(dir, meta);
             void boot(id, meta);
@@ -386,7 +486,7 @@ export function skillPlugin(): Plugin {
             if (action === "relaunch" && req.method === "POST") {
               if (!job.alive) return sendJson(res, 400, { ok: false, error: "实例已经停了,重新开一个任务吧" });
               // 不等它:拉起 + 自动回车要十几秒,结果写进 job.json 由前端轮询
-              void launchDesktop(job.provider, dir).then((launch) => {
+              void launchDesktop(job.provider, dir, job.freshWindow).then((launch) => {
                 const meta = readJsonSafe<JobMeta>(path.join(dir, "job.json"));
                 if (meta) writeMeta(dir, { ...meta, launch: { ...launch, at: new Date().toISOString() } });
               });
