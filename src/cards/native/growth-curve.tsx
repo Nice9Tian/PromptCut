@@ -1,5 +1,5 @@
 import { motion, useMotionValue, animate } from "motion/react";
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef } from "react";
 import type { CardDef, CardProps } from "../../kernel/types";
 import { HudParams, hudControls, hudDefaults, getPositionClass, easeExpoOut, accentOf } from "./hud";
 import "./hud.css";
@@ -15,7 +15,10 @@ interface Params extends HudParams {
 
 function NumberTicker({ value, duration }: { value: number; duration: number }) {
   const v = useMotionValue(0);
-  const [displayValue, setDisplayValue] = useState(0);
+  // 数字直接同步写进 DOM,不走 React state:导出时每帧截图前 React 的异步提交会和截图抢跑,
+  // 实测 10~15% 的帧数字停在上一帧的值,导两遍不一样。同步写就落在 Motion 的同一次 rAF 里。
+  // 写法照 magicui/vendor/number-ticker.tsx;初值写死在 JSX 里,免得重挂载后首帧空一下。
+  const ref = useRef<HTMLSpanElement>(null);
 
   useEffect(() => {
     const controls = animate(v, value, {
@@ -23,7 +26,7 @@ function NumberTicker({ value, duration }: { value: number; duration: number }) 
       ease: easeExpoOut,
     });
     const unsub = v.on("change", (latest) => {
-      setDisplayValue(Math.round(latest));
+      if (ref.current) ref.current.textContent = String(Math.round(latest));
     });
     return () => {
       controls.stop();
@@ -31,7 +34,7 @@ function NumberTicker({ value, duration }: { value: number; duration: number }) 
     };
   }, [value, v, duration]);
 
-  return <>{displayValue}</>;
+  return <span ref={ref}>0</span>;
 }
 
 // Simple Catmull-Rom to Cubic Bezier conversion

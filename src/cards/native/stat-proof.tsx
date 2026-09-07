@@ -1,5 +1,5 @@
 import { motion, useMotionValue, animate } from "motion/react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef } from "react";
 import type { CardDef, CardProps } from "../../kernel/types";
 import { HudParams, hudControls, hudDefaults, getPositionClass, easeExpoOut, accentOf } from "./hud";
 import "./hud.css";
@@ -17,7 +17,10 @@ interface Params extends HudParams {
 
 function StatProofCard({ params }: CardProps<Params>) {
   const v = useMotionValue(0);
-  const [displayValue, setDisplayValue] = useState(0);
+  // 数字直接同步写进 DOM,不走 React state:导出时每帧截图前 React 的异步提交会和截图抢跑,
+  // 实测 10~15% 的帧数字停在上一帧的值,导两遍不一样。同步写就落在 Motion 的同一次 rAF 里。
+  // 写法照 magicui/vendor/number-ticker.tsx;初值写死在 JSX 里,免得重挂载后首帧空一下。
+  const numRef = useRef<HTMLSpanElement>(null);
 
   useEffect(() => {
     const durationSec = params.countMs > 0 ? params.countMs / 1000 : 1.4;
@@ -26,7 +29,7 @@ function StatProofCard({ params }: CardProps<Params>) {
       ease: easeExpoOut,
     });
     const unsub = v.on("change", (latest) => {
-      setDisplayValue(Math.round(latest));
+      if (numRef.current) numRef.current.textContent = String(Math.round(latest));
     });
     return () => {
       controls.stop();
@@ -53,7 +56,7 @@ function StatProofCard({ params }: CardProps<Params>) {
             className="text-[160px] font-bold leading-none"
             style={{ color: accentOf(params), fontVariantNumeric: "tabular-nums" }}
           >
-            {displayValue}
+            <span ref={numRef}>0</span>
           </span>
           {params.suffix && <span className="text-6xl font-bold ml-2 opacity-90">{params.suffix}</span>}
         </div>
