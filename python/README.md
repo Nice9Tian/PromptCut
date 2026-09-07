@@ -1,4 +1,22 @@
-# promptcut_stt · 语音转文字
+# PromptCut 的 Python 侧
+
+这个目录下的包，都跑在随包分发的内置 Python 上，输出都是 JSONL（一行一个 JSON），
+本体都只依赖标准库 + numpy，重依赖按需 import，没装就在 `status` 里如实报告：
+
+| 包 | 干什么 | 重依赖 | 随拓展包发的权重 |
+|---|---|---|---|
+| `promptcut_stt` | 语音转文字（本文其余部分讲的就是它） | faster-whisper 或 openai-whisper | 无，模型按需下载 |
+| `promptcut_shots` | 镜头切换识别 | onnxruntime | `transnetv2.onnx` |
+| `promptcut_subject` | 主体检测：人脸 / 人体 / 开放词汇，告诉 AI 卡片该躲开哪块 | light 档 onnxruntime；full 档 torch + transformers | `yunet.onnx`、`rtdetr_r18vd.onnx`、`grounding-dino-tiny/` |
+| `promptcut_track` | 运动追踪（任意点） | torch | `bootstapir_v2.pt` |
+
+权重不随安装包发，由**拓展库包**离线送达（轻装档 / 完整档两档，见
+[`desktop/README.md`](../desktop/README.md) 的「拓展库包」一节）；没装拓展时
+每个包各有自己的兜底档。
+
+---
+
+## promptcut_stt · 语音转文字
 
 PromptCut 的语音转文字包。纯 Python，**本体只依赖标准库**，两个转写引擎按需 import——
 没装就在 `status` 里报 `installed: false`，`transcribe` 时给一句人话错误，不会抛堆栈。
