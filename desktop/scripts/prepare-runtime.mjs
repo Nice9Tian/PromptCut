@@ -156,6 +156,39 @@ const SKIP_PATH_PATTERNS = [
   /[/\\]scripts[/\\]__tmp-/,
 ];
 
+/**
+ * 把仓库根 `.env*` 里的 `VITE_` 变量取出来,**交给 vite build 当环境变量**。
+ *
+ * 为什么要绕这一道:`VITE_` 前缀的变量是在构建时**内联进前端产物**的
+ * (`import.meta.env.VITE_DIAG_SUBMIT_URL` 之类)。而上面的黑名单把 `.env*` 挡在了
+ * 拷贝之外 —— 文件不进包是对的,但 vite build 是在 `runtime/app` 里跑的,那里没有这个
+ * 文件,于是那些值也一起没了:**打出来的包里诊断提交功能是死的**,按钮灰掉说
+ * 「还没配收报告的地址」。是打完第一个完整包才发现的,靠单测和 --check 都看不出来。
+ *
+ * vite 的 loadEnv 除了读 .env 文件,也会把 process.env 里带前缀的变量收进去,
+ * 所以这样传就够了,不用把文件拷过去再删。
+ *
+ * 只取 `VITE_` 开头的:那些本来就是「要发给用户」的值(诊断服务的地址和提交令牌 ——
+ * 令牌是公开可得的,worker.js 里写明了它只挡随手扫到的人)。真正的服务端密钥
+ * (ADMIN_KEY 之类)放在 `.dev.vars` 和 wrangler secret 里,不带 VITE_ 前缀,取不到也不该取。
+ */
+function viteEnvFromDotEnv() {
+  const out = {};
+  for (const name of [".env", ".env.local", ".env.production", ".env.production.local"]) {
+    const p = path.join(PROJECT_ROOT, name);
+    if (!fs.existsSync(p)) continue;
+    for (const line of fs.readFileSync(p, "utf-8").split(/\r?\n/)) {
+      const m = line.match(/^\s*(VITE_[A-Z0-9_]+)\s*=\s*(.*)$/);
+      if (!m) continue;
+      // 去掉可能的引号
+      out[m[1]] = m[2].trim().replace(/^(['"])(.*)\1$/, "$2");
+    }
+  }
+  const keys = Object.keys(out);
+  console.log(keys.length ? `  注入构建期变量:${keys.join(", ")}` : "  仓库根没有 .env*,构建期变量为空");
+  return out;
+}
+
 function shouldCopyApp(name, fullPath, isDir) {
   if (isDir && SKIP_DIRS.has(name)) return false;
   if (!isDir) {
@@ -232,6 +265,7 @@ function stepApp() {
     shell: true,
     stdio: "inherit",
     timeout: 300_000,
+    env: { ...process.env, ...viteEnvFromDotEnv() },
   });
   if (buildResult.status !== 0) {
     console.error(`[FAIL] vite build exited with code ${buildResult.status}`);
