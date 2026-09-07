@@ -180,12 +180,16 @@ test('translate:去掉 use client、@/lib/utils 指到本地,并报告改了什�
   assert.equal(r.rewrites.length, 2);
 });
 
-test('review 第二档:canvas / Math.random / 三维库', () => {
+test('review 第二档:只剩 WebGL / 三维库;canvas 与 Math.random 已经接得住,放行', () => {
   const tiers = (src) => reviewCardSource(src).map((f) => f.tier);
-  assert.deepEqual(tiers('const c = ref.current.getContext("2d")'), [2]);
-  assert.deepEqual(tiers('const x = Math.random()'), [2]);
+  // 导出页把 Math.random 钉成带种子的、截图期间关脚本 —— 粒子卡实测逐字节一致,所以这两条不再拒
+  assert.deepEqual(tiers('const c = ref.current.getContext("2d")'), []);
+  assert.deepEqual(tiers('const x = Math.random()'), []);
+  assert.deepEqual(tiers('const gl = c.getContext("webgl")'), [2]);
   // three 既是 WebGL 也是没装的依赖 —— 两条都要报
   assert.deepEqual(tiers('import * as THREE from "three"').sort(), [2, 'deps']);
+  // 装好的粒子 / Lottie 库是允许的依赖
+  assert.deepEqual(tiers('import { tsParticles } from "@tsparticles/engine"\nimport lottie from "lottie-web"'), []);
 });
 
 test('review 第三档:鼠标 / hover / 滚动', () => {
@@ -226,10 +230,10 @@ test('review 来源/许可证:搬来的没声明 → 拒绝;Commons Clause → �
 });
 
 test('checkCardSource 把审查发现并进 errors,带档位标签', () => {
-  const src = GOOD.replace('return <motion', 'const r = Math.random();\n  return <motion');
+  const src = GOOD.replace('return <motion', 'const gl = document.createElement("canvas").getContext("webgl");\n  return <motion');
   const r = checkCardSource('price-tag', src, []);
   assert.equal(r.ok, false);
-  assert.match(r.errors.join('\n'), /\[第二档·管线暂不支持\] Math\.random/);
+  assert.match(r.errors.join('\n'), /\[第二档·管线暂不支持\] WebGL/);
   assert.equal(r.findings.length, 1);
 });
 

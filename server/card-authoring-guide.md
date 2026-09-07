@@ -138,6 +138,8 @@ export const priceTag: CardDef<Params> = {
 
 - `react`
 - `motion/react`（`motion`、`AnimatePresence`、`useTransform` 等）
+- `lottie-web`（按帧定位用 `goToAndStop(frame, true)`，不要 autoplay；参考 `src/cards/native/lottie.tsx`）
+- `@tsparticles/engine` + `@tsparticles/slim`（canvas 粒子；挂载时先 `setRandom(() => Math.random())`，参考 `src/cards/native/particles.tsx`）
 - Tailwind class（项目已装 Tailwind）
 - `import type { CardDef, CardProps } from "../../kernel/types"`
 - 复用 HUD 那套位置/主色约定：`import { hudControls, hudDefaults, getPositionClass, accentOf, easeExpoOut, type HudParams } from "../native/hud"`，
@@ -154,12 +156,13 @@ export const priceTag: CardDef<Params> = {
 - **必须你来做的**：把组件包成 `CardDef`——写 `Component`（把 `params` 喂给它、套上 `absolute inset-0` 的 1920×1080 层）、`defaults`、`controls`、`useWhen`。返回的 `suggestedControls` 是从它的 `*Props` 接口推出来、你还没露出来的参数，由你决定要不要提。
 - **文件头必须声明来源和许可证**，照 `src/cards/magicui/vendor/word-rotate.tsx` 的写法：`来源: <URL>` 加许可证名。能搬的只有 MIT / Apache-2.0 / BSD / ISC / CC0。React Bits（Commons Clause）、Aceternity（专有）、animate.css（Hippocratic）、GSAP（禁止用于无代码动画工具）**不能搬**。
 - 文件头声明了来源是 magicui 的卡可以用 `mu-` 前缀。
+- **不用上网找源码**：Magic UI 全部组件的原始源码在本地目录里，本文末尾「附:Magic UI 可搬目录」按档位列了每一个。想用哪个就 `get_card_source({ cardId: "mu-<name>" })` 读它（返回里的 `hint` 会告诉你要先处理什么），包好后用同一个 id `create_card`。
 
 审查会**拒绝**这几类，返回的 `findings` 逐条带档位：
 
 | 档位 | 触发 | 为什么 |
 |---|---|---|
-| 第二档·管线暂不支持 | `<canvas>` / `getContext`、`Math.random`、three / cobe / 粒子库 | 导出管线还接不住：canvas 不在 DOM 里，随机每次挂载都不同 |
+| 第二档·管线暂不支持 | WebGL、three / cobe 三维库 | 走 GPU 光栅化，导出用软件光栅化对不上。`<canvas>` 和 `Math.random` **现在接得住**（随机钉成带种子的、截图期间关脚本），不再拒 |
 | 第三档·交互驱动 | mousemove / scroll 监听、`whileHover` / `whileTap` / `whileInView`、`useScroll` | 导出里没有鼠标和滚动，只会停在初态；改成由 `t` 驱动的参数才能进导出 |
 | 依赖 | import 了没装的库 | 只有 react、motion/react、Tailwind、相对路径 |
 | 动画 class | `animate-xxx` 没定义 | Tailwind 自带 4 个；MagicUI 的 22 组已在 `magicui-animations.css`；别的要自己写进去 |

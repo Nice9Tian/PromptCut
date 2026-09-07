@@ -72,6 +72,7 @@ export interface CardCheck {
 const ALLOWED_IMPORTS: RegExp[] = [
   /^react$/, /^react\/jsx-runtime$/, /^react-dom$/,
   /^motion\/react$/, /^motion$/,
+  /^lottie-web$/, /^@tsparticles\/(engine|slim)$/,   // 已装、已在导出管线上验证过的两个库
   /^\.\.?\//,                       // 相对路径(kernel/types、native/hud、magicui/vendor/*)
 ];
 
@@ -89,6 +90,59 @@ const VENDORED_ANIMATES = new Set([
 const LICENSE_OK = /\b(MIT|Apache[- ]2\.0|BSD[- ][23][- ]Clause|\bBSD\b|ISC|CC0|Unlicense|0BSD)\b/i;
 /** 明确不能搬的:Commons Clause 禁止再分发组件本身;Hippocratic 非 OSI;GSAP 禁止用于无代码动画工具 */
 const LICENSE_BAD = /Commons[- ]Clause|Hippocratic|Aceternity|\bGSAP\b|proprietary|All rights reserved|专有/i;
+
+/* ── 可搬目录:MagicUI 全部组件的原始源码 + 审查门跑出来的档位 ──
+ * 放在 server/catalog/magicui/(不在 src 下,tsc 和 vite 都不会去编译那些原始文件)。
+ * 模型通过 card_authoring_guide 看到目录,通过 get_card_source({cardId:"mu-<name>"}) 拿源码,
+ * 包成 CardDef 后用同一个 id 走 create_card —— 不需要新工具,也不用上网。
+ */
+const catalogDir = new URL('./catalog/magicui/', import.meta.url);
+
+interface CatalogEntry {
+  name: string; id: string; file: string; description: string;
+  tier: 1 | 2 | 3 | 'deps'; blockers: string[]; props: string[]; imported: string | null;
+}
+
+function loadCatalog(): { license: string; components: CatalogEntry[] } | null {
+  try {
+    return JSON.parse(fs.readFileSync(new URL('./index.json', catalogDir), 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+/** 目录源码:只认 mu-<name>,name 必须在 index.json 里,防止拿 id 去读别的文件 */
+export function readCatalogSource(id: string): { name: string; source: string; entry: CatalogEntry } | null {
+  const m = /^mu-([a-z0-9-]+)$/.exec(id);
+  const cat = m && loadCatalog();
+  const entry = cat && cat.components.find((c) => c.name === m![1]);
+  if (!entry) return null;
+  try {
+    return { name: entry.name, source: fs.readFileSync(new URL(`./${entry.name}.tsx`, catalogDir), 'utf8'), entry };
+  } catch {
+    return null;
+  }
+}
+
+/** 把目录渲染成 guide 末尾的一节。按档位分组,每行一个组件:id、一句话、搬时要注意什么 */
+export function renderCatalog(): string {
+  const cat = loadCatalog();
+  if (!cat) return '';
+  const groups: Record<string, CatalogEntry[]> = { 1: [], deps: [], 3: [], 2: [] };
+  for (const c of cat.components) (groups[String(c.tier)] ||= []).push(c);
+  const line = (c: CatalogEntry) =>
+    `- \`${c.id}\` —— ${c.description}${c.imported ? `(已在库里:\`${c.imported}\`)` : ''}${c.props.length ? `;上游 props:${c.props.join('、')}` : ''}${c.blockers.length ? `;要处理:${c.blockers.join('、')}` : ''}`;
+  return [
+    '## 附:Magic UI 可搬目录',
+    '',
+    `来源 ${cat.license},${cat.components.length} 个组件,源码在本地。想用其中一个:\`get_card_source({ cardId: "mu-<name>" })\` 读原始源码 → 按上面「搬第三方组件」包成 CardDef、文件头写来源 → \`create_card\` 用同一个 id 建卡。档位是审查门跑出来的。`,
+    '',
+    `### 现在就能搬(${groups[1].length})`, ...groups[1].map(line), '',
+    `### 引了没装的库,搬时要把用到的几行带进来或去掉(${groups.deps.length})`, ...groups.deps.map(line), '',
+    `### 交互 / 滚动驱动,要改成由 t 驱动的参数才能进导出(${groups[3].length})`, ...groups[3].map(line), '',
+    `### 管线暂不支持(${groups[2].length})`, ...groups[2].map(line), '',
+  ].join('\n');
+}
 
 /**
  * 机械翻译:只做不需要判断的替换。返回改过的源码和「改了什么」的清单,
@@ -131,14 +185,14 @@ export function reviewCardSource(source: string, hints?: { vendored?: boolean })
   const push = (tier: CardFinding['tier'], rule: string, detail: string) => f.push({ tier, rule, detail });
 
   // ── 第二档:管线接不住 ──
-  if (/getContext\s*\(|<canvas\b|HTMLCanvasElement|OffscreenCanvas|WebGLRenderingContext/.test(source)) {
-    push(2, 'canvas', '画在 <canvas> 上的内容不在 DOM 里,静态跳过的探针看不见;而且截图窗口里那段自由跑的虚拟时间会让逐帧累加的绘制推进不确定的步数。导出脚本收紧 shoot() 之前接不住。');
+  // canvas 和 Math.random 曾经在这一档,现在不在了:导出页把 Math.random 钉成带种子的、截图期间
+  // 关掉脚本执行(exportClock.ts / export-frames.mjs 的 shoot),静态跳过的探针也看得见 canvas。
+  // 实测 tsParticles 粒子卡「新鲜 vs 复用 vs 跳过」逐字节 0 差异。剩下接不住的是 WebGL 三维库。
+  if (/\bWebGLRenderingContext\b|getContext\s*\(\s*["']webgl2?["']/.test(source)) {
+    push(2, 'WebGL', 'WebGL 的光栅化走 GPU 路径,导出用的是软件光栅化且两次不完全一致,现在接不住。');
   }
-  if (/\bMath\.random\s*\(/.test(source)) {
-    push(2, 'Math.random', '每次挂载随机一次,导两遍就是两个画面。换成带种子的随机(参数里给 seed),或把随机值提成 defaults 里写死的常量。');
-  }
-  if (/\bfrom\s+["'](three|@react-three\/[^"']+|cobe|canvas-confetti|tsparticles|@tsparticles\/[^"']+)["']/.test(source)) {
-    push(2, 'WebGL/粒子库', '三维 / 粒子库走 WebGL 或 canvas,和上一条同一个问题,而且没装。');
+  if (/\bfrom\s+["'](three|@react-three\/[^"']+|cobe|@react-three-fiber[^"']*)["']/.test(source)) {
+    push(2, '三维库', 'three / cobe 走 WebGL,和上一条同一个问题,而且没装。');
   }
 
   // ── 第三档:靠输入驱动,导出里没有输入 ──
@@ -344,7 +398,9 @@ export default function vitePluginCards(): Plugin {
           const guide = fs.readFileSync(new URL('./card-authoring-guide.md', import.meta.url), 'utf-8');
           res.statusCode = 200;
           res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
-          res.end(guide);
+          // 附上可搬目录:模型只看得见库里已有的卡,不知道 MagicUI 还有哪些没搬、各干什么。
+          // 目录是审查门跑出来的(server/catalog/magicui/index.json),档位不是手写的。
+          res.end(guide + '\n' + renderCatalog());
         } catch (e: any) {
           sendJson(res, 500, { ok: false, error: e?.message || String(e) });
         }
@@ -366,9 +422,19 @@ export default function vitePluginCards(): Plugin {
           return sendJson(res, 400, { ok: false, error: '非法的文件路径' });
         }
         if (!fs.existsSync(target)) {
+          // 不在 user 目录 → 看看是不是可搬目录里的 MagicUI 组件。返回的是**上游原始源码**,
+          // 还没包成 CardDef,模型拿到后按 guide 的「搬第三方组件」包好、用同一个 id 走 create_card。
+          const cat = readCatalogSource(id);
+          if (cat) {
+            return sendJson(res, 200, {
+              ok: true, id, file: cat.entry.file, source: cat.source, lines: cat.source.split('\n').length,
+              catalog: true, tier: cat.entry.tier, blockers: cat.entry.blockers, props: cat.entry.props,
+              hint: `这是 Magic UI 目录里的原始源码(MIT),还不是卡。包成 CardDef、文件头写「来源: https://magicui.design/docs/components/${cat.name}」和 MIT,再用 create_card 以 id "${id}" 建卡。${cat.entry.blockers.length ? '要先处理:' + cat.entry.blockers.join('、') : ''}`,
+            });
+          }
           return sendJson(res, 404, {
             ok: false,
-            error: `src/cards/user/${id}.tsx 不存在。内置卡没有单独可读的源码文件,想调整内置卡请改它的参数(list_cards 看 schema,update_clip 改值)。`,
+            error: `src/cards/user/${id}.tsx 不存在。内置卡没有单独可读的源码文件,想调整内置卡请改它的参数(list_cards 看 schema,update_clip 改值)。Magic UI 目录里的组件用 mu-<name> 读(见 card_authoring_guide 末尾的目录)。`,
           });
         }
         const source = fs.readFileSync(target, 'utf8');

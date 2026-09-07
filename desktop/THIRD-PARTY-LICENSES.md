@@ -81,6 +81,8 @@ https://www.gyan.dev/ffmpeg/builds/#release-builds （选择对应版本的 sour
 | `tailwindcss`           | MIT           | CSS 框架                           |
 | `puppeteer`             | Apache-2.0    | Chrome 自动化（导出用）            |
 | `pngjs`                 | MIT           | PNG 编解码（确定性验证用）         |
+| `lottie-web`            | MIT           | Lottie 动画播放（Lottie 卡）；素材文件另有各自许可 |
+| `@tsparticles/engine` / `@tsparticles/slim` | MIT | canvas 粒子（粒子背景卡）  |
 | `typescript`            | Apache-2.0    | TypeScript 编译器（开发依赖）      |
 
 - **未核实，分发前请确认**：运行 `npx license-checker --summary` 确认完整依赖树中没有不兼容的许可证
@@ -291,6 +293,7 @@ https://www.gyan.dev/ffmpeg/builds/#release-builds （选择对应版本的 sour
 | Magic UI 组件：number-ticker、blur-fade、animated-circular-progress-bar、typing-animation、word-rotate | `src/cards/magicui/vendor/*.tsx` | https://github.com/magicuidesign/magicui | MIT |
 | Magic UI 动画样式（22 组 `@keyframes` 与同名 class，抠自 `apps/www/styles/globals.css`） | `src/cards/magicui/vendor/magicui-animations.css` | 同上 | MIT |
 | `cn.ts`（自写的极简替代，不是 shadcn 那份） | `src/cards/magicui/vendor/cn.ts` | 本项目 | — |
+| Magic UI 可搬目录：全部 78 个组件的原始源码 + `index.json`（不参与编译，供模型按需导入） | `server/catalog/magicui/` | 同上 | MIT |
 
 `create_card` 的审查门要求每一张搬进来的卡在文件头声明来源和许可证，并拒绝 Commons Clause / Hippocratic / 专有 / GSAP。经它导入的卡落在 `src/cards/user/`，随安装包分发前把它们补进这张表。
 
