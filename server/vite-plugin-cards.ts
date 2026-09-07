@@ -151,11 +151,13 @@ function renderAssets(): string {
     try { return JSON.parse(fs.readFileSync(new URL(`./catalog/${kind}/index.json`, import.meta.url), 'utf8')); } catch { return null; }
   };
   const out: string[] = [];
+  // note 是模型看 6 帧拼图写的观察,比人写的 description 具体;有就优先用,use 是它建议的场合
+  const desc = (i: any) => (i.note ? `${i.note}${i.use ? `(${i.use})` : ''}` : i.description);
   const lottie = read('lottie');
   if (lottie) {
     out.push(`## 附:Lottie 素材(${lottie.items.length},${lottie.license})`, '',
       '用法:`add_clip({ cardId: "lottie", params: { src: "<url>" } })`,clip 时长照着 seconds 给;想循环就加 `loop: "yes"`。', '',
-      ...lottie.items.map((i: any) => `- \`${i.url}\` —— ${i.description};${i.seconds}s,${i.w}×${i.h}`), '');
+      ...lottie.items.map((i: any) => `- \`${i.url}\` —— ${desc(i)};${i.seconds}s,${i.w}×${i.h}`), '');
   }
   const particles = read('particles');
   if (particles) {
@@ -163,9 +165,9 @@ function renderAssets(): string {
     const rest = particles.items.filter((i: any) => !i.featured);
     out.push(`## 附:粒子配置(${particles.items.length},${particles.license})`, '',
       '用法:`add_clip({ cardId: "particles", params: { config: "<url>", seed: 1 } })`。都是背景,通常盖住整段时长放最底层;换 seed 换排布。每个都在导出管线上实跑验证过。', '',
-      `### 推荐(${featured.length})`, ...featured.map((i: any) => `- \`${i.url}\` —— ${i.description}`), '',
+      `### 推荐(${featured.length})`, ...featured.map((i: any) => `- \`${i.url}\` —— ${desc(i)}`), '',
       `### 其他(${rest.length},多是同一外观的变体)`,
-      rest.map((i: any) => `\`${i.name}\`(${i.description})`).join('、'), '');
+      rest.map((i: any) => `\`${i.name}\`(${i.note || i.description})`).join('、'), '');
   }
   return out.join('\n');
 }
