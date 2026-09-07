@@ -32,8 +32,11 @@ interface JobMeta {
   /** 只起实例、不拉桌面 app(自检和排错用) */
   noLaunch?: boolean;
   /** 最近一次拉起桌面 app 的方式,给对话框显示和排错 */
-  launch?: { kind: string; detail: string; at: string };
+  launch?: { kind: string; detail: string; at: string; autoSend?: AutoSend };
 }
+
+/** 替用户按回车的结果:发了 / 桌面 app 没到前台没敢发 / 脚本出错 / 非 Windows 跳过 */
+type AutoSend = "sent" | "nofocus" | "error" | "skipped";
 
 interface Instance {
   ready?: boolean;
@@ -119,17 +122,62 @@ function revealDir(dir: string) {
 }
 
 /**
+ * 替用户按下那一下回车。
+ *
+ * 两家的深链都只把指令**预填**进输入框,不发送(实测)。用户要的是「打开就发出去,
+ * agent 自己把环境配好」,所以拉起之后再补一下 Enter。
+ *
+ * 安全闸:先等前台窗口真的是那个桌面 app(最多 12 秒),不是就什么都不发 ——
+ * 宁可让用户自己按,也不能往别的窗口里敲回车。Claude 的输入框预填斜杠命令时会
+ * 弹补全菜单,第一下 Enter 是选中补全、第二下才发送;所以发两下,中间隔半秒。
+ * 已经发出去的话,第二下落在空输入框上,没有副作用。
+ *
+ * 只做 Windows:桌面壳本来就只发 Windows 包。脚本落在任务目录里,不走 shell 引号。
+ */
+function autoPressEnter(dir: string, processMatch: string): Promise<AutoSend> {
+  if (process.platform !== "win32") return Promise.resolve("skipped");
+  const script = [
+    "Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public class PcFg { [DllImport(\"user32.dll\")] public static extern IntPtr GetForegroundWindow(); [DllImport(\"user32.dll\")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid); }'",
+    "$deadline = (Get-Date).AddSeconds(12)",
+    "$ok = $false",
+    "while ((Get-Date) -lt $deadline) {",
+    "  $h = [PcFg]::GetForegroundWindow(); $procId = [uint32]0; [PcFg]::GetWindowThreadProcessId($h, [ref]$procId) | Out-Null",
+    "  $proc = Get-Process -Id $procId -ErrorAction SilentlyContinue",
+    "  if ($proc -and $proc.ProcessName -match '" + processMatch + "') { $ok = $true; break }",
+    "  Start-Sleep -Milliseconds 300",
+    "}",
+    "if (-not $ok) { Write-Output 'NOFOCUS'; exit 2 }",
+    "Start-Sleep -Milliseconds 1500",
+    "Add-Type -AssemblyName System.Windows.Forms",
+    "[System.Windows.Forms.SendKeys]::SendWait('{ENTER}')",
+    "Start-Sleep -Milliseconds 500",
+    "[System.Windows.Forms.SendKeys]::SendWait('{ENTER}')",
+    "Write-Output 'SENT'",
+  ].join("\r\n");
+  const file = path.join(dir, "press-enter.ps1");
+  fs.writeFileSync(file, script, "utf8");
+  return new Promise((resolve) => {
+    let out = "";
+    const child = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", file], { windowsHide: true, stdio: ["ignore", "pipe", "ignore"] });
+    child.stdout.on("data", (c) => (out += c));
+    child.on("error", () => resolve("error"));
+    child.on("exit", () => resolve(out.includes("SENT") ? "sent" : out.includes("NOFOCUS") ? "nofocus" : "error"));
+  });
+}
+
+/**
  * 拉起桌面 app 的新对话。
  *
  * Claude:一条深链搞定,handler 读 folder + q。q 给 /promptcut,skill 在目录里。
  * Codex:先 `codex app <目录>` 把工作区开到任务目录,再用 codex://threads/new?prompt= 开新线程。
  *   两步之间留几秒,app 没起来时深链会被吞掉。
  */
-function launchDesktop(provider: Provider, dir: string): { kind: string; detail: string } {
+async function launchDesktop(provider: Provider, dir: string): Promise<{ kind: string; detail: string; autoSend: AutoSend }> {
   if (provider === "claude") {
     const url = `claude://code/new?folder=${encodeURIComponent(dir)}&q=${encodeURIComponent("/promptcut")}`;
     openUrl(url);
-    return { kind: "claude-deeplink", detail: url };
+    const autoSend = await autoPressEnter(dir, "claude");
+    return { kind: "claude-deeplink", detail: url, autoSend };
   }
   const prompt = "先读这个目录里的 AGENTS.md,按它的流程开始;干完把 project.proc 的链接给我";
   const url = `codex://threads/new?prompt=${encodeURIComponent(prompt)}`;
@@ -138,8 +186,11 @@ function launchDesktop(provider: Provider, dir: string): { kind: string; detail:
   } else {
     spawn("codex", ["app", dir], { detached: true, stdio: "ignore" }).unref();
   }
-  setTimeout(() => openUrl(url), 6000);
-  return { kind: "codex-app+deeplink", detail: `codex app "${dir}" → ${url}` };
+  // app 没起来时深链会被吞掉,等它几秒
+  await new Promise((r) => setTimeout(r, 6000));
+  openUrl(url);
+  const autoSend = await autoPressEnter(dir, "codex");
+  return { kind: "codex-app+deeplink", detail: `codex app "${dir}" → ${url}`, autoSend };
 }
 
 /**
@@ -246,8 +297,10 @@ export function skillPlugin(): Plugin {
           if (meta.noLaunch) {
             update({ phase: "ready" });
           } else {
-            const launch = launchDesktop(meta.provider, dir);
-            update({ phase: "ready", launch: { ...launch, at: new Date().toISOString() } });
+            // 先标 ready 再去拉 app:拉起 + 自动回车要等十几秒,对话框不该一直显示「拉起中」
+            update({ phase: "ready" });
+            const launch = await launchDesktop(meta.provider, dir);
+            update({ launch: { ...launch, at: new Date().toISOString() } });
           }
         } catch (e) {
           update({ phase: "failed", error: (e as Error).message });
@@ -332,10 +385,12 @@ export function skillPlugin(): Plugin {
             }
             if (action === "relaunch" && req.method === "POST") {
               if (!job.alive) return sendJson(res, 400, { ok: false, error: "实例已经停了,重新开一个任务吧" });
-              const launch = launchDesktop(job.provider, dir);
-              const meta = readJsonSafe<JobMeta>(path.join(dir, "job.json"));
-              if (meta) writeMeta(dir, { ...meta, launch: { ...launch, at: new Date().toISOString() } });
-              return sendJson(res, 200, { ok: true, launch });
+              // 不等它:拉起 + 自动回车要十几秒,结果写进 job.json 由前端轮询
+              void launchDesktop(job.provider, dir).then((launch) => {
+                const meta = readJsonSafe<JobMeta>(path.join(dir, "job.json"));
+                if (meta) writeMeta(dir, { ...meta, launch: { ...launch, at: new Date().toISOString() } });
+              });
+              return sendJson(res, 200, { ok: true });
             }
             if (action === "reveal" && req.method === "POST") {
               revealDir(dir);

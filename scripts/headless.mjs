@@ -184,9 +184,17 @@ async function main() {
       lastFingerprint = fp;
       if (st.saved) log(`写回 project.proc(${st.clips} 张卡)`);
       if (st.error) log(`写回失败:${st.error}`);
-      writeInstance({ dirty: st.dirty, savedAt: st.savedAt, name: st.name, clips: st.clips, lastError: st.error || null });
+      // 页面重载过的话 savedAt 会变回 null,别把 instance.json 里的旧值冲掉
+      writeInstance({ dirty: st.dirty, savedAt: st.savedAt || instance.savedAt, name: st.name, clips: st.clips, lastError: st.error || null });
     } catch (e) {
       log(`页面没响应:${e.message}`);
+      // 多半是页面重载了(开发期改源码触发)。等它把 __pcHeadless 装回来,而不是每秒报一次错
+      try {
+        await page.waitForFunction(() => !!window.__pcHeadless, { timeout: 30000 });
+        log("页面重载后已恢复");
+      } catch {
+        log("页面 30 秒内没恢复");
+      }
     }
     if (Date.now() - lastActivity > IDLE_MS) return shutdown(`空转超过 ${IDLE_MS / 3600000} 小时`);
     await sleep(1000);

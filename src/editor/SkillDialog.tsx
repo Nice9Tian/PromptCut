@@ -32,7 +32,7 @@ interface Job {
   instanceError: string | null;
   procUpdatedAt: string | null;
   procUrl: string;
-  launch?: { kind: string; detail: string; at: string };
+  launch?: { kind: string; detail: string; at: string; autoSend?: "sent" | "nofocus" | "error" | "skipped" };
 }
 
 const PROVIDERS: { id: Provider; name: string; desc: string }[] = [
@@ -45,7 +45,7 @@ const STEPS: { phase: Phase; label: string }[] = [
   { phase: "booting", label: "起一份无头实例(独立端口,不碰你手里这份)" },
   { phase: "launching", label: "写入说明文件,拉起桌面 app 的新对话" },
   // 深链只把 /promptcut 预填进输入框,不会替用户按回车 —— 实测 Claude 桌面版就是这个行为
-  { phase: "ready", label: "就绪:桌面 app 里已经预填好指令,按回车发送,再告诉它要做什么" },
+  { phase: "ready", label: "就绪:桌面 app 已打开新对话" },
 ];
 
 const ORDER: Phase[] = ["snapshot", "booting", "launching", "ready"];
@@ -210,6 +210,11 @@ export function SkillDialog(props: { open: boolean; onClose: () => void }): JSX.
                 );
               })}
               {job.phase === "failed" && <div className="pc-skill-step is-failed">失败:{job.error}</div>}
+              {job.phase === "ready" && !job.launch && <div className="pc-skill-step is-active">正在拉起桌面 app 并替你按回车…</div>}
+              {job.launch?.autoSend === "sent" && <div className="pc-skill-step is-done">指令已自动发送,agent 在配环境;配好后直接告诉它要做什么</div>}
+              {job.launch && job.launch.autoSend !== "sent" && (
+                <div className="pc-skill-step is-active">桌面 app 的窗口没到前台,指令留在输入框里 —— 切过去按一下回车就行</div>
+              )}
               {job.phase === "stopped" && <div className="pc-skill-step">实例已停止。结果文件还在,可以合并</div>}
             </div>
 
