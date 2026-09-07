@@ -767,5 +767,5 @@
    "reason": "同 textMask,50 帧不同"
   }
  ],
- "notes_by": "gemini-3.8-flash 看 6 帧拼图写的观察(note/use/tags);description 是人写的兜底"
+ "notes_by": "模型看 6 帧拼图写的观察(note/use/tags),见 scripts/catalog-notes.mjs;description 是人写的兜底"
 }
