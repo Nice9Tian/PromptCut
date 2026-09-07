@@ -162,6 +162,11 @@ export async function openBakery(opts = {}) {
       // 特征是每几趟出现一趟、单帧 3~23 个像素、幅度 ≤27/255(圆角/字形边缘的抗锯齿)。
       // 实测 demo 时间轴第 1 帧:不加 6 趟里 2 趟差 16px,加了 8/8 逐字节一致。
       '--disable-partial-raster',
+      // 全部动画走主线程:CSS transform/opacity 动画默认跑在合成器线程,主线程 __pcSyncAnims 已经
+      // pause 了它还晚一拍,截图那帧又按自己的钟走半格(约 16ms)。负载重时 demo 第 0 帧 probe 卡的
+      // pcSpin 方块整个时有时无(3359 像素、通道差 255)。另一个会话的 A/B(两组各 30 趟同时跑
+      // 互相制造负载,只导第 0-1 帧):不加翻 6 次,加了 0 次。软件合成本来就开着,线程动画只剩风险。
+      '--disable-threaded-animation',
       // 实验/排查用:PC_CHROME_ARGS="--flag-a --flag-b" 追加启动参数,不设就是上面这套
       ...(process.env.PC_CHROME_ARGS ? process.env.PC_CHROME_ARGS.split(/\s+/).filter(Boolean) : []),
     ],
