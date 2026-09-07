@@ -58,7 +58,41 @@ https://www.gyan.dev/ffmpeg/builds/#release-builds （选择对应版本的 sour
   - `rfd` (Rusty File Dialogs)：MIT License
   - `serde` / `serde_json`：MIT License 或 Apache-2.0
 - **说明**：这些依赖在 Rust 编译时静态链接进 `promptcut.exe`。完整的依赖树可通过 `cargo tree` 查看。
-- **未核实，分发前请确认**：运行 `cargo license` 或 `cargo deny check` 确认完整依赖树中没有不兼容的许可证
+
+### 完整依赖树的核查结果
+
+闸门配置在 `desktop/src-tauri/deny.toml`，跑法：
+
+```powershell
+cd desktop/src-tauri
+cargo deny check licenses     # 2026-09-08：licenses ok
+```
+
+`deny.toml` 的 `allow` 是白名单，**引进新许可证会当场失败**，不会悄悄混进去。
+2026-09-08 全量核过一遍（Tauri 2.11 依赖树，约 460 个 crate）：
+
+| 许可证 | 个数 | 处理 |
+| --- | --- | --- |
+| MIT / Apache-2.0（多数为双许可） | 绝大部分 | 保留声明即可 |
+| Unicode-3.0 | 19（ICU 系） | 保留声明 |
+| Zlib / Unlicense / 0BSD / CC0-1.0 / MIT-0 / ISC / BSD-2 / BSD-3 | 若干 | 保留声明 |
+| **MPL-2.0** | 5：`cssparser`、`cssparser-macros`、`dtoa-short`、`selectors`、`option-ext` | 见下面的源码获取说明 |
+| LGPL-2.1-or-later | 名义上 1：`r-efi` | 它是 `MIT OR Apache-2.0 OR LGPL-2.1-or-later` 三选一，**我们取 MIT**（`deny.toml` 里 clarify 明确了）；而且它是 wasi 目标的依赖，Windows 包里不参与编译 |
+
+**没有 GPL / AGPL / SSPL。**
+
+#### MPL-2.0 的源码获取（§3.2 义务）
+
+上面 5 个 crate 是弱著佐权、**按文件计**：允许静态链进闭源二进制，但必须让拿到二进制的人
+能取得**这些文件本身**的源码。它们全部是 crates.io 上的公开发布版本，源码按下面的地址取，
+版本号见 `desktop/src-tauri/Cargo.lock`：
+
+- `cssparser` / `cssparser-macros` / `selectors`：https://github.com/servo/rust-cssparser 、
+  https://github.com/servo/stylo
+- `dtoa-short`：https://github.com/upsuper/dtoa-short
+- `option-ext`：https://github.com/soc/option-ext
+
+我们没有修改过其中任何一个文件。
 
 ## 5. WebView2
 
@@ -84,8 +118,29 @@ https://www.gyan.dev/ffmpeg/builds/#release-builds （选择对应版本的 sour
 | `lottie-web`            | MIT           | Lottie 动画播放（Lottie 卡）；素材文件另有各自许可 |
 | `@tsparticles/engine` / `@tsparticles/slim` | MIT | canvas 粒子（粒子背景卡）  |
 | `typescript`            | Apache-2.0    | TypeScript 编译器（开发依赖）      |
+| `react-markdown`        | MIT           | AI 回复的 Markdown 渲染            |
+| `remark-gfm`            | MIT           | Markdown 的表格 / 任务列表扩展     |
+| `remark-math` / `rehype-katex` | MIT    | Markdown 里的公式                  |
+| `katex`                 | MIT           | 公式排版（含自带字体，同为 MIT）   |
+| `node-pty`              | MIT           | 伪终端（CLI 驱动跑 claude / codex）|
 
-- **未核实，分发前请确认**：运行 `npx license-checker --summary` 确认完整依赖树中没有不兼容的许可证
+### 完整依赖树的核查结果
+
+`npx license-checker --summary`（0.2.10 版，241 个包）：
+
+| 许可证 | 个数 | 处理 |
+| --- | --- | --- |
+| MIT | 217 | 随包分发源码即满足署名要求 |
+| ISC | 8 | 同上 |
+| Apache-2.0 | 7 | `puppeteer` / `puppeteer-core` / `@puppeteer/browsers` / `chromium-bidi` / `webdriver-bidi-protocol` / `typescript` / `detect-libc`。需保留 NOTICE 与许可证正文，node_modules 原样分发即满足 |
+| **MPL-2.0** | 4 | `lightningcss` 及其 win32-x64 二进制（`tailwindcss` v4 的依赖）。**弱著佐权，按文件计**：只要原样分发、不修改其源码、并保证用户能拿到这些文件的源码即可。我们把整个 `node_modules` 原样打进 `runtime/app`，源码就在包里，满足 §3.2 |
+| BSD-3-Clause | 2 | `devtools-protocol`、`source-map-js` |
+| BSD-2-Clause | 1 | `entities` |
+| 0BSD | 1 | `tslib` |
+| UNLICENSED | 1 | PromptCut 自己（`package.json` 里 private），不是第三方 |
+
+**没有 GPL / AGPL / SSPL 类强著佐权依赖。** 换依赖之后重跑一次
+`npx license-checker --summary`，数字对不上就按上表补登记。
 
 ## 7. 内置 Python（随安装包分发）
 
@@ -301,8 +356,14 @@ https://www.gyan.dev/ffmpeg/builds/#release-builds （选择对应版本的 sour
 
 ## 分发前检查清单
 
-- [ ] 运行 `cargo deny check licenses` 确认 Rust 依赖许可证兼容
-- [ ] 运行 `npx license-checker --production --summary` 确认 npm 依赖许可证兼容
+- [x] 运行 `cargo deny check licenses` 确认 Rust 依赖许可证兼容 ——
+      **2026-09-08 已核**：`licenses ok`。白名单配置在 `desktop/src-tauri/deny.toml`，
+      引进新许可证会当场失败。逐条见第 4 节；MPL-2.0 那 5 个的源码获取说明也在那儿。
+      **换依赖就要重跑**
+- [x] 运行 `npx license-checker --summary` 确认 npm 依赖许可证兼容 ——
+      **2026-09-08 已核**：241 个包，MIT 217 / ISC 8 / Apache-2.0 7 / MPL-2.0 4 /
+      BSD-3-Clause 2 / BSD-2-Clause 1 / 0BSD 1，无 GPL 系。逐条见第 6 节。
+      **换依赖就要重跑**
 - [ ] 确认 `runtime/ffmpeg/LICENSE` 文件存在且包含 GPL v3 全文
 - [ ] 确认 ffmpeg 源码获取途径文档已写入安装包或官网
 - [ ] 确认 Chrome for Testing 的再分发条款允许捆绑分发

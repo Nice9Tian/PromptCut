@@ -106,10 +106,31 @@ function stepSidecar() {
 // ── Step 2: App ─────────────────────────────────────────────────────────
 
 /** Names/patterns to skip when copying the app. */
+/*
+ * 这是**黑名单**:没列到的一律拷进 runtime/app,然后进安装包发给所有用户。
+ * 所以少列一条不是「打包大了点」,是把开发机上的东西发出去。
+ *
+ * 除了构建产物,这里必须挡住三类:
+ *   - `.env*` —— 里面有诊断服务的提交令牌之类的密钥;
+ *   - `.pc-*` —— 用户/开发者的草稿、AI 会话历史、Skill 任务目录,全是个人数据;
+ *   - `tools/*/target`、`.cache` —— Rust 编译产物,单是 tools 下面就有 2.7 GB。
+ * `--from-head` 只在用它的时候才干净;有人手跑 `npm run prepare-runtime` 就全靠这份名单。
+ */
 const SKIP_DIRS = new Set([
   "node_modules", "out", "dist", ".git", ".vite", "desktop",
+  "target",            // Rust 编译产物(tools/*/target,2.7 GB)
+  ".cache",
+  ".pc-projects",      // 本机草稿
+  ".pc-chats",         // AI 会话历史
+  ".pc-work",          // 会话附件 / 打开 .proc 时的副本
+  ".pc-projects-headless",
+  ".claude",           // 本机的 agent 配置和权限
+  "release",
 ]);
 const SKIP_FILE_PATTERNS = [
+  /^\.env($|\.)/,      // .env / .env.local / .env.production —— 里面是密钥
+  /^\.pc-last-.*\.txt$/,
+  /\.lock$/,           // .proc 的独占锁,开发机上的残留
   /^AGY-TASK-.*\.md$/,
   /^left-probe\.html$/,
   /^probe-data\.html$/,

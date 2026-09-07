@@ -18,8 +18,23 @@ tsconfig.tsbuildinfo
 .pc-projects/
 
 # 本地环境变量:诊断报告收集端的地址和令牌在里面(见 tools/report-worker/)
-.env.local
-.env.*.local
+# 只写 .env.local 不够 —— 裸 .env 和 .env.production 一样是密钥文件
+.env
+.env.*
+!.env.example
 
 # wrangler 的本地缓存
 .wrangler/
+
+# Rust 编译产物。desktop/src-tauri/target 早就在忽略里,tools/ 下面几个小工具的
+# 漏了 —— 单是 tools/report-worker/target 就有一两个 G
+tools/*/target/
+
+# Skill 模式的临时落脚点:上一次任务的 id、.proc 的独占锁。
+# 只写 *.proc.lock,**不要写 *.lock** —— Cargo.lock 是要进仓库的
+.pc-last-*.txt
+*.proc.lock
+undefined.lock
+
+# 桌面版的发版产物(安装包和补丁都是几百 MB,不进仓库)
+desktop/release/

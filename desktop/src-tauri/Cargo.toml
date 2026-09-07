@@ -1,9 +1,12 @@
 [package]
 name = "promptcut"
-version = "0.2.2"
+version = "0.2.4"
 edition = "2021"
 authors = []
 description = "PromptCut Desktop"
+# 这个 crate 是本仓库的应用代码,不发 crates.io。写明之后 cargo-deny 才把它当私有 crate
+# 跳过许可证判定(见 deny.toml 的 [licenses.private]),否则每次检查都卡在「自己没有许可证」
+publish = false
 
 [lib]
 name = "promptcut_lib"

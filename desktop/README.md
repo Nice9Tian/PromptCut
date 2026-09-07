@@ -240,6 +240,33 @@ npm run make-extension -- stt
 node --test desktop/test/make-extension.test.mjs
 ```
 
+## 外壳在 SKILL 模式里做的三件事（0.2.10 新增）
+
+SKILL 模式是「把当前项目交给桌面版的 Claude Code / Codex 去改」。整条链路的主体在 Node
+那半（`server/vite-plugin-skill*.ts`、`scripts/headless.mjs`），外壳只负责三件**只有原生
+一侧做得到**的事。三件全都能降级 —— 老外壳上不报错，只是少一个便利，所以这次外壳只进末位。
+
+1. **`.proc` 文件关联**（`tauri.conf.json` 的 `bundle.fileAssociations`）
+   双击 `.proc` 用 PromptCut 打开。启动参数交给 `/api/skill/open-path`，那边**先把文件复制
+   到 `.pc-work/opened/` 再读副本** —— 原文件不被占用，双击一份别人正在编辑的 `.proc`
+   不会互相踩。老外壳上没有这个关联，用户从软件里「打开」即可。
+
+2. **`.proc` 的内核级独占锁**（`src/proc_lock.rs`，三个 Tauri 命令）
+   两个 PromptCut 同时开着同一份 `.proc`，各自按内存里的状态往回写，后写的把先写的整份
+   盖掉。锁分两层：Node 那半原子创建 `<name>.proc.lock` 并用 pid 兜底，外壳这半用 Windows
+   共享模式 0 把那个锁文件的句柄独占住 —— **进程被强杀内核立刻收走**，不会留下解不开的
+   死锁。顺序是先 Node 后外壳。前端调用处 `src/editor/io/procLock.ts` 全程可选链，
+   浏览器里跑就只有 Node 那一层，够用，只是少了「被强杀也能自动解锁」。
+
+3. **主窗收成悬浮图标**（`src/skill_shell.rs` + `ui/overlay.html`）
+   SKILL 模式期间 agent 在另一份看不见的实例上干活，主窗留着占地方。盯 Node 写的状态文件，
+   进模式就把主窗收成右上角的小图标，双击叫回来；这期间点关闭不是退出（真退出会把
+   sidecar 和 agent 的连接一起带走）。老外壳上主窗照常留着，功能不缺。
+
+**无头实例**（`scripts/headless.mjs`）不归外壳管：它是另起的一份 vite + 一张看不见的
+puppeteer 页面，自己的端口、自己的草稿目录。为什么必须有页面 —— 这个软件的渲染内核就是
+React + DOM，项目状态住在页面的 store 里，离开浏览器什么工具都没有。
+
 ## 开发期
 
 开发时不需要每次都跑 `prepare-runtime`。先跑一次组装好 `src-tauri/runtime/`，然后：
@@ -306,6 +333,7 @@ desktop/
   THIRD-PARTY-LICENSES.md
   .gitignore
   ui/index.html                   启动等待页
+  ui/overlay.html                 SKILL 模式下主窗收起来后的右上角悬浮图标(双击叫回主窗)
   scripts/
     prepare-runtime.mjs           组装 runtime/
     prepare-python.mjs            组装内置 Python（由 python-runtime 任务提供）
@@ -335,6 +363,8 @@ desktop/
     nsis/hooks.nsh
     src/main.rs
     src/lib.rs
+    src/proc_lock.rs              .proc 的内核级独占锁(Windows 共享模式 0;进程一死内核就收)
+    src/skill_shell.rs            SKILL 模式:盯状态文件,主窗收成悬浮图标 / 叫回来
     icons/icon-source.svg         图标源文件
     binaries/                     (git ignored) node sidecar
     runtime/                      (git ignored) 运行时组件

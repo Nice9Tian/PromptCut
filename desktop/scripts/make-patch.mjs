@@ -60,9 +60,18 @@ const RUNTIME_STATE = new Set([
   "exports",        // 用户导出的视频
   ".pc-chats",      // AI 会话历史
   ".pc-work",       // 每个会话的附件工作目录
+  ".pc-projects",   // 用户草稿 —— 漏了它,补丁会把打包机上的草稿发给所有人
   "out",
   ".vite",
+  ".cache",
+  ".claude",
 ]);
+
+/**
+ * 单个文件级别的黑名单。目录名挡不住 `.env.local` 这种躺在根上的文件 ——
+ * 它里面是诊断服务的提交令牌,跟着补丁发出去等于把密钥交给每一个装了补丁的用户。
+ */
+const RUNTIME_STATE_FILES = [/^\.env($|\.)/, /^\.pc-last-.*\.txt$/, /\.lock$/];
 
 function fail(msg) {
   console.error(`[FAIL] ${msg}`);
@@ -86,6 +95,8 @@ function listPayloadFiles(dir = APP_DIR, base = "") {
   const out = [];
   for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
     if (base === "" && RUNTIME_STATE.has(ent.name)) continue;
+    // 文件级黑名单在**每一层**都查:.env.local 之类不是只会出现在根上
+    if (!ent.isDirectory() && RUNTIME_STATE_FILES.some((re) => re.test(ent.name))) continue;
     const rel = base ? `${base}/${ent.name}` : ent.name;
     const full = path.join(dir, ent.name);
     if (ent.isDirectory()) out.push(...listPayloadFiles(full, rel));
