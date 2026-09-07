@@ -141,7 +141,33 @@ export function renderCatalog(): string {
     `### 引了没装的库,搬时要把用到的几行带进来或去掉(${groups.deps.length})`, ...groups.deps.map(line), '',
     `### 交互 / 滚动驱动,要改成由 t 驱动的参数才能进导出(${groups[3].length})`, ...groups[3].map(line), '',
     `### 管线暂不支持(${groups[2].length})`, ...groups[2].map(line), '',
+    renderAssets(),
   ].join('\n');
+}
+
+/** Lottie 与粒子的素材目录:都是现成文件,不用建卡,直接 add_clip 现有的卡并把 URL 填进参数 */
+function renderAssets(): string {
+  const read = (kind: string) => {
+    try { return JSON.parse(fs.readFileSync(new URL(`./catalog/${kind}/index.json`, import.meta.url), 'utf8')); } catch { return null; }
+  };
+  const out: string[] = [];
+  const lottie = read('lottie');
+  if (lottie) {
+    out.push(`## 附:Lottie 素材(${lottie.items.length},${lottie.license})`, '',
+      '用法:`add_clip({ cardId: "lottie", params: { src: "<url>" } })`,clip 时长照着 seconds 给;想循环就加 `loop: "yes"`。', '',
+      ...lottie.items.map((i: any) => `- \`${i.url}\` —— ${i.description};${i.seconds}s,${i.w}×${i.h}`), '');
+  }
+  const particles = read('particles');
+  if (particles) {
+    const featured = particles.items.filter((i: any) => i.featured);
+    const rest = particles.items.filter((i: any) => !i.featured);
+    out.push(`## 附:粒子配置(${particles.items.length},${particles.license})`, '',
+      '用法:`add_clip({ cardId: "particles", params: { config: "<url>", seed: 1 } })`。都是背景,通常盖住整段时长放最底层;换 seed 换排布。每个都在导出管线上实跑验证过。', '',
+      `### 推荐(${featured.length})`, ...featured.map((i: any) => `- \`${i.url}\` —— ${i.description}`), '',
+      `### 其他(${rest.length},多是同一外观的变体)`,
+      rest.map((i: any) => `\`${i.name}\`(${i.description})`).join('、'), '');
+  }
+  return out.join('\n');
 }
 
 /**
@@ -392,6 +418,29 @@ export default function vitePluginCards(): Plugin {
 
       // 建卡规则单独用一个端点按需取,而不是塞进每次对话的系统提示里 ——
       // 它只在「要建新卡」时才用得上,常驻会白白占掉几千 token。
+      /**
+       * 素材文件:/catalog/lottie/<name>.json、/catalog/particles/<name>.json。
+       * Lottie 卡的 src、粒子卡的 config 直接填这个 URL,编辑器预览和导出页都从这里取
+       * (同源 fetch,导出脚本的 pauseIfNetworkFetchesPending 会等它取完再推进虚拟时间)。
+       * 只放行 index.json 里登记过的名字,不拿 URL 去读别的文件。
+       */
+      server.middlewares.use('/catalog', (req, res, next) => {
+        const m = /^\/(lottie|particles)\/([A-Za-z0-9-]+)\.json$/.exec((req.url || '').split('?')[0]);
+        if (!m) return next();
+        const [, kind, name] = m;
+        try {
+          const index = JSON.parse(fs.readFileSync(new URL(`./catalog/${kind}/index.json`, import.meta.url), 'utf8'));
+          if (!index.items.some((it: { name: string }) => it.name === name)) return sendJson(res, 404, { ok: false, error: `${kind} 素材目录里没有 "${name}"` });
+          const body = fs.readFileSync(new URL(`./catalog/${kind}/${name}.json`, import.meta.url));
+          res.statusCode = 200;
+          res.setHeader('Content-Type', 'application/json; charset=utf-8');
+          res.setHeader('Cache-Control', 'no-cache');
+          res.end(body);
+        } catch (e: any) {
+          sendJson(res, 500, { ok: false, error: e?.message || String(e) });
+        }
+      });
+
       server.middlewares.use('/api/cards/guide', (req, res) => {
         if (req.method !== 'GET') return sendJson(res, 405, { ok: false, error: 'GET only' });
         try {

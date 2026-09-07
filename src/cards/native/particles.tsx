@@ -17,6 +17,7 @@ import type { CardDef, CardProps } from "../../kernel/types";
  */
 
 interface Params {
+  config: string;
   color: string;
   quantity: number;
   speed: number;
@@ -27,6 +28,44 @@ interface Params {
 
 /** 引擎插件只装一次,多张粒子卡共用 */
 let engineReady: Promise<void> | null = null;
+
+/** 不管配置怎么写,这几项一律按我们的来:铺在卡片层里、不响应鼠标、不按 DPR 放大、透明底 */
+function forceOurs(opts: Record<string, any>): Record<string, any> {
+  return {
+    ...opts,
+    fullScreen: { enable: false },
+    detectRetina: false,
+    background: { ...(opts.background || {}), color: "transparent" },
+    interactivity: {
+      ...(opts.interactivity || {}),
+      events: { ...((opts.interactivity && opts.interactivity.events) || {}), onHover: { enable: false }, onClick: { enable: false }, resize: { enable: false } },
+    },
+  };
+}
+
+function simpleOptions(params: Params): Record<string, any> {
+  return {
+    fpsLimit: 60,
+    particles: {
+      number: { value: Math.max(0, params.quantity | 0), density: { enable: false } },
+      color: { value: params.color },
+      opacity: { value: 0.8 },
+      size: { value: Math.max(0.5, params.size) },
+      move: { enable: true, speed: Math.max(0, params.speed), outModes: { default: "out" } },
+      links: { enable: params.links === "yes", color: params.color, distance: 160, opacity: 0.45, width: 1.5 },
+    },
+  };
+}
+
+/** config 参数:以 { 开头就是内联 JSON,否则当 URL 去取;空串就用上面几个简单参数 */
+async function resolveOptions(params: Params): Promise<Record<string, any>> {
+  const c = params.config.trim();
+  if (!c) return simpleOptions(params);
+  if (c.startsWith("{")) return JSON.parse(c);
+  const r = await fetch(c);
+  if (!r.ok) throw new Error(`拉取粒子配置失败 ${r.status}: ${c}`);
+  return r.json();
+}
 
 function ParticlesCard({ params }: CardProps<Params>) {
   const box = useRef<HTMLDivElement>(null);
@@ -40,28 +79,12 @@ function ParticlesCard({ params }: CardProps<Params>) {
     window.__pcResetRandom?.(params.seed | 0 || 1);
 
     engineReady ??= loadSlim(tsParticles);
-    engineReady
-      .then(() => {
+    Promise.all([engineReady, resolveOptions(params)])
+      .then(([, opts]) => {
         if (dead || !box.current) return undefined;
-        return tsParticles.load({
-          element: box.current,
-          options: {
-            fullScreen: { enable: false },
-            detectRetina: false,
-            background: { color: "transparent" },
-            fpsLimit: 60,
-            particles: {
-              number: { value: Math.max(0, params.quantity | 0), density: { enable: false } },
-              color: { value: params.color },
-              opacity: { value: 0.8 },
-              size: { value: Math.max(0.5, params.size) },
-              move: { enable: true, speed: Math.max(0, params.speed), outModes: { default: "out" } },
-              links: { enable: params.links === "yes", color: params.color, distance: 160, opacity: 0.45, width: 1.5 },
-            },
-            // 导出里没有鼠标;编辑器里也不要它响应,画面才和导出一致
-            interactivity: { events: { onHover: { enable: false }, onClick: { enable: false }, resize: { enable: false } } },
-          },
-        });
+        // 随机种子在配置取回之后再拨一次:取配置是异步的,中间别的卡可能已经抽过随机数
+        window.__pcResetRandom?.(params.seed | 0 || 1);
+        return tsParticles.load({ element: box.current, options: forceOurs(opts) });
       })
       .then((c) => {
         if (dead) c?.destroy();
@@ -73,7 +96,7 @@ function ParticlesCard({ params }: CardProps<Params>) {
       dead = true;
       container?.destroy();
     };
-  }, [params.color, params.quantity, params.speed, params.size, params.links, params.seed]);
+  }, [params.config, params.color, params.quantity, params.speed, params.size, params.links, params.seed]);
 
   return <div ref={box} className="absolute inset-0" />;
 }
@@ -82,11 +105,12 @@ export const particlesCard: CardDef<Params> = {
   id: "particles",
   name: "粒子背景",
   description: "漂浮的粒子,可带连线,铺满整个画面",
-  useWhen: "整段画面需要一层动态的科技感 / 星空感底纹时用,通常放最底层、盖住整段时长。粒子位置由 seed 决定,同一个 seed 每次导出都一样;想换一种排布就换 seed。它是背景不是主角,别指望它传达信息;要强调数字或文字用别的卡叠在上面。",
-  tags: ["粒子", "背景", "科技", "星空", "canvas"],
+  useWhen: "整段画面需要一层动态的科技感 / 星空感底纹时用,通常放最底层、盖住整段时长。两种用法:不填 config 就用颜色/数量/速度几个简单参数;要雪花、星空、气泡这类现成效果,把 config 填成素材目录里的 URL(见 card_authoring_guide 末尾「粒子配置」一节),此时简单参数不起作用。粒子位置由 seed 决定,同一个 seed 每次导出都一样;想换一种排布就换 seed。它是背景不是主角,别指望它传达信息;要强调数字或文字用别的卡叠在上面。",
+  tags: ["粒子", "背景", "科技", "星空", "雪花", "canvas"],
   source: "native",
-  defaults: { color: "#8ab4ff", quantity: 80, speed: 1.2, size: 3, links: "yes", seed: 1 },
+  defaults: { config: "", color: "#8ab4ff", quantity: 80, speed: 1.2, size: 3, links: "yes", seed: 1 },
   controls: [
+    { key: "config", label: "现成配置(URL 或 JSON)", type: "text", hint: "填了就用它,下面的颜色/数量/速度不起作用;素材目录:/catalog/particles/<name>.json" },
     { key: "color", label: "颜色", type: "color" },
     { key: "quantity", label: "数量", type: "number", min: 0, max: 400, step: 10 },
     { key: "speed", label: "速度", type: "number", min: 0, max: 10, step: 0.2 },

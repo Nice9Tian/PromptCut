@@ -294,6 +294,8 @@ https://www.gyan.dev/ffmpeg/builds/#release-builds （选择对应版本的 sour
 | Magic UI 动画样式（22 组 `@keyframes` 与同名 class，抠自 `apps/www/styles/globals.css`） | `src/cards/magicui/vendor/magicui-animations.css` | 同上 | MIT |
 | `cn.ts`（自写的极简替代，不是 shadcn 那份） | `src/cards/magicui/vendor/cn.ts` | 本项目 | — |
 | Magic UI 可搬目录：全部 78 个组件的原始源码 + `index.json`（不参与编译，供模型按需导入） | `server/catalog/magicui/` | 同上 | MIT |
+| Lottie 素材：lottie-web 仓库 `demo/` 下的 5 个演示动画（adrock、bodymovin、gatin、happy2016、navidad） | `server/catalog/lottie/` | https://github.com/airbnb/lottie-web | MIT（随仓库） |
+| 粒子配置：从 `@tsparticles/configs` 导出、经导出管线实跑筛选的配置 JSON | `server/catalog/particles/` | https://github.com/tsparticles/tsparticles | MIT |
 
 `create_card` 的审查门要求每一张搬进来的卡在文件头声明来源和许可证，并拒绝 Commons Clause / Hippocratic / 专有 / GSAP。经它导入的卡落在 `src/cards/user/`，随安装包分发前把它们补进这张表。
 

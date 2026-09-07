@@ -1,0 +1,63 @@
+{
+ "source": "https://github.com/airbnb/lottie-web (demo/)",
+ "license": "MIT",
+ "fetched": "2026-09-07",
+ "usage": "add_clip cardId \"lottie\", params.src = url;clip 时长 ≈ seconds,loop 可循环",
+ "items": [
+  {
+   "name": "adrock",
+   "file": "server/catalog/lottie/adrock.json",
+   "url": "/catalog/lottie/adrock.json",
+   "description": "摇滚小人角色动画,竖版",
+   "fr": 30,
+   "frames": 392,
+   "seconds": 13.07,
+   "w": 690,
+   "h": 913
+  },
+  {
+   "name": "bodymovin",
+   "file": "server/catalog/lottie/bodymovin.json",
+   "url": "/catalog/lottie/bodymovin.json",
+   "description": "Bodymovin 字标动画,横条状,适合当标题",
+   "fr": 30,
+   "frames": 103,
+   "seconds": 3.43,
+   "w": 1820,
+   "h": 275
+  },
+  {
+   "name": "gatin",
+   "file": "server/catalog/lottie/gatin.json",
+   "url": "/catalog/lottie/gatin.json",
+   "description": "小猫角色动画,方形",
+   "fr": 25,
+   "frames": 80,
+   "seconds": 3.2,
+   "w": 800,
+   "h": 800
+  },
+  {
+   "name": "happy2016",
+   "file": "server/catalog/lottie/happy2016.json",
+   "url": "/catalog/lottie/happy2016.json",
+   "description": "新年贺卡式的 2016 数字动画,全屏 16:9",
+   "fr": 30,
+   "frames": 99,
+   "seconds": 3.3,
+   "w": 1920,
+   "h": 1080
+  },
+  {
+   "name": "navidad",
+   "file": "server/catalog/lottie/navidad.json",
+   "url": "/catalog/lottie/navidad.json",
+   "description": "圣诞主题场景动画,全屏 16:9",
+   "fr": 25,
+   "frames": 125,
+   "seconds": 5,
+   "w": 1920,
+   "h": 1080
+  }
+ ]
+}

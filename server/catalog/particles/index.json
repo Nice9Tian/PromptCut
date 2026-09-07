@@ -1,0 +1,399 @@
+{
+ "source": "https://github.com/tsparticles/tsparticles (@tsparticles/configs)",
+ "license": "MIT",
+ "fetched": "2026-09-07",
+ "engine": "@tsparticles/slim",
+ "screened": "每个配置在导出管线上实跑 90 帧:canvas 不空白、第 5≠30 帧在动;画面完全相同的只留一个;之后再经 URL 路由做「新鲜 vs 复用」(推荐的再加「vs 静态跳过」)逐字节比对,不一致的剔除,见 excluded",
+ "usage": "add_clip cardId \"particles\", params.config = url(简单参数此时无效),seed 换排布",
+ "items": [
+  {
+   "name": "basic",
+   "file": "server/catalog/particles/basic.json",
+   "url": "/catalog/particles/basic.json",
+   "description": "经典:漂浮圆点带连线",
+   "featured": true
+  },
+  {
+   "name": "big",
+   "file": "server/catalog/particles/big.json",
+   "url": "/catalog/particles/big.json",
+   "description": "大号半透明圆盘铺满",
+   "featured": true
+  },
+  {
+   "name": "bigBlend",
+   "file": "server/catalog/particles/bigBlend.json",
+   "url": "/catalog/particles/bigBlend.json",
+   "description": "大圆盘,混合模式叠色",
+   "featured": true
+  },
+  {
+   "name": "bubble",
+   "file": "server/catalog/particles/bubble.json",
+   "url": "/catalog/particles/bubble.json",
+   "description": "大气泡缓缓漂浮",
+   "featured": true
+  },
+  {
+   "name": "colorAnimation",
+   "file": "server/catalog/particles/colorAnimation.json",
+   "url": "/catalog/particles/colorAnimation.json",
+   "description": "颜色循环变化的粒子",
+   "featured": true
+  },
+  {
+   "name": "fallingConfetti",
+   "file": "server/catalog/particles/fallingConfetti.json",
+   "url": "/catalog/particles/fallingConfetti.json",
+   "description": "飘落的彩纸",
+   "featured": true
+  },
+  {
+   "name": "gradients",
+   "file": "server/catalog/particles/gradients.json",
+   "url": "/catalog/particles/gradients.json",
+   "description": "渐变色粒子",
+   "featured": true
+  },
+  {
+   "name": "groups",
+   "file": "server/catalog/particles/groups.json",
+   "url": "/catalog/particles/groups.json",
+   "description": "几组不同大小颜色的粒子",
+   "featured": true
+  },
+  {
+   "name": "lch",
+   "file": "server/catalog/particles/lch.json",
+   "url": "/catalog/particles/lch.json",
+   "description": "LCH 色彩空间渐变的粒子",
+   "featured": true
+  },
+  {
+   "name": "life",
+   "file": "server/catalog/particles/life.json",
+   "url": "/catalog/particles/life.json",
+   "description": "不断生灭的粒子",
+   "featured": true
+  },
+  {
+   "name": "linkTriangles",
+   "file": "server/catalog/particles/linkTriangles.json",
+   "url": "/catalog/particles/linkTriangles.json",
+   "description": "连线并填成三角网",
+   "featured": true
+  },
+  {
+   "name": "nasa",
+   "file": "server/catalog/particles/nasa.json",
+   "url": "/catalog/particles/nasa.json",
+   "description": "细小星点的星空",
+   "featured": true
+  },
+  {
+   "name": "orbit",
+   "file": "server/catalog/particles/orbit.json",
+   "url": "/catalog/particles/orbit.json",
+   "description": "带轨道环的粒子",
+   "featured": true
+  },
+  {
+   "name": "parallax",
+   "file": "server/catalog/particles/parallax.json",
+   "url": "/catalog/particles/parallax.json",
+   "description": "分层视差感",
+   "featured": true
+  },
+  {
+   "name": "plasma",
+   "file": "server/catalog/particles/plasma.json",
+   "url": "/catalog/particles/plasma.json",
+   "description": "等离子色团",
+   "featured": true
+  },
+  {
+   "name": "poisson",
+   "file": "server/catalog/particles/poisson.json",
+   "url": "/catalog/particles/poisson.json",
+   "description": "均匀铺开的圆点阵",
+   "featured": true
+  },
+  {
+   "name": "random",
+   "file": "server/catalog/particles/random.json",
+   "url": "/catalog/particles/random.json",
+   "description": "随机形状与颜色混合",
+   "featured": true
+  },
+  {
+   "name": "repulse",
+   "file": "server/catalog/particles/repulse.json",
+   "url": "/catalog/particles/repulse.json",
+   "description": "常见的连线网",
+   "featured": true
+  },
+  {
+   "name": "slow",
+   "file": "server/catalog/particles/slow.json",
+   "url": "/catalog/particles/slow.json",
+   "description": "缓慢漂浮",
+   "featured": true
+  },
+  {
+   "name": "snow",
+   "file": "server/catalog/particles/snow.json",
+   "url": "/catalog/particles/snow.json",
+   "description": "雪花飘落",
+   "featured": true
+  },
+  {
+   "name": "spin",
+   "file": "server/catalog/particles/spin.json",
+   "url": "/catalog/particles/spin.json",
+   "description": "自转的粒子",
+   "featured": true
+  },
+  {
+   "name": "star",
+   "file": "server/catalog/particles/star.json",
+   "url": "/catalog/particles/star.json",
+   "description": "星形粒子",
+   "featured": true
+  },
+  {
+   "name": "strokeAnimation",
+   "file": "server/catalog/particles/strokeAnimation.json",
+   "url": "/catalog/particles/strokeAnimation.json",
+   "description": "描边色循环",
+   "featured": true
+  },
+  {
+   "name": "triangles",
+   "file": "server/catalog/particles/triangles.json",
+   "url": "/catalog/particles/triangles.json",
+   "description": "三角形连线",
+   "featured": true
+  },
+  {
+   "name": "twinkle",
+   "file": "server/catalog/particles/twinkle.json",
+   "url": "/catalog/particles/twinkle.json",
+   "description": "闪烁的星星",
+   "featured": true
+  },
+  {
+   "name": "vibrate",
+   "file": "server/catalog/particles/vibrate.json",
+   "url": "/catalog/particles/vibrate.json",
+   "description": "微微抖动的粒子",
+   "featured": true
+  },
+  {
+   "name": "backgroundCanvas",
+   "file": "server/catalog/particles/backgroundCanvas.json",
+   "url": "/catalog/particles/backgroundCanvas.json",
+   "description": "稀疏小点",
+   "featured": false
+  },
+  {
+   "name": "bigBlendCombo",
+   "file": "server/catalog/particles/bigBlendCombo.json",
+   "url": "/catalog/particles/bigBlendCombo.json",
+   "description": "大圆盘,混合模式组合",
+   "featured": false
+  },
+  {
+   "name": "clickPause",
+   "file": "server/catalog/particles/clickPause.json",
+   "url": "/catalog/particles/clickPause.json",
+   "description": "稀疏漂浮点",
+   "featured": false
+  },
+  {
+   "name": "collisionsAbsorb",
+   "file": "server/catalog/particles/collisionsAbsorb.json",
+   "url": "/catalog/particles/collisionsAbsorb.json",
+   "description": "碰撞吸收",
+   "featured": false
+  },
+  {
+   "name": "collisionsBounce",
+   "file": "server/catalog/particles/collisionsBounce.json",
+   "url": "/catalog/particles/collisionsBounce.json",
+   "description": "碰撞反弹",
+   "featured": false
+  },
+  {
+   "name": "delay",
+   "file": "server/catalog/particles/delay.json",
+   "url": "/catalog/particles/delay.json",
+   "description": "延迟出现",
+   "featured": false
+  },
+  {
+   "name": "delayColor",
+   "file": "server/catalog/particles/delayColor.json",
+   "url": "/catalog/particles/delayColor.json",
+   "description": "延迟变色",
+   "featured": false
+  },
+  {
+   "name": "delayOpacity",
+   "file": "server/catalog/particles/delayOpacity.json",
+   "url": "/catalog/particles/delayOpacity.json",
+   "description": "延迟淡入",
+   "featured": false
+  },
+  {
+   "name": "delaySize",
+   "file": "server/catalog/particles/delaySize.json",
+   "url": "/catalog/particles/delaySize.json",
+   "description": "延迟变大",
+   "featured": false
+  },
+  {
+   "name": "delayStrokeColor",
+   "file": "server/catalog/particles/delayStrokeColor.json",
+   "url": "/catalog/particles/delayStrokeColor.json",
+   "description": "延迟描边变色",
+   "featured": false
+  },
+  {
+   "name": "destroy",
+   "file": "server/catalog/particles/destroy.json",
+   "url": "/catalog/particles/destroy.json",
+   "description": "到边消失",
+   "featured": false
+  },
+  {
+   "name": "destroyExplode",
+   "file": "server/catalog/particles/destroyExplode.json",
+   "url": "/catalog/particles/destroyExplode.json",
+   "description": "到边爆开",
+   "featured": false
+  },
+  {
+   "name": "effectBubble",
+   "file": "server/catalog/particles/effectBubble.json",
+   "url": "/catalog/particles/effectBubble.json",
+   "description": "气泡效果",
+   "featured": false
+  },
+  {
+   "name": "effectFilter",
+   "file": "server/catalog/particles/effectFilter.json",
+   "url": "/catalog/particles/effectFilter.json",
+   "description": "滤镜效果",
+   "featured": false
+  },
+  {
+   "name": "effectParticles",
+   "file": "server/catalog/particles/effectParticles.json",
+   "url": "/catalog/particles/effectParticles.json",
+   "description": "粒子内嵌粒子",
+   "featured": false
+  },
+  {
+   "name": "effectTrailTransform",
+   "file": "server/catalog/particles/effectTrailTransform.json",
+   "url": "/catalog/particles/effectTrailTransform.json",
+   "description": "拖尾变形",
+   "featured": false
+  },
+  {
+   "name": "grabRandomColor",
+   "file": "server/catalog/particles/grabRandomColor.json",
+   "url": "/catalog/particles/grabRandomColor.json",
+   "description": "稀疏漂浮点(随机色)",
+   "featured": false
+  },
+  {
+   "name": "lightHover",
+   "file": "server/catalog/particles/lightHover.json",
+   "url": "/catalog/particles/lightHover.json",
+   "description": "光照感粒子",
+   "featured": false
+  },
+  {
+   "name": "mouseAttract",
+   "file": "server/catalog/particles/mouseAttract.json",
+   "url": "/catalog/particles/mouseAttract.json",
+   "description": "稀疏漂浮点",
+   "featured": false
+  },
+  {
+   "name": "mouseDestroy",
+   "file": "server/catalog/particles/mouseDestroy.json",
+   "url": "/catalog/particles/mouseDestroy.json",
+   "description": "稀疏漂浮点",
+   "featured": false
+  },
+  {
+   "name": "mouseDrag",
+   "file": "server/catalog/particles/mouseDrag.json",
+   "url": "/catalog/particles/mouseDrag.json",
+   "description": "密集圆点",
+   "featured": false
+  },
+  {
+   "name": "mouseParticle2",
+   "file": "server/catalog/particles/mouseParticle2.json",
+   "url": "/catalog/particles/mouseParticle2.json",
+   "description": "中等密度圆点",
+   "featured": false
+  },
+  {
+   "name": "moveAngle",
+   "file": "server/catalog/particles/moveAngle.json",
+   "url": "/catalog/particles/moveAngle.json",
+   "description": "定向漂移",
+   "featured": false
+  },
+  {
+   "name": "moveDistance",
+   "file": "server/catalog/particles/moveDistance.json",
+   "url": "/catalog/particles/moveDistance.json",
+   "description": "限距漂移",
+   "featured": false
+  },
+  {
+   "name": "moveInside",
+   "file": "server/catalog/particles/moveInside.json",
+   "url": "/catalog/particles/moveInside.json",
+   "description": "向内漂移",
+   "featured": false
+  },
+  {
+   "name": "moveOutside",
+   "file": "server/catalog/particles/moveOutside.json",
+   "url": "/catalog/particles/moveOutside.json",
+   "description": "向外漂移",
+   "featured": false
+  },
+  {
+   "name": "noClear",
+   "file": "server/catalog/particles/noClear.json",
+   "url": "/catalog/particles/noClear.json",
+   "description": "不清屏的拖痕",
+   "featured": false
+  }
+ ],
+ "excluded": [
+  {
+   "name": "shadow",
+   "reason": "canvas 阴影(shadowBlur)两趟光栅化不一致,60/60 帧不同"
+  },
+  {
+   "name": "nyancat2",
+   "reason": "彩虹尾迹两趟不一致,32 帧不同"
+  },
+  {
+   "name": "textMask",
+   "reason": "canvas 文字遮罩两趟不一致,48 帧不同"
+  },
+  {
+   "name": "textMaskMultiline",
+   "reason": "同 textMask,50 帧不同"
+  }
+ ]
+}
