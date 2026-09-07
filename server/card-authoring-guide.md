@@ -146,6 +146,27 @@ export const priceTag: CardDef<Params> = {
 
 别引其他第三方库——没装的会直接编译失败。
 
+### 搬第三方组件（Magic UI 等）
+
+可以把 Magic UI 的组件源码直接交给 `create_card`，它会先过一遍翻译器再审查：
+
+- **自动改掉的**：`"use client"` 去掉；`@/lib/utils` 指到本地的 `../magicui/vendor/cn`。改了什么在返回的 `rewrites` 里。
+- **必须你来做的**：把组件包成 `CardDef`——写 `Component`（把 `params` 喂给它、套上 `absolute inset-0` 的 1920×1080 层）、`defaults`、`controls`、`useWhen`。返回的 `suggestedControls` 是从它的 `*Props` 接口推出来、你还没露出来的参数，由你决定要不要提。
+- **文件头必须声明来源和许可证**，照 `src/cards/magicui/vendor/word-rotate.tsx` 的写法：`来源: <URL>` 加许可证名。能搬的只有 MIT / Apache-2.0 / BSD / ISC / CC0。React Bits（Commons Clause）、Aceternity（专有）、animate.css（Hippocratic）、GSAP（禁止用于无代码动画工具）**不能搬**。
+- 文件头声明了来源是 magicui 的卡可以用 `mu-` 前缀。
+
+审查会**拒绝**这几类，返回的 `findings` 逐条带档位：
+
+| 档位 | 触发 | 为什么 |
+|---|---|---|
+| 第二档·管线暂不支持 | `<canvas>` / `getContext`、`Math.random`、three / cobe / 粒子库 | 导出管线还接不住：canvas 不在 DOM 里，随机每次挂载都不同 |
+| 第三档·交互驱动 | mousemove / scroll 监听、`whileHover` / `whileTap` / `whileInView`、`useScroll` | 导出里没有鼠标和滚动，只会停在初态；改成由 `t` 驱动的参数才能进导出 |
+| 依赖 | import 了没装的库 | 只有 react、motion/react、Tailwind、相对路径 |
+| 动画 class | `animate-xxx` 没定义 | Tailwind 自带 4 个；MagicUI 的 22 组已在 `magicui-animations.css`；别的要自己写进去 |
+| 来源/许可证 | 搬来的没写来源，或许可证不允许 | 不知道能不能随安装包分发 |
+
+机制上已验证能直接搬的 Magic UI 组件（和已过逐字节比对的 5 张同类）：文字类（Text Animate、Typing、Number Ticker、Word Rotate、Shiny / Gradient / Aurora Text、Morphing、Spinning、Text 3D Flip）、Blur Fade、Border Beam、Shine Border、Marquee、Orbiting Circles、Animated List、各按钮、各背景图案、设备框。搬进来后一定 `see_preview` 看一眼。
+
 ## 4. 组件收到什么
 
 ```ts

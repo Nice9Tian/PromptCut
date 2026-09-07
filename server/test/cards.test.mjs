@@ -37,7 +37,7 @@ const pluginUrl = compile('server/vite-plugin-cards.ts', 'cards-plugin.mjs', [["
 
 const { registerCards } = await import(registryUrl);
 const { validateCardParams, findCard } = await import(cardParamsUrl);
-const { checkCardSource, applyCardPatch } = await import(pluginUrl);
+const { checkCardSource, applyCardPatch, translateCardSource, reviewCardSource, suggestControls } = await import(pluginUrl);
 
 // 一张最小的假卡,形状和真卡一致
 registerCards([{
@@ -167,6 +167,86 @@ test('语法错误 → 拒绝并给出行号', () => {
 test('缺 controls 字段 → 拒绝', () => {
   const src = GOOD.replace('  controls: [{ key: "text", label: "文字", type: "text" }],\n', '');
   assert.match(checkCardSource('price-tag', src, []).errors.join('\n'), /缺少 controls/);
+});
+
+// ── 翻译器:机械翻译 + 审查门 + controls 建议 ─────────────────────────
+// 审查的分档来自 11 张卡在导出管线上的逐字节比对;这里钉住的是「哪一类代码会被
+// 挡在哪一档」,别让以后放宽规则的人不知不觉把接不住的机制放进来。
+
+test('translate:去掉 use client、@/lib/utils 指到本地,并报告改了什么', () => {
+  const r = translateCardSource('"use client"\nimport { cn } from "@/lib/utils"\nexport const x = 1');
+  assert.equal(/use client/.test(r.source), false);
+  assert.match(r.source, /from "\.\.\/magicui\/vendor\/cn"/);
+  assert.equal(r.rewrites.length, 2);
+});
+
+test('review 第二档:canvas / Math.random / 三维库', () => {
+  const tiers = (src) => reviewCardSource(src).map((f) => f.tier);
+  assert.deepEqual(tiers('const c = ref.current.getContext("2d")'), [2]);
+  assert.deepEqual(tiers('const x = Math.random()'), [2]);
+  // three 既是 WebGL 也是没装的依赖 —— 两条都要报
+  assert.deepEqual(tiers('import * as THREE from "three"').sort(), [2, 'deps']);
+});
+
+test('review 第三档:鼠标 / hover / 滚动', () => {
+  const tiers = (src) => reviewCardSource(src).map((f) => f.tier);
+  assert.deepEqual(tiers('window.addEventListener("mousemove", h)'), [3]);
+  assert.deepEqual(tiers('<motion.div whileHover={{ scale: 1.1 }} />'), [3]);
+  assert.deepEqual(tiers('const { scrollY } = useScroll()'), [3]);
+});
+
+test('review 依赖:没装的库拒绝,允许的放行', () => {
+  assert.equal(reviewCardSource('import { Sparkles } from "lucide-react"')[0].tier, 'deps');
+  assert.deepEqual(
+    reviewCardSource('import { motion } from "motion/react"\nimport { cn } from "../magicui/vendor/cn"\nimport type { CardDef } from "../../kernel/types"'),
+    [],
+  );
+});
+
+test('review 动画 class:MagicUI 那 22 组已 vendor 放行,没定义的拒绝', () => {
+  assert.deepEqual(reviewCardSource('<span className="animate-shiny-text animate-spin" />'), []);
+  const f = reviewCardSource('<span className="animate-wobble" />');
+  assert.equal(f.length, 1);
+  assert.equal(f[0].tier, 'keyframes');
+  assert.match(f[0].detail, /magicui-animations\.css/);
+});
+
+test('review 来源/许可证:搬来的没声明 → 拒绝;Commons Clause → 拒绝;MIT → 放行', () => {
+  const body = 'export const A = () => null';
+  // 直接把 MagicUI 代码贴过来:有 @/lib/utils 的痕迹但没写来源
+  const undeclared = reviewCardSource('import { cn } from "@/lib/utils"\n' + body).filter((f) => f.tier === 'license');
+  assert.equal(undeclared.length, 1);
+  assert.match(undeclared[0].rule, /未声明/);
+  // 翻译器已经改掉了 @/lib/utils 这个痕迹,靠 hints.vendored 仍然要求声明
+  assert.equal(reviewCardSource(body, { vendored: true }).filter((f) => f.tier === 'license').length, 1);
+  const bad = reviewCardSource('/**\n * 来源: https://reactbits.dev/x\n * MIT + Commons Clause\n */\n' + body);
+  assert.match(bad.find((f) => f.tier === 'license').rule, /不允许分发/);
+  const ok = reviewCardSource('/**\n * 来源: https://magicui.design/docs/components/x\n * MIT License\n */\n' + body);
+  assert.deepEqual(ok, []);
+});
+
+test('checkCardSource 把审查发现并进 errors,带档位标签', () => {
+  const src = GOOD.replace('return <motion', 'const r = Math.random();\n  return <motion');
+  const r = checkCardSource('price-tag', src, []);
+  assert.equal(r.ok, false);
+  assert.match(r.errors.join('\n'), /\[第二档·管线暂不支持\] Math\.random/);
+  assert.equal(r.findings.length, 1);
+});
+
+test('mu- 前缀:文件头声明来源 magicui 的可以用', () => {
+  const src = '/**\n * 来源: https://magicui.design/docs/components/thing\n * MIT License\n */\n' + GOOD.replace('id: "price-tag"', 'id: "mu-thing"');
+  const r = checkCardSource('mu-thing', src, []);
+  assert.equal(r.ok, true, r.errors.join('\n'));
+});
+
+test('suggestControls:从 *Props 接口推 controls,跳过 className/children', () => {
+  const s = suggestControls(`
+    interface ShinyProps extends React.HTMLAttributes<HTMLSpanElement> {
+      text: string; shimmerWidth?: number; loop?: boolean; mode: "fast" | "slow"; words: string[]; className?: string; children?: React.ReactNode;
+    }`);
+  assert.deepEqual(s.map((x) => [x.key, x.type]), [['text', 'text'], ['shimmerWidth', 'number'], ['loop', 'select'], ['mode', 'select'], ['words', 'text']]);
+  assert.match(s.find((x) => x.key === 'mode').hint, /fast \/ slow/);
+  assert.match(s.find((x) => x.key === 'words').hint, /\|/);
 });
 
 // ── applyCardPatch:局部改卡 ────────────────────────────────────────
