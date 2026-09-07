@@ -173,19 +173,44 @@ const SKIP_PATH_PATTERNS = [
  * (ADMIN_KEY 之类)放在 `.dev.vars` 和 wrangler secret 里,不带 VITE_ 前缀,取不到也不该取。
  */
 function viteEnvFromDotEnv() {
+  /*
+   * 找两个地方,**真仓库在前、源码根在后(后者覆盖前者)**:
+   *
+   *   path.resolve(DESKTOP_DIR, "..")  真仓库。`.env*` 是 gitignore 的开发者本地文件,
+   *                                    只存在于这里;
+   *   PROJECT_ROOT                     源码根。`--source` 指过来时是一棵**临时 worktree**,
+   *                                    那里面没有 .env*(gitignore 的东西不会进 worktree)。
+   *
+   * 只看 PROJECT_ROOT 是不够的 —— 那正是第一版的毛病:手动建 worktree 时我把 .env.local
+   * 拷进去了,所以验过;而真正的发布路径 `build-release --from-head` 会自己开一棵
+   * desktop/.cache/release-src,那里面永远没有这个文件,于是 VITE_ 变量照样丢,
+   * 装出来的包诊断提交还是死的。加上真仓库这条回退才算真修好。
+   */
+  const roots = [path.resolve(DESKTOP_DIR, ".."), PROJECT_ROOT];
   const out = {};
-  for (const name of [".env", ".env.local", ".env.production", ".env.production.local"]) {
-    const p = path.join(PROJECT_ROOT, name);
-    if (!fs.existsSync(p)) continue;
-    for (const line of fs.readFileSync(p, "utf-8").split(/\r?\n/)) {
-      const m = line.match(/^\s*(VITE_[A-Z0-9_]+)\s*=\s*(.*)$/);
-      if (!m) continue;
-      // 去掉可能的引号
-      out[m[1]] = m[2].trim().replace(/^(['"])(.*)\1$/, "$2");
+  const seen = new Set();
+  for (const root of roots) {
+    if (seen.has(root)) continue;
+    seen.add(root);
+    for (const name of [".env", ".env.local", ".env.production", ".env.production.local"]) {
+      const p = path.join(root, name);
+      if (!fs.existsSync(p)) continue;
+      for (const line of fs.readFileSync(p, "utf-8").split(/\r?\n/)) {
+        const m = line.match(/^\s*(VITE_[A-Z0-9_]+)\s*=\s*(.*)$/);
+        if (!m) continue;
+        // 去掉可能的引号
+        out[m[1]] = m[2].trim().replace(/^(['"])(.*)\1$/, "$2");
+      }
     }
   }
   const keys = Object.keys(out);
-  console.log(keys.length ? `  注入构建期变量:${keys.join(", ")}` : "  仓库根没有 .env*,构建期变量为空");
+  if (keys.length) {
+    console.log(`  注入构建期变量:${keys.join(", ")}`);
+  } else {
+    // 不是致命错误(别人克隆这个仓库本来就没有这些值),但要说清后果,别让人事后才发现
+    console.log("  ⚠ 没找到任何 VITE_ 变量(查过真仓库和源码根的 .env*)");
+    console.log("    后果:装出来的包里「提交诊断报告」会灰掉,只能「保存为文件」。");
+  }
   return out;
 }
 
