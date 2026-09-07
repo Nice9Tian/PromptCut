@@ -12,7 +12,6 @@ import {
   IconNew,
   IconMore,
   IconPalette,
-  IconNewChat,
   IconImport,
   IconOpen,
   IconRedo,
@@ -20,7 +19,7 @@ import {
   IconSettings,
   IconUndo,
 } from "../ui/icons";
-import { type LayoutMode, setLayoutMode, useLayoutMode } from "./layoutMode";
+import { ModeSwitch } from "./ModeSwitch";
 import { ProjectSettingsDialog } from "./ProjectSettingsDialog";
 import { SkinDialog } from "./SkinDialog";
 import { SkillDialog } from "./SkillDialog";
@@ -188,8 +187,6 @@ export function TopBar() {
       unlisten?.();
     };
   }, []);
-
-  const layoutMode = useLayoutMode();
 
   // ResizeObserver 监听顶栏根元素自身 clientWidth 并带滞回换算档位
   useEffect(() => {
@@ -405,21 +402,15 @@ ${summarizeCombine(report)}`);
       <span className="pc-bar-sep" />
 
       {/*
-        B · 外观与布局。皮肤已经不在这条上了——它是「⋯」菜单里的一项,点开是
-        带预设和自定义配色的对话框。布局和项目设置在宽档留在栏上,窄档收进「⋯」。
+        B · 模式与项目设置。
+        「传统式 / 对话式 / SKILL」是一个整体的三选一控件(ModeSwitch),不是下拉框 ——
+        三个模式互斥,滑块在哪一格就是哪一格,一眼看得出还有哪两个可以去;下拉框收起来
+        只看得见当前值。SKILL 也不该混进一个叫「布局」的下拉里,它根本不是布局。
+        皮肤仍然只住在「⋯」里。
       */}
       {tier !== "narrow" && (
         <div className="pc-bar-group">
-          <label className="pc-bar-label" title="布局">布局</label>
-          <select
-            value={layoutMode}
-            onChange={(e) => setLayoutMode(e.target.value as LayoutMode)}
-            className="pc-select"
-            title="选择布局模式"
-          >
-            <option value="classic">传统式</option>
-            <option value="chat">对话式</option>
-          </select>
+          <ModeSwitch onOpenSkill={() => setSkillOpen(true)} />
           <Btn
             onClick={() => setSettingsOpen(true)}
             label="项目设置"
@@ -467,20 +458,7 @@ ${summarizeCombine(report)}`);
             <IconPalette />
             <span className="pc-btn-label">皮肤…</span>
           </button>
-          {/* Skill 模式:把项目交给桌面版的 Claude Code / Codex 去改,改完再合回来 */}
-          <button
-            type="button"
-            className="pc-btn"
-            style={{ width: "100%", justifyContent: "flex-start" }}
-            title="把当前项目交给 Claude Code / Codex 的桌面版去改"
-            onClick={() => {
-              setMenuOpen(false);
-              setSkillOpen(true);
-            }}
-          >
-            <IconNewChat />
-            <span className="pc-btn-label">Skill 模式…</span>
-          </button>
+          {/* Skill 模式已经挪到条上的三选一控件里了(ModeSwitch),这里不再重复 */}
           <button
             type="button"
             className="pc-btn"
@@ -494,20 +472,11 @@ ${summarizeCombine(report)}`);
             <IconImport />
             <span className="pc-btn-label">合并 Skill 结果…</span>
           </button>
-          {/* 布局和项目设置只在窄档收进来,宽档它们还在条上 */}
+          {/* 模式开关和项目设置只在窄档收进来,宽档它们还在条上 */}
           {tier === "narrow" && (
             <>
               <div className="pc-more-menu-row">
-                <label className="pc-bar-label" title="布局">布局</label>
-                <select
-                  value={layoutMode}
-                  onChange={(e) => setLayoutMode(e.target.value as LayoutMode)}
-                  className="pc-select"
-                  title="选择布局模式"
-                >
-                  <option value="classic">传统式</option>
-                  <option value="chat">对话式</option>
-                </select>
+                <ModeSwitch onOpenSkill={() => { setMenuOpen(false); setSkillOpen(true); }} />
               </div>
               <button
                 type="button"

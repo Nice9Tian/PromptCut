@@ -5,7 +5,13 @@ import { exportProjectJson } from "./index";
 import { collectProjectAi, applyProjectAi, resetProjectAi, type ProjectAi } from "../../ai/projectAi";
 import { getSkillSnapshot } from "../../skill/skillMode";
 
-/** 存盘时给项目盖一个「这是 SKILL 模式下的产物」的戳。不在 SKILL 模式就不写这一段 */
+/**
+ * 存盘时给项目盖一个「这是 SKILL 模式下的产物」的戳。不在 SKILL 模式就不写这一段。
+ *
+ * 一度打算让 /api/skill/start 那边在建任务时注入,由我这边只读不写 —— 后来那条线的
+ * 所有权作废了(有第三方在重构 vite-plugin-skill.ts),所以还是在这里写。
+ * 只有一个写入方,不会出现两处各写各的。
+ */
 function skillStamp(): { active: boolean; jobId?: string | null; at?: string } | undefined {
   const { state } = getSkillSnapshot();
   if (!state.active) return undefined;
