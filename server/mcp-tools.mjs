@@ -32,7 +32,7 @@ export const tools = [
   },
   {
     name: "add_clip",
-    description: "在时间轴上添加一张新卡片。需要提供 cardId 和 start 时间。params 会和卡片 defaults 合并，只写你要改的项即可；但键名必须是该卡真有的参数、标了必填的参数不能为空，否则直接报错——先用 list_cards({cardId}) 看清 schema 再建。字幕卡不要手写 lines，用 fill_captions。",
+    description: "在时间轴上添加一张新卡片。需要提供 cardId 和 start 时间。params 会和卡片 defaults 合并，只写你要改的项即可；但键名必须是该卡真有的参数、标了必填的参数不能为空，否则直接报错——先用 list_cards({cardId}) 看清 schema 再建。字幕卡不要手写 lines，用 fill_captions。返回新建的 clip，外加 `look`（为这张卡准备好的 see_preview 调用，涉及位置和遮挡的决定请照着调去看真实画面）和 `timeline`（当前全部轨道与 clip 的 id、起止一览，之后引用 clipId 以它为准）。",
     inputSchema: {
       type: "object",
       properties: {
@@ -48,7 +48,7 @@ export const tools = [
   },
   {
     name: "update_clip",
-    description: "更新某张卡片,可修改参数、时段或更换卡片类型(cardId)。",
+    description: "更新某张卡片,可修改参数、时段或更换卡片类型(cardId)。**已经在时间轴上的卡要改就用它**，不要 remove_clip 再 add_clip 重建。返回 `look`（去看这张卡真实画面的 see_preview 调用）和 `timeline`（当前全部 clip 的 id、起止一览）。",
     inputSchema: {
       type: "object",
       properties: {
@@ -64,10 +64,14 @@ export const tools = [
   },
   {
     name: "remove_clip",
-    description: "删除某张卡片(根据 clipId)。",
+    description: "删除某张卡片(根据 clipId)。有门槛：你自己刚用 add_clip 建的卡、或者一口气连删超过 5 张，会被拒——要改卡用 update_clip；确实要删就传 force:true 并在 reason 里写明理由（用户会看到这句话）。返回 `timeline`（删完后全部 clip 的 id、起止一览，之后引用 clipId 以它为准）。",
     inputSchema: {
       type: "object",
-      properties: { clipId: { type: "string" } },
+      properties: {
+        clipId: { type: "string" },
+        force: { type: "boolean", description: "越过门槛（删自己刚建的卡 / 连删超过 5 张）。必须同时给 reason。" },
+        reason: { type: "string", description: "为什么要删这张卡。force 为 true 时必填，原样回显给用户。" }
+      },
       required: ["clipId"]
     },
     side: "browser"

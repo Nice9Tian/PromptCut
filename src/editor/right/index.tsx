@@ -8,6 +8,7 @@ import { getState, actions } from "../../store/project";
 import { allCards } from "../../kernel/registry";
 import { validateCardParams, findCard } from "../../kernel/cardParams";
 import { findClip } from "../../kernel/project";
+import { createClipGuard, timelineDigest, lookHint } from "./toolEcho";
 import { sttStatus, sttInstall, transcribeMedia } from "../io/stt";
 import { importVideoFiles } from "../io";
 import { runAutoWorkflow, getAutoWorkflowStatus } from "./autoWorkflow";
@@ -17,6 +18,9 @@ import { runSttInstall } from "../io/runSttInstall";
 /** 后台 STT 任务的状态(MCP 工具立即返回 jobId,结果靠轮询) */
 interface SttJob { done: boolean; ok: boolean; error?: string; logTail?: string[]; segments?: number }
 const sttJobs = new Map<string, SttJob>();
+
+/** 时间轴工具的删除门槛。见 toolEcho.ts 头注释里那份复盘。 */
+const clipGuard = createClipGuard();
 
 /** 正在跑的镜头识别作业,按 mediaId 索引。结果落进 store 后就删掉。 */
 const shotJobs = new Map<string, { jobId: string; percent: number; engine: string; error?: string }>();
@@ -116,7 +120,10 @@ export function RightPanel() {
           params: args.params
         });
         if (!clip) throw new Error("添加卡片失败");
-        return clip;
+        clipGuard.noteCreated(clip.id);
+        // look:去看这张卡真实画面的现成调用;timeline:当前全部 clip 的 id 和起止,
+        // 之后模型引用 clipId 以它为准,不再凭几步前的记忆。理由见 toolEcho.ts。
+        return { ...clip, look: lookHint(clip.id), timeline: timelineDigest(getState().project) };
       },
       updateClip: (args) => {
         if (args.params || args.cardId !== undefined) {
@@ -131,12 +138,20 @@ export function RightPanel() {
         if (args.params) actions.setClipParams(args.clipId, args.params);
         if (args.start !== undefined || args.end !== undefined) actions.moveClip(args.clipId, { start: args.start, end: args.end });
         if (args.cardId !== undefined) actions.setClipCard(args.clipId, args.cardId);
-        return { ok: true };
+        clipGuard.noteMutation();
+        return { ok: true, clipId: args.clipId, look: lookHint(args.clipId), timeline: timelineDigest(getState().project) };
       },
-      removeClip: (args) => { actions.removeClip(args.clipId); return { ok: true }; },
-      duplicateClip: (args) => { const c = actions.duplicateClip(args.clipId); if (!c) throw new Error("复制失败"); return c; },
-      splitClip: (args) => { const c = actions.splitClip(args.clipId, args.t); if (!c) throw new Error("切分失败"); return c; },
-      addTrack: (args) => { const t = actions.addTrack(args.name); return t; },
+      removeClip: (args) => {
+        // 门槛:删自己刚建的卡、或一口气连删一串,要 force + reason。理由回显给用户。见 toolEcho.ts。
+        const a = args as { clipId: string; force?: boolean; reason?: string };
+        const { reason } = clipGuard.checkRemove(a);
+        actions.removeClip(a.clipId);
+        clipGuard.noteRemoved(a.clipId);
+        return { ok: true, removed: a.clipId, ...(reason ? { reason } : null), timeline: timelineDigest(getState().project) };
+      },
+      duplicateClip: (args) => { const c = actions.duplicateClip(args.clipId); if (!c) throw new Error("复制失败"); clipGuard.noteCreated(c.id); return c; },
+      splitClip: (args) => { const c = actions.splitClip(args.clipId, args.t); if (!c) throw new Error("切分失败"); clipGuard.noteCreated(c.id); return c; },
+      addTrack: (args) => { const t = actions.addTrack(args.name); clipGuard.noteMutation(); return t; },
       seek: (args) => { actions.seek(args.t); return { ok: true }; },
       play: () => { actions.play(); return { ok: true }; },
       pause: () => { actions.pause(); return { ok: true }; },
