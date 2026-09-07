@@ -100,3 +100,15 @@ export function machineCode(fingerprint = machineFingerprint()) {
   const code = base32(digest).slice(0, CODE_LEN);
   return `PCM-${code.match(/.{1,5}/g).join("-")}`;
 }
+
+/**
+ * 脱敏后的识别码,形如 PCM-4K7QX-…。
+ *
+ * 诊断报告要发给我们,而这串码**就是**配置分发的解密口令,整串写进去等于
+ * 附赠一把钥匙。首组 5 位 = 25 位熵,够在几十台机器里认出是哪一台,
+ * 又远不足以反推出完整口令。
+ */
+export function redactMachineCode(code = machineCode()) {
+  const head = String(code).split("-").slice(0, 2).join("-");
+  return `${head}-…`;
+}

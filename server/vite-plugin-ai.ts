@@ -305,10 +305,14 @@ export default function vitePluginAi(): Plugin {
 
       // 排查信息:用户点「诊断」时一次性拿全,复制给我们看。
       // 里面绝不能有明文 Key —— publicConfig() 已经把它换成 { set, last4 }。
+      //
+      // 机器码同样要脱敏。它不只是个编号,它**就是**分发 API 配置时的加密口令
+      // (configShare 拿它当 password),整串写进报告等于把解密口令一起交出去。
+      // 只留第一组:够我们认出是哪台机器,不够任何人拿去解密。
       server.middlewares.use('/api/ai/diagnostics', async (req, res) => {
         if (req.method !== 'GET') return sendJson(res, 405, { ok: false, error: 'GET only' });
         try {
-          const [{ publicConfig }, { setupRoot }, { machineCode }, runners] = await Promise.all([
+          const [{ publicConfig }, { setupRoot }, { machineCode, redactMachineCode }, runners] = await Promise.all([
             import(new URL('./ai-config.mjs', import.meta.url).href),
             import(new URL('./runners/cli-runtime.mjs', import.meta.url).href),
             import(new URL('./runners/machine-id.mjs', import.meta.url).href),
@@ -325,7 +329,8 @@ export default function vitePluginAi(): Plugin {
               cliHome: setupRoot(),
               configPath: process.env.PROMPTCUT_AI_CONFIG || '(默认 %LOCALAPPDATA%\\promptcut\\ai.json)',
             },
-            machineCode: machineCode(),
+            machineCode: redactMachineCode(machineCode()),
+            machineCodeNote: '只保留首组:机器码同时是配置分发的解密口令,整串不外发',
             providers: await runners.listProviders({ refresh: true }),
             config: publicConfig(),
           });
