@@ -5,7 +5,9 @@
  *   1. 接住 PromptCut 前端 POST 过来的报告,存进 KV;
  *   2. 往飞书群里发一行摘要 + 取报告的链接 —— 飞书机器人发不了文件,
  *      几百 KB 的 JSON 直接贴过去会刷屏,所以群里只放摘要;
- *   3. 用 ADMIN_KEY 把取报告和列表这两个口守住。
+ *   3. 用 ADMIN_KEY 把取报告和列表这两个口守住。**ADMIN_KEY 只留在 Worker 和收件箱 GUI 里,
+ *      永远不出现在发出去的链接里** —— 群里那条链接带的是单份报告的只读取件码
+ *      (HMAC(ADMIN_KEY, id)),读不了别的报告,也列不了、删不了。
  *
  * 为什么用 KV 不用 R2:R2 即使只用免费额度也要求账号先绑卡,KV 不用。
  * 单值上限 25MB,而前端 SUBMIT_LIMIT 是 4MB,够。
@@ -28,6 +30,50 @@ const MAX_BYTES = 6 * 1024 * 1024;
 
 /** 列表一页最多列多少条。1000 是 KV list 的上限,客户端拿游标翻完为止 */
 const LIST_LIMIT = 1000;
+
+/**
+ * 单份报告的只读取件码。**飞书群里发的是它,不是 ADMIN_KEY。**
+ *
+ * 原来发的链接是 `/r/<id>?k=<ADMIN_KEY>` —— 那是管理密钥,能取任意一份、能列全部、能删。
+ * 群里每个人、每一张转发出去的截图,拿到的都是这把总钥匙。
+ *
+ * 换成 HMAC(ADMIN_KEY, id):每份报告一个码,只能读它自己那一份,列不了也删不了。
+ * ADMIN_KEY 始终留在 Worker 里,只有收件箱 GUI 手上有。
+ *
+ * (要更严可以在签名里混进签发时间做成限时链接。这里没做:报告是**故意不过期**的,
+ * 半年后回头查同一个问题时链接还得能用。)
+ */
+async function readToken(adminKey, id) {
+  const enc = new TextEncoder();
+  const key = await crypto.subtle.importKey('raw', enc.encode(adminKey), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const sig = new Uint8Array(await crypto.subtle.sign('HMAC', key, enc.encode(id)));
+  // base64url,截前 128 bit —— 够抗爆破,又不至于让链接长得没法看
+  return btoa(String.fromCharCode(...sig.slice(0, 16))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+/** 定长比较,别让比较耗时把答案漏出去 */
+function sameSecret(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string' || a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
+/**
+ * 限流。用 Cloudflare 的 Rate limiting 绑定(在边缘按 key 计数,不花 KV 写额度)。
+ *
+ * 没配这个绑定就直接放行 —— 老部署不该因为少一个绑定就整个挂掉,
+ * 但 wrangler.jsonc 里已经写好了,重新 deploy 一次就生效。
+ */
+async function allow(env, key) {
+  try {
+    if (!env.SUBMIT_LIMIT?.limit) return true;
+    const { success } = await env.SUBMIT_LIMIT.limit({ key });
+    return success !== false;
+  } catch {
+    return true; // 限流器自己出问题不该把收报告这件事也挡掉
+  }
+}
 
 function cors(res) {
   // 前端用 text/plain 发,属于 CORS 简单请求,不会有预检;
@@ -82,28 +128,38 @@ export default {
 
     if (req.method === 'OPTIONS') return cors(new Response(null, { status: 204 }));
 
-    // ---- 取一份报告:GET /r/<id>?k=<ADMIN_KEY> ----
+    const ip = req.headers.get('cf-connecting-ip') || '';
+    const isAdminPath = url.pathname === '/list' || url.pathname.startsWith('/r/');
+    // 管理口按 IP 限流:这几条是拿密钥当门的,不限流等于给爆破无限次机会
+    if (isAdminPath && !(await allow(env, `admin:${ip}`))) {
+      return new Response('slow down', { status: 429 });
+    }
+
+    // ---- 取一份报告:GET /r/<id>?k=<ADMIN_KEY> 或 ?s=<单份取件码> ----
     if (req.method === 'GET' && url.pathname.startsWith('/r/')) {
-      if (!env.ADMIN_KEY || url.searchParams.get('k') !== env.ADMIN_KEY) {
-        return new Response('nope', { status: 404 });
-      }
-      const body = await env.REPORTS.get(url.pathname.slice(3));
+      const id = url.pathname.slice(3);
+      if (!env.ADMIN_KEY) return new Response('nope', { status: 404 });
+      const byAdmin = sameSecret(url.searchParams.get('k') || '', env.ADMIN_KEY);
+      const byToken = sameSecret(url.searchParams.get('s') || '', await readToken(env.ADMIN_KEY, id));
+      if (!byAdmin && !byToken) return new Response('nope', { status: 404 });
+      const body = await env.REPORTS.get(id);
       if (!body) return new Response('not found', { status: 404 });
+      // 这条**不加** Access-Control-Allow-Origin:报告正文不该被任意网页跨站读走
       return new Response(body, { headers: { 'Content-Type': 'text/plain;charset=utf-8' } });
     }
 
-    // ---- 删一份:DELETE /r/<id>?k=<ADMIN_KEY> ----
+    // ---- 删一份:DELETE /r/<id>?k=<ADMIN_KEY> ----(取件码没有删除权)
     if (req.method === 'DELETE' && url.pathname.startsWith('/r/')) {
-      if (!env.ADMIN_KEY || url.searchParams.get('k') !== env.ADMIN_KEY) {
+      if (!env.ADMIN_KEY || !sameSecret(url.searchParams.get('k') || '', env.ADMIN_KEY)) {
         return new Response('nope', { status: 404 });
       }
       await env.REPORTS.delete(url.pathname.slice(3));
-      return json({ ok: true });
+      return new Response(JSON.stringify({ ok: true }), { headers: { 'Content-Type': 'application/json;charset=utf-8' } });
     }
 
-    // ---- 列最近的:GET /list?k=<ADMIN_KEY> ----
+    // ---- 列最近的:GET /list?k=<ADMIN_KEY> ----(取件码没有列表权)
     if (req.method === 'GET' && url.pathname === '/list') {
-      if (!env.ADMIN_KEY || url.searchParams.get('k') !== env.ADMIN_KEY) {
+      if (!env.ADMIN_KEY || !sameSecret(url.searchParams.get('k') || '', env.ADMIN_KEY)) {
         return new Response('nope', { status: 404 });
       }
       const cursor = url.searchParams.get('cursor') || undefined;
@@ -111,14 +167,20 @@ export default {
       const asked = Number(url.searchParams.get('limit'));
       const limit = Number.isFinite(asked) && asked > 0 ? Math.min(asked, LIST_LIMIT) : LIST_LIMIT;
       const out = await env.REPORTS.list({ limit, cursor });
-      return json({
+      // 同样不给 Access-Control-Allow-Origin:清单里有机器码、IP、标签,别让网页跨站读走
+      return new Response(JSON.stringify({
         ok: true,
         keys: out.keys.map((k) => ({ id: k.name, ...k.metadata })),
         cursor: out.list_complete ? null : out.cursor,
-      });
+      }), { headers: { 'Content-Type': 'application/json;charset=utf-8' } });
     }
 
     if (req.method !== 'POST') return cors(new Response('POST only', { status: 405 }));
+
+    // 收报告也按 IP 限流:令牌是随前端打包发出去的,公开可得,光靠它挡不住灌数据
+    if (!(await allow(env, `submit:${ip}`))) {
+      return json({ ok: false, error: '提交太频繁,过一会儿再试' }, 429);
+    }
 
     // ---- 收报告 ----
     const raw = await req.text();
@@ -132,7 +194,7 @@ export default {
      * 它挡的是「地址被人扫到,随手 curl 一下」。真要防滥用,在 Cloudflare 后台
      * 给这条路由加一条 Rate limiting 规则,那个是按 IP 在边缘上算的。
      */
-    if (env.SUBMIT_TOKEN && payload.token !== env.SUBMIT_TOKEN) {
+    if (env.SUBMIT_TOKEN && !sameSecret(String(payload.token || ''), env.SUBMIT_TOKEN)) {
       return json({ ok: false, error: '令牌不对' }, 403);
     }
     // 存之前必须把令牌摘掉,而且**存重新序列化的那份**,不是原始 raw ——
@@ -150,7 +212,10 @@ export default {
     };
     await env.REPORTS.put(id, stored, { metadata: meta });
 
-    const link = `${url.origin}/r/${id}?k=${env.ADMIN_KEY || ''}`;
+    // 群里发的是**这一份**的只读取件码,不是管理密钥。见 readToken 上面的说明
+    const link = env.ADMIN_KEY
+      ? `${url.origin}/r/${id}?s=${await readToken(env.ADMIN_KEY, id)}`
+      : `${url.origin}/r/${id}`;
     await notifyFeishu(env, { id, label: meta.label, size: stored.length, payload, link });
 
     return json({ ok: true, id });

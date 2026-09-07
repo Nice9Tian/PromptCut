@@ -9,6 +9,14 @@
   // 换账号部署的话得自己跑一遍那条命令,把 id 换成它打印的那串。
   "kv_namespaces": [
     { "binding": "REPORTS", "id": "7a697d9718d74daeaabdcff73db1f8eb" }
+  ],
+
+  // 按 IP 限流。提交令牌是随前端打包发出去的、公开可得,光靠它挡不住有人拿 6MB 的
+  // 垃圾报告灌 KV(存储费和账单都是真的);管理口不限流则等于给爆破 ADMIN_KEY 无限次机会。
+  // 这个绑定在 Cloudflare 边缘上计数,不消耗 KV 写额度。period 只能是 10 或 60。
+  // namespace_id 在本 Worker 内自己编号即可,不用去后台建。
+  "ratelimits": [
+    { "name": "SUBMIT_LIMIT", "namespace_id": "1001", "simple": { "limit": 20, "period": 60 } }
   ]
 
   // FEISHU_WEBHOOK / SUBMIT_TOKEN / ADMIN_KEY 三个是密钥,
