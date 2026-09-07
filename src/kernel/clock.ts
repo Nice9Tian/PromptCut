@@ -19,6 +19,23 @@ declare global {
     __pcResetAnims?: () => void;
     /** 导出:本帧素材(视频 seek 等)就绪 */
     __pcFrameReady?: () => Promise<void>;
+    /**
+     * 导出:经 exportClock 包过的 rAF 被注册了多少次。
+     * rAF 驱动的 JS 动画(Motion 的 MotionValue)每帧都会重新注册下一帧,停了就不再注册,
+     * 所以「这一格内计数没涨」等价于「没有 JS 动画在跑」。document.getAnimations() 看不见这类动画。
+     */
+    __pcRafCount?: number;
+    /** 导出:未被计数的原始 rAF。导出脚本自己等帧用它,免得把 __pcRafCount 顶起来。 */
+    __pcRealRaf?: (cb: FrameRequestCallback) => number;
+    /**
+     * 导出:DOM 变动次数。静态帧判定的主力 —— Motion 的 JS 动画绕开了被替换的 rAF,
+     * 但它每帧都要把新值写回 style / 文本节点,这个躲不掉。理由详见 exportClock.ts。
+     */
+    __pcMutationCount?: number;
+    /** 导出:这一帧画面静不静止(静止才敢复用上一帧的截图) */
+    __pcStaticProbe?: () => { anims: number; finished: number; raf: number; mut: number; video: boolean };
+    /** 导出:原地换项目,不重新导航。常驻烘焙进程复用同一个页面时用。 */
+    __pcLoadProject?: (raw: unknown) => Promise<void>;
   }
 }
 

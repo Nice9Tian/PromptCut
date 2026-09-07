@@ -123,7 +123,9 @@ export default function ExportView() {
         if (json && Array.isArray((json as Project).tracks)) return await prefetchMedia(json as Project);
         return json;
       })
-      .then((json: any) => {
+      // 命名函数表达式:函数体既是首次加载的装配流程,也是换项目时要重跑的那一套。
+      // 取个名字就能在体内自己调用(见下面的 __pcLoadProject),不用把这一大块抽出去。
+      .then(function install(json: any) {
       let tl: Timeline;
       let proj: Project | null = null;
 
@@ -142,7 +144,14 @@ export default function ExportView() {
 
       window.__pcSetT = (sec: number) => {
         window.__pcExportMs = sec * 1000;
-        setT(sec);
+        // flushSync:和下面 __pcRestartCards 同一个理由 —— 这一帧的渲染(尤其是 clip 边界上
+        // 卡片的挂载/卸载)必须在这次调用里同步提交完。不然 React 把它排进调度器,落在
+        // 下一格虚拟时间的哪个位置取决于这一帧截图花了多少真实时间;Motion 要等挂载提交后的
+        // 下一次 rAF 才建 WAAPI 动画,于是动画有时算进这一帧、有时要到下一帧才被 __pcSyncAnims
+        // 看见,锚点差一帧,整段入场差一帧相位。实测 demo 时间轴 blur-fade 卡切进来那一段
+        // (第 60~71 帧)连导两趟约一半概率全不同,就是它。同步提交之后,挂载在推进虚拟时间之前
+        // 就已落地,第一次 rAF 里 Motion 就把动画建好,不再依赖截图耗时。
+        flushSync(() => setT(sec));
 
         const p = projectRef.current;
         if (p) {
@@ -181,8 +190,14 @@ export default function ExportView() {
       // 必须 pause:transform / opacity 这类动画跑在合成线程上,只设 currentTime 不暂停的话,
       // 截图那一帧合成器仍按它自己的时钟采样,两次导出差零点几帧。暂停后数值只由 currentTime 决定。
       // 越过结尾的用 finish():Motion 等 finished 才提交终态样式,CSS 动画则回到自然样式,和正常播完一致。
+      // 这一帧被 finish() 收束的动画数。静态判定要看它:动画在这一帧从"还差一小段"跳到终态,
+      // 画面是变了的,但收束之后 getAnimations() 里它已经是 finished、DOM 也没被改过 ——
+      // 探针只看得见"结束后的状态",看不见"在这一帧结束"这件事。实测 type-shift 外层过渡恰好在
+      // 第 6 帧结束,静态跳过复用了第 5 帧,和不跳过差 28085 个像素。
+      let finishedThisFrame = 0;
       window.__pcSyncAnims = () => {
         const now = window.__pcExportMs ?? 0;
+        finishedThisFrame = 0;
         for (const a of document.getAnimations()) {
           if (a.playState === "finished" || a.playState === "idle") continue;
           let s0 = anchors.get(a);
@@ -194,12 +209,46 @@ export default function ExportView() {
           const end = a.effect?.getComputedTiming().endTime;
           if (typeof end === "number" && Number.isFinite(end) && target >= end) {
             a.finish();
+            finishedThisFrame++;
             continue;
           }
           if (a.playState !== "paused") a.pause();
           a.currentTime = target;
         }
       };
+      /**
+       * 这一帧画面静不静止。四个条件同时成立才算,因为单看任何一个都会漏:
+       *   anims —— getAnimations() 只看得见 CSS/过渡/WAAPI;
+       *   mut   —— 补上它看不见的 JS 动画(Motion 的 MotionValue,例如 rank-bars 的滚动数值),
+       *            以及卡片刚重挂载、动画还没建起来那几帧 —— 那时 anims 是 0,画面却在变;
+       *   raf   —— 走了被替换的 rAF 的第三方循环。Motion 走不到这里(见 exportClock.ts),
+       *            留着是因为不要钱,多罩一层算一层;
+       *   video —— 前三个都看不见的第四种变化:底下 <video> 在放。它自己会变,而且
+       *            卡片上的 backdrop-filter 毛玻璃会把它的变化采样进来,于是毫无动画的玻璃板也在逐帧变。
+       * 判静态是为了复用上一帧的截图,判错了会渲出坏帧,所以宁可保守。
+       */
+      window.__pcStaticProbe = () => ({
+        anims: document.getAnimations().filter((a) => a.playState !== "finished" && a.playState !== "idle").length,
+        finished: finishedThisFrame,
+        raf: window.__pcRafCount ?? 0,
+        mut: window.__pcMutationCount ?? 0,
+        video: Array.from(document.querySelectorAll("video")).some((v) => {
+          const s = getComputedStyle(v);
+          return s.visibility !== "hidden" && parseFloat(s.opacity) > 0;
+        }),
+      });
+      /**
+       * 原地换一个项目,不重新导航。常驻烘焙进程靠它复用同一个页面:
+       * 起 Chrome + goto + 字体首次布局加起来是固定的几秒钟,每烘一次都重付一遍太贵。
+       * 走的是 install 自己,和重新加载页面同一条路径,不会两套行为。
+       */
+      window.__pcLoadProject = async (raw: unknown) => {
+        window.__pcReady = false;
+        setMediaWarm(false);
+        const next = raw && Array.isArray((raw as Project).tracks) ? await prefetchMedia(raw as Project) : raw;
+        install(next);
+      };
+
       // 没有视频素材就直接就绪;有视频素材要等它整段解码进内存(见下面的 effect)。
       if (!proj || !proj.media.some((m) => m.url)) window.__pcReady = true;
       else Promise.all(proj.media.filter((m) => m.url).map((m) => warmVideo(m.url))).then(() => setMediaWarm(true));
