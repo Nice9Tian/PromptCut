@@ -10,6 +10,18 @@ export function getMediaFile(id: string): File | undefined {
   return mediaFiles.get(id);
 }
 
+/**
+ * 在 io 之外登记的素材，把原始 File 交回这张表。
+ *
+ * 这张表是 getMediaFile 的唯一来源，而 getMediaFile 撑着两件事：语音转写要拿原文件
+ * 上传（stt.ts），导出时 blob: 的素材要重新传一份给渲染进程。绕过它登记的素材
+ * 两样都会悄悄失灵 —— 转写报「素材文件不在内存里」，导出则把那条素材的 url 清空，
+ * 而这两处都不会说是「导入时漏登记」造成的。
+ */
+export function registerMediaFile(id: string, file: File): void {
+  mediaFiles.set(id, file);
+}
+
 /** 选一个或多个视频文件,登记成 MediaAsset(blob URL + 探测时长/宽高),并放到视频轨播放头处。返回登记的素材 id。 */
 export async function importVideoFiles(files: FileList | File[]): Promise<string[]> {
   const fileArray = Array.from(files);

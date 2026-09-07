@@ -62,7 +62,7 @@ ffmpeg / Python / Rust 编译缓存还是用 `desktop/` 下原来那份，不会
 | ---------------------------------------- | ------- | -------------------------------------------- |
 | `release/PromptCut-<版本>-setup.exe`     | ~320 MB | 第一次安装；内核代次变了；补丁装不上时的兜底 |
 | `release/PromptCut-patch-<版本>.exe`     | 几 MB起 | 已经装过，只是更新 Node 那半边               |
-| `release/PromptCut-ext-<名字>-<版本>.exe` | 几十 MB | 可选能力（语音识别、镜头识别），按需装       |
+| `release/extensions/PromptCut-ext-<名字>-<版本>.exe` | 50~330 MB | 可选能力（语音识别 / 镜头识别 / 运动追踪），按需装 |
 
 前两个都是 exe，用户双击就装，不用先解压。补丁那个是 NSIS 自解压壳：把内容解到
 `$PLUGINSDIR`（NSIS 退出时自动清，不会在 `%TEMP%` 留几百 MB 残骸），然后运行
@@ -289,6 +289,7 @@ desktop/
     PromptCut-<版本>-setup.exe    完整安装包
     PromptCut-patch-<版本>.exe    更新补丁(双击即装)
     manifest-<版本>.json          该版本的文件清单，下一次发布拿它算差异
-    PromptCut-ext-<名字>-<版本>.exe  拓展库包
-    ext-<名字>-<版本>.json        拓展包清单
+    extensions/                   拓展库包单独放这里 —— 它们按自己的节奏出版本，
+      PromptCut-ext-<名字>-<版本>.exe  和安装包/补丁不是一批东西，混在一起时
+      ext-<名字>-<版本>.json           一眼看不出这次发布该给用户哪几个文件
 ```

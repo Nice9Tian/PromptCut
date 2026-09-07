@@ -3,6 +3,7 @@
  *
  * 检测跑在服务端（TransNetV2 或 scdet 兜底），这边只负责等和存。
  */
+import { readSseStream } from "../editor/io/stt";
 import type { Shots } from "../kernel/project";
 
 export interface ShotsJobState {
@@ -55,4 +56,36 @@ export async function waitForShots(jobId: string, onProgress?: (pct: number, eng
     }
     await new Promise((r) => setTimeout(r, 1000));
   }
+}
+
+/**
+ * 装镜头识别拓展（onnxruntime + TransNetV2 权重）。
+ *
+ * 服务端的 `/api/shots/install` 一直都在，缺的只是这个客户端函数 —— 于是
+ * 开始页那张卡只能干看着状态、没有安装入口。和 installTrack 一样流式读
+ * pip 日志：这一步要等好几十秒，中间不出声的话分不清是在装还是卡死了。
+ */
+export async function installShots(
+  onLog?: (line: string) => void,
+): Promise<{ ok: boolean; log: string[] }> {
+  const res = await fetch("/api/shots/install", { method: "POST" });
+  if (!res.ok || !res.body) {
+    const d = await res.json().catch(() => ({}));
+    throw new Error(d.error || `/api/shots/install 返回 ${res.status}`);
+  }
+  const log: string[] = [];
+  let ok = true;
+  await readSseStream(res.body, (ev) => {
+    if (ev.event === "log") {
+      const line = ev.line ?? ev.data ?? "";
+      log.push(line);
+      onLog?.(line);
+    } else if (ev.event === "error") {
+      ok = false;
+      const msg = ev.message ?? "安装失败";
+      log.push("[error] " + msg);
+      onLog?.("[error] " + msg);
+    }
+  });
+  return { ok, log };
 }

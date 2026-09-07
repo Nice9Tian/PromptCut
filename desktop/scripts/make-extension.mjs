@@ -12,7 +12,9 @@
  *   node scripts/make-extension.mjs stt       # 语音识别（faster-whisper 依赖）
  *   node scripts/make-extension.mjs shots --model <transnetv2.onnx 的路径>
  *
- * 产物：release/PromptCut-ext-<名字>-<版本>.exe，双击即装。
+ * 产物：release/extensions/PromptCut-ext-<名字>-<版本>.exe，双击即装。
+ * 单独一个目录：拓展包按自己的节奏出版本，和安装包/补丁不是一批东西，
+ * 混在一起时 release/ 里一眼看不出「这次发布该给用户哪几个文件」。
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -23,6 +25,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DESKTOP_DIR = path.resolve(__dirname, "..");
 const PROJECT_ROOT = path.resolve(DESKTOP_DIR, "..");
 const RELEASE_DIR = path.join(DESKTOP_DIR, "release");
+/** 拓展包单独放，别和安装包、补丁混在一个目录里 */
+const EXT_DIR = path.join(RELEASE_DIR, "extensions");
 const STAGE_DIR = path.join(DESKTOP_DIR, ".cache", "ext-stage");
 
 const argv = process.argv.slice(2);
@@ -210,8 +214,8 @@ function main() {
   }
 
   // ── 打包 ───────────────────────────────────────────────────────────
-  mkdirp(RELEASE_DIR);
-  const exePath = path.join(RELEASE_DIR, `${stem}.exe`);
+  mkdirp(EXT_DIR);
+  const exePath = path.join(EXT_DIR, `${stem}.exe`);
   rmrf(exePath);
   console.log("  用 NSIS 打成 exe…");
   const build = spawnSync(findMakensis(), [
@@ -226,7 +230,7 @@ function main() {
     fail(`NSIS 打包失败（退出码 ${build.status}）\n${(build.stdout || "").slice(-2000)}${build.stderr || ""}`);
   }
 
-  fs.writeFileSync(path.join(RELEASE_DIR, `ext-${name}-${ext.version}.json`), JSON.stringify(manifest, null, 2));
+  fs.writeFileSync(path.join(EXT_DIR, `ext-${name}-${ext.version}.json`), JSON.stringify(manifest, null, 2));
   rmrf(STAGE_DIR);
   console.log(`\n  拓展库包：${exePath}（${mb(fs.statSync(exePath).size)} MB）`);
 }

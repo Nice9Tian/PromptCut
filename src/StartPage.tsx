@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { JSX } from "react";
+import type { JSX, ReactNode } from "react";
 import "./StartPage.css";
 import { Logo } from "./ui/Logo";
 import { listDrafts, openDraft, deleteDraft, newDraftId, setActiveDraftId } from "./editor/io/drafts";
@@ -7,6 +7,9 @@ import type { DraftInfo } from "./editor/io/drafts";
 import { newProject, loadProc, PROC_EXT } from "./editor/io/proc";
 import { actions } from "./store/project";
 import { sttStatus } from "./editor/io/stt";
+import type { SttStatus, SttEngineStatus } from "./editor/io/stt";
+import { shotsStatus, installShots } from "./ai/shots";
+import { trackStatus, installTrack } from "./ai/track";
 import { runSttInstall } from "./editor/io/runSttInstall";
 import { useInstallJobs } from "./ai/sttInstallStore";
 import { SttInstallProgress } from "./editor/right/SttInstallProgress";
@@ -39,7 +42,7 @@ function humanDate(iso: string): string {
  * 开始页面。进软件先看到这里,选了才进编辑器。
  *
  * 三块:开始创作、拓展功能、本地草稿。没有左侧栏,也没有那排圆形入口 ——
- * 这一版只把「新建 / 打开草稿 / 装听写」这三件事摆出来。
+ * 这一版只把「新建 / 打开草稿 / 看拓展装没装」这三件事摆出来。
  */
 export function StartPage(props: { onEnterEditor: () => void }): JSX.Element {
   const { onEnterEditor } = props;
@@ -127,9 +130,7 @@ export function StartPage(props: { onEnterEditor: () => void }): JSX.Element {
 
         <section className="sp-section">
           <h2 className="sp-section-title">拓展功能</h2>
-          <div className="sp-ext-row">
-            <SttCard />
-          </div>
+          <ExtensionCards />
         </section>
 
         <section className="sp-section">
@@ -189,31 +190,173 @@ export function StartPage(props: { onEnterEditor: () => void }): JSX.Element {
   );
 }
 
-/** 拓展功能里的听写识别:显示装没装,没装就地装 */
-function SttCard(): JSX.Element {
-  const [status, setStatus] = useState<{ ready: boolean; detail: string } | null>(null);
+/**
+ * 一个拓展在界面上的样子。
+ *
+ * 拆出 offerInstall 而不是直接用「装没装」取反:有两种没装的情况不该给安装按钮 ——
+ * 状态压根读不到、以及连 Python 都没有。这两种点了必然再失败一次,
+ * 显示成普通的「未安装」等于骗用户去撞墙。
+ */
+interface ExtStatusView {
+  headline: string;
+  /** 跟在 headline 后面那句:现在实际吃的是哪一档、降级之后还能干什么 */
+  note: string;
+  tone: "ok" | "muted" | "danger";
+  offerInstall: boolean;
+}
+
+function toneClass(tone: ExtStatusView["tone"]): string {
+  return tone === "ok" ? "sp-ok" : tone === "danger" ? "sp-ext-error" : "sp-muted";
+}
+
+function failedView(reason: unknown): ExtStatusView {
+  return {
+    headline: "读不到状态",
+    note: reason instanceof Error ? reason.message : String(reason),
+    tone: "danger",
+    offerInstall: false,
+  };
+}
+
+/** 把一次 settled 的查询结果翻成界面状态。映射本身也可能抛(后端少给字段),一起兜住 */
+function toView<T>(r: PromiseSettledResult<T>, map: (v: T) => ExtStatusView): ExtStatusView {
+  if (r.status === "rejected") return failedView(r.reason);
+  try { return map(r.value); } catch (e) { return failedView(e); }
+}
+
+function viewStt(s: SttStatus): ExtStatusView {
+  // 状态在 engines.<引擎>.installed 里,顶层没有 ready / installed / available 这些字段;
+  // 以前读顶层,取到的永远是 undefined,所以装好了也一直显示「未安装」。
+  const engines: Record<string, SttEngineStatus> = s.engines;
+  const hit = Object.entries(engines).find(([, e]) => e.installed);
+  if (hit) {
+    return {
+      headline: "已安装",
+      note: `当前用 ${hit[0]}${hit[1].version ? ` ${hit[1].version}` : ""}`,
+      tone: "ok",
+      offerInstall: false,
+    };
+  }
+  return {
+    headline: "未安装",
+    note: "没有兜底档，装上才能把说的话转成字幕",
+    tone: "muted",
+    offerInstall: true,
+  };
+}
+
+function viewShots(s: { ready: boolean; engine: string }): ExtStatusView {
+  if (s.ready) {
+    return {
+      headline: "已安装",
+      note: `当前用 ${s.engine || "TransNetV2"}，硬切和溶解、淡入淡出都认得出`,
+      tone: "ok",
+      offerInstall: false,
+    };
+  }
+  return {
+    headline: "未安装",
+    note: "当前用 ffmpeg scdet，只认硬切，认不出溶解",
+    tone: "muted",
+    offerInstall: true,
+  };
+}
+
+function viewTrack(s: { ready: boolean; engine: "bootstapir" | "template" | null; reason?: string }): ExtStatusView {
+  if (s.ready) {
+    return {
+      headline: "已安装",
+      note: `当前用 ${s.engine ?? "bootstapir"}，转向、形变、短暂被挡都跟得住`,
+      tone: "ok",
+      offerInstall: false,
+    };
+  }
+  if (s.engine === "template") {
+    // ready:false 不等于用不了 —— 这一档是能跑的,写成光秃秃的「未安装」会让人
+    // 以为功能是灰的,所以把「还能用」和「什么时候会翻车」一起说清楚。
+    return {
+      headline: "未安装",
+      note: "当前用 numpy 模板匹配兜底，照样能追：刚体、纹理清晰的目标追得很准；"
+        + "目标转向、缩放或长时间被挡就会跟丢。装上拓展会稳得多，但要下约 400 MB",
+      tone: "muted",
+      offerInstall: true,
+    };
+  }
+  return {
+    headline: "用不了",
+    note: s.reason || "两档都起不来，通常是找不到 Python",
+    tone: "danger",
+    offerInstall: false,
+  };
+}
+
+/** 拓展卡的壳子。三张卡长得一样,差别只在图标、文案和右边那个按钮 */
+function ExtCard(props: {
+  icon: ReactNode;
+  name: string;
+  desc: string;
+  status: ExtStatusView | null;
+  action?: ReactNode;
+  children?: ReactNode;
+}): JSX.Element {
+  const { icon, name, desc, status, action, children } = props;
+  return (
+    <div className="sp-ext-card">
+      <div className="sp-ext-icon" aria-hidden="true">{icon}</div>
+      <div className="sp-ext-body">
+        <div className="sp-ext-name">{name}</div>
+        <div className="sp-ext-desc">{desc}</div>
+        <div className="sp-ext-state">
+          {status === null
+            ? <span className="sp-muted">检测中…</span>
+            : <span className={toneClass(status.tone)}>
+                {status.headline}{status.note ? ` · ${status.note}` : ""}
+              </span>}
+        </div>
+        {children}
+      </div>
+      {action}
+    </div>
+  );
+}
+
+/** 拓展功能区:听写、镜头识别、运动追踪三张卡 */
+function ExtensionCards(): JSX.Element {
+  const [stt, setStt] = useState<ExtStatusView | null>(null);
+  const [shots, setShots] = useState<ExtStatusView | null>(null);
+  const [track, setTrack] = useState<ExtStatusView | null>(null);
+
+  const load = useCallback(async () => {
+    // 三个查询各打一个 HTTP,而且都要等 Python 那边应答。串行的话最慢的排在最后,
+    // 开始页会干等着,所以一起发。用 allSettled 不用 all:一个拓展查不到状态
+    // 不该把另外两张卡也永远钉在「检测中…」。
+    const [a, b, c] = await Promise.allSettled([sttStatus(), shotsStatus(), trackStatus()]);
+    setStt(toView(a, viewStt));
+    setShots(toView(b, viewShots));
+    setTrack(toView(c, viewTrack));
+  }, []);
+
+  useEffect(() => { void load(); }, [load]);
+
+  return (
+    <div className="sp-ext-row">
+      <SttCard status={stt} onReload={load} />
+      <ShotsCard status={shots} onReload={load} />
+      <TrackCard status={track} onReload={load} />
+    </div>
+  );
+}
+
+/** 听写识别:状态由上面统一查,这张卡只管就地安装 */
+function SttCard(props: { status: ExtStatusView | null; onReload: () => void | Promise<void> }): JSX.Element {
+  const { status, onReload } = props;
   const [startError, setStartError] = useState<string | null>(null);
   const jobs = useInstallJobs();
   const job = jobs.at(-1);
   const running = !!job && job.phase !== "done" && job.phase !== "failed";
 
-  const load = useCallback(async () => {
-    try {
-      const s = await sttStatus();
-      // 状态在 engines.<引擎>.installed 里,顶层没有 ready / installed / available 这些字段;
-      // 以前读顶层,取到的永远是 undefined,所以装好了也一直显示「未安装」。
-      const ready = Object.values(s.engines).some((e) => e.installed);
-      const engine = Object.entries(s.engines).find(([, e]) => e.installed);
-      setStatus({ ready, detail: engine ? `${engine[0]} ${engine[1].version ?? ""}`.trim() : "未安装" });
-    } catch (e) {
-      // 内置 Python 没就绪时 sttStatus 会抛,这时装不了,把原因说出来
-      setStatus({ ready: false, detail: e instanceof Error ? e.message : "读不到状态" });
-    }
-  }, []);
-
-  useEffect(() => { void load(); }, [load]);
   // 装完自动把状态刷新到位,不用用户自己再点一次
-  useEffect(() => { if (job?.phase === "done") void load(); }, [job?.phase, load]);
+  useEffect(() => { if (job?.phase === "done") void onReload(); }, [job?.phase, onReload]);
 
   const install = () => {
     setStartError(null);
@@ -226,36 +369,134 @@ function SttCard(): JSX.Element {
   };
 
   return (
-    <div className="sp-ext-card">
-      <div className="sp-ext-icon" aria-hidden="true">
+    <ExtCard
+      icon={
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
           <rect x="9" y="3" width="6" height="11" rx="3" />
           <path d="M5 11a7 7 0 0 0 14 0" />
           <path d="M12 18v3M8.5 21h7" />
         </svg>
-      </div>
-      <div className="sp-ext-body">
-        <div className="sp-ext-name">听写识别</div>
-        <div className="sp-ext-desc">把视频里的话转成字幕，本机跑，不上传。</div>
-        <div className="sp-ext-state">
-          {status === null ? "检测中…" : status.ready
-            ? <span className="sp-ok">已就绪{status.detail ? ` · ${status.detail}` : ""}</span>
-            : <span className="sp-muted">{status.detail || "未安装"}</span>}
-        </div>
-        {/* 装的过程要看得见:下几百 MB、跑几分钟,没有进度就和没反应一样。
-            失败的也留着显示,否则用户只看到按钮变回「安装」,不知道为什么没装上。 */}
-        {(running || job?.phase === "failed") && (
-          <div className="sp-ext-progress"><SttInstallProgress job={job!} compact /></div>
-        )}
-        {startError && <div className="sp-ext-error">{startError}</div>}
-      </div>
-      {/* 判断依据是「有没有在跑」,不是「有没有任务」—— 装完一次之后 store 里会一直留着
-          那条已完成的记录,拿它当条件会让卡片再也出不来按钮,变成死胡同。 */}
-      {status && !status.ready && !running && (
-        <button className="sp-ghost-btn" onClick={install}>
-          {job?.phase === "failed" ? "重试" : "安装"}
-        </button>
+      }
+      name="听写识别"
+      desc="把视频里的话转成字幕，本机跑，不上传。"
+      status={status}
+      action={
+        // 判断依据是「有没有在跑」,不是「有没有任务」—— 装完一次之后 store 里会一直留着
+        // 那条已完成的记录,拿它当条件会让卡片再也出不来按钮,变成死胡同。
+        status?.offerInstall && !running
+          ? <button className="sp-ghost-btn" onClick={install}>{job?.phase === "failed" ? "重试" : "安装"}</button>
+          : null
+      }
+    >
+      {/* 装的过程要看得见:下几百 MB、跑几分钟,没有进度就和没反应一样。
+          失败的也留着显示,否则用户只看到按钮变回「安装」,不知道为什么没装上。 */}
+      {(running || job?.phase === "failed") && (
+        <div className="sp-ext-progress"><SttInstallProgress job={job!} compact /></div>
       )}
-    </div>
+      {startError && <div className="sp-ext-error">{startError}</div>}
+    </ExtCard>
+  );
+}
+
+/** 镜头识别:状态由上面统一查,安装走 installShots 的 SSE 日志流 */
+function ShotsCard(props: { status: ExtStatusView | null; onReload: () => void | Promise<void> }): JSX.Element {
+  const { status, onReload } = props;
+  const [running, setRunning] = useState(false);
+  const [tail, setTail] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  const install = () => {
+    setRunning(true);
+    setError(null);
+    setTail("");
+    // 只留最后一行,理由同运动追踪那张卡
+    void installShots((line) => setTail(line))
+      .then(({ ok, log }) => {
+        if (!ok) setError(log.filter((l) => l.startsWith("[error]")).slice(-1)[0] ?? "安装失败");
+        return onReload();
+      })
+      .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setRunning(false));
+  };
+
+  return (
+    <ExtCard
+      icon={
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+          <rect x="3" y="5" width="18" height="14" rx="2" />
+          <path d="M10 5v14M14 5v14" />
+        </svg>
+      }
+      name="镜头识别"
+      desc="找出素材里的镜头切换点，按镜头拆条。"
+      status={status}
+      action={
+        status?.offerInstall && !running
+          ? <button className="sp-ghost-btn" onClick={install} title="约 30 MB">
+              {error ? "重试" : "安装"}
+            </button>
+          : null
+      }
+    >
+      {running && (
+        <div className="sp-ext-progress">
+          <span className="sp-muted">安装中…{tail ? ` ${tail}` : ""}</span>
+        </div>
+      )}
+      {error && <div className="sp-ext-error">{error}</div>}
+    </ExtCard>
+  );
+}
+
+/** 运动追踪:状态由上面统一查,安装走 installTrack 的 SSE 日志流 */
+function TrackCard(props: { status: ExtStatusView | null; onReload: () => void | Promise<void> }): JSX.Element {
+  const { status, onReload } = props;
+  const [running, setRunning] = useState(false);
+  const [tail, setTail] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  const install = () => {
+    // 400 MB 走的是用户自己的网,开始之前先问一声 —— 点错了退不掉。
+    if (!confirm("运动追踪拓展要下载 torch 和 BootsTAPIR 权重，约 400 MB，要好几分钟。现在装？")) return;
+    setRunning(true);
+    setError(null);
+    setTail("");
+    // 只留最后一行:pip 会刷几百行,开始页没有装日志面板的地方,
+    // 有一行在动就够说明「还在跑」了。
+    void installTrack((line) => setTail(line))
+      .then(({ ok, log }) => {
+        if (!ok) setError(log.filter((l) => l.startsWith("[error]")).slice(-1)[0] ?? "安装失败");
+        return onReload();
+      })
+      .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setRunning(false));
+  };
+
+  return (
+    <ExtCard
+      icon={
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+          <circle cx="12" cy="12" r="3.2" />
+          <path d="M12 2.5v3.2M12 18.3v3.2M2.5 12h3.2M18.3 12h3.2" />
+        </svg>
+      }
+      name="运动追踪"
+      desc="让文字和贴图跟着画面里的目标走。"
+      status={status}
+      action={
+        status?.offerInstall && !running
+          ? <button className="sp-ghost-btn" onClick={install} title="约 400 MB，要好几分钟">
+              {error ? "重试" : "安装"}
+            </button>
+          : null
+      }
+    >
+      {running && (
+        <div className="sp-ext-progress">
+          <span className="sp-muted">安装中…{tail ? ` ${tail}` : ""}</span>
+        </div>
+      )}
+      {error && <div className="sp-ext-error">{error}</div>}
+    </ExtCard>
   );
 }

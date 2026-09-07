@@ -68,7 +68,8 @@
   border-color: var(--ui-border-strong);
 }
 
-/* 工具行:「+」28 方钮 + 搜索框,都是 L3 + 控件描边 + 4 圆角 */
+/* 工具行:导入 / 「+」28 方钮 + 搜索框,都是 L3 + 控件描边 + 4 圆角。
+ * 第一个是常驻的「导入素材」,分页专属的「+」跟在它后面,所以导入用主文字色压住一档层级。 */
 .pc-l-tools {
   display: flex;
   gap: 7px;
@@ -91,6 +92,9 @@
 .pc-l-add:hover {
   color: var(--ui-fg);
   background: var(--ui-float);
+}
+.pc-l-add.is-import {
+  color: var(--ui-fg);
 }
 .pc-l-search {
   flex: 1;

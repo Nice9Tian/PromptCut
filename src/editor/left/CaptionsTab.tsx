@@ -1,12 +1,24 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { actions, useStore } from "../../store/project";
-import type { Project } from "../../kernel/project";
+import type { MediaAsset, Project, TranscriptSegment } from "../../kernel/project";
 import { TranscribePanel } from "./TranscribePanel";
 
 /**
- * 素材 → 字幕: 某个素材的语音转文字结果。
- * 支持按文本搜索字幕片段，点一段把播放头挪到时间轴上对应的位置。
+ * 素材 → 字幕:一棵两级树。
+ * 父节点是「转写来自哪个视频」,子节点才是段落。
+ * 这样一次搜索能扫过所有素材,不必先切素材再找;点一段仍然把播放头挪到时间轴上对应位置。
  */
+
+/** 一个素材节点 + 它当前该显示的段落(搜索过后可能只剩命中的那几条) */
+interface CaptionNode {
+  media: MediaAsset;
+  /** 带原始下标:点击定位、调试属性都按原始下标走,不受过滤影响 */
+  rows: { seg: TranscriptSegment; index: number }[];
+  total: number;
+  /** 搜索时这个素材还该不该出现在树里 */
+  matched: boolean;
+}
+
 export function CaptionsTab({
   search,
   mediaId,
@@ -21,13 +33,37 @@ export function CaptionsTab({
 }) {
   const project = useStore((s) => s.project);
   const t = useStore((s) => s.t);
-  const [transcribing, setTranscribing] = useState(false);
+  /** 正在重转写的素材:它的段落先让位给 TranscribePanel */
+  const [retranscribeId, setRetranscribeId] = useState<string | null>(null);
+  /** 手动折叠/展开的记录。浏览态和搜索态各记一份,免得互相干扰 */
+  const [openMap, setOpenMap] = useState<Record<string, boolean>>({});
+  const [searchOpenMap, setSearchOpenMap] = useState<Record<string, boolean>>({});
 
-  const media = project.media.find((m) => m.id === mediaId) ?? project.media[0] ?? null;
+  const q = search.trim().toLowerCase();
+
   useEffect(() => {
     // 选中的素材被删了就退回第一条
     if (mediaId && !project.media.some((m) => m.id === mediaId)) onPick(project.media[0]?.id ?? null);
   }, [mediaId, project.media, onPick]);
+
+  useEffect(() => {
+    // 换搜索词就把手动折叠清掉,否则上一轮折起来的节点会把这一轮的命中藏住
+    setSearchOpenMap({});
+  }, [q]);
+
+  const nodes = useMemo<CaptionNode[]>(
+    () =>
+      project.media.map((media) => {
+        const segments = media.transcript?.segments ?? [];
+        const all = segments.map((seg, index) => ({ seg, index }));
+        if (!q) return { media, rows: all, total: segments.length, matched: true };
+        // 素材名命中就整份留下,省得用户搜到视频名却看不见它的段落
+        const nameHit = media.name.toLowerCase().includes(q);
+        const rows = nameHit ? all : all.filter(({ seg }) => seg.text.toLowerCase().includes(q));
+        return { media, rows, total: segments.length, matched: nameHit || rows.length > 0 };
+      }),
+    [project.media, q],
+  );
 
   if (project.media.length === 0) {
     return (
@@ -56,77 +92,166 @@ export function CaptionsTab({
     );
   }
 
-  const transcript = media?.transcript;
+  // mediaId 还兼着「导入的 .srt 挂到哪」,没选过就落到第一份有转写的素材上
+  const focusId = mediaId ?? project.media.find((m) => m.transcript)?.id ?? project.media[0]?.id ?? null;
+  const visible = q ? nodes.filter((n) => n.matched) : nodes;
+  const nothingTranscribed = project.media.every((m) => !m.transcript);
 
-  const filteredSegments = transcript?.segments
-    ? transcript.segments
-        .map((seg, originalIndex) => ({ seg, originalIndex }))
-        .filter(({ seg }) => {
-          if (!search.trim()) return true;
-          return seg.text.toLowerCase().includes(search.trim().toLowerCase());
-        })
-    : [];
+  /** 默认只展开当前聚焦的那份;搜索时改成「有命中就展开」,素材和段落再多也不会一屏全铺开 */
+  const isOpen = (n: CaptionNode) =>
+    q ? (searchOpenMap[n.media.id] ?? n.rows.length > 0) : (openMap[n.media.id] ?? n.media.id === focusId);
+
+  const setOpen = (id: string, open: boolean) => {
+    const set = q ? setSearchOpenMap : setOpenMap;
+    set((prev) => ({ ...prev, [id]: open }));
+  };
 
   return (
     <div className="flex-1 min-h-0 flex flex-col">
-      {/* 选哪条素材 */}
-      {project.media.length > 1 && (
-        <div className="flex-none flex gap-1 overflow-x-auto px-2 py-1.5 border-b border-neutral-800 pc-l-scroll">
-          {project.media.map((m) => (
-            <button
-              key={m.id}
-              data-pc-caption-media={m.id}
-              className={`shrink-0 max-w-[140px] truncate rounded px-1.5 h-6 text-[11px] border ${
-                m.id === media?.id
-                  ? "border-neutral-500 bg-neutral-800 text-neutral-100"
-                  : "border-neutral-800 text-neutral-400 hover:text-neutral-200 hover:border-neutral-700"
-              }`}
-              onClick={() => onPick(m.id)}
-              title={m.name}
-            >
-              {m.transcript ? "✓ " : ""}
-              {m.name}
-            </button>
-          ))}
+      {nothingTranscribed && !q && (
+        <div className="flex-none px-2 py-1.5 text-[11px] text-neutral-500 border-b border-neutral-800">
+          还没有字幕。点开下面的素材开始转写,或用工具栏的「+」导入 .srt。
         </div>
       )}
 
-      <div className="flex-1 min-h-0 overflow-y-auto pc-l-scroll">
-        {!media ? null : !transcript || transcribing ? (
-          <div className="p-2">
-            <TranscribePanel mediaId={media.id} onClose={() => setTranscribing(false)} />
+      <div className="flex-1 min-h-0 overflow-y-auto pc-l-scroll" role="tree">
+        {visible.length === 0 ? (
+          <div className="p-4 text-center text-xs text-neutral-500">没有匹配的字幕</div>
+        ) : (
+          visible.map((node) => (
+            <MediaNode
+              key={node.media.id}
+              node={node}
+              open={isOpen(node)}
+              focused={node.media.id === focusId}
+              filtering={q.length > 0}
+              project={project}
+              t={t}
+              retranscribing={retranscribeId === node.media.id}
+              onToggle={(open) => {
+                // 展开/点父节点也要认领焦点,导入 srt 才知道该挂到谁身上
+                onPick(node.media.id);
+                setOpen(node.media.id, open);
+              }}
+              onRetranscribe={() => {
+                onPick(node.media.id);
+                setRetranscribeId(node.media.id);
+                setOpen(node.media.id, true);
+              }}
+              onCloseTranscribe={() => setRetranscribeId(null)}
+              onPickSelf={() => onPick(node.media.id)}
+            />
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** 一个素材父节点:头一行是视频名 + 段数,展开后是它的段落(或转写面板) */
+function MediaNode({
+  node,
+  open,
+  focused,
+  filtering,
+  project,
+  t,
+  retranscribing,
+  onToggle,
+  onRetranscribe,
+  onCloseTranscribe,
+  onPickSelf,
+}: {
+  node: CaptionNode;
+  open: boolean;
+  focused: boolean;
+  filtering: boolean;
+  project: Project;
+  t: number;
+  retranscribing: boolean;
+  onToggle: (open: boolean) => void;
+  onRetranscribe: () => void;
+  onCloseTranscribe: () => void;
+  onPickSelf: () => void;
+}) {
+  const { media, rows, total } = node;
+  const transcript = media.transcript;
+  // 没转写的素材展开就直接给转写面板,原来那个入口不丢
+  const showPanel = !transcript || retranscribing;
+
+  const count = filtering && rows.length !== total ? `${rows.length}/${total} 段` : `${total} 段`;
+
+  return (
+    <div className="border-b border-neutral-800/60" role="treeitem" aria-expanded={open}>
+      <button
+        type="button"
+        data-pc-caption-media={media.id}
+        className={`w-full flex items-center gap-1.5 px-2 py-1.5 text-left text-xs ${
+          focused ? "bg-neutral-800/60 text-neutral-100" : "text-neutral-300 hover:bg-neutral-800/40"
+        }`}
+        onClick={() => onToggle(!open)}
+        title={media.name}
+      >
+        <svg
+          className={`shrink-0 text-neutral-500 ${open ? "rotate-90" : ""}`}
+          width="10"
+          height="10"
+          viewBox="0 0 10 10"
+          aria-hidden="true"
+        >
+          <path d="M3.5 1.5 L7 5 L3.5 8.5" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+        <span className="shrink-0 text-neutral-500" aria-hidden="true">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6">
+            <rect x="3" y="5" width="18" height="14" rx="2" />
+            <path d="M7 15h7M7 11h4" />
+          </svg>
+        </span>
+        <span className="flex-1 truncate">{media.name}</span>
+        <span className="shrink-0 tabular-nums text-[10px] text-neutral-500">
+          {transcript ? count : "未转写"}
+          {media.duration ? ` · ${fmt(media.duration)}` : ""}
+        </span>
+      </button>
+
+      {open &&
+        (showPanel ? (
+          <div className="p-2 pl-5">
+            <TranscribePanel mediaId={media.id} onClose={onCloseTranscribe} />
           </div>
         ) : (
-          <>
-            <div className="flex items-center gap-2 px-2 py-1.5 text-[11px] text-neutral-500 border-b border-neutral-800">
-              <span className="text-neutral-300">{transcript.segments.length} 段</span>
+          <div role="group">
+            <div className="flex items-center gap-2 pl-5 pr-2 py-1 text-[10px] text-neutral-500">
               <span className="truncate">
                 {transcript.engine} · {transcript.model}
                 {transcript.language ? ` · ${transcript.language}` : ""}
               </span>
               <button
+                type="button"
                 className="ml-auto shrink-0 h-5 px-1.5 rounded border border-neutral-700 text-neutral-400 hover:text-neutral-200 hover:border-neutral-600"
-                onClick={() => setTranscribing(true)}
+                onClick={onRetranscribe}
               >
                 重新转写
               </button>
             </div>
-            {filteredSegments.length === 0 ? (
-              <div className="p-4 text-center text-xs text-neutral-500">没有匹配的字幕</div>
+            {rows.length === 0 ? (
+              <div className="pl-5 pr-2 pb-1.5 text-[11px] text-neutral-600">这份转写里没有匹配的段落</div>
             ) : (
-              <div className="py-1">
-                {filteredSegments.map(({ seg, originalIndex }) => {
+              <div className="pb-1">
+                {rows.map(({ seg, index }) => {
                   const tl = timelineTimeOf(project, media.id, seg.start);
                   const active = tl != null && t >= tl && t < tl + Math.max(0.1, seg.end - seg.start);
                   return (
                     <button
-                      key={originalIndex}
-                      data-pc-caption-seg={originalIndex}
-                      className={`w-full text-left flex gap-2 px-2 py-1 text-xs ${
+                      key={index}
+                      type="button"
+                      data-pc-caption-seg={index}
+                      className={`w-full text-left flex gap-2 pl-5 pr-2 py-1 text-xs ${
                         active ? "bg-neutral-800 text-neutral-100" : "text-neutral-300 hover:bg-neutral-800/60"
                       } ${tl == null ? "opacity-50" : ""}`}
                       title={tl == null ? "这段素材还没放到时间轴上" : "点一下把播放头挪过去"}
                       onClick={() => {
+                        onPickSelf();
                         if (tl != null) actions.seek(tl);
                       }}
                     >
@@ -137,9 +262,8 @@ export function CaptionsTab({
                 })}
               </div>
             )}
-          </>
-        )}
-      </div>
+          </div>
+        ))}
     </div>
   );
 }

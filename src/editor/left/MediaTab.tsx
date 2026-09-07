@@ -53,8 +53,34 @@ async function measureVideoDimensions(url: string): Promise<{ width: number; hei
   });
 }
 
+async function measureImageDimensions(url: string): Promise<{ width: number; height: number }> {
+  if (!url) {
+    throw new Error("图片 URL 为空");
+  }
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const timer = setTimeout(() => reject(new Error("读取图片尺寸超时")), 5000);
+    img.onload = () => {
+      clearTimeout(timer);
+      if (img.naturalWidth > 0 && img.naturalHeight > 0) {
+        resolve({ width: img.naturalWidth, height: img.naturalHeight });
+      } else {
+        reject(new Error("未能读取到有效的图片尺寸"));
+      }
+    };
+    img.onerror = () => {
+      clearTimeout(timer);
+      reject(new Error("加载图片失败"));
+    };
+    img.src = url;
+  });
+}
+
+/** 空态和「没有匹配的…」里的称呼跟着分页走,免得配乐页也说「视频」 */
+const KIND_NOUN: Record<MediaAsset["kind"], string> = { video: "视频", audio: "配乐", image: "图像" };
+
 /**
- * 素材 → 视频: 导入进来的素材列表。
+ * 素材 → 视频 / 图像 / 配乐: 导入进来的素材列表(同一个组件按 kinds 过滤出三个分页)。
  * 支持搜索过滤、拖拽到时间轴、右键菜单（取视频比例作为项目比例、删除素材）。
  */
 export function MediaTab({
@@ -64,9 +90,10 @@ export function MediaTab({
 }: {
   search: string;
   onOpenCaptions: (mediaId: string) => void;
-  /** 只显示这些种类的素材(不给就全显示)。视频页给 video/image,配乐页给 audio。 */
+  /** 只显示这些种类的素材(不给就全显示)。视频页给 video,图像页给 image,配乐页给 audio。 */
   kinds?: MediaAsset["kind"][];
 }) {
+  const noun = kinds && kinds.length === 1 ? KIND_NOUN[kinds[0]] : "素材";
   const allMedia = useStore((s) => s.project.media);
   const media = useMemo(() => (kinds ? allMedia.filter((m) => kinds.includes(m.kind)) : allMedia), [allMedia, kinds]);
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; media: MediaAsset } | null>(null);
@@ -89,7 +116,8 @@ export function MediaTab({
       let width = m.width;
       let height = m.height;
       if (!width || !height || width <= 0 || height <= 0) {
-        const measured = await measureVideoDimensions(m.url);
+        // 图片得用 <img> 量,拿 <video> 读它只会报「加载视频元数据失败」
+        const measured = m.kind === "image" ? await measureImageDimensions(m.url) : await measureVideoDimensions(m.url);
         width = measured.width;
         height = measured.height;
       }
@@ -117,14 +145,14 @@ export function MediaTab({
                 </svg>
               </div>
               <div className="pc-l-empty-text">
-                还没有导入的素材。
+                还没有导入的{noun}。
                 <br />
-                点上面的 + 加进来。
+                点上面的导入按钮加进来。
               </div>
             </div>
           </div>
         ) : filteredMedia.length === 0 ? (
-          <div className="px-3 py-4 text-xs text-neutral-500">没有匹配的视频</div>
+          <div className="px-3 py-4 text-xs text-neutral-500">没有匹配的{noun}</div>
         ) : (
           <div className="px-1">
             {filteredMedia.map((m) => (
@@ -144,21 +172,24 @@ export function MediaTab({
                 <div className="text-neutral-500 tabular-nums shrink-0">
                   {m.duration != null ? `${Math.floor(m.duration / 60)}:${(m.duration % 60).toFixed(1).padStart(4, "0")}` : "—"}
                 </div>
-                <button
-                  data-pc="transcribe-btn"
-                  title={m.transcript ? `已转写 · ${m.transcript.segments.length} 段` : "去字幕分页转写"}
-                  className={`shrink-0 px-1 h-5 rounded text-[10px] border ${
-                    m.transcript
-                      ? "border-indigo-600/50 text-indigo-400 hover:bg-indigo-900/40"
-                      : "border-neutral-700 text-neutral-500 hover:text-neutral-300 hover:border-neutral-600"
-                  }`}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onOpenCaptions(m.id);
-                  }}
-                >
-                  {m.transcript ? `✓ ${m.transcript.segments.length}段` : "字幕"}
-                </button>
+                {/* 图片没有声音,转写按钮对它没有意义 */}
+                {m.kind !== "image" && (
+                  <button
+                    data-pc="transcribe-btn"
+                    title={m.transcript ? `已转写 · ${m.transcript.segments.length} 段` : "去字幕分页转写"}
+                    className={`shrink-0 px-1 h-5 rounded text-[10px] border ${
+                      m.transcript
+                        ? "border-indigo-600/50 text-indigo-400 hover:bg-indigo-900/40"
+                        : "border-neutral-700 text-neutral-500 hover:text-neutral-300 hover:border-neutral-600"
+                    }`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onOpenCaptions(m.id);
+                    }}
+                  >
+                    {m.transcript ? `✓ ${m.transcript.segments.length}段` : "字幕"}
+                  </button>
+                )}
               </div>
             ))}
           </div>
@@ -170,14 +201,19 @@ export function MediaTab({
           x={ctxMenu.x}
           y={ctxMenu.y}
           items={[
-            {
-              label: "以视频比例作为项目比例",
-              hint:
-                ctxMenu.media.width && ctxMenu.media.height && ctxMenu.media.width > 0 && ctxMenu.media.height > 0
-                  ? `${ctxMenu.media.width}x${ctxMenu.media.height}`
-                  : undefined,
-              onClick: () => handleApplyAspectRatio(ctxMenu.media),
-            },
+            // 声音没有画幅,「取比例」这一项对配乐不成立
+            ...(ctxMenu.media.kind === "audio"
+              ? []
+              : [
+                  {
+                    label: ctxMenu.media.kind === "image" ? "以图片比例作为项目比例" : "以视频比例作为项目比例",
+                    hint:
+                      ctxMenu.media.width && ctxMenu.media.height && ctxMenu.media.width > 0 && ctxMenu.media.height > 0
+                        ? `${ctxMenu.media.width}x${ctxMenu.media.height}`
+                        : undefined,
+                    onClick: () => handleApplyAspectRatio(ctxMenu.media),
+                  },
+                ]),
             {
               label: "删除素材",
               danger: true,

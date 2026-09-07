@@ -13,11 +13,11 @@ import { Inspector } from "./Inspector";
 /**
  * 左栏:两级分页。
  *   顶级  素材 | 编辑
- *   二级  素材 → 全局风格 / 卡片 / 视频 / 字幕     编辑 → 参数 / 代码
+ *   二级  素材 → 全局风格 / 卡片 / 转场 / 视频 / 图像 / 配乐 / 字幕     编辑 → 参数 / 代码
  * 分页选择记在 localStorage;各分页都常驻挂载(只是隐藏),切来切去不丢滚动位置和输入。
  */
 type TopTab = "assets" | "edit";
-type AssetTab = "style" | "cards" | "transitions" | "videos" | "music" | "captions";
+type AssetTab = "style" | "cards" | "transitions" | "videos" | "images" | "music" | "captions";
 type EditTab = "form" | "code";
 
 const TOP_TABS: { key: TopTab; label: string }[] = [
@@ -29,12 +29,17 @@ const ASSET_TABS: { key: AssetTab; label: string }[] = [
   { key: "cards", label: "卡片" },
   { key: "transitions", label: "转场" },
   { key: "videos", label: "视频" },
+  { key: "images", label: "图像" },
   { key: "music", label: "配乐" },
   { key: "captions", label: "字幕" },
 ];
-/** 视频页看画面,配乐页看声音 */
-const VISUAL_KINDS: MediaAsset["kind"][] = ["video", "image"];
+const ASSET_TAB_KEYS = ASSET_TABS.map((t) => t.key) as readonly AssetTab[];
+/** 三个素材分页各管一种素材,和导入时按内容类型归位的口径一致 */
+const VIDEO_KINDS: MediaAsset["kind"][] = ["video"];
+const IMAGE_KINDS: MediaAsset["kind"][] = ["image"];
 const AUDIO_KINDS: MediaAsset["kind"][] = ["audio"];
+/** 导入落到哪一类素材,就切到管这一类的分页 */
+const KIND_TAB: Record<MediaAsset["kind"], AssetTab> = { video: "videos", image: "images", audio: "music" };
 
 const EDIT_TABS: { key: EditTab; label: string }[] = [
   { key: "form", label: "参数" },
@@ -51,18 +56,20 @@ function stored<T extends string>(key: string, allowed: readonly T[], fallback: 
 
 export function LeftPanel() {
   const [top, setTop] = useState<TopTab>(() => stored("pc.left.tab", ["assets", "edit"] as const, "assets"));
-  const [assetTab, setAssetTab] = useState<AssetTab>(() =>
-    stored("pc.left.assetTab", ["style", "cards", "transitions", "videos", "music", "captions"] as const, "cards"),
-  );
+  const [assetTab, setAssetTab] = useState<AssetTab>(() => stored("pc.left.assetTab", ASSET_TAB_KEYS, "cards"));
   const [editTab, setEditTab] = useState<EditTab>(() => stored("pc.left.editTab", ["form", "code"] as const, "form"));
   const [captionMediaId, setCaptionMediaId] = useState<string | null>(null);
 
   // 搜索词按分页各记各的，切分页时各自保持不变
-  const [cardsSearch, setCardsSearch] = useState("");
-  const [videosSearch, setVideosSearch] = useState("");
-  const [captionsSearch, setCaptionsSearch] = useState("");
-
-  const [musicSearch, setMusicSearch] = useState("");
+  // (「全局风格」没有搜索框,所以只有其余分页各占一格)
+  const [searches, setSearches] = useState<Record<Exclude<AssetTab, "style">, string>>({
+    cards: "",
+    transitions: "",
+    videos: "",
+    images: "",
+    music: "",
+    captions: "",
+  });
   const cardsTabRef = useRef<CardsTabHandle>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
@@ -85,22 +92,9 @@ export function LeftPanel() {
   const subActive: string = top === "assets" ? assetTab : editTab;
   const pickSub = (key: string) => (top === "assets" ? pickAsset(key as AssetTab) : pickEdit(key as EditTab));
 
-  const currentSearch =
-    assetTab === "cards" ? cardsSearch : assetTab === "videos" ? videosSearch : assetTab === "music" ? musicSearch : captionsSearch;
-
-  const handleSearchChange = (val: string) => {
-    if (assetTab === "cards") setCardsSearch(val);
-    else if (assetTab === "videos") setVideosSearch(val);
-    else if (assetTab === "music") setMusicSearch(val);
-    else if (assetTab === "captions") setCaptionsSearch(val);
-  };
-
-  const handleClearSearch = () => {
-    if (assetTab === "cards") setCardsSearch("");
-    else if (assetTab === "videos") setVideosSearch("");
-    else if (assetTab === "music") setMusicSearch("");
-    else if (assetTab === "captions") setCaptionsSearch("");
-  };
+  const searchTab = (assetTab === "style" ? "cards" : assetTab) as Exclude<AssetTab, "style">;
+  const currentSearch = searches[searchTab];
+  const setSearch = (val: string) => setSearches((s) => ({ ...s, [searchTab]: val }));
 
   return (
     <div data-pc="left" className="h-full flex flex-col min-h-0 overflow-hidden bg-neutral-950 text-neutral-100">
@@ -140,16 +134,17 @@ export function LeftPanel() {
         className="flex-1 min-h-0 flex flex-col overflow-hidden"
         style={{ display: top === "assets" ? "flex" : "none" }}
       >
-        {/* 统一导航条: 仅在素材且二级分页为卡片/视频/字幕时显示 */}
+        {/* 统一导航条: 「全局风格」没有可搜的列表,别的素材分页都显示 */}
         {assetTab !== "style" && (
           <AssetToolbar
             captionMediaId={captionMediaId}
             assetTab={assetTab}
             search={currentSearch}
-            onSearchChange={handleSearchChange}
-            onClearSearch={handleClearSearch}
+            onSearchChange={setSearch}
+            onClearSearch={() => setSearch("")}
             onScrollCardsToTop={() => cardsTabRef.current?.scrollToTop()}
             searchInputRef={searchInputRef}
+            onImported={(kind) => pickAsset(KIND_TAB[kind])}
           />
         )}
 
@@ -157,20 +152,23 @@ export function LeftPanel() {
           <StyleTab />
         </div>
         <div className="flex-1 min-h-0 flex flex-col" style={{ display: assetTab === "cards" ? "flex" : "none" }}>
-          <CardsTab ref={cardsTabRef} search={cardsSearch} />
+          <CardsTab ref={cardsTabRef} search={searches.cards} />
         </div>
         <div className="flex-1 min-h-0 flex flex-col" style={{ display: assetTab === "transitions" ? "flex" : "none" }}>
           <TransitionsTab />
         </div>
         <div className="flex-1 min-h-0 flex flex-col" style={{ display: assetTab === "videos" ? "flex" : "none" }}>
-          <MediaTab search={videosSearch} onOpenCaptions={openCaptions} kinds={VISUAL_KINDS} />
+          <MediaTab search={searches.videos} onOpenCaptions={openCaptions} kinds={VIDEO_KINDS} />
+        </div>
+        <div className="flex-1 min-h-0 flex flex-col" style={{ display: assetTab === "images" ? "flex" : "none" }}>
+          <MediaTab search={searches.images} onOpenCaptions={openCaptions} kinds={IMAGE_KINDS} />
         </div>
         <div className="flex-1 min-h-0 flex flex-col" style={{ display: assetTab === "music" ? "flex" : "none" }}>
-          <MediaTab search={musicSearch} onOpenCaptions={openCaptions} kinds={AUDIO_KINDS} />
+          <MediaTab search={searches.music} onOpenCaptions={openCaptions} kinds={AUDIO_KINDS} />
         </div>
         <div className="flex-1 min-h-0 flex flex-col" style={{ display: assetTab === "captions" ? "flex" : "none" }}>
           <CaptionsTab
-            search={captionsSearch}
+            search={searches.captions}
             mediaId={captionMediaId}
             onPick={setCaptionMediaId}
             onGoImport={() => pickAsset("videos")}
