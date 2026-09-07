@@ -1,3 +1,12 @@
+/**
+ * Codex 桌面版那条路(app-server --stdio)的单测。
+ *
+ * 跑法 —— **必须带这个 flag**:
+ *   node --experimental-test-module-mocks --test server/test/codex-desktop.test.mjs
+ *
+ * `mock.module` 在 Node 里还是实验特性,不带 flag 时它压根不存在,报的是
+ * 「mock.module is not a function」,看上去像用例挂了,其实是没开开关。
+ */
 import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';

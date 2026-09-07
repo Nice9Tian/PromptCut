@@ -15,7 +15,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-const BASE = "http://127.0.0.1:5190";
+const BASE = process.env.PROMPTCUT_BASE || "http://127.0.0.1:5190";
 let failed = 0;
 const ok = (c, m) => { console.log(`${c ? "PASS" : "FAIL"}: ${m}`); if (!c) failed++; };
 const j = async (u, init) => { const r = await fetch(BASE + u, init); return { status: r.status, d: await r.json().catch(() => null) }; };
@@ -24,11 +24,24 @@ const post = (u, body) => j(u, { method: "POST", headers: { "Content-Type": "app
 const ROOT = process.env.PROMPTCUT_SKILL_DIR || path.join(os.homedir(), "Documents", "PromptCut-Skill");
 const STATE = path.join(ROOT, "skill-state.json");
 
-// 直接 import 闸门模块来测 checkGate 的两种进程身份 —— 走 HTTP 的话没法伪装成无头实例
-const gateUrl = new URL("../../../../../../Documents/PromptCut/server/skill-gate.mjs", import.meta.url).href;
+/*
+ * 这份要一个**跑着的 dev server**才有意义(前 2、6 步走 HTTP)。没有就干净地跳过 ——
+ * 原来不跳,`node --test server/test/*.test.mjs` 把它一起扫进来,报成一条失败,
+ * 时间长了大家就学会无视红色,真出问题反而看不见。
+ */
+try {
+  await fetch(BASE + "/api/skill-mode");
+} catch {
+  console.log(`SKIP: ${BASE} 上没有 dev server。先 npm run dev,再跑这一份。`);
+  process.exit(0);
+}
+
+// 直接 import 闸门模块来测 checkGate 的两种进程身份 —— 走 HTTP 的话没法伪装成无头实例。
+// 默认按自己的位置算(server/test/ 的上一层就是 server/);原来写的是一串固定层数的 ../,
+// 换个盘符或目录深度就解析到不存在的路径上去了。
 const gate = await import(process.argv[2]
   ? "file:///" + process.argv[2].replace(/\\/g, "/") + "/server/skill-gate.mjs"
-  : gateUrl);
+  : new URL("../skill-gate.mjs", import.meta.url).href);
 
 // 1. 默认关着
 await post("/api/skill-mode/close", { by: "test-reset" });

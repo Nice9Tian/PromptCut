@@ -177,6 +177,19 @@ export async function readSseStream(
   const decoder = new TextDecoder("utf-8");
   let buf = "";
 
+  const emit = (block: string) => {
+    const dataLine = block
+      .split("\n")
+      .find((l) => l.startsWith("data:"));
+    if (!dataLine) return;
+    const jsonStr = dataLine.slice("data:".length).trim();
+    if (!jsonStr) return;
+    try {
+      const ev = JSON.parse(jsonStr) as SttEvent;
+      onEvent(ev);
+    } catch { /* 忽略非 JSON */ }
+  };
+
   try {
     while (true) {
       const { done, value } = await reader.read();
@@ -185,19 +198,18 @@ export async function readSseStream(
       // SSE 事件以 \n\n 分隔
       const events = buf.split("\n\n");
       buf = events.pop() ?? "";
-      for (const block of events) {
-        const dataLine = block
-          .split("\n")
-          .find((l) => l.startsWith("data:"));
-        if (!dataLine) continue;
-        const jsonStr = dataLine.slice("data:".length).trim();
-        if (!jsonStr) continue;
-        try {
-          const ev = JSON.parse(jsonStr) as SttEvent;
-          onEvent(ev);
-        } catch { /* 忽略非 JSON */ }
-      }
+      for (const block of events) emit(block);
     }
+    /*
+     * 流结束时缓冲区里剩下的那一段也要发。
+     *
+     * 上面按 \n\n 切,最后一段(还没等到分隔符的部分)留在 buf 里等下一次读取。可服务端
+     * 把最后一个事件写完就直接关流的话,那个 \n\n 永远不会来 —— 已经完整收到的 done 事件
+     * 就这么烂在 buf 里被丢掉,调用方报「转写未收到 done 事件」,而数据其实是到齐了的。
+     * decode() 不带 stream 是让 TextDecoder 把它自己的尾巴也吐出来。
+     */
+    buf += decoder.decode();
+    if (buf.trim()) emit(buf);
   } finally {
     reader.releaseLock();
   }
