@@ -113,7 +113,10 @@ function stepSidecar() {
  * 除了构建产物,这里必须挡住三类:
  *   - `.env*` —— 里面有诊断服务的提交令牌之类的密钥;
  *   - `.pc-*` —— 用户/开发者的草稿、AI 会话历史、Skill 任务目录,全是个人数据;
- *   - `tools/*/target`、`.cache` —— Rust 编译产物,单是 tools 下面就有 2.7 GB。
+ *   - tools 下各 crate 的 `target`、`.cache` —— Rust 编译产物,单是 tools 下面就有 2.7 GB。
+ *     (这一行别写成 `tools/<星号>/target` 的字面形式:那里面的 `<星号>/` 会当场
+ *     把这段块注释关掉,整个文件从下一行起被当代码解析,直接 SyntaxError。
+ *     c0a66b8 就是这么把 prepare-runtime 打瘫的,连 --check 都跑不起来。)
  * `--from-head` 只在用它的时候才干净;有人手跑 `npm run prepare-runtime` 就全靠这份名单。
  */
 const SKIP_DIRS = new Set([
