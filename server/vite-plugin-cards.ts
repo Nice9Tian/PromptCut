@@ -264,7 +264,13 @@ export default function vitePluginCards(): Plugin {
 
             const already = fs.existsSync(target);
             if (already && !overwrite) {
-              return sendJson(res, 409, { ok: false, error: `src/cards/user/${id}.tsx 已存在。要改它就传 overwrite: true。` });
+              // 这句话出现的时机,正是模型「想改一张已有的卡」的那一刻 —— 全仓库
+              // 最该把它引到 edit_card 上的地方。原来这里写的是「传 overwrite: true」,
+              // 等于在决策点上教它整篇重写。
+              return sendJson(res, 409, {
+                ok: false,
+                error: `src/cards/user/${id}.tsx 已存在。要改它请用 get_card_source 读回源码、再用 edit_card 改那一处;确实要整张推倒重来才传 overwrite: true。`,
+              });
             }
 
             const check = checkCardSource(id, source, Array.isArray(existingIds) && !already ? existingIds : []);

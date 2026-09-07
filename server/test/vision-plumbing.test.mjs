@@ -7,6 +7,7 @@
  */
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { Agent } from '../harness/agent.mjs';
 import { MessageHistory } from '../harness/history.mjs';
 import { createProvider as anthropic } from '../harness/providers/anthropic.mjs';
 import { createProvider as openai } from '../harness/providers/openai.mjs';
@@ -103,6 +104,73 @@ test('gemini 把 image 块转成 inlineData', async () => {
   assert.equal(part.inlineData.data, B64);
 });
 
+// ── agent.mjs 把 __image 从工具结果里摘出来 ────────────────────────────
+// 这一段是整条链的入口：漏了它，base64 会当成普通文本灌进历史，模型什么也看不见，
+// 界面存档还会被撑大。而它不报错，只表现成「模型好像没看图」。
+
+/** 第一轮调一次工具，第二轮说句话收尾 */
+function scriptedProvider(toolName) {
+  let turn = 0;
+  return { name: 'scripted', async *stream() {
+    if (++turn === 1) {
+      yield { type: 'tool_use', id: 'call_1', name: toolName, input: {} };
+      yield { type: 'stop', reason: 'tool_use' };
+    } else {
+      yield { type: 'text_delta', text: '看完了。' };
+      yield { type: 'stop', reason: 'end_turn' };
+    }
+  } };
+}
+
+async function runWithTool(result) {
+  const events = [];
+  const agent = new Agent({
+    provider: scriptedProvider('see_preview'),
+    system: 's',
+    tools: [{ name: 'see_preview', inputSchema: { type: 'object', properties: {} }, execute: async () => result }],
+    onEvent: (e) => events.push(e),
+  });
+  const out = await agent.run('看一眼画面');
+  return { history: out.history.get(), events };
+}
+
+test('__image 被摘出来，变成同一条 user 消息末尾的 image 块', async () => {
+  const { history } = await runWithTool({ ok: true, t: 2, __image: { mime: 'image/png', base64: B64 } });
+  const msg = history.find((m) => m.role === 'user' && m.content.some((b) => b.type === 'tool_result'));
+  const kinds = msg.content.map((b) => b.type);
+  assert.deepEqual(kinds, ['tool_result', 'image', 'text'], '图要排在工具结果之后');
+  assert.equal(msg.content[1].data, B64);
+  assert.ok(!msg.content.some((b) => b.type === 'tool_result' && b.content.includes(B64.slice(0, 50))),
+    'base64 不能同时还留在 tool_result 的文本里');
+});
+
+test('摘出来之后不多出一条 user 消息（连续同角色三家 API 容忍度不一样）', async () => {
+  const { history } = await runWithTool({ ok: true, __image: { mime: 'image/png', base64: B64 } });
+  for (let i = 1; i < history.length; i++) {
+    assert.notEqual(history[i].role, history[i - 1].role, `第 ${i} 条和上一条都是 ${history[i].role}`);
+  }
+});
+
+test('转发给界面的 tool_result 事件里不带 base64，存档才不会被撑大', async () => {
+  const { events } = await runWithTool({ ok: true, __image: { mime: 'image/png', base64: B64 } });
+  const ev = events.find((e) => e.type === 'tool_result');
+  assert.ok(!JSON.stringify(ev).includes(B64.slice(0, 50)), '事件里漏了 base64');
+  assert.match(ev.output.image, /画面/, '该留一句话说明画面在哪');
+});
+
+test('普通工具（没有 __image）走原来的路，一个字都不变', async () => {
+  const { history } = await runWithTool({ ok: true, clips: 2 });
+  const msg = history.find((m) => m.role === 'user' && m.content.some((b) => b.type === 'tool_result'));
+  assert.deepEqual(msg.content.map((b) => b.type), ['tool_result']);
+  assert.equal(msg.content[0].content, JSON.stringify({ ok: true, clips: 2 }));
+});
+
+test('工具失败时不摘图（失败结果里的 __image 不该被当成画面送进去）', async () => {
+  const { history } = await runWithTool({ ok: false, error: '炸了', __image: { mime: 'image/png', base64: B64 } });
+  const msg = history.find((m) => m.role === 'user' && m.content.some((b) => b.type === 'tool_result'));
+  assert.ok(!msg.content.some((b) => b.type === 'image'), '失败的调用不该带图');
+});
+
 test('历史长度不按 base64 的字面长度算，否则看一次图就会把对话截光', () => {
   const h = new MessageHistory({ maxChars: 120000 });
   h.append({ role: 'user', content: [{ type: 'text', text: '给字号调大' }] });
@@ -129,4 +197,51 @@ test('pruneImages 不动没有图片的消息', () => {
   h.append({ role: 'user', content: [{ type: 'text', text: 'x' }] });
   h.pruneImages(0);
   assert.equal(h.get()[0].content[0].text, 'x');
+});
+
+// ── 回归面 ────────────────────────────────────────────────────────────
+// 这次改动碰到了这几条路但不打算改变它们的行为。改坏了不会报错，只会让
+// 「什么时候截断」「消息发成什么形状」悄悄变掉，所以拿旧行为当基准钉住。
+
+test('回归：纯文本历史的长度算法和改之前逐字节相同', () => {
+  const msgs = [];
+  for (let i = 0; i < 200; i++) {
+    msgs.push({ role: i % 2 ? 'assistant' : 'user', content: [{ type: 'text', text: '长文本'.repeat(200) + i }] });
+  }
+  const old = JSON.stringify(msgs).length; // 改之前就是这么算的
+  assert.equal(MessageHistory.fromJSON(msgs, {}).estimateTokens(), Math.ceil(old / 3));
+});
+
+test('回归：纯文本历史该截断的仍然截断', () => {
+  const msgs = [{ role: 'user', content: [{ type: 'text', text: '最初的请求' }] }];
+  for (let i = 0; i < 60; i++) msgs.push({ role: i % 2 ? 'assistant' : 'user', content: [{ type: 'text', text: 'x'.repeat(3000) }] });
+  const h = MessageHistory.fromJSON(msgs, { maxChars: 120000 });
+  h.truncate();
+  assert.ok(h.get().length < 61, '应当截过');
+  assert.ok(JSON.stringify(h.get()).length <= 120000, '截完还超');
+});
+
+test('回归：OpenAI 纯文本对话的 content 仍是字符串，不是多模态数组', async () => {
+  const body = await bodyOf(openai, [
+    { role: 'user', content: [{ type: 'text', text: '你好' }] },
+    { role: 'assistant', content: [{ type: 'text', text: '在' }] },
+    { role: 'user', content: [{ type: 'text', text: '再问一句' }] },
+  ]);
+  for (const m of body.messages) assert.equal(typeof m.content, 'string', `${m.role} 的 content 成了 ${typeof m.content}`);
+});
+
+test('回归：OpenAI 无图的工具往返不多出一条 user 消息', async () => {
+  const body = await bodyOf(openai, [
+    { role: 'assistant', content: [{ type: 'tool_use', id: 'c1', name: 'seek', input: { t: 1 } }] },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'c1', content: '{"ok":true}' }] },
+  ]);
+  assert.deepEqual(body.messages.map((m) => m.role), ['assistant', 'tool']);
+});
+
+test('回归：OpenAI 工具结果后跟文字（无图）时，文字仍以字符串发出', async () => {
+  const body = await bodyOf(openai, [
+    { role: 'assistant', content: [{ type: 'tool_use', id: 'c1', name: 'seek', input: {} }] },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'c1', content: 'ok' }, { type: 'text', text: '接着做' }] },
+  ]);
+  assert.equal(body.messages.at(-1).content, '接着做', '无图时不该变成多模态数组');
 });

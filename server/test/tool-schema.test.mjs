@@ -3,6 +3,7 @@
 // { type:"object", properties:{} },意思变成「这个对象没有任何字段」,
 // 模型因此一个卡片参数都传不出去,建出来的卡永远是 params: {}。
 // 跑法:node --test server/test/tool-schema.test.mjs
+import { readFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { toolToVendor, sanitizeSchema } from '../harness/schema.mjs';
@@ -107,4 +108,31 @@ test('注入不会污染共享的 mcpTools 常量', () => {
   sentToModel(CARDS);
   const raw = mcpTools.find((t) => t.name === 'add_clip');
   assert.equal(raw.inputSchema.properties.params.anyOf, undefined, 'mcpTools 是模块级共享的,不能被就地改掉');
+});
+
+// ── 三处声明必须对齐 ──────────────────────────────────────────────────
+// 一个工具要能被调用，得同时出现在三个地方：mcp-tools.mjs 的声明、mcpExecutor 的
+// 分发、EditorApi 的实现。缺哪一处都是「模型看得见但调不动」，而且只在模型真的
+// 去调的时候才暴露 —— 那时候一次任务已经跑废了。
+test('mcp-tools 里每个 browser 工具，执行器里都有对应的分发分支', () => {
+  const src = readFileSync(new URL('../../src/ai/mcpExecutor.ts', import.meta.url), 'utf8');
+  const missing = mcpTools
+    .filter((t) => t.side === 'browser')
+    .map((t) => t.name)
+    .filter((n) => !src.includes(`tool === "${n}"`));
+  assert.deepEqual(missing, [], `执行器里没有分支的工具：${missing.join('、')}`);
+});
+
+test('执行器分发的每个工具名，mcp-tools 里都真的有声明', () => {
+  const src = readFileSync(new URL('../../src/ai/mcpExecutor.ts', import.meta.url), 'utf8');
+  const declared = new Set(mcpTools.map((t) => t.name));
+  const dispatched = [...src.matchAll(/tool === "([a-z_]+)"/g)].map((m) => m[1]);
+  const orphans = dispatched.filter((n) => !declared.has(n));
+  assert.deepEqual(orphans, [], `执行器分发了但没声明的工具：${orphans.join('、')}`);
+});
+
+test('只有 see_preview 放宽了超时；它必须大于渲染自己的上限，否则报错信息会被桥的超时盖掉', () => {
+  const withTimeout = mcpTools.filter((t) => t.timeoutMs);
+  assert.deepEqual(withTimeout.map((t) => t.name), ['see_preview']);
+  assert.ok(withTimeout[0].timeoutMs > 120000, '要大于 vite-plugin-vision 里 120 秒的渲染上限');
 });
