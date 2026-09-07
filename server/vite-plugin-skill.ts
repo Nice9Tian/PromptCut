@@ -4,17 +4,18 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { spawn } from "node:child_process";
+import { createCodexTask } from "./codex-desktop";
 
 /**
  * Skill 模式:把当前项目交给桌面版的 Claude Code / Codex 去改,改完再合回来。
  *
- * 一次「任务」= 项目根 .pc-work/skill/<id>/ 下的一个目录:
+ * 一次「任务」= Documents/PromptCut-Skill/<id>/ 下的一个目录:
  *   1. 快照当前项目成 base.proc 和 project.proc;
  *   2. 起一份无头 PromptCut(scripts/headless.mjs):自己的端口、自己的草稿目录(就是这个任务目录),
  *      和用户正在用的实例完全隔离;
  *   3. 往目录里放 CLAUDE.md / SKILL.md / AGENTS.md / .mcp.json,agent 一进来就知道该干什么;
  *   4. 用深链拉起桌面 app 的新对话(Claude: claude://code/new?folder=…&q=/promptcut;
- *      Codex: codex app <目录> + codex://threads/new?prompt=…);
+ *      Codex: app-server 创建无项目归属的线程 + codex://threads/<id>);
  *   5. agent 干完回复里带 project.proc 的 file:// 链接;用户回到这里点「合并」做三方合并。
  *
  * 另外还管「按路径打开 .proc」:先复制到 .pc-work/opened/ 再给前端,原文件不占、不改。
@@ -33,7 +34,7 @@ interface JobMeta {
   /** 只起实例、不拉桌面 app(自检和排错用) */
   noLaunch?: boolean;
   /** 最近一次拉起桌面 app 的方式,给对话框显示和排错 */
-  launch?: { kind: string; detail: string; at: string; autoSend?: AutoSend };
+  launch?: { kind: string; detail: string; at: string; autoSend?: AutoSend; status?: "launching" | "ready" | "failed"; projectId?: string | null; workspaceMode?: "projectless"; threadId?: string; cwd?: string; initialState?: "dispatching" | "completed" };
 }
 
 /** 替用户按回车的结果:发了 / 桌面 app 没到前台没敢发 / 脚本出错 / 非 Windows 跳过 */
@@ -144,16 +145,15 @@ function writeMeta(dir: string, meta: JobMeta) {
 }
 
 /** 打开一个 URL 协议(claude:// codex://)。rundll32 不经过 cmd,不用操心引号 */
-function openUrl(url: string) {
-  if (process.platform === "win32") {
-    // 不能加 detached:Windows 上它会给子进程开一个新控制台,和 windowsHide 打架,
-    // 用户就会看见一下黑窗闪过
-    spawn("rundll32.exe", ["url.dll,FileProtocolHandler", url], { stdio: "ignore", windowsHide: true }).unref();
-  } else if (process.platform === "darwin") {
-    spawn("open", [url], { detached: true, stdio: "ignore" }).unref();
-  } else {
-    spawn("xdg-open", [url], { detached: true, stdio: "ignore" }).unref();
-  }
+function openUrl(url: string): Promise<void> {
+  const command = process.platform === "win32" ? "rundll32.exe" : process.platform === "darwin" ? "open" : "xdg-open";
+  const args = process.platform === "win32" ? ["url.dll,FileProtocolHandler", url] : [url];
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { stdio: "ignore", windowsHide: true });
+    const timer = setTimeout(() => { child.kill(); reject(new Error("打开桌面协议超时")); }, 15000);
+    child.on("error", error => { clearTimeout(timer); reject(error); });
+    child.on("exit", code => { clearTimeout(timer); code === 0 ? resolve() : reject(new Error(`打开桌面协议失败 (${code})`)); });
+  });
 }
 
 function revealDir(dir: string) {
@@ -182,26 +182,6 @@ function runPs(dir: string, name: string, lines: string[]): Promise<string> {
     child.on("error", () => resolve(""));
     child.on("exit", () => resolve(out));
   });
-}
-
-/**
- * 等桌面 app 的窗口出现。
- *
- * Codex 多半是冷启动:`codex app` 只是把请求丢过去,app 自己要几秒才起来,这期间发深链
- * 会被吞掉。实测冷启动约 4 秒;这里轮询到 45 秒 —— 机器忙的时候固定 sleep 不够用。
- */
-async function waitForWindow(dir: string, processMatch: string, seconds = 45): Promise<boolean> {
-  if (process.platform !== "win32") return true;
-  const out = await runPs(dir, "wait-window.ps1", [
-    `$deadline = (Get-Date).AddSeconds(${seconds})`,
-    "while ((Get-Date) -lt $deadline) {",
-    `  $p = Get-Process | Where-Object { $_.ProcessName -match '${processMatch}' -and $_.MainWindowTitle -ne '' }`,
-    "  if ($p) { Write-Output 'UP'; exit 0 }",
-    "  Start-Sleep -Milliseconds 500",
-    "}",
-    "Write-Output 'TIMEOUT'",
-  ]);
-  return out.includes("UP");
 }
 
 /**
@@ -249,45 +229,23 @@ async function autoPressEnter(dir: string, processMatch: string): Promise<AutoSe
  */
 const APP_PROCESS: Record<Provider, string> = { claude: "claude", codex: "chatgpt|codex" };
 
-/**
- * 关掉 Codex 桌面版,好让下一次 `codex app <目录>` 冷启动到任务目录。
- *
- * 为什么需要:Codex **只在冷启动时定工作区**(实测:app 开着时再 `codex app <别的目录>`
- * 什么都不发生,窗口和标题一动不动)。想让新对话的工作区就是任务目录,只能先关掉它。
- *
- * 发 WM_CLOSE 而不是 taskkill:让它自己走正常的退出流程,别把用户没存的东西弄丢。
- */
-async function closeCodexApp(dir: string): Promise<boolean> {
-  if (process.platform !== "win32") return false;
-  const out = await runPs(dir, "close-codex.ps1", [
-    "$w = Get-Process | Where-Object { $_.ProcessName -match 'chatgpt' -and $_.MainWindowTitle -ne '' }",
-    "if (-not $w) { Write-Output 'NOTRUNNING'; exit 0 }",
-    "$w | ForEach-Object { $_.CloseMainWindow() | Out-Null }",
-    "$deadline = (Get-Date).AddSeconds(15)",
-    "while ((Get-Date) -lt $deadline) {",
-    "  if (-not (Get-Process | Where-Object { $_.ProcessName -match 'chatgpt' -and $_.MainWindowTitle -ne '' })) { Write-Output 'CLOSED'; exit 0 }",
-    "  Start-Sleep -Milliseconds 500",
-    "}",
-    "Write-Output 'STILLUP'",
-  ]);
-  return out.includes("CLOSED") || out.includes("NOTRUNNING");
+type LaunchResult = Omit<NonNullable<JobMeta["launch"]>, "at">;
+const pendingLaunches = new Map<string, Promise<LaunchResult>>();
+function launchDesktop(provider: Provider, dir: string): Promise<LaunchResult> {
+  const existing = pendingLaunches.get(dir);
+  if (existing) return existing;
+  const result = launchDesktopImpl(provider, dir).catch((error): LaunchResult => ({
+    kind: "desktop-launch", status: "failed", autoSend: "error", detail: String(error),
+  })).finally(() => pendingLaunches.delete(dir));
+  pendingLaunches.set(dir, result);
+  return result;
 }
 
-/**
- * 拉起桌面 app 的新对话。
- *
- * Claude:一条深链搞定,handler 读 folder + q。q 给 /promptcut,skill 在目录里。
- * Codex:先 `codex app <目录>` 把工作区开到任务目录,等它的窗口真的出现,
- *   再用 codex://threads/new?prompt= 开新线程 —— app 没起来时深链会被吞掉。
- *
- * freshWindow(只对 Codex 有意义):先把 Codex 关掉再冷启动,这样工作区**就是**任务目录,
- *   agent 的 cwd 天然正确、AGENTS.md 自动被读到。代价是会关掉用户现有的 Codex 窗口,
- *   所以默认不开 —— 任务目录本来就在仓库里面,工作区停在仓库根目录也读得到。
- */
-async function launchDesktop(provider: Provider, dir: string, freshWindow = true): Promise<{ kind: string; detail: string; autoSend: AutoSend }> {
+/** 创建无项目归属的独立线程，再打开已有线程深链。 */
+async function launchDesktopImpl(provider: Provider, dir: string): Promise<Omit<NonNullable<JobMeta["launch"]>, "at">> {
   if (provider === "claude") {
     const url = `claude://code/new?folder=${encodeURIComponent(dir)}&q=${encodeURIComponent("/promptcut")}`;
-    openUrl(url);
+    await openUrl(url);
     const autoSend = await autoPressEnter(dir, APP_PROCESS.claude);
     return { kind: "claude-deeplink", detail: url, autoSend };
   }
@@ -308,31 +266,17 @@ async function launchDesktop(provider: Provider, dir: string, freshWindow = true
     slash,
     "按 AGENTS.md 里的办法调一次 get_project,把项目名和每条序列的卡片数报给我,确认环境通了,然后等我说要做什么。",
   ].join("\n");
-  const url = `codex://threads/new?prompt=${encodeURIComponent(prompt)}`;
-  /*
-   * Codex 必须冷启动到任务目录。
-   *
-   * 任务目录现在在仓库外面,复用一个工作区停在别处的窗口,agent 连 AGENTS.md 都读不到
-   * (沙箱只覆盖工作区)。而 Codex 只在冷启动时定工作区 —— 所以先温和关掉它。
-   */
-  const closed = freshWindow ? await closeCodexApp(dir) : false;
-  if (process.platform === "win32") {
-    // 不能加 detached:Windows 上它会给子进程开一个新控制台,和 windowsHide 打架,
-    // 用户就会看见一下黑窗闪过。这条命令只是给 app 发个信号,几百毫秒就回来。
-    spawn("cmd.exe", ["/d", "/s", "/c", `codex app "${dir}"`], { stdio: "ignore", windowsHide: true }).unref();
-  } else {
-    spawn("codex", ["app", dir], { detached: true, stdio: "ignore" }).unref();
-  }
-  // 轮询等它的窗口出现,别用固定 sleep —— 冷启动实测 4 秒,机器忙的时候更久。
-  // 等不到也照发:也许它已经开着,只是那一刻没有带标题的主窗口
-  await waitForWindow(dir, APP_PROCESS.codex);
-  openUrl(url);
-  const autoSend = await autoPressEnter(dir, APP_PROCESS.codex);
-  return {
-    kind: freshWindow ? (closed ? "codex-fresh+deeplink" : "codex-app+deeplink(没关掉,按热启动走)") : "codex-app+deeplink",
-    detail: `codex app "${dir}" → ${url}`,
-    autoSend,
+  const save = (launch: Omit<NonNullable<JobMeta["launch"]>, "at">) => {
+    const meta = readJsonSafe<JobMeta>(path.join(dir, "job.json"));
+    if (meta) writeMeta(dir, { ...meta, launch: { ...launch, at: new Date().toISOString() } });
   };
+  const previous = readJsonSafe<JobMeta>(path.join(dir, "job.json"))?.launch;
+  const launch = await createCodexTask(dir, prompt, previous, save);
+  if (launch.status === "ready" && launch.threadId) {
+    try { await openUrl(`codex://threads/${encodeURIComponent(launch.threadId)}`); }
+    catch (error) { return { ...launch, status: "failed", detail: `打开 Codex 线程失败: ${String(error)}` }; }
+  }
+  return launch;
 }
 
 /**
@@ -439,10 +383,9 @@ export function skillPlugin(): Plugin {
           if (meta.noLaunch) {
             update({ phase: "ready" });
           } else {
-            // 先标 ready 再去拉 app:拉起 + 自动回车要等十几秒,对话框不该一直显示「拉起中」
-            update({ phase: "ready" });
+            // launch 进度由启动器写入 job.json。
             const launch = await launchDesktop(meta.provider, dir);
-            update({ launch: { ...launch, at: new Date().toISOString() } });
+            update({ phase: "ready", launch: { ...launch, at: new Date().toISOString() } });
           }
         } catch (e) {
           update({ phase: "failed", error: (e as Error).message });

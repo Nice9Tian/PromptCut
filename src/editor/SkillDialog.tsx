@@ -32,12 +32,12 @@ interface Job {
   instanceError: string | null;
   procUpdatedAt: string | null;
   procUrl: string;
-  launch?: { kind: string; detail: string; at: string; autoSend?: "sent" | "nofocus" | "error" | "skipped" };
+  launch?: { kind: string; detail: string; at: string; status?: "launching" | "ready" | "failed"; autoSend?: "sent" | "nofocus" | "error" | "skipped" };
 }
 
 const PROVIDERS: { id: Provider; name: string; desc: string }[] = [
   { id: "claude", name: "Claude Code", desc: "新建一个独立任务目录,Claude 桌面版的新对话直接落在那儿,预填好 /promptcut 自动发送" },
-  { id: "codex", name: "Codex", desc: "新建一个独立任务目录,把 Codex 冷启动到那儿(会先关掉现有窗口),再开一条新线程;流程写在 AGENTS.md 里" },
+  { id: "codex", name: "Codex", desc: "自动创建不在项目中的独立任务,工作区指向任务目录,执行环境检查后打开对话" },
 ];
 
 const STEPS: { phase: Phase; label: string }[] = [
@@ -45,7 +45,7 @@ const STEPS: { phase: Phase; label: string }[] = [
   { phase: "booting", label: "起一份无头实例(独立端口,不碰你手里这份)" },
   { phase: "launching", label: "写入说明文件,拉起桌面 app 的新对话" },
   // 深链只把 /promptcut 预填进输入框,不会替用户按回车 —— 实测 Claude 桌面版就是这个行为
-  { phase: "ready", label: "就绪:桌面 app 已打开新对话" },
+  { phase: "ready", label: "实例就绪" },
 ];
 
 const ORDER: Phase[] = ["snapshot", "booting", "launching", "ready"];
@@ -194,8 +194,7 @@ export function SkillDialog(props: { open: boolean; onClose: () => void }): JSX.
 
         {provider === "codex" && (
           <div className="pc-skill-check">
-            Codex 只在冷启动时决定工作区,所以开始时会**先温和关掉现在开着的 Codex 窗口**,
-            再让它冷启动到新建的任务目录。
+            无需关闭 Codex。任务不挂在你的项目下面,工作区指向独立任务目录;环境检查完成后自动打开对话。
           </div>
         )}
 
@@ -219,10 +218,11 @@ export function SkillDialog(props: { open: boolean; onClose: () => void }): JSX.
               })}
               {job.phase === "failed" && <div className="pc-skill-step is-failed">失败:{job.error}</div>}
               {job.phase === "ready" && !job.launch && <div className="pc-skill-step is-active">正在拉起桌面 app 并替你按回车…</div>}
-              {job.launch?.autoSend === "sent" && <div className="pc-skill-step is-done">指令已自动发送,agent 在配环境;配好后直接告诉它要做什么</div>}
-              {job.launch && job.launch.autoSend !== "sent" && (
+              {job.launch?.status !== "failed" && job.launch?.autoSend === "sent" && <div className="pc-skill-step is-done">指令已自动发送,agent 在配环境;配好后直接告诉它要做什么</div>}
+              {job.launch?.autoSend === "nofocus" && (
                 <div className="pc-skill-step is-active">桌面 app 的窗口没到前台,指令留在输入框里 —— 切过去按一下回车就行</div>
               )}
+              {job.launch && (job.launch.status === "launching" || job.launch.status === "failed" || job.launch.autoSend === "error") && <div className={`pc-skill-step ${job.launch.status === "launching" ? "is-active" : "is-failed"}`}>{job.launch.detail}</div>}
               {job.phase === "stopped" && <div className="pc-skill-step">实例已停止。结果文件还在,可以合并</div>}
             </div>
 
