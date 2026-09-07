@@ -1,0 +1,16 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "promptcut-reports",
+  "main": "worker.js",
+  "compatibility_date": "2026-09-01",
+  "observability": { "enabled": true },
+
+  // 由 `npx wrangler kv namespace create REPORTS` 建出来的。
+  // 换账号部署的话得自己跑一遍那条命令,把 id 换成它打印的那串。
+  "kv_namespaces": [
+    { "binding": "REPORTS", "id": "7a697d9718d74daeaabdcff73db1f8eb" }
+  ]
+
+  // FEISHU_WEBHOOK / SUBMIT_TOKEN / ADMIN_KEY 三个是密钥,
+  // 用 `npx wrangler secret put <名字>` 设,不要写进这个文件(它会进 git)。
+}

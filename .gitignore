@@ -16,3 +16,10 @@ tsconfig.tsbuildinfo
 
 # 本地草稿(server/vite-plugin-projects.ts):每份草稿一个 .proc 文件
 .pc-projects/
+
+# 本地环境变量:诊断报告收集端的地址和令牌在里面(见 tools/report-worker/)
+.env.local
+.env.*.local
+
+# wrangler 的本地缓存
+.wrangler/
