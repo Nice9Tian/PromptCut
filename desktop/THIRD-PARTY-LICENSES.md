@@ -85,13 +85,29 @@ https://www.gyan.dev/ffmpeg/builds/#release-builds （选择对应版本的 sour
 
 - **未核实，分发前请确认**：运行 `npx license-checker --summary` 确认完整依赖树中没有不兼容的许可证
 
-## 7. 内置 Python（将来包含）
+## 7. 内置 Python（随安装包分发）
 
-- **用途**：语音转文字（STT）引擎的运行环境
+- **用途**：语音转文字、镜头识别、运动追踪的运行环境
 - **许可证**：PSF License (Python Software Foundation License)
-- **来源**：https://www.python.org/downloads/windows/ （Windows embeddable package）
+- **来源**：https://www.python.org/downloads/windows/ （Windows embeddable package 3.11.9）
 - **说明**：内置 Python 解释器随安装包分发。PSF License 允许再分发。
 - **未核实，分发前请确认**：具体使用的 Python 版本的 PSF License 条款
+
+### 7.1 内置 Python 里预装的第三方库（随安装包分发）
+
+这些库**装在解释器的 site-packages 里、随安装包一起发出去**，和第 8 节
+「用户自行下载」的性质完全不同 —— 它们的许可证义务在我们这边。
+
+| 库          | 版本   | 许可证       | 用途                                     |
+| ----------- | ------ | ------------ | ---------------------------------------- |
+| `numpy`     | 2.2.6  | BSD-3-Clause | 运动追踪未装拓展时的模板匹配兜底档所需     |
+| `pip`       | 26.2.1 | MIT          | 安装拓展依赖                             |
+| `setuptools`| 84.0.0 | MIT          | pip 的依赖                               |
+| `wheel`     | 0.48.0 | MIT          | pip 的依赖                               |
+
+**加库到基础运行时要同步改这一节**（改的是 `desktop/scripts/prepare-python.mjs`
+里的 `BASE_LIBS`）。基础运行时里的东西不像拓展包那样是用户主动下载的，
+漏登记就是我们自己在无证分发。
 
 ## 8. 用户自行下载的组件（不随安装包分发）
 

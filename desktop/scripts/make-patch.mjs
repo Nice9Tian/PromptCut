@@ -150,6 +150,22 @@ function findBaseManifest(appVersion) {
   return null;
 }
 
+/**
+ * 只哈希 package-lock 里的**依赖内容**，跳过应用自己的版本号。
+ *
+ * 原先哈希的是整份文件，于是每次小版本发布（只改了 version 字段）都会被判成
+ * 「依赖变了」，硬把 196 MB 的 node_modules 塞进补丁 —— 一个本该几 MB 的补丁
+ * 变成 48 MB。而补丁这一层存在的理由就是它小。
+ *
+ * 真正的依赖变化仍然抓得住：它们全在 packages 里，那部分一个字节都没跳过。
+ */
+function hashLockDeps(file) {
+  const raw = JSON.parse(fs.readFileSync(file, "utf-8"));
+  delete raw.version;
+  if (raw.packages && raw.packages[""]) delete raw.packages[""].version;
+  return createHash("sha256").update(JSON.stringify(raw)).digest("hex");
+}
+
 function main() {
   console.log("PromptCut make-patch");
 
@@ -181,7 +197,9 @@ function main() {
     );
   }
 
-  const lockHash = sha256File(path.join(APP_DIR, "package-lock.json"));
+  const lockPath = path.join(APP_DIR, "package-lock.json");
+  const lockHash = sha256File(lockPath);
+  const lockDepsHash = hashLockDeps(lockPath);
   const base = findBaseManifest(appVersion);
   if (base) console.log(`  基准清单：${path.basename(base.path)}（app ${base.data.appVersion}）`);
   else console.log("  没有找到上一次发布的清单");
@@ -195,13 +213,16 @@ function main() {
     includesDeps = false; depsReason = "命令行指定 --no-deps";
   } else if (!base) {
     includesDeps = true; depsReason = "没有基准清单可比，保守起见带上依赖";
-  } else if (base.data.lockHash !== lockHash) {
-    includesDeps = true; depsReason = "package-lock.json 与基准不同";
+  } else if (!base.data.lockDepsHash) {
+    // 老清单只记了整份文件的哈希，没法判断变的是不是依赖，保守带上
+    includesDeps = true; depsReason = "基准清单来自旧版本，无法只比依赖";
+  } else if (base.data.lockDepsHash !== lockDepsHash) {
+    includesDeps = true; depsReason = "依赖与基准不同";
   } else {
-    includesDeps = false; depsReason = "package-lock.json 与基准一致";
+    includesDeps = false; depsReason = "依赖与基准一致";
   }
   console.log(`  依赖：${includesDeps ? "随包发出" : "不发"}（${depsReason}）`);
-  if (!includesDeps && base && base.data.lockHash !== lockHash) {
+  if (!includesDeps && base && base.data.lockDepsHash && base.data.lockDepsHash !== lockDepsHash) {
     fail("依赖有变化，--no-deps 会产出一个装上去就跑不起来的补丁");
   }
 
@@ -256,6 +277,8 @@ function main() {
     includesDeps,
     depsReason,
     lockHash,
+    // 下一次发布靠它判断依赖到底变没变（lockHash 会被版本号一起带偏）
+    lockDepsHash,
     baseAppVersion: base?.data?.appVersion ?? null,
     baseLockHash: base?.data?.lockHash ?? null,
     payloadFiles: files.length,

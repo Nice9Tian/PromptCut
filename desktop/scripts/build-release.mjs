@@ -84,7 +84,13 @@ function cleanupWorktree() {
 }
 process.on("exit", cleanupWorktree);
 
-if (!has("--skip-runtime") && !has("--patch-only")) {
+// 只有 --skip-runtime 才跳过组装。
+//
+// --patch-only 曾经也走「只检查」这条分支,那是错的:补丁的内容**就是**
+// runtime/app,不按新源码组装它,校验必然报「runtime/app 落后于源码」,
+// 于是 --from-head --patch-only 这条最常用的小版本发布路径根本跑不通。
+// --patch-only 的意思是「跳过 Rust 编译」,不是「跳过组装 Node 那半边」。
+if (!has("--skip-runtime")) {
   run("组装 runtime", "node", ["scripts/prepare-runtime.mjs", ...sourceArgs]);
 } else {
   run("检查 runtime", "node", ["scripts/prepare-runtime.mjs", "--check", ...sourceArgs]);
