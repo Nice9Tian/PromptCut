@@ -3,6 +3,14 @@ import { createEmptyProject } from "../../kernel/project";
 import type { Project } from "../../kernel/project";
 import { exportProjectJson } from "./index";
 import { collectProjectAi, applyProjectAi, resetProjectAi, type ProjectAi } from "../../ai/projectAi";
+import { getSkillSnapshot } from "../../skill/skillMode";
+
+/** 存盘时给项目盖一个「这是 SKILL 模式下的产物」的戳。不在 SKILL 模式就不写这一段 */
+function skillStamp(): { active: boolean; jobId?: string | null; at?: string } | undefined {
+  const { state } = getSkillSnapshot();
+  if (!state.active) return undefined;
+  return { active: true, jobId: state.jobId, at: new Date().toISOString() };
+}
 
 /**
  * `.proc` —— PromptCut 自己的项目文件。
@@ -37,6 +45,15 @@ export interface ProcFile {
    * 都让它把自己说过的话再读一遍。旧文件没有这一段,读的时候按空处理。
    */
   ai?: ProjectAi;
+  /**
+   * 这份编排是不是在 SKILL 模式下产生的,以及属于哪个任务。
+   *
+   * 只是**留在项目文件里的痕迹**,不是运行时开关 —— 真正决定"现在能不能操作"的是
+   * server/skill-gate.mjs 那个状态文件。理由:无头实例、Rust 壳、用户这份是三个进程,
+   * 而 .proc 随时可能被另存到别处、被拷走;拿一份会跑的文件当三方共享状态,
+   * 迟早出现两边看到的模式不一样。这里记下来是为了事后看得出"这段是谁改的"。
+   */
+  skill?: { active: boolean; jobId?: string | null; at?: string };
 }
 
 /** 当前项目 → .proc 文本 */
@@ -49,6 +66,7 @@ export function serializeProc(thumbnail: string | null = null): string {
     thumbnail,
     project,
     ai: collectProjectAi(),
+    skill: skillStamp(),
   };
   return JSON.stringify(doc, null, 2);
 }

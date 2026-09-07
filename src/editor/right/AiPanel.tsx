@@ -7,6 +7,7 @@ import { renderMarkdown } from "../../ai/Markdown";
 import type { ChatAttachment, ChatMessage, MessagePart, ToolCallInfo } from "../../ai/types";
 import { conversationReport } from "../../ai/debug";
 import { ReportDialog } from "./ReportDialog";
+import { SkillLock } from "./SkillLock";
 import { AiSetupDialog } from "./AiSetupDialog";
 import { useChatHistory } from "../../ai/useChatHistory";
 import { SttInstallProgress } from "./SttInstallProgress";
@@ -620,6 +621,8 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
 
   return (
     <aside className="panel panel-right ai-panel">
+      {/* SKILL 模式下整块盖住:项目正交给无头实例上的 agent 改,两边同时写会互相覆盖 */}
+      <SkillLock />
       <div className="ai-panel-header">
         <div className="ai-panel-title">
           <span>AI 助手</span>

@@ -155,6 +155,17 @@ export default function vitePluginAi(): Plugin {
           throw err;
         }
 
+        /*
+         * SKILL 模式的闸门(server/skill-gate.mjs)。
+         *
+         * 只在无头实例上拦,而且**拦在执行之前** —— 用户点了「关闭 SKILL 模式」就是收回了
+         * 控制权,agent 那边可能正跑在半路并不知情。执行完再回滚是收拾不干净的:见过画面的
+         * 卡片、写过的文件都追不回来。放行与否只看那一个状态文件,和这条调用是谁发起的无关。
+         */
+        const gate = await import(new URL('./skill-gate.mjs', import.meta.url).href);
+        const verdict = gate.checkGate(tool);
+        if (!verdict.ok) return { ok: false, skillClosed: true, message: verdict.message };
+
         if (!editorRes) {
           throw new Error('编辑台没有打开:没有页面连着 /api/mcp/events');
         }

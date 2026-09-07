@@ -1,0 +1,95 @@
+/*
+ * SKILL 模式的锁定层。绝对定位铺满 AI 面板。
+ *
+ * 面板得先是定位父级,否则 inset:0 会一路找到视口、把整个界面盖住。这条 position 写在
+ * 这里而不是 AiPanel.css:那个文件别的会话在动,往里加一行容易被冲掉;而 relative 加在
+ * 一个 flex 纵向容器上、且它原本没有绝对定位的子元素,对现有布局零影响。
+ */
+.ai-panel {
+  position: relative;
+}
+
+.pc-skill-lock {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  /* 半透明:让用户还能看见底下的对话内容,知道 agent 接手前聊到哪了 */
+  background: color-mix(in oklab, var(--ui-bg) 82%, transparent);
+  backdrop-filter: blur(2px);
+}
+
+.pc-skill-lock-card {
+  width: 100%;
+  max-width: 300px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--ui-accent);
+  border-radius: var(--ui-radius, 6px);
+  background: var(--ui-panel);
+  box-shadow: var(--ui-shadow, 0 8px 24px rgba(0, 0, 0, 0.35));
+}
+
+.pc-skill-lock-badge {
+  align-self: flex-start;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--ui-accent);
+  color: var(--ui-accent-fg);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.pc-skill-lock-body {
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--ui-fg-muted);
+}
+
+.pc-skill-lock-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--ui-fg-faint);
+}
+.pc-skill-lock-meta > div {
+  display: flex;
+  gap: 8px;
+}
+.pc-skill-lock-meta span { flex: 0 0 auto; }
+.pc-skill-lock-meta code {
+  font-family: var(--ui-font-mono, ui-monospace, monospace);
+  color: var(--ui-fg-muted);
+  overflow-wrap: anywhere;
+}
+
+.pc-skill-lock-err {
+  font-size: 12px;
+  color: var(--ui-danger);
+  line-height: 1.6;
+}
+
+.pc-skill-lock-btn {
+  height: 32px;
+  border: 1px solid var(--ui-border-strong);
+  border-radius: var(--ui-radius, 4px);
+  background: var(--ui-panel-2);
+  color: var(--ui-fg);
+  font-family: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.pc-skill-lock-btn:hover:not(:disabled) { background: var(--ui-float); }
+.pc-skill-lock-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.pc-skill-lock-hint {
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--ui-fg-faint);
+}
