@@ -15,6 +15,9 @@ use tauri::{Emitter, Manager, RunEvent, WebviewUrl};
 use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_shell::ShellExt;
 
+mod proc_lock;
+mod skill_shell;
+
 const EDITOR_URL: &str = "http://127.0.0.1:5210/";
 
 /// 启动参数里的 .proc 文件(双击文件、右键「打开方式」)。只认真实存在的文件。
@@ -246,6 +249,23 @@ pub fn run() {
                     tauri::webview::NewWindowResponse::Deny
                 })
                 .build()?;
+
+            // ── SKILL 模式:主窗收起来变成右上角的悬浮图标 ─────────────
+            // 盯住状态文件(Node 那边写)。返回的开关给下面的关窗拦截用 —— 关窗时再去
+            // 读一次文件太慢,而且那一刻要立刻决定拦不拦。
+            let skill_active = skill_shell::spawn_watcher(handle.clone());
+            let skill_flag = skill_active.clone();
+            let skill_handle = handle.clone();
+            win.on_window_event(move |event| {
+                // SKILL 模式下点关闭不是退出,是缩回悬浮图标 —— 无头实例还在干活,
+                // 这时候真退出会把整条链路(sidecar、agent 的连接)一起带走。
+                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                    if skill_shell::is_active(&skill_flag) {
+                        api.prevent_close();
+                        skill_shell::back_to_overlay(&skill_handle);
+                    }
+                }
+            });
 
             // If there is already an instance running, just navigate to it.
             if existing_instance {

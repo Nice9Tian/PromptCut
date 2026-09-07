@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>PromptCut · SKILL</title>
+<style>
+  /*
+   * SKILL 模式的悬浮图标。整个窗口是透明无边框的,所以这里画的圆角卡片就是用户看到的全部。
+   * 唯一的交互是双击 —— 单击不算,免得拖动或者误触就把窗口弹出来。
+   */
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; background: transparent; overflow: hidden; }
+  body {
+    font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    /* 整块可拖:无边框窗口没有标题栏,不给拖拽区用户就挪不动它 */
+    -webkit-app-region: drag;
+    user-select: none;
+    cursor: default;
+  }
+  .card {
+    height: 100%;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 0 14px;
+    border-radius: 12px;
+    background: rgba(24, 26, 34, 0.94);
+    border: 1px solid #AFFAFA;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+    color: #e6edf6;
+  }
+  .dot {
+    width: 10px; height: 10px; border-radius: 50%;
+    background: #AFFAFA; flex: 0 0 auto;
+    animation: pulse 1.8s ease-in-out infinite;
+  }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+  .text { min-width: 0; flex: 1 1 auto; }
+  .title { font-size: 12px; font-weight: 600; color: #AFFAFA; }
+  .sub {
+    font-size: 11px; color: #8da4c8; margin-top: 2px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .hint { font-size: 10px; color: #56719b; margin-top: 1px; }
+</style>
+</head>
+<body>
+  <div class="card" id="card" title="双击回到 PromptCut">
+    <div class="dot"></div>
+    <div class="text">
+      <div class="title">SKILL 模式</div>
+      <div class="sub" id="sub">正在等 AI 助手…</div>
+      <div class="hint">双击回到软件</div>
+    </div>
+  </div>
+
+<script>
+  // 双击才叫回主窗。拖动这张卡的时候浏览器也会派发 click,所以只认 dblclick。
+  document.getElementById('card').addEventListener('dblclick', function () {
+    var t = window.__TAURI__;
+    if (t && t.event && t.event.emit) t.event.emit('pc-skill-restore');
+  });
+
+  // 壳每秒推一次进度(只在真的变了的时候推)
+  var t = window.__TAURI__;
+  if (t && t.event && t.event.listen) {
+    t.event.listen('pc-skill-overlay', function (e) {
+      var d = (e && e.payload) || {};
+      var sub = document.getElementById('sub');
+      if (typeof d.clips === 'number') {
+        var when = d.updated_at ? new Date(Number(d.updated_at) * 1000) : null;
+        var hhmm = when
+          ? String(when.getHours()).padStart(2, '0') + ':' + String(when.getMinutes()).padStart(2, '0')
+          : '';
+        sub.textContent = d.clips + ' 张卡' + (hhmm ? ' · ' + hhmm : '');
+      } else if (d.job_id) {
+        sub.textContent = d.job_id;
+      }
+    });
+  }
+</script>
+</body>
+</html>
