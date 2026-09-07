@@ -24,6 +24,7 @@ import { ProjectSettingsDialog } from "./ProjectSettingsDialog";
 import { SkinDialog } from "./SkinDialog";
 import { SkillDialog } from "./SkillDialog";
 import { applyCombine, summarizeCombine } from "./io/combineImport";
+import { isViewOnly } from "./io/viewOnly";
 import "../ui/toolbar.css";
 
 /** 顶栏宽度档位:宽档(全部展开)、中档(图标收缩)、窄档(折叠更多菜单) */
@@ -61,17 +62,23 @@ function Btn({
   icon,
   primary,
   collapsed,
+  disabled,
+  title,
 }: {
   onClick: () => void;
   label: string;
   icon?: React.ReactNode;
   primary?: boolean;
   collapsed?: boolean;
+  disabled?: boolean;
+  /** 覆盖悬停提示。禁用时用它说清为什么点不了 */
+  title?: string;
 }) {
   return (
     <button
-      title={label}
+      title={title ?? label}
       onClick={onClick}
+      disabled={disabled}
       className={`pc-btn${primary ? " pc-btn--primary" : ""}${collapsed ? " pc-btn--collapsed" : ""}`}
     >
       {icon}
@@ -95,6 +102,8 @@ export function TopBar() {
   const [skillOpen, setSkillOpen] = useState(false);
   const mergeInput = useRef<HTMLInputElement>(null);
   const [moreBtnRect, setMoreBtnRect] = useState<DOMRect | null>(null);
+  // 只读查看在页面地址里就定了,不会中途变,所以不进 state
+  const viewOnly = isViewOnly();
 
   const name = useStore((s) => s.project.name);
   const dirty = useStore((s) => s.dirty);
@@ -507,6 +516,14 @@ ${summarizeCombine(report)}
 
       <span className="ml-auto" />
 
+      {/* 只读查看:告诉人这份是看的不是改的。真正拦住写盘的是服务端那道
+          (server/vite-plugin-view-gate.ts),这里只是别让人白点一下才发现 */}
+      {viewOnly && (
+        <span className="pc-viewonly-badge" title="这个页面是用只读链接打开的:能看,不能改。项目由 Skill 任务里的 agent 负责修改。">
+          只读查看
+        </span>
+      )}
+
       {/* C · 文件操作条:打开/保存参与中档收起,导出为主按钮永远不收起。
           导入视频已迁到左栏「素材 → 视频」的 + 按钮,顶栏不再重复 */}
       <div className="pc-bar-group">
@@ -523,6 +540,8 @@ ${summarizeCombine(report)}
           label="保存项目"
           icon={<IconSave />}
           collapsed={tier !== "wide"}
+          disabled={viewOnly}
+          title={viewOnly ? "只读查看模式:改不了这个项目" : "保存项目"}
         />
         <Btn
           onClick={run(exportProject)}

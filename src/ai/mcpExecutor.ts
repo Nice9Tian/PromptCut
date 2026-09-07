@@ -89,20 +89,23 @@ export function connectMcpExecutor(getApi: () => EditorApi, onStatus?: (s: { con
   let active = true;
 
   /*
-   * 两个 URL 参数决定这个页面和 MCP 桥的关系:
+   * 三个 URL 参数决定这个页面和 MCP 桥的关系:
    *
-   *   ?observe=1     只看不接。页面照常渲染项目,但**不连桥** —— 给「想看一眼画面」的人用。
-   *                  agent 拿自己的浏览器打开编辑台看布局,就该走这条;不走的话它一连上
-   *                  就把无头实例那个页面踢了,之后所有工具调用全失败(实测过)。
+   *   ?view=<钥匙>   只读浏览。页面照常渲染项目,但**不连桥**。Skill 任务会把一条带这把
+   *                  钥匙的完整链接交给 agent(instance.json 的 viewUrl),它照常打开就行 ——
+   *                  不用记「要加什么后缀」。没有这把钥匙的话,连页面都打不开
+   *                  (server/vite-plugin-view-gate.ts 那道)。
+   *   ?observe=1     同一件事的老写法,留着不动。用户自己那份 PromptCut 没有钥匙这套,
+   *                  想只读打开时只有它可用。
    *   ?owner=<令牌>  宣示所有权。带着它连上之后,服务端会拒绝一切没有同一把钥匙的连接,
    *                  别人抢不走。无头实例用它保住自己。
    *
-   * 两个都不带 = 普通用户的编辑台,行为和以前一模一样(先来后到、刷新可接管)。
+   * 都不带 = 普通用户的编辑台,行为和以前一模一样(先来后到、刷新可接管)。
    */
   const params = (() => {
     try { return new URLSearchParams(location.search); } catch { return new URLSearchParams(); }
   })();
-  const observeOnly = params.has("observe");
+  const observeOnly = params.has("observe") || !!params.get("view");
   const ownerToken = params.get("owner") || "";
 
   if (observeOnly) {

@@ -50,6 +50,9 @@ interface Instance {
   stopped?: boolean;
   error?: string;
   clips?: number;
+  /** 只读浏览的钥匙,以及拼好的完整链接。说明文件里直接把 viewUrl 交给 agent */
+  viewToken?: string;
+  viewUrl?: string;
 }
 
 function sendJson(res: ServerResponse, code: number, data: unknown) {
@@ -314,7 +317,7 @@ export function skillPlugin(): Plugin {
           const tplUrl = new URL("./skill-templates.mjs", import.meta.url);
           tplUrl.searchParams.set("t", String(fs.statSync(tplUrl).mtimeMs));
           const tpl = await import(tplUrl.href);
-          const ctx = { jobDir: dir, root, port: inst.port!, provider: meta.provider, createdAt: meta.createdAt };
+          const ctx = { jobDir: dir, root, port: inst.port!, provider: meta.provider, createdAt: meta.createdAt, viewUrl: inst.viewUrl };
           fs.mkdirSync(path.join(dir, ".claude", "skills", "promptcut"), { recursive: true });
           fs.writeFileSync(path.join(dir, ".claude", "skills", "promptcut", "SKILL.md"), tpl.claudeSkillMd(ctx), "utf8");
           fs.writeFileSync(path.join(dir, "CLAUDE.md"), tpl.claudeMd(ctx), "utf8");

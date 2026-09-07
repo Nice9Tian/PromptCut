@@ -19,7 +19,7 @@ import path from "node:path";
 const fileUrl = (p) => "file:///" + String(p).replace(/\\/g, "/");
 
 /** 三家 CLI 都是在任务目录里起的,路径用绝对的,别指望 cwd */
-export function skillBody({ jobDir, port, provider }) {
+export function skillBody({ jobDir, port, provider, viewUrl }) {
   // 用任务目录里自己那份:目录在仓库外,引用仓库里的脚本会被 agent 的沙箱挡掉
   const toolCli = path.join(jobDir, "tools", "pc-tool.mjs");
   const proc = path.join(jobDir, "project.proc");
@@ -67,18 +67,18 @@ node "${toolCli}" save                       # 等写回完成,打印 project.pr
 
 带画面的工具(\`see_preview\`)返回里的 \`previewImage\` 是一张 png 的路径,看图请读那个文件。
 
-## 想亲眼看看编辑台?只能用只读方式打开
+## 想亲眼看看编辑台
+
+用这条链接(钥匙已经在里面了,原样打开):
 
 \`\`\`
-http://127.0.0.1:${port}/?observe=1
+${viewUrl || `http://127.0.0.1:${port}/?observe=1`}
 \`\`\`
 
-**必须带 \`?observe=1\`。** 不带的话你一连上就把这个实例自己的页面从 MCP 桥上**踢掉**了 ——
-桥同一时刻只认一个编辑台,而被踢的那一方不会自己回来。后果是你**之后所有的工具调用全部失败**,
-这次任务当场哑掉。(现在服务端会拒绝这种连接并回 409 提醒你,但别指望它:该带的参数带上。)
+它是**只读**的:能看,不能改 —— 保存会被服务端拒掉,项目还是由你通过工具来改。
+页面是打开那一刻的快照,你改完要重新加载才看得到新画面。
 
-\`?observe=1\` 的页面照常渲染项目,只是不连桥。它是**打开那一刻的快照**,你改完之后要重新加载
-才看得到新的画面。要看某一帧的真实渲染,\`see_preview\` 比开浏览器更直接、也更准。
+看某一帧的真实渲染,\`see_preview\` 比开浏览器更直接也更准,优先用它。
 
 ## 开工第一件事(必做)
 
@@ -190,13 +190,14 @@ export function claudeSettingsJson() {
 }
 
 /** 给人看的 README */
-export function readmeMd({ jobDir, port, provider, createdAt }) {
+export function readmeMd({ jobDir, port, provider, createdAt, viewUrl }) {
   return `# PromptCut Skill 任务
 
 - 创建时间:${createdAt}
 - 驱动:${provider}
 - 无头实例端口:${port}
 - 结果文件:${path.join(jobDir, "project.proc")}
+${viewUrl ? `- 只读查看这个实例的画面:${viewUrl}\n  (能看不能改;直接开裸地址会被拦下,并把这条链接给你)` : ""}
 
 agent 干完后回复里会有 project.proc 的链接。回到 PromptCut,顶栏「⋯ → Skill 模式」里点「合并结果到当前项目」,
 或者直接双击 project.proc 打开看看。

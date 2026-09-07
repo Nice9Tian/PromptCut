@@ -421,3 +421,19 @@
   letter-spacing: inherit;
   outline: none;
 }
+
+/* 只读查看:这份页面是用带钥匙的只读链接打开的(Skill 任务在跑时给 agent 用的那条)。
+   不做成刺眼的警告条 —— 它是常态而不是故障;但要让人一眼分清「这份改不了」。 */
+.pc-viewonly-badge {
+  flex: none;
+  margin-right: 8px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: nowrap;
+  color: var(--ui-fg-muted);
+  background: var(--ui-panel-2);
+  border: 1px solid var(--ui-border-strong);
+  cursor: default;
+}

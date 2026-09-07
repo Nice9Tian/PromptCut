@@ -693,7 +693,10 @@ export default function vitePluginAi(): Plugin {
           return res.end(JSON.stringify({
             ok: false,
             error: '编辑台已被一个正在运行的实例占用',
-            hint: '这个端口上有 Skill 任务在跑。想看画面请用只读方式打开:在地址后面加 ?observe=1,那样不会抢走它的连接。',
+            // 别让人去猜该加什么后缀:钥匙在环境变量里,直接把能用的那条链接给出去
+            hint: process.env.PROMPTCUT_VIEW_TOKEN
+              ? `这个端口上有 Skill 任务在跑。想看画面请打开这条只读链接(钥匙已在里面):http://${req.headers.host || '127.0.0.1'}/?draft=project&view=${encodeURIComponent(process.env.PROMPTCUT_VIEW_TOKEN)}`
+              : '这个端口上有 Skill 任务在跑。想看画面请用只读方式打开:在地址后面加 ?observe=1,那样不会抢走它的连接。',
           }));
         }
 

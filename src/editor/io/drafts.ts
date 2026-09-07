@@ -1,5 +1,6 @@
 import { loadProc, serializeProc, forgetSaveTarget } from "./proc";
 import { acquireDraftLock, releaseDraftLock } from "./procLock";
+import { isViewOnly, ownerHeaders } from "./viewOnly";
 import { actions } from "../../store/project";
 import type { Project } from "../../kernel/project";
 
@@ -35,10 +36,14 @@ export function newDraftId(): string {
 }
 
 export async function saveDraft(id: string, thumbnail: string | null = null): Promise<DraftInfo> {
+  // 只读查看的页面在这里就停住,不用等服务端拒了再报错 —— 报错文案也更像人话
+  if (isViewOnly()) throw new Error("这是只读查看模式,改不了这个项目");
   return json<DraftInfo>(
     await fetch(`/api/projects/${encodeURIComponent(id)}`, {
       method: "PUT",
-      headers: { "Content-Type": "application/json" },
+      // x-pc-owner:Skill 无头实例写回时用它证明「我是这个实例的主人」。
+      // 普通页面没有这个头,服务端那边也不要求(只有无头实例上的 view-gate 才检查)
+      headers: { "Content-Type": "application/json", ...ownerHeaders() },
       body: serializeProc(thumbnail),
     }),
   );

@@ -142,12 +142,31 @@ process.on("SIGTERM", () => shutdown("SIGTERM"));
 async function main() {
   const port = Number(flag("--port")) || (await freePort());
   log(`任务目录 ${JOB},端口 ${port}`);
-  writeInstance({ port });
+
+  /*
+   * 两把钥匙,**在起 vite 之前就生成**,因为要通过环境变量交给服务端 —— 服务端拿到之后
+   * 才能在页面这一层就做判断,而不是等到某个请求打进来再说。
+   *
+   *   ownerToken  谁是编辑台。带着它连 MCP 桥的那个页面是主人,别人抢不走(a8a6ee8)。
+   *               无头实例自己用。
+   *   viewToken   只读浏览。带着它能把编辑台**打开看**,但保存会被服务端拒掉。
+   *               这一把是给 agent 的:它拿到的是一条完整链接,不需要记住「要加什么后缀」。
+   *
+   * 为什么要分成两把而不是一把当两用:同一把的话,把 view= 改成 owner= 就能变成主人。
+   * agent 不是敌人,但它会照着自己的理解改 URL —— 两把钥匙让这件事做不到。
+   */
+  const rnd = () => Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 10);
+  const ownerToken = `own-${process.pid}-${rnd()}`;
+  const viewToken = `view-${process.pid}-${rnd()}`;
+  const viewUrl = `http://127.0.0.1:${port}/?draft=project&view=${encodeURIComponent(viewToken)}`;
+  writeInstance({ port, ownerToken, viewToken, viewUrl });
 
   // ── 1. vite ──────────────────────────────────────────────────────
   const viteBin = path.join(ROOT, "node_modules", "vite", "bin", "vite.js");
   const env = {
     ...process.env,
+    PROMPTCUT_OWNER_TOKEN: ownerToken,
+    PROMPTCUT_VIEW_TOKEN: viewToken,
     PROMPTCUT_HEADLESS: "1",
     // 草稿目录 = 任务目录:project.proc 就是这个实例的当前项目
     PROMPTCUT_PROJECTS_DIR: JOB,
@@ -193,10 +212,9 @@ async function main() {
    * ?owner=<令牌> 宣示所有权:带着它连上 MCP 桥之后,服务端会拒绝一切没有同一把钥匙的
    * 连接。没有这一步,agent 拿自己的浏览器打开这个端口「看一眼」就会把这个页面踢掉,
    * 之后它自己的所有工具调用全部失败 —— 而被踢的一方不会自己回来。
-   * 令牌写进 instance.json,想只读观察的人可以从那里知道该用 ?observe=1。
+   * 两把钥匙都在上面 main() 开头生成,并已经通过环境变量交给了服务端。
    */
-  const ownerToken = `hl-${process.pid}-${Math.random().toString(36).slice(2, 10)}`;
-  writeInstance({ ownerToken });
+  log(`只读链接:${viewUrl}`);
 
   // ?draft=project 由 Shell 打开任务目录里的 project.proc 并直接进编辑器;
   // ?headless=1 让页面装上 window.__pcHeadless(自动写回用)
