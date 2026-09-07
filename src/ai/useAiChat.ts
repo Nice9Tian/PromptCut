@@ -259,9 +259,13 @@ export function useAiChat(opts?: { mock?: boolean }) {
             newApi.apiKey = { set: false, last4: "" };
           }
         }
+        // 假流也要照着真接口合并:漏掉哪个字段,界面上对应的开关就会在保存后
+        // 弹回原值,看着像 bug 其实是假流没跟上(toolProtocol 就这么坑过一次)
         return {
           ...prev,
           defaultProvider: patch.defaultProvider !== undefined ? patch.defaultProvider : prev.defaultProvider,
+          toolProtocol: patch.toolProtocol !== undefined ? patch.toolProtocol : prev.toolProtocol,
+          cliModels: patch.cliModels ? { ...prev.cliModels, ...patch.cliModels } : prev.cliModels,
           api: newApi
         };
       });

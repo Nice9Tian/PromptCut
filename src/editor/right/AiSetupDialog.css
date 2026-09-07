@@ -237,16 +237,45 @@
   cursor: not-allowed;
 }
 
-.ais-protocol-mode {
-  display: flex;
-  align-items: center;
+/* ── 「更多」里的高级开关 ─────────────────────────────
+   文本协议模式以前是这一页上一个裸勾选框,太容易误点;收进这里,并且把
+   「什么时候才该开」写在旁边,而不是只给一个括号里的短语。 */
+.ais-more {
+  display: grid;
   gap: 8px;
-  font-size: 13px;
-  color: var(--ink-muted);
+  padding: 10px 12px;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  background: var(--fill-subtle);
 }
-.ais-protocol-mode input[type="checkbox"] {
+.ais-more-title {
+  font-size: 11px;
+  color: var(--ink-faint);
+  letter-spacing: 0.04em;
+}
+/* 勾选框和说明并排,说明可以换行,勾选框始终对齐第一行 */
+.ais-more-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
   cursor: pointer;
 }
+.ais-more-row input[type="checkbox"] {
+  margin-top: 2px;
+  flex: 0 0 auto;
+  cursor: pointer;
+}
+.ais-more-body {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.ais-more-name {
+  font-size: 13px;
+  color: var(--ink);
+}
+/* 「更多」按钮靠左,关闭仍然靠右 */
+.ais-footer-spacer { flex: 1 1 auto; }
 .ais-setup-progress { margin-top: 8px; display: grid; gap: 8px; overflow-wrap: anywhere; }
 .ais-setup-progress pre { max-height: 140px; overflow: auto; white-space: pre-wrap; font-size: 11px; }
 .ais-setup-progress a { width: fit-content; text-decoration: none; }

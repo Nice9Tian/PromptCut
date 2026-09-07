@@ -43,6 +43,8 @@ export function AiSetupDialog(props: {
   const [agyPermError, setAgyPermError] = useState("");
   const [granting, setGranting] = useState(false);
   const [toolProtocol, setToolProtocol] = useState(false);
+  /** 「更多」里放高级开关。每次打开对话框都收回去,免得上次展开过就一直敞着 */
+  const [moreOpen, setMoreOpen] = useState(false);
   /** 三家 CLI 的可选模型清单(| 分隔),面板上的模型选择器读它 */
   const [cliModels, setCliModels] = useState<Record<string, string>>({});
   const [savingModels, setSavingModels] = useState(false);
@@ -52,20 +54,34 @@ export function AiSetupDialog(props: {
   /** 剪贴板写不进去时,把报告摆出来让用户自己复制 */
   const [diagReport, setDiagReport] = useState("");
 
+  /*
+   * 导航状态只在「对话框被打开」这一刻重置。
+   *
+   * 以前这段和下面的表单同步写在同一个 effect 里,依赖是 [open, current, config] ——
+   * 于是**每次保存配置都会把人踢回第一级**:填完 API Key 点保存,config 一变,
+   * effect 重跑,setOpenedEntry(null) 把详情页收掉;「更多」展开着也会被合上。
+   * 拆成两个:这个只看 open,那个只管把 config 同步进表单。
+   */
   useEffect(() => {
     if (!open) return;
-    // 每次打开都回到第一级:上次配到哪儿了不该影响这次想看什么
     setOpenedEntry(null);
+    setMoreOpen(false);
     setDiagState("");
     setDiagReport("");
+    // 保存反馈和没提交的输入也属于「这一次打开」的状态,不能跟着 config 走:
+    // 跟着走的话保存成功那一刻 config 一变,「已保存」当场被抹掉,用户什么都没看见。
+    setApiKeyInput("");
+    setSaveSuccess(false);
+    setSaveError(null);
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
     if (config) {
       setApiVendor(config.api.vendor);
       setApiBaseUrl(config.api.baseUrl);
       setApiModel(config.api.model);
       setReplaceKey(!config.api.apiKey.set);
-      setApiKeyInput("");
-      setSaveSuccess(false);
-      setSaveError(null);
       setToolProtocol(!!config.toolProtocol);
       setCliModels({ ...(config.cliModels ?? {}) });
       setModelsMsg("");
@@ -74,7 +90,7 @@ export function AiSetupDialog(props: {
       .then((r) => r.json())
       .then((data) => { if (data.ok) setAgyPerms(data); })
       .catch(() => {});
-  }, [open, current, config]);
+  }, [open, config]);
 
   useEffect(() => {
     if (!open) return;
@@ -448,14 +464,40 @@ export function AiSetupDialog(props: {
                 );
               })}
             </div>
-            <div className="ais-protocol-mode">
-              <label>
-                <input type="checkbox" checked={toolProtocol} onChange={(e) => handleSaveProtocol(e.target.checked)} />
-                文本协议模式（CLI 原生工具被拒时用）
-              </label>
-            </div>
+            {/*
+              文本协议模式收进「更多」里。它以前是这一页上一个裸的勾选框,谁都可能顺手点一下,
+              可它改的是模型下达工具调用的方式 —— 打开之后调用写在正文里,比原生工具慢也更容易出错,
+              属于「CLI 真的拒绝原生工具了」才该动的开关,不该和选驱动放在同一层。
+            */}
+            {moreOpen && (
+              <div className="ais-more">
+                <div className="ais-more-title">高级</div>
+                <label className="ais-more-row">
+                  <input
+                    type="checkbox"
+                    checked={toolProtocol}
+                    onChange={(e) => handleSaveProtocol(e.target.checked)}
+                  />
+                  <span className="ais-more-body">
+                    <span className="ais-more-name">文本协议模式</span>
+                    <span className="ais-detail">
+                      只有当这家 CLI 拒绝原生工具时才需要打开。打开后模型改用回复正文里的文本块
+                      下达工具调用，比原生工具慢、也更容易出错。不确定就别动它。
+                    </span>
+                  </span>
+                </label>
+              </div>
+            )}
             <div className="ais-footer">
               <div className="ais-footer-actions">
+                <button
+                  className="ais-btn ais-more-btn"
+                  aria-expanded={moreOpen}
+                  onClick={() => setMoreOpen((v) => !v)}
+                >
+                  更多{moreOpen ? " ▴" : " ▾"}
+                </button>
+                <span className="ais-footer-spacer" />
                 <button className="ais-btn" onClick={onClose}>关闭</button>
               </div>
               {stt && <div className="ais-stt-info">语音识别: {stt.engine} - {stt.available ? "可用" : `不可用 (${stt.hint})`}</div>}
