@@ -1,5 +1,6 @@
 import type { Plugin, ViteDevServer } from "vite";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { apiPath } from "./http-guard.mjs";
 
 /**
  * Skill 无头实例的「只读浏览」钥匙。
@@ -44,8 +45,23 @@ import type { IncomingMessage, ServerResponse } from "node:http";
  * 这个插件整个是空转的。
  */
 
-/** 只读页面把项目写回去的那几条路。别的接口不归这里管 */
-const PROJECT_WRITE = /^\/api\/projects(\/|$)/;
+/*
+ * 要 owner 钥匙才准写的路。
+ *
+ * 全部**大小写不敏感**,而且判断前先把 pathname 转小写 —— connect 匹配路由时不区分大小写
+ * (node_modules/vite/dist/node/chunks/node.js:7059 拿 toLowerCase 比),所以
+ * `PUT /aPi/projects/project` 照样能落到 /api/projects 的处理函数上。原来这里的正则是
+ * 区分大小写的,等于给写闸留了一扇后门。
+ *
+ * 边界说清楚:这里挡的是**改项目**和**删任务目录**这两类不可逆的写。别的写口
+ * (比如 /api/media/upload/、/api/cards/create)没挡,因为无头实例自己的页面在替 agent
+ * 执行工具时要用它们,而那些请求和只读访客的请求在服务端长得一模一样。真要连那些一起挡,
+ * 得让页面的每一次写都带上 owner 头,是另一件事。
+ */
+const OWNER_REQUIRED = [
+  /^\/api\/projects(\/|$)/i,
+  /^\/api\/skill\/jobs\//i, // stop / delete / relaunch —— delete 会 fs.rmSync 递归删任务目录
+];
 const WRITE_METHODS = new Set(["PUT", "POST", "PATCH", "DELETE"]);
 
 function param(req: IncomingMessage, name: string): string {
@@ -64,15 +80,32 @@ function same(a: string, b: string): boolean {
   return diff === 0;
 }
 
-/** 这次请求是不是「浏览器要打开一个页面」,而不是取 js / css / 图片 */
+/** vite 自己的东西、依赖、以及明确是静态资源的扩展名 —— 这些放行,不是「打开页面」 */
+const ASSET_EXT = /\.(m?[jt]sx?|css|json|map|png|jpe?g|gif|svg|webp|avif|ico|bmp|woff2?|ttf|otf|eot|mp4|webm|mov|mp3|wav|ogg|wasm|txt|proc)$/i;
+
+/**
+ * 这次请求是不是「浏览器要打开一个页面」。
+ *
+ * **判据是白名单式的**:除了明确认得出的资源,其余 GET 一律当成导航。
+ * 原来反过来写(要求 Accept 里有 text/html、且路径没有扩展名),漏了三个口子,实测:
+ *
+ *   Accept: text/html   /              → 拦下  ✓
+ *   Accept: text/html   /index.html    → 漏放  ← vite 在这个路径上照样吐整个编辑台
+ *   Accept: 星号/星号    /              → 漏放
+ *   (没有 Accept 头)     /              → 漏放
+ *
+ * 漏放的后果不是「谁都能编辑」——连桥有 owner 校验、写盘有 x-pc-owner,两道都还在。
+ * 真正丢掉的是那张**自愈说明页**:agent 开了裸地址不会被告知正确链接,只会看到一个
+ * 默默失灵的编辑台,然后开始猜为什么工具不工作。所以这道要宽,宁可多拦。
+ */
 function isDocumentRequest(req: IncomingMessage): boolean {
   if ((req.method || "GET").toUpperCase() !== "GET") return false;
-  const accept = String(req.headers.accept || "");
-  if (!accept.includes("text/html")) return false;
-  const pathname = (req.url || "/").split("?")[0];
-  // vite 自己的东西和带扩展名的资源都不是导航
-  if (pathname.startsWith("/@") || pathname.startsWith("/node_modules/")) return false;
-  return !/\.[a-z0-9]+$/i.test(pathname);
+  const pathname = (req.url || "/").split("?")[0].toLowerCase().replace(/\/{2,}/g, "/");
+  if (pathname.startsWith("/@") || pathname.startsWith("/node_modules/") || pathname.startsWith("/api/")) return false;
+  if (pathname.startsWith("/src/") || pathname.startsWith("/catalog/") || pathname.startsWith("/media/")) return false;
+  // .html 不在 ASSET_EXT 里 —— 它是页面,要拦
+  if (ASSET_EXT.test(pathname)) return false;
+  return true;
 }
 
 function lockedPage(viewUrl: string): string {
@@ -125,10 +158,11 @@ export function viewGatePlugin(): Plugin {
           return res.end(lockedPage(viewUrlFor(req)));
         }
 
-        // ── 2. 写这一层:改项目必须有 owner 那把钥匙 ──
+        // ── 2. 写这一层:改项目 / 删任务目录必须有 owner 那把钥匙 ──
         const method = String(req.method || "GET").toUpperCase();
-        const pathname = (req.url || "/").split("?")[0];
-        if (WRITE_METHODS.has(method) && PROJECT_WRITE.test(pathname)) {
+        // 转小写 + 折掉重复斜杠,理由见 OWNER_REQUIRED 上面的说明
+        const pathname = (req.url || "/").split("?")[0].toLowerCase().replace(/\/{2,}/g, "/");
+        if (WRITE_METHODS.has(method) && OWNER_REQUIRED.some((re) => re.test(pathname))) {
           // 无头实例自己写回时会带这个头(见 src/editor/io/drafts.ts)
           const header = String(req.headers["x-pc-owner"] || "");
           if (!same(header, ownerToken)) {

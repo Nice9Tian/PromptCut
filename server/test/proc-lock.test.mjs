@@ -136,9 +136,6 @@ test("锁的是旁路 .lock,.proc 本体始终可读可写", { skip: process.pla
   await sleep(500);
 });
 
-test.after(() => {
-  try { fs.rmSync(TMP, { recursive: true, force: true }); } catch {}
-});
 
 /*
  * 下面几条测的是 Node 那半的真身 —— server/vite-plugin-skill-state.ts 里的 acquireLock,
@@ -214,4 +211,91 @@ test("并发接管同一个死锁:恰好一个赢(不是两个都以为自己独
   const won = results.filter((r) => r === "WON").length;
   assert.equal(won, 1, `恰好一个该抢到死锁的接管权,实际 ${won} 个`);
   try { fs.unlinkSync(LOCK); } catch {}
+});
+
+/*
+ * 错开时序下的双赢 —— 这是 85cad05 那一版真正的洞,而且上面那条「12 个并发」抓不到它:
+ * 12 个进程是齐步走的,恰好掩盖了「一个已经跑完、另一个才刚醒过来」这种交错。
+ *
+ * 复现手法:把 B 卡在删旧锁那一步(patch 掉 fs.unlinkSync,第一次遇到锁文件就空转一会儿),
+ * 让 A 在这期间完整跑完接管。老代码里 B 醒来之后会无条件把 A 刚建好的锁删掉、自己再赢一次。
+ */
+function raceChild({ stallMs }) {
+  const src = [
+    `const fs = (await import('node:fs')).default;`,
+    `const LOCK = ${JSON.stringify(LOCK)};`,
+    `const STALL = ${stallMs};`,
+    `if (STALL > 0) {`,
+    `  const real = fs.unlinkSync.bind(fs);`,
+    `  let stalled = false;`,
+    // 只卡「删旧锁」那一次;.claim 的清理不卡,否则测的就不是同一件事了
+    `  fs.unlinkSync = (p, ...rest) => {`,
+    `    if (!stalled && String(p) === LOCK) { stalled = true; const end = Date.now() + STALL; while (Date.now() < end) {} }`,
+    `    return real(p, ...rest);`,
+    `  };`,
+    `}`,
+    `const s = await import(${JSON.stringify(new URL("../vite-plugin-skill-state.ts", import.meta.url).href)});`,
+    `const r = s.acquireLock(${JSON.stringify(PROC)});`,
+    `process.stdout.write(JSON.stringify({ pid: process.pid, ok: r.ok, stolen: !!r.stolen }));`,
+    // 赢了就一直握着,让「两个都以为自己赢了」暴露出来
+    `if (r.ok) await new Promise((res) => setTimeout(res, 2000));`,
+  ].join("\n");
+  const f = path.join(TMP, `race-${stallMs}.mjs`);
+  fs.writeFileSync(f, src, "utf8");
+  return new Promise((resolve) => {
+    let out = "";
+    const c = spawn(process.execPath, [f], { stdio: ["ignore", "pipe", "pipe"] });
+    let err = "";
+    c.stdout.on("data", (b) => (out += b));
+    c.stderr.on("data", (b) => (err += b));
+    c.on("exit", () => resolve(out ? JSON.parse(out) : { ok: false, crashed: err.slice(0, 300) }));
+  });
+}
+
+test("错开时序接管同一个死锁:仍然只有一个赢(不是两个都以为自己独占)", async () => {
+  try { fs.unlinkSync(LOCK); } catch {}
+  try { fs.unlinkSync(LOCK + ".claim"); } catch {}
+  const dead = liveOtherPid();
+  const deadPid = dead.pid;
+  kill(dead);
+  await sleep(500);
+  fs.writeFileSync(LOCK, JSON.stringify({ pid: deadPid, at: "2020-01-01T00:00:00Z", host: "dead" }));
+
+  // B 卡在「删旧锁」那一步;A 稍后启动,在这期间完整跑完
+  const b = raceChild({ stallMs: 1500 });
+  await sleep(400);
+  const a = raceChild({ stallMs: 0 });
+  const [rb, ra] = await Promise.all([b, a]);
+
+  const winners = [ra, rb].filter((r) => r.ok);
+  assert.equal(
+    winners.length, 1,
+    `恰好一个该赢,实际 ${winners.length} 个。A=${JSON.stringify(ra)} B=${JSON.stringify(rb)}`,
+  );
+  // 锁文件里写的必须就是那个赢家
+  const held = JSON.parse(fs.readFileSync(LOCK, "utf8"));
+  assert.equal(held.pid, winners[0].pid, "锁文件里的 pid 应该是赢家的");
+  try { fs.unlinkSync(LOCK); } catch {}
+});
+
+test("接管权的 claim 文件残留了(持有者被强杀)不会把项目永久锁死", async () => {
+  try { fs.unlinkSync(LOCK); } catch {}
+  const dead = liveOtherPid();
+  const deadPid = dead.pid;
+  kill(dead);
+  await sleep(500);
+  fs.writeFileSync(LOCK, JSON.stringify({ pid: deadPid, at: "2020-01-01T00:00:00Z", host: "dead" }));
+  // 伪造一个「接管到一半被强杀」留下的 claim
+  fs.writeFileSync(LOCK + ".claim", JSON.stringify({ pid: deadPid, at: "2020-01-01T00:00:00Z" }));
+
+  const r = state.acquireLock(PROC);
+  assert.equal(r.ok, true, `残留 claim 不该挡住接管,实际:${JSON.stringify(r)}`);
+  assert.equal(fs.existsSync(LOCK + ".claim"), false, "接管完该把 claim 清掉");
+  state.releaseLock(PROC);
+});
+
+// 收尾放在最后:过滤运行(--test-name-pattern)时,它若排在前面会先跑掉、把临时目录删了,
+// 后面的用例全部 ENOENT —— 看起来像功能坏了,其实是钩子顺序。
+test.after(() => {
+  try { fs.rmSync(TMP, { recursive: true, force: true }); } catch {}
 });

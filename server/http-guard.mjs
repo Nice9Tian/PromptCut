@@ -28,6 +28,27 @@
  */
 import path from "node:path";
 
+/**
+ * 把请求 URL 归一成「拿来和路由前缀比对」的形式:**转小写 + 折掉重复斜杠**,并去掉查询串。
+ *
+ * 这一步不做会出大事。connect(vite 的中间件层)匹配路由时**不区分大小写** ——
+ * node_modules/vite/dist/node/chunks/node.js:7059:
+ *     if (path.toLowerCase().substr(0, route.length) !== route.toLowerCase()) return next(err);
+ *
+ * 所以 `POST /aPi/ai/config` 照样落到 `/api/ai/config` 的处理函数上。而守卫这边如果用
+ * 区分大小写的 startsWith("/api/") 判断,就会认为「这不是 API 请求」而放行 —— 整道卡口
+ * 被一个大写字母穿掉。实测过:跨源 text/plain 打 /aPi/ai/config,真的把 ai.json 的
+ * baseUrl 改成了攻击者的地址。
+ *
+ * 重复斜杠同理:`//api/x` 在 connect 那边也可能命中。
+ *
+ * 不做百分号解码:connect 也不解码,`/%61pi/...` 在它那儿同样匹配不上(实测回 404),
+ * 两边保持一致才不会出现「一边认一边不认」的缝。
+ */
+export function apiPath(url) {
+  return String(url || "/").split("?")[0].toLowerCase().replace(/\/{2,}/g, "/");
+}
+
 /** 同源?没有 Origin 头当自己人(curl、sidecar、同源 GET 都不带) */
 export function originOk(req) {
   const origin = req.headers?.origin;

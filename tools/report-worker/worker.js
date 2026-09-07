@@ -53,6 +53,10 @@ async function readToken(adminKey, id) {
 
 /** 定长比较,别让比较耗时把答案漏出去 */
 function sameSecret(a, b) {
+  // 空串必须先挡掉:两个空串长度相同、逐位异或也是 0,会返回 true。
+  // 现在每个调用点都另有 `!env.ADMIN_KEY` 之类兜着,构不成实际漏洞,
+  // 但这是个只等一次疏忽就会炸的雷 —— 门本身不该把「什么都没有」当成「对上了」。
+  if (!a || !b) return false;
   if (typeof a !== 'string' || typeof b !== 'string' || a.length !== b.length) return false;
   let diff = 0;
   for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
@@ -188,6 +192,11 @@ export default {
 
     let payload;
     try { payload = JSON.parse(raw); } catch { return json({ ok: false, error: '不是 JSON' }, 400); }
+    // body 是 `null` / `123` / `"x"` 时 JSON.parse 也会成功,后面 delete payload.token
+    // 直接抛 TypeError,Worker 回 500。必须是个对象才往下走。
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+      return json({ ok: false, error: '报告要是一个 JSON 对象' }, 400);
+    }
 
     /*
      * 令牌。它跟着前端打包发出去,所以拦不住铁了心要灌数据的人 ——

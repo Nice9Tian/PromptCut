@@ -1,5 +1,5 @@
 import type { Plugin, ViteDevServer } from "vite";
-import { originOk, jsonContentType } from "./http-guard.mjs";
+import { originOk, jsonContentType, apiPath } from "./http-guard.mjs";
 
 /**
  * `/api/**` 的同源守卫。**一个卡口,不是十二个。**
@@ -47,7 +47,10 @@ export function apiGuardPlugin(): Plugin {
     name: "promptcut-api-guard",
     configureServer(server: ViteDevServer) {
       server.middlewares.use((req, res, next) => {
-        const url = req.url || "/";
+        // 必须走 apiPath 归一化(转小写 + 折斜杠)。connect 匹配路由不区分大小写,
+        // 用区分大小写的 startsWith 判断的话,一个 `/aPi/ai/config` 就能把整道卡口穿掉 ——
+        // 实测真的改掉了 ai.json 里的 baseUrl。详见 http-guard.mjs 里 apiPath 的说明。
+        const url = apiPath(req.url);
         if (!url.startsWith("/api/")) return next();
 
         const deny = (error: string) => {
@@ -63,8 +66,9 @@ export function apiGuardPlugin(): Plugin {
 
         const method = String(req.method || "GET").toUpperCase();
         const hasCt = !!req.headers["content-type"];
-        const raw = RAW_BODY_PREFIXES.some((p) => url.startsWith(p));
-        if (method !== "GET" && method !== "HEAD" && hasCt && !raw && !jsonContentType(req)) {
+        // url 已经转过小写,前缀表本来就是全小写的
+        const rawBody = RAW_BODY_PREFIXES.some((p) => url.startsWith(p));
+        if (method !== "GET" && method !== "HEAD" && hasCt && !rawBody && !jsonContentType(req)) {
           return deny("这个接口只接受 Content-Type: application/json");
         }
 

@@ -128,10 +128,15 @@ const SKIP_DIRS = new Set([
   ".pc-work",          // 会话附件 / 打开 .proc 时的副本
   ".pc-projects-headless",
   ".claude",           // 本机的 agent 配置和权限
+  ".wrangler",         // wrangler dev 的本地缓存(诊断 Worker 那套)
   "release",
 ]);
 const SKIP_FILE_PATTERNS = [
   /^\.env($|\.)/,      // .env / .env.local / .env.production —— 里面是密钥
+  // wrangler 读本地密钥就用这个固定文件名,里面正是 ADMIN_KEY / FEISHU_WEBHOOK / SUBMIT_TOKEN。
+  // 它不叫 .env,所以上面那条匹配不到 —— 单列一条。
+  /^\.dev\.vars($|\.)/,
+  /^\.npmrc$/,         // 可能带私有 registry 的认证 token
   /^\.pc-last-.*\.txt$/,
   /\.lock$/,           // .proc 的独占锁,开发机上的残留
   /^AGY-TASK-.*\.md$/,

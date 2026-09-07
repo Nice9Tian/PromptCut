@@ -71,7 +71,13 @@ const RUNTIME_STATE = new Set([
  * 单个文件级别的黑名单。目录名挡不住 `.env.local` 这种躺在根上的文件 ——
  * 它里面是诊断服务的提交令牌,跟着补丁发出去等于把密钥交给每一个装了补丁的用户。
  */
-const RUNTIME_STATE_FILES = [/^\.env($|\.)/, /^\.pc-last-.*\.txt$/, /\.lock$/];
+const RUNTIME_STATE_FILES = [
+  /^\.env($|\.)/,
+  /^\.dev\.vars($|\.)/, // wrangler 的本地密钥文件,不叫 .env 但装的是同一类东西
+  /^\.npmrc$/,
+  /^\.pc-last-.*\.txt$/,
+  /\.lock$/,
+];
 
 function fail(msg) {
   console.error(`[FAIL] ${msg}`);

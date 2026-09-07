@@ -159,7 +159,17 @@ async function main() {
   const ownerToken = `own-${process.pid}-${rnd()}`;
   const viewToken = `view-${process.pid}-${rnd()}`;
   const viewUrl = `http://127.0.0.1:${port}/?draft=project&view=${encodeURIComponent(viewToken)}`;
-  writeInstance({ port, ownerToken, viewToken, viewUrl });
+  /*
+   * **ownerToken 不写进 instance.json。**
+   *
+   * SKILL.md 和 README 明确让 agent 去读这个文件(端口、写回状态都在里面)。owner 那把钥匙
+   * 要是也躺在同一个文件里,「分两把钥匙」这件事就白做了 —— agent 顺手就能把 view= 换成
+   * owner= 变成主人,而分两把的全部意义就是让这件事做不到。
+   *
+   * 它只经两条路走:环境变量交给服务端,页面地址交给无头实例自己那张页面。
+   * 全仓没有任何代码从 instance.json 读 ownerToken(grep 过)。
+   */
+  writeInstance({ port, viewToken, viewUrl });
 
   // ── 1. vite ──────────────────────────────────────────────────────
   const viteBin = path.join(ROOT, "node_modules", "vite", "bin", "vite.js");

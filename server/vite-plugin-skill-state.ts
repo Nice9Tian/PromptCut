@@ -131,27 +131,66 @@ export function acquireLock(procPath: string, retriesLeft = 3): { ok: boolean; e
     /*
      * 上一个持有者已经不在了(崩溃 / 强杀),或者这压根是个空壳锁 —— 接管。
      *
-     * **不能直接 writeFileSync 覆写**:从上面 readFileSync 判活到这一句是三步分离的,
-     * 两个实例能同时读到同一个死 pid、同时判定「可以接管」、然后双双覆写,各自都以为
-     * 自己独占 —— 于是两份 PromptCut 一起往同一个 .proc 上写,后写的整份盖掉先写的。
+     * # 接管这件事本身必须是原子的
      *
-     * 改成「删掉再回头重抢」:真正决定归属的还是开头那个原子的 wx,删除只是把跑道清空。
-     * 两个实例并发时其中一个的 unlink 会失败(文件已经不在了),没关系,它照样回去抢 wx,
-     * 而 wx 只会让一个人赢。retriesLeft 防的是病态情况下两边反复删来删去的活锁。
+     * 光「删掉再回头重抢」是不够的,这是上一版栽的地方:删除是**无条件**的,它不检查
+     * 文件是不是还是刚才判死的那一个。两个实例错开一点点就会这样 ——
+     *
+     *   B: 读到死 pid,判定可以接管            (还没删)
+     *   A: 读到死 pid → 删掉 → wx 建新锁 → 赢    (锁里现在是 A 的 pid)
+     *   B: 接着往下走,把 **A 刚建好的锁**删掉 → wx → 也赢
+     *
+     * 两边都拿到 ok:true,两份 PromptCut 一起往同一个 .proc 上写。
+     * (原来那条测试是 12 个进程齐步走,恰好掩盖了这种错开的时序。)
+     *
+     * # 改法:先原子认领「接管权」,再接管
+     *
+     * 用 `wx` 建一个旁路的 `.claim` 文件 —— 这一步是原子的,只有一个进程能建成。
+     * 建成的那个才有资格删旧锁;没建成的直接回去重新走一遍正常判定:那时旧锁要么已经
+     * 被赢家换成活着的 pid(于是它正确地被拒),要么恰好还没建好(于是它自己 wx 赢)。
+     * 两种都只有一个赢家。
+     *
+     * claim 只在这几微秒里存在。万一持有 claim 的进程正好在这中间被强杀,claim 会残留 ——
+     * 所以下面对 claim 也判一次活,死的就清掉,不让一个残留文件把项目永久锁死。
      */
     if (retriesLeft <= 0) {
       return { ok: false, error: "锁文件反复被别人抢走,请稍后再试" };
     }
+
+    const claim = file + ".claim";
     try {
-      fs.unlinkSync(file);
+      fs.writeFileSync(claim, JSON.stringify({ pid: process.pid, at: new Date().toISOString() }), { flag: "wx" });
     } catch (e) {
-      // 删不掉多半是这一瞬间被别人(外壳的内核句柄)握住了 —— 那就是别人的锁,不是我的
-      if ((e as NodeJS.ErrnoException).code !== "ENOENT") {
-        return { ok: false, by: "kernel", error: "这个项目文件正被另一个 PromptCut 打开" };
+      if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+      // 有人正在接管同一个死锁。先看看那个人还活着没
+      let holder: number | null = null;
+      try {
+        const raw = fs.readFileSync(claim, "utf8").trim();
+        const parsed = raw ? (JSON.parse(raw) as LockFile) : null;
+        if (parsed && typeof parsed.pid === "number") holder = parsed.pid;
+      } catch { /* 读不出来就当没主 */ }
+      if (holder === null || !pidAlive(holder)) {
+        try { fs.unlinkSync(claim); } catch { /* 别人抢先清了,无所谓 */ }
       }
+      // 回去重新走一遍正常判定 —— 赢家这时多半已经把新锁建好了
+      return acquireLock(procPath, retriesLeft - 1);
     }
-    const again = acquireLock(procPath, retriesLeft - 1);
-    return again.ok ? { ...again, stolen: true } : again;
+
+    try {
+      // 只有拿到 claim 的这一个进程会走到这里
+      try {
+        fs.unlinkSync(file);
+      } catch (e) {
+        // 删不掉多半是这一瞬间被别人(外壳的内核句柄)握住了 —— 那就是活锁,不是死锁
+        if ((e as NodeJS.ErrnoException).code !== "ENOENT") {
+          return { ok: false, by: "kernel", error: "这个项目文件正被另一个 PromptCut 打开" };
+        }
+      }
+      const again = acquireLock(procPath, retriesLeft - 1);
+      return again.ok ? { ...again, stolen: true } : again;
+    } finally {
+      try { fs.unlinkSync(claim); } catch { /* 已经没了就算了 */ }
+    }
   } catch (e) {
     // 锁写不出来(只读目录之类)不该把「打开项目」这件事整个挡掉
     return { ok: true, error: (e as Error).message };

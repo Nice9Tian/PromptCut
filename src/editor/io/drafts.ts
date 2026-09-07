@@ -71,7 +71,10 @@ export async function openDraft(id: string): Promise<Project> {
 }
 
 export async function deleteDraft(id: string): Promise<void> {
-  await json(await fetch(`/api/projects/${encodeURIComponent(id)}`, { method: "DELETE" }));
+  if (isViewOnly()) throw new Error("这是只读查看模式,删不了这个项目");
+  // 和 saveDraft 一样要带 owner 头:删也是写,无头实例上的写闸认的是这个头。
+  // 漏了的话,实例**自己的**页面点删除会被自己的闸拦下。
+  await json(await fetch(`/api/projects/${encodeURIComponent(id)}`, { method: "DELETE", headers: ownerHeaders() }));
 }
 
 /**
