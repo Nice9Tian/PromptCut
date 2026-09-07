@@ -1,11 +1,11 @@
 import type { JSX } from "react";
 import { createPortal } from "react-dom";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import "./AiSetupDialog.css";
 import { ApiSharePanel } from "./ApiSharePanel";
 import { SETUP_ENTRIES, isCliEntry, readFace, writeFace } from "./setupEntries";
 import type { SetupEntry, SetupEntryId } from "./setupEntries";
-import { copyDebugReport, redactDebug } from "../../ai/debug";
+import { deliverDebugReport, redactDebug } from "../../ai/debug";
 import { CAPABILITIES } from "../../ai/modelOptions";
 import type { ProviderInfo, AiProvider, SttInfo, PublicAiConfig, AiConfigPatch, ApiVendor, CliSetupJob, LoginState } from "../../ai/types";
 
@@ -81,6 +81,20 @@ export function AiSetupDialog(props: {
   const [diagState, setDiagState] = useState("");
   /** 剪贴板写不进去时,把报告摆出来让用户自己复制 */
   const [diagReport, setDiagReport] = useState("");
+  /*
+   * 报告到底去哪了,要弹一条看得见的提示。
+   *
+   * 以前只把这句话塞进「使用这一项」旁边那行小灰字里,点完 Debugger 什么动静都
+   * 没有,用户根本不知道复制成功没有。
+   */
+  const [diagToast, setDiagToast] = useState("");
+  const diagToastTimer = useRef<number | null>(null);
+  const showDiagToast = (text: string) => {
+    setDiagToast(text);
+    if (diagToastTimer.current) window.clearTimeout(diagToastTimer.current);
+    diagToastTimer.current = window.setTimeout(() => setDiagToast(""), 6000);
+  };
+  useEffect(() => () => { if (diagToastTimer.current) window.clearTimeout(diagToastTimer.current); }, []);
 
   /*
    * 导航状态只在「对话框被打开」这一刻重置。
@@ -256,14 +270,20 @@ export function AiSetupDialog(props: {
       setDiagState(e instanceof Error ? `收集失败:${e.message}` : "收集失败");
       return;
     }
-    // 收集成功了,剪贴板能不能写是另一回事:写不进去就把内容摆出来让用户自己复制,
-    // 别只丢一句「请手动复制下面的内容」却没有下面的内容。
-    try {
-      await copyDebugReport(report);
-      setDiagState("已复制到剪贴板,可以直接粘贴给我们");
-    } catch {
-      setDiagReport(report);
-      setDiagState("剪贴板不可用,请手动复制下面这段");
+    // 收集成功了,交到用户手上是另一回事:太长的存文件并打开所在文件夹,短的进剪贴板,
+    // 两条路都断了才把内容摆出来让用户自己复制 —— 别只丢一句「请手动复制下面的内容」
+    // 却没有下面的内容。不管走哪条,都要弹一条看得见的提示说清楚东西去哪了。
+    const out = await deliverDebugReport(report, "环境诊断");
+    if (out.kind === "file") {
+      setDiagState("");
+      showDiagToast(`报告较大,已存成文件并打开了所在文件夹:\n${out.file}`);
+    } else if (out.kind === "clipboard") {
+      setDiagState("");
+      showDiagToast("诊断报告已复制到剪贴板,可以直接粘贴给我们");
+    } else {
+      setDiagReport(out.text);
+      setDiagState("剪贴板和保存都不可用,请手动复制下面这段");
+      showDiagToast(`复制和保存都失败了:${out.why}\n报告已显示在下方,请手动复制`);
     }
   };
 
@@ -472,6 +492,12 @@ export function AiSetupDialog(props: {
   return createPortal(
     <div className="ais-backdrop" onClick={onClose}>
       <div className="ais-dialog" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+        {/* 报告去哪了要看得见。role=status 让读屏软件也念出来 */}
+        {diagToast && (
+          <div className="ais-toast" role="status" onClick={() => setDiagToast("")}>
+            {diagToast}
+          </div>
+        )}
         {!entry ? (
           <>
             <div className="ais-title">选择 AI 助手的驱动方式</div>

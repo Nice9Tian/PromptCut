@@ -5,7 +5,7 @@ import "katex/dist/katex.min.css";
 import { useAiChat } from "../../ai/useAiChat";
 import { renderMarkdown } from "../../ai/Markdown";
 import type { ChatAttachment, ChatMessage, MessagePart, ToolCallInfo } from "../../ai/types";
-import { conversationReport, copyDebugReport } from "../../ai/debug";
+import { conversationReport, deliverDebugReport } from "../../ai/debug";
 import { AiSetupDialog } from "./AiSetupDialog";
 import { useChatHistory } from "../../ai/useChatHistory";
 import { SttInstallProgress } from "./SttInstallProgress";
@@ -432,9 +432,12 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
   const copyDiagnostics = async () => {
     if (messages.length === 0) return setToast("还没有对话可以导出");
     try {
-      await copyDebugReport(conversationReport(messages, provider, config));
-      const truncated = messages.some((m) => m.traceTruncated);
-      setToast(truncated ? "诊断报告已复制(过大的事件已截断)" : "诊断报告已复制到剪贴板");
+      const report = conversationReport(messages, provider, config);
+      const tail = messages.some((m) => m.traceTruncated) ? "(过大的事件已截断)" : "";
+      const out = await deliverDebugReport(report, "对话诊断");
+      if (out.kind === "file") setToast(`报告较大,已存成文件并打开了所在文件夹${tail}`);
+      else if (out.kind === "clipboard") setToast(`诊断报告已复制到剪贴板${tail}`);
+      else setToast(`复制和保存都失败了:${out.why}`);
     } catch (e) {
       setToast(e instanceof Error ? e.message : "复制失败");
     }

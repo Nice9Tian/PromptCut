@@ -79,6 +79,64 @@ export function conversationReport(messages: ChatMessage[], provider: string | n
   }), null, 2);
 }
 
+/**
+ * 超过这个长度就不往剪贴板塞了,直接存文件。
+ *
+ * 挑 10 万字符是按「还贴得动吗」来的:带上每一步执行事件之后报告轻松几百 KB,
+ * 粘进聊天框既卡又没人看得下去,不如给个文件让用户直接发过来。
+ */
+export const DEBUG_INLINE_LIMIT = 100_000;
+
+export type ReportDelivery =
+  | { kind: 'clipboard' }
+  | { kind: 'file'; dir: string; file: string }
+  /** 剪贴板和存盘都不行,只能把内容摆出来让用户自己复制 */
+  | { kind: 'manual'; text: string; why: string };
+
+async function saveReportToFile(text: string, label: string): Promise<{ dir: string; file: string }> {
+  const res = await fetch('/api/ai/diagnostics/save', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text, label }),
+  });
+  const data = await res.json().catch(() => null);
+  if (!res.ok || !data?.ok) throw new Error(data?.error || `保存失败 HTTP ${res.status}`);
+  return { dir: data.dir, file: data.file };
+}
+
+/**
+ * 把报告交到用户手上,并**说清楚交到哪儿了**。
+ *
+ * 长的存文件顺带打开所在文件夹;短的进剪贴板。两条路都断了才退回「自己复制」,
+ * 由调用方把文本摆出来 —— 不能只说一句「请手动复制」却没有可复制的东西。
+ */
+export async function deliverDebugReport(text: string, label: string): Promise<ReportDelivery> {
+  if (text.length > DEBUG_INLINE_LIMIT) {
+    try {
+      return { kind: 'file', ...(await saveReportToFile(text, label)) };
+    } catch (e) {
+      // 存盘不行(打包版没有这个接口、磁盘满、权限不足)还是试试剪贴板,
+      // 贴不动总比拿不到强
+      try {
+        await copyDebugReport(text);
+        return { kind: 'clipboard' };
+      } catch {
+        return { kind: 'manual', text, why: e instanceof Error ? e.message : String(e) };
+      }
+    }
+  }
+  try {
+    await copyDebugReport(text);
+    return { kind: 'clipboard' };
+  } catch (e) {
+    try {
+      return { kind: 'file', ...(await saveReportToFile(text, label)) };
+    } catch {
+      return { kind: 'manual', text, why: e instanceof Error ? e.message : String(e) };
+    }
+  }
+}
+
 export async function copyDebugReport(text: string): Promise<void> {
   try { await navigator.clipboard.writeText(text); return; } catch { /* WebView/permissions fallback. */ }
   const field = document.createElement('textarea');

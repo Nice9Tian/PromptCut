@@ -600,8 +600,29 @@
 
 /* 「更多」里有非默认项时的提示点。收起来防误触,但不能收到开着也看不出来 */
 .ais-more-dot {
-  color: var(--ui-accent);
+  color: var(--accent);
   font-size: 14px;
   line-height: 1;
   margin-left: 3px;
+}
+
+/* 诊断报告去向提示。贴在对话框顶部,点一下就消失,6 秒自动收。
+   用 sticky 而不是 absolute:.ais-dialog 自己是滚动容器,绝对定位的会被滚走 */
+.ais-toast {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  margin-bottom: 10px;
+  padding: 9px 12px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: var(--bg-panel);
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.5;
+  /* 文件路径可能很长,要能换行;提示里的换行也得保住 */
+  white-space: pre-wrap;
+  word-break: break-all;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, .45);
+  cursor: pointer;
 }

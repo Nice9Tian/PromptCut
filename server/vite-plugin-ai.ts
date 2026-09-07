@@ -3,8 +3,23 @@ import type { ServerResponse } from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
+
+/**
+ * 在文件管理器里打开一个目录。
+ * explorer 打开目录时退出码就是 1,所以这里不看退出码,也不等它。
+ */
+function revealInFileManager(dir: string) {
+  const opener = process.platform === 'win32' ? 'explorer.exe'
+    : process.platform === 'darwin' ? 'open' : 'xdg-open';
+  try {
+    spawn(opener, [dir], { detached: true, stdio: 'ignore' }).unref();
+  } catch {
+    /* 打不开就算了,文件已经写好了,路径也会回给界面 */
+  }
+}
 
 function sendJson(res: ServerResponse, code: number, data: any) {
   if (res.headersSent) return;
@@ -252,6 +267,41 @@ export default function vitePluginAi(): Plugin {
           });
         });
       }
+
+      /**
+       * POST /api/ai/diagnostics/save —— 报告太长时存成文件,并打开它所在的文件夹。
+       *
+       * 为什么不一律走剪贴板:诊断报告带上每一步执行事件之后动辄几百 KB,
+       * 粘到聊天框里既贴不动也没人看。超过阈值就落盘,让用户直接把文件发过来。
+       *
+       * **每次单独建一个带时间戳的文件夹**,里面就这一个 txt。直接打开
+       * 「诊断报告」总目录的话,用户会看到一堆历次的文件,还得自己认哪个是刚生成的。
+       */
+      server.middlewares.use('/api/ai/diagnostics/save', async (req, res) => {
+        if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: 'POST only' });
+        let body = '';
+        let tooBig = false;
+        // 报告本身就是大块头,这里的上限只用来挡住明显不正常的请求
+        req.on('data', (c) => { body += c; if (body.length > 64 * 1024 * 1024) { tooBig = true; req.destroy(); } });
+        req.on('end', () => {
+          if (tooBig) return sendJson(res, 413, { ok: false, error: '报告超过 64MB,没有保存' });
+          try {
+            const { text, label } = JSON.parse(body || '{}');
+            if (typeof text !== 'string' || !text) return sendJson(res, 400, { ok: false, error: 'text 必填' });
+            const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..+$/, '').replace('T', '-');
+            const safeLabel = String(label || '诊断').replace(/[\\/:*?"<>|]/g, '');
+            // 和 ai.json 放一处,不往桌面上堆东西;反正马上就用资源管理器打开了
+            const root = path.join(process.env.LOCALAPPDATA || os.homedir(), 'promptcut', '诊断报告');
+            const dir = path.join(root, `${safeLabel}-${stamp}`);
+            fs.mkdirSync(dir, { recursive: true });
+            const file = path.join(dir, `${safeLabel}-${stamp}.txt`);
+            // 带 BOM:Windows 记事本没有它会把中文按 ANSI 读成乱码
+            fs.writeFileSync(file, '﻿' + text, 'utf8');
+            revealInFileManager(dir);
+            sendJson(res, 200, { ok: true, dir, file });
+          } catch (e: any) { sendJson(res, 500, { ok: false, error: e.message }); }
+        });
+      });
 
       // 排查信息:用户点「诊断」时一次性拿全,复制给我们看。
       // 里面绝不能有明文 Key —— publicConfig() 已经把它换成 { set, last4 }。
