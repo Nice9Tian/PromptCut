@@ -40,6 +40,18 @@ export function installExportClock(): void {
     window.__pcRafCount = (window.__pcRafCount ?? 0) + 1;
     return realRaf((ts) => cb(typeof window.__pcExportMs === "number" ? window.__pcExportMs : ts));
   };
+  /*
+   * 关于截图窗口里 rAF 多跑几次的问题 —— 结论:**不用管**,别再往这里加东西。
+   * 截图那一小段虚拟时间是自由跑的,rAF 会按真实节奏多触发几次。曾担心 canvas 粒子这类循环
+   * 会因此多走步,试过两种堵法,都错了:
+   *   - CDP Emulation.setScriptExecutionDisabled:把 pending 的 rAF 回调整个丢掉,Motion 的帧循环
+   *     就此死掉,动画从第 5 帧起全冻住 —— 三趟冻得一模一样,逐字节比对看不出来,只有比同一趟里
+   *     第 10 帧和第 30 帧才发现。
+   *   - 在这层包装里把回调按住、截完再发:改变了回调落在哪个 vsync 上,word-rotate 换词那一帧
+   *     出现 1/5 的抖动;不按住是 0/5。
+   * 而实测不堵也是确定的:时间戳被钉住,同一帧里多出来的 tick 对读时间的循环(Motion、word-rotate)
+   * 算出同一个数,对按 delta 走的循环(tsParticles)delta 为 0 就是空转 —— particles 6 趟 0 差异。
+   */
 
   /*
    * DOM 变动计数 —— 静态帧判定的主力。
@@ -54,6 +66,27 @@ export function installExportClock(): void {
    * 因为 Motion 要到下一帧才建动画,而画面已经在变了)。
    */
   patchAnimate();
+
+  /*
+   * 随机数钉死。canvas 粒子这类效果每帧都 Math.random(),导两遍就是两个画面。
+   * 导出页里换成带种子的 mulberry32:同一个种子出同一串数;每次重挂载卡片
+   * (__pcRestartCards)把种子拨回起点,于是复用同一个页面连烘两趟也一致。
+   * 不是「更随机」,是「可复现的随机」—— 导出要的正是后者。时间轴还没就位
+   * (__pcExportMs 不是数字)时回落到真随机,和 performance.now 的处理一致。
+   */
+  const realRandom = Math.random;
+  let rngState = 1;
+  const seeded = () => {
+    rngState = (rngState + 0x6d2b79f5) | 0;
+    let t = rngState;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  window.__pcResetRandom = (seed = 1) => {
+    rngState = seed | 0;
+  };
+  Math.random = () => (typeof window.__pcExportMs === "number" ? seeded() : realRandom());
 
   window.__pcMutationCount = 0;
   new MutationObserver((records) => {

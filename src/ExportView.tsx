@@ -177,6 +177,8 @@ export default function ExportView() {
       // flushSync:重挂载在这次调用里同步完成。否则 React 的调度任务落在下一格虚拟时间的哪个位置
       // 两次导出不一样,卡片的第一帧就会差一帧。
       window.__pcRestartCards = () => {
+        // 随机种子先拨回起点,再重挂载:卡片挂载时抽的随机数(粒子初始位置之类)每趟都一样
+        window.__pcResetRandom?.(1);
         flushSync(() => setPlayToken((n) => n + 1));
       };
 
@@ -235,6 +237,11 @@ export default function ExportView() {
         video: Array.from(document.querySelectorAll("video")).some((v) => {
           const s = getComputedStyle(v);
           return s.visibility !== "hidden" && parseFloat(s.opacity) > 0;
+        }),
+        // canvas 上画的东西不在 DOM 里,MutationObserver 看不见;有可见的 canvas 就不敢判静止
+        canvas: Array.from(document.querySelectorAll("canvas")).some((c) => {
+          const s = getComputedStyle(c);
+          return s.visibility !== "hidden" && parseFloat(s.opacity) > 0 && c.width > 0 && c.height > 0;
         }),
       });
       /**

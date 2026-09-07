@@ -281,6 +281,11 @@ export async function bakeFrames(bakery, opts = {}) {
    * patchAnimate 从根上和 document.timeline 解耦了(见那里的「三个时钟」)。
    */
   const shoot = async () => {
+    // ⚠ 这一小段自由跑的虚拟时间里 rAF 会按真实节奏多触发几次 —— **不用堵,别改**。
+    // 试过 CDP 关脚本执行(Motion 帧循环死掉,动画从第 5 帧起全冻住,三趟冻得一样,逐字节看不出来)
+    // 和让包装 rAF 按住回调(word-rotate 换词那帧 1/5 抖动),都比不堵更糟。不堵是确定的:时间戳被
+    // 钉住,读时间的循环多算几轮是同一个数,按 delta 走的(tsParticles)零 delta 就是空转。
+    // 详见 exportClock.ts 里 rAF 包装旁的说明。
     const shot = page.screenshot(shotOpts);
     await client.send('Emulation.setVirtualTimePolicy', { policy: 'advance' });
     try {
@@ -354,9 +359,9 @@ export async function bakeFrames(bakery, opts = {}) {
     // finished:这一帧被 __pcSyncAnims 收束的动画数。动画在这一帧从"还差一小段"跳到终态,画面变了,
     // 但收束后 anims 里已经没有它、DOM 也没动 —— 只看 anims 会在动画结束那一帧误判静止。
     const isStatic = !!probe && probe.anims === 0 && probe.finished === 0 && probe.mut === before.mut
-      && probe.raf === before.raf && !probe.video;
+      && probe.raf === before.raf && !probe.video && !probe.canvas;
     if (process.env.PC_STATIC_TRACE) {
-      console.log(`  静态判定 帧${frameIndex}: anims=${probe?.anims} finished=${probe?.finished} mut=${before.mut}->${probe?.mut} raf=${before.raf}->${probe?.raf} video=${probe?.video} => ${isStatic ? '静止' : '在变'}`);
+      console.log(`  静态判定 帧${frameIndex}: anims=${probe?.anims} finished=${probe?.finished} mut=${before.mut}->${probe?.mut} raf=${before.raf}->${probe?.raf} video=${probe?.video} canvas=${probe?.canvas} => ${isStatic ? '静止' : '在变'}`);
     }
     return isStatic;
   };
