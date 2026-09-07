@@ -89,8 +89,15 @@ function sideToVars(side: PaletteSide, mode: SkinMode): Record<string, string> {
     "ui-fg-muted": side.fgMuted,
     "ui-fg-faint": side.fgFaint ?? mix(side.fgMuted, l1, 62),
     "ui-accent": side.accent,
-    "ui-accent-hover": mix(side.accent, "#ffffff", dark ? 82 : 78),
-    "ui-accent-press": mix(side.accent, "#000000", dark ? 78 : 74),
+    // 悬停往哪边混要看强调色本身的明度。原来一律往白里混,那是按「深色主题的
+    // 强调色总是中等饱和」写的;换成淡色强调(比如浅青)之后,再往白里混就几乎
+    // 看不出变化,按钮悬停等于没反应。淡色就反过来往黑里混。
+    "ui-accent-hover": relLuminance(side.accent) > 0.55
+      ? mix(side.accent, "#000000", 88)
+      : mix(side.accent, "#ffffff", dark ? 82 : 78),
+    "ui-accent-press": relLuminance(side.accent) > 0.55
+      ? mix(side.accent, "#000000", 76)
+      : mix(side.accent, "#000000", dark ? 78 : 74),
     "ui-accent-fg": dark ? l0 : "#ffffff",
     "ui-accent-soft": dark ? mix(side.accent, l1, 24) : mix(side.accent, "#ffffff", 14),
     "ui-danger": sem.danger,
@@ -160,7 +167,7 @@ export const skins: Skin[] = [
   }),
 ];
 
-export const DEFAULT_SKIN = "steel-dark";
+export const DEFAULT_SKIN = "indigo-dark";
 
 export function getSkin(id: string): Skin {
   return skins.find((s) => s.id === id) ?? skins[0];

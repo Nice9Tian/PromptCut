@@ -78,12 +78,12 @@ export const palettes: Palette[] = [
     blurb: "底色带蓝紫倾向,强调色是紫。偏消费端的创作气质,轨道色更饱和、更活跃。",
     dark: {
       surfaces: ["#0C0E16", "#161A26", "#1E2331", "#282E3E", "#343B4D"],
-      fg: "#E6E9F2", fgMuted: "#98A0B8", accent: "#9D8CF5",
+      fg: "#E6E9F2", fgMuted: "#98A0B8", accent: "#AFFAFA",
       tracks: T("#4FB3C9", "#5FBB8F", "#A98CF0", "#E0B356", "#E77FB0", "#7F95F5", "#E08A63"),
     },
     light: {
       surfaces: ["#DCDFE8", "#ECEEF4", "#FFFFFF", "#E3E6EF", "#FFFFFF"],
-      fg: "#1A1D29", fgMuted: "#565D73", accent: "#5B46C9", border: "#C7CBD9",
+      fg: "#1A1D29", fgMuted: "#565D73", accent: "#0E7A85", border: "#C7CBD9",
       tracks: T("#23808F", "#2F7A58", "#6A4BC0", "#9A6F1C", "#B34B7F", "#4A5CC4", "#A9532C"),
     },
   },
