@@ -1,0 +1,138 @@
+/* Skill 模式对话框。基础壳用 ui/toolbar.css 的 .pc-dialog,这里只放它自己的东西 */
+.pc-skill-dialog {
+  width: 560px;
+  max-width: calc(100vw - 32px);
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+}
+
+.pc-skill-intro {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--ui-fg-muted);
+}
+
+/* 两张驱动卡:Claude / Codex */
+.pc-skill-providers {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.pc-skill-provider {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid var(--ui-border-strong);
+  border-radius: var(--ui-radius, 6px);
+  background: var(--ui-panel-2);
+  color: var(--ui-fg);
+  text-align: left;
+  cursor: pointer;
+  font-family: inherit;
+  transition: border-color 160ms cubic-bezier(0.16, 1, 0.3, 1), background 160ms;
+}
+.pc-skill-provider:hover:not(:disabled) {
+  border-color: color-mix(in oklab, var(--ui-border-strong) 60%, var(--ui-fg));
+}
+.pc-skill-provider.is-on {
+  border-color: var(--ui-accent);
+  background: var(--ui-accent-soft);
+}
+.pc-skill-provider:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.pc-skill-provider-name {
+  font-size: 14px;
+  font-weight: 600;
+}
+.pc-skill-provider-desc {
+  font-size: 12px;
+  color: var(--ui-fg-muted);
+  line-height: 1.5;
+}
+
+/* 进度:一行一步 */
+.pc-skill-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+}
+.pc-skill-step {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  color: var(--ui-fg-muted);
+}
+.pc-skill-step.is-done { color: var(--ui-fg); }
+.pc-skill-step.is-active { color: var(--ui-accent); }
+.pc-skill-step.is-failed { color: var(--ui-danger); }
+.pc-skill-step-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: 0 0 auto;
+  opacity: 0.7;
+}
+
+.pc-skill-meta {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 12px;
+  font-size: 12px;
+  color: var(--ui-fg-muted);
+}
+.pc-skill-meta code {
+  font-family: var(--ui-font-mono, ui-monospace, monospace);
+  color: var(--ui-fg);
+  overflow-wrap: anywhere;
+}
+
+.pc-skill-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.pc-skill-msg {
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  color: var(--ui-fg);
+  background: var(--ui-panel-2);
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius, 4px);
+  padding: 8px 10px;
+}
+.pc-skill-msg.is-err { color: var(--ui-danger); }
+
+/* 历史任务 */
+.pc-skill-jobs {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 180px;
+  overflow-y: auto;
+}
+.pc-skill-job {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border-radius: var(--ui-radius, 4px);
+  font-size: 12px;
+  color: var(--ui-fg-muted);
+  cursor: pointer;
+  background: transparent;
+  border: 1px solid transparent;
+  text-align: left;
+  font-family: inherit;
+}
+.pc-skill-job:hover { background: var(--ui-panel-2); }
+.pc-skill-job.is-on { border-color: var(--ui-accent); color: var(--ui-fg); }
+.pc-skill-job-name { flex: 1 1 auto; color: var(--ui-fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pc-skill-job-state { flex: 0 0 auto; }
+.pc-skill-job-state.is-live { color: var(--ui-success); }

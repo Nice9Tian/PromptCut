@@ -107,6 +107,9 @@ export default function vitePluginAi(): Plugin {
     name: 'vite-plugin-ai',
     configureServer(server) {
       server.httpServer?.on('listening', () => {
+        // 无头实例(PROMPTCUT_HEADLESS=1)不写这个锁文件:它是给没指定端口的 mcp-server 兜底的,
+        // 被无头实例盖掉会把用户自己那份 AI 面板指到错误的端口上
+        if (process.env.PROMPTCUT_HEADLESS === '1') return;
         try {
           const addr = server.httpServer?.address();
           if (addr && typeof addr !== 'string') {

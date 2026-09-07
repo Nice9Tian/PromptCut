@@ -12,6 +12,8 @@ import {
   IconNew,
   IconMore,
   IconPalette,
+  IconNewChat,
+  IconImport,
   IconOpen,
   IconRedo,
   IconSave,
@@ -21,6 +23,8 @@ import {
 import { type LayoutMode, setLayoutMode, useLayoutMode } from "./layoutMode";
 import { ProjectSettingsDialog } from "./ProjectSettingsDialog";
 import { SkinDialog } from "./SkinDialog";
+import { SkillDialog } from "./SkillDialog";
+import { applyCombine, summarizeCombine } from "./io/combineImport";
 import "../ui/toolbar.css";
 
 /** 顶栏宽度档位:宽档(全部展开)、中档(图标收缩)、窄档(折叠更多菜单) */
@@ -89,6 +93,8 @@ export function TopBar() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [skinOpen, setSkinOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [skillOpen, setSkillOpen] = useState(false);
+  const mergeInput = useRef<HTMLInputElement>(null);
   const [moreBtnRect, setMoreBtnRect] = useState<DOMRect | null>(null);
 
   const name = useStore((s) => s.project.name);
@@ -339,6 +345,21 @@ export function TopBar() {
     window.dispatchEvent(new Event("pc-go-home"));
   };
 
+  /**
+   * 把一份 .proc(通常是 Skill 的结果)三方合并进当前项目。
+   * 没有启动时的快照就拿当前项目当基线 —— 退化成「把对方多出来的加进来」,不会盖掉自己的。
+   * 从 Skill 对话框里合并会带上真正的基线,冲突判断更准;这个入口是给手头只有文件的情况。
+   */
+  const mergeFromFile = async (file: File) => {
+    try {
+      const report = applyCombine(await file.text(), null);
+      alert(`已把「${file.name}」合并到当前项目(记得保存):
+${summarizeCombine(report)}`);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "合并失败");
+    }
+  };
+
   const toggleMoreMenu = () => {
     if (!menuOpen && moreBtnRef.current) {
       setMoreBtnRect(moreBtnRef.current.getBoundingClientRect());
@@ -446,6 +467,33 @@ export function TopBar() {
             <IconPalette />
             <span className="pc-btn-label">皮肤…</span>
           </button>
+          {/* Skill 模式:把项目交给桌面版的 Claude Code / Codex 去改,改完再合回来 */}
+          <button
+            type="button"
+            className="pc-btn"
+            style={{ width: "100%", justifyContent: "flex-start" }}
+            title="把当前项目交给 Claude Code / Codex 的桌面版去改"
+            onClick={() => {
+              setMenuOpen(false);
+              setSkillOpen(true);
+            }}
+          >
+            <IconNewChat />
+            <span className="pc-btn-label">Skill 模式…</span>
+          </button>
+          <button
+            type="button"
+            className="pc-btn"
+            style={{ width: "100%", justifyContent: "flex-start" }}
+            title="挑一份 .proc,把它的改动三方合并进当前项目"
+            onClick={() => {
+              setMenuOpen(false);
+              mergeInput.current?.click();
+            }}
+          >
+            <IconImport />
+            <span className="pc-btn-label">合并 Skill 结果…</span>
+          </button>
           {/* 布局和项目设置只在窄档收进来,宽档它们还在条上 */}
           {tier === "narrow" && (
             <>
@@ -518,6 +566,14 @@ export function TopBar() {
 
       {/* 项目设置对话框 */}
       <SkinDialog open={skinOpen} onClose={() => setSkinOpen(false)} />
+      <SkillDialog open={skillOpen} onClose={() => setSkillOpen(false)} />
+      <input
+        ref={mergeInput}
+        type="file"
+        accept={`${PROC_EXT},.json`}
+        hidden
+        onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) void mergeFromFile(f); }}
+      />
       <ProjectSettingsDialog
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}

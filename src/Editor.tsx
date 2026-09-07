@@ -109,7 +109,10 @@ export default function Editor() {
 
   useEffect(() => {
     const p = getState().project;
-    if (p.tracks.every((t) => t.clips.length === 0)) {
+    // 无头实例(?headless=1,scripts/headless.mjs 开的页面)不塞演示卡:
+    // 那会把一份空快照悄悄变成 10 张演示卡,合并回去时全算成 agent 新加的
+    const headless = new URLSearchParams(location.search).has("headless");
+    if (!headless && p.tracks.every((t) => t.clips.length === 0)) {
       for (const c of [...magicuiDemoClips, ...nativeDemoClips]) {
         actions.addCardClip(c.cardId, c.start, { duration: c.end - c.start, params: c.params });
       }
