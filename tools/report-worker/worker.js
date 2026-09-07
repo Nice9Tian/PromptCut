@@ -16,11 +16,18 @@
 /** 收多大的报告。比前端的 4MB 略松一点,挡住明显不正常的请求就行 */
 const MAX_BYTES = 6 * 1024 * 1024;
 
-/** 报告在 KV 里留多久(秒)。90 天,过期自动清,不用手动打扫 */
-const TTL = 90 * 24 * 3600;
+/*
+ * 报告**不设过期**。
+ *
+ * 原来挂了 90 天的 TTL,想的是「不用手动打扫」。但那等于替人决定了
+ * 「只有近期的报告有用」—— 隔半年回头对一个老问题,东西已经自己删没了。
+ * 该不该删由收件箱里的删除按钮决定,不由计时器决定。
+ *
+ * KV 免费额度 1GB。真堆满了再谈清理,而不是提前替人做主。
+ */
 
-/** 列表页一次列多少条 */
-const LIST_LIMIT = 50;
+/** 列表一页最多列多少条。1000 是 KV list 的上限,客户端拿游标翻完为止 */
+const LIST_LIMIT = 1000;
 
 function cors(res) {
   // 前端用 text/plain 发,属于 CORS 简单请求,不会有预检;
@@ -100,7 +107,10 @@ export default {
         return new Response('nope', { status: 404 });
       }
       const cursor = url.searchParams.get('cursor') || undefined;
-      const out = await env.REPORTS.list({ limit: LIST_LIMIT, cursor });
+      // limit 可以调小,主要是给「翻页翻得对不对」这种自检用;上限还是 LIST_LIMIT
+      const asked = Number(url.searchParams.get('limit'));
+      const limit = Number.isFinite(asked) && asked > 0 ? Math.min(asked, LIST_LIMIT) : LIST_LIMIT;
+      const out = await env.REPORTS.list({ limit, cursor });
       return json({
         ok: true,
         keys: out.keys.map((k) => ({ id: k.name, ...k.metadata })),
@@ -138,7 +148,7 @@ export default {
       size: stored.length,
       ip: req.headers.get('cf-connecting-ip') || '',
     };
-    await env.REPORTS.put(id, stored, { expirationTtl: TTL, metadata: meta });
+    await env.REPORTS.put(id, stored, { metadata: meta });
 
     const link = `${url.origin}/r/${id}?k=${env.ADMIN_KEY || ''}`;
     await notifyFeishu(env, { id, label: meta.label, size: stored.length, payload, link });

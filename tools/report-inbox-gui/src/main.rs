@@ -19,6 +19,14 @@ use std::thread;
 use eframe::egui;
 use net::{Item, Msg};
 
+/*
+ * 一次刷新最多拉多少条。
+ *
+ * 不是「只要近期的」,是给失控情况留个刹车 —— 真堆到这个数,界面里
+ * 一条条翻本来也没意义了,该去查是不是有人在灌数据。
+ */
+const MAX_ITEMS: usize = 5000;
+
 fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -216,19 +224,31 @@ impl App {
         }
     }
 
-    fn drain(&mut self) {
+    fn drain(&mut self, ctx: &egui::Context) {
         while let Ok(msg) = self.rx.try_recv() {
             self.busy = false;
             match msg {
                 Msg::Listed(items, cursor) => {
-                    let got = items.len();
                     self.items.extend(items);
                     self.cursor = cursor;
-                    self.status = format!(
-                        "拿到 {got} 条,共 {}{}",
-                        self.items.len(),
-                        if self.cursor.is_some() { "(还有更多)" } else { "" }
-                    );
+                    /*
+                     * 没翻完就自己接着翻。
+                     *
+                     * 原来这里停下来等用户点「加载更多」,等于默认只给最近一页 ——
+                     * 「只有近期的报告有用」不该由界面替人决定。一次拉全,
+                     * 边拉边显示,用户不用管有几页。
+                     */
+                    if self.cursor.is_some() && self.items.len() < MAX_ITEMS {
+                        self.status = format!("已拿到 {} 条,继续…", self.items.len());
+                        self.refresh(ctx, true);
+                    } else if self.cursor.is_some() {
+                        self.status = format!(
+                            "已拿到 {} 条,到了本次上限 {MAX_ITEMS} 条。删掉一些或者提高 MAX_ITEMS",
+                            self.items.len()
+                        );
+                    } else {
+                        self.status = format!("共 {} 条,全部拉完", self.items.len());
+                    }
                 }
                 Msg::Body(id, text) => {
                     // 取的过程中用户可能已经点了别的,别把内容贴错行
@@ -254,7 +274,7 @@ impl App {
 impl eframe::App for App {
     // eframe 0.36 起 App 直接拿到 Ui,中央面板由框架给好,不用自己开 CentralPanel
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        self.drain();
+        self.drain(&ui.ctx().clone());
         let ctx = ui.ctx().clone();
 
         // ---- 顶上:连哪儿、拿什么钥匙 ----
@@ -333,13 +353,8 @@ impl eframe::App for App {
                             open_id = Some(item.id.clone());
                         }
                     }
-                    if self.cursor.is_some()
-                        && ui.add_enabled(!self.busy, egui::Button::new("加载更多")).clicked()
-                    {
-                        open_id = None;
-                        delete_id = None;
-                        // 这里不能直接调 self.refresh:上面借着 self 在迭代
-                        ui.data_mut(|d| d.insert_temp("load_more".into(), true));
+                    if self.busy && self.cursor.is_some() {
+                        ui.weak("还在拉后面几页…");
                     }
                 });
 
@@ -380,9 +395,7 @@ impl eframe::App for App {
         });
 
         // 上面借用结束了,这里才动 self
-        if ctx.data_mut(|d| d.remove_temp::<bool>("load_more".into()).is_some()) {
-            self.refresh(&ctx, true);
-        }
+
         if ctx.data_mut(|d| d.remove_temp::<bool>("save".into()).is_some()) {
             self.save_to_file();
         }
