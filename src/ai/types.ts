@@ -110,6 +110,25 @@ export type MessagePart =
   | { kind: "status"; text: string }
   | ({ kind: "tool" } & ToolCallInfo);
 
+/**
+ * 这条回复实际是拿什么跑出来的。
+ *
+ * 必须逐条记,不能只记「现在选的是什么」:模型 / 推理档 / 加速档都是**发送那一刻
+ * 现读**的(见 modelOptions.readChoice),用户中途换一次,同一段对话里前后几条就
+ * 来自不同的模型;分工模式下还会按角色临时改用别家。排查时只看当前选择会认错人。
+ */
+export interface MessageRuntime {
+  provider: AiProvider;
+  /** 空 = 用该驱动自己的默认模型 */
+  model: string;
+  /** 推理强度档;空 = 跟随驱动自己的默认 */
+  effort: string;
+  /** 加速档(目前只有 Claude Code 有) */
+  fast: boolean;
+  /** 文本协议模式:工具调用写在回复正文里。工具相关的异常先看这一条 */
+  toolProtocol: boolean;
+}
+
 export interface ChatMessage {
   id: string;
   role: "user" | "assistant";
@@ -132,6 +151,8 @@ export interface ChatMessage {
   progress?: RunProgress;
   outcome?: string;
   usage?: unknown;
+  /** 这条回复用的模型/推理档/加速档/文本协议。旧历史里没有,报告里显示为「未记录」 */
+  runtime?: MessageRuntime;
   trace?: { at: string; event: RunEvent }[];
   traceTruncated?: boolean;
   traceBytes?: number;

@@ -1,6 +1,6 @@
 import { recordTrace } from './debug';
 import { useState, useEffect, useRef, useCallback } from "react";
-import type { AiProvider, ChatMessage, ChatAttachment, MessagePart, ProviderInfo, RunEvent, SttInfo, LoginState, PublicAiConfig, AiConfigPatch, CliSetupJob } from "./types";
+import type { AiProvider, ChatMessage, ChatAttachment, MessagePart, MessageRuntime, ProviderInfo, RunEvent, SttInfo, LoginState, PublicAiConfig, AiConfigPatch, CliSetupJob } from "./types";
 import { parseSseChunks } from "./sse";
 import { readChoice } from "./modelOptions";
 import { getScript } from "./script";
@@ -368,9 +368,18 @@ export function useAiChat(opts?: { mock?: boolean }) {
       await runOrchestration(
         plan,
         text,
-        async (task, prompt, override) =>
-          runRoleTask({
-            provider: override ?? provider,
+        async (task, prompt, override) => {
+          // 角色可以被派到别家驱动上跑,记录要跟着**实际用的那家**走,
+          // 不是面板上选中的那家 —— 否则报告里整段对话看着都是同一个模型。
+          const runProvider = override ?? provider;
+          // override 来自角色卡,类型上是任意字符串。记录里只认已知的那几家,认不出就
+          // 退回面板上选中的这家 —— 报告里宁可写得保守,也别塞一个野值进去。
+          const recorded = (["claude", "agy", "codex", "api"] as const).find((p) => p === runProvider) ?? provider;
+          const runtime: MessageRuntime = {
+            provider: recorded, ...readChoice(recorded), toolProtocol: !!config?.toolProtocol,
+          };
+          return runRoleTask({
+            provider: runProvider,
             prompt,
             roleId: task.roleId,
             signal: ac.signal,
@@ -379,14 +388,15 @@ export function useAiChat(opts?: { mock?: boolean }) {
                 const id = `${Date.now()}-${task.id}`;
                 setMessages((prev) => [...prev, {
                   id, role: "assistant", roleId, text: "",
-                  parts: [], tools: [], statuses: [], pending: true, startedAt: Date.now(),
+                  parts: [], tools: [], statuses: [], pending: true, startedAt: Date.now(), runtime,
                 }]);
                 return id;
               },
               updateMessage: (id, patch) =>
                 setMessages((prev) => prev.map((m) => (m.id === id ? patch(m) : m))),
             },
-          }),
+          });
+        },
         setOrchestration,
         ac.signal,
       );
@@ -411,7 +421,12 @@ export function useAiChat(opts?: { mock?: boolean }) {
       if (verdict.parallel && (await runTeamMode(text))) return;
     }
 
-    abort(); 
+    abort();
+
+    // 发送这一刻就把「这条用什么跑」定下来,而且**发出去的和记下来的是同一份**。
+    // 分开各读一次的话,用户在流式过程中换了模型,记录就会和实际跑的对不上。
+    const choice = readChoice(provider);
+    const runtime: MessageRuntime = { provider, ...choice, toolProtocol: !!config?.toolProtocol };
 
     const userMsg: ChatMessage = {
       id: Date.now().toString(),
@@ -430,6 +445,7 @@ export function useAiChat(opts?: { mock?: boolean }) {
       statuses: [],
       pending: true,
       startedAt: Date.now(),
+      runtime,
       trace: [],
     };
 
@@ -506,9 +522,9 @@ export function useAiChat(opts?: { mock?: boolean }) {
           provider,
           prompt: text,
           sessionId,
-          // 模型 / 推理强度 / 加速档:每次发送时现读,用户在面板上换完立刻生效,
-          // 不用等下一次会话。哪家支持哪几样由 runner 端翻译,这里只管把选择传过去。
-          ...readChoice(provider),
+          // 模型 / 推理强度 / 加速档:上面发送那一刻已经读好(choice),用户在面板上
+          // 换完下一条立刻生效。哪家支持哪几样由 runner 端翻译,这里只管把选择传过去。
+          ...choice,
           // 素材库里的东西一并列进附件清单:模型不用先花一轮 list_media 才知道
           // 手上有哪些素材,「给每个视频配字幕」这类要求也才有确定的对象。
           attachments: [...(attachments ?? []), ...mediaAsAttachments()],

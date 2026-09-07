@@ -597,3 +597,11 @@
     border-color: color-mix(in oklab, var(--accent) 70%, var(--hairline));
   }
 }
+
+/* 「更多」里有非默认项时的提示点。收起来防误触,但不能收到开着也看不出来 */
+.ais-more-dot {
+  color: var(--ui-accent);
+  font-size: 14px;
+  line-height: 1;
+  margin-left: 3px;
+}

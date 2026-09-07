@@ -9,6 +9,34 @@ import { copyDebugReport, redactDebug } from "../../ai/debug";
 import { CAPABILITIES } from "../../ai/modelOptions";
 import type { ProviderInfo, AiProvider, SttInfo, PublicAiConfig, AiConfigPatch, ApiVendor, CliSetupJob, LoginState } from "../../ai/types";
 
+/**
+ * 把「非默认、又容易让排查跑偏」的设置挑成人话，放在诊断报告最前面。
+ *
+ * 这些值服务端那份 config 里全都有，问题在于没人会去翻。文本协议模式尤其：
+ * 它一开，模型就改用回复正文里的文本块下达工具调用，工具相关的症状全变样，
+ * 而开关本身藏在「更多」里，用户自己都未必记得点过。
+ */
+function notableSettings(cfg: PublicAiConfig | null | undefined, current: AiProvider | null): string[] {
+  if (!cfg) return ["拿不到服务端配置（/api/ai/diagnostics 没返回 config），下面的内容可能不全"];
+  const out: string[] = [];
+  if (cfg.toolProtocol) {
+    out.push("⚠ 文本协议模式已开启（默认是关的）——模型改用回复正文里的文本块下达工具调用。工具相关的异常先怀疑这里");
+  }
+  out.push(`当前使用：${current ?? "（还没选）"}；配置里的默认：${cfg.defaultProvider ?? "（未设）"}`);
+  if (current === "api") {
+    out.push(`API 直连：${cfg.api.vendor}，模型 ${cfg.api.model || "（未填）"}，maxTokens ${cfg.api.maxTokens}`);
+    // redactDebug 会把 apiKey 整个换成 [REDACTED]，连「到底配没配」都看不出来了。
+    // 这两个字段名躲开它的匹配，好让支持能分清「没配 Key」和「Key 不对」。
+    out.push(cfg.api.apiKey.set ? `API Key：已配置，末四位 ${cfg.api.apiKey.last4}` : "API Key：未配置");
+    if (cfg.api.baseUrl) out.push(`走了自定义 baseUrl：${cfg.api.baseUrl}`);
+  }
+  // 模型清单是空的，面板上就只有「默认」一项可选 —— 用户常报「换不了模型」其实是这个
+  for (const id of ["claude", "codex", "agy"] as const) {
+    if (!cfg.cliModels?.[id]) out.push(`${id} 没配模型清单，面板上只会有「默认」一项`);
+  }
+  return out;
+}
+
 export function AiSetupDialog(props: {
   open: boolean; onClose: () => void;
   providers: ProviderInfo[];
@@ -209,8 +237,12 @@ export function AiSetupDialog(props: {
       const server = await res.json();
       report = JSON.stringify(
         redactDebug({
-          format: "PromptCut AI setup diagnostics v1",
+          format: "PromptCut AI setup diagnostics v2",
           copiedAt: new Date().toISOString(),
+          // 摆在最前面:和默认值不一样、又最容易让人查错方向的几条。
+          // 服务端那份 config 里本来就有,但埋在几百行 JSON 底下没人翻得到 ——
+          // 「用户其实开着文本协议模式」这种乌龙就是这么来的。
+          notable: notableSettings(server?.config, current),
           browser: { userAgent: navigator.userAgent, language: navigator.language },
           openedEntry,
           currentProvider: current,
@@ -490,12 +522,19 @@ export function AiSetupDialog(props: {
             )}
             <div className="ais-footer">
               <div className="ais-footer-actions">
+                {/*
+                  收起来是为了防误触,但不能收到「开着也看不出来」。里面有非默认项时
+                  按钮上挂个点:用户不展开也知道这儿动过,不至于一直开着文本协议模式
+                  却在别处找原因。
+                */}
                 <button
                   className="ais-btn ais-more-btn"
                   aria-expanded={moreOpen}
                   onClick={() => setMoreOpen((v) => !v)}
+                  title={toolProtocol ? "文本协议模式开着" : undefined}
                 >
-                  更多{moreOpen ? " ▴" : " ▾"}
+                  更多{toolProtocol && <span className="ais-more-dot" aria-label="有非默认设置">•</span>}
+                  {moreOpen ? " ▴" : " ▾"}
                 </button>
                 <span className="ais-footer-spacer" />
                 <button className="ais-btn" onClick={onClose}>关闭</button>
