@@ -7,9 +7,13 @@ import { stepTimeline } from "./step-timeline";
 import { textCards } from "./batch-text";
 import { dataCards } from "./batch-data";
 import { timelineCards } from "./batch-timeline";
+import { lottieCard } from "./lottie";
+import { particlesCard } from "./particles";
 
 /** 自家用 Motion 写的卡。每张卡一个文件,在这里汇总。 */
 export const nativeCards: CardDef<any>[] = [
+  lottieCard,
+  particlesCard,
   odometer,
   blurText,
   ringMetric,
