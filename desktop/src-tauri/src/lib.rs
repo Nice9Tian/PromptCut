@@ -51,6 +51,36 @@ fn editor_url_with_open(open: Option<String>) -> String {
 /// Holds the sidecar process ID so we can kill the whole tree on exit.
 struct SidecarPid(Mutex<Option<u32>>);
 
+/* ── .proc 独占锁的三个命令 ──────────────────────────────────────────────
+ *
+ * 真正的独占只有外壳做得到:Windows 的共享模式由内核管,进程一死内核就收走。
+ * Node 那半(server/vite-plugin-skill-state.ts)负责原子创建锁文件和 pid 兜底,
+ * 内核那一层的句柄由这里握着 —— 两半合起来才既挡得住并发、又不会因为进程被强杀
+ * 而留下一把永远解不开的锁。锁的是旁路的 `<name>.proc.lock`,不是 .proc 本体
+ * (锁本体会把自家 sidecar 的读写一起挡掉,见 proc_lock.rs 的说明)。
+ *
+ * 前端在浏览器里跑时这几个命令不存在,那边只走 Node 那半 —— 够用,只是少了
+ * 「被强杀也能自动解锁」这一层。
+ */
+
+#[tauri::command]
+fn acquire_proc_lock(
+    locks: tauri::State<'_, proc_lock::ProcLocks>,
+    proc_path: String,
+) -> Result<(), String> {
+    proc_lock::acquire(&locks, &proc_path)
+}
+
+#[tauri::command]
+fn release_proc_lock(locks: tauri::State<'_, proc_lock::ProcLocks>, proc_path: String) {
+    proc_lock::release(&locks, &proc_path);
+}
+
+#[tauri::command]
+fn is_proc_locked(locks: tauri::State<'_, proc_lock::ProcLocks>, proc_path: String) -> bool {
+    proc_lock::is_locked_by_other(&locks, &proc_path)
+}
+
 /// Build a JS snippet that writes `message` into `#status`, polling until
 /// the DOM element exists (the sidecar may crash before the wait page finishes
 /// parsing, so `getElementById` could return null on the first attempt).
@@ -145,6 +175,12 @@ pub fn run() {
 
     // -- Setup ------------------------------------------------------------
     builder
+        .manage(proc_lock::ProcLocks::new())
+        .invoke_handler(tauri::generate_handler![
+            acquire_proc_lock,
+            release_proc_lock,
+            is_proc_locked
+        ])
         .setup(|app| {
             let handle = app.handle().clone();
 
@@ -431,6 +467,10 @@ pub fn run() {
         .expect("failed to build tauri application")
         .run(|handle, event| match event {
             RunEvent::ExitRequested { .. } | RunEvent::Exit => {
+                // 句柄本来在进程退出时就会被内核收走,这里显式放一次是为了「正常退出」
+                // 这条路上锁文件能被 Node 那半删掉(它只删自己 pid 写的那份,而删的前提
+                // 是没人握着句柄)。不放的话下一次启动要走 pid 兜底那条弱判据。
+                proc_lock::release_all(&handle.state::<proc_lock::ProcLocks>());
                 kill_sidecar_tree(handle);
             }
             _ => {}

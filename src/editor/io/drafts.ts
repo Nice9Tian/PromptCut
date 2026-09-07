@@ -1,4 +1,5 @@
 import { loadProc, serializeProc, forgetSaveTarget } from "./proc";
+import { acquireDraftLock, releaseDraftLock } from "./procLock";
 import { actions } from "../../store/project";
 import type { Project } from "../../kernel/project";
 
@@ -45,8 +46,18 @@ export async function saveDraft(id: string, thumbnail: string | null = null): Pr
 
 /** 读一份草稿并载入 store。返回载入后的 Project */
 export async function openDraft(id: string): Promise<Project> {
+  /*
+   * 先抢独占锁再读内容。顺序不能反 —— 读完再抢的话,两个实例可能都已经把项目
+   * 载进内存了,再告诉其中一个「你没抢到」就晚了,它已经能编辑了。
+   * SKILL 模式下服务端会直接放行(skipped),那时无头实例才是唯一的写者。
+   */
+  const lock = await acquireDraftLock(id);
+  if (!lock.ok) throw new Error(lock.error || "这个项目正被另一个 PromptCut 打开");
   const res = await fetch(`/api/projects/${encodeURIComponent(id)}`);
-  if (!res.ok) throw new Error(`打不开这份草稿(${res.status})`);
+  if (!res.ok) {
+    await releaseDraftLock();
+    throw new Error(`打不开这份草稿(${res.status})`);
+  }
   const project = loadProc(await res.text());
   // 换了草稿就换了落点,不能再覆盖上一个项目的文件
   forgetSaveTarget();
@@ -67,6 +78,9 @@ export async function deleteDraft(id: string): Promise<void> {
 let activeDraftId: string | null = null;
 
 export function setActiveDraftId(id: string | null): void {
+  // 换草稿(含设成 null:新建项目、从文件打开)就把上一份的锁放掉。
+  // 不 await:调用点大多在用户手势里,放锁慢一点不该卡住界面;放锁本身是幂等的。
+  if (activeDraftId && activeDraftId !== id) void releaseDraftLock();
   activeDraftId = id;
 }
 

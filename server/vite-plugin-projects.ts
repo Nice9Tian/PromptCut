@@ -29,6 +29,14 @@ function projectsDir(root: string): string {
   return dir;
 }
 
+/**
+ * 一份草稿在磁盘上的位置。导出给 vite-plugin-skill-state.ts 用 —— 独占锁要按
+ * 草稿 id 找到真实文件,而目录规则(含 PROMPTCUT_PROJECTS_DIR 覆盖)只该有这一份。
+ */
+export function draftFileFor(root: string, id: string): string | null {
+  return fileFor(root, id);
+}
+
 function fileFor(root: string, id: string): string | null {
   if (!isValidDraftId(id)) return null;
   return path.join(projectsDir(root), id + EXT);

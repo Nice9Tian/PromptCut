@@ -31,8 +31,22 @@ export default defineConfig({
       }
     : {
         watch: {
-          // 桌面壳的二进制、导出产物、内置 Python 都不是源码;watch 到 exe 会 EBUSY 把 dev server 崩掉
-          ignored: ["**/desktop/**", "**/out/**", "**/python/**", "**/node_modules/**"],
+          /*
+           * 这里每一条都不是源码,而且**漏掉会出人命**:
+           *
+           * - desktop / out / python:桌面壳的二进制、导出产物、内置 Python。
+           *   watch 到正在写的 exe 会 EBUSY 把 dev server 崩掉。
+           * - **.lock**:.proc 的独占锁。外壳用共享模式 0 握着它,chokidar 去 fs.watch
+           *   立刻拿到 EBUSY,而那是 FSWatcher 的 error 事件 —— **整个 dev server 当场退出**,
+           *   连带 sidecar 和编辑器一起没。实测过一次,不是推测。
+           * - .pc-projects / .pc-work / .pc-chats:草稿、任务目录、会话历史。都是运行时数据,
+           *   改一下就触发一次 HMR 纯属浪费,而且草稿是自动保存的,等于每次保存都重载。
+           */
+          ignored: [
+            "**/desktop/**", "**/out/**", "**/python/**", "**/node_modules/**",
+            "**/*.lock",
+            "**/.pc-projects/**", "**/.pc-work/**", "**/.pc-chats/**",
+          ],
         },
       },
 });

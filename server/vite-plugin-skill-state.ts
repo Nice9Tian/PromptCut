@@ -189,16 +189,28 @@ export function skillStatePlugin(): Plugin {
         const url = new URL(req.url || "/", "http://localhost");
         const action = url.pathname.replace(/^\/+/, "");
         try {
-          const { path: raw } = JSON.parse((await readBody(req)) || "{}");
-          const target = path.resolve(String(raw || ""));
-          if (!raw) return sendJson(res, 400, { ok: false, error: "path 必填" });
+          const body = JSON.parse((await readBody(req)) || "{}");
+          /*
+           * 前端手里通常只有草稿 id(路径规则在服务端,而且可以被 PROMPTCUT_PROJECTS_DIR
+           * 改掉),所以这里两种都收:draftId 由 projects 插件解析成真实路径,path 留给
+           * 已经知道绝对路径的调用方。
+           */
+          let raw = body.path;
+          if (!raw && body.draftId) {
+            const { draftFileFor } = await import(new URL("./vite-plugin-projects.ts", import.meta.url).href);
+            raw = draftFileFor(server.config.root || process.cwd(), String(body.draftId));
+            if (!raw) return sendJson(res, 400, { ok: false, error: "草稿 id 不合法" });
+          }
+          if (!raw) return sendJson(res, 400, { ok: false, error: "path 或 draftId 必填" });
+          const target = path.resolve(String(raw));
           if (action === "acquire") {
             const gate = await import(new URL("./skill-gate.mjs", import.meta.url).href);
             // SKILL 模式下不加锁 —— 壳和用户那份都要读无头实例正在写的那个文件
             if (gate.readState().active) return sendJson(res, 200, { ok: true, skipped: "skill-mode" });
             const out = acquireLock(target);
             if (out.ok) held.add(target);
-            return sendJson(res, out.ok ? 200 : 409, out);
+            // 把解析出的真实路径回给前端:桌面壳那层要拿它去独占内核句柄
+            return sendJson(res, out.ok ? 200 : 409, { ...out, file: target });
           }
           if (action === "release") {
             releaseLock(target);
