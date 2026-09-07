@@ -13,7 +13,8 @@
     "smoke": "node scripts/smoke-all.mjs",
     "make-patch": "node scripts/make-patch.mjs",
     "release": "node scripts/build-release.mjs",
-    "make-extension": "node scripts/make-extension.mjs"
+    "make-extension": "node scripts/make-extension.mjs",
+    "test": "node --test test/*.test.mjs"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2"

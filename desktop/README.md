@@ -162,17 +162,42 @@ release\PromptCut-patch-0.2.3.exe -WhatIf
 
 ### 拓展库包
 
-语音识别和镜头识别要额外的 Python 依赖和模型。默认是运行时 `pip install` 现下载，
-断网、内网或者国内网络不通就装不上，而且每台机器都要重下一遍。拓展库包把 wheel
-和模型预先打好，**安装过程全程离线**（`pip --no-index`，明确禁掉 PyPI）。
+镜头识别、主体检测、运动追踪、语音识别要额外的 Python 依赖和模型。默认是运行时
+`pip install` 现下载，断网、内网或者国内网络不通就装不上，而且每台机器都要重下一遍。
+拓展库包把 wheel 和模型预先打好，**安装过程全程离线**（`pip --no-index`，明确禁掉 PyPI）。
+
+**发给用户的是两档**，不是四个包——用户不该去弄懂里面有几个模型：
+
+| 档 | 带来什么能力 | 里面有什么 | 实测体积 |
+| --- | --- | --- | --- |
+| **轻装档 `light`** | 镜头识别、主体检测（人脸 + 人体） | onnxruntime + transnetv2 / yunet / rtdetr_r18vd | wheel 实测 5 个 26.0 MB；模型 107 MB（29.6 + 0.2 + 77.3）；**exe 实测 124.0 MB**（130,038,628 字节） |
+| **完整档 `full`** | 轻装档全部 + 运动追踪 + 开放词汇主体检测 | 再加 torch / transformers + bootstapir_v2.pt + grounding-dino-tiny/ | wheel 实测 34 个 177.4 MB；模型再多 208.7 + 658.3 MB；**exe 实测 1074.6 MB**（1,126,797,614 字节） |
+
+（2026-09-07 修完许可证后重打的实测值。比上一版各大约 6.6 KB，多出来的就是包内
+`THIRD-PARTY-LICENSES.txt` 里新加的三份许可证正文：light 17,696 字节 / full 18,605 字节。）
+
+```powershell
+npm run make-extension -- light --transnet <transnetv2.onnx> --yunet <yunet.onnx> --rtdetr <rtdetr_r18vd.onnx>
+npm run make-extension -- full  --transnet … --yunet … --rtdetr … `
+                                --bootstapir <bootstapir_v2.pt> --dino <grounding-dino-tiny 目录>
+```
+
+产物分目录落在 `release/extensions/_light/` 和 `_full/`：两个 exe 的名字只差一个词，
+平铺在一起很容易发错文件给用户。
+
+语音识别**不在这两档里**：它的模型是按需下载的（用户挑 small 还是 large-v3），
+随包发没有意义，所以仍旧单独出 `stt` 包，只装依赖。
+
+模型怎么来：`transnetv2.onnx` 见 [`tools/transnetv2/README.md`](../tools/transnetv2/README.md)，
+其余四个见 [`tools/subject/README.md`](../tools/subject/README.md)。
+
+老的按能力拆开的单项包**继续能用**，给开发者单独重打某一项：
 
 ```powershell
 npm run make-extension -- shots --model <transnetv2.onnx 的路径>
+npm run make-extension -- track --model <bootstapir_v2.pt 的路径>
 npm run make-extension -- stt
 ```
-
-`transnetv2.onnx` 怎么来见 [`tools/transnetv2/README.md`](../tools/transnetv2/README.md)。
-产物约 52 MB（26 MB wheel + 30 MB 模型）。
 
 几个要点：
 
@@ -182,11 +207,38 @@ npm run make-extension -- stt
   安装器读 `runtime/VERSIONS.json` 比对，版本太旧**在动手之前**就拒绝——不然用户
   白等一分钟，盘上还多出一堆没人用的 wheel。
 - **模型落在 `%APPDATA%\com.promptcut.desktop\models`**，不在安装目录里，卸载软件
-  不会把它删掉。依赖落在 `<安装目录>\runtime\pylibs`。
-- 装完会让程序自己跑一次 `status` 自检，**只有它回报 `ready: true` 才算成功**；
-  文件到位但代码不认，同样算失败。
+  不会把它删掉。依赖落在 `<安装目录>\runtime\pylibs`。模型条目**可以是目录**
+  （`grounding-dino-tiny/` 那种 HF snapshot），安装器递归拷；同名目录先删再拷，
+  免得升级时旧文件留在里面。
+- 装完会**按 manifest 里的 `provides` 逐个能力自检**（light 档要 `promptcut_shots`
+  和 `promptcut_subject` 都说自己能跑），有一个不过就算失败：文件到位但代码不认，
+  和没装是一回事。各模块的就绪判据不一样——shots/track 看 `"ready": true`，
+  subject 看 `"engine"` 不为 null（它分 light/full 两档），stt 看引擎 `installed`。
+- **每个随包权重都必须写齐 `title` / `license` / `source`**，缺一项 `make-extension`
+  直接拒绝出包（`assertModelMeta`），并要同步到
+  [`THIRD-PARTY-LICENSES.md`](THIRD-PARTY-LICENSES.md) 第 9 节。`license` 还必须是
+  `scripts/licenses/` 下有全文的 SPDX 标识符——写成 `Apache 2.0`（少个连字符）
+  一样出不了包，因为那样就没有全文可附。
+- **许可证全文随包走**。包里的 `THIRD-PARTY-LICENSES.txt` = 逐模型清单 + MIT /
+  Apache-2.0 / BSD-3-Clause 三份**正文**（每份抬头写清适用于哪几个模型、原始版权行），
+  装的时候 `apply-extension.ps1` 把它按包名拷到
+  `%APPDATA%\com.promptcut.desktop\models\THIRD-PARTY-LICENSES-<包名>.txt`，和权重放一起
+  （light / full 各一份、互不覆盖）。
+  只发一张写着许可证名字的清单不满足 MIT／Apache-2.0 §4(a)／BSD-3 第 2 条 ——
+  2026-09-07 之前的包就是那样，已作废重打。三份全文的来源见
+  [`scripts/licenses/README.md`](scripts/licenses/README.md)。
+- **wheel 的许可证用脚本扫，不靠人翻**：每次重打完跑
+  `node scripts/scan-wheel-licenses.mjs`（读 `release/extensions/` 下的 manifest，
+  逐个查 PyPI 的 `license_expression` + `classifiers`），命中 GPL / AGPL / LGPL /
+  SSPL / 非商用 就退出码 1。2026-09-07 实测 light + full 合计 34 个包、0 个可疑。
 
 拓展有自己的版本号，和应用版本、外壳版本三者独立。
+
+打包脚本的纯逻辑（拓展表、许可证硬闸、manifest 生成）有单测，改完跑一下：
+
+```powershell
+node --test desktop/test/make-extension.test.mjs
+```
 
 ## 开发期
 
@@ -263,12 +315,18 @@ desktop/
     apply-patch.cmd               补丁包里的「安装更新.cmd」
     patch-installer.nsi           补丁 exe 的自解压外壳(NSIS,须带 UTF-8 BOM)
     make-extension.mjs            打拓展库包(离线依赖 + 模型)
+    licenses/                     MIT / Apache-2.0 / BSD-3-Clause 三份全文,
+                                  打包时追加到包内 THIRD-PARTY-LICENSES.txt 末尾
+                                  (文件名就是 SPDX 标识符,MODEL_META 的 license 要能对上)
+    scan-wheel-licenses.mjs       扫拓展包各 wheel 的许可证(查 PyPI,命中 GPL 类就退 1)
     apply-extension.ps1           拓展包安装器(随包发给用户)
     extension-installer.nsi       拓展 exe 的自解压外壳(同样须带 BOM)
     smoke-procs.mjs               进程树工具（共用）
     smoke-boot.mjs                启动冒烟
     smoke-shutdown.mjs            关闭冒烟
     smoke-all.mjs                 全流程冒烟
+  test/
+    make-extension.test.mjs       拓展表/许可证硬闸/manifest 的单测(node --test)
   src-tauri/
     Cargo.toml
     build.rs
@@ -290,6 +348,13 @@ desktop/
     PromptCut-patch-<版本>.exe    更新补丁(双击即装)
     manifest-<版本>.json          该版本的文件清单，下一次发布拿它算差异
     extensions/                   拓展库包单独放这里 —— 它们按自己的节奏出版本，
-      PromptCut-ext-<名字>-<版本>.exe  和安装包/补丁不是一批东西，混在一起时
-      ext-<名字>-<版本>.json           一眼看不出这次发布该给用户哪几个文件
+      _light/                     和安装包/补丁不是一批东西，混在一起时
+        PromptCut-ext-light-<版本>.exe   一眼看不出这次发布该给用户哪几个文件。
+        ext-light-<版本>.json            两档再各占一个子目录：两个 exe 名字只
+        THIRD-PARTY-LICENSES.txt         差一个词，平铺着很容易发错。
+      _full/
+        PromptCut-ext-full-<版本>.exe
+        ext-full-<版本>.json
+        THIRD-PARTY-LICENSES.txt
+      PromptCut-ext-<单项名>-<版本>.exe  单项包（shots/track/stt）还是平铺在这里
 ```
