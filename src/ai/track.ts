@@ -14,11 +14,17 @@ export interface TrackPoint {
   xy: [number, number][];
   /** 逐帧是否可见。被遮挡或移出画面为 false，此时 xy 是模型的猜测 */
   visible: boolean[];
+  /**
+   * 这个点压根没追成，兜底档才会给（纹理不够、贴太靠边）。
+   * 给了 note 就说明整条 xy 都是占位，visible 也全是 false——别拿去绑卡片。
+   */
+  note?: string;
 }
 
 export interface TrackJobState {
   status: "running" | "done" | "error";
-  engine: "bootstapir";
+  /** 作业跑完前是 undefined —— 哪一档由 Python 侧选，结果回来才知道 */
+  engine?: "bootstapir" | "template";
   percent: number;
   message?: string;
   width?: number;
@@ -28,7 +34,7 @@ export interface TrackJobState {
 }
 
 export interface TrackResult {
-  engine: string;
+  engine: "bootstapir" | "template";
   createdAt: string;
   width: number;
   height: number;
@@ -36,8 +42,19 @@ export interface TrackResult {
   points: TrackPoint[];
 }
 
-/** 拓展装没装。没装时 engine 是 template，精度差很多。 */
-export async function trackStatus(): Promise<{ ready: boolean; engine: string; detail?: unknown }> {
+/**
+ * 能追到哪一档。
+ *
+ * ready 只说神经网络那档。**ready 为 false 不等于追不了**：没装拓展时还有
+ * numpy 的模板匹配（engine = "template"），精度和鲁棒性差不少但能跑。
+ * engine 为 null 才是真的两档都用不了（连 Python 都没有）。
+ */
+export async function trackStatus(): Promise<{
+  ready: boolean;
+  engine: "bootstapir" | "template" | null;
+  reason?: string;
+  detail?: unknown;
+}> {
   const r = await fetch("/api/track/status");
   if (!r.ok) throw new Error("查不到运动追踪拓展的状态");
   return r.json();
@@ -65,10 +82,13 @@ export async function pollTrackJob(jobId: string): Promise<TrackJobState> {
   return data.job as TrackJobState;
 }
 
-/** 等一个作业跑完。250 帧约 26 秒，所以轮询间隔给 1 秒。 */
+/**
+ * 等一个作业跑完。轮询间隔 1 秒 —— 神经网络档 250 帧约 26 秒，
+ * 兜底档同样帧数 1 秒出头，两档共用这一个节奏就够。
+ */
 export async function waitForTrack(
   jobId: string,
-  onProgress?: (pct: number, engine: string) => void,
+  onProgress?: (pct: number, engine: TrackResult["engine"] | undefined) => void,
 ): Promise<TrackResult> {
   for (;;) {
     const job = await pollTrackJob(jobId);
@@ -76,7 +96,10 @@ export async function waitForTrack(
     if (job.status === "error") throw new Error(job.message || "运动追踪失败");
     if (job.status === "done") {
       return {
-        engine: job.engine,
+        // 作业跑完却没报 engine，只可能是 Python 侧的 result 事件缺字段。
+        // 认成 template 是**保守**的那一侧：调用方会据此提醒「这是降级结果，
+        // 别太当真」，反过来误标成 bootstapir 会让人拿粗结果当准数据。
+        engine: job.engine ?? "template",
         createdAt: new Date().toISOString(),
         width: job.width ?? 0,
         height: job.height ?? 0,

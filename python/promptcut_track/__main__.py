@@ -51,7 +51,13 @@ def model_path(paths: Dict[str, Optional[str]]) -> str:
 
 
 def probe(paths: Dict[str, Optional[str]]) -> Dict[str, Any]:
-    """报告能不能跑。两个条件缺一不可：torch 装了，权重文件在。"""
+    """报告能跑到哪一档。
+
+    ready 只说神经网络那档（torch 装了 + 权重在）。**它不等于「能不能追」**——
+    未就绪时还有 numpy 的模板匹配兜底，那一档只要 numpy 和 ffmpeg 在就能跑，
+    而 numpy 在基础运行时里。两者要分开报，否则调用方会把「没装拓展」
+    读成「这个功能用不了」。
+    """
     add_pylibs(paths["pylibs"])
     runtime: Dict[str, Any] = {"installed": False, "version": None}
     try:
@@ -66,10 +72,23 @@ def probe(paths: Dict[str, Optional[str]]) -> Dict[str, Any]:
     if model["exists"]:
         model["bytes"] = os.path.getsize(mp)
 
+    fallback: Dict[str, Any] = {"available": False}
+    try:
+        import numpy  # noqa: F401
+
+        fallback = {"available": bool(paths["ffmpeg"]), "numpy": numpy.__version__}
+        if not paths["ffmpeg"]:
+            fallback["error"] = "找不到 ffmpeg"
+    except Exception as exc:
+        fallback["error"] = str(exc)
+
+    ready = bool(runtime["installed"] and model["exists"])
     return {
-        "ready": bool(runtime["installed"] and model["exists"]),
+        "ready": ready,
+        "engine": "bootstapir" if ready else ("template" if fallback["available"] else None),
         "runtime": runtime,
         "model": model,
+        "fallback": fallback,
         "ffmpeg": paths["ffmpeg"],
     }
 
@@ -138,12 +157,62 @@ def _parse_points(raw: str) -> List[List[float]]:
     return out
 
 
+def _track_template(paths: Dict[str, Optional[str]], video: str,
+                    queries_px: List[List[float]]) -> int:
+    """兜底档。输出格式和神经网络那档**逐字段一致**，只有 engine 不同。
+
+    格式一致是刻意的：调用方（Node 服务端、MCP 工具、将来的界面）不该为两档
+    各写一套解析。哪一档跑的看 engine 字段，别的都一样。
+    """
+    from .template import decode_gray, track_template
+
+    try:
+        frames, src, dst = decode_gray(paths["ffmpeg"], video)
+    except Exception as exc:
+        emit_error(str(exc))
+        return 1
+    emit({"event": "progress", "phase": "decoded",
+          "frames": int(len(frames)), "width": src[0], "height": src[1]})
+
+    # 用户给的是原始像素，解码时缩过，要换到解码分辨率上再匹配
+    sx, sy = dst[0] / src[0], dst[1] / src[1]
+    queries = [(p[0], p[1] * sx, p[2] * sy) for p in queries_px]
+
+    def on_progress(done: int, total: int) -> None:
+        emit({"event": "progress", "phase": "track",
+              "percent": round(done * 100 / max(total, 1), 1),
+              "points": done, "total": total})
+
+    try:
+        result = track_template(frames, queries, on_progress=on_progress)
+    except Exception as exc:
+        emit_error(f"追踪失败：{exc}")
+        return 1
+
+    emit({
+        "event": "result",
+        "engine": "template",
+        "width": src[0],
+        "height": src[1],
+        "frames": int(len(frames)),
+        "points": [
+            {
+                "query": queries_px[i],
+                # 换回原始像素，前端不用关心这一档解码到了多大
+                "xy": [[round(float(x) / sx, 2), round(float(y) / sy, 2)]
+                       for x, y in result["tracks"][i]],
+                "visible": [bool(v) for v in result["visible"][i]],
+                **({"note": result["notes"][i]} if result["notes"][i] else {}),
+            }
+            for i in range(len(queries_px))
+        ],
+    })
+    return 0
+
+
 def cmd_track(args: argparse.Namespace) -> int:
     paths = env_paths()
     info = probe(paths)
-    if not info["ready"]:
-        emit_error("运动追踪拓展未就绪", detail=info)
-        return 2
     if not paths["ffmpeg"]:
         emit_error("找不到 ffmpeg，无法解码视频。")
         return 2
@@ -156,6 +225,16 @@ def cmd_track(args: argparse.Namespace) -> int:
     except ValueError as exc:
         emit_error(str(exc))
         return 2
+
+    engine = args.engine or info["engine"]
+    if engine is None:
+        emit_error("既没装运动追踪拓展，兜底档也用不了", detail=info)
+        return 2
+    if engine == "bootstapir" and not info["ready"]:
+        emit_error("运动追踪拓展未就绪", detail=info)
+        return 2
+    if engine == "template":
+        return _track_template(paths, args.video, queries_px)
 
     from .tracker import decode_frames, load_model, scale_points, track
 
@@ -189,6 +268,7 @@ def cmd_track(args: argparse.Namespace) -> int:
     back = scale_points(result["tracks"], src, to_model=False)
     emit({
         "event": "result",
+        "engine": "bootstapir",
         "width": src[0],
         "height": src[1],
         "frames": int(len(frames)),
@@ -215,6 +295,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     t.add_argument("--video", required=True)
     t.add_argument("--points", required=True,
                    help='JSON：[[帧号, x, y], ...]，坐标为原始视频像素')
+    t.add_argument("--engine", choices=["bootstapir", "template"], default=None,
+                   help="强制用哪一档。默认按 status 报的 engine 自动选")
     t.set_defaults(func=cmd_track)
 
     args = parser.parse_args(argv)

@@ -20,7 +20,11 @@ const sttJobs = new Map<string, SttJob>();
 /** 正在跑的镜头识别作业,按 mediaId 索引。结果落进 store 后就删掉。 */
 const shotJobs = new Map<string, { jobId: string; percent: number; engine: string; error?: string }>();
 /** 进行中的追踪作业,以及跑完的轨迹。都只在内存里,刷新页面就没了 */
-const trackJobs = new Map<string, { jobId: string; percent: number; engine: string; error?: string }>();
+// engine 可以是 undefined:哪一档在跑由 Python 侧决定,作业跑完前 Node 不知道。
+// 之前这里写死 "bootstapir",于是没装拓展时会把兜底档的进度报成神经网络档。
+const trackJobs = new Map<string, {
+  jobId: string; percent: number; engine?: "bootstapir" | "template"; error?: string;
+}>();
 const trackResults = new Map<string, TrackResult>();
 
 export function RightPanel() {
@@ -272,7 +276,7 @@ export function RightPanel() {
         }
 
         const jobId = await startTracking(media.path, media.id, args.points);
-        trackJobs.set(args.mediaId, { jobId, percent: 0, engine: "bootstapir" });
+        trackJobs.set(args.mediaId, { jobId, percent: 0 });
         waitForTrack(jobId, (percent, engine) =>
           trackJobs.set(args.mediaId, { jobId, percent, engine }))
           .then((result) => {
@@ -281,13 +285,16 @@ export function RightPanel() {
           })
           .catch((e: unknown) => {
             trackJobs.set(args.mediaId, {
-              jobId, percent: 0, engine: "bootstapir",
+              jobId, percent: 0,
               error: e instanceof Error ? e.message : String(e),
             });
           });
         return {
           jobId, started: true, mediaId: args.mediaId, points: args.points.length,
           hint: "运动追踪已在后台开始,请用 get_track 轮询该 mediaId",
+          // 装没装拓展决定用哪一档,也决定要等多久:同样 250 帧,
+          // 神经网络档约 26 秒,模板匹配约 1 秒。
+          engineHint: "哪一档在跑要等结果出来才知道,看 get_track 返回的 engine",
         };
       },
 
@@ -307,7 +314,8 @@ export function RightPanel() {
           // 降级档要让模型看见,否则它会拿模板匹配的粗结果当准数据下判断
           engineNote: result.engine === "bootstapir"
             ? "BootsTAPIR,任意点追踪,visible 为 false 表示该帧被遮挡或移出画面"
-            : "当前是浏览器内的模板匹配兜底,只适合纹理清晰、无遮挡、位移平缓的场景,精度低得多",
+            : "当前是模板匹配兜底(未装运动追踪拓展)。刚体、纹理清晰、不转向的目标能追得很准,"
+              + "但目标一旦转向、缩放或长时间被挡就会跟丢;某个点带 note 字段表示它压根没追成",
           width: result.width,
           height: result.height,
           frames: result.frames,

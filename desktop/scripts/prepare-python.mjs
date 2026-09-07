@@ -417,6 +417,70 @@ function copySttPackage() {
   return true;
 }
 
+/**
+ * 把 python/ 下**所有** promptcut_* 包复制进 site-packages。
+ *
+ * 原来只复制 promptcut_stt。开发期看不出问题——vite 那边的 buildEnv 会把缺的包
+ * 临时镜像到 pylibs 里——但**正式包里没有 python/ 源码目录**，那条镜像路径根本
+ * 走不到，于是镜头识别和运动追踪在装好的软件里会直接 No module named。
+ * 每加一个包都改一次这里太容易漏，所以按前缀扫。
+ */
+function copyPromptcutPackages() {
+  const srcDir = path.join(ROOT, 'python');
+  if (!fs.existsSync(srcDir)) return [];
+  const pkgs = fs.readdirSync(srcDir).filter(
+    (f) => f.startsWith('promptcut_')
+      && f !== 'promptcut_stt'  // 上面单独处理过了
+      && fs.statSync(path.join(srcDir, f)).isDirectory(),
+  );
+  for (const pkg of pkgs) {
+    const dst = path.join(SITE_PACKAGES, pkg);
+    rimraf(dst);
+    copyDir(path.join(srcDir, pkg), dst);
+    log(`[5/6] 复制 ${pkg} → Lib/site-packages(${mb(dirSize(dst))})`);
+  }
+  if (!pkgs.length) warn('[5/6] python/ 下没有别的 promptcut_* 包。');
+  return pkgs;
+}
+
+/**
+ * 基础运行时自带的第三方库。目前只有 numpy。
+ *
+ * 为什么 numpy 值得进基础包、torch 不值得：运动追踪的**兜底档**（模板匹配）
+ * 只要 numpy 就能跑，而拓展包是 190 MB torch + 208 MB 权重。多数用户一开始
+ * 不会装拓展，「追不了」和「追得糙」对他们是完全不同的两件事。numpy 大约
+ * 15 MB，换来这个功能开箱可用，划算。
+ *
+ * 装进 site-packages 而不是 pylibs：pylibs 是拓展包的地盘，用户卸拓展时
+ * 会被清掉，基础能力不能跟着一起没。
+ */
+const BASE_LIBS = ['numpy==2.2.6'];
+
+function installBaseLibs() {
+  const probe = runPython(['-I', '-c', 'import numpy, sys; sys.stdout.write(numpy.__version__)']);
+  if (probe.status === 0) {
+    log(`[5/6] 基础库已就位:numpy ${probe.stdout.trim()}`);
+    return true;
+  }
+  log(`[5/6] 安装基础库 ${BASE_LIBS.join(', ')} → Lib/site-packages`);
+  const r = runPython(
+    ['-I', '-m', 'pip', 'install', '--no-warn-script-location',
+     '--target', SITE_PACKAGES, ...BASE_LIBS],
+    {}, { stdio: 'inherit' },
+  );
+  if (r.status !== 0) {
+    warn('[5/6] numpy 安装失败。运动追踪的兜底档会用不了(拓展装了的话不受影响)。');
+    return false;
+  }
+  const after = runPython(['-I', '-c', 'import numpy, sys; sys.stdout.write(numpy.__version__)']);
+  if (after.status !== 0) {
+    warn('[5/6] numpy 装完仍然 import 不到,检查 ._pth 有没有放开 site-packages。');
+    return false;
+  }
+  log(`[5/6] numpy ${after.stdout.trim()} 就位(${mb(dirSize(path.join(SITE_PACKAGES, 'numpy')))})`);
+  return true;
+}
+
 function writeVersionFile(pip) {
   const data = { version: PYTHON_VERSION, pip, builtAt: new Date().toISOString() };
   fs.writeFileSync(VERSION_FILE, JSON.stringify(data, null, 2) + '\n', 'utf8');
@@ -601,6 +665,8 @@ async function build({ force }) {
   }
 
   copySttPackage();
+  copyPromptcutPackages();
+  installBaseLibs();
   copyRequirements();
   writeVersionFile(pip);
 

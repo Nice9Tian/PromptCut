@@ -22,17 +22,26 @@ import {
   readBody,
 } from "./vite-plugin-stt";
 
+type TrackEngine = "bootstapir" | "template";
+
 interface TrackPoint {
   query: [number, number, number];
   xy: [number, number][];
   visible: boolean[];
+  /** 这个点没能追（纹理不够、贴边），兜底档才会给。给了就别用这条轨迹 */
+  note?: string;
 }
 
 interface TrackJob {
   id: string;
   mediaId?: string;
   status: "running" | "done" | "error";
-  engine: "bootstapir";
+  /**
+   * 哪一档在跑。**以 result 事件里的 engine 为准**，不要在起作业时就写死——
+   * 选档是 Python 侧按 status 决定的（装了拓展走神经网络，没装走模板匹配），
+   * Node 这边猜一个只会在没装拓展时把 template 报成 bootstapir。
+   */
+  engine?: TrackEngine;
   percent: number;
   message?: string;
   width?: number;
@@ -97,6 +106,9 @@ function runTracking(
         if (ev.event === "progress" && typeof ev.percent === "number") {
           job.percent = ev.percent as number;
         } else if (ev.event === "result") {
+          if (ev.engine === "bootstapir" || ev.engine === "template") {
+            job.engine = ev.engine;
+          }
           job.width = ev.width as number;
           job.height = ev.height as number;
           job.frames = ev.frames as number;
@@ -143,8 +155,11 @@ export function trackPlugin(): Plugin {
         if (req.method === "GET" && url === "/api/track/status") {
           const python = findPython(root);
           if (!python) {
+            // engine 给 null 而不是 "template"：兜底档也是 Python 跑的
+            // （numpy 做模板匹配），没有解释器时两档都用不了。报成 template
+            // 会让调用方以为还能追，结果每次调用都失败。
             return sendJson(res, 200, {
-              ok: true, ready: false, engine: "template",
+              ok: true, ready: false, engine: null,
               reason: "没有可用的 Python",
             });
           }
@@ -153,19 +168,23 @@ export function trackPlugin(): Plugin {
           let out = "";
           child.stdout?.on("data", (d: Buffer) => { out += d.toString(); });
           child.on("error", () =>
-            sendJson(res, 200, { ok: true, ready: false, engine: "template" }));
+            sendJson(res, 200, { ok: true, ready: false, engine: null,
+                                 reason: "解释器启动失败" }));
           child.on("close", () => {
             try {
               const line = out.split(/\r?\n/).find((l) => l.includes('"event"'));
               const info = line ? JSON.parse(line) : {};
+              // engine 直接采信 Python 侧的判断：那边同时看了 torch、权重
+              // 和 numpy，比在这里按 ready 反推准。
               sendJson(res, 200, {
                 ok: true,
                 ready: !!info.ready,
-                engine: info.ready ? "bootstapir" : "template",
+                engine: info.engine ?? null,
                 detail: info,
               });
             } catch {
-              sendJson(res, 200, { ok: true, ready: false, engine: "template" });
+              sendJson(res, 200, { ok: true, ready: false, engine: null,
+                                   reason: "解释器没有返回可解析的状态" });
             }
           });
           return;
@@ -201,7 +220,6 @@ export function trackPlugin(): Plugin {
               id: randomUUID().slice(0, 8),
               mediaId: body.mediaId,
               status: "running",
-              engine: "bootstapir",
               percent: 0,
             };
             jobs.set(job.id, job);
