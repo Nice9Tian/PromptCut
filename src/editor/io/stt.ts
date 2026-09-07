@@ -169,7 +169,7 @@ export async function transcribeMedia(
 }
 
 /** 解析 SSE 流,逐事件调用 callback(可能 throw) */
-async function readSseStream(
+export async function readSseStream(
   body: ReadableStream<Uint8Array>,
   onEvent: (ev: SttEvent) => void
 ): Promise<void> {

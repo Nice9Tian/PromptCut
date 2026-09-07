@@ -1,4 +1,5 @@
 import { AnimClock } from "./AnimClock";
+import { motionAt } from "./motion";
 import { getCard } from "./registry";
 import type { Timeline } from "./types";
 
@@ -21,8 +22,22 @@ export function Stage({ timeline, t, playToken, speed = 1 }: { timeline: Timelin
           const def = getCard(clip.cardId);
           if (!def) return null;
           const C = def.Component;
+
+          // 绑了轨迹的 clip 整层跟着目标平移。平移放在**外层**而不是交给卡片：
+          // 卡片不知道自己被绑了，也不该知道——换一张卡，跟随照样生效。
+          const m = clip.motion ? motionAt(clip.motion, Math.max(0, t - clip.start)) : null;
+          if (m && clip.motion!.whenHidden === "hide" && !m.visible) return null;
+
           return (
-            <div key={`${clip.id}:${playToken}`} data-pc-clip={clip.id} style={{ position: "absolute", inset: 0 }}>
+            <div
+              key={`${clip.id}:${playToken}`}
+              data-pc-clip={clip.id}
+              style={{
+                position: "absolute",
+                inset: 0,
+                ...(m ? { transform: `translate(${m.dx}px, ${m.dy}px)`, willChange: "transform" } : null),
+              }}
+            >
               {/*
                 clip.params 在写入时就是全量的(见 store 的 addCardClip),
                 这里铺一层 defaults 只是兜底:卡片以后新增参数时,先前存下的 clip

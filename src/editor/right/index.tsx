@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { startShotDetection, waitForShots } from "../../ai/shots";
-import { startTracking, waitForTrack, type TrackResult } from "../../ai/track";
+import { installTrack, startTracking, trackStatus, waitForTrack, type TrackResult } from "../../ai/track";
+import { buildClipMotion } from "../../kernel/motion";
 import { AiPanel } from "./AiPanel";
 import { connectMcpExecutor, EditorApi } from "../../ai/mcpExecutor";
 import { getState, actions } from "../../store/project";
@@ -22,6 +23,12 @@ const shotJobs = new Map<string, { jobId: string; percent: number; engine: strin
 /** 进行中的追踪作业,以及跑完的轨迹。都只在内存里,刷新页面就没了 */
 // engine 可以是 undefined:哪一档在跑由 Python 侧决定,作业跑完前 Node 不知道。
 // 之前这里写死 "bootstapir",于是没装拓展时会把兜底档的进度报成神经网络档。
+// 拓展安装的后台作业。和 sttJobs 分开:两者的 jobId 各自生成,混在一张表里
+// 只会让「找不到这个 jobId」这类问题更难查。
+const trackInstallJobs = new Map<string, {
+  done: boolean; ok: boolean; error?: string; logTail: string[];
+}>();
+
 const trackJobs = new Map<string, {
   jobId: string; percent: number; engine?: "bootstapir" | "template"; error?: string;
 }>();
@@ -138,7 +145,9 @@ export function RightPanel() {
 
       // ── 语音转文字 ────────────────────────────────────────────────
       backgroundJobStatus: ({ jobId }) => {
-        const job = sttJobs.get(jobId);
+        // 听写和运动追踪各有一张作业表。只查前者的话,track_install 返回的
+        // jobId 拿过来一定是「找不到」,而那条消息会把人引向「是不是重启了」。
+        const job = sttJobs.get(jobId) ?? trackInstallJobs.get(jobId);
         if (!job) throw new Error('找不到后台任务，可能已重启。');
         return { jobId, ...job };
       },
@@ -298,6 +307,14 @@ export function RightPanel() {
         };
       },
 
+      /**
+       * 默认只回摘要,不回逐帧坐标。
+       *
+       * 一段 30 秒 30fps 的片子,每个点是 900 组坐标 —— 原样吐给模型是好几万
+       * token,而模型通常根本不需要它们:要让卡片跟着走就调 attach_clip_motion,
+       * 数据在应用内部直接流转,不必绕模型一圈。full:true 是留给「模型真的要
+       * 自己算点什么」的口子,不是默认路径。
+       */
       getTrack: (args) => {
         const media = getState().project.media.find((m) => m.id === args.mediaId);
         if (!media) throw new Error(`找不到素材 ${args.mediaId}`);
@@ -308,7 +325,7 @@ export function RightPanel() {
           if (pending) return { running: true, percent: pending.percent, engine: pending.engine };
           return null;
         }
-        return {
+        const head = {
           running: false,
           engine: result.engine,
           // 降级档要让模型看见,否则它会拿模板匹配的粗结果当准数据下判断
@@ -319,8 +336,162 @@ export function RightPanel() {
           width: result.width,
           height: result.height,
           frames: result.frames,
-          points: result.points,
         };
+        if (args.full) return { ...head, points: result.points };
+        return {
+          ...head,
+          points: result.points.map((p, i) => {
+            const vis = p.visible.filter(Boolean).length;
+            const xs = p.xy.map((q) => q[0]);
+            const ys = p.xy.map((q) => q[1]);
+            return {
+              index: i,
+              query: p.query,
+              visibleFrames: vis,
+              totalFrames: p.visible.length,
+              // 位移范围:接近 0 说明目标基本没动,绑上去也看不出效果
+              movedX: Math.round(Math.max(...xs) - Math.min(...xs)),
+              movedY: Math.round(Math.max(...ys) - Math.min(...ys)),
+              from: p.xy[0]?.map((v) => Math.round(v)),
+              to: p.xy[p.xy.length - 1]?.map((v) => Math.round(v)),
+              ...(p.note ? { note: p.note } : {}),
+            };
+          }),
+          hint: "只给了摘要。要让卡片跟着某个点走就调 attach_clip_motion(不用把坐标读出来);"
+            + "确实需要逐帧坐标时传 full:true,但那会是很长一串数字。",
+        };
+      },
+
+      trackStatus: async () => {
+        const s = await trackStatus();
+        return {
+          ...s,
+          hint: s.engine === "bootstapir"
+            ? "已装拓展,走 BootsTAPIR。"
+            : s.engine === "template"
+              ? "未装拓展,走模板匹配兜底 —— 能追,但目标转向、形变或长时间被挡时会跟丢。"
+                + "用户要更稳的结果就用 track_install 装拓展(约 400 MB)。"
+              : "两档都用不了(通常是找不到 Python),这台机器上追不了。",
+        };
+      },
+
+      // 400 MB 的下载,远超 MCP 桥的调用超时,所以立刻返回 jobId。
+      trackInstall: async () => {
+        const jobId = `track-${Date.now().toString(36)}`;
+        trackInstallJobs.set(jobId, { done: false, ok: false, logTail: [] });
+        void installTrack((line) => {
+          const job = trackInstallJobs.get(jobId);
+          if (job) job.logTail = [...job.logTail, line].slice(-20);
+        })
+          .then(({ ok }) => {
+            const job = trackInstallJobs.get(jobId);
+            trackInstallJobs.set(jobId, { done: true, ok, logTail: job?.logTail ?? [] });
+          })
+          .catch((e: unknown) => {
+            const job = trackInstallJobs.get(jobId);
+            trackInstallJobs.set(jobId, {
+              done: true, ok: false,
+              error: e instanceof Error ? e.message : String(e),
+              logTail: job?.logTail ?? [],
+            });
+          });
+        return {
+          jobId, started: true,
+          hint: "运动追踪拓展正在后台安装(torch + 权重约 400 MB,要几分钟)。"
+            + "用 background_job_status 查这个 jobId,或用 track_status 看 engine 有没有变成 bootstapir。不要重复启动。",
+        };
+      },
+
+      /**
+       * 把一张卡绑到一条轨迹上,让它跟着画面里的目标走。
+       *
+       * 这是追踪功能真正的落点 —— 在此之前,追出来的坐标只是一串数字,
+       * 没有任何东西消费它。
+       *
+       * 数据不经过模型:模型只说「clip X 跟 point 0」,逐帧坐标在应用内部
+       * 从 trackResults 直接烘进 clip。让模型把 900 组坐标读进来再写回去,
+       * 既烧上下文又必然出错。
+       */
+      attachClipMotion: (args) => {
+        const p = getState().project;
+        const hit = findClip(p, args.clipId);
+        if (!hit) throw new Error(`找不到片段 ${args.clipId}`);
+        if (!hit.clip.cardId) throw new Error(`${args.clipId} 是素材段,不是卡片段,没有「跟着走」这回事`);
+
+        const media = p.media.find((m) => m.id === args.mediaId);
+        if (!media) throw new Error(`找不到素材 ${args.mediaId}`);
+
+        const result = trackResults.get(args.mediaId);
+        if (!result) {
+          throw new Error(trackJobs.get(args.mediaId)
+            ? `${media.name} 的追踪还没跑完,先用 get_track 等它出结果`
+            : `${media.name} 还没追过,先调 track_points`);
+        }
+        const idx = args.pointIndex ?? 0;
+        const point = result.points[idx];
+        if (!point) throw new Error(`这次追踪只有 ${result.points.length} 个点,没有第 ${idx} 个`);
+        if (point.note) throw new Error(`第 ${idx} 个点没追成:${point.note}`);
+
+        // 画面来自哪一段素材:必须和卡片在时间上真的重叠,否则卡片会跟着
+        // 一个当时根本没在播的画面走。
+        const source = p.tracks
+          .flatMap((t) => t.clips)
+          .filter((c) => c.mediaId === args.mediaId)
+          .find((c) => c.start < hit.clip.end && c.end > hit.clip.start);
+        if (!source) {
+          throw new Error(`时间轴上没有一段 ${media.name} 和这张卡在时间上重叠 —— `
+            + `卡片放在 ${hit.clip.start.toFixed(2)}~${hit.clip.end.toFixed(2)}s,那段时间画面上没有这个素材`);
+        }
+
+        const built = buildClipMotion({
+          xy: point.xy,
+          visible: point.visible,
+          media: {
+            id: media.id,
+            width: media.width ?? 0,
+            height: media.height ?? 0,
+            duration: media.duration ?? 0,
+          },
+          stage: { width: p.width, height: p.height },
+          card: { start: hit.clip.start, end: hit.clip.end },
+          clipOfMedia: { start: source.start, mediaOffset: source.mediaOffset ?? 0 },
+          pointIndex: idx,
+          whenHidden: args.whenHidden === "hide" ? "hide" : "hold",
+        });
+
+        if (!actions.setClipMotion(args.clipId, built.motion)) {
+          throw new Error(`绑定失败:写不进片段 ${args.clipId}`);
+        }
+
+        const { frames, visibleFrames, rangeX, rangeY } = built.summary;
+        return {
+          ok: true,
+          clipId: args.clipId,
+          mediaId: args.mediaId,
+          pointIndex: idx,
+          engine: result.engine,
+          frames,
+          visibleFrames,
+          movedX: rangeX,
+          movedY: rangeY,
+          whenHidden: built.motion.whenHidden,
+          // 两种「绑了等于没绑」要当场说破,不能让用户自己去预览里发现
+          ...(rangeX < 2 && rangeY < 2
+            ? { warning: "这个点几乎没动(位移不到 2 像素),绑上去看不出跟随效果" }
+            : {}),
+          ...(visibleFrames < frames * 0.5
+            ? { warning2: `一半以上的帧(${frames - visibleFrames}/${frames})目标不可见,`
+                + `跟随会大段停住${built.motion.whenHidden === "hide" ? "或整张卡消失" : ""}` }
+            : {}),
+        };
+      },
+
+      detachClipMotion: (args) => {
+        const hit = findClip(getState().project, args.clipId);
+        if (!hit) throw new Error(`找不到片段 ${args.clipId}`);
+        if (!hit.clip.motion) return { ok: true, clipId: args.clipId, changed: false, hint: "这张卡本来就没绑轨迹" };
+        actions.setClipMotion(args.clipId, undefined);
+        return { ok: true, clipId: args.clipId, changed: true };
       },
 
       getTranscript: (args) => {

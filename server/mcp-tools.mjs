@@ -244,13 +244,51 @@ export const tools = [
   },
   {
     name: "get_track",
-    description: "读取运动追踪结果，track_points 之后用它轮询和取数（未完成时返回 running:true 和进度百分比）。返回每个点逐帧的 xy 坐标和 visible（该帧目标是否可见——被遮挡或移出画面时为 false）。**把卡片绑到轨迹上时要看 visible**：不可见的帧不要硬贴上去，那几帧的坐标是外推的猜测，贴上去会让卡片飘走。**某个点带 note 字段表示它压根没追成**（纹理不够、贴太靠画面边缘），那条轨迹整条都是占位，别用。同时会返回 engine 和 engineNote：engine 为 template 说明用户没装拓展、走的是模板匹配兜底，那一档在目标转向或形变时会悄悄跟丢——跟丢的帧 visible 为 false，但不要把大片 false 读成「画面里没有运动」，也可以建议用户装上拓展再追一次。",
+    description: "读取运动追踪结果，track_points 之后用它轮询（未完成时返回 running:true 和进度百分比）。**默认只回摘要**：每个点的可见帧数、位移范围、起止坐标——足够判断这次追踪成没成、值不值得绑。**不要为了让卡片跟着走而把坐标读出来**，那是 attach_clip_motion 的活，数据在应用内部直接流转；一段 30 秒的片子每个点是 900 组坐标，读进来纯属浪费。确实要自己算点什么才传 full:true。某个点带 note 表示它压根没追成（纹理不够、贴太靠边），别用那条。engine 为 template 说明用户没装拓展、走的是模板匹配兜底，目标转向或形变时会悄悄跟丢——不要把大片不可见读成「画面里没有运动」，可以建议用户 track_install 装上拓展再追一次。",
     inputSchema: {
       type: "object",
       properties: {
-        mediaId: { type: "string" }
+        mediaId: { type: "string" },
+        full: { type: "boolean", description: "回逐帧坐标（很长）。默认 false，只回摘要" }
       },
       required: ["mediaId"]
+    },
+    side: "browser"
+  },
+  {
+    name: "track_status",
+    description: "查运动追踪能跑到哪一档，追之前先看一眼。engine 为 bootstapir 表示已装拓展（准、慢、能扛遮挡和形变）；template 表示没装拓展、走 numpy 的模板匹配兜底（快，刚体清晰纹理能追得很准，但目标转向、缩放或长时间被挡就会跟丢）；null 表示两档都用不了（通常是找不到 Python）。用户想要更稳的结果时用 track_install 装拓展。",
+    inputSchema: { type: "object", properties: {} },
+    side: "browser"
+  },
+  {
+    name: "track_install",
+    description: "安装运动追踪拓展（BootsTAPIR，torch + 权重约 400 MB，要几分钟）。装完追踪会自动从模板匹配兜底切到神经网络档。由于耗时远超调用超时，立即返回 jobId；用 background_job_status 查该 jobId，或用 track_status 看 engine 有没有变成 bootstapir。**不要重复启动**。只在用户明确要更好的追踪效果时才装——兜底档对刚体目标已经够用，别为了追一个纹理清晰的静物就让用户下 400 MB。",
+    inputSchema: { type: "object", properties: {} },
+    side: "browser"
+  },
+  {
+    name: "attach_clip_motion",
+    description: "把一张卡片绑到一条运动轨迹上，让它跟着画面里的目标走 —— 这是运动追踪真正的用法。先 track_points 追出轨迹，再用这个工具绑，**不需要把坐标读出来**，逐帧数据在应用内部直接流转。卡片会保持你摆的位置，只是跟着目标一起挪。参数：clipId 必填（要跟随的卡片段，不能是素材段）；mediaId 必填（轨迹来自哪段素材）；pointIndex 默认 0（track_points 传了几个点就有几条轨迹，按传入顺序编号）；whenHidden 默认 hold（目标被挡时停在最后看见的位置）或 hide（目标被挡时整张卡不显示）。要求卡片段和该素材段在时间轴上真的重叠，否则会报错——卡片跟着一个当时没在播的画面走是没有意义的。返回里带 movedX/movedY（位移范围）和 visibleFrames，位移接近 0 或大片不可见时会给 warning。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        clipId: { type: "string" },
+        mediaId: { type: "string" },
+        pointIndex: { type: "number", description: "第几条轨迹，默认 0" },
+        whenHidden: { type: "string", enum: ["hold", "hide"], description: "目标被挡时的行为，默认 hold" }
+      },
+      required: ["clipId", "mediaId"]
+    },
+    side: "browser"
+  },
+  {
+    name: "detach_clip_motion",
+    description: "解除一张卡片的运动跟随，让它回到固定位置。参数：clipId 必填。",
+    inputSchema: {
+      type: "object",
+      properties: { clipId: { type: "string" } },
+      required: ["clipId"]
     },
     side: "browser"
   },

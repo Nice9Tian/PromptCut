@@ -136,7 +136,12 @@ export function flattenOverlay(p: Project): Timeline {
     if (tr.hidden) continue;
     for (const c of tr.clips) {
       if (!c.cardId) continue; // 素材段交给视频层
-      clips.push({ id: c.id, cardId: c.cardId, start: c.start, end: c.end, params: c.params });
+      // motion 必须带过来:它是**播放时**才用得上的东西,漏在这里的话
+      // 绑定看起来存下了、时间轴上也显示绑了,可预览和导出都一动不动。
+      clips.push({
+        id: c.id, cardId: c.cardId, start: c.start, end: c.end, params: c.params,
+        ...(c.motion ? { motion: c.motion } : null),
+      });
     }
   }
   return { width: p.width, height: p.height, fps: p.fps, duration: p.duration, clips };

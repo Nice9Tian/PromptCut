@@ -49,7 +49,13 @@ export interface EditorApi {
   detectShots(args: { mediaId: string; force?: boolean }): Promise<any>;
   listShots(args: { mediaId: string }): any;
   trackPoints(args: { mediaId: string; points: number[][] }): Promise<any>;
-  getTrack(args: { mediaId: string }): any;
+  getTrack(args: { mediaId: string; full?: boolean }): any;
+  trackStatus(): Promise<any>;
+  trackInstall(): Promise<any>;
+  attachClipMotion(args: {
+    clipId: string; mediaId: string; pointIndex?: number; whenHidden?: string;
+  }): any;
+  detachClipMotion(args: { clipId: string }): any;
   autoWorkflow(args: { mediaId: string; style?: string; maxCards?: number }): Promise<any>;
   autoWorkflowStatus(args: { jobId: string }): any;
   fillCaptions(args: { clipId?: string; mediaId?: string; showEn?: boolean }): any;
@@ -127,6 +133,10 @@ export function connectMcpExecutor(getApi: () => EditorApi, onStatus?: (s: { con
           else if (tool === "list_shots") result = api.listShots(args);
           else if (tool === "track_points") result = await api.trackPoints(args);
           else if (tool === "get_track") result = api.getTrack(args);
+          else if (tool === "track_status") result = await api.trackStatus();
+          else if (tool === "track_install") result = await api.trackInstall();
+          else if (tool === "attach_clip_motion") result = api.attachClipMotion(args);
+          else if (tool === "detach_clip_motion") result = api.detachClipMotion(args);
           else if (tool === "auto_workflow") result = await api.autoWorkflow(args);
           else if (tool === "auto_workflow_status") result = api.autoWorkflowStatus(args);
           else if (tool === "fill_captions") result = api.fillCaptions(args);

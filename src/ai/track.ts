@@ -1,11 +1,14 @@
 /**
  * 运动追踪的前端胶水：起作业、轮询、拿轨迹。
  *
- * 追踪跑在服务端（BootsTAPIR，未装拓展时前端退回模板匹配），这边只负责等和存。
+ * 两档都跑在服务端：装了拓展走 BootsTAPIR，没装走 numpy 的模板匹配兜底。
+ * 这边只负责起作业、等结果、存结果。
  * 和镜头识别不同，轨迹**不写进项目文档**：查询点是用户每次现指的，同一段素材
  * 可以追很多组点，塞进 project 只会让工程文件无限膨胀。所以结果留在内存里，
  * 由 right/index.tsx 的 Map 持有，够 get_track 取一次就行。
  */
+
+import { readSseStream } from "../editor/io/stt";
 
 export interface TrackPoint {
   /** 用户指定的查询点 [帧号, x, y]，原始像素 */
@@ -109,4 +112,35 @@ export async function waitForTrack(
     }
     await new Promise((r) => setTimeout(r, 1000));
   }
+}
+
+/**
+ * 装运动追踪拓展（torch + BootsTAPIR 权重，接近 400 MB）。
+ *
+ * 流式读 pip 日志而不是等它跑完再回：这一步要好几分钟，中间一声不吭的话
+ * 谁也说不清是在装还是卡死了。
+ */
+export async function installTrack(
+  onLog?: (line: string) => void,
+): Promise<{ ok: boolean; log: string[] }> {
+  const res = await fetch("/api/track/install", { method: "POST" });
+  if (!res.ok || !res.body) {
+    const d = await res.json().catch(() => ({}));
+    throw new Error(d.error || `/api/track/install 返回 ${res.status}`);
+  }
+  const log: string[] = [];
+  let ok = true;
+  await readSseStream(res.body, (ev) => {
+    if (ev.event === "log") {
+      const line = ev.line ?? ev.data ?? "";
+      log.push(line);
+      onLog?.(line);
+    } else if (ev.event === "error") {
+      ok = false;
+      const msg = ev.message ?? "安装失败";
+      log.push("[error] " + msg);
+      onLog?.("[error] " + msg);
+    }
+  });
+  return { ok, log };
 }

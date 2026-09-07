@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from "react";
 import { createEmptyProject, DEFAULT_CARD_DUR, DEFAULT_MEDIA_DUR, findClip, newId, type MediaAsset, type Project, type Track, type TrackClip, type Transcript, type Shots } from "../kernel/project";
 import { getCard } from "../kernel/registry";
+import type { ClipMotion } from "../kernel/types";
 
 /**
  * 编辑器状态存储(单例)。所有面板、时间轴、MCP 工具都通过这里读写,不直接改 Project 对象。
@@ -350,6 +351,30 @@ export const actions = {
       ...t,
       clips: t.clips.map((c) => (c.id === clipId ? { ...c, ...patch } : c)),
     })));
+  },
+  /**
+   * 绑定 / 解绑一条运动轨迹。传 undefined 就是解绑。
+   *
+   * 和 updateClip 分开而不是并进它的 patch:motion 是一坨逐帧数据,不是
+   * 淡入淡出那种一眼看完的标量,混在同一个 patch 里会让「随手改个不透明度」
+   * 和「换掉整条轨迹」长得一模一样。
+   */
+  setClipMotion(clipId: string, motion: ClipMotion | undefined) {
+    const p = state.project;
+    const hit = findClip(p, clipId);
+    if (!hit) return false;
+    setProject(updateTrack(p, hit.track.id, (t) => ({
+      ...t,
+      clips: t.clips.map((c) => {
+        if (c.id !== clipId) return c;
+        if (!motion) {
+          const { motion: _drop, ...rest } = c;
+          return rest;
+        }
+        return { ...c, motion };
+      }),
+    })));
+    return true;
   },
   /**
    * 把两段相接的素材接成交叉溶解:后一段往前拉出 dur 秒的重叠,两边各加 dur 秒的淡化。
