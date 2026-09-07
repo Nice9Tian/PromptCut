@@ -5,7 +5,8 @@ import "katex/dist/katex.min.css";
 import { useAiChat } from "../../ai/useAiChat";
 import { renderMarkdown } from "../../ai/Markdown";
 import type { ChatAttachment, ChatMessage, MessagePart, ToolCallInfo } from "../../ai/types";
-import { conversationReport, deliverDebugReport } from "../../ai/debug";
+import { conversationReport } from "../../ai/debug";
+import { ReportDialog } from "./ReportDialog";
 import { AiSetupDialog } from "./AiSetupDialog";
 import { useChatHistory } from "../../ai/useChatHistory";
 import { SttInstallProgress } from "./SttInstallProgress";
@@ -182,6 +183,9 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
   const [uploading, setUploading] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  /** 诊断报告子窗口:报告正文 + 开关 */
+  const [diagReport, setDiagReport] = useState("");
+  const [diagOpen, setDiagOpen] = useState(false);
   const [showLoginPrompt, setShowLoginPrompt] = useState(false);
   const [view, setView] = useState<ViewMode>(() => {
     try {
@@ -426,22 +430,23 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
   const toolbar = useToolbarLayout(controlsRef, measureRef, OVERFLOW_ORDER);
 
   /**
-   * 把这段对话连同每一步的执行事件复制成一份 JSON,出问题时直接贴给别人看。
+   * 把这段对话连同每一步的执行事件收成一份 JSON,摆进子窗口。
    * 密钥和模型私有思考在 conversationReport 里已经剔掉,这里不用再处理。
+   *
+   * 复制 / 保存为文件 / 提交三条出口都在子窗口里,由用户自己挑 —— 报告动辄几百 KB,
+   * 以前替用户决定「这份该复制还是该存盘」,结果他既看不到报告也没得选。
    */
-  const copyDiagnostics = async () => {
+  const openDiagnostics = () => {
     if (messages.length === 0) return setToast("还没有对话可以导出");
     try {
-      const report = conversationReport(messages, provider, config);
-      const tail = messages.some((m) => m.traceTruncated) ? "(过大的事件已截断)" : "";
-      const out = await deliverDebugReport(report, "对话诊断");
-      if (out.kind === "file") setToast(`报告较大,已存成文件并打开了所在文件夹${tail}`);
-      else if (out.kind === "clipboard") setToast(`诊断报告已复制到剪贴板${tail}`);
-      else setToast(`复制和保存都失败了:${out.why}`);
+      setDiagReport(conversationReport(messages, provider, config));
+      setDiagOpen(true);
     } catch (e) {
-      setToast(e instanceof Error ? e.message : "复制失败");
+      setToast(e instanceof Error ? e.message : "诊断报告生成失败");
     }
   };
+  /** 有事件被截断过就在子窗口顶上说一句,免得我们照着一份残缺报告查半天 */
+  const diagTruncated = messages.some((m) => m.traceTruncated);
 
   if (providers.length > 0 && !providers.some(p => p.available)) {
     return (
@@ -535,15 +540,15 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
     },
     {
       key: "diag",
-      label: "复制诊断报告",
+      label: "诊断报告",
       node: (
         <button
           key="diag"
           data-key="diag"
           className="ai-gear-btn"
-          title="把这段对话和每一步执行事件复制成 JSON(不含密钥)"
-          aria-label="复制诊断报告"
-          onClick={copyDiagnostics}
+          title="把这段对话和每一步执行事件收成 JSON(不含密钥),在子窗口里复制 / 存文件 / 提交"
+          aria-label="诊断报告"
+          onClick={openDiagnostics}
           disabled={messages.length === 0}
         >
           <span aria-hidden="true">⎘</span><span className="ai-btn-label">诊断</span>
@@ -1000,6 +1005,14 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
         installError={installError}
         config={config}
         onSaveConfig={saveConfig}
+      />
+      <ReportDialog
+        open={diagOpen}
+        title="对话诊断报告"
+        label="对话诊断"
+        hint={diagTruncated ? "含可见对话与每一步执行事件;过大的事件已截断" : "含可见对话与每一步执行事件;不含密钥与模型私有思考"}
+        text={diagReport}
+        onClose={() => setDiagOpen(false)}
       />
       <ScriptDialog open={scriptOpen} onClose={() => setScriptOpen(false)} />
       <ChatHistoryDrawer

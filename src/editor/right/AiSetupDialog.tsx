@@ -3,9 +3,10 @@ import { createPortal } from "react-dom";
 import { useEffect, useRef, useState } from "react";
 import "./AiSetupDialog.css";
 import { ApiSharePanel } from "./ApiSharePanel";
+import { ReportDialog } from "./ReportDialog";
 import { SETUP_ENTRIES, isCliEntry, readFace, writeFace } from "./setupEntries";
 import type { SetupEntry, SetupEntryId } from "./setupEntries";
-import { deliverDebugReport, redactDebug } from "../../ai/debug";
+import { redactDebug } from "../../ai/debug";
 import { CAPABILITIES } from "../../ai/modelOptions";
 import type { ProviderInfo, AiProvider, SttInfo, PublicAiConfig, AiConfigPatch, ApiVendor, CliSetupJob, LoginState } from "../../ai/types";
 
@@ -79,8 +80,14 @@ export function AiSetupDialog(props: {
   const [loadingAgyModels, setLoadingAgyModels] = useState(false);
   const [modelsMsg, setModelsMsg] = useState("");
   const [diagState, setDiagState] = useState("");
-  /** 剪贴板写不进去时,把报告摆出来让用户自己复制 */
+  /*
+   * 收好的报告 + 装它的子窗口。
+   *
+   * 以前是点一下就按长度自己选路走掉(短的进剪贴板、长的落盘),用户既看不到
+   * 报告长什么样也没得挑。现在先摆出来,复制 / 保存为文件 / 提交三条路由用户定。
+   */
   const [diagReport, setDiagReport] = useState("");
+  const [diagOpen, setDiagOpen] = useState(false);
   /*
    * 报告到底去哪了,要弹一条看得见的提示。
    *
@@ -110,6 +117,7 @@ export function AiSetupDialog(props: {
     setMoreOpen(false);
     setDiagState("");
     setDiagReport("");
+    setDiagOpen(false);
     // 保存反馈和没提交的输入也属于「这一次打开」的状态,不能跟着 config 走:
     // 跟着走的话保存成功那一刻 config 一变,「已保存」当场被抹掉,用户什么都没看见。
     setApiKeyInput("");
@@ -239,10 +247,13 @@ export function AiSetupDialog(props: {
 
   /**
    * 排查信息:服务端那份(平台、CLI 路径、各家安装/登录状态、脱敏后的配置)
-   * 加上浏览器这边的一点上下文,一起复制走。密钥在服务端就已经换成 last4,
-   * redactDebug 再兜一道底。
+   * 加上浏览器这边的一点上下文,收成一份 JSON 摆进子窗口。密钥在服务端就已经
+   * 换成 last4,机器码只留首组(它同时是配置分发的解密口令),redactDebug 再兜一道底。
+   *
+   * 先收完再开窗:收集要等服务端 refresh 一遍各家 CLI 状态,先开窗会闪一下空白;
+   * 收集期间「正在收集…」显示在底部那行小字上。
    */
-  const copyDiagnostics = async () => {
+  const openDiagnostics = async () => {
     setDiagState("正在收集…");
     setDiagReport("");
     let report: string;
@@ -267,24 +278,15 @@ export function AiSetupDialog(props: {
         2,
       );
     } catch (e) {
-      setDiagState(e instanceof Error ? `收集失败:${e.message}` : "收集失败");
+      const why = e instanceof Error ? e.message : String(e);
+      setDiagState(`收集失败:${why}`);
+      showDiagToast(`诊断信息收集失败:${why}`);
       return;
     }
-    // 收集成功了,交到用户手上是另一回事:太长的存文件并打开所在文件夹,短的进剪贴板,
-    // 两条路都断了才把内容摆出来让用户自己复制 —— 别只丢一句「请手动复制下面的内容」
-    // 却没有下面的内容。不管走哪条,都要弹一条看得见的提示说清楚东西去哪了。
-    const out = await deliverDebugReport(report, "环境诊断");
-    if (out.kind === "file") {
-      setDiagState("");
-      showDiagToast(`报告较大,已存成文件并打开了所在文件夹:\n${out.file}`);
-    } else if (out.kind === "clipboard") {
-      setDiagState("");
-      showDiagToast("诊断报告已复制到剪贴板,可以直接粘贴给我们");
-    } else {
-      setDiagReport(out.text);
-      setDiagState("剪贴板和保存都不可用,请手动复制下面这段");
-      showDiagToast(`复制和保存都失败了:${out.why}\n报告已显示在下方,请手动复制`);
-    }
+    // 收集成功就把报告摆进子窗口,复制 / 保存为文件 / 提交由用户自己挑。
+    setDiagReport(report);
+    setDiagOpen(true);
+    setDiagState("");
   };
 
   /** 切换入口时把上一项的诊断输出清掉,免得看着像是当前这项的 */
@@ -292,6 +294,7 @@ export function AiSetupDialog(props: {
     setOpenedEntry(id);
     setDiagState("");
     setDiagReport("");
+    setDiagOpen(false);
   };
 
   /** 这一项现在能不能用,以及不能用的话缺什么 */
@@ -490,6 +493,7 @@ export function AiSetupDialog(props: {
   const entry = openedEntry ? SETUP_ENTRIES.find((e) => e.id === openedEntry) : null;
 
   return createPortal(
+    <>
     <div className="ais-backdrop" onClick={onClose}>
       <div className="ais-dialog" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
         {/* 报告去哪了要看得见。role=status 让读屏软件也念出来 */}
@@ -581,21 +585,17 @@ export function AiSetupDialog(props: {
 
             <div className="ais-detail-body">
               {isCliEntry(entry.id) ? renderCliBody(entry) : entry.id === "router" ? renderRouterBody() : renderCustomBody()}
-              {diagReport && (
-                <textarea
-                  className="ais-share-blob"
-                  readOnly
-                  rows={6}
-                  value={diagReport}
-                  onFocus={(e) => e.currentTarget.select()}
-                />
-              )}
             </div>
 
             <div className="ais-footer">
               <div className="ais-footer-actions">
-                <button className="ais-btn" onClick={copyDiagnostics} title="把本机环境、安装与登录状态复制成 JSON（不含密钥）">
-                  Debugger
+                <button
+                  className="ais-btn"
+                  onClick={openDiagnostics}
+                  disabled={diagState === "正在收集…"}
+                  title="收集本机环境、安装与登录状态(不含密钥),在子窗口里复制 / 存文件 / 提交"
+                >
+                  {diagState === "正在收集…" ? "收集中…" : "Debugger"}
                 </button>
                 <span className="ais-use-hint">{diagState || (readiness(entry).ok ? "" : readiness(entry).label)}</span>
                 <button
@@ -610,7 +610,16 @@ export function AiSetupDialog(props: {
           </>
         )}
       </div>
-    </div>,
+    </div>
+    <ReportDialog
+      open={diagOpen}
+      title="环境诊断报告"
+      label="环境诊断"
+      hint="含本机环境、各家 CLI 安装与登录状态;不含密钥,机器码只保留首组"
+      text={diagReport}
+      onClose={() => setDiagOpen(false)}
+    />
+    </>,
     document.body,
   );
 }
