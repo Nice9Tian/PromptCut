@@ -38,7 +38,8 @@ export function opacityAt(clip, t) {
  */
 export function mediaLayersAt(project, t) {
   const layers = [];
-  for (const tr of project.tracks || []) {
+  // 和前端一个口径:时间轴上靠上的序列在上层,所以倒着遍历 —— 产出的最后一层压在最上面
+  for (const tr of [...(project.tracks || [])].reverse()) {
     if (tr.hidden) continue;
     for (const c of tr.clips || []) {
       if (!c.mediaId || t < c.start || t >= c.end) continue;

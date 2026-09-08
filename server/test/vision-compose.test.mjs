@@ -27,13 +27,14 @@ test("cardsOnly:素材段和素材列表全部拿掉,卡片段原样留着", () 
   assert.equal(project.tracks[0].clips.length, 2);
 });
 
-test("mediaLayersAt:第 12 秒有视频和图片两层,按序列顺序从下到上;音频、隐藏序列不算", () => {
+test("mediaLayersAt:第 12 秒有视频和图片两层,从下到上排;音频、隐藏序列不算", () => {
   const layers = mediaLayersAt(project, 12);
-  assert.deepEqual(layers.map((l) => l.media.id), ["m1", "m2"]);
-  // 视频段从素材第 1.5 秒起播,第 12 秒对应素材的 1.5 + (12 - 2.68)
-  assert.ok(Math.abs(layers[0].mediaTime - (1.5 + 12 - 2.68)) < 1e-9);
-  assert.equal(layers[0].opacity, 1);
+  // 数组从下到上:最后一个盖在最上面。时间轴上靠上的序列在上层,所以序列 2 的图片在下、序列 1 的视频在上
+  assert.deepEqual(layers.map((l) => l.media.id), ["m2", "m1"]);
   // 图片段 10 秒进、淡入 2 秒:第 12 秒刚好淡完
+  assert.equal(layers[0].opacity, 1);
+  // 视频段从素材第 1.5 秒起播,第 12 秒对应素材的 1.5 + (12 - 2.68)
+  assert.ok(Math.abs(layers[1].mediaTime - (1.5 + 12 - 2.68)) < 1e-9);
   assert.equal(layers[1].opacity, 1);
   assert.equal(opacityAt(project.tracks[1].clips[0], 11), 0.5);
   assert.deepEqual(mediaLayersAt(project, 1).map((l) => l.media.id), [], "第 1 秒只有卡片,没有素材层");

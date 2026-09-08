@@ -1,6 +1,6 @@
 /**
  * 底部时间轴:多条序列、clip 拖动/缩放/跨序列、播放头、吸附、右键菜单、接收左栏拖来的卡片和媒体。
- * 序列不分种类:同一条序列里卡片段和素材段都能放,叠放顺序看序列先后。
+ * 序列不分种类:同一条序列里卡片段和素材段都能放;**上面那条序列画在上层**,和这里看到的一致。
  */
 import { useEffect } from "react";
 import { useStore, actions, getState } from "../../store/project";

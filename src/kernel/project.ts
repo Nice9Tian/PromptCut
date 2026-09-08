@@ -158,7 +158,10 @@ export function findSoundAsset(p: Project, mediaId: string): MediaAsset | undefi
 /**
  * 序列(以前分「动效轨 / 视频轨」两种,现在不分了):
  * 一条序列里既能放卡片段(cardId),也能放素材段(mediaId),不重叠、按 start 排序。
- * 叠放顺序看数组:靠后的画在上面。旧项目文件里的 kind 字段读进来就忽略掉。
+ * 叠放顺序跟着时间轴上看到的来:**靠上的序列画在上层**(tracks[0] 是最上面那一行,
+ * 也就是最上层)。渲染时把数组倒过来遍历,DOM 里靠后的仍然压住靠前的,
+ * 所以下游(Stage、MediaLayers、videoClipAt、命中测试)统一按「列表最后一个 = 最上层」理解。
+ * 旧项目文件里的 kind 字段读进来就忽略掉。
  */
 export interface Track {
   id: string;
@@ -249,11 +252,13 @@ export function createEmptyProject(name = "未命名"): Project {
 
 /**
  * 把项目压平成 Stage 需要的 Timeline(所有序列里的卡片段,跳过 hidden 的序列)。
- * 序列顺序 = 叠放顺序:tracks 数组靠后的画在上面。素材段(有 mediaId)不进舞台,走视频层。
+ * 序列顺序 = 叠放顺序:**时间轴上靠上的序列在上层**,所以这里倒着遍历 tracks ——
+ * 产出的数组仍然是「靠后的画在上面」,Stage 直接按顺序渲染即可。
+ * 素材段(有 mediaId)不进舞台,走视频层。
  */
 export function flattenOverlay(p: Project): Timeline {
   const clips: Clip[] = [];
-  for (const tr of p.tracks) {
+  for (const tr of [...p.tracks].reverse()) {
     if (tr.hidden) continue;
     for (const c of tr.clips) {
       if (!c.cardId) continue; // 素材段交给视频层
@@ -317,7 +322,8 @@ export function videoLayersAt(
   t: number,
 ): Array<{ clip: TrackClip; media: MediaAsset; opacity: number }> {
   const layers: Array<{ clip: TrackClip; media: MediaAsset; opacity: number }> = [];
-  for (const tr of p.tracks) {
+  // 和 flattenOverlay 一个口径:倒着走,产出的最后一个就是最上层(= 时间轴最上面那条序列)
+  for (const tr of [...p.tracks].reverse()) {
     if (tr.hidden) continue;
     for (const c of tr.clips) {
       if (!c.mediaId || t < c.start || t >= c.end) continue;

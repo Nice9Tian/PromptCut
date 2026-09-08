@@ -288,20 +288,15 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
               label: "置顶",
               action: () => {
                 const tracks = getState().project.tracks;
-                if (tracks.length > 0) {
-                  const topTrack = tracks[tracks.length - 1]; // later in array = higher z-index
-                  actions.moveClip(clip.id, { trackId: topTrack.id });
-                }
+                // 最上面那条序列就是最上层(和时间轴上看到的一致)
+                if (tracks.length > 0) actions.moveClip(clip.id, { trackId: tracks[0].id });
               }
             },
             {
               label: "置底",
               action: () => {
                 const tracks = getState().project.tracks;
-                if (tracks.length > 0) {
-                  const bottomTrack = tracks[0];
-                  actions.moveClip(clip.id, { trackId: bottomTrack.id });
-                }
+                if (tracks.length > 0) actions.moveClip(clip.id, { trackId: tracks[tracks.length - 1].id });
               }
             },
             { label: "删除", action: () => actions.removeClip(clip.id) },

@@ -48,7 +48,7 @@ export const tools = [
   },
   {
     name: "update_clip",
-    description: "更新某张卡片,可修改参数、时段、更换卡片类型(cardId),以及不透明度 / 淡入淡出 / 标签 / 所在序列。**已经在时间轴上的卡要改就用它**，不要 remove_clip 再 add_clip 重建。opacity 0~1(遮到人又挪不开时降它);fadeIn/fadeOut 是秒;trackId 换序列——序列数组里靠后的盖住靠前的,要让一张卡压在另一张上面就把它挪到更靠后的序列(get_project 里 tracks 的顺序)。位置、尺寸、缩放不在这里改,用 set_rect / set_position / align / nudge。**挂着转场的片段**(list_transitions 看得到)相对时间关系是锁住的:只给 start 的整组平移可以(同组一起走),改时长 / 换序列 / 手改转场那一侧的 fadeIn·fadeOut 会被拒,要改先 remove_transition。返回 `look`（去看这张卡真实画面的 see_preview 调用）和 `timeline`（当前全部 clip 的 id、起止一览，外加 `duration` / `contentEnd` —— 对不上就用 set_project_meta 修）。",
+    description: "更新某张卡片,可修改参数、时段、更换卡片类型(cardId),以及不透明度 / 淡入淡出 / 标签 / 所在序列。**已经在时间轴上的卡要改就用它**，不要 remove_clip 再 add_clip 重建。opacity 0~1(遮到人又挪不开时降它);fadeIn/fadeOut 是秒;trackId 换序列——**时间轴上靠上的序列盖住靠下的**(get_project 里 tracks[0] 就是最上面那条、也是最上层),要让一张卡压在另一张上面就把它挪到更靠上的序列。位置、尺寸、缩放不在这里改,用 set_rect / set_position / align / nudge。**挂着转场的片段**(list_transitions 看得到)相对时间关系是锁住的:只给 start 的整组平移可以(同组一起走),改时长 / 换序列 / 手改转场那一侧的 fadeIn·fadeOut 会被拒,要改先 remove_transition。返回 `look`（去看这张卡真实画面的 see_preview 调用）和 `timeline`（当前全部 clip 的 id、起止一览，外加 `duration` / `contentEnd` —— 对不上就用 set_project_meta 修）。",
     inputSchema: {
       type: "object",
       properties: {
@@ -61,7 +61,7 @@ export const tools = [
         fadeIn: { type: "number", description: "淡入秒数" },
         fadeOut: { type: "number", description: "淡出秒数" },
         label: { type: "string", description: "时间轴上显示的名字" },
-        trackId: { type: "string", description: "挪到哪条序列;靠后的序列在上层" }
+        trackId: { type: "string", description: "挪到哪条序列;时间轴上靠上的序列在上层(tracks[0] 最上层)" }
       },
       required: ["clipId"]
     },
