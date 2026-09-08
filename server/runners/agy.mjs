@@ -270,6 +270,11 @@ function _startRun(opts) {
 
            if (res.denied_actions && res.denied_actions.length > 0) {
                const deniedNames = res.denied_actions.map(a => a.display_name || a.action).join(', ');
+               // 被拒的原始说明。agy 把它放在 denied_actions 里(字段名各版本不一),
+               // 拼进续跑消息里给模型看 —— 比我们转述一遍准确
+               const deniedDetail = res.denied_actions
+                 .map(a => a.reason || a.message || a.detail || '')
+                 .filter(Boolean).join('; ');
                /*
                 * 被拒**而且什么都没产出** = 这一轮废了,不能报成功。
                 *
@@ -285,11 +290,23 @@ function _startRun(opts) {
                 * (见 server/mcp-tools.mjs 里 wait 的说明)。
                 */
                if (!String(finalResponse).trim() && !emitted.trim()) {
+                  const why = deniedDetail || `内建工具 ${deniedNames} 被拒绝`;
                   childController.finish({
                     type: 'error',
                     message: `Antigravity 拒绝了它自己的内建工具(${deniedNames})之后放弃了这一轮,没有产出任何结果。`
                       + `无人值守模式下它没法弹窗征求同意,所以需要 command 权限的工具一律自动拒绝。`
-                      + `PromptCut 的工具不受影响 —— 如果它是想「等几秒再查作业」,现在有 wait 工具可以用,重试一次即可。`,
+                      + `PromptCut 的工具不受影响 —— 如果它是想「等几秒再查作业」,现在有 wait 工具可以用。`,
+                    /*
+                     * 这一类中断是「接着说就有可能成」的:上下文都还在(--conversation 会把
+                     * 整段对话带回来),缺的只是让它知道刚才为什么停、以及换哪条路。
+                     * 所以标成可续跑,并且**把中断原因和替代方案直接拼进续跑的那句话** ——
+                     * 不让它自己开口问「刚才怎么了」,省一轮往返,也省得它猜错。
+                     */
+                    retryable: true,
+                    retryPrompt: `接着上面继续做。上一轮中断了,原因是:${why}。\n`
+                      + `这是 Antigravity 自己的权限限制,无人值守模式下需要 command 权限的内建工具(run_command 等)一律被自动拒绝,换个说法重试也没用。\n`
+                      + `如果你刚才是想等几秒再查后台作业,请改用 PromptCut 的 wait 工具(参数 seconds,1~30);别的需求也请只用 PromptCut 提供的工具。\n`
+                      + `不用重头再来,从刚才停下的地方接着做就行。`,
                   });
                   return;
                }

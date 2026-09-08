@@ -96,3 +96,41 @@ test('response 空但流里已经说过话:算有产出,不报错', async () => 
   assert.ok(events.some((e) => e.type === 'done'), '流里已经有正文了,不该判成空轮');
   assert.equal(events.find((e) => e.type === 'error'), undefined);
 });
+
+/*
+ * 自动续跑要用到的两个字段。前端拿它们决定「要不要自动接一句、接什么」,
+ * 所以形状必须钉住:少一个,自动续跑就静默失效,而失效的表现和以前一模一样
+ * (界面上一个错误躺在那儿),不会有人发现。
+ */
+test('可续跑的中断要带 retryable 和拼好的 retryPrompt', async () => {
+  const events = await run({
+    conversation_id: 'c1',
+    status: 'SUCCESS',
+    response: '',
+    denied_actions: [{
+      display_name: 'RunCommand',
+      reason: 'user denied permission to run command:\npowershell -Command "Start-Sleep -Seconds 3"',
+    }],
+  });
+  const err = events.find((e) => e.type === 'error');
+  assert.equal(err.retryable, true);
+  assert.ok(err.retryPrompt, '要有拼好的续跑话术');
+  assert.match(err.retryPrompt, /Start-Sleep/, '把被拒的原始说明拼进去 —— 让模型直接看见,不用自己开口问');
+  assert.match(err.retryPrompt, /wait/, '要指出替代方案,不然它只会换个说法再撞一次');
+  assert.match(err.retryPrompt, /接着|继续/, '要说清是接着做,不是重头再来');
+});
+
+test('不可续跑的错(agy 自己报 ERROR)不带 retryable —— 那种续跑一百次也一样', async () => {
+  const events = await run({ conversation_id: 'c1', status: 'ERROR', error: 'invalid model selection' });
+  const err = events.find((e) => e.type === 'error');
+  assert.ok(err);
+  assert.notEqual(err.retryable, true, '模型名错了,自动续跑只会空烧额度');
+});
+
+test('有产出时即使被拒也不带 retryable:没什么可续的', async () => {
+  const events = await run({
+    conversation_id: 'c1', status: 'SUCCESS', response: '做完了。',
+    denied_actions: [{ display_name: 'RunCommand' }],
+  });
+  assert.equal(events.find((e) => e.type === 'error'), undefined);
+});

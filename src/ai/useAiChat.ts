@@ -86,6 +86,11 @@ export function useAiChat(opts?: { mock?: boolean; tabId?: string; getConversati
   const [sttInfo, setSttInfo] = useState<SttInfo | null>(null);
   const [provider, setProvider] = useState<AiProvider | null>(null);
   const [sessionIds, setSessionIds] = useState<Partial<Record<AiProvider, string>>>({});
+  /**
+   * 自动续跑还剩几次。用户每发一条新消息就重置成 1 ——
+   * 「一轮用户输入最多自动接一次」,不给无限循环留口子。
+   */
+  const autoContinueLeftRef = useRef(1);
   const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -442,8 +447,13 @@ export function useAiChat(opts?: { mock?: boolean; tabId?: string; getConversati
     }
   };
 
-  const send = async (text: string, attachments?: ChatAttachment[]) => {
+  // 第三个参数叫 sendOpts 不叫 opts:这个函数体里到处在读**外层 hook 的** opts
+  // (opts.mock、opts.getConversationId),重名会把它整个遮住,而且遮得悄无声息 ——
+  // 类型对不上才炸出来,不然就是运行时读到 undefined。
+  const send = async (text: string, attachments?: ChatAttachment[], sendOpts?: { auto?: boolean }) => {
     if (!provider) return;
+    // 用户自己发的才重置额度;自动续跑那次不重置,否则「续跑 → 又错 → 再续」能一直转下去
+    if (!sendOpts?.auto) autoContinueLeftRef.current = 1;
 
     abort();
 
@@ -694,6 +704,23 @@ export function useAiChat(opts?: { mock?: boolean; tabId?: string; getConversati
                 m.id === asstMsgId ? { ...m, error: ev.message, pending: false, finishedAt: Date.now(), outcome: "error" } : m
               )
             );
+            /*
+             * 可续跑的中断:自动接着说一句,别让用户去点重试。
+             *
+             * 上下文不用我们搬 —— CLI 那几条路都带 `--conversation <id>`,agy 会把整段
+             * 对话原样带回来;要补的只是「刚才为什么停」,那句话由驱动拼好放在 retryPrompt 里
+             * (里面直接带着被拒的原始说明),这里原样发出去,模型不必自己开口问。
+             *
+             * **只续一次**。哪些错值得续由驱动判定(密钥错、模型名错、额度光了都不带这个标记),
+             * 但判定不可能永远对;万一续了还是同一个错,再续就是无限循环,在用户的额度上烧。
+             * 一次不成就停在那儿,把错误留给用户看 —— 他知道的比我们多。
+             * 用户自己发新消息时额度重置(见 send 开头)。
+             */
+            if (ev.retryable && ev.retryPrompt && autoContinueLeftRef.current > 0) {
+              autoContinueLeftRef.current -= 1;
+              const prompt = ev.retryPrompt;
+              setTimeout(() => { void send(prompt, undefined, { auto: true }); }, 0);
+            }
           } else if (ev.type === "done") {
             setMessages((prev) =>
               prev.map((m) =>

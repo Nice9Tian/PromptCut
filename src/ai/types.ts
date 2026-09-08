@@ -127,7 +127,18 @@ export type RunEvent =
   | { type: "diagnostic"; stage: string; data?: unknown; callId?: string }
   | { type: "status"; text: string }
   | { type: "done"; sessionId?: string; usage?: unknown; outcome?: string; completed?: number; failed?: number }
-  | { type: "error"; message: string };
+  /**
+   * 出错。
+   *
+   * `retryable` 是**驱动那边**判定的:这一轮是不是「接着说就有可能成」的那种中断
+   * (比如 agy 把自己的内建工具拒了之后直接放弃,什么都没产出)。
+   * 密钥错、模型名错、额度用光这些不带这个标记 —— 它们重试一百次也是同一个结果,
+   * 自动续跑只会空烧额度。
+   *
+   * `retryPrompt` 是续跑时要发的那句话,**由驱动把中断原因拼进去**,前端原样发出去。
+   * 这样模型不用自己开口问「刚才怎么了」,上下文直接摆在它面前。
+   */
+  | { type: "error"; message: string; retryable?: boolean; retryPrompt?: string };
 
 export interface ChatAttachment {
   url: string;
