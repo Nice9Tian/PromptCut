@@ -82,6 +82,10 @@ export function AiSetupDialog(props: {
   const [apiVendor, setApiVendor] = useState<ApiVendor>("anthropic");
   const [apiBaseUrl, setApiBaseUrl] = useState("");
   const [apiModel, setApiModel] = useState("");
+  /** Router 那一路的模型清单(| 分隔),独立于自定义页 */
+  const [routerModel, setRouterModel] = useState("");
+  const [savingRouter, setSavingRouter] = useState(false);
+  const [routerMsg, setRouterMsg] = useState("");
   const [apiKeyInput, setApiKeyInput] = useState("");
   const [replaceKey, setReplaceKey] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -150,9 +154,13 @@ export function AiSetupDialog(props: {
   useEffect(() => {
     if (!open) return;
     if (config) {
-      setApiVendor(config.api.vendor);
-      setApiBaseUrl(config.api.baseUrl);
-      setApiModel(config.api.model);
+      // 两路各读各的 profile;老服务端没有 profiles 时退回顶层那份
+      const custom = config.api.profiles?.custom ?? config.api;
+      setApiVendor(custom.vendor);
+      setApiBaseUrl(custom.baseUrl);
+      setApiModel(custom.model);
+      setRouterModel(config.api.profiles?.router?.model ?? (config.api.source === "router" ? config.api.model : ""));
+      setRouterMsg("");
       setReplaceKey(!config.api.apiKey.set);
       setToolProtocol(!!config.toolProtocol);
       setCliModels({ ...(config.cliModels ?? {}) });
@@ -217,7 +225,8 @@ export function AiSetupDialog(props: {
     setSaving(true);
     setSaveError(null);
     setSaveSuccess(false);
-    const patch: AiConfigPatch = { api: { vendor: apiVendor, baseUrl: apiBaseUrl, model: apiModel } };
+    // 显式写进 custom 那一路:即使当前生效的是 Router,也不会把 Router 的配置冲掉
+    const patch: AiConfigPatch = { api: { profiles: { custom: { vendor: apiVendor, baseUrl: apiBaseUrl, model: apiModel } } } };
     if (replaceKey && apiKeyInput.trim()) { patch.api!.apiKey = apiKeyInput.trim(); patch.api!.source = "custom"; }
     else if (config?.keys?.custom.set) patch.api!.source = "custom"; // 保存自定义页 = 切到自定义那一路
     try {
@@ -464,6 +473,45 @@ export function AiSetupDialog(props: {
         onClear={onClearKey ? () => clearKeyOf("router") : undefined}
         clearMsg={clearMsg}
       />
+      {config?.keys?.router?.set && (
+        <>
+          <div className="ais-api-field">
+            <label>模型</label>
+            <input
+              type="text"
+              value={routerModel}
+              onChange={(e) => setRouterModel(e.target.value)}
+              placeholder="model-a|model-b"
+            />
+          </div>
+          <div className="ais-detail">
+            分发密文里带的模型可以在这里改、也可以用 <code>|</code> 多写几个备选，面板输入框旁边就能切；
+            厂商 {config.api.profiles?.router?.vendor ?? config.api.vendor}，地址 {config.api.profiles?.router?.baseUrl || "(默认)"}，这两项跟着密文走。
+          </div>
+          <div className="ais-api-actions">
+            <button
+              className="ais-btn ais-primary-btn"
+              disabled={savingRouter}
+              onClick={async (e) => {
+                e.preventDefault();
+                setSavingRouter(true);
+                setRouterMsg("");
+                try {
+                  await onSaveConfig({ api: { profiles: { router: { model: routerModel } } } });
+                  setRouterMsg("已保存，面板上的模型选择器会立刻用新清单");
+                } catch (err) {
+                  setRouterMsg(err instanceof Error ? err.message : "保存失败");
+                } finally {
+                  setSavingRouter(false);
+                }
+              }}
+            >
+              {savingRouter ? "保存中…" : "保存模型清单"}
+            </button>
+            {routerMsg && <span className="ais-detail">{routerMsg}</span>}
+          </div>
+        </>
+      )}
     </section>
   );
 
@@ -492,8 +540,11 @@ export function AiSetupDialog(props: {
           type="text"
           value={apiModel}
           onChange={(e) => setApiModel(e.target.value)}
-          placeholder={apiVendor === "anthropic" ? "claude-sonnet-4-5" : apiVendor === "openai" ? "gpt-4o" : "gemini-2.0-flash"}
+          placeholder={apiVendor === "anthropic" ? "claude-sonnet-4-5|claude-haiku-4-5" : apiVendor === "openai" ? "gpt-4o|gpt-4o-mini" : "gemini-2.0-flash|gemini-2.0-pro"}
         />
+      </div>
+      <div className="ais-detail">
+        用 <code>|</code> 分开写几个模型，面板输入框旁边就能切；不选就用第一个。
       </div>
       <div className="ais-api-field">
         <label>API Key</label>

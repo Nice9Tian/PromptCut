@@ -24,6 +24,13 @@ export type LoginState = "idle" | "waiting" | "ok" | "timeout" | "failed";
 /** API Key 的两路来源:自定义 API 里自己填的 / Router 分发密文导入的。各自加密、各自成文件,不混用 */
 export type KeyKind = "custom" | "router";
 
+/** 一路的连接配置。model 用 | 分隔多个备选,面板输入框旁的模型选择器按它列 */
+export interface ApiProfile {
+  vendor: ApiVendor;
+  baseUrl: string;
+  model: string;
+}
+
 export interface KeyState { set: boolean; last4: string }
 
 export interface PublicAiConfig {
@@ -38,6 +45,8 @@ export interface PublicAiConfig {
     apiKey: KeyState;
     /** 当前生效的是哪一路;没设 Key 时为空串 */
     source: KeyKind | "";
+    /** 两路各自的连接配置;上面的 vendor / baseUrl / model 是生效那一路的镜像。老服务端没有这个字段 */
+    profiles?: Record<KeyKind, ApiProfile>;
   };
   /** 两路各自存没存 Key */
   keys: Record<KeyKind, KeyState>;
@@ -56,6 +65,8 @@ export interface AiConfigPatch {
     apiKey?: string | null;
     /** 这次的 Key 写进哪一路(缺省 custom);不带 apiKey 时表示切换生效的那一路 */
     source?: KeyKind | "";
+    /** 显式改某一路的连接配置,不受 source 影响 */
+    profiles?: Partial<Record<KeyKind, Partial<ApiProfile>>>;
   };
   cliModels?: Partial<{ claude: string; codex: string; agy: string }>;
   toolProtocol?: boolean;

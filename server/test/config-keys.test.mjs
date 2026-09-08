@@ -153,3 +153,68 @@ test("apiKey: null 清掉生效那一路(和清理按钮一个效果)", async ()
     assert.equal(readConfig().api.apiKey, "");
   });
 });
+
+test("两路各一份连接配置:自定义页和 Router 导入互不冲掉,顶层字段跟着生效那一路走", async () => {
+  await withConfig(({ writeConfig, readConfig, publicConfig }) => {
+    // 自定义页:显式写 profiles.custom + Key
+    writeConfig({ api: { profiles: { custom: { vendor: "openai", baseUrl: "https://x.example", model: "gpt-4o|gpt-4o-mini" } }, apiKey: CUSTOM, source: "custom" } });
+    let cfg = readConfig();
+    assert.equal(cfg.api.source, "custom");
+    assert.equal(cfg.api.model, "gpt-4o|gpt-4o-mini", "生效的是 custom,顶层 model 是它的镜像");
+    assert.equal(cfg.api.vendor, "openai");
+
+    // Router 导入(老写法:顶层字段 + source router)写进 router 那一路,custom 那份原样
+    writeConfig({ api: { vendor: "anthropic", baseUrl: "", model: "claude-sonnet-4-5", apiKey: ROUTER, source: "router" } });
+    cfg = readConfig();
+    assert.equal(cfg.api.source, "router");
+    assert.equal(cfg.api.model, "claude-sonnet-4-5");
+    assert.equal(cfg.api.vendor, "anthropic");
+    assert.equal(cfg.api.profiles.custom.model, "gpt-4o|gpt-4o-mini", "custom 那一路没被 Router 导入冲掉");
+    assert.equal(cfg.api.profiles.custom.baseUrl, "https://x.example");
+
+    // Router 页改模型清单:只动 router 那一路
+    writeConfig({ api: { profiles: { router: { model: "claude-sonnet-4-5|claude-haiku-4-5" } } } });
+    cfg = readConfig();
+    assert.equal(cfg.api.model, "claude-sonnet-4-5|claude-haiku-4-5");
+    assert.equal(cfg.api.profiles.router.vendor, "anthropic", "没传的字段不动");
+
+    // 当前生效的是 Router 时改自定义页:custom 那一路变了,顶层(生效)不变
+    writeConfig({ api: { profiles: { custom: { model: "gpt-5" } } } });
+    cfg = readConfig();
+    assert.equal(cfg.api.profiles.custom.model, "gpt-5");
+    assert.equal(cfg.api.model, "claude-sonnet-4-5|claude-haiku-4-5");
+
+    // 切回 custom:顶层跟着切
+    writeConfig({ api: { source: "custom" } });
+    cfg = readConfig();
+    assert.equal(cfg.api.source, "custom");
+    assert.equal(cfg.api.model, "gpt-5");
+    assert.equal(cfg.api.baseUrl, "https://x.example");
+    assert.deepEqual(Object.keys(publicConfig().api.profiles).sort(), ["custom", "router"]);
+  });
+});
+
+test("老版本没有 profiles 的 ai.json:顶层那份搬进当前那一路,一个字不丢", async () => {
+  await withConfig(({ readConfig, writeConfig, file }) => {
+    fs.writeFileSync(file, JSON.stringify({ version: 1, api: { vendor: "gemini", baseUrl: "https://g.example", model: "gemini-2.0-flash|gemini-2.0-pro", maxTokens: 2048 } }));
+    let cfg = readConfig();
+    assert.equal(cfg.api.model, "gemini-2.0-flash|gemini-2.0-pro");
+    assert.equal(cfg.api.profiles.custom.model, "gemini-2.0-flash|gemini-2.0-pro");
+    assert.equal(cfg.api.profiles.custom.vendor, "gemini");
+    assert.equal(cfg.api.profiles.router.model, "");
+    // 写一次之后落盘的形状就是新的,再读还一样
+    writeConfig({ toolProtocol: true });
+    cfg = readConfig();
+    assert.equal(cfg.api.model, "gemini-2.0-flash|gemini-2.0-pro");
+    assert.equal(cfg.api.baseUrl, "https://g.example");
+  });
+});
+
+test("profiles 的校验:厂商、地址不合法整份不写", async () => {
+  await withConfig(({ writeConfig, readConfig }) => {
+    writeConfig({ api: { profiles: { custom: { model: "a|b" } } } });
+    assert.throws(() => writeConfig({ api: { profiles: { router: { vendor: "foo" } } } }), /vendor 只能是/);
+    assert.throws(() => writeConfig({ api: { profiles: { custom: { baseUrl: "ftp://x" } } } }), /http\(s\)/);
+    assert.equal(readConfig().api.profiles.custom.model, "a|b");
+  });
+});

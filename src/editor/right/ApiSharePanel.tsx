@@ -87,9 +87,8 @@ export function ApiSharePanel(props: {
     try {
       await onSaveConfig({
         api: {
-          vendor: parsed.vendor,
-          baseUrl: parsed.baseUrl,
-          model: parsed.model,
+          // 连接配置显式写进 Router 那一路(profiles.router),不碰自定义页填的那份
+          profiles: { router: { vendor: parsed.vendor, baseUrl: parsed.baseUrl, model: parsed.model } },
           ...(parsed.maxTokens ? { maxTokens: parsed.maxTokens } : {}),
           apiKey: parsed.apiKey,
           // 写进 Router 那一路(keys/router.key,PCRTR1. 封装),和自定义 API 的 Key 分开放

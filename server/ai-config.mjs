@@ -67,13 +67,23 @@ function getDefaults() {
       /** 当前生效的 Key 来自哪一路:custom / router / ""(没设) */
       source: '',
       model: '',
-      maxTokens: 4096
+      maxTokens: 4096,
+      /**
+       * 两路各自的连接配置:自定义 API 里自己填的、Router 分发密文导入的。
+       * 以前 vendor / baseUrl / model 只有一份,导入 Router 会把自己填的冲掉,反过来也一样;
+       * 现在各存各的,上面那三个字段是**当前生效那一路**的镜像(readConfig 每次同步),
+       * 下游(runner、面板的模型选择器)照旧只读 api.model。model 用 | 分隔多个备选。
+       */
+      profiles: {
+        custom: { vendor: 'anthropic', baseUrl: '', model: '' },
+        router: { vendor: 'anthropic', baseUrl: '', model: '' },
+      },
     },
     // 三家 CLI 各自的可选模型清单,和 api.model 同一个约定:用 | 分隔。
     // 面板上的模型选择器就读这里;留空就只有「默认」一项。
     cliModels: {
       claude: 'opus|sonnet|haiku',
-      codex: '',
+      codex: 'gpt-5.6-terra|gpt-5.6-sol',
       agy: ''
     }
   };
@@ -87,6 +97,10 @@ function readRaw() {
     if (!fs.existsSync(p)) return defs;
     const parsed = JSON.parse(fs.readFileSync(p, 'utf8'));
     const merged = deepMerge(defs, parsed, true);
+    // 老配置把 Codex 模型清单落成空串；读取时补上预设，让已有安装也能立即看到。
+    if (!String(parsed?.cliModels?.codex ?? '').trim()) {
+      merged.cliModels.codex = defs.cliModels.codex;
+    }
     if (!merged.api || typeof merged.api !== 'object' || Array.isArray(merged.api)) {
       merged.api = defs.api;
     }
@@ -129,7 +143,35 @@ export function readConfig() {
   cfg.api.apiKey = key;
   cfg.api.source = key ? source : '';
   delete cfg.api.hasSource;
+  syncProfile(cfg);
   return cfg;
+}
+
+const PROFILE_FIELDS = ['vendor', 'baseUrl', 'model'];
+
+/**
+ * 让 api.vendor / baseUrl / model 等于当前生效那一路的 profile。
+ * 老版本的 ai.json 没有 profiles:那三个字段还是唯一的一份,先把它们搬进当前那一路
+ * (没设 Key 就算 custom),再镜像回去 —— 老配置一个字都不丢。
+ */
+function syncProfile(cfg) {
+  const face = cfg.api.source === 'router' ? 'router' : 'custom';
+  const prof = cfg.api.profiles[face];
+  const empty = !prof.model && !prof.baseUrl && prof.vendor === 'anthropic';
+  if (empty && (cfg.api.model || cfg.api.baseUrl || cfg.api.vendor !== 'anthropic')) {
+    for (const k of PROFILE_FIELDS) prof[k] = cfg.api[k];
+  }
+  for (const k of PROFILE_FIELDS) cfg.api[k] = prof[k];
+}
+
+function checkProfilePatch(patch, where) {
+  if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw new Error(`${where} 必须是对象`);
+  if (patch.vendor !== undefined && !['anthropic', 'openai', 'gemini'].includes(patch.vendor)) throw new Error('vendor 只能是 anthropic / openai / gemini');
+  if (patch.baseUrl !== undefined) {
+    if (typeof patch.baseUrl !== 'string') throw new Error(`${where}.baseUrl 必须是字符串`);
+    if (patch.baseUrl !== '' && !patch.baseUrl.startsWith('http://') && !patch.baseUrl.startsWith('https://')) throw new Error('baseUrl 必须是 http(s) 地址或留空');
+  }
+  if (patch.model !== undefined && typeof patch.model !== 'string') throw new Error(`${where}.model 必须是字符串`);
 }
 
 function deepMerge(target, source, reading = false) {
@@ -161,18 +203,30 @@ export function writeConfig(partial) {
   const current = readConfig();
   const newConfig = deepMerge(current, partial, false);
 
-  if (partial.api && partial.api.vendor !== undefined) {
-    if (!['anthropic', 'openai', 'gemini'].includes(partial.api.vendor)) {
-      throw new Error('vendor 只能是 anthropic / openai / gemini');
+  /*
+   * 连接配置分两路存。顶层的 vendor / baseUrl / model(老写法)写进**目标那一路**:
+   * 带 source 就是那一路(Router 导入走这里),不带就是当前生效的那一路,没设 Key 算 custom。
+   * profiles.custom / profiles.router 显式给的各写各的,不受 source 影响 ——
+   * 设置窗口的自定义页和 Router 页都用这个写法,互不冲掉。
+   */
+  if (partial.api) {
+    const legacy = {};
+    for (const k of PROFILE_FIELDS) if (partial.api[k] !== undefined) legacy[k] = partial.api[k];
+    if (Object.keys(legacy).length) {
+      checkProfilePatch(legacy, 'api');
+      const targetSource = partial.api.source !== undefined && partial.api.source !== '' ? partial.api.source : current.api.source;
+      const face = targetSource === 'router' ? 'router' : 'custom';
+      Object.assign(newConfig.api.profiles[face], legacy);
     }
-    newConfig.api.vendor = partial.api.vendor;
-  }
-
-  if (partial.api && partial.api.baseUrl !== undefined) {
-    if (partial.api.baseUrl !== '' && !partial.api.baseUrl.startsWith('http://') && !partial.api.baseUrl.startsWith('https://')) {
-      throw new Error('baseUrl 必须是 http(s) 地址或留空');
+    if (partial.api.profiles !== undefined) {
+      const incoming = partial.api.profiles;
+      if (!incoming || typeof incoming !== 'object' || Array.isArray(incoming)) throw new Error('api.profiles 必须是对象');
+      for (const face of KEY_KINDS) {
+        if (incoming[face] === undefined) continue;
+        checkProfilePatch(incoming[face], `api.profiles.${face}`);
+        for (const k of PROFILE_FIELDS) if (incoming[face][k] !== undefined) newConfig.api.profiles[face][k] = incoming[face][k];
+      }
     }
-    newConfig.api.baseUrl = partial.api.baseUrl;
   }
 
   if (partial.defaultProvider !== undefined) {
@@ -239,6 +293,8 @@ export function writeConfig(partial) {
     newConfig.toolProtocol = !!partial.toolProtocol;
   }
 
+  // 顶层三个字段跟着生效的那一路走
+  syncProfile(newConfig);
   persist(newConfig);
   return newConfig;
 }

@@ -28,6 +28,11 @@ AI 面板的分页栏、Agent 之间的范围声明与互相通知（`declare_sc
 * 卡片契约多了 `parts`（部件树）和 `lifecycle`（进场落定时刻、之后停住 / 循环 / 持续变化、支持的退场），见 `server/card-authoring-guide.md`。
 * 素材封装卡：`server/catalog` 里的 Lottie / 粒子配置在构建时各自翻译成一张卡（`src/cards/assets`，id 前缀 `lottie-` / `particles-`，create_card 不许占），粒子卡的旋钮由 `particlesKnobs.ts` 从配置里翻译出来（配置里有的才露）。
 
+### 部件库与组合卡（src/parts、src/kernel/parts.ts）
+
+* 部件（`PartDef`，src/parts/types.ts）是可独立渲染的最小单元，一个文件一个放在 src/parts/lib/，glob 自动收集；组合卡（cardId `composite`）的 `clip.parts` 是一棵部件实例树，舞台（kernel/PartTree.tsx）按树逐级渲染摆位，每个实例的框相对父框、进场时机相对父级。
+* MCP 工具 `list_parts`、`add_composite`、`add_part`、`set_part`、`remove_part`、`move_part`；`get_clip` / `set_clip` 对组合卡返回 / 接受整棵实例树（带 partId、frame.local 可写、frame.world 只读、settleMs）。树的增删改移和校验都是 kernel/parts.ts 的纯函数，参数面板（PartsForm）和 Agent 走同一条路。
+
 ### Skill 任务（server/vite-plugin-skill.ts）
 
 * `GET /api/skill/jobs` - 每个任务多了 `starting`（刚点的、实例还没上来，三分钟内）、`startedAt`（最近一次起实例）、
@@ -100,10 +105,20 @@ CLI 管理目录默认为 `%LOCALAPPDATA%\promptcut\cli`，测试可通过 `PROM
     "baseUrl": "",
     "apiKey": "",
     "model": "",
-    "maxTokens": 4096
-  }
+    "maxTokens": 4096,
+    "source": "",
+    "profiles": {
+      "custom": { "vendor": "anthropic", "baseUrl": "", "model": "" },
+      "router": { "vendor": "anthropic", "baseUrl": "", "model": "" }
+    }
+  },
+  "cliModels": { "claude": "opus|sonnet|haiku", "codex": "", "agy": "" }
 }
 ```
+`profiles` 是两路(自定义 API / Router 导入)各自的连接配置;顶层的 `vendor` / `baseUrl` / `model` 是**当前生效那一路**(`source`)的镜像,
+下游(runner、面板的模型选择器)只读它们。`model`(以及 `cliModels.*`)用 `|` 分隔多个备选,面板输入框旁边能切,不选就用第一个。
+POST `/api/ai/config` 时:`api.profiles.custom / router` 各写各的;老写法的顶层 `vendor / baseUrl / model` 写进目标那一路
+(带 `source` 就是那一路,不带就是当前生效的那一路)。老版本没有 `profiles` 的 ai.json 读的时候会把顶层那份搬进当前那一路。
 **强调**：`apiKey` 仅存在于服务端进程内存中使用，绝不写入普通日志、绝不出现在事件流中，也绝不通过任何接口回显给前端。
 
 ## 端口发现顺序
