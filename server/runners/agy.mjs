@@ -266,12 +266,36 @@ function _startRun(opts) {
               return;
            }
 
+           const finalResponse = res.response || '';
+
            if (res.denied_actions && res.denied_actions.length > 0) {
                const deniedNames = res.denied_actions.map(a => a.display_name || a.action).join(', ');
+               /*
+                * 被拒**而且什么都没产出** = 这一轮废了,不能报成功。
+                *
+                * agy 在无人值守模式下把自己的 run_command 自动拒掉之后就放弃整轮,
+                * result 里 denied_actions 有值、response 是空的,但 status 不是 ERROR。
+                * 原来这里只发一条 status 就照常 finish('done') —— 界面上是一串工具调用
+                * 之后毫无征兆地结束:没有回复、没有报错,用户完全不知道发生了什么。
+                * (用户原话:「这里拒绝好像是我们拒绝的,没有给 Agent 反馈而是直接中断了」。)
+                *
+                * 拒绝这件事我们无法在 agy 的循环里回喂 —— 它是一次性的 CLI 调用,
+                * 自己管自己的工具。能做的是:把它如实报成错误,并且说清楚下一步。
+                * 真正的治本在另一头:补了 wait 工具,模型就不必再借 shell 去睡觉了
+                * (见 server/mcp-tools.mjs 里 wait 的说明)。
+                */
+               if (!String(finalResponse).trim() && !emitted.trim()) {
+                  childController.finish({
+                    type: 'error',
+                    message: `Antigravity 拒绝了它自己的内建工具(${deniedNames})之后放弃了这一轮,没有产出任何结果。`
+                      + `无人值守模式下它没法弹窗征求同意,所以需要 command 权限的工具一律自动拒绝。`
+                      + `PromptCut 的工具不受影响 —— 如果它是想「等几秒再查作业」,现在有 wait 工具可以用,重试一次即可。`,
+                  });
+                  return;
+               }
                childController.safeOnEvent({ type: 'status', text: `部分动作被拒绝: ${deniedNames}` });
            }
 
-           const finalResponse = res.response || '';
            if (typeof finalResponse === 'string' && finalResponse.trim().length > 0) {
               const cleanedEmitted = emitted.trim();
               const cleanedResponse = finalResponse.trim();

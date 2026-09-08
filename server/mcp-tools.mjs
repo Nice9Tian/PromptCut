@@ -1,4 +1,24 @@
 export const tools = [
+  /*
+   * 等一会儿。看着多余,其实是必需品。
+   *
+   * 有十来个工具是「立刻返回 jobId,你去轮询」的形状,说明里也写着「隔几秒问一次」——
+   * 但在有这个工具之前,**模型根本没有等待的手段**。它唯一想得到的办法就是借壳跑一条
+   * shell 命令(实测 agy 就发了 `powershell -Command "Start-Sleep -Seconds 3"`),
+   * 而无人值守模式下 Antigravity 会把自己的 run_command 自动拒掉,一拒**整轮就废** ——
+   * 用户那边看到的是一串工具调用之后毫无征兆地结束,没有回复也没有报错。
+   *
+   * 换句话说:是我们让它去等,却没给它表针。补上这一个,那条借道 shell 的路就不用走了。
+   */
+  {
+    name: "wait",
+    description: "等待若干秒之后再继续（用于轮询之间的间隔）。凡是返回 jobId 让你轮询的工具（collect_job、stt_status、get_transcript、list_shots 等），两次查询之间用它来等，**不要用 shell 命令或别的办法自己睡** —— 那些在无人值守模式下会被拒绝，并且会让整轮对话直接中断。参数 seconds：1~30，默认 3。",
+    inputSchema: {
+      type: "object",
+      properties: { seconds: { type: "number", description: "等多少秒，1~30，默认 3" } }
+    },
+    side: "server",
+  },
   { name: "background_job_status", description: "查询 stt_install 或 transcribe_media 返回的 jobId，得到 done、ok、error 和进度；done=true 且 ok=false 表示失败，不要继续轮询。", inputSchema: { type: "object", properties: { jobId: { type: "string" } }, required: ["jobId"] }, side: "browser" },
   {
     name: "list_cards",
@@ -588,7 +608,7 @@ export const tools = [
   },
   {
     name: "detect_subjects",
-    description: "检测素材画面里的人物位置，用来决定卡片放哪边不会遮住人。立即返回 jobId，用 list_subjects 轮询；跑完之后 list_shots 的每个镜头会带上 subject 和 suggestedPosition。**用户说「别遮住脸」「避开人物」「放空的那一边」时走这条路，不要靠猜 position。**返回里带 engine（当前档位）和 etaSeconds（预估耗时）：实测 light 约 0.5 秒/帧、full 约 3 秒/帧，20 个镜头 60 个采样 light 半分钟、full 三分多钟——**light 隔 3 秒问一次 list_subjects、full 隔 10 秒问一次就够**，别每秒都问；engine 为 null 说明两档都用不了，这个作业多半会失败，先调 subject_status 确认。采样时刻默认自己算：做过 detect_shots 就每个镜头取 20%/50%/80% 三点（镜头短于 1 秒只取中点），没做过就每 2 秒一点；总数超过 200 会自动降精度（先每镜头只取一个中点，仍超再等距抽稀），降过就在返回里给一句 sampledNote，此时镜头级结论更粗、approximate 的镜头会变多。也可以自己传 times（素材内秒数数组，一次最多 200 个）。prompt 只有 full 档认（能找任意名词），**必须是英文名词短语、用「 . 」分隔、结尾带句点**，例如「person . face . dog .」；用户的中文需求要先自己翻成英文再传。full 档的文本塔是 bert-base-uncased，词表里没有中文，喂中文会被切成 [UNK] 然后返回**看着合法其实是噪声**的框（实测「显示器 . 椅子 .」框住了画面主体、conf 0.44，纯属瞎猜）。light 档忽略 prompt、只认 person 和 face，但会把提示词原样回显。参数：mediaId 必填；times / prompt / force 可选。同一素材测过会自动复用（换了 prompt、传 force:true、或者上一批结果是 light 档跑的而这次带了 prompt——light 答不了提示词，会自动重测并回 staleEngine:true——才重跑）。先用 subject_status 看能跑到哪一档。",
+    description: "检测素材画面里的人物位置，用来决定卡片放哪边不会遮住人。立即返回 jobId，用 list_subjects 轮询；跑完之后 list_shots 的每个镜头会带上 subject 和 suggestedPosition。**用户说「别遮住脸」「避开人物」「放空的那一边」时走这条路，不要靠猜 position。**返回里带 engine（当前档位）和 etaSeconds（预估耗时）：实测 light 约 0.5 秒/帧、full 约 3 秒/帧，20 个镜头 60 个采样 light 半分钟、full 三分多钟——**light 隔 3 秒问一次 list_subjects、full 隔 10 秒问一次就够**，别每秒都问 —— 间隔用 wait 工具等，不要用 shell 命令自己睡；engine 为 null 说明两档都用不了，这个作业多半会失败，先调 subject_status 确认。采样时刻默认自己算：做过 detect_shots 就每个镜头取 20%/50%/80% 三点（镜头短于 1 秒只取中点），没做过就每 2 秒一点；总数超过 200 会自动降精度（先每镜头只取一个中点，仍超再等距抽稀），降过就在返回里给一句 sampledNote，此时镜头级结论更粗、approximate 的镜头会变多。也可以自己传 times（素材内秒数数组，一次最多 200 个）。prompt 只有 full 档认（能找任意名词），**必须是英文名词短语、用「 . 」分隔、结尾带句点**，例如「person . face . dog .」；用户的中文需求要先自己翻成英文再传。full 档的文本塔是 bert-base-uncased，词表里没有中文，喂中文会被切成 [UNK] 然后返回**看着合法其实是噪声**的框（实测「显示器 . 椅子 .」框住了画面主体、conf 0.44，纯属瞎猜）。light 档忽略 prompt、只认 person 和 face，但会把提示词原样回显。参数：mediaId 必填；times / prompt / force 可选。同一素材测过会自动复用（换了 prompt、传 force:true、或者上一批结果是 light 档跑的而这次带了 prompt——light 答不了提示词，会自动重测并回 staleEngine:true——才重跑）。先用 subject_status 看能跑到哪一档。",
     inputSchema: {
       type: "object",
       properties: {
@@ -776,7 +796,7 @@ export const tools = [
   },
   {
     name: "collect_download",
-    description: "从网页链接把视频抓下来并装进素材库。下载在服务端后台跑(视频流 + 音频流分开下再用 ffmpeg 合并,非 H.264 的自动转码),**立刻返回 jobId**,用 collect_job 轮询(隔 3 秒问一次),done 且带 mediaId 才算收进素材库。参数:url 必填;quality 可选(默认 1080;未登录的 B 站最高就是 1080,更高要 cookies);site 可选(auto / bilibili / generic);audioOnly 只要音频;allParts 多 P 稿件全部下载(默认只取链接指定的那一 P);cookies 是 Netscape 格式 cookies.txt 的磁盘路径,登录才有的清晰度要它。同一条链接正在下时再调会直接回已有的 jobId(reused: true)。",
+    description: "从网页链接把视频抓下来并装进素材库。下载在服务端后台跑(视频流 + 音频流分开下再用 ffmpeg 合并,非 H.264 的自动转码),**立刻返回 jobId**,用 collect_job 轮询,两次之间用 wait 工具等 3 秒(**不要用 shell 命令自己睡**,无人值守模式下会被拒绝并中断整轮),done 且带 mediaId 才算收进素材库。参数:url 必填;quality 可选(默认 1080;未登录的 B 站最高就是 1080,更高要 cookies);site 可选(auto / bilibili / generic);audioOnly 只要音频;allParts 多 P 稿件全部下载(默认只取链接指定的那一 P);cookies 是 Netscape 格式 cookies.txt 的磁盘路径,登录才有的清晰度要它。同一条链接正在下时再调会直接回已有的 jobId(reused: true)。",
     inputSchema: {
       type: "object",
       properties: {

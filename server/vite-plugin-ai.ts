@@ -201,6 +201,27 @@ export default function vitePluginAi(): Plugin {
         const verdict = gate.checkGate(tool);
         if (!verdict.ok) return { ok: false, skillClosed: true, message: verdict.message };
 
+        /*
+         * side: "server" 的工具就地执行,不过浏览器桥。
+         *
+         * 目前只有 wait。它纯粹是「睡一会儿」,没有任何理由绕编辑台走一趟 ——
+         * 而且这样一来,即使桥这一刻忙着,轮询之间的等待也不会失败。
+         * 上面那道 SKILL 闸门仍然管得着它(用户收回控制权时连等待都不该继续)。
+         */
+        if (toolDef.side === 'server') {
+          if (tool === 'wait') {
+            // 只认真正的数字:Number(null) 是 0、Number('') 也是 0,靠 isFinite 判会把
+            // 「没填」当成「填了 0」再夹到 1 秒 —— 那不是用户的意思,默认该是 3 秒
+            const raw = (args as any)?.seconds;
+            const secs = typeof raw === 'number' && Number.isFinite(raw)
+              ? Math.min(30, Math.max(1, raw))
+              : 3;
+            await new Promise((r) => setTimeout(r, secs * 1000));
+            return { ok: true, waited: secs };
+          }
+          return { ok: false, error: `服务端工具 ${tool} 没有实现` };
+        }
+
         if (!editorRes) {
           throw new Error('编辑台没有打开:没有页面连着 /api/mcp/events');
         }
