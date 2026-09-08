@@ -591,7 +591,18 @@ export function useAiChat(opts?: { mock?: boolean; tabId?: string; getConversati
     abortControllerRef.current = ac;
 
     try {
-      const sessionId = sessionIds[provider];
+      /*
+       * 会话 id 以 **localStorage 为准**,不用组件里那份 state。
+       *
+       * 换项目时 projectAi.applyProjectAi 会把 `aiSession:*` 全清掉(理由见那边),
+       * 但它清不到这个 hook 的 state —— 读 state 的话,换了项目第一句还是会带着
+       * 上个项目的会话 id 发出去,服务端照旧把那边的历史整段读回来。
+       * state 留着只为显示;决定「接哪段历史」的必须是同一个真相源。
+       */
+      const sessionId = (() => {
+        try { return localStorage.getItem(sessKey(provider)) || undefined; }
+        catch { return sessionIds[provider]; }
+      })();
       // 多 Agent:这一页的对话 ID 随请求带上,服务端把它塞给 MCP 进程,工具调用就知道是谁发的;
       // 其他 Agent 的动态(范围变动、给它的消息)拼在提示词前面 —— 只进模型,不进屏幕上那条用户消息
       const agentId = opts?.getConversationId?.();

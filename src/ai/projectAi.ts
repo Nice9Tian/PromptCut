@@ -1,6 +1,7 @@
 import type { ChatMessage } from "./types";
 import { getScript, setScript } from "./script";
 import { getMessages, messagesForSave, replaceMessages } from "./liveChat";
+import { resetAiSessionIds } from "./aiSessionKeys";
 
 /**
  * 随项目一起存取的 AI 状态:剧本 + 这段对话。
@@ -30,6 +31,7 @@ export function applyProjectAi(ai: unknown): void {
   const src = (ai && typeof ai === "object" ? ai : {}) as Partial<ProjectAi>;
   setScript(typeof src.script === "string" ? src.script : "");
   replaceMessages(src.messages);
+  resetAiSessionIds();
 }
 
 /** 新建项目:两样都清空 */
