@@ -17,6 +17,7 @@ use tauri_plugin_shell::ShellExt;
 
 mod agent_webview;
 mod chrome_color;
+mod kill_on_close;
 mod proc_lock;
 mod skill_shell;
 
@@ -404,6 +405,15 @@ pub fn run() {
             // Store sidecar PID for cleanup.
             let pid = child.pid();
             handle.manage(SidecarPid(Mutex::new(Some(pid))));
+
+            // 再上一道内核级的保险:把 sidecar 放进一个 kill-on-close 的 job object,
+            // 外壳进程无论怎么死(崩溃、任务管理器、安装器强杀)都会连它一起带走。
+            // 下面那句 taskkill 只在正常退出时跑得到,强杀那条路上一行代码都执行不了 ——
+            // 留下的孤儿 ffmpeg 会锁住 runtimefmpegfmpeg.exe,让下次安装写不进去。
+            // 失败只记日志:少这层保护就是回到从前,不该因此起不来。
+            if let Err(e) = kill_on_close::attach_to_kill_on_close_job(pid) {
+                eprintln!("[sidecar] kill-on-close 保护没挂上,非正常退出可能留下孤儿进程: {e}");
+            }
 
             // ── Logging + terminated detection ──────────────────────
             let sidecar_dead = Arc::new(AtomicBool::new(false));
