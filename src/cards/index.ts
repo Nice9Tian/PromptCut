@@ -3,6 +3,8 @@ import { magicuiCards } from "./magicui";
 import { nativeCards } from "./native";
 import { userCards } from "./user";
 import { assetCards } from "./assets";
+// 部件库(组合卡的零件)和卡片一起装:src/parts/index.ts 自己注册,这里只要确保它被加载
+import "../parts";
 import { probeCards } from "./_probe";
 
 // 这个模块会被 HMR 重新执行(新建或修改 src/cards/user/ 下的卡就会触发),

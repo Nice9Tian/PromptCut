@@ -3,6 +3,8 @@ import { frameCss } from "./layout";
 import { motionAt } from "./motion";
 import { cardOpacityAt, hasOpacityControls } from "./project";
 import { getCard } from "./registry";
+import { PartTree } from "./PartTree";
+import { frameBox } from "./layout";
 import type { Timeline } from "./types";
 
 /** 提前 0.05s 挂载,让进场动画的第一帧正卡在 start 上 */
@@ -49,7 +51,12 @@ export function Stage({ timeline, t, playToken, speed = 1 }: { timeline: Timelin
                 里没有那个键,没有这层就会把 undefined 传进组件。
                 正常情况下它一项都不会补 —— 补上了就说明 clip 缺参数。
               */}
-              <C params={{ ...def.defaults, ...clip.params }} playToken={playToken} t={Math.max(0, t - clip.start)} duration={clip.end - clip.start} />
+              {clip.cardId === "composite" && clip.parts?.length ? (
+                // 组合卡:部件实例树逐级渲染,画布尺寸就是这张卡的框(没有框 = 整个舞台)
+                <PartTree parts={clip.parts} size={frameBox(clip.frame, timeline)} t={Math.max(0, t - clip.start)} playToken={playToken} />
+              ) : (
+                <C params={{ ...def.defaults, ...clip.params }} playToken={playToken} t={Math.max(0, t - clip.start)} duration={clip.end - clip.start} />
+              )}
             </div>
           );
         })}

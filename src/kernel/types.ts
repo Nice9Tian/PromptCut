@@ -183,6 +183,27 @@ export interface ClipMotion {
   whenHidden: "hold" | "hide";
 }
 
+/**
+ * 组合卡里的一个部件实例:引用部件库里的哪个部件、它的参数、相对父框的框、进场时机、子实例。
+ * 只存局部框,画面绝对位置由 kernel/parts.ts 的 placeParts 逐级合成。
+ * 树的增删改移走 kernel/parts.ts 的纯函数;Agent 走 add_part / set_part / remove_part / move_part。
+ */
+export interface PartInstance {
+  /** 实例 id,一棵树内唯一 */
+  id: string;
+  /** 部件库里的部件 id(src/parts) */
+  partId: string;
+  /** 全量参数(写入时就和部件 defaults 合并好) */
+  params: Record<string, unknown>;
+  /** 相对父框(根实例的父框是组合卡画布)。没有 = 铺满父框 */
+  frame?: ClipFrame;
+  /** 相对父实例进场的毫秒数;根实例相对 clip 起点 */
+  enterMs?: number;
+  /** 给人看的名字,没有就用部件名 */
+  label?: string;
+  children?: PartInstance[];
+}
+
 /** 时间轴上的一张卡 */
 export interface Clip {
   id: string;
@@ -204,6 +225,8 @@ export interface Clip {
   fadeOut?: number;
   /** 整体不透明度(0-1,默认 1)。音频段用它当音量。 */
   opacity?: number;
+  /** 组合卡(cardId "composite")的部件实例树。别的卡没有这个字段 */
+  parts?: PartInstance[];
 }
 
 export interface Timeline {

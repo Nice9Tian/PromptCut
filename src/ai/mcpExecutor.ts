@@ -43,6 +43,12 @@ export interface EditorApi {
   nudge(args: { clipId: string; dx?: number; dy?: number; scaleBy?: number; rotateBy?: number; clamp?: boolean }): any;
   getLayout(args?: { clipId?: string }): any;
   getClip(args: { clipId: string }): any;
+  listParts(args?: { partId?: string; detail?: string }): any;
+  addComposite(args: { start: number; duration?: number; trackId?: string; parts?: unknown[] }): any;
+  addPart(args: { clipId: string; partId: string; params?: Record<string, unknown>; frame?: unknown; enterMs?: number; label?: string; parentId?: string; index?: number }): any;
+  setPart(args: { clipId: string; partInstanceId: string; params?: Record<string, unknown>; frame?: unknown; enterMs?: number; label?: string }): any;
+  removePart(args: { clipId: string; partInstanceId: string }): any;
+  movePart(args: { clipId: string; partInstanceId: string; parentId?: string | null; index?: number }): any;
   setClip(args: { clipId: string; envelope: unknown }): any;
   removeClip(args: { clipId: string }): any;
   duplicateClip(args: { clipId: string }): any;
@@ -286,6 +292,12 @@ export function connectMcpExecutor(getApi: () => EditorApi, onStatus?: (s: { con
           else if (tool === "nudge") result = api.nudge(args);
           else if (tool === "get_layout") result = api.getLayout(args);
           else if (tool === "get_clip") result = api.getClip(args);
+          else if (tool === "list_parts") result = api.listParts(args);
+          else if (tool === "add_composite") result = api.addComposite(args);
+          else if (tool === "add_part") result = api.addPart(args);
+          else if (tool === "set_part") result = api.setPart(args);
+          else if (tool === "remove_part") result = api.removePart(args);
+          else if (tool === "move_part") result = api.movePart(args);
           else if (tool === "set_clip") result = api.setClip(args);
           else if (tool === "remove_clip") result = api.removeClip(args);
           else if (tool === "duplicate_clip") result = api.duplicateClip(args);

@@ -101,6 +101,17 @@ Agent 和代码页看到的不是组件源码,而是一份固定形状的**封�
 - **时序随参数变的卡(条目数、字数、间隔、速度决定落定时刻)再给一个 `timing`**:`timing: (p) => ({ settleMs, parts: { items: { settleMs } }, after? })`,
   封装每次读的时候按 clip 的实际参数重算,和 frame 的 local → world 一样是派生量、不落盘;`parts` / `lifecycle` 里的静态值只当默认参数下的参考。
 
+### 部件库与组合卡(自由组合不用建卡)
+
+要「标题 + 要点 + 一个环形指标」这种现成卡里没有的搭配,**不要 create_card 写新卡**,用组合卡:
+
+- `list_parts` 看部件库(src/parts/lib,每个部件是可独立渲染的最小单元:标题、要点、环形指标、排行条、Lottie……);
+- `add_composite({ start, duration, parts: [{ partId, params?, frame?, enterMs? }, …] })` 一次搭好,或先建空的再 `add_part`;
+- `set_part` / `remove_part` / `move_part` 改参数、框、进场时机、次序和父子关系;`get_clip` 里 parts 每个实例带 partId、frame.local(相对父框,可写)、frame.world(画面绝对位置,只读)、enterMs、settleMs。
+- 部件的框相对**父框**:根部件的父框是组合卡的画布(默认整个舞台,set_rect 缩小组合卡整棵跟着缩),子部件的父框是父部件的框。次序靠后的画在上面。
+
+写新部件(给部件库添零件)放 src/parts/lib/<id>.tsx,契约见 src/parts/types.ts:根元素 absolute inset 0、在自己的框里排版、不带整屏定位参数、给 defaultFrame 和 settleMs。
+
 ### 素材封装卡(不要再手写)
 
 素材目录里的 Lottie 动画和粒子配置**已经是卡**:`lottie-<name>`、`particles-<name>`(src/cards/assets,构建时由目录生成)。

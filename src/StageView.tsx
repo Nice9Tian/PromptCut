@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { Stage } from "./kernel/Stage";
+import { partsTiming } from "./kernel/parts";
+import { getPart } from "./parts/registry";
 import { flattenOverlay, type Project } from "./kernel/project";
 import { installStageClock } from "./render/stageClock";
 import { createAnimationPinner } from "./render/pinAnimations";
@@ -129,7 +131,14 @@ export default function StageView() {
       pinner.sync(from * 1000);
 
       // 补跑途中跨到别的卡的入点时才提交一次 React(让它挂载),其余帧只推时钟
-      const entries = active.map((c) => Math.max(0, c.start - LEAD)).filter((s) => s > from).sort((a, b) => a - b);
+      // 组合卡里 enterMs > 0 的部件在 clip 入点那次提交时还没到点,不挂载;中途不提交它就一直不挂,
+      // 直到最后 setT 才挂,进场动画就从 target 才开始跑,画面停在入场首帧。所以它们的进场点也算提交点。
+      const partEntries = active.flatMap((c) =>
+        c.cardId === "composite" && c.parts?.length
+          ? [...partsTiming(c.parts, getPart).parts.values()].filter((e) => e.enterMs > 0).map((e) => Math.max(0, c.start + e.enterMs / 1000 - LEAD))
+          : [],
+      );
+      const entries = [...active.map((c) => Math.max(0, c.start - LEAD)), ...partEntries].filter((s) => s > from).sort((a, b) => a - b);
       let ei = 0;
       clock.advanceTo(Math.max(0, target) * 1000, {
         onFrame: (ms) => {

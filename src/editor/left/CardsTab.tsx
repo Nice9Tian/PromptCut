@@ -1,6 +1,8 @@
 import { forwardRef, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { allCards } from "../../kernel/registry";
 import { CardCell } from "./CardCell";
+import { PartCell } from "./PartCell";
+import { allParts } from "../../parts/registry";
 import { assetCardKind, featuredParticleIds } from "../../cards/assets";
 
 export interface CardsTabHandle {
@@ -28,6 +30,12 @@ export const CardsTab = forwardRef<CardsTabHandle, CardsTabProps>(function Cards
 
   const [allParticles, setAllParticles] = useState(false);
 
+  // 部件库:组合卡的零件。按名字、说明、标签搜
+  const parts = useMemo(() => {
+    const q = search.toLowerCase().trim();
+    return allParts().filter((p) => !q || p.name.toLowerCase().includes(q) || p.description.toLowerCase().includes(q) || p.id.includes(q) || (p.tags ?? []).some((t) => t.toLowerCase().includes(q)));
+  }, [search]);
+
   const cards = useMemo(() => {
     const q = search.toLowerCase();
     const all = allCards().filter(
@@ -53,7 +61,21 @@ export const CardsTab = forwardRef<CardsTabHandle, CardsTabProps>(function Cards
 
   return (
     <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto pc-l-scroll pb-4 pt-1">
-      {cards.empty && <div className="p-4 text-center text-xs text-neutral-500">没有匹配的卡片</div>}
+      {cards.empty && parts.length === 0 && <div className="p-4 text-center text-xs text-neutral-500">没有匹配的卡片</div>}
+
+      {parts.length > 0 && (
+        <div className="mb-2">
+          <div className="text-[11px] uppercase tracking-wide text-neutral-500 px-2 py-1 flex justify-between" title="组合卡的零件:点一下加进选中的组合卡,没选中就在播放头新建一张组合卡">
+            <span>部件库</span>
+            <span>({parts.length})</span>
+          </div>
+          <div className="grid grid-cols-2 gap-1.5 px-2">
+            {parts.map((def) => (
+              <PartCell key={def.id} def={def} />
+            ))}
+          </div>
+        </div>
+      )}
 
       {cards.user.length > 0 && (
         <div className="mb-2">

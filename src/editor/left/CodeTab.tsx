@@ -66,6 +66,7 @@ export function CodeTab({ clip }: { clip: TrackClip }) {
           moveClip: (id, patch) => actions.moveClip(id, patch),
           setClipFrame: (id, frame) => actions.setClipFrame(id, frame),
           updateClip: (id, patch) => actions.updateClip(id, patch),
+          setClipParts: (id, parts) => actions.setClipParts(id, parts),
         },
         getCard,
       );
@@ -168,7 +169,7 @@ export function CodeTab({ clip }: { clip: TrackClip }) {
             缺 {missing.length} 项参数,正靠默认值兜底渲染:{missing.join(", ")}
           </div>
         ) : (
-          <div className="text-[10px] text-neutral-500">可改:card.id / time / frame.local / blend / parts 里的参数 / params;world、motion、lifecycle 只读</div>
+          <div className="text-[10px] text-neutral-500">可改:card.id / time / frame.local / blend / parts(组合卡整棵可增删改)/ params;world、motion、lifecycle 只读</div>
         )}
       </div>
     </div>

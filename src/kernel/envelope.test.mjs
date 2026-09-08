@@ -187,3 +187,72 @@ test("时序随参数重算:条目多了落定就晚,静态值只是默认参数
   const b = clipOf({ cardId: "broken-card" });
   assert.equal(envelopeOf(project(b), b, broken, STAGE).card.lifecycle.settleMs, 1100);
 });
+
+test("组合卡:parts 是实例树,带 partId / 画面位置 / 时序;写回整棵替换,只读段不影响", () => {
+  const compositeCard = { id: "composite", name: "组合卡", source: "native", description: "", defaults: {}, controls: [], lifecycle: { after: "hold", exit: ["fade"] }, Component: () => null };
+  registerCards([card, compositeCard]);
+  const titlePart = {
+    id: "text-title", name: "标题", description: "", role: "text",
+    defaults: { text: "T", size: 48 }, controls: [{ key: "text", label: "标题", type: "text", required: true }, { key: "size", label: "字号", type: "number" }],
+    defaultFrame: { x: 100, y: 100, w: 800, h: 160 }, settleMs: () => 600, after: "hold", Component: () => null,
+  };
+  const lookup = (id) => (id === "text-title" ? titlePart : undefined);
+  const clip = { id: "c1", cardId: "composite", start: 0, end: 4, params: {}, frame: { x: 0, y: 0, w: 960, h: 540 },
+    parts: [{ id: "a", partId: "text-title", params: { text: "Hi", size: 48 }, frame: { x: 100, y: 100, w: 800, h: 160 }, enterMs: 300 }] };
+  const env = envelopeOf(project(clip), clip, compositeCard, STAGE, lookup);
+  assert.equal(env.card.composite, true);
+  assert.equal(env.card.lifecycle.settleMs, 900, "300 进场 + 600 落定");
+  assert.equal(env.parts[0].partId, "text-title");
+  assert.equal(env.parts[0].label, "标题");
+  assert.deepEqual(env.parts[0].frame.local, { x: 100, y: 100, w: 800, h: 160 });
+  assert.deepEqual(env.parts[0].frame.world, { left: 100, top: 100, width: 800, height: 160 }, "组合卡画布在 (0,0),缩放 1");
+  assert.deepEqual(env.parts[0].params, { text: "Hi", size: 48 });
+
+  // 原样写回:没改动
+  const r0 = recorder(); r0.writer.setClipParts = (id, parts) => r0.calls.push(["parts", id, parts]);
+  assert.deepEqual(applyEnvelope(project(clip), "c1", env, compositeCard, STAGE, r0.writer, (id) => (id === "composite" ? compositeCard : card), lookup).changed, []);
+
+  // 改一个部件的参数和框、加一个部件
+  const edited = JSON.parse(JSON.stringify(env));
+  edited.parts[0].params.text = "Hello";
+  edited.parts[0].frame.local = { x: 50, y: 60, w: 700, h: 120 };
+  edited.parts[0].frame.world = { left: 999, top: 999, width: 1, height: 1 };
+  edited.parts.push({ id: "b", partId: "text-title", params: { text: "Sub" }, enterMs: 500 });
+  const r1 = recorder(); r1.writer.setClipParts = (id, parts) => r1.calls.push(["parts", id, parts]);
+  const rep = applyEnvelope(project(clip), "c1", edited, compositeCard, STAGE, r1.writer, (id) => (id === "composite" ? compositeCard : card), lookup);
+  assert.deepEqual(rep.changed, ["parts"]);
+  const tree = r1.calls[0][2];
+  assert.equal(tree[0].params.text, "Hello");
+  assert.deepEqual(tree[0].frame, { x: 50, y: 60, w: 700, h: 120 }, "只有 local 写进去,world 忽略");
+  assert.equal(tree[0].label, undefined, "部件名是显示用的,不存");
+  assert.deepEqual(tree[1], { id: "b", partId: "text-title", params: { text: "Sub", size: 48 }, enterMs: 500 }, "新实例参数补齐默认值");
+
+  // 坏树整份拒
+  const bad = JSON.parse(JSON.stringify(env));
+  bad.parts.push({ id: "a", partId: "text-title", params: {} });
+  assert.throws(() => applyEnvelope(project(clip), "c1", bad, compositeCard, STAGE, recorder().writer, () => compositeCard, lookup), /重复/);
+});
+
+test("组合卡:嵌套的部件树原样写回不算改动(enterMs 保持相对父级),enterAtMs 是绝对时刻;缩过的组合卡里部件的画面位置按缩放后的框算", () => {
+  const compositeCard = { id: "composite", name: "组合卡", source: "native", description: "", defaults: {}, controls: [], lifecycle: { after: "hold", exit: ["fade"] }, Component: () => null };
+  const box = { id: "group-box", name: "组", description: "", role: "group", defaults: {}, controls: [], after: "hold", Component: () => null };
+  const titlePart = { id: "text-title", name: "标题", description: "", role: "text", defaults: { text: "T" }, controls: [{ key: "text", label: "标题", type: "text" }], settleMs: () => 600, after: "hold", Component: () => null };
+  const lookup = (id) => ({ "group-box": box, "text-title": titlePart })[id];
+  registerCards([card, compositeCard]);
+  const clip = { id: "c1", cardId: "composite", start: 0, end: 4, params: {},
+    frame: { x: 960, y: 540, w: 1920, h: 1080, anchor: [0.5, 0.5], scale: 0.5 },
+    parts: [{ id: "g", partId: "group-box", params: {}, enterMs: 500, frame: { x: 100, y: 100, w: 800, h: 400 }, children: [{ id: "t", partId: "text-title", params: { text: "Hi" }, enterMs: 300 }] }] };
+  const env = envelopeOf(project(clip), clip, compositeCard, STAGE, lookup);
+  const g = env.parts[0], t = g.children[0];
+  assert.equal(g.enterMs, 500); assert.equal(g.enterAtMs, 500);
+  assert.equal(t.enterMs, 300, "写出去的还是相对父级的值"); assert.equal(t.enterAtMs, 800, "绝对时刻另给");
+  assert.equal(t.settleMs, 1400);
+  // 组合卡缩到一半绕中心:画布视觉框是 (480,270,960,540);g 的框 (100,100,800,400) 缩一半后落在 (530,320,400,200)
+  assert.deepEqual(g.frame.world, { left: 530, top: 320, width: 400, height: 200 });
+  assert.deepEqual(t.frame.world, g.frame.world, "没有框的子部件铺满父框");
+  const r = recorder(); r.writer.setClipParts = (id, parts) => r.calls.push(["parts", id, parts]);
+  assert.deepEqual(applyEnvelope(project(clip), "c1", env, compositeCard, STAGE, r.writer, () => compositeCard, lookup).changed, [], "往返一次一个字都不该写");
+  // 连续两次往返,子实例的 enterMs 不漂
+  const again = envelopeOf(project(clip), clip, compositeCard, STAGE, lookup);
+  assert.equal(again.parts[0].children[0].enterMs, 300);
+});

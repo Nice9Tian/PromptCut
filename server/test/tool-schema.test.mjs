@@ -161,3 +161,17 @@ test('所有工具的 enum 值都是字符串(Gemini 只认字符串枚举)', ()
   for (const t of mcpTools) walk(t.inputSchema, t.name);
   assert.deepEqual(bad, [], '数字 / 布尔枚举会让 Gemini 直接拒掉整个请求');
 });
+
+test('所有 type 都是单一字符串(Gemini 不认数组 type,sanitizeSchema 也不会打平它)', () => {
+  const bad = [];
+  const walk = (node, where) => {
+    if (!node || typeof node !== 'object') return;
+    if ('type' in node && typeof node.type !== 'string') bad.push(`${where}: ${JSON.stringify(node.type)}`);
+    for (const [k, v] of Object.entries(node)) {
+      if (k === 'enum' || k === 'type') continue;
+      if (v && typeof v === 'object') walk(v, `${where}.${k}`);
+    }
+  };
+  for (const t of mcpTools) walk(t.inputSchema, t.name);
+  assert.deepEqual(bad, []);
+});

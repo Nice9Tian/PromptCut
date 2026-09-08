@@ -2,6 +2,8 @@ import { useStore, actions } from "../../store/project";
 import { findClip } from "../../kernel/project";
 import { getCard, allCards } from "../../kernel/registry";
 import { ParamsForm } from "./ParamsForm";
+import { PartsForm } from "./PartsForm";
+import { isComposite } from "../../kernel/envelope";
 import { CodeTab } from "./CodeTab";
 
 /** 编辑分页的内容。参数 / 代码这一级由左栏的二级分页栏控制,这里只按 tab 渲染。 */
@@ -110,7 +112,7 @@ export function Inspector({ tab }: { tab: "form" | "code" }) {
       </div>
       
       <div className="flex-1 min-h-0 overflow-y-auto pc-l-scroll">
-        {tab === "form" && <ParamsForm clip={clip} cardDef={cardDef} />}
+        {tab === "form" && (isComposite(clip) ? <PartsForm clip={clip} /> : <ParamsForm clip={clip} cardDef={cardDef} />)}
         {tab === "code" && <CodeTab clip={clip} />}
       </div>
     </div>

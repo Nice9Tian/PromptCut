@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from "react";
 import { createEmptyProject, DEFAULT_CARD_DUR, DEFAULT_MEDIA_DUR, findClip, newId, type MediaAsset, type Project, type Track, type TrackClip, type Transcript, type Shots, type Subjects } from "../kernel/project";
 import { getCard } from "../kernel/registry";
-import type { ClipFrame, ClipMotion } from "../kernel/types";
+import type { ClipFrame, ClipMotion, PartInstance } from "../kernel/types";
 import {
   normalizeCuts, switchCut as switchCutPure, addCut as addCutPure, renameCut as renameCutPure,
   removeCut as removeCutPure, stripMediaFromCuts,
@@ -295,7 +295,7 @@ export const actions = {
 
   /* ---------- clip ---------- */
   /** 往序列里加一张卡。不给 trackId 就挑一条这段时间空着的序列。返回 clip。 */
-  addCardClip(cardId: string, start: number, opts: { trackId?: string; duration?: number; params?: Record<string, unknown> } = {}): TrackClip | null {
+  addCardClip(cardId: string, start: number, opts: { trackId?: string; duration?: number; params?: Record<string, unknown>; parts?: PartInstance[] } = {}): TrackClip | null {
     const def = getCard(cardId);
     if (!def) return null;
     const p = state.project;
@@ -307,7 +307,7 @@ export const actions = {
     // 参数在写入时就展开成完整的一份,不留「空 = 用默认值」这种隐式状态。
     // 调用方(界面、AI)照旧只传要改的项,但存进 clip 的是全量:
     // 存的和渲染的一致,代码页能直接看,导出的项目也不会因为以后调了卡片默认值而变样。
-    let clip: TrackClip = { id: newId("c"), cardId, start, end: start + dur, params: { ...def.defaults, ...(opts.params ?? {}) } };
+    let clip: TrackClip = { id: newId("c"), cardId, start, end: start + dur, params: { ...def.defaults, ...(opts.params ?? {}) }, ...(opts.parts?.length ? { parts: opts.parts } : {}) };
     clip = placeOrShift(target, clip);
     setProject(updateTrack(p, target.id, (t) => ({ ...t, clips: sortClips([...t.clips, clip]) })));
     set({ selection: [clip.id] });
@@ -472,6 +472,27 @@ export const actions = {
     setProject(updateTrack(p, hit.track.id, (t) => ({ ...t, clips: t.clips.map((c) => (c.id === clipId ? { ...c, params: merged } : c)) })));
   },
   /** 换卡片类型(保留时段)。keepParams 为 true 时,保留新卡也有的同名参数。 */
+  /**
+   * 组合卡的部件实例树:整棵替换。树的增删改移在 kernel/parts.ts 里算好(纯函数、已校验),这里只负责存。
+   * 空数组 = 清掉字段。
+   */
+  setClipParts(clipId: string, parts: PartInstance[]) {
+    const p = state.project;
+    const hit = findClip(p, clipId);
+    if (!hit) return false;
+    setProject(updateTrack(p, hit.track.id, (t) => ({
+      ...t,
+      clips: t.clips.map((c) => {
+        if (c.id !== clipId) return c;
+        if (!parts.length) {
+          const { parts: _drop, ...rest } = c;
+          return rest;
+        }
+        return { ...c, parts };
+      }),
+    })));
+    return true;
+  },
   setClipCard(clipId: string, cardId: string, opts: { keepParams?: boolean } = {}) {
     const p = state.project;
     const hit = findClip(p, clipId);
@@ -483,7 +504,15 @@ export const actions = {
       for (const k of Object.keys(def.defaults)) if (k in hit.clip.params) kept[k] = hit.clip.params[k];
     }
     const params: Record<string, unknown> = { ...def.defaults, ...kept };
-    setProject(updateTrack(p, hit.track.id, (t) => ({ ...t, clips: t.clips.map((c) => (c.id === clipId ? { ...c, cardId, params } : c)) })));
+    // 换成别的卡时部件树跟着丢:parts 只属于组合卡,留着会让舞台继续画旧的部件、面板还当它是组合卡
+    setProject(updateTrack(p, hit.track.id, (t) => ({
+      ...t,
+      clips: t.clips.map((c) => {
+        if (c.id !== clipId) return c;
+        const { parts: _parts, ...rest } = c;
+        return cardId === "composite" ? { ...c, cardId, params } : { ...rest, cardId, params };
+      }),
+    })));
   },
   removeClip(clipId: string) {
     const p = state.project;
@@ -497,7 +526,7 @@ export const actions = {
     const hit = findClip(p, clipId);
     if (!hit) return null;
     const len = hit.clip.end - hit.clip.start;
-    let clip: TrackClip = { ...hit.clip, id: newId("c"), start: hit.clip.end, end: hit.clip.end + len };
+    let clip: TrackClip = { ...hit.clip, id: newId("c"), start: hit.clip.end, end: hit.clip.end + len, ...(hit.clip.parts ? { parts: JSON.parse(JSON.stringify(hit.clip.parts)) } : {}) };
     clip = placeOrShift(hit.track, clip);
     setProject(updateTrack(p, hit.track.id, (t) => ({ ...t, clips: sortClips([...t.clips, clip]) })));
     set({ selection: [clip.id] });
@@ -509,7 +538,7 @@ export const actions = {
     const hit = findClip(p, clipId);
     if (!hit || t <= hit.clip.start + 0.05 || t >= hit.clip.end - 0.05) return null;
     const left: TrackClip = { ...hit.clip, end: t };
-    const right: TrackClip = { ...hit.clip, id: newId("c"), start: t, mediaOffset: (hit.clip.mediaOffset ?? 0) + (t - hit.clip.start) };
+    const right: TrackClip = { ...hit.clip, id: newId("c"), start: t, mediaOffset: (hit.clip.mediaOffset ?? 0) + (t - hit.clip.start), ...(hit.clip.parts ? { parts: JSON.parse(JSON.stringify(hit.clip.parts)) } : {}) };
     setProject(updateTrack(p, hit.track.id, (t2) => ({ ...t2, clips: sortClips([...t2.clips.filter((c) => c.id !== clipId), left, right]) })));
     return right;
   },

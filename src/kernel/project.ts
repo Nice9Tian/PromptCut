@@ -231,6 +231,8 @@ export function flattenOverlay(p: Project): Timeline {
         ...(c.opacity !== undefined ? { opacity: c.opacity } : null),
         ...(c.fadeIn ? { fadeIn: c.fadeIn } : null),
         ...(c.fadeOut ? { fadeOut: c.fadeOut } : null),
+        // 组合卡的部件树:Stage 靠它渲染,漏了组合卡就是一张空卡
+        ...(c.parts?.length ? { parts: c.parts } : null),
       });
     }
   }

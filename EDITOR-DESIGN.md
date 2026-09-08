@@ -48,6 +48,8 @@
 - `Inspector` 只接一个 `tab: "form" | "code"` 的 prop,参数/代码这一级由分页壳控制;
   「代码」页显示的是这张卡的**约定封装**(`src/kernel/envelope.ts`:card + lifecycle / time / frame / blend / motion / parts / params),
   不是原始的 `{ cardId, start, end, params }`,也不是组件源码;Agent 的 `get_clip` / `set_clip` 看到和改的是同一份;
+  选中的是组合卡(cardId `composite`,内容是 `clip.parts` 部件实例树)时「参数」页换成 `PartsForm`:一棵可增删改移的部件树,
+  卡片页多一组「部件库」(`PartCell`),点一下加进选中的组合卡或新建一张;
   片段头部(卡名、换卡、开始/结束)在两个二级分页里都在。
 - 自动化钩子(`scripts/left-check.mjs` 依赖):`data-pc="left" / "library" / "inspector" / "search" / "code-editor" / "switch-card"`、
   `data-pc-top-tab`、`data-pc-tab`、`data-pc-card`、`data-pc-media`、`data-pc-param`。

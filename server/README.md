@@ -28,6 +28,10 @@ AI 面板的分页栏、Agent 之间的范围声明与互相通知（`declare_sc
 * 卡片契约多了 `parts`（部件树）和 `lifecycle`（进场落定时刻、之后停住 / 循环 / 持续变化、支持的退场），见 `server/card-authoring-guide.md`。
 * 素材封装卡：`server/catalog` 里的 Lottie / 粒子配置在构建时各自翻译成一张卡（`src/cards/assets`，id 前缀 `lottie-` / `particles-`，create_card 不许占），粒子卡的旋钮由 `particlesKnobs.ts` 从配置里翻译出来（配置里有的才露）。
 
+### CLI 额度阈值熔断（server/runners/quota.mjs）
+
+* Claude Code / Codex 驱动的额度记账与熔断,`GET /api/ai/quota` 看当前额度;机制说明见 [server/runners/QUOTA.md](runners/QUOTA.md)。
+
 ### 部件库与组合卡（src/parts、src/kernel/parts.ts）
 
 * 部件（`PartDef`，src/parts/types.ts）是可独立渲染的最小单元，一个文件一个放在 src/parts/lib/，glob 自动收集；组合卡（cardId `composite`）的 `clip.parts` 是一棵部件实例树，舞台（kernel/PartTree.tsx）按树逐级渲染摆位，每个实例的框相对父框、进场时机相对父级。

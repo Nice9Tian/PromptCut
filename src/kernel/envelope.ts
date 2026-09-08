@@ -1,7 +1,9 @@
-import type { CardDef, CardPart, CardTiming, ClipFrame } from "./types";
+import type { CardDef, CardPart, CardTiming, ClipFrame, PartInstance } from "./types";
+import { getPart } from "../parts/registry.ts";
+import { partsTiming, placeParts, validatePartTree, type PartLookup } from "./parts.ts";
 import type { Project, TrackClip } from "./project";
 import { findClip } from "./project.ts";
-import { worldOf, type Size, type WorldPlacement } from "./layout.ts";
+import { worldOf, type Box, type Size, type WorldPlacement } from "./layout.ts";
 import { validateCardParams } from "./cardParams.ts";
 
 /**
@@ -33,9 +35,19 @@ export interface EnvelopePart {
   role?: CardPart["role"];
   enterMs?: number;
   settleMs?: number;
-  /** 这个部件自己的参数值(键来自 CardPart.params) */
+  /** 这个部件自己的参数值(键来自 CardPart.params;组合卡里是实例的全量参数) */
   params: Record<string, unknown>;
   children?: EnvelopePart[];
+  /**
+   * 下面几个只有**组合卡**的部件实例才有(普通卡的部件只是说明书,没有自己的位置):
+   * partId 引用部件库里的哪个部件;frame.local 相对父框、可写,frame.world 画面绝对矩形、只读;
+   * after 是这个部件落定后的行为。
+   */
+  partId?: string;
+  frame?: { local: ClipFrame | null; world: Box };
+  after?: "hold" | "loop" | "evolve";
+  /** 相对 clip 起点的绝对进场时刻(毫秒),只读;enterMs 仍是相对父级的、可写 */
+  enterAtMs?: number;
 }
 
 export interface ClipEnvelope {
@@ -46,6 +58,8 @@ export interface ClipEnvelope {
     name: string;
     source: CardDef["source"];
     lifecycle: { settleMs?: number; after: "hold" | "loop" | "evolve"; exit: ("fade" | "reverse")[] };
+    /** 组合卡:parts 是可增删改移的部件实例树(add_part / set_part / remove_part / move_part,或整棵写回) */
+    composite?: boolean;
   };
   time: { start: number; end: number; duration: number };
   frame: {
@@ -106,6 +120,57 @@ function partsOf(card: CardDef<any> | undefined, params: Record<string, unknown>
   return [{ id: "root", label: card?.name ?? "卡片", role: "group", params: { ...params } }];
 }
 
+/** 组合卡:部件实例树 → 封装里的 parts,带每个实例的画面位置和时序 */
+function compositePartsOf(tree: PartInstance[], clipWorld: WorldPlacement, lookup: PartLookup): { parts: EnvelopePart[]; settleMs: number; after: "hold" | "loop" | "evolve" } {
+  // 根级传缩放**之后**的矩形:placeParts 内部约定「parentBox 是乘过缩放的世界矩形 + 累计缩放」,
+  // 子级靠 width / scale 还原父框的逻辑尺寸;worldOf 的 box 是缩放前的画布,传它会差一个 scale²、原点也不对。
+  // visualBox 在没旋转时正是缩放绕锚点之后的矩形;旋转过的组合卡这里取的是外接矩形,只是近似。
+  const placed = placeParts(tree, { box: clipWorld.visualBox, scale: clipWorld.scale });
+  const timing = partsTiming(tree, lookup);
+  const fill = (n: PartInstance): EnvelopePart => {
+    const def = lookup(n.partId);
+    const tm = timing.parts.get(n.id);
+    const pl = placed.get(n.id);
+    return {
+      id: n.id,
+      partId: n.partId,
+      label: n.label ?? def?.name ?? n.partId,
+      ...(def?.role ? { role: def.role } : {}),
+      // enterMs 写回去要的是相对父级的值(PartInstance 的定义);绝对时刻另给 enterAtMs 只读
+      enterMs: n.enterMs ?? 0,
+      ...(tm ? { enterAtMs: Math.round(tm.enterMs), settleMs: Math.round(tm.settleMs), after: tm.after } : {}),
+      params: { ...n.params },
+      frame: { local: n.frame ?? null, world: pl?.world ?? clipWorld.box },
+      ...(n.children?.length ? { children: n.children.map(fill) } : {}),
+    };
+  };
+  return { parts: tree.map(fill), settleMs: Math.round(timing.settleMs), after: timing.after };
+}
+
+/** 封装里的部件实例(可能被人改过)→ 存进 clip 的 PartInstance;只留可写的字段 */
+function instancesFromEnvelope(parts: unknown[], lookup: PartLookup): unknown[] {
+  return parts.map((raw) => {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
+    const r = raw as Record<string, unknown>;
+    // 封装里的 label 是显示名(没自定义就是部件名);等于部件名的不存,免得「原样写回」被判成改了
+    const defName = typeof r.partId === "string" ? lookup(r.partId)?.name : undefined;
+    const label = typeof r.label === "string" && r.label && r.label !== defName ? r.label : undefined;
+    const frameRaw = r.frame;
+    const local = frameRaw && typeof frameRaw === "object" && !Array.isArray(frameRaw) && "local" in (frameRaw as object)
+      ? (frameRaw as { local: unknown }).local
+      : frameRaw;
+    return {
+      id: r.id,
+      partId: r.partId,
+      params: r.params ?? {},
+      ...(local !== undefined && local !== null ? { frame: local } : {}),
+      ...(r.enterMs !== undefined ? { enterMs: r.enterMs } : {}),
+      ...(label !== undefined ? { label } : {}),
+      ...(Array.isArray(r.children) ? { children: instancesFromEnvelope(r.children, lookup) } : {}),
+    };
+  });
+}
+
 /** 部件树里的参数摊平回一份 params(写回时用:用户改的是部件里的值) */
 function flattenParts(parts: EnvelopePart[] | undefined, into: Record<string, unknown>): void {
   for (const p of parts ?? []) {
@@ -114,16 +179,21 @@ function flattenParts(parts: EnvelopePart[] | undefined, into: Record<string, un
   }
 }
 
-export function envelopeOf(project: Project, clip: TrackClip, card: CardDef<any> | undefined, stage: Size): ClipEnvelope {
+export function envelopeOf(project: Project, clip: TrackClip, card: CardDef<any> | undefined, stage: Size, partLookup: PartLookup = getPart): ClipEnvelope {
   const params = { ...(clip.params ?? {}) };
   const missing = (card?.controls ?? []).map((c) => c.key).filter((k) => !(k in params));
   const motion = clip.motion;
   const timing = timingOf(card, params);
   const staticLc = card?.lifecycle ?? DEFAULT_LIFECYCLE;
+  const world = worldOf(clip.frame, stage);
+  // 组合卡:结构和时序都来自部件实例树,不是卡片声明
+  const composite = isComposite(clip);
+  const comp = composite ? compositePartsOf(clip.parts ?? [], world, partLookup) : null;
   const lifecycle = {
     ...staticLc,
     ...(roundMs(timing.settleMs) !== undefined ? { settleMs: roundMs(timing.settleMs) } : {}),
     ...(timing.after ? { after: timing.after } : {}),
+    ...(comp ? { settleMs: comp.settleMs, after: comp.after } : {}),
   };
   return {
     $schema: ENVELOPE_SCHEMA,
@@ -133,15 +203,21 @@ export function envelopeOf(project: Project, clip: TrackClip, card: CardDef<any>
       name: card?.name ?? clip.cardId,
       source: card?.source ?? "native",
       lifecycle,
+      ...(composite ? { composite: true } : {}),
     },
     time: { start: clip.start, end: clip.end, duration: round3(clip.end - clip.start) },
-    frame: { local: clip.frame ?? null, world: worldOf(clip.frame, stage) },
+    frame: { local: clip.frame ?? null, world },
     blend: { opacity: clip.opacity ?? 1, fadeIn: clip.fadeIn ?? 0, fadeOut: clip.fadeOut ?? 0 },
     motion: motion ? { attached: true, mediaId: motion.mediaId, whenHidden: motion.whenHidden } : { attached: false },
-    parts: partsOf(card, params, timing),
+    parts: comp ? comp.parts : partsOf(card, params, timing),
     params,
     ...(missing.length ? { missingParams: missing } : {}),
   };
+}
+
+/** 组合卡:cardId 是 composite,或者 clip 上已经有部件树 */
+export function isComposite(clip: { cardId: string; parts?: PartInstance[] }): boolean {
+  return clip.cardId === "composite" || !!clip.parts?.length;
 }
 
 function round3(n: number): number {
@@ -155,10 +231,12 @@ export interface EnvelopeWriter {
   moveClip(clipId: string, patch: { start?: number; end?: number }): void;
   setClipFrame(clipId: string, frame: ClipFrame | undefined): void;
   updateClip(clipId: string, patch: { opacity?: number; fadeIn?: number; fadeOut?: number }): void;
+  /** 组合卡的部件实例树整棵替换 */
+  setClipParts?(clipId: string, parts: PartInstance[]): void;
 }
 
 export interface ApplyReport {
-  /** 实际改了哪些段:card / params / time / frame / blend */
+  /** 实际改了哪些段:card / params / parts / time / frame / blend */
   changed: string[];
 }
 
@@ -201,11 +279,13 @@ export function applyEnvelope(
   stage: Size,
   writer: EnvelopeWriter,
   findCardById: (id: string) => CardDef<any> | undefined,
+  partLookup: PartLookup = getPart,
 ): ApplyReport {
   if (!isObj(input)) throw new Error("封装要是一个对象 { ... }");
   const hit = findClip(project, clipId);
   if (!hit) throw new Error(`找不到 clip ${clipId}`);
-  const current = envelopeOf(project, hit.clip, card, stage);
+  const current = envelopeOf(project, hit.clip, card, stage, partLookup);
+  const composite = isComposite(hit.clip);
   const env = input as Partial<ClipEnvelope> & Record<string, unknown>;
   const changed: string[] = [];
 
@@ -220,9 +300,19 @@ export function applyEnvelope(
   if (env.params !== undefined && !isObj(env.params)) throw new Error("params 要是一个对象");
   const fromParams = isObj(env.params) ? env.params : undefined;
   const fromParts: Record<string, unknown> = {};
+  // 组合卡:parts 是可写的实例树,整棵校验、整棵替换;普通卡:parts 里的值只是 params 的另一种视图
+  let nextTree: PartInstance[] | undefined;
   if (env.parts !== undefined) {
     if (!Array.isArray(env.parts)) throw new Error("parts 要是数组");
-    flattenParts(env.parts as EnvelopePart[], fromParts);
+    if (composite) {
+      const tree = validatePartTree(instancesFromEnvelope(env.parts, partLookup), partLookup);
+      // 现有的树也过一遍同样的归一化(键序、默认值),不然键序不同就会被判成改了
+      let currentNorm: unknown = hit.clip.parts ?? [];
+      try { currentNorm = validatePartTree(hit.clip.parts ?? [], partLookup); } catch { /* 库里少了部件之类,按原样比 */ }
+      if (JSON.stringify(tree) !== JSON.stringify(currentNorm)) nextTree = tree;
+    } else {
+      flattenParts(env.parts as EnvelopePart[], fromParts);
+    }
   }
   // params 段没动、parts 段动了 → 以 parts 为准;两边都给了以 params 为准(它是全量视图)
   const paramsSame = fromParams !== undefined && JSON.stringify(fromParams) === JSON.stringify(current.params);
@@ -278,6 +368,11 @@ export function applyEnvelope(
   if (nextParams) {
     writer.setClipParams(clipId, nextParams, { merge: false });
     changed.push("params");
+  }
+  if (nextTree) {
+    if (!writer.setClipParts) throw new Error("这里不支持改组合卡的部件树");
+    writer.setClipParts(clipId, nextTree);
+    changed.push("parts");
   }
   if (nextTime) {
     writer.moveClip(clipId, nextTime);
