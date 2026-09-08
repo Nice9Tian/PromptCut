@@ -32,8 +32,25 @@
 ; 代价说清楚:如果用户开着软件启动安装器、又在询问框上点了取消,他那个还开着的窗口会因为
 ; sidecar 已经被杀而变成空壳,得重开一次。相比「装不上,而且不重启就永远装不上」,这个换得值。
 
+; 写不进去的文件必须让整个安装失败,不许跳过。
+;
+; NSIS 默认 AllowSkipFiles on:界面模式下弹一个「无法写入文件」的框,静默模式(/S)则
+; **一声不吭跳过这个文件继续装**,最后还报退出码 0。实测过:拿一个孤儿 ffmpeg 锁住
+; runtime\ffmpeg\ffmpeg.exe,静默装完退出码是 0,而那个文件的修改时间还是上一版的 ——
+; 装出来的是一个「看起来装好了、其实少了几个文件」的应用,比装不上更难查。
+; 关掉之后两条路统一:写不进去就中止,于是 .onInstFailed 接管、出诊断报告。
+AllowSkipFiles off
+
 ; 把杀进程的活写成一个临时 ps1 再跑,而不是把 PowerShell 代码塞进 nsExec 的命令行 ——
 ; 那样两边的引号会打架,而这段脚本里全是 $ 和引号。
+;
+; **进程列表必须走 WMI(Get-CimInstance Win32_Process),不能用 Get-Process。**
+; NSIS 是 32 位程序,它起的 PowerShell 也是 32 位;而 32 位进程**读不到 64 位进程的
+; Process.Path** —— 那个属性底下是 MainModule,跨位数枚举模块会失败,配上
+; SilentlyContinue 就静悄悄返回 $null,于是每个进程都被当成「路径不明」跳过,
+; 一个都杀不掉,脚本还照样退出码 0。
+; 这个坑只有把安装包真的装一遍才看得见:手动用 64 位 PowerShell 测,它是好的。
+; WMI 那条路由内核提供,不受 WOW64 影响。
 !macro PC_WRITE_KILLER
   InitPluginsDir
   FileOpen $9 "$PLUGINSDIR\pc-kill-leftovers.ps1" w
@@ -44,12 +61,12 @@
   FileWrite $9 "$$runtime = [System.IO.Path]::Combine($$Dir, 'runtime') + [System.IO.Path]::DirectorySeparatorChar$\r$\n"
   FileWrite $9 "$$sidecar = [System.IO.Path]::Combine($$Dir, 'node.exe')$\r$\n"
   FileWrite $9 "$$cmp = [System.StringComparison]::OrdinalIgnoreCase$\r$\n"
-  FileWrite $9 "foreach ($$proc in Get-Process) {$\r$\n"
-  FileWrite $9 "  $$path = $$proc.Path$\r$\n"
+  FileWrite $9 "foreach ($$proc in Get-CimInstance Win32_Process) {$\r$\n"
+  FileWrite $9 "  $$path = $$proc.ExecutablePath$\r$\n"
   FileWrite $9 "  if (-not $$path) { continue }$\r$\n"
   FileWrite $9 "  if ($$path.Equals($$sidecar, $$cmp) -or $$path.StartsWith($$runtime, $$cmp)) {$\r$\n"
-  FileWrite $9 "    Write-Output ('kill ' + $$proc.Id + ' ' + $$path)$\r$\n"
-  FileWrite $9 "    Stop-Process -Id $$proc.Id -Force$\r$\n"
+  FileWrite $9 "    Write-Output ('kill ' + $$proc.ProcessId + ' ' + $$path)$\r$\n"
+  FileWrite $9 "    Stop-Process -Id $$proc.ProcessId -Force$\r$\n"
   FileWrite $9 "  }$\r$\n"
   FileWrite $9 "}$\r$\n"
   FileClose $9

@@ -70,18 +70,22 @@ if ($Dir) {
 # ── 占着安装目录里文件的进程(最常见的元凶)────────────────────────────
 Add-Section '占用安装目录的进程'
 Add-Line '(上一次运行留下的孤儿会锁住自己的 exe,安装器就写不进去)'
+# 走 WMI 而不是 Get-Process:安装器是 32 位的,它起的 PowerShell 也是,
+# 而 32 位进程读不到 64 位进程的 Process.Path(MainModule 跨位数会失败,返回 $null)。
+# 用 Get-Process 的话这一节会永远报「没有占用进程」—— 一个假阴性,
+# 而且恰好把最常见的原因排除掉了,比不报还糟。
 $found = $false
 if ($dirExists) {
   $prefix = $Dir.TrimEnd('\') + '\'
   $cmp = [System.StringComparison]::OrdinalIgnoreCase
-  foreach ($proc in Get-Process) {
-    $path = $proc.Path
+  foreach ($proc in Get-CimInstance Win32_Process) {
+    $path = $proc.ExecutablePath
     if (-not $path) { continue }
     if ($path.StartsWith($prefix, $cmp)) {
       $found = $true
       $started = ''
-      try { $started = ' 启动于 ' + $proc.StartTime.ToString('HH:mm:ss') } catch {}
-      Add-Line ('  PID ' + $proc.Id + '  ' + $path + $started)
+      try { $started = ' 启动于 ' + $proc.CreationDate.ToString('HH:mm:ss') } catch {}
+      Add-Line ('  PID ' + $proc.ProcessId + '  ' + $path + $started)
     }
   }
 }
