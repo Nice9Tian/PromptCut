@@ -4,6 +4,20 @@ import { readSse, assertOk } from './base.mjs';
 import { toolToVendor } from '../schema.mjs';
 import { createThinkSplitter } from '../think-tags.mjs';
 
+/**
+ * 哪些 (地址, 模型) 已经明说过「工具和 reasoning_effort 不能同时给」。
+ * 进程级记忆:同一次运行里撞过一次就够了,后面每一轮都直接不带,不用每轮都白撞一次 400。
+ * 不落盘 —— 上游随时可能改支持情况,重启一次重新试是合理的。
+ */
+const effortRejectsTools = new Set();
+
+/** 这条 400 是不是「工具 + reasoning_effort 不兼容」那一种 */
+function isEffortWithToolsRejection(text) {
+  if (!text) return false;
+  const s = String(text);
+  return /reasoning_effort/i.test(s) && /not supported|unsupported|cannot|can't/i.test(s);
+}
+
 export function createProvider(cfg, { fetchImpl = globalThis.fetch } = {}) {
   return {
     name: 'openai',
@@ -109,6 +123,11 @@ export function createProvider(cfg, { fetchImpl = globalThis.fetch } = {}) {
         stream_options: { include_usage: true }
       };
 
+      const openaiTools = (tools || []).map(t => toolToVendor(t, 'openai', { compat: cfg.schemaCompat }));
+      if (openaiTools.length > 0) {
+        body.tools = openaiTools;
+      }
+
       /*
        * 思考强度。空字符串 = 用模型默认,这时**一个字段都不发** ——
        * 有些上游对不认识的参数是直接 400,而不是忽略。
@@ -118,20 +137,47 @@ export function createProvider(cfg, { fetchImpl = globalThis.fetch } = {}) {
        * medium / high). It can also be automatically injected by the gateway through
        * the model name suffix.」—— 也就是说填 `xxx-thinking` 这类带后缀的模型名时,
        * 网关会自己注入,那种情况下用户不选档位也是对的,别硬塞一个覆盖掉它。
+       *
+       * 但有些模型**不接受 reasoning_effort 和 function tools 同时出现**,直接 400:
+       *
+       *   Function tools with reasoning_effort are not supported for gpt-5.6-terra in
+       *   /v1/chat/completions. To use function tools, use /v1/responses or set
+       *   reasoning_effort to 'none'.
+       *
+       * 而这个应用**每一次请求都带着三十来个工具**,所以只要用户给这类模型选了思考档,
+       * 就是条条大路都 400 —— 表现是「对话一发就红」,看起来像断线,其实是参数打架。
+       *
+       * 400 不该被通用重试层重试(那层是对的:参数错重发一百次也一样)。这里做的是
+       * 另一回事 —— **改请求再发一次**:去掉 reasoning_effort 重发,并记住这个
+       * (地址, 模型) 从此不再带它。思考档在支持的模型上照常生效,不支持的自己降级,
+       * 不需要维护一张模型白名单(那种表永远追不上上游改名)。
        */
-      if (cfg.effort) body.reasoning_effort = cfg.effort;
+      const effortKey = `${baseUrl}|${cfg.model}`;
+      const wantEffort = !!cfg.effort && !effortRejectsTools.has(effortKey);
+      if (wantEffort) body.reasoning_effort = cfg.effort;
 
-      const openaiTools = (tools || []).map(t => toolToVendor(t, 'openai', { compat: cfg.schemaCompat }));
-      if (openaiTools.length > 0) {
-        body.tools = openaiTools;
-      }
-
-      const response = await fetchImpl(url, {
+      const post = (b) => fetchImpl(url, {
         method: 'POST',
         headers,
-        body: JSON.stringify(body),
+        body: JSON.stringify(b),
         signal
       });
+
+      let response = await post(body);
+
+      if (response.status === 400 && wantEffort && openaiTools.length > 0) {
+        // 正文只能读一次:读出来判一判,不是这个原因的话再包回去交给 assertOk 正常报错
+        let text = '';
+        try { text = await response.text(); } catch { /* 读不到就当不是 */ }
+        if (isEffortWithToolsRejection(text)) {
+          effortRejectsTools.add(effortKey);
+          const retryBody = { ...body };
+          delete retryBody.reasoning_effort;
+          response = await post(retryBody);
+        } else {
+          response = { ok: false, status: response.status, headers: response.headers, text: async () => text };
+        }
+      }
 
       await assertOk(response, 'openai');
 
