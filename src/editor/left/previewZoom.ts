@@ -1,88 +1,81 @@
-import { useEffect, useRef, useState, type RefObject } from "react";
-import { measureContentBox, unionBox, type Box } from "./contentBox";
+import { useEffect, useMemo, useState, type RefObject } from "react";
+import { measureAcrossTime, type Box } from "./contentBox";
+import { lookupBox, rememberBox } from "./previewBoxes";
+import { startPrewarm } from "./prewarmBoxes";
+import { getState } from "../../store/project";
 
 /**
- * 预览卡的缩放:按动效**跑完整段**时内容最大的包围盒来缩,量一次、记住,之后不再动。
+ * 预览卡的缩放:按动效**跑完整段**时内容最大的包围盒来缩。
  *
- * 以前是悬停后在 160 / 600 / 1400ms 各量一次、每量到一次就把视野再推近一点 —— 画面会晃,
- * 而且入场从画外飞进来的动效第一次量到的是半路的框。现在:
- *   1. 第一次悬停先做一遍**测量跑**:舞台藏着(opacity 0)挂上去,等动画建好之后,把舞台里所有
- *      Web Animations 暂停、逐个时刻拨 currentTime(0 到落定时刻,每 100ms 一档),每一档量包围盒取并集。
- *      这一步是同步的,不靠 requestAnimationFrame,窗口在后台、动画被节流也照样量得出来;
- *   2. 量完存进缓存(按卡片 / 部件 id),视野一步到位推到那个盒子,再从头正常速度播一遍;
- *   3. 之后每次悬停直接用缓存,不再量。
- * 量的时长最多 MAX_MEASURE_MS;不是 Web Animations 驱动的部分(跟 t 走的 Lottie、打字机)按 t = 0 量。
+ * 盒子有两层来源(previewBoxes.ts):
+ *   1. **已经算好的**:随包发的静态表(`src/cards/preview-boxes.json`)或本机缓存 ——
+ *      悬停时直接拿来用,一步到位,没有测量跑、没有黑屏;
+ *   2. **现场量**:表里没有(用户 / AI 新建的卡、刚加的部件、静态表还没生成)就退回
+ *      这里的 DOM 测量:先藏着舞台(opacity 0)挂上去,等动画建好之后把里面的
+ *      Web Animations 逐档拨过去量并集,量完存进缓存、推近视野、从头正常播一遍。
+ *
+ * 另外第一次用到这个 hook(= 第一次打开卡片页)会顺手启动后台补量(prewarmBoxes.tsx),
+ * 把表里缺的卡片在屏幕外慢慢算完,之后就都走第 1 条路了。
  */
 export interface PreviewZoom {
-  /** 量出来的盒子;null = 没量到或内容铺满整幅,按整幅显示 */
+  /** 用来缩放的盒子;null = 内容铺满整幅,按整幅显示 */
   box: Box | null;
   /** 正在测量跑:舞台藏起来 */
   measuring: boolean;
-  /** 每次重播 +1,和以前一样用它做 key 重挂载 */
+  /** 每次重播 +1,用它做 key 重挂载 */
   token: number;
 }
 
 const MAX_MEASURE_MS = 4000;
-const STEP_MS = 100;
 /** 挂上去之后等动画建好再量;motion 在挂载后的下一帧才创建 Web Animations */
 const SETTLE_DELAY_MS = 80;
-const cache = new Map<string, Box | null>();
 
-/** 让别处(比如改了卡片源码热更新后)能把缓存丢掉 */
-export function invalidatePreviewZoom(key?: string) {
-  if (key) cache.delete(key);
-  else cache.clear();
-}
-
-/** 同步量一遍:把舞台里的动画拨到各个时刻取包围盒并集;量完把动画拨回 0 */
-function measureAcross(stage: HTMLElement, totalMs: number): Box | null {
-  const anims = stage.getAnimations({ subtree: true });
-  let union: Box | null = null;
-  const set = (t: number) => {
-    for (const a of anims) {
-      try {
-        a.pause();
-        a.currentTime = t;
-      } catch { /* 有的动画不让改(比如已经结束的),跳过 */ }
-    }
-  };
-  for (let t = 0; t <= totalMs; t += STEP_MS) {
-    set(t);
-    union = unionBox(union, measureContentBox(stage));
-  }
-  set(0);
-  return union;
-}
+/** 卡片源码热更新之后想重量:previewBoxes 的 forgetBoxes 丢缓存,再刷新页面 */
+export { forgetBoxes as invalidatePreviewZoom } from "./previewBoxes";
 
 export function usePreviewZoom(key: string, stageRef: RefObject<HTMLElement | null>, hot: boolean, animMs: number): PreviewZoom {
-  const [box, setBox] = useState<Box | null>(() => cache.get(key) ?? null);
+  const [measured, setMeasured] = useState<{ key: string; box: Box | null } | null>(null);
   const [measuring, setMeasuring] = useState(false);
   const [token, setToken] = useState(0);
+  const { width, height } = getState().project;
+
+  // 渲染时就查一次表:等 effect 跑完再套盒子的话,第一帧会先按整幅画出来,肉眼能看见一下跳变
+  const known = useMemo(() => lookupBox(key, width, height), [key, width, height, measured]);
+
+  // 第一次有格子用到预览 = 卡片页开了,顺手把后台补量支起来
+  useEffect(() => { startPrewarm(); }, []);
 
   useEffect(() => {
     if (!hot) return;
     setToken((n) => n + 1);
-    if (cache.has(key)) {
-      setBox(cache.get(key) ?? null);
+
+    // 算好过了(静态表 / 本机缓存 / 这次会话早先量的):直接用,不再量
+    if (lookupBox(key, width, height).has) {
       setMeasuring(false);
       return;
     }
-    // 第一次:测量跑
+
+    // 没算过:现场量一遍
     setMeasuring(true);
     const total = Math.min(MAX_MEASURE_MS, Math.max(400, animMs) + 300);
     const timer = window.setTimeout(() => {
       const stage = stageRef.current;
-      const union = stage ? measureAcross(stage, total) : null;
-      cache.set(key, union);
-      setBox(union);
+      let union: Box | null = null;
+      try {
+        union = stage ? measureAcrossTime(stage, total) : null;
+      } catch {
+        union = null; // 量炸了就按整幅,别把预览卡住
+      }
+      rememberBox(key, width, height, union);
+      setMeasured({ key, box: union });
       setMeasuring(false);
       // 量完从头正常速度再播一遍
       setToken((n) => n + 1);
     }, SETTLE_DELAY_MS);
     return () => window.clearTimeout(timer);
-  }, [hot, key, animMs, stageRef]);
+  }, [hot, key, animMs, stageRef, width, height]);
 
-  return { box, measuring, token };
+  return { box: measured?.key === key ? measured.box : known.box, measuring, token };
 }
 
 /** 有盒子就推到盒子(留一圈边),没有就整幅;返回舞台该放的位置和比例 */

@@ -42,8 +42,9 @@
   所以切分页不丢滚动位置、搜索词和代码框里没提交的草稿。
 - 分页选择记在 localStorage:`pc.left.tab`(assets/edit)、`pc.left.assetTab`(cards/videos/captions)、
   `pc.left.editTab`(form/code)。
-- `CardsTab` 搜索 + 卡片网格;`MediaTab` 素材列表(拖到时间轴、右键删除),每行的「字幕」按钮
-  跳到字幕分页并选中这条;`CaptionsTab` 选素材 → 没转写就在这儿转,转过就列出每一段,
+- `CardsTab` 搜索 + 卡片网格;`MediaTab` 视频 / 图像是方形预览卡、配乐是行(拖到时间轴,右键
+  「转写字幕 / 取比例 / 删除」;时间轴上的视频、音频片段右键也能转写,走 `captionsBus.ts` 的
+  `pc-open-captions` 事件);`CaptionsTab` 选素材 → 没转写就在这儿转,转过就列出每一段,
   点一段把播放头挪到时间轴上对应的位置(素材时间经所在片段的 `mediaOffset` 换算)。
 - `Inspector` 只接一个 `tab: "form" | "code"` 的 prop,参数/代码这一级由分页壳控制;
   「代码」页显示的是这张卡的**约定封装**(`src/kernel/envelope.ts`:card + lifecycle / time / frame / blend / motion / parts / params),
@@ -51,6 +52,21 @@
   选中的是组合卡(cardId `composite`,内容是 `clip.parts` 部件实例树)时「参数」页换成 `PartsForm`:一棵可增删改移的部件树,
   卡片页多一组「部件库」(`PartCell`),点一下加进选中的组合卡或新建一张;
   片段头部(卡名、换卡、开始/结束)在两个二级分页里都在。
+- **统一的方形预览卡**(`PreviewCard.tsx`,样式 `left.css` 的 `.pc-pcard*`):动效卡、部件、
+  转场、视频、图像共用一个壳 —— 正方形画面区 + 底边标题条 + 贴底的强调色进度条。悬停才起动画 /
+  播视频。**不要**给它套皮肤里 `.cursor-grab.bg-neutral-900` 那组类:那条规则悬停时画一道 3px 的
+  左侧强调色内阴影,预览一铺满就成了漏进画面的色边。
+- **列数按面板宽度算**:`index.tsx` 的 `gridColumns` = `max(2, floor(面板宽 / 100))`(100 是顶栏
+  「导出视频」按钮的宽),写成 CSS 变量 `--pc-l-cols` 挂在左栏根节点上,`.pc-l-grid` 和卡片页的
+  `grid-cols-2` 都读它;不够再多一列时格子按 `1fr` 拉宽填满。
+- **预览按动效的包围盒推近**,不按整幅画幅 —— 1920×1080 缩进 130px 的格子,标题卡只剩一粒。盒子分两层:
+  - **算好的**:`src/cards/preview-boxes.json` 静态表(`npm run preview-boxes` 离线生成、入库、随包发)
+    和本机 localStorage 缓存,悬停时直接用,一步到位;
+  - **现场量**:表里没有(用户 / AI 新建的卡、刚加的部件)就藏着舞台跑一遍,把 Web Animations 逐档拨过去
+    量并集(`contentBox.ts` 的 `measureAcrossTime`),量完存进缓存。
+    第一次打开卡片页还会在屏幕外把表里缺的挨个补量(`prewarmBoxes.tsx`,一次一个、排在空闲时段)。
+  canvas 里画了什么 DOM 看不见,所以 `contentBox.ts` 对 2D 画布直接扫像素定边界;粒子卡不进后台队列
+  (53 张 canvas 引擎太贵),靠悬停时的像素扫描就够。卡片改了默认参数或动画,重跑 `npm run preview-boxes`。
 - 自动化钩子(`scripts/left-check.mjs` 依赖):`data-pc="left" / "library" / "inspector" / "search" / "code-editor" / "switch-card"`、
   `data-pc-top-tab`、`data-pc-tab`、`data-pc-card`、`data-pc-media`、`data-pc-param`。
 - 上下分屏(`pc.left.split`、`data-pc="split"`)已随两级分页去掉。
