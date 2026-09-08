@@ -167,6 +167,15 @@ export async function openBakery(opts = {}) {
       // pcSpin 方块整个时有时无(3359 像素、通道差 255)。另一个会话的 A/B(两组各 30 趟同时跑
       // 互相制造负载,只导第 0-1 帧):不加翻 6 次,加了 0 次。软件合成本来就开着,线程动画只剩风险。
       '--disable-threaded-animation',
+      // WebGL:上面那串 --disable-gpu* 把它一起关死了 —— 不是「慢一点」,是 getContext('webgl')
+      // 直接返回 null,three.js 那类卡在导出里会渲成一张空画布,而且**不报错**
+      // (空 canvas 的 PNG 也有一千多字节,只看文件大小根本发现不了)。
+      // 这个标志把 SwiftShader 的软件 WebGL 打开。名字里的 unsafe 指的是「没有 GPU 沙箱那层保障」,
+      // 不是画得不准 —— 实测同一个三角形连画三趟 PNG 逐字节相同(hash 9ec00ecd ×3),
+      // 确定性正是导出这条路唯一在乎的东西。
+      // 加它也不动老基线:demo 时间轴第 0~14 帧,开与不开烘出来 15/15 逐字节相同
+      // (它只是给 WebGL 上下文补了一个软件实现,2D 那条光栅路径本来就已经是软件的了)。
+      '--enable-unsafe-swiftshader',
       // 实验/排查用:PC_CHROME_ARGS="--flag-a --flag-b" 追加启动参数,不设就是上面这套
       ...(process.env.PC_CHROME_ARGS ? process.env.PC_CHROME_ARGS.split(/\s+/).filter(Boolean) : []),
     ],

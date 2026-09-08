@@ -209,6 +209,9 @@ async function main() {
       "--hide-scrollbars",
       "--no-first-run",
       "--disable-gpu",
+      // 软件 WebGL:不加的话三维卡(scene-3d)在这个无头实例里是一张空画布,
+      // contentBox 会去量一块从没渲染过的画布。导出和 see_preview 走 export-frames.mjs,那边加了同一条。
+      "--enable-unsafe-swiftshader",
       ...(process.env.PC_CHROME_ARGS ? process.env.PC_CHROME_ARGS.split(/\s+/).filter(Boolean) : []),
     ],
   });

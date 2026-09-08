@@ -9,6 +9,7 @@ import { dataCards } from "./batch-data";
 import { timelineCards } from "./batch-timeline";
 import { lottieCard } from "./lottie";
 import { particlesCard } from "./particles";
+import { scene3dCard } from "./scene-3d";
 import { compositeCard } from "./composite";
 
 /** 自家用 Motion 写的卡。每张卡一个文件,在这里汇总。 */
@@ -16,6 +17,7 @@ export const nativeCards: CardDef<any>[] = [
   compositeCard,
   lottieCard,
   particlesCard,
+  scene3dCard,
   odometer,
   blurText,
   ringMetric,
