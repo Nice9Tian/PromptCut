@@ -4,13 +4,6 @@ import { readSse, assertOk } from './base.mjs';
 import { toolToVendor } from '../schema.mjs';
 import { createThinkSplitter } from '../think-tags.mjs';
 
-/**
- * 哪些 (地址, 模型) 已经明说过「工具和 reasoning_effort 不能同时给」。
- * 进程级记忆:同一次运行里撞过一次就够了,后面每一轮都直接不带,不用每轮都白撞一次 400。
- * 不落盘 —— 上游随时可能改支持情况,重启一次重新试是合理的。
- */
-const effortRejectsTools = new Set();
-
 /** 这条 400 是不是「工具 + reasoning_effort 不兼容」那一种 */
 function isEffortWithToolsRejection(text) {
   if (!text) return false;
@@ -144,17 +137,13 @@ export function createProvider(cfg, { fetchImpl = globalThis.fetch } = {}) {
        *   /v1/chat/completions. To use function tools, use /v1/responses or set
        *   reasoning_effort to 'none'.
        *
-       * 而这个应用**每一次请求都带着三十来个工具**,所以只要用户给这类模型选了思考档,
-       * 就是条条大路都 400 —— 表现是「对话一发就红」,看起来像断线,其实是参数打架。
+       * 而这个应用**每一次请求都带着三十来个工具**,所以只要落到不吃这个组合的上游,
+       * 就是一发就 400 —— 表现像断线,其实是参数和路由撞上了。
        *
-       * 400 不该被通用重试层重试(那层是对的:参数错重发一百次也一样)。这里做的是
-       * 另一回事 —— **改请求再发一次**:去掉 reasoning_effort 重发,并记住这个
-       * (地址, 模型) 从此不再带它。思考档在支持的模型上照常生效,不支持的自己降级,
-       * 不需要维护一张模型白名单(那种表永远追不上上游改名)。
+       * 通用重试层不管 400(那层是对的:参数错重发一百次也一样),但**这一个 400 是例外**,
+       * 因为它取决于路由到哪个上游,不取决于请求内容。下面单独处理。
        */
-      const effortKey = `${baseUrl}|${cfg.model}`;
-      const wantEffort = !!cfg.effort && !effortRejectsTools.has(effortKey);
-      if (wantEffort) body.reasoning_effort = cfg.effort;
+      if (cfg.effort) body.reasoning_effort = cfg.effort;
 
       const post = (b) => fetchImpl(url, {
         method: 'POST',
@@ -162,20 +151,48 @@ export function createProvider(cfg, { fetchImpl = globalThis.fetch } = {}) {
         body: JSON.stringify(b),
         signal
       });
+      /** 把已经读走正文的错误响应包回一个壳,好让 assertOk 照常报出那句话 */
+      const asRead = (r, text) => ({ ok: false, status: r.status, headers: r.headers, text: async () => text });
 
       let response = await post(body);
 
-      if (response.status === 400 && wantEffort && openaiTools.length > 0) {
-        // 正文只能读一次:读出来判一判,不是这个原因的话再包回去交给 assertOk 正常报错
+      if (response.status === 400 && cfg.effort && openaiTools.length > 0) {
+        // 正文只能读一次:读出来判一判,不是这个原因的话包回去交给 assertOk 正常报错
         let text = '';
         try { text = await response.text(); } catch { /* 读不到就当不是 */ }
-        if (isEffortWithToolsRejection(text)) {
-          effortRejectsTools.add(effortKey);
-          const retryBody = { ...body };
-          delete retryBody.reasoning_effort;
-          response = await post(retryBody);
+        if (!isEffortWithToolsRejection(text)) {
+          response = asRead(response, text);
         } else {
-          response = { ok: false, status: response.status, headers: response.headers, text: async () => text };
+          /*
+           * **这是路由问题,不是模型能力问题** —— 中转站的账单页说得很清楚:
+           *
+           *   01:00:04  分组 Openai-Gpt-2  gpt-5.6-terra  错误  0 tokens  $0.000000
+           *   01:00:43  分组 Codex-Gpt-1   gpt-5.6-terra  成功  18s       $0.001894
+           *
+           * 同一个模型名,两个不同的上游分组,一个不吃 function tools + reasoning_effort、
+           * 另一个吃。落到哪一个是中转站路由决定的,和我们发什么无关。
+           *
+           * 所以正确做法是**原样重发去碰另一条路由**,而不是改请求。特别地:
+           * 别去记「这个模型不支持」—— 那等于凭一次坏运气把思考档永久关掉,
+           * 而它在对的上游上明明是好的。
+           *
+           * 重发很便宜:被拒那次账单是 0 tokens、$0.000000、1 秒返回,
+           * 所以多试几次是划算的。都不成再退而求其次去掉参数 ——
+           * 少一个思考档,总好过把整条对话红在那儿。
+           */
+          const ROUTE_RETRIES = 3;
+          for (let i = 0; i < ROUTE_RETRIES && isEffortWithToolsRejection(text); i++) {
+            response = await post(body);
+            if (response.status !== 400) { text = ''; break; }
+            try { text = await response.text(); } catch { text = ''; }
+            if (!isEffortWithToolsRejection(text)) { response = asRead(response, text); break; }
+          }
+          // 几条路由都撞上不支持的上游:最后退一步,去掉思考档再发一次
+          if (response.status === 400 && isEffortWithToolsRejection(text)) {
+            const retryBody = { ...body };
+            delete retryBody.reasoning_effort;
+            response = await post(retryBody);
+          }
         }
       }
 
