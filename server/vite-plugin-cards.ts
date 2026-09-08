@@ -73,6 +73,7 @@ const ALLOWED_IMPORTS: RegExp[] = [
   /^react$/, /^react\/jsx-runtime$/, /^react-dom$/,
   /^motion\/react$/, /^motion$/,
   /^lottie-web$/, /^@tsparticles\/(engine|slim)$/,   // 已装、已在导出管线上验证过的两个库
+  /^three$/, /^three\/.+$/,         // 三维:已装,且在导出管线上验证过逐字节一致(见下面第二档那段)
   /^\.\.?\//,                       // 相对路径(kernel/types、native/hud、magicui/vendor/*)
 ];
 
@@ -208,6 +209,38 @@ function provenance(source: string): { declared: boolean; looksVendored: boolean
  * 审查门:按实测过的机制清单分档。这里**只管新增的几类**,Date.now / 定时器 /
  * IntersectionObserver 三条老规矩仍在 checkCardSource 里,报错文案不变。
  */
+/**
+ * 去掉注释,只留代码。给「有没有用某个 API」这类判断用 ——
+ * 注释里提到一个名字不等于用了它,尤其是那些**专门解释「为什么不用它」**的注释。
+ * 字符串里的 // 不该被当成注释起点,所以要跟着引号状态走,不能拿正则一把梭。
+ */
+export function stripComments(src: string): string {
+  let out = "";
+  let i = 0;
+  let quote = "";      // 当前在哪种引号里("" = 不在)
+  while (i < src.length) {
+    const c = src[i];
+    const next = src[i + 1];
+    if (quote) {
+      if (c === "\\") { out += c + (next ?? ""); i += 2; continue; }
+      if (c === quote) quote = "";
+      out += c; i++; continue;
+    }
+    if (c === '"' || c === "'" || c === "`") { quote = c; out += c; i++; continue; }
+    if (c === "/" && next === "/") { while (i < src.length && src[i] !== "\n") i++; continue; }
+    if (c === "/" && next === "*") {
+      i += 2;
+      while (i < src.length && !(src[i] === "*" && src[i + 1] === "/")) i++;
+      i += 2;
+      // 用一个换行顶替,免得把注释两边的记号粘成一个
+      out += "\n";
+      continue;
+    }
+    out += c; i++;
+  }
+  return out;
+}
+
 export function reviewCardSource(source: string, hints?: { vendored?: boolean }): CardFinding[] {
   const f: CardFinding[] = [];
   const push = (tier: CardFinding['tier'], rule: string, detail: string) => f.push({ tier, rule, detail });
@@ -215,12 +248,42 @@ export function reviewCardSource(source: string, hints?: { vendored?: boolean })
   // ── 第二档:管线接不住 ──
   // canvas 和 Math.random 曾经在这一档,现在不在了:导出页把 Math.random 钉成带种子的、截图期间
   // 关掉脚本执行(exportClock.ts / export-frames.mjs 的 shoot),静态跳过的探针也看得见 canvas。
-  // 实测 tsParticles 粒子卡「新鲜 vs 复用 vs 跳过」逐字节 0 差异。剩下接不住的是 WebGL 三维库。
-  if (/\bWebGLRenderingContext\b|getContext\s*\(\s*["']webgl2?["']/.test(source)) {
-    push(2, 'WebGL', 'WebGL 的光栅化走 GPU 路径,导出用的是软件光栅化且两次不完全一致,现在接不住。');
+  // 实测 tsParticles 粒子卡「新鲜 vs 复用 vs 跳过」逐字节 0 差异。
+  //
+  // WebGL 也曾经在这一档,现在不在了。当初的理由(「走 GPU 路径,两次不完全一致」)其实是**反的**:
+  // 导出那套 --disable-gpu 根本没让它走 GPU,而是把它整个关死 —— getContext("webgl") 返回 null,
+  // 画面是一张空画布,还不报错。现在加了 --enable-unsafe-swiftshader 走 SwiftShader 软件光栅,
+  // 实测 scene-3d 卡(three.js)在真导出管线上两趟 20/20 帧逐字节相同,老基线 15/15 不受影响。
+  //
+  // 剩下真正接不住的不是 WebGL,是**按 delta 累积的帧循环**:截图窗口里那段自由跑的虚拟时间
+  // 会让它多推进不确定的步数,而且往回拖播放头没有倒带。所以这一档现在拦的是那个模式。
+  /*
+   * 只匹配字面量 `setAnimationLoop(` 是拦不住的。实测四个样例:
+   *   裸 requestAnimationFrame + performance.now() 累积 delta(three)  → 放行
+   *   renderer.setAnimationLoop(...)                                   → 拦住
+   *   requestAnimationFrame + 自增计数器(连时钟都不读)                → 放行 ← 最阴的一个
+   *   const fn = "setAnimationLoop"; renderer[fn](...)                 → 放行
+   *
+   * 但也不能见 rAF 就拦:rAF 本身在这条管线上是**验证过没问题**的(Motion 的 JS 动画就走它,
+   * 逐字节 0 差异),一刀切会把一大批本来好好的卡挡在门外。
+   * 真正接不住的是「自己驱动一个三维场景」这个组合 —— 所以两个条件同时成立才拦。
+   */
+  /*
+   * 认**名字本身**,不认调用形式:`const fn = "setAnimationLoop"; renderer[fn](cb)` 这种
+   * 拐一手的写法,只匹配 `setAnimationLoop(` 是抓不住的。
+   *
+   * 但只看代码、不看注释 —— 这条规则的报错文案让作者「照 scene-3d.tsx 的写法」,
+   * 而那张卡的注释里恰恰在解释为什么**不能**用 setAnimationLoop。连注释一起匹配的话,
+   * 照着抄的人会被这条规则拒掉,理由还是它自己推荐的那份参考。
+   */
+  const code = stripComments(source);
+  const usesRaf = /\brequestAnimationFrame\b|\bsetAnimationLoop\b/.test(code);
+  const uses3D = /\bfrom\s+["']three(\/[^"']*)?["']|\bnew\s+THREE\.|\bWebGLRenderer\b|getContext\s*\(\s*["']webgl2?["']/.test(code);
+  if (/\bsetAnimationLoop\b/.test(code) || (usesRaf && uses3D)) {
+    push(2, '自带帧循环', '三维场景自己跑帧循环(setAnimationLoop / requestAnimationFrame)在这条管线上接不住:导出时截图窗口里那段自由跑的虚拟时间会让它多走不确定的步数,两趟导出对不上;往回拖播放头也回不到原样。把画面写成 t 的纯函数(比如 rotation.y = t * 转速 * 2π),在 t 变了的时候显式 render 一次 —— 照 src/cards/native/scene-3d.tsx 的写法,那张卡一次 rAF 都不注册。');
   }
-  if (/\bfrom\s+["'](three|@react-three\/[^"']+|cobe|@react-three-fiber[^"']*)["']/.test(source)) {
-    push(2, '三维库', 'three / cobe 走 WebGL,和上一条同一个问题,而且没装。');
+  if (/\bfrom\s+["'](@react-three\/[^"']+|cobe|@react-three-fiber[^"']*)["']/.test(source)) {
+    push(2, '三维框架', '@react-three/fiber 和 cobe 都自带 rAF 帧循环(理由同上),而且都没装。要做三维直接用 three(已装),照 src/cards/native/scene-3d.tsx 那样按 t 渲染。');
   }
 
   // ── 第三档:靠输入驱动,导出里没有输入 ──
@@ -241,7 +304,7 @@ export function reviewCardSource(source: string, hints?: { vendored?: boolean })
     if (!ALLOWED_IMPORTS.some((re) => re.test(spec))) {
       push('deps', `import "${spec}"`, spec.startsWith('@/')
         ? `别名 ${spec} 指向的是原项目的文件,这里没有。@/lib/utils 会自动改到本地的 cn;别的要么去掉,要么把用到的那几行搬进来。`
-        : `没装 ${spec}。能用的只有 react、motion/react、Tailwind class,以及相对路径引的 kernel/types、native/hud、magicui/vendor/*。`);
+        : `没装 ${spec}。装了的是 react、motion/react、three、lottie-web、@tsparticles/engine|slim,加上 Tailwind class 和相对路径引的 kernel/types、native/hud、magicui/vendor/*。`);
     }
   }
 

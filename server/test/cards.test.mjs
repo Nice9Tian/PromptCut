@@ -180,14 +180,32 @@ test('translate:去掉 use client、@/lib/utils 指到本地,并报告改了什�
   assert.equal(r.rewrites.length, 2);
 });
 
-test('review 第二档:只剩 WebGL / 三维库;canvas 与 Math.random 已经接得住,放行', () => {
+test('review 第二档:拦的是自带帧循环,不再拦 WebGL / three 本身', () => {
   const tiers = (src) => reviewCardSource(src).map((f) => f.tier);
   // 导出页把 Math.random 钉成带种子的、截图期间关脚本 —— 粒子卡实测逐字节一致,所以这两条不再拒
   assert.deepEqual(tiers('const c = ref.current.getContext("2d")'), []);
   assert.deepEqual(tiers('const x = Math.random()'), []);
-  assert.deepEqual(tiers('const gl = c.getContext("webgl")'), [2]);
-  // three 既是 WebGL 也是没装的依赖 —— 两条都要报
-  assert.deepEqual(tiers('import * as THREE from "three"').sort(), [2, 'deps']);
+  // WebGL 本身放行:导出加了 --enable-unsafe-swiftshader 之后,three 卡实测两趟 20/20 帧逐字节相同
+  assert.deepEqual(tiers('const gl = c.getContext("webgl")'), []);
+  assert.deepEqual(tiers('import * as THREE from "three"'), []);
+  assert.deepEqual(tiers('import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js"'), []);
+  // 真正接不住的是「三维场景 + 自己跑帧循环」这个组合
+  assert.deepEqual(tiers('renderer.setAnimationLoop((t) => draw(t))'), [2]);
+  // 裸 rAF 驱动一个 three 场景:以前从这儿溜过去
+  assert.deepEqual(tiers('import * as THREE from "three"\nrequestAnimationFrame(function l(){ mesh.rotation.y += 0.01; requestAnimationFrame(l) })'), [2]);
+  assert.deepEqual(tiers('const gl = c.getContext("webgl")\nrequestAnimationFrame(loop)'), [2]);
+  // 变量名绕过 setAnimationLoop 也拦得住(它同时用了 three)
+  assert.deepEqual(tiers('import * as THREE from "three"\nconst fn = "setAnimationLoop"; renderer[fn](cb)'), [2]);
+  // 注释里提到不算用了:这条规则的报错文案让人「照 scene-3d.tsx 的写法」,
+  // 而那张卡的注释里正好在解释为什么不能用 setAnimationLoop —— 连注释一起匹配就成了自相矛盾
+  assert.deepEqual(tiers('// 不要用 setAnimationLoop,它按 delta 累积\nimport * as THREE from "three"\nrenderer.render(s, c)'), []);
+  assert.deepEqual(tiers('/* three 的 setAnimationLoop 在这条管线上接不住 */\nconst x = 1'), []);
+  // 字符串里的 // 不该被当成注释,后面的代码照样要看得见
+  assert.deepEqual(tiers('const url = "http://x"; renderer.setAnimationLoop(cb)'), [2]);
+  // 但**不能**见 rAF 就拦:二维卡用 rAF 是这条管线上验证过的,一刀切会误伤一大片
+  assert.deepEqual(tiers('requestAnimationFrame(() => setX(1))'), []);
+  // 自带帧循环的三维框架:既是第二档,也没装
+  assert.deepEqual(tiers('import { Canvas } from "@react-three/fiber"').sort(), [2, 'deps']);
   // 装好的粒子 / Lottie 库是允许的依赖
   assert.deepEqual(tiers('import { tsParticles } from "@tsparticles/engine"\nimport lottie from "lottie-web"'), []);
 });
@@ -230,10 +248,10 @@ test('review 来源/许可证:搬来的没声明 → 拒绝;Commons Clause → �
 });
 
 test('checkCardSource 把审查发现并进 errors,带档位标签', () => {
-  const src = GOOD.replace('return <motion', 'const gl = document.createElement("canvas").getContext("webgl");\n  return <motion');
+  const src = GOOD.replace('return <motion', 'renderer.setAnimationLoop((ms) => draw(ms));\n  return <motion');
   const r = checkCardSource('price-tag', src, []);
   assert.equal(r.ok, false);
-  assert.match(r.errors.join('\n'), /\[第二档·管线暂不支持\] WebGL/);
+  assert.match(r.errors.join('\n'), /\[第二档·管线暂不支持\] 自带帧循环/);
   assert.equal(r.findings.length, 1);
 });
 

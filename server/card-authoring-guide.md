@@ -204,9 +204,9 @@ Agent 和代码页看到的不是组件源码,而是一份固定形状的**封�
 
 | 档位 | 触发 | 为什么 |
 |---|---|---|
-| 第二档·管线暂不支持 | WebGL、three / cobe 三维库 | 走 GPU 光栅化，导出用软件光栅化对不上。`<canvas>` 和 `Math.random` **现在接得住**（随机钉成带种子的、截图期间关脚本），不再拒 |
+| 第二档·管线暂不支持 | `setAnimationLoop` 这类**自带帧循环**、@react-three/fiber、cobe | 按 delta 累积的循环在导出里会多走不确定的步数，往回拖播放头也回不去。`<canvas>`、`Math.random`、**WebGL 和 three 现在都接得住**（three 已装，导出开了软件 WebGL，实测两趟逐字节相同），不再拒 |
 | 第三档·交互驱动 | mousemove / scroll 监听、`whileHover` / `whileTap` / `whileInView`、`useScroll` | 导出里没有鼠标和滚动，只会停在初态；改成由 `t` 驱动的参数才能进导出 |
-| 依赖 | import 了没装的库 | 只有 react、motion/react、Tailwind、相对路径 |
+| 依赖 | import 了没装的库 | 装了的:react、motion/react、three、lottie-web、@tsparticles/*、Tailwind class,以及相对路径 |
 | 动画 class | `animate-xxx` 没定义 | Tailwind 自带 4 个；MagicUI 的 22 组已在 `magicui-animations.css`；别的要自己写进去 |
 | 来源/许可证 | 搬来的没写来源，或许可证不允许 | 不知道能不能随安装包分发 |
 
