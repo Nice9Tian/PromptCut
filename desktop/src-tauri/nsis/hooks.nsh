@@ -114,11 +114,16 @@ AllowSkipFiles off
   pc_diag_skip_${phase}:
 !macroend
 
+; SetErrorLevel 2:NSIS 默认无论成败都退出 0。静默安装(/S)是脚本在调,
+; 退出码是它唯一能拿到的结果 —— 失败了还报 0,批量部署那边会以为装好了。
+; 2 是 NSIS 约定的「安装失败」。
 Function .onInstFailed
+  SetErrorLevel 2
   !insertmacro PC_DIAG_REPORT "install"
 FunctionEnd
 
 Function un.onUninstFailed
+  SetErrorLevel 2
   !insertmacro PC_DIAG_REPORT "uninstall"
 FunctionEnd
 

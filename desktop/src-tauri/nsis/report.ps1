@@ -99,6 +99,7 @@ $targets = @(
   (Join-Path $Dir 'node.exe'),
   (Join-Path $Dir 'promptcut.exe')
 )
+$locked = New-Object System.Collections.Generic.List[string]
 foreach ($f in $targets) {
   if (-not (Test-Path $f)) { Add-Line ('  缺失: ' + $f); continue }
   $size = (Get-Item $f).Length
@@ -108,6 +109,64 @@ foreach ($f in $targets) {
     $fs.Close(); $writable = $true
   } catch { $writable = $false }
   Add-Line ('  ' + $f + '  ' + $size + ' 字节  可独占写入=' + $writable)
+  if (-not $writable) { $locked.Add($f) }
+}
+
+# ── 到底是谁锁着 ────────────────────────────────────────────────────────
+# 上面那一节只说得出「写不进去」,说不出「被谁占着」。而占用者未必在安装目录里
+# (杀毒软件的扫描线程、索引服务、用户自己开着的播放器都可能),所以按路径找进程那一节
+# 会如实报「没有」—— 对,但不解决问题。
+#
+# Restart Manager 就是干这个的:Windows 安装程序用它来问「要更新这个文件,得先请谁让开」。
+# 它不受路径和位数限制,能直接把持有句柄的进程报出来。
+if ($locked.Count -gt 0) {
+  Add-Section '锁住这些文件的是谁'
+  try {
+    if (-not ('PcRm' -as [type])) {
+      Add-Type -Namespace '' -Name 'PcRm' -MemberDefinition @'
+[StructLayout(LayoutKind.Sequential)] public struct FILETIME { public uint dwLowDateTime; public uint dwHighDateTime; }
+[StructLayout(LayoutKind.Sequential)] public struct RM_UNIQUE_PROCESS { public int dwProcessId; public FILETIME ProcessStartTime; }
+[StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)] public struct RM_PROCESS_INFO {
+  public RM_UNIQUE_PROCESS Process;
+  [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 256)] public string strAppName;
+  [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 64)] public string strServiceShortName;
+  public int ApplicationType; public uint AppStatus; public uint TSSessionId;
+  [MarshalAs(UnmanagedType.Bool)] public bool bRestartable;
+}
+[DllImport("rstrtmgr.dll", CharSet = CharSet.Unicode)] public static extern int RmStartSession(out uint pSessionHandle, int dwSessionFlags, string strSessionKey);
+[DllImport("rstrtmgr.dll")] public static extern int RmEndSession(uint pSessionHandle);
+[DllImport("rstrtmgr.dll", CharSet = CharSet.Unicode)] public static extern int RmRegisterResources(uint pSessionHandle, uint nFiles, string[] rgsFilenames, uint nApplications, IntPtr rgApplications, uint nServices, string[] rgsServiceNames);
+[DllImport("rstrtmgr.dll")] public static extern int RmGetList(uint dwSessionHandle, out uint pnProcInfoNeeded, ref uint pnProcInfo, [In, Out] RM_PROCESS_INFO[] rgAffectedApps, ref uint lpdwRebootReasons);
+'@ -ErrorAction Stop
+    }
+    $session = 0
+    $key = [guid]::NewGuid().ToString()
+    if ([PcRm]::RmStartSession([ref]$session, 0, $key) -eq 0) {
+      try {
+        [void][PcRm]::RmRegisterResources($session, [uint32]$locked.Count, $locked.ToArray(), 0, [IntPtr]::Zero, 0, $null)
+        $needed = 0; $count = 0; $reason = 0
+        [void][PcRm]::RmGetList($session, [ref]$needed, [ref]$count, $null, [ref]$reason)
+        if ($needed -gt 0) {
+          $count = $needed
+          $arr = New-Object 'PcRm+RM_PROCESS_INFO[]' $needed
+          if ([PcRm]::RmGetList($session, [ref]$needed, [ref]$count, $arr, [ref]$reason) -eq 0) {
+            for ($i = 0; $i -lt $count; $i++) {
+              $pi = $arr[$i]
+              $exe = ''
+              try { $exe = ' -> ' + (Get-CimInstance Win32_Process -Filter ("ProcessId=" + $pi.Process.dwProcessId)).ExecutablePath } catch {}
+              Add-Line ('  PID ' + $pi.Process.dwProcessId + '  ' + $pi.strAppName + $exe)
+            }
+          }
+        } else {
+          Add-Line '  Restart Manager 说没有进程持有这些文件 —— 那多半是杀毒软件在内核层拦截,或者权限问题'
+        }
+      } finally { [void][PcRm]::RmEndSession($session) }
+    } else {
+      Add-Line '  Restart Manager 会话开不起来,查不到持有者'
+    }
+  } catch {
+    Add-Line ('  查持有者失败: ' + $_.Exception.Message)
+  }
 }
 
 # ── 杀毒 ────────────────────────────────────────────────────────────────
