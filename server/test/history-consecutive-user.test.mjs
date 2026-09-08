@@ -59,13 +59,31 @@ test("连着并两次也只有一条 user", () => {
   assert.deepEqual(msgs[0].content.map((b) => b.text), ["一", "二"]);
 });
 
-test("末尾那条 user 的 content 不是数组时(老历史)不许炸,新起一条", () => {
+test("末尾那条 user 是老格式字符串时,也要并进去而不是新起一条", () => {
+  /*
+   * 盘上那个文件只经过 JSON.parse,不校验形状(api.mjs),所以 content 是字符串的
+   * 老格式历史真的读得回来。原来这里退回「新起一条」—— 可末尾本来就是 user,
+   * 新起一条正好拼出这个方法要消灭的形状。
+   */
   const h = new MessageHistory();
   h.append({ role: "user", content: "纯字符串的老格式" });
-  assert.doesNotThrow(() => h.appendUserText("继续"));
-  assert.equal(h.get().length, 2, "改不动就只能新起一条 —— 至少不能崩");
+  h.appendUserText("继续");
+
+  const msgs = h.get();
+  assert.equal(msgs.length, 1, "不许多出一条 user");
+  assert.deepEqual(msgs[0].content, [
+    { type: "text", text: "纯字符串的老格式" },
+    { type: "text", text: "继续" },
+  ], "字符串要就地规范成块数组,原话不能丢");
+  assert.equal(consecutiveSameRole(msgs), -1);
 });
 
+test("末尾那条 user 的 content 是个怪东西时不许崩", () => {
+  const h = new MessageHistory();
+  h.append({ role: "user", content: 42 });
+  assert.doesNotThrow(() => h.appendUserText("继续"));
+  assert.equal(h.get().length, 2, "救不回来就只能新起一条 —— 至少不能崩");
+});
 test("改的是历史里那一条,不是 get() 返回的拷贝", () => {
   const h = new MessageHistory();
   h.append({ role: "user", content: [{ type: "text", text: "先" }] });

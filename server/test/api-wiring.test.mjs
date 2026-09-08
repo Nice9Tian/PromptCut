@@ -132,12 +132,20 @@ test('盘上已经写坏的历史,读回来就要治好 —— 不能先撞一�
   };
   await run(sid, fetchImpl);
 
-  assert.ok(sent, '第一次请求要发得出去');
-  const roles = sent.messages.map((m) => m.role);
-  assert.ok(roles.includes('tool'), `悬空的 tool_use 在**第一次请求里**就该配上 tool_result,实际:${roles.join(',')}`);
-  const tool = sent.messages.find((m) => m.role === 'tool');
-  assert.equal(tool.tool_call_id, 'call_1');
-  try { fs.unlinkSync(file); } catch { /* 清理 */ }
+  /*
+   * 这两条用例往**真实的** harness-sessions 写文件(startRun 的目录不可注入)。
+   * 断言失败时如果不清,残留会被诊断报告的会话文件柜数进去 —— 我们自己的测试
+   * 污染我们自己的排查工具。所以清理放 finally。
+   */
+  try {
+    assert.ok(sent, '第一次请求要发得出去');
+    const roles = sent.messages.map((m) => m.role);
+    assert.ok(roles.includes('tool'), `悬空的 tool_use 在**第一次请求里**就该配上 tool_result,实际:${roles.join(',')}`);
+    const tool = sent.messages.find((m) => m.role === 'tool');
+    assert.equal(tool.tool_call_id, 'call_1');
+  } finally {
+    try { fs.unlinkSync(file); } catch { /* 清理 */ }
+  }
 });
 
 test('接着旧历史往下说时,发出去的消息里不许有两条连着的 user', async () => {
@@ -158,11 +166,14 @@ test('接着旧历史往下说时,发出去的消息里不许有两条连着的 
   };
   await run(sid, fetchImpl);
 
-  assert.ok(sent, '第一次请求要发得出去');
-  const roles = sent.messages.map((m) => m.role);
-  for (let i = 1; i < roles.length; i++) {
-    assert.ok(!(roles[i] === 'user' && roles[i - 1] === 'user'), `第 ${i} 条和上一条都是 user:${roles.join(',')}`);
+  try {
+    assert.ok(sent, '第一次请求要发得出去');
+    const roles = sent.messages.map((m) => m.role);
+    for (let i = 1; i < roles.length; i++) {
+      assert.ok(!(roles[i] === 'user' && roles[i - 1] === 'user'), `第 ${i} 条和上一条都是 user:${roles.join(',')}`);
+    }
+    assert.ok(JSON.stringify(sent.messages).includes('你好'), '新说的那句要真的带上');
+  } finally {
+    try { fs.unlinkSync(file); } catch { /* 清理 */ }
   }
-  assert.ok(JSON.stringify(sent.messages).includes('你好'), '新说的那句要真的带上');
-  try { fs.unlinkSync(file); } catch { /* 清理 */ }
 });

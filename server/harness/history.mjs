@@ -41,7 +41,15 @@ export class MessageHistory {
    */
   appendUserText(text) {
     const last = this.messages[this.messages.length - 1];
-    if (last?.role === 'user' && Array.isArray(last.content)) last.content.push({ type: 'text', text });
+    if (last?.role !== 'user') { this.messages.push({ role: 'user', content: [{ type: 'text', text }] }); return; }
+    /*
+     * 末尾是 user,但 content 是一个字符串(老格式,或盘上那个文件被外部改过 ——
+     * api.mjs 读回来时只 JSON.parse,不校验形状)。原来这里退回「新起一条」,
+     * 可末尾本来就是 user,新起一条正好拼出这个方法要消灭的形状。
+     * 就地规范成块数组再并进去。
+     */
+    if (typeof last.content === 'string') last.content = [{ type: 'text', text: last.content }];
+    if (Array.isArray(last.content)) last.content.push({ type: 'text', text });
     else this.messages.push({ role: 'user', content: [{ type: 'text', text }] });
   }
 

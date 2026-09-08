@@ -70,15 +70,25 @@ export class Agent {
         this.onEvent({ type: 'status', text: `结果摘要请求失败：${err.message}` });
       } finally { clearInterval(heartbeat); }
       flush();
-      if (content.length) this.history.append({ role: 'assistant', content });
       lastText = text;
       if (summarizing) {
         const note = `\n\n本次执行已暂停：${summaryReason}。已成功执行 ${completed} 次操作，失败 ${failed} 次。已完成的修改会保留；可以补充要求后继续，或复制本次对话进行排查。`;
         this.onEvent({ type: 'text', delta: note });
-        this.history.append({ role: 'assistant', content: [{ type: 'text', text: note }] });
+        /*
+         * 收尾这句要**并进当轮那条 assistant**,不能另起一条。
+         *
+         * 上面本来就要 append 一条 assistant(模型的汇总文字),这里再 append 一条
+         * 就是两条连着的 assistant —— 和 appendUserText 治的是同一个病的另一半。
+         * 这个形状会被 saveHistory 原样写进 harness-sessions 里那个文件,而后续
+         * 没有任何一步会把它合并回去:**这个会话从此每次都 400,而且不自愈**,
+         * 用户根本不知道有这么个文件可以删。
+         */
+        content.push({ type: 'text', text: note });
+        if (content.length) this.history.append({ role: 'assistant', content });
         lastText += note;
         break;
       }
+      if (content.length) this.history.append({ role: 'assistant', content });
       if (!calls.length) {
         if (!text.trim()) throw new Error('API 没有返回文字或工具调用，请检查模型和接口协议设置。');
         break;

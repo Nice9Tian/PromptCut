@@ -175,7 +175,11 @@ export function startRun(opts) {
     let initialMessages = [];
     if (fs.existsSync(historyFile)) {
       try {
-        initialMessages = JSON.parse(fs.readFileSync(historyFile, 'utf8'));
+        const parsed = JSON.parse(fs.readFileSync(historyFile, 'utf8'));
+        if (Array.isArray(parsed)) initialMessages = parsed;
+        // 是合法 JSON 但不是消息数组(文件被外部改过)。静默丢空的话,用户看到的是
+        // 「它忘了刚才说过的话」而没有任何线索 —— 说一声,至少知道往哪儿查。
+        else safeOnEvent({ type: 'status', text: '这个会话的历史文件格式不对,已从空白开始。' });
       } catch {}
     }
     
