@@ -29,6 +29,109 @@ pub const OVERLAY_LABEL: &str = "skill-overlay";
 
 const OVERLAY_W: f64 = 232.0;
 const OVERLAY_H: f64 = 72.0;
+/// 「上一步动作」预览块的高度:预览(232 宽按 16:9 是 130)+ 说明一行 + 内边距
+const PREVIEW_BLOCK_H: f64 = 130.0 + 22.0;
+/// 启动进度块的高度:四步 + 一行状态
+const STEPS_BLOCK_H: f64 = 108.0;
+const BLOCK_GAP: f64 = 8.0;
+/// 启动完成之后进度块再留这么久才收起来,让用户看见「实例就绪」亮起来
+const STEPS_LINGER: Duration = Duration::from_secs(4);
+
+/// 悬浮窗高度 = 卡片 + 正在显示的块。位置不动(还是右上角),只往下长。
+fn overlay_height(steps: bool, preview: bool) -> f64 {
+    let mut h = OVERLAY_H;
+    if steps {
+        h += BLOCK_GAP + STEPS_BLOCK_H;
+    }
+    if preview {
+        h += BLOCK_GAP + PREVIEW_BLOCK_H;
+    }
+    h
+}
+
+/// 启动进度:任务目录里 job.json 的 phase / launch。用户点「开始」的那一刻主窗就收成
+/// 悬浮窗了,快照 → 起实例 → 拉桌面 app → 就绪这几步就在悬浮窗上走,
+/// 不再是 Skill 对话框里的内容(见 src/editor/SkillDialog.tsx)。
+#[derive(Serialize, Clone, Default, PartialEq)]
+pub struct ProgressInfo {
+    pub phase: Option<String>,
+    pub error: Option<String>,
+    pub launch_status: Option<String>,
+    pub launch_detail: Option<String>,
+    /// 启动流程走完了(成功或失败),悬浮页据此决定进度块要不要收
+    pub done: bool,
+    pub failed: bool,
+}
+
+/// 读任务目录(project.proc 所在目录)里的 job.json。读不到就 None:老任务、目录被删都算正常。
+fn read_progress(proc: &PathBuf) -> Option<ProgressInfo> {
+    let dir = proc.parent()?;
+    let text = fs::read_to_string(dir.join("job.json")).ok()?;
+    let v = serde_json::from_str::<serde_json::Value>(&text).ok()?;
+    let str_of = |x: Option<&serde_json::Value>| x.and_then(|s| s.as_str()).map(str::to_string);
+    let phase = str_of(v.get("phase"));
+    let error = str_of(v.get("error"));
+    let launch = v.get("launch");
+    let launch_status = str_of(launch.and_then(|l| l.get("status")));
+    let launch_detail = str_of(launch.and_then(|l| l.get("detail")));
+    let failed = phase.as_deref() == Some("failed") || launch_status.as_deref() == Some("failed");
+    let done = failed
+        || phase.as_deref() == Some("stopped")
+        || (phase.as_deref() == Some("ready") && launch_status.as_deref() != Some("launching"));
+    Some(ProgressInfo { phase, error, launch_status, launch_detail, done, failed })
+}
+
+/// 悬浮窗下面那张预览图。agent 每做成一次时间轴动作,无头实例就把那一刻的画面渲染出来
+/// 写到 skillRoot 下的 last-action.png / .json(见 server/vite-plugin-skill-state.ts),
+/// 这里盯着 json 的修改时间,变了就把图读进来推给悬浮页。
+#[derive(Serialize, Clone, Default)]
+pub struct PreviewInfo {
+    pub tool: Option<String>,
+    pub clip_id: Option<String>,
+    pub t: Option<f64>,
+    pub at: Option<String>,
+    /// data:image/png;base64,… 直接给 <img> 用
+    pub data_url: Option<String>,
+}
+
+fn last_action_json() -> PathBuf {
+    skill_root().join("last-action.json")
+}
+
+fn last_action_png() -> PathBuf {
+    skill_root().join("last-action.png")
+}
+
+/// 读预览。返回 (json 的修改时间戳, 内容);读不到就 None —— 没预览是常态,不是错。
+fn read_preview() -> Option<(u128, PreviewInfo)> {
+    use base64::Engine;
+    let meta = fs::metadata(last_action_json()).ok()?;
+    let stamp = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis())?;
+    let v = serde_json::from_str::<serde_json::Value>(&fs::read_to_string(last_action_json()).ok()?).ok()?;
+    let png = fs::read(last_action_png()).ok()?;
+    // 正在被写到一半的 png 会解不出来;Node 那边是先写临时文件再改名,所以读到的要么整要么没有
+    if png.len() < 8 || &png[..8] != b"\x89PNG\r\n\x1a\n" {
+        return None;
+    }
+    let data_url = format!(
+        "data:image/png;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(&png)
+    );
+    Some((
+        stamp,
+        PreviewInfo {
+            tool: v.get("tool").and_then(|x| x.as_str()).map(str::to_string),
+            clip_id: v.get("clipId").and_then(|x| x.as_str()).map(str::to_string),
+            t: v.get("t").and_then(|x| x.as_f64()),
+            at: v.get("at").and_then(|x| x.as_str()).map(str::to_string),
+            data_url: Some(data_url),
+        },
+    ))
+}
 /// 离屏幕右上角的边距
 const OVERLAY_MARGIN: f64 = 16.0;
 
@@ -212,6 +315,12 @@ pub fn spawn_watcher(handle: tauri::AppHandle) -> Arc<AtomicBool> {
     std::thread::spawn(move || {
         let mut last_active = false;
         let mut last_info = String::new();
+        let mut last_preview: u128 = 0;
+        let mut last_progress: Option<ProgressInfo> = None;
+        // 进度块什么时候走完的:走完之后再留 STEPS_LINGER 才收
+        let mut done_at: Option<std::time::Instant> = None;
+        let mut steps_shown = false;
+        let mut size_key = (false, false);
         loop {
             let (is_on, job_id, proc) = read_state();
 
@@ -236,8 +345,52 @@ pub fn spawn_watcher(handle: tauri::AppHandle) -> Arc<AtomicBool> {
                     last_info = digest;
                     let _ = handle.emit_to(OVERLAY_LABEL, "pc-skill-overlay", info);
                 }
+                // 启动进度:job.json 变了才推。走完之后再留几秒,然后把进度块收掉
+                let progress = proc.as_ref().and_then(read_progress);
+                if progress != last_progress {
+                    if let Some(pg) = &progress {
+                        if pg.done {
+                            if done_at.is_none() {
+                                done_at = Some(std::time::Instant::now());
+                            }
+                        } else {
+                            done_at = None;
+                        }
+                        let _ = handle.emit_to(OVERLAY_LABEL, "pc-skill-progress", pg.clone());
+                    }
+                    last_progress = progress.clone();
+                }
+                let show_steps = match (&progress, done_at) {
+                    (Some(_), None) => true,
+                    (Some(_), Some(t)) => t.elapsed() < STEPS_LINGER,
+                    (None, _) => false,
+                };
+                if show_steps != steps_shown {
+                    steps_shown = show_steps;
+                    let _ = handle.emit_to(OVERLAY_LABEL, "pc-skill-steps", show_steps);
+                }
+                // 「上一步动作」的预览图:json 的修改时间变了才读、才推
+                if let Some((stamp, preview)) = read_preview() {
+                    if stamp != last_preview {
+                        last_preview = stamp;
+                        let _ = handle.emit_to(OVERLAY_LABEL, "pc-skill-preview", preview);
+                    }
+                }
+                // 窗口高度跟着正在显示的块走(位置不动,还是右上角)
+                let key = (show_steps, last_preview != 0);
+                if key != size_key {
+                    size_key = key;
+                    if let Some(w) = overlay(&handle) {
+                        let _ = w.set_size(tauri::LogicalSize::new(OVERLAY_W, overlay_height(key.0, key.1)));
+                    }
+                }
             } else {
                 last_info.clear();
+                last_preview = 0;
+                last_progress = None;
+                done_at = None;
+                steps_shown = false;
+                size_key = (false, false);
             }
 
             std::thread::sleep(Duration::from_millis(1000));

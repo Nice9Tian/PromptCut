@@ -2779,8 +2779,9 @@ dependencies = [
 
 [[package]]
 name = "promptcut"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
+ "base64 0.22.1",
  "rfd",
  "serde",
  "serde_json",
@@ -2790,6 +2791,8 @@ dependencies = [
  "tauri-plugin-shell",
  "tauri-plugin-single-instance",
  "tauri-plugin-window-state",
+ "webview2-com",
+ "windows",
 ]
 
 [[package]]

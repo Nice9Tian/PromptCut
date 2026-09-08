@@ -124,13 +124,16 @@ html.skin-swapping * {
  * 4. 打磨层:让主色真正出现在界面里,给面板和控件加层次
  * ============================================================ */
 
-/* 应用底色:深色皮肤带一点朝向主色的径向光,浅色皮肤保持干净 */
-[data-skin] .bg-neutral-950 {
+/* 应用底色:深色皮肤带一点朝向主色的径向光,浅色皮肤保持干净。
+ * 只铺在编辑器根节点上。原来选的是所有 .bg-neutral-950,时间轴里那些 20px 高的
+ * 小条(范围条、「序列」表头、标尺、底部滚动条)也各自铺了一份 1200×600 的光,
+ * 在那么矮的条里整条都落在 14% 强调色那一段,看上去就是一道横穿序列栏的强调色带。 */
+[data-skin] [data-pc="editor"].bg-neutral-950 {
   background-image:
     radial-gradient(1200px 600px at 20% -10%, color-mix(in oklab, var(--ui-accent) 14%, transparent), transparent 60%),
     radial-gradient(900px 500px at 100% 110%, color-mix(in oklab, var(--ui-accent) 8%, transparent), transparent 60%);
 }
-[data-skin-mode="light"] .bg-neutral-950 { background-image: none; }
+[data-skin-mode="light"] [data-pc="editor"].bg-neutral-950 { background-image: none; }
 
 /* 通用按钮:双层表面 + 细边 + 悬停时主色描边 */
 [data-skin] button.bg-neutral-800,

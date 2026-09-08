@@ -11,6 +11,14 @@ function outRoot(root: string): string {
   return process.env.PROMPTCUT_EXPORT_DIR || path.resolve(root, "out");
 }
 
+/**
+ * 素材落盘目录。上传和素材收集(vite-plugin-collect)都往这里写,
+ * 所以 /@media/<文件名> 对两边的文件都能取到。
+ */
+export function mediaDir(root: string): string {
+  return path.resolve(outRoot(root), "media");
+}
+
 async function handleMediaUpload(req: Connect.IncomingMessage, res: ServerResponse, root: string) {
   const rawName = req.url?.split("/").pop();
   if (!rawName) {
@@ -20,10 +28,10 @@ async function handleMediaUpload(req: Connect.IncomingMessage, res: ServerRespon
   }
   const name = decodeURIComponent(rawName);
   const safeName = sanitizeFilename(name);
-  const mediaDir = path.resolve(outRoot(root), "media");
-  await fs.mkdir(mediaDir, { recursive: true });
-  
-  const destPath = path.resolve(mediaDir, safeName);
+  const dir = mediaDir(root);
+  await fs.mkdir(dir, { recursive: true });
+
+  const destPath = path.resolve(dir, safeName);
   const chunks: Buffer[] = [];
   req.on("data", (chunk: Buffer) => chunks.push(chunk));
   req.on("end", async () => {
@@ -105,7 +113,7 @@ export function mediaPlugin(): Plugin {
           const rawName = req.url.split("?")[0].split("/").pop();
           if (rawName) {
             const name = sanitizeFilename(decodeURIComponent(rawName));
-            return serveFile(path.resolve(outRoot(root), "media", name), req, res);
+            return serveFile(path.resolve(mediaDir(root), name), req, res);
           }
         }
         

@@ -53,31 +53,6 @@
   line-height: 1.5;
 }
 
-/* 进度:一行一步 */
-.pc-skill-steps {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  font-size: 13px;
-}
-.pc-skill-step {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  color: var(--ui-fg-muted);
-}
-.pc-skill-step.is-done { color: var(--ui-fg); }
-.pc-skill-step.is-active { color: var(--ui-accent); }
-.pc-skill-step.is-failed { color: var(--ui-danger); }
-.pc-skill-step-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: currentColor;
-  flex: 0 0 auto;
-  opacity: 0.7;
-}
-
 .pc-skill-meta {
   display: grid;
   grid-template-columns: auto 1fr;
@@ -120,30 +95,90 @@
 }
 .pc-skill-msg.is-err { color: var(--ui-danger); }
 
-/* 历史任务 */
+/* 历史任务:一行一个任务,右侧一排操作(强制并入 / 停 或 开始 / 删) */
 .pc-skill-jobs {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  max-height: 180px;
+  max-height: 260px;
   overflow-y: auto;
 }
 .pc-skill-job {
   display: flex;
-  align-items: center;
-  gap: 10px;
+  flex-direction: column;
+  gap: 4px;
   padding: 6px 8px;
   border-radius: var(--ui-radius, 4px);
   font-size: 12px;
   color: var(--ui-fg-muted);
-  cursor: pointer;
-  background: transparent;
   border: 1px solid transparent;
-  text-align: left;
-  font-family: inherit;
 }
 .pc-skill-job:hover { background: var(--ui-panel-2); }
-.pc-skill-job.is-on { border-color: var(--ui-accent); color: var(--ui-fg); }
+.pc-skill-job.is-live { border-color: color-mix(in oklab, var(--ui-success) 45%, transparent); }
+.pc-skill-job-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
 .pc-skill-job-name { flex: 1 1 auto; color: var(--ui-fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pc-skill-job-when { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pc-skill-job-state { flex: 0 0 auto; }
 .pc-skill-job-state.is-live { color: var(--ui-success); }
+.pc-skill-job-state.is-failed { color: var(--ui-danger); }
+.pc-skill-job-acts {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+.pc-skill-job-act {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 22px;
+  min-width: 22px;
+  padding: 0 4px;
+  border-radius: 4px;
+  border: 1px solid var(--ui-border-strong);
+  background: var(--ui-panel-2);
+  color: var(--ui-fg-muted);
+  font-family: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+  transition: background 120ms, color 120ms, border-color 120ms;
+}
+.pc-skill-job-act:hover:not(:disabled) { color: var(--ui-fg); border-color: color-mix(in oklab, var(--ui-border-strong) 60%, var(--ui-fg)); }
+.pc-skill-job-act:disabled { opacity: 0.45; cursor: not-allowed; }
+.pc-skill-job-act.is-merge { padding: 0 8px; }
+.pc-skill-job-act.is-merge:hover:not(:disabled) { color: var(--ui-accent); border-color: var(--ui-accent); }
+/* 停止:红色方框 —— 用户一眼能认出「这是关掉」 */
+.pc-skill-job-act.is-stop { color: var(--ui-danger); border-color: var(--ui-danger); background: color-mix(in oklab, var(--ui-danger) 14%, transparent); }
+.pc-skill-job-act.is-stop:hover:not(:disabled) { color: #fff; background: var(--ui-danger); border-color: var(--ui-danger); }
+/* 开始:停掉之后顶替红框的位置 */
+.pc-skill-job-act.is-start { color: var(--ui-success); border-color: var(--ui-success); background: color-mix(in oklab, var(--ui-success) 14%, transparent); }
+.pc-skill-job-act.is-start:hover:not(:disabled) { color: #fff; background: var(--ui-success); border-color: var(--ui-success); }
+.pc-skill-job-act.is-del:hover:not(:disabled) { color: var(--ui-danger); border-color: var(--ui-danger); }
+.pc-skill-job-detail {
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--ui-fg-faint);
+  white-space: pre-wrap;
+}
+.pc-skill-job-detail.is-err { color: var(--ui-danger); }
+.pc-skill-job-detail.is-ok { color: var(--ui-fg-muted); }
+.pc-skill-job-links { display: flex; gap: 12px; }
+.pc-skill-job-link {
+  padding: 0;
+  background: none;
+  border: 0;
+  color: var(--ui-fg-muted);
+  font-family: inherit;
+  font-size: 11.5px;
+  text-decoration: underline dotted;
+  cursor: pointer;
+}
+.pc-skill-job-link:hover:not(:disabled) { color: var(--ui-accent); }
+.pc-skill-job-link:disabled { opacity: 0.45; cursor: not-allowed; }

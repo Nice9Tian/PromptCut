@@ -4,7 +4,8 @@ import type { AiProvider, ChatMessage, ChatAttachment, MessagePart, MessageRunti
 import { parseSseChunks } from "./sse";
 import { readChoice } from "./modelOptions";
 import { getScript } from "./script";
-import { useChatMessages, setMessages } from "./liveChat";
+import { useChatMessages, getChatStore, MAIN_TAB } from "./liveChat";
+import * as agentBus from "./agentBus";
 import { WORKFLOW_ROLES, ALL_ROLES } from "./roles";
 import { isTeamMode } from "./teamMode";
 import { shouldOrchestrate } from "./triage";
@@ -72,9 +73,15 @@ function completeToolPart(
   return next;
 }
 
-export function useAiChat(opts?: { mock?: boolean }) {
-  // 对话归项目所有(要随 .proc 存取、随项目切换),所以放在组件外的 store 里
-  const messages = useChatMessages();
+export function useAiChat(opts?: { mock?: boolean; tabId?: string; getConversationId?: () => string | undefined }) {
+  // 对话归项目所有(要随 .proc 存取、随项目切换),所以放在组件外的 store 里。
+  // 多 Agent 分页:每页一份 store,主页(MAIN_TAB)那份才随 .proc 存取
+  const tabId = opts?.tabId ?? MAIN_TAB;
+  const store = getChatStore(tabId);
+  const setMessages = store.set;
+  const messages = useChatMessages(store);
+  // CLI 驱动的会话 id 也按页分开:两页共用一个 sessionId 等于两个 Agent 接着同一段对话说
+  const sessKey = (p: string) => (tabId === MAIN_TAB ? `aiSession:${p}` : `aiSession:${p}:${tabId}`);
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [sttInfo, setSttInfo] = useState<SttInfo | null>(null);
   const [provider, setProvider] = useState<AiProvider | null>(null);
@@ -89,6 +96,8 @@ export function useAiChat(opts?: { mock?: boolean }) {
   /** 分工模式这一轮的编排状态。界面(OrchestrationBlock)直接读它。 */
   const [orchestration, setOrchestration] = useState<OrchestrationState | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+  // 这一页被关掉(多 Agent 分页关页)时把还在跑的请求掐掉:连接一断服务端就会 abort 那一轮
+  useEffect(() => () => { abortControllerRef.current?.abort(); }, []);
   const currentRunId = useRef<string | null>(null);
   const setupGateRef = useRef(false);
   const [setupJobs, setSetupJobs] = useState<CliSetupJob[]>([]);
@@ -108,7 +117,7 @@ export function useAiChat(opts?: { mock?: boolean }) {
       setConfig({ version: 1, defaultProvider: null, toolProtocol: true, api: { vendor: "anthropic", baseUrl: "", model: "gpt-4o|gpt-4o-mini", maxTokens: 4096, apiKey: { set: false, last4: "" } }, cliModels: { claude: "opus|sonnet|haiku", codex: "", agy: "gemini-3.1-pro-high|gemini-3.8-flash-low" } });
       setProvider("claude");
       // ?nosetup=1 给自动化脚本用:不弹首启设置对话框
-      if (localStorage.getItem("aiSetupDone") === null && !new URLSearchParams(location.search).has("nosetup")) {
+      if (tabId === MAIN_TAB && localStorage.getItem("aiSetupDone") === null && !new URLSearchParams(location.search).has("nosetup")) {
         setSetupOpen(true);
       }
       return;
@@ -158,7 +167,7 @@ export function useAiChat(opts?: { mock?: boolean }) {
     if (providers.length > 0 && !setupGateRef.current && !opts?.mock) {
       setupGateRef.current = true;
       // ?nosetup=1 给自动化脚本用:不弹首启设置对话框
-      if (localStorage.getItem("aiSetupDone") === null && !new URLSearchParams(location.search).has("nosetup")) {
+      if (tabId === MAIN_TAB && localStorage.getItem("aiSetupDone") === null && !new URLSearchParams(location.search).has("nosetup")) {
         setSetupOpen(true);
       }
     }
@@ -302,7 +311,7 @@ export function useAiChat(opts?: { mock?: boolean }) {
   useEffect(() => {
     if (!provider) return;
     // 换模型不动对话:对话属于这个项目,换个模型接着聊是合理的
-    const sess = localStorage.getItem(`aiSession:${provider}`);
+    const sess = localStorage.getItem(sessKey(provider));
     if (sess) {
       setSessionIds((prev) => ({ ...prev, [provider]: sess }));
     }
@@ -315,7 +324,7 @@ export function useAiChat(opts?: { mock?: boolean }) {
 
   const newChat = () => {
     if (!provider) return;
-    localStorage.removeItem(`aiSession:${provider}`);
+    localStorage.removeItem(sessKey(provider));
     setMessages([]);
     setSessionIds((prev) => {
       const next = { ...prev };
@@ -360,10 +369,8 @@ export function useAiChat(opts?: { mock?: boolean }) {
     });
 
     try {
+      // 用户那句原话在 send() 里已经先进了消息流(编排块就画在它下面),这里不再追加
       const plan = await buildPlan(text, { managerPrompt: manager.prompt, provider });
-
-      // 用户那句原话要进消息流，否则编排块上面是空的，看不出在回应什么
-      setMessages((prev) => [...prev, { id: Date.now().toString(), role: "user", text }]);
 
       await runOrchestration(
         plan,
@@ -415,25 +422,32 @@ export function useAiChat(opts?: { mock?: boolean }) {
   const send = async (text: string, attachments?: ChatAttachment[]) => {
     if (!provider) return;
 
-    // 分工模式：先过便宜的闸，值得才编排；编排失败就落回下面的普通流程
-    if (isTeamMode() && !attachments?.length) {
-      const verdict = await shouldOrchestrate(text);
-      if (verdict.parallel && (await runTeamMode(text))) return;
-    }
-
     abort();
 
-    // 发送这一刻就把「这条用什么跑」定下来,而且**发出去的和记下来的是同一份**。
-    // 分开各读一次的话,用户在流式过程中换了模型,记录就会和实际跑的对不上。
-    const choice = readChoice(provider);
-    const runtime: MessageRuntime = { provider, ...choice, toolProtocol: !!config?.toolProtocol };
-
+    // 用户那句话**发送的这一瞬间**就进消息流。以前分工模式下要等入口闸(可能打一次模型)
+    // 和主管三步拆解全回来才追加,那几秒到几十秒里界面纹丝不动,用户以为没发出去。
     const userMsg: ChatMessage = {
       id: Date.now().toString(),
       role: "user",
       text,
       attachments,
     };
+    setMessages((prev) => [...prev, userMsg]);
+
+    // 分工模式：先过便宜的闸，值得才编排；编排失败就落回下面的普通流程。
+    // 闸还在判的时候编排块就先挂上「正在拆解」—— 它画在最后一条用户消息下面,
+    // 用户能看见有东西在转;判定不值得编排就把块撤掉,走普通问答。
+    if (isTeamMode() && !attachments?.length) {
+      setOrchestration({ phase: "planning", query: text, plan: "", dag: "", tasks: [], waves: [] });
+      const verdict = await shouldOrchestrate(text);
+      if (verdict.parallel && (await runTeamMode(text))) return;
+      if (!verdict.parallel) setOrchestration(null);
+    }
+
+    // 发送这一刻就把「这条用什么跑」定下来,而且**发出去的和记下来的是同一份**。
+    // 分开各读一次的话,用户在流式过程中换了模型,记录就会和实际跑的对不上。
+    const choice = readChoice(provider);
+    const runtime: MessageRuntime = { provider, ...choice, toolProtocol: !!config?.toolProtocol };
 
     const asstMsgId = (Date.now() + 1).toString();
     const asstMsg: ChatMessage = {
@@ -449,7 +463,8 @@ export function useAiChat(opts?: { mock?: boolean }) {
       trace: [],
     };
 
-    setMessages((prev) => [...prev, userMsg, asstMsg]);
+    // 用户消息上面已经进去了,这里只追加助手那条
+    setMessages((prev) => [...prev, asstMsg]);
     setStreaming(true);
     setError(null);
 
@@ -515,12 +530,17 @@ export function useAiChat(opts?: { mock?: boolean }) {
 
     try {
       const sessionId = sessionIds[provider];
+      // 多 Agent:这一页的对话 ID 随请求带上,服务端把它塞给 MCP 进程,工具调用就知道是谁发的;
+      // 其他 Agent 的动态(范围变动、给它的消息)拼在提示词前面 —— 只进模型,不进屏幕上那条用户消息
+      const agentId = opts?.getConversationId?.();
+      const notes = agentId ? agentBus.consumeNotes(agentId) : "";
       const res = await fetch("/api/ai/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           provider,
-          prompt: text,
+          prompt: notes ? `${notes}\n\n${text}` : text,
+          conversationId: agentId,
           sessionId,
           // 模型 / 推理强度 / 加速档:上面发送那一刻已经读好(choice),用户在面板上
           // 换完下一条立刻生效。哪家支持哪几样由 runner 端翻译,这里只管把选择传过去。
@@ -559,7 +579,7 @@ export function useAiChat(opts?: { mock?: boolean }) {
             currentRunId.current = ev.runId;
           } else if (ev.type === "session" && ev.sessionId) {
             setSessionIds((prev) => ({ ...prev, [provider]: ev.sessionId! }));
-            localStorage.setItem(`aiSession:${provider}`, ev.sessionId!);
+            localStorage.setItem(sessKey(provider), ev.sessionId!);
           } else if (ev.type === "text" && ev.delta) {
             setMessages((prev) =>
               prev.map((m) =>

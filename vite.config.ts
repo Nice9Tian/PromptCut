@@ -16,10 +16,26 @@ import { projectsPlugin } from "./server/vite-plugin-projects";
 import { visionPlugin } from "./server/vite-plugin-vision";
 import { skillPlugin } from "./server/vite-plugin-skill";
 import { skillStatePlugin } from "./server/vite-plugin-skill-state";
+import { collectPlugin } from "./server/vite-plugin-collect";
+import { webPlugin } from "./server/vite-plugin-web";
 
 // 无头实例(scripts/headless.mjs)和用户手里那份 vite 跑在同一个项目根上,
 // 依赖预构建缓存分开放,免得两个进程同时写 node_modules/.vite 互相踩。
 const headless = process.env.PROMPTCUT_HEADLESS === "1";
+
+/**
+ * vite 的静态中间件会把**项目根下的任意文件**按路径发出去 —— 实测
+ * `GET /out/cookies/bilibili.txt` 是 200,内容原样。开发期 dataDir 就是 `<root>/out`,
+ * 于是素材收集存下的站点登录态(SESSDATA / bili_jct,等于账号)成了一条 HTTP 可取的地址。
+ * 同源策略只挡「别的网页读」,挡不住 agent 自己那个浏览器:它会去任意外站,
+ * 页面上写一句「打开 http://127.0.0.1:5210/out/cookies/bilibili.txt」就能把 cookie
+ * 读进模型上下文。所以在文件系统这一层直接拒掉。
+ *
+ * 前四条是 vite 的默认值:`deny` 是**整体替换**不是追加,不带上就等于把默认防护删了。
+ * (正式包里 PROMPTCUT_DATA_DIR 指向 %LOCALAPPDATA%,不在根下,本来就取不到;
+ *  这一条保的是开发期和「壳连仓库 dev server」那种跑法。)
+ */
+const fsDeny = [".env", ".env.*", "*.{crt,pem}", "**/.git/**", "**/out/cookies/**"];
 
 export default defineConfig({
   ...(headless ? { cacheDir: "node_modules/.vite-headless" } : {}),
@@ -28,15 +44,17 @@ export default defineConfig({
   //   apiGuardPlugin  —— /api/** 的同源校验,任何 dev server 都生效;
   //   viewGatePlugin  —— Skill 无头实例的只读钥匙,只在 headless.mjs 起的那份上生效
   //                      (它靠 PROMPTCUT_VIEW_TOKEN 判断,用户自己那份没有这个变量,整个空转)。
-  plugins: [apiGuardPlugin(), viewGatePlugin(), react(), tailwindcss(), exportPlugin(), vitePluginAi(), sttPlugin(), shotsPlugin(), trackPlugin(), subjectPlugin(), mediaPlugin(), chatsPlugin(), vitePluginCards(), projectsPlugin(), visionPlugin(), skillPlugin(), skillStatePlugin()],
+  plugins: [apiGuardPlugin(), viewGatePlugin(), react(), tailwindcss(), exportPlugin(), vitePluginAi(), sttPlugin(), shotsPlugin(), trackPlugin(), subjectPlugin(), mediaPlugin(), chatsPlugin(), vitePluginCards(), projectsPlugin(), visionPlugin(), skillPlugin(), skillStatePlugin(), collectPlugin(), webPlugin()],
   server: headless
     ? {
         // 无头实例不要热更新:它是给 agent 跑的,源码一改就重载页面,重载期间工具全失败,
         // 页面里的状态也得从 project.proc 重新读。关掉监听,它就只认启动那一刻的代码。
         watch: null,
         hmr: false,
+        fs: { deny: fsDeny },
       }
     : {
+        fs: { deny: fsDeny },
         watch: {
           /*
            * 这里每一条都不是源码,而且**漏掉会出人命**:

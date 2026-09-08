@@ -18,6 +18,53 @@
 * `POST /api/mcp/call` - MCP server 向编辑台请求工具调用。
 * `GET /api/mcp/status` - 获取当前 MCP 连接状态（调试用）。
 
+### Skill 任务（server/vite-plugin-skill.ts）
+
+* `GET /api/skill/jobs` - 每个任务多了 `starting`（刚点的、实例还没上来，三分钟内）、`startedAt`（最近一次起实例）、
+  `mergeRequest`（agent 调了 `submit_merge` 还没被并入的请求 `{ seq, note }`）。前端拿 `starting` 在点「开始」的那一刻就切进 SKILL 模式。
+* `POST /api/skill/jobs/:id/restart` - 停掉的任务再起一份实例（项目用任务目录里的 `project.proc`，`base.proc` 不动），
+  然后把桌面 app 的对话叫回来。实例还活着返回 400。
+* `POST /api/skill/jobs/:id/relaunch` - Claude 那条路现在优先 `claude://code/continue?session=<local_…>` 把原会话叫回前台
+  （会话 id 用上次核对到的，没有就翻桌面版归档找落在任务目录里的那条）；实测同一目录第二次走 `code/new?folder=`
+  会开成「No folder」的临时工作区，`/promptcut` 在里面是未知命令。找不到原会话才退回新建。
+* `POST /api/skill/jobs/:id/merge-result` - 用户那份 PromptCut 做完合并把 `{ seq, ok, summary, error? }` 写回任务目录的
+  `merge-result.json`。
+
+**agent 把改动并回用户项目（`submit_merge`）**：任务目录里那份 `tools/mcp-server.mjs` 只在任务目录里多暴露这一个工具。
+它先等实例把改动写回 `project.proc`，再往任务目录写 `merge-request.json`；用户手里的 PromptCut 每秒轮询任务列表，
+SKILL 模式开着且就是这个任务时，在自己页面里做三方合并（`src/skill/skillMode.ts` 的 `serveMergeRequest`，
+和对话框里「强制并入」同一个 `applyCombine`），把报告 POST 到 `merge-result`，工具等到它就把报告回给 agent（60 秒超时）。
+像 git worktree 合回主分支，仲裁的一方是用户正在开着的编辑台；用户关了 SKILL 模式，请求就不再生效。
+
+### 素材收集（server/vite-plugin-collect.ts）
+从网页链接（B 站等）抓视频，落到素材目录 `out/media`（和上传同一个目录，所以 `/@media/<文件名>` 直接能取）。干活的是 `python/promptcut_collect`（yt-dlp 封装，见 [python/README.md](../python/README.md)），这边只起进程、解析 JSONL、管作业表。
+* `GET /api/collect/status` - `{ ok, python, ready, ytdlp: { installed, version, error }, ffmpeg, presets }`。`ready` 要求 yt-dlp 装了且 ffmpeg 找得到。
+* `POST /api/collect/install` - 无 body。pip 装 yt-dlp（约 3 MB），SSE 流式回 pip 日志（`log` / `installed` / `error` 事件）。
+* `POST /api/collect/search` - `{ query, site?, limit? }`，站内搜索（bilibili 默认 / generic 搜 YouTube；limit 1~10，默认 5）。先用 yt-dlp 的搜索抽取器扁平拿链接，再并发探测每条拿 `title / duration / uploader / view_count / max_height`（实测 3 条约 3 秒）；单条失败只带 `error`。给 agent「按主题找素材」用，MCP 工具 `collect_search`。
+* `POST /api/collect/probe` - `{ url, site?, quality? }`，同步探测（上限 50 秒），返回 `{ ok, title, duration, uploader, heights, parts, subtitles, formats, notes }`；失败 `{ ok:false, error, notInstalled?, notes }`。
+* `POST /api/collect/download` - `{ url, quality?, site?, audioOnly?, allParts?, keepCodec?, cookies? }`，立刻返回 `{ ok, jobId, outDir }`。同一条链接正在下时返回已有的 jobId 并带 `reused: true`。
+* `GET /api/collect/job/<id>` - `{ ok, job }`。`job` 含 `status`（running / done / error）、`stage`（starting / video / audio / merge / transcode / done）、`percent`、`speed`、`eta`、`info`、`items`（每个文件的 `path` / `url` / 标题 / 时长 / 分辨率 / `vcodec` / `transcoded`）、`notes`（412 重试记录）、`message`（出错原因）。作业只在内存里，重启后 404。
+* `DELETE /api/collect/job/<id>` - 取消：杀掉整棵进程树，`status` 变 error、`message` 为「已取消」。
+* `GET /api/collect/jobs` - 全部作业，新的在前。
+
+**登录态**（`server/collect-cookies.mjs` 纯逻辑，可单测；浏览器那半边借 `server/web/` 的 agent 浏览器）。yt-dlp 读不了 Chrome / Edge 的 cookie 库（Windows 应用绑定加密，实测两家都是 `Could not copy cookie database`），所以让用户在 agent 的浏览器窗口里扫码登录，再从 CDP `Network.getAllCookies` 取出来存成 Netscape 格式的 `<dataDir>/cookies/<site>.txt`，之后探测和下载自动带上。
+* `POST /api/collect/login` - `{ site?: "bilibili", force? }`。已登录且没过期回 `{ alreadyLoggedIn: true, userId, expiresAt }`；否则打开站点登录页并把浏览器窗口挪到用户面前，回 `{ visible: true, message }`。
+* `POST /api/collect/login/check` - `{ site?, hide? }`。从浏览器取 cookie，`SESSDATA / bili_jct / DedeUserID` 齐了且没过期就存盘、藏回窗口，回 `{ loggedIn: true, userId, expiresAt, path, count }`；否则 `{ loggedIn: false, missing, expired, hint }`。
+* `GET /api/collect/cookies` - 各站存盘登录态 `{ bilibili: { name, loggedIn, expired, userId, expiresAt, path } }`；`/status` 的返回里也带同一份 `cookies`。
+* `DELETE /api/collect/cookies?site=bilibili` - 退出登录（删文件）。
+* `probe` / `download` 没传 `cookies` 时按链接判断站点、自动带上没过期的存盘登录态；作业的 `cookiesUsed` 和 `notes` 说明带没带、为什么没带。
+
+MCP 工具 `collect_login / collect_login_check / collect_logout`。验证：`node --test server/test/collect-cookies.test.mjs`。
+
+扫码登录（接口版，不开浏览器）：`POST /api/collect/qr/start` → `{ key, url, svgUrl, expiresIn }`，二维码由 `server/qr.mjs`（零依赖的 QR 编码器，已和 Python qrcode 库逐模块对拍、jsQR 实测能解）现画；`GET /api/collect/qr/svg?key=` 出 SVG；`GET /api/collect/qr/poll?key=` 回 `state`（waiting / scanned / expired / ok），ok 时登录态已存盘。逻辑在 `server/collect-qr-login.mjs`，编辑台里的登录框 `src/editor/right/CollectLoginDialog.tsx` 两个页签：扫码（这条）和账号密码（打开站点登录页，走 agent 浏览器）。
+
+### Agent 浏览器的壳模式（server/web/browser.mjs）
+桌面壳给 WebView2 开了调试端口并通过 `PROMPTCUT_AGENT_CDP` 传给 sidecar 时，`getBrowser` 走 `connectShell`：连 `http://127.0.0.1:<port>`，按壳注入的 `window.__PROMPTCUT_AGENT__` 标记认出 agent 那块子 webview（热重启后重连也认得），实例带 `shell: true`、`shared: true`（关的时候只断开）。`showWindow / hideWindow` 在壳模式下不动窗口，只解除 / 恢复视口仿真并回 `{ shell: true }`；`web_handoff` 的返回带 `shell`，由前端点亮顶栏「浏览器」页签、用户点开面板后 invoke 壳命令把 webview 摆到位。没有这个变量（浏览器里 `npm run dev`）就退回离屏 Chrome（已加 `--mute-audio`、压掉欢迎页和恢复气泡）。详见 [desktop/README.md](../desktop/README.md) 的「Agent 的浏览器」一节。
+
+前端胶水在 `src/ai/collect.ts`；MCP 工具 `collect_status / collect_install / collect_probe / collect_download / collect_job` 的实现在 `src/editor/right/index.tsx`，下完自动用 `importVideoFromServer`（`src/editor/io/index.ts`）登记进素材库、放到视频轨，不再上传一遍。角色卡 `src/ai/roles/collector.md`（素材收集员）。
+
+验证：`node --test server/test/collect-plugin.test.mjs`（用 `server/test/fake-collect.cmd` 冒充 Python，不联网）；真实链路见 python/README.md 的实测记录。
+
 ## 登录状态探测（server/runners/auth.mjs）
 - Claude：以 `claude auth status` 的 JSON 为准。
 - Codex：合并 stdout/stderr 读取 `codex login status`。安装、登录和执行统一使用 `%LOCALAPPDATA%\promptcut\cli\codex-home`，不会修改 Codex 桌面应用的配置或凭据。用户需在 PromptCut 内登录一次。

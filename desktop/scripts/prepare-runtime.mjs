@@ -514,29 +514,38 @@ function stepFfmpeg() {
   return ver;
 }
 
-// ── Step 5: Python (detect only) ────────────────────────────────────────
+// ── Step 5: Python ──────────────────────────────────────────────────────
 
+/**
+ * 内置 Python 和 Node 一样是**必须件**,缺了就不许出包。
+ *
+ * 这里以前是「detect only」:找不到只打一条 WARN 就往下走,理由是「语音识别功能
+ * 不可用」——那是 Python 还只喂 STT 时的写法。现在它下面挂着转场识别、主体检测、
+ * 运动追踪四个包,README 也把它和 Node / Chrome / ffmpeg 并列写进「全部运行时」,
+ * 放行等于打出一个装上去才发现半边功能是死的安装包。
+ *
+ * 这一步只做检测、不做组装:组装归 prepare-python.mjs(要联网下 embeddable zip
+ * 和 pip),那是个几分钟的活儿,不该埋在每次 prepare-runtime 里偷偷触发。
+ */
 function stepPython() {
   const stepT = Date.now();
-  console.log("\n── Step 5: Python (detect only) ──");
+  console.log("\n── Step 5: Python ──");
   const pythonExe = path.join(RUNTIME_DIR, "python", "python.exe");
-  let ver = null;
 
-  if (fs.existsSync(pythonExe)) {
-    try {
-      const out = execSync(`"${pythonExe}" -V`, { encoding: "utf-8", timeout: 5000 });
-      ver = out.trim(); // "Python 3.11.x"
-      console.log(`  Python found: ${ver} [${((Date.now() - stepT) / 1000).toFixed(1)}s]`);
-    } catch (e) {
-      console.warn(`  Python exe exists but failed to run: ${e.message}`);
-    }
-  } else {
-    console.warn(
-      "  [WARN] runtime/python 还没就绪，语音识别功能不可用；" +
-      "跑 npm run prepare-python 组装"
-    );
+  assert(
+    fs.existsSync(pythonExe),
+    `内置 Python 缺失: ${pythonExe}\n` +
+    "         它是必须件(转场识别 / 主体检测 / 运动追踪 / 语音识别都跑在它上面)。\n" +
+    "         先跑 npm run prepare-python 组装,再重跑本脚本。"
+  );
+
+  let ver;
+  try {
+    ver = execSync(`"${pythonExe}" -V`, { encoding: "utf-8", timeout: 5000 }).trim(); // "Python 3.11.x"
+  } catch (e) {
+    assert(false, `内置 Python 存在但跑不起来: ${e.message}\n         用 npm run prepare-python -- --force 重装。`);
   }
-
+  console.log(`  Python found: ${ver} [${((Date.now() - stepT) / 1000).toFixed(1)}s]`);
   return ver;
 }
 
@@ -610,16 +619,6 @@ function stepVersions(nodeVer, chromeVer, ffmpegVer, pythonVer) {
     appSrcHash,
     builtAt: new Date().toISOString(),
   };
-
-  // Log if python status changed
-  if (fs.existsSync(versionsPath)) {
-    try {
-      const old = JSON.parse(fs.readFileSync(versionsPath, "utf-8"));
-      if (old.python && !pythonVer) {
-        console.log(`  [info] Previous VERSIONS.json had python="${old.python}", now detected null`);
-      }
-    } catch { /* ignore */ }
-  }
 
   mkdirp(RUNTIME_DIR);
   fs.writeFileSync(versionsPath, JSON.stringify(data, null, 2));

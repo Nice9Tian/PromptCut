@@ -21,6 +21,12 @@ export function SkillLock(): JSX.Element | null {
 
   useEffect(() => subscribeSkill(setSnap), []);
 
+  // 「关闭中…」不能是死锁:关成了这个组件会整个卸掉;关没成(被拒、超时、被别的实例
+  // 又打开)closeSkillMode 会抛,下面的 catch 把按钮复位并显示原因。这里再兜一层 ——
+  // 状态一旦从关变回开(since 变了),不管请求在什么阶段,按钮都复位,免得永远点不了。
+  const since = snap?.state.since ?? null;
+  useEffect(() => { setClosing(false); }, [since]);
+
   if (!snap?.state.active) return null;
   const { state, proc } = snap;
 
@@ -31,6 +37,7 @@ export function SkillLock(): JSX.Element | null {
       await closeSkillMode("user");
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+    } finally {
       setClosing(false);
     }
   };

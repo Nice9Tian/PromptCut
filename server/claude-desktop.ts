@@ -114,8 +114,11 @@ export async function launchClaudeTask(dir: string, prompt: string, overrides: P
     const why = SEND_REASONS[pressed.reason ?? ""] ?? "没能替你发送";
     return { kind: "claude-deeplink", status: "ready", autoSend, detail: `${why}。到 Claude 里看一眼:指令应该还留在输入框里,目录对的话按一下回车就行${note}` };
   }
-  // 回车之后盯着归档:新会话落在哪个目录
-  const deadline = t0 + deps.settleMs + deps.verifyMs;
+  // 回车之后盯着归档:新会话落在哪个目录。
+  // 期限从**回车之后**起算:原来是从深链那一刻起算,而 UIA 那段(找窗口、等信任弹窗、
+  // 等预填、按发送)在 Electron 那棵巨大的无障碍树上动辄四五十秒,回来时期限早过了,
+  // 归档一眼都没看就报「没在归档里看到新会话」—— 明明会话就开在任务目录里(实测)。
+  const deadline = deps.now() + deps.verifyMs;
   let seen: SessionRecord | null = null;
   while (deps.now() < deadline) {
     seen = findSessionSince(deps.sessionsDir, t0, dir);
@@ -132,6 +135,30 @@ export async function launchClaudeTask(dir: string, prompt: string, overrides: P
     };
   }
   return { kind: "claude-deeplink", status: "ready", autoSend, detail: `指令已发送,但没在会话归档里看到新会话,到 Claude 里确认一下${note}` };
+}
+
+/**
+ * 「重新拉起对话」:任务目录里已经开过 Claude 会话的,直接把那个会话叫回来。
+ *
+ * 不再走 code/new?folder=:实测同一个目录第二次走这条深链,桌面版开出来的是一个
+ * 「No folder」的临时工作区(scratch workspace),/promptcut 在里面是未知命令,agent
+ * 连任务目录都找不到。桌面版另有 `claude://code/continue?session=local_…` 能按会话
+ * id 把原会话切到前台,会话里 skill 早就加载过了,什么都不用再发。
+ *
+ * 会话 id 优先用上一次拉起时核对到的;没有就翻归档找落在这个目录里的最新一条。
+ * 都没有就返回 null,让调用方照常走新建那条路。
+ */
+export async function resumeClaudeSession(dir: string, knownSessionId: string | undefined, overrides: Partial<ClaudeDeps> = {}): Promise<ClaudeLaunch | null> {
+  const deps = { ...defaultDeps(), ...overrides };
+  let sessionId = knownSessionId && /^local_[A-Za-z0-9-]{1,64}$/.test(knownSessionId) ? knownSessionId : undefined;
+  let cwd: string | undefined;
+  if (!sessionId) {
+    const seen = findSessionSince(deps.sessionsDir, 0, dir);
+    if (seen?.matches) { sessionId = seen.sessionId; cwd = seen.cwd; }
+  }
+  if (!sessionId) return null;
+  await deps.openUrl(`claude://code/continue?session=${encodeURIComponent(sessionId)}`);
+  return { kind: "claude-continue", status: "ready", autoSend: "skipped", sessionId, sessionCwd: cwd ?? dir, detail: "已把原来的 Claude 会话叫回前台;对话关掉过的话在那儿接着说就行" };
 }
 
 /* ---------------- ~/.claude.json:预写信任 ---------------- */

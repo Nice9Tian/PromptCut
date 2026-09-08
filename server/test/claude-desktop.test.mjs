@@ -219,3 +219,53 @@ test('trustFolder:没有 ~/.claude.json 也能建;已有条目的别的字段保
   assert.deepEqual(cfg.projects[dir].disabledMcpjsonServers, ['other']);
   assert.equal(Object.keys(cfg.projects).length, 1);
 });
+
+test('重新拉起:任务目录里已有会话就走 code/continue,不再开 code/new(那会开成 No folder)', async () => {
+  const { resumeClaudeSession } = await import('../claude-desktop.ts');
+  const home = fakeHome();
+  const sessionsDir = path.join(tmp(), 'claude-code-sessions');
+  const dir = path.join(tmp(), 'job');
+  fs.mkdirSync(dir);
+  // 归档里有一条落在任务目录的旧会话(createdAt 很早也算:重新拉起不限时间)
+  const id = writeSession(sessionsDir, { cwd: dir, createdAt: Date.now() - 3600_000 });
+  const { deps: d, calls } = deps(home, sessionsDir);
+  const r = await resumeClaudeSession(dir, undefined, d);
+  assert.equal(r?.kind, 'claude-continue');
+  assert.equal(r?.sessionId, id);
+  assert.equal(calls.urls.length, 1);
+  assert.match(calls.urls[0], /^claude:\/\/code\/continue\?session=local_/);
+  assert.equal(calls.enters.length, 0, '续开原会话不该再替用户回车');
+});
+
+test('重新拉起:上次核对到的会话 id 优先;归档里什么都没有就返回 null 让调用方走新建', async () => {
+  const { resumeClaudeSession } = await import('../claude-desktop.ts');
+  const home = fakeHome();
+  const sessionsDir = path.join(tmp(), 'claude-code-sessions');
+  const dir = path.join(tmp(), 'job');
+  fs.mkdirSync(dir);
+  const { deps: d, calls } = deps(home, sessionsDir);
+  const r = await resumeClaudeSession(dir, 'local_abc-123', d);
+  assert.equal(r?.sessionId, 'local_abc-123');
+  assert.match(calls.urls[0], /session=local_abc-123$/);
+  const none = await resumeClaudeSession(dir, 'not a session id', d);
+  assert.equal(none, null);
+  assert.equal(calls.urls.length, 1);
+});
+
+test('归档核对的期限从回车之后起算:UIA 那段拖了很久也不会错过会话', async () => {
+  const home = fakeHome();
+  const sessionsDir = path.join(tmp(), 'claude-code-sessions');
+  const dir = path.join(tmp(), 'job');
+  fs.mkdirSync(dir);
+  let clock = 1_000_000;
+  const { deps: d } = deps(home, sessionsDir, {
+    now: () => clock,
+    settleMs: 100, verifyMs: 500, pollMs: 5,
+    // 回车那一步耗时远超 settleMs + verifyMs,会话在这期间落盘
+    sendPrompt: async () => { writeSession(sessionsDir, { cwd: dir, createdAt: clock + 10 }); clock += 60_000; return sent(); },
+  });
+  const r = await launchClaudeTask(dir, '/promptcut', d);
+  assert.equal(r.status, 'ready');
+  assert.equal(r.sessionCwd, dir, '回车之后才开始核对,应该看得到这条会话');
+  assert.doesNotMatch(r.detail, /没在会话归档里看到/);
+});

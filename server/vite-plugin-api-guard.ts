@@ -40,7 +40,11 @@ import { originOk, jsonContentType, apiPath } from "./http-guard.mjs";
  */
 
 /** body 是原始字节、Content-Type 由文件类型决定的路由前缀 */
-const RAW_BODY_PREFIXES = ["/api/media/upload/", "/api/export/media/"];
+// 对话附件的「+」上传也是把 File 原样当 body(Content-Type 按文件类型填,视频就是 video/mp4)。
+// 漏了这一条的后果是附件一个都传不上去,界面只说「导入失败」。
+// 听写(transcribe_media)也是先把素材原样 POST 到 /api/stt/upload/<job>/<名字>,同一个道理。
+// 这四条就是全部原始体路由:服务端里只有它们直接把 req 往文件里灌(见 api-guard.test.mjs)。
+const RAW_BODY_PREFIXES = ["/api/media/upload/", "/api/export/media/", "/api/chats/attach/upload", "/api/stt/upload/"];
 
 export function apiGuardPlugin(): Plugin {
   return {

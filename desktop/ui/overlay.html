@@ -16,32 +16,94 @@
     -webkit-app-region: drag;
     user-select: none;
     cursor: default;
+    display: flex; flex-direction: column; gap: 8px;
   }
   .card {
-    height: 100%;
+    flex: 0 0 72px; height: 72px;
     display: flex;
     align-items: center;
     gap: 10px;
     padding: 0 14px;
     border-radius: 12px;
     background: rgba(24, 26, 34, 0.94);
-    border: 1px solid #AFFAFA;
+    border: 1px solid #00DBDB;
     box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
     color: #e6edf6;
   }
   .dot {
     width: 10px; height: 10px; border-radius: 50%;
-    background: #AFFAFA; flex: 0 0 auto;
+    background: #00DBDB; flex: 0 0 auto;
     animation: pulse 1.8s ease-in-out infinite;
   }
   @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
   .text { min-width: 0; flex: 1 1 auto; }
-  .title { font-size: 12px; font-weight: 600; color: #AFFAFA; }
+  .title { font-size: 12px; font-weight: 600; color: #00DBDB; }
   .sub {
     font-size: 11px; color: #8da4c8; margin-top: 2px;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
   .hint { font-size: 10px; color: #56719b; margin-top: 1px; }
+
+  /* 卡片下面的块共用的壳 */
+  .block {
+    display: none;
+    flex-direction: column;
+    border-radius: 10px;
+    background: rgba(24, 26, 34, 0.94);
+    border: 1px solid rgba(0, 219, 219, 0.45);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+    padding: 6px;
+    overflow: hidden;
+  }
+  .block.is-on { display: flex; }
+
+  /*
+   * 启动进度。用户点「开始」的那一刻主窗就收起来了,快照 → 起实例 → 拉桌面 app → 就绪
+   * 这四步在这里走:做完的亮起来,正在做的那一步呼吸,失败的变红。壳(skill_shell.rs)
+   * 在流程走完几秒后把这块收掉,卡片还是原来那一条。
+   */
+  .steps { flex: 0 0 108px; height: 108px; gap: 3px; padding: 7px 10px; }
+  .step {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 11px; line-height: 18px; color: #56719b;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    transition: color 240ms;
+  }
+  .step i {
+    width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto;
+    background: currentColor; opacity: 0.55;
+    transition: transform 240ms cubic-bezier(0.16, 1, 0.3, 1), opacity 240ms;
+  }
+  .step.is-done { color: #e6edf6; }
+  .step.is-done i { opacity: 1; transform: scale(0.9); }
+  .step.is-active { color: #00DBDB; }
+  .step.is-active i { opacity: 1; animation: pulse 1.2s ease-in-out infinite; transform: scale(1.25); }
+  .step.is-failed { color: #ff6b6b; }
+  .step.is-failed i { opacity: 1; }
+  .steps .status {
+    margin-top: 3px; font-size: 10px; line-height: 14px; color: #8da4c8;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .steps .status.is-failed { color: #ff6b6b; }
+
+  /*
+   * 「上一步动作」预览。壳只在第一张图到了之后才把窗口撑高,所以没有图的时候这块
+   * 根本不占地方。不放时间轴、不放任何控件:它只回答一个问题 —— agent 刚才那一步做出来是什么样。
+   */
+  .preview { gap: 4px; }
+  .preview img {
+    display: block;
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    object-fit: contain;
+    background: #000;
+    border-radius: 6px;
+  }
+  .preview .cap {
+    font-size: 10px; color: #8da4c8;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .preview .cap b { color: #00DBDB; font-weight: 600; }
 </style>
 </head>
 <body>
@@ -49,9 +111,20 @@
     <div class="dot"></div>
     <div class="text">
       <div class="title">SKILL 模式</div>
-      <div class="sub" id="sub">正在等 AI 助手…</div>
+      <div class="sub" id="sub">正在启动…</div>
       <div class="hint">双击回到软件</div>
     </div>
+  </div>
+  <div class="block steps" id="steps" title="启动进度">
+    <div class="step" data-phase="snapshot"><i></i><span>快照当前项目</span></div>
+    <div class="step" data-phase="booting"><i></i><span>起一份无头实例</span></div>
+    <div class="step" data-phase="launching"><i></i><span>写入说明,拉起桌面 app</span></div>
+    <div class="step" data-phase="ready"><i></i><span>实例就绪</span></div>
+    <div class="status" id="steps-status"></div>
+  </div>
+  <div class="block preview" id="preview" title="AI 上一步做成的时间轴动作,那一刻的画面">
+    <img id="preview-img" alt="上一步动作的画面">
+    <div class="cap" id="preview-cap"></div>
   </div>
 
 <script>
@@ -60,6 +133,8 @@
     var t = window.__TAURI__;
     if (t && t.event && t.event.emit) t.event.emit('pc-skill-restore');
   });
+
+  var launched = false;
 
   // 壳每秒推一次进度(只在真的变了的时候推)
   var t = window.__TAURI__;
@@ -73,9 +148,83 @@
           ? String(when.getHours()).padStart(2, '0') + ':' + String(when.getMinutes()).padStart(2, '0')
           : '';
         sub.textContent = d.clips + ' 张卡' + (hhmm ? ' · ' + hhmm : '');
-      } else if (d.job_id) {
+      } else if (d.job_id && launched) {
         sub.textContent = d.job_id;
       }
+    });
+
+    // 启动进度(skill_shell.rs 读任务目录的 job.json 推过来)
+    var ORDER = ['snapshot', 'booting', 'launching', 'ready'];
+    t.event.listen('pc-skill-progress', function (e) {
+      var d = (e && e.payload) || {};
+      var phase = d.phase || 'snapshot';
+      var cur = ORDER.indexOf(phase);
+      var rows = document.querySelectorAll('#steps .step');
+      for (var i = 0; i < rows.length; i++) {
+        var me = ORDER.indexOf(rows[i].getAttribute('data-phase'));
+        var cls = 'step';
+        if (d.failed) {
+          // 失败停在哪一步:phase 记的是失败前那一步,它变红,前面的算做完
+          cls += me < cur ? ' is-done' : me === cur ? ' is-failed' : '';
+        } else if (phase === 'stopped') {
+          cls += ' is-done';
+        } else if (me < cur) {
+          cls += ' is-done';
+        } else if (me === cur) {
+          // 实例就绪之后还在拉桌面 app 的话,「实例就绪」已经算做完,状态行说明还在拉
+          cls += phase === 'ready' ? ' is-done' : ' is-active';
+        }
+        rows[i].className = cls;
+      }
+      var status = document.getElementById('steps-status');
+      var text = '';
+      if (d.failed) text = d.error || d.launch_detail || '启动失败';
+      else if (phase === 'ready' && d.launch_status === 'launching') text = d.launch_detail || '正在拉起桌面 app…';
+      else if (phase === 'ready') text = d.launch_detail || '就绪,等 AI 助手动手';
+      else if (phase === 'stopped') text = '实例已停止';
+      status.textContent = text;
+      status.className = 'status' + (d.failed ? ' is-failed' : '');
+      var sub = document.getElementById('sub');
+      if (d.failed) sub.textContent = '启动失败';
+      else if (!d.done) sub.textContent = '正在启动…';
+      else if (!launched) sub.textContent = '正在等 AI 助手…';
+      if (d.done && !d.failed) launched = true;
+    });
+
+    // 进度块显示 / 收起(窗口高度由壳撑,这里只切显示)
+    t.event.listen('pc-skill-steps', function (e) {
+      var on = !!(e && e.payload);
+      document.getElementById('steps').classList.toggle('is-on', on);
+    });
+  }
+</script>
+<script>
+  // 壳推「上一步动作」的预览图(desktop/src-tauri/src/skill_shell.rs 的 watcher):
+  // json 的修改时间变了才推一次,所以这里不用去重。窗口高度由壳撑,这里只负责显示。
+  var tp = window.__TAURI__;
+  if (tp && tp.event && tp.event.listen) {
+    tp.event.listen('pc-skill-preview', function (e) {
+      var d = (e && e.payload) || {};
+      if (!d.data_url) return;
+      var box = document.getElementById('preview');
+      var img = document.getElementById('preview-img');
+      var cap = document.getElementById('preview-cap');
+      img.src = d.data_url;
+      var names = {
+        add_clip: '加了一张卡', update_clip: '改了一张卡', remove_clip: '删了一张卡',
+        duplicate_clip: '复制了一张卡', split_clip: '切开了一张卡', fill_captions: '灌了字幕',
+        set_position: '挪了位置', set_rect: '放进了矩形', align: '对齐了', nudge: '微调了',
+        attach_clip_motion: '绑了跟随', detach_clip_motion: '解了跟随', add_track: '加了序列',
+        switch_cut: '切换了剪辑', add_cut: '新建了剪辑', set_theme: '换了主题',
+      };
+      var what = names[d.tool] || (d.tool || '上一步');
+      var when = d.at ? new Date(d.at) : null;
+      var hhmm = when && !isNaN(when.getTime())
+        ? String(when.getHours()).padStart(2, '0') + ':' + String(when.getMinutes()).padStart(2, '0') + ':' + String(when.getSeconds()).padStart(2, '0')
+        : '';
+      var at = typeof d.t === 'number' ? ' · ' + d.t.toFixed(1) + 's' : '';
+      cap.innerHTML = '<b>上一步</b> ' + what + at + (hhmm ? ' · ' + hhmm : '');
+      box.classList.add('is-on');
     });
   }
 </script>

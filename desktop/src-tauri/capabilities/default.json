@@ -8,6 +8,14 @@
   "permissions": [
     "core:default",
     "opener:default",
-    "window-state:default"
+    "window-state:default",
+    "allow-acquire-proc-lock",
+    "allow-release-proc-lock",
+    "allow-is-proc-locked",
+    "allow-agent-webview-show",
+    "allow-agent-webview-hide",
+    "allow-agent-webview-mute",
+    "allow-agent-webview-info",
+    "allow-menu-bar-color"
   ]
 }

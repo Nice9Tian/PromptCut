@@ -116,17 +116,22 @@ test('注入不会污染共享的 mcpTools 常量', () => {
 // 去调的时候才暴露 —— 那时候一次任务已经跑废了。
 test('mcp-tools 里每个 browser 工具，执行器里都有对应的分发分支', () => {
   const src = readFileSync(new URL('../../src/ai/mcpExecutor.ts', import.meta.url), 'utf8');
+  // web_* 走的是前缀分发 + runWebTool 里的 switch，不是逐个 tool === 分支。守卫的意思没变：
+  // 声明了就必须真有地方接住，所以这里也认 case "web_x": 这种形式。
   const missing = mcpTools
     .filter((t) => t.side === 'browser')
     .map((t) => t.name)
-    .filter((n) => !src.includes(`tool === "${n}"`));
+    .filter((n) => !src.includes(`tool === "${n}"`) && !src.includes(`case "${n}":`));
   assert.deepEqual(missing, [], `执行器里没有分支的工具：${missing.join('、')}`);
 });
 
 test('执行器分发的每个工具名，mcp-tools 里都真的有声明', () => {
   const src = readFileSync(new URL('../../src/ai/mcpExecutor.ts', import.meta.url), 'utf8');
   const declared = new Set(mcpTools.map((t) => t.name));
-  const dispatched = [...src.matchAll(/tool === "([a-z_]+)"/g)].map((m) => m[1]);
+  const dispatched = [
+    ...[...src.matchAll(/tool === "([a-z_]+)"/g)].map((m) => m[1]),
+    ...[...src.matchAll(/case "(web_[a-z_]+)":/g)].map((m) => m[1]),
+  ];
   const orphans = dispatched.filter((n) => !declared.has(n));
   assert.deepEqual(orphans, [], `执行器分发了但没声明的工具：${orphans.join('、')}`);
 });
@@ -135,4 +140,24 @@ test('只有 see_preview 放宽了超时；它必须大于渲染自己的上限�
   const withTimeout = mcpTools.filter((t) => t.timeoutMs);
   assert.deepEqual(withTimeout.map((t) => t.name), ['see_preview']);
   assert.ok(withTimeout[0].timeoutMs > 120000, '要大于 vite-plugin-vision 里 120 秒的渲染上限');
+});
+
+// ── 枚举值必须是字符串 ─────────────────────────────────────────────
+// 诊断报告里抓到的真失败:collect_probe 的 quality 写了数字枚举 [2160, 1440, …],
+// Gemini 的 OpenAI 兼容接口回 400「enum[0] (TYPE_STRING), 2160」,整个请求被拒,
+// agent 一个工具都调不了。取值范围写进 description,服务端用白名单兜底。
+test('所有工具的 enum 值都是字符串(Gemini 只认字符串枚举)', () => {
+  const bad = [];
+  const walk = (node, where) => {
+    if (!node || typeof node !== 'object') return;
+    if (Array.isArray(node.enum)) {
+      for (const v of node.enum) if (typeof v !== 'string') bad.push(`${where}: ${JSON.stringify(v)}`);
+    }
+    for (const [k, v] of Object.entries(node)) {
+      if (k === 'enum') continue;
+      if (v && typeof v === 'object') walk(v, `${where}.${k}`);
+    }
+  };
+  for (const t of mcpTools) walk(t.inputSchema, t.name);
+  assert.deepEqual(bad, [], '数字 / 布尔枚举会让 Gemini 直接拒掉整个请求');
 });

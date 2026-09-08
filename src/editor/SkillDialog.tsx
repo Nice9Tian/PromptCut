@@ -4,13 +4,15 @@ import { createPortal } from "react-dom";
 import { serializeProc, currentProjectName } from "./io/proc";
 import { applyCombine, summarizeCombine } from "./io/combineImport";
 import { useStore } from "../store/project";
+import { openSkillMode } from "../skill/skillMode";
 import "./SkillDialog.css";
 
 /**
  * Skill 模式:把当前项目交给桌面版的 Claude Code / Codex 去改。
  *
- * 点「开始」→ 服务端快照项目、起一份无头实例、拉起桌面 app 的新对话;这里轮询任务状态,
- * 把每一步摆出来。agent 干完后回来点「合并结果」,三方合并并进当前项目。
+ * 点「开始」→ 服务端快照项目、起一份无头实例、拉起桌面 app 的新对话。点下去的那一刻
+ * 就切进 SKILL 悬浮窗,启动的每一步在悬浮窗上走动画(desktop/ui/overlay.html),
+ * 这个对话框只管选驱动、看历史任务、对任务做操作:强制并入 / 停 / 再起 / 删。
  */
 
 type Provider = "claude" | "codex";
@@ -21,10 +23,13 @@ interface Job {
   provider: Provider;
   name: string;
   createdAt: string;
+  startedAt?: string;
   phase: Phase;
   error?: string;
   dir: string;
   alive: boolean;
+  /** 刚点的、实例还没上来 */
+  starting: boolean;
   port: number | null;
   dirty: boolean | null;
   savedAt: string | null;
@@ -39,16 +44,6 @@ const PROVIDERS: { id: Provider; name: string; desc: string }[] = [
   { id: "claude", name: "Claude Code", desc: "新建一个独立任务目录,Claude 桌面版的新对话直接落在那儿,预填好 /promptcut 自动发送" },
   { id: "codex", name: "Codex", desc: "自动创建不在项目中的独立任务,工作区指向任务目录,执行环境检查后打开对话" },
 ];
-
-const STEPS: { phase: Phase; label: string }[] = [
-  { phase: "snapshot", label: "快照当前项目" },
-  { phase: "booting", label: "起一份无头实例(独立端口,不碰你手里这份)" },
-  { phase: "launching", label: "写入说明文件,拉起桌面 app 的新对话" },
-  // 深链只把 /promptcut 预填进输入框,不会替用户按回车 —— 实测 Claude 桌面版就是这个行为
-  { phase: "ready", label: "实例就绪" },
-];
-
-const ORDER: Phase[] = ["snapshot", "booting", "launching", "ready"];
 
 async function api<T = unknown>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init);
@@ -65,12 +60,48 @@ function fmtTime(iso: string | null | undefined): string {
   return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
 
+function jobStateLabel(j: Job): { text: string; cls: string } {
+  if (j.alive) return { text: "运行中", cls: " is-live" };
+  if (j.starting) return { text: "启动中", cls: " is-live" };
+  if (j.phase === "failed") return { text: "失败", cls: " is-failed" };
+  return { text: "已停", cls: "" };
+}
+
+/** 一句话说清这个任务现在怎么样了:失败原因 / 拉起结果 / 写回状态 */
+function jobDetail(j: Job): { text: string; tone: "ok" | "err" | "muted" } | null {
+  if (j.phase === "failed") return { text: `失败:${j.error || j.instanceError || "原因未知"}`, tone: "err" };
+  // 停掉的任务不用再讲当初拉起的经过,那一行只会把列表撑乱
+  if (!j.alive && !j.starting) return null;
+  if (j.launch?.status === "failed" || j.launch?.autoSend === "error") return { text: j.launch.detail, tone: "err" };
+  if (j.launch?.status === "launching") return { text: j.launch.detail, tone: "muted" };
+  if (j.launch?.autoSend === "nofocus") return { text: "桌面 app 的窗口没到前台,指令留在输入框里 —— 切过去按一下回车就行", tone: "muted" };
+  if (j.launch?.detail) return { text: j.launch.detail, tone: "ok" };
+  return null;
+}
+
+/* 行内小图标:不引第三方图标库,几条 path 就够 */
+const IconStop = () => (
+  <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><rect x="1.5" y="1.5" width="9" height="9" rx="1.5" fill="currentColor" /></svg>
+);
+const IconPlay = () => (
+  <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 1.5v9l8-4.5z" fill="currentColor" /></svg>
+);
+const IconTrash = () => (
+  <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round">
+    <path d="M1.5 3h9M4.5 3V1.8h3V3M2.8 3l.5 7.2h5.4L9.2 3M5 5v3.5M7 5v3.5" />
+  </svg>
+);
+const IconMerge = () => (
+  <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M3 1.5v9M9 1.5v3c0 2-6 2-6 4.5" /><circle cx="3" cy="10.5" r="1" fill="currentColor" /><circle cx="9" cy="1.5" r="1" fill="currentColor" /><circle cx="3" cy="1.5" r="1" fill="currentColor" />
+  </svg>
+);
+
 export function SkillDialog(props: { open: boolean; onClose: () => void }): JSX.Element | null {
   const { open, onClose } = props;
   const dirty = useStore((s) => s.dirty);
   const [provider, setProvider] = useState<Provider>("claude");
   const [jobs, setJobs] = useState<Job[]>([]);
-  const [current, setCurrent] = useState<string | null>(null);
   const [busy, setBusy] = useState("");
   const [msg, setMsg] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
   const timer = useRef<number | null>(null);
@@ -84,7 +115,7 @@ export function SkillDialog(props: { open: boolean; onClose: () => void }): JSX.
     }
   }, []);
 
-  // 开着就每 1.5 秒刷一次:实例起来要几秒到几十秒,用户得看见进度在走
+  // 开着就每 1.5 秒刷一次:任务的生死、写回时间都在变
   useEffect(() => {
     if (!open) return;
     setMsg(null);
@@ -109,8 +140,6 @@ export function SkillDialog(props: { open: boolean; onClose: () => void }): JSX.
 
   if (!open) return null;
 
-  const job = jobs.find((j) => j.id === current) ?? null;
-
   const run = async (what: string, fn: () => Promise<string | void>) => {
     setBusy(what);
     setMsg(null);
@@ -125,6 +154,11 @@ export function SkillDialog(props: { open: boolean; onClose: () => void }): JSX.
     }
   };
 
+  /*
+   * 开始:建任务 → **立刻**进 SKILL 模式(主窗收成悬浮窗,启动进度在悬浮窗上走)→ 关掉这个对话框。
+   * 不等实例就绪:那要几秒到几十秒,用户点了「开始」就该看到软件切过去,而不是盯着对话框里的进度条。
+   * 快照那一步在 /api/skill/start 里是同步做完的,project.proc 这时已经在了,锁能直接挂上。
+   */
   const start = () =>
     run("start", async () => {
       if (dirty && !confirm("当前项目有未保存的改动。Skill 拿到的是现在这一刻的快照,继续?")) return;
@@ -133,32 +167,48 @@ export function SkillDialog(props: { open: boolean; onClose: () => void }): JSX.
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ provider, proc: serializeProc(), name: currentProjectName() }),
       });
-      setCurrent(data.job.id);
+      await openSkillMode({ jobId: data.job.id, jobDir: data.job.dir, procPath: `${data.job.dir}\\project.proc` });
+      onClose();
     });
 
+  /** 强制并入:不管 agent 有没有调 submit_merge,现在就把任务目录里的结果三方合并进当前项目 */
   const merge = (j: Job) =>
-    run("merge", async () => {
+    run(`merge:${j.id}`, async () => {
       const [theirs, base] = await Promise.all([
         fetch(`/api/skill/jobs/${j.id}/proc`).then((r) => (r.ok ? r.text() : Promise.reject(new Error("还没有结果文件")))),
         fetch(`/api/skill/jobs/${j.id}/base`).then((r) => (r.ok ? r.text() : null)),
       ]);
       const report = applyCombine(theirs, base);
-      return "已合并到当前项目(记得保存):\n" + summarizeCombine(report);
+      return "已并入当前项目(记得保存):\n" + summarizeCombine(report);
     });
 
-  const stepState = (phase: Phase): "done" | "active" | "todo" | "failed" => {
-    if (!job) return "todo";
-    if (job.phase === "failed") {
-      // 失败停在哪一步:job.phase 记的是失败前的那一步,由 error 标出来
-      return "failed";
-    }
-    if (job.phase === "stopped") return ORDER.indexOf(phase) <= ORDER.indexOf("ready") ? "done" : "todo";
-    const cur = ORDER.indexOf(job.phase);
-    const me = ORDER.indexOf(phase);
-    if (me < cur) return "done";
-    if (me === cur) return job.phase === "ready" ? "done" : "active";
-    return "todo";
-  };
+  const stop = (j: Job) =>
+    run(`stop:${j.id}`, async () => {
+      await api(`/api/skill/jobs/${j.id}/stop`, { method: "POST" });
+      return "已通知实例收工";
+    });
+
+  /** 开始(停掉的任务再起一份实例,并把桌面 app 的对话叫回来);之后同样立刻进 SKILL 模式 */
+  const restart = (j: Job) =>
+    run(`restart:${j.id}`, async () => {
+      const data = await api<{ job: Job }>(`/api/skill/jobs/${j.id}/restart`, { method: "POST" });
+      await openSkillMode({ jobId: data.job.id, jobDir: data.job.dir, procPath: `${data.job.dir}\\project.proc` });
+      onClose();
+    });
+
+  const remove = (j: Job) =>
+    run(`delete:${j.id}`, async () => {
+      if (!confirm(`删除任务「${j.name} · ${fmtTime(j.createdAt)}」?任务目录会整个删掉,结果文件也没了。`)) return;
+      await api(`/api/skill/jobs/${j.id}/delete`, { method: "POST" });
+    });
+
+  const relaunch = (j: Job) =>
+    run(`relaunch:${j.id}`, async () => {
+      await api(`/api/skill/jobs/${j.id}/relaunch`, { method: "POST" });
+      return "已把桌面 app 的对话叫回来";
+    });
+
+  const reveal = (j: Job) => run(`reveal:${j.id}`, async () => { await api(`/api/skill/jobs/${j.id}/reveal`, { method: "POST" }); });
 
   return createPortal(
     <div className="pc-dialog-mask" onClick={onClose}>
@@ -174,7 +224,7 @@ export function SkillDialog(props: { open: boolean; onClose: () => void }): JSX.
         <div className="pc-skill-intro">
           把当前项目交给桌面版的 AI 编程助手去改。开始时会新建一个<b>独立的任务目录</b>(在软件的数据目录下,
           不在源码里),项目副本、工具、说明都在里面;它跑在另一份看不见的 PromptCut 上,不会动你正在编辑的这份。
-          改完把结果链接交回来,你再决定合不合进来。
+          点「开始」软件就收成悬浮窗;agent 可以随时把改动并回来,你也能在下面的历史任务里「强制并入」。
         </div>
 
         <div className="pc-skill-providers">
@@ -204,70 +254,60 @@ export function SkillDialog(props: { open: boolean; onClose: () => void }): JSX.
           </button>
         </div>
 
-        {job && (
-          <>
-            <div className="pc-skill-steps">
-              {STEPS.map((s) => {
-                const st = stepState(s.phase);
-                return (
-                  <div key={s.phase} className={`pc-skill-step is-${st}`}>
-                    <span className="pc-skill-step-dot" />
-                    <span>{s.label}</span>
-                  </div>
-                );
-              })}
-              {job.phase === "failed" && <div className="pc-skill-step is-failed">失败:{job.error}</div>}
-              {job.phase === "ready" && !job.launch && <div className="pc-skill-step is-active">正在拉起桌面 app 并替你按回车…</div>}
-              {job.launch?.status !== "failed" && job.launch?.autoSend === "sent" && <div className="pc-skill-step is-done">指令已自动发送,agent 在配环境;配好后直接告诉它要做什么</div>}
-              {/* Claude 那条路会拿桌面版的会话归档核对一遍:落在任务目录里才算数,没核对到就照实说 */}
-              {job.launch?.kind === "claude-deeplink" && job.launch.autoSend === "sent" && job.launch.status !== "failed" && (
-                <div className={`pc-skill-step ${job.launch.sessionId ? "is-done" : "is-active"}`}>{job.launch.detail}</div>
-              )}
-              {job.launch?.autoSend === "nofocus" && (
-                <div className="pc-skill-step is-active">桌面 app 的窗口没到前台,指令留在输入框里 —— 切过去按一下回车就行</div>
-              )}
-              {job.launch && (job.launch.status === "launching" || job.launch.status === "failed" || job.launch.autoSend === "error") && <div className={`pc-skill-step ${job.launch.status === "launching" ? "is-active" : "is-failed"}`}>{job.launch.detail}</div>}
-              {job.phase === "stopped" && <div className="pc-skill-step">实例已停止。结果文件还在,可以合并</div>}
-            </div>
-
-            <div className="pc-skill-meta">
-              <span>任务</span><code>{job.name} · {fmtTime(job.createdAt)} · {job.provider}</code>
-              <span>目录</span><code>{job.dir}</code>
-              <span>实例</span><code>{job.alive ? `端口 ${job.port},${job.dirty ? "有改动待写回" : "已写回"}${job.clips != null ? `,${job.clips} 张卡` : ""}` : "未运行"}</code>
-              <span>结果</span><code>{job.procUpdatedAt ? `project.proc 更新于 ${fmtTime(job.procUpdatedAt)}` : "还没写回"}</code>
-            </div>
-
-            <div className="pc-skill-actions">
-              <button type="button" className="pc-dialog-opt" disabled={busy !== "" || !job.procUpdatedAt} onClick={() => merge(job)} title="三方合并:以启动时的快照为基线,把 agent 的改动并进当前项目;两边都改的保留你的">
-                {busy === "merge" ? "合并中…" : "合并结果到当前项目"}
-              </button>
-              <button type="button" className="pc-dialog-opt" disabled={busy !== "" || !job.alive} onClick={() => run("relaunch", async () => { await api(`/api/skill/jobs/${job.id}/relaunch`, { method: "POST" }); return "已重新拉起桌面 app 的对话"; })} title="桌面 app 的对话关掉了就再拉一次">
-                重新拉起对话
-              </button>
-              <button type="button" className="pc-dialog-opt" disabled={busy !== ""} onClick={() => run("reveal", async () => { await api(`/api/skill/jobs/${job.id}/reveal`, { method: "POST" }); })}>
-                打开任务文件夹
-              </button>
-              <button type="button" className="pc-dialog-opt" disabled={busy !== "" || !job.alive} onClick={() => run("stop", async () => { await api(`/api/skill/jobs/${job.id}/stop`, { method: "POST" }); return "已通知实例收工"; })}>
-                停止实例
-              </button>
-            </div>
-          </>
-        )}
-
         {msg && <div className={`pc-skill-msg${msg.tone === "err" ? " is-err" : ""}`}>{msg.text}</div>}
 
         {jobs.length > 0 && (
           <div className="pc-dialog-body">
             <div className="pc-dialog-label">历史任务</div>
             <div className="pc-skill-jobs">
-              {jobs.map((j) => (
-                <button key={j.id} type="button" className={`pc-skill-job${j.id === current ? " is-on" : ""}`} onClick={() => setCurrent(j.id)}>
-                  <span className="pc-skill-job-name">{j.name}</span>
-                  <span>{fmtTime(j.createdAt)}</span>
-                  <span>{j.provider}</span>
-                  <span className={`pc-skill-job-state${j.alive ? " is-live" : ""}`}>{j.alive ? "运行中" : j.phase === "failed" ? "失败" : "已停"}</span>
-                </button>
-              ))}
+              {jobs.map((j) => {
+                const st = jobStateLabel(j);
+                const detail = jobDetail(j);
+                const running = j.alive || j.starting;
+                const busyHere = busy.endsWith(`:${j.id}`);
+                return (
+                  <div key={j.id} className={`pc-skill-job${running ? " is-live" : ""}`}>
+                    <div className="pc-skill-job-main">
+                      <span className="pc-skill-job-name" title={j.dir}>{j.name}</span>
+                      <span className={`pc-skill-job-state${st.cls}`}>{st.text}</span>
+                    </div>
+                    <div className="pc-skill-job-main">
+                      <span className="pc-skill-job-when">{fmtTime(j.createdAt)} · {j.provider}{j.clips != null ? ` · ${j.clips} 张卡` : ""}</span>
+                      <span className="pc-skill-job-acts">
+                        <button
+                          type="button"
+                          className="pc-skill-job-act is-merge"
+                          disabled={busy !== "" || !j.procUpdatedAt}
+                          onClick={() => merge(j)}
+                          title={j.procUpdatedAt ? `强制并入:以启动时的快照为基线,把这个任务的改动三方合并进当前项目(结果更新于 ${fmtTime(j.procUpdatedAt)})` : "还没有结果文件"}
+                        >
+                          <IconMerge />
+                          <span>{busyHere && busy.startsWith("merge:") ? "并入中…" : "强制并入"}</span>
+                        </button>
+                        {running ? (
+                          <button type="button" className="pc-skill-job-act is-stop" disabled={busy !== ""} onClick={() => stop(j)} title="停止实例(agent 之后再改会被拒)" aria-label="停止实例">
+                            <IconStop />
+                          </button>
+                        ) : (
+                          <button type="button" className="pc-skill-job-act is-start" disabled={busy !== ""} onClick={() => restart(j)} title="开始:再起一份实例,把桌面 app 的对话叫回来,并进入 SKILL 模式" aria-label="开始">
+                            <IconPlay />
+                          </button>
+                        )}
+                        <button type="button" className="pc-skill-job-act is-del" disabled={busy !== "" || running} onClick={() => remove(j)} title={running ? "先停掉实例再删" : "删除任务目录"} aria-label="删除">
+                          <IconTrash />
+                        </button>
+                      </span>
+                    </div>
+                    {detail && <div className={`pc-skill-job-detail is-${detail.tone}`}>{detail.text}</div>}
+                    {running && (
+                      <div className="pc-skill-job-links">
+                        <button type="button" className="pc-skill-job-link" disabled={busy !== ""} onClick={() => relaunch(j)} title="桌面 app 的对话关掉了就再叫回来">重新拉起对话</button>
+                        <button type="button" className="pc-skill-job-link" disabled={busy !== ""} onClick={() => reveal(j)}>打开任务文件夹</button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           </div>
         )}

@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import * as readline from 'node:readline';
+import { fileURLToPath } from 'node:url';
 import { tools } from './mcp-tools.mjs';
 import { injectCardParams } from './card-params-schema.mjs';
 
@@ -39,6 +40,74 @@ function getTargets() {
   return { port, hosts: Array.from(hostsSet) };
 }
 
+/*
+ * Skill 任务目录里才有的工具:submit_merge。
+ *
+ * 这份脚本被复制进 <任务目录>/tools/ 跑的时候,上一级就是任务目录(有 job.json)。
+ * agent 改完项目想并回用户手里那份,没法自己动手 —— 用户的 PromptCut 在另一个端口、
+ * 另一个进程,agent 连它的地址都不该知道。所以走文件:往任务目录写 merge-request.json,
+ * 用户那份 PromptCut 每秒轮询任务列表,看到请求就在自己页面里做三方合并(和对话框里
+ * 「强制并入」同一套代码),把结果写成 merge-result.json,这里等到它就把结果回给 agent。
+ * 像 git worktree 合回主分支,只是仲裁的一方是用户正在开着的编辑台。
+ */
+const JOB_DIR = (() => {
+  try {
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const dir = path.resolve(here, "..");
+    return fs.existsSync(path.join(dir, "job.json")) ? dir : null;
+  } catch {
+    return null;
+  }
+})();
+
+const SUBMIT_MERGE = {
+  name: "submit_merge",
+  description: "把这个任务目录里的项目改动并回用户正在编辑的那份 PromptCut 项目(三方合并:以启动时的快照为基线,两边都改的保留用户的)。像 git worktree 合回主分支。会先等实例把改动写回 project.proc,再等用户那边的 PromptCut 完成合并(它每秒检查一次),返回合并报告。用户那边没开 PromptCut 或已关闭 SKILL 模式时会超时,请如实告诉用户让他在 Skill 对话框里点「强制并入」。",
+  inputSchema: {
+    type: "object",
+    properties: {
+      note: { type: "string", description: "一句话说明这次并入了什么(会显示给用户)" },
+    },
+  },
+};
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function waitWriteBack(dir) {
+  const file = path.join(dir, "instance.json");
+  const t0 = Date.now();
+  let inst = null;
+  for (let i = 0; i < 30; i++) {
+    await sleep(500);
+    try {
+      const st = fs.statSync(file);
+      inst = JSON.parse(fs.readFileSync(file, "utf8"));
+      // 必须等到一份这次调用之后写出来的样本,不然读到的是改动前的旧 dirty=false
+      if (st.mtimeMs >= t0 && inst.dirty === false && inst.ready) return { ok: true, inst };
+    } catch { /* 正在写,下一轮再读 */ }
+  }
+  return { ok: false, inst };
+}
+
+async function submitMerge(args) {
+  if (!JOB_DIR) return { ok: false, error: "这不是 Skill 任务目录,没有可并回的目标" };
+  const wb = await waitWriteBack(JOB_DIR);
+  if (!wb.ok) return { ok: false, error: "15 秒内实例没把改动写回 project.proc(实例可能已经停了),先确认实例还在跑" };
+  const seq = Date.now();
+  const note = typeof args.note === "string" ? args.note.slice(0, 400) : "";
+  const resultFile = path.join(JOB_DIR, "merge-result.json");
+  try { fs.unlinkSync(resultFile); } catch {}
+  fs.writeFileSync(path.join(JOB_DIR, "merge-request.json"), JSON.stringify({ seq, note, requestedAt: new Date().toISOString() }), "utf8");
+  for (let i = 0; i < 120; i++) {
+    await sleep(500);
+    try {
+      const r = JSON.parse(fs.readFileSync(resultFile, "utf8"));
+      if (r && r.seq === seq) return r;
+    } catch { /* 还没有 */ }
+  }
+  return { ok: false, error: "60 秒内用户那边的 PromptCut 没有响应合并请求:可能没开着、或者 SKILL 模式已关闭。请用户在 Skill 对话框的历史任务里点「强制并入」。" };
+}
+
 let lastBridgeHost = null;
 
 function isConnRefused(err) {
@@ -67,7 +136,9 @@ async function callBridge(tool, args) {
       const res = await fetch(`http://${host}:${port}/api/mcp/call`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tool, args })
+        // 多 Agent 分页:这个 MCP 进程是哪一页的 Agent 起的(vite-plugin-ai 起 CLI 时塞的环境变量),
+        // 编辑台拿它记「谁改了哪儿」;没有就不带
+        body: JSON.stringify({ tool, args, agent: process.env.PROMPTCUT_AGENT || undefined })
       });
       if (lastBridgeHost !== host) {
         process.stderr.write(`[mcp-server] bridge at ${host}:${port}\n`);
@@ -130,6 +201,7 @@ async function handleMessage(line) {
       description: t.description,
       inputSchema: t.inputSchema
     }));
+    if (JOB_DIR) pubTools.push(SUBMIT_MERGE);
 
     // Fetch cards to dynamically update the schema for add_clip and update_clip
     try {
@@ -156,6 +228,12 @@ async function handleMessage(line) {
   if (req.method === 'tools/call') {
     const tool = req.params.name;
     const args = req.params.arguments || {};
+
+    if (tool === SUBMIT_MERGE.name) {
+      const out = await submitMerge(args);
+      sendResponse(req.id, { content: [{ type: "text", text: JSON.stringify(out, null, 2) }], isError: !out.ok });
+      return;
+    }
     
     let res;
     try {

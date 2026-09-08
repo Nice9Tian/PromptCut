@@ -11,6 +11,10 @@ import type { SttStatus, SttEngineStatus } from "./editor/io/stt";
 import { shotsStatus, installShots } from "./ai/shots";
 import { trackStatus, installTrack } from "./ai/track";
 import { subjectStatus, installSubject } from "./ai/subject";
+import { collectStatus, installCollect, type CollectStatus } from "./ai/collect";
+import { openCollectLogin, useCollectLoginState } from "./ai/collectLoginStore";
+import { CollectLoginDialog } from "./editor/right/CollectLoginDialog";
+import { MenuBarFade } from "./ui/MenuBarFade";
 import { runSttInstall } from "./editor/io/runSttInstall";
 import { useInstallJobs } from "./ai/sttInstallStore";
 import { SttInstallProgress } from "./editor/right/SttInstallProgress";
@@ -113,6 +117,7 @@ export function StartPage(props: { onEnterEditor: () => void }): JSX.Element {
 
   return (
     <div className="sp">
+      <MenuBarFade />
       <header className="sp-bar">
         {/* Logo 自带文字标,别再补一遍 */}
         <Logo size={22} />
@@ -358,21 +363,34 @@ function ExtensionCards(): JSX.Element {
   const [shots, setShots] = useState<ExtStatusView | null>(null);
   const [track, setTrack] = useState<ExtStatusView | null>(null);
   const [subject, setSubject] = useState<ExtStatusView | null>(null);
+  const [collect, setCollect] = useState<ExtStatusView | null>(null);
+  /** 素材收集的原始状态:登录按钮要看 ready 和各站登录态 */
+  const [collectRaw, setCollectRaw] = useState<CollectStatus | null>(null);
 
   const load = useCallback(async () => {
-    // 四个查询各打一个 HTTP,而且都要等 Python 那边应答。串行的话最慢的排在最后,
+    // 五个查询各打一个 HTTP,而且都要等 Python 那边应答。串行的话最慢的排在最后,
     // 开始页会干等着,所以一起发。用 allSettled 不用 all:一个拓展查不到状态
-    // 不该把另外三张卡也永远钉在「检测中…」。
-    const [a, b, c, d] = await Promise.allSettled([
-      sttStatus(), shotsStatus(), trackStatus(), subjectStatus(),
+    // 不该把另外几张卡也永远钉在「检测中…」。
+    const [a, b, c, d, e] = await Promise.allSettled([
+      sttStatus(), shotsStatus(), trackStatus(), subjectStatus(), collectStatus(),
     ]);
     setStt(toView(a, viewStt));
     setShots(toView(b, viewShots));
     setTrack(toView(c, viewTrack));
     setSubject(toView(d, viewSubject));
+    setCollect(toView(e, viewCollect));
+    setCollectRaw(e.status === "fulfilled" ? e.value : null);
   }, []);
 
   useEffect(() => { void load(); }, [load]);
+
+  // 登录框关掉之后刷新一次:登录 / 退出都会改这张卡上的字
+  const loginOpen = useCollectLoginState().open;
+  const wasOpen = useRef(false);
+  useEffect(() => {
+    if (wasOpen.current && !loginOpen) void load();
+    wasOpen.current = loginOpen;
+  }, [loginOpen, load]);
 
   return (
     <div className="sp-ext-row">
@@ -380,7 +398,97 @@ function ExtensionCards(): JSX.Element {
       <ShotsCard status={shots} onReload={load} />
       <TrackCard status={track} onReload={load} />
       <SubjectCard status={subject} onReload={load} />
+      <CollectCard status={collect} raw={collectRaw} onReload={load} />
+      <CollectLoginDialog />
     </div>
+  );
+}
+
+function viewCollect(s: CollectStatus): ExtStatusView {
+  if (s.ready) {
+    const bili = s.cookies?.bilibili;
+    const login = bili?.loggedIn
+      ? `B 站已登录（用户 ${bili.userId ?? "?"}）`
+      : bili?.expired ? "B 站登录态已过期" : "B 站未登录，最高 1080p";
+    return {
+      headline: "已安装",
+      note: `yt-dlp ${s.ytdlp?.version ?? ""}；${login}`,
+      tone: "ok",
+      offerInstall: false,
+    };
+  }
+  if (s.python === false || (s.ytdlp?.installed && !s.ffmpeg)) {
+    // 没有内置 Python 或没有 ffmpeg 不是在线装能解决的,给按钮只会让人再撞一次墙
+    return {
+      headline: "用不了",
+      note: s.reason || (s.ytdlp?.installed ? "找不到 ffmpeg，视频流和音频流合不起来" : "找不到内置 Python"),
+      tone: "danger",
+      offerInstall: false,
+    };
+  }
+  return {
+    headline: "未安装",
+    note: "装上就能把 B 站等网页链接里的视频直接抓进素材库（约 3 MB）",
+    tone: "muted",
+    offerInstall: true,
+  };
+}
+
+/** 素材收集:状态由上面统一查,安装走 installCollect 的 SSE 日志流(pip 装 yt-dlp) */
+function CollectCard(props: { status: ExtStatusView | null; raw: CollectStatus | null; onReload: () => void | Promise<void> }): JSX.Element {
+  const { status, raw, onReload } = props;
+  const [running, setRunning] = useState(false);
+  // 装好了才谈登录:按钮文案跟着存盘登录态走,过期也算「要重新登录」
+  const canLogin = !!raw?.ready;
+  const biliLoggedIn = !!raw?.cookies?.bilibili?.loggedIn;
+  const [tail, setTail] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  const install = () => {
+    setRunning(true);
+    setError(null);
+    setTail("");
+    void installCollect((line) => setTail(line))
+      .then(({ ok, log }) => {
+        if (!ok) setError(log.filter((l) => l.startsWith("[error]")).slice(-1)[0] ?? "安装失败");
+        return onReload();
+      })
+      .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setRunning(false));
+  };
+
+  return (
+    <ExtCard
+      icon={
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M12 3v12" />
+          <path d="M7 10l5 5 5-5" />
+          <path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" />
+        </svg>
+      }
+      name="素材收集"
+      desc="给一条 B 站等网页链接，把视频抓进素材库。"
+      status={status}
+      action={
+        status?.offerInstall && !running
+          ? <button className="sp-ghost-btn" onClick={install} title="约 3 MB">
+              {error ? "重试" : "安装"}
+            </button>
+          : canLogin
+            ? <button className="sp-ghost-btn" onClick={() => openCollectLogin("bilibili", "qr")}
+                title={biliLoggedIn ? "查看登录态、换账号或退出" : "扫码或账号密码登录,拿登录才有的清晰度"}>
+                {biliLoggedIn ? "B 站账号" : "登录 B 站"}
+              </button>
+            : null
+      }
+    >
+      {running && (
+        <div className="sp-ext-progress">
+          <span className="sp-muted">安装中…{tail ? ` ${tail}` : ""}</span>
+        </div>
+      )}
+      {error && <div className="sp-ext-error">{error}</div>}
+    </ExtCard>
   );
 }
 

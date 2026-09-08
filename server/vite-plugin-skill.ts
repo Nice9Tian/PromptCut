@@ -5,7 +5,7 @@ import path from "node:path";
 import os from "node:os";
 import { spawn } from "node:child_process";
 import { createCodexTask } from "./codex-desktop";
-import { launchClaudeTask, openUrl, type AutoSend } from "./claude-desktop";
+import { launchClaudeTask, openUrl, resumeClaudeSession, type AutoSend } from "./claude-desktop";
 
 /**
  * Skill 模式:把当前项目交给桌面版的 Claude Code / Codex 去改,改完再合回来。
@@ -30,6 +30,8 @@ interface JobMeta {
   provider: Provider;
   name: string;
   createdAt: string;
+  /** 最近一次起实例的时间(停了再「开始」会更新);没有就等于 createdAt */
+  startedAt?: string;
   phase: Phase;
   error?: string;
   /** 只起实例、不拉桌面 app(自检和排错用) */
@@ -158,10 +160,10 @@ function revealDir(dir: string) {
 
 type LaunchResult = Omit<NonNullable<JobMeta["launch"]>, "at">;
 const pendingLaunches = new Map<string, Promise<LaunchResult>>();
-function launchDesktop(provider: Provider, dir: string): Promise<LaunchResult> {
+function launchDesktop(provider: Provider, dir: string, again = false): Promise<LaunchResult> {
   const existing = pendingLaunches.get(dir);
   if (existing) return existing;
-  const result = launchDesktopImpl(provider, dir).catch((error): LaunchResult => ({
+  const result = launchDesktopImpl(provider, dir, again).catch((error): LaunchResult => ({
     kind: "desktop-launch", status: "failed", autoSend: "error", detail: String(error),
   })).finally(() => pendingLaunches.delete(dir));
   pendingLaunches.set(dir, result);
@@ -169,8 +171,14 @@ function launchDesktop(provider: Provider, dir: string): Promise<LaunchResult> {
 }
 
 /** 创建无项目归属的独立线程，再打开已有线程深链。 */
-async function launchDesktopImpl(provider: Provider, dir: string): Promise<Omit<NonNullable<JobMeta["launch"]>, "at">> {
+async function launchDesktopImpl(provider: Provider, dir: string, again = false): Promise<Omit<NonNullable<JobMeta["launch"]>, "at">> {
   if (provider === "claude") {
+    // 「重新拉起」优先把原会话叫回来(见 resumeClaudeSession 的说明);没有原会话再新建
+    if (again) {
+      const previous = readJsonSafe<JobMeta>(path.join(dir, "job.json"))?.launch;
+      const resumed = await resumeClaudeSession(dir, previous?.sessionId);
+      if (resumed) return resumed;
+    }
     // 预写信任、开深链、等够再回车、拿归档核对 —— 都在 claude-desktop.ts 里,那里有踩坑记录
     return launchClaudeTask(dir, "/promptcut");
   }
@@ -256,25 +264,37 @@ export function skillPlugin(): Plugin {
         if (!meta) return null;
         const inst = readJsonSafe<Instance>(path.join(dir, "instance.json"));
         const alive = !!inst && !inst.stopped && pidAlive(inst.pid);
+        const startedAt = meta.startedAt ?? meta.createdAt;
         let phase = meta.phase;
         // 实例真死了而 meta 还说 ready,以文件系统为准
-        if ((phase === "ready" || phase === "launching") && !alive && !inst?.stopped && meta.createdAt < new Date(Date.now() - 10000).toISOString()) {
+        if ((phase === "ready" || phase === "launching") && !alive && !inst?.stopped && startedAt < new Date(Date.now() - 10000).toISOString()) {
           phase = inst?.error ? "failed" : phase === "ready" ? "stopped" : phase;
         }
         if (inst?.stopped) phase = "stopped";
+        // 正在起:实例还没上来,但这个任务是刚点的。前端拿它来**立刻**切进 SKILL 悬浮窗,
+        // 不用等实例就绪那几秒到几十秒;三分钟还没起来就不算了,免得一个卡死的任务把窗口一直吊着
+        const starting = !alive && (phase === "snapshot" || phase === "booting" || phase === "launching")
+          && Date.parse(startedAt) > Date.now() - 180000;
         const procFile = path.join(dir, "project.proc");
         const procStat = fs.existsSync(procFile) ? fs.statSync(procFile) : null;
+        // agent 调 submit_merge 写下的请求;已经有同一序号的结果就不再算待办
+        const req = readJsonSafe<{ seq: number; note?: string; requestedAt?: string }>(path.join(dir, "merge-request.json"));
+        const done = readJsonSafe<{ seq: number }>(path.join(dir, "merge-result.json"));
+        const mergeRequest = req && typeof req.seq === "number" && done?.seq !== req.seq ? req : null;
         return {
           ...meta,
           phase,
+          startedAt,
           dir,
           alive,
+          starting,
           port: inst?.port ?? null,
           dirty: inst?.dirty ?? null,
           savedAt: inst?.savedAt ?? null,
           clips: inst?.clips ?? null,
           instanceError: inst?.error ?? null,
           procUpdatedAt: procStat ? procStat.mtime.toISOString() : null,
+          mergeRequest,
           procUrl: "file:///" + procFile.replace(/\\/g, "/"),
         };
       };
@@ -288,6 +308,11 @@ export function skillPlugin(): Plugin {
         };
         try {
           update({ phase: "booting" });
+          // 停过再「开始」的任务:上一轮留下的 stop 文件会让新实例一起来就收工,旧 instance.json
+          // 会被 describe 当成活的;两样都清掉再起
+          for (const stale of ["stop", "instance.json"]) {
+            try { fs.rmSync(path.join(dir, stale), { force: true }); } catch {}
+          }
           const script = path.join(root, "scripts", "headless.mjs");
           const logFd = fs.openSync(path.join(dir, "headless.out.log"), "a");
           const child = spawn(process.execPath, [script, "--job", dir], {
@@ -330,7 +355,9 @@ export function skillPlugin(): Plugin {
           if (meta.noLaunch) {
             update({ phase: "ready" });
           } else {
-            // launch 进度由启动器写入 job.json。
+            // 实例这时已经就绪,先把 ready 亮出来;拉桌面 app + 替用户回车这一段要几十秒,
+            // 进度走 launch.status,别让「实例就绪」那一格看着像卡住了
+            update({ phase: "ready", launch: { kind: meta.provider === "claude" ? "claude-deeplink" : "codex", status: "launching", detail: "正在拉起桌面 app 的新对话,并替你发送指令…", at: new Date().toISOString() } });
             const launch = await launchDesktop(meta.provider, dir);
             update({ phase: "ready", launch: { ...launch, at: new Date().toISOString() } });
           }
@@ -419,11 +446,30 @@ export function skillPlugin(): Plugin {
             if (action === "relaunch" && req.method === "POST") {
               if (!job.alive) return sendJson(res, 400, { ok: false, error: "实例已经停了,重新开一个任务吧" });
               // 不等它:拉起 + 自动回车要十几秒,结果写进 job.json 由前端轮询
-              void launchDesktop(job.provider, dir).then((launch) => {
+              void launchDesktop(job.provider, dir, true).then((launch) => {
                 const meta = readJsonSafe<JobMeta>(path.join(dir, "job.json"));
                 if (meta) writeMeta(dir, { ...meta, launch: { ...launch, at: new Date().toISOString() } });
               });
               return sendJson(res, 200, { ok: true });
+            }
+            // POST …/merge-result:用户那份 PromptCut 做完合并把报告写回来,submit_merge 等的就是它
+            if (action === "merge-result" && req.method === "POST") {
+              const body = JSON.parse((await readBody(req)) || "{}");
+              if (typeof body.seq !== "number") return sendJson(res, 400, { ok: false, error: "缺 seq" });
+              const result = { seq: body.seq, ok: body.ok === true, summary: String(body.summary || "").slice(0, 4000), error: body.error ? String(body.error).slice(0, 1000) : undefined, at: new Date().toISOString() };
+              fs.writeFileSync(path.join(dir, "merge-result.json"), JSON.stringify(result), "utf8");
+              return sendJson(res, 200, { ok: true });
+            }
+            // POST …/restart:停掉的任务再起一份实例(项目用任务目录里的 project.proc,agent 改到哪算哪),
+            // 然后把桌面 app 的对话叫回来。快照那一步不重做:base.proc 还是当初那份,合并基线不变。
+            if (action === "restart" && req.method === "POST") {
+              if (job.alive || job.starting) return sendJson(res, 400, { ok: false, error: "实例还在跑" });
+              const meta = readJsonSafe<JobMeta>(path.join(dir, "job.json"));
+              if (!meta) return sendJson(res, 500, { ok: false, error: "job.json 读不出来" });
+              const next: JobMeta = { ...meta, phase: "booting", startedAt: new Date().toISOString(), error: undefined };
+              writeMeta(dir, next);
+              void boot(id, next);
+              return sendJson(res, 200, { ok: true, job: describe(id) });
             }
             if (action === "reveal" && req.method === "POST") {
               revealDir(dir);

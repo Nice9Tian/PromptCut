@@ -48,7 +48,7 @@ export async function sttStatus(): Promise<SttStatus> {
   const res = await fetch("/api/stt/status");
   if (res.status === 503) {
     const data = await res.json().catch(() => ({}));
-    throw new Error(data.error ?? "STT 服务不可用(503):内置 Python 未就绪,先跑 npm run prepare-python");
+    throw new Error(data.error ?? "STT 服务不可用(503):找不到内置 Python,重装一次安装包即可。");
   }
   if (!res.ok) {
     throw new Error(`/api/stt/status 返回 ${res.status}`);

@@ -249,9 +249,43 @@ export function skillStatePlugin(): Plugin {
             const body = JSON.parse((await readBody(req)) || "{}");
             return sendJson(res, 200, { ok: true, state: gate.openGate(body) });
           }
+          // 无头实例上报「上一步做成的时间轴动作」的画面:写到 skillRoot/last-action.{png,json},
+          // 壳的 watcher(desktop/src-tauri/src/skill_shell.rs)盯着 json 的修改时间推给悬浮窗。
+          // 只收无头实例的:用户自己那份 PromptCut 的动作不是 agent 的,不该出现在悬浮窗里。
+          if (action === "last-action" && req.method === "POST") {
+            if (process.env.PROMPTCUT_HEADLESS !== "1") {
+              return sendJson(res, 200, { ok: true, skipped: "not-headless" });
+            }
+            const body = JSON.parse((await readBody(req)) || "{}");
+            const base64 = typeof body.base64 === "string" ? body.base64 : "";
+            const png = Buffer.from(base64, "base64");
+            if (png.length < 8 || png.subarray(0, 8).toString("binary") !== "\x89PNG\r\n\x1a\n") {
+              return sendJson(res, 400, { ok: false, error: "base64 不是一张 png" });
+            }
+            const root = gate.skillRoot();
+            fs.mkdirSync(root, { recursive: true });
+            // png 先落临时文件再改名:壳每秒都在读,读到半张图就白推一次
+            const pngPath = path.join(root, "last-action.png");
+            fs.writeFileSync(pngPath + ".tmp", png);
+            fs.renameSync(pngPath + ".tmp", pngPath);
+            const meta = {
+              tool: typeof body.tool === "string" ? body.tool.slice(0, 64) : null,
+              clipId: typeof body.clipId === "string" ? body.clipId.slice(0, 64) : null,
+              t: typeof body.t === "number" && Number.isFinite(body.t) ? body.t : null,
+              jobId: gate.readState().jobId ?? null,
+              at: new Date().toISOString(),
+            };
+            const jsonPath = path.join(root, "last-action.json");
+            fs.writeFileSync(jsonPath + ".tmp", JSON.stringify(meta), "utf8");
+            fs.renameSync(jsonPath + ".tmp", jsonPath);
+            return sendJson(res, 200, { ok: true, ...meta, bytes: png.length });
+          }
           if (action === "close" && req.method === "POST") {
             const body = JSON.parse((await readBody(req)) || "{}");
-            return sendJson(res, 200, { ok: true, state: gate.closeGate(body.by || "user") });
+            const state = gate.closeGate(body.by || "user");
+            // 记一行到 sidecar 日志:用户报「关闭中…卡死」时,先看这里有没有收到请求
+            console.log(`[skill-mode] close by=${body.by || "user"} job=${state.jobId ?? "-"} at=${state.closedAt}`);
+            return sendJson(res, 200, { ok: true, state });
           }
           return sendJson(res, 404, { ok: false, error: "没有这个接口" });
         } catch (e) {

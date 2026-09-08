@@ -89,15 +89,73 @@ function isHeadlessPage(): boolean {
   }
 }
 
+interface JobLite {
+  id: string;
+  dir: string;
+  alive: boolean;
+  /** 刚点的、实例还没上来:也算「有活着的任务」,悬浮窗要立刻出来 */
+  starting?: boolean;
+  createdAt?: string;
+  startedAt?: string;
+  /** agent 调了 submit_merge,等这边把它的改动并进来 */
+  mergeRequest?: { seq: number; note?: string } | null;
+}
+
+/** 已经并过的请求序号,别把同一次请求并两遍(轮询每秒一次,合并要几百毫秒) */
+let mergedSeq = 0;
+let merging = false;
+
+/**
+ * 替 agent 完成 submit_merge:任务目录里的 project.proc 三方合并进当前项目,
+ * 报告写回去(server/mcp-server.mjs 的 submitMerge 在等它)。和对话框里「强制并入」
+ * 走的是同一个 applyCombine。只在 SKILL 模式开着、而且就是这个任务时才做 ——
+ * 关了模式就等于收回了控制权,agent 的并入请求也不该再生效。
+ */
+async function serveMergeRequest(job: JobLite) {
+  const req = job.mergeRequest;
+  if (!req || merging || req.seq === mergedSeq) return;
+  merging = true;
+  try {
+    let ok = false;
+    let summary = "";
+    let error: string | undefined;
+    try {
+      const [theirs, base] = await Promise.all([
+        fetch(`/api/skill/jobs/${job.id}/proc`).then((r) => (r.ok ? r.text() : Promise.reject(new Error("还没有结果文件")))),
+        fetch(`/api/skill/jobs/${job.id}/base`).then((r) => (r.ok ? r.text() : null)),
+      ]);
+      const { applyCombine, summarizeCombine } = await import("../editor/io/combineImport");
+      const report = applyCombine(theirs, base);
+      summary = summarizeCombine(report);
+      ok = true;
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    }
+    mergedSeq = req.seq;
+    await fetch(`/api/skill/jobs/${job.id}/merge-result`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ seq: req.seq, ok, summary, error }),
+    });
+  } finally {
+    merging = false;
+  }
+}
+
 async function syncWithJobs(state: SkillState) {
   if (isHeadlessPage()) return;
-  let alive: { id: string; dir: string; alive: boolean; createdAt?: string } | null = null;
+  let alive: JobLite | null = null;
   try {
     const res = await fetch("/api/skill/jobs");
     const data = await res.json();
-    alive = (data?.jobs ?? []).find((j: { alive?: boolean }) => j.alive) ?? null;
+    const jobs: JobLite[] = data?.jobs ?? [];
+    alive = jobs.find((j) => j.alive) ?? jobs.find((j) => j.starting) ?? null;
   } catch {
     return; // 接口不在(旧版本 / 正在重启)就什么都不做,别乱关用户的模式
+  }
+
+  if (alive && state.active && state.jobId === alive.id && alive.mergeRequest) {
+    void serveMergeRequest(alive);
   }
 
   if (alive && !state.active) {
@@ -109,7 +167,7 @@ async function syncWithJobs(state: SkillState) {
      * 按时间比就没有这个洞:关掉的那一刻之前存在的任务,一律不再唤醒它。
      */
     const closedAt = state.closedBy === "user" ? Date.parse(state.closedAt || "") : NaN;
-    const jobStarted = Date.parse(alive.createdAt || "");
+    const jobStarted = Date.parse(alive.startedAt || alive.createdAt || "");
     const suppressed = Number.isFinite(closedAt) && !(jobStarted > closedAt);
     if (!suppressed) {
       await openSkillMode({ jobId: alive.id, jobDir: alive.dir, procPath: `${alive.dir}\\project.proc` });
@@ -169,12 +227,28 @@ export async function openSkillMode(info: { jobId?: string; jobDir?: string; pro
 
 /** 关:用户点「关闭 SKILL 模式」。之后无头实例的任何操作都会被拒 */
 export async function closeSkillMode(by = "user"): Promise<void> {
-  await fetch("/api/skill-mode/close", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ by }),
-  });
+  // 以前这里既不看响应也不设超时:请求被守卫拒了、或者一直不返回,按钮就永远停在
+  // 「关闭中…」,用户看不到任何原因(实测发生过)。现在:超时、非 2xx、服务端说没关成,
+  // 都抛出去让按钮复位并把原因显示出来。
+  let res: Response;
+  try {
+    res = await fetch("/api/skill-mode/close", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ by }),
+      signal: AbortSignal.timeout(10_000),
+    });
+  } catch (e) {
+    throw new Error(`关闭请求没发出去:${e instanceof Error ? e.message : String(e)}`);
+  }
+  const data = await res.json().catch(() => null);
+  if (!res.ok || !data?.ok) {
+    throw new Error(`关闭请求被拒(HTTP ${res.status}):${data?.error ?? "服务端没有说明原因"}`);
+  }
   await poll();
+  if (snapshot.state.active) {
+    throw new Error("关闭请求成功了,但服务端仍报告 SKILL 模式开着 —— 可能有别的实例在同时改状态,再点一次试试");
+  }
 }
 
 /**

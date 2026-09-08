@@ -90,6 +90,8 @@ export function OrchestrationBlock({ state }: { state: OrchestrationState }) {
     <div className="pc-orch">
       <button className="pc-orch-summary" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
         <span className="pc-orch-caret">{open ? "▾" : "▸"}</span>
+        {/* 拆解和执行期间转个圈:主管三步拆解要好几十秒,没有动静用户会以为卡死了 */}
+        {(state.phase === "planning" || state.phase === "running") && <span className="ai-spinner" aria-hidden />}
         <span className={state.phase === "error" ? "pc-orch-bad" : undefined}>{summarize(state)}</span>
       </button>
 

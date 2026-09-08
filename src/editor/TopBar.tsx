@@ -20,6 +20,7 @@ import {
   IconUndo,
 } from "../ui/icons";
 import { ModeSwitch } from "./ModeSwitch";
+import { AgentBrowserTab } from "./AgentBrowserTab";
 import { ProjectSettingsDialog } from "./ProjectSettingsDialog";
 import { SkinDialog } from "./SkinDialog";
 import { SkillDialog } from "./SkillDialog";
@@ -102,6 +103,35 @@ export function TopBar() {
   const [skillOpen, setSkillOpen] = useState(false);
   const mergeInput = useRef<HTMLInputElement>(null);
   const [moreBtnRect, setMoreBtnRect] = useState<DOMRect | null>(null);
+
+  /**
+   * 「项目」下拉:新建 / 打开 / 保存 / 项目设置收在一个按钮里,点开才出子菜单。
+   * 四个动作都是"偶尔点一次"的,平铺在条上占四个位置,还挤得导出这种常点的没地方。
+   * 菜单挂在 body 上(portal),和「⋯」一样点外面 / 按 Esc 收起。
+   */
+  const [projOpen, setProjOpen] = useState(false);
+  const projBtnRef = useRef<HTMLButtonElement>(null);
+  const projMenuRef = useRef<HTMLDivElement>(null);
+  const [projRect, setProjRect] = useState<DOMRect | null>(null);
+  const toggleProjMenu = () => {
+    if (!projOpen && projBtnRef.current) setProjRect(projBtnRef.current.getBoundingClientRect());
+    setProjOpen((v) => !v);
+  };
+  useEffect(() => {
+    if (!projOpen) return;
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (projMenuRef.current?.contains(t) || projBtnRef.current?.contains(t)) return;
+      setProjOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { e.preventDefault(); setProjOpen(false); } };
+    window.addEventListener("mousedown", onDown);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("mousedown", onDown);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [projOpen]);
   // 只读查看在页面地址里就定了,不会中途变,所以不进 state
   const viewOnly = isViewOnly();
 
@@ -419,6 +449,13 @@ ${summarizeCombine(report)}
       <span className="pc-bar-sep" />
 
       {/*
+        A' · AI 的浏览器页签(只在桌面壳里出现)。agent 撞上登录 / 验证码时不弹窗,
+        这个页签闪并冒气泡,用户点过去才切到浏览器面板。任何宽度都在:它是 agent 和人之间的
+        交接口,收进「⋯」里就没人看见闪了。
+      */}
+      <AgentBrowserTab />
+
+      {/*
         B · 模式与项目设置。
         「传统式 / 对话式 / SKILL」是一个整体的三选一控件(ModeSwitch),不是下拉框 ——
         三个模式互斥,滑块在哪一格就是哪一格,一眼看得出还有哪两个可以去;下拉框收起来
@@ -428,12 +465,6 @@ ${summarizeCombine(report)}
       {tier !== "narrow" && (
         <div className="pc-bar-group">
           <ModeSwitch onOpenSkill={() => setSkillOpen(true)} />
-          <Btn
-            onClick={() => setSettingsOpen(true)}
-            label="项目设置"
-            icon={<IconSettings />}
-            collapsed={tier !== "wide"}
-          />
         </div>
       )}
       {/* 「⋯」任何宽度都在:皮肤只住在这里面,收起来就没入口了 */}
@@ -489,27 +520,52 @@ ${summarizeCombine(report)}
             <IconImport />
             <span className="pc-btn-label">合并 Skill 结果…</span>
           </button>
-          {/* 模式开关和项目设置只在窄档收进来,宽档它们还在条上 */}
+          {/* 模式开关只在窄档收进来,宽档它还在条上;项目设置已经住进「项目」菜单 */}
           {tier === "narrow" && (
-            <>
-              <div className="pc-more-menu-row">
-                <ModeSwitch onOpenSkill={() => { setMenuOpen(false); setSkillOpen(true); }} />
-              </div>
-              <button
-                type="button"
-                className="pc-btn"
-                style={{ width: "100%", justifyContent: "flex-start" }}
-                title="项目设置"
-                onClick={() => {
-                  setMenuOpen(false);
-                  setSettingsOpen(true);
-                }}
-              >
-                <IconSettings />
-                <span className="pc-btn-label">项目设置</span>
-              </button>
-            </>
+            <div className="pc-more-menu-row">
+              <ModeSwitch onOpenSkill={() => { setMenuOpen(false); setSkillOpen(true); }} />
+            </div>
           )}
+        </div>,
+        document.body,
+      )}
+
+      {/* 「项目」下拉菜单:挂在按钮下方,和 ⋯ 一样走 portal */}
+      {projOpen && createPortal(
+        <div
+          ref={projMenuRef}
+          className="pc-proj-menu"
+          role="menu"
+          style={{
+            top: (projRect?.bottom ?? 36) + 6,
+            left: Math.max(8, Math.min(projRect?.left ?? 0, window.innerWidth - 248)),
+          }}
+        >
+          <button type="button" role="menuitem" className="pc-proj-item" onClick={() => { setProjOpen(false); createProject(); }}>
+            <IconNew />
+            <span className="pc-proj-text"><b>新建项目</b><small>开一个空项目</small></span>
+          </button>
+          <button type="button" role="menuitem" className="pc-proj-item" onClick={() => { setProjOpen(false); projectInput.current?.click(); }}>
+            <IconOpen />
+            <span className="pc-proj-text"><b>打开项目…</b><small>{PROC_EXT} 项目文件</small></span>
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            className="pc-proj-item"
+            disabled={viewOnly}
+            title={viewOnly ? "只读查看模式:改不了这个项目" : undefined}
+            onClick={() => { setProjOpen(false); void saveProject(); }}
+          >
+            <IconSave />
+            <span className="pc-proj-text"><b>保存项目</b><small>{dirty ? "有没保存的改动" : "已是最新"}</small></span>
+            {dirty && <span className="pc-proj-dirty" />}
+          </button>
+          <div className="pc-proj-sep" role="separator" />
+          <button type="button" role="menuitem" className="pc-proj-item" onClick={() => { setProjOpen(false); setSettingsOpen(true); }}>
+            <IconSettings />
+            <span className="pc-proj-text"><b>项目设置…</b><small>尺寸、帧率、主题</small></span>
+          </button>
         </div>,
         document.body,
       )}
@@ -528,21 +584,23 @@ ${summarizeCombine(report)}
           导入视频已迁到左栏「素材 → 视频」的 + 按钮,顶栏不再重复 */}
       <div className="pc-bar-group">
         <Btn onClick={goHome} label="首页" icon={<IconHome />} collapsed={tier !== "wide"} />
-        <Btn onClick={createProject} label="新建项目" icon={<IconNew />} collapsed={tier !== "wide"} />
-        <Btn
-          onClick={() => projectInput.current?.click()}
-          label="打开项目"
-          icon={<IconOpen />}
-          collapsed={tier !== "wide"}
-        />
-        <Btn
-          onClick={saveProject}
-          label="保存项目"
-          icon={<IconSave />}
-          collapsed={tier !== "wide"}
-          disabled={viewOnly}
-          title={viewOnly ? "只读查看模式:改不了这个项目" : "保存项目"}
-        />
+        {/* 新建 / 打开 / 保存 / 项目设置收在这一个按钮里,点开才出子菜单(见 toggleProjMenu) */}
+        <button
+          ref={projBtnRef}
+          type="button"
+          className={`pc-btn pc-proj-btn${projOpen ? " is-open" : ""}`}
+          title="项目:新建、打开、保存、设置"
+          aria-haspopup="menu"
+          aria-expanded={projOpen}
+          onClick={toggleProjMenu}
+        >
+          <IconOpen />
+          <span className="pc-btn-label">项目</span>
+          <svg className="pc-proj-caret" width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+            <path d="M2 3.5 5 6.5 8 3.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+          {dirty && <span className="pc-proj-dirty" title="有没保存的改动" />}
+        </button>
         <Btn
           onClick={run(exportProject)}
           label="导出视频"

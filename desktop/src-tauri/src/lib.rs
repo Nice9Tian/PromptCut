@@ -15,6 +15,8 @@ use tauri::{Emitter, Manager, RunEvent, WebviewUrl};
 use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_shell::ShellExt;
 
+mod agent_webview;
+mod chrome_color;
 mod proc_lock;
 mod skill_shell;
 
@@ -176,10 +178,17 @@ pub fn run() {
     // -- Setup ------------------------------------------------------------
     builder
         .manage(proc_lock::ProcLocks::new())
+        // agent 浏览器的调试端口启动时就定下来:主窗口和子 webview 的启动参数都要带它
+        .manage(agent_webview::AgentBrowser::new(agent_webview::pick_port()))
         .invoke_handler(tauri::generate_handler![
             acquire_proc_lock,
             release_proc_lock,
-            is_proc_locked
+            is_proc_locked,
+            agent_webview::agent_webview_show,
+            agent_webview::agent_webview_hide,
+            agent_webview::agent_webview_mute,
+            agent_webview::agent_webview_info,
+            chrome_color::menu_bar_color
         ])
         .setup(|app| {
             let handle = app.handle().clone();
@@ -263,6 +272,10 @@ pub fn run() {
                 // 就是这个原因。本应用不用 Tauri 的文件拖放事件(要接系统拖入文件时,
                 // 关掉之后走网页标准的 dataTransfer.files 即可)。
                 .disable_drag_drop_handler()
+                // 主窗口和 agent 子 webview 共用一个 WebView2 环境,启动参数必须一样(含调试端口)
+                .additional_browser_args(&agent_webview::browser_args(
+                    handle.state::<agent_webview::AgentBrowser>().port,
+                ))
                 .on_navigation(move |url| {
                     let host = url.host_str().unwrap_or("");
                     if host == "127.0.0.1"
@@ -285,6 +298,12 @@ pub fn run() {
                     tauri::webview::NewWindowResponse::Deny
                 })
                 .build()?;
+
+            // agent 的浏览器:主窗口里的子 webview,一开始就建好(藏在客户区外面),
+            // Node 那边连调试端口时它必须已经在。建不出来只记日志,不影响编辑器本身。
+            if let Err(e) = agent_webview::ensure(&handle) {
+                eprintln!("[promptcut] agent webview 没建起来: {e}");
+            }
 
             // ── SKILL 模式:主窗收起来变成右上角的悬浮图标 ─────────────
             // 盯住状态文件(Node 那边写)。返回的开关给下面的关窗拦截用 —— 关窗时再去
@@ -342,6 +361,12 @@ pub fn run() {
             envs.insert("PROMPTCUT_PYLIBS".into(), pylibs_dir.to_string_lossy().into_owned());
             envs.insert("PROMPTCUT_MODELS".into(), models_dir.to_string_lossy().into_owned());
             envs.insert("PROMPTCUT_DATA_DIR".into(), app_data_dir.to_string_lossy().into_owned());
+            // agent 浏览器就是壳里的子 webview:把调试端口交给 Node,那边 puppeteer 直接连
+            let agent_port = handle.state::<agent_webview::AgentBrowser>().port;
+            if agent_port != 0 {
+                envs.insert("PROMPTCUT_AGENT_CDP".into(), agent_port.to_string());
+                envs.insert("PROMPTCUT_AGENT_URL".into(), agent_webview::INITIAL_URL.into());
+            }
 
             // ── Spawn sidecar ───────────────────────────────────────
             let app_dir = runtime_dir.join("app");

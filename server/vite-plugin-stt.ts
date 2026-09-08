@@ -13,6 +13,18 @@ function sanitizeName(name: string) {
   return name.replace(/[/\\]/g, "").replace(/\.\./g, "");
 }
 
+/**
+ * 找不到内置 Python 时统一回这一句。
+ *
+ * 措辞是给两种人看的:装了正式包的用户,和在仓库里跑 npm run dev 的开发。
+ * 对前者这不是「功能没开」——内置 Python 和 Node、Chrome、ffmpeg 一样随包发,
+ * 缺了说明安装包坏了或被杀软删了,该重装而不是去找什么开关。旧文案写的是
+ * 「未就绪,先跑 npm run prepare-python」,那条命令用户手上根本没有,只会把人带偏。
+ */
+export const PYTHON_MISSING =
+  "找不到内置 Python。正式安装包自带它,缺了多半是安装损坏或被杀毒软件删掉,重装一次即可;" +
+  "在仓库里开发的话跑 npm run prepare-python 组装。";
+
 /** 按文档顺序查找内置 Python 解释器路径;找不到返回 null */
 export function findPython(root: string): string | null {
   if (process.env.PROMPTCUT_PYTHON) {
@@ -56,7 +68,7 @@ export async function buildEnv(root: string, pythonPath: string): Promise<NodeJS
   // 按包逐个判断,不能只看 promptcut_stt:自带解释器的 site-packages 里有 stt、
   // 却没有后加的 promptcut_shots,一旦只看前者就会整段跳过,镜头识别永远报
   // No module named。
-  const PACKAGES = ["promptcut_stt", "promptcut_shots", "promptcut_track", "promptcut_subject"];
+  const PACKAGES = ["promptcut_stt", "promptcut_shots", "promptcut_track", "promptcut_subject", "promptcut_collect"];
   const missing = PACKAGES.filter(
     (pkg) => !existsSync(path.join(pythonDir, "Lib", "site-packages", pkg)),
   );
@@ -225,7 +237,7 @@ export function sttPlugin(): Plugin {
           if (!python) {
             res.statusCode = 503;
             res.setHeader("Content-Type", "application/json");
-            res.end(JSON.stringify({ error: "内置 Python 未就绪,先跑 npm run prepare-python" }));
+            res.end(JSON.stringify({ error: PYTHON_MISSING }));
             return;
           }
           try {
@@ -260,7 +272,7 @@ export function sttPlugin(): Plugin {
           if (!python) {
             res.statusCode = 503;
             res.setHeader("Content-Type", "application/json");
-            res.end(JSON.stringify({ error: "内置 Python 未就绪,先跑 npm run prepare-python" }));
+            res.end(JSON.stringify({ error: PYTHON_MISSING }));
             return;
           }
           try {
@@ -317,7 +329,7 @@ export function sttPlugin(): Plugin {
           if (!python) {
             res.statusCode = 503;
             res.setHeader("Content-Type", "application/json");
-            res.end(JSON.stringify({ error: "内置 Python 未就绪,先跑 npm run prepare-python" }));
+            res.end(JSON.stringify({ error: PYTHON_MISSING }));
             return;
           }
           try {

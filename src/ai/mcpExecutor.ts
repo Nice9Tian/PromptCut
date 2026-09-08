@@ -2,6 +2,10 @@
 // 所以在这里就地声明用到的那点形状。
 // @ts-expect-error 无类型声明的 .mjs
 import { tools as RAW_TOOL_SPECS } from "../../server/mcp-tools.mjs";
+import { webOpen, webView, webClick, webType, webScroll, webRead, webHandoff, webClose } from "./web";
+import { requestAgentBrowser, closeAgentBrowser } from "./agentBrowserStore";
+import * as agentBus from "./agentBus";
+import { getState } from "../store/project";
 const TOOL_SPECS = RAW_TOOL_SPECS as { name: string; inputSchema?: { required?: string[] } }[];
 
 /**
@@ -77,11 +81,101 @@ export interface EditorApi {
   autoWorkflowStatus(args: { jobId: string }): any;
   fillCaptions(args: { clipId?: string; mediaId?: string; showEn?: boolean }): any;
   importMedia(args: { url?: string; name?: string }): Promise<any>;
+  collectStatus(): Promise<any>;
+  collectSearch(args: { query: string; site?: string; limit?: number }): Promise<any>;
+  collectInstall(): Promise<any>;
+  collectProbe(args: { url: string; site?: string; quality?: number }): Promise<any>;
+  collectDownload(args: { url: string; quality?: number; site?: string; audioOnly?: boolean; allParts?: boolean; cookies?: string }): Promise<any>;
+  collectJob(args: { jobId: string }): Promise<any>;
+  collectLogin(args: { site?: string; method?: "qr" | "browser"; force?: boolean }): Promise<any>;
+  collectLoginCheck(args: { site?: string; hide?: boolean }): Promise<any>;
+  collectLogout(args: { site?: string }): Promise<any>;
   createCard(args: { id: string; source: string; overwrite?: boolean }): Promise<any>;
   getCardSource(args: { cardId: string }): Promise<any>;
   editCard(args: { cardId: string; find: string; replace: string; replaceAll?: boolean }): Promise<any>;
   seePreview(args: { t?: number; clipId?: string }): Promise<any>;
   cardAuthoringGuide(): Promise<any>;
+}
+
+/** 这些工具改的是时间轴:做成一次,就值得给 SKILL 悬浮窗下面那张预览图刷新一次 */
+const TIMELINE_TOOLS = new Set([
+  "add_clip", "update_clip", "remove_clip", "duplicate_clip", "split_clip",
+  "set_position", "set_rect", "align", "nudge", "fill_captions", "attach_clip_motion", "detach_clip_motion",
+  "add_track", "switch_cut", "add_cut", "set_theme",
+]);
+
+function isHeadlessPage(): boolean {
+  try { return new URLSearchParams(location.search).has("headless"); } catch { return false; }
+}
+
+/** 同一时刻只渲染一张:agent 连着改十张卡,预览跟着渲染十次没意义,只留最后那次 */
+let lastActionBusy = false;
+let lastActionPending: (() => Promise<void>) | null = null;
+
+/**
+ * SKILL 模式的悬浮窗下面显示「agent 上一步做成的动作」的画面。
+ *
+ * 只在无头实例的页面里做(它才是被 agent 操控的那份):动作成功后按 see_preview 那条路
+ * 把那一刻的整屏渲染成 png,POST 给自己的服务端写到 skillRoot/last-action.{png,json},
+ * 壳的 watcher 盯着那两个文件,变了就推给悬浮窗。全程失败静默 —— 预览是锦上添花,
+ * 不能反过来影响工具调用。
+ */
+function reportLastAction(api: EditorApi, tool: string, args: any, result: any): void {
+  if (!isHeadlessPage() || !TIMELINE_TOOLS.has(tool)) return;
+  const run = async () => {
+    // 时间点:优先这次动作涉及的那张卡的中点(add/update 的返回里有 clip 或 timeline),
+    // 都没有就让服务端用当前播放头。
+    let t: number | undefined;
+    const clipId: string | undefined = result?.clip?.id ?? args?.clipId ?? result?.clipId;
+    const clip = result?.clip
+      ?? (clipId ? (result?.timeline as any[] | undefined)?.flatMap((tr: any) => tr?.clips ?? [])?.find((c: any) => c?.id === clipId) : undefined);
+    if (clip && typeof clip.start === "number" && typeof clip.end === "number") t = (clip.start + clip.end) / 2;
+    else if (typeof args?.start === "number") t = args.start + 0.5;
+    const shot = await api.seePreview(t == null ? {} : { t });
+    const base64 = shot?.__image?.base64;
+    if (!base64) return;
+    await fetch("/api/skill-mode/last-action", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tool, clipId: clipId ?? null, t: shot?.t ?? t ?? null, base64 }),
+    });
+  };
+  const kick = () => {
+    if (lastActionBusy) { lastActionPending = run; return; }
+    lastActionBusy = true;
+    run().catch(() => {}).finally(() => {
+      lastActionBusy = false;
+      const next = lastActionPending;
+      lastActionPending = null;
+      if (next) { lastActionBusy = true; next().catch(() => {}).finally(() => { lastActionBusy = false; }); }
+    });
+  };
+  kick();
+}
+
+/** web_* 的分发。返回体里的 __image 原样往上传,让 harness 把它摘成图片块 */
+async function runWebTool(tool: string, args: any): Promise<any> {
+  switch (tool) {
+    case "web_open": return webOpen(args);
+    case "web_view": return webView();
+    case "web_click": return webClick(args);
+    case "web_type": return webType(args);
+    case "web_scroll": return webScroll(args);
+    case "web_read": return webRead(args);
+    case "web_handoff": {
+      const r = await webHandoff(args);
+      // 桌面壳模式:agent 的浏览器是主窗口里的子 webview,Node 那边挪不动它,
+      // 只回一个 shell 标记。这边**不弹窗打断用户**:点亮顶栏的「浏览器」页签(闪烁 +
+      // 「有待操作」气泡),用户自己点过去时面板才把 webview 摆出来。
+      if (r && (r as { shell?: boolean }).shell) {
+        if (args?.hide) closeAgentBrowser();
+        else requestAgentBrowser(typeof args?.reason === "string" ? args.reason : "");
+      }
+      return r;
+    }
+    case "web_close": return webClose();
+    default: throw new Error(`未知的网页工具: ${tool}`);
+  }
 }
 
 export function connectMcpExecutor(getApi: () => EditorApi, onStatus?: (s: { connected: boolean }) => void): () => void {
@@ -153,6 +247,10 @@ export function connectMcpExecutor(getApi: () => EditorApi, onStatus?: (s: { con
         const id = ev.id;
         const tool = ev.tool;
         const args = ev.args as any;
+        // 多 Agent:服务端把发起这次调用的 Agent 对话 ID 带过来(走 agy 或外部命令行的没有)
+        const agent: string | null = typeof ev.agent === "string" && ev.agent ? ev.agent : null;
+        // 时间轴操作前后各看一眼项目,算出这次改了哪几条「剪辑->序列」,记到公告板上给别的 Agent 看
+        const before = TIMELINE_TOOLS.has(tool) ? getState().project : null;
         const api = getApi();
         let ok = true;
         let result: unknown;
@@ -163,7 +261,12 @@ export function connectMcpExecutor(getApi: () => EditorApi, onStatus?: (s: { con
           if (missing.length > 0) {
             throw new Error(`缺少必填参数：${missing.join("、")}。请补齐后重试。`);
           }
-          if (tool === "background_job_status") result = api.backgroundJobStatus(args);
+          // 多 Agent 协调的四个工具不碰编辑台,直接在公告板(agentBus)上办
+          if (tool === "declare_scope") result = agentBus.declareScope(agent, args);
+          else if (tool === "list_agents") result = agentBus.listAgents(agent);
+          else if (tool === "send_message") result = agentBus.sendMessage(agent, args);
+          else if (tool === "check_messages") result = agentBus.checkMessages(agent);
+          else if (tool === "background_job_status") result = api.backgroundJobStatus(args);
           else if (tool === "list_cards") result = api.listCards(args);
           else if (tool === "get_project") result = api.getProject();
           else if (tool === "list_media") result = api.listMedia();
@@ -209,11 +312,23 @@ export function connectMcpExecutor(getApi: () => EditorApi, onStatus?: (s: { con
           else if (tool === "auto_workflow_status") result = api.autoWorkflowStatus(args);
           else if (tool === "fill_captions") result = api.fillCaptions(args);
           else if (tool === "import_media") result = await api.importMedia(args);
+          else if (tool === "collect_status") result = await api.collectStatus();
+          else if (tool === "collect_search") result = await api.collectSearch(args);
+          else if (tool === "collect_install") result = await api.collectInstall();
+          else if (tool === "collect_probe") result = await api.collectProbe(args);
+          else if (tool === "collect_download") result = await api.collectDownload(args);
+          else if (tool === "collect_job") result = await api.collectJob(args);
+          else if (tool === "collect_login") result = await api.collectLogin(args);
+          else if (tool === "collect_login_check") result = await api.collectLoginCheck(args);
+          else if (tool === "collect_logout") result = await api.collectLogout(args);
           else if (tool === "create_card") result = await api.createCard(args);
           else if (tool === "get_card_source") result = await api.getCardSource(args);
           else if (tool === "edit_card") result = await api.editCard(args);
           else if (tool === "see_preview") result = await api.seePreview(args);
           else if (tool === "card_authoring_guide") result = await api.cardAuthoringGuide();
+          // 网页操作不经过 EditorApi:浏览器整个在服务端,这些工具不碰编辑台的任何状态。
+          // 挂进 EditorApi 只会逼编辑台那边实现 8 个纯转发的方法。
+          else if (tool.startsWith("web_")) result = await runWebTool(tool, args);
           else throw new Error(`未知工具: ${tool}`);
         } catch (err: unknown) {
           ok = false;
@@ -229,6 +344,14 @@ export function connectMcpExecutor(getApi: () => EditorApi, onStatus?: (s: { con
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ id, ok, result, error })
         }).catch(() => {});
+
+        // 做成了一次时间轴动作 → 给 SKILL 悬浮窗刷一张预览(只在无头实例里生效,失败静默)
+        if (ok) {
+          try { reportLastAction(api, tool, args, result); } catch { /* 预览是附带的,不影响结果 */ }
+          if (before) {
+            try { agentBus.noteToolChange(agent, tool, before, getState().project); } catch { /* 公告板是附带的 */ }
+          }
+        }
       }
     };
 

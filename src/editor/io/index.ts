@@ -89,6 +89,51 @@ export async function importVideoFiles(files: FileList | File[]): Promise<string
   return mediaIds;
 }
 
+/**
+ * 登记一个**已经在服务端素材目录里**的文件(素材收集下载好的那种)。
+ *
+ * 和 importVideoFiles 走同一条登记路:探时长宽高、addMedia、登记 File、放到视频轨。
+ * 唯一的差别是不再 POST 上传一遍 —— 文件本来就在 out/media 里,path 直接给,
+ * 几十上百 MB 的视频再往服务端传一次纯属浪费。
+ */
+export async function importVideoFromServer(opts: { url: string; path: string; name?: string }): Promise<string> {
+  const res = await fetch(opts.url);
+  if (!res.ok) throw new Error(`取文件失败(HTTP ${res.status}):${opts.url}`);
+  const blob = await res.blob();
+  const name = opts.name || decodeURIComponent(opts.url.split("/").pop() || "video.mp4");
+  const file = new File([blob], name, { type: blob.type || "video/mp4" });
+  const url = URL.createObjectURL(file);
+
+  const video = document.createElement("video");
+  video.preload = "metadata";
+  video.muted = true;
+  video.style.display = "none";
+  document.body.appendChild(video);
+  const meta = await new Promise<{ duration: number; videoWidth: number; videoHeight: number }>((resolve) => {
+    video.onloadedmetadata = () => resolve({ duration: video.duration, videoWidth: video.videoWidth, videoHeight: video.videoHeight });
+    video.onerror = () => {
+      console.warn(`[io] 探测视频失败: ${name}`);
+      resolve({ duration: 5, videoWidth: 1920, videoHeight: 1080 });
+    };
+    video.src = url;
+  });
+  document.body.removeChild(video);
+
+  const media = actions.addMedia({
+    kind: "video",
+    name,
+    url,
+    duration: meta.duration,
+    width: meta.videoWidth,
+    height: meta.videoHeight,
+  });
+  mediaFiles.set(media.id, file);
+  actions.setMediaPath(media.id, opts.path);
+  const clip = actions.addMediaClip(media.id, getState().t);
+  if (!clip) console.warn(`[io] addMediaClip 返回 null, mediaId: ${media.id}`);
+  return media.id;
+}
+
 /** 读取 .promptcut.json(或兼容的 overlay 编排 JSON)并载入 store。返回 Project。 */
 export async function importProjectFile(file: File): Promise<Project> {
   const text = await file.text();

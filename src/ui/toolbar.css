@@ -6,6 +6,21 @@
  * 颜色全部走 --ui-*,所以五套主题深浅十份取值都能直接换。
  */
 
+/*
+ * 菜单栏 → 导航栏的过渡带。壳采样到菜单栏颜色后把它写进 --pc-menubar 并给 <html> 加
+ * pc-has-menubar;没有壳(浏览器里跑)就 0 高,等于不存在。10px 是「拉开一点高度」
+ * 的那一点:再高会像多了一条空栏,再矮渐变看不出来。
+ */
+.pc-bar-fade {
+  flex: 0 0 auto;
+  height: 0;
+  background: transparent;
+}
+html.pc-has-menubar .pc-bar-fade {
+  height: 10px;
+  background: linear-gradient(to bottom, var(--pc-menubar), var(--ui-panel));
+}
+
 .pc-bar {
   display: flex;
   align-items: center;
@@ -235,6 +250,72 @@
   justify-content: space-between;
   gap: 8px;
 }
+
+/* ── 「项目」按钮与下拉 ────────────────────────────────────────────── */
+.pc-proj-btn { position: relative; gap: 6px; }
+.pc-proj-btn.is-open {
+  background: var(--ui-accent-soft);
+  border-color: var(--ui-accent);
+}
+.pc-proj-caret { opacity: 0.7; transition: transform 160ms; }
+.pc-proj-btn.is-open .pc-proj-caret { transform: rotate(180deg); }
+/* 有没保存的改动:按钮右上角一个小点,菜单里「保存项目」那一行也带一个 */
+.pc-proj-dirty {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ui-accent);
+  box-shadow: 0 0 0 2px var(--ui-panel, #111);
+}
+.pc-proj-item .pc-proj-dirty { position: static; box-shadow: none; margin-left: auto; }
+
+.pc-proj-menu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 232px;
+  padding: 6px;
+  background: var(--ui-float);
+  border: 1px solid var(--ui-border-strong);
+  border-radius: 8px;
+  box-shadow: var(--ui-shadow, 0 12px 32px rgba(0, 0, 0, 0.4));
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  animation: pc-proj-in 140ms ease-out;
+}
+@keyframes pc-proj-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.pc-proj-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ui-text, inherit);
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+.pc-proj-item:hover, .pc-proj-item:focus-visible {
+  background: var(--ui-accent-soft);
+  border-color: var(--ui-accent);
+  outline: none;
+}
+.pc-proj-item:disabled { opacity: 0.45; cursor: default; }
+.pc-proj-item:disabled:hover { background: transparent; border-color: transparent; }
+.pc-proj-item svg { width: 16px; height: 16px; flex: none; opacity: 0.85; }
+.pc-proj-text { display: flex; flex-direction: column; gap: 1px; line-height: 1.25; }
+.pc-proj-text b { font-size: 12.5px; font-weight: 600; }
+.pc-proj-text small { font-size: 11px; color: var(--ui-text-muted, #999); }
+.pc-proj-sep { height: 1px; margin: 4px 6px; background: var(--ui-border-strong); opacity: 0.6; }
 
 /* 项目设置对话框 */
 .pc-dialog-mask {

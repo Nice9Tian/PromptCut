@@ -1,11 +1,11 @@
-/* 时间轴顶部的剪辑选项栏(CutTabs.tsx)。配色跟 timeline.css 的工具条一致 */
+/* 时间轴顶部的剪辑选项栏(CutTabs.tsx)。全部走 --ui-* 变量:原来写死 #0a0a0a 那一套,换皮肤时这一条还是黑的 */
 .pc-tl-cuts {
   display: flex;
   align-items: flex-end;
   gap: 2px;
   padding: 4px 8px 0;
-  background: #0a0a0a;
-  border-bottom: 1px solid #262626;
+  background: var(--ui-bg);
+  border-bottom: 1px solid var(--ui-border);
   flex-shrink: 0;
   overflow-x: auto;
   scrollbar-width: none;
@@ -19,22 +19,22 @@
   gap: 6px;
   padding: 4px 8px 4px 12px;
   border-radius: 6px 6px 0 0;
-  background: #171717;
-  color: #a3a3a3;
+  background: var(--ui-bg-2);
+  color: var(--ui-fg-muted);
   font-size: 12px;
   line-height: 16px;
-  border: 1px solid #262626;
+  border: 1px solid var(--ui-border);
   border-bottom: none;
   cursor: pointer;
   user-select: none;
   white-space: nowrap;
   max-width: 200px;
 }
-.pc-tl-cut:hover { color: #e5e5e5; background: #1f1f1f; }
+.pc-tl-cut:hover { color: var(--ui-fg); background: var(--ui-panel); }
 .pc-tl-cut.is-on {
-  background: #262626;
-  color: #fafafa;
-  border-color: #3f3f46;
+  background: var(--ui-panel);
+  color: var(--ui-fg);
+  border-color: var(--ui-border-strong);
   /* 压住下边的分隔线,看起来和时间轴连成一体 */
   margin-bottom: -1px;
   padding-bottom: 5px;
@@ -61,11 +61,11 @@
   cursor: pointer;
 }
 .pc-tl-cut:hover .pc-tl-cut-x { opacity: 0.6; }
-.pc-tl-cut-x:hover { opacity: 1 !important; background: #3f3f46; }
+.pc-tl-cut-x:hover { opacity: 1 !important; background: var(--ui-panel-2); }
 
 .pc-tl-cut-add {
   padding: 3px 8px 5px;
-  color: #737373;
+  color: var(--ui-fg-faint);
   font-size: 15px;
   line-height: 1;
   background: transparent;
@@ -73,4 +73,4 @@
   cursor: pointer;
   border-radius: 4px;
 }
-.pc-tl-cut-add:hover { color: #fafafa; background: #1f1f1f; }
+.pc-tl-cut-add:hover { color: var(--ui-fg); background: var(--ui-panel); }

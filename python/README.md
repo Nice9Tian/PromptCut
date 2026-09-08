@@ -9,6 +9,7 @@
 | `promptcut_shots` | 镜头切换识别 | onnxruntime | `transnetv2.onnx` |
 | `promptcut_subject` | 主体检测：人脸 / 人体 / 开放词汇，告诉 AI 卡片该躲开哪块 | light 档 onnxruntime；full 档 torch + transformers | `yunet.onnx`、`rtdetr_r18vd.onnx`、`grounding-dino-tiny/` |
 | `promptcut_track` | 运动追踪（任意点） | torch | `bootstapir_v2.pt` |
+| `promptcut_collect` | 素材收集：从网页链接（B 站等）把视频抓成本地 mp4（见文末一节） | yt-dlp | 无，纯 Python 轮子按需 pip |
 
 权重不随安装包发，由**拓展库包**离线送达（轻装档 / 完整档两档，见
 [`desktop/README.md`](../desktop/README.md) 的「拓展库包」一节）；没装拓展时
@@ -237,3 +238,70 @@ huggingface-hub 1.30.0、tokenizers 0.23.2、numpy 2.4.6。装完 `status` 里
 **已知提示（不影响结果）**：huggingface-hub 在 Windows 非开发者模式下不能建符号链接，
 会 warn 一句「caching files will still work but in a degraded version」，只是缓存多占些磁盘；
 另有一句未设 `HF_TOKEN` 的匿名下载限速提醒。两条都在 stderr，属正常现象。
+
+---
+
+## promptcut_collect · 素材收集（yt-dlp）
+
+把网页链接里的视频抓成编辑台能直接用的 mp4。底层是 [yt-dlp](https://github.com/yt-dlp/yt-dlp)
+（Unlicense），按需 `pip install` 到 `PROMPTCUT_PYLIBS`（纯 Python 轮子，约 3 MB）；
+本包本体只依赖标准库，和 `promptcut_stt.jsonl` 共用 JSONL 输出。
+
+```
+python/promptcut_collect/
+  __init__.py               版本号
+  __main__.py               argparse 入口：status / presets / install / probe / download
+  ytdl.py                   yt-dlp 封装：格式选择、进度、重试、H.264 转码兜底
+  presets/
+    __init__.py             预设注册与按链接匹配
+    bilibili.py             哔哩哔哩：BV/av/b23.tv 归一化、UA + Referer、412 重试
+    generic.py              兜底：只带浏览器 UA，其余交给 yt-dlp 自己的 extractor
+  requirements-collect.txt  yt-dlp>=2025.1.1
+```
+
+### agent 直接调（bilibili 预设按链接自动选中）
+
+```
+<PROMPTCUT_PYTHON> -I -m promptcut_collect probe    --url BV1BYtB6GEFV
+<PROMPTCUT_PYTHON> -I -m promptcut_collect download --url https://www.bilibili.com/video/BV1BYtB6GEFV --out-dir <目录> --quality 1080
+```
+
+开发期（包还在源码树里）同样要用 runpy 引导，见上文「启动方式」。环境变量：
+`PROMPTCUT_PYLIBS`（yt-dlp 装在哪）、`PROMPTCUT_FFMPEG`（ffmpeg 目录或 exe；没设就找 PATH）。
+
+### 子命令
+
+- `status`：`{"event":"status","ready":bool,"ytdlp":{installed,version,error},"ffmpeg":路径,"presets":[...]}`。
+  `ready` 要求 yt-dlp 装了**且**找得到 ffmpeg——视频流和音频流是分开下的，没 ffmpeg 合不起来。
+- `install`：pip 装 `requirements-collect.txt` 到 `PROMPTCUT_PYLIBS`，每行 pip 输出转成 `log` 事件，末行 `installed`。
+- `probe --url … [--site auto|bilibili|generic] [--quality 1080] [--cookies 文件] [--cookies-from-browser chrome]`：
+  只探测。末行 `done` 带 `title / duration / uploader / heights（可选清晰度）/ parts（多 P 列表或 null）/ subtitles / formats`。
+- `download --url … --out-dir 目录 [--quality 1080] [--audio-only] [--all-parts] [--keep-codec] [--cookies …]`：
+  事件依次是 `start` → （`retry`）→ `info`（标题时长，下载前）→ 若干 `progress`（`stage` 为
+  `video / audio / merge / transcode`，`percent` 是当前阶段、`overall` 是按字节加权的整体）→ 每个文件一个
+  `item` → `done`。文件名是「标题 [id].mp4」，标题里 Windows 不许的字符和 `#%&` 去掉，最长 80 字。
+
+  格式选择：`bestvideo[vcodec^=avc1][height<=Q]+bestaudio[ext=m4a]`，退而求其次再放开编码。
+  下完用 ffprobe 看一眼，视频不是 H.264（B 站的 hvc1 / av01 档）就用 ffmpeg 转成 libx264，`item` 里
+  `transcoded: true`；浏览器 `<video>` 预览只认 H.264 稳，`--keep-codec` 可关掉。
+
+退出码：0 成功；1 下载/探测失败（末行 `error`）；2 参数或环境问题；3 yt-dlp 没装（`error` 带 `notInstalled: true`）。
+
+### 哔哩哔哩预设（实测 2026-09-08，yt-dlp 2026.08.19）
+
+- 不带浏览器 UA 直接请求回 **412 Precondition Failed**；带 Chrome UA + `Referer: https://www.bilibili.com/`
+  就正常。同一台机器连着请求偶尔仍 412，隔 1.5 秒重试就过，所以 412 归为「值得重试」（默认 3 次）。
+- 未登录能拿 1080p / 720p / 480p / 360p，视频流 avc1 / hvc1 / av01 三种编码，音频 m4a。
+  1080p60、4K、杜比只有登录（且大会员）才给，要的话传 `--cookies`。
+- 多 P 稿件：链接带 `?p=N` 只下那一 P；不带时默认也只取第一 P（`noplaylist`），`--all-parts` 才全下。
+- `BV1BYtB6GEFV`（9 分 36 秒）480p 实测：探测约 3 秒，下载 + 合并 26 秒，34 MB，h264 852×480。
+
+### 跑单元测试
+
+```
+cd python
+<PROMPTCUT_PYTHON> -I -m unittest discover -s tests -t . -p "test_collect.py" -v
+```
+
+不联网、不要求装 yt-dlp：预设的匹配与归一化、格式串、文件名清洗，以及 `status` / `presets` /
+`install`（没设 pylibs）/ `probe`（没装 yt-dlp）四个子命令的退出码与输出形状。13 项。
