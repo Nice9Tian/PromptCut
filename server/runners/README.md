@@ -98,9 +98,13 @@ codex exec --json --skip-git-repo-check -C <cwd> \
   -c mcp_servers.promptcut.command="<node绝对路径>" \
   -c mcp_servers.promptcut.args=["<mcp-server.mjs绝对路径>"] \
   -c mcp_servers.promptcut.env={PROMPTCUT_PORT="<port>"} \
+  -c mcp_servers.promptcut.enabled_tools=["<PromptCut 工具名>",...] \
+  -c mcp_servers.promptcut.default_tools_approval_mode="approve" \
   [--model <m>] -
 ```
-注意：`approval_policy="never"` 用于禁用 MCP 审批拦截，与 `sandbox_mode` 是两个正交的开关。
+注意：`approval_policy="never"` 表示 Codex 不能向用户弹审批；它本身**不会**放行 MCP。
+运行器用 `enabled_tools` 逐个限制 PromptCut 工具，再仅对这个 server 设置 `approve`。
+`sandbox_mode="read-only"` 仍独立生效，shell 没有随 MCP 一起放开。
 续聊：
 ```bash
 codex exec resume <threadId> --json --skip-git-repo-check \
@@ -172,6 +176,7 @@ codex exec resume <threadId> --json --skip-git-repo-check \
 
 ### Codex
 - **工作目录与沙箱**: `exec resume` 不支持 `-C` / `-s`，因此依赖于运行器的 `cwd` 和传入的 `-c sandbox_mode="read-only"`。
+- **工具授权**: 每次运行都从 `mcp-tools.mjs` 生成 `mcp_servers.promptcut.enabled_tools`，并设置 `mcp_servers.promptcut.default_tools_approval_mode="approve"`；只免批 PromptCut MCP，绝不关闭 shell 沙箱。
 - **用户配置覆盖**: 不会自动覆盖用户的 `~/.codex/config.toml` 配置（如 provider 账号问题、`model_reasoning_effort` 不识别问题等），出现此类报错时需用户自行调整 Codex 全局配置。运行器代码严禁读取该配置文件。
 
 ### Antigravity (agy)

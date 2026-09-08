@@ -1,6 +1,21 @@
 import { cliEnv } from './cli-runtime.mjs';
 import { spawnCli, resolveExe, lineSplitter, probeVersion } from './index.mjs';
 import { execFileSync } from 'node:child_process';
+import { tools } from '../mcp-tools.mjs';
+
+/**
+ * Codex 把「工具是否暴露」和「调用是否要审批」分成两个配置项。只注册 server 不会
+ * 自动放行；在 approval_policy="never" 下，默认需要审批的 MCP 调用会当场被拒。
+ *
+ * 两项都显式传：enabled_tools 把能力限制在 PromptCut 自己公布的清单里，approve 则
+ * 只免批这个 MCP server 的工具。shell 仍受 read-only sandbox 约束。
+ */
+export function getCodexMcpPolicyArgv() {
+  return [
+    '-c', `mcp_servers.promptcut.enabled_tools=${JSON.stringify(tools.map(t => t.name))}`,
+    '-c', 'mcp_servers.promptcut.default_tools_approval_mode="approve"',
+  ];
+}
 
 /**
  * 把任意形状的错误变成人能读的一行。
@@ -99,9 +114,7 @@ export function startRun(opts) {
   return { abort: () => abortRef.abort(), done: donePromise };
 }
 
-function _startRun(opts) {
-  const exePath = resolveExe('codex');
-  
+export function buildCodexArgs(opts) {
   const args = [];
   if (opts.sessionId) {
       args.push('exec', 'resume', opts.sessionId);
@@ -124,6 +137,7 @@ function _startRun(opts) {
       args.push('-c', `mcp_servers.promptcut.args=${JSON.stringify(opts.mcp.args)}`);
       const envPairs = Object.entries(opts.mcp.env).map(([k,v]) => `${k}=${JSON.stringify(String(v))}`).join(', ');
       args.push('-c', `mcp_servers.promptcut.env={${envPairs}}`);
+      args.push(...getCodexMcpPolicyArgv());
   }
   
   if (opts.model) {
@@ -135,7 +149,13 @@ function _startRun(opts) {
       args.push('-c', `model_reasoning_effort="${opts.effort}"`);
   }
   args.push('-'); // stdin
-  
+  return args;
+}
+
+function _startRun(opts) {
+  const exePath = resolveExe('codex');
+  const args = buildCodexArgs(opts);
+
   const fullPrompt = `<<<系统说明>>>\n${opts.systemPrompt}\n<<<用户消息>>>\n${opts.prompt}`;
   
   const { child, safeOnEvent, finish, abort, donePromise } = spawnCli(exePath, args, { cwd: opts.cwd, env: cliEnv('codex') }, opts.onEvent, 'Codex CLI');
