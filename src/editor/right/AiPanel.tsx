@@ -447,6 +447,20 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
   };
   const toggleTool = toggleIn(expanded, setExpanded);
 
+  /**
+   * 简洁模式下的小方块:同一时刻**只摊开一个**,点开新的就把上一个收掉。
+   *
+   * 和详细模式不一样:那边每个工具块自带标题行、就摆在它自己那一段的位置上,
+   * 同时开几个也认得出谁是谁。简洁模式的详情是**统一摊在那一排方块下面**的,
+   * 开两个就成了两坨挨着的 JSON,分不清各自对应上面哪个方块;方块行还会被
+   * 越顶越高,想对照着看反而要来回滚。
+   *
+   * 用函数式更新而不是 toggleIn 那种读闭包里的 set:方块可能连着点,
+   * 那样每次都从同一份旧集合算起,后一下会把前一下的结果盖掉。
+   */
+  const toggleChip = (key: string) =>
+    setExpanded((prev) => (prev.has(key) ? new Set() : new Set([key])));
+
   // 顶栏按实测宽度排布:窄了先换行、再收文字,还不够就把低优先级的收进「⋯」
   // 分工模式的开关放在 ai/teamMode 里:编排器那边也要读它,放这儿会变成两份状态
   const [teamMode, setTeamModeState] = useState(isTeamMode);
@@ -937,8 +951,9 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
                                   type="button"
                                   className={`ai-chip ai-chip--${toolKind(t.name)} is-${state}${expanded.has(key) ? " is-open" : ""}`}
                                   title={`${KIND_LABEL[toolKind(t.name)]}：${t.name}${t.ok === false ? "（失败）" : t.ok === undefined ? "（进行中）" : ""}`}
+                                  aria-expanded={expanded.has(key)}
                                   aria-label={`${t.name} ${state === "err" ? "失败" : state === "run" ? "进行中" : "成功"}`}
-                                  onClick={() => toggleTool(key)}
+                                  onClick={() => toggleChip(key)}
                                 />
                               );
                             })}
