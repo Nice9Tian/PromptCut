@@ -1059,3 +1059,59 @@
     transform: none;
   }
 }
+
+/*
+ * 思考里的步骤条。
+ *
+ * 这些「**Clarifying article link and scope**」是模型报的进度,不是给人读的推理。
+ * 原样铺成文字会把正文顶开、把阅读切断,所以压成一行行的小字,和 .ai-thinking 一样
+ * 退到 ink-faint 那一档 —— 存在感低于回复本身,但一眼能看到走到哪一步了。
+ *
+ * 只有最后一条、且消息还没结束时才动(is-live)。已经过去的步骤是静止的小圆点,
+ * 满屏都在呼吸的话反而看不出哪一步是当下。
+ */
+.ai-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 2px 0 6px;
+  min-width: 0;
+}
+.ai-step {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--ink-faint);
+  min-width: 0;
+}
+.ai-step-dot {
+  flex: none;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.45;
+}
+.ai-step-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.ai-step.is-live .ai-step-dot {
+  opacity: 1;
+  animation: ai-step-breathe 1.4s ease-in-out infinite;
+}
+.ai-step.is-live .ai-step-label {
+  color: var(--ink-soft, var(--ink-faint));
+}
+@keyframes ai-step-breathe {
+  0%, 100% { transform: scale(1); opacity: 0.45; }
+  50% { transform: scale(1.6); opacity: 1; }
+}
+/* 跟随系统「减少动态效果」:呼吸只是提示,不该硬塞给对动画敏感的人 */
+@media (prefers-reduced-motion: reduce) {
+  .ai-step.is-live .ai-step-dot { animation: none; opacity: 1; }
+}

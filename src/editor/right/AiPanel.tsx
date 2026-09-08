@@ -19,6 +19,7 @@ import { useInstallJobs, matchInstallJob } from "../../ai/sttInstallStore";
 import { useToolbarLayout, MORE_KEY } from "./useToolbarLayout";
 import { isTeamMode, setTeamMode, subscribeTeamMode } from "../../ai/teamMode";
 import { RoleHeader } from "./RoleAvatar";
+import { thinkingSteps, stepsOfThinking } from "../../ai/thinkingSteps";
 import { OrchestrationBlock } from "./OrchestrationBlock";
 import { ToolbarOverflowMenu } from "./ToolbarOverflowMenu";
 import { IconHistory, IconSettings } from "../../ui/icons";
@@ -72,6 +73,32 @@ function partsOf(m: ChatMessage): MessagePart[] {
 
 /** 顶栏上的一个控件。栏上和「⋯」菜单里渲染的是同一个 node */
 type ToolbarControl = OverflowEntry;
+
+/**
+ * 思考里那些步骤名,做成一条走马灯。
+ *
+ * 为什么不是纯文本:模型经中转站发回来的 `<think>` 里装的常常不是思维链,而是一句话的
+ * 步骤名(「**Clarifying article link and scope**」)。原样铺在气泡里会把正文顶开,
+ * 用户读一半被一段英文打断;藏进「显示思考」开关里又等于没有,他不知道它在忙什么。
+ * 折中:只把步骤名抽出来排成一行行,最后一条在消息还没结束时带呼吸动画 ——
+ * 一眼能看出「还在走、走到哪一步」,又不抢正文的位置。
+ */
+function StepStrip({ steps, live }: { steps: string[]; live: boolean }) {
+  if (!steps.length) return null;
+  return (
+    <div className="ai-steps">
+      {steps.map((s, i) => {
+        const last = i === steps.length - 1;
+        return (
+          <div key={i} className={"ai-step" + (live && last ? " is-live" : " is-done")}>
+            <span className="ai-step-dot" />
+            <span className="ai-step-label">{s}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 /**
  * 顶栏放不下时往「⋯」菜单里收的顺序:排在前面的先收。
@@ -795,10 +822,10 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
             // pending 一起清掉(useAiChat.ts:335)，不会留下永远转圈的旧气泡。
             const parts = partsOf(m);
             /** 简洁模式下把几段思考按顺序拼起来一次显示;详细模式仍按原位置逐段渲染 */
-            const thinkingText = parts
+            const thinkingTexts = parts
               .filter((p) => p.kind === "thinking")
-              .map((p) => (p as { text: string }).text)
-              .join("\n\n");
+              .map((p) => (p as { text: string }).text);
+            const thinkingText = thinkingTexts.join("\n\n");
             const busyTool = m.pending ? runningTool(parts) : null;
 
             /** 一个工具片段:标题行 + 可展开的入参 / 结果 / 文件 */
@@ -908,12 +935,20 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
                       );
                     }
                     if (p.kind === "thinking") {
-                      return showThinking ? (
-                        <div key={pidx} className="ai-thinking">
-                          <div className="ai-thinking-head">思考</div>
-                          {p.text}
+                      // 步骤条一直显示。这些「**Clarifying article link and scope**」之类本来就是
+                      // 进度,不该被「显示思考」藏起来 —— 藏了用户就不知道它在干什么;
+                      // 而原样铺成文字又会把正文顶开。完整原文仍归那个开关管。
+                      return (
+                        <div key={pidx}>
+                          <StepStrip steps={thinkingSteps(p.text)} live={!!m.pending} />
+                          {showThinking && (
+                            <div className="ai-thinking">
+                              <div className="ai-thinking-head">思考</div>
+                              {p.text}
+                            </div>
+                          )}
                         </div>
-                      ) : null;
+                      );
                     }
                     return renderTool(p, `${m.id}:${pidx}`);
                   })
@@ -922,6 +957,7 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
                   <>
                     {/* 勾了「显示思考」的话简洁模式也要看得到,否则等于开关在这个模式下失灵。
                         这里按发生顺序拼成一段放在回复之前——先想后答,读起来是顺的。 */}
+                    <StepStrip steps={stepsOfThinking(thinkingTexts)} live={!!m.pending} />
                     {showThinking && thinkingText && (
                       <div className="ai-thinking">
                         <div className="ai-thinking-head">思考</div>

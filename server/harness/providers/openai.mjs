@@ -2,6 +2,7 @@
 // 本家 API 要点: Chat Completions 接口，tool 变成 role=tool 的独立消息，工具定义为 function，增量流在 choices[0].delta 拼装。
 import { readSse, assertOk } from './base.mjs';
 import { toolToVendor } from '../schema.mjs';
+import { createThinkSplitter } from '../think-tags.mjs';
 
 export function createProvider(cfg, { fetchImpl = globalThis.fetch } = {}) {
   return {
@@ -136,6 +137,13 @@ export function createProvider(cfg, { fetchImpl = globalThis.fetch } = {}) {
 
       let partialToolCalls = {}; // index -> {id, name, args}
       let stopReason = null;
+      /*
+       * 有的中转站不把推理放进单独字段,而是**内联在 content 里**发 `<think>…</think>`。
+       * 那样它会整段走 text_delta 进聊天气泡,用户看到一个赤裸的 `</think>` 卡在正文中间。
+       * 这里在流的层面把它拆到思考那条通道 —— 下游(UI、历史)一行都不用改。
+       * 拆分器要跨 chunk 记状态,所以建在循环外面。
+       */
+      const think = createThinkSplitter();
       let promptTokens = 0;
       let completionTokens = 0;
 
@@ -160,7 +168,11 @@ export function createProvider(cfg, { fetchImpl = globalThis.fetch } = {}) {
         const choice = parsed.choices?.[0];
         if (choice) {
           if (choice.delta?.content) {
-            yield { type: 'text_delta', text: choice.delta.content };
+            for (const ev of think.push(choice.delta.content)) {
+              yield ev.kind === 'think'
+                ? { type: 'thinking_delta', text: ev.text }
+                : { type: 'text_delta', text: ev.text };
+            }
           }
 
           // 各家兼容接口给推理过程起的名字不一样,常见这三个,取到哪个算哪个
@@ -206,6 +218,12 @@ export function createProvider(cfg, { fetchImpl = globalThis.fetch } = {}) {
       if (!stopReason) throw new Error('API 响应流提前结束或未返回 SSE 数据，请检查接口协议。');
       if (stopReason === 'length' && Object.keys(partialToolCalls).length) throw new Error('模型输出达到长度上限，工具参数未完成。');
       yield { type: 'usage', input: promptTokens, output: completionTokens };
+      // 收尾:扣住的尾巴要放出来(可能是半个标签,也可能就是正常正文)
+      for (const ev of think.flush()) {
+        yield ev.kind === 'think'
+          ? { type: 'thinking_delta', text: ev.text }
+          : { type: 'text_delta', text: ev.text };
+      }
       yield { type: 'stop', reason: stopReason || 'stop' };
     }
   };
