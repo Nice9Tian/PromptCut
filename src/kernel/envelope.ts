@@ -3,7 +3,7 @@ import { getPart } from "../parts/registry.ts";
 import { partsTiming, placeParts, validatePartTree, type PartLookup } from "./parts.ts";
 import type { Project, TrackClip } from "./project";
 import { findClip } from "./project.ts";
-import { worldOf, type Box, type Size, type WorldPlacement } from "./layout.ts";
+import { visualBox, worldOf, type Box, type Size, type WorldPlacement } from "./layout.ts";
 import { validateCardParams } from "./cardParams.ts";
 
 /**
@@ -121,11 +121,19 @@ function partsOf(card: CardDef<any> | undefined, params: Record<string, unknown>
 }
 
 /** 组合卡:部件实例树 → 封装里的 parts,带每个实例的画面位置和时序 */
-function compositePartsOf(tree: PartInstance[], clipWorld: WorldPlacement, lookup: PartLookup): { parts: EnvelopePart[]; settleMs: number; after: "hold" | "loop" | "evolve" } {
-  // 根级传缩放**之后**的矩形:placeParts 内部约定「parentBox 是乘过缩放的世界矩形 + 累计缩放」,
-  // 子级靠 width / scale 还原父框的逻辑尺寸;worldOf 的 box 是缩放前的画布,传它会差一个 scale²、原点也不对。
-  // visualBox 在没旋转时正是缩放绕锚点之后的矩形;旋转过的组合卡这里取的是外接矩形,只是近似。
-  const placed = placeParts(tree, { box: clipWorld.visualBox, scale: clipWorld.scale });
+function compositePartsOf(tree: PartInstance[], parentBox: Box, clipWorld: WorldPlacement, lookup: PartLookup): { parts: EnvelopePart[]; settleMs: number; after: "hold" | "loop" | "evolve" } {
+  /*
+   * 根级传缩放**之后**的矩形:placeParts 内部约定「parentBox 是乘过缩放的世界矩形 + 累计缩放」,
+   * 子级靠 width / scale 还原父框的逻辑尺寸;worldOf 的 box 是缩放前的画布,传它会差一个 scale²、原点也不对。
+   * 没旋转时它正是缩放绕锚点之后的矩形;旋转过的组合卡这里取的是外接矩形,只是近似。
+   *
+   * ⚠ 这个框必须是**没投影过**的。visualBox 现在会按相机投影(三维卡要的),
+   * 但渲染器那边(PartTree)用的是 frameBox —— 传投影过的框进来,两边父框就不是同一个了,
+   * 部件的 world 会既不等于修复前的值、也不等于画面真值。实测一张 translateZ:+400 的组合卡,
+   * 铺满父框的部件从 1920×1080 变成 2628.7×1478.7,偏了 37%,而画面上它其实还是 1920×1080
+   * 再被整体投影。所以调用方传的是不带 fov 的 visualBox。
+   */
+  const placed = placeParts(tree, { box: parentBox, scale: clipWorld.scale });
   const timing = partsTiming(tree, lookup);
   const fill = (n: PartInstance): EnvelopePart => {
     const def = lookup(n.partId);
@@ -185,10 +193,12 @@ export function envelopeOf(project: Project, clip: TrackClip, card: CardDef<any>
   const motion = clip.motion;
   const timing = timingOf(card, params);
   const staticLc = card?.lifecycle ?? DEFAULT_LIFECYCLE;
-  const world = worldOf(clip.frame, stage);
+  // 三维:visualBox 要按项目的相机投影算,不然摆进空间的卡在 get_clip 里报的是平面位置
+  const world = worldOf(clip.frame, stage, project.camera3dFov);
   // 组合卡:结构和时序都来自部件实例树,不是卡片声明
   const composite = isComposite(clip);
-  const comp = composite ? compositePartsOf(clip.parts ?? [], world, partLookup) : null;
+  // 部件定位用**不带投影**的框(见 compositePartsOf 里的说明):渲染器那边用的就是这个
+  const comp = composite ? compositePartsOf(clip.parts ?? [], visualBox(clip.frame, stage), world, partLookup) : null;
   const lifecycle = {
     ...staticLc,
     ...(roundMs(timing.settleMs) !== undefined ? { settleMs: roundMs(timing.settleMs) } : {}),
@@ -243,15 +253,42 @@ export interface ApplyReport {
 const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
 const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 
-/** 允许写进 frame.local 的键;别的键(比如有人把 world 抄进来)直接拒 */
-const FRAME_KEYS = new Set(["x", "y", "w", "h", "anchor", "scale", "rotate"]);
+/**
+ * 允许写进 frame.local 的键;别的键(比如有人把 world 抄进来)直接拒。
+ *
+ * ⚠ 给 ClipFrame 加字段就要同步这里,否则那个字段一进 frame 就把 set_clip 整个堵死:
+ * envelopeOf 把 clip.frame 原样放进 frame.local,applyEnvelope 在 diff **之前**就校验它 ——
+ * 于是哪怕只想改 params,只要封装里带着 frame 段就一律失败,而且错误信息还会反过来
+ * 告诉 Agent「这个键不合法」,它照做删掉,那张卡的这个属性就没了。
+ * kernel/parts.ts 里还有一份同样的清单,两处要一起改。
+ */
+const FRAME_KEYS = new Set(["x", "y", "w", "h", "anchor", "scale", "rotate", "rotateX", "rotateY", "translateZ"]);
 
+/**
+ * 三维只对**卡片段**生效。素材段(有 mediaId)的预览、导出、see_preview 是三条不同的渲染路径,
+ * 现在还对不齐三维:编辑器预览会按 frame 斜切但没有透视,导出根本不读 frame,
+ * see_preview 走服务端 ffmpeg 只有整幅缩放 —— 三个结果没有一个是对的。
+ *
+ * 拦截放在这里而不是只放在 set_position 那个工具入口:set_clip 是另一条路,
+ * `get_clip` 拿到封装、往 frame.local 里塞个 rotateY 再写回来,一样能绕过去(实测能写进去)。
+ * 凡是能改 frame 的路都会经过 applyEnvelope 或 framePatchFromArgs,两处都守住才是真守住。
+ */
+export function assertNo3dOnMedia(clip: TrackClip, frame: ClipFrame | undefined): void {
+  if (!frame || !(clip as { mediaId?: string }).mediaId) return;
+  const used = (["rotateX", "rotateY", "translateZ"] as const).filter((k) => frame[k] !== undefined && frame[k] !== 0);
+  if (!used.length) return;
+  throw new Error(
+    `${used.join(" / ")} 只对卡片生效,这个 clip 是素材段(视频 / 图片)。` +
+    `素材层的预览、导出、see_preview 走的是三条不同的渲染路径,现在还对不齐三维,设了只会让三处画面互相矛盾。` +
+    `要让素材立体,把它放进一张卡里再摆,或者先导出成图片素材。位置 / 大小 / 平面旋转对素材是正常支持的。`,
+  );
+}
 function validateFrame(raw: unknown): ClipFrame | undefined {
   if (raw === null || raw === undefined) return undefined;
   if (!isObj(raw)) throw new Error("frame.local 要是对象或 null(null = 铺满舞台)");
-  for (const k of Object.keys(raw)) if (!FRAME_KEYS.has(k)) throw new Error(`frame.local 不认识 "${k}",只有 x / y / w / h / anchor / scale / rotate;world 是算出来的,不能写`);
+  for (const k of Object.keys(raw)) if (!FRAME_KEYS.has(k)) throw new Error(`frame.local 不认识 "${k}",只有 x / y / w / h / anchor / scale / rotate / rotateX / rotateY / translateZ;world 是算出来的,不能写`);
   if (!isNum(raw.x) || !isNum(raw.y)) throw new Error("frame.local 的 x、y 必须是数字(锚点在舞台上的位置)");
-  for (const k of ["w", "h", "scale", "rotate"] as const) {
+  for (const k of ["w", "h", "scale", "rotate", "rotateX", "rotateY", "translateZ"] as const) {
     if (raw[k] !== undefined && !isNum(raw[k])) throw new Error(`frame.local.${k} 要是数字`);
   }
   if (raw.w !== undefined && (raw.w as number) <= 0) throw new Error("frame.local.w 要大于 0");
@@ -341,6 +378,7 @@ export function applyEnvelope(
     if (!isObj(env.frame)) throw new Error("frame 要是对象 { local, world };只有 local 能写");
     if ("local" in env.frame) {
       const f = validateFrame(env.frame.local);
+      assertNo3dOnMedia(hit.clip, f);
       if (JSON.stringify(f ?? null) !== JSON.stringify(current.frame.local)) nextFrame = { set: true, frame: f };
     }
   }

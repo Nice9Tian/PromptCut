@@ -256,3 +256,91 @@ test("组合卡:嵌套的部件树原样写回不算改动(enterMs 保持相对�
   const again = envelopeOf(project(clip), clip, compositeCard, STAGE, lookup);
   assert.equal(again.parts[0].children[0].enterMs, 300);
 });
+
+/*
+ * 三维回归。ClipFrame 加了 rotateX / rotateY / translateZ,而这里的 FRAME_KEYS 白名单
+ * 当初没同步 —— 后果不是「三维改不了」,是**这张卡的 set_clip 整个用不了**:
+ * envelopeOf 把 frame 原样放进 frame.local,applyEnvelope 在 diff 之前就无条件校验它,
+ * 于是哪怕只想改 params,只要封装里带着 frame 段就抛错。而错误信息会告诉 Agent
+ * 「rotateY 不是合法的 frame 键」,它照做删掉,那张卡就被摆回平面了。
+ */
+test("三维:摆进空间的卡,封装原样传回不该报错", () => {
+  for (const frame of [
+    { x: 960, y: 540, anchor: [0.5, 0.5], rotateY: 30 },
+    { x: 960, y: 540, anchor: [0.5, 0.5], rotateX: -12 },
+    { x: 960, y: 540, anchor: [0.5, 0.5], translateZ: 200 },
+    { x: 960, y: 540, anchor: [0.5, 0.5], rotateX: 5, rotateY: 30, translateZ: -80 },
+  ]) {
+    const clip = clipOf({ frame });
+    const env = envelopeOf(project(clip), clip, card, STAGE);
+    assert.deepEqual(env.frame.local, frame, "读出来的 local 要原样带着三维那几项");
+    const r = recorder();
+    // 原样传回 = 什么都没改,changed 应该是空的,更不能抛
+    assert.deepEqual(
+      applyEnvelope(project(clip), "c1", env, card, STAGE, r.writer, () => card).changed,
+      [],
+      `frame=${JSON.stringify(frame)} 原样传回不该有改动`,
+    );
+  }
+});
+
+test("三维:能通过 set_clip 把卡摆进空间,也能改回来", () => {
+  const clip = clipOf({ frame: { x: 960, y: 540, anchor: [0.5, 0.5] } });
+  const env = envelopeOf(project(clip), clip, card, STAGE);
+  const r = recorder();
+  const edited = { ...env, frame: { ...env.frame, local: { ...env.frame.local, rotateY: 25, translateZ: 120 } } };
+  const rep = applyEnvelope(project(clip), "c1", edited, card, STAGE, r.writer, () => card);
+  assert.deepEqual(rep.changed, ["frame"]);
+  const wrote = r.calls.find((c) => c[0] === "frame");
+  assert.equal(wrote[2].rotateY, 25);
+  assert.equal(wrote[2].translateZ, 120);
+});
+
+test("三维:frame.local 里的三维项必须是数字", () => {
+  const clip = clipOf({ frame: { x: 960, y: 540 } });
+  const env = envelopeOf(project(clip), clip, card, STAGE);
+  const r = recorder();
+  const bad = { ...env, frame: { ...env.frame, local: { x: 960, y: 540, rotateY: "很多" } } };
+  assert.throws(
+    () => applyEnvelope(project(clip), "c1", bad, card, STAGE, r.writer, () => card),
+    /frame\.local\.rotateY 要是数字/,
+  );
+});
+
+/*
+ * 素材段的三维:set_clip 这条路也要拦住。
+ *
+ * set_position 那边先加了拦截,但 set_clip 是另一条路 —— get_clip 拿到封装、
+ * 往 frame.local 里塞一个 rotateY 再写回来,照样能写进去(审查时实测能写进去)。
+ * 凡是能改 frame 的路都会经过 applyEnvelope,规则放在那儿才是真守住。
+ */
+test("素材段:set_clip 也不能把三维塞进 frame", () => {
+  const mediaClip = { id: "m1", mediaId: "v1", start: 0, end: 3, frame: { x: 960, y: 540, w: 1920, h: 1080 } };
+  const proj = { name: "p", width: 1920, height: 1080, fps: 30, duration: 20, themeId: "t", media: [{ id: "v1", url: "x", kind: "video" }], tracks: [{ id: "t1", kind: "overlay", name: "序列 1", clips: [mediaClip] }], cuts: [] };
+  const env = envelopeOf(proj, mediaClip, undefined, STAGE);
+  const r = recorder();
+  const edited = { ...env, frame: { ...env.frame, local: { ...env.frame.local, rotateY: 35 } } };
+  assert.throws(
+    () => applyEnvelope(proj, "m1", edited, undefined, STAGE, r.writer, () => undefined),
+    /只对卡片生效/,
+  );
+  // 拦下来就一个字都不该写
+  assert.equal(r.calls.length, 0);
+});
+
+test("素材段:平面的位置 / 大小 / 旋转照常能改", () => {
+  const mediaClip = { id: "m1", mediaId: "v1", start: 0, end: 3, frame: { x: 960, y: 540, w: 1920, h: 1080 } };
+  const proj = { name: "p", width: 1920, height: 1080, fps: 30, duration: 20, themeId: "t", media: [{ id: "v1", url: "x", kind: "video" }], tracks: [{ id: "t1", kind: "overlay", name: "序列 1", clips: [mediaClip] }], cuts: [] };
+  const env = envelopeOf(proj, mediaClip, undefined, STAGE);
+  const r = recorder();
+  const edited = { ...env, frame: { ...env.frame, local: { ...env.frame.local, x: 500, rotate: 12 } } };
+  assert.deepEqual(applyEnvelope(proj, "m1", edited, undefined, STAGE, r.writer, () => undefined).changed, ["frame"]);
+});
+
+test("卡片段:三维照常能通过 set_clip 写进去(拦截只针对素材)", () => {
+  const clip = clipOf({ frame: { x: 960, y: 540, anchor: [0.5, 0.5] } });
+  const env = envelopeOf(project(clip), clip, card, STAGE);
+  const r = recorder();
+  const edited = { ...env, frame: { ...env.frame, local: { ...env.frame.local, rotateY: 35 } } };
+  assert.deepEqual(applyEnvelope(project(clip), "c1", edited, card, STAGE, r.writer, () => card).changed, ["frame"]);
+});

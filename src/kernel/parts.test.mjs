@@ -9,7 +9,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { addPart, removePart, updatePart, movePart, validatePartTree, placeParts, partsTiming, findPart, flattenParts, MAX_PART_NODES } from "./parts.ts";
+import { addPart, removePart, updatePart, movePart, validatePartFrame, validatePartTree, placeParts, partsTiming, findPart, flattenParts, MAX_PART_NODES } from "./parts.ts";
 
 const title = {
   id: "text-title", name: "标题", description: "", role: "text",
@@ -121,4 +121,33 @@ test("树有节点上限;frame 写回时重建成固定键序", () => {
   assert.throws(() => validatePartTree(many, lookup), /最多/);
   const ok = validatePartTree([{ id: "a", partId: "text-title", params: { text: "x" }, frame: { scale: 2, y: 1, x: 0, anchor: [0.5, 0.5] } }], lookup);
   assert.deepEqual(Object.keys(ok[0].frame), ["x", "y", "anchor", "scale"]);
+});
+
+/*
+ * 部件级三维:**拒绝**,不是支持。
+ *
+ * clip 级的 FRAME_KEYS 补三维是为了修 set_clip(见 envelope.test.mjs);部件这一层
+ * 一并放行过一版,但渲染接不住 —— CSS 的 perspective 只作用于直接子元素,传不到部件那一格,
+ * 实测部件 rotateY(40°) 的外接框高度在卡片没有 preserve-3d 时是 300.00(纯仿射)、
+ * 有 preserve-3d 时才是 336.44(真透视),而卡片一带 opacity/filter 又回到 300.00。
+ * 三种情况三个结果,所以当场拒掉,理由说清楚。
+ */
+test("部件的 frame 拒绝三维,并告诉调用方该怎么办", () => {
+  for (const k of ["rotateX", "rotateY", "translateZ"]) {
+    assert.throws(
+      () => validatePartFrame({ x: 0, y: 0, [k]: 30 }, "部件 a"),
+      new RegExp(`暂时不支持 ${k}`),
+      `${k} 该被拒`,
+    );
+  }
+  // 报错要指路,不能只说「不认识」
+  assert.throws(() => validatePartFrame({ x: 0, y: 0, rotateY: 30 }, "部件 a"), /set_position/);
+});
+
+test("部件的 frame:平面那几项照常收,而且不带多余的键", () => {
+  assert.deepEqual(validatePartFrame({ x: 1, y: 2, scale: 0.5, rotate: 8 }, "部件 a"), { x: 1, y: 2, scale: 0.5, rotate: 8 });
+});
+
+test("部件的 frame:不认识的键仍然按老话术拒", () => {
+  assert.throws(() => validatePartFrame({ x: 0, y: 0, wat: 1 }, "部件 a"), /不认识 "wat"/);
 });

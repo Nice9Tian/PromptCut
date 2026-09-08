@@ -51,7 +51,24 @@ export function flattenParts(tree: PartInstance[]): PartInstance[] {
 
 const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
 const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
+/**
+ * 部件的 frame 允许哪些键。
+ *
+ * **故意不含 rotateX / rotateY / translateZ** —— 部件级三维现在渲染接不住,放行等于给一个
+ * 假的能力。CSS 的 `perspective` 只作用于直接子元素,链路是
+ * `AnimClock(perspective) → 卡片 div → 部件 div`,要传到部件那一层得靠卡片 div 的 preserve-3d,
+ * 而那个只在**卡片自己的 frame** 是三维时才写。实测部件 rotateY(40°) 的外接框高度:
+ *   卡片 div 无 preserve-3d(卡片是二维时的常态) 300.00 —— 纯仿射斜切,没有近大远小
+ *   卡片 div 有 preserve-3d                      336.44 —— 才是真透视
+ * 而且就算卡片也摆进了空间,只要这张卡带了淡入淡出 / 强调,Stage 会把 opacity / filter
+ * 写在同一个 div 上,透视又归零(实测同样回到 300.00)。
+ *
+ * 三种情况给三个结果,和素材层被 reject3dOnMedia 拒掉是同一个理由:
+ * 宁可当场说不行,也别让 Agent 设了以为成了。要三维就整张卡摆(set_position 的三维参数)。
+ * kernel/envelope.ts 里 clip 级那份清单是**含**三维的,那一层渲染是对的。
+ */
 const FRAME_KEYS = new Set(["x", "y", "w", "h", "anchor", "scale", "rotate"]);
+const PART_3D_KEYS = ["rotateX", "rotateY", "translateZ"];
 
 /** 一棵树最多多少个实例。MCP 传进来的是任意 JSON,没上限的话一次就能塞进几万个节点 */
 export const MAX_PART_NODES = 200;
@@ -59,7 +76,17 @@ export const MAX_PART_NODES = 200;
 export function validatePartFrame(raw: unknown, where: string): ClipFrame | undefined {
   if (raw === null || raw === undefined) return undefined;
   if (!isObj(raw)) throw new Error(`${where} 的 frame 要是对象或 null(null = 铺满父框)`);
-  for (const k of Object.keys(raw)) if (!FRAME_KEYS.has(k)) throw new Error(`${where} 的 frame 不认识 "${k}",只有 x / y / w / h / anchor / scale / rotate`);
+  for (const k of Object.keys(raw)) {
+    if (FRAME_KEYS.has(k)) continue;
+    if (PART_3D_KEYS.includes(k)) {
+      throw new Error(
+        `${where} 的 frame 暂时不支持 ${k}:三维只能整张卡摆(set_position 的 rotateX / rotateY / translateZ),` +
+        `部件那一层拿不到透视,设了只会得到仿射斜切,而且这张卡一带淡入淡出或强调连斜切都会变样。` +
+        `要让这个部件立体,把它单独做成一张卡再摆。`,
+      );
+    }
+    throw new Error(`${where} 的 frame 不认识 "${k}",只有 x / y / w / h / anchor / scale / rotate`);
+  }
   if (!isNum(raw.x) || !isNum(raw.y)) throw new Error(`${where} 的 frame.x / frame.y 必须是数字(锚点在父框里的位置)`);
   for (const k of ["w", "h", "scale", "rotate"] as const) if (raw[k] !== undefined && !isNum(raw[k])) throw new Error(`${where} 的 frame.${k} 要是数字`);
   for (const k of ["w", "h", "scale"] as const) if (raw[k] !== undefined && (raw[k] as number) <= 0) throw new Error(`${where} 的 frame.${k} 要大于 0`);
@@ -77,6 +104,8 @@ export function validatePartFrame(raw: unknown, where: string): ClipFrame | unde
     ...(f.anchor !== undefined ? { anchor: [(f.anchor as number[])[0], (f.anchor as number[])[1]] as [number, number] } : {}),
     ...(f.scale !== undefined ? { scale: f.scale as number } : {}),
     ...(f.rotate !== undefined ? { rotate: f.rotate as number } : {}),
+    // 这里是**显式重建**:上面放行了什么,这里就要有什么,否则会出现「校验通过、值被悄悄丢掉」。
+    // 三维那三项上面直接拒了,所以这里也不该有 —— 两处一起看才说得清。
   };
 }
 
