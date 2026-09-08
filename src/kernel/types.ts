@@ -38,6 +38,14 @@ export interface CardProps<P> {
   t?: number;
   /** clip 总时长(秒) */
   duration?: number;
+  /**
+   * 舞台的画幅和相机。绝大多数卡不需要它 —— 卡片按自己那一格排版,不该关心整个画面多大。
+   *
+   * 只有**自带三维场景**的卡(scene-3d)需要:它要用和 A 层 CSS 完全同一台相机,
+   * 两边的透视强度才对得上。让它自己开一个 fov 参数、再靠人记得填成同一个数,
+   * 是必然会对不上的设计 —— 项目一改 fov,那张卡就悄悄不在同一个空间里了。
+   */
+  stage?: { width: number; height: number; camera3dFov?: number };
 }
 
 /**
@@ -162,8 +170,27 @@ export interface ClipFrame {
   anchor?: [number, number];
   /** 默认 1,绕锚点 */
   scale?: number;
-  /** 度,顺时针,默认 0,绕锚点 */
+  /** 度,顺时针,默认 0,绕锚点。这是**平面内**的旋转(绕 z 轴) */
   rotate?: number;
+
+  /*
+   * ── 三维(可选,不填就完全是老行为,老项目一个字节不变)────────────────
+   *
+   * 单位和 2D 那几项一致:角度是度,`translateZ` 是**舞台像素**,朝观众为正
+   * (和 CSS 的 `translateZ(+)`、和 src/kernel/space3d.ts 的世界 z 同向)。
+   *
+   * 透视强度不在这里 —— 它是**整个舞台**的属性(一个画面只有一台相机),
+   * 存在 project.camera3dFov 上。卡片只说自己在空间里怎么摆,不说别人怎么看它。
+   *
+   * 旋转的正方向照抄 CSS,不自己发明(否则 frameCss 里就得取反,而那种取反没人记得住)。
+   * 两个方向都实测过:perspective 600 下转 40°,近的那条边投影出来更长。
+   */
+  /** 绕水平轴翻转(度)。正值 = **顶边往里倒、底边朝观众抬起来** */
+  rotateX?: number;
+  /** 绕垂直轴翻转(度)。正值 = **右边往里转、左边朝观众转过来** */
+  rotateY?: number;
+  /** 沿深度方向平移(舞台像素),正值朝观众 */
+  translateZ?: number;
 }
 
 export interface ClipMotion {
@@ -241,4 +268,12 @@ export interface Timeline {
   fps: number;
   duration: number; // 秒
   clips: Clip[];
+  /**
+   * 三维透视强度,从 project.camera3dFov 带过来。不开三维时**这个键根本不存在** ——
+   * 老项目的 timeline 对象要逐字段和以前一样。
+   *
+   * 它必须走 Timeline 而不是各个视图各读各的 project:预览(StageView)和导出(ExportView)
+   * 都只拿到 Timeline,漏一处就是「预览有透视、导出没有」,而那种分叉不报错。
+   */
+  camera3dFov?: number;
 }

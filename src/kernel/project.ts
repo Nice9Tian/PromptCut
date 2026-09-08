@@ -214,6 +214,17 @@ export interface Project {
   fps: number;
   duration: number; // 秒
   themeId: string;
+  /**
+   * 三维透视强度(垂直视场角,度)。**一个画面只有一台相机**,所以它在项目上,不在卡片上。
+   *
+   * 不填 = 不开三维:舞台不加 perspective,所有卡片的渲染和以前一模一样。
+   * 只有卡片真的用了 rotateX/rotateY/translateZ 时才需要它 —— 没有 perspective 的话
+   * 那几个变换会退化成仿射拉伸(平行线仍然平行),看着像"歪了"而不是"立起来了"。
+   *
+   * 为什么存 fov 而不是相机距离:距离和画幅绑死(竖屏 H 从 1080 变 1920,同一个距离
+   * 透视强度就变了),而 fov 跨画幅稳定。换算见 src/kernel/space3d.ts。
+   */
+  camera3dFov?: number;
   media: MediaAsset[];
   tracks: Track[];
   /** 全部剪辑,按选项栏顺序。老文件没有这个字段,加载时 normalizeCuts 补成三条 */
@@ -281,7 +292,8 @@ export function flattenOverlay(p: Project): Timeline {
       });
     }
   }
-  return { width: p.width, height: p.height, fps: p.fps, duration: p.duration, clips };
+  // 三维只在真开了的时候才带这个键:老项目的 timeline 对象要和以前完全一样
+  return { width: p.width, height: p.height, fps: p.fps, duration: p.duration, clips, ...(p.camera3dFov ? { camera3dFov: p.camera3dFov } : null) };
 }
 
 /** 某时刻该播哪一段素材(按序列顺序找第一条命中的素材段) */

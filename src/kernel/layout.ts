@@ -15,6 +15,7 @@
  */
 import type { CSSProperties } from "react";
 import type { ClipFrame } from "./types";
+import { cameraFor, projectStage } from "./space3d.ts";
 
 export interface Size {
   width: number;
@@ -38,6 +39,12 @@ export interface FrameResolved {
   anchor: [number, number];
   scale: number;
   rotate: number;
+  /** 绕水平轴(度)。0 = 不翻 */
+  rotateX: number;
+  /** 绕垂直轴(度)。0 = 不翻 */
+  rotateY: number;
+  /** 深度平移(舞台像素),朝观众为正。0 = 在屏幕平面上 */
+  translateZ: number;
 }
 
 /** 补全默认值:没有 frame = 铺满父坐标系 */
@@ -50,7 +57,21 @@ export function resolveFrame(frame: ClipFrame | undefined, parent: Size): FrameR
     anchor: frame?.anchor ?? [0, 0],
     scale: frame?.scale ?? 1,
     rotate: frame?.rotate ?? 0,
+    rotateX: frame?.rotateX ?? 0,
+    rotateY: frame?.rotateY ?? 0,
+    translateZ: frame?.translateZ ?? 0,
   };
+}
+
+/**
+ * 这个 frame 有没有用到三维。
+ *
+ * frameCss(要不要写 preserve-3d)和 visualBox(要不要走投影)都问它 ——
+ * 两处各写一遍 `rotateX || rotateY || translateZ` 的话,以后加第四个三维字段
+ * 一定会漏掉其中一处,而漏掉不报错,只是某一边悄悄按二维算。
+ */
+export function frameIs3D(frame: ClipFrame | undefined | FrameResolved): boolean {
+  return !!(frame?.rotateX || frame?.rotateY || frame?.translateZ);
 }
 
 /** 框在父坐标系里的矩形:锚点在 (x,y),左上角 = (x,y) 减去锚点在框内的偏移 */
@@ -76,25 +97,68 @@ export interface WorldPlacement {
 }
 
 /**
- * 缩放 + 旋转之后的外接矩形(AABB)。
- * scale 是均匀的,和 rotate 可交换,所以不用管 CSS transform 列表的顺序;两者都绕锚点。
+ * 变换之后在画面上占的外接矩形(AABB)。
+ *
+ * 四个角走**和 frameCss 完全一样的一串变换**,最后按透视投影落到屏幕上。
+ * CSS 的 transform 列表是右边的先作用,`frameCss` 写的是
+ * `translateZ rotateX rotateY scale rotate`,所以顺序是:
+ * 先平面旋转 → 缩放 → 绕 y 翻 → 绕 x 翻 → 沿 z 平移 → 投影。
+ *
+ * `fovDeg` 就是项目的 `camera3dFov`:
+ *   - 不传(项目没开三维)= 没有透视,三维那几项只造成仿射压缩(rotateY 把宽压成 cos θ 倍),
+ *     这也正是画面上真实发生的事 —— 所以照样要算,不能当它们不存在;
+ *   - 传了就按针孔相机投影,和 CSS 的 perspective 是同一个公式(见 space3d.ts)。
+ *
+ * **越过相机平面的降级**:卡片被推到相机上或相机后面(translateZ ≥ 相机距离)时,投影没有意义。
+ * 这里把角点的 z 夹在相机前面一点点,于是得到一个**很大但有限**的框 ——
+ * 大于舞台的框 clampToStage 本来就不夹(见那里的注释),get_layout 上也一眼看得出"这卡飞了"。
+ * 不返回 Infinity 是因为那会顺着算进 NaN,而 NaN 会安静地毁掉后面每一个判断。
  */
-export function visualBox(frame: ClipFrame | undefined, parent: Size): Box {
+export function visualBox(frame: ClipFrame | undefined, parent: Size, fovDeg?: number): Box {
   const f = resolveFrame(frame, parent);
   const b = frameBox(frame, parent);
   const rad = (f.rotate * Math.PI) / 180;
-  const cos = Math.cos(rad);
-  const sin = Math.sin(rad);
+  const cos = Math.cos(rad), sin = Math.sin(rad);
+  const rx = (f.rotateX * Math.PI) / 180;
+  const ry = (f.rotateY * Math.PI) / 180;
+  const cosX = Math.cos(rx), sinX = Math.sin(rx);
+  const cosY = Math.cos(ry), sinY = Math.sin(ry);
+  const is3D = frameIs3D(f);
+  // 相机只在项目开了三维时才存在;没开就是平行投影
+  const distance = fovDeg ? cameraFor(parent, fovDeg).distance : Infinity;
+  const zCap = Number.isFinite(distance) ? distance * 0.98 : Infinity;
+
   const corners: [number, number][] = [
     [b.left, b.top], [b.left + b.width, b.top], [b.left, b.top + b.height], [b.left + b.width, b.top + b.height],
   ];
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-  for (const [cx, cy] of corners) {
-    const dx = (cx - f.x) * f.scale;
-    const dy = (cy - f.y) * f.scale;
-    const rx = f.x + dx * cos - dy * sin;
-    const ry = f.y + dx * sin + dy * cos;
-    x0 = Math.min(x0, rx); y0 = Math.min(y0, ry); x1 = Math.max(x1, rx); y1 = Math.max(y1, ry);
+  for (const [cxi, cyi] of corners) {
+    // 绕锚点:先平面旋转,再缩放(均匀缩放和旋转可交换,顺序无所谓)
+    const dx0 = (cxi - f.x) * f.scale;
+    const dy0 = (cyi - f.y) * f.scale;
+    let x = dx0 * cos - dy0 * sin;
+    let y = dx0 * sin + dy0 * cos;
+    let z = 0;
+    if (is3D) {
+      // rotateY:x' = x·cosθ + z·sinθ,z' = −x·sinθ + z·cosθ
+      const nx = x * cosY + z * sinY;
+      z = -x * sinY + z * cosY;
+      x = nx;
+      // rotateX:y' = y·cosθ − z·sinθ,z' = y·sinθ + z·cosθ
+      const ny = y * cosX - z * sinX;
+      z = y * sinX + z * cosX;
+      y = ny;
+      z += f.translateZ;
+    }
+    const sx = f.x + x;
+    const sy = f.y + y;
+    let px = sx, py = sy;
+    if (fovDeg && is3D) {
+      const p = projectStage({ x: sx, y: sy, z: Math.min(z, zCap) }, parent, fovDeg);
+      // zCap 保证了 p 不会是 null;真为 null 时退回未投影的点,总比 NaN 强
+      if (p) { px = p.x; py = p.y; }
+    }
+    x0 = Math.min(x0, px); y0 = Math.min(y0, py); x1 = Math.max(x1, px); y1 = Math.max(y1, py);
   }
   return { left: x0, top: y0, width: x1 - x0, height: y1 - y0 };
 }
@@ -102,10 +166,19 @@ export function visualBox(frame: ClipFrame | undefined, parent: Size): Box {
 /**
  * 局部框 → 世界描述。卡片级:父 = 舞台,原点重合,所以就是把 frame 补全再算两个矩形。
  * 部件级接进来时这里改成:parentWorld 的 box.left/top 加上局部 x,y,scale 相乘。
+ *
+ * 字段**逐个列出来**而不是 `...f`:resolveFrame 现在还带着 rotateX / rotateY / translateZ,
+ * 展开进去的话每个 clip(包括从没碰过三维的老项目)的 world 里都会多出三个 0,
+ * 而 world 的语义是「投影之后在画面上的样子」,那三个是投影**之前**的局部量 ——
+ * Agent 看见它们会以为 world 也能写三维。它们在 frame.local 里,该在那儿看。
  */
-export function worldOf(frame: ClipFrame | undefined, parent: Size): WorldPlacement {
+export function worldOf(frame: ClipFrame | undefined, parent: Size, fovDeg?: number): WorldPlacement {
   const f = resolveFrame(frame, parent);
-  return { ...f, box: frameBox(frame, parent), visualBox: visualBox(frame, parent) };
+  return {
+    x: f.x, y: f.y, anchor: f.anchor, w: f.w, h: f.h, scale: f.scale, rotate: f.rotate,
+    box: frameBox(frame, parent),
+    visualBox: visualBox(frame, parent, fovDeg),
+  };
 }
 
 /**
@@ -126,6 +199,12 @@ export interface PositionArgs {
   anchor?: [number, number];
   scale?: number;
   rotate?: number;
+  /** 绕水平轴翻转(度),正值 = 顶边往里倒。要项目开了 camera3dFov 才看得出透视 */
+  rotateX?: number;
+  /** 绕垂直轴翻转(度),正值 = 右边往里转。同上 */
+  rotateY?: number;
+  /** 深度平移(舞台像素),正值朝观众 */
+  translateZ?: number;
 }
 
 /**
@@ -148,6 +227,11 @@ export function framePatchFromArgs(args: PositionArgs, parent: Size): Partial<Cl
   num("h", args.h, (n) => (n > 0 ? null : `h 必须大于 0,收到 ${n}`));
   num("scale", args.scale, (n) => (n > 0 ? null : `scale 必须大于 0,收到 ${n};要隐藏卡片用 remove_clip 或 opacity,不要缩到 0`));
   num("rotate", args.rotate);
+  // 三维。角度不设上下限(转 720° 是合法的动画意图),translateZ 也不限 ——
+  // 推到相机后面会被 projectStage 判成不可见,那是渲染层的事,不该在参数校验里替它决定
+  num("rotateX", args.rotateX);
+  num("rotateY", args.rotateY);
+  num("translateZ", args.translateZ);
   if (args.anchor !== undefined) {
     const a = args.anchor;
     if (!Array.isArray(a) || a.length !== 2 || !a.every((n) => typeof n === "number" && Number.isFinite(n))) {
@@ -156,7 +240,7 @@ export function framePatchFromArgs(args: PositionArgs, parent: Size): Partial<Cl
     out.anchor = [a[0], a[1]];
   }
   if (Object.keys(out).length === 0) {
-    throw new Error("set_position 至少要传 x / y / w / h / anchor / scale / rotate 中的一项,或 clear:true");
+    throw new Error("set_position 至少要传 x / y / w / h / anchor / scale / rotate / rotateX / rotateY / translateZ 中的一项,或 clear:true");
   }
   return args.space === "world" ? localFromWorld(out, parent) : out;
 }
@@ -182,6 +266,17 @@ export function frameCss(frame: ClipFrame | undefined, parent: Size, translate?:
   }
   const f = resolveFrame(frame, parent);
   const box = frameBox(frame, parent);
+  /*
+   * 三维那几项排在 scale / rotate **前面**(CSS 里靠左 = 后作用 = 更外层),
+   * 对应的心智模型是「先在平面里排好版,再把整张卡摆进空间」——
+   * 反过来的话,倾斜会被后面的缩放拉伸,用户调 scale 时会发现透视跟着变形。
+   *
+   * 三项全为 0 时一个字符都不往 transform 里加:老项目的导出有逐像素基线,
+   * 哪怕多一个恒等变换都可能让合成器换一条光栅路径。
+   */
+  if (f.translateZ !== 0) parts.push(`translateZ(${f.translateZ}px)`);
+  if (f.rotateX !== 0) parts.push(`rotateX(${f.rotateX}deg)`);
+  if (f.rotateY !== 0) parts.push(`rotateY(${f.rotateY}deg)`);
   if (f.scale !== 1) parts.push(`scale(${f.scale})`);
   if (f.rotate !== 0) parts.push(`rotate(${f.rotate}deg)`);
   return {
@@ -193,6 +288,21 @@ export function frameCss(frame: ClipFrame | undefined, parent: Size, translate?:
     transformOrigin: `${f.anchor[0] * 100}% ${f.anchor[1] * 100}%`,
     ...(parts.length ? { transform: parts.join(" ") } : null),
     ...(translate ? { willChange: "transform" } : null),
+    /*
+     * 只有真的用到三维才写 preserve-3d,没用三维的卡走的还是和以前一模一样的那条路。
+     *
+     * 它管的是**这张卡内部的子元素**能不能有自己的空间关系,不管这张卡自己怎么被投影 ——
+     * 卡片自身的透视由父层的 perspective 决定(见 kernel/Stage.tsx)。
+     *
+     * 顺带记一条实测,因为它反直觉:`opacity` / `filter` / `overflow:hidden` 确实会把
+     * 这个元素的 transform-style **打回 flat**,但那只影响它的子树,
+     * **卡片自己的投影一点不变**。同一张 rotateY(40°) 的卡,三个属性各加一遍:
+     *   基线 / +opacity:0.5 / +filter:drop-shadow / +overflow:hidden
+     *   外框都是 154.88×133.93,左右两边高都是 133.93 / 108.69 —— 四组逐位相同。
+     * Stage 会在卡片外层写 opacity(淡入淡出)和 filter(强调),所以这条必须钉住:
+     * 那两个属性**不会**让摆进空间的卡突然摊平。
+     */
+    ...(frameIs3D(f) ? { transformStyle: "preserve-3d" as const } : null),
   };
 }
 
@@ -293,22 +403,54 @@ export function alignIsInvisible(frame: ClipFrame | undefined, parent: Size): bo
  * 把框夹回父坐标系里:可见框(缩放旋转后)超出哪条边就往回挪多少。
  * 比父坐标系还大的框夹不回来,原样返回 —— 那是 scale 的事,不是位置的事。
  * 给 nudge / set_position 的 clamp 用:「再往右 300」不该把卡推出屏幕。
+ *
+ * # 三维下要换算,而且要迭代
+ *
+ * 越界量是在**投影后**的画面上量的,而 `x/y` 存的是**投影前**的局部坐标,
+ * 两者差一个 `d/(d−z)` 倍。直接把画面上的越界量加到 x 上,结果是:
+ *   - z 为负(往里推,倍率 < 1):挪得不够,夹完还在画外。实测 translateZ:-800 的卡
+ *     连夹三次,右边仍在 2002.5 → 1948.9 → 1930.1,永远贴不到 1920;
+ *   - z 为正(朝观众,倍率 > 1):挪过头。实测 translateZ:700 的卡夹完右边落在 849.6,
+ *     离该贴的 1920 差了大半屏 —— 卡片没出画,但被拽到了一个谁也没要求的位置。
+ *
+ * 所以先除以锚点处的投影倍率再挪。旋转过的卡四个角倍率各不相同,一次除不干净,
+ * 再迭代几轮收到不动点为止 —— 收敛得很快,纯 translateZ 一轮就够。
  */
-export function clampToStage(frame: ClipFrame | undefined, parent: Size): ClipFrame {
-  const f = resolveFrame(frame, parent);
-  const vb = visualBox(frame, parent);
-  let dx = 0;
-  let dy = 0;
-  if (vb.width <= parent.width) {
-    if (vb.left < 0) dx = -vb.left;
-    else if (vb.left + vb.width > parent.width) dx = parent.width - (vb.left + vb.width);
+const CLAMP_PASSES = 6;
+
+export function clampToStage(frame: ClipFrame | undefined, parent: Size, fovDeg?: number): ClipFrame {
+  const f0 = resolveFrame(frame, parent);
+  let cur: ClipFrame = { ...frame, x: f0.x, y: f0.y };
+  let moved = false;
+
+  for (let pass = 0; pass < CLAMP_PASSES; pass++) {
+    const f = resolveFrame(cur, parent);
+    const vb = visualBox(cur, parent, fovDeg);
+    let dx = 0;
+    let dy = 0;
+    if (vb.width <= parent.width) {
+      if (vb.left < 0) dx = -vb.left;
+      else if (vb.left + vb.width > parent.width) dx = parent.width - (vb.left + vb.width);
+    }
+    if (vb.height <= parent.height) {
+      if (vb.top < 0) dy = -vb.top;
+      else if (vb.top + vb.height > parent.height) dy = parent.height - (vb.top + vb.height);
+    }
+    if (dx === 0 && dy === 0) break;
+    // 锚点处的投影倍率:锚点就是变换原点,旋转不动它,所以它的深度就是 translateZ
+    const k = fovDeg && frameIs3D(f)
+      ? projectStage({ x: f.x, y: f.y, z: f.translateZ }, parent, fovDeg)?.scale || 1
+      : 1;
+    cur = { ...cur, x: f.x + dx / k, y: f.y + dy / k };
+    moved = true;
+    // 二维时一轮就是精确解,不必再走一遍(也保证结果和以前逐位相同)
+    if (k === 1) break;
+    if (Math.abs(dx) < 0.01 && Math.abs(dy) < 0.01) break;
   }
-  if (vb.height <= parent.height) {
-    if (vb.top < 0) dy = -vb.top;
-    else if (vb.top + vb.height > parent.height) dy = parent.height - (vb.top + vb.height);
-  }
-  if (dx === 0 && dy === 0) return { ...frame, x: f.x, y: f.y };
-  return { ...frame, x: f.x + dx, y: f.y + dy };
+
+  if (!moved) return { ...frame, x: f0.x, y: f0.y };
+  const f = resolveFrame(cur, parent);
+  return { ...frame, x: f.x, y: f.y };
 }
 
 export type SafeSide = "left" | "right" | "top" | "bottom";

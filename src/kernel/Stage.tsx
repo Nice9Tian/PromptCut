@@ -1,5 +1,6 @@
 import { AnimClock } from "./AnimClock";
 import { frameCss } from "./layout";
+import { perspectivePx } from "./space3d";
 import { motionAt } from "./motion";
 import { cardOpacityAt, hasOpacityControls } from "./project";
 import { emphasisFilter } from "./emphasis";
@@ -17,12 +18,55 @@ const LEAD = 0.05;
  */
 export function Stage({ timeline, t, playToken, speed = 1 }: { timeline: Timeline; t: number; playToken: number; speed?: number }) {
   const active = timeline.clips.filter((c) => t >= c.start - LEAD && t < c.end);
+  // 自带三维场景的卡(scene-3d)要用和 A 层同一台相机,所以把画幅和 fov 一起递下去。
+  // 对象整体透传,别的卡收到了也不看。
+  const stageInfo = { width: timeline.width, height: timeline.height, camera3dFov: timeline.camera3dFov };
   return (
     <div
       className="pc-stage"
       style={{ position: "relative", width: timeline.width, height: timeline.height, overflow: "hidden", background: "transparent" }}
     >
-      <AnimClock speed={speed}>
+      {/*
+        三维的透视挂在这一层,不是挂在舞台那一格 —— 因为 CSS 的 `perspective`
+        **只作用于直接子元素**,而卡片 div 的直接父元素就是 AnimClock 这一层。
+        往外挪一格就会静悄悄失效(实测:卡片高度一点不变,rotateY 只剩仿射拉伸),
+        而且外面那格还有 overflow:hidden,它会把 transform-style 强制打回 flat。
+
+        放在 Stage 里而不是各个视图里,是为了让预览和导出走同一条路:
+        StageView / ExportView 拿到的都只是 Timeline,任何一方漏写就是
+        「预览有透视、导出没有」,而那种分叉不报错。
+
+        perspective 的值就是相机到 z=0 平面的距离,和 three.js 那边同一个数、
+        同一个单位(见 kernel/space3d.ts)—— A 层和 B 层不用标定就能对齐,靠的就是这个。
+        不开三维时一个属性都不加:老项目的导出有逐像素基线。
+
+        **这里没有 transform-style: preserve-3d,是故意的。** 直觉上「开三维就该加上它」,
+        实测下来它做的完全是另一件事(perspective 618、一张 translateZ(-300) 的卡):
+
+          无 perspective            卡片投影宽 300.00   画面上在前的是 DOM 靠后那张
+          perspective + preserve-3d 卡片投影宽 201.96   画面上在前的变成 z 更近那张
+          只有 perspective          卡片投影宽 201.96   画面上在前的仍是 DOM 靠后那张
+
+        投影宽两行一模一样 —— 它**对透视一点贡献都没有**;它唯一的作用是把兄弟卡片
+        从「按 DOM 顺序叠」改成「按 z 深度排序」。那正好推翻这套设计写死的两条约定:
+        谁盖住谁只看序列(trackId),以及卡片之间不做穿插。加上它的话,Agent 把最上层的卡
+        往里推一点(translateZ 负值),它会立刻被下面所有卡盖住 —— 和工具描述承诺的相反。
+
+        它还会顺手改掉**没碰过三维的卡**的像素:一张只有 scale+rotate 的卡,截图 sha256
+        在「不开三维」和「只有 perspective」下相同,加了 preserve-3d 就变了。
+        也就是说一旦有人调 set_camera3d,画面里另外那些卡全部换了光栅路径。
+      */}
+      <AnimClock
+        speed={speed}
+        style={
+          timeline.camera3dFov
+            ? {
+                perspective: `${perspectivePx({ width: timeline.width, height: timeline.height }, timeline.camera3dFov)}px`,
+                perspectiveOrigin: "50% 50%",
+              }
+            : undefined
+        }
+      >
         {active.map((clip) => {
           const def = getCard(clip.cardId);
           if (!def) return null;
@@ -59,7 +103,7 @@ export function Stage({ timeline, t, playToken, speed = 1 }: { timeline: Timelin
                 // 组合卡:部件实例树逐级渲染,画布尺寸就是这张卡的框(没有框 = 整个舞台)
                 <PartTree parts={clip.parts} size={frameBox(clip.frame, timeline)} t={Math.max(0, t - clip.start)} playToken={playToken} />
               ) : (
-                <C params={{ ...def.defaults, ...clip.params }} playToken={playToken} t={Math.max(0, t - clip.start)} duration={clip.end - clip.start} />
+                <C params={{ ...def.defaults, ...clip.params }} playToken={playToken} t={Math.max(0, t - clip.start)} duration={clip.end - clip.start} stage={stageInfo} />
               )}
             </div>
           );

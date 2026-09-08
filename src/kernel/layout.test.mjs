@@ -45,7 +45,11 @@ test("右下锚点贴到舞台右下角", () => {
 });
 
 test("省略 w/h 就是舞台尺寸;省略 anchor 就是左上角", () => {
-  assert.deepEqual(resolveFrame({ x: 100, y: 50 }, STAGE), { x: 100, y: 50, w: 1920, h: 1080, anchor: [0, 0], scale: 1, rotate: 0 });
+  // 三维那三项的默认值也一起钉住:它们必须默认为 0,否则「没开三维的项目渲染不变」这条就破了
+  assert.deepEqual(resolveFrame({ x: 100, y: 50 }, STAGE), {
+    x: 100, y: 50, w: 1920, h: 1080, anchor: [0, 0], scale: 1, rotate: 0,
+    rotateX: 0, rotateY: 0, translateZ: 0,
+  });
   assert.deepEqual(frameBox({ x: 100, y: 50 }, STAGE), { left: 100, top: 50, width: 1920, height: 1080 });
 });
 
@@ -250,4 +254,123 @@ test("nudgeFrame:空调用和非正倍数都拒", () => {
   assert.throws(() => nudgeFrame({}, undefined, STAGE), /至少要传/);
   assert.throws(() => nudgeFrame({ scaleBy: 0 }, undefined, STAGE), /scaleBy 是倍数/);
   assert.throws(() => nudgeFrame({ dx: "5" }, undefined, STAGE), /dx 必须是有限数字/);
+});
+
+/*
+ * 三维。硬要求是**没用到三维的项目,输出一个字节都不变** ——
+ * 老项目的导出有逐像素基线,哪怕多一个恒等变换都可能让合成器换一条光栅路径。
+ */
+test("三维:三项都不填时,transform 和以前完全一样,也不加 preserve-3d", () => {
+  const before = frameCss({ x: 960, y: 540, w: 400, h: 200, anchor: [0.5, 0.5], scale: 2, rotate: 15 }, STAGE);
+  assert.equal(before.transform, "scale(2) rotate(15deg)");
+  assert.equal(before.transformStyle, undefined, "没用三维就不该建立 3D 渲染上下文");
+});
+
+test("三维:translateZ / rotateX / rotateY 各自写进 transform", () => {
+  const css = frameCss({ x: 0, y: 0, translateZ: 120, rotateX: 20, rotateY: -35 }, STAGE);
+  assert.match(css.transform, /translateZ\(120px\)/);
+  assert.match(css.transform, /rotateX\(20deg\)/);
+  assert.match(css.transform, /rotateY\(-35deg\)/);
+});
+
+test("三维排在 scale/rotate 前面:先在平面里排版,再整张摆进空间", () => {
+  const css = frameCss({ x: 0, y: 0, translateZ: 100, rotateY: 30, scale: 2, rotate: 10 }, STAGE);
+  assert.equal(css.transform, "translateZ(100px) rotateY(30deg) scale(2) rotate(10deg)");
+  // 反过来的话倾斜会被后面的缩放拉伸,用户调 scale 时会发现透视跟着变形
+  assert.ok(css.transform.indexOf("rotateY") < css.transform.indexOf("scale"));
+});
+
+test("三维:用到了才加 preserve-3d —— 它只管卡片内部,没用到就一个字都不写", () => {
+  assert.equal(frameCss({ x: 0, y: 0, translateZ: 1 }, STAGE).transformStyle, "preserve-3d");
+  assert.equal(frameCss({ x: 0, y: 0, rotateX: 1 }, STAGE).transformStyle, "preserve-3d");
+  assert.equal(frameCss({ x: 0, y: 0, rotateY: 1 }, STAGE).transformStyle, "preserve-3d");
+  assert.equal(frameCss({ x: 0, y: 0, scale: 3, rotate: 90 }, STAGE).transformStyle, undefined);
+});
+
+test("三维:没有 frame 的那条老路一点都没动", () => {
+  assert.deepEqual(frameCss(undefined, STAGE), { position: "absolute", inset: 0 });
+});
+
+/*
+ * 三维下的 visualBox / clamp。
+ *
+ * 这里出错不会报任何错,只会让两个判断悄悄给出平面时代的答案:
+ *   - clamp:true 以为卡片还在画面里,什么都不做,卡片其实已经飞出去了;
+ *   - get_layout 返回的 visualBox 和屏幕上实际占的地方对不上,Agent 据此判遮挡会判错。
+ */
+test("三维:visualBox 走透视投影 —— 往观众推会变大,而且离画面中心越远推得越出格", () => {
+  const stage = { width: 1920, height: 1080 };
+  const flat = visualBox({ x: 960, y: 540, w: 400, h: 200, anchor: [0.5, 0.5] }, stage, 40);
+  assert.equal(Math.round(flat.width), 400, "z=0 时不该有任何变化");
+
+  // 相机距离 d = 1080 / (2·tan20°) ≈ 1483.6;推到 z=700,放大 d/(d−700) ≈ 1.893
+  const near = visualBox({ x: 960, y: 540, w: 400, h: 200, anchor: [0.5, 0.5], translateZ: 700 }, stage, 40);
+  assert.ok(Math.abs(near.width - 400 * 1.893) < 4, `该放大到 ≈757,实得 ${near.width}`);
+
+  const far = visualBox({ x: 960, y: 540, w: 400, h: 200, anchor: [0.5, 0.5], translateZ: -700 }, stage, 40);
+  assert.ok(far.width < 400, `往里推该变小,实得 ${far.width}`);
+});
+
+test("三维:clamp 要真的贴到边,而且两个方向都不能过冲", () => {
+  const stage = { width: 1920, height: 1080 };
+  const edge = (f) => { const vb = visualBox(f, stage, 40); return vb.left + vb.width; };
+
+  /*
+   * 越界量是在**投影后**量的,x 存的是投影前的 —— 差一个 d/(d−z) 倍。
+   * 不换算的话:z 为负挪不够(夹完还在画外),z 为正挪过头(被拽到大半屏之外)。
+   * 这条测试当初只测了 z 为正、断言又只写了 right <= 1920.5,过冲照样通过,所以没抓到。
+   */
+  for (const z of [-800, -300, 0, 300, 700]) {
+    const frame = { x: 2400, y: 540, w: 800, h: 450, anchor: [0.5, 0.5], ...(z ? { translateZ: z } : null) };
+    const c = clampToStage(frame, stage, 40);
+    const right = edge(c);
+    assert.ok(right <= 1920.5, `z=${z}:夹完还出画,右边在 ${right}`);
+    assert.ok(right >= 1919.5, `z=${z}:夹过头了,右边只到 ${right},该贴着 1920`);
+    // 幂等:再夹一次不该再动
+    const again = clampToStage(c, stage, 40);
+    assert.ok(Math.abs(again.x - c.x) < 0.01, `z=${z}:再夹一次又动了 ${c.x} → ${again.x}`);
+  }
+});
+
+test("三维:不给 fov 时 clamp 和以前逐位相同(纯二维那条老路不能动)", () => {
+  const stage = { width: 1920, height: 1080 };
+  for (const frame of [
+    { x: 2400, y: 540, w: 800, h: 450, anchor: [0.5, 0.5] },
+    { x: -300, y: 900, w: 400, h: 200, anchor: [0.5, 0.5], scale: 1.4, rotate: 20 },
+    { x: 960, y: 540, w: 400, h: 200, anchor: [0.5, 0.5] },
+  ]) {
+    const c = clampToStage(frame, stage);
+    const vb = visualBox(c, stage);
+    assert.ok(vb.left >= -0.5 && vb.left + vb.width <= stage.width + 0.5, `没夹回来:${JSON.stringify(vb)}`);
+  }
+});
+
+test("三维:clamp 拉不回来的(投影后比舞台还大)原样返回,不乱挪", () => {
+  const stage = { width: 1920, height: 1080 };
+  const d = 1080 / (2 * Math.tan((40 * Math.PI) / 360));
+  const frame = { x: 960, y: 540, w: 400, h: 200, anchor: [0.5, 0.5], translateZ: d + 500 };
+  assert.equal(clampToStage(frame, stage, 40).x, 960);
+});
+test("三维:没开相机时 rotateY 只是仿射压缩,visualBox 也要照实算", () => {
+  const stage = { width: 1920, height: 1080 };
+  const vb = visualBox({ x: 960, y: 540, w: 400, h: 200, anchor: [0.5, 0.5], rotateY: 60 }, stage);
+  // cos60° = 0.5,宽压成一半;没有透视所以高度不变
+  assert.ok(Math.abs(vb.width - 200) < 0.5, `该压成 200,实得 ${vb.width}`);
+  assert.ok(Math.abs(vb.height - 200) < 0.5, `高度不该变,实得 ${vb.height}`);
+});
+
+test("三维:卡片推到相机后面时给一个很大但有限的框,不能是 NaN / Infinity", () => {
+  const stage = { width: 1920, height: 1080 };
+  const d = 1080 / (2 * Math.tan((40 * Math.PI) / 360));
+  const vb = visualBox({ x: 960, y: 540, w: 400, h: 200, anchor: [0.5, 0.5], translateZ: d + 500 }, stage, 40);
+  assert.ok(Number.isFinite(vb.width) && Number.isFinite(vb.left), `不能出 NaN/Infinity:${JSON.stringify(vb)}`);
+  assert.ok(vb.width > stage.width, "越过相机平面的卡,框该大到一眼看得出不对");
+  // 比舞台还大的框 clampToStage 本来就不夹,所以不会被拉出个荒唐的位置
+  const clamped = clampToStage({ x: 960, y: 540, w: 400, h: 200, anchor: [0.5, 0.5], translateZ: d + 500 }, stage, 40);
+  assert.equal(clamped.x, 960);
+});
+
+test("三维:world 里不该多出 rotateX / rotateY / translateZ(它们是投影之前的局部量)", () => {
+  const w = worldOf({ x: 10, y: 20, w: 100, h: 50, rotateY: 30 }, { width: 1920, height: 1080 }, 40);
+  assert.deepEqual(Object.keys(w).sort(), ["anchor", "box", "h", "rotate", "scale", "visualBox", "w", "x", "y"]);
 });

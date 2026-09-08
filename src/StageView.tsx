@@ -6,6 +6,7 @@ import { getPart } from "./parts/registry";
 import { flattenOverlay, type Project } from "./kernel/project";
 import { installStageClock } from "./render/stageClock";
 import { createAnimationPinner } from "./render/pinAnimations";
+import { canvasBox } from "./editor/left/contentBox";
 import { themeStyle } from "./themes";
 import "./cards";
 
@@ -227,7 +228,14 @@ export default function StageView() {
         let l = Infinity, t = Infinity, r = -Infinity, b = -Infinity;
         const walk = (el: Element) => {
           if (isSolid(el)) {
-            const rc = el.getBoundingClientRect();
+            /*
+             * canvas 要先扫像素:元素矩形永远是整块画布,而三维卡(scene-3d)、粒子卡多半
+             * 铺满整幅、四周全是透明的。不扫的话 get_layout 的 contentBox 会报「这张卡占满全屏」,
+             * 而工具描述明写「判断会不会盖住人看 contentBox」—— Agent 会以为字幕无处可放。
+             * 扫不出来(画布被污染、真的整块都画了)就退回元素矩形。
+             */
+            const painted = el.tagName === "CANVAS" ? canvasBox(el as HTMLCanvasElement) : null;
+            const rc = painted ?? el.getBoundingClientRect();
             if (rc.width > 0 && rc.height > 0) {
               l = Math.min(l, rc.left); t = Math.min(t, rc.top);
               r = Math.max(r, rc.right); b = Math.max(b, rc.bottom);
@@ -309,6 +317,12 @@ export default function StageView() {
         overflow: "hidden",
         background: "transparent",
         ...themeStyle(project.themeId),
+        /*
+         * 三维的 perspective **不在这里**。这一格和卡片之间还隔着 .pc-stage 和 AnimClock
+         * 两层 div,而 CSS 的 perspective 只作用于直接子元素 —— 挂在这里等于没挂
+         * (实测卡片高度纹丝不动,rotateY 只剩仿射拉伸,而且不报错)。
+         * 它挂在 kernel/Stage.tsx 里卡片的直接父元素上,预览和导出共用同一处。
+         */
       }}
     >
       <Stage timeline={timeline} t={t} playToken={token} />
