@@ -1,10 +1,14 @@
 import type { Plugin, ViteDevServer } from "vite";
 import type { ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import fs from "node:fs";
 import fsp from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { PNG } from "pngjs";
+import { cardsOnly, composeFrame, extractArgs, mediaLayersAt } from "./vision-compose.mjs";
+import { mediaDir } from "./vite-plugin-media";
 
 /**
  * 给模型一双眼睛:把「时间轴第 t 秒长什么样」渲染成一张图交回去。
@@ -25,6 +29,90 @@ const MAX_EDGE = 768;
 const MATTE: [number, number, number] = [0x11, 0x13, 0x18];
 /** 单次渲染的墙钟上限:起 Chrome + 预热 + 一帧,超了就是卡住了 */
 const RENDER_TIMEOUT_MS = 120000;
+/** ffmpeg 抽一帧的上限:本地文件按关键帧定位,正常两三秒 */
+const EXTRACT_TIMEOUT_MS = 30000;
+
+/**
+ * ffmpeg 在哪:PATH 上的优先;没有就用 winget 装的那份(和 scripts/export-frames.mjs 同一个兜底);
+ * 都没有返回 null,素材那一层就不画、在 note 里说清楚。结果缓存,别每次看图都 spawn 一遍 -version。
+ */
+let ffmpegResolved: string | null | undefined;
+function ffmpegCommand(): string | null {
+  if (ffmpegResolved !== undefined) return ffmpegResolved;
+  const candidates = [
+    process.env.PROMPTCUT_FFMPEG,
+    "ffmpeg",
+    path.join(process.env.LOCALAPPDATA || os.homedir(), "Microsoft", "WinGet", "Packages", "Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe", "ffmpeg-9.0.1-full_build", "bin", "ffmpeg.exe"),
+  ].filter(Boolean) as string[];
+  for (const c of candidates) {
+    try {
+      const r = spawnSync(c, ["-version"], { stdio: "ignore", windowsHide: true, timeout: 5000 });
+      if (r.status === 0) return (ffmpegResolved = c);
+    } catch { /* 下一个 */ }
+  }
+  return (ffmpegResolved = null);
+}
+
+/** 素材文件在磁盘上的位置:导入时记的 path 优先,没有就按文件名去媒体目录找 */
+function mediaFileOf(root: string, m: any): string | null {
+  const direct = m?.path ? String(m.path) : "";
+  if (direct && fs.existsSync(direct)) return direct;
+  const base = String(m?.url || m?.path || "").split(/[/\\]/).pop() || "";
+  if (!base) return null;
+  const local = path.join(mediaDir(root), decodeURIComponent(base));
+  return fs.existsSync(local) ? local : null;
+}
+
+/** 用 ffmpeg 把素材的第 seconds 秒抽成 w×h 的 RGBA PNG(object-fit: cover) */
+function extractFrame(ffmpeg: string, opts: { file: string; kind: string; seconds: number; width: number; height: number; opacity: number; out: string }): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(ffmpeg, extractArgs(opts), { stdio: ["ignore", "ignore", "pipe"], windowsHide: true });
+    let err = "";
+    child.stderr.on("data", (c) => { err += c; });
+    const timer = setTimeout(() => { child.kill(); reject(new Error("ffmpeg 抽帧超时")); }, EXTRACT_TIMEOUT_MS);
+    child.on("error", (e) => { clearTimeout(timer); reject(e); });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      if (code !== 0) return reject(new Error(`ffmpeg 退出码 ${code}${err ? `:${err.trim().slice(-300)}` : ""}`));
+      fsp.readFile(opts.out).then(resolve, reject);
+    });
+  });
+}
+
+/**
+ * 素材层:第 t 秒画面里的每一段视频 / 图片各抽一帧。抽不到的(文件没了、ffmpeg 不在)
+ * 在 notes 里如实说,那一层留空 —— 别让模型对着一张缺层的图得出「视频没进来」。
+ */
+async function renderMediaLayers(root: string, project: any, t: number, dir: string, notes: string[]): Promise<PNG[]> {
+  const layers = mediaLayersAt(project, t);
+  if (layers.length === 0) return [];
+  const ffmpeg = ffmpegCommand();
+  if (!ffmpeg) {
+    notes.push("这台机器上找不到 ffmpeg,画面里素材那一层是空的(不是素材的问题)。");
+    return [];
+  }
+  const width = project.width || 1920;
+  const height = project.height || 1080;
+  const out: PNG[] = [];
+  let i = 0;
+  for (const layer of layers) {
+    const file = mediaFileOf(root, layer.media);
+    if (!file) {
+      notes.push(`素材「${layer.media.name || layer.media.id}」的文件服务端取不到,画面里它那一层是空的。`);
+      continue;
+    }
+    try {
+      const png = await extractFrame(ffmpeg, {
+        file, kind: layer.media.kind, seconds: Math.max(0, layer.mediaTime), width, height, opacity: layer.opacity,
+        out: path.join(dir, `layer-${i++}.png`),
+      });
+      out.push(PNG.sync.read(png));
+    } catch (e: any) {
+      notes.push(`素材「${layer.media.name || layer.media.id}」第 ${layer.mediaTime.toFixed(2)} 秒抽帧失败(${e?.message || e}),画面里它那一层是空的。`);
+    }
+  }
+  return out;
+}
 
 let counter = 0;
 
@@ -164,8 +252,15 @@ function originOf(server: ViteDevServer): string {
   return `http://${host}:${port}`;
 }
 
-/** 跑一次单帧渲染,拿到那一帧的 PNG 字节 */
-async function renderOneFrame(root: string, origin: string, project: any, t: number): Promise<Buffer> {
+/**
+ * 跑一次单帧渲染,拿到那一帧的 PNG 字节。
+ *
+ * 页面里**只渲卡片**(素材段全部拿掉):导出脚本逐帧推进虚拟时间,有 <video> 在画面里时
+ * 每帧都要等一次真实的 seek,看第 12 秒要走 360 帧、六七分钟,see_preview 因此超时
+ * (实测)。没有素材时帧帧静止,几秒就到。素材那一层由 ffmpeg 抽那一帧,在
+ * vision-compose.mjs 里按同样的规则合成到卡片下面。
+ */
+async function renderOneFrame(root: string, origin: string, project: any, t: number, notes: string[]): Promise<Buffer> {
   const id = `vision-${Date.now().toString(36)}-${counter++}`;
   const dir = path.resolve(outRoot(root), `export-${id}`);
   await fsp.mkdir(dir, { recursive: true });
@@ -176,7 +271,9 @@ async function renderOneFrame(root: string, origin: string, project: any, t: num
   const frame = Math.min(maxFrame, Math.max(0, Math.round(t * fps)));
 
   try {
-    await fsp.writeFile(path.join(dir, "project.json"), JSON.stringify(project, null, 2), "utf8");
+    // 素材层和卡片层互不依赖:ffmpeg 抽帧和起 Chrome 渲卡片并行跑
+    const layersPromise = renderMediaLayers(root, project, frame / fps, dir, notes);
+    await fsp.writeFile(path.join(dir, "project.json"), JSON.stringify(cardsOnly(project), null, 2), "utf8");
     const relOut = process.env.PROMPTCUT_EXPORT_DIR ? dir : `out/export-${id}`;
     const args = [
       "scripts/export-frames.mjs",
@@ -210,7 +307,10 @@ async function renderOneFrame(root: string, origin: string, project: any, t: num
       });
     });
 
-    return await fsp.readFile(path.join(dir, "frames", `${String(frame).padStart(6, "0")}.png`));
+    const cards = PNG.sync.read(await fsp.readFile(path.join(dir, "frames", `${String(frame).padStart(6, "0")}.png`)));
+    const layers = await layersPromise;
+    if (layers.length === 0) return PNG.sync.write(cards);
+    return PNG.sync.write(composeFrame(cards.width, cards.height, layers, cards));
   } finally {
     // 看一眼就够了,不留垃圾;删不掉也不该让这次调用失败
     fsp.rm(dir, { recursive: true, force: true }).catch(() => {});
@@ -252,7 +352,7 @@ export function visionPlugin(): Plugin {
             }
             if (!Number.isFinite(at)) at = 0;
 
-            const raw = await enqueue(() => renderOneFrame(root, originOf(server), target, at));
+            const raw = await enqueue(() => renderOneFrame(root, originOf(server), target, at, notes));
             const { png, width, height } = shrink(PNG.sync.read(raw));
             const base64 = PNG.sync.write(png).toString("base64");
 

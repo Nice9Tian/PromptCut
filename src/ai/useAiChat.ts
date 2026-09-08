@@ -409,6 +409,8 @@ export function useAiChat(opts?: { mock?: boolean; tabId?: string; getConversati
           return runRoleTask({
             provider: runProvider,
             prompt,
+            // 分工出去的角色也算这一页的:不带的话它调 declare_scope 会被服务端拒(实测报告里就是这么失败的)
+            conversationId: opts?.getConversationId?.(),
             roleId: task.roleId,
             signal: ac.signal,
             hooks: {

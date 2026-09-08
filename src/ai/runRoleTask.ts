@@ -72,8 +72,10 @@ export async function runRoleTask(opts: {
   roleId: string;
   hooks: RoleTaskHooks;
   signal?: AbortSignal;
+  /** 发起这次分工的那一页的对话 ID:带上它,角色调 declare_scope 之类的工具才记得到页签上 */
+  conversationId?: string;
 }): Promise<string> {
-  const { provider, prompt, roleId, hooks, signal } = opts;
+  const { provider, prompt, roleId, hooks, signal, conversationId } = opts;
   const msgId = hooks.createMessage(roleId);
 
   const res = await fetch("/api/ai/chat", {
@@ -81,7 +83,7 @@ export async function runRoleTask(opts: {
     headers: { "Content-Type": "application/json" },
     // 故意不传 sessionId：每个并行任务要一个干净的会话，否则几段对话会
     // 交错进同一个上下文，CLI 驱动尤其明显。
-    body: JSON.stringify({ provider, prompt }),
+    body: JSON.stringify({ provider, prompt, conversationId }),
     signal,
   });
   if (!res.ok || !res.body) throw new Error(`角色 ${roleId} 的请求失败（HTTP ${res.status}）`);
