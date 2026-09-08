@@ -53,6 +53,35 @@ export interface PublicAiConfig {
   /** 三家 CLI 各自的可选模型清单,用 | 分隔 */
   cliModels: { claude: string; codex: string; agy: string };
   toolProtocol: boolean;
+  /** CLI 额度熔断(Claude Code / Codex):任一用量窗口到 thresholdPercent 就中断;每新增 checkEveryBytes 字节重查。老服务端没有这个字段 */
+  quota?: QuotaConfig;
+}
+
+export interface QuotaConfig {
+  enabled: boolean;
+  thresholdPercent: number;
+  checkEveryBytes: number;
+}
+
+/** /api/ai/quota 返回的用量 */
+export interface QuotaWindow {
+  id: string;
+  label: string;
+  usedPercent: number;
+  resetsText: string | null;
+  resetsAt: number | null;
+}
+export interface QuotaInfo {
+  provider: string;
+  label: string;
+  supported: boolean;
+  ok: boolean;
+  checkedAt: number;
+  windows: QuotaWindow[];
+  maxUsedPercent: number | null;
+  worst: QuotaWindow | null;
+  planType?: string;
+  error?: string;
 }
 
 export interface AiConfigPatch {
@@ -70,6 +99,7 @@ export interface AiConfigPatch {
   };
   cliModels?: Partial<{ claude: string; codex: string; agy: string }>;
   toolProtocol?: boolean;
+  quota?: Partial<QuotaConfig>;
 }
 
 export interface SttInfo {

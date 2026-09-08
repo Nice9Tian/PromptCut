@@ -1,3 +1,4 @@
+import type { QuotaConfig, QuotaInfo } from "../../ai/types";
 import type { JSX } from "react";
 import { createPortal } from "react-dom";
 import { useBackdropClose } from "../../ui/backdropClose";
@@ -103,6 +104,11 @@ export function AiSetupDialog(props: {
   /** 三家 CLI 的可选模型清单(| 分隔),面板上的模型选择器读它 */
   const [cliModels, setCliModels] = useState<Record<string, string>>({});
   const [savingModels, setSavingModels] = useState(false);
+  /** 额度熔断:阈值配置(全局)+ 每家 CLI 最近查到的用量 */
+  const [quotaCfg, setQuotaCfg] = useState<QuotaConfig>({ enabled: true, thresholdPercent: 80, checkEveryBytes: 262144 });
+  const [quotaInfo, setQuotaInfo] = useState<Record<string, QuotaInfo | undefined>>({});
+  const [quotaBusy, setQuotaBusy] = useState<Record<string, boolean>>({});
+  const [quotaMsg, setQuotaMsg] = useState("");
   const [loadingAgyModels, setLoadingAgyModels] = useState(false);
   const [modelsMsg, setModelsMsg] = useState("");
   const [diagState, setDiagState] = useState("");
@@ -165,6 +171,7 @@ export function AiSetupDialog(props: {
       setToolProtocol(!!config.toolProtocol);
       setCliModels({ ...(config.cliModels ?? {}) });
       setModelsMsg("");
+      if (config.quota) setQuotaCfg({ ...config.quota });
     }
     fetch("/api/ai/agy-permissions")
       .then((r) => r.json())
@@ -187,6 +194,12 @@ export function AiSetupDialog(props: {
         .catch(() => {});
     }
   }, [open, providers]);
+
+  useEffect(() => {
+    if (!open || (openedEntry !== "claude" && openedEntry !== "codex")) return;
+    void loadQuota(openedEntry, false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, openedEntry]);
 
   useEffect(() => {
     if (!open) return;
@@ -269,6 +282,31 @@ export function AiSetupDialog(props: {
       setModelsMsg(e instanceof Error ? e.message : "读取失败");
     } finally {
       setLoadingAgyModels(false);
+    }
+  };
+
+  const saveQuota = async (next: QuotaConfig) => {
+    setQuotaCfg(next);
+    setQuotaMsg("");
+    try {
+      await onSaveConfig({ quota: next });
+      setQuotaMsg("已保存");
+    } catch (e) {
+      setQuotaMsg(e instanceof Error ? e.message : "保存失败");
+    }
+  };
+
+  /** 查一家的用量。Claude 那条要跑一次 claude -p /usage,十来秒 */
+  const loadQuota = async (provider: string, refresh: boolean) => {
+    setQuotaBusy((prev) => ({ ...prev, [provider]: true }));
+    try {
+      const d = await (await fetch(`/api/ai/quota?provider=${provider}${refresh ? "&refresh=1" : ""}`)).json();
+      if (!d.ok) throw new Error(d.error || "查不到额度");
+      setQuotaInfo((prev) => ({ ...prev, [provider]: d.quota }));
+    } catch (e) {
+      setQuotaInfo((prev) => ({ ...prev, [provider]: { provider, label: provider, supported: true, ok: false, checkedAt: Date.now(), windows: [], maxUsedPercent: null, worst: null, error: e instanceof Error ? e.message : String(e) } }));
+    } finally {
+      setQuotaBusy((prev) => ({ ...prev, [provider]: false }));
     }
   };
 
@@ -438,6 +476,60 @@ export function AiSetupDialog(props: {
           )}
           {modelsMsg && <div className="ais-detail">{modelsMsg}</div>}
         </section>
+
+        {(entry.id === "claude" || entry.id === "codex") && (() => {
+          const info = quotaInfo[entry.id];
+          const busy = !!quotaBusy[entry.id];
+          const over = info?.ok && typeof info.maxUsedPercent === "number" && info.maxUsedPercent >= quotaCfg.thresholdPercent;
+          return (
+            <section className="ais-step">
+              <div className="ais-step-head">
+                <span className="ais-step-no">4</span>
+                <span className="ais-step-title">额度熔断</span>
+                {info?.ok
+                  ? <span className={over ? "ais-status-err" : "ais-status-ok"}>{over ? `已用 ${info.maxUsedPercent}%,超线` : `最高已用 ${info.maxUsedPercent}%`}</span>
+                  : <span className="ais-status-err">{busy ? "查询中…" : info ? "查不到" : "未查"}</span>}
+              </div>
+              <div className="ais-detail">
+                订阅额度(5 小时 / 每周窗口)用到阈值就中断这一路的对话并报错,免得编排做到一半被 CLI 拒掉。
+                每新增约 {Math.round(quotaCfg.checkEveryBytes / 1024)} KB 的对话上下文会在后台重查一次;查不到用量(没登录、API Key 模式)不拦。
+              </div>
+              <label className="ais-more-row">
+                <input type="checkbox" checked={quotaCfg.enabled} onChange={(e) => saveQuota({ ...quotaCfg, enabled: e.target.checked })} />
+                <span>启用熔断</span>
+              </label>
+              <div className="ais-api-field">
+                <label>阈值 %</label>
+                <input
+                  type="number" min={1} max={100} step={5}
+                  value={quotaCfg.thresholdPercent}
+                  onChange={(e) => setQuotaCfg({ ...quotaCfg, thresholdPercent: Number(e.target.value) || 80 })}
+                  onBlur={() => saveQuota({ ...quotaCfg, thresholdPercent: Math.min(100, Math.max(1, Math.round(quotaCfg.thresholdPercent) || 80)) })}
+                />
+                <label>重查间隔 KB</label>
+                <input
+                  type="number" min={16} step={64}
+                  value={Math.round(quotaCfg.checkEveryBytes / 1024)}
+                  onChange={(e) => setQuotaCfg({ ...quotaCfg, checkEveryBytes: Math.max(16, Number(e.target.value) || 256) * 1024 })}
+                  onBlur={() => saveQuota({ ...quotaCfg, checkEveryBytes: Math.max(16 * 1024, Math.round(quotaCfg.checkEveryBytes)) })}
+                />
+                <button className="ais-btn" disabled={busy} onClick={(e) => { e.preventDefault(); void loadQuota(entry.id, true); }}>
+                  {busy ? "查询中…" : "现在查"}
+                </button>
+              </div>
+              {info?.ok && (
+                <div className="ais-detail">
+                  {info.windows.map((w) => (
+                    <div key={w.id}>{w.label}:已用 {w.usedPercent}%{w.resetsText ? `,${w.resetsText} 重置` : ""}</div>
+                  ))}
+                  {info.planType && <div>套餐:{info.planType}</div>}
+                </div>
+              )}
+              {info && !info.ok && <div className="ais-fixhint">{info.error || "查不到用量"}</div>}
+              {quotaMsg && <div className="ais-detail">{quotaMsg}</div>}
+            </section>
+          );
+        })()}
 
         {entry.id === "agy" && agyPerms && (
           <section className="ais-step">

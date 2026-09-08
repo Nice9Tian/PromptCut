@@ -118,7 +118,25 @@ export default function vitePluginAi(): Plugin {
   let editorOwner = '';
   let nextCallId = 1;
   const pendingCalls = new Map<number, (result: any) => void>();
-  const activeRuns = new Map<string, { abort: () => void, finished: boolean }>();
+  const activeRuns = new Map<string, { abort: () => void, finished: boolean, provider?: string, fail?: (message: string) => void }>();
+  /**
+   * CLI 额度熔断(server/runners/quota.mjs):对话开始前 gate,结束后按新增字节记账、到线后台重查;
+   * 重查发现超线就把同一路正在跑的对话全部掐掉。模块懒加载,和别的 runner 一样。
+   */
+  let quotaGuardPromise: Promise<any> | null = null;
+  const getQuotaGuard = () => {
+    quotaGuardPromise ??= import(new URL('./runners/quota.mjs', import.meta.url).href).then((m: any) => ({ guard: m.createQuotaGuard(), mod: m }));
+    return quotaGuardPromise;
+  };
+  const failProviderRuns = (provider: string, message: string) => {
+    for (const [id, st] of activeRuns) {
+      if (st.finished || st.provider !== provider) continue;
+      try { st.fail?.(message); } catch {}
+      try { st.abort(); } catch {}
+      st.finished = true;
+      activeRuns.delete(id);
+    }
+  };
 
   return {
     name: 'vite-plugin-ai',
@@ -617,6 +635,22 @@ export default function vitePluginAi(): Plugin {
             const { publicConfig } = await import(new URL('./ai-config.mjs', import.meta.url).href);
             const cfg = publicConfig();
 
+            // 额度熔断:先看这一路的用量,超线就不起 CLI 了,直接把原因告诉用户
+            const { guard: quotaGuard, mod: quotaMod } = await getQuotaGuard();
+            try {
+              await quotaGuard.gate(provider, cfg.quota);
+            } catch (e: any) {
+              if (e instanceof quotaMod.QuotaExceededError) {
+                res.write(`data: ${JSON.stringify({ type: 'error', message: e.message, quota: e.quota })}\n\n`);
+                res.write(`data: ${JSON.stringify({ type: 'done' })}\n\n`);
+                clearInterval(keepAlive);
+                res.end();
+                return;
+              }
+              throw e;
+            }
+            let replyBytes = 0;
+
             const run = runners.startRun({
               provider,
               prompt: finalPrompt,
@@ -633,11 +667,16 @@ export default function vitePluginAi(): Plugin {
               callTool: async (name: string, args: any) => await callToolInternal(name, args, agentId || undefined),
               onEvent: (ev: any) => {
                 if (ev.type === 'done') hasDone = true;
+                if (ev.type === 'text' && typeof ev.delta === 'string') replyBytes += Buffer.byteLength(ev.delta, 'utf8');
                 res.write(`data: ${JSON.stringify(ev)}\n\n`);
               }
             });
 
-            const runState = { abort: run.abort, finished: false };
+            const runState = {
+              abort: run.abort, finished: false, provider,
+              // 后台重查发现超线时,把原因写给正在看这条对话的人,再掐进程
+              fail: (message: string) => { try { res.write(`data: ${JSON.stringify({ type: 'error', message })}\n\n`); } catch {} },
+            };
             activeRuns.set(runId, runState);
 
             res.on('close', () => {
@@ -656,6 +695,9 @@ export default function vitePluginAi(): Plugin {
             runState.finished = true;
             activeRuns.delete(runId);
             clearInterval(keepAlive);
+            // 记账:这一轮新增的上下文 = 发出去的提示词 + 收回来的回复。到线就后台重查,超线掐同一路的其他对话
+            const noted = quotaGuard.note(provider, Buffer.byteLength(finalPrompt, 'utf8') + replyBytes, cfg.quota);
+            if (noted) noted.then((v: any) => { if (v?.blocked) failProviderRuns(provider, v.message); }).catch(() => {});
             if (!hasDone) {
                res.write(`data: ${JSON.stringify({ type: 'done' })}\n\n`);
             }
@@ -670,6 +712,24 @@ export default function vitePluginAi(): Plugin {
             }
           }
         });
+      });
+
+      // 额度:给设置窗口显示用。refresh=1 强制重查(Claude 那条要跑一次 claude -p,十来秒)
+      server.middlewares.use('/api/ai/quota', async (req, res) => {
+        if (req.method !== 'GET') return sendJson(res, 405, { ok: false, error: 'GET only' });
+        try {
+          const url = new URL(req.url || '/', 'http://localhost');
+          const provider = url.searchParams.get('provider') || '';
+          const { guard, mod } = await getQuotaGuard();
+          if (!mod.QUOTA_PROVIDERS.includes(provider)) return sendJson(res, 400, { ok: false, error: '只有 claude / codex 有额度窗口' });
+          const { publicConfig } = await import(new URL('./ai-config.mjs', import.meta.url).href);
+          const cfg = mod.normalizeQuotaConfig(publicConfig().quota);
+          const quota = await guard.get(provider, { refresh: url.searchParams.get('refresh') === '1' });
+          const verdict = guard.verdict(provider, cfg);
+          sendJson(res, 200, { ok: true, quota, config: cfg, blocked: !!verdict.blocked, message: verdict.message ?? null, bytesSince: guard.bytesSince(provider) });
+        } catch (e: any) {
+          sendJson(res, 500, { ok: false, error: String(e) });
+        }
       });
 
       server.middlewares.use('/api/ai/abort', (req, res) => {

@@ -60,6 +60,11 @@ function getDefaults() {
     version: 1,
     defaultProvider: null,
     toolProtocol: false,
+    /**
+     * CLI 驱动(Claude Code / Codex)的额度熔断:任一用量窗口用到 thresholdPercent 就中断这一路;
+     * 每新增 checkEveryBytes 字节的上下文后台重查一次。见 server/runners/quota.mjs。
+     */
+    quota: { enabled: true, thresholdPercent: 80, checkEveryBytes: 262144 },
     api: {
       vendor: 'anthropic',
       baseUrl: '',
@@ -291,6 +296,24 @@ export function writeConfig(partial) {
 
   if (partial.toolProtocol !== undefined) {
     newConfig.toolProtocol = !!partial.toolProtocol;
+  }
+
+  if (partial.quota !== undefined) {
+    const q = partial.quota;
+    if (!q || typeof q !== 'object' || Array.isArray(q)) throw new Error('quota 必须是对象');
+    const next = { ...(newConfig.quota || {}) };
+    if (q.enabled !== undefined) next.enabled = !!q.enabled;
+    if (q.thresholdPercent !== undefined) {
+      const v = Number(q.thresholdPercent);
+      if (!Number.isFinite(v) || v < 1 || v > 100) throw new Error('quota.thresholdPercent 是 1~100 的百分数');
+      next.thresholdPercent = Math.round(v);
+    }
+    if (q.checkEveryBytes !== undefined) {
+      const v = Number(q.checkEveryBytes);
+      if (!Number.isFinite(v) || v < 16384) throw new Error('quota.checkEveryBytes 至少 16384(16KB)');
+      next.checkEveryBytes = Math.round(v);
+    }
+    newConfig.quota = next;
   }
 
   // 顶层三个字段跟着生效的那一路走
