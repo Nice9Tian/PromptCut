@@ -2,8 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { MediaLayers } from "./preview/MediaLayers";
 import { themeStyle } from "../themes";
 import { actions, getState, useStore } from "../store/project";
-import { findClip } from "../kernel/project";
-import { nudgeFrame } from "../kernel/layout";
+import { videoLayersAt, findClip } from "../kernel/project";
+import { frameBox, nudgeFrame } from "../kernel/layout";
 import type { PcStageApi } from "../StageView";
 import { ControlBar } from "./preview/ControlBar";
 import { ToolBar, ToolType } from "./preview/ToolBar";
@@ -109,19 +109,30 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
    * 选中描边用的外框:不用包裹层(每张卡都占满整屏),用片段的实体范围——
    * 字幕卡的描边贴着字幕本身,而不是绕屏幕一圈。老渲染面没有 bounds 就退回包裹层。
    */
+  /**
+   * 此刻画面上的素材段(视频 / 图片)和它们的矩形。
+   *
+   * 它们由**主文档**的 MediaLayers 画,不在舞台 iframe 里 —— 所以 iframe 的 hitTest
+   * 看不见它们,点一下视频等于点了个寂寞(选不中、拖不动)。这里把它们补上,
+   * 和卡片一起参与命中和描边。矩形就是片段的框,没设框就是整幅画面。
+   */
+  const mediaRects = useCallback((): { clipId: string; left: number; top: number; width: number; height: number }[] => {
+    const stageSize = { width: project.width, height: project.height };
+    return videoLayersAt(project, t).map((l) => ({ clipId: l.clip.id, ...frameBox(l.clip.frame, stageSize) }));
+  }, [project, t]);
+
   const refreshRects = useCallback(() => {
     const s = stage();
-    if (!s?.rects) return;
-    const list = s.rects();
-    setRects(
-      s.bounds
-        ? list.map((r) => {
-            const b = s.bounds(r.clipId);
-            return b ? { clipId: r.clipId, ...b } : r;
-          })
-        : list,
-    );
-  }, [stage]);
+    const list = s?.rects ? s.rects() : [];
+    const cards = s?.bounds
+      ? list.map((r) => {
+          const b = s.bounds!(r.clipId);
+          return b ? { clipId: r.clipId, ...b } : r;
+        })
+      : list;
+    // 素材段在下、卡片在上(DOM 里 MediaLayers 排在舞台 iframe 前面),命中时也按这个顺序找
+    setRects([...mediaRects(), ...cards]);
+  }, [stage, mediaRects]);
 
   /** 刚被点中的片段:描边闪一下,让用户看清点到的是谁 */
   const [flash, setFlash] = useState<{ clipId: string; token: number } | null>(null);
@@ -137,9 +148,15 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
     const x = (e.clientX - rect.left) / scale;
     const y = (e.clientY - rect.top) / scale;
     const s = stage();
-    const hit = s?.hitTest
-      ? s.hitTest(x, y)
-      : [...rects].reverse().find((r) => x >= r.left && x <= r.left + r.width && y >= r.top && y <= r.top + r.height) ?? null;
+    // 卡片在上层:先问舞台。没点中卡片再看素材段(它们在主文档里,舞台看不见)
+    const card = s?.hitTest ? s.hitTest(x, y) : null;
+    const inside = (r: { left: number; top: number; width: number; height: number }) =>
+      x >= r.left && x <= r.left + r.width && y >= r.top && y <= r.top + r.height;
+    const hit =
+      card ??
+      [...mediaRects()].reverse().find(inside) ??
+      (s?.hitTest ? null : [...rects].reverse().find(inside)) ??
+      null;
     return { hit, overlayRect: rect };
   };
 

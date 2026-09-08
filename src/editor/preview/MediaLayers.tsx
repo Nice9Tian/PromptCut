@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { emphasisFilter } from "../../kernel/emphasis";
+import { frameCss } from "../../kernel/layout";
 import { audioClipsAt, videoLayersAt, type MediaAsset, type Project, type TrackClip } from "../../kernel/project";
 import { planSync } from "./mediaSync";
 
@@ -59,6 +60,7 @@ function VideoLayer({
   playing,
   muted,
   gain = 1,
+  stage,
 }: {
   clip: TrackClip;
   media: MediaAsset;
@@ -68,6 +70,8 @@ function VideoLayer({
   muted: boolean;
   /** 预览总音量,叠在淡入淡出之上 */
   gain?: number;
+  /** 画面尺寸:算片段的框要用 */
+  stage: { width: number; height: number };
 }) {
   const ref = useRef<HTMLVideoElement>(null);
   const target = targetTimeOf(clip, t);
@@ -76,24 +80,24 @@ function VideoLayer({
     syncMediaEl(ref.current, target, playing, muted ? 0 : opacity * gain);
   }, [target, playing, opacity, muted, gain]);
 
+  /*
+   * 外面这一层是**片段的框**(clip.frame):没有框就铺满画面,和以前一样;
+   * 设过框就按框摆 —— set_rect / set_position / align / nudge、预览里拖动写的都是它。
+   * 以前素材层不认这个字段,于是给视频摆位置写进去了却一动不动,只有卡片才看得出效果。
+   */
+  const box = { position: "absolute" as const, overflow: "hidden" as const, ...frameCss(clip.frame, stage) };
+  const fill = { width: "100%", height: "100%", objectFit: "cover" as const, opacity, filter: emphasisOf(clip) };
   if (media.kind === "image") {
     return (
-      <img
-        src={media.url}
-        alt=""
-        style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", opacity, filter: emphasisOf(clip) }}
-      />
+      <div style={box}>
+        <img src={media.url} alt="" style={{ display: "block", ...fill }} />
+      </div>
     );
   }
   return (
-    <video
-      ref={ref}
-      src={media.url}
-      muted={muted}
-      playsInline
-      preload="auto"
-      style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", opacity, filter: emphasisOf(clip) }}
-    />
+    <div style={box}>
+      <video ref={ref} src={media.url} muted={muted} playsInline preload="auto" style={{ display: "block", ...fill }} />
+    </div>
   );
 }
 
@@ -127,7 +131,7 @@ export function MediaLayers({
   return (
     <>
       {layers.map((l) => (
-        <VideoLayer key={l.clip.id} clip={l.clip} media={l.media} opacity={l.opacity} t={t} playing={playing} muted={muted} gain={master} />
+        <VideoLayer key={l.clip.id} clip={l.clip} media={l.media} opacity={l.opacity} t={t} playing={playing} muted={muted} gain={master} stage={{ width: project.width, height: project.height }} />
       ))}
       {audios.map((a) => (
         <AudioLayer key={a.clip.id} clip={a.clip} media={a.media} volume={a.volume * master} t={t} playing={playing} />
