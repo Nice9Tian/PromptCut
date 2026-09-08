@@ -59,8 +59,15 @@ export function ModelBar(props: {
    * claude-sonnet-4-6 一档都没有。别的驱动还是各家那张固定表。
    */
   const efforts = effortsFor(provider, model, config);
-  // 存着的档位这个模型没有时,下拉框直接显示实际会发出去的那一档,别让屏幕和请求对不上
-  const effort = efforts.includes(choice.effort) ? choice.effort : (model ? paired.effort : choice.effort);
+  /*
+   * 存着的档位这个模型没有时,下拉框直接显示实际会发出去的那一档,别让屏幕和请求对不上。
+   *
+   * 认不出来时降级成 `""`(默认),**不能回退到存着的那个值** —— 原来没选模型时就是那样,
+   * 于是浏览器里存的旧档位照样发出去。用户诊断报告里那个 400 就有这一层:
+   * codex 的清单里去掉了 `minimal`,可存着 `minimal` 的人没选模型时还是会把它发出去。
+   * 清单里没有的值一律不发,让上游用自己的默认 —— 宁可少一档,不要发一个必然被拒的值。
+   */
+  const effort = efforts.includes(choice.effort) ? choice.effort : (model ? paired.effort : "");
 
   const update = (patch: Partial<typeof choice>) => {
     writeChoice(provider, patch);

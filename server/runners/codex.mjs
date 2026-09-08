@@ -2,6 +2,49 @@ import { cliEnv } from './cli-runtime.mjs';
 import { spawnCli, resolveExe, lineSplitter, probeVersion } from './index.mjs';
 import { execFileSync } from 'node:child_process';
 
+/**
+ * 把任意形状的错误变成人能读的一行。
+ *
+ * 原来这里写的是 `String(item.error)` —— codex 的 error 是**对象**时,那句话的结果是
+ * 字面的 `[object Object]`。用户诊断报告里那三行 `summary: "[object Object]"` 就是它。
+ * 后果不只是难看:模型也只拿到这一坨,于是它开始猜为什么失败,猜出「当前会话禁止审批,
+ * 请切换权限模式」这种用户根本做不到的指引(那个 approval_policy="never" 是我们自己
+ * 写死在启动参数里的)。真实原因被吃掉,是整条误导的起点。
+ */
+function errText(err) {
+  if (err == null) return '';
+  if (typeof err === 'string') return err;
+  // 常见形状:{ message } / { error: { message } } / { code, message }
+  const msg = err.message ?? err.error?.message ?? err.detail ?? err.reason;
+  if (typeof msg === 'string' && msg) {
+    const code = err.code ?? err.error?.code ?? err.type;
+    return code ? `${msg}(${code})` : msg;
+  }
+  try { return JSON.stringify(err); } catch { return Object.prototype.toString.call(err); }
+}
+
+/** 工具结果的摘要:成功看 result,失败**一定要把 error 带出来** */
+function resultSummary(o) {
+  if (o?.result !== undefined && o.result !== null) {
+    try { return JSON.stringify(o.result).substring(0, 300); } catch { return String(o.result).substring(0, 300); }
+  }
+  return errText(o?.error).substring(0, 300);
+}
+
+/**
+ * 这个错误是不是「被拒 / 需要审批」。
+ *
+ * 原来的判断是 `typeof err === 'string' && (含 denied|approval)` —— error 是对象时
+ * 条件永远不成立,于是 onPermissionDenied 不触发,claude / agy 都有的「被拒之后改用
+ * 文本协议重试」那条兜底对 codex 是**死的**。先摊平成文本再判,对象也就认得出来了。
+ */
+function looksDenied(err) {
+  const t = errText(err).toLowerCase();
+  if (!t) return false;
+  return t.includes('denied') || t.includes('approval') || t.includes('not approved')
+      || t.includes('rejected') || t.includes('permission');
+}
+
 export async function getCodexProvider() {
   const exePath = resolveExe('codex');
   let available = false;
@@ -139,11 +182,10 @@ function _startRun(opts) {
                  } else if (evType === 'item.completed') {
                      const name = item.tool ?? item.name ?? item.tool_name;
                      const ok = !(item.error) && item.status !== 'failed';
-                     if (!ok && typeof item.error === 'string' && (item.error.toLowerCase().includes('denied') || item.error.toLowerCase().includes('approval'))) {
+                     if (!ok && looksDenied(item.error)) {
                          if (opts.onPermissionDenied) opts.onPermissionDenied();
                      }
-                     const summary = item.result ? JSON.stringify(item.result).substring(0, 300) : (item.error ? String(item.error) : '');
-                     safeOnEvent({ type: 'tool_result', name, ok, summary });
+                     safeOnEvent({ type: 'tool_result', name, ok, summary: resultSummary(item) });
                  }
              }
          }
@@ -153,10 +195,10 @@ function _startRun(opts) {
              safeOnEvent({ type: 'tool_call', name: ev.name, input: ev.input || {} });
          } else if (status === 'completed' || status === 'success' || status === 'error' || status === 'done' || ev.result !== undefined) {
              const ok = status === 'completed' || status === 'success' || status === 'done' || (!status && !ev.error);
-             if (!ok && typeof ev.error === 'string' && (ev.error.toLowerCase().includes('denied') || ev.error.toLowerCase().includes('approval'))) {
+             if (!ok && looksDenied(ev.error)) {
                  if (opts.onPermissionDenied) opts.onPermissionDenied();
              }
-             safeOnEvent({ type: 'tool_result', name: ev.name, ok, summary: ev.result ? JSON.stringify(ev.result).substring(0, 300) : '' });
+             safeOnEvent({ type: 'tool_result', name: ev.name, ok, summary: resultSummary(ev) });
          }
       } else if (evType === 'turn.completed') {
          finish({ type: 'done', sessionId: threadId, usage: ev.usage });

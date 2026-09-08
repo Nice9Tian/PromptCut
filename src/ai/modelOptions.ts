@@ -10,8 +10,15 @@ import type { AiProvider } from "./types";
  * 不支持的就在界面上灰掉,不做假开关 —— 点了没反应比没有这个开关更糟。
  */
 
-/** 推理强度。空字符串 = 跟随各家自己的默认,不传标志 */
-export type EffortLevel = "" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+/**
+ * 推理强度。空字符串 = 跟随各家自己的默认,不传标志。
+ *
+ * `minimal` 现在**没有任何驱动提供**(它曾在 codex 的清单里,而上游不认,选中就是 400)。
+ * 类型里留着它只为一件事:用户浏览器里可能还存着这个旧值,留着类型才对得上;
+ * 界面那边会把不在清单里的值降级成默认(见 ModelBar),所以它发不出去。
+ * 别因为「类型里有」就把它加回某家的 efforts。
+ */
+export type EffortLevel = "" | "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
 export interface ProviderCapability {
   /** 支持哪几档推理强度;空数组 = 这家不支持,界面上灰掉 */
@@ -32,8 +39,17 @@ export const CAPABILITIES: Record<AiProvider, ProviderCapability> = {
     modelsHint: "填别名就行（opus / sonnet / haiku），也可以填完整模型名",
   },
   codex: {
-    // codex 没有 --effort,只能用 -c model_reasoning_effort= 覆盖配置项
-    efforts: ["", "minimal", "low", "medium", "high", "xhigh"],
+    /*
+     * codex 没有 --effort,只能用 -c model_reasoning_effort= 覆盖配置项。
+     *
+     * 这份清单必须和上游认的值一致 —— 用户诊断报告里就撞过一次:他从这个下拉框里选了
+     * `minimal`,请求直接 400:
+     *   Unsupported value: 'minimal' is not supported with the 'gpt-5.6-terra' model.
+     *   Supported values are: 'none', 'low', 'medium', 'high', 'xhigh', and 'max'.
+     * 两头都错了:`minimal` 我们给了、上游不认;`none` 和 `max` 上游认、我们没给。
+     * 摆一个必然 400 的选项在菜单里,用户不可能猜到是我们的错。
+     */
+    efforts: ["", "none", "low", "medium", "high", "xhigh", "max"],
     fast: false,
     suggestedModels: "gpt-5.6-terra|gpt-5.6-sol",
     modelsHint: "填 codex 支持的模型名，多个用 | 分开",
@@ -63,6 +79,8 @@ export const CAPABILITIES: Record<AiProvider, ProviderCapability> = {
 
 export const EFFORT_LABEL: Record<EffortLevel, string> = {
   "": "默认",
+  // codex 的 none 是「明确关掉思考」,和 ""(不传这个参数、随它自己的默认)不是一回事
+  none: "关闭",
   minimal: "极简",
   low: "低",
   medium: "中",
