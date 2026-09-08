@@ -302,12 +302,16 @@
   gap: 6px;
   margin-top: 5px;
 }
-/* 素材网格:两列,和卡片页一致 */
+/* 素材网格:列数由左栏根节点按宽度算好写在 --pc-l-cols 上(见 index.tsx 的 gridColumns),
+ * 卡片页那些 Tailwind 的 grid-cols-2 也一并接管,几个分页一个口径 */
 .pc-l-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(var(--pc-l-cols, 2), minmax(0, 1fr));
   gap: 6px;
   padding: 4px 8px;
+}
+[data-pc="left"] .grid.grid-cols-2 {
+  grid-template-columns: repeat(var(--pc-l-cols, 2), minmax(0, 1fr));
 }
 /* 转场卡悬停:后一段在前一段上来回淡入淡出 */
 @keyframes pc-xfade {

@@ -47,6 +47,17 @@ const EDIT_TABS: { key: EditTab; label: string }[] = [
   { key: "code", label: "代码" },
 ];
 
+/**
+ * 卡片网格一行放几张:目标卡宽 = 顶栏「导出视频」按钮的宽度(100px),
+ * 面板宽度能放下几个目标宽就几列,至少两列;不够再多一列时,格子按 1fr 拉宽填满。
+ * 用 CSS 变量下发(--pc-l-cols),各个分页的网格(.pc-l-grid、Tailwind 的 grid-cols-2)
+ * 在 left.css 里统一读它,不用每个分页各写一遍 ResizeObserver。
+ */
+const CARD_TARGET_W = 100;
+function gridColumns(panelWidth: number): number {
+  return Math.max(2, Math.floor(panelWidth / CARD_TARGET_W));
+}
+
 function stored<T extends string>(key: string, allowed: readonly T[], fallback: T): T {
   try {
     const v = localStorage.getItem(key) as T | null;
@@ -73,6 +84,17 @@ export function LeftPanel() {
   });
   const cardsTabRef = useRef<CardsTabHandle>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const [cols, setCols] = useState(2);
+  useEffect(() => {
+    const el = rootRef.current;
+    if (!el) return;
+    const update = () => setCols(gridColumns(el.clientWidth));
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   const pick = <T extends string>(key: string, set: (v: T) => void) => (v: T) => {
     set(v);
@@ -103,7 +125,7 @@ export function LeftPanel() {
   const setSearch = (val: string) => setSearches((s) => ({ ...s, [searchTab]: val }));
 
   return (
-    <div data-pc="left" className="h-full flex flex-col min-h-0 overflow-hidden bg-neutral-950 text-neutral-100">
+    <div ref={rootRef} data-pc="left" className="h-full flex flex-col min-h-0 overflow-hidden bg-neutral-950 text-neutral-100" style={{ "--pc-l-cols": cols } as React.CSSProperties}>
       {/* 顶级分页:选中主文字 + 强调色下划线(配色诊断与修正 v2 左栏) */}
       <div className="pc-l-tabs">
         {TOP_TABS.map((tab) => (
