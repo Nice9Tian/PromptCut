@@ -167,3 +167,21 @@ export function compatToSend(provider: AiProvider, model: string, vendor: string
 export function normalizeModel(model: string, available: string[]): string {
   return model && available.includes(model) ? model : "";
 }
+
+/**
+ * 这一家现在有哪些模型可选。面板的下拉框和**真正发请求那一刻**都得用这一份,
+ * 不能各算各的。
+ *
+ * 以前只有 ModelBar 算了一次,拿去填下拉框;发请求走的是 readChoice 的原值。
+ * 结果是:清单里已经没有的名字(改过设置、或者当初手打错了一个字)在下拉框里
+ * 早就退回「默认」了,请求里却还带着它 —— 界面显示「默认」,CLI 收到的是个
+ * 不存在的模型名,当场退出。用户看着一切正常,只是永远得不到回复。
+ */
+export function modelsFor(
+  provider: AiProvider,
+  config: { api?: { model?: string }; cliModels?: Partial<Record<string, string>> } | null | undefined,
+): string[] {
+  return provider === "api"
+    ? parseModelList(config?.api?.model)
+    : parseModelList(config?.cliModels?.[provider]);
+}

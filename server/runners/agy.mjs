@@ -184,7 +184,24 @@ function _startRun(opts) {
            }
         } else if (ev.event === 'result' && ev.result) {
            const res = ev.result;
-           
+
+           /*
+            * agy 出错时照样发一条 result,只是 status 是 ERROR、error 里写着原因,
+            * 然后以非 0 退出。这里原来不看 status,把它当成正常收尾发了个 done ——
+            * 而 done 一发,spawnCli 里 hasDone 就为真,`close` 那条「exited with code 1」
+            * 也被一并压掉。于是界面上只剩一句「已启动 Antigravity」,几秒后无声无息地结束:
+            * 没有回复、没有报错、usage 全是 0,看起来就像连不上。
+            *
+            * 实际最常撞上的是模型名不对(比如 `gemini-3.8.flash` —— agy 的名字是
+            * `gemini-3.8-flash-low` 这种),agy 说得清清楚楚,只是没人把这句话传出来。
+            * claude.mjs 那边一直是查 is_error 的,这里补齐。
+            */
+           if (res.status === 'ERROR' || res.error) {
+              const why = typeof res.error === 'string' ? res.error : (res.error?.message || 'Antigravity 报错但没说原因');
+              childController.finish({ type: 'error', message: `Antigravity: ${why}` });
+              return;
+           }
+
            if (res.denied_actions && res.denied_actions.length > 0) {
                const deniedNames = res.denied_actions.map(a => a.display_name || a.action).join(', ');
                childController.safeOnEvent({ type: 'status', text: `部分动作被拒绝: ${deniedNames}` });

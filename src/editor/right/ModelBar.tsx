@@ -4,7 +4,7 @@ import type { AiProvider, PublicAiConfig } from "../../ai/types";
 import {
   CAPABILITIES,
   EFFORT_LABEL,
-  parseModelList,
+  modelsFor,
   readChoice,
   writeChoice,
   normalizeModel,
@@ -40,9 +40,8 @@ export function ModelBar(props: {
   if (!provider) return null;
   const cap = CAPABILITIES[provider];
 
-  const models = provider === "api"
-    ? parseModelList(config?.api.model)
-    : parseModelList(config?.cliModels?.[provider as "claude" | "codex" | "agy"]);
+  // 和 useAiChat 发请求时用的是同一个函数 —— 下拉框显示什么,请求里就得是什么
+  const models = modelsFor(provider, config);
 
   // 设置里把某个模型删掉之后,别再拿一个已经不存在的名字去跑
   const model = normalizeModel(choice.model, models);

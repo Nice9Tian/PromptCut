@@ -2,7 +2,7 @@ import { recordTrace } from './debug';
 import { useState, useEffect, useRef, useCallback } from "react";
 import type { AiProvider, ChatMessage, ChatAttachment, MessagePart, MessageRuntime, ProviderInfo, RunEvent, SttInfo, LoginState, PublicAiConfig, AiConfigPatch, CliSetupJob, KeyKind } from "./types";
 import { parseSseChunks } from "./sse";
-import { readChoice, compatToSend } from "./modelOptions";
+import { readChoice, compatToSend, normalizeModel, modelsFor } from "./modelOptions";
 import { getScript } from "./script";
 import { useChatMessages, getChatStore, MAIN_TAB } from "./liveChat";
 import * as agentBus from "./agentBus";
@@ -470,6 +470,14 @@ export function useAiChat(opts?: { mock?: boolean; tabId?: string; getConversati
     // 发送这一刻就把「这条用什么跑」定下来,而且**发出去的和记下来的是同一份**。
     // 分开各读一次的话,用户在流式过程中换了模型,记录就会和实际跑的对不上。
     const choice = readChoice(provider);
+    /*
+     * 模型名在这里再过一道清单。面板上早就这么做了(normalizeModel),但那只管下拉框
+     * 显示成什么;发请求一直用的是 localStorage 里的原值。于是一个已经不在清单里的
+     * 名字——设置改过、或者当初就手打错了一个字符——界面上显示「默认」,请求里却
+     * 照旧带着它。CLI 拿到不存在的模型名当场退出,用户什么提示都看不到。
+     * 显示和实际跑的必须是同一个值。
+     */
+    choice.model = normalizeModel(choice.model, modelsFor(provider, config));
     // 参数兼容模式:锁死的驱动 / 模型不听本地偏好,按策略定论;可调的把偏好交给服务端
     choice.schemaCompat = compatToSend(provider, choice.model, config?.api?.vendor, choice.schemaCompat);
     const runtime: MessageRuntime = { provider, ...choice, toolProtocol: !!config?.toolProtocol };
