@@ -6,6 +6,7 @@ import { Agent } from '../harness/agent.mjs';
 import { MessageHistory } from '../harness/history.mjs';
 import { buildTools } from '../harness/tools/index.mjs';
 import { createRetryingFetch } from '../harness/retry-fetch.mjs';
+import { withIdleTimeout } from '../harness/idle-timeout.mjs';
 
 // 对应 13.3 及获取配置接口
 export async function getApiProvider() {
@@ -148,18 +149,20 @@ export function startRun(opts) {
 
     const requestFetch = opts.fetchImpl || globalThis.fetch;
     /*
-     * 自动重试包在**最外层**,不在里面。
+     * 三层包在一起,顺序是有讲究的(从外到内):重试 → 闲置超时 → 真正的 fetch。
      *
-     * 里面那个箭头函数每次被调用都新建一份 120 秒超时 signal —— 重试必须重新调它,
-     * 才能拿到一份没烧过的超时;要是把重试塞进 signal 里面,第二次尝试会带着
-     * 上一次已经到期的 signal 出门,当场就 abort。
+     * 重试在最外面:每次尝试都要重新走一遍闲置超时那一层,拿到一份**新的**计时器。
+     * 反过来的话第二次尝试会带着上一次已经到期的 signal 出门,当场就 abort。
      *
      * 停止用的是 abortController.signal(用户点停止),退避等待期间也听它 ——
      * 不然点了停止还要干等十几秒才有反应。
      * 只重试「发请求」这一下:流已经开始读之后不能重发,详见 retry-fetch.mjs 的说明。
      */
     const retryingFetch = createRetryingFetch(
-      (url, options) => requestFetch(url, { ...options, signal: AbortSignal.any([abortController.signal, AbortSignal.timeout(120000)]) }),
+      // 超时按「多久没来数据」算,不按「一共跑了多久」算 —— 原来是 AbortSignal.timeout(120000),
+      // 那是整段请求的墙钟上限(含读流),一个健康地流了 121 秒的长回合会被硬掐断。
+      // 上下文越大、工具越多越容易撞上,也就是活干得越多越容易被掐。见 harness/idle-timeout.mjs。
+      withIdleTimeout((url, options) => requestFetch(url, { ...options, signal: abortController.signal }), { idleMs: 120000 }),
       {
         signal: abortController.signal,
         onRetry: ({ attempt, of, reason, delayMs }) => {
@@ -188,18 +191,35 @@ export function startRun(opts) {
       history 
     });
 
+    /*
+     * 落历史。**成功和失败都要落** ——
+     *
+     * 原来只在成功那条路写盘,于是一超时/一报错,这一轮做过的事(说过的话、调过的工具)
+     * 全部丢掉:下次带同一个 sessionId 进来,读到的还是上一轮的历史。用户手打「继续」
+     * 看着像接上了,其实是从更早的地方重新开始 —— 而且他不会知道。
+     * 中断恰恰是最需要「记得刚才干到哪」的时候。
+     */
+    const saveHistory = () => {
+      try {
+        const historyStr = JSON.stringify(history.toJSON());
+        // 再确认一遍历史里没有 API Key
+        fs.writeFileSync(
+          historyFile,
+          currentApiKey && historyStr.includes(currentApiKey)
+            ? historyStr.split(currentApiKey).join('***')
+            : historyStr,
+          'utf8',
+        );
+      } catch (e) {
+        // 存不下也不该把这一轮的结果盖掉,记一句就够了
+        console.error('[api] 会话历史没写成:', e?.message || e);
+      }
+    };
+
     try {
       const result = await agent.run(opts.prompt);
-      
-      const toSave = history.toJSON();
-      const historyStr = JSON.stringify(toSave);
-      // Double check that API key is not in history
-      if (currentApiKey && historyStr.includes(currentApiKey)) {
-        fs.writeFileSync(historyFile, historyStr.split(currentApiKey).join('***'), 'utf8');
-      } else {
-        fs.writeFileSync(historyFile, historyStr, 'utf8');
-      }
-      
+      saveHistory();
+
       const rawUsage = result.usage || {};
       const usage = {
         input: typeof rawUsage.input === 'number' ? rawUsage.input : 0,
@@ -208,14 +228,36 @@ export function startRun(opts) {
       
       safeOnEvent({ type: 'done', sessionId, usage, outcome: result.outcome, completed: result.completed, failed: result.failed });
     } catch (err) {
-      if (err.name === 'AbortError' || abortController.signal.aborted) {
+      // 半路断了也要把做到哪儿记下来,不然「继续」接的是更早的那一轮
+      saveHistory();
+
+      if (abortController.signal.aborted) {
+        // 用户点了停止 —— 这是他的决定,不报错也不自动续
         safeOnEvent({ type: 'status', text: '已中止' });
       } else {
         let msg = err.message || String(err);
         if (currentApiKey && msg.includes(currentApiKey)) {
           msg = msg.split(currentApiKey).join('***');
         }
-        safeOnEvent({ type: 'error', message: msg });
+        /*
+         * 超时是**可续跑**的:上下文都在历史里(上面刚存过),模型只是这一次没在
+         * 规定时间内吐字。让它接着说,而不是让用户去手打「继续」。
+         *
+         * 注意 AbortError 不能一律当成「用户停止」:`AbortSignal.timeout` 触发时
+         * 抛的是 TimeoutError,而经 AbortSignal.any 传递之后名字可能是 AbortError ——
+         * 原来那句 `err.name === 'AbortError'` 会把超时也吞成一条「已中止」的状态,
+         * 连红字都不给,用户只看到对话无声停住。所以判「是不是用户停的」只认
+         * abortController.signal.aborted 这一个真凭据。
+         */
+        const isTimeout = err.name === 'TimeoutError' || /timeout|timed out|aborted due to timeout/i.test(msg);
+        safeOnEvent(isTimeout ? {
+          type: 'error',
+          message: msg,
+          retryable: true,
+          retryPrompt: `接着上面继续做。上一轮没做完就断了,原因是:${msg}。\n`
+            + `之前的进度都还在,不用重头再来,从刚才停下的地方接着做就行。\n`
+            + `如果上一步是在等某个后台作业,用 wait 工具等几秒再查它的状态。`,
+        } : { type: 'error', message: msg });
       }
     }
   })();
