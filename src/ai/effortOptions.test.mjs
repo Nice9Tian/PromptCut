@@ -90,5 +90,6 @@ test("sanitizeEffort:agy 按模型分组各有各的清单", () => {
 test("sanitizeEffort:乱七八糟的值也收得住", () => {
   assert.equal(sanitizeEffort("claude", "opus", "不存在的档", null), "");
   assert.equal(sanitizeEffort("claude", "opus", undefined, null), "");
-  assert.equal(sanitizeEffort("api", "", "xhigh", null), sanitizeEffort("api", "", "xhigh", null));
+  // api 直连没有 xhigh 这一档。原来这里左右写的是同一个调用,恒等成立 —— 等于没测
+  assert.equal(sanitizeEffort("api", "", "xhigh", null), "");
 });

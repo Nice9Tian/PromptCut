@@ -110,3 +110,59 @@ test('中断落盘的历史里不能有悬空 tool_use —— 否则这个会话
   assert.equal(paired.is_error, true, '补的那条要标成失败,让模型知道那一步被打断了');
   try { fs.unlinkSync(file); } catch { /* 清理 */ }
 });
+
+test('盘上已经写坏的历史,读回来就要治好 —— 不能先撞一次 400 再自愈', async () => {
+  const sid = `w-healread-${Math.random().toString(36).slice(2, 8)}`;
+  const file = historyFileOf(sid);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  /*
+   * 埋一份带悬空 tool_use 的历史。这种文件是真实存在的:「中断也落盘」是后来才加的,
+   * 在那之前 / 在那个改动的中间态里,盘上留下过一批只有 tool_use 没有 tool_result 的会话。
+   * 只在写的时候治,这种会话第一句必然 400,靠 catch 里的 saveHistory 才自愈。
+   */
+  fs.writeFileSync(file, JSON.stringify([
+    { role: 'user', content: [{ type: 'text', text: '开始' }] },
+    { role: 'assistant', content: [{ type: 'tool_use', id: 'call_1', name: 'get_project', input: {} }] },
+  ]), 'utf8');
+
+  let sent = null;
+  const fetchImpl = (url, init) => {
+    if (!sent) { try { sent = JSON.parse(init.body); } catch { sent = null; } }
+    return Promise.reject(Object.assign(new Error('已停止'), { name: 'AbortError' }));
+  };
+  await run(sid, fetchImpl);
+
+  assert.ok(sent, '第一次请求要发得出去');
+  const roles = sent.messages.map((m) => m.role);
+  assert.ok(roles.includes('tool'), `悬空的 tool_use 在**第一次请求里**就该配上 tool_result,实际:${roles.join(',')}`);
+  const tool = sent.messages.find((m) => m.role === 'tool');
+  assert.equal(tool.tool_call_id, 'call_1');
+  try { fs.unlinkSync(file); } catch { /* 清理 */ }
+});
+
+test('接着旧历史往下说时,发出去的消息里不许有两条连着的 user', async () => {
+  const sid = `w-dupuser-${Math.random().toString(36).slice(2, 8)}`;
+  const file = historyFileOf(sid);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  // 末尾是一条 user(中断落盘补的那种形状),再进来一句话就会拼出两条连着的 user
+  fs.writeFileSync(file, JSON.stringify([
+    { role: 'user', content: [{ type: 'text', text: '开始' }] },
+    { role: 'assistant', content: [{ type: 'text', text: '好的' }] },
+    { role: 'user', content: [{ type: 'text', text: '上一次被打断了' }] },
+  ]), 'utf8');
+
+  let sent = null;
+  const fetchImpl = (url, init) => {
+    if (!sent) { try { sent = JSON.parse(init.body); } catch { sent = null; } }
+    return Promise.reject(Object.assign(new Error('已停止'), { name: 'AbortError' }));
+  };
+  await run(sid, fetchImpl);
+
+  assert.ok(sent, '第一次请求要发得出去');
+  const roles = sent.messages.map((m) => m.role);
+  for (let i = 1; i < roles.length; i++) {
+    assert.ok(!(roles[i] === 'user' && roles[i - 1] === 'user'), `第 ${i} 条和上一条都是 user:${roles.join(',')}`);
+  }
+  assert.ok(JSON.stringify(sent.messages).includes('你好'), '新说的那句要真的带上');
+  try { fs.unlinkSync(file); } catch { /* 清理 */ }
+});

@@ -18,7 +18,8 @@ export class Agent {
   }
 
   async run(userText) {
-    this.history.append({ role: 'user', content: [{ type: 'text', text: userText }] });
+    // 末尾已经是 user 消息时要并进去,不能新起一条 —— 理由见 history.appendUserText
+    this.history.appendUserText(userText);
     const usage = { input: 0, output: 0 };
     const recent = [];
     let completed = 0, failed = 0, outcome = 'completed', lastText = '', lastRound = 0;
@@ -32,7 +33,8 @@ export class Agent {
       checkAbort(this.signal);
       lastRound = round;
       const summarizing = !!summaryReason;
-      if (summarizing) this.history.append({ role: 'user', content: [{ type: 'text', text: `执行已暂停：${summaryReason}。不要再调用工具，只用中文说明已完成的部分、未完成的部分、阻碍和下一步。不得把未完成任务说成成功。` }] });
+      // 上一轮刚放完 tool_result(那是一条 user),这里直接 append 就又是两条连着的 user
+      if (summarizing) this.history.appendUserText(`执行已暂停：${summaryReason}。不要再调用工具，只用中文说明已完成的部分、未完成的部分、阻碍和下一步。不得把未完成任务说成成功。`);
       // 进度这一行只给屏幕看,不进模型上下文。不限轮次时不写分母,省得出现「第 3/Infinity 轮」
       const roundText = Number.isFinite(this.maxIterations) ? `第 ${round}/${this.maxIterations} 轮` : `第 ${round} 轮`;
       progress(round, summarizing ? 'summarizing' : 'requesting', summarizing ? '正在整理执行结果和未完成事项…' : `${roundText}：正在等待模型响应…`);

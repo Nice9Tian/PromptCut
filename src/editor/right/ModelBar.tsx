@@ -67,7 +67,10 @@ export function ModelBar(props: {
    * codex 的清单里去掉了 `minimal`,可存着 `minimal` 的人没选模型时还是会把它发出去。
    * 清单里没有的值一律不发,让上游用自己的默认 —— 宁可少一档,不要发一个必然被拒的值。
    */
-  const effort = efforts.includes(choice.effort) ? choice.effort : (model ? paired.effort : "");
+  const effort = efforts.includes(choice.effort) ? choice.effort
+    // paired.effort 也可能是清单里没有的(存着 codex 的 minimal 之类),
+    // 受控 select 的 value 找不到对应 option 时 selectedIndex 变 -1,框里**显示空白**
+    : (model && efforts.includes(paired.effort) ? paired.effort : "");
 
   const update = (patch: Partial<typeof choice>) => {
     writeChoice(provider, patch);

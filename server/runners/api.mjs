@@ -179,7 +179,13 @@ export function startRun(opts) {
       } catch {}
     }
     
-    const history = MessageHistory.fromJSON(initialMessages, { onEvent: safeOnEvent });
+    /*
+     * 读回来的也要治一道。落盘那一处(saveHistory)已经补过悬空的 tool_use,
+     * 但盘上可能躺着**在那之前**写坏的历史:那时候中断是不落盘的,后来改成落盘了,
+     * 于是开发机上留下过一批带悬空 tool_use 的文件。只治写不治读的话,
+     * 这种脏会话会先撞一次 400、靠 catch 里的 saveHistory 自愈,下一条才正常。
+     */
+    const history = MessageHistory.fromJSON(healDanglingToolUse(initialMessages), { onEvent: safeOnEvent });
 
     let providerModule;
     if (cfg.vendor === 'anthropic') {

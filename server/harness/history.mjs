@@ -27,6 +27,24 @@ export class MessageHistory {
     this.messages.push(...msgs);
   }
 
+  /**
+   * 加一句用户的话,末尾已经是 user 消息时**并进那一条**。
+   *
+   * 历史里出现两条连着的 user 是个真实形状,不是理论问题:接着上一段往下说时,
+   * 末尾可能是中断落盘补的那条(装 tool_result 的 user),也可能是上一轮撞到
+   * 轮次上限时收尾用的那条。Anthropic 不收连续同角色,而三家 provider 的转换
+   * 里都没有合并逻辑 —— 所以在这里挡住,而不是指望每个调用方自己记得。
+   *
+   * 放在 MessageHistory 上是因为这是**历史自己的不变量**:让调用方拿 get() 的
+   * 返回值去改末尾那条,靠的是「get 返回的是浅拷贝、里面的对象还是同一批」这个
+   * 巧合,哪天 get 改成深拷贝就无声失效了。
+   */
+  appendUserText(text) {
+    const last = this.messages[this.messages.length - 1];
+    if (last?.role === 'user' && Array.isArray(last.content)) last.content.push({ type: 'text', text });
+    else this.messages.push({ role: 'user', content: [{ type: 'text', text }] });
+  }
+
   get() {
     return [...this.messages];
   }
