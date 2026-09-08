@@ -81,5 +81,11 @@ export const pinBoard: CardDef<Params> = {
     { key: "items", label: "要点(用|分隔)", type: "text" },
     { key: "stepMs", label: "间隔(ms)", type: "number" },
   ],
+  parts: [
+    { id: "title", label: "小标题", role: "text", params: ["title"], enterMs: 0, settleMs: 600 },
+    { id: "subtitle", label: "副标题", role: "text", params: ["subtitle", "accent"], enterMs: 100, settleMs: 700 },
+    { id: "items", label: "要点", role: "list", params: ["items", "stepMs"], enterMs: 300, settleMs: 300 + 2 * 200 + 400 },
+  ],
+  lifecycle: { settleMs: 1100, after: "hold", exit: ["fade"] },
   Component: PinBoardCard,
 };

@@ -154,5 +154,11 @@ export const focusCard: CardDef<Params> = {
     { key: "camW", label: "视频宽", type: "number" },
     { key: "camH", label: "视频高", type: "number" },
   ],
+  parts: [
+    { id: "bg", label: "背景", role: "decor", params: ["bg"], enterMs: 0, settleMs: 500 },
+    { id: "cam", label: "口播视频", role: "media", params: ["camSrc", "showRing", "camDX", "camDY", "camW", "camH", "side"], enterMs: 0, settleMs: 700 },
+    { id: "items", label: "要点", role: "list", params: ["items", "stepMs"], enterMs: 300, settleMs: 300 + 2 * 300 + 600 },
+  ],
+  lifecycle: { settleMs: 1500, after: "evolve", exit: ["fade"] },
   Component: FocusCard,
 };

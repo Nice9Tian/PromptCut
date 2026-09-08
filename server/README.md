@@ -22,6 +22,12 @@
 
 AI 面板的分页栏、Agent 之间的范围声明与互相通知（`declare_scope` / `list_agents` / `send_message` / `check_messages`），以及 `conversationId → PROMPTCUT_AGENT` 的透传，见 [docs/multi-agent.md](../docs/multi-agent.md)。
 
+### 约定封装（src/kernel/envelope.ts）
+
+* MCP 工具 `get_clip({ clipId })` / `set_clip({ clipId, envelope })`：Agent 看到和改的都是这份固定形状的封装（card + lifecycle / time / frame / blend / motion / parts / params），不是原始 clip，更不是组件源码。左栏「编辑 → 代码」显示和编辑的也是它，两边走同一个 `applyEnvelope`：只写有差异的段、任一处不合法整份不写。
+* 卡片契约多了 `parts`（部件树）和 `lifecycle`（进场落定时刻、之后停住 / 循环 / 持续变化、支持的退场），见 `server/card-authoring-guide.md`。
+* 素材封装卡：`server/catalog` 里的 Lottie / 粒子配置在构建时各自翻译成一张卡（`src/cards/assets`，id 前缀 `lottie-` / `particles-`，create_card 不许占），粒子卡的旋钮由 `particlesKnobs.ts` 从配置里翻译出来（配置里有的才露）。
+
 ### Skill 任务（server/vite-plugin-skill.ts）
 
 * `GET /api/skill/jobs` - 每个任务多了 `starting`（刚点的、实例还没上来，三分钟内）、`startedAt`（最近一次起实例）、

@@ -24,6 +24,10 @@ function describe(control) {
   const bits = [control.label].filter(Boolean);
   if (control.required) bits.push("必填");
   if (control.hint) bits.push(control.hint);
+  // 素材目录:列出可选的 URL,但不做 enum —— 目录之外的 URL / 内联 JSON 也是合法的
+  if (control.type === "asset" && Array.isArray(control.options) && control.options.length) {
+    bits.push("素材目录:" + control.options.map((o) => `${o.value}(${o.label})`).join(";"));
+  }
   return bits.join(" · ") || undefined;
 }
 

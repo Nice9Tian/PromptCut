@@ -65,5 +65,9 @@ export const blurText: CardDef<Params> = {
     { key: "text", label: "文字", type: "text" },
     { key: "staggerMs", label: "字间距(ms)", type: "number" },
   ],
+  parts: [
+    { id: "text", label: "文字", role: "list", params: ["text", "staggerMs"], enterMs: 0, settleMs: 2 * 220 + 800 },
+  ],
+  lifecycle: { settleMs: 1240, after: "hold", exit: ["fade"] },
   Component: BlurTextCard,
 };

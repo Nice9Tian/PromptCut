@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { actions } from "../../store/project";
 import type { CardDef, Control } from "../../kernel/types";
+import { ASSET_TARGET } from "../../cards/catalogAssets";
 import type { TrackClip } from "../../kernel/project";
 import { SpeakerPicker } from "./SpeakerPicker";
 
@@ -147,6 +148,31 @@ export function ParamsForm({ clip, cardDef }: { clip: TrackClip; cardDef: CardDe
                 </select>
               )}
               
+              {ctrl.type === "asset" && (
+                <div className="flex w-full flex-col gap-1">
+                  <select
+                    data-pc-param={ctrl.key}
+                    value={ctrl.options.some((o) => o.value === String(val ?? "")) ? String(val) : ""}
+                    onChange={e => actions.setClipParams(clip.id, { ...(e.target.value ? ASSET_TARGET[ctrl.kind].extra : {}), [ctrl.key]: e.target.value })}
+                    className="w-full h-6 px-1 bg-neutral-900 border border-neutral-800 rounded text-xs text-neutral-200 outline-none focus:border-neutral-600"
+                    title="软件自带的素材;要用别的就在下面手填"
+                  >
+                    <option value="">{String(val ?? "").trim() && !ctrl.options.some((o) => o.value === String(val)) ? "(自定义,见下)" : "— 不用素材 —"}</option>
+                    {ctrl.options.map((o) => (
+                      <option key={o.value} value={o.value}>{o.label}</option>
+                    ))}
+                  </select>
+                  <input
+                    data-pc-param-custom={ctrl.key}
+                    type="text"
+                    value={String(val ?? "")}
+                    placeholder="或手填 URL / JSON"
+                    onChange={e => actions.setClipParams(clip.id, { [ctrl.key]: e.target.value })}
+                    className="w-full h-6 px-1.5 bg-neutral-900 border border-neutral-800 rounded text-xs text-neutral-200 outline-none focus:border-neutral-600"
+                  />
+                </div>
+              )}
+
               {ctrl.type === "color" && (
                 <ColorControl clipId={clip.id} ctrlKey={ctrl.key} value={String(val ?? "")} isColorOk={isColorOk} isHex={isHex} />
               )}

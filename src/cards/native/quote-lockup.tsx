@@ -81,5 +81,10 @@ export const quoteLockup: CardDef<Params> = {
     { key: "author", label: "署名", type: "text" },
     { key: "side", label: "靠侧", type: "select", options: [{ value: "left", label: "靠左" }, { value: "right", label: "靠右" }] },
   ],
+  parts: [
+    { id: "quote", label: "金句", role: "list", params: ["quote", "side"], enterMs: 0, settleMs: 960 },
+    { id: "author", label: "署名", role: "text", params: ["author"], enterMs: 740, settleMs: 1340 },
+  ],
+  lifecycle: { settleMs: 1340, after: "hold", exit: ["fade"] },
   Component: QuoteLockupCard,
 };

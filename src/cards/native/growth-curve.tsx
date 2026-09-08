@@ -196,5 +196,12 @@ export const growthCurve: CardDef<Params> = {
     { key: "drawMs", label: "绘制时长(ms)", type: "number", min: 500, max: 2000, step: 100 },
     { key: "caption", label: "右下角小注", type: "text" },
   ],
+  parts: [
+    { id: "title", label: "标题", role: "group", params: ["kicker", "kickerZh"], enterMs: 0, settleMs: 0 },
+    { id: "curve", label: "曲线", role: "media", params: ["points", "drawMs"], enterMs: 0, settleMs: 1000 },
+    { id: "value", label: "最高值", role: "text", params: ["unit"], enterMs: 850, settleMs: 1250 },
+    { id: "caption", label: "小注", role: "text", params: ["caption"], enterMs: 0, settleMs: 0 },
+  ],
+  lifecycle: { settleMs: 1250, after: "hold", exit: ["fade"] },
   Component: GrowthCurveCard,
 };

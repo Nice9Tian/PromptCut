@@ -42,5 +42,9 @@ export const blurFadeCard: CardDef<Params> = {
       ],
     },
   ],
+  parts: [
+    { id: "text", label: "文字", role: "text", params: ["text", "accent", "position"], enterMs: 0, settleMs: 400 },
+  ],
+  lifecycle: { settleMs: 400, after: "hold", exit: ["fade"] },
   Component: BlurFadeCard,
 };

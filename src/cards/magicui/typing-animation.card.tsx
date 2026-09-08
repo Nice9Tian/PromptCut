@@ -31,5 +31,9 @@ export const typingAnimationCard: CardDef<Params> = {
     { key: "text", label: "文本", type: "text" },
     { key: "duration", label: "每字毫秒", type: "number" },
   ],
+  parts: [
+    { id: "text", label: "文字", role: "text", params: ["text", "duration"], enterMs: 0, settleMs: 1320 },
+  ],
+  lifecycle: { settleMs: 1320, after: "hold", exit: ["fade"] },
   Component: TypingAnimationCard,
 };

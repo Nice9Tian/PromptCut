@@ -51,6 +51,8 @@ PromptCut 使用多轨模型 (`Project` 对象):
       - `set_position({ clipId, x, y, anchor })`：精确把锚点放到某个坐标（`anchor` 决定 x,y 指的是框内哪个点，[0.5,0.5] 是中心）。
       放完看返回里的 `layout`：**`contentBox`（实测的实体内容框）判会不会盖住人**，`world.visualBox` 判会不会出画；再用 `look` 看画面。`get_layout` 随时能读。微调时给 `nudge` / `set_position` 带 `clamp: true`，卡片不会被推出画。
     - **别遮人的完整走法**：`list_shots` / `list_subjects` 的 `suggestedRect` 就是空的那一侧的矩形，直接 `set_rect({ clipId, ...suggestedRect })`；`suggestedRect` 为 null（四侧全被占）时不要硬放，改 `update_clip({ clipId, opacity: 0.6 })` 降不透明度、或缩小、或换镜头。
+    - **一张卡对外唯一的样子是它的「约定封装」**:`get_clip({ clipId })` 返回 card(含 lifecycle:进场多久落定 settleMs、之后 hold / loop / evolve、支持的退场)、time、frame(local 可写 / world 只读)、blend、motion、parts(部件树,每个部件带自己的参数和进场时序)、params。**不要读组件源码、不要读素材文件来推断一张卡怎么动** —— 看封装。要判断「动画早播完了后面都是静止」比较 lifecycle.settleMs 和 time.duration;哪个参数管哪一块看 parts。改它用 `set_clip({ clipId, envelope })`(整份传回或只传要改的段,只写有差异的段),单项工具 update_clip / set_rect 等改的是同一份数据。
+    - **动效素材已经是卡**:`list_cards` 里 source 为 `asset` 的 `lottie-<name>`(Lottie 动画)和 `particles-<name>`(粒子背景)直接 add_clip 就能用,参数是翻译好的旋钮(速度 / 到头后 / 适配;数量 / 速度 / 大小 / 颜色 / 连线 / 种子),按标签搜(雪花、星空、片头标题)。不要去拼 /catalog/… 的 URL 手填进通用的 lottie / particles 卡,那两张只在用户自己给了文件时才用。
     - **上下层、淡入淡出、不透明度**都在 `update_clip`：`trackId` 换序列（序列数组里靠后的盖住靠前的），`fadeIn` / `fadeOut` 秒数，`opacity` 0~1。
     - **一个项目里可以有多条剪辑（时间轴）**，时间轴顶部的选项栏切换，默认「剪辑1 / 剪辑2 / 剪辑3」。**所有 clip、序列、定位、导出、see_preview 工具都只作用于当前激活的那条**，`get_project` 的 `tracks` 也是它的。用户说「换到剪辑2」「另起一条时间轴」「再做一版」时：`list_cuts` 看有哪些、`switch_cut({ name })` 切换、`add_cut` 新建（默认切过去）。切换后选中会清空、播放头回到那条上次离开的位置——切完先 `get_project` 或看返回里的 `timeline` 再动手，别拿上一条的 clipId 去改。
 

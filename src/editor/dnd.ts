@@ -13,7 +13,7 @@ export const MIME_CARD = "application/x-promptcut-card";
 export const MIME_MEDIA = "application/x-promptcut-media";
 
 export type DragPayload =
-  | { kind: "card"; cardId: string; name: string; duration: number }
+  | { kind: "card"; cardId: string; name: string; duration: number; params?: Record<string, unknown> }
   | { kind: "media"; mediaId: string; name: string; duration: number };
 
 let payload: DragPayload | null = null;

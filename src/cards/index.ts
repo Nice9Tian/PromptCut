@@ -2,12 +2,14 @@ import { registerCards, resetCards, allCards } from "../kernel/registry";
 import { magicuiCards } from "./magicui";
 import { nativeCards } from "./native";
 import { userCards } from "./user";
+import { assetCards } from "./assets";
 import { probeCards } from "./_probe";
 
 // 这个模块会被 HMR 重新执行(新建或修改 src/cards/user/ 下的卡就会触发),
 // 所以每次都从空开始重装一遍:删掉的卡片文件不会赖在库里,重复注册也不会报错。
 resetCards();
-registerCards([...magicuiCards, ...nativeCards, ...probeCards]);
+// 素材封装卡(Lottie / 粒子目录翻译出来的)和内置卡一起注册:它们是构建时生成的,id 有保留前缀
+registerCards([...magicuiCards, ...nativeCards, ...assetCards, ...probeCards]);
 
 // 用户 / AI 建的卡最后注册,并且要先滤掉和内置卡撞车的 id。
 // 这些文件是运行时新增的,一张撞车的卡不该让整个编辑器起不来 ——

@@ -111,5 +111,11 @@ export const uiCallout: CardDef<Params> = {
       ],
     },
   ],
+  parts: [
+    { id: "ring", label: "圈选框", role: "decor", params: ["ringW", "ringH", "offsetX", "offsetY"], enterMs: 0, settleMs: 600 },
+    { id: "line", label: "引线", role: "decor", params: ["side"], enterMs: 400, settleMs: 900 },
+    { id: "label", label: "标签", role: "text", params: ["label"], enterMs: 900, settleMs: 1300 },
+  ],
+  lifecycle: { settleMs: 1300, after: "hold", exit: ["fade"] },
   Component: UiCalloutCard,
 };

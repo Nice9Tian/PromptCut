@@ -109,5 +109,10 @@ export const rankBars: CardDef<Params> = {
     { key: "rows", label: "数据行 (名称,数值|名称,数值)", type: "text" },
     { key: "suffix", label: "数值后缀", type: "text" },
   ],
+  parts: [
+    { id: "title", label: "标题", role: "text", params: ["title"], enterMs: 0, settleMs: 0 },
+    { id: "rows", label: "数据行", role: "list", params: ["rows", "suffix"], enterMs: 0, settleMs: 3 * 120 + 900 },
+  ],
+  lifecycle: { settleMs: 1260, after: "hold", exit: ["fade"] },
   Component: RankBarsCard,
 };

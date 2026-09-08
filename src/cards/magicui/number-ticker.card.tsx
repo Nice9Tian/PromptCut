@@ -40,5 +40,10 @@ export const numberTickerCard: CardDef<Params> = {
     { key: "unit", label: "单位", type: "text" },
     { key: "accent", label: "主色(留空用主题色)", type: "color" },
   ],
+  parts: [
+    { id: "number", label: "数值", role: "text", params: ["value", "unit", "accent"], enterMs: 0, settleMs: 1600 },
+    { id: "label", label: "说明", role: "text", params: ["label"], enterMs: 0, settleMs: 0 },
+  ],
+  lifecycle: { settleMs: 1600, after: "hold", exit: ["fade"] },
   Component: NumberTickerCard,
 };

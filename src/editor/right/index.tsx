@@ -10,7 +10,8 @@ import { AgentTabs } from "./AgentTabs";
 import { useAgentTabs } from "../../ai/agentTabs";
 import { connectMcpExecutor, EditorApi } from "../../ai/mcpExecutor";
 import { getState, actions } from "../../store/project";
-import { allCards } from "../../kernel/registry";
+import { allCards, getCard } from "../../kernel/registry";
+import { applyEnvelope, envelopeOf } from "../../kernel/envelope";
 import { validateCardParams, findCard } from "../../kernel/cardParams";
 import {
   findClip, subjectForRange, subjectSampleTimes, suggestPosition,
@@ -334,6 +335,34 @@ export function RightPanel() {
         });
         clipGuard.noteMutation();
         return r;
+      },
+      // 约定封装:Agent 看到和改的都是它(kernel/envelope.ts),不是原始 clip 也不是组件源码
+      getClip: (args) => {
+        const hit = findClip(getState().project, args.clipId);
+        if (!hit) throw new Error(`找不到 clip ${args.clipId}`);
+        return envelopeOf(getState().project, hit.clip, getCard(hit.clip.cardId), stageSize());
+      },
+      setClip: (args) => {
+        const hit = findClip(getState().project, args.clipId);
+        if (!hit) throw new Error(`找不到 clip ${args.clipId}`);
+        const report = applyEnvelope(
+          getState().project, args.clipId, args.envelope, getCard(hit.clip.cardId), stageSize(),
+          {
+            setClipCard: (id, cardId) => actions.setClipCard(id, cardId),
+            setClipParams: (id, params, opts) => actions.setClipParams(id, params, opts),
+            moveClip: (id, patch) => actions.moveClip(id, patch),
+            setClipFrame: (id, frame) => actions.setClipFrame(id, frame),
+            updateClip: (id, patch) => actions.updateClip(id, patch),
+          },
+          getCard,
+        );
+        if (report.changed.length) clipGuard.noteMutation();
+        const after = findClip(getState().project, args.clipId)!;
+        return {
+          ok: true, clipId: args.clipId, changed: report.changed,
+          envelope: envelopeOf(getState().project, after.clip, getCard(after.clip.cardId), stageSize()),
+          look: lookHint(args.clipId), timeline: timelineDigest(getState().project),
+        };
       },
       getLayout: (args) => {
         const p = getState().project;

@@ -30,7 +30,7 @@ function compile(srcRel, outName, rewrites = []) {
 }
 
 const registryUrl = compile('src/kernel/registry.ts', 'registry.mjs');
-const cardParamsUrl = compile('src/kernel/cardParams.ts', 'cardParams.mjs', [['./registry', './registry.mjs']]);
+const cardParamsUrl = compile('src/kernel/cardParams.ts', 'cardParams.mjs', [['./registry.ts', './registry.mjs']]);
 // 转译产物落在临时目录里,解析不到 node_modules,所以把 typescript 换成绝对 URL
 const tsUrl = pathToFileURL(require_.resolve('typescript')).href;
 const pluginUrl = compile('server/vite-plugin-cards.ts', 'cards-plugin.mjs', [["from 'typescript'", `from '${tsUrl}'`]]);

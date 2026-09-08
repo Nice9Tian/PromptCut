@@ -123,5 +123,9 @@ export const chapterBar: CardDef<Params> = {
     { key: "progAccent", label: "进度颜色", type: "color" },
     { key: "progAlpha", label: "进度透明度", type: "number", step: 0.1 },
   ],
+  parts: [
+    { id: "chapters", label: "章节", role: "list", params: ["chapters", "showProgress", "progMode", "progAccent", "progAlpha"], enterMs: 0, settleMs: 800 },
+  ],
+  lifecycle: { settleMs: 800, after: "evolve", exit: ["fade"] },
   Component: ChapterBarCard,
 };

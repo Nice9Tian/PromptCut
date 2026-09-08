@@ -83,5 +83,9 @@ export const checklist: CardDef<Params> = {
     { key: "items", label: "条目(竖线分隔)", type: "text" },
     { key: "stepMs", label: "行间隔(ms)", type: "number" },
   ],
+  parts: [
+    { id: "items", label: "条目", role: "list", params: ["items", "stepMs"], enterMs: 0, settleMs: 3 * 260 + 650 },
+  ],
+  lifecycle: { settleMs: 1430, after: "hold", exit: ["fade"] },
   Component: ChecklistCard,
 };

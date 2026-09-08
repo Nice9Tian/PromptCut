@@ -78,6 +78,34 @@ export const priceTag: CardDef<Params> = {
 | `defaults` | ✓ | 每个参数的默认值。见下面「默认值规则」 |
 | `controls` | ✓ | 参数控件表。界面面板和 AI 都靠它了解 schema |
 | `Component` | ✓ | React 组件 |
+| `parts` | 建议 | **部件树**(约定封装的结构):这张卡对外由哪几块组成,每块由哪些参数驱动、什么时候进场、多久落定。代码页和 `get_clip` 按它组织参数。见下面「部件树与生命周期」 |
+| `lifecycle` | 建议 | **生命周期**(约定封装的时间):进场多久落定(`settleMs`)、之后 `hold` 停住 / `loop` 循环 / `evolve` 持续变化、支持的退场(`exit`,目前都是 `["fade"]`) |
+
+### 部件树与生命周期(约定封装)
+
+Agent 和代码页看到的不是组件源码,而是一份固定形状的**封装**(`get_clip` 返回的对象):card + lifecycle、time、frame、blend、parts、params。
+组件源码只在建卡 / 改卡时经过审查门落盘一次,之后**只通过封装操作**。所以一张卡要把自己的结构和时序说清楚:
+
+```ts
+  parts: [
+    { id: "title", label: "小标题", role: "text", params: ["title"], enterMs: 0, settleMs: 600 },
+    { id: "items", label: "要点", role: "list", params: ["items", "stepMs"], enterMs: 300, settleMs: 1100 },
+  ],
+  lifecycle: { settleMs: 1100, after: "hold", exit: ["fade"] },
+```
+
+- `parts[].params` 里的键必须是 `controls` 里真有的;一个参数只归一个部件;通用的 position / accent 归根部件或不写。
+- `enterMs` / `settleMs` 按 motion 的 delay / duration 算(spring 按 +400ms 估),列表按最后一项算。
+- `lifecycle.settleMs` 是整张卡最晚落定的时刻。Agent 据此知道「这段 clip 后面几秒是静止的」,该缩短时长还是加淡出。
+- 没写这两个字段的卡按「一个根部件、有进场动画、之后停住、只支持淡出」处理,不报错。
+
+### 素材封装卡(不要再手写)
+
+素材目录里的 Lottie 动画和粒子配置**已经是卡**:`lottie-<name>`、`particles-<name>`(src/cards/assets,构建时由目录生成)。
+它们是「动效素材 → 函数翻译 → 约定封装」的产物:原始文件留在目录里,组件复用 LottieView / ParticlesView,
+对外只有翻译出来的旋钮(粒子卡露出配置里真有的数量 / 速度 / 大小 / 颜色 / 不透明度 / 连线)。
+想用某个素材就 `add_clip({ cardId: "lottie-adrock" })`,**不要**去读素材 JSON、不要用 create_card 再包一层;
+`lottie-` / `particles-` 前缀是保留命名空间。
 
 ### 默认值规则（重要）
 

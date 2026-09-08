@@ -136,6 +136,29 @@ export const tools = [
     side: "browser"
   },
   {
+    name: "get_clip",
+    description: "读一张卡的**约定封装**:card(哪张卡 + lifecycle:进场多久落定 settleMs、之后 hold 停住 / loop 循环 / evolve 持续变化、支持的退场 exit)、time(start / end / duration)、frame(local 存下来的框,null 即铺满;world 算出来的画面绝对位置,只读)、blend(opacity / fadeIn / fadeOut)、motion(是否绑了轨迹)、parts(部件树:每个部件带自己的参数值和进场时序)、params(全量参数)。要判断「动画早就播完了后面都是静止」看 lifecycle.settleMs 和 time.duration;要知道哪个参数管哪一块看 parts。改它用 set_clip,或者 update_clip / set_rect 等单项工具 —— 它们改的是同一份数据。",
+    inputSchema: {
+      type: "object",
+      properties: { clipId: { type: "string" } },
+      required: ["clipId"]
+    },
+    side: "browser"
+  },
+  {
+    name: "set_clip",
+    description: "按约定封装改一张卡:把 get_clip 拿到的对象改好后整份传回来(也可以只传要改的段)。可写:card.id(换卡)、params(全量)或 parts 里各部件的 params、time.start / time.end、frame.local(x / y / w / h / anchor / scale / rotate,或 null 铺满)、blend.opacity / fadeIn / fadeOut。只写有差异的段,任一处不合法整份不写;frame.world、motion、card.lifecycle 是只读的,传了会被忽略。返回改了哪些段、新的封装和 look。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        clipId: { type: "string" },
+        envelope: { type: "object", description: "get_clip 返回的那个对象(改过的),或只含要改的段" }
+      },
+      required: ["clipId", "envelope"]
+    },
+    side: "browser"
+  },
+  {
     name: "get_layout",
     description: "读卡片的布局:local(存下来的框,没设过为 null 即铺满全屏)、world(算出来的画面绝对位置:锚点坐标、尺寸、box 是画布矩形、visualBox 是缩放旋转之后画布真正占的矩形)和 **contentBox(量出来的实体内容框:文字、图片、有底色的盒子的并集,透明容器不算)**。判断「这张卡会不会盖住人」看 contentBox —— 默认卡的画布铺满全屏,看 box/visualBox 永远是「会盖住」;判断「会不会出画」看 visualBox。contentBox 按当前播放头时刻在预览里实测,卡片此刻不在画面上时为 null 并附 contentNote(先 seek 进它的时段)。不传 clipId 返回全部卡片的加舞台尺寸。set_position / set_rect / align / nudge 四个工具改的都是同一个框,任何一个改完都能在这里读到一致的结果。",
     inputSchema: {

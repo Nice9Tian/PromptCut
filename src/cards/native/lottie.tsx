@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import lottie, { type AnimationItem } from "lottie-web";
 import type { CardDef, CardProps } from "../../kernel/types";
+import { assetOptions } from "../catalogAssets";
 import { isExportMode } from "../../kernel/clock";
 
 /**
@@ -48,7 +49,22 @@ const DEMO_JSON = JSON.stringify({
   }],
 });
 
-function LottieCard({ params, t = 0 }: CardProps<Params>) {
+/** LottieView 的输入:和卡片参数同名,素材封装卡(src/cards/assets)把 src 固定后也用它 */
+export interface LottieViewProps {
+  json: string;
+  src: string;
+  speed: number;
+  loop: string;
+  fit: string;
+  t?: number;
+}
+
+/**
+ * 渲染核心:给定数据来源和 t,把动画定位到对应帧。这是「函数翻译」那一层的产物 ——
+ * 素材目录里的每个 Lottie 文件都通过它变成一张封装卡,卡片之间只差 src。
+ */
+export function LottieView(params: LottieViewProps) {
+  const t = params.t ?? 0;
   const box = useRef<HTMLDivElement>(null);
   const anim = useRef<AnimationItem | null>(null);
   const meta = useRef({ fr: 30, total: 0 });
@@ -104,20 +120,26 @@ function LottieCard({ params, t = 0 }: CardProps<Params>) {
   return <div ref={box} className="absolute inset-0" />;
 }
 
+function LottieCard({ params, t = 0 }: CardProps<Params>) {
+  return <LottieView json={params.json} src={params.src} speed={params.speed} loop={params.loop} fit={params.fit} t={t} />;
+}
+
 export const lottieCard: CardDef<Params> = {
   id: "lottie",
   name: "Lottie 动画",
   description: "播放一段 Lottie(AE 导出的 JSON)动画,跟着时间轴逐帧走",
-  useWhen: "手上有现成的 Lottie 文件(LottieFiles 下载的、设计师用 AE 导出的)想直接放进视频时用。把 JSON 文本贴进 json 参数,或者给一个 URL。它不会自己「播」,是按 clip 时间逐帧定位:clip 多长动画就走多长,speed 调快慢,loop 决定到头了循环还是停在最后一帧。不适合自己从零画动效 —— 那用别的卡。素材文件的许可证要自己核对。",
+  useWhen: "要放一段现成的 Lottie 动画时用。软件自带几段素材(片头字标、角色亮相、节日装饰等),列在 src 控件的 options 里,把那个 URL 填进 src 就行;手上有别的 Lottie 文件(LottieFiles 下载的、设计师用 AE 导出的)也可以直接用。把 JSON 文本贴进 json 参数,或者给一个 URL。它不会自己「播」,是按 clip 时间逐帧定位:clip 多长动画就走多长,speed 调快慢,loop 决定到头了循环还是停在最后一帧。不适合自己从零画动效 —— 那用别的卡。素材文件的许可证要自己核对。",
   tags: ["lottie", "动画文件", "AE", "素材"],
   source: "native",
   defaults: { json: DEMO_JSON, src: "", speed: 1, loop: "no", fit: "contain" },
   controls: [
     { key: "json", label: "Lottie JSON 文本(优先)", type: "text", hint: "整个 .json 文件的内容;留空则用 src" },
-    { key: "src", label: "或 JSON 的 URL", type: "text" },
+    { key: "src", label: "或素材 / URL", type: "asset", kind: "lottie", options: assetOptions("lottie"), hint: "从素材目录里挑一个(options 里的 URL),或填别的 JSON URL;json 参数留空时才用它" },
     { key: "speed", label: "速度倍率", type: "number", min: 0.1, max: 8, step: 0.1 },
     { key: "loop", label: "到头后", type: "select", options: [{ value: "no", label: "停在最后一帧" }, { value: "yes", label: "循环" }] },
     { key: "fit", label: "适配", type: "select", options: [{ value: "contain", label: "完整显示" }, { value: "cover", label: "铺满裁切" }] },
   ],
+  parts: [{ id: "animation", label: "动画", role: "media", params: ["json", "src", "speed", "loop", "fit"] }],
+  lifecycle: { after: "hold", exit: ["fade"] },
   Component: LottieCard,
 };

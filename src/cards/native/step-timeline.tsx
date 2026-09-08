@@ -93,5 +93,9 @@ export const stepTimeline: CardDef<Params> = {
     { key: "steps", label: "步骤(竖线分隔)", type: "text" },
     { key: "stepMs", label: "步进时间(ms)", type: "number" },
   ],
+  parts: [
+    { id: "steps", label: "步骤", role: "list", params: ["steps", "stepMs"], enterMs: 0, settleMs: 4 * 250 + 400 },
+  ],
+  lifecycle: { settleMs: 1400, after: "evolve", exit: ["fade"] },
   Component: StepTimelineCard,
 };

@@ -18,7 +18,13 @@ export type Control =
   | (ControlBase & { type: "text" })
   | (ControlBase & { type: "number"; min?: number; max?: number; step?: number })
   | (ControlBase & { type: "select"; options: { value: string; label: string }[] })
-  | (ControlBase & { type: "color" });
+  | (ControlBase & { type: "color" })
+  /**
+   * 素材目录里挑一个(Lottie 动画 / 粒子配置)。value 是同源 URL,直接填进参数;
+   * 和 select 的区别:**不限定取值** —— 目录之外的 URL、内联 JSON 照样能填。
+   * options 来自 src/cards/catalogAssets.ts,list_cards 原样带出去,AI 看到就知道有哪些素材。
+   */
+  | (ControlBase & { type: "asset"; kind: "lottie" | "particles"; options: { value: string; label: string }[] });
 
 export interface CardProps<P> {
   params: P;
@@ -33,14 +39,58 @@ export interface CardProps<P> {
   duration?: number;
 }
 
+/**
+ * 卡片对外暴露的**部件树**:约定封装的结构一半。
+ *
+ * 一张卡在外面看不该是一坨扁平参数:要点钉板是「标题 + 副标题 + 一列要点」,每个部件由
+ * 哪几个参数驱动、什么时候进场、多久落定,都写在这棵树上。代码页(CodeTab)按这棵树把
+ * 参数分组显示,Agent 拿到的封装(kernel/envelope.ts)也按它组织 —— 两边看到的是同一个结构。
+ *
+ * 部件目前**不是**独立的渲染单元(部件级 frame 还没落地,见 ClipFrame 的说明),所以这里
+ * 只有「结构 + 参数归属 + 时序」,没有位置。将来部件级 frame 加进来时就挂在这个节点上。
+ */
+export interface CardPart {
+  /** 稳定 id,卡内唯一,如 "title"、"items" */
+  id: string;
+  label: string;
+  /** 部件是什么:文字 / 媒体(图、动画、canvas)/ 列表 / 装饰 / 分组 */
+  role?: "text" | "media" | "list" | "decor" | "group";
+  /** 驱动这个部件的参数键(controls 里的 key) */
+  params?: string[];
+  children?: CardPart[];
+  /** 相对 clip 起点,这个部件什么时候开始进场(毫秒);静态可知时填 */
+  enterMs?: number;
+  /** 进场动画什么时候落定(毫秒);列表类按最后一项算 */
+  settleMs?: number;
+}
+
+/**
+ * 卡片的生命周期声明:约定封装的时间一半。
+ *
+ * 大多数卡只有进场动画,落定之后就静止到 clip 结束 —— 但这件事以前没处写,Agent 给一张
+ * 0.9 秒落定的卡配 3 秒时长时不知道后面 2 秒是死的。这里把它说清楚。退场目前只有 clip 级
+ * 的 fadeOut(整体淡出);卡片自己实现的反向退场还没有,所以 exit 里暂时只会出现 "fade"。
+ */
+export interface CardLifecycle {
+  /** 进场动画多久落定(毫秒,按默认参数算);跟着时间轴走或一直在变的卡可以不填 */
+  settleMs?: number;
+  /** 落定之后:hold 停住不动 / loop 循环重播 / evolve 一直在变(粒子、跟时间轴走的卡) */
+  after: "hold" | "loop" | "evolve";
+  /** 支持的退场方式。"fade" = 用 clip.fadeOut 整体淡出,所有卡都支持 */
+  exit: ("fade" | "reverse")[];
+}
+
 /** 卡片契约。所有卡片(自家写的、Magic UI 适配的、AI 现场建的)都长这样。 */
 export interface CardDef<P = Record<string, unknown>> {
   id: string;
   name: string;
   /** 一句话说清这张卡长什么样、播什么动效 */
   description: string;
-  /** 来源标签,给面板分组。`user` 是 AI 或用户后来建的,存在 src/cards/user/ */
-  source: "magicui" | "native" | "user";
+  /**
+   * 来源标签,给面板分组。`user` 是 AI 或用户后来建的,存在 src/cards/user/;
+   * `asset` 是从素材目录(Lottie 动画 / 粒子配置)翻译出来的封装卡,见 src/cards/assets/
+   */
+  source: "magicui" | "native" | "user" | "asset";
   /**
    * 什么时候该选这张卡 —— 写给 AI 看的选卡依据,而不是描述外观。
    * 例:"口播里出现带单位的数字(3 倍、80%)时用它把数字放大成主视觉"。
@@ -52,6 +102,10 @@ export interface CardDef<P = Record<string, unknown>> {
   defaults: P;
   controls: Control[];
   Component: ComponentType<CardProps<P>>;
+  /** 部件树(约定封装的结构)。没写 = 整张卡是一个部件,所有参数都归它 */
+  parts?: CardPart[];
+  /** 生命周期(约定封装的时间)。没写 = 按「有进场动画、之后停住、只支持淡出」处理 */
+  lifecycle?: CardLifecycle;
 }
 
 /**

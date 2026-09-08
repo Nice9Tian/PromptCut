@@ -104,5 +104,11 @@ export const statProof: CardDef<Params> = {
     { key: "footZh", label: "中文注脚", type: "text" },
     { key: "countMs", label: "动画时长(ms)", type: "number", min: 100, max: 1800, step: 100 },
   ],
+  parts: [
+    { id: "title", label: "引导字", role: "group", params: ["kicker", "kickerZh"], enterMs: 0, settleMs: 600 },
+    { id: "value", label: "数值", role: "text", params: ["value", "prefix", "suffix", "countMs"], enterMs: 0, settleMs: 1200 },
+    { id: "foot", label: "注脚", role: "group", params: ["footEn", "footZh"], enterMs: 400, settleMs: 1200 },
+  ],
+  lifecycle: { settleMs: 1200, after: "hold", exit: ["fade"] },
   Component: StatProofCard,
 };

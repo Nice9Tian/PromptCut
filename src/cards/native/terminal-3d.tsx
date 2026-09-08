@@ -126,5 +126,9 @@ export const terminal3d: CardDef<Params> = {
     { key: "lines", label: "行(|分隔)", type: "text" },
     { key: "cps", label: "每秒字符", type: "number" },
   ],
+  parts: [
+    { id: "terminal", label: "终端", role: "list", params: ["file", "lines", "cps"], enterMs: 0, settleMs: 1900 },
+  ],
+  lifecycle: { settleMs: 1900, after: "evolve", exit: ["fade"] },
   Component: Terminal3dCard,
 };

@@ -70,5 +70,11 @@ export const termCard: CardDef<Params> = {
     { key: "term", label: "术语", type: "text" },
     { key: "def", label: "定义", type: "text" },
   ],
+  parts: [
+    { id: "en", label: "小注", role: "text", params: ["en"], enterMs: 250, settleMs: 850 },
+    { id: "term", label: "术语", role: "text", params: ["term"], enterMs: 0, settleMs: 800 },
+    { id: "def", label: "定义", role: "text", params: ["def"], enterMs: 0, settleMs: 14 * 30 + 100 },
+  ],
+  lifecycle: { settleMs: 850, after: "hold", exit: ["fade"] },
   Component: TermCard,
 };

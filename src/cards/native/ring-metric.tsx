@@ -94,5 +94,10 @@ export const ringMetric: CardDef<Params> = {
     { key: "value", label: "数值(0-100)", type: "number" },
     { key: "label", label: "说明", type: "text" },
   ],
+  parts: [
+    { id: "metric", label: "指标", role: "group", params: ["value"], enterMs: 0, settleMs: 1500 },
+    { id: "label", label: "说明", role: "text", params: ["label"], enterMs: 0, settleMs: 0 },
+  ],
+  lifecycle: { settleMs: 1500, after: "hold", exit: ["fade"] },
   Component: RingMetricCard,
 };

@@ -82,5 +82,10 @@ export const entityChips: CardDef<Params> = {
     { key: "note", label: "旁注(上行|下行)", type: "text" },
     { key: "stepMs", label: "间隔(ms)", type: "number" },
   ],
+  parts: [
+    { id: "chips", label: "名牌", role: "list", params: ["chips", "stepMs"], enterMs: 0, settleMs: 1 * 150 + 600 },
+    { id: "note", label: "旁注", role: "text", params: ["note"], enterMs: 2 * 150 + 200, settleMs: 2 * 150 + 200 + 600 },
+  ],
+  lifecycle: { settleMs: 1100, after: "hold", exit: ["fade"] },
   Component: EntityChipsCard,
 };

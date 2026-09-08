@@ -66,5 +66,10 @@ export const animatedCircularProgressBarCard: CardDef<Params> = {
     { key: "label", label: "说明文字", type: "text" },
     { key: "accent", label: "主色(留空用主题色)", type: "color" },
   ],
+  parts: [
+    { id: "ring", label: "进度环", role: "media", params: ["value", "accent"], enterMs: 0, settleMs: 1200 },
+    { id: "label", label: "说明", role: "text", params: ["label"], enterMs: 0, settleMs: 0 },
+  ],
+  lifecycle: { settleMs: 1200, after: "hold", exit: ["fade"] },
   Component: AnimatedCircularProgressBarCard,
 };

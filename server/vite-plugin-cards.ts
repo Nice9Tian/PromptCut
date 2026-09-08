@@ -319,6 +319,10 @@ export function checkCardSource(
   if (id.startsWith('mu-') && !/来源\s*[:：][^\n]*magicui/i.test(source.split('\n').slice(0, 40).join('\n'))) {
     errors.push('mu- 前缀留给 Magic UI 适配卡,换一个 id。(从 magicui.design 搬来、文件头写了「来源: …magicui…」的可以用。)');
   }
+  // lottie- / particles- 是素材封装卡(src/cards/assets,由素材目录构建时生成)的命名空间,手写的卡不能占
+  if (/^(lottie|particles)-/.test(id)) {
+    errors.push('lottie- / particles- 前缀留给素材目录翻译出来的封装卡,换一个 id。');
+  }
   if (existingIds.includes(id)) {
     errors.push(`已经有 id 为 "${id}" 的卡片了。卡片 id 必须唯一,换一个;想改现有的卡请直接改它的文件。`);
   }

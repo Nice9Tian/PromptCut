@@ -1,5 +1,5 @@
 import type { CardDef, Control } from "./types";
-import { allCards } from "./registry";
+import { allCards } from "./registry.ts";
 
 /**
  * 卡片参数的校验。
@@ -33,6 +33,7 @@ function isFilled(value: unknown): boolean {
 function describeControl(c: Control): string {
   const bits = [`${c.key}(${c.label},${c.type}`];
   if (c.type === "select") bits.push(`取值 ${c.options.map((o) => o.value).join("/")}`);
+  if (c.type === "asset") bits.push(`素材目录里的 URL(${c.options.length} 个,见 controls 的 options),也可以填别的 URL 或内联 JSON`);
   if (c.required) bits.push("必填");
   return bits.join(",") + ")";
 }

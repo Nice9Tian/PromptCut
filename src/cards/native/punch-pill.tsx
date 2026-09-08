@@ -54,5 +54,9 @@ export const punchPill: CardDef<Params> = {
     ...hudControls,
     { key: "text", label: "短句", type: "text" },
   ],
+  parts: [
+    { id: "text", label: "短句", role: "text", params: ["text"], enterMs: 0, settleMs: 1200 },
+  ],
+  lifecycle: { settleMs: 1200, after: "hold", exit: ["fade"] },
   Component: PunchPillCard,
 };

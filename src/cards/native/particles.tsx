@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { tsParticles, setRandom, type Container } from "@tsparticles/engine";
 import { loadSlim } from "@tsparticles/slim";
 import type { CardDef, CardProps } from "../../kernel/types";
+import { assetOptions } from "../catalogAssets";
 
 /**
  * 粒子背景:tsParticles(MIT)画在 canvas 上的漂浮粒子,可选连线。
@@ -67,7 +68,12 @@ async function resolveOptions(params: Params): Promise<Record<string, any>> {
   return r.json();
 }
 
-function ParticlesCard({ params }: CardProps<Params>) {
+/**
+ * 渲染核心:给一个「取配置」的函数和随机种子,把粒子画进卡片层。
+ * `key` 是配置的身份 —— 它变了才重新装引擎;素材封装卡(src/cards/assets)用它把翻译后的旋钮
+ * 写回原配置再渲染,通用粒子卡用它渲染 URL / 内联 JSON / 简单参数三种来源。
+ */
+export function ParticlesView({ resolve, seed, depsKey }: { resolve: () => Promise<Record<string, any>>; seed: number; depsKey: string }) {
   const box = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -76,14 +82,14 @@ function ParticlesCard({ params }: CardProps<Params>) {
 
     // 见文件头第 1 条。导出页里 __pcResetRandom 存在,按这张卡的 seed 拨一次;编辑器里是真随机
     setRandom(() => Math.random());
-    window.__pcResetRandom?.(params.seed | 0 || 1);
+    window.__pcResetRandom?.(seed | 0 || 1);
 
     engineReady ??= loadSlim(tsParticles);
-    Promise.all([engineReady, resolveOptions(params)])
+    Promise.all([engineReady, resolve()])
       .then(([, opts]) => {
         if (dead || !box.current) return undefined;
         // 随机种子在配置取回之后再拨一次:取配置是异步的,中间别的卡可能已经抽过随机数
-        window.__pcResetRandom?.(params.seed | 0 || 1);
+        window.__pcResetRandom?.(seed | 0 || 1);
         return tsParticles.load({ element: box.current, options: forceOurs(opts) });
       })
       .then((c) => {
@@ -96,21 +102,27 @@ function ParticlesCard({ params }: CardProps<Params>) {
       dead = true;
       container?.destroy();
     };
-  }, [params.config, params.color, params.quantity, params.speed, params.size, params.links, params.seed]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [depsKey, seed]);
 
   return <div ref={box} className="absolute inset-0" />;
+}
+
+function ParticlesCard({ params }: CardProps<Params>) {
+  const depsKey = [params.config, params.color, params.quantity, params.speed, params.size, params.links].join("\u0000");
+  return <ParticlesView resolve={() => resolveOptions(params)} seed={params.seed} depsKey={depsKey} />;
 }
 
 export const particlesCard: CardDef<Params> = {
   id: "particles",
   name: "粒子背景",
   description: "漂浮的粒子,可带连线,铺满整个画面",
-  useWhen: "整段画面需要一层动态的科技感 / 星空感底纹时用,通常放最底层、盖住整段时长。两种用法:不填 config 就用颜色/数量/速度几个简单参数;要雪花、星空、气泡这类现成效果,把 config 填成素材目录里的 URL(见 card_authoring_guide 末尾「粒子配置」一节),此时简单参数不起作用。粒子位置由 seed 决定,同一个 seed 每次导出都一样;想换一种排布就换 seed。它是背景不是主角,别指望它传达信息;要强调数字或文字用别的卡叠在上面。",
+  useWhen: "整段画面需要一层动态的科技感 / 星空感底纹时用,通常放最底层、盖住整段时长。两种用法:不填 config 就用颜色/数量/速度几个简单参数;要雪花、星空、气泡、彩带这类现成效果,从 config 控件的 options 里挑一个 URL 填进 config(软件自带 50 多种),此时简单参数不起作用。粒子位置由 seed 决定,同一个 seed 每次导出都一样;想换一种排布就换 seed。它是背景不是主角,别指望它传达信息;要强调数字或文字用别的卡叠在上面。",
   tags: ["粒子", "背景", "科技", "星空", "雪花", "canvas"],
   source: "native",
   defaults: { config: "", color: "#8ab4ff", quantity: 80, speed: 1.2, size: 3, links: "yes", seed: 1 },
   controls: [
-    { key: "config", label: "现成配置(URL 或 JSON)", type: "text", hint: "填了就用它,下面的颜色/数量/速度不起作用;素材目录:/catalog/particles/<name>.json" },
+    { key: "config", label: "现成配置", type: "asset", kind: "particles", options: assetOptions("particles"), hint: "从素材目录里挑一个(options 里的 URL),或填别的 URL / 内联 JSON;填了就用它,下面的颜色/数量/速度不起作用" },
     { key: "color", label: "颜色", type: "color" },
     { key: "quantity", label: "数量", type: "number", min: 0, max: 400, step: 10 },
     { key: "speed", label: "速度", type: "number", min: 0, max: 10, step: 0.2 },
@@ -118,5 +130,7 @@ export const particlesCard: CardDef<Params> = {
     { key: "links", label: "连线", type: "select", options: [{ value: "yes", label: "有" }, { value: "no", label: "无" }] },
     { key: "seed", label: "随机种子", type: "number", min: 1, max: 99999, step: 1, hint: "换一个数就换一种排布;同一个数每次导出都一样" },
   ],
+  parts: [{ id: "particles", label: "粒子", role: "media", params: ["config", "color", "quantity", "speed", "size", "links", "seed"] }],
+  lifecycle: { after: "evolve", exit: ["fade"] },
   Component: ParticlesCard,
 };

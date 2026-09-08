@@ -90,5 +90,9 @@ export const typeShift: CardDef<Params> = {
     { key: "lines", label: "多行内容(|分行,*次重,—署名)", type: "text" },
     { key: "shiftAtMs", label: "重排时间(ms)", type: "number", min: 100, max: 2000, step: 100 },
   ],
+  parts: [
+    { id: "lines", label: "多行内容", role: "list", params: ["lines", "shiftAtMs"], enterMs: 0, settleMs: 1300 },
+  ],
+  lifecycle: { settleMs: 1300, after: "hold", exit: ["fade"] },
   Component: TypeShiftCard,
 };

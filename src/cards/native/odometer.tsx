@@ -80,5 +80,11 @@ export const odometer: CardDef<Params> = {
     { key: "label", label: "说明", type: "text" },
     { key: "kicker", label: "小字", type: "text" },
   ],
+  parts: [
+    { id: "kicker", label: "小字", role: "text", params: ["kicker"], enterMs: 0, settleMs: 0 },
+    { id: "value", label: "数值", role: "text", params: ["value", "unit"], enterMs: 0, settleMs: 1280 },
+    { id: "label", label: "说明", role: "text", params: ["label"], enterMs: 0, settleMs: 0 },
+  ],
+  lifecycle: { settleMs: 1280, after: "hold", exit: ["fade"] },
   Component: OdometerCard,
 };

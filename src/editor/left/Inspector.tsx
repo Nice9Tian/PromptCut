@@ -53,6 +53,7 @@ export function Inspector({ tab }: { tab: "form" | "code" }) {
   const magic = allCards().filter(c => c.source === "magicui");
   const native = allCards().filter(c => c.source === "native");
   const user = allCards().filter(c => c.source === "user");
+  const asset = allCards().filter(c => c.source === "asset");
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
@@ -70,6 +71,11 @@ export function Inspector({ tab }: { tab: "form" | "code" }) {
               {user.length > 0 && (
                 <optgroup label="新建">
                   {user.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </optgroup>
+              )}
+              {asset.length > 0 && (
+                <optgroup label="动效素材">
+                  {asset.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                 </optgroup>
               )}
               <optgroup label="Magic UI">

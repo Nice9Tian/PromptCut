@@ -35,5 +35,9 @@ export const wordRotateCard: CardDef<Params> = {
     { key: "words", label: "轮换词(用|分隔)", type: "text" },
     { key: "prefix", label: "前缀", type: "text" },
   ],
+  parts: [
+    { id: "words", label: "轮换词", role: "list", params: ["words", "prefix"], enterMs: 0, settleMs: 250 },
+  ],
+  lifecycle: { settleMs: 250, after: "loop", exit: ["fade"] },
   Component: WordRotateCard,
 };

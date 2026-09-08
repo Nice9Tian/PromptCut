@@ -120,5 +120,9 @@ export const captionTrack: CardDef<Params> = {
     { key: "strokeW", label: "描边宽度", type: "number" },
     { key: "strokeColor", label: "描边颜色", type: "color" },
   ],
+  parts: [
+    { id: "lines", label: "字幕行", role: "list", params: ["lines", "showEn", "strokeOn", "strokeW", "strokeColor"] },
+  ],
+  lifecycle: { after: "evolve", exit: ["fade"] },
   Component: CaptionTrackCard,
 };

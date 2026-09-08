@@ -110,5 +110,11 @@ export const versusCard: CardDef<Params> = {
       ],
     },
   ],
+  parts: [
+    { id: "cardA", label: "A侧", role: "group", params: ["aKicker", "aTitle", "aSub", "aAccent"], enterMs: 0, settleMs: 500 },
+    { id: "cardB", label: "B侧", role: "group", params: ["bKicker", "bTitle", "bSub"], enterMs: 0, settleMs: 500 },
+    { id: "badge", label: "VS标识", role: "decor", params: ["winner"], enterMs: 300, settleMs: 900 },
+  ],
+  lifecycle: { settleMs: 900, after: "hold", exit: ["fade"] },
   Component: VersusCard,
 };

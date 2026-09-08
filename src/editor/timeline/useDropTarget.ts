@@ -71,11 +71,13 @@ export function useDropTarget(target: DropTarget) {
     const cardId = dt.getData(MIME_CARD) || (payload.kind === "card" ? payload.cardId : "");
     const mediaId = dt.getData(MIME_MEDIA) || (payload.kind === "media" ? payload.mediaId : "");
 
+    // 素材格拖出来的卡带着填好的参数和时长(左栏 AssetCell);普通卡格两样都没有,走默认
+    const cardOpts = payload.kind === "card" ? { params: payload.params, duration: payload.params ? payload.duration : undefined } : {};
     let clip = null;
     if (plan.trackId) {
       clip =
         payload.kind === "card"
-          ? actions.addCardClip(cardId, plan.start, { trackId: plan.trackId })
+          ? actions.addCardClip(cardId, plan.start, { trackId: plan.trackId, ...cardOpts })
           : actions.addMediaClip(mediaId, plan.start, { trackId: plan.trackId });
     } else {
       clip = actions.addClipOnNewTrack({
@@ -84,6 +86,11 @@ export function useDropTarget(target: DropTarget) {
         mediaId: payload.kind === "media" ? mediaId : undefined,
         start: plan.start,
       });
+      // 新建序列那条路不接参数,落完再补上
+      if (clip && payload.kind === "card" && payload.params) {
+        actions.setClipParams(clip.id, payload.params);
+        if (cardOpts.duration) actions.moveClip(clip.id, { end: clip.start + cardOpts.duration });
+      }
     }
     if (!clip) return;
 

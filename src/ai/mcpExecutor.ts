@@ -42,6 +42,8 @@ export interface EditorApi {
   align(args: { clipId: string; h?: "left" | "center" | "right"; v?: "top" | "center" | "bottom"; margin?: number }): any;
   nudge(args: { clipId: string; dx?: number; dy?: number; scaleBy?: number; rotateBy?: number; clamp?: boolean }): any;
   getLayout(args?: { clipId?: string }): any;
+  getClip(args: { clipId: string }): any;
+  setClip(args: { clipId: string; envelope: unknown }): any;
   removeClip(args: { clipId: string }): any;
   duplicateClip(args: { clipId: string }): any;
   splitClip(args: { clipId: string; t: number }): any;
@@ -283,6 +285,8 @@ export function connectMcpExecutor(getApi: () => EditorApi, onStatus?: (s: { con
           else if (tool === "align") result = api.align(args);
           else if (tool === "nudge") result = api.nudge(args);
           else if (tool === "get_layout") result = api.getLayout(args);
+          else if (tool === "get_clip") result = api.getClip(args);
+          else if (tool === "set_clip") result = api.setClip(args);
           else if (tool === "remove_clip") result = api.removeClip(args);
           else if (tool === "duplicate_clip") result = api.duplicateClip(args);
           else if (tool === "split_clip") result = api.splitClip(args);
