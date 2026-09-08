@@ -1,6 +1,7 @@
 import type { Project, TranscriptSegment } from "../../kernel/project";
 import { actions, getState } from "../../store/project";
 import { createEmptyProject } from "../../kernel/project";
+import { resetProjectAi } from "../../ai/projectAi";
 import { getCard } from "../../kernel/registry";
 
 // 模块级变量存 File，供阶段 2 导出时使用
@@ -170,10 +171,15 @@ export async function importProjectFile(file: File): Promise<Project> {
     }
 
     actions.loadProject(project, file.name);
+    // 换项目就要清掉 AI 状态。打开 .proc 走 applyProjectAi、新建走 resetProjectAi,
+    // 而「导入旧格式」这条路以前两个都没走 —— 后端那把会话 id 留着,重现 81f255b。
+    // 区别是它连可见对话也没清,所以症状是看得见的,危害低一档,但一样得清。
+    resetProjectAi();
     return project;
   } else if (json.cards && Array.isArray(json.cards)) {
     const p = createEmptyProject(file.name.replace(/\.[^/.]+$/, ""));
     actions.loadProject(p, file.name);
+    resetProjectAi();
     
     let maxEnd = 0;
     for (const c of json.cards) {

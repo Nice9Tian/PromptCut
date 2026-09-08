@@ -531,8 +531,12 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
    * 复制 / 保存为文件 / 提交三条出口都在子窗口里,由用户自己挑 —— 报告动辄几百 KB,
    * 以前替用户决定「这份该复制还是该存盘」,结果他既看不到报告也没得选。
    */
+  // 收集要等一次本机请求,期间按钮还点得动 —— 每点一次就多一轮采集
+  const diagBusy = useRef(false);
   const openDiagnostics = async () => {
     if (messages.length === 0) return setToast("还没有对话可以导出");
+    if (diagBusy.current) return;
+    diagBusy.current = true;
     /*
      * 先收环境再开窗:模式、素材库、后端会话文件柜、Node 进程状态(见 ai/envCollect.ts)。
      * 少了这一段,「产品的 bug」和「这台机器的环境问题」在报告里一条都排除不掉。
@@ -554,6 +558,8 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
       setToast(null);
     } catch (e) {
       setToast(e instanceof Error ? e.message : "诊断报告生成失败");
+    } finally {
+      diagBusy.current = false;
     }
   };
   /** 有事件被截断过就在子窗口顶上说一句,免得我们照着一份残缺报告查半天 */

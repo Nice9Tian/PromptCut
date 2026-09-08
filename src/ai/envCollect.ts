@@ -51,7 +51,9 @@ function clientInput(): EnvInput {
 /** 服务端那一半:Node 进程状态、会话文件柜、装了哪些驱动 */
 async function serverPart(): Promise<unknown> {
   try {
-    const res = await fetch("/api/ai/diagnostics", { signal: AbortSignal.timeout(SERVER_TIMEOUT_MS) });
+    // refresh=0:不要为了这份快照去给三个 CLI 各起一个子进程探活(单个超时 15 秒)。
+    // 那会让最有价值的 sessions 段被探活拖到超时丢掉 —— 而这个按钮正是机器出问题时才点的。
+    const res = await fetch("/api/ai/diagnostics?refresh=0", { signal: AbortSignal.timeout(SERVER_TIMEOUT_MS) });
     const data = await res.json();
     if (!res.ok || !data?.ok) return { error: data?.error || `HTTP ${res.status}` };
     return data;

@@ -416,6 +416,38 @@ export default function vitePluginAi(): Plugin {
             getRunner(),
           ]);
           res.setHeader('Cache-Control', 'no-store');
+          /*
+           * 驱动探活会给 claude / codex / agy 各起一个子进程(runners/auth.mjs,
+           * 单个超时 15 秒)。诊断报告那条路等不起,而且它要的是**这台机器的现状**,
+           * 不是「CLI 现在还登着吗」,所以它带 ?refresh=0 走进程内缓存。
+           *
+           * 还要把它单独 try 起来:原来整个响应是 all-or-nothing 的,探活一抛错就 500,
+           * 把 node 和 sessions 一起带走 —— 而那两段恰恰是这个按钮最有价值的产出,
+           * 偏偏在机器出问题的时候最容易被连坐。
+           */
+          const refresh = new URL(req.url || '/', 'http://x').searchParams.get('refresh') !== '0';
+          let providers: unknown;
+          try {
+            /*
+             * refresh=0 那条路(诊断快照)还要再压一道**时限**。
+             *
+             * 光走缓存不够:缓存是空的时候(服务刚起)照样要探一遍,实测冷启动 3.1 秒,
+             * 而 CLI 真卡住时那是 3 × 15 秒。这个按钮偏偏是「机器已经出问题了」才点的,
+             * 也就是最可能同时撞上「缓存空」和「CLI 卡住」的场合 —— 客户端 5 秒一到就
+             * abort,把整个 server 段换成一个 error,node 和 sessions 跟着陪葬,
+             * 而那两段才是这个按钮最有价值的产出。
+             *
+             * 所以超时就把 providers 这一格换成一句话,别的照常返回。
+             * refresh=true 那条路(AI 设置里的「诊断」)不压时限:它要的就是真实探活结果。
+             */
+            providers = refresh
+              ? await runners.listProviders({ refresh })
+              : await Promise.race([
+                  runners.listProviders({ refresh: false }),
+                  new Promise((resolve) => setTimeout(() => resolve({ error: '驱动探活超时', 说明: '超过 2.5 秒没回来,这一格先跳过 —— 下面那些机器状态仍然有效' }), 2500)),
+                ]);
+          }
+          catch (e: any) { providers = { error: e?.message || String(e), 说明: '驱动探活失败 —— 下面那些机器状态仍然有效' }; }
           sendJson(res, 200, {
             ok: true,
             generatedAt: new Date().toISOString(),
@@ -437,7 +469,8 @@ export default function vitePluginAi(): Plugin {
              * 报「有几段、各几条、多新」,是这类看不见的串台唯一的物证。不含对话内容。
              */
             sessions: env.inspectSessionStore(),
-            providers: await runners.listProviders({ refresh: true }),
+            providers,
+            providersRefreshed: refresh,
             config: publicConfig(),
           });
         } catch (e: any) { sendJson(res, 500, { ok: false, error: e.message }); }

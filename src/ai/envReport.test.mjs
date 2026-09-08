@@ -83,12 +83,48 @@ test("干净起步时也要说清「就是干净的」,而不是留一个空对�
   assert.match(r.chat.说明, /从零开始/);
 });
 
-test("localStorage 里的长值要截断:一条草稿能把整份报告顶爆", () => {
-  const r = buildEnvReport({ ...base, storage: store({ "pc.draft": "x".repeat(5000) }) });
-  assert.ok(r.localSettings["pc.draft"].length < 300);
-  assert.match(r.localSettings["pc.draft"], /共 5000 字/);
+test("用户写的剧本正文不许进报告 —— 这份报告是要上传的", () => {
+  /*
+   * pc.ai.script 存的是用户手写的剧本(ai/script.ts)。原来这里按 `ai*` / `pc.*`
+   * 前缀通配收值,于是剧本前 200 字静默进了要上传的报告(ai/reportSubmit.ts)。
+   * 通配还意味着将来任何新加的同前缀键都会自动跟着外发,加键的人不会想到这一层。
+   */
+  const 剧本 = "第一幕:主角喝完野生狗奶,直接化身快乐小狗,镜头推近";
+  const r = buildEnvReport({ ...base, storage: store({ "pc.ai.script": 剧本 }) });
+  const dumped = JSON.stringify(r);
+  assert.ok(!dumped.includes("快乐小狗"), `剧本正文漏进报告了:${dumped}`);
+  assert.match(r.localSettings["pc.ai.script"], /有值/, "但要让人知道有这么个键");
+  assert.match(r.localSettings["pc.ai.script"], new RegExp(`共 ${剧本.length} 字`), "长度要报出来");
 });
 
+test("白名单里的纯设置项照旧带值 —— 不然排查时什么也看不出来", () => {
+  const r = buildEnvReport({
+    ...base,
+    storage: store({ aiProvider: "api", aiShowThinking: "1", "pc.layout.mode": "chat", "pc.ai.effort.codex": "high" }),
+  });
+  assert.deepEqual(r.localSettings, {
+    aiProvider: "api",
+    aiShowThinking: "1",
+    "pc.layout.mode": "chat",
+    "pc.ai.effort.codex": "high",
+  });
+});
+
+test("没见过的同前缀新键默认不带原文 —— 加键的人不必记得这条规矩", () => {
+  const r = buildEnvReport({ ...base, storage: store({ "pc.某个以后才加的键": "谁知道里面装了什么" }) });
+  assert.ok(!JSON.stringify(r).includes("谁知道"), "白名单外的一律不带原文");
+});
+
+test("跟我们无关的键一个都不收", () => {
+  const r = buildEnvReport({ ...base, storage: store({ "some-other-app": "x", token: "abc" }) });
+  assert.deepEqual(r.localSettings, {});
+});
+
+test("长值要截断:一条草稿能把整份报告顶爆", () => {
+  const r = buildEnvReport({ ...base, storage: store({ aiProvider: "x".repeat(5000) }) });
+  assert.ok(r.localSettings.aiProvider.length < 300);
+  assert.match(r.localSettings.aiProvider, /共 5000 字/);
+});
 test("读不到 localStorage 时报一句话,不许整份报告跟着挂", () => {
   const r = buildEnvReport({ ...base, storage: null });
   assert.match(r.localNote, /读不到/);
@@ -105,4 +141,8 @@ test("序列只报条数,不把整条时间轴塞进报告", () => {
     { id: "t-2", name: undefined, clips: 0 },
   ]);
   assert.equal(r.project.clipCount, 2);
+});
+
+test("posix 根目录下的素材,目录就是根,不是「没有目录」", () => {
+  assert.deepEqual(mediaDirs([{ id: "m", name: "a.mp4", kind: "video", path: "/a.mp4" }]), ["/"]);
 });

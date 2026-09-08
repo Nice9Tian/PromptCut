@@ -1,3 +1,7 @@
+// 带 .ts 后缀:tsconfig 开了 allowImportingTsExtensions,而单测是用 node --test 直接跑
+// .ts 的,无后缀的传递 import 它解析不了(projectAi.test.mjs 当初就栽在这上面)。
+import { AI_SESSION_PREFIX } from "./aiSessionKeys.ts";
+
 /**
  * 诊断报告里的「当时这台机器是什么状态」。
  *
@@ -57,9 +61,41 @@ export interface EnvInput {
   viewport?: { width: number; height: number; dpr?: number } | null;
 }
 
-const SESSION_PREFIX = 'aiSession:';
 /** 值太长就截断:localStorage 里存过整段草稿,一条能把报告顶上撑爆 */
 const VALUE_LIMIT = 200;
+
+/**
+ * 能把**原值**带进报告的键。是白名单,不是前缀通配。
+ *
+ * 原来写的是「`ai` 或 `pc.` 开头就收」,于是 `pc.ai.script`(用户手写的剧本正文,
+ * 见 ai/script.ts)静默进了报告 —— 而这份报告是**要上传的**(ai/reportSubmit.ts)。
+ * 更糟的是通配意味着将来任何新加的 `ai*` / `pc.*` 键都会自动跟着外发,
+ * 加键的人不会想到这一层。
+ *
+ * 所以反过来:只有明确列进来的纯设置项才带值,别的只报「有这么个键、多长」。
+ * 排查时「哪些设置存在、各多长」本身就够用,原文并不需要。
+ */
+const VALUE_SAFE = new Set([
+  "aiProvider", "aiShowThinking", "aiViewMode", "aiTeamMode", "aiSetupFace", "aiSetupDone",
+  "pc.layout.mode", "pc.volume", "pc.muted", "pc.deps.sttDismissed", "pc.agentTabs.active",
+]);
+/**
+ * 这些前缀下存的都是枚举 / 开关 / 数字(驱动名、模型名、思考档、布局标签页、面板宽度),
+ * 带值安全,而且正是排查时要看的东西。
+ *
+ * 「pc.ai.」整个前缀**不能**放行 —— 用户手写的剧本就在 pc.ai.script 底下。
+ * 所以逐个列出 pc.ai. 下面那几种设置。宁可少列几个:少列只是少一行信息,
+ * 多列就是把用户的原创内容发出去。
+ */
+const VALUE_SAFE_PREFIX = [
+  "pc.ai.model.", "pc.ai.effort.", "pc.ai.fast.", "pc.ai.deepAuto.",
+  "pc.ai.deepAutoRounds.", "pc.ai.schemaCompat.", "pc.ai.toolProtocol.",
+  "pc.left.", "pc.right.", "pc.timeline.",
+];
+
+function safeToShow(key: string): boolean {
+  return VALUE_SAFE.has(key) || VALUE_SAFE_PREFIX.some((p) => key.startsWith(p));
+}
 
 /** 一句人话说清「现在是哪个模式」,省得从三个布尔值里推 */
 export function describeMode(input: EnvInput): string {
@@ -82,7 +118,8 @@ export function mediaDirs(media: EnvMediaItem[]): string[] {
   for (const m of media) {
     if (!m.path) continue;
     const cut = Math.max(m.path.lastIndexOf('\\'), m.path.lastIndexOf('/'));
-    seen.add(cut > 0 ? m.path.slice(0, cut) : '(没有目录)');
+    // cut === 0 是 posix 根下的文件(/a.mp4),目录就是根,不是「没有目录」
+    seen.add(cut > 0 ? m.path.slice(0, cut) : cut === 0 ? '/' : '(没有目录)');
   }
   return [...seen];
 }
@@ -99,8 +136,10 @@ function localKeys(storage: EnvInput['storage']): { sessionIds: Record<string, s
       const v = storage.getItem(k);
       if (v === null) continue;
       const short = v.length > VALUE_LIMIT ? `${v.slice(0, VALUE_LIMIT)}…(共 ${v.length} 字)` : v;
-      if (k.startsWith(SESSION_PREFIX)) sessionIds[k] = short;
-      else if (/^(ai|pc\.)/.test(k)) settings[k] = short;
+      if (k.startsWith(AI_SESSION_PREFIX)) sessionIds[k] = short;
+      else if (!/^(ai|pc\.)/.test(k)) continue;
+      // 白名单外的只报「有这么个键、多长」:排查要的是「哪些设置存在」,不是原文 —— 见 VALUE_SAFE
+      else settings[k] = safeToShow(k) ? short : `(有值,共 ${v.length} 字;不在白名单,不带原文)`;
     }
   } catch {
     return { sessionIds, settings, note: '读 localStorage 时出错,下面这些可能不全' };
