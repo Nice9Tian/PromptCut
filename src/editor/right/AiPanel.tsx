@@ -6,6 +6,7 @@ import { useAiChat } from "../../ai/useAiChat";
 import { renderMarkdown } from "../../ai/Markdown";
 import type { ChatAttachment, ChatMessage, MessagePart, ToolCallInfo } from "../../ai/types";
 import { conversationReport } from "../../ai/debug";
+import { collectEnvironment } from "../../ai/envCollect";
 import { ReportDialog } from "./ReportDialog";
 import { SkillLock } from "./SkillLock";
 import { AiSetupDialog } from "./AiSetupDialog";
@@ -530,11 +531,27 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
    * 复制 / 保存为文件 / 提交三条出口都在子窗口里,由用户自己挑 —— 报告动辄几百 KB,
    * 以前替用户决定「这份该复制还是该存盘」,结果他既看不到报告也没得选。
    */
-  const openDiagnostics = () => {
+  const openDiagnostics = async () => {
     if (messages.length === 0) return setToast("还没有对话可以导出");
+    /*
+     * 先收环境再开窗:模式、素材库、后端会话文件柜、Node 进程状态(见 ai/envCollect.ts)。
+     * 少了这一段,「产品的 bug」和「这台机器的环境问题」在报告里一条都排除不掉。
+     *
+     * 收集要等一次本机请求,所以先说一声 —— 服务正好挂了的话这里会停满 5 秒,
+     * 一个没有任何反馈的按钮会让用户以为点漏了,再点一次。
+     */
+    setToast("正在收集诊断信息…");
+    let environment: unknown;
     try {
-      setDiagReport(conversationReport(messages, provider, config));
+      environment = await collectEnvironment(messages.length);
+    } catch (e) {
+      // 收不到环境不该把整份报告一起弄丢:用户已经出问题了,对话本身是唯一的线索
+      environment = { error: e instanceof Error ? e.message : String(e) };
+    }
+    try {
+      setDiagReport(conversationReport(messages, provider, config, environment));
       setDiagOpen(true);
+      setToast(null);
     } catch (e) {
       setToast(e instanceof Error ? e.message : "诊断报告生成失败");
     }

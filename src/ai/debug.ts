@@ -66,7 +66,7 @@ function describeRuntime(r: MessageRuntime): string {
   return bits.join('，');
 }
 
-export function conversationReport(messages: ChatMessage[], provider: string | null, config?: PublicAiConfig | null): string {
+export function conversationReport(messages: ChatMessage[], provider: string | null, config?: PublicAiConfig | null, environment?: unknown): string {
   /*
    * 每条回复自己带 runtime。只报「当前选的是什么」会看错人：模型、思考档、加速档
    * 都是发送那一刻现读的，用户聊到一半换一次，前后几条就来自不同的模型；分工模式
@@ -96,7 +96,18 @@ export function conversationReport(messages: ChatMessage[], provider: string | n
       textProtocolEverUsed: distinct.some((r) => r.toolProtocol),
     },
     api: provider === 'api' ? { vendor: config?.api.vendor, model: config?.api.model, maxTokens: config?.api.maxTokens } : undefined,
-    note: '包含可见对话和执行事件；不包含密钥或模型私有思考。大输出和过长事件会标明截断。', messages,
+    /*
+     * 出问题那一刻的现场:模式、项目和素材、后端会话文件柜、Node 进程状态。
+     *
+     * 只有对话的话,「产品的 bug」和「这台机器的环境问题」一条都排除不掉。
+     * 用户报「Agent 看得见别的项目的素材」时就是这样:报告里看得到模型说出一个
+     * 不存在的文件名,却看不到当时素材库是不是空的、项目存在哪 —— 只能来回问。
+     *
+     * 采集失败不挡报告:少一段现场也比整份导不出来强,所以这里收的是
+     * 「拿到了什么」而不是「一定拿得到」,失败时上游填一个 error 进来。
+     */
+    environment,
+    note: '包含可见对话、执行事件和当时的环境快照；不包含密钥或模型私有思考。大输出和过长事件会标明截断。', messages,
   }), null, 2);
 }
 

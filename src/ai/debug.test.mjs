@@ -66,3 +66,28 @@ test("嵌套结构和数组一起走一遍", () => {
   assert.equal(out.list[0].headers["x-api-key"], "[REDACTED]");
   assert.equal(out.list[0].ok, true);
 });
+
+/*
+ * 环境快照(ai/envReport.ts + server/harness/env-snapshot.mjs)也走同一条脱敏管线。
+ * 它里面全是路径:项目文件、素材目录、cwd、tmpdir —— 每一条都带用户名。
+ * 这一段是后加的,而脱敏是「加字段时最容易忘的一步」,所以单钉一条。
+ */
+test("环境快照里的路径同样要脱敏,并且原样留在报告里", async () => {
+  const { conversationReport } = await import("./debug.ts");
+  const report = JSON.parse(conversationReport([{ role: "user", content: "hi" }], "api", null, {
+    project: { filePath: `C:${BS}Users${BS}admin${BS}Documents${BS}片子${BS}a.proc` },
+    media: { dirs: [`C:${BS}Users${BS}admin${BS}AppData${BS}Local${BS}Temp${BS}promptcut`] },
+    server: { node: { cwd: "/home/admin/PromptCut" }, headers: { "x-api-key": "sk-abcdefghijklmnop" } },
+  }));
+  assert.ok(report.environment, "环境快照必须真的进报告 —— 少了它就只能靠来回问用户");
+  assert.ok(!/admin/.test(JSON.stringify(report.environment)), "用户名该没了");
+  assert.match(report.environment.project.filePath, /片子/, "目录结构要留着");
+  assert.equal(report.environment.server.headers["x-api-key"], "[REDACTED]");
+});
+
+test("没传环境快照时报告照样出得来(旧调用方 / 采集失败)", async () => {
+  const { conversationReport } = await import("./debug.ts");
+  const report = JSON.parse(conversationReport([{ role: "user", content: "hi" }], "api", null));
+  assert.equal(report.environment, undefined);
+  assert.equal(report.messages.length, 1);
+});

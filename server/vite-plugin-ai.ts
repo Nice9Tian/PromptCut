@@ -408,10 +408,11 @@ export default function vitePluginAi(): Plugin {
       server.middlewares.use('/api/ai/diagnostics', async (req, res) => {
         if (req.method !== 'GET') return sendJson(res, 405, { ok: false, error: 'GET only' });
         try {
-          const [{ publicConfig }, { setupRoot }, { machineCode, redactMachineCode }, runners] = await Promise.all([
+          const [{ publicConfig }, { setupRoot }, { machineCode, redactMachineCode }, env, runners] = await Promise.all([
             import(new URL('./ai-config.mjs', import.meta.url).href),
             import(new URL('./runners/cli-runtime.mjs', import.meta.url).href),
             import(new URL('./runners/machine-id.mjs', import.meta.url).href),
+            import(new URL('./harness/env-snapshot.mjs', import.meta.url).href),
             getRunner(),
           ]);
           res.setHeader('Cache-Control', 'no-store');
@@ -427,6 +428,15 @@ export default function vitePluginAi(): Plugin {
             },
             machineCode: redactMachineCode(machineCode()),
             machineCodeNote: '只保留首组:机器码同时是配置分发的解密口令,整串不外发',
+            // 本地服务这个进程的现状:跑了多久、内存还剩多少、是打包版还是源码跑的。
+            // 「重启一下就好了」这类问题,不看这些就只能靠猜。
+            node: env.nodeStatus(),
+            /*
+             * 后端的会话文件柜。界面上的对话是按项目走的,而**服务端接哪段历史**取决于
+             * localStorage 里那把会话 id;两者脱节时界面上完全看不出来(见 81f255b)。
+             * 报「有几段、各几条、多新」,是这类看不见的串台唯一的物证。不含对话内容。
+             */
+            sessions: env.inspectSessionStore(),
             providers: await runners.listProviders({ refresh: true }),
             config: publicConfig(),
           });
