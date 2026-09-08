@@ -18,6 +18,10 @@
 * `POST /api/mcp/call` - MCP server 向编辑台请求工具调用。
 * `GET /api/mcp/status` - 获取当前 MCP 连接状态（调试用）。
 
+### 多 Agent 并行
+
+AI 面板的分页栏、Agent 之间的范围声明与互相通知（`declare_scope` / `list_agents` / `send_message` / `check_messages`），以及 `conversationId → PROMPTCUT_AGENT` 的透传，见 [docs/multi-agent.md](../docs/multi-agent.md)。
+
 ### Skill 任务（server/vite-plugin-skill.ts）
 
 * `GET /api/skill/jobs` - 每个任务多了 `starting`（刚点的、实例还没上来，三分钟内）、`startedAt`（最近一次起实例）、
