@@ -93,3 +93,18 @@ test("sanitizeEffort:乱七八糟的值也收得住", () => {
   // api 直连没有 xhigh 这一档。原来这里左右写的是同一个调用,恒等成立 —— 等于没测
   assert.equal(sanitizeEffort("api", "", "xhigh", null), "");
 });
+
+test('每家清单的第一档必须是「默认」空串 —— 下拉框的兜底值全靠它', () => {
+  /*
+   * ModelBar 的档位下拉框在认不出存着的值时兜底成 ""(见那边的注释:宁可少一档,
+   * 也不发一个必然被拒的值)。而受控 select 的 value 在 options 里找不到时
+   * selectedIndex 会变成 -1 —— **框里显示空白**。
+   *
+   * 也就是说「兜底成 "" 是安全的」这句话,完全建立在「每家清单里都有 "" 这一档」
+   * 上面。这条不变量以前没有任何地方守着:哪天有人从某家清单里删掉开头那个空串,
+   * 空白下拉框就立刻从不可达变成可达,而且没有一条测试会红。
+   */
+  for (const [provider, cap] of Object.entries(CAPABILITIES)) {
+    assert.equal(cap.efforts[0], "", `${provider} 的第一档不是空串,ModelBar 的兜底会显示空白`);
+  }
+});

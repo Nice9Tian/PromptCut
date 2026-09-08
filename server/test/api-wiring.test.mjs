@@ -8,6 +8,10 @@
  *     箭头函数 `{ ...options, signal: abortController.signal }` 把组合信号覆盖掉了,
  *     于是整层是死的 —— 单测照样全绿。
  * 所以这一档只从 startRun 进去,只用「真 fetch 会看到什么」来判断。
+ *
+ * 另外:这里的用例都往**真实的** %TEMP%/promptcut/harness-sessions 写文件
+ * (startRun 的目录不可注入)。断言失败时如果不清,残留会被诊断报告的会话文件柜
+ * 数进去 —— 我们自己的测试污染我们自己的排查工具。所以清理一律放 finally。
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -53,12 +57,15 @@ test('闲置超时真的接上了:上游一个字节都不给,最终要被掐断
   };
 
   const { events } = await run(sid, fetchImpl, { idleMsForTest: 150 });
-  assert.ok(sawSignal, '真 fetch 必须收到一个 signal');
-  const err = events.find((e) => e.type === 'error');
-  assert.ok(err, `上游不吐字时该报错,实际事件:${events.map((e) => e.type).join(',')}`);
-  assert.match(err.message, /timeout|超时/i);
-  assert.equal(err.retryable, true, '超时应当可自动续跑');
-  try { fs.unlinkSync(historyFileOf(sid)); } catch { /* 清理 */ }
+  try {
+    assert.ok(sawSignal, '真 fetch 必须收到一个 signal');
+    const err = events.find((e) => e.type === 'error');
+    assert.ok(err, `上游不吐字时该报错,实际事件:${events.map((e) => e.type).join(',')}`);
+    assert.match(err.message, /timeout|超时/i);
+    assert.equal(err.retryable, true, '超时应当可自动续跑');
+  } finally {
+    try { fs.unlinkSync(historyFileOf(sid)); } catch { /* 清理 */ }
+  }
 });
 
 test('用户点停止照样管用 —— 合并信号不能把停止那一路弄丢', async () => {
@@ -79,8 +86,11 @@ test('用户点停止照样管用 —— 合并信号不能把停止那一路弄
   });
   setTimeout(() => handle.abort(), 60);
   const events = await p;
-  assert.ok(events.some((e) => e.type === 'status' && e.text === '已中止'));
-  try { fs.unlinkSync(historyFileOf(sid)); } catch { /* 清理 */ }
+  try {
+    assert.ok(events.some((e) => e.type === 'status' && e.text === '已中止'));
+  } finally {
+    try { fs.unlinkSync(historyFileOf(sid)); } catch { /* 清理 */ }
+  }
 });
 
 test('中断落盘的历史里不能有悬空 tool_use —— 否则这个会话从此每次都 400', async () => {
@@ -99,16 +109,19 @@ test('中断落盘的历史里不能有悬空 tool_use —— 否则这个会话
     throw e;
   });
 
-  const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
-  const idx = saved.findIndex((m) => m.role === 'assistant' && m.content?.some?.((b) => b.type === 'tool_use'));
-  assert.ok(idx >= 0, '那条带 tool_use 的消息还在');
-  const next = saved[idx + 1];
-  assert.ok(next, 'tool_use 后面必须跟着东西');
-  assert.equal(next.role, 'user');
-  const paired = next.content.find((b) => b.type === 'tool_result' && b.tool_use_id === 'call_1');
-  assert.ok(paired, '悬空的 tool_use 必须被补上配对的 tool_result');
-  assert.equal(paired.is_error, true, '补的那条要标成失败,让模型知道那一步被打断了');
-  try { fs.unlinkSync(file); } catch { /* 清理 */ }
+  try {
+    const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const idx = saved.findIndex((m) => m.role === 'assistant' && m.content?.some?.((b) => b.type === 'tool_use'));
+    assert.ok(idx >= 0, '那条带 tool_use 的消息还在');
+    const next = saved[idx + 1];
+    assert.ok(next, 'tool_use 后面必须跟着东西');
+    assert.equal(next.role, 'user');
+    const paired = next.content.find((b) => b.type === 'tool_result' && b.tool_use_id === 'call_1');
+    assert.ok(paired, '悬空的 tool_use 必须被补上配对的 tool_result');
+    assert.equal(paired.is_error, true, '补的那条要标成失败,让模型知道那一步被打断了');
+  } finally {
+    try { fs.unlinkSync(file); } catch { /* 清理 */ }
+  }
 });
 
 test('盘上已经写坏的历史,读回来就要治好 —— 不能先撞一次 400 再自愈', async () => {

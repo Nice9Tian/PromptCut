@@ -429,15 +429,22 @@ export default function vitePluginAi(): Plugin {
           let providers: unknown;
           try {
             /*
-             * refresh=0 那条路(诊断快照)还要再压一道**时限**。
+             * refresh=0 那条路(诊断快照)再压一道时限。
              *
-             * 光走缓存不够:缓存是空的时候(服务刚起)照样要探一遍,实测冷启动 3.1 秒,
-             * 而 CLI 真卡住时那是 3 × 15 秒。这个按钮偏偏是「机器已经出问题了」才点的,
-             * 也就是最可能同时撞上「缓存空」和「CLI 卡住」的场合 —— 客户端 5 秒一到就
-             * abort,把整个 server 段换成一个 error,node 和 sessions 跟着陪葬,
-             * 而那两段才是这个按钮最有价值的产出。
+             * 但**要说清这道时限管不到什么**,别把它当成一张不存在的保票:
+             * runners/index.mjs 的 probeVersion 用的是 execFileSync,而三个 provider
+             * 都在第一个 await 之前调它 —— 也就是说 listProviders(...) 这个调用本身
+             * 就同步阻塞(每个 CLI 上限 15 秒),下面那个 setTimeout 要等它返回之后
+             * 才被创建。CLI 真卡住时这道 race 完全不生效,整个 dev server 一起冻住。
+             * 真修法是把 probeVersion 改成异步 execFile,那要单独一轮评审。
              *
-             * 所以超时就把 providers 这一格换成一句话,别的照常返回。
+             * 它管得到的是:探活本身返回慢(而不是卡死)、以及 listProviders 抛错。
+             * 这两种下面照常把 node 和 sessions 返回 —— 那两段才是这个按钮最有价值的
+             * 产出,不该被 providers 这一格连坐。
+             *
+             * 缓存也别高估:TTL 只有 5 秒(index.mjs),用户点按钮时基本不命中,
+             * 所以 refresh=0 的实际收益是「不强制刷新 probeAuth」,不是「直接走缓存」。
+             *
              * refresh=true 那条路(AI 设置里的「诊断」)不压时限:它要的就是真实探活结果。
              */
             providers = refresh
