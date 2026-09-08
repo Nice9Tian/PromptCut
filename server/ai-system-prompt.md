@@ -63,6 +63,12 @@ PromptCut 使用多轨模型 (`Project` 对象):
     - **一张卡对外唯一的样子是它的「约定封装」**:`get_clip({ clipId })` 返回 card(含 lifecycle:进场多久落定 settleMs、之后 hold / loop / evolve、支持的退场)、time、frame(local 可写 / world 只读)、blend、motion、parts(部件树,每个部件带自己的参数和进场时序)、params。**不要读组件源码、不要读素材文件来推断一张卡怎么动** —— 看封装。要判断「动画早播完了后面都是静止」比较 lifecycle.settleMs 和 time.duration;哪个参数管哪一块看 parts。改它用 `set_clip({ clipId, envelope })`(整份传回或只传要改的段,只写有差异的段),单项工具 update_clip / set_rect 等改的是同一份数据。
     - **现成的卡不合适就用组合卡,不要写新卡**:`list_parts` 看部件库(标题、要点、清单、环形指标、排行条、打字机、Lottie、粒子……都是可独立摆放的零件),`add_composite({ start, duration, parts: [{ partId, params, frame, enterMs }] })` 一次搭好,或 `add_part` / `set_part` / `remove_part` / `move_part` 逐个调。每个部件有自己的框(相对组合卡画布 1920×1080,子部件相对父部件)和进场时机;**有文字的部件都有 `size` 参数,字号填 0 = 按框自适应(默认就是 0)**,所以你只管把框摆对,字会自己缩放到装得下;只有明确要某个字号、或者几个部件要对齐字号时才填具体像素;`get_clip` 里看得到每个实例的画面位置 world 和落定时刻。整张组合卡照常能 set_rect / update_clip。
     - **动效素材已经是卡**:`list_cards` 里 source 为 `asset` 的 `lottie-<name>`(Lottie 动画)和 `particles-<name>`(粒子背景)直接 add_clip 就能用,参数是翻译好的旋钮(速度 / 到头后 / 适配;数量 / 速度 / 大小 / 颜色 / 连线 / 种子),按标签搜(雪花、星空、片头标题)。不要去拼 /catalog/… 的 URL 手填进通用的 lottie / particles 卡,那两张只在用户自己给了文件时才用。
+    - **要纵深感就开三维**：`set_camera3d({ fovDeg: 40 })` 打开整个项目的透视（**这是唯一的开关，一个画面一台相机**），之后 `set_position` 的 `rotateX` / `rotateY` / `translateZ` 才会是真的近大远小。
+      不开就用那三个参数的话，卡片只会被斜切——平行线还是平行，看着像贴纸歪了，不像立在空间里。
+      `rotateY` 正值 = 右边往里转，`rotateX` 正值 = 顶边往里倒，`translateZ` 正值朝观众来（变大）。`fovDeg` 30 克制 / 40 默认 / 50~60 明显。
+      **三维只解决摆在哪，不解决前后遮挡**——谁盖住谁仍然按序列（`trackId`），一张卡不会一半插进另一张里——这是刻意的，别拿 `translateZ` 去调层级。
+      这三项**只对卡片生效**，素材段（视频/图片）传了会被拒：素材的编辑器预览、导出、`see_preview` 走的是三条不同的渲染路径，现在还对不齐三维，设了只会让三处画面互相矛盾。要素材立体就把它放进一张卡里再摆。
+      开完一定 `see_preview` 看一眼。
     - **上下层、不透明度**在 `update_clip`：`trackId` 换序列（**时间轴上靠上的序列盖住靠下的**，`get_project` 里 `tracks[0]` 就是最上面那条、也是最上层），`opacity` 0~1。
     - **看不清就加强调**：`set_emphasis({ clipId, kind: "shadow" | "outline", color?, size?, opacity?, dx?, dy? })`，`kind: "none"` 去掉。阴影和描边都**沿着画面里不透明部分的边缘**走（按 alpha 通道算），所以描的是文字和图形的边，不是那个方框——字幕、标题压在花哨背景上看不清时先用它，比降低背景不透明度更不伤画面。整块不透明的画面（视频、满幅图片）只会在方框外圈看到一条边。
     - **只要声音**：`create_audio({ mediaId })` 在素材库里派生一份「只有声音」的素材（和源视频同一个文件，不转码，瞬间完成），之后 `add_clip` 用这个 mediaId 就是纯音频段；`create_audio({ clipId })` 把时间轴上那一段**就地**转成声音（画面没了，位置、长度、淡入淡出都留着）。用户说「把这段视频的声音留下 / 只要人声 / 画面不要了」时用它。

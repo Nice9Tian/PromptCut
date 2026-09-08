@@ -43,6 +43,14 @@ export interface EditorState {
   dirty: boolean;
   /** 用户手动拖范围卡标设定的总时长，没设过就是 null */
   durationManual: number | null;
+  /**
+   * 上一次用过的三维视角。关掉三维(camera3dFov 被抹掉)时记在这儿,再打开就回到那个值。
+   *
+   * **不落盘**:存盘结果要和从没开过三维一样。放在 store 而不是模块变量,是因为模块变量
+   * 跨项目存活 —— A 项目调过 60、关掉,再打开一个从没开过三维的 B 项目,B 会莫名其妙拿到 60。
+   * 挂在这儿,loadProject 顺手清掉就干净了。
+   */
+  lastCamera3dFov: number | null;
   /** 预览总音量 0–1(只影响预览,不写进项目;导出由 ffmpeg 合成原音) */
   volume: number;
   /** 预览静音开关,和 volume 分开记,取消静音能回到原音量 */
@@ -70,6 +78,7 @@ let state: EditorState = {
   filePath: null,
   dirty: false,
   durationManual: null,
+  lastCamera3dFov: null,
   volume: readVolume(),
   muted: false,
 };
@@ -216,13 +225,18 @@ export const actions = {
     future.length = 0;
     // 所有加载路径的唯一入口,在这里把项目补成多剪辑形状:老文件没有 cuts 就补成默认三条
     const normalized = normalizeCuts(p);
-    set({ project: normalized, filePath, dirty: false, t: 0, playing: false, selection: [], playToken: state.playToken + 1, durationManual: null });
+    // lastCamera3dFov 跟着项目走,换项目要清掉,否则三维视角会串味
+    set({ project: normalized, filePath, dirty: false, t: 0, playing: false, selection: [], playToken: state.playToken + 1, durationManual: null, lastCamera3dFov: null });
   },
   newProject(name?: string) {
     actions.loadProject(createEmptyProject(name));
   },
-  setProjectMeta(patch: Partial<Pick<Project, "name" | "width" | "height" | "fps" | "duration" | "themeId">>) {
+  setProjectMeta(patch: Partial<Pick<Project, "name" | "width" | "height" | "fps" | "duration" | "themeId" | "camera3dFov">>) {
     setProject({ ...state.project, ...patch });
+  },
+  /** 记住关三维之前用的视角(不落盘,换项目自动清)。见 EditorState.lastCamera3dFov */
+  rememberCamera3dFov(fov: number | null) {
+    set({ lastCamera3dFov: fov });
   },
   setDurationManual(sec: number) {
     const val = Math.max(1, sec);

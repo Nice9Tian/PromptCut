@@ -37,7 +37,7 @@ export interface EditorApi {
   addClip(args: { cardId: string; start: number; duration?: number; trackId?: string; params?: any }): any;
   updateClip(args: { clipId: string; start?: number; end?: number; cardId?: string; params?: any; opacity?: number; fadeIn?: number; fadeOut?: number; label?: string; trackId?: string }): any;
   /** 卡片级定位(场景图的根节点)。部件级接进来时加 node 参数,签名不用改 */
-  setPosition(args: { clipId: string; space?: "world" | "local"; x?: number; y?: number; w?: number; h?: number; anchor?: [number, number]; scale?: number; rotate?: number; clear?: boolean; clamp?: boolean }): any;
+  setPosition(args: { clipId: string; space?: "world" | "local"; x?: number; y?: number; w?: number; h?: number; anchor?: [number, number]; scale?: number; rotate?: number; rotateX?: number; rotateY?: number; translateZ?: number; clear?: boolean; clamp?: boolean }): any;
   setRect(args: { clipId: string; x1: number; y1: number; x2: number; y2: number; mode?: "fit" | "canvas"; align?: [number, number] }): any;
   align(args: { clipId: string; h?: "left" | "center" | "right"; v?: "top" | "center" | "bottom"; margin?: number }): any;
   nudge(args: { clipId: string; dx?: number; dy?: number; scaleBy?: number; rotateBy?: number; clamp?: boolean }): any;
@@ -70,6 +70,7 @@ export interface EditorApi {
   pause(): any;
   setTheme(args: { themeId: string }): any;
   setProjectMeta(args: any): any;
+  setCamera3d(args: { enabled?: boolean; fovDeg?: number }): any;
   // STT 工具
   sttStatus(): Promise<any>;
   sttInstall(args: { engine: string }): Promise<any>;
@@ -322,6 +323,7 @@ export function connectMcpExecutor(getApi: () => EditorApi, onStatus?: (s: { con
           else if (tool === "pause") result = api.pause();
           else if (tool === "set_theme") result = api.setTheme(args);
           else if (tool === "set_project_meta") result = api.setProjectMeta(args);
+          else if (tool === "set_camera3d") result = api.setCamera3d(args);
           else if (tool === "stt_status") result = await api.sttStatus();
           else if (tool === "stt_install") result = await api.sttInstall(args);
           else if (tool === "transcribe_media") result = await api.transcribeMedia(args);

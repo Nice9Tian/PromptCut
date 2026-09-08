@@ -89,7 +89,7 @@ export const tools = [
   },
   {
     name: "set_position",
-    description: "给卡片定位:把它的锚点放到画面上某个坐标,可选尺寸、缩放、旋转。**这是把任何卡片摆到任何位置的正道**——不再受卡片自带 position 档位(center/bottom/…)限制,不用为了位置换卡。坐标系:舞台像素,原点左上角,1920×1080 时中心是 960,540。anchor 决定 x,y 指的是框内哪个点([0,0] 左上、[0.5,0.5] 中心、[1,1] 右下),缩放和旋转也绕它;例如把卡片中心放到左半屏正中:{ x:480, y:540, anchor:[0.5,0.5] }。只传的字段会改,其余保留;传 clear:true 恢复铺满全屏。w/h 是卡片的**画布**尺寸(大多数卡按 1920×1080 设计,缩小画布不等于缩小内容,整体缩小用 scale)。space 对卡片级 world/local 等价(父坐标系就是舞台),将来部件级才有区别。返回 layout(见 get_layout)和 look。",
+    description: "给卡片定位:把它的锚点放到画面上某个坐标,可选尺寸、缩放、旋转。**这是把任何卡片摆到任何位置的正道**——不再受卡片自带 position 档位(center/bottom/…)限制,不用为了位置换卡。坐标系:舞台像素,原点左上角,1920×1080 时中心是 960,540。anchor 决定 x,y 指的是框内哪个点([0,0] 左上、[0.5,0.5] 中心、[1,1] 右下),缩放和旋转也绕它;例如把卡片中心放到左半屏正中:{ x:480, y:540, anchor:[0.5,0.5] }。只传的字段会改,其余保留;传 clear:true 恢复铺满全屏。w/h 是卡片的**画布**尺寸(大多数卡按 1920×1080 设计,缩小画布不等于缩小内容,整体缩小用 scale)。space 对卡片级 world/local 等价(父坐标系就是舞台),将来部件级才有区别。**三维**:rotateX / rotateY / translateZ 把卡片摆进空间,但要先调 set_camera3d 打开透视,否则看到的是仿射拉伸不是透视。返回 layout(见 get_layout)和 look。",
     inputSchema: {
       type: "object",
       properties: {
@@ -101,7 +101,10 @@ export const tools = [
         h: { type: "number", description: "画布高(像素),省略=舞台高" },
         anchor: { type: "array", items: { type: "number" }, minItems: 2, maxItems: 2, description: "[ax, ay],0~1;默认 [0,0]" },
         scale: { type: "number", description: "绕锚点缩放,默认 1" },
-        rotate: { type: "number", description: "绕锚点旋转,度,顺时针,默认 0" },
+        rotate: { type: "number", description: "绕锚点旋转,度,顺时针,默认 0。这是**平面内**的旋转" },
+        rotateX: { type: "number", description: "三维:绕水平轴翻转,度。正值=**顶边往里倒、底边朝观众抬起来**(像把牌子朝后仰)。**要先用 set_camera3d 打开三维**,否则只会看到仿射拉伸而不是透视。**只对卡片生效**,素材段(视频/图片)会被拒" },
+        rotateY: { type: "number", description: "三维:绕垂直轴翻转,度。正值=**右边往里转、左边朝观众转过来**。同样要先 set_camera3d,同样只对卡片生效" },
+        translateZ: { type: "number", description: "三维:沿深度平移,舞台像素,正值朝观众(变大)、负值往里(变小)。同样要先 set_camera3d,同样只对卡片生效。注意推得太靠前会越过相机:translateZ 接近\"相机距离\"(set_camera3d 会告诉你这个数)时卡片会涨到占满整幅甚至更大" },
         clear: { type: "boolean", description: "true = 删掉框,恢复铺满全屏" },
         clamp: { type: "boolean", description: "true = 算完后把可见框夹回舞台内,不让卡片出画" }
       },
@@ -250,7 +253,7 @@ export const tools = [
   },
   {
     name: "set_clip",
-    description: "按约定封装改一张卡:把 get_clip 拿到的对象改好后整份传回来(也可以只传要改的段)。可写:card.id(换卡)、params(全量)或 parts 里各部件的 params、time.start / time.end、frame.local(x / y / w / h / anchor / scale / rotate,或 null 铺满)、blend.opacity / fadeIn / fadeOut。只写有差异的段,任一处不合法整份不写;frame.world、motion、card.lifecycle 是只读的,传了会被忽略。返回改了哪些段、新的封装和 look。",
+    description: "按约定封装改一张卡:把 get_clip 拿到的对象改好后整份传回来(也可以只传要改的段)。可写:card.id(换卡)、params(全量)或 parts 里各部件的 params、time.start / time.end、frame.local(x / y / w / h / anchor / scale / rotate,以及三维的 rotateX / rotateY / translateZ —— 三维要先 set_camera3d 打开才有透视,而且只对卡片段生效,素材段会被拒;或 null 铺满)、blend.opacity / fadeIn / fadeOut。只写有差异的段,任一处不合法整份不写;frame.world、motion、card.lifecycle 是只读的,传了会被忽略。返回改了哪些段、新的封装和 look。",
     inputSchema: {
       type: "object",
       properties: {
@@ -492,6 +495,33 @@ export const tools = [
       }
     },
     side: "browser"
+  },
+  {
+    name: "set_camera3d",
+    description:
+      "打开 / 关掉三维透视,并调它的强度。**这是三维的唯一开关**,整个项目一档,不是逐卡的。" +
+      "关着的时候 set_position 的 rotateX / rotateY / translateZ 只会得到仿射拉伸 —— 卡片被斜切,但没有近大远小,看着像贴纸不像立在空间里。" +
+      "打开之后舞台变成一个透视空间:屏幕平面是 z=0,translateZ 正值朝观众来(变大)、负值往里去(变小)。" +
+      "\n\n" +
+      "强度用 fovDeg(视场角)调,**没有\"相机距离\"这个参数** —— 距离是从 fov 和画布高度推出来的(d = H / (2·tan(fov/2)))。" +
+      "这么设计是因为竖屏项目画布高 1920、横屏 1080,同一个距离在两种画幅下透视强度完全不同,而 fov 直接就是\"透视有多强\",换画幅不用重调。" +
+      "档位:**30° 克制**(接近正交,适合规整的信息版面)、**40° 默认**、**50~60° 明显**(卡片一转就有纵深)、**80° 以上是鱼眼**,边角会夸张变形。" +
+      "\n\n" +
+      "改完一定要 see_preview 看真实画面:透视强度只能看出来,算不出来。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        enabled: {
+          type: "boolean",
+          description: "true = 打开三维(不同时传 fovDeg 时:这个项目之前调过就回到那个值,没调过用默认 40°);false = 关掉,回到纯二维。卡片上已有的 rotateX/rotateY/translateZ 不会被清掉,只是不再有透视",
+        },
+        fovDeg: {
+          type: "number",
+          description: "视场角(度),5~120,越大透视越夸张。传了它就等于同时把三维打开,不用再传 enabled",
+        },
+      },
+    },
+    side: "browser",
   },
   {
     name: "stt_status",
