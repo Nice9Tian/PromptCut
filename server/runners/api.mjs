@@ -8,6 +8,54 @@ import { buildTools } from '../harness/tools/index.mjs';
 import { createRetryingFetch } from '../harness/retry-fetch.mjs';
 import { withIdleTimeout } from '../harness/idle-timeout.mjs';
 
+/**
+ * 把「有 tool_use、没有配对 tool_result」的半截回合补平,再落盘。
+ *
+ * # 为什么需要
+ *
+ * agent.mjs 是先把带 tool_use 的 assistant 消息入历史(:71),跑完工具才把
+ * tool_result 入历史(:134)。中间那一段有三道 checkAbort —— 用户在工具执行途中点停止,
+ * 就会在历史里留下一个悬空的 tool_use。
+ *
+ * 以前这不要紧:出错那条路根本不落盘。而现在「中断也落历史」之后,这份不配对的历史
+ * 会被写进 `%TEMP%/promptcut/harness-sessions/<sessionId>.json`,下次原样读回 ——
+ * 于是发出去的消息里会出现「带 tool_calls 的 assistant 紧跟一条纯文本 user、
+ * 中间没有任何 role:"tool"」,Anthropic 和 OpenAI 都按规范拒绝。
+ * **这个 sessionId 从此每次都 400**,而用户根本不知道有这么个文件可以删。
+ *
+ * 补一条 is_error 的 tool_result 而不是把 tool_use 删掉:让模型下次能看见
+ * 「刚才那一步被打断了」,而不是莫名其妙少了一段。
+ */
+function healDanglingToolUse(messages) {
+  if (!Array.isArray(messages)) return messages;
+  const out = messages.slice();
+  for (let i = 0; i < out.length; i++) {
+    const m = out[i];
+    if (m?.role !== 'assistant' || !Array.isArray(m.content)) continue;
+    const ids = m.content.filter(b => b?.type === 'tool_use' && b.id).map(b => b.id);
+    if (!ids.length) continue;
+    // 配对的 tool_result 只可能在紧随其后的那条 user 消息里(agent.mjs 就是这么拼的)
+    const next = out[i + 1];
+    const done = new Set(
+      next?.role === 'user' && Array.isArray(next.content)
+        ? next.content.filter(b => b?.type === 'tool_result').map(b => b.tool_use_id)
+        : [],
+    );
+    const missing = ids.filter(id => !done.has(id));
+    if (!missing.length) continue;
+    const patch = missing.map(id => ({
+      type: 'tool_result', tool_use_id: id, is_error: true,
+      content: '已中断,这次调用没有执行完。',
+    }));
+    if (next?.role === 'user' && Array.isArray(next.content)) {
+      out[i + 1] = { ...next, content: [...patch, ...next.content] };
+    } else {
+      out.splice(i + 1, 0, { role: 'user', content: patch });
+    }
+  }
+  return out;
+}
+
 // 对应 13.3 及获取配置接口
 export async function getApiProvider() {
   let configModule;
@@ -162,7 +210,30 @@ export function startRun(opts) {
       // 超时按「多久没来数据」算,不按「一共跑了多久」算 —— 原来是 AbortSignal.timeout(120000),
       // 那是整段请求的墙钟上限(含读流),一个健康地流了 121 秒的长回合会被硬掐断。
       // 上下文越大、工具越多越容易撞上,也就是活干得越多越容易被掐。见 harness/idle-timeout.mjs。
-      withIdleTimeout((url, options) => requestFetch(url, { ...options, signal: abortController.signal }), { idleMs: 120000 }),
+      withIdleTimeout(
+        (url, options) => requestFetch(url, {
+          ...options,
+          /*
+           * **合并,不能覆盖。**
+           *
+           * 这里原来写的是 `signal: abortController.signal` —— 一行之差,把
+           * withIdleTimeout 组合好的信号整个盖掉了,于是闲置定时器到点 abort 的那个
+           * controller 根本没人在听:上游真卡住时这一轮永远不结束,不报错、不触发自动续跑,
+           * 界面上只有心跳在涨。而改之前 AbortSignal.timeout 是直接交给真 fetch 的,
+           * 会真的掐断 —— 也就是说那一版比改之前更糟,是回归。
+           *
+           * options.signal 里已经含了用户停止那一路(withIdleTimeout 组合过),
+           * 这里再并一次 abortController.signal 是为了「即使包装层将来变了,
+           * 用户点停止也一定管用」这条保证不依赖上游实现。
+           */
+          signal: options?.signal
+            ? AbortSignal.any([abortController.signal, options.signal])
+            : abortController.signal,
+        }),
+        // 阈值可以从 opts 传,给测试用 —— 不然一条「上游不吐字」的用例要真等两分钟。
+        // 生产路径没人传,走 120 秒。
+        { idleMs: Number(opts.idleMsForTest) > 0 ? Number(opts.idleMsForTest) : 120000 },
+      ),
       {
         signal: abortController.signal,
         onRetry: ({ attempt, of, reason, delayMs }) => {
@@ -201,7 +272,7 @@ export function startRun(opts) {
      */
     const saveHistory = () => {
       try {
-        const historyStr = JSON.stringify(history.toJSON());
+        const historyStr = JSON.stringify(healDanglingToolUse(history.toJSON()));
         // 再确认一遍历史里没有 API Key
         fs.writeFileSync(
           historyFile,
