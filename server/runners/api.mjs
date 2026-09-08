@@ -109,7 +109,14 @@ export function startRun(opts) {
     const schemaCompat = opts.schemaCompat === 'on' ? true
       : opts.schemaCompat === 'off' ? false
       : (cfg.vendor === 'gemini' || /gemini/i.test(picked));
-    cfg = { ...cfg, model: picked, schemaCompat };
+    /*
+     * 思考强度。CLI 那三条路各自翻译成命令行参数(claude 的 --effort、codex 的
+     * -c model_reasoning_effort、agy 的 --effort),而 API 直连这条路以前**根本没读过它** ——
+     * 面板上的档位对 API 是死的。走 OpenAI 兼容口径的中转是收 `reasoning_effort` 的,
+     * 具体怎么发交给各 provider 自己决定(每家字段名不一样)。
+     * 空值不覆盖:让模型 / 网关按自己的默认来。
+     */
+    cfg = { ...cfg, model: picked, schemaCompat, effort: opts.effort || '' };
 
     const historyDir = path.join(os.tmpdir(), 'promptcut', 'harness-sessions');
     fs.mkdirSync(historyDir, { recursive: true });
@@ -147,7 +154,7 @@ export function startRun(opts) {
     const maxIterations = opts.deepAuto
       ? (opts.maxRounds === 0 ? Infinity : Number(opts.maxRounds) || 300)
       : 24;
-    safeOnEvent({ type: 'diagnostic', stage: 'configuration', data: { vendor: cfg.vendor, model: cfg.model, maxTokens: cfg.maxTokens, protocol: 'native-tools', schemaCompat, maxRounds: Number.isFinite(maxIterations) ? maxIterations : null, deepAuto: !!opts.deepAuto } });
+    safeOnEvent({ type: 'diagnostic', stage: 'configuration', data: { vendor: cfg.vendor, model: cfg.model, effort: cfg.effort || '(默认)', maxTokens: cfg.maxTokens, protocol: 'native-tools', schemaCompat, maxRounds: Number.isFinite(maxIterations) ? maxIterations : null, deepAuto: !!opts.deepAuto } });
     const tools = await buildTools({ callTool: opts.callTool, workspaceDir: opts.cwd, onEvent: safeOnEvent });
     const agent = new Agent({ 
       provider, 

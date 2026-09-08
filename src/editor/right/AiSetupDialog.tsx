@@ -117,6 +117,8 @@ export function AiSetupDialog(props: {
   const [quotaBusy, setQuotaBusy] = useState<Record<string, boolean>>({});
   const [quotaMsg, setQuotaMsg] = useState("");
   const [loadingAgyModels, setLoadingAgyModels] = useState(false);
+  const [loadingApiModels, setLoadingApiModels] = useState(false);
+  const [apiModelsMsg, setApiModelsMsg] = useState("");
   const [modelsMsg, setModelsMsg] = useState("");
   const [diagState, setDiagState] = useState("");
   /*
@@ -293,6 +295,30 @@ export function AiSetupDialog(props: {
       setModelsMsg(e instanceof Error ? e.message : "读取失败");
     } finally {
       setLoadingAgyModels(false);
+    }
+  };
+
+  /**
+   * API 直连:从接口自己拉模型清单，省得手打。
+   *
+   * 读的是**已保存**的配置（服务端拿 baseUrl 和解密后的 Key 去打 /v1/models），
+   * 所以先存再读——不然刚在框里改的地址还没落盘，读回来的是上一次那份。
+   */
+  const loadApiModels = async () => {
+    setLoadingApiModels(true);
+    setApiModelsMsg("");
+    try {
+      await onSaveConfig({ api: { profiles: { custom: { vendor: apiVendor, baseUrl: apiBaseUrl, model: apiModel } } } } as AiConfigPatch);
+      const d = await (await fetch("/api/ai/models?provider=api")).json();
+      if (!d.ok) throw new Error(d.error || "读不到模型清单");
+      const list: string[] = d.models ?? [];
+      if (list.length === 0) throw new Error("接口没有返回任何模型");
+      setApiModel(list.join("|"));
+      setApiModelsMsg(`读到 ${list.length} 个模型，确认后点保存`);
+    } catch (e) {
+      setApiModelsMsg(e instanceof Error ? e.message : "读取失败");
+    } finally {
+      setLoadingApiModels(false);
     }
   };
 
@@ -675,6 +701,13 @@ export function AiSetupDialog(props: {
           placeholder={apiVendor === "anthropic" ? "claude-sonnet-4-5|claude-haiku-4-5" : apiVendor === "openai" ? "gpt-4o|gpt-4o-mini" : "gemini-2.0-flash|gemini-2.0-pro"}
         />
       </div>
+      <div className="ais-api-field">
+        <button className="ais-btn" disabled={loadingApiModels} onClick={(e) => { e.preventDefault(); loadApiModels(); }}>
+          {loadingApiModels ? "读取中…" : "从接口读取"}
+        </button>
+        <span className="ais-detail">打一次 {"{接口地址}"}/v1/models，把清单填进上面这一栏（中转站基本都支持；官方源列的是它自家的模型）</span>
+      </div>
+      {apiModelsMsg && <div className="ais-detail">{apiModelsMsg}</div>}
       <div className="ais-detail">
         用 <code>|</code> 分开写几个模型，面板输入框旁边就能切；不选就用第一个。
       </div>

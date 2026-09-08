@@ -238,15 +238,34 @@ export default function vitePluginAi(): Plugin {
       });
 
       /**
-       * 列出某家 CLI 能用的模型。
+       * 列出某家能用的模型。
        *
-       * 目前只有 agy 有列表命令(`agy models`,输出是「名字<TAB>说明」)。
+       * 两条路:
+       *   - `agy`:跑 `agy models`(输出是「名字<TAB>说明」);
+       *   - `api`:打 OpenAI 兼容的 `GET {baseUrl}/v1/models`。中转站基本都实现了这个口子,
+       *     返回 `{ data: [{ id, object, owned_by }], object: "list" }`。
+       *
        * claude / codex 没有对应命令,清单只能在设置里手填 —— 与其编一份可能过期的
        * 硬编码名单,不如老实说这一家读不到。
        */
       server.middlewares.use('/api/ai/models', async (req, res) => {
         if (req.method !== 'GET') return sendJson(res, 405, { ok: false, error: 'GET only' });
         const provider = new URL(req.url || '/', 'http://localhost').searchParams.get('provider');
+
+        if (provider === 'api') {
+          try {
+            const { readConfig } = await import(new URL('./ai-config.mjs', import.meta.url).href);
+            const api = (readConfig() as any)?.api || {};
+            if (!api.apiKey) return sendJson(res, 400, { ok: false, error: '还没填 API Key,拉不了模型清单' });
+            if (!api.baseUrl) return sendJson(res, 400, { ok: false, error: '还没填接口地址(官方源没有统一的清单口子,中转站才有)' });
+            const { listApiModels } = await import(new URL('./runners/api-models.mjs', import.meta.url).href);
+            const models = await listApiModels(api);
+            return sendJson(res, 200, { ok: true, models });
+          } catch (e: any) {
+            return sendJson(res, 500, { ok: false, error: e.message || String(e) });
+          }
+        }
+
         if (provider !== 'agy') {
           return sendJson(res, 400, { ok: false, error: '这一家没有列出模型的命令,请在上面手填' });
         }

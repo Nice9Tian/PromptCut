@@ -108,6 +108,18 @@ export function createProvider(cfg, { fetchImpl = globalThis.fetch } = {}) {
         stream_options: { include_usage: true }
       };
 
+      /*
+       * 思考强度。空字符串 = 用模型默认,这时**一个字段都不发** ——
+       * 有些上游对不认识的参数是直接 400,而不是忽略。
+       *
+       * `reasoning_effort` 是 OpenAI 兼容口径里的标准字段(o 系列、GPT-5 系列),
+       * 中转站也照这个收:openlux 的文档写「Inference model strength (such as low /
+       * medium / high). It can also be automatically injected by the gateway through
+       * the model name suffix.」—— 也就是说填 `xxx-thinking` 这类带后缀的模型名时,
+       * 网关会自己注入,那种情况下用户不选档位也是对的,别硬塞一个覆盖掉它。
+       */
+      if (cfg.effort) body.reasoning_effort = cfg.effort;
+
       const openaiTools = (tools || []).map(t => toolToVendor(t, 'openai', { compat: cfg.schemaCompat }));
       if (openaiTools.length > 0) {
         body.tools = openaiTools;

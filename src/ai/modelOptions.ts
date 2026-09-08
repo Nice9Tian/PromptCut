@@ -45,8 +45,16 @@ export const CAPABILITIES: Record<AiProvider, ProviderCapability> = {
     modelsHint: "可以点「从 CLI 读取」直接拉 agy models 的清单",
   },
   api: {
-    // 推理强度是各家 API 自己的参数,harness 现在没接,先不给假选项
-    efforts: [],
+    /*
+     * low / medium / high 是 OpenAI 兼容口径 `reasoning_effort` 的取值,中转站也照收
+     * (openlux 文档：「Inference model strength (such as low / medium / high)」)。
+     * 不给 minimal / xhigh / max：那几档是 CLI 各自的扩展，OpenAI 兼容接口不认，
+     * 列出来只会让用户选一个上游会 400 的值。
+     *
+     * 选「默认」(空)时一个字段都不发 —— 有些模型名自带 `-thinking` 后缀，网关会自己
+     * 注入档位，这时候硬塞一个反而把它覆盖掉。
+     */
+    efforts: ["", "low", "medium", "high"],
     fast: false,
     suggestedModels: "",
     modelsHint: "多个模型用 | 分开，面板上就能切",
