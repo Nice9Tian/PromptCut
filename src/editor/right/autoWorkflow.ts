@@ -236,10 +236,8 @@ async function pipeline(args: { mediaId: string; style?: string; maxCards?: numb
 
   let captionClipId: string | null = null;
   if (mappedSegments.length > 0) {
-    let captionTrack = getState().project.tracks.find(t => t.name === "字幕");
-    if (!captionTrack) {
-      captionTrack = actions.addTrack("字幕");
-    }
+    // 字幕单独一条序列,而且建在最上层 —— 字幕得压在画面之上,追加到末尾等于埋在底下
+    const captionTrack = actions.ensureCaptionTrack();
     
     const globalStart = Math.min(...mappedSegments.map(s => s.start));
     const globalEnd = Math.max(...mappedSegments.map(s => s.end));

@@ -20,6 +20,7 @@ import type { PartInstance } from "../../kernel/types";
 import { validateCardParams, findCard } from "../../kernel/cardParams";
 import { describeTransition, timingLock, transitionsOf, type TransitionKind } from "../../kernel/transitions";
 import { describeEmphasis } from "../../kernel/emphasis";
+import { CAPTION_CARD_ID, captionsFromTranscript, captionsOf, describeCaption, formatCaptions } from "../../kernel/captions";
 import {
   findClip, subjectForRange, subjectSampleTimes, suggestPosition,
   MAX_SUBJECT_TIMES,
@@ -158,6 +159,24 @@ const subjectInstallJobs = new Map<string, {
 }>();
 
 /** 一段区间上最有代表性的几个框。全量吐给模型太长,一个镜头三次采样就是三份重复的人 */
+/**
+ * 找那张字幕卡。不给 clipId 时:时间轴上只有一张就用它,有多张要求说清楚是哪张
+ * (和 fill_captions 一个口径 —— 猜错了会改到另一段视频的字幕上,不如报错)。
+ */
+function findCaptionClip(clipId?: string) {
+  const project = getState().project;
+  if (!clipId) {
+    const hits = project.tracks.flatMap((t) => t.clips.filter((c) => c.cardId === CAPTION_CARD_ID));
+    if (hits.length === 0) throw new Error("时间轴上没有字幕卡。先 add_clip 建一张 caption-track,再用 fill_captions 灌进文字稿。");
+    if (hits.length > 1) throw new Error(`时间轴上有 ${hits.length} 张字幕卡,请用 clipId 指明是哪一张:${hits.map((c) => c.id).join(", ")}`);
+    clipId = hits[0].id;
+  }
+  const hit = findClip(project, clipId);
+  if (!hit) throw new Error(`找不到 clip ${clipId}`);
+  if (hit.clip.cardId !== CAPTION_CARD_ID) throw new Error(`clip ${clipId} 是 ${hit.clip.cardId || "素材段"},不是字幕卡。`);
+  return hit;
+}
+
 function topBoxes(boxes: SubjectBox[], limit = 4): SubjectBox[] {
   return [...boxes]
     .sort((a, b) => b.w * b.h - a.w * a.h)
@@ -275,9 +294,13 @@ export function RightPanel() {
       addClip: (args) => {
         // 先校验再落库:参数错了当场报错,而不是建出一张播默认值的空壳卡
         validateCardParams(args.cardId, args.params);
+        // 字幕卡没指定序列时统一去「字幕」序列(没有就建一条,建在最上层):
+        // 字幕要压在画面之上,而且单独一条轨才看得清哪句话在什么时候
+        const trackId =
+          args.trackId ?? (args.cardId === CAPTION_CARD_ID ? actions.ensureCaptionTrack().id : undefined);
         const clip = actions.addCardClip(args.cardId, args.start, {
           duration: args.duration,
-          trackId: args.trackId,
+          trackId,
           params: args.params
         });
         if (!clip) throw new Error("添加卡片失败");
@@ -1446,25 +1469,96 @@ export function RightPanel() {
         const clip = hit.clip as { start: number; end: number; cardId?: string };
         if (clip.cardId !== "caption-track") throw new Error(`clip ${clipId} 是 ${clip.cardId},不是字幕卡。`);
 
-        // lines 里的秒数相对 clip 起点;只保留和 clip 时段有交集的段落,
-        // 并把跨界的段落裁到 clip 边界内,免得字幕在卡片外提前亮或不消失。
-        const kept = segments
-          .filter((s) => s.end > clip.start && s.start < clip.end)
-          .map((s) => ({
-            start: Math.max(s.start, clip.start) - clip.start,
-            end: Math.min(s.end, clip.end) - clip.start,
-            text: s.text.trim().replace(/[\n|]/g, " "),
-          }))
-          .filter((s) => s.end > s.start && s.text !== "");
-        if (kept.length === 0) {
-          throw new Error(`文字稿里没有落在这张卡时段(${clip.start}s–${clip.end}s)内的段落,检查一下 clip 的起止时间。`);
+        /*
+         * 文字稿的秒数是**素材内**的,得先按这份素材在时间轴上的位置换算过去
+         * (素材被挪到第 30 秒、或者修掉了开头,不换算字幕就整体错位),
+         * 再减去字幕卡起点变成相对秒。跨出卡片的段落裁到边界内,
+         * 免得字幕在卡片外提前亮或不消失。
+         */
+        const placed = project.tracks.flatMap((t) => t.clips);
+        const plan = captionsFromTranscript(placed, media.id, segments, { from: clip.start, to: clip.end });
+        if (plan.lines.length === 0) {
+          const onTimeline = placed.some((c) => c.mediaId === media.id);
+          throw new Error(
+            onTimeline
+              ? `文字稿里没有落在这张卡时段(${clip.start}s–${clip.end}s)内的段落,检查一下 clip 的起止时间。`
+              : `素材「${media.name}」还没放到时间轴上,字幕对不上时间。先 add_clip 把它放上去。`,
+          );
         }
 
-        const lines = kept.map((s) => `${s.start.toFixed(2)}|${s.end.toFixed(2)}|${s.text}|`).join("\n");
-        const params = { lines, showEn: args.showEn === true ? "true" : "false" };
+        const kept = plan.lines;
+        const params = { lines: formatCaptions(kept), showEn: args.showEn === true ? "true" : "false" };
         validateCardParams("caption-track", params, (hit.clip as { params?: Record<string, unknown> }).params);
         actions.setClipParams(clipId, params);
         return { clipId, mediaId: media.id, lines: kept.length, from: clip.start, to: clip.end };
+      },
+      /**
+       * 字幕卡里到底有哪几条:下标 + 相对秒 + 绝对秒 + 文字。
+       * 改字幕前先看这个,index 以它为准(按时间排,和时间轴上画出来的顺序一致)。
+       */
+      listCaptions: (args) => {
+        const hit = findCaptionClip(args.clipId);
+        const clip = hit.clip as { start: number; end: number; params?: Record<string, unknown> };
+        const lines = captionsOf(clip);
+        return {
+          clipId: hit.clip.id,
+          from: clip.start,
+          to: clip.end,
+          count: lines.length,
+          captions: lines.map((l, index) => ({
+            index,
+            start: l.start,
+            end: l.end,
+            // 相对秒容易和时间轴上的秒搞混,两个都给
+            absStart: clip.start + l.start,
+            absEnd: clip.start + l.end,
+            text: l.zh,
+            ...(l.en ? { en: l.en } : {}),
+          })),
+        };
+      },
+      /**
+       * 单条字幕的增删改。整份重灌走 fill_captions,这里是给「第 3 条说错了」用的。
+       *
+       * 时间由 kernel/captions 夹在左右邻居之间,所以 Agent 写一个越界的秒数不会
+       * 弄出两条抢同一秒的字幕 —— 会贴到边上,并在返回里告诉它实际落在哪。
+       */
+      editCaption: (args) => {
+        const hit = findCaptionClip(args.clipId);
+        const clipId = hit.clip.id;
+        const op = args.op ?? "edit";
+
+        if (op === "remove") {
+          if (args.index == null) throw new Error("remove 要给 index(list_captions 里的下标)");
+          const lines = captionsOf(hit.clip as { params?: Record<string, unknown> });
+          const gone = lines[args.index];
+          if (!gone) throw new Error(`这张字幕卡只有 ${lines.length} 条,没有第 ${args.index} 条`);
+          if (!actions.removeCaption(clipId, args.index)) throw new Error("删除失败");
+          return { clipId, removed: describeCaption(gone, args.index), count: lines.length - 1 };
+        }
+
+        if (op === "insert") {
+          if (args.start == null) throw new Error("insert 要给 start(相对字幕卡起点的秒)");
+          if (!args.text) throw new Error("insert 要给 text");
+          const at = actions.addCaption(clipId, { start: args.start, end: args.end, zh: args.text, en: args.en });
+          if (at < 0) throw new Error(`${args.start}s 附近没有放得下的空当了 —— 先用 list_captions 看看哪儿是空的,或者把邻近那条改短。`);
+          const now = captionsOf(findCaptionClip(clipId).clip as { params?: Record<string, unknown> });
+          return { clipId, index: at, caption: describeCaption(now[at], at), count: now.length };
+        }
+
+        if (args.index == null) throw new Error("edit 要给 index(list_captions 里的下标)");
+        if (args.text === undefined && args.en === undefined && args.start === undefined && args.end === undefined) {
+          throw new Error("edit 至少要给 text / en / start / end 里的一个");
+        }
+        const at = actions.editCaption(clipId, args.index, {
+          start: args.start,
+          end: args.end,
+          zh: args.text,
+          en: args.en,
+        });
+        if (at < 0) throw new Error(`改不了第 ${args.index} 条,先用 list_captions 确认下标`);
+        const now = captionsOf(findCaptionClip(clipId).clip as { params?: Record<string, unknown> });
+        return { clipId, index: at, caption: describeCaption(now[at], at), count: now.length };
       },
       /**
        * 现场建一张新卡片。源码落到 src/cards/user/<id>.tsx,vite HMR 编译后

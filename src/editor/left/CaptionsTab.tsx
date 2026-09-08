@@ -35,6 +35,8 @@ export function CaptionsTab({
   const t = useStore((s) => s.t);
   /** 正在重转写的素材:它的段落先让位给 TranscribePanel */
   const [retranscribeId, setRetranscribeId] = useState<string | null>(null);
+  /** 「铺成字幕轨」的结果提示,几秒后自己消失 */
+  const [flash, setFlash] = useState<string | null>(null);
   /** 手动折叠/展开的记录。浏览态和搜索态各记一份,免得互相干扰 */
   const [openMap, setOpenMap] = useState<Record<string, boolean>>({});
   const [searchOpenMap, setSearchOpenMap] = useState<Record<string, boolean>>({});
@@ -52,6 +54,18 @@ export function CaptionsTab({
     // 换搜索词就把手动折叠清掉,否则上一轮折起来的节点会把这一轮的命中藏住
     setSearchOpenMap({});
   }, [q]);
+
+  useEffect(() => {
+    if (!flash) return;
+    const id = setTimeout(() => setFlash(null), 4000);
+    return () => clearTimeout(id);
+  }, [flash]);
+
+  /** 把一份文字稿铺成时间轴上的字幕轨(建/复用字幕序列 + 一张字幕卡) */
+  const build = (id: string) => {
+    const r = actions.buildCaptions(id);
+    setFlash(r.ok ? `已铺 ${r.count} 条字幕到「字幕」序列` : r.reason);
+  };
 
   const nodes = useMemo<CaptionNode[]>(
     () =>
@@ -110,6 +124,12 @@ export function CaptionsTab({
 
   return (
     <div className="flex-1 min-h-0 flex flex-col">
+      {flash && (
+        <div className="flex-none px-2 py-1.5 text-[11px] text-neutral-300 bg-neutral-800/60 border-b border-neutral-800">
+          {flash}
+        </div>
+      )}
+
       {nothingTranscribed && !q && (
         <div className="flex-none px-2 py-1.5 text-[11px] text-neutral-500 border-b border-neutral-800">
           还没有字幕。点开下面的素材开始转写,或用工具栏的「+」导入 .srt。
@@ -140,6 +160,10 @@ export function CaptionsTab({
                 setRetranscribeId(node.media.id);
                 setOpen(node.media.id, true);
               }}
+              onBuild={() => {
+                onPick(node.media.id);
+                build(node.media.id);
+              }}
               onCloseTranscribe={() => setRetranscribeId(null)}
               onPickSelf={() => onPick(node.media.id)}
             />
@@ -161,6 +185,7 @@ function MediaNode({
   retranscribing,
   onToggle,
   onRetranscribe,
+  onBuild,
   onCloseTranscribe,
   onPickSelf,
 }: {
@@ -173,6 +198,8 @@ function MediaNode({
   retranscribing: boolean;
   onToggle: (open: boolean) => void;
   onRetranscribe: () => void;
+  /** 把这份文字稿铺成时间轴上的字幕轨 */
+  onBuild: () => void;
   onCloseTranscribe: () => void;
   onPickSelf: () => void;
 }) {
@@ -228,9 +255,19 @@ function MediaNode({
                 {transcript.engine} · {transcript.model}
                 {transcript.language ? ` · ${transcript.language}` : ""}
               </span>
+              {/* 转写完了下一步就是「铺到时间轴上」。以前这一步只有 AI 会做,
+                  人在这儿看完文字稿就没路可走了 —— 现在一键建字幕卡,时间轴上就有字幕轨了 */}
               <button
                 type="button"
                 className="ml-auto shrink-0 h-5 px-1.5 rounded border border-neutral-700 text-neutral-400 hover:text-neutral-200 hover:border-neutral-600"
+                onClick={onBuild}
+                title="把这份文字稿铺成时间轴上的字幕轨"
+              >
+                铺成字幕轨
+              </button>
+              <button
+                type="button"
+                className="shrink-0 h-5 px-1.5 rounded border border-neutral-700 text-neutral-400 hover:text-neutral-200 hover:border-neutral-600"
                 onClick={onRetranscribe}
               >
                 重新转写

@@ -93,6 +93,29 @@
 
 Agent 那边:`list_transitions` / `add_transition` / `remove_transition`,规矩和界面同一份代码。
 
+## 字幕轨(src/kernel/captions.ts)
+
+字幕**不是**每句话一个 clip:整段口播共用一张 `caption-track` 卡,内容存在它的 `lines`
+参数里(`起|止|中|英` 一行一条,秒数相对卡片起点)。这份格式没变过 —— 老项目文件、
+`fill_captions`、卡片组件三边都认它。
+
+变的是**时间轴上看得见了**:`kernel/captions.ts` 把那串文本解析成一条条 `CaptionLine`,
+`timeline/CaptionLines.tsx` 在字幕卡内部把每条画成一小格,改完再 `formatCaptions` 写回同一个
+字符串。以前时间轴上只有一个大色块,哪句话几秒出、压在哪个镜头上一概看不见。
+
+- 时段规矩都在 kernel 里:`captionBounds` 给出「这条能挪到哪」(卡片内 + 不越过左右邻居),
+  `editCaption` 只给 `start` 就是**整条平移**(长度不变)、给 `start+end` 才是修边,
+  `insertCaption` 落点被占就往后找空当、塞不下返回 -1。所以界面和 Agent 谁都写不出两条抢同一秒的字幕;
+- 时间轴上:点一下把播放头挪过去、拖着挪、拽两端改时长、**双击改字**、右键删/加。
+  双击是自己数的 —— 拖动要 `setPointerCapture`,指针一被捕获浏览器就不再判定原生 `dblclick`;
+- 字幕卡默认落在名叫「字幕」的序列上(`ensureCaptionTrack`,没有就建,**建在 tracks[0]**;
+  叠放顺序是「靠上的在上层」,追加到末尾等于把字幕埋在画面底下);
+- 文字稿的秒数是**素材内**的,`captionsFromTranscript` 先按素材在时间轴上的位置换算
+  (认 `mediaOffset`)再减去卡片起点。素材放在开头且没修头时两者恰好相等,所以这个坑很久没被踩出来。
+
+入口:人走左栏「字幕」页 → 转写完点「铺成字幕轨」(`actions.buildCaptions`,同一时段已有字幕卡就复用);
+Agent 走 `fill_captions` 灌整份,再用 `list_captions` / `edit_caption` 改单条。
+
 ## 唯一真源:src/store/project.ts
 
 ```ts

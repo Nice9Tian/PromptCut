@@ -11,6 +11,8 @@ import { clipTrackKind } from "../../kernel/trackKind";
 import { describeTransition, timingLock, transitionsOfClip } from "../../kernel/transitions";
 import { describeEmphasis } from "../../kernel/emphasis";
 import { requestCaptions } from "../left/captionsBus";
+import { CaptionLines } from "./CaptionLines";
+import { captionsOf, isCaptionClip } from "../../kernel/captions";
 
 export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
   const { pxPerSec, trackAreaRef, setDraggingClipId, setDraggingTrackId, rowSize } = useTimelineContext();
@@ -23,8 +25,14 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
   // 这一段是不是「有画面的素材」:只有它能转成声音(卡片、图片、已经是声音的都不行)
   const canBecomeAudio = !!clip.mediaId && getState().project.media.find((m) => m.id === clip.mediaId)?.kind === "video";
 
+  // 字幕卡不走「标题 + 副标题」那一套:它的内容是一条条字幕,直接在色块里画出来
+  const isCaption = isCaptionClip(clip);
+  const capCount = useMemo(() => (isCaption ? captionsOf(clip).length : 0), [isCaption, clip.params?.lines]);
+
   let subtitle = "";
-  if (clip.cardId && cardDef) {
+  if (isCaption) {
+    subtitle = capCount > 0 ? `${capCount} 条字幕` : "还没有字幕,右键素材去转写";
+  } else if (clip.cardId && cardDef) {
     const textControl = cardDef.controls.find((c) => c.type === "text");
     if (textControl) {
       const val = clip.params[textControl.key] ?? cardDef.defaults[textControl.key];
@@ -216,7 +224,10 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
           className={`absolute left-0 top-0 bottom-0 w-2 z-30 ${track.locked ? "" : "cursor-col-resize hover:bg-white/30"}`}
         />
         
-        {rowSize === "small" ? (
+        {isCaption && capCount > 0 ? (
+          // 字幕卡:色块里画出一条条字幕,点它跳过去、拖它挪时间、双击改字
+          <CaptionLines clip={clip} height={ROW_SIZE_H[rowSize]} />
+        ) : rowSize === "small" ? (
           <span className="truncate pointer-events-none font-medium drop-shadow-md w-full">{label}</span>
         ) : (
           <div className="flex flex-col items-start justify-center overflow-hidden pointer-events-none min-w-0 w-full leading-tight">

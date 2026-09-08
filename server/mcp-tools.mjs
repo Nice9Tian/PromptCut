@@ -694,6 +694,34 @@ export const tools = [
     side: "browser"
   },
   {
+    name: "list_captions",
+    description: "列出一张字幕卡里的每一条字幕:下标、起止秒(相对卡片起点)、绝对时间轴秒、文字。改字幕前先调它拿准 index。clipId 不传时自动找时间轴上唯一那张字幕卡。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        clipId: { type: "string", description: "字幕卡的 clipId；时间轴上有多张时必须指明" }
+      }
+    },
+    side: "browser"
+  },
+  {
+    name: "edit_caption",
+    description: "改字幕卡里的**某一条**字幕:改文字、挪时间、改时长、删掉、或在某处插一条。整份重灌用 fill_captions,这个工具是给「第 3 条说错了」「这句晚半秒出」这种单条微调用的。index 是 list_captions 返回的下标(从 0 起,按时间排)。op:edit 改这条(text / start / end 至少给一个)、remove 删这条、insert 在 start 处插一条(text 必填,挤不进空当会报错)。start / end 是**相对字幕卡起点**的秒数,和 list_captions 返回的一致;时间会被夹在左右两条之间,不会覆盖到别人身上。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        clipId: { type: "string", description: "字幕卡的 clipId；时间轴上有多张时必须指明" },
+        op: { type: "string", enum: ["edit", "remove", "insert"], description: "默认 edit" },
+        index: { type: "number", description: "第几条（list_captions 的下标，从 0 起）。edit / remove 必填" },
+        text: { type: "string", description: "这条字幕的文字。insert 必填；用 *星号* 包住的词会按主色高亮" },
+        en: { type: "string", description: "英文行，可留空" },
+        start: { type: "number", description: "起点秒（相对字幕卡起点）。edit 时只给 start = 整条平移，长度不变" },
+        end: { type: "number", description: "止点秒（相对字幕卡起点）" }
+      }
+    },
+    side: "browser"
+  },
+  {
     name: "import_media",
     description: "把用户用「+」发来的附件装进项目素材库，并放到视频轨上。附件放在对话的工作目录里，和素材库是两回事——`list_media` 看不到它，必须先用本工具导入才能转写、配字幕、配动效。参数 url 就是用户消息末尾附件清单里的「站内地址」（形如 /@pcwork/<会话id>/<文件名>）。返回 mediaId。用户发了视频还让你处理它时，第一步就调它，不要回一句「请先手动导入」。",
     inputSchema: {

@@ -93,6 +93,8 @@ export interface EditorApi {
   autoWorkflow(args: { mediaId: string; style?: string; maxCards?: number }): Promise<any>;
   autoWorkflowStatus(args: { jobId: string }): any;
   fillCaptions(args: { clipId?: string; mediaId?: string; showEn?: boolean }): any;
+  listCaptions(args: { clipId?: string }): any;
+  editCaption(args: { clipId?: string; op?: string; index?: number; text?: string; en?: string; start?: number; end?: number }): any;
   importMedia(args: { url?: string; name?: string }): Promise<any>;
   collectStatus(): Promise<any>;
   collectSearch(args: { query: string; site?: string; limit?: number }): Promise<any>;
@@ -115,7 +117,7 @@ export interface EditorApi {
 const TIMELINE_TOOLS = new Set([
   "add_clip", "update_clip", "remove_clip", "duplicate_clip", "split_clip",
   "add_transition", "remove_transition", "create_audio", "set_emphasis",
-  "set_position", "set_rect", "align", "nudge", "fill_captions", "attach_clip_motion", "detach_clip_motion",
+  "set_position", "set_rect", "align", "nudge", "fill_captions", "edit_caption", "attach_clip_motion", "detach_clip_motion",
   "add_track", "switch_cut", "add_cut", "set_theme",
 ]);
 
@@ -339,6 +341,8 @@ export function connectMcpExecutor(getApi: () => EditorApi, onStatus?: (s: { con
           else if (tool === "auto_workflow") result = await api.autoWorkflow(args);
           else if (tool === "auto_workflow_status") result = api.autoWorkflowStatus(args);
           else if (tool === "fill_captions") result = api.fillCaptions(args);
+          else if (tool === "list_captions") result = api.listCaptions(args);
+          else if (tool === "edit_caption") result = api.editCaption(args);
           else if (tool === "import_media") result = await api.importMedia(args);
           else if (tool === "collect_status") result = await api.collectStatus();
           else if (tool === "collect_search") result = await api.collectSearch(args);
