@@ -1006,7 +1006,7 @@
 }
 
 /*
- * 动作类型 —— 读取最淡,它们数量最多但最不值得注意。
+ * 动作类型 —— 读取最暗(深灰底 + 放大镜),它们数量最多但最不值得注意。
  * 颜色的分工:红色只留给「失败」。删除是灰底垃圾桶,不用红 —— 以前删除和失败都是红的,
  * 用户扫一眼分不出「删了东西」和「出错了」。修改用黄绿而不是黄:黄在用户眼里是警告。
  */
@@ -1017,8 +1017,9 @@
 .ai-chip--download { --chip: var(--ui-accent, #60a5fa); --chip-icon: url("data:image/svg+xml,%3Csvg%20xmlns%3D'http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg'%20viewBox%3D'0%200%2012%2012'%20fill%3D'none'%20stroke%3D'%23fff'%20stroke-width%3D'1.6'%20stroke-linecap%3D'round'%20stroke-linejoin%3D'round'%3E%3Cpath%20d%3D'M6%202.1v5.3M3.7%205.9L6%208.2l2.3-2.3M2.9%2010h6.2'%2F%3E%3C%2Fsvg%3E"); }
 .ai-chip--job { --chip: var(--ui-accent, #60a5fa); }
 .ai-chip--read {
-  --chip: transparent;
-  border-color: var(--hairline-strong);
+  /* 深灰:比别的动作暗一档(读取最不值得注意),但比面板亮,不至于看成空位 */
+  --chip: #3c4552;
+  --chip-icon: url("data:image/svg+xml,%3Csvg%20xmlns%3D'http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg'%20viewBox%3D'0%200%2012%2012'%20fill%3D'none'%20stroke%3D'%23fff'%20stroke-width%3D'1.5'%20stroke-linecap%3D'round'%3E%3Ccircle%20cx%3D'5.2'%20cy%3D'5.2'%20r%3D'2.8'%2F%3E%3Cpath%20d%3D'M7.3%207.3l2.4%202.4'%2F%3E%3C%2Fsvg%3E");
 }
 
 /* 还没出结果:轻轻呼吸,和「已经做完」区分开 */
