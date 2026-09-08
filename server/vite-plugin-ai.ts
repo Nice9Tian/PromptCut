@@ -50,9 +50,17 @@ async function oneShotCompletion(
   const providerModule = await import(
     new URL(`./harness/providers/${cfg.vendor || 'anthropic'}.mjs`, import.meta.url).href
   );
+  // 编排阶段这几次小调用也走中转,一样会撞上「upstream load is saturated」。
+  // 撞上就整个编排失败,而它其实只要等几秒。包一层自动重试,规则和主对话那条路同源。
+  const { createRetryingFetch } = await import(new URL('./harness/retry-fetch.mjs', import.meta.url).href);
   const provider = (providerModule as any).createProvider(
     { ...cfg, maxTokens },
-    { fetchImpl: (u: string, o: RequestInit) => fetch(u, { ...o, signal: AbortSignal.timeout(timeoutMs) }) },
+    {
+      fetchImpl: (createRetryingFetch as any)(
+        (u: string, o: RequestInit) => fetch(u, { ...o, signal: AbortSignal.timeout(timeoutMs) }),
+        { onRetry: (i: any) => console.error(`[oneshot] ${i.reason},${i.delayMs}ms 后重试(第 ${i.attempt}/${i.of} 次)`) },
+      ),
+    },
   );
   let text = '';
   for await (const ev of provider.stream(

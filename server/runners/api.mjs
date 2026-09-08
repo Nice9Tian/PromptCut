@@ -5,6 +5,7 @@ import crypto from 'node:crypto';
 import { Agent } from '../harness/agent.mjs';
 import { MessageHistory } from '../harness/history.mjs';
 import { buildTools } from '../harness/tools/index.mjs';
+import { createRetryingFetch } from '../harness/retry-fetch.mjs';
 
 // 对应 13.3 及获取配置接口
 export async function getApiProvider() {
@@ -146,7 +147,27 @@ export function startRun(opts) {
     }
 
     const requestFetch = opts.fetchImpl || globalThis.fetch;
-    const provider = providerModule.createProvider(cfg, { fetchImpl: (url, options) => requestFetch(url, { ...options, signal: AbortSignal.any([abortController.signal, AbortSignal.timeout(120000)]) }) });
+    /*
+     * 自动重试包在**最外层**,不在里面。
+     *
+     * 里面那个箭头函数每次被调用都新建一份 120 秒超时 signal —— 重试必须重新调它,
+     * 才能拿到一份没烧过的超时;要是把重试塞进 signal 里面,第二次尝试会带着
+     * 上一次已经到期的 signal 出门,当场就 abort。
+     *
+     * 停止用的是 abortController.signal(用户点停止),退避等待期间也听它 ——
+     * 不然点了停止还要干等十几秒才有反应。
+     * 只重试「发请求」这一下:流已经开始读之后不能重发,详见 retry-fetch.mjs 的说明。
+     */
+    const retryingFetch = createRetryingFetch(
+      (url, options) => requestFetch(url, { ...options, signal: AbortSignal.any([abortController.signal, AbortSignal.timeout(120000)]) }),
+      {
+        signal: abortController.signal,
+        onRetry: ({ attempt, of, reason, delayMs }) => {
+          console.error(`[api] ${reason},${delayMs}ms 后重试(第 ${attempt}/${of} 次)`);
+        },
+      },
+    );
+    const provider = providerModule.createProvider(cfg, { fetchImpl: retryingFetch });
     /*
      * 轮次上限:常规 24 轮;「深度自主」开着时换成设置里的「自主轮次」(opts.maxRounds),
      * 那个值为 0 表示不限 —— 在这里变成 Infinity,循环就没有终点了。
