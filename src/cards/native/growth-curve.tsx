@@ -203,5 +203,9 @@ export const growthCurve: CardDef<Params> = {
     { id: "caption", label: "小注", role: "text", params: ["caption"], enterMs: 0, settleMs: 0 },
   ],
   lifecycle: { settleMs: 1250, after: "hold", exit: ["fade"] },
+  timing: (p) => {
+    const draw = p.drawMs > 0 ? p.drawMs : 1000;
+    return { settleMs: draw * 0.85 + 400, parts: { curve: { settleMs: draw }, value: { enterMs: draw * 0.85, settleMs: draw * 0.85 + 400 } } };
+  },
   Component: GrowthCurveCard,
 };

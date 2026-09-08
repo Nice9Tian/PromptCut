@@ -87,5 +87,15 @@ export const entityChips: CardDef<Params> = {
     { id: "note", label: "旁注", role: "text", params: ["note"], enterMs: 2 * 150 + 200, settleMs: 2 * 150 + 200 + 600 },
   ],
   lifecycle: { settleMs: 1100, after: "hold", exit: ["fade"] },
+  timing: (p) => {
+    const count = Math.max(1, p.chips.split("\n").filter(Boolean).length);
+    const chips = (count - 1) * p.stepMs + 600;
+    const hasNote = (p.note || "").split("|").filter(Boolean).length > 0;
+    const noteEnter = count * p.stepMs + 200;
+    return {
+      settleMs: hasNote ? noteEnter + 600 : chips,
+      parts: { chips: { settleMs: chips }, note: { enterMs: noteEnter, settleMs: hasNote ? noteEnter + 600 : noteEnter } },
+    };
+  },
   Component: EntityChipsCard,
 };

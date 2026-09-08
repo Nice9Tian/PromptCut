@@ -86,5 +86,15 @@ export const quoteLockup: CardDef<Params> = {
     { id: "author", label: "署名", role: "text", params: ["author"], enterMs: 740, settleMs: 1340 },
   ],
   lifecycle: { settleMs: 1340, after: "hold", exit: ["fade"] },
+  timing: (p) => {
+    const lines = Math.max(1, p.quote.split("|").filter(Boolean).length);
+    const quote = (lines - 1) * 180 + 600;
+    const authorEnter = lines * 180 + 200;
+    const hasAuthor = !!(p.author || "").trim();
+    return {
+      settleMs: hasAuthor ? authorEnter + 600 : quote,
+      parts: { quote: { settleMs: quote }, author: { enterMs: authorEnter, settleMs: hasAuthor ? authorEnter + 600 : authorEnter } },
+    };
+  },
   Component: QuoteLockupCard,
 };

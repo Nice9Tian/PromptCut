@@ -161,3 +161,29 @@ test("写:换卡先于写参数,新卡的参数按新卡校验", () => {
   assert.equal(r.calls[0][0], "card");
   assert.throws(() => applyEnvelope(project(clip), "c1", { card: { id: "other-card" } }, card, STAGE, recorder().writer, (id) => (id === "other-card" ? other : card)), /必填/);
 });
+
+test("时序随参数重算:条目多了落定就晚,静态值只是默认参数下的参考", () => {
+  const timed = {
+    ...card,
+    id: "timed-card",
+    timing: (p) => {
+      const count = String(p.items).split("|").filter(Boolean).length;
+      const settle = 300 + (count - 1) * Number(p.stepMs) + 400;
+      return { settleMs: settle, parts: { items: { settleMs: settle } } };
+    },
+  };
+  registerCards([card, timed]);
+  const base = clipOf({ cardId: "timed-card" });
+  const env0 = envelopeOf(project(base), base, timed, STAGE);
+  assert.equal(env0.card.lifecycle.settleMs, 1100, "默认 3 条 × 200ms 和静态声明一致");
+  const more = clipOf({ cardId: "timed-card", params: { ...card.defaults, items: "a|b|c|d|e|f", stepMs: 500 } });
+  const env1 = envelopeOf(project(more), more, timed, STAGE);
+  assert.equal(env1.card.lifecycle.settleMs, 300 + 5 * 500 + 400);
+  assert.equal(env1.parts.find((p) => p.id === "items").settleMs, 300 + 5 * 500 + 400);
+  assert.equal(env1.parts.find((p) => p.id === "title").settleMs, 600, "timing 没提到的部件保留静态值");
+  // timing 算炸了不能把封装拖垮
+  const broken = { ...timed, id: "broken-card", timing: () => { throw new Error("boom"); } };
+  registerCards([card, broken]);
+  const b = clipOf({ cardId: "broken-card" });
+  assert.equal(envelopeOf(project(b), b, broken, STAGE).card.lifecycle.settleMs, 1100);
+});

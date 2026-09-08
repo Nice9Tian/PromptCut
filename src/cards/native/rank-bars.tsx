@@ -114,5 +114,10 @@ export const rankBars: CardDef<Params> = {
     { id: "rows", label: "数据行", role: "list", params: ["rows", "suffix"], enterMs: 0, settleMs: 3 * 120 + 900 },
   ],
   lifecycle: { settleMs: 1260, after: "hold", exit: ["fade"] },
+  timing: (p) => {
+    const rows = Math.max(1, p.rows.split("|").filter(Boolean).length);
+    const settle = (rows - 1) * 120 + 900;
+    return { settleMs: settle, parts: { rows: { settleMs: settle } } };
+  },
   Component: RankBarsCard,
 };

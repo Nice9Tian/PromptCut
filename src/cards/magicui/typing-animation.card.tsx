@@ -35,5 +35,9 @@ export const typingAnimationCard: CardDef<Params> = {
     { id: "text", label: "文字", role: "text", params: ["text", "duration"], enterMs: 0, settleMs: 1320 },
   ],
   lifecycle: { settleMs: 1320, after: "hold", exit: ["fade"] },
+  timing: (p) => {
+    const settle = p.text.length * p.duration;
+    return { settleMs: settle, parts: { text: { settleMs: settle } } };
+  },
   Component: TypingAnimationCard,
 };

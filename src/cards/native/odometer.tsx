@@ -86,5 +86,10 @@ export const odometer: CardDef<Params> = {
     { id: "label", label: "说明", role: "text", params: ["label"], enterMs: 0, settleMs: 0 },
   ],
   lifecycle: { settleMs: 1280, after: "hold", exit: ["fade"] },
+  timing: (p) => {
+    const digits = String(Math.floor(Number(p.value) || 0)).length;
+    const settle = 800 + (digits - 1) * 120;
+    return { settleMs: settle, parts: { value: { settleMs: settle } } };
+  },
   Component: OdometerCard,
 };

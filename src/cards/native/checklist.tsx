@@ -87,5 +87,10 @@ export const checklist: CardDef<Params> = {
     { id: "items", label: "条目", role: "list", params: ["items", "stepMs"], enterMs: 0, settleMs: 3 * 260 + 650 },
   ],
   lifecycle: { settleMs: 1430, after: "hold", exit: ["fade"] },
+  timing: (p) => {
+    const count = Math.max(1, p.items.split("|").filter(Boolean).length);
+    const settle = (count - 1) * p.stepMs + 650;
+    return { settleMs: settle, parts: { items: { settleMs: settle } } };
+  },
   Component: ChecklistCard,
 };

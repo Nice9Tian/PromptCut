@@ -130,5 +130,10 @@ export const terminal3d: CardDef<Params> = {
     { id: "terminal", label: "终端", role: "list", params: ["file", "lines", "cps"], enterMs: 0, settleMs: 1900 },
   ],
   lifecycle: { settleMs: 1900, after: "evolve", exit: ["fade"] },
+  timing: (p) => {
+    const chars = p.lines.split("|").reduce((sum, line) => sum + line.length, 0);
+    const settle = (chars / (p.cps > 0 ? p.cps : 20)) * 1000;
+    return { settleMs: settle, parts: { terminal: { settleMs: settle } } };
+  },
   Component: Terminal3dCard,
 };

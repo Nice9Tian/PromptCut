@@ -1,4 +1,4 @@
-import type { CardDef, CardPart, ClipFrame } from "./types";
+import type { CardDef, CardPart, CardTiming, ClipFrame } from "./types";
 import type { Project, TrackClip } from "./project";
 import { findClip } from "./project.ts";
 import { worldOf, type Size, type WorldPlacement } from "./layout.ts";
@@ -71,17 +71,37 @@ function pick(params: Record<string, unknown>, keys: string[] | undefined): Reco
   return out;
 }
 
+/**
+ * 按当前参数算时序。卡片给了 timing 就用它(参数先和 defaults 合并,和渲染时看到的一样),
+ * 没给或算炸了就退回静态声明 —— 时序是辅助信息,不能让它把整份封装拖垮。
+ */
+function timingOf(card: CardDef<any> | undefined, params: Record<string, unknown>): CardTiming {
+  if (!card?.timing) return {};
+  try {
+    return card.timing({ ...card.defaults, ...params }) ?? {};
+  } catch {
+    return {};
+  }
+}
+
+const roundMs = (v: number | undefined) => (v === undefined || !Number.isFinite(v) ? undefined : Math.round(v));
+
 /** 把卡片声明的部件树填上当前参数值;没声明 parts 的卡就是一个根部件,所有参数都归它 */
-function partsOf(card: CardDef<any> | undefined, params: Record<string, unknown>): EnvelopePart[] {
-  const fill = (p: CardPart): EnvelopePart => ({
-    id: p.id,
-    label: p.label,
-    ...(p.role ? { role: p.role } : {}),
-    ...(p.enterMs !== undefined ? { enterMs: p.enterMs } : {}),
-    ...(p.settleMs !== undefined ? { settleMs: p.settleMs } : {}),
-    params: pick(params, p.params),
-    ...(p.children?.length ? { children: p.children.map(fill) } : {}),
-  });
+function partsOf(card: CardDef<any> | undefined, params: Record<string, unknown>, timing: CardTiming): EnvelopePart[] {
+  const fill = (p: CardPart): EnvelopePart => {
+    const dyn = timing.parts?.[p.id];
+    const enterMs = roundMs(dyn?.enterMs) ?? p.enterMs;
+    const settleMs = roundMs(dyn?.settleMs) ?? p.settleMs;
+    return {
+      id: p.id,
+      label: p.label,
+      ...(p.role ? { role: p.role } : {}),
+      ...(enterMs !== undefined ? { enterMs } : {}),
+      ...(settleMs !== undefined ? { settleMs } : {}),
+      params: pick(params, p.params),
+      ...(p.children?.length ? { children: p.children.map(fill) } : {}),
+    };
+  };
   if (card?.parts?.length) return card.parts.map(fill);
   return [{ id: "root", label: card?.name ?? "卡片", role: "group", params: { ...params } }];
 }
@@ -98,6 +118,13 @@ export function envelopeOf(project: Project, clip: TrackClip, card: CardDef<any>
   const params = { ...(clip.params ?? {}) };
   const missing = (card?.controls ?? []).map((c) => c.key).filter((k) => !(k in params));
   const motion = clip.motion;
+  const timing = timingOf(card, params);
+  const staticLc = card?.lifecycle ?? DEFAULT_LIFECYCLE;
+  const lifecycle = {
+    ...staticLc,
+    ...(roundMs(timing.settleMs) !== undefined ? { settleMs: roundMs(timing.settleMs) } : {}),
+    ...(timing.after ? { after: timing.after } : {}),
+  };
   return {
     $schema: ENVELOPE_SCHEMA,
     id: clip.id,
@@ -105,13 +132,13 @@ export function envelopeOf(project: Project, clip: TrackClip, card: CardDef<any>
       id: clip.cardId,
       name: card?.name ?? clip.cardId,
       source: card?.source ?? "native",
-      lifecycle: card?.lifecycle ?? DEFAULT_LIFECYCLE,
+      lifecycle,
     },
     time: { start: clip.start, end: clip.end, duration: round3(clip.end - clip.start) },
     frame: { local: clip.frame ?? null, world: worldOf(clip.frame, stage) },
     blend: { opacity: clip.opacity ?? 1, fadeIn: clip.fadeIn ?? 0, fadeOut: clip.fadeOut ?? 0 },
     motion: motion ? { attached: true, mediaId: motion.mediaId, whenHidden: motion.whenHidden } : { attached: false },
-    parts: partsOf(card, params),
+    parts: partsOf(card, params, timing),
     params,
     ...(missing.length ? { missingParams: missing } : {}),
   };

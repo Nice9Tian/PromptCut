@@ -69,5 +69,10 @@ export const blurText: CardDef<Params> = {
     { id: "text", label: "文字", role: "list", params: ["text", "staggerMs"], enterMs: 0, settleMs: 2 * 220 + 800 },
   ],
   lifecycle: { settleMs: 1240, after: "hold", exit: ["fade"] },
+  timing: (p) => {
+    const chunks = Math.max(1, p.text.split("|").length);
+    const settle = (chunks - 1) * p.staggerMs + 800;
+    return { settleMs: settle, parts: { text: { settleMs: settle } } };
+  },
   Component: BlurTextCard,
 };

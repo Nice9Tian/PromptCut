@@ -141,5 +141,6 @@ export const lottieCard: CardDef<Params> = {
   ],
   parts: [{ id: "animation", label: "动画", role: "media", params: ["json", "src", "speed", "loop", "fit"] }],
   lifecycle: { after: "hold", exit: ["fade"] },
+  timing: (p) => ({ after: p.loop === "yes" ? "loop" : "hold" }),
   Component: LottieCard,
 };

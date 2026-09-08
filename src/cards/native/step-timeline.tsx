@@ -97,5 +97,10 @@ export const stepTimeline: CardDef<Params> = {
     { id: "steps", label: "步骤", role: "list", params: ["steps", "stepMs"], enterMs: 0, settleMs: 4 * 250 + 400 },
   ],
   lifecycle: { settleMs: 1400, after: "evolve", exit: ["fade"] },
+  timing: (p) => {
+    const steps = Math.max(1, p.steps.split("|").filter(Boolean).length);
+    const settle = (steps - 1) * p.stepMs + 400;
+    return { settleMs: settle, parts: { steps: { settleMs: settle } } };
+  },
   Component: StepTimelineCard,
 };

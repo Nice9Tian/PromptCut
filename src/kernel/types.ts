@@ -80,6 +80,23 @@ export interface CardLifecycle {
   exit: ("fade" | "reverse")[];
 }
 
+/**
+ * 按**当前参数**算出来的时序:和 frame 的 local → world 一样,是派生量,不落盘。
+ *
+ * parts / lifecycle 里写的 settleMs 是按默认参数算的静态值;条目数、字数、间隔一改,
+ * 落定时刻就变了。卡片给一个 timing 函数,封装(kernel/envelope.ts)每次读的时候按 clip
+ * 实际参数重算,代码页和 get_clip 看到的永远是**这一张**卡此刻的时序,不是默认值的。
+ * 没给 timing 的卡照用静态值。
+ */
+export interface CardTiming {
+  /** 整张卡最晚落定(毫秒) */
+  settleMs?: number;
+  /** 按部件 id 覆盖各部件的进场 / 落定时刻 */
+  parts?: Record<string, { enterMs?: number; settleMs?: number }>;
+  /** 落定之后的行为随参数变(比如 loop 开关) */
+  after?: "hold" | "loop" | "evolve";
+}
+
 /** 卡片契约。所有卡片(自家写的、Magic UI 适配的、AI 现场建的)都长这样。 */
 export interface CardDef<P = Record<string, unknown>> {
   id: string;
@@ -106,6 +123,8 @@ export interface CardDef<P = Record<string, unknown>> {
   parts?: CardPart[];
   /** 生命周期(约定封装的时间)。没写 = 按「有进场动画、之后停住、只支持淡出」处理 */
   lifecycle?: CardLifecycle;
+  /** 按当前参数重算时序(见 CardTiming)。参数是和 defaults 合并后的全量 */
+  timing?: (params: P) => CardTiming;
 }
 
 /**

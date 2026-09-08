@@ -50,6 +50,12 @@ function lottieCardOf(a: CatalogAsset): CardDef<any> {
     ],
     parts: [{ id: "animation", label: a.name, role: "media", params: ["speed", "loop", "fit"], enterMs: 0, ...(settleMs ? { settleMs } : {}) }],
     lifecycle: { ...(settleMs ? { settleMs } : {}), after: "hold", exit: ["fade"] },
+    // 动画本身多长是定的,但 speed 拉快就早落定;loop 打开就不是「停住」而是「循环」
+    timing: (p) => {
+      const speed = Number(p.speed) > 0 ? Number(p.speed) : 1;
+      const settle = settleMs ? settleMs / speed : undefined;
+      return { ...(settle ? { settleMs: settle, parts: { animation: { settleMs: settle } } } : {}), after: String(p.loop) === "yes" ? "loop" : "hold" };
+    },
     Component,
   };
 }

@@ -87,5 +87,10 @@ export const pinBoard: CardDef<Params> = {
     { id: "items", label: "要点", role: "list", params: ["items", "stepMs"], enterMs: 300, settleMs: 300 + 2 * 200 + 400 },
   ],
   lifecycle: { settleMs: 1100, after: "hold", exit: ["fade"] },
+  timing: (p) => {
+    const count = Math.max(1, p.items.split("|").filter(Boolean).length);
+    const items = 300 + (count - 1) * p.stepMs + 400;
+    return { settleMs: Math.max(700, items), parts: { items: { settleMs: items } } };
+  },
   Component: PinBoardCard,
 };

@@ -98,6 +98,8 @@ Agent 和代码页看到的不是组件源码,而是一份固定形状的**封�
 - `enterMs` / `settleMs` 按 motion 的 delay / duration 算(spring 按 +400ms 估),列表按最后一项算。
 - `lifecycle.settleMs` 是整张卡最晚落定的时刻。Agent 据此知道「这段 clip 后面几秒是静止的」,该缩短时长还是加淡出。
 - 没写这两个字段的卡按「一个根部件、有进场动画、之后停住、只支持淡出」处理,不报错。
+- **时序随参数变的卡(条目数、字数、间隔、速度决定落定时刻)再给一个 `timing`**:`timing: (p) => ({ settleMs, parts: { items: { settleMs } }, after? })`,
+  封装每次读的时候按 clip 的实际参数重算,和 frame 的 local → world 一样是派生量、不落盘;`parts` / `lifecycle` 里的静态值只当默认参数下的参考。
 
 ### 素材封装卡(不要再手写)
 
