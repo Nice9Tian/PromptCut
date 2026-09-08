@@ -10,6 +10,10 @@ import { ReportDialog } from "./ReportDialog";
 import { SkillLock } from "./SkillLock";
 import { AiSetupDialog } from "./AiSetupDialog";
 import { useChatHistory } from "../../ai/useChatHistory";
+import { MAIN_TAB } from "../../ai/liveChat";
+import * as agentBus from "../../ai/agentBus";
+import { setTabBusy, setTabConversation } from "../../ai/agentTabs";
+import { getChat } from "../../ai/chatStore";
 import { SttInstallProgress } from "./SttInstallProgress";
 import { useInstallJobs, matchInstallJob } from "../../ai/sttInstallStore";
 import { useToolbarLayout, MORE_KEY } from "./useToolbarLayout";
@@ -165,7 +169,11 @@ function outcomeText(m: ChatMessage): string | null {
   return OUTCOME_TEXT[m.outcome] || `本次执行结束于:${m.outcome}`;
 }
 
-export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mock?: boolean; openSetupSignal?: number }) {
+export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mock?: boolean; openSetupSignal?: number; tabId?: string; active?: boolean }) {
+  // 多 Agent 分页:每页一个 AiPanel 实例,各自一份对话、一份会话归档 id;不在前台的页只是 display:none,对话照跑
+  const tabId = props.tabId ?? MAIN_TAB;
+  const active = props.active ?? true;
+  const convRef = useRef<string | undefined>(undefined);
   // ?aimock=1 给界面自测用:走内置假流,不需要装好任何模型后端
   const mock = props.mock ?? (() => {
     try {
@@ -174,8 +182,47 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
       return false;
     }
   })();
-  const { messages, providers, sttInfo, provider, setProvider, streaming, send, runWorkflow, workflowRoles, abort, newChat, error, setMessages, login, loginState, setupJobs, cancelSetup, install, installState, installError, config, saveConfig, setupOpen, openSetup, closeSetup, orchestration } = useAiChat({ mock });
-  const history = useChatHistory({ provider, messages, sessionId: undefined });
+  const { messages, providers, sttInfo, provider, setProvider, streaming, send, runWorkflow, workflowRoles, abort, newChat, error, setMessages, login, loginState, setupJobs, cancelSetup, install, installState, installError, config, saveConfig, setupOpen, openSetup, closeSetup, orchestration } = useAiChat({ mock, tabId, getConversationId: () => convRef.current });
+  const history = useChatHistory({ provider, messages, sessionId: undefined, storageKey: tabId === MAIN_TAB ? undefined : `pcChatId:${tabId}` });
+  convRef.current = history.conversationId;
+
+  // 页签上要知道这一页的对话 ID(给模型看的 Agent ID)和忙不忙
+  useEffect(() => { setTabConversation(tabId, history.conversationId); agentBus.markSeen(history.conversationId); }, [tabId, history.conversationId]);
+  useEffect(() => { setTabBusy(tabId, streaming); }, [tabId, streaming]);
+
+  // 刷新页面回来:非主页的对话不在 .proc 里,从会话归档按 id 找回
+  useEffect(() => {
+    if (tabId === MAIN_TAB) return;
+    let alive = true;
+    void getChat(history.conversationId).then((chat) => {
+      if (alive && chat && chat.messages.length && messages.length === 0) setMessages(chat.messages);
+    });
+    return () => { alive = false; };
+    // 只在挂上来那一刻找一次
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tabId]);
+
+  /*
+   * 别的 Agent 用 send_message 投来的消息:这一页空闲时就当一条用户消息发出去,
+   * 忙着就等这一轮跑完(streaming 翻回 false 时再来一次)。自动连锁有层数上限(agentBus.MAX_AUTO_HOPS),
+   * 到顶的消息留在信箱里,用户下次发消息时一并带上,不会两个 Agent 自己聊个没完。
+   */
+  useEffect(() => {
+    if (streaming) return;
+    const convId = history.conversationId;
+    const deliver = () => {
+      if (!agentBus.hasAutoDeliverable(convId)) return;
+      const msgs = agentBus.takeInbox(convId, true);
+      if (msgs.length === 0) return;
+      agentBus.beginRun(convId, Math.max(...msgs.map((m) => m.hops)));
+      void send(agentBus.formatInbound(msgs));
+    };
+    deliver();
+    return agentBus.subscribeBus(deliver);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [streaming, history.conversationId]);
+  // 用户自己发的那一轮层数归零;一轮结束也清掉
+  useEffect(() => { if (!streaming) agentBus.endRun(history.conversationId); }, [streaming, history.conversationId]);
   const installJobs = useInstallJobs();
   const [historyOpen, setHistoryOpen] = useState(false);
   const [scriptOpen, setScriptOpen] = useState(false);
@@ -311,7 +358,7 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (props.hotkeysOff) return;
+    if (props.hotkeysOff || !active) return;
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       handleSend();
@@ -451,7 +498,7 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
 
   if (providers.length > 0 && !providers.some(p => p.available)) {
     return (
-      <aside className="panel panel-right ai-panel">
+      <aside className="panel panel-right ai-panel" data-inactive={active ? undefined : "1"} aria-hidden={active ? undefined : true}>
         <div className="ai-panel-header">
           <div className="ai-panel-title">AI 助手</div>
           <button className="ai-gear-btn" title="AI 设置" aria-label="AI 设置" onClick={openSetup}><span aria-hidden="true">⚙</span><span>AI 设置</span></button>
@@ -620,7 +667,7 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
   ];
 
   return (
-    <aside className="panel panel-right ai-panel">
+    <aside className="panel panel-right ai-panel" data-inactive={active ? undefined : "1"} aria-hidden={active ? undefined : true}>
       {/* SKILL 模式下整块盖住:项目正交给无头实例上的 agent 改,两边同时写会互相覆盖 */}
       <SkillLock />
       <div className="ai-panel-header">

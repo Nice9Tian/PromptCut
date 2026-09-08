@@ -1,0 +1,118 @@
+/* AI 助手面板顶上的 Agent 分页栏(AgentTabs.tsx)。配色全走 --ui-* 变量 */
+.pc-agent-tabs {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  padding: 6px 8px 0;
+  background: var(--ui-bg-2);
+  border-bottom: 1px solid var(--ui-border);
+  flex: 0 0 auto;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.pc-agent-tabs::-webkit-scrollbar { display: none; }
+
+.pc-agent-tab {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px 5px 10px;
+  border-radius: 6px 6px 0 0;
+  background: var(--ui-panel-2);
+  color: var(--ui-fg-muted);
+  font-size: 12px;
+  line-height: 16px;
+  border: 1px solid var(--ui-border);
+  border-bottom: none;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+  max-width: 180px;
+  outline: none;
+}
+.pc-agent-tab:hover { color: var(--ui-fg); background: var(--ui-panel); }
+.pc-agent-tab:focus-visible { box-shadow: 0 0 0 2px var(--ui-accent-soft); }
+.pc-agent-tab.is-on {
+  background: var(--ui-panel);
+  color: var(--ui-fg);
+  border-color: var(--ui-border-strong);
+  margin-bottom: -1px;
+  padding-bottom: 6px;
+}
+
+/* 状态点:空闲灰、跑着的时候强调色呼吸 */
+.pc-agent-tab-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ui-fg-faint);
+  flex: 0 0 auto;
+}
+.pc-agent-tab.is-busy .pc-agent-tab-dot {
+  background: var(--ui-accent);
+  animation: pc-agent-pulse 1.4s ease-in-out infinite;
+}
+@keyframes pc-agent-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.35; transform: scale(0.8); }
+}
+
+.pc-agent-tab-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pc-agent-tab-badge {
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--ui-accent);
+  color: var(--ui-accent-fg);
+  font-size: 10px;
+  line-height: 16px;
+  text-align: center;
+  font-weight: 600;
+}
+
+.pc-agent-tab-x {
+  opacity: 0;
+  font-size: 13px;
+  line-height: 1;
+  padding: 1px 3px;
+  border-radius: 3px;
+  color: inherit;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+.pc-agent-tab:hover .pc-agent-tab-x,
+.pc-agent-tab.is-on .pc-agent-tab-x { opacity: 0.6; }
+.pc-agent-tab-x:hover { opacity: 1 !important; background: var(--ui-panel-2); }
+
+.pc-agent-tab-add {
+  padding: 3px 8px 5px;
+  color: var(--ui-fg-faint);
+  font-size: 15px;
+  line-height: 1;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  border-radius: 4px;
+}
+.pc-agent-tab-add:hover { color: var(--ui-fg); background: var(--ui-panel); }
+
+/* 多页容器:分页栏在上,当前页占满剩下的高度;别的页 display:none 但保持挂载(对话在跑) */
+.pc-agent-stack {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+.pc-agent-stack > .ai-panel {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: auto;
+}
+.pc-agent-stack > .ai-panel[data-inactive="1"] { display: none; }

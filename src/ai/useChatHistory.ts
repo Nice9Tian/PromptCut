@@ -13,16 +13,19 @@ export function useChatHistory(opts: {
   provider: string | null;
   messages: ChatMessage[];
   sessionId?: string;
+  /** localStorage 里记「当前会话 id」的键;多 Agent 分页时每页一个 */
+  storageKey?: string;
 }) {
+  const keyRef = useRef(opts.storageKey ?? "pcChatId");
   // 当前会话 ID，初值从 localStorage 读，没有就创建并写回
   const [conversationId, setConversationId] = useState<string>(() => {
     try {
-      const stored = localStorage.getItem("pcChatId");
+      const stored = localStorage.getItem(keyRef.current);
       if (stored && /^[A-Za-z0-9_-]{1,64}$/.test(stored)) {
         return stored;
       }
       const fresh = newChatId();
-      localStorage.setItem("pcChatId", fresh);
+      localStorage.setItem(keyRef.current, fresh);
       return fresh;
     } catch {
       return newChatId();
@@ -115,7 +118,7 @@ export function useChatHistory(opts: {
       if (chat) {
         setConversationId(id);
         try {
-          localStorage.setItem("pcChatId", id);
+          localStorage.setItem(keyRef.current, id);
         } catch {
           /* 忽略本地存储写入失败 */
         }
@@ -132,7 +135,7 @@ export function useChatHistory(opts: {
     const nextId = newChatId();
     setConversationId(nextId);
     try {
-      localStorage.setItem("pcChatId", nextId);
+      localStorage.setItem(keyRef.current, nextId);
     } catch {
       /* 忽略本地存储写入失败 */
     }

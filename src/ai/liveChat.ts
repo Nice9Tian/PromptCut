@@ -1,8 +1,8 @@
 import { useSyncExternalStore } from "react";
-import type { ChatMessage } from "./types";
+import type { ChatMessage } from "./types.ts";
 
 /**
- * 当前项目正在进行的这段 AI 对话。
+ * 当前项目正在进行的 AI 对话。
  *
  * (和 chatStore.ts 不是一回事:那个管的是服务端的历史会话归档,
  *  这里管的是「此刻屏幕上这一段」。)
@@ -14,40 +14,79 @@ import type { ChatMessage } from "./types";
  *
  * 所以挪成模块级 store:组件外也读得到(存 .proc 要收集、打开 .proc 要灌回),
  * 并且随项目整体换掉。
+ *
+ * 多 Agent 分页之后一个页面上同时有好几段对话,每一页一份 store(getChatStore(tabId))。
+ * 「主」那一页(MAIN_TAB)还是原来那份:存进 .proc、随项目切换的只有它 ——
+ * 别的页是临时开来并行干活的 Agent,它们各自的历史走服务端的会话归档就够了。
  */
 
-let messages: ChatMessage[] = [];
-const listeners = new Set<() => void>();
+export const MAIN_TAB = "main";
 
-function emit() {
-  for (const fn of listeners) fn();
+export interface ChatStore {
+  get(): ChatMessage[];
+  set(next: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[])): void;
+  replace(next: unknown): void;
+  subscribe(fn: () => void): () => void;
 }
+
+function createStore(): ChatStore {
+  let messages: ChatMessage[] = [];
+  const listeners = new Set<() => void>();
+  const emit = () => { for (const fn of listeners) fn(); };
+  return {
+    get: () => messages,
+    set(next) {
+      const value = typeof next === "function" ? next(messages) : next;
+      if (value === messages) return;
+      messages = value;
+      emit();
+    },
+    replace(next) {
+      messages = Array.isArray(next) ? (next as ChatMessage[]) : [];
+      emit();
+    },
+    subscribe(fn) {
+      listeners.add(fn);
+      return () => { listeners.delete(fn); };
+    },
+  };
+}
+
+const stores = new Map<string, ChatStore>();
+
+/** 某一页的对话 store。没有就建一份空的;关掉的页用 dropChatStore 收掉 */
+export function getChatStore(tabId: string = MAIN_TAB): ChatStore {
+  let s = stores.get(tabId);
+  if (!s) {
+    s = createStore();
+    stores.set(tabId, s);
+  }
+  return s;
+}
+
+export function dropChatStore(tabId: string): void {
+  if (tabId === MAIN_TAB) return;
+  stores.delete(tabId);
+}
+
+const main = getChatStore(MAIN_TAB);
 
 export function getMessages(): ChatMessage[] {
-  return messages;
+  return main.get();
 }
 
-/** 和 React 的 setState 一样,支持直接给值或给更新函数 */
+/** 和 React 的 setState 一样,支持直接给值或给更新函数(主页那一份) */
 export function setMessages(next: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[])) {
-  const value = typeof next === "function" ? next(messages) : next;
-  if (value === messages) return;
-  messages = value;
-  emit();
+  main.set(next);
 }
 
-/** 换项目 / 新建项目时整体换掉 */
+/** 换项目 / 新建项目时整体换掉(主页那一份) */
 export function replaceMessages(next: unknown) {
-  messages = Array.isArray(next) ? (next as ChatMessage[]) : [];
-  emit();
+  main.replace(next);
 }
 
-function subscribe(fn: () => void) {
-  listeners.add(fn);
-  return () => { listeners.delete(fn); };
-}
-
-export function useChatMessages(): ChatMessage[] {
-  return useSyncExternalStore(subscribe, getMessages, getMessages);
+export function useChatMessages(store: ChatStore = main): ChatMessage[] {
+  return useSyncExternalStore(store.subscribe, store.get, store.get);
 }
 
 /**
@@ -58,7 +97,7 @@ export function useChatMessages(): ChatMessage[] {
  * 条数封顶,免得一个长项目把 .proc 撑到几十兆。
  */
 export function messagesForSave(limit = 100): ChatMessage[] {
-  return messages
+  return main.get()
     .filter((m) => !m.pending)
     .slice(-limit)
     .map(({ trace, traceBytes, traceTruncated, ...rest }) => rest);

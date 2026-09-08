@@ -162,7 +162,11 @@ export default function vitePluginAi(): Plugin {
         }
       }
 
-      async function callToolInternal(tool: string, args: any): Promise<any> {
+      /**
+       * agent:发起这次调用的 Agent 对话 ID(多 Agent 分页)。CLI 那条路由 mcp-server 从环境变量
+       * PROMPTCUT_AGENT 带上来,API 直连那条路由 startRun 的 callTool 闭包带;编辑台拿它记「谁改了哪儿」。
+       */
+      async function callToolInternal(tool: string, args: any, agent?: string): Promise<any> {
         const { tools } = await import(new URL('./mcp-tools.mjs', import.meta.url).href);
         const toolDef = tools.find((t: any) => t.name === tool);
         
@@ -205,7 +209,7 @@ export default function vitePluginAi(): Plugin {
           }, limit);
         });
 
-        editorRes.write(`data: ${JSON.stringify({ type: 'call', id, tool, args })}\n\n`);
+        editorRes.write(`data: ${JSON.stringify({ type: 'call', id, tool, args, agent: agent || undefined })}\n\n`);
         
         const out = await p;
         if (out.ok) return out.result || out;
@@ -531,6 +535,8 @@ export default function vitePluginAi(): Plugin {
             const runners = await getRunner();
             const data = JSON.parse(body);
             const { provider, prompt, sessionId, model, effort, fast, attachments, script } = data;
+            // 多 Agent 分页:这一页的对话 ID。只认会话 id 的字符集,别的一律当没带
+            const agentId: string = typeof data.conversationId === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(data.conversationId) ? data.conversationId : '';
 
             let systemPrompt = '';
             try {
@@ -566,7 +572,7 @@ export default function vitePluginAi(): Plugin {
 
             const editorPort = (server.httpServer?.address() as any)?.port || 5195;
             const editorState = editorRes ? "编辑台已连接" : "未连接";
-            finalPrompt += `\n\n当前端口 ${editorPort};${editorState}`;
+            finalPrompt += `\n\n当前端口 ${editorPort};${editorState}` + (agentId ? `;你的 Agent 对话 ID:${agentId}` : '');
 
             res.writeHead(200, {
               'Content-Type': 'text/event-stream',
@@ -583,7 +589,7 @@ export default function vitePluginAi(): Plugin {
               serverName: "promptcut",
               command: process.execPath,
               args: [fileURLToPath(new URL('./mcp-server.mjs', import.meta.url))],
-              env: { PROMPTCUT_PORT: String(editorPort) }
+              env: { PROMPTCUT_PORT: String(editorPort), ...(agentId ? { PROMPTCUT_AGENT: agentId } : {}) }
             };
 
             const cwd = path.join(server.config.root, 'exports', 'ai-workspace');
@@ -608,7 +614,7 @@ export default function vitePluginAi(): Plugin {
               fast,
               toolProtocol: cfg.toolProtocol,
               mcp,
-              callTool: async (name: string, args: any) => await callToolInternal(name, args),
+              callTool: async (name: string, args: any) => await callToolInternal(name, args, agentId || undefined),
               onEvent: (ev: any) => {
                 if (ev.type === 'done') hasDone = true;
                 res.write(`data: ${JSON.stringify(ev)}\n\n`);
@@ -751,8 +757,8 @@ export default function vitePluginAi(): Plugin {
         req.on('data', c => body += c);
         req.on('end', async () => {
           try {
-            const { tool, args } = JSON.parse(body);
-            const result = await callToolInternal(tool, args);
+            const { tool, args, agent } = JSON.parse(body);
+            const result = await callToolInternal(tool, args, typeof agent === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(agent) ? agent : undefined);
             sendJson(res, 200, { ok: true, result });
           } catch (e: any) {
             if (e.code === 'UNKNOWN_TOOL') {
