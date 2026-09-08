@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { audioClipsAt, videoLayersAt, type MediaAsset, type Project, type TrackClip } from "../../kernel/project";
+import { planSync } from "./mediaSync";
 
 /**
  * 预览里的素材层:画面(视频/图片)和声音(配乐、旁白)。
@@ -8,23 +9,36 @@ import { audioClipsAt, videoLayersAt, type MediaAsset, type Project, type TrackC
  * 序列靠后的画在上面(videoLayersAt 已经按这个顺序给了)。
  * 声音层每段一个 <audio>,音量走 opacityAt,所以音频段的淡入淡出同样有效。
  *
- * 每一层自己跟播放头同步:播放中差得超过 0.2s 就 seek,暂停时差 0.03s 就 seek——
- * 和以前单条视频的做法一致,只是现在每层各管各的。
+ * 每一层自己跟播放头同步。同步该怎么做在 mediaSync.ts,那边是纯函数、带单测;
+ * 这里只负责把元素的读数递过去,再把结果照着执行。
  */
+
+/** 上一次由我们发起的纠偏 seek 的时刻,按元素记 */
+const lastSeekAt = new WeakMap<HTMLMediaElement, number>();
 
 /** 把一个 media 元素对齐到时间轴 */
 function syncMediaEl(el: HTMLMediaElement | null, target: number, playing: boolean, volume: number) {
   if (!el) return;
   const v = Math.max(0, Math.min(1, volume));
   if (el.volume !== v) el.volume = v;
-  if (!Number.isFinite(target) || target < 0) return;
-  if (playing) {
-    if (Math.abs(el.currentTime - target) > 0.2) el.currentTime = target;
-    if (el.paused) el.play().catch(() => {});
-  } else {
-    if (!el.paused) el.pause();
-    if (Math.abs(el.currentTime - target) > 0.03) el.currentTime = target;
+
+  const plan = planSync({
+    elTime: el.currentTime,
+    seeking: el.seeking,
+    paused: el.paused,
+    target,
+    playing,
+    now: performance.now(),
+    lastSeekAt: lastSeekAt.get(el) ?? 0,
+  });
+
+  if (plan.rate !== null && el.playbackRate !== plan.rate) el.playbackRate = plan.rate;
+  if (plan.seekTo !== null) {
+    el.currentTime = plan.seekTo;
+    lastSeekAt.set(el, performance.now());
   }
+  if (plan.pause) el.pause();
+  if (plan.play) el.play().catch(() => {});
 }
 
 function targetTimeOf(clip: TrackClip, t: number) {
