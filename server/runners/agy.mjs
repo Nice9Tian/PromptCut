@@ -106,9 +106,23 @@ function _startRun(opts) {
   let isAborted = false;
   
   const fullPrompt = `<<<系统说明>>>\n${opts.systemPrompt}\n<<<用户消息>>>\n${opts.prompt}`;
-  
+
+  /*
+   * 提示词走 **stdin**,不走命令行参数。
+   *
+   * 原来是 `-p <整个提示词>`。Windows 单条命令行上限 32767 字符,而系统提示词本身就
+   * 15,000 出头 —— 平时够用,一旦叠上文本协议那份工具清单(33,000 字符)就是 49,000,
+   * 直接 `spawn ENAMETOOLONG`。也就是说 agy 的「原生工具被拒 → 改用文本协议重试」
+   * 这条兜底路**从来没有成功过**,一进去就炸,而且炸得看不出所以然。
+   * claude.mjs 和 codex.mjs 早就是走 stdin 的,这里是唯一的例外。
+   *
+   * `--input-format stream-json` 让 agy 从 stdin 逐行读 NDJSON;它本身就意味着 print 模式,
+   * 所以不再给 `-p`(给了反而会把后面那个标志当成提示词吃掉)。消息的形状是实测出来的:
+   * `{"event":"user","message":{"role":"user","content":"…"}}` —— 少 `event` 或少 `message`
+   * 都会被 agy 明确拒绝。实测 48,000 字符的提示词这样发过去正常返回。
+   */
   const args = [
-    '-p', fullPrompt,
+    '--input-format', 'stream-json',
     '--output-format', 'stream-json',
     '--add-dir', opts.cwd,
     '--print-timeout', '20m'
@@ -139,7 +153,16 @@ function _startRun(opts) {
     
     childController = spawnCli(exePath, args, { cwd: opts.cwd }, opts.onEvent, 'Antigravity');
     let emitted = '';
-    
+
+    // 提示词从这里进去(见上面 args 的说明)。EPIPE 忽略:进程要是已经自己退了,
+    // 真正的原因在 stderr / result 事件里,不该被一个写管道失败盖过去。
+    childController.child.stdin.on('error', () => {});
+    try {
+      childController.child.stdin.write(JSON.stringify({ event: 'user', message: { role: 'user', content: fullPrompt } }) + '\n');
+      childController.child.stdin.end();
+    } catch { /* 同上 */ }
+
+
     childController.child.stdout.on('data', lineSplitter(line => {
       if (!line.trim()) return;
       if (process.env.PROMPTCUT_RUNNER_DEBUG) console.error('[agy] ' + line);
@@ -152,11 +175,14 @@ function _startRun(opts) {
            if (su.step_type === 'tool') {
               let tName = su.tool_name;
               let tInput = su.tool_info?.parameters || {};
-              if (tName === 'call_mcp_tool') {
+              // 这一步到底是不是在调 PromptCut 的工具。agy 自己也有一大堆内建工具
+              // (run_command / browser_* / …),它们不走 MCP,被拒的处理方式完全不同
+              const isMcp = su.tool_name === 'call_mcp_tool';
+              if (isMcp) {
                   tName = tInput.ToolName || 'call_mcp_tool';
                   tInput = tInput.Arguments || tInput;
               }
-              
+
               if (su.state === 'ACTIVE') {
                  childController.safeOnEvent({ type: 'tool_call', name: tName, input: tInput });
               } else if (su.state === 'DONE') {
@@ -168,9 +194,27 @@ function _startRun(opts) {
                  childController.safeOnEvent({ type: 'tool_result', name: tName, ok: true, summary: outputStr.substring(0, 300) });
               } else if (su.state === 'ERROR') {
                  const msg = su.tool_info?.error?.message || '';
-                 if (msg.includes('permission') || msg.includes('权限') || msg.includes('denied') || msg.includes('not allowed')) {
+                 const denied = msg.includes('permission') || msg.includes('权限') || msg.includes('denied') || msg.includes('not allowed');
+                 /*
+                  * 「被拒」要分是谁被拒的,原来一律当成 MCP 被拒,两处都错:
+                  *
+                  * - 话说错了。agy 内建的 run_command 在无人值守模式下没法弹窗问,会被自动
+                  *   拒掉,而我们回一句「请点『授权 PromptCut 工具』」—— 那个按钮跟它一点关系
+                  *   没有,用户点了也没用。同一轮里 get_project / list_media 明明都成功了,
+                  *   MCP 根本是通的。
+                  * - 事也做错了。onPermissionDenied 会让整轮跑完之后改用文本协议重试,可文本协议
+                  *   换的只是「PromptCut 的工具怎么下达」,管不着 agy 自己那套 command 权限;
+                  *   重试一遍照样被拒。白跑一轮,还把用户等在那儿。
+                  *
+                  * 所以只有真的是 MCP 那条路被拒时才回退。agy 自家工具被拒就照实说,
+                  * 并且当成一次失败的工具调用交回给模型 —— 让它换个办法接着做,而不是整轮作废。
+                  */
+                 if (denied && isMcp) {
                     if (opts.onPermissionDenied) opts.onPermissionDenied();
                     childController.safeOnEvent({ type: 'status', text: `agy 拒绝了 MCP 工具调用。请打开 AI 设置（右栏齿轮），点『授权 PromptCut 工具』，然后重试。` });
+                 } else if (denied) {
+                    childController.safeOnEvent({ type: 'tool_result', name: tName, ok: false, summary: `Antigravity 自己拒绝了这个工具(它的内建工具,不是 PromptCut 的):${msg}` });
+                    childController.safeOnEvent({ type: 'status', text: `Antigravity 拦下了它自己的 ${tName}——无人值守模式下没法弹窗征求同意。PromptCut 的工具不受影响,让它改用 PromptCut 的工具做同一件事即可。` });
                  } else {
                     childController.safeOnEvent({ type: 'tool_result', name: tName, ok: false, summary: msg });
                  }

@@ -274,8 +274,14 @@ export function runTextProtocolLoop({ startRun, opts, onEvent }) {
       onEvent({ type: 'done', sessionId: currentOpts.sessionId });
       resolve();
     } catch (e) {
+      /*
+       * 报一次就够了:这里已经把 error 发给界面了,再 reject 出去,
+       * /api/ai/chat 那头 `await run.done` 的 catch 会把同一句话原样再写一条 SSE,
+       * 用户看到的是一模一样的两行报错(诊断报告里就是这样)。
+       * 发过了就当收尾处理,别让调用方以为还没人管。
+       */
       onEvent({ type: 'error', message: String(e) });
-      reject(e);
+      resolve();
     }
   });
   
