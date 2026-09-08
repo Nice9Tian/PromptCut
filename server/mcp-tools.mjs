@@ -788,6 +788,26 @@ export const tools = [
     timeoutMs: 150000
   },
   {
+    name: "see_sequences",
+    description: "看素材本身:按镜头(list_shots 的划分)把视频拼成缩略图,每个镜头一张 4 格或 9 格拼图(等间隔抽帧,格子按行从左到右对应返回里的 frames 秒数),一次交回一页最多 N 张,翻页看后面的镜头。**判断一段素材里到底有什么、人物在哪一侧、画面是什么调性、哪几段能用,不要只靠字幕猜 —— 字幕说的是「说了什么」,这里看的是「画面是什么」。** 用法:1) 直接调 see_sequences({ mediaId }),没跑过镜头识别会自动跑并等它(5 分钟素材约 36 秒;识别不了就按 10 秒一段切,返回里标 fallback);2) 返回里 pages 是总页数、nextPage 是下一页,翻到 nextPage 为 null 为止;3) 某个镜头看不清就 see_sequences({ mediaId, scene: 镜头序号, grid: 9 })单独放大看;4) 只关心某段时间用 from / to 秒数缩小范围。每张拼图都附这个镜头的起止秒数、进出转场、这段时间的字幕文本(有转写的话)和主体侧别(有检测的话),看图时把它们对上。一页别要太多:默认 6 张,上限 12 张,能说清就停,不要为了「看完」把所有页都翻一遍。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        mediaId: { type: "string", description: "list_media 里的素材 id;只支持视频" },
+        page: { type: "number", description: "第几页,从 1 起;默认 1" },
+        perPage: { type: "number", description: "每页几个镜头,默认 6,最多 12。一个镜头一张拼图" },
+        grid: { type: "number", description: "每张拼图几格:4(2×2)或 9(3×3),默认 4。镜头长、变化多、或要看细节时用 9" },
+        scene: { type: "number", description: "只看这一个镜头(list_shots 里的序号,从 1 起),忽略分页;默认配 9 格" },
+        from: { type: "number", description: "只看从这一秒起的镜头(素材内秒数)" },
+        to: { type: "number", description: "只看到这一秒为止的镜头(素材内秒数)" }
+      },
+      required: ["mediaId"]
+    },
+    side: "browser",
+    // 可能要先跑一遍镜头识别再拼十几张图
+    timeoutMs: 180000
+  },
+  {
     name: "create_card",
     description: "新建一张动效卡片，源码写入 src/cards/user/<id>.tsx，热更新后自动注册，list_cards 立刻可见。只在现有卡片都满足不了需求时才建新卡——先用 list_cards 确认没有能用的。调用前必须先调 card_authoring_guide 看规则。落盘前会校验 id、CardDef 结构、禁用 API 和语法，不合格直接报错并说明原因。**只用来建新卡**：想改一张已经建好的卡，用 get_card_source + edit_card，不要用 overwrite 整篇重写。",
     inputSchema: {

@@ -108,6 +108,12 @@ export class Agent {
           const { __image, ...rest } = result;
           result = { ...rest, image: '画面见本条消息末尾的图片' };
         }
+        // see_sequences 一页多张:每张标上镜头序号,模型看图时能和 scenes 对上
+        if (ok && result && typeof result === 'object' && Array.isArray(result.__images)) {
+          for (const im of result.__images) if (im?.base64) images.push({ ...im, name: `${call.name} 镜头 ${im.sceneIndex ?? '?'}` });
+          const { __images, ...rest } = result;
+          result = { ...rest, images: `${result.__images.length} 张镜头拼图见本条消息末尾,按镜头序号排列` };
+        }
         const output = typeof result === 'string' ? result : JSON.stringify(result ?? null);
         ok ? completed++ : failed++;
         this.onEvent({ type: 'tool_result', callId: call.id, round, name: call.name, ok, summary: output.slice(0, 1000), output: result, durationMs: Date.now() - begin });

@@ -271,9 +271,16 @@ async function handleMessage(line) {
       // (API 直连那条路做的是同一件事，见 harness/agent.mjs 里的 __image 处理。)
       const payload = out.result || out;
       const image = payload && typeof payload === "object" ? payload.__image : null;
-      const rest = image ? (({ __image, ...r }) => r)(payload) : payload;
+      // see_sequences 一次带一页拼图:__images 是数组,每张各一个 image 块,顺序和 scenes 一致
+      const images = payload && typeof payload === "object" && Array.isArray(payload.__images) ? payload.__images : [];
+      const rest = image || images.length ? (({ __image, __images, ...r }) => r)(payload) : payload;
       const content = [{ type: "text", text: JSON.stringify(rest, null, 2) }];
       if (image?.base64) content.push({ type: "image", data: image.base64, mimeType: image.mime || "image/png" });
+      for (const im of images) {
+        if (!im?.base64) continue;
+        content.push({ type: "text", text: `镜头 ${im.sceneIndex ?? "?"}:` });
+        content.push({ type: "image", data: im.base64, mimeType: im.mime || "image/jpeg" });
+      }
       sendResponse(req.id, { content });
     } else {
       sendResponse(req.id, {

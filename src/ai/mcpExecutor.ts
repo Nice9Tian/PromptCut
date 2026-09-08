@@ -102,6 +102,7 @@ export interface EditorApi {
   getCardSource(args: { cardId: string }): Promise<any>;
   editCard(args: { cardId: string; find: string; replace: string; replaceAll?: boolean }): Promise<any>;
   seePreview(args: { t?: number; clipId?: string }): Promise<any>;
+  seeSequences(args: { mediaId: string; page?: number; perPage?: number; grid?: number; scene?: number; from?: number; to?: number }): Promise<any>;
   cardAuthoringGuide(): Promise<any>;
 }
 
@@ -341,6 +342,7 @@ export function connectMcpExecutor(getApi: () => EditorApi, onStatus?: (s: { con
           else if (tool === "get_card_source") result = await api.getCardSource(args);
           else if (tool === "edit_card") result = await api.editCard(args);
           else if (tool === "see_preview") result = await api.seePreview(args);
+          else if (tool === "see_sequences") result = await api.seeSequences(args);
           else if (tool === "card_authoring_guide") result = await api.cardAuthoringGuide();
           // 网页操作不经过 EditorApi:浏览器整个在服务端,这些工具不碰编辑台的任何状态。
           // 挂进 EditorApi 只会逼编辑台那边实现 8 个纯转发的方法。

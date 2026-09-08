@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { startShotDetection, waitForShots } from "../../ai/shots";
+import { scenesOf, planSequences, frameTimes, transcriptFor } from "../../ai/sequences";
 import { installTrack, startTracking, trackStatus, waitForTrack, type TrackResult } from "../../ai/track";
 import {
   installSubject, startSubjectDetection, subjectStatus, waitForSubjects,
@@ -1394,6 +1395,104 @@ export function RightPanel() {
        * project 是从这里带过去的,不是让服务端自己去读:时间轴的真身在浏览器 store 里,
        * 服务端手上那份(上次保存的)可能已经是旧的 —— 让模型看一张过时的画面,比不给它看更糟。
        */
+      /**
+       * 看素材:按镜头拼图分页交给模型(规划在 src/ai/sequences.ts,拼图由 /api/vision/sheet 用 ffmpeg 做)。
+       * 没跑过镜头识别就在这里跑并等它 —— 模型要看的是画面,别让它先学一套「起作业、轮询」的流程;
+       * 识别失败退回固定 10 秒一段,返回里标 fallback 让它知道边界不是真镜头。
+       */
+      seeSequences: async (args) => {
+        let media = getState().project.media.find((m) => m.id === args.mediaId);
+        if (!media) throw new Error(`找不到素材 ${args.mediaId}`);
+        if (media.kind !== "video") throw new Error(`${media.name} 不是视频,没有画面可看`);
+        // 刚导入的素材,服务端路径要等上传完才写进来(import_media 一返回模型就可能接着调这里):最多等 15 秒
+        for (let i = 0; i < 30 && !media.path; i++) {
+          await new Promise((r) => setTimeout(r, 500));
+          media = getState().project.media.find((m) => m.id === args.mediaId) ?? media;
+        }
+        if (!media.path) throw new Error(`${media.name} 没有服务端可读的路径(上传没完成或失败),稍后再试或重新导入`);
+        const notes: string[] = [];
+        let shots = media.shots ?? null;
+        if (!shots) {
+          const pending = shotJobs.get(args.mediaId);
+          try {
+            let jobId = pending && !pending.error ? pending.jobId : "";
+            if (!jobId) {
+              jobId = await startShotDetection(media.path, media.id);
+              shotJobs.set(args.mediaId, { jobId, percent: 0, engine: "scdet" });
+            }
+            const result = await waitForShots(jobId, (percent, engine) => shotJobs.set(args.mediaId, { jobId, percent, engine }));
+            actions.setMediaShots(args.mediaId, result);
+            shotJobs.delete(args.mediaId);
+            shots = result;
+            notes.push(`刚跑完镜头识别(${result.engine}),共 ${result.shots.length} 个镜头。`);
+          } catch (e) {
+            notes.push(`镜头识别没成功(${e instanceof Error ? e.message : String(e)}),下面按每 10 秒一段切,边界不是真镜头。`);
+          }
+        }
+        const { scenes: all, fallback } = scenesOf(shots, media.duration ?? 0);
+        if (!all.length) throw new Error(`${media.name} 没有可看的画面(时长为 0?)`);
+        const plan = planSequences(all, args);
+        // 拼图一张一张要,最多 3 张并行:每张是一次 ffmpeg,全开会把机器压死
+        const results: any[] = new Array(plan.scenes.length);
+        let cursor = 0;
+        const worker = async () => {
+          for (;;) {
+            const i = cursor++;
+            if (i >= plan.scenes.length) return;
+            const sc = plan.scenes[i];
+            try {
+              const r = await fetch("/api/vision/sheet", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ media: { id: media.id, name: media.name, kind: media.kind, url: media.url, path: media.path }, start: sc.start, end: sc.end, grid: plan.grid }),
+              });
+              const d = await r.json().catch(() => ({}));
+              if (!r.ok || !d.ok) throw new Error(d.error || `HTTP ${r.status}`);
+              results[i] = d;
+            } catch (e) {
+              results[i] = { error: e instanceof Error ? e.message : String(e) };
+            }
+          }
+        };
+        await Promise.all([worker(), worker(), worker()]);
+        const images: { sceneIndex: number; mime: string; base64: string }[] = [];
+        const scenesOut = plan.scenes.map((sc, i) => {
+          const r = results[i];
+          if (r?.__image?.base64) images.push({ sceneIndex: sc.index, mime: r.__image.mime || "image/jpeg", base64: r.__image.base64 });
+          const text = transcriptFor(media.transcript, sc.start, sc.end);
+          return {
+            index: sc.index,
+            start: sc.start,
+            end: sc.end,
+            duration: Math.round((sc.end - sc.start) * 100) / 100,
+            in: sc.inTransition,
+            out: sc.outTransition,
+            frames: r?.frames ?? frameTimes(sc.start, sc.end, plan.grid),
+            ...(text ? { transcript: text } : {}),
+            subject: subjectDigest(subjectForRange(media.subjects, sc.start, sc.end)),
+            ...(r?.error ? { imageError: r.error } : {}),
+          };
+        });
+        return {
+          ok: true,
+          mediaId: media.id,
+          name: media.name,
+          engine: shots?.engine ?? null,
+          ...(fallback ? { fallback } : {}),
+          page: plan.page, pages: plan.pages, perPage: plan.perPage, grid: plan.grid,
+          nextPage: plan.nextPage, prevPage: plan.prevPage,
+          matched: plan.matched, totalScenes: plan.totalScenes,
+          scenes: scenesOut,
+          note: [
+            ...notes,
+            `每张拼图对应 scenes 里同序号的镜头,格子按行从左到右对应 frames 里的秒数。`,
+            plan.nextPage ? `还有 ${plan.pages - plan.page} 页:see_sequences({ mediaId, page: ${plan.nextPage} })。` : "这是最后一页。",
+            "某个镜头看不清:see_sequences({ mediaId, scene: 序号, grid: 9 })。",
+            !media.transcript ? "这个素材还没转写,想对照说了什么先 transcribe_media。" : "",
+          ].filter(Boolean).join(" "),
+          __images: images,
+        };
+      },
       seePreview: async (args) => {
         const state = getState();
         const t = typeof args?.t === "number" ? args.t : undefined;

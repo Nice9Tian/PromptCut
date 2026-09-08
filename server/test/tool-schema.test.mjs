@@ -136,10 +136,10 @@ test('执行器分发的每个工具名，mcp-tools 里都真的有声明', () =
   assert.deepEqual(orphans, [], `执行器分发了但没声明的工具：${orphans.join('、')}`);
 });
 
-test('只有 see_preview 放宽了超时；它必须大于渲染自己的上限，否则报错信息会被桥的超时盖掉', () => {
+test('只有两个看画面的工具放宽了超时；都要大于自己那条管线的上限，否则报错信息会被桥的超时盖掉', () => {
   const withTimeout = mcpTools.filter((t) => t.timeoutMs);
-  assert.deepEqual(withTimeout.map((t) => t.name), ['see_preview']);
-  assert.ok(withTimeout[0].timeoutMs > 120000, '要大于 vite-plugin-vision 里 120 秒的渲染上限');
+  assert.deepEqual(withTimeout.map((t) => t.name), ['see_preview', 'see_sequences']);
+  for (const t of withTimeout) assert.ok(t.timeoutMs > 120000, `${t.name} 要大于 vite-plugin-vision 里 120 秒的渲染上限`);
 });
 
 // ── 枚举值必须是字符串 ─────────────────────────────────────────────

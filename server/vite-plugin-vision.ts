@@ -7,6 +7,7 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { PNG } from "pngjs";
+import { createHash } from "node:crypto";
 import { cardsOnly, composeFrame, extractArgs, mediaLayersAt } from "./vision-compose.mjs";
 import { mediaDir } from "./vite-plugin-media";
 
@@ -322,6 +323,66 @@ export function visionPlugin(): Plugin {
     name: "promptcut-vision",
     configureServer(server: ViteDevServer) {
       const root = server.config.root;
+
+      /*
+       * POST /api/vision/sheet { media, start, end, grid } —— see_sequences 用的镜头拼图。
+       * 一个镜头一张 JPEG:从 start 到 end 等间隔抽 grid 帧(4 = 2×2,9 = 3×3),每格 480 宽,
+       * ffmpeg 一趟做完(fps 滤镜取帧 + tile 拼格),不落中间帧。按文件、修改时间、区间、格数缓存在
+       * out/sheets 下,翻页回看不重抽。media 是项目里那条素材记录(和 snapshot 收 project 一样,
+       * 文件按 path / 媒体目录解析,不接受任意路径)。
+       */
+      server.middlewares.use("/api/vision/sheet", (req, res) => {
+        if (req.method !== "POST") return sendJson(res, 405, { ok: false, error: "POST only" });
+        let body = "";
+        req.on("data", (c) => { body += c; if (body.length > 1024 * 1024) req.destroy(); });
+        req.on("end", async () => {
+          try {
+            const { media, start, end, grid } = JSON.parse(body || "{}");
+            const file = mediaFileOf(root, media);
+            if (!file) return sendJson(res, 404, { ok: false, error: "素材文件服务端取不到,重新导入一次再试" });
+            const s0 = Number(start), s1 = Number(end);
+            if (!Number.isFinite(s0) || !Number.isFinite(s1) || s1 <= s0) return sendJson(res, 400, { ok: false, error: "start / end 要是秒数且 end > start" });
+            const g = grid === 9 ? 9 : 4;
+            const cols = g === 9 ? 3 : 2;
+            const ffmpeg = ffmpegCommand();
+            if (!ffmpeg) return sendJson(res, 500, { ok: false, error: "这台机器上找不到 ffmpeg" });
+            const eps = 0.05;
+            const dur = Math.max(0.1, s1 - s0 - eps);
+            const stamp = fs.statSync(file).mtimeMs;
+            const key = createHash("sha1").update(`${file}|${stamp}|${s0.toFixed(2)}|${s1.toFixed(2)}|${g}`).digest("hex").slice(0, 20);
+            const dir = path.join(outRoot(root), "sheets");
+            await fsp.mkdir(dir, { recursive: true });
+            const out = path.join(dir, `${key}.jpg`);
+            let cached = fs.existsSync(out);
+            if (!cached) {
+              await new Promise<void>((resolve, reject) => {
+                const args = [
+                  "-y", "-hide_banner", "-loglevel", "error", "-nostdin",
+                  "-ss", (s0 + eps).toFixed(3), "-t", dur.toFixed(3), "-i", file,
+                  // fps 取 grid 帧、缩到 480 宽、tile 拼成 cols 列;不够 grid 帧(镜头太短)时剩下的格子留底色
+                  "-vf", `fps=${(g / dur).toFixed(6)},scale=480:-2:flags=fast_bilinear,tile=${cols}x${cols}:padding=2:margin=2:color=0x111318`,
+                  "-frames:v", "1", "-q:v", "5", "-f", "image2", "-c:v", "mjpeg", out,
+                ];
+                const child = spawn(ffmpeg, args, { stdio: ["ignore", "ignore", "pipe"], windowsHide: true });
+                let err = "";
+                child.stderr.on("data", (c) => { err += c; });
+                const timer = setTimeout(() => { child.kill(); reject(new Error("ffmpeg 拼图超时")); }, EXTRACT_TIMEOUT_MS * 2);
+                child.on("error", (e) => { clearTimeout(timer); reject(e); });
+                child.on("close", (code) => {
+                  clearTimeout(timer);
+                  if (code !== 0 || !fs.existsSync(out)) return reject(new Error(`ffmpeg 退出码 ${code}${err ? `:${err.trim().slice(-300)}` : ""}`));
+                  resolve();
+                });
+              });
+            }
+            const base64 = (await fsp.readFile(out)).toString("base64");
+            const frames = Array.from({ length: g }, (_, k) => Math.round((s0 + eps + (dur * k) / g) * 100) / 100);
+            sendJson(res, 200, { ok: true, grid: g, cols, frames, cached, __image: { mime: "image/jpeg", base64 } });
+          } catch (e: any) {
+            sendJson(res, 500, { ok: false, error: e?.message || String(e) });
+          }
+        });
+      });
 
       server.middlewares.use("/api/vision/snapshot", (req, res) => {
         if (req.method !== "POST") return sendJson(res, 405, { ok: false, error: "POST only" });
