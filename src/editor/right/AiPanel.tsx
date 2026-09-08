@@ -86,13 +86,15 @@ const OVERFLOW_ORDER = ["diag", "thinking", "team", "view", "new", "script", "au
  * 哪几下是在删东西。读取类故意用最淡的颜色:它们数量最多但最不值得注意,
  * 满屏一样亮的话反而看不见真正的动作。
  */
-type ToolKind = "add" | "remove" | "edit" | "read" | "job";
+type ToolKind = "add" | "remove" | "edit" | "read" | "download" | "job";
 
 function toolKind(name: string): ToolKind {
   if (/^(remove|delete|clear)_/.test(name)) return "remove";
   if (/^(add|create|import|insert)_/.test(name)) return "add";
   if (/^(set|update|move|rename|reorder|split|trim)_/.test(name)) return "edit";
   if (/^(list|get|read|detect|search|find)_/.test(name)) return "read";
+  // 下载单拎出来:它和别的「处理」不一样,方块里画个下箭头,一眼看得出是在往回搬东西
+  if (/download/i.test(name)) return "download";
   return "job";
 }
 
@@ -101,6 +103,7 @@ const KIND_LABEL: Record<ToolKind, string> = {
   remove: "删除",
   edit: "修改",
   read: "读取",
+  download: "下载",
   job: "处理",
 };
 
