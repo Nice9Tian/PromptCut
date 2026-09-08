@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { MediaLayers } from "./preview/MediaLayers";
 import { themeStyle } from "../themes";
-import { actions, useStore } from "../store/project";
+import { actions, getState, useStore } from "../store/project";
+import { findClip } from "../kernel/project";
+import { nudgeFrame } from "../kernel/layout";
 import type { PcStageApi } from "../StageView";
 import { ControlBar } from "./preview/ControlBar";
 import { ToolBar, ToolType } from "./preview/ToolBar";
@@ -179,24 +181,31 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
       const clipId = targetRect.clipId;
       const startX = e.clientX;
       const startY = e.clientY;
-      const clip = project.tracks.flatMap((tr) => tr.clips).find((c) => c.id === clipId);
-      const initX = (clip?.params.x as number) || 0;
-      const initY = (clip?.params.y as number) || 0;
 
       let currentDx = 0;
       let currentDy = 0;
 
       const onMove = (ev: PointerEvent) => {
+        // 覆盖层是按 scale 缩放显示的,位移换算回舞台像素,和 frame 用的是同一套单位
         currentDx = (ev.clientX - startX) / scale;
         currentDy = (ev.clientY - startY) / scale;
         setDragPreview({ clipId, dx: currentDx, dy: currentDy });
       };
-      
+
       const onUp = () => {
         setDragPreview(null);
-        if (Math.abs(currentDx) > 0.01 || Math.abs(currentDy) > 0.01) {
-          // 等卡片支持 x/y 参数后即可生效
-          actions.setClipParams(clipId, { x: initX + currentDx, y: initY + currentDy }, { merge: true });
+        if (Math.abs(currentDx) > 0.5 || Math.abs(currentDy) > 0.5) {
+          /*
+           * 拖动改的是 clip 的 frame(位置框),不是卡片参数:卡片没有 x / y 参数,以前往 params 里
+           * 写 x / y 等于什么都没改 —— 描边跟着鼠标走了一段,松手就弹回去。
+           * 走 nudgeFrame 和 Agent 的 nudge / set_position 是同一条路:没有 frame 的卡先按铺满舞台
+           * 算出当前位置再加位移,松手只写一次,一次拖动 = 一步撤销。
+           */
+          const hit = findClip(getState().project, clipId);
+          if (hit) {
+            const stageSize = { width: getState().project.width, height: getState().project.height };
+            actions.setClipFrame(clipId, nudgeFrame({ dx: Math.round(currentDx), dy: Math.round(currentDy) }, hit.clip.frame, stageSize));
+          }
         }
         window.removeEventListener("pointermove", onMove);
         window.removeEventListener("pointerup", onUp);
