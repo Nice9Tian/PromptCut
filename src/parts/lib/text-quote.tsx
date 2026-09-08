@@ -2,6 +2,7 @@ import { motion } from "motion/react";
 import type { PartDef, PartProps } from "../types";
 import { accentOf, easeExpoOut } from "../../cards/native/hud";
 import "../../cards/native/hud.css";
+import { fitOr } from "../fit";
 
 /**
  * 金句引言:多行金句伴随左侧主色竖线逐行揭示。从 quote-lockup 拆出。
@@ -9,10 +10,12 @@ import "../../cards/native/hud.css";
  */
 interface Params {
   quote: string;
+  size: number;
   accent: string;
 }
 
-function QuotePart({ params }: PartProps<Params>) {
+function QuotePart({ params, width, height }: PartProps<Params>) {
+  const size = fitOr(params.size, { width: width - 48 - 28, height, text: params.quote, splitter: "|", lineHeight: 1.25 + 16 / 64, max: 200 });
   const lines = params.quote.split("|").filter(Boolean);
   const accent = accentOf(params);
   const staggerMs = 180;
@@ -40,7 +43,8 @@ function QuotePart({ params }: PartProps<Params>) {
           {lines.map((line, i) => (
             <motion.div
               key={i}
-              className="text-[64px] font-bold leading-tight text-white"
+              className="font-bold leading-tight text-white"
+              style={{ fontSize: size }}
               initial={{ opacity: 0, y: 16 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: (i * staggerMs) / 1000, duration: 0.6, ease: easeExpoOut }}
@@ -64,10 +68,12 @@ export const textQuote: PartDef<Params> = {
   from: "quote-lockup",
   defaults: {
     quote: "设计不只是|它的外观和感觉。|设计是怎么工作的。",
+    size: 0,
     accent: "",
   },
   controls: [
     { key: "quote", label: "金句(用|分行)", type: "text", required: true },
+    { key: "size", label: "字号(0 = 按框自适应)", type: "number", min: 0, max: 200, step: 2, hint: "0 表示按部件的框自动算;想固定就填具体像素" },
     { key: "accent", label: "竖线颜色(留空用主题色)", type: "color" },
   ],
   defaultFrame: { x: 200, y: 340, w: 1000, h: 360 },

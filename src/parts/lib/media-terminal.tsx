@@ -1,5 +1,6 @@
 import type { PartDef, PartProps } from "../types";
 import "../../cards/native/hud.css";
+import { fitOr } from "../fit";
 
 /**
  * 3D打字机终端:展示一段代码或命令逐字敲出的过程。
@@ -30,6 +31,9 @@ function MediaTerminalPart({ params, width, height, t }: PartProps<Params>) {
       remainingChars = 0;
     }
   }
+
+  const numLines = Math.max(1, linesArr.length);
+  const size = fitOr(params.size, { width: width - 96, height: (height - 192) * 0.65, text: params.lines, splitter: "|", lines: numLines, lineHeight: 1.6, max: 120 });
 
   return (
     <div style={{ position: "absolute", inset: 0, width, height, perspective: "1600px", display: "flex", justifyContent: "center", alignItems: "center" }}>
@@ -67,10 +71,10 @@ function MediaTerminalPart({ params, width, height, t }: PartProps<Params>) {
             <div className="w-6 h-6 rounded-full bg-yellow-500" />
             <div className="w-6 h-6 rounded-full bg-green-500" />
           </div>
-          <div className="flex-1 text-center text-[var(--pc-fg-muted)]" style={{ fontSize: params.size * 0.66 }}>{params.file}</div>
+          <div className="flex-1 text-center text-[var(--pc-fg-muted)]" style={{ fontSize: size * 0.66 }}>{params.file}</div>
         </div>
 
-        <div className="p-12 flex-1 leading-[1.6]" style={{ fontSize: params.size }}>
+        <div className="p-12 flex-1 leading-[1.6]" style={{ fontSize: size }}>
           {renderedLines.map((line, i) => {
             const firstChar = linesArr[i][0];
             let color = "var(--pc-fg)";
@@ -111,16 +115,17 @@ export const mediaTerminal: PartDef<Params> = {
     file: "deploy.sh",
     lines: "$ npm run build|# 正在构建...|❯ 进度 100%|✓ 构建完成",
     cps: 20,
-    size: 48,
+    size: 0,
   },
   controls: [
     { key: "file", label: "文件名", type: "text" },
     { key: "lines", label: "行(|分隔)", type: "text" },
     { key: "cps", label: "每秒字符", type: "number", min: 5, max: 100, step: 1 },
-    { key: "size", label: "字号", type: "number", min: 16, max: 120, step: 2 },
+    { key: "size", label: "字号(0 = 按框自适应)", type: "number", min: 0, max: 120, step: 2, hint: "0 表示按部件的框自动算;想固定就填具体像素" },
   ],
   defaultFrame: { x: 960, y: 540, w: 1200, h: 800, anchor: [0.5, 0.5] },
   settleMs: (p) => (p.lines.split("|").reduce((sum, line) => sum + line.length, 0) / (p.cps > 0 ? p.cps : 20)) * 1000,
   after: "evolve",
   Component: MediaTerminalPart,
 };
+

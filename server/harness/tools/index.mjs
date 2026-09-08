@@ -2,7 +2,7 @@ import { tools as mcpTools } from '../../mcp-tools.mjs';
 import { thinkTool } from './think.mjs';
 import { createTextEditorTool } from './textEditor.mjs';
 import { setTimeout as delay } from 'node:timers/promises';
-import { injectCardParams } from '../../card-params-schema.mjs';
+import { injectCardParams, injectPartParams } from '../../card-params-schema.mjs';
 
 export async function buildTools({ callTool, workspaceDir, onEvent = () => {}, pollIntervalMs = 3000, jobTimeoutMs = 600000 }) {
   async function waitForJob(name, input, initial, context) {
@@ -43,6 +43,13 @@ export async function buildTools({ callTool, workspaceDir, onEvent = () => {}, p
   } catch (error) {
     // 拿不到卡片列表就退回自由对象:少了参数提示总比工具整个不能用强
     onEvent({ type: 'status', text: `没能取到卡片 schema,add_clip 的参数提示会缺失:${error.message}` });
+  }
+
+  try {
+    const parts = await callTool('list_parts', { detail: 'full' });
+    injectPartParams(result, parts);
+  } catch (error) {
+    onEvent({ type: 'status', text: `没能取到部件 schema,add_part 的参数提示会缺失:${error.message}` });
   }
 
   return result;

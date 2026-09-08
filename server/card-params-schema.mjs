@@ -70,8 +70,77 @@ export function injectCardParams(tools, cards) {
   const schema = buildParamsSchema(cards);
   if (!schema) return tools;
   for (const tool of tools) {
+    // 只碰卡片的两个工具:add_part / set_part 也有 params,那是部件的,由 injectPartParams 管
+    if (tool?.name !== "add_clip" && tool?.name !== "update_clip") continue;
     const props = tool?.inputSchema?.properties ?? tool?.parameters?.properties;
     if (props && "params" in props) props.params = schema;
+  }
+  return tools;
+}
+
+/* ── 部件:add_part / set_part 的 params,add_composite 的 parts ──────────────── */
+
+const FRAME_SCHEMA = {
+  type: "object",
+  description: "相对父框的框:x / y 锚点位置(像素)、w / h 尺寸、anchor [ax, ay](默认 [0,0])、scale、rotate;省略用部件的 defaultFrame",
+  properties: {
+    x: { type: "number" }, y: { type: "number" }, w: { type: "number" }, h: { type: "number" },
+    anchor: { type: "array", items: { type: "number" } }, scale: { type: "number" }, rotate: { type: "number" },
+  },
+  required: ["x", "y"],
+};
+
+/** 部件参数按 partId 分支的 schema;和卡片那份一个做法 */
+export function buildPartParamsSchema(parts) {
+  const usable = (parts || []).filter((p) => p && typeof p.id === "string" && Array.isArray(p.controls));
+  if (usable.length === 0) return null;
+  return {
+    type: "object",
+    description: "部件参数,合法字段取决于 partId;有文字的部件都有 size,填 0 = 按框自适应。先 list_parts({ partId }) 看 controls。",
+    anyOf: usable.map((part) => {
+      const properties = {};
+      const required = [];
+      for (const control of part.controls) {
+        properties[control.key] = { ...typeOf(control), description: describe(control) };
+        if (control.required) required.push(control.key);
+      }
+      return { title: part.id, type: "object", properties, ...(required.length ? { required } : {}), additionalProperties: true };
+    }),
+  };
+}
+
+/**
+ * add_composite.parts 的 schema:每项 { partId, params, frame, enterMs, label, children }。
+ * children 不能无限递归(Gemini 不支持 $ref),展开两层够用;再深的用 add_part 加。
+ */
+export function buildPartsListSchema(parts, paramsSchema) {
+  const ids = (parts || []).map((p) => p?.id).filter((id) => typeof id === "string");
+  const item = (children) => ({
+    type: "object",
+    properties: {
+      partId: { type: "string", ...(ids.length ? { enum: ids } : {}), description: "list_parts 里的部件 id" },
+      params: paramsSchema ?? { type: "object", additionalProperties: true },
+      frame: FRAME_SCHEMA,
+      enterMs: { type: "number", description: "相对父级进场的毫秒数" },
+      label: { type: "string" },
+      ...(children ? { children } : {}),
+    },
+    required: ["partId"],
+    additionalProperties: true,
+  });
+  return { type: "array", items: item({ type: "array", items: item({ type: "array", items: item(null) }) }), description: "部件实例列表;最多在这里嵌套三层,更深的用 add_part 加" };
+}
+
+/** 就地把 add_part / set_part 的 params 和 add_composite 的 parts 换成真实 schema;拿不到部件列表就原样返回 */
+export function injectPartParams(tools, parts) {
+  const schema = buildPartParamsSchema(parts);
+  if (!schema) return tools;
+  for (const tool of tools) {
+    const props = tool?.inputSchema?.properties ?? tool?.parameters?.properties;
+    if (!props) continue;
+    if ((tool.name === "add_part" || tool.name === "set_part") && "params" in props) props.params = schema;
+    if (tool.name === "add_composite" && "parts" in props) props.parts = buildPartsListSchema(parts, schema);
+    if ((tool.name === "add_part" || tool.name === "set_part") && "frame" in props) props.frame = { ...FRAME_SCHEMA, description: props.frame?.description ?? FRAME_SCHEMA.description };
   }
   return tools;
 }

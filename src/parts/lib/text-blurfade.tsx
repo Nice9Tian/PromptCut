@@ -1,6 +1,7 @@
 import type { PartDef, PartProps } from "../types";
 import { BlurFade } from "../../cards/magicui/vendor/blur-fade";
 import { accentOf } from "../../cards/native/hud";
+import { fitOr } from "../fit";
 
 /**
  * 模糊浮现文字:从 mu-blur-fade 拆出。
@@ -8,10 +9,12 @@ import { accentOf } from "../../cards/native/hud";
  */
 interface Params {
   text: string;
+  size: number;
   accent: string;
 }
 
-function BlurFadePart({ params }: PartProps<Params>) {
+function BlurFadePart({ params, width, height }: PartProps<Params>) {
+  const size = fitOr(params.size, { width, height, text: params.text, max: 240 });
   return (
     <div
       style={{
@@ -26,8 +29,9 @@ function BlurFadePart({ params }: PartProps<Params>) {
     >
       <BlurFade startImmediately={true} delay={0} yOffset={20}>
         <h2
-          className="text-[96px] font-bold"
+          className="font-bold"
           style={{
+            fontSize: size,
             color: accentOf(params),
             textShadow: "var(--pc-text-shadow, 0 4px 24px rgba(0,0,0,0.75))",
             margin: 0,
@@ -50,10 +54,12 @@ export const textBlurfade: PartDef<Params> = {
   from: "mu-blur-fade",
   defaults: {
     text: "你好世界",
+    size: 0,
     accent: "",
   },
   controls: [
     { key: "text", label: "文本", type: "text", required: true },
+    { key: "size", label: "字号(0 = 按框自适应)", type: "number", min: 0, max: 240, step: 2, hint: "0 表示按部件的框自动算;想固定就填具体像素" },
     { key: "accent", label: "主色(留空用主题色)", type: "color" },
   ],
   defaultFrame: { x: 360, y: 440, w: 1200, h: 200 },

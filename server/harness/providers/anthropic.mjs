@@ -48,7 +48,7 @@ export function createProvider(cfg, { fetchImpl = globalThis.fetch } = {}) {
         body.system = system;
       }
       
-      const anthropicTools = (tools || []).map(t => toolToVendor(t, 'anthropic'));
+      const anthropicTools = (tools || []).map(t => toolToVendor(t, 'anthropic', { compat: cfg.schemaCompat }));
       if (anthropicTools.length > 0) {
         body.tools = anthropicTools;
       }

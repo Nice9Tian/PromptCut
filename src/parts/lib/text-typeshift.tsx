@@ -2,6 +2,7 @@ import { motion } from "motion/react";
 import type { PartDef, PartProps } from "../types";
 import { accentOf, easeExpoOut } from "../../cards/native/hud";
 import "../../cards/native/hud.css";
+import { fitOr } from "../fit";
 
 /**
  * 排版流文字:草稿感多行文字自动重排定型。从 type-shift 拆出。
@@ -9,13 +10,16 @@ import "../../cards/native/hud.css";
  */
 interface Params {
   lines: string;
+  size: number;
   shiftAtMs: number;
   accent: string;
 }
 
-function TypeShiftPart({ params }: PartProps<Params>) {
+function TypeShiftPart({ params, width, height }: PartProps<Params>) {
   const accent = accentOf(params);
   const rawLines = params.lines.split("|").filter(Boolean);
+  const unitLines = rawLines.reduce((s, l, i) => s + (i === 0 ? 1 : l.startsWith("*") ? 2 / 3 : l.startsWith("—") ? 1 / 3 : 0.5), 0);
+  const size = fitOr(params.size, { width: width - 48, height, text: params.lines, splitter: "|", lines: unitLines * 1.28, max: 200 });
   const shiftDelay = params.shiftAtMs / 1000;
 
   return (
@@ -46,16 +50,16 @@ function TypeShiftPart({ params }: PartProps<Params>) {
           if (isSub) text = text.slice(1).trim();
           else if (isAuthor) text = text.slice(1).trim();
 
-          let targetSize = "48px";
+          let targetSize = size * 0.5;
           let targetColor = "rgba(255, 255, 255, 0.8)";
           if (isHero) {
-            targetSize = "96px";
+            targetSize = size;
             targetColor = accent;
           } else if (isSub) {
-            targetSize = "64px";
+            targetSize = size * (2 / 3);
             targetColor = "rgba(255, 255, 255, 1)";
           } else if (isAuthor) {
-            targetSize = "32px";
+            targetSize = size / 3;
             targetColor = "rgba(156, 163, 175, 1)";
           }
 
@@ -67,7 +71,7 @@ function TypeShiftPart({ params }: PartProps<Params>) {
               className="font-bold leading-tight"
               initial={{
                 x: initialX,
-                fontSize: "48px",
+                fontSize: size * 0.5,
                 color: "rgba(156, 163, 175, 1)",
                 marginTop: "0px",
               }}
@@ -98,11 +102,13 @@ export const textTypeshift: PartDef<Params> = {
   from: "type-shift",
   defaults: {
     lines: "标题排版流|*次重信息|辅助说明文字|—署名信息",
+    size: 0,
     shiftAtMs: 900,
     accent: "",
   },
   controls: [
     { key: "lines", label: "多行内容(|分行,*次重,—署名)", type: "text", required: true },
+    { key: "size", label: "字号(0 = 按框自适应)", type: "number", min: 0, max: 200, step: 2, hint: "0 表示按部件的框自动算;想固定就填具体像素" },
     { key: "shiftAtMs", label: "重排时间(ms)", type: "number", min: 100, max: 2000, step: 100 },
     { key: "accent", label: "首行高亮色(留空用主题色)", type: "color" },
   ],

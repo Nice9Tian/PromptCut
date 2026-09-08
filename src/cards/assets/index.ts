@@ -64,12 +64,13 @@ function particlesCardOf(a: CatalogAsset): CardDef<any> | null {
   const config = configOf(a.name);
   if (!config) return null;
   const knobs = translateParticlesConfig(config);
-  const Component = ({ params }: CardProps<any>) => {
+  const Component = ({ params, t = 0 }: CardProps<any>) => {
     const depsKey = JSON.stringify(knobs.controls.map((c) => params[c.key]));
     return createElement(ParticlesView, {
       resolve: async () => knobs.apply(config, params),
       seed: Number(params.seed) || 1,
       depsKey,
+      t,
     });
   };
   return {

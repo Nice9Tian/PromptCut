@@ -568,7 +568,7 @@ export default function vitePluginAi(): Plugin {
           try {
             const runners = await getRunner();
             const data = JSON.parse(body);
-            const { provider, prompt, sessionId, model, effort, fast, attachments, script } = data;
+            const { provider, prompt, sessionId, model, effort, fast, attachments, script, schemaCompat } = data;
             // 多 Agent 分页:这一页的对话 ID。只认会话 id 的字符集,别的一律当没带
             const agentId: string = typeof data.conversationId === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(data.conversationId) ? data.conversationId : '';
 
@@ -662,6 +662,8 @@ export default function vitePluginAi(): Plugin {
               // 不支持的直接忽略(前端也已经把对应控件灰掉了)
               effort,
               fast,
+              // 参数兼容模式(工具 schema 按 Gemini 子集清洗):'auto' / 'on' / 'off',API 直连的 runner 才用
+              schemaCompat,
               toolProtocol: cfg.toolProtocol,
               mcp,
               callTool: async (name: string, args: any) => await callToolInternal(name, args, agentId || undefined),

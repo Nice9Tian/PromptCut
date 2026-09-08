@@ -36,6 +36,10 @@ function forceOurs(opts: Record<string, any>): Record<string, any> {
     ...opts,
     fullScreen: { enable: false },
     detectRetina: false,
+    // 引擎默认「窗口失焦 / 画布不在视口里就暂停」:预览 iframe、无头导出页、Browser 面板收起时都算失焦,
+    // 结果是画布一直空白(实测:canvas 在、粒子数在,一像素都没画)。这两项一律关掉,画不画由我们的时钟说了算
+    pauseOnBlur: false,
+    pauseOnOutsideViewport: false,
     background: { ...(opts.background || {}), color: "transparent" },
     interactivity: {
       ...(opts.interactivity || {}),
@@ -69,48 +73,129 @@ async function resolveOptions(params: Params): Promise<Record<string, any>> {
 }
 
 /**
- * 渲染核心:给一个「取配置」的函数和随机种子,把粒子画进卡片层。
- * `key` 是配置的身份 —— 它变了才重新装引擎;素材封装卡(src/cards/assets)用它把翻译后的旋钮
+ * 渲染核心:给一个「取配置」的函数和随机种子,把粒子画进卡片层,**由时间轴的 t 驱动**。
+ *
+ * 为什么不让引擎自己跑:tsParticles 4 的帧循环靠 requestAnimationFrame,而预览 iframe 和导出页的
+ * rAF 是虚拟时钟(kernel/exportClock.ts),不会自己跳;它还会把画布 transferControlToOffscreen,
+ * 画在离屏位图上,预览里一个像素都出不来(实测:容器活着、200 个粒子都在、位图全空)。
+ * 所以这里:
+ *   1. 装载时把 transferControlToOffscreen 短路成「就用这张画布」,画到看得见的 canvas 上;
+ *   2. 装好立刻 pause() 掐掉它自己的循环,每次 t 变了按 1/60 秒一步步 drawParticles 推到 t;
+ *   3. 随机数用按 seed 播种的 PRNG,往回拖播放头就重开一遍再推 —— 同一个 seed、同一个 t,
+ *      在编辑器、预览、导出里画出来的是同一帧。这和 Lottie 卡 goToAndStop 是一个思路。
+ * `depsKey` 是配置的身份 —— 它变了才重新装引擎;素材封装卡(src/cards/assets)用它把翻译后的旋钮
  * 写回原配置再渲染,通用粒子卡用它渲染 URL / 内联 JSON / 简单参数三种来源。
  */
-export function ParticlesView({ resolve, seed, depsKey }: { resolve: () => Promise<Record<string, any>>; seed: number; depsKey: string }) {
+export function ParticlesView({ resolve, seed, depsKey, t = 0 }: { resolve: () => Promise<Record<string, any>>; seed: number; depsKey: string; t?: number }) {
   const box = useRef<HTMLDivElement>(null);
+  /** 引擎容器 + 已经推到了第几毫秒;重装时整个换掉 */
+  const state = useRef<{ container: Container | null; atMs: number; gen: number }>({ container: null, atMs: 0, gen: 0 });
+  const wantT = useRef(t);
+  wantT.current = t;
 
   useEffect(() => {
-    let container: Container | undefined;
     let dead = false;
+    const gen = ++state.current.gen;
+    state.current.container?.destroy();
+    state.current.container = null;
+    state.current.atMs = 0;
 
-    // 见文件头第 1 条。导出页里 __pcResetRandom 存在,按这张卡的 seed 拨一次;编辑器里是真随机
-    setRandom(() => Math.random());
-    window.__pcResetRandom?.(seed | 0 || 1);
-
-    engineReady ??= loadSlim(tsParticles);
+    // HMR 重跑这个模块时引擎已经 load 过,再注册插件会抛错;吞掉,插件本来就在
+    engineReady ??= loadSlim(tsParticles).catch(() => {});
     Promise.all([engineReady, resolve()])
       .then(([, opts]) => {
         if (dead || !box.current) return undefined;
-        // 随机种子在配置取回之后再拨一次:取配置是异步的,中间别的卡可能已经抽过随机数
-        window.__pcResetRandom?.(seed | 0 || 1);
+        // 粒子的初始排布由种子决定:装载那一刻用的随机数就是播种过的
+        setRandom(seededRandom(seed));
+        withRealCanvas(() => {}); // 确保短路已装上(幂等)
         return tsParticles.load({ element: box.current, options: forceOurs(opts) });
       })
       .then((c) => {
-        if (dead) c?.destroy();
-        else container = c;
+        if (!c) return;
+        if (dead || gen !== state.current.gen) { c.destroy(); return; }
+        // 掐掉引擎自己的帧循环:从现在起只有我们按 t 推它
+        c.pause();
+        state.current.container = c;
+        state.current.atMs = 0;
+        stepTo(state.current, seed, wantT.current);
       })
       .catch((e) => console.warn("[particles] 启动失败:", e));
 
     return () => {
       dead = true;
-      container?.destroy();
+      state.current.container?.destroy();
+      state.current.container = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [depsKey, seed]);
 
+  // t 变了就推到 t;往回拖就重开一遍再推(粒子系统没有倒带)
+  useEffect(() => {
+    if (state.current.container) stepTo(state.current, seed, t);
+  }, [t, seed]);
+
   return <div ref={box} className="absolute inset-0" />;
 }
 
-function ParticlesCard({ params }: CardProps<Params>) {
+/** 一步多长:按 60fps 推,和引擎默认的 fpsLimit 一致,物理不会因为一步太长而炸 */
+const STEP_MS = 1000 / 60;
+/** 单次最多推多少步:20 秒;再长的 clip 也不至于一次卡死主线程 */
+const MAX_STEPS = 60 * 20;
+
+function stepTo(st: { container: Container | null; atMs: number }, seed: number, tSec: number) {
+  const c = st.container;
+  if (!c || c.destroyed) return;
+  const target = Math.max(0, tSec) * 1000;
+  if (target < st.atMs - 0.5) {
+    // 往回:重新播种、重新排布,再从 0 推过来
+    setRandom(seededRandom(seed));
+    st.atMs = 0;
+    c.refresh().then(() => { c.pause(); stepTo(st, seed, tSec); }).catch(() => {});
+    return;
+  }
+  const render = c.canvas.render;
+  let steps = 0;
+  if (target <= st.atMs + 0.5 && st.atMs === 0) {
+    // t = 0:画初始那一帧(不推进)
+    render.drawParticles({ value: 0, factor: 0 } as any);
+    return;
+  }
+  while (st.atMs < target - 0.5 && steps++ < MAX_STEPS) {
+    const d = Math.min(STEP_MS, target - st.atMs);
+    render.drawParticles({ value: d, factor: d / STEP_MS } as any);
+    st.atMs += d;
+  }
+}
+
+/** 按 seed 播种的 PRNG(mulberry32):同一个 seed 永远是同一串数 */
+function seededRandom(seed: number): () => number {
+  let a = (seed | 0) || 1;
+  return () => {
+    a = (a + 0x6d2b79f5) | 0;
+    let x = Math.imul(a ^ (a >>> 15), 1 | a);
+    x = (x + Math.imul(x ^ (x >>> 7), 61 | x)) ^ x;
+    return ((x ^ (x >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/**
+ * 让 tsParticles 直接画在看得见的 canvas 上。
+ * 引擎 4.x 一律 canvas.transferControlToOffscreen() 再画到离屏位图;预览 iframe 里离屏位图
+ * 从不提交到屏幕。把这个方法短路成返回画布自己,引擎拿到的 getContext / width / height 都是真画布的。
+ * 全局只装一次;这个项目里没有别的东西用 OffscreenCanvas。
+ */
+let realCanvasPatched = false;
+function withRealCanvas(fn: () => void) {
+  if (!realCanvasPatched && typeof HTMLCanvasElement !== "undefined") {
+    (HTMLCanvasElement.prototype as any).transferControlToOffscreen = function () { return this; };
+    realCanvasPatched = true;
+  }
+  fn();
+}
+
+function ParticlesCard({ params, t = 0 }: CardProps<Params>) {
   const depsKey = [params.config, params.color, params.quantity, params.speed, params.size, params.links].join("\u0000");
-  return <ParticlesView resolve={() => resolveOptions(params)} seed={params.seed} depsKey={depsKey} />;
+  return <ParticlesView resolve={() => resolveOptions(params)} seed={params.seed} depsKey={depsKey} t={t} />;
 }
 
 export const particlesCard: CardDef<Params> = {

@@ -82,7 +82,7 @@ export function createProvider(cfg, { fetchImpl = globalThis.fetch } = {}) {
         };
       }
 
-      const geminiTools = (tools || []).map(t => toolToVendor(t, 'gemini'));
+      const geminiTools = (tools || []).map(t => toolToVendor(t, 'gemini', { compat: cfg.schemaCompat }));
       if (geminiTools.length > 0) {
         body.tools = [{ functionDeclarations: geminiTools }];
       }

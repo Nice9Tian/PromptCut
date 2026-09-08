@@ -104,7 +104,12 @@ export function startRun(opts) {
     // 这一次跑哪个由 opts.model 决定;没挑就用清单里第一个。
     const modelList = String(cfg.model || '').split('|').map(s => s.trim()).filter(Boolean);
     const picked = opts.model && modelList.includes(opts.model) ? opts.model : modelList[0] || '';
-    cfg = { ...cfg, model: picked };
+    // 参数兼容模式:'on' / 'off' 是用户(或前端按模型名锁定)的决定;'auto' / 没传 就按厂商和模型名推 ——
+    // 走 OpenAI 兼容接口的 Router 也可能接的是 Gemini,厂商字段靠不住,模型名里有 gemini 就开
+    const schemaCompat = opts.schemaCompat === 'on' ? true
+      : opts.schemaCompat === 'off' ? false
+      : (cfg.vendor === 'gemini' || /gemini/i.test(picked));
+    cfg = { ...cfg, model: picked, schemaCompat };
 
     const historyDir = path.join(os.tmpdir(), 'promptcut', 'harness-sessions');
     fs.mkdirSync(historyDir, { recursive: true });
@@ -135,7 +140,7 @@ export function startRun(opts) {
 
     const requestFetch = opts.fetchImpl || globalThis.fetch;
     const provider = providerModule.createProvider(cfg, { fetchImpl: (url, options) => requestFetch(url, { ...options, signal: AbortSignal.any([abortController.signal, AbortSignal.timeout(120000)]) }) });
-    safeOnEvent({ type: 'diagnostic', stage: 'configuration', data: { vendor: cfg.vendor, model: cfg.model, maxTokens: cfg.maxTokens, protocol: 'native-tools', maxRounds: 24 } });
+    safeOnEvent({ type: 'diagnostic', stage: 'configuration', data: { vendor: cfg.vendor, model: cfg.model, maxTokens: cfg.maxTokens, protocol: 'native-tools', schemaCompat, maxRounds: 24 } });
     const tools = await buildTools({ callTool: opts.callTool, workspaceDir: opts.cwd, onEvent: safeOnEvent });
     const agent = new Agent({ 
       provider, 

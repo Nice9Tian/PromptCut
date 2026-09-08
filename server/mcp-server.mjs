@@ -4,7 +4,7 @@ import * as path from 'node:path';
 import * as readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { tools } from './mcp-tools.mjs';
-import { injectCardParams } from './card-params-schema.mjs';
+import { injectCardParams, injectPartParams } from './card-params-schema.mjs';
 
 function getTargets() {
   let port = 5195;
@@ -219,6 +219,17 @@ async function handleMessage(line) {
       }
     } catch(e) {
       // Ignore if bridge is not available, we just return the generic schema
+    }
+
+    // 部件同理:add_part / set_part 的 params、add_composite 的 parts 换成按 partId 分支的真实 schema
+    try {
+      const res = await callBridge('list_parts', { detail: 'full' });
+      if (res.ok) {
+        const out = await res.json();
+        if (out.ok && out.result) injectPartParams(pubTools, out.result);
+      }
+    } catch (e) {
+      // 拿不到就退回自由对象
     }
 
     sendResponse(req.id, { tools: pubTools });

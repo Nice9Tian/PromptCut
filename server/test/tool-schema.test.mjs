@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { toolToVendor, sanitizeSchema } from '../harness/schema.mjs';
 import { tools as mcpTools } from '../mcp-tools.mjs';
-import { buildParamsSchema, injectCardParams } from '../card-params-schema.mjs';
+import { buildParamsSchema, injectCardParams, injectPartParams, buildPartParamsSchema } from '../card-params-schema.mjs';
 
 /** 两张形状不同的卡,够覆盖 text / number / select / required */
 const CARDS = [
@@ -174,4 +174,38 @@ test('所有 type 都是单一字符串(Gemini 不认数组 type,sanitizeSchema 
   };
   for (const t of mcpTools) walk(t.inputSchema, t.name);
   assert.deepEqual(bad, []);
+});
+
+// ── 部件:add_part / set_part 的 params 与 add_composite 的 parts ───────────────
+const PARTS = [
+  { id: 'text-title', controls: [{ key: 'text', label: '标题', type: 'text', required: true }, { key: 'size', label: '字号', type: 'number' }] },
+  { id: 'list-pins', controls: [{ key: 'items', label: '要点', type: 'text' }] },
+];
+test('injectPartParams 只碰部件工具;injectCardParams 不再误伤 add_part 的 params', () => {
+  const tools = JSON.parse(JSON.stringify(mcpTools));
+  injectCardParams(tools, [{ id: 'x', controls: [{ key: 'foo', label: 'f', type: 'text' }] }]);
+  const addPart = tools.find((t) => t.name === 'add_part');
+  assert.equal(addPart.inputSchema.properties.params.anyOf, undefined, '卡片 schema 不该灌进 add_part');
+  injectPartParams(tools, PARTS);
+  assert.equal(addPart.inputSchema.properties.params.anyOf.length, 2);
+  assert.deepEqual(addPart.inputSchema.properties.params.anyOf[0].required, ['text']);
+  assert.equal(tools.find((t) => t.name === 'set_part').inputSchema.properties.params.anyOf[1].title, 'list-pins');
+  const parts = tools.find((t) => t.name === 'add_composite').inputSchema.properties.parts;
+  assert.equal(parts.type, 'array');
+  assert.deepEqual(parts.items.properties.partId.enum, ['text-title', 'list-pins']);
+  assert.equal(parts.items.properties.children.items.properties.children.items.properties.children, undefined, '最多三层');
+  assert.equal(tools.find((t) => t.name === 'add_clip').inputSchema.properties.params.anyOf[0].title, 'x', '卡片工具还是卡片 schema');
+  assert.equal(buildPartParamsSchema([]), null);
+});
+
+test('sanitizeSchema:compat 和 vendor 解耦 —— openai 也能按 Gemini 子集清洗,gemini 也能关掉', () => {
+  const schema = { type: 'object', properties: { params: { type: 'object' }, n: { type: 'number', default: 1 } }, additionalProperties: true };
+  const openaiCompat = sanitizeSchema(schema, 'openai', { compat: true });
+  assert.equal(openaiCompat.additionalProperties, undefined);
+  assert.deepEqual(openaiCompat.properties.params, { type: 'object', properties: {} });
+  assert.equal(openaiCompat.properties.n.default, undefined);
+  const openaiPlain = sanitizeSchema(schema, 'openai');
+  assert.equal(openaiPlain.properties.params.additionalProperties, true);
+  assert.equal(sanitizeSchema(schema, 'gemini').properties.params.additionalProperties, undefined, 'gemini 默认就是 compat');
+  assert.equal(sanitizeSchema(schema, 'gemini', { compat: false }).properties.params.additionalProperties, true);
 });

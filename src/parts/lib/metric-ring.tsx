@@ -32,7 +32,7 @@ function MetricRingPart({ params, width, height }: PartProps<Params>) {
     };
   }, [params.value, v]);
 
-  const size = params.ringSize;
+  const size = params.ringSize > 0 ? params.ringSize : Math.min(width, height) * 0.9;
   const strokeWidth = 32 * (size / 480);
   const radius = (size - strokeWidth) / 2;
   const circumference = radius * 2 * Math.PI;
@@ -86,12 +86,12 @@ export const metricRing: PartDef<Params> = {
   from: "ring-metric",
   defaults: {
     value: 75,
-    ringSize: 480,
+    ringSize: 0,
     accent: "",
   },
   controls: [
     { key: "value", label: "数值(0-100)", type: "number" },
-    { key: "ringSize", label: "环形尺寸", type: "number", min: 100, max: 1000, step: 10 },
+    { key: "ringSize", label: "环形尺寸(0 = 按框自适应)", type: "number", min: 0, max: 1000, step: 2, hint: "0 表示按部件的框自动算尺寸;想固定就填具体像素" },
     { key: "accent", label: "颜色", type: "color" },
   ],
   defaultFrame: { x: 960, y: 540, w: 480, h: 480, anchor: [0.5, 0.5] },

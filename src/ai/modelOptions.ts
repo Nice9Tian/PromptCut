@@ -101,13 +101,22 @@ export interface RunChoice {
   model: string;
   effort: EffortLevel;
   fast: boolean;
+  /**
+   * 参数兼容模式:工具 schema 按 Gemini 那套最窄子集清洗。auto = 按模型名推(有 gemini 就开);
+   * on / off 是用户手动定的。Claude / GPT 系列锁死 off、Gemini 锁死 on,别的厂商才让用户调(见 compatPolicy)。
+   */
+  schemaCompat: SchemaCompat;
 }
 
+export type SchemaCompat = "auto" | "on" | "off";
+
 export function readChoice(provider: AiProvider): RunChoice {
+  const compat = read("schemaCompat", provider);
   return {
     model: read("model", provider),
     effort: read("effort", provider) as EffortLevel,
     fast: read("fast", provider) === "1",
+    schemaCompat: compat === "on" || compat === "off" ? compat : "auto",
   };
 }
 
@@ -115,6 +124,32 @@ export function writeChoice(provider: AiProvider, patch: Partial<RunChoice>): vo
   if (patch.model !== undefined) write("model", provider, patch.model);
   if (patch.effort !== undefined) write("effort", provider, patch.effort);
   if (patch.fast !== undefined) write("fast", provider, patch.fast ? "1" : "");
+  if (patch.schemaCompat !== undefined) write("schemaCompat", provider, patch.schemaCompat === "auto" ? "" : patch.schemaCompat);
+}
+
+/**
+ * 参数兼容开关在这个驱动 / 模型下该是什么样。
+ *   - Claude Code / Codex 这两条 CLI 路,以及 API 直连里模型名带 claude / gpt / o1~o9 / codex 的:锁死关(它们吃完整 schema);
+ *   - agy 这条 CLI 路,以及 API 直连里模型名带 gemini 的:锁死开;
+ *   - 其余(API 直连接的别家模型、模型名看不出来的):用户自己调,默认按厂商字段推。
+ * 模型名不带厂商信息时按 vendor 兜底 —— Router 可能把 Gemini 挂在 openai 兼容接口后面,所以看模型名优先。
+ */
+export function compatPolicy(provider: AiProvider, model: string, vendor: string | undefined, pref: SchemaCompat): { on: boolean; locked: boolean; reason: string } {
+  const m = (model || "").toLowerCase();
+  if (provider === "claude" || provider === "codex") return { on: false, locked: true, reason: "Claude Code / Codex 吃完整的工具 schema,不用兼容模式" };
+  if (provider === "agy") return { on: true, locked: true, reason: "Antigravity 跑的是 Gemini,工具 schema 按 Gemini 的子集清洗" };
+  if (/claude/.test(m) || /(^|[^a-z])(gpt|o[1-9]|codex)/.test(m)) return { on: false, locked: true, reason: "Claude / GPT 系列吃完整的工具 schema,不用兼容模式" };
+  if (/gemini/.test(m)) return { on: true, locked: true, reason: "Gemini 只认最窄的 schema 子集,自动开启兼容模式" };
+  const auto = vendor === "gemini";
+  const on = pref === "on" ? true : pref === "off" ? false : auto;
+  return { on, locked: false, reason: `模型名看不出厂商:${auto ? "按厂商字段默认开" : "默认关"};工具调用报 schema 相关的 400 就打开` };
+}
+
+/** 发请求时带的值:锁死的直接给定论,可调的把用户偏好交给服务端(auto 由服务端按模型名再推一次) */
+export function compatToSend(provider: AiProvider, model: string, vendor: string | undefined, pref: SchemaCompat): SchemaCompat {
+  const pol = compatPolicy(provider, model, vendor, pref);
+  if (pol.locked) return pol.on ? "on" : "off";
+  return pref;
 }
 
 /**

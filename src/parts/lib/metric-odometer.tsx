@@ -1,6 +1,7 @@
 import { motion } from "motion/react";
 import type { PartDef, PartProps } from "../types";
 import { easeExpoOut, accentOf } from "../../cards/native/hud";
+import { fitOr } from "../fit";
 
 /**
  * 翻牌数字:大号的机械滚轮数字加上单位。
@@ -42,16 +43,17 @@ function OdometerWheel({ digit, index }: { digit: string; index: number }) {
 
 function MetricOdometerPart({ params, width, height }: PartProps<Params>) {
   const strValue = String(Math.floor(params.value));
+  const size = fitOr(params.size, { width, height, text: strValue + params.unit, lines: 1, max: 400 });
 
   return (
     <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", width, height }}>
       <div className="flex items-baseline gap-4" style={{ color: accentOf(params) }}>
-        <div style={{ fontSize: params.size, fontWeight: "bold", display: "flex", fontFamily: "var(--pc-font-mono, ui-monospace, monospace)" }}>
+        <div style={{ fontSize: size, fontWeight: "bold", display: "flex", fontFamily: "var(--pc-font-mono, ui-monospace, monospace)" }}>
           {strValue.split("").map((c, i) => (
             <OdometerWheel key={i} digit={c} index={i} />
           ))}
         </div>
-        {params.unit && <div style={{ fontSize: params.size * (48/120), fontWeight: 600, opacity: 0.8 }}>{params.unit}</div>}
+        {params.unit && <div style={{ fontSize: size * (48/120), fontWeight: 600, opacity: 0.8 }}>{params.unit}</div>}
       </div>
     </div>
   );
@@ -68,13 +70,13 @@ export const metricOdometer: PartDef<Params> = {
   defaults: {
     value: 12480,
     unit: "次",
-    size: 120,
+    size: 0,
     accent: "",
   },
   controls: [
     { key: "value", label: "数值", type: "number" },
     { key: "unit", label: "单位", type: "text" },
-    { key: "size", label: "字号", type: "number", min: 24, max: 400, step: 4 },
+    { key: "size", label: "字号(0 = 按框自适应)", type: "number", min: 0, max: 400, step: 2, hint: "0 表示按部件的框自动算;想固定就填具体像素" },
     { key: "accent", label: "颜色", type: "color" },
   ],
   defaultFrame: { x: 960, y: 540, w: 800, h: 200, anchor: [0.5, 0.5] },

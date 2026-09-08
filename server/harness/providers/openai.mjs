@@ -108,7 +108,7 @@ export function createProvider(cfg, { fetchImpl = globalThis.fetch } = {}) {
         stream_options: { include_usage: true }
       };
 
-      const openaiTools = (tools || []).map(t => toolToVendor(t, 'openai'));
+      const openaiTools = (tools || []).map(t => toolToVendor(t, 'openai', { compat: cfg.schemaCompat }));
       if (openaiTools.length > 0) {
         body.tools = openaiTools;
       }

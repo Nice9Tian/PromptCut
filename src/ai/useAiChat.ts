@@ -2,7 +2,7 @@ import { recordTrace } from './debug';
 import { useState, useEffect, useRef, useCallback } from "react";
 import type { AiProvider, ChatMessage, ChatAttachment, MessagePart, MessageRuntime, ProviderInfo, RunEvent, SttInfo, LoginState, PublicAiConfig, AiConfigPatch, CliSetupJob, KeyKind } from "./types";
 import { parseSseChunks } from "./sse";
-import { readChoice } from "./modelOptions";
+import { readChoice, compatToSend } from "./modelOptions";
 import { getScript } from "./script";
 import { useChatMessages, getChatStore, MAIN_TAB } from "./liveChat";
 import * as agentBus from "./agentBus";
@@ -470,6 +470,8 @@ export function useAiChat(opts?: { mock?: boolean; tabId?: string; getConversati
     // 发送这一刻就把「这条用什么跑」定下来,而且**发出去的和记下来的是同一份**。
     // 分开各读一次的话,用户在流式过程中换了模型,记录就会和实际跑的对不上。
     const choice = readChoice(provider);
+    // 参数兼容模式:锁死的驱动 / 模型不听本地偏好,按策略定论;可调的把偏好交给服务端
+    choice.schemaCompat = compatToSend(provider, choice.model, config?.api?.vendor, choice.schemaCompat);
     const runtime: MessageRuntime = { provider, ...choice, toolProtocol: !!config?.toolProtocol };
 
     const asstMsgId = (Date.now() + 1).toString();

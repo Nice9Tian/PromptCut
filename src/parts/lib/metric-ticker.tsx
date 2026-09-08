@@ -1,6 +1,7 @@
 import type { PartDef, PartProps } from "../types";
 import { NumberTicker } from "../../cards/magicui/vendor/number-ticker";
 import { accentOf } from "../../cards/native/hud";
+import { fitOr } from "../fit";
 
 /**
  * 数字滚动:从 mu-number-ticker 拆出。
@@ -11,9 +12,15 @@ interface Params {
   label: string;
   unit: string;
   accent: string;
+  size: number;
 }
 
-function MetricTickerPart({ params }: PartProps<Params>) {
+function MetricTickerPart({ params, width, height }: PartProps<Params>) {
+  const text1 = String(params.value) + params.unit;
+  const text2 = params.label || "";
+  const longestText = text1.length > text2.length ? text1 : text2;
+  const size = fitOr(params.size, { width, height, text: longestText, lines: 1.6, max: 400 });
+
   return (
     <div
       style={{
@@ -25,6 +32,8 @@ function MetricTickerPart({ params }: PartProps<Params>) {
         justifyContent: "center",
         boxSizing: "border-box",
         fontFamily: "var(--pc-font, system-ui, sans-serif)",
+        width,
+        height,
       }}
     >
       <div className="flex items-baseline gap-4" style={{ color: accentOf(params) }}>
@@ -32,7 +41,7 @@ function MetricTickerPart({ params }: PartProps<Params>) {
           value={params.value}
           className="font-bold leading-none"
           style={{
-            fontSize: 200,
+            fontSize: size,
             fontFamily: "var(--pc-font-mono, ui-monospace, monospace)",
             textShadow: "var(--pc-text-shadow, 0 4px 24px rgba(0,0,0,0.75))",
           }}
@@ -41,7 +50,7 @@ function MetricTickerPart({ params }: PartProps<Params>) {
         <span
           className="font-bold"
           style={{
-            fontSize: 60,
+            fontSize: size * 0.3,
             textShadow: "var(--pc-text-shadow, 0 4px 24px rgba(0,0,0,0.75))",
           }}
         >
@@ -51,7 +60,7 @@ function MetricTickerPart({ params }: PartProps<Params>) {
       <p
         className="mt-8"
         style={{
-          fontSize: 60,
+          fontSize: size * 0.3,
           color: "var(--pc-fg, #f3f4f6)",
           textShadow: "var(--pc-text-shadow, 0 4px 24px rgba(0,0,0,0.75))",
           margin: "32px 0 0 0",
@@ -76,12 +85,14 @@ export const metricTicker: PartDef<Params> = {
     label: "已完成目标",
     unit: "%",
     accent: "",
+    size: 0,
   },
   controls: [
     { key: "value", label: "目标值", type: "number" },
     { key: "label", label: "说明文字", type: "text" },
     { key: "unit", label: "单位", type: "text" },
     { key: "accent", label: "主色(留空用主题色)", type: "color" },
+    { key: "size", label: "字号(0 = 按框自适应)", type: "number", min: 0, max: 400, step: 2, hint: "0 表示按部件的框自动算;想固定就填具体像素" },
   ],
   defaultFrame: { x: 460, y: 300, w: 1000, h: 480 },
   settleMs: () => 1600,

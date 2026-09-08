@@ -2,6 +2,7 @@ import { motion } from "motion/react";
 import type { PartDef, PartProps } from "../types";
 import { accentOf, easeExpoOut } from "../../cards/native/hud";
 import "../../cards/native/hud.css";
+import { fitOr } from "../fit";
 
 /**
  * 逐条打勾的清单:从 checklist 卡片拆出。
@@ -9,11 +10,12 @@ import "../../cards/native/hud.css";
  */
 interface Params {
   items: string;
+  size: number;
   stepMs: number;
   accent: string;
 }
 
-function CheckItem({ text, i, stepMs, accent }: { text: string; i: number; stepMs: number; accent: string }) {
+function CheckItem({ text, i, stepMs, accent, size }: { text: string; i: number; stepMs: number; accent: string; size: number }) {
   const rowDelay = i * (stepMs / 1000);
   const tickDelay = rowDelay + 0.15;
 
@@ -51,12 +53,13 @@ function CheckItem({ text, i, stepMs, accent }: { text: string; i: number; stepM
           />
         </svg>
       </div>
-      <div className="text-[72px] font-bold text-white">{text}</div>
+      <div className="font-bold text-white" style={{ fontSize: size }}>{text}</div>
     </motion.div>
   );
 }
 
-function ChecklistPart({ params }: PartProps<Params>) {
+function ChecklistPart({ params, width, height }: PartProps<Params>) {
+  const size = fitOr(params.size, { width: width - 96 - 80 - 24, height: height - 96, text: params.items, splitter: "|", lineHeight: 1.25 + 32 / 72, max: 160 });
   const items = params.items.split("|").filter(Boolean);
   return (
     <div
@@ -72,7 +75,7 @@ function ChecklistPart({ params }: PartProps<Params>) {
       }}
     >
       {items.map((item, i) => (
-        <CheckItem key={i} text={item} i={i} stepMs={params.stepMs} accent={accentOf(params)} />
+        <CheckItem key={i} text={item} i={i} stepMs={params.stepMs} accent={accentOf(params)} size={size} />
       ))}
     </div>
   );
@@ -88,11 +91,13 @@ export const listCheck: PartDef<Params> = {
   from: "checklist",
   defaults: {
     items: "选题定方向|脚本写钩子|镜头列清单|剪辑控节奏",
+    size: 0,
     stepMs: 260,
     accent: "",
   },
   controls: [
     { key: "items", label: "条目(竖线分隔)", type: "text", required: true },
+    { key: "size", label: "字号(0 = 按框自适应)", type: "number", min: 0, max: 160, step: 2, hint: "0 表示按部件的框自动算;想固定就填具体像素" },
     { key: "stepMs", label: "行间隔(ms)", type: "number", min: 0, max: 2000, step: 20 },
     { key: "accent", label: "主色(留空用主题色)", type: "color" },
   ],

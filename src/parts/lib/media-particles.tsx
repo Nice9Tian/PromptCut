@@ -40,12 +40,12 @@ async function resolveOptions(params: Params): Promise<Record<string, any>> {
   return r.json();
 }
 
-function MediaParticlesPart({ params, width, height }: PartProps<Params>) {
+function MediaParticlesPart({ params, width, height, t }: PartProps<Params>) {
   const depsKey = [params.config, params.color, params.quantity, params.speed, params.size, params.links].join("\u0000");
 
   return (
     <div style={{ position: "absolute", inset: 0, width, height }}>
-      <ParticlesView resolve={() => resolveOptions(params)} seed={params.seed} depsKey={depsKey} />
+      <ParticlesView resolve={() => resolveOptions(params)} seed={params.seed} depsKey={depsKey} t={t} />
     </div>
   );
 }

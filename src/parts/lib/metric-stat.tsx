@@ -3,6 +3,7 @@ import { useEffect, useRef } from "react";
 import type { PartDef, PartProps } from "../types";
 import { easeExpoOut, accentOf } from "../../cards/native/hud";
 import "../../cards/native/hud.css";
+import { fitOr } from "../fit";
 
 /**
  * 数据证明。
@@ -19,6 +20,7 @@ interface Params {
   footZh: string;
   countMs: number;
   accent: string;
+  size: number;
 }
 
 function MetricStatPart({ params, width, height }: PartProps<Params>) {
@@ -40,6 +42,8 @@ function MetricStatPart({ params, width, height }: PartProps<Params>) {
     };
   }, [params.value, v, params.countMs]);
 
+  const size = fitOr(params.size, { width: width - 96, height: height - 80, text: (params.prefix || "") + String(params.value) + (params.suffix || ""), lines: 1.5, max: 400 });
+
   return (
     <div style={{ position: "absolute", inset: 0, display: "flex", justifyContent: "center", alignItems: "center", width, height }}>
       <div className="hud-glass flex flex-col items-center justify-center gap-2 px-12 py-10 w-full h-full">
@@ -49,19 +53,19 @@ function MetricStatPart({ params, width, height }: PartProps<Params>) {
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.6, ease: easeExpoOut }}
         >
-          <div className="text-xl tracking-[0.2em] font-mono uppercase font-bold">{params.kicker}</div>
-          <div className="text-lg tracking-widest">{params.kickerZh}</div>
+          <div className="tracking-[0.2em] font-mono uppercase font-bold" style={{ fontSize: size * 0.125 }}>{params.kicker}</div>
+          <div className="tracking-widest" style={{ fontSize: size * 0.1125 }}>{params.kickerZh}</div>
         </motion.div>
 
         <div className="flex items-baseline my-4">
-          {params.prefix && <span className="text-6xl font-bold mr-2 opacity-90">{params.prefix}</span>}
+          {params.prefix && <span className="font-bold mr-2 opacity-90" style={{ fontSize: size * 0.375 }}>{params.prefix}</span>}
           <span
-            className="text-[160px] font-bold leading-none"
-            style={{ color: accentOf(params), fontVariantNumeric: "tabular-nums" }}
+            className="font-bold leading-none"
+            style={{ color: accentOf(params), fontVariantNumeric: "tabular-nums", fontSize: size }}
           >
             <span ref={numRef}>0</span>
           </span>
-          {params.suffix && <span className="text-6xl font-bold ml-2 opacity-90">{params.suffix}</span>}
+          {params.suffix && <span className="font-bold ml-2 opacity-90" style={{ fontSize: size * 0.375 }}>{params.suffix}</span>}
         </div>
 
         <motion.div
@@ -70,8 +74,8 @@ function MetricStatPart({ params, width, height }: PartProps<Params>) {
           animate={{ opacity: 1 }}
           transition={{ duration: 0.8, delay: 0.4, ease: easeExpoOut }}
         >
-          <div className="text-sm tracking-widest uppercase">{params.footEn}</div>
-          <div className="text-base">{params.footZh}</div>
+          <div className="tracking-widest uppercase" style={{ fontSize: size * 0.0875 }}>{params.footEn}</div>
+          <div style={{ fontSize: size * 0.1 }}>{params.footZh}</div>
         </motion.div>
       </div>
     </div>
@@ -96,6 +100,7 @@ export const metricStat: PartDef<Params> = {
     footZh: "数据来自内部测试",
     countMs: 1200,
     accent: "",
+    size: 0,
   },
   controls: [
     { key: "kicker", label: "英文引导字", type: "text" },
@@ -107,6 +112,7 @@ export const metricStat: PartDef<Params> = {
     { key: "footZh", label: "中文注脚", type: "text" },
     { key: "countMs", label: "动画时长(ms)", type: "number", min: 100, max: 1800, step: 100 },
     { key: "accent", label: "主题色", type: "color" },
+    { key: "size", label: "字号(0 = 按框自适应)", type: "number", min: 0, max: 400, step: 2, hint: "0 表示按部件的框自动算;想固定就填具体像素" },
   ],
   defaultFrame: { x: 960, y: 540, w: 600, h: 460, anchor: [0.5, 0.5] },
   settleMs: (p: Params) => (p.countMs > 0 ? p.countMs : 1400),

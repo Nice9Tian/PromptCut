@@ -2,6 +2,7 @@ import { motion } from "motion/react";
 import type { PartDef, PartProps } from "../types";
 import { easeExpoOut, accentOf } from "../../cards/native/hud";
 import "../../cards/native/hud.css";
+import { fitOr } from "../fit";
 
 /**
  * A/B 对比面板。
@@ -18,6 +19,7 @@ interface Params {
   bSub: string;
   winner: string;
   accent: string;
+  size: number;
 }
 
 function GroupVersusPart({ params, width, height }: PartProps<Params>) {
@@ -28,6 +30,9 @@ function GroupVersusPart({ params, width, height }: PartProps<Params>) {
 
   const aColor = params.aAccent && params.aAccent.trim() ? params.aAccent : accentOf(params);
   const bColor = accentOf(params);
+
+  const longerTitle = (params.aTitle?.length || 0) > (params.bTitle?.length || 0) ? params.aTitle : params.bTitle;
+  const size = fitOr(params.size, { width: (width - 112) / 2 * 0.75, height: height - 128, text: longerTitle, lines: 2.2, max: 120 });
 
   return (
     <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", width, height }}>
@@ -43,17 +48,18 @@ function GroupVersusPart({ params, width, height }: PartProps<Params>) {
             borderWidth: isAWinner ? "2px" : "var(--pc-border-width, 1px)",
           }}
         >
-          <div className="text-xl tracking-widest opacity-80 uppercase font-mono">{params.aKicker}</div>
-          <div className="text-[72px] font-bold leading-tight my-2">{params.aTitle}</div>
-          <div className="text-2xl opacity-60">{params.aSub}</div>
+          <div className="tracking-widest opacity-80 uppercase font-mono" style={{ fontSize: size * 0.28 }}>{params.aKicker}</div>
+          <div className="font-bold leading-tight my-2" style={{ fontSize: size }}>{params.aTitle}</div>
+          <div className="opacity-60" style={{ fontSize: size * 0.33 }}>{params.aSub}</div>
         </motion.div>
 
         {/* VS Badge */}
         <motion.div
-          className="absolute left-1/2 top-1/2 w-28 h-28 rounded-full bg-black/60 border border-white/20 flex items-center justify-center text-4xl font-bold font-mono italic z-10 backdrop-blur-md"
+          className="absolute left-1/2 top-1/2 rounded-full bg-black/60 border border-white/20 flex items-center justify-center font-bold font-mono italic z-10 backdrop-blur-md"
           initial={{ opacity: 0, scale: 0, x: "-50%", y: "-50%" }}
           animate={{ opacity: 1, scale: 1, x: "-50%", y: "-50%" }}
           transition={{ duration: 0.6, delay: 0.3, type: "spring", bounce: 0.5 }}
+          style={{ width: size * 1.56, height: size * 1.56, fontSize: size * 0.5 }}
         >
           VS
         </motion.div>
@@ -69,9 +75,9 @@ function GroupVersusPart({ params, width, height }: PartProps<Params>) {
             borderWidth: isBWinner ? "2px" : "var(--pc-border-width, 1px)",
           }}
         >
-          <div className="text-xl tracking-widest opacity-80 uppercase font-mono">{params.bKicker}</div>
-          <div className="text-[72px] font-bold leading-tight my-2">{params.bTitle}</div>
-          <div className="text-2xl opacity-60">{params.bSub}</div>
+          <div className="tracking-widest opacity-80 uppercase font-mono" style={{ fontSize: size * 0.28 }}>{params.bKicker}</div>
+          <div className="font-bold leading-tight my-2" style={{ fontSize: size }}>{params.bTitle}</div>
+          <div className="opacity-60" style={{ fontSize: size * 0.33 }}>{params.bSub}</div>
         </motion.div>
       </div>
     </div>
@@ -96,6 +102,7 @@ export const groupVersus: PartDef<Params> = {
     bSub: "开箱即用，降本增效",
     winner: "b",
     accent: "",
+    size: 0,
   },
   controls: [
     { key: "aKicker", label: "A侧小字", type: "text" },
@@ -116,6 +123,7 @@ export const groupVersus: PartDef<Params> = {
       ],
     },
     { key: "accent", label: "主色/B侧颜色", type: "color" },
+    { key: "size", label: "字号(0 = 按框自适应)", type: "number", min: 0, max: 200, step: 2, hint: "0 表示按部件的框自动算;想固定就填具体像素" },
   ],
   defaultFrame: { x: 960, y: 540, w: 1200, h: 600, anchor: [0.5, 0.5] },
   settleMs: () => 900,

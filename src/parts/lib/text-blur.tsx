@@ -2,6 +2,7 @@ import { motion } from "motion/react";
 import type { PartDef, PartProps } from "../types";
 import { accentOf, easeExpoOut } from "../../cards/native/hud";
 import "../../cards/native/hud.css";
+import { fitOr } from "../fit";
 
 /**
  * 模糊浮现文字:逐块模糊浮现的文字，支持用星号高亮重点词。从 blur-text 卡片拆出。
@@ -9,6 +10,7 @@ import "../../cards/native/hud.css";
  */
 interface Params {
   text: string;
+  size: number;
   staggerMs: number;
   accent: string;
 }
@@ -27,7 +29,8 @@ function parseText(chunk: string, accent: string) {
   });
 }
 
-function BlurTextPart({ params }: PartProps<Params>) {
+function BlurTextPart({ params, width, height }: PartProps<Params>) {
+  const size = fitOr(params.size, { width: width - 96, height: height - 96, text: params.text.replace(/[|*]/g, ""), max: 200 });
   const chunks = params.text.split("|");
   return (
     <div
@@ -41,7 +44,7 @@ function BlurTextPart({ params }: PartProps<Params>) {
         boxSizing: "border-box",
       }}
     >
-      <div className="text-[80px] font-bold leading-tight flex flex-wrap gap-x-4 justify-center">
+      <div className="font-bold leading-tight flex flex-wrap gap-x-4 justify-center" style={{ fontSize: size }}>
         {chunks.map((chunk, i) => (
           <motion.div
             key={i}
@@ -71,11 +74,13 @@ export const textBlur: PartDef<Params> = {
   from: "blur-text",
   defaults: {
     text: "走心的句子|从虚焦里|*慢慢浮现*",
+    size: 0,
     staggerMs: 220,
     accent: "",
   },
   controls: [
     { key: "text", label: "文字", type: "text", required: true },
+    { key: "size", label: "字号(0 = 按框自适应)", type: "number", min: 0, max: 200, step: 2, hint: "0 表示按部件的框自动算;想固定就填具体像素" },
     { key: "staggerMs", label: "字间距(ms)", type: "number", min: 0, max: 2000, step: 20 },
     { key: "accent", label: "主色(留空用主题色)", type: "color" },
   ],

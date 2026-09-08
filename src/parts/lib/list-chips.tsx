@@ -1,6 +1,7 @@
 import { motion } from "motion/react";
 import type { PartDef, PartProps } from "../types";
 import { easeExpoOut } from "../../cards/native/hud";
+import { fitOr } from "../fit";
 
 /**
  * 实体名牌:从 entity-chips 卡片拆出。
@@ -8,11 +9,15 @@ import { easeExpoOut } from "../../cards/native/hud";
  */
 interface Params {
   chips: string;
+  size: number;
   stepMs: number;
 }
 
-function ChipsPart({ params }: PartProps<Params>) {
+function ChipsPart({ params, width, height }: PartProps<Params>) {
   const chipLines = params.chips.split("\n").filter(Boolean);
+  const fitText = chipLines.map((l) => l.split("|").slice(1).join("")).join("|");
+  const size = fitOr(params.size, { width, height, text: fitText, splitter: "|", lineHeight: 2 + 16 / 28, max: 120 });
+
   return (
     <div
       style={{
@@ -32,21 +37,25 @@ function ChipsPart({ params }: PartProps<Params>) {
         return (
           <motion.div
             key={i}
-            className="h-[56px] rounded-[28px] px-8 flex items-center gap-4 shadow-lg overflow-hidden whitespace-nowrap"
+            className="shadow-lg overflow-hidden whitespace-nowrap flex items-center"
             style={{
               backgroundColor: isDark ? "#111" : "#fff",
               color: isDark ? "#fff" : "#111",
               width: "fit-content",
+              height: size * 2,
+              borderRadius: size,
+              padding: `0 ${size * (32 / 28)}px`,
+              gap: size * (16 / 28),
             }}
             initial={{ opacity: 0, x: -60 }}
             animate={{ opacity: 1, x: 0 }}
             transition={{ delay: (i * params.stepMs) / 1000, duration: 0.6, ease: easeExpoOut }}
           >
-            <div className="text-[28px] font-bold">{name}</div>
+            <div className="font-bold" style={{ fontSize: size }}>{name}</div>
             {title && (
               <>
-                <div className="w-[2px] h-[24px] bg-current opacity-20" />
-                <div className="text-[24px] opacity-80">{title}</div>
+                <div className="w-[2px] bg-current opacity-20" style={{ height: size * (24 / 28) }} />
+                <div className="opacity-80" style={{ fontSize: size * (24 / 28) }}>{title}</div>
               </>
             )}
           </motion.div>
@@ -66,10 +75,12 @@ export const listChips: PartDef<Params> = {
   from: "entity-chips",
   defaults: {
     chips: "dark|张三|创始人\nlight|李四|技术总监",
+    size: 0,
     stepMs: 150,
   },
   controls: [
     { key: "chips", label: "名牌(牌面|名|身份,换行)", type: "text", required: true },
+    { key: "size", label: "字号(0 = 按框自适应)", type: "number", min: 0, max: 120, step: 2, hint: "0 表示按部件的框自动算;想固定就填具体像素" },
     { key: "stepMs", label: "间隔(ms)", type: "number", min: 0, max: 2000, step: 10 },
   ],
   defaultFrame: { x: 160, y: 360, w: 600, h: 360 },

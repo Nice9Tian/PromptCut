@@ -1,6 +1,7 @@
 import { motion } from "motion/react";
 import type { PartDef, PartProps } from "../types";
 import { easeExpoOut, accentOf } from "../../cards/native/hud";
+import { fitOr } from "../fit";
 
 /**
  * 界面标注。
@@ -11,6 +12,7 @@ interface Params {
   label: string;
   side: string;
   accent: string;
+  size: number;
 }
 
 function DecorCalloutPart({ params, width, height }: PartProps<Params>) {
@@ -31,6 +33,8 @@ function DecorCalloutPart({ params, width, height }: PartProps<Params>) {
 
   const points = `${startX},${startY} ${midX},${startY} ${endX},${endY}`;
   const pathLen = lineLength + Math.abs(lineDrop);
+
+  const size = fitOr(params.size, { width: Math.max(200, width), height: Math.max(48, height * 0.4), text: params.label, lines: 1, max: 80 });
 
   return (
     <div style={{ position: "absolute", inset: 0, overflow: "visible" }}>
@@ -63,10 +67,11 @@ function DecorCalloutPart({ params, width, height }: PartProps<Params>) {
 
         {/* Label */}
         <motion.div
-          className="absolute px-8 py-3 bg-black text-white rounded-full font-bold text-3xl whitespace-nowrap"
+          className="absolute px-8 py-3 bg-black text-white rounded-full font-bold whitespace-nowrap"
           style={{
             left: isLeft ? -lineLength - 10 : ringW + lineLength + 10,
             top: endY,
+            fontSize: size,
           }}
           initial={{ opacity: 0, x: isLeft ? "-100%" : 0, y: "-50%" }}
           animate={{ opacity: 1, x: isLeft ? "-100%" : 0, y: "-50%" }}
@@ -91,6 +96,7 @@ export const decorCallout: PartDef<Params> = {
     label: "核心功能入口",
     side: "right",
     accent: "",
+    size: 0,
   },
   controls: [
     { key: "label", label: "标签文字", type: "text" },
@@ -104,6 +110,7 @@ export const decorCallout: PartDef<Params> = {
       ],
     },
     { key: "accent", label: "主题色", type: "color" },
+    { key: "size", label: "字号(0 = 按框自适应)", type: "number", min: 0, max: 120, step: 2, hint: "0 表示按部件的框自动算;想固定就填具体像素" },
   ],
   defaultFrame: { x: 960, y: 540, w: 240, h: 120, anchor: [0.5, 0.5] },
   settleMs: () => 1300,

@@ -2,6 +2,7 @@ import { motion, useMotionValue, animate } from "motion/react";
 import { useEffect, useId, useRef } from "react";
 import type { PartDef, PartProps } from "../types";
 import { easeExpoOut, accentOf } from "../../cards/native/hud";
+import { fitOr } from "../fit";
 
 /**
  * 增长折线图:一条动态画出的平滑渐变折线,并在最高点标注数字。
@@ -13,6 +14,7 @@ interface Params {
   unit: string;
   drawMs: number;
   accent: string;
+  size: number;
 }
 
 function NumberTicker({ value, duration }: { value: number; duration: number }) {
@@ -74,6 +76,8 @@ function ChartGrowthPart({ params, width, height }: PartProps<Params>) {
   const range = maxVal - minVal || 1;
   const maxIdx = data.findIndex(d => d.value === maxVal);
 
+  const size = fitOr(params.size, { width: innerWidth / data.length, height: height * 0.18, text: String(maxVal) + params.unit, lines: 1, max: 120 });
+
   const pts: [number, number][] = data.map((d, i) => {
     const x = paddingX + (i / Math.max(1, data.length - 1)) * innerWidth;
     const y = paddingY + innerHeight - ((d.value - minVal) / range) * innerHeight;
@@ -129,8 +133,8 @@ function ChartGrowthPart({ params, width, height }: PartProps<Params>) {
       {pts.map((pt, i) => (
         <div
           key={i}
-          className="absolute text-xl opacity-70 text-center transform -translate-x-1/2 mt-2"
-          style={{ left: pt[0], top: paddingY + innerHeight }}
+          className="absolute opacity-70 text-center transform -translate-x-1/2 mt-2"
+          style={{ left: pt[0], top: paddingY + innerHeight, fontSize: size * 0.42 }}
         >
           {data[i].label}
         </div>
@@ -145,9 +149,9 @@ function ChartGrowthPart({ params, width, height }: PartProps<Params>) {
           transition={{ duration: 0.4, delay: drawSec * 0.85, ease: easeExpoOut }}
         >
           <div className="w-4 h-4 rounded-full" style={{ backgroundColor: accent, border: "3px solid white" }}></div>
-          <div className="text-5xl font-bold font-mono whitespace-nowrap" style={{ color: accent, fontVariantNumeric: "tabular-nums" }}>
+          <div className="font-bold font-mono whitespace-nowrap" style={{ color: accent, fontVariantNumeric: "tabular-nums", fontSize: size }}>
             <NumberTicker value={maxVal} duration={0.6} />
-            {params.unit && <span className="text-xl ml-1 text-white opacity-80">{params.unit}</span>}
+            {params.unit && <span className="ml-1 text-white opacity-80" style={{ fontSize: size * 0.42 }}>{params.unit}</span>}
           </div>
         </motion.div>
       )}
@@ -168,15 +172,18 @@ export const chartGrowth: PartDef<Params> = {
     unit: "W",
     drawMs: 1000,
     accent: "",
+    size: 0,
   },
   controls: [
     { key: "points", label: "数据点(标签 数值|...)", type: "text" },
     { key: "unit", label: "单位", type: "text" },
     { key: "drawMs", label: "绘制时长(ms)", type: "number", min: 500, max: 2000, step: 100 },
     { key: "accent", label: "颜色", type: "color" },
+    { key: "size", label: "字号(0 = 按框自适应)", type: "number", min: 0, max: 120, step: 2, hint: "0 表示按部件的框自动算;想固定就填具体像素" },
   ],
   defaultFrame: { x: 960, y: 540, w: 1100, h: 420, anchor: [0.5, 0.5] },
   settleMs: (p) => (p.drawMs > 0 ? p.drawMs : 1000) * 0.85 + 400,
   after: "hold",
   Component: ChartGrowthPart,
 };
+

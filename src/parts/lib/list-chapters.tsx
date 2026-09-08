@@ -3,6 +3,7 @@ import { useId } from "react";
 import type { PartDef, PartProps } from "../types";
 import { easeExpoOut, accentOf } from "../../cards/native/hud";
 import "../../cards/native/hud.css";
+import { fitOr } from "../fit";
 
 /**
  * 章节导航条。
@@ -11,6 +12,7 @@ import "../../cards/native/hud.css";
  */
 interface Params {
   chapters: string;
+  size: number;
   showProgress: string;
   progMode: string;
   progAccent: string;
@@ -19,7 +21,7 @@ interface Params {
   accent: string;
 }
 
-function ListChaptersPart({ params, t, width }: PartProps<Params>) {
+function ListChaptersPart({ params, t, width, height }: PartProps<Params>) {
   const layoutId = useId();
   const rawChapters = params.chapters.split("|").filter(Boolean);
   const chaps = rawChapters.map((raw: string) => {
@@ -27,6 +29,15 @@ function ListChaptersPart({ params, t, width }: PartProps<Params>) {
     const name = raw.substring(0, lastSpace).trim();
     const start = parseFloat(raw.substring(lastSpace + 1));
     return { name, start };
+  });
+
+  const n = Math.max(1, chaps.length);
+  const size = fitOr(params.size, {
+    width: width - 64 - (n - 1) * 32 - n * 64,
+    height,
+    text: chaps.map((c) => c.name).join(""),
+    lineHeight: 1.25 + 32 / 48,
+    max: 120,
   });
 
   let curIdx = 0;
@@ -62,7 +73,7 @@ function ListChaptersPart({ params, t, width }: PartProps<Params>) {
           else if (isPast) color = "var(--pc-fg-muted)";
 
           return (
-            <div key={i} className="relative px-8 py-4 rounded-full text-[48px] font-bold" style={{ zIndex: 1 }}>
+            <div key={i} className="relative px-8 py-4 rounded-full font-bold" style={{ zIndex: 1, fontSize: size }}>
               {isCur && (
                 <motion.div
                   layoutId={`chapter-bg-${layoutId}`}
@@ -118,6 +129,7 @@ export const listChapters: PartDef<Params> = {
   from: "chapter-bar",
   defaults: {
     chapters: "选题 0|脚本 2|剪辑 4",
+    size: 0,
     showProgress: "true",
     progMode: "fill",
     progAccent: "",
@@ -127,6 +139,7 @@ export const listChapters: PartDef<Params> = {
   },
   controls: [
     { key: "chapters", label: "章节(名称 秒)", type: "text" },
+    { key: "size", label: "字号(0 = 按框自适应)", type: "number", min: 0, max: 120, step: 2, hint: "0 表示按部件的框自动算;想固定就填具体像素" },
     { key: "showProgress", label: "显示进度", type: "select", options: [{ value: "true", label: "是" }, { value: "false", label: "否" }] },
     { key: "progMode", label: "进度模式", type: "select", options: [{ value: "fill", label: "填充" }, { value: "line", label: "底线" }] },
     { key: "progAccent", label: "进度颜色", type: "color" },

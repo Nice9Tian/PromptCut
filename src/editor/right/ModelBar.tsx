@@ -8,7 +8,9 @@ import {
   readChoice,
   writeChoice,
   normalizeModel,
+  compatPolicy,
   type EffortLevel,
+  type SchemaCompat,
 } from "../../ai/modelOptions";
 import "./ModelBar.css";
 
@@ -28,7 +30,7 @@ export function ModelBar(props: {
   disabled?: boolean;
 }): JSX.Element | null {
   const { provider, config, disabled } = props;
-  const [choice, setChoice] = useState(() => ({ model: "", effort: "" as EffortLevel, fast: false }));
+  const [choice, setChoice] = useState(() => ({ model: "", effort: "" as EffortLevel, fast: false, schemaCompat: "auto" as SchemaCompat }));
 
   // 换 provider 就把那一家自己的选择读出来
   useEffect(() => {
@@ -49,6 +51,12 @@ export function ModelBar(props: {
     writeChoice(provider, patch);
     setChoice((prev) => ({ ...prev, ...patch }));
   };
+
+  // 参数兼容:Claude / GPT 锁关、Gemini 锁开,别家让用户点
+  const compat = compatPolicy(provider, model, config?.api?.vendor, choice.schemaCompat);
+  const compatHint = compat.locked
+    ? compat.reason
+    : `参数兼容模式(${compat.on ? "开" : "关"}):把工具参数的 schema 按 Gemini 那套最窄子集清洗。${compat.reason}`;
 
   const fastHint = cap.fast
     ? "加速：出字更快，不换模型"
@@ -100,6 +108,18 @@ export function ModelBar(props: {
         onClick={() => update({ fast: !choice.fast })}
       >
         Fast
+      </button>
+
+      <button
+        type="button"
+        data-pc="schema-compat"
+        className={`ai-modelbar-fast${compat.on ? " is-on" : ""}`}
+        disabled={disabled || compat.locked}
+        title={compatHint}
+        aria-pressed={compat.on}
+        onClick={() => update({ schemaCompat: compat.on ? "off" : "on" })}
+      >
+        参数兼容
       </button>
     </div>
   );
