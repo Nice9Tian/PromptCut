@@ -114,7 +114,7 @@ export function useAiChat(opts?: { mock?: boolean; tabId?: string; getConversati
         { id: "agy", label: "Antigravity", available: true, version: "1.1.27", auth: { loggedIn: true } },
         { id: "api", label: "API 直连", available: false, note: "还没填 API Key", auth: { loggedIn: false, detail: "还没填 API Key" } }
       ]);
-      setConfig({ version: 1, defaultProvider: null, toolProtocol: true, api: { vendor: "anthropic", baseUrl: "", model: "gpt-4o|gpt-4o-mini", maxTokens: 4096, apiKey: { set: false, last4: "" }, source: "" }, keys: { custom: { set: false, last4: "" }, router: { set: false, last4: "" } }, cliModels: { claude: "opus|sonnet|haiku", codex: "", agy: "gemini-3.1-pro-high|gemini-3.8-flash-low" } });
+      setConfig({ version: 1, defaultProvider: null, toolProtocol: true, api: { vendor: "anthropic", baseUrl: "", model: "gpt-4o|gpt-4o-mini", maxTokens: 4096, apiKey: { set: false, last4: "" }, source: "" }, keys: { custom: { set: false, last4: "" }, router: { set: false, last4: "" } }, cliModels: { claude: "opus|sonnet|haiku", codex: "gpt-5.6-terra|gpt-5.6-sol", agy: "gemini-3.1-pro-high|gemini-3.8-flash-low" } });
       setProvider("claude");
       // ?nosetup=1 给自动化脚本用:不弹首启设置对话框
       if (tabId === MAIN_TAB && localStorage.getItem("aiSetupDone") === null && !new URLSearchParams(location.search).has("nosetup")) {

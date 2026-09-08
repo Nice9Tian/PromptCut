@@ -35,7 +35,7 @@ export const CAPABILITIES: Record<AiProvider, ProviderCapability> = {
     // codex 没有 --effort,只能用 -c model_reasoning_effort= 覆盖配置项
     efforts: ["", "minimal", "low", "medium", "high", "xhigh"],
     fast: false,
-    suggestedModels: "",
+    suggestedModels: "gpt-5.6-terra|gpt-5.6-sol",
     modelsHint: "填 codex 支持的模型名，多个用 | 分开",
   },
   agy: {
