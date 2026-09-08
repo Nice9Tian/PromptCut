@@ -634,7 +634,9 @@ export default function vitePluginAi(): Plugin {
             // 额度熔断:先看这一路的用量,超线就不起 CLI 了,直接把原因告诉用户
             const { guard: quotaGuard, mod: quotaMod } = await getQuotaGuard();
             try {
-              await quotaGuard.gate(provider, cfg.quota);
+              // 把模型一起递进去:claude 的 /usage 里「本周(Fable)」那种窗口是模型专属的,
+              // 不跑那个模型就不该拿它来拦(见 quota.mjs 的 decidingWindows)
+              await quotaGuard.gate(provider, cfg.quota, model);
             } catch (e: any) {
               if (e instanceof quotaMod.QuotaExceededError) {
                 res.write(`data: ${JSON.stringify({ type: 'error', message: e.message, quota: e.quota })}\n\n`);
@@ -712,7 +714,7 @@ export default function vitePluginAi(): Plugin {
             activeRuns.delete(runId);
             clearInterval(keepAlive);
             // 记账:这一轮新增的上下文 = 发出去的提示词 + 收回来的回复。到线就后台重查,超线掐同一路的其他对话
-            const noted = quotaGuard.note(provider, Buffer.byteLength(finalPrompt, 'utf8') + replyBytes, cfg.quota);
+            const noted = quotaGuard.note(provider, Buffer.byteLength(finalPrompt, 'utf8') + replyBytes, cfg.quota, model);
             if (noted) noted.then((v: any) => { if (v?.blocked) failProviderRuns(provider, v.message); }).catch(() => {});
             if (!hasDone) {
                res.write(`data: ${JSON.stringify({ type: 'done' })}\n\n`);
@@ -741,7 +743,8 @@ export default function vitePluginAi(): Plugin {
           const { publicConfig } = await import(new URL('./ai-config.mjs', import.meta.url).href);
           const cfg = mod.normalizeQuotaConfig(publicConfig().quota);
           const quota = await guard.get(provider, { refresh: url.searchParams.get('refresh') === '1' });
-          const verdict = guard.verdict(provider, cfg);
+          // 面板问的时候也要带上模型,不然显示的「已熔断」和真正发起对话时的判定对不上
+          const verdict = guard.verdict(provider, cfg, url.searchParams.get('model') || '');
           sendJson(res, 200, { ok: true, quota, config: cfg, blocked: !!verdict.blocked, message: verdict.message ?? null, bytesSince: guard.bytesSince(provider) });
         } catch (e: any) {
           sendJson(res, 500, { ok: false, error: String(e) });

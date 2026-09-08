@@ -110,9 +110,47 @@ function formatReset(ms) {
   }
 }
 
-/** 把窗口列表收成一份结果:最高的那个窗口决定拦不拦 */
+/**
+ * 哪些窗口该参与「拦不拦」的判定 —— **按当前跑的模型筛**。
+ *
+ * claude 的 /usage 会同时报好几个窗口:
+ *   Current session            当前 5 小时,跟模型无关
+ *   Current week (all models)  本周全部模型合计
+ *   Current week (Fable)       **只有 Fable 这一个模型的**本周额度
+ *
+ * 原来是拿所有窗口里最高的那个去比阈值,于是 Fable 那一栏一涨,跑 opus / sonnet 的对话
+ * 也跟着被熔断 —— 明明那条路的额度还剩很多。用户没选 Fable 的时候,Fable 用了多少
+ * 跟他这次对话没有任何关系。
+ *
+ * 规则:`session` 和 `week`(全部模型)任何时候都算;`week-<模型名>` 只有正在跑那个模型时才算。
+ * 模型名匹配用「包含」,因为界面上填的可能是别名 `fable`,也可能是全名 `claude-fable-5-1`。
+ * 没指定模型(走驱动默认)时不计入任何模型专属窗口 —— 这时候按全部模型那一栏判,
+ * 宁可放过也不误伤。
+ */
+export function decidingWindows(windows, model) {
+  const m = String(model || '').toLowerCase();
+  return (windows || []).filter((w) => {
+    const id = String(w?.id || '');
+    if (!id.startsWith('week-')) return true;
+    const name = id.slice(5).trim();
+    return !!name && m.includes(name);
+  });
+}
+
+/** 一组窗口里用量最高的那个 */
+function worstOf(windows) {
+  return (windows || []).reduce((a, w) => (!a || w.usedPercent > a.usedPercent ? w : a), null);
+}
+
+/**
+ * 把窗口列表收成一份结果。
+ *
+ * `maxUsedPercent` / `worst` 是**所有窗口**里最高的那个,给界面显示用 ——
+ * 用户想看到自己哪一栏快满了,哪怕这次不跑那个模型。
+ * 拦不拦是另一回事,走 decidingWindows,见 verdict()。
+ */
 export function summarize(provider, windows, extra = {}) {
-  const worst = windows.reduce((a, w) => (!a || w.usedPercent > a.usedPercent ? w : a), null);
+  const worst = worstOf(windows);
   return {
     provider,
     label: PROVIDER_LABEL[provider] || provider,
@@ -219,8 +257,9 @@ export function normalizeQuotaConfig(raw) {
   return cfg;
 }
 
-export function exceededMessage(info, thresholdPercent) {
-  const w = info.worst;
+/** `worst` 传的是**参与判定的那些窗口**里最高的那个,不一定等于 info.worst(那是所有窗口的最高) */
+export function exceededMessage(info, thresholdPercent, worst = info.worst) {
+  const w = worst;
   const reset = w?.resetsText ? `,${w.label}窗口 ${w.resetsText} 重置` : '';
   return `${info.label} 额度已用 ${w?.usedPercent ?? '?'}%(${w?.label ?? '窗口'}),超过阈值 ${thresholdPercent}%,已中断${reset}。要继续可以在 AI 设置里调高阈值或关掉熔断。`;
 }
@@ -255,23 +294,25 @@ export function createQuotaGuard(deps = {}) {
     return p;
   }
 
-  function verdict(provider, cfg) {
+  /** model:这次对话跑的模型。决定 week-<模型> 那类窗口算不算,见 decidingWindows */
+  function verdict(provider, cfg, model) {
     const info = results.get(provider);
     if (!info || !info.ok || !cfg.enabled) return { blocked: false, info };
-    if (typeof info.maxUsedPercent === 'number' && info.maxUsedPercent >= cfg.thresholdPercent) {
-      return { blocked: true, info, message: exceededMessage(info, cfg.thresholdPercent) };
+    const worst = worstOf(decidingWindows(info.windows, model));
+    if (worst && typeof worst.usedPercent === 'number' && worst.usedPercent >= cfg.thresholdPercent) {
+      return { blocked: true, info, worst, message: exceededMessage(info, cfg.thresholdPercent, worst) };
     }
-    return { blocked: false, info };
+    return { blocked: false, info, worst };
   }
 
   return {
-    /** 对话开始前:没查过或太旧就查,超线就抛 QuotaExceededError */
-    async gate(provider, rawCfg) {
+    /** 对话开始前:没查过或太旧就查,超线就抛 QuotaExceededError。model 决定模型专属窗口算不算 */
+    async gate(provider, rawCfg, model) {
       const cfg = normalizeQuotaConfig(rawCfg);
       if (!cfg.enabled || !QUOTA_PROVIDERS.includes(provider)) return null;
       const cached = results.get(provider);
       if (!cached || now() - cached.checkedAt > staleMs) await refresh(provider);
-      const v = verdict(provider, cfg);
+      const v = verdict(provider, cfg, model);
       if (v.blocked) throw new QuotaExceededError(v.message, v.info);
       return v.info;
     },
@@ -279,13 +320,13 @@ export function createQuotaGuard(deps = {}) {
      * 对话结束后记账:新增了多少字节。累计超过 checkEveryBytes 就后台重查,
      * 返回 Promise<verdict | null>(null = 这次没触发重查),调用方拿到 blocked 就去掐正在跑的对话。
      */
-    note(provider, n, rawCfg) {
+    note(provider, n, rawCfg, model) {
       const cfg = normalizeQuotaConfig(rawCfg);
       if (!cfg.enabled || !QUOTA_PROVIDERS.includes(provider)) return null;
       const total = (bytes.get(provider) ?? 0) + Math.max(0, n | 0);
       bytes.set(provider, total);
       if (total < cfg.checkEveryBytes) return null;
-      return refresh(provider).then(() => verdict(provider, cfg));
+      return refresh(provider).then(() => verdict(provider, cfg, model));
     },
     /** 当前缓存(给界面显示);refresh=true 强制重查 */
     async get(provider, { refresh: force = false } = {}) {
@@ -294,6 +335,6 @@ export function createQuotaGuard(deps = {}) {
       return results.get(provider);
     },
     bytesSince(provider) { return bytes.get(provider) ?? 0; },
-    verdict(provider, rawCfg) { return verdict(provider, normalizeQuotaConfig(rawCfg)); },
+    verdict(provider, rawCfg, model) { return verdict(provider, normalizeQuotaConfig(rawCfg), model); },
   };
 }

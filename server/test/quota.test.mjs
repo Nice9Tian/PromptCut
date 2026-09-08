@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-const { parseClaudeUsage, parseCodexRateLimits, summarize, createQuotaGuard, normalizeQuotaConfig, QuotaExceededError } = await import('../runners/quota.mjs');
+const { parseClaudeUsage, parseCodexRateLimits, summarize, createQuotaGuard, normalizeQuotaConfig, QuotaExceededError, decidingWindows } = await import('../runners/quota.mjs');
 
 const CLAUDE_TEXT = `You are currently using your subscription to power your Claude Code usage
 
@@ -118,4 +118,66 @@ test('并发 refresh 只查一次', async () => {
   const g = createQuotaGuard({ probe });
   await Promise.all([g.get('codex', { refresh: true }), g.get('codex', { refresh: true }), g.gate('codex', {})]);
   assert.equal(calls.length, 1);
+});
+
+/*
+ * 模型专属窗口不该拦别的模型。
+ *
+ * claude 的 /usage 同时报「本周(全部模型)」和「本周(Fable)」。原来是拿所有窗口里最高的
+ * 那个比阈值,于是 Fable 一栏涨到 75%,跑 opus 的对话也被熔断 —— 而那条路的额度还剩一半。
+ */
+test('decidingWindows:session 和「全部模型」永远算;week-<模型> 只在跑那个模型时算', () => {
+  const w = parseClaudeUsage(CLAUDE_TEXT);
+  const ids = (model) => decidingWindows(w, model).map((x) => x.id);
+
+  assert.deepEqual(ids(''), ['session', 'week'], '没指定模型:不看任何模型专属窗口');
+  assert.deepEqual(ids('opus'), ['session', 'week'], '跑 opus:Fable 那一栏与他无关');
+  assert.deepEqual(ids('sonnet'), ['session', 'week']);
+  assert.deepEqual(ids('fable'), ['session', 'week', 'week-fable'], '别名也要认出来');
+  assert.deepEqual(ids('claude-fable-5-1'), ['session', 'week', 'week-fable'], '全名也要认出来');
+  assert.deepEqual(ids('FABLE'), ['session', 'week', 'week-fable'], '大小写不敏感');
+  assert.deepEqual(decidingWindows(null, 'fable'), []);
+});
+
+test('summarize 仍然报所有窗口里最高的那个 —— 那是给界面看的,不是拿来拦的', () => {
+  const s = summarize('claude', parseClaudeUsage(CLAUDE_TEXT));
+  assert.equal(s.maxUsedPercent, 75);
+  assert.equal(s.worst.id, 'week-fable');
+});
+
+test('gate:Fable 到 75% 时,跑 opus 不拦、跑 fable 才拦', async () => {
+  const probe = async (provider) => summarize(provider, parseClaudeUsage(CLAUDE_TEXT));
+  const cfg = { thresholdPercent: 70 };
+
+  const a = createQuotaGuard({ probe });
+  const info = await a.gate('claude', cfg, 'opus');
+  assert.ok(info, '跑 opus 应该放行:全部模型那一栏才 51%,没到 70%');
+
+  const b = createQuotaGuard({ probe });
+  await assert.rejects(() => b.gate('claude', cfg, 'fable'), (e) => {
+    assert.ok(e instanceof QuotaExceededError);
+    assert.match(e.message, /75%/);
+    assert.match(e.message, /本周\(Fable\)/, '要指名道姓是哪个窗口把它拦下来的');
+    return true;
+  });
+
+  const c = createQuotaGuard({ probe });
+  assert.ok(await c.gate('claude', cfg, ''), '没指定模型也放行');
+});
+
+test('gate:「全部模型」那一栏超线时,跑什么模型都拦', async () => {
+  const probe = async (provider) => summarize(provider, parseClaudeUsage(CLAUDE_TEXT));
+  const g = createQuotaGuard({ probe });
+  await assert.rejects(() => g.gate('claude', { thresholdPercent: 50 }, 'opus'), (e) => {
+    assert.match(e.message, /51%/);
+    assert.match(e.message, /全部模型/);
+    return true;
+  });
+});
+
+test('verdict:同一份缓存,换个模型问就得到不同结论', async () => {
+  const g = createQuotaGuard({ probe: async (p) => summarize(p, parseClaudeUsage(CLAUDE_TEXT)) });
+  await g.get('claude');
+  assert.equal(g.verdict('claude', { thresholdPercent: 70 }, 'opus').blocked, false);
+  assert.equal(g.verdict('claude', { thresholdPercent: 70 }, 'fable').blocked, true);
 });
