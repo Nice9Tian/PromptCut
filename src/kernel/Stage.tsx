@@ -75,7 +75,7 @@ export function Stage({ timeline, t, playToken, speed = 1, proxy }: { timeline: 
             : undefined
         }
       >
-        {active.map((clip) => {
+        {active.map((clip, i) => {
           const def = getCard(clip.cardId);
           if (!def) return null;
           const C = def.Component;
@@ -100,6 +100,23 @@ export function Stage({ timeline, t, playToken, speed = 1, proxy }: { timeline: 
                 ...frameCss(clip.frame, timeline, m ? { dx: m.dx, dy: m.dy } : undefined),
                 ...(op < 1 ? { opacity: op } : null),
                 ...(filter ? { filter } : null),
+                /*
+                 * 层序写死在这里,不靠 DOM 顺序。
+                 *
+                 * `active` 已经是画家顺序(flattenOverlay 倒着遍历 tracks,所以最后一个 =
+                 * 时间轴最上面那条序列 = 最上层),但光有 DOM 顺序不够:卡片内部只要有人写了
+                 * z-index,而外层又不是层叠上下文,那个 z-index 就会跑到舞台这一级去比,
+                 * 越过后面的兄弟。实测 focus-card 内部有 `zIndex: 100`(focus-card.tsx:40),
+                 * 于是把三维卡放到最上面那条序列,画面中心仍然是 focus-card ——
+                 * Agent 按「靠上的序列盖住靠下的」去排层,结果和承诺相反。
+                 *
+                 * 所以两件事一起做:显式 z-index 定序,`isolation: isolate` 造一个层叠上下文
+                 * 把卡片内部的 z-index 关在里面。这就是设计文档里「每个 A/B 对象带一个遮蔽标识、
+                 * 0 在最前面」那条 —— 遮蔽标识就是序列顺序,这里把它翻译成 CSS 的方向
+                 * (CSS 是数字越大越靠前,和「0 最前」正好相反,所以只能写死在一处)。
+                 */
+                zIndex: i + 1,
+                isolation: "isolate",
               }}
             >
               {/*
