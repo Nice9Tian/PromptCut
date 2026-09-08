@@ -4,8 +4,15 @@ const canonical = value => JSON.stringify(value, (_key, v) => v && typeof v === 
 const checkAbort = signal => { if (signal?.aborted) throw Object.assign(new Error('已停止'), { name: 'AbortError' }); };
 
 export class Agent {
-  constructor({ provider, system, tools, maxIterations = 24, onEvent, signal, history }) {
-    Object.assign(this, { provider, system, tools, maxIterations, signal });
+  /**
+   * maxIterations 允许是 Infinity(深度自主 + 自主轮次填 0)。这时循环没有终点,
+   * 停下来只靠三样:用户点停止(signal)、模型自己不再调工具、重复操作检测。
+   *
+   * deepAuto 为真时**不给模型任何关于轮次的话**:到顶收尾那条消息里不写轮数,
+   * 免得模型看见「第几轮 / 上限多少」就开始替自己算预算、提前草草收工。
+   */
+  constructor({ provider, system, tools, maxIterations = 24, deepAuto = false, onEvent, signal, history }) {
+    Object.assign(this, { provider, system, tools, maxIterations, deepAuto, signal });
     this.onEvent = onEvent || (() => {});
     this.history = history || new MessageHistory({ onEvent: this.onEvent });
   }
@@ -26,7 +33,9 @@ export class Agent {
       lastRound = round;
       const summarizing = !!summaryReason;
       if (summarizing) this.history.append({ role: 'user', content: [{ type: 'text', text: `执行已暂停：${summaryReason}。不要再调用工具，只用中文说明已完成的部分、未完成的部分、阻碍和下一步。不得把未完成任务说成成功。` }] });
-      progress(round, summarizing ? 'summarizing' : 'requesting', summarizing ? '正在整理执行结果和未完成事项…' : `第 ${round}/${this.maxIterations} 轮：正在等待模型响应…`);
+      // 进度这一行只给屏幕看,不进模型上下文。不限轮次时不写分母,省得出现「第 3/Infinity 轮」
+      const roundText = Number.isFinite(this.maxIterations) ? `第 ${round}/${this.maxIterations} 轮` : `第 ${round} 轮`;
+      progress(round, summarizing ? 'summarizing' : 'requesting', summarizing ? '正在整理执行结果和未完成事项…' : `${roundText}：正在等待模型响应…`);
       this.onEvent({ type: 'diagnostic', stage: 'request', data: { round, summaryOnly: summarizing, messages: this.history.get().length, tools: summarizing ? 0 : this.tools.length } });
       const content = [], calls = [];
       let text = '', current = '';
@@ -134,7 +143,9 @@ export class Agent {
       if (repeats >= 3) {
         outcome = 'stalled'; summaryReason = '连续出现重复操作且结果没有变化，已停止无效循环';
       } else if (round === this.maxIterations) {
-        outcome = 'round_limit'; summaryReason = `已达到 ${this.maxIterations} 轮模型往返上限`;
+        // 深度自主下不报轮数:这句会作为 user 消息进模型上下文(见循环开头的 summarizing 分支)
+        outcome = 'round_limit';
+        summaryReason = this.deepAuto ? '本次运行已到上限' : `已达到 ${this.maxIterations} 轮模型往返上限`;
       }
       this.history.pruneImages();
       this.history.truncate();

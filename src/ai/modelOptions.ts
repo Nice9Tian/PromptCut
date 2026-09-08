@@ -106,6 +106,12 @@ export interface RunChoice {
    * on / off 是用户手动定的。Claude / GPT 系列锁死 off、Gemini 锁死 on,别的厂商才让用户调(见 compatPolicy)。
    */
   schemaCompat: SchemaCompat;
+  /**
+   * 深度自主:把一次运行的轮次上限从常规的几十轮放宽到 300,并且**不再往模型手里
+   * 塞任何关于轮次的话**。默认关着 —— 常规上限的作用是把跑偏的运行拦下来,
+   * 开着它等于把这道闸交给用户自己判断,只在明确要它长时间自己跑时才开。
+   */
+  deepAuto: boolean;
 }
 
 export type SchemaCompat = "auto" | "on" | "off";
@@ -116,6 +122,7 @@ export function readChoice(provider: AiProvider): RunChoice {
     model: read("model", provider),
     effort: read("effort", provider) as EffortLevel,
     fast: read("fast", provider) === "1",
+    deepAuto: read("deepAuto", provider) === "1",
     schemaCompat: compat === "on" || compat === "off" ? compat : "auto",
   };
 }
@@ -124,6 +131,7 @@ export function writeChoice(provider: AiProvider, patch: Partial<RunChoice>): vo
   if (patch.model !== undefined) write("model", provider, patch.model);
   if (patch.effort !== undefined) write("effort", provider, patch.effort);
   if (patch.fast !== undefined) write("fast", provider, patch.fast ? "1" : "");
+  if (patch.deepAuto !== undefined) write("deepAuto", provider, patch.deepAuto ? "1" : "");
   if (patch.schemaCompat !== undefined) write("schemaCompat", provider, patch.schemaCompat === "auto" ? "" : patch.schemaCompat);
 }
 

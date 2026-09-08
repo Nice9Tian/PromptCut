@@ -61,6 +61,12 @@ function getDefaults() {
     defaultProvider: null,
     toolProtocol: false,
     /**
+     * 「深度自主」开着时一次运行最多跑多少轮模型往返。**0 = 不限**,
+     * 那种情况下只有用户点停止、模型自己收尾、或者重复操作检测拦下来才会停。
+     * 没开深度自主时这个值不起作用,走各条路自己的常规上限(harness 24 轮 / 文本协议 8 轮)。
+     */
+    deepAutoRounds: 300,
+    /**
      * CLI 驱动(Claude Code / Codex)的额度熔断:任一用量窗口用到 thresholdPercent 就中断这一路;
      * 每新增 checkEveryBytes 字节的上下文后台重查一次。见 server/runners/quota.mjs。
      */
@@ -296,6 +302,14 @@ export function writeConfig(partial) {
 
   if (partial.toolProtocol !== undefined) {
     newConfig.toolProtocol = !!partial.toolProtocol;
+  }
+
+  if (partial.deepAutoRounds !== undefined) {
+    const v = Number(partial.deepAutoRounds);
+    // 0 是「不限」,是有意义的取值,所以下界是 0 不是 1。上界 100000 只为挡住手滑,
+    // 真跑到那儿早就被重复操作检测或者用户自己拦下来了。
+    if (!Number.isFinite(v) || v < 0 || v > 100000) throw new Error('deepAutoRounds 是 0~100000 的整数(0 = 不限轮次)');
+    newConfig.deepAutoRounds = Math.round(v);
   }
 
   if (partial.quota !== undefined) {

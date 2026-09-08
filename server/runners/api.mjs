@@ -140,12 +140,21 @@ export function startRun(opts) {
 
     const requestFetch = opts.fetchImpl || globalThis.fetch;
     const provider = providerModule.createProvider(cfg, { fetchImpl: (url, options) => requestFetch(url, { ...options, signal: AbortSignal.any([abortController.signal, AbortSignal.timeout(120000)]) }) });
-    safeOnEvent({ type: 'diagnostic', stage: 'configuration', data: { vendor: cfg.vendor, model: cfg.model, maxTokens: cfg.maxTokens, protocol: 'native-tools', schemaCompat, maxRounds: 24 } });
+    /*
+     * 轮次上限:常规 24 轮;「深度自主」开着时换成设置里的「自主轮次」(opts.maxRounds),
+     * 那个值为 0 表示不限 —— 在这里变成 Infinity,循环就没有终点了。
+     */
+    const maxIterations = opts.deepAuto
+      ? (opts.maxRounds === 0 ? Infinity : Number(opts.maxRounds) || 300)
+      : 24;
+    safeOnEvent({ type: 'diagnostic', stage: 'configuration', data: { vendor: cfg.vendor, model: cfg.model, maxTokens: cfg.maxTokens, protocol: 'native-tools', schemaCompat, maxRounds: Number.isFinite(maxIterations) ? maxIterations : null, deepAuto: !!opts.deepAuto } });
     const tools = await buildTools({ callTool: opts.callTool, workspaceDir: opts.cwd, onEvent: safeOnEvent });
     const agent = new Agent({ 
       provider, 
       system: opts.systemPrompt, 
       tools, 
+      maxIterations,
+      deepAuto: !!opts.deepAuto,
       onEvent: safeOnEvent, 
       signal: abortController.signal, 
       history 

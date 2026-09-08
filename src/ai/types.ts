@@ -53,6 +53,11 @@ export interface PublicAiConfig {
   /** 三家 CLI 各自的可选模型清单,用 | 分隔 */
   cliModels: { claude: string; codex: string; agy: string };
   toolProtocol: boolean;
+  /**
+   * 「深度自主」开着时这一次运行最多跑多少轮。**0 = 不限**。老服务端没有这个字段,
+   * 界面按 300 显示。没开深度自主时它不起作用,走各条路自己的常规上限。
+   */
+  deepAutoRounds?: number;
   /** CLI 额度熔断(Claude Code / Codex):任一用量窗口到 thresholdPercent 就中断;每新增 checkEveryBytes 字节重查。老服务端没有这个字段 */
   quota?: QuotaConfig;
 }
@@ -99,6 +104,8 @@ export interface AiConfigPatch {
   };
   cliModels?: Partial<{ claude: string; codex: string; agy: string }>;
   toolProtocol?: boolean;
+  /** 「深度自主」下的轮次上限;0 = 不限 */
+  deepAutoRounds?: number;
   quota?: Partial<QuotaConfig>;
 }
 
@@ -178,6 +185,8 @@ export interface MessageRuntime {
   effort: string;
   /** 加速档(目前只有 Claude Code 有) */
   fast: boolean;
+  /** 深度自主:轮次上限放宽到 300,且不给模型任何轮次提示 */
+  deepAuto?: boolean;
   /** 文本协议模式:工具调用写在回复正文里。工具相关的异常先看这一条 */
   toolProtocol: boolean;
 }

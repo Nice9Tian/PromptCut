@@ -149,7 +149,9 @@ function activityText(m: ChatMessage, busyTool: ToolCallInfo | null): string {
 function progressMeta(m: ChatMessage): string | null {
   const p = m.progress;
   if (!p?.round) return null;
-  const bits = [`第 ${p.round}/${p.maxRounds ?? "?"} 轮`];
+  // maxRounds 为 null 是「不限轮次」(深度自主 + 自主轮次填 0):Infinity 过一趟 JSON 就是 null。
+  // 写成「第 12/? 轮」会让人以为丢了信息,其实是本来就没有分母
+  const bits = [p.maxRounds ? `第 ${p.round}/${p.maxRounds} 轮` : `第 ${p.round} 轮(不限)`];
   if (p.completed || p.failed) bits.push(`成功 ${p.completed ?? 0}·失败 ${p.failed ?? 0}`);
   if (p.elapsedMs) bits.push(`${Math.floor(p.elapsedMs / 1000)} 秒`);
   return bits.join(" · ");

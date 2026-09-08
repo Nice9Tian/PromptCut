@@ -51,7 +51,7 @@ export function recordTrace(message: ChatMessage, event: RunEvent): ChatMessage 
 
 /** 同一套设置压成一行,用来数「这段对话里前后到底用过几种配置」 */
 function runtimeKey(r: MessageRuntime): string {
-  return [r.provider, r.model || '(默认)', r.effort || '(默认)', r.fast ? 'fast' : '-', r.toolProtocol ? 'textproto' : '-'].join(' / ');
+  return [r.provider, r.model || '(默认)', r.effort || '(默认)', r.fast ? 'fast' : '-', r.deepAuto ? 'deep' : '-', r.toolProtocol ? 'textproto' : '-'].join(' / ');
 }
 
 /**
@@ -60,6 +60,8 @@ function runtimeKey(r: MessageRuntime): string {
 function describeRuntime(r: MessageRuntime): string {
   const bits = [r.provider, `模型 ${r.model || '默认'}`, `思考 ${r.effort || '默认'}`];
   if (r.fast) bits.push('加速');
+  // 具体多少轮在设置里(deepAutoRounds),这条 runtime 没记,所以只说开着,不报一个可能是错的数
+  if (r.deepAuto) bits.push('深度自主');
   if (r.toolProtocol) bits.push('文本协议模式');
   return bits.join('，');
 }

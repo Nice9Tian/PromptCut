@@ -568,7 +568,7 @@ export default function vitePluginAi(): Plugin {
           try {
             const runners = await getRunner();
             const data = JSON.parse(body);
-            const { provider, prompt, sessionId, model, effort, fast, attachments, script, schemaCompat } = data;
+            const { provider, prompt, sessionId, model, effort, fast, attachments, script, schemaCompat, deepAuto } = data;
             // 多 Agent 分页:这一页的对话 ID。只认会话 id 的字符集,别的一律当没带
             const agentId: string = typeof data.conversationId === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(data.conversationId) ? data.conversationId : '';
 
@@ -658,6 +658,15 @@ export default function vitePluginAi(): Plugin {
               sessionId,
               cwd,
               model,
+              /*
+               * 深度自主:轮次上限换成设置里的「自主轮次」(ai.json 的 deepAutoRounds,
+               * 默认 300,填 0 就是不限),而且不再给模型任何关于轮次的话。
+               *
+               * 轮数从**服务端配置**取,不听请求体里的数 —— 前端只发一个「开没开」的布尔。
+               * 上限是道安全阀,不该由一个请求字段随手顶开。
+               */
+              maxRounds: deepAuto ? (cfg.deepAutoRounds ?? 300) : undefined,
+              deepAuto: !!deepAuto,
               // 推理强度和加速档:哪家支持哪些由各自的 runner 翻译成标志,
               // 不支持的直接忽略(前端也已经把对应控件灰掉了)
               effort,

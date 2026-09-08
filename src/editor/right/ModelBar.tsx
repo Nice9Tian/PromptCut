@@ -30,7 +30,7 @@ export function ModelBar(props: {
   disabled?: boolean;
 }): JSX.Element | null {
   const { provider, config, disabled } = props;
-  const [choice, setChoice] = useState(() => ({ model: "", effort: "" as EffortLevel, fast: false, schemaCompat: "auto" as SchemaCompat }));
+  const [choice, setChoice] = useState(() => ({ model: "", effort: "" as EffortLevel, fast: false, deepAuto: false, schemaCompat: "auto" as SchemaCompat }));
 
   // 换 provider 就把那一家自己的选择读出来
   useEffect(() => {
@@ -57,6 +57,20 @@ export function ModelBar(props: {
   const compatHint = compat.locked
     ? compat.reason
     : `参数兼容模式(${compat.on ? "开" : "关"}):把工具参数的 schema 按 Gemini 那套最窄子集清洗。${compat.reason}`;
+
+  /*
+   * 深度自主:轮次上限换成设置里的「自主轮次」(默认 300,填 0 就是不限),
+   * 并且不再往模型手里塞任何关于轮次的话。
+   *
+   * 每家驱动都支持 —— 这道闸是 PromptCut 自己的循环在管的,不是各家 CLI 的能力,
+   * 所以不进 CAPABILITIES,也不会因为换了驱动就灰掉。
+   */
+  const rounds = config?.deepAutoRounds;
+  const deepHint = choice.deepAuto
+    ? (rounds === 0
+        ? "深度自主：不限轮次，会一直跑到它自己认为做完或你点停止。想改成有限轮次去「AI 设置 → 更多 → 自主轮次」"
+        : `深度自主：轮次上限放宽到 ${rounds ?? 300} 轮，且不给模型任何轮次提示。在「AI 设置 → 更多 → 自主轮次」里改`)
+    : `深度自主：把轮次上限放宽到 ${rounds === 0 ? "不限" : `${rounds ?? 300} 轮`}，并且不给模型任何轮次提示。常规上限是用来拦住跑偏的运行的，长任务再开`;
 
   const fastHint = cap.fast
     ? "加速：出字更快，不换模型"
@@ -108,6 +122,18 @@ export function ModelBar(props: {
         onClick={() => update({ fast: !choice.fast })}
       >
         Fast
+      </button>
+
+      <button
+        type="button"
+        data-pc="deep-auto"
+        className={`ai-modelbar-fast${choice.deepAuto ? " is-on" : ""}`}
+        disabled={disabled}
+        title={deepHint}
+        aria-pressed={choice.deepAuto}
+        onClick={() => update({ deepAuto: !choice.deepAuto })}
+      >
+        深度自主
       </button>
 
       <button

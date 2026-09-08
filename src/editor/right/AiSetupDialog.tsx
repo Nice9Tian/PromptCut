@@ -99,6 +99,13 @@ export function AiSetupDialog(props: {
   const [agyPermError, setAgyPermError] = useState("");
   const [granting, setGranting] = useState(false);
   const [toolProtocol, setToolProtocol] = useState(false);
+  /**
+   * 「深度自主」开着时一次运行最多跑多少轮。存成字符串是为了让输入框能清空 ——
+   * 用数字 state 的话,删到空会被当成 0,而 0 在这里是「不限轮次」这个真实取值,
+   * 用户只是想改个数字就莫名其妙变成了无限跑。
+   */
+  const [deepRounds, setDeepRounds] = useState("300");
+  const [deepRoundsMsg, setDeepRoundsMsg] = useState("");
   /** 「更多」里放高级开关。每次打开对话框都收回去,免得上次展开过就一直敞着 */
   const [moreOpen, setMoreOpen] = useState(false);
   /** 三家 CLI 的可选模型清单(| 分隔),面板上的模型选择器读它 */
@@ -155,6 +162,9 @@ export function AiSetupDialog(props: {
     setApiKeyInput("");
     setSaveSuccess(false);
     setSaveError(null);
+    // 「自主轮次」那句回执同理:保存成功那一刻 config 一变,下面同步表单的 effect 会重跑,
+    // 把清空放在那边等于自己抹掉刚写的回执 —— 存成功了用户却什么反馈都看不见
+    setDeepRoundsMsg("");
   }, [open]);
 
   useEffect(() => {
@@ -169,6 +179,7 @@ export function AiSetupDialog(props: {
       setRouterMsg("");
       setReplaceKey(!config.api.apiKey.set);
       setToolProtocol(!!config.toolProtocol);
+      setDeepRounds(String(config.deepAutoRounds ?? 300));
       setCliModels({ ...(config.cliModels ?? {}) });
       setModelsMsg("");
       if (config.quota) setQuotaCfg({ ...config.quota });
@@ -313,6 +324,35 @@ export function AiSetupDialog(props: {
   const handleSaveProtocol = async (checked: boolean) => {
     setToolProtocol(checked);
     await onSaveConfig({ toolProtocol: checked });
+  };
+
+  /** 「自主轮次」改过没有。改过就在「更多」按钮上挂个点,不展开也知道这儿动过 */
+  const roundsChanged = (config?.deepAutoRounds ?? 300) !== 300;
+
+  /**
+   * 「自主轮次」失焦时存。不做「边打字边存」:中间态(比如把 300 删成 3 再删成空)
+   * 每一步都落盘,既没意义也会把 0 这个特殊值误存进去。
+   */
+  const handleSaveDeepRounds = async () => {
+    const raw = deepRounds.trim();
+    if (raw === "") {
+      // 清空不当成 0。0 是「不限」,得让用户自己打出来
+      setDeepRounds(String(config?.deepAutoRounds ?? 300));
+      setDeepRoundsMsg("");
+      return;
+    }
+    const v = Number(raw);
+    if (!Number.isFinite(v) || v < 0 || v > 100000 || !Number.isInteger(v)) {
+      setDeepRoundsMsg("填 0~100000 的整数，0 表示不限轮次");
+      return;
+    }
+    if (v === (config?.deepAutoRounds ?? 300)) { setDeepRoundsMsg(""); return; }
+    try {
+      await onSaveConfig({ deepAutoRounds: v });
+      setDeepRoundsMsg(v === 0 ? "已保存：不限轮次" : `已保存：${v} 轮`);
+    } catch (e) {
+      setDeepRoundsMsg(e instanceof Error ? e.message : "保存失败");
+    }
   };
 
   /**
@@ -727,6 +767,31 @@ export function AiSetupDialog(props: {
                     </span>
                   </span>
                 </label>
+                {/*
+                  自主轮次:只在输入框旁边的「深度自主」按下时才起作用,所以放在这里而不是
+                  面板上 —— 面板管的是「这一次怎么跑」,一个数值上限是设一次就不动的东西。
+                */}
+                <label className="ais-more-row">
+                  <input
+                    type="number"
+                    className="ais-more-num"
+                    min={0}
+                    max={100000}
+                    step={10}
+                    value={deepRounds}
+                    onChange={(e) => { setDeepRounds(e.target.value); setDeepRoundsMsg(""); }}
+                    onBlur={handleSaveDeepRounds}
+                    onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+                  />
+                  <span className="ais-more-body">
+                    <span className="ais-more-name">自主轮次{deepRoundsMsg && <span className="ais-more-note">{deepRoundsMsg}</span>}</span>
+                    <span className="ais-detail">
+                      输入框旁边按下「深度自主」之后，这一次运行最多跑多少轮模型往返，
+                      同时不再给模型任何关于轮次的提示。<b>填 0 表示不限轮次</b>——
+                      那样它会一直跑到自己认为做完、或者你点停止为止。没按「深度自主」时这个值不起作用。
+                    </span>
+                  </span>
+                </label>
               </div>
             )}
             <div className="ais-footer">
@@ -740,9 +805,9 @@ export function AiSetupDialog(props: {
                   className="ais-btn ais-more-btn"
                   aria-expanded={moreOpen}
                   onClick={() => setMoreOpen((v) => !v)}
-                  title={toolProtocol ? "文本协议模式开着" : undefined}
+                  title={[toolProtocol ? "文本协议模式开着" : "", roundsChanged ? `自主轮次 ${config?.deepAutoRounds === 0 ? "不限" : config?.deepAutoRounds}` : ""].filter(Boolean).join("；") || undefined}
                 >
-                  更多{toolProtocol && <span className="ais-more-dot" aria-label="有非默认设置">•</span>}
+                  更多{(toolProtocol || roundsChanged) && <span className="ais-more-dot" aria-label="有非默认设置">•</span>}
                   {moreOpen ? " ▴" : " ▾"}
                 </button>
                 <span className="ais-footer-spacer" />

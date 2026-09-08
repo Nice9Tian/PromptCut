@@ -172,6 +172,14 @@ export function runTextProtocolLoop({ startRun, opts, onEvent }) {
   let currentOpts = { ...opts };
   
   currentOpts.mcp = undefined;
+  /*
+   * 文本协议这条路的轮次上限。常规 8 轮;「深度自主」开着时换成设置里的「自主轮次」
+   * (opts.maxRounds),那个值为 0 就是不限 —— 这里变成 Infinity,循环没有终点,
+   * 只有模型自己不再下达工具调用、出错、或者用户点停止才会出来。
+   */
+  const maxLoops = opts.deepAuto
+    ? (opts.maxRounds === 0 ? Infinity : Number(opts.maxRounds) || 300)
+    : 8;
   let loopCount = 0;
   let finalAbort = () => {};
   
@@ -180,7 +188,7 @@ export function runTextProtocolLoop({ startRun, opts, onEvent }) {
       const protocolPrompt = await renderProtocolPrompt();
       currentOpts.systemPrompt = currentOpts.systemPrompt + '\n\n' + protocolPrompt;
       
-      while (loopCount < 8) {
+      while (loopCount < maxLoops) {
         loopCount++;
         let collectedText = '';
         // 每一轮都是一条新的输出流,过滤器不能跨轮复用(上一轮的半截标记会串味)
@@ -260,7 +268,9 @@ export function runTextProtocolLoop({ startRun, opts, onEvent }) {
         currentOpts.sessionId = lastSessionId;
       }
       
-      onEvent({ type: 'status', text: '文本协议已达 8 轮上限' });
+      // 这句只发给界面,不进模型上下文 —— 深度自主要的是「模型看不见轮次」,
+      // 不是「用户也看不见为什么停了」
+      onEvent({ type: 'status', text: `文本协议已达 ${maxLoops} 轮上限` });
       onEvent({ type: 'done', sessionId: currentOpts.sessionId });
       resolve();
     } catch (e) {

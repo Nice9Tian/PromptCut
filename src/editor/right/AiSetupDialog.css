@@ -631,3 +631,30 @@
   box-shadow: 0 6px 20px rgba(0, 0, 0, .45);
   cursor: pointer;
 }
+
+/*
+ * 「自主轮次」的数字框。和上面那行的勾选框占同一列,所以宽度固定、顶部对齐,
+ * 两行的说明文字才会在同一条竖线上起头。
+ */
+.ais-more-num {
+  flex: 0 0 auto;
+  width: 72px;
+  margin-top: 1px;
+  padding: 3px 6px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--ink);
+  background: var(--bg-canvas);
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+}
+.ais-more-num:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+/* 存下来了 / 填错了,就在标题后面挂一句,不挤走说明文字 */
+.ais-more-note {
+  margin-left: 8px;
+  font-size: 12px;
+  color: var(--ink-muted);
+}
