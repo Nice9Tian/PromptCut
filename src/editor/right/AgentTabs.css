@@ -30,6 +30,21 @@
   white-space: nowrap;
   max-width: 180px;
   outline: none;
+  /*
+   * 页签要**能缩**。
+   *
+   * 原来只有 max-width,没有 flex 收缩:每个页签都按内容撑到 180px 的上限
+   * (那是内容盒,加上 padding + border 实测约 200px),而右栏本身才三百出头。
+   * 于是两个长标题就把栏撑满,第三个整条被挤出可视区 —— 而这条栏的滚动条是藏起来的
+   * (下面 scrollbar-width: none),用户根本看不出还能横向滚,只看到关闭按钮不见了,
+   * 以为是被标题「推走」了。实测:320px 容器里三个页签,第三个的 × 在可视区外。
+   *
+   * 改成一起按比例缩,让它们尽量都留在视野里。min-width 给个下限,免得挤成一条缝;
+   * 真的多到放不下才回到横向滚动。
+   */
+  flex: 0 1 auto;
+  min-width: 72px;
+  overflow: hidden;
 }
 .pc-agent-tab:hover { color: var(--ui-fg); background: var(--ui-panel); }
 .pc-agent-tab:focus-visible { box-shadow: 0 0 0 2px var(--ui-accent-soft); }
@@ -58,9 +73,27 @@
   50% { opacity: 0.35; transform: scale(0.8); }
 }
 
+/*
+ * 页签缩的时候,缩的**只能是标题**。
+ *
+ * min-width: 0 是必须的:flex 子项默认 min-width:auto,不肯缩到内容宽度以下,
+ * 那样省略号永远不生效,挤掉的就会变成后面的角标和关闭按钮。
+ */
 .pc-agent-tab-name {
+  flex: 0 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/*
+ * 这三样任何时候都不许被挤掉 —— 尤其是关闭按钮:
+ * 标题再长也得留得下它,否则用户就没法关掉那一页了。
+ */
+.pc-agent-tab-dot,
+.pc-agent-tab-badge,
+.pc-agent-tab-x {
+  flex: 0 0 auto;
 }
 
 .pc-agent-tab-badge {
