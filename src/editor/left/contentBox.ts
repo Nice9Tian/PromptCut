@@ -17,6 +17,23 @@ export interface Box {
   b: number;
 }
 
+/**
+ * 一张卡的「墨色」:实体模式(低保真预览)拿它给代理色块上色。
+ *
+ * 两个数,缺一个都不行:
+ *   - `rgb` 是**按 alpha 加权**的平均颜色 —— 只统计真画了东西的地方。
+ *     直接对整个盒子求平均的话,标题卡里九成是透明的,所有文字卡都会被稀释成同一坨灰。
+ *   - `cover` 是这张卡有多「实」(0~1):画了东西的面积占盒子的比例。
+ *     满底的面板卡接近 1,只有几个字的标题卡是零点几。
+ *
+ * 代理平面用 `rgba(rgb, cover)` 画,于是面板卡和标题卡在实体模式下**长得不一样** ——
+ * 而「这一块压上去是不是太重了」正是浏览时要判断的东西。按 ID 哈希出来的颜色给不了这个。
+ */
+export interface Ink {
+  rgb: [number, number, number];
+  cover: number;
+}
+
 const REPLACED = new Set(["IMG", "SVG", "CANVAS", "VIDEO", "PICTURE"]);
 /** canvas 扫像素时每边最多取样多少档;再大就跳着取,几万个点足够定边界 */
 const CANVAS_SAMPLES = 200;
@@ -58,17 +75,30 @@ function textRect(el: Element): DOMRect | null {
  * canvas 里画了什么,DOM 是看不见的:元素矩形永远是整块画布,于是粒子背景、图表这类卡
  * 一律被判成「铺满整幅」,预览只能退回整幅缩放。这里直接读像素,把真正画到东西的那块框出来。
  *
- * 只对 2D 画布有效:WebGL 的画布取不到 2d 上下文(返回 null),被跨域图片污染过的画布
- * 读像素会抛 —— 两种情况都返回 null,调用方退回元素矩形。返回的是**屏幕坐标**,
+ * 2D 和 WebGL 画布都支持(靠 drawImage 到离屏画布,见下面的说明)。被跨域图片污染过的
+ * 画布读像素会抛 —— 那种情况返回 null,调用方退回元素矩形。返回的是**屏幕坐标**,
  * 和其他几种量法口径一致。
  */
-function canvasBox(el: HTMLCanvasElement): DOMRect | null {
+export function canvasBox(el: HTMLCanvasElement): DOMRect | null {
   const w = el.width, h = el.height;
   if (!w || !h) return null;
   let data: Uint8ClampedArray;
   try {
-    const ctx = el.getContext("2d", { willReadFrequently: true });
+    /*
+     * 不能用 `el.getContext("2d")`:**一个画布只能有一种上下文**,WebGL 画布上它返回 null,
+     * 于是三维卡(scene-3d)会退回「元素矩形」= 整块画布 —— 而它多半铺满全屏、四周全透明。
+     * 后果是 get_layout 的 contentBox 报「这张卡占满 1920×1080」,而工具描述明写
+     * 「判断会不会盖住人看 contentBox」,Agent 会以为无处可放,去挪本来不用挪的东西。
+     *
+     * `drawImage` 到一张离屏 2D 画布上则两种上下文都通(WebGL 那边靠
+     * scene-3d 建渲染器时的 preserveDrawingBuffer:true 保证读得到内容)。
+     */
+    const off = document.createElement("canvas");
+    off.width = w;
+    off.height = h;
+    const ctx = off.getContext("2d", { willReadFrequently: true });
     if (!ctx) return null;
+    ctx.drawImage(el, 0, 0);
     data = ctx.getImageData(0, 0, w, h).data;
   } catch {
     return null;
@@ -144,6 +174,130 @@ export function measureContentBox(stage: HTMLElement): Box | null {
   // 并出来还是几乎整幅画面,那就按整幅来,不用切
   if (((b.r - b.l) * (b.b - b.t)) / (stageW * stageH) >= 0.85) return null;
   return b;
+}
+
+/** 解析 computed style 的颜色。拿不准就返回 null,让调用方跳过这一处而不是记一个瞎猜的颜色 */
+function parseColor(v: string): { rgb: [number, number, number]; a: number } | null {
+  if (!v || v === "transparent" || v === "none") return null;
+  const m = /rgba?\(([^)]+)\)/.exec(v);
+  if (!m) return null;
+  const p = m[1].split(/[\s,/]+/).filter(Boolean).map(Number);
+  if (p.length < 3 || p.some((n) => !Number.isFinite(n))) return null;
+  const a = p.length >= 4 ? p[3] : 1;
+  if (a <= 0) return null;
+  return { rgb: [p[0], p[1], p[2]], a };
+}
+
+/**
+ * canvas 的墨色:直接读像素。
+ *
+ * 走 `drawImage` 到一张小的离屏 2D 画布上,而不是对原画布 `getContext("2d")` ——
+ * 后者对 WebGL 画布返回 null(一个画布只能有一种上下文),三维卡就永远取不到色。
+ * 顺带把取样降到 64×64,几千个点足够定一个平均色,还省掉大画布的读回开销。
+ *
+ * 取不到就返回 null:画布被跨域图片污染过会抛,WebGL 没开 preserveDrawingBuffer 时
+ * 拿到的可能是一张空图 —— 两种都不该记成「这张卡是透明的」。
+ */
+function canvasInk(el: HTMLCanvasElement): { sum: [number, number, number]; weight: number; samples: number } | null {
+  const w = el.width, h = el.height;
+  if (!w || !h) return null;
+  const n = 64;
+  try {
+    const off = document.createElement("canvas");
+    off.width = Math.min(n, w);
+    off.height = Math.min(n, h);
+    const ctx = off.getContext("2d", { willReadFrequently: true });
+    if (!ctx) return null;
+    ctx.drawImage(el, 0, 0, off.width, off.height);
+    const d = ctx.getImageData(0, 0, off.width, off.height).data;
+    const sum: [number, number, number] = [0, 0, 0];
+    let weight = 0;
+    for (let i = 0; i < d.length; i += 4) {
+      const a = d[i + 3] / 255;
+      if (d[i + 3] < ALPHA_MIN) continue;
+      sum[0] += d[i] * a; sum[1] += d[i + 1] * a; sum[2] += d[i + 2] * a;
+      weight += a;
+    }
+    return weight > 0 ? { sum, weight, samples: (d.length / 4) || 1 } : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 量这张卡的墨色。走的元素和 measureContentBox **同一套筛子**,只是那边并矩形、这边攒颜色。
+ *
+ * 颜色不从像素来(DOM 读不到自己的像素),从 computed style 来:
+ * 底色取 `background-color`、文字取 `color`,各自按「面积 × alpha」加权。
+ * `getComputedStyle` 给的是解析后的最终值,`--pc-glass-bg` 那些变量自动落成具体颜色,
+ * **卡片一张都不用改**。canvas 例外,那个真读像素。
+ *
+ * 嵌套的盒子会被重复计入(外层底色 + 内层底色都算一遍),所以 cover 夹到 1 ——
+ * 它要表达的是「这块有多实」,不是精确的覆盖率,重复计入只会让实的更实,方向是对的。
+ */
+export function measureInk(stage: HTMLElement, box: Box | null): Ink | null {
+  const sr = stage.getBoundingClientRect();
+  const scale = stage.offsetWidth > 0 ? sr.width / stage.offsetWidth : 0;
+  if (sr.width <= 0 || scale <= 0) return null;
+  // 参照面积:有内容框就用它,没有就用整个舞台(铺满型的卡)
+  const refArea = box ? Math.max(1, (box.r - box.l) * (box.b - box.t)) : (sr.width / scale) * (sr.height / scale);
+  const stageArea = sr.width * sr.height;
+
+  const sum: [number, number, number] = [0, 0, 0];
+  let weight = 0;
+
+  /** 记一处:颜色 + 它铺了多大(屏幕面积,换算回舞台面积) */
+  const add = (c: { rgb: [number, number, number]; a: number }, screenArea: number, opacity: number) => {
+    if (screenArea <= 0) return;
+    // 铺满舞台的算背景,不算内容 —— 和 measureContentBox 同一条规矩
+    if (screenArea / stageArea >= 0.9) return;
+    const w = (screenArea / (scale * scale)) * c.a * opacity;
+    if (w <= 0) return;
+    sum[0] += c.rgb[0] * w; sum[1] += c.rgb[1] * w; sum[2] += c.rgb[2] * w;
+    weight += w;
+  };
+
+  for (const el of stage.querySelectorAll<HTMLElement>("*")) {
+    if (el.tagName === "SCRIPT" || el.tagName === "STYLE") continue;
+    if (el.namespaceURI === "http://www.w3.org/2000/svg" && el.tagName !== "svg") continue;
+    const cs = getComputedStyle(el);
+    const op = parseFloat(cs.opacity);
+    if (cs.display === "none" || cs.visibility === "hidden" || op === 0) continue;
+
+    if (el.tagName.toUpperCase() === "CANVAS") {
+      const ink = canvasInk(el as HTMLCanvasElement);
+      const rect = el.getBoundingClientRect();
+      if (ink && rect.width > 0) {
+        // 画布上「画了东西」的那一份面积:有效像素占比 × 画布在屏幕上的面积
+        const painted = (ink.weight / ink.samples) * rect.width * rect.height;
+        add({ rgb: [ink.sum[0] / ink.weight, ink.sum[1] / ink.weight, ink.sum[2] / ink.weight], a: 1 }, painted, op);
+      }
+      continue;
+    }
+    if (REPLACED.has(el.tagName.toUpperCase())) {
+      // 图片 / 视频读不到平均色(跨域会污染画布),按中性灰记一笔,只是为了让 cover 反映"这儿有东西"
+      const r = el.getBoundingClientRect();
+      add({ rgb: [128, 128, 128], a: 1 }, r.width * r.height, op);
+      continue;
+    }
+    if (hasOwnText(el)) {
+      const tr = textRect(el);
+      const c = parseColor(cs.color);
+      // 字不是实心的,一个字框里大概三成是笔画 —— 不打这个折,一行字会比一整块底色还重
+      if (tr && c) add(c, tr.width * tr.height * 0.3, op);
+    }
+    const bg = parseColor(cs.backgroundColor);
+    if (bg) {
+      const r = el.getBoundingClientRect();
+      add(bg, r.width * r.height, op);
+    }
+  }
+
+  if (weight <= 0) return null;
+  return {
+    rgb: [Math.round(sum[0] / weight), Math.round(sum[1] / weight), Math.round(sum[2] / weight)],
+    cover: Math.min(1, weight / refArea),
+  };
 }
 
 export function unionBox(a: Box | null, b: Box | null): Box | null {
