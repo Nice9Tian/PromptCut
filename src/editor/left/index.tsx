@@ -1,10 +1,11 @@
 import "./debug";
 import "./left.css";
-import { useRef, useState } from "react";
+import { useRef, useState, useEffect } from "react";
 import { CardsTab, type CardsTabHandle } from "./CardsTab";
 import { MediaTab } from "./MediaTab";
 import { CaptionsTab } from "./CaptionsTab";
 import { TransitionsTab } from "./TransitionsTab";
+import { onCaptionsRequest } from "./captionsBus";
 import type { MediaAsset } from "../../kernel/project";
 import { StyleTab } from "./StyleTab";
 import { AssetToolbar } from "./AssetToolbar";
@@ -87,6 +88,11 @@ export function LeftPanel() {
     setCaptionMediaId(mediaId);
     pickAsset("captions");
   };
+  // 时间轴上右键「转写字幕」也走这里:切到素材 → 字幕分页并聚焦那份素材
+  useEffect(() => onCaptionsRequest((id) => {
+    pickTop("assets");
+    openCaptions(id);
+  }), []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const subTabs = top === "assets" ? ASSET_TABS : EDIT_TABS;
   const subActive: string = top === "assets" ? assetTab : editTab;

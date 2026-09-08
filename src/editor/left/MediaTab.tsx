@@ -1,9 +1,10 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useStore, actions } from "../../store/project";
 import { DEFAULT_MEDIA_DUR, type MediaAsset } from "../../kernel/project";
 import { clearDragPayload, MIME_MEDIA, setDragPayload } from "../dnd";
-import { ContextMenu } from "./ContextMenu";
+import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { PreviewCard } from "./PreviewCard";
 
 async function measureVideoDimensions(url: string): Promise<{ width: number; height: number }> {
   if (!url) {
@@ -79,9 +80,90 @@ async function measureImageDimensions(url: string): Promise<{ width: number; hei
 /** 空态和「没有匹配的…」里的称呼跟着分页走,免得配乐页也说「视频」 */
 const KIND_NOUN: Record<MediaAsset["kind"], string> = { video: "视频", audio: "配乐", image: "图像" };
 
+function fmtDur(sec: number | undefined): string {
+  if (sec == null) return "—";
+  return `${Math.floor(sec / 60)}:${(sec % 60).toFixed(1).padStart(4, "0")}`;
+}
+
+/**
+ * 视频 / 图像的方形预览卡。视频:平时停在首帧,悬停时静音循环播,底边一条强调色
+ * 进度条跟着播放位置走(只看不拖);图像:整张铺满。拖到时间轴、右键菜单都挂在卡上。
+ */
+function MediaCard({
+  m,
+  onDragStart,
+  onDragEnd,
+  onContextMenu,
+}: {
+  m: MediaAsset;
+  onDragStart: (e: React.DragEvent) => void;
+  onDragEnd: () => void;
+  onContextMenu: (e: React.MouseEvent) => void;
+}) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const [hot, setHot] = useState(false);
+  const [progress, setProgress] = useState<number | null>(null);
+
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    if (hot) {
+      v.currentTime = 0;
+      // 自动播放被浏览器拒了就算了,首帧还在
+      v.play().catch(() => {});
+    } else {
+      v.pause();
+      // 回到首帧:下次悬停从头看,不悬停时卡上也是可辨认的一帧
+      try { v.currentTime = 0; } catch { /* 还没加载出元数据 */ }
+      setProgress(null);
+    }
+  }, [hot]);
+
+  const preview =
+    m.kind === "image" ? (
+      <img src={m.url} alt="" draggable={false} />
+    ) : (
+      <video
+        ref={videoRef}
+        src={m.url}
+        muted
+        loop
+        playsInline
+        preload="metadata"
+        draggable={false}
+        onTimeUpdate={(e) => {
+          const el = e.currentTarget;
+          if (hot && el.duration > 0) setProgress(el.currentTime / el.duration);
+        }}
+      />
+    );
+
+  const subtitle =
+    m.kind === "image"
+      ? m.width && m.height ? `${m.width}×${m.height}` : undefined
+      : `${fmtDur(m.duration)}${m.transcript ? ` · 字幕 ${m.transcript.segments.length} 段` : ""}`;
+
+  return (
+    <PreviewCard
+      attrs={{ "data-pc-media": m.id }}
+      title={m.name}
+      subtitle={subtitle}
+      preview={preview}
+      progress={m.kind === "video" && hot ? (progress ?? 0) : null}
+      onHover={setHot}
+      draggable
+      onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
+      onContextMenu={onContextMenu}
+      titleAttr={m.kind === "video" ? "悬停预览;拖动 = 拖到时间轴;右键 = 更多" : "拖动 = 拖到时间轴;右键 = 更多"}
+    />
+  );
+}
+
 /**
  * 素材 → 视频 / 图像 / 配乐: 导入进来的素材列表(同一个组件按 kinds 过滤出三个分页)。
- * 支持搜索过滤、拖拽到时间轴、右键菜单（取视频比例作为项目比例、删除素材）。
+ * 视频和图像是方形预览卡网格,配乐是一行一条。支持搜索过滤、拖拽到时间轴、
+ * 右键菜单(转写字幕、取素材比例作为项目比例、删除素材)。
  */
 export function MediaTab({
   search,
@@ -111,6 +193,11 @@ export function MediaTab({
     setDragPayload({ kind: "media", mediaId: m.id, name: m.name, duration: m.duration ?? DEFAULT_MEDIA_DUR });
   };
 
+  const openMenu = (e: React.MouseEvent, m: MediaAsset) => {
+    e.preventDefault();
+    setCtxMenu({ x: e.clientX, y: e.clientY, media: m });
+  };
+
   const handleApplyAspectRatio = async (m: MediaAsset) => {
     try {
       let width = m.width;
@@ -131,6 +218,36 @@ export function MediaTab({
       alert(`获取视频分辨率失败: ${msg}`);
     }
   };
+
+  /** 右键菜单的项:转写(有声音的才有)、取比例(有画面的才有)、删除 */
+  const menuItems = (m: MediaAsset): ContextMenuItem[] => [
+    ...(m.kind === "image"
+      ? []
+      : [
+          {
+            label: m.transcript ? "查看字幕" : "转写字幕",
+            hint: m.transcript ? `${m.transcript.segments.length} 段` : undefined,
+            onClick: () => onOpenCaptions(m.id),
+          },
+        ]),
+    ...(m.kind === "audio"
+      ? []
+      : [
+          {
+            label: m.kind === "image" ? "以图片比例作为项目比例" : "以视频比例作为项目比例",
+            hint: m.width && m.height && m.width > 0 && m.height > 0 ? `${m.width}x${m.height}` : undefined,
+            onClick: () => handleApplyAspectRatio(m),
+          },
+        ]),
+    {
+      label: "删除素材",
+      danger: true,
+      onClick: () => setConfirmDelete({ mediaId: m.id, name: m.name }),
+    },
+  ];
+
+  // 视频和图像是卡片网格;配乐没有画面,还是一行一条
+  const grid = !kinds || kinds.some((k) => k !== "audio");
 
   return (
     <div className="flex-1 min-h-0 flex flex-col pc-l-scroll">
@@ -153,76 +270,32 @@ export function MediaTab({
           </div>
         ) : filteredMedia.length === 0 ? (
           <div className="px-3 py-4 text-xs text-neutral-500">没有匹配的{noun}</div>
+        ) : grid ? (
+          <div className="pc-l-grid">
+            {filteredMedia.map((m) =>
+              m.kind === "audio" ? (
+                <AudioRow key={m.id} m={m} onDragStart={(e) => handleDragStart(e, m)} onContextMenu={(e) => openMenu(e, m)} />
+              ) : (
+                <MediaCard
+                  key={m.id}
+                  m={m}
+                  onDragStart={(e) => handleDragStart(e, m)}
+                  onDragEnd={clearDragPayload}
+                  onContextMenu={(e) => openMenu(e, m)}
+                />
+              ),
+            )}
+          </div>
         ) : (
           <div className="px-1">
             {filteredMedia.map((m) => (
-              <div
-                key={m.id}
-                data-pc-media={m.id}
-                draggable
-                onDragStart={(e) => handleDragStart(e, m)}
-                onDragEnd={clearDragPayload}
-                onContextMenu={(e) => {
-                  e.preventDefault();
-                  setCtxMenu({ x: e.clientX, y: e.clientY, media: m });
-                }}
-                className="flex items-center gap-2 px-2 py-1 rounded hover:bg-neutral-800 cursor-grab text-xs"
-              >
-                <div className="flex-1 truncate text-neutral-200">{m.name}</div>
-                <div className="text-neutral-500 tabular-nums shrink-0">
-                  {m.duration != null ? `${Math.floor(m.duration / 60)}:${(m.duration % 60).toFixed(1).padStart(4, "0")}` : "—"}
-                </div>
-                {/* 图片没有声音,转写按钮对它没有意义 */}
-                {m.kind !== "image" && (
-                  <button
-                    data-pc="transcribe-btn"
-                    title={m.transcript ? `已转写 · ${m.transcript.segments.length} 段` : "去字幕分页转写"}
-                    className={`shrink-0 px-1 h-5 rounded text-[10px] border ${
-                      m.transcript
-                        ? "border-indigo-600/50 text-indigo-400 hover:bg-indigo-900/40"
-                        : "border-neutral-700 text-neutral-500 hover:text-neutral-300 hover:border-neutral-600"
-                    }`}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onOpenCaptions(m.id);
-                    }}
-                  >
-                    {m.transcript ? `✓ ${m.transcript.segments.length}段` : "字幕"}
-                  </button>
-                )}
-              </div>
+              <AudioRow key={m.id} m={m} onDragStart={(e) => handleDragStart(e, m)} onContextMenu={(e) => openMenu(e, m)} />
             ))}
           </div>
         )}
       </div>
 
-      {ctxMenu && (
-        <ContextMenu
-          x={ctxMenu.x}
-          y={ctxMenu.y}
-          items={[
-            // 声音没有画幅,「取比例」这一项对配乐不成立
-            ...(ctxMenu.media.kind === "audio"
-              ? []
-              : [
-                  {
-                    label: ctxMenu.media.kind === "image" ? "以图片比例作为项目比例" : "以视频比例作为项目比例",
-                    hint:
-                      ctxMenu.media.width && ctxMenu.media.height && ctxMenu.media.width > 0 && ctxMenu.media.height > 0
-                        ? `${ctxMenu.media.width}x${ctxMenu.media.height}`
-                        : undefined,
-                    onClick: () => handleApplyAspectRatio(ctxMenu.media),
-                  },
-                ]),
-            {
-              label: "删除素材",
-              danger: true,
-              onClick: () => setConfirmDelete({ mediaId: ctxMenu.media.id, name: ctxMenu.media.name }),
-            },
-          ]}
-          onClose={() => setCtxMenu(null)}
-        />
-      )}
+      {ctxMenu && <ContextMenu x={ctxMenu.x} y={ctxMenu.y} items={menuItems(ctxMenu.media)} onClose={() => setCtxMenu(null)} />}
 
       {confirmDelete && (
         <ConfirmDialog
@@ -236,6 +309,25 @@ export function MediaTab({
           onCancel={() => setConfirmDelete(null)}
         />
       )}
+    </div>
+  );
+}
+
+/** 配乐一行:名字 + 时长(+ 已有字幕的段数)。转写入口在右键菜单里 */
+function AudioRow({ m, onDragStart, onContextMenu }: { m: MediaAsset; onDragStart: (e: React.DragEvent) => void; onContextMenu: (e: React.MouseEvent) => void }) {
+  return (
+    <div
+      data-pc-media={m.id}
+      draggable
+      onDragStart={onDragStart}
+      onDragEnd={clearDragPayload}
+      onContextMenu={onContextMenu}
+      className="flex items-center gap-2 px-2 py-1 rounded hover:bg-neutral-800 cursor-grab text-xs"
+      title="拖动 = 拖到时间轴;右键 = 转写字幕 / 删除"
+    >
+      <div className="flex-1 truncate text-neutral-200">{m.name}</div>
+      {m.transcript && <div className="text-indigo-400 text-[10px] shrink-0">字幕 {m.transcript.segments.length} 段</div>}
+      <div className="text-neutral-500 tabular-nums shrink-0">{fmtDur(m.duration)}</div>
     </div>
   );
 }

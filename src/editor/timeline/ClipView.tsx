@@ -8,6 +8,7 @@ import { TrackClip, Track } from "../../kernel/project";
 import { useDrag } from "./useDrag";
 import { ContextMenu } from "./ContextMenu";
 import { clipTrackKind } from "../../kernel/trackKind";
+import { requestCaptions } from "../left/captionsBus";
 
 export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
   const { pxPerSec, trackAreaRef, setDraggingClipId, setDraggingTrackId, rowSize } = useTimelineContext();
@@ -235,6 +236,15 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
           onClose={() => setContextMenu(null)}
           items={[
             { label: "复制", action: () => actions.duplicateClip(clip.id) },
+            // 有声音的素材段可以直接去转写(图片没有声音,不给这一项)
+            ...(() => {
+              const media = clip.mediaId ? getState().project.media.find((m) => m.id === clip.mediaId) : null;
+              if (!media || media.kind === "image") return [];
+              return [{
+                label: media.transcript ? `查看字幕(${media.transcript.segments.length} 段)` : "转写字幕",
+                action: () => requestCaptions(media.id),
+              }];
+            })(),
             {
               label: "在播放头处分割",
               action: () => actions.splitClip(clip.id, getState().t),

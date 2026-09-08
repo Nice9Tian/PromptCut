@@ -5,38 +5,34 @@ import { themeStyle } from "../../themes";
 import type { CardDef } from "../../kernel/types";
 import { DEFAULT_CARD_DUR } from "../../kernel/project";
 import { clearDragPayload, MIME_CARD, setDragPayload } from "../dnd";
+import { PreviewCard } from "./PreviewCard";
 
+/**
+ * 卡片库里的一格:方形预览卡(PreviewCard)。不悬停显示名字和说明,悬停 180ms 后
+ * 在卡里按项目画幅等比缩放跑一遍动画;点一下加到播放头,拖动拖到时间轴。
+ */
 export function CardCell({ def }: { def: CardDef<any> }) {
   const [hot, setHot] = useState(false);
   const [token, setToken] = useState(0);
   const [box, setBox] = useState({ w: 0, h: 0 });
-  const timerRef = useRef<any>(null);
-  const ref = useRef<HTMLDivElement>(null);
+  const [error, setError] = useState(false);
+  const viewRef = useRef<HTMLDivElement>(null);
 
-  const project = useStore(s => s.project);
+  const project = useStore((s) => s.project);
 
   useLayoutEffect(() => {
-    if (hot && ref.current) {
-      const rect = ref.current.getBoundingClientRect();
+    if (hot && viewRef.current) {
+      const rect = viewRef.current.getBoundingClientRect();
       setBox({ w: rect.width, h: rect.height });
     }
   }, [hot]);
 
-  const onEnter = () => {
-    timerRef.current = setTimeout(() => {
-      setHot(true);
-      setToken(t => t + 1);
-    }, 180);
-  };
-
-  const onLeave = () => {
-    if (timerRef.current) clearTimeout(timerRef.current);
-    setHot(false);
+  const onHover = (v: boolean) => {
+    setHot(v);
+    if (v) setToken((t) => t + 1);
   };
 
   const onDragStart = (e: React.DragEvent) => {
-    if (timerRef.current) clearTimeout(timerRef.current);
-    setHot(false);
     e.dataTransfer.setData(MIME_CARD, def.id);
     e.dataTransfer.effectAllowed = "copy";
     setDragPayload({ kind: "card", cardId: def.id, name: def.name, duration: DEFAULT_CARD_DUR });
@@ -57,60 +53,55 @@ export function CardCell({ def }: { def: CardDef<any> }) {
     }
   };
 
-  const [error, setError] = useState(false);
-
   const scale = box.w && box.h ? Math.min(box.w / project.width, box.h / project.height) : 1;
 
-  return (
-    <div
-      data-pc-card={def.id}
-      ref={ref}
-      className="relative rounded border border-neutral-800 bg-neutral-900 hover:border-neutral-600 cursor-grab overflow-hidden h-24"
-      draggable
-      onMouseEnter={onEnter}
-      onMouseLeave={onLeave}
-      onDragStart={onDragStart}
-      onDragEnd={onDragEnd}
-      onClick={onClick}
-      title="点击 = 加到播放头;拖动 = 拖到时间轴的位置"
-    >
+  const preview = (
+    <div ref={viewRef} className="absolute inset-0">
       {!hot && (
-        <div className="p-1.5 pointer-events-none">
-          <div className="text-xs text-neutral-200 font-medium truncate">{def.name}</div>
-          <div className="text-[10px] text-neutral-500 line-clamp-2 mt-1">{def.description}</div>
+        <div className="pc-pcard-text">
+          <div className="pc-pcard-name">{def.name}</div>
+          <div className="pc-pcard-desc">{def.description}</div>
         </div>
       )}
-      
-      {error && (
-        <div className="absolute bottom-1 inset-x-0 text-center text-[10px] text-red-500 z-10 pointer-events-none bg-black/50">
-          没有动效轨,先在时间轴新建一条
-        </div>
-      )}
-
       {hot && box.w > 0 && box.h > 0 && (
-        <>
-          <div data-pc="preview" className="absolute inset-0 overflow-hidden bg-black/60 pointer-events-none" style={{ ...themeStyle(project.themeId) }}>
-            <div style={{
+        <div data-pc="preview" className="absolute inset-0 overflow-hidden bg-black/60 pointer-events-none" style={{ ...themeStyle(project.themeId) }}>
+          <div
+            style={{
               position: "absolute",
               left: (box.w - project.width * scale) / 2,
               top: (box.h - project.height * scale) / 2,
               width: project.width,
               height: project.height,
               transform: `scale(${scale})`,
-              transformOrigin: "0 0"
-            }}>
-              <div className="pc-stage" style={{ position: "relative", width: "100%", height: "100%" }} key={token}>
-                <AnimClock speed={1}>
-                  <def.Component params={def.defaults} playToken={token} />
-                </AnimClock>
-              </div>
+              transformOrigin: "0 0",
+            }}
+          >
+            <div className="pc-stage" style={{ position: "relative", width: "100%", height: "100%" }} key={token}>
+              <AnimClock speed={1}>
+                <def.Component params={def.defaults} playToken={token} />
+              </AnimClock>
             </div>
           </div>
-          <div className="absolute top-0 inset-x-0 bg-black/70 text-[10px] px-1 py-0.5 truncate text-neutral-200 pointer-events-none z-10">
-            {def.name}
-          </div>
-        </>
+        </div>
       )}
     </div>
+  );
+
+  return (
+    <PreviewCard
+      attrs={{ "data-pc-card": def.id }}
+      title={def.name}
+      // 不悬停时名字已经在画面区里,标题条只在动画跑起来之后压在底边
+      caption="hover"
+      preview={preview}
+      hoverDelayMs={180}
+      onHover={onHover}
+      draggable
+      onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
+      onClick={onClick}
+      error={error ? "没有动效轨,先在时间轴新建一条" : null}
+      titleAttr="点击 = 加到播放头;拖动 = 拖到时间轴的位置"
+    />
   );
 }

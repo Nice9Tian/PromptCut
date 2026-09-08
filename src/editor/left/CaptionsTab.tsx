@@ -40,11 +40,13 @@ export function CaptionsTab({
   const [searchOpenMap, setSearchOpenMap] = useState<Record<string, boolean>>({});
 
   const q = search.trim().toLowerCase();
+  // 图片没有声音,转写对它没有意义:字幕页只列视频和配乐
+  const spoken = useMemo(() => project.media.filter((m) => m.kind !== "image"), [project.media]);
 
   useEffect(() => {
-    // 选中的素材被删了就退回第一条
-    if (mediaId && !project.media.some((m) => m.id === mediaId)) onPick(project.media[0]?.id ?? null);
-  }, [mediaId, project.media, onPick]);
+    // 选中的素材被删了(或者是张图片)就退回第一条
+    if (mediaId && !spoken.some((m) => m.id === mediaId)) onPick(spoken[0]?.id ?? null);
+  }, [mediaId, spoken, onPick]);
 
   useEffect(() => {
     // 换搜索词就把手动折叠清掉,否则上一轮折起来的节点会把这一轮的命中藏住
@@ -53,7 +55,7 @@ export function CaptionsTab({
 
   const nodes = useMemo<CaptionNode[]>(
     () =>
-      project.media.map((media) => {
+      spoken.map((media) => {
         const segments = media.transcript?.segments ?? [];
         const all = segments.map((seg, index) => ({ seg, index }));
         if (!q) return { media, rows: all, total: segments.length, matched: true };
@@ -62,10 +64,10 @@ export function CaptionsTab({
         const rows = nameHit ? all : all.filter(({ seg }) => seg.text.toLowerCase().includes(q));
         return { media, rows, total: segments.length, matched: nameHit || rows.length > 0 };
       }),
-    [project.media, q],
+    [spoken, q],
   );
 
-  if (project.media.length === 0) {
+  if (spoken.length === 0) {
     return (
       <div className="pc-l-empty">
         <div>
@@ -93,9 +95,9 @@ export function CaptionsTab({
   }
 
   // mediaId 还兼着「导入的 .srt 挂到哪」,没选过就落到第一份有转写的素材上
-  const focusId = mediaId ?? project.media.find((m) => m.transcript)?.id ?? project.media[0]?.id ?? null;
+  const focusId = mediaId ?? spoken.find((m) => m.transcript)?.id ?? spoken[0]?.id ?? null;
   const visible = q ? nodes.filter((n) => n.matched) : nodes;
-  const nothingTranscribed = project.media.every((m) => !m.transcript);
+  const nothingTranscribed = spoken.every((m) => !m.transcript);
 
   /** 默认只展开当前聚焦的那份;搜索时改成「有命中就展开」,素材和段落再多也不会一屏全铺开 */
   const isOpen = (n: CaptionNode) =>

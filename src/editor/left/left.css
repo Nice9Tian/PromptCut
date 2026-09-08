@@ -182,3 +182,136 @@
 .pc-l-empty-btn:hover {
   background: var(--ui-float);
 }
+
+/* ── 统一的方形预览卡(PreviewCard.tsx):动效卡 / 转场 / 视频 / 图像共用 ──
+ * 正方形画面区 + 底边标题条 + 贴底的强调色进度条。悬停只描边不画内阴影:
+ * 皮肤里那条 `.cursor-grab.bg-neutral-900:hover` 的 3px 左侧内阴影会漏进铺满的预览画面里。 */
+.pc-pcard-wrap {
+  min-width: 0;
+}
+.pc-pcard {
+  position: relative;
+  aspect-ratio: 1 / 1;
+  border-radius: 6px;
+  border: 1px solid var(--ui-border);
+  background: linear-gradient(160deg, var(--ui-panel), var(--ui-bg-2));
+  overflow: hidden;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+  transition: border-color 140ms, box-shadow 140ms;
+}
+.pc-pcard.is-grab {
+  cursor: grab;
+}
+.pc-pcard.is-hot {
+  border-color: color-mix(in oklab, var(--ui-accent) 70%, var(--ui-border));
+  box-shadow: 0 6px 14px rgba(0, 0, 0, 0.35);
+}
+.pc-pcard-view {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+.pc-pcard-view > img,
+.pc-pcard-view > video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  background: #000;
+}
+/* 画面区里的文字说明(动效卡没悬停时) */
+.pc-pcard-text {
+  padding: 8px 9px;
+  pointer-events: none;
+}
+.pc-pcard-text .pc-pcard-name {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ui-fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pc-pcard-text .pc-pcard-desc {
+  margin-top: 4px;
+  font-size: 10.5px;
+  line-height: 1.45;
+  color: var(--ui-fg-muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.pc-pcard-cap {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 14px 7px 5px;
+  background: linear-gradient(to top, rgba(8, 10, 16, 0.86), rgba(8, 10, 16, 0));
+  pointer-events: none;
+}
+.pc-pcard-title {
+  font-size: 11px;
+  font-weight: 500;
+  color: #eef2f8;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+}
+.pc-pcard-sub {
+  font-size: 10px;
+  color: rgba(238, 242, 248, 0.7);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* 播放进度:贴着底边,只看不拖 */
+.pc-pcard-bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3px;
+  background: rgba(255, 255, 255, 0.12);
+  pointer-events: none;
+}
+.pc-pcard-bar-fill {
+  height: 100%;
+  background: var(--ui-accent);
+  transition: width 120ms linear;
+}
+.pc-pcard-err {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 3px 4px;
+  font-size: 10px;
+  text-align: center;
+  color: var(--ui-danger);
+  background: rgba(0, 0, 0, 0.6);
+  pointer-events: none;
+  z-index: 2;
+}
+/* 转场卡下面那行操作 */
+.pc-pcard-foot {
+  display: flex;
+  gap: 6px;
+  margin-top: 5px;
+}
+/* 素材网格:两列,和卡片页一致 */
+.pc-l-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  padding: 4px 8px;
+}
+/* 转场卡悬停:后一段在前一段上来回淡入淡出 */
+@keyframes pc-xfade {
+  0%, 15% { opacity: 0; }
+  50%, 65% { opacity: 1; }
+  100% { opacity: 0; }
+}
