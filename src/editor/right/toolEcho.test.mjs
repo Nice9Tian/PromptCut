@@ -73,11 +73,45 @@ test("timelineDigest 只带 id/卡或素材/起止，不带 params，秒数保�
       { id: "v1", name: "视频", clips: [{ id: "m1", mediaId: "med", start: 0, end: 13.7333 }] },
     ],
   });
-  assert.deepEqual(d, [
+  assert.deepEqual(d.tracks, [
     { trackId: "t1", name: "字幕", clips: [{ id: "c1", cardId: "caption-track", start: 0, end: 13.73 }] },
     { trackId: "v1", name: "视频", clips: [{ id: "m1", mediaId: "med", start: 0, end: 13.73 }] },
   ]);
   assert.equal(JSON.stringify(d).includes("params"), false);
+});
+
+/*
+ * 项目时长和内容实际结束的位置**必须一起回显**。
+ *
+ * 这两个数错位是看不见的:store 里只有「拖素材上轨道」会把 duration 往长了顶一次,
+ * removeClip 根本不动它,卡片类的 clip 连顶都不顶。于是「清理完冗余内容」之后
+ * 时长还停在老的最大值,片尾挂着一段黑;往后铺卡铺过了头,超出的那截直接被切掉。
+ * 模型每一步都收到这份回显,却看不到这个数,自然想不到要去 set_project_meta 修。
+ */
+test("timelineDigest 带上项目时长和内容实际的结束位置", () => {
+  const p = (duration, tracks) => timelineDigest({
+    version: 1, name: "p", width: 1, height: 1, fps: 30, duration, media: [], tracks,
+  });
+
+  // 删剩一张短卡:时长没跟着缩,片尾挂着一段黑
+  const shrunk = p(30, [{ id: "t1", name: "s", clips: [{ id: "c1", cardId: "x", start: 0, end: 12, params: {} }] }]);
+  assert.equal(shrunk.duration, 30);
+  assert.equal(shrunk.contentEnd, 12);
+
+  // 卡铺过了头:超出 duration 的那截播不到也导不出
+  const overflow = p(30, [{ id: "t1", name: "s", clips: [{ id: "c1", cardId: "x", start: 0, end: 42.5, params: {} }] }]);
+  assert.equal(overflow.contentEnd, 42.5);
+
+  // 跨轨道取最大值,不是只看第一条
+  const multi = p(60, [
+    { id: "t1", name: "a", clips: [{ id: "c1", cardId: "x", start: 0, end: 5, params: {} }] },
+    { id: "t2", name: "b", clips: [{ id: "c2", cardId: "y", start: 5, end: 18.666, params: {} }] },
+  ]);
+  assert.equal(multi.contentEnd, 18.67, "和 clip 的起止一样保留两位");
+
+  // 空时间轴是 0,不是 -Infinity(Math.max 空数组的坑)
+  assert.equal(p(30, []).contentEnd, 0);
+  assert.equal(p(30, [{ id: "t1", name: "空", clips: [] }]).contentEnd, 0);
 });
 
 test("lookHint 是一个现成的 see_preview 调用", () => {

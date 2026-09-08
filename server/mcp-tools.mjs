@@ -32,7 +32,7 @@ export const tools = [
   },
   {
     name: "add_clip",
-    description: "在时间轴上添加一张新卡片。需要提供 cardId 和 start 时间。params 会和卡片 defaults 合并，只写你要改的项即可；但键名必须是该卡真有的参数、标了必填的参数不能为空，否则直接报错——先用 list_cards({cardId}) 看清 schema 再建。字幕卡不要手写 lines，用 fill_captions。返回新建的 clip，外加 `look`（为这张卡准备好的 see_preview 调用，涉及位置和遮挡的决定请照着调去看真实画面）和 `timeline`（当前全部轨道与 clip 的 id、起止一览，之后引用 clipId 以它为准）。",
+    description: "在时间轴上添加一张新卡片。需要提供 cardId 和 start 时间。params 会和卡片 defaults 合并，只写你要改的项即可；但键名必须是该卡真有的参数、标了必填的参数不能为空，否则直接报错——先用 list_cards({cardId}) 看清 schema 再建。字幕卡不要手写 lines，用 fill_captions。返回新建的 clip，外加 `look`（为这张卡准备好的 see_preview 调用，涉及位置和遮挡的决定请照着调去看真实画面）和 `timeline`（当前全部轨道与 clip 的 id、起止一览，之后引用 clipId 以它为准；里面的 `duration` 是整条片子多长、`contentEnd` 是内容实际结束在哪，两个数对不上就用 set_project_meta 把 duration 设成 contentEnd）。",
     inputSchema: {
       type: "object",
       properties: {
@@ -48,7 +48,7 @@ export const tools = [
   },
   {
     name: "update_clip",
-    description: "更新某张卡片,可修改参数、时段、更换卡片类型(cardId),以及不透明度 / 淡入淡出 / 标签 / 所在序列。**已经在时间轴上的卡要改就用它**，不要 remove_clip 再 add_clip 重建。opacity 0~1(遮到人又挪不开时降它);fadeIn/fadeOut 是秒;trackId 换序列——序列数组里靠后的盖住靠前的,要让一张卡压在另一张上面就把它挪到更靠后的序列(get_project 里 tracks 的顺序)。位置、尺寸、缩放不在这里改,用 set_rect / set_position / align / nudge。返回 `look`（去看这张卡真实画面的 see_preview 调用）和 `timeline`（当前全部 clip 的 id、起止一览）。",
+    description: "更新某张卡片,可修改参数、时段、更换卡片类型(cardId),以及不透明度 / 淡入淡出 / 标签 / 所在序列。**已经在时间轴上的卡要改就用它**，不要 remove_clip 再 add_clip 重建。opacity 0~1(遮到人又挪不开时降它);fadeIn/fadeOut 是秒;trackId 换序列——序列数组里靠后的盖住靠前的,要让一张卡压在另一张上面就把它挪到更靠后的序列(get_project 里 tracks 的顺序)。位置、尺寸、缩放不在这里改,用 set_rect / set_position / align / nudge。返回 `look`（去看这张卡真实画面的 see_preview 调用）和 `timeline`（当前全部 clip 的 id、起止一览，外加 `duration` / `contentEnd` —— 对不上就用 set_project_meta 修）。",
     inputSchema: {
       type: "object",
       properties: {
@@ -254,7 +254,7 @@ export const tools = [
   },
   {
     name: "remove_clip",
-    description: "删除某张卡片(根据 clipId)。有门槛：你自己刚用 add_clip 建的卡、或者一口气连删超过 5 张，会被拒——要改卡用 update_clip；确实要删就传 force:true 并在 reason 里写明理由（用户会看到这句话）。返回 `timeline`（删完后全部 clip 的 id、起止一览，之后引用 clipId 以它为准）。",
+    description: "删除某张卡片(根据 clipId)。有门槛：你自己刚用 add_clip 建的卡、或者一口气连删超过 5 张，会被拒——要改卡用 update_clip；确实要删就传 force:true 并在 reason 里写明理由（用户会看到这句话）。返回 `timeline`（删完后全部 clip 的 id、起止一览，之后引用 clipId 以它为准。**删完尤其要看 `duration` 和 `contentEnd`**：时长不会自己缩短，片尾很容易挂着一段黑，用 set_project_meta 修掉）。",
     inputSchema: {
       type: "object",
       properties: {
@@ -391,16 +391,23 @@ export const tools = [
   },
   {
     name: "set_project_meta",
-    description: "设置项目元数据(名称、宽高、帧率、时长等)。",
+    description: "设置项目元数据:名称、画布宽高、帧率、**整条片子的时长**、主题。改时间轴的总长度就用这里的 `duration` —— 它是唯一的入口,没有别的工具能改。",
     inputSchema: {
       type: "object",
       properties: {
-        name: { type: "string" },
-        width: { type: "number" },
-        height: { type: "number" },
-        fps: { type: "number" },
-        duration: { type: "number" },
-        themeId: { type: "string" }
+        name: { type: "string", description: "项目名" },
+        width: { type: "number", description: "画布宽(像素)" },
+        height: { type: "number", description: "画布高(像素)" },
+        fps: { type: "number", description: "帧率" },
+        duration: {
+          type: "number",
+          description:
+            "整条片子多长,单位秒。时间轴从 0 开始、到这里结束,**预览和导出都在这一刻切断**。" +
+            "它不会自己跟着内容走:加卡片不会把它撑长,删东西也不会把它缩短(只有拖素材上轨道时会往长了顶一次)。" +
+            "所以排完版要自己对一遍 —— 工具返回的 timeline 里 contentEnd 是内容实际结束的位置," +
+            "比 duration 小就是片尾挂了一段黑,比 duration 大就是后面那截被切掉了,两种都要把 duration 设成 contentEnd。"
+        },
+        themeId: { type: "string", description: "全局主题 id" }
       }
     },
     side: "browser"

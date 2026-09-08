@@ -25,10 +25,25 @@ export interface TimelineDigestTrack {
   name: string;
   clips: TimelineDigestClip[];
 }
+export interface TimelineDigest {
+  /** 整条片子多长(秒)。预览和导出都在这里停 */
+  duration: number;
+  /** 最后一张卡 / 一段素材结束在哪(秒)。空时间轴是 0 */
+  contentEnd: number;
+  tracks: TimelineDigestTrack[];
+}
 
-/** 工具结果里回显的时间轴一览。只有 id / 卡或素材 / 起止，不带 params，省 token。 */
-export function timelineDigest(p: Project): TimelineDigestTrack[] {
-  return p.tracks.map((tr) => ({
+/**
+ * 工具结果里回显的时间轴一览。只有 id / 卡或素材 / 起止，不带 params，省 token。
+ *
+ * duration 和 contentEnd 必须一起给出来 —— 这两个数不一样是**看不见的**:
+ * 项目时长只涨不缩(store 里 addClip 才 Math.max 一下,removeClip 根本不动它,
+ * 卡片类的 clip 连涨都不涨),所以「删完冗余内容」之后时长还停在老的最大值,
+ * 片尾挂着一段黑;反过来往后铺卡片铺过了头,超出的部分直接被切掉。
+ * 以前这份回显只有轨道和 clip,模型每一步都看不到这个错位,自然也想不到去修。
+ */
+export function timelineDigest(p: Project): TimelineDigest {
+  const tracks = p.tracks.map((tr) => ({
     trackId: tr.id,
     name: tr.name,
     clips: tr.clips.map((c) => ({
@@ -38,6 +53,12 @@ export function timelineDigest(p: Project): TimelineDigestTrack[] {
       end: round2(c.end),
     })),
   }));
+  const ends = p.tracks.flatMap((tr) => tr.clips.map((c) => c.end));
+  return {
+    duration: round2(p.duration),
+    contentEnd: round2(ends.length ? Math.max(...ends) : 0),
+    tracks,
+  };
 }
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
