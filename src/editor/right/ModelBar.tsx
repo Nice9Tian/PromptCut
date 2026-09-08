@@ -5,6 +5,8 @@ import {
   CAPABILITIES,
   EFFORT_LABEL,
   modelsFor,
+  effortsFor,
+  pairModelEffort,
   readChoice,
   writeChoice,
   normalizeModel,
@@ -43,8 +45,22 @@ export function ModelBar(props: {
   // 和 useAiChat 发请求时用的是同一个函数 —— 下拉框显示什么,请求里就得是什么
   const models = modelsFor(provider, config);
 
-  // 设置里把某个模型删掉之后,别再拿一个已经不存在的名字去跑
-  const model = normalizeModel(choice.model, models);
+  /*
+   * 设置里把某个模型删掉之后,别再拿一个已经不存在的名字去跑。
+   * agy 还要多一道:清单已经折成基名了(见 agyGroups),而 localStorage 里可能存着
+   * 早先那种带 -low 后缀的写法 —— 先折回基名再对清单,否则用户明明选过,
+   * 下拉框却显示成「默认」。
+   */
+  const paired = pairModelEffort(provider, choice.model, choice.effort, config);
+  const model = normalizeModel(paired.model, models);
+
+  /*
+   * 这个模型支持哪几档思考。agy 是**按模型算**的:gemini-3.1-pro 只有低 / 高(没有中),
+   * claude-sonnet-4-6 一档都没有。别的驱动还是各家那张固定表。
+   */
+  const efforts = effortsFor(provider, model, config);
+  // 存着的档位这个模型没有时,下拉框直接显示实际会发出去的那一档,别让屏幕和请求对不上
+  const effort = efforts.includes(choice.effort) ? choice.effort : (model ? paired.effort : choice.effort);
 
   const update = (patch: Partial<typeof choice>) => {
     writeChoice(provider, patch);
@@ -99,14 +115,20 @@ export function ModelBar(props: {
         <span className="ai-modelbar-label">思考</span>
         <select
           className="ai-modelbar-select"
-          value={choice.effort}
-          disabled={disabled || cap.efforts.length === 0}
-          title={cap.efforts.length === 0 ? "API 直连这边还没接推理强度" : "推理强度：越高想得越久"}
+          value={effort}
+          disabled={disabled || efforts.length === 0}
+          title={
+            efforts.length === 0
+              ? (provider === "agy" ? `${model} 不支持调思考档` : "API 直连这边还没接推理强度")
+              : provider === "agy" && model
+                ? `推理强度：越高想得越久。agy 把档位编在模型名里，这里选好就会发 --model ${model} --effort <档>`
+                : "推理强度：越高想得越久"
+          }
           onChange={(e) => update({ effort: e.target.value as EffortLevel })}
         >
-          {cap.efforts.length === 0
+          {efforts.length === 0
             ? <option value="">不支持</option>
-            : cap.efforts.map((lv) => (
+            : efforts.map((lv) => (
                 <option key={lv} value={lv}>{EFFORT_LABEL[lv]}</option>
               ))}
         </select>

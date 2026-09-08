@@ -84,8 +84,31 @@ test('stdin 是 agy 认的那种 NDJSON:少 event 或少 message 它都会拒', 
 });
 
 test('模型 / 推理档 / 会话 id 还是走命令行,没被一起挪走', async () => {
-  const { args } = await run({ model: 'gemini-3.8-flash-low', effort: 'low', sessionId: 'abc' });
-  assert.equal(args[args.indexOf('--model') + 1], 'gemini-3.8-flash-low');
+  const { args } = await run({ model: 'gemini-3.8-flash', effort: 'low', sessionId: 'abc' });
+  assert.equal(args[args.indexOf('--model') + 1], 'gemini-3.8-flash');
   assert.equal(args[args.indexOf('--effort') + 1], 'low');
   assert.equal(args[args.indexOf('--conversation') + 1], 'abc');
+});
+
+/*
+ * 名字里带档位的写法(gemini-3.8-flash-low)和 --effort 必须配对,配不上 agy 直接拒整轮。
+ * 面板已经拆成「基名 + 档位」了,但后台任务、分工模式那几条路不经过面板,
+ * 会话历史里也可能存着早先带后缀的名字 —— 这里是最后一道。
+ */
+test('带档位后缀的模型名:剥成基名,后缀当档位,保证配得上', async () => {
+  const { args } = await run({ model: 'gemini-3.8-flash-low', effort: 'high' });
+  assert.equal(args[args.indexOf('--model') + 1], 'gemini-3.8-flash');
+  assert.equal(args[args.indexOf('--effort') + 1], 'low', '名字里那档说了算,不能把对不上的 high 发出去');
+});
+
+test('带后缀但没给档位:也要补上,不然 agy 说 requires --effort', async () => {
+  const { args } = await run({ model: 'gemini-3.1-pro-high', effort: '' });
+  assert.equal(args[args.indexOf('--model') + 1], 'gemini-3.1-pro');
+  assert.equal(args[args.indexOf('--effort') + 1], 'high');
+});
+
+test('不带档位后缀的模型名原样传,也不硬塞一个档位', async () => {
+  const { args } = await run({ model: 'claude-sonnet-4-6', effort: '' });
+  assert.equal(args[args.indexOf('--model') + 1], 'claude-sonnet-4-6');
+  assert.ok(!args.includes('--effort'), 'claude-sonnet-4-6 不吃 --effort,给了会被拒');
 });

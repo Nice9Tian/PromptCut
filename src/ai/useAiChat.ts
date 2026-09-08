@@ -2,7 +2,7 @@ import { recordTrace } from './debug';
 import { useState, useEffect, useRef, useCallback } from "react";
 import type { AiProvider, ChatMessage, ChatAttachment, MessagePart, MessageRuntime, ProviderInfo, RunEvent, SttInfo, LoginState, PublicAiConfig, AiConfigPatch, CliSetupJob, KeyKind } from "./types";
 import { parseSseChunks } from "./sse";
-import { readChoice, compatToSend, normalizeModel, modelsFor } from "./modelOptions";
+import { readChoice, compatToSend, normalizeModel, modelsFor, pairModelEffort } from "./modelOptions";
 import { getScript } from "./script";
 import { useChatMessages, getChatStore, MAIN_TAB } from "./liveChat";
 import * as agentBus from "./agentBus";
@@ -114,7 +114,7 @@ export function useAiChat(opts?: { mock?: boolean; tabId?: string; getConversati
         { id: "agy", label: "Antigravity", available: true, version: "1.1.27", auth: { loggedIn: true } },
         { id: "api", label: "API 直连", available: false, note: "还没填 API Key", auth: { loggedIn: false, detail: "还没填 API Key" } }
       ]);
-      setConfig({ version: 1, defaultProvider: null, toolProtocol: true, api: { vendor: "anthropic", baseUrl: "", model: "gpt-4o|gpt-4o-mini", maxTokens: 4096, apiKey: { set: false, last4: "" }, source: "" }, keys: { custom: { set: false, last4: "" }, router: { set: false, last4: "" } }, cliModels: { claude: "opus|sonnet|haiku", codex: "gpt-5.6-terra|gpt-5.6-sol", agy: "gemini-3.1-pro-high|gemini-3.8-flash-low" } });
+      setConfig({ version: 1, defaultProvider: null, toolProtocol: true, api: { vendor: "anthropic", baseUrl: "", model: "gpt-4o|gpt-4o-mini", maxTokens: 4096, apiKey: { set: false, last4: "" }, source: "" }, keys: { custom: { set: false, last4: "" }, router: { set: false, last4: "" } }, cliModels: { claude: "opus|sonnet|haiku", codex: "gpt-5.6-terra|gpt-5.6-sol", agy: "gemini-3.8-flash-high|gemini-3.8-flash-medium|gemini-3.8-flash-low|gemini-3.1-pro-high|gemini-3.1-pro-low|claude-sonnet-4-6" } });
       setProvider("claude");
       // ?nosetup=1 给自动化脚本用:不弹首启设置对话框
       if (tabId === MAIN_TAB && localStorage.getItem("aiSetupDone") === null && !new URLSearchParams(location.search).has("nosetup")) {
@@ -478,6 +478,16 @@ export function useAiChat(opts?: { mock?: boolean; tabId?: string; getConversati
      * 显示和实际跑的必须是同一个值。
      */
     choice.model = normalizeModel(choice.model, modelsFor(provider, config));
+    /*
+     * agy 的模型名和思考档必须配对(gemini-3.8-flash-low 配 --effort high 会被它当场拒),
+     * 而且每个模型自己有哪几档不一样。面板上是「基名 + 档位」两个框,发出去之前在这里
+     * 拼成 agy 认的那一对;别的驱动原样返回。
+     */
+    {
+      const pair = pairModelEffort(provider, choice.model, choice.effort, config);
+      choice.model = pair.model;
+      choice.effort = pair.effort;
+    }
     // 参数兼容模式:锁死的驱动 / 模型不听本地偏好,按策略定论;可调的把偏好交给服务端
     choice.schemaCompat = compatToSend(provider, choice.model, config?.api?.vendor, choice.schemaCompat);
     const runtime: MessageRuntime = { provider, ...choice, toolProtocol: !!config?.toolProtocol };

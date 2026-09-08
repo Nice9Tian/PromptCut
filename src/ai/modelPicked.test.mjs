@@ -18,7 +18,8 @@ const cfg = {
 test("清单从哪来:api 读 api.model,三家 CLI 各读自己那条", () => {
   assert.deepEqual(modelsFor("api", cfg), ["gpt-4o", "gpt-4o-mini"]);
   assert.deepEqual(modelsFor("claude", cfg), ["opus", "sonnet"]);
-  assert.deepEqual(modelsFor("agy", cfg), ["gemini-3.8-flash-low", "gemini-3.1-pro-high"]);
+  // agy 的档位编在名字里,面板上列的是基名(配对规则见 agyEffort.test.mjs)
+  assert.deepEqual(modelsFor("agy", cfg), ["gemini-3.8-flash", "gemini-3.1-pro"]);
 });
 
 test("没配清单、或者根本没有 config:是空数组,不是抛出去", () => {
@@ -30,7 +31,8 @@ test("没配清单、或者根本没有 config:是空数组,不是抛出去", ()
 test("不在清单里的名字一律退回「默认」——事故里那个点号写法就该被拦在这儿", () => {
   const models = modelsFor("agy", cfg);
   assert.equal(normalizeModel("gemini-3.8.flash", models), "", "写错一个字符就不该发出去");
-  assert.equal(normalizeModel("gemini-3.8-flash-low", models), "gemini-3.8-flash-low");
+  // 清单折成基名了,所以对得上的是基名;带后缀那种老写法由 pairModelEffort 先折回来
+  assert.equal(normalizeModel("gemini-3.8-flash", models), "gemini-3.8-flash");
 });
 
 test("清单空的时候,任何存着的旧名字都要退回「默认」", () => {

@@ -181,7 +181,110 @@ export function modelsFor(
   provider: AiProvider,
   config: { api?: { model?: string }; cliModels?: Partial<Record<string, string>> } | null | undefined,
 ): string[] {
-  return provider === "api"
+  const raw = provider === "api"
     ? parseModelList(config?.api?.model)
     : parseModelList(config?.cliModels?.[provider]);
+  // agy 把思考档编在模型名里,面板上只列基名(见 agyGroups)
+  return provider === "agy" ? agyGroups(raw).map((g) => g.base) : raw;
+}
+
+/* ── agy:模型名里编着思考档 ─────────────────────────────────
+ *
+ * `agy models` 给出来的是 gemini-3.8-flash-low / -medium / -high 这种,思考档是**名字的一部分**。
+ * 而 agy 同时又收 --effort,两者**必须配对**,配不上它直接拒:
+ *
+ *   --model gemini-3.8-flash-low  --effort low    ✓
+ *   --model gemini-3.8-flash-low  --effort high   ✗ invalid model selection
+ *   --model gemini-3.8-flash      --effort low    ✓ 基名 + 档位,和上面第一条等价
+ *   --model gemini-3.8-flash                      ✗ requires --effort (available: low, medium, high)
+ *   --model gemini-3.1-pro        --effort medium ✗ has no "medium" effort (available: low, high)
+ *   --model claude-sonnet-4-6     --effort low    ✗ --effort is not supported for this model
+ *
+ * 所以档位不能是一张固定的表:**每个模型自己有哪几档,得从清单里数出来**
+ * (gemini-3.1-pro 只有 low / high,没有 medium;claude-sonnet-4-6 一档都没有)。
+ * 面板上把带后缀的名字折成一个基名,选哪一档交给「思考」那个下拉框,
+ * 发请求时再拼回成 agy 认的那一对。
+ */
+
+/** 一个 agy 模型,以及它到底支持哪几档思考(空数组 = 这个模型不吃 --effort) */
+export interface AgyModelGroup {
+  base: string;
+  efforts: EffortLevel[];
+}
+
+/** 名字末尾的思考档。只认这三个 —— claude-opus-4-6-**thinking** 那种后缀不是档位 */
+const AGY_EFFORT_SUFFIX = /^(.+)-(low|medium|high)$/;
+
+/** 从低到高。用来在存着的档位对不上这个模型时往下取一档 */
+const AGY_EFFORT_ORDER: EffortLevel[] = ["low", "medium", "high"];
+
+/**
+ * 把 `agy models` 那串名字折成「基名 + 它支持的档位」。
+ * 顺序按清单里第一次出现的先后,档位按 low → medium → high 排(界面上从轻到重才顺)。
+ */
+export function agyGroups(models: string[]): AgyModelGroup[] {
+  const byBase = new Map<string, Set<string>>();
+  for (const name of models) {
+    const m = AGY_EFFORT_SUFFIX.exec(name);
+    const base = m ? m[1] : name;
+    if (!byBase.has(base)) byBase.set(base, new Set());
+    if (m) byBase.get(base)!.add(m[2]);
+  }
+  return [...byBase].map(([base, efforts]) => ({
+    base,
+    efforts: AGY_EFFORT_ORDER.filter((e) => efforts.has(e)),
+  }));
+}
+
+/**
+ * 选中这个模型之后,「思考」下拉框该给哪几档。
+ *
+ * agy 之外还是各家那张固定表。agy 这边:
+ *   - 没选模型(默认):给固定表,agy 自己那个默认模型配什么档都收;
+ *   - 选了带档位的模型:**只给它有的那几档,而且没有「默认」** —— 基名不带 --effort 是会被拒的;
+ *   - 选了不吃档位的模型(claude-sonnet-4-6):空数组,界面上灰掉写「不支持」。
+ */
+export function effortsFor(
+  provider: AiProvider,
+  model: string,
+  config: { api?: { model?: string }; cliModels?: Partial<Record<string, string>> } | null | undefined,
+): EffortLevel[] {
+  if (provider !== "agy") return CAPABILITIES[provider].efforts;
+  if (!model) return CAPABILITIES.agy.efforts;
+  const group = agyGroups(parseModelList(config?.cliModels?.agy)).find((g) => g.base === model);
+  return group ? group.efforts : CAPABILITIES.agy.efforts;
+}
+
+/**
+ * 真正发出去的那一对 (model, effort)。
+ *
+ * agy 之外原样返回。agy 这边负责把面板上的「基名 + 档位」拼成它认的组合,并且**保证配得上**:
+ * 存着的档位这个模型没有(换了模型、或者是早先版本留下的),就往下取一档,
+ * 一档都没有就取它最低的那档;模型压根不吃档位就把档位清掉。
+ *
+ * 还兼容早先直接存了带后缀名字的情况:先把后缀剥掉当基名,剥下来的那档在
+ * 存着的档位对不上时充当兜底 —— 用户当初选的就是它。
+ */
+export function pairModelEffort(
+  provider: AiProvider,
+  model: string,
+  effort: EffortLevel,
+  config: { api?: { model?: string }; cliModels?: Partial<Record<string, string>> } | null | undefined,
+): { model: string; effort: EffortLevel } {
+  if (provider !== "agy" || !model) return { model, effort };
+
+  const suffix = AGY_EFFORT_SUFFIX.exec(model);
+  const base = suffix ? suffix[1] : model;
+  const fromName = (suffix ? suffix[2] : "") as EffortLevel;
+
+  const group = agyGroups(parseModelList(config?.cliModels?.agy)).find((g) => g.base === base);
+  const available = group ? group.efforts : [];
+  if (available.length === 0) return { model: base, effort: "" };
+
+  if (available.includes(effort)) return { model: base, effort };
+  if (fromName && available.includes(fromName)) return { model: base, effort: fromName };
+  // 往下取一档:宁可比用户要的轻,也不要背着他更贵更慢地跑
+  const wanted = AGY_EFFORT_ORDER.indexOf(effort);
+  const lower = wanted < 0 ? [] : AGY_EFFORT_ORDER.slice(0, wanted).filter((e) => available.includes(e));
+  return { model: base, effort: lower.length ? lower[lower.length - 1] : available[0] };
 }

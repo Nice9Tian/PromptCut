@@ -130,12 +130,32 @@ function _startRun(opts) {
   if (opts.sessionId) {
     args.push('--conversation', opts.sessionId);
   }
-  if (opts.model) {
-    args.push('--model', opts.model);
+  /*
+   * 模型名和思考档**必须配对**,这是 agy 的硬规矩,配不上直接拒整轮:
+   *
+   *   --model gemini-3.8-flash-low --effort low   ✓
+   *   --model gemini-3.8-flash-low --effort high  ✗ invalid model selection
+   *   --model gemini-3.8-flash     --effort low   ✓ 基名 + 档位,和第一条等价
+   *
+   * 面板那边已经拆成「基名 + 档位」再发过来了(modelOptions.pairModelEffort),
+   * 这里把带后缀的写法再兜一道:后台任务、分工模式那几条路不一定经过面板,
+   * 而且会话历史里存的可能是早先那种带后缀的名字。剥掉后缀、拿它当档位,
+   * 结果和原来那个名字完全等价,但一定配得上。
+   */
+  let model = opts.model || '';
+  let effort = opts.effort || '';
+  const suffixed = /^(.+)-(low|medium|high)$/.exec(model);
+  if (suffixed) {
+    model = suffixed[1];
+    effort = suffixed[2];
   }
-  // agy 支持 low|medium|high 三档;没有加速档,前端会把那个开关灰掉
-  if (opts.effort) {
-    args.push('--effort', opts.effort);
+  if (model) {
+    args.push('--model', model);
+  }
+  // agy 支持 low|medium|high 三档,但**每个模型有哪几档不一样**(gemini-3.1-pro 就没有 medium);
+  // 没有加速档,前端会把那个开关灰掉
+  if (effort) {
+    args.push('--effort', effort);
   }
 
   const safeOnEvent = (ev) => {
