@@ -1,4 +1,4 @@
-import { useState, useRef, useLayoutEffect, useEffect } from "react";
+import { useState, useRef, useLayoutEffect } from "react";
 import { useStore, actions, getState } from "../../store/project";
 import { AnimClock } from "../../kernel/AnimClock";
 import { themeStyle } from "../../themes";
@@ -6,31 +6,29 @@ import type { CardDef } from "../../kernel/types";
 import { DEFAULT_CARD_DUR } from "../../kernel/project";
 import { clearDragPayload, MIME_CARD, setDragPayload } from "../dnd";
 import { PreviewCard } from "./PreviewCard";
-import { measureContentBox, unionBox, type Box } from "./contentBox";
-
-/** 量包围盒的时刻(悬停后毫秒):进场动画常常从画外飞进来,多量几次取并集 */
-const MEASURE_AT = [160, 600, 1400];
-/** 包围盒四周留的空,按盒子尺寸的比例 */
-const PAD = 0.1;
+import { usePreviewZoom, zoomFor } from "./previewZoom";
 
 /**
  * 卡片库里的一格:方形预览卡(PreviewCard)。不悬停显示名字和说明,悬停 180ms 后
  * 在卡里跑一遍动画;点一下加到播放头,拖动拖到时间轴。
  *
- * 预览的缩放不按整个画幅,按**动效实际画出来的包围盒**:先按整幅铺开跑起来,
- * 量到内容的盒子之后再把视野推近到那个盒子(contentBox.ts)。1920×1080 的画幅
- * 里一个 400px 的标题,按整幅缩进 130px 的卡只剩一粒,按盒子缩就能看清。
+ * 预览的缩放不按整个画幅,按**动效跑完整段时内容最大的包围盒**(previewZoom.ts):
+ * 第一次悬停先藏着舞台倍速跑一遍量出盒子并缓存,再一步到位推近、从头正常播;
+ * 之后每次悬停直接用缓存,不再量、不再晃。1920×1080 的画幅里一个 400px 的标题,
+ * 按整幅缩进 130px 的卡只剩一粒,按盒子缩就能看清。
  */
 export function CardCell({ def }: { def: CardDef<any> }) {
   const [hot, setHot] = useState(false);
-  const [token, setToken] = useState(0);
   const [box, setBox] = useState({ w: 0, h: 0 });
-  const [content, setContent] = useState<Box | null>(null);
   const [error, setError] = useState(false);
   const viewRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
 
   const project = useStore((s) => s.project);
+
+  // 动画多长:卡片声明的落定时刻(按默认参数算),没有就按 1.5s
+  const animMs = animMsOf(def);
+  const zoom = usePreviewZoom(`card:${def.id}`, stageRef, hot, animMs);
 
   useLayoutEffect(() => {
     if (hot && viewRef.current) {
@@ -38,31 +36,6 @@ export function CardCell({ def }: { def: CardDef<any> }) {
       setBox({ w: rect.width, h: rect.height });
     }
   }, [hot]);
-
-  const onHover = (v: boolean) => {
-    setHot(v);
-    if (v) setToken((t) => t + 1);
-    else setContent(null);
-  };
-
-  // 整幅铺开时的比例:量包围盒要用它把屏幕像素换回舞台像素
-  const fullScale = box.w && box.h ? Math.min(box.w / project.width, box.h / project.height) : 1;
-
-  useEffect(() => {
-    if (!hot) return;
-    let union: Box | null = null;
-    const timers = MEASURE_AT.map((ms) =>
-      window.setTimeout(() => {
-        const stage = stageRef.current;
-        if (!stage) return;
-        const measured = measureContentBox(stage);
-        if (!measured) return;
-        union = unionBox(union, measured);
-        setContent(union);
-      }, ms),
-    );
-    return () => timers.forEach((t) => window.clearTimeout(t));
-  }, [hot, token]);
 
   const onDragStart = (e: React.DragEvent) => {
     e.dataTransfer.setData(MIME_CARD, def.id);
@@ -85,21 +58,7 @@ export function CardCell({ def }: { def: CardDef<any> }) {
     }
   };
 
-  // 有包围盒就推近到盒子(留一圈边),没有就整幅
-  let scale = fullScale;
-  let left = (box.w - project.width * scale) / 2;
-  let top = (box.h - project.height * scale) / 2;
-  if (content) {
-    const bw = Math.max(1, content.r - content.l);
-    const bh = Math.max(1, content.b - content.t);
-    scale = Math.min(box.w / (bw * (1 + PAD * 2)), box.h / (bh * (1 + PAD * 2)));
-    // 别推得比整幅还远(盒子量错成一大片时退回整幅),也别放大到糊成马赛克
-    scale = Math.max(fullScale, Math.min(scale, 2));
-    const cx = (content.l + content.r) / 2;
-    const cy = (content.t + content.b) / 2;
-    left = box.w / 2 - cx * scale;
-    top = box.h / 2 - cy * scale;
-  }
+  const { scale, left, top } = zoomFor(zoom.box, box, project);
 
   const preview = (
     <div ref={viewRef} className="absolute inset-0">
@@ -120,13 +79,14 @@ export function CardCell({ def }: { def: CardDef<any> }) {
               height: project.height,
               transform: `scale(${scale})`,
               transformOrigin: "0 0",
-              // 量到盒子之后视野是「推近」过去的,不是跳过去
-              transition: content ? "transform 260ms cubic-bezier(0.16, 1, 0.3, 1), left 260ms cubic-bezier(0.16, 1, 0.3, 1), top 260ms cubic-bezier(0.16, 1, 0.3, 1)" : "none",
+              // 测量跑的时候不给人看:那一遍是倍速的,量完再从头正常播。
+              // 藏起来要用 opacity 而不是 visibility:visibility 会继承到每个子元素,量包围盒的人看谁都是 hidden,什么都量不到
+              opacity: zoom.measuring ? 0 : 1,
             }}
           >
-            <div ref={stageRef} className="pc-stage" style={{ position: "relative", width: "100%", height: "100%" }} key={token}>
+            <div ref={stageRef} className="pc-stage" style={{ position: "relative", width: "100%", height: "100%" }} key={zoom.token}>
               <AnimClock speed={1}>
-                <def.Component params={def.defaults} playToken={token} />
+                <def.Component params={def.defaults} playToken={zoom.token} />
               </AnimClock>
             </div>
           </div>
@@ -143,7 +103,7 @@ export function CardCell({ def }: { def: CardDef<any> }) {
       caption="hover"
       preview={preview}
       hoverDelayMs={180}
-      onHover={onHover}
+      onHover={setHot}
       draggable
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
@@ -152,4 +112,14 @@ export function CardCell({ def }: { def: CardDef<any> }) {
       titleAttr="点击 = 加到播放头;拖动 = 拖到时间轴的位置"
     />
   );
+}
+
+/** 卡片的动画时长(毫秒):timing 按默认参数算 > lifecycle 静态值 > 1500 */
+function animMsOf(def: CardDef<any>): number {
+  try {
+    const dyn = def.timing?.(def.defaults)?.settleMs;
+    if (typeof dyn === "number" && Number.isFinite(dyn)) return dyn;
+  } catch { /* 算炸了按静态值 */ }
+  const st = def.lifecycle?.settleMs;
+  return typeof st === "number" && Number.isFinite(st) ? st : 1500;
 }
