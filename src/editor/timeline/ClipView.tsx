@@ -9,6 +9,7 @@ import { useDrag } from "./useDrag";
 import { ContextMenu } from "./ContextMenu";
 import { clipTrackKind } from "../../kernel/trackKind";
 import { describeTransition, timingLock, transitionsOfClip } from "../../kernel/transitions";
+import { describeEmphasis } from "../../kernel/emphasis";
 import { requestCaptions } from "../left/captionsBus";
 
 export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
@@ -263,6 +264,9 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
               label: `删除转场:${describeTransition(getState().project, tr)}`,
               action: () => actions.removeTransition(tr.id),
             })),
+            ...(clip.emphasis
+              ? [{ label: `去掉强调:${describeEmphasis(clip.emphasis)}`, action: () => actions.setClipEmphasis(clip.id, null) }]
+              : []),
             { label: "复制", action: () => actions.duplicateClip(clip.id) },
             // 只要声音:画面没了,位置、长度、素材内偏移、淡入淡出都留着;素材库里同时多一份声音素材
             ...(canBecomeAudio ? [{ label: "转换为声音", action: () => actions.convertClipToAudio(clip.id) }] : []),

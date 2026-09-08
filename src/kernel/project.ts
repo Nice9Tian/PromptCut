@@ -267,6 +267,8 @@ export function flattenOverlay(p: Project): Timeline {
         // 不透明度 / 淡入淡出也要带过来:以前只有视频层吃这三个字段,卡片 clip 上设了等于没设,
         // 模型「降不透明度避开人物」这一招在卡片上是空操作。Stage 现在按 cardOpacityAt 应用。
         ...(c.opacity !== undefined ? { opacity: c.opacity } : null),
+        // 强调(阴影 / 描边)同理:Stage 渲染时才用得上,漏在这里就成了设了不生效
+        ...(c.emphasis ? { emphasis: c.emphasis } : null),
         ...(c.fadeIn ? { fadeIn: c.fadeIn } : null),
         ...(c.fadeOut ? { fadeOut: c.fadeOut } : null),
         // 组合卡的部件树:Stage 靠它渲染,漏了组合卡就是一张空卡

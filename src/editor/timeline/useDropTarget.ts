@@ -2,7 +2,7 @@ import { actions, getState } from "../../store/project";
 import { DEFAULT_CARD_DUR, DEFAULT_MEDIA_DUR } from "../../kernel/project";
 import { timeOfX } from "./utils";
 import { useTimelineContext } from "./TimelineContext";
-import { planDrop, planTransition, type DropPlan, type DropTarget } from "./dropPlan";
+import { clipAt, planDrop, planTransition, type DropPlan, type DropTarget } from "./dropPlan";
 import { clearDragPayload, getDragPayload, MIME_CARD, MIME_MEDIA, type DragPayload } from "../dnd";
 
 /** 拖动没经过本窗口的 dragstart(跨窗口拖进来)时的兜底:只认得种类,时长用默认值 */
@@ -66,6 +66,16 @@ export function useDropTarget(target: DropTarget) {
     setDropPlan(null);
     clearDragPayload();
     if (plan.status === "forbidden") return;
+
+    // 强调:给落点正下方那一段加阴影 / 描边
+    if (payload.kind === "emphasis") {
+      if (!plan.trackId) return;
+      const rect = e.currentTarget.getBoundingClientRect();
+      const sec = timeOfX(e.clientX - rect.left, pxPerSec);
+      const hit = clipAt(getState().project, plan.trackId, sec);
+      if (hit) actions.setClipEmphasis(hit.id, payload.emphasis);
+      return;
+    }
 
     // 转场:不放新片段,而是把落点处已有的那一 / 两段绑起来
     if (payload.kind === "transition") {

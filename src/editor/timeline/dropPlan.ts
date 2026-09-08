@@ -2,6 +2,7 @@ import type { Project } from "../../kernel/project";
 import { planPlacement } from "../../store/project";
 import { formatTime, snapTime } from "./utils";
 import { checkCrossfade, checkFade, clampDur, planTransitionDrop, TRANSITION_LABEL } from "../../kernel/transitions";
+import { describeEmphasis } from "../../kernel/emphasis";
 import { type DragPayload } from "../dnd";
 
 /**
@@ -24,6 +25,14 @@ export interface DropPlan {
 }
 
 export type DropTarget = { trackId: string } | { newTrackIndex: number };
+
+/** 强调落在哪一段上:落点那一刻正下方的片段 */
+export function clipAt(project: Project, trackId: string, sec: number): { id: string; start: number; end: number } | null {
+  const track = project.tracks.find((t) => t.id === trackId);
+  if (!track || track.locked) return null;
+  const c = track.clips.find((x) => sec >= x.start && sec < x.end);
+  return c ? { id: c.id, start: c.start, end: c.end } : null;
+}
 
 /** 转场落点算出来的结论:落下时照着它调 addTransition */
 export interface TransitionPlan {
@@ -81,6 +90,20 @@ export function planDrop(
   rawSec: number,
   opts: { altKey: boolean; pxPerSec: number; t: number },
 ): DropPlan {
+  // 强调也不占地方:落在哪一段上就给哪一段加
+  if (payload.kind === "emphasis") {
+    const base = { label: payload.name, trackId: null as string | null, newTrackIndex: null as number | null };
+    if ("newTrackIndex" in target) {
+      return { ...base, start: rawSec, end: rawSec, status: "forbidden", hint: "强调要落在已有的片段上" };
+    }
+    const hit = clipAt(project, target.trackId, rawSec);
+    if (!hit) return { ...base, trackId: target.trackId, start: rawSec, end: rawSec, status: "forbidden", hint: "拖到某一段片段上" };
+    return {
+      ...base, trackId: target.trackId, start: hit.start, end: hit.end, status: "ok",
+      hint: describeEmphasis(payload.emphasis),
+    };
+  }
+
   // 转场不占地方,它绑的是已经在时间轴上的片段 —— 只能落在已有序列上
   if (payload.kind === "transition") {
     const base = { label: payload.name, trackId: null as string | null, newTrackIndex: null as number | null };

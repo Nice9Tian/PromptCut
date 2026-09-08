@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { emphasisFilter } from "../../kernel/emphasis";
 import { audioClipsAt, videoLayersAt, type MediaAsset, type Project, type TrackClip } from "../../kernel/project";
 import { planSync } from "./mediaSync";
 
@@ -45,6 +46,11 @@ function targetTimeOf(clip: TrackClip, t: number) {
   return (clip.mediaOffset ?? 0) + (t - clip.start);
 }
 
+/** 素材层的强调:filter 挂在元素上,和舞台那边同一份计算(kernel/emphasis.ts) */
+function emphasisOf(clip: TrackClip): string | undefined {
+  return emphasisFilter(clip.emphasis) || undefined;
+}
+
 function VideoLayer({
   clip,
   media,
@@ -75,7 +81,7 @@ function VideoLayer({
       <img
         src={media.url}
         alt=""
-        style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", opacity }}
+        style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", opacity, filter: emphasisOf(clip) }}
       />
     );
   }
@@ -86,7 +92,7 @@ function VideoLayer({
       muted={muted}
       playsInline
       preload="auto"
-      style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", opacity }}
+      style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", opacity, filter: emphasisOf(clip) }}
     />
   );
 }

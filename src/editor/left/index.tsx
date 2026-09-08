@@ -5,6 +5,7 @@ import { CardsTab, type CardsTabHandle } from "./CardsTab";
 import { MediaTab } from "./MediaTab";
 import { CaptionsTab } from "./CaptionsTab";
 import { TransitionsTab } from "./TransitionsTab";
+import { EmphasisTab } from "./EmphasisTab";
 import { onCaptionsRequest } from "./captionsBus";
 import type { MediaAsset } from "../../kernel/project";
 import { StyleTab } from "./StyleTab";
@@ -18,7 +19,7 @@ import { Inspector } from "./Inspector";
  * 分页选择记在 localStorage;各分页都常驻挂载(只是隐藏),切来切去不丢滚动位置和输入。
  */
 type TopTab = "assets" | "edit";
-type AssetTab = "style" | "cards" | "transitions" | "videos" | "images" | "music" | "captions";
+type AssetTab = "style" | "cards" | "transitions" | "emphasis" | "videos" | "images" | "music" | "captions";
 type EditTab = "form" | "code";
 
 const TOP_TABS: { key: TopTab; label: string }[] = [
@@ -29,6 +30,7 @@ const ASSET_TABS: { key: AssetTab; label: string }[] = [
   { key: "style", label: "全局风格" },
   { key: "cards", label: "卡片" },
   { key: "transitions", label: "转场" },
+  { key: "emphasis", label: "强调" },
   { key: "videos", label: "视频" },
   { key: "images", label: "图像" },
   { key: "music", label: "配乐" },
@@ -77,6 +79,7 @@ export function LeftPanel() {
   const [searches, setSearches] = useState<Record<Exclude<AssetTab, "style">, string>>({
     cards: "",
     transitions: "",
+    emphasis: "",
     videos: "",
     images: "",
     music: "",
@@ -184,6 +187,9 @@ export function LeftPanel() {
         </div>
         <div className="flex-1 min-h-0 flex flex-col" style={{ display: assetTab === "transitions" ? "flex" : "none" }}>
           <TransitionsTab />
+        </div>
+        <div className="flex-1 min-h-0 flex flex-col" style={{ display: assetTab === "emphasis" ? "flex" : "none" }}>
+          <EmphasisTab />
         </div>
         <div className="flex-1 min-h-0 flex flex-col" style={{ display: assetTab === "videos" ? "flex" : "none" }}>
           <MediaTab search={searches.videos} onOpenCaptions={openCaptions} kinds={VIDEO_KINDS} />

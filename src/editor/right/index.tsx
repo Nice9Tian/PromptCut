@@ -19,6 +19,7 @@ import { COMPOSITE_CARD_ID } from "../../cards/native/composite";
 import type { PartInstance } from "../../kernel/types";
 import { validateCardParams, findCard } from "../../kernel/cardParams";
 import { describeTransition, timingLock, transitionsOf, type TransitionKind } from "../../kernel/transitions";
+import { describeEmphasis } from "../../kernel/emphasis";
 import {
   findClip, subjectForRange, subjectSampleTimes, suggestPosition,
   MAX_SUBJECT_TIMES,
@@ -481,6 +482,30 @@ export function RightPanel() {
         if (!c) throw new Error("切分失败");
         clipGuard.noteCreated(c.id);
         return c;
+      },
+      setEmphasis: (args) => {
+        const clipId = String(args.clipId ?? "");
+        const kind = String(args.kind ?? "");
+        if (!clipId) throw new Error("要 clipId");
+        if (kind === "none") {
+          const r = actions.setClipEmphasis(clipId, null);
+          if (!r.ok) throw new Error(r.error ?? "去不掉");
+          clipGuard.noteMutation();
+          return { ok: true, clipId, emphasis: null, note: "强调去掉了" };
+        }
+        if (kind !== "shadow" && kind !== "outline") {
+          throw new Error(`kind 只能是 shadow(阴影)/ outline(描边)/ none(去掉),收到 ${JSON.stringify(args.kind)}`);
+        }
+        const r = actions.setClipEmphasis(clipId, {
+          kind, color: args.color, size: args.size, opacity: args.opacity, dx: args.dx, dy: args.dy,
+        });
+        if (!r.ok) throw new Error(r.error ?? "加不上");
+        clipGuard.noteMutation();
+        return {
+          ok: true, clipId, emphasis: r.emphasis, describe: describeEmphasis(r.emphasis),
+          look: lookHint(clipId),
+          note: "强调沿着画面里不透明部分的边缘走(按 alpha 算),透明底的卡片、抠好的人物最明显;整块不透明的画面只会在方框外圈看到一条边。",
+        };
       },
       createAudio: (args) => {
         const mediaId = args.mediaId ? String(args.mediaId) : "";

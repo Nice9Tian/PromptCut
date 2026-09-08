@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from "react";
 import { createEmptyProject, DEFAULT_CARD_DUR, DEFAULT_MEDIA_DUR, findClip, findSoundAsset, newId, soundAssetFrom, type MediaAsset, type Project, type Track, type TrackClip, type Transcript, type Shots, type Subjects } from "../kernel/project";
 import { getCard } from "../kernel/registry";
+import { normalizeEmphasis, type ClipEmphasis } from "../kernel/emphasis";
 import type { ClipFrame, ClipMotion, PartInstance } from "../kernel/types";
 import {
   normalizeCuts, switchCut as switchCutPure, addCut as addCutPure, renameCut as renameCutPure,
@@ -469,6 +470,31 @@ export const actions = {
     })));
     return { ok: true, ...(blocked.length ? { blocked } : {}) };
   },
+  /**
+   * 给一段加 / 去掉强调(阴影、描边)。传 null 就是去掉。
+   * 参数在 kernel/emphasis.ts 里补全和夹范围,kind 不认识就当没设。
+   */
+  setClipEmphasis(clipId: string, emphasis: Partial<ClipEmphasis> | null): { ok: boolean; emphasis: ClipEmphasis | null; error?: string } {
+    const p = state.project;
+    const hit = findClip(p, clipId);
+    if (!hit) return { ok: false, emphasis: null, error: `找不到片段 ${clipId}` };
+    const next = emphasis ? normalizeEmphasis(emphasis) : null;
+    if (emphasis && !next) return { ok: false, emphasis: null, error: "强调只有 shadow(阴影)和 outline(描边)两种" };
+    setProject(updateTrack(p, hit.track.id, (t) => ({
+      ...t,
+      clips: t.clips.map((c) => {
+        if (c.id !== clipId) return c;
+        if (!next) {
+          // 去掉时把键删掉,而不是留个 undefined —— 存进 .proc 会多一行没用的
+          const { emphasis: _drop, ...rest } = c;
+          return rest;
+        }
+        return { ...c, emphasis: next };
+      }),
+    })));
+    return { ok: true, emphasis: next };
+  },
+
   /**
    * 绑定 / 解绑一条运动轨迹。传 undefined 就是解绑。
    *

@@ -54,6 +54,7 @@ export interface EditorApi {
   duplicateClip(args: { clipId: string }): any;
   splitClip(args: { clipId: string; t: number }): any;
   createAudio(args: { mediaId?: string; clipId?: string }): any;
+  setEmphasis(args: { clipId: string; kind: string; color?: string; size?: number; opacity?: number; dx?: number; dy?: number }): any;
   listTransitions(): any;
   addTransition(args: { kind: string; clipId: string; otherClipId?: string; dur?: number }): any;
   removeTransition(args: { transitionId: string }): any;
@@ -113,7 +114,7 @@ export interface EditorApi {
 /** 这些工具改的是时间轴:做成一次,就值得给 SKILL 悬浮窗下面那张预览图刷新一次 */
 const TIMELINE_TOOLS = new Set([
   "add_clip", "update_clip", "remove_clip", "duplicate_clip", "split_clip",
-  "add_transition", "remove_transition", "create_audio",
+  "add_transition", "remove_transition", "create_audio", "set_emphasis",
   "set_position", "set_rect", "align", "nudge", "fill_captions", "attach_clip_motion", "detach_clip_motion",
   "add_track", "switch_cut", "add_cut", "set_theme",
 ]);
@@ -309,6 +310,7 @@ export function connectMcpExecutor(getApi: () => EditorApi, onStatus?: (s: { con
           else if (tool === "duplicate_clip") result = api.duplicateClip(args);
           else if (tool === "split_clip") result = api.splitClip(args);
           else if (tool === "create_audio") result = api.createAudio(args);
+          else if (tool === "set_emphasis") result = api.setEmphasis(args);
           else if (tool === "list_transitions") result = api.listTransitions();
           else if (tool === "add_transition") result = api.addTransition(args);
           else if (tool === "remove_transition") result = api.removeTransition(args);

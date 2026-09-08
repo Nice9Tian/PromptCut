@@ -1,4 +1,5 @@
 import type { ComponentType } from "react";
+import type { ClipEmphasis } from "./emphasis.ts";
 
 /**
  * 控件的公共字段。
@@ -225,6 +226,11 @@ export interface Clip {
   fadeOut?: number;
   /** 整体不透明度(0-1,默认 1)。音频段用它当音量。 */
   opacity?: number;
+  /**
+   * 强调:沿着画面里不透明部分的边缘加阴影或描边(kernel/emphasis.ts)。
+   * 走 CSS 的 drop-shadow,按 alpha 通道算 —— 描的是文字 / 图形的边,不是那个方框。
+   */
+  emphasis?: ClipEmphasis;
   /** 组合卡(cardId "composite")的部件实例树。别的卡没有这个字段 */
   parts?: PartInstance[];
 }

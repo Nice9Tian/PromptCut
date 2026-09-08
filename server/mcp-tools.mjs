@@ -290,6 +290,24 @@ export const tools = [
     side: "browser"
   },
   {
+    name: "set_emphasis",
+    description: "给一段加「强调」:kind 为 shadow(阴影)或 outline(描边),none 是去掉。**两种都沿着画面里不透明部分的边缘走**(CSS drop-shadow 按 alpha 通道算),所以描的是文字、图形、抠好的人物的边,不是那个方框 —— 透明底的卡片效果最明显,整块不透明的画面(视频、满幅图片)只会在方框外圈看到一条边。参数:color CSS 颜色(阴影默认黑、描边默认白),size 舞台像素(阴影是模糊半径、描边是线宽,0~80),opacity 0~1,dx/dy 阴影偏移(描边用不到)。字幕、标题压在花哨背景上看不清时优先用它,比降低背景不透明度更不伤画面。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        clipId: { type: "string" },
+        kind: { type: "string", description: "shadow / outline / none" },
+        color: { type: "string", description: "CSS 颜色,如 #000000" },
+        size: { type: "number", description: "舞台像素:阴影=模糊半径,描边=线宽" },
+        opacity: { type: "number", description: "0~1" },
+        dx: { type: "number", description: "阴影横向偏移(舞台像素)" },
+        dy: { type: "number", description: "阴影纵向偏移(舞台像素)" }
+      },
+      required: ["clipId", "kind"]
+    },
+    side: "browser"
+  },
+  {
     name: "create_audio",
     description: "把视频变成声音。两种用法:给 mediaId —— 在素材库里派生出一份「只有声音」的素材(和源视频同一个文件,不转码,所以是瞬间的),之后 add_clip 用这个 mediaId 就是纯音频段;给 clipId —— 把时间轴上**这一段**就地转成声音,画面没了、位置长度素材内偏移淡入淡出全留着,素材库里同时也留一份。同一段视频只会派生一份声音素材,重复调返回同一个 mediaId。图片没有声音会被拒;本来就是声音的原样返回。淡入淡出对声音一样有效(预览按音量、导出按 afade),要给声音加淡入淡出用 add_transition。",
     inputSchema: {

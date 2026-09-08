@@ -3,7 +3,7 @@ import { importSrtFile } from "../io";
 import { IconClose, IconImport, IconPlus, IconSearch } from "../../ui/icons";
 import { KIND_LABEL, MEDIA_ACCEPT, importMediaFiles, type AssetKind } from "./importAssets";
 
-export type AssetToolbarTab = "cards" | "transitions" | "videos" | "images" | "music" | "captions";
+export type AssetToolbarTab = "cards" | "transitions" | "emphasis" | "videos" | "images" | "music" | "captions";
 
 export interface AssetToolbarProps {
   assetTab: AssetToolbarTab;
@@ -22,6 +22,7 @@ export interface AssetToolbarProps {
 const SEARCH_META: Record<AssetToolbarTab, { placeholder: string; dataPc: string }> = {
   cards: { placeholder: "搜索卡片…", dataPc: "search" },
   transitions: { placeholder: "搜索转场…", dataPc: "transition-search" },
+  emphasis: { placeholder: "搜索强调…", dataPc: "emphasis-search" },
   videos: { placeholder: "搜索视频…", dataPc: "media-search" },
   images: { placeholder: "搜索图像…", dataPc: "image-search" },
   music: { placeholder: "搜索配乐…", dataPc: "music-search" },

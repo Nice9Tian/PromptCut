@@ -2,6 +2,7 @@ import { AnimClock } from "./AnimClock";
 import { frameCss } from "./layout";
 import { motionAt } from "./motion";
 import { cardOpacityAt, hasOpacityControls } from "./project";
+import { emphasisFilter } from "./emphasis";
 import { getCard } from "./registry";
 import { PartTree } from "./PartTree";
 import { frameBox } from "./layout";
@@ -36,6 +37,8 @@ export function Stage({ timeline, t, playToken, speed = 1 }: { timeline: Timelin
           // 没有 frame 时 frameCss 输出的就是以前那套 inset:0,老项目逐字节不变。
           // 不透明度 / 淡入淡出同理放外层,而且只在设了的时候才写 opacity —— 没设的卡 DOM 一个字不变。
           const op = hasOpacityControls(clip) ? cardOpacityAt(clip, t) : 1;
+          // 强调(阴影 / 描边)沿 alpha 边缘走,所以挂在卡片外层这一格上;没设就一个字不写
+          const filter = emphasisFilter(clip.emphasis);
           return (
             <div
               key={`${clip.id}:${playToken}`}
@@ -43,6 +46,7 @@ export function Stage({ timeline, t, playToken, speed = 1 }: { timeline: Timelin
               style={{
                 ...frameCss(clip.frame, timeline, m ? { dx: m.dx, dy: m.dy } : undefined),
                 ...(op < 1 ? { opacity: op } : null),
+                ...(filter ? { filter } : null),
               }}
             >
               {/*
