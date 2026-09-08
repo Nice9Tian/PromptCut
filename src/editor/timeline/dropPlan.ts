@@ -1,6 +1,7 @@
 import type { Project } from "../../kernel/project";
 import { planPlacement } from "../../store/project";
 import { formatTime, snapTime } from "./utils";
+import { checkCrossfade, checkFade, clampDur, planTransitionDrop, TRANSITION_LABEL } from "../../kernel/transitions";
 import { type DragPayload } from "../dnd";
 
 /**
@@ -24,6 +25,55 @@ export interface DropPlan {
 
 export type DropTarget = { trackId: string } | { newTrackIndex: number };
 
+/** 转场落点算出来的结论:落下时照着它调 addTransition */
+export interface TransitionPlan {
+  kind: "crossfade" | "fadeIn" | "fadeOut";
+  aId: string;
+  bId?: string;
+  dur: number;
+}
+
+/**
+ * 拖着转场在时间轴上晃时的预演:接缝上给交叉溶解,片段两端给淡入 / 淡出,
+ * 别的地方明说「拖到片段两端或两段接缝处」。加不上的(中间空着、时长不够)也在这儿就说清楚,
+ * 免得松手才报错。
+ */
+export function planTransition(
+  project: Project,
+  kind: "crossfade" | "fadeIn" | "fadeOut",
+  trackId: string,
+  rawSec: number,
+  dur: number,
+): { plan: TransitionPlan | null; status: "ok" | "forbidden"; hint: string; span: { start: number; end: number } | null } {
+  const track = project.tracks.find((t) => t.id === trackId);
+  if (!track) return { plan: null, status: "forbidden", hint: "找不到这条序列", span: null };
+  if (track.locked) return { plan: null, status: "forbidden", hint: "序列已锁定", span: null };
+  const spot = planTransitionDrop(project, trackId, rawSec);
+  if (!spot) {
+    return { plan: null, status: "forbidden", hint: kind === "crossfade" ? "拖到两段首尾相接的地方" : "拖到片段的开头或结尾", span: null };
+  }
+  // 拖的是哪一种就只认哪一种:拖着「淡入」落在接缝上,给的还是淡入(落在后一段的头上)
+  const wanted = kind === "crossfade" ? spot : { kind, aId: spot.kind === "crossfade" && kind === "fadeIn" ? spot.bId! : spot.aId };
+  const d = clampDur(dur);
+  if (wanted.kind === "crossfade") {
+    const chk = checkCrossfade(project, wanted.aId, wanted.bId!, d);
+    if (!chk.ok) return { plan: null, status: "forbidden", hint: chk.error, span: null };
+    return {
+      plan: { kind: "crossfade", aId: chk.a.id, bId: chk.b.id, dur: chk.dur },
+      status: "ok",
+      hint: `交叉溶解 ${chk.dur.toFixed(1)}s`,
+      span: { start: chk.b.start - chk.dur, end: chk.b.start },
+    };
+  }
+  const side = wanted.kind as "fadeIn" | "fadeOut";
+  const chk = checkFade(project, wanted.aId, side, d);
+  if (!chk.ok) return { plan: null, status: "forbidden", hint: chk.error, span: null };
+  const span = side === "fadeIn"
+    ? { start: chk.clip.start, end: chk.clip.start + chk.dur }
+    : { start: chk.clip.end - chk.dur, end: chk.clip.end };
+  return { plan: { kind: side, aId: chk.clip.id, dur: chk.dur }, status: "ok", hint: `${TRANSITION_LABEL[side]} ${chk.dur.toFixed(1)}s`, span };
+}
+
 export function planDrop(
   project: Project,
   payload: DragPayload,
@@ -31,6 +81,22 @@ export function planDrop(
   rawSec: number,
   opts: { altKey: boolean; pxPerSec: number; t: number },
 ): DropPlan {
+  // 转场不占地方,它绑的是已经在时间轴上的片段 —— 只能落在已有序列上
+  if (payload.kind === "transition") {
+    const base = { label: payload.name, trackId: null as string | null, newTrackIndex: null as number | null };
+    if ("newTrackIndex" in target) {
+      return { ...base, start: rawSec, end: rawSec, status: "forbidden", hint: "转场要落在已有片段上,不能新建序列" };
+    }
+    const r = planTransition(project, payload.transition, target.trackId, rawSec, payload.duration);
+    return {
+      ...base,
+      trackId: target.trackId,
+      start: r.span?.start ?? rawSec,
+      end: r.span?.end ?? rawSec,
+      status: r.status,
+      hint: r.hint,
+    };
+  }
   const dur = Math.max(0.1, payload.duration);
   const start = Math.max(0, snapTime(rawSec, opts.altKey, project, opts.t, undefined, opts.pxPerSec));
   const base = { label: payload.name, trackId: null as string | null, newTrackIndex: null as number | null };

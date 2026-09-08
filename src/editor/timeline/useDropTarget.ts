@@ -2,7 +2,7 @@ import { actions, getState } from "../../store/project";
 import { DEFAULT_CARD_DUR, DEFAULT_MEDIA_DUR } from "../../kernel/project";
 import { timeOfX } from "./utils";
 import { useTimelineContext } from "./TimelineContext";
-import { planDrop, type DropPlan, type DropTarget } from "./dropPlan";
+import { planDrop, planTransition, type DropPlan, type DropTarget } from "./dropPlan";
 import { clearDragPayload, getDragPayload, MIME_CARD, MIME_MEDIA, type DragPayload } from "../dnd";
 
 /** 拖动没经过本窗口的 dragstart(跨窗口拖进来)时的兜底:只认得种类,时长用默认值 */
@@ -66,6 +66,17 @@ export function useDropTarget(target: DropTarget) {
     setDropPlan(null);
     clearDragPayload();
     if (plan.status === "forbidden") return;
+
+    // 转场:不放新片段,而是把落点处已有的那一 / 两段绑起来
+    if (payload.kind === "transition") {
+      if (!plan.trackId) return;
+      const rect = e.currentTarget.getBoundingClientRect();
+      const sec = timeOfX(e.clientX - rect.left, pxPerSec);
+      const r = planTransition(getState().project, payload.transition, plan.trackId, sec, payload.duration);
+      if (!r.plan) return;
+      actions.addTransition({ kind: r.plan.kind, clipId: r.plan.aId, otherClipId: r.plan.bId, dur: r.plan.dur });
+      return;
+    }
 
     // id 以 dataTransfer 为准(它才是拖放契约里的正本),模块里那份只是兜底
     const cardId = dt.getData(MIME_CARD) || (payload.kind === "card" ? payload.cardId : "");

@@ -48,7 +48,7 @@ export const tools = [
   },
   {
     name: "update_clip",
-    description: "更新某张卡片,可修改参数、时段、更换卡片类型(cardId),以及不透明度 / 淡入淡出 / 标签 / 所在序列。**已经在时间轴上的卡要改就用它**，不要 remove_clip 再 add_clip 重建。opacity 0~1(遮到人又挪不开时降它);fadeIn/fadeOut 是秒;trackId 换序列——序列数组里靠后的盖住靠前的,要让一张卡压在另一张上面就把它挪到更靠后的序列(get_project 里 tracks 的顺序)。位置、尺寸、缩放不在这里改,用 set_rect / set_position / align / nudge。返回 `look`（去看这张卡真实画面的 see_preview 调用）和 `timeline`（当前全部 clip 的 id、起止一览，外加 `duration` / `contentEnd` —— 对不上就用 set_project_meta 修）。",
+    description: "更新某张卡片,可修改参数、时段、更换卡片类型(cardId),以及不透明度 / 淡入淡出 / 标签 / 所在序列。**已经在时间轴上的卡要改就用它**，不要 remove_clip 再 add_clip 重建。opacity 0~1(遮到人又挪不开时降它);fadeIn/fadeOut 是秒;trackId 换序列——序列数组里靠后的盖住靠前的,要让一张卡压在另一张上面就把它挪到更靠后的序列(get_project 里 tracks 的顺序)。位置、尺寸、缩放不在这里改,用 set_rect / set_position / align / nudge。**挂着转场的片段**(list_transitions 看得到)相对时间关系是锁住的:只给 start 的整组平移可以(同组一起走),改时长 / 换序列 / 手改转场那一侧的 fadeIn·fadeOut 会被拒,要改先 remove_transition。返回 `look`（去看这张卡真实画面的 see_preview 调用）和 `timeline`（当前全部 clip 的 id、起止一览，外加 `duration` / `contentEnd` —— 对不上就用 set_project_meta 修）。",
     inputSchema: {
       type: "object",
       properties: {
@@ -278,7 +278,7 @@ export const tools = [
   },
   {
     name: "split_clip",
-    description: "在指定时间点(t)将卡片切分为两段。",
+    description: "在指定时间点(t)将卡片切分为两段。挂着转场的片段切不开(转场两头会对不上),先 remove_transition。",
     inputSchema: {
       type: "object",
       properties: { 
@@ -286,6 +286,37 @@ export const tools = [
         t: { type: "number" }
       },
       required: ["clipId", "t"]
+    },
+    side: "browser"
+  },
+  {
+    name: "list_transitions",
+    description: "列出当前剪辑里的全部转场(交叉溶解 / 淡入 / 淡出)。**转场会把它引用的片段绑成一组**:那几段的相对时间关系被锁住 —— 单独改时长、换序列、split_clip 都会被拒(update_clip 只给 start 的整组平移仍然可以,同组的会跟着一起走)。要单独调先 remove_transition。返回每条的 id、kind、aId/bId、dur。",
+    inputSchema: { type: "object", properties: {} },
+    side: "browser"
+  },
+  {
+    name: "add_transition",
+    description: "加一处转场,并把相关片段绑成一组。kind 三种:crossfade 交叉溶解——要两段**首尾相接**的片段(clipId 和 otherClipId,前后顺序写反也认),会把后一段往前拉出重叠、必要时挪到另一条序列(同一条序列内不允许重叠);fadeIn 淡入——只加在片段**开头**;fadeOut 淡出——只加在**结尾**。dur 是秒(默认交叉溶解 0.5、淡入淡出 0.6)。加完那几段的相对时间关系就锁住了,要再单独调先 remove_transition。中间空着一段、时长比片段还长、那一端已经有转场了,都会被拒并告诉你原因。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        kind: { type: "string", description: "crossfade / fadeIn / fadeOut" },
+        clipId: { type: "string", description: "淡入淡出:那一段;交叉溶解:两段中的任意一段" },
+        otherClipId: { type: "string", description: "只有交叉溶解要:另一段" },
+        dur: { type: "number", description: "秒,0.1~10" }
+      },
+      required: ["kind", "clipId"]
+    },
+    side: "browser"
+  },
+  {
+    name: "remove_transition",
+    description: "删掉一处转场(transitionId 从 list_transitions 或 get_project 的 transitions 里拿)。淡化会被擦掉,交叉溶解还会尽量把后一段放回加转场之前的位置;删完这几段就解锁,可以单独改时间了。",
+    inputSchema: {
+      type: "object",
+      properties: { transitionId: { type: "string" } },
+      required: ["transitionId"]
     },
     side: "browser"
   },

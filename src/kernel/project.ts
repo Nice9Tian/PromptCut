@@ -160,12 +160,16 @@ export interface TrackClip extends Clip {
  *
  * 命名:代码里 Track 已经叫「序列」了,这一层叫 Cut、界面上叫「剪辑」,别撞名。
  */
+import type { Transition } from "./transitions.ts";
+
 export interface Cut {
   id: string;
   name: string;
   /** 停放时才有;激活的那条为 undefined,内容在 Project.tracks */
   tracks?: Track[];
   duration?: number;
+  /** 停放时才有:这条剪辑的转场记录 */
+  transitions?: Transition[];
   /** 上次离开时的播放头,切回来接着看 */
   t?: number;
 }
@@ -182,6 +186,11 @@ export interface Project {
   tracks: Track[];
   /** 全部剪辑,按选项栏顺序。老文件没有这个字段,加载时 normalizeCuts 补成三条 */
   cuts?: Cut[];
+  /**
+   * 转场记录(当前激活的这条剪辑的)。一条转场绑住它引用的那几段:
+   * 相对时间关系锁住,想单独改先删转场。见 kernel/transitions.ts。
+   */
+  transitions?: Transition[];
   /** 当前激活的剪辑。tracks / duration 就是它的内容 */
   activeCutId?: string;
 }

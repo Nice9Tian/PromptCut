@@ -71,6 +71,28 @@
   `data-pc-top-tab`、`data-pc-tab`、`data-pc-card`、`data-pc-media`、`data-pc-param`。
 - 上下分屏(`pc.left.split`、`data-pc="split"`)已随两级分页去掉。
 
+## 转场:把片段绑成一组(src/kernel/transitions.ts)
+
+转场是**对象**,不再是「两段重叠 + 各自淡化」的巧合:`project.transitions` 里一条记录
+(`{ id, kind, aId, bId?, dur, prevB? }`,随剪辑一起停放/取回,见 cuts.ts),它管着两端的
+`fadeIn` / `fadeOut`,并且**把它引用的片段绑成一组**。
+
+- `crossfade` 要两段**首尾相接**的片段。同一条序列内不允许重叠,所以加转场时会把后一段
+  往前拉 `dur` 秒、必要时挪到另一条序列(挪之前的位置记在 `prevB`,删转场时放回去);
+- `fadeIn` 只加在片段开头、`fadeOut` 只加在结尾;那一端已经被交叉溶解占着就不给加;
+- **组内相对时间关系锁住**:单独改时长、换序列、切开都不行(store 的 moveClip / splitClip
+  直接挡回来,Agent 那边 update_clip / split_clip 抛出带 `transitionId` 的说明)。
+  **整组一起平移是允许的** —— moveClip 收到组内任意一段的位移,就把 `groupOf` 算出来的
+  全部成员按同一个 Δ 挪(`shiftClipsBy`,有一处放不下就整组不动);
+- 删转场:擦掉淡化、放回后一段、记录去掉,那几段就自由了。删片段时引用它的转场一并撤掉。
+
+界面上:左栏「转场」页三张卡(交叉溶解 / 淡入 / 淡出)拖到时间轴 —— 拖到两段接缝处是交叉溶解、
+拖到一段的头/尾是淡入/淡出(`planTransition` 在 dragover 时就把能不能加、加多长算出来,
+落不下时直接把原因写在落点提示上);那一页还列出已有的转场,每条都能删。时间轴上片段两端
+画出淡化区间,被绑住的片段右上角挂一枚链条角标(标题写着为什么挪不动),右键第一项就是删转场。
+
+Agent 那边:`list_transitions` / `add_transition` / `remove_transition`,规矩和界面同一份代码。
+
 ## 唯一真源:src/store/project.ts
 
 ```ts

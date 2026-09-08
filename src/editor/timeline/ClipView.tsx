@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useTimelineContext } from "./TimelineContext";
 import { actions, useStore, getState } from "../../store/project";
 import { getCard } from "../../kernel/registry";
@@ -8,6 +8,7 @@ import { TrackClip, Track } from "../../kernel/project";
 import { useDrag } from "./useDrag";
 import { ContextMenu } from "./ContextMenu";
 import { clipTrackKind } from "../../kernel/trackKind";
+import { describeTransition, timingLock, transitionsOfClip } from "../../kernel/transitions";
 import { requestCaptions } from "../left/captionsBus";
 
 export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
@@ -30,6 +31,11 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
   } else if (clip.mediaId) {
     subtitle = "时长 " + formatTime(clip.end - clip.start);
   }
+
+  // 挂在这段上的转场:画出淡化区间、右键能删,而且它锁着这段的时间关系(单独拖会被 store 挡回来,整组一起走)
+  const allTransitions = useStore((s) => s.project.transitions);
+  const myTransitions = useMemo(() => transitionsOfClip(getState().project, clip.id), [allTransitions, clip.id]);
+  const lock = myTransitions.length > 0 ? timingLock(getState().project, clip.id) : null;
 
   const [dragState, setDragState] = useState<{ start: number; end: number; trackId: string; forbidden: boolean } | null>(null);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
@@ -220,6 +226,21 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
           </div>
         )}
         
+        {/* 转场:两端的淡化区间铺一层渐变,成组的再挂一个链条角标 —— 一眼看出这段被绑着 */}
+        {(clip.fadeIn ?? 0) > 0 && (
+          <div className="pc-clip-fade is-in" style={{ width: (clip.fadeIn ?? 0) * pxPerSec }} aria-hidden="true" />
+        )}
+        {(clip.fadeOut ?? 0) > 0 && (
+          <div className="pc-clip-fade is-out" style={{ width: (clip.fadeOut ?? 0) * pxPerSec }} aria-hidden="true" />
+        )}
+        {lock && (
+          <span className="pc-clip-link" title={lock.message}>
+            <svg width="9" height="9" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+              <path d="M4.6 7.4L7.4 4.6M5 2.6l.9-.9a2.3 2.3 0 013.3 3.3l-.9.9M7 9.4l-.9.9a2.3 2.3 0 01-3.3-3.3l.9-.9" />
+            </svg>
+          </span>
+        )}
+
         {/* 镜头切换标记画在文字之上、把手之下:把手要能拖，标记只是看的 */}
         <ShotMarkers clip={clip} rowHeight={ROW_SIZE_H[rowSize]} />
 
@@ -235,6 +256,11 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
           y={contextMenu.y}
           onClose={() => setContextMenu(null)}
           items={[
+            // 转场在最上面:被绑住的时候用户第一件想做的事就是解开它
+            ...myTransitions.map((tr) => ({
+              label: `删除转场:${describeTransition(getState().project, tr)}`,
+              action: () => actions.removeTransition(tr.id),
+            })),
             { label: "复制", action: () => actions.duplicateClip(clip.id) },
             // 有声音的素材段可以直接去转写(图片没有声音,不给这一项)
             ...(() => {
@@ -246,9 +272,9 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
               }];
             })(),
             {
-              label: "在播放头处分割",
+              label: lock ? "在播放头处分割(先删转场)" : "在播放头处分割",
               action: () => actions.splitClip(clip.id, getState().t),
-              disabled: getState().t <= clip.start || getState().t >= clip.end,
+              disabled: !!lock || getState().t <= clip.start || getState().t >= clip.end,
             },
             {
               label: "置顶",

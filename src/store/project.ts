@@ -6,6 +6,10 @@ import {
   normalizeCuts, switchCut as switchCutPure, addCut as addCutPure, renameCut as renameCutPure,
   removeCut as removeCutPure, stripMediaFromCuts,
 } from "../kernel/cuts";
+import {
+  checkCrossfade, checkFade, clampDur, fadeOwner, groupOf, timingLock,
+  transitionsOf, transitionsOfClip, type Transition, type TransitionKind,
+} from "../kernel/transitions";
 
 /**
  * 编辑器状态存储(单例)。所有面板、时间轴、MCP 工具都通过这里读写,不直接改 Project 对象。
@@ -80,8 +84,56 @@ function setProject(next: Project, opts: { undoable?: boolean } = {}) {
   set({ project: next, dirty: true });
 }
 
+/** 把一条转场写下的淡化擦掉(片段可能已经不在了,擦不到就跳过) */
+function clearTransitionFades(p: Project, tr: Transition): Project {
+  const clear = (clipId: string | undefined, side: "fadeIn" | "fadeOut") => {
+    if (!clipId) return;
+    p = {
+      ...p,
+      tracks: p.tracks.map((t) => ({
+        ...t,
+        clips: t.clips.map((c) => (c.id === clipId ? { ...c, [side]: 0 } : c)),
+      })),
+    };
+  };
+  if (tr.kind === "crossfade") {
+    clear(tr.aId, "fadeOut");
+    clear(tr.bId, "fadeIn");
+  } else {
+    clear(tr.aId, tr.kind === "fadeIn" ? "fadeIn" : "fadeOut");
+  }
+  return p;
+}
+
 function updateTrack(p: Project, trackId: string, fn: (t: Track) => Track): Project {
   return { ...p, tracks: p.tracks.map((t) => (t.id === trackId ? fn(t) : t)) };
+}
+
+/**
+ * 把一组片段整体平移 dt 秒。轨内不能重叠、不能被推到 0 之前 —— 有一处放不下就整组不动
+ * (返回 null),不做「挪一半」这种半吊子结果。组内的相对关系原样保留,所以转场不会散。
+ */
+function shiftClipsBy(p: Project, ids: string[], dt: number): Project | null {
+  const set = new Set(ids);
+  let found = 0;
+  const tracks = p.tracks.map((t) => ({
+    ...t,
+    clips: sortClips(
+      t.clips.map((c) => {
+        if (!set.has(c.id)) return c;
+        found++;
+        return { ...c, start: c.start + dt, end: c.end + dt };
+      }),
+    ),
+  }));
+  if (found !== set.size) return null;
+  for (const t of tracks) {
+    for (let i = 0; i < t.clips.length; i++) {
+      if (t.clips[i].start < -1e-6) return null;
+      if (i > 0 && t.clips[i].start < t.clips[i - 1].end - 1e-6) return null;
+    }
+  }
+  return { ...p, tracks };
 }
 
 function sortClips(clips: TrackClip[]): TrackClip[] {
@@ -362,6 +414,25 @@ export const actions = {
     const p = state.project;
     const hit = findClip(p, clipId);
     if (!hit) return;
+    /*
+     * 挂着转场的片段:相对关系是转场的一部分,不许单独动。
+     * 允许的只有「整组一起平移」—— 那不改相对关系,转场照旧成立。
+     * 改长度、换序列都会把转场弄坏,直接拒绝(要改先删转场)。
+     */
+    if (timingLock(p, clipId)) {
+      const wantStart = patch.start ?? hit.clip.start;
+      // 只给 start:意思是「把这段挪到这儿」,时长不变(单独修边本来就会被下面拒掉,
+      // 按修边理解等于永远拒绝,那 Agent 就没法平移整组了)
+      const wantEnd = patch.end ?? (patch.start !== undefined ? wantStart + (hit.clip.end - hit.clip.start) : hit.clip.end);
+      const lenChanged = Math.abs(wantEnd - wantStart - (hit.clip.end - hit.clip.start)) > 1e-3;
+      const trackChanged = !!patch.trackId && patch.trackId !== hit.track.id;
+      if (lenChanged || trackChanged) return;
+      const dt = wantStart - hit.clip.start;
+      if (Math.abs(dt) < 1e-6) return;
+      const next = shiftClipsBy(p, groupOf(p, clipId).members, dt);
+      if (next) setProject(next);
+      return;
+    }
     const targetId = patch.trackId ?? hit.track.id;
     const target = p.tracks.find((t) => t.id === targetId);
     if (!target || target.locked) return;
@@ -378,14 +449,25 @@ export const actions = {
    * 改片段自身的属性(不是卡片参数):淡入淡出、整体不透明度、显示名。
    * 两段素材重叠 + 各自淡化 = 交叉溶解,所以「转场」不需要单独的对象,改这几个字段就够。
    */
-  updateClip(clipId: string, patch: Partial<Pick<TrackClip, "fadeIn" | "fadeOut" | "opacity" | "label">>) {
+  updateClip(clipId: string, patch: Partial<Pick<TrackClip, "fadeIn" | "fadeOut" | "opacity" | "label">>): { ok: boolean; blocked?: ("fadeIn" | "fadeOut")[] } {
     const p = state.project;
     const hit = findClip(p, clipId);
-    if (!hit) return;
+    if (!hit) return { ok: false };
+    // 转场管着的淡化不许直接改:那是转场的时长,改了两边就对不上。要改先删转场再重加
+    const blocked: ("fadeIn" | "fadeOut")[] = [];
+    const clean: typeof patch = { ...patch };
+    for (const side of ["fadeIn", "fadeOut"] as const) {
+      if (clean[side] !== undefined && fadeOwner(p, clipId, side)) {
+        blocked.push(side);
+        delete clean[side];
+      }
+    }
+    if (Object.keys(clean).length === 0) return { ok: blocked.length === 0, ...(blocked.length ? { blocked } : {}) };
     setProject(updateTrack(p, hit.track.id, (t) => ({
       ...t,
-      clips: t.clips.map((c) => (c.id === clipId ? { ...c, ...patch } : c)),
+      clips: t.clips.map((c) => (c.id === clipId ? { ...c, ...clean } : c)),
     })));
+    return { ok: true, ...(blocked.length ? { blocked } : {}) };
   },
   /**
    * 绑定 / 解绑一条运动轨迹。传 undefined 就是解绑。
@@ -439,31 +521,115 @@ export const actions = {
    * 同一条序列内不允许重叠,所以后一段必须落在别的序列上——现有序列都放不下就新建一条。
    * 返回是否成功。
    */
+  /**
+   * 老名字,留着给已有调用方用:现在等价于 addTransition({ kind: "crossfade" })。
+   * 一定要走那条路 —— 只有它会写下转场记录,把两段绑成一组;光设 fadeIn / fadeOut
+   * 的话谁都能随手挪走其中一段,溶解就悄悄散了。
+   */
   applyCrossfade(aId: string, bId: string, dur: number): boolean {
-    if (!(dur > 0)) return false;
-    const A = findClip(state.project, aId);
-    const B = findClip(state.project, bId);
-    if (!A || !B) return false;
-
-    const len = B.clip.end - B.clip.start;
-    const newStart = Math.max(0, B.clip.start - dur);
-    const fits = (tr: Track) =>
-      !tr.locked &&
-      !tr.clips.some((c) => c.id !== bId && Math.max(newStart, c.start) < Math.min(newStart + len, c.end));
-
-    // 优先原地(它自己那条序列放得下就不用挪),其次别的序列,最后新建
-    const candidates = [
-      ...(B.track.id !== A.track.id && fits(B.track) ? [B.track] : []),
-      ...state.project.tracks.filter((t) => t.id !== A.track.id && t.id !== B.track.id && fits(t)),
-    ];
-    const target = candidates[0] ?? actions.addTrack();
-
-    actions.moveClip(bId, { start: newStart, end: newStart + len, trackId: target.id });
-    if (!findClip(state.project, bId)) return false;
-    actions.updateClip(aId, { fadeOut: dur });
-    actions.updateClip(bId, { fadeIn: dur });
-    return true;
+    return actions.addTransition({ kind: "crossfade", clipId: aId, otherClipId: bId, dur }).ok;
   },
+
+  /* ---------- 转场:加了就把相关片段绑成一组(规矩在 kernel/transitions.ts) ---------- */
+
+  /**
+   * 加一处转场。
+   *
+   *   - crossfade:要两段首尾相接的片段。同一条序列内不能重叠,所以会把后一段往前拉出
+   *     重叠、必要时挪到另一条序列(挪之前的位置记在 prevB 里,删转场时放回去);
+   *   - fadeIn / fadeOut:只认一段,分别写在它的头和尾。
+   *
+   * 整件事一次 setProject 落地 —— 撤销一步就能全撤,不会留下「挪了但没绑」的半截状态。
+   */
+  addTransition(args: { kind: TransitionKind; clipId: string; otherClipId?: string; dur?: number }):
+    { ok: true; transition: Transition } | { ok: false; error: string } {
+    const p = state.project;
+    const dur = clampDur(args.dur, args.kind === "crossfade" ? 0.5 : 0.6);
+
+    if (args.kind === "fadeIn" || args.kind === "fadeOut") {
+      const chk = checkFade(p, args.clipId, args.kind, dur);
+      if (!chk.ok) return chk;
+      const tr: Transition = { id: newId("tx"), kind: args.kind, aId: args.clipId, dur: chk.dur };
+      const hit = findClip(p, args.clipId)!;
+      const next = updateTrack(p, hit.track.id, (t) => ({
+        ...t,
+        clips: t.clips.map((c) => (c.id === args.clipId ? { ...c, [args.kind]: chk.dur } : c)),
+      }));
+      setProject({ ...next, transitions: [...transitionsOf(next), tr] });
+      return { ok: true, transition: tr };
+    }
+
+    if (!args.otherClipId) return { ok: false, error: "交叉溶解要两段:clipId 和 otherClipId" };
+    const chk = checkCrossfade(p, args.clipId, args.otherClipId, dur);
+    if (!chk.ok) return chk;
+    const { a, b } = chk;
+    const aTrack = findClip(p, a.id)!.track;
+    const bTrack = findClip(p, b.id)!.track;
+    const len = b.end - b.start;
+    const newStart = Math.max(0, b.start - chk.dur);
+    const fits = (tr: Track) =>
+      !tr.locked && tr.id !== aTrack.id &&
+      !tr.clips.some((c) => c.id !== b.id && Math.max(newStart, c.start) < Math.min(newStart + len, c.end) - 1e-6);
+
+    // 先原地(后一段本来就不在前一段那条序列上、且挪过去放得下),再找别的,最后新建一条
+    const target = [bTrack, ...p.tracks.filter((t) => t.id !== bTrack.id)].find(fits);
+    const newTrack: Track | null = target ? null : { id: newId("t"), name: `序列 ${p.tracks.length + 1}`, clips: [] };
+    const targetId = target?.id ?? newTrack!.id;
+
+    const movedB: TrackClip = { ...b, start: newStart, end: newStart + len, fadeIn: chk.dur };
+    let tracks = p.tracks.map((t) => {
+      let clips = t.clips.filter((c) => c.id !== b.id);
+      if (t.id === aTrack.id) clips = clips.map((c) => (c.id === a.id ? { ...c, fadeOut: chk.dur } : c));
+      if (t.id === targetId) clips = sortClips([...clips, movedB]);
+      return { ...t, clips };
+    });
+    if (newTrack) tracks = [...tracks, { ...newTrack, clips: [movedB] }];
+
+    const tr: Transition = {
+      id: newId("tx"), kind: "crossfade", aId: a.id, bId: b.id, dur: chk.dur,
+      prevB: { start: b.start, trackId: bTrack.id },
+    };
+    setProject({ ...p, tracks, transitions: [...transitionsOf(p), tr] });
+    return { ok: true, transition: tr };
+  },
+
+  /**
+   * 删一处转场:淡化擦掉、记录去掉,交叉溶解还会尽量把后一段放回加转场之前的位置
+   * (那儿被占了就留在原地,返回 note 说明)。删完这几段就自由了。
+   */
+  removeTransition(transitionId: string): { ok: true; note?: string } | { ok: false; error: string } {
+    const p = state.project;
+    const tr = transitionsOf(p).find((x) => x.id === transitionId);
+    if (!tr) return { ok: false, error: `找不到转场 ${transitionId}` };
+    let next = clearTransitionFades(p, tr);
+    let note: string | undefined;
+    if (tr.kind === "crossfade" && tr.bId && tr.prevB) {
+      const hit = findClip(next, tr.bId);
+      if (hit) {
+        const len = hit.clip.end - hit.clip.start;
+        const home = next.tracks.find((t) => t.id === tr.prevB!.trackId);
+        const free = home && !home.locked && !home.clips.some(
+          (c) => c.id !== tr.bId && Math.max(tr.prevB!.start, c.start) < Math.min(tr.prevB!.start + len, c.end) - 1e-6,
+        );
+        if (free) {
+          const moved: TrackClip = { ...hit.clip, start: tr.prevB.start, end: tr.prevB.start + len };
+          next = {
+            ...next,
+            tracks: next.tracks.map((t) => {
+              let clips = t.clips.filter((c) => c.id !== tr.bId);
+              if (t.id === home!.id) clips = sortClips([...clips, moved]);
+              return { ...t, clips };
+            }),
+          };
+        } else {
+          note = "后一段原来的位置被占了,留在当前位置(两段现在还重叠着,可以自己挪开)";
+        }
+      }
+    }
+    setProject({ ...next, transitions: transitionsOf(next).filter((x) => x.id !== transitionId) });
+    return { ok: true, ...(note ? { note } : {}) };
+  },
+
   setClipParams(clipId: string, params: Record<string, unknown>, opts: { merge?: boolean } = { merge: true }) {
     const p = state.project;
     const hit = findClip(p, clipId);
@@ -518,7 +684,13 @@ export const actions = {
     const p = state.project;
     const hit = findClip(p, clipId);
     if (!hit) return;
-    setProject(updateTrack(p, hit.track.id, (t) => ({ ...t, clips: t.clips.filter((c) => c.id !== clipId) })));
+    // 片段没了,引用它的转场也就没了意义:一并撤掉,并把另一头的淡化擦干净,
+    // 免得留下一段「无缘无故淡出」的画面
+    const doomed = transitionsOfClip(p, clipId);
+    let next = updateTrack(p, hit.track.id, (t) => ({ ...t, clips: t.clips.filter((c) => c.id !== clipId) }));
+    for (const tr of doomed) next = clearTransitionFades(next, tr);
+    if (doomed.length) next = { ...next, transitions: transitionsOf(next).filter((tr) => !doomed.includes(tr)) };
+    setProject(next);
     set({ selection: state.selection.filter((id) => id !== clipId) });
   },
   duplicateClip(clipId: string): TrackClip | null {
@@ -537,6 +709,8 @@ export const actions = {
     const p = state.project;
     const hit = findClip(p, clipId);
     if (!hit || t <= hit.clip.start + 0.05 || t >= hit.clip.end - 0.05) return null;
+    // 切开会凭空多出一段,转场两头就对不上了 —— 先删转场
+    if (timingLock(p, clipId)) return null;
     const left: TrackClip = { ...hit.clip, end: t };
     const right: TrackClip = { ...hit.clip, id: newId("c"), start: t, mediaOffset: (hit.clip.mediaOffset ?? 0) + (t - hit.clip.start), ...(hit.clip.parts ? { parts: JSON.parse(JSON.stringify(hit.clip.parts)) } : {}) };
     setProject(updateTrack(p, hit.track.id, (t2) => ({ ...t2, clips: sortClips([...t2.clips.filter((c) => c.id !== clipId), left, right]) })));

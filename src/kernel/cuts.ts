@@ -58,13 +58,14 @@ export function normalizeCuts(p: Project): Project {
         tracks = c.tracks;
         if (typeof c.duration === "number") duration = c.duration;
       }
-      const { tracks: _t, duration: _d, ...rest } = c;
+      const { tracks: _t, duration: _d, transitions: _x, ...rest } = c;
       return rest;
     }
     return {
       ...c,
       tracks: Array.isArray(c.tracks) ? c.tracks : emptyTracks(),
       duration: typeof c.duration === "number" && c.duration > 0 ? c.duration : DEFAULT_CUT_DURATION,
+      transitions: Array.isArray(c.transitions) ? c.transitions : [],
     };
   });
 
@@ -116,15 +117,15 @@ export function switchCut(p: Project, cutId: string, t: number): { project: Proj
   if (!target) throw new Error(`找不到剪辑 ${cutId}`);
 
   const cuts = q.cuts!.map((c) => {
-    if (c.id === q.activeCutId) return { ...c, tracks: q.tracks, duration: q.duration, t };
+    if (c.id === q.activeCutId) return { ...c, tracks: q.tracks, duration: q.duration, transitions: q.transitions ?? [], t };
     if (c.id === cutId) {
-      const { tracks: _t, duration: _d, t: _pt, ...rest } = c;
+      const { tracks: _t, duration: _d, transitions: _x, t: _pt, ...rest } = c;
       return rest;
     }
     return c;
   });
   return {
-    project: { ...q, tracks: target.tracks ?? emptyTracks(), duration: target.duration ?? DEFAULT_CUT_DURATION, cuts, activeCutId: cutId },
+    project: { ...q, tracks: target.tracks ?? emptyTracks(), duration: target.duration ?? DEFAULT_CUT_DURATION, transitions: target.transitions ?? [], cuts, activeCutId: cutId },
     t: target.t ?? 0,
   };
 }
@@ -137,6 +138,7 @@ export function addCut(p: Project, name?: string): { project: Project; cut: Cut 
     name: (name ?? "").trim() || nextCutName(q.cuts!),
     tracks: emptyTracks(),
     duration: DEFAULT_CUT_DURATION,
+    transitions: [],
   };
   return { project: { ...q, cuts: [...q.cuts!, cut] }, cut };
 }

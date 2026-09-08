@@ -11,10 +11,13 @@ import { useSyncExternalStore } from "react";
 
 export const MIME_CARD = "application/x-promptcut-card";
 export const MIME_MEDIA = "application/x-promptcut-media";
+export const MIME_TRANSITION = "application/x-promptcut-transition";
 
 export type DragPayload =
   | { kind: "card"; cardId: string; name: string; duration: number; params?: Record<string, unknown> }
-  | { kind: "media"; mediaId: string; name: string; duration: number };
+  | { kind: "media"; mediaId: string; name: string; duration: number }
+  /** 转场:拖到两段的接缝上是交叉溶解,拖到一段的头 / 尾是淡入 / 淡出(见 kernel/transitions.ts) */
+  | { kind: "transition"; transition: "crossfade" | "fadeIn" | "fadeOut"; name: string; duration: number };
 
 let payload: DragPayload | null = null;
 const subs = new Set<() => void>();
@@ -45,7 +48,7 @@ export function getDragPayload(): DragPayload | null {
 /** dataTransfer.types 里有没有我们认识的载荷(跨窗口拖进来时只能靠它) */
 export function hasDragType(types: readonly string[] | DOMStringList): boolean {
   const list = Array.from(types as ArrayLike<string>);
-  return list.includes(MIME_CARD) || list.includes(MIME_MEDIA);
+  return list.includes(MIME_CARD) || list.includes(MIME_MEDIA) || list.includes(MIME_TRANSITION);
 }
 
 function subscribe(f: () => void) {

@@ -18,6 +18,7 @@ import { allParts, getPart } from "../../parts/registry";
 import { COMPOSITE_CARD_ID } from "../../cards/native/composite";
 import type { PartInstance } from "../../kernel/types";
 import { validateCardParams, findCard } from "../../kernel/cardParams";
+import { describeTransition, timingLock, transitionsOf, type TransitionKind } from "../../kernel/transitions";
 import {
   findClip, subjectForRange, subjectSampleTimes, suggestPosition,
   MAX_SUBJECT_TIMES,
@@ -294,6 +295,30 @@ export function RightPanel() {
           const switching = args.cardId !== undefined && args.cardId !== clip.cardId;
           validateCardParams(args.cardId ?? clip.cardId!, args.params, switching ? undefined : clip.params);
         }
+        /*
+         * 挂着转场的片段:相对时间关系是转场的一部分。
+         *   - 整组平移(只给 start,或 start+end 保持时长)照做,同组的会跟着一起走;
+         *   - 改时长、换序列、手改转场管着的那一侧淡化 —— 拒绝,并告诉它先 remove_transition。
+         */
+        const lock = timingLock(getState().project, args.clipId);
+        if (lock) {
+          const cur = findClip(getState().project, args.clipId)!.clip;
+          const wantStart = args.start ?? cur.start;
+          const wantEnd = args.end ?? cur.end;
+          if (Math.abs(wantEnd - wantStart - (cur.end - cur.start)) > 1e-3) {
+            throw new Error(`改不了时长:${lock.message}`);
+          }
+          if (args.trackId !== undefined && args.trackId !== findClip(getState().project, args.clipId)!.track.id) {
+            throw new Error(`换不了序列:${lock.message}`);
+          }
+          for (const side of ["fadeIn", "fadeOut"] as const) {
+            if (args[side] !== undefined && lock.transitions.some((tr) =>
+              (tr.kind === "crossfade" && ((side === "fadeOut" && tr.aId === args.clipId) || (side === "fadeIn" && tr.bId === args.clipId))) ||
+              (tr.kind === side && tr.aId === args.clipId))) {
+              throw new Error(`${side} 是转场的时长,不能单独改:${lock.message}`);
+            }
+          }
+        }
         if (args.params) actions.setClipParams(args.clipId, args.params);
         // 不透明度 / 淡入淡出 / 标签:store 早就支持,以前只是没暴露给模型 —— 系统提示词让它
         // 「遮到人就降不透明度」,它却没有工具能做。
@@ -316,7 +341,10 @@ export function RightPanel() {
         }
         if (args.cardId !== undefined) actions.setClipCard(args.clipId, args.cardId);
         clipGuard.noteMutation();
-        return { ok: true, clipId: args.clipId, look: lookHint(args.clipId), timeline: timelineDigest(getState().project) };
+        return {
+          ok: true, clipId: args.clipId, look: lookHint(args.clipId), timeline: timelineDigest(getState().project),
+          ...(lock ? { movedGroup: lock.members, note: "这段挂着转场,整组一起挪了" } : {}),
+        };
       },
       setPosition: (args) => {
         const r = withFrame(args.clipId, (prev, stage) => {
@@ -446,7 +474,44 @@ export function RightPanel() {
         return { ok: true, removed: a.clipId, ...(reason ? { reason } : null), timeline: timelineDigest(getState().project) };
       },
       duplicateClip: (args) => { const c = actions.duplicateClip(args.clipId); if (!c) throw new Error("复制失败"); clipGuard.noteCreated(c.id); return c; },
-      splitClip: (args) => { const c = actions.splitClip(args.clipId, args.t); if (!c) throw new Error("切分失败"); clipGuard.noteCreated(c.id); return c; },
+      splitClip: (args) => {
+        const lock = timingLock(getState().project, args.clipId);
+        if (lock) throw new Error(`切不开:${lock.message}`);
+        const c = actions.splitClip(args.clipId, args.t);
+        if (!c) throw new Error("切分失败");
+        clipGuard.noteCreated(c.id);
+        return c;
+      },
+      listTransitions: () => {
+        const p = getState().project;
+        return {
+          ok: true,
+          transitions: transitionsOf(p).map((tr) => ({ ...tr, describe: describeTransition(p, tr) })),
+          hint: "转场把它引用的片段绑成一组:那几段的相对时间关系锁住了,单独改时长 / 换序列 / 切开都会被拒。整组平移不受限制。要单独调先 remove_transition。",
+        };
+      },
+      addTransition: (args) => {
+        const kind = String(args.kind ?? "") as TransitionKind;
+        if (!["crossfade", "fadeIn", "fadeOut"].includes(kind)) {
+          throw new Error(`kind 只能是 crossfade / fadeIn / fadeOut,收到 ${JSON.stringify(args.kind)}`);
+        }
+        const r = actions.addTransition({ kind, clipId: args.clipId, otherClipId: args.otherClipId, dur: args.dur });
+        if (!r.ok) throw new Error(r.error);
+        clipGuard.noteMutation();
+        const p = getState().project;
+        return {
+          ok: true, transition: r.transition, describe: describeTransition(p, r.transition),
+          group: [r.transition.aId, ...(r.transition.bId ? [r.transition.bId] : [])],
+          note: "这几段现在绑成一组:相对时间关系锁住了(整组平移仍然可以)。要单独调先 remove_transition。",
+          timeline: timelineDigest(p),
+        };
+      },
+      removeTransition: (args) => {
+        const r = actions.removeTransition(String(args.transitionId ?? ""));
+        if (!r.ok) throw new Error(r.error);
+        clipGuard.noteMutation();
+        return { ok: true, ...(r.note ? { note: r.note } : {}), timeline: timelineDigest(getState().project) };
+      },
       /* ---------- 剪辑(多条时间轴) ---------- */
       listCuts: () => ({ activeCutId: getState().project.activeCutId, cuts: listCuts(getState().project) }),
       switchCut: (args) => {
