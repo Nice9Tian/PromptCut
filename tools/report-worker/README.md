@@ -87,6 +87,33 @@ VITE_DIAG_SUBMIT_TOKEN=<和 SUBMIT_TOKEN 一样的那串>
 
 重启 `npm run dev`，诊断子窗口里那个灰着的「提交」按钮就亮了。
 
+**装出来的桌面版走的是另一条路，别只验 dev。** 壳不是加载打包好的 `dist/`，而是拿 sidecar
+的 node 在 `runtime/app` 里起一个 `vite --port 5210` 的 dev server（`desktop/src-tauri/src/lib.rs`），
+而且是 `env_clear()` 起的。所以 `desktop/scripts/prepare-runtime.mjs` 除了把 `VITE_` 变量喂给
+`vite build`，还会在拷贝之后**在 `runtime/app/` 里重新生成一份 `.env.local`**（只含 `VITE_` 变量）。
+少了这一步，包里「提交」永远灰着写「还没配收报告的地址」，dist 里内联得再对也没用 ——
+0.2.12 之前每个版本都是这样。验的时候看装完之后的
+`%LOCALAPPDATA%\promptcut\runtime\app\.env.local` 在不在。
+
+## 收件箱的本机常量
+
+`tools/report-inbox-gui/inbox.local.json`（**已被 .gitignore 忽略**，样例见同目录
+`inbox.local.example.json`）：
+
+```json
+{
+  "url": "https://promptcut-reports.promptcut.workers.dev",
+  "key": "<ADMIN_KEY>"
+}
+```
+
+收件箱启动时逐字段读它（`PROMPTCUT_REPORT_INBOX_CONFIG` 环境变量可以指到别处），
+两栏都齐就**自动刷一次**，不用手点。文件里留空的字段回落到界面上次记住的值
+（`%LOCALAPPDATA%\promptcut\report-inbox.json`）。
+
+`ADMIN_KEY` 能读所有人的报告，别提交进仓库；换机器交接时发 `inbox.local.example.json`
+让对方自己填。
+
 ## 飞书链接里带着 ADMIN_KEY
 
 `notifyFeishu` 发出去的链接是把 `k` 拼好的，也就是**群里的人都能点开报告全文**。

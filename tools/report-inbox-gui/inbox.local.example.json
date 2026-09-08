@@ -1,0 +1,7 @@
+{
+  "//": "把这个文件复制成同目录下的 inbox.local.json 并填上真值。inbox.local.json 已被 .gitignore 忽略。",
+  "//url": "收报告的 Worker 地址,和前端 .env.local 里的 VITE_DIAG_SUBMIT_URL 是同一个",
+  "//key": "Worker 的 ADMIN_KEY(wrangler secret put ADMIN_KEY 设的那串)。它能读所有人的报告,别提交进仓库",
+  "url": "https://promptcut-reports.xxx.workers.dev",
+  "key": ""
+}

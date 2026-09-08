@@ -74,6 +74,46 @@ fn settings_path() -> std::path::PathBuf {
     std::path::Path::new(&root).join("promptcut").join("report-inbox.json")
 }
 
+/*
+ * 仓库里的本机常量:`tools/report-inbox-gui/inbox.local.json`(已被 .gitignore 忽略,
+ * 样例见同目录 `inbox.local.example.json`)。
+ *
+ * 为什么要有它:原来地址和 ADMIN_KEY 只活在 %LOCALAPPDATA% 那份 report-inbox.json 里 ——
+ * 那是**界面自己写的缓存**,换台机器、重装、或者清一次 LOCALAPPDATA 就没了,
+ * 打开收件箱是两个空框,不填就一条都看不到。仓库里放一份常量文件,克隆下来填一次,
+ * 之后开箱即用。
+ *
+ * 找的顺序:环境变量指定的路径 → 编译时的 crate 目录(就是仓库里那份) → exe 旁边
+ * (把 exe 单独拷去别处时用)。谁先命中用谁。
+ */
+fn local_config_paths() -> Vec<std::path::PathBuf> {
+    let mut out = Vec::new();
+    if let Ok(p) = std::env::var("PROMPTCUT_REPORT_INBOX_CONFIG") {
+        if !p.trim().is_empty() {
+            out.push(std::path::PathBuf::from(p));
+        }
+    }
+    out.push(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("inbox.local.json"));
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            out.push(dir.join("inbox.local.json"));
+        }
+    }
+    out
+}
+
+/// 读仓库里那份常量。读不到、或者 JSON 坏了,就当没有 —— 界面还能手填,不该为此打不开。
+fn load_local_config() -> Option<Settings> {
+    for path in local_config_paths() {
+        let Ok(text) = std::fs::read_to_string(&path) else { continue };
+        match serde_json::from_str::<Settings>(&text) {
+            Ok(cfg) if !cfg.url.trim().is_empty() || !cfg.key.trim().is_empty() => return Some(cfg),
+            _ => continue,
+        }
+    }
+    None
+}
+
 /// 存报告的地方。每次存都开在资源管理器里,省得用户自己找。
 fn save_dir() -> std::path::PathBuf {
     let root = std::env::var("LOCALAPPDATA").unwrap_or_else(|_| ".".into());
@@ -94,6 +134,8 @@ struct App {
     /// 密钥默认打码显示。它能读所有人的报告,不该一直明晃晃摆在屏幕上
     show_key: bool,
     remember: bool,
+    /// 启动时自动刷一次。第一帧才有 egui 的 ctx,所以只能在 ui() 里做,这里记个标记
+    auto_refresh: bool,
 
     items: Vec<Item>,
     cursor: Option<String>,
@@ -113,11 +155,24 @@ impl App {
             .ok()
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default();
-        let remember = !saved.key.is_empty();
+        /*
+         * 仓库里那份常量优先,**逐字段**优先:它写了地址就用它的地址,没写的字段
+         * 才回落到界面上次记住的值。这样改常量文件立刻生效,不会被一份过期的缓存盖住;
+         * 而常量文件里故意留空的字段(比如不想把 ADMIN_KEY 写进文件)也不会把已有的值抹掉。
+         */
+        let local = load_local_config().unwrap_or_default();
+        let pick = |from_file: String, cached: String| {
+            if from_file.trim().is_empty() { cached } else { from_file.trim().to_string() }
+        };
+        let url = pick(local.url, saved.url);
+        let key = pick(local.key, saved.key);
+        let remember = !key.is_empty();
         let (tx, rx) = channel();
         Self {
-            url: saved.url,
-            key: saved.key,
+            // 两栏都齐了就自己拉一次:开箱第一眼该是报告列表,不是一个要人点「刷新」的空界面
+            auto_refresh: !url.trim().is_empty() && !key.trim().is_empty(),
+            url,
+            key,
             show_key: false,
             remember,
             items: Vec::new(),
@@ -277,6 +332,11 @@ impl eframe::App for App {
         self.drain(&ui.ctx().clone());
         let ctx = ui.ctx().clone();
 
+        if self.auto_refresh {
+            self.auto_refresh = false;
+            self.refresh(&ctx, false);
+        }
+
         // ---- 顶上:连哪儿、拿什么钥匙 ----
         ui.horizontal(|ui| {
             ui.label("服务地址");
@@ -337,8 +397,19 @@ impl eframe::App for App {
                 .id_salt("list")
                 .auto_shrink([false, false])
                 .show(&mut cols[0], |ui| {
+                    /*
+                     * 空清单分三种,得说清楚是哪一种。
+                     * 原来一律说「填好上面两栏点刷新」—— 两栏明明填好了、也刷过了、
+                     * 服务端就是一条都没有的时候,这句话把人往错的方向带。
+                     */
                     if visible.is_empty() {
-                        ui.weak("还没有报告。填好上面两栏点「刷新」。");
+                        if !filter.is_empty() {
+                            ui.weak("没有匹配「筛选」的报告。清空筛选看全部。");
+                        } else if self.items.is_empty() && !self.status.is_empty() && !self.busy {
+                            ui.weak("服务端一条报告也没有。等有人在软件里点「提交」之后再刷新。");
+                        } else if self.url.trim().is_empty() || self.key.trim().is_empty() {
+                            ui.weak("还没有报告。填好上面两栏点「刷新」。");
+                        }
                     }
                     for item in &visible {
                         let picked = self.selected.as_deref() == Some(item.id.as_str());

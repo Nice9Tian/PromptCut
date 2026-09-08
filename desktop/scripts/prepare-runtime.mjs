@@ -214,6 +214,40 @@ function viteEnvFromDotEnv() {
   return out;
 }
 
+/**
+ * 把那些 `VITE_` 变量**再落一份 `.env.local` 进包里**。
+ *
+ * 上面那道「传给 vite build」只喂饱了 `dist/`,而**装出来的应用根本不读 dist** ——
+ * 壳(desktop/src-tauri/src/lib.rs)是拿 sidecar 的 node 在 `runtime/app` 里起一个
+ * `vite --port 5210` 的 dev server,前端是现编译现送的。那个进程还是 `env_clear()`
+ * 起的,只拿到壳显式塞进去的几个 PROMPTCUT_*,于是 `import.meta.env.VITE_DIAG_SUBMIT_URL`
+ * 在用户机器上恒为空:诊断子窗口的「提交」永远灰着,写着「还没配收报告的地址」。
+ * 0.2.12 之前每一个版本都是这样,dist 里明明内联好了也没用 —— 那份产物没人加载。
+ *
+ * 所以这里在拷贝**之后**自己生成一份:内容只有 VITE_ 变量,是重新写的,不是把开发机的
+ * `.env.local` 原样拷进来(那里面可能有别的东西)。SKIP_FILE_PATTERNS 挡的是「原样拷贝」,
+ * 挡的对;这份是白名单过滤后的结果,该进包。
+ *
+ * 值本身是公开的:地址就是要发给用户的,提交令牌 worker.js 里写明了只挡随手扫到的人。
+ */
+function writeRuntimeEnv(appDir, viteEnv) {
+  const keys = Object.keys(viteEnv);
+  const target = path.join(appDir, ".env.local");
+  if (keys.length === 0) {
+    // 没有值就别留个空文件在那儿装样子,不然下次排查时看见文件在会以为这条路通了
+    if (fs.existsSync(target)) fs.rmSync(target);
+    return;
+  }
+  const body = [
+    "# 由 desktop/scripts/prepare-runtime.mjs 生成,不要手改。",
+    "# 应用是在这个目录里跑 vite dev 的,前端的 import.meta.env 从这里来。",
+    ...keys.map((k) => `${k}=${viteEnv[k]}`),
+    "",
+  ].join("\n");
+  fs.writeFileSync(target, body);
+  console.log(`  写入 runtime .env.local:${keys.join(", ")}`);
+}
+
 function shouldCopyApp(name, fullPath, isDir) {
   if (isDir && SKIP_DIRS.has(name)) return false;
   if (!isDir) {
@@ -241,6 +275,14 @@ function stepApp() {
     assert(fs.existsSync(viteJs), `vite.js not found: ${viteJs}`);
     const rolldown = path.join(appDir, "node_modules", "@rolldown", "binding-win32-x64-msvc");
     assert(fs.existsSync(rolldown), `rolldown binding not found: ${rolldown}`);
+    /*
+     * 这份 .env.local 是应用里「提交诊断报告」唯一的地址来源(见 writeRuntimeEnv)。
+     * 开发机上有值却没生成,说明打包那步漏了 —— 只是包里少了个按钮,不该让整个 --check
+     * 挂掉,但一定要吼一声:上一次就是没人吼,一连发了十几个版本才发现。
+     */
+    if (Object.keys(viteEnvFromDotEnv()).length > 0 && !fs.existsSync(path.join(appDir, ".env.local"))) {
+      console.log("  ⚠ runtime/app/.env.local 不在:包里的「提交诊断报告」会是灰的。重跑一次不带 --check 的打包");
+    }
     console.log(`  ✓ App exists (${dirSizeMB(appDir)} MB) [${((Date.now() - stepT) / 1000).toFixed(1)}s]`);
     return { appDir };
   }
@@ -285,12 +327,13 @@ function stepApp() {
   assert(ptyCheck.status === 0 && ptyCheck.stdout.includes('PROMPTCUT_PTY_OK'),
     `Background CLI login component failed verification: ${ptyCheck.stderr || ptyCheck.error || ptyCheck.status}`);
   console.log("  Running vite build…");
+  const viteEnv = viteEnvFromDotEnv();
   const buildResult = spawnSync("npx.cmd", ["vite", "build"], {
     cwd: appDir,
     shell: true,
     stdio: "inherit",
     timeout: 300_000,
-    env: { ...process.env, ...viteEnvFromDotEnv() },
+    env: { ...process.env, ...viteEnv },
   });
   if (buildResult.status !== 0) {
     console.error(`[FAIL] vite build exited with code ${buildResult.status}`);
@@ -298,6 +341,8 @@ function stepApp() {
   }
   const distIndex = path.join(appDir, "dist", "index.html");
   assert(fs.existsSync(distIndex), `dist/index.html not found after vite build: ${distIndex}`);
+
+  writeRuntimeEnv(appDir, viteEnv);
 
   console.log(`  Done (${dirSizeMB(appDir)} MB) [${((Date.now() - stepT) / 1000).toFixed(1)}s]`);
   return { appDir };
