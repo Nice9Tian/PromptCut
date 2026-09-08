@@ -482,6 +482,32 @@ export function RightPanel() {
         clipGuard.noteCreated(c.id);
         return c;
       },
+      createAudio: (args) => {
+        const mediaId = args.mediaId ? String(args.mediaId) : "";
+        const clipId = args.clipId ? String(args.clipId) : "";
+        if (!mediaId && !clipId) throw new Error("给 mediaId(素材库里派生一份声音)或 clipId(把时间轴上这一段就地转成声音)");
+        if (mediaId && clipId) throw new Error("mediaId 和 clipId 只给一个:给 clipId 就是把那一段转成声音,顺带也会在素材库留一份");
+        if (clipId) {
+          const r = actions.convertClipToAudio(clipId);
+          if (!r.ok) throw new Error(r.error);
+          clipGuard.noteMutation();
+          const p = getState().project;
+          const m = p.media.find((x) => x.id === r.mediaId);
+          return {
+            ok: true, clipId, mediaId: r.mediaId, name: m?.name,
+            note: r.already ? "这段本来就是声音,没动" : "这段现在只剩声音(画面没了),位置、长度、淡入淡出都留着;素材库里也多了这份声音",
+            timeline: timelineDigest(p),
+          };
+        }
+        const r = actions.audioFromVideo(mediaId);
+        if (!r.ok) throw new Error(r.error);
+        return {
+          ok: true, mediaId: r.media.id, name: r.media.name, created: r.created,
+          note: r.created
+            ? "素材库里多了一份只有声音的素材(和源视频同一个文件,没转码),add_clip 传这个 mediaId 就是纯音频段"
+            : "这段视频的声音素材早就派生过了,直接用这个 mediaId",
+        };
+      },
       listTransitions: () => {
         const p = getState().project;
         return {

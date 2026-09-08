@@ -35,7 +35,8 @@ function findPairs(p: Project): Pair[] {
     for (const c of tr.clips) {
       if (!c.mediaId) continue;
       const m = p.media.find((x) => x.id === c.mediaId);
-      if (!m || m.kind === "audio") continue; // 声音不做转场
+      if (!m) continue;
+      // 声音也算:两段音乐重叠 + 各自淡化就是听得见的交叉淡入淡出,和画面同一套做法
       all.push({ clip: c, trackId: tr.id });
     }
   }
@@ -51,9 +52,16 @@ function findPairs(p: Project): Pair[] {
   return pairs;
 }
 
-/** 一段素材的静态画面:图片直接放,视频取首帧(转场卡只看溶解,不播) */
+/** 一段素材的静态画面:图片直接放,视频取首帧,声音没有画面就给一块底色(转场卡只看溶解,不播) */
 function Still({ media, style }: { media: MediaAsset | undefined; style?: React.CSSProperties }) {
   if (!media) return <div style={{ ...style, background: "var(--ui-panel-2)" }} />;
+  if (media.kind === "audio") {
+    return (
+      <div style={{ ...style, background: "var(--ui-panel-2)", display: "grid", placeItems: "center", color: "var(--ui-fg-faint)", fontSize: 10 }}>
+        声音
+      </div>
+    );
+  }
   if (media.kind === "image") return <img src={media.url} alt="" draggable={false} style={style} />;
   return <video src={media.url} muted playsInline preload="metadata" draggable={false} style={style} />;
 }

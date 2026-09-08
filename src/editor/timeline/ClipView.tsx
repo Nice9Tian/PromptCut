@@ -19,6 +19,8 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
   const label = clip.cardId ? (cardDef ? cardDef.name : "未知卡片") : clip.label;
   // 按素材类型上色:文字 / 视频 / 转场… 各一档,一眼读得出片段是什么
   const trackKind = clipTrackKind(clip, (id) => getState().project.media.find((m) => m.id === id));
+  // 这一段是不是「有画面的素材」:只有它能转成声音(卡片、图片、已经是声音的都不行)
+  const canBecomeAudio = !!clip.mediaId && getState().project.media.find((m) => m.id === clip.mediaId)?.kind === "video";
 
   let subtitle = "";
   if (clip.cardId && cardDef) {
@@ -262,6 +264,8 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
               action: () => actions.removeTransition(tr.id),
             })),
             { label: "复制", action: () => actions.duplicateClip(clip.id) },
+            // 只要声音:画面没了,位置、长度、素材内偏移、淡入淡出都留着;素材库里同时多一份声音素材
+            ...(canBecomeAudio ? [{ label: "转换为声音", action: () => actions.convertClipToAudio(clip.id) }] : []),
             // 有声音的素材段可以直接去转写(图片没有声音,不给这一项)
             ...(() => {
               const media = clip.mediaId ? getState().project.media.find((m) => m.id === clip.mediaId) : null;

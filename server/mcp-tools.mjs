@@ -290,6 +290,18 @@ export const tools = [
     side: "browser"
   },
   {
+    name: "create_audio",
+    description: "把视频变成声音。两种用法:给 mediaId —— 在素材库里派生出一份「只有声音」的素材(和源视频同一个文件,不转码,所以是瞬间的),之后 add_clip 用这个 mediaId 就是纯音频段;给 clipId —— 把时间轴上**这一段**就地转成声音,画面没了、位置长度素材内偏移淡入淡出全留着,素材库里同时也留一份。同一段视频只会派生一份声音素材,重复调返回同一个 mediaId。图片没有声音会被拒;本来就是声音的原样返回。淡入淡出对声音一样有效(预览按音量、导出按 afade),要给声音加淡入淡出用 add_transition。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        mediaId: { type: "string", description: "素材库里的视频:派生一份声音素材" },
+        clipId: { type: "string", description: "时间轴上的一段视频:就地转成声音" }
+      }
+    },
+    side: "browser"
+  },
+  {
     name: "list_transitions",
     description: "列出当前剪辑里的全部转场(交叉溶解 / 淡入 / 淡出)。**转场会把它引用的片段绑成一组**:那几段的相对时间关系被锁住 —— 单独改时长、换序列、split_clip 都会被拒(update_clip 只给 start 的整组平移仍然可以,同组的会跟着一起走)。要单独调先 remove_transition。返回每条的 id、kind、aId/bId、dur。",
     inputSchema: { type: "object", properties: {} },

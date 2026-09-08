@@ -124,6 +124,35 @@ export interface MediaAsset {
   duration?: number; // 秒
   width?: number;
   height?: number;
+  /**
+   * 「只要声音」的那一份是从哪段视频派生的(soundAssetFrom)。
+   * 两份指着同一个文件,只是 kind 不同 —— 不做转码,所以「创建为声音」是瞬间的。
+   * 导出上传本地文件时靠它找回源文件(见 editor/io/index.ts)。
+   */
+  soundOf?: string;
+}
+
+/**
+ * 从一段视频派生出「只要声音」的素材:同一个文件、同一段时长,kind 换成 audio。
+ * 不转码 —— 浏览器用 <audio> 播 mp4 只出声音,ffmpeg 混音也只取音轨,没必要先切一份文件出来。
+ */
+export function soundAssetFrom(src: MediaAsset, id: string): MediaAsset {
+  return {
+    id,
+    kind: "audio",
+    name: `${src.name.replace(/\.[^.]+$/, "")} · 声音`,
+    url: src.url,
+    ...(src.path ? { path: src.path } : {}),
+    ...(src.duration != null ? { duration: src.duration } : {}),
+    // 转写是对同一条音轨做的,派生的这份直接继承,省得再转一遍
+    ...(src.transcript ? { transcript: src.transcript } : {}),
+    soundOf: src.id,
+  };
+}
+
+/** 这段素材已经派生过声音了吗(派生是幂等的,同一段只留一份) */
+export function findSoundAsset(p: Project, mediaId: string): MediaAsset | undefined {
+  return p.media.find((m) => m.kind === "audio" && m.soundOf === mediaId);
 }
 
 /**

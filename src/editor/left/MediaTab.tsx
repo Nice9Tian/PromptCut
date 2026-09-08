@@ -179,6 +179,11 @@ export function MediaTab({
   const allMedia = useStore((s) => s.project.media);
   const media = useMemo(() => (kinds ? allMedia.filter((m) => kinds.includes(m.kind)) : allMedia), [allMedia, kinds]);
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; media: MediaAsset } | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+  const flash = (text: string) => {
+    setMsg(text);
+    window.setTimeout(() => setMsg(null), 3000);
+  };
   const [confirmDelete, setConfirmDelete] = useState<{ mediaId: string; name: string } | null>(null);
 
   const filteredMedia = useMemo(() => {
@@ -219,7 +224,7 @@ export function MediaTab({
     }
   };
 
-  /** 右键菜单的项:转写(有声音的才有)、取比例(有画面的才有)、删除 */
+  /** 右键菜单的项:转写、创建为声音(有声音的才有)、取比例(有画面的才有)、删除 */
   const menuItems = (m: MediaAsset): ContextMenuItem[] => [
     ...(m.kind === "image"
       ? []
@@ -230,6 +235,19 @@ export function MediaTab({
             onClick: () => onOpenCaptions(m.id),
           },
         ]),
+    // 视频派生出「只要声音」的一份:同一个文件、不转码,拖到时间轴上就是纯音频段
+    ...(m.kind === "video"
+      ? [
+          {
+            label: "创建为声音",
+            hint: "配乐页",
+            onClick: () => {
+              const r = actions.audioFromVideo(m.id);
+              flash(r.ok ? (r.created ? `已创建「${r.media.name}」,在配乐页` : `「${r.media.name}」早就建过了,在配乐页`) : r.error);
+            },
+          },
+        ]
+      : []),
     ...(m.kind === "audio"
       ? []
       : [
@@ -294,6 +312,8 @@ export function MediaTab({
           </div>
         )}
       </div>
+
+      {msg && <div className="flex-none px-2 py-1.5 text-[11px] text-neutral-400 border-t border-neutral-800">{msg}</div>}
 
       {ctxMenu && <ContextMenu x={ctxMenu.x} y={ctxMenu.y} items={menuItems(ctxMenu.media)} onClose={() => setCtxMenu(null)} />}
 

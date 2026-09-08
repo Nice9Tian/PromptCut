@@ -7,7 +7,12 @@ import { getCard } from "../../kernel/registry";
 const mediaFiles = new Map<string, File>();
 
 export function getMediaFile(id: string): File | undefined {
-  return mediaFiles.get(id);
+  const own = mediaFiles.get(id);
+  if (own) return own;
+  // 「创建为声音」派生出来的那份没有自己的 File(它和源视频是同一个文件),借源素材的。
+  // 转写、导出都走这里,漏了这一步派生的声音就成了「文件不在内存里」
+  const src = getState().project.media.find((m) => m.id === id)?.soundOf;
+  return src ? mediaFiles.get(src) : undefined;
 }
 
 /**
@@ -272,7 +277,8 @@ export function exportProjectJson(): string {
 
   for (const m of p.media) {
     if (m.url.startsWith("blob:")) {
-      const file = mediaFiles.get(m.id);
+      // 派生出来的「声音」素材和源视频指着同一个文件,但它自己没登记过 File —— 回头找源素材的
+      const file = mediaFiles.get(m.id) ?? (m.soundOf ? mediaFiles.get(m.soundOf) : undefined);
       m.url = file ? file.name : m.name;
     }
   }
@@ -296,7 +302,8 @@ export async function exportVideo(
   
   for (const m of p.media) {
     if (m.url.startsWith("blob:")) {
-      const file = mediaFiles.get(m.id);
+      // 同上:派生的「声音」素材没有自己的 File,借源视频那份(两者本来就是同一个文件)
+      const file = mediaFiles.get(m.id) ?? (m.soundOf ? mediaFiles.get(m.soundOf) : undefined);
       if (file) {
         const res = await fetch(`/api/export/media/${encodeURIComponent(file.name)}`, { method: "POST", body: file });
         if (res.ok) {

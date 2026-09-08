@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from "react";
-import { createEmptyProject, DEFAULT_CARD_DUR, DEFAULT_MEDIA_DUR, findClip, newId, type MediaAsset, type Project, type Track, type TrackClip, type Transcript, type Shots, type Subjects } from "../kernel/project";
+import { createEmptyProject, DEFAULT_CARD_DUR, DEFAULT_MEDIA_DUR, findClip, findSoundAsset, newId, soundAssetFrom, type MediaAsset, type Project, type Track, type TrackClip, type Transcript, type Shots, type Subjects } from "../kernel/project";
 import { getCard } from "../kernel/registry";
 import type { ClipFrame, ClipMotion, PartInstance } from "../kernel/types";
 import {
@@ -718,6 +718,44 @@ export const actions = {
   },
 
   /* ---------- 素材 ---------- */
+
+  /**
+   * 「创建为声音」:给一段视频派生出只有声音的那一份素材(素材库里多一条,进配乐页)。
+   * 同一段视频只派生一份,再调返回的是同一条。图片没有声音;本来就是声音的原样返回。
+   */
+  audioFromVideo(mediaId: string): { ok: true; media: MediaAsset; created: boolean } | { ok: false; error: string } {
+    const p = state.project;
+    const src = p.media.find((m) => m.id === mediaId);
+    if (!src) return { ok: false, error: `找不到素材 ${mediaId}` };
+    if (src.kind === "image") return { ok: false, error: `「${src.name}」是图片,没有声音` };
+    if (src.kind === "audio") return { ok: true, media: src, created: false };
+    const had = findSoundAsset(p, mediaId);
+    if (had) return { ok: true, media: had, created: false };
+    const media = soundAssetFrom(src, newId("m"));
+    // 素材库的增删和 addMedia 一样不进撤销栈:撤销管的是时间轴,不是素材柜
+    setProject({ ...p, media: [...p.media, media] }, { undoable: false });
+    return { ok: true, media, created: true };
+  },
+
+  /**
+   * 把时间轴上的一段视频**就地**转成声音:画面没了,声音照旧(位置、长度、素材内偏移、
+   * 淡入淡出全部保留)。素材库里同时会多出那份声音素材,以后能直接再拖。
+   */
+  convertClipToAudio(clipId: string): { ok: true; mediaId: string; created: boolean; already?: boolean } | { ok: false; error: string } {
+    const hit = findClip(state.project, clipId);
+    if (!hit) return { ok: false, error: `找不到片段 ${clipId}` };
+    if (!hit.clip.mediaId) return { ok: false, error: "这段是卡片,不是素材,没有声音可转" };
+    const r = actions.audioFromVideo(hit.clip.mediaId);
+    if (!r.ok) return r;
+    if (r.media.id === hit.clip.mediaId) return { ok: true, mediaId: r.media.id, created: false, already: true };
+    const p = state.project; // audioFromVideo 已经写过一次,这里要拿新的
+    setProject(updateTrack(p, hit.track.id, (t) => ({
+      ...t,
+      // 名字也跟着换:时间轴上还挂着「访谈.mp4」会让人以为画面还在
+      clips: t.clips.map((c) => (c.id === clipId ? { ...c, mediaId: r.media.id, label: r.media.name } : c)),
+    })));
+    return { ok: true, mediaId: r.media.id, created: r.created };
+  },
   addMedia(asset: Omit<MediaAsset, "id"> & { id?: string }): MediaAsset {
     const m: MediaAsset = { ...asset, id: asset.id ?? newId("m") };
     setProject({ ...state.project, media: [...state.project.media, m] }, { undoable: false });
