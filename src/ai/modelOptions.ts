@@ -282,6 +282,26 @@ export function effortsFor(
 }
 
 /**
+ * 把一个可能过期的档位收进当前清单里,收不进就退回「默认」。
+ *
+ * 档位存在 localStorage,而清单是会变的 —— 0ae554b 把 codex 的 `minimal` 去掉了
+ * (上游根本不认,选中必 400)。老用户浏览器里那个值还在,面板只把它降级成「默认」**显示**,
+ * 发请求那条路读的是 localStorage 原值,于是界面写着「默认」、请求里照旧带着 minimal,
+ * 还是那条 400。
+ *
+ * 抽成纯函数是为了**能测发送路径本身** —— 只测 CAPABILITIES 清单是同义反复,
+ * 清单对了而发送路径没接上,线上照样 400(这次评审抓到的正是这个形状)。
+ */
+export function sanitizeEffort(
+  provider: AiProvider,
+  model: string,
+  effort: EffortLevel,
+  config: { api?: { model?: string }; cliModels?: Partial<Record<string, string>> } | null | undefined,
+): EffortLevel {
+  return effortsFor(provider, model, config).includes(effort) ? effort : "";
+}
+
+/**
  * 真正发出去的那一对 (model, effort)。
  *
  * agy 之外原样返回。agy 这边负责把面板上的「基名 + 档位」拼成它认的组合,并且**保证配得上**:

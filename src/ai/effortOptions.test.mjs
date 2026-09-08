@@ -12,7 +12,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-const { CAPABILITIES, EFFORT_LABEL } = await import('./modelOptions.ts');
+const { CAPABILITIES, EFFORT_LABEL, sanitizeEffort } = await import('./modelOptions.ts');
 
 /** codex 上游在 400 里逐字列出来的那一串 */
 const CODEX_UPSTREAM = ['none', 'low', 'medium', 'high', 'xhigh', 'max'];
@@ -60,4 +60,35 @@ test('minimal 没有任何驱动再提供它', () => {
  */
 test('api:只给 OpenAI 兼容口径认的三档', () => {
   assert.deepEqual(CAPABILITIES.api.efforts.filter(Boolean).sort(), ['high', 'low', 'medium']);
+});
+
+/*
+ * 下面这一档钉的是**发送路径**,不是能力清单。
+ *
+ * 评审抓到的形状:清单改对了(0ae554b 把 codex 的 minimal 去掉),面板也把它降级成
+ * 「默认」显示了 —— 但发请求那条路读的是 localStorage 原值,于是界面写着「默认」、
+ * 请求里照旧带着 minimal,还是那条 400。只测 CAPABILITIES 是同义反复,抓不到这个。
+ */
+test("sanitizeEffort:清单里没有的档位一律降级成默认 —— 老用户 localStorage 里的旧值就是这么漏出去的", () => {
+  // 0ae554b 之前 codex 的清单里有 minimal,现在没有了
+  assert.equal(sanitizeEffort("codex", "gpt-5.6-terra", "minimal", null), "");
+  // 清单里有的原样保留
+  assert.equal(sanitizeEffort("codex", "gpt-5.6-terra", "high", null), "high");
+  assert.equal(sanitizeEffort("codex", "gpt-5.6-terra", "none", null), "none");
+  // 空字符串本来就是「默认」,是合法值
+  assert.equal(sanitizeEffort("codex", "gpt-5.6-terra", "", null), "");
+});
+
+test("sanitizeEffort:agy 按模型分组各有各的清单", () => {
+  const config = { cliModels: { agy: "gemini-3.8-flash-high|gemini-3.8-flash-low|gemini-3.1-pro-high" } };
+  // gemini-3.1-pro 这一组没有 medium
+  assert.equal(sanitizeEffort("agy", "gemini-3.1-pro", "medium", config), "");
+  assert.equal(sanitizeEffort("agy", "gemini-3.1-pro", "high", config), "high");
+  assert.equal(sanitizeEffort("agy", "gemini-3.8-flash", "low", config), "low");
+});
+
+test("sanitizeEffort:乱七八糟的值也收得住", () => {
+  assert.equal(sanitizeEffort("claude", "opus", "不存在的档", null), "");
+  assert.equal(sanitizeEffort("claude", "opus", undefined, null), "");
+  assert.equal(sanitizeEffort("api", "", "xhigh", null), sanitizeEffort("api", "", "xhigh", null));
 });

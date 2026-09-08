@@ -2,7 +2,7 @@ import { recordTrace } from './debug';
 import { useState, useEffect, useRef, useCallback } from "react";
 import type { AiProvider, ChatMessage, ChatAttachment, MessagePart, MessageRuntime, ProviderInfo, RunEvent, SttInfo, LoginState, PublicAiConfig, AiConfigPatch, CliSetupJob, KeyKind } from "./types";
 import { parseSseChunks } from "./sse";
-import { readChoice, compatToSend, normalizeModel, modelsFor, pairModelEffort } from "./modelOptions";
+import { readChoice, compatToSend, normalizeModel, modelsFor, pairModelEffort, sanitizeEffort } from "./modelOptions";
 import { getScript } from "./script";
 import { useChatMessages, getChatStore, MAIN_TAB } from "./liveChat";
 import * as agentBus from "./agentBus";
@@ -498,6 +498,15 @@ export function useAiChat(opts?: { mock?: boolean; tabId?: string; getConversati
       choice.model = pair.model;
       choice.effort = pair.effort;
     }
+    /*
+     * 档位也要按清单兜一道 —— 和上面 normalizeModel 是同一个道理,而且踩过同一种坑。
+     *
+     * 档位存在 localStorage 里。清单改过之后(0ae554b 把 codex 的 `minimal` 去掉了,
+     * 因为上游根本不认、选中必 400),老用户浏览器里那个值还在。ModelBar 只把它降级成
+     * 「默认」**显示**,发请求这条路读的是 localStorage 原值 —— 于是界面上写着「默认」,
+     * 请求里照旧带着 minimal,还是那条 400。显示和实际跑的必须是同一个值。
+     */
+    choice.effort = sanitizeEffort(provider, choice.model, choice.effort, config);
     // 参数兼容模式:锁死的驱动 / 模型不听本地偏好,按策略定论;可调的把偏好交给服务端
     choice.schemaCompat = compatToSend(provider, choice.model, config?.api?.vendor, choice.schemaCompat);
     const runtime: MessageRuntime = { provider, ...choice, toolProtocol: !!config?.toolProtocol };
