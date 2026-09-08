@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { JSX } from "react";
 import { createPortal } from "react-dom";
+import { useBackdropClose } from "../ui/backdropClose";
 import { serializeProc, currentProjectName } from "./io/proc";
 import { applyCombine, summarizeCombine } from "./io/combineImport";
 import { useStore } from "../store/project";
@@ -138,6 +139,8 @@ export function SkillDialog(props: { open: boolean; onClose: () => void }): JSX.
     return () => window.removeEventListener("keydown", onKey);
   }, [open, onClose]);
 
+  // 遮罩:按下和松开都落在遮罩上才关,在输入框里拖着选文字不会误关(见 ui/backdropClose.ts)
+  const backdrop = useBackdropClose(onClose);
   if (!open) return null;
 
   const run = async (what: string, fn: () => Promise<string | void>) => {
@@ -211,7 +214,7 @@ export function SkillDialog(props: { open: boolean; onClose: () => void }): JSX.
   const reveal = (j: Job) => run(`reveal:${j.id}`, async () => { await api(`/api/skill/jobs/${j.id}/reveal`, { method: "POST" }); });
 
   return createPortal(
-    <div className="pc-dialog-mask" onClick={onClose}>
+    <div className="pc-dialog-mask" {...backdrop}>
       <div
         className="pc-dialog pc-skill-dialog"
         role="dialog"

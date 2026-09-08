@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { useBackdropClose } from "../ui/backdropClose";
 import { actions, useStore } from "../store/project";
 import "./ProjectSettingsDialog.css";
 
@@ -102,10 +103,12 @@ export function ProjectSettingsDialog({ open, onClose }: ProjectSettingsDialogPr
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [open]);
 
+  // 遮罩:按下和松开都落在遮罩上才关,在输入框里拖着选文字不会误关(见 ui/backdropClose.ts)
+  const backdrop = useBackdropClose(handleCancel);
   if (!open) return null;
 
   return createPortal(
-    <div className="pc-dialog-mask" onClick={handleCancel}>
+    <div className="pc-dialog-mask" {...backdrop}>
       <div
         className="pc-dialog"
         role="dialog"

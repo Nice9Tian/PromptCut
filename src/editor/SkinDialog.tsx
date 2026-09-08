@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import type { JSX } from "react";
 import { createPortal } from "react-dom";
+import { useBackdropClose } from "../ui/backdropClose";
 import { useSkin } from "../skins/useSkin";
 import { skinGroups } from "../skins/skins";
 import {
@@ -36,6 +37,8 @@ export function SkinDialog(props: { open: boolean; onClose: () => void }): JSX.E
     return () => window.removeEventListener("keydown", onKey);
   }, [open, onClose]);
 
+  // 遮罩:按下和松开都落在遮罩上才关,在输入框里拖着选文字不会误关(见 ui/backdropClose.ts)
+  const backdrop = useBackdropClose(onClose);
   if (!open) return null;
 
   const slotGroups = SKIN_SLOTS.reduce<Record<string, typeof SKIN_SLOTS>>((acc, s) => {
@@ -44,7 +47,7 @@ export function SkinDialog(props: { open: boolean; onClose: () => void }): JSX.E
   }, {});
 
   return createPortal(
-    <div className="pc-dialog-mask" onClick={onClose}>
+    <div className="pc-dialog-mask" {...backdrop}>
       <div
         className="pc-dialog pc-skin-dialog"
         role="dialog"

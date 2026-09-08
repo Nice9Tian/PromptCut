@@ -21,6 +21,11 @@ export type ApiVendor = "anthropic" | "openai" | "gemini";
 
 export type LoginState = "idle" | "waiting" | "ok" | "timeout" | "failed";
 
+/** API Key 的两路来源:自定义 API 里自己填的 / Router 分发密文导入的。各自加密、各自成文件,不混用 */
+export type KeyKind = "custom" | "router";
+
+export interface KeyState { set: boolean; last4: string }
+
 export interface PublicAiConfig {
   version: number;
   defaultProvider: AiProvider | null;
@@ -29,8 +34,13 @@ export interface PublicAiConfig {
     baseUrl: string;
     model: string;
     maxTokens: number;
-    apiKey: { set: boolean; last4: string };
+    /** 当前生效的那一路的 Key(脱敏) */
+    apiKey: KeyState;
+    /** 当前生效的是哪一路;没设 Key 时为空串 */
+    source: KeyKind | "";
   };
+  /** 两路各自存没存 Key */
+  keys: Record<KeyKind, KeyState>;
   /** 三家 CLI 各自的可选模型清单,用 | 分隔 */
   cliModels: { claude: string; codex: string; agy: string };
   toolProtocol: boolean;
@@ -44,6 +54,8 @@ export interface AiConfigPatch {
     model?: string;
     maxTokens?: number;
     apiKey?: string | null;
+    /** 这次的 Key 写进哪一路(缺省 custom);不带 apiKey 时表示切换生效的那一路 */
+    source?: KeyKind | "";
   };
   cliModels?: Partial<{ claude: string; codex: string; agy: string }>;
   toolProtocol?: boolean;

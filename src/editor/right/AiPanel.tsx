@@ -182,7 +182,7 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
       return false;
     }
   })();
-  const { messages, providers, sttInfo, provider, setProvider, streaming, send, runWorkflow, workflowRoles, abort, newChat, error, setMessages, login, loginState, setupJobs, cancelSetup, install, installState, installError, config, saveConfig, setupOpen, openSetup, closeSetup, orchestration } = useAiChat({ mock, tabId, getConversationId: () => convRef.current });
+  const { messages, providers, sttInfo, provider, setProvider, streaming, send, runWorkflow, workflowRoles, abort, newChat, error, setMessages, login, loginState, setupJobs, cancelSetup, install, installState, installError, config, saveConfig, clearKey, setupOpen, openSetup, closeSetup, orchestration } = useAiChat({ mock, tabId, getConversationId: () => convRef.current });
   const history = useChatHistory({ provider, messages, sessionId: undefined, storageKey: tabId === MAIN_TAB ? undefined : `pcChatId:${tabId}` });
   convRef.current = history.conversationId;
 
@@ -522,6 +522,7 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
           installError={installError}
           config={config}
           onSaveConfig={saveConfig}
+          onClearKey={clearKey}
         />
       </aside>
     );
@@ -1055,6 +1056,7 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
         installError={installError}
         config={config}
         onSaveConfig={saveConfig}
+          onClearKey={clearKey}
       />
       <ReportDialog
         open={diagOpen}

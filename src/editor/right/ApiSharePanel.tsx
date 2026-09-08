@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { JSX } from "react";
-import type { AiConfigPatch } from "../../ai/types";
+import type { AiConfigPatch, KeyState } from "../../ai/types";
 import { copyDebugReport } from "../../ai/debug";
 import { decryptConfig, looksLikeShareBlob, type SharedApiConfig } from "../../ai/configShare";
 
@@ -16,8 +16,15 @@ import { decryptConfig, looksLikeShareBlob, type SharedApiConfig } from "../../a
  */
 export function ApiSharePanel(props: {
   onSaveConfig: (patch: AiConfigPatch) => Promise<void>;
+  /** Router 那一路存没存 Key(脱敏) */
+  saved?: KeyState | null;
+  /** 当前生效的就是 Router 这一路 */
+  active?: boolean;
+  clearing?: boolean;
+  onClear?: () => void;
+  clearMsg?: string;
 }): JSX.Element {
-  const { onSaveConfig } = props;
+  const { onSaveConfig, saved, active, clearing, onClear, clearMsg } = props;
   const [machineCode, setMachineCode] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
@@ -85,6 +92,8 @@ export function ApiSharePanel(props: {
           model: parsed.model,
           ...(parsed.maxTokens ? { maxTokens: parsed.maxTokens } : {}),
           apiKey: parsed.apiKey,
+          // 写进 Router 那一路(keys/router.key,PCRTR1. 封装),和自定义 API 的 Key 分开放
+          source: "router",
         },
         defaultProvider: "api",
       });
@@ -100,6 +109,17 @@ export function ApiSharePanel(props: {
 
   return (
     <div className="ais-share">
+      {saved?.set && (
+        <div className="ais-api-saved-key">
+          <span>已导入 ••••{saved.last4}{active ? "(当前生效)" : "(当前生效的是自定义 API 那份)"}</span>
+          {onClear && (
+            <button className="ais-btn ais-danger-btn" disabled={!!clearing} onClick={(e) => { e.preventDefault(); onClear(); }} title="删除 keys/router.key">
+              {clearing ? "清理中…" : "清理密钥"}
+            </button>
+          )}
+        </div>
+      )}
+      {clearMsg && <div className="ais-detail">{clearMsg}</div>}
       <div className="ais-share-code">
         <span className="ais-detail">本机识别码</span>
         <code>{machineCode ?? "读取中…"}</code>

@@ -1,5 +1,6 @@
 import type { JSX } from "react";
 import { createPortal } from "react-dom";
+import { useBackdropClose } from "../../ui/backdropClose";
 import { useEffect, useRef, useState } from "react";
 import "./AiSetupDialog.css";
 import { ApiSharePanel } from "./ApiSharePanel";
@@ -8,7 +9,7 @@ import { SETUP_ENTRIES, isCliEntry, readFace, writeFace } from "./setupEntries";
 import type { SetupEntry, SetupEntryId } from "./setupEntries";
 import { redactDebug } from "../../ai/debug";
 import { CAPABILITIES } from "../../ai/modelOptions";
-import type { ProviderInfo, AiProvider, SttInfo, PublicAiConfig, AiConfigPatch, ApiVendor, CliSetupJob, LoginState } from "../../ai/types";
+import type { ProviderInfo, AiProvider, SttInfo, PublicAiConfig, AiConfigPatch, ApiVendor, CliSetupJob, LoginState, KeyKind } from "../../ai/types";
 
 /**
  * 把「非默认、又容易让排查跑偏」的设置挑成人话，放在诊断报告最前面。
@@ -51,8 +52,29 @@ export function AiSetupDialog(props: {
   installState: Partial<Record<AiProvider, "idle" | "installing" | "ok" | "timeout" | "failed">>;
   installError: Partial<Record<AiProvider, string>>;
   config: PublicAiConfig | null; onSaveConfig: (partial: AiConfigPatch) => Promise<void>;
+  /** 「清理密钥」:删掉那一路的密钥文件 */
+  onClearKey?: (kind: KeyKind) => Promise<void>;
 }): JSX.Element | null {
-  const { open, onClose, providers, stt, current, onChoose, onLogin, loginState, setupJobs, onCancelSetup, onInstall, installState, installError, config, onSaveConfig } = props;
+  const { open, onClose, providers, stt, current, onChoose, onLogin, loginState, setupJobs, onCancelSetup, onInstall, installState, installError, config, onSaveConfig, onClearKey } = props;
+  // 遮罩:按下和松开都在遮罩上才关。在输入框里拖着选文字、松手滑到外面,不能把窗口关了
+  const backdrop = useBackdropClose(onClose);
+  const [clearing, setClearing] = useState<KeyKind | "">("");
+  const [clearMsg, setClearMsg] = useState("");
+  const clearKeyOf = async (kind: KeyKind) => {
+    if (!onClearKey) return;
+    if (!confirm(kind === "router" ? "删除 Router 导入的密钥文件?之后要再粘一次分发密文。" : "删除自定义 API 的密钥文件?之后要重新填 Key。")) return;
+    setClearing(kind);
+    setClearMsg("");
+    try {
+      await onClearKey(kind);
+      setClearMsg("密钥文件已删除");
+      if (kind === "custom") { setReplaceKey(true); setApiKeyInput(""); }
+    } catch (e) {
+      setClearMsg(e instanceof Error ? e.message : "清理失败");
+    } finally {
+      setClearing("");
+    }
+  };
 
   /** null = 停在第一级的选择页;有值 = 进了那一项的配置页 */
   const [openedEntry, setOpenedEntry] = useState<SetupEntryId | null>(null);
@@ -196,7 +218,8 @@ export function AiSetupDialog(props: {
     setSaveError(null);
     setSaveSuccess(false);
     const patch: AiConfigPatch = { api: { vendor: apiVendor, baseUrl: apiBaseUrl, model: apiModel } };
-    if (replaceKey && apiKeyInput.trim()) patch.api!.apiKey = apiKeyInput.trim();
+    if (replaceKey && apiKeyInput.trim()) { patch.api!.apiKey = apiKeyInput.trim(); patch.api!.source = "custom"; }
+    else if (config?.keys?.custom.set) patch.api!.source = "custom"; // 保存自定义页 = 切到自定义那一路
     try {
       await onSaveConfig(patch);
       setSaveSuccess(true);
@@ -433,7 +456,14 @@ export function AiSetupDialog(props: {
         分发方用你的本机识别码把 API 配置加密成一段密文。粘进来就自动解开并保存，
         密钥全程不以明文出现在聊天记录或磁盘上。
       </div>
-      <ApiSharePanel onSaveConfig={onSaveConfig} />
+      <ApiSharePanel
+        onSaveConfig={onSaveConfig}
+        saved={config?.keys?.router ?? null}
+        active={config?.api.source === "router"}
+        clearing={clearing === "router"}
+        onClear={onClearKey ? () => clearKeyOf("router") : undefined}
+        clearMsg={clearMsg}
+      />
     </section>
   );
 
@@ -467,14 +497,20 @@ export function AiSetupDialog(props: {
       </div>
       <div className="ais-api-field">
         <label>API Key</label>
-        {config?.api.apiKey.set && !replaceKey ? (
+        {config?.keys?.custom.set && !replaceKey ? (
           <div className="ais-api-saved-key">
-            <span>已保存 ••••{config.api.apiKey.last4}</span>
-            <button className="ais-btn" onClick={(e) => { e.preventDefault(); setReplaceKey(true); }}>更换</button>
+            <span>已保存 ••••{config.keys.custom.last4}{config.api.source === "router" ? "(当前生效的是 Router 导入的那份)" : ""}</span>
+            <span className="ais-api-saved-acts">
+              <button className="ais-btn" onClick={(e) => { e.preventDefault(); setReplaceKey(true); }}>更换</button>
+              <button className="ais-btn ais-danger-btn" disabled={clearing !== ""} onClick={(e) => { e.preventDefault(); clearKeyOf("custom"); }} title="删除 keys/custom.key">
+                {clearing === "custom" ? "清理中…" : "清理密钥"}
+              </button>
+            </span>
           </div>
         ) : (
           <input type="password" value={apiKeyInput} onChange={(e) => setApiKeyInput(e.target.value)} placeholder="粘贴 API Key" />
         )}
+        {clearMsg && <div className="ais-detail">{clearMsg}</div>}
       </div>
       <div className="ais-api-actions">
         <button className="ais-btn ais-primary-btn" onClick={(e) => { e.preventDefault(); handleSaveApi(); }} disabled={saving}>
@@ -484,8 +520,8 @@ export function AiSetupDialog(props: {
         {saveError && <span className="ais-status-err">{saveError}</span>}
       </div>
       <div className="ais-detail">
-        Key 落盘时用本机指纹加密（<code>ai.json</code> 里存的是密文），不会明文躺在配置文件里；
-        它挡的是备份、同步盘、误提交这类外泄，挡不住能在这台机器上跑代码的人。
+        Key 落盘时用本机指纹加密，单独存在 <code>keys/custom.key</code>（和 Router 导入的那份各用各的加密标识，不混用），
+        不会明文躺在配置文件里；它挡的是备份、同步盘、误提交这类外泄，挡不住能在这台机器上跑代码的人。
       </div>
     </section>
   );
@@ -494,7 +530,7 @@ export function AiSetupDialog(props: {
 
   return createPortal(
     <>
-    <div className="ais-backdrop" onClick={onClose}>
+    <div className="ais-backdrop" {...backdrop}>
       <div className="ais-dialog" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
         {/* 报告去哪了要看得见。role=status 让读屏软件也念出来 */}
         {diagToast && (

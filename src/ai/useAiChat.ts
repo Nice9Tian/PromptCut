@@ -1,6 +1,6 @@
 import { recordTrace } from './debug';
 import { useState, useEffect, useRef, useCallback } from "react";
-import type { AiProvider, ChatMessage, ChatAttachment, MessagePart, MessageRuntime, ProviderInfo, RunEvent, SttInfo, LoginState, PublicAiConfig, AiConfigPatch, CliSetupJob } from "./types";
+import type { AiProvider, ChatMessage, ChatAttachment, MessagePart, MessageRuntime, ProviderInfo, RunEvent, SttInfo, LoginState, PublicAiConfig, AiConfigPatch, CliSetupJob, KeyKind } from "./types";
 import { parseSseChunks } from "./sse";
 import { readChoice } from "./modelOptions";
 import { getScript } from "./script";
@@ -114,7 +114,7 @@ export function useAiChat(opts?: { mock?: boolean; tabId?: string; getConversati
         { id: "agy", label: "Antigravity", available: true, version: "1.1.27", auth: { loggedIn: true } },
         { id: "api", label: "API 直连", available: false, note: "还没填 API Key", auth: { loggedIn: false, detail: "还没填 API Key" } }
       ]);
-      setConfig({ version: 1, defaultProvider: null, toolProtocol: true, api: { vendor: "anthropic", baseUrl: "", model: "gpt-4o|gpt-4o-mini", maxTokens: 4096, apiKey: { set: false, last4: "" } }, cliModels: { claude: "opus|sonnet|haiku", codex: "", agy: "gemini-3.1-pro-high|gemini-3.8-flash-low" } });
+      setConfig({ version: 1, defaultProvider: null, toolProtocol: true, api: { vendor: "anthropic", baseUrl: "", model: "gpt-4o|gpt-4o-mini", maxTokens: 4096, apiKey: { set: false, last4: "" }, source: "" }, keys: { custom: { set: false, last4: "" }, router: { set: false, last4: "" } }, cliModels: { claude: "opus|sonnet|haiku", codex: "", agy: "gemini-3.1-pro-high|gemini-3.8-flash-low" } });
       setProvider("claude");
       // ?nosetup=1 给自动化脚本用:不弹首启设置对话框
       if (tabId === MAIN_TAB && localStorage.getItem("aiSetupDone") === null && !new URLSearchParams(location.search).has("nosetup")) {
@@ -294,6 +294,27 @@ export function useAiChat(opts?: { mock?: boolean; tabId?: string; getConversati
       setError("保存配置失败");
       throw e;
     }
+  }, [opts?.mock]);
+
+  /** 「清理密钥」:删掉那一路的密钥文件,拿回最新配置 */
+  const clearKey = useCallback(async (kind: KeyKind) => {
+    if (opts?.mock) {
+      setConfig(prev => {
+        if (!prev) return prev;
+        const keys = { ...prev.keys, [kind]: { set: false, last4: "" } };
+        const active = prev.api.source === kind;
+        return { ...prev, keys, api: active ? { ...prev.api, apiKey: { set: false, last4: "" }, source: "" } : prev.api };
+      });
+      return;
+    }
+    const res = await fetch("/api/ai/config/clear-key", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ kind }),
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok || !data?.ok) throw new Error(data?.error || "清理密钥失败");
+    setConfig(data.config);
   }, [opts?.mock]);
 
   const openSetup = useCallback(() => setSetupOpen(true), []);
@@ -726,6 +747,7 @@ export function useAiChat(opts?: { mock?: boolean; tabId?: string; getConversati
     installError,
     config,
     saveConfig,
+    clearKey,
     setupOpen,
     openSetup,
     closeSetup

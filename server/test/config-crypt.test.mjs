@@ -61,7 +61,10 @@ test("落盘的 ai.json 里没有明文 Key,读回来却是明文", async () => 
 
     const onDisk = fs.readFileSync(file, "utf8");
     assert.ok(!onDisk.includes(KEY), "明文 Key 落到磁盘上了");
-    assert.ok(onDisk.includes("PCENC1."), "磁盘上不是密文");
+    // Key 现在单独存在 keys/custom.key 里,ai.json 只留 source
+    assert.ok(!onDisk.includes("PCENC1."), "ai.json 里不该再有密文");
+    const keyFile = fs.readFileSync(path.join(dir, "keys", "custom.key"), "utf8");
+    assert.ok(keyFile.startsWith("PCENC1.") && !keyFile.includes(KEY), "密钥文件里应是密文");
 
     assert.equal(readConfig().api.apiKey, KEY, "读回来应该是明文");
 

@@ -487,7 +487,23 @@ export default function vitePluginAi(): Plugin {
 
       server.middlewares.use('/api/ai/config', async (req, res) => {
         try {
-          const { publicConfig, writeConfig } = await import(new URL('./ai-config.mjs', import.meta.url).href);
+          const { publicConfig, writeConfig, clearKey } = await import(new URL('./ai-config.mjs', import.meta.url).href);
+          // POST /api/ai/config/clear-key {kind}:删掉那一路的密钥文件(设置窗口里的「清理密钥」)
+          if ((req.url || '').split('?')[0] === '/clear-key') {
+            if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: 'POST only' });
+            let body = '';
+            req.on('data', c => body += c);
+            req.on('end', () => {
+              try {
+                const { kind } = JSON.parse(body || '{}');
+                clearKey(kind);
+                sendJson(res, 200, { ok: true, config: publicConfig() });
+              } catch (e: any) {
+                sendJson(res, 400, { ok: false, error: e.message });
+              }
+            });
+            return;
+          }
           if (req.method === 'GET') {
             return sendJson(res, 200, { ok: true, config: publicConfig() });
           } else if (req.method === 'POST') {

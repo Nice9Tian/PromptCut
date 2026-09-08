@@ -1,7 +1,24 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { sealKey, openKey } from './runners/config-crypt.mjs';
+import { sealKey, openKey, sealedKind, KEY_KINDS } from './runners/config-crypt.mjs';
+
+/**
+ * AI 配置(ai.json)+ 两个密钥文件。
+ *
+ * API Key **不再写在 ai.json 里**,而是各放各的文件,和 ai.json 同目录:
+ *   keys/custom.key  —— 「自定义 API」里用户自己填的 Key,PCENC1. 那一套封装
+ *   keys/router.key  —— 「PromptCut Router」分发密文导入的 Key,PCRTR1. 那一套封装
+ * 两路的加密标签、AAD、前缀都不一样,拿错一路解出来是空串,不会混用。
+ * ai.json 里的 `api.source` 记着**当前生效的是哪一路**("custom" / "router" / "");
+ * 进程内 `api.apiKey` 永远是当前那一路解开后的明文,下游(providers、publicConfig)不用改。
+ *
+ * 设置窗口里的「清理密钥」就是删掉对应那个文件(clearKey);删的是当前生效的那一路时,
+ * source 一并清空,等于「没设 Key」。
+ *
+ * 老版本把密文直接写在 ai.json 的 api.apiKey 里:读到这种就当 custom 那一路,下一次
+ * 写配置时搬进 keys/custom.key,ai.json 里不再留。
+ */
 
 function getConfigPath() {
   if (process.env.PROMPTCUT_AI_CONFIG) {
@@ -9,6 +26,33 @@ function getConfigPath() {
   }
   const appData = process.env.LOCALAPPDATA || os.homedir();
   return path.join(appData, 'promptcut', 'ai.json');
+}
+
+/** 某一路 Key 的文件路径 */
+export function keyFilePath(kind) {
+  if (!KEY_KINDS.includes(kind)) throw new Error(`密钥类型只能是 ${KEY_KINDS.join(' / ')}`);
+  return path.join(path.dirname(getConfigPath()), 'keys', `${kind}.key`);
+}
+
+function readKeyFile(kind) {
+  try {
+    const sealed = fs.readFileSync(keyFilePath(kind), 'utf8').trim();
+    // 文件里必须是**这一路**的密文;明文或另一路的密文都不认
+    if (sealedKind(sealed) !== kind) return '';
+    return openKey(sealed, kind);
+  } catch {
+    return '';
+  }
+}
+
+function writeKeyFile(kind, plain) {
+  const file = keyFilePath(kind);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  // 0600:密文的口令是**本机**机器码,同一台机器上的另一个用户推得出来,所以别让他读到密文。
+  // writeFileSync 的 mode 只在新建时生效,已存在的文件要另外 chmod 一次。
+  // (Windows 上 chmod 基本是空操作,这一道是给 POSIX 的。)
+  fs.writeFileSync(file, sealKey(plain, kind) + '\n', { encoding: 'utf8', mode: 0o600 });
+  try { fs.chmodSync(file, 0o600); } catch { /* Windows / 权限不够,不影响功能 */ }
 }
 
 function getDefaults() {
@@ -20,6 +64,8 @@ function getDefaults() {
       vendor: 'anthropic',
       baseUrl: '',
       apiKey: '',
+      /** 当前生效的 Key 来自哪一路:custom / router / ""(没设) */
+      source: '',
       model: '',
       maxTokens: 4096
     },
@@ -33,23 +79,57 @@ function getDefaults() {
   };
 }
 
-export function readConfig() {
+/** 磁盘上那份 ai.json 原样(合并过默认值),Key 字段不解开 */
+function readRaw() {
   const p = getConfigPath();
   const defs = getDefaults();
   try {
     if (!fs.existsSync(p)) return defs;
-    const content = fs.readFileSync(p, 'utf8');
-    const parsed = JSON.parse(content);
+    const parsed = JSON.parse(fs.readFileSync(p, 'utf8'));
     const merged = deepMerge(defs, parsed, true);
     if (!merged.api || typeof merged.api !== 'object' || Array.isArray(merged.api)) {
       merged.api = defs.api;
     }
-    // 落盘的是密文,进程内一律用明文:下游(providers、publicConfig)都不用改
-    merged.api.apiKey = openKey(merged.api.apiKey);
+    // 有没有写过 source:清理密钥之后 persist 写的是 "",那是「真的没设」;
+    // 老版本的 ai.json 根本没这个字段,这时才允许去扫两路文件
+    merged.api.hasSource = typeof parsed?.api?.source === 'string';
+    if (!KEY_KINDS.includes(merged.api.source)) merged.api.source = '';
     return merged;
   } catch {
     return defs;
   }
+}
+
+/** ai.json 里遗留的 Key(老版本写在这儿)。只认 custom 那一路的密文或明文 */
+function legacyKey(raw) {
+  const v = raw.api.apiKey;
+  if (!v || typeof v !== 'string') return '';
+  const kind = sealedKind(v);
+  if (kind && kind !== 'custom') return '';
+  return openKey(v, 'custom');
+}
+
+export function readConfig() {
+  const cfg = readRaw();
+  let source = cfg.api.source;
+  let key = source ? readKeyFile(source) : '';
+  if (!key) {
+    // 没有文件(或者文件对不上这一路):看看 ai.json 里有没有老版本留下的
+    const legacy = legacyKey(cfg);
+    if (legacy) { key = legacy; source = 'custom'; }
+    else if (!source && !cfg.api.hasSource) {
+      // source 从没写过,但某一路的文件在:custom 优先(用户自己填的那份)
+      for (const kind of KEY_KINDS) {
+        const k = readKeyFile(kind);
+        if (k) { key = k; source = kind; break; }
+      }
+    }
+  }
+  // 落盘的是密文,进程内一律用明文:下游(providers、publicConfig)都不用改
+  cfg.api.apiKey = key;
+  cfg.api.source = key ? source : '';
+  delete cfg.api.hasSource;
+  return cfg;
 }
 
 function deepMerge(target, source, reading = false) {
@@ -67,43 +147,73 @@ function deepMerge(target, source, reading = false) {
   return result;
 }
 
+/** 把内存里的配置写回 ai.json(Key 不进去,只留 source) */
+function persist(cfg) {
+  const p = getConfigPath();
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  const onDisk = { ...cfg, api: { ...cfg.api } };
+  delete onDisk.api.apiKey;
+  fs.writeFileSync(p, JSON.stringify(onDisk, null, 2), { encoding: 'utf8', mode: 0o600 });
+  try { fs.chmodSync(p, 0o600); } catch { /* Windows / 权限不够,不影响功能 */ }
+}
+
 export function writeConfig(partial) {
   const current = readConfig();
   const newConfig = deepMerge(current, partial, false);
-  
+
   if (partial.api && partial.api.vendor !== undefined) {
     if (!['anthropic', 'openai', 'gemini'].includes(partial.api.vendor)) {
       throw new Error('vendor 只能是 anthropic / openai / gemini');
     }
     newConfig.api.vendor = partial.api.vendor;
   }
-  
+
   if (partial.api && partial.api.baseUrl !== undefined) {
     if (partial.api.baseUrl !== '' && !partial.api.baseUrl.startsWith('http://') && !partial.api.baseUrl.startsWith('https://')) {
       throw new Error('baseUrl 必须是 http(s) 地址或留空');
     }
     newConfig.api.baseUrl = partial.api.baseUrl;
   }
-  
+
   if (partial.defaultProvider !== undefined) {
     if (!['claude', 'agy', 'codex', 'api', null].includes(partial.defaultProvider)) {
       throw new Error('defaultProvider 必须是 claude, agy, codex, api 或 null');
     }
     newConfig.defaultProvider = partial.defaultProvider;
   }
-  
+
+  /*
+   * Key 的三种写法:
+   *   apiKey: "…"   写进 source 指定的那一路(不给 source 就是 custom),并切到那一路;
+   *   apiKey: null  清掉当前生效的那一路(文件一并删);
+   *   apiKey: ""/缺 Key 不动,只允许单独切 source(那一路得有文件)。
+   */
+  let source = current.api.source;
+  let key = current.api.apiKey;
+  const wantSource = partial.api && partial.api.source !== undefined ? partial.api.source : undefined;
+  if (wantSource !== undefined && wantSource !== '' && !KEY_KINDS.includes(wantSource)) {
+    throw new Error(`api.source 只能是 ${KEY_KINDS.join(' / ')}`);
+  }
   if (partial.api && partial.api.apiKey !== undefined) {
     if (partial.api.apiKey === null) {
-      newConfig.api.apiKey = '';
+      if (source) removeKeyFile(source);
+      key = ''; source = '';
     } else if (partial.api.apiKey !== '') {
-      newConfig.api.apiKey = partial.api.apiKey;
-    } else {
-      newConfig.api.apiKey = current.api.apiKey;
+      const kind = wantSource || 'custom';
+      if (typeof partial.api.apiKey !== 'string') throw new Error('apiKey 必须是字符串');
+      writeKeyFile(kind, partial.api.apiKey);
+      key = partial.api.apiKey; source = kind;
     }
-  } else {
-    newConfig.api.apiKey = current.api.apiKey;
+  } else if (wantSource !== undefined && wantSource !== source) {
+    const k = wantSource ? readKeyFile(wantSource) : '';
+    if (wantSource && !k) throw new Error(`${wantSource} 这一路还没有保存过 Key`);
+    key = k; source = wantSource;
   }
-  
+  // 老版本留在 ai.json 里的 Key:搬进文件,ai.json 里不再留
+  if (source === 'custom' && key && !fs.existsSync(keyFilePath('custom'))) writeKeyFile('custom', key);
+  newConfig.api.apiKey = key;
+  newConfig.api.source = key ? source : '';
+
   if (partial.api && partial.api.maxTokens !== undefined) {
     const val = parseInt(partial.api.maxTokens, 10);
     if (!isNaN(val) && val > 0) {
@@ -129,17 +239,31 @@ export function writeConfig(partial) {
     newConfig.toolProtocol = !!partial.toolProtocol;
   }
 
-  const p = getConfigPath();
-  fs.mkdirSync(path.dirname(p), { recursive: true });
-  // Key 只以密文落盘;返回给调用方的仍是明文那份(publicConfig 会再脱敏一次)
-  const onDisk = { ...newConfig, api: { ...newConfig.api, apiKey: sealKey(newConfig.api.apiKey) } };
-  // 0600:密文的口令是**本机**机器码,同一台机器上的另一个用户推得出来,所以别让他读到密文。
-  // writeFileSync 的 mode 只在新建时生效,已存在的文件要另外 chmod 一次。
-  // (Windows 上 chmod 基本是空操作,这一道是给 POSIX 的。)
-  fs.writeFileSync(p, JSON.stringify(onDisk, null, 2), { encoding: 'utf8', mode: 0o600 });
-  try { fs.chmodSync(p, 0o600); } catch { /* Windows / 权限不够,不影响功能 */ }
-
+  persist(newConfig);
   return newConfig;
+}
+
+function removeKeyFile(kind) {
+  try { fs.rmSync(keyFilePath(kind), { force: true }); } catch { /* 没有就算了 */ }
+}
+
+/**
+ * 「清理密钥」:删掉某一路的密钥文件。删的正是当前生效的那一路,配置就退回「没设 Key」。
+ * 老版本留在 ai.json 里的 Key 也一并抹掉(清 custom 时),不然读回来又冒出来。
+ */
+export function clearKey(kind) {
+  if (!KEY_KINDS.includes(kind)) throw new Error(`密钥类型只能是 ${KEY_KINDS.join(' / ')}`);
+  const cfg = readConfig();
+  removeKeyFile(kind);
+  if (cfg.api.source === kind) { cfg.api.apiKey = ''; cfg.api.source = ''; }
+  persist(cfg);
+  return cfg;
+}
+
+/** 某一路有没有存着 Key(不解开也能看前缀,但这里顺手核一遍能不能解) */
+function keyState(kind) {
+  const k = readKeyFile(kind);
+  return { set: k.length > 0, last4: k.length >= 4 ? k.slice(-4) : '' };
 }
 
 export function publicConfig() {
@@ -149,5 +273,9 @@ export function publicConfig() {
     set: apiKey.length > 0,
     last4: apiKey.length >= 4 ? apiKey.slice(-4) : ''
   };
+  // 两路各自的状态:设置窗口里 Router 页和自定义页各显示各的,互不影响
+  cfg.keys = { custom: keyState('custom'), router: keyState('router') };
+  // 老版本 Key 还在 ai.json 里、没搬家的情况:custom 页也得看得到
+  if (cfg.api.source === 'custom' && !cfg.keys.custom.set) cfg.keys.custom = { ...cfg.api.apiKey };
   return cfg;
 }
