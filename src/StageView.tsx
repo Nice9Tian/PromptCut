@@ -7,6 +7,7 @@ import { flattenOverlay, type Project } from "./kernel/project";
 import { installStageClock } from "./render/stageClock";
 import { createAnimationPinner } from "./render/pinAnimations";
 import { canvasBox } from "./editor/left/contentBox";
+import { ensureProxyStyle, proxyAllowed, proxyOf, resetInk, sampleAll } from "./render/solidMode";
 import { themeStyle } from "./themes";
 import "./cards";
 
@@ -45,6 +46,11 @@ export interface PcStageApi {
   render(t: number, opts?: { jump?: boolean; replay?: boolean }): void;
   /** 舞台尺寸,给编辑器算缩放 */
   size(): { width: number; height: number };
+  /**
+   * 实体模式:true = 画色块(浏览、播放、拖动时用),false = 真渲(暂停时用)。
+   * 只在 ?stage=1&proxy=1 的页面上有效,别处调了不生效也不报错。
+   */
+  setProxy(on: boolean): void;
   /** 取活跃卡片的位置(包裹层的外框——每张卡都是整屏的,只能当兜底用) */
   rects(): { clipId: string; left: number; top: number; width: number; height: number }[];
   /**
@@ -86,7 +92,12 @@ export default function StageView() {
   const [project, setProject] = useState<Project | null>(null);
   const [t, setT] = useState(0);
   const [token, setToken] = useState(1);
-  const ref = useRef({ project: null as Project | null, t: 0, layoutKey: "", settle: 0 });
+  /*
+   * 实体模式开关。只有 ?stage=1&proxy=1 这条路能打开(见 render/solidMode.ts),
+   * 导出页 ?export=1 拿不到它 —— 退化方向必须是「慢但正确」。
+   */
+  const [proxy, setProxy] = useState(false);
+  const ref = useRef({ project: null as Project | null, t: 0, layoutKey: "", settle: 0, proxy: false });
 
   useEffect(() => {
     document.documentElement.style.background = "transparent";
@@ -114,6 +125,7 @@ export default function StageView() {
       if (!opts.jump && !opts.replay && dt >= 0 && dt < CONTINUOUS_MAX) {
         flushSync(() => setT(target));
         clock.advanceTo(Math.max(0, target) * 1000, { onFrame: (ms) => pinner.sync(ms) });
+        scheduleSample();
         return;
       }
 
@@ -155,6 +167,24 @@ export default function StageView() {
       flushSync(() => setT(target));
       clock.tick(Math.max(0, target) * 1000);
       pinner.sync(Math.max(0, target) * 1000);
+      scheduleSample();
+    };
+
+    /*
+     * 真渲之后采一次墨色(实体模式的色块要用)。
+     *
+     * 「每次真渲都是一次采样机会」—— 用得越久,实体模式越准:用户改了主色、换了文案,
+     * 方块跟着变。播放中是实体模式,不会走到这里,所以不会拖慢播放。
+     * 防抖是因为连续拖播放头会一帧一个 renderAt,而采样要遍历每张卡的所有元素读 computed style。
+     */
+    let sampleTimer = 0;
+    const scheduleSample = () => {
+      if (!proxyAllowed() || ref.current.proxy) return;
+      window.clearTimeout(sampleTimer);
+      sampleTimer = window.setTimeout(() => {
+        const stageEl = document.querySelector<HTMLElement>(".pc-stage");
+        if (stageEl && !ref.current.proxy) sampleAll(stageEl);
+      }, 120);
     };
 
     /** 舞台左上角在文档里的位置,把元素外框换算成舞台坐标 */
@@ -254,6 +284,8 @@ export default function StageView() {
         return toStage(new DOMRect(cl, ct, cr - cl, cb - ct), origin);
       },
       setProject(next) {
+        // clipId 会在不同项目里复用,不清掉就会张冠李戴
+        if (next !== ref.current.project) resetInk();
         const prevKey = ref.current.layoutKey;
         const nextKey = layoutKeyOf(next);
         ref.current.project = next;
@@ -273,6 +305,24 @@ export default function StageView() {
       size() {
         const p = ref.current.project;
         return { width: p?.width ?? 1920, height: p?.height ?? 1080 };
+      },
+      setProxy(on) {
+        // 只有显式带了 ?proxy=1 的页面才允许开。导出页永远进不来这一条。
+        if (!proxyAllowed()) return;
+        const want = !!on;
+        if (want === ref.current.proxy) return;
+        ref.current.proxy = want;
+        if (want) ensureProxyStyle();
+        /*
+         * 从实体切回真渲的那一刻要采一次样,而不是切进实体时采 ——
+         * 实体模式下画面上只有色块,量它等于把上一次的结论抄一遍再劣化。
+         * 采样排在这一帧提交之后(真卡已经画出来了),所以放 flushSync 后面。
+         */
+        flushSync(() => setProxy(want));
+        if (!want) {
+          const stageEl = document.querySelector<HTMLElement>(".pc-stage");
+          if (stageEl) sampleAll(stageEl);
+        }
       },
       rects() {
         const stageEl = document.querySelector(".pc-stage");
@@ -325,7 +375,7 @@ export default function StageView() {
          */
       }}
     >
-      <Stage timeline={timeline} t={t} playToken={token} />
+      <Stage timeline={timeline} t={t} playToken={token} proxy={proxy ? proxyOf : undefined} />
     </div>
   );
 }

@@ -9,6 +9,14 @@ import { PartTree } from "./PartTree";
 import { frameBox } from "./layout";
 import type { Timeline } from "./types";
 
+/**
+ * 实体模式:浏览时把每张卡换成一个色块。给一个「这张卡该画成什么样」的查询函数,
+ * Stage 只负责摆位置 —— 颜色怎么来的、什么时候采样,是 render/solidMode.ts 的事。
+ *
+ * 不传 = 真渲,DOM 和以前**一个字都不差**(导出走的就是这条路)。
+ */
+export type ProxyRender = (clipId: string) => { color: string; box: { left: number; top: number; width: number; height: number } | null };
+
 /** 提前 0.05s 挂载,让进场动画的第一帧正卡在 start 上 */
 const LEAD = 0.05;
 
@@ -16,7 +24,7 @@ const LEAD = 0.05;
  * 舞台:按当前时刻挑出活跃 clip 并挂载。卡片以 clip.id + playToken 作 key,
  * 进入区间即重新挂载、从头播放(和导出时的行为一致)。
  */
-export function Stage({ timeline, t, playToken, speed = 1 }: { timeline: Timeline; t: number; playToken: number; speed?: number }) {
+export function Stage({ timeline, t, playToken, speed = 1, proxy }: { timeline: Timeline; t: number; playToken: number; speed?: number; proxy?: ProxyRender }) {
   const active = timeline.clips.filter((c) => t >= c.start - LEAD && t < c.end);
   // 自带三维场景的卡(scene-3d)要用和 A 层同一台相机,所以把画幅和 fov 一起递下去。
   // 对象整体透传,别的卡收到了也不看。
@@ -87,6 +95,7 @@ export function Stage({ timeline, t, playToken, speed = 1 }: { timeline: Timelin
             <div
               key={`${clip.id}:${playToken}`}
               data-pc-clip={clip.id}
+              className={proxy ? "pc-proxy" : undefined}
               style={{
                 ...frameCss(clip.frame, timeline, m ? { dx: m.dx, dy: m.dy } : undefined),
                 ...(op < 1 ? { opacity: op } : null),
@@ -105,6 +114,28 @@ export function Stage({ timeline, t, playToken, speed = 1 }: { timeline: Timelin
               ) : (
                 <C params={{ ...def.defaults, ...clip.params }} playToken={playToken} t={Math.max(0, t - clip.start)} duration={clip.end - clip.start} stage={stageInfo} />
               )}
+              {/*
+                代理色块是卡片的**兄弟**,不是把卡片包起来 —— 真卡由 .pc-proxy 那条
+                CSS 规则藏掉(见 render/solidMode.ts)。包一层 div 的话,切换实体模式那一刻
+                React 会重挂载卡片,而重挂载会丢掉 pinAnimations 的锚点:
+                用户看到的是「每次暂停,字都重新飞进来一次」。
+                box 是「这张卡真正画了东西的那一块」,坐标相对卡片自己的框;
+                量不到(或者内容本来就铺满这张卡)就 inset:0。
+              */}
+              {proxy ? (() => {
+                const px = proxy(clip.id);
+                return (
+                  <div
+                    data-pc-proxy-plane=""
+                    style={{
+                      position: "absolute",
+                      ...(px.box ?? { inset: 0 }),
+                      background: px.color,
+                      borderRadius: 6,
+                    }}
+                  />
+                );
+              })() : null}
             </div>
           );
         })}

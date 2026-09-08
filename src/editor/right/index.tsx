@@ -55,12 +55,23 @@ function measureContentBox(clipId: string): { contentBox: { left: number; top: n
   if (!s?.bounds) return { contentBox: null, contentNote: "预览窗口没就绪,量不到内容框;稍后再 get_layout" };
   const st = getState();
   try {
+    /*
+     * 量之前先退出实体模式:播放中画面上是色块,量到的就是色块的框而不是内容的框。
+     * Agent 拿 contentBox 判「会不会盖住人」,量错了它会去挪本来不用挪的东西。
+     * 量完按当前播放状态放回去 —— 用户还在播就继续画色块。
+     */
+    s.setProxy?.(false);
     s.setProject(st.project);
     s.render(st.t, { jump: true });
   } catch {
     // 预览没准备好时 render 可能抛,量不到就量不到,别让整个工具失败
   }
   const box = s.bounds(clipId);
+  try {
+    s.setProxy?.(st.playing);
+  } catch {
+    // 同上,恢复失败不该让工具失败
+  }
   if (!box) {
     const hit = findClip(st.project, clipId);
     const range = hit ? `${hit.clip.start}~${hit.clip.end}s` : "?";

@@ -167,6 +167,18 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
     setTimeout(refreshRects, 50);
   }, [stageReady, project, stage, refreshRects]);
 
+  /*
+   * 实体模式的挡位:**播放中 = 色块,暂停 = 真渲**。
+   *
+   * 这是最省事的调度,也基本够用 —— 不需要 requestIdleCallback、不需要优先级队列,
+   * 而且符合剪辑软件的直觉:一边看一边判断构图,停下来才看细节。
+   * 真要更细,再按「离播放头的距离」分批升级。
+   */
+  useEffect(() => {
+    if (!stageReady) return;
+    stage()?.setProxy(playing);
+  }, [stageReady, playing, stage]);
+
   // 时间变了就下发。播放中是连续推进;拖播放头 / 跳转 / 重播(playToken 变)都按跳转处理:
   // 重挂载 + 从入点补跑到那一刻。两者合在一个 effect 里,一次 seek 只渲染一帧。
   useEffect(() => {
@@ -308,7 +320,9 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
                 ref={frameRef}
                 data-pc="stage-frame"
                 title="预览舞台"
-                src={`${location.pathname}?stage=1`}
+                // proxy=1 只加在编辑台这一处:实体模式是给人浏览用的,
+                // 导出(?export=1)和 see_preview 都不该看到色块(见 render/solidMode.ts)
+                src={`${location.pathname}?stage=1&proxy=1`}
                 onLoad={() => {
                   if (frameRef.current?.contentWindow?.__pcStage) setStageReady(true);
                 }}
