@@ -433,7 +433,10 @@ def download(url: str, out_dir: str, site: Optional[str] = None, quality: int = 
 
     # 文件名自己算：yt-dlp 的模板会把 ? # 之类留在名字里，进 URL 时麻烦。
     # 中途一直用 id 当名字，落地后再改成「标题 [id].ext」。
-    opts["outtmpl"] = os.path.join(out_dir, "%(id)s.%(ext)s")
+    # out_dir 里的 % 要翻倍转义：outtmpl 整条都会被 yt-dlp 当模板解析，目录名里
+    # 真出现一个 % 就会被当成字段占位符的开头，抛 ValueError: incomplete format。
+    # 正常路径（%LOCALAPPDATA%\promptcut 展开后）不含 %，但 out_dir 是外面传进来的。
+    opts["outtmpl"] = os.path.join(out_dir.replace("%", "%%"), "%(id)s.%(ext)s")
     opts["format"] = format_selector(quality, audio_only)
     if not audio_only:
         opts["merge_output_format"] = "mp4"

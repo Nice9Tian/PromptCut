@@ -121,3 +121,29 @@ export function isInside(child, parent) {
 export function isInsideAny(child, parents) {
   return parents.some((p) => p && isInside(child, p));
 }
+
+/**
+ * 请求体超限时:**先把 413 发出去,再掐断**。返回 true 表示已经回过响应了,调用方别再往下走。
+ *
+ * 两个坑都在这一个函数里踩过:
+ *
+ * 1. 各处原来写的是 `if (body.length > max) req.destroy()`,把 413 留给 `req.on('end')` 去发。
+ *    那句 413 是死代码 —— destroy() 直接毁掉底层 socket,`end` **永远不会触发**。结果是
+ *    服务端一声不吭把连接掐了,前端拿到「网络错误 / 连接中断」这种看不出所以然的报错。
+ * 2. 改成「先 sendJson 再同步 destroy()」还是不够:`res.end()` 是异步的,同步接一句 destroy()
+ *    往往在那几个字节离开内核缓冲之前就把 socket 毁了,客户端看到的还是连接中断。
+ *
+ * 所以掐断挪进 `end` 的回调里;万一回调不来(连接早就断了),兜底定时器照样收摊。
+ */
+export function overLimit(req, res, len, max, message) {
+  if (len <= max) return false;
+  if (!res.headersSent) {
+    res.statusCode = 413;
+    res.setHeader("Content-Type", "application/json; charset=utf-8");
+    res.end(JSON.stringify({ ok: false, error: message }), () => req.destroy());
+    setTimeout(() => req.destroy(), 1000).unref?.();
+  } else {
+    req.destroy();
+  }
+  return true;
+}

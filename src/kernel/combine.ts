@@ -175,7 +175,17 @@ function combineCut(
   const ourIdx = indexClips(ours.tracks);
   const theirIdx = indexClips(theirs.tracks);
 
-  // theirs 新建的序列整条搬过来(里面的 clip 也算新加,下面按 clip 再走一遍时会跳过)
+  // theirs 新建的序列先摆一条**空壳**过来,卡片一张都不跟着搬。
+  //
+  // 曾经是整条深拷贝(连 clip 一起),再靠下面那个循环「已经搬过就跳过」去重。但那个跳过只认
+  // `!o && !b`(真正的新卡),于是两条路漏出来,而且都是静默的数据损坏:
+  //   1. 两边都改过同一张卡 → 记完「保留你的」就 continue,ours 那份留在原序列,
+  //      theirs 的副本已经在新序列里 → 同一个 clip id 同时活在两条序列上;
+  //   2. 用户已经删掉、Skill 那边改过 → 记完「保持删除」就 continue,副本照样进来 → 卡复活。
+  // 两种情况下合并报告写的结果和磁盘上的结果是反的。
+  //
+  // 所以序列归属和卡片归属彻底分开:这里只负责「多出一条序列」,每张卡去哪条序列一律交给
+  // 下面按 id 的统一循环(place / park),那里才有 base / ours / theirs 三边的完整信息。
   const carriedTracks = new Set<string>();
   for (const t of theirs.tracks) {
     // 空序列不搬:normalizeCuts 给停放的剪辑补的空序列 id 每次都是新的,base / ours / theirs
@@ -183,10 +193,8 @@ function combineCut(
     // 真正有内容的新序列照搬;空的对谁都没有信息。
     if (t.clips.length === 0) continue;
     if (!ours.tracks.some((x) => x.id === t.id) && !(base?.tracks ?? []).some((x) => x.id === t.id)) {
-      out.tracks.push(deepClone(t));
+      out.tracks.push({ ...deepClone(t), clips: [] });
       carriedTracks.add(t.id);
-      report.addedTracks += 1;
-      report.addedClips += t.clips.length;
     }
   }
 
@@ -234,7 +242,6 @@ function combineCut(
     const b = baseIdx.get(id);
     const o = ourIdx.get(id);
     const t = theirIdx.get(id);
-    if (t && carriedTracks.has(t.trackId) && !o && !b) continue; // 已随新序列整条搬过来
 
     if (!o) {
       if (!t) continue; // 只有 base 有:两边都删了
@@ -272,6 +279,15 @@ function combineCut(
     }
     place(deepClone(t.clip), t.trackId, o.trackId);
     report.updatedClips += 1;
+  }
+
+  // 空壳序列的收尾:上面摆过去的新序列,卡片是由统一循环一张张放进来的。要是它那些卡最后
+  // 全被判成「保留你的」或者「保持删除」,这条序列就一张卡都没有 —— 撤掉它,也别报「新增序列」。
+  for (const id of carriedTracks) {
+    const tr = out.tracks.find((t) => t.id === id);
+    if (!tr) continue;
+    if (tr.clips.length === 0) out.tracks = out.tracks.filter((t) => t.id !== id);
+    else report.addedTracks += 1;
   }
 
   // 时长:别把 theirs 拉长的部分截掉

@@ -310,3 +310,59 @@ test("多条剪辑同时停放 clip:结果序列的 id 不重复", () => {
   assert.equal(ids.length, 2);
   assert.notEqual(ids[0], ids[1]);
 });
+
+/*
+ * 下面三条钉的是同一个坑:theirs 新建一条序列、又把一张**已经存在**的卡放进去。
+ * 曾经是把新序列连卡一起深拷贝过来,再靠「已经搬过就跳过」去重 —— 而那个跳过只认真正的新卡,
+ * 于是卡会同时出现在两条序列上,或者被用户删掉的卡跟着复活,而合并报告写的却是相反的结论。
+ */
+
+test("新序列里放的是两边都改过的卡:保留你的那一份,新序列里不留副本", () => {
+  const base = seed();
+  const ours = clone(base);
+  ours.tracks[0].clips[0].params = { mine: 1 };          // 用户改了 a
+  const theirs = clone(base);
+  theirs.tracks[0].clips = [];
+  theirs.tracks.push({ id: "t-new", name: "字幕", clips: [clip("a", 0, 2, { params: { theirs: 1 } })] });
+
+  const { project, report } = combineProjects(base, ours, theirs);
+  const all = project.tracks.flatMap((t) => t.clips.map((c) => c.id));
+  assert.deepEqual(all, ["a"], "同一个 clip id 不能同时活在两条序列上");
+  assert.deepEqual(clipsOf(project, "t-1")[0].params, { mine: 1 }, "留的必须是用户那份");
+  assert.equal(report.conflicts.length, 1);
+  assert.ok(!findTrack(project, "字幕"), "一张卡都没落进去的新序列不该留下空壳");
+  assert.equal(report.addedTracks, 0);
+});
+
+test("新序列里放的是用户已经删掉的卡:保持删除,不借新序列复活", () => {
+  const base = seed();
+  const ours = clone(base);
+  ours.tracks[0].clips = [];                              // 用户删了 a
+  const theirs = clone(base);
+  theirs.tracks[0].clips = [];
+  theirs.tracks.push({ id: "t-new", name: "字幕", clips: [clip("a", 0, 2, { params: { theirs: 1 } })] });
+
+  const { project, report } = combineProjects(base, ours, theirs);
+  assert.deepEqual(project.tracks.flatMap((t) => t.clips.map((c) => c.id)), [], "删掉的卡不能复活");
+  assert.equal(report.conflicts.length, 1);
+  assert.ok(!findTrack(project, "字幕"));
+});
+
+test("新序列里既有新卡也有已存在的卡:新卡照进,老卡按三方规则判", () => {
+  const base = seed();
+  const ours = clone(base);
+  ours.tracks[0].clips[0].params = { mine: 1 };
+  const theirs = clone(base);
+  theirs.tracks[0].clips = [];
+  theirs.tracks.push({ id: "t-new", name: "字幕", clips: [
+    clip("a", 0, 2, { params: { theirs: 1 } }),
+    clip("s1", 3, 4),
+  ] });
+
+  const { project, report } = combineProjects(base, ours, theirs);
+  assert.deepEqual(findTrack(project, "字幕").clips.map((c) => c.id), ["s1"], "只有真正的新卡进新序列");
+  assert.deepEqual(clipsOf(project, "t-1").map((c) => c.id), ["a"]);
+  assert.equal(report.addedTracks, 1);
+  assert.equal(report.addedClips, 1);
+  assert.equal(report.conflicts.length, 1);
+});

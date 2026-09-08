@@ -32,6 +32,8 @@ const RUNTIME_DIR = path.resolve(DESKTOP_DIR, "src-tauri", "runtime");
 const BINARIES_DIR = path.resolve(DESKTOP_DIR, "src-tauri", "binaries");
 
 const CHECK_ONLY = process.argv.includes("--check");
+/** 发布构建带这个:VITE_ 变量一个都找不到时当场失败,而不是默默出一个功能残废的包 */
+const REQUIRE_VITE_ENV = process.argv.includes("--require-vite-env");
 const t0 = Date.now();
 
 // ── Utilities ───────────────────────────────────────────────────────────
@@ -130,6 +132,12 @@ const SKIP_DIRS = new Set([
   ".claude",           // 本机的 agent 配置和权限
   ".wrangler",         // wrangler dev 的本地缓存(诊断 Worker 那套)
   "release",
+  // AI harness 的文本工具就往这儿落文件(server/harness/tools/textEditor.mjs、
+  // server/vite-plugin-cards.ts)。开发机上跑过 AI 面板就有模型写的 .md/.txt/.json/.png,
+  // 上面那份文件名黑名单只挡 .mp4/.mov/.webm/.log,一个都拦不住 —— 不挡就随安装包发出去,
+  // 并且装完躺在用户自己的导出目录里。make-patch.mjs 的 RUNTIME_STATE 早把它算作
+  // 「用户状态」了,两处口径得一致。
+  "exports",
 ]);
 const SKIP_FILE_PATTERNS = [
   /^\.env($|\.)/,      // .env / .env.local / .env.production —— 里面是密钥
@@ -155,6 +163,20 @@ const SKIP_PATH_PATTERNS = [
   /[/\\]scripts[/\\]_tmp-/,
   /[/\\]scripts[/\\]__tmp-/,
 ];
+
+/**
+ * `.env` 一行右边那串东西按 dotenv 的规矩解出来:**引号内原样,引号外的 `#` 起注释**。
+ *
+ * 为什么不能只 trim 一下就用:开发期 vite 读同一个文件走的是 dotenv,`A=x  # 线上` 解出来是 `x`;
+ * 这里要是把 `  # 线上` 一起当成值注入,就成了「同一份 .env.local,开发跑得好好的、打出来的包
+ * 是坏的,而且哪儿都不报错」—— 前端拿到的 URL 尾巴上挂着一段注释,请求发不出去。
+ */
+function parseEnvValue(raw) {
+  const s = String(raw).trim();
+  const quoted = s.match(/^(['"])([\s\S]*?)\1/);
+  if (quoted) return quoted[2];          // 引号里的 # 是值的一部分,不是注释
+  return s.replace(/\s+#.*$/, "").trim(); // 裸值:空白 + # 之后是注释
+}
 
 /**
  * 把仓库根 `.env*` 里的 `VITE_` 变量取出来,**交给 vite build 当环境变量**。
@@ -198,18 +220,31 @@ function viteEnvFromDotEnv() {
       for (const line of fs.readFileSync(p, "utf-8").split(/\r?\n/)) {
         const m = line.match(/^\s*(VITE_[A-Z0-9_]+)\s*=\s*(.*)$/);
         if (!m) continue;
-        // 去掉可能的引号
-        out[m[1]] = m[2].trim().replace(/^(['"])(.*)\1$/, "$2");
+        out[m[1]] = parseEnvValue(m[2]);
       }
     }
   }
   const keys = Object.keys(out);
   if (keys.length) {
     console.log(`  注入构建期变量:${keys.join(", ")}`);
-  } else {
-    // 不是致命错误(别人克隆这个仓库本来就没有这些值),但要说清后果,别让人事后才发现
-    console.log("  ⚠ 没找到任何 VITE_ 变量(查过真仓库和源码根的 .env*)");
-    console.log("    后果:装出来的包里「提交诊断报告」会灰掉,只能「保存为文件」。");
+    return out;
+  }
+  /*
+   * 一个都没找到。手跑(比如别人克隆这个仓库)时这不算错,警告一句就行;
+   * **正经发布时必须当场失败**。
+   *
+   * 这个坑修过两回(d4d1a00 传给 vite build、ca46dd3 加真仓库回退),两回都是发出去才发现的,
+   * 因为流程里没有任何一步会因此失败:vite build 照常成功、--check 看不出来、单测更测不到,
+   * 装出来的包一切正常,只有「提交诊断报告」那个按钮是灰的。缺值本身好修,难的是**没人知道**。
+   * 所以 build-release 会带上 --require-vite-env,让它在这里就断掉。
+   */
+  console.log("  ⚠ 没找到任何 VITE_ 变量(查过真仓库和源码根的 .env*)");
+  console.log("    后果:装出来的包里「提交诊断报告」会灰掉,只能「保存为文件」。");
+  if (REQUIRE_VITE_ENV) {
+    console.error("[FAIL] 发布构建要求 VITE_ 变量就位,但一个都没找到。");
+    console.error(`       在仓库根建 .env.local 并填上 VITE_DIAG_* 再重来;`);
+    console.error(`       确实要发一个没有诊断提交功能的包,就去掉 --require-vite-env。`);
+    process.exit(1);
   }
   return out;
 }
@@ -596,8 +631,21 @@ function stepPython() {
 
 // ── Step 6: VERSIONS.json ───────────────────────────────────────────────
 
+/*
+ * 源码指纹:相对路径 + 大小,**不算 mtime**。
+ *
+ * 曾经把 `Math.floor(st.mtimeMs)` 也算进来,于是 `--from-head` 那条路必然对不上:
+ * 那时源码根是一棵新检出的 worktree(desktop/.cache/release-src),git 把每个文件的
+ * mtime 都置成检出那一刻,内容一个字节没变、指纹却全变了 —— `--check` 报「runtime/app
+ * 落后于源码」,`--from-head --skip-runtime` 直接跑不通。反过来也一样:发过一次
+ * `--from-head` 之后,VERSIONS.json 里记的是 worktree 的 mtime,之后每次普通
+ * `--check` 都会误报落后。
+ *
+ * 换成**内容哈希**而不是退回「路径 + 大小」:后者漏掉「改了内容但字节数没变」的编辑
+ * (改个常量、换个字符),而这道校验正是拿来挡「改完忘了重新组装」的。整棵 app 源码
+ * (已按 shouldCopyApp 过滤,不含 node_modules / dist / .git)读一遍是秒级的,值这个钱。
+ */
 function computeAppSrcHash(appDir) {
-  // Collect all files with rel path, size, mtimeMs — same filter as copy
   const entries = [];
   const walk = (dir, base) => {
     let items;
@@ -611,8 +659,8 @@ function computeAppSrcHash(appDir) {
       } else {
         if (!shouldCopyApp(ent.name, fullPath, false)) continue;
         try {
-          const st = fs.statSync(fullPath);
-          entries.push(`${rel}|${st.size}|${Math.floor(st.mtimeMs)}`);
+          const sha = createHash("sha256").update(fs.readFileSync(fullPath)).digest("hex");
+          entries.push(`${rel}|${sha}`);
         } catch { /* skip */ }
       }
     }

@@ -115,6 +115,24 @@ function readRaw() {
     if (!merged.api || typeof merged.api !== 'object' || Array.isArray(merged.api)) {
       merged.api = defs.api;
     }
+    /*
+     * profiles 也要按类型兜一层,而且要连每一路单独兜。
+     *
+     * 本文件的原则是「ai.json 解不开也不要 500」—— 上面 try/catch 兜住的是 JSON 解析。
+     * 但 profiles 写成 null、数组、或者少了 router / custom 其中一路时,JSON 是合法的,
+     * 崩在后面:syncProfile 里 `cfg.api.profiles[face]` 取到 undefined,下一行读 `prof.model`
+     * 就是 TypeError,而那已经在这个 try 外面了 —— 结果是整个 AI 设置接口 500,
+     * 用户连进去把配置改回来的机会都没有。手改过 ai.json、或者旧版本升上来都可能撞上。
+     */
+    const profs = merged.api.profiles;
+    if (!profs || typeof profs !== 'object' || Array.isArray(profs)) {
+      merged.api.profiles = deepMerge(defs.api.profiles, {}, true);
+    } else {
+      for (const face of ['router', 'custom']) {
+        const one = profs[face];
+        if (!one || typeof one !== 'object' || Array.isArray(one)) profs[face] = { ...defs.api.profiles[face] };
+      }
+    }
     // 有没有写过 source:清理密钥之后 persist 写的是 "",那是「真的没设」;
     // 老版本的 ai.json 根本没这个字段,这时才允许去扫两路文件
     merged.api.hasSource = typeof parsed?.api?.source === 'string';

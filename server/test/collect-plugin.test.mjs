@@ -35,12 +35,14 @@ compile('server/vite-plugin-web.ts', 'web.mjs', [
 ]);
 const cookiesUrl = pathToFileURL(path.join(ROOT, 'server', 'collect-cookies.mjs')).href;
 const qrLoginUrl = pathToFileURL(path.join(ROOT, 'server', 'collect-qr-login.mjs')).href;
+const guardUrl = pathToFileURL(path.join(ROOT, 'server', 'http-guard.mjs')).href;
 const collectUrl = compile('server/vite-plugin-collect.ts', 'collect.mjs', [
   ['from "./vite-plugin-stt"', 'from "./stt.mjs"'],
   ['from "./vite-plugin-media"', 'from "./media.mjs"'],
   ['from "./vite-plugin-web"', 'from "./web.mjs"'],
   ['from "./collect-cookies.mjs"', `from "${cookiesUrl}"`],
   ['from "./collect-qr-login.mjs"', `from "${qrLoginUrl}"`],
+  ['from "./http-guard.mjs"', `from "${guardUrl}"`],
   // 登录那几条路动态 import 浏览器模块;转译产物在临时目录,相对路径找不到,改成绝对的
   ['import("./web/browser.mjs")', `import("${pathToFileURL(path.join(ROOT, 'server', 'web', 'browser.mjs')).href}")`],
   ['import("./web/session.mjs")', `import("${pathToFileURL(path.join(ROOT, 'server', 'web', 'session.mjs')).href}")`],

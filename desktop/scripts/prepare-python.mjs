@@ -105,16 +105,26 @@ function rimraf(target) {
   fs.rmSync(target, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 }
 
+/*
+ * 拷 python/promptcut_* 进 site-packages。**白名单**,不是黑名单。
+ *
+ * 这些目录会原样进安装包发给所有用户,而它们同时是开发目录 —— 谁在里面放过一个
+ * .env、一份模型权重、一个调试用的大文件,都会跟着发出去。原来只挡 __pycache__ 和 .pyc,
+ * 等于「除了这两样,别的一律发」。放行清单写死成包该有的东西:代码、清单、许可证。
+ * 真要新增别的类型(比如包内数据文件),在这里显式加一条,别把闸门改回黑名单。
+ */
+const PY_PACKAGE_FILES = [/\.py$/i, /\.pyi$/i, /\.txt$/i, /^LICENSE/i, /^py\.typed$/i];
+
 function copyDir(src, dst) {
   fs.mkdirSync(dst, { recursive: true });
   for (const e of fs.readdirSync(src, { withFileTypes: true })) {
     const s = path.join(src, e.name);
     const d = path.join(dst, e.name);
     if (e.isDirectory()) {
-      if (e.name === '__pycache__') continue;
+      if (e.name === '__pycache__' || e.name.startsWith('.')) continue;
       copyDir(s, d);
     } else if (e.isFile()) {
-      if (e.name.endsWith('.pyc')) continue;
+      if (!PY_PACKAGE_FILES.some((re) => re.test(e.name))) continue;
       fs.copyFileSync(s, d);
     }
   }

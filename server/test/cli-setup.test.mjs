@@ -48,6 +48,17 @@ test('finds a newly installed executable without PATH or cached misses', () => {
   assert.equal(resolveCli('claude', opts), exe);
 });
 
+test('does not mistake Codex Desktop internal runtime for an installed CLI', () => {
+  const local = path.join(root, 'LocalAppData');
+  const desktop = path.join(local, 'OpenAI', 'Codex', 'bin', 'internal', 'codex.exe');
+  fs.mkdirSync(path.dirname(desktop), { recursive: true }); fs.writeFileSync(desktop, '');
+  const result = resolveCli('codex', {
+    env: { LOCALAPPDATA: local }, home: path.join(root, 'home'), root: path.join(root, 'managed-missing'), platform: 'win32',
+    lookup: () => desktop,
+  });
+  assert.equal(result, 'codex');
+});
+
 test('npm shim uses bundled Node and preserves JSON and shell metacharacters', () => {
   const bin = path.join(root, 'npm 中文 & spaced');
   const pkg = path.join(bin, 'node_modules', '@openai', 'codex');
@@ -162,4 +173,17 @@ test('Codex auth accepts status on stderr (actual child process)', { skip: proce
   process.env.APPDATA = appdata; process.env.LOCALAPPDATA = path.join(root, 'local');
   try { assert.equal((await probeAuth('codex', { refresh: true })).loggedIn, true); }
   finally { for (const [k,v] of Object.entries(before)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } }
+});
+
+test('Codex Desktop under Programs\ is excluded too, not just the where.exe hit', () => {
+  // 这条路径曾经写在候选表里、当作合法 CLI 直接返回,而排除只写在 where.exe 那一支 ——
+  // 候选表命中就 return,那道排除对它永远跑不到。
+  const local = path.join(root, 'LocalAppData-programs');
+  const desktop = path.join(local, 'Programs', 'OpenAI', 'Codex', 'bin', 'codex.exe');
+  fs.mkdirSync(path.dirname(desktop), { recursive: true }); fs.writeFileSync(desktop, '');
+  const result = resolveCli('codex', {
+    env: { LOCALAPPDATA: local }, home: path.join(root, 'home'), root: path.join(root, 'managed-missing'), platform: 'win32',
+    lookup: () => desktop,
+  });
+  assert.equal(result, 'codex');
 });

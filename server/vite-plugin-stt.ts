@@ -38,14 +38,47 @@ export function findPython(root: string): string | null {
 }
 
 /**
+ * 批处理解释器(.cmd/.bat)不能接收的字符。
+ *
+ * `&` `|` `<` `>` `^` 在 cmd 的命令行里是元字符,`"` 会把引号层次搞乱,`%` 会触发变量展开。
+ * 见下面 spawnPython 的说明:这些字符没有任何一种写法能安全地送进批处理。
+ */
+const CMD_METACHARS = /[&|<>^"%]/;
+
+/**
  * 启动解释器。
- * Node 18.20+/20+ 在 Windows 上拒绝直接 spawn .cmd/.bat(EINVAL),
- * 这类解释器要经 cmd.exe /c 转一手。参数仍按数组传,不拼命令行,避免注入。
+ *
+ * `.exe` 直接 spawn,不经过任何 shell —— 正常路径(findPython 返回自带的 python.exe)走的就是这条,
+ * 参数按数组交给 CreateProcess,没有二次解析,元字符再多也只是普通字符。
+ *
+ * `.cmd` / `.bat` 是另一回事。Node 18.20+/20+ 在 Windows 上拒绝直接 spawn 它们(EINVAL),
+ * 必须借道 cmd.exe,而**借道之后就没有安全的写法了**,两条路都实测过:
+ *
+ *   - `cmd /c` 逐参数加双引号:引号会跟着进到批处理里,`%3` 这类位置参数拿到的是带引号的值,
+ *     脚本自己的 `if "%SUBCMD%"=="status"` 一类比较全部对不上,功能当场就坏;
+ *   - 不加引号(或走 PowerShell 5.1 的 native 调用,它只在含空格时才加引号):
+ *     `a&b.mp4`、`https://x/?a&rm` 这种不含空格却含元字符的参数,`&` 到了 cmd 那里就是命令分隔符,
+ *     后半段被当命令执行 —— 实测确实执行了。
+ *
+ * 两者不可兼得:要么参数带着引号进去、批处理自己的解析崩掉,要么不带引号、元字符逃逸。
+ * 根子上,批处理文件就不具备安全接收不可信参数的能力。而这两个位置恰恰喂用户输入:
+ * 素材路径(shots)和收集用的 URL(collect,URL 里带 `&` 是家常便饭)。
+ *
+ * 所以这里**不赌**:参数一旦含元字符就拒绝执行,并说清怎么绕开(把 PROMPTCUT_PYTHON 指到
+ * python.exe,那条路没有这个问题)。干净的参数照常放行,`.cmd` 当解释器的开发/测试配置不受影响。
  */
 export function spawnPython(pythonPath: string, args: string[], env: NodeJS.ProcessEnv): ChildProcess {
   const lower = pythonPath.toLowerCase();
   if (process.platform === "win32" && (lower.endsWith(".cmd") || lower.endsWith(".bat"))) {
-    return spawn("cmd.exe", ["/c", pythonPath, ...args], { env, windowsHide: true });
+    const bad = args.find((a) => CMD_METACHARS.test(String(a)));
+    if (bad !== undefined) {
+      throw new Error(
+        `参数里有 cmd 元字符(${JSON.stringify(bad)}),批处理解释器接不住 —— ` +
+        `PROMPTCUT_PYTHON 现在指向 ${path.basename(pythonPath)}。` +
+        `把它改指到 python.exe 就没有这个限制(.exe 不经过 shell)。`,
+      );
+    }
+    return spawn("cmd.exe", ["/d", "/s", "/c", pythonPath, ...args], { env, windowsHide: true });
   }
   return spawn(pythonPath, args, { env, windowsHide: true });
 }

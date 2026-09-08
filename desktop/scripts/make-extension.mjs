@@ -470,8 +470,15 @@ function main() {
   for (const m of ext.models) {
     const dest = path.join(modelDir, m.file);
     if (m.dir) {
-      // HF snapshot 是一整个目录，递归照搬；apply-extension.ps1 那边也是递归拷
-      fs.cpSync(m.from, dest, { recursive: true });
+      // HF snapshot 是一整个目录，递归照搬；apply-extension.ps1 那边也是递归拷。
+      //
+      // 但要挡掉点开头的东西：`--dino <路径>` 很可能被指到一份 HF 缓存或者 git 克隆，
+      // 那里面的 .git/、.cache/、.huggingface/ 会一起进 _full 档 exe——体积翻几倍不说，
+      // .git 里还带着克隆来源和完整历史。模型本体从来不是点开头的，挡掉不会误伤。
+      fs.cpSync(m.from, dest, {
+        recursive: true,
+        filter: (src) => !path.basename(src).startsWith("."),
+      });
       console.log(`  模型：${m.file}/（目录，${mb(dirSize(dest))} MB）`);
     } else {
       fs.copyFileSync(m.from, dest);

@@ -17,22 +17,27 @@ import staticFile from "../../cards/preview-boxes.json";
  */
 export type BoxTuple = [number, number, number, number];
 
+/**
+ * 静态表的类型按 **JSON 导入进来的样子**写,而不是按我们希望的样子写:
+ * TS 把 json 里的数组推成 `number[]`,不是定长元组,断言成元组会被拒(TS2352)。
+ * 定长是生成脚本(scripts/preview-boxes.mjs)那头保证的,这边只读不写,拿 `number[]` 就够用。
+ */
 interface StaticFile {
   /** 这张表是哪一版量的。重新生成就变,本机缓存跟着作废(那是旧代码量出来的) */
   rev?: number;
-  stage: [number, number];
-  boxes: Record<string, BoxTuple | null>;
+  stage: number[];
+  boxes: Record<string, number[] | null>;
 }
 
 const LS_KEY = "pc.previewBoxes.v1";
-const statics = staticFile as StaticFile;
+const statics: StaticFile = staticFile;
 
 /** 舞台分桶的键 */
 function bucket(w: number, h: number): string {
   return `${Math.round(w)}x${Math.round(h)}`;
 }
 
-function toBox(t: BoxTuple | null | undefined): Box | null {
+function toBox(t: readonly number[] | null | undefined): Box | null {
   return t ? { l: t[0], t: t[1], r: t[2], b: t[3] } : null;
 }
 

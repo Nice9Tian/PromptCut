@@ -36,9 +36,12 @@ function run(label, cmd, args, opts = {}) {
   }
 }
 
-const shellVersion = JSON.parse(
+const tauriConf = JSON.parse(
   fs.readFileSync(path.join(DESKTOP_DIR, "src-tauri", "tauri.conf.json"), "utf-8")
-).version;
+);
+const shellVersion = tauriConf.version;
+/** NSIS 用它给安装包命名。从配置读,别在下面拼文件名时另写一份字面量。 */
+const productName = tauriConf.productName || "PromptCut";
 
 console.log("PromptCut build-release");
 console.log(`  外壳版本：${shellVersion}（Rust 那半边，只在需要重编时才变）`);
@@ -91,7 +94,9 @@ process.on("exit", cleanupWorktree);
 // 于是 --from-head --patch-only 这条最常用的小版本发布路径根本跑不通。
 // --patch-only 的意思是「跳过 Rust 编译」,不是「跳过组装 Node 那半边」。
 if (!has("--skip-runtime")) {
-  run("组装 runtime", "node", ["scripts/prepare-runtime.mjs", ...sourceArgs]);
+  // --require-vite-env:VITE_ 变量找不到就当场失败。这条路是**发布**,不是手跑试试,
+  // 少了那些值打出来的包诊断提交是死的,而且流程里没有任何别的一步会因此报错。
+  run("组装 runtime", "node", ["scripts/prepare-runtime.mjs", "--require-vite-env", ...sourceArgs]);
 } else {
   run("检查 runtime", "node", ["scripts/prepare-runtime.mjs", "--check", ...sourceArgs]);
 }
@@ -123,9 +128,18 @@ const results = [];
 if (!has("--patch-only")) {
   // tauri 按外壳版本命名，这里按应用版本另存一份，免得两个不同内容的
   // 安装包重名（外壳不动、应用升级时就会这样）。
-  const src = path.join(BUNDLE_DIR, `PromptCut_${shellVersion}_x64-setup.exe`);
-  if (!fs.existsSync(src)) {
-    console.error(`[FAIL] 找不到安装包：${src}`);
+  //
+  // 产品名从 tauri.conf.json 取、架构用通配：以前这行把 `PromptCut` 和 `x64` 都写死了，
+  // 改产品名或换目标架构时 `tauri build` 明明成功、这一步却报「找不到安装包」，
+  // 而错误信息指向一个本来就不该存在的文件名，看不出真正原因。
+  const setupName = `${productName}_${shellVersion}_*-setup.exe`;
+  const src = fs.existsSync(BUNDLE_DIR)
+    ? fs.readdirSync(BUNDLE_DIR)
+        .filter((f) => f.startsWith(`${productName}_${shellVersion}_`) && f.endsWith("-setup.exe"))
+        .map((f) => path.join(BUNDLE_DIR, f))[0]
+    : undefined;
+  if (!src) {
+    console.error(`[FAIL] 找不到安装包：${path.join(BUNDLE_DIR, setupName)}`);
     process.exit(1);
   }
   const dest = path.join(RELEASE_DIR, `PromptCut-${appVersion}-setup.exe`);

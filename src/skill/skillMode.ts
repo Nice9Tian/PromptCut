@@ -8,6 +8,13 @@
  * 为什么是轮询不是 SSE:壳那边本来就在轮询同一个文件(Rust 里没有网页那套事件流),
  * 前端再单独搞一套推送只会让两边看到的时刻对不上。一秒一次的 JSON 请求便宜得很。
  */
+/*
+ * combineImport 用静态引入。原来这里是 `await import(...)`,想的是「合并这条路不常走,
+ * 别让它的代码进主包」—— 但 TopBar.tsx 和 SkillDialog.tsx 已经静态引入了同一个模块,
+ * 它本来就在主包里。动态引入一个已经静态引入的模块分不出去任何东西,只是让打包器
+ * 报一句 INEFFECTIVE_DYNAMIC_IMPORT,并且在真要看包体积时误导人。
+ */
+import * as combineImport from "../editor/io/combineImport";
 
 export interface SkillState {
   active: boolean;
@@ -124,7 +131,7 @@ async function serveMergeRequest(job: JobLite) {
         fetch(`/api/skill/jobs/${job.id}/proc`).then((r) => (r.ok ? r.text() : Promise.reject(new Error("还没有结果文件")))),
         fetch(`/api/skill/jobs/${job.id}/base`).then((r) => (r.ok ? r.text() : null)),
       ]);
-      const { applyCombine, summarizeCombine } = await import("../editor/io/combineImport");
+      const { applyCombine, summarizeCombine } = combineImport;
       const report = applyCombine(theirs, base);
       summary = summarizeCombine(report);
       ok = true;

@@ -24,22 +24,46 @@ export function cliEnv(provider, base = process.env) {
 
 export function resolveCli(name, { env = process.env, home = os.homedir(), platform = process.platform, root = setupRoot(), lookup = execFileSync } = {}) {
   const local = env.LOCALAPPDATA || path.join(home, 'AppData', 'Local');
+  // Codex Desktop keeps an internal app-server binary under its own install
+  // tree. It is not a user-installed CLI and cannot be used by PromptCut (nor
+  // removed while the desktop app is running). Treat anything in there as
+  // absent so setup can install a supported, independent CLI.
+  //
+  // Both spellings are excluded because the installer has used both: the
+  // `Programs\` one was once listed as a *valid* candidate below, which meant
+  // the check further down never ran for it — the candidate list returns on
+  // the first existing file, so an exclusion applied only to the `where.exe`
+  // branch is unreachable for any path the list already accepts. One predicate,
+  // applied to both lookups, is the only arrangement that cannot drift apart.
+  const desktopRoots = name === 'codex' && platform === 'win32'
+    ? [path.join(local, 'OpenAI', 'Codex', 'bin'), path.join(local, 'Programs', 'OpenAI', 'Codex', 'bin')]
+      .map(d => path.resolve(d).toLowerCase() + path.sep)
+    : [];
+  const isDesktopRuntime = file => {
+    const resolved = path.resolve(file).toLowerCase();
+    return desktopRoots.some(d => resolved.startsWith(d));
+  };
+
   const candidates = [
     path.join(root, name, name + (platform === 'win32' ? '.exe' : '')),
     path.join(home, '.local', 'bin', name + (platform === 'win32' ? '.exe' : '')),
   ];
   if (platform === 'win32') candidates.push(
     path.join(local, name, 'bin', `${name}.exe`),
-    ...(name === 'codex' ? [path.join(local, 'Programs', 'OpenAI', 'Codex', 'bin', 'codex.exe')] : []),
     path.join(env.APPDATA || path.join(home, 'AppData', 'Roaming'), 'npm', `${name}.cmd`),
   );
-  for (const file of candidates) if (fs.existsSync(file)) return file;
+  for (const file of candidates) if (fs.existsSync(file) && !isDesktopRuntime(file)) return file;
   try {
     const out = lookup(platform === 'win32' ? 'where.exe' : 'which', [name], {
       env, encoding: 'utf8', timeout: 3000, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'],
     });
     const hits = out.trim().split(/\r?\n/);
-    const hit = hits.find(f => fs.existsSync(f) && (platform !== 'win32' || /\.(exe|cmd|bat)$/i.test(f)));
+    const hit = hits.find(f => {
+      const resolved = path.resolve(f);
+      return fs.existsSync(resolved)
+        && (platform !== 'win32' || /\.(exe|cmd|bat)$/i.test(resolved))
+        && !isDesktopRuntime(resolved);
+    });
     if (hit) return hit;
   } catch {}
   return name;

@@ -27,6 +27,7 @@ import {
   SITES, siteNames, assessLogin, saveCookies, savedCookieStatus, forgetCookies, pickCookies,
 } from "./collect-cookies.mjs";
 import { qrLogin } from "./collect-qr-login.mjs";
+import { isInside } from "./http-guard.mjs";
 
 export type CollectStage = "starting" | "video" | "audio" | "merge" | "transcode" | "done";
 
@@ -156,8 +157,10 @@ function explicitCookies(root: string, raw: unknown): string | undefined {
   if (typeof raw !== "string" || !raw) return undefined;
   const dir = path.resolve(dataDir(root), "cookies");
   const target = path.resolve(raw);
-  const inside = target === dir || target.startsWith(dir + path.sep);
-  return inside ? target : undefined;
+  // 用 isInside 而不是自己写 startsWith:Windows 的路径大小写不敏感,自己比会把
+  // `C:\Users\...` 和 `c:\users\...` 判成两个地方。判错的方向虽然是安全的(把合法文件
+  // 当越界忽略),但表现是「登录态明明存了、下载却不带 cookie」,还不报错。
+  return isInside(target, dir) ? target : undefined;
 }
 
 /** 各站点存盘登录态的现状,status 和 cookies 两个接口都回它 */

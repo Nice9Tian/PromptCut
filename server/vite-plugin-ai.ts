@@ -5,6 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { overLimit } from './http-guard.mjs';
 
 
 /**
@@ -28,20 +29,7 @@ function sendJson(res: ServerResponse, code: number, data: any) {
   res.end(JSON.stringify(data));
 }
 
-/**
- * 请求体超限时:**先把 413 发出去,再掐断**。返回 true 表示已经回过响应了,调用方别再往下走。
- *
- * 原来各处写的是 `if (body.length > max) req.destroy()`,把 413 留给 `req.on('end')` 去发。
- * 那句 413 是死代码 —— destroy() 直接毁掉底层 socket,`end` **永远不会触发**。结果是
- * 服务端一声不吭把连接掐了,前端拿到的是「网络错误 / 连接中断」这种看不出所以然的报错,
- * 而不是「你这个东西太大了」。顺序反过来才对。
- */
-function overLimit(req: any, res: ServerResponse, len: number, max: number, message: string): boolean {
-  if (len <= max) return false;
-  sendJson(res, 413, { ok: false, error: message });
-  req.destroy();
-  return true;
-}
+/* 请求体超限的 413:实现挪去 server/http-guard.mjs 了,vision 那边也要用同一份 */
 
 /**
  * 一次「无工具、无历史」的最小补全。分工模式的编排阶段全都走它。
@@ -510,8 +498,10 @@ export default function vitePluginAi(): Plugin {
           if ((req.url || '').split('?')[0] === '/clear-key') {
             if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: 'POST only' });
             let body = '';
-            req.on('data', c => body += c);
+            let over = false;
+            req.on('data', c => { if (over) return; body += c; over = overLimit(req, res, body.length, 8192, '请求体超过 8KB'); });
             req.on('end', () => {
+              if (over) return;
               try {
                 const { kind } = JSON.parse(body || '{}');
                 clearKey(kind);
@@ -526,8 +516,10 @@ export default function vitePluginAi(): Plugin {
             return sendJson(res, 200, { ok: true, config: publicConfig() });
           } else if (req.method === 'POST') {
             let body = '';
-            req.on('data', c => body += c);
+            let over = false;
+            req.on('data', c => { if (over) return; body += c; over = overLimit(req, res, body.length, 200_000, '请求体超过 200KB'); });
             req.on('end', () => {
+              if (over) return;
               try {
                 const partial = JSON.parse(body);
                 writeConfig(partial);
@@ -562,8 +554,12 @@ export default function vitePluginAi(): Plugin {
       server.middlewares.use('/api/ai/chat', async (req, res) => {
         if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: 'POST only' });
         let body = '';
-        req.on('data', c => body += c);
+        let over = false;
+        // 32MB:附件带的是地址和文本(ChatAttachment 没有内联二进制),整段字幕、整篇文档都够;
+        // 再大就不是正常输入了,而是有人在往这条路上灌东西。
+        req.on('data', c => { if (over) return; body += c; over = overLimit(req, res, body.length, 32 * 1024 * 1024, '请求体超过 32MB'); });
         req.on('end', async () => {
+          if (over) return;
           let hasDone = false;
           try {
             const runners = await getRunner();
@@ -671,6 +667,15 @@ export default function vitePluginAi(): Plugin {
               // 不支持的直接忽略(前端也已经把对应控件灰掉了)
               effort,
               fast,
+              /*
+               * 深度自主:轮次上限换成设置里的「自主轮次」(ai.json 的 deepAutoRounds,
+               * 默认 300,填 0 就是不限),而且不再给模型任何关于轮次的话。
+               *
+               * 轮数从**服务端配置**取,不听请求体里的数 —— 前端只发一个「开没开」的布尔。
+               * 上限是道安全阀,不该由一个请求字段随手顶开。
+               */
+              maxRounds: deepAuto ? (cfg.deepAutoRounds ?? 300) : undefined,
+              deepAuto: !!deepAuto,
               // 参数兼容模式(工具 schema 按 Gemini 子集清洗):'auto' / 'on' / 'off',API 直连的 runner 才用
               schemaCompat,
               toolProtocol: cfg.toolProtocol,
@@ -746,8 +751,10 @@ export default function vitePluginAi(): Plugin {
       server.middlewares.use('/api/ai/abort', (req, res) => {
         if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: 'POST only' });
         let body = '';
-        req.on('data', c => body += c);
+        let over = false;
+        req.on('data', c => { if (over) return; body += c; over = overLimit(req, res, body.length, 8192, '请求体超过 8KB'); });
         req.on('end', () => {
+          if (over) return;
           try {
             const { runId } = JSON.parse(body);
             const runState = activeRuns.get(runId);
@@ -822,8 +829,11 @@ export default function vitePluginAi(): Plugin {
       server.middlewares.use('/api/mcp/result', (req, res) => {
         if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: 'POST only' });
         let body = '';
-        req.on('data', c => body += c);
+        let over = false;
+        // 工具结果从页面回来,里面可能整段是画面或大段文本,给得宽一点;宽也是有上限的。
+        req.on('data', c => { if (over) return; body += c; over = overLimit(req, res, body.length, 64 * 1024 * 1024, '工具结果超过 64MB'); });
         req.on('end', () => {
+          if (over) return;
           try {
             const data = JSON.parse(body);
             const cb = pendingCalls.get(data.id);
@@ -841,8 +851,10 @@ export default function vitePluginAi(): Plugin {
       server.middlewares.use('/api/mcp/call', async (req, res) => {
         if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: 'POST only' });
         let body = '';
-        req.on('data', c => body += c);
+        let over = false;
+        req.on('data', c => { if (over) return; body += c; over = overLimit(req, res, body.length, 32 * 1024 * 1024, '请求体超过 32MB'); });
         req.on('end', async () => {
+          if (over) return;
           try {
             const { tool, args, agent } = JSON.parse(body);
             const result = await callToolInternal(tool, args, typeof agent === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(agent) ? agent : undefined);
