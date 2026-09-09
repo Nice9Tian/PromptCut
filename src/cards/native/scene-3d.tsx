@@ -1,6 +1,10 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { CardDef, CardProps } from "../../kernel/types";
 import { cameraFor, DEFAULT_FOV_DEG } from "../../kernel/space3d";
+import {
+  addLights, applyTexture, geometryOf, materialOf, poseMesh, radiusFor, shapeOf,
+  type Scene3DParams, type ThreeMod,
+} from "./scene3dObject";
 
 /**
  * 三维场景(B 层):three.js 画在自己的 canvas 上的一个立体物件,透明底,能和别的卡叠。
@@ -39,7 +43,7 @@ import { cameraFor, DEFAULT_FOV_DEG } from "../../kernel/space3d";
  * 那个标志要是被谁删了,这张卡在导出里会变成一张空画布,而且**预览里还是好的** —— 只会在成片里发现。
  */
 
-type ThreeMod = typeof import("three");
+type Params = Scene3DParams;
 
 /**
  * three 只在真的用到这张卡时才下载(核心 ~150KB gzip)。
@@ -50,80 +54,6 @@ type ThreeMod = typeof import("three");
  */
 let threeMod: Promise<ThreeMod> | null = null;
 const loadThree = (): Promise<ThreeMod> => (threeMod ??= import("three"));
-
-const SHAPES = ["cube", "sphere", "torus", "knot", "cone", "cylinder", "crystal"] as const;
-type Shape = (typeof SHAPES)[number];
-
-interface Params {
-  shape: string;
-  color: string;
-  metal: number;
-  rough: number;
-  size: number;
-  spinY: number;
-  spinX: number;
-  tilt: number;
-  light: string;
-  fov: number;
-  wire: string;
-  texture: string;
-}
-
-/** 每种形状的几何体。`r` 是"半径",按画布高度算出来的世界单位(1 世界单位 = 1 像素) */
-function geometryOf(THREE: ThreeMod, shape: Shape, r: number) {
-  switch (shape) {
-    case "sphere":
-      return new THREE.SphereGeometry(r, 64, 48);
-    case "torus":
-      return new THREE.TorusGeometry(r * 0.72, r * 0.28, 32, 96);
-    case "knot":
-      return new THREE.TorusKnotGeometry(r * 0.68, r * 0.22, 160, 32);
-    case "cone":
-      return new THREE.ConeGeometry(r, r * 1.8, 64);
-    case "cylinder":
-      return new THREE.CylinderGeometry(r * 0.72, r * 0.72, r * 1.6, 64);
-    case "crystal":
-      return new THREE.IcosahedronGeometry(r, 0);
-    case "cube":
-    default:
-      return new THREE.BoxGeometry(r * 1.5, r * 1.5, r * 1.5);
-  }
-}
-
-/**
- * 灯光预设。三档都是"环境光 + 主光 + 补光"的老套路,区别只在强弱和方向 ——
- * 让 Agent 挑一个词,比让它填三个光源的位置靠谱得多。
- */
-function addLights(THREE: ThreeMod, scene: any, preset: string, d: number) {
-  const key = new THREE.DirectionalLight(0xffffff, 1);
-  const fill = new THREE.DirectionalLight(0xffffff, 1);
-  let ambient = 0.5;
-  if (preset === "rim") {
-    // 逆光:主光从后上方压过来,只留一条亮边,适合剪影感
-    ambient = 0.18;
-    key.position.set(-0.4, 0.9, -1).multiplyScalar(d);
-    key.intensity = 3.2;
-    fill.position.set(0.6, -0.2, 0.8).multiplyScalar(d);
-    fill.intensity = 0.35;
-  } else if (preset === "soft") {
-    // 柔光:大环境光 + 弱方向光,几乎没有硬阴影
-    ambient = 1.1;
-    key.position.set(0.5, 0.8, 1).multiplyScalar(d);
-    key.intensity = 0.9;
-    fill.position.set(-0.7, 0.1, 0.5).multiplyScalar(d);
-    fill.intensity = 0.5;
-  } else {
-    // studio:标准三点光的前两点,金属质感最出彩
-    ambient = 0.45;
-    key.position.set(0.7, 1, 0.8).multiplyScalar(d);
-    key.intensity = 2.4;
-    fill.position.set(-0.9, -0.2, 0.6).multiplyScalar(d);
-    fill.intensity = 0.8;
-  }
-  scene.add(new THREE.AmbientLight(0xffffff, ambient), key, fill);
-}
-
-const TAU = Math.PI * 2;
 
 function Scene3DCard({ params, t = 0, stage }: CardProps<Params>) {
   const host = useRef<HTMLDivElement>(null);
@@ -173,15 +103,8 @@ function Scene3DCard({ params, t = 0, stage }: CardProps<Params>) {
     const scene = new THREE.Scene();
     addLights(THREE, scene, params.light, cam.distance);
 
-    const shape = (SHAPES as readonly string[]).includes(params.shape) ? (params.shape as Shape) : "cube";
-    const r = (Math.min(Math.max(params.size, 0.05), 1) * h) / 2;
-    const geometry = geometryOf(THREE, shape, r);
-    const material = new THREE.MeshStandardMaterial({
-      color: new THREE.Color(params.color),
-      metalness: Math.min(Math.max(params.metal, 0), 1),
-      roughness: Math.min(Math.max(params.rough, 0), 1),
-      wireframe: params.wire === "yes",
-    });
+    const geometry = geometryOf(THREE, shapeOf(params.shape), radiusFor(params, h));
+    const material = materialOf(THREE, params);
     const mesh = new THREE.Mesh(geometry, material);
     scene.add(mesh);
 
@@ -209,23 +132,11 @@ function Scene3DCard({ params, t = 0, stage }: CardProps<Params>) {
      */
     let texture: any = null;
     if (params.texture) {
-      texture = new THREE.TextureLoader().load(
-        params.texture,
-        (tex: any) => {
-          // 颜色空间要标对,否则贴上去整体偏暗(three 默认按线性解释)
-          tex.colorSpace = THREE.SRGBColorSpace;
-          material.map = tex;
-          // 烘出来的卡是透明底,不开 transparent 的话四周会变成黑块
-          material.transparent = true;
-          material.needsUpdate = true;
-          if (gl.current) {
-            pose(mesh, params, tRef.current);
-            gl.current.renderer.render(gl.current.scene, gl.current.camera);
-          }
-        },
-        undefined,
-        () => console.warn("[scene-3d] 纹理加载失败:", params.texture),
-      );
+      texture = applyTexture(THREE, material, params.texture, () => {
+        if (!gl.current) return;
+        poseMesh(mesh, params, tRef.current);
+        gl.current.renderer.render(gl.current.scene, gl.current.camera);
+      });
     }
 
     /*
@@ -269,7 +180,7 @@ function Scene3DCard({ params, t = 0, stage }: CardProps<Params>) {
      * useEffect 是**绘制之后**才跑的,只靠它的话挂载后的第一次绘制是一张空 canvas ——
      * 预览里会闪一格白。既然已经在 layout effect 里(绘制之前),顺手画完再走。
      */
-    pose(mesh, params, tRef.current);
+    poseMesh(mesh, params, tRef.current);
     renderer.render(scene, camera);
 
     /*
@@ -308,17 +219,13 @@ function Scene3DCard({ params, t = 0, stage }: CardProps<Params>) {
   useEffect(() => {
     const g = gl.current;
     if (!g) return;
-    pose(g.mesh, params, t);
+    poseMesh(g.mesh, params, t);
     g.renderer.render(g.scene, g.camera);
   });
 
   return <div ref={host} className="absolute inset-0" />;
 }
 
-/** 姿势只由 t 和几个参数决定 —— 这是「画面是 t 的纯函数」的全部实现 */
-function pose(mesh: any, params: Params, t: number) {
-  mesh.rotation.set((params.tilt * Math.PI) / 180 + t * params.spinX * TAU, t * params.spinY * TAU, 0);
-}
 
 export const scene3dCard: CardDef<Params> = {
   id: "scene-3d",

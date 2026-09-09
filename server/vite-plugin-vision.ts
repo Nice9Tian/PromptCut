@@ -327,7 +327,8 @@ async function bakeOne(
   const key = createHash("sha1")
     .update(JSON.stringify({ clip: iso.clip, theme: project.themeId, at, px, bg: rgb ? rgb[1].toLowerCase() : null }))
     .digest("hex").slice(0, 12);
-  const name = `bake-${clipId.replace(/[^w.-]/g, "_")}-${key}.png`;
+  // 文件名带上 clipId 只是为了在素材目录里认得出来;真正保证唯一的是后面那段输入哈希
+  const name = `bake-${clipId.replace(/[^\w.-]/g, "_")}-${key}.png`;
   const dir = mediaDir(root);
   await fsp.mkdir(dir, { recursive: true });
   const file = path.join(dir, name);
