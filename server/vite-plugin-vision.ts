@@ -27,8 +27,24 @@ import { isInside, overLimit } from "./http-guard.mjs";
 
 /** 回给模型的图的最大边长。再大对判断画面没有帮助,只是白烧 token。 */
 const MAX_EDGE = 768;
-/** 渲染出来的帧是透明底(导出要叠底用),合成到这个颜色上再给模型看 */
-const MATTE: [number, number, number] = [0x11, 0x13, 0x18];
+/**
+ * 渲染出来的帧是**透明底**(导出时要叠在素材层上),给模型看之前得垫一个底。
+ *
+ * 以前垫的是一块近黑的纯色(#111318)。那个选择有个致命的地方:**深色的卡片贴上去等于消失**,
+ * 而画面里"什么都没有"和"有一张深色的卡"长得一模一样 —— 模型没法区分这两种情况。
+ *
+ * 真实案例(诊断报告 对话诊断-20260909-045354):一张深色金属的三维 logo 卡,模型连着看了
+ * 20 次 see_preview,思考里写的是 "Diagnosing blank logo card rendering" —— 它以为卡没渲出来,
+ * 于是把同样的 5 次调用原样重复了三轮,一直没拿到新信息。卡其实是好的,只是黑的贴在黑的上面。
+ *
+ * 换成**棋盘格**:透明的地方才露出格子,卡片盖住的地方一格都看不见。于是
+ * "这块是透明的"和"这块是深色的"一眼就分得开 —— 这正是图像编辑器用了几十年的老办法。
+ * 中间调而不是黑白:深色卡和浅色卡都能从它上面浮出来。
+ */
+const CHECKER_A: [number, number, number] = [0x6b, 0x70, 0x7b];
+const CHECKER_B: [number, number, number] = [0x8b, 0x91, 0x9c];
+/** 格子边长(输出像素)。跟着输出走而不是跟着原图,缩放到多大格子都一样清楚 */
+const CHECKER_PX = 16;
 /** 单次渲染的墙钟上限:起 Chrome + 预热 + 一帧,超了就是卡住了 */
 const RENDER_TIMEOUT_MS = 120000;
 /** ffmpeg 抽一帧的上限:本地文件按关键帧定位,正常两三秒 */
@@ -242,10 +258,12 @@ function shrink(png: PNG): { png: PNG; width: number; height: number } {
       }
       const o = (y * w + x) << 2;
       const cover = a / n;
-      // 合成到不透明底色上:out = 前景(已预乘) + 底色 × (1 - 覆盖率)
-      out.data[o] = Math.round(r / n + MATTE[0] * (1 - cover));
-      out.data[o + 1] = Math.round(g / n + MATTE[1] * (1 - cover));
-      out.data[o + 2] = Math.round(b / n + MATTE[2] * (1 - cover));
+      // 合成到棋盘格上:out = 前景(已预乘) + 格子色 × (1 - 覆盖率)。
+      // 卡片盖住的地方 cover=1,格子一点都露不出来;只有真透明的地方才看得见格子。
+      const matte = (((x / CHECKER_PX) | 0) + ((y / CHECKER_PX) | 0)) % 2 === 0 ? CHECKER_A : CHECKER_B;
+      out.data[o] = Math.round(r / n + matte[0] * (1 - cover));
+      out.data[o + 1] = Math.round(g / n + matte[1] * (1 - cover));
+      out.data[o + 2] = Math.round(b / n + matte[2] * (1 - cover));
       out.data[o + 3] = 255;
     }
   }
@@ -541,6 +559,22 @@ export function visionPlugin(): Plugin {
             }
             if (!Number.isFinite(at)) at = 0;
 
+            /*
+             * 先把 at 夹到项目时长内,**再**拿去渲、也拿它回话。
+             *
+             * renderOneFrame 内部本来就会夹(帧号超出时长会渲到一个空舞台),但以前回话里的
+             * `t` 回的是**入参**。于是「你要 t=30、实际渲的是片尾那一帧」时,返回值还理直气壮地
+             * 说 t:30 —— 模型对着一张不是它要的画面,却没有任何线索知道发生了截断,
+             * 只会以为「这一刻长这样」。报一个渲另一个,是最难查的那种错。
+             */
+            const fpsOf = target.fps || 30;
+            const lastT = Math.max(0, Math.floor((target.duration || 0) * fpsOf) - 1) / fpsOf;
+            if (at > lastT) {
+              notes.push(`要看的 ${at} 秒超过了整条片子的长度(${target.duration} 秒),实际渲的是最后一帧 ${lastT.toFixed(2)} 秒。`);
+              at = lastT;
+            }
+
+            notes.push("画面里的灰色棋盘格是**透明**,不是画面内容 —— 那里什么都没画。卡片盖住的地方看不到格子。") ;
             const raw = await enqueue(() => renderOneFrame(root, originOf(server), target, at, notes));
             const { png, width, height } = shrink(PNG.sync.read(raw));
             const base64 = PNG.sync.write(png).toString("base64");
