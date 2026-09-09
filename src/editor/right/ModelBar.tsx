@@ -167,17 +167,21 @@ export function ModelBar(props: {
         深度自主
       </button>
 
-      <button
-        type="button"
-        data-pc="schema-compat"
-        className={`ai-modelbar-fast${compat.on ? " is-on" : ""}`}
-        disabled={disabled || compat.locked}
-        title={compatHint}
-        aria-pressed={compat.on}
-        onClick={() => update({ schemaCompat: compat.on ? "off" : "on" })}
-      >
-        参数兼容
-      </button>
+      {/* 这条路上这个开关不经手(比如 agy 走 MCP,压根不过 sanitizeSchema)就别显示 ——
+          摆一个按下去什么也不会发生的按钮,比没有这个按钮更误导 */}
+      {compat.applies && (
+        <button
+          type="button"
+          data-pc="schema-compat"
+          className={`ai-modelbar-fast${compat.on ? " is-on" : ""}`}
+          disabled={disabled || compat.locked}
+          title={compatHint}
+          aria-pressed={compat.on}
+          onClick={() => update({ schemaCompat: compat.on ? "off" : "on" })}
+        >
+          参数兼容
+        </button>
+      )}
     </div>
   );
 }

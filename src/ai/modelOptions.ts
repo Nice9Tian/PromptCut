@@ -164,19 +164,31 @@ export function writeChoice(provider: AiProvider, patch: Partial<RunChoice>): vo
 /**
  * 参数兼容开关在这个驱动 / 模型下该是什么样。
  *   - Claude Code / Codex 这两条 CLI 路,以及 API 直连里模型名带 claude / gpt / o1~o9 / codex 的:锁死关(它们吃完整 schema);
- *   - agy 这条 CLI 路,以及 API 直连里模型名带 gemini 的:锁死开;
+ *   - API 直连里模型名带 gemini 的:锁死开;
+ *   - agy 这条 CLI 路:**这个开关根本不经手**(见 applies);
  *   - 其余(API 直连接的别家模型、模型名看不出来的):用户自己调,默认按厂商字段推。
  * 模型名不带厂商信息时按 vendor 兜底 —— Router 可能把 Gemini 挂在 openai 兼容接口后面,所以看模型名优先。
+ *
+ * `applies = false` 表示**这条路上这个开关不起任何作用**,界面上不该显示它。
+ * agy 就是这种:它的工具是 `agy mcp add promptcut` 注册的 MCP 服务暴露的,走 mcp-server.mjs,
+ * 根本不经过 sanitizeSchema —— `schemaCompat` 全仓库只有 runners/api.mjs 会读。
+ * 以前这里给 agy 返回「锁死开启」,面板上于是亮着一个按下去什么也不会发生的按钮。
  */
-export function compatPolicy(provider: AiProvider, model: string, vendor: string | undefined, pref: SchemaCompat): { on: boolean; locked: boolean; reason: string } {
+export function compatPolicy(provider: AiProvider, model: string, vendor: string | undefined, pref: SchemaCompat): { on: boolean; locked: boolean; reason: string; applies: boolean } {
   const m = (model || "").toLowerCase();
-  if (provider === "claude" || provider === "codex") return { on: false, locked: true, reason: "Claude Code / Codex 吃完整的工具 schema,不用兼容模式" };
-  if (provider === "agy") return { on: true, locked: true, reason: "Antigravity 跑的是 Gemini,工具 schema 按 Gemini 的子集清洗" };
-  if (/claude/.test(m) || /(^|[^a-z])(gpt|o[1-9]|codex)/.test(m)) return { on: false, locked: true, reason: "Claude / GPT 系列吃完整的工具 schema,不用兼容模式" };
-  if (/gemini/.test(m)) return { on: true, locked: true, reason: "Gemini 只认最窄的 schema 子集,自动开启兼容模式" };
+  if (provider === "claude" || provider === "codex") return { on: false, locked: true, applies: true, reason: "Claude Code / Codex 吃完整的工具 schema,不用兼容模式" };
+  if (provider === "agy") return { on: true, locked: true, applies: false, reason: "Antigravity 的工具走 MCP 注册,不经过这里的 schema 清洗,这个开关对它不起作用" };
+  if (/claude/.test(m) || /(^|[^a-z])(gpt|o[1-9]|codex)/.test(m)) return { on: false, locked: true, applies: true, reason: "Claude / GPT 系列吃完整的工具 schema,不用兼容模式" };
+  /*
+   * Gemini 仍然锁开,但**理由变了**,别再说成「只认最窄的子集」。
+   * 按 v1beta 的 discovery 契约,它的 Schema 认 title / default / minItems / maxItems / format 等等;
+   * 真正不认的只有 additionalProperties / $schema / exclusiveMinimum / exclusiveMaximum(见 harness/schema.mjs)。
+   * 所以关掉这个开关会把 additionalProperties 原样发过去 —— 那是真的会 400,因此仍然锁死。
+   */
+  if (/gemini/.test(m)) return { on: true, locked: true, applies: true, reason: "Gemini 不认 additionalProperties 这几个字段,发过去会 400,所以这一档锁死开着" };
   const auto = vendor === "gemini";
   const on = pref === "on" ? true : pref === "off" ? false : auto;
-  return { on, locked: false, reason: `模型名看不出厂商:${auto ? "按厂商字段默认开" : "默认关"};工具调用报 schema 相关的 400 就打开` };
+  return { on, locked: false, applies: true, reason: `模型名看不出厂商:${auto ? "按厂商字段默认开" : "默认关"};工具调用报 schema 相关的 400 就打开` };
 }
 
 /** 发请求时带的值:锁死的直接给定论,可调的把用户偏好交给服务端(auto 由服务端按模型名再推一次) */

@@ -207,9 +207,81 @@ test('sanitizeSchema:compat 和 vendor 解耦 —— openai 也能按 Gemini 子
   const openaiCompat = sanitizeSchema(schema, 'openai', { compat: true });
   assert.equal(openaiCompat.additionalProperties, undefined);
   assert.deepEqual(openaiCompat.properties.params, { type: 'object', properties: {} });
-  assert.equal(openaiCompat.properties.n.default, undefined);
+  // default 是 Gemini 认的字段,兼容模式**不该**删它(以前删了,是过度设限)
+  assert.equal(openaiCompat.properties.n.default, 1);
   const openaiPlain = sanitizeSchema(schema, 'openai');
   assert.equal(openaiPlain.properties.params.additionalProperties, true);
   assert.equal(sanitizeSchema(schema, 'gemini').properties.params.additionalProperties, undefined, 'gemini 默认就是 compat');
   assert.equal(sanitizeSchema(schema, 'gemini', { compat: false }).properties.params.additionalProperties, true);
+});
+
+/**
+ * 兼容模式到底该删什么 —— 这一组钉的是「删得准」,不是「删得多」。
+ *
+ * 依据是 Gemini v1beta discovery 契约里 Schema 的字段清单。多删的代价是实打实的能力损失:
+ * `title` 那条删出过真实损害 —— card-params-schema 把卡片参数展开成 anyOf 分支、
+ * 用 title 标明是哪张卡,删了模型就认不出该填哪张卡的参数(见下一条测试)。
+ */
+test('兼容模式只删 Gemini 真不认的:additionalProperties / $schema / exclusive* 走,title / default / minItems / maxItems 留', () => {
+  const src = {
+    type: 'object',
+    $schema: 'http://json-schema.org/draft-07/schema#',
+    additionalProperties: true,
+    properties: {
+      keep: { type: 'array', title: '要留的', minItems: 1, maxItems: 9, items: { type: 'string', default: 'x' } },
+      num: { type: 'number', exclusiveMinimum: 3, exclusiveMaximum: 7 },
+      ex: { type: 'string', examples: ['头一个', '第二个'] },
+    },
+  };
+  const out = sanitizeSchema(src, 'gemini', { compat: true });
+
+  // 真不认的:删掉
+  assert.equal(out.$schema, undefined, '$schema 不在 Gemini 的 Schema 清单里');
+  assert.equal(out.additionalProperties, undefined, 'additionalProperties 是唯一一条硬限制');
+
+  // 认的:必须留下
+  assert.equal(out.properties.keep.title, '要留的', 'title 是 Gemini 认的,删了会拆掉 anyOf 分支的卡片标签');
+  assert.equal(out.properties.keep.minItems, 1);
+  assert.equal(out.properties.keep.maxItems, 9);
+  assert.equal(out.properties.keep.items.default, 'x', '嵌套进 items 里的也要留');
+
+  // 没有对应字段的:改写,不是丢掉
+  assert.equal(out.properties.num.exclusiveMinimum, undefined);
+  assert.equal(out.properties.num.exclusiveMaximum, undefined);
+  assert.equal(out.properties.num.minimum, 3, '开区间退成闭区间近似,总好过整条约束消失');
+  assert.equal(out.properties.num.maximum, 7);
+  assert.equal(out.properties.ex.examples, undefined, '清单里只有单数 example');
+  assert.equal(out.properties.ex.example, '头一个');
+});
+
+test('兼容模式的 format:Gemini 认的取值留着,不认的才删', () => {
+  const src = {
+    type: 'object',
+    properties: {
+      when: { type: 'string', format: 'date-time' },
+      f: { type: 'number', format: 'double' },
+      link: { type: 'string', format: 'uri' },
+      mail: { type: 'string', format: 'email' },
+    },
+  };
+  const out = sanitizeSchema(src, 'gemini', { compat: true });
+  assert.equal(out.properties.when.format, 'date-time');
+  assert.equal(out.properties.f.format, 'double');
+  assert.equal(out.properties.link.format, undefined, 'uri 会被 Gemini 拒,按白名单剔掉');
+  assert.equal(out.properties.mail.format, undefined);
+});
+
+/**
+ * 这一条钉的是那个真实的损害:卡片参数的 anyOf 分支靠 `title: card.id` 标明是哪张卡,
+ * 而兼容模式曾经把 title 删了 —— 于是模型面对一堆没有标签的分支,认不出该填哪张卡的参数。
+ */
+test('卡片参数的 anyOf 分支过完兼容模式,还认得出是哪张卡', () => {
+  const cards = [
+    { id: 'stat-proof', name: '数字实证', controls: [{ key: 'value', type: 'number' }] },
+    { id: 'mu-number-ticker', name: '数字滚动', controls: [{ key: 'label', type: 'text' }] },
+  ];
+  const schema = buildParamsSchema(cards);
+  assert.ok(schema && Array.isArray(schema.anyOf), '前提:展开成了 anyOf 分支');
+  const out = sanitizeSchema(schema, 'gemini', { compat: true });
+  assert.deepEqual(out.anyOf.map((b) => b.title), ['stat-proof', 'mu-number-ticker']);
 });
