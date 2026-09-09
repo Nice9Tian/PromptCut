@@ -1,4 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+
+import { useBakePrefetch, beginForegroundBake, endForegroundBake } from "./useBakePrefetch";
 import { flattenOverlay, type Project } from "../../kernel/project";
 import { placeClip3D } from "./place3d";
 import { getCard } from "../../kernel/registry";
@@ -8,6 +10,7 @@ import {
   type Scene3DParams,
 } from "../../cards/native/scene3dObject";
 import { cameraFor, DEFAULT_FOV_DEG, stageToWorld } from "../../kernel/space3d";
+import { motionOf, pickBakeT, sampleTimesFor, texKeyOf, type TimedClip } from "./bakeTime";
 // 棋盘格底和浮层样式在这儿(.pc-3d-checker / .pc-3d-note)。自己引一次,不指望父组件替它引
 import "./preview.css";
 
@@ -65,28 +68,54 @@ export function Scene3DView({ project, t }: Props) {
   const selected = useStore((s) => s.selection[0]);
   const [mods, setMods] = useState<[ThreeMod, OrbitMod] | null>(null);
   const [pending, setPending] = useState(0);
-  const [err, setErr] = useState<string | null>(null);
   /**
-   * 贴图缓存:键是**这张卡长什么样**,不是 clipId。
+   * 正在烘哪一刻。有值 = 板子上现在是**色块**,这一刻的图还没渲出来。
+   * 说出来是因为原来那个 bug 最坏的地方不是慢,是**沉默地显示另一个时刻** ——
+   * 界面上写着 0.2 秒,板子上是 1.0 秒的画,没有任何提示。
+   */
+  const [bakingAt, setBakingAt] = useState<number | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  /*
+   * 「这张卡长什么样」的指纹,只带**决定像素**的东西:哪张卡、什么参数、画布多大。
+   * 不带 clipId 之外的身份信息也不带时刻 —— 它管的是**要不要重建场景**,不是贴哪张图。
    *
    * 只用 clipId 有两个错:换个项目 clipId 会重复(都是 c1 / n1 这种),新项目会看到上个项目的
    * 贴图;改了卡片参数之后 clipId 没变,贴图也不会更新,画面停在旧的样子还不报错。
-   * 服务端那边本来就是按「输入」做的缓存(见 bakeOne),这边跟它对齐即可。
-   */
-  const textures = useRef(new Map<string, string>());
-  /*
-   * 贴图的键只带**决定像素**的东西:哪张卡、什么参数、画布多大。
    *
    * 位置和三维变换不在里面 —— 服务端烘的时候会把 frame 整个摘掉(见 bakeOne 的说明),
-   * 所以转一下卡片、推一下深度,贴图一个像素都不会变。把整个 frame 塞进键里的后果是:
-   * 在「三维」面板里拖滑杆,每一格都算缓存未命中,于是每一格发一次烘焙请求。
+   * 所以转一下卡片、推一下深度,贴图一个像素都不会变。把整个 frame 塞进去的后果是:
+   * 在「三维」面板里拖滑杆,每一格都算变了,于是每一格重建一次场景。
    */
   const texKey = (c: { id: string; cardId: string; params?: unknown; frame?: { w?: number; h?: number } }) =>
     [c.id, c.cardId, JSON.stringify(c.params ?? {}), `${c.frame?.w ?? "-"}x${c.frame?.h ?? "-"}`].join("|");
+  /**
+   * **播放头这一刻**该显示哪一刻烘出来的图,以及那张图的缓存键。
+   *
+   * 原来这里只有一个答案:片段中点。于是任何带动画的卡在 3D 里显示的都不是当前这一刻 ——
+   * mu-number-ticker(滚动 1.6 秒)放在 [0,2],播放头 0.23 秒时 2D 是 81%,3D 是 100%。
+   * 摆位置的人对着的是一张别的时刻的画面,而且不报错。选哪一刻的规则见 bakeTime.ts。
+   */
+  const bakeTOf = (c: TimedClip) => pickBakeT(c, motionOf(getCard(c.cardId) as any, c.params), t);
+  const momentKey = (c: TimedClip) => texKeyOf(c, bakeTOf(c));
+  /**
+   * 按**时刻**存的贴图:`texKeyOf(clip, 那一刻)` → URL。前台现烘的和预烘拿回来的都进这里,
+   * 一个键只对应一张图,所以「板子上贴的到底是哪一刻」永远是确定的。
+   *
+   * 板子上只会出现这个表里、且键正好等于此刻 `momentKey(clip)` 的那一张。别的一律不贴 ——
+   * 见下面 apply 的说明:贴一张别的时刻的真实画面,比贴一块色块糟得多。
+   */
+  const moments = useRef(new Map<string, string>());
   /** 场景那一套,和 scene-3d 卡一样要显式 dispose —— WebGL 资源不归 GC 管 */
   const gl = useRef<{ dispose: () => void; render: () => void } | null>(null);
-  /** 贴图到位后要能立刻换上去:clipId → 换图函数 */
-  const swap = useRef(new Map<string, (url: string) => void>());
+  /**
+   * 贴图到位后要能立刻换上去:clipId → 换图函数。
+   *
+   * 第二个参数是「这张图确实是此刻该显示的那一刻」。**不带这个标记的一律不上板子** ——
+   * 调用方必须先自己对过账,不能指望「随便一张总比色块强」。
+   */
+  const swap = useRef(new Map<string, (url: string, precise?: boolean) => void>());
+  /** 把板子打回色块:clipId → 复位函数。换到了没烘过的时刻就立刻退回去,不留着旧图冒充 */
+  const proxy = useRef(new Map<string, () => void>());
   /** 三维物件每帧要按 t 摆姿势(会转的那种)。渲染循环里调,所以要读最新的 t */
   const posers = useRef<((t: number) => void)[]>([]);
   /**
@@ -113,6 +142,31 @@ export function Scene3DView({ project, t }: Props) {
    */
   const projRef = useRef(project);
   projRef.current = project;
+  /*
+   * 整条片子要预烘哪几个时刻。**按每张卡自己的动画节奏抽样**(sampleTimesFor),
+   * 不是一段一张中点 —— 中点那张多半不是用户正看的那一刻,那正是「3D 里显示的不是当前帧」的病根。
+   *
+   * 只算一次(project 没变就不重算):这个列表每轮调度都要用,而它只跟项目内容有关,
+   * 和播放头无关 —— 播放头只决定**先烘哪个**,那是 bakePlan 的事。
+   */
+  const wantedMoments = useMemo(() => {
+    const out: { clipId: string; t: number; start: number; end: number }[] = [];
+    for (const c of flattenOverlay(project).clips) {
+      // 素材段本来就是位图,不用烘;scene-3d 在这个视图里是真几何,也不用
+      if ((c as any).mediaId || c.cardId === "scene-3d") continue;
+      const motion = motionOf(getCard(c.cardId) as any, c.params);
+      for (const mt of sampleTimesFor(c as TimedClip, motion)) {
+        out.push({ clipId: c.id, t: mt, start: c.start, end: c.end });
+      }
+    }
+    return out;
+  }, [project]);
+  /*
+   * 空闲时把这些时刻预先烘好(排队规则见 bakePlan.ts)。
+   * 这个视图挂着的时候才开:烘一张要起一个 Chrome、四五秒,
+   * 没打开三维页的人不该为它一直付这笔账。
+   */
+  const prefetch = useBakePrefetch({ project, t, moments: wantedMoments, enabled: true });
 
   useEffect(() => {
     let dead = false;
@@ -122,8 +176,12 @@ export function Scene3DView({ project, t }: Props) {
 
   const timeline = flattenOverlay(project);
   const active = timeline.clips.filter((c) => t >= c.start && t < c.end);
-  // 这一刻有哪些卡、各自长什么样 —— 变了才重建场景(和重烘)
+  // 这一刻有哪些卡、各自长什么样 —— 变了才重建场景。**故意不带时刻**:
+  // 带上的话在一段卡里拖时间轴,每跨一格就重建一次整个场景(几何全建、贴图全重载、
+  // 还要新开一个 WebGL 上下文,浏览器上限约 16)。换时刻只换 material.map,不必重建。
   const sig = active.map(texKey).join("|");
+  // 该显示哪几刻。变了只重新取图,不重建场景
+  const momentSig = active.map(momentKey).join("|");
 
   /* ── 建场景 ───────────────────────────────────────────────────── */
   useEffect(() => {
@@ -177,6 +235,7 @@ export function Scene3DView({ project, t }: Props) {
 
     const disposables: { dispose: () => void }[] = [edge.geometry, edge.material as any];
     swap.current = new Map();
+    proxy.current = new Map();
 
     posers.current = [];
     // 拾取用:每块 mesh 记住它属于哪个 clip(three 的 userData 就是干这个的)
@@ -256,9 +315,17 @@ export function Scene3DView({ project, t }: Props) {
       pickables.push(mesh);
       disposables.push(geo, mat);
 
-      // 已经烘好的直接贴上;没有的先留色块,等 bake 回来再换
-      const known = textures.current.get(texKey(clip));
-      const apply = (url: string) => {
+      /*
+       * **只贴当前这一刻的图,别的一律退回色块。**
+       *
+       * 一度写成「精确的那张没到就先拿预烘那张垫着,总比一块灰色色块强」——那是错的。
+       * 垫上去的是另一个时刻的真实画面,它长得和成片一模一样,没人看得出它是垫的;
+       * 而色块**自明**地不是成品(和实体模式同一条道理,见 render/solidMode.ts)。
+       * 一张看着像真的、其实是别的时刻的画面,会被当成这一刻的依据传下去 ——
+       * 那正是「界面上 0.2 秒、板子上 1.0 秒」这个 bug 的本体,换个时刻再犯一遍没有意义。
+       */
+      const apply = (url: string, precise = false) => {
+        if (!precise) return; // 预烘那条路不带时刻,它给的图只进缓存,不上板子
         const tex = applyTexture(THREE, mat, url, () => {
           mat.color.set(0xffffff);
           mat.opacity = 1;
@@ -266,8 +333,19 @@ export function Scene3DView({ project, t }: Props) {
         });
         if (tex) disposables.push(tex);
       };
-      if (known) apply(known);
-      else swap.current.set(clip.id, apply);
+      /** 退回色块:这一刻的图还没烘出来,或者换到了别的时刻 */
+      const toProxy = () => {
+        if (!mat.map) return;
+        mat.map = null;
+        mat.color.set(PROXY_COLOR);
+        mat.opacity = 0.45;
+        mat.needsUpdate = true;
+        renderer.render(scene, camera);
+      };
+      swap.current.set(clip.id, apply);
+      proxy.current.set(clip.id, toProxy);
+      const exact = moments.current.get(momentKey(clip));
+      if (exact) apply(exact, true);
     }
 
     /*
@@ -366,16 +444,30 @@ export function Scene3DView({ project, t }: Props) {
     // t 故意不在依赖里:姿势由渲染循环按 tRef 每帧更新,进依赖会让整个场景每帧重建
   }, [mods, sig, project.width, project.height, project.camera3dFov]);
 
-  /* ── 缺哪张烘哪张,回来就换上 ─────────────────────────────────── */
+  /* ── 换到哪一刻就贴哪一刻;没有的先退回色块,再去烘 ─────────────── */
   useEffect(() => {
     /*
      * 只给**二维的卡**要贴图。scene-3d 那种在这个视图里是真几何,不需要贴图 ——
      * 一开始没排除它,结果每开一次都白烘一张(单张 4.7~6.5 秒),而且烘出来根本没人用。
      */
-    const need = active.filter((c) => c.cardId !== "scene-3d" && !textures.current.has(texKey(c)));
+    const flat = active.filter((c) => c.cardId !== "scene-3d");
+    const need: typeof flat = [];
+    for (const c of flat) {
+      const url = moments.current.get(momentKey(c));
+      // 有这一刻的就贴上(这条也覆盖「拖回刚才那一刻」:缓存命中,一张都不用重烘)
+      if (url) swap.current.get(c.id)?.(url, true);
+      // 没有就**立刻**打回色块。留着上一刻的图不动,等于把一个错的画面继续传下去
+      else { proxy.current.get(c.id)?.(); need.push(c); }
+    }
     if (!need.length) return;
     let dead = false;
     setPending(need.length);
+    setBakingAt(bakeTOf(need[0]));
+    /*
+     * 告诉预烘让路。服务端渲染是串行的,预烘要是正占着,这一张 —— 用户此刻正盯着的那张 ——
+     * 就得排在它后面多等四五秒。本来是来提速的,反而卡了一下。
+     */
+    beginForegroundBake();
     (async () => {
       try {
         const res = await fetch("/api/vision/bake-batch", {
@@ -383,29 +475,72 @@ export function Scene3DView({ project, t }: Props) {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             project,
-            // 取每段的中点:起止两端常卡在进出场动画上,烘出来是个半透明中间态
-            clips: need.map((c) => ({ clipId: c.id, t: (c.start + c.end) / 2 })),
+            // 要的是**播放头这一刻**吸附到格子上的那一刻,不是片段中点(见 bakeTime.ts)
+            clips: need.map((c) => ({ clipId: c.id, t: bakeTOf(c) })),
             size: 1024,
+            /*
+             * 插队。用户正盯着这块板子等它变成真图,而队里可能排着一长串没人等的预烘 ——
+             * 不插队实测要 19.5 秒才出画面,插了队最坏只等正在跑的那一个(约 5 秒)。
+             */
+            priority: 1,
           }),
         });
         const data = await res.json().catch(() => ({}));
-        if (dead) return;
-        if (!res.ok || !data.ok) throw new Error(data.error || `烘焙失败(HTTP ${res.status})`);
+        if (!res.ok || !data.ok) {
+          if (dead) return;
+          throw new Error(data.error || `烘焙失败(HTTP ${res.status})`);
+        }
         for (const b of data.baked ?? []) {
           const c = need.find((x) => x.id === b.clipId);
-          if (c) textures.current.set(texKey(c), b.url);
-          swap.current.get(b.clipId)?.(b.url);
+          /*
+           * **烘出来的一定进缓存,哪怕播放头已经挪走了**(dead)。花了四五秒渲的这一张,
+           * 键就是「那一刻」,扔掉的话拖回去还得再等一遍。
+           * 但只有播放头还停在这一刻时才往板子上贴 —— 挪走了还贴,贴的就是别的时刻的画面。
+           */
+          if (c) moments.current.set(momentKey(c), b.url);
+          if (!dead) swap.current.get(b.clipId)?.(b.url, true);
         }
+        if (dead) return;
         if (data.failed?.length) setErr(`${data.failed.length} 张没烘出来:${data.failed[0].error}`);
       } catch (e: any) {
         if (!dead) setErr(String(e?.message || e));
       } finally {
-        if (!dead) setPending(0);
+        endForegroundBake();
+        if (!dead) { setPending(0); setBakingAt(null); }
       }
     })();
     return () => { dead = true; };
+    // momentSig 在依赖里:拖时间轴换到别的时刻要重新取图。但它**不在建场景那个 effect 的
+    // 依赖里**,所以只是换 material.map,场景不重建。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sig]);
+  }, [sig, momentSig]);
+
+  /* ── 预烘好的贴图一到就收进「按时刻」的缓存,轮到那一刻就用得上 ─────── */
+  useEffect(() => {
+    if (!prefetch.ready.size) return;
+    const all = projRef.current.tracks.flatMap((tr: any) => tr.clips ?? []);
+    for (const [id, url] of prefetch.ready) {
+      // 预烘的键是 `<clipId>@<t>`(见 useBakePrefetch 的 momentId)。clipId 里不会有 @
+      const at = id.lastIndexOf("@");
+      if (at < 0) continue;
+      const clipId = id.slice(0, at);
+      const mt = Number(id.slice(at + 1));
+      const c = all.find((x: any) => x.id === clipId);
+      if (!c || !Number.isFinite(mt)) continue;
+      const k = texKeyOf(c, mt);
+      if (moments.current.get(k) === url) continue;
+      moments.current.set(k, url);
+      /*
+       * **只有它正好就是这块板子此刻该显示的那一刻,才换上去。**
+       * 预烘会把整条片子的很多时刻都烘出来,拿其中任意一张往板子上贴,
+       * 贴的就是别的时刻的画面 —— 那正是要修的那个 bug。
+       */
+      if (k === momentKey(c)) swap.current.get(clipId)?.(url, true);
+    }
+    // momentSig 在依赖里:预烘的结果和「此刻该显示哪一刻」是两个都会变的量,
+    // 任一个变了都要重新对一次账
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prefetch.ready, momentSig]);
 
   return (
     /*
@@ -423,7 +558,9 @@ export function Scene3DView({ project, t }: Props) {
             color: err ? "var(--ui-danger, #f87171)" : "var(--ui-text-2, #94a3b8)",
           }}
         >
-          {err ?? `正在烘 ${pending} 张卡的贴图…色块是占位,烘好会自动换上`}
+          {err ?? (bakingAt === null
+            ? `正在烘 ${pending} 张卡的贴图…色块是占位,烘好会自动换上`
+            : `正在烘第 ${bakingAt.toFixed(2)} 秒的画面(共 ${pending} 张)…色块是占位,不是别的时刻的画面`)}
         </div>
       )}
       {!mods && !err && (
