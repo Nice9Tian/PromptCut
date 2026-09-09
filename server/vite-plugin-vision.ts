@@ -454,6 +454,106 @@ export function visionPlugin(): Plugin {
           }
         });
       });
+
+      /**
+       * POST /api/vision/bake { project, clipId, t, size } —— 把一张卡烘成透明底 PNG 存进素材库。
+       *
+       * 和 /snapshot 是同一条渲染管线(isolateClip + renderOneFrame),差别只有两点:
+       * 不缩图(纹理要原尺寸),以及把结果**落盘**成 `/@media/<name>.png` 而不是塞进上下文给模型看。
+       *
+       * # 为什么这条路不会让预览和导出分叉
+       *
+       * 因为烘焙是**一次性的、发生在更早**的一步:画这张图的就是导出成片的那个渲染器
+       * (scripts/export-frames.mjs)。之后预览和导出都只是加载同一个文件,谁都不做栅格化。
+       * 「浏览器里没有 DOM → 位图的原语」这句话是对的,但它推不出「所以做不了」——
+       * 只要不要求**当场**栅格化,服务端这条管线本来就产得出那张位图。
+       *
+       * # 它是快照,不是活的
+       *
+       * 卡片的动画定格在 t 那一帧;卡片参数改了纹理不会跟着变,要重新烘。
+       * 这个限制看得见(画面明显停住),所以可以接受 —— 静默的分叉才是不能接受的那种。
+       */
+      server.middlewares.use("/api/vision/bake", (req, res) => {
+        if (req.method !== "POST") return sendJson(res, 405, { ok: false, error: "POST only" });
+        let body = "";
+        let over = false;
+        req.on("data", (c) => { if (over) return; body += c; over = overLimit(req, res, body.length, 64 * 1024 * 1024, "请求体超过 64MB"); });
+        req.on("end", async () => {
+          if (over) return;
+          try {
+            const { project, clipId, t, size, bg } = JSON.parse(body || "{}");
+            if (!project || !Array.isArray(project.tracks)) return sendJson(res, 400, { ok: false, error: "缺少 project" });
+            if (!clipId) return sendJson(res, 400, { ok: false, error: "缺少 clipId:烘焙只能对着一张卡" });
+
+            const iso = isolateClip(resolveMediaUrls(project).project, clipId);
+            if (!iso) return sendJson(res, 404, { ok: false, error: `时间轴上没有 id 为 ${clipId} 的片段。` });
+            if (iso.clip.mediaId) return sendJson(res, 400, { ok: false, error: "这是素材段(视频 / 图片),本来就是位图,直接把它的 URL 当纹理用即可,不用烘。" });
+
+            /*
+             * 画布改成正方形:纹理贴到立体表面上,原始 16:9 会被拉变形。
+             * 卡片按新画幅重新排版(它们本来就是响应式的),所以这不是裁切,是重排。
+             */
+            const px = Math.min(2048, Math.max(256, Math.round(Number(size) || 1024)));
+            // 没给时间就取这一段的中点 —— 起止两端常卡在进场 / 退场动画上,烘出来是个半透明中间态
+            const at = Number.isFinite(Number(t)) ? Number(t) : (iso.clip.start + iso.clip.end) / 2;
+            const target = { ...iso.project, width: px, height: px };
+
+            let raw = await enqueue(() => renderOneFrame(root, originOf(server), target, at, []));
+
+            /*
+             * 底色决定贴上去是什么观感,而这个选择只该在**烘的时候**做一次:
+             *
+             *   不传 bg(透明底)→ 物体表面在卡片透明的地方也跟着透明,得到「挖空」效果:
+             *                      内容像浮在空间里,立方体本身看不见。适合标志、招牌。
+             *   传了 bg        → 压平成不透明,得到「实心物体表面贴着这张卡」。
+             *                      大多数人说「把卡贴到立方体上」要的是这个。
+             *
+             * 放在这里而不是放到卡片上,是因为卡片那边只能对整张贴图开或关 transparent,
+             * 分不清「这块本来就该透」和「这块只是卡片没画」。底色在烘的时候就定死最干净。
+             */
+            const rgb = typeof bg === "string" ? /^#?([0-9a-f]{6})$/i.exec(bg.trim()) : null;
+            if (rgb) {
+              const v = parseInt(rgb[1], 16);
+              const [br, bgc, bb] = [(v >> 16) & 255, (v >> 8) & 255, v & 255];
+              const p = PNG.sync.read(raw);
+              for (let i = 0; i < p.data.length; i += 4) {
+                const a = p.data[i + 3] / 255;
+                p.data[i] = Math.round(p.data[i] * a + br * (1 - a));
+                p.data[i + 1] = Math.round(p.data[i + 1] * a + bgc * (1 - a));
+                p.data[i + 2] = Math.round(p.data[i + 2] * a + bb * (1 - a));
+                p.data[i + 3] = 255;
+              }
+              raw = PNG.sync.write(p);
+            }
+
+            const png = PNG.sync.read(raw);
+            let clear = 0;
+            for (let i = 3; i < png.data.length; i += 4) if (png.data[i] === 0) clear++;
+            const total = png.width * png.height;
+
+            const name = `bake-${clipId}-${Math.round(at * 1000)}-${createHash("sha1").update(raw).digest("hex").slice(0, 8)}.png`;
+            const dir = mediaDir(root);
+            await fsp.mkdir(dir, { recursive: true });
+            await fsp.writeFile(path.join(dir, name), raw);
+
+            sendJson(res, 200, {
+              ok: true,
+              url: `/@media/${encodeURIComponent(name)}`,
+              width: png.width,
+              height: png.height,
+              t: at,
+              transparentRatio: Math.round((clear / total) * 1000) / 1000,
+              bytes: raw.length,
+              hint: rgb
+                ? "不透明贴图:贴上去是「实心物体表面印着这张卡」。把 url 填进 scene-3d 的 texture 参数。"
+                : "透明底贴图:贴上去物体在卡片没画的地方也是透空的,内容像浮在空间里(适合标志 / 招牌)。想要「实心立方体表面印着这张卡」就重烘一次并传 bg(比如 bg:\"#0b0f17\")。",
+              note: "这是一张**快照**:卡片的动画定格在 t 这一帧,之后改卡片参数贴图不会跟着变,要重新烘。",
+            });
+          } catch (e: any) {
+            sendJson(res, 500, { ok: false, error: e?.message || String(e) });
+          }
+        });
+      });
     },
   };
 }

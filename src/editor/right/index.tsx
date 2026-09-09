@@ -1799,6 +1799,22 @@ export function RightPanel() {
         if (!res.ok || !data.ok) throw new Error(data.error || `渲染画面失败(HTTP ${res.status})`);
         return data;
       },
+      bakeCard: async (args) => {
+        const res = await fetch("/api/vision/bake", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            project: getState().project,
+            clipId: args.clipId,
+            t: args.t,
+            size: args.size,
+            bg: args.bg,
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.ok) throw new Error(data.error || `烘焙失败(HTTP ${res.status})`);
+        return data;
+      },
       cardAuthoringGuide: async () => {
         const res = await fetch("/api/cards/guide");
         if (!res.ok) throw new Error(`拿不到建卡指南(HTTP ${res.status})`);

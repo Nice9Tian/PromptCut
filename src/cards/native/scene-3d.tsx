@@ -66,6 +66,7 @@ interface Params {
   light: string;
   fov: number;
   wire: string;
+  texture: string;
 }
 
 /** 每种形状的几何体。`r` 是"半径",按画布高度算出来的世界单位(1 世界单位 = 1 像素) */
@@ -185,6 +186,49 @@ function Scene3DCard({ params, t = 0, stage }: CardProps<Params>) {
     scene.add(mesh);
 
     /*
+     * 纹理:一张普通图片的 URL。通常是 bake_card 把一张卡烘出来的
+     * `/@media/xxx.png`(透明底),也可以是素材库里任何一张图。
+     *
+     * # 为什么这条路不会让预览和导出分叉
+     *
+     * 因为**两边都只是在加载同一张图片**。烘焙发生在更早的一次性步骤里(服务端跑
+     * see_preview 那条管线,和成片同一个渲染器画的),预览和导出谁都不做栅格化,
+     * 各自 `<img>` 那张 PNG 而已。分叉的前提是两边各算各的,这里没有人在算。
+     *
+     * # 代价是它是一张快照
+     *
+     * 卡片的动画会定格在烘的那一帧;卡片参数改了,纹理不会自己跟着变,要重新烘。
+     * 这个限制是**看得见**的(画面明显停住),不像静默分叉那样只能靠对比成片才发现。
+     *
+     * # 异步加载和导出的时序
+     *
+     * `load` 是异步的,而导出是逐帧截图 —— 首帧有没有可能截到还没贴图的样子?
+     * 不会:导出用的虚拟时间策略是 `pauseIfNetworkFetchesPending`,图片请求挂着的时候
+     * 虚拟时间根本不走,和动态 `import("three")` 是同一个道理(实测见提交说明)。
+     * 拿到图之后要手动再画一帧 —— 那时 t 不一定变,不能指望下面那个 effect 帮忙。
+     */
+    let texture: any = null;
+    if (params.texture) {
+      texture = new THREE.TextureLoader().load(
+        params.texture,
+        (tex: any) => {
+          // 颜色空间要标对,否则贴上去整体偏暗(three 默认按线性解释)
+          tex.colorSpace = THREE.SRGBColorSpace;
+          material.map = tex;
+          // 烘出来的卡是透明底,不开 transparent 的话四周会变成黑块
+          material.transparent = true;
+          material.needsUpdate = true;
+          if (gl.current) {
+            pose(mesh, params, tRef.current);
+            gl.current.renderer.render(gl.current.scene, gl.current.camera);
+          }
+        },
+        undefined,
+        () => console.warn("[scene-3d] 纹理加载失败:", params.texture),
+      );
+    }
+
+    /*
      * `preserveDrawingBuffer: true` 不是可有可无的:没有它,画完之后画布的像素随时可能被清掉,
      * `drawImage(canvas)` 读回来是空的。而编辑器有两处要读这张画布的像素 ——
      * `contentBox.ts` 量「这张卡真正画了东西的那一块」(不读就退回整块画布,
@@ -205,6 +249,7 @@ function Scene3DCard({ params, t = 0, stage }: CardProps<Params>) {
       dispose: () => {
         geometry.dispose();
         material.dispose();
+        texture?.dispose();
         renderer.dispose();
         /*
          * `dispose()` **不释放 WebGL 上下文**,只清 three 自己的缓存。而浏览器对同时存在的
@@ -254,7 +299,7 @@ function Scene3DCard({ params, t = 0, stage }: CardProps<Params>) {
       gl.current?.dispose();
       gl.current = null;
     };
-  }, [THREE, params.shape, params.color, params.metal, params.rough, params.size, params.light, params.wire, fov, stageW, stageH]);
+  }, [THREE, params.shape, params.color, params.metal, params.rough, params.size, params.light, params.wire, params.texture, fov, stageW, stageH]);
 
   /*
    * 每次 t 变了就摆好姿势、画一帧。**没有 rAF、没有 delta** —— 姿势只由 t 决定。
@@ -289,7 +334,7 @@ export const scene3dCard: CardDef<Params> = {
   source: "native",
   defaults: {
     shape: "knot", color: "#8ab4ff", metal: 0.6, rough: 0.25, size: 0.55,
-    spinY: 0.15, spinX: 0, tilt: -18, light: "studio", fov: 0, wire: "no",
+    spinY: 0.15, spinX: 0, tilt: -18, light: "studio", fov: 0, wire: "no", texture: "",
   },
   controls: [
     { key: "shape", label: "形状", type: "select", options: [
@@ -309,8 +354,9 @@ export const scene3dCard: CardDef<Params> = {
     ] },
     { key: "fov", label: "视角(度)", type: "number", min: 0, max: 120, step: 1, hint: "0 = 跟着项目的相机走(默认,推荐);填正数 = 这张卡单独用一个视角,和别的卡就不在同一个空间里了" },
     { key: "wire", label: "线框", type: "select", options: [{ value: "no", label: "实体" }, { value: "yes", label: "线框" }] },
+    { key: "texture", label: "贴图", type: "text", hint: "图片 URL。用 bake_card 把一张卡烘成透明底 PNG 再贴上来最直接;素材库里的图片也行。留空 = 纯色" },
   ],
-  parts: [{ id: "object", label: "物件", role: "media", params: ["shape", "color", "metal", "rough", "size", "spinY", "spinX", "tilt", "light", "fov", "wire"] }],
+  parts: [{ id: "object", label: "物件", role: "media", params: ["shape", "color", "metal", "rough", "size", "spinY", "spinX", "tilt", "light", "fov", "wire", "texture"] }],
   // 没有进场动画:它一挂载就是最终形态,之后一直转
   lifecycle: { after: "evolve", exit: ["fade"] },
   Component: Scene3DCard,

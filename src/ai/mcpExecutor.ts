@@ -71,6 +71,7 @@ export interface EditorApi {
   setTheme(args: { themeId: string }): any;
   setProjectMeta(args: any): any;
   setCamera3d(args: { enabled?: boolean; fovDeg?: number }): any;
+  bakeCard(args: { clipId: string; t?: number; size?: number; bg?: string }): Promise<any>;
   // STT 工具
   sttStatus(): Promise<any>;
   sttInstall(args: { engine: string }): Promise<any>;
@@ -324,6 +325,7 @@ export function connectMcpExecutor(getApi: () => EditorApi, onStatus?: (s: { con
           else if (tool === "set_theme") result = api.setTheme(args);
           else if (tool === "set_project_meta") result = api.setProjectMeta(args);
           else if (tool === "set_camera3d") result = api.setCamera3d(args);
+          else if (tool === "bake_card") result = await api.bakeCard(args);
           else if (tool === "stt_status") result = await api.sttStatus();
           else if (tool === "stt_install") result = await api.sttInstall(args);
           else if (tool === "transcribe_media") result = await api.transcribeMedia(args);
