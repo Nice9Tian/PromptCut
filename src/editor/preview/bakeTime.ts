@@ -82,6 +82,24 @@ export const DEFAULT_SETTLE_MS = 2000;
 const EPS = 1e-6;
 
 /**
+ * 第 `i` 个格子落在哪一刻(相对片段起点的秒数)。
+ *
+ * **只有这一处算得出格子的位置** —— `pickBakeT` 和 `sampleTimesFor` 都走它。
+ * 分开算过一次,代价是这样的:`sampleTimesFor` 当时是**累加**(`rel += step`),
+ * `pickBakeT` 是 **floor 再乘**(`Math.floor(rel / step) * step`)。step = 0.25 时
+ * 两者逐位相同(0.25 是二进制精确的),**1/30 不是** —— 30fps 下 60 个采样点里
+ * 有 39 个对不上,差 2.8e-17。
+ *
+ * 而缓存键是拿这个浮点数格式化出来的,所以后果不是"差一点点",是**预烘出来的图
+ * 显示端一张都问不到,而且不报错** —— 只表现为「明明烘过还是要现烘」。
+ * 按序号乘则两边必然逐位相同:`floor(i * step / step)` 取整回 `i`,再乘同一个 `step`。
+ *
+ * (顺带记一笔:试过"量化到固定小数位"来兜这件事,更糟 —— 1/30 截成 0.033333 比
+ * 帧边界小一点,floor 会直接退回一整帧。别再走那条路。)
+ */
+const gridAt = (i: number, step: number): number => i * step;
+
+/**
  * 从卡片定义里读出「它什么时候还在动」。`timing(params)` 优先 —— 它按**这一张**卡的
  * 实际参数算,而 lifecycle 里的是默认参数下的静态值。
  *
@@ -141,7 +159,7 @@ export function pickBakeT(clip: TimedClip, motion: CardMotion, t: number, opts: 
   // 播放头在段外(预烘会问到还没播到的段)就按段首算
   const rel = Math.min(Math.max(0, (Number.isFinite(t) ? t : clip.start) - clip.start), Math.max(0, len - EPS));
   if (!alwaysMoving && rel >= settle - EPS) return clip.start + settle;
-  const snapped = Math.floor(rel / step + EPS) * step;
+  const snapped = gridAt(Math.floor(rel / step + EPS), step);
   return clip.start + Math.min(snapped, Math.max(0, len - EPS));
 }
 
@@ -161,7 +179,12 @@ export function sampleTimesFor(clip: TimedClip, motion: CardMotion, opts: Sample
 
   const out: number[] = [];
   const live = alwaysMoving ? len : settle;
-  for (let rel = 0; rel < live - EPS; rel += step) out.push(clip.start + rel);
+  // 按**序号**取格子,不要 `rel += step` 累加 —— 累加出来的值 pickBakeT 吸附不回来(见 gridAt)
+  for (let i = 0; ; i++) {
+    const rel = gridAt(i, step);
+    if (rel >= live - EPS) break;
+    out.push(clip.start + rel);
+  }
   // 落定之后整段是同一帧,用落定那一刻当它的代表
   if (!alwaysMoving) out.push(clip.start + settle);
   if (!out.length) out.push(clip.start);

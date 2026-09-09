@@ -68,6 +68,33 @@ test("前台吸附的格子必须落在预烘排的格子上,否则预烘白排"
   }
 });
 
+/**
+ * 上面那条用的是默认的 0.25 —— 而 0.25 是**二进制精确**的,所以它永远绿,
+ * 钉不住真正的风险。逐帧那一档的步长是 1/30、1/24、1/29.97,一个都不精确。
+ *
+ * 这条曾经真的挂过:`sampleTimesFor` 累加(`rel += step`)、`pickBakeT` floor 再乘,
+ * 30fps 下 60 个采样点有 39 个差 2.8e-17。而缓存键是拿这个浮点数格式化出来的,
+ * 于是**预烘出来的图显示端一张都问不到,还不报错** —— 只表现为「明明烘过还要现烘」。
+ * 所以这里比的是**逐位相等**(===),不是 toFixed 之后相等。
+ */
+test("非二进制精确的步长(逐帧那一档)也要对得上 —— 差 2.8e-17 就等于预烘全白做", () => {
+  for (const [name, step] of [["1/30", 1 / 30], ["1/24", 1 / 24], ["1/29.97", 1 / 29.97], ["0.1", 0.1]]) {
+    const c = clip({ end: 3 });
+    const motion = { settleMs: 3000, after: "hold" };
+    const planned = sampleTimesFor(c, motion, { stepSec: step, maxPerClip: 9999 });
+    const set = new Set(planned);
+    assert.ok(planned.length > 20, `${name}:采样点太少,这条测试没测到东西`);
+    for (const want of planned) {
+      // 停在这个采样点上,吸附回来必须是**同一个浮点数**
+      assert.ok(set.has(pickBakeT(c, motion, want, { stepSec: step })), `${name}:停在 ${want} 上吸附不回自己`);
+    }
+    // 也测格子之间的位置:往回吸附到的那一刻必须在名单里
+    for (let t = 0; t < 3; t += 0.017) {
+      assert.ok(set.has(pickBakeT(c, motion, t, { stepSec: step })), `${name}:t=${t} 吸附到的那一刻不在预烘名单里`);
+    }
+  }
+});
+
 test("抽稀只减覆盖,首尾必留", () => {
   const c = clip({ end: 30 });
   const all = sampleTimesFor(c, { settleMs: 0, after: "evolve" }, { maxPerClip: 999 });
