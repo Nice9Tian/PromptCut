@@ -10,6 +10,7 @@ import { xOfTime, HEADER_W_MIN, HEADER_W_MAX, TAIL_SLACK_PX, contentEndOf } from
 import { TrackRow } from "./TrackRow";
 import { Ruler } from "./Ruler";
 import { RangeBar, RANGE_H } from "./RangeBar";
+import { RenderBar, RENDER_H } from "./RenderBar";
 import { InsertZones } from "./InsertZones";
 import { NewTrackZone } from "./NewTrackZone";
 import { Playhead } from "./Playhead";
@@ -66,6 +67,8 @@ function TimelineInner() {
           <div className="pc-tl-hdr flex-shrink-0 sticky bg-neutral-950 z-40" style={{ top: RANGE_H }}>
             序列
           </div>
+          {/* 和右边那条绿条等高的占位:不补的话右边整体下移,轨道行和左边的表头就错开了 */}
+          <div className="flex-shrink-0 sticky bg-neutral-950 z-40" style={{ top: RANGE_H + 26, height: RENDER_H }} />
           <div className="flex-1 flex flex-col">
             {tracks.map((track, i) => (
               <TrackHeader key={track.id} track={track} index={i} />
@@ -98,6 +101,10 @@ function TimelineInner() {
           </div>
           <div className="flex-shrink-0 sticky bg-neutral-950 z-20" style={{ top: RANGE_H, height: 26 }}>
             <Ruler />
+          </div>
+          {/* 预渲染绿条:紧贴标尺下沿(AE 的位置) */}
+          <div className="flex-shrink-0 sticky bg-neutral-950 z-20" style={{ top: RANGE_H + 26, height: RENDER_H }}>
+            <RenderBar />
           </div>
           <div
             className="flex-1 relative"

@@ -191,3 +191,124 @@ test("预算按机器内存分档,而且有上下限", () => {
   // 按实测平均 55KB 一个、一张卡十来个时刻算,8GB 的机器够放一两百张卡
   assert.ok(defaultBudgetBytes(8) / 55000 / 12 > 100);
 });
+
+/* ── 两档:低帧率全部铺完,才开始原始帧率 ─────────────────────── */
+
+const MT = (clipId, t, start, end, tier) => ({ clipId, t, start, end, tier, key: `${clipId}@${t}#${tier}` });
+
+test("低帧率那一档全部排完,才轮到原始帧率", () => {
+  const moments = [
+    // 原始帧率的放在数组前面,故意让"照数组顺序"这种写法露馅
+    MT("a", 0.1, 0, 2, "full"), MT("a", 0.2, 0, 2, "full"),
+    MT("a", 0, 0, 2, "coarse"), MT("b", 10, 10, 12, "coarse"),
+  ];
+  const p = planBakes({ moments, t: 0, budgetBytes: 1e9, known: new Map() });
+  const tiers = p.jobs.map((j) => j.tier);
+  assert.deepEqual(tiers, ["coarse", "coarse", "full", "full"], `实得 ${tiers}`);
+});
+
+test("哪怕原始帧率那张就在播放头上,也要等低帧率全部铺完", () => {
+  const moments = [
+    MT("cur", 5, 5, 7, "full"),      // 正在播,而且是精确那一档
+    MT("far", 100, 100, 102, "coarse"), // 离得很远,但属于低帧率档
+  ];
+  const p = planBakes({ moments, t: 5, budgetBytes: 1e9, known: new Map() });
+  assert.deepEqual(p.jobs.map((j) => j.clipId), ["far", "cur"],
+    "先把整条片子铺满低帧率,比让眼前这一格精确更有用");
+});
+
+test("每一档内部仍然是「眼前 → 两侧 → 从 0 铺」", () => {
+  const moments = [
+    MT("c-far", 50, 50, 52, "coarse"),
+    MT("c-cur", 5, 5, 7, "coarse"),
+    MT("c-near", 8, 8, 9, "coarse"),
+    MT("f-far", 50, 50, 52, "full"),
+    MT("f-cur", 5, 5, 7, "full"),
+  ];
+  const p = planBakes({ moments, t: 5, budgetBytes: 1e9, known: new Map(), nearWindowSec: 10 });
+  assert.deepEqual(p.jobs.map((j) => j.clipId), ["c-cur", "c-near", "c-far", "f-cur", "f-far"]);
+  assert.deepEqual(p.jobs.map((j) => j.phase), ["current", "near", "rest", "current", "rest"]);
+});
+
+test("不写 tier 的按低帧率算(老调用方不会因此掉到最后)", () => {
+  const moments = [
+    { clipId: "old", t: 1, start: 0, end: 2, key: "old@1" },
+    MT("newfull", 1.1, 0, 2, "full"),
+  ];
+  const p = planBakes({ moments, t: 1, budgetBytes: 1e9, known: new Map() });
+  assert.deepEqual(p.jobs.map((j) => j.tier), ["coarse", "full"]);
+  assert.equal(p.jobs[0].clipId, "old");
+});
+
+/* ── 归到帧号:两档格子对得上账的前提 ─────────────────────────── */
+
+test("归一是第二道防线:累加出来的值也能被归回同一个帧", async () => {
+  const { canonFrameT } = await import("./bakePlan.ts");
+  /*
+   * bakeTime.ts 现在按序号乘(gridAt),所以它自己产出的值已经对得齐了 ——
+   * 这条不再依赖它产出不齐的值,而是**自己造**一组累加出来的(那正是历史上出问题的形状),
+   * 证明 canonFrameT 能把它们归回和「按序号乘」一样的那个浮点数。
+   *
+   * 留着这道防线是因为时刻不一定都来自 sampleTimesFor:换个步长、从别处传进来,
+   * 都可能带着表示误差,而缓存键是对这个浮点数做哈希的,差一位就是两个文件。
+   */
+  for (const fps of [30, 24, 25, 60]) {
+    const step = 1 / fps;
+    let drifted = 0;
+    let sawDrift = false;
+    for (let i = 0; i < 60; i++) {
+      const byMul = i * step;               // 按序号乘(bakeTime 现在的做法)
+      if (drifted !== byMul) sawDrift = true;
+      assert.equal(
+        canonFrameT(drifted, 0, fps),
+        canonFrameT(byMul, 0, fps),
+        `${fps}fps 第 ${i} 帧:累加值 ${drifted} 和相乘值 ${byMul} 归一之后仍然不同`,
+      );
+      drifted += step;                      // 累加(历史上出问题的做法)
+    }
+    assert.ok(sawDrift, `${fps}fps:累加和相乘居然逐位相同,这条用例失去意义了`);
+  }
+});
+
+test("按固定小数位量化是错的(会整整退回一帧)—— 记下来别再试", async () => {
+  const { sampleTimesFor, pickBakeT } = await import("./bakeTime.ts");
+  const clip = { id: "c", cardId: "x", start: 0, end: 2, params: {} };
+  const motion = { settleMs: 0, after: "evolve" };
+  const step = 1 / 30;
+  const q = (t) => Math.round(t * 1e6) / 1e6;   // 微秒量化:看着合理,其实不成立
+  const bad = sampleTimesFor(clip, motion, { stepSec: step, maxPerClip: 10000 })
+    .map(q)
+    .filter((t) => q(pickBakeT(clip, motion, t, { stepSec: step })) !== t).length;
+  assert.ok(bad > 0, "微秒量化居然成立了?那就该重新评估 canonFrameT 是不是还有必要");
+});
+
+test("归一是幂等的,而且分得开相邻两帧", async () => {
+  const { canonFrameT } = await import("./bakePlan.ts");
+  for (const v of [0, 0.19999999999999998, 0.2, 1 / 3, 2.5, 0.5]) {
+    assert.equal(canonFrameT(canonFrameT(v, 0, 30), 0, 30), canonFrameT(v, 0, 30), `${v} 归一两次不一致`);
+  }
+  assert.notEqual(canonFrameT(10 / 60, 0, 60), canonFrameT(11 / 60, 0, 60), "相邻帧被并成一格就分不出帧了");
+});
+
+test("归一让低帧率成为逐帧的子集 —— 这是 canonFrameT 现在存在的**主要**理由", async () => {
+  const { canonFrameT } = await import("./bakePlan.ts");
+  const { sampleTimesFor } = await import("./bakeTime.ts");
+  const clip = { id: "c", cardId: "x", start: 0, end: 2, params: {} };
+  const motion = { settleMs: 0, after: "evolve" };
+  const fps = 30;
+  const fineRaw = sampleTimesFor(clip, motion, { stepSec: 1 / fps, maxPerClip: 10000 });
+  const coarseRaw = sampleTimesFor(clip, motion, { stepSec: 0.25 });
+
+  /*
+   * 先证明**不归一就是对不上的**:30fps 下 0.25 秒 = 7.5 帧,所以 0.25 / 0.75 / 1.25 / 1.75
+   * 根本不落在帧格子上。对不上的后果是同一瞬间烘两遍,而且低帧率那张不算进绿条的覆盖。
+   */
+  const fineSetRaw = new Set(fineRaw);
+  const missRaw = coarseRaw.filter((t) => !fineSetRaw.has(t));
+  assert.ok(missRaw.length > 0, "不归一居然就对得上了?那这个函数可以删了");
+
+  const fine = new Set(fineRaw.map((t) => canonFrameT(t, 0, fps)));
+  for (const t of coarseRaw) {
+    assert.ok(fine.has(canonFrameT(t, 0, fps)), `低帧率的 ${t} 归一之后仍然不在逐帧的格子上`);
+  }
+});

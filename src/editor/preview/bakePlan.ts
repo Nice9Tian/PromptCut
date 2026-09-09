@@ -51,9 +51,26 @@
  * 场景一重建就全部 dispose。预烘出来的文件在被用到之前一点显存都不占。
  */
 
+/**
+ * 两档预渲染。
+ *
+ * coarse —— **低帧率**那一档(0.25 秒一格)。先把整条片子铺满它:成本只有原始帧率的
+ *   零头,而且拖到任何地方都立刻有画面,只是最多差 0.25 秒。
+ * full   —— **原始帧率**那一档(项目 fps)。coarse 全部铺完之后才开始,
+ *   烘好之后那一段就是逐帧精确的。
+ *
+ * 顺序写死成「coarse 全部完成 → 才开始 full」,不是按距离混着排:
+ * 先让整条片子都能看(哪怕差 0.25 秒),比让开头那几秒精确、后面全是空白有用得多。
+ */
+export type BakeTier = "coarse" | "full";
+
 /** 要烘的一个时刻。`key` 由调用方给(见 bakeTime.ts 的 texKeyOf),这里不自己算 */
 export interface BakeMoment {
   clipId: string;
+  /** 属于哪一档。不写按 coarse 算 */
+  tier?: BakeTier;
+  /** 是否落在原始帧率的格子上。排队不看它,画进度条要看(见 bakeCoverage) */
+  fine?: boolean;
   /** 烘哪一刻(时间轴绝对秒) */
   t: number;
   /** 这张卡在时间轴上的区间 —— 用来判断「现在是不是正播到它」 */
@@ -70,6 +87,7 @@ export interface BakeJob {
   t: number;
   key: string;
   phase: BakePhase;
+  tier: BakeTier;
 }
 
 export interface KeptFile {
@@ -106,6 +124,39 @@ export interface BakePlan {
   dropped: number;
 }
 
+/**
+ * 把一个时刻**归到帧号上**:`start + i / fps`,i 是整数帧号。
+ *
+ * # 它现在解决的是「两档格子对不齐」
+ *
+ * 预渲染分两档:低帧率(0.25 秒一格)和原始帧率(1/fps 一格)。这两套格子**本来对不上** ——
+ * 30fps 下 0.25 秒 = 7.5 帧,所以 0.25 / 0.75 / 1.25 / 1.75 这些点根本不落在帧格子上
+ * (实测 8 个低帧率点里有 4 个落空)。对不上的后果有两个,都不报错:
+ *
+ *   - 同一个瞬间被当成两个不同的键,**烘两遍**;
+ *   - 低帧率那张烘好了,却不算进「原始帧率」的覆盖,绿条每隔半秒缺一块。
+ *
+ * 归一之后低帧率成为原始帧率的**子集**,两个问题一起消失。
+ *
+ * # 顺带兜住的历史问题(根因已由 bakeTime.ts 修掉)
+ *
+ * 曾经 `sampleTimesFor` 是**累加** step、`pickBakeT` 是 **floor 再乘**,两者在 1/30 这种
+ * 非二进制精确的步长上差 2.8e-17(30fps 下 60 个采样有 39 个对不上),而缓存键是对这个
+ * 浮点数做哈希的 —— 于是逐帧那一档烘出来的图显示端一张都问不到。现在 `bakeTime.ts` 的
+ * `gridAt` 统一成「按序号乘」,根因没了;这里仍然按帧号归一,等于多一道防线:
+ * 时刻要是从别处来、或者用了别的步长,照样能被归回同一个值。
+ *
+ * **别改成按固定小数位量化。** 试过,更糟:1/30 被截成 0.033333,比帧边界小一点,
+ * `floor` 直接退回一整帧(60 个错 20 个)。非有限小数的步长上那条路根本不成立。
+ *
+ * 用 round 而不是 floor:传进来的值本来就该落在某一帧上,只是带表示误差,round 把它还原成
+ * 本来的帧号;而「不显示还没播到的那一帧」在调用 `pickBakeT` 时已经用 floor 保证过了。
+ */
+export function canonFrameT(t: number, start: number, fps: number): number {
+  const f = Math.max(1, fps);
+  return start + Math.round((t - start) * f) / f;
+}
+
 const DEFAULT_NEAR_WINDOW_SEC = 20;
 
 /** 播放头是不是正落在这张卡上 */
@@ -121,9 +172,12 @@ export function distanceFrom(m: { t: number }, t: number): number {
   return Math.abs(m.t - t);
 }
 
-export function planBakes(input: PlanInput): BakePlan {
-  const { moments, t, budgetBytes, known, nearWindowSec = DEFAULT_NEAR_WINDOW_SEC } = input;
-
+/** 一档之内怎么排:眼前 → 两侧 → 从 0 铺 */
+function orderWithinTier(
+  moments: BakeMoment[],
+  t: number,
+  nearWindowSec: number,
+): { m: BakeMoment; phase: BakePhase }[] {
   /*
    * 「此刻正在播的每张卡,离当前时间最近的那个时刻」—— 这些就是屏幕上正显示的东西。
    * 按 clip 取最近的一个,而不是把正在播的卡的所有时刻都算成 current:
@@ -149,10 +203,28 @@ export function planBakes(input: PlanInput): BakePlan {
   // 剩下的从 0 开始按时间顺序铺
   const rest = others.filter((m) => distanceFrom(m, t) > nearWindowSec).sort((a, b) => a.t - b.t);
 
-  const ordered: { m: BakeMoment; phase: BakePhase }[] = [
+  return [
     ...current.map((m) => ({ m, phase: "current" as const })),
     ...near.map((m) => ({ m, phase: "near" as const })),
     ...rest.map((m) => ({ m, phase: "rest" as const })),
+  ];
+}
+
+export function planBakes(input: PlanInput): BakePlan {
+  const { moments, t, budgetBytes, known, nearWindowSec = DEFAULT_NEAR_WINDOW_SEC } = input;
+
+  /*
+   * **先把低帧率那一档整条铺完,再开始原始帧率那一档。**
+   *
+   * 不混着排:混排的结果是播放头附近变成逐帧精确、而片子后半段还一片空白 ——
+   * 而"拖到哪儿都有画面(哪怕差 0.25 秒)"比"开头几秒特别准"有用得多。
+   * 两档各自再按「眼前 → 两侧 → 从 0 铺」排,所以低帧率那一档也是先照顾眼前。
+   */
+  const coarse = moments.filter((m) => (m.tier ?? "coarse") === "coarse");
+  const full = moments.filter((m) => m.tier === "full");
+  const ordered = [
+    ...orderWithinTier(coarse, t, nearWindowSec),
+    ...orderWithinTier(full, t, nearWindowSec),
   ];
 
   const keep: KeptFile[] = [];
@@ -170,7 +242,7 @@ export function planBakes(input: PlanInput): BakePlan {
     const bytes = known.get(m.key);
     if (bytes === undefined) {
       // 还没烘 —— 磁盘上不存在,不占任何空间,所以不参与预算,只排进待烘队列
-      jobs.push({ clipId: m.clipId, t: m.t, key: m.key, phase });
+      jobs.push({ clipId: m.clipId, t: m.t, key: m.key, phase, tier: m.tier ?? "coarse" });
       continue;
     }
     /*

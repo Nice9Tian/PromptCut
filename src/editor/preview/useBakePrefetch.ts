@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { planBakes, defaultBudgetBytes, type BakeMoment } from "./bakePlan";
+import { planBakes, defaultBudgetBytes, type BakeMoment, type BakeTier } from "./bakePlan";
+import { coverageSegments, publishCoverage } from "./bakeCoverage";
 
 /**
  * 空闲时把贴图预先烘好。排队规则见 bakePlan.ts,这里只管**什么时候动手**。
@@ -57,6 +58,10 @@ export interface WantedMoment {
   t: number;
   start: number;
   end: number;
+  /** 低帧率还是原始帧率。不写按低帧率算 */
+  tier?: BakeTier;
+  /** 这一刻是否落在**原始帧率**的格子上(0.5 秒这种点两档都有,所以和 tier 是两件事) */
+  fine?: boolean;
 }
 
 export interface PrefetchStatus {
@@ -105,6 +110,9 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
  */
 export const momentId = (clipId: string, t: number) => `${clipId}@${t}`;
 
+// canonFrameT 定义在 bakePlan.ts(纯函数、可单测);这里再导出,方便 Scene3DView 一处引入
+export { canonFrameT } from "./bakePlan";
+
 export function useBakePrefetch({
   project,
   t,
@@ -142,6 +150,8 @@ export function useBakePrefetch({
     let dead = false;
     let cancelIdle: (() => void) | null = null;
     const ready = new Map<string, string>();
+    /** 这一刻正在烘(给绿条标出来)。烘完置回 null */
+    let latestBakingAt: number | null = null;
 
     /** 等到「浏览器空闲」且「用户停手」且「前台没在烘」 */
     const waitIdle = () => new Promise<void>((resolve) => {
@@ -154,11 +164,39 @@ export function useBakePrefetch({
       cancelIdle = onIdle(attempt);
     });
 
-    const post = async (url: string, payload: unknown) => {
+    /**
+     * 把覆盖情况发给绿条。`bakingAt` 从 `latestBakingAt` 读 —— 它在烘的过程中会变,
+     * 而这个函数在每轮盘点后调一次,不能把当时那个瞬间的值封进闭包。
+     */
+    const publishBaked = (all: BakeMoment[], known: Map<string, number>) => {
+      let bytes = 0;
+      for (const b of known.values()) bytes += b;
+      const isBaked = (m: { key?: string }) => !!m.key && known.has(m.key);
+      /*
+       * 黄 = 低帧率那一格的覆盖;绿 = **原始帧率格子**的覆盖。
+       * 绿用 `fine` 而不是 `tier === "full"`:0.5 秒这类点两档都落在上面,
+       * 排队时算低帧率(先烘),但它同样是逐帧那一档的一格 —— 漏掉它绿条会每隔半秒缺一块。
+       */
+      const coarse = all.filter((m) => (m.tier ?? "coarse") === "coarse");
+      const full = all.filter((m) => m.fine);
+      publishCoverage({
+        coarse: coverageSegments(coarse, isBaked),
+        full: coverageSegments(full, isBaked),
+        coarseBaked: coarse.filter(isBaked).length,
+        coarseTotal: coarse.length,
+        fullBaked: full.filter(isBaked).length,
+        fullTotal: full.length,
+        bakingAt: latestBakingAt,
+        bytes,
+      });
+    };
+
+    const post = async (url: string, payload: unknown, signal?: AbortSignal) => {
       const res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
+        signal,
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.ok) throw new Error(data.error || `${url} 失败(HTTP ${res.status})`);
@@ -167,6 +205,25 @@ export function useBakePrefetch({
 
     /** 没活干就往后退,有活干或用户动了就退回最短 */
     let backoff = REST_MS;
+
+    /**
+     * 歇着,但**用户一动就立刻醒**。
+     *
+     * 原来这里是一句 `await sleep(backoff)`,而 backoff 全烘完之后会翻倍到 60 秒。
+     * 后果:改一张卡的参数 —— 它那几段缓存当场作废 —— 而进度条上的黄绿条还挂着,
+     * 板子上还贴着改之前的图,**最长要等一分钟**才刷新。用户看到的就是"改了没反应"。
+     *
+     * 所以拆成小段睡,每段之间看一眼 touchedAt(改项目、拖播放头都会更新它)。
+     * 250ms 一次的开销可以忽略:只是比一下时间戳,不发请求也不碰磁盘。
+     */
+    const restUntilTouched = async (ms: number) => {
+      const since = touchedAt.current;
+      const until = Date.now() + ms;
+      while (!dead && Date.now() < until) {
+        if (touchedAt.current !== since) return;
+        await sleep(Math.min(250, ms));
+      }
+    };
 
     (async () => {
       while (!dead) {
@@ -179,7 +236,7 @@ export function useBakePrefetch({
           const proj = projRef.current;
           const now = tRef.current;
           const wanted = momentsRef.current;
-          if (!wanted.length) { await sleep(backoff); backoff = Math.min(IDLE_MAX_MS, backoff * 2); continue; }
+          if (!wanted.length) { await restUntilTouched(backoff); backoff = Math.min(IDLE_MAX_MS, backoff * 2); continue; }
 
           /* ① 盘点:哪些已经有了、各自多大、还有哪些没人认领 */
           const st = await post("/api/vision/bake-status", {
@@ -201,7 +258,12 @@ export function useBakePrefetch({
             if (!it.key) continue;
             const w = wanted.find((m) => m.clipId === it.clipId && m.t === it.t);
             if (!w) continue;
-            planMoments.push({ clipId: w.clipId, t: w.t, start: w.start, end: w.end, key: it.key });
+            /*
+             * **tier 必须带过来。** 漏掉它的后果是所有时刻都退回 coarse:
+             * 界面上显示"低帧率 23/496、原始帧率 0/0",而排队也就没有了先后 ——
+             * 而且不报错,只是两档悄悄合成了一档。
+             */
+            planMoments.push({ clipId: w.clipId, t: w.t, start: w.start, end: w.end, key: it.key, tier: w.tier ?? "coarse", fine: !!w.fine });
             if (typeof it.bytes === "number") {
               known.set(it.key, it.bytes);
               if (it.url) ready.set(momentId(w.clipId, w.t), it.url);
@@ -209,6 +271,15 @@ export function useBakePrefetch({
           }
           // 没人认领的旧文件也计入占用 —— 不数它们的话,磁盘上的东西永远删不掉
           for (const o of st.orphans ?? []) known.set(o.key, o.bytes);
+
+          /*
+           * 把「哪几段已经能立刻看到画面」发给时间轴顶上那条绿条。
+           *
+           * 用**这一轮盘点的结果**发,而不是用前端记的那份:盘点是问服务端要的,
+           * 上次开编辑器烘出来的文件也算数;只按这次会话烘过的算,绿条会从零开始涨,
+           * 明明磁盘上早就有了。
+           */
+          publishBaked(planMoments, known);
 
           /* ② 排队:眼前 → 两侧 → 从 0 铺;同一份名单顺便算出该删哪些 */
           const plan = planBakes({ moments: planMoments, t: now, budgetBytes: budget, known });
@@ -253,17 +324,46 @@ export function useBakePrefetch({
             if (footprint >= budget) break;
             await waitIdle();
             if (dead) return;
-            // 用户在这期间动过了 → 队伍已经不对了,回去重排
-            if (Date.now() - touchedAt.current < IDLE_MS) break;
+            /*
+             * 用户在这一轮开始之后动过任何东西 → 手上这份队伍已经不作数了,回去重排。
+             *
+             * 原来这里写的是 `Date.now() - touchedAt.current < IDLE_MS`,**永远不成立**:
+             * 上面那句 `waitIdle()` 的定义就是"安静满 IDLE_MS 才返回",所以走到这一行时
+             * 这个差值必然 ≥ IDLE_MS。等于这条退出路径从来没生效过。
+             *
+             * 后果实测得到:一轮排出四百多个活,每批 7 个约 5 秒 —— 整整五分钟里
+             * **一次都不会重新盘点**。期间改一张卡,进度条上它那几段黄绿条纹丝不动,
+             * 因为重新发布覆盖只发生在下一轮盘点之后。用户看到的就是"改了半天没反应"。
+             *
+             * 比时间戳而不是比时长:只要和开工时不一样,就说明中途有变化。
+             */
+            if (touchedAt.current !== roundStartedAt) break;
 
             didSomething = true;
+            // 绿条上要标出"正在烘这一刻",所以取这一批里最靠前的那个时刻
+            latestBakingAt = Math.min(...batch.map((j) => j.t));
+            publishBaked(planMoments, known);
             setStatus((s) => ({ ...s, baking: { clipId: job.clipId, phase: job.phase }, queued: plan.jobs.length - done }));
             try {
+              /*
+               * 用户一动就把这批掐掉。实测:不掐的话「改完一张卡到进度条更新」要 11.8 秒,
+               * 其中 7.8 秒是干等这批烘完 —— 而这批烘的还是**改之前**那一版,早就作废了。
+               *
+               * 掐掉不浪费:服务端不会因此停手,图照样落盘(见 bakeOne 的 bakeInFlight),
+               * 只是这一轮不再等它。
+               */
+              const ac = new AbortController();
+              const stopWatch = (async () => {
+                while (!ac.signal.aborted && !dead) {
+                  if (touchedAt.current !== roundStartedAt) return ac.abort();
+                  await sleep(200);
+                }
+              })();
               const out = await post("/api/vision/bake-batch", {
                 project: projRef.current,
                 clips: batch.map((j) => ({ clipId: j.clipId, t: j.t })),
                 size: 1024,
-              });
+              }, ac.signal).finally(() => { ac.abort(); void stopWatch; });
               for (const b of out.baked ?? []) {
                 /*
                  * 按「卡 + 时刻」存,而且时刻用**服务端回的那个**:一批里有好几张,
@@ -271,12 +371,19 @@ export function useBakePrefetch({
                  */
                 ready.set(momentId(b.clipId, b.t), b.url);
                 if (typeof b.bytes === "number") footprint += b.bytes;
+                // 这一刻已经能看了,记进 known,下一句发布时绿条就把它涂上
+                const j = batch.find((x) => x.clipId === b.clipId && x.t === b.t);
+                if (j && typeof b.bytes === "number") known.set(j.key, b.bytes);
               }
             } catch (e: any) {
-              // 一批烘不出来不该让整轮停摆,下一轮盘点会重新遇到它们
-              if (!dead) setStatus((s) => ({ ...s, error: String(e?.message || e) }));
+              // 一批烘不出来不该让整轮停摆,下一轮盘点会重新遇到它们;
+              // 被掐掉的更不算错 —— 那是项目变了、我们自己主动放弃的
+              if (!dead && e?.name !== "AbortError") setStatus((s) => ({ ...s, error: String(e?.message || e) }));
             }
             done += batch.length;
+            latestBakingAt = null;
+            // 每烘完一批就更新绿条,而不是等整轮跑完 —— 用户要看着它一段一段长出来
+            publishBaked(planMoments, known);
             setStatus((s) => ({
               ...s,
               ready: new Map(ready),
@@ -292,10 +399,14 @@ export function useBakePrefetch({
          * 这一轮干了活,或者用户在这期间动过东西 → 下一轮马上来;
          * 否则说明已经烘齐了,逐次翻倍往后退,免得空转着一直问服务端。
          */
-        backoff = didSomething || touchedAt.current !== roundStartedAt
-          ? REST_MS
-          : Math.min(IDLE_MAX_MS, backoff * 2);
-        await sleep(backoff);
+        /*
+         * 因为**有变化**才回到这里的:立刻重排,别再歇。手上这份计划已经作废了,
+         * 歇 4 秒只是让用户多盯 4 秒不对的进度条。下一轮开头的 waitIdle 会保证
+         * 「安静 600ms」,连续编辑自然会被合并,不会打成一片请求。
+         */
+        const changed = touchedAt.current !== roundStartedAt;
+        backoff = changed ? 0 : didSomething ? REST_MS : Math.min(IDLE_MAX_MS, backoff * 2);
+        if (backoff > 0) await restUntilTouched(backoff);
       }
     })();
 
