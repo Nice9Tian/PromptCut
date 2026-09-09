@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { MediaLayers } from "./preview/MediaLayers";
 import { Scene3DView } from "./preview/Scene3DView";
 import { themeStyle } from "../themes";
@@ -12,6 +12,7 @@ import { MiniScrubber } from "./preview/MiniScrubber";
 import { PreviewContextMenu } from "./preview/PreviewContextMenu";
 import { getCard } from "../kernel/registry";
 import { useLayoutMode } from "./layoutMode";
+import { fitView, frameOrigin, panBy, wheelZoomFactor, zoomAt, type View2D } from "./preview/viewport2d";
 import "./preview/preview.css";
 
 /**
@@ -37,8 +38,43 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
   const selection = useStore((s) => s.selection);
   const boxRef = useRef<HTMLDivElement>(null);
   const frameRef = useRef<HTMLIFrameElement>(null);
-  const [scale, setScale] = useState(0.4);
-  const [stageReady, setStageReady] = useState(false);
+  /**
+   * 怎么看这块画布:缩放多少、平移到哪、是不是还跟着窗口自动适应。换算见 preview/viewport2d.ts。
+   *
+   * `scale` 下面还有七八处在用(命中测试、拖动换算、描边框),所以在这里解出来一个同名的量,
+   * 那些地方一个字都不用改 —— 它们本来就只关心「一个画面像素在屏幕上是几像素」。
+   */
+  const [cam, setCam] = useState<View2D>({ scale: 0.4, tx: 0, ty: 0, auto: true });
+  const scale = cam.scale;
+  const camRef = useRef(cam);
+  camRef.current = cam;
+  /**
+   * 预览窗口有多大。**画框摆在哪儿由我们自己算**,所以这个尺寸得一直拿在手上。
+   *
+   * 本来是想省掉它的:外层是 grid + place-items:center,画面自己就在正中,
+   * 只要再叠一个「相对中心的偏移」就行。**实测发现这条路不通**:画框一旦比窗口高,
+   * 浏览器就不再居中了,而是把顶边贴到 0(grid 的 safe 对齐,怕内容溢出到够不着的地方)。
+   * 试过 `align-items: unsafe center` 强制真居中 —— 计算样式确实变了,画框照样贴顶。
+   * 而「画框比窗口大」正是放大之后的常态,也正是最需要拖动的时候。
+   * 于是改成:画框绝对定位在左上角,位置完全由 frameOrigin 算出来,浏览器不掺和。
+   */
+  const [boxSize, setBoxSize] = useState<{ width: number; height: number } | null>(null);
+  /**
+   * 渲染面就绪的**代数**,不是一个布尔。0 = 还没就绪,之后每换一个新的渲染面就 +1。
+   *
+   * 为什么不能是布尔:2D 那一页整棵子树(连同 iframe)挂在 `view === "3d" ? … : …` 的
+   * 另一支上,切到 3D 再切回来是**卸载再挂载**,iframe 是新的、里面的渲染面是空的。
+   * 而 `setStageReady(true)` 在已经是 true 时不改变 state,下面那两个 effect(下发
+   * project、下发时间)就不会重跑 —— 于是切回 2D 是一片空白,得去碰一下时间轴,
+   * 让 `t` 变一下把 render 那个 effect 逼出来,画面才回来。
+   *
+   * 换成代数之后,每来一次 `pc-stage-ready` 都是一个新值,两个 effect 必定重跑。
+   * 顺带也管住了别的换渲染面的路子(改画幅换 key、开发时热更新整页重载),
+   * 那些同样是「新的 iframe + 旧的 true」。
+   *
+   * `!stageReady` 对 0 照样成立,所以下面那几处判断一个字都不用改。
+   */
+  const [stageReady, setStageReady] = useState(0);
   const tRef = useRef(t);
   tRef.current = t;
   const playingRef = useRef(playing);
@@ -90,22 +126,123 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
     return () => cancelAnimationFrame(raf);
   }, [playing, project.duration]);
 
-  // 自适应缩放
+  /*
+   * 量一次窗口有多大,顺便在「自动适应」还开着时重新算缩放比。
+   *
+   * 两件事都要做,原因不同:
+   *   - 窗口尺寸**必须一直跟着量**,因为画框摆在哪儿是我们自己算的(见下面 frameOrigin),
+   *     算式里就有窗口宽高;
+   *   - 缩放比只在 auto 时重算。以前这里是无条件重算的,那时候没有手动缩放也就无所谓。
+   *     现在不行了:用户放大到 200% 去调一个字的位置,拖一下侧栏宽度(ResizeObserver 就响了),
+   *     画面「啪」地跳回适应窗口,刚找好的地方就没了。
+   *
+   * 用 useLayoutEffect 而不是 useEffect:第一次渲染时还不知道窗口多大,画框会先摆在左上角。
+   * 布局效应在浏览器绘制**之前**同步跑完并触发重渲染,所以那一帧用户看不见。
+   */
+  useLayoutEffect(() => {
+    const el = boxRef.current;
+    if (!el) return;
+    const measure = () => {
+      const r = el.getBoundingClientRect();
+      if (r.width < 1 || r.height < 1) return;
+      setBoxSize({ width: r.width, height: r.height });
+      if (camRef.current.auto) setCam(fitView(project, r));
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [project.width, project.height, view]);
+
+  /** 回到「适应窗口」。工具行那个徽章点一下就走这儿 */
+  const fitToWindow = useCallback(() => {
+    const el = boxRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    if (r.width < 1 || r.height < 1) return;
+    setCam(fitView({ width: project.width, height: project.height }, r));
+  }, [project.width, project.height]);
+
+  /*
+   * 滚轮缩放 + 中键拖动平移。
+   *
+   * 为什么不用 React 的 onWheel:React 17 起把 wheel 绑成**被动**监听器,
+   * 里面调 preventDefault 不但不起作用,还会在控制台报一行警告 ——
+   * 于是滚轮在缩放画面的同时把整个面板也滚了。只能自己 addEventListener 并显式关掉 passive。
+   *
+   * 依赖里只有画幅:cam 走 ref 读最新值,否则每缩放一格就要重新解绑重绑一次监听器。
+   */
   useEffect(() => {
     const el = boxRef.current;
     if (!el) return;
-    const ro = new ResizeObserver(() => {
-      const r = el.getBoundingClientRect();
-      setScale(Math.max(0.05, Math.min((r.width - 16) / project.width, (r.height - 16) / project.height)));
-    });
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [project.width, project.height]);
+    const box = () => el.getBoundingClientRect();
+    const size = { width: project.width, height: project.height };
+
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const r = box();
+      const factor = wheelZoomFactor(e.deltaY, e.deltaMode);
+      if (factor === 1) return;
+      const cur = camRef.current;
+      setCam(zoomAt(cur, size, r, { x: e.clientX - r.left, y: e.clientY - r.top }, cur.scale * factor));
+    };
+
+    /*
+     * 中键拖动:按住不放拖动画布。左键留给选择 / 移动工具(它自己判 button !== 0 就退出),
+     * 右键留给菜单,所以平移只认中键 —— 三个键各管一件事,不用按修饰键。
+     */
+    let panning = false;
+    let lastX = 0;
+    let lastY = 0;
+    const onDown = (e: PointerEvent) => {
+      if (e.button !== 1) return;
+      // 中键在很多浏览器上是「自动滚动」,不拦住就会弹出那个圆形滚动光标
+      e.preventDefault();
+      panning = true;
+      lastX = e.clientX;
+      lastY = e.clientY;
+      // 抓住指针,拖出预览区也照样跟手。指针要是已经没了(松开得比这行还早)会抛,不该因此中断拖动
+      try { el.setPointerCapture(e.pointerId); } catch { /* 没抓住就算了,照样能拖,只是出了区域会断 */ }
+      el.style.cursor = "grabbing";
+    };
+    const onMove = (e: PointerEvent) => {
+      if (!panning) return;
+      const dx = e.clientX - lastX;
+      const dy = e.clientY - lastY;
+      lastX = e.clientX;
+      lastY = e.clientY;
+      setCam(panBy(camRef.current, size, box(), dx, dy));
+    };
+    const stopPan = (e: PointerEvent) => {
+      if (!panning) return;
+      panning = false;
+      try { if (el.hasPointerCapture(e.pointerId)) el.releasePointerCapture(e.pointerId); } catch { /* 已经放开了 */ }
+      el.style.cursor = "";
+    };
+    // 中键按下默认会开自动滚动,auxclick 也要拦一下,否则松开时还会触发
+    const onAux = (e: MouseEvent) => { if (e.button === 1) e.preventDefault(); };
+
+    el.addEventListener("wheel", onWheel, { passive: false });
+    el.addEventListener("pointerdown", onDown);
+    el.addEventListener("pointermove", onMove);
+    el.addEventListener("pointerup", stopPan);
+    el.addEventListener("pointercancel", stopPan);
+    el.addEventListener("auxclick", onAux);
+    return () => {
+      el.removeEventListener("wheel", onWheel);
+      el.removeEventListener("pointerdown", onDown);
+      el.removeEventListener("pointermove", onMove);
+      el.removeEventListener("pointerup", stopPan);
+      el.removeEventListener("pointercancel", stopPan);
+      el.removeEventListener("auxclick", onAux);
+    };
+  }, [project.width, project.height, view]);
 
   // 渲染面就绪:它挂载完会 postMessage 过来;刷新顺序不定,onLoad 里再探一次
   useEffect(() => {
     const onMessage = (e: MessageEvent) => {
-      if (e.source === frameRef.current?.contentWindow && (e.data as any)?.type === "pc-stage-ready") setStageReady(true);
+      // 每来一次就 +1:同一个值再赋一遍不会触发重渲染,而新挂的 iframe 需要重新收一遍 project 和时间
+      if (e.source === frameRef.current?.contentWindow && (e.data as any)?.type === "pc-stage-ready") setStageReady((n) => n + 1);
     };
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
@@ -288,6 +425,9 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
     setEditingText(null);
   };
 
+  /** 画框左上角该摆在窗口的哪个位置。还没量到窗口大小时先不摆(那一帧在绘制前就过去了) */
+  const frameXY = boxSize ? frameOrigin(cam, project, boxSize) : null;
+
   return (
     <div className="pc-pv" data-pc="preview">
       <div className="pc-pv-tabs" data-pc="preview-tabs">
@@ -310,21 +450,32 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
         </div>
       ) : (
       <>
-      <ToolBar tool={tool} onToolChange={setTool} />
+      <ToolBar tool={tool} onToolChange={setTool} zoom={cam.scale} fitted={cam.auto} onFit={fitToWindow} />
 
       <div ref={boxRef} className="pc-pv-stage">
         <div
-          className="pc-pv-frame"
+          className="pc-pv-frame pc-checker"
           style={{
             width: project.width * scale,
             height: project.height * scale,
-            // 透明棋盘格必须比周围画布更暗、更弱(配色规范 04 条):原来是偏亮的中灰,
-            // 在近黑界面里成了最亮的一大块,把注意力从画面本身拽走。跟着皮肤走,不写死。
-            backgroundColor: "color-mix(in srgb, var(--ui-bg-2) 30%, var(--ui-panel))",
-            backgroundImage:
-              "linear-gradient(45deg,var(--ui-bg-2) 25%,transparent 25%,transparent 75%,var(--ui-bg-2) 75%),linear-gradient(45deg,var(--ui-bg-2) 25%,transparent 25%,transparent 75%,var(--ui-bg-2) 75%)",
-            backgroundSize: "32px 32px",
-            backgroundPosition: "0 0,16px 16px",
+            /*
+             * 位置完全由自己算(见 boxSize 那段说明:靠浏览器居中在放大之后会失准)。
+             * 绝对定位到左上角,再用 transform 挪到该在的地方 —— transform 不触发重排,
+             * 拖动时每一帧都在改它,用 left/top 会一路重排。
+             */
+            position: "absolute",
+            left: 0,
+            top: 0,
+            transform: frameXY ? `translate(${frameXY.x}px, ${frameXY.y}px)` : undefined,
+            /*
+             * 透明棋盘格搬到 .pc-checker 了(见 preview/preview.css)。
+             *
+             * 原来这儿内联写着另一套偏暗的值,理由是「配色规范 04 条:透明格要比周围画布更暗更弱」。
+             * 那条规矩本身没错,但它和这块底真正要回答的问题冲突:**这儿是不是什么都没有?**
+             * 底一暗,一张深色的卡和「什么都没画」就长得一模一样 —— see_preview 和 3D 视图
+             * 都因为这个踩过坑。而且 2D 和 3D 两页各用一套值,同一个项目在两页里
+             * 「透明」长得都不一样。所以统一到中灰那一套,和 see_preview 逐值对齐。
+             */
           }}
         >
           <div style={{ transform: `scale(${scale})`, transformOrigin: "0 0", position: "absolute", left: 0, top: 0, ...themeStyle(project.themeId) }}>
@@ -341,7 +492,8 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
                  */
                 src={`${location.pathname}?stage=1`}
                 onLoad={() => {
-                  if (frameRef.current?.contentWindow?.__pcStage) setStageReady(true);
+                  // 和上面的 postMessage 同一条路:也要 +1,不然消息比 onLoad 早到时这一次就白探了
+                  if (frameRef.current?.contentWindow?.__pcStage) setStageReady((n) => n + 1);
                 }}
                 style={{
                   position: "absolute",

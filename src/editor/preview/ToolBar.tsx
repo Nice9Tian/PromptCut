@@ -1,7 +1,7 @@
 /**
  * 预览工具行(配色诊断与修正 v2 整屏,中栏顶部)。
  * 直接铺在 L0 画布上,没有条底:三个 28 方工具钮(选中 L3 底 + 强调色描边),
- * 右侧是画幅 / 帧率的等宽小字和「适应窗口」小徽章。
+ * 右侧是画幅 / 帧率的等宽小字、当前缩放比,和「适应窗口」按钮。
  */
 import { useStore } from "../../store/project";
 import { IconCursor, IconText, IconMove } from "../../ui/icons";
@@ -15,7 +15,21 @@ const TOOLS: { key: ToolType; label: string; Icon: typeof IconCursor }[] = [
   { key: "text", label: "文字", Icon: IconText },
 ];
 
-export function ToolBar({ tool, onToolChange }: { tool: ToolType; onToolChange: (tool: ToolType) => void }) {
+export function ToolBar({
+  tool,
+  onToolChange,
+  zoom,
+  fitted,
+  onFit,
+}: {
+  tool: ToolType;
+  onToolChange: (tool: ToolType) => void;
+  /** 当前缩放比(1 = 一个画面像素占一个屏幕像素) */
+  zoom: number;
+  /** 是不是正跟着窗口自动适应 */
+  fitted: boolean;
+  onFit: () => void;
+}) {
   const width = useStore((s) => s.project.width);
   const height = useStore((s) => s.project.height);
   const fps = useStore((s) => s.project.fps);
@@ -34,9 +48,23 @@ export function ToolBar({ tool, onToolChange }: { tool: ToolType; onToolChange: 
         </button>
       ))}
       <span className="pc-pv-meta">
-        {width} × {height} · {fps} fps
+        {width} × {height} · {fps} fps · {Math.round(zoom * 100)}%
       </span>
-      <span className="pc-pv-badge">适应窗口</span>
+      {/*
+        以前这里是个 <span>,写着「适应窗口」却点不动 —— 它只是在陈述「现在正适应着窗口」,
+        可是看起来就是个按钮,点了没反应。现在滚轮能缩放、中键能平移了,
+        它才有事可做:自己调过视角之后点一下回到适应窗口。
+        还在自动适应时按钮是禁用的(点了也没有任何变化,不如直接说明白)。
+      */}
+      <button
+        type="button"
+        className={`pc-pv-badge pc-pv-fit${fitted ? " is-on" : ""}`}
+        onClick={onFit}
+        disabled={fitted}
+        title={fitted ? "画面正跟着窗口自动适应。滚轮缩放、中键拖动平移" : "回到适应窗口(滚轮缩放、中键拖动平移)"}
+      >
+        适应窗口
+      </button>
     </div>
   );
 }

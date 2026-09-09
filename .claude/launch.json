@@ -12,6 +12,12 @@
       "runtimeExecutable": "npx",
       "runtimeArgs": ["vite", "--port", "5197", "--strictPort", "--host", "127.0.0.1"],
       "port": 5197
+    },
+    {
+      "name": "dev-2d",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["vite", "--port", "5198", "--strictPort", "--host", "127.0.0.1"],
+      "port": 5198
     }
   ]
 }
