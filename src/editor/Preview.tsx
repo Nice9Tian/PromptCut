@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { MediaLayers } from "./preview/MediaLayers";
+import { Scene3DView } from "./preview/Scene3DView";
 import { themeStyle } from "../themes";
 import { actions, getState, useStore } from "../store/project";
 import { videoLayersAt, findClip } from "../kernel/project";
@@ -43,6 +44,11 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
   const playingRef = useRef(playing);
   playingRef.current = playing;
 
+  /*
+   * 预览分两页。2D 是成片(预览所见 = 导出所得),3D 是"这些东西在空间里怎么摆"。
+   * 两页各自回答一个问题,不要互相迁就 —— 2D 里出现代理色块就是把它的契约破了。
+   */
+  const [view, setView] = useState<"2d" | "3d">("2d");
   const [tool, setTool] = useState<ToolType>("select");
   const [rects, setRects] = useState<{ clipId: string; left: number; top: number; width: number; height: number }[]>([]);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; clipId: string; cardId: string } | null>(null);
@@ -167,18 +173,6 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
     setTimeout(refreshRects, 50);
   }, [stageReady, project, stage, refreshRects]);
 
-  /*
-   * 实体模式的挡位:**播放中 = 色块,暂停 = 真渲**。
-   *
-   * 这是最省事的调度,也基本够用 —— 不需要 requestIdleCallback、不需要优先级队列,
-   * 而且符合剪辑软件的直觉:一边看一边判断构图,停下来才看细节。
-   * 真要更细,再按「离播放头的距离」分批升级。
-   */
-  useEffect(() => {
-    if (!stageReady) return;
-    stage()?.setProxy(playing);
-  }, [stageReady, playing, stage]);
-
   // 时间变了就下发。播放中是连续推进;拖播放头 / 跳转 / 重播(playToken 变)都按跳转处理:
   // 重挂载 + 从入点补跑到那一刻。两者合在一个 effect 里,一次 seek 只渲染一帧。
   useEffect(() => {
@@ -296,6 +290,26 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
 
   return (
     <div className="pc-pv" data-pc="preview">
+      <div className="pc-pv-tabs" data-pc="preview-tabs">
+        {([["2d", "2D"], ["3d", "3D"]] as const).map(([id, label]) => (
+          <button
+            key={id}
+            type="button"
+            className={view === id ? "is-on" : undefined}
+            onClick={() => setView(id)}
+            title={id === "2d" ? "成片预览:所见即导出所得" : "三维视图:像 Blender 那样绕着看这些卡在空间里怎么摆"}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {view === "3d" ? (
+        <div className="pc-pv-stage" style={{ position: "relative" }}>
+          <Scene3DView project={project} t={t} />
+        </div>
+      ) : (
+      <>
       <ToolBar tool={tool} onToolChange={setTool} />
 
       <div ref={boxRef} className="pc-pv-stage">
@@ -320,9 +334,12 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
                 ref={frameRef}
                 data-pc="stage-frame"
                 title="预览舞台"
-                // proxy=1 只加在编辑台这一处:实体模式是给人浏览用的,
-                // 导出(?export=1)和 see_preview 都不该看到色块(见 render/solidMode.ts)
-                src={`${location.pathname}?stage=1&proxy=1`}
+                /*
+                 * 这里**不加 proxy=1**:2D 预览的契约是「预览所见 = 导出所得」,
+                 * 播放时换成色块就把这条破了 —— 用户按播放是要看成片长什么样,
+                 * 不是要看构图草图。代理只活在 3D 视图里,而且只是烘焙没跟上时的过渡。
+                 */
+                src={`${location.pathname}?stage=1`}
                 onLoad={() => {
                   if (frameRef.current?.contentWindow?.__pcStage) setStageReady(true);
                 }}
@@ -377,6 +394,8 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
           </div>
         </div>
       </div>
+      </>
+      )}
       
       <ControlBar />
       {showMiniScrubber && <MiniScrubber />}

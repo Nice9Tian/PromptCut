@@ -277,6 +277,114 @@ function originOf(server: ViteDevServer): string {
  * (实测)。没有素材时帧帧静止,几秒就到。素材那一层由 ffmpeg 抽那一帧,在
  * vision-compose.mjs 里按同样的规则合成到卡片下面。
  */
+/**
+ * 烘一张卡成图片,**按输入做缓存**。单张 bake_card 和 3D 视图的批量都走这里。
+ *
+ * 缓存键是「输入」的哈希 —— 卡片内容 + 时刻 + 尺寸 + 底色 + 主题。所以同一张卡同样的参数
+ * 只会真渲一次(4.7~6.5 秒),之后命中就是一次 fs.access,零成本。
+ * 这正是「一般来说用户都是烘焙好的、不用代理」能成立的前提:代理只覆盖第一次那几秒。
+ *
+ * 键里**不能**用输出的哈希:那要先渲出来才知道叫什么,等于永远不命中。
+ */
+async function bakeOne(
+  root: string,
+  origin: string,
+  project: any,
+  clipId: string,
+  t: number,
+  size: unknown,
+  bg: unknown,
+): Promise<any> {
+  const iso = isolateClip(project, clipId);
+  if (!iso) throw new Error(`时间轴上没有 id 为 ${clipId} 的片段。`);
+  if (iso.clip.mediaId) throw new Error("这是素材段(视频 / 图片),本来就是位图,直接把它的 URL 当纹理用即可,不用烘。");
+
+  // 画布改成正方形:纹理贴到立体表面上,原始 16:9 会被拉变形。
+  // 卡片按新画幅重新排版(它们本来就是响应式的),所以这不是裁切,是重排。
+  const px = Math.min(2048, Math.max(256, Math.round(Number(size) || 1024)));
+  // 没给时间就取这一段的中点 —— 起止两端常卡在进场 / 退场动画上,烘出来是个半透明中间态
+  const at = Number.isFinite(t) ? t : (iso.clip.start + iso.clip.end) / 2;
+  const rgb = typeof bg === "string" ? /^#?([0-9a-f]{6})$/i.exec(bg.trim()) : null;
+
+  const key = createHash("sha1")
+    .update(JSON.stringify({ clip: iso.clip, theme: project.themeId, at, px, bg: rgb ? rgb[1].toLowerCase() : null }))
+    .digest("hex").slice(0, 12);
+  const name = `bake-${clipId.replace(/[^w.-]/g, "_")}-${key}.png`;
+  const dir = mediaDir(root);
+  await fsp.mkdir(dir, { recursive: true });
+  const file = path.join(dir, name);
+  const url = `/@media/${encodeURIComponent(name)}`;
+
+  const hint = rgb
+    ? "不透明贴图:贴上去是「实心物体表面印着这张卡」。把 url 填进 scene-3d 的 texture 参数。"
+    : "透明底贴图:贴上去物体在卡片没画的地方也是透空的,内容像浮在空间里(适合标志 / 招牌)。想要「实心立方体表面印着这张卡」就重烘一次并传 bg(比如 bg:\"#0b0f17\")。";
+  const note = "这是一张**快照**:卡片的动画定格在 t 这一帧,之后改卡片参数贴图不会跟着变,要重新烘。";
+
+  // 缓存命中:同样的输入烘过了,直接给 URL
+  try {
+    const st = await fsp.stat(file);
+    return { clipId, url, t: at, width: px, height: px, bytes: st.size, cached: true, hint, note };
+  } catch { /* 没烘过,往下渲 */ }
+
+  let raw = await enqueue(() => renderOneFrame(root, origin, { ...iso.project, width: px, height: px }, at, []));
+
+  /*
+   * 底色决定贴上去是什么观感,而这个选择只该在**烘的时候**做一次:
+   *   不传 bg → 透明底,物体在卡片没画的地方也透空(挖空观感,适合标志 / 招牌);
+   *   传了 bg → 压平成不透明,实心物体表面印着这张卡。
+   * 放在这里而不是放到卡片上,是因为卡片那边只能对整张贴图开或关 transparent,
+   * 分不清「这块本来就该透」和「这块只是卡片没画」。
+   */
+  if (rgb) {
+    const v = parseInt(rgb[1], 16);
+    const [br, bgc, bb] = [(v >> 16) & 255, (v >> 8) & 255, v & 255];
+    const img = PNG.sync.read(raw);
+    for (let i = 0; i < img.data.length; i += 4) {
+      const a = img.data[i + 3] / 255;
+      img.data[i] = Math.round(img.data[i] * a + br * (1 - a));
+      img.data[i + 1] = Math.round(img.data[i + 1] * a + bgc * (1 - a));
+      img.data[i + 2] = Math.round(img.data[i + 2] * a + bb * (1 - a));
+      img.data[i + 3] = 255;
+    }
+    raw = PNG.sync.write(img);
+  }
+
+  const png = PNG.sync.read(raw);
+  let clear = 0;
+  for (let i = 3; i < png.data.length; i += 4) if (png.data[i] === 0) clear++;
+  await fsp.writeFile(file, raw);
+  return {
+    clipId, url, t: at, width: png.width, height: png.height, bytes: raw.length, cached: false,
+    transparentRatio: Math.round((clear / (png.width * png.height)) * 1000) / 1000,
+    hint, note,
+  };
+}
+
+/** 跑一次 export-frames 子进程。单张和批量共用同一套超时 / 报错处理 */
+function runExport(root: string, args: string[]): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const child = spawn(process.execPath, args, { cwd: root });
+    const tail: string[] = [];
+    const keep = (chunk: Buffer) => { tail.push(chunk.toString()); if (tail.length > 20) tail.shift(); };
+    child.stdout.on("data", keep);
+    child.stderr.on("data", keep);
+    const timer = setTimeout(() => {
+      if (process.platform === "win32" && child.pid) spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], { stdio: "ignore" });
+      else child.kill("SIGKILL");
+      reject(new Error(`渲染超时(${RENDER_TIMEOUT_MS / 1000} 秒)。`));
+    }, RENDER_TIMEOUT_MS);
+    child.on("error", (e) => { clearTimeout(timer); reject(e); });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      if (code === 0) return resolve();
+      const msg = tail.join("").trim().slice(-600);
+      reject(new Error(code === 3221225794
+        ? "渲染进程启动失败(0xC0000142)。同时开着的浏览器实例太多,等导出跑完再看图。"
+        : `渲染进程异常退出(代码 ${code})${msg ? `:${msg}` : ""}`));
+    });
+  });
+}
+
 async function renderOneFrame(root: string, origin: string, project: any, t: number, notes: string[]): Promise<Buffer> {
   const id = `vision-${Date.now().toString(36)}-${counter++}`;
   const dir = path.resolve(outRoot(root), `export-${id}`);
@@ -473,6 +581,47 @@ export function visionPlugin(): Plugin {
        * 卡片的动画定格在 t 那一帧;卡片参数改了纹理不会跟着变,要重新烘。
        * 这个限制看得见(画面明显停住),所以可以接受 —— 静默的分叉才是不能接受的那种。
        */
+      /**
+       * POST /api/vision/bake-batch { project, clips: [{clipId, t}], size, bg } —— 一次问一批。
+       *
+       * 给 3D 视图用的(不是 MCP 工具,Agent 那边用单张的 bake_card 就够)。
+       * 实现上就是**顺着烘**,快在缓存:文件名按「输入」算哈希(卡片内容 + t + size + bg),
+       * 所以同一张卡同样的参数只会真渲一次,之后开多少次 3D 视图都是文件已存在、直接返回。
+       *
+       * 试过把 N 张摊进一个项目的 N 个时间槽、一趟渲完,实测 4 张 18.7 秒,而单张 4.7~6.5 秒 ——
+       * 一点没快:瓶颈不是起 Chrome,是那条路要**逐帧走完整条时间轴**(4 张卡摊开就是 120 帧),
+       * 而 export-frames 的 --frames 只收连续区间,挑不出那 4 帧。所以那条路撤掉了,
+       * 真正的快法是命中缓存 —— 用户手里的卡大多是烘过的,这也正是「一般不用代理」的前提。
+       */
+      server.middlewares.use("/api/vision/bake-batch", (req, res) => {
+        if (req.method !== "POST") return sendJson(res, 405, { ok: false, error: "POST only" });
+        let body = "";
+        let over = false;
+        req.on("data", (c) => { if (over) return; body += c; over = overLimit(req, res, body.length, 64 * 1024 * 1024, "请求体超过 64MB"); });
+        req.on("end", async () => {
+          if (over) return;
+          try {
+            const { project, clips, size, bg } = JSON.parse(body || "{}");
+            if (!project || !Array.isArray(project.tracks)) return sendJson(res, 400, { ok: false, error: "缺少 project" });
+            if (!Array.isArray(clips) || !clips.length) return sendJson(res, 400, { ok: false, error: "缺少 clips" });
+            const resolved = resolveMediaUrls(project).project;
+            const baked: any[] = [];
+            const failed: any[] = [];
+            for (const c of clips) {
+              if (!c || typeof c.clipId !== "string") continue;
+              try {
+                baked.push(await bakeOne(root, originOf(server), resolved, c.clipId, Number(c.t), size, bg));
+              } catch (e: any) {
+                // 一张失败不拖垮整批 —— 3D 视图那边继续给它显示代理色块
+                failed.push({ clipId: c.clipId, error: e?.message || String(e) });
+              }
+            }
+            sendJson(res, 200, { ok: true, baked, failed });
+          } catch (e: any) {
+            sendJson(res, 500, { ok: false, error: e?.message || String(e) });
+          }
+        });
+      });
       server.middlewares.use("/api/vision/bake", (req, res) => {
         if (req.method !== "POST") return sendJson(res, 405, { ok: false, error: "POST only" });
         let body = "";
@@ -484,71 +633,8 @@ export function visionPlugin(): Plugin {
             const { project, clipId, t, size, bg } = JSON.parse(body || "{}");
             if (!project || !Array.isArray(project.tracks)) return sendJson(res, 400, { ok: false, error: "缺少 project" });
             if (!clipId) return sendJson(res, 400, { ok: false, error: "缺少 clipId:烘焙只能对着一张卡" });
-
-            const iso = isolateClip(resolveMediaUrls(project).project, clipId);
-            if (!iso) return sendJson(res, 404, { ok: false, error: `时间轴上没有 id 为 ${clipId} 的片段。` });
-            if (iso.clip.mediaId) return sendJson(res, 400, { ok: false, error: "这是素材段(视频 / 图片),本来就是位图,直接把它的 URL 当纹理用即可,不用烘。" });
-
-            /*
-             * 画布改成正方形:纹理贴到立体表面上,原始 16:9 会被拉变形。
-             * 卡片按新画幅重新排版(它们本来就是响应式的),所以这不是裁切,是重排。
-             */
-            const px = Math.min(2048, Math.max(256, Math.round(Number(size) || 1024)));
-            // 没给时间就取这一段的中点 —— 起止两端常卡在进场 / 退场动画上,烘出来是个半透明中间态
-            const at = Number.isFinite(Number(t)) ? Number(t) : (iso.clip.start + iso.clip.end) / 2;
-            const target = { ...iso.project, width: px, height: px };
-
-            let raw = await enqueue(() => renderOneFrame(root, originOf(server), target, at, []));
-
-            /*
-             * 底色决定贴上去是什么观感,而这个选择只该在**烘的时候**做一次:
-             *
-             *   不传 bg(透明底)→ 物体表面在卡片透明的地方也跟着透明,得到「挖空」效果:
-             *                      内容像浮在空间里,立方体本身看不见。适合标志、招牌。
-             *   传了 bg        → 压平成不透明,得到「实心物体表面贴着这张卡」。
-             *                      大多数人说「把卡贴到立方体上」要的是这个。
-             *
-             * 放在这里而不是放到卡片上,是因为卡片那边只能对整张贴图开或关 transparent,
-             * 分不清「这块本来就该透」和「这块只是卡片没画」。底色在烘的时候就定死最干净。
-             */
-            const rgb = typeof bg === "string" ? /^#?([0-9a-f]{6})$/i.exec(bg.trim()) : null;
-            if (rgb) {
-              const v = parseInt(rgb[1], 16);
-              const [br, bgc, bb] = [(v >> 16) & 255, (v >> 8) & 255, v & 255];
-              const p = PNG.sync.read(raw);
-              for (let i = 0; i < p.data.length; i += 4) {
-                const a = p.data[i + 3] / 255;
-                p.data[i] = Math.round(p.data[i] * a + br * (1 - a));
-                p.data[i + 1] = Math.round(p.data[i + 1] * a + bgc * (1 - a));
-                p.data[i + 2] = Math.round(p.data[i + 2] * a + bb * (1 - a));
-                p.data[i + 3] = 255;
-              }
-              raw = PNG.sync.write(p);
-            }
-
-            const png = PNG.sync.read(raw);
-            let clear = 0;
-            for (let i = 3; i < png.data.length; i += 4) if (png.data[i] === 0) clear++;
-            const total = png.width * png.height;
-
-            const name = `bake-${clipId}-${Math.round(at * 1000)}-${createHash("sha1").update(raw).digest("hex").slice(0, 8)}.png`;
-            const dir = mediaDir(root);
-            await fsp.mkdir(dir, { recursive: true });
-            await fsp.writeFile(path.join(dir, name), raw);
-
-            sendJson(res, 200, {
-              ok: true,
-              url: `/@media/${encodeURIComponent(name)}`,
-              width: png.width,
-              height: png.height,
-              t: at,
-              transparentRatio: Math.round((clear / total) * 1000) / 1000,
-              bytes: raw.length,
-              hint: rgb
-                ? "不透明贴图:贴上去是「实心物体表面印着这张卡」。把 url 填进 scene-3d 的 texture 参数。"
-                : "透明底贴图:贴上去物体在卡片没画的地方也是透空的,内容像浮在空间里(适合标志 / 招牌)。想要「实心立方体表面印着这张卡」就重烘一次并传 bg(比如 bg:\"#0b0f17\")。",
-              note: "这是一张**快照**:卡片的动画定格在 t 这一帧,之后改卡片参数贴图不会跟着变,要重新烘。",
-            });
+            const out = await bakeOne(root, originOf(server), resolveMediaUrls(project).project, clipId, Number(t), size, bg);
+            sendJson(res, 200, { ok: true, ...out });
           } catch (e: any) {
             sendJson(res, 500, { ok: false, error: e?.message || String(e) });
           }

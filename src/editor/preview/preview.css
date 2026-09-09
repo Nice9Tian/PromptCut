@@ -57,6 +57,30 @@
   white-space: nowrap;
 }
 
+/* ── 2D / 3D 分页 ───────────────────────────────────────────────────── */
+/* 两页回答的是不同的问题:2D 是成片长什么样,3D 是这些东西在空间里怎么摆。 */
+.pc-pv-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 4px 6px 0;
+  flex: 0 0 auto;
+}
+.pc-pv-tabs button {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--ui-text-2, #94a3b8);
+  font: 12px/1 system-ui, sans-serif;
+  padding: 5px 12px;
+  border-radius: 5px 5px 0 0;
+  cursor: pointer;
+}
+.pc-pv-tabs button:hover { color: var(--ui-fg); }
+.pc-pv-tabs button.is-on {
+  color: var(--ui-fg);
+  background: color-mix(in srgb, var(--ui-bg-2) 55%, var(--ui-panel));
+}
+
 /* ── 画面 ───────────────────────────────────────────────────────────── */
 .pc-pv-stage {
   flex: 1;
