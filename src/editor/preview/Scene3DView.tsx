@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { useBakePrefetch, beginForegroundBake, endForegroundBake, canonFrameT } from "./useBakePrefetch";
 import { clipFingerprint, markBaked, momentId } from "./bakeCoverage";
+import { measureImageBox, worthCropping } from "./alphaBox";
 import { flattenOverlay, type Project } from "../../kernel/project";
 import { placeClip3D } from "./place3d";
 import { frustum2d } from "./frustum2d";
@@ -135,14 +136,42 @@ export function Scene3DView({ project, t }: Props) {
    * 退回低帧率仍然守着原来那条规矩:`pickBakeT` 只往回取(floor),所以看到的一定是
    * **已经发生过的**那一刻,最多差 0.25 秒,不会把还没播到的画面提前显示出来。
    */
-  const bakeTOf = (c: TimedClip) => {
+  /** 播放头这一刻对应的**原始帧率**那一格 —— 也就是成片里真会出现的那一帧 */
+  const fineTOf = (c: TimedClip) => {
     const motion = motionOf(getCard(c.cardId) as any, c.params);
     const fps = Math.max(1, projRef.current.fps || 30);
-    const fine = canonFrameT(pickBakeT(c, motion, t, { stepSec: 1 / fps }), c.start, fps);
+    return canonFrameT(pickBakeT(c, motion, t, { stepSec: 1 / fps }), c.start, fps);
+  };
+  const bakeTOf = (c: TimedClip) => {
+    const fine = fineTOf(c);
     if (moments.current.has(texKeyOf(c, fine))) return fine;
+    const motion = motionOf(getCard(c.cardId) as any, c.params);
+    const fps = Math.max(1, projRef.current.fps || 30);
     return canonFrameT(pickBakeT(c, motion, t), c.start, fps);
   };
   const momentKey = (c: TimedClip) => texKeyOf(c, bakeTOf(c));
+  /*
+   * 播放头**停住**了没有。停住 = 用户在盯着这一帧看,那就值得把它自己那一帧烘出来。
+   *
+   * 为什么要分这一下:粗粒度那一档(黄条)是 0.25 秒一格的替身,拖动时它很划算 ——
+   * 一张图管一片区域,拖过去不用每落一个位置就渲一次(单张四五秒)。但停下来之后它就
+   * 不够了:实测播放头停在第 121 帧,三维要的是第 120 帧,和二维差整整一帧。
+   * 拖动中不补(省渲染),停下来才补(要准),两头都占得住。
+   */
+  /*
+   * 前台烘成功一次就 +1。**只有成功才加。**
+   *
+   * 要它是因为 momentSig 盯不住这件事:贴图缓存是个 ref,粗粒度那张落地之后 momentSig 一个字都没变
+   * (bakeTOf 前后都返回同一个粗粒度时刻),效果不重跑,下面「停住了就补烘精确帧」那条路就永远够不着。
+   * 失败不加是防死循环:失败后要烘的还是那几张,加了就会一直重试。
+   */
+  const [bakeGen, setBakeGen] = useState(0);
+  const [parked, setParked] = useState(false);
+  useEffect(() => {
+    setParked(false);
+    const id = setTimeout(() => setParked(true), 500);
+    return () => clearTimeout(id);
+  }, [t]);
   /**
    * 按**时刻**存的贴图:`texKeyOf(clip, 那一刻)` → URL。前台现烘的和预烘拿回来的都进这里,
    * 一个键只对应一张图,所以「板子上贴的到底是哪一刻」永远是确定的。
@@ -335,9 +364,24 @@ export function Scene3DView({ project, t }: Props) {
     // 摆位每帧重算,所以要留着这几个 group 的引用
     const placed: { clipId: string; pivot: any; inner: any; spin: any; tilt: any; mesh: any }[] = [];
 
+    /*
+     * 画家序的序号。**谁盖住谁只看序列顺序,不看 Z** —— 这是成片那边写死的约定。
+     *
+     * 成片(Stage.tsx)故意**不加** `transform-style: preserve-3d`,那里有实测三行表:
+     * 加了它,兄弟卡片就从「按 DOM 顺序叠」变成「按 z 深度排序」,于是 Agent 把最上层的卡
+     * 往里推一点(translateZ 负值)会立刻被下面所有卡盖住 —— 和工具描述承诺的相反。
+     *
+     * 而这个视图里,板子材质是 transparent,three.js 对透明队列走 reversePainterSortStable:
+     * 没有 renderOrder 就**按 z 排**,而 `tilt.position.z = pl.translateZ` 让卡片本来就各有各的 z。
+     * 也就是说这里以前是让 translateZ 主导遮挡的,正好和成片相反,而且不报错。
+     * 显式钉上画家序,两边才是同一套规矩。
+     */
+    let order = 0;
+
     for (const clip of active) {
       // 正负号全在 place3d.ts 里,那边有单测钉着(见它的说明)
       const pl = placeClip3D(clip.frame, stage);
+      const renderOrder = order++;
 
       // 摆位那一串 group 是共用的:平板和真三维物件都挂在它里面
       const pivot = new THREE.Group();
@@ -370,6 +414,9 @@ export function Scene3DView({ project, t }: Props) {
         const mat = materialOf(THREE, params);
         const mesh = new THREE.Mesh(geo, mat);
         mesh.position.set(...pl.meshOffset);
+        // 不带贴图时它是不透明的(走 opaque 队列、自己写深度),renderOrder 只影响绘制先后不影响结果;
+        // 一旦 applyTexture 把它转成 transparent,就和板子排在同一个队列里,这时候这一行是必须的
+        mesh.renderOrder = renderOrder;
         inner.add(mesh);
         mesh.userData.clipId = clip.id;
         pickables.push(mesh);
@@ -402,6 +449,7 @@ export function Scene3DView({ project, t }: Props) {
       });
       const mesh = new THREE.Mesh(geo, mat);
       mesh.position.set(...pl.meshOffset);
+      mesh.renderOrder = renderOrder;   // 见上面「画家序」那段
       inner.add(mesh);
       mesh.userData.clipId = clip.id;
       pickables.push(mesh);
@@ -416,9 +464,45 @@ export function Scene3DView({ project, t }: Props) {
        * 一张看着像真的、其实是别的时刻的画面,会被当成这一刻的依据传下去 ——
        * 那正是「界面上 0.2 秒、板子上 1.0 秒」这个 bug 的本体,换个时刻再犯一遍没有意义。
        */
+      /*
+       * **把整屏的板子裁成内容那一块。**
+       *
+       * 绝大多数卡没写 frame.w/h,它们的框就是整幅舞台 —— 于是每块板子都是屏幕大小、
+       * 外形一模一样,里面 70~90% 是全透明的。一摞这样的透明片摆在空间里,
+       * 「东西是怎么摆的」根本看不出来,而那正是这个视图存在的理由。
+       *
+       * 内容框从**贴图自己**量(alpha 包围盒)。烘焙的排版尺寸修对之后,贴图画布和卡片的框
+       * 是 1:1 的,所以量出来的相对位置直接就是「四个角在这张卡的框里的位置」——
+       * 拿它从这块屏幕平面上裁一小块,再把贴图的对应区域映上去,位置天然是对的。
+       *
+       * 量不出来、或者本来就铺满(满屏渐变底那种)就保持整块 —— 那种卡**就该**是一整块板子。
+       */
+      const cropToContent = (tex: any) => {
+        const box = measureImageBox(tex.image);
+        if (!worthCropping(box) || !box) return;
+        const W = pl.size.width, H = pl.size.height;
+        const nextGeo = new THREE.PlaneGeometry(W * box.w, H * box.h);
+        const old = mesh.geometry;
+        mesh.geometry = nextGeo;
+        old.dispose();
+        disposables.push(nextGeo);
+        /*
+         * 把板子挪到内容框的中心。平面自己是以原点为中心的,而内容框多半不在正中,
+         * 不挪的话贴图看着就整体偏了 —— 这一步和 UV 那一步必须成对,少一个都会错位。
+         */
+        const dx = (box.x + box.w / 2) * W - W / 2;
+        const dy = H / 2 - (box.y + box.h / 2) * H;   // three 的 y 朝上,图片坐标朝下
+        mesh.position.set(pl.meshOffset[0] + dx, pl.meshOffset[1] + dy, pl.meshOffset[2]);
+        // 贴图只显示这一块。three 的 UV 原点在左下,所以 y 要翻过来
+        tex.repeat.set(box.w, box.h);
+        tex.offset.set(box.x, 1 - box.y - box.h);
+        tex.needsUpdate = true;
+      };
+
       const apply = (url: string, precise = false) => {
         if (!precise) return; // 预烘那条路不带时刻,它给的图只进缓存,不上板子
-        const tex = applyTexture(THREE, mat, url, () => {
+        const tex = applyTexture(THREE, mat, url, (loaded: any) => {
+          cropToContent(loaded);
           mat.color.set(0xffffff);
           mat.opacity = 1;
           renderer.render(scene, camera);
@@ -560,7 +644,21 @@ export function Scene3DView({ project, t }: Props) {
       // 没有就**立刻**打回色块。留着上一刻的图不动,等于把一个错的画面继续传下去
       else { proxy.current.get(c.id)?.(); need.push(c); }
     }
-    if (!need.length) {
+    /*
+     * 这一轮要烘哪些、各烘哪一刻。两种情形:
+     *   need 非空 —— 板子上现在是色块,按 bakeTOf 烘。那可能是粗粒度那一档(0.25 秒一格),
+     *                拖动时这很划算:一张图管一片区域,不用每落一个位置就渲四五秒。
+     *   need 为空、但播放头**停住**了 —— 画面已经有了,可它可能只是那个替身。
+     *                用户在盯着看,补烘播放头自己那一帧(实测停在第 121 帧时,
+     *                三维拿的是第 120 帧,和二维差整整一帧)。
+     * 拖动中不补(省渲染),停住才补(要准)。
+     */
+    const asks = need.length
+      ? need.map((c) => ({ clip: c, at: bakeTOf(c) }))
+      : parked
+        ? flat.filter((c) => !moments.current.has(texKeyOf(c, fineTOf(c)))).map((c) => ({ clip: c, at: fineTOf(c) }))
+        : [];
+    if (!asks.length) {
       /*
        * 一张都不用烘(拖回了已经预渲染的地方)。**这里必须把「正在烘」清掉** ——
        * 上一次的 effect 是被 cleanup 掐掉的(dead),它 finally 里那句清理带着 `!dead` 判断,
@@ -571,8 +669,8 @@ export function Scene3DView({ project, t }: Props) {
       return;
     }
     let dead = false;
-    setPending(need.length);
-    setBakingAt(bakeTOf(need[0]));
+    setPending(asks.length);
+    setBakingAt(asks[0].at);
     /*
      * **换到别的时刻就把上一次的请求掐掉。**
      *
@@ -598,7 +696,7 @@ export function Scene3DView({ project, t }: Props) {
           body: JSON.stringify({
             project,
             // 要的是**播放头这一刻**吸附到格子上的那一刻,不是片段中点(见 bakeTime.ts)
-            clips: need.map((c) => ({ clipId: c.id, t: bakeTOf(c) })),
+            clips: asks.map((a) => ({ clipId: a.clip.id, t: a.at })),
             size: 1024,
             /*
              * 插队。用户正盯着这块板子等它变成真图,而队里可能排着一长串没人等的预烘 ——
@@ -614,14 +712,16 @@ export function Scene3DView({ project, t }: Props) {
           throw new Error(data.error || `烘焙失败(HTTP ${res.status})`);
         }
         for (const b of data.baked ?? []) {
-          const c = need.find((x) => x.id === b.clipId);
+          const a = asks.find((x) => x.clip.id === b.clipId);
           /*
            * **烘出来的一定进缓存,哪怕播放头已经挪走了**(dead)。花了四五秒渲的这一张,
            * 键就是「那一刻」,扔掉的话拖回去还得再等一遍。
            * 但只有播放头还停在这一刻时才往板子上贴 —— 挪走了还贴,贴的就是别的时刻的画面。
            */
-          if (c) moments.current.set(momentKey(c), b.url);
-          if (!dead) swap.current.get(b.clipId)?.(b.url, true);
+          // 存到**我们要的那一刻**上,不是 momentKey —— 补烘精确帧时这两个键不是同一个
+          if (a) moments.current.set(texKeyOf(a.clip, a.at), b.url);
+          // 存完再算 momentKey:精确帧一进缓存,bakeTOf 就改口选它,这里正好对上、换上去
+          if (!dead && a && texKeyOf(a.clip, a.at) === momentKey(a.clip)) swap.current.get(b.clipId)?.(b.url, true);
           /*
            * **同时告诉时间轴那条进度条。**
            *
@@ -629,9 +729,11 @@ export function Scene3DView({ project, t }: Props) {
            * 画面已经换成真图了,时间轴上那一段还是空的 —— 要等下一轮盘点(最长几秒)才补上,
            * 看起来就是"条子慢半拍"。这里补一句,两条路就都记账了。
            */
-          markBaked([momentId(b.clipId, b.t)]);
+          markBaked([momentId(b.clipId, a ? a.at : b.t)]);
         }
         if (dead) return;
+        // 烘成了就让这个 effect 再跑一轮:刚落地的可能只是粗粒度那张,停住时还要补精确帧
+        if (data.baked?.length) setBakeGen((g) => g + 1);
         if (data.failed?.length) setErr(`${data.failed.length} 张没烘出来:${data.failed[0].error}`);
       } catch (e: any) {
         // 被 cleanup 掐掉的不算出错:那是用户挪走了播放头,本来就不该再等它
@@ -645,7 +747,7 @@ export function Scene3DView({ project, t }: Props) {
     // momentSig 在依赖里:拖时间轴换到别的时刻要重新取图。但它**不在建场景那个 effect 的
     // 依赖里**,所以只是换 material.map,场景不重建。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sig, momentSig]);
+  }, [sig, momentSig, parked, bakeGen]);
 
   /* ── 预烘好的贴图一到就收进「按时刻」的缓存,轮到那一刻就用得上 ─────── */
   useEffect(() => {

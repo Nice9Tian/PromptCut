@@ -1,4 +1,8 @@
-import { Project, Track } from "../../kernel/project";
+// 只当类型用 —— 写成 import type,node 的类型剥离会把整行抹掉,单测就不用去解析
+// 那个没写扩展名的路径了(否则 node --test 直接 ERR_MODULE_NOT_FOUND)
+import type { Project, Track } from "../../kernel/project";
+// 带 .ts 后缀:单测用 node --test 直接跑源码,不写后缀它解析不到(仓库里已有这种写法)
+import { atFrameGrid } from "../../render/frameGrid.ts";
 
 /** 轨道行高配置 */
 export type RowSize = "small" | "medium" | "large";
@@ -84,7 +88,18 @@ export function snapTime(
   ignoreClipId?: string,
   pxPerSec: number = 100
 ) {
-  if (altKey) return time;
+  /*
+   * **一律落到帧格上**,alt 也不例外。
+   *
+   * alt 的意思是「别吸到别的片段和整秒上」,不是「可以停在成片里不存在的时刻」——
+   * 成片逐帧渲,一条 4.041s 开始的片段在成片里其实从第 122 帧(4.0667s)开始。
+   *
+   * 这不只是不好看:三维视图的烘焙时刻是按**片段起点**排格子的,导出渲的是**全局帧格**,
+   * 起点不在帧格上两套格子就对不齐,而且不是一一对应 —— 实测起点 4.041 时,播放头
+   * 第 121 / 122 / 123 帧拿到的烘焙帧是 121 / 121 / 122,三维比二维整整慢一帧,不报错。
+   */
+  const grid = (v: number) => atFrameGrid(v, project.fps || 30);
+  if (altKey) return grid(time);
   const threshold = 10 / pxPerSec; // snap within 10 pixels
   const snapPoints = [0, t];
   const maxSec = Math.max(project.duration, time + 10);
@@ -105,7 +120,7 @@ export function snapTime(
       minDiff = diff;
     }
   }
-  return best;
+  return grid(best);
 }
 
 export function formatTime(seconds: number) {

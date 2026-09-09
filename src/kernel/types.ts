@@ -276,4 +276,13 @@ export interface Timeline {
    * 都只拿到 Timeline,漏一处就是「预览有透视、导出没有」,而那种分叉不报错。
    */
   camera3dFov?: number;
+  /**
+   * 主题 id。**卡片的每一处 `var(--pc-…)` 都靠它**,所以它和 camera3dFov 走同一条路:
+   * 放进 Timeline,而不是让预览和导出各自去读 project。
+   *
+   * 上面那条注释预言的事真发生过一次,漏的就是这个字段:StageView 挂了 themeStyle,
+   * ExportView 没挂。默认主题下大部分兜底值和主题值碰巧相同,只有等宽字体露馅 ——
+   * 预览是 Consolas,成片是 NSimSun,而且不报错。换个主题就是全线错色。
+   */
+  themeId?: string;
 }

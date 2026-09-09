@@ -1,3 +1,4 @@
+import { useId } from "react";
 import { motion } from "motion/react";
 import type { CardDef, CardProps } from "../../kernel/types";
 import { HudParams, hudControls, hudDefaults, getPositionClass, easeExpoOut, accentOf } from "./hud";
@@ -11,7 +12,20 @@ interface Params extends HudParams {
   progAlpha: number;
 }
 
-function ChapterBarCard({ params, t = 0, duration = 6 }: CardProps<Params>) {
+function ChapterBarCard({ params, t = 0, duration = 6, playToken = 0 }: CardProps<Params>) {
+  /*
+   * 高亮块的**共享布局 id**。两截都不能少:
+   *
+   *   useId()    —— 同屏摆两张章节条时,写死的字符串会让两张抢同一个 layoutId,高亮在两张卡之间乱飞。
+   *   playToken  —— 重挂载要换一个新 id。`layoutId` 是「共享布局」:旧节点消失、新节点出现,
+   *                 Motion 会把这当成一次过渡,让新高亮从旧位置滑过去。而重挂载是**重播**,
+   *                 不是过渡。useId() 挡不住这个 —— 它在同一个树位置上重挂载后是同一个值。
+   *
+   * 这不是洁癖:预览跳转时会重挂载(StageView 的 setToken),导出每一趟都是全新页面、
+   * 永远碰不到旧节点。于是同一帧两边不一样 —— 实测预览里高亮被投影补了 translateY(-13.442px),
+   * 导出是 none;全新页面上第一次渲染则逐字节相同,正是这条的直接证据。
+   */
+  const gid = `${useId()}-${playToken}`;
   const rawChapters = params.chapters.split("|").filter(Boolean);
   const chaps = rawChapters.map((raw) => {
     const lastSpace = raw.lastIndexOf(" ");
@@ -56,7 +70,7 @@ function ChapterBarCard({ params, t = 0, duration = 6 }: CardProps<Params>) {
             <div key={i} className="relative px-8 py-4 rounded-full text-[48px] font-bold" style={{ zIndex: 1 }}>
               {isCur && (
                 <motion.div
-                  layoutId="chapter-bg"
+                  layoutId={`chapter-bg-${gid}`}
                   className="absolute inset-0"
                   style={{ backgroundColor: accentOf(params), opacity: 0.18, zIndex: -1, borderRadius: "9999px" }}
                   transition={{ duration: 0.4, ease: easeExpoOut }}

@@ -21,8 +21,14 @@ interface Params {
   accent: string;
 }
 
-function ListChaptersPart({ params, t, width, height }: PartProps<Params>) {
-  const layoutId = useId();
+function ListChaptersPart({ params, t, width, height, playToken }: PartProps<Params>) {
+  /*
+   * 共享布局 id 要带上 playToken。useId() 只解决「同屏两份抢同一个 id」,
+   * 解决不了**重挂载**:`layoutId` 是共享布局,旧节点消失、新节点出现时 Motion 会当成一次过渡,
+   * 让新高亮从旧位置滑过去 —— 而重挂载是重播,不是过渡。而 useId() 在同一个树位置重挂载后是同一个值。
+   * 预览跳转会重挂载、导出每趟都是全新页面,于是同一帧两边不一样(chapter-bar 上实测过,见那边的说明)。
+   */
+  const layoutId = `${useId()}-${playToken}`;
   const rawChapters = params.chapters.split("|").filter(Boolean);
   const chaps = rawChapters.map((raw: string) => {
     const lastSpace = raw.lastIndexOf(" ");

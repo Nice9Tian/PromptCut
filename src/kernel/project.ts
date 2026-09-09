@@ -293,7 +293,7 @@ export function flattenOverlay(p: Project): Timeline {
     }
   }
   // 三维只在真开了的时候才带这个键:老项目的 timeline 对象要和以前完全一样
-  return { width: p.width, height: p.height, fps: p.fps, duration: p.duration, clips, ...(p.camera3dFov ? { camera3dFov: p.camera3dFov } : null) };
+  return { width: p.width, height: p.height, fps: p.fps, duration: p.duration, clips, ...(p.camera3dFov ? { camera3dFov: p.camera3dFov } : null), ...(p.themeId ? { themeId: p.themeId } : null) };
 }
 
 /** 某时刻该播哪一段素材(按序列顺序找第一条命中的素材段) */

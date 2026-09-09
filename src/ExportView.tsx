@@ -4,6 +4,7 @@ import { Stage } from "./kernel/Stage";
 import { installExportClock } from "./kernel/exportClock";
 import type { Timeline } from "./kernel/types";
 import { flattenOverlay, videoLayersAt, type Project } from "./kernel/project";
+import { themeStyle } from "./themes";
 import { demoTimeline } from "./demo";
 import "./cards";
 
@@ -313,7 +314,25 @@ export default function ExportView() {
   if (!timeline) return null;
 
   return (
-    <div style={{ position: "relative", width: timeline.width, height: timeline.height, overflow: "hidden", background: "transparent" }}>
+    <div
+      style={{
+        position: "relative",
+        width: timeline.width,
+        height: timeline.height,
+        overflow: "hidden",
+        background: "transparent",
+        /*
+         * **主题变量必须挂在这里**,和 StageView 那一处对齐。
+         *
+         * 少了它,卡片里每一处 `var(--pc-…, 兜底)` 在导出里都会走兜底 —— 而预览走的是主题值。
+         * 默认主题下大部分兜底和主题值碰巧相同,所以这条漏了很久都没被发现;只有等宽字体
+         * 露了馅:主题是 `ui-monospace, Consolas, monospace`,兜底是 `ui-monospace, monospace`,
+         * 后者在 Windows 上落到 NSimSun —— 预览里是带斜杠零的 Consolas,成片里是一套衬线字。
+         * 换个主题(比如 Courier New 那套、或者任何改了配色的)就是全线不一致。
+         */
+        ...themeStyle(timeline.themeId),
+      }}
+    >
       {visualMedia.map((m) => {
         const l = layerOf(m.id);
         const common = {

@@ -14,6 +14,7 @@ import { getCard } from "../kernel/registry";
 import { useLayoutMode } from "./layoutMode";
 import { fitView, frameOrigin, panBy, wheelZoomFactor, zoomAt, type View2D } from "./preview/viewport2d";
 import "./preview/preview.css";
+import { atFrameGrid } from "../render/frameGrid";
 
 /**
  * 中央预览:视频层 + 动效渲染面,按容器缩放。播放循环也在这里(rAF 推进 store.t)。
@@ -106,25 +107,44 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
     };
   }, [stage]);
 
-  // 播放循环
+  /*
+   * 播放循环。**播放头只停在成片真有的那些帧上。**
+   *
+   * 以前是按墙上时钟连续推的:显示器 60Hz 就一秒推 60 个 t,而成片是 fps 帧的,
+   * 于是有一半的 t 在成片里根本不存在。单看 2D 察觉不到,一切到 3D 就露馅 ——
+   * 那边显示的是烘好的整帧,两个视图对同一个播放头能差半帧,而进场动画最陡的就是那一段。
+   * 量化之后 2D 播放显示的就是导出会写出来的那一帧,3D 贴的也是同一帧。
+   *
+   * 累加器 acc 必须保持不量化,不然每帧丢掉的那点余数会累起来,播放越走越慢。
+   */
   useEffect(() => {
     if (!playing) return;
+    const fps = Math.max(1, project.fps || 30);
     let raf = 0;
     let last = performance.now();
+    let acc = tRef.current;      // 真实推进到哪儿(不量化)
+    let wrote = atFrameGrid(acc, fps);  // 上一次交出去的帧时刻
     const tick = (now: number) => {
-      const nt = tRef.current + (now - last) / 1000;
+      /*
+       * 播放中外面也可能 seek(点时间轴、拖播放头),那时以外面的为准。
+       * 判据是「差得比一帧还多」而不是「不相等」:tRef 在 render 里才赋值,量化之后 store 的 t
+       * 可能比这里晚一帧,那不是 seek —— 按 seek 处理会让播放隔几帧倒退一格。
+       */
+      if (Math.abs(tRef.current - wrote) > 1.5 / fps) acc = tRef.current;
+      acc += (now - last) / 1000;
       last = now;
-      if (nt >= project.duration) {
+      if (acc >= project.duration) {
         actions.pause();
         actions.seek(project.duration);
         return;
       }
-      actions.tick(nt);
+      wrote = atFrameGrid(acc, fps);
+      actions.tick(wrote);
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [playing, project.duration]);
+  }, [playing, project.duration, project.fps]);
 
   /*
    * 量一次窗口有多大,顺便在「自动适应」还开着时重新算缩放比。

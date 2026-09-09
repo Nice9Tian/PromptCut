@@ -68,6 +68,16 @@ export function LottieView(params: LottieViewProps) {
   const box = useRef<HTMLDivElement>(null);
   const anim = useRef<AnimationItem | null>(null);
   const meta = useRef({ fr: 30, total: 0 });
+  /** 最新的 t。装载是异步的(src 要 fetch),装完那一刻得知道「现在该停在哪一帧」 */
+  const wantT = useRef(t);
+  wantT.current = t;
+
+  /** t → 帧号。装载完成时和 t 变化时都要算,所以只写一处 */
+  const frameAt = (sec: number) => {
+    const { fr, total } = meta.current;
+    const f = sec * fr * (params.speed > 0 ? params.speed : 1);
+    return params.loop === "yes" ? f % total : Math.min(f, total - 1);
+  };
 
   // 加载 / 换素材
   useEffect(() => {
@@ -89,7 +99,16 @@ export function LottieView(params: LottieViewProps) {
       });
       meta.current = { fr: Number(data.fr) || 30, total: Math.max(0, (Number(data.op) || 0) - (Number(data.ip) || 0)) };
       anim.current = a;
-      a.goToAndStop(0, true);
+      /*
+       * **停在当前 t,不是第 0 帧。**
+       *
+       * 装载是异步的(src 要 fetch),而下面那个「t 变了就跳帧」的 effect 只在 t 真的变的时候跑。
+       * 装完得比最后一次 t 变化还晚,它就再也不会被触发 —— 动画从此钉死在第 0 帧,
+       * 而且不报错。实测 lottie-adrock 在 t=3.0s:导出是角色站定的最后一帧,预览只剩背景和影子。
+       * 导出那边踩不到这个坑:虚拟时钟会等挂着的网络请求(pauseIfNetworkFetchesPending),
+       * JSON 一定在推帧之前就位。
+       */
+      a.goToAndStop(meta.current.total ? frameAt(wantT.current) : 0, true);
       // 导出页里 lottie 自己的 rAF 循环只会空转(没有 autoplay 的动画),冻住它省得每帧都被判成「在变」
       // freeze() 是 lottie-web 公开 API,只是类型声明里漏了
       if (isExportMode()) (lottie as unknown as { freeze?: () => void }).freeze?.();
@@ -110,11 +129,8 @@ export function LottieView(params: LottieViewProps) {
   // 跟着时间轴走:t → 帧号
   useEffect(() => {
     const a = anim.current;
-    const { fr, total } = meta.current;
-    if (!a || !total) return;
-    let f = t * fr * (params.speed > 0 ? params.speed : 1);
-    f = params.loop === "yes" ? f % total : Math.min(f, total - 1);
-    a.goToAndStop(f, true);
+    if (!a || !meta.current.total) return;
+    a.goToAndStop(frameAt(t), true);
   }, [t, params.speed, params.loop]);
 
   return <div ref={box} className="absolute inset-0" />;

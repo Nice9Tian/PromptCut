@@ -133,12 +133,12 @@ export const themes: Theme[] = [
   }
 ];
 
-export function getTheme(id: string): Theme {
+export function getTheme(id: string | undefined): Theme {
   return themes.find((t) => t.id === id) ?? themes[0];
 }
 
 /** 转成 style 对象,挂到任意元素上 */
-export function themeStyle(id: string): Record<string, string> {
+export function themeStyle(id: string | undefined): Record<string, string> {
   const t = getTheme(id);
   const out: Record<string, string> = {};
   for (const [k, v] of Object.entries(t.vars)) out[`--pc-${k}`] = v;

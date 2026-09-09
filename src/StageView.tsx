@@ -1,10 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { Stage } from "./kernel/Stage";
-import { partsTiming } from "./kernel/parts";
-import { getPart } from "./parts/registry";
 import { flattenOverlay, type Project } from "./kernel/project";
 import { installStageClock } from "./render/stageClock";
+import { onFrameGrid } from "./render/frameGrid";
 import { createAnimationPinner } from "./render/pinAnimations";
 import { canvasBox } from "./editor/left/contentBox";
 import { ensureProxyStyle, proxyAllowed, proxyOf, resetInk, sampleAll } from "./render/solidMode";
@@ -98,6 +97,10 @@ export default function StageView() {
    */
   const [proxy, setProxy] = useState(false);
   const ref = useRef({ project: null as Project | null, t: 0, layoutKey: "", settle: 0, proxy: false });
+  /** 落定补拍的代数:又渲了一帧就作废上一次挂着的补拍(见 renderAt 里 settle 的说明) */
+  const settleGen = useRef(0);
+  /** 渲染代数:又来一次渲染就作废上一次还在飞的异步补跑(见 renderAt 里的说明) */
+  const renderGen = useRef(0);
 
   useEffect(() => {
     document.documentElement.style.background = "transparent";
@@ -109,6 +112,30 @@ export default function StageView() {
 
   useEffect(() => {
     if (!clock) return;
+
+    /*
+     * 补一拍「落定」。**同步补跑完的那一瞬间,Motion 还没把新值写回 DOM。**
+     *
+     * Motion 的 JS 动画(transform 这类)确实挂在我们接管的 rAF 上 —— 手动 tick 能推动它,
+     * 推出来的值和导出逐位相同。但它解析关键帧要**跨一个任务边界**:实测在同一个 JS 任务里
+     * 再补多少拍都没用,让出一个微任务之后只补一拍就够。而跳转那条路是一个同步块跑完的,
+     * 于是补跑结束时卡片还停在 initial 那一帧。
+     *
+     * 实测 chapter-bar 第 9 帧:导出 translateY(-8.65515px),预览 translateY(-120px)——
+     * 进场条整个悬在画面外,而且不报错。补上这一拍之后两边逐位相同。
+     * 导出那边不需要这个:它每一帧都是真实的浏览器帧,任务边界白捡。
+     *
+     * 时间不动(还是 target),所以这一拍只让写回发生,不会让动画多走。
+     */
+    const settle = (target: number) => {
+      const gen = ++settleGen.current;
+      queueMicrotask(() => {
+        if (gen !== settleGen.current || !clock) return;
+        const ms = Math.max(0, target) * 1000;
+        clock.tick(ms);
+        pinner.sync(ms);
+      });
+    };
 
     const renderAt = (target: number, opts: { jump?: boolean; replay?: boolean } = {}) => {
       const p = ref.current.project;
@@ -123,8 +150,10 @@ export default function StageView() {
 
       // 连续播放:接着往下跑一两帧就行
       if (!opts.jump && !opts.replay && dt >= 0 && dt < CONTINUOUS_MAX) {
+        renderGen.current++;   // 掐掉可能还在飞的上一次补跑
         flushSync(() => setT(target));
         clock.advanceTo(Math.max(0, target) * 1000, { onFrame: (ms) => pinner.sync(ms) });
+        settle(target);
         scheduleSample();
         return;
       }
@@ -132,7 +161,24 @@ export default function StageView() {
       // 跳转 / 重播:把这一刻活跃的卡全部重挂载,从各自的入点补跑到 target,
       // 于是画面等于「从入点一路播到 target」的那一帧,而不是「刚开始播」的第一帧。
       const active = clips.filter((c) => target >= c.start - LEAD && target < c.end);
-      const from = active.length ? Math.max(0, Math.min(...active.map((c) => c.start - LEAD))) : Math.max(0, target);
+
+      /*
+       * **挂载时刻必须落在帧格上** —— 不然「预览所见 = 导出所得」在每个卡片入点都破一次。
+       *
+       * 导出是一帧一帧推的:一张卡在第一个 ≥ start-LEAD 的**帧**上挂载,时间原点就是那一帧,
+       * 而不是 start-LEAD 本身。跳转这条路以前直接把时钟设到连续的 start-LEAD,原点比导出
+       * 早了不到一帧;补跑又按 60fps 走,而导出按项目 fps 走。于是凡是「挂载即播」的卡
+       * (绝大多数卡都是)在入点附近和成片对不上。
+       *
+       * 实测 mu-circular-progress(1.2s easeOut cubic、入点 1.0s、30fps),同一个 t=1.0:
+       * 导出 6%,预览 9%。差的就是 33.3ms(一帧)和 50ms(LEAD)这一格。easeOut 开头最陡,
+       * 半帧的偏差在画面上就是两位数的百分比 —— 用户切 2D/3D 一眼能看出来。
+       */
+      const fps = Math.max(1, p.fps || 30);
+      const onGrid = (sec: number) => onFrameGrid(sec, fps);
+      const rawFrom = active.length ? Math.max(0, Math.min(...active.map((c) => c.start - LEAD))) : Math.max(0, target);
+      // 夹一下:target 本身不在帧格上时(编辑器给的 t 理论上都在),对齐后可能反超它
+      const from = Math.min(onGrid(rawFrom), Math.max(0, target));
 
       pinner.reset();
       clock.set(from * 1000);
@@ -140,34 +186,66 @@ export default function StageView() {
         setToken((n) => n + 1);
         setT(from);
       });
+      /*
+       * **在 from 这一刻空跑两拍**,不是笔误。
+       *
+       * 第一拍跑卡片自己注册的 rAF —— 那里面才会把动画建起来(数字滚动的 useSpring 就是在
+       * 这一拍里 .set() 的)。Motion 建完动画要到**下一拍**才做第一次推进,所以只跑一拍的话,
+       * 补跑的第一格被拿去当了动画的起跑线,整条动画比导出慢一帧。
+       *
+       * 导出那边是白捡的:预热阶段先在挂载点空跑了一帧(warmUp 里 __pcRestartCards 之后那次
+       * step(0)),等正式第 0 帧渲的时候动画早就上好膛了。这里补上同一拍,两边起跑线才一致。
+       * 两拍的时刻相同,delta 为 0,不会让动画多走 —— 只是把「建立」和「推进」分开。
+       */
+      clock.tick(from * 1000);
       clock.tick(from * 1000);
       pinner.sync(from * 1000);
 
-      // 补跑途中跨到别的卡的入点时才提交一次 React(让它挂载),其余帧只推时钟
-      // 组合卡里 enterMs > 0 的部件在 clip 入点那次提交时还没到点,不挂载;中途不提交它就一直不挂,
-      // 直到最后 setT 才挂,进场动画就从 target 才开始跑,画面停在入场首帧。所以它们的进场点也算提交点。
-      const partEntries = active.flatMap((c) =>
-        c.cardId === "composite" && c.parts?.length
-          ? [...partsTiming(c.parts, getPart).parts.values()].filter((e) => e.enterMs > 0).map((e) => Math.max(0, c.start + e.enterMs / 1000 - LEAD))
-          : [],
-      );
-      const entries = [...active.map((c) => Math.max(0, c.start - LEAD)), ...partEntries].filter((s) => s > from).sort((a, b) => a - b);
-      let ei = 0;
-      clock.advanceTo(Math.max(0, target) * 1000, {
-        onFrame: (ms) => {
-          const sec = ms / 1000;
-          while (ei < entries.length && sec >= entries[ei]) {
-            flushSync(() => setT(sec));
-            ei += 1;
-          }
-          pinner.sync(ms);
-        },
-      });
+      /*
+       * **补跑的每一帧都提交一次 React**,和导出一模一样(ExportView 每帧 flushSync)。
+       *
+       * 以前只在「跨到某张卡的入点」时提交,其余帧只推时钟。省下的是 React 的活儿,丢掉的是
+       * 两样东西,而且都不报错:
+       *   - **卡片自己改的状态**:同步补跑期间的 setState 一次都没被提交。实测 word-rotate
+       *     在 t=1.8s 上整个轮换词**消失**(AnimatePresence 把旧词退场了、新词还没挂上),
+       *     导出是「你是 卓越」。
+       *   - **按 t 自己往前推的卡**:particles / lottie 这类不注册 rAF,全靠每帧拿到新的 t。
+       *     只在最后给一次 t,粒子就从 0 一口气推到 target,累积出来的画面和逐帧推不一样。
+       *
+       * 试过一条省事的判据「这一帧有 rAF 跑过才提交」,正是被上面第二类卡否掉的 —— 它们一个
+       * rAF 都不注册。既然导出就是每帧提交,预览照做才是最不容易再分叉的写法。
+       * 代价:跳 6 秒(补跑上限)约 86ms,单次点击跳转感觉不出来。
+       *
+       * entries 那套(clip 入点 + 组合卡部件的 enterMs)因此不再需要:每帧都提交,
+       * 该挂的自然在它该挂的那一帧挂上。
+       */
 
-      flushSync(() => setT(target));
-      clock.tick(Math.max(0, target) * 1000);
-      pinner.sync(Math.max(0, target) * 1000);
-      scheduleSample();
+      /*
+       * 补跑**每帧之间让出一个微任务**(advanceToAsync),而不是一个同步块跑完。
+       *
+       * 同步跑完的画面和「一帧一帧推过去」不是同一张:跨不过同步块的东西全被落下 ——
+       * Motion 解析关键帧、AnimatePresence 换人、粒子引擎异步装载。实测同一个预览页、
+       * 同一个 t=1.8s,跳过去 vs 逐帧推过去:particles 差 12.9 万像素、word-rotate 差 2.2 万。
+       * 而导出永远是逐帧推的那一种,所以要对齐的是它。
+       *
+       * 于是这条路变成异步的。gen 是防串台的:拖播放头时上一次补跑可能还在飞,
+       * 新的一次进来就把它掐掉,不然两次补跑会交替往同一个时钟上写。
+       */
+      const gen = ++renderGen.current;
+      void (async () => {
+        await clock.advanceToAsync(Math.max(0, target) * 1000, {
+          step: 1000 / fps,
+          abort: () => gen !== renderGen.current,
+          onFrame: (ms) => flushSync(() => setT(ms / 1000)),
+          afterFrame: (ms) => pinner.sync(ms),
+        });
+        if (gen !== renderGen.current) return;
+        flushSync(() => setT(target));
+        clock.tick(Math.max(0, target) * 1000);
+        pinner.sync(Math.max(0, target) * 1000);
+        settle(target);
+        scheduleSample();
+      })();
     };
 
     /*
@@ -366,7 +444,8 @@ export default function StageView() {
         height: project.height,
         overflow: "hidden",
         background: "transparent",
-        ...themeStyle(project.themeId),
+        // 和 ExportView 读同一处(Timeline),不是各读各的 project —— 见 Timeline.themeId 的说明
+        ...themeStyle(timeline.themeId),
         /*
          * 三维的 perspective **不在这里**。这一格和卡片之间还隔着 .pc-stage 和 AnimClock
          * 两层 div,而 CSS 的 perspective 只作用于直接子元素 —— 挂在这里等于没挂

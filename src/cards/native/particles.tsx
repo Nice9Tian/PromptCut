@@ -39,6 +39,21 @@ function forceOurs(opts: Record<string, any>): Record<string, any> {
     // 引擎默认「窗口失焦 / 画布不在视口里就暂停」:预览 iframe、无头导出页、Browser 面板收起时都算失焦,
     // 结果是画布一直空白(实测:canvas 在、粒子数在,一像素都没画)。这两项一律关掉,画不画由我们的时钟说了算
     pauseOnBlur: false,
+    /*
+     * **根节点这个 resize 也要关**,不是只关 interactivity 里那个。
+     *
+     * 引擎默认 `resize.enable = true`、`delay = 0.5`(见 Options/Classes/ResizeEvent.js),
+     * 于是它自己给画布装一个 ResizeObserver,回调里挂一个 **500ms 的真实时间定时器**,
+     * 到点走 windowResize() → setDensity() 增删粒子。而增删粒子会消耗我们注入的种子随机数,
+     * 随机流一错位,后面每一帧的粒子就都不一样了 —— **这条路根本不经过 drawParticles**,
+     * 所以「推进序列逐步相同」也拦不住它。
+     *
+     * 它为什么只在某些路径上咬人:那是个真实时间的定时器。逐帧推过去要花几百毫秒真实时间,
+     * 定时器就落在推进序列**中间**;一口气推完只要几毫秒,定时器落在**结束之后**,对这一帧没影响。
+     * 预览跳转和导出恰好就是这两种。实测同一个 t=1.8s,两条路差 12.9 万个像素。
+     * 画布尺寸由我们的布局说了算,引擎不需要自己盯着。
+     */
+    resize: { enable: false },
     pauseOnOutsideViewport: false,
     background: { ...(opts.background || {}), color: "transparent" },
     interactivity: {
@@ -155,15 +170,41 @@ function stepTo(st: { container: Container | null; atMs: number }, seed: number,
   }
   const render = c.canvas.render;
   let steps = 0;
-  if (target <= st.atMs + 0.5 && st.atMs === 0) {
-    // t = 0:画初始那一帧(不推进)
+  if (st.atMs === 0) {
+    /*
+     * 初始那一帧:只画,不推进。**target 是多少都要画这一下。**
+     *
+     * 以前写的是「target 也在 0 附近才画」,于是「一口气推到 t」的那一边把它跳过了。
+     * 而逐帧推的那一边(导出)必然在 t=0 上画过一次 —— 一次 drawParticles 会消耗随机数,
+     * 少画一次,两边的随机数流就此错开一格,粒子从此各走各的。
+     *
+     * 两种叫法是真实存在的:导出每帧叫一次;预览跳转时引擎是异步装好的,装完补跑早跑完了,
+     * 只剩最后一个 t。实测 particles-life 在 t=1.8s 上差 3.18% 的像素、最大通道差 164。
+     */
     render.drawParticles({ value: 0, factor: 0 } as any);
-    return;
+    // 记下「初始那一帧已经画过了」。不记的话,先停在 t≈0 再往前推,会比直接跳到 t 多画一次 value=0 ——
+    // 往回拖(refresh 之后递归回到 t=0)正好会走这条路。用一个极小的量占位,不影响下面按整格推进。
+    st.atMs = 1e-9;
+    if (target <= 0.5) return;
   }
-  while (st.atMs < target - 0.5 && steps++ < MAX_STEPS) {
-    const d = Math.min(STEP_MS, target - st.atMs);
-    render.drawParticles({ value: d, factor: d / STEP_MS } as any);
-    st.atMs += d;
+  /*
+   * **只走整格,不足一格的余数留着。**
+   *
+   * 以前是 `d = min(STEP_MS, target - atMs)`:每次调用都拿一个短步把余数吃干净。
+   * 那样一来「推到 t」的结果就和**中途被叫过几次**有关 —— 逐帧叫(每次 +33.33ms)走的是
+   * 16.667 / 16.666 交替,一口气叫到底走的是一连串 16.667。步长不同 → factor 不同 →
+   * 一百多步累下来粒子就飘开了。
+   *
+   * 而预览和导出恰好就是这两种叫法:导出逐帧叫;预览跳转时引擎是异步装好的,装完时
+   * 补跑早就同步跑完了,只剩最后一个 t,于是一口气推。实测 particles-life 在 t=1.8s 上
+   * 差 3.18% 的像素、最大通道差 164。
+   *
+   * 只走整格之后,推到同一个 t 的**步序逐步相同**,和中途叫了几次无关。代价是画面最多
+   * 落后不到一格(16.7ms),但两边落后得一模一样 —— 这正是要的。
+   */
+  while (st.atMs + STEP_MS <= target + 1e-6 && steps++ < MAX_STEPS) {
+    render.drawParticles({ value: STEP_MS, factor: 1 } as any);
+    st.atMs += STEP_MS;
   }
 }
 

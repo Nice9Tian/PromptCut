@@ -24,14 +24,42 @@ export interface StageClock {
   now(): number;
   /** 直接把时钟拨到某毫秒,不跑帧(用于重挂载前设定时间原点) */
   set(ms: number): void;
-  /** 跑一帧:时钟拨到 ms,执行这一帧排队的 rAF 回调 */
-  tick(ms: number): void;
+  /**
+   * 跑一帧:时钟拨到 ms,执行这一帧排队的 rAF 回调。**返回跑了几个回调。**
+   *
+   * 这个数是「这一帧有没有卡片在自己动」的判据:卡片自带的循环、Motion 的帧循环都靠 rAF,
+   * 一个都没有就说明这一帧没人会改自己的状态。调用方拿它决定要不要提交 React ——
+   * 补跑几百帧时,大部分帧其实什么都没发生,不必每帧都渲一遍。
+   */
+  tick(ms: number): number;
   /**
    * 从当前时刻推进到 target,分步跑帧。
    * 一定要分步:Motion 的帧循环会把单帧 delta 夹到 40ms 上限(防切回标签页时跳变),
    * 一步跨几秒的话动画只会前进 40ms。
    */
-  advanceTo(target: number, opts?: { step?: number; maxCatchUp?: number; onFrame?: (ms: number) => void }): void;
+  advanceTo(target: number, opts?: { step?: number; maxCatchUp?: number; onFrame?: (ms: number, ran: number) => void }): void;
+  /**
+   * 和 advanceTo 一样地补跑,但**每帧之间让出一个微任务**。
+   *
+   * 为什么需要这个:同步补跑跑出来的画面和「一帧一帧推过去」不一样,而导出永远是后者。
+   * 实测同一个预览页、同一个 t=1.8s,跳过去和逐帧推过去,particles 差 12.9 万个像素、
+   * word-rotate 差 2.2 万个 —— 差的是那些**跨不过同步块的东西**:Motion 解析关键帧、
+   * AnimatePresence 换人、粒子引擎异步装载,它们都要一个任务边界才推得动。
+   *
+   * 让出微任务而不是真帧:微任务在同一个任务里排干,不用等 vsync,几百帧也就几十毫秒;
+   * 等真帧的话跳 6 秒要等 180 个 vsync = 3 秒,没法用。
+   *
+   * `abort` 让新的一次渲染能把上一次还在飞的补跑掐掉(快速拖播放头时会发生)。
+   */
+  advanceToAsync(target: number, opts?: {
+    step?: number;
+    maxCatchUp?: number;
+    /** **跑这一帧之前**调:提交 React。和导出的 step 同序 —— 那边也是先 __pcSetT 再推虚拟时间 */
+    onFrame?: (ms: number) => void;
+    /** 跑完这一帧的 rAF 回调之后调:钉动画(这一帧里新建的动画要在这时候才拿得到) */
+    afterFrame?: (ms: number) => void;
+    abort?: () => boolean;
+  }): Promise<void>;
 }
 
 const DEFAULT_STEP = 1000 / 60;
@@ -50,6 +78,13 @@ export function installStageClock(): StageClock {
   let queue: { id: number; cb: FrameRequestCallback }[] = [];
 
   performance.now = () => now;
+  /*
+   * 原始 rAF 留一份。**接管之后页面里就再没有「等浏览器画一帧」的办法了** —— 而有些活儿
+   * 非等不可:Motion 解析关键帧要跨一个任务边界,跳转那一下的补跑是同步跑完的,它来不及,
+   * 卡片就停在 initial 那一帧(见 StageView 里 settle 的说明)。
+   * 和 exportClock 挂同一个名字,两边取法一致。
+   */
+  window.__pcRealRaf = window.requestAnimationFrame.bind(window);
   window.requestAnimationFrame = (cb: FrameRequestCallback) => {
     const id = nextId++;
     queue.push({ id, cb });
@@ -59,7 +94,7 @@ export function installStageClock(): StageClock {
     queue = queue.filter((e) => e.id !== id);
   };
 
-  const tick = (ms: number) => {
+  const tick = (ms: number): number => {
     now = ms;
     // 先取走再跑:回调里重新注册的 rAF 属于下一帧,不然会在同一帧里无限自我调用
     const due = queue;
@@ -71,6 +106,7 @@ export function installStageClock(): StageClock {
         console.error("[stageClock] rAF 回调抛错", err);
       }
     }
+    return due.length;
   };
 
   const clock: StageClock = {
@@ -85,21 +121,55 @@ export function installStageClock(): StageClock {
       if (target < now) {
         // 往回走:调用方负责重挂载,这里只把时钟拨过去
         now = target;
-        tick(target);
-        opts.onFrame?.(target);
+        opts.onFrame?.(target, tick(target));
         return;
       }
       if (target - now > maxCatchUp) now = target - maxCatchUp;
       let ms = now;
       while (ms < target) {
         ms = Math.min(target, ms + step);
-        tick(ms);
-        opts.onFrame?.(ms);
+        opts.onFrame?.(ms, tick(ms));
       }
       if (now !== target) {
-        tick(target);
-        opts.onFrame?.(target);
+        opts.onFrame?.(target, tick(target));
       }
+    },
+    async advanceToAsync(target, opts = {}) {
+      const step = opts.step ?? DEFAULT_STEP;
+      const maxCatchUp = opts.maxCatchUp ?? DEFAULT_MAX_CATCH_UP;
+      if (target < now) {
+        now = target;
+        opts.onFrame?.(target);
+        tick(target);
+        opts.afterFrame?.(target);
+        return;
+      }
+      if (target - now > maxCatchUp) now = target - maxCatchUp;
+      /*
+       * 一帧里的顺序:**让出微任务 → 拨时钟 → 提交 React → 跑 rAF 回调 → 钉动画**。
+       *
+       * 和导出的 step() 逐步对齐:那边 `__pcSetT(sec)` 里先写 `__pcExportMs` 再 flushSync 提交,
+       * 然后 `advance(budget)` 推一格虚拟时间跑这一帧,最后 `__pcSyncAnims()` 钉动画。
+       * 少了「先拨时钟」这一步,React 渲染时读到的 performance.now 还是上一帧的;顺序反过来的话,
+       * 凡是要**量布局**
+       * 的东西就会比导出差一帧 —— 实测 chapter-bar 里 layoutId 那块高亮,预览被投影补了
+       * translateY(-13.442px),而导出是 none,那 13.44 正好是父元素一帧的位移量。
+       *
+       * 让出微任务是给跨不过同步块的东西留口子(Motion 解析关键帧、粒子引擎异步装载)。
+       */
+      let ms = now;
+      while (ms < target) {
+        await Promise.resolve();
+        if (opts.abort?.()) return;
+        ms = Math.min(target, ms + step);
+        now = ms;                 // 先拨时钟:React 渲染时读到的就是这一帧
+        opts.onFrame?.(ms);       // 提交
+        tick(ms);                 // 跑这一帧的 rAF 回调
+        opts.afterFrame?.(ms);    // 钉动画
+      }
+      await Promise.resolve();
+      if (opts.abort?.()) return;
+      if (now !== target) { now = target; opts.onFrame?.(target); tick(target); opts.afterFrame?.(target); }
     },
   };
 
