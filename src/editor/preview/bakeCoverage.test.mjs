@@ -100,3 +100,105 @@ test("0.25 秒一格累加出来的浮点误差不会画出一堆碎缝", () => 
 test("空输入不炸", () => {
   assert.deepEqual(coverageSegments([], all), []);
 });
+
+/* ── 改一张卡:只有这一张的覆盖作废,而且是当帧作废 ─────────────── */
+
+const { visibleCoverage, clipFingerprint, momentId } = await import("./bakeCoverage.ts");
+
+/**
+ * 造一张卡的覆盖:[a,b) 里按 step 铺时刻。覆盖表存的是**事实**(有哪些时刻),
+ * 段落由 visibleCoverage 现算 —— 这样前台烘完只要往 baked 里加一个 id 就行。
+ */
+const CC = (clipId, fp, a, b, step = 1) => {
+  const moments = [];
+  for (let t = a; t < b - 1e-9; t += step) {
+    moments.push({ clipId, id: momentId(clipId, t), t, start: a, end: b, tier: "coarse", fine: true });
+  }
+  return { clipId, fp, moments };
+};
+/** 把这几张卡的所有时刻都标成已烘 */
+const allBaked = (clips) => new Set(clips.flatMap((c) => c.moments.map((m) => m.id)));
+const COV = (clips, baked) => ({ clips, baked: baked ?? allBaked(clips), bakingAt: null, bytes: 0 });
+
+test("改了 A:只有 A 那一段消失,B 一点不受影响", () => {
+  const cov = COV([CC("a", "fpA", 0, 2), CC("b", "fpB", 10, 12)]);
+  // 用户改了 A 的参数 → A 的指纹变了,B 没变
+  const v = visibleCoverage(cov, new Set(["fpA-改过了", "fpB"]));
+  assert.deepEqual(v.coarse, [{ start: 10, end: 12 }], "只该剩 B 那一段");
+  assert.equal(v.stale, 1, "有 1 张卡的覆盖作废了");
+  assert.equal(v.coarseTotal, 2, "计数也只剩 B 的,不能把 A 的算进去");
+});
+
+test("什么都没改:两张都留着,而且首尾相接的合成一条", () => {
+  const cov = COV([CC("a", "fpA", 0, 2), CC("b", "fpB", 2, 4)]);
+  const v = visibleCoverage(cov, new Set(["fpA", "fpB"]));
+  assert.deepEqual(v.coarse, [{ start: 0, end: 4 }], "挨着的该连成一条");
+  assert.equal(v.stale, 0);
+  assert.equal(v.coarseTotal, 4);
+});
+
+test("卡被删掉了:它的覆盖也不画(指纹在当前项目里根本不存在)", () => {
+  const cov = COV([CC("a", "fpA", 0, 2), CC("b", "fpB", 10, 12)]);
+  const v = visibleCoverage(cov, new Set(["fpB"]));
+  assert.deepEqual(v.coarse, [{ start: 10, end: 12 }]);
+  assert.equal(v.stale, 1);
+});
+
+test("全改了:条子整条空,不是留着旧的骗人", () => {
+  const cov = COV([CC("a", "fpA", 0, 2), CC("b", "fpB", 10, 12)]);
+  const v = visibleCoverage(cov, new Set(["新A", "新B"]));
+  assert.deepEqual(v.coarse, []);
+  assert.deepEqual(v.full, []);
+  assert.equal(v.coarseTotal, 0);
+  assert.equal(v.stale, 2);
+});
+
+test("没烘的时刻不产生颜色,烘一个就多一段 —— 段是现算的,不是存死的", () => {
+  const a = CC("a", "fpA", 0, 3);           // 三个时刻:0 / 1 / 2
+  const cov = COV([a], new Set());           // 一个都没烘
+  const live = new Set(["fpA"]);
+  assert.deepEqual(visibleCoverage(cov, live).coarse, [], "一个都没烘就没有颜色");
+
+  // 只烘中间那一刻 → 只覆盖 [1,2)
+  const one = { ...cov, baked: new Set([momentId("a", 1)]) };
+  assert.deepEqual(visibleCoverage(one, live).coarse, [{ start: 1, end: 2 }]);
+  assert.equal(visibleCoverage(one, live).coarseBaked, 1);
+});
+
+test("指纹只认「决定像素」的东西:改参数会变,挪位置不会", () => {
+  const base = { id: "c1", cardId: "pin-board", params: { a: 1 }, frame: { x: 0, y: 0, w: 960, h: 540 } };
+  const moved = { ...base, frame: { x: 500, y: 200, w: 960, h: 540 } };
+  const resized = { ...base, frame: { x: 0, y: 0, w: 1920, h: 1080 } };
+  const edited = { ...base, params: { a: 2 } };
+  assert.equal(clipFingerprint(moved), clipFingerprint(base), "只挪位置,像素没变,不该让覆盖作废");
+  assert.notEqual(clipFingerprint(resized), clipFingerprint(base), "画幅变了,烘出来就不一样");
+  assert.notEqual(clipFingerprint(edited), clipFingerprint(base), "改参数必须作废");
+});
+
+/* ── 前台现烘完也要记账,否则条子慢半拍 ─────────────────────────── */
+
+test("markBaked 让「刚烘好的那一刻」立刻算进覆盖", async () => {
+  const m = await import("./bakeCoverage.ts");
+  const a = CC("a", "fpA", 0, 3);
+  m.publishCoverage({ clips: [a], baked: new Set(), bakingAt: null, bytes: 0 });
+  const live = new Set(["fpA"]);
+  assert.deepEqual(m.visibleCoverage(m.getCoverage(), live).coarse, [], "还没烘,没有颜色");
+
+  // 前台现烘完了那一刻 —— 只给一个 id,不用重新盘点、不用重算段
+  m.markBaked([momentId("a", 1)]);
+  assert.deepEqual(m.visibleCoverage(m.getCoverage(), live).coarse, [{ start: 1, end: 2 }],
+    "画面出来了,条子必须同一刻就跟上");
+});
+
+test("markBaked 会通知订阅者(条子靠这个重画)", async () => {
+  const m = await import("./bakeCoverage.ts");
+  m.publishCoverage({ clips: [CC("a", "fpA", 0, 3)], baked: new Set(), bakingAt: null, bytes: 0 });
+  let hits = 0;
+  const off = m.subscribeCoverage(() => { hits++; });
+  m.markBaked([momentId("a", 0)]);
+  assert.equal(hits, 1, "标记之后必须通知,否则界面不会重画");
+  // 同一个 id 再标一次不该白通知一遍(条子没变化,重画是浪费)
+  m.markBaked([momentId("a", 0)]);
+  assert.equal(hits, 1, "重复标记不该再通知");
+  off();
+});

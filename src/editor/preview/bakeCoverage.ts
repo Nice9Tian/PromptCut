@@ -25,8 +25,19 @@ export interface CoverageSegment {
 /** 浮点比较的容差:时刻是 0.25 秒一格累加出来的,末位会有误差 */
 const EPS = 1e-6;
 
+/**
+ * 一刻的标识:`<clipId>@<t>`。
+ *
+ * **判断「烘了没」用它,不用服务端那个缓存键。** 前台现烘和空闲预烘走的是两条路,
+ * 前台手上只有 (clipId, t),没有服务端算的哈希;两条路要是各用各的键,前台烘完了
+ * 覆盖表也认不出来 —— 表现就是「画面已经出来了,时间轴上的条还没变」。
+ */
+export const momentId = (clipId: string, t: number) => `${clipId}@${t}`;
+
 export interface CoverageInput {
   clipId: string;
+  /** 这一刻的标识(momentId)。覆盖表按它记「烘了没」 */
+  id?: string;
   /** 这一刻的缓存键。判断「烘了没」要用它,所以这里也带上 */
   key?: string;
   /** 属于哪一档(低帧率 / 原始帧率)。分开画黄绿两条 */
@@ -73,11 +84,21 @@ export function coverageSegments(
     }
   }
 
-  raw.sort((a, b) => a.start - b.start || a.end - b.end);
+  return mergeSegments(raw);
+}
+
+/**
+ * 把挨着或重叠的段并起来。不合并的话一张卡会画出十几条挨着的小块,每块之间一道缝,
+ * 看着像「烘得断断续续」,其实是连续的。
+ *
+ * 单独导出是因为**画的时候还要再合一次**:覆盖是按卡分开存的(见 ClipCoverage),
+ * 而首尾相接的两张卡各自的段应该连成一条。
+ */
+export function mergeSegments(segs: CoverageSegment[]): CoverageSegment[] {
+  const raw = [...segs].sort((a, b) => a.start - b.start || a.end - b.end);
   const merged: CoverageSegment[] = [];
   for (const seg of raw) {
     const last = merged[merged.length - 1];
-    // 挨着(或重叠)就并成一段,免得画出一排带缝的小绿块
     if (last && seg.start <= last.end + EPS) last.end = Math.max(last.end, seg.end);
     else merged.push({ ...seg });
   }
@@ -93,25 +114,59 @@ export function coverageSegments(
  * 两档分开画而不是合成一个百分比,是因为它们对用户的意义完全不同:
  * 黄的地方"能看但不准",绿的地方"就是这一帧"。合成一条就把这个区别抹掉了。
  */
+/**
+ * 一张卡的覆盖情况。**带着这张卡当时的内容指纹**。
+ *
+ * 分卡存 + 带指纹,是为了「改了 A,A 那一段立刻变白」这件事能**不依赖任何异步**:
+ * 画条子的时候拿当前项目的指纹对一遍,对不上的直接不画。用户一改参数,store 里的
+ * project 就换了,条子这一帧就把 A 抹掉了 —— 不用等盘点、不用等烘焙、也不会有竞态。
+ *
+ * 之前是把所有卡合成一条整段存的,于是**只有预烘循环能更新它**,而那个循环要等
+ * 当前这批烘完、再盘点一次才轮得到发布。结果就是「改完卡片,条子纹丝不动」。
+ */
+export interface ClipCoverage {
+  clipId: string;
+  /** 这张卡当时长什么样(clipFingerprint)。和当前项目对不上就说明它已经作废了 */
+  fp: string;
+  /** 这张卡要烘的全部时刻 */
+  moments: CoverageInput[];
+}
+
+/**
+ * 覆盖表存的是**事实**(有哪些时刻、哪些已经烘好),段落是画的时候现算的。
+ *
+ * 这样安排是因为「烘好了」这件事有两个来源:空闲预烘,和用户正盯着时前台的现烘。
+ * 存算好的段的话,只有预烘那条路能更新它 —— 前台烘完,画面出来了,条子还得等下一轮
+ * 盘点才变。存事实就没这问题:哪条路烘完都只是往 `baked` 里加一个 id,条子当帧就重算。
+ */
 export interface BakeCoverage {
-  /** 低帧率已覆盖的段(黄) */
-  coarse: CoverageSegment[];
-  /** 原始帧率已覆盖的段(绿)。它总是落在 coarse 之内 */
-  full: CoverageSegment[];
-  coarseBaked: number;
-  coarseTotal: number;
-  fullBaked: number;
-  fullTotal: number;
+  /** 按卡分开存,画的时候按指纹过滤 */
+  clips: ClipCoverage[];
+  /** 已经烘好的那些时刻(momentId)。两条烘焙路径共用这一个集合 */
+  baked: Set<string>;
   /** 正在烘的那一刻(时间轴绝对秒);没在烘就是 null */
   bakingAt: number | null;
   /** 已经占了多少磁盘(字节,实测值) */
   bytes: number;
 }
 
-const EMPTY: BakeCoverage = {
-  coarse: [], full: [], coarseBaked: 0, coarseTotal: 0, fullBaked: 0, fullTotal: 0,
-  bakingAt: null, bytes: 0,
-};
+const EMPTY: BakeCoverage = { clips: [], baked: new Set(), bakingAt: null, bytes: 0 };
+
+/**
+ * 一张卡「长什么样」的指纹 —— 只带**决定像素**的东西。
+ *
+ * 这一份是**唯一**的算法:Scene3DView 判断要不要重建场景用它,进度条判断某段覆盖
+ * 是不是过期了也用它。两处各写一套的话,会出现「条子认为还有效、画面已经换了」这种
+ * 对不上的状态,而且不报错。
+ *
+ * 位置和三维变换不进指纹:服务端烘的时候会把 frame 整个摘掉(见 bakeTarget),
+ * 转一下卡、推一下深度,像素一个都不变。
+ */
+export function clipFingerprint(c: {
+  id: string; cardId: string; params?: unknown; frame?: { w?: number; h?: number } | null;
+}): string {
+  return [c.id, c.cardId, JSON.stringify(c.params ?? {}), `${c.frame?.w ?? "-"}x${c.frame?.h ?? "-"}`].join("|");
+}
 
 /*
  * 模块级的小仓库:预烘那边写,时间轴那边读。
@@ -145,3 +200,60 @@ export function getCoverage(): BakeCoverage {
   return current;
 }
 
+
+/** 进度条真正要画的东西:过滤掉作废的卡之后,跨卡合并出来的段和计数 */
+export interface VisibleCoverage {
+  coarse: CoverageSegment[];
+  full: CoverageSegment[];
+  coarseBaked: number;
+  coarseTotal: number;
+  fullBaked: number;
+  fullTotal: number;
+  /** 有多少张卡的覆盖已经作废(刚改过参数,还没重烘) */
+  stale: number;
+}
+
+/**
+ * 拿**当前项目**的指纹过一遍覆盖,只留还算数的,再跨卡合并。
+ *
+ * 这是「改了 A,A 那一段当帧就变白」的全部机制:指纹对不上就不画。
+ * 它是个纯函数,所以这条行为可以单测 —— 而它要是错了,界面上的表现是
+ * 「条子显示绿的,拖过去却要等五秒」,属于会骗人的那一类,必须钉住。
+ */
+export function visibleCoverage(cov: BakeCoverage, liveFingerprints: Set<string>): VisibleCoverage {
+  const live = cov.clips.filter((c) => liveFingerprints.has(c.fp));
+  const isBaked = (m: CoverageInput) => !!m.id && cov.baked.has(m.id);
+  const coarseM: CoverageInput[] = [];
+  const fineM: CoverageInput[] = [];
+  for (const c of live) {
+    for (const m of c.moments) {
+      if ((m.tier ?? "coarse") === "coarse") coarseM.push(m);
+      // 绿用 fine 而不是 tier:0.5 秒这类点两档都落在上面,排队时算低帧率,
+      // 但它同样是逐帧那一档的一格 —— 漏掉它绿条会每隔半秒缺一块
+      if (m.fine) fineM.push(m);
+    }
+  }
+  return {
+    coarse: coverageSegments(coarseM, isBaked),
+    full: coverageSegments(fineM, isBaked),
+    coarseBaked: coarseM.filter(isBaked).length,
+    coarseTotal: coarseM.length,
+    fullBaked: fineM.filter(isBaked).length,
+    fullTotal: fineM.length,
+    stale: cov.clips.length - live.length,
+  };
+}
+
+/**
+ * 记下「这一刻烘好了」。**前台现烘完也要调这个** —— 不调的话画面已经换成真图了,
+ * 时间轴上那一段还是空的,要等下一轮盘点才补上,看起来就是条子慢半拍。
+ *
+ * 只加不算段:段是画的时候现算的,所以这里 O(1) 就够,每烘完一张调一次不心疼。
+ */
+export function markBaked(ids: string[]): void {
+  const add = ids.filter((id) => !current.baked.has(id));
+  if (!add.length) return;
+  const baked = new Set(current.baked);
+  for (const id of add) baked.add(id);
+  publishCoverage({ ...current, baked });
+}

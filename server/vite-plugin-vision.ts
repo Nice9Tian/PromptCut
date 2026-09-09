@@ -195,8 +195,25 @@ function maxConcurrentRenders(): number {
   return Math.max(1, Math.min(8, byCpu, Number.isFinite(byMem) ? byMem : 8));
 }
 
+/**
+ * **永远给前台留一个槽位。**
+ *
+ * 插队(priority)只解决「谁先排」,解决不了「有没有位子」:空闲预烘会把池子填满,
+ * 于是用户改完一张卡、正盯着屏幕等的那一张,得先等某个没人等的活跑完才有槽位。
+ * 实测过一次 13.6 秒 —— 插队是生效的,可它前面那 7 个都已经在跑了,插队插不进正在跑的。
+ *
+ * 所以后台(priority 0)最多只能用到 `max - 1`,剩下那个槽位专门空着等前台。
+ * 代价是吞吐少了 1/7,换来的是**用户永远不用等一个没人等的活**。
+ *
+ * 只有一个槽位的机器留不出来(留了就没人干活了),那时退化成原来的行为。
+ */
 function pumpRenderQueue() {
-  while (renderRunning < maxConcurrentRenders() && renderWaiting.length) {
+  const max = maxConcurrentRenders();
+  while (renderWaiting.length) {
+    // 队列是按优先级插好序的,队头就是下一个最该跑的
+    const next = renderWaiting[0];
+    const limit = next.priority > 0 ? max : Math.max(1, max - 1);
+    if (renderRunning >= limit) break;
     const item = renderWaiting.shift()!;
     renderRunning++;
     Promise.resolve()
@@ -900,8 +917,19 @@ export function visionPlugin(): Plugin {
              */
             const orphans = [...onDisk.values()].filter((f) => !mine.has(f.key));
             const totalBytes = [...onDisk.values()].reduce((s, f) => s + f.bytes, 0);
-            // concurrency 一并告诉前端:预烘该一次发几张才能把渲染池喂满(见 maxConcurrentRenders)
-            sendJson(res, 200, { ok: true, items, orphans, totalBytes, fileCount: onDisk.size, concurrency: maxConcurrentRenders() });
+            /*
+             * concurrency:池子多大,预烘按它决定一次发几张才喂得满。
+             * running:此刻真有几个渲染在跑。后台最多用到 concurrency-1(留一个给前台),
+             *   所以这两个数是「槽位有没有留住」唯一可信的观测口。
+             *
+             * 别拿 out/export-vision-* 的目录数去数并发:那些目录是 fire-and-forget 删的
+             * (见 renderOneFrame 的 finally),跑完还没删掉的会和在跑的叠在一起 ——
+             * 实测 7 个槽位数出来 10 个,那是量具错了,不是并发超了。
+             */
+            sendJson(res, 200, {
+              ok: true, items, orphans, totalBytes, fileCount: onDisk.size,
+              concurrency: maxConcurrentRenders(), running: renderRunning,
+            });
           } catch (e: any) {
             sendJson(res, 500, { ok: false, error: e?.message || String(e) });
           }

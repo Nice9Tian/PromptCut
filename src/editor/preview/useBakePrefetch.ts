@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { planBakes, defaultBudgetBytes, type BakeMoment, type BakeTier } from "./bakePlan";
-import { coverageSegments, publishCoverage } from "./bakeCoverage";
+import { clipFingerprint, momentId, publishCoverage, type ClipCoverage } from "./bakeCoverage";
 
 /**
  * 空闲时把贴图预先烘好。排队规则见 bakePlan.ts,这里只管**什么时候动手**。
@@ -101,14 +101,8 @@ function onIdle(fn: () => void, timeout = 2000): () => void {
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
-/**
- * `ready` 里认这一刻的键:同一张卡的不同时刻是不同的图,只按 clipId 存会互相盖掉。
- *
- * 格式是**约定**:`<clipId>@<t>`,拆的时候从后往前找 `@`(clipId 里不会有)。
- * Scene3DView 就是这么拆回去的 —— 这里要是改了格式,那边会**静默**对不上号,
- * 表现成「预烘明明烘好了,板子上还是色块」。要改就两处一起改。
- */
-export const momentId = (clipId: string, t: number) => `${clipId}@${t}`;
+// momentId 定义在 bakeCoverage.ts(纯的,覆盖表也按它记账);这里再导出给 Scene3DView 用
+export { momentId } from "./bakeCoverage";
 
 // canonFrameT 定义在 bakePlan.ts(纯函数、可单测);这里再导出,方便 Scene3DView 一处引入
 export { canonFrameT } from "./bakePlan";
@@ -139,6 +133,17 @@ export function useBakePrefetch({
   tRef.current = t;
   const momentsRef = useRef(moments);
   momentsRef.current = moments;
+  /**
+   * 每张卡当前的内容指纹。发布覆盖时要带上它 —— 画条子的那一侧靠它判断
+   * 「这段覆盖还算不算数」,从而做到改完卡片当帧就变白,不用等这里发布。
+   */
+  const fingerprints = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const tr of project?.tracks ?? []) for (const c of tr.clips ?? []) m.set(c.id, clipFingerprint(c));
+    return m;
+  }, [project]);
+  const fpRef = useRef(fingerprints);
+  fpRef.current = fingerprints;
   /** 最后一次改动的时刻 —— 用来判断用户是不是还在拖 */
   const touchedAt = useRef(Date.now());
   useEffect(() => { touchedAt.current = Date.now(); }, [project, t]);
@@ -168,27 +173,53 @@ export function useBakePrefetch({
      * 把覆盖情况发给绿条。`bakingAt` 从 `latestBakingAt` 读 —— 它在烘的过程中会变,
      * 而这个函数在每轮盘点后调一次,不能把当时那个瞬间的值封进闭包。
      */
-    const publishBaked = (all: BakeMoment[], known: Map<string, number>) => {
+    const publishBaked = (all: BakeMoment[], known: Map<string, number>, fpAtRequest: Map<string, string>) => {
       let bytes = 0;
       for (const b of known.values()) bytes += b;
       const isBaked = (m: { key?: string }) => !!m.key && known.has(m.key);
+
       /*
-       * 黄 = 低帧率那一格的覆盖;绿 = **原始帧率格子**的覆盖。
-       * 绿用 `fine` 而不是 `tier === "full"`:0.5 秒这类点两档都落在上面,
-       * 排队时算低帧率(先烘),但它同样是逐帧那一档的一格 —— 漏掉它绿条会每隔半秒缺一块。
+       * **按卡分开发布**,每条带上这张卡当时的内容指纹。
+       *
+       * 合成一整条的话,就只有这个循环能更新它 —— 而这个循环要等当前这批烘完、
+       * 再盘点一次才轮得到发布,于是「改完卡片条子纹丝不动」。分卡存之后,
+       * 画条子的那一侧拿当前项目的指纹一对就知道哪条作废了,不用等这里。
        */
-      const coarse = all.filter((m) => (m.tier ?? "coarse") === "coarse");
-      const full = all.filter((m) => m.fine);
-      publishCoverage({
-        coarse: coverageSegments(coarse, isBaked),
-        full: coverageSegments(full, isBaked),
-        coarseBaked: coarse.filter(isBaked).length,
-        coarseTotal: coarse.length,
-        fullBaked: full.filter(isBaked).length,
-        fullTotal: full.length,
-        bakingAt: latestBakingAt,
-        bytes,
-      });
+      const byClip = new Map<string, BakeMoment[]>();
+      for (const m of all) {
+        const list = byClip.get(m.clipId);
+        if (list) list.push(m);
+        else byClip.set(m.clipId, [m]);
+      }
+
+      const clips: ClipCoverage[] = [];
+      const baked = new Set<string>();
+      for (const [clipId, ms] of byClip) {
+        /*
+         * 用**发请求那一刻**的指纹,不是现在的。
+         *
+         * 盘点是异步的:请求发出去之后用户可能已经改了这张卡。拿"现在的指纹"去盖一份
+         * "改之前的盘点结果",等于把过期数据盖上有效的戳 —— 实测过:改完 29ms 条子正确变白,
+         * 591ms 那个在途的盘点回来,又把它涂回去了,而那一刻它根本还没重烘。
+         * 条子说有、拖过去要等五秒,正是最不能接受的那种骗人。
+         *
+         * 带上当时的指纹之后,这种过期结果和当前项目对不上,画条子那一侧自动滤掉。
+         */
+        const fp = fpAtRequest.get(clipId);
+        // 指纹都拿不到说明这张卡当时就不在项目里,那它的覆盖也没有意义
+        if (!fp) continue;
+        clips.push({
+          clipId,
+          fp,
+          moments: ms.map((m) => ({
+            clipId: m.clipId, id: momentId(m.clipId, m.t), key: m.key,
+            t: m.t, start: m.start, end: m.end, tier: m.tier, fine: m.fine,
+          })),
+        });
+        // 盘点问回来「这个键在磁盘上」的,就是已经烘好的那些时刻
+        for (const m of ms) if (isBaked(m)) baked.add(momentId(m.clipId, m.t));
+      }
+      publishCoverage({ clips, baked, bakingAt: latestBakingAt, bytes });
     };
 
     const post = async (url: string, payload: unknown, signal?: AbortSignal) => {
@@ -238,6 +269,8 @@ export function useBakePrefetch({
           const wanted = momentsRef.current;
           if (!wanted.length) { await restUntilTouched(backoff); backoff = Math.min(IDLE_MAX_MS, backoff * 2); continue; }
 
+          // 拍下**这一刻**每张卡长什么样。盘点是异步的,回来时项目可能已经变了(见 publishBaked)
+          const fpAtRequest = fpRef.current;
           /* ① 盘点:哪些已经有了、各自多大、还有哪些没人认领 */
           const st = await post("/api/vision/bake-status", {
             project: proj,
@@ -279,7 +312,7 @@ export function useBakePrefetch({
            * 上次开编辑器烘出来的文件也算数;只按这次会话烘过的算,绿条会从零开始涨,
            * 明明磁盘上早就有了。
            */
-          publishBaked(planMoments, known);
+          publishBaked(planMoments, known, fpAtRequest);
 
           /* ② 排队:眼前 → 两侧 → 从 0 铺;同一份名单顺便算出该删哪些 */
           const plan = planBakes({ moments: planMoments, t: now, budgetBytes: budget, known });
@@ -342,7 +375,7 @@ export function useBakePrefetch({
             didSomething = true;
             // 绿条上要标出"正在烘这一刻",所以取这一批里最靠前的那个时刻
             latestBakingAt = Math.min(...batch.map((j) => j.t));
-            publishBaked(planMoments, known);
+            publishBaked(planMoments, known, fpAtRequest);
             setStatus((s) => ({ ...s, baking: { clipId: job.clipId, phase: job.phase }, queued: plan.jobs.length - done }));
             try {
               /*
@@ -383,7 +416,7 @@ export function useBakePrefetch({
             done += batch.length;
             latestBakingAt = null;
             // 每烘完一批就更新绿条,而不是等整轮跑完 —— 用户要看着它一段一段长出来
-            publishBaked(planMoments, known);
+            publishBaked(planMoments, known, fpAtRequest);
             setStatus((s) => ({
               ...s,
               ready: new Map(ready),

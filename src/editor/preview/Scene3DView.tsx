@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { useBakePrefetch, beginForegroundBake, endForegroundBake, canonFrameT } from "./useBakePrefetch";
+import { clipFingerprint, markBaked, momentId } from "./bakeCoverage";
 import { flattenOverlay, type Project } from "../../kernel/project";
 import { placeClip3D } from "./place3d";
 import { frustum2d } from "./frustum2d";
@@ -97,8 +98,27 @@ export function Scene3DView({ project, t }: Props) {
    * 所以转一下卡片、推一下深度,贴图一个像素都不会变。把整个 frame 塞进去的后果是:
    * 在「三维」面板里拖滑杆,每一格都算变了,于是每一格重建一次场景。
    */
-  const texKey = (c: { id: string; cardId: string; params?: unknown; frame?: { w?: number; h?: number } }) =>
-    [c.id, c.cardId, JSON.stringify(c.params ?? {}), `${c.frame?.w ?? "-"}x${c.frame?.h ?? "-"}`].join("|");
+  // 指纹只有一份实现(bakeCoverage.clipFingerprint)—— 进度条判断「这段覆盖还算不算数」
+  // 用的也是它。两处各写一套的话会出现「条子说还有效、画面已经换了」,而且不报错。
+  const texKey = clipFingerprint;
+  /**
+   * 要不要**重建整个场景**的指纹。只带真正决定**几何**的东西:
+   * 哪几张卡、各自是什么卡、板子多大。`scene-3d` 还要带 params —— 它的几何
+   * (形状、半径)就是参数算出来的;二维卡的板子只是一块 PlaneGeometry,和参数无关。
+   *
+   * **二维卡的 params 故意不在里面。** 它们只决定贴图长什么样,而换贴图走的是
+   * `swap` / `proxy` 那条路,只改 material.map,不用重建。
+   *
+   * 放进来的后果实测过:拖一次滑杆连发十几次改动,就**重建十几次整个场景** ——
+   * 每次都 new 一个 WebGLRenderer、再 forceContextLoss 掉旧的(浏览器上限约 16,
+   * 超了静默丢最老的)。用户看到的就是画面卡住、改了半天毫无反馈。
+   */
+  const buildKey = (c: { id: string; cardId: string; params?: unknown; frame?: { w?: number; h?: number } | null }) => {
+    const box = `${c.frame?.w ?? "-"}x${c.frame?.h ?? "-"}`;
+    return c.cardId === "scene-3d"
+      ? [c.id, c.cardId, box, JSON.stringify(c.params ?? {})].join("|")
+      : [c.id, c.cardId, box].join("|");
+  };
   /**
    * **播放头这一刻**该显示哪一刻烘出来的图,以及那张图的缓存键。
    *
@@ -227,7 +247,7 @@ export function Scene3DView({ project, t }: Props) {
   // 这一刻有哪些卡、各自长什么样 —— 变了才重建场景。**故意不带时刻**:
   // 带上的话在一段卡里拖时间轴,每跨一格就重建一次整个场景(几何全建、贴图全重载、
   // 还要新开一个 WebGL 上下文,浏览器上限约 16)。换时刻只换 material.map,不必重建。
-  const sig = active.map(texKey).join("|");
+  const sig = active.map(buildKey).join("|");
   // 该显示哪几刻。变了只重新取图,不重建场景
   const momentSig = active.map(momentKey).join("|");
 
@@ -602,6 +622,14 @@ export function Scene3DView({ project, t }: Props) {
            */
           if (c) moments.current.set(momentKey(c), b.url);
           if (!dead) swap.current.get(b.clipId)?.(b.url, true);
+          /*
+           * **同时告诉时间轴那条进度条。**
+           *
+           * 前台现烘和空闲预烘是两条路,而覆盖表原来只有预烘那条会写。于是前台烘完、
+           * 画面已经换成真图了,时间轴上那一段还是空的 —— 要等下一轮盘点(最长几秒)才补上,
+           * 看起来就是"条子慢半拍"。这里补一句,两条路就都记账了。
+           */
+          markBaked([momentId(b.clipId, b.t)]);
         }
         if (dead) return;
         if (data.failed?.length) setErr(`${data.failed.length} 张没烘出来:${data.failed[0].error}`);

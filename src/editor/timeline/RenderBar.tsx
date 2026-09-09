@@ -1,8 +1,11 @@
-import { useSyncExternalStore } from "react";
+import { useMemo, useSyncExternalStore } from "react";
 import { useTimelineContext } from "./TimelineContext";
 import { useStore } from "../../store/project";
 import { useScrub } from "./useScrub";
-import { getCoverage, subscribeCoverage, type CoverageSegment } from "../preview/bakeCoverage";
+import {
+  clipFingerprint, getCoverage, subscribeCoverage, visibleCoverage,
+  type CoverageSegment,
+} from "../preview/bakeCoverage";
 import { xOfTime } from "./utils";
 
 /** 进度条高度(px)。够看见、又不抢时间轴的地方 */
@@ -13,30 +16,34 @@ export const RENDER_H = 5;
  *
  * # 两种颜色说的是两件事
  *
- * **黄 = 低帧率那一档已经有了。** 拖过去立刻有画面,但看到的那一刻最多和播放头差 0.25 秒
- * (0.25 秒一格,约 4 帧/秒)。这一档先把整条片子铺满 —— 成本只有原始帧率的零头。
+ * **黄 = 低帧率那一档已经有了。** 拖过去立刻有画面,但看到的那一刻最多和播放头差 0.25 秒。
+ * 这一档先把整条片子铺满 —— 成本只有原始帧率的零头。
  *
  * **绿 = 原始帧率那一档也有了。** 那一段是逐帧精确的。低帧率全部铺完之后才开始烘它。
  *
  * **空白 = 什么都没有,拖过去要等它现烘(一张约 4 秒)。**
  *
- * 两档分开画而不是合成一个百分比,是因为它们对用户的意义完全不同:黄的地方"能看但不准",
- * 绿的地方"就是这一帧"。合成一条就把这个区别抹掉了 —— 而这个区别正是用户要看的。
+ * # 改了一张卡,它那一段**当帧**就变白
+ *
+ * 覆盖是**按卡**存的,每条带着那张卡当时的内容指纹(见 bakeCoverage 的 ClipCoverage)。
+ * 这里每次渲染都拿**当前项目**的指纹对一遍,对不上的直接不画。
+ *
+ * 所以「改完卡片条子立刻变白」不依赖任何异步:用户一改参数,store 里的 project 就换了,
+ * 这个组件这一帧就把那张卡抹掉了 —— 不等盘点、不等烘焙,也不可能有竞态。
+ *
+ * 之前不是这样:覆盖是所有卡合成一整条存的,**只有预烘循环能更新它**,而那个循环得先把
+ * 手上这批烘完、再盘点一次才轮得到发布。于是改完卡片条子纹丝不动,看起来像被烘焙卡住了。
+ * 那是结构问题,不是时序没调好 —— 所以这次改的是结构。
  *
  * # 画法上的两条硬要求
  *
- * 1. **画的是真实覆盖的时间段,不是百分比。** 段的算法在 bakeCoverage.ts:一个烘好的时刻
- *    覆盖到同一张卡的下一个时刻为止。百分比进度条做不到这件事 —— 它能显示 90%,
- *    而用户偏偏拖到剩下那 10% 里,一样干等,条却是满的。
+ * 1. **画的是真实覆盖的时间段,不是百分比。** 一个烘好的时刻覆盖到同一张卡的下一个时刻为止。
+ *    百分比进度条做不到这件事 —— 它能显示 90%,而用户偏偏拖到剩下那 10% 里,一样干等。
  * 2. **宁可少画不能多画。** 多画一格就是骗人:那儿明明要等五秒,条却是有色的。
- *
- * 数据来自 `bakeCoverage` 那个模块级小仓库,预烘每烘完一批就发一次。
- * 预烘只在预览面板切到「3D」页时才跑,所以**没开过 3D 页的话这条是空的** ——
- * 空着是诚实的:那时确实一段都没预渲染。已经烘过的部分在切回 2D 页之后仍然显示,
- * 因为仓库是模块级的,不随组件卸载清空。
  */
 export function RenderBar() {
   const { pxPerSec } = useTimelineContext();
+  const project = useStore((s) => s.project);
   const duration = useStore((s) => Math.max(s.project.duration, s.t + 10));
   const startScrub = useScrub();
   /*
@@ -44,6 +51,16 @@ export function RenderBar() {
    * 它保证并发渲染下读到的值和订阅到的是同一份,不会出现"画面用的是旧值"。
    */
   const cov = useSyncExternalStore(subscribeCoverage, getCoverage, getCoverage);
+
+  /** 当前项目里每张卡长什么样。改了参数这个集合就变,于是过期的覆盖当帧被滤掉 */
+  const liveFps = useMemo(() => {
+    const set = new Set<string>();
+    for (const tr of project?.tracks ?? []) for (const c of tr.clips ?? []) set.add(clipFingerprint(c));
+    return set;
+  }, [project]);
+
+  // 过滤 + 合并的逻辑放在 bakeCoverage 里(纯函数,有单测钉着这条行为)
+  const shown = useMemo(() => visibleCoverage(cov, liveFps), [cov, liveFps]);
 
   const x0 = xOfTime(0, pxPerSec);
   const width = Math.max(0, xOfTime(duration, pxPerSec) - x0);
@@ -58,12 +75,13 @@ export function RenderBar() {
     });
 
   const pct = (a: number, b: number) => (b ? Math.round((a / b) * 100) : 0);
-  const title = cov.coarseTotal === 0
+  const title = shown.coarseTotal === 0
     ? "预渲染:还没开始。切到预览面板的「3D」页会在空闲时自动预渲染"
     : [
-        `低帧率(黄)${cov.coarseBaked}/${cov.coarseTotal}(${pct(cov.coarseBaked, cov.coarseTotal)}%)—— 拖过去立刻有画面,最多差 0.25 秒`,
-        `原始帧率(绿)${cov.fullBaked}/${cov.fullTotal}(${pct(cov.fullBaked, cov.fullTotal)}%)—— 逐帧精确`,
+        `低帧率(黄)${shown.coarseBaked}/${shown.coarseTotal}(${pct(shown.coarseBaked, shown.coarseTotal)}%)—— 拖过去立刻有画面,最多差 0.25 秒`,
+        `原始帧率(绿)${shown.fullBaked}/${shown.fullTotal}(${pct(shown.fullBaked, shown.fullTotal)}%)—— 逐帧精确`,
         `空白 = 要等它现烘(一张约 4 秒)。已占 ${(cov.bytes / 1048576).toFixed(1)}MB`,
+        ...(shown.stale ? [`${shown.stale} 张卡刚改过,它们那几段已作废,正在重烘`] : []),
       ].join("\n");
 
   return (
@@ -78,8 +96,8 @@ export function RenderBar() {
       {/* 底槽:整条片子的长度,标出"还有多少没预渲染" */}
       <div className="pc-tl-renderbar-track absolute top-0 bottom-0" style={{ left: x0, width }} />
       {/* 先铺黄的(低帧率),再把绿的(原始帧率)盖在上面 —— 绿的一定落在黄的之内 */}
-      {band(cov.coarse, "pc-tl-renderbar-coarse absolute top-0 bottom-0")}
-      {band(cov.full, "pc-tl-renderbar-done absolute top-0 bottom-0")}
+      {band(shown.coarse, "pc-tl-renderbar-coarse absolute top-0 bottom-0")}
+      {band(shown.full, "pc-tl-renderbar-done absolute top-0 bottom-0")}
       {/*
         正在烘的那一刻单独标一下。它还没进任何一档的覆盖(还没烘完),
         但用户看得见"进度正卡在这儿",而不是对着一条不动的条猜是不是死了。
