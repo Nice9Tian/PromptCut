@@ -485,6 +485,52 @@ export default function vitePluginCards(): Plugin {
     configureServer(server: ViteDevServer) {
       const userDir = path.join(server.config.root, 'src', 'cards', 'user');
 
+      /*
+       * 卡片归属表:哪张定制卡属于哪个项目。
+       *
+       * 为什么需要它:src/cards/user/ 是**一个全局目录**,index.ts 用 import.meta.glob 扫全目录,
+       * 所以从前 Agent 给 A 项目建的卡,打开 B 项目照样出现在 list_cards 里。用户的原话是
+       * 「ThreeJS 的资产又从上一个项目泄露给他了」—— 那张 logo-3d-9tian 是给某个客户做的,
+       * 串到别人的片子里既是噪音也是风险。
+       *
+       * 为什么不写进卡片文件本身:注册表拿到的是 import 出来的 CardDef 对象,不是文件文本,
+       * 读不到文件头的注释。放一张旁表最直接。
+       *
+       * 归属只记「谁建的」,**要不要共享是另一回事**(scope 字段),因为跨项目复用有时正是想要的
+       * (自己的品牌卡下个片子还想用)。默认 project = 不共享,用户可以在聊天面板里改成共享。
+       */
+      const scopeFile = path.join(server.config.root, 'src', 'cards', 'user', '_scopes.json');
+      type CardScope = { scope: 'project' | 'custom'; projectId?: string; createdAt?: string };
+      const readScopes = (): Record<string, CardScope> => {
+        try { return JSON.parse(fs.readFileSync(scopeFile, 'utf8')); } catch { return {}; }
+      };
+      const writeScopes = (m: Record<string, CardScope>) => {
+        try { fs.writeFileSync(scopeFile, JSON.stringify(m, null, 2), 'utf8'); } catch { /* 写不进去不该让建卡失败 */ }
+      };
+
+      // GET 读全表 / POST { cardId, scope } 改一张卡的档位(聊天面板那两个勾选框用)
+      server.middlewares.use('/api/cards/scopes', (req, res) => {
+        if (req.method === 'GET') return sendJson(res, 200, { ok: true, scopes: readScopes() });
+        if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: 'GET or POST' });
+        if (!originOk(req as any)) return sendJson(res, 403, { ok: false, error: 'Origin rejected' });
+        let body = '';
+        req.on('data', (c) => { body += c; if (body.length > 64 * 1024) req.destroy(); });
+        req.on('end', () => {
+          try {
+            const { cardId, scope, projectId } = JSON.parse(body || '{}');
+            if (typeof cardId !== 'string' || (scope !== 'project' && scope !== 'custom')) {
+              return sendJson(res, 400, { ok: false, error: 'cardId 必填,scope 只能是 project 或 custom' });
+            }
+            const m = readScopes();
+            m[cardId] = { ...m[cardId], scope, ...(projectId ? { projectId } : {}) };
+            writeScopes(m);
+            sendJson(res, 200, { ok: true, scopes: m });
+          } catch (e: any) {
+            sendJson(res, 400, { ok: false, error: e?.message || String(e) });
+          }
+        });
+      });
+
       // 建卡规则单独用一个端点按需取,而不是塞进每次对话的系统提示里 ——
       // 它只在「要建新卡」时才用得上,常驻会白白占掉几千 token。
       /**
@@ -628,7 +674,7 @@ export default function vitePluginCards(): Plugin {
         req.on('data', (c) => { body += c; if (body.length > MAX_SOURCE_BYTES * 2) req.destroy(); });
         req.on('end', () => {
           try {
-            const { id, source, existingIds, overwrite } = JSON.parse(body || '{}');
+            const { id, source, existingIds, overwrite, projectId } = JSON.parse(body || '{}');
             if (typeof id !== 'string' || typeof source !== 'string') {
               return sendJson(res, 400, { ok: false, error: 'id 和 source 都必须是字符串' });
             }
@@ -673,6 +719,20 @@ export default function vitePluginCards(): Plugin {
             const suggestedControls = suggestControls(finalSource).filter((s) => !declared.has(s.key));
 
             fs.writeFileSync(target, finalSource, 'utf8');
+
+            /*
+             * 盖归属戳。默认 project = 只在建它的这个项目里出现 —— 这是止血的那一下:
+             * 定制卡多半是给某个客户/某条片子做的,默认共享才是反直觉的那个选择。
+             * 想跨项目复用,在聊天面板里把它改成「自定义素材」即可。
+             * 覆盖重写(overwrite)时不动已有的档位,免得用户设过的共享被一次改卡冲掉。
+             */
+            {
+              const m = readScopes();
+              if (!m[id]) {
+                m[id] = { scope: "project", createdAt: new Date().toISOString(), ...(typeof projectId === "string" && projectId ? { projectId } : {}) };
+                writeScopes(m);
+              }
+            }
             sendJson(res, 200, {
               ok: true,
               id,

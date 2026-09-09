@@ -32,6 +32,8 @@ import {
   type Size,
 } from "../../kernel/layout";
 import { listCuts, resolveCut } from "../../kernel/cuts";
+import { getActiveDraftId } from "../io/drafts";
+import { invalidateScopes, isCardVisible, loadScopes, readVisibility, type ScopeEntry } from "../cardScope";
 import { cameraFor, clampFov, DEFAULT_FOV_DEG, MAX_FOV_DEG, MIN_FOV_DEG } from "../../kernel/space3d";
 
 import type { ClipFrame } from "../../kernel/types";
@@ -140,6 +142,14 @@ import { runSttInstall } from "../io/runSttInstall";
 
 /** 后台 STT 任务的状态(MCP 工具立即返回 jobId,结果靠轮询) */
 interface SttJob { done: boolean; ok: boolean; error?: string; logTail?: string[]; segments?: number }
+/**
+ * 归属表的同步快照。`list_cards` 是同步的,没法 await —— 所以模块加载时先拉一次,
+ * 建卡 / 改档位之后再刷新。拉不到就是空表,而空表在 isCardVisible 里一律放行:
+ * 宁可多给几张卡,也不能因为一次网络抖动让 Agent 突然一张卡都看不见。
+ */
+let cardScopes: Record<string, ScopeEntry> = {};
+const refreshScopes = () => { invalidateScopes(); loadScopes(true).then((m) => { cardScopes = m; }).catch(() => {}); };
+loadScopes().then((m) => { cardScopes = m; }).catch(() => {});
 const sttJobs = new Map<string, SttJob>();
 
 /** 素材收集拓展的安装作业。和 sttJobs 分开,理由同 trackInstallJobs。 */
@@ -252,7 +262,18 @@ export function RightPanel() {
        * 和 defaults 全量拉一遍,又贵又淹没重点。
        */
       listCards: (args) => {
-        const wanted = args?.cardId ? [findCard(args.cardId)] : allCards();
+        /*
+         * 卡片库对 Agent 暴露多少,由 editor/cardScope.ts 那三档决定 ——
+         * 内置卡按组开关,用户卡看「是不是本项目建的 / 有没有标共享」。
+         * 从前这里是全给,于是给 A 项目建的定制卡会出现在 B 项目里(用户原话:
+         * 「ThreeJS 的资产又从上一个项目泄露给他了」)。
+         *
+         * 点名要某一张卡时(带 cardId)**不过滤**:那是明确的指名道姓,
+         * 藏起来只会让它拿到一句「没有这张卡」而不知道为什么。
+         */
+        const wanted = args?.cardId
+          ? [findCard(args.cardId)]
+          : allCards().filter((c) => isCardVisible(c, readVisibility(), cardScopes, getActiveDraftId()));
         const full = args?.detail === "full" || !!args?.cardId;
         return wanted.map((c) => {
           const base = {
@@ -1653,10 +1674,13 @@ export function RightPanel() {
             source: args.source,
             overwrite: args.overwrite === true,
             existingIds: allCards().map((c) => c.id),
+            // 盖归属戳:定制卡默认只属于建它的这个项目(见 editor/cardScope.ts)
+            projectId: getActiveDraftId() ?? undefined,
           }),
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok || !data.ok) throw new Error(data.error || `建卡失败(HTTP ${res.status})`);
+        refreshScopes();
         return data;
       },
       /**

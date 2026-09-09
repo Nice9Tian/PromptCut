@@ -1,9 +1,13 @@
-import { forwardRef, useImperativeHandle, useMemo, useRef, useState } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { allCards } from "../../kernel/registry";
 import { CardCell } from "./CardCell";
 import { PartCell } from "./PartCell";
 import { allParts } from "../../parts/registry";
 import { assetCardKind, featuredParticleIds } from "../../cards/assets";
+import { CardScopeBar } from "./CardScopeBar";
+import { UserCardMenu } from "./UserCardMenu";
+import { isCardVisible, loadScopes, readVisibility, type CardVisibility, type ScopeEntry } from "../cardScope";
+import { getActiveDraftId } from "../io/drafts";
 
 export interface CardsTabHandle {
   scrollToTop: () => void;
@@ -19,6 +23,12 @@ export const CardsTab = forwardRef<CardsTabHandle, CardsTabProps>(function Cards
   ref,
 ) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  // 三档筛选。scopes 是服务端那张归属表(哪张定制卡属于哪个项目)
+  const [vis, setVis] = useState<CardVisibility>(() => readVisibility());
+  const [scopes, setScopes] = useState<Record<string, ScopeEntry>>({});
+  const [menu, setMenu] = useState<{ cardId: string; x: number; y: number } | null>(null);
+  const reloadScopes = () => { loadScopes(true).then(setScopes).catch(() => {}); };
+  useEffect(() => { loadScopes().then(setScopes).catch(() => {}); }, []);
 
   useImperativeHandle(ref, () => ({
     scrollToTop: () => {
@@ -38,7 +48,8 @@ export const CardsTab = forwardRef<CardsTabHandle, CardsTabProps>(function Cards
 
   const cards = useMemo(() => {
     const q = search.toLowerCase();
-    const all = allCards().filter(
+    const projectId = getActiveDraftId();
+    const all = allCards().filter((c) => isCardVisible(c, vis, scopes, projectId)).filter(
       (c) =>
         c.name.toLowerCase().includes(q) ||
         c.description.toLowerCase().includes(q) ||
@@ -57,10 +68,12 @@ export const CardsTab = forwardRef<CardsTabHandle, CardsTabProps>(function Cards
       particles: all.filter((c) => assetCardKind(c) === "particles"),
       empty: all.length === 0,
     };
-  }, [search]);
+  }, [search, vis, scopes]);
 
   return (
-    <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto pc-l-scroll pb-4 pt-1">
+    <div className="flex-1 min-h-0 flex flex-col">
+      <CardScopeBar onChange={setVis} />
+      <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto pc-l-scroll pb-4 pt-1">
       {cards.empty && parts.length === 0 && <div className="p-4 text-center text-xs text-neutral-500">没有匹配的卡片</div>}
 
       {parts.length > 0 && (
@@ -85,7 +98,10 @@ export const CardsTab = forwardRef<CardsTabHandle, CardsTabProps>(function Cards
           </div>
           <div className="grid grid-cols-2 gap-1.5 px-2">
             {cards.user.map((def) => (
-              <CardCell key={def.id} def={def} />
+              // 右键换档:项目素材 ⇄ 自定义素材(见 UserCardMenu)
+              <div key={def.id} onContextMenu={(e) => { e.preventDefault(); setMenu({ cardId: def.id, x: e.clientX, y: e.clientY }); }}>
+                <CardCell def={def} />
+              </div>
             ))}
           </div>
         </div>
@@ -159,6 +175,18 @@ export const CardsTab = forwardRef<CardsTabHandle, CardsTabProps>(function Cards
             ))}
           </div>
         </div>
+      )}
+      </div>
+
+      {menu && (
+        <UserCardMenu
+          cardId={menu.cardId}
+          entry={scopes[menu.cardId]}
+          x={menu.x}
+          y={menu.y}
+          onClose={() => setMenu(null)}
+          onChanged={reloadScopes}
+        />
       )}
     </div>
   );
