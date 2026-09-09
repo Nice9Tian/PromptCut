@@ -149,6 +149,18 @@ export function CodeTab({ clip }: { clip: TrackClip }) {
         {lifecycleLine}
       </div>
 
+      {/*
+        frame.local 收哪些键要**常驻**写出来,不能塞进下面那条状态栏 ——
+        那一行是 h-4 单行,而且只在「没报错、没未应用改动、不缺参数」时才出现,
+        平时根本看不到。而三维那三项没设过的时候 JSON 里压根不出现,
+        光看这段 JSON 是不知道它们存在的,这一页偏偏正是给想直接写值的人用的。
+      */}
+      <div className="mb-2 shrink-0 text-[10px] leading-relaxed text-neutral-600">
+        frame.local:x / y / w / h / anchor / scale / rotate,以及三维的{" "}
+        <span className="text-neutral-400">rotateX / rotateY / translateZ</span>
+        (三维要在「参数」页打开透视相机才有近大远小,否则只是斜切)
+      </div>
+
       <textarea
         data-pc="code-editor"
         value={draft}

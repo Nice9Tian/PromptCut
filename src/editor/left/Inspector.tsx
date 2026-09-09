@@ -5,6 +5,7 @@ import { ParamsForm } from "./ParamsForm";
 import { PartsForm } from "./PartsForm";
 import { isComposite } from "../../kernel/envelope";
 import { CodeTab } from "./CodeTab";
+import { Frame3DForm } from "./Frame3DForm";
 
 /** 编辑分页的内容。参数 / 代码这一级由左栏的二级分页栏控制,这里只按 tab 渲染。 */
 export function Inspector({ tab }: { tab: "form" | "code" }) {
@@ -113,6 +114,8 @@ export function Inspector({ tab }: { tab: "form" | "code" }) {
       
       <div className="flex-1 min-h-0 overflow-y-auto pc-l-scroll">
         {tab === "form" && (isComposite(clip) ? <PartsForm clip={clip} /> : <ParamsForm clip={clip} cardDef={cardDef} />)}
+        {/* 三维排在卡片参数后面:它改的是「这张卡摆在哪」,不是卡片自己的内容 */}
+        {tab === "form" && <Frame3DForm clip={clip} />}
         {tab === "code" && <CodeTab clip={clip} />}
       </div>
     </div>

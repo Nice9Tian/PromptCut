@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { flattenOverlay, type Project } from "../../kernel/project";
 import { placeClip3D } from "./place3d";
 import { getCard } from "../../kernel/registry";
+import { actions, useStore } from "../../store/project";
 import {
   addLights, applyTexture, geometryOf, materialOf, poseMesh, radiusFor, shapeOf,
   type Scene3DParams,
@@ -59,6 +60,7 @@ interface Props {
 
 export function Scene3DView({ project, t }: Props) {
   const host = useRef<HTMLDivElement>(null);
+  const selected = useStore((s) => s.selection[0]);
   const [mods, setMods] = useState<[ThreeMod, OrbitMod] | null>(null);
   const [pending, setPending] = useState(0);
   const [err, setErr] = useState<string | null>(null);
@@ -78,8 +80,23 @@ export function Scene3DView({ project, t }: Props) {
   const swap = useRef(new Map<string, (url: string) => void>());
   /** 三维物件每帧要按 t 摆姿势(会转的那种)。渲染循环里调,所以要读最新的 t */
   const posers = useRef<((t: number) => void)[]>([]);
+  /**
+   * 用户转到哪儿了。**跨场景重建保留** —— 这是「拖时间轴相机会弹回去」的修复点。
+   *
+   * 建场景那个 effect 的依赖里有 `sig`,而 `sig` 是「**这一刻**有哪些卡」算出来的。
+   * `t` 已经刻意排除在依赖外了,但 `sig` 会**随时间间接变化**:拖过任意一条 clip 边界,
+   * 活跃的卡就换了一批,effect 整段重跑,`new PerspectiveCamera` + `new OrbitControls`
+   * 把机位打回默认 —— 用户刚转好的视角,一拖进度条就没了。
+   *
+   * 存在 ref 里而不是 state:它每次拖动都在变,进 state 会引起重渲染,而这个值
+   * 只有重建场景那一刻才被读一次。
+   */
+  const pose = useRef<{ pos: [number, number, number]; target: [number, number, number] } | null>(null);
   const tRef = useRef(t);
   tRef.current = t;
+  // 选中变了不该重建场景(重建 = 重新加载所有贴图),所以也走 ref
+  const selRef = useRef(selected);
+  selRef.current = selected;
 
   useEffect(() => {
     let dead = false;
@@ -114,11 +131,20 @@ export function Scene3DView({ project, t }: Props) {
      */
     const cam = cameraFor(stage, project.camera3dFov ?? DEFAULT_FOV_DEG);
     const camera = new THREE.PerspectiveCamera(cam.fovDeg, w / h, 1, cam.distance * 40);
-    camera.position.set(...cam.position);
+    // 转过就接着用上次的机位,没转过才用成片那台的位置(见 pose 那个 ref 的说明)
+    camera.position.set(...(pose.current?.pos ?? cam.position));
 
     const controls = new OrbitControls(camera, renderer.domElement);
-    controls.target.set(0, 0, 0);
+    controls.target.set(...(pose.current?.target ?? [0, 0, 0]));
     controls.enableDamping = true;
+    // 用户一转就记下来。OrbitControls 的 change 在每次相机被它改动时触发,
+    // 包括阻尼滑行的那几帧,所以松手后的最终位置一定记的是最后那一下。
+    controls.addEventListener("change", () => {
+      pose.current = {
+        pos: camera.position.toArray() as [number, number, number],
+        target: controls.target.toArray() as [number, number, number],
+      };
+    });
     controls.update();
 
     scene.add(new THREE.AmbientLight(0xffffff, 2.2));
@@ -137,6 +163,8 @@ export function Scene3DView({ project, t }: Props) {
     swap.current = new Map();
 
     posers.current = [];
+    // 拾取用:每块 mesh 记住它属于哪个 clip(three 的 userData 就是干这个的)
+    const pickables: any[] = [];
 
     for (const clip of active) {
       // 正负号全在 place3d.ts 里,那边有单测钉着(见它的说明)
@@ -173,6 +201,8 @@ export function Scene3DView({ project, t }: Props) {
         const mesh = new THREE.Mesh(geo, mat);
         mesh.position.set(...pl.meshOffset);
         inner.add(mesh);
+        mesh.userData.clipId = clip.id;
+        pickables.push(mesh);
         disposables.push(geo, mat);
 
         // 灯的距离尺度照抄卡片:它用的是自己画布那台相机的距离
@@ -203,6 +233,8 @@ export function Scene3DView({ project, t }: Props) {
       const mesh = new THREE.Mesh(geo, mat);
       mesh.position.set(...pl.meshOffset);
       inner.add(mesh);
+      mesh.userData.clipId = clip.id;
+      pickables.push(mesh);
       disposables.push(geo, mat);
 
       // 已经烘好的直接贴上;没有的先留色块,等 bake 回来再换
@@ -219,11 +251,51 @@ export function Scene3DView({ project, t }: Props) {
       else swap.current.set(clip.id, apply);
     }
 
+    /*
+     * 点选。用射线打中的第一块 mesh,把它的 clip 设成选中 —— 选中之后左边的编辑面板
+     * 就是这张卡,可以直接拧「三维」那三个旋钮,所以这一页从"能看"变成"能摆"。
+     *
+     * 要和 OrbitControls 共存:转视角也是按下+拖动。所以按下时记位置,
+     * 松开时只有几乎没动过(< 4px)才当成点击 —— 否则转个视角就把选中改掉了。
+     */
+    const raycaster = new THREE.Raycaster();
+    let downAt: { x: number; y: number } | null = null;
+    const onDown = (e: PointerEvent) => { downAt = { x: e.clientX, y: e.clientY }; };
+    const onUp = (e: PointerEvent) => {
+      if (!downAt) return;
+      const moved = Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y);
+      downAt = null;
+      if (moved > 4) return;
+      const r = renderer.domElement.getBoundingClientRect();
+      const ndc = new THREE.Vector2(
+        ((e.clientX - r.left) / r.width) * 2 - 1,
+        -((e.clientY - r.top) / r.height) * 2 + 1,
+      );
+      raycaster.setFromCamera(ndc, camera);
+      const hit = raycaster.intersectObjects(pickables, false)[0];
+      // 点空白处不清选中:清了的话在 3D 页随手一点就丢了左边正在编辑的那张卡
+      const id = hit?.object?.userData?.clipId;
+      if (id) actions.select([id]);
+    };
+    renderer.domElement.addEventListener("pointerdown", onDown);
+    renderer.domElement.addEventListener("pointerup", onUp);
+
+    /* 选中的那块描一圈边:不改它自己的材质,另加一个线框子物体,取消选中直接删掉 */
+    const marks = new Map<string, any>();
+    for (const m of pickables) {
+      const box = new THREE.BoxHelper(m, 0x22d3ee);
+      box.visible = false;
+      scene.add(box);
+      marks.set(m.userData.clipId, box);
+      disposables.push(box.geometry, box.material as any);
+    }
+
     let raf = 0;
     const tick = () => {
       controls.update();
       // 会转的三维物件跟着时间轴走:姿势是 t 的纯函数,所以每帧照着当前 t 摆一次就行
       for (const pose of posers.current) pose(tRef.current);
+      for (const [id, box] of marks) { box.visible = id === selRef.current; if (box.visible) box.update(); }
       renderer.render(scene, camera);
       raf = requestAnimationFrame(tick);
     };
@@ -243,6 +315,8 @@ export function Scene3DView({ project, t }: Props) {
       render: () => renderer.render(scene, camera),
       dispose: () => {
         cancelAnimationFrame(raf);
+        renderer.domElement.removeEventListener("pointerdown", onDown);
+        renderer.domElement.removeEventListener("pointerup", onUp);
         ro.disconnect();
         controls.dispose();
         for (const d of disposables) d.dispose?.();
