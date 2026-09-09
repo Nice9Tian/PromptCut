@@ -276,3 +276,33 @@
 @media (prefers-reduced-motion: reduce) {
   .pc-pv-hit.is-pulse { animation: none; }
 }
+
+/*
+ * 3D 视图的底:棋盘格,不是黑色。
+ *
+ * 这块画布是 alpha:true 的,没画到的地方直接透出后面的面板色 rgb(12,14,22) —— 近黑。
+ * 于是「一张深色的卡」和「这儿什么都没有」在屏幕上长得一模一样,分不出是卡没烘出来
+ * 还是卡本来就这么暗。see_preview 给模型看的图上犯过同一个错(那边的底是 #111318),
+ * 记录在 vite-plugin-vision.ts 里。
+ *
+ * 格子的两个灰和边长跟 vite-plugin-vision.ts 的 CHECKER_A / CHECKER_B / CHECKER_PX
+ * **逐值对齐**。人在这儿看到的格子,和 Agent 在 see_preview 里看到的格子,是同一个意思:
+ * 那里是透明的,什么都没画。两边不一致的话,人和模型说的就不是同一件事了。
+ */
+.pc-3d-checker {
+  background-color: #6b707b;
+  background-image:
+    linear-gradient(45deg, #8b919c 25%, transparent 25%, transparent 75%, #8b919c 75%),
+    linear-gradient(45deg, #8b919c 25%, transparent 25%, transparent 75%, #8b919c 75%);
+  background-size: 32px 32px;
+  background-position: 0 0, 16px 16px;
+}
+
+/* 格子上的浮层要自带底色,否则 #94a3b8 的字压在中灰格子上读不出来 */
+.pc-3d-note {
+  padding: 4px 10px;
+  border-radius: 6px;
+  font: 12px/1.6 system-ui, sans-serif;
+  background: color-mix(in srgb, var(--ui-panel) 92%, transparent);
+  box-shadow: 0 1px 6px rgb(0 0 0 / 35%);
+}

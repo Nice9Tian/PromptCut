@@ -8,6 +8,8 @@ import {
   type Scene3DParams,
 } from "../../cards/native/scene3dObject";
 import { cameraFor, DEFAULT_FOV_DEG, stageToWorld } from "../../kernel/space3d";
+// 棋盘格底和浮层样式在这儿(.pc-3d-checker / .pc-3d-note)。自己引一次,不指望父组件替它引
+import "./preview.css";
 
 /**
  * 3D 视图:把这一刻画面上的每张卡当成一块**立在空间里的板子**,可以像 Blender 那样绕着看。
@@ -406,14 +408,18 @@ export function Scene3DView({ project, t }: Props) {
   }, [sig]);
 
   return (
-    <div style={{ position: "relative", width: "100%", height: "100%", minHeight: 200 }}>
+    /*
+     * 底是棋盘格,不是黑的。画布 alpha:true,没画到的地方本来直接透出近黑的面板色,
+     * 于是「深色的卡」和「这儿什么都没有」长得一模一样 —— 格子把这两件事分开。
+     * 格子的灰和边长跟 see_preview 那边逐值对齐(见 .pc-3d-checker 的说明)。
+     */
+    <div className="pc-3d-checker" style={{ position: "relative", width: "100%", height: "100%", minHeight: 200 }}>
       <div ref={host} style={{ position: "absolute", inset: 0 }} />
       {(pending > 0 || err) && (
         <div
+          className="pc-3d-note"
           style={{
-            position: "absolute", left: 10, bottom: 10, padding: "4px 10px", borderRadius: 6,
-            font: "12px/1.6 system-ui, sans-serif", pointerEvents: "none",
-            background: "color-mix(in srgb, var(--ui-panel) 88%, transparent)",
+            position: "absolute", left: 10, bottom: 10, pointerEvents: "none",
             color: err ? "var(--ui-danger, #f87171)" : "var(--ui-text-2, #94a3b8)",
           }}
         >
@@ -421,8 +427,8 @@ export function Scene3DView({ project, t }: Props) {
         </div>
       )}
       {!mods && !err && (
-        <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center", color: "var(--ui-text-2, #94a3b8)", font: "13px system-ui" }}>
-          正在加载三维视图…
+        <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center" }}>
+          <span className="pc-3d-note" style={{ color: "var(--ui-text-2, #94a3b8)" }}>正在加载三维视图…</span>
         </div>
       )}
     </div>
