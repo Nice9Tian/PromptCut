@@ -51,6 +51,15 @@ const RENDER_TIMEOUT_MS = 120000;
 const EXTRACT_TIMEOUT_MS = 30000;
 
 /**
+ * 烘焙时把片段挪到第几秒开始(起跑线)。理由和实测数据见 bakeTarget 里那段长注释。
+ *
+ * 不能是 0:预热在 t=0 上走四帧再重挂载卡片,压着第 0 帧的段会多经历这一段,画出来不一样
+ * (实测 step-timeline 差 15164 个像素)。0.5 秒 = 15 帧,推过去约 0.24 秒,买的是
+ * 「34/34 张卡挪位置逐字节相同」。
+ */
+const BAKE_LEAD = 0.5;
+
+/**
  * ffmpeg 在哪:PATH 上的优先;没有就用 winget 装的那份(和 scripts/export-frames.mjs 同一个兜底);
  * 都没有返回 null,素材那一层就不画、在 note 里说清楚。结果缓存,别每次看图都 spawn 一遍 -version。
  */
@@ -445,7 +454,59 @@ export function bakeTarget(
    * 「这张卡自己长什么样」。位置和三维变换由用它的那一方去做:
    * scene-3d 贴到物体表面,3D 视图贴到代表这张卡的那块板子上。烘的时候再带一遍就是叠两次。
    */
-  const { frame: _dropFrame, ...plainClip } = iso.clip;
+  /*
+   * **把这一段挪到固定的起跑线上再烘。**
+   *
+   * 以前是照着它在时间轴上的原位渲的,两笔账都记在这上头:
+   *
+   * 1. **延迟和它排得多靠后成正比。** 导出脚本从第 0 帧顺推(确定性要求),而实测**推一个
+   *    「画面上什么都没有」的空帧和推一个实帧一样贵**(约 16ms):一张卡摆在第 10 秒,
+   *    烘它第一帧要 9014ms,其中 4803ms 全花在推 0~299 这 300 个空帧上。
+   * 2. **挪一下位置,它烘好的十来个时刻全部作废。** 缓存键里带着 start/end 的绝对值,
+   *    而画面根本没变 —— 用户只是把卡拖了个位置,参数一个字没改,却要干等重烘一遍。
+   *
+   * 挪到起跑线上之后,同一张卡同一个**片内相对时刻**永远算出同一个键、渲同一趟,
+   * 两笔账一起消掉:推帧距离只剩 BAKE_LEAD + 片内偏移,和它排在哪儿无关。
+   *
+   * ## 凭什么敢挪:34 张卡逐字节验过
+   *
+   * 挪位置要成立,前提是卡片画出来和绝对位置无关。逐卡对过账(同一片内时刻,一份摆在
+   * 0.5 秒处、一份摆在 12 秒处,比 PNG 的 sha1):**34/34 逐字节相同**。
+   *
+   * 验的过程里咬出两件事,都在这一版里处理了:
+   *
+   * - **mu-word-rotate 原来真的会随位置变**:摆在 0/0.5/1 秒处和摆在 2/3/4/6/12 秒处
+   *   烘出来是两张不同的图,差 22599 个像素、最大通道差 250(板子上显示的是上一个词还是
+   *   下一个词)。根因在卡片那边(轮播用 `now - lastTick` 累加、命中后把相位挪到当前帧),
+   *   已经改成 `floor(elapsed / duration)`,见 vendor/word-rotate.tsx。
+   * - **第 0 帧是特殊的,所以起跑线不能是 0。** 预热(warmUp)在 t=0 上走四帧再重挂载卡片,
+   *   于是「片段正好压着第 0 帧」的卡会多经历这一段:实测摆在 0 秒处 vs 摆在别处,
+   *   step-timeline 差 15164 个像素、mu-word-rotate 差一整个词。留半秒的起跑距离就绕开了
+   *   ——  实测 0.5 秒处和 12 秒处 34/34 逐字节相同。代价是每趟多推 15 帧(约 0.24 秒)。
+   */
+  /*
+   * **片内位置一律用「第几帧」表示,不用「差多少秒」。**
+   *
+   * 时刻的格子本来就是相对片段起点的(`bakeTime.ts` 的 `pickBakeT` 返回 `clip.start + 格子`),
+   * 所以直觉上 `t - clip.start` 就把绝对位置减掉了。但那是**浮点减法**:一段摆在 3 秒处时
+   * `3.25 - 3 = 0.25` 逐位精确,摆在 17.3 秒处时 `17.55 - 17.3 = 0.2500000000000018`。
+   * 键是拿这个数哈希出来的,于是"挪一下位置就全部作废"会以另一种形式活下来 ——
+   * 而且只在位置不是整数的时候发作,最难查。(同一类坑 bakeTime.ts 里记过一次:
+   * step=1/30 时累加和 floor 再乘差 2.8e-17,后果是"预烘出来的图显示端一张都问不到"。)
+   *
+   * 换成整数帧号就没有这回事:同一个帧号必然算出同一个 double,而渲染那一侧
+   * (`Math.round(at * fps)`)本来就只认帧号,一点信息都没丢。
+   */
+  const fps = project.fps || 30;
+  // 至少留一帧:零长度的段推不出任何一帧,烘出来是空图而且不报错
+  const lenFrames = Math.max(1, Math.round(((iso.clip.end ?? 0) - (iso.clip.start ?? 0)) * fps));
+  const len = lenFrames / fps;
+  const { frame: _dropFrame, ...bare } = iso.clip;
+  /*
+   * 键就是从这个 plainClip 算的,所以**这里挪了位置,键才真的和位置无关**。
+   * 只改 at、不改 clip 上的 start/end 是不够的 —— 那两个字段照样会进哈希。
+   */
+  const plainClip = { ...bare, start: BAKE_LEAD, end: BAKE_LEAD + len };
   const box = {
     w: Math.max(1, Math.round(iso.clip?.frame?.w ?? project.width)),
     h: Math.max(1, Math.round(iso.clip?.frame?.h ?? project.height)),
@@ -473,7 +534,19 @@ export function bakeTarget(
    */
   const renderBox = fit === "box" ? { width: box.w, height: box.h } : { width: px, height: px };
   // 没给时间就取这一段的中点 —— 起止两端常卡在进场 / 退场动画上,烘出来是个半透明中间态
-  const at = Number.isFinite(t) ? t : (iso.clip.start + iso.clip.end) / 2;
+  const relFrames = Number.isFinite(t)
+    ? Math.min(lenFrames, Math.max(0, Math.round(((t as number) - (iso.clip.start ?? 0)) * fps)))
+    : Math.round(lenFrames / 2);
+  /** 真正渲第几帧:起跑线 + 片内第几帧。**键和渲染都用它**,所以和绝对位置无关 */
+  const at = BAKE_LEAD + relFrames / fps;
+  /**
+   * 回给调用方的 t —— **必须是它问的那个绝对时刻**,不是上面那个挪过的。
+   *
+   * 3D 视图和预烘都拿 `clipId + t` 当贴图的账本键(momentId),回一个挪过的时刻就会
+   * 对不上号:`batch.find(x => x.t === b.t)` 全部落空,于是「明明烘出来了却当成没烘」,
+   * 一直重烘同一张,而且不报错。
+   */
+  const askedT = Number.isFinite(t) ? (t as number) : (iso.clip.start + iso.clip.end) / 2;
   const rgb = typeof bg === "string" ? /^#?([0-9a-f]{6})$/i.exec(bg.trim()) : null;
 
   const key = createHash("sha1")
@@ -482,7 +555,23 @@ export function bakeTarget(
   // 文件名带上 clipId 只是为了在素材目录里认得出来;真正保证唯一的是后面那段输入哈希
   const name = `bake-${clipId.replace(/[^\w.-]/g, "_")}-${key}.png`;
   const url = `/@media/${encodeURIComponent(name)}`;
-  return { iso, plainClip, renderBox, at, rgb, key, name, url };
+  /**
+   * 渲这一趟用的项目。**只在这里拼一次**:烘单张和烘一批以前各拼一份,
+   * 两处都要记得改 duration、改 tracks、按 renderBox 排版 —— 漏一处就是
+   * 「单张烘的和批量烘的不是同一张图」,而且不报错。
+   *
+   * duration 必须跟着挪过的位置重算(原来那个是整条片子的长度,而这里只剩一段),
+   * 多给一帧的余量:renderFrames 会把帧号夹进 duration*fps-1,正好卡在末尾时会少一帧。
+   */
+  const target = {
+    ...iso.project,
+    // **按真实容器尺寸排版**,不是按贴图尺寸(见上面那段说明)
+    width: renderBox.width,
+    height: renderBox.height,
+    duration: BAKE_LEAD + len + 1 / fps,
+    tracks: iso.project.tracks.map((tr: any) => ({ ...tr, clips: tr.clips.map(() => plainClip) })),
+  };
+  return { iso, plainClip, renderBox, target, at, askedT, rgb, key, name, url };
 }
 
 /**
@@ -534,7 +623,7 @@ async function bakeOne(
    */
   pre?: Buffer,
 ): Promise<any> {
-  const { iso, plainClip, renderBox, at, rgb, key, name, url } = bakeTarget(project, clipId, t, size, bg, fit);
+  const { target, at, askedT, rgb, key, name, url, renderBox } = bakeTarget(project, clipId, t, size, bg, fit);
   const dir = mediaDir(root);
   await fsp.mkdir(dir, { recursive: true });
   const file = path.join(dir, name);
@@ -547,7 +636,7 @@ async function bakeOne(
   // 缓存命中:同样的输入烘过了,直接给 URL
   try {
     const st = await fsp.stat(file);
-    return { clipId, url, t: at, width: renderBox.width, height: renderBox.height, bytes: st.size, cached: true, hint, note };
+    return { clipId, url, t: askedT, width: renderBox.width, height: renderBox.height, bytes: st.size, cached: true, hint, note };
   } catch { /* 没烘过,往下渲 */ }
 
   /*
@@ -573,13 +662,6 @@ async function bakeOne(
   }
 
   async function bakeAndWrite() {
-  const target = {
-    ...iso.project,
-    // **按真实容器尺寸排版**,不是按贴图尺寸(见 bakeTarget 里那段说明)
-    width: renderBox.width,
-    height: renderBox.height,
-    tracks: iso.project.tracks.map((tr: any) => ({ ...tr, clips: tr.clips.map(() => plainClip) })),
-  };
   let raw = pre ?? await enqueue(() => renderOneFrame(root, origin, target, at, []), priority);
 
   /*
@@ -603,7 +685,7 @@ async function bakeOne(
   await fsp.writeFile(tmp, raw);
   await fsp.rename(tmp, file);
   return {
-    clipId, url, t: at, width: png.width, height: png.height, bytes: raw.length, cached: false,
+    clipId, url, t: askedT, width: png.width, height: png.height, bytes: raw.length, cached: false,
     transparentRatio: Math.round((clear / (png.width * png.height)) * 1000) / 1000,
     hint, note,
   };
@@ -651,13 +733,7 @@ async function bakeClip(
    * 排版尺寸对同一张卡是固定的(只看 clip 的框),所以一趟里所有时刻共用同一个 target 项目。
    * 时刻不同的只是「渲第几帧」,由 renderFrames 的 target-frames 决定。
    */
-  const { iso, plainClip, renderBox } = bakeTarget(project, clipId, missing[0].t, size, bg, fit);
-  const target = {
-    ...iso.project,
-    width: renderBox.width,
-    height: renderBox.height,
-    tracks: iso.project.tracks.map((tr: any) => ({ ...tr, clips: tr.clips.map(() => plainClip) })),
-  };
+  const { target } = bakeTarget(project, clipId, missing[0].t, size, bg, fit);
   const fps = target.fps || 30;
   const shots = await enqueue(() => renderFrames(root, origin, target, missing.map((m) => m.at), []), priority);
 
