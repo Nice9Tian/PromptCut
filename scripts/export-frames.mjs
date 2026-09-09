@@ -239,7 +239,7 @@ export async function bakeFrames(bakery, opts = {}) {
   const warmFrames = opts.warm ?? 3;
   const format = opts.format === 'jpeg' ? 'jpeg' : 'png';
   const quality = opts.quality ?? 80;
-  const staticSkip = opts.staticSkip ?? false;
+  const wantStaticSkip = opts.staticSkip ?? false;
   const verifyEvery = opts.verifyEvery ?? 10;
   const ext = format === 'jpeg' ? 'jpg' : 'png';
 
@@ -262,6 +262,26 @@ export async function bakeFrames(bakery, opts = {}) {
     startFrame = a;
     endFrame = b;
   }
+  /*
+   * **只截这几帧**(离散取样)。给预烘用:它要的是一张卡的若干个**时刻**,不是连续一段。
+   *
+   * 为什么值这一改:不管要第几帧,下面 renderPass 都从第 0 帧顺推(确定性要求 —— 动画的锚点是
+   * 「首次出现那一帧」,跳着推就没有锚点,按 delta 积分的卡片也会走样)。所以烘同一张卡的 N 个时刻,
+   * 分 N 趟就是 N 次重复顺推,是 O(N²);一趟推过去沿途截,推进只付一次。
+   * 实测(1920x1080、7 个时刻):分趟 30.7s → 一趟 6.9s;推一帧约 18~23ms,截一张约 78ms。
+   *
+   * 静态跳过在这种模式下必须关死:它的 lastBuf 是「上一张真截的」,离散取样时那可能是几十帧之前,
+   * 直接复用就是把时间轴压扁;verifyEvery 又是按「连续跳过次数」计数的,离散下那个保险也失效。
+   */
+  const targetFrames = Array.isArray(opts.targetFrames) && opts.targetFrames.length
+    ? new Set(opts.targetFrames.map((n) => Math.max(0, Math.round(Number(n)))))
+    : null;
+  if (targetFrames) {
+    startFrame = Math.min(...targetFrames);
+    endFrame = Math.max(...targetFrames);
+  }
+  // 离散取样和静态跳过不兼容(见上),这里一律关掉,不看调用方传了什么
+  const staticSkip = targetFrames ? false : wantStaticSkip;
   await page.setViewport({ width, height, deviceScaleFactor: 1 });
 
   // 从这一刻起页面时间归导出脚本管
@@ -397,7 +417,7 @@ export async function bakeFrames(bakery, opts = {}) {
     await page.evaluate(() => { window.__pcResetAnims && window.__pcResetAnims(); });
   };
 
-  const totalFrames = endFrame - startFrame + 1;
+  const totalFrames = targetFrames ? targetFrames.size : endFrame - startFrame + 1;
   const durationSec = (totalFrames / fps).toFixed(3);
   let reused = 0;
 
@@ -410,7 +430,7 @@ export async function bakeFrames(bakery, opts = {}) {
     let runLen = 0;      // 已经连续复用了几帧
     reused = 0;
     for (let i = 0; i <= endFrame; i++) {
-      const wantShot = i >= startFrame;
+      const wantShot = targetFrames ? targetFrames.has(i) : i >= startFrame;
       const isStatic = await step(i, wantShot);
       if (!wantShot) continue;
 
@@ -449,7 +469,7 @@ export async function bakeFrames(bakery, opts = {}) {
       console.warn(`静态跳过在第 ${mismatchAt} 帧判错(复用的和真截的不一致),禁用跳过重跑一遍`);
     }
     await warmUp();
-    mismatchAt = await renderPass(staticSkip && attempt === 0);
+  mismatchAt = await renderPass(staticSkip && attempt === 0);
     if (mismatchAt === null) break;
   }
 
@@ -554,6 +574,7 @@ if (isMain) {
     else if (args[i] === '--format') opts.format = args[++i];
     else if (args[i] === '--quality') opts.quality = parseInt(args[++i], 10);
     else if (args[i] === '--static-skip') opts.staticSkip = true;
+    else if (args[i] === '--target-frames') opts.targetFrames = args[++i].split(',').map(Number).filter(Number.isFinite);
   }
   exportFrames(opts).catch(e => {
     console.error(e);

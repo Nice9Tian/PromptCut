@@ -303,6 +303,7 @@ function isolateClip(project: any, clipId: string): { project: any; clip: any } 
  * 为它引入一个原生依赖或者又一个子进程不划算。盒式平均对「看清楚画面上有什么」
  * 足够,而且缩小时它比取点采样更不容易把细字抖没。
  */
+
 function shrink(png: PNG): { png: PNG; width: number; height: number } {
   const scale = Math.min(1, MAX_EDGE / Math.max(png.width, png.height));
   const w = Math.max(1, Math.round(png.width * scale));
@@ -456,21 +457,54 @@ export function bakeTarget(
    *   box    —— 卡片自己那个框的尺寸。3D 视图用:那边的板子就是这个框,
    *             一比一贴上去才不会拉伸,而且排版和舞台上完全一致。
    */
-  const scale = fit === "box" ? Math.min(1, px / Math.max(box.w, box.h)) : 1;
-  const canvas = fit === "box"
-    ? { width: Math.max(16, Math.round(box.w * scale)), height: Math.max(16, Math.round(box.h * scale)) }
-    : { width: px, height: px };
+  /*
+   * **两个尺寸,不能混为一谈。**
+   *
+   *   renderBox —— 按什么尺寸**排版**,也就是输出多大。必须是这张卡在成片里真实的容器大小。
+   *
+   * 原来这两个是同一个值(直接按贴图尺寸去渲),后果是**卡片按别的宽度重新排了版**:
+   * 卡片用的是绝对 px,容器从 1920 变成 1024,字就相对变大、要换行、底块被撑满。
+   * 实测同一张 blur-text:在 1024×576 上渲,内容框占画布 100%×70.1%(换行);
+   * 在真实的 1920×1080 上渲是 66.5%×28.1%(一行)—— 后者才和 2D 预览一致。
+   * 也就是说 3D 板子上贴的根本不是 2D 那张画面,而且不报错。
+   *
+   * square 那一档不受影响:它**本来就是**要在正方形容器里排版(贴到立体表面上,
+   * 16:9 会被拉变形),所以它的 renderBox 就是那个正方形。
+   */
+  const renderBox = fit === "box" ? { width: box.w, height: box.h } : { width: px, height: px };
   // 没给时间就取这一段的中点 —— 起止两端常卡在进场 / 退场动画上,烘出来是个半透明中间态
   const at = Number.isFinite(t) ? t : (iso.clip.start + iso.clip.end) / 2;
   const rgb = typeof bg === "string" ? /^#?([0-9a-f]{6})$/i.exec(bg.trim()) : null;
 
   const key = createHash("sha1")
-    .update(JSON.stringify({ clip: plainClip, theme: project.themeId, at, canvas, fit, bg: rgb ? rgb[1].toLowerCase() : null }))
+    .update(JSON.stringify({ clip: plainClip, theme: project.themeId, at, renderBox, fit, bg: rgb ? rgb[1].toLowerCase() : null }))
     .digest("hex").slice(0, 12);
   // 文件名带上 clipId 只是为了在素材目录里认得出来;真正保证唯一的是后面那段输入哈希
   const name = `bake-${clipId.replace(/[^\w.-]/g, "_")}-${key}.png`;
   const url = `/@media/${encodeURIComponent(name)}`;
-  return { iso, plainClip, canvas, at, rgb, key, name, url };
+  return { iso, plainClip, renderBox, at, rgb, key, name, url };
+}
+
+/**
+ * 传了底色就把透明底压平成不透明,没传就原样返回。
+ *
+ * 这个选择只该在**烘的时候**做一次:不传 = 透明底,物体在卡片没画的地方也透空(挖空观感,
+ * 适合标志 / 招牌);传了 = 实心物体表面印着这张卡。放在这里而不是放到卡片上,是因为卡片那边
+ * 只能对整张贴图开或关 transparent,分不清「这块本来就该透」和「这块只是卡片没画」。
+ */
+function flattenBg(raw: Buffer, rgb: RegExpExecArray | null): Buffer {
+  if (!rgb) return raw;
+  const v = parseInt(rgb[1], 16);
+  const [br, bgc, bb] = [(v >> 16) & 255, (v >> 8) & 255, v & 255];
+  const img = PNG.sync.read(raw);
+  for (let i = 0; i < img.data.length; i += 4) {
+    const a = img.data[i + 3] / 255;
+    img.data[i] = Math.round(img.data[i] * a + br * (1 - a));
+    img.data[i + 1] = Math.round(img.data[i + 1] * a + bgc * (1 - a));
+    img.data[i + 2] = Math.round(img.data[i + 2] * a + bb * (1 - a));
+    img.data[i + 3] = 255;
+  }
+  return PNG.sync.write(img);
 }
 
 /**
@@ -493,8 +527,14 @@ async function bakeOne(
   fit: "square" | "box" = "square",
   /** 1 = 用户正等着看的,插队;0 = 空闲预烘,排队尾 */
   priority = 0,
+  /**
+   * 已经渲好的那一帧(PNG)。给 bakeClip 用:它一趟渲出同一张卡的好几个时刻,
+   * 然后把每一张交回这里走**同一套**缓存键、底色压平、原子落盘和返回值 ——
+   * 两条路各写一套的话,迟早会出现「单张烘的和批量烘的不是同一张图」,而且不报错。
+   */
+  pre?: Buffer,
 ): Promise<any> {
-  const { iso, plainClip, canvas, at, rgb, key, name, url } = bakeTarget(project, clipId, t, size, bg, fit);
+  const { iso, plainClip, renderBox, at, rgb, key, name, url } = bakeTarget(project, clipId, t, size, bg, fit);
   const dir = mediaDir(root);
   await fsp.mkdir(dir, { recursive: true });
   const file = path.join(dir, name);
@@ -507,7 +547,7 @@ async function bakeOne(
   // 缓存命中:同样的输入烘过了,直接给 URL
   try {
     const st = await fsp.stat(file);
-    return { clipId, url, t: at, width: canvas.width, height: canvas.height, bytes: st.size, cached: true, hint, note };
+    return { clipId, url, t: at, width: renderBox.width, height: renderBox.height, bytes: st.size, cached: true, hint, note };
   } catch { /* 没烘过,往下渲 */ }
 
   /*
@@ -535,11 +575,12 @@ async function bakeOne(
   async function bakeAndWrite() {
   const target = {
     ...iso.project,
-    width: canvas.width,
-    height: canvas.height,
+    // **按真实容器尺寸排版**,不是按贴图尺寸(见 bakeTarget 里那段说明)
+    width: renderBox.width,
+    height: renderBox.height,
     tracks: iso.project.tracks.map((tr: any) => ({ ...tr, clips: tr.clips.map(() => plainClip) })),
   };
-  let raw = await enqueue(() => renderOneFrame(root, origin, target, at, []), priority);
+  let raw = pre ?? await enqueue(() => renderOneFrame(root, origin, target, at, []), priority);
 
   /*
    * 底色决定贴上去是什么观感,而这个选择只该在**烘的时候**做一次:
@@ -548,19 +589,7 @@ async function bakeOne(
    * 放在这里而不是放到卡片上,是因为卡片那边只能对整张贴图开或关 transparent,
    * 分不清「这块本来就该透」和「这块只是卡片没画」。
    */
-  if (rgb) {
-    const v = parseInt(rgb[1], 16);
-    const [br, bgc, bb] = [(v >> 16) & 255, (v >> 8) & 255, v & 255];
-    const img = PNG.sync.read(raw);
-    for (let i = 0; i < img.data.length; i += 4) {
-      const a = img.data[i + 3] / 255;
-      img.data[i] = Math.round(img.data[i] * a + br * (1 - a));
-      img.data[i + 1] = Math.round(img.data[i + 1] * a + bgc * (1 - a));
-      img.data[i + 2] = Math.round(img.data[i + 2] * a + bb * (1 - a));
-      img.data[i + 3] = 255;
-    }
-    raw = PNG.sync.write(img);
-  }
+  raw = flattenBg(raw, rgb);
 
   const png = PNG.sync.read(raw);
   let clear = 0;
@@ -579,6 +608,67 @@ async function bakeOne(
     hint, note,
   };
   }
+}
+
+/**
+ * 烘**同一张卡的若干个时刻**。没烘过的合成一趟渲完,烘过的直接命中缓存。
+ *
+ * 为什么按卡分组而不是把所有请求平铺开:导出脚本从第 0 帧顺推(确定性要求),所以
+ * 「烘第 F 帧」这件事已经把 0..F 全推了一遍 —— 同一张卡里**所有 ≤F 的时刻都是顺路白捡的**,
+ * 多截一张 78ms,而单独开一趟要 4400ms。
+ *
+ * **这不牺牲「先烘播放头附近」**:批次的先后仍然由调用方按离播放头的距离排,这里只是把
+ * 同一张卡的其余时刻捎上。最坏情况是那个最近的时刻在一趟里排在后面几张,晚几十毫秒。
+ */
+async function bakeClip(
+  root: string,
+  origin: string,
+  project: any,
+  clipId: string,
+  times: number[],
+  size: unknown,
+  bg: unknown,
+  fit: "square" | "box" = "square",
+  priority = 0,
+): Promise<any[]> {
+  const uniq = [...new Set(times.map(Number).filter(Number.isFinite))];
+  if (uniq.length <= 1) {
+    return [await bakeOne(root, origin, project, clipId, uniq[0], size, bg, fit, priority)];
+  }
+
+  // 哪几个时刻还没落盘。已经有的不进这一趟 —— 它们在 bakeOne 里一次 fs.access 就返回了
+  const dir = mediaDir(root);
+  const missing: { t: number; at: number }[] = [];
+  for (const t of uniq) {
+    const tg = bakeTarget(project, clipId, t, size, bg, fit);
+    try { await fsp.stat(path.join(dir, tg.name)); } catch { missing.push({ t, at: tg.at }); }
+  }
+  if (missing.length < 2) {
+    return await Promise.all(uniq.map((t) => bakeOne(root, origin, project, clipId, t, size, bg, fit, priority)));
+  }
+
+  /*
+   * 排版尺寸对同一张卡是固定的(只看 clip 的框),所以一趟里所有时刻共用同一个 target 项目。
+   * 时刻不同的只是「渲第几帧」,由 renderFrames 的 target-frames 决定。
+   */
+  const { iso, plainClip, renderBox } = bakeTarget(project, clipId, missing[0].t, size, bg, fit);
+  const target = {
+    ...iso.project,
+    width: renderBox.width,
+    height: renderBox.height,
+    tracks: iso.project.tracks.map((tr: any) => ({ ...tr, clips: tr.clips.map(() => plainClip) })),
+  };
+  const fps = target.fps || 30;
+  const shots = await enqueue(() => renderFrames(root, origin, target, missing.map((m) => m.at), []), priority);
+
+  // 渲好的按帧号交回 bakeOne,缓存键、底色、落盘、返回值全走那一套
+  const byT = new Map<number, Buffer>();
+  for (const m of missing) {
+    const f = Math.max(0, Math.round(m.at * fps));
+    const buf = shots.get(f);
+    if (buf) byT.set(m.t, buf);
+  }
+  return await Promise.all(uniq.map((t) => bakeOne(root, origin, project, clipId, t, size, bg, fit, priority, byT.get(t))));
 }
 
 /** 跑一次 export-frames 子进程。单张和批量共用同一套超时 / 报错处理 */
@@ -659,6 +749,55 @@ async function renderOneFrame(root: string, origin: string, project: any, t: num
     return PNG.sync.write(composeFrame(cards.width, cards.height, layers, cards));
   } finally {
     // 看一眼就够了,不留垃圾;删不掉也不该让这次调用失败
+    fsp.rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+/**
+ * 一趟渲**同一份项目的若干个时刻**。返回「帧号 → PNG」。
+ *
+ * 和 renderOneFrame 的唯一区别是「一趟出几张」。为什么值得单开一条路:导出脚本不管要第几帧
+ * 都从第 0 帧顺推(确定性要求 —— 动画的锚点是「首次出现那一帧」,跳着推就没有锚点),
+ * 所以烘一张卡的 N 个时刻,分 N 趟就是 N 次重复顺推,是 O(N²);一趟推过去沿途截,推进只付一次。
+ *
+ * 实测(1920x1080、同一张卡的 7 个时刻):分 7 趟 31.0s → 一趟 2.7s,**11.4 倍**,而且
+ * 7 张逐字节相同。单价拆开是:推一帧约 18~23ms,截一张约 78ms,而单独起一趟要 4.0~5.0s。
+ * 也就是说同一张卡的第 2 个时刻起,成本从 4400ms 掉到 78ms。
+ */
+async function renderFrames(root: string, origin: string, project: any, times: number[], notes: string[]): Promise<Map<number, Buffer>> {
+  const id = `vision-${Date.now().toString(36)}-${counter++}`;
+  const dir = path.resolve(outRoot(root), `export-${id}`);
+  await fsp.mkdir(dir, { recursive: true });
+
+  const fps = project.fps || 30;
+  const maxFrame = Math.max(0, Math.floor((project.duration || 0) * fps) - 1);
+  const frames = [...new Set(times.map((t) => Math.min(maxFrame, Math.max(0, Math.round(t * fps)))))].sort((a, b) => a - b);
+
+  try {
+    // 素材层按帧各抽各的,和起 Chrome 渲卡片并行跑(卡片的隔离项目通常没有素材层,这里多半是空的)
+    const layersPromises = frames.map((f) => renderMediaLayers(root, project, f / fps, dir, notes));
+    await fsp.writeFile(path.join(dir, "project.json"), JSON.stringify(cardsOnly(project), null, 2), "utf8");
+    const relOut = process.env.PROMPTCUT_EXPORT_DIR ? dir : `out/export-${id}`;
+    const args = [
+      "scripts/export-frames.mjs",
+      "--url", `${origin}/?export=1&timeline=/@export/${id}/project.json`,
+      "--out", relOut,
+      "--frames", `0-${frames[frames.length - 1]}`,
+      "--target-frames", frames.join(","),
+      "--fps", String(fps),
+      "--no-video",
+    ];
+    await runExport(root, args);
+
+    const out = new Map<number, Buffer>();
+    for (let i = 0; i < frames.length; i++) {
+      const f = frames[i];
+      const cards = PNG.sync.read(await fsp.readFile(path.join(dir, "frames", `${String(f).padStart(6, "0")}.png`)));
+      const layers = await layersPromises[i];
+      out.set(f, layers.length === 0 ? PNG.sync.write(cards) : PNG.sync.write(composeFrame(cards.width, cards.height, layers, cards)));
+    }
+    return out;
+  } finally {
     fsp.rm(dir, { recursive: true, force: true }).catch(() => {});
   }
 }
@@ -846,23 +985,29 @@ export function visionPlugin(): Plugin {
             const failed: any[] = [];
             const pri = Number(priority) > 0 ? 1 : 0;
             /*
+             * **先按卡分组。** 同一张卡的几个时刻合成一趟渲(见 bakeClip):导出脚本从第 0 帧顺推,
+             * 「烘第 F 帧」已经把 0..F 推了一遍,同一张卡里其余 ≤F 的时刻是顺路白捡的。
+             * 实测同一张卡 7 个时刻:分趟 31.0s → 一趟 2.7s,而且逐字节相同。
+             *
+             * 分组**不改批次的先后**:调用方按离播放头的距离排好序发过来,这里用 Map 保持首次出现的
+             * 顺序,所以最近的那张卡仍然第一个开渲 —— 「先烘播放头附近」这条没有被牺牲。
+             */
+            const byClip = new Map<string, number[]>();
+            for (const c of clips) {
+              if (!c || typeof c.clipId !== "string") continue;
+              const arr = byClip.get(c.clipId);
+              if (arr) arr.push(Number(c.t)); else byClip.set(c.clipId, [Number(c.t)]);
+            }
+            /*
              * **一次全放进去,让渲染池去并行**,不要在这儿一张张 await。
-             *
-             * 原来是串行的:一批 8 张就是 8×4 秒。但这台机器 28 个核,一次只跑一个 Chrome
-             * 等于闲着。真正该管并发的是 enqueue 那个池(它有上限,见 maxConcurrentRenders)——
-             * 在这里串行只是把池饿着,一个槽位都用不满。
-             *
-             * 一张失败不拖垮整批,所以用 allSettled 而不是 all:3D 视图那边
-             * 拿到几张就先贴几张,失败的继续显示占位色块。
+             * 一张失败不拖垮整批,所以用 allSettled —— 3D 视图那边拿到几张就先贴几张。
              */
             const settled = await Promise.allSettled(
-              clips
-                .filter((c: any) => c && typeof c.clipId === "string")
-                .map((c: any) => bakeOne(root, originOf(server), resolved, c.clipId, Number(c.t), size, bg, "box", pri)
-                  .then((r) => r, (e) => { throw Object.assign(e instanceof Error ? e : new Error(String(e)), { clipId: c.clipId }); })),
+              [...byClip].map(([clipId, ts]) => bakeClip(root, originOf(server), resolved, clipId, ts, size, bg, "box", pri)
+                .then((r) => r, (e) => { throw Object.assign(e instanceof Error ? e : new Error(String(e)), { clipId }); })),
             );
             for (const s of settled) {
-              if (s.status === "fulfilled") baked.push(s.value);
+              if (s.status === "fulfilled") baked.push(...s.value);
               else failed.push({ clipId: (s.reason as any)?.clipId, error: (s.reason as any)?.message || String(s.reason) });
             }
             sendJson(res, 200, { ok: true, baked, failed });

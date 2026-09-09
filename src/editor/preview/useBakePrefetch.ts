@@ -345,9 +345,44 @@ export function useBakePrefetch({
            * 刚好填满池子,既不浪费槽位,也不会让「回去重排」等太久。
            */
           const lot = Math.max(1, Math.min(8, Number(st.concurrency) || 1));
+          /**
+           * 一趟最多捎多少个同卡时刻。**顺路的那部分几乎免费**:服务端从第 0 帧顺推,
+           * 「烘第 F 帧」已经把 0..F 推了一遍,同一张卡其余 ≤F 的时刻只多花一次截图(约 78ms),
+           * 而单独开一趟要 4400ms。封顶是怕一个请求跑太久 —— 用户拖走时掐掉的那一趟越长越亏
+           * (虽然不浪费:服务端照样落盘)。
+           */
+          const RIDE_ALONG = 48;
+          const taken = new Set<number>();
           let done = 0;
-          for (let i = 0; i < plan.jobs.length; i += lot) {
-            const batch = plan.jobs.slice(i, i + lot);
+          for (let i = 0; i < plan.jobs.length; i += 1) {
+            if (taken.has(i)) continue;
+            /*
+             * **批次的先后一点没动**:仍然按 plan.jobs 的顺序(离播放头由近到远)取下一个还没发的活,
+             * 填满服务端的池子。变的只是「每张卡把自己其余的时刻捎上」—— 那部分是顺路的。
+             */
+            const batch: typeof plan.jobs = [];
+            const clipsIn = new Set<string>();
+            for (let k = i; k < plan.jobs.length && clipsIn.size < lot; k++) {
+              if (taken.has(k)) continue;
+              const j = plan.jobs[k];
+              if (!clipsIn.has(j.clipId)) {
+                if (clipsIn.size >= lot) break;
+                clipsIn.add(j.clipId);
+              }
+              taken.add(k); batch.push(j);
+            }
+            // 再把这几张卡在队伍里更靠后的时刻捎上,按卡各自封顶
+            const perClip = new Map<string, number>();
+            for (const j of batch) perClip.set(j.clipId, (perClip.get(j.clipId) ?? 0) + 1);
+            for (let k = 0; k < plan.jobs.length; k++) {
+              if (taken.has(k)) continue;
+              const j = plan.jobs[k];
+              if (!clipsIn.has(j.clipId)) continue;
+              const n = perClip.get(j.clipId) ?? 0;
+              if (n >= RIDE_ALONG) continue;
+              perClip.set(j.clipId, n + 1);
+              taken.add(k); batch.push(j);
+            }
             const job = batch[0];
             if (dead) return;
             /*
