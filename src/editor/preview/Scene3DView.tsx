@@ -72,8 +72,15 @@ export function Scene3DView({ project, t }: Props) {
    * 服务端那边本来就是按「输入」做的缓存(见 bakeOne),这边跟它对齐即可。
    */
   const textures = useRef(new Map<string, string>());
-  const texKey = (c: { id: string; cardId: string; params?: unknown; frame?: unknown }) =>
-    `${c.id}\u0000${c.cardId}\u0000${JSON.stringify(c.params ?? {})}\u0000${JSON.stringify(c.frame ?? null)}`;
+  /*
+   * 贴图的键只带**决定像素**的东西:哪张卡、什么参数、画布多大。
+   *
+   * 位置和三维变换不在里面 —— 服务端烘的时候会把 frame 整个摘掉(见 bakeOne 的说明),
+   * 所以转一下卡片、推一下深度,贴图一个像素都不会变。把整个 frame 塞进键里的后果是:
+   * 在「三维」面板里拖滑杆,每一格都算缓存未命中,于是每一格发一次烘焙请求。
+   */
+  const texKey = (c: { id: string; cardId: string; params?: unknown; frame?: { w?: number; h?: number } }) =>
+    [c.id, c.cardId, JSON.stringify(c.params ?? {}), `${c.frame?.w ?? "-"}x${c.frame?.h ?? "-"}`].join("|");
   /** 场景那一套,和 scene-3d 卡一样要显式 dispose —— WebGL 资源不归 GC 管 */
   const gl = useRef<{ dispose: () => void; render: () => void } | null>(null);
   /** 贴图到位后要能立刻换上去:clipId → 换图函数 */
@@ -97,6 +104,13 @@ export function Scene3DView({ project, t }: Props) {
   // 选中变了不该重建场景(重建 = 重新加载所有贴图),所以也走 ref
   const selRef = useRef(selected);
   selRef.current = selected;
+  /*
+   * 摆位每帧从最新的 project 读,不进建场景那个 effect 的依赖。
+   * 否则在「三维」面板里拖一下滑杆就重建一次整个场景(几何全部重建、贴图全部重新加载),
+   * 而拖动是连续的 —— 一次拖动几十次重建。
+   */
+  const projRef = useRef(project);
+  projRef.current = project;
 
   useEffect(() => {
     let dead = false;
@@ -165,6 +179,8 @@ export function Scene3DView({ project, t }: Props) {
     posers.current = [];
     // 拾取用:每块 mesh 记住它属于哪个 clip(three 的 userData 就是干这个的)
     const pickables: any[] = [];
+    // 摆位每帧重算,所以要留着这几个 group 的引用
+    const placed: { clipId: string; pivot: any; inner: any; spin: any; tilt: any; mesh: any }[] = [];
 
     for (const clip of active) {
       // 正负号全在 place3d.ts 里,那边有单测钉着(见它的说明)
@@ -186,6 +202,7 @@ export function Scene3DView({ project, t }: Props) {
       tilt.position.z = pl.translateZ;
       pivot.add(tilt);
       scene.add(pivot);
+      placed.push({ clipId: clip.id, pivot, inner, spin, tilt, mesh: null });
 
       const def = getCard(clip.cardId);
 
@@ -294,6 +311,22 @@ export function Scene3DView({ project, t }: Props) {
     const tick = () => {
       controls.update();
       // 会转的三维物件跟着时间轴走:姿势是 t 的纯函数,所以每帧照着当前 t 摆一次就行
+      /*
+       * 每帧按最新的 project 重摆一次。开销就是几个矩阵,但换来的是:
+       * 在「三维」面板里拖滑杆时场景**不重建** —— 不重建就不会重新造几何、
+       * 不会重新加载贴图,拖起来是连续的。
+       */
+      for (const q of placed) {
+        const c = projRef.current.tracks.flatMap((tr: any) => tr.clips).find((x: any) => x.id === q.clipId);
+        if (!c) continue;
+        const pl2 = placeClip3D(c.frame, { width: projRef.current.width, height: projRef.current.height });
+        q.pivot.position.set(...pl2.pivot);
+        q.inner.rotation.z = pl2.rollZ;
+        q.inner.scale.setScalar(pl2.scale);
+        q.spin.rotation.y = pl2.spinY;
+        q.tilt.rotation.x = pl2.tiltX;
+        q.tilt.position.z = pl2.translateZ;
+      }
       for (const pose of posers.current) pose(tRef.current);
       for (const [id, box] of marks) { box.visible = id === selRef.current; if (box.visible) box.update(); }
       renderer.render(scene, camera);

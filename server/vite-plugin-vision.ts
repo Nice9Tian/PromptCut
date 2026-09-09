@@ -312,20 +312,47 @@ async function bakeOne(
   t: number,
   size: unknown,
   bg: unknown,
+  fit: "square" | "box" = "square",
 ): Promise<any> {
   const iso = isolateClip(project, clipId);
   if (!iso) throw new Error(`时间轴上没有 id 为 ${clipId} 的片段。`);
   if (iso.clip.mediaId) throw new Error("这是素材段(视频 / 图片),本来就是位图,直接把它的 URL 当纹理用即可,不用烘。");
 
-  // 画布改成正方形:纹理贴到立体表面上,原始 16:9 会被拉变形。
-  // 卡片按新画幅重新排版(它们本来就是响应式的),所以这不是裁切,是重排。
+  /*
+   * **把 frame 摘掉再烘。**
+   *
+   * frame 是「这张卡摆在整个画幅的哪儿、怎么转」,是相对项目画幅(比如 1920×1080)写的。
+   * 而烘焙要换一个画布(正方形贴图 / 卡片自己的框),坐标对不上 —— 一张 x:960 的卡
+   * 放到 512×512 的画布上就整个跑到画外,烘出来是**一张全透明的空图,而且不报错**。
+   * (实测:带 frame 的卡烘出来 transparentRatio = 1、1096 字节,三种不同变换烘出来还一模一样,
+   * 因为它们都是同一张空图。)
+   *
+   * 摘掉之后卡片铺满画布、按画布尺寸重新排版 —— 卡片本来就是响应式的,这正是我们要的
+   * 「这张卡自己长什么样」。位置和三维变换由用它的那一方去做:
+   * scene-3d 贴到物体表面,3D 视图贴到代表这张卡的那块板子上。烘的时候再带一遍就是叠两次。
+   */
+  const { frame: _dropFrame, ...plainClip } = iso.clip;
+  const box = {
+    w: Math.max(1, Math.round(iso.clip?.frame?.w ?? project.width)),
+    h: Math.max(1, Math.round(iso.clip?.frame?.h ?? project.height)),
+  };
   const px = Math.min(2048, Math.max(256, Math.round(Number(size) || 1024)));
+  /*
+   * 画幅两种:
+   *   square —— 正方形。贴到立体表面上用(bake_card 的默认):原始 16:9 会被拉变形。
+   *   box    —— 卡片自己那个框的尺寸。3D 视图用:那边的板子就是这个框,
+   *             一比一贴上去才不会拉伸,而且排版和舞台上完全一致。
+   */
+  const scale = fit === "box" ? Math.min(1, px / Math.max(box.w, box.h)) : 1;
+  const canvas = fit === "box"
+    ? { width: Math.max(16, Math.round(box.w * scale)), height: Math.max(16, Math.round(box.h * scale)) }
+    : { width: px, height: px };
   // 没给时间就取这一段的中点 —— 起止两端常卡在进场 / 退场动画上,烘出来是个半透明中间态
   const at = Number.isFinite(t) ? t : (iso.clip.start + iso.clip.end) / 2;
   const rgb = typeof bg === "string" ? /^#?([0-9a-f]{6})$/i.exec(bg.trim()) : null;
 
   const key = createHash("sha1")
-    .update(JSON.stringify({ clip: iso.clip, theme: project.themeId, at, px, bg: rgb ? rgb[1].toLowerCase() : null }))
+    .update(JSON.stringify({ clip: plainClip, theme: project.themeId, at, canvas, fit, bg: rgb ? rgb[1].toLowerCase() : null }))
     .digest("hex").slice(0, 12);
   // 文件名带上 clipId 只是为了在素材目录里认得出来;真正保证唯一的是后面那段输入哈希
   const name = `bake-${clipId.replace(/[^\w.-]/g, "_")}-${key}.png`;
@@ -342,10 +369,16 @@ async function bakeOne(
   // 缓存命中:同样的输入烘过了,直接给 URL
   try {
     const st = await fsp.stat(file);
-    return { clipId, url, t: at, width: px, height: px, bytes: st.size, cached: true, hint, note };
+    return { clipId, url, t: at, width: canvas.width, height: canvas.height, bytes: st.size, cached: true, hint, note };
   } catch { /* 没烘过,往下渲 */ }
 
-  let raw = await enqueue(() => renderOneFrame(root, origin, { ...iso.project, width: px, height: px }, at, []));
+  const target = {
+    ...iso.project,
+    width: canvas.width,
+    height: canvas.height,
+    tracks: iso.project.tracks.map((tr: any) => ({ ...tr, clips: tr.clips.map(() => plainClip) })),
+  };
+  let raw = await enqueue(() => renderOneFrame(root, origin, target, at, []));
 
   /*
    * 底色决定贴上去是什么观感,而这个选择只该在**烘的时候**做一次:
@@ -645,7 +678,7 @@ export function visionPlugin(): Plugin {
             for (const c of clips) {
               if (!c || typeof c.clipId !== "string") continue;
               try {
-                baked.push(await bakeOne(root, originOf(server), resolved, c.clipId, Number(c.t), size, bg));
+                baked.push(await bakeOne(root, originOf(server), resolved, c.clipId, Number(c.t), size, bg, "box"));
               } catch (e: any) {
                 // 一张失败不拖垮整批 —— 3D 视图那边继续给它显示代理色块
                 failed.push({ clipId: c.clipId, error: e?.message || String(e) });
