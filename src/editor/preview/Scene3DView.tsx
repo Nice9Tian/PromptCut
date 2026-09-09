@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { useBakePrefetch, beginForegroundBake, endForegroundBake } from "./useBakePrefetch";
+import { useBakePrefetch, beginForegroundBake, endForegroundBake, canonFrameT } from "./useBakePrefetch";
 import { flattenOverlay, type Project } from "../../kernel/project";
 import { placeClip3D } from "./place3d";
+import { frustum2d } from "./frustum2d";
 import { getCard } from "../../kernel/registry";
 import { actions, useStore } from "../../store/project";
 import {
@@ -75,6 +76,16 @@ export function Scene3DView({ project, t }: Props) {
    */
   const [bakingAt, setBakingAt] = useState<number | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  /**
+   * 要不要显示「2D 视角框」。默认关:大多数时候用户是来看卡怎么摆的,
+   * 多一套线只会挡视线;要判断「这张卡在不在画面里」时才打开。
+   *
+   * 走 ref 是因为建场景那个 effect 不能把它放进依赖 —— 放进去点一下按钮就重建整个场景。
+   * 显隐由渲染循环每帧读这个 ref 来切(和选中描边 selRef 同一套做法)。
+   */
+  const [frustumOn, setFrustumOn] = useState(false);
+  const frustumRef = useRef(frustumOn);
+  frustumRef.current = frustumOn;
   /*
    * 「这张卡长什么样」的指纹,只带**决定像素**的东西:哪张卡、什么参数、画布多大。
    * 不带 clipId 之外的身份信息也不带时刻 —— 它管的是**要不要重建场景**,不是贴哪张图。
@@ -95,7 +106,22 @@ export function Scene3DView({ project, t }: Props) {
    * mu-number-ticker(滚动 1.6 秒)放在 [0,2],播放头 0.23 秒时 2D 是 81%,3D 是 100%。
    * 摆位置的人对着的是一张别的时刻的画面,而且不报错。选哪一刻的规则见 bakeTime.ts。
    */
-  const bakeTOf = (c: TimedClip) => pickBakeT(c, motionOf(getCard(c.cardId) as any, c.params), t);
+  /*
+   * 有原始帧率那一张就用它,没有才退回低帧率那一档。
+   *
+   * 不这么挑的话,逐帧预烘出来的那几百张**一张都不会被显示** —— 显示端永远只问 0.25 秒
+   * 那个格子要图,烘再多也是白烧。
+   *
+   * 退回低帧率仍然守着原来那条规矩:`pickBakeT` 只往回取(floor),所以看到的一定是
+   * **已经发生过的**那一刻,最多差 0.25 秒,不会把还没播到的画面提前显示出来。
+   */
+  const bakeTOf = (c: TimedClip) => {
+    const motion = motionOf(getCard(c.cardId) as any, c.params);
+    const fps = Math.max(1, projRef.current.fps || 30);
+    const fine = canonFrameT(pickBakeT(c, motion, t, { stepSec: 1 / fps }), c.start, fps);
+    if (moments.current.has(texKeyOf(c, fine))) return fine;
+    return canonFrameT(pickBakeT(c, motion, t), c.start, fps);
+  };
   const momentKey = (c: TimedClip) => texKeyOf(c, bakeTOf(c));
   /**
    * 按**时刻**存的贴图:`texKeyOf(clip, 那一刻)` → URL。前台现烘的和预烘拿回来的都进这里,
@@ -150,14 +176,36 @@ export function Scene3DView({ project, t }: Props) {
    * 和播放头无关 —— 播放头只决定**先烘哪个**,那是 bakePlan 的事。
    */
   const wantedMoments = useMemo(() => {
-    const out: { clipId: string; t: number; start: number; end: number }[] = [];
+    const out: { clipId: string; t: number; start: number; end: number; tier: "coarse" | "full"; fine: boolean }[] = [];
+    const fps = Math.max(1, project.fps || 30);
     for (const c of flattenOverlay(project).clips) {
       // 素材段本来就是位图,不用烘;scene-3d 在这个视图里是真几何,也不用
       if ((c as any).mediaId || c.cardId === "scene-3d") continue;
       const motion = motionOf(getCard(c.cardId) as any, c.params);
-      for (const mt of sampleTimesFor(c as TimedClip, motion)) {
-        out.push({ clipId: c.id, t: mt, start: c.start, end: c.end });
+      /*
+       * 按**量化后的时刻**去重:0.5 秒这种点在两档的格子上都有,不去重会重复排一遍,
+       * 而且服务端算出来是同一个键,白问一次。
+       */
+      const slots = new Map<number, { t: number; tier: "coarse" | "full"; fine: boolean }>();
+      // 低帧率那一档(0.25 秒一格):先把整条片子铺满它,成本只有原始帧率的零头
+      for (const raw of sampleTimesFor(c as TimedClip, motion)) {
+        const t = canonFrameT(raw, c.start, fps);
+        slots.set(t, { t, tier: "coarse", fine: false });
       }
+      /*
+       * 原始帧率那一档:逐帧。**排在低帧率全部铺完之后**才会被烘(顺序由 bakePlan 定)。
+       * maxPerClip 按这一段自己的帧数给,不用默认的 12 —— 默认那个是为低帧率定的,
+       * 拿它来限制逐帧会把一段两秒的卡抽稀成 12 张,那就不叫原始帧率了。
+       */
+      const frames = Math.ceil((c.end - c.start) * fps) + 2;
+      for (const raw of sampleTimesFor(c as TimedClip, motion, { stepSec: 1 / fps, maxPerClip: frames })) {
+        const t = canonFrameT(raw, c.start, fps);
+        const had = slots.get(t);
+        // 两档都落在这一刻:排队上算低帧率(先烘),但它同时也是逐帧那一档的一格
+        if (had) had.fine = true;
+        else slots.set(t, { t, tier: "full", fine: true });
+      }
+      for (const s of slots.values()) out.push({ clipId: c.id, start: c.start, end: c.end, ...s });
     }
     return out;
   }, [project]);
@@ -234,6 +282,30 @@ export function Scene3DView({ project, t }: Props) {
     scene.add(edge);
 
     const disposables: { dispose: () => void }[] = [edge.geometry, edge.material as any];
+
+    /*
+     * 「2D 视角框」:一个**尖在 2D 那台相机、底在画幅**的四角锥(几何见 frustum2d.ts)。
+     *
+     * 上面那圈 `edge` 只说了「画幅在这个平面上」,没说**是从哪儿看过去的** ——
+     * 而转两下之后,"这张卡到底在不在画面里"恰恰要靠视线方向才判断得了。
+     *
+     * 整个锥八条线**同一个琥珀色**:底面四条边和四条棱是一样东西的两部分,
+     * 分成两个颜色会让人以为是两样东西。琥珀和选中描边的青(0x22d3ee)、
+     * 画幅轮廓的灰蓝(0x64748b)都分得开。
+     *
+     * **建一次就放着,用 visible 开关**,不进 effect 依赖:进依赖的话点一下按钮就要
+     * 重建整个场景 —— 几何全建、贴图全重载,还新开一个 WebGL 上下文(上限约 16)。
+     */
+    const frustum = new THREE.LineSegments(
+      new THREE.BufferGeometry().setAttribute(
+        "position",
+        new THREE.Float32BufferAttribute(frustum2d(stage, project.camera3dFov).positions, 3),
+      ),
+      new THREE.LineBasicMaterial({ color: 0xf59e0b, transparent: true, opacity: 0.9 }),
+    );
+    frustum.visible = frustumRef.current;
+    scene.add(frustum);
+    disposables.push(frustum.geometry, frustum.material as any);
     swap.current = new Map();
     proxy.current = new Map();
 
@@ -409,6 +481,15 @@ export function Scene3DView({ project, t }: Props) {
       }
       for (const pose of posers.current) pose(tRef.current);
       for (const [id, box] of marks) { box.visible = id === selRef.current; if (box.visible) box.update(); }
+      /*
+       * 视角框只切显隐,不重建场景(理由见上面建它的地方)。
+       *
+       * 开着的时候把灰色那圈 `edge` 收起来:锥的底面和它是**同一个矩形**,
+       * 两条线重叠在一起会打架(深度一样,谁在上面看显卡心情),而且一圈灰一圈黄
+       * 也不该是两个颜色。开了就整个锥都是黄的,关了再把灰圈放回来当常驻参照。
+       */
+      frustum.visible = frustumRef.current;
+      edge.visible = !frustumRef.current;
       renderer.render(scene, camera);
       raf = requestAnimationFrame(tick);
     };
@@ -459,10 +540,31 @@ export function Scene3DView({ project, t }: Props) {
       // 没有就**立刻**打回色块。留着上一刻的图不动,等于把一个错的画面继续传下去
       else { proxy.current.get(c.id)?.(); need.push(c); }
     }
-    if (!need.length) return;
+    if (!need.length) {
+      /*
+       * 一张都不用烘(拖回了已经预渲染的地方)。**这里必须把「正在烘」清掉** ——
+       * 上一次的 effect 是被 cleanup 掐掉的(dead),它 finally 里那句清理带着 `!dead` 判断,
+       * 所以不会执行。不在这儿清的话,画面已经好了,提示却一直挂着"正在烘第 X 秒"。
+       */
+      setPending(0);
+      setBakingAt(null);
+      return;
+    }
     let dead = false;
     setPending(need.length);
     setBakingAt(bakeTOf(need[0]));
+    /*
+     * **换到别的时刻就把上一次的请求掐掉。**
+     *
+     * 不掐的后果实测过:在没预渲染的区域连着挪 8 次播放头,发出 9 个前台烘焙请求、
+     * 同时有 4 个挂着。而浏览器对同一个源只给约 6 条连接 —— 挂满之后,
+     * **连取一张已经烘好的贴图的 GET 都排不进去**,于是"拖回已经预渲染的地方也不刷新,
+     * 非要等前面那个没烘完的先完成"。
+     *
+     * 掐掉不浪费:服务端那边不会因此停手,而且同键并发是合并的(见 bakeOne 的 bakeInFlight),
+     * 图照样会落盘。下次要它的时候直接命中缓存。
+     */
+    const ac = new AbortController();
     /*
      * 告诉预烘让路。服务端渲染是串行的,预烘要是正占着,这一张 —— 用户此刻正盯着的那张 ——
      * 就得排在它后面多等四五秒。本来是来提速的,反而卡了一下。
@@ -484,6 +586,7 @@ export function Scene3DView({ project, t }: Props) {
              */
             priority: 1,
           }),
+          signal: ac.signal,
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok || !data.ok) {
@@ -503,13 +606,14 @@ export function Scene3DView({ project, t }: Props) {
         if (dead) return;
         if (data.failed?.length) setErr(`${data.failed.length} 张没烘出来:${data.failed[0].error}`);
       } catch (e: any) {
-        if (!dead) setErr(String(e?.message || e));
+        // 被 cleanup 掐掉的不算出错:那是用户挪走了播放头,本来就不该再等它
+        if (!dead && e?.name !== "AbortError") setErr(String(e?.message || e));
       } finally {
         endForegroundBake();
         if (!dead) { setPending(0); setBakingAt(null); }
       }
     })();
-    return () => { dead = true; };
+    return () => { dead = true; ac.abort(); };
     // momentSig 在依赖里:拖时间轴换到别的时刻要重新取图。但它**不在建场景那个 effect 的
     // 依赖里**,所以只是换 material.map,场景不重建。
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -550,6 +654,32 @@ export function Scene3DView({ project, t }: Props) {
      */
     <div className="pc-3d-checker" style={{ position: "relative", width: "100%", height: "100%", minHeight: 200 }}>
       <div ref={host} style={{ position: "absolute", inset: 0 }} />
+
+      {/*
+        「2D 视角框」开关。放右上角:左下角那条是烘焙进度,别抢地方。
+        只有加载完(mods 到位、场景建起来了)才显示 —— 场景还没有的时候点它什么都不会发生。
+      */}
+      {mods && (
+        <button
+          type="button"
+          /*
+           * **不要再挂 `.pc-3d-note`**(以前挂过)。那个 class 的意思是「浮在格子上的状态提示」,
+           * 按它去找「正在烘…」那条会连这个按钮一起匹配到 —— 已经有人写测试时踩过一次。
+           * 长得像不是共用类名的理由:一样的底和圆角在 CSS 里合成一条规则就够了。
+           */
+          className={`pc-3d-toggle${frustumOn ? " is-on" : ""}`}
+          style={{ position: "absolute", right: 10, top: 10 }}
+          aria-pressed={frustumOn}
+          onClick={() => setFrustumOn((v) => !v)}
+          title={
+            project.camera3dFov
+              ? `画出 2D 页那台相机张开到画幅的四角锥(视角 ${project.camera3dFov}°)—— 用来判断一张卡到底在不在成片画面里`
+              : `画出 2D 页那台相机张开到画幅的四角锥。这个项目没设视角,按默认 ${DEFAULT_FOV_DEG}° 画(和 3D 页开场机位同一台相机)`
+          }
+        >
+          2D 视角框
+        </button>
+      )}
       {(pending > 0 || err) && (
         <div
           className="pc-3d-note"
