@@ -346,6 +346,22 @@ export function useBakePrefetch({
            */
           const lot = Math.max(1, Math.min(8, Number(st.concurrency) || 1));
           /**
+           * 同时挂几个请求在飞。
+           *
+           * **一批刚好填满池子,不等于池子一直是满的。** 一批里那几张卡的活儿长短差很多
+           * (烘一张卡要从第 0 帧顺推到它所在的帧,所以贵在它排在时间轴多靠后,和它自己
+           * 长不长没关系)。一个请求要等**最慢的那张**才返回,于是每批的尾巴上池子都在塌:
+           * 先烘完的那几个槽位空着,干等最后一张。批越大,尾巴越长。
+           *
+           * 所以同时挂两批:A 收尾的时候 B 的活已经在池子里了,槽位不落空。
+           *
+           * 为什么是 2 而不是更多:浏览器对同一个源只给约 6 条 HTTP/1.1 连接,而**贴图本身
+           * 也要走这些连接**取回来。Scene3DView 那边踩过一次:挂了 4 个烘焙请求之后,
+           * 连取一张已经烘好的图的 GET 都排不进去,表现成「拖回已经预烘过的地方也不刷新」。
+           * 两批(前台那张再占一条)还剩三条给图,够用。
+           */
+          const INFLIGHT = 2;
+          /**
            * 一趟最多捎多少个同卡时刻。**顺路的那部分几乎免费**:服务端从第 0 帧顺推,
            * 「烘第 F 帧」已经把 0..F 推了一遍,同一张卡其余 ≤F 的时刻只多花一次截图(约 78ms),
            * 而单独开一趟要 4400ms。封顶是怕一个请求跑太久 —— 用户拖走时掐掉的那一趟越长越亏
@@ -354,6 +370,74 @@ export function useBakePrefetch({
           const RIDE_ALONG = 48;
           const taken = new Set<number>();
           let done = 0;
+          /** 已经发出去、还没回来的那几批。`at` 是这一批里最靠前的时刻(绿条要标它) */
+          const flying = new Set<{ at: number; p: Promise<void> }>();
+          /** 在飞的批里最靠前的那一刻 —— 绿条标的是它,不是某一批自己的 */
+          const bakingAtNow = () => (flying.size ? Math.min(...[...flying].map((f) => f.at)) : null);
+
+          /** 发一批出去,登记进 flying;回来时自己摘掉、更新绿条 */
+          const launch = (batch: typeof plan.jobs) => {
+            const entry = { at: Math.min(...batch.map((j) => j.t)), p: Promise.resolve() };
+            // 先登记再开跑:反过来的话 finally 里那句 delete 有可能先于 add 执行
+            flying.add(entry);
+            latestBakingAt = bakingAtNow();
+            publishBaked(planMoments, known, fpAtRequest);
+            setStatus((s) => ({
+              ...s, baking: { clipId: batch[0].clipId, phase: batch[0].phase },
+              queued: Math.max(0, plan.jobs.length - done),
+            }));
+            entry.p = (async () => {
+              try {
+                /*
+                 * 用户一动就把这批掐掉。实测:不掐的话「改完一张卡到进度条更新」要 11.8 秒,
+                 * 其中 7.8 秒是干等这批烘完 —— 而这批烘的还是**改之前**那一版,早就作废了。
+                 *
+                 * 掐掉不浪费:服务端不会因此停手,图照样落盘(见 bakeOne 的 bakeInFlight),
+                 * 只是这一轮不再等它。
+                 */
+                const ac = new AbortController();
+                const stopWatch = (async () => {
+                  while (!ac.signal.aborted && !dead) {
+                    if (touchedAt.current !== roundStartedAt) return ac.abort();
+                    await sleep(200);
+                  }
+                })();
+                const out = await post("/api/vision/bake-batch", {
+                  project: projRef.current,
+                  clips: batch.map((j) => ({ clipId: j.clipId, t: j.t })),
+                  size: 1024,
+                }, ac.signal).finally(() => { ac.abort(); void stopWatch; });
+                for (const b of out.baked ?? []) {
+                  /*
+                   * 按「卡 + 时刻」存,而且时刻用**服务端回的那个**:一批里有好几张,
+                   * 拿 batch[0] 的 t 去认会把整批都记成同一刻(而且不报错,只是贴图对不上)。
+                   */
+                  ready.set(momentId(b.clipId, b.t), b.url);
+                  if (typeof b.bytes === "number") footprint += b.bytes;
+                  // 这一刻已经能看了,记进 known,下一句发布时绿条就把它涂上
+                  const j = batch.find((x) => x.clipId === b.clipId && x.t === b.t);
+                  if (j && typeof b.bytes === "number") known.set(j.key, b.bytes);
+                }
+              } catch (e: any) {
+                // 一批烘不出来不该让整轮停摆,下一轮盘点会重新遇到它们;
+                // 被掐掉的更不算错 —— 那是项目变了、我们自己主动放弃的
+                if (!dead && e?.name !== "AbortError") setStatus((s) => ({ ...s, error: String(e?.message || e) }));
+              } finally {
+                flying.delete(entry);
+                done += batch.length;
+                latestBakingAt = bakingAtNow();
+                // 每回来一批就更新绿条,而不是等整轮跑完 —— 用户要看着它一段一段长出来
+                publishBaked(planMoments, known, fpAtRequest);
+                setStatus((s) => ({
+                  ...s,
+                  ready: new Map(ready),
+                  footprintBytes: footprint,
+                  baking: flying.size ? s.baking : null,
+                  queued: Math.max(0, plan.jobs.length - done),
+                }));
+              }
+            })();
+          };
           for (let i = 0; i < plan.jobs.length; i += 1) {
             if (taken.has(i)) continue;
             /*
@@ -383,11 +467,10 @@ export function useBakePrefetch({
               perClip.set(j.clipId, n + 1);
               taken.add(k); batch.push(j);
             }
-            const job = batch[0];
             if (dead) return;
             /*
-             * 满了就停。**最多超出一个文件**(几十 KB)—— 因为没烘出来之前不知道它多大,
-             * 而为了这几十 KB 去估一个大小,反而会把整套东西建在猜测上。
+             * 满了就停。**最多超出还在飞的那几批**(几十 KB × INFLIGHT)—— 因为没烘出来之前
+             * 不知道它多大,而为了这几十 KB 去估一个大小,反而会把整套东西建在猜测上。
              */
             if (footprint >= budget) break;
             await waitIdle();
@@ -408,58 +491,20 @@ export function useBakePrefetch({
             if (touchedAt.current !== roundStartedAt) break;
 
             didSomething = true;
-            // 绿条上要标出"正在烘这一刻",所以取这一批里最靠前的那个时刻
-            latestBakingAt = Math.min(...batch.map((j) => j.t));
-            publishBaked(planMoments, known, fpAtRequest);
-            setStatus((s) => ({ ...s, baking: { clipId: job.clipId, phase: job.phase }, queued: plan.jobs.length - done }));
-            try {
-              /*
-               * 用户一动就把这批掐掉。实测:不掐的话「改完一张卡到进度条更新」要 11.8 秒,
-               * 其中 7.8 秒是干等这批烘完 —— 而这批烘的还是**改之前**那一版,早就作废了。
-               *
-               * 掐掉不浪费:服务端不会因此停手,图照样落盘(见 bakeOne 的 bakeInFlight),
-               * 只是这一轮不再等它。
-               */
-              const ac = new AbortController();
-              const stopWatch = (async () => {
-                while (!ac.signal.aborted && !dead) {
-                  if (touchedAt.current !== roundStartedAt) return ac.abort();
-                  await sleep(200);
-                }
-              })();
-              const out = await post("/api/vision/bake-batch", {
-                project: projRef.current,
-                clips: batch.map((j) => ({ clipId: j.clipId, t: j.t })),
-                size: 1024,
-              }, ac.signal).finally(() => { ac.abort(); void stopWatch; });
-              for (const b of out.baked ?? []) {
-                /*
-                 * 按「卡 + 时刻」存,而且时刻用**服务端回的那个**:一批里有好几张,
-                 * 拿 batch[0] 的 t 去认会把整批都记成同一刻(而且不报错,只是贴图对不上)。
-                 */
-                ready.set(momentId(b.clipId, b.t), b.url);
-                if (typeof b.bytes === "number") footprint += b.bytes;
-                // 这一刻已经能看了,记进 known,下一句发布时绿条就把它涂上
-                const j = batch.find((x) => x.clipId === b.clipId && x.t === b.t);
-                if (j && typeof b.bytes === "number") known.set(j.key, b.bytes);
-              }
-            } catch (e: any) {
-              // 一批烘不出来不该让整轮停摆,下一轮盘点会重新遇到它们;
-              // 被掐掉的更不算错 —— 那是项目变了、我们自己主动放弃的
-              if (!dead && e?.name !== "AbortError") setStatus((s) => ({ ...s, error: String(e?.message || e) }));
-            }
-            done += batch.length;
-            latestBakingAt = null;
-            // 每烘完一批就更新绿条,而不是等整轮跑完 —— 用户要看着它一段一段长出来
-            publishBaked(planMoments, known, fpAtRequest);
-            setStatus((s) => ({
-              ...s,
-              ready: new Map(ready),
-              footprintBytes: footprint,
-              baking: null,
-              queued: Math.max(0, plan.jobs.length - done),
-            }));
+            /*
+             * 池子里没位置就等一个回来。**只等一个,不等全部** —— 等全部就退回原来那种
+             * 「一批一批地等最慢的」,尾巴照样塌。
+             */
+            if (flying.size >= INFLIGHT) await Promise.race([...flying].map((f) => f.p));
+            if (dead) return;
+            if (touchedAt.current !== roundStartedAt) break;
+            launch(batch);
           }
+          /*
+           * 这一轮的活全排出去了,等挂着的那几批回来再进下一轮盘点。
+           * 不等的话下一轮会拿着「还没落盘」的盘点结果重排一遍,把正在烘的那些又排一次。
+           */
+          await Promise.allSettled([...flying].map((f) => f.p));
         } catch (e: any) {
           if (!dead) setStatus((s) => ({ ...s, baking: null, error: String(e?.message || e) }));
         }

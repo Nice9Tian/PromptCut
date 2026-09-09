@@ -198,10 +198,15 @@ export async function openBakery(opts = {}) {
      * 旧 page 必须关:每趟漏一个不关,renderer 进程线性泄漏(这台机器多开 Chrome 复现过 0xC0000142)。
      * 关掉时它的虚拟时间还停在 pause,close 不受影响。
      * 实测 reset 全程 200~345ms(含关旧页),冷启动(起 Chrome + goto + 灌项目)459ms,每趟省约 250ms。
+     *
+     * `nextUrl` 换一个导出页地址再开(不给就还用开 bakery 时那个)。常驻 worker 要它:
+     * 每趟烘的是**不同的**隔离项目(`?timeline=/@export/<id>/project.json`),而项目由页面自己
+     * 去 fetch,所以换项目就得换地址。走 goto 而不是 loadProject 是有意的 —— 新 page 上
+     * goto 和「全新起一个浏览器」等价,而 loadProject 那条路的确定性问题见它自己的说明。
      */
-    async reset(project) {
+    async reset(project, nextUrl) {
       const old = bakery.page;
-      const s = await newSession(browser, url);
+      const s = await newSession(browser, nextUrl || url);
       if (project) await s.loadProject(project);
       Object.assign(bakery, s);
       await old.close();

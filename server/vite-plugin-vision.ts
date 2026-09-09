@@ -1,7 +1,7 @@
 import type { Plugin, ViteDevServer } from "vite";
 import type { ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import { spawn, spawnSync } from "node:child_process";
+import { fork, spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
@@ -671,29 +671,158 @@ async function bakeClip(
   return await Promise.all(uniq.map((t) => bakeOne(root, origin, project, clipId, t, size, bg, fit, priority, byT.get(t))));
 }
 
-/** 跑一次 export-frames 子进程。单张和批量共用同一套超时 / 报错处理 */
-function runExport(root: string, args: string[]): Promise<void> {
-  return new Promise<void>((resolve, reject) => {
-    const child = spawn(process.execPath, args, { cwd: root });
-    const tail: string[] = [];
-    const keep = (chunk: Buffer) => { tail.push(chunk.toString()); if (tail.length > 20) tail.shift(); };
-    child.stdout.on("data", keep);
-    child.stderr.on("data", keep);
-    const timer = setTimeout(() => {
-      if (process.platform === "win32" && child.pid) spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], { stdio: "ignore" });
-      else child.kill("SIGKILL");
-      reject(new Error(`渲染超时(${RENDER_TIMEOUT_MS / 1000} 秒)。`));
-    }, RENDER_TIMEOUT_MS);
-    child.on("error", (e) => { clearTimeout(timer); reject(e); });
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      if (code === 0) return resolve();
-      const msg = tail.join("").trim().slice(-600);
-      reject(new Error(code === 3221225794
-        ? "渲染进程启动失败(0xC0000142)。同时开着的浏览器实例太多,等导出跑完再看图。"
-        : `渲染进程异常退出(代码 ${code})${msg ? `:${msg}` : ""}`));
-    });
+/** 一趟烘焙要告诉渲染进程的全部东西。字段名和 export-frames 的 opts 一致 */
+interface RenderJobOpts {
+  url: string;
+  out: string;
+  frames: string;
+  fps: number;
+  /** 只截这几帧(离散取样)。不给就是 frames 那个连续区间 */
+  targetFrames?: number[];
+}
+
+/**
+ * # 常驻渲染 worker 池
+ *
+ * 以前每烘一次就 spawn 一个 node、起一个 Chrome、烘完整个进程退掉。**这笔固定开销比烘焙本身
+ * 大一个数量级**,实测(1920×1080,只要第 0 帧,vite 和 Chrome 都已经热着):
+ *
+ * ```
+ *   162ms  Launching Puppeteer...        ← 进程启动 + import puppeteer 只要 155ms
+ *   643ms  Warm-up 3 frames...
+ *  1109ms  Export finished in 0.4s.      ← 活儿到这里就干完了
+ *  4030ms  进程退出                       ← 剩下的 2.9 秒全是 browser.close() 在等 Chrome 收摊
+ * ```
+ *
+ * 也就是说四秒里只有一秒在干活,**将近三秒是在等一个 Chrome 关机** —— 而且这三秒结结实实
+ * 压在用户身上:runExport 是 `child.on("close")` 才 resolve 的。
+ *
+ * 换成常驻之后,同一份活实测 **4030ms → 810ms**(首趟 1261ms,含起 Chrome)。省下的既不是
+ * 起进程也不是加载页面,就是那个「开机 + 关机」。
+ *
+ * ## 复用的确定性靠什么保证
+ *
+ * 不是这里保证的,是 export-frames 里 `bakery.reset()` 保证的:每趟开一个**全新的 page**
+ * (全新 renderer,从没被启用过虚拟时间,和全新起一个浏览器等价),旧 page 立刻关掉。
+ * 那边有逐字节比对过的实测数据(复用烘的 vs 全新起浏览器烘的,四趟两两 6/6 全 0 帧)。
+ * 这里只负责**别把一个可疑的 worker 继续用下去**:超时、崩了、报过错的一律杀掉重开
+ * (worker 自己那边还有一层,见 render-worker.mjs 的「三条自保规矩」)。
+ *
+ * ## 为什么 worker 数不用另算一遍
+ *
+ * 并发上限由 `enqueue` 那个池子把着(见 maxConcurrentRenders),走到这里的活本来就不会超过它。
+ * 所以这里只要「有空闲的就用,没有就再开一个」,不必再算一次 —— 两处各算各的,迟早会
+ * 出现「池子说能跑 7 个,worker 只有 3 个」这种对不上账的事。多出来的 worker 由它自己的
+ * 闲置超时收掉。
+ */
+interface RenderWorker {
+  child: import("node:child_process").ChildProcess;
+  busy: boolean;
+  /** 这个 worker 上还没回来的活:请求 id → 结果回调。`started` 是它有没有真的开跑 */
+  pending: Map<number, { ok: () => void; fail: (e: Error) => void; timer: NodeJS.Timeout; started: boolean }>;
+  /** stdout/stderr 的最后几行,出错时当错误信息用 */
+  tail: string[];
+  /** 已经不能再派活了(超时杀掉 / 自己退了) */
+  dead: boolean;
+}
+
+const renderWorkers: RenderWorker[] = [];
+let renderJobSeq = 0;
+
+/** 从池子里摘掉一个 worker 并杀掉它;它身上没回来的活全部判失败 */
+function killWorker(w: RenderWorker, why: Error) {
+  if (w.dead) return;
+  w.dead = true;
+  const at = renderWorkers.indexOf(w);
+  if (at >= 0) renderWorkers.splice(at, 1);
+  for (const p of w.pending.values()) { clearTimeout(p.timer); p.fail(why); }
+  w.pending.clear();
+  // 渲染进程自己还拉着一个 Chrome,只杀它会留孤儿
+  if (process.platform === "win32" && w.child.pid) spawn("taskkill", ["/PID", String(w.child.pid), "/T", "/F"], { stdio: "ignore" });
+  else w.child.kill("SIGKILL");
+}
+
+function spawnWorker(root: string): RenderWorker {
+  const child = fork(path.resolve(root, "scripts/render-worker.mjs"), [], {
+    cwd: root,
+    // stdout/stderr 留着当错误信息;协议走第四条 ipc 通道,不和日志混在一起
+    stdio: ["ignore", "pipe", "pipe", "ipc"],
   });
+  const w: RenderWorker = { child, busy: false, pending: new Map(), tail: [], dead: false };
+  const keep = (chunk: Buffer) => { w.tail.push(chunk.toString()); if (w.tail.length > 20) w.tail.shift(); };
+  child.stdout?.on("data", keep);
+  child.stderr?.on("data", keep);
+  child.on("message", (msg: any) => {
+    const p = msg ? w.pending.get(msg.id) : undefined;
+    if (!p) return;
+    if (msg.type === "started") { p.started = true; return; }
+    if (msg.type !== "done" && msg.type !== "error") return;
+    w.pending.delete(msg.id);
+    clearTimeout(p.timer);
+    w.busy = false;
+    if (msg.type === "done") p.ok();
+    else {
+      /*
+       * worker 报错时它自己已经把那个 bakery 丢掉了(见 render-worker 的第 1 条规矩),
+       * 进程本身还是干净的,所以**不杀**,下一趟它会重新开一个浏览器。
+       */
+      p.fail(new Error(String(msg.message || "渲染失败")));
+    }
+  });
+  const bury = (code: number | null) => {
+    if (w.dead) return;
+    const msg = w.tail.join("").trim().slice(-600);
+    killWorker(w, new Error(code === 3221225794
+      ? "渲染进程启动失败(0xC0000142)。同时开着的浏览器实例太多,等导出跑完再看图。"
+      : `渲染进程异常退出(代码 ${code})${msg ? `:${msg}` : ""}`));
+  };
+  child.on("error", (e) => { if (!w.dead) killWorker(w, e instanceof Error ? e : new Error(String(e))); });
+  child.on("exit", bury);
+  renderWorkers.push(w);
+  return w;
+}
+
+/**
+ * 跑一趟烘焙。单张和批量共用同一套超时 / 报错处理。
+ *
+ * 超时的处理和以前一样是**杀进程**,但杀的是整个 worker(连它守着的 Chrome)——
+ * 卡住的页面留着比重开一个贵:下一趟在它上面烘出来的东西不可信,而且不报错。
+ */
+async function runExport(root: string, opts: RenderJobOpts, retry = true): Promise<void> {
+  const w = renderWorkers.find((x) => !x.busy && !x.dead) || spawnWorker(root);
+  w.busy = true;
+  const id = ++renderJobSeq;
+  const entry = { ok: () => {}, fail: (_: Error) => {}, timer: null as any, started: false };
+  try {
+    await new Promise<void>((resolve, reject) => {
+      entry.ok = resolve;
+      entry.fail = reject;
+      entry.timer = setTimeout(() => {
+        w.pending.delete(id);
+        killWorker(w, new Error(`渲染超时(${RENDER_TIMEOUT_MS / 1000} 秒)。`));
+        reject(new Error(`渲染超时(${RENDER_TIMEOUT_MS / 1000} 秒)。`));
+      }, RENDER_TIMEOUT_MS);
+      w.pending.set(id, entry);
+      w.child.send({ type: "bake", id, opts }, (e) => {
+        if (!e) return;
+        w.pending.delete(id);
+        clearTimeout(entry.timer);
+        killWorker(w, e);
+        reject(e);
+      });
+    });
+  } catch (e) {
+    /*
+     * **没开跑的活重发一次。** 只有一种成因:派活的那一刻这个 worker 正好闲置超时自己退了
+     * (IPC 是异步的,谁也拦不住这个瞬间)。不重试的话,用户每隔一阵子就会随机撞上一次
+     * 「渲染进程异常退出」,而下一次点又好了 —— 最难查的那种偶发。
+     *
+     * 开跑之后失败的**不**重发:那时候可能已经落了一半的盘,而 worker 那边已经把出过错的
+     * bakery 丢掉了,下一趟本来就是干净的。
+     */
+    if (retry && !entry.started) return await runExport(root, opts, false);
+    throw e;
+  }
 }
 
 async function renderOneFrame(root: string, origin: string, project: any, t: number, notes: string[]): Promise<Buffer> {
@@ -711,36 +840,11 @@ async function renderOneFrame(root: string, origin: string, project: any, t: num
     const layersPromise = renderMediaLayers(root, project, frame / fps, dir, notes);
     await fsp.writeFile(path.join(dir, "project.json"), JSON.stringify(cardsOnly(project), null, 2), "utf8");
     const relOut = process.env.PROMPTCUT_EXPORT_DIR ? dir : `out/export-${id}`;
-    const args = [
-      "scripts/export-frames.mjs",
-      "--url", `${origin}/?export=1&timeline=/@export/${id}/project.json`,
-      "--out", relOut,
-      "--frames", `${frame}-${frame}`,
-      "--fps", String(fps),
-      "--no-video",
-    ];
-
-    await new Promise<void>((resolve, reject) => {
-      const child = spawn(process.execPath, args, { cwd: root });
-      const tail: string[] = [];
-      const keep = (chunk: Buffer) => { tail.push(chunk.toString()); if (tail.length > 20) tail.shift(); };
-      child.stdout.on("data", keep);
-      child.stderr.on("data", keep);
-      const timer = setTimeout(() => {
-        // 渲染进程自己还会拉起 Chrome,只杀它会留孤儿
-        if (process.platform === "win32" && child.pid) spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], { stdio: "ignore" });
-        else child.kill("SIGKILL");
-        reject(new Error(`渲染超时(${RENDER_TIMEOUT_MS / 1000} 秒)。`));
-      }, RENDER_TIMEOUT_MS);
-      child.on("error", (e) => { clearTimeout(timer); reject(e); });
-      child.on("close", (code) => {
-        clearTimeout(timer);
-        if (code === 0) return resolve();
-        const msg = tail.join("").trim().slice(-600);
-        reject(new Error(code === 3221225794
-          ? "渲染进程启动失败(0xC0000142)。同时开着的浏览器实例太多,等导出跑完再看图。"
-          : `渲染进程异常退出(代码 ${code})${msg ? `:${msg}` : ""}`));
-      });
+    await runExport(root, {
+      url: `${origin}/?export=1&timeline=/@export/${id}/project.json`,
+      out: relOut,
+      frames: `${frame}-${frame}`,
+      fps,
     });
 
     const cards = PNG.sync.read(await fsp.readFile(path.join(dir, "frames", `${String(frame).padStart(6, "0")}.png`)));
@@ -778,16 +882,13 @@ async function renderFrames(root: string, origin: string, project: any, times: n
     const layersPromises = frames.map((f) => renderMediaLayers(root, project, f / fps, dir, notes));
     await fsp.writeFile(path.join(dir, "project.json"), JSON.stringify(cardsOnly(project), null, 2), "utf8");
     const relOut = process.env.PROMPTCUT_EXPORT_DIR ? dir : `out/export-${id}`;
-    const args = [
-      "scripts/export-frames.mjs",
-      "--url", `${origin}/?export=1&timeline=/@export/${id}/project.json`,
-      "--out", relOut,
-      "--frames", `0-${frames[frames.length - 1]}`,
-      "--target-frames", frames.join(","),
-      "--fps", String(fps),
-      "--no-video",
-    ];
-    await runExport(root, args);
+    await runExport(root, {
+      url: `${origin}/?export=1&timeline=/@export/${id}/project.json`,
+      out: relOut,
+      frames: `0-${frames[frames.length - 1]}`,
+      targetFrames: frames,
+      fps,
+    });
 
     const out = new Map<number, Buffer>();
     for (let i = 0; i < frames.length; i++) {
@@ -1074,6 +1175,9 @@ export function visionPlugin(): Plugin {
             sendJson(res, 200, {
               ok: true, items, orphans, totalBytes, fileCount: onDisk.size,
               concurrency: maxConcurrentRenders(), running: renderRunning,
+              // 常驻 worker 有几个活着。冷的时候是 0,烘过之后应该稳定在并发用到的那个数上;
+              // 要是它一直等于 running 又不停变,说明 worker 在被反复杀掉重开(见 killWorker)
+              workers: renderWorkers.length,
             });
           } catch (e: any) {
             sendJson(res, 500, { ok: false, error: e?.message || String(e) });
