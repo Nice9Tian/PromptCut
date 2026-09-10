@@ -662,7 +662,7 @@ async function bakeOne(
   }
 
   async function bakeAndWrite() {
-  let raw = pre ?? await enqueue(() => renderOneFrame(root, origin, target, at, []), priority);
+  let raw = pre ?? await enqueue(() => renderOneFrame(root, origin, target, at, [], priority), priority);
 
   /*
    * 底色决定贴上去是什么观感,而这个选择只该在**烘的时候**做一次:
@@ -735,7 +735,7 @@ async function bakeClip(
    */
   const { target } = bakeTarget(project, clipId, missing[0].t, size, bg, fit);
   const fps = target.fps || 30;
-  const shots = await enqueue(() => renderFrames(root, origin, target, missing.map((m) => m.at), []), priority);
+  const shots = await enqueue(() => renderFrames(root, origin, target, missing.map((m) => m.at), [], priority), priority);
 
   // 渲好的按帧号交回 bakeOne,缓存键、底色、落盘、返回值全走那一套
   const byT = new Map<number, Buffer>();
@@ -800,10 +800,24 @@ interface RenderWorker {
   tail: string[];
   /** 已经不能再派活了(超时杀掉 / 自己退了) */
   dead: boolean;
+  /**
+   * 前台专用。**后台的活一律不许碰它。**
+   *
+   * 池子按并发上限分配槽位本来就给前台留了一格,但那只解决「有没有位子」,解决不了
+   * 「位子上那个 Chrome 是不是热的」:后台预烘会把所有已有的 worker 占满,于是用户
+   * 松手要图时只能现开一个 —— 又是一次开机。留一个专属的、预热好的、永不闲置退出的,
+   * 用户拖到哪儿松手都有人立刻接住。
+   */
+  reserved: boolean;
 }
 
 const renderWorkers: RenderWorker[] = [];
 let renderJobSeq = 0;
+/**
+ * 最近一次渲染用的源地址。预热要一个能打开的导出页地址,而预热发生在「还没有活」的时候,
+ * 手上没有任何 opts.url 可用 —— 记一个下来就够,反正整个开发服务器只有一个源。
+ */
+let lastRenderOrigin: string | null = null;
 
 /** 从池子里摘掉一个 worker 并杀掉它;它身上没回来的活全部判失败 */
 function killWorker(w: RenderWorker, why: Error) {
@@ -818,13 +832,15 @@ function killWorker(w: RenderWorker, why: Error) {
   else w.child.kill("SIGKILL");
 }
 
-function spawnWorker(root: string): RenderWorker {
+function spawnWorker(root: string, reserved = false): RenderWorker {
   const child = fork(path.resolve(root, "scripts/render-worker.mjs"), [], {
     cwd: root,
     // stdout/stderr 留着当错误信息;协议走第四条 ipc 通道,不和日志混在一起
     stdio: ["ignore", "pipe", "pipe", "ipc"],
+    // 前台那个常驻不许闲置退出(0 = 永不),否则用户去改会儿参数回来又要等一次开机
+    env: reserved ? { ...process.env, PROMPTCUT_WORKER_IDLE_MS: "0" } : process.env,
   });
-  const w: RenderWorker = { child, busy: false, pending: new Map(), tail: [], dead: false };
+  const w: RenderWorker = { child, busy: false, pending: new Map(), tail: [], dead: false, reserved };
   const keep = (chunk: Buffer) => { w.tail.push(chunk.toString()); if (w.tail.length > 20) w.tail.shift(); };
   child.stdout?.on("data", keep);
   child.stderr?.on("data", keep);
@@ -855,7 +871,38 @@ function spawnWorker(root: string): RenderWorker {
   child.on("error", (e) => { if (!w.dead) killWorker(w, e instanceof Error ? e : new Error(String(e))); });
   child.on("exit", bury);
   renderWorkers.push(w);
+  // 前台那个一生下来就把 Chrome 开起来 —— 等用户松手才开机,他就要多等约 1.3 秒
+  if (reserved && lastRenderOrigin) child.send({ type: "prewarm", url: `${lastRenderOrigin}/?export=1` });
   return w;
+}
+
+/**
+ * 挑一个 worker 干活。**前台和后台走两条路。**
+ *
+ *   前台(用户松手正等着看的那一张)—— 只用 reserved 那个:它是热的、专属的、永不闲置退出,
+ *     后台再忙也占不到它。派走之后**立刻再备一个热的**,免得用户连着拖两次时第二次没人接。
+ *   后台(空闲预烘)—— 只用非 reserved 的,没有空闲的就再开一个。
+ *     **绝不碰 reserved**:预烘一个活五六秒,占住它这套东西就白做了。
+ *
+ * 池子的并发上限(见 pumpRenderQueue)管的是「有没有位子」,这里管的是
+ * 「位子上那个 Chrome 是不是热的」—— 两件事,缺一个用户都得干等一次开机。
+ */
+function pickWorker(root: string, priority: number): RenderWorker {
+  if (priority > 0) {
+    const w = renderWorkers.find((x) => x.reserved && !x.busy && !x.dead) ?? spawnWorker(root, true);
+    w.busy = true;
+    ensureSpareWorker(root);
+    return w;
+  }
+  const w = renderWorkers.find((x) => !x.reserved && !x.busy && !x.dead) ?? spawnWorker(root, false);
+  w.busy = true;
+  return w;
+}
+
+/** 手上没有空闲的前台 worker 了就再开一个并预热 —— 「开烘之后立刻备一个」的落点 */
+function ensureSpareWorker(root: string) {
+  if (renderWorkers.some((x) => x.reserved && !x.busy && !x.dead)) return;
+  spawnWorker(root, true);
 }
 
 /**
@@ -864,9 +911,9 @@ function spawnWorker(root: string): RenderWorker {
  * 超时的处理和以前一样是**杀进程**,但杀的是整个 worker(连它守着的 Chrome)——
  * 卡住的页面留着比重开一个贵:下一趟在它上面烘出来的东西不可信,而且不报错。
  */
-async function runExport(root: string, opts: RenderJobOpts, retry = true): Promise<void> {
-  const w = renderWorkers.find((x) => !x.busy && !x.dead) || spawnWorker(root);
-  w.busy = true;
+async function runExport(root: string, opts: RenderJobOpts, priority = 0, retry = true): Promise<void> {
+  try { lastRenderOrigin = new URL(opts.url).origin; } catch { /* 地址不合法就不记,预热那一步自然跳过 */ }
+  const w = pickWorker(root, priority);
   const id = ++renderJobSeq;
   const entry = { ok: () => {}, fail: (_: Error) => {}, timer: null as any, started: false };
   try {
@@ -896,12 +943,12 @@ async function runExport(root: string, opts: RenderJobOpts, retry = true): Promi
      * 开跑之后失败的**不**重发:那时候可能已经落了一半的盘,而 worker 那边已经把出过错的
      * bakery 丢掉了,下一趟本来就是干净的。
      */
-    if (retry && !entry.started) return await runExport(root, opts, false);
+    if (retry && !entry.started) return await runExport(root, opts, priority, false);
     throw e;
   }
 }
 
-async function renderOneFrame(root: string, origin: string, project: any, t: number, notes: string[]): Promise<Buffer> {
+async function renderOneFrame(root: string, origin: string, project: any, t: number, notes: string[], priority = 0): Promise<Buffer> {
   const id = `vision-${Date.now().toString(36)}-${counter++}`;
   const dir = path.resolve(outRoot(root), `export-${id}`);
   await fsp.mkdir(dir, { recursive: true });
@@ -921,7 +968,7 @@ async function renderOneFrame(root: string, origin: string, project: any, t: num
       out: relOut,
       frames: `${frame}-${frame}`,
       fps,
-    });
+    }, priority);
 
     const cards = PNG.sync.read(await fsp.readFile(path.join(dir, "frames", `${String(frame).padStart(6, "0")}.png`)));
     const layers = await layersPromise;
@@ -944,7 +991,7 @@ async function renderOneFrame(root: string, origin: string, project: any, t: num
  * 7 张逐字节相同。单价拆开是:推一帧约 18~23ms,截一张约 78ms,而单独起一趟要 4.0~5.0s。
  * 也就是说同一张卡的第 2 个时刻起,成本从 4400ms 掉到 78ms。
  */
-async function renderFrames(root: string, origin: string, project: any, times: number[], notes: string[]): Promise<Map<number, Buffer>> {
+async function renderFrames(root: string, origin: string, project: any, times: number[], notes: string[], priority = 0): Promise<Map<number, Buffer>> {
   const id = `vision-${Date.now().toString(36)}-${counter++}`;
   const dir = path.resolve(outRoot(root), `export-${id}`);
   await fsp.mkdir(dir, { recursive: true });
@@ -964,7 +1011,7 @@ async function renderFrames(root: string, origin: string, project: any, times: n
       frames: `0-${frames[frames.length - 1]}`,
       targetFrames: frames,
       fps,
-    });
+    }, priority);
 
     const out = new Map<number, Buffer>();
     for (let i = 0; i < frames.length; i++) {
@@ -1254,6 +1301,8 @@ export function visionPlugin(): Plugin {
               // 常驻 worker 有几个活着。冷的时候是 0,烘过之后应该稳定在并发用到的那个数上;
               // 要是它一直等于 running 又不停变,说明 worker 在被反复杀掉重开(见 killWorker)
               workers: renderWorkers.length,
+              // 前台专属的那个热 Chrome 在不在。它应该长期是 1 —— 掉到 0 就说明常驻没留住
+              reservedWorkers: renderWorkers.filter((w) => w.reserved && !w.dead).length,
             });
           } catch (e: any) {
             sendJson(res, 500, { ok: false, error: e?.message || String(e) });
