@@ -1019,9 +1019,23 @@ export default function vitePluginCards(): Plugin {
         mapCache.set(urlPath, decoded);
         return decoded;
       };
+      /*
+       * 项目 JSON 放在内存里按短 id 供页面拉取,和 vite-plugin-vision 的 /@export/<id>/project.json 同一个做法。
+       * 不塞进 URL:卡片 props 里有长文本或 data: 图片时,请求行超过 Node 的 16 KB 头部上限,页面直接 431。
+       */
+      const domProjects = new Map<string, string>();
+      server.middlewares.use('/@cards-dom', (req, res, next) => {
+        const id = (req.url || '').split('/')[1] || '';
+        const body = domProjects.get(id);
+        if (!body) return next();
+        res.setHeader('Content-Type', 'application/json');
+        res.end(body);
+      });
       const renderDomTree = async (origin: string, isoProject: any, frame: number): Promise<DomNode[]> => {
-        const tl = 'data:application/json,' + encodeURIComponent(JSON.stringify(isoProject));
-        const url = `${origin}/?export=1&timeline=${encodeURIComponent(tl)}`;
+        const pid = crypto.randomBytes(8).toString('hex');
+        domProjects.clear(); // 一次只渲一个(domChain 排队),上一份用不着了
+        domProjects.set(pid, JSON.stringify(isoProject));
+        const url = `${origin}/?export=1&timeline=/@cards-dom/${pid}/project.json`;
         const mod = await import(pathToFileURL(path.join(server.config.root, 'scripts', 'export-frames.mjs')).href);
         if (domIdle) clearTimeout(domIdle);
         try {

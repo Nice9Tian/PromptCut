@@ -114,22 +114,30 @@ export function startRun(opts) {
  * 实测里它把这四步全踩了:先 view_file 四个 MCP schema 的 json(那些 schema 早就在
  * 它自己的工具清单里)、再 grep_search 应用目录、再 view_file 用户附件的磁盘路径。
  * 光是「读一遍工具说明书」就白烧掉两轮。所以这里点名把替代路径写清楚。
+ *
+ * 审查环路里又见过一次:worker 先 list_dir 应用目录、再 read_url_content 一个网页、
+ * 再 grep_search 应用源码找 `project.tracks` —— 三个内建工具各撞一次墙,三轮全作废。
+ * 所以清单要列全,并且说清「换一个内建工具也一样」。
  */
 const AGY_ADDENDUM = `
 ## 关于你自己那套内建工具(只有你这一家需要看)
 
-你除了 PromptCut 的工具,自己还带着 view_file / grep_search / find_by_name /
-run_command 这些内建工具。**在这里基本都用不了,而且用了代价很大:**
+你除了 PromptCut 的工具,自己还带着 view_file / list_dir / grep_search / find_by_name /
+read_url_content / run_command 这些内建工具。**在这里基本都用不了,而且用了代价很大:**
 
 - 你的工作区只有一个很小的临时目录,读写它以外的任何路径都会被自动拒绝
   (无人值守,没人能给你点同意);
-- 被拒一次,你这一轮就整个作废、什么都交不出来,要从头再来一遍。
+- 读网页、跑命令同样没人能给你点同意,一律自动拒绝;
+- 被拒一次,你这一轮就整个作废、什么都交不出来,要从头再来一遍。换一个内建工具也一样。
 
-所以:**除非文件确实在你的工作区里,否则不要用内建工具碰任何路径。**
+所以:**除非文件确实在你的工作区里,否则不要用内建工具碰任何路径、网址或命令。**
 你要做的每一件事都有对应的 PromptCut 工具:
 
 | 你想干的事 | 用这个,别用内建工具 |
 | --- | --- |
+| 看工程里有什么(轨道、片段、素材、卡片) | \`get_project\` / \`get_clip\` / \`get_track\` / \`list_media\` / \`list_cards\` |
+| 弄清工程的数据长什么样 | 上面这些工具返回的就是;别去搜应用目录里的源码 |
+| 读网页、查资料 | \`web_open\` / \`web_read\` |
 | 看某张卡的源码 | \`get_card_source\` |
 | 改一张卡 | \`edit_card\`(新建才用 \`create_card\`) |
 | 看画面长什么样 | \`see_frames\` |
@@ -137,6 +145,25 @@ run_command 这些内建工具。**在这里基本都用不了,而且用了代�
 | 等几秒再查后台作业 | \`wait({ seconds })\`,别用 run_command 去 sleep |
 | 查某个工具怎么调 | 它的参数说明**已经在你的工具清单里**了,直接看;不要去读磁盘上的 schema json |
 `;
+
+/**
+ * 被拒的是哪一类权限,就指哪条 PromptCut 的路。
+ *
+ * 原来续跑话术写死「command 权限(run_command 等)被拒,改用 wait」。实跑里三次被拒分别是
+ * list_dir(read_file)、read_url_content(read_url)、grep_search(read_file),一次 command 都没有 ——
+ * 模型照着那句去躲 run_command,转手拿另一个内建工具再撞一次墙,重试用完,整个审查环路作废。
+ */
+export function deniedAdvice(names, detail) {
+  const s = `${names} ${detail}`.toLowerCase().replace(/[_\s-]/g, '');
+  const tips = [];
+  if (/readfile|listdir|grepsearch|findbyname|viewfile|codebasesearch/.test(s)) {
+    tips.push('看工程、素材、卡片:用 get_project / get_clip / list_media / list_cards / get_card_source,别去翻磁盘上的目录和源码');
+  }
+  if (/readurl/.test(s)) tips.push('读网页:用 web_open / web_read;用户发来的附件用 import_media({ url })');
+  if (/runcommand|command/.test(s)) tips.push('等几秒再查后台作业:用 wait({ seconds },1~30),别用 run_command 去 sleep');
+  if (!tips.length) tips.push('换成 PromptCut 提供的工具做同一件事');
+  return tips;
+}
 
 function _startRun(opts) {
   const exePath = resolveExe('agy');
@@ -351,11 +378,12 @@ function _startRun(opts) {
                 */
                if (!String(finalResponse).trim() && !emitted.trim()) {
                   const why = deniedDetail || `内建工具 ${deniedNames} 被拒绝`;
+                  const tips = deniedAdvice(deniedNames, deniedDetail);
                   childController.finish({
                     type: 'error',
                     message: `Antigravity 拒绝了它自己的内建工具(${deniedNames})之后放弃了这一轮,没有产出任何结果。`
-                      + `无人值守模式下它没法弹窗征求同意,所以需要 command 权限的工具一律自动拒绝。`
-                      + `PromptCut 的工具不受影响 —— 如果它是想「等几秒再查作业」,现在有 wait 工具可以用。`,
+                      + `无人值守模式下它没法弹窗征求同意,工作区以外的读文件、读网页、跑命令一律自动拒绝。`
+                      + `PromptCut 的工具不受影响 —— ${tips.join(';')}。`,
                     /*
                      * 这一类中断是「接着说就有可能成」的:上下文都还在(--conversation 会把
                      * 整段对话带回来),缺的只是让它知道刚才为什么停、以及换哪条路。
@@ -364,8 +392,9 @@ function _startRun(opts) {
                      */
                     retryable: true,
                     retryPrompt: `接着上面继续做。上一轮中断了,原因是:${why}。\n`
-                      + `这是 Antigravity 自己的权限限制,无人值守模式下需要 command 权限的内建工具(run_command 等)一律被自动拒绝,换个说法重试也没用。\n`
-                      + `如果你刚才是想等几秒再查后台作业,请改用 PromptCut 的 wait 工具(参数 seconds,1~30);别的需求也请只用 PromptCut 提供的工具。\n`
+                      + `这是 Antigravity 自己的权限限制:无人值守模式下,你的内建工具(view_file / list_dir / grep_search / find_by_name / read_url_content / run_command 等)`
+                      + `只要碰工作区以外的路径、网址或命令,一律被自动拒绝,整轮作废。换一个内建工具也一样,不要再试。\n`
+                      + `改用 PromptCut 的工具:\n${tips.map((t) => `- ${t}`).join('\n')}\n`
                       + `不用重头再来,从刚才停下的地方接着做就行。`,
                   });
                   return;

@@ -52,10 +52,12 @@ export function judgerOpenPrompt({ userText }) {
   ].join('\n');
 }
 
-export function judgerVerdictPrompt({ userText, requirements, delivery, opinions }) {
+export function judgerVerdictPrompt({ userText, requirements, delivery, opinions, reviewerInterrupted = false }) {
   const list = opinions.length
     ? opinions.map((o, i) => `${i + 1}. ${o.issue}\n   依据:${o.evidence || '(没给)'}`).join('\n')
-    : '(reviewer 没有提出意见)';
+    : reviewerInterrupted
+      ? '(reviewer 这一轮因技术原因中断,没有交出意见。这不代表没有问题 —— 请你自己用只读工具核对工程后再裁定。)'
+      : '(reviewer 没有提出意见)';
   return [
     '用户的原话:', userText, '',
     '本轮给 worker 的要求:', requirements, '',

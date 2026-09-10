@@ -7,11 +7,11 @@
 | 0 字体地基 | 完成(第 3 条除外) | 主题字体栈补齐 Consolas / Segoe UI Symbol / 中文字体,`themeStyle` 把 `--font-mono` 接到主题;`scripts/font-audit.mjs` 零告警。**第 3 条「字体随包分发」没做**:要换掉系统字体(雅黑 / 苹方不能随包分发),成片观感会变,等设计决定 |
 | 1 beginFrame 后端 | 完成 | `scripts/export-frames.mjs`,接口不变;旧后端归档到 `scripts/archive/`。全长 1800 帧 107.7 → 26.9 ms/帧 |
 | 2 常驻 worker + 打包 | 完成 | render-worker / `/api/export` / see_frames / bake_card / 预烘都走同一个 `openBakery`,自动换上新后端;`prepare-runtime.mjs` 带上 headless-shell;打补丁升上来缺它时自动安装 |
-| 3 卡片审计 | 见 `scripts/card-audit.mjs` | 位置无关 / 确定性 / 结构稳定 / 挂载请求 / 载体 |
+| 3 卡片审计 | 完成(脚本 + 首次实跑),**3 张卡待修** | `scripts/card-audit.mjs`,89 张:确定性 89/89;位置无关不过 3 张 —— `mu-word-rotate`(最大通道差 250)、`versus-card`(40)、`lottie-bodymovin`(42);结构不稳定 2 张(`chapter-bar`、`terminal-3d`);`particles-nasa` 挂载时访问外网 |
 | 4 HTML 采样缓存 | 完成 | `--dom-cache` + `scripts/replay-frames.mjs`;id 改名、画布转图、关动画;乱序重放 300/300 相同 |
 | 5 分片并行 | 完成但**不提速** | `--workers N` 输出逐字节相同,但 1/4/8 个进程 54.8/44.8/62.4 秒;默认单进程 |
 | 6 画布层单独出帧 | 没做 | 可选项,毛玻璃叠在画布上时不能拆 |
-| MCP 衔接 | 完成 | `get_card_source` / `edit_card` 覆盖内置卡和卡片用到的部件文件(带共用计数、备份、校验);新增只读的 `inspect_card_dom`(每个节点标源码行,经 source map 换算) |
+| MCP 衔接 | 完成 | `get_card_source` / `edit_card` 覆盖内置卡和卡片用到的部件文件(带共用计数、备份、校验);新增只读的 `inspect_card_dom`(每个节点标源码行,经 source map 换算)。端到端实测:无头编辑台连桥 → `/api/mcp/call` 走完三个工具;60 KB props 的项目照常出树 |
 
 这份计划的每个判断都带出处。出处分三类:**仓库里的文件/提交**、**实测**(2026-09-10,i7-14700KF 28 线程 / 32 GB,Chrome 152,1920×1080 / 30fps)、**一般经验**(没有原文可引,会标出来)。实测脚本在会话 scratchpad 里,落地时挪进 `scripts/`,见「附:验证脚本」。
 

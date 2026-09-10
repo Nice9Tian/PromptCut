@@ -112,7 +112,16 @@ export function cliBackend({ startProviderRun, baseOpts, setToolAccess, signal }
             const r = await runOnce({ role, systemPrompt, prompt: ask, sessionId });
             sessionId = r.sessionId || sessionId;
             if (!r.error) return { text: r.text, submitted: parseSubmission(r.text, submit), session: sessionId, usage: r.usage };
-            if (signal?.aborted || !r.error.retryable || attempt >= RETRIES || !sessionId) throw new Error(r.error.message || 'CLI 报错');
+            if (signal?.aborted || !r.error.retryable) throw new Error(r.error.message || 'CLI 报错');
+            if (attempt >= RETRIES || !sessionId) {
+              /*
+               * 可续跑的中断,重试用完了:这一回合交不出东西,但**环路不该跟着作废**。
+               * 实跑:worker 三次都被 agy 自家的内建工具拒掉,这里一 throw,judger 定好的要求、
+               * worker 已经动过的工程全白跑,用户只看到一个错误。改成交回一个标了 interrupted 的结果,
+               * 怎么接由 loop.mjs 决定。不可续跑的错(模型名不对之类)和用户点停止照旧抛出去。
+               */
+              return { text: r.text, submitted: parseSubmission(r.text, submit), session: sessionId, usage: r.usage, interrupted: r.error.message || 'CLI 报错' };
+            }
             onRoleEvent(role, { type: 'loop', stage: 'retry', role, attempt: attempt + 1, reason: r.error.message });
             ask = r.error.retryPrompt || '上一次中断了。之前的进度都还在,接着刚才停下的地方继续做。';
           }

@@ -103,3 +103,47 @@ test('可续跑的错误:接着同一个会话重试;不可续跑的错误结束
   assert.ok(bad.events.some((e) => e.type === 'error' && /模型名不对/.test(e.message)));
   assert.equal(bad.locks.at(-1), null, '出错也要解锁');
 });
+
+/*
+ * 实跑:worker 三次都被 agy 自家的内建工具拒掉(list_dir / read_url_content / grep_search),
+ * 重试用完就 throw,整个环路报错结束 —— judger 定好的要求、worker 已经动过的工程全白跑。
+ */
+const denied = { error: { message: 'Antigravity 拒绝了它自己的内建工具(GrepSearch)', retryable: true, retryPrompt: '接着做' } };
+
+test('worker 重试用完仍然中断:不作废环路,改动交给 reviewer / judger 核对,算一次没通过', async () => {
+  const { events, calls } = await run({
+    judger: [block('issue_plan', { requirements: 'A', reviewerBrief: 'X' }),
+      block('request_revision', { rulings: [], requirements: '接着把 A 做完' }), block('phase_done', { summary: 'ok' })],
+    worker: [denied, denied, denied, '交货:A 做完了'],
+    reviewer: [block('submit_review', { opinions: [] }), block('submit_review', { opinions: [] })],
+  });
+  assert.ok(!events.some((e) => e.type === 'error'), '不能报错结束');
+  assert.equal(events.find((e) => e.type === 'done').outcome, 'passed');
+  assert.ok(events.some((e) => e.type === 'status' && /重试用完仍然中断/.test(e.text)));
+  const reviewer = calls.find((c) => c.role === 'reviewer');
+  assert.match(reviewer.prompt, /被技术原因打断[\s\S]*GrepSearch/, 'reviewer 要知道这次交货是中断的、为什么');
+  const workers = calls.filter((c) => c.role === 'worker');
+  assert.equal(workers.length, 4, '三次尝试 + 下一轮新的一次');
+  assert.ok(!workers[3].sessionId, '下一轮 worker 是新会话');
+});
+
+test('worker 连着两轮中断:停下来正常收尾(不是报错),说明原因', async () => {
+  const { events } = await run({
+    judger: [block('issue_plan', { requirements: 'A', reviewerBrief: 'X' }), block('request_revision', { rulings: [], requirements: 'A' })],
+    worker: Array(6).fill(denied),
+    reviewer: [block('submit_review', { opinions: [] })],
+  });
+  assert.ok(!events.some((e) => e.type === 'error'));
+  assert.equal(events.find((e) => e.type === 'done').outcome, 'interrupted');
+  assert.ok(events.some((e) => e.type === 'text' && /连续 2 轮都被技术原因打断[\s\S]*GrepSearch/.test(e.delta)));
+});
+
+test('reviewer 重试用完仍然中断:judger 被告知自己核对,而不是当成「没有意见」', async () => {
+  const { events, calls } = await run({
+    judger: [block('issue_plan', { requirements: 'A', reviewerBrief: 'X' }), block('phase_done', { summary: 'ok' })],
+    worker: ['交货'],
+    reviewer: [denied, denied, denied],
+  });
+  assert.equal(events.find((e) => e.type === 'done').outcome, 'passed');
+  assert.match(calls.filter((c) => c.role === 'judger')[1].prompt, /reviewer 这一轮因技术原因中断/);
+});

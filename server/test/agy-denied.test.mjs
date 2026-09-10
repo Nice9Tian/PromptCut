@@ -120,6 +120,29 @@ test('可续跑的中断要带 retryable 和拼好的 retryPrompt', async () => 
   assert.match(err.retryPrompt, /接着|继续/, '要说清是接着做,不是重头再来');
 });
 
+test('续跑话术按被拒的权限类型指路:读文件被拒不能说成 command、不能只给 wait', async () => {
+  const events = await run({
+    conversation_id: 'c1', status: 'SUCCESS', response: '',
+    denied_actions: [{
+      display_name: 'GrepSearch',
+      reason: 'permission check failed for read_file "C:\\app": user denied permission for read_file(C:\\app)',
+    }],
+  });
+  const err = events.find((e) => e.type === 'error');
+  assert.match(err.retryPrompt, /get_project/, '读文件被拒要指到看工程的工具');
+  assert.doesNotMatch(err.retryPrompt, /wait\(/, '跟等待无关,别把它往 wait 上带');
+  assert.match(err.retryPrompt, /换一个内建工具也一样/, '实跑里它被拒一次就换另一个内建工具再撞');
+  assert.doesNotMatch(err.message, /command 权限/);
+});
+
+test('读网页被拒:指到 web_open / web_read', async () => {
+  const events = await run({
+    conversation_id: 'c1', status: 'SUCCESS', response: '',
+    denied_actions: [{ display_name: 'ReadUrlContent', action: 'read_url_content' }],
+  });
+  assert.match(events.find((e) => e.type === 'error').retryPrompt, /web_open/);
+});
+
 test('不可续跑的错(agy 自己报 ERROR)不带 retryable —— 那种续跑一百次也一样', async () => {
   const events = await run({ conversation_id: 'c1', status: 'ERROR', error: 'invalid model selection' });
   const err = events.find((e) => e.type === 'error');

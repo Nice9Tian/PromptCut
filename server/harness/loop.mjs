@@ -14,6 +14,10 @@ import * as P from './loop-prompts.mjs';
  *
  * worker 每一轮都换一段新的历史并重新注入用户原话 —— 截断只钉住最近一条用户文字消息
  * (history.mjs),指望 worker 从早期历史里翻回原始需求是靠不住的。
+ *
+ * 某个回合重试用完仍然中断(后端交回 interrupted),不作废整个环路:worker 的改动照样交给
+ * reviewer / judger 核对、算一次没通过;reviewer 中断就让 judger 自己核对。worker 连着中断
+ * MAX_INTERRUPTS 次才停下 —— 那多半是环境问题,再跑只是空烧。
  */
 
 const FAILS_PER_BATCH = 3;
@@ -21,6 +25,7 @@ const MAX_BATCHES = 2;
 const ROLE_ROUNDS = 60;
 const RETRIES = 2;
 const WORKER_MIN_ROUNDS = 60;
+const MAX_INTERRUPTS = 2;
 const RETRY_PROMPT = '上一次请求因为网关超时断了。之前的进度都还在,接着刚才停下的地方继续做。';
 const NUDGE_PROMPT = '你还没有按规定交出结论。现在就交。';
 
@@ -197,6 +202,9 @@ export function presentLoopEvent(ev) {
         const why = !ev.reason || isTimeout({ message: ev.reason }) ? '请求网关超时' : '中断了';
         return [{ type: 'status', text: `${role} 这一轮${why},接着刚才的进度重试(第 ${ev.attempt} 次)` }];
       }
+      case 'interrupted': return [{ type: 'status', text: ev.role === 'worker'
+        ? 'worker 重试用完仍然中断 —— 不作废整个任务,把它已经做的改动交给 reviewer 和 judger 核对'
+        : `${role} 重试用完仍然中断 —— 不作废整个任务,接着往下走` }];
       case 'reflect': return [{ type: 'status', text: 'worker 连续没通过,这一轮不干活,先反省' }];
       case 'rewrite': return [{ type: 'status', text: 'judger 读完反省,正在改写任务要求和检查项' }];
       default: return [];
@@ -242,6 +250,7 @@ export async function runReviewLoop(o) {
     const res = await backend.runRole(role, args);
     for (const k of Object.keys(usage)) usage[k] += Number(res.usage?.[k]) || 0;
     completed += res.completed || 0; failed += res.failed || 0;
+    if (res.interrupted) say({ stage: 'interrupted', role, reason: res.interrupted });
     return res;
   }
 
@@ -273,6 +282,7 @@ export async function runReviewLoop(o) {
   let brief = plan.input.reviewerBrief;
 
   const reflections = [];
+  let interrupts = 0;
   for (let batch = 1; batch <= MAX_BATCHES; batch++) {
     const verdicts = [];
     let prevSig = null;
@@ -285,7 +295,21 @@ export async function runReviewLoop(o) {
         prompt: P.workerPrompt({ userText, requirements, lessons: [...lessons, ...newLessons] }),
       });
       if (work.submitted?.name === 'need_user') return finish('need_user', `需要你处理:${work.submitted.input.reason}`);
-      const delivery = work.text;
+      interrupts = work.interrupted ? interrupts + 1 : 0;
+      if (interrupts >= MAX_INTERRUPTS) {
+        return finish('interrupted', [
+          `worker 连续 ${interrupts} 轮都被技术原因打断,环路先停下。最后一次的原因:`,
+          work.interrupted,
+          '',
+          '之前已经做过的改动都还在工程里。处理掉上面的原因后,再发一条消息就能接着做。',
+        ].join('\n'));
+      }
+      // 中断的 worker 多半没写交货总结,但它中断前动过的工程是真的 —— 交给后面的人按工程现状核对
+      const delivery = work.interrupted
+        ? [`(worker 这一轮被技术原因打断,没能写完交货总结。原因:${work.interrupted})`,
+          '它中断前对工程做的改动都还在,请直接用只读工具核对工程现状。',
+          work.text?.trim() ? `\n它中断前说到:\n${work.text.trim()}` : ''].join('\n')
+        : work.text;
 
       // ── reviewer ──
       say({ stage: 'review', role: 'reviewer' });
@@ -294,13 +318,14 @@ export async function runReviewLoop(o) {
         prompt: P.reviewerPrompt({ brief, userText, delivery }),
       });
       const opinions = review.submitted?.input?.opinions
-        ?? (review.text?.trim() ? [{ issue: review.text.trim(), evidence: '(reviewer 没有按格式提交,这是它的原文)' }] : []);
+        ?? (!review.interrupted && review.text?.trim() ? [{ issue: review.text.trim(), evidence: '(reviewer 没有按格式提交,这是它的原文)' }] : []);
 
       // ── judger 裁决 ──
       // 开场播报用 judging:原来也叫 verdict,而 verdict 事件没带裁决结果时会显示成「judger 没有给出裁决」——
       // 每一轮裁决之前都凭空多一行这句,看着像 judger 次次都要推一下才肯交
-      const verdict = await judgerTurn('judging', P.judgerVerdictPrompt({ userText, requirements, delivery, opinions }),
-        ['phase_done', 'request_revision', 'need_user']);
+      const verdict = await judgerTurn('judging', P.judgerVerdictPrompt({
+        userText, requirements, delivery, opinions, reviewerInterrupted: !!review.interrupted && !review.submitted,
+      }), ['phase_done', 'request_revision', 'need_user']);
       say({ stage: 'verdict', role: 'judger', verdict: verdict?.name || 'none', input: verdict?.input });
 
       if (verdict?.name === 'phase_done') {
