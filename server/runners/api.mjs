@@ -3,6 +3,31 @@ import os from 'node:os';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 import { Agent } from '../harness/agent.mjs';
+import { runReviewLoop } from '../harness/loop.mjs';
+
+/**
+ * 审查环路的教训跨运行保存:judger 在改写时认可的教训,下一次运行开场交给 judger 和 worker。
+ * 放在 ai.json 同目录(不放 %TEMP%,那里会被清理)。只留最近 30 条,多了会稀释注意力。
+ */
+function lessonsStore() {
+  const dir = process.env.PROMPTCUT_AI_CONFIG
+    ? path.dirname(process.env.PROMPTCUT_AI_CONFIG)
+    : path.join(process.env.LOCALAPPDATA || os.homedir(), 'promptcut');
+  const file = path.join(dir, 'review-lessons.json');
+  const read = () => {
+    try { const v = JSON.parse(fs.readFileSync(file, 'utf8')); return Array.isArray(v) ? v.filter((s) => typeof s === 'string') : []; } catch { return []; }
+  };
+  return {
+    read,
+    add(list) {
+      try {
+        const merged = [...read().filter((s) => !list.includes(s)), ...list].slice(-30);
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(file, JSON.stringify(merged, null, 2), 'utf8');
+      } catch (e) { console.error('[api] 审查教训没写成:', e?.message || e); }
+    },
+  };
+}
 import { MessageHistory } from '../harness/history.mjs';
 import { buildTools } from '../harness/tools/index.mjs';
 import { createRetryingFetch } from '../harness/retry-fetch.mjs';
@@ -305,7 +330,18 @@ export function startRun(opts) {
     };
 
     try {
-      const result = await agent.run(opts.prompt);
+      /*
+       * 审查环路:默认跟着「深度自主」开关走 —— 开了深度自主,就是要它做完整的活,
+       * 这时才值得多花 reviewer / judger 的开销。也可以用 opts.reviewLoop 单独开关。
+       */
+      const useLoop = opts.reviewLoop ?? !!opts.deepAuto;
+      const result = useLoop
+        ? await runReviewLoop({
+            provider, tools, system: opts.systemPrompt, userText: opts.prompt,
+            maxIterations, deepAuto: !!opts.deepAuto, maxInputTokens: agent.maxInputTokens,
+            signal: abortController.signal, history, lessonsStore: lessonsStore(), onEvent: safeOnEvent,
+          })
+        : await agent.run(opts.prompt);
       saveHistory();
 
       const rawUsage = result.usage || {};

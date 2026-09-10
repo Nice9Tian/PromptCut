@@ -136,9 +136,10 @@ export class Agent {
         }
         // see_frames 素材模式(source: "media")一页多张:每张标上镜头序号,模型看图时能和 scenes 对上
         if (ok && result && typeof result === 'object' && Array.isArray(result.__images)) {
-          for (const im of result.__images) if (im?.base64) images.push({ ...im, name: `${call.name} 镜头 ${im.sceneIndex ?? '?'}` });
+          // 每张图带 label(比如 times 多帧的「t=3.2s」)就用它,否则按镜头序号
+          for (const im of result.__images) if (im?.base64) images.push({ ...im, name: `${call.name} ${im.label ?? `镜头 ${im.sceneIndex ?? '?'}`}` });
           const { __images, ...rest } = result;
-          result = { ...rest, images: `${result.__images.length} 张镜头拼图见本条消息末尾,按镜头序号排列` };
+          result = { ...rest, images: `${result.__images.length} 张图见本条消息末尾,按顺序排列` };
         }
         const output = typeof result === 'string' ? result : JSON.stringify(result ?? null);
         ok ? completed++ : failed++;

@@ -1809,19 +1809,36 @@ export function RightPanel() {
       },
       seePreview: async (args) => {
         const state = getState();
-        const t = typeof args?.t === "number" ? args.t : undefined;
-        const res = await fetch("/api/vision/snapshot", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            project: state.project,
-            t: t ?? (args?.clipId ? undefined : state.t),
-            clipId: args?.clipId,
-          }),
-        });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok || !data.ok) throw new Error(data.error || `渲染画面失败(HTTP ${res.status})`);
-        return data;
+        const snap = async (t: number | undefined) => {
+          const res = await fetch("/api/vision/snapshot", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              project: state.project,
+              t: t ?? (args?.clipId ? undefined : state.t),
+              clipId: args?.clipId,
+            }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok || !data.ok) throw new Error(data.error || `渲染画面失败(HTTP ${res.status})`);
+          return data;
+        };
+        /*
+         * times:一次看多个时刻。reviewer 判断镜头节奏要对比好几个时刻,一张一张调太慢,
+         * 也容易看漏。一张一张按顺序渲(渲染器同一时刻只接一个前台请求),每张标上时刻。
+         * 上限 10 张,和 harness 里保留的截图数对齐 —— 多了前面的会被挤掉。
+         */
+        const times = Array.isArray(args?.times) ? args.times.filter((x: unknown) => typeof x === "number").slice(0, 10) : [];
+        if (times.length) {
+          const frames: any[] = [], images: any[] = [];
+          for (const t of times) {
+            const { __image, ...rest } = await snap(t);
+            frames.push({ t, ...rest });
+            if (__image?.base64) images.push({ ...__image, label: `t=${t}s` });
+          }
+          return { ok: true, frames, note: `${images.length} 张画面按 times 的顺序排列,每张标着时刻。`, __images: images };
+        }
+        return snap(typeof args?.t === "number" ? args.t : undefined);
       },
       bakeCard: async (args) => {
         const res = await fetch("/api/vision/bake", {

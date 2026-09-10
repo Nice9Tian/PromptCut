@@ -110,7 +110,7 @@ export interface EditorApi {
   createCard(args: { id: string; source: string; overwrite?: boolean }): Promise<any>;
   getCardSource(args: { cardId: string }): Promise<any>;
   editCard(args: { cardId: string; find: string; replace: string; replaceAll?: boolean }): Promise<any>;
-  seePreview(args: { t?: number; clipId?: string }): Promise<any>;
+  seePreview(args: { t?: number; clipId?: string; times?: number[] }): Promise<any>;
   seeSequences(args: { mediaId: string; page?: number; perPage?: number; grid?: number; scene?: number; from?: number; to?: number }): Promise<any>;
   cardAuthoringGuide(): Promise<any>;
 }

@@ -929,7 +929,7 @@ export const tools = [
       "看画面帧。两种来源,用 source 分开:\n\n" +
       "**source: \"timeline\" —— 成片画面。** 把时间轴某一刻渲染成图片交回来,用的就是导出那条渲染管线,看到的即导出所得。" +
       "不传 t 取当前播放头所在时刻;传 clipId 只渲那一张卡、其余轨道全部不画,用来分辨「这张卡自己不对」还是「被上面别的卡盖住了」" +
-      "(不同时传 t 的话取该片段的中点,避开进出场动画的中间态)。**改完卡片的样式后应当看一眼再下结论**,不要凭源码想象效果。" +
+      "(不同时传 t 的话取该片段的中点,避开进出场动画的中间态)。要对比几个时刻就传 times 数组,一次最多 10 个。**改完卡片的样式后应当看一眼再下结论**,不要凭源码想象效果。" +
       "每次要起一个渲染进程,大约几秒到十几秒,别连着刷。**画面里的灰色棋盘格是「透明」,不是内容** —— 那里什么都没画;" +
       "卡片盖住的地方看不到格子。所以「一片棋盘格」= 这一刻真的什么都没有,不要再反复换 t 去试。\n\n" +
       "**source: \"media\" —— 素材本身。** 按镜头(list_shots 的划分)把视频拼成缩略图,每个镜头一张 4 格或 9 格拼图" +
@@ -946,6 +946,7 @@ export const tools = [
         source: { type: "string", enum: ["timeline", "media"], description: "timeline = 时间轴上的成片画面;media = 素材本身按镜头拼的缩略图" },
         t: { type: "number", description: "[timeline] 时间轴第几秒;不传就用当前播放头" },
         clipId: { type: "string", description: "[timeline] 只看这一个片段的画面" },
+        times: { type: "array", items: { type: "number" }, description: "[timeline] 一次看多个时刻(秒),最多 10 个,按顺序各返回一张;给了 times 就忽略 t。对比镜头节奏、看同一张卡进场中途和落定之后用它" },
         mediaId: { type: "string", description: "[media,必填] list_media 里的素材 id;只支持视频" },
         page: { type: "number", description: "[media] 第几页,从 1 起;默认 1" },
         perPage: { type: "number", description: "[media] 每页几个镜头,默认 6,最多 12。一个镜头一张拼图" },

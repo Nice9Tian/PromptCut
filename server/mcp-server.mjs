@@ -289,7 +289,7 @@ async function handleMessage(line) {
       if (image?.base64) content.push({ type: "image", data: image.base64, mimeType: image.mime || "image/png" });
       for (const im of images) {
         if (!im?.base64) continue;
-        content.push({ type: "text", text: `镜头 ${im.sceneIndex ?? "?"}:` });
+        content.push({ type: "text", text: `${im.label ?? `镜头 ${im.sceneIndex ?? "?"}`}:` });
         content.push({ type: "image", data: im.base64, mimeType: im.mime || "image/jpeg" });
       }
       sendResponse(req.id, { content });
