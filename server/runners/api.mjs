@@ -3,7 +3,7 @@ import os from 'node:os';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 import { Agent } from '../harness/agent.mjs';
-import { runReviewLoop } from '../harness/loop.mjs';
+import { runReviewLoop, presentLoopEvent } from '../harness/loop.mjs';
 
 /**
  * 审查环路的教训跨运行保存:judger 在改写时认可的教训,下一次运行开场交给 judger 和 worker。
@@ -339,7 +339,8 @@ export function startRun(opts) {
         ? await runReviewLoop({
             provider, tools, system: opts.systemPrompt, userText: opts.prompt,
             maxIterations, deepAuto: !!opts.deepAuto, maxInputTokens: agent.maxInputTokens,
-            signal: abortController.signal, history, lessonsStore: lessonsStore(), onEvent: safeOnEvent,
+            signal: abortController.signal, history, lessonsStore: lessonsStore(),
+            onEvent: (ev) => { for (const e of presentLoopEvent(ev)) safeOnEvent(e); },
           })
         : await agent.run(opts.prompt);
       saveHistory();

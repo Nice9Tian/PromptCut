@@ -6,7 +6,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { runReviewLoop } from '../harness/loop.mjs';
+import { runReviewLoop, presentLoopEvent } from '../harness/loop.mjs';
 
 const USER = '把这段口播配上动效,三十秒以内';
 
@@ -123,6 +123,18 @@ test('两批都没过:第二次反省后停下,把两次反省交给用户', asy
   });
   assert.equal(out.outcome, 'exhausted');
   assert.match(out.text, /第一次反省的内容[\s\S]*第二次反省的内容/);
+});
+
+test('聊天栏显示:裁决变成逐条列出的状态行,reviewer/judger 的话进思考区,worker 的话进正文', () => {
+  const [st] = presentLoopEvent({ type: 'loop', stage: 'verdict', role: 'judger', verdict: 'request_revision',
+    input: { rulings: [{ opinion: '卡片 3 雷同', verdict: '采纳', reason: '成立' }, { opinion: '换配乐', verdict: '驳回', reason: '改不动' }] } });
+  assert.equal(st.type, 'status');
+  assert.match(st.text, /采纳 1 条、降级 0 条、驳回 1 条/);
+  assert.match(st.text, /\[驳回\] 换配乐 —— 改不动/);
+  assert.equal(presentLoopEvent({ type: 'text', role: 'judger', delta: '我看看' })[0].type, 'thinking');
+  assert.equal(presentLoopEvent({ type: 'text', role: 'worker', delta: '交货' })[0].type, 'text');
+  assert.match(presentLoopEvent({ type: 'progress', role: 'reviewer', text: '第 1 轮' })[0].text, /^reviewer · 第 1 轮/);
+  assert.deepEqual(presentLoopEvent({ type: 'loop', stage: 'done', outcome: 'passed' }), [], '结束不另起状态行,结论走正文');
 });
 
 test('审查中途点停止:整个环路抛 AbortError', async () => {

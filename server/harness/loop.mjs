@@ -97,6 +97,46 @@ function reviewTool() {
   });
 }
 
+const ROLE_LABEL = { judger: 'judger', worker: 'worker', reviewer: 'reviewer' };
+
+/**
+ * 把环路的原始事件翻成聊天栏认得的那几种(text / thinking / status / progress …),前端不用改:
+ * - 阶段切换、每次裁决 → status 行,裁决逐条列出来,用户一眼看到为什么没过;
+ * - reviewer / judger 说的话 → thinking(折叠区),不混进回复正文;
+ * - worker 的交货和环路的最终结论 → text;
+ * - progress 的文字前面加上角色。
+ */
+export function presentLoopEvent(ev) {
+  if (ev.type === 'loop') {
+    const role = ROLE_LABEL[ev.role] || '';
+    switch (ev.stage) {
+      case 'plan': return [{ type: 'status', text: '审查环路 · judger 正在看工程,定任务要求和检查项' }];
+      case 'work': return [{ type: 'status', text: `worker 开始第 ${ev.attempt} 次交付${ev.batch > 1 ? `(第 ${ev.batch} 批)` : ''}` }];
+      case 'review': return [{ type: 'status', text: 'reviewer 正在按检查项审查' }];
+      case 'verdict': {
+        if (ev.verdict === 'phase_done') return [{ type: 'status', text: 'judger:通过' }];
+        if (ev.verdict === 'need_user') return [{ type: 'status', text: 'judger:需要你来决定' }];
+        if (ev.verdict !== 'request_revision') return [{ type: 'status', text: 'judger 没有给出裁决,按不通过处理' }];
+        const rulings = ev.input?.rulings || [];
+        const count = (v) => rulings.filter((r) => r.verdict === v).length;
+        return [{
+          type: 'status',
+          text: [`judger:不通过 —— 采纳 ${count('采纳')} 条、降级 ${count('降级')} 条、驳回 ${count('驳回')} 条`,
+            ...rulings.map((r) => `· [${r.verdict}] ${r.opinion} —— ${r.reason}`)].join('\n'),
+        }];
+      }
+      case 'stalled': return [{ type: 'status', text: '连续两次卡在同样的问题上,提前进入反省' }];
+      case 'reflect': return [{ type: 'status', text: 'worker 连续没通过,这一轮不干活,先反省' }];
+      case 'rewrite': return [{ type: 'status', text: 'judger 读完反省,正在改写任务要求和检查项' }];
+      default: return role ? [] : [];
+    }
+  }
+  if (ev.type === 'text' && (ev.role === 'reviewer' || ev.role === 'judger')) return [{ type: 'thinking', delta: ev.delta, round: ev.round }];
+  if (ev.type === 'text' && ev.role === 'loop') return [{ type: 'text', delta: `\n\n${ev.delta}` }];
+  if (ev.type === 'progress' && ev.role && ev.text) return [{ ...ev, text: `${ROLE_LABEL[ev.role] || ev.role} · ${ev.text}` }];
+  return [ev];
+}
+
 const signature = (rulings) => (rulings || [])
   .filter((r) => r.verdict !== '驳回')
   .map((r) => String(r.opinion || '').replace(/\s+/g, ''))
