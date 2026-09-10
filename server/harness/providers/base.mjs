@@ -8,7 +8,8 @@
  * stream 产出以下事件之一:
  * - { type: 'text_delta', text: string }
  * - { type: 'tool_use', id: string, name: string, input: object }
- * - { type: 'usage', input: number, output: number }
+ * - { type: 'usage', input: number, output: number, cacheRead?: number }
+ *   input 是这一轮完整的输入长度(含命中缓存的部分);cacheRead 是其中命中缓存的量,报得出来的家才有
  * - { type: 'stop', reason: string }
  */
 

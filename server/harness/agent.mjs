@@ -10,9 +10,12 @@ export class Agent {
    *
    * deepAuto 为真时**不给模型任何关于轮次的话**:到顶收尾那条消息里不写轮数,
    * 免得模型看见「第几轮 / 上限多少」就开始替自己算预算、提前草草收工。
+   *
+   * maxInputTokens:单次请求的输入 token 预算。给了就按每轮 API 报回的真实 token 数截断
+   * (见 history.fitTokens),不给就还是老的按字符数截。
    */
-  constructor({ provider, system, tools, maxIterations = 24, deepAuto = false, onEvent, signal, history }) {
-    Object.assign(this, { provider, system, tools, maxIterations, deepAuto, signal });
+  constructor({ provider, system, tools, maxIterations = 24, deepAuto = false, maxInputTokens = 0, onEvent, signal, history }) {
+    Object.assign(this, { provider, system, tools, maxIterations, deepAuto, maxInputTokens, signal });
     this.onEvent = onEvent || (() => {});
     this.history = history || new MessageHistory({ onEvent: this.onEvent });
   }
@@ -20,7 +23,7 @@ export class Agent {
   async run(userText) {
     // 末尾已经是 user 消息时要并进去,不能新起一条 —— 理由见 history.appendUserText
     this.history.appendUserText(userText);
-    const usage = { input: 0, output: 0 };
+    const usage = { input: 0, output: 0, cacheRead: 0 };
     const recent = [];
     let completed = 0, failed = 0, outcome = 'completed', lastText = '', lastRound = 0;
     const started = Date.now();
@@ -40,7 +43,7 @@ export class Agent {
       progress(round, summarizing ? 'summarizing' : 'requesting', summarizing ? '正在整理执行结果和未完成事项…' : `${roundText}：正在等待模型响应…`);
       this.onEvent({ type: 'diagnostic', stage: 'request', data: { round, summaryOnly: summarizing, messages: this.history.get().length, tools: summarizing ? 0 : this.tools.length } });
       const content = [], calls = [];
-      let text = '', current = '';
+      let text = '', current = '', lastInput = 0;
       const flush = () => { if (current) { content.push({ type: 'text', text: current }); current = ''; } };
       const heartbeat = setInterval(() => progress(round, summarizing ? 'summarizing' : 'requesting', `仍在等待模型响应，已用时 ${Math.floor((Date.now() - started) / 1000)} 秒；可以随时停止。`), 10000);
       try {
@@ -63,6 +66,8 @@ export class Agent {
             this.onEvent({ type: 'diagnostic', stage: 'response', data: { round, stopReason: ev.reason, toolCalls: calls.length } });
           } else if (ev.type === 'usage') {
             usage.input += Number(ev.input) || 0; usage.output += Number(ev.output) || 0;
+            usage.cacheRead += Number(ev.cacheRead) || 0;
+            lastInput = Number(ev.input) || 0;
           }
         }
       } catch (err) {
@@ -129,7 +134,7 @@ export class Agent {
           const { __image, ...rest } = result;
           result = { ...rest, image: '画面见本条消息末尾的图片' };
         }
-        // see_sequences 一页多张:每张标上镜头序号,模型看图时能和 scenes 对上
+        // see_frames 素材模式(source: "media")一页多张:每张标上镜头序号,模型看图时能和 scenes 对上
         if (ok && result && typeof result === 'object' && Array.isArray(result.__images)) {
           for (const im of result.__images) if (im?.base64) images.push({ ...im, name: `${call.name} 镜头 ${im.sceneIndex ?? '?'}` });
           const { __images, ...rest } = result;
@@ -160,7 +165,8 @@ export class Agent {
         summaryReason = this.deepAuto ? '本次运行已到上限' : `已达到 ${this.maxIterations} 轮模型往返上限`;
       }
       this.history.pruneImages();
-      this.history.truncate();
+      if (this.maxInputTokens > 0 && lastInput > 0) this.history.fitTokens(lastInput, this.maxInputTokens);
+      else this.history.truncate();
     }
     progress(lastRound, outcome === 'completed' ? 'completed' : 'paused', outcome === 'completed' ? `本次完成：${completed} 次成功，${failed} 次失败。` : summaryReason);
     return { text: lastText, history: this.history, usage, outcome, completed, failed };

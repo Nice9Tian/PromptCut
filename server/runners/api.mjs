@@ -189,7 +189,8 @@ export function startRun(opts) {
      * 于是开发机上留下过一批带悬空 tool_use 的文件。只治写不治读的话,
      * 这种脏会话会先撞一次 400、靠 catch 里的 saveHistory 自愈,下一条才正常。
      */
-    const history = MessageHistory.fromJSON(healDanglingToolUse(initialMessages), { onEvent: safeOnEvent });
+    // 字符上限关掉:截断改由 Agent 按每轮真实 token 数来做(见下面的 maxInputTokens)
+    const history = MessageHistory.fromJSON(healDanglingToolUse(initialMessages), { onEvent: safeOnEvent, maxChars: Infinity });
 
     let providerModule;
     if (cfg.vendor === 'anthropic') {
@@ -267,6 +268,12 @@ export function startRun(opts) {
       tools, 
       maxIterations,
       deepAuto: !!opts.deepAuto,
+      /*
+       * 上下文拉满:gemini-3.8-flash 是 100 万 token 上下文(openlux 网关 /v1/models 的说明
+       * 「offers a million-token context window」)。预算 = 上下文 − 这一轮最多输出的量 − 3 万余量。
+       * 网关自动缓存,实测同一前缀第二次命中约八成,长上下文的费用压得住。
+       */
+      maxInputTokens: 1_000_000 - (Number(cfg.maxTokens) || 4096) - 30_000,
       onEvent: safeOnEvent, 
       signal: abortController.signal, 
       history 
@@ -304,7 +311,9 @@ export function startRun(opts) {
       const rawUsage = result.usage || {};
       const usage = {
         input: typeof rawUsage.input === 'number' ? rawUsage.input : 0,
-        output: typeof rawUsage.output === 'number' ? rawUsage.output : 0
+        output: typeof rawUsage.output === 'number' ? rawUsage.output : 0,
+        // 网关自动缓存的命中量;input 里已经含着它,这个数是看命中率用的
+        cacheRead: typeof rawUsage.cacheRead === 'number' ? rawUsage.cacheRead : 0,
       };
       
       safeOnEvent({ type: 'done', sessionId, usage, outcome: result.outcome, completed: result.completed, failed: result.failed });

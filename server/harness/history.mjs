@@ -72,7 +72,7 @@ export class MessageHistory {
    * 网络。一次任务里可能看十几次画面，全留着既贵又没用——模型要判断的是「刚改完
    * 现在长什么样」，三轮前的旧样子留在上下文里反而会让它把旧画面当成现状。
    */
-  pruneImages(keep = 2) {
+  pruneImages(keep = 10) {
     let seen = 0;
     for (let i = this.messages.length - 1; i >= 0; i--) {
       const msg = this.messages[i];
@@ -82,6 +82,24 @@ export class MessageHistory {
         if (++seen > keep) msg.content[j] = { type: 'text', text: '(更早的一张截图已从上下文移除；需要重看请再截一次)' };
       }
     }
+  }
+
+  size() {
+    return sizeOf(this.messages);
+  }
+
+  /**
+   * 按 API 报回来的真实 token 数截断。
+   *
+   * 字符数除以 3 估 token 对英文和 JSON 大致准,中文差不多一字一 token,会被低估到三分之一。
+   * 所以不再猜换算比:拿这一轮实际的 input token 数和当前历史的字符数算出比例,
+   * 把 maxChars 定到「预算对应的字符数」再截。0.9 是给下一轮新增内容留的余量。
+   * reported 里还含着系统提示和工具说明(不在 history 里),按比例算会截得略多一点,偏安全。
+   */
+  fitTokens(reported, budget) {
+    if (!(reported > budget) || !(budget > 0)) return;
+    this.maxChars = Math.floor(this.size() * (budget / reported) * 0.9);
+    this.truncate();
   }
 
   truncate() {

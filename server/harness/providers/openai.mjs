@@ -209,6 +209,7 @@ export function createProvider(cfg, { fetchImpl = globalThis.fetch } = {}) {
       const think = createThinkSplitter();
       let promptTokens = 0;
       let completionTokens = 0;
+      let cacheRead = 0;
 
       for await (const { data } of readSse(response, { signal })) {
         if (data === '[DONE]') {
@@ -225,6 +226,12 @@ export function createProvider(cfg, { fetchImpl = globalThis.fetch } = {}) {
         if (parsed.usage) {
           promptTokens = parsed.usage.prompt_tokens || 0;
           completionTokens = parsed.usage.completion_tokens || 0;
+          /*
+           * 网关自动做的提示词缓存,命中量在这里。prompt_tokens 本身已经**含着**它
+           * (实测 openlux:prompt_tokens 34057、cached_tokens 27877),所以 input 不用再加,
+           * 这个数只拿来看命中率。不报这个字段的兼容接口就是 0。
+           */
+          cacheRead = Number(parsed.usage.prompt_tokens_details?.cached_tokens) || 0;
         }
 
         if (parsed.error) throw new Error(parsed.error.message || 'API 流返回错误');
@@ -280,7 +287,7 @@ export function createProvider(cfg, { fetchImpl = globalThis.fetch } = {}) {
 
       if (!stopReason) throw new Error('API 响应流提前结束或未返回 SSE 数据，请检查接口协议。');
       if (stopReason === 'length' && Object.keys(partialToolCalls).length) throw new Error('模型输出达到长度上限，工具参数未完成。');
-      yield { type: 'usage', input: promptTokens, output: completionTokens };
+      yield { type: 'usage', input: promptTokens, output: completionTokens, cacheRead };
       // 收尾:扣住的尾巴要放出来(可能是半个标签,也可能就是正常正文)
       for (const ev of think.flush()) {
         yield ev.kind === 'think'
