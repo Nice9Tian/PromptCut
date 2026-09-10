@@ -175,6 +175,15 @@ export function presentLoopEvent(ev) {
         if (ev.verdict === 'need_user') return [{ type: 'status', text: 'judger:需要你来决定' }];
         if (ev.verdict !== 'request_revision') return [{ type: 'status', text: 'judger 没有给出裁决,按不通过处理' }];
         const rulings = ev.input?.rulings || [];
+        /*
+         * 没有逐条裁定也会判不通过:judger 自己用只读工具核对,发现问题在 reviewer 意见之外
+         * (实跑:worker 的总结说做了,工程里其实没动)。这时「采纳 0 条」读起来像什么都没发生,
+         * 改成直接把 judger 的要求摆出来。
+         */
+        if (!rulings.length) {
+          const first = String(ev.input?.requirements || '').split('\n').map((s) => s.trim()).find(Boolean) || '(没写要求)';
+          return [{ type: 'status', text: `judger:不通过 —— 没有逐条裁定 reviewer 的意见,是它自己核对后要求返工:\n· ${first}` }];
+        }
         const count = (v) => rulings.filter((r) => r.verdict === v).length;
         return [{
           type: 'status',

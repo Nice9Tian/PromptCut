@@ -135,6 +135,12 @@ test('聊天栏显示:裁决变成逐条列出的状态行,reviewer/judger 的�
   assert.equal(presentLoopEvent({ type: 'text', role: 'worker', delta: '交货' })[0].type, 'text');
   assert.match(presentLoopEvent({ type: 'progress', role: 'reviewer', text: '第 1 轮' })[0].text, /^reviewer · 第 1 轮/);
   assert.deepEqual(presentLoopEvent({ type: 'loop', stage: 'done', outcome: 'passed' }), [], '结束不另起状态行,结论走正文');
+  // 实跑见过:没有逐条裁定、judger 自己核对后要求返工 —— 要把要求摆出来,不能只写「采纳 0 条」
+  const [own] = presentLoopEvent({ type: 'loop', stage: 'verdict', role: 'judger', verdict: 'request_revision',
+    input: { rulings: [], requirements: 'worker 必须真实调用工具执行整改\n1. 清理全部冗余卡片' } });
+  assert.match(own.text, /它自己核对后要求返工/);
+  assert.match(own.text, /worker 必须真实调用工具执行整改/);
+  assert.equal(presentLoopEvent({ type: 'loop', stage: 'judging', role: 'judger' })[0].text, 'judger 正在逐条裁定 reviewer 的意见');
 });
 
 test('网关超时:接着同一段历史重试,不把整个环路作废;重试也用完才冒出去', async () => {
