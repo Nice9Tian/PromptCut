@@ -1163,7 +1163,9 @@ export function visionPlugin(): Plugin {
           const frames = await enqueue(() => renderFrames(root, originOf(server), spec.project, spec.times, notes, priority), priority, priority > 0 ? 25000 : 0);
           const bufs = spec.times.map((t: number) => frames.get(frameOf(t))).filter(Boolean) as Buffer[];
           if (!bufs.length) throw new Error("一帧都没渲出来");
-          await visual.encodeGif({ ffmpeg, frames: bufs, outGif: p.gif, outGrid: p.grid });
+          // 给用户看的动图裁到这张卡出现过的区域(整屏缩到一百来像素宽字就看不清了);交给 Agent 的拼图照旧整屏
+          const crop = await visual.contentCrop(bufs).catch(() => null);
+          await visual.encodeGif({ ffmpeg, frames: bufs, outGif: p.gif, outGrid: p.grid, crop });
           return { gif: p.gif, grid: p.grid, times: spec.times };
         })().finally(() => gifInflight.delete(key));
         gifInflight.set(key, job);

@@ -11,6 +11,13 @@ import path from 'node:path';
 import os from 'node:os';
 import child_process from 'node:child_process';
 
+/** pngjs 只在 devDependencies 里,安装包里未必有:按需加载,加载不到就不裁(照整屏编),而不是整个模块起不来 */
+let pngLib;
+async function loadPng() {
+  if (pngLib === undefined) pngLib = await import('pngjs').then((m) => m.default || m, () => null);
+  return pngLib;
+}
+
 /** 和拼图的 tile=4x2 对上，一张图正好 8 格；帧数少可以保证渲染快。 */
 export const GIF_FRAMES = 8;
 
@@ -189,11 +196,55 @@ export function gifPaths(dir, key) {
   };
 }
 
-/** 
+/**
+ * 卡片在 1920×1080 的舞台上往往只占一小块,聊天栏里前后对比那一行每张动图只有一百来像素宽,整屏缩下去字都看不清。
+ * 所以动图只取这张卡 8 帧里出现过的区域(取并集:进场飞过的路也算进去),四周留边,再扩成和舞台一样的比例,
+ * 免得每张动图长宽比不一。宽度不小于舞台的 1/4(= 动图输出宽 480),裁得再小也不放大,放大只会糊。
+ * 帧没有透明像素(整屏不透明)、全空、或者裁完几乎就是整屏时返回 null,照整屏编。
+ */
+export async function contentCrop(frames, { pad = 0.06, alphaMin = 8 } = {}) {
+  const lib = await loadPng();
+  if (!lib) return null;
+  let W = 0, H = 0, x0 = Infinity, y0 = Infinity, x1 = -1, y1 = -1;
+  for (const buf of frames) {
+    const png = lib.PNG.sync.read(buf);
+    W = png.width; H = png.height;
+    const d = png.data;
+    for (let y = 0; y < H; y++) {
+      const row = y * W * 4 + 3;
+      for (let x = 0; x < W; x++) {
+        if (d[row + x * 4] < alphaMin) continue;
+        if (x < x0) x0 = x;
+        if (x > x1) x1 = x;
+        if (y < y0) y0 = y;
+        if (y > y1) y1 = y;
+      }
+    }
+  }
+  if (x1 < 0 || !W || !H) return null;
+  const aspect = W / H;
+  const m = Math.round(pad * Math.min(W, H));
+  let w = x1 - x0 + 1 + 2 * m;
+  let h = y1 - y0 + 1 + 2 * m;
+  if (w / h < aspect) w = h * aspect; else h = w / aspect;
+  if (w < W / 4) { w = W / 4; h = w / aspect; }
+  if (w > W) { w = W; h = w / aspect; }
+  if (h > H) { h = H; w = h * aspect; }
+  w = Math.round(w / 2) * 2;
+  h = Math.round(h / 2) * 2;
+  if (w >= W * 0.95) return null;
+  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+  const x = Math.round(clamp((x0 + x1) / 2 - w / 2, 0, W - w));
+  const y = Math.round(clamp((y0 + y1) / 2 - h / 2, 0, H - h));
+  return { x, y, w, h };
+}
+
+/**
  * 两遍 palettegen/paletteuse 是因为 GIF 只有 256 色，先生成调色板再上色才不糊；
  * 写临时目录并在 finally 里删是因为 ffmpeg 的 %02d 序列输入需要真实文件，且不同并发调用互不干扰。
+ * crop 只裁给用户看的动图;交给 Agent 的拼图保持整屏,它要判断这张卡在画面里的位置和构图。
  */
-export async function encodeGif({ ffmpeg, frames, outGif, outGrid, width = 480, fps = 4 }) {
+export async function encodeGif({ ffmpeg, frames, outGif, outGrid, width = 480, fps = 4, crop = null }) {
   const tmp = await fsPromises.mkdtemp(path.join(os.tmpdir(), 'encode-gif-'));
   try {
     for (let i = 0; i < frames.length; i++) {
@@ -233,7 +284,7 @@ export async function encodeGif({ ffmpeg, frames, outGif, outGrid, width = 480, 
 
     const argsGif = [
       '-y', '-framerate', String(fps), '-i', 'f%02d.png',
-      '-vf', `scale=${width}:-2:flags=lanczos,split[a][b];[a]palettegen[p];[b][p]paletteuse`,
+      '-vf', `${crop ? `crop=${crop.w}:${crop.h}:${crop.x}:${crop.y},` : ''}scale=${width}:-2:flags=lanczos,split[a][b];[a]palettegen[p];[b][p]paletteuse`,
       '-loop', '0', outGif
     ];
     await runFfmpeg(argsGif);

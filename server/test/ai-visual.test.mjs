@@ -15,7 +15,8 @@ import {
   readJson,
   gifPaths,
   encodeGif,
-  findFfmpeg
+  findFfmpeg,
+  contentCrop
 } from '../ai-visual.mjs';
 import fsPromises from 'node:fs/promises';
 import path from 'node:path';
@@ -145,6 +146,40 @@ test('writeJson & readJson', async (t) => {
 
   const notFound = await readJson(tmpDir, 'not-exist.json');
   assert.equal(notFound, null);
+});
+
+/** 透明底上画若干不透明矩形 [x0, y0, x1, y1](含端点) */
+function framePng(W, H, rects, opaque = false) {
+  const png = new PNG({ width: W, height: H });
+  png.data.fill(0);
+  if (opaque) for (let i = 3; i < png.data.length; i += 4) png.data[i] = 255;
+  for (const [x0, y0, x1, y1] of rects) {
+    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) png.data[((W * y + x) << 2) + 3] = 255;
+  }
+  return PNG.sync.write(png);
+}
+
+test('contentCrop:取 8 帧里出现过区域的并集,留边、按舞台比例、不小于 1/4 宽、不出界', async () => {
+  const W = 384, H = 216;
+  // 进场从左边飞到右边:两帧的位置都得框进去
+  const crop = await contentCrop([framePng(W, H, [[40, 90, 60, 110]]), framePng(W, H, [[150, 95, 170, 115]])]);
+  assert.ok(crop);
+  assert.ok(crop.x <= 40 && crop.x + crop.w >= 171, `横向要框住 40..170:${JSON.stringify(crop)}`);
+  assert.ok(crop.y <= 90 && crop.y + crop.h >= 116, `纵向要框住 90..115:${JSON.stringify(crop)}`);
+  assert.ok(Math.abs(crop.w / crop.h - W / H) < 0.05, '比例和舞台一样');
+  assert.ok(crop.w >= W / 4, '不小于 1/4 宽');
+  assert.ok(crop.x >= 0 && crop.y >= 0 && crop.x + crop.w <= W && crop.y + crop.h <= H, '不出界');
+
+  // 很小的一块:按最小宽度放大裁框,贴边时往里挪而不是出界
+  const tiny = await contentCrop([framePng(W, H, [[0, 0, 3, 3]])]);
+  assert.deepEqual([tiny.x, tiny.y, tiny.w >= W / 4], [0, 0, true]);
+});
+
+test('contentCrop:全透明、整屏不透明、几乎整屏 —— 都不裁', async () => {
+  const W = 384, H = 216;
+  assert.equal(await contentCrop([framePng(W, H, [])]), null);
+  assert.equal(await contentCrop([framePng(W, H, [], true)]), null);
+  assert.equal(await contentCrop([framePng(W, H, [[2, 2, W - 3, H - 3]])]), null);
 });
 
 test('encodeGif', async (t) => {
