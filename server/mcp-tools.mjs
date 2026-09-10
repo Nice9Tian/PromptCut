@@ -896,27 +896,48 @@ export const tools = [
   },
   {
     name: "get_card_source",
-    description: "读回一张自己建的卡的当前源码（只对 create_card 建出来的用户卡有效；内置卡没有可读源码，调整内置卡请改参数）。**要改已有的卡之前必须先调它**：不读回来就改，等于凭记忆重写整张卡，没提到的地方每改一轮就会漂一点。",
+    description: "读回一张卡片的原始源码。用户卡和内置卡都能读。返回定义文件的源码，外加 files：这张卡一路用到的卡片 / 部件文件，每个带 sharedBy（被几张卡共用）。传 file 读其中某一个——inspect_card_dom 标出的源码位置常常落在共用部件或 vendor 文件里。**要改已有的卡之前必须先调它**：不读回来就改，等于凭记忆重写整张卡，没提到的地方每改一轮就会漂一点。",
     inputSchema: {
       type: "object",
-      properties: { cardId: { type: "string", description: "卡片 id" } },
+      properties: {
+        cardId: { type: "string", description: "卡片 id" },
+        file: { type: "string", description: "要读的文件相对路径，必须在这张卡的 files 列表里；不传就是卡片定义文件" }
+      },
       required: ["cardId"]
     },
     side: "browser"
   },
   {
     name: "edit_card",
-    description: "改一张自己建的卡：把源码里的 find 这一段替换成 replace，只动这一处，别的地方原样不变。**这是修改已有卡片的唯一正确方式**，不要用 create_card + overwrite 整篇重写。用法：先 get_card_source 读回源码，照着它原样复制要改的那几行当 find（缩进空格都要一致），写上改完的样子当 replace。find 必须在源码里唯一命中：命中 0 次说明你手上的版本旧了，命中多次就把 find 写长一点带上周围几行。落盘前会跑和建卡一样的校验。",
+    description: "改一张卡的源码（用户卡和内置卡都行）：把源码里的 find 这一段替换成 replace，只动这一处，别的地方原样不变。**这是修改已有卡片的唯一正确方式**，不要用 create_card + overwrite 整篇重写。用法：先 get_card_source 读回源码，照着它原样复制要改的那几行当 find（缩进空格都要一致），写上改完的样子当 replace。find 必须在源码里唯一命中：命中 0 次说明你手上的版本旧了，命中多次就把 find 写长一点带上周围几行。带 file 可以改这张卡用到的部件 / vendor 文件（必须在 get_card_source 返回的 files 里）；sharedBy > 1 的文件被多张卡共用，改了它们都会跟着变。**只能改源码，不能改 HTML**：舞台上的 DOM 是源码渲染出来的，直接改 DOM 下一帧就被盖掉。内置文件改之前会自动备份到 out/card-edits/。落盘前会做语法检查，并拒绝新引入 Date.now / setTimeout / setAnimationLoop 这类不跟帧走的写法。",
     inputSchema: {
       type: "object",
       properties: {
         cardId: { type: "string" },
+        file: { type: "string", description: "要改的文件相对路径，必须在 get_card_source 返回的 files 里；不传就改卡片定义文件" },
         find: { type: "string", description: "要被替换掉的原文，逐字照抄源码" },
         replace: { type: "string", description: "替换成的新内容" },
         replaceAll: { type: "boolean", description: "find 有意匹配多处且都要改时传 true" }
       },
       required: ["cardId", "find", "replace"]
     },
+    side: "browser"
+  },
+  {
+    name: "inspect_card_dom",
+    description: "只读地看一张卡某一刻渲染出来的 HTML（DOM 树），每个节点标出是哪个组件、源码哪一行渲染的。用来在「画面上这一块」和「源码里那一行」之间对上号，再用 get_card_source + edit_card 去改那一行。**只能看，不能改**：HTML 是源码渲染出来的，要改就改源码。只有一个子节点、自己又没字的包装层会被折叠掉；默认往下 3 层，超出的节点标「…还有 N 个后代，传 ref:N 往下看」，把那个数字传给 ref 就从那个节点继续展开（同一时刻的树有缓存，往下看不用重新渲染）。同一行源码生成多个兄弟节点（列表）时会标出来——改那一行它们一起变。用的是导出同一条渲染管线，看到的就是成片那一帧的结构；第一次调要起一个渲染进程，几秒。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        clipId: { type: "string", description: "要看的片段 id" },
+        t: { type: "number", description: "时间轴第几秒；不传取这个片段的中点" },
+        ref: { type: "number", description: "从这个节点往下展开（上一次返回里的 ref 数字）；不传从最外层开始" },
+        depth: { type: "number", description: "往下展开几层，默认 3，最多 8" }
+      },
+      required: ["clipId"]
+    },
+    // 不放宽超时:片段会被挪到 0.5 秒的起跑线上再渲(见 vite-plugin-cards 的 /api/cards/dom),
+    // 不管它排在时间轴哪里都只推几十帧,远在桥的默认 60 秒以内
     side: "browser"
   },
   {

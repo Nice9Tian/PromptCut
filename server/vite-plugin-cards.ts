@@ -1,8 +1,308 @@
 import type { Plugin, ViteDevServer } from 'vite';
 import type { ServerResponse } from 'node:http';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
+import crypto from 'node:crypto';
+import { pathToFileURL } from 'node:url';
 import ts from 'typescript';
+
+/* ────────────────────────────────────────────────────────────────────
+ * 0.4 起:Agent 能读、能改**所有**卡片的原始源码(内置卡也算),但改不了 HTML。
+ *
+ * 为什么是「改源码、不改 HTML」:舞台上的 DOM 是 React 按源码和参数渲染出来的派生物,
+ * 下一次渲染就会把直接改过的 DOM 盖掉,导出时每一帧也都从源码重渲 —— 改 DOM 等于制造
+ * 第二个真相。所以 DOM 只给看(inspect_card_dom,每个节点标出是源码哪一行渲染的),
+ * 改动一律落回源码(edit_card)。见 docs/render-rebuild-plan.md「目标架构」。
+ *
+ * 能改的范围只开到卡片目录和卡片共用的部件库;内核、编辑器、服务端一律不开。
+ * 内置文件改之前先备份到 out/card-edits/,改坏了能找回来。
+ * ──────────────────────────────────────────────────────────────────── */
+
+/** 按卡片 id 找定义文件时扫的目录(不递归:vendor/ 这类子目录是被卡片引用的实现,不是卡) */
+const CARD_DEF_DIRS = ['src/cards/native', 'src/cards/magicui'];
+/** Agent 能改的源码范围 */
+const EDITABLE_ROOTS = ['src/cards/', 'src/parts/'];
+const EDITABLE_EXT = /\.(tsx|ts|css)$/;
+const MAX_EDIT_BYTES = 256 * 1024;
+
+const toRel = (root: string, abs: string) => path.relative(root, abs).split(path.sep).join('/');
+
+/** 这个相对路径 Agent 能不能改:在卡片 / 部件目录下、是源码或样式文件、不是测试 */
+export function isEditablePath(rel: string): boolean {
+  if (!rel || rel.includes('..') || path.isAbsolute(rel)) return false;
+  if (/\.test\.(ts|tsx|mjs)$/.test(rel)) return false;
+  return EDITABLE_ROOTS.some((r) => rel.startsWith(r)) && EDITABLE_EXT.test(rel);
+}
+
+/** 卡片 id → 定义它的源码文件(相对仓库根)。用户卡优先,其次内置卡;都没有返回 null */
+export function findCardFile(root: string, id: string): string | null {
+  if (!/^[a-z][a-z0-9]*(-[a-z0-9]+)*$/.test(id)) return null;
+  if (fs.existsSync(path.join(root, 'src', 'cards', 'user', `${id}.tsx`))) return `src/cards/user/${id}.tsx`;
+  const re = new RegExp(`\\bid:\\s*["'\`]${id}["'\`]`);
+  for (const dir of CARD_DEF_DIRS) {
+    const abs = path.join(root, dir);
+    if (!fs.existsSync(abs)) continue;
+    for (const f of fs.readdirSync(abs).sort()) {
+      if (!f.endsWith('.tsx')) continue;
+      const src = fs.readFileSync(path.join(abs, f), 'utf8');
+      if (re.test(src) && /\bCardDef\b/.test(src)) return `${dir}/${f}`;
+    }
+  }
+  return null;
+}
+
+/** 一个文件直接用到的本地文件(相对导入,且落在可改范围内的);样式文件也算 —— 画面一半在 CSS 里 */
+export function localImports(root: string, rel: string): string[] {
+  let src = '';
+  try { src = fs.readFileSync(path.join(root, rel), 'utf8'); } catch { return []; }
+  const out: string[] = [];
+  const re = /(?:import|export)\s+(?:[^'"]*?\sfrom\s+)?["'](\.{1,2}\/[^"']+)["']|import\(\s*["'](\.{1,2}\/[^"']+)["']\s*\)/g;
+  for (const m of src.matchAll(re)) {
+    const base = path.resolve(path.dirname(path.join(root, rel)), m[1] || m[2]);
+    const hit = [base, `${base}.tsx`, `${base}.ts`, path.join(base, 'index.tsx'), path.join(base, 'index.ts')]
+      .find((c) => fs.existsSync(c) && fs.statSync(c).isFile());
+    if (!hit) continue;
+    const r = toRel(root, hit);
+    if (isEditablePath(r) && !out.includes(r)) out.push(r);
+  }
+  return out;
+}
+
+/** 一张卡的全部本地源码:定义文件 + 它一路用到的卡片 / 部件文件(第一个是定义文件) */
+export function importClosure(root: string, rel: string, limit = 60): string[] {
+  const seen = [rel];
+  for (let i = 0; i < seen.length && seen.length < limit; i++) {
+    for (const r of localImports(root, seen[i])) if (!seen.includes(r)) seen.push(r);
+  }
+  return seen;
+}
+
+/** 全部卡片定义文件(用户卡 + 内置卡),给「这个文件被几张卡共用」计数用 */
+function allCardFiles(root: string): string[] {
+  const out: string[] = [];
+  const userDir = path.join(root, 'src', 'cards', 'user');
+  if (fs.existsSync(userDir)) for (const f of fs.readdirSync(userDir)) if (f.endsWith('.tsx')) out.push(`src/cards/user/${f}`);
+  for (const dir of CARD_DEF_DIRS) {
+    const abs = path.join(root, dir);
+    if (!fs.existsSync(abs)) continue;
+    for (const f of fs.readdirSync(abs)) {
+      if (f.endsWith('.tsx') && /\bCardDef\b/.test(fs.readFileSync(path.join(abs, f), 'utf8'))) out.push(`${dir}/${f}`);
+    }
+  }
+  return out;
+}
+
+/** 每个文件被几张卡的源码闭包包含。改一个共用文件会同时改掉这么多张卡,要告诉 Agent */
+export function sharedByCounts(root: string): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const f of allCardFiles(root)) for (const r of importClosure(root, f)) counts.set(r, (counts.get(r) || 0) + 1);
+  return counts;
+}
+
+/** 改完之后不许**新**出现的写法:导出按帧推时间,这些东西不跟着帧走。已有的不追究(那是原作者的事) */
+const RISKY_PATTERNS: [RegExp, string][] = [
+  [/\bDate\.now\s*\(/g, 'Date.now():要读时间就用组件收到的 t'],
+  [/\bnew\s+Date\s*\(\s*\)/g, 'new Date():要读时间就用组件收到的 t'],
+  [/\bsetTimeout\s*\(|\bsetInterval\s*\(/g, 'setTimeout / setInterval 驱动动画:用 motion 的 animate,或者读 t'],
+  [/\bIntersectionObserver\b/g, 'IntersectionObserver:卡片挂载即播放,没有「滚进视口」'],
+  [/\bsetAnimationLoop\b/g, 'setAnimationLoop:三维画面写成 t 的纯函数,t 变了再显式 render 一次(照 scene-3d.tsx)'],
+];
+
+/** 内置 / 共用文件的一次编辑能不能落盘 */
+export function checkSourceEdit(rel: string, before: string, after: string): { ok: boolean; errors: string[] } {
+  const errors: string[] = [];
+  if (Buffer.byteLength(after, 'utf8') > MAX_EDIT_BYTES) errors.push(`改完超过 ${MAX_EDIT_BYTES / 1024}KB,太大了。`);
+  if (/\.(tsx|ts)$/.test(rel)) {
+    const out = ts.transpileModule(after, {
+      reportDiagnostics: true,
+      fileName: rel,
+      compilerOptions: { jsx: ts.JsxEmit.Preserve, target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
+    });
+    for (const d of out.diagnostics || []) {
+      const pos = d.start !== undefined ? after.slice(0, d.start).split('\n').length : undefined;
+      errors.push(`语法错误${pos ? `(第 ${pos} 行)` : ''}:${ts.flattenDiagnosticMessageText(d.messageText, ' ')}`);
+    }
+  }
+  for (const [re, why] of RISKY_PATTERNS) {
+    const n0 = (before.match(re) || []).length;
+    const n1 = (after.match(re) || []).length;
+    if (n1 > n0) errors.push(`这次编辑新加了 ${why}。`);
+  }
+  // 卡片定义文件:CardDef 的具名导出和 id 不能被改掉,不然注册表认不出它、或者换了身份
+  if (/export\s+const\s+\w+\s*:\s*CardDef/.test(before)) {
+    if (!/export\s+const\s+\w+\s*:\s*CardDef/.test(after)) errors.push('改完没有 `export const xxx: CardDef` 了 —— 注册表靠它认卡。');
+    const idOf = (s: string) => (s.match(/\bid:\s*["'`]([^"'`]+)["'`]/) || [])[1];
+    if (idOf(before) !== idOf(after)) errors.push(`CardDef 的 id 从 "${idOf(before)}" 变成了 "${idOf(after)}" —— 卡片 id 不能改,时间轴上的片段靠它找卡。`);
+  }
+  return { ok: errors.length === 0, errors };
+}
+
+/** 改内置 / 共用文件之前留一份原样,返回备份的相对路径 */
+function backupBeforeEdit(root: string, rel: string, content: string): string {
+  const dir = path.join(root, 'out', 'card-edits');
+  fs.mkdirSync(dir, { recursive: true });
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const file = path.join(dir, `${stamp}__${rel.replace(/\//g, '__')}`);
+  fs.writeFileSync(file, content, 'utf8');
+  return toRel(root, file);
+}
+
+/* ── source map:把 React 记下的「转换后」行号换回源码行号 ──
+ * React 19 开发版在每个 fiber 上留了 _debugStack,里面是渲染这个节点的那一行 JSX 的位置 ——
+ * 但行号是 Vite 转换后代码的(实测 rank-bars.tsx:59 在原文件里是一个 animate 属性)。
+ * 经 source map 换算后 6/6 准确。自己解 VLQ 而不是引第三方包:几十行的事,安装包里不一定带那个包。 */
+const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+
+/** 解 mappings:返回每一行(生成代码)的段 [生成列, 源文件下标, 原行, 原列],全部 0 起 */
+export function decodeMappings(mappings: string): number[][][] {
+  const lines: number[][][] = [];
+  let src = 0, oLine = 0, oCol = 0;
+  for (const lineStr of mappings.split(';')) {
+    const segs: number[][] = [];
+    let gCol = 0;
+    if (lineStr) {
+      for (const segStr of lineStr.split(',')) {
+        const vals: number[] = [];
+        let shift = 0, value = 0;
+        for (const ch of segStr) {
+          let d = B64.indexOf(ch);
+          const cont = d & 32;
+          d &= 31;
+          value += d << shift;
+          if (cont) shift += 5;
+          else { vals.push(value & 1 ? -(value >>> 1) : value >>> 1); value = 0; shift = 0; }
+        }
+        if (!vals.length) continue;
+        gCol += vals[0];
+        if (vals.length >= 4) { src += vals[1]; oLine += vals[2]; oCol += vals[3]; segs.push([gCol, src, oLine, oCol]); }
+      }
+    }
+    lines.push(segs);
+  }
+  return lines;
+}
+
+/** 生成代码的第 line 行第 col 列(都 1 起)→ 原始位置(1 起);找不到返回 null */
+export function originalPosition(decoded: number[][][], line: number, col: number): { line: number; col: number } | null {
+  const segs = decoded[line - 1];
+  if (!segs || !segs.length) return null;
+  let hit: number[] | null = null;
+  for (const s of segs) { if (s[0] <= col - 1) hit = s; else break; }
+  hit = hit || segs[0];
+  return { line: hit[2] + 1, col: hit[3] + 1 };
+}
+
+/** 只读 DOM 树的一个节点(页面里采出来,服务端补上源码位置) */
+export interface DomNode {
+  ref: number;
+  parent: number;
+  tag: string;
+  cls: string;
+  text: string;
+  owner: string | null;
+  site: { path: string; line: number; col: number } | null;
+  where?: string;
+  rect: number[];
+  wrap: number;
+  desc: number;
+  children: number[];
+}
+
+/**
+ * 把节点表排成给模型看的文本:从 fromRef 起、往下 depth 层,超出的标「…还有 N 个后代 [ref_x]」。
+ * 同一行源码在兄弟节点里出现多次(.map 生成的列表)就标出来 —— 改那一行会同时改掉它们。
+ */
+export function formatDomTree(nodes: DomNode[], fromRef: number, depth: number, maxLines = 160): string {
+  const out: string[] = [];
+  let truncated = 0;
+  const walk = (ref: number, d: number) => {
+    const n = nodes[ref];
+    if (!n) return;
+    if (out.length >= maxLines) { truncated++; return; }
+    const siblings = n.parent >= 0 ? nodes[n.parent].children.map((c) => nodes[c]) : [];
+    const sameSite = n.where ? siblings.filter((s) => s.where === n.where).length : 0;
+    const parts = [
+      `[ref_${n.ref}]`,
+      n.tag + (n.cls ? '.' + n.cls : ''),
+      n.text ? JSON.stringify(n.text) : '',
+      n.owner ? `‹${n.owner}›` : '',
+      n.where || '',
+      sameSite > 1 ? `(同一行源码生成了 ${sameSite} 个兄弟节点)` : '',
+      n.wrap ? `(折叠了 ${n.wrap} 层包装)` : '',
+      `${n.rect[2]}×${n.rect[3]}@${n.rect[0]},${n.rect[1]}`,
+    ].filter(Boolean);
+    if (d >= depth && n.children.length) parts.push(`…还有 ${n.desc} 个后代,传 ref:${n.ref} 往下看`);
+    out.push('  '.repeat(d) + parts.join(' '));
+    if (d < depth) for (const c of n.children) walk(c, d + 1);
+  };
+  walk(fromRef, 0);
+  if (truncated) out.push(`…输出到 ${maxLines} 行为止,还有 ${truncated} 个节点没列出;挑一个 ref 往下看`);
+  return out.join('\n');
+}
+
+/**
+ * 在导出页里采舞台的 DOM 树(页面里执行)。折叠「只有一个子节点、自己又没字」的包装层 ——
+ * 实测卡片内容都在第 6~7 层以下,前几层全是 ExportView / Stage 的外壳,不折叠的话「看三层」什么都看不到。
+ */
+function EXTRACT_DOM(): DomNode[] {
+  const stage = document.getElementById('root')?.firstElementChild;
+  if (!stage) return [];
+  const fiberOf = (el: Element): any => {
+    const k = Object.keys(el).find((x) => x.startsWith('__reactFiber$'));
+    return k ? (el as any)[k] : null;
+  };
+  const ownerName = (el: Element) => {
+    let f = fiberOf(el);
+    while (f) { if (typeof f.type === 'function') return f.type.displayName || f.type.name || null; f = f.return; }
+    return null;
+  };
+  // _debugStack 第一帧是 jsxDEV 自己,往下找第一个落在 /src/ 里的调用点
+  const siteOf = (el: Element) => {
+    const f = fiberOf(el);
+    const s = f && f._debugStack ? String(f._debugStack.stack || f._debugStack) : '';
+    for (const l of s.split('\n').slice(1)) {
+      if (/jsx-dev-runtime|react-dom|react_stack_bottom_frame/.test(l)) continue;
+      const m = l.match(/https?:\/\/[^/]+(\/src\/[^?:)\s]+)(?:\?[^:)\s]*)?:(\d+):(\d+)/);
+      if (m) return { path: m[1], line: Number(m[2]), col: Number(m[3]) };
+    }
+    return null;
+  };
+  const ownText = (el: Element) => [...el.childNodes].filter((n) => n.nodeType === 3).map((n) => n.nodeValue).join('').trim();
+  const nodes: DomNode[] = [];
+  const visit = (el: Element, parent: number): number => {
+    let cur = el;
+    let wrap = 0;
+    while (cur.children.length === 1 && !ownText(cur)) { cur = cur.children[0]; wrap++; }
+    const r = cur.getBoundingClientRect();
+    const node: DomNode = {
+      ref: nodes.length, parent,
+      tag: cur.tagName.toLowerCase(),
+      cls: (cur.getAttribute('class') || '').trim().split(/\s+/).filter(Boolean).slice(0, 4).join('.'),
+      text: ownText(cur).slice(0, 40),
+      owner: ownerName(cur), site: siteOf(cur),
+      rect: [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)],
+      wrap, desc: cur.querySelectorAll('*').length, children: [],
+    };
+    nodes.push(node);
+    for (const c of [...cur.children]) node.children.push(visit(c, node.ref));
+    return node.ref;
+  };
+  visit(stage, -1);
+  return nodes;
+}
+
+/** 只留下 clipId 那一段(和 vite-plugin-vision 的 isolateClip 同一个做法,各写一份免得两边互相牵制) */
+export function isolateClipForDom(project: any, clipId: string): { project: any; clip: any } | null {
+  for (const track of project?.tracks || []) {
+    for (const clip of track.clips || []) {
+      if (clip.id !== clipId) continue;
+      const keepMedia = clip.mediaId ? (project.media || []).filter((m: any) => m.id === clip.mediaId) : [];
+      return { clip, project: { ...project, media: keepMedia, tracks: [{ ...track, hidden: false, clips: [clip] }] } };
+    }
+  }
+  return null;
+}
 
 /**
  * 建卡端点。
@@ -571,22 +871,25 @@ export default function vitePluginCards(): Plugin {
       });
 
       /**
-       * 读回一张用户卡的当前源码。
+       * 读回一张卡的源码。0.4 起内置卡也能读(理由见文件头「Agent 能读、能改所有卡片的原始源码」)。
        *
        * 没有这个口子的时候,改卡只能走 create_card + overwrite —— 那是整篇重写,
-       * 模型手上没有当前版本,只能凭记忆重建,没被提到的细节每轮都会漂。
-       * 先读回来,才谈得上「改」。只开到 user 目录:内置卡改参数就够了,不该被改源码。
+       * 模型手上没有当前版本,只能凭记忆重建,没被提到的细节每轮都会漂。先读回来,才谈得上「改」。
+       *
+       * 返回定义文件的源码,外加 files:这张卡一路用到的卡片 / 部件文件,每个带 sharedBy(被几张卡共用)。
+       * 传 file 就读其中那一个 —— inspect_card_dom 标出来的源码位置常常落在共用部件或 vendor 文件里。
+       * 既不是用户卡、也不是已注册卡片的 id,仍然回落到 Magic UI 可搬目录(给「搬第三方组件」用)。
        */
       server.middlewares.use('/api/cards/source', (req, res) => {
         if (req.method !== 'GET') return sendJson(res, 405, { ok: false, error: 'GET only' });
-        const id = new URL(req.url || '', 'http://x').searchParams.get('id') || '';
+        const q = new URL(req.url || '', 'http://x').searchParams;
+        const id = q.get('id') || '';
+        const wantFile = q.get('file') || '';
         if (!ID_RE.test(id)) return sendJson(res, 400, { ok: false, error: `卡片 id "${id}" 不合法。` });
-        const target = path.join(userDir, `${id}.tsx`);
-        if (path.dirname(path.resolve(target)) !== path.resolve(userDir)) {
-          return sendJson(res, 400, { ok: false, error: '非法的文件路径' });
-        }
-        if (!fs.existsSync(target)) {
-          // 不在 user 目录 → 看看是不是可搬目录里的 MagicUI 组件。返回的是**上游原始源码**,
+        const root = server.config.root;
+        const defFile = findCardFile(root, id);
+        if (!defFile) {
+          // 不是卡 → 看看是不是可搬目录里的 MagicUI 组件。返回的是**上游原始源码**,
           // 还没包成 CardDef,模型拿到后按 guide 的「搬第三方组件」包好、用同一个 id 走 create_card。
           const cat = readCatalogSource(id);
           if (cat) {
@@ -598,19 +901,34 @@ export default function vitePluginCards(): Plugin {
           }
           return sendJson(res, 404, {
             ok: false,
-            error: `src/cards/user/${id}.tsx 不存在。内置卡没有单独可读的源码文件,想调整内置卡请改它的参数(list_cards 看 schema,update_clip 改值)。Magic UI 目录里的组件用 mu-<name> 读(见 card_authoring_guide 末尾的目录)。`,
+            error: `找不到卡片 "${id}" 的源码。先用 list_cards 确认 id;Magic UI 目录里还没搬的组件用 mu-<name> 读(见 card_authoring_guide 末尾的目录)。素材封装卡(lottie-* / particles-*)是按素材目录生成的,没有单独的源码文件 —— 要改它们的画法,读 lottie / particles 这两张卡。`,
           });
         }
-        const source = fs.readFileSync(target, 'utf8');
-        sendJson(res, 200, { ok: true, id, file: `src/cards/user/${id}.tsx`, source, lines: source.split('\n').length });
+        const closure = importClosure(root, defFile);
+        const target = wantFile || defFile;
+        if (!closure.includes(target)) {
+          return sendJson(res, 400, { ok: false, error: `"${target}" 不在卡片 ${id} 的源码文件里。能读的是:${closure.join('、')}` });
+        }
+        const counts = sharedByCounts(root);
+        const source = fs.readFileSync(path.join(root, target), 'utf8');
+        const builtin = !defFile.startsWith('src/cards/user/');
+        sendJson(res, 200, {
+          ok: true, id, file: target, source, lines: source.split('\n').length, builtin,
+          files: closure.map((f) => ({ file: f, sharedBy: counts.get(f) || 1 })),
+          ...(builtin ? { hint: '这是内置卡。改它用 edit_card(可以带 file 改它用到的部件 / vendor 文件);sharedBy > 1 的文件是多张卡共用的,改了它们都会跟着变。改完用 see_frames 看一眼画面。' } : {}),
+        });
       });
 
       /**
-       * 局部替换式改卡:给一段 find、一段 replace,只动那一处。
+       * 局部替换式改卡:给一段 find、一段 replace,只动那一处。用户卡和内置卡都行,带 file 可以改部件文件。
        *
        * 相对 create_card + overwrite 的意义不在省字数,在于**没提到的地方一定不变**。
        * 所以 find 必须唯一命中:命中 0 次说明调用方手上的版本是旧的,命中多次说明
        * 它想改哪一处根本没说清 —— 两种都该报错让它先读回源码,而不是替它猜。
+       *
+       * 能改的只有这张卡的源码闭包(定义文件 + 它用到的卡片 / 部件文件),而且只能是源码 / 样式文件。
+       * 用户卡的定义文件走和建卡一样的校验;内置 / 共用文件走 checkSourceEdit(语法 + 不许新加不跟帧走的写法
+       * + CardDef 导出和 id 不许动),改之前备份到 out/card-edits/。
        */
       server.middlewares.use('/api/cards/edit', async (req, res) => {
         if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: 'POST only' });
@@ -620,46 +938,182 @@ export default function vitePluginCards(): Plugin {
         if (!originOk(req as any)) return sendJson(res, 403, { ok: false, error: 'Origin rejected' });
 
         let body = '';
-        req.on('data', (c) => { body += c; if (body.length > MAX_SOURCE_BYTES * 2) req.destroy(); });
+        req.on('data', (c) => { body += c; if (body.length > MAX_EDIT_BYTES * 2) req.destroy(); });
         req.on('end', () => {
           try {
-            const { id, find, replace, replaceAll } = JSON.parse(body || '{}');
+            const { id, file, find, replace, replaceAll } = JSON.parse(body || '{}');
             if (typeof id !== 'string' || typeof find !== 'string' || typeof replace !== 'string') {
               return sendJson(res, 400, { ok: false, error: 'id、find、replace 都必须是字符串' });
             }
             if (!ID_RE.test(id)) return sendJson(res, 400, { ok: false, error: `卡片 id "${id}" 不合法。` });
 
-            const target = path.join(userDir, `${id}.tsx`);
-            if (path.dirname(path.resolve(target)) !== path.resolve(userDir)) {
-              return sendJson(res, 400, { ok: false, error: '非法的文件路径' });
+            const root = server.config.root;
+            const defFile = findCardFile(root, id);
+            if (!defFile) {
+              return sendJson(res, 404, { ok: false, error: `找不到卡片 "${id}" 的源码。先用 get_card_source 确认 id 和能改的文件。` });
             }
-            if (!fs.existsSync(target)) {
-              return sendJson(res, 404, { ok: false, error: `src/cards/user/${id}.tsx 不存在,edit_card 只能改用 create_card 建出来的卡。` });
+            const closure = importClosure(root, defFile);
+            const target = typeof file === 'string' && file ? file : defFile;
+            if (!closure.includes(target) || !isEditablePath(target)) {
+              return sendJson(res, 400, { ok: false, error: `"${target}" 不是卡片 ${id} 的源码文件,不能改。能改的是:${closure.join('、')}` });
             }
 
-            const before = fs.readFileSync(target, 'utf8');
+            const abs = path.join(root, target);
+            const before = fs.readFileSync(abs, 'utf8');
             const patch = applyCardPatch(before, find, replace, replaceAll === true);
             if (!patch.ok) return sendJson(res, 400, { ok: false, error: patch.error });
             const { after, replaced } = patch;
 
-            // 和 create 走同一套校验:局部替换一样能把文件改到编译不过
-            const check = checkCardSource(id, after, []);
+            const isUserDef = target === defFile && defFile.startsWith('src/cards/user/');
+            // 用户卡的定义文件和 create 走同一套校验:局部替换一样能把文件改到编译不过
+            const check = isUserDef ? checkCardSource(id, after, []) : checkSourceEdit(target, before, after);
             if (!check.ok) {
               return sendJson(res, 400, { ok: false, error: check.errors.join('\n'), errors: check.errors });
             }
 
-            fs.writeFileSync(target, after, 'utf8');
+            const backup = isUserDef ? undefined : backupBeforeEdit(root, target, before);
+            fs.writeFileSync(abs, after, 'utf8');
+            const sharedBy = sharedByCounts(root).get(target) || 1;
             sendJson(res, 200, {
               ok: true,
               id,
-              file: `src/cards/user/${id}.tsx`,
+              file: target,
               replaced,
               source: after,
-              hint: '已改写并热更新。改完用 see_frames 看一眼画面,再决定要不要接着调。',
+              builtin: !defFile.startsWith('src/cards/user/'),
+              sharedBy,
+              ...(backup ? { backup } : {}),
+              hint: sharedBy > 1
+                ? `已改写并热更新。这个文件被 ${sharedBy} 张卡共用,它们都会跟着变。改完用 see_frames 看一眼画面。`
+                : '已改写并热更新。改完用 see_frames 看一眼画面,再决定要不要接着调。',
             });
           } catch (e: any) {
             sendJson(res, 400, { ok: false, error: e?.message || String(e) });
           }
+        });
+      });
+
+      /*
+       * 只读 DOM 树(inspect_card_dom 的服务端)。
+       *
+       * 用导出同一条渲染管线(scripts/export-frames.mjs)把单独这一个片段渲到指定那一帧,
+       * 在页面里采出折叠过包装层的树,再用 source map 把每个节点的渲染位置换回源码行号。
+       * 自己留一个 bakery(闲 90 秒自动关),不占 vite-plugin-vision 的渲染池 —— 两边互不牵制。
+       * 同一时刻的树缓存起来:模型「往下看」一个 ref 时不用重渲一遍。源码一改,缓存全清。
+       */
+      let domBakery: any = null;
+      let domIdle: ReturnType<typeof setTimeout> | null = null;
+      let domChain: Promise<unknown> = Promise.resolve();
+      const domTrees = new Map<string, { nodes: DomNode[]; header: string }>();
+      const mapCache = new Map<string, number[][][] | null>();
+      server.watcher?.on('change', () => { mapCache.clear(); domTrees.clear(); });
+      const mapFor = async (urlPath: string) => {
+        if (mapCache.has(urlPath)) return mapCache.get(urlPath) ?? null;
+        let decoded: number[][][] | null = null;
+        try {
+          const env = (server as any).environments?.client;
+          const r = env?.transformRequest ? await env.transformRequest(urlPath) : await server.transformRequest(urlPath);
+          const m = r?.map as any;
+          if (m && typeof m.mappings === 'string') decoded = decodeMappings(m.mappings);
+        } catch { /* 拿不到就退回转换后的行号,并标出来 */ }
+        mapCache.set(urlPath, decoded);
+        return decoded;
+      };
+      const renderDomTree = async (origin: string, isoProject: any, frame: number): Promise<DomNode[]> => {
+        const tl = 'data:application/json,' + encodeURIComponent(JSON.stringify(isoProject));
+        const url = `${origin}/?export=1&timeline=${encodeURIComponent(tl)}`;
+        const mod = await import(pathToFileURL(path.join(server.config.root, 'scripts', 'export-frames.mjs')).href);
+        if (domIdle) clearTimeout(domIdle);
+        try {
+          if (!domBakery) domBakery = await mod.openBakery({ url });
+          else await domBakery.reset(null, url);
+          const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-dom-'));
+          try {
+            await mod.bakeFrames(domBakery, { out: tmp, targetFrames: [frame], format: 'jpeg', quality: 40 });
+          } finally {
+            fs.rmSync(tmp, { recursive: true, force: true });
+          }
+          const nodes: DomNode[] = await domBakery.page.evaluate(EXTRACT_DOM);
+          for (const n of nodes) {
+            if (!n.site) continue;
+            const dec = await mapFor(n.site.path);
+            const o = dec ? originalPosition(dec, n.site.line, n.site.col) : null;
+            n.where = `${n.site.path.slice(1)}:${o ? o.line : `${n.site.line}(转换后行号)`}`;
+          }
+          return nodes;
+        } catch (e) {
+          try { await domBakery?.close(); } catch { /* ignore */ }
+          domBakery = null;
+          throw e;
+        } finally {
+          domIdle = setTimeout(() => { domBakery?.close().catch(() => {}); domBakery = null; }, 90_000);
+          domIdle.unref?.();
+        }
+      };
+
+      server.middlewares.use('/api/cards/dom', (req, res) => {
+        if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: 'POST only' });
+        if (!req.headers['content-type']?.startsWith('application/json')) {
+          return sendJson(res, 415, { ok: false, error: 'JSON required' });
+        }
+        if (!originOk(req as any)) return sendJson(res, 403, { ok: false, error: 'Origin rejected' });
+        let body = '';
+        req.on('data', (c) => { body += c; if (body.length > 32 * 1024 * 1024) req.destroy(); });
+        req.on('end', () => {
+          // 一次只渲一个:共用一个 bakery,并发进来的排队
+          domChain = domChain.then(async () => {
+            try {
+              const { project, clipId, t, ref, depth } = JSON.parse(body || '{}');
+              if (!project || typeof clipId !== 'string') return sendJson(res, 400, { ok: false, error: 'project 和 clipId 必填' });
+              const iso = isolateClipForDom(project, clipId);
+              if (!iso) return sendJson(res, 404, { ok: false, error: `项目里找不到片段 ${clipId}` });
+              const fps = Number(project.fps) || 30;
+              const { clip } = iso;
+              const tt = typeof t === 'number' && Number.isFinite(t)
+                ? Math.min(Math.max(t, clip.start), clip.end - 1 / fps)
+                : (clip.start + clip.end) / 2;
+              const frame = Math.max(0, Math.round(tt * fps));
+              /*
+               * 挪到固定起跑线上再渲:导出从第 0 帧顺推,片段排在第 50 秒就得先推一千多帧。卡片画面和它在
+               * 时间轴上的绝对位置无关(提交 4edf40e 逐卡验过 34/34),所以把它挪到 0.5 秒处 ——
+               * 不挪到 0 是因为第 0 帧上有预热,压着第 0 帧的卡会多经历一段(同一个提交里实测过)。
+               * 片内位置用整数帧号换算,不用秒相减(浮点减法会让同一帧算出两个键)。
+               */
+              const LEAD_IN = 15; // 0.5 秒 @30fps;按帧数给,换 fps 也是整数帧
+              const clipStartFrame = Math.round(clip.start * fps);
+              const inClip = frame - clipStartFrame;
+              const shiftedStart = LEAD_IN / fps;
+              const shifted = { ...clip, start: shiftedStart, end: shiftedStart + (clip.end - clip.start) };
+              const renderProject = {
+                ...iso.project,
+                duration: shifted.end + 1,
+                tracks: iso.project.tracks.map((tr: any) => ({ ...tr, clips: [shifted] })),
+              };
+              const renderFrame = LEAD_IN + inClip;
+              const key = crypto.createHash('sha1').update(JSON.stringify(renderProject)).digest('hex') + '@' + renderFrame;
+              let entry = domTrees.get(key);
+              const cached = !!entry;
+              if (!entry) {
+                const nodes = await renderDomTree(`http://${req.headers.host}`, renderProject, renderFrame);
+                entry = { nodes, header: `片段 ${clipId}(${clip.cardId ?? '素材'})第 ${frame} 帧(t=${(frame / fps).toFixed(3)}s,片内第 ${inClip} 帧),折叠包装层后 ${nodes.length} 个节点。` };
+                domTrees.set(key, entry);
+                if (domTrees.size > 20) domTrees.delete(domTrees.keys().next().value as string);
+              }
+              const refNum = typeof ref === 'string' ? Number(ref.replace(/^ref_/, '')) : ref;
+              const from = Number.isInteger(refNum) && entry.nodes[refNum] ? refNum : 0;
+              const d = Math.max(1, Math.min(8, Number(depth) || 3));
+              const text = entry.nodes.length
+                ? formatDomTree(entry.nodes, from, d)
+                : '(舞台上什么都没有 —— 这一刻这张卡还没进场或已经退场)';
+              sendJson(res, 200, {
+                ok: true, clipId, frame, t: frame / fps, nodes: entry.nodes.length, cached,
+                text: `${entry.header}${from ? `从 ref_${from} ` : ''}往下 ${d} 层:\n${text}`,
+                hint: '这棵树只能看、不能改:舞台上的 HTML 是源码渲染出来的。要改哪个节点,用 get_card_source 读它标出的那个文件,再用 edit_card(带 file)改那一行。',
+              });
+            } catch (e: any) {
+              sendJson(res, 500, { ok: false, error: e?.message || String(e) });
+            }
+          }).catch(() => {});
         });
       });
 

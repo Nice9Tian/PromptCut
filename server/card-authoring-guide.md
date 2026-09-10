@@ -265,6 +265,20 @@ see_frames({ source: "timeline", clipId })                       ← 看画面�
 `find` 要从 `get_card_source` 返回的源码里**逐字照抄**（缩进、空格都要一致），并且在
 全文里唯一命中；匹配到多处就把 `find` 写长一点、带上周围几行。
 
+**内置卡也能这样改源码**（不只是 `create_card` 建出来的）。不知道画面上某一块是源码哪一行渲染的，先看它的 DOM 树：
+
+```
+inspect_card_dom({ clipId })                  ← 只读：每个节点标出组件和源码行，如 src/cards/native/rank-bars.tsx:49
+inspect_card_dom({ clipId, ref: 6 })          ← 从某个节点往下展开（同一时刻有缓存，不重渲）
+get_card_source({ cardId, file })             ← 读那个文件（必须在返回的 files 列表里）
+edit_card({ cardId, file, find, replace })    ← 改那一行
+```
+
+- **只能改源码，不能改 HTML**：DOM 是源码渲染出来的，没有直接改 DOM 的工具，也不该找。
+- `files` 里每个文件带 `sharedBy`：大于 1 的是多张卡共用的部件（比如 `hud.ts`），改了它们一起变；只想改这一张，就改它自己的定义文件。
+- 标着「同一行源码生成了 N 个兄弟节点」的是列表，改那一行 N 个一起变。
+- 内置文件改之前自动备份到 `out/card-edits/`；不许新引入 `Date.now` / `setTimeout` / `setAnimationLoop` 这类不跟帧走的写法。
+
 **不要用 `create_card` + `overwrite: true` 去改卡。** 那是整篇重写：你手上没有当前
 版本，就只能凭记忆重建，这次没提到的细节（字号、间距、颜色）会一次比一次漂，用户
 会看到自己没要求改的地方莫名其妙变了。`overwrite` 只留给「这张卡整个推倒重来」。

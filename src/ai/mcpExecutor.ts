@@ -108,8 +108,10 @@ export interface EditorApi {
   collectLoginCheck(args: { site?: string; hide?: boolean }): Promise<any>;
   collectLogout(args: { site?: string }): Promise<any>;
   createCard(args: { id: string; source: string; overwrite?: boolean }): Promise<any>;
-  getCardSource(args: { cardId: string }): Promise<any>;
-  editCard(args: { cardId: string; find: string; replace: string; replaceAll?: boolean }): Promise<any>;
+  getCardSource(args: { cardId: string; file?: string }): Promise<any>;
+  editCard(args: { cardId: string; file?: string; find: string; replace: string; replaceAll?: boolean }): Promise<any>;
+  /** 只读 DOM 树(inspect_card_dom):每个节点标出源码位置,改动一律走 editCard */
+  inspectCardDom(args: { clipId: string; t?: number; ref?: number | string; depth?: number }): Promise<any>;
   seePreview(args: { t?: number; clipId?: string; times?: number[] }): Promise<any>;
   seeSequences(args: { mediaId: string; page?: number; perPage?: number; grid?: number; scene?: number; from?: number; to?: number }): Promise<any>;
   cardAuthoringGuide(): Promise<any>;
@@ -360,6 +362,7 @@ export function connectMcpExecutor(getApi: () => EditorApi, onStatus?: (s: { con
           else if (tool === "create_card") result = await api.createCard(args);
           else if (tool === "get_card_source") result = await api.getCardSource(args);
           else if (tool === "edit_card") result = await api.editCard(args);
+          else if (tool === "inspect_card_dom") result = await api.inspectCardDom(args);
           else if (tool === "see_frames") {
             // 一个工具两种画面:成片(timeline)走 seePreview,素材镜头拼图(media)走 seeSequences
             const { source, ...rest } = (args ?? {}) as any;

@@ -1684,23 +1684,40 @@ export function RightPanel() {
         return data;
       },
       /**
-       * 读回自己建的卡的当前源码。改卡的第一步 —— 不读回来就改,等于凭记忆重写。
+       * 读回一张卡的源码(用户卡和内置卡都行)。改卡的第一步 —— 不读回来就改,等于凭记忆重写。
+       * 带 file 读这张卡用到的某个部件 / vendor 文件。
        */
       getCardSource: async (args) => {
-        const res = await fetch(`/api/cards/source?id=${encodeURIComponent(args.cardId)}`);
+        const q = new URLSearchParams({ id: args.cardId, ...(args.file ? { file: args.file } : {}) });
+        const res = await fetch(`/api/cards/source?${q}`);
         const data = await res.json().catch(() => ({}));
         if (!res.ok || !data.ok) throw new Error(data.error || `读不到卡片源码(HTTP ${res.status})`);
         return data;
       },
-      /** 局部替换式改卡。整篇重写交给 createCard,那条路只该走一次(建卡)。 */
+      /** 局部替换式改卡(带 file 改部件文件)。整篇重写交给 createCard,那条路只该走一次(建卡)。 */
       editCard: async (args) => {
         const res = await fetch("/api/cards/edit", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ id: args.cardId, find: args.find, replace: args.replace, replaceAll: args.replaceAll === true }),
+          body: JSON.stringify({ id: args.cardId, file: args.file, find: args.find, replace: args.replace, replaceAll: args.replaceAll === true }),
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok || !data.ok) throw new Error(data.error || `改卡失败(HTTP ${res.status})`);
+        return data;
+      },
+      /**
+       * 只读地看一张卡某一刻的 DOM 树(每个节点标出源码位置)。project 从这里带过去,理由和 see_frames 一样:
+       * 时间轴的真身在浏览器 store 里,服务端手上那份(上次保存的)可能已经是旧的。
+       */
+      inspectCardDom: async (args) => {
+        const ref = typeof args.ref === "string" ? Number(String(args.ref).replace(/^ref_/, "")) : args.ref;
+        const res = await fetch("/api/cards/dom", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ project: getState().project, clipId: args.clipId, t: args.t, ref, depth: args.depth }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.ok) throw new Error(data.error || `读不到 DOM 树(HTTP ${res.status})`);
         return data;
       },
       /**
