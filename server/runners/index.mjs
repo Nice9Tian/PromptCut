@@ -75,8 +75,12 @@ export async function listProviders(opts = {}) {
   return providersCache;
 }
 
+import { startCliLoop } from './cli-loop.mjs';
+
 export function startRun(opts) {
   if (opts.provider === 'claude') return startClaude(opts);
+  // 审查环路走 agy:每个角色回合起一次 agy(见 cli-loop.mjs)。开关规则和 API 直连一样
+  if (opts.provider === 'agy' && (opts.reviewLoop ?? !!opts.deepAuto)) return startCliLoop(opts, startAgy);
   if (opts.provider === 'agy') return startAgy(opts);
   if (opts.provider === 'codex') return startCodex(opts);
   if (opts.provider === 'api') {

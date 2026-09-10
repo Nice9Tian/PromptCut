@@ -180,14 +180,33 @@ export default function vitePluginAi(): Plugin {
        * agent:发起这次调用的 Agent 对话 ID(多 Agent 分页)。CLI 那条路由 mcp-server 从环境变量
        * PROMPTCUT_AGENT 带上来,API 直连那条路由 startRun 的 callTool 闭包带;编辑台拿它记「谁改了哪儿」。
        */
+      /** 审查环路走 CLI 时的只读锁:null = 不锁;Set = 只放行这些工具(空 Set = 全拦)。见下面 callToolInternal */
+      let loopToolLock: Set<string> | null = null;
+
       async function callToolInternal(tool: string, args: any, agent?: string): Promise<any> {
         const { tools } = await import(new URL('./mcp-tools.mjs', import.meta.url).href);
         const toolDef = tools.find((t: any) => t.name === tool);
-        
+
         if (!toolDef) {
           const err = new Error('Unknown tool');
           (err as any).code = 'UNKNOWN_TOOL';
           throw err;
+        }
+
+        /*
+         * 审查环路走 CLI 时的只读锁(runners/cli-loop.mjs 通过 setToolAccess 设置)。
+         *
+         * CLI 的 MCP 是全局登记的,没法按回合少给工具,所以只能在执行入口拦:reviewer / judger
+         * 回合只放行只读名单,反省回合一个都不放行。锁是这个服务端全局的 —— 锁住的那几分钟里
+         * 别的对话页发来的写操作也会被拦,这是有意的:reviewer 正在看的工程不该被同时改。
+         */
+        if (loopToolLock && !loopToolLock.has(tool)) {
+          return {
+            ok: false,
+            error: loopToolLock.size
+              ? `审查环路的这一回合是只读的:${tool} 这一回合不能用。能用的只有 ${[...loopToolLock].join('、')}。`
+              : `审查环路的这一回合不调用任何工具,${tool} 被拒绝。只用文字回答。`,
+          };
         }
 
         /*
@@ -780,6 +799,8 @@ export default function vitePluginAi(): Plugin {
               schemaCompat,
               // 审查环路单独开关(只有 API 直连用);不传就跟着深度自主走,见 runners/api.mjs
               reviewLoop: typeof data.reviewLoop === 'boolean' ? data.reviewLoop : undefined,
+              // 审查环路走 CLI 时,按回合给工具上只读锁(见 callToolInternal)。null = 解锁
+              setToolAccess: (list: string[] | null) => { loopToolLock = list ? new Set(list) : null; },
               toolProtocol: cfg.toolProtocol,
               mcp,
               callTool: async (name: string, args: any) => await callToolInternal(name, args, agentId || undefined),
