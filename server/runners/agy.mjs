@@ -7,34 +7,39 @@ function runAgy(exe, args, options) {
   return execFileSync(invocation.command, invocation.args, { env: cliEnv('agy'), timeout: 15000, ...options });
 }
 
+/**
+ * 登记 agy 的 PromptCut MCP:**不在登记里写端口**,端口在每次起 agy 时经环境变量带进去。
+ *
+ * agy 的 MCP 登记是全局的(一台机器一份)。原来登记时写死 `-e PROMPTCUT_PORT=<端口>`,
+ * 而「是否已登记」只比对 node 和脚本路径、不比端口 —— 同一份代码的两个实例(5190 的编辑台、
+ * 5198 的测试)端口不同,后启动的会以为已经登记好,agy 的工具调用就一直打到前一个端口上;
+ * 那个端口关了就全报错,被别的程序占着就一直挂着。
+ *
+ * 现在:登记里只有命令和脚本;PROMPTCUT_PORT / PROMPTCUT_AGENT 放在 agy 进程的环境变量里
+ * (见下面 spawnCli 的 env),agy 起 MCP 子进程时继承下去,mcp-server.mjs 读到的就是
+ * 发起这次对话的那个服务端。每个服务端进程第一次用 agy 时重登一次(`mcp add` 是「加或更新」),
+ * 顺手把老版本写进登记的端口清掉;之后只在命令或脚本路径变了时才重登。
+ */
+let registeredOnce = false;
 let registerPromise = null;
-let lastRegisteredPort = null;
+
+export function mcpAddArgs(mcpOpts) {
+  return ['mcp', 'add', 'promptcut', mcpOpts.command, mcpOpts.args[0]];
+}
 
 async function ensureMcpRegistered(exePath, mcpOpts, safeOnEvent) {
-  if (registerPromise && lastRegisteredPort === mcpOpts.env.PROMPTCUT_PORT) return registerPromise;
-  
+  if (registerPromise) await registerPromise.catch(() => {});
   registerPromise = (async () => {
+    if (registeredOnce) {
+      try {
+        const listStdout = runAgy(exePath, ['mcp', 'list'], { encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+        const line = listStdout.split(/\r?\n/).find((l) => l.split(/\s+/)[0] === 'promptcut');
+        if (line && line.includes(mcpOpts.command) && line.includes(mcpOpts.args[0])) return;
+      } catch { /* 查不到就重登 */ }
+    }
     try {
-      const listStdout = runAgy(exePath, ['mcp', 'list'], { encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
-      const lines = listStdout.trim().split(/\r?\n/);
-      let found = false;
-      for (const l of lines) {
-         if (l.startsWith('promptcut') || l.split(/\s+/)[0] === 'promptcut') {
-             if (l.includes(mcpOpts.command) && l.includes(mcpOpts.args[0])) {
-                 found = true;
-                 break;
-             }
-         }
-      }
-      if (found) {
-         lastRegisteredPort = mcpOpts.env.PROMPTCUT_PORT;
-         return;
-      }
-    } catch {}
-
-    try {
-      runAgy(exePath, ['mcp', 'add', '-e', `PROMPTCUT_PORT=${mcpOpts.env.PROMPTCUT_PORT}`, 'promptcut', mcpOpts.command, mcpOpts.args[0]], { windowsHide: true, stdio: 'ignore' });
-      lastRegisteredPort = mcpOpts.env.PROMPTCUT_PORT;
+      runAgy(exePath, mcpAddArgs(mcpOpts), { windowsHide: true, stdio: 'ignore' });
+      registeredOnce = true;
       safeOnEvent({ type: 'status', text: '已把 PromptCut 注册为 agy 的 MCP 服务（agy mcp add promptcut）' });
     } catch (e) {
       safeOnEvent({ type: 'error', message: `MCP registration failed: ${e.message}` });
@@ -207,7 +212,9 @@ function _startRun(opts) {
        return;
     }
     
-    childController = spawnCli(exePath, args, { cwd: opts.cwd }, opts.onEvent, 'Antigravity');
+    // 端口和 Agent 页经环境变量交给 agy,它起 MCP 子进程时继承下去(登记里不写端口,见 ensureMcpRegistered)
+    const mcpEnv = opts.mcp?.env || {};
+    childController = spawnCli(exePath, args, { cwd: opts.cwd, env: { ...process.env, ...mcpEnv } }, opts.onEvent, 'Antigravity');
     let emitted = '';
 
     // 提示词从这里进去(见上面 args 的说明)。EPIPE 忽略:进程要是已经自己退了,

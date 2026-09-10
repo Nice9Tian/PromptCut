@@ -169,6 +169,7 @@ export function presentLoopEvent(ev) {
       case 'plan': return [{ type: 'status', text: '审查环路 · judger 正在看工程,定任务要求和检查项' }];
       case 'work': return [{ type: 'status', text: `worker 开始第 ${ev.attempt} 次交付${ev.batch > 1 ? `(第 ${ev.batch} 批)` : ''}` }];
       case 'review': return [{ type: 'status', text: 'reviewer 正在按检查项审查' }];
+      case 'judging': return [{ type: 'status', text: 'judger 正在逐条裁定 reviewer 的意见' }];
       case 'verdict': {
         if (ev.verdict === 'phase_done') return [{ type: 'status', text: 'judger:通过' }];
         if (ev.verdict === 'need_user') return [{ type: 'status', text: 'judger:需要你来决定' }];
@@ -287,7 +288,9 @@ export async function runReviewLoop(o) {
         ?? (review.text?.trim() ? [{ issue: review.text.trim(), evidence: '(reviewer 没有按格式提交,这是它的原文)' }] : []);
 
       // ── judger 裁决 ──
-      const verdict = await judgerTurn('verdict', P.judgerVerdictPrompt({ userText, requirements, delivery, opinions }),
+      // 开场播报用 judging:原来也叫 verdict,而 verdict 事件没带裁决结果时会显示成「judger 没有给出裁决」——
+      // 每一轮裁决之前都凭空多一行这句,看着像 judger 次次都要推一下才肯交
+      const verdict = await judgerTurn('judging', P.judgerVerdictPrompt({ userText, requirements, delivery, opinions }),
         ['phase_done', 'request_revision', 'need_user']);
       say({ stage: 'verdict', role: 'judger', verdict: verdict?.name || 'none', input: verdict?.input });
 

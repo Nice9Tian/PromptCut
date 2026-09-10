@@ -129,6 +129,21 @@ function isConnRefused(err) {
   return found;
 }
 
+/*
+ * 每一次调用都有上限:这个工具自己声明的 timeoutMs(没有就 60 秒,和桥那边的默认一样)再加 30 秒。
+ *
+ * 原来 fetch 不设超时。端口连不上(ECONNREFUSED)是秒回的,问题出在端口「连得上但没人回话」——
+ * 登记里写死的端口被别的程序占了、或者那个 PromptCut 卡死了 —— 这时 agy 那边的工具调用就一直挂着,
+ * 整轮对话跟着停住,没有任何报错。多出来的 30 秒是留给桥自己的超时先到、把真正的报错传回来。
+ */
+function bridgeTimeoutMs(tool) {
+  // 测试用:不然一条「端口没人回话」的用例要真等 90 秒
+  const override = Number(process.env.PROMPTCUT_BRIDGE_TIMEOUT_MS);
+  if (override > 0) return override;
+  const def = tools.find((t) => t.name === tool);
+  return (Number(def?.timeoutMs) || 60000) + 30000;
+}
+
 async function callBridge(tool, args) {
   const { port, hosts } = getTargets();
   for (const host of hosts) {
@@ -138,7 +153,8 @@ async function callBridge(tool, args) {
         headers: { 'Content-Type': 'application/json' },
         // 多 Agent 分页:这个 MCP 进程是哪一页的 Agent 起的(vite-plugin-ai 起 CLI 时塞的环境变量),
         // 编辑台拿它记「谁改了哪儿」;没有就不带
-        body: JSON.stringify({ tool, args, agent: process.env.PROMPTCUT_AGENT || undefined })
+        body: JSON.stringify({ tool, args, agent: process.env.PROMPTCUT_AGENT || undefined }),
+        signal: AbortSignal.timeout(bridgeTimeoutMs(tool)),
       });
       if (lastBridgeHost !== host) {
         process.stderr.write(`[mcp-server] bridge at ${host}:${port}\n`);
@@ -148,6 +164,10 @@ async function callBridge(tool, args) {
     } catch (err) {
       if (isConnRefused(err)) {
         continue;
+      }
+      if (err?.name === 'TimeoutError') {
+        throw new Error(`PromptCut 在 ${host}:${port} 上 ${Math.round(bridgeTimeoutMs(tool) / 1000)} 秒没有回应(${tool})。`
+          + '可能是这个端口被别的程序占着、或者编辑台卡住了;这次调用没有执行完,可以稍后重试。');
       }
       throw err;
     }
