@@ -100,7 +100,37 @@ if (!has("--skip-runtime")) {
 } else {
   run("检查 runtime", "node", ["scripts/prepare-runtime.mjs", "--check", ...sourceArgs]);
 }
-// runtime/app 已经拷好，worktree 的使命就完成了；后面的步骤都不再读源码。
+/**
+ * **拆 worktree 之前,先把安装器那三个文件抢出来。**
+ *
+ * 原来这里写的是「worktree 的使命就完成了;后面的步骤都不再读源码」—— 那句话是错的。
+ * make-patch 还要读三个文件:`apply-patch.ps1`、`apply-patch.cmd`、`patch-installer.nsi`,
+ * 而它取的是**自己所在的工作区目录**,不是这棵 HEAD worktree。于是 `--from-head` 那句
+ * 「源码取自 HEAD、忽略未提交改动」对这三个文件不成立:runtime 是已提交的 A 版、
+ * 安装器却是工作区的 B 版,打出来的包对不上任何一个提交。
+ *
+ * 实测撞见过一次:安装器的改动还没提交就被打进了包,而它要读的服务端字段
+ * (/api/mcp/status 的 activeRuns)还停在旧版 —— 两半各说各话,而且不报错。
+ *
+ * 不把 worktree 留到 make-patch 之后再拆,是因为中间夹着 `tauri build`;
+ * 让一棵 worktree 在 Rust 编译期间躺在 desktop/.cache 下,是给自己找新的麻烦。
+ * 抢三个文件出来便宜得多。
+ */
+let installerSrc = null;
+if (worktree) {
+  installerSrc = path.join(DESKTOP_DIR, ".cache", "release-installer");
+  fs.rmSync(installerSrc, { recursive: true, force: true });
+  fs.mkdirSync(installerSrc, { recursive: true });
+  for (const f of ["apply-patch.ps1", "apply-patch.cmd", "patch-installer.nsi"]) {
+    const from = path.join(worktree, "desktop", "scripts", f);
+    if (!fs.existsSync(from)) {
+      console.error(`[FAIL] HEAD 里没有 desktop/scripts/${f}`);
+      process.exit(1);
+    }
+    fs.copyFileSync(from, path.join(installerSrc, f));
+  }
+  console.log(`  安装器取自 HEAD：${installerSrc}`);
+}
 cleanupWorktree();
 
 // 版本号以 runtime/app 里那份为准 —— 它才是真正被打进产物的源码。
@@ -118,6 +148,8 @@ const patchArgs = ["scripts/make-patch.mjs"];
 if (has("--with-deps")) patchArgs.push("--with-deps");
 if (has("--no-deps")) patchArgs.push("--no-deps");
 if (has("--from-head")) patchArgs.push("--skip-source-check");
+// 安装器那三个文件也要来自 HEAD,不能是工作区当前的样子(见上面抢文件那一段)
+if (installerSrc) patchArgs.push("--installer-src", installerSrc);
 if (has("--zip")) patchArgs.push("--zip");
 run("打更新补丁", "node", patchArgs);
 

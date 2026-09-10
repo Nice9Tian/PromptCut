@@ -52,6 +52,29 @@ const option = (name) => {
 };
 
 /**
+ * 安装器那三个文件(apply-patch.ps1 / apply-patch.cmd / patch-installer.nsi)从哪儿取。
+ *
+ * **默认是 `__dirname`,也就是当前工作区。这对 `--from-head` 是错的。**
+ * payload 走的是 `runtime/app`,那是 prepare-runtime 从 HEAD 的临时 worktree 组装出来的;
+ * 而这三个文件一直是直接从工作区拷的,于是 `--from-head` 那句「源码取自 HEAD、忽略未提交
+ * 改动」对它们不成立 —— 打出来的包可能是「runtime 是已提交的 A 版、安装器是工作区的 B 版」,
+ * 对不上任何一个提交。实测撞见过:安装器的改动还没提交就被打进了包,而它依赖的服务端字段
+ * (那次是 /api/mcp/status 的 activeRuns)还停在旧版,两半对不上。
+ *
+ * 所以 build-release 在拆掉 worktree 之前会把这三个文件先拷到一个暂存目录,
+ * 再用 `--installer-src` 指过来。单独手跑 make-patch 时不传,行为和以前一样。
+ */
+const INSTALLER_DIR = option("--installer-src") || __dirname;
+/** 三个文件缺一不可:少了任何一个,补丁包要么装不了,要么根本打不出来 */
+const INSTALLER_FILES = ["apply-patch.ps1", "apply-patch.cmd", "patch-installer.nsi"];
+for (const f of INSTALLER_FILES) {
+  if (!fs.existsSync(path.join(INSTALLER_DIR, f))) {
+    console.error(`[FAIL] 安装器文件缺失：${path.join(INSTALLER_DIR, f)}`);
+    process.exit(1);
+  }
+}
+
+/**
  * runtime/app 里不属于构建产物的东西：用户跑起来之后自己长出来的目录。
  * 补丁绝不能碰它们 —— 导出的视频和 AI 会话历史都在这里面。
  */
@@ -307,8 +330,8 @@ function main() {
   };
   fs.writeFileSync(path.join(root, "patch.json"), JSON.stringify(manifest, null, 2));
 
-  fs.copyFileSync(path.join(__dirname, "apply-patch.ps1"), path.join(root, "apply-patch.ps1"));
-  fs.copyFileSync(path.join(__dirname, "apply-patch.cmd"), path.join(root, "安装更新.cmd"));
+  fs.copyFileSync(path.join(INSTALLER_DIR, "apply-patch.ps1"), path.join(root, "apply-patch.ps1"));
+  fs.copyFileSync(path.join(INSTALLER_DIR, "apply-patch.cmd"), path.join(root, "安装更新.cmd"));
   fs.writeFileSync(path.join(root, "README.txt"), readmeText(manifest));
 
   // ── 打包 ──────────────────────────────────────────────────────────
@@ -332,7 +355,7 @@ function main() {
     `-DSRCDIR=${root}`,
     `-DOUTFILE=${exePath}`,
     `-DICON=${path.join(DESKTOP_DIR, "src-tauri", "icons", "icon.ico")}`,
-    path.join(__dirname, "patch-installer.nsi"),
+    path.join(INSTALLER_DIR, "patch-installer.nsi"),
   ], { encoding: "utf8", timeout: 1_800_000 });
   if (build.status !== 0 || !fs.existsSync(exePath)) {
     fail(`NSIS 打包失败（退出码 ${build.status}）\n${(build.stdout || "").slice(-2000)}${build.stderr || ""}`);
