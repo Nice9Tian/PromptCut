@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { planBakes, defaultBudgetBytes, type BakeMoment, type BakeTier } from "./bakePlan";
 import { clipFingerprint, momentId, publishCoverage, type ClipCoverage } from "./bakeCoverage";
+import { isScrubbing } from "../timeline/useScrub";
 
 /**
  * 空闲时把贴图预先烘好。排队规则见 bakePlan.ts,这里只管**什么时候动手**。
@@ -162,7 +163,8 @@ export function useBakePrefetch({
     const waitIdle = () => new Promise<void>((resolve) => {
       const attempt = () => {
         if (dead) return resolve();
-        const quiet = Date.now() - touchedAt.current >= IDLE_MS;
+        // 手还按在播放头上就一律不动手 —— 拖动时每一格都会改 t,烘出来的全是一闪而过的位置
+        const quiet = Date.now() - touchedAt.current >= IDLE_MS && !isScrubbing();
         if (quiet && foreground === 0) return resolve();
         cancelIdle = onIdle(attempt);
       };
@@ -211,6 +213,8 @@ export function useBakePrefetch({
         clips.push({
           clipId,
           fp,
+          // 发布这一刻它待在哪儿。之后用户把卡挪走,画条子那侧按差值平移(见 ClipCoverage.start)
+          start: ms[0]?.start ?? 0,
           moments: ms.map((m) => ({
             clipId: m.clipId, id: momentId(m.clipId, m.t), key: m.key,
             t: m.t, start: m.start, end: m.end, tier: m.tier, fine: m.fine,

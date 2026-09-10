@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import { useBakePrefetch, beginForegroundBake, endForegroundBake, canonFrameT } from "./useBakePrefetch";
 import { clipFingerprint, markBaked, momentId } from "./bakeCoverage";
@@ -14,6 +14,7 @@ import {
 } from "../../cards/native/scene3dObject";
 import { cameraFor, DEFAULT_FOV_DEG, stageToWorld } from "../../kernel/space3d";
 import { motionOf, pickBakeT, sampleTimesFor, texKeyOf, type TimedClip } from "./bakeTime";
+import { isScrubbing, subscribeScrub } from "../timeline/useScrub";
 // 棋盘格底和浮层样式在这儿(.pc-3d-checker / .pc-3d-note)。自己引一次,不指望父组件替它引
 import "./preview.css";
 
@@ -59,6 +60,42 @@ const loadMods = (): Promise<[ThreeMod, OrbitMod]> =>
 
 /** 没贴图时的占位色。半透明,一眼看得出"这块还在烘" */
 const PROXY_COLOR = 0x64748b;
+
+/**
+ * URL → 已经解码好的贴图。**跨场景重建复用。**
+ *
+ * # 为什么要有它:两张卡交界处会闪一下色块
+ *
+ * 场景的重建键 `sig` 是「此刻画面上有哪几张卡」,所以播放头**每跨过一次卡片边界**整个场景
+ * 就重建一次,每块板子都是新的 mesh + 新的 material。而 `applyTexture` 一律走
+ * `new THREE.TextureLoader().load(url)` —— 哪怕这张图刚刚才贴过、HTTP 缓存里热着,
+ * 解码也是异步的。于是新板子先以 PROXY_COLOR 的色块出场,一两帧之后贴图才回来。
+ * 用户看到的就是「两张卡之间突然闪一下实体模式」,而其实什么都没缺,只是重解码了一遍。
+ *
+ * 存下解码结果之后,重建时命中的那张**同一帧就贴上**,中间没有色块。
+ *
+ * # 为什么要有上限,而且淘汰时要跳过正在用的
+ *
+ * 一张 1920×1080 的贴图在显存里约 8MB,而预烘会烘出几百个时刻 —— 不设上限,用户把时间轴
+ * 从头拖到尾就能把显存撑爆。上限之外还有一条:**正在板子上的那几张一律不淘汰**,
+ * 淘汰时 dispose 掉一张还挂在 material.map 上的贴图,那块板子会直接变黑,而且不报错。
+ */
+const TEX_CACHE_MAX = 12;
+const texCache = new Map<string, any>();
+/** 此刻真的挂在板子上的那几个 URL。淘汰要绕开它们 */
+const texInUse = new Set<string>();
+
+function cacheTexture(url: string, tex: any) {
+  // Map 保持插入顺序,重新 set 一次就等于把它挪到队尾 —— 最久没用的排在队头
+  texCache.delete(url);
+  texCache.set(url, tex);
+  for (const k of [...texCache.keys()]) {
+    if (texCache.size <= TEX_CACHE_MAX) break;
+    if (texInUse.has(k)) continue;
+    texCache.get(k)?.dispose?.();
+    texCache.delete(k);
+  }
+}
 
 interface Props {
   project: Project;
@@ -166,12 +203,26 @@ export function Scene3DView({ project, t }: Props) {
    * 失败不加是防死循环:失败后要烘的还是那几张,加了就会一直重试。
    */
   const [bakeGen, setBakeGen] = useState(0);
+  /**
+   * 手还按在播放头上没有(见 timeline/useScrub 的 isScrubbing)。
+   *
+   * **按着的时候一张都不烘。** 拖动时播放头每跨过一个 0.25 秒的格子就换一个时刻,
+   * 于是按着不放拖过去一路就是一串前台烘焙,每一个都占住一个 Chrome 好几秒 ——
+   * 而它们烘的全是用户一闪而过、根本没停下来看的位置。等用户真的松手停在某处,
+   * 他要的那一张反而排在这堆注定作废的活后面。
+   *
+   * 用「松手」这个事件而不是防抖 N 毫秒:松手是明确的,不用猜多久算停下;
+   * 而点一下卡尺跳过去(按下即松开)也不会因此多等一拍。
+   */
+  const scrubbing = useSyncExternalStore(subscribeScrub, isScrubbing, isScrubbing);
   const [parked, setParked] = useState(false);
   useEffect(() => {
     setParked(false);
+    // 手还按着就不算「停住」——那时候连粗粒度那张都不该烘,更别说补精确帧
+    if (scrubbing) return;
     const id = setTimeout(() => setParked(true), 500);
     return () => clearTimeout(id);
-  }, [t]);
+  }, [t, scrubbing]);
   /**
    * 按**时刻**存的贴图:`texKeyOf(clip, 那一刻)` → URL。前台现烘的和预烘拿回来的都进这里,
    * 一个键只对应一张图,所以「板子上贴的到底是哪一刻」永远是确定的。
@@ -454,6 +505,8 @@ export function Scene3DView({ project, t }: Props) {
       mesh.userData.clipId = clip.id;
       pickables.push(mesh);
       disposables.push(geo, mat);
+      /** 这块板子此刻挂着哪张贴图。贴图缓存淘汰时要绕开正在用的,靠它记账 */
+      let boundUrl: string | null = null;
 
       /*
        * **只贴当前这一刻的图,别的一律退回色块。**
@@ -499,18 +552,47 @@ export function Scene3DView({ project, t }: Props) {
         tex.needsUpdate = true;
       };
 
+      /** 贴上去之后的收尾:裁到内容框、恢复成不透明的白底(色块那一套的反操作) */
+      const dressUp = (tex: any) => {
+        cropToContent(tex);
+        mat.color.set(0xffffff);
+        mat.opacity = 1;
+        renderer.render(scene, camera);
+      };
       const apply = (url: string, precise = false) => {
         if (!precise) return; // 预烘那条路不带时刻,它给的图只进缓存,不上板子
-        const tex = applyTexture(THREE, mat, url, (loaded: any) => {
-          cropToContent(loaded);
-          mat.color.set(0xffffff);
-          mat.opacity = 1;
-          renderer.render(scene, camera);
+        boundUrl = url;
+        texInUse.add(url);
+        /*
+         * **解码过的直接贴,不再走一遍 TextureLoader。**
+         *
+         * 这一条就是「两张卡之间闪一下色块」的根治:跨过卡片边界时整个场景重建,
+         * 每块板子都是新的 material,而异步加载哪怕命中 HTTP 缓存也要一两帧才回来 ——
+         * 那一两帧里板子是 PROXY_COLOR 的色块。命中这里就在同一帧贴完,中间没有空档。
+         */
+        const hit = texCache.get(url);
+        if (hit) {
+          mat.map = hit;
+          // 烘出来的卡是透明底,不开 transparent 四周会变成黑块(和 applyTexture 里同一个理由)
+          mat.transparent = true;
+          mat.needsUpdate = true;
+          cacheTexture(url, hit); // 挪到队尾:它是最近用过的
+          dressUp(hit);
+          return;
+        }
+        applyTexture(THREE, mat, url, (loaded: any) => {
+          cacheTexture(url, loaded);
+          dressUp(loaded);
         });
-        if (tex) disposables.push(tex);
+        /*
+         * **不进 disposables。** 贴图的所有权归上面那个缓存,场景重建时连它一起 dispose 掉的话,
+         * 下一次重建又得重新解码,缓存就白做了;更糟的是别的板子可能正挂着同一张
+         * (相对键之后,同一张卡的两个副本共用同一个文件),dispose 会让那块板子直接变黑。
+         */
       };
       /** 退回色块:这一刻的图还没烘出来,或者换到了别的时刻 */
       const toProxy = () => {
+        if (boundUrl) { texInUse.delete(boundUrl); boundUrl = null; }
         if (!mat.map) return;
         mat.map = null;
         mat.color.set(PROXY_COLOR);
@@ -617,6 +699,11 @@ export function Scene3DView({ project, t }: Props) {
         renderer.domElement.removeEventListener("pointerup", onUp);
         ro.disconnect();
         controls.dispose();
+        /*
+         * 这一场的板子全没了,所以「正在用的贴图」清空 —— 不清的话这些 URL 会永远挡着淘汰,
+         * 缓存只进不出,显存一路涨。贴图本身不在 disposables 里(所有权归 texCache)。
+         */
+        texInUse.clear();
         for (const d of disposables) d.dispose?.();
         renderer.dispose();
         // dispose() 不释放 WebGL 上下文,浏览器上限约 16,超了静默丢最老的(和 scene-3d 同一个坑)
@@ -653,6 +740,15 @@ export function Scene3DView({ project, t }: Props) {
      *                三维拿的是第 120 帧,和二维差整整一帧)。
      * 拖动中不补(省渲染),停住才补(要准)。
      */
+    /*
+     * **手还按着就到此为止:贴图照换(缓存里有的立刻贴上),但一张都不烘。**
+     *
+     * 上面那个循环已经把该贴的贴了、该打回色块的打回了 —— 那是免费的。往下才是花钱的部分:
+     * 拖过去的每一个格子都发一次烘焙,每个占住一个 Chrome 好几秒,而它们烘的都是
+     * 用户一闪而过的位置。松手之后 scrubbing 变 false,这个 effect 会立刻再跑一遍,
+     * 那时才真的开烘 —— 用户停在哪儿就烘哪儿,一次都不浪费。
+     */
+    if (scrubbing) { setPending(0); setBakingAt(null); return; }
     const asks = need.length
       ? need.map((c) => ({ clip: c, at: bakeTOf(c) }))
       : parked
@@ -747,7 +843,7 @@ export function Scene3DView({ project, t }: Props) {
     // momentSig 在依赖里:拖时间轴换到别的时刻要重新取图。但它**不在建场景那个 effect 的
     // 依赖里**,所以只是换 material.map,场景不重建。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sig, momentSig, parked, bakeGen]);
+  }, [sig, momentSig, parked, bakeGen, scrubbing]);
 
   /* ── 预烘好的贴图一到就收进「按时刻」的缓存,轮到那一刻就用得上 ─────── */
   useEffect(() => {

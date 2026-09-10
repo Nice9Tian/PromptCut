@@ -3,7 +3,7 @@ import { useTimelineContext } from "./TimelineContext";
 import { useStore } from "../../store/project";
 import { useScrub } from "./useScrub";
 import {
-  clipFingerprint, getCoverage, subscribeCoverage, visibleCoverage,
+  clipFingerprint, getCoverage, idleSpans, mergeSegments, subscribeCoverage, visibleCoverage,
   type CoverageSegment,
 } from "../preview/bakeCoverage";
 import { xOfTime } from "./utils";
@@ -52,15 +52,41 @@ export function RenderBar() {
    */
   const cov = useSyncExternalStore(subscribeCoverage, getCoverage, getCoverage);
 
-  /** 当前项目里每张卡长什么样。改了参数这个集合就变,于是过期的覆盖当帧被滤掉 */
+  /**
+   * 当前项目里每张卡长什么样、现在待在哪儿。指纹 → 当前起点。
+   *
+   * 指纹变了 → 那张卡的覆盖当帧作废(改参数、剪长短、换画幅)。
+   * 指纹没变但起点变了 → 覆盖跟着平移(挪位置不改像素,烘好的图还能用)。两条都在 visibleCoverage 里。
+   */
   const liveFps = useMemo(() => {
-    const set = new Set<string>();
-    for (const tr of project?.tracks ?? []) for (const c of tr.clips ?? []) set.add(clipFingerprint(c));
-    return set;
+    const map = new Map<string, number>();
+    for (const tr of project?.tracks ?? []) for (const c of tr.clips ?? []) map.set(clipFingerprint(c), c.start);
+    return map;
   }, [project]);
 
   // 过滤 + 合并的逻辑放在 bakeCoverage 里(纯函数,有单测钉着这条行为)
   const shown = useMemo(() => visibleCoverage(cov, liveFps), [cov, liveFps]);
+
+  /**
+   * 「本来就没东西要烘」的那几段,和烘好的一样涂上色。
+   *
+   * 空白的几秒、素材段(视频 / 图片本来就是位图,`bakeTarget` 会直接拒绝烘)、
+   * scene-3d(在 3D 视图里是真几何,不需要贴图)—— 拖过去立刻就是它该有的样子。
+   * 按条子的契约("绿的地方拖过去一定立刻有画面")它们就该是绿的。
+   *
+   * 不这么画的话,一条全部烘完的片子上永远留着几块白,用户没法把「还没烘」和
+   * 「本来就没东西」分开,看上去就是预烘一直卡在那儿不动。
+   */
+  const idle = useMemo(() => {
+    const busy: { start: number; end: number }[] = [];
+    for (const tr of project?.tracks ?? []) {
+      for (const c of tr.clips ?? []) {
+        if ((c as any).mediaId || c.cardId === "scene-3d") continue; // 这两类不用烘
+        busy.push({ start: c.start, end: c.end });
+      }
+    }
+    return idleSpans(busy, project?.duration ?? 0);
+  }, [project]);
 
   const x0 = xOfTime(0, pxPerSec);
   const width = Math.max(0, xOfTime(duration, pxPerSec) - x0);
@@ -96,8 +122,8 @@ export function RenderBar() {
       {/* 底槽:整条片子的长度,标出"还有多少没预渲染" */}
       <div className="pc-tl-renderbar-track absolute top-0 bottom-0" style={{ left: x0, width }} />
       {/* 先铺黄的(低帧率),再把绿的(原始帧率)盖在上面 —— 绿的一定落在黄的之内 */}
-      {band(shown.coarse, "pc-tl-renderbar-coarse absolute top-0 bottom-0")}
-      {band(shown.full, "pc-tl-renderbar-done absolute top-0 bottom-0")}
+      {band(mergeSegments([...shown.coarse, ...idle]), "pc-tl-renderbar-coarse absolute top-0 bottom-0")}
+      {band(mergeSegments([...shown.full, ...idle]), "pc-tl-renderbar-done absolute top-0 bottom-0")}
       {/*
         正在烘的那一刻单独标一下。它还没进任何一档的覆盖(还没烘完),
         但用户看得见"进度正卡在这儿",而不是对着一条不动的条猜是不是死了。

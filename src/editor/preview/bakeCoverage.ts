@@ -106,6 +106,36 @@ export function mergeSegments(segs: CoverageSegment[]): CoverageSegment[] {
 }
 
 /**
+ * 时间轴上**压根没有东西要烘**的那几段。
+ *
+ * # 为什么这些段也该是绿的
+ *
+ * 条子的契约是「绿的地方拖过去一定立刻有画面,不绿的地方一定要等」。空白的那几秒
+ * ——没有卡、或者只有素材段(视频 / 图片,本来就是位图,不用烘)、或者只有 scene-3d
+ * (在 3D 视图里是真几何,不需要贴图)—— 拖过去**立刻**就是它该有的样子,一秒都不用等。
+ * 按契约它就该是绿的。
+ *
+ * 原来它们永远是白的,后果不只是难看:用户没法把「这一段还没烘」和「这一段本来就没东西」
+ * 分开,于是条子永远差一块,**看上去像预烘卡住了**,而其实早就全烘完了。
+ *
+ * `spans` 传的是「有东西要烘」的那些段(调用方按项目当前状态算),这里返回它们在
+ * `[0, duration]` 里的补集。
+ */
+export function idleSpans(spans: CoverageSegment[], duration: number): CoverageSegment[] {
+  if (!(duration > 0)) return [];
+  const busy = mergeSegments(spans.filter((s) => s.end > s.start));
+  const out: CoverageSegment[] = [];
+  let at = 0;
+  for (const s of busy) {
+    if (s.start > at + EPS) out.push({ start: at, end: Math.min(s.start, duration) });
+    at = Math.max(at, s.end);
+    if (at >= duration) break;
+  }
+  if (at < duration - EPS) out.push({ start: at, end: duration });
+  return out.filter((s) => s.end > s.start + EPS);
+}
+
+/**
  * 进度条要显示的全部信息。**两档分开**:
  *
  * coarse(黄)—— 低帧率那一档。拖过去立刻有画面,但看到的那一刻最多和播放头差 0.25 秒。
@@ -128,6 +158,19 @@ export interface ClipCoverage {
   clipId: string;
   /** 这张卡当时长什么样(clipFingerprint)。和当前项目对不上就说明它已经作废了 */
   fp: string;
+  /**
+   * 发布这条覆盖时,这张卡在时间轴上的起点。
+   *
+   * **没有它,条子会在卡挪走之后继续在原地涂绿。** 指纹里故意不带时间轴位置(挪一下位置
+   * 像素一个都不变,烘出来的图还是那一张,见 bakeTarget),所以光看指纹是看不出卡挪没挪的;
+   * 而每个时刻记的 `t / start / end` 都是**绝对秒**,卡挪走了它们还停在老地方。
+   * 实测:把一张 [20,24] 的卡挪到 27 秒,条子仍然在 [20,24] 上画着绿,而那里已经空了,
+   * `stale` 还报 0 —— 正是「明明没烘好却是绿的」。
+   *
+   * 记下起点之后,画的时候按差值整体平移(见 visibleCoverage):图还是那几张、账还是那本账,
+   * 只是画到卡片现在待的地方去。
+   */
+  start: number;
   /** 这张卡要烘的全部时刻 */
   moments: CoverageInput[];
 }
@@ -164,8 +207,30 @@ const EMPTY: BakeCoverage = { clips: [], baked: new Set(), bakingAt: null, bytes
  */
 export function clipFingerprint(c: {
   id: string; cardId: string; params?: unknown; frame?: { w?: number; h?: number } | null;
+  start?: number; end?: number;
 }): string {
-  return [c.id, c.cardId, JSON.stringify(c.params ?? {}), `${c.frame?.w ?? "-"}x${c.frame?.h ?? "-"}`].join("|");
+  /*
+   * **列黑名单,不列白名单。**
+   *
+   * 服务端的缓存键是拿「整个 clip 去掉 frame」哈希出来的(见 bakeTarget),所以凡是 clip 上的
+   * 字段变了,烘出来就可能是另一张图。这里原来只挑了 id / cardId / params / frame 四样,
+   * 于是 `emphasis`(描边)、`motion`(运动轨迹)、`fadeIn/fadeOut`、`opacity`、`parts`
+   * (组合卡的部件树)改了之后**指纹纹丝不动** —— 条子照旧是绿的,而那几张图其实已经作废。
+   * 白名单还有个毛病:以后往 Clip 上加字段的人不会想到来这里补一笔,漏了也不报错。
+   *
+   * 所以反过来:除了下面这三样,**其余一律进指纹**。
+   *   - `start` 单独排除:挪位置不改像素(bakeTarget 会把片段挪到固定起跑线再烘),
+   *     所以挪一下不该让覆盖作废 —— 位置的变化由 ClipCoverage.start 平移来吸收。
+   *   - `end` 也不直接进,但**长度进**:剪短剪长会改键(键里带片内帧数),必须作废。
+   *   - `frame` 只取 w×h:那是排版尺寸,会改像素;x/y/旋转/缩放不改(烘的时候整个 frame 被摘掉)。
+   */
+  const { start: _start, end: _end, frame: _frame, ...rest } = c as Record<string, unknown> & typeof c;
+  const dur = Math.max(0, (Number(c.end) || 0) - (Number(c.start) || 0));
+  return [
+    JSON.stringify(rest),
+    `${c.frame?.w ?? "-"}x${c.frame?.h ?? "-"}`,
+    dur.toFixed(6),
+  ].join("|");
 }
 
 /*
@@ -220,17 +285,36 @@ export interface VisibleCoverage {
  * 它是个纯函数,所以这条行为可以单测 —— 而它要是错了,界面上的表现是
  * 「条子显示绿的,拖过去却要等五秒」,属于会骗人的那一类,必须钉住。
  */
-export function visibleCoverage(cov: BakeCoverage, liveFingerprints: Set<string>): VisibleCoverage {
-  const live = cov.clips.filter((c) => liveFingerprints.has(c.fp));
+export function visibleCoverage(
+  cov: BakeCoverage,
+  /** 当前项目里还活着的卡:指纹 → 它**现在**在时间轴上的起点(指纹里带 clip.id,所以不会撞) */
+  liveClips: Map<string, number>,
+): VisibleCoverage {
   const isBaked = (m: CoverageInput) => !!m.id && cov.baked.has(m.id);
   const coarseM: CoverageInput[] = [];
   const fineM: CoverageInput[] = [];
-  for (const c of live) {
+  let dropped = 0;
+  for (const c of cov.clips) {
+    const liveStart = liveClips.get(c.fp);
+    // 指纹对不上 = 这张卡改过或者没了,它的覆盖全部作废
+    if (liveStart === undefined) { dropped++; continue; }
+    /*
+     * **卡挪走了就把覆盖跟着挪。**
+     *
+     * 时刻记的是绝对秒,卡一挪它们就指着老地方;而挪位置并不会让烘好的图作废
+     * (bakeTarget 把片段挪到固定起跑线再烘,实测挪完 34/34 张仍命中同一个文件)。
+     * 所以正确的做法是平移,不是作废 —— 作废会让条子在缓存明明还在的时候闪一下白。
+     * 平移只动画到哪儿,`m.id` 一个字不改,所以「烘没烘」这本账照旧对得上。
+     */
+    const shift = liveStart - (c.start ?? 0);
     for (const m of c.moments) {
-      if ((m.tier ?? "coarse") === "coarse") coarseM.push(m);
+      const at = Math.abs(shift) < EPS
+        ? m
+        : { ...m, t: m.t + shift, start: m.start + shift, end: m.end + shift };
+      if ((m.tier ?? "coarse") === "coarse") coarseM.push(at);
       // 绿用 fine 而不是 tier:0.5 秒这类点两档都落在上面,排队时算低帧率,
       // 但它同样是逐帧那一档的一格 —— 漏掉它绿条会每隔半秒缺一块
-      if (m.fine) fineM.push(m);
+      if (m.fine) fineM.push(at);
     }
   }
   return {
@@ -240,7 +324,7 @@ export function visibleCoverage(cov: BakeCoverage, liveFingerprints: Set<string>
     coarseTotal: coarseM.length,
     fullBaked: fineM.filter(isBaked).length,
     fullTotal: fineM.length,
-    stale: cov.clips.length - live.length,
+    stale: dropped,
   };
 }
 

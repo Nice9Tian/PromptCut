@@ -35,8 +35,15 @@ import { openBakery, bakeFrames } from './export-frames.mjs';
 
 /** 烘几趟就换一个新浏览器 */
 const MAX_JOBS = Number(process.env.PROMPTCUT_WORKER_MAX_JOBS) || 40;
-/** 闲多久就自己退出(毫秒) */
-const IDLE_EXIT_MS = Number(process.env.PROMPTCUT_WORKER_IDLE_MS) || 180000;
+/**
+ * 闲多久就自己退出(毫秒)。
+ *
+ * **传 0 = 永不退出**,留给前台专用的那个常驻 worker(见父进程的 takeForeground):
+ * 它存在的全部意义就是「用户随时松手,都有一个热的 Chrome 立刻接住」,
+ * 闲三分钟就退掉的话,用户去改了会儿参数再回来拖时间轴,又要等一次开机。
+ */
+const rawIdle = process.env.PROMPTCUT_WORKER_IDLE_MS;
+const IDLE_EXIT_MS = rawIdle === undefined || rawIdle === "" ? 180000 : Number(rawIdle);
 
 let bakery = null;
 /** 这个 bakery 已经烘过几趟 */
@@ -45,6 +52,7 @@ let idleTimer = null;
 
 function armIdleExit() {
   clearTimeout(idleTimer);
+  if (!(IDLE_EXIT_MS > 0)) return; // 0 / 非法 = 常驻,见上面
   idleTimer = setTimeout(async () => {
     try { await bakery?.close(); } catch { /* 关不掉也要退,别把进程留在这儿 */ }
     process.exit(0);
@@ -95,6 +103,17 @@ async function runJob(opts) {
 let chain = Promise.resolve();
 
 process.on('message', (msg) => {
+  /*
+   * **预热**:现在就起 Chrome、加载好导出页,别等第一个活来了才开机。
+   *
+   * 给前台那个常驻 worker 用。用户拖时间轴松手的那一刻才派活,如果那时候 Chrome 还没起,
+   * 他要多等约 1.3 秒 —— 而这 1.3 秒完全可以在他还在拖的时候就付掉。
+   * 预热用的地址随便给一个导出页就行:真正的活来了会 reset 到它自己的项目地址上。
+   */
+  if (msg && msg.type === 'prewarm') {
+    chain = chain.then(() => bakeryFor(msg.url).then(() => {}, () => {}));
+    return;
+  }
   if (!msg || msg.type !== 'bake') return;
   clearTimeout(idleTimer);
   chain = chain.then(async () => {
