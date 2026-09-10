@@ -58,7 +58,16 @@ export class Agent {
           } else if (ev.type === 'tool_use') {
             if (summarizing) continue; // Never execute tools once the safety stop fired.
             flush();
-            const call = { ...ev, id: ev.id || `round-${round}-call-${calls.length + 1}` };
+            /*
+             * 工具名为空或带非法字符:历史里换成一个合法的占位名。
+             *
+             * 实跑见过模型发出 name 为空串的调用。原样写进历史,下一次请求 Gemini(走 OpenAI 兼容口)
+             * 就整个 400「Request contains an invalid argument」—— 这个会话从此每一轮都 400。
+             * 占位名照样配一条 is_error 的 tool_result(下面「未知工具」那一支),模型看得到自己调错了。
+             */
+            const validName = typeof ev.name === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(ev.name);
+            const call = { ...ev, name: validName ? ev.name : 'invalid_tool_name', id: ev.id || `round-${round}-call-${calls.length + 1}` };
+            if (!validName) call.inputError = `工具名 ${JSON.stringify(ev.name ?? '')} 不合法(为空或带非法字符),这次调用没有执行。请用工具清单里的名字重新调用。`;
             if (calls.some(c => c.id === call.id)) throw new Error('API 返回了重复的工具调用 ID，已停止以免重复执行。');
             calls.push(call);
             content.push({ type: 'tool_use', id: call.id, name: call.name, input: call.input });
@@ -115,8 +124,9 @@ export class Agent {
         const toolHeartbeat = setInterval(() => progress(round, 'executing', `正在执行 ${call.name}，已等待 ${Math.floor((Date.now() - begin) / 1000)} 秒…`), 5000);
         let result, ok = true;
         try {
-          if (!tool) throw new Error(`未知工具 ${call.name}，请使用已提供的工具名称。`);
+          // 先报参数/名字本身的问题:空工具名换成的占位名一定是「未知工具」,那句话会盖掉真正的原因
           if (call.inputError) throw new Error(call.inputError);
+          if (!tool) throw new Error(`未知工具 ${call.name}，请使用已提供的工具名称。`);
           if (!call.input || typeof call.input !== 'object' || Array.isArray(call.input)) throw new Error('工具参数必须是 JSON 对象。');
           for (const key of tool.inputSchema?.required || []) if (call.input[key] === undefined) throw new Error(`缺少必填参数 ${key}。`);
           result = await tool.execute(call.input, { signal: this.signal, callId: call.id, round });

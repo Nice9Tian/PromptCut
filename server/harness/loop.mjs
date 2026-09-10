@@ -17,6 +17,7 @@ const FAILS_PER_BATCH = 3;
 const MAX_BATCHES = 2;
 const ROLE_ROUNDS = 60;
 const RETRIES = 2;
+const WORKER_MIN_ROUNDS = 60;
 
 /** 和 runners/api.mjs 判「可续跑」用的是同一套:超时类的错误才重试 */
 const isTimeout = (err) => err?.name === 'TimeoutError' || /timeout|timed out|aborted due to timeout|没有收到任何数据/i.test(String(err?.message || ''));
@@ -162,7 +163,12 @@ export async function runReviewLoop(o) {
   const providerFor = (role) => o.providers?.[role] || o.provider;
   const byName = new Map(allTools.map((t) => [t.name, t]));
   const readOnly = P.READ_ONLY_TOOLS.map((n) => byName.get(n)).filter(Boolean);
-  const workerRounds = o.maxIterations ?? 24;
+  /*
+   * worker 每轮至少 60 次往返。常规对话的上限是 24,实跑里 worker 第一次交付就撞上它、
+   * 在「最后核对画面」之前被截断 —— 而截断出来的半成品正是这个环路要治的病。
+   * 深度自主给的更大(或不限)就用那个。
+   */
+  const workerRounds = Math.max(o.maxIterations ?? 0, WORKER_MIN_ROUNDS);
   const lessons = [...(o.lessonsStore?.read?.() || [])];
   const newLessons = [];
   const usage = { input: 0, output: 0, cacheRead: 0 };

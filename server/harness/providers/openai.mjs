@@ -268,7 +268,21 @@ export function createProvider(cfg, { fetchImpl = globalThis.fetch } = {}) {
             stopReason = choice.finish_reason;
             
             // output tools
-            const indices = Object.keys(partialToolCalls).map(Number).sort((a, b) => a - b);
+            const sorted = Object.keys(partialToolCalls).map(Number).sort((a, b) => a - b);
+            /*
+             * 网关偶尔把一次调用拆成两条(不同 id):前一条有名字、参数是空的,后一条有参数、名字是空的。
+             * 实跑见过 set_position 就这样拆开:前一条报「缺少 clipId」,后一条空名进了历史,
+             * 下一次请求整个 400。条件卡得很窄 —— 只在「无名有参」紧跟「有名无参」时合并,
+             * 正常的并行调用各自都有名字,碰不到这里。
+             */
+            for (let k = 1; k < sorted.length; k++) {
+              const cur = partialToolCalls[sorted[k]], prev = partialToolCalls[sorted[k - 1]];
+              if (cur && prev && !cur.name && cur.args && prev.name && !String(prev.args || '').replace(/[{}\s]/g, '')) {
+                prev.args = cur.args;
+                delete partialToolCalls[sorted[k]];
+              }
+            }
+            const indices = sorted.filter((i) => partialToolCalls[i]);
             for (const idx of indices) {
                const pt = partialToolCalls[idx];
                let input = {};
