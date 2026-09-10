@@ -137,6 +137,33 @@ test('聊天栏显示:裁决变成逐条列出的状态行,reviewer/judger 的�
   assert.deepEqual(presentLoopEvent({ type: 'loop', stage: 'done', outcome: 'passed' }), [], '结束不另起状态行,结论走正文');
 });
 
+test('网关超时:接着同一段历史重试,不把整个环路作废;重试也用完才冒出去', async () => {
+  const flaky = (inner, fails) => {
+    let left = fails;
+    return { name: 'flaky', async *stream(...a) {
+      if (left-- > 0) throw Object.assign(new Error('The operation was aborted due to timeout(120 秒没有收到任何数据)'), { name: 'TimeoutError' });
+      yield* inner.stream(...a);
+    } };
+  };
+  const calls = [], events = [];
+  const out = await runReviewLoop({
+    providers: {
+      judger: scripted('judger', [plan(), done], calls),
+      worker: flaky(scripted('worker', [deliver()], calls), 1),
+      reviewer: scripted('reviewer', [review()], calls),
+    },
+    tools: TOOLS, system: 's', userText: USER, onEvent: (e) => events.push(e),
+  });
+  assert.equal(out.outcome, 'passed', '超时一次之后应当接着跑完');
+  assert.ok(events.some((e) => e.type === 'loop' && e.stage === 'retry' && e.role === 'worker'));
+  assert.match(presentLoopEvent({ type: 'loop', stage: 'retry', role: 'worker', attempt: 1 })[0].text, /网关超时/);
+
+  await assert.rejects(() => runReviewLoop({
+    providers: { judger: flaky(scripted('judger', [plan()], []), 5) },
+    tools: TOOLS, system: 's', userText: USER,
+  }), /timeout/, '重试用完还超时,就交给上层(api.mjs 会标成可续跑)');
+});
+
 test('审查中途点停止:整个环路抛 AbortError', async () => {
   const ac = new AbortController();
   await assert.rejects(() => run({

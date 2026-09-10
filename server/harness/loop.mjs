@@ -16,6 +16,10 @@ import * as P from './loop-prompts.mjs';
 const FAILS_PER_BATCH = 3;
 const MAX_BATCHES = 2;
 const ROLE_ROUNDS = 60;
+const RETRIES = 2;
+
+/** 和 runners/api.mjs 判「可续跑」用的是同一套:超时类的错误才重试 */
+const isTimeout = (err) => err?.name === 'TimeoutError' || /timeout|timed out|aborted due to timeout|没有收到任何数据/i.test(String(err?.message || ''));
 
 /** 记录型工具:模型调一次就把参数存下来,本回合的结论就是它 */
 function recorder(name, description, inputSchema) {
@@ -126,6 +130,7 @@ export function presentLoopEvent(ev) {
         }];
       }
       case 'stalled': return [{ type: 'status', text: '连续两次卡在同样的问题上,提前进入反省' }];
+      case 'retry': return [{ type: 'status', text: `${role} 这一轮请求网关超时,接着刚才的进度重试(第 ${ev.attempt} 次)` }];
       case 'reflect': return [{ type: 'status', text: 'worker 连续没通过,这一轮不干活,先反省' }];
       case 'rewrite': return [{ type: 'status', text: 'judger 读完反省,正在改写任务要求和检查项' }];
       default: return role ? [] : [];
@@ -175,7 +180,21 @@ export async function runReviewLoop(o) {
         onEvent({ ...ev, role });
       },
     });
-    const res = await agent.run(prompt);
+    /*
+     * 上游卡住(闲置超时)时接着这一段历史再请求一次,而不是让异常冒出去结束整个环路。
+     * 环路一跑十几分钟,一次网关卡顿就把前面所有角色的进度作废,代价太大。
+     * 用户点停止(signal.aborted)不重试;同一个回合最多重试 RETRIES 次。
+     */
+    let res;
+    for (let attempt = 0; ; attempt++) {
+      try {
+        res = await agent.run(attempt === 0 ? prompt : '上一次请求因为网关超时断了。之前的进度都还在,接着刚才停下的地方继续做。');
+        break;
+      } catch (err) {
+        if (signal?.aborted || attempt >= RETRIES || !isTimeout(err)) throw err;
+        say({ stage: 'retry', role, attempt: attempt + 1, reason: String(err?.message || err) });
+      }
+    }
     for (const k of Object.keys(usage)) usage[k] += Number(res.usage?.[k]) || 0;
     completed += res.completed || 0; failed += res.failed || 0;
     return { ...res, history: h };
