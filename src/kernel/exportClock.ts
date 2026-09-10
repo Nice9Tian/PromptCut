@@ -1,3 +1,5 @@
+import { installPinnedEntropy } from "./pinEntropy";
+
 /**
  * 导出模式的页面时钟量化。
  *
@@ -68,25 +70,13 @@ export function installExportClock(): void {
   patchAnimate();
 
   /*
-   * 随机数钉死。canvas 粒子这类效果每帧都 Math.random(),导两遍就是两个画面。
-   * 导出页里换成带种子的 mulberry32:同一个种子出同一串数;每次重挂载卡片
-   * (__pcRestartCards)把种子拨回起点,于是复用同一个页面连烘两趟也一致。
-   * 不是「更随机」,是「可复现的随机」—— 导出要的正是后者。时间轴还没就位
-   * (__pcExportMs 不是数字)时回落到真随机,和 performance.now 的处理一致。
+   * 随机数 / 墙上时钟 / crypto 钉死:搬到了 pinEntropy.ts。
+   * 正常情况下它已经由 render/stageClockEntry.ts 在所有 import 之前装好了(第三方库在模块加载时
+   * 就抓走 Math.random,晚装够不着);这里再调一次只是兜底,重复调用是空操作。
+   * 以前这里的 Math.random 在时间轴就位前回落到真随机 —— lottie 的表达式随机正是从那个口子漏进来的,
+   * 见 pinEntropy.ts 文件头。__pcResetRandom 由它提供,__pcRestartCards 照旧调它把种子拨回起点。
    */
-  const realRandom = Math.random;
-  let rngState = 1;
-  const seeded = () => {
-    rngState = (rngState + 0x6d2b79f5) | 0;
-    let t = rngState;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-  window.__pcResetRandom = (seed = 1) => {
-    rngState = seed | 0;
-  };
-  Math.random = () => (typeof window.__pcExportMs === "number" ? seeded() : realRandom());
+  installPinnedEntropy();
 
   window.__pcMutationCount = 0;
   new MutationObserver((records) => {

@@ -1,3 +1,5 @@
+// 随机数 / 墙上时钟必须比任何第三方库先钉住,所以这一行排在最前面(见 render/stageClockEntry.ts)
+import "./render/stageClockEntry";
 import { createRoot } from "react-dom/client";
 import "./index.css";
 import App from "./App";
