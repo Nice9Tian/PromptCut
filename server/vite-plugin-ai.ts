@@ -778,6 +778,8 @@ export default function vitePluginAi(): Plugin {
               deepAuto: !!deepAuto,
               // 参数兼容模式(工具 schema 按 Gemini 子集清洗):'auto' / 'on' / 'off',API 直连的 runner 才用
               schemaCompat,
+              // 审查环路单独开关(只有 API 直连用);不传就跟着深度自主走,见 runners/api.mjs
+              reviewLoop: typeof data.reviewLoop === 'boolean' ? data.reviewLoop : undefined,
               toolProtocol: cfg.toolProtocol,
               mcp,
               callTool: async (name: string, args: any) => await callToolInternal(name, args, agentId || undefined),
