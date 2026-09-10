@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { actions, useStore } from "../store/project";
 import { cancelExport, exportVideo, fetchExportFile, revealExport, importProjectFile } from "./io";
-import { newProject, pickSaveTarget, serializeProc, writeProcToDisk, PROC_EXT } from "./io/proc";
+import { newProject, pickSaveTarget, serializeProc, writeProcToDisk, loadProc, forgetSaveTarget, PROC_EXT, PROC_FORMAT } from "./io/proc";
 import { ExportDialog, type ExportState } from "./ExportDialog";
 import { ensureActiveDraftId, saveDraft, setActiveDraftId } from "./io/drafts";
 import { Logo } from "../ui/Logo";
@@ -375,6 +375,23 @@ export function TopBar() {
     setActiveDraftId(null);
   };
 
+  /**
+   * 顶栏「打开项目…」。.proc 外面有一层 {format, project, ai} 的壳,importProjectFile
+   * 只认裸 Project 和 {cards} 编排,拿它开 .proc 会直接报「无法识别」—— 所以 .proc 走
+   * loadProc(连剧本和对话一起灌回去),其余的旧 JSON 才交给 importProjectFile。
+   */
+  const openProjectFile = async (file: File) => {
+    if (dirty && !confirm("当前项目还有未保存的改动，打开别的项目会丢掉它们。继续？")) return;
+    const text = await file.text();
+    let isProc = false;
+    try { isProc = JSON.parse(text)?.format === PROC_FORMAT; } catch { /* 交给下面报错 */ }
+    if (isProc) actions.loadProject(loadProc(text), file.name);
+    else await importProjectFile(file);
+    // 从文件打开的不属于任何草稿;保存时重新问落点,别覆盖上一个项目的文件
+    setActiveDraftId(null);
+    forgetSaveTarget();
+  };
+
   /** 回到开始页。Shell 在监听这个事件 */
   const goHome = () => {
     if (dirty && !confirm("当前项目还有未保存的改动，回首页会丢掉它们。继续？")) return;
@@ -615,7 +632,7 @@ ${summarizeCombine(report)}
         type="file"
         accept={`${PROC_EXT},.json`}
         hidden
-        onChange={(e) => e.target.files?.[0] && run(() => importProjectFile(e.target.files![0]))()}
+        onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) run(() => openProjectFile(f))(); }}
       />
 
       {/* 项目设置对话框 */}
