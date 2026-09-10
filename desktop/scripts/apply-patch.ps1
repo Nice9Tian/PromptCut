@@ -134,33 +134,114 @@ if ($WhatIf) {
 # ── 4. 请用户关掉正在运行的程序 ───────────────────────────────────────
 # 只认可执行文件在本次要更新的目录下的那些进程。按进程名一刀切会连着别处
 # 装的、或者开发中跑的 PromptCut 一起杀掉——那些和这次更新没有关系。
+#
+# **两类进程都要认。** 外壳（promptcut.exe）只是个窗口，真正服务页面、跑 AI
+# 循环、握着 runtime\app 里每一个文件的是它起的 node 子进程。原来只按
+# promptcut.exe 判「关干净了没有」，node 活着照样算通过 —— 于是补丁在一个
+# 正在服务的 dev server 脚下把整棵 runtime\app 换掉了。那种情况下 node **不会崩，
+# 只会哑**：它自己的循环照跑、对模型的请求照发，但页面发出的每一个 HTTP 请求
+# 都挂住，直到服务重起。用户看到的是一连串莫名其妙的工具超时，查不到原因。
 function Get-TargetProcesses {
-    @(Get-Process -Name 'promptcut' -ErrorAction SilentlyContinue | Where-Object {
-        $p = $null
-        try { $p = $_.Path } catch { }
+    $hits = New-Object System.Collections.Generic.List[object]
+
+    foreach ($p in @(Get-Process -Name 'promptcut' -ErrorAction SilentlyContinue)) {
+        $path = $null
+        try { $path = $p.Path } catch { }
         # 取不到路径（权限不足）时保守地算作目标，不然文件被占住会更新到一半。
-        (-not $p) -or $p.StartsWith($InstallDir, [StringComparison]::OrdinalIgnoreCase)
-    })
+        if ((-not $path) -or $path.StartsWith($InstallDir, [StringComparison]::OrdinalIgnoreCase)) {
+            $hits.Add([pscustomobject]@{ Id = $p.Id; Name = $p.ProcessName; Proc = $p })
+        }
+    }
+
+    # node 子进程：可执行文件在安装目录下（外壳带的那份 node），或者命令行里
+    # 指着安装目录（开发期用系统 node 起的也算）。两条任一命中就算。
+    try {
+        $procs = Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" -ErrorAction Stop
+    } catch {
+        $procs = @()
+    }
+    foreach ($q in $procs) {
+        $exe = [string]$q.ExecutablePath
+        $cmd = [string]$q.CommandLine
+        $inDir = ($exe -and $exe.StartsWith($InstallDir, [StringComparison]::OrdinalIgnoreCase)) -or
+                 ($cmd -and $cmd.IndexOf($InstallDir, [StringComparison]::OrdinalIgnoreCase) -ge 0)
+        if ($inDir) {
+            $obj = $null
+            try { $obj = Get-Process -Id $q.ProcessId -ErrorAction Stop } catch { }
+            if ($obj) { $hits.Add([pscustomobject]@{ Id = $q.ProcessId; Name = 'node'; Proc = $obj }) }
+        }
+    }
+
+    # 用 ToArray() 而不是 @($hits):Windows PowerShell 5.1 里 `@(...)` 展开一个
+    # 装着「包了 Process 对象的 PSCustomObject」的泛型 List 会抛
+    # 「Argument types do not match」。ToArray() 没这个毛病。
+    $hits.ToArray()
+}
+
+# 问一下正在跑的那个实例：现在有几轮对话在进行中。
+# 取不到就返回 $null（程序没开、端口不对、老版本没有这个字段），那时不拦。
+function Get-ActiveAiRuns {
+    $port = $env:PROMPTCUT_PORT
+    if (-not $port) { $port = '5210' }
+    try {
+        $req = [System.Net.HttpWebRequest]::Create("http://127.0.0.1:$port/api/mcp/status")
+        # 本机回环不该走系统代理：走了就会连不上，然后被误判成「没在跑」
+        $req.Proxy = $null
+        $req.Timeout = 3000
+        $req.ReadWriteTimeout = 3000
+        $resp = $req.GetResponse()
+        $reader = New-Object System.IO.StreamReader($resp.GetResponseStream())
+        $body = $reader.ReadToEnd()
+        $reader.Close(); $resp.Close()
+        $json = $body | ConvertFrom-Json
+        if ($null -eq $json.activeRuns) { return $null }
+        return [int]$json.activeRuns
+    } catch {
+        return $null
+    }
 }
 
 $running = Get-TargetProcesses
 if ($running.Count -gt 0) {
+    <#
+        先问一句「有没有对话正在跑」。
+
+        补丁会把整棵 runtime\app 覆盖掉，而一轮 AI 对话可能已经改了半条时间轴、
+        建了几张卡、正等着某个后台作业。这种时候关掉它，用户丢的不是「一次更新」，
+        是做到一半的活儿。更新晚几分钟无所谓，所以默认让路。
+    #>
+    $active = Get-ActiveAiRuns
+    if ($active -gt 0) {
+        Write-Warn "PromptCut 里还有 $active 轮 AI 对话正在跑。"
+        Write-Warn "现在更新会把它们中途掐断，做到一半的改动可能丢失。"
+        if ($Force) {
+            Write-Warn "已指定 -Force，仍然继续。"
+        } elseif ($env:PROMPTCUT_PATCH_NONINTERACTIVE) {
+            Fail "有对话正在跑，已停下。等它跑完再更新，或者用 -Force 强行继续。"
+        } else {
+            Write-Host "  建议等对话跑完再更新。"
+            if ((Read-Host "  仍然现在更新？(y/N)") -notmatch '^[yY]') { Write-Host "  已取消。"; exit 0 }
+        }
+    }
+
     if (-not $Force -and -not $env:PROMPTCUT_PATCH_NONINTERACTIVE) {
         Write-Warn "PromptCut 正在运行，需要先关掉才能更新。"
         if ((Read-Host "  现在关掉它？(y/N)") -notmatch '^[yY]') { Write-Host "  已取消。"; exit 0 }
     }
     Write-Step "正在关闭 PromptCut…"
     foreach ($p in $running) {
-        try { $null = $p.CloseMainWindow() } catch { }
+        try { $null = $p.Proc.CloseMainWindow() } catch { }
     }
     Start-Sleep -Seconds 2
     foreach ($p in Get-TargetProcesses) {
         try { Stop-Process -Id $p.Id -Force -ErrorAction Stop } catch { }
     }
-    # 外壳起的 node 子进程未必跟着退，文件被占住就没法覆盖。
+    # node 子进程未必跟着外壳退，而它才是握着 runtime\app 的那个。
     Start-Sleep -Seconds 2
-    if ((Get-TargetProcesses).Count -gt 0) {
-        Fail "PromptCut 关不掉。请手动退出后再运行本更新。"
+    $left = Get-TargetProcesses
+    if ($left.Count -gt 0) {
+        $names = ($left | ForEach-Object { "$($_.Name)($($_.Id))" }) -join '、'
+        Fail "PromptCut 关不掉（还剩：$names）。请手动退出后再运行本更新。"
     }
     Write-Ok "已关闭"
 }

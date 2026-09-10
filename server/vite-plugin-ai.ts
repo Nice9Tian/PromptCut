@@ -973,11 +973,21 @@ export default function vitePluginAi(): Plugin {
       server.middlewares.use('/api/mcp/status', (req, res) => {
         if (req.method !== 'GET') return sendJson(res, 405, { ok: false, error: 'GET only' });
         const port = (server.httpServer?.address() as any)?.port || 5195;
+        let activeRunCount = 0;
+        for (const st of activeRuns.values()) if (!st.finished) activeRunCount++;
         sendJson(res, 200, {
           editorConnected: !!editorRes,
           // 有主 = 这个端口被一个正在跑的实例占着,别的页面连不上(只能 ?observe=1 只读打开)
           editorOwned: !!editorOwner,
           pending: pendingCalls.size,
+          /*
+           * 还有几轮对话正在跑。装补丁的脚本(desktop/scripts/apply-patch.ps1)靠它决定
+           * 要不要拦一下 —— 补丁会把整个 runtime/app 覆盖掉,而覆盖发生在一个正在服务
+           * 页面的 dev server 脚下时,agent 那边**不会崩,只会哑**:Node 里的循环照跑、
+           * 对模型的请求照发,但页面发出的每一个 HTTP 请求(工具结果回传、看画面、读卡源码)
+           * 全部挂住,直到服务重新起来。表现就是一连串莫名其妙的工具超时,查不到原因。
+           */
+          activeRuns: activeRunCount,
           port
         });
       });
