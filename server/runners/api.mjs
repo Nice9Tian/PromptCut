@@ -231,6 +231,11 @@ export function startRun(opts) {
       return;
     }
 
+    /*
+     * 审查环路:默认跟着「深度自主」开关走 —— 开了深度自主,就是要它做完整的活,
+     * 这时才值得多花 reviewer / judger 的开销。也可以用 opts.reviewLoop 单独开关。
+     */
+    const useLoop = opts.reviewLoop ?? !!opts.deepAuto;
     const requestFetch = opts.fetchImpl || globalThis.fetch;
     /*
      * 三层包在一起,顺序是有讲究的(从外到内):重试 → 闲置超时 → 真正的 fetch。
@@ -268,7 +273,13 @@ export function startRun(opts) {
         }),
         // 阈值可以从 opts 传,给测试用 —— 不然一条「上游不吐字」的用例要真等两分钟。
         // 生产路径没人传,走 120 秒。
-        { idleMs: Number(opts.idleMsForTest) > 0 ? Number(opts.idleMsForTest) : 120000 },
+        /*
+         * 环路里放宽到 300 秒。实跑 worker 一轮干到 40 多次往返、历史 80 多条、带着 10 张截图时,
+         * 模型吐第一个字前要想 90~110 秒,再大一点就撞上 120 秒被掐断;重试带的是同一份请求,
+         * 照样超时 —— 三次都卡在同一个回合,整个环路作废。那不是断线,是想得慢。
+         * 普通对话仍是 120 秒:真卡住的时候还是该早点告诉用户。
+         */
+        { idleMs: Number(opts.idleMsForTest) > 0 ? Number(opts.idleMsForTest) : (useLoop ? 300000 : 120000) },
       ),
       {
         signal: abortController.signal,
@@ -330,11 +341,6 @@ export function startRun(opts) {
     };
 
     try {
-      /*
-       * 审查环路:默认跟着「深度自主」开关走 —— 开了深度自主,就是要它做完整的活,
-       * 这时才值得多花 reviewer / judger 的开销。也可以用 opts.reviewLoop 单独开关。
-       */
-      const useLoop = opts.reviewLoop ?? !!opts.deepAuto;
       const result = useLoop
         ? await runReviewLoop({
             provider, tools, system: opts.systemPrompt, userText: opts.prompt,
