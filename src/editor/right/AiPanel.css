@@ -1029,6 +1029,41 @@
   border-color: var(--ink);
   transform: scale(1.18);
 }
+/* 连续 4 个以上同一种图标:折成「第一个方块 ×N」,点开摊成单个,末尾的 ×N 再收回去 */
+.ai-chipgroup {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+}
+.ai-chipgroup:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+.ai-chip-count {
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 16px;
+  color: var(--ink-muted);
+  font-variant-numeric: tabular-nums;
+}
+.ai-chipgroup:hover .ai-chip,
+.ai-chipgroup:hover .ai-chip-count,
+.ai-chip-count:hover {
+  color: var(--ink);
+}
+.ai-chipgroup:hover .ai-chip {
+  transform: scale(1.18);
+}
 
 /*
  * 动作类型 —— 读取最暗(深灰底 + 放大镜),它们数量最多但最不值得注意。
@@ -1040,7 +1075,23 @@
 .ai-chip--edit { --chip: #a3c22a; --chip-icon: url("data:image/svg+xml,%3Csvg%20xmlns%3D'http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg'%20viewBox%3D'0%200%2012%2012'%20fill%3D'none'%20stroke%3D'%23fff'%20stroke-width%3D'1.6'%20stroke-linecap%3D'round'%20stroke-linejoin%3D'round'%3E%3Cpath%20d%3D'M2.5%209.5l.6-2.4%205-5%201.8%201.8-5%205zM7.3%202.9l1.8%201.8'%2F%3E%3C%2Fsvg%3E"); }
 /* 下载:和「处理」同色(都是要等的活儿),白色下箭头 + 托盘把它认出来 —— 光靠蓝方块看不出在下东西 */
 .ai-chip--download { --chip: var(--ui-accent, #60a5fa); --chip-icon: url("data:image/svg+xml,%3Csvg%20xmlns%3D'http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg'%20viewBox%3D'0%200%2012%2012'%20fill%3D'none'%20stroke%3D'%23fff'%20stroke-width%3D'1.6'%20stroke-linecap%3D'round'%20stroke-linejoin%3D'round'%3E%3Cpath%20d%3D'M6%202.1v5.3M3.7%205.9L6%208.2l2.3-2.3M2.9%2010h6.2'%2F%3E%3C%2Fsvg%3E"); }
-.ai-chip--job { --chip: var(--ui-accent, #60a5fa); }
+/*
+ * 处理(转写、追踪、检测、烘焙、自动流程这类要跑一阵的):深黄底 + 一圈白点。
+ * 先算出 10 个圆心,从正上方顺时针排(起点 -> 末尾),末尾 4 个透明度 0.8 / 0.6 / 0.4 / 0.2 递减,
+ * 看着像转圈的加载,一眼知道是在跑的活儿。和「修改」的黄绿分得开:这边偏橙
+ */
+.ai-chip--job { --chip: #b8860b; --chip-icon: url("data:image/svg+xml,%3Csvg%20xmlns%3D'http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg'%20viewBox%3D'0%200%2012%2012'%20fill%3D'%23fff'%3E%3Ccircle%20cx%3D'6'%20cy%3D'2.1'%20r%3D'0.95'%2F%3E%3Ccircle%20cx%3D'8.29'%20cy%3D'2.84'%20r%3D'0.95'%2F%3E%3Ccircle%20cx%3D'9.71'%20cy%3D'4.79'%20r%3D'0.95'%2F%3E%3Ccircle%20cx%3D'9.71'%20cy%3D'7.21'%20r%3D'0.95'%2F%3E%3Ccircle%20cx%3D'8.29'%20cy%3D'9.16'%20r%3D'0.95'%2F%3E%3Ccircle%20cx%3D'6'%20cy%3D'9.9'%20r%3D'0.95'%2F%3E%3Ccircle%20cx%3D'3.71'%20cy%3D'9.16'%20r%3D'0.95'%20fill-opacity%3D'0.8'%2F%3E%3Ccircle%20cx%3D'2.29'%20cy%3D'7.21'%20r%3D'0.95'%20fill-opacity%3D'0.6'%2F%3E%3Ccircle%20cx%3D'2.29'%20cy%3D'4.79'%20r%3D'0.95'%20fill-opacity%3D'0.4'%2F%3E%3Ccircle%20cx%3D'3.71'%20cy%3D'2.84'%20r%3D'0.95'%20fill-opacity%3D'0.2'%2F%3E%3C%2Fsvg%3E"); }
+/* 多 Agent(declare_scope、send_message、check_messages、list_agents):深紫底 + 白色聊天气泡 */
+.ai-chip--agent { --chip: #5b2aa8; --chip-icon: url("data:image/svg+xml,%3Csvg%20xmlns%3D'http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg'%20viewBox%3D'0%200%2012%2012'%20fill%3D'none'%20stroke%3D'%23fff'%20stroke-width%3D'1.4'%20stroke-linecap%3D'round'%20stroke-linejoin%3D'round'%3E%3Cpath%20d%3D'M3.4%202.3h5.2a1.9%201.9%200%200%201%201.9%201.9v2.9a1.9%201.9%200%200%201-1.9%201.9H5.6L3.2%2010.4V9A1.9%201.9%200%200%201%201.5%207.1V4.2a1.9%201.9%200%200%201%201.9-1.9z'%2F%3E%3C%2Fsvg%3E"); }
+/* 界面操作(play、pause、seek、switch_*):只动编辑台界面、不改项目。比「查看」再深一档的蓝 + 白色点击的手 */
+.ai-chip--ui { --chip: #23489c; --chip-icon: url("data:image/svg+xml,%3Csvg%20xmlns%3D'http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg'%20viewBox%3D'0%200%2024%2024'%20fill%3D'none'%20stroke%3D'%23fff'%20stroke-width%3D'2.3'%20stroke-linecap%3D'round'%20stroke-linejoin%3D'round'%3E%3Cpath%20d%3D'M9%2012.5V4.6a1.6%201.6%200%200%201%203.2%200V11'%2F%3E%3Cpath%20d%3D'M12.2%2010.6a1.6%201.6%200%200%201%203.2%200V12'%2F%3E%3Cpath%20d%3D'M15.4%2011.2a1.6%201.6%200%200%201%203.2%200v1.3'%2F%3E%3Cpath%20d%3D'M18.6%2012.2a1.6%201.6%200%200%201%203.2%200v3.3a6.5%206.5%200%200%201-6.5%206.5h-1.6a6%206%200%200%201-4.9-2.6l-4-5.7a1.7%201.7%200%200%201%202.6-2.2L9%2013.2'%2F%3E%3C%2Fsvg%3E"); }
+/* 查看画面(see_frames、view_*):比「处理」深一档的蓝 + 白色眼睛,和翻数据的放大镜分开 */
+.ai-chip--look { --chip: #2b5fc7; --chip-icon: url("data:image/svg+xml,%3Csvg%20xmlns%3D'http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg'%20viewBox%3D'0%200%2012%2012'%20fill%3D'none'%20stroke%3D'%23fff'%20stroke-width%3D'1.4'%20stroke-linecap%3D'round'%20stroke-linejoin%3D'round'%3E%3Cpath%20d%3D'M1.2%206C2.6%203.5%204.2%202.7%206%202.7s3.4.8%204.8%203.3C9.4%208.5%207.8%209.3%206%209.3S2.6%208.5%201.2%206z'%2F%3E%3Ccircle%20cx%3D'6'%20cy%3D'6'%20r%3D'1.5'%20fill%3D'%23fff'%20stroke%3D'none'%2F%3E%3C%2Fsvg%3E"); }
+/*
+ * 等待:没在干活,灰蓝底 + 白色 Zzz。先定两端 —— 左下大 Z(边长 2.4、笔画 1.1)、右上小 Z(1.8、0.95),
+ * 关于方块中心对称;中间那个取两者插值(中心、边长、笔画都取中点),正好落在正中。拐角圆角 r = 边长/4。
+ */
+.ai-chip--wait { --chip: #475569; --chip-icon: url("data:image/svg+xml,%3Csvg%20xmlns%3D'http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg'%20viewBox%3D'0%200%2012%2012'%20fill%3D'none'%20stroke%3D'%23fff'%20stroke-linecap%3D'round'%20stroke-linejoin%3D'round'%3E%3Cpath%20stroke-width%3D'1.1'%20d%3D'M1.25%208.35H3.05Q3.65%208.35%203.23%208.77L1.67%2010.33Q1.25%2010.75%201.85%2010.75H3.65'%2F%3E%3Cpath%20stroke-width%3D'1.02'%20d%3D'M4.95%204.95H6.53Q7.05%204.95%206.68%205.32L5.32%206.68Q4.95%207.05%205.48%207.05H7.05'%2F%3E%3Cpath%20stroke-width%3D'0.95'%20d%3D'M8.65%201.55H10Q10.45%201.55%2010.13%201.87L8.97%203.03Q8.65%203.35%209.1%203.35H10.45'%2F%3E%3C%2Fsvg%3E"); }
 .ai-chip--read {
   /* 深灰:比别的动作暗一档(读取最不值得注意),但比面板亮,不至于看成空位 */
   --chip: #3c4552;

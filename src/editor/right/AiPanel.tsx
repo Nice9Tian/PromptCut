@@ -115,15 +115,30 @@ const OVERFLOW_ORDER = ["diag", "thinking", "team", "view", "new", "script", "au
  * 哪几下是在删东西。读取类故意用最淡的颜色:它们数量最多但最不值得注意,
  * 满屏一样亮的话反而看不见真正的动作。
  */
-type ToolKind = "add" | "remove" | "edit" | "read" | "download" | "job";
+type ToolKind = "add" | "remove" | "edit" | "read" | "look" | "download" | "ui" | "agent" | "wait" | "job";
 
+/*
+ * 「处理」是兜底,只该剩下真正要跑一阵的活儿(转写、追踪、检测、烘焙、自动流程)。
+ * 新工具落进「处理」的话,先想想它其实是在收集、改、读还是在点界面。
+ */
 function toolKind(name: string): ToolKind {
+  // 收集放最前:search_web、collect_*、web_* 的目的都是往回搬素材和资料,哪怕名字像「读取」「查看」也归这里。
+  // *_install 装的是拓展包,和 collect_install 一样算往回搬东西
+  if (/^(collect|web)_|^search_web$|_install$|download/i.test(name)) return "download";
+  // 界面操作:播放头、切剪辑这类只动编辑台界面、不改项目的
+  if (/^(play|pause|seek)$|^switch_/.test(name)) return "ui";
+  // 多 Agent 之间报范围、互相递话。放在读取前面:list_agents / check_messages 名字像读取,其实是协作
+  if (/^(declare_scope|send_message|check_messages|list_agents)$/.test(name)) return "agent";
   if (/^(remove|delete|clear)_/.test(name)) return "remove";
-  if (/^(add|create|import|insert)_/.test(name)) return "add";
-  if (/^(set|update|move|rename|reorder|split|trim)_/.test(name)) return "edit";
-  if (/^(list|get|read|detect|search|find)_/.test(name)) return "read";
-  // 下载单拎出来:它和别的「处理」不一样,方块里画个下箭头,一眼看得出是在往回搬东西
-  if (/download/i.test(name)) return "download";
+  // duplicate_clip 是多出一段、fill_captions 是铺出一批字幕,都算新增
+  if (/^(add|create|import|insert|duplicate|fill)_/.test(name)) return "add";
+  // align / nudge 是在挪位置;attach / detach 是给 clip 挂上、摘掉运动 —— 都是改 clip
+  if (/^(set|update|edit|move|rename|reorder|split|trim|attach|detach)_|^(align|nudge)$/.test(name)) return "edit";
+  // 看画面(see_frames、view_file 这类)单拎出来,和翻数据的读取分开
+  if (/^(see|view)_/.test(name)) return "look";
+  // detect_* 要跑一阵分析,不在这里 —— 落到下面的「处理」。*_status 只是问一句进度,算读取
+  if (/^(list|get|read|search|find|check|inspect)_|_status$|_guide$/.test(name)) return "read";
+  if (/^wait/.test(name)) return "wait";
   return "job";
 }
 
@@ -132,7 +147,11 @@ const KIND_LABEL: Record<ToolKind, string> = {
   remove: "删除",
   edit: "修改",
   read: "读取",
-  download: "下载",
+  look: "查看",
+  download: "收集",
+  ui: "界面操作",
+  agent: "多 Agent",
+  wait: "等待",
   job: "处理",
 };
 
@@ -160,6 +179,26 @@ function simpleBlocks(parts: MessagePart[]): SimpleBlock[] {
     }
   }
   return out;
+}
+
+/** 连续这么多个同一种图标就折成「第一个 ×N」,免得一排方块刷屏 */
+const CHIP_RUN_MIN = 4;
+
+/**
+ * 把一排方块切成「长得一样」的连续段,每段是 [start, end)。
+ * 长得一样 = 同一种动作类型;失败的是红叹号,自成一类,会把同类型的一串打断。
+ * stt_install 可能渲染成进度条而不是方块,不和任何东西并。
+ */
+function chipRuns(tools: ToolCallInfo[]): { start: number; end: number }[] {
+  const look = (t: ToolCallInfo, i: number) =>
+    t.name === "stt_install" ? `install:${i}` : t.ok === false ? "err" : toolKind(t.name);
+  const runs: { start: number; end: number }[] = [];
+  tools.forEach((t, i) => {
+    const last = runs[runs.length - 1];
+    if (last && look(tools[last.start], last.start) === look(t, i)) last.end = i + 1;
+    else runs.push({ start: i, end: i + 1 });
+  });
+  return runs;
 }
 
 /** 正在执行、还没有结果的那个工具(有就说明这一刻在跑它) */
@@ -492,6 +531,20 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
    */
   const toggleChip = (key: string) =>
     setExpanded((prev) => (prev.has(key) ? new Set() : new Set([key])));
+
+  /**
+   * 折起来的「方块 ×N」:点开摊成单个方块,再点末尾的 ×N 收回去。
+   * 收回时顺手把摊开的详情也关掉 —— 否则详情还挂在下面,对应的方块却已经看不见了。
+   */
+  const [openRuns, setOpenRuns] = useState<Set<string>>(new Set());
+  const toggleRun = (key: string) => {
+    if (openRuns.has(key)) setExpanded(new Set());
+    setOpenRuns((prev) => {
+      const next = new Set(prev);
+      if (!next.delete(key)) next.add(key);
+      return next;
+    });
+  };
 
   // 顶栏按实测宽度排布:窄了先换行、再收文字,还不够就把低优先级的收进「⋯」
   // 分工模式的开关放在 ai/teamMode 里:编排器那边也要读它,放这儿会变成两份状态
@@ -1020,23 +1073,56 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
                         }
                         return (
                           <div key={bi} className="ai-chiprow">
-                            {b.tools.map((t, ti) => {
-                              const key = `${m.id}:c${bi}:${ti}`;
-                              // 装引擎那种几分钟的活儿不折成方块,它有自己的进度条
-                              const job = t.name === "stt_install" ? matchInstallJob(t, installJobs) : undefined;
-                              if (job) return <SttInstallProgress key={key} job={job} compact />;
-                              const state = t.ok === undefined ? "run" : t.ok ? "ok" : "err";
-                              return (
+                            {chipRuns(b.tools).flatMap(({ start, end }) => {
+                              const chip = (t: ToolCallInfo, ti: number) => {
+                                const key = `${m.id}:c${bi}:${ti}`;
+                                // 装引擎那种几分钟的活儿不折成方块,它有自己的进度条
+                                const job = t.name === "stt_install" ? matchInstallJob(t, installJobs) : undefined;
+                                if (job) return <SttInstallProgress key={key} job={job} compact />;
+                                const state = t.ok === undefined ? "run" : t.ok ? "ok" : "err";
+                                return (
+                                  <button
+                                    key={key}
+                                    type="button"
+                                    className={`ai-chip ai-chip--${toolKind(t.name)} is-${state}${expanded.has(key) ? " is-open" : ""}`}
+                                    title={`${KIND_LABEL[toolKind(t.name)]}：${t.name}${t.ok === false ? "（失败）" : t.ok === undefined ? "（进行中）" : ""}`}
+                                    aria-expanded={expanded.has(key)}
+                                    aria-label={`${t.name} ${state === "err" ? "失败" : state === "run" ? "进行中" : "成功"}`}
+                                    onClick={() => toggleChip(key)}
+                                  />
+                                );
+                              };
+                              const run = b.tools.slice(start, end);
+                              const each = run.map((t, j) => chip(t, start + j));
+                              // 不到 4 个照常一个个摆;到 4 个起折成「第一个 ×N」,之后同类的继续往上累计
+                              if (run.length < CHIP_RUN_MIN) return each;
+                              const runKey = `${m.id}:c${bi}:r${start}`;
+                              const n = run.length;
+                              if (openRuns.has(runKey)) {
+                                return [
+                                  ...each,
+                                  <button key={`f${runKey}`} type="button" className="ai-chip-count" title="收起这一串" onClick={() => toggleRun(runKey)}>
+                                    ×{n}
+                                  </button>,
+                                ];
+                              }
+                              const first = run[0];
+                              const kind = toolKind(first.name);
+                              // 整串里还有没跑完的就让它呼吸,和单个方块的「进行中」一个意思
+                              const state = first.ok === false ? "err" : run.some((t) => t.ok === undefined) ? "run" : "ok";
+                              return [
                                 <button
-                                  key={key}
+                                  key={runKey}
                                   type="button"
-                                  className={`ai-chip ai-chip--${toolKind(t.name)} is-${state}${expanded.has(key) ? " is-open" : ""}`}
-                                  title={`${KIND_LABEL[toolKind(t.name)]}：${t.name}${t.ok === false ? "（失败）" : t.ok === undefined ? "（进行中）" : ""}`}
-                                  aria-expanded={expanded.has(key)}
-                                  aria-label={`${t.name} ${state === "err" ? "失败" : state === "run" ? "进行中" : "成功"}`}
-                                  onClick={() => toggleChip(key)}
-                                />
-                              );
+                                  className="ai-chipgroup"
+                                  title={`${state === "err" ? "失败" : KIND_LABEL[kind]} ×${n}：${[...new Set(run.map((t) => t.name))].join("、")}（点开逐个看）`}
+                                  aria-label={`${KIND_LABEL[kind]} ${n} 次${state === "err" ? ",全部失败" : state === "run" ? ",有进行中的" : ""},点开逐个看`}
+                                  onClick={() => toggleRun(runKey)}
+                                >
+                                  <span className={`ai-chip ai-chip--${kind} is-${state}`} aria-hidden />
+                                  <span className="ai-chip-count">×{n}</span>
+                                </button>,
+                              ];
                             })}
                             {/* 点开的那几个把完整详情摊在这一排下面 */}
                             {b.tools.map((t, ti) => {
