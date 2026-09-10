@@ -134,3 +134,48 @@ test('有产出时即使被拒也不带 retryable:没什么可续的', async () 
   });
   assert.equal(events.find((e) => e.type === 'error'), undefined);
 });
+
+/*
+ * 工具报错的分类:「找不到文件」和「被拒绝」是两回事。
+ *
+ * agy 的权限判定会先把工具参数转一遍,这一步顺手读文件;读不到就把 ENOENT 原样往上抛,
+ * 报错文本里因此同时出现 `declaring permissions` 和 `cannot find the file`。
+ * 原来只按 includes('permission') 判,于是一个「路径写错了」被报成「无人值守没法征求同意」——
+ * 模型照着这句去猜权限,怎么改都不对;用户看到的也是一个根本不存在的权限故障。
+ */
+function toolError(message) {
+  return [{
+    event: 'step_update',
+    step_update: {
+      step_type: 'tool', state: 'ERROR', tool_name: 'view_file',
+      tool_info: { error: { message } },
+    },
+  }];
+}
+
+test('报错里同时有 permission 和「找不到文件」时,按找不到文件算', async () => {
+  const events = await run(
+    { conversation_id: 'c1', status: 'SUCCESS', response: '换个路径再试。' },
+    toolError('declaring permissions: cortex tool view_file: convert tool call for permissions: '
+      + 'model output error: invalid tool call error (invalid_args) failed to read file: '
+      + 'open C:/x/instructions.md: The system cannot find the file specified.'),
+  );
+  const tr = events.find((e) => e.type === 'tool_result');
+  assert.ok(tr && tr.ok === false, '要当成一次失败的工具调用交回去');
+  assert.match(tr.summary, /cannot find the file/, '把原文给模型,让它自己看出是路径写错了');
+  assert.doesNotMatch(tr.summary, /Antigravity 自己拒绝/, '这不是拒绝,别这么说');
+  assert.equal(
+    events.find((e) => e.type === 'status' && /弹窗征求同意/.test(e.text)), undefined,
+    '不该冒出权限相关的提示 —— 那会把模型和用户一起带偏',
+  );
+});
+
+test('真正的权限拒绝仍然按拒绝算', async () => {
+  const events = await run(
+    { conversation_id: 'c1', status: 'SUCCESS', response: '好' },
+    toolError('permission check failed for read_file "C:\\x": user denied permission for read_file(C:\\x)'),
+  );
+  const tr = events.find((e) => e.type === 'tool_result');
+  assert.ok(tr && tr.ok === false);
+  assert.match(tr.summary, /Antigravity 自己拒绝/, '这条确实是被拒,要说明是它自家的工具被拒');
+});

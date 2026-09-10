@@ -97,6 +97,42 @@ export function startRun(opts) {
   return { abort: () => abortRef.abort(), done: donePromise };
 }
 
+/**
+ * 只发给 agy 的一段补充说明,拼在通用系统提示词后面。
+ *
+ * 通用提示词是四家 runner 共用的,它不知道「跑它的这一家自己还带着一套内建工具」。
+ * 而 agy 带着 —— view_file / grep_search / find_by_name / run_command 那一套。
+ * 它的工作区只有 `exports/ai-workspace` 那个小沙箱(见 vite-plugin-ai.ts 里的 cwd),
+ * 伸到沙箱外的一律自动拒绝;而**一次拒绝会让 agy 放弃整轮、不产出任何东西**。
+ * 也就是说,它随手读一个文件的代价是整轮作废,再由我们发一条续跑消息重来。
+ *
+ * 实测里它把这四步全踩了:先 view_file 四个 MCP schema 的 json(那些 schema 早就在
+ * 它自己的工具清单里)、再 grep_search 应用目录、再 view_file 用户附件的磁盘路径。
+ * 光是「读一遍工具说明书」就白烧掉两轮。所以这里点名把替代路径写清楚。
+ */
+const AGY_ADDENDUM = `
+## 关于你自己那套内建工具(只有你这一家需要看)
+
+你除了 PromptCut 的工具,自己还带着 view_file / grep_search / find_by_name /
+run_command 这些内建工具。**在这里基本都用不了,而且用了代价很大:**
+
+- 你的工作区只有一个很小的临时目录,读写它以外的任何路径都会被自动拒绝
+  (无人值守,没人能给你点同意);
+- 被拒一次,你这一轮就整个作废、什么都交不出来,要从头再来一遍。
+
+所以:**除非文件确实在你的工作区里,否则不要用内建工具碰任何路径。**
+你要做的每一件事都有对应的 PromptCut 工具:
+
+| 你想干的事 | 用这个,别用内建工具 |
+| --- | --- |
+| 看某张卡的源码 | \`get_card_source\` |
+| 改一张卡 | \`edit_card\`(新建才用 \`create_card\`) |
+| 看画面长什么样 | \`see_preview\` |
+| 处理用户发来的附件 | \`import_media({ url })\`,url 取消息里的**站内地址**;别去 view_file 那个磁盘路径 |
+| 等几秒再查后台作业 | \`wait({ seconds })\`,别用 run_command 去 sleep |
+| 查某个工具怎么调 | 它的参数说明**已经在你的工具清单里**了,直接看;不要去读磁盘上的 schema json |
+`;
+
 function _startRun(opts) {
   const exePath = resolveExe('agy');
   
@@ -105,7 +141,7 @@ function _startRun(opts) {
   let childController = null;
   let isAborted = false;
   
-  const fullPrompt = `<<<系统说明>>>\n${opts.systemPrompt}\n<<<用户消息>>>\n${opts.prompt}`;
+  const fullPrompt = `<<<系统说明>>>\n${opts.systemPrompt}\n${AGY_ADDENDUM}\n<<<用户消息>>>\n${opts.prompt}`;
 
   /*
    * 提示词走 **stdin**,不走命令行参数。
@@ -214,7 +250,24 @@ function _startRun(opts) {
                  childController.safeOnEvent({ type: 'tool_result', name: tName, ok: true, summary: outputStr.substring(0, 300) });
               } else if (su.state === 'ERROR') {
                  const msg = su.tool_info?.error?.message || '';
-                 const denied = msg.includes('permission') || msg.includes('权限') || msg.includes('denied') || msg.includes('not allowed');
+                 /*
+                  * **「文件不存在」不是「被拒绝」,哪怕报错里出现了 permission 这个词。**
+                  *
+                  * agy 的权限判定要先把工具参数转一遍(`convert tool call for permissions`),
+                  * 这一步顺手去读文件;读不到就把 ENOENT 原样往上抛,于是整条报错长这样:
+                  *
+                  *   declaring permissions: cortex tool view_file: convert tool call for
+                  *   permissions: ... failed to read file: open <路径>:
+                  *   The system cannot find the file specified.
+                  *
+                  * 里面有 permission,原来那个 includes 判定就一口咬定是权限问题,回给模型
+                  * 一句「无人值守模式下没法弹窗征求同意」—— 而真相是它写了个根本不存在的路径。
+                  * 模型照着这句话去猜权限,怎么试都不对;用户看到的也是一个假的权限故障。
+                  * 所以先认「找不到」,认出来就当成一次普通的工具失败,把原文交回去让它换个路径。
+                  */
+                 const notFound = /cannot find the file|no such file|not found|ENOENT|系统找不到/i.test(msg);
+                 const denied = !notFound
+                   && (msg.includes('permission') || msg.includes('权限') || msg.includes('denied') || msg.includes('not allowed'));
                  /*
                   * 「被拒」要分是谁被拒的,原来一律当成 MCP 被拒,两处都错:
                   *
