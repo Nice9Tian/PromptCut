@@ -238,7 +238,7 @@ fill_captions({ clipId })
 19. `card_authoring_guide`: 取建卡规则全文(CardDef 契约、控件类型、硬性约束、可用依赖、完整示例)。
 20. `create_card`: 新建一张卡,源码写进 `src/cards/user/<id>.tsx`,热更新后自动注册,`list_cards` 立刻可见。
 21. `get_card_source` / `edit_card`: 读回自己建的卡的源码、对它做局部替换。
-22. `see_frames` 的成片模式(`source: "timeline"`): 把时间轴上的画面渲染成图给你看 —— 不带 `t` 看播放头那一刻的整屏(可用 `t` 指定秒数),带 `clipId` 只看那一张卡。素材本身的镜头拼图是同一个工具的素材模式,见 §12。`add_clip` / `update_clip` 的返回里有个 `look` 字段,就是为这张卡准备好的 `see_frames` 调用,照着调即可。
+22. `see_frames` 的成片模式(`source: "timeline"`): 把时间轴上的画面渲染成图给你看 —— 不带 `t` 看播放头那一刻的整屏(可用 `t` 指定秒数),带 `clipId` 只看那一张卡。素材本身的镜头拼图是同一个工具的素材模式,见 §12。想一眼看清一张卡**整段**的动效(进场、落定、退场),用 `get_gif({ clipId })`:整段均匀抽 8 帧,你拿到 4×2 拼图,用户在聊天栏点开能看到动图。`add_clip` / `update_clip` 的返回里有个 `look` 字段,就是为这张卡准备好的 `see_frames` 调用,照着调即可。
 
 **建新卡是最后手段。** 先 `list_cards()` 看摘要、再 `list_cards({cardId})` 看参数,
 确认**没有任何一张现有卡能通过调参数达成需求**,才建新的 ——

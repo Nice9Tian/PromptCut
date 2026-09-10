@@ -983,6 +983,23 @@ export const tools = [
     timeoutMs: 180000
   },
   {
+    name: "get_gif",
+    description:
+      "把一张卡从头到尾均匀抽 8 帧,做成一张动图(GIF)给用户看,同时把这 8 帧拼成一张 4×2 的图交给你。" +
+      "第 k 格对应返回里 times 的第 k 个时刻(按行从左到右)。用来一眼看清这张卡整段的动效:进场怎么来、落定长什么样、有没有退场。" +
+      "只渲那一张卡,其余轨道不画(和 see_frames 传 clipId 一样)。一次要渲 8 帧,比看一张画面慢,别连着刷。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        clipId: { type: "string", description: "要看的卡(时间轴上的片段 id)" },
+      },
+      required: ["clipId"],
+    },
+    side: "browser",
+    // 8 帧一趟渲完(renderFrames 顺推一遍沿途截),再用 ffmpeg 编 GIF;冷启动 Chrome 可能过分钟
+    timeoutMs: 180000
+  },
+  {
     name: "bake_card",
     description:
       "把一张卡**烘成一张图片**存进素材库,返回它的 URL。目前唯一的用处是给 `scene-3d` 当贴图 —— " +

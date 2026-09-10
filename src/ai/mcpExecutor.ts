@@ -125,6 +125,78 @@ const TIMELINE_TOOLS = new Set([
   "add_track", "switch_cut", "add_cut", "set_theme",
 ]);
 
+/**
+ * 聊天栏的「看得见的结果」。
+ *
+ * 用户在简洁界面点开一个工具,原来看到的是入参和结果的 JSON —— 那是给调试看的。
+ * 看图的工具该看到当时返回的那张图,加卡 / 删卡该看到那张卡,改卡该看到改了哪几个参数
+ * 和前后两段动图。这些东西只有执行工具的这个页面拿得到(改之前的工程、返回的位图),
+ * 所以在这里交给服务端存一份「可视化记录」,把它的 id 放在结果最前面:四家的工具结果
+ * 摘要都保留开头那一截,聊天栏凭这个 id 去取记录。
+ *
+ * 动图不在这里渲:这里只存「怎么渲」(那张卡当时的样子),用户点开时服务端才渲。
+ * 所以 Agent 调工具只多一次本地写文件;交记录最多等 3 秒,超时就不带,工具结果照常返回。
+ */
+const CLIP_EDIT_TOOLS = new Set([
+  "update_clip", "set_clip", "set_position", "set_rect", "align", "nudge", "set_emphasis",
+  "add_part", "set_part", "remove_part", "move_part",
+]);
+const CLIP_CREATE_TOOLS = new Set(["add_clip", "duplicate_clip", "add_composite"]);
+
+function cloneProject<T>(p: T): T {
+  try { return structuredClone(p); } catch { return JSON.parse(JSON.stringify(p)); }
+}
+
+function visualRequest(tool: string, args: any, result: any, before: unknown): Record<string, unknown> | null {
+  if (!result || typeof result !== "object" || result.ok === false) return null;
+  if (tool === "see_frames") {
+    const images: { mime?: string; base64: string; label: string }[] = [];
+    if (result.__image?.base64) images.push({ mime: result.__image.mime, base64: result.__image.base64, label: typeof result.t === "number" ? `t=${result.t}s` : "" });
+    for (const im of Array.isArray(result.__images) ? result.__images : []) {
+      if (im?.base64) images.push({ mime: im.mime, base64: im.base64, label: im.label ?? (im.sceneIndex != null ? `镜头 ${im.sceneIndex}` : "") });
+    }
+    return images.length ? { tool, images } : null;
+  }
+  if (CLIP_CREATE_TOOLS.has(tool)) {
+    const id = result.id || result.clipId;
+    return id ? { tool, clipId: id, after: getState().project } : null;
+  }
+  if (tool === "remove_clip") return before && args?.clipId ? { tool, clipId: args.clipId, before } : null;
+  if (CLIP_EDIT_TOOLS.has(tool)) return before && args?.clipId ? { tool, clipId: args.clipId, before, after: getState().project } : null;
+  return null;
+}
+
+async function withVisual(tool: string, args: any, result: unknown, before: unknown): Promise<unknown> {
+  try {
+    const body = visualRequest(tool, args, result, before);
+    if (!body) return result;
+    const res = await fetch("/api/ai/visual", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body), signal: AbortSignal.timeout(3000),
+    });
+    const data = await res.json().catch(() => null);
+    if (!data?.ok || !data.visualId) return result;
+    return { visualId: data.visualId, ...(result as object) };
+  } catch {
+    return result; // 可视化是附带的,交不上就算了
+  }
+}
+
+/** get_gif:把一张卡整段均匀抽 8 帧,用户看动图、模型看 4×2 拼图 */
+async function getGif(args: { clipId: string }) {
+  const res = await fetch("/api/ai/visual", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ tool: "get_gif", clipId: args.clipId, after: getState().project, render: true }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.ok) throw new Error(data.error || `做动图失败(HTTP ${res.status})`);
+  return {
+    visualId: data.visualId, ok: true, clipId: args.clipId, times: data.times, gif: data.gifUrl,
+    note: `拼图 4×2,第 k 格对应 times 的第 k 个时刻(按行从左到右)。用户在聊天栏点开这一步能看到动图。`,
+    ...(data.grid ? { __image: { mime: "image/png", base64: data.grid } } : {}),
+  };
+}
+
 function isHeadlessPage(): boolean {
   try { return new URLSearchParams(location.search).has("headless"); } catch { return false; }
 }
@@ -272,6 +344,8 @@ export function connectMcpExecutor(getApi: () => EditorApi, onStatus?: (s: { con
         const agent: string | null = typeof ev.agent === "string" && ev.agent ? ev.agent : null;
         // 时间轴操作前后各看一眼项目,算出这次改了哪几条「剪辑->序列」,记到公告板上给别的 Agent 看
         const before = TIMELINE_TOOLS.has(tool) ? getState().project : null;
+        // 聊天栏要画「改之前」的那张卡:只有改卡 / 删卡的工具才拍这一份
+        const visualBefore = CLIP_EDIT_TOOLS.has(tool) || tool === "remove_clip" ? cloneProject(getState().project) : null;
         const api = getApi();
         let ok = true;
         let result: unknown;
@@ -376,6 +450,7 @@ export function connectMcpExecutor(getApi: () => EditorApi, onStatus?: (s: { con
               result = { ok: false, error: `source 只能是 "timeline"(成片画面)或 "media"(素材镜头拼图),收到的是 ${JSON.stringify(source)}` };
             }
           }
+          else if (tool === "get_gif") result = await getGif(args);
           else if (tool === "card_authoring_guide") result = await api.cardAuthoringGuide();
           // 网页操作不经过 EditorApi:浏览器整个在服务端,这些工具不碰编辑台的任何状态。
           // 挂进 EditorApi 只会逼编辑台那边实现 8 个纯转发的方法。
@@ -389,6 +464,8 @@ export function connectMcpExecutor(getApi: () => EditorApi, onStatus?: (s: { con
             error = String(err);
           }
         }
+
+        if (ok && tool !== "get_gif") result = await withVisual(tool, args, result, visualBefore);
 
         fetch("/api/mcp/result", {
           method: "POST",

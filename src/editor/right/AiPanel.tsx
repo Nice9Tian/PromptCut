@@ -16,6 +16,7 @@ import * as agentBus from "../../ai/agentBus";
 import { setTabBusy, setTabConversation } from "../../ai/agentTabs";
 import { getChat } from "../../ai/chatStore";
 import { SttInstallProgress } from "./SttInstallProgress";
+import { ToolVisual, visualIdOf } from "./ToolVisual";
 import { useInstallJobs, matchInstallJob } from "../../ai/sttInstallStore";
 import { useToolbarLayout, MORE_KEY } from "./useToolbarLayout";
 import { isTeamMode, setTeamMode, subscribeTeamMode } from "../../ai/teamMode";
@@ -855,6 +856,7 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
             const renderTool = (t: ToolCallInfo, key: string) => {
               const open = expanded.has(key);
               const done = t.ok !== undefined;
+              const visualId = done ? visualIdOf(t.summary) : null;
               // 装引擎要下好几百 MB、可能跑几分钟。折成一行「stt_install ✓」的话,
               // 用户看到的就是聊天框里一个转圈的小字,不知道在干什么、还要多久。
               // 这里换成带进度的控件,和启动时那个缺依赖提示用的是同一个。
@@ -874,14 +876,31 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
                   </div>
                   {open && (
                     <div className="ai-tool-detail">
-                      <div className="ai-tool-label">入参</div>
-                      <pre className="ai-tool-pre">{JSON.stringify(t.input || {}, null, 2)}</pre>
-                      {t.summary ? (
-                        <>
+                      {/*
+                        有可视化记录的(看图、加卡、删卡、改卡、get_gif):先给看得见的结果,
+                        入参和结果的 JSON 收进「原始数据」—— 那是调试用的,不该是用户点开看到的第一样东西。
+                      */}
+                      {visualId ? <ToolVisual id={visualId} /> : null}
+                      {visualId ? (
+                        <details className="ai-tool-raw">
+                          <summary>原始数据</summary>
+                          <div className="ai-tool-label">入参</div>
+                          <pre className="ai-tool-pre">{JSON.stringify(t.input || {}, null, 2)}</pre>
                           <div className="ai-tool-label">结果</div>
                           <pre className="ai-tool-pre wrap">{t.summary}</pre>
+                        </details>
+                      ) : (
+                        <>
+                          <div className="ai-tool-label">入参</div>
+                          <pre className="ai-tool-pre">{JSON.stringify(t.input || {}, null, 2)}</pre>
+                          {t.summary ? (
+                            <>
+                              <div className="ai-tool-label">结果</div>
+                              <pre className="ai-tool-pre wrap">{t.summary}</pre>
+                            </>
+                          ) : null}
                         </>
-                      ) : null}
+                      )}
                       {t.files && t.files.length > 0 ? (
                         <div className="ai-tool-files">
                           {t.files.map((f, fidx) => {

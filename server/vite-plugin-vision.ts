@@ -1117,6 +1117,136 @@ export function visionPlugin(): Plugin {
         });
       });
 
+      /*
+       * /api/ai/visual —— 聊天栏里「看得见的工具结果」(执行这一侧见 src/ai/mcpExecutor.ts 的 withVisual)。
+       *
+       *   POST /                    { tool, images?, clipId?, before?, after?, render? } → { visualId, … }
+       *   GET  /<visualId>.json     这条记录
+       *   GET  /file/<name>         存下来的位图(see_frames 当时返回的那几张)
+       *   GET  /gif/<key>.gif       一张卡的 8 帧动图
+       *
+       * 动图**用户点开时才渲**:POST 只存「怎么渲」(那张卡当时的样子,isolateClip 之后的迷你工程),
+       * 第一次 GET 才排队渲染、编码、落盘,之后读缓存。渲染走后台优先级(0),不和模型正阻塞等着的
+       * see_frames 抢槽位 —— Agent 调工具只多一次本地写文件。get_gif 是模型自己要的,走前台优先级(1)。
+       */
+      const visualLib = () => import(new URL("./ai-visual.mjs", import.meta.url).href);
+      const visualDir = () => path.join(outRoot(root), "ai-visual");
+      const gifInflight = new Map<string, Promise<{ gif: string; grid: string; times: number[] }>>();
+
+      async function saveCardSpec(project: any, clipId: string) {
+        const visual = await visualLib();
+        const iso = isolateClip(resolveMediaUrls(project).project, clipId);
+        if (!iso) return null;
+        const times = visual.sampleTimes(iso.clip);
+        const key = visual.specKey(iso.project, clipId);
+        const dir = visualDir();
+        await visual.writeJson(dir, visual.gifPaths(dir, key).spec, { project: iso.project, clipId, times });
+        return { key, clip: iso.clip, gif: `/api/ai/visual/gif/${key}.gif` };
+      }
+
+      function ensureGif(key: string, priority: number) {
+        const running = gifInflight.get(key);
+        if (running) return running;
+        const job = (async () => {
+          const visual = await visualLib();
+          const dir = visualDir();
+          const p = visual.gifPaths(dir, key);
+          const spec = await visual.readJson(dir, p.spec);
+          if (!spec) throw Object.assign(new Error("找不到这张动图的渲染规格(可能是清理过 out/ai-visual)"), { status: 404 });
+          if (fs.existsSync(p.gif) && fs.existsSync(p.grid)) return { gif: p.gif, grid: p.grid, times: spec.times };
+          const ffmpeg = ffmpegCommand();
+          if (!ffmpeg) throw new Error("这台机器上找不到 ffmpeg,做不了动图");
+          const notes: string[] = [];
+          const fps = spec.project.fps || 30;
+          const maxFrame = Math.max(0, Math.floor((spec.project.duration || 0) * fps) - 1);
+          const frameOf = (t: number) => Math.min(maxFrame, Math.max(0, Math.round(t * fps)));
+          const frames = await enqueue(() => renderFrames(root, originOf(server), spec.project, spec.times, notes, priority), priority, priority > 0 ? 25000 : 0);
+          const bufs = spec.times.map((t: number) => frames.get(frameOf(t))).filter(Boolean) as Buffer[];
+          if (!bufs.length) throw new Error("一帧都没渲出来");
+          await visual.encodeGif({ ffmpeg, frames: bufs, outGif: p.gif, outGrid: p.grid });
+          return { gif: p.gif, grid: p.grid, times: spec.times };
+        })().finally(() => gifInflight.delete(key));
+        gifInflight.set(key, job);
+        return job;
+      }
+
+      server.middlewares.use("/api/ai/visual", (req, res) => {
+        const url = String(req.url || "/").split("?")[0];
+        const fail = (e: any) => sendJson(res, e?.status || 500, { ok: false, error: e?.message || String(e) });
+
+        if (req.method === "GET") {
+          (async () => {
+            const visual = await visualLib();
+            const dir = visualDir();
+            let m: RegExpExecArray | null;
+            if ((m = /^\/(v-[0-9a-z]{6,40})\.json$/.exec(url))) {
+              const rec = await visual.readJson(dir, `${m[1]}.json`);
+              return rec ? sendJson(res, 200, { ok: true, record: rec }) : sendJson(res, 404, { ok: false, error: "没有这条可视化记录" });
+            }
+            if ((m = /^\/file\/([^/]+)$/.exec(url))) {
+              const name = visual.safeFileName(m[1]);
+              const file = name && path.join(dir, name);
+              if (!file || !fs.existsSync(file)) return sendJson(res, 404, { ok: false, error: "没有这个文件" });
+              const ext = path.extname(file).slice(1);
+              res.setHeader("Content-Type", ext === "jpg" ? "image/jpeg" : `image/${ext}`);
+              res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+              return fs.createReadStream(file).pipe(res);
+            }
+            if ((m = /^\/gif\/([0-9a-f]{16})\.gif$/.exec(url))) {
+              const g = await ensureGif(m[1], 0);
+              res.setHeader("Content-Type", "image/gif");
+              res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+              return fs.createReadStream(g.gif).pipe(res);
+            }
+            sendJson(res, 404, { ok: false, error: "没有这个接口" });
+          })().catch(fail);
+          return;
+        }
+        if (req.method !== "POST") return sendJson(res, 405, { ok: false, error: "GET / POST only" });
+
+        let body = "";
+        let over = false;
+        req.on("data", (c) => { if (over) return; body += c; over = overLimit(req, res, body.length, 64 * 1024 * 1024, "请求体超过 64MB"); });
+        req.on("end", async () => {
+          if (over) return;
+          try {
+            const visual = await visualLib();
+            const dir = visualDir();
+            const { tool, images, clipId, before, after, render } = JSON.parse(body || "{}");
+            const record: any = { tool: String(tool || ""), createdAt: new Date().toISOString() };
+            if (Array.isArray(images) && images.length) {
+              record.images = [];
+              for (const im of images.slice(0, 16)) {
+                if (!im?.base64) continue;
+                const saved = await visual.saveImage(dir, { mime: im.mime, base64: im.base64 });
+                record.images.push({ url: saved.url, label: String(im.label || "") });
+              }
+            }
+            let afterSpec: any = null;
+            if (typeof clipId === "string" && clipId) {
+              record.clipId = clipId;
+              const beforeSpec = before && Array.isArray(before.tracks) ? await saveCardSpec(before, clipId) : null;
+              afterSpec = after && Array.isArray(after.tracks) ? await saveCardSpec(after, clipId) : null;
+              if (beforeSpec) record.before = { gif: beforeSpec.gif };
+              if (afterSpec) record.after = { gif: afterSpec.gif };
+              if (beforeSpec && afterSpec) record.diff = visual.diffClips(beforeSpec.clip, afterSpec.clip);
+            }
+            const visualId = visual.newVisualId();
+            await visual.writeJson(dir, `${visualId}.json`, record);
+
+            if (render) {
+              if (!afterSpec) return sendJson(res, 404, { ok: false, error: `时间轴上没有 id 为 ${clipId} 的片段。` });
+              const g = await ensureGif(afterSpec.key, 1);
+              const grid = (await fsp.readFile(g.grid)).toString("base64");
+              return sendJson(res, 200, { ok: true, visualId, gifUrl: afterSpec.gif, times: g.times, grid });
+            }
+            sendJson(res, 200, { ok: true, visualId });
+          } catch (e: any) {
+            fail(e);
+          }
+        });
+      });
+
       server.middlewares.use("/api/vision/snapshot", (req, res) => {
         if (req.method !== "POST") return sendJson(res, 405, { ok: false, error: "POST only" });
         let body = "";

@@ -138,11 +138,11 @@ test('执行器分发的每个工具名，mcp-tools 里都真的有声明', () =
 
 // 放宽超时的名单要**逐个**是有意加的:桥的超时一旦先到,真正的报错信息就被盖掉,
 // Agent 只看得到「超时」两个字。所以这里钉死名单,加新的必须改这一行。
-// 两个都要当场起一个 Chrome 渲染(vite-plugin-vision):see_frames 渲单帧(timeline)或一整张拼图(media),
-// bake_card 渲单帧。
-test('放宽超时的只有这两个渲染类工具；都要大于自己那条管线的上限，否则报错信息会被桥的超时盖掉', () => {
+// 三个都要当场起一个 Chrome 渲染(vite-plugin-vision):see_frames 渲单帧(timeline)或一整张拼图(media),
+// get_gif 一趟渲 8 帧再编动图,bake_card 渲单帧。
+test('放宽超时的只有这三个渲染类工具；都要大于自己那条管线的上限，否则报错信息会被桥的超时盖掉', () => {
   const withTimeout = mcpTools.filter((t) => t.timeoutMs);
-  assert.deepEqual(withTimeout.map((t) => t.name), ['see_frames', 'bake_card']);
+  assert.deepEqual(withTimeout.map((t) => t.name), ['see_frames', 'get_gif', 'bake_card']);
   for (const t of withTimeout) assert.ok(t.timeoutMs > 120000, `${t.name} 要大于 vite-plugin-vision 里 120 秒的渲染上限`);
 });
 

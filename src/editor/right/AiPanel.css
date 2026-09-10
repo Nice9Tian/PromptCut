@@ -609,6 +609,31 @@
   color: var(--ink-muted);
   overflow-wrap: anywhere;
 }
+/* ── 工具结果的可视化(ToolVisual.tsx):看图的位图、改卡的参数差异、前后两段动图 ── */
+.ai-visual { display: flex; flex-direction: column; gap: 10px; }
+.ai-visual-note { font-size: 12px; color: var(--ink-muted); }
+.ai-visual-images { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
+.ai-visual-images figure,
+.ai-visual-gif { margin: 0; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.ai-visual-images img { width: 100%; height: auto; display: block; border-radius: 6px; border: 1px solid var(--hairline); background: var(--fill-subtle); }
+.ai-visual-images figcaption,
+.ai-visual-gif figcaption { font-size: 11px; color: var(--ink-muted); font-variant-numeric: tabular-nums; }
+.ai-visual-diff { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; font-size: 12px; }
+.ai-visual-diff li { display: grid; grid-template-columns: minmax(80px, max-content) minmax(0, 1fr) auto minmax(0, 1fr); gap: 6px; align-items: baseline; }
+.ai-visual-diff .k { font-family: var(--font-mono); color: var(--ink-muted); }
+.ai-visual-diff .from { color: var(--ink-faint); text-decoration: line-through; text-decoration-color: var(--hairline); overflow-wrap: anywhere; }
+.ai-visual-diff .arrow { color: var(--ink-faint); }
+.ai-visual-diff .to { color: var(--ink); overflow-wrap: anywhere; }
+.ai-visual-gifs { display: flex; align-items: center; gap: 8px; }
+.ai-visual-gifs .ai-visual-gif { flex: 1 1 0; }
+.ai-visual-arrow { flex: none; color: var(--ink-muted); font-size: 16px; }
+.ai-visual-gif .box { position: relative; aspect-ratio: 16 / 9; border-radius: 6px; border: 1px solid var(--hairline); background: var(--fill-subtle); overflow: hidden; display: flex; align-items: center; justify-content: center; }
+.ai-visual-gif .box img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.ai-visual-gif.is-loading .box img { position: absolute; inset: 0; opacity: 0; }
+.ai-visual-gif .box button { font-size: 12px; background: none; border: 1px solid var(--hairline); border-radius: 4px; color: var(--ink); padding: 4px 8px; cursor: pointer; }
+.ai-tool-raw { margin-top: 4px; }
+.ai-tool-raw > summary { font-size: 11px; color: var(--ink-faint); cursor: pointer; }
+
 .ai-tool-img {
   max-width: 100%;
   border-radius: 4px;
