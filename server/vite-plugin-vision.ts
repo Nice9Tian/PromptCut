@@ -34,7 +34,7 @@ const MAX_EDGE = 768;
  * 而画面里"什么都没有"和"有一张深色的卡"长得一模一样 —— 模型没法区分这两种情况。
  *
  * 真实案例(诊断报告 对话诊断-20260909-045354):一张深色金属的三维 logo 卡,模型连着看了
- * 20 次 see_preview,思考里写的是 "Diagnosing blank logo card rendering" —— 它以为卡没渲出来,
+ * 20 次 see_frames,思考里写的是 "Diagnosing blank logo card rendering" —— 它以为卡没渲出来,
  * 于是把同样的 5 次调用原样重复了三轮,一直没拿到新信息。卡其实是好的,只是黑的贴在黑的上面。
  *
  * 换成**棋盘格**:透明的地方才露出格子,卡片盖住的地方一格都看不见。于是
@@ -241,7 +241,7 @@ function pumpRenderQueue() {
  *
  * runExport 的 `RENDER_TIMEOUT_MS` 是从「派活那一刻」起算的,盖不住前面排队的那一段。
  * 于是一个活可以在队列里躺任意久而没有任何看门狗上膛 —— 上层(见 mcp-tools.mjs 里
- * see_preview 的 timeoutMs)先到点放弃等待,回一句「超过 N 秒没有返回」,而这句话
+ * see_frames 的 timeoutMs)先到点放弃等待,回一句「超过 N 秒没有返回」,而这句话
  * 什么都没解释:到底是渲染卡住了,还是压根没轮到它?两者的下一步完全不同。
  * 给排队单独上一个看门狗,超时就把它从队里摘掉并说清是**排队**排掉的。
  */
@@ -393,7 +393,7 @@ function originOf(server: ViteDevServer): string {
  * 跑一次单帧渲染,拿到那一帧的 PNG 字节。
  *
  * 页面里**只渲卡片**(素材段全部拿掉):导出脚本逐帧推进虚拟时间,有 <video> 在画面里时
- * 每帧都要等一次真实的 seek,看第 12 秒要走 360 帧、六七分钟,see_preview 因此超时
+ * 每帧都要等一次真实的 seek,看第 12 秒要走 360 帧、六七分钟,see_frames 因此超时
  * (实测)。没有素材时帧帧静止,几秒就到。素材那一层由 ffmpeg 抽那一帧,在
  * vision-compose.mjs 里按同样的规则合成到卡片下面。
  */
@@ -1056,7 +1056,7 @@ export function visionPlugin(): Plugin {
       const root = server.config.root;
 
       /*
-       * POST /api/vision/sheet { media, start, end, grid } —— see_sequences 用的镜头拼图。
+       * POST /api/vision/sheet { media, start, end, grid } —— see_frames 素材模式(source: "media")用的镜头拼图。
        * 一个镜头一张 JPEG:从 start 到 end 等间隔抽 grid 帧(4 = 2×2,9 = 3×3),每格 480 宽,
        * ffmpeg 一趟做完(fps 滤镜取帧 + tile 拼格),不落中间帧。按文件、修改时间、区间、格数缓存在
        * out/sheets 下,翻页回看不重抽。media 是项目里那条素材记录(和 snapshot 收 project 一样,
@@ -1167,13 +1167,13 @@ export function visionPlugin(): Plugin {
             /*
              * **前台优先级(1),不是默认的 0。**
              *
-             * see_preview 是模型正阻塞着等的那一张 —— 前台里最前台的。可它原来用默认
+             * see_frames 是模型正阻塞着等的那一张 —— 前台里最前台的。可它原来用默认
              * priority,于是掉进 pumpRenderQueue 给后台留的那道限制里:后台只能用到
              * `max - 1` 个槽位,而且要和空闲预烘按先来后到排。也就是说,那个「永远给
              * 前台留一个槽位」的设计恰好把真正的前台挡在了外面。
              *
              * 排队看门狗给 25 秒:加上渲染自己的 120 秒上限,合起来 145 秒,刚好落在
-             * see_preview 那 150 秒工具上限之内 —— 保证超时之前一定能给出一句
+             * see_frames 那 150 秒工具上限之内 —— 保证超时之前一定能给出一句
              * **说得清原因**的话,而不是让上层回一句无从下手的「没有返回」。
              */
             const raw = await enqueue(() => renderOneFrame(root, originOf(server), target, at, notes, 1), 1, 25000);

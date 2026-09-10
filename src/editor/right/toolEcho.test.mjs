@@ -114,9 +114,9 @@ test("timelineDigest 带上项目时长和内容实际的结束位置", () => {
   assert.equal(p(30, [{ id: "t1", name: "空", clips: [] }]).contentEnd, 0);
 });
 
-test("lookHint 是一个现成的 see_preview 调用", () => {
+test("lookHint 是一个现成的 see_frames 调用", () => {
   const h = lookHint("c9");
-  assert.equal(h.tool, "see_preview");
-  assert.deepEqual(h.args, { clipId: "c9" });
+  assert.equal(h.tool, "see_frames");
+  assert.deepEqual(h.args, { source: "timeline", clipId: "c9" });
   assert.match(h.why, /真实画面/);
 });

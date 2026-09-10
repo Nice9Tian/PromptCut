@@ -276,13 +276,13 @@ async function handleMessage(line) {
     
     const out = await res.json();
     if (out.ok) {
-      // 带画面的工具(see_preview)把 base64 放在 __image 里。MCP 的 content 数组
+      // 带画面的工具(see_frames)把 base64 放在 __image 里。MCP 的 content 数组
       // 本来就支持 image 块，直接作为一个块发出去即可；但 base64 绝不能留在 text
       // 块里——那是几十万字符的乱码，模型看不见画面，上下文还被白白撑爆。
       // (API 直连那条路做的是同一件事，见 harness/agent.mjs 里的 __image 处理。)
       const payload = out.result || out;
       const image = payload && typeof payload === "object" ? payload.__image : null;
-      // see_sequences 一次带一页拼图:__images 是数组,每张各一个 image 块,顺序和 scenes 一致
+      // see_frames 素材模式(source: "media")一次带一页拼图:__images 是数组,每张各一个 image 块,顺序和 scenes 一致
       const images = payload && typeof payload === "object" && Array.isArray(payload.__images) ? payload.__images : [];
       const rest = image || images.length ? (({ __image, __images, ...r }) => r)(payload) : payload;
       const content = [{ type: "text", text: JSON.stringify(rest, null, 2) }];

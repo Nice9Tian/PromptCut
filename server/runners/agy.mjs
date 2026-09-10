@@ -127,7 +127,7 @@ run_command 这些内建工具。**在这里基本都用不了,而且用了代�
 | --- | --- |
 | 看某张卡的源码 | \`get_card_source\` |
 | 改一张卡 | \`edit_card\`(新建才用 \`create_card\`) |
-| 看画面长什么样 | \`see_preview\` |
+| 看画面长什么样 | \`see_frames\` |
 | 处理用户发来的附件 | \`import_media({ url })\`,url 取消息里的**站内地址**;别去 view_file 那个磁盘路径 |
 | 等几秒再查后台作业 | \`wait({ seconds })\`,别用 run_command 去 sleep |
 | 查某个工具怎么调 | 它的参数说明**已经在你的工具清单里**了,直接看;不要去读磁盘上的 schema json |

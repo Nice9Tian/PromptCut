@@ -876,7 +876,7 @@ export function Scene3DView({ project, t }: Props) {
     /*
      * 底是棋盘格,不是黑的。画布 alpha:true,没画到的地方本来直接透出近黑的面板色,
      * 于是「深色的卡」和「这儿什么都没有」长得一模一样 —— 格子把这两件事分开。
-     * 格子的灰和边长跟 see_preview 那边逐值对齐(见 .pc-3d-checker 的说明)。
+     * 格子的灰和边长跟 see_frames 那边逐值对齐(见 .pc-3d-checker 的说明)。
      */
     <div className="pc-3d-checker" style={{ position: "relative", width: "100%", height: "100%", minHeight: 200 }}>
       <div ref={host} style={{ position: "absolute", inset: 0 }} />

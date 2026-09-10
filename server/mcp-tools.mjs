@@ -52,7 +52,7 @@ export const tools = [
   },
   {
     name: "add_clip",
-    description: "在时间轴上添加一张新卡片。需要提供 cardId 和 start 时间。params 会和卡片 defaults 合并，只写你要改的项即可；但键名必须是该卡真有的参数、标了必填的参数不能为空，否则直接报错——先用 list_cards({cardId}) 看清 schema 再建。字幕卡不要手写 lines，用 fill_captions。返回新建的 clip，外加 `look`（为这张卡准备好的 see_preview 调用，涉及位置和遮挡的决定请照着调去看真实画面）和 `timeline`（当前全部轨道与 clip 的 id、起止一览，之后引用 clipId 以它为准；里面的 `duration` 是整条片子多长、`contentEnd` 是内容实际结束在哪，两个数对不上就用 set_project_meta 把 duration 设成 contentEnd）。",
+    description: "在时间轴上添加一张新卡片。需要提供 cardId 和 start 时间。params 会和卡片 defaults 合并，只写你要改的项即可；但键名必须是该卡真有的参数、标了必填的参数不能为空，否则直接报错——先用 list_cards({cardId}) 看清 schema 再建。字幕卡不要手写 lines，用 fill_captions。返回新建的 clip，外加 `look`（为这张卡准备好的 see_frames 调用，涉及位置和遮挡的决定请照着调去看真实画面）和 `timeline`（当前全部轨道与 clip 的 id、起止一览，之后引用 clipId 以它为准；里面的 `duration` 是整条片子多长、`contentEnd` 是内容实际结束在哪，两个数对不上就用 set_project_meta 把 duration 设成 contentEnd）。",
     inputSchema: {
       type: "object",
       properties: {
@@ -68,7 +68,7 @@ export const tools = [
   },
   {
     name: "update_clip",
-    description: "更新某张卡片,可修改参数、时段、更换卡片类型(cardId),以及不透明度 / 淡入淡出 / 标签 / 所在序列。**已经在时间轴上的卡要改就用它**，不要 remove_clip 再 add_clip 重建。opacity 0~1(遮到人又挪不开时降它);fadeIn/fadeOut 是秒;trackId 换序列——**时间轴上靠上的序列盖住靠下的**(get_project 里 tracks[0] 就是最上面那条、也是最上层),要让一张卡压在另一张上面就把它挪到更靠上的序列。位置、尺寸、缩放不在这里改,用 set_rect / set_position / align / nudge。**挂着转场的片段**(list_transitions 看得到)相对时间关系是锁住的:只给 start 的整组平移可以(同组一起走),改时长 / 换序列 / 手改转场那一侧的 fadeIn·fadeOut 会被拒,要改先 remove_transition。返回 `look`（去看这张卡真实画面的 see_preview 调用）和 `timeline`（当前全部 clip 的 id、起止一览，外加 `duration` / `contentEnd` —— 对不上就用 set_project_meta 修）。",
+    description: "更新某张卡片,可修改参数、时段、更换卡片类型(cardId),以及不透明度 / 淡入淡出 / 标签 / 所在序列。**已经在时间轴上的卡要改就用它**，不要 remove_clip 再 add_clip 重建。opacity 0~1(遮到人又挪不开时降它);fadeIn/fadeOut 是秒;trackId 换序列——**时间轴上靠上的序列盖住靠下的**(get_project 里 tracks[0] 就是最上面那条、也是最上层),要让一张卡压在另一张上面就把它挪到更靠上的序列。位置、尺寸、缩放不在这里改,用 set_rect / set_position / align / nudge。**挂着转场的片段**(list_transitions 看得到)相对时间关系是锁住的:只给 start 的整组平移可以(同组一起走),改时长 / 换序列 / 手改转场那一侧的 fadeIn·fadeOut 会被拒,要改先 remove_transition。返回 `look`（去看这张卡真实画面的 see_frames 调用）和 `timeline`（当前全部 clip 的 id、起止一览，外加 `duration` / `contentEnd` —— 对不上就用 set_project_meta 修）。",
     inputSchema: {
       type: "object",
       properties: {
@@ -375,7 +375,7 @@ export const tools = [
   },
   {
     name: "list_cuts",
-    description: "列出项目里的全部剪辑(时间轴)。一个项目可以有多条剪辑,时间轴顶部的选项栏切换,默认三条:剪辑1 / 剪辑2 / 剪辑3。**所有 clip / 序列 / 定位 / 导出 / see_preview 工具都只作用于当前激活的那条剪辑**(active:true 的),get_project 的 tracks 也是它的内容;要动别的剪辑先 switch_cut。返回每条的 id、name、active、trackCount、clipCount、duration。",
+    description: "列出项目里的全部剪辑(时间轴)。一个项目可以有多条剪辑,时间轴顶部的选项栏切换,默认三条:剪辑1 / 剪辑2 / 剪辑3。**所有 clip / 序列 / 定位 / 导出 / see_frames 工具都只作用于当前激活的那条剪辑**(active:true 的),get_project 的 tracks 也是它的内容;要动别的剪辑先 switch_cut。返回每条的 id、name、active、trackCount、clipCount、duration。",
     inputSchema: { type: "object", properties: {} },
     side: "browser"
   },
@@ -507,7 +507,7 @@ export const tools = [
       "这么设计是因为竖屏项目画布高 1920、横屏 1080,同一个距离在两种画幅下透视强度完全不同,而 fov 直接就是\"透视有多强\",换画幅不用重调。" +
       "档位:**30° 克制**(接近正交,适合规整的信息版面)、**40° 默认**、**50~60° 明显**(卡片一转就有纵深)、**80° 以上是鱼眼**,边角会夸张变形。" +
       "\n\n" +
-      "改完一定要 see_preview 看真实画面:透视强度只能看出来,算不出来。",
+      "改完一定要 see_frames 看真实画面:透视强度只能看出来,算不出来。",
     inputSchema: {
       type: "object",
       properties: {
@@ -669,7 +669,7 @@ export const tools = [
   },
   {
     name: "subject_status",
-    description: "查主体检测能跑到哪一档，检测之前先看一眼。engine 为 full 表示装了完整拓展（YuNet 人脸 + RT-DETR 人体 + Grounding DINO 开放词汇，prompt 生效，能找任意名词）；light 表示只装了轻档（YuNet + RT-DETR，只认 person 和 face，prompt 不生效）；null 表示**两档都用不了，没有兜底档**——此时不要假装检测过，位置和遮挡的判断退回 see_preview 看真实画面。用户想要就用 subject_install 装 light 档（约 30 MB）。",
+    description: "查主体检测能跑到哪一档，检测之前先看一眼。engine 为 full 表示装了完整拓展（YuNet 人脸 + RT-DETR 人体 + Grounding DINO 开放词汇，prompt 生效，能找任意名词）；light 表示只装了轻档（YuNet + RT-DETR，只认 person 和 face，prompt 不生效）；null 表示**两档都用不了，没有兜底档**——此时不要假装检测过，位置和遮挡的判断退回 see_frames 看真实画面。用户想要就用 subject_install 装 light 档（约 30 MB）。",
     inputSchema: { type: "object", properties: {} },
     side: "browser"
   },
@@ -920,18 +920,45 @@ export const tools = [
     side: "browser"
   },
   {
-    name: "see_preview",
-    description: "看画面：把时间轴某一刻渲染成图片交回来，用的就是导出那条渲染管线，所以看到的即导出所得。不传参数看整个预览画面（默认播放头所在时刻，也可以用 t 指定第几秒）；传 clipId 则只渲染那一张卡、其余轨道全部不画，用来分辨「这张卡自己不对」还是「被上面别的卡盖住了」（不同时传 t 的话取该片段的中点，避开进出场动画的中间态）。**改完卡片的样式后应当看一眼再下结论**，不要凭源码想象效果。每次要起一个渲染进程，大约几秒到十几秒，别连着刷。**画面里的灰色棋盘格是「透明」,不是内容** —— 那里什么都没画;卡片盖住的地方看不到格子。所以「一片棋盘格」= 这一刻真的什么都没有,不要再反复换 t 去试。",
+    name: "see_frames",
+    /*
+     * 原来是 see_preview(成片)和 see_sequences(素材)两个工具。合成一个、名字里不再有 preview:
+     * 「预览」这个词暗示「粗看一眼、草稿」,模型会跟着放低标准。现在统一叫「画面帧」。
+     */
+    description:
+      "看画面帧。两种来源,用 source 分开:\n\n" +
+      "**source: \"timeline\" —— 成片画面。** 把时间轴某一刻渲染成图片交回来,用的就是导出那条渲染管线,看到的即导出所得。" +
+      "不传 t 取当前播放头所在时刻;传 clipId 只渲那一张卡、其余轨道全部不画,用来分辨「这张卡自己不对」还是「被上面别的卡盖住了」" +
+      "(不同时传 t 的话取该片段的中点,避开进出场动画的中间态)。**改完卡片的样式后应当看一眼再下结论**,不要凭源码想象效果。" +
+      "每次要起一个渲染进程,大约几秒到十几秒,别连着刷。**画面里的灰色棋盘格是「透明」,不是内容** —— 那里什么都没画;" +
+      "卡片盖住的地方看不到格子。所以「一片棋盘格」= 这一刻真的什么都没有,不要再反复换 t 去试。\n\n" +
+      "**source: \"media\" —— 素材本身。** 按镜头(list_shots 的划分)把视频拼成缩略图,每个镜头一张 4 格或 9 格拼图" +
+      "(等间隔抽帧,格子按行从左到右对应返回里的 frames 秒数),一次交回一页最多 N 张,翻页看后面的镜头。" +
+      "**判断一段素材里到底有什么、人物在哪一侧、画面是什么调性、哪几段能用,不要只靠字幕猜 —— 字幕说的是「说了什么」,这里看的是「画面是什么」。** " +
+      "用法:1) 直接调 see_frames({ source: \"media\", mediaId }),没跑过镜头识别会自动跑并等它(5 分钟素材约 36 秒;识别不了就按 10 秒一段切,返回里标 fallback);" +
+      "2) 返回里 pages 是总页数、nextPage 是下一页,翻到 nextPage 为 null 为止;" +
+      "3) 某个镜头看不清就 see_frames({ source: \"media\", mediaId, scene: 镜头序号, grid: 9 }) 单独放大看;" +
+      "4) 只关心某段时间用 from / to 秒数缩小范围。每张拼图都附这个镜头的起止秒数、进出转场、这段时间的字幕文本(有转写的话)和主体侧别(有检测的话),看图时把它们对上。" +
+      "一页别要太多:默认 6 张,上限 12 张,能说清就停,不要为了「看完」把所有页都翻一遍。",
     inputSchema: {
       type: "object",
       properties: {
-        t: { type: "number", description: "时间轴第几秒；不传就用当前播放头" },
-        clipId: { type: "string", description: "只看这一个片段的画面" }
-      }
+        source: { type: "string", enum: ["timeline", "media"], description: "timeline = 时间轴上的成片画面;media = 素材本身按镜头拼的缩略图" },
+        t: { type: "number", description: "[timeline] 时间轴第几秒;不传就用当前播放头" },
+        clipId: { type: "string", description: "[timeline] 只看这一个片段的画面" },
+        mediaId: { type: "string", description: "[media,必填] list_media 里的素材 id;只支持视频" },
+        page: { type: "number", description: "[media] 第几页,从 1 起;默认 1" },
+        perPage: { type: "number", description: "[media] 每页几个镜头,默认 6,最多 12。一个镜头一张拼图" },
+        grid: { type: "number", description: "[media] 每张拼图几格:4(2×2)或 9(3×3),默认 4。镜头长、变化多、或要看细节时用 9" },
+        scene: { type: "number", description: "[media] 只看这一个镜头(list_shots 里的序号,从 1 起),忽略分页;默认配 9 格" },
+        from: { type: "number", description: "[media] 只看从这一秒起的镜头(素材内秒数)" },
+        to: { type: "number", description: "[media] 只看到这一秒为止的镜头(素材内秒数)" }
+      },
+      required: ["source"]
     },
     side: "browser",
-    // 当场起一个 Chrome 渲一帧,冷启动 + 素材预热可能过分钟,60 秒的默认上限不够
-    timeoutMs: 150000
+    // 当场起一个 Chrome 渲一帧(timeline),或先跑一遍镜头识别再拼十几张图(media),60 秒的默认上限不够
+    timeoutMs: 180000
   },
   {
     name: "bake_card",
@@ -939,7 +966,7 @@ export const tools = [
       "把一张卡**烘成一张图片**存进素材库,返回它的 URL。目前唯一的用处是给 `scene-3d` 当贴图 —— " +
       "把 URL 填进那张卡的 `texture` 参数,就得到「立体物件表面印着这张卡」。" +
       "\n\n" +
-      "画这张图的是**导出成片的那个渲染器**(和 see_preview 同一条管线),所以贴上去之后预览和成片长得一样。" +
+      "画这张图的是**导出成片的那个渲染器**(和 see_frames 同一条管线),所以贴上去之后预览和成片长得一样。" +
       "\n\n" +
       "**它是一张快照,不是活的**:卡片的动画会定格在 `t` 那一帧;之后你改了这张卡的参数,贴图**不会**跟着变," +
       "要重新烘一次再把新 URL 填回去。所以顺序是「先把卡调好,再烘」。" +
@@ -961,28 +988,8 @@ export const tools = [
       required: ["clipId"],
     },
     side: "browser",
-    // 和 see_preview 一样要当场起一个 Chrome 渲一帧
+    // 和 see_frames 一样要当场起一个 Chrome 渲一帧
     timeoutMs: 150000
-  },
-  {
-    name: "see_sequences",
-    description: "看素材本身:按镜头(list_shots 的划分)把视频拼成缩略图,每个镜头一张 4 格或 9 格拼图(等间隔抽帧,格子按行从左到右对应返回里的 frames 秒数),一次交回一页最多 N 张,翻页看后面的镜头。**判断一段素材里到底有什么、人物在哪一侧、画面是什么调性、哪几段能用,不要只靠字幕猜 —— 字幕说的是「说了什么」,这里看的是「画面是什么」。** 用法:1) 直接调 see_sequences({ mediaId }),没跑过镜头识别会自动跑并等它(5 分钟素材约 36 秒;识别不了就按 10 秒一段切,返回里标 fallback);2) 返回里 pages 是总页数、nextPage 是下一页,翻到 nextPage 为 null 为止;3) 某个镜头看不清就 see_sequences({ mediaId, scene: 镜头序号, grid: 9 })单独放大看;4) 只关心某段时间用 from / to 秒数缩小范围。每张拼图都附这个镜头的起止秒数、进出转场、这段时间的字幕文本(有转写的话)和主体侧别(有检测的话),看图时把它们对上。一页别要太多:默认 6 张,上限 12 张,能说清就停,不要为了「看完」把所有页都翻一遍。",
-    inputSchema: {
-      type: "object",
-      properties: {
-        mediaId: { type: "string", description: "list_media 里的素材 id;只支持视频" },
-        page: { type: "number", description: "第几页,从 1 起;默认 1" },
-        perPage: { type: "number", description: "每页几个镜头,默认 6,最多 12。一个镜头一张拼图" },
-        grid: { type: "number", description: "每张拼图几格:4(2×2)或 9(3×3),默认 4。镜头长、变化多、或要看细节时用 9" },
-        scene: { type: "number", description: "只看这一个镜头(list_shots 里的序号,从 1 起),忽略分页;默认配 9 格" },
-        from: { type: "number", description: "只看从这一秒起的镜头(素材内秒数)" },
-        to: { type: "number", description: "只看到这一秒为止的镜头(素材内秒数)" }
-      },
-      required: ["mediaId"]
-    },
-    side: "browser",
-    // 可能要先跑一遍镜头识别再拼十几张图
-    timeoutMs: 180000
   },
   {
     name: "create_card",

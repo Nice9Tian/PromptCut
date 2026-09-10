@@ -115,7 +115,7 @@ function Scene3DCard({ params, t = 0, stage }: CardProps<Params>) {
      * # 为什么这条路不会让预览和导出分叉
      *
      * 因为**两边都只是在加载同一张图片**。烘焙发生在更早的一次性步骤里(服务端跑
-     * see_preview 那条管线,和成片同一个渲染器画的),预览和导出谁都不做栅格化,
+     * see_frames 那条管线,和成片同一个渲染器画的),预览和导出谁都不做栅格化,
      * 各自 `<img>` 那张 PNG 而已。分叉的前提是两边各算各的,这里没有人在算。
      *
      * # 代价是它是一张快照
@@ -187,7 +187,7 @@ function Scene3DCard({ params, t = 0, stage }: CardProps<Params>) {
      * 卡片的框改了(set_rect / nudge / set_position)不会重挂载 —— playToken 只在
      * loadProject / switchCut / seek / play 时递增。而 `setSize(w,h,false)` 不写 canvas 的
      * CSS 宽高,所以画布会一直是旧的像素尺寸、相机 aspect 也是旧的,要等下一次拖播放头才自愈。
-     * 导出和 see_preview 都是重新起页面渲染,不受影响;错的只有人眼看的实时预览。
+     * 导出和 see_frames 都是重新起页面渲染,不受影响;错的只有人眼看的实时预览。
      */
     const ro = new ResizeObserver(() => {
       const nw = Math.max(1, el.clientWidth);

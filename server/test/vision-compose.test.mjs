@@ -1,5 +1,5 @@
 // node --test server/test/vision-compose.test.mjs
-// see_preview 的合成:卡片层只进页面、素材层由 ffmpeg 抽帧,这里验纯函数那部分。
+// see_frames 的合成:卡片层只进页面、素材层由 ffmpeg 抽帧,这里验纯函数那部分。
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { PNG } from "pngjs";

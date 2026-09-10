@@ -65,7 +65,7 @@ node "${toolCli}" call add_clip '{"cardId":"title-card","start":0,"duration":3,"
 node "${toolCli}" save                       # 等写回完成,打印 project.proc 的路径和 file:// 链接
 \`\`\`
 
-带画面的工具(\`see_preview\`)返回里的 \`previewImage\` 是一张 png 的路径,看图请读那个文件。
+带画面的工具(\`see_frames\`)返回里的 \`previewImage\` 是一张 png 的路径,看图请读那个文件。
 
 ## 想亲眼看看编辑台
 
@@ -78,7 +78,7 @@ ${viewUrl || `http://127.0.0.1:${port}/?observe=1`}
 它是**只读**的:能看,不能改 —— 保存会被服务端拒掉,项目还是由你通过工具来改。
 页面是打开那一刻的快照,你改完要重新加载才看得到新画面。
 
-看某一帧的真实渲染,\`see_preview\` 比开浏览器更直接也更准,优先用它。
+看某一帧的真实渲染,\`see_frames\` 比开浏览器更直接也更准,优先用它。
 
 ## 开工第一件事(必做)
 
@@ -90,7 +90,7 @@ ${viewUrl || `http://127.0.0.1:${port}/?observe=1`}
 
 1. \`get_project\` 看整体结构,\`list_media\` 看素材,\`list_cuts\` 看有几条剪辑;
 2. \`list_cards\` 扫一遍有哪些卡、每张卡什么时候用;选定之后 \`list_cards({cardId})\` 拿完整参数再 \`add_clip\`;
-3. 改完关键的几张卡就 \`see_preview\` 看真实画面,别凭想象排版;涉及遮挡和位置的决定必须看图;
+3. 改完关键的几张卡就 \`see_frames\` 看真实画面,别凭想象排版;涉及遮挡和位置的决定必须看图;
 4. 字幕用 \`fill_captions\`,不要手写 lines;素材有语音就先 \`transcribe_media\`;
    用户给的是网页链接(B 站 BV 号之类)就 \`collect_probe\` 看一眼再 \`collect_download\`,用 \`collect_job\` 轮询到 done,素材会自动登记进素材库;
 5. **已经在时间轴上的卡要改就 \`update_clip\`**,不要删了重建 —— 重建会换 id,用户那边合并时会当成"删了一张又加了一张"。

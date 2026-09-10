@@ -11,7 +11,7 @@
  * 连哪个实例:--port N > 环境变量 PROMPTCUT_PORT > --job <目录>/instance.json > 当前目录的 instance.json。
  * Skill 任务目录里就有 instance.json,所以在任务目录下直接跑就行。
  *
- * see_preview 这类带画面的工具,返回里的 __image 会被换成一个 png 文件路径(写在当前目录),
+ * see_frames 这类带画面的工具,返回里的 __image 会被换成一个 png 文件路径(写在当前目录),
  * base64 不打到终端 —— 那是几十万字符的乱码,模型看不见画面,上下文还被撑爆。
  */
 import fs from "node:fs";

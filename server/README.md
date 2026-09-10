@@ -17,7 +17,7 @@
 * `POST /api/mcp/result` - 编辑台返回的 MCP 工具执行结果。
 * `POST /api/mcp/call` - MCP server 向编辑台请求工具调用。
 * `GET /api/mcp/status` - 获取当前 MCP 连接状态（调试用）。
-* `POST /api/vision/sheet` - 接收 `{ media, start, end, grid }`，用 ffmpeg 把素材这一段等间隔抽 4 或 9 帧拼成一张 JPEG（`__image`），按文件、修改时间、区间、格数缓存在 `out/sheets/`。是 MCP 工具 `see_sequences`（按镜头分页看素材画面）的服务端一半；规划逻辑在 `src/ai/sequences.ts`。
+* `POST /api/vision/sheet` - 接收 `{ media, start, end, grid }`，用 ffmpeg 把素材这一段等间隔抽 4 或 9 帧拼成一张 JPEG（`__image`），按文件、修改时间、区间、格数缓存在 `out/sheets/`。是 MCP 工具 `see_frames` 素材模式（`source: "media"`，按镜头分页看素材画面）的服务端一半；规划逻辑在 `src/ai/sequences.ts`。
 
 ### 多 Agent 并行
 

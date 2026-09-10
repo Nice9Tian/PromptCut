@@ -123,7 +123,7 @@ test('事件类型必须是 thinking_delta —— agent.mjs 只认这个名字,�
 test('有官方 functionCall.id 就用它,没有才自己编号', async () => {
   const { events } = await run(CFG, {
     responses: [() => sse(parts(
-      { functionCall: { id: 'call_abc', name: 'see_preview', args: { t: 1 } } },
+      { functionCall: { id: 'call_abc', name: 'see_frames', args: { t: 1 } } },
       { functionCall: { name: 'list_cards', args: {} } },
     ))],
   });
@@ -135,9 +135,9 @@ test('有官方 functionCall.id 就用它,没有才自己编号', async () => {
 test('自己编的号在一条流里不会重复 —— agent.mjs 撞号会直接停掉整轮', async () => {
   const { events } = await run(CFG, {
     responses: [() => sse(parts(
-      { functionCall: { name: 'see_preview', args: { t: 1 } } },
-      { functionCall: { name: 'see_preview', args: { t: 2 } } },
-      { functionCall: { name: 'see_preview', args: { t: 3 } } },
+      { functionCall: { name: 'see_frames', args: { t: 1 } } },
+      { functionCall: { name: 'see_frames', args: { t: 2 } } },
+      { functionCall: { name: 'see_frames', args: { t: 3 } } },
     ))],
   });
   const ids = events.filter((e) => e.type === 'tool_use').map((e) => e.id);
@@ -148,7 +148,7 @@ test('自己编的号在一条流里不会重复 —— agent.mjs 撞号会直�
 
 const withToolResult = (content, toolUseId = 'call_abc') => [
   { role: 'user', content: [{ type: 'text', text: '看一下' }] },
-  { role: 'assistant', content: [{ type: 'tool_use', id: toolUseId, name: 'see_preview', input: {} }] },
+  { role: 'assistant', content: [{ type: 'tool_use', id: toolUseId, name: 'see_frames', input: {} }] },
   { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolUseId, content }] },
 ];
 const fnResp = (sent) => sent[0].contents.at(-1).parts[0].functionResponse;
@@ -177,7 +177,7 @@ test('官方 id 回传,自己编的号不回传(发过去 Gemini 也不认识)',
 
 test('functionResponse 的 name 从当轮的 tool_use 里查,别写死 unknown', async () => {
   const { sent } = await run(CFG, { messages: withToolResult({ ok: true }), responses: [() => sse(parts({ text: '好' }))] });
-  assert.equal(fnResp(sent).name, 'see_preview');
+  assert.equal(fnResp(sent).name, 'see_frames');
 });
 
 /* ── 收尾 ─────────────────────────────────────────────────────── */

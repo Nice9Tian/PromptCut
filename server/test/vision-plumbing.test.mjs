@@ -125,9 +125,9 @@ function scriptedProvider(toolName) {
 async function runWithTool(result) {
   const events = [];
   const agent = new Agent({
-    provider: scriptedProvider('see_preview'),
+    provider: scriptedProvider('see_frames'),
     system: 's',
-    tools: [{ name: 'see_preview', inputSchema: { type: 'object', properties: {} }, execute: async () => result }],
+    tools: [{ name: 'see_frames', inputSchema: { type: 'object', properties: {} }, execute: async () => result }],
     onEvent: (e) => events.push(e),
   });
   const out = await agent.run('看一眼画面');

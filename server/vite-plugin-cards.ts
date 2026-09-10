@@ -655,7 +655,7 @@ export default function vitePluginCards(): Plugin {
               file: `src/cards/user/${id}.tsx`,
               replaced,
               source: after,
-              hint: '已改写并热更新。改完用 see_preview 看一眼画面,再决定要不要接着调。',
+              hint: '已改写并热更新。改完用 see_frames 看一眼画面,再决定要不要接着调。',
             });
           } catch (e: any) {
             sendJson(res, 400, { ok: false, error: e?.message || String(e) });

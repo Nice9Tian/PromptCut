@@ -134,7 +134,7 @@ let lastActionPending: (() => Promise<void>) | null = null;
 /**
  * SKILL 模式的悬浮窗下面显示「agent 上一步做成的动作」的画面。
  *
- * 只在无头实例的页面里做(它才是被 agent 操控的那份):动作成功后按 see_preview 那条路
+ * 只在无头实例的页面里做(它才是被 agent 操控的那份):动作成功后按 see_frames 那条路
  * 把那一刻的整屏渲染成 png,POST 给自己的服务端写到 skillRoot/last-action.{png,json},
  * 壳的 watcher 盯着那两个文件,变了就推给悬浮窗。全程失败静默 —— 预览是锦上添花,
  * 不能反过来影响工具调用。
@@ -360,8 +360,19 @@ export function connectMcpExecutor(getApi: () => EditorApi, onStatus?: (s: { con
           else if (tool === "create_card") result = await api.createCard(args);
           else if (tool === "get_card_source") result = await api.getCardSource(args);
           else if (tool === "edit_card") result = await api.editCard(args);
-          else if (tool === "see_preview") result = await api.seePreview(args);
-          else if (tool === "see_sequences") result = await api.seeSequences(args);
+          else if (tool === "see_frames") {
+            // 一个工具两种画面:成片(timeline)走 seePreview,素材镜头拼图(media)走 seeSequences
+            const { source, ...rest } = (args ?? {}) as any;
+            if (source === "media") {
+              result = rest.mediaId
+                ? await api.seeSequences(rest)
+                : { ok: false, error: 'source 为 "media" 时要给 mediaId(list_media 里的素材 id)' };
+            } else if (source === "timeline" || source === undefined) {
+              result = await api.seePreview(rest);
+            } else {
+              result = { ok: false, error: `source 只能是 "timeline"(成片画面)或 "media"(素材镜头拼图),收到的是 ${JSON.stringify(source)}` };
+            }
+          }
           else if (tool === "card_authoring_guide") result = await api.cardAuthoringGuide();
           // 网页操作不经过 EditorApi:浏览器整个在服务端,这些工具不碰编辑台的任何状态。
           // 挂进 EditorApi 只会逼编辑台那边实现 8 个纯转发的方法。

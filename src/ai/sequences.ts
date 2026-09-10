@@ -1,7 +1,7 @@
 import type { Shots, Transcript, TransitionKind } from "../kernel/project";
 
 /**
- * see_sequences 的纯逻辑:把镜头划分变成「要看哪几个镜头、分几页、每张拼图抽哪几帧」。
+ * see_frames 素材模式(source: "media")的纯逻辑:把镜头划分变成「要看哪几个镜头、分几页、每张拼图抽哪几帧」。
  * 不碰网络、不碰 store,node 里直接单测(sequences.test.mjs)。拼图本身由服务端 ffmpeg 生成
  * (server/vite-plugin-vision.ts 的 /api/vision/sheet),这里只算规划。
  */

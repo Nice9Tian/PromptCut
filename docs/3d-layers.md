@@ -187,7 +187,7 @@ A 层是 DOM、B 层是同一棵 DOM 里的一个 canvas，浏览器一次就合
 
 ### 硬规矩：绝不进 Agent 的眼睛
 
-`see_preview` 走 `scripts/export-frames.mjs` 另起一个 Chrome、加载 `?export=1`，
+`see_frames` 走 `scripts/export-frames.mjs` 另起一个 Chrome、加载 `?export=1`，
 **根本不经过编辑台那个窗口**。所以只要实体模式活在 `?stage=1` 这条路上，vision 那边读都读不到。
 
 参数必须是**显式打开**：
@@ -305,7 +305,7 @@ mesh.rotation.y = t * 转速 * 2π      // 而不是 rotation.y += delta
 
 **素材段(视频 / 图片)不支持。** 三条渲染路径各是一个样:编辑器预览(`MediaLayers`)会按
 frame 斜切但没有透视(素材层渲染在主文档里,祖先没有 perspective);导出(`ExportView`)
-根本不读 frame,整幅铺满;`see_preview` 的素材层走服务端 ffmpeg,同样只有整幅缩放。
+根本不读 frame,整幅铺满;`see_frames` 的素材层走服务端 ffmpeg,同样只有整幅缩放。
 没有一种是对的,所以 `set_position` 和 `set_clip` 两条路都拒。
 
 ## 待验证的四条 —— 都验完了
@@ -337,7 +337,7 @@ frame 斜切但没有透视(素材层渲染在主文档里,祖先没有 perspect
 **那个推理漏了第三条,而且是最自然的那条:烘一次,存成素材。**
 
 关键在于「不要求**当场**栅格化」。烘焙是一次性的、发生在更早的一步,画那张图的就是导出成片的
-那个渲染器(`scripts/export-frames.mjs`,和 `see_preview` 同一条管线)。之后预览和导出都只是
+那个渲染器(`scripts/export-frames.mjs`,和 `see_frames` 同一条管线)。之后预览和导出都只是
 **加载同一个文件**,谁都没有在栅格化。分叉的前提是两边各算各的,而这里没有人在算。
 
 实测:同一张烘出来的贴图,预览(`?stage=1`)和导出(`?export=1`)的同一帧,
@@ -352,7 +352,7 @@ scene-3d 的 texture 参数填那个 url
 ```
 
 管线是现成的,一件新东西都没造:`isolateClip`(只渲这一张卡)+ `renderOneFrame` 早就在
-`server/vite-plugin-vision.ts` 里给 `see_preview` 用着;`/api/media/upload` 和 `/@media/<名>`
+`server/vite-plugin-vision.ts` 里给 `see_frames` 用着;`/api/media/upload` 和 `/@media/<名>`
 早就在 `server/vite-plugin-media.ts` 里。而 `/@media/` 和两个渲染页**同源**,所以
 `TextureLoader` 读它不会污染画布。新增的只有一个端点(`/api/vision/bake`)和一个参数。
 

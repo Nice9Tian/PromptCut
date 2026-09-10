@@ -210,7 +210,7 @@ Agent 和代码页看到的不是组件源码,而是一份固定形状的**封�
 | 动画 class | `animate-xxx` 没定义 | Tailwind 自带 4 个；MagicUI 的 22 组已在 `magicui-animations.css`；别的要自己写进去 |
 | 来源/许可证 | 搬来的没写来源，或许可证不允许 | 不知道能不能随安装包分发 |
 
-机制上已验证能直接搬的 Magic UI 组件（和已过逐字节比对的 5 张同类）：文字类（Text Animate、Typing、Number Ticker、Word Rotate、Shiny / Gradient / Aurora Text、Morphing、Spinning、Text 3D Flip）、Blur Fade、Border Beam、Shine Border、Marquee、Orbiting Circles、Animated List、各按钮、各背景图案、设备框。搬进来后一定 `see_preview` 看一眼。
+机制上已验证能直接搬的 Magic UI 组件（和已过逐字节比对的 5 张同类）：文字类（Text Animate、Typing、Number Ticker、Word Rotate、Shiny / Gradient / Aurora Text、Morphing、Spinning、Text 3D Flip）、Blur Fade、Border Beam、Shine Border、Marquee、Orbiting Circles、Animated List、各按钮、各背景图案、设备框。搬进来后一定 `see_frames` 看一眼。
 
 ## 4. 组件收到什么
 
@@ -234,7 +234,7 @@ card_authoring_guide()                     ← 先读规则（就是这份）
 create_card({ id, source })                ← 落盘 + 热更新 + 自动注册
 list_cards({ cardId: "price-tag" })        ← 确认注册成功、schema 是你想要的
 add_clip({ cardId: "price-tag", start, duration, params })   ← 放上时间轴
-see_preview({ clipId })                    ← 看一眼画面，确认它真的长成你想要的样子
+see_frames({ source: "timeline", clipId })                    ← 看一眼画面，确认它真的长成你想要的样子
 seek({ t: start + 0.5 })                   ← 把播放头挪过去，让用户直接看到效果
 ```
 
@@ -251,7 +251,7 @@ seek({ t: start + 0.5 })                   ← 把播放头挪过去，让用户
 ```
 list_cards({ cardId })          ← 看这张卡有哪些参数
 update_clip({ clipId, params }) ← 改值，立刻生效，不碰源码
-see_preview({ clipId })         ← 看一眼改成什么样了
+see_frames({ source: "timeline", clipId })         ← 看一眼改成什么样了
 ```
 
 只有参数覆盖不到的（要加一个新参数、改布局、改动画类型）才动源码，走这三步：
@@ -259,7 +259,7 @@ see_preview({ clipId })         ← 看一眼改成什么样了
 ```
 get_card_source({ cardId })                   ← 读回当前源码，必须先读
 edit_card({ cardId, find, replace })          ← 只替换那一段，别处原样不动
-see_preview({ clipId })                       ← 看画面确认，别凭源码想象
+see_frames({ source: "timeline", clipId })                       ← 看画面确认，别凭源码想象
 ```
 
 `find` 要从 `get_card_source` 返回的源码里**逐字照抄**（缩进、空格都要一致），并且在

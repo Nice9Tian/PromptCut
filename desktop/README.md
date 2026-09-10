@@ -295,7 +295,7 @@ SKILL 模式的悬浮图标（`ui/overlay.html`，`src-tauri/src/skill_shell.rs`
 agent **上一次做成的时间轴动作**那一刻的画面——没有时间轴、没有控件，只回答「它刚才那一步做出来是什么样」：
 
 - 无头实例的页面里，时间轴类工具（add_clip / update_clip / set_rect / fill_captions 等，见
-  `src/ai/mcpExecutor.ts` 的 `TIMELINE_TOOLS`）成功后按 `see_preview` 那条路渲染那张卡中点的整屏，
+  `src/ai/mcpExecutor.ts` 的 `TIMELINE_TOOLS`）成功后按 `see_frames` 那条路渲染那张卡中点的整屏，
   POST 到自己的 `/api/skill-mode/last-action`，写到 `~/Documents/PromptCut-Skill/last-action.{png,json}`
   （先写临时文件再改名）。只有 `PROMPTCUT_HEADLESS=1` 的实例会写，用户自己那份的动作不算。
 - 壳的 watcher 每秒看一眼 `last-action.json` 的修改时间，变了就把 png 读成 data URL 推给悬浮页

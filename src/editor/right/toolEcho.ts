@@ -4,7 +4,7 @@
  *
  * 为什么要有这些——来自一份真实对话导出的复盘：4 轮对话、79 次工具调用只失败 1 次，
  * 用户还是没拿到想要的结果。时间耗在三件事上：
- *   - 前两轮 47 次调用里 0 次 see_preview，却在总结里写「已避开人物主体」；
+ *   - 前两轮 47 次调用里 0 次 see_frames，却在总结里写「已避开人物主体」；
  *   - 18 次 remove_clip + 13 次 add_clip：第 2 轮把第 1 轮刚建的 5 张卡全删了、再建 5 张几乎一样的；
  *   - 第 3 轮拿着第 1 轮的 clipId 去 update_clip，那个 id 第 2 轮已经被它自己删了。
  * 三样东西分别对着这三件事：lookHint 给它一个看画面的入口，timelineDigest 让它手里的 id 永远是新的，
@@ -69,8 +69,8 @@ const round2 = (n: number) => Math.round(n * 100) / 100;
  */
 export function lookHint(clipId: string) {
   return {
-    tool: "see_preview",
-    args: { clipId },
+    tool: "see_frames",
+    args: { source: "timeline", clipId },
     why: "先确认真实画面再下结论：这张卡会不会压到人物、文字会不会被别的卡盖住。要看整屏就不传 clipId、传 t。",
   };
 }

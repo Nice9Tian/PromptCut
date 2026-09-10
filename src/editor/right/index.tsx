@@ -730,7 +730,7 @@ export function RightPanel() {
             ? { clamped: `fovDeg 被夹到 ${fov}(允许 ${MIN_FOV_DEG}~${MAX_FOV_DEG})` }
             : null),
           cameraDistancePx: Math.round(cam.distance),
-          hint: "现在 set_position 的 rotateX / rotateY / translateZ 会走真透视了。改完用 see_preview 看一眼 —— 透视强度只能看,算不出来",
+          hint: "现在 set_position 的 rotateX / rotateY / translateZ 会走真透视了。改完用 see_frames 看一眼 —— 透视强度只能看,算不出来",
         };
       },
 
@@ -1061,7 +1061,7 @@ export function RightPanel() {
                 subjectHint: `上次主体检测失败:${subjectPending.error}。`
                   + (media.subjects ? "下面每个镜头的 subject 来自更早成功的那一批,不是这次的。" : "")
                   + "先调 subject_status 看 engine:为 null 说明这台机器上两档都用不了(没有兜底档),"
-                  + "退回 see_preview({ t }) 看真实画面判断人在哪,**不要继续轮询本工具**;"
+                  + "退回 see_frames({ source: 'timeline', t }) 看真实画面判断人在哪,**不要继续轮询本工具**;"
                   + "engine 不为 null 才值得调 detect_subjects 并传 force:true 重试。",
               }
             : subjectPending
@@ -1080,7 +1080,7 @@ export function RightPanel() {
                       subjectFailedCount: media.subjects.failedCount ?? 0,
                       subjectHint: `主体检测跑完了,但这一批 ${media.subjects.samples.length} 个采样没有一个可用`
                         + "(全部抽帧失败,见 subjectFailedCount),所以每个 subject 都是 null —— 这不是「画面里没有人」。"
-                        + "换几个时刻用 detect_subjects 传 times 重测,或退回 see_preview({ t }) 看图。",
+                        + "换几个时刻用 detect_subjects 传 times 重测,或退回 see_frames({ source: 'timeline', t }) 看图。",
                     }
                   : {
                       subjectEngine: media.subjects.engine,
@@ -1404,7 +1404,7 @@ export function RightPanel() {
                 + "要按任意词找目标(猫、手机、红色的车)得装 full 档拓展库包。"
               // 这里没有兜底档,和运动追踪不一样 —— 不能让模型以为还有个降级引擎在跑。
               : "两档都用不了,这台机器上检测不了主体。"
-                + "位置和遮挡的判断退回 see_preview 看图,不要凭空猜「人在左边」。"
+                + "位置和遮挡的判断退回 see_frames 看图,不要凭空猜「人在左边」。"
                 + "用户想要就用 subject_install 装 light 档(约 30 MB)。",
         };
       },
@@ -1800,8 +1800,8 @@ export function RightPanel() {
           note: [
             ...notes,
             `每张拼图对应 scenes 里同序号的镜头,格子按行从左到右对应 frames 里的秒数。`,
-            plan.nextPage ? `还有 ${plan.pages - plan.page} 页:see_sequences({ mediaId, page: ${plan.nextPage} })。` : "这是最后一页。",
-            "某个镜头看不清:see_sequences({ mediaId, scene: 序号, grid: 9 })。",
+            plan.nextPage ? `还有 ${plan.pages - plan.page} 页:see_frames({ source: "media", mediaId, page: ${plan.nextPage} })。` : "这是最后一页。",
+            "某个镜头看不清:see_frames({ source: 'media', mediaId, scene: 序号, grid: 9 })。",
             !media.transcript ? "这个素材还没转写,想对照说了什么先 transcribe_media。" : "",
           ].filter(Boolean).join(" "),
           __images: images,
