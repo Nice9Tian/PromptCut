@@ -9,7 +9,7 @@ import { runReviewLoop, presentLoopEvent } from '../harness/loop.mjs';
  * 审查环路的教训跨运行保存:judger 在改写时认可的教训,下一次运行开场交给 judger 和 worker。
  * 放在 ai.json 同目录(不放 %TEMP%,那里会被清理)。只留最近 30 条,多了会稀释注意力。
  */
-function lessonsStore() {
+export function lessonsStore() {
   const dir = process.env.PROMPTCUT_AI_CONFIG
     ? path.dirname(process.env.PROMPTCUT_AI_CONFIG)
     : path.join(process.env.LOCALAPPDATA || os.homedir(), 'promptcut');
