@@ -179,7 +179,7 @@ let counter = 0;
  * 插队只插**还没开始**的:正在跑的那几个 Chrome 不打断(打断等于白烧几秒)。
  * 所以前台最坏等一个槽位空出来,而不是等整条队。
  */
-interface RenderJob { run: () => Promise<any>; ok: (v: any) => void; fail: (e: any) => void; priority: number }
+interface RenderJob { run: () => Promise<any>; ok: (v: any) => void; fail: (e: any) => void; priority: number; queueTimer?: NodeJS.Timeout }
 const renderWaiting: RenderJob[] = [];
 /**
  * 正在渲的:键 → 那次渲染的 promise。同一个键同时被要好几次时共用一次渲染。
@@ -224,6 +224,8 @@ function pumpRenderQueue() {
     const limit = next.priority > 0 ? max : Math.max(1, max - 1);
     if (renderRunning >= limit) break;
     const item = renderWaiting.shift()!;
+    // 排队看门狗只管排队那一段;真开跑了就归 runExport 的 RENDER_TIMEOUT_MS 管
+    if (item.queueTimer) clearTimeout(item.queueTimer);
     renderRunning++;
     Promise.resolve()
       .then(item.run)
@@ -232,10 +234,31 @@ function pumpRenderQueue() {
   }
 }
 
-/** priority 越大越先跑。前台(用户正等着看的)传 1,空闲预烘用默认的 0 */
-function enqueue<T>(job: () => Promise<T>, priority = 0): Promise<T> {
+/**
+ * priority 越大越先跑。前台(用户正等着看的)传 1,空闲预烘用默认的 0。
+ *
+ * `queueTimeoutMs`:**排队等太久就别等了。**
+ *
+ * runExport 的 `RENDER_TIMEOUT_MS` 是从「派活那一刻」起算的,盖不住前面排队的那一段。
+ * 于是一个活可以在队列里躺任意久而没有任何看门狗上膛 —— 上层(见 mcp-tools.mjs 里
+ * see_preview 的 timeoutMs)先到点放弃等待,回一句「超过 N 秒没有返回」,而这句话
+ * 什么都没解释:到底是渲染卡住了,还是压根没轮到它?两者的下一步完全不同。
+ * 给排队单独上一个看门狗,超时就把它从队里摘掉并说清是**排队**排掉的。
+ */
+function enqueue<T>(job: () => Promise<T>, priority = 0, queueTimeoutMs = 0): Promise<T> {
   return new Promise<T>((ok, fail) => {
     const item: RenderJob = { run: job, ok, fail, priority };
+    if (queueTimeoutMs > 0) {
+      item.queueTimer = setTimeout(() => {
+        const at = renderWaiting.indexOf(item);
+        if (at < 0) return; // 已经开跑了,轮不到这里管
+        renderWaiting.splice(at, 1);
+        fail(new Error(
+          `排队等渲染超过 ${Math.round(queueTimeoutMs / 1000)} 秒还没轮到(前面有 ${renderRunning} 个正在渲)。`
+          + `不是这张卡的问题 —— 过一会儿再看,或者等手上的导出 / 预烘跑完。`,
+        ));
+      }, queueTimeoutMs);
+    }
     // 插在所有优先级不低于它的之后 —— 同级之间仍然先来后到
     const at = renderWaiting.findIndex((w) => w.priority < priority);
     if (at < 0) renderWaiting.push(item); else renderWaiting.splice(at, 0, item);
@@ -1141,7 +1164,19 @@ export function visionPlugin(): Plugin {
             }
 
             notes.push("画面里的灰色棋盘格是**透明**,不是画面内容 —— 那里什么都没画。卡片盖住的地方看不到格子。") ;
-            const raw = await enqueue(() => renderOneFrame(root, originOf(server), target, at, notes));
+            /*
+             * **前台优先级(1),不是默认的 0。**
+             *
+             * see_preview 是模型正阻塞着等的那一张 —— 前台里最前台的。可它原来用默认
+             * priority,于是掉进 pumpRenderQueue 给后台留的那道限制里:后台只能用到
+             * `max - 1` 个槽位,而且要和空闲预烘按先来后到排。也就是说,那个「永远给
+             * 前台留一个槽位」的设计恰好把真正的前台挡在了外面。
+             *
+             * 排队看门狗给 25 秒:加上渲染自己的 120 秒上限,合起来 145 秒,刚好落在
+             * see_preview 那 150 秒工具上限之内 —— 保证超时之前一定能给出一句
+             * **说得清原因**的话,而不是让上层回一句无从下手的「没有返回」。
+             */
+            const raw = await enqueue(() => renderOneFrame(root, originOf(server), target, at, notes, 1), 1, 25000);
             const { png, width, height } = shrink(PNG.sync.read(raw));
             const base64 = PNG.sync.write(png).toString("base64");
 
@@ -1344,7 +1379,9 @@ export function visionPlugin(): Plugin {
             const { project, clipId, t, size, bg } = JSON.parse(body || "{}");
             if (!project || !Array.isArray(project.tracks)) return sendJson(res, 400, { ok: false, error: "缺少 project" });
             if (!clipId) return sendJson(res, 400, { ok: false, error: "缺少 clipId:烘焙只能对着一张卡" });
-            const out = await bakeOne(root, originOf(server), resolveMediaUrls(project).project, clipId, Number(t), size, bg);
+            // 和 /snapshot 同理:bake_card 是模型正阻塞着等的一次调用,属前台(priority 1),
+            // 不该排在空闲预烘后面。fit 保持默认的 square —— 贴图要正方形
+            const out = await bakeOne(root, originOf(server), resolveMediaUrls(project).project, clipId, Number(t), size, bg, "square", 1);
             sendJson(res, 200, { ok: true, ...out });
           } catch (e: any) {
             sendJson(res, 500, { ok: false, error: e?.message || String(e) });
