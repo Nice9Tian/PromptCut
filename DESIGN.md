@@ -67,12 +67,13 @@ export const myCard: CardDef<Params> = {
 细节和实测数据见 `scripts/README.md`。要点:
 
 - 页面侧(`src/ExportView.tsx`)暴露 `__pcReady`、`__pcTimeline`、`__pcSetT(sec)`、`__pcSyncAnims()`、`__pcResetAnims()`、`__pcRestartCards()`、`__pcFrameReady()`,类型声明在 `src/kernel/clock.ts`。
-- 导出视图一进入就装 `installExportClock()`(`src/kernel/exportClock.ts`):`performance.now` 和 rAF 时间戳量化到当前帧的导出毫秒。
-- 每帧:`__pcSetT` → 推进一格虚拟时间(rAF 等待先挂再推进)→ `__pcSyncAnims` 把所有 Web Animations pause 并钉 currentTime → 等图片 decode / 视频 seek → 截图(截图期间虚拟时间切 advance,截完切回 pause)。
+- 导出视图一进入就装 `installExportClock()`(`src/kernel/exportClock.ts`):`performance.now` 和 rAF 时间戳量化到当前帧的导出毫秒。随机数、墙上时钟、crypto 由 `src/kernel/pinEntropy.ts` 在所有 import 之前钉死(`render/stageClockEntry.ts`)。
+- **0.4 起渲染后端是 chrome-headless-shell 的 `HeadlessExperimental.beginFrame`**(帧时间由脚本给),不再用 CDP 虚拟时间。每帧:`__pcSetT` → 等网络 → 排空 → beginFrame 推一拍 → 等网络 → 排空 → `__pcSyncAnims` 钉动画 → 排空 → 等图片 decode / 视频 seek → beginFrame 截图。旧的虚拟时间后端归档在 `scripts/archive/`。
 - `AnimClock` 只在预览里做倍速;导出时不碰 playbackRate。
-- Chrome 启动参数固定带软件光栅化(`--disable-gpu` 等)和窗口移出屏幕。
-- 输出 `<out>/frames/%06d.png`,ffmpeg 合成 `overlay.mov`(ProRes 4444 alpha)和 `preview.mp4`。
-- `scripts/verify-determinism.mjs` 导两遍逐像素比对,目标全部相同(2026-09-06 三段各 60/60)。
+- Chrome 启动参数固定带软件光栅化(`--disable-gpu` 等)和 `--enable-begin-frame-control`。
+- 字体:每个字形都要落在字体栈里显式写出的字体上(主题字体栈见 `src/themes/index.ts`),`scripts/font-audit.mjs` 检查。
+- 输出 `<out>/frames/%06d.png`,ffmpeg 合成 `overlay.mov`(ProRes 4444 alpha)和 `preview.mp4`。可选 `--dom-cache` 同时存每帧的 HTML 快照,供 `scripts/replay-frames.mjs` 乱序重截。
+- `scripts/verify-determinism.mjs` 导两遍逐像素比对,目标全部相同。实测见 `scripts/README.md` 和 `docs/render-rebuild-plan.md`。
 
 ## 注意
 

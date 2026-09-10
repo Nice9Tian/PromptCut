@@ -438,60 +438,67 @@ function stepChrome(appDir) {
    * 实测过一次 —— 而那 428 MB 拷过去的内容和已经在的一模一样,纯属白费。
    * 真要重来就先把 runtime/chrome 删掉。
    */
-  const already = fs.existsSync(chromeExe);
+  /*
+   * 两个浏览器都要:
+   *   chrome                —— 完整 Chrome,给网页工具 / 采集用(server/web/browser.mjs)
+   *   chrome-headless-shell —— 导出和预烘用。0.4 起渲染后端是 HeadlessExperimental.beginFrame,
+   *                            这个 CDP 域只在 headless-shell 里有(见 scripts/export-frames.mjs 文件头)。
+   *                            以前为了省约 200 MB 专门不拷它,现在少了它导出直接起不来。
+   * puppeteer 按 PUPPETEER_CACHE_DIR(= runtime/chrome,lib.rs 里设)下的 <browser>/win64-<版本> 找它们。
+   */
+  const BROWSERS = [
+    { name: "chrome", exe: path.join("chrome-win64", "chrome.exe") },
+    { name: "chrome-headless-shell", exe: path.join("chrome-headless-shell-win64", "chrome-headless-shell.exe") },
+  ];
+  const exeOf = (b) => path.join(chromeDir, b.name, `win64-${version}`, b.exe);
 
   if (CHECK_ONLY) {
-    assert(fs.existsSync(chromeExe), `Chrome exe not found: ${chromeExe}`);
-    console.log(`  ✓ Chrome exists (${dirSizeMB(chromeDir)} MB) [${((Date.now() - stepT) / 1000).toFixed(1)}s]`);
+    for (const b of BROWSERS) assert(fs.existsSync(exeOf(b)), `${b.name} exe not found: ${exeOf(b)}`);
+    console.log(`  ✓ Chrome + headless-shell exist (${dirSizeMB(chromeDir)} MB) [${((Date.now() - stepT) / 1000).toFixed(1)}s]`);
     return version;
   }
 
-  // Try copying from puppeteer cache first
   const userProfile = process.env.USERPROFILE || "";
-  const cacheDir = path.join(userProfile, ".cache", "puppeteer", "chrome", `win64-${version}`);
-  let copied = already;
-
-  if (already) {
-    console.log(`  已是同一版本,跳过拷贝(下面的旧版本清理照跑)`);
-  } else if (fs.existsSync(cacheDir)) {
-    console.log(`  Copying from cache: ${cacheDir}`);
-    mkdirp(destVersionDir);
-    copyRecursive(cacheDir, destVersionDir, (name, fullPath) => {
-      // Skip headless shell to save ~200 MB
-      return !fullPath.includes("chrome-headless-shell");
-    });
-    copied = true;
-  }
-
-  if (!copied) {
-    console.log("  Cache not found, downloading via puppeteer…");
-    const dlResult = spawnSync("npx.cmd", [
-      "puppeteer", "browsers", "install", `chrome@${version}`,
-      "--path", chromeDir,
-    ], {
-      cwd: effectiveAppDir,
-      shell: true,
-      stdio: "inherit",
-      timeout: 600_000,
-    });
-    if (dlResult.status !== 0) {
-      console.error(`[FAIL] puppeteer browsers install failed (code ${dlResult.status})`);
-      process.exit(1);
-    }
-  }
-
-  // Remove other Chrome versions
-  const chromeParent = path.join(chromeDir, "chrome");
-  if (fs.existsSync(chromeParent)) {
-    for (const ent of fs.readdirSync(chromeParent, { withFileTypes: true })) {
-      if (ent.isDirectory() && ent.name !== `win64-${version}`) {
-        console.log(`  Removing old version: ${ent.name}`);
-        rmrf(path.join(chromeParent, ent.name));
+  for (const b of BROWSERS) {
+    const dest = path.join(chromeDir, b.name, `win64-${version}`);
+    const cacheDir = path.join(userProfile, ".cache", "puppeteer", b.name, `win64-${version}`);
+    // 这一版已经在位就别再拷(理由见上面 already 那段:开着的 Chrome 会让覆盖拿到 EBUSY)
+    if (fs.existsSync(exeOf(b))) {
+      console.log(`  ${b.name}:已是同一版本,跳过拷贝(下面的旧版本清理照跑)`);
+    } else if (fs.existsSync(cacheDir)) {
+      console.log(`  ${b.name}:Copying from cache: ${cacheDir}`);
+      mkdirp(dest);
+      copyRecursive(cacheDir, dest);
+    } else {
+      console.log(`  ${b.name}:Cache not found, downloading via puppeteer…`);
+      const dlResult = spawnSync("npx.cmd", [
+        "puppeteer", "browsers", "install", `${b.name}@${version}`,
+        "--path", chromeDir,
+      ], {
+        cwd: effectiveAppDir,
+        shell: true,
+        stdio: "inherit",
+        timeout: 600_000,
+      });
+      if (dlResult.status !== 0) {
+        console.error(`[FAIL] puppeteer browsers install ${b.name} failed (code ${dlResult.status})`);
+        process.exit(1);
       }
     }
+
+    // Remove other versions of this browser
+    const parent = path.join(chromeDir, b.name);
+    if (fs.existsSync(parent)) {
+      for (const ent of fs.readdirSync(parent, { withFileTypes: true })) {
+        if (ent.isDirectory() && ent.name !== `win64-${version}`) {
+          console.log(`  Removing old ${b.name} version: ${ent.name}`);
+          rmrf(path.join(parent, ent.name));
+        }
+      }
+    }
+    assert(fs.existsSync(exeOf(b)), `${b.name} exe not found after install: ${exeOf(b)}`);
   }
 
-  assert(fs.existsSync(chromeExe), `Chrome exe not found after install: ${chromeExe}`);
   console.log(`  Done (${dirSizeMB(chromeDir)} MB) [${((Date.now() - stepT) / 1000).toFixed(1)}s]`);
   return version;
 }
