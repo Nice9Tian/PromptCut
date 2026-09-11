@@ -3,6 +3,7 @@ import { actions, getState } from "../../store/project";
 import { createEmptyProject } from "../../kernel/project";
 import { resetProjectAi } from "../../ai/projectAi";
 import { getCard } from "../../kernel/registry";
+import { mediaUrlFromPath, restoreMediaUrls } from "./mediaUrls";
 
 // 模块级变量存 File，供阶段 2 导出时使用
 const mediaFiles = new Map<string, File>();
@@ -155,20 +156,10 @@ export async function importProjectFile(file: File): Promise<Project> {
     };
     delete (project as unknown as Record<string, unknown>)._note;
 
-    if (project.media) {
-      for (const m of project.media) {
-        if (m.path) {
-          const basename = m.path.split(/[/\\]/).pop();
-          m.url = `/@media/${encodeURIComponent(basename || "")}`;
-        } else if (m.url.startsWith("blob:") || m.url.startsWith("http:") || m.url.startsWith("https:") || m.url.startsWith("data:") || m.url.startsWith("/")) {
-          // keep
-        } else {
-          console.warn(`[io] 缺失素材: ${m.name} (${m.url})`);
-          m.url = "";
-          m.name = `(缺失) ${m.name}`;
-        }
-      }
-    }
+    // 和打开 .proc 同一套换算(parseProc 也调它),规则只有一份
+    const restored = restoreMediaUrls(project.media || []);
+    for (const m of restored.missing) console.warn(`[io] 缺失素材: ${m.name} (${m.url})`);
+    project.media = restored.media;
 
     actions.loadProject(project, file.name);
     // 换项目就要清掉 AI 状态。打开 .proc 走 applyProjectAi、新建走 resetProjectAi,
@@ -279,10 +270,16 @@ export async function importSrtFile(
 /** 把当前项目序列化成 JSON 字符串(blob URL 换成相对路径) */
 export function exportProjectJson(): string {
   const p = JSON.parse(JSON.stringify(getState().project)) as Project & { _note?: string };
-  p._note = "这个文件只记录编排；media[].url 是素材文件名，重新打开项目后需要用「导入视频」重新导入同名素材，clip 会保留但画面要重新关联。";
+  p._note = "这个文件只记录编排；素材按 media[].path 在服务端素材目录里找回（/@media/<文件名>）。没有 path 的素材只记了文件名，重新打开后要用「导入视频」重新导入同名素材。";
 
   for (const m of p.media) {
     if (m.url.startsWith("blob:")) {
+      // blob: 只在这个页面活着。有 path 就写成服务端地址,重新打开、导出、截图都能直接取到
+      const served = mediaUrlFromPath(m.path);
+      if (served) {
+        m.url = served;
+        continue;
+      }
       // 派生出来的「声音」素材和源视频指着同一个文件,但它自己没登记过 File —— 回头找源素材的
       const file = mediaFiles.get(m.id) ?? (m.soundOf ? mediaFiles.get(m.soundOf) : undefined);
       m.url = file ? file.name : m.name;

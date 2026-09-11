@@ -177,7 +177,8 @@ async function newSession(browser, url) {
    * 等网络:对应旧管线的 pauseIfNetworkFetchesPending。请求一直不回来(比如某个长连接)就显式报错,
    * 假死更糟。事件驱动:没有请求在路上时立刻返回,不白等。
    */
-  const inflight = new Set();
+  /** requestId → 这条请求是什么,超时报错时要说得出是谁挂着 */
+  const inflight = new Map();
   let waiters = [];
   const drained = () => {
     if (inflight.size) return;
@@ -186,13 +187,23 @@ async function newSession(browser, url) {
     w.forEach((f) => f());
   };
   await client.send('Network.enable');
-  client.on('Network.requestWillBeSent', (e) => inflight.add(e.requestId));
+  client.on('Network.requestWillBeSent', (e) => {
+    /*
+     * <video>/<audio> 的媒体流不算。一段大视频挂在页面上,它的请求会一直开着边播边取,
+     * 永远等不到 loadingFinished —— 算进来的话每帧都要白等满 30 秒然后报错(实测一个项目挂了
+     * 20 段视频、最大 265 MB,导出一帧都出不来)。视频这一层有它自己的等法:ExportView 的
+     * __pcFrameReady 逐层等 seek 到位,这里再等一遍既不需要也等不到。
+     */
+    if (e.type === 'Media') return;
+    inflight.set(e.requestId, `${e.type || '?'} ${String(e.request?.url || '').slice(0, 120)}`);
+  });
   for (const ev of ['Network.loadingFinished', 'Network.loadingFailed', 'Network.requestServedFromCache']) {
     client.on(ev, (e) => { inflight.delete(e.requestId); drained(); });
   }
   const waitNet = (ms = 30000) => (inflight.size === 0 ? Promise.resolve() : new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(
-      `${inflight.size} 个网络请求 ${ms / 1000} 秒还没回来:页面可能挂着一直不结束的请求`
+      `${inflight.size} 个网络请求 ${ms / 1000} 秒还没回来:页面可能挂着一直不结束的请求。`
+      + `前几个:${[...inflight.values()].slice(0, 3).join(' | ')}`
     )), ms);
     waiters.push(() => { clearTimeout(timer); resolve(); });
   }));

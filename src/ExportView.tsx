@@ -46,6 +46,9 @@ async function prefetchMedia(p: Project): Promise<Project> {
       try {
         const res = await fetch(m.url);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        // 找不到的相对地址会被 dev server 的 SPA 回退接住,回 200 + index.html。
+        // 当成素材塞给 <video> 只会解码失败,还让下面的就绪判定白等,所以按缺失处理
+        if ((res.headers.get("content-type") || "").includes("text/html")) throw new Error("拿到的是网页,不是素材");
         return { ...m, url: URL.createObjectURL(await res.blob()) };
       } catch (e) {
         console.warn(`[ExportView] 素材预取失败,该段将没有画面: ${m.url}`, e);
@@ -268,8 +271,16 @@ export default function ExportView() {
   useEffect(() => {
     if (!mediaWarm || window.__pcReady) return;
     const els = [...videoEls.current.values()];
-    if (els.length === 0) return;
-    const allReady = () => els.every((e) => e.readyState >= 4);
+    if (els.length === 0) {
+      // 有 url 的只剩音频(或者画面素材全都预取失败被清空了):没有要缓冲的画面,直接就绪。
+      // 以前这里直接 return,__pcReady 永远不置位,导出脚本等满 60 秒报错
+      if (!(project?.media || []).some((m) => m.url && m.kind !== "audio")) window.__pcReady = true;
+      return;
+    }
+    // 加载失败的元素也算「定了」:它永远等不到 canplaythrough,不放行的话导出卡在第 0 帧。
+    // 那一层照常没有画面,和预取失败(url 清空)的待遇一样
+    const settled = (e: HTMLVideoElement) => e.readyState >= 4 || e.error !== null || e.networkState === HTMLMediaElement.NETWORK_NO_SOURCE;
+    const allReady = () => els.every(settled);
     if (allReady()) {
       window.__pcReady = true;
       return;
@@ -278,12 +289,21 @@ export default function ExportView() {
     const on = () => {
       if (allReady()) {
         window.__pcReady = true;
-        for (const e of els) e.removeEventListener("canplaythrough", on);
+        for (const e of els) {
+          e.removeEventListener("canplaythrough", on);
+          e.removeEventListener("error", on);
+        }
       }
     };
-    for (const e of els) e.addEventListener("canplaythrough", on);
+    for (const e of els) {
+      e.addEventListener("canplaythrough", on);
+      e.addEventListener("error", on);
+    }
     return () => {
-      for (const e of els) e.removeEventListener("canplaythrough", on);
+      for (const e of els) {
+        e.removeEventListener("canplaythrough", on);
+        e.removeEventListener("error", on);
+      }
     };
   }, [mediaWarm, project]);
 

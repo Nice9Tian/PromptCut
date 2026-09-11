@@ -2,6 +2,7 @@ import { actions, getState } from "../../store/project";
 import { createEmptyProject } from "../../kernel/project";
 import type { Project } from "../../kernel/project";
 import { exportProjectJson } from "./index";
+import { restoreMediaUrls } from "./mediaUrls";
 import { collectProjectAi, applyProjectAi, resetProjectAi, type ProjectAi } from "../../ai/projectAi";
 import { getSkillSnapshot } from "../../skill/skillMode";
 
@@ -24,7 +25,8 @@ function skillStamp(): { active: boolean; jobId?: string | null; at?: string } |
  * 里面就是一层薄壳加一份编排:壳记住格式和版本,方便以后改结构时认得出老文件。
  * 兼容读入旧的 `.promptcut.json`(那时候是裸的 Project),所以 `parseProc` 两种都吃。
  *
- * 素材本身不进 .proc,只记文件名 —— 一份编排几十 KB,塞进视频就没法发给别人了。
+ * 素材本身不进 .proc,只记地址和服务端 path —— 一份编排几十 KB,塞进视频就没法发给别人了。
+ * 读回来时 parseProc 按 path 把地址换回 /@media/<文件名>(见 mediaUrls.ts)。
  *
  * 一条不变量:**读回来的 clip.params 必须原样保留,这里绝不补默认值。**
  * clip.params 现在是写入时物化的(store 的 addCardClip / setClipCard 会把 defaults
@@ -84,7 +86,11 @@ export function parseProc(text: string): Project {
   if (!project || typeof project !== "object" || !Array.isArray(project.tracks)) {
     throw new Error("这不是一个 PromptCut 项目文件");
   }
-  return { ...createEmptyProject(), ...project };
+  const full: Project = { ...createEmptyProject(), ...project };
+  // 存下来的素材地址是死的 blob: 或裸文件名,按 path 换回能播的 /@media 地址(见 mediaUrls.ts)
+  const { media, missing } = restoreMediaUrls(full.media || []);
+  for (const m of missing) console.warn(`[proc] 缺失素材: ${m.name} (${m.url})`);
+  return { ...full, media };
 }
 
 /**
