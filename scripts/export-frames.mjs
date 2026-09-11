@@ -1102,7 +1102,11 @@ export async function exportFrames(opts) {
   let baked;
   // Full single-worker exports stream Chrome PNGs directly into local ffmpeg.
   // No frame buffer list or PNG directory is needed for the compositor.
-  const streamCards = !opts.bakery && workers === 1 && !opts.targetFrames && !noVideo;
+  // Stream only a complete timeline.  A --frames segment starts its PNG
+  // sequence at an arbitrary absolute frame; keeping that path file-backed
+  // preserves the segment's start_number and avoids treating a partial stream
+  // as a timeline that begins at frame zero.
+  const streamCards = !opts.bakery && workers === 1 && !opts.targetFrames && !opts.frames && !noVideo;
   await fs.mkdir(outDir, { recursive: true });
   const streamedCards = streamCards ? streamPngVideo(ffmpegCmd, path.join(outDir, 'overlay.mov'), opts.fps || 30) : null;
   try {
