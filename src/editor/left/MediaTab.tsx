@@ -78,7 +78,7 @@ async function measureImageDimensions(url: string): Promise<{ width: number; hei
 }
 
 /** 空态和「没有匹配的…」里的称呼跟着分页走,免得配乐页也说「视频」 */
-const KIND_NOUN: Record<MediaAsset["kind"], string> = { video: "视频", audio: "配乐", image: "图像" };
+const KIND_NOUN: Record<MediaAsset["kind"], string> = { video: "视频", audio: "配乐", image: "图片" };
 
 function fmtDur(sec: number | undefined): string {
   if (sec == null) return "—";

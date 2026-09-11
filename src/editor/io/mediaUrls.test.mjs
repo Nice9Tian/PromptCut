@@ -61,3 +61,24 @@ test("「· 声音」派生素材带着源文件的 path,一样按 path 找回",
   ]);
   assert.equal(media[0].url, `/@media/${encodeURIComponent(src)}`);
 });
+
+test("旧项目把 jpg / mp3 错记成 video 时按扩展名迁移分页", () => {
+  const { media, moved } = restoreMediaUrls([
+    { id: "jpg", kind: "video", name: "东京.jpg", url: "/@media/%E4%B8%9C%E4%BA%AC.jpg" },
+    { id: "mp3", kind: "video", name: "bgm.mp3", url: "/@media/bgm.mp3" },
+    { id: "ok", kind: "image", name: "cover.jpg", url: "/@media/cover.jpg" },
+  ]);
+  assert.deepEqual(media.map((m) => m.kind), ["image", "audio", "image"]);
+  assert.deepEqual(moved.map((m) => [m.id, m.from, m.to]), [
+    ["jpg", "video", "image"],
+    ["mp3", "video", "audio"],
+  ]);
+});
+
+test("派生声音素材即使源文件是 mp4 也不被迁移回视频", () => {
+  const { media, moved } = restoreMediaUrls([
+    { id: "sound", kind: "audio", name: "片段 · 声音", url: "/@media/a.mp4", path: "C:/m/a.mp4", soundOf: "video" },
+  ]);
+  assert.equal(media[0].kind, "audio");
+  assert.deepEqual(moved, []);
+});

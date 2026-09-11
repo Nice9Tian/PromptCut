@@ -1,12 +1,13 @@
 import type { MediaAsset } from "../../kernel/project";
 import { actions } from "../../store/project";
 import { importVideoFiles, registerMediaFile } from "../io";
+import { classifyFileDetailed, EXT_KIND } from "../io/mediaKinds";
 
 export type AssetKind = MediaAsset["kind"];
 
 /**
- * 「导入素材」用的通用导入:用户选什么就收什么,按内容类型分别登记成 video / audio / image 素材,
- * 让它们各自落到素材库对应的分页里。
+ * 「导入素材」用的通用导入:按内容类型分别登记成 video / audio / image 素材,
+ * 让它们各自落到素材库对应的分页里；类型冲突或无法识别的文件会被拒绝。
  *
  * 视频那一路直接复用 io 里的 importVideoFiles —— 它除了登记素材还会把 File 存进 io 的私有表
  * (导出和语音转写靠 getMediaFile 取原文件)、并把片段放到播放头处,自己另写一套只会和它走岔。
@@ -16,19 +17,6 @@ export type AssetKind = MediaAsset["kind"];
  * 而上传失败退回 blob: 的素材导出时会被直接清空。两处都不会提示是导入漏登记造成的。
  */
 
-/** 认不出 MIME 时按后缀兜底:系统对冷门容器(mkv / heic / opus 等)常常给空 type */
-const EXT_KIND: Record<string, AssetKind> = {
-  mp4: "video", m4v: "video", mov: "video", webm: "video", mkv: "video", avi: "video",
-  wmv: "video", flv: "video", mpg: "video", mpeg: "video", ts: "video", m2ts: "video",
-  "3gp": "video", ogv: "video",
-
-  mp3: "audio", wav: "audio", aac: "audio", m4a: "audio", flac: "audio", ogg: "audio",
-  oga: "audio", opus: "audio", wma: "audio", aiff: "audio", aif: "audio",
-
-  png: "image", jpg: "image", jpeg: "image", gif: "image", webp: "image", bmp: "image",
-  tif: "image", tiff: "image", avif: "image", heic: "image", heif: "image", svg: "image",
-};
-
 /** 文件选择器的 accept:MIME 通配打头,再补一串后缀,免得系统不认 MIME 时把文件灰掉 */
 export const MEDIA_ACCEPT = [
   "video/*",
@@ -37,16 +25,9 @@ export const MEDIA_ACCEPT = [
   ...Object.keys(EXT_KIND).map((ext) => `.${ext}`),
 ].join(",");
 
-export function classifyFile(file: File): AssetKind | null {
-  const type = file.type.toLowerCase();
-  if (type.startsWith("video/")) return "video";
-  if (type.startsWith("audio/")) return "audio";
-  if (type.startsWith("image/")) return "image";
-  const ext = file.name.toLowerCase().split(".").pop() ?? "";
-  return EXT_KIND[ext] ?? null;
-}
-
-export const KIND_LABEL: Record<AssetKind, string> = { video: "视频", audio: "配乐", image: "图像" };
+export { classifyFileDetailed, EXT_KIND, KIND_LABEL } from "../io/mediaKinds";
+export type { FileClassification } from "../io/mediaKinds";
+export const classifyFile = (file: File): AssetKind | null => classifyFileDetailed(file).kind;
 
 /** 探测元数据都给 5 秒上限:坏文件不该把整批导入卡死,拿不到就留空,后面按默认时长处理 */
 function withTimeout<T>(run: (settle: (v: T) => void) => void, fallback: T): Promise<T> {
@@ -136,19 +117,24 @@ export interface ImportResult {
   skipped: string[];
   /** 第一个收下的文件属于哪一类,用来把用户带到对应分页 */
   firstKind: AssetKind | null;
+  /** 类型冲突或完全无法识别的文件，以及给用户的修复建议 */
+  rejected: string[];
 }
 
 export async function importMediaFiles(files: FileList | File[]): Promise<ImportResult> {
   const counts: Record<AssetKind, number> = { video: 0, audio: 0, image: 0 };
   const skipped: string[] = [];
+  const rejected: string[] = [];
   let firstKind: AssetKind | null = null;
 
   const videos: File[] = [];
   const rest: { file: File; kind: "audio" | "image" }[] = [];
   for (const file of Array.from(files)) {
-    const kind = classifyFile(file);
+    const detected = classifyFileDetailed(file);
+    const kind = detected.kind;
     if (!kind) {
       skipped.push(file.name);
+      if (detected.reason) rejected.push(detected.reason);
       continue;
     }
     if (!firstKind) firstKind = kind;
@@ -164,5 +150,5 @@ export async function importMediaFiles(files: FileList | File[]): Promise<Import
     counts[kind] += 1;
   }
 
-  return { counts, skipped, firstKind };
+  return { counts, skipped, firstKind, rejected };
 }

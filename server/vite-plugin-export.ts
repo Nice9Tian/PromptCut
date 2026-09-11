@@ -115,7 +115,14 @@ async function handleExportStart(req: Connect.IncomingMessage, res: ServerRespon
       lastJobId = id;
       // 回给浏览器的路径:开发期是相对项目根的 out/export-<id>,桌面版(设了 PROMPTCUT_EXPORT_DIR)给绝对路径
       const relOutDir = process.env.PROMPTCUT_EXPORT_DIR ? outDir : `out/export-${id}`;
-      const job: ExportJob = { id, status: "running", done: 0, total: 1, outDir: relOutDir, absOutDir: outDir };
+      // The child does not print its first frame until Chrome has loaded and
+      // sampled the project.  Seed the job with the real render total so the
+      // dialog never shows the misleading 0/1 while that work is underway.
+      const renderFps = Number(fps) > 0 ? Number(fps) : Number(project.fps) || 30;
+      const renderTotal = frames && /^\d+\s*-\s*\d+$/.test(frames)
+        ? (() => { const [a, b] = frames.split("-").map(Number); return Math.max(1, b - a + 1); })()
+        : Math.max(1, Math.floor((Number(project.duration) || 0) * renderFps));
+      const job: ExportJob = { id, status: "running", done: 0, total: renderTotal, stage: "render", outDir: relOutDir, absOutDir: outDir };
       jobs.set(id, job);
       
       // Spawn child process

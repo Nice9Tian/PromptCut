@@ -1,4 +1,6 @@
 import type { MediaAsset } from "../../kernel/project";
+import { kindFromExtension, type AssetKind } from "./mediaKinds.ts";
+import { publishMediaMigrations, type MediaKindMigration } from "./mediaMigrationBus.ts";
 
 /**
  * 素材地址在「存盘 → 再打开」之间怎么保持能播。
@@ -36,15 +38,22 @@ const MISSING = "(缺失) ";
  * - 其余(死掉的 blob:、裸文件名):清空 url、名字前面标「(缺失)」,并记进 missing ——
  *   空 url 的素材预览和导出都会跳过,不会再拿一个打不开的地址去等。
  */
-export function restoreMediaUrls(media: MediaAsset[]): { media: MediaAsset[]; missing: MediaAsset[] } {
+export function restoreMediaUrls(media: MediaAsset[]): { media: MediaAsset[]; missing: MediaAsset[]; moved: MediaKindMigration[] } {
   const missing: MediaAsset[] = [];
+  const moved: MediaKindMigration[] = [];
   const out = media.map((m) => {
-    const fromPath = mediaUrlFromPath(m.path);
-    if (fromPath) return { ...m, url: fromPath };
-    const url = m.url || "";
-    if (!url || isDurable(url)) return m;
-    missing.push(m);
-    return { ...m, url: "", name: m.name.startsWith(MISSING) ? m.name : `${MISSING}${m.name}` };
+    const extKind = kindFromExtension(m.name) ?? kindFromExtension(m.path || "") ?? kindFromExtension(m.url || "");
+    // A derived audio asset intentionally keeps audio kind even when its source is .mp4.
+    const shouldMove = !!extKind && extKind !== m.kind && !(m.kind === "audio" && m.soundOf);
+    const normalized = shouldMove ? { ...m, kind: extKind as AssetKind } : m;
+    if (shouldMove) moved.push({ id: m.id, name: m.name, from: m.kind, to: extKind as AssetKind });
+    const fromPath = mediaUrlFromPath(normalized.path);
+    if (fromPath) return { ...normalized, url: fromPath };
+    const url = normalized.url || "";
+    if (!url || isDurable(url)) return normalized;
+    missing.push(normalized);
+    return { ...normalized, url: "", name: normalized.name.startsWith(MISSING) ? normalized.name : `${MISSING}${normalized.name}` };
   });
-  return { media: out, missing };
+  publishMediaMigrations(moved);
+  return { media: out, missing, moved };
 }

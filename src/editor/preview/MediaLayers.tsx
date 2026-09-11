@@ -4,7 +4,7 @@ import { clipFilterOpsAt, cssFilter, type FilterDef } from "../../kernel/filters
 import type { AudioFxDef } from "../../kernel/audioFx.mjs";
 import { releasePreviewAudio, routePreviewAudio } from "../../audio/previewAudio";
 import { frameCss } from "../../kernel/layout";
-import { audioClipsAt, nextVideoLayerAfter, videoLayersAt, type MediaAsset, type Project, type TrackClip } from "../../kernel/project";
+import { audioClipsAt, isImageMedia, nextVideoLayerAfter, videoLayersAt, type MediaAsset, type Project, type TrackClip } from "../../kernel/project";
 import { isScrubbing, subscribeScrub } from "../timeline/useScrub";
 import { planSlots, planSync, type SlotClip } from "./mediaSync";
 
@@ -138,7 +138,7 @@ const emptySlot = (): Slot => ({ clip: null, full: null, ready: false, token: 0,
 
 /** 进槽位的只有视频段;图片段、没地址的段不进 */
 function slotClipOf(clip: TrackClip, media: MediaAsset): SlotClip | null {
-  if (media.kind === "image" || !media.url) return null;
+  if (isImageMedia(media) || !media.url) return null;
   return { id: clip.id, url: media.url, start: clip.start, end: clip.end, offset: clip.mediaOffset ?? 0 };
 }
 
@@ -263,7 +263,7 @@ function VideoTrack({
    * 以前素材层不认这个字段,于是给视频摆位置写进去了却一动不动,只有卡片才看得出效果。
    */
   const boxOf = (clip: TrackClip | null) => ({ position: "absolute" as const, overflow: "hidden" as const, ...frameCss(clip?.frame, stage) });
-  const image = cur && cur.media.kind === "image" ? cur : null;
+  const image = cur && isImageMedia(cur.media) ? cur : null;
   return (
     <>
       {[0, 1].map((i) => {
@@ -363,7 +363,7 @@ export function MediaLayers({
           audioFx={project.audioFx}
         />
       ))}
-      {audioOnly && !muted && layers.filter(l => l.media.kind === "video" && !l.clip.audioMuted && !project.tracks.find(tr => tr.id === l.trackId)?.muted).map(l => (
+      {audioOnly && !muted && layers.filter(l => !isImageMedia(l.media) && l.media.kind === "video" && !l.clip.audioMuted && !project.tracks.find(tr => tr.id === l.trackId)?.muted).map(l => (
         <AudioLayer key={l.clip.id} clip={l.clip} media={l.media} volume={l.opacity * master * (l.clip.audioVolume ?? 1)} t={t} playing={playing} scrubbing={scrubbing} audioFx={project.audioFx} />
       ))}
       {audios.map((a) => (

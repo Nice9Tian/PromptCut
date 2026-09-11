@@ -16,6 +16,7 @@ import "./editor/shell.css";
 import { StatusBar } from "./editor/StatusBar";
 import { DependencyPrompt } from "./editor/DependencyPrompt";
 import { motion } from "motion/react";
+import { MediaMigrationDialog } from "./editor/MediaMigrationDialog";
 
 /** 拖杆宽度(px),和 ResizeHandle 里的 w-1.5 / h-1.5 对应 */
 const HANDLE_W = 6;
@@ -146,6 +147,7 @@ export default function Editor() {
   // 所以右栏在两种模式下始终是同一个槽位,组件实例得以保留。
   return (
     <div data-pc="editor" className="h-full flex flex-col bg-neutral-950 text-neutral-100">
+      <MediaMigrationDialog />
       {/* 桌面壳里菜单栏到导航栏的颜色过渡;浏览器里跑时高度为 0 */}
       <MenuBarFade />
       <TopBar />

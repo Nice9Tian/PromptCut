@@ -34,7 +34,7 @@ const ASSET_TABS: { key: AssetTab; label: string }[] = [
   { key: "audiofx", label: "音频效果" },
   { key: "emphasis", label: "强调" },
   { key: "videos", label: "视频" },
-  { key: "images", label: "图像" },
+  { key: "images", label: "图片" },
   { key: "music", label: "配乐" },
   { key: "captions", label: "字幕" },
 ];

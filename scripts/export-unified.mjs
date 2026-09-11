@@ -26,6 +26,7 @@ export async function exportUnified(project, opts) {
       const bakery = await service.bakery(project);
       try {
         await bakeFrames(bakery, { out: entry.dir, targetFrames: frames, snapshotOnly: true, signal: opts.signal,
+          onProgressLog: true,
           onSnapshot: (n, html, controls) => service.record(entry, n, html, controls) });
         await service.save(entry);
       } finally { await bakery.close(); }

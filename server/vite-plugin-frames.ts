@@ -18,7 +18,12 @@ export function frameService(root: string, origin: string) {
 }
 export function renderProject(project: any) {
   return { ...project, media: (project.media || []).map((m: any) => {
-    if (m.url?.startsWith("blob:") && m.path) return { ...m, url: "/@media/" + encodeURIComponent(path.basename(m.path)) };
+    // .proc files from older versions may contain a bare filename (and some
+    // callers still send blob URLs).  The renderer cannot resolve either
+    // form; the durable server path is the source of truth for both.
+    if (m.path && (!m.url || m.url.startsWith("blob:") || !m.url.startsWith("/"))) {
+      return { ...m, url: "/@media/" + encodeURIComponent(path.basename(m.path)) };
+    }
     return m;
   }) };
 }

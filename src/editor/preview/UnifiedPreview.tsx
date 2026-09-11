@@ -53,8 +53,19 @@ export function UnifiedPreview({ project, t, playing }: { project: Project; t: n
   useEffect(() => {
     const element = ref.current;
     if (!element || video?.project !== project) return;
-    if (!playing || Math.abs(element.currentTime - t) > 0.15) element.currentTime = t;
-    if (playing) void element.play().catch(() => {}); else element.pause();
+    const sync = () => {
+      // Setting currentTime before metadata is available is ignored by some
+      // Chromium builds.  Run the same seek again when the generated preview
+      // has its duration, otherwise the editor appears permanently stuck on
+      // the first frame after C becomes ready.
+      if (!playing || Math.abs(element.currentTime - t) > 0.15) {
+        try { element.currentTime = Math.max(0, Math.min(t, Number.isFinite(element.duration) ? element.duration : t)); } catch { /* loading */ }
+      }
+      if (playing) void element.play().catch(() => {}); else element.pause();
+    };
+    element.addEventListener("loadedmetadata", sync);
+    sync();
+    return () => element.removeEventListener("loadedmetadata", sync);
   }, [project, video, t, playing]);
   const style = { position: "absolute" as const, inset: 0, width: "100%", height: "100%", pointerEvents: "none" as const };
   return <div style={style}>

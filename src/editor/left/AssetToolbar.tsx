@@ -25,7 +25,7 @@ const SEARCH_META: Record<AssetToolbarTab, { placeholder: string; dataPc: string
   audiofx: { placeholder: "搜索音频效果…", dataPc: "audiofx-search" },
   emphasis: { placeholder: "搜索强调…", dataPc: "emphasis-search" },
   videos: { placeholder: "搜索视频…", dataPc: "media-search" },
-  images: { placeholder: "搜索图像…", dataPc: "image-search" },
+  images: { placeholder: "搜索图片…", dataPc: "image-search" },
   music: { placeholder: "搜索配乐…", dataPc: "music-search" },
   captions: { placeholder: "搜索字幕…", dataPc: "caption-search" },
 };
@@ -66,16 +66,15 @@ export function AssetToolbar({
     const files = e.target.files;
     if (!files || files.length === 0) return;
     try {
-      const { counts, skipped, firstKind } = await importMediaFiles(files);
+      const { counts, skipped, firstKind, rejected } = await importMediaFiles(files);
       if (firstKind) onImported?.(firstKind);
       if (skipped.length > 0) {
         const done = (Object.keys(counts) as AssetKind[])
           .filter((k) => counts[k] > 0)
           .map((k) => `${KIND_LABEL[k]} ${counts[k]}`)
           .join("、");
-        alert(
-          `${done ? `已导入:${done}。\n\n` : ""}这些文件不是视频 / 音频 / 图片,已跳过:\n${skipped.join("\n")}`,
-        );
+        const details = rejected.length ? `\n\n${rejected.join("\n")}` : "";
+        alert(`${done ? `已导入:${done}。\n\n` : ""}这些文件不是视频 / 音频 / 图片,已跳过:\n${skipped.join("\n")}${details}`);
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);

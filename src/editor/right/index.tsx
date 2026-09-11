@@ -136,7 +136,7 @@ function reject3dOnMedia(clipId: string, args: { rotateX?: number; rotateY?: num
 }
 import { sttStatus, sttInstall, transcribeMedia } from "../io/stt";
 import { importVideoFiles, importVideoFromServer } from "../io";
-import { classifyFile, registerAsset } from "../left/importAssets";
+import { classifyFileDetailed, KIND_LABEL, registerAsset } from "../left/importAssets";
 import { mediaCardUrl, isImageMedia } from "../../ai/mediaRef";
 import {
   collectStatus, installCollect, probeLink, startDownload, waitForDownload, type CollectJob,
@@ -1048,12 +1048,11 @@ export function RightPanel() {
         const mimeExt = MIME_EXT[blob.type.split(";")[0].trim().toLowerCase()];
         if (mimeExt && !/\.[a-z0-9]{2,5}$/i.test(name)) name += `.${mimeExt}`;
         const file = new File([blob], name, { type: blob.type || "" });
-        /*
-         * 按内容分类登记。以前一律走 importVideoFiles,于是网上找来的 jpg 被登记成 kind: "video"、
-         * 时长 5 秒(探测失败的兜底值)、还被放上视频轨;see_frames 对它跑镜头识别只得到一个 0.04 秒的
-         * 「镜头」,模型认定「抽不出画面」,转头去 Read 磁盘路径。认不出类型的仍按视频处理(老行为)。
-         */
-        const kind = classifyFile(file) ?? "video";
+        const detected = classifyFileDetailed(file);
+        if (!detected.kind) {
+          throw new Error(detected.reason || `无法识别文件“${name}”的类型，请使用视频、音频或图片文件。`);
+        }
+        const kind = detected.kind;
         if (kind !== "video") {
           const id = await registerAsset(file, kind);
           const media = getState().project.media.find((m) => m.id === id);
@@ -1061,10 +1060,11 @@ export function RightPanel() {
             mediaId: id,
             name,
             kind,
+            kindLabel: KIND_LABEL[kind],
             ...(kind === "image" ? { width: media?.width, height: media?.height } : { duration: media?.duration }),
             cardUrl: media ? mediaCardUrl(media) : "",
             hint: kind === "image"
-              ? "图片已进素材库(没放到时间轴)。卡片参数里要用这张图就填 cardUrl;想看它长什么样用 see_frames({ source: \"media\", mediaId })。"
+              ? "图片已进“图片”素材库(没放到时间轴)。卡片参数里要用这张图就填 cardUrl;想看它长什么样用 see_frames({ source: \"media\", mediaId })。"
               : "音频已进素材库(没放到时间轴)。",
           };
         }
@@ -1075,6 +1075,7 @@ export function RightPanel() {
           mediaId: ids[0],
           name,
           kind,
+          kindLabel: KIND_LABEL[kind],
           duration: media?.duration,
           width: media?.width,
           height: media?.height,

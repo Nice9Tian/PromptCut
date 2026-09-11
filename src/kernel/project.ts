@@ -133,6 +133,19 @@ export interface MediaAsset {
 }
 
 /**
+ * 老项目曾把图片统一登记成 kind:"video"。渲染时不能只相信 kind，
+ * 否则 JPG/PNG 会被挂到 <video> 上，Chrome 会在首帧后报解码错误。
+ * 文件名、路径和 URL 都参与判断，兼容存盘前后的三种地址形态。
+ */
+const IMAGE_MEDIA_EXT = /\.(?:png|jpe?g|gif|webp|bmp|avif|tiff?|svg|heic|heif)(?:[?#]|$)/i;
+export function isImageMedia(media: Pick<MediaAsset, "kind" | "name" | "path" | "url">): boolean {
+  if (media.kind === "image") return true;
+  return [media.name, media.path, media.url].some((value) =>
+    typeof value === "string" && IMAGE_MEDIA_EXT.test(value.split(/[?#]/, 1)[0]),
+  );
+}
+
+/**
  * 从一段视频派生出「只要声音」的素材:同一个文件、同一段时长,kind 换成 audio。
  * 不转码 —— 浏览器用 <audio> 播 mp4 只出声音,ffmpeg 混音也只取音轨,没必要先切一份文件出来。
  */

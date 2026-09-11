@@ -645,6 +645,14 @@ export async function bakeFrames(bakery, opts = {}) {
         if (opts.onSnapshot) await opts.onSnapshot(i, html, controls);
         if (domDir) await fs.writeFile(path.join(domDir, String(i).padStart(6, '0') + '.html.gz'), gzip(Buffer.from(html, 'utf8')));
       }
+      // Unified export first runs a complete HTML sampling pass (B).  That
+      // pass intentionally does not write PNGs, but it still has to report
+      // progress; otherwise the UI remains at its initial 0/1 for the whole
+      // sampling pass and looks frozen on long projects.
+      if (opts.onProgress) opts.onProgress(i, totalFrames, { sampled: true });
+      if (opts.onProgressLog && ((i - startFrame + 1) % 10 === 0 || i === endFrame)) {
+        console.log(`Exported frame ${i} (${i - startFrame + 1}/${totalFrames})`);
+      }
       if (!wantShot || opts.snapshotOnly) continue;
 
       let buf;
