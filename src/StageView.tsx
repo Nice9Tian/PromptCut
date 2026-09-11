@@ -87,6 +87,26 @@ declare global {
   }
 }
 
+/**
+ * 两份项目之间变了的卡片段(按对象引用比:store 是不可变更新,没动过的 clip 引用不变)。
+ * 新增 / 删除的也算变了。只看卡片段:素材段由视频层画,和舞台无关。
+ */
+function changedCardClips(prev: Project | null, next: Project): { id: string; start: number; end: number }[] {
+  const before = new Map<string, unknown>();
+  if (prev) for (const tr of prev.tracks) for (const c of tr.clips) if (c.cardId) before.set(c.id, c);
+  const out: { id: string; start: number; end: number }[] = [];
+  const seen = new Set<string>();
+  for (const tr of next.tracks) {
+    for (const c of tr.clips) {
+      if (!c.cardId) continue;
+      seen.add(c.id);
+      if (before.get(c.id) !== c) out.push({ id: c.id, start: c.start, end: c.end });
+    }
+  }
+  for (const [id, c] of before) if (!seen.has(id)) out.push({ id, start: (c as { start: number }).start, end: (c as { end: number }).end });
+  return out;
+}
+
 export default function StageView() {
   const [project, setProject] = useState<Project | null>(null);
   const [t, setT] = useState(0);
@@ -362,8 +382,9 @@ export default function StageView() {
         return toStage(new DOMRect(cl, ct, cr - cl, cb - ct), origin);
       },
       setProject(next) {
+        const prev = ref.current.project;
         // clipId 会在不同项目里复用,不清掉就会张冠李戴
-        if (next !== ref.current.project) resetInk();
+        if (next !== prev) resetInk();
         const prevKey = ref.current.layoutKey;
         const nextKey = layoutKeyOf(next);
         ref.current.project = next;
@@ -375,8 +396,19 @@ export default function StageView() {
           renderAt(ref.current.t, { jump: true });
           return;
         }
-        // 只改了卡片参数:先原样重渲染(打字时画面不闪),停手 200ms 后再重算这一帧。
-        // 不重算不行——改参数可能让卡片长出新的动画,而新动画在没人推时钟时会停在 initial。
+        /*
+         * 只改了卡片参数:先原样重渲染(打字时画面不闪),停手 200ms 后再重算这一帧。
+         * 不重算不行——改参数可能让卡片长出新的动画,而新动画在没人推时钟时会停在 initial。
+         *
+         * 但**哪张卡都没变的改动**(改视频段的不透明度、挂滤镜、加音频效果、改素材……)和
+         * **改的卡此刻不在画面上**的改动,都不用补跑:补跑要把活跃的卡全部重挂载、从入点逐帧
+         * 提交到播放头,实测 Agent 每写一次 65~350 ms 的主线程 —— 一轮几十次写就是十几秒卡顿。
+         * store 是不可变更新,没动过的 clip 对象引用不变,按引用比一遍就知道谁变了。
+         */
+        const changed = changedCardClips(prev, next);
+        if (!changed.length) return;
+        const t = ref.current.t;
+        if (!changed.some((c) => t >= c.start - LEAD && t < c.end)) return;
         ref.current.settle = window.setTimeout(() => renderAt(ref.current.t, { jump: true }), SETTLE_MS);
       },
       render: renderAt,

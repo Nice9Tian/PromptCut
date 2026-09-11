@@ -1,4 +1,4 @@
-import React, { useRef, useState, useEffect, useLayoutEffect } from "react";
+import React, { useRef, useState, useEffect, useLayoutEffect, useMemo } from "react";
 import "./AiPanel.css";
 // 公式样式表:renderMarkdown 用 KaTeX 渲染数学,样式在这里一次性引入
 import "katex/dist/katex.min.css";
@@ -241,6 +241,311 @@ function outcomeText(m: ChatMessage): string | null {
   if (!m.outcome || m.outcome === "completed" || m.outcome === "error") return null;
   return OUTCOME_TEXT[m.outcome] || `本次执行结束于:${m.outcome}`;
 }
+
+
+/** 一条消息里属于它自己的展开状态:key 都以 `<消息id>:` 开头,取出来拼成字符串好做浅比较 */
+function keysFor(set: Set<string>, id: string): string {
+  const prefix = id + ":";
+  const out: string[] = [];
+  for (const k of set) if (k.startsWith(prefix)) out.push(k);
+  return out.sort().join("|");
+}
+
+interface MessageRowProps {
+  m: ChatMessage;
+  view: ViewMode;
+  showThinking: boolean;
+  installJobs: ReturnType<typeof useInstallJobs>;
+  expanded: Set<string>;
+  openRuns: Set<string>;
+  /** 这条消息自己的展开 key(见 keysFor):memo 只看它,别的消息点开点收不牵动这一条 */
+  openKeys: string;
+  runKeys: string;
+  /** 稳定引用的回调(AiPanel 里用 ref 中转),不然每次渲染都是新函数、memo 白做 */
+  on: { toggleTool: (key: string) => void; toggleChip: (key: string) => void; toggleRun: (key: string) => void };
+}
+
+/**
+ * 一条消息的气泡。
+ *
+ * 为什么单独成组件并 memo:Agent 一轮几百次工具调用,每个流式片段都 setMessages 一次;
+ * 以前整个列表在 AiPanel 里 map 出来,每个片段都把**所有**历史消息重渲一遍(重新 partsOf、
+ * renderMarkdown、JSON.stringify),历史到 1200 次工具时实测每片段 114 ms,界面卡死。
+ * 流式只换最后一条的对象,其余消息引用不变 —— memo 之后它们一次都不重渲。
+ */
+const MessageRow = React.memo(function MessageRow({ m, view, showThinking, installJobs, expanded, openRuns, on }: MessageRowProps) {
+  const { toggleTool, toggleChip, toggleRun } = on;
+        // 「转圈 + 正在做什么」跟着 m.pending 走，不再要求它是最后一条。
+        // 分工模式下同一批角色的气泡是同时 pending 的，按「最后一条」判的话
+        // 只有最下面那个有动静，上面几个看着像卡死了。
+        //
+        // 单线模式下同时只可能有一条 pending，两种写法等价；abort() 会把所有
+        // pending 一起清掉(useAiChat.ts:335)，不会留下永远转圈的旧气泡。
+        const parts = partsOf(m);
+        /** 简洁模式下把几段思考按顺序拼起来一次显示;详细模式仍按原位置逐段渲染 */
+        const thinkingTexts = parts
+          .filter((p) => p.kind === "thinking")
+          .map((p) => (p as { text: string }).text);
+        const thinkingText = thinkingTexts.join("\n\n");
+        const busyTool = m.pending ? runningTool(parts) : null;
+
+        /** 一个工具片段:标题行 + 可展开的入参 / 结果 / 文件 */
+        const renderTool = (t: ToolCallInfo, key: string) => {
+          const open = expanded.has(key);
+          const done = t.ok !== undefined;
+          const visualId = done ? visualIdOf(t.summary) : null;
+          // 装引擎要下好几百 MB、可能跑几分钟。折成一行「stt_install ✓」的话,
+          // 用户看到的就是聊天框里一个转圈的小字,不知道在干什么、还要多久。
+          // 这里换成带进度的控件,和启动时那个缺依赖提示用的是同一个。
+          const installJob = t.name === "stt_install" ? matchInstallJob(t, installJobs) : undefined;
+          if (installJob) {
+            return <SttInstallProgress key={key} job={installJob} compact />;
+          }
+          return (
+            <div key={key} className="ai-tool-block">
+              <div
+                className={`ai-tool-chip ${t.ok === true ? "ok" : t.ok === false ? "err" : ""}`}
+                onClick={() => toggleTool(key)}
+              >
+                {done ? (t.ok ? "✓" : "✗") : <span className="ai-spinner" aria-hidden />}
+                <span className="ai-tool-name">{t.name}</span>
+                <span className="ai-tool-caret">{open ? "▾" : "▸"}</span>
+              </div>
+              {open && (
+                <div className="ai-tool-detail">
+                  {/*
+                    有可视化记录的(看图、加卡、删卡、改卡、get_gif):先给看得见的结果,
+                    入参和结果的 JSON 收进「原始数据」—— 那是调试用的,不该是用户点开看到的第一样东西。
+                  */}
+                  {visualId ? <ToolVisual id={visualId} /> : null}
+                  {visualId ? (
+                    <details className="ai-tool-raw">
+                      <summary>原始数据</summary>
+                      <div className="ai-tool-label">入参</div>
+                      <pre className="ai-tool-pre">{JSON.stringify(t.input || {}, null, 2)}</pre>
+                      <div className="ai-tool-label">结果</div>
+                      <pre className="ai-tool-pre wrap">{t.summary}</pre>
+                    </details>
+                  ) : (
+                    <>
+                      <div className="ai-tool-label">入参</div>
+                      <pre className="ai-tool-pre">{JSON.stringify(t.input || {}, null, 2)}</pre>
+                      {t.summary ? (
+                        <>
+                          <div className="ai-tool-label">结果</div>
+                          <pre className="ai-tool-pre wrap">{t.summary}</pre>
+                        </>
+                      ) : null}
+                    </>
+                  )}
+                  {t.files && t.files.length > 0 ? (
+                    <div className="ai-tool-files">
+                      {t.files.map((f, fidx) => {
+                        const lower = f.toLowerCase();
+                        const isImg =
+                          lower.endsWith(".png") || lower.endsWith(".jpg") || lower.endsWith(".jpeg");
+                        if (!isImg) {
+                          return (
+                            <div key={fidx} className="ai-tool-file">
+                              {f}
+                            </div>
+                          );
+                        }
+                        const url =
+                          f.startsWith("http") || f.startsWith("data:")
+                            ? f
+                            : `/@fs/${f.replace(/\\/g, "/").replace(/^\/?/, "")}`;
+                        return (
+                          <div key={fidx}>
+                            <img
+                              src={url}
+                              className="ai-tool-img"
+                              alt={f}
+                              onError={(e) => {
+                                e.currentTarget.style.display = "none";
+                                if (e.currentTarget.nextSibling) return;
+                                const span = document.createElement("div");
+                                span.className = "ai-tool-file";
+                                span.textContent = f;
+                                e.currentTarget.parentElement?.appendChild(span);
+                              }}
+                            />
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : null}
+                </div>
+              )}
+            </div>
+          );
+        };
+
+        // 返回数组而不是包一层 Fragment：只为了在某条消息后面多插一个块，
+        // 就把整个气泡往里缩一级、几百行全部重新缩进，blame 会脏得看不出改了什么。
+        return (
+          <div className={`ai-message ${m.role}`}>
+            {/*
+              这条回复是哪个角色产出的。普通对话没有 roleId 就不显示——
+              每条回复顶上都挂一个「AI 助手」只是噪音，反而让分工模式下
+              真正的角色名不显眼。
+            */}
+            {m.roleId && <RoleHeader roleId={m.roleId} />}
+            {m.attachments && m.attachments.length > 0 && (
+              <div className="ai-message-attach">[附件: {m.attachments.map((a) => a.name).join(", ")}]</div>
+            )}
+
+            {view === "verbose" && m.role === "assistant" ? (
+              // 详细模式:按真实发生顺序渲染,文字和工具交错,回复不会被工具块埋掉
+              parts.map((p, pidx) => {
+                if (p.kind === "text") {
+                  if (!p.text) return null;
+                  return (
+                    <div key={pidx} className="ai-message-text">
+                      {renderMarkdown(p.text)}
+                    </div>
+                  );
+                }
+                if (p.kind === "status") {
+                  return (
+                    <div key={pidx} className="ai-tool-chip info">
+                      信息: {p.text}
+                    </div>
+                  );
+                }
+                if (p.kind === "thinking") {
+                  // 步骤条一直显示。这些「**Clarifying article link and scope**」之类本来就是
+                  // 进度,不该被「显示思考」藏起来 —— 藏了用户就不知道它在干什么;
+                  // 而原样铺成文字又会把正文顶开。完整原文仍归那个开关管。
+                  return (
+                    <div key={pidx}>
+                      <StepStrip steps={thinkingSteps(p.text)} live={!!m.pending} />
+                      {showThinking && (
+                        <div className="ai-thinking">
+                          <div className="ai-thinking-head">思考</div>
+                          {p.text}
+                        </div>
+                      )}
+                    </div>
+                  );
+                }
+                return renderTool(p, `${m.id}:${pidx}`);
+              })
+            ) : (
+              // 简洁模式:只给回复正文;做过的操作折成一行,想看再展开
+              <>
+                {/* 勾了「显示思考」的话简洁模式也要看得到,否则等于开关在这个模式下失灵。
+                    这里按发生顺序拼成一段放在回复之前——先想后答,读起来是顺的。 */}
+                <StepStrip steps={stepsOfThinking(thinkingTexts)} live={!!m.pending} />
+                {showThinking && thinkingText && (
+                  <div className="ai-thinking">
+                    <div className="ai-thinking-head">思考</div>
+                    {thinkingText}
+                  </div>
+                )}
+                {m.role === "user" ? (
+                  <div className="ai-message-text">{renderMarkdown(m.text)}</div>
+                ) : (
+                  // 按发生顺序铺:说一句 → 做几件事(一排小方块)→ 再说一句。
+                  // 方块自然把每次返回的句子隔开,也让用户看见条目在往外冒,
+                  // 不会以为卡住了。
+                  simpleBlocks(parts).map((b, bi) => {
+                    if (b.kind === "text") {
+                      return b.text.trim() ? (
+                        <div key={bi} className="ai-message-text">{renderMarkdown(b.text)}</div>
+                      ) : null;
+                    }
+                    return (
+                      <div key={bi} className="ai-chiprow">
+                        {chipRuns(b.tools).flatMap(({ start, end }) => {
+                          const chip = (t: ToolCallInfo, ti: number) => {
+                            const key = `${m.id}:c${bi}:${ti}`;
+                            // 装引擎那种几分钟的活儿不折成方块,它有自己的进度条
+                            const job = t.name === "stt_install" ? matchInstallJob(t, installJobs) : undefined;
+                            if (job) return <SttInstallProgress key={key} job={job} compact />;
+                            const state = t.ok === undefined ? "run" : t.ok ? "ok" : "err";
+                            return (
+                              <button
+                                key={key}
+                                type="button"
+                                className={`ai-chip ai-chip--${toolKind(t.name)} is-${state}${expanded.has(key) ? " is-open" : ""}`}
+                                title={`${KIND_LABEL[toolKind(t.name)]}：${t.name}${t.ok === false ? "（失败）" : t.ok === undefined ? "（进行中）" : ""}`}
+                                aria-expanded={expanded.has(key)}
+                                aria-label={`${t.name} ${state === "err" ? "失败" : state === "run" ? "进行中" : "成功"}`}
+                                onClick={() => toggleChip(key)}
+                              />
+                            );
+                          };
+                          const run = b.tools.slice(start, end);
+                          const each = run.map((t, j) => chip(t, start + j));
+                          // 不到 4 个照常一个个摆;到 4 个起折成「第一个 ×N」,之后同类的继续往上累计
+                          if (run.length < CHIP_RUN_MIN) return each;
+                          const runKey = `${m.id}:c${bi}:r${start}`;
+                          const n = run.length;
+                          if (openRuns.has(runKey)) {
+                            return [
+                              ...each,
+                              <button key={`f${runKey}`} type="button" className="ai-chip-count" title="收起这一串" onClick={() => toggleRun(runKey)}>
+                                ×{n}
+                              </button>,
+                            ];
+                          }
+                          const first = run[0];
+                          const kind = toolKind(first.name);
+                          // 整串里还有没跑完的就让它呼吸,和单个方块的「进行中」一个意思
+                          const state = first.ok === false ? "err" : run.some((t) => t.ok === undefined) ? "run" : "ok";
+                          return [
+                            <button
+                              key={runKey}
+                              type="button"
+                              className="ai-chipgroup"
+                              title={`${state === "err" ? "失败" : KIND_LABEL[kind]} ×${n}：${[...new Set(run.map((t) => t.name))].join("、")}（点开逐个看）`}
+                              aria-label={`${KIND_LABEL[kind]} ${n} 次${state === "err" ? ",全部失败" : state === "run" ? ",有进行中的" : ""},点开逐个看`}
+                              onClick={() => toggleRun(runKey)}
+                            >
+                              <span className={`ai-chip ai-chip--${kind} is-${state}`} aria-hidden />
+                              <span className="ai-chip-count">×{n}</span>
+                            </button>,
+                          ];
+                        })}
+                        {/* 点开的那几个把完整详情摊在这一排下面 */}
+                        {b.tools.map((t, ti) => {
+                          const key = `${m.id}:c${bi}:${ti}`;
+                          return expanded.has(key) ? (
+                            <div key={`d${key}`} className="ai-chip-detail">{renderTool(t, key)}</div>
+                          ) : null;
+                        })}
+                      </div>
+                    );
+                  })
+                )}
+              </>
+            )}
+
+            {m.pending && (
+              <div className="ai-activity" role="status" aria-live="polite">
+                <span className="ai-spinner" aria-hidden />
+                <span className="ai-activity-text">{activityText(m, busyTool)}</span>
+                <span className="ai-activity-dots" aria-hidden>
+                  <i />
+                  <i />
+                  <i />
+                </span>
+              </div>
+            )}
+            {m.pending && progressMeta(m) && (
+              <div className="ai-activity-meta">{progressMeta(m)}</div>
+            )}
+
+            {m.error && <div className="ai-message-error">{m.error}</div>}
+            {!m.pending && outcomeText(m) && (
+              <div className="ai-message-outcome">{outcomeText(m)}</div>
+            )}
+          </div>
+        );
+}, (a, b) =>
+  a.m === b.m && a.view === b.view && a.showThinking === b.showThinking && a.installJobs === b.installJobs &&
+  a.openKeys === b.openKeys && a.runKeys === b.runKeys && a.on === b.on);
 
 export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mock?: boolean; openSetupSignal?: number; tabId?: string; active?: boolean }) {
   // 多 Agent 分页:每页一个 AiPanel 实例,各自一份对话、一份会话归档 id;不在前台的页只是 display:none,对话照跑
@@ -545,6 +850,14 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
       return next;
     });
   };
+  // MessageRow 是 memo 的:回调经 ref 中转,引用永远不变,点开 / 收起走最新的那份闭包
+  const handlersRef = useRef({ toggleTool, toggleChip, toggleRun });
+  handlersRef.current = { toggleTool, toggleChip, toggleRun };
+  const rowHandlers = useMemo(() => ({
+    toggleTool: (k: string) => handlersRef.current.toggleTool(k),
+    toggleChip: (k: string) => handlersRef.current.toggleChip(k),
+    toggleRun: (k: string) => handlersRef.current.toggleRun(k),
+  }), []);
 
   // 顶栏按实测宽度排布:窄了先换行、再收文字,还不够就把低优先级的收进「⋯」
   // 分工模式的开关放在 ai/teamMode 里:编排器那边也要读它,放这儿会变成两份状态
@@ -890,279 +1203,23 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
             </div>
           </div>
         ) : (
-          messages.map((m, i) => {
-            // 「转圈 + 正在做什么」跟着 m.pending 走，不再要求它是最后一条。
-            // 分工模式下同一批角色的气泡是同时 pending 的，按「最后一条」判的话
-            // 只有最下面那个有动静，上面几个看着像卡死了。
-            //
-            // 单线模式下同时只可能有一条 pending，两种写法等价；abort() 会把所有
-            // pending 一起清掉(useAiChat.ts:335)，不会留下永远转圈的旧气泡。
-            const parts = partsOf(m);
-            /** 简洁模式下把几段思考按顺序拼起来一次显示;详细模式仍按原位置逐段渲染 */
-            const thinkingTexts = parts
-              .filter((p) => p.kind === "thinking")
-              .map((p) => (p as { text: string }).text);
-            const thinkingText = thinkingTexts.join("\n\n");
-            const busyTool = m.pending ? runningTool(parts) : null;
-
-            /** 一个工具片段:标题行 + 可展开的入参 / 结果 / 文件 */
-            const renderTool = (t: ToolCallInfo, key: string) => {
-              const open = expanded.has(key);
-              const done = t.ok !== undefined;
-              const visualId = done ? visualIdOf(t.summary) : null;
-              // 装引擎要下好几百 MB、可能跑几分钟。折成一行「stt_install ✓」的话,
-              // 用户看到的就是聊天框里一个转圈的小字,不知道在干什么、还要多久。
-              // 这里换成带进度的控件,和启动时那个缺依赖提示用的是同一个。
-              const installJob = t.name === "stt_install" ? matchInstallJob(t, installJobs) : undefined;
-              if (installJob) {
-                return <SttInstallProgress key={key} job={installJob} compact />;
-              }
-              return (
-                <div key={key} className="ai-tool-block">
-                  <div
-                    className={`ai-tool-chip ${t.ok === true ? "ok" : t.ok === false ? "err" : ""}`}
-                    onClick={() => toggleTool(key)}
-                  >
-                    {done ? (t.ok ? "✓" : "✗") : <span className="ai-spinner" aria-hidden />}
-                    <span className="ai-tool-name">{t.name}</span>
-                    <span className="ai-tool-caret">{open ? "▾" : "▸"}</span>
-                  </div>
-                  {open && (
-                    <div className="ai-tool-detail">
-                      {/*
-                        有可视化记录的(看图、加卡、删卡、改卡、get_gif):先给看得见的结果,
-                        入参和结果的 JSON 收进「原始数据」—— 那是调试用的,不该是用户点开看到的第一样东西。
-                      */}
-                      {visualId ? <ToolVisual id={visualId} /> : null}
-                      {visualId ? (
-                        <details className="ai-tool-raw">
-                          <summary>原始数据</summary>
-                          <div className="ai-tool-label">入参</div>
-                          <pre className="ai-tool-pre">{JSON.stringify(t.input || {}, null, 2)}</pre>
-                          <div className="ai-tool-label">结果</div>
-                          <pre className="ai-tool-pre wrap">{t.summary}</pre>
-                        </details>
-                      ) : (
-                        <>
-                          <div className="ai-tool-label">入参</div>
-                          <pre className="ai-tool-pre">{JSON.stringify(t.input || {}, null, 2)}</pre>
-                          {t.summary ? (
-                            <>
-                              <div className="ai-tool-label">结果</div>
-                              <pre className="ai-tool-pre wrap">{t.summary}</pre>
-                            </>
-                          ) : null}
-                        </>
-                      )}
-                      {t.files && t.files.length > 0 ? (
-                        <div className="ai-tool-files">
-                          {t.files.map((f, fidx) => {
-                            const lower = f.toLowerCase();
-                            const isImg =
-                              lower.endsWith(".png") || lower.endsWith(".jpg") || lower.endsWith(".jpeg");
-                            if (!isImg) {
-                              return (
-                                <div key={fidx} className="ai-tool-file">
-                                  {f}
-                                </div>
-                              );
-                            }
-                            const url =
-                              f.startsWith("http") || f.startsWith("data:")
-                                ? f
-                                : `/@fs/${f.replace(/\\/g, "/").replace(/^\/?/, "")}`;
-                            return (
-                              <div key={fidx}>
-                                <img
-                                  src={url}
-                                  className="ai-tool-img"
-                                  alt={f}
-                                  onError={(e) => {
-                                    e.currentTarget.style.display = "none";
-                                    if (e.currentTarget.nextSibling) return;
-                                    const span = document.createElement("div");
-                                    span.className = "ai-tool-file";
-                                    span.textContent = f;
-                                    e.currentTarget.parentElement?.appendChild(span);
-                                  }}
-                                />
-                              </div>
-                            );
-                          })}
-                        </div>
-                      ) : null}
-                    </div>
-                  )}
-                </div>
-              );
-            };
-
-            // 返回数组而不是包一层 Fragment：只为了在某条消息后面多插一个块，
-            // 就把整个气泡往里缩一级、几百行全部重新缩进，blame 会脏得看不出改了什么。
-            return [
-              <div key={m.id} className={`ai-message ${m.role}`}>
-                {/*
-                  这条回复是哪个角色产出的。普通对话没有 roleId 就不显示——
-                  每条回复顶上都挂一个「AI 助手」只是噪音，反而让分工模式下
-                  真正的角色名不显眼。
-                */}
-                {m.roleId && <RoleHeader roleId={m.roleId} />}
-                {m.attachments && m.attachments.length > 0 && (
-                  <div className="ai-message-attach">[附件: {m.attachments.map((a) => a.name).join(", ")}]</div>
-                )}
-
-                {view === "verbose" && m.role === "assistant" ? (
-                  // 详细模式:按真实发生顺序渲染,文字和工具交错,回复不会被工具块埋掉
-                  parts.map((p, pidx) => {
-                    if (p.kind === "text") {
-                      if (!p.text) return null;
-                      return (
-                        <div key={pidx} className="ai-message-text">
-                          {renderMarkdown(p.text)}
-                        </div>
-                      );
-                    }
-                    if (p.kind === "status") {
-                      return (
-                        <div key={pidx} className="ai-tool-chip info">
-                          信息: {p.text}
-                        </div>
-                      );
-                    }
-                    if (p.kind === "thinking") {
-                      // 步骤条一直显示。这些「**Clarifying article link and scope**」之类本来就是
-                      // 进度,不该被「显示思考」藏起来 —— 藏了用户就不知道它在干什么;
-                      // 而原样铺成文字又会把正文顶开。完整原文仍归那个开关管。
-                      return (
-                        <div key={pidx}>
-                          <StepStrip steps={thinkingSteps(p.text)} live={!!m.pending} />
-                          {showThinking && (
-                            <div className="ai-thinking">
-                              <div className="ai-thinking-head">思考</div>
-                              {p.text}
-                            </div>
-                          )}
-                        </div>
-                      );
-                    }
-                    return renderTool(p, `${m.id}:${pidx}`);
-                  })
-                ) : (
-                  // 简洁模式:只给回复正文;做过的操作折成一行,想看再展开
-                  <>
-                    {/* 勾了「显示思考」的话简洁模式也要看得到,否则等于开关在这个模式下失灵。
-                        这里按发生顺序拼成一段放在回复之前——先想后答,读起来是顺的。 */}
-                    <StepStrip steps={stepsOfThinking(thinkingTexts)} live={!!m.pending} />
-                    {showThinking && thinkingText && (
-                      <div className="ai-thinking">
-                        <div className="ai-thinking-head">思考</div>
-                        {thinkingText}
-                      </div>
-                    )}
-                    {m.role === "user" ? (
-                      <div className="ai-message-text">{renderMarkdown(m.text)}</div>
-                    ) : (
-                      // 按发生顺序铺:说一句 → 做几件事(一排小方块)→ 再说一句。
-                      // 方块自然把每次返回的句子隔开,也让用户看见条目在往外冒,
-                      // 不会以为卡住了。
-                      simpleBlocks(parts).map((b, bi) => {
-                        if (b.kind === "text") {
-                          return b.text.trim() ? (
-                            <div key={bi} className="ai-message-text">{renderMarkdown(b.text)}</div>
-                          ) : null;
-                        }
-                        return (
-                          <div key={bi} className="ai-chiprow">
-                            {chipRuns(b.tools).flatMap(({ start, end }) => {
-                              const chip = (t: ToolCallInfo, ti: number) => {
-                                const key = `${m.id}:c${bi}:${ti}`;
-                                // 装引擎那种几分钟的活儿不折成方块,它有自己的进度条
-                                const job = t.name === "stt_install" ? matchInstallJob(t, installJobs) : undefined;
-                                if (job) return <SttInstallProgress key={key} job={job} compact />;
-                                const state = t.ok === undefined ? "run" : t.ok ? "ok" : "err";
-                                return (
-                                  <button
-                                    key={key}
-                                    type="button"
-                                    className={`ai-chip ai-chip--${toolKind(t.name)} is-${state}${expanded.has(key) ? " is-open" : ""}`}
-                                    title={`${KIND_LABEL[toolKind(t.name)]}：${t.name}${t.ok === false ? "（失败）" : t.ok === undefined ? "（进行中）" : ""}`}
-                                    aria-expanded={expanded.has(key)}
-                                    aria-label={`${t.name} ${state === "err" ? "失败" : state === "run" ? "进行中" : "成功"}`}
-                                    onClick={() => toggleChip(key)}
-                                  />
-                                );
-                              };
-                              const run = b.tools.slice(start, end);
-                              const each = run.map((t, j) => chip(t, start + j));
-                              // 不到 4 个照常一个个摆;到 4 个起折成「第一个 ×N」,之后同类的继续往上累计
-                              if (run.length < CHIP_RUN_MIN) return each;
-                              const runKey = `${m.id}:c${bi}:r${start}`;
-                              const n = run.length;
-                              if (openRuns.has(runKey)) {
-                                return [
-                                  ...each,
-                                  <button key={`f${runKey}`} type="button" className="ai-chip-count" title="收起这一串" onClick={() => toggleRun(runKey)}>
-                                    ×{n}
-                                  </button>,
-                                ];
-                              }
-                              const first = run[0];
-                              const kind = toolKind(first.name);
-                              // 整串里还有没跑完的就让它呼吸,和单个方块的「进行中」一个意思
-                              const state = first.ok === false ? "err" : run.some((t) => t.ok === undefined) ? "run" : "ok";
-                              return [
-                                <button
-                                  key={runKey}
-                                  type="button"
-                                  className="ai-chipgroup"
-                                  title={`${state === "err" ? "失败" : KIND_LABEL[kind]} ×${n}：${[...new Set(run.map((t) => t.name))].join("、")}（点开逐个看）`}
-                                  aria-label={`${KIND_LABEL[kind]} ${n} 次${state === "err" ? ",全部失败" : state === "run" ? ",有进行中的" : ""},点开逐个看`}
-                                  onClick={() => toggleRun(runKey)}
-                                >
-                                  <span className={`ai-chip ai-chip--${kind} is-${state}`} aria-hidden />
-                                  <span className="ai-chip-count">×{n}</span>
-                                </button>,
-                              ];
-                            })}
-                            {/* 点开的那几个把完整详情摊在这一排下面 */}
-                            {b.tools.map((t, ti) => {
-                              const key = `${m.id}:c${bi}:${ti}`;
-                              return expanded.has(key) ? (
-                                <div key={`d${key}`} className="ai-chip-detail">{renderTool(t, key)}</div>
-                              ) : null;
-                            })}
-                          </div>
-                        );
-                      })
-                    )}
-                  </>
-                )}
-
-                {m.pending && (
-                  <div className="ai-activity" role="status" aria-live="polite">
-                    <span className="ai-spinner" aria-hidden />
-                    <span className="ai-activity-text">{activityText(m, busyTool)}</span>
-                    <span className="ai-activity-dots" aria-hidden>
-                      <i />
-                      <i />
-                      <i />
-                    </span>
-                  </div>
-                )}
-                {m.pending && progressMeta(m) && (
-                  <div className="ai-activity-meta">{progressMeta(m)}</div>
-                )}
-
-                {m.error && <div className="ai-message-error">{m.error}</div>}
-                {!m.pending && outcomeText(m) && (
-                  <div className="ai-message-outcome">{outcomeText(m)}</div>
-                )}
-              </div>,
-              i === lastUserIdx && orchestration
-                ? <OrchestrationBlock key={`${m.id}:orch`} state={orchestration} />
-                : null,
-            ];
-          })
+          messages.map((m, i) => [
+            <MessageRow
+              key={m.id}
+              m={m}
+              view={view}
+              showThinking={showThinking}
+              installJobs={installJobs}
+              expanded={expanded}
+              openRuns={openRuns}
+              openKeys={keysFor(expanded, m.id)}
+              runKeys={keysFor(openRuns, m.id)}
+              on={rowHandlers}
+            />,
+            i === lastUserIdx && orchestration
+              ? <OrchestrationBlock key={`${m.id}:orch`} state={orchestration} />
+              : null,
+          ])
         )}
       </div>
 

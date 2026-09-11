@@ -39,8 +39,24 @@ export function normalizeMath(src: string): string {
   return out.join("");
 }
 
+/**
+ * 按原文缓存渲染结果。同一段文字在每次列表重渲时都要重新过 remark / KaTeX,历史里几百段
+ * 文字合起来是几十毫秒;流式时只有最后一段在变,其余全是缓存命中。React 元素可以原样复用。
+ */
+const cache = new Map<string, ReactNode>();
+const CACHE_MAX = 400;
+
 export function renderMarkdown(text: string): ReactNode {
   if (!text) return null;
+  const hit = cache.get(text);
+  if (hit !== undefined) return hit;
+  const node = renderMarkdownUncached(text);
+  if (cache.size >= CACHE_MAX) cache.delete(cache.keys().next().value!);
+  cache.set(text, node);
+  return node;
+}
+
+function renderMarkdownUncached(text: string): ReactNode {
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm, remarkMath]}

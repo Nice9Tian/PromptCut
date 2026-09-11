@@ -332,8 +332,18 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
 
   // 时间变了就下发。播放中是连续推进;拖播放头 / 跳转 / 重播(playToken 变)都按跳转处理:
   // 重挂载 + 从入点补跑到那一刻。两者合在一个 effect 里,一次 seek 只渲染一帧。
+  /*
+   * 只认「时间真的变了」:stage / refreshRects 这两个回调的引用会跟着项目、缩放一起换,
+   * 以前它们一换这个 effect 就重跑,于是 Agent 每写一次项目都多来一次 jump 渲染 ——
+   * 重挂载活跃的卡、从入点逐帧补跑到播放头,实测播放头在 60 秒处每次 230~350 ms 的主线程,
+   * 而项目变了该不该补跑,setProject 那边(StageView)已经按「哪张卡变了、在不在画面上」判过了。
+   */
+  const lastRenderKey = useRef("");
   useEffect(() => {
     if (!stageReady) return;
+    const key = `${stageReady}|${t}|${playToken}`;
+    if (key === lastRenderKey.current) return;
+    lastRenderKey.current = key;
     stage()?.render(t, { jump: !playingRef.current });
     refreshRects();
   }, [stageReady, t, playToken, stage, refreshRects]);
