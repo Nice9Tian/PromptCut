@@ -1238,6 +1238,8 @@ interface UiRequest {
   signal?: AbortSignal;
   resolve: (v: any[] | null) => void;
   reject: (e: Error) => void;
+  /** 已经换一台重试过一次(非取消的失败只重试一次) */
+  retried?: boolean;
 }
 
 function createUiRenderer(root: string, originFn: () => string) {
@@ -1288,7 +1290,19 @@ function createUiRenderer(root: string, originFn: () => string) {
     w.busy = true;
     running.set(w, { ac, startedAt });
     runOnWorker(w, req.job, ac.signal)
-      .then(req.resolve, req.reject)
+      .then(req.resolve, (e: any) => {
+        /*
+         * 不是被取消、也没被请求方放弃的失败,换一台再试一次。实测连着打断、换页时偶尔会撞上
+         * 「Browser target is not found」(这台背后的浏览器没了;worker 已经把它丢掉,巡检几秒内重开)。
+         * 用户正盯着这张图,别让这种一次性的失败漏到界面上。只重试一次,第二次还失败就如实报。
+         */
+        if (!e?.cancelled && !req.retried && !req.signal?.aborted) {
+          // 带着 retried 重新交进去:第二次再失败就走下面的 reject,不会一直重试下去
+          submit({ ...req, retried: true });
+          return;
+        }
+        req.reject(e);
+      })
       .finally(() => {
         running.delete(w);
         req.signal?.removeEventListener("abort", onOuter);
@@ -1306,10 +1320,10 @@ function createUiRenderer(root: string, originFn: () => string) {
     start(w, req);
   };
 
-  const run: Runner = (job, signal) => new Promise((resolve, reject) => {
+  /** 交一个请求进来:有空的就跑,否则按规则 2 / 3 打断或排进待办。重试也走这里(带着 retried) */
+  const submit = (req: UiRequest) => {
     ensure();
-    if (signal?.aborted) return reject(cancelError());
-    const req: UiRequest = { job, signal, resolve, reject };
+    if (req.signal?.aborted) return req.reject(cancelError());
     const w = freeSlot();
     if (w) return start(w, req);
     // 规则 2:打断一台才开始的
@@ -1319,12 +1333,14 @@ function createUiRenderer(root: string, originFn: () => string) {
     // 规则 3:只留最新的一个
     if (pending) pending.reject(Object.assign(new Error("被更新的请求替换了"), { cancelled: true }));
     pending = req;
-    signal?.addEventListener("abort", () => {
+    req.signal?.addEventListener("abort", () => {
       if (pending !== req) return;
       pending = null;
-      reject(cancelError());
+      req.reject(cancelError());
     }, { once: true });
-  });
+  };
+
+  const run: Runner = (job, signal) => new Promise((resolve, reject) => submit({ job, signal, resolve, reject }));
 
   return {
     run,

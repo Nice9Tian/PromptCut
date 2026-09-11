@@ -1009,22 +1009,13 @@ export async function exportFrames(opts) {
         '-c:v', 'prores_ks', '-profile:v', '4444', '-pix_fmt', 'yuva444p10le',
         path.join(outDir, 'overlay.mov'),
       ]);
+      /*
+       * 没有素材的项目也走同一条合成(0 个素材层 = 灰底 + 卡片)。以前这里单留一条老命令,它踩的是同一个坑:
+       * 整帧不透明的卡片 PNG 不带 alpha,ffmpeg 中途重建滤镜图,随机丢帧、还可能卡死(实测旧 preview.mp4 1792/1800)。
+       * buildComposeArgs 每个输入都带 -reinit_filter 0,还有看门狗;走它两条路就一起好了。
+       */
       const layers = (plan?.layers || []).filter((l) => clipFrameRange(l.clip, fps, startFrame, endFrame));
-      if (layers.length) {
-        await composePreview({ ffmpegCmd, baked, layers, outDir });
-      } else {
-        console.log('Creating preview.mp4...');
-        await runFfmpeg([
-          // 灰底是 lavfi 生成的无限流,-shortest 拦不住它(帧序列结束后 overlay 会一直重复最后一帧),
-          // 必须给灰底 d= 时长并用 -t 截断,否则 ffmpeg 永远不退出、文件无限长。
-          '-y', '-f', 'lavfi', '-i', `color=c=#333333:s=${width}x${height}:r=${fps}:d=${durationSec}`,
-          '-framerate', String(fps), '-start_number', String(startFrame),
-          '-i', path.join(framesDir, `%06d.${ext}`),
-          '-filter_complex', '[0:v][1:v]overlay=eof_action=endall[out]', '-map', '[out]',
-          '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-t', String(durationSec),
-          path.join(outDir, 'preview.mp4'),
-        ]);
-      }
+      await composePreview({ ffmpegCmd, baked, layers, outDir });
       // 音轨:逐帧截图只有画面,声音在这里拼回去(配乐 + 视频自带的声音)
       try {
         const { buildAudioPlan, buildFfmpegArgs, hasAudioStream } = await import('./mux-audio.mjs');

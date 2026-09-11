@@ -16,6 +16,8 @@
 
 ### 1. 安装版里 Agent 改过的内置卡,打补丁后会被覆盖
 
+> **0.5.0 已解决**:装机版改卡写进 `<数据目录>/card-overrides/`,仓库那份当只读底版,补丁只换底版(`server/card-overrides.mjs`,见 [decoupling-plan.md](decoupling-plan.md)「实施记录」阶段 5)。
+
 - **来源**:`edit_card` 写入的是 dev server 根目录下的 `src/cards/…`,在安装版里就是 `runtime/app`。而更新补丁会整个覆盖 `runtime/app`(make-patch 只打这一部分)。
 - **后果**:用户让 Agent 改好的内置卡,升一次级就回到原样。改前备份在 `out/card-edits/`,但没有任何东西会把它恢复回去。
 - **要做**:
@@ -26,6 +28,8 @@
 - **验收**:改内置卡 → 装补丁 → 改动仍在,或者用户在装补丁前明确收到提示。
 
 ### 2. `--workers` 的默认值,代码和文档不一致
+
+> **0.5.0 已解决**:命令行默认单进程,`--workers` 真正被解析了(以前命令行根本不认这个参数,一律 `auto` 开 4 个分片),`/api/export` 也显式传 `--workers 1`(见 [decoupling-plan.md](decoupling-plan.md) 阶段 6)。
 
 - **来源**:`scripts/export-frames.mjs:742` 的命令行默认是 `workers: 'auto'`(最多 4 个进程),但同文件 563、651 行的注释和 `scripts/README.md:25` 都写默认单进程。
 - **要做**:按文档改成默认 1。实测 4 个进程只快约 18%(54.8 → 44.8 秒),却要占 4 份内存和 CPU,不值得作为默认。

@@ -4,6 +4,7 @@ import path from "path";
 import fs from "fs/promises";
 import { spawn } from "child_process";
 import type { AddressInfo } from "net";
+import { exportBegin, exportEnd } from "./render-pool-state.mjs";
 
 interface ExportJob {
   id: string;
@@ -146,6 +147,20 @@ async function handleExportStart(req: Connect.IncomingMessage, res: ServerRespon
       
       const child = spawn(process.execPath, args, { cwd: root });
       job.child = child;
+      /*
+       * 记账(render-pool-state.mjs):导出也起 Chrome、也吃核,渲染池算槽位时要把它算进去,
+       * 而且导出期间暂停空闲预烘(docs/decoupling-plan.md 3.3 节「导出优先级最低」)。
+       * 结束只记一次:子进程起不来时可能只有 error 没有 close,两条路都要收。
+       */
+      exportBegin();
+      let accounted = true;
+      const settle = () => {
+        if (!accounted) return;
+        accounted = false;
+        exportEnd();
+      };
+      child.on("error", settle);
+      child.on("close", settle);
 
       let stderrLog: string[] = [];
       child.stdout.on("data", (data) => {
