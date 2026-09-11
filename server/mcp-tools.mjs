@@ -1,5 +1,11 @@
 export const tools = [
   {
+    name: "set_clip_volume",
+    description: "设置音频或视频卡片的独立声音音量。volume 范围 0~1，0=无声，0.5=50%，1=原声（默认）。不改变画面不透明度，保留淡入淡出；不会解除序列静音、隐藏或音画分离后的原视频静音。支持撤销，锁定序列须先解锁。",
+    inputSchema: { type: "object", properties: { clipId: { type: "string" }, volume: { type: "number", minimum: 0, maximum: 1 } }, required: ["clipId", "volume"] },
+    side: "browser",
+  },
+  {
     name: "separate_audio",
     description: "音画分离：保留并静音目标视频片段，在其序列正下方新建序列放置音频卡片，保留起止时间、素材偏移、音量及淡入淡出。返回 audioClipId、trackId、mediaId。锁定序列或已分离的视频不可重复操作。",
     inputSchema: { type: "object", properties: { clipId: { type: "string" } }, required: ["clipId"] },

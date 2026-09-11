@@ -389,3 +389,16 @@
 }
 
 .pc-audio-waveform { position: absolute; left: 0; bottom: 1px; width: 100%; height: 16px; opacity: .45; pointer-events: none; }
+
+.pc-clip-volume-dialog { margin: auto; width: min(360px, calc(100vw - 32px)); padding: 20px; border: 1px solid var(--ui-border); border-radius: 12px; background: var(--ui-bg-2); color: var(--ui-fg); box-shadow: 0 12px 48px #0008; font-size: 13px; }
+.pc-clip-volume-dialog::backdrop { background: #0008; }
+.pc-clip-volume-dialog h3 { margin: 0 0 8px; font-size: 16px; font-weight: 600; }
+.pc-clip-volume-dialog p { margin: 10px 0; color: var(--ui-fg-muted); font-size: 12px; }
+.pc-volume-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pc-volume-controls { display: flex; align-items: center; gap: 12px; margin: 20px 0; }
+.pc-volume-controls input[type=range] { flex: 1; min-width: 0; accent-color: var(--ui-accent); }
+.pc-volume-controls input[type=number] { width: 64px; border: 1px solid var(--ui-border); border-radius: 4px; padding: 4px; background: var(--ui-bg); color: var(--ui-fg); }
+.pc-volume-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
+.pc-volume-actions button { padding: 6px 10px; border: 1px solid var(--ui-border); border-radius: 6px; cursor: pointer; }
+.pc-volume-actions button[type=submit] { background: var(--ui-accent); color: white; }
+.pc-volume-actions button:disabled { opacity: .4; cursor: default; }

@@ -41,7 +41,7 @@ export function buildAudioPlan(project, outDir, exists = fs.existsSync) {
         start: +c.start.toFixed(3),
         dur,
         offset: +(c.mediaOffset ?? 0).toFixed(3),
-        volume: c.opacity ?? 1,
+        volume: (c.opacity ?? 1) * (c.audioVolume ?? 1),
         fadeIn: c.fadeIn ?? 0,
         fadeOut: c.fadeOut ?? 0,
       });

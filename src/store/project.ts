@@ -855,6 +855,22 @@ export const actions = {
    * 「创建为声音」:给一段视频派生出只有声音的那一份素材(素材库里多一条,进配乐页)。
    * 同一段视频只派生一份,再调返回的是同一条。图片没有声音;本来就是声音的原样返回。
    */
+  setClipVolume(clipId: string, volume: number) {
+    const p = state.project;
+    const hit = findClip(p, clipId);
+    if (!hit) return { ok: false, error: "找不到片段" };
+    if (hit.track.locked) return { ok: false, error: "请先解锁序列" };
+    const media = p.media.find((m) => m.id === hit.clip.mediaId);
+    if (!media || (media.kind !== "video" && media.kind !== "audio")) return { ok: false, error: "只能调整音频或视频片段的音量" };
+    if (typeof volume !== "number" || !Number.isFinite(volume) || volume < 0 || volume > 1) return { ok: false, error: "音量必须是 0 到 1 之间的数字" };
+    if (volume !== (hit.clip.audioVolume ?? 1)) {
+      setProject(updateTrack(p, hit.track.id, (track) => ({
+        ...track, clips: track.clips.map((clip) => clip.id === clipId ? { ...clip, audioVolume: volume } : clip),
+      })));
+    }
+    return { ok: true, clipId, volume, muted: !!(hit.clip.audioMuted || hit.track.muted), hidden: !!hit.track.hidden };
+  },
+
   separateAudio(clipId: string) {
     const p = state.project;
     const hit = findClip(p, clipId);
@@ -867,7 +883,7 @@ export const actions = {
     const audio: TrackClip = {
       id: newId("c"), cardId: "", mediaId: media.id, params: {}, label: media.name,
       start: hit.clip.start, end: hit.clip.end, mediaOffset: hit.clip.mediaOffset,
-      opacity: hit.clip.opacity, fadeIn: hit.clip.fadeIn, fadeOut: hit.clip.fadeOut,
+      opacity: hit.clip.opacity, fadeIn: hit.clip.fadeIn, fadeOut: hit.clip.fadeOut, audioVolume: hit.clip.audioVolume,
     };
     const track: Track = { id: newId("t"), name: media.name, muted: hit.track.muted, hidden: hit.track.hidden, clips: [audio] };
     const tracks = p.tracks.map((t) => t.id === hit.track.id

@@ -55,6 +55,7 @@ export interface EditorApi {
   removeClip(args: { clipId: string }): any;
   duplicateClip(args: { clipId: string }): any;
   splitClip(args: { clipId: string; t: number }): any;
+  setClipVolume(args: { clipId: string; volume: number }): any;
   separateAudio(args: { clipId: string }): any;
   createAudio(args: { mediaId?: string; clipId?: string }): any;
   setEmphasis(args: { clipId: string; kind: string; color?: string; size?: number; opacity?: number; dx?: number; dy?: number }): any;
@@ -126,7 +127,7 @@ export interface EditorApi {
 /** 这些工具改的是时间轴:做成一次,就值得给 SKILL 悬浮窗下面那张预览图刷新一次 */
 const TIMELINE_TOOLS = new Set([
   "add_clip", "update_clip", "remove_clip", "duplicate_clip", "split_clip",
-  "add_transition", "remove_transition", "separate_audio", "create_audio", "set_emphasis",
+  "add_transition", "remove_transition", "set_clip_volume", "separate_audio", "create_audio", "set_emphasis",
   "set_position", "set_rect", "align", "nudge", "fill_captions", "edit_caption", "attach_clip_motion", "detach_clip_motion",
   "add_track", "switch_cut", "add_cut", "set_theme", "voice_generate",
 ]);
@@ -402,6 +403,7 @@ export function connectMcpExecutor(getApi: () => EditorApi, onStatus?: (s: { con
           else if (tool === "remove_clip") result = api.removeClip(args);
           else if (tool === "duplicate_clip") result = api.duplicateClip(args);
           else if (tool === "split_clip") result = api.splitClip(args);
+          else if (tool === "set_clip_volume") result = api.setClipVolume(args);
           else if (tool === "separate_audio") result = api.separateAudio(args);
           else if (tool === "create_audio") result = api.createAudio(args);
           else if (tool === "set_emphasis") result = api.setEmphasis(args);

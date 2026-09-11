@@ -179,6 +179,8 @@ export interface TrackClip extends Clip {
   /** 视频段从素材的第几秒开始播(默认 0) */
   mediaOffset?: number;
   audioMuted?: boolean;
+  /** 独立声音音量，0~1；缺省为原声 1。 */
+  audioVolume?: number;
   label?: string;
   // fadeIn / fadeOut / opacity 挪到了 kernel/types.ts 的 Clip 上:卡片 clip 现在也吃它们,
   // 不再是素材段专属。
@@ -415,7 +417,7 @@ export function audioClipsAt(
       if (!c.mediaId || t < c.start || t >= c.end) continue;
       const media = p.media.find((m) => m.id === c.mediaId);
       if (!media || media.kind !== "audio" || tr.muted || c.audioMuted) continue;
-      out.push({ clip: c, media, volume: opacityAt(c, t) });
+      out.push({ clip: c, media, volume: opacityAt(c, t) * (c.audioVolume ?? 1) });
     }
   }
   return out;

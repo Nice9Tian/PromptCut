@@ -1,4 +1,5 @@
 import { AudioWaveform } from "./AudioWaveform";
+import { ClipVolumeDialog } from "./ClipVolumeDialog";
 import { useMemo, useState } from "react";
 import { useTimelineContext } from "./TimelineContext";
 import { actions, useStore, getState } from "../../store/project";
@@ -16,6 +17,7 @@ import { CaptionLines } from "./CaptionLines";
 import { captionsOf, isCaptionClip } from "../../kernel/captions";
 
 export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
+  const [volumeOpen, setVolumeOpen] = useState(false);
   const { pxPerSec, trackAreaRef, setDraggingClipId, setDraggingTrackId, rowSize } = useTimelineContext();
   const media = useStore((s) => s.project.media.find((m) => m.id === clip.mediaId));
   const selection = useStore((s) => s.selection);
@@ -267,6 +269,7 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
         />
       </div>
 
+      {volumeOpen && <ClipVolumeDialog clip={clip} track={track} onClose={() => setVolumeOpen(false)} />}
       {contextMenu && (
         <ContextMenu
           x={contextMenu.x}
@@ -282,6 +285,7 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
               ? [{ label: `去掉强调:${describeEmphasis(clip.emphasis)}`, action: () => actions.setClipEmphasis(clip.id, null) }]
               : []),
             { label: "复制", action: () => actions.duplicateClip(clip.id) },
+            ...(media && media.kind !== "image" ? [{ label: "调整声音音量…", disabled: !!track.locked, action: () => setVolumeOpen(true) }] : []),
             // 只要声音:画面没了,位置、长度、素材内偏移、淡入淡出都留着;素材库里同时多一份声音素材
             ...(canBecomeAudio ? [{ label: "音画分离", disabled: !!track.locked || !!clip.audioMuted, action: () => actions.separateAudio(clip.id) }, { label: "转换为声音", action: () => actions.convertClipToAudio(clip.id) }] : []),
             // 有声音的素材段可以直接去转写(图片没有声音,不给这一项)
