@@ -10,6 +10,7 @@ import { AiPanel } from "./AiPanel";
 import { AgentTabs } from "./AgentTabs";
 import { useAgentTabs } from "../../ai/agentTabs";
 import { connectMcpExecutor, EditorApi } from "../../ai/mcpExecutor";
+import { prerenderUrl } from "../prerender";
 import { getState, actions } from "../../store/project";
 import { allCards, getCard } from "../../kernel/registry";
 import { applyEnvelope, assertNo3dOnMedia, envelopeOf, isComposite } from "../../kernel/envelope";
@@ -1745,10 +1746,12 @@ export function RightPanel() {
        */
       inspectCardDom: async (args) => {
         const ref = typeof args.ref === "string" ? Number(String(args.ref).replace(/^ref_/, "")) : args.ref;
-        const res = await fetch("/api/cards/dom", {
+        // 兜底路径:有数据镜像时服务端直接问预渲染。这里也发到预渲染的源上,60 秒(工具上限)就放手
+        const res = await fetch(await prerenderUrl("/api/cards/dom"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ project: getState().project, clipId: args.clipId, t: args.t, ref, depth: args.depth }),
+          signal: AbortSignal.timeout(60000),
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok || !data.ok) throw new Error(data.error || `读不到 DOM 树(HTTP ${res.status})`);
@@ -1835,7 +1838,7 @@ export function RightPanel() {
             if (i >= plan.scenes.length) return;
             const sc = plan.scenes[i];
             try {
-              const r = await fetch("/api/vision/sheet", {
+              const r = await fetch(await prerenderUrl("/api/vision/sheet"), {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ media: { id: media.id, name: media.name, kind: media.kind, url: media.url, path: media.path }, start: sc.start, end: sc.end, grid: plan.grid }),
@@ -1889,8 +1892,13 @@ export function RightPanel() {
       },
       seePreview: async (args) => {
         const state = getState();
+        /*
+         * 这条是兜底:有数据镜像时 see_frames 由服务端直接问预渲染(vite-plugin-ai 的服务端工具),
+         * 根本不经过这个页面。走到这里时也发到预渲染的源上,并且和工具上限一样 180 秒就放手 ——
+         * 放手之后连接断开,预渲染会把还在排队的活摘掉,不会白占一个 Chrome。
+         */
         const snap = async (t: number | undefined) => {
-          const res = await fetch("/api/vision/snapshot", {
+          const res = await fetch(await prerenderUrl("/api/vision/snapshot"), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -1898,6 +1906,7 @@ export function RightPanel() {
               t: t ?? (args?.clipId ? undefined : state.t),
               clipId: args?.clipId,
             }),
+            signal: AbortSignal.timeout(180000),
           });
           const data = await res.json().catch(() => ({}));
           if (!res.ok || !data.ok) throw new Error(data.error || `渲染画面失败(HTTP ${res.status})`);
@@ -1911,10 +1920,11 @@ export function RightPanel() {
          */
         const times = Array.isArray(args?.times) ? args.times.filter((x: unknown) => typeof x === "number").slice(0, 10) : [];
         if (times.length) {
-          const res = await fetch("/api/vision/snapshot", {
+          const res = await fetch(await prerenderUrl("/api/vision/snapshot"), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ project: state.project, times, clipId: args?.clipId }),
+            signal: AbortSignal.timeout(180000),
           });
           const data = await res.json().catch(() => ({}));
           if (!res.ok || !data.ok) throw new Error(data.error || `渲染画面失败(HTTP ${res.status})`);
@@ -1923,7 +1933,8 @@ export function RightPanel() {
         return snap(typeof args?.t === "number" ? args.t : undefined);
       },
       bakeCard: async (args) => {
-        const res = await fetch("/api/vision/bake", {
+        // 兜底路径:有数据镜像时 bake_card 由服务端直接问预渲染。这里也发到预渲染的源上,150 秒(工具上限)就放手
+        const res = await fetch(await prerenderUrl("/api/vision/bake"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -1933,6 +1944,7 @@ export function RightPanel() {
             size: args.size,
             bg: args.bg,
           }),
+          signal: AbortSignal.timeout(150000),
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok || !data.ok) throw new Error(data.error || `烘焙失败(HTTP ${res.status})`);

@@ -1,4 +1,5 @@
 import { openBakery, bakeFrames } from './export-frames.mjs';
+import { postFrame } from '../server/png-post.mjs';
 
 /**
  * 常驻渲染 worker:**一个进程守着一个 Chrome,一趟一趟接活**。
@@ -21,11 +22,24 @@ import { openBakery, bakeFrames } from './export-frames.mjs';
  * 再往同一条管子里塞协议消息,两边都得先猜「这一行是日志还是消息」。走 `process.send`
  * 是另一条通道,互不干扰。
  *
+ * # 消息
+ *
+ *   prewarm    { url }            现在就起 Chrome、停在导出页上,别等活来了才开机
+ *   bake       { id, opts }       烘一趟(export-frames 的 bakeFrames)
+ *   post       { id, items }      这一帧交出去之前的像素活(合成素材层、压底色、缩图),见 server/png-post.mjs。
+ *                                 放在这里做,是为了不占父进程(给编辑器供模块的 Vite)的事件循环
+ *   cancel     { id }             不要这一趟了。**只换页,不换浏览器**(见下面第 1 条的例外)
+ *   invalidate {}                 卡片源码变了:备用页里加载的是旧模块,扔掉
+ *
+ * 回给父进程的:ready、started、done、error(被取消的带 cancelled: true)、hot(备用页好了,
+ * 下一趟来活只需把项目灌进去 —— 界面那对热备渲染器按它判断「谁是热的」)。
+ *
  * # 三条自保规矩
  *
- * 1. **出过错的 bakery 一律丢掉。** 烘焙中途失败时页面的虚拟时间可能停在 pause,
- *    也可能挂着没排空的任务 —— 下一趟在这样的页面上接着烘,烘出来的东西不可信,
- *    而且**不报错**。所以宁可多付一次 3 秒的重开。
+ * 1. **出过错的 bakery 一律丢掉。** 烘焙中途失败时页面可能挂着没排空的任务 —— 下一趟在这样的
+ *    页面上接着烘,烘出来的东西不可信,而且**不报错**。所以宁可多付一次 3 秒的重开。
+ *    例外是**取消**:它停在两帧之间(bakeFrames 每帧开头看一眼 signal),页面不在半路上,
+ *    而下一趟本来就要换一张全新的页(resetWith),旧页随之关掉 —— 用不着重开浏览器。
  * 2. **烘够 MAX_JOBS 趟主动重开。** Chrome 长时间跑会慢慢涨内存(每趟一个新 renderer,
  *    旧的关掉但浏览器进程自己的堆不回落)。这台机器上多开 Chrome 踩过 0xC0000142,
  *    宁可定期换一个新的。
@@ -38,9 +52,9 @@ const MAX_JOBS = Number(process.env.PROMPTCUT_WORKER_MAX_JOBS) || 40;
 /**
  * 闲多久就自己退出(毫秒)。
  *
- * **传 0 = 永不退出**,留给前台专用的那个常驻 worker(见父进程的 takeForeground):
- * 它存在的全部意义就是「用户随时松手,都有一个热的 Chrome 立刻接住」,
- * 闲三分钟就退掉的话,用户去改了会儿参数再回来拖时间轴,又要等一次开机。
+ * **传 0 = 永不退出**,留给前台专用的常驻 worker:它存在的全部意义就是「用户随时松手,
+ * 都有一个热的 Chrome 立刻接住」,闲三分钟就退掉的话,用户去改了会儿参数再回来拖时间轴,
+ * 又要等一次开机。
  */
 const rawIdle = process.env.PROMPTCUT_WORKER_IDLE_MS;
 const IDLE_EXIT_MS = rawIdle === undefined || rawIdle === "" ? 180000 : Number(rawIdle);
@@ -49,6 +63,12 @@ let bakery = null;
 /** 这个 bakery 已经烘过几趟 */
 let jobsDone = 0;
 let idleTimer = null;
+/** 正在跑的那一趟:取消消息靠 id 找到它的 AbortController */
+let current = null;
+/** 还排在本进程链上、没开跑就被取消的活 */
+const cancelledEarly = new Set();
+/** 最近一次用过的导出页地址:invalidate 之后按它重开备用页 */
+let lastUrl = null;
 
 function armIdleExit() {
   clearTimeout(idleTimer);
@@ -77,6 +97,7 @@ async function dropBakery() {
  * 上一趟烘完页面已经被推到了片尾、动画锚点全都建好了,原地再烘一趟拿到的不是第 0 帧的画面。
  */
 async function bakeryFor(url) {
+  lastUrl = url;
   if (!bakery) {
     bakery = await openBakery({ url });
     return bakery;
@@ -111,20 +132,31 @@ async function projectOf(url) {
   return await res.json();
 }
 
-/** 趁闲把下一趟要用的备用页开好。不等它:下一趟 resetWith 会自己等 */
+/**
+ * 趁闲把下一趟要用的备用页开好。不等它:下一趟 resetWith 会自己等。
+ * 备用页就绪时回一声 hot —— 界面那对热备渲染器靠它知道「这一台可以立刻接活了」。
+ */
 function preloadNext(url) {
-  try { bakery?.preload(emptyUrlOf(url)); } catch { /* 地址不合法就算了,下一趟走老路 */ }
+  try {
+    const p = bakery?.preload(emptyUrlOf(url));
+    p?.then((s) => { if (s) process.send?.({ type: 'hot' }); }, () => {});
+  } catch { /* 地址不合法就算了,下一趟走老路 */ }
 }
 
-async function runJob(opts) {
+async function runJob(opts, signal) {
   if (jobsDone >= MAX_JOBS) await dropBakery();
   try {
     const b = await bakeryFor(opts.url);
-    const baked = await bakeFrames(b, opts);
+    const baked = await bakeFrames(b, { ...opts, signal });
     jobsDone++;
     preloadNext(opts.url);
     return baked;
   } catch (e) {
+    if (e?.cancelled) {
+      // 见「三条自保规矩」第 1 条的例外:停在两帧之间,只换页。下一趟 resetWith 会关掉这张旧页
+      preloadNext(opts.url);
+      throw e;
+    }
     // 见「三条自保规矩」第 1 条:这个页面已经不可信了(备用页随浏览器一起关)
     await dropBakery();
     throw e;
@@ -135,6 +167,7 @@ async function runJob(opts) {
 let chain = Promise.resolve();
 
 process.on('message', (msg) => {
+  if (!msg) return;
   /*
    * **预热**:现在就起 Chrome、加载好导出页,别等第一个活来了才开机。
    *
@@ -142,11 +175,44 @@ process.on('message', (msg) => {
    * 他要多等约 1.3 秒 —— 而这 1.3 秒完全可以在他还在拖的时候就付掉。
    * 预热用的地址随便给一个导出页就行:真正的活来了会 reset 到它自己的项目地址上。
    */
-  if (msg && msg.type === 'prewarm') {
+  if (msg.type === 'prewarm') {
     chain = chain.then(() => bakeryFor(msg.url).then(() => preloadNext(msg.url), () => {}));
     return;
   }
-  if (!msg || msg.type !== 'bake') return;
+  /*
+   * 取消。正在跑的那一趟:拨一下它的 signal,bakeFrames 在下一帧开头停下;
+   * 还排在链上没开跑的:记下来,轮到它时直接回 cancelled。
+   * 不在这里回 error —— 回话统一由那一趟自己的收尾发,免得同一个 id 回两次。
+   */
+  if (msg.type === 'cancel') {
+    if (current && current.id === msg.id) current.ac.abort();
+    else cancelledEarly.add(msg.id);
+    return;
+  }
+  /*
+   * 卡片源码变了。备用页是提前开好的,里面加载的是**改之前**的模块 —— 拿它灌下一个项目,
+   * 渲出来的就是旧卡片,而且不报错。扔掉它,下一趟现开一张(或者闲着时重新备一张)。
+   */
+  if (msg.type === 'invalidate') {
+    chain = chain.then(() => {
+      bakery?.dropSpare?.();
+      if (lastUrl) preloadNext(lastUrl);
+    });
+    return;
+  }
+  if (msg.type === 'post') {
+    chain = chain.then(async () => {
+      try {
+        const results = [];
+        for (const item of msg.items || []) results.push(await postFrame(item));
+        process.send?.({ type: 'done', id: msg.id, result: results });
+      } catch (e) {
+        process.send?.({ type: 'error', id: msg.id, message: e?.message || String(e) });
+      }
+    });
+    return;
+  }
+  if (msg.type !== 'bake') return;
   clearTimeout(idleTimer);
   chain = chain.then(async () => {
     /*
@@ -155,12 +221,20 @@ process.on('message', (msg) => {
      * 那种情况父进程换一个新 worker 重来一次,用户看不见任何异常(见 runExport 的重试)。
      */
     process.send?.({ type: 'started', id: msg.id });
+    if (cancelledEarly.delete(msg.id)) {
+      process.send?.({ type: 'error', id: msg.id, message: '已取消', cancelled: true });
+      armIdleExit();
+      return;
+    }
+    const ac = new AbortController();
+    current = { id: msg.id, ac };
     try {
-      const result = await runJob(msg.opts || {});
+      const result = await runJob(msg.opts || {}, ac.signal);
       process.send?.({ type: 'done', id: msg.id, result });
     } catch (e) {
-      process.send?.({ type: 'error', id: msg.id, message: e?.message || String(e) });
+      process.send?.({ type: 'error', id: msg.id, message: e?.message || String(e), cancelled: !!e?.cancelled });
     } finally {
+      current = null;
       armIdleExit();
     }
   });

@@ -6,6 +6,13 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import ts from 'typescript';
+import { originOk as guardOriginOk } from './http-guard.mjs';
+import { isPrerender } from './render-role.mjs';
+import { proxyToPrerender } from './prerender-client.mjs';
+import {
+  readEffective, writeCardFile, overridesRoot, overrideFileFor, repoFileForOverride,
+  setCardHasher, emitCardSourceChange,
+} from './card-overrides.mjs';
 
 /* ────────────────────────────────────────────────────────────────────
  * 0.4 起:Agent 能读、能改**所有**卡片的原始源码(内置卡也算),但改不了 HTML。
@@ -45,7 +52,8 @@ export function findCardFile(root: string, id: string): string | null {
     if (!fs.existsSync(abs)) continue;
     for (const f of fs.readdirSync(abs).sort()) {
       if (!f.endsWith('.tsx')) continue;
-      const src = fs.readFileSync(path.join(abs, f), 'utf8');
+      // 读生效内容(改动层优先):id 和导出不许改,但判断要和实际加载的那一份一致
+      const src = readEffective(root, path.join(abs, f));
       if (re.test(src) && /\bCardDef\b/.test(src)) return `${dir}/${f}`;
     }
   }
@@ -55,7 +63,8 @@ export function findCardFile(root: string, id: string): string | null {
 /** 一个文件直接用到的本地文件(相对导入,且落在可改范围内的);样式文件也算 —— 画面一半在 CSS 里 */
 export function localImports(root: string, rel: string): string[] {
   let src = '';
-  try { src = fs.readFileSync(path.join(root, rel), 'utf8'); } catch { return []; }
+  // 改动层里的版本可能多 import 了别的文件:闭包、共用计数、代码哈希都得按实际加载的那一份算
+  try { src = readEffective(root, path.join(root, rel)); } catch { return []; }
   const out: string[] = [];
   const re = /(?:import|export)\s+(?:[^'"]*?\sfrom\s+)?["'](\.{1,2}\/[^"']+)["']|import\(\s*["'](\.{1,2}\/[^"']+)["']\s*\)/g;
   for (const m of src.matchAll(re)) {
@@ -326,11 +335,12 @@ function sendJson(res: ServerResponse, code: number, data: unknown) {
   res.end(JSON.stringify(data));
 }
 
-/** 只认同源请求,和 ai 那几个写端点一致 */
+/**
+ * 只认同源请求,和 ai 那几个写端点一致。走 http-guard 的同一份判定:预渲染进程还要放行编辑器那一端的源
+ * (/api/cards/dom 在预渲染上跑,编辑器页面的兜底路径会跨源直连过来),两处各写一份迟早对不上。
+ */
 function originOk(req: { headers: Record<string, any> }): boolean {
-  const origin = req.headers.origin;
-  if (!origin) return true;
-  return origin === 'http://' + req.headers.host || origin === 'https://' + req.headers.host;
+  return guardOriginOk(req);
 }
 
 /** 审查发现的一条不合规。tier 决定它属于哪一类问题,给调用方(通常是模型)分门别类地看 */
@@ -780,10 +790,74 @@ export function applyCardPatch(
 }
 
 export default function vitePluginCards(): Plugin {
+  let projectRoot = process.cwd();
   return {
     name: 'promptcut-cards',
+    configResolved(config) {
+      projectRoot = config.root;
+    },
+    /*
+     * 卡片改动层(card-overrides.mjs):装机版里改过的卡 / 部件,加载时交出改动层那一份,
+     * 仓库里的原文件当只读底版。编辑器的 Vite 和预渲染的 Vite 都挂这个插件,所以两边看到的是同一份。
+     */
+    load(id) {
+      if (!overridesRoot()) return null;
+      const file = id.split('?')[0];
+      if (!path.isAbsolute(file)) return null;
+      const o = overrideFileFor(projectRoot, file);
+      if (!o || !fs.existsSync(o)) return null;
+      this.addWatchFile(o);
+      return fs.readFileSync(o, 'utf8');
+    },
     configureServer(server: ViteDevServer) {
       const userDir = path.join(server.config.root, 'src', 'cards', 'user');
+
+      /*
+       * 卡片代码的哈希 → 渲染缓存的键(card-overrides.mjs 的 cardCodeHash)。
+       * 按「定义文件 + 依赖闭包」的生效内容算;任何卡片 / 部件源码一变整表清空,下次用到再算。
+       */
+      const hashCache = new Map<string, string>();
+      setCardHasher((cardId: string) => {
+        const hit = hashCache.get(cardId);
+        if (hit !== undefined) return hit;
+        const root = server.config.root;
+        const def = findCardFile(root, cardId);
+        let h = '';
+        if (def) {
+          const sha = crypto.createHash('sha1');
+          for (const f of importClosure(root, def)) {
+            sha.update(f);
+            try { sha.update(readEffective(root, path.join(root, f))); } catch { /* 读不到的文件不算进去 */ }
+          }
+          h = sha.digest('hex').slice(0, 12);
+        }
+        hashCache.set(cardId, h);
+        return h;
+      });
+      const isCardSource = (file: string) => {
+        const rel = toRel(server.config.root, file);
+        return rel.startsWith('src/cards/') || rel.startsWith('src/parts/');
+      };
+      const onSource = (file: string) => {
+        const over = repoFileForOverride(server.config.root, file);
+        if (over) {
+          // 改动层里的文件变了:Vite 盯着的是原文件,手动作废对应模块,再按原文件走一遍热更新
+          for (const m of server.moduleGraph.getModulesByFile(over.split(path.sep).join('/')) ?? []) server.moduleGraph.invalidateModule(m);
+          hashCache.clear();
+          server.watcher.emit('change', over);
+          return;
+        }
+        if (!isCardSource(file)) return;
+        hashCache.clear();
+        emitCardSourceChange(file);
+      };
+      server.watcher.on('change', onSource);
+      server.watcher.on('add', onSource);
+      server.watcher.on('unlink', onSource);
+      const top = overridesRoot();
+      if (top) {
+        try { fs.mkdirSync(top, { recursive: true }); server.watcher.add(top); } catch { /* 建不了就只是没有热更新 */ }
+      }
 
       /*
        * 卡片归属表:哪张定制卡属于哪个项目。
@@ -910,7 +984,8 @@ export default function vitePluginCards(): Plugin {
           return sendJson(res, 400, { ok: false, error: `"${target}" 不在卡片 ${id} 的源码文件里。能读的是:${closure.join('、')}` });
         }
         const counts = sharedByCounts(root);
-        const source = fs.readFileSync(path.join(root, target), 'utf8');
+        // 生效内容:装机版里改过的卡读的是改动层那一份(见 card-overrides.mjs)
+        const source = readEffective(root, path.join(root, target));
         const builtin = !defFile.startsWith('src/cards/user/');
         sendJson(res, 200, {
           ok: true, id, file: target, source, lines: source.split('\n').length, builtin,
@@ -959,7 +1034,8 @@ export default function vitePluginCards(): Plugin {
             }
 
             const abs = path.join(root, target);
-            const before = fs.readFileSync(abs, 'utf8');
+            // 改的是生效的那一份:装机版里上一次改动在改动层,接着改要从它往下改,不是从底版
+            const before = readEffective(root, abs);
             const patch = applyCardPatch(before, find, replace, replaceAll === true);
             if (!patch.ok) return sendJson(res, 400, { ok: false, error: patch.error });
             const { after, replaced } = patch;
@@ -972,7 +1048,17 @@ export default function vitePluginCards(): Plugin {
             }
 
             const backup = isUserDef ? undefined : backupBeforeEdit(root, target, before);
-            fs.writeFileSync(abs, after, 'utf8');
+            /*
+             * 写到哪儿由 card-overrides 决定:装机版写改动层(补丁覆盖 runtime/app 时改动不丢),
+             * 开发期直接写仓库文件。写进改动层时 Vite 盯着的原文件没变,它自己不会热更新 ——
+             * 手动把那个模块作废,再按「原文件变了」走一遍同样的热更新(load 钩子会交出改动层的内容)。
+             */
+            const written = writeCardFile(root, abs, after);
+            if (written !== abs) {
+              for (const m of server.moduleGraph.getModulesByFile(abs.split(path.sep).join('/')) ?? []) server.moduleGraph.invalidateModule(m);
+              server.watcher.emit('change', abs);
+            }
+            emitCardSourceChange(abs);
             const sharedBy = sharedByCounts(root).get(target) || 1;
             sendJson(res, 200, {
               ok: true,
@@ -1066,6 +1152,8 @@ export default function vitePluginCards(): Plugin {
       };
 
       server.middlewares.use('/api/cards/dom', (req, res) => {
+        // 编辑器这一端不渲:原样转给预渲染进程(它有自己的 Chrome,不占编辑器这边的进程和连接)
+        if (!isPrerender) return proxyToPrerender(req, res);
         if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: 'POST only' });
         if (!req.headers['content-type']?.startsWith('application/json')) {
           return sendJson(res, 415, { ok: false, error: 'JSON required' });

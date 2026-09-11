@@ -6,6 +6,8 @@ import { webOpen, webView, webClick, webType, webScroll, webRead, webHandoff, we
 import { requestAgentBrowser, closeAgentBrowser } from "./agentBrowserStore";
 import * as agentBus from "./agentBus";
 import { getState } from "../store/project";
+import { prerenderUrl } from "../editor/prerender";
+import { flushDataMirror, startDataMirror } from "../editor/dataMirror";
 const TOOL_SPECS = RAW_TOOL_SPECS as { name: string; inputSchema?: { required?: string[] } }[];
 
 /**
@@ -170,7 +172,7 @@ async function withVisual(tool: string, args: any, result: unknown, before: unkn
   try {
     const body = visualRequest(tool, args, result, before);
     if (!body) return result;
-    const res = await fetch("/api/ai/visual", {
+    const res = await fetch(await prerenderUrl("/api/ai/visual"), {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body), signal: AbortSignal.timeout(3000),
     });
@@ -184,9 +186,11 @@ async function withVisual(tool: string, args: any, result: unknown, before: unkn
 
 /** get_gif:把一张卡整段均匀抽 8 帧,用户看动图、模型看 4×2 拼图 */
 async function getGif(args: { clipId: string }) {
-  const res = await fetch("/api/ai/visual", {
+  // 兜底路径(有数据镜像时服务端直接做,见 vite-plugin-ai 的服务端工具)。发到预渲染的源上,180 秒就放手
+  const res = await fetch(await prerenderUrl("/api/ai/visual"), {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ tool: "get_gif", clipId: args.clipId, after: getState().project, render: true }),
+    signal: AbortSignal.timeout(180000),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok || !data.ok) throw new Error(data.error || `做动图失败(HTTP ${res.status})`);
@@ -309,6 +313,11 @@ export function connectMcpExecutor(getApi: () => EditorApi, onStatus?: (s: { con
 
     source.onopen = () => {
       onStatus?.({ connected: true });
+      /*
+       * 连着桥的这个页面才是「编辑台」,由它把项目镜像给服务端(数据管理的只读镜像,见 src/editor/dataMirror.ts)。
+       * 只读观看页(observe / view)上面已经 return 了,不会走到这里 —— 两个页面同时推会互相覆盖。
+       */
+      startDataMirror();
     };
 
     source.onmessage = async (e) => {
@@ -466,6 +475,12 @@ export function connectMcpExecutor(getApi: () => EditorApi, onStatus?: (s: { con
         }
 
         if (ok && tool !== "get_gif") result = await withVisual(tool, args, result, visualBefore);
+
+        /*
+         * 回结果之前把这次改动推给数据镜像:Agent 改完马上 see_frames 时,服务端拿镜像去渲,
+         * 必须已经是改完的那一份(读后写一致)。没改动时这一步什么都不发。
+         */
+        try { await flushDataMirror(); } catch { /* 推不上不影响这次结果;服务端没有新镜像时会退回经页面执行 */ }
 
         fetch("/api/mcp/result", {
           method: "POST",

@@ -4,6 +4,7 @@ import { createEmptyProject } from "../../kernel/project";
 import { resetProjectAi } from "../../ai/projectAi";
 import { getCard } from "../../kernel/registry";
 import { mediaUrlFromPath, restoreMediaUrls } from "./mediaUrls";
+import { prerenderBase } from "../prerender";
 
 // 模块级变量存 File，供阶段 2 导出时使用
 const mediaFiles = new Map<string, File>();
@@ -302,13 +303,18 @@ export async function exportVideo(
   } = {},
 ): Promise<{ outDir: string; id: string }> {
   const p = JSON.parse(JSON.stringify(getState().project)) as Project;
-  
+  /*
+   * 导出在**预渲染进程**上跑(它和渲染池共用槽位记账,导出期间暂停空闲预烘,见 render-pool-state.mjs)。
+   * 上传、提交、进度推送都直接发到它的源上:进度流要挂整整一趟导出,挤在编辑器自己的源上会占着连接。
+   */
+  const base = await prerenderBase();
+
   for (const m of p.media) {
     if (m.url.startsWith("blob:")) {
       // 同上:派生的「声音」素材没有自己的 File,借源视频那份(两者本来就是同一个文件)
       const file = mediaFiles.get(m.id) ?? (m.soundOf ? mediaFiles.get(m.soundOf) : undefined);
       if (file) {
-        const res = await fetch(`/api/export/media/${encodeURIComponent(file.name)}`, { method: "POST", body: file });
+        const res = await fetch(`${base}/api/export/media/${encodeURIComponent(file.name)}`, { method: "POST", body: file });
         if (res.ok) {
           const data = await res.json();
           m.url = data.url;
@@ -324,18 +330,18 @@ export async function exportVideo(
   }
 
   const frames = (opts as { frames?: string }).frames;
-  const res = await fetch("/api/export", {
+  const res = await fetch(`${base}/api/export`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ project: p, frames })
   });
   if (!res.ok) throw new Error(await res.text());
-  
+
   const { id, outDir } = await res.json();
   opts.onStart?.(id);
 
   return new Promise((resolve, reject) => {
-    const es = new EventSource(`/api/export/${id}?sse=1`);
+    const es = new EventSource(`${base}/api/export/${id}?sse=1`);
     let settled = false;
     const finish = (fn: () => void) => {
       if (settled) return;

@@ -33,7 +33,10 @@ const registryUrl = compile('src/kernel/registry.ts', 'registry.mjs');
 const cardParamsUrl = compile('src/kernel/cardParams.ts', 'cardParams.mjs', [['./registry.ts', './registry.mjs']]);
 // 转译产物落在临时目录里,解析不到 node_modules,所以把 typescript 换成绝对 URL
 const tsUrl = pathToFileURL(require_.resolve('typescript')).href;
-const pluginUrl = compile('server/vite-plugin-cards.ts', 'cards-plugin.mjs', [["from 'typescript'", `from '${tsUrl}'`]]);
+// 插件里同目录的 .mjs(http-guard、card-overrides、prerender-client……)也一样:转译到临时目录后要指回 server/ 下的原文件
+const localMjs = [...new Set([...fs.readFileSync(path.join(ROOT, 'server/vite-plugin-cards.ts'), 'utf8').matchAll(/from '\.\/([\w-]+\.mjs)'/g)].map((m) => m[1]))]
+  .map((f) => [`from './${f}'`, `from '${pathToFileURL(path.join(ROOT, 'server', f)).href}'`]);
+const pluginUrl = compile('server/vite-plugin-cards.ts', 'cards-plugin.mjs', [["from 'typescript'", `from '${tsUrl}'`], ...localMjs]);
 
 const { registerCards } = await import(registryUrl);
 const { validateCardParams, findCard } = await import(cardParamsUrl);

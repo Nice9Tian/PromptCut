@@ -786,7 +786,11 @@ export function Scene3DView({ project, t }: Props) {
     beginForegroundBake();
     (async () => {
       try {
-        const res = await fetch("/api/vision/bake-batch", {
+        /*
+         * 前台烘焙走**编辑器自己的常驻热备渲染器**(两台 Chrome 轮换,见 vite-plugin-vision 的 uiRenderer),
+         * 不进预渲染池:用户正盯着的这一张最高优先级,一毫秒都不该排在 Agent 或预烘后面。
+         */
+        const res = await fetch("/api/ui-render/bake-batch", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({

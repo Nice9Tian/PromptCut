@@ -19,6 +19,8 @@ const OUT = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-card-source-test-'));
 
 let src = fs.readFileSync(path.join(ROOT, 'server/vite-plugin-cards.ts'), 'utf8');
 src = src.split("from 'typescript'").join(`from '${pathToFileURL(require_.resolve('typescript')).href}'`);
+// 插件里同目录的 .mjs(http-guard、card-overrides、prerender-client……)转译到临时目录后要指回 server/ 下的原文件
+src = src.replace(/from '\.\/([\w-]+\.mjs)'/g, (_m, f) => `from '${pathToFileURL(path.join(ROOT, 'server', f)).href}'`);
 const js = ts.transpileModule(src, { compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext } }).outputText;
 fs.writeFileSync(path.join(OUT, 'plugin.mjs'), js);
 const {

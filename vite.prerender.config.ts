@@ -1,0 +1,73 @@
+import { defineConfig, type Plugin } from "vite";
+import react from "@vitejs/plugin-react";
+import tailwindcss from "@tailwindcss/vite";
+import { apiGuardPlugin } from "./server/vite-plugin-api-guard";
+import { exportPlugin } from "./server/vite-plugin-export";
+import { mediaPlugin } from "./server/vite-plugin-media";
+import vitePluginCards from "./server/vite-plugin-cards";
+import { visionPlugin } from "./server/vite-plugin-vision";
+
+/**
+ * 预渲染进程的 Vite(docs/decoupling-plan.md 第 3 节「预渲染」)。
+ *
+ * 由编辑器那一端的 dev server(server/vite-plugin-prerender.ts)用 PROMPTCUT_ROLE=prerender 拉起,
+ * 独立进程、独立端口、低于正常的进程优先级。它做三件事:
+ *
+ *   1. 渲染池、导出、Agent 的看图请求 —— 渲染请求挂在**这个**源上,不占编辑器那个源的 6 条连接;
+ *   2. 渲染用的 Chrome 从**这里**加载导出页和卡片模块,不和编辑器抢它那个 Vite;
+ *   3. PNG 的像素活在渲染 worker 里做(server/png-post.mjs),这个进程的事件循环只收发。
+ *
+ * 只挂导出页需要的插件:没有 vite-plugin-ai(它会改写全局 port.json,把 MCP 指到这里来),
+ * 没有听写 / 镜头 / 追踪 / 素材收集这些会起子进程的插件。
+ */
+
+/**
+ * 只放行编辑器那一端的源(环境变量里给的几个写法:127.0.0.1 / localhost / [::1])。
+ * 浏览器发 JSON POST 会先发预检,这里答了预检,后面的同源守卫(apiGuardPlugin → originOk)
+ * 也按同一张名单放行 —— 两处用同一个环境变量,不会一个放一个拦。
+ */
+function corsForEditor(): Plugin {
+  const allowed = new Set(String(process.env.PROMPTCUT_CORS_ORIGINS || "").split(",").map((s) => s.trim()).filter(Boolean));
+  return {
+    name: "promptcut-prerender-cors",
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        const origin = req.headers.origin;
+        if (origin && allowed.has(origin)) {
+          res.setHeader("Access-Control-Allow-Origin", origin);
+          res.setHeader("Vary", "Origin");
+          res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+          res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+          res.setHeader("Access-Control-Max-Age", "600");
+          if (req.method === "OPTIONS") {
+            res.statusCode = 204;
+            return res.end();
+          }
+        }
+        next();
+      });
+    },
+  };
+}
+
+const fsDeny = [".env", ".env.*", "*.{crt,pem}", "**/.git/**", "**/out/cookies/**"];
+
+export default defineConfig({
+  // 依赖预构建缓存和编辑器那一份分开,两个进程同时写 node_modules/.vite 会互相踩
+  cacheDir: process.env.PROMPTCUT_HEADLESS === "1" ? "node_modules/.vite-prerender-headless" : "node_modules/.vite-prerender",
+  clearScreen: false,
+  // 跨源守卫要排在所有接口前面(中间件按 configureServer 的调用顺序注册)
+  plugins: [corsForEditor(), apiGuardPlugin(), react(), tailwindcss(), exportPlugin(), mediaPlugin(), vitePluginCards(), visionPlugin()],
+  server: {
+    // 渲染页每一趟都是全新的页面,用不着热更新;源码改了照样重新变换(watcher 还开着)
+    hmr: false,
+    fs: { deny: fsDeny },
+    watch: {
+      ignored: [
+        "**/desktop/**", "**/out/**", "**/python/**", "**/node_modules/**",
+        "**/*.lock",
+        "**/.pc-projects/**", "**/.pc-work/**", "**/.pc-chats/**",
+      ],
+    },
+  },
+});

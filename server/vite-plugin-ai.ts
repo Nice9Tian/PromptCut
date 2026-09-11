@@ -6,6 +6,12 @@ import os from 'node:os';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { overLimit } from './http-guard.mjs';
+/*
+ * 必须静态 import:vite 打包配置时,别的插件静态引入的 prerender-client.mjs 被打进同一个包里,
+ * 状态(预渲染的地址、就绪没有)在那一份上。这里要是换成 import(new URL(...)) 动态加载,拿到的是
+ * 磁盘上的另一份模块实例,状态永远是空的 —— 实测服务端 see_frames 在 whenPrerenderReady 里干等 60 秒。
+ */
+import { prerenderPost } from './prerender-client.mjs';
 
 
 /**
@@ -180,6 +186,114 @@ export default function vitePluginAi(): Plugin {
        * agent:发起这次调用的 Agent 对话 ID(多 Agent 分页)。CLI 那条路由 mcp-server 从环境变量
        * PROMPTCUT_AGENT 带上来,API 直连那条路由 startRun 的 callTool 闭包带;编辑台拿它记「谁改了哪儿」。
        */
+      /*
+       * 数据管理的只读镜像(docs/decoupling-plan.md 第 3.2 节,阶段 4)。
+       *
+       * 连着桥的编辑器页面把项目(带版本号)和停下时的播放头推过来(src/editor/dataMirror.ts)。
+       * 有了它,Agent 的读和渲染 —— get_project / see_frames(成片)/ get_gif / bake_card / inspect_card_dom ——
+       * 就在这里直接拿镜像去问预渲染进程,**完全不经过编辑器页面**:以前这些调用要经 SSE 转给页面,
+       * 页面再发渲染请求,请求一挂几分钟,占的是编辑器那个源的连接,界面因此卡死而 CPU 一点都不忙。
+       * 写操作仍然经过页面(撤销 / 重做都在那边),页面在回结果之前会先把改动推过来,读后写一致。
+       * 页面关掉之后镜像还留在内存里,Agent 照样能读、能看画面。
+       */
+      let mirror: { rev: number; project: any; t: number; at: number } | null = null;
+      server.middlewares.use('/api/data/project', (req, res) => {
+        if (req.method === 'GET') {
+          return sendJson(res, mirror ? 200 : 404, mirror ? { ok: true, rev: mirror.rev, t: mirror.t, at: mirror.at, project: mirror.project } : { ok: false, error: '还没有镜像:编辑器页面没打开过' });
+        }
+        if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: 'GET / POST only' });
+        let body = '';
+        let size = 0;
+        req.on('data', (c) => { size += c.length; if (size > 64 * 1024 * 1024) { req.destroy(); return; } body += c; });
+        req.on('end', () => {
+          try {
+            const d = JSON.parse(body || '{}');
+            if (!d.project || !Array.isArray(d.project.tracks)) return sendJson(res, 400, { ok: false, error: '缺少 project' });
+            mirror = { rev: Number(d.rev) || 0, project: d.project, t: Number.isFinite(Number(d.t)) ? Number(d.t) : 0, at: Date.now() };
+            sendJson(res, 200, { ok: true, rev: mirror.rev });
+          } catch (e: any) {
+            sendJson(res, 400, { ok: false, error: e?.message || String(e) });
+          }
+        });
+      });
+
+      /** 这几个工具在服务端就地执行(有镜像时);其余照旧经编辑器页面 */
+      const MIRRORED_TOOLS = new Set(['get_project', 'see_frames', 'get_gif', 'bake_card', 'inspect_card_dom']);
+
+      /**
+       * 服务端执行一个读 / 渲染类工具。返回 undefined = 这里不接,交给编辑器页面。
+       * 出错就抛(和经页面那条路一样:桥把 error 原样交给 Agent)。
+       */
+      async function runMirroredTool(tool: string, args: any, toolDef: any): Promise<any> {
+        if (!MIRRORED_TOOLS.has(tool) || !mirror) return undefined;
+        const required: string[] = toolDef?.inputSchema?.required ?? [];
+        const missing = required.filter((k) => args?.[k] === undefined || args?.[k] === null);
+        if (missing.length) throw new Error(`缺少必填参数：${missing.join('、')}。请补齐后重试。`);
+        const project = mirror.project;
+        const timeoutMs = toolDef?.timeoutMs || 60000;
+
+        if (tool === 'get_project') {
+          // 和编辑器页面的 getProject 同一个形状:文字稿只给摘要,全文走 get_transcript
+          return {
+            ...project,
+            media: (project.media || []).map((m: any) => m?.transcript ? {
+              ...m,
+              transcript: {
+                engine: m.transcript.engine, model: m.transcript.model, language: m.transcript.language,
+                createdAt: m.transcript.createdAt, segments: m.transcript.segments?.length ?? 0,
+                hint: '完整文字稿请用 get_transcript',
+              },
+            } : m),
+          };
+        }
+
+        if (tool === 'see_frames') {
+          const { source, ...rest } = args || {};
+          // 素材镜头拼图要跑镜头识别、写回项目,留给编辑器页面
+          if (source !== undefined && source !== 'timeline') return undefined;
+          const times = Array.isArray(rest.times) ? rest.times.filter((x: unknown) => typeof x === 'number').slice(0, 10) : [];
+          const body = times.length
+            ? { project, times, clipId: rest.clipId }
+            : { project, t: typeof rest.t === 'number' ? rest.t : (rest.clipId ? undefined : mirror.t), clipId: rest.clipId };
+          const data = await prerenderPost('/api/vision/snapshot', body, { timeoutMs });
+          if (!data?.ok) throw new Error(data?.error || '渲染画面失败');
+          let result: any = times.length ? { ok: true, frames: data.frames, note: data.note, __images: data.__images } : data;
+          // 聊天栏里「看得见的工具结果」:和编辑器页面的 withVisual 同一份记录
+          const images: any[] = [];
+          if (data.__image?.base64) images.push({ mime: data.__image.mime, base64: data.__image.base64, label: typeof data.t === 'number' ? `t=${data.t}s` : '' });
+          for (const im of Array.isArray(data.__images) ? data.__images : []) if (im?.base64) images.push({ mime: im.mime, base64: im.base64, label: im.label ?? '' });
+          if (images.length) {
+            const v = await prerenderPost('/api/ai/visual', { tool: 'see_frames', images }, { timeoutMs: 5000 }).catch(() => null);
+            if (v?.ok && v.visualId) result = { visualId: v.visualId, ...result };
+          }
+          return result;
+        }
+
+        if (tool === 'get_gif') {
+          const data = await prerenderPost('/api/ai/visual', { tool: 'get_gif', clipId: args.clipId, after: project, render: true }, { timeoutMs });
+          if (!data?.ok) throw new Error(data?.error || '做动图失败');
+          return {
+            visualId: data.visualId, ok: true, clipId: args.clipId, times: data.times, gif: data.gifUrl,
+            note: '拼图 4×2,第 k 格对应 times 的第 k 个时刻(按行从左到右)。用户在聊天栏点开这一步能看到动图。',
+            ...(data.grid ? { __image: { mime: 'image/png', base64: data.grid } } : {}),
+          };
+        }
+
+        if (tool === 'bake_card') {
+          const data = await prerenderPost('/api/vision/bake', { project, clipId: args.clipId, t: args.t, size: args.size, bg: args.bg }, { timeoutMs });
+          if (!data?.ok) throw new Error(data?.error || '烘焙失败');
+          return data;
+        }
+
+        if (tool === 'inspect_card_dom') {
+          const ref = typeof args.ref === 'string' ? Number(String(args.ref).replace(/^ref_/, '')) : args.ref;
+          const data = await prerenderPost('/api/cards/dom', { project, clipId: args.clipId, t: args.t, ref, depth: args.depth }, { timeoutMs });
+          if (!data?.ok) throw new Error(data?.error || '读不到 DOM 树');
+          return data;
+        }
+        return undefined;
+      }
+
       /** 审查环路走 CLI 时的只读锁:null = 不锁;Set = 只放行这些工具(空 Set = 全拦)。见下面 callToolInternal */
       let loopToolLock: Set<string> | null = null;
 
@@ -219,6 +333,13 @@ export default function vitePluginAi(): Plugin {
         const gate = await import(new URL('./skill-gate.mjs', import.meta.url).href);
         const verdict = gate.checkGate(tool);
         if (!verdict.ok) return { ok: false, skillClosed: true, message: verdict.message };
+
+        /*
+         * 读 / 渲染类工具有镜像时就地执行,直接问预渲染进程,不经过编辑器页面(见上面 runMirroredTool)。
+         * 返回 undefined 的(没有镜像、素材拼图这类)照旧走桥。
+         */
+        const mirrored = await runMirroredTool(tool, args, toolDef);
+        if (mirrored !== undefined) return mirrored;
 
         /*
          * side: "server" 的工具就地执行,不过浏览器桥。

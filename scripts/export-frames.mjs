@@ -351,6 +351,15 @@ export async function openBakery(opts = {}) {
       }
       return bakery.spare;
     },
+    /**
+     * 扔掉备用页。卡片源码一改,备用页里加载的就是旧模块 —— 拿它灌下一个项目渲出来的是旧卡片,
+     * 而且不报错(见 render-worker 的 invalidate)。
+     */
+    dropSpare() {
+      const p = bakery.spare;
+      bakery.spare = null;
+      p?.then((s) => s?.page?.close(), () => {}).catch(() => {});
+    },
     /** 用备用页(没有就现开一个空项目页)换一趟新的,再把 project 灌进去 */
     async resetWith(project, emptyUrl) {
       const old = bakery.page;
@@ -522,6 +531,11 @@ export async function bakeFrames(bakery, opts = {}) {
     domLossy = 0;
     const writes = [];
     for (let i = 0; i <= endFrame; i++) {
+      /*
+       * 取消只在两帧之间生效:这时上一帧的推进、排空、截图都已经做完,页面不在半路上。
+       * 调用方(render-worker)据此只换一张新页,不必把整个浏览器当成可疑的重开。
+       */
+      if (opts.signal?.aborted) throw Object.assign(new Error('已取消'), { cancelled: true });
       const wantShot = targetFrames ? targetFrames.has(i) : i >= startFrame;
       const isStatic = await step(i, wantShot);
       if (!wantShot) continue;

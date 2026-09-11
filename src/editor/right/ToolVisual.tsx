@@ -1,12 +1,16 @@
 import { useEffect, useState } from "react";
 import type { JSX } from "react";
+import { prerenderUrl, usePrerenderBase, withBase } from "../prerender";
 
 /**
  * 聊天栏里一步工具的「看得见的结果」:当时返回的位图、改了哪几个参数、前后两段动图。
  *
- * 记录由执行工具的页面交给服务端存着(src/ai/mcpExecutor.ts 的 withVisual),工具结果最前面
- * 带一个 visualId。四家的工具结果摘要都保留开头那一截,所以这里从摘要里认 id 就够了,
- * 不用关心这一步是 API 直连还是 agy / Claude / Codex 跑的。
+ * 记录由执行工具的那一方交给服务端存着(src/ai/mcpExecutor.ts 的 withVisual,或者服务端直接执行的
+ * 看图工具),工具结果最前面带一个 visualId。四家的工具结果摘要都保留开头那一截,所以这里从摘要里
+ * 认 id 就够了,不用关心这一步是 API 直连还是 agy / Claude / Codex 跑的。
+ *
+ * 记录和动图都存在**预渲染进程**上(/api/ai/visual 在那边),所以地址前面拼预渲染的源:
+ * 动图第一次打开要现渲几秒到几十秒,挂在编辑器自己的源上会占着它的连接。
  */
 export function visualIdOf(summary?: string): string | null {
   const m = /"visualId"\s*:\s*"(v-[0-9a-z]{6,40})"/.exec(summary || "");
@@ -24,10 +28,12 @@ interface VisualRecord {
 export function ToolVisual({ id }: { id: string }): JSX.Element {
   const [rec, setRec] = useState<VisualRecord | null>(null);
   const [err, setErr] = useState("");
+  const base = usePrerenderBase();
 
   useEffect(() => {
     let alive = true;
-    fetch(`/api/ai/visual/${id}.json`)
+    prerenderUrl(`/api/ai/visual/${id}.json`)
+      .then((u) => fetch(u))
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then((d) => { if (alive) setRec(d.record ?? d); })
       .catch((e) => { if (alive) setErr(String(e?.message || e)); });
@@ -47,7 +53,7 @@ export function ToolVisual({ id }: { id: string }): JSX.Element {
         <div className="ai-visual-images">
           {rec.images.map((im, i) => (
             <figure key={i}>
-              <img src={im.url} alt={im.label || `画面 ${i + 1}`} loading="lazy" />
+              <img src={withBase(base, im.url)} alt={im.label || `画面 ${i + 1}`} loading="lazy" />
               {im.label ? <figcaption>{im.label}</figcaption> : null}
             </figure>
           ))}
@@ -71,9 +77,9 @@ export function ToolVisual({ id }: { id: string }): JSX.Element {
 
       {hasGif ? (
         <div className="ai-visual-gifs">
-          {rec.before ? <Gif src={rec.before.gif} label={beforeLabel} /> : null}
+          {rec.before ? <Gif src={withBase(base, rec.before.gif)} label={beforeLabel} /> : null}
           {rec.before && rec.after ? <div className="ai-visual-arrow" aria-hidden>→</div> : null}
-          {rec.after ? <Gif src={rec.after.gif} label={afterLabel} /> : null}
+          {rec.after ? <Gif src={withBase(base, rec.after.gif)} label={afterLabel} /> : null}
         </div>
       ) : null}
     </div>
