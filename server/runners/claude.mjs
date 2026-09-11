@@ -100,7 +100,20 @@ function _startRun(opts) {
     args.push('--mcp-config', mcpConfigPath, '--strict-mcp-config', '--allowedTools', ...getAllowedToolsArgv());
   }
 
-  args.push('--append-system-prompt', opts.systemPrompt);
+  /*
+   * 系统提示词走**文件**,不走命令行参数。
+   *
+   * 原来是 `--append-system-prompt <整段>`。系统提示词本身 15,000 出头,平时撑得住;
+   * 原生工具一被拒,startRun 就改走文本协议重试,那份工具清单(33,000 字符)拼进
+   * systemPrompt 之后就是 48,000,超过 Windows 单条命令行 32767 的上限,当场
+   * `spawn ENAMETOOLONG` —— 实测诊断报告里 Opus 就是这么收的尾,这条兜底路一次都没走通过。
+   * stdin 已经被用户消息占了,所以落一个临时文件,跑完删掉。
+   */
+  const promptDir = path.join(os.tmpdir(), 'promptcut');
+  fs.mkdirSync(promptDir, { recursive: true });
+  const promptFile = path.join(promptDir, `claude-system-${process.pid}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}.md`);
+  fs.writeFileSync(promptFile, opts.systemPrompt, 'utf8');
+  args.push('--append-system-prompt-file', promptFile);
   if (opts.sessionId) {
     args.push('--resume', opts.sessionId);
   }
@@ -141,7 +154,8 @@ function _startRun(opts) {
          for (const c of ev.message.content) {
             if (c.type === 'tool_use') {
                toolIdToName.set(c.id, c.name);
-               safeOnEvent({ type: 'tool_call', name: c.name, input: c.input });
+               // callId 必带:并行调同名工具时界面靠它把结果对回去,只按名字配会整排错位
+               safeOnEvent({ type: 'tool_call', callId: c.id, name: c.name, input: c.input });
             }
          }
       } else if (ev.type === 'user' && ev.message?.content) {
@@ -152,15 +166,21 @@ function _startRun(opts) {
                else if (Array.isArray(c.content)) summary = c.content.map(x => (x.text || '')).join('');
                
                const name = toolIdToName.get(c.tool_use_id) || 'unknown';
-               safeOnEvent({ type: 'tool_result', name: name, ok: !c.is_error, summary: summary.substring(0, 300) });
+               safeOnEvent({ type: 'tool_result', callId: c.tool_use_id, name: name, ok: !c.is_error, summary: summary.substring(0, 300) });
             }
          }
       } else if (ev.type === 'result') {
-         if (ev.permission_denials && ev.permission_denials.length > 0) {
-             if (opts.onPermissionDenied) opts.onPermissionDenied();
-         }
-         if (ev.result && ev.result.permission_denials && ev.result.permission_denials.length > 0) {
-             if (opts.onPermissionDenied) opts.onPermissionDenied();
+         /*
+          * 只有 PromptCut 自己的工具被拒,才说明原生工具这条通道坏了、值得改走文本协议。
+          *
+          * --allowedTools 只放行 mcp__promptcut__*,自带的 Read / Grep / Bash / Write / Skill 被拒是常态
+          * (用户全局 CLAUDE.md 让它收尾时播报,Skill + Write 必被拒)。原来任何一次被拒都算,于是整轮
+          * 已经做完、答复也写好了,又吞掉 done 从头重跑一遍 —— 诊断报告 对话诊断-20260910-234339 里
+          * #7 #13 #15 三轮都是这样在最后一步报错,而没碰过自带工具的 #9 #11 都正常结束。
+          */
+         const denials = [...(ev.permission_denials || []), ...(ev.result?.permission_denials || [])];
+         if (denials.some((d) => String(d?.tool_name || '').startsWith('mcp__promptcut')) && opts.onPermissionDenied) {
+             opts.onPermissionDenied();
          }
          if (ev.is_error) {
              const message = ev.result || ev.error?.message || ev.terminal_reason || 'Claude 出错';
@@ -182,5 +202,9 @@ function _startRun(opts) {
       // ignore
   }
 
-  return { abort, done: donePromise };
+  // 跑完(正常、出错、被停)都把临时的系统提示词文件删掉
+  const done = donePromise.finally(() => {
+    try { fs.rmSync(promptFile, { force: true }); } catch { /* ignore */ }
+  });
+  return { abort, done };
 }

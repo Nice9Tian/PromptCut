@@ -42,6 +42,7 @@ node scripts/export-frames.mjs --url "http://127.0.0.1:5197/?export=1" --frames 
 | `font-audit.mjs` | 查每个文本节点实际用到的字体,落进系统回退(白名单以外)就报出来 |
 | `card-audit.mjs` | 逐张卡查位置无关、确定性、DOM 结构稳定、挂载时的网络请求、画面载体 |
 | `archive/export-frames-virtual-time.mjs` | 旧后端,只留作对账 |
+| `diaglog.py <报告> overview\|anomalies\|pages\|page N\|show I\|find RE\|env\|split` | 读「对话诊断」报告(一两 MB 的单个 JSON):总表、异常归类、按页读、拆成小文件;也能 `from diaglog import load` 当对象用。`py -3` 跑,用法见文件头 |
 
 **做逐帧对账之前先读 [`docs/compare-pitfalls.md`](../docs/compare-pitfalls.md)。** 里面记着「画面看着一样,程序却说不一样」的几种成因:预热截图错位、样式写法、属性顺序、浮点末位、WAAPI 和 JS 两条动画路径的差别、被钉住的时钟、纯 DOM 环境的坑、实验服务器改写全局端口文件。
 
