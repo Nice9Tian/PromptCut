@@ -10,6 +10,7 @@ export function UnifiedPreview({ project, t, playing }: { project: Project; t: n
   const ref = useRef<HTMLVideoElement>(null);
   const latest = useRef(t); latest.current = t;
   const requestFrame = useRef<() => void>(() => {});
+  const controller = useRef<AbortController | null>(null);
   useEffect(() => {
     let active = true;
     let timer: ReturnType<typeof setTimeout>;
@@ -17,7 +18,9 @@ export function UnifiedPreview({ project, t, playing }: { project: Project; t: n
     setError("");
     const poll = async () => {
       try {
-        const status = await frameRequest("preload", project);
+        // C/B runs in the low-priority prerender process. It must never occupy
+        // the hot Chrome used by the human preview.
+        const status = await frameRequest("preload", project, {}, undefined, { target: "prerender", lane: "background" });
         if (!active) return;
         if (status.error) setError(status.error);
         if (status.video) setVideo({ project, url: status.video });
@@ -30,26 +33,28 @@ export function UnifiedPreview({ project, t, playing }: { project: Project; t: n
     return () => { active = false; clearTimeout(timer); };
   }, [project]);
   useEffect(() => {
-    if (video?.project === project) return;
     let active = true;
     let busy = false;
     // One in-flight preview request, then ask for the most recent playhead.
     const draw = async () => {
-      if (busy || !active) return;
+      if (busy || !active || (playing && video?.project === project)) return;
       busy = true;
       const requested = latest.current;
+      controller.current?.abort();
+      const currentController = new AbortController();
+      controller.current = currentController;
       try {
-        const result = await see_frames(project, [requested]);
-        if (active) { setImage({ project, url: result.frames[0].url }); setError(""); }
-      } catch (e) { if (active) setError(String(e)); }
+        const result = await see_frames(project, [requested], currentController.signal, { target: "user", lane: "user" });
+        if (active && !currentController.signal.aborted && requested === latest.current) { setImage({ project, url: result.frames[0].url }); setError(""); }
+      } catch (e) { if (active && (e as any)?.name !== "AbortError" && !currentController.signal.aborted) setError(String(e)); }
       busy = false;
       if (active && requested !== latest.current) void draw();
     };
     requestFrame.current = () => { void draw(); };
     void draw();
-    return () => { active = false; };
-  }, [project, video]);
-  useEffect(() => { requestFrame.current(); }, [Math.round(t * (project.fps || 30))]);
+    return () => { active = false; controller.current?.abort(); };
+  }, [project, playing, video]);
+  useEffect(() => { if (!playing || video?.project !== project) requestFrame.current(); }, [Math.round(t * (project.fps || 30)), playing, video, project]);
   useEffect(() => {
     const element = ref.current;
     if (!element || video?.project !== project) return;
@@ -64,13 +69,22 @@ export function UnifiedPreview({ project, t, playing }: { project: Project; t: n
       if (playing) void element.play().catch(() => {}); else element.pause();
     };
     element.addEventListener("loadedmetadata", sync);
+    element.addEventListener("loadeddata", sync);
+    element.addEventListener("canplay", sync);
+    element.addEventListener("seeked", sync);
     sync();
-    return () => element.removeEventListener("loadedmetadata", sync);
+    return () => {
+      element.removeEventListener("loadedmetadata", sync);
+      element.removeEventListener("loadeddata", sync);
+      element.removeEventListener("canplay", sync);
+      element.removeEventListener("seeked", sync);
+    };
   }, [project, video, t, playing]);
   const style = { position: "absolute" as const, inset: 0, width: "100%", height: "100%", pointerEvents: "none" as const };
   return <div style={style}>
-    {video?.project === project ? <video ref={ref} src={video.url} muted playsInline preload="auto" style={style} /> :
-      image?.project === project ? <img src={image.url} alt="" style={style} /> : null}
+    {video?.project === project && playing ? <video ref={ref} src={video.url} muted playsInline preload="auto" style={style} /> :
+      image?.project === project ? <img src={image.url} alt="" style={style} /> :
+      video?.project === project ? <video ref={ref} src={video.url} muted playsInline preload="auto" style={style} /> : null}
     {error && <div role="status" style={{ position: "absolute", bottom: 8, left: 8, color: "white", background: "#842323", fontSize: 16 }}>{error}</div>}
   </div>;
 }

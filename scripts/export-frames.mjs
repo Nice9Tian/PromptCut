@@ -517,6 +517,15 @@ export async function bakeFrames(bakery, opts = {}) {
   /** 截一张:发一拍并要这一拍的截图。此刻动画已钉住、页面时钟已量化,这一拍里画面不会再变 */
   const shoot = async () => {
     if (!opts.glassFrames) {
+      // Pixel maps rasterize a hidden source video into a canvas. Load only the
+      // requested frame before freezing HTML; otherwise __bfFreeze would copy
+      // an empty canvas into the snapshot and every cache replay would stay blank.
+      const hasPixelMap = await page.evaluate(() => !!document.querySelector("canvas[data-pc-pixel-map]"));
+      if (hasPixelMap) {
+        await prepareFrameMedia(bakery);
+        await beginFrame();
+        await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      }
       const snapshot = await page.evaluate(() => window.__bfFreeze());
       if (snapshot.lossy) throw new Error(`Cannot snapshot ${snapshot.lossy} canvas elements`);
       return captureSnapshot(bakery, snapshot.html, shotParams);
@@ -630,7 +639,15 @@ export async function bakeFrames(bakery, opts = {}) {
     domLossy = 0;
     glass.list = [];
     glass.blurs.clear();
+    // Keep disk writes streaming with a small bounded queue.  The old code
+    // appended one fs.writeFile Promise per frame; each pending Promise kept
+    // its PNG Buffer alive until the whole movie finished, so a long export
+    // grew to several gigabytes before ffmpeg even started.
     const writes = [];
+    const queueWrite = async (file, data) => {
+      writes.push(fs.writeFile(file, data));
+      if (writes.length >= 4) await Promise.all(writes.splice(0));
+    };
     for (let i = 0; i <= endFrame; i++) {
       /*
        * 取消只在两帧之间生效:这时上一帧的推进、排空、截图都已经做完,页面不在半路上。
@@ -650,7 +667,7 @@ export async function bakeFrames(bakery, opts = {}) {
       // progress; otherwise the UI remains at its initial 0/1 for the whole
       // sampling pass and looks frozen on long projects.
       if (opts.onProgress) opts.onProgress(i, totalFrames, { sampled: true });
-      if (opts.onProgressLog && ((i - startFrame + 1) % 10 === 0 || i === endFrame)) {
+      if (!opts.quiet && opts.onProgressLog && ((i - startFrame + 1) % 10 === 0 || i === endFrame)) {
         console.log(`Exported frame ${i} (${i - startFrame + 1}/${totalFrames})`);
       }
       if (!wantShot || opts.snapshotOnly) continue;
@@ -662,7 +679,7 @@ export async function bakeFrames(bakery, opts = {}) {
         if (runLen % verifyEvery === 0) {
           // 便宜的保险:连续复用到第 verifyEvery 帧就强制真截一张比一次。对不上就整趟作废重跑
           const real = await shoot();
-          if (!real.equals(lastBuf)) { await Promise.all(writes); return i; }
+          if (!real.equals(lastBuf)) { await Promise.all(writes.splice(0)); return i; }
           lastBuf = real;
           buf = real;
         } else {
@@ -677,20 +694,20 @@ export async function bakeFrames(bakery, opts = {}) {
       }
       const name = String(i).padStart(6, '0');
       // 写盘不挡下一帧
-      writes.push(fs.writeFile(path.join(framesDir, `${name}.${ext}`), buf));
+      await queueWrite(path.join(framesDir, `${name}.${ext}`), buf);
       if (fresh) lastGlass = undefined;
       if (glassFrames && glassFrames.has(i)) {
         if (lastGlass === undefined) lastGlass = await shootGlass();
         if (lastGlass) {
           glass.list.push(i);
-          writes.push(fs.writeFile(path.join(glassDir, `${name}.png`), lastGlass));
+          await queueWrite(path.join(glassDir, `${name}.png`), lastGlass);
         }
       }
-      if (process.env.PC_EXPORT_VERBOSE || (i - startFrame + 1) % 10 === 0 || i === endFrame) {
+      if (!opts.quiet && (process.env.PC_EXPORT_VERBOSE || (i - startFrame + 1) % 10 === 0 || i === endFrame)) {
         console.log(`Exported frame ${i} (${i - startFrame + 1}/${totalFrames})`);
       }
     }
-    await Promise.all(writes);
+    await Promise.all(writes.splice(0));
     return null;
   };
 
@@ -770,6 +787,41 @@ export function balancedShards(start, end, n) {
 }
 
 /**
+ * Prefer boundaries where a card mounts/unmounts. Cutting inside an active
+ * card can change the first-frame anchor of Motion/WAAPI animations in a
+ * parallel bakery. If there are too few boundaries, return fewer shards.
+ */
+export function safeTimelineShards(timeline, start, end, n) {
+  const fps = timeline?.fps || 30;
+  const cuts = new Set([start, end + 1]);
+  for (const clip of timeline?.clips || []) {
+    for (const t of [clip.start, clip.end]) {
+      const f = Math.round(Number(t) * fps);
+      if (Number.isFinite(f) && f > start && f <= end) cuts.add(f);
+    }
+  }
+  const segments = [...cuts].sort((a, b) => a - b).map((a, i, all) => [a, all[i + 1] - 1]).filter(r => r[0] <= r[1]);
+  if (segments.length <= n) return segments;
+  const result = [];
+  let at = 0;
+  for (let k = 0; k < n; k++) {
+    const left = segments.length - at;
+    const slots = n - k;
+    const remainingFrames = segments.slice(at).reduce((sum, r) => sum + r[1] - r[0] + 1, 0);
+    const target = Math.ceil(remainingFrames / slots);
+    let count = 0, next = at;
+    while (next < segments.length && (count === 0 || count + segments[next][1] - segments[next][0] + 1 <= target || slots === 1)) {
+      count += segments[next][1] - segments[next][0] + 1;
+      next++;
+      if (slots > 1 && count >= target) break;
+    }
+    result.push([segments[at][0], segments[next - 1][1]]);
+    at = next;
+  }
+  return result;
+}
+
+/**
  * 开几个分片。'auto':每个 Chrome 约 1.9 个核、约 750 MB(实测),按核数和空闲内存一起夹,最多 8
  * (旧管线实测 8 个是拐点,12 个反而更慢)。
  */
@@ -792,7 +844,7 @@ async function bakeSharded(opts, n) {
     let start = 0;
     let end = Math.floor((timeline.duration || 20) * fps) - 1;
     if (opts.frames) [start, end] = opts.frames.split('-').map(Number);
-    const shards = balancedShards(start, end, n);
+    const shards = safeTimelineShards(timeline, start, end, n);
     console.log(`分片导出:${shards.length} 个进程,段 ${shards.map(([a, b]) => `${a}-${b}`).join(' ')}`);
     while (bakeries.length < shards.length) bakeries.push(await openBakery(opts));
     const t0 = Date.now();

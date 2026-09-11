@@ -8,6 +8,13 @@ import { unpackFrameArchive } from "./frame-archive.mjs";
 import { overLimit } from "./http-guard.mjs";
 
 const services = new Map<string, FramePipeline>();
+function requestSignal(req: any, res: any) {
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  req.once?.("aborted", abort);
+  res.once?.("close", () => { if (!res.writableEnded) abort(); });
+  return controller.signal;
+}
 export function frameService(root: string, origin: string) {
   let service = services.get(root);
   if (!service) {
@@ -72,7 +79,8 @@ export function framesPlugin(): Plugin {
           if (!Array.isArray(project.tracks) || !Number.isFinite(project.duration) || project.duration <= 0) throw new Error("Invalid project");
           const entry = await service.entry(project);
           if (url.pathname === "/see") {
-            const frames = await service.see_frames(project, input.times || [0]);
+            const lane = input.lane === "agent" ? "agent" : "user";
+            const frames = await service.see_frames(project, input.times || [0], { lane, signal: requestSignal(req, res) });
             return json(200, { key: entry.key, frames: [...frames].map(([frame, value]: any) => ({ frame, source: value.source, url: `/api/frames/${entry.key}/frames/${String(frame).padStart(6, "0")}.png` })) });
           }
           if (url.pathname === "/preload") await service.preload(project);

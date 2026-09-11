@@ -183,7 +183,7 @@ export async function importProjectFile(file: File): Promise<Project> {
     delete (project as unknown as Record<string, unknown>)._note;
 
     // 和打开 .proc 同一套换算(parseProc 也调它),规则只有一份
-    const restored = restoreMediaUrls(project.media || []);
+    const restored = restoreMediaUrls(project.media || [], { externalPathUrl: true });
     for (const m of restored.missing) console.warn(`[io] 缺失素材: ${m.name} (${m.url})`);
     project.media = restored.media;
 
@@ -359,7 +359,7 @@ export async function exportVideo(
   const res = await fetch(`${base}/api/export`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ project: p, frames })
+    body: JSON.stringify({ project: p, frames, workers: (opts as { workers?: number | string }).workers })
   });
   if (!res.ok) throw new Error(await res.text());
 
@@ -423,6 +423,21 @@ export async function fetchExportFile(id: string, name: string): Promise<Blob> {
   const r = await fetch(exportJobUrl(id, `/file/${encodeURIComponent(name)}`));
   if (!r.ok) throw new Error(`取不到 ${name}:${await r.text()}`);
   return r.blob();
+}
+
+/** Stream a finished export directly into a File System Access writable. */
+export async function streamExportFile(id: string, name: string, writable: FileSystemWritableFileStream): Promise<void> {
+  const r = await fetch(exportJobUrl(id, `/file/${encodeURIComponent(name)}`));
+  if (!r.ok) throw new Error(`取不到 ${name}:${await r.text()}`);
+  if (!r.body) throw new Error(`取不到 ${name}:响应没有数据流`);
+  const reader = r.body.getReader();
+  try {
+    for (;;) {
+      const part = await reader.read();
+      if (part.done) break;
+      if (part.value) await writable.write(part.value);
+    }
+  } finally { reader.releaseLock(); }
 }
 
 declare global {

@@ -25,7 +25,10 @@ export class FramePipeline {
     this.code = code;
     this.entries = new Map();
     this.queue = [];
+    // The human preview, Agent and background bake each own an independent
+    // serialized queue.  A long Agent render must never hold the hot user Chrome.
     this.foreground = Promise.resolve();
+    this.laneChains = new Map([['user', Promise.resolve()], ['agent', Promise.resolve()], ['background', Promise.resolve()]]);
     this.background = Promise.resolve();
     this.generations = new Map();
     this.lanes = new Map();
@@ -51,17 +54,22 @@ export class FramePipeline {
     await entry.loading;
     return entry;
   }
-  async bakery(project) {
+  async bakery(project, lane = 'agent') {
     const empty = { ...project, tracks: [], media: [] };
     const url = this.origin() + '/?export=1&timeline=' + encodeURIComponent('data:application/json,' + encodeURIComponent(JSON.stringify(empty)));
     const bakery = await openBakery({ url });
     try {
       await bakery.loadProject(project);
-      await bakery.page.setViewport({ width: project.width, height: project.height, deviceScaleFactor: 1 });
+      await bakery.page.setViewport({ width: project.width, height: project.height, deviceScaleFactor: this.scaleForLane(lane) });
       await bakery.client.send('Emulation.setDefaultBackgroundColorOverride', { color: { r: 0, g: 0, b: 0, a: 0 } });
       return bakery;
     }
     catch (e) { await bakery.close(); throw e; }
+  }
+  scaleForLane(lane) {
+    if (lane !== 'background') return 1;
+    const value = Number(process.env.PROMPTCUT_PRERENDER_SCALE || 1);
+    return Number.isFinite(value) && value > 0 ? Math.min(3, Math.max(0.5, value)) : 1;
   }
   async acquire(lane, project) {
     const previous = this.lanes.get(lane);
@@ -71,18 +79,19 @@ export class FramePipeline {
       const url = this.origin() + '/?export=1&timeline=' + encodeURIComponent('data:application/json,' + encodeURIComponent(JSON.stringify(empty)));
       try {
         await previous.bakery.reset(project, url);
-        await previous.bakery.page.setViewport({ width: project.width, height: project.height, deviceScaleFactor: 1 });
+        await previous.bakery.page.setViewport({ width: project.width, height: project.height, deviceScaleFactor: this.scaleForLane(lane) });
         await previous.bakery.client.send('Emulation.setDefaultBackgroundColorOverride', { color: { r: 0, g: 0, b: 0, a: 0 } });
         return previous.bakery;
       } catch { await previous.bakery.close().catch(() => {}); this.lanes.delete(lane); }
     }
-    const bakery = await this.bakery(project);
+    const bakery = await this.bakery(project, lane);
     this.lanes.set(lane, { bakery });
     return bakery;
   }
   release(lane) {
     const session = this.lanes.get(lane);
     if (!session) return;
+    if (lane === 'user' || lane === 'agent') return;
     session.timer = setTimeout(() => {
       if (this.lanes.get(lane) !== session) return;
       this.lanes.delete(lane);
@@ -91,22 +100,29 @@ export class FramePipeline {
     session.timer.unref?.();
   }
   /** Shared public entry point. Independent requests in the same turn merge into one forward pass. */
-  async see_frames(project, times, { signal } = {}) {
+  async see_frames(project, times, { signal, lane = 'agent' } = {}) {
+    lane = lane === 'user' || lane === 'background' ? lane : 'agent';
     const entry = await this.entry(project);
     const fps = project.fps || 30;
     const max = Math.max(0, Math.floor(project.duration * fps) - 1);
     if (!times.length || times.some(t => !Number.isFinite(t))) throw new Error('Frame times must be finite numbers');
     const frames = [...new Set(times.map(t => Math.max(0, Math.min(max, Math.round(t * fps)))))];
     return new Promise((resolve, reject) => {
-      this.queue.push({ entry, frames, signal, resolve, reject });
+      this.queue.push({ entry, frames, signal, lane, resolve, reject });
       if (!this.timer) this.timer = setTimeout(() => {
         this.timer = null;
         const requests = this.queue.splice(0);
-        this.foreground = this.foreground.catch(() => {}).then(() => this.flush(requests));
+        for (const currentLane of ['user', 'agent', 'background']) {
+          const laneRequests = requests.filter(r => r.lane === currentLane);
+          if (!laneRequests.length) continue;
+          const chain = (this.laneChains.get(currentLane) || Promise.resolve()).catch(() => {}).then(() => this.flush(laneRequests, currentLane));
+          this.laneChains.set(currentLane, chain);
+          if (currentLane === 'user') this.foreground = chain;
+        }
       }, 12);
     });
   }
-  async flush(requests) {
+  async flush(requests, lane = 'agent') {
     const groups = new Map();
     for (const request of requests) {
       if (request.signal?.aborted) { request.reject(new Error('Frame request cancelled')); continue; }
@@ -117,7 +133,7 @@ export class FramePipeline {
       const entry = group[0].entry;
       const frames = [...new Set(group.flatMap(r => r.frames))].sort((a, b) => a - b);
       try {
-        const result = await this.readFrames(entry, frames);
+        const result = await this.readFrames(entry, frames, lane, group.find(r => !r.signal?.aborted)?.signal);
         for (const request of group) {
           if (request.signal?.aborted) request.reject(new Error('Frame request cancelled'));
           else request.resolve(new Map(request.frames.map(n => [n, result.get(n)])));
@@ -125,7 +141,7 @@ export class FramePipeline {
       } catch (e) { group.forEach(r => r.reject(e)); }
     }
   }
-  async readFrames(entry, frames) {
+  async readFrames(entry, frames, lane = 'agent', signal) {
     const result = new Map();
     const missing = [];
     for (const frame of frames) {
@@ -134,11 +150,11 @@ export class FramePipeline {
       catch { missing.push(frame); }
     }
     if (!missing.length) return result;
-    const bakery = await this.acquire('foreground', entry.project);
+    const bakery = await this.acquire(lane, entry.project);
     try {
       const uncached = missing.filter(n => !entry.html.has(n));
       if (uncached.length) {
-        await bakeFrames(bakery, { out: entry.dir, targetFrames: uncached, snapshotOnly: true,
+        await bakeFrames(bakery, { out: entry.dir, targetFrames: uncached, snapshotOnly: true, signal,
           onSnapshot: (n, html, controls) => this.record(entry, n, html, controls) });
         await this.save(entry);
       }
@@ -151,7 +167,7 @@ export class FramePipeline {
         await atomic(path.join(entry.dir, 'frames', pad(frame) + '.png'), buf);
         result.set(frame, { buf, source: uncached.includes(frame) ? 'advance' : 'html' });
       }
-    } finally { this.release('foreground'); }
+    } finally { this.release(lane); }
     return result;
   }
   record(entry, n, html, controls = []) {
@@ -263,7 +279,7 @@ export class FramePipeline {
     clearTimeout(this.timer);
     for (const r of this.queue.splice(0)) r.reject(new Error('Renderer closed'));
     for (const generation of this.generations.values()) generation.controller.abort();
-    await Promise.allSettled([this.foreground, this.background]);
+    await Promise.allSettled([this.foreground, this.background, ...this.laneChains.values()]);
     await Promise.allSettled([...this.lanes.values()].map(session => { clearTimeout(session.timer); return session.bakery.close(); }));
     this.lanes.clear();
   }

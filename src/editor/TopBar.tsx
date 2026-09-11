@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { actions, useStore } from "../store/project";
-import { cancelExport, exportVideo, fetchExportFile, revealExport, importProjectFile } from "./io";
+import { cancelExport, exportVideo, streamExportFile, revealExport, importProjectFile } from "./io";
 import { newProject, pickSaveTarget, serializeProc, writeProcToDisk, loadProc, forgetSaveTarget, PROC_EXT, PROC_FORMAT } from "./io/proc";
 import { ExportDialog, type ExportState } from "./ExportDialog";
 import { ensureActiveDraftId, saveDraft, setActiveDraftId } from "./io/drafts";
@@ -138,6 +138,7 @@ export function TopBar() {
   const viewOnly = isViewOnly();
 
   const name = useStore((s) => s.project.name);
+  const project = useStore((s) => s.project);
   const dirty = useStore((s) => s.dirty);
   const projectInput = useRef<HTMLInputElement>(null);
 
@@ -337,7 +338,9 @@ export function TopBar() {
     setExportState({
       phase: "running",
       done: 0,
-      total: 0,
+      // Seed a visible total immediately; the server also seeds this before
+      // spawning Chrome, so the dialog never presents a misleading 0/0.
+      total: Math.max(1, Math.floor(project.duration * (project.fps || 30))),
       target: target ? target.name : "产物目录（本机不支持选择位置）",
       startedAt: Date.now(),
     });
@@ -354,10 +357,14 @@ export function TopBar() {
 
       // 渲染完了才把成品搬到用户选的位置;没选就留在产物目录里
       if (target) {
-        const blob = await fetchExportFile(id, "preview.mp4");
         const w = await target.createWritable();
-        await w.write(blob);
-        await w.close();
+        try {
+          await streamExportFile(id, "preview.mp4", w);
+          await w.close();
+        } catch (error) {
+          await w.abort?.();
+          throw error;
+        }
       }
       setExportState((s) => (s ? { ...s, phase: "done", outDir, done: s.total || 1, total: s.total || 1 } : s));
     } catch (e) {

@@ -2,6 +2,7 @@ import type { Plugin, ViteDevServer, Connect } from "vite";
 import type { ServerResponse } from "http";
 import path from "path";
 import fs from "fs/promises";
+import { createReadStream } from "fs";
 import { spawn } from "child_process";
 import type { AddressInfo } from "net";
 import { exportBegin, exportEnd } from "./render-pool-state.mjs";
@@ -73,11 +74,13 @@ async function handleExportStart(req: Connect.IncomingMessage, res: ServerRespon
       let frames: string | undefined;
       let fps: number | undefined;
       let noVideo: boolean | undefined;
+      let workers: number | string | undefined;
       if (body.project) {
         project = body.project;
         frames = body.frames;
         fps = body.fps;
         noVideo = body.noVideo;
+        workers = body.workers;
       }
       
       const now = new Date();
@@ -138,9 +141,11 @@ async function handleExportStart(req: Connect.IncomingMessage, res: ServerRespon
         `http://127.0.0.1:${port}/?export=1&timeline=/@export/${id}/project.json`,
         "--out",
         relOutDir,
-        // 显式单进程(docs/decoupling-plan.md 阶段 0 / 6):分片每片都从第 0 帧推起,多开几个 Chrome 只是互相抢 CPU
+        // 默认按机器资源并行；每个分片仍从第 0 帧推起，且只在安全卡片边界切开。
         "--workers",
-        "1",
+        workers !== undefined && workers !== null && workers !== ""
+          ? String(workers)
+          : (process.env.PROMPTCUT_EXPORT_WORKERS || "auto"),
       ];
       if (frames) {
         args.push("--frames", frames);
@@ -329,10 +334,14 @@ async function handleDeliverable(res: ServerResponse, id: string, name: string) 
     return res.end("Path escaped output dir");
   }
   try {
-    const data = await fs.readFile(file);
+    const stat = await fs.stat(file);
     res.setHeader("Content-Type", name.endsWith(".mov") ? "video/quicktime" : "video/mp4");
-    res.setHeader("Content-Length", String(data.length));
-    res.end(data);
+    res.setHeader("Content-Length", String(stat.size));
+    res.setHeader("Cache-Control", "no-store");
+    // Stream the finished movie to the browser.  A multi-gigabyte Buffer here
+    // would duplicate the export in the Vite process just as the child is
+    // closing Chrome/ffmpeg.
+    createReadStream(file).on("error", () => { if (!res.headersSent) res.statusCode = 404; res.destroy(); }).pipe(res);
   } catch {
     res.statusCode = 404;
     res.end("产物还没生成");

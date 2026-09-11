@@ -1150,7 +1150,7 @@ async function renderFrames(root: string, origin: string, project: any, times: n
     const service = frameService(root, origin);
     const normalized = renderProject(project);
     const entry = await service.entry(normalized);
-    const frames = await service.see_frames(normalized, times, { signal: o.signal });
+    const frames = await service.see_frames(normalized, times, { signal: o.signal, lane: "agent" });
     const result = new Map<number, FrameResult>();
     for (const [frame, value] of frames) {
       if (o.post && (o.post.shrink || o.post.bg || o.post.stats)) {
