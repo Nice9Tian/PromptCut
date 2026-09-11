@@ -18,9 +18,16 @@ import { publishMediaMigrations, type MediaKindMigration } from "./mediaMigratio
  */
 
 /** 服务端素材目录里这个文件的地址。没有 path 返回 null */
-export function mediaUrlFromPath(path: string | undefined): string | null {
+export function mediaUrlFromPath(path: string | undefined, opts: { external?: boolean } = {}): string | null {
   const base = path ? path.split(/[/\\]/).pop() : "";
-  return base ? `/@media/${encodeURIComponent(base)}` : null;
+  if (!base) return null;
+  // Projects imported from an older installation may point at a real file in
+  // the user's Videos/PromptCut/media directory.  Keep the compact /@media
+  // form for normal assets, but let the loader ask the server to resolve that
+  // durable path when it is outside the current project's out/media folder.
+  return opts.external
+    ? `/api/media/file?path=${encodeURIComponent(path || "")}`
+    : `/@media/${encodeURIComponent(base)}`;
 }
 
 /** 不随页面失效的地址:网络地址、data:、同源绝对路径(/@media/...) */
@@ -38,7 +45,7 @@ const MISSING = "(缺失) ";
  * - 其余(死掉的 blob:、裸文件名):清空 url、名字前面标「(缺失)」,并记进 missing ——
  *   空 url 的素材预览和导出都会跳过,不会再拿一个打不开的地址去等。
  */
-export function restoreMediaUrls(media: MediaAsset[]): { media: MediaAsset[]; missing: MediaAsset[]; moved: MediaKindMigration[] } {
+export function restoreMediaUrls(media: MediaAsset[], opts: { externalPathUrl?: boolean } = {}): { media: MediaAsset[]; missing: MediaAsset[]; moved: MediaKindMigration[] } {
   const missing: MediaAsset[] = [];
   const moved: MediaKindMigration[] = [];
   const out = media.map((m) => {
@@ -47,7 +54,7 @@ export function restoreMediaUrls(media: MediaAsset[]): { media: MediaAsset[]; mi
     const shouldMove = !!extKind && extKind !== m.kind && !(m.kind === "audio" && m.soundOf);
     const normalized = shouldMove ? { ...m, kind: extKind as AssetKind } : m;
     if (shouldMove) moved.push({ id: m.id, name: m.name, from: m.kind, to: extKind as AssetKind });
-    const fromPath = mediaUrlFromPath(normalized.path);
+    const fromPath = mediaUrlFromPath(normalized.path, { external: opts.externalPathUrl });
     if (fromPath) return { ...normalized, url: fromPath };
     const url = normalized.url || "";
     if (!url || isDurable(url)) return normalized;

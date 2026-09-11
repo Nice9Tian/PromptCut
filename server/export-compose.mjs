@@ -41,7 +41,8 @@ export function composeLayers(project) {
       if (!media || media.kind === "audio") continue;
       // 滤镜定义是项目级的(project.filters),合成时只拿得到 layers —— 在这里把定义和这段的参数带上
       const def = filterOfClip(project, c);
-      out.push({ clip: c, media, ...(def ? { filter: { def, params: c.filter.params } } : null) });
+      const pixelMap = c.pixelMap && (project.pixelMaps ?? []).find((x) => x.id === c.pixelMap.id);
+      out.push({ clip: c, media, ...(def ? { filter: { def, params: c.filter.params } } : null), ...(pixelMap ? { pixelMap } : null) });
     }
   }
   return out;
@@ -272,6 +273,8 @@ function emphasisChain(inLabel, outLabel, ops, w, h, k) {
  */
 export function buildComposeArgs(opts) {
   const { width, height, fps, startFrame, endFrame, cardsPattern, out } = opts;
+  const pixelLayer = (opts.layers || []).find((layer) => layer.pixelMap);
+  if (pixelLayer) throw new Error(`片段 ${pixelLayer.clip?.id || "(未知)"} 使用了像素映射,请用默认的 Chrome 导出(--media chrome);ffmpeg 兼容旁路不支持像素级映射`);
   const bg = opts.background || "#333333";
   const untagged = opts.untaggedMatrix || "bt709";
   const notes = [];
@@ -288,9 +291,10 @@ export function buildComposeArgs(opts) {
    * 卡片 / 遮罩后面再显式接一个 format=rgba:第一帧恰好是 rgb24 时,协商出来的格式就不带 alpha,后面透明的帧会被压成不透明。
    */
   const R = ["-reinit_filter", "0"];
-  // 输入 0:底色;1:卡片;2:遮罩(可选);之后每段素材一个输入
+  // 输入 0:底色;1:卡片(或已经流式编码好的卡片视频);2:遮罩(可选);之后每段素材一个输入
   args.push(...R, "-f", "lavfi", "-i", `color=c=${bg}:s=${width}x${height}:r=${fps}:d=${dur}`);
-  args.push(...R, "-framerate", String(fps), "-start_number", String(startFrame), "-i", cardsPattern);
+  if (opts.cardsVideo) args.push(...R, "-i", opts.cardsVideo);
+  else args.push(...R, "-framerate", String(fps), "-start_number", String(startFrame), "-i", cardsPattern);
   let next = 2;
   let maskIn = -1;
   if (opts.mask) {

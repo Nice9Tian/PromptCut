@@ -30,6 +30,7 @@ PromptCut 使用多轨模型 (`Project` 对象):
    - 种类只有 brightness / contrast / saturate / hue / grayscale / sepia / invert / blur,依次作用;没有「暖色调」这种现成项,自己组合(例如 sepia 0.25 + saturate 1.2 + hue -10)。
    - 参数可以随时间变:value 写表达式字符串,t 是**片段内**秒数、d 是片段时长、p = t/d。所以同一个滤镜挂到哪段都一样用;要每段强弱不同,就在 params 里声明参数、挂的时候给那一段传值。
    - 同一种效果用到好几段时,建**一个**滤镜挂到多段上,不要每段建一个一模一样的。挂完用 `see_frames` 看一眼真实效果再下结论。
+8c. 通用像素映射(换色、抠色、素材替换、调暗部):先 `list_media` 找素材 id，再 `list_media_effects` 看这条媒体已有的滤镜/映射，接着 `create_pixel_map` 建定义、`apply_pixel_map` 挂到片段，最后 `see_frames` 复核。`where` 是 0~1 权重表达式，变量为 `r g b a luma x y t`；`to` 可是 `{kind:"media",mediaId,stage:"origin"|"after_filters"}`、`{kind:"color",value:"#ff0000"}`、`{kind:"transparent"}` 或 `{kind:"expr",r:"r^1.6",g:"g^1.6",b:"b^1.6",a:"a"}`。`mode:"continuous"` 混合，`discrete` 选离散值。颜色序列用 `colorSequence:{from:[...],to:[...],mode}`，首尾对齐并支持不等长插值。表达式由安全解析器翻译，不能写 JavaScript。`stage` 明确是取素材原始输出还是某个滤镜之后的输出；需要改定义用 `update_pixel_map`，删除前先确认 `usedBy`，只摘一段传 `apply_pixel_map` 的空 `pixelMapId`。
 9. `seek` / `play` / `pause`: 控制播放头和播放状态。
 10. `set_theme` / `set_project_meta`: 调整项目配置(全局主题、画布尺寸、帧率，以及**整条片子的时长**)。
 

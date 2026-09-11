@@ -197,6 +197,8 @@ export interface TrackClip extends Clip {
   label?: string;
   /** 挂着的滤镜:引用 project.filters 里的一条 + 这一段的参数值。只有素材段有。见 kernel/filters.mjs */
   filter?: import("./filters.mjs").ClipFilter;
+  /** 通用像素映射:引用 project.pixelMaps 里的一条。只有视频 / 图片段有。 */
+  pixelMap?: import("./pixelMap.mjs").ClipPixelMap;
   /** 挂着的音频效果:引用 project.audioFx 里的一条 + 这一段的参数值。只有视频 / 声音段有。见 kernel/audioFx.mjs */
   audioFx?: import("./audioFx.mjs").ClipAudioFx;
   // fadeIn / fadeOut / opacity 挪到了 kernel/types.ts 的 Clip 上:卡片 clip 现在也吃它们,
@@ -270,6 +272,8 @@ export interface Project {
    * 见 kernel/filters.mjs。
    */
   filters?: import("./filters.mjs").FilterDef[];
+  /** 通用像素映射库。片段通过 pixelMap 引用其中一条。 */
+  pixelMaps?: import("./pixelMap.mjs").PixelMapDef[];
   /**
    * 音频效果库(素材库「音频效果」页列的那些)。项目级,所有剪辑共用;片段用 clip.audioFx 引用其中一条。
    * 见 kernel/audioFx.mjs。

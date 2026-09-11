@@ -12,6 +12,7 @@ import type { MediaAsset } from "../../kernel/project";
 import { StyleTab } from "./StyleTab";
 import { AssetToolbar } from "./AssetToolbar";
 import { Inspector } from "./Inspector";
+import { NodeGraphTab } from "../nodes/NodeGraphTab";
 
 /**
  * 左栏:两级分页。
@@ -20,7 +21,7 @@ import { Inspector } from "./Inspector";
  * 分页选择记在 localStorage;各分页都常驻挂载(只是隐藏),切来切去不丢滚动位置和输入。
  */
 type TopTab = "assets" | "edit";
-type AssetTab = "style" | "cards" | "transitions" | "audiofx" | "emphasis" | "videos" | "images" | "music" | "captions";
+type AssetTab = "style" | "cards" | "transitions" | "audiofx" | "emphasis" | "videos" | "images" | "music" | "captions" | "nodes";
 type EditTab = "form" | "code";
 
 const TOP_TABS: { key: TopTab; label: string }[] = [
@@ -37,6 +38,7 @@ const ASSET_TABS: { key: AssetTab; label: string }[] = [
   { key: "images", label: "图片" },
   { key: "music", label: "配乐" },
   { key: "captions", label: "字幕" },
+  { key: "nodes", label: "节点" },
 ];
 const ASSET_TAB_KEYS = ASSET_TABS.map((t) => t.key) as readonly AssetTab[];
 /** 三个素材分页各管一种素材,和导入时按内容类型归位的口径一致 */
@@ -87,6 +89,7 @@ export function LeftPanel() {
     images: "",
     music: "",
     captions: "",
+    nodes: "",
   });
   const cardsTabRef = useRef<CardsTabHandle>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -126,7 +129,7 @@ export function LeftPanel() {
   const subActive: string = top === "assets" ? assetTab : editTab;
   const pickSub = (key: string) => (top === "assets" ? pickAsset(key as AssetTab) : pickEdit(key as EditTab));
 
-  const searchTab = (assetTab === "style" ? "cards" : assetTab) as Exclude<AssetTab, "style">;
+  const searchTab = (assetTab === "style" || assetTab === "nodes" ? "cards" : assetTab) as Exclude<AssetTab, "style">;
   const currentSearch = searches[searchTab];
   const setSearch = (val: string) => setSearches((s) => ({ ...s, [searchTab]: val }));
 
@@ -169,7 +172,7 @@ export function LeftPanel() {
         style={{ display: top === "assets" ? "flex" : "none" }}
       >
         {/* 统一导航条: 「全局风格」没有可搜的列表,别的素材分页都显示 */}
-        {assetTab !== "style" && (
+        {assetTab !== "style" && assetTab !== "nodes" && (
           <AssetToolbar
             captionMediaId={captionMediaId}
             assetTab={assetTab}
@@ -213,6 +216,9 @@ export function LeftPanel() {
             onPick={setCaptionMediaId}
             onGoImport={() => pickAsset("videos")}
           />
+        </div>
+        <div className="flex-1 min-h-0 flex flex-col" style={{ display: assetTab === "nodes" ? "flex" : "none" }}>
+          <NodeGraphTab />
         </div>
       </div>
 

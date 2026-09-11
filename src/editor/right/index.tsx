@@ -31,6 +31,7 @@ import { createClipGuard, timelineDigest, lookHint } from "./toolEcho";
 import { createTrackTools } from "./trackTools";
 import { createFilterTools } from "./filterTools";
 import { createAudioFxTools } from "./audioFxTools";
+import { createPixelMapTools } from "./pixelMapTools";
 import { audioPlanOf, soundingAt } from "../../kernel/audioPlan.mjs";
 import {
   framePatchFromArgs, worldOf, rectToFrame, alignToFrame, alignIsInvisible, nudgeFrame, clampToStage, rectForSafeSide,
@@ -179,6 +180,7 @@ const trackTools = createTrackTools({ getState, actions });
 const filterTools = createFilterTools({ getState, actions });
 /** 音频效果库工具(list/create/update/remove/apply_audio_fx)。见 audioFxTools.ts 头注释 */
 const audioFxTools = createAudioFxTools({ getState, actions });
+const pixelMapTools = createPixelMapTools({ getState, actions });
 
 /**
  * 测响度(measure_audio):素材、时间轴片段、或整条时间轴的混音。ffmpeg 在服务端跑(server/vite-plugin-audio.ts),
@@ -759,6 +761,12 @@ export function RightPanel() {
       updateFilter: (args) => { const r = filterTools.updateFilter(args); clipGuard.noteMutation(); return r; },
       removeFilter: (args) => { const r = filterTools.removeFilter(args); clipGuard.noteMutation(); return r; },
       applyFilter: (args) => { const r = filterTools.applyFilter(args); clipGuard.noteMutation(); return r; },
+      listPixelMaps: () => pixelMapTools.listPixelMaps(),
+      createPixelMap: (args) => { const r = pixelMapTools.createPixelMap(args); clipGuard.noteMutation(); return r; },
+      updatePixelMap: (args) => { const r = pixelMapTools.updatePixelMap(args); clipGuard.noteMutation(); return r; },
+      removePixelMap: (args) => { const r = pixelMapTools.removePixelMap(args); clipGuard.noteMutation(); return r; },
+      applyPixelMap: (args) => { const r = pixelMapTools.applyPixelMap(args); clipGuard.noteMutation(); return r; },
+      listMediaEffects: (args) => pixelMapTools.listMediaEffects(args),
       listAudioFx: () => audioFxTools.listAudioFx(),
       createAudioFx: (args) => { const r = audioFxTools.createAudioFx(args); clipGuard.noteMutation(); return r; },
       updateAudioFx: (args) => { const r = audioFxTools.updateAudioFx(args); clipGuard.noteMutation(); return r; },

@@ -20,6 +20,7 @@ import {
 } from "../kernel/cuts";
 import type { ClipFilter, FilterDef } from "../kernel/filters.mjs";
 import type { AudioFxDef, ClipAudioFx } from "../kernel/audioFx.mjs";
+import type { ClipPixelMap, PixelMapDef } from "../kernel/pixelMap.mjs";
 import {
   checkCrossfade, checkFade, clampDur, fadeOwner, groupOf, timingLock,
   transitionsOf, transitionsOfClip, type Transition, type TransitionKind,
@@ -1062,6 +1063,31 @@ export const actions = {
       ...t,
       clips: t.clips.map((c) => (c.id !== clipId ? c : filter ? { ...c, filter } : withoutFilter(c))),
     })));
+    return true;
+  },
+
+  /* ---------- 通用像素映射 ---------- */
+  addPixelMap(def: PixelMapDef, attach?: { clipId: string; pixelMap: ClipPixelMap }) {
+    const p = state.project;
+    let tracks = p.tracks;
+    if (attach) {
+      const hit = findClip(p, attach.clipId);
+      if (hit) tracks = updateTrack(p, hit.track.id, (t) => ({ ...t, clips: t.clips.map((c) => c.id === attach.clipId ? { ...c, pixelMap: attach.pixelMap } : c) })).tracks;
+    }
+    setProject({ ...p, tracks, pixelMaps: [...(p.pixelMaps ?? []), def] });
+  },
+  updatePixelMap(id: string, def: PixelMapDef) {
+    setProject({ ...state.project, pixelMaps: (state.project.pixelMaps ?? []).map((x) => x.id === id ? def : x) });
+  },
+  removePixelMap(id: string) {
+    const p = state.project;
+    setProject({ ...p, pixelMaps: (p.pixelMaps ?? []).filter((x) => x.id !== id), tracks: p.tracks.map((t) => ({ ...t, clips: t.clips.map((c) => c.pixelMap?.id === id ? (() => { const { pixelMap, ...rest } = c; return rest; })() : c) })) });
+  },
+  setClipPixelMap(clipId: string, pixelMap: ClipPixelMap | null): boolean {
+    const p = state.project;
+    const hit = findClip(p, clipId);
+    if (!hit) return false;
+    setProject(updateTrack(p, hit.track.id, (t) => ({ ...t, clips: t.clips.map((c) => c.id === clipId ? (pixelMap ? { ...c, pixelMap } : (() => { const { pixelMap: _, ...rest } = c; return rest; })()) : c) })));
     return true;
   },
 };

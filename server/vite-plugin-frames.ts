@@ -28,8 +28,11 @@ export function renderProject(project: any) {
     // .proc files from older versions may contain a bare filename (and some
     // callers still send blob URLs).  The renderer cannot resolve either
     // form; the durable server path is the source of truth for both.
-    if (m.path && (!m.url || m.url.startsWith("blob:") || !m.url.startsWith("/"))) {
-      return { ...m, url: "/@media/" + encodeURIComponent(path.basename(m.path)) };
+    // A legacy .proc may say /@media/<name> while the actual file lives in
+    // the shared Videos/PromptCut/media folder.  Resolve through the guarded
+    // media endpoint so the export/Agent page sees the same file as the editor.
+    if (m.path && (!m.url || m.url.startsWith("blob:") || !m.url.startsWith("/@export/"))) {
+      return { ...m, url: "/api/media/file?path=" + encodeURIComponent(String(m.path)) };
     }
     return m;
   }) };

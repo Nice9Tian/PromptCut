@@ -700,6 +700,55 @@ export const tools = [
     side: "browser"
   },
   {
+    name: "list_pixel_maps",
+    description: "列出项目里的通用像素映射。像素映射用安全表达式统一表达换色、抠色、透明和素材替换：where 允许 r/g/b/a/luma/x/y/t，to 可以是 {kind:'media',mediaId,stage:'origin'|'after_filters'}、{kind:'color',value:'#ff0000'}、{kind:'transparent'} 或 {kind:'expr',r,g,b,a}。先调用 list_media 找素材 id，再用 list_media_effects 看已有滤镜和映射。",
+    inputSchema: { type: "object", properties: {} },
+    side: "browser"
+  },
+  {
+    name: "list_media_effects",
+    description: "查看某个媒体连接在当前时间轴上的全部效果和顺序：普通滤镜、像素映射、音频效果，以及项目效果库定义。mediaId 可省略以列出全部片段。创建映射前先调用它，确认 source/to 的 stage 是 origin 还是 after_filters。",
+    inputSchema: { type: "object", properties: { mediaId: { type: "string" } } },
+    side: "browser"
+  },
+  {
+    name: "create_pixel_map",
+    description: "创建通用像素映射并放入项目库，可选 clipId 直接挂到视频/图片片段。where 是 0~1 软选区，例如 'smoothstep(0.35,0.8,g-r)*(1-smoothstep(0.15,0.45,b))'；to 可写 {kind:'media',mediaId:'B',stage:'origin'|'after_filters'}、{kind:'color',value:'#ff0000'}、{kind:'transparent'} 或每通道表达式 {kind:'expr',r:'r^1.6',g:'g^1.6',b:'b^1.6',a:'a'}。mode=continuous 会混合，discrete 会选离散颜色。颜色序列可传 colorSequence:{from:['#000000','#ffffff'],to:['#001133','#ffcc88'],mode:'continuous'}，两端长度不等时按首尾对齐插值。表达式只翻译不执行 JavaScript。创建后用 see_frames 复核。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: { type: "string" },
+        description: { type: "string" },
+        source: { type: "object", description: "映射输入媒体，可含 mediaId、stage(origin/after_filters)、filterId" },
+        where: { type: "string", description: "0~1 选区表达式，变量 r/g/b/a/luma/x/y/t" },
+        to: { description: "目标可写字符串 '#ff0000'、'transparent'、素材 id，也可写 media/color/transparent/expr 对象；使用 colorSequence 时可省略" },
+        mode: { type: "string", enum: ["continuous", "discrete"] },
+        colorSequence: { type: "object", description: "可选 from/to 颜色序列及 mode" },
+        clipId: { type: "string" }
+      },
+      required: ["name", "where"]
+    },
+    side: "browser"
+  },
+  {
+    name: "update_pixel_map",
+    description: "更新项目里的像素映射。给出的字段会替换定义；挂载它的片段都会跟着变。改完用 see_frames 看真实效果。",
+  inputSchema: { type: "object", properties: { pixelMapId: { type: "string" }, name: { type: "string" }, description: { type: "string" }, source: { type: "object" }, where: { type: "string" }, to: { description: "字符串颜色/transparent/素材 id，或目标对象" }, mode: { type: "string", enum: ["continuous", "discrete"] }, colorSequence: { type: "object" } }, required: ["pixelMapId"] },
+    side: "browser"
+  },
+  {
+    name: "remove_pixel_map",
+    description: "删除一个像素映射。仍挂在片段上时需要 force:true，并在 reason 写明用户可见的理由；只想摘掉一段请用 apply_pixel_map 的空 pixelMapId。",
+    inputSchema: { type: "object", properties: { pixelMapId: { type: "string" }, force: { type: "boolean" }, reason: { type: "string" } }, required: ["pixelMapId"] },
+    side: "browser"
+  },
+  {
+    name: "apply_pixel_map",
+    description: "把像素映射挂到视频/图片片段上；每段只挂一条，再挂就是替换。pixelMapId 传空字符串表示摘掉。to 为媒体时 stage 决定取素材原始像素还是该素材滤镜后的输出。挂完用 see_frames 复核。",
+    inputSchema: { type: "object", properties: { clipId: { type: "string" }, pixelMapId: { type: "string", description: "空字符串=摘掉" } }, required: ["clipId", "pixelMapId"] },
+    side: "browser"
+  },
+  {
     name: "seek",
     description: "跳转到时间轴的指定秒数。",
     inputSchema: {

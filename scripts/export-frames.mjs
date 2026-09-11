@@ -9,6 +9,29 @@ import { fileURLToPath } from 'url';
 import { buildComposeArgs, clipFrameRange, composeLayers } from '../server/export-compose.mjs';
 import { buildAudioPlan, buildFfmpegArgs, hasAudioStream } from './mux-audio.mjs';
 
+/** Encode incoming screenshots immediately so Node retains at most one PNG. */
+function streamPngVideo(ffmpeg, file, fps) {
+  const proc = spawn(ffmpeg, ['-y', '-hide_banner', '-loglevel', 'error', '-f', 'image2pipe', '-vcodec', 'png',
+    '-framerate', String(fps), '-i', 'pipe:0', '-an', '-c:v', 'prores_ks', '-profile:v', '4444',
+    '-pix_fmt', 'yuva444p10le', file], { stdio: ['pipe', 'ignore', 'pipe'], windowsHide: true });
+  let stderr = '', inputError = null;
+  proc.stderr.on('data', d => { stderr = (stderr + d).slice(-8000); });
+  proc.stdin.on('error', e => { inputError = e; });
+  const done = new Promise((resolve, reject) => {
+    proc.on('error', reject);
+    proc.on('close', code => code === 0 ? resolve() : reject(inputError || new Error(`ffmpeg ${code}: ${stderr}`)));
+  });
+  done.catch(() => {});
+  return {
+    async write(buffer) {
+      if (inputError) throw inputError;
+      await new Promise((resolve, reject) => proc.stdin.write(buffer, e => e ? reject(e) : resolve()));
+    },
+    async finish() { proc.stdin.end(); await done; },
+    async abort() { proc.stdin.destroy(); proc.kill(); await done.catch(() => {}); },
+  };
+}
+
 /**
  * 逐帧导出 —— beginFrame 后端。
  *
@@ -693,8 +716,12 @@ export async function bakeFrames(bakery, opts = {}) {
         lastBuf = buf;
       }
       const name = String(i).padStart(6, '0');
-      // 写盘不挡下一帧
-      await queueWrite(path.join(framesDir, `${name}.${ext}`), buf);
+      // A full export can hand the PNG straight to a local ffmpeg pipe.  The
+      // callback is awaited before the next frame, so the screenshot Buffer is
+      // released as soon as ffmpeg accepts it and never accumulates in Node.
+      if (opts.onFrame) await opts.onFrame(i, buf);
+      // 写盘不挡下一帧 (streaming exports may deliberately skip PNG files)
+      if (opts.writeFrames !== false) await queueWrite(path.join(framesDir, `${name}.${ext}`), buf);
       if (fresh) lastGlass = undefined;
       if (glassFrames && glassFrames.has(i)) {
         if (lastGlass === undefined) lastGlass = await shootGlass();
@@ -917,11 +944,13 @@ export function mediaSourceOf(m, { outDir, pageUrl, mediaRoot }) {
   }
   if (m.path) {
     const f = path.resolve(String(m.path));
-    if (isInside(f, mediaRoot) && fsSync.existsSync(f)) return f;
+    const roots = [mediaRoot, ...legacyMediaRoots()];
+    if (roots.some((root) => isInside(f, root)) && fsSync.existsSync(f)) return f;
   }
   if (url.startsWith('/@media/')) {
     const f = path.join(mediaRoot, decodeURIComponent(url.slice('/@media/'.length).split('?')[0]));
-    if (isInside(f, mediaRoot) && fsSync.existsSync(f)) return f;
+    const roots = [mediaRoot, ...legacyMediaRoots()];
+    if (roots.some((root) => isInside(f, root)) && fsSync.existsSync(f)) return f;
   }
   try {
     const u = new URL(url, pageUrl);
@@ -956,6 +985,14 @@ function probeVisual(ffprobeCmd, src) {
 
 /** 素材库目录(/@media/<文件> 落在这里)。画面层和音轨都按它找素材 */
 const mediaRootDir = () => path.resolve(process.env.PROMPTCUT_EXPORT_DIR || path.resolve('out'), 'media');
+// Older .proc files keep absolute paths in %USERPROFILE%/Videos/PromptCut/media.
+// Keep ffmpeg's lookup in sync with the browser media endpoint so legacy
+// projects render the same footage they show in the editor.
+function legacyMediaRoots() {
+  const roots = [path.join(process.env.USERPROFILE || process.env.HOME || '', 'Videos', 'PromptCut', 'media')];
+  if (process.env.PROMPTCUT_MEDIA_DIR) roots.push(path.resolve(process.env.PROMPTCUT_MEDIA_DIR));
+  return roots.filter(Boolean);
+}
 
 const DEFAULT_URL = 'http://127.0.0.1:5190/?export=1';
 
@@ -1063,19 +1100,28 @@ export async function exportFrames(opts) {
     }
   }
   let baked;
-  const unifiedProject = mediaMode === 'chrome' && !opts.bakery ? await loadProject(opts.url || DEFAULT_URL, outDir) : null;
-  if (unifiedProject) {
-    const { exportUnified } = await import('./export-unified.mjs');
-    baked = await exportUnified(unifiedProject, { ...opts, url: opts.url || DEFAULT_URL });
-  } else if (workers > 1) {
-    baked = await bakeSharded(bakeOpts, workers);
-  } else {
-    const bakery = opts.bakery || await openBakery(bakeOpts);
-    try {
-      baked = await bakeFrames(bakery, bakeOpts);
-    } finally {
-      if (!opts.bakery) await bakery.close();
+  // Full single-worker exports stream Chrome PNGs directly into local ffmpeg.
+  // No frame buffer list or PNG directory is needed for the compositor.
+  const streamCards = !opts.bakery && workers === 1 && !opts.targetFrames && !noVideo;
+  await fs.mkdir(outDir, { recursive: true });
+  const streamedCards = streamCards ? streamPngVideo(ffmpegCmd, path.join(outDir, 'overlay.mov'), opts.fps || 30) : null;
+  try {
+    const unifiedProject = mediaMode === 'chrome' && !opts.bakery ? await loadProject(opts.url || DEFAULT_URL, outDir) : null;
+    if (unifiedProject) {
+      const { exportUnified } = await import('./export-unified.mjs');
+      baked = await exportUnified(unifiedProject, { ...opts, url: opts.url || DEFAULT_URL,
+        ...(streamedCards ? { onFrame: (_frame, buf) => streamedCards.write(buf), writeFrames: false } : {}) });
+    } else if (workers > 1) {
+      baked = await bakeSharded(bakeOpts, workers);
+    } else {
+      const bakery = opts.bakery || await openBakery(bakeOpts);
+      try { baked = await bakeFrames(bakery, { ...bakeOpts, ...(streamedCards ? { onFrame: (_frame, buf) => streamedCards.write(buf), writeFrames: false } : {}) }); }
+      finally { if (!opts.bakery) await bakery.close(); }
     }
+    if (streamedCards) await streamedCards.finish();
+  } catch (error) {
+    await streamedCards?.abort();
+    throw error;
   }
   const { framesDir, ext, fps, width, height, startFrame, endFrame, durationSec } = baked;
 
@@ -1088,20 +1134,20 @@ export async function exportFrames(opts) {
     });
     try {
       // 卡片透明层。素材走 ffmpeg 时这里只有卡片 —— 名字说的就是它:叠到别的画面上用的那一层
-      console.log('Creating overlay.mov...');
-      await runFfmpeg([
-        '-y', '-framerate', String(fps), '-start_number', String(startFrame),
-        '-i', path.join(framesDir, `%06d.${ext}`),
-        '-c:v', 'prores_ks', '-profile:v', '4444', '-pix_fmt', 'yuva444p10le',
-        path.join(outDir, 'overlay.mov'),
-      ]);
+      if (streamCards) console.log('overlay.mov 已由 Chrome 帧流式写入本地 ffmpeg。');
+      else {
+        console.log('Creating overlay.mov...');
+        await runFfmpeg(['-y', '-framerate', String(fps), '-start_number', String(startFrame),
+          '-i', path.join(framesDir, `%06d.${ext}`), '-c:v', 'prores_ks', '-profile:v', '4444',
+          '-pix_fmt', 'yuva444p10le', path.join(outDir, 'overlay.mov')]);
+      }
       /*
        * 没有素材的项目也走同一条合成(0 个素材层 = 灰底 + 卡片)。以前这里单留一条老命令,它踩的是同一个坑:
        * 整帧不透明的卡片 PNG 不带 alpha,ffmpeg 中途重建滤镜图,随机丢帧、还可能卡死(实测旧 preview.mp4 1792/1800)。
        * buildComposeArgs 每个输入都带 -reinit_filter 0,还有看门狗;走它两条路就一起好了。
        */
       const layers = (plan?.layers || []).filter((l) => clipFrameRange(l.clip, fps, startFrame, endFrame));
-      await composePreview({ ffmpegCmd, baked, layers, outDir });
+      await composePreview({ ffmpegCmd, baked, layers, outDir, cardsVideo: streamCards ? path.join(outDir, 'overlay.mov') : null });
       // 音轨:逐帧截图只有画面,声音在这里拼回去(配乐 + 视频自带的声音 + 音频效果)
       try {
         // 页面拿的是哪份项目就混哪份(和 planMedia 同一个 loadProject):以前只认 <out>/project.json,
@@ -1276,7 +1322,7 @@ function runFfmpegProgress(ffmpegCmd, args, onFrame, stallMs = Number(process.en
  * 素材合成那一步:灰底 + 素材层(+ 毛玻璃)+ 卡片层 → preview.mp4,一趟 ffmpeg。
  * 进度用 -progress 读出来,打成 `Composited frame n/N`,vite-plugin-export 转给界面。
  */
-async function composePreview({ ffmpegCmd, baked, layers, outDir }) {
+async function composePreview({ ffmpegCmd, baked, layers, outDir, cardsVideo = null }) {
   const { framesDir, ext, fps, width, height, startFrame, endFrame } = baked;
   const total = endFrame - startFrame + 1;
   const glassList = baked.glass?.list || [];
@@ -1291,6 +1337,7 @@ async function composePreview({ ffmpegCmd, baked, layers, outDir }) {
   const { args, graph, notes, sidecars = [] } = buildComposeArgs({
     width, height, fps, startFrame, endFrame, layers, mask,
     cardsPattern: path.join(framesDir, `%06d.${ext}`),
+    cardsVideo,
     out: path.join(outDir, 'preview.mp4'),
     // 随时间变化的滤镜每段一份 sendcmd 脚本,写进导出目录;给绝对路径,不依赖 ffmpeg 的工作目录
     sidecarDir: path.resolve(outDir),

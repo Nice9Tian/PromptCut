@@ -74,6 +74,12 @@ export interface EditorApi {
   updateFilter(args: any): any;
   removeFilter(args: { filterId: string; force?: boolean; reason?: string }): any;
   applyFilter(args: { clipId: string; filterId: string; params?: Record<string, number> }): any;
+  listPixelMaps(): any;
+  createPixelMap(args: any): any;
+  updatePixelMap(args: any): any;
+  removePixelMap(args: { pixelMapId: string; force?: boolean; reason?: string }): any;
+  applyPixelMap(args: { clipId: string; pixelMapId?: string }): any;
+  listMediaEffects(args?: { mediaId?: string }): any;
   // 音频效果库。校验和门槛在 editor/right/audioFxTools.ts,数值在 kernel/audioFx.mjs,节点图在 src/audio/fxChain.ts
   listAudioFx(): any;
   createAudioFx(args: any): any;
@@ -150,6 +156,7 @@ const TIMELINE_TOOLS = new Set([
   "set_position", "set_rect", "align", "nudge", "fill_captions", "edit_caption", "attach_clip_motion", "detach_clip_motion",
   "add_track", "remove_track", "update_track", "move_track",
   "create_filter", "update_filter", "remove_filter", "apply_filter",
+  "create_pixel_map", "update_pixel_map", "remove_pixel_map", "apply_pixel_map",
   "create_audio_fx", "update_audio_fx", "remove_audio_fx", "apply_audio_fx",
   "switch_cut", "add_cut", "set_theme", "voice_generate",
 ]);
@@ -442,6 +449,12 @@ export function connectMcpExecutor(getApi: () => EditorApi, onStatus?: (s: { con
           else if (tool === "update_filter") result = api.updateFilter(args);
           else if (tool === "remove_filter") result = api.removeFilter(args);
           else if (tool === "apply_filter") result = api.applyFilter(args);
+          else if (tool === "list_pixel_maps") result = api.listPixelMaps();
+          else if (tool === "create_pixel_map") result = api.createPixelMap(args);
+          else if (tool === "update_pixel_map") result = api.updatePixelMap(args);
+          else if (tool === "remove_pixel_map") result = api.removePixelMap(args);
+          else if (tool === "apply_pixel_map") result = api.applyPixelMap(args);
+          else if (tool === "list_media_effects") result = api.listMediaEffects(args);
           else if (tool === "list_audio_fx") result = api.listAudioFx();
           else if (tool === "create_audio_fx") result = api.createAudioFx(args);
           else if (tool === "update_audio_fx") result = api.updateAudioFx(args);

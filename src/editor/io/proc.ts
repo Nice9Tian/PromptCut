@@ -123,7 +123,11 @@ export function parseProc(text: string, opts: ParseProcOptions = {}): Project {
   const id = typeof project.id === "string" && project.id ? project.id : opts.legacyId || newProjectId();
   const full: Project = { ...createEmptyProject(), ...project, id };
   // 存下来的素材地址是死的 blob: 或裸文件名,按 path 换回能播的 /@media 地址(见 mediaUrls.ts)
-  const { media, missing } = restoreMediaUrls(full.media || []);
+  // A .proc can have been created by the desktop build, where the media file
+  // lives in the shared Videos/PromptCut/media folder rather than this source
+  // checkout's out/media.  Keep the absolute path behind the server's guarded
+  // media endpoint so old projects remain playable after moving installations.
+  const { media, missing } = restoreMediaUrls(full.media || [], { externalPathUrl: true });
   for (const m of missing) console.warn(`[proc] 缺失素材: ${m.name} (${m.url})`);
   return { ...full, media };
 }

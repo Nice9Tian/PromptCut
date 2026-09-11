@@ -2,6 +2,7 @@ import type { Plugin, ViteDevServer, Connect } from "vite";
 import type { ServerResponse } from "http";
 import path from "path";
 import fs from "fs/promises";
+import os from "os";
 import { createReadStream } from "fs";
 import { spawn } from "child_process";
 import type { AddressInfo } from "net";
@@ -39,6 +40,47 @@ function sanitizeFilename(name: string) {
  */
 function outRoot(root: string): string {
   return process.env.PROMPTCUT_EXPORT_DIR || path.resolve(root, "out");
+}
+
+function inside(file: string, dir: string): boolean {
+  const target = path.resolve(file);
+  const base = path.resolve(dir);
+  return target === base || target.startsWith(base + path.sep);
+}
+
+/** The same PromptCut-owned folders exposed by vite-plugin-media. */
+function allowedMediaRoots(root: string): string[] {
+  const roots = [path.resolve(outRoot(root), "media"), path.join(os.homedir(), "Videos", "PromptCut", "media")];
+  if (process.env.PROMPTCUT_MEDIA_DIR) roots.push(path.resolve(process.env.PROMPTCUT_MEDIA_DIR));
+  return roots;
+}
+
+/**
+ * Make the project used by the export page address every legacy asset through
+ * the guarded media endpoint.  Older .proc files may still contain /@media
+ * URLs even though `path` points at the shared desktop media directory; the
+ * export page runs in the source checkout, so that short URL would otherwise
+ * resolve to the wrong directory.
+ */
+async function normalizeExportMedia(project: any, root: string, id: string): Promise<void> {
+  if (!project?.media || !Array.isArray(project.media)) return;
+  const roots = allowedMediaRoots(root);
+  for (const m of project.media) {
+    if (m?.url && String(m.url).startsWith("/@export/media/")) {
+      const fileName = String(m.url).split("/").pop();
+      if (fileName) m.url = `/@export/${id}/media/${fileName}`;
+    }
+    const rawPath = typeof m?.path === "string" ? m.path : "";
+    if (!rawPath) continue;
+    const file = path.resolve(rawPath);
+    if (!roots.some((dir) => inside(file, dir))) continue;
+    try {
+      await fs.access(file);
+    } catch {
+      continue;
+    }
+    m.url = `/api/media/file?path=${encodeURIComponent(file)}`;
+  }
 }
 
 async function handleMediaUpload(req: Connect.IncomingMessage, res: ServerResponse, root: string) {
@@ -103,6 +145,10 @@ async function handleExportStart(req: Connect.IncomingMessage, res: ServerRespon
       // Rewrite media URLs in project
       if (project.media && Array.isArray(project.media)) {
         for (const m of project.media) {
+          // Projects from the desktop media library carry an absolute path,
+          // while the export page only knows HTTP URLs. Route it through the
+          // guarded media endpoint so legacy projects render their real files.
+          if (m.path) m.url = `/api/media/file?path=${encodeURIComponent(String(m.path))}`;
           if (m.url && m.url.startsWith("/@export/media/")) {
             const fileName = m.url.split("/").pop();
             if (fileName) {
@@ -111,6 +157,10 @@ async function handleExportStart(req: Connect.IncomingMessage, res: ServerRespon
           }
         }
       }
+      // Old projects can carry a valid absolute `path` together with the
+      // stale short /@media URL.  Resolve those paths before writing the
+      // timeline consumed by the export Chrome page.
+      await normalizeExportMedia(project, root, id);
       
       const projectJsonPath = path.resolve(outDir, "project.json");
       await fs.writeFile(projectJsonPath, JSON.stringify(project, null, 2));
@@ -145,7 +195,7 @@ async function handleExportStart(req: Connect.IncomingMessage, res: ServerRespon
         "--workers",
         workers !== undefined && workers !== null && workers !== ""
           ? String(workers)
-          : (process.env.PROMPTCUT_EXPORT_WORKERS || "auto"),
+          : (process.env.PROMPTCUT_EXPORT_WORKERS || "1"),
       ];
       if (frames) {
         args.push("--frames", frames);

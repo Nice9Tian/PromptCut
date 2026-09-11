@@ -2,6 +2,7 @@ import type { Plugin, ViteDevServer, Connect } from "vite";
 import type { ServerResponse } from "http";
 import path from "path";
 import fs from "fs/promises";
+import os from "os";
 
 function sanitizeFilename(name: string) {
   return name.replace(/[/\\]/g, "").replace(/\.\./g, "");
@@ -9,6 +10,44 @@ function sanitizeFilename(name: string) {
 
 function outRoot(root: string): string {
   return process.env.PROMPTCUT_EXPORT_DIR || path.resolve(root, "out");
+}
+
+function inside(file: string, dir: string): boolean {
+  const target = path.resolve(file);
+  const base = path.resolve(dir);
+  return target === base || target.startsWith(base + path.sep);
+}
+
+/**
+ * Old .proc files store an absolute path from the desktop media library.  The
+ * browser cannot read that path directly, so expose only the two media roots
+ * owned by PromptCut (current out/media and the legacy Videos/PromptCut/media
+ * folder).  The path is never accepted as an arbitrary file read.
+ */
+function allowedMediaRoots(root: string): string[] {
+  const roots = [mediaDir(root)];
+  const legacy = path.join(os.homedir(), "Videos", "PromptCut", "media");
+  roots.push(legacy);
+  if (process.env.PROMPTCUT_MEDIA_DIR) roots.push(path.resolve(process.env.PROMPTCUT_MEDIA_DIR));
+  return roots;
+}
+
+async function handleMediaFile(req: Connect.IncomingMessage, res: ServerResponse, root: string) {
+  try {
+    const query = new URL(req.url || "/", "http://promptcut.local").searchParams;
+    const raw = query.get("path");
+    if (!raw) { res.statusCode = 400; return res.end("Missing media path"); }
+    const file = path.resolve(raw);
+    const roots = allowedMediaRoots(root);
+    if (!roots.some((dir) => inside(file, dir))) {
+      res.statusCode = 403;
+      return res.end("Media path is outside PromptCut media folders");
+    }
+    return serveFile(file, req, res);
+  } catch {
+    res.statusCode = 400;
+    res.end("Invalid media path");
+  }
 }
 
 /**
@@ -62,6 +101,8 @@ async function serveFile(filePath: string, req: Connect.IncomingMessage, res: Se
     else if (filePath.endsWith(".webm")) contentType = "video/webm";
     else if (filePath.endsWith(".mov")) contentType = "video/quicktime";
     else if (filePath.endsWith(".mp3")) contentType = "audio/mpeg";
+    else if (filePath.endsWith(".m4a")) contentType = "audio/mp4";
+    else if (filePath.endsWith(".wav")) contentType = "audio/wav";
     else if (filePath.endsWith(".png")) contentType = "image/png";
     else if (filePath.endsWith(".jpg") || filePath.endsWith(".jpeg")) contentType = "image/jpeg";
     
@@ -106,6 +147,11 @@ export function mediaPlugin(): Plugin {
         // POST /api/media/upload/<文件名>
         if (req.method === "POST" && req.url.startsWith("/api/media/upload/")) {
           return handleMediaUpload(req, res, root);
+        }
+
+        // GET /api/media/file?path=<legacy absolute path>
+        if (req.method === "GET" && req.url.startsWith("/api/media/file")) {
+          return handleMediaFile(req, res, root);
         }
         
         // GET /@media/<文件名>

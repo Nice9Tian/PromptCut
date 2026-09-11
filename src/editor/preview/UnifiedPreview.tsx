@@ -11,6 +11,8 @@ export function UnifiedPreview({ project, t, playing }: { project: Project; t: n
   const latest = useRef(t); latest.current = t;
   const requestFrame = useRef<() => void>(() => {});
   const controller = useRef<AbortController | null>(null);
+  const playingRef = useRef(playing); playingRef.current = playing;
+  const videoRef = useRef(video); videoRef.current = video;
   useEffect(() => {
     let active = true;
     let timer: ReturnType<typeof setTimeout>;
@@ -34,26 +36,53 @@ export function UnifiedPreview({ project, t, playing }: { project: Project; t: n
   }, [project]);
   useEffect(() => {
     let active = true;
-    let busy = false;
-    // One in-flight preview request, then ask for the most recent playhead.
-    const draw = async () => {
-      if (busy || !active || (playing && video?.project === project)) return;
-      busy = true;
-      const requested = latest.current;
-      controller.current?.abort();
-      const currentController = new AbortController();
-      controller.current = currentController;
-      try {
-        const result = await see_frames(project, [requested], currentController.signal, { target: "user", lane: "user" });
-        if (active && !currentController.signal.aborted && requested === latest.current) { setImage({ project, url: result.frames[0].url }); setError(""); }
-      } catch (e) { if (active && (e as any)?.name !== "AbortError" && !currentController.signal.aborted) setError(String(e)); }
-      busy = false;
-      if (active && requested !== latest.current) void draw();
+    let inFlight: Promise<void> | null = null;
+    let pending: number | null = null;
+    const fps = Math.max(1, project.fps || 30);
+    const frameOf = (sec: number) => Math.round(sec * fps);
+
+    /**
+     * Keep exactly one request in the hot user lane.  While it is rendering,
+     * every timeline update overwrites `pending`; when the current request
+     * finishes its result is shown first, then the newest pending frame starts
+     * immediately.  This keeps the UI responsive without spawning a backlog
+     * of obsolete Chrome renders.
+     */
+    const draw = () => {
+      if (!active || (playingRef.current && videoRef.current?.project === project)) return;
+      pending = latest.current;
+      if (inFlight) return;
+      inFlight = (async () => {
+        while (active && pending !== null) {
+          const requested = pending;
+          pending = null;
+          const currentController = new AbortController();
+          controller.current = currentController;
+          try {
+            const result = await see_frames(project, [requested], currentController.signal, { target: "user", lane: "user" });
+            if (!active || currentController.signal.aborted) return;
+            const frame = result.frames[0];
+            // A completed old frame is still useful: commit it immediately so
+            // the player never waits on a blank gap before the latest frame.
+            if (frame) setImage({ project, url: frame.url });
+            if (frameOf(requested) === frameOf(latest.current)) setError("");
+          } catch (e) {
+            if (active && (e as any)?.name !== "AbortError" && !currentController.signal.aborted
+              && frameOf(requested) === frameOf(latest.current)) setError(String(e));
+          } finally {
+            if (controller.current === currentController) controller.current = null;
+          }
+          if (active && frameOf(requested) !== frameOf(latest.current)) pending = latest.current;
+        }
+      })().finally(() => {
+        inFlight = null;
+        if (active && pending !== null) draw();
+      });
     };
     requestFrame.current = () => { void draw(); };
     void draw();
     return () => { active = false; controller.current?.abort(); };
-  }, [project, playing, video]);
+  }, [project]);
   useEffect(() => { if (!playing || video?.project !== project) requestFrame.current(); }, [Math.round(t * (project.fps || 30)), playing, video, project]);
   useEffect(() => {
     const element = ref.current;
