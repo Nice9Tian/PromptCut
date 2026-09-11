@@ -147,7 +147,8 @@ async function projectOf(url) {
 function preloadNext(url) {
   try {
     const p = bakery?.preload(emptyUrlOf(url));
-    p?.then((s) => { if (s && jobsInHand === 0) process.send?.({ type: 'hot' }); }, () => {});
+    // 备用页开不出来(浏览器已经不在了)、手上又没活:丢掉 bakery,下一次预热重开一个,别让它一直不热
+    p?.then((s) => { if (s && jobsInHand === 0) process.send?.({ type: 'hot' }); }, () => { if (jobsInHand === 0) dropBakery(); });
   } catch { /* 地址不合法就算了,下一趟走老路 */ }
 }
 
@@ -186,7 +187,12 @@ process.on('message', (msg) => {
    * 预热用的地址随便给一个导出页就行:真正的活来了会 reset 到它自己的项目地址上。
    */
   if (msg.type === 'prewarm') {
-    chain = chain.then(() => bakeryFor(msg.url).then(() => preloadNext(msg.url), () => {}));
+    /*
+     * 预热失败(实测:「Browser target is not found」—— 手里的 bakery 背后那个浏览器已经不在了)就把 bakery 丢掉。
+     * 以前这里把错误吞了、bakery 留着,之后每一次预热都在同一个死掉的浏览器上失败,永远报不出 hot,
+     * 热备那边只能看着它一直「空闲、不热」;丢掉之后,下一次预热(热备巡检每 5 秒催一次)会开一个新的。
+     */
+    chain = chain.then(() => bakeryFor(msg.url).then(() => preloadNext(msg.url), () => dropBakery()));
     return;
   }
   /*
@@ -222,6 +228,12 @@ process.on('message', (msg) => {
       } catch (e) {
         process.send?.({ type: 'error', id: msg.id, message: e?.message || String(e) });
       }
+      /*
+       * 后处理做完再报一次 hot。烘帧那一趟收尾时报过,但那时父进程还在等这一步后处理、这台还算忙,
+       * 那一声被忽略了(父进程只在空闲时认 hot);不在这里补的话,「热」就一直停在 0,
+       * 热备调度退回到「挑一台空着的」,新活可能落到还在开备用页的那台上。
+       */
+      if (jobsInHand === 0 && bakery?.spare) bakery.spare.then((s) => { if (s && jobsInHand === 0) process.send?.({ type: 'hot' }); }, () => {});
     });
     return;
   }

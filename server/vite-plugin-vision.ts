@@ -829,6 +829,13 @@ interface RenderWorker {
    * 界面那对热备渲染器按它挑「谁是热的」(docs/decoupling-plan.md 第 3.2 节)。
    */
   hot: boolean;
+  /** 忙着的时候收到的 hot:收尾放掉 busy 时再算热(hot 常和 done 同一轮到达,见 spawnWorker) */
+  hotPending?: boolean;
+  /** 收到过几次 hot、最近一次什么时候(热备状态的明细,排查用) */
+  hotMsgs?: number;
+  lastHotAt?: number;
+  /** 最近一次被热备巡检催着预热是什么时候(同一台 5 秒内不重复催) */
+  warmingAt?: number;
   /** 变热时的回调(热备调度用来派待办) */
   onHot?: () => void;
   /** stdout/stderr 的最后几行,出错时当错误信息用 */
@@ -881,8 +888,18 @@ function spawnWorker(root: string, reserved = false): RenderWorker {
   child.stderr?.on("data", keep);
   child.on("message", (msg: any) => {
     if (msg?.type === "hot") {
-      // worker 只在手上没活时才报 hot;这边再兜一道:正派着活的那台不算热(免得热备调度把新活派给一台忙着的)
-      if (!w.busy) w.hot = true;
+      w.hotMsgs = (w.hotMsgs ?? 0) + 1;
+      w.lastHotAt = Date.now();
+      /*
+       * worker 只在手上没活时才报 hot。但它往往紧跟着「done」一起到:两条消息同一轮连着派发,
+       * 这时 runOnWorker 还没来得及把 busy 放掉。忙着的时候先记下来,收尾放掉 busy 时再算热
+       * (见 runOnWorker)—— 直接丢掉的话,「热」就一直停在 0。
+       */
+      if (w.busy) {
+        w.hotPending = true;
+        return;
+      }
+      w.hot = true;
       w.onHot?.();
       return;
     }
@@ -1041,6 +1058,7 @@ function callWorker(
  */
 async function runOnWorker(w: RenderWorker, job: RenderJob2, signal?: AbortSignal): Promise<any[] | null> {
   w.hot = false;
+  w.hotPending = false;
   try {
     const entry = { ok: () => {}, fail: () => {}, timer: null, started: false };
     try {
@@ -1056,6 +1074,12 @@ async function runOnWorker(w: RenderWorker, job: RenderJob2, signal?: AbortSigna
     return await callWorker(w, { type: "post", id: ++renderJobSeq, items }, RENDER_TIMEOUT_MS, signal);
   } finally {
     w.busy = false;
+    // 忙着的时候 worker 已经报过 hot(备用页好了、手上没活):现在放手了,补上
+    if (w.hotPending && !w.dead) {
+      w.hotPending = false;
+      w.hot = true;
+      w.onHot?.();
+    }
   }
 }
 
@@ -1232,6 +1256,26 @@ function createUiRenderer(root: string, originFn: () => string) {
     }
   };
 
+  /*
+   * **巡检:永远保持热着**(用户原话「永远保持一个是热状态,才能随时响应」)。
+   *
+   * 「热」靠 worker 报 hot 维持,但有几种情形它不会再报:活失败后 worker 丢了浏览器(bakery 为空,
+   * 不会自己重开);卡片连着改几次,备用页被扔了又开、中途开失败。实测完整跑一遍端到端之后,
+   * 两台都停在「空闲、不热」,最后一次 hot 在 45 秒前。
+   * 每 2 秒看一眼:空闲却不热的那台发一次预热(没浏览器就开一个,有就换页、备好备用页,好了会报 hot)。
+   * 同一台 5 秒内不重复催。热着的时候什么都不做,不花钱。
+   */
+  const keepWarm = setInterval(() => {
+    const now = Date.now();
+    for (const w of slots) {
+      if (w.dead || w.busy || w.hot) continue;
+      if (w.warmingAt && now - w.warmingAt < 5000) continue;
+      w.warmingAt = now;
+      try { w.child.send({ type: "prewarm", url: `${originFn()}/?export=1` }, () => {}); } catch { /* 送不到的下一轮 ensure 会换掉 */ }
+    }
+  }, 2000);
+  keepWarm.unref?.();
+
   /** 挑一台:热的优先,其次空着的(还在换页 / 刚起的也行,worker 里会等备用页就绪) */
   const freeSlot = () => slots.find((w) => !w.dead && !w.busy && w.hot) ?? slots.find((w) => !w.dead && !w.busy);
 
@@ -1285,11 +1329,18 @@ function createUiRenderer(root: string, originFn: () => string) {
   return {
     run,
     prewarm: ensure,
+    /** 服务关掉时停掉巡检(vite 在同一个进程里重启时,旧的这一份不该还在往死掉的 worker 发消息) */
+    stop: () => clearInterval(keepWarm),
     status: () => ({
       workers: slots.filter((w) => !w.dead).length,
       hot: slots.filter((w) => !w.dead && w.hot && !w.busy).length,
       busy: slots.filter((w) => !w.dead && w.busy).length,
       pending: pending ? 1 : 0,
+      // 每台的明细:排查「热」为什么没回来时看它
+      detail: slots.map((w) => ({
+        pid: w.child.pid, dead: w.dead, hot: w.hot, busy: w.busy, hotPending: !!w.hotPending,
+        hotMsgs: w.hotMsgs ?? 0, lastHotAgoMs: w.lastHotAt ? Date.now() - w.lastHotAt : null,
+      })),
     }),
   };
 }
@@ -1312,6 +1363,7 @@ function invalidateWorkers() {
  */
 function registerEditorSide(server: ViteDevServer, root: string) {
   const ui = createUiRenderer(root, () => originOf(server));
+  server.httpServer?.on("close", () => ui.stop());
   server.httpServer?.once("listening", () => {
     // 一开机就把两台热备起好 —— 等用户第一次拖动才开机,他要多等几秒
     setTimeout(() => { try { ui.prewarm(); } catch { /* 起不来就等第一次用的时候再起 */ } }, 1000);
