@@ -1,7 +1,7 @@
 /**
  * 给时间轴上的每一个 clip 各烘一张定格图 → out/card-shots/NN-<cardId>.png,再拼一张总览图。
  *
- *   node scripts/card-shots.mjs                       # 自己起一份 vite(端口 5199)
+ *   node scripts/card-shots.mjs                       # 自己起一份 vite(端口 5245,不写全局 port.json)
  *   node scripts/card-shots.mjs --url http://127.0.0.1:5190   # 用现成的开发服务器
  *   node scripts/card-shots.mjs --at 0.75 --bg "#0b0e14"
  *
@@ -18,6 +18,7 @@
 import puppeteer from "puppeteer";
 import fs from "node:fs/promises";
 import path from "node:path";
+import os from "node:os";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
@@ -29,14 +30,15 @@ const arg = (name, fallback) => {
 };
 
 const OUT = path.resolve(ROOT, arg("out", path.join("out", "card-shots")));
-const PORT = Number(arg("port", "5199"));
+// 5199 以前分给过别的会话的 dev server;挑一个没人用的
+const PORT = Number(arg("port", "5245"));
 /** 取 clip 内的相对位置(0~1);入场动画一般 1 秒内走完,0.75 处基本都是稳态 */
 const AT = Number(arg("at", "0.75"));
 /** 走到目标时刻的步长(秒)。步子太大 Motion 的 JS 动画会跳,太小纯粹是慢 */
 const STEP = Number(arg("step", String(1 / 15)));
 const BG = arg("bg", "#0b0e14");
-const CHROME =
-  process.env.PC_CHROME_PATH || "/opt/pw-browsers/chromium-1194/chrome-linux/chrome";
+// 不指定就用 puppeteer 自带的 Chrome(原来写死的是云端 Linux 沙箱的路径,本机上起不来)
+const CHROME = process.env.PC_CHROME_PATH || undefined;
 
 const log = (...a) => console.log("[card-shots]", ...a);
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -57,9 +59,17 @@ async function waitHttp(target, ms) {
 let vite = null;
 async function startVite() {
   const bin = path.join(ROOT, "node_modules", "vite", "bin", "vite.js");
+  /*
+   * TEMP / TMP 指到一个单独的目录再起:dev server 一起来就把自己的端口写进 %TEMP%\promptcut\port.json,
+   * 没指定端口的 MCP 客户端照它去连 —— 不隔开的话,跑一次截图就把用户正在用的编辑台的 AI 连接指歪了
+   * (见 docs/compare-pitfalls.md 第 8 条)。
+   */
+  const tmp = path.join(os.tmpdir(), "promptcut-card-shots");
+  await fs.mkdir(tmp, { recursive: true });
   vite = spawn(process.execPath, [bin, "--port", String(PORT), "--strictPort", "--host", "127.0.0.1"], {
     cwd: ROOT,
     stdio: ["ignore", "ignore", "inherit"],
+    env: { ...process.env, TEMP: tmp, TMP: tmp },
   });
   const target = `http://127.0.0.1:${PORT}/`;
   await waitHttp(target, 90000);
