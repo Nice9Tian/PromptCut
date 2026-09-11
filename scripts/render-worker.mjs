@@ -81,19 +81,51 @@ async function bakeryFor(url) {
     bakery = await openBakery({ url });
     return bakery;
   }
-  await bakery.reset(null, url);
+  /*
+   * 有备用页就不导航:把这趟的项目直接灌进一个提前开好的全新空页(见 export-frames 的 resetWith)。
+   * 拿不到项目(地址里没有 timeline、取不回来)就退回老路 —— 新开 page 导航过去。
+   */
+  const project = await projectOf(url).catch(() => null);
+  if (project) await bakery.resetWith(project, emptyUrlOf(url));
+  else await bakery.reset(null, url);
   return bakery;
+}
+
+/** 同一个源上的空项目导出页:备用页停在这里,什么卡都不挂 */
+function emptyUrlOf(url) {
+  const empty = { width: 1920, height: 1080, fps: 30, duration: 1, clips: [] };
+  return `${new URL(url).origin}/?export=1&timeline=${encodeURIComponent('data:application/json,' + encodeURIComponent(JSON.stringify(empty)))}`;
+}
+
+/** 导出页地址里 timeline 参数指向的项目 JSON(data: 直接解;/@export/... 之类的相对地址向同一个源取) */
+async function projectOf(url) {
+  const u = new URL(url);
+  const tl = u.searchParams.get('timeline');
+  if (!tl) return null;
+  if (tl.startsWith('data:')) {
+    const comma = tl.indexOf(',');
+    return JSON.parse(decodeURIComponent(tl.slice(comma + 1)));
+  }
+  const res = await fetch(new URL(tl, u.origin));
+  if (!res.ok) throw new Error(`取项目失败 HTTP ${res.status}`);
+  return await res.json();
+}
+
+/** 趁闲把下一趟要用的备用页开好。不等它:下一趟 resetWith 会自己等 */
+function preloadNext(url) {
+  try { bakery?.preload(emptyUrlOf(url)); } catch { /* 地址不合法就算了,下一趟走老路 */ }
 }
 
 async function runJob(opts) {
   if (jobsDone >= MAX_JOBS) await dropBakery();
-  const b = await bakeryFor(opts.url);
   try {
+    const b = await bakeryFor(opts.url);
     const baked = await bakeFrames(b, opts);
     jobsDone++;
+    preloadNext(opts.url);
     return baked;
   } catch (e) {
-    // 见「三条自保规矩」第 1 条:这个页面已经不可信了
+    // 见「三条自保规矩」第 1 条:这个页面已经不可信了(备用页随浏览器一起关)
     await dropBakery();
     throw e;
   }
@@ -111,7 +143,7 @@ process.on('message', (msg) => {
    * 预热用的地址随便给一个导出页就行:真正的活来了会 reset 到它自己的项目地址上。
    */
   if (msg && msg.type === 'prewarm') {
-    chain = chain.then(() => bakeryFor(msg.url).then(() => {}, () => {}));
+    chain = chain.then(() => bakeryFor(msg.url).then(() => preloadNext(msg.url), () => {}));
     return;
   }
   if (!msg || msg.type !== 'bake') return;

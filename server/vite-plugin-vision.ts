@@ -1257,7 +1257,7 @@ export function visionPlugin(): Plugin {
         req.on("end", async () => {
           if (over) return;
           try {
-            const { project, t, clipId } = JSON.parse(body || "{}");
+            const { project, t, clipId, times } = JSON.parse(body || "{}");
             if (!project || !Array.isArray(project.tracks)) {
               return sendJson(res, 400, { ok: false, error: "缺少 project" });
             }
@@ -1296,6 +1296,39 @@ export function visionPlugin(): Plugin {
             }
 
             notes.push("画面里的灰色棋盘格是**透明**,不是画面内容 —— 那里什么都没画。卡片盖住的地方看不到格子。") ;
+            /*
+             * times:一次看多个时刻,**合成一趟渲**(renderFrames:从第 0 帧顺推,沿途截这几帧)。
+             *
+             * 以前前端逐个时刻调本接口,每张都从第 0 帧重推 —— 看 8 个时刻就推 8 遍。
+             * 推进才是大头:一帧约 20ms,第 19 秒就是 570 帧;而准备一趟(常驻 worker 里换页)只要约 0.3 秒。
+             * 一趟推到最晚那个时刻,成本从「各时刻帧数之和」降到「最大帧数」。
+             * 截出来的画面和逐张渲逐字节相同:单张走的 frames `F-F` 同样是从第 0 帧推到 F。
+             */
+            const list = Array.isArray(times) ? times.map(Number).filter(Number.isFinite).slice(0, 10) : [];
+            if (list.length) {
+              const maxFrame = Math.round(lastT * fpsOf);
+              const clamped = list.map((x) => Math.min(Math.max(0, x), lastT));
+              if (clamped.some((x, i) => x !== list[i])) {
+                notes.push(`有的时刻超出了片子的长度(${target.duration} 秒),按最后一帧 ${lastT.toFixed(2)} 秒渲。`);
+              }
+              const shots = await enqueue(() => renderFrames(root, originOf(server), target, clamped, notes, 1), 1, 25000);
+              const frames: any[] = [];
+              const images: any[] = [];
+              clamped.forEach((x, i) => {
+                const buf = shots.get(Math.min(maxFrame, Math.max(0, Math.round(x * fpsOf))));
+                if (!buf) return;
+                const { png, width, height } = shrink(PNG.sync.read(buf));
+                frames.push({ t: x, clipId: clipId || null, width, height });
+                images.push({ mime: "image/png", base64: PNG.sync.write(png).toString("base64"), label: `t=${list[i]}s` });
+              });
+              return sendJson(res, 200, {
+                ok: true,
+                frames,
+                // 素材层按帧各抽各的,取不到文件时每一帧都会记一条同样的话 —— 去重
+                note: [`${images.length} 张画面按 times 的顺序排列,每张标着时刻。`, ...new Set(notes)].join(" "),
+                __images: images,
+              });
+            }
             /*
              * **前台优先级(1),不是默认的 0。**
              *

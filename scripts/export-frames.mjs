@@ -335,6 +335,36 @@ export async function openBakery(opts = {}) {
       Object.assign(bakery, s);
       await old.close();
     },
+    /**
+     * 备用页:提前开好一个**全新的**、停在空项目上的 page。来活时 resetWith 把项目原地灌进去。
+     *
+     * 为什么值得:一趟的准备里,新开 page + 导航 + 加载整张模块图 + 等就绪约 310 ms,而把项目灌进
+     * 一个已经就绪的新页只要 3~4 ms(实测,rank-bars / mu-number-ticker / particles)。
+     * 为什么不破坏确定性:备用页和现开的页一样是全新的、从没推过帧,灌项目走的是 loadProject
+     * 这条「只在全新 page 上用」的路 —— 实测两条路渲同一帧逐字节相同(3 张卡 × 3 次,9/9)。
+     */
+    spare: null,
+    preload(emptyUrl) {
+      if (!bakery.spare) {
+        bakery.spare = newSession(browser, emptyUrl);
+        bakery.spare.catch(() => {}); // 备用页开失败不报,resetWith 会现开一个兜底
+      }
+      return bakery.spare;
+    },
+    /** 用备用页(没有就现开一个空项目页)换一趟新的,再把 project 灌进去 */
+    async resetWith(project, emptyUrl) {
+      const old = bakery.page;
+      let s = null;
+      if (bakery.spare) {
+        const p = bakery.spare;
+        bakery.spare = null;
+        s = await p.catch(() => null);
+      }
+      if (!s) s = await newSession(browser, emptyUrl);
+      await s.loadProject(project);
+      Object.assign(bakery, s);
+      await old.close();
+    },
     /** 旧管线里「放开虚拟时间」的接口。这里没有虚拟时间,保留成空操作,老调用方不用改 */
     releaseClock: async () => {},
     close: () => browser.close(),
