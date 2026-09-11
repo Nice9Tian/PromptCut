@@ -332,8 +332,8 @@ export function cardOpacityAt(clip: Clip, t: number): number {
 export function videoLayersAt(
   p: Project,
   t: number,
-): Array<{ clip: TrackClip; media: MediaAsset; opacity: number }> {
-  const layers: Array<{ clip: TrackClip; media: MediaAsset; opacity: number }> = [];
+): Array<{ trackId: string; clip: TrackClip; media: MediaAsset; opacity: number }> {
+  const layers: Array<{ trackId: string; clip: TrackClip; media: MediaAsset; opacity: number }> = [];
   // 和 flattenOverlay 一个口径:倒着走,产出的最后一个就是最上层(= 时间轴最上面那条序列)
   for (const tr of [...p.tracks].reverse()) {
     if (tr.hidden) continue;
@@ -343,10 +343,47 @@ export function videoLayersAt(
       if (!media || media.kind === "audio") continue;
       const opacity = opacityAt(c, t);
       if (opacity <= 0) continue;
-      layers.push({ clip: c, media, opacity });
+      // trackId:预览按序列挂播放器(每条序列两个 <video> 轮换),要靠它把这一段对到它那一对上
+      layers.push({ trackId: tr.id, clip: c, media, opacity });
     }
   }
   return layers;
+}
+
+/**
+ * 每条序列上**严格在 t 之后**开始的第一段画面(视频/图片),口径和 videoLayersAt 一样:
+ * 跳过隐藏序列、音频段、卡片段、找不到素材的段,顺序也是「最后一个 = 最上层」。
+ * 这条序列后面没有画面了就不出条目。
+ *
+ * # 为什么要知道「下一段」
+ *
+ * 预览每切一段视频,原来是新建一个 <video> 再从文件中段 seek。素材每 5 秒一个关键帧,
+ * 中段 seek 要先解出最多 150 帧才出画,切一次就黑/卡一两百毫秒;真实项目 88.7 秒里切了 25 次,
+ * 而且同一个文件内部的切换在原片里**没有一次是连续的**,光复用播放器也省不掉那次 seek。
+ * 所以预览每条序列备两个播放器,离下一段起点还有一点时间时就把它装进空着的那个、
+ * seek 到起点停好(见 editor/preview/MediaLayers.tsx)—— 这里就是回答「下一段是谁」。
+ *
+ * 不看不透明度:下一段开头若是淡入,起点那一刻是 0,但要提前装好的恰恰是它。
+ */
+export function nextVideoLayerAfter(
+  p: Project,
+  t: number,
+): Array<{ trackId: string; clip: TrackClip; media: MediaAsset }> {
+  const out: Array<{ trackId: string; clip: TrackClip; media: MediaAsset }> = [];
+  for (const tr of [...p.tracks].reverse()) {
+    if (tr.hidden) continue;
+    let best: { clip: TrackClip; media: MediaAsset } | null = null;
+    // 不假设 clips 已按 start 排好:读进来的老文件未必排过,找最早的那段就是
+    for (const c of tr.clips) {
+      if (!c.mediaId || c.start <= t) continue;
+      if (best && c.start >= best.clip.start) continue;
+      const media = p.media.find((m) => m.id === c.mediaId);
+      if (!media || media.kind === "audio") continue;
+      best = { clip: c, media };
+    }
+    if (best) out.push({ trackId: tr.id, ...best });
+  }
+  return out;
 }
 
 /** 某时刻该出声的所有音频段(opacity 当音量用) */

@@ -39,6 +39,16 @@ export const IN_SYNC_SEC = 0.04;
 export const MAX_RATE_SKEW = 0.1;
 /** 暂停时对齐得准一点 —— 这时候 seek 不跟播放抢,而且用户在逐帧看 */
 export const PAUSED_SEEK_SEC = 0.03;
+/**
+ * 手按着播放头拖的时候,两次 seek 之间至少隔这么久。
+ *
+ * 原来暂停时只要差过 0.03s 就立刻 seek,拖动时鼠标每动一下就是一次 —— 3 秒拖下来实测 154 次,
+ * 每次都「从关键帧解到目标」,解码器一直在推翻重来。seeking 期间本来就不发新指令,
+ * 这一条再管住「seek 很快落定」的那一头(同一个 GOP 里往后挪几乎不要钱):
+ * 50ms 一次,3 秒最多 60 次。没发出去的那次由调用方按 retryInMs 补上,不会丢。
+ * 松手之后 scrubbing 变回 false,立刻按 0.03s 精确对齐。
+ */
+export const SCRUB_SEEK_MIN_MS = 50;
 
 export interface SyncInput {
   /** 元素当前时间,null 表示还没有元数据、读不出来 */
@@ -51,6 +61,8 @@ export interface SyncInput {
   target: number;
   /** 时间轴在播放中 */
   playing: boolean;
+  /** 手正按着播放头拖(见 timeline/useScrub.ts 的 isScrubbing);只影响暂停时 seek 的疏密 */
+  scrubbing?: boolean;
   /** 现在几点(ms),用来算冷却 */
   now: number;
   /** 上一次由我们发起的纠偏 seek 是什么时候,没有过就是 0 */
@@ -66,17 +78,25 @@ export interface SyncPlan {
   play: boolean;
   /** 要不要调 pause() */
   pause: boolean;
+  /**
+   * 这次该 seek 却没发(拖动时离上一次太近),过这么多毫秒再判一次;null 表示不用补。
+   * 调用方必须真的补:拖动停住以后不会再有新的渲染来触发同步,不补画面就停在旧的一帧。
+   */
+  retryInMs: number | null;
 }
 
-const NOTHING: SyncPlan = { seekTo: null, rate: null, play: false, pause: false };
+const NOTHING: SyncPlan = { seekTo: null, rate: null, play: false, pause: false, retryInMs: null };
 
 /**
  * 这一帧该对元素做什么。
  *
  * 调用方拿到结果照做即可;`seekTo` 非空时要把 `lastSeekAt` 更新成 `now`。
+ *
+ * seeking 期间来的新位置这里一律不理,所以调用方还要在 `seeked` 时拿**最新的**目标再调一次 ——
+ * 不然最后一次拖动恰好落在 seek 中间时,最终位置永远补不上(MediaLayers.tsx 的 driveMedia)。
  */
 export function planSync(input: SyncInput): SyncPlan {
-  const { elTime, seeking, paused, target, playing, now, lastSeekAt } = input;
+  const { elTime, seeking, paused, target, playing, scrubbing, now, lastSeekAt } = input;
   if (!Number.isFinite(target) || target < 0 || !Number.isFinite(elTime)) return NOTHING;
 
   // seek 还没落定时什么都别做。这一条是断开自持循环的关键:seeking 期间 currentTime
@@ -88,7 +108,9 @@ export function planSync(input: SyncInput): SyncPlan {
     // 暂停:速度先还原,免得下次起播带着上次的微调
     const rate = 1;
     const needSeek = Math.abs(elTime - target) > PAUSED_SEEK_SEC;
-    return { seekTo: needSeek ? target : null, rate, play: false, pause: !paused };
+    const wait = scrubbing ? SCRUB_SEEK_MIN_MS - (now - lastSeekAt) : 0;
+    if (needSeek && wait > 0) return { seekTo: null, rate, play: false, pause: !paused, retryInMs: wait };
+    return { seekTo: needSeek ? target : null, rate, play: false, pause: !paused, retryInMs: null };
   }
 
   const drift = target - elTime; // 正数 = 视频落后于播放头
@@ -98,10 +120,10 @@ export function planSync(input: SyncInput): SyncPlan {
     // 真脱节了。但冷却没过就先忍着 —— 上一次 seek 的解码可能还在路上,
     // 这时候再发一次只会把它推翻重来,这正是原来那个循环的形状。
     if (now - lastSeekAt < SEEK_COOLDOWN_MS) return { ...NOTHING, rate: 1, play: paused };
-    return { seekTo: target, rate: 1, play: paused, pause: false };
+    return { seekTo: target, rate: 1, play: paused, pause: false, retryInMs: null };
   }
 
-  if (off <= IN_SYNC_SEC) return { seekTo: null, rate: 1, play: paused, pause: false };
+  if (off <= IN_SYNC_SEC) return { seekTo: null, rate: 1, play: paused, pause: false, retryInMs: null };
 
   /*
    * 中等偏差:变速追。
@@ -112,5 +134,123 @@ export function planSync(input: SyncInput): SyncPlan {
    */
   const skew = (drift / HARD_SEEK_SEC) * MAX_RATE_SKEW;
   const rate = 1 + Math.max(-MAX_RATE_SKEW, Math.min(MAX_RATE_SKEW, skew));
-  return { seekTo: null, rate, play: paused, pause: false };
+  return { seekTo: null, rate, play: paused, pause: false, retryInMs: null };
+}
+
+/*
+ * ────────────────────────────── 双缓冲槽位 ──────────────────────────────
+ *
+ * 每条序列固定两个 <video>(槽位 0 / 1):一个放当前段,另一个提前装好下一段。
+ *
+ * 为什么:原来每切一段就新建一个播放器、再从文件中段 seek,关键帧 5 秒一个,切一次要解上百帧
+ * 才出画。真实项目 88.7 秒切 25 次,改前实测交界处出画延迟中位数 200ms 左右。同一个文件内部的
+ * 切换在原片里没有一次是连续的,所以光「按素材复用播放器」没用,那次 seek 省不掉 ——
+ * 只能**提前付**:离下一段起点还有 PREROLL_SEC 时,把它装进空着的槽位、seek 到起点停好,
+ * 等 requestVideoFrameCallback 说「这一帧画出来了」;到了交界只换显示、让它接着放。
+ *
+ * 下面是纯函数:给它两个槽位眼下装着什么、当前段和下一段是谁,它说每个槽位该装什么、
+ * 哪个在播、哪个在备、这一帧显示哪个。执行在 MediaLayers.tsx。
+ */
+
+/** 离下一段起点还剩这么久时开始提前装(秒)。实测 1080p、5 秒关键帧的中段 seek 落定要 70~600ms */
+export const PREROLL_SEC = 1;
+/**
+ * 新一段迟迟出不了画(没来得及提前装:片段比 PREROLL_SEC 还短、刚在播放中跳了位置)时,
+ * 最多让上一段的最后一帧顶这么久;过了就硬切,别让画面一直停在上一段。
+ */
+export const NOT_READY_GRACE_SEC = 0.5;
+/** 判「首尾相接」的容差:上一段的 end 和这一段的 start 差不到这么多,才能拿上一段的末帧顶班 */
+const TOUCH_SEC = 0.05;
+
+/** 槽位能装的一段:只有视频段进槽位,图片段直接画 <img> */
+export interface SlotClip {
+  id: string;
+  url: string;
+  start: number;
+  end: number;
+  /** 素材内起点(mediaOffset) */
+  offset: number;
+}
+
+export interface SlotState {
+  /** 这个槽位眼下装着哪一段;还没装过是 null */
+  clip: SlotClip | null;
+  /** 装的这一段已经有一帧画出来了(requestVideoFrameCallback 回调过、时刻落在这一段的素材区间里) */
+  ready: boolean;
+}
+
+export interface SlotsInput {
+  slots: readonly SlotState[];
+  /** 上一帧显示的是哪个槽位,没显示是 null */
+  shown: number | null;
+  /** 这条序列此刻的视频段 */
+  cur: SlotClip | null;
+  /** 这条序列 t 之后的第一段视频(kernel/project.ts 的 nextVideoLayerAfter) */
+  next: SlotClip | null;
+  t: number;
+  playing: boolean;
+}
+
+export interface SlotsPlan {
+  /** 每个槽位该装哪一段;和 slots[i].clip 一样就是不动,null 表示从没装过 */
+  load: (SlotClip | null)[];
+  /** 放当前段、跟着播放头走的槽位 */
+  active: number | null;
+  /** 提前装好下一段、停在起点的槽位 */
+  preload: number | null;
+  /** 这一帧显示哪个槽位 */
+  shown: number | null;
+}
+
+export function planSlots(input: SlotsInput): SlotsPlan {
+  const { slots, shown, cur, next, t, playing } = input;
+  const load = slots.map((s) => s.clip);
+  const holding = (id: string) => load.findIndex((c) => c?.id === id);
+  const sameUrl = (url: string) => {
+    const i = load.findIndex((c) => c?.url === url);
+    return i < 0 ? null : i;
+  };
+
+  // ① 当前段放哪个槽位
+  let active: number | null = null;
+  if (cur) {
+    active = holding(cur.id);
+    if (active < 0) {
+      if (!playing) {
+        // 暂停时随手拖到哪算哪:只用正在显示的那个,和原来一个元素的行为一样。
+        // 没显示着的就挑装着同一个文件的(不用重新加载),都没有就 0 号
+        active = shown ?? sameUrl(cur.url) ?? 0;
+      } else {
+        // 播放中却没提前装好:装进另一个,正在显示的那个先拿末帧顶着(见 ③)
+        active = shown !== null ? 1 - shown : (sameUrl(cur.url) ?? 0);
+      }
+      load[active] = cur;
+    }
+  }
+
+  // ② 这一帧显示哪个
+  let show: number | null = null;
+  if (cur && active !== null) {
+    const ready = slots[active].clip?.id === cur.id && slots[active].ready;
+    const held = shown !== null && shown !== active ? slots[shown].clip : null;
+    if (ready || !playing || t - cur.start >= NOT_READY_GRACE_SEC) show = active;
+    // 新的一段还没出画:首尾相接的话,让上一段停在最后一帧顶一下,比闪黑或闪一帧别处的旧画面好
+    else if (held && Math.abs(cur.start - held.end) < TOUCH_SEC) show = shown;
+    // 接不上(中间有空档、或者是跳过来的):和原来新建播放器一样先空着,等它出画
+    else show = null;
+  }
+
+  // ③ 下一段提前装进另一个槽位 —— 只在播放时做。暂停时拖来拖去,预备槽位跟着来回 seek 只会让
+  //    两个解码器一起推翻重来。正在顶班的那个不能拿去装,等新的一段出画再说
+  let preload: number | null = null;
+  if (playing && next && next.start > t && next.start - t <= PREROLL_SEC) {
+    let p = holding(next.id);
+    if (p < 0) p = active !== null ? 1 - active : (sameUrl(next.url) ?? 0);
+    if (p !== active && p !== show) {
+      load[p] = next;
+      preload = p;
+    }
+  }
+
+  return { load, active, preload, shown: show };
 }

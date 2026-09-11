@@ -101,12 +101,40 @@ export function useScrub() {
     }
     actions.seek(snap(secAt(e.clientX) + offset, e.altKey));
 
+    /*
+     * pointermove 只记「想去哪」,每个 animation frame 最多交一次给 store。
+     *
+     * 每交一次,整条时间轴、舞台、素材层都要跟着重渲、视频还要 seek;鼠标事件比屏幕刷新密的时候
+     * (高回报率鼠标、事件在主线程堆着),一帧里交好几次,前面几次画出来之前就作废了。
+     * 卡片层照样每帧跟着走;视频由素材层自己再节流(mediaSync 的 SCRUB_SEEK_MIN_MS),
+     * 拖动时允许比播放头晚一两帧,松手时补齐。
+     */
+    let pending: number | null = null;
+    let raf = 0;
+    const flush = () => {
+      raf = 0;
+      if (pending === null) return;
+      actions.seek(pending);
+      pending = null;
+    };
     const onMove = (ev: PointerEvent) => {
-      actions.seek(snap(secAt(ev.clientX) + offset, ev.altKey));
+      pending = snap(secAt(ev.clientX) + offset, ev.altKey);
+      if (!raf) raf = requestAnimationFrame(flush);
     };
     // 手按下了 —— 从这一刻起前台烘焙让路,直到松手。收尾挂在 window 上(见上面 isScrubbing)
     beginScrub(e.pointerId);
     const onUp = (ev: PointerEvent) => {
+      /*
+       * 松手落在精确位置:按松手处的指针交最后一次,还没交出去的那一帧就不用交了(被它盖掉)。
+       * pointercancel 的坐标不可信(可能是 0),那种情况只交已经记下的。
+       * 和 store 里已经一样就不交:每交一次整个编辑器都要重渲一遍,松手时多交一次就多等一遍。
+       * 视频那边不靠这里 —— isScrubbing 变回 false 时素材层自己按 0.03s 精确对齐一次。
+       */
+      if (raf) cancelAnimationFrame(raf);
+      raf = 0;
+      const final = ev.type === "pointerup" ? snap(secAt(ev.clientX) + offset, ev.altKey) : pending;
+      pending = null;
+      if (final !== null && final !== getState().t) actions.seek(final);
       endScrub(ev.pointerId);
       el.removeEventListener("pointermove", onMove);
       el.removeEventListener("pointerup", onUp);
