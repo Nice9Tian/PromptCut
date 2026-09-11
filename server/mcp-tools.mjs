@@ -80,7 +80,7 @@ export const tools = [
   },
   {
     name: "update_clip",
-    description: "更新某张卡片,可修改参数、时段、更换卡片类型(cardId),以及不透明度 / 淡入淡出 / 标签 / 所在序列。**已经在时间轴上的卡要改就用它**，不要 remove_clip 再 add_clip 重建。opacity 0~1(遮到人又挪不开时降它);fadeIn/fadeOut 是秒;trackId 换序列——**时间轴上靠上的序列盖住靠下的**(get_project 里 tracks[0] 就是最上面那条、也是最上层),要让一张卡压在另一张上面就把它挪到更靠上的序列。位置、尺寸、缩放不在这里改,用 set_rect / set_position / align / nudge。**挂着转场的片段**(list_transitions 看得到)相对时间关系是锁住的:只给 start 的整组平移可以(同组一起走),改时长 / 换序列 / 手改转场那一侧的 fadeIn·fadeOut 会被拒,要改先 remove_transition。返回 `look`（去看这张卡真实画面的 see_frames 调用）和 `timeline`（当前全部 clip 的 id、起止一览，外加 `duration` / `contentEnd` —— 对不上就用 set_project_meta 修）。",
+    description: "更新某张卡片,可修改参数、时段、更换卡片类型(cardId),以及不透明度 / 淡入淡出 / 标签 / 所在序列。**已经在时间轴上的卡要改就用它**，不要 remove_clip 再 add_clip 重建。opacity 0~1(遮到人又挪不开时降它);fadeIn/fadeOut 是秒;trackId 换序列——**时间轴上靠上的序列盖住靠下的**(get_project 里 tracks[0] 就是最上面那条、也是最上层),要让一张卡压在另一张上面就把它挪到更靠上的序列。位置、尺寸、缩放不在这里改,用 set_rect / set_position / align / nudge;声音音量也不在这里,用 set_clip_volume(传 volume 会被拒)。**挂着转场的片段**(list_transitions 看得到)相对时间关系是锁住的:只给 start 的整组平移可以(同组一起走),改时长 / 换序列 / 手改转场那一侧的 fadeIn·fadeOut 会被拒,要改先 remove_transition。返回 `look`（去看这张卡真实画面的 see_frames 调用）和 `timeline`（当前全部 clip 的 id、起止一览，外加 `duration` / `contentEnd` —— 对不上就用 set_project_meta 修）。",
     inputSchema: {
       type: "object",
       properties: {
@@ -265,7 +265,7 @@ export const tools = [
   },
   {
     name: "set_clip",
-    description: "按约定封装改一张卡:把 get_clip 拿到的对象改好后整份传回来(也可以只传要改的段)。可写:card.id(换卡)、params(全量)或 parts 里各部件的 params、time.start / time.end、frame.local(x / y / w / h / anchor / scale / rotate,以及三维的 rotateX / rotateY / translateZ —— 三维要先 set_camera3d 打开才有透视,而且只对卡片段生效,素材段会被拒;或 null 铺满)、blend.opacity / fadeIn / fadeOut。只写有差异的段,任一处不合法整份不写;frame.world、motion、card.lifecycle 是只读的,传了会被忽略。返回改了哪些段、新的封装和 look。",
+    description: "按约定封装改一张卡:把 get_clip 拿到的对象改好后整份传回来(也可以只传要改的段)。可写:card.id(换卡)、params(全量)或 parts 里各部件的 params、time.start / time.end、frame.local(x / y / w / h / anchor / scale / rotate,以及三维的 rotateX / rotateY / translateZ —— 三维要先 set_camera3d 打开才有透视,而且只对卡片段生效,素材段会被拒;或 null 铺满)、blend.opacity / fadeIn / fadeOut(声音音量不在 blend 里,用 set_clip_volume)。只写有差异的段,任一处不合法整份不写;frame.world、motion、card.lifecycle 是只读的,传了会被忽略。返回改了哪些段、新的封装和 look。",
     inputSchema: {
       type: "object",
       properties: {

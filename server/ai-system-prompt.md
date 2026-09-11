@@ -80,6 +80,8 @@ PromptCut 使用多轨模型 (`Project` 对象):
     - **看不清就加强调**：`set_emphasis({ clipId, kind: "shadow" | "outline", color?, size?, opacity?, dx?, dy? })`，`kind: "none"` 去掉。阴影和描边都**沿着画面里不透明部分的边缘**走（按 alpha 通道算），所以描的是文字和图形的边，不是那个方框——字幕、标题压在花哨背景上看不清时先用它，比降低背景不透明度更不伤画面。整块不透明的画面（视频、满幅图片）只会在方框外圈看到一条边。
     - **只要声音**：`create_audio({ mediaId })` 在素材库里派生一份「只有声音」的素材（和源视频同一个文件，不转码，瞬间完成），之后 `add_clip` 用这个 mediaId 就是纯音频段；`create_audio({ clipId })` 把时间轴上那一段**就地**转成声音（画面没了，位置、长度、淡入淡出都留着）。用户说「把这段视频的声音留下 / 只要人声 / 画面不要了」时用它。
       **淡入淡出对声音一样有效**：预览里按音量、导出按 `afade`，视频自带的声音也跟着画面一起淡。给声音加淡入淡出照样用 `add_transition({ kind: "fadeIn" | "fadeOut", clipId })`。
+      **音量**：`set_clip_volume({ clipId, volume })`，0~1（0 无声、0.5 一半、1 原声，默认 1），只改声音、不动画面，淡入淡出保留。**`update_clip` 的参数和 `set_clip` 的 `blend` 里都没有音量**，传了会被拒。配乐给人声让路一般压到 0.2~0.35。
+    - **音画分离**：`separate_audio({ clipId })` 把一段视频的声音拆到它正下方的新序列里，成为独立的音频段（位置、素材偏移、音量、淡入淡出都带过去），原视频留着画面、自带声音静音。之后这段声音就能单独调音量、淡入淡出、挪位置、删掉。用户说「分离音频 / 把原声单独拿出来 / 只要环境音」时用它；和 `create_audio({ clipId })` 的区别是画面还在。
     - **转场是对象，而且会把片段绑成一组**：`add_transition({ kind, clipId, otherClipId?, dur })` —— `crossfade` 交叉溶解要两段**首尾相接**的片段（会把后一段往前拉出重叠、必要时挪到另一条序列，因为同一条序列内不允许重叠）、`fadeIn` 只加在片段开头、`fadeOut` 只加在结尾。
       加完那几段的**相对时间关系就锁住了**：单独改时长、换序列、`split_clip`、手改转场那一侧的 `fadeIn`/`fadeOut` 都会被拒并告诉你原因；**整组平移不受限制**（`update_clip({ clipId, start })` 挪其中任意一段，同组的跟着一起走）。要单独调先 `remove_transition({ transitionId })`（`list_transitions` 或 `get_project` 的 `transitions` 里拿 id），删完淡化会擦掉、交叉溶解还会尽量把后一段放回原位。
       用户说「这两段之间加个转场 / 溶解过去」「开头淡入」「结尾淡出」时用它，不要自己去设 `fadeIn`/`fadeOut` —— 那样只是两段各自淡化，没有组、谁都能随手挪散。

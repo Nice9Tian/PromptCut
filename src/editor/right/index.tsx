@@ -13,7 +13,7 @@ import { connectMcpExecutor, EditorApi } from "../../ai/mcpExecutor";
 import { prerenderUrl } from "../prerender";
 import { getState, actions } from "../../store/project";
 import { allCards, getCard } from "../../kernel/registry";
-import { applyEnvelope, assertNo3dOnMedia, envelopeOf, isComposite } from "../../kernel/envelope";
+import { applyEnvelope, assertNo3dOnMedia, envelopeOf, isComposite, rejectAudioVolumeKeys } from "../../kernel/envelope";
 import { addPart as addPartToTree, movePart as movePartInTree, removePart as removePartFromTree, updatePart as updatePartInTree, validatePartTree } from "../../kernel/parts";
 import { allParts, getPart } from "../../parts/registry";
 import { COMPOSITE_CARD_ID } from "../../cards/native/composite";
@@ -360,6 +360,7 @@ export function RightPanel() {
         return { ...clip, look: lookHint(clip.id), timeline: timelineDigest(getState().project) };
       },
       updateClip: (args) => {
+        rejectAudioVolumeKeys(args, "update_clip");
         if (args.params || args.cardId !== undefined) {
           const hit = findClip(getState().project, args.clipId);
           if (!hit) throw new Error(`找不到 clip ${args.clipId}`);

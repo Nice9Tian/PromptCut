@@ -10,7 +10,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { envelopeOf, applyEnvelope, ENVELOPE_SCHEMA, describeLifecycle } from "./envelope.ts";
+import { envelopeOf, applyEnvelope, ENVELOPE_SCHEMA, describeLifecycle, rejectAudioVolumeKeys } from "./envelope.ts";
 
 const STAGE = { width: 1920, height: 1080 };
 
@@ -105,6 +105,23 @@ test("写:原样传回去什么都不写;只改一段就只写那一段", () => 
   const rep = applyEnvelope(project(clip), "c1", edited, card, STAGE, r1.writer, () => card);
   assert.deepEqual(rep.changed, ["time", "blend"]);
   assert.deepEqual(r1.calls, [["time", "c1", { start: 2.4, end: 3.6 }], ["blend", "c1", { fadeOut: 0.4 }]]);
+});
+
+test("写:blend 里塞音量当场拒并指向 set_clip_volume,一处都不写(以前回 changed: [] 像是成功了)", () => {
+  const clip = clipOf();
+  const r = recorder();
+  assert.throws(
+    () => applyEnvelope(project(clip), "c1", { blend: { volume: 0.3, fadeOut: 0.4 } }, card, STAGE, r.writer, () => card),
+    /set_clip_volume/,
+  );
+  assert.equal(r.calls.length, 0);
+});
+
+test("update_clip 的参数:volume / audioVolume / gain 拒掉并指路,其余参数照常放行", () => {
+  assert.throws(() => rejectAudioVolumeKeys({ clipId: "c1", volume: "0.3" }, "update_clip"), /update_clip.*set_clip_volume/);
+  assert.throws(() => rejectAudioVolumeKeys({ clipId: "c1", audioVolume: 0.5 }, "update_clip"), /audioVolume/);
+  assert.doesNotThrow(() => rejectAudioVolumeKeys({ clipId: "c1", opacity: 0.5, fadeIn: 1 }, "update_clip"));
+  assert.doesNotThrow(() => rejectAudioVolumeKeys(undefined, "update_clip"));
 });
 
 test("写:改 parts 里的参数等于改 params;两边都给以 params 为准", () => {

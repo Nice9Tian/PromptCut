@@ -251,6 +251,20 @@ export interface ApplyReport {
 }
 
 const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
+
+/**
+ * 声音音量只有 set_clip_volume 一个入口。Agent 找不到它时会往 update_clip 的参数、set_clip 的 blend 里塞
+ * volume —— 以前这两处都静默丢掉还报成功(update_clip 回 ok、set_clip 回 changed: []),它得来回试好几轮
+ * 才敢说「没这功能」。现在当场拒掉并指路。
+ */
+const AUDIO_VOLUME_KEYS = ["volume", "audioVolume", "gain"];
+export function rejectAudioVolumeKeys(obj: unknown, where: string): void {
+  if (!isObj(obj)) return;
+  const hit = AUDIO_VOLUME_KEYS.filter((k) => obj[k] !== undefined);
+  if (hit.length) {
+    throw new Error(`${where} 里没有声音音量(收到 ${hit.join(" / ")})。调音量用 set_clip_volume({ clipId, volume: 0~1 }),0 无声、1 原声;opacity 是画面不透明度`);
+  }
+}
 const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 
 /**
@@ -386,6 +400,7 @@ export function applyEnvelope(
   let nextBlend: { opacity?: number; fadeIn?: number; fadeOut?: number } | undefined;
   if (env.blend !== undefined) {
     if (!isObj(env.blend)) throw new Error("blend 要是对象 { opacity, fadeIn, fadeOut }");
+    rejectAudioVolumeKeys(env.blend, "set_clip 的 blend");
     const patch: { opacity?: number; fadeIn?: number; fadeOut?: number } = {};
     for (const k of ["opacity", "fadeIn", "fadeOut"] as const) {
       const v = env.blend[k];
