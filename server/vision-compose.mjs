@@ -11,6 +11,7 @@
  * 纯函数放在这个 .mjs 里,好让 node --test 不经 vite 就能测。
  */
 import { PNG } from "pngjs";
+import { clipFilterOpsAt, ffmpegStaticChain } from "../src/kernel/filters.mjs";
 
 /** 把素材段全部拿掉,只剩卡片:页面里没有 <video>,每一帧都能判静止 */
 export function cardsOnly(project) {
@@ -47,7 +48,11 @@ export function mediaLayersAt(project, t) {
       if (!media || media.kind === "audio") continue;
       const opacity = opacityAt(c, t);
       if (opacity <= 0) continue;
-      layers.push({ clip: c, media, opacity, mediaTime: (c.mediaOffset ?? 0) + (t - c.start) });
+      // 滤镜:这一刻的数值翻成常量 ffmpeg 滤镜,和预览、导出同一份数值(kernel/filters.mjs)。
+      // 这里的素材层铺满全画面、不认 clip.frame(老问题),所以模糊按画布像素算、不乘框的缩放
+      const ops = clipFilterOpsAt(project, c, t);
+      const filter = ops ? ffmpegStaticChain(ops) : "";
+      layers.push({ clip: c, media, opacity, mediaTime: (c.mediaOffset ?? 0) + (t - c.start), ...(filter ? { filter } : null) });
     }
   }
   return layers;
@@ -56,13 +61,15 @@ export function mediaLayersAt(project, t) {
 /**
  * ffmpeg 抽一帧并按 object-fit: cover 铺满 w×h 的滤镜参数。
  * 视频用 -ss 定位(放在 -i 前面,走关键帧快速定位再精确解码到那一帧);图片没有时间轴,不加。
+ * filter:mediaLayersAt 给的滤镜串,接在 rgba 之后、不透明度之前(CSS 里 filter 先于 opacity)。
  */
-export function extractArgs({ file, kind, seconds, width, height, opacity, out }) {
+export function extractArgs({ file, kind, seconds, width, height, opacity, filter, out }) {
   const filters = [
     `scale=${width}:${height}:force_original_aspect_ratio=increase`,
     `crop=${width}:${height}`,
     "format=rgba",
   ];
+  if (filter) filters.push(filter);
   if (opacity < 1) filters.push(`colorchannelmixer=aa=${opacity.toFixed(4)}`);
   return [
     "-y", "-hide_banner", "-loglevel", "error", "-nostdin",

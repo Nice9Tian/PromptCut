@@ -17,12 +17,18 @@ export interface TimelineDigestClip {
   id: string;
   cardId?: string;
   mediaId?: string;
+  /** 挂着的滤镜(project.filters 里的 id) */
+  filterId?: string;
   start: number;
   end: number;
 }
 export interface TimelineDigestTrack {
   trackId: string;
   name: string;
+  /** 只在为 true 时出现:隐藏 / 静音 / 锁定的序列,模型要知道那上面的东西看不见、听不见或改不了 */
+  hidden?: true;
+  muted?: true;
+  locked?: true;
   clips: TimelineDigestClip[];
 }
 export interface TimelineDigest {
@@ -46,9 +52,13 @@ export function timelineDigest(p: Project): TimelineDigest {
   const tracks = p.tracks.map((tr) => ({
     trackId: tr.id,
     name: tr.name,
+    ...(tr.hidden ? { hidden: true as const } : null),
+    ...(tr.muted ? { muted: true as const } : null),
+    ...(tr.locked ? { locked: true as const } : null),
     clips: tr.clips.map((c) => ({
       id: c.id,
       ...(c.cardId ? { cardId: c.cardId } : { mediaId: c.mediaId }),
+      ...(c.filter ? { filterId: c.filter.id } : null),
       start: round2(c.start),
       end: round2(c.end),
     })),

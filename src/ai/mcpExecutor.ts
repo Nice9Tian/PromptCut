@@ -62,7 +62,18 @@ export interface EditorApi {
   listTransitions(): any;
   addTransition(args: { kind: string; clipId: string; otherClipId?: string; dur?: number }): any;
   removeTransition(args: { transitionId: string }): any;
-  addTrack(args: { name?: string }): any;
+  // 序列(轨道)。校验和门槛在 editor/right/trackTools.ts
+  addTrack(args: { name?: string; index?: number }): any;
+  listTracks(): any;
+  removeTrack(args: { trackId?: string; trackIds?: string[]; force?: boolean; reason?: string }): any;
+  updateTrack(args: { trackId: string; name?: string; hidden?: boolean; muted?: boolean; locked?: boolean }): any;
+  moveTrack(args: { trackId: string; index: number }): any;
+  // 滤镜库。校验和门槛在 editor/right/filterTools.ts,数值和三条管线的翻译在 kernel/filters.mjs
+  listFilters(): any;
+  createFilter(args: any): any;
+  updateFilter(args: any): any;
+  removeFilter(args: { filterId: string; force?: boolean; reason?: string }): any;
+  applyFilter(args: { clipId: string; filterId: string; params?: Record<string, number> }): any;
   // 多条剪辑(时间轴)。其余 clip / 序列工具都只作用于当前激活的那条
   listCuts(): any;
   switchCut(args: { cutId?: string; name?: string }): any;
@@ -129,7 +140,9 @@ const TIMELINE_TOOLS = new Set([
   "add_clip", "update_clip", "remove_clip", "duplicate_clip", "split_clip",
   "add_transition", "remove_transition", "set_clip_volume", "separate_audio", "create_audio", "set_emphasis",
   "set_position", "set_rect", "align", "nudge", "fill_captions", "edit_caption", "attach_clip_motion", "detach_clip_motion",
-  "add_track", "switch_cut", "add_cut", "set_theme", "voice_generate",
+  "add_track", "remove_track", "update_track", "move_track",
+  "create_filter", "update_filter", "remove_filter", "apply_filter",
+  "switch_cut", "add_cut", "set_theme", "voice_generate",
 ]);
 
 /**
@@ -411,6 +424,15 @@ export function connectMcpExecutor(getApi: () => EditorApi, onStatus?: (s: { con
           else if (tool === "add_transition") result = api.addTransition(args);
           else if (tool === "remove_transition") result = api.removeTransition(args);
           else if (tool === "add_track") result = api.addTrack(args);
+          else if (tool === "list_tracks") result = api.listTracks();
+          else if (tool === "remove_track") result = api.removeTrack(args);
+          else if (tool === "update_track") result = api.updateTrack(args);
+          else if (tool === "move_track") result = api.moveTrack(args);
+          else if (tool === "list_filters") result = api.listFilters();
+          else if (tool === "create_filter") result = api.createFilter(args);
+          else if (tool === "update_filter") result = api.updateFilter(args);
+          else if (tool === "remove_filter") result = api.removeFilter(args);
+          else if (tool === "apply_filter") result = api.applyFilter(args);
           else if (tool === "seek") result = api.seek(args);
           else if (tool === "play") result = api.play();
           else if (tool === "pause") result = api.pause();

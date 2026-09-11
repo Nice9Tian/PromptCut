@@ -7,6 +7,7 @@ import {
 } from "../../kernel/transitions";
 import { clearDragPayload, MIME_TRANSITION, setDragPayload } from "../dnd";
 import { PreviewCard } from "./PreviewCard";
+import { FiltersSection } from "./FiltersSection";
 
 /**
  * 转场分页。
@@ -220,6 +221,9 @@ export function TransitionsTab() {
             </div>
           </div>
         )}
+
+        {/* 滤镜库:项目级,Agent 建的和以后人建的都在这里,能挂到选中的片段上复用 */}
+        <FiltersSection flash={flash} />
 
         {/* 时间轴上首尾相接的接缝:一键接成交叉溶解 */}
         <div className="px-2 pt-2 pb-3">

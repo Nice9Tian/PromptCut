@@ -28,6 +28,8 @@ import {
   type SubjectBox, type SubjectRangeInfo,
 } from "../../kernel/project";
 import { createClipGuard, timelineDigest, lookHint } from "./toolEcho";
+import { createTrackTools } from "./trackTools";
+import { createFilterTools } from "./filterTools";
 import {
   framePatchFromArgs, worldOf, rectToFrame, alignToFrame, alignIsInvisible, nudgeFrame, clampToStage, rectForSafeSide,
   type Size,
@@ -169,6 +171,10 @@ const collectJobs = new Map<string, {
 
 /** 时间轴工具的删除门槛。见 toolEcho.ts 头注释里那份复盘。 */
 const clipGuard = createClipGuard();
+/** 序列工具(list/remove/update/move_track)的校验和门槛。见 trackTools.ts 头注释 */
+const trackTools = createTrackTools({ getState, actions });
+/** 滤镜库工具(list/create/update/remove/apply_filter)。见 filterTools.ts 头注释 */
+const filterTools = createFilterTools({ getState, actions });
 
 /** 正在跑的镜头识别作业,按 mediaId 索引。结果落进 store 后就删掉。 */
 const shotJobs = new Map<string, { jobId: string; percent: number; engine: string; error?: string }>();
@@ -690,7 +696,16 @@ export function RightPanel() {
           cuts: listCuts(q),
         };
       },
-      addTrack: (args) => { const t = actions.addTrack(args.name); clipGuard.noteMutation(); return t; },
+      addTrack: (args) => { const r = trackTools.addTrack(args); clipGuard.noteMutation(); return r; },
+      listTracks: () => trackTools.listTracks(),
+      removeTrack: (args) => { const r = trackTools.removeTrack(args); clipGuard.noteMutation(); return r; },
+      updateTrack: (args) => { const r = trackTools.updateTrack(args); clipGuard.noteMutation(); return r; },
+      moveTrack: (args) => { const r = trackTools.moveTrack(args); clipGuard.noteMutation(); return r; },
+      listFilters: () => filterTools.listFilters(),
+      createFilter: (args) => { const r = filterTools.createFilter(args); clipGuard.noteMutation(); return r; },
+      updateFilter: (args) => { const r = filterTools.updateFilter(args); clipGuard.noteMutation(); return r; },
+      removeFilter: (args) => { const r = filterTools.removeFilter(args); clipGuard.noteMutation(); return r; },
+      applyFilter: (args) => { const r = filterTools.applyFilter(args); clipGuard.noteMutation(); return r; },
       seek: (args) => { actions.seek(args.t); return { ok: true }; },
       play: () => { actions.play(); return { ok: true }; },
       pause: () => { actions.pause(); return { ok: true }; },

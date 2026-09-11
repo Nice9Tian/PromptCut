@@ -16,8 +16,9 @@ import {
 import type { ClipFrame, ClipMotion, PartInstance } from "../kernel/types";
 import {
   normalizeCuts, switchCut as switchCutPure, addCut as addCutPure, renameCut as renameCutPure,
-  removeCut as removeCutPure, stripMediaFromCuts,
+  removeCut as removeCutPure, stripMediaFromCuts, stripFilterFromCuts, withoutFilter,
 } from "../kernel/cuts";
+import type { ClipFilter, FilterDef } from "../kernel/filters.mjs";
 import {
   checkCrossfade, checkFade, clampDur, fadeOwner, groupOf, timingLock,
   transitionsOf, transitionsOfClip, type Transition, type TransitionKind,
@@ -358,7 +359,22 @@ export const actions = {
     return track;
   },
   removeTrack(trackId: string) {
-    setProject({ ...state.project, tracks: state.project.tracks.filter((t) => t.id !== trackId) });
+    actions.removeTracks([trackId]);
+  },
+  /**
+   * 删几条序列(一步撤销)。上面片段挂着的转场一并撤掉、留在别的序列上那一头的淡化擦干净 ——
+   * 和 removeClip 一个道理;以前只删序列不管转场,会留下指向不存在片段的转场。
+   */
+  removeTracks(trackIds: string[]) {
+    const p = state.project;
+    const ids = new Set(trackIds);
+    const gone = new Set(p.tracks.filter((t) => ids.has(t.id)).flatMap((t) => t.clips.map((c) => c.id)));
+    const doomed = transitionsOf(p).filter((tr) => gone.has(tr.aId) || (tr.bId !== undefined && gone.has(tr.bId)));
+    let next: Project = { ...p, tracks: p.tracks.filter((t) => !ids.has(t.id)) };
+    for (const tr of doomed) next = clearTransitionFades(next, tr);
+    if (doomed.length) next = { ...next, transitions: transitionsOf(next).filter((tr) => !doomed.includes(tr)) };
+    setProject(next);
+    if (state.selection.some((id) => gone.has(id))) set({ selection: state.selection.filter((id) => !gone.has(id)) });
   },
   updateTrack(trackId: string, patch: Partial<Pick<Track, "name" | "hidden" | "locked" | "muted">>) {
     setProject(updateTrack(state.project, trackId, (t) => ({ ...t, ...patch })));
@@ -974,6 +990,34 @@ export const actions = {
       media: p.media.filter((m) => m.id !== mediaId),
       tracks: p.tracks.map((t) => ({ ...t, clips: t.clips.filter((c) => c.mediaId !== mediaId) })),
     }, mediaId));
+  },
+
+  /* ---------- 滤镜库(项目级,和素材一样所有剪辑共用) ---------- */
+  addFilter(def: FilterDef) {
+    setProject({ ...state.project, filters: [...(state.project.filters ?? []), def] });
+  },
+  updateFilter(filterId: string, def: FilterDef) {
+    setProject({ ...state.project, filters: (state.project.filters ?? []).map((f) => (f.id === filterId ? def : f)) });
+  },
+  /** 删滤镜:激活剪辑和停放剪辑里挂着它的段一并摘掉,不留指向已删滤镜的引用 */
+  removeFilter(filterId: string) {
+    const p = state.project;
+    setProject(stripFilterFromCuts({
+      ...p,
+      filters: (p.filters ?? []).filter((f) => f.id !== filterId),
+      tracks: p.tracks.map((t) => ({ ...t, clips: t.clips.map((c) => (c.filter?.id === filterId ? withoutFilter(c) : c)) })),
+    }, filterId));
+  },
+  /** 挂 / 换 / 摘片段上的滤镜(null = 摘掉)。找不到片段返回 false;校验在调用方 */
+  setClipFilter(clipId: string, filter: ClipFilter | null): boolean {
+    const p = state.project;
+    const hit = findClip(p, clipId);
+    if (!hit) return false;
+    setProject(updateTrack(p, hit.track.id, (t) => ({
+      ...t,
+      clips: t.clips.map((c) => (c.id !== clipId ? c : filter ? { ...c, filter } : withoutFilter(c))),
+    })));
+    return true;
   },
 };
 

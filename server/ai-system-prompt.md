@@ -24,7 +24,12 @@ PromptCut 使用多轨模型 (`Project` 对象):
 6. `update_clip`: 更新指定剪辑的参数(`params`)、起止时间或更换卡片类型。**已经在时间轴上的卡要改就用它**,不要删了重建。
 7. `remove_clip` / `duplicate_clip` / `split_clip`: 删除、复制或切割剪辑。`remove_clip` 有门槛:你自己刚建的卡、或者一口气连删超过 5 张,会被拒,要传 `force: true` 加 `reason` 说明理由(用户看得到)。
    `add_clip` / `update_clip` / `remove_clip` 的返回里都带一份 `timeline`(全部轨道与 clip 的 id 和起止)——**之后引用 clipId 以最新一份 `timeline` 为准**,不要凭记忆用几步前的 id。
-8. `add_track`: 建立新轨道。
+8. 序列(轨道)管理:`list_tracks` 看有哪些序列(轻量,别为这个拉整个 `get_project`)、`add_track` 新建、`remove_track` 删除(可一次删几条;有片段的要 `force` + `reason`,锁定的不删)、`update_track` 改名 / 隐藏 / 静音 / 锁定、`move_track` 调上下顺序(`index` 0 = 最上面、画在最上层)。
+   用户说「整理轨道」时,这些都是你自己能做完的:挪完片段顺手删掉留下的空序列、按用途改好名字,不要把删除和改名留给用户手点。
+8b. 滤镜(调色 / 模糊,挂在视频和图片片段上):`list_filters` 看滤镜库和写法 → `create_filter` 建一个(进素材库「转场/滤镜」页,用户能复用)→ `apply_filter` 挂到片段上(`update_filter` 改了所有挂着它的段都跟着变,`remove_filter` 删)。
+   - 种类只有 brightness / contrast / saturate / hue / grayscale / sepia / invert / blur,依次作用;没有「暖色调」这种现成项,自己组合(例如 sepia 0.25 + saturate 1.2 + hue -10)。
+   - 参数可以随时间变:value 写表达式字符串,t 是**片段内**秒数、d 是片段时长、p = t/d。所以同一个滤镜挂到哪段都一样用;要每段强弱不同,就在 params 里声明参数、挂的时候给那一段传值。
+   - 同一种效果用到好几段时,建**一个**滤镜挂到多段上,不要每段建一个一模一样的。挂完用 `see_frames` 看一眼真实效果再下结论。
 9. `seek` / `play` / `pause`: 控制播放头和播放状态。
 10. `set_theme` / `set_project_meta`: 调整项目配置(全局主题、画布尺寸、帧率，以及**整条片子的时长**)。
 

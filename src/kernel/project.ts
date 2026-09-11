@@ -182,6 +182,8 @@ export interface TrackClip extends Clip {
   /** 独立声音音量，0~1；缺省为原声 1。 */
   audioVolume?: number;
   label?: string;
+  /** 挂着的滤镜:引用 project.filters 里的一条 + 这一段的参数值。只有素材段有。见 kernel/filters.mjs */
+  filter?: import("./filters.mjs").ClipFilter;
   // fadeIn / fadeOut / opacity 挪到了 kernel/types.ts 的 Clip 上:卡片 clip 现在也吃它们,
   // 不再是素材段专属。
 }
@@ -248,6 +250,11 @@ export interface Project {
   transitions?: Transition[];
   /** 当前激活的剪辑。tracks / duration 就是它的内容 */
   activeCutId?: string;
+  /**
+   * 滤镜库(素材库「转场/滤镜」页列的那些)。项目级,所有剪辑共用;片段用 clip.filter 引用其中一条。
+   * 见 kernel/filters.mjs。
+   */
+  filters?: import("./filters.mjs").FilterDef[];
 }
 
 /** 新拖上时间轴的卡片默认时长(秒);落点预览和真正落卡用的是同一个值 */

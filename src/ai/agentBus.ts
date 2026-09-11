@@ -80,10 +80,17 @@ export function diffScopes(before: Project, after: Project): string[] {
   const prev = new Map(before.tracks.map((t) => [t.id, t]));
   for (const t of after.tracks) {
     const b = prev.get(t.id);
-    if (!b || b.clips !== t.clips || b.name !== t.name) out.push(`${name}->${t.name}`);
+    if (!b || b.clips !== t.clips || b.name !== t.name || !!b.hidden !== !!t.hidden || !!b.muted !== !!t.muted || !!b.locked !== !!t.locked) {
+      out.push(`${name}->${t.name}`);
+    }
   }
   for (const b of before.tracks) {
     if (!after.tracks.some((t) => t.id === b.id)) out.push(`${name}->${b.name}(已删)`);
+  }
+  // 只调了上下顺序:每条序列的内容都没变,但画面的遮挡关系变了,别的 Agent 也该知道
+  if (out.length === 0) {
+    const order = (p: Project) => p.tracks.map((t) => t.id).join("\n");
+    if (order(before) !== order(after)) out.push(`${name}->序列顺序`);
   }
   return out;
 }

@@ -29,7 +29,7 @@ const TOP_TABS: { key: TopTab; label: string }[] = [
 const ASSET_TABS: { key: AssetTab; label: string }[] = [
   { key: "style", label: "全局风格" },
   { key: "cards", label: "卡片" },
-  { key: "transitions", label: "转场" },
+  { key: "transitions", label: "转场/滤镜" },
   { key: "emphasis", label: "强调" },
   { key: "videos", label: "视频" },
   { key: "images", label: "图像" },

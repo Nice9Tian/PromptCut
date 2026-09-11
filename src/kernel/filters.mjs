@@ -1,0 +1,498 @@
+/**
+ * 滤镜:定义、随时间变化的参数表达式,以及三条合成管线各自要的形状。
+ *
+ *   预览(MediaLayers)        → cssFilter(resolveOps(...))             CSS filter 字符串
+ *   导出(export-compose)     → ffmpegChain + sendcmdScript            ffmpeg 滤镜 + 逐帧改参数
+ *   see_frames(vision-compose)→ ffmpegStaticChain(resolveOps(... t))  某一刻的常量滤镜
+ *
+ * 规则只在这里写一次:三条管线都从 resolveOps() 拿「这一刻每一步的数值」,再各自翻译。
+ * 纯 JS(类型在 filters.d.mts),是为了 node 直接跑的服务端合成也能 import。
+ *
+ * # 为什么是这几种
+ *
+ * 每一种都要在 CSS 和 ffmpeg 里算出**同一个像素**,否则编辑台看到的和导出的对不上。
+ * 这里只收 CSS Filter Effects 规范里有精确矩阵 / 线性公式定义、ffmpeg 又能逐项复刻的:
+ *   - brightness / contrast / invert:规范里是 feComponentTransfer 的线性函数 → ffmpeg lutrgb。
+ *     实测 lutrgb 和精确公式四舍五入后 256 级逐级一致;colorlevels 会先把黑白点截成整数级,对比度 2.5 时差 2 级;
+ *     eq 更不行:它在 YUV 上改亮度(加法)、对比度只动 Y,和 CSS 的 RGB 乘法对不上。
+ *   - saturate / hue / grayscale / sepia:规范给了 3×3 矩阵 → ffmpeg colorchannelmixer 逐项填(实测最多差 1 级)。
+ *     colorchannelmixer 每项只能在 -2~2,所以 saturate 上限是 2(系数最大 0.072+0.928×2)。
+ *   - blur:规范是 stdDeviation = 半径的高斯 → ffmpeg gblur 的 sigma,边缘处理见 ffmpegChain。
+ * 每一步单独截断到 0~1,和 Chrome 把每个滤镜函数当一个独立颜色滤镜(各自 clamp)一致。
+ *
+ * # 时间表达式
+ *
+ * 参数可以是数字,也可以是一段表达式字符串,例如 "1 + 0.2*sin(t*2*PI)"。
+ * 自己写的小语法(不是 eval / Function):只认数字、+ - * / % ^、括号、白名单函数和下面这些变量:
+ *   t = 片段内的秒数(从片段开头算,所以同一个滤镜挂到哪段都一样用)
+ *   d = 片段时长(秒)   p = t / d(0~1 的进度)   PI、E
+ *   以及滤镜自己声明的参数名(params),挂到片段上时可以逐段改值。
+ */
+
+/* ------------------------------------------------------------------ 种类 */
+
+export const FILTER_KINDS = {
+  brightness: { label: "亮度", min: 0, max: 3, neutral: 1, hint: "1 = 原样,<1 变暗,>1 变亮(乘法)" },
+  contrast: { label: "对比度", min: 0, max: 3, neutral: 1, hint: "1 = 原样,>1 拉开明暗,<1 压向中灰" },
+  saturate: { label: "饱和度", min: 0, max: 2, neutral: 1, hint: "0 = 无色,1 = 原样,2 = 两倍" },
+  hue: { label: "色相", min: -180, max: 180, neutral: 0, unit: "°", hint: "色相旋转角度" },
+  grayscale: { label: "黑白", min: 0, max: 1, neutral: 0, hint: "0~1,1 = 完全黑白" },
+  sepia: { label: "复古", min: 0, max: 1, neutral: 0, hint: "0~1,老照片的褐色调" },
+  invert: { label: "反色", min: 0, max: 1, neutral: 0, hint: "0~1,1 = 负片" },
+  blur: { label: "模糊", min: 0, max: 40, neutral: 0, unit: "px", hint: "高斯模糊,单位是画布像素" },
+};
+
+export const MAX_OPS = 12;
+export const MAX_PARAMS = 8;
+export const MAX_EXPR_LEN = 300;
+const MAX_NODES = 200;
+
+/* ------------------------------------------------------------------ 表达式 */
+
+const FUNCS = {
+  sin: [1, Math.sin], cos: [1, Math.cos], tan: [1, Math.tan], abs: [1, Math.abs],
+  sqrt: [1, Math.sqrt], exp: [1, Math.exp], log: [1, Math.log], floor: [1, Math.floor],
+  ceil: [1, Math.ceil], round: [1, Math.round], sign: [1, Math.sign],
+  min: [-2, Math.min], max: [-2, Math.max],
+  pow: [2, Math.pow],
+  mod: [2, (a, b) => a - b * Math.floor(a / b)],
+  clamp: [3, (x, a, b) => Math.min(Math.max(x, a), b)],
+  lerp: [3, (a, b, x) => a + (b - a) * x],
+  step: [2, (edge, x) => (x < edge ? 0 : 1)],
+  smoothstep: [3, (e0, e1, x) => {
+    const k = Math.min(Math.max((x - e0) / (e1 - e0), 0), 1);
+    return k * k * (3 - 2 * k);
+  }],
+};
+const CONSTS = { PI: Math.PI, E: Math.E };
+export const BASE_VARS = ["t", "d", "p"];
+const RESERVED = new Set([...BASE_VARS, ...Object.keys(CONSTS), ...Object.keys(FUNCS)]);
+
+export const EXPR_HELP =
+  "参数可以写数字,或一段随时间变化的表达式字符串。变量:t = 片段内秒数(从片段开头算),d = 片段时长,p = t/d(0~1 进度)," +
+  "以及你在 params 里声明的参数名。运算:+ - * / % ^ 和括号。函数:sin cos tan abs sqrt exp log floor ceil round sign " +
+  "min max pow mod clamp(x,lo,hi) lerp(a,b,x) step(edge,x) smoothstep(e0,e1,x)。常量 PI、E。" +
+  "例:\"1 + 0.2*sin(t*2*PI)\"(亮度每秒呼吸一次)、\"lerp(0, 8, smoothstep(0, 1, t))\"(模糊在第一秒内慢慢起来)、" +
+  "\"p\"(配 grayscale:整段从彩色慢慢褪成黑白)。";
+
+export class FilterExprError extends Error {}
+
+function tokenize(src) {
+  const out = [];
+  let i = 0;
+  while (i < src.length) {
+    const c = src[i];
+    if (/\s/.test(c)) { i++; continue; }
+    const num = /^(\d+\.?\d*|\.\d+)(e[+-]?\d+)?/i.exec(src.slice(i));
+    if (num) { out.push({ k: "num", v: Number(num[0]), at: i }); i += num[0].length; continue; }
+    const id = /^[A-Za-z_][A-Za-z0-9_]*/.exec(src.slice(i));
+    if (id) { out.push({ k: "id", v: id[0], at: i }); i += id[0].length; continue; }
+    if ("+-*/%^(),".includes(c)) { out.push({ k: c, at: i }); i++; continue; }
+    throw new FilterExprError(`第 ${i + 1} 个字符「${c}」不认识`);
+  }
+  return out;
+}
+
+/**
+ * 编译成一个求值函数。vars 是允许出现的变量名(t/d/p + 滤镜声明的参数)。
+ * 返回 { fn(env) → number, uses: Set<变量名> }。语法错、未知名字都在这里抛,文案写给模型看。
+ */
+export function compileExpr(src, vars = BASE_VARS) {
+  if (typeof src !== "string") throw new FilterExprError("表达式要是字符串");
+  if (src.length > MAX_EXPR_LEN) throw new FilterExprError(`表达式太长(上限 ${MAX_EXPR_LEN} 字符)`);
+  const allowed = new Set(vars);
+  const toks = tokenize(src);
+  let pos = 0;
+  let nodes = 0;
+  const uses = new Set();
+  const peek = () => toks[pos];
+  const eat = (k) => {
+    const tk = toks[pos];
+    if (!tk || tk.k !== k) throw new FilterExprError(`第 ${tk ? tk.at + 1 : src.length + 1} 个字符附近缺少「${k}」`);
+    pos++;
+    return tk;
+  };
+  const node = (f) => {
+    if (++nodes > MAX_NODES) throw new FilterExprError("表达式太复杂了");
+    return f;
+  };
+
+  const add = () => {
+    let l = mul();
+    while (peek() && (peek().k === "+" || peek().k === "-")) {
+      const op = toks[pos++].k;
+      const a = l, b = mul();
+      l = node(op === "+" ? (e) => a(e) + b(e) : (e) => a(e) - b(e));
+    }
+    return l;
+  };
+  const mul = () => {
+    let l = unary();
+    while (peek() && (peek().k === "*" || peek().k === "/" || peek().k === "%")) {
+      const op = toks[pos++].k;
+      const a = l, b = unary();
+      l = node(op === "*" ? (e) => a(e) * b(e) : op === "/" ? (e) => a(e) / b(e) : (e) => FUNCS.mod[1](a(e), b(e)));
+    }
+    return l;
+  };
+  const unary = () => {
+    if (peek() && (peek().k === "-" || peek().k === "+")) {
+      const neg = toks[pos++].k === "-";
+      const a = unary();
+      return neg ? node((e) => -a(e)) : a;
+    }
+    return power();
+  };
+  const power = () => {
+    const base = atom();
+    if (peek() && peek().k === "^") {
+      pos++;
+      const ex = unary();
+      return node((e) => Math.pow(base(e), ex(e)));
+    }
+    return base;
+  };
+  const atom = () => {
+    const tk = peek();
+    if (!tk) throw new FilterExprError("表达式不完整");
+    if (tk.k === "num") { pos++; const v = tk.v; return node(() => v); }
+    if (tk.k === "(") { pos++; const inner = add(); eat(")"); return inner; }
+    if (tk.k === "id") {
+      pos++;
+      const name = tk.v;
+      // 一律 Object.hasOwn:`name in CONSTS` 会认下 __proto__ / constructor 这类从 Object 继承来的名字
+      if (peek() && peek().k === "(") {
+        const spec = Object.hasOwn(FUNCS, name) ? FUNCS[name] : null;
+        if (!spec) throw new FilterExprError(`没有函数 ${name}(能用的:${Object.keys(FUNCS).join(" ")})`);
+        pos++;
+        const args = [];
+        if (!(peek() && peek().k === ")")) {
+          args.push(add());
+          while (peek() && peek().k === ",") { pos++; args.push(add()); }
+        }
+        eat(")");
+        const [arity, f] = spec;
+        if (arity > 0 && args.length !== arity) throw new FilterExprError(`${name} 要 ${arity} 个参数,给了 ${args.length} 个`);
+        if (arity < 0 && args.length < -arity) throw new FilterExprError(`${name} 至少要 ${-arity} 个参数`);
+        return node((e) => f(...args.map((a) => a(e))));
+      }
+      if (Object.hasOwn(CONSTS, name)) { const v = CONSTS[name]; return node(() => v); }
+      if (!allowed.has(name)) {
+        throw new FilterExprError(`不认识「${name}」。能用的变量:${[...allowed].join(" ")}(参数名要先在 params 里声明)`);
+      }
+      uses.add(name);
+      return node((e) => e[name]);
+    }
+    throw new FilterExprError(`第 ${tk.at + 1} 个字符「${tk.k}」放错了地方`);
+  };
+
+  const fn = add();
+  if (pos < toks.length) throw new FilterExprError(`第 ${toks[pos].at + 1} 个字符开始多出来了`);
+  return { fn, uses };
+}
+
+const compiled = new Map();
+function compiledOf(src, vars) {
+  const key = `${vars.join(",")} ${src}`;
+  let c = compiled.get(key);
+  if (!c) {
+    c = compileExpr(src, vars);
+    if (compiled.size > 500) compiled.clear();
+    compiled.set(key, c);
+  }
+  return c;
+}
+
+/* ------------------------------------------------------------------ 定义校验 */
+
+const PARAM_NAME = /^[a-z][A-Za-z0-9_]{0,23}$/;
+const round6 = (n) => Math.round(n * 1e6) / 1e6;
+const clamp = (x, a, b) => Math.min(Math.max(x, a), b);
+
+/**
+ * 把模型 / 界面交来的滤镜定义洗成规范形状,不合规就抛(文案写给模型看)。
+ * 返回 { name, description?, params?, ops }(id / createdAt 由调用方加)。
+ */
+export function normalizeFilterDef(input) {
+  if (!input || typeof input !== "object") throw new FilterExprError("滤镜定义要是一个对象");
+  const name = typeof input.name === "string" ? input.name.trim() : "";
+  if (!name || name.length > 30) throw new FilterExprError("name 必填,30 字以内(素材库里显示这个名字)");
+  const description = typeof input.description === "string" && input.description.trim() ? input.description.trim().slice(0, 200) : undefined;
+
+  const params = {};
+  const rawParams = input.params && typeof input.params === "object" ? input.params : {};
+  const keys = Object.keys(rawParams);
+  if (keys.length > MAX_PARAMS) throw new FilterExprError(`params 最多 ${MAX_PARAMS} 个`);
+  for (const key of keys) {
+    if (!PARAM_NAME.test(key) || RESERVED.has(key)) {
+      throw new FilterExprError(`参数名「${key}」不行:小写字母开头、只含字母数字下划线,且不能和 ${[...RESERVED].join(" ")} 重名`);
+    }
+    const raw = rawParams[key];
+    const spec = typeof raw === "number" ? { default: raw } : raw && typeof raw === "object" ? raw : null;
+    if (!spec || typeof spec.default !== "number" || !Number.isFinite(spec.default)) throw new FilterExprError(`参数 ${key} 要有数字 default`);
+    const min = typeof spec.min === "number" && Number.isFinite(spec.min) ? spec.min : undefined;
+    const max = typeof spec.max === "number" && Number.isFinite(spec.max) ? spec.max : undefined;
+    if (min !== undefined && max !== undefined && min > max) throw new FilterExprError(`参数 ${key} 的 min 大于 max`);
+    if ((min !== undefined && spec.default < min) || (max !== undefined && spec.default > max)) throw new FilterExprError(`参数 ${key} 的 default 超出了 min~max`);
+    params[key] = {
+      default: spec.default,
+      ...(min !== undefined ? { min } : null),
+      ...(max !== undefined ? { max } : null),
+      ...(typeof spec.label === "string" && spec.label.trim() ? { label: spec.label.trim().slice(0, 20) } : null),
+    };
+  }
+  const vars = [...BASE_VARS, ...keys];
+
+  if (!Array.isArray(input.ops) || input.ops.length === 0) throw new FilterExprError(`ops 至少一步,例:[{ "kind": "brightness", "value": 1.2 }]`);
+  if (input.ops.length > MAX_OPS) throw new FilterExprError(`ops 最多 ${MAX_OPS} 步`);
+  const ops = input.ops.map((op, i) => {
+    const kind = op && op.kind;
+    const spec = Object.hasOwn(FILTER_KINDS, kind) ? FILTER_KINDS[kind] : null;
+    if (!spec) throw new FilterExprError(`ops[${i}].kind「${kind}」不认识,只有:${Object.keys(FILTER_KINDS).join(" / ")}`);
+    const value = op.value;
+    if (typeof value === "number") {
+      if (!Number.isFinite(value)) throw new FilterExprError(`ops[${i}].value 不是有限数字`);
+      if (value < spec.min || value > spec.max) throw new FilterExprError(`ops[${i}] ${kind} 要在 ${spec.min}~${spec.max} 之间,收到 ${value}`);
+      return { kind, value };
+    }
+    if (typeof value !== "string" || !value.trim()) throw new FilterExprError(`ops[${i}].value 要是数字或表达式字符串`);
+    try {
+      compileExpr(value.trim(), vars);
+    } catch (e) {
+      throw new FilterExprError(`ops[${i}] ${kind} 的表达式有问题:${e.message}`);
+    }
+    return { kind, value: value.trim() };
+  });
+
+  const def = { name, ...(description ? { description } : null), ...(keys.length ? { params } : null), ops };
+  // 抽几个时刻试算一遍:算出 NaN / 无穷(比如 log(0)、除以 0)当场说,别等到导出
+  for (const d of [1, 10]) {
+    for (const t of [0, d * 0.37, d]) {
+      for (const [i, op] of def.ops.entries()) {
+        if (typeof op.value !== "string") continue;
+        const v = compiledOf(op.value, vars).fn(envOf(def, undefined, t, d));
+        if (!Number.isFinite(v)) throw new FilterExprError(`ops[${i}] ${op.kind} 在 t=${round6(t)}、d=${d} 时算出了 ${v},换个写法(注意除以 0、log(0))`);
+      }
+    }
+  }
+  return def;
+}
+
+/** 片段上的参数覆盖:只留声明过的键,夹进 min~max。不合法的键直接报错 */
+export function normalizeClipParams(def, input) {
+  if (input === undefined || input === null) return undefined;
+  if (typeof input !== "object") throw new FilterExprError("params 要是对象");
+  const out = {};
+  for (const [k, v] of Object.entries(input)) {
+    const spec = def.params && Object.hasOwn(def.params, k) ? def.params[k] : null;
+    if (!spec) throw new FilterExprError(`滤镜「${def.name}」没有参数 ${k}${def.params ? `(有:${Object.keys(def.params).join(" ")})` : "(它没声明参数)"}`);
+    if (typeof v !== "number" || !Number.isFinite(v)) throw new FilterExprError(`参数 ${k} 要是数字`);
+    out[k] = clamp(v, spec.min ?? -Infinity, spec.max ?? Infinity);
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
+/* ------------------------------------------------------------------ 求值 */
+
+function envOf(def, clipParams, t, d) {
+  const dd = Math.max(0, Number(d) || 0);
+  const tt = clamp(Number(t) || 0, 0, dd || Infinity);
+  const env = { t: tt, d: dd, p: dd > 0 ? tt / dd : 0 };
+  for (const [k, spec] of Object.entries(def.params || {})) {
+    const v = clipParams && typeof clipParams[k] === "number" ? clipParams[k] : spec.default;
+    env[k] = clamp(v, spec.min ?? -Infinity, spec.max ?? Infinity);
+  }
+  return env;
+}
+
+/**
+ * 这一刻每一步的数值。t 是片段内秒数,d 是片段时长。算不出来(NaN)的一步退回中性值,超范围的夹住。
+ * 返回 [{ kind, value }],和 def.ops 一一对应(中性的步骤也保留 —— ffmpeg 那边要固定的滤镜结构)。
+ */
+export function resolveOps(def, clipParams, t, d) {
+  const vars = [...BASE_VARS, ...Object.keys(def.params || {})];
+  const env = envOf(def, clipParams, t, d);
+  return def.ops.map((op) => {
+    const spec = FILTER_KINDS[op.kind];
+    let v = typeof op.value === "number" ? op.value : compiledOf(op.value, vars).fn(env);
+    if (!Number.isFinite(v)) v = spec.neutral;
+    return { kind: op.kind, value: round6(clamp(v, spec.min, spec.max)) };
+  });
+}
+
+/** 有没有随时间变的步骤(用到 t 或 p)。没有的话导出直接用常量滤镜,不用逐帧发命令 */
+export function isAnimated(def) {
+  const vars = [...BASE_VARS, ...Object.keys(def.params || {})];
+  return def.ops.some((op) => {
+    if (typeof op.value !== "string") return false;
+    const { uses } = compiledOf(op.value, vars);
+    return uses.has("t") || uses.has("p");
+  });
+}
+
+/** 一句话描述,给界面列表和工具回显用 */
+export function describeFilter(def) {
+  return def.ops
+    .map((op) => {
+      const spec = FILTER_KINDS[op.kind];
+      return `${spec.label} ${typeof op.value === "number" ? `${op.value}${spec.unit ?? ""}` : op.value}`;
+    })
+    .join(" · ");
+}
+
+/* ------------------------------------------------------------------ 预览:CSS */
+
+/**
+ * CSS filter 字符串。pxScale:画布 1 像素在这个元素的坐标里是多少 CSS 像素(元素本身按画布尺寸布局、
+ * 外面整体 transform 缩放时传 1 —— 预览的 MediaLayers 就是这样)。中性的步骤跳过;全是中性返回 ""。
+ */
+export function cssFilter(ops, pxScale = 1) {
+  const parts = [];
+  for (const { kind, value: v } of ops) {
+    if (v === FILTER_KINDS[kind].neutral) continue;
+    if (kind === "brightness") parts.push(`brightness(${v})`);
+    else if (kind === "contrast") parts.push(`contrast(${v})`);
+    else if (kind === "saturate") parts.push(`saturate(${v})`);
+    else if (kind === "hue") parts.push(`hue-rotate(${v}deg)`);
+    else if (kind === "grayscale") parts.push(`grayscale(${v})`);
+    else if (kind === "sepia") parts.push(`sepia(${v})`);
+    else if (kind === "invert") parts.push(`invert(${v})`);
+    else if (kind === "blur") parts.push(`blur(${round6(v * pxScale)}px)`);
+  }
+  return parts.join(" ");
+}
+
+/* ------------------------------------------------------------------ 导出 / see_frames:ffmpeg */
+
+/** CSS Filter Effects 规范里的矩阵(行优先 3×3),见 https://drafts.fxtf.org/filter-effects/#FilterFunction */
+export function colorMatrix(kind, v) {
+  if (kind === "saturate") {
+    const s = v;
+    return [0.213 + 0.787 * s, 0.715 - 0.715 * s, 0.072 - 0.072 * s, 0.213 - 0.213 * s, 0.715 + 0.285 * s, 0.072 - 0.072 * s, 0.213 - 0.213 * s, 0.715 - 0.715 * s, 0.072 + 0.928 * s];
+  }
+  if (kind === "grayscale") {
+    const s = 1 - v;
+    return [0.2126 + 0.7874 * s, 0.7152 - 0.7152 * s, 0.0722 - 0.0722 * s, 0.2126 - 0.2126 * s, 0.7152 + 0.2848 * s, 0.0722 - 0.0722 * s, 0.2126 - 0.2126 * s, 0.7152 - 0.7152 * s, 0.0722 + 0.9278 * s];
+  }
+  if (kind === "sepia") {
+    const s = 1 - v;
+    return [0.393 + 0.607 * s, 0.769 - 0.769 * s, 0.189 - 0.189 * s, 0.349 - 0.349 * s, 0.686 + 0.314 * s, 0.168 - 0.168 * s, 0.272 - 0.272 * s, 0.534 - 0.534 * s, 0.131 + 0.869 * s];
+  }
+  if (kind === "hue") {
+    const a = (v * Math.PI) / 180;
+    const c = Math.cos(a), s = Math.sin(a);
+    return [
+      0.213 + c * 0.787 - s * 0.213, 0.715 - c * 0.715 - s * 0.715, 0.072 - c * 0.072 + s * 0.928,
+      0.213 - c * 0.213 + s * 0.143, 0.715 + c * 0.285 + s * 0.14, 0.072 - c * 0.072 - s * 0.283,
+      0.213 - c * 0.213 - s * 0.787, 0.715 - c * 0.715 + s * 0.715, 0.072 + c * 0.928 + s * 0.072,
+    ];
+  }
+  return null;
+}
+
+const MIXER_KEYS = ["rr", "rg", "rb", "gr", "gg", "gb", "br", "bg", "bb"];
+const LUT_KEYS = ["r", "g", "b"];
+
+/**
+ * 线性映射 out = slope·in + icpt(0~1 上,再截到 0~1)写成 lutrgb 表达式(8 位取值 val)。
+ * lutrgb 按每个取值预先算一张表,结果先 (int) 截断再夹进 0~255 —— +0.5 把截断变成四舍五入。
+ * 表达式里不能有逗号:sendcmd 用逗号分隔命令。linear 留着给单测对照公式。
+ */
+function linearLut(slope, icpt) {
+  const s = round6(slope);
+  const c = round6(icpt * 255 + 0.5);
+  const expr = `val*${s}${c < 0 ? "" : "+"}${c}`;
+  return { filter: "lutrgb", opts: { r: expr, g: expr, b: expr }, linear: { slope: s, icpt: round6(icpt) } };
+}
+
+/**
+ * 某一刻的数值 → ffmpeg 滤镜步骤 [{ filter, opts }]。
+ * 结构只由种类决定(同一个滤镜不管 t 是多少,步骤的个数和种类都一样),导出逐帧改参数靠这一点。
+ * blurScale:画布 1 像素在这条 ffmpeg 链里是多少像素(素材层按缩放后的框尺寸处理时就是框的 scale)。
+ */
+export function ffmpegStages(ops, blurScale = 1) {
+  return ops.map(({ kind, value: v }) => {
+    if (kind === "brightness") return linearLut(v, 0);
+    if (kind === "contrast") return linearLut(v, 0.5 - 0.5 * v);
+    if (kind === "invert") return linearLut(1 - 2 * v, v);
+    /*
+     * 模糊对不到逐像素:Chrome 软件渲染用 Skia 的三次盒式近似,GPU(编辑台预览)又是另一套高斯核。
+     * 实测 σ=4、testsrc2 上和 Chrome 软件渲染比:gblur steps=1 最大差 32 级 / 平均 3.6,steps=3 为 18 / 2.1,
+     * steps=6 为 14 / 1.6(肉眼看不出差别,差在锐利细节的边上)。三次盒式 boxblur 平均差不多,但 gblur 的 sigma
+     * 能用 sendcmd 逐帧改,所以取 gblur steps=6。
+     */
+    if (kind === "blur") return { filter: "gblur", opts: { sigma: round6(Math.max(0, v * blurScale)), steps: 6 } };
+    const m = colorMatrix(kind, v);
+    const opts = {};
+    MIXER_KEYS.forEach((k, i) => { opts[k] = round6(m[i]); });
+    return { filter: "colorchannelmixer", opts };
+  });
+}
+
+/** 模糊要补的透明边宽:3σ 以外高斯的权重已经小于千分之三 */
+export const blurPadOf = (sigma) => Math.max(1, Math.ceil(sigma * 3));
+
+/**
+ * 滤镜串:"lutrgb@f0_0=r=...,colorchannelmixer@f0_1=rr=...".
+ * tag 给了就给每个实例起名 `<filter>@<tag>_<i>`,导出逐帧发命令时靠名字找到它。
+ *
+ * 模糊前后要包一层:Chrome 的 blur 在元素边外取的是透明(按预乘颜色算),框的边缘会化成半透明、露出底下;
+ * gblur 默认把边上的像素往外复制,边缘是实的。所以先预乘、四周补一圈透明、模糊、裁回、反预乘 ——
+ * 和 Chrome 同一个取法。blurPad 是补多宽(逐帧变化时按整段最大的 σ 算,见 sendcmdScript)。
+ * 输入要带 alpha(gbrap / rgba)。
+ */
+export function ffmpegChain(stages, tag, blurPad) {
+  return stages
+    .map((s, i) => {
+      const name = tag ? `${s.filter}@${tag}_${i}` : s.filter;
+      const body = `${name}=${Object.entries(s.opts).map(([k, v]) => `${k}=${v}`).join(":")}`;
+      if (s.filter !== "gblur") return body;
+      const P = blurPad ?? blurPadOf(s.opts.sigma);
+      return `premultiply=inplace=1,pad=iw+${2 * P}:ih+${2 * P}:${P}:${P}:color=black@0,${body},crop=iw-${2 * P}:ih-${2 * P}:${P}:${P},unpremultiply=inplace=1`;
+    })
+    .join(",");
+}
+
+/** 不随时间变的滤镜:中性的步骤直接省掉,全是中性返回 ""(调用方就不往链上接东西) */
+export function ffmpegStaticChain(ops, blurScale = 1) {
+  const live = ops.filter((op) => op.value !== FILTER_KINDS[op.kind].neutral);
+  return live.length ? ffmpegChain(ffmpegStages(live, blurScale)) : "";
+}
+
+/**
+ * 逐帧改参数的 sendcmd 脚本(交给 `sendcmd=f=<文件>`),以及模糊要补的边宽。
+ * frames:[{ ts: 这一帧在 sendcmd 所在位置的流时间(秒), t: 片段内秒数 }],调用方按自己链上的时间基准算好。
+ * 每帧一行,把所有步骤的所有参数都发一遍(结构不变,只换数);时间戳往前挪 1/4 帧,免得浮点比较差一点点错过这一帧。
+ */
+export function sendcmdScript(def, clipParams, d, frames, tag, blurScale = 1, fps = 30) {
+  const lead = 0.25 / fps;
+  const lines = [];
+  let maxSigma = 0;
+  for (const { ts, t } of frames) {
+    const stages = ffmpegStages(resolveOps(def, clipParams, t, d), blurScale);
+    const cmds = [];
+    stages.forEach((s, i) => {
+      const name = `${s.filter}@${tag}_${i}`;
+      const keys = s.filter === "colorchannelmixer" ? MIXER_KEYS : s.filter === "lutrgb" ? LUT_KEYS : ["sigma"];
+      for (const k of keys) cmds.push(`${name} ${k} ${s.opts[k]}`);
+      if (s.filter === "gblur") maxSigma = Math.max(maxSigma, s.opts.sigma);
+    });
+    lines.push(`${round6(Math.max(0, ts - lead))} ${cmds.join(", ")};`);
+  }
+  return { script: lines.join("\n") + "\n", blurPad: blurPadOf(maxSigma) };
+}
+
+/* ------------------------------------------------------------------ 项目里的查找 */
+
+/** 片段挂着的滤镜定义(找不到就 null —— 滤镜被删了,片段按没滤镜画) */
+export function filterOfClip(project, clip) {
+  if (!clip || !clip.filter || !clip.filter.id) return null;
+  return (project.filters || []).find((f) => f.id === clip.filter.id) || null;
+}
+
+/** 片段在时间轴时刻 T 的滤镜数值;没挂或找不到定义返回 null */
+export function clipFilterOpsAt(project, clip, T) {
+  const def = filterOfClip(project, clip);
+  if (!def) return null;
+  return resolveOps(def, clip.filter.params, T - clip.start, clip.end - clip.start);
+}

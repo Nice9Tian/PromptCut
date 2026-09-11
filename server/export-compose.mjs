@@ -28,6 +28,8 @@
  * 纯函数,不碰磁盘、不起进程,node --test 直接测(server/test/export-compose.test.mjs)。
  */
 
+import { ffmpegChain, ffmpegStages, ffmpegStaticChain, filterOfClip, isAnimated, resolveOps, sendcmdScript } from "../src/kernel/filters.mjs";
+
 /** 和 ExportView / flattenOverlay 一个口径:从下到上所有画面素材段(视频 + 图片),不管时间 */
 export function composeLayers(project) {
   const out = [];
@@ -37,7 +39,9 @@ export function composeLayers(project) {
       if (!c.mediaId) continue;
       const media = (project.media || []).find((m) => m.id === c.mediaId);
       if (!media || media.kind === "audio") continue;
-      out.push({ clip: c, media });
+      // 滤镜定义是项目级的(project.filters),合成时只拿得到 layers —— 在这里把定义和这段的参数带上
+      const def = filterOfClip(project, c);
+      out.push({ clip: c, media, ...(def ? { filter: { def, params: c.filter.params } } : null) });
     }
   }
   return out;
@@ -295,6 +299,8 @@ export function buildComposeArgs(opts) {
   }
   const graph = [];
   const used = [];
+  // 随时间变化的滤镜要一份 sendcmd 脚本:这里只给出路径和内容,由调用方写盘(这个模块不碰磁盘)
+  const sidecars = [];
   let base = "b0";
   graph.push(`[0:v]format=gbrp[b0]`);
   const stage = { width, height };
@@ -343,6 +349,29 @@ export function buildComposeArgs(opts) {
     // cover:等比放大到盖满框,再居中裁。视频没标色彩空间时按 untagged 解(和 Chrome 对 HD 素材的假设一致)
     const matrix = !isImage && (!layer.colorSpace || layer.colorSpace === "unknown") ? `:in_color_matrix=${untagged}` : "";
     chain.push(`scale=${p.w}:${p.h}:force_original_aspect_ratio=increase${matrix}`, `crop=${p.w}:${p.h}`, "format=gbrap");
+    /*
+     * 滤镜(kernel/filters.mjs,和预览、see_frames 同一份数值):摆框之后、强调和不透明度之前 ——
+     * CSS 里 filter 先于 opacity,强调的 drop-shadow 和滤镜写在同一个 filter 里、排在滤镜后面。
+     * 模糊按框缩放之后的像素算(预览里 blur 写在框里、跟着框的 scale 一起缩放),和强调乘 p.scale 一个口径。
+     */
+    if (layer.filter) {
+      const { def, params } = layer.filter;
+      const d = clip.end - clip.start;
+      if (isAnimated(def)) {
+        // 逐帧改参数:sendcmd 接在 trim 之后,这里的时间戳就是时间轴的绝对时间(帧 i = i/fps)
+        const tag = `fx${k}`;
+        const frames = [];
+        for (let i = a; i <= b; i++) frames.push({ ts: i / fps, t: i / fps - clip.start });
+        const { script, blurPad } = sendcmdScript(def, params, d, frames, tag, p.scale, fps);
+        const file = `${String(opts.sidecarDir || ".").replace(/\\/g, "/")}/filter-${k}.cmd`;
+        sidecars.push({ file, text: script });
+        // Windows 路径里的冒号是滤镜参数的分隔符:单引号 + \: 转义(和 subtitles 滤镜传路径同一个写法)
+        chain.push(`sendcmd=f='${file.replace(/:/g, "\\:")}'`, ffmpegChain(ffmpegStages(resolveOps(def, params, ta - clip.start, d), p.scale), tag, blurPad));
+      } else {
+        const fx = ffmpegStaticChain(resolveOps(def, params, 0, d), p.scale);
+        if (fx) chain.push(fx);
+      }
+    }
     const lines = [];
     let cur = `m${k}`;
     lines.push(`[${k}:v]${chain.join(",")}[${cur}]`);
@@ -393,5 +422,5 @@ export function buildComposeArgs(opts) {
   const g = graph.join(";");
   // 帧数用 -frames:v 卡死:按秒截(-t)时时长在三位小数取整,会多出或少一帧
   args.push("-filter_complex", g, "-map", "[out]", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-frames:v", String(frames), out);
-  return { args, graph: g, notes, used };
+  return { args, graph: g, notes, used, sidecars };
 }

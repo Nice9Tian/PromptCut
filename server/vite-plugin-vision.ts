@@ -103,7 +103,7 @@ function mediaFileOf(root: string, m: any): string | null {
 }
 
 /** 用 ffmpeg 把素材的第 seconds 秒抽成 w×h 的 RGBA PNG(object-fit: cover),写到 opts.out */
-function extractFrame(ffmpeg: string, opts: { file: string; kind: string; seconds: number; width: number; height: number; opacity: number; out: string }): Promise<void> {
+function extractFrame(ffmpeg: string, opts: { file: string; kind: string; seconds: number; width: number; height: number; opacity: number; filter?: string; out: string }): Promise<void> {
   return new Promise((resolve, reject) => {
     const child = spawn(ffmpeg, extractArgs(opts), { stdio: ["ignore", "ignore", "pipe"], windowsHide: true });
     let err = "";
@@ -147,7 +147,7 @@ async function renderMediaLayers(root: string, project: any, t: number, dir: str
       // 帧号带进文件名:renderFrames 一趟抽好几个时刻的素材层,都落在同一个目录里
       const layerOut = path.join(dir, `layer-${Math.round(t * 1000)}-${i++}.png`);
       await extractFrame(ffmpeg, {
-        file, kind: layer.media.kind, seconds: Math.max(0, layer.mediaTime), width, height, opacity: layer.opacity,
+        file, kind: layer.media.kind, seconds: Math.max(0, layer.mediaTime), width, height, opacity: layer.opacity, filter: layer.filter,
         out: layerOut,
       });
       out.push(layerOut);

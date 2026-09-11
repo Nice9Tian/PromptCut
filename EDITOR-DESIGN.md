@@ -276,7 +276,7 @@ MIME 常量和拖动载荷都在 `src/editor/dnd.ts`:
 
 AI 助手在浏览器外(node 进程)跑,通过 MCP 工具操作项目。工具的执行端在浏览器里(store 在浏览器里),所以链路是:
 `AI 进程 → (SSE/WS) → 浏览器 src/ai/mcpExecutor → actions.*`。工具清单至少:
-`list_cards`(含 controls 和 defaults)、`get_project`、`get_selection`、`add_clip`、`update_clip`(params/时段/换卡)、`remove_clip`、`add_track`、`seek`、`play/pause`、`set_theme`。
+`list_cards`(含 controls 和 defaults)、`get_project`、`get_selection`、`add_clip`、`update_clip`(params/时段/换卡)、`remove_clip`、序列管理(`list_tracks` / `add_track` / `remove_track` / `update_track` / `move_track`,见 `src/editor/right/trackTools.ts`)、滤镜库(`list_filters` / `create_filter` / `update_filter` / `remove_filter` / `apply_filter`,数值和三条合成管线的翻译在 `src/kernel/filters.mjs`,门槛在 `src/editor/right/filterTools.ts`)、`seek`、`play/pause`、`set_theme`。
 工具 schema 从 `CardDef.controls` 自动生成,这样加卡不用改工具。
 
 ## 目录归属(并行时不要越界)

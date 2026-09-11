@@ -1,5 +1,6 @@
 import { useLayoutEffect, useReducer, useRef, useSyncExternalStore } from "react";
 import { emphasisFilter } from "../../kernel/emphasis";
+import { clipFilterOpsAt, cssFilter, type FilterDef } from "../../kernel/filters.mjs";
 import { frameCss } from "../../kernel/layout";
 import { audioClipsAt, nextVideoLayerAfter, videoLayersAt, type MediaAsset, type Project, type TrackClip } from "../../kernel/project";
 import { isScrubbing, subscribeScrub } from "../timeline/useScrub";
@@ -103,9 +104,15 @@ function targetTimeOf(clip: TrackClip, t: number) {
   return (clip.mediaOffset ?? 0) + (t - clip.start);
 }
 
-/** 素材层的强调:filter 挂在元素上,和舞台那边同一份计算(kernel/emphasis.ts) */
-function emphasisOf(clip: TrackClip): string | undefined {
-  return emphasisFilter(clip.emphasis) || undefined;
+/**
+ * 素材层元素上的 filter:先滤镜(kernel/filters.mjs,和导出、see_frames 同一份数值)、后强调的 drop-shadow ——
+ * 影子是调过色的画面投下的,和导出链上「先滤镜、后强调」一个顺序。强调和舞台那边同一份计算(kernel/emphasis.ts)。
+ * 元素在片段的框里、外面整体 transform 缩放,所以 blur 直接写画布像素。两样都没有就不写这个属性。
+ */
+function filterOf(clip: TrackClip, filters: FilterDef[] | undefined, t: number): string | undefined {
+  const ops = filters?.length ? clipFilterOpsAt({ filters }, clip, t) : null;
+  const parts = [ops ? cssFilter(ops) : "", emphasisFilter(clip.emphasis) || ""].filter(Boolean);
+  return parts.length ? parts.join(" ") : undefined;
 }
 
 interface Layer {
@@ -147,7 +154,10 @@ function VideoTrack({
   muted,
   gain = 1,
   stage,
+  filters,
 }: {
+  /** 项目的滤镜库(片段的 clip.filter 引用其中一条) */
+  filters?: FilterDef[];
   /** 这条序列此刻的画面段(videoLayersAt 里属于它的那条),没有是 null */
   cur: Layer | null;
   /** 这条序列 t 之后的第一段画面(nextVideoLayerAfter) */
@@ -259,14 +269,14 @@ function VideoTrack({
               muted={muted}
               playsInline
               preload="auto"
-              style={{ display: "block", width: "100%", height: "100%", objectFit: "cover", opacity, filter: clip ? emphasisOf(clip) : undefined }}
+              style={{ display: "block", width: "100%", height: "100%", objectFit: "cover", opacity, filter: clip ? filterOf(clip, filters, t) : undefined }}
             />
           </div>
         );
       })}
       {image && (
         <div key={image.clip.id} style={boxOf(image.clip)}>
-          <img src={image.media.url} alt="" style={{ display: "block", width: "100%", height: "100%", objectFit: "cover", opacity: image.opacity, filter: emphasisOf(image.clip) }} />
+          <img src={image.media.url} alt="" style={{ display: "block", width: "100%", height: "100%", objectFit: "cover", opacity: image.opacity, filter: filterOf(image.clip, filters, t) }} />
         </div>
       )}
     </>
@@ -333,6 +343,7 @@ export function MediaLayers({
           muted={muted}
           gain={project.tracks.find((track) => track.id === id)?.muted ? 0 : master}
           stage={stage}
+          filters={project.filters}
         />
       ))}
       {audios.map((a) => (

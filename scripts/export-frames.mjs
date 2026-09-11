@@ -1115,11 +1115,14 @@ async function composePreview({ ffmpegCmd, baked, layers, outDir }) {
     await fillGlassGaps(baked.glass.dir, startFrame, endFrame, width, height);
     mask = { pattern: path.join(baked.glass.dir, '%06d.png'), blur };
   }
-  const { args, graph, notes } = buildComposeArgs({
+  const { args, graph, notes, sidecars = [] } = buildComposeArgs({
     width, height, fps, startFrame, endFrame, layers, mask,
     cardsPattern: path.join(framesDir, `%06d.${ext}`),
     out: path.join(outDir, 'preview.mp4'),
+    // 随时间变化的滤镜每段一份 sendcmd 脚本,写进导出目录;给绝对路径,不依赖 ffmpeg 的工作目录
+    sidecarDir: path.resolve(outDir),
   });
+  await Promise.all(sidecars.map((s) => fs.writeFile(s.file, s.text, 'utf8')));
   for (const n of notes) console.warn('合成:', n);
   let finalArgs = args;
   // 片段多、带强调时 filter graph 会很长;Windows 命令行上限 32K 字符,长了改用文件传

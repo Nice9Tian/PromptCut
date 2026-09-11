@@ -6,6 +6,7 @@ import { PartsForm } from "./PartsForm";
 import { isComposite } from "../../kernel/envelope";
 import { CodeTab } from "./CodeTab";
 import { Frame3DForm } from "./Frame3DForm";
+import { ClipFilterForm } from "./ClipFilterForm";
 
 /** 编辑分页的内容。参数 / 代码这一级由左栏的二级分页栏控制,这里只按 tab 渲染。 */
 export function Inspector({ tab }: { tab: "form" | "code" }) {
@@ -47,7 +48,7 @@ export function Inspector({ tab }: { tab: "form" | "code" }) {
           />
           <span className="text-neutral-500">{(clip.end - clip.start).toFixed(2)}s</span>
         </div>
-        <div className="text-neutral-500">视频片段没有卡片参数</div>
+        <ClipFilterForm clip={clip} />
       </div>
     );
   }

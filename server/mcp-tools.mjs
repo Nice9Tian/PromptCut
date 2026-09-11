@@ -444,12 +444,153 @@ export const tools = [
   },
   {
     name: "add_track",
-    description: "添加一条新的序列(序列不分种类,卡片段和素材段都能放)。",
+    description: "添加一条新的序列(序列不分种类,卡片段和素材段都能放)。不给 index 就加在最下面。",
     inputSchema: {
       type: "object",
       properties: {
-        name: { type: "string" }
+        name: { type: "string" },
+        index: { type: "integer", description: "插在第几条(从 0 起,0 = 最上面、画在最上层)" }
       }
+    },
+    side: "browser"
+  },
+  {
+    name: "list_tracks",
+    description: "列出当前剪辑的全部序列(轨道),很轻:每条给 trackId、index(0 = 最上面、画在最上层)、name、clipCount、卡片 / 素材各几段、占用的时间范围,空序列标 empty:true,隐藏 / 静音 / 锁定的标出来。整理序列、找空序列、决定放哪一层时用它,不要为此去拉整个 get_project。",
+    inputSchema: { type: "object", properties: {} },
+    side: "browser"
+  },
+  {
+    name: "remove_track",
+    description: "删除序列,一次可删几条(trackIds),一步撤销。空序列直接删;上面还有片段的会被拒 —— 删序列会连片段一起删,确实要删就传 force:true 并在 reason 里写明理由(用户会看到)。锁定的序列不删;至少要留一条。被删片段上挂着的转场会一并撤掉。用户说「删掉空轨道 / 清理没用的序列」就是它:先 list_tracks 找出 empty:true 的,一次传进来。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        trackId: { type: "string", description: "删一条" },
+        trackIds: { type: "array", items: { type: "string" }, description: "删几条,和 trackId 二选一" },
+        force: { type: "boolean", description: "序列上有片段时才需要" },
+        reason: { type: "string", description: "force 时必填" }
+      }
+    },
+    side: "browser"
+  },
+  {
+    name: "update_track",
+    description: "改一条序列的名字、隐藏、静音、锁定,给哪个改哪个。hidden:true 预览和导出里都看不见(不是删除);muted:true 只关声音;locked:true 之后上面的片段改不了、序列也删不了。用户说「把这条改名叫配乐」「先把字幕轨藏起来」「这条静音」就是它。锁定是用户用来保护内容的,没被要求就别去解锁。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        trackId: { type: "string" },
+        name: { type: "string" },
+        hidden: { type: "boolean" },
+        muted: { type: "boolean" },
+        locked: { type: "boolean" }
+      },
+      required: ["trackId"]
+    },
+    side: "browser"
+  },
+  {
+    name: "move_track",
+    description: "调整序列的上下顺序,把它挪到第 index 条(从 0 起)。时间轴上靠上的序列画在上层:字幕、卡片要压在画面之上就挪到上面。只改画面遮挡关系,不动任何片段的时间,声音不受影响。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        trackId: { type: "string" },
+        index: { type: "integer", description: "0 = 最上面" }
+      },
+      required: ["trackId", "index"]
+    },
+    side: "browser"
+  },
+  {
+    name: "list_filters",
+    description: "列出滤镜库(素材库「转场/滤镜」页里的那些),以及能用的滤镜种类、取值范围和表达式写法。每条给 filterId、name、description、params(挂到片段上可逐段调的参数)、ops、summary、animated(有没有随时间变的步骤)、usedBy(挂在哪几段上)。挂滤镜前先看有没有现成能复用的。",
+    inputSchema: { type: "object", properties: {} },
+    side: "browser"
+  },
+  {
+    name: "create_filter",
+    description: "新建一个滤镜,放进素材库「转场/滤镜」页 —— 用户能看到、能复用,你也能挂到任意视频 / 图片片段上。ops 是依次作用的几步,kind 八种:brightness 亮度(1 原样,0~3,乘法)、contrast 对比度(1 原样,0~3)、saturate 饱和度(1 原样,0~2)、hue 色相旋转(度,-180~180)、grayscale 黑白(0~1)、sepia 复古褐(0~1)、invert 反色(0~1)、blur 模糊(画布像素,0~40)。value 写数字,或写**随时间变化的表达式字符串**:t = 片段内秒数(从片段开头算,所以同一个滤镜挂到哪段都一样用)、d = 片段时长、p = t/d(0~1 进度),还能引用 params 里声明的参数;函数有 sin cos abs min max pow clamp lerp step smoothstep 等,常量 PI。例:{ name:'呼吸感', params:{ amount:{ default:0.15, min:0, max:0.5, label:'幅度' } }, ops:[{ kind:'brightness', value:'1 + amount*sin(t*2*PI)' }] };整段褪成黑白:{ kind:'grayscale', value:'p' }。传 clipId 就顺手挂到那一段上。预览、导出、see_frames 算的是同一份数值。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "素材库里显示的名字,30 字以内" },
+        description: { type: "string", description: "一句话说它是什么效果、适合什么画面" },
+        params: {
+          type: "object",
+          description: "可选:可逐段调的参数,键是参数名(小写字母开头),值是 { default, min?, max?, label? }。表达式里直接用参数名",
+          additionalProperties: {
+            type: "object",
+            properties: {
+              default: { type: "number" },
+              min: { type: "number" },
+              max: { type: "number" },
+              label: { type: "string" }
+            },
+            required: ["default"]
+          }
+        },
+        ops: {
+          type: "array",
+          description: "依次作用的步骤,1~12 步",
+          items: {
+            type: "object",
+            properties: {
+              kind: { type: "string", enum: ["brightness", "contrast", "saturate", "hue", "grayscale", "sepia", "invert", "blur"] },
+              value: { anyOf: [{ type: "number" }, { type: "string" }], description: "数字,或含 t / d / p / 参数名的表达式字符串" }
+            },
+            required: ["kind", "value"]
+          }
+        },
+        clipId: { type: "string", description: "可选:建完直接挂到这一段(视频 / 图片)" },
+        clipParams: { type: "object", description: "可选:挂上时这一段的参数值,覆盖 params 的 default" }
+      },
+      required: ["name", "ops"]
+    },
+    side: "browser"
+  },
+  {
+    name: "update_filter",
+    description: "改滤镜库里的一个滤镜。挂着它的片段**全部**跟着变(片段引用的是它,不是复制了一份)。给了 ops / params 就整项替换。只想改某一段的效果,用 apply_filter 给那一段传 params 覆盖,或另建一个滤镜。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        filterId: { type: "string" },
+        name: { type: "string" },
+        description: { type: "string" },
+        params: { type: "object", description: "同 create_filter" },
+        ops: { type: "array", items: { type: "object" }, description: "同 create_filter" }
+      },
+      required: ["filterId"]
+    },
+    side: "browser"
+  },
+  {
+    name: "remove_filter",
+    description: "从滤镜库删掉一个滤镜。还挂在片段上时会被拒;确实要删就传 force:true 并在 reason 里写明理由(用户会看到),所有剪辑里挂着它的片段会一起摘掉。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        filterId: { type: "string" },
+        force: { type: "boolean" },
+        reason: { type: "string" }
+      },
+      required: ["filterId"]
+    },
+    side: "browser"
+  },
+  {
+    name: "apply_filter",
+    description: "把滤镜库里的一个滤镜挂到视频 / 图片片段上(每段只挂一个,再挂就是替换);params 给这一段单独的参数值。filterId 传空字符串就是摘掉。卡片片段不收(卡片用自己的样式参数)。挂完用 see_frames 看一眼真实效果。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        clipId: { type: "string" },
+        filterId: { type: "string", description: "空字符串 = 摘掉这一段的滤镜" },
+        params: { type: "object", description: "可选:这一段的参数值,只能是这个滤镜 params 里声明过的" }
+      },
+      required: ["clipId", "filterId"]
     },
     side: "browser"
   },

@@ -182,3 +182,21 @@ export function stripMediaFromCuts(p: Project, mediaId: string): Project {
       c.tracks ? { ...c, tracks: c.tracks.map((t) => ({ ...t, clips: t.clips.filter((cl) => cl.mediaId !== mediaId) })) } : c),
   };
 }
+
+/** 摘掉片段上的滤镜字段(整个键拿掉,存盘结果和从没挂过一样) */
+export function withoutFilter<T extends { filter?: unknown }>(clip: T): T {
+  const { filter: _gone, ...rest } = clip;
+  return rest as T;
+}
+
+/** 滤镜也是项目级的:删滤镜要把停放剪辑里挂着它的段也摘掉,和 stripMediaFromCuts 一个道理 */
+export function stripFilterFromCuts(p: Project, filterId: string): Project {
+  if (!p.cuts) return p;
+  return {
+    ...p,
+    cuts: p.cuts.map((c) =>
+      c.tracks
+        ? { ...c, tracks: c.tracks.map((t) => ({ ...t, clips: t.clips.map((cl) => (cl.filter?.id === filterId ? withoutFilter(cl) : cl)) })) }
+        : c),
+  };
+}
