@@ -18,6 +18,9 @@ import { MenuBarFade } from "./ui/MenuBarFade";
 import { runSttInstall } from "./editor/io/runSttInstall";
 import { useInstallJobs } from "./ai/sttInstallStore";
 import { SttInstallProgress } from "./editor/right/SttInstallProgress";
+import { VoiceSettingsDialog } from "./voice/VoiceSettingsDialog";
+import { openVoiceSettings, useVoiceSettingsState } from "./ai/voiceSettingsStore";
+import { getVoiceConfig } from "./ai/voice";
 
 /** 字节数写成人看的样子 */
 function humanSize(bytes: number): string {
@@ -399,7 +402,9 @@ function ExtensionCards(): JSX.Element {
       <TrackCard status={track} onReload={load} />
       <SubjectCard status={subject} onReload={load} />
       <CollectCard status={collect} raw={collectRaw} onReload={load} />
+      <VoiceCard />
       <CollectLoginDialog />
+      <VoiceSettingsDialog />
     </div>
   );
 }
@@ -432,6 +437,54 @@ function viewCollect(s: CollectStatus): ExtStatusView {
     tone: "muted",
     offerInstall: true,
   };
+}
+
+/**
+ * 配音:云端合成,不用装东西,卡上只显示「令牌配没配、默认用谁」。
+ * 设置项多,点「设置」开子窗口(编辑台顶栏的「配音设置」开的是同一个)。
+ */
+function VoiceCard(): JSX.Element {
+  const [status, setStatus] = useState<ExtStatusView | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const { config, presets } = await getVoiceConfig();
+      const p = config.provider;
+      const id = config[p].voiceId;
+      const voice = config.customVoices.find((v) => v.provider === p && v.voiceId === id)?.name
+        ?? presets.systemVoices[p].find((v) => v.voiceId === id)?.name
+        ?? id;
+      setStatus(config.apiKey.set
+        ? { headline: "已配置", note: `${presets.labels[p]} · ${voice}`, tone: "ok", offerInstall: false }
+        : { headline: "未配置", note: "填好 API Key，agent 才能配音", tone: "muted", offerInstall: false });
+    } catch (e) {
+      setStatus(failedView(e));
+    }
+  }, []);
+
+  useEffect(() => { void load(); }, [load]);
+
+  // 设置窗口关掉之后刷新一次:令牌、默认音色都可能改了
+  const open = useVoiceSettingsState().open;
+  const wasOpen = useRef(false);
+  useEffect(() => {
+    if (wasOpen.current && !open) void load();
+    wasOpen.current = open;
+  }, [open, load]);
+
+  return (
+    <ExtCard
+      icon={
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+          <path d="M4 10v4M8 7v10M12 4v16M16 8v8M20 11v2" />
+        </svg>
+      }
+      name="配音"
+      desc="把文字配成语音，云端合成，默认 MiniMax。"
+      status={status}
+      action={<button className="sp-ghost-btn" onClick={openVoiceSettings}>设置</button>}
+    />
+  );
 }
 
 /** 素材收集:状态由上面统一查,安装走 installCollect 的 SSE 日志流(pip 装 yt-dlp) */

@@ -195,6 +195,15 @@ export function IconHome(p: IconProps) {
   );
 }
 
+/** 配音设置(声波) */
+export function IconVoice(p: IconProps) {
+  return (
+    <Stroked {...p}>
+      <path d="M4 10v4M8 7v10M12 4v16M16 8v8M20 11v2" />
+    </Stroked>
+  );
+}
+
 /** 新建项目 */
 export function IconNew(p: IconProps) {
   return (

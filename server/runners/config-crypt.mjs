@@ -18,12 +18,22 @@
 import { createCipheriv, createDecipheriv, pbkdf2Sync, randomBytes } from "node:crypto";
 import { machineFingerprint } from "./machine-id.mjs";
 
-/** 两路 Key 各自的标识。换算法就换前缀,老密文照样认得出来 */
+/** 各路 Key 的标识。换算法就换前缀,老密文照样认得出来 */
 const SCHEMES = {
   custom: { prefix: "PCENC1.", aad: Buffer.from("PromptCut-config-at-rest-v1"), label: "PromptCut-at-rest" },
   router: { prefix: "PCRTR1.", aad: Buffer.from("PromptCut-router-at-rest-v1"), label: "PromptCut-router-at-rest" },
+  // 配音(voice_generate)的网关令牌。和对话 API 的 Key 不是同一把,也不能当对话来源用
+  voice: { prefix: "PCVOC1.", aad: Buffer.from("PromptCut-voice-at-rest-v1"), label: "PromptCut-voice-at-rest" },
 };
-export const KEY_KINDS = Object.keys(SCHEMES);
+/**
+ * 对话 API 的两路来源(ai.json 的 api.source 只能取这两个)。
+ * 写死而不是 Object.keys(SCHEMES):ai-config 拿它当「合法来源」的白名单,
+ * voice 那把令牌混进来就成了一个能选的对话来源。
+ */
+export const KEY_KINDS = ["custom", "router"];
+
+/** 能落盘的全部 Key 种类(对话两路 + 各功能自己的,如配音)。ai-config 的密钥文件按它校验 */
+export const SECRET_KINDS = Object.keys(SCHEMES);
 
 const SALT_BYTES = 16;
 const IV_BYTES = 12;

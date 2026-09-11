@@ -142,6 +142,31 @@ export async function importVideoFromServer(opts: { url: string; path: string; n
   return media.id;
 }
 
+/**
+ * 登记一个已经在服务端素材目录里的**音频**(配音生成的那种)。只进素材库,不放时间轴。
+ *
+ * 地址直接用 /@media/<文件名>(和 registerAsset 登记音频一个路数):渲染和导出进程
+ * 够不着 blob:。File 仍然记进 mediaFiles,转写和导出要拿原文件时找得到。
+ */
+export async function importAudioFromServer(opts: { url: string; path: string; name?: string }): Promise<string> {
+  const res = await fetch(opts.url);
+  if (!res.ok) throw new Error(`取文件失败(HTTP ${res.status}):${opts.url}`);
+  const blob = await res.blob();
+  const name = opts.name || decodeURIComponent(opts.url.split("/").pop() || "voice.mp3");
+  const file = new File([blob], name, { type: blob.type || "audio/mpeg" });
+  const duration = await new Promise<number | undefined>((resolve) => {
+    const el = document.createElement("audio");
+    el.preload = "metadata";
+    const timer = window.setTimeout(() => resolve(undefined), 8000);
+    el.onloadedmetadata = () => { window.clearTimeout(timer); resolve(Number.isFinite(el.duration) ? el.duration : undefined); };
+    el.onerror = () => { window.clearTimeout(timer); console.warn(`[io] 探测音频失败: ${name}`); resolve(undefined); };
+    el.src = opts.url;
+  });
+  const media = actions.addMedia({ kind: "audio", name, url: opts.url, path: opts.path, duration });
+  mediaFiles.set(media.id, file);
+  return media.id;
+}
+
 /** 读取 .promptcut.json(或兼容的 overlay 编排 JSON)并载入 store。返回 Project。 */
 export async function importProjectFile(file: File): Promise<Project> {
   const text = await file.text();

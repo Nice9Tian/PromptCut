@@ -791,6 +791,31 @@ export const tools = [
     side: "browser"
   },
   {
+    name: "voice_list",
+    description: "查配音(voice_generate)的设置:默认服务(minimax / kling / vidu)、各服务的默认音色和参数、能用的音色(systemVoices 系统音色 + customVoices 用户在「配音设置」里建的或登记的「我的音色」,如复刻出来的人声)、API Key 设没设(apiKeySet)。第一次配音前先调一次,voiceId 从这里挑,不要自己编。",
+    inputSchema: { type: "object", properties: {} },
+    side: "browser"
+  },
+  {
+    name: "voice_generate",
+    description: "把一段文字配成语音(云端 TTS,走 API),同步返回,几秒钟。不传的参数取「配音设置」里的设置(出厂是 MiniMax speech-2.8-hd)。生成的 mp3 装进素材库;传 start(秒)就同时放到时间轴那个位置(可配 trackId),不传只进素材库。一次一段:MiniMax / Vidu 单次最多 5000 字、可灵 1000 字;长稿按句群拆开多次调,下一段的 start = 上一段 start + 上一段 duration(可留 0.2~0.4 秒气口)。voiceId 只能用 voice_list 里列出的音色,别的会被拒;没有新建音色的工具 —— 新音色首次合成要另收 ¥9.9,只能由用户在「配音设置」里建。没配 API Key、额度用完会报错,把报错原样告诉用户,不要反复重试。返回 mediaId、duration(秒)、clipId(放了时间轴才有)、provider、voiceId、chars(计费字数)。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        text: { type: "string", description: "要念的文字。数字、英文按想要的读法写(「130 毫秒」「PromptCut 零点五」)" },
+        start: { type: "number", description: "放到时间轴的起点(秒);不传只进素材库" },
+        trackId: { type: "string", description: "放到哪条序列;不传自动挑" },
+        provider: { type: "string", enum: ["minimax", "kling", "vidu"], description: "不传用设置里的默认服务" },
+        voiceId: { type: "string", description: "音色 id,只能取 voice_list 里有的;不传用该服务的默认音色" },
+        speed: { type: "number", description: "语速,MiniMax / Vidu 0.5~2、可灵 0.8~2;不传用设置" },
+        emotion: { type: "string", enum: ["happy", "sad", "angry", "fearful", "disgusted", "surprised", "calm"], description: "情绪,只对 MiniMax / Vidu 有效;不传由模型按文字判断" },
+        name: { type: "string", description: "素材名里带上的简短标签,如「开场旁白」" }
+      },
+      required: ["text"]
+    },
+    side: "browser"
+  },
+  {
     name: "collect_status",
     description: "查素材收集拓展的状态:yt-dlp 装没装(及版本)、ffmpeg 在不在、有哪些站点预设(bilibili / generic),以及各站登录态 cookies(键是站点 id,值有 loggedIn / expired / userId / expiresAt)。ready 为 true 才能 collect_probe / collect_download;为 false 时看 ytdlp.installed —— 没装就 collect_install,其余原因(没有 ffmpeg、没有内置 Python)不是工具能修的,如实告诉用户。抓链接之前先调它。",
     inputSchema: { type: "object", properties: {} },

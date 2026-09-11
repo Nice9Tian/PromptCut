@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { sealKey, openKey, sealedKind, KEY_KINDS } from './runners/config-crypt.mjs';
+import { sealKey, openKey, sealedKind, KEY_KINDS, SECRET_KINDS } from './runners/config-crypt.mjs';
 
 /**
  * AI 配置(ai.json)+ 两个密钥文件。
@@ -28,9 +28,9 @@ function getConfigPath() {
   return path.join(appData, 'promptcut', 'ai.json');
 }
 
-/** 某一路 Key 的文件路径 */
+/** 某一路 Key 的文件路径(对话两路之外,各功能自己的 Key 也放这里,见文件末尾的 readSecret) */
 export function keyFilePath(kind) {
-  if (!KEY_KINDS.includes(kind)) throw new Error(`密钥类型只能是 ${KEY_KINDS.join(' / ')}`);
+  if (!SECRET_KINDS.includes(kind)) throw new Error(`密钥类型只能是 ${SECRET_KINDS.join(' / ')}`);
   return path.join(path.dirname(getConfigPath()), 'keys', `${kind}.key`);
 }
 
@@ -389,4 +389,31 @@ export function publicConfig() {
   // 老版本 Key 还在 ai.json 里、没搬家的情况:custom 页也得看得到
   if (cfg.api.source === 'custom' && !cfg.keys.custom.set) cfg.keys.custom = { ...cfg.api.apiKey };
   return cfg;
+}
+
+/*
+ * 别的功能自己的 Key(比如配音用的 API Key)也走这一套:和对话 API 的 Key 同样落在
+ * keys/<kind>.key、同样 0600、同样 config-crypt 封装、前缀对不上就当没设。
+ * 各用各的 kind,互相解不开;它们不是对话来源,不进 api.source,clearKey 也不碰它们。
+ */
+export function readSecret(kind) {
+  return readKeyFile(kind);
+}
+
+export function writeSecret(kind, plain) {
+  writeKeyFile(kind, plain);
+}
+
+export function removeSecret(kind) {
+  removeKeyFile(kind);
+}
+
+/**
+ * 对话 API「自定义」那一路填的地址,只取协议 + 主机(https://example.com/v1 → https://example.com)。
+ * 同一家 API 下的别的接口(配音的 /minimax/v1/…)没单独填地址时拿它当默认。读的是原始配置,不解 Key。
+ */
+export function apiOrigin() {
+  const raw = readRaw();
+  const u = raw.api?.profiles?.custom?.baseUrl || raw.api?.baseUrl || '';
+  try { return u ? new URL(u).origin : ''; } catch { return ''; }
 }

@@ -36,6 +36,9 @@ import { listCuts, resolveCut } from "../../kernel/cuts";
 import { getActiveDraftId } from "../io/drafts";
 import { invalidateScopes, isCardVisible, loadScopes, readVisibility, type ScopeEntry } from "../cardScope";
 import { cameraFor, clampFov, DEFAULT_FOV_DEG, MAX_FOV_DEG, MIN_FOV_DEG } from "../../kernel/space3d";
+import { generateVoice, getVoiceConfig } from "../../ai/voice";
+import { VoiceSettingsDialog } from "../../voice/VoiceSettingsDialog";
+import { importAudioFromServer } from "../io";
 
 import type { ClipFrame } from "../../kernel/types";
 
@@ -997,6 +1000,44 @@ export function RightPanel() {
           height: media?.height,
           cardUrl: media ? mediaCardUrl(media) : "",
           hint: "已装进素材库并放到视频轨上。要做字幕就先 transcribe_media,再 add_clip 建 caption-track 并用 fill_captions 灌入。",
+        };
+      },
+
+      voiceList: async () => {
+        const { config, presets } = await getVoiceConfig();
+        return {
+          provider: config.provider,
+          apiKeySet: config.apiKey.set,
+          defaults: { minimax: config.minimax, kling: config.kling, vidu: config.vidu },
+          systemVoices: presets.systemVoices,
+          customVoices: config.customVoices.map((v) => ({ provider: v.provider, voiceId: v.voiceId, name: v.name, kind: v.kind, note: v.note })),
+          textLimits: presets.textLimits,
+          hint: config.apiKey.set
+            ? "voice_generate 的 voiceId 从 systemVoices / customVoices 里挑(customVoices 要配对 provider)。"
+            : "还没配 API Key,voice_generate 会失败。告诉用户去「配音设置」(开始页的配音卡、编辑台顶栏都能打开)里填 API Key。",
+        };
+      },
+
+      voiceGenerate: async (args) => {
+        if (!args.text || !String(args.text).trim()) throw new Error("text 不能是空的");
+        const r = await generateVoice({
+          text: args.text, provider: args.provider, voiceId: args.voiceId,
+          speed: args.speed, emotion: args.emotion, name: args.name,
+        });
+        const mediaId = await importAudioFromServer({ url: r.url, path: r.path, name: r.name });
+        const media = getState().project.media.find((m) => m.id === mediaId);
+        let clipId: string | undefined;
+        if (typeof args.start === "number") {
+          const clip = actions.addMediaClip(mediaId, Math.max(0, args.start), { trackId: args.trackId });
+          if (!clip) throw new Error(`语音已进素材库(mediaId ${mediaId}),但放上时间轴失败 —— trackId 不对?`);
+          clipId = clip.id;
+        }
+        return {
+          mediaId, name: r.name, duration: media?.duration, clipId,
+          provider: r.provider, model: r.model, voiceId: r.voiceId, chars: r.chars,
+          hint: clipId
+            ? "已进素材库并放到时间轴。下一段的 start 接在这段 start + duration 后面。"
+            : "已进素材库(没放时间轴)。要上时间轴就传 start 再生成,或者用户可以自己从素材库拖。",
         };
       },
 
@@ -1980,6 +2021,8 @@ export function RightPanel() {
       </div>
       {/* 站点登录框:开始页的卡和 collect_login 工具都会打开它,挂在这里才能在编辑台里出现 */}
       <CollectLoginDialog />
+      {/* 配音设置子窗口:顶栏的「配音设置」按钮开它 */}
+      <VoiceSettingsDialog />
       {/* 桌面壳模式下 agent 交出浏览器时的浮层(Chrome 方案下永远不会打开) */}
       <AgentBrowserFrame />
     </>

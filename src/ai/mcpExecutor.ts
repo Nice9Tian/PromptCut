@@ -101,6 +101,9 @@ export interface EditorApi {
   listCaptions(args: { clipId?: string }): any;
   editCaption(args: { clipId?: string; op?: string; index?: number; text?: string; en?: string; start?: number; end?: number }): any;
   importMedia(args: { url?: string; name?: string }): Promise<any>;
+  // 配音:云端 TTS 生成 mp3 进素材库,给 start 就上时间轴
+  voiceList(): Promise<any>;
+  voiceGenerate(args: { text: string; start?: number; trackId?: string; provider?: string; voiceId?: string; speed?: number; emotion?: string; name?: string }): Promise<any>;
   collectStatus(): Promise<any>;
   collectSearch(args: { query: string; site?: string; limit?: number }): Promise<any>;
   collectInstall(): Promise<any>;
@@ -125,7 +128,7 @@ const TIMELINE_TOOLS = new Set([
   "add_clip", "update_clip", "remove_clip", "duplicate_clip", "split_clip",
   "add_transition", "remove_transition", "separate_audio", "create_audio", "set_emphasis",
   "set_position", "set_rect", "align", "nudge", "fill_captions", "edit_caption", "attach_clip_motion", "detach_clip_motion",
-  "add_track", "switch_cut", "add_cut", "set_theme",
+  "add_track", "switch_cut", "add_cut", "set_theme", "voice_generate",
 ]);
 
 /**
@@ -435,6 +438,8 @@ export function connectMcpExecutor(getApi: () => EditorApi, onStatus?: (s: { con
           else if (tool === "list_captions") result = api.listCaptions(args);
           else if (tool === "edit_caption") result = api.editCaption(args);
           else if (tool === "import_media") result = await api.importMedia(args);
+          else if (tool === "voice_list") result = await api.voiceList();
+          else if (tool === "voice_generate") result = await api.voiceGenerate(args);
           else if (tool === "collect_status") result = await api.collectStatus();
           else if (tool === "collect_search") result = await api.collectSearch(args);
           else if (tool === "collect_install") result = await api.collectInstall();

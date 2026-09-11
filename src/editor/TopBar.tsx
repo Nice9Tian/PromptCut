@@ -18,7 +18,9 @@ import {
   IconSave,
   IconSettings,
   IconUndo,
+  IconVoice,
 } from "../ui/icons";
+import { openVoiceSettings } from "../ai/voiceSettingsStore";
 import { ModeSwitch } from "./ModeSwitch";
 import { AgentBrowserTab } from "./AgentBrowserTab";
 import { ProjectSettingsDialog } from "./ProjectSettingsDialog";
@@ -618,6 +620,8 @@ ${summarizeCombine(report)}
           </svg>
           {dirty && <span className="pc-proj-dirty" title="有没保存的改动" />}
         </button>
+        {/* 配音设置:开子窗口,和开始页配音卡的「设置」是同一个 */}
+        <Btn onClick={openVoiceSettings} label="配音设置" icon={<IconVoice />} collapsed={tier !== "wide"} />
         <Btn
           onClick={run(exportProject)}
           label="导出视频"
