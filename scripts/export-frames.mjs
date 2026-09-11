@@ -2,8 +2,9 @@ import puppeteer from 'puppeteer';
 import path from 'path';
 import fs from 'fs/promises';
 import fsSync from 'node:fs';
-import { spawn } from 'child_process';
+import { spawn, execFileSync } from 'child_process';
 import { fileURLToPath } from 'url';
+import { buildComposeArgs, clipFrameRange, composeLayers } from '../server/export-compose.mjs';
 
 /**
  * 逐帧导出 —— beginFrame 后端。
@@ -148,6 +149,63 @@ function PAGE_PRELUDE() {
         .replace(new RegExp(`((?:xlink:)?href="#)${e}(")`, 'g'), `$1${id}__r$2`);
     }
     return { html, lossy };
+  };
+  /*
+   * 毛玻璃遮罩(只渲卡片的导出用,见 server/export-compose.mjs 的 mask)。
+   *
+   * 卡片的玻璃是 backdrop-filter:blur,模糊的是它**背后**的东西。页面只渲卡片时背后是透明的,
+   * 视频由 ffmpeg 事后垫进去 —— 玻璃就成了一块只带底色、不模糊视频的膜。要把模糊补回来,ffmpeg 得知道
+   * 玻璃在画面上的确切形状:位置、缩放旋转三维、圆角、被祖先的 opacity 淡到几成、被谁裁掉。
+   * 这些自己算很容易漏,所以让 Chrome 画:这一帧截完卡片之后,临时把舞台上除玻璃以外的东西全藏起来、
+   * 玻璃本身涂成纯白,再截一张 —— 白的地方就是玻璃,alpha 就是它的覆盖度 × 不透明度。截完原样还回去。
+   *
+   * 还原时不能惊动任何动画:
+   *   - 全程不碰 transition-property(改它会取消正在跑的 CSS 过渡),只把 duration / delay 压成 0,
+   *     这样改值不会起新的过渡;
+   *   - 撤掉时分两步:先撤掉覆盖、保留「duration 0」再强制算一次样式(值变回去也不起过渡),再整个删掉;
+   *   - 动画(Motion 的 WAAPI、CSS animation)在层叠里低于 !important 的作者样式,覆盖期间被压住,撤掉即恢复;
+   *   - 只有本来就可见的玻璃才标记:原本 visibility:hidden 的不能被这里的规则拉出来。
+   * 祖先上的 filter 不动:去掉它会改变绝对定位后代的包含块,可能把玻璃挪位;代价是带强调阴影的玻璃卡,
+   * 遮罩边上会多一圈淡淡的影子(模糊略微溢出玻璃边)。
+   */
+  const GLASS_HOLD = '#root *, #root *::before, #root *::after { transition-duration: 0s !important; transition-delay: 0s !important; }';
+  const GLASS_ON = GLASS_HOLD + `
+    #root *, #root *::before, #root *::after { visibility: hidden !important; }
+    #root [data-bf-glass] { visibility: visible !important; background: #fff !important; border-color: #fff !important;
+      box-shadow: none !important; outline: none !important; filter: none !important; backdrop-filter: none !important;
+      -webkit-backdrop-filter: none !important; color: transparent !important; text-shadow: none !important; }
+    #root [data-bf-glass] *, #root [data-bf-glass]::before, #root [data-bf-glass]::after { visibility: hidden !important; }`;
+  window.__bfGlassOn = () => {
+    const root = document.getElementById('root');
+    if (!root) return null;
+    const els = [];
+    const blurs = [];
+    for (const el of root.querySelectorAll('*')) {
+      const cs = getComputedStyle(el);
+      const bf = cs.backdropFilter || cs.webkitBackdropFilter;
+      if (!bf || bf === 'none' || cs.visibility !== 'visible') continue;
+      els.push(el);
+      const m = /blur\(([\d.]+)px\)/.exec(bf);
+      if (m) blurs.push(parseFloat(m[1]));
+    }
+    if (!els.length) return null;
+    for (const el of els) el.setAttribute('data-bf-glass', '');
+    const st = document.createElement('style');
+    st.id = '__bf_glass';
+    st.textContent = GLASS_ON;
+    document.head.appendChild(st);
+    window.__bfGlassEls = els;
+    return { count: els.length, blurs };
+  };
+  window.__bfGlassOff = () => {
+    const st = document.getElementById('__bf_glass');
+    if (!st) return;
+    st.textContent = GLASS_HOLD;
+    void document.body.offsetHeight;
+    st.remove();
+    for (const el of window.__bfGlassEls || []) el.removeAttribute('data-bf-glass');
+    window.__bfGlassEls = null;
+    void document.body.offsetHeight;
   };
 }
 
@@ -294,7 +352,7 @@ async function installHeadlessShell() {
  * 复用只要换一个 page。复用姿势:每趟烘帧之前调一次 `await bakery.reset(project, url)`,然后 bakeFrames。
  */
 export async function openBakery(opts = {}) {
-  const url = opts.url || 'http://127.0.0.1:5190/?export=1';
+  const url = opts.url || DEFAULT_URL;
 
   console.log('Launching Puppeteer (chrome-headless-shell)...');
   const launch = () => puppeteer.launch({ headless: 'shell', protocolTimeout: 60000, args: CHROME_ARGS });
@@ -390,6 +448,8 @@ export async function openBakery(opts = {}) {
  *   staticSkip     —— 画面静止的帧直接复用上一张,连截都不截。判据见 ExportView 的 __pcStaticProbe
  *   verifyEvery    —— 连续复用多少帧就强制真截一张比对一次
  *   targetFrames   —— 只截这几帧(离散取样,给预烘用);仍从第 0 帧顺推,只是沿途只截这几张
+ *   glassFrames    —— Set<帧号>:这些帧底下有素材,截完卡片再截一张毛玻璃遮罩(PAGE_PRELUDE 的 __bfGlassOn)
+ *                     到 <out>/glass/%06d.png。没有玻璃的帧不写文件;返回值的 glass 里有写了几张、玻璃的模糊量
  */
 export async function bakeFrames(bakery, opts = {}) {
   const { page, client, beginFrame, waitNet } = bakery;
@@ -524,13 +584,33 @@ export async function bakeFrames(bakery, opts = {}) {
   if (domDir) await fs.mkdir(domDir, { recursive: true });
   let domLossy = 0;
 
+  const glassFrames = opts.glassFrames instanceof Set && opts.glassFrames.size ? opts.glassFrames : null;
+  const glassDir = glassFrames ? path.join(outDir, 'glass') : null;
+  if (glassDir) await fs.mkdir(glassDir, { recursive: true });
+  const glass = { dir: glassDir, list: [], blurs: new Set() };
+  /** 这一帧的毛玻璃遮罩;没有可见的玻璃返回 null。多出来的这一拍时间戳照旧钉着,rAF 循环空转(见 exportClock.ts) */
+  const shootGlass = async () => {
+    const info = await page.evaluate(() => window.__bfGlassOn());
+    if (!info) return null;
+    for (const b of info.blurs) glass.blurs.add(b);
+    try {
+      return await shoot();
+    } finally {
+      await page.evaluate(() => window.__bfGlassOff());
+    }
+  };
+
   /** 跑一遍全部帧。allowSkip 为假时每帧老老实实真截。返回判错的帧号;没判错返回 null。 */
   const renderPass = async (allowSkip) => {
     let lastBuf = null;  // 上一张**真截**出来的图
     let lastDom = null;  // 上一份冻结下来的舞台(gzip 过的)
     let runLen = 0;      // 已经连续复用了几帧
+    // 上一张真截对应的遮罩:undefined = 还没截过(null = 截了,没有玻璃)。静止帧复用卡片图时遮罩也一起复用
+    let lastGlass;
     reused = 0;
     domLossy = 0;
+    glass.list = [];
+    glass.blurs.clear();
     const writes = [];
     for (let i = 0; i <= endFrame; i++) {
       /*
@@ -565,6 +645,14 @@ export async function bakeFrames(bakery, opts = {}) {
       const name = String(i).padStart(6, '0');
       // 写盘不挡下一帧
       writes.push(fs.writeFile(path.join(framesDir, `${name}.${ext}`), buf));
+      if (fresh) lastGlass = undefined;
+      if (glassFrames && glassFrames.has(i)) {
+        if (lastGlass === undefined) lastGlass = await shootGlass();
+        if (lastGlass) {
+          glass.list.push(i);
+          writes.push(fs.writeFile(path.join(glassDir, `${name}.png`), lastGlass));
+        }
+      }
       if (domDir) {
         if (fresh || !lastDom) {
           const { html, lossy } = await page.evaluate(() => window.__bfFreeze());
@@ -602,8 +690,11 @@ export async function bakeFrames(bakery, opts = {}) {
     if (domLossy) console.warn(`HTML 采样缓存:${domLossy} 个画布读不出像素,重放时这些画布是空的`);
   }
   const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-  console.log(`Export finished in ${elapsed}s (${totalFrames} frames${reused ? `, ${reused} reused` : ''}).`);
-  return { framesDir, ext, fps, width, height, startFrame, endFrame, totalFrames, durationSec, reused, elapsed, domDir };
+  console.log(`Export finished in ${elapsed}s (${totalFrames} frames${reused ? `, ${reused} reused` : ''}${glass.list.length ? `, ${glass.list.length} glass masks` : ''}).`);
+  return {
+    framesDir, ext, fps, width, height, startFrame, endFrame, totalFrames, durationSec, reused, elapsed, domDir,
+    glass: { dir: glass.dir, list: glass.list, blurs: [...glass.blurs] },
+  };
 }
 
 /*
@@ -689,6 +780,11 @@ async function bakeSharded(opts, n) {
       durationSec: (totalFrames / r0.fps).toFixed(3),
       reused: results.reduce((s, r) => s + (r.reused || 0), 0),
       elapsed: ((Date.now() - t0) / 1000).toFixed(1),
+      glass: {
+        dir: r0.glass?.dir ?? null,
+        list: results.flatMap((r) => r.glass?.list || []),
+        blurs: [...new Set(results.flatMap((r) => r.glass?.blurs || []))],
+      },
     };
     // 各分片各写了一份只覆盖自己那段的清单,合成一份覆盖全段的
     if (r0.domDir) {
@@ -703,47 +799,209 @@ async function bakeSharded(opts, n) {
   }
 }
 
+/** 本机的 ffmpeg:PATH 上有就用它,没有就退到 winget 装的那一份 */
+async function findFfmpeg() {
+  const localAppData = process.env.LOCALAPPDATA || '';
+  const ffmpegFallback = path.join(localAppData, 'Microsoft', 'WinGet', 'Packages', 'Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe', 'ffmpeg-9.0.1-full_build', 'bin', 'ffmpeg.exe');
+  try {
+    await new Promise((resolve, reject) => {
+      const proc = spawn('ffmpeg', ['-version']);
+      proc.on('close', code => code === 0 ? resolve() : reject());
+      proc.on('error', reject);
+    });
+    return 'ffmpeg';
+  } catch {
+    return ffmpegFallback;
+  }
+}
+const ffprobeOf = (ffmpegCmd) => ffmpegCmd.replace(/ffmpeg(.exe)?$/i, (m) => m.toLowerCase().startsWith('ffmpeg.exe') ? 'ffprobe.exe' : 'ffprobe');
+
+const isInside = (file, dir) => {
+  const rel = path.relative(dir, file);
+  return !!rel && !rel.startsWith('..') && !path.isAbsolute(rel);
+};
+
+/**
+ * 素材在 ffmpeg 那边从哪儿读。页面是按 m.url 去 fetch 的,这里按同一个地址找:
+ *   /@export/<id>/media/<文件> → <out>/media/<文件>(导出时浏览器上传的素材);
+ *   /@media/<文件>、或 path 字段 → 素材目录里的文件(素材库);
+ *   都不在本机就和页面一样走 HTTP 找 dev server 要(两处都支持 Range,ffmpeg 能 seek)。
+ * 和 vite-plugin-vision 的 mediaFileOf 同一道边界:磁盘路径只认落在素材目录 / 产物目录里的,
+ * HTTP 只认页面同源的 —— project.json 是浏览器发来的,不能让它指使 ffmpeg 读任意文件。
+ */
+export function mediaSourceOf(m, { outDir, pageUrl, mediaRoot }) {
+  const url = String(m?.url || '');
+  if (!url || /^(blob|data):/i.test(url)) return null;
+  const exportMedia = path.resolve(outDir, 'media');
+  const marker = url.lastIndexOf('/media/');
+  if (url.startsWith('/@export/') && marker !== -1) {
+    const f = path.join(exportMedia, decodeURIComponent(url.slice(marker + '/media/'.length).split('?')[0]));
+    if (isInside(f, exportMedia) && fsSync.existsSync(f)) return f;
+  }
+  if (m.path) {
+    const f = path.resolve(String(m.path));
+    if (isInside(f, mediaRoot) && fsSync.existsSync(f)) return f;
+  }
+  if (url.startsWith('/@media/')) {
+    const f = path.join(mediaRoot, decodeURIComponent(url.slice('/@media/'.length).split('?')[0]));
+    if (isInside(f, mediaRoot) && fsSync.existsSync(f)) return f;
+  }
+  try {
+    const u = new URL(url, pageUrl);
+    if (u.origin === new URL(pageUrl).origin && /^https?:$/.test(u.protocol)) return u.href;
+  } catch { /* 地址不合法 */ }
+  return null;
+}
+
+/**
+ * ffprobe 看一眼素材:有没有透明通道(决定强调算不算)、色彩空间(没标注的按 bt709 解,和 Chrome 一致)、
+ * 要不要换解码器(带 alpha 的 VP8/VP9 用 ffmpeg 自带解码器会丢 alpha,得用 libvpx)。读不出来返回 null。
+ */
+function probeVisual(ffprobeCmd, src) {
+  try {
+    const out = execFileSync(ffprobeCmd, [
+      '-v', 'error', '-select_streams', 'v:0',
+      '-show_entries', 'stream=codec_name,pix_fmt,color_space:stream_tags=alpha_mode', '-of', 'json', src,
+    ], { encoding: 'utf8', timeout: 20000, windowsHide: true });
+    const s = JSON.parse(out).streams?.[0];
+    if (!s) return null;
+    const alphaTag = String(s.tags?.alpha_mode ?? s.tags?.ALPHA_MODE ?? '') === '1';
+    const pix = String(s.pix_fmt || '');
+    return {
+      hasAlpha: alphaTag || /^(yuva|rgba|bgra|argb|abgr|gbrap|ya|pal8)/.test(pix),
+      colorSpace: s.color_space || 'unknown',
+      decoder: alphaTag ? ({ vp8: 'libvpx', vp9: 'libvpx-vp9' })[s.codec_name] : undefined,
+    };
+  } catch {
+    return null;
+  }
+}
+
+const DEFAULT_URL = 'http://127.0.0.1:5190/?export=1';
+
+/** 页面拿的是哪份项目,ffmpeg 就用哪份:按导出页地址里的 timeline 去取;取不到再看 <out>/project.json */
+async function loadProject(url, outDir) {
+  try {
+    const u = new URL(url);
+    const tl = u.searchParams.get('timeline');
+    if (tl) {
+      const r = await fetch(new URL(tl, u));
+      if (r.ok) {
+        const j = await r.json();
+        if (j && Array.isArray(j.tracks)) return j;
+      }
+    }
+  } catch (e) {
+    console.warn('取项目失败,改读产物目录里的 project.json:', e.message);
+  }
+  const f = path.join(outDir, 'project.json');
+  if (fsSync.existsSync(f)) {
+    const j = JSON.parse(fsSync.readFileSync(f, 'utf8'));
+    if (j && Array.isArray(j.tracks)) return j;
+  }
+  return null;
+}
+
+/**
+ * 烘帧之前先把素材层规划好:每段素材从哪儿读、有没有 alpha,以及哪些帧底下有素材
+ * (那些帧要截毛玻璃遮罩;底下没素材的帧,玻璃背后只有灰底,模不模糊都一样)。
+ */
+async function planMedia(opts, outDir, ffmpegCmd) {
+  const url = opts.url || DEFAULT_URL;
+  const project = await loadProject(url, outDir);
+  if (!project) return null;
+  const all = composeLayers(project);
+  if (!all.length) return { project, layers: [], glassFrames: new Set() };
+  const mediaRoot = path.resolve(process.env.PROMPTCUT_EXPORT_DIR || path.resolve('out'), 'media');
+  const ffprobeCmd = ffprobeOf(ffmpegCmd);
+  const probed = new Map();
+  const layers = all.map((l) => {
+    let src = mediaSourceOf(l.media, { outDir, pageUrl: url, mediaRoot });
+    let info = null;
+    if (src) {
+      if (!probed.has(src)) probed.set(src, probeVisual(ffprobeCmd, src));
+      info = probed.get(src);
+      if (!info) {
+        console.warn(`素材「${l.media.name || l.media.id}」ffprobe 读不出来(${src}),这一层没有画面`);
+        src = null;
+      }
+    } else {
+      console.warn(`素材「${l.media.name || l.media.id}」找不到文件(${l.media.url || '无地址'}),这一层没有画面`);
+    }
+    return { ...l, src, hasAlpha: !!info?.hasAlpha, colorSpace: info?.colorSpace, decoder: info?.decoder };
+  });
+  const fps = opts.fps || project.fps || 30;
+  let [f0, f1] = [0, Math.floor((project.duration || 20) * fps) - 1];
+  if (opts.frames) [f0, f1] = opts.frames.split('-').map(Number);
+  const glassFrames = new Set();
+  for (const l of layers) {
+    if (!l.src) continue;
+    const r = clipFrameRange(l.clip, fps, f0, f1);
+    if (r) for (let i = r[0]; i <= r[1]; i++) glassFrames.add(i);
+  }
+  return { project, layers, glassFrames };
+}
+
+/** 遮罩序列要每帧都有一张(image2 输入不能缺号):没有玻璃的帧补一张全透明的 */
+async function fillGlassGaps(dir, startFrame, endFrame, width, height) {
+  const { PNG } = await import('pngjs');
+  const empty = PNG.sync.write(new PNG({ width, height }));
+  const writes = [];
+  for (let i = startFrame; i <= endFrame; i++) {
+    const f = path.join(dir, `${String(i).padStart(6, '0')}.png`);
+    if (!fsSync.existsSync(f)) writes.push(fs.writeFile(f, empty));
+  }
+  await Promise.all(writes);
+}
+
 /**
  * 一次性导出:自己开 bakery、烘帧、合成视频、关掉。CLI 和现有的 /api/export 走这条。
  * opts.workers:1(默认)/ 数字 / 'auto'。离散取样(targetFrames)和外部传进来的 bakery 一律单进程。
+ * opts.media:素材怎么进成片。
+ *   'ffmpeg'(默认)—— 页面只渲卡片的透明层(?cardsOnly=1),视频 / 图片由 ffmpeg 合进 preview.mp4
+ *                      (server/export-compose.mjs)。frames/ 和 overlay.mov 因此**只有卡片**。
+ *   'chrome'       —— 以前的做法:素材挂进页面逐帧 seek,烤进每一张 PNG。留作对账和兜底。
+ *   外部传进来的 bakery 已经导航到某个地址,改不了页面,按 'chrome' 处理。
  */
 export async function exportFrames(opts) {
   const outDir = opts.out || 'out';
   const noVideo = opts.noVideo || false;
   const workers = (opts.bakery || opts.targetFrames) ? 1 : await resolveWorkers(opts.workers);
+  const mediaMode = opts.bakery || opts.media === 'chrome' ? 'chrome' : 'ffmpeg';
+  const ffmpegCmd = await findFfmpeg();
+  let plan = null;
+  let bakeOpts = opts;
+  if (mediaMode === 'ffmpeg') {
+    const url = opts.url || DEFAULT_URL;
+    bakeOpts = { ...opts, url: url + (url.includes('?') ? '&' : '?') + 'cardsOnly=1' };
+    // 不出视频(--no-video)、离散取样都不合成,也就用不上素材规划和遮罩
+    if (!noVideo && !opts.targetFrames) {
+      plan = await planMedia(opts, outDir, ffmpegCmd);
+      if (plan?.glassFrames.size) bakeOpts.glassFrames = plan.glassFrames;
+    }
+  }
   let baked;
   if (workers > 1) {
-    baked = await bakeSharded(opts, workers);
+    baked = await bakeSharded(bakeOpts, workers);
   } else {
-    const bakery = opts.bakery || await openBakery(opts);
+    const bakery = opts.bakery || await openBakery(bakeOpts);
     try {
-      baked = await bakeFrames(bakery, opts);
+      baked = await bakeFrames(bakery, bakeOpts);
     } finally {
       if (!opts.bakery) await bakery.close();
     }
   }
-  const { framesDir, ext, fps, width, height, startFrame, durationSec } = baked;
+  const { framesDir, ext, fps, width, height, startFrame, endFrame, durationSec } = baked;
 
   if (!noVideo) {
     console.log('Running ffmpeg to generate video files...');
-    const localAppData = process.env.LOCALAPPDATA || '';
-    const ffmpegFallback = path.join(localAppData, 'Microsoft', 'WinGet', 'Packages', 'Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe', 'ffmpeg-9.0.1-full_build', 'bin', 'ffmpeg.exe');
-    let ffmpegCmd = 'ffmpeg';
-    try {
-      await new Promise((resolve, reject) => {
-        const proc = spawn('ffmpeg', ['-version']);
-        proc.on('close', code => code === 0 ? resolve() : reject());
-        proc.on('error', reject);
-      });
-    } catch {
-      ffmpegCmd = ffmpegFallback;
-    }
     const runFfmpeg = (args) => new Promise((resolve, reject) => {
       const proc = spawn(ffmpegCmd, args, { stdio: 'inherit' });
       proc.on('close', code => code === 0 ? resolve() : reject(new Error(`ffmpeg exited with code ${code}`)));
       proc.on('error', reject);
     });
     try {
+      // 卡片透明层。素材走 ffmpeg 时这里只有卡片 —— 名字说的就是它:叠到别的画面上用的那一层
       console.log('Creating overlay.mov...');
       await runFfmpeg([
         '-y', '-framerate', String(fps), '-start_number', String(startFrame),
@@ -751,17 +1009,22 @@ export async function exportFrames(opts) {
         '-c:v', 'prores_ks', '-profile:v', '4444', '-pix_fmt', 'yuva444p10le',
         path.join(outDir, 'overlay.mov'),
       ]);
-      console.log('Creating preview.mp4...');
-      await runFfmpeg([
-        // 灰底是 lavfi 生成的无限流,-shortest 拦不住它(帧序列结束后 overlay 会一直重复最后一帧),
-        // 必须给灰底 d= 时长并用 -t 截断,否则 ffmpeg 永远不退出、文件无限长。
-        '-y', '-f', 'lavfi', '-i', `color=c=#333333:s=${width}x${height}:r=${fps}:d=${durationSec}`,
-        '-framerate', String(fps), '-start_number', String(startFrame),
-        '-i', path.join(framesDir, `%06d.${ext}`),
-        '-filter_complex', '[0:v][1:v]overlay=eof_action=endall[out]', '-map', '[out]',
-        '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-t', String(durationSec),
-        path.join(outDir, 'preview.mp4'),
-      ]);
+      const layers = (plan?.layers || []).filter((l) => clipFrameRange(l.clip, fps, startFrame, endFrame));
+      if (layers.length) {
+        await composePreview({ ffmpegCmd, baked, layers, outDir });
+      } else {
+        console.log('Creating preview.mp4...');
+        await runFfmpeg([
+          // 灰底是 lavfi 生成的无限流,-shortest 拦不住它(帧序列结束后 overlay 会一直重复最后一帧),
+          // 必须给灰底 d= 时长并用 -t 截断,否则 ffmpeg 永远不退出、文件无限长。
+          '-y', '-f', 'lavfi', '-i', `color=c=#333333:s=${width}x${height}:r=${fps}:d=${durationSec}`,
+          '-framerate', String(fps), '-start_number', String(startFrame),
+          '-i', path.join(framesDir, `%06d.${ext}`),
+          '-filter_complex', '[0:v][1:v]overlay=eof_action=endall[out]', '-map', '[out]',
+          '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-t', String(durationSec),
+          path.join(outDir, 'preview.mp4'),
+        ]);
+      }
       // 音轨:逐帧截图只有画面,声音在这里拼回去(配乐 + 视频自带的声音)
       try {
         const { buildAudioPlan, buildFfmpegArgs, hasAudioStream } = await import('./mux-audio.mjs');
@@ -787,18 +1050,113 @@ export async function exportFrames(opts) {
       console.log('Video synthesis complete.');
     } catch (e) {
       console.error('FFmpeg failed:', e.message);
+      // 以前这里吞掉错误照常退出 0,界面报「导出完成」、取件时才发现没有 preview.mp4
+      process.exitCode = 1;
     }
   }
+}
+
+/**
+ * 跑一趟 ffmpeg,用 -progress 读出已出的帧数回调给 onFrame。
+ * 看门狗:stallMs 内帧数一直不动就杀掉报错。ffmpeg 真卡住时 CPU 归零、不报错也不退出(实测过:卡片 PNG 中途变格式
+ * 触发滤镜图重建,见 buildComposeArgs 里 -reinit_filter 那段),不设这道闸,导出会在界面上永远停在某个进度。
+ */
+function runFfmpegProgress(ffmpegCmd, args, onFrame, stallMs = Number(process.env.PC_COMPOSE_STALL_MS) || 45000) {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(ffmpegCmd, ['-progress', 'pipe:1', '-nostats', '-loglevel', 'warning', ...args], { stdio: ['ignore', 'pipe', 'inherit'] });
+    let buf = '';
+    let last = -1;
+    let lastChange = Date.now();
+    let stalled = false;
+    const dog = setInterval(() => {
+      if (Date.now() - lastChange > stallMs) {
+        stalled = true;
+        proc.kill();
+      }
+    }, 2000);
+    proc.stdout.on('data', (d) => {
+      buf += d;
+      let k;
+      while ((k = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, k).trim();
+        buf = buf.slice(k + 1);
+        const m = /^frame=(\d+)$/.exec(line);
+        if (!m) continue;
+        const n = Number(m[1]);
+        if (n !== last) {
+          last = n;
+          lastChange = Date.now();
+          onFrame(n);
+        }
+      }
+    });
+    proc.on('close', (code) => {
+      clearInterval(dog);
+      if (stalled) reject(Object.assign(new Error(`ffmpeg 合成 ${stallMs / 1000} 秒没有任何进展(停在第 ${Math.max(0, last)} 帧),已中止`), { stalled: true }));
+      else if (code === 0) resolve();
+      else reject(new Error(`ffmpeg(素材合成)exited with code ${code}`));
+    });
+    proc.on('error', (e) => {
+      clearInterval(dog);
+      reject(e);
+    });
+  });
+}
+
+/**
+ * 素材合成那一步:灰底 + 素材层(+ 毛玻璃)+ 卡片层 → preview.mp4,一趟 ffmpeg。
+ * 进度用 -progress 读出来,打成 `Composited frame n/N`,vite-plugin-export 转给界面。
+ */
+async function composePreview({ ffmpegCmd, baked, layers, outDir }) {
+  const { framesDir, ext, fps, width, height, startFrame, endFrame } = baked;
+  const total = endFrame - startFrame + 1;
+  const glassList = baked.glass?.list || [];
+  const blurs = baked.glass?.blurs || [];
+  const blur = blurs.length ? Math.max(...blurs) : 0;
+  if (blurs.length > 1) console.warn(`毛玻璃的模糊量不止一种(${blurs.join(' / ')} px),统一按最大的 ${blur}px 合成`);
+  let mask = null;
+  if (glassList.length && blur > 0) {
+    await fillGlassGaps(baked.glass.dir, startFrame, endFrame, width, height);
+    mask = { pattern: path.join(baked.glass.dir, '%06d.png'), blur };
+  }
+  const { args, graph, notes } = buildComposeArgs({
+    width, height, fps, startFrame, endFrame, layers, mask,
+    cardsPattern: path.join(framesDir, `%06d.${ext}`),
+    out: path.join(outDir, 'preview.mp4'),
+  });
+  for (const n of notes) console.warn('合成:', n);
+  let finalArgs = args;
+  // 片段多、带强调时 filter graph 会很长;Windows 命令行上限 32K 字符,长了改用文件传
+  if (graph.length > 8000) {
+    const f = path.join(outDir, 'compose-filter.txt');
+    await fs.writeFile(f, graph, 'utf8');
+    const k = args.indexOf('-filter_complex');
+    finalArgs = [...args.slice(0, k), '-/filter_complex', f, ...args.slice(k + 2)];
+  }
+  console.log(`Creating preview.mp4: compositing ${layers.length} media clip(s)${mask ? ` + glass blur ${blur}px on ${glassList.length} frame(s)` : ''} with ffmpeg...`);
+  const t0 = Date.now();
+  let printed = -1;
+  await runFfmpegProgress(ffmpegCmd, finalArgs, (n) => {
+    const k = Math.min(total, n);
+    if (k !== printed) {
+      printed = k;
+      console.log(`Composited frame ${k}/${total}`);
+    }
+  });
+  console.log(`Composited ${total} frames in ${((Date.now() - t0) / 1000).toFixed(1)}s.`);
 }
 
 const isMain = import.meta.url.startsWith('file:') && process.argv[1] === fileURLToPath(import.meta.url);
 
 if (isMain) {
   const args = process.argv.slice(2);
-  // 命令行默认按机器自动分片(/api/export 走的就是这条);要单进程传 --workers 1
-  const opts = { noVideo: false, workers: 'auto' };
+  // 默认单进程:分片的每一片都要从第 0 帧推起,实测提速有限、还和别的 Chrome 抢 CPU(见 balancedShards 上面)。
+  // 以前这里默认 'auto',而 /api/export 不传 --workers,于是每次导出都开到 4 个分片
+  const opts = { noVideo: false, workers: 1 };
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--url') opts.url = args[++i];
+    else if (args[i] === '--workers') opts.workers = args[++i];
+    else if (args[i] === '--media') opts.media = args[++i];
     else if (args[i] === '--out') opts.out = args[++i];
     else if (args[i] === '--frames') opts.frames = args[++i];
     else if (args[i] === '--fps') opts.fps = parseFloat(args[++i]);

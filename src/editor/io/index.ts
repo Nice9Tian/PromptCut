@@ -297,7 +297,8 @@ export function exportProjectJson(): string {
  */
 export async function exportVideo(
   opts: {
-    onProgress?: (done: number, total: number) => void;
+    /** stage:render = 逐帧渲卡片,compose = ffmpeg 合素材编码;done/total 是这一步的帧数 */
+    onProgress?: (done: number, total: number, stage?: "render" | "compose") => void;
     /** 拿到任务 id 就能取消了,所以在开跑那一刻先回给调用方 */
     onStart?: (id: string) => void;
   } = {},
@@ -352,7 +353,7 @@ export async function exportVideo(
     es.onmessage = (e) => {
       const data = JSON.parse(e.data);
       if (data.status === "running") {
-        opts.onProgress?.(data.done, data.total);
+        opts.onProgress?.(data.done, data.total, data.stage);
       } else if (data.status === "done") {
         finish(() => {
           opts.onProgress?.(data.total, data.total);

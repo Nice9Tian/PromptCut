@@ -16,9 +16,11 @@ export interface ExportState {
   phase: ExportPhase;
   /** 服务端任务 id;结束后「打开产物目录」还要用，所以存在状态里而不是 ref 里 */
   id?: string;
-  /** 已渲染帧 / 总帧数 */
+  /** 当前这一步的已完成帧 / 总帧数 */
   done: number;
   total: number;
+  /** render = 浏览器逐帧渲卡片;compose = ffmpeg 把视频素材和卡片合成成片。两步各走一遍进度条 */
+  stage?: "render" | "compose";
   /** 用户选定的落点，没选就是服务端的产物目录 */
   target: string;
   outDir?: string;
@@ -105,7 +107,7 @@ export function ExportDialog(props: {
             </div>
             <div className="pc-export-meta">
               <span>{pct}%</span>
-              <span>{state.done} / {state.total} 帧</span>
+              <span>{state.stage === "compose" ? "合成视频" : "渲染卡片"} {state.done} / {state.total} 帧</span>
               <span>已用 {fmtDuration(elapsed)}</span>
             </div>
             <div className="pc-export-hint">
@@ -116,7 +118,7 @@ export function ExportDialog(props: {
 
         {state.phase === "done" && (
           <div className="pc-export-ok">
-            视频已保存。其余产物（透明通道 overlay.mov、逐帧 PNG）在产物目录里。
+            视频已保存。其余产物（只含卡片层的透明通道 overlay.mov、逐帧 PNG，不含视频 / 图片素材）在产物目录里。
           </div>
         )}
 

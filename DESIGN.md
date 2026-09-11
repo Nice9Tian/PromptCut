@@ -72,7 +72,8 @@ export const myCard: CardDef<Params> = {
 - `AnimClock` 只在预览里做倍速;导出时不碰 playbackRate。
 - Chrome 启动参数固定带软件光栅化(`--disable-gpu` 等)和 `--enable-begin-frame-control`。
 - 字体:每个字形都要落在字体栈里显式写出的字体上(主题字体栈见 `src/themes/index.ts`),`scripts/font-audit.mjs` 检查。
-- 输出 `<out>/frames/%06d.png`,ffmpeg 合成 `overlay.mov`(ProRes 4444 alpha)和 `preview.mp4`。可选 `--dom-cache` 同时存每帧的 HTML 快照,供 `scripts/replay-frames.mjs` 乱序重截。
+- 页面只渲卡片的透明层(`?cardsOnly=1`),视频 / 图片素材不进 Chrome,由 ffmpeg 按预览同一套规则合进成片(`server/export-compose.mjs`)。
+- 输出 `<out>/frames/%06d.png`(只有卡片),ffmpeg 合成 `overlay.mov`(ProRes 4444 alpha,只有卡片)和 `preview.mp4`(成片)。可选 `--dom-cache` 同时存每帧的 HTML 快照,供 `scripts/replay-frames.mjs` 乱序重截。
 - `scripts/verify-determinism.mjs` 导两遍逐像素比对,目标全部相同。实测见 `scripts/README.md` 和 `docs/render-rebuild-plan.md`。
 
 ## 注意

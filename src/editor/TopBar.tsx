@@ -346,8 +346,8 @@ export function TopBar() {
           exportIdRef.current = jobId;
           setExportState((st) => (st ? { ...st, id: jobId } : st));
         },
-        onProgress: (done, total) =>
-          setExportState((s) => (s && s.phase === "running" ? { ...s, done, total } : s)),
+        onProgress: (done, total, stage) =>
+          setExportState((s) => (s && s.phase === "running" ? { ...s, done, total, stage } : s)),
       });
 
       // 渲染完了才把成品搬到用户选的位置;没选就留在产物目录里

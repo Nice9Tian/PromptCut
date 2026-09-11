@@ -335,6 +335,23 @@ c8e3a71 提交后做了一轮只读审查。agy 第一轮报的 4 条它自己�
 
 阶段 0、1、6 互不依赖，可以并行。阶段 2 → 3、4 → 5 有先后顺序。
 
+### 阶段 6 实测（已落地）
+
+做法见 `server/export-compose.mjs` 文件头：页面加 `?cardsOnly=1` 只渲卡片，素材由一趟 ffmpeg 按预览 `MediaLayers` 的规则合进 `preview.mp4`；`overlay.mov` 和 `frames/` 从此只有卡片；`/api/export` 显式 `--workers 1`，命令行默认也改成 1（旧命令行其实根本不解析 `--workers`，永远 auto）。
+
+测试项目：60 秒、1800 帧；5 段视频（交叉溶解、带框旋转淡化的竖屏片段、25 fps 未标色彩空间的片段）+ 1 张带 alpha 的图片（描边、旋转）+ 15 张真实卡片（8 张毛玻璃）。端口 5252，TEMP 指向 scratch，全局 `port.json` 前后未变。
+
+| | 墙钟 | Chrome 阶段 | 每帧（Chrome） | ffmpeg |
+|---|---|---|---|---|
+| 旧，`/api/export` 实际走法（auto → 4 个分片） | 136.2 s / 137.7 s | 112.6 s | —（4 个进程并发） | overlay 13.8 s + 灰底合成 |
+| 旧，单进程 | 148.9 s | 128.1 s | 71.2 ms | overlay 13.7 s + 灰底合成 |
+| 新，单进程（含 1084 张毛玻璃遮罩） | 95.8 s / 98.2 s | 62.8 / 63.0 s | 35.0 ms | overlay 12.4 s + 素材合成 21.1 s |
+| 新，只渲卡片（`--no-video`，不截遮罩） | 42.1 / 44.4 s | 同左 | 23.4 ms | — |
+
+- 这个项目的视频是 720p、整段预取进内存，旧管线的 seek 不算最贵的情形；素材越大越长，差距越大（Chrome 阶段每帧的钱全省在 seek 上）。
+- 成片逐帧对照（旧 = Chrome 截的 PNG 铺灰底，新 = 新 `preview.mp4` 解码）：全屏视频 + 毛玻璃卡（第 300 帧）均差 1.43/255，玻璃区域 2.28；交叉溶解中（第 570 帧）1.57。带 `frame` 的片段旧导出不认（铺满或不见），新的按预览摆，另用 Chrome 按 `MediaLayers` 同一套 CSS 渲参照：外接框差 ≤ 1 px，均差 0.39~0.41；描边强调外沿比 Chrome 宽约 2 px。
+- 两个新发现的旧问题：卡片 PNG 整帧不透明时 Chrome 省掉 alpha（rgba → rgb24），ffmpeg 默认会重建滤镜图，旧 `preview.mp4` 因此丢了 8 帧（1792/1800）；新合成每个输入都带 `-reinit_filter 0`，1800/1800。混音在这个项目上旧新都失败（`mux-audio.mjs` 的时间戳问题，和本阶段无关，另开了任务）。
+
 ### 怎么测（不碰真实软件）
 
 - 另起 dev server，用 **5197 以外的空闲端口**，把 `TEMP` 指到 scratch。这样 `port.json` 会写进 scratch，全局那份前后比对不变。[hybrid-sampling-plan.md](hybrid-sampling-plan.md) 用 5241 这样做过。

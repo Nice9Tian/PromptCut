@@ -22,13 +22,20 @@ node scripts/export-frames.mjs --url "http://127.0.0.1:5197/?export=1" --frames 
 | `--format png\|jpeg` / `--quality` | 默认 PNG(带 alpha,optimizeForSpeed:仍无损,只是压得快、文件大) |
 | `--static-skip` | 画面静止的帧复用上一张,每 10 帧强制真截一张比对 |
 | `--dom-cache` | 同时把每帧舞台冻结成 HTML 存到 `<out>/dom/`,供 `replay-frames.mjs` 乱序重截 |
-| `--workers N\|auto` | 分片并行,默认 1。每个分片仍从第 0 帧推起,输出和单进程逐字节相同,但提速有限(见下) |
-| `--no-video` | 跳过 ffmpeg 合成 |
+| `--workers N\|auto` | 分片并行,默认 1(`/api/export` 也显式传 1)。每个分片仍从第 0 帧推起,输出和单进程逐字节相同,但提速有限(见下) |
+| `--media ffmpeg\|chrome` | 素材(视频 / 图片)怎么进成片。默认 `ffmpeg`:页面只渲卡片(`&cardsOnly=1`),素材由 ffmpeg 合进 `preview.mp4`(`server/export-compose.mjs`);`chrome` 是 0.4 以前的做法,素材挂进页面逐帧 seek,留作对账 |
+| `--no-video` | 跳过 ffmpeg 合成(帧照样只有卡片,除非 `--media chrome`) |
 | `PC_EXPORT_TRACE=1` | 每帧把页面时钟和全部动画状态记到 `<out>/trace.json`,排查确定性用 |
 | `PC_EXPORT_VERBOSE=1` | 每帧打印进度 |
 | `PC_CHROME_ARGS="…"` | 追加 Chrome 启动参数(排查用) |
 
-不带 `--no-video` 时用 ffmpeg 合成 `<out>/overlay.mov`(ProRes 4444 带 alpha)和 `<out>/preview.mp4`(叠在灰底上)。
+不带 `--no-video` 时用 ffmpeg 合成:
+
+- `<out>/overlay.mov`:ProRes 4444 带 alpha,**只有卡片层**(拿去叠在别的画面上用的那一层;以前素材也烤在里面);
+- `<out>/preview.mp4`:成片。灰底 → 素材层(按 `clip.frame` 摆位、cover 铺满、不透明度 × 淡入淡出、交叉溶解)→ 卡片层,再混音轨。
+  素材层的规则和预览 `MediaLayers` 一致,细节(取帧、强调、毛玻璃)见 `server/export-compose.mjs` 文件头。
+  卡片上的毛玻璃(`backdrop-filter`)在只渲卡片时模糊不到视频:底下有素材的帧会多截一张玻璃遮罩(`<out>/glass/`),
+  ffmpeg 按遮罩把素材那层模糊后混回去。进度分两步报:`Exported frame i (k/N)` 是渲卡片,`Composited frame k/N` 是合成。
 
 找不到 chrome-headless-shell 时会自动装进 `PUPPETEER_CACHE_DIR`(桌面版 = `runtime/chrome`)再重试 ——
 从 0.3.x 打补丁升上来的用户手里没有它(补丁只带 `runtime/app`)。

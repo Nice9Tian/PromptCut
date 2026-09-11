@@ -11,6 +11,17 @@ import "./cards";
 // 只要进了导出视图就把页面时钟量化到导出帧(见 exportClock.ts),必须早于任何卡片挂载
 if (new URLSearchParams(location.search).has("export")) installExportClock();
 
+/*
+ * ?cardsOnly=1:素材(视频 / 图片)一概不挂,只渲卡片的透明层。
+ * 完整导出默认走这条(scripts/export-frames.mjs),素材由 ffmpeg 合进成片(server/export-compose.mjs)——
+ * 挂着 <video> 的话每帧都要等 seek,画面里有视频的帧也永远判不了静止。
+ * 在这里拿掉而不是让服务端另写一份项目:同一个 project.json 既给页面也给 ffmpeg 和混音用,不会两份对不上。
+ */
+const CARDS_ONLY = new URLSearchParams(location.search).get("cardsOnly") === "1";
+function stripMedia(p: Project): Project {
+  return { ...p, media: [], tracks: p.tracks.map((tr) => ({ ...tr, clips: tr.clips.filter((c) => !c.mediaId) })) };
+}
+
 function waitForVideoSeek(v: HTMLVideoElement): Promise<void> {
   return new Promise<void>((resolve) => {
     let done = false;
@@ -124,7 +135,7 @@ export default function ExportView() {
     (url ? fetch(url).then((r) => r.json()) : Promise.resolve(demoTimeline))
       .then(async (json: unknown) => {
         // Project 形状(有 tracks)先把素材预取成 blob:,再进入下面的常规流程
-        if (json && Array.isArray((json as Project).tracks)) return await prefetchMedia(json as Project);
+        if (json && Array.isArray((json as Project).tracks)) return await prefetchMedia(CARDS_ONLY ? stripMedia(json as Project) : (json as Project));
         return json;
       })
       // 命名函数表达式:函数体既是首次加载的装配流程,也是换项目时要重跑的那一套。
@@ -256,7 +267,9 @@ export default function ExportView() {
       window.__pcLoadProject = async (raw: unknown) => {
         window.__pcReady = false;
         setMediaWarm(false);
-        const next = raw && Array.isArray((raw as Project).tracks) ? await prefetchMedia(raw as Project) : raw;
+        const next = raw && Array.isArray((raw as Project).tracks)
+          ? await prefetchMedia(CARDS_ONLY ? stripMedia(raw as Project) : (raw as Project))
+          : raw;
         install(next);
       };
 

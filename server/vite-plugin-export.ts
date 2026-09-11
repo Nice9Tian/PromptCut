@@ -10,6 +10,8 @@ interface ExportJob {
   status: "running" | "done" | "error" | "cancelled";
   done: number;
   total: number;
+  /** 进行到哪一步:render = Chrome 逐帧渲卡片,compose = ffmpeg 合素材编码。done/total 是这一步的帧数 */
+  stage?: "render" | "compose";
   message?: string;
   outDir: string;
   /** 绝对路径,给「打开文件夹」和取件用;不回给浏览器以外的地方 */
@@ -127,7 +129,10 @@ async function handleExportStart(req: Connect.IncomingMessage, res: ServerRespon
         "--url",
         `http://127.0.0.1:${port}/?export=1&timeline=/@export/${id}/project.json`,
         "--out",
-        relOutDir
+        relOutDir,
+        // 显式单进程(docs/decoupling-plan.md 阶段 0 / 6):分片每片都从第 0 帧推起,多开几个 Chrome 只是互相抢 CPU
+        "--workers",
+        "1",
       ];
       if (frames) {
         args.push("--frames", frames);
@@ -145,11 +150,15 @@ async function handleExportStart(req: Connect.IncomingMessage, res: ServerRespon
       let stderrLog: string[] = [];
       child.stdout.on("data", (data) => {
         const str = data.toString();
-        // Exported frame 0 (1/90)
-        const progressMatch = str.match(/Exported frame \d+ \((\d+)\/(\d+)\)/);
-        if (progressMatch) {
-          job.done = parseInt(progressMatch[1], 10);
-          job.total = parseInt(progressMatch[2], 10);
+        // 两步各自报进度:「Exported frame 0 (1/90)」是 Chrome 渲卡片,「Composited frame 45/90」是 ffmpeg 合素材。
+        // 一块输出里可能有好几行,取最后一行
+        const composed = [...str.matchAll(/Composited frame (\d+)\/(\d+)/g)].pop();
+        const rendered = [...str.matchAll(/Exported frame \d+ \((\d+)\/(\d+)\)/g)].pop();
+        const m = composed || rendered;
+        if (m) {
+          job.stage = composed ? "compose" : "render";
+          job.done = parseInt(m[1], 10);
+          job.total = parseInt(m[2], 10);
         }
       });
       
@@ -210,7 +219,7 @@ function handleProgress(req: Connect.IncomingMessage, res: ServerResponse) {
     res.setHeader("Connection", "keep-alive");
     
     const sendEvent = () => {
-      res.write(`data: ${JSON.stringify({ done: job.done, total: job.total, status: job.status, message: job.message })}\n\n`);
+      res.write(`data: ${JSON.stringify({ done: job.done, total: job.total, stage: job.stage, status: job.status, message: job.message })}\n\n`);
     };
     
     sendEvent();
@@ -233,7 +242,7 @@ function handleProgress(req: Connect.IncomingMessage, res: ServerResponse) {
     });
   } else {
     res.setHeader("Content-Type", "application/json");
-    res.end(JSON.stringify({ done: job.done, total: job.total, status: job.status, message: job.message }));
+    res.end(JSON.stringify({ done: job.done, total: job.total, stage: job.stage, status: job.status, message: job.message }));
   }
 }
 
