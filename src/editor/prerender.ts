@@ -10,14 +10,22 @@ import { useEffect, useState } from "react";
  *
  * 预渲染还没起来(或者这是个老的 dev server、没有 /api/prerender/info)就退回同源 ——
  * 慢一点,但功能照旧。
+ *
+ * **地址只缓存几秒**:预渲染崩了会被重新拉起,每次都换一个新的空闲端口(vite-plugin-prerender)。
+ * 缓存死了的话,它一重启,页面上所有直连请求都打到旧端口上,直到用户刷新页面。
  */
 
-let base: string | null = null;
-let asking: Promise<string> | null = null;
+/** 地址(或者「还没就绪」这个结论)能用多久 */
+const CACHE_MS = 5000;
 
-async function ask(): Promise<string> {
-  // 起预渲染要一两秒(首次预构建依赖更久):没就绪就多问几次,还不行就先用同源
-  for (let i = 0; i < 20; i++) {
+let base: string | null = null;
+let checkedAt = 0;
+let asking: Promise<string> | null = null;
+/** 头一次问:预渲染可能还在启动,多等一会儿;之后只问一次,没就绪就先用同源 */
+let firstAsk = true;
+
+async function ask(tries: number): Promise<string> {
+  for (let i = 0; i < tries; i++) {
     try {
       const r = await fetch("/api/prerender/info", { cache: "no-store" });
       if (!r.ok) return "";
@@ -26,18 +34,20 @@ async function ask(): Promise<string> {
     } catch {
       return "";
     }
-    await new Promise((r) => setTimeout(r, 500));
+    if (i < tries - 1) await new Promise((r) => setTimeout(r, 500));
   }
   return "";
 }
 
 /** 预渲染的源(`http://127.0.0.1:端口`);拿不到时是空串,也就是同源 */
 export async function prerenderBase(): Promise<string> {
-  if (base !== null) return base;
+  if (base !== null && Date.now() - checkedAt < CACHE_MS) return base;
   if (!asking) {
-    asking = ask().then((u) => {
-      // 同源兜底不缓存:预渲染晚一点起来,下一次还能换到它上面去
-      if (u) base = u;
+    // 起预渲染要一两秒(首次预构建依赖更久):头一次最多等 10 秒,之后不再干等
+    asking = ask(firstAsk ? 20 : 1).then((u) => {
+      firstAsk = false;
+      base = u;
+      checkedAt = Date.now();
       asking = null;
       return u;
     });

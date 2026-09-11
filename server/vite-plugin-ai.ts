@@ -196,7 +196,7 @@ export default function vitePluginAi(): Plugin {
        * 写操作仍然经过页面(撤销 / 重做都在那边),页面在回结果之前会先把改动推过来,读后写一致。
        * 页面关掉之后镜像还留在内存里,Agent 照样能读、能看画面。
        */
-      let mirror: { rev: number; project: any; t: number; at: number } | null = null;
+      let mirror: { session: string; rev: number; project: any; t: number; at: number } | null = null;
       server.middlewares.use('/api/data/project', (req, res) => {
         if (req.method === 'GET') {
           return sendJson(res, mirror ? 200 : 404, mirror ? { ok: true, rev: mirror.rev, t: mirror.t, at: mirror.at, project: mirror.project } : { ok: false, error: '还没有镜像:编辑器页面没打开过' });
@@ -209,7 +209,16 @@ export default function vitePluginAi(): Plugin {
           try {
             const d = JSON.parse(body || '{}');
             if (!d.project || !Array.isArray(d.project.tracks)) return sendJson(res, 400, { ok: false, error: '缺少 project' });
-            mirror = { rev: Number(d.rev) || 0, project: d.project, t: Number.isFinite(Number(d.t)) ? Number(d.t) : 0, at: Date.now() };
+            const session = String(d.session || '');
+            const rev = Number(d.rev) || 0;
+            /*
+             * 同一个页面会话里只收更新的版本:页面那边已经一次只推一个,这里再兜一道,
+             * 万一两次推送乱序到达,旧的也盖不掉新的。换了页面(刷新、重开)版本号从头数,按会话区分。
+             */
+            if (mirror && mirror.session === session && rev <= mirror.rev) {
+              return sendJson(res, 200, { ok: true, rev: mirror.rev, stale: true });
+            }
+            mirror = { session, rev, project: d.project, t: Number.isFinite(Number(d.t)) ? Number(d.t) : 0, at: Date.now() };
             sendJson(res, 200, { ok: true, rev: mirror.rev });
           } catch (e: any) {
             sendJson(res, 400, { ok: false, error: e?.message || String(e) });

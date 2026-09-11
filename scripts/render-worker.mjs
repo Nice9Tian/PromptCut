@@ -31,7 +31,7 @@ import { postFrame } from '../server/png-post.mjs';
  *   cancel     { id }             不要这一趟了。**只换页,不换浏览器**(见下面第 1 条的例外)
  *   invalidate {}                 卡片源码变了:备用页里加载的是旧模块,扔掉
  *
- * 回给父进程的:ready、started、done、error(被取消的带 cancelled: true)、hot(备用页好了,
+ * 回给父进程的:ready、started、done、error(被取消的带 cancelled: true)、hot(手上没活、备用页好了,
  * 下一趟来活只需把项目灌进去 —— 界面那对热备渲染器按它判断「谁是热的」)。
  *
  * # 三条自保规矩
@@ -65,10 +65,17 @@ let jobsDone = 0;
 let idleTimer = null;
 /** 正在跑的那一趟:取消消息靠 id 找到它的 AbortController */
 let current = null;
-/** 还排在本进程链上、没开跑就被取消的活 */
+/** 已经收到、还没做完的烘焙活(含排在本进程链上的)。只有它为 0 时才报 hot */
+let jobsInHand = 0;
+/** 还排在本进程链上、没开跑就被取消的活。只在手上还有活时才记,并且设上限,不会一直涨 */
 const cancelledEarly = new Set();
+const CANCELLED_EARLY_MAX = 200;
 /** 最近一次用过的导出页地址:invalidate 之后按它重开备用页 */
 let lastUrl = null;
+
+function cancelledError() {
+  return Object.assign(new Error('已取消'), { cancelled: true });
+}
 
 function armIdleExit() {
   clearTimeout(idleTimer);
@@ -134,12 +141,13 @@ async function projectOf(url) {
 
 /**
  * 趁闲把下一趟要用的备用页开好。不等它:下一趟 resetWith 会自己等。
- * 备用页就绪时回一声 hot —— 界面那对热备渲染器靠它知道「这一台可以立刻接活了」。
+ * 备用页就绪、而且**手上没有别的活**时才回一声 hot —— 界面那对热备渲染器靠它挑「谁是热的」;
+ * 手上还排着活的时候报 hot,父进程会把一台忙着的当成热的派活过来。
  */
 function preloadNext(url) {
   try {
     const p = bakery?.preload(emptyUrlOf(url));
-    p?.then((s) => { if (s) process.send?.({ type: 'hot' }); }, () => {});
+    p?.then((s) => { if (s && jobsInHand === 0) process.send?.({ type: 'hot' }); }, () => {});
   } catch { /* 地址不合法就算了,下一趟走老路 */ }
 }
 
@@ -147,6 +155,8 @@ async function runJob(opts, signal) {
   if (jobsDone >= MAX_JOBS) await dropBakery();
   try {
     const b = await bakeryFor(opts.url);
+    // 开页(尤其是冷启动)不看 signal;开完先看一眼,已经不要了就别再推帧
+    if (signal.aborted) throw cancelledError();
     const baked = await bakeFrames(b, { ...opts, signal });
     jobsDone++;
     preloadNext(opts.url);
@@ -181,12 +191,15 @@ process.on('message', (msg) => {
   }
   /*
    * 取消。正在跑的那一趟:拨一下它的 signal,bakeFrames 在下一帧开头停下;
-   * 还排在链上没开跑的:记下来,轮到它时直接回 cancelled。
+   * 还排在链上没开跑的:记下来,轮到它时直接回 cancelled;已经做完的:什么都不用做。
    * 不在这里回 error —— 回话统一由那一趟自己的收尾发,免得同一个 id 回两次。
    */
   if (msg.type === 'cancel') {
     if (current && current.id === msg.id) current.ac.abort();
-    else cancelledEarly.add(msg.id);
+    else if (jobsInHand > 0) {
+      if (cancelledEarly.size >= CANCELLED_EARLY_MAX) cancelledEarly.clear();
+      cancelledEarly.add(msg.id);
+    }
     return;
   }
   /*
@@ -214,6 +227,7 @@ process.on('message', (msg) => {
   }
   if (msg.type !== 'bake') return;
   clearTimeout(idleTimer);
+  jobsInHand++;
   chain = chain.then(async () => {
     /*
      * 先回一声「接住了」。父进程靠它区分两种失败:活儿开跑之后崩的(不能重发,可能已经写了文件),
@@ -221,21 +235,26 @@ process.on('message', (msg) => {
      * 那种情况父进程换一个新 worker 重来一次,用户看不见任何异常(见 runExport 的重试)。
      */
     process.send?.({ type: 'started', id: msg.id });
-    if (cancelledEarly.delete(msg.id)) {
-      process.send?.({ type: 'error', id: msg.id, message: '已取消', cancelled: true });
-      armIdleExit();
-      return;
-    }
-    const ac = new AbortController();
-    current = { id: msg.id, ac };
     try {
-      const result = await runJob(msg.opts || {}, ac.signal);
-      process.send?.({ type: 'done', id: msg.id, result });
-    } catch (e) {
-      process.send?.({ type: 'error', id: msg.id, message: e?.message || String(e), cancelled: !!e?.cancelled });
+      if (cancelledEarly.delete(msg.id)) {
+        process.send?.({ type: 'error', id: msg.id, message: '已取消', cancelled: true });
+        return;
+      }
+      const ac = new AbortController();
+      current = { id: msg.id, ac };
+      try {
+        const result = await runJob(msg.opts || {}, ac.signal);
+        process.send?.({ type: 'done', id: msg.id, result });
+      } catch (e) {
+        process.send?.({ type: 'error', id: msg.id, message: e?.message || String(e), cancelled: !!e?.cancelled });
+      } finally {
+        current = null;
+      }
     } finally {
-      current = null;
+      jobsInHand--;
       armIdleExit();
+      // 手上的活都清了、备用页也在:告诉父进程这台又热了(没有备用页的话 preloadNext 那边会在它开好时报)
+      if (jobsInHand === 0 && bakery?.spare) bakery.spare.then((s) => { if (s && jobsInHand === 0) process.send?.({ type: 'hot' }); }, () => {});
     }
   });
 });

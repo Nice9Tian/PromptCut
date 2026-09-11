@@ -41,6 +41,11 @@ import { cardCodeHash, onCardSourceChange } from "./card-overrides.mjs";
 const RENDER_TIMEOUT_MS = 120000;
 /** ffmpeg 抽一帧的上限:本地文件按关键帧定位,正常两三秒 */
 const EXTRACT_TIMEOUT_MS = 30000;
+/**
+ * 叫 worker 取消之后等它回话的上限。它停在两帧之间(一帧约 20~30 ms)或者开完页就停,
+ * 正常几十毫秒;冷启动 Chrome 最慢约 6 秒。超过这个数就当它卡死了,整台杀掉。
+ */
+const CANCEL_GRACE_MS = 15000;
 
 /**
  * 烘焙时把片段挪到第几秒开始(起跑线)。理由和实测数据见 bakeTarget 里那段长注释。
@@ -182,7 +187,7 @@ const renderWaiting: RenderJob[] = [];
  * 正在渲的:键 → 那次渲染的 promise。同一个键同时被要好几次时共用一次渲染。
  * 并行池之前不需要它(串行天然错开),之后才需要 —— 见 bakeOne 里的说明。
  */
-const bakeInFlight = new Map<string, Promise<any>>();
+const bakeInFlight = new Map<string, { promise: Promise<any>; priority: number }>();
 let renderRunning = 0;
 
 /**
@@ -653,22 +658,31 @@ async function bakeOne(
    * 更糟的是那几个 write 会重叠,中间有个窗口能被读到半张 —— 而浏览器正好可能在这时候
    * 来取这张图,拿到半张 PNG 就是贴不上,表现成「这块板子怎么一直是色块」。
    */
-  const flying = bakeInFlight.get(key);
-  if (flying) {
+  /*
+   * 搭车等同键的那一趟,有两个例外:
+   *   - **自己更急就不搭**:Agent 的 bake_card(优先级 1)撞上一趟排在队尾的预烘(优先级 0)时,
+   *     跟着等就是排在所有预烘后面、直到工具超时 —— 优先级倒挂。自己渲一趟,落盘是原子改名,两份不冲突。
+   *   - **那一趟被取消了**(是它的请求方断开,不是这张图渲不出来):再看一眼,别的等待者可能已经接着渲了,
+   *     有就跟那一趟;没有才自己来。见过的就不再跟,免得在同一个已经失败的 promise 上打转。
+   */
+  const seen = new Set<Promise<any>>();
+  for (;;) {
+    const flying = bakeInFlight.get(key);
+    if (!flying || seen.has(flying.promise) || priority > flying.priority) break;
+    seen.add(flying.promise);
     try {
-      return await flying;
+      return await flying.promise;
     } catch (e: any) {
-      // 同键的那一趟是**别人**要的,它的请求方断开了才被取消 —— 不是这张图渲不出来。自己再渲一趟
       if (!e?.cancelled || o.signal?.aborted) throw e;
     }
   }
 
   const work = bakeAndWrite();
-  bakeInFlight.set(key, work);
+  bakeInFlight.set(key, { promise: work, priority });
   try {
     return await work;
   } finally {
-    if (bakeInFlight.get(key) === work) bakeInFlight.delete(key);
+    if (bakeInFlight.get(key)?.promise === work) bakeInFlight.delete(key);
   }
 
   async function bakeAndWrite() {
@@ -867,7 +881,8 @@ function spawnWorker(root: string, reserved = false): RenderWorker {
   child.stderr?.on("data", keep);
   child.on("message", (msg: any) => {
     if (msg?.type === "hot") {
-      w.hot = true;
+      // worker 只在手上没活时才报 hot;这边再兜一道:正派着活的那台不算热(免得热备调度把新活派给一台忙着的)
+      if (!w.busy) w.hot = true;
       w.onHot?.();
       return;
     }
@@ -985,17 +1000,30 @@ function callWorker(
       reject(new Error(`渲染超时(${timeoutMs / 1000} 秒)。`));
     }, timeoutMs);
     w.pending.set(id, entry);
-    const onAbort = () => {
-      if (!w.pending.has(id)) return;
+    if (signal?.aborted) {
+      // 还没发出去就不要了:干脆不发,也不发 cancel(发了 worker 那边会记一个永远用不上的 id)
       w.pending.delete(id);
       if (entry.timer) clearTimeout(entry.timer);
-      if (msg.type === "bake") w.child.send({ type: "cancel", id }, () => {});
-      reject(cancelError());
-    };
-    if (signal) {
-      if (signal.aborted) return onAbort();
-      signal.addEventListener("abort", onAbort, { once: true });
+      return reject(cancelError());
     }
+    /*
+     * 取消:叫 worker 停下,但**不在这里放手** —— 要等它回话(它停在两帧之间,或者开完页一看已取消),
+     * 这台 worker 才真的空出来。以前这里立刻 reject,busy 马上变 false:渲染池的在跑计数偏小、Chrome 超发,
+     * 下一趟活派到同一台上还得排在旧活后面,热备的「打断」也腾不出真正空闲的那台。
+     * 后处理(post)很快,不取消,让它做完。worker 迟迟不回话就当它卡死了,整台杀掉。
+     */
+    const onAbort = () => {
+      if (!w.pending.has(id) || msg.type !== "bake") return;
+      w.child.send({ type: "cancel", id }, () => {});
+      if (entry.timer) clearTimeout(entry.timer);
+      entry.timer = setTimeout(() => {
+        if (!w.pending.has(id)) return;
+        w.pending.delete(id);
+        killWorker(w, new Error(`取消之后 ${CANCEL_GRACE_MS / 1000} 秒 worker 还没停下`));
+        reject(cancelError());
+      }, CANCEL_GRACE_MS);
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
     w.child.send(msg, (e) => {
       if (!e) return;
       w.pending.delete(id);
@@ -1021,6 +1049,8 @@ async function runOnWorker(w: RenderWorker, job: RenderJob2, signal?: AbortSigna
       throw Object.assign(e instanceof Error ? e : new Error(String(e)), { notStarted: !entry.started });
     }
     if (!job.post) return null;
+    // 烘完帧才发现调用方已经不要了:后处理就不做了
+    if (signal?.aborted) throw cancelError();
     const items = await job.post();
     if (!items || !items.length) return null;
     return await callWorker(w, { type: "post", id: ++renderJobSeq, items }, RENDER_TIMEOUT_MS, signal);
@@ -1092,7 +1122,8 @@ async function renderOneFrame(root: string, origin: string, project: any, t: num
  * 也就是说同一张卡的第 2 个时刻起,成本从 4400ms 掉到 78ms。
  */
 async function renderFrames(root: string, origin: string, project: any, times: number[], notes: string[], priority = 0, o: RenderOpts = {}): Promise<Map<number, FrameResult>> {
-  const id = `vision-${Date.now().toString(36)}-${counter++}`;
+  // 带上 pid:编辑器进程(热备渲染器)和预渲染进程往同一个 out/ 里写,各自的 counter 都从 0 数
+  const id = `vision-${process.pid}-${Date.now().toString(36)}-${counter++}`;
   const dir = path.resolve(outRoot(root), `export-${id}`);
   await fsp.mkdir(dir, { recursive: true });
 
@@ -1309,13 +1340,24 @@ function registerEditorSide(server: ViteDevServer, root: string) {
         }
         const baked: any[] = [];
         const failed: any[] = [];
-        const settled = await Promise.allSettled(
-          [...byClip].map(([clipId, ts]) => bakeClip(root, originOf(server), resolved, clipId, ts, size, bg, "box", 1, { signal, runner: ui.run })
-            .then((r) => r, (e) => { throw Object.assign(e instanceof Error ? e : new Error(String(e)), { clipId }); })),
-        );
-        for (const s of settled) {
-          if (s.status === "fulfilled") baked.push(...s.value);
-          else failed.push({ clipId: (s.reason as any)?.clipId, error: (s.reason as any)?.message || String(s.reason), cancelled: !!(s.reason as any)?.cancelled });
+        /*
+         * **同一个请求里的几张卡按顺序渲**,一张渲完再交下一张。
+         *
+         * 热备渲染器的打断 / 挤掉规则是给「用户又换了一个时刻」用的:新请求来了,旧请求才开始的那张就不要了。
+         * 要是把同一批的几张一起交出去,它们会互相打断、互相挤掉 —— 实测一批 N 张只成两三张,其余回
+         * 「被新请求替换」,3D 视图还会弹一句「N 张没烘出来」。一个请求的几张是一体的,不该互相竞争。
+         * 顺序渲不慢:热备是为「立刻有人接」,不是为一批里的并行。
+         */
+        for (const [clipId, ts] of byClip) {
+          if (signal.aborted) {
+            failed.push({ clipId, error: "请求方已经不要了", cancelled: true });
+            continue;
+          }
+          try {
+            baked.push(...await bakeClip(root, originOf(server), resolved, clipId, ts, size, bg, "box", 1, { signal, runner: ui.run }));
+          } catch (e: any) {
+            failed.push({ clipId, error: e?.message || String(e), cancelled: !!e?.cancelled });
+          }
         }
         sendJson(res, 200, { ok: true, baked, failed });
       } catch (e: any) {

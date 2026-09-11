@@ -499,6 +499,8 @@ export async function bakeFrames(bakery, opts = {}) {
   const warmUp = async () => {
     console.log(`Warm-up ${warmFrames} frames...`);
     for (let i = 0; i < warmFrames; i++) {
+      // 预热也看取消:不看的话,取消要等预热走完、进了逐帧循环才生效,这段时间 worker 其实还占着
+      if (opts.signal?.aborted) throw Object.assign(new Error('已取消'), { cancelled: true });
       await step(0, false);
       await shoot();
     }

@@ -19,41 +19,59 @@ import { getState, subscribe } from "../store/project";
  * - Agent 的写操作:mcpExecutor 在回结果之前调 flushDataMirror(),所以 Agent「改完马上看」
  *   看到的一定是改完的那份(读后写一致)。
  * - 播放头 t 只在停下来时推(播放时每帧都变,推了也没人要):see_frames 不给时刻时用它。
+ * - **推送一次只飞一个**,后一次等前一次落地再发:两次同时在路上的话,到达顺序没保证,
+ *   旧的可能把新的盖掉。服务端也按「页面会话 + 版本号」拒收旧的(vite-plugin-ai)。
+ * - **推失败(网络错误、HTTP 非 2xx)就当没推过**,过一会儿自己再推;不然镜像会一直停在旧版,
+ *   直到下一次有人改东西。
  */
 
+/** 这个页面这次打开的会话 id:刷新页面版本号从头数,服务端靠它分辨「新页面」和「旧推送」 */
+const session = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 let rev = 0;
 let pushedProject: unknown = null;
 let pushedT = -1;
 let timer: ReturnType<typeof setTimeout> | null = null;
-let inflight: Promise<void> | null = null;
+let chain: Promise<void> = Promise.resolve();
 let started = false;
 
-async function push(): Promise<void> {
+async function pushNow(): Promise<void> {
   const s = getState();
   const project = s.project;
   const t = s.t;
   if (project === pushedProject && t === pushedT) return;
-  const body = JSON.stringify({ rev: ++rev, project, t, playing: s.playing });
-  pushedProject = project;
-  pushedT = t;
+  const body = JSON.stringify({ session, rev: ++rev, project, t, playing: s.playing });
+  let ok = false;
   try {
-    await fetch("/api/data/project", {
+    const res = await fetch("/api/data/project", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body,
       signal: AbortSignal.timeout(10000),
     });
+    ok = res.ok;
   } catch {
-    // 推不上就当没推,下一次变化再推;服务端没有镜像时 Agent 的工具退回经页面执行
-    pushedProject = null;
+    ok = false;
   }
+  if (ok) {
+    pushedProject = project;
+    pushedT = t;
+  } else if (started) {
+    // 推不上:过两秒再试。服务端没有新镜像时 Agent 的工具退回经页面执行,不会用到过期的这一份
+    schedule(2000);
+  }
+}
+
+/** 排进推送链:前一次落地之后才发下一次 */
+function push(): Promise<void> {
+  chain = chain.then(pushNow, pushNow);
+  return chain;
 }
 
 function schedule(delay: number) {
   if (timer) clearTimeout(timer);
   timer = setTimeout(() => {
     timer = null;
-    inflight = push().finally(() => { inflight = null; });
+    void push();
   }, delay);
 }
 
@@ -90,7 +108,5 @@ export async function flushDataMirror(): Promise<void> {
     clearTimeout(timer);
     timer = null;
   }
-  if (inflight) await inflight;
-  inflight = push().finally(() => { inflight = null; });
-  await inflight;
+  await push();
 }
