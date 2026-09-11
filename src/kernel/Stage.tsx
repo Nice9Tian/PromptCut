@@ -95,6 +95,7 @@ export function Stage({ timeline, t, playToken, speed = 1, proxy }: { timeline: 
             <div
               key={`${clip.id}:${playToken}`}
               data-pc-clip={clip.id}
+              data-pc-local-frame={Math.round((t - clip.start) * timeline.fps)}
               className={proxy ? "pc-proxy" : undefined}
               style={{
                 ...frameCss(clip.frame, timeline, m ? { dx: m.dx, dy: m.dy } : undefined),

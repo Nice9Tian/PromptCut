@@ -328,6 +328,7 @@ export function MediaLayers({
   playing,
   muted = false,
   masterVolume = 1,
+  audioOnly = false,
 }: {
   project: Project;
   t: number;
@@ -336,6 +337,7 @@ export function MediaLayers({
   muted?: boolean;
   /** 预览总音量 0–1,叠在每段自己的淡入淡出音量之上;静音就传 0 */
   masterVolume?: number;
+  audioOnly?: boolean;
 }) {
   // 手按着播放头时 seek 放疏一点;松手那一刻它变回 false,各层按 0.03s 精确对齐一次(见 mediaSync 的 SCRUB_SEEK_MIN_MS)
   const scrubbing = useSyncExternalStore(subscribeScrub, isScrubbing, isScrubbing);
@@ -346,7 +348,7 @@ export function MediaLayers({
   const stage = { width: project.width, height: project.height };
   return (
     <>
-      {visualTrackIds(project).map((id) => (
+      {!audioOnly && visualTrackIds(project).map((id) => (
         <VideoTrack
           key={id}
           cur={layers.find((l) => l.trackId === id) ?? null}
@@ -360,6 +362,9 @@ export function MediaLayers({
           filters={project.filters}
           audioFx={project.audioFx}
         />
+      ))}
+      {audioOnly && !muted && layers.filter(l => l.media.kind === "video" && !l.clip.audioMuted && !project.tracks.find(tr => tr.id === l.trackId)?.muted).map(l => (
+        <AudioLayer key={l.clip.id} clip={l.clip} media={l.media} volume={l.opacity * master * (l.clip.audioVolume ?? 1)} t={t} playing={playing} scrubbing={scrubbing} audioFx={project.audioFx} />
       ))}
       {audios.map((a) => (
         <AudioLayer key={a.clip.id} clip={a.clip} media={a.media} volume={a.volume * master} t={t} playing={playing} scrubbing={scrubbing} audioFx={project.audioFx} />

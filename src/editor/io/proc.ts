@@ -1,3 +1,4 @@
+import { snapshotsFor, restoreSnapshots, frameRequest } from "../../render/frameClient";
 import { actions, getState } from "../../store/project";
 import { createEmptyProject, newProjectId } from "../../kernel/project";
 import type { Project } from "../../kernel/project";
@@ -71,6 +72,8 @@ export interface ProcFile {
    * 找不到的 cardId。打开时装回本机,规矩见 procCards.ts。没有定制卡就不写这一段。
    */
   cards?: BundledCard[];
+  /** Disposable frame deltas, encoded as one gzip/base64 block. */
+  snapshots?: string;
 }
 
 /** 当前项目 → .proc 文本 */
@@ -82,12 +85,24 @@ export function serializeProc(thumbnail: string | null = null): string {
     version: PROC_VERSION,
     savedAt: new Date().toISOString(),
     thumbnail,
+    snapshots: snapshotsFor(getState().project),
     project,
     ai: collectProjectAi(),
     skill: skillStamp(),
     cards: cards.length ? cards : undefined,
   };
   return JSON.stringify(doc, null, 2);
+}
+
+/** Collect whatever B has completed. Missing/corrupt caches must never prevent saving the project. */
+export async function withFrameSnapshots(text: string): Promise<string> {
+  try {
+    const doc = JSON.parse(text) as ProcFile;
+    if (doc.format !== PROC_FORMAT) return text;
+    const result = await frameRequest("archive", doc.project, {}, AbortSignal.timeout(2500));
+    doc.snapshots = result.snapshots;
+    return JSON.stringify(doc, null, 2);
+  } catch { return text; }
 }
 
 export interface ParseProcOptions {
@@ -130,6 +145,7 @@ export function loadProc(text: string, opts: ParseProcOptions = {}): Project {
     /* parseProc 已经验过一遍,走到这儿说明是裸 Project,没有 ai 段 */
   }
   applyProjectAi(doc?.ai ?? null);
+  restoreSnapshots(project, doc?.snapshots);
   // 项目里带的定制卡装回本机。不等它:装完 vite 热更新,卡自己出现在舞台和卡库里
   if (doc) void restoreProjectCards(bundledCardsOf(doc), project.id ?? null);
   return project;
@@ -216,6 +232,7 @@ export async function writeProcToDisk(
 ): Promise<SaveOutcome> {
   const picker = pickerFn();
   if (!picker) {
+    text = await withFrameSnapshots(text);
     const blob = new Blob([text], { type: "application/json" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
@@ -238,6 +255,7 @@ export async function writeProcToDisk(
     }
   }
 
+  text = await withFrameSnapshots(text);
   const writable = await saveTarget.createWritable();
   await writable.write(text);
   await writable.close();

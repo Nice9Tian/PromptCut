@@ -23,7 +23,7 @@ node scripts/export-frames.mjs --url "http://127.0.0.1:5197/?export=1" --frames 
 | `--static-skip` | 画面静止的帧复用上一张,每 10 帧强制真截一张比对 |
 | `--dom-cache` | 同时把每帧舞台冻结成 HTML 存到 `<out>/dom/`,供 `replay-frames.mjs` 乱序重截 |
 | `--workers N\|auto` | 分片并行,默认 1(`/api/export` 也显式传 1)。每个分片仍从第 0 帧推起,输出和单进程逐字节相同,但提速有限(见下) |
-| `--media ffmpeg\|chrome` | 素材(视频 / 图片)怎么进成片。默认 `ffmpeg`:页面只渲卡片(`&cardsOnly=1`),素材由 ffmpeg 合进 `preview.mp4`(`server/export-compose.mjs`);`chrome` 是 0.4 以前的做法,素材挂进页面逐帧 seek,留作对账 |
+| `--media ffmpeg\|chrome` | 素材(视频 / 图片)怎么进成片。默认 `chrome`:预览、导出、`see_frames` 共用 Chrome FrameScene；`ffmpeg` 是兼容旁路，页面只渲卡片(`&cardsOnly=1`)，素材由 ffmpeg 合进 `preview.mp4`(`server/export-compose.mjs`) |
 | `--audio ffmpeg` | 声音不走 Chrome 混音(默认在 OfflineAudioContext 里混,带音频效果,和预览同一套节点图),改用 `mux-audio.mjs` 的 ffmpeg 滤镜图直接混,没有效果;对账用 |
 | `--no-video` | 跳过 ffmpeg 合成(帧照样只有卡片,除非 `--media chrome`) |
 | `PC_EXPORT_TRACE=1` | 每帧把页面时钟和全部动画状态记到 `<out>/trace.json`,排查确定性用 |

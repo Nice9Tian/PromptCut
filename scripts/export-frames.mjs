@@ -1,4 +1,6 @@
 import puppeteer from 'puppeteer';
+import { captureSnapshot } from './capture-snapshot.mjs';
+import { installFrameMedia, prepareFrameMedia } from './frame-media.mjs';
 import path from 'path';
 import fs from 'fs/promises';
 import fsSync from 'node:fs';
@@ -126,6 +128,11 @@ function PAGE_PRELUDE() {
       for (let k = 0; k < cs.length; k++) { const q = cs.item(k); s += q + ':' + cs.getPropertyValue(q) + ';'; }
       s += 'animation:none !important;transition:none !important;';
       copy[i].setAttribute('style', s);
+      if (orig[i].tagName === 'VIDEO' && orig[i].dataset.pcMediaSrc) {
+        copy[i].removeAttribute('src');
+        copy[i].setAttribute('preload', 'none');
+        copy[i].style.visibility = 'hidden';
+      }
       if (orig[i].tagName === 'CANVAS') {
         let src = null;
         try { src = orig[i].toDataURL('image/png'); } catch { src = null; }
@@ -149,7 +156,10 @@ function PAGE_PRELUDE() {
         .replace(new RegExp(`(url\\((?:&quot;|["'])?[^)"'&]*#)${e}((?:&quot;|["'])?\\))`, 'g'), `$1${id}__r$2`)
         .replace(new RegExp(`((?:xlink:)?href="#)${e}(")`, 'g'), `$1${id}__r$2`);
     }
-    return { html, lossy };
+    const controls = [...clone.querySelectorAll('[data-pc-clip][data-pc-local-frame]')].map(el => ({
+      id: el.getAttribute('data-pc-clip'), frame: Number(el.getAttribute('data-pc-local-frame')), html: el.outerHTML,
+    }));
+    return { html, lossy, controls };
   };
   /*
    * 毛玻璃遮罩(只渲卡片的导出用,见 server/export-compose.mjs 的 mask)。
@@ -290,6 +300,7 @@ async function newSession(browser, url) {
   };
 
   await page.evaluateOnNewDocument(PAGE_PRELUDE);
+  await page.evaluateOnNewDocument(installFrameMedia);
   console.log(`Navigating to ${url}...`);
   await client.send('Page.navigate', { url });
   console.log('Waiting for window.__pcReady...');
@@ -505,6 +516,12 @@ export async function bakeFrames(bakery, opts = {}) {
 
   /** 截一张:发一拍并要这一拍的截图。此刻动画已钉住、页面时钟已量化,这一拍里画面不会再变 */
   const shoot = async () => {
+    if (!opts.glassFrames) {
+      const snapshot = await page.evaluate(() => window.__bfFreeze());
+      if (snapshot.lossy) throw new Error(`Cannot snapshot ${snapshot.lossy} canvas elements`);
+      return captureSnapshot(bakery, snapshot.html, shotParams);
+    }
+    await prepareFrameMedia(bakery);
     const r = await beginFrame({ screenshot: shotParams });
     if (!r.screenshotData) throw new Error('beginFrame 这一拍没有返回截图');
     return Buffer.from(r.screenshotData, 'base64');
@@ -516,6 +533,7 @@ export async function bakeFrames(bakery, opts = {}) {
     // 两个计数器要在推进之前取、推进之后比;取值和下发时间合并成一次 evaluate
     const before = await page.evaluate((sec) => {
       const n = { raf: window.__pcRafCount ?? 0, mut: window.__pcMutationCount ?? 0 };
+      window.__pcHideFrameMedia?.();
       window.__pcSetT(sec);
       return n;
     }, frameIndex / fps);
@@ -563,11 +581,11 @@ export async function bakeFrames(bakery, opts = {}) {
       // 预热也看取消:不看的话,取消要等预热走完、进了逐帧循环才生效,这段时间 worker 其实还占着
       if (opts.signal?.aborted) throw Object.assign(new Error('已取消'), { cancelled: true });
       await step(0, false);
-      await shoot();
+      await beginFrame();
     }
     await page.evaluate(() => { window.__pcRestartCards && window.__pcRestartCards(); window.__pcResetAnims && window.__pcResetAnims(); });
     await step(0, false);
-    await shoot();
+    await beginFrame();
     await page.evaluate(() => { window.__pcResetAnims && window.__pcResetAnims(); });
   };
 
@@ -621,7 +639,13 @@ export async function bakeFrames(bakery, opts = {}) {
       if (opts.signal?.aborted) throw Object.assign(new Error('已取消'), { cancelled: true });
       const wantShot = targetFrames ? targetFrames.has(i) : i >= startFrame;
       const isStatic = await step(i, wantShot);
-      if (!wantShot) continue;
+      if (domDir || opts.onSnapshot) {
+        const { html, lossy, controls } = await page.evaluate(() => window.__bfFreeze());
+        if (lossy) throw new Error('HTML snapshot contains unreadable canvases');
+        if (opts.onSnapshot) await opts.onSnapshot(i, html, controls);
+        if (domDir) await fs.writeFile(path.join(domDir, String(i).padStart(6, '0') + '.html.gz'), gzip(Buffer.from(html, 'utf8')));
+      }
+      if (!wantShot || opts.snapshotOnly) continue;
 
       let buf;
       let fresh = true;
@@ -653,14 +677,6 @@ export async function bakeFrames(bakery, opts = {}) {
           glass.list.push(i);
           writes.push(fs.writeFile(path.join(glassDir, `${name}.png`), lastGlass));
         }
-      }
-      if (domDir) {
-        if (fresh || !lastDom) {
-          const { html, lossy } = await page.evaluate(() => window.__bfFreeze());
-          domLossy += lossy;
-          lastDom = gzip(Buffer.from(html, 'utf8'));
-        }
-        writes.push(fs.writeFile(path.join(domDir, `${name}.html.gz`), lastDom));
       }
       if (process.env.PC_EXPORT_VERBOSE || (i - startFrame + 1) % 10 === 0 || i === endFrame) {
         console.log(`Exported frame ${i} (${i - startFrame + 1}/${totalFrames})`);
@@ -801,7 +817,7 @@ async function bakeSharded(opts, n) {
 }
 
 /** 本机的 ffmpeg:PATH 上有就用它,没有就退到 winget 装的那一份 */
-async function findFfmpeg() {
+export async function findFfmpeg() {
   const localAppData = process.env.LOCALAPPDATA || '';
   const ffmpegFallback = path.join(localAppData, 'Microsoft', 'WinGet', 'Packages', 'Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe', 'ffmpeg-9.0.1-full_build', 'bin', 'ffmpeg.exe');
   try {
@@ -962,9 +978,9 @@ async function fillGlassGaps(dir, startFrame, endFrame, width, height) {
  * 一次性导出:自己开 bakery、烘帧、合成视频、关掉。CLI 和现有的 /api/export 走这条。
  * opts.workers:1(默认)/ 数字 / 'auto'。离散取样(targetFrames)和外部传进来的 bakery 一律单进程。
  * opts.media:素材怎么进成片。
- *   'ffmpeg'(默认)—— 页面只渲卡片的透明层(?cardsOnly=1),视频 / 图片由 ffmpeg 合进 preview.mp4
- *                      (server/export-compose.mjs)。frames/ 和 overlay.mov 因此**只有卡片**。
- *   'chrome'       —— 以前的做法:素材挂进页面逐帧 seek,烤进每一张 PNG。留作对账和兜底。
+ *   'chrome'(默认)—— 预览、see_frames、导出共用 FramePipeline/Chrome 页面，视频素材在截图帧才加载。
+ *   'ffmpeg'       —— 兼容旁路:页面只渲卡片的透明层(?cardsOnly=1),视频 / 图片由 ffmpeg 合进 preview.mp4
+ *                      (server/export-compose.mjs)。frames/ 和 overlay.mov 因此只有卡片。
  *   外部传进来的 bakery 已经导航到某个地址,改不了页面,按 'chrome' 处理。
  * opts.audio:声音怎么混。默认在 Chrome 里(OfflineAudioContext,带音频效果,见 mixAudioInChrome);
  *   'ffmpeg' 走 scripts/mux-audio.mjs 的滤镜图直接混(没有效果),对账和兜底用。
@@ -973,7 +989,7 @@ export async function exportFrames(opts) {
   const outDir = opts.out || 'out';
   const noVideo = opts.noVideo || false;
   const workers = (opts.bakery || opts.targetFrames) ? 1 : await resolveWorkers(opts.workers);
-  const mediaMode = opts.bakery || opts.media === 'chrome' ? 'chrome' : 'ffmpeg';
+  const mediaMode = opts.media === 'ffmpeg' && !opts.bakery ? 'ffmpeg' : 'chrome';
   const ffmpegCmd = await findFfmpeg();
   let plan = null;
   let bakeOpts = opts;
@@ -987,7 +1003,11 @@ export async function exportFrames(opts) {
     }
   }
   let baked;
-  if (workers > 1) {
+  const unifiedProject = mediaMode === 'chrome' && !opts.bakery ? await loadProject(opts.url || DEFAULT_URL, outDir) : null;
+  if (unifiedProject) {
+    const { exportUnified } = await import('./export-unified.mjs');
+    baked = await exportUnified(unifiedProject, { ...opts, url: opts.url || DEFAULT_URL });
+  } else if (workers > 1) {
     baked = await bakeSharded(bakeOpts, workers);
   } else {
     const bakery = opts.bakery || await openBakery(bakeOpts);

@@ -1,3 +1,4 @@
+import { framesPlugin } from "./server/vite-plugin-frames";
 import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
@@ -57,7 +58,7 @@ export default defineConfig({
   cacheDir: process.env.PROMPTCUT_HEADLESS === "1" ? "node_modules/.vite-prerender-headless" : "node_modules/.vite-prerender",
   clearScreen: false,
   // 跨源守卫要排在所有接口前面(中间件按 configureServer 的调用顺序注册)
-  plugins: [corsForEditor(), apiGuardPlugin(), react(), tailwindcss(), exportPlugin(), mediaPlugin(), vitePluginCards(), visionPlugin()],
+  plugins: [corsForEditor(), apiGuardPlugin(), react(), tailwindcss(), exportPlugin(), framesPlugin(), mediaPlugin(), vitePluginCards(), visionPlugin()],
   server: {
     // 渲染页每一趟都是全新的页面,用不着热更新;源码改了照样重新变换(watcher 还开着)
     hmr: false,

@@ -1,4 +1,4 @@
-import { loadProc, serializeProc, forgetSaveTarget } from "./proc";
+import { loadProc, serializeProc, forgetSaveTarget, withFrameSnapshots } from "./proc";
 import { acquireDraftLock, releaseDraftLock } from "./procLock";
 import { isViewOnly, ownerHeaders } from "./viewOnly";
 import { actions } from "../../store/project";
@@ -44,7 +44,7 @@ export async function saveDraft(id: string, thumbnail: string | null = null): Pr
       // x-pc-owner:Skill 无头实例写回时用它证明「我是这个实例的主人」。
       // 普通页面没有这个头,服务端那边也不要求(只有无头实例上的 view-gate 才检查)
       headers: { "Content-Type": "application/json", ...ownerHeaders() },
-      body: serializeProc(thumbnail),
+      body: await withFrameSnapshots(serializeProc(thumbnail)),
     }),
   );
 }

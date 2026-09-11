@@ -1,4 +1,3 @@
-import { useEffect, useRef } from "react";
 import { motion } from "motion/react";
 import type { CardDef, CardProps } from "../../kernel/types";
 import { isExportMode } from "../../kernel/clock";
@@ -18,14 +17,6 @@ interface Params extends HudParams {
 }
 
 function FocusCard({ params, t = 0 }: CardProps<Params>) {
-  const vidRef = useRef<HTMLVideoElement>(null);
-
-  useEffect(() => {
-    if (isExportMode() && vidRef.current) {
-      vidRef.current.currentTime = t;
-    }
-  }, [t]);
-
   const bgColors: Record<string, string> = {
     cream: "#fdfbf7",
     mist: "#f0f2f5",
@@ -77,8 +68,11 @@ function FocusCard({ params, t = 0 }: CardProps<Params>) {
             )}
             {params.camSrc ? (
               <video
-                ref={vidRef}
-                src={params.camSrc}
+                src={isExportMode() ? undefined : params.camSrc}
+                data-pc-media-src={isExportMode() ? params.camSrc : undefined}
+                data-pc-media-time={Math.max(0, t)}
+                preload={isExportMode() ? "none" : "auto"}
+                style={isExportMode() ? { visibility: "hidden" } : undefined}
                 muted
                 playsInline
                 autoPlay={!isExportMode()}

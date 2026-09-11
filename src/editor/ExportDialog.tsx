@@ -118,7 +118,7 @@ export function ExportDialog(props: {
 
         {state.phase === "done" && (
           <div className="pc-export-ok">
-            视频已保存。其余产物（只含卡片层的透明通道 overlay.mov、逐帧 PNG，不含视频 / 图片素材）在产物目录里。
+            视频已保存。其余产物（overlay.mov、逐帧 PNG）在产物目录里；默认导出帧与视频共用 Chrome FrameScene。
           </div>
         )}
 

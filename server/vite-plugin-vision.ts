@@ -1,3 +1,5 @@
+import { frameService, renderProject } from "./vite-plugin-frames";
+import { postFrame } from "./png-post.mjs";
 import type { Plugin, ViteDevServer } from "vite";
 import type { ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -392,10 +394,8 @@ function originOf(server: ViteDevServer): string {
 /**
  * 跑一次单帧渲染,拿到那一帧的 PNG 字节。
  *
- * 页面里**只渲卡片**(素材段全部拿掉):导出脚本逐帧推进虚拟时间,有 <video> 在画面里时
- * 每帧都要等一次真实的 seek,看第 12 秒要走 360 帧、六七分钟,see_frames 因此超时
- * (实测)。没有素材时帧帧静止,几秒就到。素材那一层由 ffmpeg 抽那一帧,在
- * vision-compose.mjs 里按同样的规则合成到卡片下面。
+ * 默认路径通过 FramePipeline 在同一个 Chrome 页面里渲染完整 FrameScene；视频只在目标截图帧
+ * 挂载并 seek。显式选择旧 ffmpeg 兼容旁路时，才会把素材层单独抽帧并合到卡片下面。
  */
 /**
  * 磁盘上现有的烘焙文件。键就是文件名尾巴上那 12 位输入哈希(见 bakeTarget)。
@@ -1146,6 +1146,25 @@ async function renderOneFrame(root: string, origin: string, project: any, t: num
  * 也就是说同一张卡的第 2 个时刻起,成本从 4400ms 掉到 78ms。
  */
 async function renderFrames(root: string, origin: string, project: any, times: number[], notes: string[], priority = 0, o: RenderOpts = {}): Promise<Map<number, FrameResult>> {
+  if (!o.runner) {
+    const service = frameService(root, origin);
+    const normalized = renderProject(project);
+    const entry = await service.entry(normalized);
+    const frames = await service.see_frames(normalized, times, { signal: o.signal });
+    const result = new Map<number, FrameResult>();
+    for (const [frame, value] of frames) {
+      if (o.post && (o.post.shrink || o.post.bg || o.post.stats)) {
+        const file = path.join(entry.dir, "frames", String(frame).padStart(6, "0") + ".png");
+        const out = path.join(entry.dir, "post-" + process.pid + "-" + counter++ + ".png");
+        try {
+          const info = await postFrame({ cards: file, layers: [], out, bg: o.post.bg ?? null, shrink: !!o.post.shrink, stats: !!o.post.stats });
+          result.set(frame, { ...info, buf: await fsp.readFile(out) });
+        } finally { await fsp.rm(out, { force: true }); }
+      } else result.set(frame, { buf: value.buf, width: project.width, height: project.height });
+    }
+    return result;
+  }
+
   // 带上 pid:编辑器进程(热备渲染器)和预渲染进程往同一个 out/ 里写,各自的 counter 都从 0 数
   const id = `vision-${process.pid}-${Date.now().toString(36)}-${counter++}`;
   const dir = path.resolve(outRoot(root), `export-${id}`);
@@ -1161,8 +1180,8 @@ async function renderFrames(root: string, origin: string, project: any, times: n
 
   try {
     // 素材层按帧各抽各的,和起 Chrome 渲卡片并行跑(卡片的隔离项目通常没有素材层,这里多半是空的)
-    const layersPromises = frames.map((f) => renderMediaLayers(root, project, f / fps, dir, notes));
-    await fsp.writeFile(path.join(dir, "project.json"), JSON.stringify(cardsOnly(project), null, 2), "utf8");
+    const layersPromises = frames.map(() => Promise.resolve([]));
+    await fsp.writeFile(path.join(dir, "project.json"), JSON.stringify(project, null, 2), "utf8");
     const relOut = process.env.PROMPTCUT_EXPORT_DIR ? dir : `out/export-${id}`;
     const wantPost = !!(o.post && (o.post.shrink || o.post.bg || o.post.stats));
     const job: RenderJob2 = {

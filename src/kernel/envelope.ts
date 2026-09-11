@@ -279,9 +279,8 @@ const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFin
 const FRAME_KEYS = new Set(["x", "y", "w", "h", "anchor", "scale", "rotate", "rotateX", "rotateY", "translateZ"]);
 
 /**
- * 三维只对**卡片段**生效。素材段(有 mediaId)的预览、导出、see_frames 是三条不同的渲染路径,
- * 现在还对不齐三维:编辑器预览会按 frame 斜切但没有透视,导出根本不读 frame,
- * see_frames 走服务端 ffmpeg 只有整幅缩放 —— 三个结果没有一个是对的。
+ * 三维只对**卡片段**生效。默认的编辑器预览、导出、see_frames 已经共用 Chrome
+ * FrameScene；这里保留限制，是因为显式选择的旧 `--media=ffmpeg` 旁路只支持二维素材。
  *
  * 拦截放在这里而不是只放在 set_position 那个工具入口:set_clip 是另一条路,
  * `get_clip` 拿到封装、往 frame.local 里塞个 rotateY 再写回来,一样能绕过去(实测能写进去)。
@@ -293,7 +292,7 @@ export function assertNo3dOnMedia(clip: TrackClip, frame: ClipFrame | undefined)
   if (!used.length) return;
   throw new Error(
     `${used.join(" / ")} 只对卡片生效,这个 clip 是素材段(视频 / 图片)。` +
-    `素材层的预览、导出、see_frames 走的是三条不同的渲染路径,现在还对不齐三维,设了只会让三处画面互相矛盾。` +
+    `默认 Chrome 预览、导出、see_frames 虽然共用同一条管线,显式 --media=ffmpeg 的兼容旁路仍不支持素材三维。` +
     `要让素材立体,把它放进一张卡里再摆,或者先导出成图片素材。位置 / 大小 / 平面旋转对素材是正常支持的。`,
   );
 }

@@ -1,3 +1,4 @@
+import { UnifiedPreview } from "./preview/UnifiedPreview";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { MediaLayers } from "./preview/MediaLayers";
 import { Scene3DView } from "./preview/Scene3DView";
@@ -510,7 +511,7 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
         >
           <div style={{ transform: `scale(${scale})`, transformOrigin: "0 0", position: "absolute", left: 0, top: 0, ...themeStyle(project.themeId) }}>
             <div style={{ position: "relative", width: project.width, height: project.height }}>
-              <MediaLayers project={project} t={t} playing={playing} masterVolume={muted ? 0 : volume} />
+              <MediaLayers project={project} t={t} playing={playing} masterVolume={muted ? 0 : volume} audioOnly />
               <iframe
                 ref={frameRef}
                 data-pc="stage-frame"
@@ -534,8 +535,10 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
                   display: "block",
                   background: "transparent",
                   colorScheme: "normal",
+                  opacity: 0,
                 }}
               />
+              <UnifiedPreview project={project} t={t} playing={playing} />
             </div>
           </div>
           

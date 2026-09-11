@@ -29,6 +29,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
+import { captureSnapshot } from './capture-snapshot.mjs';
 import { openBakery } from './export-frames.mjs';
 
 /** 解析 --frames:「a-b」或「a,b,c」;不给就是缓存里全部的帧 */
@@ -61,26 +62,11 @@ export async function replayFrames(opts) {
   try {
     await page.setViewport({ width: manifest.width, height: manifest.height, deviceScaleFactor: 1 });
     await client.send('Emulation.setDefaultBackgroundColorOverride', { color: { r: 0, g: 0, b: 0, a: 0 } });
-    /*
-     * 原树必须**移除**,不能只隐藏:快照里 SVG 渐变之类的 `url(#id)` 如果在文档里还能找到同名的原树元素,
-     * 会解析到隐藏的那一份上(实测 growth-curve 的曲线填充整片错掉,差 >8 的像素每帧 148029 个)。
-     * 冻结时已经给 id 改过名,这里再移除一次原树,双保险。
-     */
-    await page.evaluate(() => {
-      document.getElementById('root')?.remove();
-      const box = document.createElement('div');
-      box.id = 'pc-replay';
-      box.style.cssText = 'position:absolute;left:0;top:0;overflow:hidden';
-      document.body.appendChild(box);
-    });
     const writes = [];
     for (const n of frames) {
       const html = zlib.gunzipSync(fs.readFileSync(path.join(cacheDir, `${String(n).padStart(6, '0')}.html.gz`))).toString('utf8');
-      await page.evaluate((h) => { document.getElementById('pc-replay').innerHTML = h; }, html);
-      await page.evaluate(() => window.__bfAssets());   // 画布换成的图要 decode 完再截
-      const r = await beginFrame({ screenshot: { format: 'png', optimizeForSpeed: true } });
-      if (!r.screenshotData) throw new Error(`第 ${n} 帧重截没有拿到截图`);
-      writes.push(fs.promises.writeFile(path.join(outDir, `${String(n).padStart(6, '0')}.png`), Buffer.from(r.screenshotData, 'base64')));
+      const buf = await captureSnapshot(bakery, html);
+      writes.push(fs.promises.writeFile(path.join(outDir, String(n).padStart(6, '0') + '.png'), buf));
     }
     await Promise.all(writes);
   } finally {
