@@ -789,6 +789,96 @@ export function applyCardPatch(
   return { ok: true, after, replaced: hits };
 }
 
+/** 一份 .proc 最多带多少张定制卡。再多就不像一个项目了,多半是文件被人动过 */
+export const MAX_BUNDLED_CARDS = 200;
+
+export interface CardInstallResult {
+  id: string;
+  status: 'written' | 'updated' | 'unchanged' | 'rejected';
+  error?: string;
+  /** updated 时本机旧版的备份(相对项目根) */
+  backup?: string;
+  /** 实际写到的文件;和底版不同说明写进了改动层,要手动触发热更新 */
+  written?: string;
+  abs?: string;
+}
+
+/**
+ * 把 .proc 里带的定制卡装回 src/cards/user/(打开项目时调,见 src/editor/io/procCards.ts)。
+ *
+ * 规矩:
+ *   - 和 create_card **同一道审查**(翻译器 + checkCardSource):.proc 可能是别人发来的,
+ *     里面的源码会在编辑器里执行。不过审的那张不装,本机已有的版本原样留着;
+ *   - existingIds 只该放**内置卡**的 id:同名内置卡是撞车,同名用户卡是「更新」;
+ *   - 本机没有 → 写底版(glob 扫的是真实目录,只写改动层它看不见);
+ *   - 本机有且一样 → 不动;
+ *   - 本机有但不一样 → **以项目里存的为准**。打开一个项目看到的应该是它存下来的样子;
+ *     本机旧版先按内容哈希备份到 historyDir(同一份只备一次),两个项目来回开不会越积越多。
+ */
+export function installBundledCards(opts: {
+  root: string;
+  historyDir: string;
+  cards: unknown;
+  existingIds: string[];
+}): CardInstallResult[] {
+  const userDir = path.join(opts.root, 'src', 'cards', 'user');
+  const list = Array.isArray(opts.cards) ? opts.cards.slice(0, MAX_BUNDLED_CARDS) : [];
+  const out: CardInstallResult[] = [];
+  const seen = new Set<string>();
+  for (const raw of list) {
+    const id = (raw as { id?: unknown })?.id;
+    const source = (raw as { source?: unknown })?.source;
+    if (typeof id !== 'string' || typeof source !== 'string') {
+      out.push({ id: String(id ?? '?'), status: 'rejected', error: 'id 和 source 都必须是字符串' });
+      continue;
+    }
+    // 先过 id 白名单再碰文件系统:这道校验挡的是路径穿越
+    if (!ID_RE.test(id)) {
+      out.push({ id, status: 'rejected', error: `卡片 id "${id}" 不合法` });
+      continue;
+    }
+    if (seen.has(id)) continue;
+    seen.add(id);
+
+    const translated = translateCardSource(source);
+    const finalSource = translated.source;
+    const check = checkCardSource(id, finalSource, opts.existingIds, { vendored: translated.rewrites.length > 0 });
+    if (!check.ok) {
+      out.push({ id, status: 'rejected', error: check.errors.join('\n') });
+      continue;
+    }
+
+    const abs = path.join(userDir, `${id}.tsx`);
+    if (path.dirname(path.resolve(abs)) !== path.resolve(userDir)) {
+      out.push({ id, status: 'rejected', error: '非法的文件路径' });
+      continue;
+    }
+    fs.mkdirSync(userDir, { recursive: true });
+
+    if (!fs.existsSync(abs)) {
+      fs.writeFileSync(abs, finalSource, 'utf8');
+      // 改动层里要是残留着同名的旧版,它会盖住刚写的底版 —— 一并换掉
+      const o = overrideFileFor(opts.root, abs);
+      if (o && fs.existsSync(o)) fs.writeFileSync(o, finalSource, 'utf8');
+      out.push({ id, status: 'written', abs, written: abs });
+      continue;
+    }
+
+    const before = readEffective(opts.root, abs);
+    if (before.replace(/\r\n/g, '\n') === finalSource) {
+      out.push({ id, status: 'unchanged' });
+      continue;
+    }
+    const hash = crypto.createHash('sha1').update(before).digest('hex').slice(0, 10);
+    fs.mkdirSync(opts.historyDir, { recursive: true });
+    const backupAbs = path.join(opts.historyDir, `${id}.${hash}.tsx`);
+    if (!fs.existsSync(backupAbs)) fs.writeFileSync(backupAbs, before, 'utf8');
+    const written = writeCardFile(opts.root, abs, finalSource);
+    out.push({ id, status: 'updated', backup: toRel(opts.root, backupAbs), abs, written });
+  }
+  return out;
+}
+
 export default function vitePluginCards(): Plugin {
   let projectRoot = process.cwd();
   return {
@@ -807,7 +897,11 @@ export default function vitePluginCards(): Plugin {
       const o = overrideFileFor(projectRoot, file);
       if (!o || !fs.existsSync(o)) return null;
       this.addWatchFile(o);
-      return fs.readFileSync(o, 'utf8');
+      const text = fs.readFileSync(o, 'utf8');
+      // `?raw` 要的是源码字符串(cards/user/index.ts 打包 .proc 用),不是模块本身。
+      // 原样交出去的话,Vite 会把 TSX 源码当成这个 ?raw 模块的 JS 来跑。
+      if (/[?&]raw\b/.test(id)) return `export default ${JSON.stringify(text)}`;
+      return text;
     },
     configureServer(server: ViteDevServer) {
       const userDir = path.join(server.config.root, 'src', 'cards', 'user');
@@ -1216,6 +1310,54 @@ export default function vitePluginCards(): Plugin {
               sendJson(res, 500, { ok: false, error: e?.message || String(e) });
             }
           }).catch(() => {});
+        });
+      });
+
+      /**
+       * 打开项目时把 .proc 里带的定制卡装回来。规矩在 installBundledCards;
+       * 这里只管三件事:收请求、写进改动层的手动触发热更新、给本机原来没有的卡盖归属戳。
+       */
+      server.middlewares.use('/api/cards/install', (req, res) => {
+        if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: 'POST only' });
+        if (!req.headers['content-type']?.startsWith('application/json')) {
+          return sendJson(res, 415, { ok: false, error: 'JSON required' });
+        }
+        if (!originOk(req as any)) return sendJson(res, 403, { ok: false, error: 'Origin rejected' });
+
+        let body = '';
+        req.on('data', (c) => { body += c; if (body.length > MAX_SOURCE_BYTES * (MAX_BUNDLED_CARDS + 4)) req.destroy(); });
+        req.on('end', () => {
+          try {
+            const { cards, projectId, existingIds } = JSON.parse(body || '{}');
+            const root = server.config.root;
+            const results = installBundledCards({
+              root,
+              historyDir: path.join(root, '.pc-work', 'card-history'),
+              cards,
+              existingIds: Array.isArray(existingIds) ? existingIds.filter((x: unknown) => typeof x === 'string') : [],
+            });
+            for (const r of results) {
+              if (!r.abs) continue;
+              // 写进改动层时 Vite 盯着的底版没变,和 edit_card 一样手动作废、再按底版变了走热更新
+              if (r.written && r.written !== r.abs) {
+                for (const m of server.moduleGraph.getModulesByFile(r.abs.split(path.sep).join('/')) ?? []) server.moduleGraph.invalidateModule(m);
+                server.watcher.emit('change', r.abs);
+              }
+              emitCardSourceChange(r.abs);
+            }
+            // 本机原来没有的卡:记在这个项目名下。已有条目不动 —— 用户设过的共享不该被一次打开冲掉
+            const m = readScopes();
+            let stamped = false;
+            for (const r of results) {
+              if (r.status !== 'written' || m[r.id]) continue;
+              m[r.id] = { scope: 'project', createdAt: new Date().toISOString(), ...(typeof projectId === 'string' && projectId ? { projectId } : {}) };
+              stamped = true;
+            }
+            if (stamped) writeScopes(m);
+            sendJson(res, 200, { ok: true, results: results.map(({ abs: _a, written: _w, ...r }) => r) });
+          } catch (e: any) {
+            sendJson(res, 400, { ok: false, error: e?.message || String(e) });
+          }
         });
       });
 

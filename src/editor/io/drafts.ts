@@ -63,7 +63,8 @@ export async function openDraft(id: string): Promise<Project> {
     await releaseDraftLock();
     throw new Error(`打不开这份草稿(${res.status})`);
   }
-  const project = loadProc(await res.text());
+  // 老草稿没有 project.id:拿草稿 id 顶上,和定制卡归属表里的老条目对得上
+  const project = loadProc(await res.text(), { legacyId: id });
   // 换了草稿就换了落点,不能再覆盖上一个项目的文件
   forgetSaveTarget();
   actions.loadProject(project, `${project.name}.proc`);

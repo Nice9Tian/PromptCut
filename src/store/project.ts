@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from "react";
-import { createEmptyProject, DEFAULT_CARD_DUR, DEFAULT_MEDIA_DUR, findClip, findSoundAsset, newId, soundAssetFrom, type MediaAsset, type Project, type Track, type TrackClip, type Transcript, type Shots, type Subjects } from "../kernel/project";
+import { createEmptyProject, DEFAULT_CARD_DUR, DEFAULT_MEDIA_DUR, findClip, findSoundAsset, newId, newProjectId, soundAssetFrom, type MediaAsset, type Project, type Track, type TrackClip, type Transcript, type Shots, type Subjects } from "../kernel/project";
 import { getCard } from "../kernel/registry";
 import { normalizeEmphasis, type ClipEmphasis } from "../kernel/emphasis";
 import {
@@ -223,8 +223,9 @@ export const actions = {
   loadProject(p: Project, filePath: string | null = null) {
     history.length = 0;
     future.length = 0;
-    // 所有加载路径的唯一入口,在这里把项目补成多剪辑形状:老文件没有 cuts 就补成默认三条
-    const normalized = normalizeCuts(p);
+    // 所有加载路径的唯一入口,在这里把项目补成多剪辑形状:老文件没有 cuts 就补成默认三条。
+    // 顺带兜住身份:定制卡的归属认 project.id,哪条路进来的项目都得有一个(见 Project.id)
+    const normalized = normalizeCuts(p.id ? p : { ...p, id: newProjectId() });
     // lastCamera3dFov 跟着项目走,换项目要清掉,否则三维视角会串味
     set({ project: normalized, filePath, dirty: false, t: 0, playing: false, selection: [], playToken: state.playToken + 1, durationManual: null, lastCamera3dFov: null });
   },

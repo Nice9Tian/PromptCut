@@ -119,24 +119,61 @@ export async function setCardScope(cardId: string, scope: CardScope, projectId?:
   invalidateScopes();
 }
 
+/** 归属表已经加载过就给缓存,没加载过给 null。存盘是同步的,等不了一次请求 */
+export function peekScopes(): Record<string, ScopeEntry> | null {
+  return scopeCache;
+}
+
+/**
+ * 项目里用到的全部卡片 id:所有剪辑(激活的那条在 tracks,停放的在 cuts[].tracks)里片段的 cardId。
+ *
+ * 「用到了」本身就是最硬的归属证据 —— 时间轴上摆着这张卡,它就是这个项目的素材,
+ * 不管归属表里记的是哪个草稿 id(那张表以前按草稿 id 记,换个打开方式就对不上)。
+ */
+export function usedCardIds(p: { tracks?: { clips?: { cardId?: string }[] }[]; cuts?: { tracks?: { clips?: { cardId?: string }[] }[] }[] }): Set<string> {
+  const out = new Set<string>();
+  const scan = (tracks: { clips?: { cardId?: string }[] }[] | undefined) => {
+    for (const t of tracks ?? []) for (const c of t.clips ?? []) if (typeof c.cardId === "string" && c.cardId) out.add(c.cardId);
+  };
+  scan(p.tracks);
+  for (const cut of p.cuts ?? []) scan(cut.tracks);
+  return out;
+}
+
+/**
+ * 一张用户卡的源码 import 了同目录的哪些文件(`./other` / `./other.tsx`)。
+ * 打包进 .proc 时顺着它把依赖一起带上,不然换台机器这张卡编译不过。
+ */
+export function localCardImports(source: string): string[] {
+  const out = new Set<string>();
+  for (const m of source.matchAll(/\bfrom\s+["']\.\/([A-Za-z0-9_-]+)(?:\.tsx)?["']/g)) out.add(m[1]);
+  for (const m of source.matchAll(/\bimport\s+["']\.\/([A-Za-z0-9_-]+)(?:\.tsx)?["']/g)) out.add(m[1]);
+  return [...out];
+}
+
 /**
  * 这张卡此刻该不该出现在 list_cards 里。
  *
  * 判据分两半:内置卡看「组开没开」,用户卡看「档位 + 是不是本项目建的」。
  * 拿不到归属表(还没加载完、请求失败)时**一律放行** —— 宁可多给几张,
  * 也不能因为一次网络抖动让 Agent 突然一张卡都看不见。
+ *
+ * `used` 是当前项目时间轴上用到的卡(usedCardIds)。用到了就算本项目的素材,
+ * 和归属表记的项目 id 无关 —— 否则从桌面打开一份 .proc,片子里正用着的卡在卡库里反而找不到。
  */
 export function isCardVisible(
   card: CardDef<any>,
   v: CardVisibility,
   scopes: Record<string, ScopeEntry>,
   projectId: string | null,
+  used?: ReadonlySet<string>,
 ): boolean {
   if (card.source !== "user") {
     if (!v.base) return false;
     const g = card.source as BaseGroup;
     return v.groups[g] !== false;
   }
+  if (v.project && used?.has(card.id)) return true;
   const entry = scopes[card.id];
   // 没有条目 = 这个功能之前建的老卡,按「自定义(未归属)」处理,不藏。
   // 悄悄让几张已有的卡消失,比泄露更难查 —— 要清理请在卡库里手动改档或删掉。
@@ -153,8 +190,9 @@ export function describeUserCard(
   card: CardDef<any>,
   scopes: Record<string, ScopeEntry>,
   projectId: string | null,
+  used?: ReadonlySet<string>,
 ): { scope: CardScope | "unknown"; mine: boolean } {
   const e = scopes[card.id];
-  if (!e) return { scope: "unknown", mine: false };
-  return { scope: e.scope, mine: !e.projectId || e.projectId === projectId };
+  if (!e) return { scope: "unknown", mine: !!used?.has(card.id) };
+  return { scope: e.scope, mine: !e.projectId || e.projectId === projectId || !!used?.has(card.id) };
 }

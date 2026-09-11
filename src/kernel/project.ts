@@ -210,6 +210,14 @@ export interface Cut {
 
 export interface Project {
   version: 1;
+  /**
+   * 项目自己的身份,跟着 .proc 走。定制卡的归属表(src/cards/user/_scopes.json)认的就是它。
+   *
+   * 以前归属认的是**草稿 id** —— 那是存放位置,不是身份:从桌面双击打开、另存为、换台机器,
+   * 草稿 id 都会变(甚至是 null),于是 Agent 给这个项目写的卡在它自己的卡库里也看不见了。
+   * 老文件没有这个字段:从草稿打开时拿草稿 id 顶上(和归属表里的老条目对得上),其余现生成一个。
+   */
+  id?: string;
   name: string;
   width: number;
   height: number;
@@ -246,9 +254,16 @@ export const DEFAULT_CARD_DUR = 3;
 /** 素材没有时长信息时,视频段的兜底时长(秒) */
 export const DEFAULT_MEDIA_DUR = 5;
 
+/** 新项目的身份。只求不撞,不求好看 */
+export function newProjectId(): string {
+  const rand = globalThis.crypto?.randomUUID?.().slice(0, 8) ?? Math.random().toString(36).slice(2, 10);
+  return `p-${Date.now().toString(36)}-${rand}`;
+}
+
 export function createEmptyProject(name = "未命名"): Project {
   return {
     version: 1,
+    id: newProjectId(),
     name,
     width: 1920,
     height: 1080,

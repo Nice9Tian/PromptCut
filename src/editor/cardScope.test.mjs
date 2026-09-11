@@ -10,7 +10,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { isCardVisible } from "./cardScope.ts";
+import { isCardVisible, usedCardIds, localCardImports } from "./cardScope.ts";
 
 const V = { base: true, groups: { native: true, magicui: true, asset: true }, custom: true, project: true };
 const card = (id, source) => ({ id, source, name: id, description: "", defaults: {}, controls: [], Component: () => null });
@@ -67,4 +67,30 @@ test("归属表拿不到时一律放行:一次网络抖动不该让 Agent 突然
 test("记了档位但没记项目 id 的老数据,按本项目算,不藏", () => {
   const c = card("y", "user");
   assert.equal(isCardVisible(c, V, { y: { scope: "project" } }, "p1"), true);
+});
+
+test("时间轴上正用着的定制卡算本项目的,不管归属表记的是哪个项目 id", () => {
+  // 东京七日那份 .proc:卡记在草稿 20260910-wu2hng 名下,从桌面打开时根本没有草稿 id
+  const map = card("tokyo7-map", "user");
+  const scopes = { "tokyo7-map": { scope: "project", projectId: "20260910-wu2hng" } };
+  const used = new Set(["tokyo7-map"]);
+  assert.equal(isCardVisible(map, V, scopes, null), false, "不看用没用到时,它就是被藏起来的那张");
+  assert.equal(isCardVisible(map, V, scopes, null, used), true, "片子里正用着,卡库里就得看得见");
+  assert.equal(isCardVisible(map, V, scopes, "p-别的", used), true);
+  assert.equal(isCardVisible(map, { ...V, project: false }, scopes, null, used), false, "关掉项目素材那一档照样藏");
+  assert.equal(isCardVisible(card("other", "user"), V, { other: { scope: "project", projectId: "x" } }, null, used), false, "没用到的别人家的卡照旧不漏");
+});
+
+test("usedCardIds 扫所有剪辑:激活的在 tracks,停放的在 cuts[].tracks", () => {
+  const p = {
+    tracks: [{ clips: [{ cardId: "a" }, { mediaId: "m" }] }],
+    cuts: [{ id: "cut-1" }, { id: "cut-2", tracks: [{ clips: [{ cardId: "b" }, { cardId: "a" }] }] }],
+  };
+  assert.deepEqual([...usedCardIds(p)].sort(), ["a", "b"]);
+  assert.deepEqual([...usedCardIds({})], []);
+});
+
+test("localCardImports 只认同目录的文件,顺带把 .tsx 后缀去掉", () => {
+  const src = `import { a } from "./shared-bits";\nimport x from "./logo.tsx";\nimport "./side";\nimport { m } from "motion/react";\nimport t from "../../kernel/types";`;
+  assert.deepEqual(localCardImports(src).sort(), ["logo", "shared-bits", "side"]);
 });

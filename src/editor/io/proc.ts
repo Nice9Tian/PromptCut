@@ -1,7 +1,8 @@
 import { actions, getState } from "../../store/project";
-import { createEmptyProject } from "../../kernel/project";
+import { createEmptyProject, newProjectId } from "../../kernel/project";
 import type { Project } from "../../kernel/project";
 import { exportProjectJson } from "./index";
+import { bundledCardsOf, collectProjectCards, restoreProjectCards, type BundledCard } from "./procCards";
 import { restoreMediaUrls } from "./mediaUrls";
 import { collectProjectAi, applyProjectAi, resetProjectAi, type ProjectAi } from "../../ai/projectAi";
 import { getSkillSnapshot } from "../../skill/skillMode";
@@ -62,11 +63,20 @@ export interface ProcFile {
    * 迟早出现两边看到的模式不一样。这里记下来是为了事后看得出"这段是谁改的"。
    */
   skill?: { active: boolean; jobId?: string | null; at?: string };
+  /**
+   * 这个项目用到的定制卡(Agent 用 create_card 写的那种)的源码。
+   *
+   * 素材不进 .proc,卡片代码却要进:素材是用户自己的文件,还在原处;定制卡活在这台机器的
+   * src/cards/user/ 全局目录里,拷走 .proc、换台机器、被别的项目同名卡覆盖,片子里就只剩一个
+   * 找不到的 cardId。打开时装回本机,规矩见 procCards.ts。没有定制卡就不写这一段。
+   */
+  cards?: BundledCard[];
 }
 
 /** 当前项目 → .proc 文本 */
 export function serializeProc(thumbnail: string | null = null): string {
   const project = JSON.parse(exportProjectJson()) as Project;
+  const cards = collectProjectCards(project);
   const doc: ProcFile = {
     format: PROC_FORMAT,
     version: PROC_VERSION,
@@ -75,18 +85,28 @@ export function serializeProc(thumbnail: string | null = null): string {
     project,
     ai: collectProjectAi(),
     skill: skillStamp(),
+    cards: cards.length ? cards : undefined,
   };
   return JSON.stringify(doc, null, 2);
 }
 
+export interface ParseProcOptions {
+  /**
+   * 老文件没有 project.id 时顶上的身份。从草稿打开时传草稿 id —— 归属表里的老条目
+   * 记的就是草稿 id,这样它名下的定制卡照样认得出来。
+   */
+  legacyId?: string;
+}
+
 /** .proc 文本 → Project。旧的裸 Project JSON 也认 */
-export function parseProc(text: string): Project {
+export function parseProc(text: string, opts: ParseProcOptions = {}): Project {
   const doc = JSON.parse(text);
   const project = doc?.format === PROC_FORMAT ? doc.project : doc;
   if (!project || typeof project !== "object" || !Array.isArray(project.tracks)) {
     throw new Error("这不是一个 PromptCut 项目文件");
   }
-  const full: Project = { ...createEmptyProject(), ...project };
+  const id = typeof project.id === "string" && project.id ? project.id : opts.legacyId || newProjectId();
+  const full: Project = { ...createEmptyProject(), ...project, id };
   // 存下来的素材地址是死的 blob: 或裸文件名,按 path 换回能播的 /@media 地址(见 mediaUrls.ts)
   const { media, missing } = restoreMediaUrls(full.media || []);
   for (const m of missing) console.warn(`[proc] 缺失素材: ${m.name} (${m.url})`);
@@ -100,16 +120,18 @@ export function parseProc(text: string): Project {
  * 于是新打开的项目里还留着上一个项目的对话。旧的 .proc 没有 ai 段,按空处理 ——
  * 也就是会清掉当前对话,这正是「每个项目一份对话」该有的样子。
  */
-export function loadProc(text: string): Project {
-  const project = parseProc(text);
-  let ai: unknown = null;
+export function loadProc(text: string, opts: ParseProcOptions = {}): Project {
+  const project = parseProc(text, opts);
+  let doc: ProcFile | null = null;
   try {
-    const doc = JSON.parse(text);
-    if (doc?.format === PROC_FORMAT) ai = doc.ai;
+    const parsed = JSON.parse(text);
+    if (parsed?.format === PROC_FORMAT) doc = parsed;
   } catch {
     /* parseProc 已经验过一遍,走到这儿说明是裸 Project,没有 ai 段 */
   }
-  applyProjectAi(ai);
+  applyProjectAi(doc?.ai ?? null);
+  // 项目里带的定制卡装回本机。不等它:装完 vite 热更新,卡自己出现在舞台和卡库里
+  if (doc) void restoreProjectCards(bundledCardsOf(doc), project.id ?? null);
   return project;
 }
 

@@ -33,8 +33,7 @@ import {
   type Size,
 } from "../../kernel/layout";
 import { listCuts, resolveCut } from "../../kernel/cuts";
-import { getActiveDraftId } from "../io/drafts";
-import { invalidateScopes, isCardVisible, loadScopes, readVisibility, type ScopeEntry } from "../cardScope";
+import { invalidateScopes, isCardVisible, loadScopes, readVisibility, usedCardIds, type ScopeEntry } from "../cardScope";
 import { cameraFor, clampFov, DEFAULT_FOV_DEG, MAX_FOV_DEG, MIN_FOV_DEG } from "../../kernel/space3d";
 import { generateVoice, getVoiceConfig } from "../../ai/voice";
 import { VoiceSettingsDialog } from "../../voice/VoiceSettingsDialog";
@@ -279,7 +278,7 @@ export function RightPanel() {
          */
         const wanted = args?.cardId
           ? [findCard(args.cardId)]
-          : allCards().filter((c) => isCardVisible(c, readVisibility(), cardScopes, getActiveDraftId()));
+          : allCards().filter((c) => isCardVisible(c, readVisibility(), cardScopes, getState().project.id ?? null, usedCardIds(getState().project)));
         const full = args?.detail === "full" || !!args?.cardId;
         return wanted.map((c) => {
           const base = {
@@ -1757,7 +1756,7 @@ export function RightPanel() {
             overwrite: args.overwrite === true,
             existingIds: allCards().map((c) => c.id),
             // 盖归属戳:定制卡默认只属于建它的这个项目(见 editor/cardScope.ts)
-            projectId: getActiveDraftId() ?? undefined,
+            projectId: getState().project.id ?? undefined,
           }),
         });
         const data = await res.json().catch(() => ({}));

@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { setCardScope, type CardScope, type ScopeEntry } from "../cardScope";
-import { getActiveDraftId } from "../io/drafts";
+import { getState } from "../../store/project";
 
 /**
  * 定制卡的右键菜单:在「项目素材」和「自定义素材」之间换档。
@@ -46,7 +46,7 @@ export function UserCardMenu({
   const label = target === "custom" ? "转换为自定义素材(跨项目可用)" : "收归本项目(不再跨项目出现)";
 
   const apply = async () => {
-    await setCardScope(cardId, target, getActiveDraftId());
+    await setCardScope(cardId, target, getState().project.id ?? null);
     onChanged();
     onClose();
   };

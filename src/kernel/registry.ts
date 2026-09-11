@@ -30,3 +30,21 @@ export function getCard(id: string): CardDef<any> | undefined {
 export function allCards(): CardDef<any>[] {
   return [...map.values()];
 }
+
+/**
+ * 定制卡(src/cards/user/)的源码原文:文件名 → 源码,以及卡片 id → 文件名。
+ * 存 .proc 时要把项目用到的定制卡一起打包(editor/io/procCards.ts)。
+ *
+ * 由 cards/index.ts 每次(含 HMR 重跑)灌进来,而不是让 procCards 直接 import cards/user ——
+ * 那会多出一条 cards/user → procCards → proc → drafts → headless 的依赖链,链上没有能接住
+ * 热更新的模块,于是 Agent 每建 / 改一张卡,编辑器就整页刷新一次。
+ */
+let userSources: { files: Record<string, string>; fileOf: Record<string, string> } = { files: {}, fileOf: {} };
+
+export function setUserCardSources(files: Record<string, string>, fileOf: Record<string, string>) {
+  userSources = { files, fileOf };
+}
+
+export function userCardSources(): { files: Record<string, string>; fileOf: Record<string, string> } {
+  return userSources;
+}

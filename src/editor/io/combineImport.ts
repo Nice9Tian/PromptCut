@@ -1,4 +1,5 @@
 import { parseProc } from "./proc";
+import { restoreCardsFromProcText } from "./procCards";
 import { actions, getState } from "../../store/project";
 import { combineProjects, describeReport, emptyBase, type CombineReport } from "../../kernel/combine";
 import type { Project } from "../../kernel/project";
@@ -18,6 +19,8 @@ export function applyCombine(theirsText: string, baseText: string | null): Combi
   const base = baseText ? parseProc(baseText) : emptyBase();
   const { project, report } = combineProjects(base, ours, theirs);
   replaceProject(project);
+  // Skill 那边新建 / 改过的定制卡随结果一起回来,装回本机,不然合进来的卡片段找不到卡
+  void restoreCardsFromProcText(theirsText, getState().project.id ?? null);
   return report;
 }
 

@@ -6,8 +6,8 @@ import { allParts } from "../../parts/registry";
 import { assetCardKind, featuredParticleIds } from "../../cards/assets";
 import { CardScopeBar } from "./CardScopeBar";
 import { UserCardMenu } from "./UserCardMenu";
-import { isCardVisible, loadScopes, readVisibility, type CardVisibility, type ScopeEntry } from "../cardScope";
-import { getActiveDraftId } from "../io/drafts";
+import { isCardVisible, loadScopes, readVisibility, usedCardIds, type CardVisibility, type ScopeEntry } from "../cardScope";
+import { useStore } from "../../store/project";
 
 export interface CardsTabHandle {
   scrollToTop: () => void;
@@ -46,10 +46,15 @@ export const CardsTab = forwardRef<CardsTabHandle, CardsTabProps>(function Cards
     return allParts().filter((p) => !q || p.name.toLowerCase().includes(q) || p.description.toLowerCase().includes(q) || p.id.includes(q) || (p.tags ?? []).some((t) => t.toLowerCase().includes(q)));
   }, [search]);
 
+  // 归属认项目自己的 id(跟着 .proc 走),再加上「时间轴上正用着」这一条 ——
+  // 以前认的是草稿 id,从桌面打开的 .proc 没有草稿 id,片子里正用着的定制卡在这里一张都看不到。
+  // 用到的卡拼成字符串做依赖:项目每改一下都会换对象,卡表不必跟着每次重算
+  const projectId = useStore((s) => s.project.id ?? null);
+  const usedKey = useStore((s) => [...usedCardIds(s.project)].sort().join("\n"));
   const cards = useMemo(() => {
     const q = search.toLowerCase();
-    const projectId = getActiveDraftId();
-    const all = allCards().filter((c) => isCardVisible(c, vis, scopes, projectId)).filter(
+    const used = new Set(usedKey ? usedKey.split("\n") : []);
+    const all = allCards().filter((c) => isCardVisible(c, vis, scopes, projectId, used)).filter(
       (c) =>
         c.name.toLowerCase().includes(q) ||
         c.description.toLowerCase().includes(q) ||
@@ -68,7 +73,7 @@ export const CardsTab = forwardRef<CardsTabHandle, CardsTabProps>(function Cards
       particles: all.filter((c) => assetCardKind(c) === "particles"),
       empty: all.length === 0,
     };
-  }, [search, vis, scopes]);
+  }, [search, vis, scopes, projectId, usedKey]);
 
   return (
     <div className="flex-1 min-h-0 flex flex-col">

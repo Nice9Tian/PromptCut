@@ -1,7 +1,7 @@
-import { registerCards, resetCards, allCards } from "../kernel/registry";
+import { registerCards, resetCards, allCards, setUserCardSources } from "../kernel/registry";
 import { magicuiCards } from "./magicui";
 import { nativeCards } from "./native";
-import { userCards } from "./user";
+import { userCards, userCardFiles, userCardFileOf } from "./user";
 import { assetCards } from "./assets";
 // 部件库(组合卡的零件)和卡片一起装:src/parts/index.ts 自己注册,这里只要确保它被加载
 import "../parts";
@@ -27,3 +27,5 @@ const safeUserCards = userCards.filter((c) => {
   return true;
 });
 registerCards(safeUserCards);
+// 定制卡源码原文交给注册表,存 .proc 时打包用(为什么不让 procCards 直接 import,见 registry.ts)
+setUserCardSources(userCardFiles, userCardFileOf);

@@ -40,7 +40,7 @@ const pluginUrl = compile('server/vite-plugin-cards.ts', 'cards-plugin.mjs', [["
 
 const { registerCards } = await import(registryUrl);
 const { validateCardParams, findCard } = await import(cardParamsUrl);
-const { checkCardSource, applyCardPatch, translateCardSource, reviewCardSource, suggestControls } = await import(pluginUrl);
+const { checkCardSource, applyCardPatch, translateCardSource, reviewCardSource, suggestControls, installBundledCards } = await import(pluginUrl);
 
 // 一张最小的假卡,形状和真卡一致
 registerCards([{
@@ -326,4 +326,72 @@ test('replace 与 find 相同 → 报错,不留一次什么都没干的「成功
 
 test('空 find → 报错(否则会匹配到每一个位置)', () => {
   assert.equal(applyCardPatch('abc', '', 'x').ok, false);
+});
+
+// ── installBundledCards:打开 .proc 时把项目里带的定制卡装回本机 ─────────
+function tmpRoot() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-install-test-'));
+  return { root, history: path.join(root, '.pc-work', 'card-history'), user: path.join(root, 'src', 'cards', 'user') };
+}
+const V2 = GOOD.replace('"¥1"', '"¥2"');
+
+test('install:本机没有 → 写进 src/cards/user/', () => {
+  const { root, history, user } = tmpRoot();
+  const [r] = installBundledCards({ root, historyDir: history, cards: [{ id: 'price-tag', source: GOOD }], existingIds: ['odometer'] });
+  assert.equal(r.status, 'written', r.error);
+  assert.equal(fs.readFileSync(path.join(user, 'price-tag.tsx'), 'utf8'), translateCardSource(GOOD).source);
+});
+
+test('install:本机一样 → 不动;不一样 → 以项目为准,旧版按内容备份且只备一次', () => {
+  const { root, history, user } = tmpRoot();
+  installBundledCards({ root, historyDir: history, cards: [{ id: 'price-tag', source: GOOD }], existingIds: [] });
+  assert.equal(installBundledCards({ root, historyDir: history, cards: [{ id: 'price-tag', source: GOOD }], existingIds: [] })[0].status, 'unchanged');
+
+  const [r] = installBundledCards({ root, historyDir: history, cards: [{ id: 'price-tag', source: V2 }], existingIds: [] });
+  assert.equal(r.status, 'updated');
+  assert.match(fs.readFileSync(path.join(user, 'price-tag.tsx'), 'utf8'), /¥2/);
+  assert.match(fs.readFileSync(path.join(root, r.backup), 'utf8'), /¥1/, '备份里是被换掉的本机旧版');
+
+  // 两个项目来回打开:同一份旧版只备一次,不会越积越多
+  installBundledCards({ root, historyDir: history, cards: [{ id: 'price-tag', source: GOOD }], existingIds: [] });
+  installBundledCards({ root, historyDir: history, cards: [{ id: 'price-tag', source: V2 }], existingIds: [] });
+  assert.equal(fs.readdirSync(history).length, 2);
+});
+
+test('install:过不了审查的不装,本机已有的原样留着', () => {
+  const { root, history, user } = tmpRoot();
+  installBundledCards({ root, historyDir: history, cards: [{ id: 'price-tag', source: GOOD }], existingIds: [] });
+  const bad = GOOD.replace('return <motion.div', 'setTimeout(() => {}, 1);\n  return <motion.div');
+  const [r] = installBundledCards({ root, historyDir: history, cards: [{ id: 'price-tag', source: bad }], existingIds: [] });
+  assert.equal(r.status, 'rejected');
+  assert.match(r.error, /setTimeout/);
+  assert.doesNotMatch(fs.readFileSync(path.join(user, 'price-tag.tsx'), 'utf8'), /setTimeout/);
+});
+
+test('install:id 挡住路径穿越、不许顶替内置卡', () => {
+  const { root, history } = tmpRoot();
+  const rs = installBundledCards({
+    root, historyDir: history, existingIds: ['price-tag'],
+    cards: [{ id: '../../evil', source: GOOD }, { id: 'price-tag', source: GOOD }, { id: 'x', source: 1 }],
+  });
+  assert.deepEqual(rs.map((r) => r.status), ['rejected', 'rejected', 'rejected']);
+  assert.equal(fs.existsSync(path.join(root, 'src', 'evil.tsx')), false);
+  assert.match(rs[1].error, /已经有 id/);
+});
+
+test('install:有改动层时比对和写入都走改动层,底版不动', () => {
+  const { root, history, user } = tmpRoot();
+  const layer = path.join(root, 'layer');
+  fs.mkdirSync(user, { recursive: true });
+  fs.writeFileSync(path.join(user, 'price-tag.tsx'), translateCardSource(GOOD).source);
+  process.env.PROMPTCUT_CARD_OVERRIDES = layer;
+  try {
+    const [r] = installBundledCards({ root, historyDir: history, cards: [{ id: 'price-tag', source: V2 }], existingIds: [] });
+    assert.equal(r.status, 'updated');
+    assert.match(fs.readFileSync(path.join(layer, 'src', 'cards', 'user', 'price-tag.tsx'), 'utf8'), /¥2/);
+    assert.match(fs.readFileSync(path.join(user, 'price-tag.tsx'), 'utf8'), /¥1/, '底版是只读的,补丁只换它');
+    assert.equal(installBundledCards({ root, historyDir: history, cards: [{ id: 'price-tag', source: V2 }], existingIds: [] })[0].status, 'unchanged', '比对的是生效的那一份');
+  } finally {
+    delete process.env.PROMPTCUT_CARD_OVERRIDES;
+  }
 });
