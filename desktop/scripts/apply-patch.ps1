@@ -116,7 +116,10 @@ if (-not $patch.includesDeps) {
     $lockPath = Join-Path $appDir 'package-lock.json'
     if (-not (Test-Path $lockPath)) { Fail "找不到 $lockPath，无法确认依赖是否匹配。请用完整安装包。" }
     $lockHash = (Get-FileHash -LiteralPath $lockPath -Algorithm SHA256).Hash.ToLower()
-    if ($lockHash -ne $patch.lockHash) {
+    # 也认补丁的基准版本那份锁文件：make-patch 只有在「依赖段和基准完全一致」时才出不带依赖的补丁，
+    # 而整份文件的哈希会被锁文件里的 version 字段带偏(0.5.2 就是改版本号改到了它，依赖一个没动，
+    # 装在 0.5.1 上却被这里拒掉)。锁文件本身在 payload 里，装完就换成新的那份。
+    if ($lockHash -ne $patch.lockHash -and -not ($patch.baseLockHash -and $lockHash -eq $patch.baseLockHash)) {
         Fail "这台机器上的依赖和补丁对不上（本补丁不含依赖）。请用完整安装包，或者下载带依赖的补丁。"
     }
     Write-Step "依赖：与补丁一致，不需要更新"
