@@ -364,6 +364,7 @@ export async function exportVideo(
   if (!res.ok) throw new Error(await res.text());
 
   const { id, outDir } = await res.json();
+  jobBase.set(id, base);
   opts.onStart?.(id);
 
   return new Promise((resolve, reject) => {
@@ -396,19 +397,30 @@ export async function exportVideo(
   });
 }
 
+/**
+ * 每个导出任务是在哪个源上开的。任务表只存在开它的那个进程的内存里,取消 / 打开目录 / 取件
+ * 必须回到同一个源 —— 以前这三条写死了同源,导出挪到预渲染进程后,编辑器那边一律回
+ * 「Unknown export job」。这里不重新问 prerenderBase():预渲染中途重启会换端口,问到的是新进程。
+ */
+const jobBase = new Map<string, string>();
+
+function exportJobUrl(id: string, suffix = ""): string {
+  return `${jobBase.get(id) ?? ""}/api/export/${id}${suffix}`;
+}
+
 /** 中止一次导出。渲染进程和它拉起的 Chrome / ffmpeg 都会被结束。 */
 export async function cancelExport(id: string): Promise<void> {
-  await fetch(`/api/export/${id}`, { method: "DELETE" }).catch(() => {});
+  await fetch(exportJobUrl(id), { method: "DELETE" }).catch(() => {});
 }
 
 /** 在文件管理器里打开这次导出的产物目录 */
 export async function revealExport(id: string): Promise<void> {
-  await fetch(`/api/export/${id}/reveal`, { method: "POST" });
+  await fetch(exportJobUrl(id, "/reveal"), { method: "POST" });
 }
 
 /** 取回某个产物(preview.mp4 / overlay.mov),用来写进用户选的位置 */
 export async function fetchExportFile(id: string, name: string): Promise<Blob> {
-  const r = await fetch(`/api/export/${id}/file/${encodeURIComponent(name)}`);
+  const r = await fetch(exportJobUrl(id, `/file/${encodeURIComponent(name)}`));
   if (!r.ok) throw new Error(`取不到 ${name}:${await r.text()}`);
   return r.blob();
 }
