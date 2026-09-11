@@ -195,7 +195,7 @@ async function handleExportStart(req: Connect.IncomingMessage, res: ServerRespon
         "--workers",
         workers !== undefined && workers !== null && workers !== ""
           ? String(workers)
-          : (process.env.PROMPTCUT_EXPORT_WORKERS || "1"),
+          : (process.env.PROMPTCUT_EXPORT_WORKERS || "auto"),
       ];
       if (frames) {
         args.push("--frames", frames);

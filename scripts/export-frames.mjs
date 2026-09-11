@@ -10,7 +10,7 @@ import { buildComposeArgs, clipFrameRange, composeLayers } from '../server/expor
 import { buildAudioPlan, buildFfmpegArgs, hasAudioStream } from './mux-audio.mjs';
 
 /** Encode incoming screenshots immediately so Node retains at most one PNG. */
-function streamPngVideo(ffmpeg, file, fps) {
+export function streamPngVideo(ffmpeg, file, fps) {
   const proc = spawn(ffmpeg, ['-y', '-hide_banner', '-loglevel', 'error', '-f', 'image2pipe', '-vcodec', 'png',
     '-framerate', String(fps), '-i', 'pipe:0', '-an', '-c:v', 'prores_ks', '-profile:v', '4444',
     '-pix_fmt', 'yuva444p10le', file], { stdio: ['pipe', 'ignore', 'pipe'], windowsHide: true });
@@ -1138,7 +1138,10 @@ export async function exportFrames(opts) {
     });
     try {
       // 卡片透明层。素材走 ffmpeg 时这里只有卡片 —— 名字说的就是它:叠到别的画面上用的那一层
-      if (streamCards) console.log('overlay.mov 已由 Chrome 帧流式写入本地 ffmpeg。');
+      const bakedCardsVideo = baked.cardsVideo || null;
+      if (streamCards || bakedCardsVideo) {
+        console.log(`${bakedCardsVideo ? '分片 overlay.mov 已合并' : 'overlay.mov 已由 Chrome 帧流式写入'}本地 ffmpeg。`);
+      }
       else {
         console.log('Creating overlay.mov...');
         await runFfmpeg(['-y', '-framerate', String(fps), '-start_number', String(startFrame),
@@ -1151,7 +1154,8 @@ export async function exportFrames(opts) {
        * buildComposeArgs 每个输入都带 -reinit_filter 0,还有看门狗;走它两条路就一起好了。
        */
       const layers = (plan?.layers || []).filter((l) => clipFrameRange(l.clip, fps, startFrame, endFrame));
-      await composePreview({ ffmpegCmd, baked, layers, outDir, cardsVideo: streamCards ? path.join(outDir, 'overlay.mov') : null });
+      await composePreview({ ffmpegCmd, baked, layers, outDir,
+        cardsVideo: bakedCardsVideo || (streamCards ? path.join(outDir, 'overlay.mov') : null) });
       // 音轨:逐帧截图只有画面,声音在这里拼回去(配乐 + 视频自带的声音 + 音频效果)
       try {
         // 页面拿的是哪份项目就混哪份(和 planMedia 同一个 loadProject):以前只认 <out>/project.json,
@@ -1375,7 +1379,7 @@ if (isMain) {
   const args = process.argv.slice(2);
   // 默认单进程:分片的每一片都要从第 0 帧推起,实测提速有限、还和别的 Chrome 抢 CPU(见 balancedShards 上面)。
   // 以前这里默认 'auto',而 /api/export 不传 --workers,于是每次导出都开到 4 个分片
-  const opts = { noVideo: false, workers: 1 };
+  const opts = { noVideo: false, workers: 'auto' };
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--url') opts.url = args[++i];
     else if (args[i] === '--workers') opts.workers = args[++i];

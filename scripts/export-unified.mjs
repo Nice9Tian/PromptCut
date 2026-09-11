@@ -1,6 +1,29 @@
 import path from 'node:path';
+import fs from 'node:fs/promises';
+import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { bakeFrames, openBakery, resolveWorkers } from './export-frames.mjs';
+import { bakeFrames, findFfmpeg, openBakery, resolveWorkers, streamPngVideo } from './export-frames.mjs';
+
+function concatPath(file) {
+  return String(file).replace(/\\/g, '/').replace(/'/g, "'\\''");
+}
+
+/** Join independently encoded part movies without decoding them again. */
+async function concatVideos(ffmpeg, parts, output) {
+  if (!parts.length) throw new Error('没有可合并的导出分片');
+  const list = output + '.concat.txt';
+  await fs.writeFile(list, parts.map((file) => `file '${concatPath(path.resolve(file))}'`).join('\n') + '\n', 'utf8');
+  try {
+    await new Promise((resolve, reject) => {
+      const proc = spawn(ffmpeg, ['-y', '-hide_banner', '-loglevel', 'error', '-f', 'concat', '-safe', '0', '-i', list,
+        '-c', 'copy', output], { stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true });
+      let stderr = '';
+      proc.stderr.on('data', (d) => { stderr = (stderr + d).slice(-8000); });
+      proc.on('error', reject);
+      proc.on('close', (code) => code === 0 ? resolve() : reject(new Error(`合并导出分片失败(ffmpeg ${code}): ${stderr}`)));
+    });
+  } finally { await fs.rm(list, { force: true }); }
+}
 
 /** Safe cuts only at card boundaries; Motion/WAAPI cards are never cut mid-life. */
 export function safeShardRanges(project, startFrame, endFrame, workers) {
@@ -45,15 +68,25 @@ export async function exportUnified(project, opts) {
   const out = opts.out || 'out';
   const requestedWorkers = targetFrames ? 1 : await resolveWorkers(opts.workers);
   const ranges = targetFrames ? [[startFrame, endFrame]] : safeShardRanges(project, startFrame, endFrame, requestedWorkers);
+  const partVideos = !opts.noVideo && ranges.length > 1 && !targetFrames;
+  const ffmpeg = partVideos ? await findFfmpeg() : null;
+  const partsDir = partVideos ? path.join(out, 'parts') : null;
+  if (partsDir) await fs.mkdir(partsDir, { recursive: true });
   const started = Date.now();
   let completed = 0;
   let first = null;
   const shardProgress = new Map();
-  const render = async ([a, b]) => {
+  const render = async ([a, b], shardIndex) => {
+    const partDir = partsDir ? path.join(partsDir, String(shardIndex).padStart(3, '0')) : out;
+    if (partsDir) await fs.mkdir(partDir, { recursive: true });
+    const partFile = partsDir ? path.join(partDir, 'overlay.mov') : null;
+    const stream = partFile ? streamPngVideo(ffmpeg, partFile, fps) : null;
+    let finished = false;
     const bakery = await openBakery({ ...opts, url: opts.url });
     try {
       const result = await bakeFrames(bakery, {
-        ...opts, out, url: opts.url, frames: `${a}-${b}`, workers: 1, onProgressLog: false,
+        ...opts, out: partDir, url: opts.url, frames: `${a}-${b}`, workers: 1, onProgressLog: false,
+        ...(stream ? { onFrame: (_frame, buf) => stream.write(buf), writeFrames: false } : {}),
         quiet: true,
         onProgress: (frame) => {
           const local = Math.max(0, Math.min(b, frame) - a + 1);
@@ -64,16 +97,30 @@ export async function exportUnified(project, opts) {
           console.log(`Exported frame ${frame} (${completed}/${allFrames.length})`);
         },
       });
+      if (stream) { await stream.finish(); finished = true; }
+      result.part = { startFrame: a, endFrame: b, file: partFile };
       first ||= result;
       return result;
+    } catch (error) {
+      if (stream && !finished) await stream.abort().catch(() => {});
+      throw error;
     } finally { await bakery.close().catch(() => {}); }
   };
-  const results = await Promise.all(ranges.map(render));
+  const results = await Promise.all(ranges.map((range, index) => render(range, index)));
+  let cardsVideo = null;
+  if (partVideos) {
+    const files = results.map((r) => r.part.file);
+    cardsVideo = path.join(out, 'overlay.mov');
+    await concatVideos(ffmpeg, files, cardsVideo);
+    console.log(`分片视频已合并: ${files.length} 个 part -> ${cardsVideo}`);
+  }
   return {
     ...(first || { framesDir: path.join(out, 'frames'), ext: 'png', width: project.width, height: project.height }),
     fps, startFrame: allFrames[0], endFrame: allFrames.at(-1), totalFrames: allFrames.length,
     durationSec: (allFrames.length / fps).toFixed(3), reused: results.reduce((n, r) => n + (r.reused || 0), 0),
     elapsed: ((Date.now() - started) / 1000).toFixed(1),
+    cardsVideo,
+    parts: results.map((r) => r.part).filter(Boolean),
     glass: { dir: first?.glass?.dir ?? null, list: results.flatMap(r => r.glass?.list || []), blurs: [...new Set(results.flatMap(r => r.glass?.blurs || []))] },
   };
 }
