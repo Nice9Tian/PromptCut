@@ -212,7 +212,7 @@ function VideoTrack({
       if (!el) continue;
       if (i === plan.active && cur) {
         // 画面淡下去的同时声音也跟着淡:交叉溶解时两段的声音不会重叠成双倍
-        driveMedia(el, { target: targetTimeOf(cur.clip, t), playing, volume: muted ? 0 : cur.opacity * gain, scrubbing });
+        driveMedia(el, { target: targetTimeOf(cur.clip, t), playing, volume: muted || cur.clip.audioMuted ? 0 : cur.opacity * gain, scrubbing });
         slots.current[i].opacity = cur.opacity;
       } else {
         releaseMedia(el);
@@ -331,7 +331,7 @@ export function MediaLayers({
           playing={playing}
           scrubbing={scrubbing}
           muted={muted}
-          gain={master}
+          gain={project.tracks.find((track) => track.id === id)?.muted ? 0 : master}
           stage={stage}
         />
       ))}

@@ -359,7 +359,7 @@ export const actions = {
   removeTrack(trackId: string) {
     setProject({ ...state.project, tracks: state.project.tracks.filter((t) => t.id !== trackId) });
   },
-  updateTrack(trackId: string, patch: Partial<Pick<Track, "name" | "hidden" | "locked">>) {
+  updateTrack(trackId: string, patch: Partial<Pick<Track, "name" | "hidden" | "locked" | "muted">>) {
     setProject(updateTrack(state.project, trackId, (t) => ({ ...t, ...patch })));
   },
   moveTrack(trackId: string, toIndex: number) {
@@ -854,6 +854,28 @@ export const actions = {
    * 「创建为声音」:给一段视频派生出只有声音的那一份素材(素材库里多一条,进配乐页)。
    * 同一段视频只派生一份,再调返回的是同一条。图片没有声音;本来就是声音的原样返回。
    */
+  separateAudio(clipId: string) {
+    const p = state.project;
+    const hit = findClip(p, clipId);
+    if (!hit) return { ok: false, error: "找不到视频片段" };
+    if (hit.track.locked) return { ok: false, error: "请先解锁序列" };
+    const src = p.media.find((m) => m.id === hit.clip.mediaId);
+    if (!src || src.kind !== "video") return { ok: false, error: "只能分离视频片段的音频" };
+    if (hit.clip.audioMuted) return { ok: false, error: "此视频已静音或已分离音频" };
+    const media = findSoundAsset(p, src.id) ?? soundAssetFrom(src, newId("m"));
+    const audio: TrackClip = {
+      id: newId("c"), cardId: "", mediaId: media.id, params: {}, label: media.name,
+      start: hit.clip.start, end: hit.clip.end, mediaOffset: hit.clip.mediaOffset,
+      opacity: hit.clip.opacity, fadeIn: hit.clip.fadeIn, fadeOut: hit.clip.fadeOut,
+    };
+    const track: Track = { id: newId("t"), name: media.name, muted: hit.track.muted, hidden: hit.track.hidden, clips: [audio] };
+    const tracks = p.tracks.map((t) => t.id === hit.track.id
+      ? { ...t, clips: t.clips.map((c) => c.id === clipId ? { ...c, audioMuted: true } : c) } : t);
+    tracks.splice(p.tracks.indexOf(hit.track) + 1, 0, track);
+    setProject({ ...p, tracks, media: p.media.includes(media) ? p.media : [...p.media, media] });
+    return { ok: true, clipId, audioClipId: audio.id, trackId: track.id, mediaId: media.id };
+  },
+
   audioFromVideo(mediaId: string): { ok: true; media: MediaAsset; created: boolean } | { ok: false; error: string } {
     const p = state.project;
     const src = p.media.find((m) => m.id === mediaId);

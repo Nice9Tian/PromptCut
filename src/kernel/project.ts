@@ -167,6 +167,7 @@ export interface Track {
   id: string;
   name: string;
   hidden?: boolean;
+  muted?: boolean;
   locked?: boolean;
   /** 同一条序列内 clip 不重叠,按 start 排序 */
   clips: TrackClip[];
@@ -177,6 +178,7 @@ export interface TrackClip extends Clip {
   mediaId?: string;
   /** 视频段从素材的第几秒开始播(默认 0) */
   mediaOffset?: number;
+  audioMuted?: boolean;
   label?: string;
   // fadeIn / fadeOut / opacity 挪到了 kernel/types.ts 的 Clip 上:卡片 clip 现在也吃它们,
   // 不再是素材段专属。
@@ -397,7 +399,7 @@ export function audioClipsAt(
     for (const c of tr.clips) {
       if (!c.mediaId || t < c.start || t >= c.end) continue;
       const media = p.media.find((m) => m.id === c.mediaId);
-      if (!media || media.kind !== "audio") continue;
+      if (!media || media.kind !== "audio" || tr.muted || c.audioMuted) continue;
       out.push({ clip: c, media, volume: opacityAt(c, t) });
     }
   }

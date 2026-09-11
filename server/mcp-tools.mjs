@@ -1,4 +1,10 @@
 export const tools = [
+  {
+    name: "separate_audio",
+    description: "音画分离：保留并静音目标视频片段，在其序列正下方新建序列放置音频卡片，保留起止时间、素材偏移、音量及淡入淡出。返回 audioClipId、trackId、mediaId。锁定序列或已分离的视频不可重复操作。",
+    inputSchema: { type: "object", properties: { clipId: { type: "string" } }, required: ["clipId"] },
+    side: "browser",
+  },
   /*
    * 等一会儿。看着多余,其实是必需品。
    *

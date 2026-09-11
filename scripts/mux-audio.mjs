@@ -27,9 +27,9 @@ export function localPathOf(url, outDir) {
 export function buildAudioPlan(project, outDir, exists = fs.existsSync) {
   const out = [];
   for (const tr of project.tracks || []) {
-    if (tr.hidden) continue;
+    if (tr.hidden || tr.muted) continue;
     for (const c of tr.clips || []) {
-      if (!c.mediaId) continue;
+      if (!c.mediaId || c.audioMuted) continue;
       const m = (project.media || []).find((x) => x.id === c.mediaId);
       if (!m || !m.url || m.kind === "image") continue;
       const file = localPathOf(m.url, outDir);

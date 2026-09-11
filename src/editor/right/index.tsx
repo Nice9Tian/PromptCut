@@ -579,6 +579,12 @@ export function RightPanel() {
           note: "强调沿着画面里不透明部分的边缘走(按 alpha 算),透明底的卡片、抠好的人物最明显;整块不透明的画面只会在方框外圈看到一条边。",
         };
       },
+      separateAudio: (args) => {
+        const result = actions.separateAudio(String(args.clipId));
+        if (!result.ok) throw new Error(result.error);
+        clipGuard.noteMutation();
+        return { ...result, timeline: timelineDigest(getState().project) };
+      },
       createAudio: (args) => {
         const mediaId = args.mediaId ? String(args.mediaId) : "";
         const clipId = args.clipId ? String(args.clipId) : "";

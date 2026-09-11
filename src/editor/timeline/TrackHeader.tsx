@@ -4,7 +4,7 @@ import { actions } from "../../store/project";
 import { ContextMenu } from "./ContextMenu";
 import { useTimelineContext } from "./TimelineContext";
 import { useReorderDrag, useRowOffset } from "./useReorder";
-import { IconDrag, IconEye, IconEyeOff, IconLock, IconUnlock } from "../../ui/icons";
+import { IconVolume, IconVolumeMute, IconDrag, IconEye, IconEyeOff, IconLock, IconUnlock } from "../../ui/icons";
 
 /**
  * 序列行头(配色诊断与修正 v2 整屏)。
@@ -67,6 +67,11 @@ export function TrackHeader({ track, index }: { track: Track; index: number }) {
           )}
         </div>
         <div className="pc-tl-row-acts" onPointerDown={(e) => e.stopPropagation()}>
+          <button type="button" className={track.muted ? "is-active" : ""}
+            onClick={() => actions.updateTrack(track.id, { muted: !track.muted })}
+            title={track.muted ? "打开序列声音" : "静音序列"} aria-label={track.muted ? "打开序列声音" : "静音序列"} aria-pressed={!!track.muted}>
+            {track.muted ? <IconVolumeMute size={12} /> : <IconVolume size={12} />}
+          </button>
           <button
             type="button"
             className={track.hidden ? "is-active" : ""}
