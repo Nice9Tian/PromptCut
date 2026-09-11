@@ -1,0 +1,89 @@
+# 比对陷阱:画面看着一样,程序却说不一样
+
+做渲染对账(两条管线逐帧比像素、逐帧比 DOM)时,先读这一篇。下面每一条都是 2026-09-11 实测撞过的墙:程序报「不同」,真正的原因却在比对方法上,不在被比的东西上。
+
+**第一条规矩:程序报不同,先用眼睛看。** 把差异最大的那一帧拼成「A | B | 差异 × 8」三联图,只裁有差异的区域,再下结论。这一轮就是看了图,才发现差异是动画中间值的细微差别,而不是错帧。拼图脚本的做法见 `docs/hybrid-sampling-plan.md` 的 E2a。
+
+---
+
+## 1. 截图那一拍不等于目标帧:预热也会截图
+
+**症状**:两边 DOM 从片内第 0 帧起全部对不上。一边的片段容器是空的,另一边卡片已经挂上了。
+
+**原因**:`bakeFrames` 在正式出帧前先预热,会在 t=0 连截 4 次(预热 3 次,重挂载后再 1 次)。给 `bakery.beginFrame` 套一层、按「第几次截图」来记帧,就会把这 4 份空舞台记进去,整体错 4 帧。
+
+**做法**:记录时从页面读当前的导出帧号,只保留目标帧。**不要按调用顺序对位。**
+
+```js
+const [f, html] = await page.evaluate(() => [Math.round((window.__pcExportMs / 1000) * 30), document.getElementById('root').innerHTML]);
+```
+
+## 2. 样式写法不同:`inset: 0` 和 `inset: 0px`
+
+**症状**:两个 DOM 实现(Chrome 和 happy-dom)逐帧 0/90 相同,差异全是 `0` 对 `0px` 这类写法。
+
+**原因**:React 设的是 `style.inset = 0`。Chrome 的 CSSOM 读回来是 `0px`,happy-dom 原样保留。
+
+**坑中坑**:想借 Chrome 把两边写法统一,把 HTML 塞进 `innerHTML` 再读回来,**这没用**。`style` 属性会原样读回,Chrome 不会重新序列化。必须经 CSSOM 重写一遍:
+
+```js
+for (const el of root.querySelectorAll('[style]')) el.style.cssText = el.getAttribute('style');
+```
+
+## 3. 属性顺序不同
+
+**症状**:内容完全一样,但 `<svg … style="…">` 和 `<svg style="…" …>` 被判成不同(checklist 0/90)。
+
+**原因**:同一段 React 代码,在两个 DOM 实现里设属性的先后不同。
+
+**做法**:比之前,每个元素的属性按名字排序。
+
+## 4. 浮点末位:Node 和 Chrome 的 V8 不是同一个版本
+
+**症状**:`translateY(0.295972px)` 对 `translateY(0.295971px)`,差百万分之一像素。
+
+**原因**:同一段 JS 在 Node 和 Chrome 里跑,各自的 V8 版本不同,`Math.pow` / `Math.exp` 这类函数在末位上会有差别。
+
+**做法**:把「逐字节相同」和「容差内相同」分成两个数报告,别混为一谈。容差规整时,正则要写对:
+
+```js
+h.replace(/-?\d+\.\d+/g, (m) => String(Math.round(Number(m) * 1e4) / 1e4))
+```
+
+这条正则还漏一种写法:很小的数会序列化成科学计数法,比如 `7.1747e-05px` 对 `7.17e-05px`,实际只差 1e-9 量级,却会被判成不同。需要的话把 `(?:e-?\d+)?` 也纳进匹配。
+
+**别从 shell 里用 `node -e` 往脚本里写正则。** 这一轮连续两次写坏:反斜杠在 shell 和 JS 字符串两层转义里被吃掉,`/-?\d+\.\d+/` 先变成匹配字面反斜杠的样子,又变成 `/-?d+.d+/`,把 `rounded-full` 改成了 `rounNaN-full`。结果是「容差内相同」的数字全错,却不报任何错。改脚本请用编辑工具。
+
+## 5. WAAPI 和 JS 两条动画路径本来就有细微差别
+
+**症状**:同一张卡,正常导出和关掉 WAAPI(让 Motion 走 JS 动画)逐像素比:rank-bars 65/90、checklist 48/90、mu-blur-fade 85/90、stat-proof 61/90 帧相同,最大通道差 2~42。
+
+**不是错帧**:把一边的第 f 帧和另一边的第 f±1、f±2 帧比,反而对得更少。
+
+**目视**:位置、结构完全一样,差的是透明度和模糊半径的中间值。**推测**:WAAPI 由 Chrome 求缓动,弹簧被近似成 `linear()`;JS 路径是 Motion 自己算。
+
+**做法**:只拿同一条动画路径的产物互相比。拿纯 DOM 环境(没有 WAAPI)的产物去比正常导出,得到的是这类差别,不是 bug。关 WAAPI 的办法,在页面加载前注入:
+
+```js
+const own = Object.prototype.hasOwnProperty;
+Object.prototype.hasOwnProperty = function (k) { return this === Element.prototype && k === 'animate' ? false : own.call(this, k); };
+```
+
+Motion 靠 `Object.hasOwnProperty.call(Element.prototype, 'animate')` 判断浏览器支不支持 WAAPI(`motion-dom/.../waapi/supports/waapi.mjs`)。**不要直接删 `Element.prototype.animate`**:导出内核的 `patchAnimate` 会把它包一层装回去,调用时 `realAnimate` 是 undefined,页面会崩。
+
+## 6. 导出页里的时钟是钉住的,别拿它计时
+
+`performance.now()` 被 `exportClock` 钉到导出毫秒,`Date` 被 `pinEntropy` 钉住。在导出页里,或者在注册了 happy-dom 全局的 Node 进程里,用它们量耗时会得到负数或 0。计时用 `process.hrtime.bigint()`。
+
+## 7. 纯 DOM 环境(happy-dom)跑应用代码的三个坑
+
+- **定时器**:`GlobalRegistrator.register()` 会把全局 `setTimeout` 换成 happy-dom 的,它的返回值没有 `.unref()`,Vite 会崩。做法:先起 Vite,再注册 happy-dom,然后把 Node 原生的定时器装回全局。
+- **画布**:卡片注册表会一次性导入所有卡。lottie-web 在**模块加载时**就拿 canvas 的 2D 上下文,happy-dom 给 null,直接崩。做法:给 `getContext` 一个什么都收下的 Proxy 桩。画布卡本来就不在纯算法范围内。
+- **CSS 变量解析不了**:动画起点值写成 `var(--pc-accent)` 时,Motion 要靠浏览器把它解析成真实颜色才能插值。happy-dom 解析不了,于是插值停在字符串上。step-timeline 就是这样:Chrome 算出 `rgba(200, 214, 255, 0.498)`,纯算法停在 `var(--pc-accent, #4f8cff)`,片内 41 帧不同。这正是 E1 里「挂载时有提问」的那类卡,必须用 Chrome 录下的答案回放,见 `docs/hybrid-sampling-plan.md` 的方向 B。
+- **回放了答案也可能不够。** 给 step-timeline 回放 Chrome 录下的计算样式(命中 25、缺失 0),结果仍然 49/90。Motion 在 happy-dom 里对 `backgroundColor: "transparent"` 报「不可动画」(`value-not-animatable`),走了另一条分支,整段颜色动画没跑;Chrome 里同一段代码没有这个警告。第三方库**按运行环境选分支**,光拦住「问浏览器要数」的接口兜不住这一类。纯算法跑完先看有没有库的警告:`node e2b-pure.mjs <卡> 2>&1 | sort | uniq -c`。
+
+## 8. 实验服务器别碰真实软件
+
+- 任何 dev server 启动时都会把自己的端口写进全局的 `%TEMP%\promptcut\port.json`(`server/vite-plugin-ai.ts`),没有指定端口的 MCP 客户端会照它去连。
+- 实验用的服务器要把 `TEMP` 指到 scratch 目录再启动,或者用 Vite 的 middlewareMode,不监听端口。
+- 用户的真实软件在 5210(`AppData\Local\PromptCut`),实验端口要避开它。

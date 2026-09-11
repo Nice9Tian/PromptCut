@@ -43,6 +43,8 @@ node scripts/export-frames.mjs --url "http://127.0.0.1:5197/?export=1" --frames 
 | `card-audit.mjs` | 逐张卡查位置无关、确定性、DOM 结构稳定、挂载时的网络请求、画面载体 |
 | `archive/export-frames-virtual-time.mjs` | 旧后端,只留作对账 |
 
+**做逐帧对账之前先读 [`docs/compare-pitfalls.md`](../docs/compare-pitfalls.md)。** 里面记着「画面看着一样,程序却说不一样」的几种成因:预热截图错位、样式写法、属性顺序、浮点末位、WAAPI 和 JS 两条动画路径的差别、被钉住的时钟、纯 DOM 环境的坑、实验服务器改写全局端口文件。
+
 ## 确定性模型(beginFrame 后端)
 
 每帧:`__pcSetT(sec)` → 等网络 → 排空 → **beginFrame 推一拍** → 等网络 → 排空 → `__pcSyncAnims()` → 排空 → 等素材 → **beginFrame 截图**。
