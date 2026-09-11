@@ -23,8 +23,12 @@ export function localPathOf(url, outDir) {
 /**
  * 从 Project 里挑出所有该出声的片段。
  * 图片没有声音;隐藏的序列不出声;音量取 clip.opacity(和画面用同一个字段,画面淡下去声音也淡)。
+ *
+ * sourceOf:素材 → ffmpeg 能读的文件或同源 http 地址。导出时传 export-frames 的 mediaSourceOf,
+ * 和画面层同一套规则。以前只认 localPathOf(/@export/<id>/media/),素材库里的 /@media/<文件> 一律被跳过,
+ * 配乐、配音、打开 .proc 后的视频原声都进不了成片。
  */
-export function buildAudioPlan(project, outDir, exists = fs.existsSync) {
+export function buildAudioPlan(project, outDir, exists = fs.existsSync, sourceOf = (m) => localPathOf(m.url, outDir)) {
   const out = [];
   for (const tr of project.tracks || []) {
     if (tr.hidden || tr.muted) continue;
@@ -32,8 +36,8 @@ export function buildAudioPlan(project, outDir, exists = fs.existsSync) {
       if (!c.mediaId || c.audioMuted) continue;
       const m = (project.media || []).find((x) => x.id === c.mediaId);
       if (!m || !m.url || m.kind === "image") continue;
-      const file = localPathOf(m.url, outDir);
-      if (!file || !exists(file)) continue;
+      const file = sourceOf(m);
+      if (!file || (!/^https?:/i.test(file) && !exists(file))) continue;
       const dur = +(c.end - c.start).toFixed(3);
       if (!(dur > 0)) continue;
       out.push({

@@ -877,6 +877,9 @@ function probeVisual(ffprobeCmd, src) {
   }
 }
 
+/** 素材库目录(/@media/<文件> 落在这里)。画面层和音轨都按它找素材 */
+const mediaRootDir = () => path.resolve(process.env.PROMPTCUT_EXPORT_DIR || path.resolve('out'), 'media');
+
 const DEFAULT_URL = 'http://127.0.0.1:5190/?export=1';
 
 /** 页面拿的是哪份项目,ffmpeg 就用哪份:按导出页地址里的 timeline 去取;取不到再看 <out>/project.json */
@@ -912,7 +915,7 @@ async function planMedia(opts, outDir, ffmpegCmd) {
   if (!project) return null;
   const all = composeLayers(project);
   if (!all.length) return { project, layers: [], glassFrames: new Set() };
-  const mediaRoot = path.resolve(process.env.PROMPTCUT_EXPORT_DIR || path.resolve('out'), 'media');
+  const mediaRoot = mediaRootDir();
   const ffprobeCmd = ffprobeOf(ffmpegCmd);
   const probed = new Map();
   const layers = all.map((l) => {
@@ -1022,8 +1025,10 @@ export async function exportFrames(opts) {
         const projectJsonPath = path.join(outDir, 'project.json');
         if (fsSync.existsSync(projectJsonPath)) {
           const proj = JSON.parse(fsSync.readFileSync(projectJsonPath, 'utf8'));
-          const ffprobeCmd = ffmpegCmd.replace(/ffmpeg(.exe)?$/i, (m) => m.toLowerCase().startsWith('ffmpeg.exe') ? 'ffprobe.exe' : 'ffprobe');
-          const plan = buildAudioPlan(proj, outDir).filter((c) => hasAudioStream(c.file, ffprobeCmd));
+          const ffprobeCmd = ffprobeOf(ffmpegCmd);
+          // 和画面层同一套找素材的规则:素材库里的 /@media/<文件> 也要找得到,不然配乐 / 配音全被跳过
+          const sourceOf = (m) => mediaSourceOf(m, { outDir, pageUrl: opts.url || DEFAULT_URL, mediaRoot: mediaRootDir() });
+          const plan = buildAudioPlan(proj, outDir, undefined, sourceOf).filter((c) => hasAudioStream(c.file, ffprobeCmd));
           if (plan.length > 0) {
             const withAudio = path.join(outDir, 'preview-audio.mp4');
             console.log(`Muxing ${plan.length} audio clip(s)...`);
