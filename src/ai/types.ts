@@ -155,6 +155,11 @@ export interface ChatAttachment {
   error?: string;
   jobId?: string;
   conversationId?: string;
+  /**
+   * 素材库里已经有的素材(不是用户这一轮用「+」发的附件)。
+   * 这一类的 url 是卡片能直接引用的 /@media/<文件名>,服务端按「素材库」单列一段,不给磁盘路径。
+   */
+  library?: boolean;
 }
 
 export interface ToolCallInfo {

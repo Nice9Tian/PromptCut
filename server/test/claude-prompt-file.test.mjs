@@ -93,6 +93,15 @@ test('系统提示词进文件,不进命令行;命令行长度和提示词大小
   assert.ok(args.join(' ').length < WINDOWS_CMDLINE_LIMIT / 2, '命令行只剩标志和工具白名单');
 });
 
+test('系统提示词后面带着自带工具的对照表', async () => {
+  script = [];
+  const { promptText } = await run({ systemPrompt: '主提示词' });
+  assert.match(promptText, /^主提示词/);
+  assert.match(promptText, /自带的那套工具/);
+  assert.match(promptText, /cardUrl/);
+  assert.match(promptText, /collect_search/);
+});
+
 test('跑完把临时文件删掉', async () => {
   script = [];
   const { promptFile } = await run();

@@ -40,7 +40,7 @@ export const tools = [
   },
   {
     name: "list_media",
-    description: "列出素材库里所有素材，返回每条素材的 id、name、kind、duration、width、height、path（服务端可直接读取的绝对磁盘路径）、url、hasTranscript、transcriptSegments（文字稿段数）；想拿完整文字稿要用 get_transcript。需要素材的 mediaId 时优先用本工具，不要为了找 mediaId 去调 get_project。",
+    description: "列出素材库里所有素材，返回每条素材的 id、name、kind（video / image / audio）、duration、width、height、cardUrl、path、hasTranscript、transcriptSegments（文字稿段数）；想拿完整文字稿要用 get_transcript。需要素材的 mediaId 时优先用本工具，不要为了找 mediaId 去调 get_project。**卡片参数里要引用某张素材图片 / 视频，填它的 cardUrl**（形如 /@media/<文件名>，预览、渲染、导出都取得到）；path 是服务端磁盘路径，只给服务端内部用，你没有能读它的工具——想看素材长什么样用 see_frames({ source: \"media\", mediaId })。",
     inputSchema: { type: "object", properties: {} },
     side: "browser"
   },
@@ -773,7 +773,7 @@ export const tools = [
   },
   {
     name: "import_media",
-    description: "把用户用「+」发来的附件装进项目素材库，并放到视频轨上。附件放在对话的工作目录里，和素材库是两回事——`list_media` 看不到它，必须先用本工具导入才能转写、配字幕、配动效。参数 url 就是用户消息末尾附件清单里的「站内地址」（形如 /@pcwork/<会话id>/<文件名>）。返回 mediaId。用户发了视频还让你处理它时，第一步就调它，不要回一句「请先手动导入」。",
+    description: "把一个文件装进项目素材库。两种来源:(1) 用户用「+」发来的附件——附件放在对话的工作目录里，和素材库是两回事，`list_media` 看不到它，必须先用本工具导入才能转写、配字幕、配动效；url 就是用户消息末尾附件清单里的「站内地址」（形如 /@pcwork/<会话id>/<文件名>）。用户发了视频还让你处理它时，第一步就调它，不要回一句「请先手动导入」。(2) 网上的图片直链（https://…），素材库里缺配图时自己找来用；这时顺手传 name（带扩展名，如 asakusa.jpg）。按文件内容分类登记：视频放到视频轨上；图片、音频只进素材库、不上时间轴。返回 mediaId、kind 和 cardUrl——卡片参数里要引用这张图 / 这段视频就填 cardUrl。",
     inputSchema: {
       type: "object",
       properties: {
@@ -968,7 +968,7 @@ export const tools = [
         t: { type: "number", description: "[timeline] 时间轴第几秒;不传就用当前播放头" },
         clipId: { type: "string", description: "[timeline] 只看这一个片段的画面" },
         times: { type: "array", items: { type: "number" }, description: "[timeline] 一次看多个时刻(秒),最多 10 个,按顺序各返回一张;给了 times 就忽略 t。对比镜头节奏、看同一张卡进场中途和落定之后用它" },
-        mediaId: { type: "string", description: "[media,必填] list_media 里的素材 id;只支持视频" },
+        mediaId: { type: "string", description: "[media,必填] list_media 里的素材 id。视频按镜头拼图;图片直接返回这张图本身(分页、grid、scene 对图片无意义);音频没有画面会被拒" },
         page: { type: "number", description: "[media] 第几页,从 1 起;默认 1" },
         perPage: { type: "number", description: "[media] 每页几个镜头,默认 6,最多 12。一个镜头一张拼图" },
         grid: { type: "number", description: "[media] 每张拼图几格:4(2×2)或 9(3×3),默认 4。镜头长、变化多、或要看细节时用 9" },

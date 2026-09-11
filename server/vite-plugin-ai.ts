@@ -701,8 +701,20 @@ export default function vitePluginAi(): Plugin {
             }
 
             let finalPrompt = prompt;
-            if (attachments && attachments.length > 0) {
-              finalPrompt += '\n\n附件:\n' + attachments.map((a: any) => {
+            // 素材库那几条单列:给 mediaId 和卡片能直接用的 cardUrl,**不给磁盘路径** ——
+            // 以前每轮都把每个素材的磁盘路径塞进来,模型没有能读它的工具,却一再被引着去读(见 src/ai/mediaRef.ts)
+            const library = (attachments || []).filter((a: any) => a.library);
+            const userFiles = (attachments || []).filter((a: any) => !a.library);
+            if (library.length > 0) {
+              const kindName: Record<string, string> = { video: '视频', image: '图片', audio: '音频' };
+              finalPrompt += '\n\n素材库(已导入,工具里用 mediaId;卡片参数里引用填 cardUrl):\n' + library.map((a: any) => {
+                let line = `- [${kindName[a.kind] || a.kind}] ${a.name} · mediaId ${a.id} · cardUrl ${a.url}`;
+                if (a.durationSec && a.kind !== 'image') line += ` · 时长 ${a.durationSec} 秒`;
+                return line;
+              }).join('\n');
+            }
+            if (userFiles.length > 0) {
+              finalPrompt += '\n\n附件:\n' + userFiles.map((a: any) => {
                 let line = `- [${a.kind === 'video' ? '视频' : a.kind}] ${a.name} · 站内地址 ${a.url}`;
                 if (a.path) line += ` · 磁盘路径 ${a.path}`;
                 if (a.url && !a.path) {

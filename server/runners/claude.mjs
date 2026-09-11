@@ -6,6 +6,36 @@ import { execFileSync } from 'node:child_process';
 
 import { tools } from '../mcp-tools.mjs';
 
+/**
+ * Claude Code 自带工具的说明,和 agy.mjs 的 AGY_ADDENDUM 是同一回事。
+ *
+ * --allowedTools 只放行 mcp__promptcut__*,自带的 Read / Glob / Grep / Bash / PowerShell / WebFetch
+ * 在这里一律被拒。模型不知道这一点:一次真实对话里 Opus 想看素材库的 jpg,先 Read 磁盘路径、
+ * 再 Bash curl、再 PowerShell Invoke-WebRequest 猜地址,换了 7 种写法全部被拒,最后停下来找用户
+ * 要权限;而它真正需要的东西(卡片怎么引用素材、缺素材去哪找)PromptCut 工具里全都有。
+ */
+const CLAUDE_ADDENDUM = `
+## 关于 Claude Code 自带的那套工具(只有你这一家需要看)
+
+你除了 PromptCut 的工具(mcp__promptcut__*),还看得见 Claude Code 自带的 Read / Write / Edit / Glob / Grep /
+Bash / PowerShell / WebFetch / WebSearch。**在这里它们全部会被拒**:这是无人值守的会话,没人能给你点同意;
+换一个自带工具、换一种命令写法,结果都一样。被拒不会带来任何新信息,只会白烧一轮。
+
+你要做的每一件事都有对应的 PromptCut 工具:
+
+| 你想干的事 | 用这个,别用自带工具 |
+| --- | --- |
+| 看工程里有什么(轨道、片段、素材、卡片) | \`get_project\` / \`get_clip\` / \`list_media\` / \`list_cards\` |
+| 看一张素材图片 / 一段视频长什么样 | \`see_frames({ source: "media", mediaId })\`,别去 Read 素材的磁盘路径 |
+| 卡片里用素材库的图片 / 视频 | \`list_media\` 返回的 \`cardUrl\`(/@media/<文件名>)填进卡片参数;别猜地址、别 curl 探测 |
+| 素材库里没有要用的画面 | 视频:\`collect_search\` → \`collect_download\`;图片:找到直链后 \`import_media({ url, name })\` |
+| 读网页、查资料 | \`web_open\` / \`web_read\`,别用 WebFetch / curl |
+| 处理用户发来的附件 | \`import_media({ url })\`,url 取附件清单里的站内地址 |
+| 看某张卡的源码 / 改卡 | \`get_card_source\` / \`edit_card\` |
+| 等几秒再查后台作业 | \`wait({ seconds })\` |
+| 找之前的对话记录、交接笔记 | 没有这种文件可找。消息开头附了「前情」就是全部;不够就直接问用户 |
+`;
+
 function getAllowedToolsArgv() {
   const arr = ['mcp__promptcut'];
   for (const t of tools) {
@@ -112,7 +142,7 @@ function _startRun(opts) {
   const promptDir = path.join(os.tmpdir(), 'promptcut');
   fs.mkdirSync(promptDir, { recursive: true });
   const promptFile = path.join(promptDir, `claude-system-${process.pid}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}.md`);
-  fs.writeFileSync(promptFile, opts.systemPrompt, 'utf8');
+  fs.writeFileSync(promptFile, `${opts.systemPrompt}\n${CLAUDE_ADDENDUM}`, 'utf8');
   args.push('--append-system-prompt-file', promptFile);
   if (opts.sessionId) {
     args.push('--resume', opts.sessionId);

@@ -129,6 +129,8 @@ function reject3dOnMedia(clipId: string, args: { rotateX?: number; rotateY?: num
 }
 import { sttStatus, sttInstall, transcribeMedia } from "../io/stt";
 import { importVideoFiles, importVideoFromServer } from "../io";
+import { classifyFile, registerAsset } from "../left/importAssets";
+import { mediaCardUrl, isImageMedia } from "../../ai/mediaRef";
 import {
   collectStatus, installCollect, probeLink, startDownload, waitForDownload, type CollectJob,
   collectLoginCheck, collectLogout, cookieStatus, searchVideos,
@@ -320,8 +322,10 @@ export function RightPanel() {
           duration: m.duration,
           width: m.width,
           height: m.height,
+          // 卡片里引用用 cardUrl。不再给 url:导入的素材那是 blob: 开头的编辑器私有地址,
+          // 模型拿去填卡片只会得到空白画面(见 src/ai/mediaRef.ts)
+          cardUrl: mediaCardUrl(m),
           path: m.path,
-          url: m.url,
           hasTranscript: !!m.transcript,
           transcriptSegments: m.transcript ? m.transcript.segments.length : 0
         }));
@@ -944,17 +948,47 @@ export function RightPanel() {
         }
         if (!res.ok) throw new Error(`取附件失败(HTTP ${res.status}),地址可能不对或附件已过期:${url}`);
         const blob = await res.blob();
-        const name = args.name || decodeURIComponent(url.split("/").pop() || "attachment.mp4");
-        const file = new File([blob], name, { type: blob.type || "video/mp4" });
+        let name = args.name || decodeURIComponent(url.split("?")[0].split("/").pop() || "attachment");
+        // 网图直链常常不带扩展名(images.unsplash.com/photo-123…):按 MIME 补一个,
+        // 落盘后 /@media 才给得出对的 Content-Type,素材库里也分得清是什么
+        const MIME_EXT: Record<string, string> = {
+          "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/gif": "gif", "image/avif": "avif",
+          "video/mp4": "mp4", "video/webm": "webm", "audio/mpeg": "mp3", "audio/wav": "wav",
+        };
+        const mimeExt = MIME_EXT[blob.type.split(";")[0].trim().toLowerCase()];
+        if (mimeExt && !/\.[a-z0-9]{2,5}$/i.test(name)) name += `.${mimeExt}`;
+        const file = new File([blob], name, { type: blob.type || "" });
+        /*
+         * 按内容分类登记。以前一律走 importVideoFiles,于是网上找来的 jpg 被登记成 kind: "video"、
+         * 时长 5 秒(探测失败的兜底值)、还被放上视频轨;see_frames 对它跑镜头识别只得到一个 0.04 秒的
+         * 「镜头」,模型认定「抽不出画面」,转头去 Read 磁盘路径。认不出类型的仍按视频处理(老行为)。
+         */
+        const kind = classifyFile(file) ?? "video";
+        if (kind !== "video") {
+          const id = await registerAsset(file, kind);
+          const media = getState().project.media.find((m) => m.id === id);
+          return {
+            mediaId: id,
+            name,
+            kind,
+            ...(kind === "image" ? { width: media?.width, height: media?.height } : { duration: media?.duration }),
+            cardUrl: media ? mediaCardUrl(media) : "",
+            hint: kind === "image"
+              ? "图片已进素材库(没放到时间轴)。卡片参数里要用这张图就填 cardUrl;想看它长什么样用 see_frames({ source: \"media\", mediaId })。"
+              : "音频已进素材库(没放到时间轴)。",
+          };
+        }
         const ids = await importVideoFiles([file]);
         if (ids.length === 0) throw new Error("导入失败,没有登记成素材。");
         const media = getState().project.media.find((m) => m.id === ids[0]);
         return {
           mediaId: ids[0],
           name,
+          kind,
           duration: media?.duration,
           width: media?.width,
           height: media?.height,
+          cardUrl: media ? mediaCardUrl(media) : "",
           hint: "已装进素材库并放到视频轨上。要做字幕就先 transcribe_media,再 add_clip 建 caption-track 并用 fill_captions 灌入。",
         };
       },
@@ -1734,6 +1768,35 @@ export function RightPanel() {
       seeSequences: async (args) => {
         let media = getState().project.media.find((m) => m.id === args.mediaId);
         if (!media) throw new Error(`找不到素材 ${args.mediaId}`);
+        /*
+         * 图片直接把图本身交回去。以前只认视频:图片要么被拒,要么(被错登记成 video 的老 jpg)
+         * 跑一遍镜头识别得到一个 0.04 秒的「镜头」—— 模型认定「抽不出画面」,转头去 Read 磁盘路径。
+         * 在编辑器页面里取,blob: 和 /@media 都取得到;长边缩到 1280,够看清又不撑爆上下文。
+         */
+        if (isImageMedia(media)) {
+          const src = media.url || mediaCardUrl(media);
+          if (!src) throw new Error(`${media.name} 没有可取的地址(上传没完成?),稍后再试`);
+          const r = await fetch(src);
+          if (!r.ok) throw new Error(`取图片失败(HTTP ${r.status}):${media.name}`);
+          const bmp = await createImageBitmap(await r.blob());
+          const scale = Math.min(1, 1280 / Math.max(bmp.width, bmp.height));
+          const canvas = document.createElement("canvas");
+          canvas.width = Math.max(1, Math.round(bmp.width * scale));
+          canvas.height = Math.max(1, Math.round(bmp.height * scale));
+          canvas.getContext("2d")!.drawImage(bmp, 0, 0, canvas.width, canvas.height);
+          const base64 = canvas.toDataURL("image/jpeg", 0.85).split(",")[1] ?? "";
+          return {
+            ok: true,
+            mediaId: media.id,
+            name: media.name,
+            kind: "image",
+            width: bmp.width,
+            height: bmp.height,
+            cardUrl: mediaCardUrl(media),
+            note: "这是一张图片,下面就是它本身(长边缩到 1280 以内)。卡片参数里要用它就填 cardUrl。",
+            __images: [{ sceneIndex: 1, label: "原图", mime: "image/jpeg", base64 }],
+          };
+        }
         if (media.kind !== "video") throw new Error(`${media.name} 不是视频,没有画面可看`);
         // 刚导入的素材,服务端路径要等上传完才写进来(import_media 一返回模型就可能接着调这里):最多等 15 秒
         for (let i = 0; i < 30 && !media.path; i++) {

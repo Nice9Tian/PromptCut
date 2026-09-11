@@ -12,27 +12,30 @@ import { shouldOrchestrate } from "./triage";
 import { buildPlan, runOrchestration, type OrchestrationState } from "./orchestrate";
 import { runRoleTask } from "./runRoleTask";
 import { getState } from "../store/project";
+import { mediaCardUrl } from "./mediaRef";
+import { buildHandoff } from "./handoff";
 
 /**
- * 把素材库里的素材整理成附件清单的形状,跟着每次发送一起带上。
+ * 把素材库里的素材整理成附件清单的形状,跟着每次发送一起带上(服务端单列成「素材库」一段)。
  *
- * 用 path(服务端和外部命令行都能读的绝对磁盘路径)而不是 url ——
- * 导入的素材 url 是 blob: 开头的浏览器内部地址,对模型和工具都没有意义。
- * 还没上传完、拿不到 path 的先不列,免得给出一个用不了的地址。
+ * url 给卡片能直接引用的 /@media/<文件名>,**不给磁盘路径**:以前给的是 path,
+ * 模型没有任何能读磁盘的工具,却每轮都被这串路径引着去 Read、去 curl(见 mediaRef.ts)。
+ * 还没上传完、换算不出 cardUrl 的先不列,免得给出一个用不了的地址。
  */
 function mediaAsAttachments(): ChatAttachment[] {
   try {
     return getState().project.media
-      .filter((m) => m.path)
-      .map((m) => ({
+      .map((m) => ({ m, cardUrl: mediaCardUrl(m) }))
+      .filter(({ cardUrl }) => cardUrl)
+      .map(({ m, cardUrl }) => ({
         id: m.id,
         name: m.name,
         kind: m.kind,
-        path: m.path,
-        url: "",
+        url: cardUrl,
+        library: true,
         status: "ready" as const,
         durationSec: m.duration,
-      })) as unknown as ChatAttachment[];
+      })) as ChatAttachment[];
   } catch {
     return [];
   }
@@ -607,12 +610,19 @@ export function useAiChat(opts?: { mock?: boolean; tabId?: string; getConversati
       // 其他 Agent 的动态(范围变动、给它的消息)拼在提示词前面 —— 只进模型,不进屏幕上那条用户消息
       const agentId = opts?.getConversationId?.();
       const notes = agentId ? agentBus.consumeNotes(agentId) : "";
+      // 换了模型:把这家没见过的那几轮摘成「前情」一起带上(理由见 handoff.ts)。
+      // 刚追加的这一问一答不算历史
+      const handoff = buildHandoff(
+        store.get().filter((m) => m.id !== userMsg.id && m.id !== asstMsgId),
+        provider,
+        !!sessionId,
+      );
       const res = await fetch("/api/ai/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           provider,
-          prompt: notes ? `${notes}\n\n${text}` : text,
+          prompt: [notes, handoff, text].filter(Boolean).join("\n\n"),
           conversationId: agentId,
           sessionId,
           // 模型 / 推理强度 / 加速档:上面发送那一刻已经读好(choice),用户在面板上

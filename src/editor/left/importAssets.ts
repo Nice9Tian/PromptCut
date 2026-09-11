@@ -95,7 +95,7 @@ function probeImage(url: string, name: string): Promise<{ width?: number; height
  * 渲染进程和导出进程都在浏览器之外,够不着 blob:,而 io 里那张「blob → File」的表是私有的,
  * 外面登记的素材进不去。走服务端地址就绕开了这条断路;上传失败(比如没起 dev server)再退回 blob:。
  */
-async function registerAsset(file: File, kind: "audio" | "image"): Promise<string> {
+export async function registerAsset(file: File, kind: "audio" | "image"): Promise<string> {
   const blobUrl = URL.createObjectURL(file);
   const meta = kind === "audio" ? await probeAudio(blobUrl, file.name) : await probeImage(blobUrl, file.name);
 
