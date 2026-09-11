@@ -430,6 +430,30 @@ ${summarizeCombine(report)}
     }
   };
 
+  // 标题栏菜单和顶栏里的按钮共用同一套动作，避免维护两份文件/导出逻辑。
+  // WindowTitleBar 只负责呈现菜单，通过这个事件把选择交回编辑器。
+  useEffect(() => {
+    const onCommand = (event: Event) => {
+      const command = (event as CustomEvent<string>).detail;
+      switch (command) {
+        case "new-project": createProject(); break;
+        case "open-project": projectInput.current?.click(); break;
+        case "save-project": if (!viewOnly) void saveProject(); break;
+        case "export-video": void run(exportProject)(); break;
+        case "go-home": goHome(); break;
+        case "undo": actions.undo(); break;
+        case "redo": actions.redo(); break;
+        case "open-skin": setSkinOpen(true); break;
+        case "open-voice": openVoiceSettings(); break;
+        case "merge-project": mergeInput.current?.click(); break;
+        case "shortcuts": alert("空格 播放/暂停\nCtrl/Cmd + Z 撤销\nCtrl/Cmd + Shift + Z 重做\nDelete 删除选中片段"); break;
+        case "about": alert("PromptCut\nAI 视频编辑器"); break;
+      }
+    };
+    window.addEventListener("pc-titlebar-command", onCommand);
+    return () => window.removeEventListener("pc-titlebar-command", onCommand);
+  }, [viewOnly, dirty, name, project]);
+
   const toggleMoreMenu = () => {
     if (!menuOpen && moreBtnRef.current) {
       setMoreBtnRect(moreBtnRef.current.getBoundingClientRect());

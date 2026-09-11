@@ -9,7 +9,6 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde::Deserialize;
-use tauri::menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder};
 use tauri::webview::WebviewWindowBuilder;
 use tauri::{Emitter, Manager, RunEvent, WebviewUrl};
 use tauri_plugin_opener::OpenerExt;
@@ -53,6 +52,62 @@ fn editor_url_with_open(open: Option<String>) -> String {
 
 /// Holds the sidecar process ID so we can kill the whole tree on exit.
 struct SidecarPid(Mutex<Option<u32>>);
+
+/// Commands originating from the WebView title bar that must remain native.
+/// Keeping these actions in Rust preserves the old menu's Explorer, reset and
+/// About behavior while the visible menu is now rendered by the themed UI.
+#[tauri::command]
+fn desktop_titlebar_command(handle: tauri::AppHandle, command: String) {
+    let app_data_dir = match handle.path().app_data_dir() {
+        Ok(path) => path,
+        Err(e) => {
+            eprintln!("[titlebar] 无法定位应用数据目录: {e}");
+            return;
+        }
+    };
+    let export_dir = dirs_home().join("Videos").join("PromptCut");
+    let runtime_dir = resolve_runtime_dir(&handle);
+    match command.as_str() {
+        "open-export" => open_in_explorer(&export_dir),
+        "open-data" => open_in_explorer(&app_data_dir),
+        "open-pylibs" => open_in_explorer(&app_data_dir.join("pylibs")),
+        "open-models" => open_in_explorer(&app_data_dir.join("models")),
+        "open-logs" => {
+            if let Ok(path) = handle.path().app_log_dir() {
+                open_in_explorer(&path);
+            }
+        }
+        "reset-pylibs" => {
+            let path = app_data_dir.join("pylibs");
+            let confirm = rfd::MessageDialog::new()
+                .set_title("PromptCut — 重置 Python 库")
+                .set_description(&format!("会删除 {}，下次转写时需要重新下载引擎，继续吗？", path.display()))
+                .set_level(rfd::MessageLevel::Warning)
+                .set_buttons(rfd::MessageButtons::OkCancel)
+                .show();
+            if confirm == rfd::MessageDialogResult::Ok {
+                match fs::remove_dir_all(&path) {
+                    Ok(_) => rfd::MessageDialog::new()
+                        .set_title("PromptCut")
+                        .set_description("已删除，下次使用语音识别时会重新下载")
+                        .set_level(rfd::MessageLevel::Info)
+                        .show(),
+                    Err(e) => rfd::MessageDialog::new()
+                        .set_title("PromptCut — 删除失败")
+                        .set_description(&format!("删除失败: {e}"))
+                        .set_level(rfd::MessageLevel::Error)
+                        .show(),
+                };
+            }
+        }
+        "about" => show_about(&handle, &runtime_dir),
+        "quit" => {
+            kill_sidecar_tree(&handle);
+            handle.exit(0);
+        }
+        _ => {}
+    }
+}
 
 /* ── .proc 独占锁的三个命令 ──────────────────────────────────────────────
  *
@@ -185,6 +240,7 @@ pub fn run() {
             acquire_proc_lock,
             release_proc_lock,
             is_proc_locked,
+            desktop_titlebar_command,
             agent_webview::agent_webview_show,
             agent_webview::agent_webview_hide,
             agent_webview::agent_webview_mute,
@@ -234,31 +290,6 @@ pub fn run() {
                 let _ = fs::create_dir_all(d);
             }
 
-            // ── Native menu ─────────────────────────────────────────
-            let menu = build_menu(&handle)?;
-            handle.set_menu(menu)?;
-
-            let export_dir_c = export_dir.clone();
-            let app_data_dir_c = app_data_dir.clone();
-            let pylibs_dir_c = pylibs_dir.clone();
-            let models_dir_c = models_dir.clone();
-            let app_log_dir_c = app_log_dir.clone();
-            let runtime_dir_c = runtime_dir.clone();
-            let handle_menu = handle.clone();
-
-            handle.on_menu_event(move |_app, event| {
-                handle_menu_event(
-                    &handle_menu,
-                    event.id().as_ref(),
-                    &export_dir_c,
-                    &app_data_dir_c,
-                    &pylibs_dir_c,
-                    &models_dir_c,
-                    &app_log_dir_c,
-                    &runtime_dir_c,
-                );
-            });
-
             // ── Build the main window ───────────────────────────────
             let opener_handle = handle.clone();
             let opener_handle2 = handle.clone();
@@ -268,6 +299,9 @@ pub fn run() {
                 .min_inner_size(1200.0, 720.0)
                 .center()
                 .maximizable(true)
+                // The webview owns the CodeX-style title bar now. Keeping the native
+                // frame hidden also prevents a second, OS-colored menu/title strip.
+                .decorations(false)
                 // 必须关掉:开着的话 WebView2 会装上 OS 级文件拖放处理,把页面里的 HTML5
                 // 拖放事件整个吃掉——素材库拖卡片到时间轴在浏览器里正常、装成桌面版就拖不动,
                 // 就是这个原因。本应用不用 Tauri 的文件拖放事件(要接系统拖入文件时,
@@ -540,106 +574,6 @@ fn kill_sidecar_tree(handle: &tauri::AppHandle) {
                 .args(["-9", &pid.to_string()])
                 .status();
         }
-    }
-}
-
-/// Build the application menu bar.
-fn build_menu(
-    handle: &tauri::AppHandle,
-) -> Result<tauri::menu::Menu<tauri::Wry>, tauri::Error> {
-    let file_menu = SubmenuBuilder::with_id(handle, "file-menu", "文件")
-        .item(&MenuItemBuilder::with_id("open-export", "打开导出文件夹").build(handle)?)
-        .item(&MenuItemBuilder::with_id("open-data", "打开数据目录").build(handle)?)
-        .separator()
-        .item(&MenuItemBuilder::with_id("quit", "退出").build(handle)?)
-        .build()?;
-
-    let tools_menu = SubmenuBuilder::with_id(handle, "tools-menu", "工具")
-        .item(&MenuItemBuilder::with_id("open-pylibs", "语音识别引擎（库目录）").build(handle)?)
-        .item(&MenuItemBuilder::with_id("open-models", "语音模型目录").build(handle)?)
-        .separator()
-        .item(&MenuItemBuilder::with_id("reset-pylibs", "重置 Python 库").build(handle)?)
-        .build()?;
-
-    // 外观:只有一项,点开前端那个皮肤对话框(预设 + 逐项调色都在里面)。
-    // 菜单里不列皮肤清单——那份清单在前端按调色板生成,抄到 Rust 里迟早跑偏。
-    let view_menu = SubmenuBuilder::with_id(handle, "view-menu", "外观")
-        .item(&MenuItemBuilder::with_id("open-skin", "皮肤…").build(handle)?)
-        .build()?;
-
-    let help_menu = SubmenuBuilder::with_id(handle, "help-menu", "帮助")
-        .item(&MenuItemBuilder::with_id("open-logs", "查看运行日志").build(handle)?)
-        .item(&MenuItemBuilder::with_id("about", "关于").build(handle)?)
-        .build()?;
-
-    MenuBuilder::new(handle)
-        .item(&file_menu)
-        .item(&tools_menu)
-        .item(&view_menu)
-        .item(&help_menu)
-        .build()
-}
-
-/// Handle a menu item click.
-fn handle_menu_event(
-    handle: &tauri::AppHandle,
-    id: &str,
-    export_dir: &PathBuf,
-    app_data_dir: &PathBuf,
-    pylibs_dir: &PathBuf,
-    models_dir: &PathBuf,
-    app_log_dir: &PathBuf,
-    runtime_dir: &PathBuf,
-) {
-    match id {
-        "open-export" => open_in_explorer(export_dir),
-        "open-data" => open_in_explorer(app_data_dir),
-        "open-pylibs" => open_in_explorer(pylibs_dir),
-        "open-models" => open_in_explorer(models_dir),
-        "open-logs" => open_in_explorer(app_log_dir),
-        // 菜单只管喊一声,皮肤对话框本身在前端;失败不影响别的菜单项,记一行日志就够
-        "open-skin" => {
-            if let Err(e) = handle.emit("pc-open-skin", ()) {
-                eprintln!("[menu] 通知前端打开皮肤对话框失败: {e}");
-            }
-        }
-        "quit" => {
-            kill_sidecar_tree(handle);
-            handle.exit(0);
-        }
-        "reset-pylibs" => {
-            let path_display = pylibs_dir.to_string_lossy().to_string();
-            let confirm = rfd::MessageDialog::new()
-                .set_title("PromptCut — 重置 Python 库")
-                .set_description(&format!(
-                    "会删除 {path_display}，下次转写时需要重新下载引擎，继续吗？"
-                ))
-                .set_level(rfd::MessageLevel::Warning)
-                .set_buttons(rfd::MessageButtons::OkCancel)
-                .show();
-            if confirm == rfd::MessageDialogResult::Ok {
-                match fs::remove_dir_all(pylibs_dir) {
-                    Ok(_) => {
-                        rfd::MessageDialog::new()
-                            .set_title("PromptCut")
-                            .set_description("已删除，下次使用语音识别时会重新下载")
-                            .set_level(rfd::MessageLevel::Info)
-                            .show();
-                    }
-                    Err(e) => {
-                        rfd::MessageDialog::new()
-                            .set_title("PromptCut — 删除失败")
-                            .set_description(&format!("删除失败: {e}"))
-                            .set_level(rfd::MessageLevel::Error)
-                            .show();
-                    }
-                }
-            }
-        }
-        "about" => {
-            show_about(handle, runtime_dir);
-        }
-        _ => {}
     }
 }
 

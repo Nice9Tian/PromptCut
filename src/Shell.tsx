@@ -5,6 +5,8 @@ import { StartPage } from "./StartPage";
 import { openDraft, setActiveDraftId } from "./editor/io/drafts";
 import { openProcPath } from "./editor/io/openPath";
 import { installHeadlessHooks } from "./headless";
+import { WindowTitleBar } from "./ui/WindowTitleBar";
+import { useSkin } from "./skins/useSkin";
 
 /**
  * 开始页和编辑器之间的门。
@@ -19,6 +21,9 @@ import { installHeadlessHooks } from "./headless";
  *   `?headless=1`      装上 window.__pcHeadless,给 scripts/headless.mjs 的自动写回用。
  */
 export function Shell(): JSX.Element {
+  // Keep the shared --ui-* palette mounted on the start page as well as the editor.
+  // The title bar is outside both routes, so its colors stay synchronized.
+  useSkin();
   const [inEditor, setInEditor] = useState(() => {
     try {
       return new URLSearchParams(location.search).has("editor");
@@ -87,7 +92,14 @@ export function Shell(): JSX.Element {
       </div>
     );
   }
-  return inEditor ? <Editor /> : <StartPage onEnterEditor={() => setInEditor(true)} />;
+  return (
+    <div className="pc-app-shell">
+      <WindowTitleBar />
+      <div className="pc-app-content">
+        {inEditor ? <Editor /> : <StartPage onEnterEditor={() => setInEditor(true)} />}
+      </div>
+    </div>
+  );
 }
 
 export default Shell;

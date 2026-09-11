@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import "./cards";
 import { TopBar } from "./editor/TopBar";
-import { MenuBarFade } from "./ui/MenuBarFade";
 import { Preview } from "./editor/Preview";
 import { LeftPanel } from "./editor/left";
 import { RightPanel } from "./editor/right";
@@ -146,10 +145,8 @@ export default function Editor() {
   // 这里用 `{!isChat && …}` 逐个开关:JSX 的兄弟槽位是定长的,false 也占位,
   // 所以右栏在两种模式下始终是同一个槽位,组件实例得以保留。
   return (
-    <div data-pc="editor" className="h-full flex flex-col bg-neutral-950 text-neutral-100">
+    <div data-pc="editor" className="h-full min-h-0 flex flex-col bg-neutral-950 text-neutral-100">
       <MediaMigrationDialog />
-      {/* 桌面壳里菜单栏到导航栏的颜色过渡;浏览器里跑时高度为 0 */}
-      <MenuBarFade />
       <TopBar />
       <DependencyPrompt />
       <div

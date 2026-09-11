@@ -8,6 +8,7 @@ fn main() {
             "acquire_proc_lock",
             "release_proc_lock",
             "is_proc_locked",
+            "desktop_titlebar_command",
             "agent_webview_show",
             "agent_webview_hide",
             "agent_webview_mute",

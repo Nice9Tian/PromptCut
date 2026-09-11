@@ -14,7 +14,6 @@ import { subjectStatus, installSubject } from "./ai/subject";
 import { collectStatus, installCollect, type CollectStatus } from "./ai/collect";
 import { openCollectLogin, useCollectLoginState } from "./ai/collectLoginStore";
 import { CollectLoginDialog } from "./editor/right/CollectLoginDialog";
-import { MenuBarFade } from "./ui/MenuBarFade";
 import { runSttInstall } from "./editor/io/runSttInstall";
 import { useInstallJobs } from "./ai/sttInstallStore";
 import { SttInstallProgress } from "./editor/right/SttInstallProgress";
@@ -120,7 +119,6 @@ export function StartPage(props: { onEnterEditor: () => void }): JSX.Element {
 
   return (
     <div className="sp">
-      <MenuBarFade />
       <header className="sp-bar">
         {/* Logo 自带文字标,别再补一遍 */}
         <Logo size={22} />
