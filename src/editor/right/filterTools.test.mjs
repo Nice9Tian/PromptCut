@@ -40,6 +40,12 @@ test("滤镜库:建、挂、改、删,门槛、撤销、跨剪辑清理", async 
     assert.equal(made.filter.animated, true);
     assert.deepEqual(getState().project.tracks[0].clips[0].filter, { id: fid, params: { amount: 0.5 } }); // 夹到 max
     assert.equal(timelineDigest(getState().project).tracks[0].clips[0].filterId, fid);
+    // 建 + 挂是一步撤销:撤一次库里没了、片段上也摘了;重做回来
+    actions.undo();
+    assert.equal(getState().project.filters?.length ?? 0, 0);
+    assert.equal(getState().project.tracks[0].clips[0].filter, undefined);
+    actions.redo();
+    assert.equal(getState().project.tracks[0].clips[0].filter.id, fid);
 
     // 挂到第二段、换参数、摘掉
     assert.equal(ft.applyFilter({ clipId: "c2", filterId: fid }).filterId, fid);

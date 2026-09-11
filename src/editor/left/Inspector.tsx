@@ -7,6 +7,7 @@ import { isComposite } from "../../kernel/envelope";
 import { CodeTab } from "./CodeTab";
 import { Frame3DForm } from "./Frame3DForm";
 import { ClipFilterForm } from "./ClipFilterForm";
+import { ClipAudioFxForm } from "./ClipAudioFxForm";
 
 /** 编辑分页的内容。参数 / 代码这一级由左栏的二级分页栏控制,这里只按 tab 渲染。 */
 export function Inspector({ tab }: { tab: "form" | "code" }) {
@@ -26,6 +27,7 @@ export function Inspector({ tab }: { tab: "form" | "code" }) {
   const { clip } = hit;
 
   if (clip.mediaId && !clip.cardId) {
+    const media = project.media.find(m => m.id === clip.mediaId);
     return (
       <div className="flex-1 flex flex-col p-2 text-xs">
         <div className="text-neutral-400 mb-2">标签: <span className="text-neutral-200">{clip.label || "无"}</span></div>
@@ -48,7 +50,8 @@ export function Inspector({ tab }: { tab: "form" | "code" }) {
           />
           <span className="text-neutral-500">{(clip.end - clip.start).toFixed(2)}s</span>
         </div>
-        <ClipFilterForm clip={clip} />
+        {media && (media.kind === "video" || media.kind === "image") && <ClipFilterForm clip={clip} />}
+        {media && (media.kind === "video" || media.kind === "audio") && <ClipAudioFxForm clip={clip} />}
       </div>
     );
   }

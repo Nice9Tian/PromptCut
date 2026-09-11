@@ -60,6 +60,9 @@ export const BASE_VARS: string[];
 export const EXPR_HELP: string;
 export class FilterExprError extends Error {}
 
+export const RESERVED: Set<string>;
+export function normalizeParamDecls(rawParams: unknown, extraReserved?: Set<string>): Record<string, FilterParamSpec>;
+export function compiledOf(src: string, vars: string[]): { fn: (env: Record<string, number>) => number; uses: Set<string> };
 export function compileExpr(src: string, vars?: string[]): { fn: (env: Record<string, number>) => number; uses: Set<string> };
 export function normalizeFilterDef(input: unknown): Omit<FilterDef, "id" | "createdBy" | "createdAt">;
 export function normalizeClipParams(def: FilterDef, input: unknown): Record<string, number> | undefined;

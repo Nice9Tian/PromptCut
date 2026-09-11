@@ -16,7 +16,7 @@ import { lookHint } from "./toolEcho";
 export interface FilterStore {
   getState(): { project: Project };
   actions: {
-    addFilter(def: FilterDef): void;
+    addFilter(def: FilterDef, attach?: { clipId: string; filter: ClipFilter }): void;
     updateFilter(filterId: string, def: FilterDef): void;
     removeFilter(filterId: string): void;
     setClipFilter(clipId: string, filter: ClipFilter | null): boolean;
@@ -94,8 +94,8 @@ export function createFilterTools(store: FilterStore) {
         mediaClip(project(), args.clipId);
         clipParams = normalizeClipParams(def, args.clipParams);
       }
-      store.actions.addFilter(def);
-      if (args?.clipId !== undefined) store.actions.setClipFilter(str(args.clipId), { id: def.id, ...(clipParams ? { params: clipParams } : null) });
+      // 入库和挂上是同一步(一步撤销)
+      store.actions.addFilter(def, args?.clipId !== undefined ? { clipId: str(args.clipId), filter: { id: def.id, ...(clipParams ? { params: clipParams } : null) } } : undefined);
       return {
         ok: true,
         filterId: def.id,
@@ -120,7 +120,8 @@ export function createFilterTools(store: FilterStore) {
       const uses = usesOf(p, cur.id);
       // 片段上覆盖的参数名如果被删掉了,留着也不生效(求值只认声明过的),提一句
       const declared = new Set(Object.keys(next.params ?? {}));
-      const stale = [...p.tracks.flatMap((t) => t.clips)].filter((c) => c.filter?.id === cur.id && Object.keys(c.filter.params ?? {}).some((k) => !declared.has(k)));
+      const everywhere = [...p.tracks, ...(p.cuts ?? []).filter((c) => c.id !== p.activeCutId).flatMap((c) => c.tracks ?? [])].flatMap((t) => t.clips);
+      const stale = everywhere.filter((c) => c.filter?.id === cur.id && Object.keys(c.filter.params ?? {}).some((k) => !declared.has(k)));
       return {
         ok: true,
         filter: summary(p, next),
@@ -141,7 +142,7 @@ export function createFilterTools(store: FilterStore) {
             "确实要删就传 force:true 并在 reason 里写明理由;只想摘某一段用 apply_filter 传空的 filterId",
         );
       }
-      if (args?.force && !reason) throw new Error("force 删除必须在 reason 里写明理由,用户会看到这句话");
+      if (uses.length && args?.force && !reason) throw new Error("force 删除必须在 reason 里写明理由,用户会看到这句话");
       store.actions.removeFilter(f.id);
       return { ok: true, removed: f.id, name: f.name, ...(uses.length ? { detached: uses, reason } : null) };
     },

@@ -10,6 +10,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
+import { audioPlanOf } from "../src/kernel/audioPlan.mjs";
 
 /** 导出时素材的 url 形如 /@export/<id>/media/<file>,真实文件在 outDir/media/<file> */
 export function localPathOf(url, outDir) {
@@ -30,26 +31,12 @@ export function localPathOf(url, outDir) {
  */
 export function buildAudioPlan(project, outDir, exists = fs.existsSync, sourceOf = (m) => localPathOf(m.url, outDir)) {
   const out = [];
-  for (const tr of project.tracks || []) {
-    if (tr.hidden || tr.muted) continue;
-    for (const c of tr.clips || []) {
-      if (!c.mediaId || c.audioMuted) continue;
-      const m = (project.media || []).find((x) => x.id === c.mediaId);
-      if (!m || !m.url || m.kind === "image") continue;
-      const file = sourceOf(m);
-      if (!file || (!/^https?:/i.test(file) && !exists(file))) continue;
-      const dur = +(c.end - c.start).toFixed(3);
-      if (!(dur > 0)) continue;
-      out.push({
-        file,
-        start: +c.start.toFixed(3),
-        dur,
-        offset: +(c.mediaOffset ?? 0).toFixed(3),
-        volume: (c.opacity ?? 1) * (c.audioVolume ?? 1),
-        fadeIn: c.fadeIn ?? 0,
-        fadeOut: c.fadeOut ?? 0,
-      });
-    }
+  // 谁出声、多响的规则在 kernel/audioPlan.mjs(和测响度、Chrome 离线混音同一份);这里只补文件在哪
+  for (const e of audioPlanOf(project)) {
+    const m = (project.media || []).find((x) => x.id === e.mediaId);
+    const file = sourceOf(m);
+    if (!file || (!/^https?:/i.test(file) && !exists(file))) continue;
+    out.push({ file, clipId: e.clipId, start: e.start, dur: e.dur, offset: e.offset, volume: e.volume, fadeIn: e.fadeIn, fadeOut: e.fadeOut, fx: e.fx });
   }
   return out;
 }

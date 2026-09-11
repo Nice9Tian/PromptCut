@@ -65,8 +65,12 @@ export function ClipFilterForm({ clip }: { clip: TrackClip }) {
               max={spec.max}
               value={clip.filter?.params?.[k] ?? spec.default}
               onChange={(e) => {
+                // 打「-」的瞬间 value 是空串,Number("") 是 0 —— 不能当成提交了 0,不然负数永远打不进去
+                if (e.target.value === "" || e.target.value === "-") return;
                 const n = Number(e.target.value);
-                if (Number.isFinite(n)) apply(cur.id, { ...(clip.filter?.params ?? {}), [k]: n });
+                // 只带声明过的键:update_filter 删掉过的参数还留在片段上的话,整栏都会被「没有参数 X」卡住
+                const kept = Object.fromEntries(Object.entries(clip.filter?.params ?? {}).filter(([key]) => cur.params && key in cur.params));
+                if (Number.isFinite(n)) apply(cur.id, { ...kept, [k]: n });
               }}
               className="w-20 h-6 px-1 bg-neutral-900 border border-neutral-800 rounded text-neutral-200 outline-none"
             />

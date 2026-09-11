@@ -39,7 +39,7 @@ export const FILTER_KINDS = {
   grayscale: { label: "黑白", min: 0, max: 1, neutral: 0, hint: "0~1,1 = 完全黑白" },
   sepia: { label: "复古", min: 0, max: 1, neutral: 0, hint: "0~1,老照片的褐色调" },
   invert: { label: "反色", min: 0, max: 1, neutral: 0, hint: "0~1,1 = 负片" },
-  blur: { label: "模糊", min: 0, max: 40, neutral: 0, unit: "px", hint: "高斯模糊,单位是画布像素" },
+  blur: { label: "模糊", min: 0, max: 40, neutral: 0, unit: "px", hint: "高斯模糊,单位是片段框内的像素(框缩小了模糊也跟着缩;铺满画面的段就是画布像素)" },
 };
 
 export const MAX_OPS = 12;
@@ -66,7 +66,7 @@ const FUNCS = {
 };
 const CONSTS = { PI: Math.PI, E: Math.E };
 export const BASE_VARS = ["t", "d", "p"];
-const RESERVED = new Set([...BASE_VARS, ...Object.keys(CONSTS), ...Object.keys(FUNCS)]);
+export const RESERVED = new Set([...BASE_VARS, ...Object.keys(CONSTS), ...Object.keys(FUNCS)]);
 
 export const EXPR_HELP =
   "参数可以写数字,或一段随时间变化的表达式字符串。变量:t = 片段内秒数(从片段开头算),d = 片段时长,p = t/d(0~1 进度)," +
@@ -192,7 +192,8 @@ export function compileExpr(src, vars = BASE_VARS) {
 }
 
 const compiled = new Map();
-function compiledOf(src, vars) {
+/** 带缓存的 compileExpr(同一条表达式预览每帧都要算) */
+export function compiledOf(src, vars) {
   const key = `${vars.join(",")} ${src}`;
   let c = compiled.get(key);
   if (!c) {
@@ -210,25 +211,20 @@ const round6 = (n) => Math.round(n * 1e6) / 1e6;
 const clamp = (x, a, b) => Math.min(Math.max(x, a), b);
 
 /**
- * 把模型 / 界面交来的滤镜定义洗成规范形状,不合规就抛(文案写给模型看)。
- * 返回 { name, description?, params?, ops }(id / createdAt 由调用方加)。
+ * 自定义参数的声明表 { 名字: { default, min?, max?, label? } | 数字 } 洗成规范形状。
+ * 视频滤镜和音频效果(kernel/audioFx.mjs)共用这一份规则,所以导出;extraReserved 是各自不许撞的名字。
  */
-export function normalizeFilterDef(input) {
-  if (!input || typeof input !== "object") throw new FilterExprError("滤镜定义要是一个对象");
-  const name = typeof input.name === "string" ? input.name.trim() : "";
-  if (!name || name.length > 30) throw new FilterExprError("name 必填,30 字以内(素材库里显示这个名字)");
-  const description = typeof input.description === "string" && input.description.trim() ? input.description.trim().slice(0, 200) : undefined;
-
+export function normalizeParamDecls(rawParams, extraReserved = RESERVED) {
   const params = {};
-  const rawParams = input.params && typeof input.params === "object" ? input.params : {};
-  const keys = Object.keys(rawParams);
+  const raw = rawParams && typeof rawParams === "object" ? rawParams : {};
+  const keys = Object.keys(raw);
   if (keys.length > MAX_PARAMS) throw new FilterExprError(`params 最多 ${MAX_PARAMS} 个`);
   for (const key of keys) {
-    if (!PARAM_NAME.test(key) || RESERVED.has(key)) {
-      throw new FilterExprError(`参数名「${key}」不行:小写字母开头、只含字母数字下划线,且不能和 ${[...RESERVED].join(" ")} 重名`);
+    if (!PARAM_NAME.test(key) || extraReserved.has(key)) {
+      throw new FilterExprError(`参数名「${key}」不行:小写字母开头、只含字母数字下划线,且不能和 ${[...extraReserved].join(" ")} 重名`);
     }
-    const raw = rawParams[key];
-    const spec = typeof raw === "number" ? { default: raw } : raw && typeof raw === "object" ? raw : null;
+    const r = raw[key];
+    const spec = typeof r === "number" ? { default: r } : r && typeof r === "object" ? r : null;
     if (!spec || typeof spec.default !== "number" || !Number.isFinite(spec.default)) throw new FilterExprError(`参数 ${key} 要有数字 default`);
     const min = typeof spec.min === "number" && Number.isFinite(spec.min) ? spec.min : undefined;
     const max = typeof spec.max === "number" && Number.isFinite(spec.max) ? spec.max : undefined;
@@ -241,6 +237,21 @@ export function normalizeFilterDef(input) {
       ...(typeof spec.label === "string" && spec.label.trim() ? { label: spec.label.trim().slice(0, 20) } : null),
     };
   }
+  return params;
+}
+
+/**
+ * 把模型 / 界面交来的滤镜定义洗成规范形状,不合规就抛(文案写给模型看)。
+ * 返回 { name, description?, params?, ops }(id / createdAt 由调用方加)。
+ */
+export function normalizeFilterDef(input) {
+  if (!input || typeof input !== "object") throw new FilterExprError("滤镜定义要是一个对象");
+  const name = typeof input.name === "string" ? input.name.trim() : "";
+  if (!name || name.length > 30) throw new FilterExprError("name 必填,30 字以内(素材库里显示这个名字)");
+  const description = typeof input.description === "string" && input.description.trim() ? input.description.trim().slice(0, 200) : undefined;
+
+  const params = normalizeParamDecls(input.params, RESERVED);
+  const keys = Object.keys(params);
   const vars = [...BASE_VARS, ...keys];
 
   if (!Array.isArray(input.ops) || input.ops.length === 0) throw new FilterExprError(`ops 至少一步,例:[{ "kind": "brightness", "value": 1.2 }]`);
@@ -314,7 +325,14 @@ export function resolveOps(def, clipParams, t, d) {
   const env = envOf(def, clipParams, t, d);
   return def.ops.map((op) => {
     const spec = FILTER_KINDS[op.kind];
-    let v = typeof op.value === "number" ? op.value : compiledOf(op.value, vars).fn(env);
+    let v;
+    // 表达式来自工程文件,可能是别的版本存的、手改过的(引用了已删掉的参数名):编译失败按中性算,
+    // 不能在预览的 render 里抛 —— 那是整个编辑台白屏
+    try {
+      v = typeof op.value === "number" ? op.value : compiledOf(op.value, vars).fn(env);
+    } catch {
+      v = spec.neutral;
+    }
     if (!Number.isFinite(v)) v = spec.neutral;
     return { kind: op.kind, value: round6(clamp(v, spec.min, spec.max)) };
   });
@@ -325,8 +343,12 @@ export function isAnimated(def) {
   const vars = [...BASE_VARS, ...Object.keys(def.params || {})];
   return def.ops.some((op) => {
     if (typeof op.value !== "string") return false;
-    const { uses } = compiledOf(op.value, vars);
-    return uses.has("t") || uses.has("p");
+    try {
+      const { uses } = compiledOf(op.value, vars);
+      return uses.has("t") || uses.has("p");
+    } catch {
+      return false; // 编译不过的表达式按中性算(见 resolveOps),自然也不算动画
+    }
   });
 }
 
@@ -468,6 +490,8 @@ export function sendcmdScript(def, clipParams, d, frames, tag, blurScale = 1, fp
   const lead = 0.25 / fps;
   const lines = [];
   let maxSigma = 0;
+  // 数值和上一帧一样就不发:慢变化的表达式大部分帧值不变(round6 之后),脚本能小几倍,sendcmd 逐帧扫的区间也少
+  let prev = "";
   for (const { ts, t } of frames) {
     const stages = ffmpegStages(resolveOps(def, clipParams, t, d), blurScale);
     const cmds = [];
@@ -477,7 +501,10 @@ export function sendcmdScript(def, clipParams, d, frames, tag, blurScale = 1, fp
       for (const k of keys) cmds.push(`${name} ${k} ${s.opts[k]}`);
       if (s.filter === "gblur") maxSigma = Math.max(maxSigma, s.opts.sigma);
     });
-    lines.push(`${round6(Math.max(0, ts - lead))} ${cmds.join(", ")};`);
+    const body = cmds.join(", ");
+    if (body === prev) continue;
+    prev = body;
+    lines.push(`${round6(Math.max(0, ts - lead))} ${body};`);
   }
   return { script: lines.join("\n") + "\n", blurPad: blurPadOf(maxSigma) };
 }

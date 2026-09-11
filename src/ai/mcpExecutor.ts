@@ -74,6 +74,14 @@ export interface EditorApi {
   updateFilter(args: any): any;
   removeFilter(args: { filterId: string; force?: boolean; reason?: string }): any;
   applyFilter(args: { clipId: string; filterId: string; params?: Record<string, number> }): any;
+  // 音频效果库。校验和门槛在 editor/right/audioFxTools.ts,数值在 kernel/audioFx.mjs,节点图在 src/audio/fxChain.ts
+  listAudioFx(): any;
+  createAudioFx(args: any): any;
+  updateAudioFx(args: any): any;
+  removeAudioFx(args: { fxId: string; force?: boolean; reason?: string }): any;
+  applyAudioFx(args: { clipId: string; fxId: string; params?: Record<string, number> }): any;
+  /** 测响度:服务端 ffmpeg ebur128(server/vite-plugin-audio.ts) */
+  measureAudio(args: { clipId?: string; mediaId?: string; scope?: string; series?: boolean }): Promise<any>;
   // 多条剪辑(时间轴)。其余 clip / 序列工具都只作用于当前激活的那条
   listCuts(): any;
   switchCut(args: { cutId?: string; name?: string }): any;
@@ -142,6 +150,7 @@ const TIMELINE_TOOLS = new Set([
   "set_position", "set_rect", "align", "nudge", "fill_captions", "edit_caption", "attach_clip_motion", "detach_clip_motion",
   "add_track", "remove_track", "update_track", "move_track",
   "create_filter", "update_filter", "remove_filter", "apply_filter",
+  "create_audio_fx", "update_audio_fx", "remove_audio_fx", "apply_audio_fx",
   "switch_cut", "add_cut", "set_theme", "voice_generate",
 ]);
 
@@ -433,6 +442,12 @@ export function connectMcpExecutor(getApi: () => EditorApi, onStatus?: (s: { con
           else if (tool === "update_filter") result = api.updateFilter(args);
           else if (tool === "remove_filter") result = api.removeFilter(args);
           else if (tool === "apply_filter") result = api.applyFilter(args);
+          else if (tool === "list_audio_fx") result = api.listAudioFx();
+          else if (tool === "create_audio_fx") result = api.createAudioFx(args);
+          else if (tool === "update_audio_fx") result = api.updateAudioFx(args);
+          else if (tool === "remove_audio_fx") result = api.removeAudioFx(args);
+          else if (tool === "apply_audio_fx") result = api.applyAudioFx(args);
+          else if (tool === "measure_audio") result = await api.measureAudio(args);
           else if (tool === "seek") result = api.seek(args);
           else if (tool === "play") result = api.play();
           else if (tool === "pause") result = api.pause();

@@ -19,6 +19,8 @@ export interface TimelineDigestClip {
   mediaId?: string;
   /** 挂着的滤镜(project.filters 里的 id) */
   filterId?: string;
+  /** 挂着的音频效果(project.audioFx 里的 id) */
+  audioFxId?: string;
   start: number;
   end: number;
 }
@@ -59,6 +61,7 @@ export function timelineDigest(p: Project): TimelineDigest {
       id: c.id,
       ...(c.cardId ? { cardId: c.cardId } : { mediaId: c.mediaId }),
       ...(c.filter ? { filterId: c.filter.id } : null),
+      ...(c.audioFx ? { audioFxId: c.audioFx.id } : null),
       start: round2(c.start),
       end: round2(c.end),
     })),

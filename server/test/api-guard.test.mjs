@@ -61,7 +61,7 @@ test('对话附件上传是原始字节体,同源时必须放行(回归)', async
 test('素材上传、导出媒体、听写上传这几条原始体路由同样放行', async () => {
   const fn = handlerOf();
   // 听写那条是诊断报告里抓到的:transcribe_media 上传素材被 403,整个转写起不来
-  for (const url of ['/api/media/upload/a.mp4', '/api/export/media/x', '/api/stt/upload/job1/a.mp4']) {
+  for (const url of ['/api/media/upload/a.mp4', '/api/export/media/x', '/api/stt/upload/job1/a.mp4', '/api/export/audio-mix/test1']) {
     const r = await pass(fn, { url, headers: { ...SAME, 'content-type': 'application/octet-stream' } });
     assert.equal(r, 'next', url);
   }

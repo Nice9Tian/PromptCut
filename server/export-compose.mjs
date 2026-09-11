@@ -365,8 +365,11 @@ export function buildComposeArgs(opts) {
         const { script, blurPad } = sendcmdScript(def, params, d, frames, tag, p.scale, fps);
         const file = `${String(opts.sidecarDir || ".").replace(/\\/g, "/")}/filter-${k}.cmd`;
         sidecars.push({ file, text: script });
-        // Windows 路径里的冒号是滤镜参数的分隔符:单引号 + \: 转义(和 subtitles 滤镜传路径同一个写法)
-        chain.push(`sendcmd=f='${file.replace(/:/g, "\\:")}'`, ffmpegChain(ffmpegStages(resolveOps(def, params, ta - clip.start, d), p.scale), tag, blurPad));
+        // Windows 路径里的冒号是滤镜参数的分隔符:单引号 + \: 转义(和 subtitles 滤镜传路径同一个写法)。
+        // 路径里的单引号会提前闭合引号,后面整条链都被当成 sendcmd 的选项(实测「Option not found」):
+        // 关引号、\' 转义、再开引号。空格和中文实测都不用管
+        const quoted = file.replace(/:/g, "\\:").replace(/'/g, "'\\''");
+        chain.push(`sendcmd=f='${quoted}'`, ffmpegChain(ffmpegStages(resolveOps(def, params, ta - clip.start, d), p.scale), tag, blurPad));
       } else {
         const fx = ffmpegStaticChain(resolveOps(def, params, 0, d), p.scale);
         if (fx) chain.push(fx);

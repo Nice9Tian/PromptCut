@@ -16,9 +16,10 @@ import {
 import type { ClipFrame, ClipMotion, PartInstance } from "../kernel/types";
 import {
   normalizeCuts, switchCut as switchCutPure, addCut as addCutPure, renameCut as renameCutPure,
-  removeCut as removeCutPure, stripMediaFromCuts, stripFilterFromCuts, withoutFilter,
+  removeCut as removeCutPure, stripMediaFromCuts, stripFilterFromCuts, withoutFilter, stripAudioFxFromCuts, withoutAudioFx,
 } from "../kernel/cuts";
 import type { ClipFilter, FilterDef } from "../kernel/filters.mjs";
+import type { AudioFxDef, ClipAudioFx } from "../kernel/audioFx.mjs";
 import {
   checkCrossfade, checkFade, clampDur, fadeOwner, groupOf, timingLock,
   transitionsOf, transitionsOfClip, type Transition, type TransitionKind,
@@ -900,6 +901,8 @@ export const actions = {
       id: newId("c"), cardId: "", mediaId: media.id, params: {}, label: media.name,
       start: hit.clip.start, end: hit.clip.end, mediaOffset: hit.clip.mediaOffset,
       opacity: hit.clip.opacity, fadeIn: hit.clip.fadeIn, fadeOut: hit.clip.fadeOut, audioVolume: hit.clip.audioVolume,
+      // 挂着的音频效果跟着声音走:分离出来的那段就是原来出声的那段
+      ...(hit.clip.audioFx ? { audioFx: hit.clip.audioFx } : null),
     };
     const track: Track = { id: newId("t"), name: media.name, muted: hit.track.muted, hidden: hit.track.hidden, clips: [audio] };
     const tracks = p.tracks.map((t) => t.id === hit.track.id
@@ -993,8 +996,15 @@ export const actions = {
   },
 
   /* ---------- 滤镜库(项目级,和素材一样所有剪辑共用) ---------- */
-  addFilter(def: FilterDef) {
-    setProject({ ...state.project, filters: [...(state.project.filters ?? []), def] });
+  /** 入库;给了 attach 就同一步挂到那一段上(一次 setProject = 一步撤销,不然撤销一次只摘掉、库里还留着) */
+  addFilter(def: FilterDef, attach?: { clipId: string; filter: ClipFilter }) {
+    const p = state.project;
+    let tracks = p.tracks;
+    if (attach) {
+      const hit = findClip(p, attach.clipId);
+      if (hit) tracks = updateTrack(p, hit.track.id, (t) => ({ ...t, clips: t.clips.map((c) => (c.id === attach.clipId ? { ...c, filter: attach.filter } : c)) })).tracks;
+    }
+    setProject({ ...p, tracks, filters: [...(p.filters ?? []), def] });
   },
   updateFilter(filterId: string, def: FilterDef) {
     setProject({ ...state.project, filters: (state.project.filters ?? []).map((f) => (f.id === filterId ? def : f)) });
@@ -1008,6 +1018,41 @@ export const actions = {
       tracks: p.tracks.map((t) => ({ ...t, clips: t.clips.map((c) => (c.filter?.id === filterId ? withoutFilter(c) : c)) })),
     }, filterId));
   },
+  /* ---------- 音频效果库(项目级,和滤镜库一个路数) ---------- */
+  /** 入库;给了 attach 就同一步挂到那一段上(一步撤销,同 addFilter) */
+  addAudioFx(def: AudioFxDef, attach?: { clipId: string; fx: ClipAudioFx }) {
+    const p = state.project;
+    let tracks = p.tracks;
+    if (attach) {
+      const hit = findClip(p, attach.clipId);
+      if (hit) tracks = updateTrack(p, hit.track.id, (t) => ({ ...t, clips: t.clips.map((c) => (c.id === attach.clipId ? { ...c, audioFx: attach.fx } : c)) })).tracks;
+    }
+    setProject({ ...p, tracks, audioFx: [...(p.audioFx ?? []), def] });
+  },
+  updateAudioFx(fxId: string, def: AudioFxDef) {
+    setProject({ ...state.project, audioFx: (state.project.audioFx ?? []).map((f) => (f.id === fxId ? def : f)) });
+  },
+  /** 删效果:激活剪辑和停放剪辑里挂着它的段一并摘掉 */
+  removeAudioFx(fxId: string) {
+    const p = state.project;
+    setProject(stripAudioFxFromCuts({
+      ...p,
+      audioFx: (p.audioFx ?? []).filter((f) => f.id !== fxId),
+      tracks: p.tracks.map((t) => ({ ...t, clips: t.clips.map((c) => (c.audioFx?.id === fxId ? withoutAudioFx(c) : c)) })),
+    }, fxId));
+  },
+  /** 挂 / 换 / 摘片段上的音频效果(null = 摘掉)。找不到片段返回 false;校验在调用方 */
+  setClipAudioFx(clipId: string, fx: ClipAudioFx | null): boolean {
+    const p = state.project;
+    const hit = findClip(p, clipId);
+    if (!hit) return false;
+    setProject(updateTrack(p, hit.track.id, (t) => ({
+      ...t,
+      clips: t.clips.map((c) => (c.id !== clipId ? c : fx ? { ...c, audioFx: fx } : withoutAudioFx(c))),
+    })));
+    return true;
+  },
+
   /** 挂 / 换 / 摘片段上的滤镜(null = 摘掉)。找不到片段返回 false;校验在调用方 */
   setClipFilter(clipId: string, filter: ClipFilter | null): boolean {
     const p = state.project;

@@ -11,6 +11,111 @@ export const tools = [
     inputSchema: { type: "object", properties: { clipId: { type: "string" } }, required: ["clipId"] },
     side: "browser",
   },
+  {
+    name: "list_audio_fx",
+    description: "列出音频效果库(素材库「音频效果」页里的那些),以及能用的效果种类、每种的参数(范围 / 默认 / 单位)、几条预设和表达式写法。每条效果给 fxId、name、description、params(挂到片段上可逐段调的参数)、ops、summary、animated、usedBy(挂在哪几段上)。挂效果前先看有没有现成能复用的;不确定该用哪种时看 kinds 里每种的 hint。",
+    inputSchema: { type: "object", properties: {} },
+    side: "browser"
+  },
+  {
+    name: "create_audio_fx",
+    description: "新建一个音频效果,放进素材库「音频效果」页 —— 用户能看到、能复用,你也能挂到任意视频 / 声音片段上。ops 是依次作用的几步,每步 { kind, <参数名>: 值 },kind 十一种:gain 增益(db,-60~24,**能超过 0 dB,是把太轻的声音放大的唯一办法**)、highpass 高通(freq, q)、lowpass 低通(freq, q)、peaking 峰值均衡(freq, q, db)、lowshelf 低架(freq, db)、highshelf 高架(freq, db)、compressor 压缩(threshold, ratio, knee, attack, release)、limiter 限幅(ceiling)、delay 回声(time, feedback, mix)、reverb 混响(decay, mix)、pan 声像(pan)。没填的参数取默认(list_audio_fx 的 kinds 里有)。参数写数字,或写**随时间变化的表达式字符串**:t = 片段内秒数、d = 片段时长、p = t/d,还能引用 params 里声明的参数。例:{ name:'压低背景', params:{ amount:{ default:-12, min:-40, max:0, label:'分贝' } }, ops:[{ kind:'gain', db:'amount' }] };人声清晰:ops:[{ kind:'highpass', freq:100 }, { kind:'peaking', freq:3000, q:1, db:3 }, { kind:'compressor', threshold:-24, ratio:3 }]。传 clipId 就顺手挂到那一段上。预览和导出用同一张节点图(Web Audio),听到的和导出的一致。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "素材库里显示的名字,30 字以内" },
+        description: { type: "string", description: "一句话说它是什么效果、适合什么声音" },
+        params: {
+          type: "object",
+          description: "可选:可逐段调的参数,键是参数名(小写字母开头,不能和种类的参数名 freq / db / q 等重名),值是 { default, min?, max?, label? }。表达式里直接用参数名",
+          additionalProperties: {
+            type: "object",
+            properties: {
+              default: { type: "number" },
+              min: { type: "number" },
+              max: { type: "number" },
+              label: { type: "string" }
+            },
+            required: ["default"]
+          }
+        },
+        ops: {
+          type: "array",
+          description: "依次作用的步骤,1~8 步,每步 { kind, <参数名>: 数字或表达式 }",
+          items: {
+            type: "object",
+            properties: {
+              kind: { type: "string", enum: ["gain", "highpass", "lowpass", "peaking", "lowshelf", "highshelf", "compressor", "limiter", "delay", "reverb", "pan"] }
+            },
+            required: ["kind"],
+            additionalProperties: true
+          }
+        },
+        clipId: { type: "string", description: "可选:建完直接挂到这一段(视频 / 声音)" },
+        clipParams: { type: "object", description: "可选:挂上时这一段的参数值,覆盖 params 的 default" }
+      },
+      required: ["name", "ops"]
+    },
+    side: "browser"
+  },
+  {
+    name: "update_audio_fx",
+    description: "改音频效果库里的一个效果。挂着它的片段**全部**跟着变(片段引用的是它,不是复制了一份)。给了 ops / params 就整项替换。只想改某一段,用 apply_audio_fx 给那一段传 params 覆盖,或另建一个效果。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        fxId: { type: "string" },
+        name: { type: "string" },
+        description: { type: "string" },
+        params: { type: "object", description: "同 create_audio_fx" },
+        ops: { type: "array", items: { type: "object" }, description: "同 create_audio_fx" }
+      },
+      required: ["fxId"]
+    },
+    side: "browser"
+  },
+  {
+    name: "remove_audio_fx",
+    description: "从音频效果库删掉一个效果。还挂在片段上时会被拒;确实要删就传 force:true 并在 reason 里写明理由(用户会看到),所有剪辑里挂着它的片段会一起摘掉。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        fxId: { type: "string" },
+        force: { type: "boolean" },
+        reason: { type: "string" }
+      },
+      required: ["fxId"]
+    },
+    side: "browser"
+  },
+  {
+    name: "apply_audio_fx",
+    description: "把音频效果库里的一个效果挂到视频 / 声音片段上(每段只挂一个,再挂就是替换;要叠几种效果就在一个效果里写多步 ops);params 给这一段单独的参数值。fxId 传空字符串就是摘掉。图片和卡片没有声音,不收。挂完可以 measure_audio 看一眼数值。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        clipId: { type: "string" },
+        fxId: { type: "string", description: "空字符串 = 摘掉这一段的音频效果" },
+        params: { type: "object", description: "可选:这一段的参数值,只能是这个效果 params 里声明过的" }
+      },
+      required: ["clipId", "fxId"]
+    },
+    side: "browser"
+  },
+  {
+    name: "measure_audio",
+    description: "测响度(EBU R128,和导出用的同一个 ffmpeg)。你听不见声音,调音量前先用它看数:给 clipId 测时间轴上那一段(只测它用到的那一截素材、**素材原声**,不含片段音量 / 淡入淡出 / 效果),给 mediaId 测整个素材,scope:'timeline' 测整条时间轴混在一起的结果(含每段音量和淡入淡出;**音频效果不含**,有效果时会标 note)。返回 integrated(整体响度 LUFS,越大越响,-14 是常见的发布目标)、truePeak(峰值 dBTP,超过 0 会削波爆音,发布要在 -1 以下)、lra / lraLow / lraHigh(响度范围,滤掉静音后的第 10 / 95 百分位)。timeline 档另给 series:逐秒的响度和那一秒正在出声的 clipId,好找出哪一秒太吵、是谁吵。经验:人声比配乐 / 环境音响 12~15 LU 才听得清;把两段的 integrated 相减就是差值,要压低 X dB 就 set_clip_volume 到 10^(-X/20)(压 12 dB ≈ 0.25),要抬高只能用 create_audio_fx 的 gain。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        clipId: { type: "string", description: "测时间轴上这一段" },
+        mediaId: { type: "string", description: "测整个素材" },
+        scope: { type: "string", enum: ["clip", "media", "timeline"], description: "不传就按给了 clipId 还是 mediaId 判" },
+        series: { type: "boolean", description: "clip / media 档也要逐秒曲线时传 true(timeline 档总是给)" }
+      }
+    },
+    side: "browser"
+  },
   /*
    * 等一会儿。看着多余,其实是必需品。
    *
@@ -511,7 +616,7 @@ export const tools = [
   },
   {
     name: "create_filter",
-    description: "新建一个滤镜,放进素材库「转场/滤镜」页 —— 用户能看到、能复用,你也能挂到任意视频 / 图片片段上。ops 是依次作用的几步,kind 八种:brightness 亮度(1 原样,0~3,乘法)、contrast 对比度(1 原样,0~3)、saturate 饱和度(1 原样,0~2)、hue 色相旋转(度,-180~180)、grayscale 黑白(0~1)、sepia 复古褐(0~1)、invert 反色(0~1)、blur 模糊(画布像素,0~40)。value 写数字,或写**随时间变化的表达式字符串**:t = 片段内秒数(从片段开头算,所以同一个滤镜挂到哪段都一样用)、d = 片段时长、p = t/d(0~1 进度),还能引用 params 里声明的参数;函数有 sin cos abs min max pow clamp lerp step smoothstep 等,常量 PI。例:{ name:'呼吸感', params:{ amount:{ default:0.15, min:0, max:0.5, label:'幅度' } }, ops:[{ kind:'brightness', value:'1 + amount*sin(t*2*PI)' }] };整段褪成黑白:{ kind:'grayscale', value:'p' }。传 clipId 就顺手挂到那一段上。预览、导出、see_frames 算的是同一份数值。",
+    description: "新建一个滤镜,放进素材库「转场/滤镜」页 —— 用户能看到、能复用,你也能挂到任意视频 / 图片片段上。ops 是依次作用的几步,kind 八种:brightness 亮度(1 原样,0~3,乘法)、contrast 对比度(1 原样,0~3)、saturate 饱和度(1 原样,0~2)、hue 色相旋转(度,-180~180)、grayscale 黑白(0~1)、sepia 复古褐(0~1)、invert 反色(0~1)、blur 模糊(片段框内的像素,0~40;框缩小了模糊跟着缩)。value 写数字,或写**随时间变化的表达式字符串**:t = 片段内秒数(从片段开头算,所以同一个滤镜挂到哪段都一样用)、d = 片段时长、p = t/d(0~1 进度),还能引用 params 里声明的参数;函数有 sin cos abs min max pow clamp lerp step smoothstep 等,常量 PI。例:{ name:'呼吸感', params:{ amount:{ default:0.15, min:0, max:0.5, label:'幅度' } }, ops:[{ kind:'brightness', value:'1 + amount*sin(t*2*PI)' }] };整段褪成黑白:{ kind:'grayscale', value:'p' }。传 clipId 就顺手挂到那一段上。预览、导出、see_frames 算的是同一份数值。",
     inputSchema: {
       type: "object",
       properties: {

@@ -189,6 +189,24 @@ export function withoutFilter<T extends { filter?: unknown }>(clip: T): T {
   return rest as T;
 }
 
+/** 摘掉片段上的音频效果字段(整个键拿掉) */
+export function withoutAudioFx<T extends { audioFx?: unknown }>(clip: T): T {
+  const { audioFx: _gone, ...rest } = clip;
+  return rest as T;
+}
+
+/** 音频效果同滤镜:删效果要把停放剪辑里挂着它的段也摘掉 */
+export function stripAudioFxFromCuts(p: Project, fxId: string): Project {
+  if (!p.cuts) return p;
+  return {
+    ...p,
+    cuts: p.cuts.map((c) =>
+      c.tracks
+        ? { ...c, tracks: c.tracks.map((t) => ({ ...t, clips: t.clips.map((cl) => (cl.audioFx?.id === fxId ? withoutAudioFx(cl) : cl)) })) }
+        : c),
+  };
+}
+
 /** 滤镜也是项目级的:删滤镜要把停放剪辑里挂着它的段也摘掉,和 stripMediaFromCuts 一个道理 */
 export function stripFilterFromCuts(p: Project, filterId: string): Project {
   if (!p.cuts) return p;

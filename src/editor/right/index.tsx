@@ -30,6 +30,8 @@ import {
 import { createClipGuard, timelineDigest, lookHint } from "./toolEcho";
 import { createTrackTools } from "./trackTools";
 import { createFilterTools } from "./filterTools";
+import { createAudioFxTools } from "./audioFxTools";
+import { audioPlanOf, soundingAt } from "../../kernel/audioPlan.mjs";
 import {
   framePatchFromArgs, worldOf, rectToFrame, alignToFrame, alignIsInvisible, nudgeFrame, clampToStage, rectForSafeSide,
   type Size,
@@ -175,6 +177,57 @@ const clipGuard = createClipGuard();
 const trackTools = createTrackTools({ getState, actions });
 /** 滤镜库工具(list/create/update/remove/apply_filter)。见 filterTools.ts 头注释 */
 const filterTools = createFilterTools({ getState, actions });
+/** 音频效果库工具(list/create/update/remove/apply_audio_fx)。见 audioFxTools.ts 头注释 */
+const audioFxTools = createAudioFxTools({ getState, actions });
+
+/**
+ * 测响度(measure_audio):素材、时间轴片段、或整条时间轴的混音。ffmpeg 在服务端跑(server/vite-plugin-audio.ts),
+ * 这里只把「测谁、从第几秒到第几秒」算清楚。timeline 档把 kernel/audioPlan 的清单整份发过去,回来的逐秒曲线
+ * 再按同一份清单标上那一秒谁在出声 —— Agent 拿到「第 19 秒 -8 LUFS,出声的是配乐 + 配音 04」才能归因。
+ */
+async function measureAudio(args: { clipId?: string; mediaId?: string; scope?: string; series?: boolean }) {
+  const p = getState().project;
+  const scope = args.scope || (args.clipId ? "clip" : args.mediaId ? "media" : "timeline");
+  const mediaOf = (id: string) => {
+    const m = p.media.find((x) => x.id === id);
+    if (!m) throw new Error(`找不到素材 ${id}`);
+    if (m.kind === "image") throw new Error(`「${m.name}」是图片,没有声音`);
+    return { id: m.id, name: m.name, kind: m.kind, url: m.url, path: (m as { path?: string }).path };
+  };
+  let body: Record<string, unknown>;
+  let plan: ReturnType<typeof audioPlanOf> | null = null;
+  if (scope === "clip") {
+    const hit = findClip(p, String(args.clipId || ""));
+    if (!hit) throw new Error(`当前剪辑里没有片段 ${args.clipId || "(没给 clipId)"}`);
+    if (!hit.clip.mediaId || hit.clip.cardId) throw new Error("卡片没有声音;要测的是视频 / 声音片段");
+    body = { scope, media: mediaOf(hit.clip.mediaId), offset: hit.clip.mediaOffset ?? 0, duration: hit.clip.end - hit.clip.start, series: !!args.series };
+  } else if (scope === "media") {
+    body = { scope, media: mediaOf(String(args.mediaId || "")), series: !!args.series };
+  } else {
+    plan = audioPlanOf(p);
+    if (!plan.length) return { ok: true, scope, empty: true, note: "时间轴上没有会出声的片段(隐藏 / 静音的序列和静音的片段不算)" };
+    body = {
+      scope: "timeline",
+      duration: p.duration,
+      entries: plan.map((e) => ({ clipId: e.clipId, media: mediaOf(e.mediaId), start: e.start, dur: e.dur, offset: e.offset, volume: e.volume, fadeIn: e.fadeIn, fadeOut: e.fadeOut })),
+    };
+  }
+  const res = await fetch("/api/audio/measure", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.timeout(55000) });
+  const data = await res.json().catch(() => null);
+  if (!res.ok || !data || data.ok === false) throw new Error(data?.error || `测响度失败(HTTP ${res.status})`);
+  const notes: string[] = Array.isArray(data.notes) ? [...data.notes] : [];
+  const out: Record<string, unknown> = { ...data, scope };
+  if (plan) {
+    if (Array.isArray(data.series)) out.series = data.series.map((s: { t: number }) => ({ ...s, sounding: soundingAt(plan!, s.t) }));
+    const withFx = plan.filter((e) => e.fx).map((e) => e.clipId);
+    if (withFx.length) notes.push(`${withFx.join("、")} 挂着音频效果,这里测的不含效果(效果在 Chrome 里算,导出时才混进去)`);
+    out.clips = plan.map((e) => ({ clipId: e.clipId, mediaId: e.mediaId, start: e.start, end: +(e.start + e.dur).toFixed(3), volume: +e.volume.toFixed(3), ...(e.fx ? { fxId: e.fx.def.id } : null) }));
+  } else if (scope === "clip") {
+    notes.push("测的是这一段用到的那截素材的原声;片段音量、淡入淡出和音频效果都不含");
+  }
+  if (notes.length) out.notes = notes;
+  return out;
+}
 
 /** 正在跑的镜头识别作业,按 mediaId 索引。结果落进 store 后就删掉。 */
 const shotJobs = new Map<string, { jobId: string; percent: number; engine: string; error?: string }>();
@@ -706,6 +759,12 @@ export function RightPanel() {
       updateFilter: (args) => { const r = filterTools.updateFilter(args); clipGuard.noteMutation(); return r; },
       removeFilter: (args) => { const r = filterTools.removeFilter(args); clipGuard.noteMutation(); return r; },
       applyFilter: (args) => { const r = filterTools.applyFilter(args); clipGuard.noteMutation(); return r; },
+      listAudioFx: () => audioFxTools.listAudioFx(),
+      createAudioFx: (args) => { const r = audioFxTools.createAudioFx(args); clipGuard.noteMutation(); return r; },
+      updateAudioFx: (args) => { const r = audioFxTools.updateAudioFx(args); clipGuard.noteMutation(); return r; },
+      removeAudioFx: (args) => { const r = audioFxTools.removeAudioFx(args); clipGuard.noteMutation(); return r; },
+      applyAudioFx: (args) => { const r = audioFxTools.applyAudioFx(args); clipGuard.noteMutation(); return r; },
+      measureAudio: (args) => measureAudio(args),
       seek: (args) => { actions.seek(args.t); return { ok: true }; },
       play: () => { actions.play(); return { ok: true }; },
       pause: () => { actions.pause(); return { ok: true }; },

@@ -272,6 +272,7 @@ async function serveFile(filePath: string, req: Connect.IncomingMessage, res: Se
     else if (filePath.endsWith(".webm")) contentType = "video/webm";
     else if (filePath.endsWith(".mov")) contentType = "video/quicktime";
     else if (filePath.endsWith(".png")) contentType = "image/png";
+    else if (filePath.endsWith(".wav")) contentType = "audio/wav";
     
     if (range) {
       const parts = range.replace(/bytes=/, "").split("-");
@@ -394,6 +395,44 @@ export function exportPlugin(): Plugin {
           return handleDeliverable(res, fileMatch[1], decodeURIComponent(fileMatch[2]));
         }
 
+        // POST /api/export/audio-mix/<id> —— 混音页(src/AudioMixView.tsx)把渲好的 mix.wav 原样交回来,
+        // 写到 export-<id>/audio/mix.wav,export-frames 再用 ffmpeg 合进 preview.mp4。
+        // 路径是「前缀 + id」的形状,因为 api-guard 只按前缀放行原始体(RAW_BODY_PREFIXES)
+        const mixMatch = req.method === "POST" && req.url.match(/^\/api\/export\/audio-mix\/([^/?]+)$/);
+        if (mixMatch) {
+          const id = sanitizeFilename(mixMatch[1]);
+          const dir = path.resolve(outRoot(root), `export-${id}`, "audio");
+          try {
+            await fs.mkdir(dir, { recursive: true });
+            // 直接落盘、不在内存里拼:float32 立体声 48k 一小时 1.4 GB。上限 3 GB(约两小时)
+            const MAX = 3 * 1024 * 1024 * 1024;
+            let bytes = 0;
+            let over = false;
+            const out = (await import("fs")).createWriteStream(path.resolve(dir, "mix.wav"));
+            await new Promise<void>((resolve, reject) => {
+              req.on("data", (c: Buffer) => {
+                if (over) return;
+                bytes += c.length;
+                if (bytes > MAX) { over = true; out.destroy(); req.destroy(); return; }
+                out.write(c);
+              });
+              req.on("end", () => out.end(() => resolve()));
+              req.on("error", reject);
+              out.on("error", reject);
+            });
+            if (over) {
+              res.statusCode = 413;
+              return res.end(JSON.stringify({ ok: false, error: "混音超过 3 GB,没有保存" }));
+            }
+            const buf = { length: bytes };
+            res.setHeader("Content-Type", "application/json");
+            return res.end(JSON.stringify({ ok: true, bytes: buf.length }));
+          } catch (e) {
+            res.statusCode = 500;
+            return res.end(JSON.stringify({ ok: false, error: e instanceof Error ? e.message : String(e) }));
+          }
+        }
+
         // POST /api/export/<id>/reveal —— 在文件管理器里打开产物目录
         const revealMatch = req.method === "POST" && req.url.match(/^\/api\/export\/([^/]+)\/reveal$/);
         if (revealMatch) {
@@ -429,6 +468,13 @@ export function exportPlugin(): Plugin {
             const id = match[1];
             const name = sanitizeFilename(decodeURIComponent(match[2]));
             return serveFile(path.resolve(outRoot(root), `export-${id}`, "media", name), req, res);
+          }
+          // GET /@export/<id>/audio/<文件> —— 混音页读裁好的 wav 和 plan.json
+          match = url.match(/^\/@export\/([^/]+)\/audio\/([^/]+)$/);
+          if (match) {
+            const id = sanitizeFilename(match[1]);
+            const name = sanitizeFilename(decodeURIComponent(match[2]));
+            return serveFile(path.resolve(outRoot(root), `export-${id}`, "audio", name), req, res);
           }
           match = url.match(/^\/@export\/media\/(.+)$/);
           if (match) {

@@ -1,6 +1,8 @@
 import { useLayoutEffect, useReducer, useRef, useSyncExternalStore } from "react";
 import { emphasisFilter } from "../../kernel/emphasis";
 import { clipFilterOpsAt, cssFilter, type FilterDef } from "../../kernel/filters.mjs";
+import type { AudioFxDef } from "../../kernel/audioFx.mjs";
+import { releasePreviewAudio, routePreviewAudio } from "../../audio/previewAudio";
 import { frameCss } from "../../kernel/layout";
 import { audioClipsAt, nextVideoLayerAfter, videoLayersAt, type MediaAsset, type Project, type TrackClip } from "../../kernel/project";
 import { isScrubbing, subscribeScrub } from "../timeline/useScrub";
@@ -107,7 +109,7 @@ function targetTimeOf(clip: TrackClip, t: number) {
 /**
  * 素材层元素上的 filter:先滤镜(kernel/filters.mjs,和导出、see_frames 同一份数值)、后强调的 drop-shadow ——
  * 影子是调过色的画面投下的,和导出链上「先滤镜、后强调」一个顺序。强调和舞台那边同一份计算(kernel/emphasis.ts)。
- * 元素在片段的框里、外面整体 transform 缩放,所以 blur 直接写画布像素。两样都没有就不写这个属性。
+ * 元素在片段的框里、外面整体 transform 缩放,所以 blur 写的是框内像素(落到画布上要乘 frame.scale,导出那边 blurScale = p.scale 一致)。两样都没有就不写这个属性。
  */
 function filterOf(clip: TrackClip, filters: FilterDef[] | undefined, t: number): string | undefined {
   const ops = filters?.length ? clipFilterOpsAt({ filters }, clip, t) : null;
@@ -155,9 +157,12 @@ function VideoTrack({
   gain = 1,
   stage,
   filters,
+  audioFx,
 }: {
   /** 项目的滤镜库(片段的 clip.filter 引用其中一条) */
   filters?: FilterDef[];
+  /** 项目的音频效果库(片段的 clip.audioFx 引用其中一条);预览接 Web Audio,见 audio/previewAudio.ts */
+  audioFx?: AudioFxDef[];
   /** 这条序列此刻的画面段(videoLayersAt 里属于它的那条),没有是 null */
   cur: Layer | null;
   /** 这条序列 t 之后的第一段画面(nextVideoLayerAfter) */
@@ -224,8 +229,11 @@ function VideoTrack({
         // 画面淡下去的同时声音也跟着淡:交叉溶解时两段的声音不会重叠成双倍
         driveMedia(el, { target: targetTimeOf(cur.clip, t), playing, volume: muted || cur.clip.audioMuted ? 0 : cur.opacity * gain * (cur.clip.audioVolume ?? 1), scrubbing });
         slots.current[i].opacity = cur.opacity;
+        // 音频效果:音量(el.volume)之后、喇叭之前,和导出一个顺序。导出(muted)时页面不出声,不接
+        if (!muted) routePreviewAudio(el, audioFx, cur.clip, t, playing);
       } else {
         releaseMedia(el);
+        if (!muted) routePreviewAudio(el, audioFx, null, t, playing);
       }
       // 兜底:同一个文件 seek 到原地这类情况不会有新帧交出来,rVFC 不回调;解码好了、时刻对得上也算好
       const s = slots.current[i];
@@ -244,6 +252,8 @@ function VideoTrack({
     return () => {
       releaseMedia(a);
       releaseMedia(b);
+      releasePreviewAudio(a);
+      releasePreviewAudio(b);
     };
   }, []);
 
@@ -283,15 +293,19 @@ function VideoTrack({
   );
 }
 
-function AudioLayer({ clip, media, volume, t, playing, scrubbing }: { clip: TrackClip; media: MediaAsset; volume: number; t: number; playing: boolean; scrubbing: boolean }) {
+function AudioLayer({ clip, media, volume, t, playing, scrubbing, audioFx }: { clip: TrackClip; media: MediaAsset; volume: number; t: number; playing: boolean; scrubbing: boolean; audioFx?: AudioFxDef[] }) {
   const ref = useRef<HTMLAudioElement>(null);
   const target = targetTimeOf(clip, t);
   useLayoutEffect(() => {
     driveMedia(ref.current, { target, playing, volume, scrubbing });
-  }, [target, playing, volume, scrubbing]);
+    routePreviewAudio(ref.current, audioFx, clip, t, playing);
+  }, [target, playing, volume, scrubbing, audioFx, clip, t]);
   useLayoutEffect(() => {
     const el = ref.current;
-    return () => releaseMedia(el);
+    return () => {
+      releaseMedia(el);
+      releasePreviewAudio(el);
+    };
   }, []);
   return <audio ref={ref} src={media.url} preload="auto" hidden />;
 }
@@ -344,10 +358,11 @@ export function MediaLayers({
           gain={project.tracks.find((track) => track.id === id)?.muted ? 0 : master}
           stage={stage}
           filters={project.filters}
+          audioFx={project.audioFx}
         />
       ))}
       {audios.map((a) => (
-        <AudioLayer key={a.clip.id} clip={a.clip} media={a.media} volume={a.volume * master} t={t} playing={playing} scrubbing={scrubbing} />
+        <AudioLayer key={a.clip.id} clip={a.clip} media={a.media} volume={a.volume * master} t={t} playing={playing} scrubbing={scrubbing} audioFx={project.audioFx} />
       ))}
     </>
   );

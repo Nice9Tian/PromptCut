@@ -85,7 +85,12 @@ PromptCut 使用多轨模型 (`Project` 对象):
     - **看不清就加强调**：`set_emphasis({ clipId, kind: "shadow" | "outline", color?, size?, opacity?, dx?, dy? })`，`kind: "none"` 去掉。阴影和描边都**沿着画面里不透明部分的边缘**走（按 alpha 通道算），所以描的是文字和图形的边，不是那个方框——字幕、标题压在花哨背景上看不清时先用它，比降低背景不透明度更不伤画面。整块不透明的画面（视频、满幅图片）只会在方框外圈看到一条边。
     - **只要声音**：`create_audio({ mediaId })` 在素材库里派生一份「只有声音」的素材（和源视频同一个文件，不转码，瞬间完成），之后 `add_clip` 用这个 mediaId 就是纯音频段；`create_audio({ clipId })` 把时间轴上那一段**就地**转成声音（画面没了，位置、长度、淡入淡出都留着）。用户说「把这段视频的声音留下 / 只要人声 / 画面不要了」时用它。
       **淡入淡出对声音一样有效**：预览里按音量、导出按 `afade`，视频自带的声音也跟着画面一起淡。给声音加淡入淡出照样用 `add_transition({ kind: "fadeIn" | "fadeOut", clipId })`。
-      **音量**：`set_clip_volume({ clipId, volume })`，0~1（0 无声、0.5 一半、1 原声，默认 1），只改声音、不动画面，淡入淡出保留。**`update_clip` 的参数和 `set_clip` 的 `blend` 里都没有音量**，传了会被拒。配乐给人声让路一般压到 0.2~0.35。
+      **音量**：`set_clip_volume({ clipId, volume })`，0~1（0 无声、0.5 一半、1 原声，默认 1），只改声音、不动画面，淡入淡出保留。**`update_clip` 的参数和 `set_clip` 的 `blend` 里都没有音量**，传了会被拒。
+      **你听不见声音，调音量前先测**：`measure_audio({ clipId })` 给这一段素材原声的整体响度（integrated，LUFS）和峰值；把人声段和配乐段各测一遍，**人声要比配乐 / 环境音响 12~15 LU 才听得清**（不是「压到 0.3」这种固定数：同一批素材里配乐本身就常比人声响 10 LU，0.3 只压 10 dB，还是盖住人声）。要压低 X dB 就 volume = 10^(-X/20)（12 dB ≈ 0.25，15 dB ≈ 0.18）；算完再 `measure_audio({ scope: "timeline" })` 看混在一起的结果：integrated 离 -14 LUFS 多远、truePeak 有没有超过 -1（超过 0 就是削波爆音），series 里逐秒找哪一秒太吵、是谁吵。
+    - **音频效果**（挂在视频 / 声音片段上，素材库「音频效果」页）：`list_audio_fx` 看效果库、十一种效果的参数和几条预设 → `create_audio_fx` 建一个 → `apply_audio_fx` 挂到片段上（`update_audio_fx` 改了所有挂着它的段都跟着变，`remove_audio_fx` 删）。种类：gain 增益（**能超过 0 dB，是把太轻的人声放大的唯一办法**，片段音量最大只到 1）、highpass / lowpass 高低通、peaking / lowshelf / highshelf 均衡、compressor 压缩、limiter 限幅（混音后峰值超 0 dB 时挂在最响的段上）、delay 回声、reverb 混响、pan 声像。
+      - 参数可以随时间变：写表达式字符串，t 是**片段内**秒数、d 是片段时长、p = t/d；要每段强弱不同就在 params 里声明参数、挂的时候给那一段传值（和滤镜一个写法）。
+      - 常见组合直接用预设（人声清晰 / 压低背景 / 电话音 / 房间混响 / 大厅混响 / 防削波限幅），`list_audio_fx` 的 presets 里有，照着 `create_audio_fx` 就行。同一种效果用到好几段时建**一个**挂到多段上。
+      - 预览和导出用同一张 Web Audio 节点图，用户在编辑台听到的就是导出的；`measure_audio` 测的是效果之前的原声。
     - **音画分离**：`separate_audio({ clipId })` 把一段视频的声音拆到它正下方的新序列里，成为独立的音频段（位置、素材偏移、音量、淡入淡出都带过去），原视频留着画面、自带声音静音。之后这段声音就能单独调音量、淡入淡出、挪位置、删掉。用户说「分离音频 / 把原声单独拿出来 / 只要环境音」时用它；和 `create_audio({ clipId })` 的区别是画面还在。
     - **转场是对象，而且会把片段绑成一组**：`add_transition({ kind, clipId, otherClipId?, dur })` —— `crossfade` 交叉溶解要两段**首尾相接**的片段（会把后一段往前拉出重叠、必要时挪到另一条序列，因为同一条序列内不允许重叠）、`fadeIn` 只加在片段开头、`fadeOut` 只加在结尾。
       加完那几段的**相对时间关系就锁住了**：单独改时长、换序列、`split_clip`、手改转场那一侧的 `fadeIn`/`fadeOut` 都会被拒并告诉你原因；**整组平移不受限制**（`update_clip({ clipId, start })` 挪其中任意一段，同组的跟着一起走）。要单独调先 `remove_transition({ transitionId })`（`list_transitions` 或 `get_project` 的 `transitions` 里拿 id），删完淡化会擦掉、交叉溶解还会尽量把后一段放回原位。

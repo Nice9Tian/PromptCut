@@ -167,3 +167,17 @@ test("ffmpeg:命名实例、模糊包一圈透明边、逐帧命令", () => {
   assert.match(ffmpegStaticChain([{ kind: "invert", value: 0.8 }]), /^lutrgb=r=val\*-0\.6\+204\.5:/);
   assert.match(ffmpegStaticChain([{ kind: "blur", value: 3 }], 2), /pad=iw\+36:ih\+36:18:18:.*gblur=sigma=6:steps=6/);
 });
+
+// 工程文件里的坏表达式(别的版本存的、手改过的):预览每帧都在 render 里调 resolveOps,抛了就是白屏
+test("坏表达式按中性算、不抛;isAnimated 按 false", () => {
+  const def = { ops: [{ kind: "brightness", value: "nope + 1" }, { kind: "blur", value: 3 }] };
+  assert.deepEqual(resolveOps(def, undefined, 1, 2), [{ kind: "brightness", value: 1 }, { kind: "blur", value: 3 }]);
+  assert.equal(isAnimated(def), false);
+});
+
+test("sendcmd 脚本:数值没变的帧不发命令", () => {
+  const def = { ops: [{ kind: "brightness", value: "step(1, t)" }] };
+  const frames = [0, 0.5, 1, 1.5, 2].map((t) => ({ ts: t, t }));
+  const { script } = sendcmdScript(def, undefined, 2, frames, "d", 1, 30);
+  assert.equal(script.trim().split("\n").length, 2, "0 和 1 处各一次");
+});

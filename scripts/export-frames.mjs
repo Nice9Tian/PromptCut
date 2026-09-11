@@ -5,6 +5,7 @@ import fsSync from 'node:fs';
 import { spawn, execFileSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import { buildComposeArgs, clipFrameRange, composeLayers } from '../server/export-compose.mjs';
+import { buildAudioPlan, buildFfmpegArgs, hasAudioStream } from './mux-audio.mjs';
 
 /**
  * 逐帧导出 —— beginFrame 后端。
@@ -965,6 +966,8 @@ async function fillGlassGaps(dir, startFrame, endFrame, width, height) {
  *                      (server/export-compose.mjs)。frames/ 和 overlay.mov 因此**只有卡片**。
  *   'chrome'       —— 以前的做法:素材挂进页面逐帧 seek,烤进每一张 PNG。留作对账和兜底。
  *   外部传进来的 bakery 已经导航到某个地址,改不了页面,按 'chrome' 处理。
+ * opts.audio:声音怎么混。默认在 Chrome 里(OfflineAudioContext,带音频效果,见 mixAudioInChrome);
+ *   'ffmpeg' 走 scripts/mux-audio.mjs 的滤镜图直接混(没有效果),对账和兜底用。
  */
 export async function exportFrames(opts) {
   const outDir = opts.out || 'out';
@@ -1019,22 +1022,43 @@ export async function exportFrames(opts) {
        */
       const layers = (plan?.layers || []).filter((l) => clipFrameRange(l.clip, fps, startFrame, endFrame));
       await composePreview({ ffmpegCmd, baked, layers, outDir });
-      // 音轨:逐帧截图只有画面,声音在这里拼回去(配乐 + 视频自带的声音)
+      // 音轨:逐帧截图只有画面,声音在这里拼回去(配乐 + 视频自带的声音 + 音频效果)
       try {
-        const { buildAudioPlan, buildFfmpegArgs, hasAudioStream } = await import('./mux-audio.mjs');
-        const projectJsonPath = path.join(outDir, 'project.json');
-        if (fsSync.existsSync(projectJsonPath)) {
-          const proj = JSON.parse(fsSync.readFileSync(projectJsonPath, 'utf8'));
+        // 页面拿的是哪份项目就混哪份(和 planMedia 同一个 loadProject):以前只认 <out>/project.json,
+        // 命令行 --out 指到别处时就静悄悄地没声音
+        const proj = await loadProject(opts.url || DEFAULT_URL, outDir);
+        if (proj) {
           const ffprobeCmd = ffprobeOf(ffmpegCmd);
           // 和画面层同一套找素材的规则:素材库里的 /@media/<文件> 也要找得到,不然配乐 / 配音全被跳过
           const sourceOf = (m) => mediaSourceOf(m, { outDir, pageUrl: opts.url || DEFAULT_URL, mediaRoot: mediaRootDir() });
           const plan = buildAudioPlan(proj, outDir, undefined, sourceOf).filter((c) => hasAudioStream(c.file, ffprobeCmd));
           if (plan.length > 0) {
+            const preview = path.join(outDir, 'preview.mp4');
             const withAudio = path.join(outDir, 'preview-audio.mp4');
-            console.log(`Muxing ${plan.length} audio clip(s)...`);
-            await runFfmpeg(buildFfmpegArgs(path.join(outDir, 'preview.mp4'), plan, withAudio, durationSec));
-            fsSync.rmSync(path.join(outDir, 'preview.mp4'));
-            fsSync.renameSync(withAudio, path.join(outDir, 'preview.mp4'));
+            /*
+             * 默认在 Chrome 里混(OfflineAudioContext,和编辑台预览同一套效果链,见 src/audio/renderMix.ts):
+             * 音频效果只有这条路才有。失败(混音页起不来、页面地址没有 /@export/<id>)就退回 ffmpeg 直接混 ——
+             * 那样效果没了,但配乐 / 配音 / 原声都在;--audio ffmpeg 强制走老路(对账用)。
+             */
+            let mixed = false;
+            if (opts.audio !== 'ffmpeg') {
+              try {
+                const r = await mixAudioInChrome({ ffmpegCmd, outDir, plan, pageUrl: opts.url || DEFAULT_URL, durationSec });
+                await runFfmpeg(['-y', '-i', preview, '-i', r.mixWav, '-map', '0:v', '-map', '1:a', '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', '-t', String(durationSec), withAudio]);
+                mixed = true;
+                // 裁好的 float32 wav 和整条 mix.wav 一小时就是一两 GB,合进成片之后就没用了
+                await fs.rm(path.join(outDir, 'audio'), { recursive: true, force: true }).catch(() => {});
+              } catch (e) {
+                const fx = plan.filter((c) => c.fx).length;
+                console.error('Chrome 混音失败,退回 ffmpeg 直接混' + (fx ? '(' + fx + ' 段挂着的音频效果会丢)' : '') + ':', e.message);
+              }
+            }
+            if (!mixed) {
+              console.log('Muxing ' + plan.length + ' audio clip(s) with ffmpeg...');
+              await runFfmpeg(buildFfmpegArgs(preview, plan, withAudio, durationSec));
+            }
+            fsSync.rmSync(preview);
+            fsSync.renameSync(withAudio, preview);
             console.log('Audio muxed into preview.mp4');
           } else {
             console.log('No audio clips; preview.mp4 stays silent.');
@@ -1050,6 +1074,75 @@ export async function exportFrames(opts) {
       process.exitCode = 1;
     }
   }
+}
+
+/**
+ * 声音在 Chrome 里混:每段先用 ffmpeg 裁出时间轴用到的那一截(48 kHz 立体声 float wav,几 MB),
+ * 写一份 plan.json,开混音页(?audioMix=1,src/AudioMixView.tsx)在 OfflineAudioContext 里按位置、音量、
+ * 淡入淡出、音频效果渲成整条 mix.wav 交回服务端(POST /api/export/<id>/audio-mix)。
+ * 页面和预览用同一份效果链(src/audio/fxChain.ts),所以编辑台听到的就是导出的。
+ * 需要页面地址里有 /@export/<id>/project.json —— 裁好的 wav 就靠这个 id 从 dev server 取。
+ */
+async function mixAudioInChrome({ ffmpegCmd, outDir, plan, pageUrl, durationSec }) {
+  const u = new URL(pageUrl);
+  const m = /^\/@export\/([^/]+)\/project\.json$/.exec(u.searchParams.get('timeline') || '');
+  if (!m) throw new Error('页面地址里没有 /@export/<id>/project.json,混音页取不到裁好的 wav');
+  const id = m[1];
+  // 时间轴时长之后才开始的段不出声,不用裁(项目 duration 比内容短时 plan 里会有这种段)
+  plan = plan.filter((e) => e.start < durationSec);
+  const audioDir = path.join(outDir, 'audio');
+  await fs.mkdir(audioDir, { recursive: true });
+  const run = (args) => new Promise((resolve, reject) => {
+    const p = spawn(ffmpegCmd, args, { stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true });
+    let err = '';
+    p.stderr.on('data', (d) => { err += d; });
+    p.on('close', (code) => (code === 0 ? resolve() : reject(new Error('ffmpeg 退出码 ' + code + ':' + err.trim().slice(-400)))));
+    p.on('error', reject);
+  });
+  // 裁段:4 个并行,每段只解用到的那几秒
+  const clips = new Array(plan.length);
+  let next = 0;
+  let aborted = false;
+  const worker = async () => {
+    while (next < plan.length && !aborted) {
+      const i = next++;
+      const e = plan[i];
+      const wav = path.join(audioDir, 'clip-' + i + '.wav');
+      await run(['-y', '-hide_banner', '-loglevel', 'error', '-ss', String(e.offset), '-t', String(e.dur), '-i', e.file,
+        '-vn', '-sn', '-dn', '-ac', '2', '-ar', '48000', '-c:a', 'pcm_f32le', wav]);
+      clips[i] = { clipId: e.clipId, url: '/@export/' + id + '/audio/clip-' + i + '.wav', start: e.start, dur: e.dur, volume: e.volume, fadeIn: e.fadeIn, fadeOut: e.fadeOut, fx: e.fx };
+    }
+  };
+  // 一个裁段失败就让其余 worker 停下来,别让孤儿 ffmpeg 继续往 audio/ 里写
+  await Promise.all(Array.from({ length: Math.min(4, plan.length) }, worker)).catch((e) => { aborted = true; throw e; });
+  const mixPlan = { sampleRate: 48000, duration: Number(durationSec), clips };
+  await fs.writeFile(path.join(audioDir, 'plan.json'), JSON.stringify(mixPlan));
+
+  console.log('Mixing ' + clips.length + ' audio clip(s) in Chrome...');
+  const browser = await puppeteer.launch({ headless: 'shell', protocolTimeout: 120000, args: ['--disable-gpu', '--autoplay-policy=no-user-gesture-required'] });
+  let result;
+  try {
+    const page = await browser.newPage();
+    page.on('console', (msg) => { if (msg.type() === 'error' || msg.type() === 'warn') console.log('MIX LOG:', msg.text()); });
+    const mixUrl = u.origin + '/?audioMix=1&plan=' + encodeURIComponent('/@export/' + id + '/audio/plan.json') + '&out=' + encodeURIComponent('/api/export/audio-mix/' + id);
+    const resp = await page.goto(mixUrl, { waitUntil: 'load', timeout: 60000 });
+    // 拿到的不是混音页(403 说明页、404)就当场失败,别等到超时才退回 ffmpeg
+    if (resp && !resp.ok()) throw new Error('混音页打不开:HTTP ' + resp.status());
+    const handle = await page.waitForFunction(() => window.__pcAudioMix, { timeout: 90000, polling: 200 }).catch(async (e) => {
+      const title = await page.title().catch(() => '');
+      throw new Error('混音页 90 秒没有结果(页面标题「' + title + '」):' + e.message);
+    });
+    result = await handle.jsonValue();
+  } finally {
+    await browser.close().catch(() => {});
+  }
+  if (!result?.ok) throw new Error(result?.error || '混音页没有返回结果');
+  for (const n of result.notes || []) console.warn('混音:', n);
+  const mixWav = path.join(audioDir, 'mix.wav');
+  if (!fsSync.existsSync(mixWav)) throw new Error('mix.wav 没交回来');
+  const peakDb = 20 * Math.log10(Math.max(result.peak || 0, 1e-9));
+  console.log('Chrome mix done in ' + ((result.renderMs || 0) / 1000).toFixed(2) + ' s, peak ' + peakDb.toFixed(1) + ' dBFS' + (peakDb > 0 ? '(削波!挂个 limiter 或压低音量)' : ''));
+  return { mixWav, clips: clips.length };
 }
 
 /**
@@ -1156,6 +1249,7 @@ if (isMain) {
     if (args[i] === '--url') opts.url = args[++i];
     else if (args[i] === '--workers') opts.workers = args[++i];
     else if (args[i] === '--media') opts.media = args[++i];
+    else if (args[i] === '--audio') opts.audio = args[++i]; // ffmpeg:不走 Chrome 混音(没有音频效果),对账用
     else if (args[i] === '--out') opts.out = args[++i];
     else if (args[i] === '--frames') opts.frames = args[++i];
     else if (args[i] === '--fps') opts.fps = parseFloat(args[++i]);
