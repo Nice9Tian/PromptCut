@@ -225,7 +225,7 @@ function pumpRenderQueue() {
   /*
    * 导出也占槽位(它自己起 Chrome,不走这个队列,见 render-pool-state.mjs)。
    * 按计划 3.3 节:导出期间**空闲预烘整个暂停** —— 预烘是给 3D 视图猜着先烘的,导出时用户多半
-   * 不在看;Agent 的活照常,还能用上导出之外的全部槽位(导出最多占 max - 1 个,默认单进程只占 1 个)。
+   * 不在看;Agent 的活照常,还能用上导出之外的全部槽位(导出最多占 max - 1 个,默认按资源自动分片)。
    */
   const exporting = exportsRunning();
   while (renderWaiting.length) {

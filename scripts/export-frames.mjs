@@ -777,7 +777,7 @@ export async function bakeFrames(bakery, opts = {}) {
  * **实测远到不了这个上限**(demo 全长 1800 帧 + 粒子 + scene-3d,28 线程机器):
  *   1 个 54.8s / 4 个 44.8s / 8 个 62.4s(比单进程还慢),三种输出两两 1800/1800 逐字节相同。
  * 软件光栅化的 Chrome 同时跑几个就互相抢 CPU,「推到自己那段开头」的钱又省不掉。
- * 所以默认单进程,分片只作为可选项(--workers N),'auto' 最多 4 个。
+ * 导出默认使用 auto 分片；显式 --workers 1 可退回单进程，'auto' 最多 4 个。
  * 真要大幅提速得换思路:按片段边界跳过前面的推进(对全局随机数流有影响,见 pinEntropy.ts),
  * 或者用 HTML 采样缓存乱序重截(scripts/replay-frames.mjs)。
  *
@@ -1073,7 +1073,7 @@ async function fillGlassGaps(dir, startFrame, endFrame, width, height) {
 
 /**
  * 一次性导出:自己开 bakery、烘帧、合成视频、关掉。CLI 和现有的 /api/export 走这条。
- * opts.workers:1(默认)/ 数字 / 'auto'。离散取样(targetFrames)和外部传进来的 bakery 一律单进程。
+ * opts.workers:数字 / 'auto'（默认）。离散取样(targetFrames)和外部传进来的 bakery 一律单进程。
  * opts.media:素材怎么进成片。
  *   'chrome'(默认)—— 预览、see_frames、导出共用 FramePipeline/Chrome 页面，视频素材在截图帧才加载。
  *   'ffmpeg'       —— 兼容旁路:页面只渲卡片的透明层(?cardsOnly=1),视频 / 图片由 ffmpeg 合进 preview.mp4
@@ -1377,8 +1377,7 @@ const isMain = import.meta.url.startsWith('file:') && process.argv[1] === fileUR
 
 if (isMain) {
   const args = process.argv.slice(2);
-  // 默认单进程:分片的每一片都要从第 0 帧推起,实测提速有限、还和别的 Chrome 抢 CPU(见 balancedShards 上面)。
-  // 以前这里默认 'auto',而 /api/export 不传 --workers,于是每次导出都开到 4 个分片
+  // 默认按机器资源分片；显式 --workers 1 可复现单进程路径。
   const opts = { noVideo: false, workers: 'auto' };
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--url') opts.url = args[++i];
