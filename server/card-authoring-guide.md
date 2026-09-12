@@ -78,8 +78,17 @@ export const priceTag: CardDef<Params> = {
 | `defaults` | ✓ | 每个参数的默认值。见下面「默认值规则」 |
 | `controls` | ✓ | 参数控件表。界面面板和 AI 都靠它了解 schema |
 | `Component` | ✓ | React 组件 |
+| `frameMode` | 建议 | `"direct"`（直接求值动画）：包括过渡在内，画面由 `params` 和局部时间 `t` 直接计算，可随机访问；`"stateful"`（状态推进动画）：依赖 Motion、CSS 动画、rAF 或模拟的历史，需要推进。是否使用 React 与这个分类无关。未填写默认保留历史；旧卡明确声明 `settleMs: 0, after: "hold"` 时自动按静态直接求值处理。 |
 | `parts` | 建议 | **部件树**(约定封装的结构):这张卡对外由哪几块组成,每块由哪些参数驱动、什么时候进场、多久落定。代码页和 `get_clip` 按它组织参数。见下面「部件树与生命周期」 |
 | `lifecycle` | 建议 | **生命周期**(约定封装的时间):进场多久落定(`settleMs`)、之后 `hold` 停住 / `loop` 循环 / `evolve` 持续变化、支持的退场(`exit`,目前都是 `["fade"]`) |
+
+### 直接访问与异步就绪
+
+字幕、纸纹以及能用 `t` 算出完整样式的卡优先使用 `frameMode: "direct"`，例如 `style={{ opacity: Math.min(1, t / 0.2) }}`。不要依赖挂载时刻、系统时钟或前一次渲染；预览会把它直接放到目标时间，状态推进动画才推演历史。`motion/react` 和粒子播放器的 React 外壳不代表它们能够直接求值。
+
+兼容旧项目：原 `frameMode: "react"` 按 `"direct"` 读取，原 `"non-react"` 按 `"stateful"` 读取，无须重写旧 `.proc` 中的卡片源码。新卡统一使用新名称。
+
+异步初始化（加载配置、构建 Canvas/WebGL 等）必须声明就绪状态，不能只靠 DOM 暂时没有变化判断。使用 `import { beginFrameWork } from "../../kernel/frameReady"`；在 effect 启动时创建 `const ready = beginFrameWork("控件名称")`，数据和画面准备好后调 `ready.ready()`，失败调 `ready.fail(error)`，effect 清理时调 `ready.dispose()`。截图会等待该状态以及字体、图片和视频解码完成；失败会明确报错。
 
 ### 部件树与生命周期(约定封装)
 
