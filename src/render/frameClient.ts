@@ -60,7 +60,7 @@ export async function frameRequest(operation: string, project: Project, extra: R
 }
 export async function collectSnapshots(project: Project) {
   const result = await frameRequest("archive", project, {}, undefined, { target: "user", lane: "user" });
-  saved = { signature: signature(project), snapshots: result.snapshots };
+  saved = typeof result.snapshots === "string" ? { signature: signature(project), snapshots: result.snapshots } : null;
   restorePending = null;
 }
 /** Timeline preview and Agent use this same server queue. */

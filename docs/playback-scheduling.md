@@ -58,6 +58,16 @@ MOV 同时可由标准工具读取完整时长与已填入的帧。
 每个活跃 HTML archive 独占临时展开目录；保存时版本检查保留并发新增帧。
 HTML 压缩块同时按时间和 8 MiB 编码字节数切分，避免真实项目中的大画布快照累积超过解码上限。
 
+## 长时间运行的内存边界
+
+冷启动的整帧和新发现的控件从第一张快照开始使用可落盘的 LazyFrameStore；每个展开窗口同时限制 16 帧和 8 MiB 字符存储估算。保存时按序读取暂存帧、逐块合并差分，不一次性展开全部暂存文件。小差分复制为独立字符串，避免 V8 子串保留整张大快照。
+
+本机完整缓存使用 `html-manifest.json` 和 `html-blocks/<sha256>.base64`。manifest 仅保存索引，压缩块按需读盘；不能因为已经 gzip 就把整部影片的所有压缩块常驻内存。后台最多每 16 帧发布一次增量；没有新帧时不重复保存。多进程通过原子 manifest 发布交换缓存，内容寻址的块文件不会被原地修改。
+
+便携 `.proc` 仍可读取原 v1/v2 内嵌归档。压缩块总量超过 16 MiB 时，`/archive` 返回 `snapshots: null, localOnly: true`，完整缓存继续留在本机，不由预览轮询传给 WebView，也不内嵌到 `.proc`。项目编排、素材引用和卡片源码不受影响，其他机器可重新生成缓存。旧版超过 32 MiB 的本机单文件缓存作为可再生数据跳过，避免启动时再次整体读入。
+
+`server/test/frame-memory.test.mjs` 在 192 MiB 堆上验证冷采样、控件、增量保存、难压缩大缓存、重新打开和便携归档的大小检查。
+
 ## 验证
 
 - `node --test server/test/frame-playback.test.mjs server/test/frame-user-watchdog.test.mjs server/test/frame-archive.test.mjs`

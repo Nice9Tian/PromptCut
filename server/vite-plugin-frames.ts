@@ -131,14 +131,15 @@ export function framesPlugin(): Plugin {
               const archive = unpackFrameArchive(input.snapshots, entry.key, { spillDir: path.join(entry.dir, "html-cache") });
               entry.html = archive.frames;
               entry.controls = archive.controls;
+              entry.createControl = archive.createControl;
               entry.disposeArchive?.(); entry.disposeArchive = archive.dispose;
               entry.recordVersion = (entry.recordVersion || 0) + 1;
               await service.save(entry);
             }
             catch { return json(200, { discarded: true }); }
           } else if (url.pathname === "/archive") {
-            await service.save(entry);
-            return json(200, { key: entry.key, snapshots: await fsp.readFile(path.join(entry.dir, "snapshots.base64"), "utf8") });
+            const snapshots = await service.portableArchive(entry);
+            return json(200, { key: entry.key, snapshots, localOnly: snapshots === null });
           } else if (url.pathname !== "/status") return json(404, { error: "Unknown frame operation" });
           await entry.mov?.ready;
           const videoReady = await fsp.access(path.join(entry.dir, "preview.mp4")).then(() => true, () => false);

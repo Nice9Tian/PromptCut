@@ -139,15 +139,19 @@ fn is_proc_locked(locks: tauri::State<'_, proc_lock::ProcLocks>, proc_path: Stri
     proc_lock::is_locked_by_other(&locks, &proc_path)
 }
 
-/// Build a JS snippet that writes `message` into `#status`, polling until
-/// the DOM element exists (the sidecar may crash before the wait page finishes
-/// parsing, so `getElementById` could return null on the first attempt).
+/// Report both startup failures and a backend exit after the editor loaded.
 fn status_eval_script(message: &str) -> String {
     let literal =
         serde_json::to_string(message).unwrap_or_else(|_| "\"(internal error)\"".to_string());
     format!(
         "(function(){{var m={};function w(){{var e=document.getElementById('status');\
-         if(e){{e.innerText=m;}}else{{setTimeout(w,100);}}}}w();}})()",
+         if(e){{e.innerText=m;return;}}\
+         e=document.getElementById('pc-service-error');\
+         if(!e){{e=document.createElement('div');e.id='pc-service-error';e.setAttribute('role','alert');\
+         e.style.cssText='position:fixed;left:16px;right:16px;bottom:16px;z-index:2147483647;padding:16px;background:#842323;color:white;white-space:pre-wrap;font:14px sans-serif';\
+         document.body.appendChild(e);}}\
+         e.textContent=m+'\\n编辑器中的未保存内容仍然保留，请勿直接刷新页面。';}}\
+         if(document.body){{w();}}else{{document.addEventListener('DOMContentLoaded',w,{{once:true}});}}}})()",
         literal
     )
 }

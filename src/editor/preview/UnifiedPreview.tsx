@@ -30,11 +30,13 @@ export function UnifiedPreview({ project, t, playing }: { project: Project; t: n
 
   useEffect(() => {
     let active = true, inFlight = false, pending = false;
+    let retry: ReturnType<typeof setTimeout>;
     let controller: AbortController | null = null;
     const fps = Math.max(1, project.fps || 30);
     const draw = async () => {
       pending = true;
       if (inFlight || !active || latest.current.playing) return;
+      clearTimeout(retry);
       inFlight = true;
       while (active && pending && !latest.current.playing) {
         pending = false;
@@ -47,7 +49,14 @@ export function UnifiedPreview({ project, t, playing }: { project: Project; t: n
             if (result.frames[0]) setImage({ project, url: result.frames[0].url });
             setError("");
           }
-        } catch (e) { if (active && !controller.signal.aborted) setError(String(e)); }
+        } catch (e) {
+          if (active && !controller.signal.aborted) {
+            setError(String(e));
+            // A backend restart should recover the paused frame without
+            // requiring a timeline edit or a reload of unsaved work.
+            if ((e as { retryable?: boolean }).retryable) retry = setTimeout(() => { void draw(); }, 2000);
+          }
+        }
         if (Math.round(requested * fps) !== Math.round(latest.current.t * fps)) pending = true;
       }
       inFlight = false;
@@ -56,7 +65,7 @@ export function UnifiedPreview({ project, t, playing }: { project: Project; t: n
       if (latest.current.playing) controller?.abort(); else void draw();
     };
     void draw();
-    return () => { active = false; controller?.abort(); };
+    return () => { active = false; clearTimeout(retry); controller?.abort(); };
   }, [project]);
   useEffect(() => { requestFrame.current(); }, [Math.round(t * (project.fps || 30)), playing, project]);
 
@@ -77,7 +86,7 @@ export function UnifiedPreview({ project, t, playing }: { project: Project; t: n
           deliveryMs: Math.min(5000, player.deliveryMs + 150) }, controller.signal);
         if (active && !status.closed && clock.playing === latest.current.playing) {
           player.update(status);
-          if (status.error) setError(status.error); else setError("");
+          if (status.error) setError(status.error); else if (clock.playing) setError("");
         }
       } catch (e) { if (active && !controller.signal.aborted) setError(String(e)); }
       finally {

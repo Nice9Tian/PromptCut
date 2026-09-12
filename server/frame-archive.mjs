@@ -12,6 +12,7 @@ export const FRAME_ARCHIVE_VERSION = 2;
 export const FRAME_CHECKPOINT_SECONDS = 10;
 export const FRAME_BLOCK_SECONDS = 60;
 const MAX_EXPANDED_FRAMES = 16;
+const MAX_EXPANDED_BYTES = 8 * 1024 * 1024;
 // Frozen canvases can make a single HTML sample several megabytes. A time
 // bound alone lets legitimate blocks exceed the decoder's safety limit.
 const MAX_BLOCK_BYTES = 8 * 1024 * 1024;
@@ -25,17 +26,6 @@ function delta(previous, html) {
   while (prefix < previous.length && prefix < html.length && previous[prefix] === html[prefix]) prefix++;
   while (suffix < previous.length - prefix && suffix < html.length - prefix && previous[previous.length - suffix - 1] === html[html.length - suffix - 1]) suffix++;
   return [prefix, suffix, html.slice(prefix, html.length - suffix)];
-}
-
-function materializeBlock(block) {
-  let previous = '';
-  const values = new Map();
-  for (const record of decodeBlock(block)) {
-    const frame = Number(record[0]);
-    previous = apply(previous, record);
-    values.set(frame, previous);
-  }
-  return values;
 }
 
 function apply(previous, record) {
@@ -54,15 +44,27 @@ function encodeBlocks(frames, { fps = 30, checkpointSeconds = FRAME_CHECKPOINT_S
   // `overlay`; only that uncommon case needs materialization.
   if (frames instanceof LazyFrameStore) {
     if (frames.overlay.size === 0 && frames.pendingSpill.size === 0) return frames.blocks;
-    const pending = frames.pendingEntries();
+    // Keep only frame numbers here. Loading every spilled HTML value at once
+    // defeats spilling and can exhaust the heap during the first archive save.
+    const pending = new Set([...frames.overlay.keys(), ...frames.pendingSpill]);
     const merged = [];
     const ranges = [...frames.blocks].sort((a, b) => a.start - b.start);
     for (const block of frames.blocks) {
       const affected = [...pending.keys()].filter(frame => frame >= block.start && frame <= block.end);
       if (!affected.length) { merged.push(block); continue; }
-      const values = materializeBlock(block);
-      for (const frame of affected) { values.set(frame, pending.get(frame)); pending.delete(frame); }
-      merged.push(...encodeBlocks(values, { fps, checkpointSeconds, blockSeconds }));
+      const records = decodeBlock(block);
+      const keys = [...new Set([...records.map(record => Number(record[0])), ...affected])].sort((a, b) => a - b);
+      function* values() {
+        let at = 0, previous = '';
+        for (const frame of keys) {
+          // Decode the old delta chain once, including records overwritten by
+          // pending edits: later deltas still refer to the old predecessor.
+          while (at < records.length && Number(records[at][0]) <= frame) previous = apply(previous, records[at++]);
+          yield [frame, pending.has(frame) ? frames.pendingValue(frame) : previous];
+          pending.delete(frame);
+        }
+      }
+      merged.push(...encodeSortedFrames(values(), { fps, checkpointSeconds, blockSeconds }));
     }
     // Do not let a sparse pending range bridge across an existing block: that
     // would create overlapping blocks and make a later binary lookup choose
@@ -70,37 +72,48 @@ function encodeBlocks(frames, { fps = 30, checkpointSeconds = FRAME_CHECKPOINT_S
     let segment = [], previousFrame;
     for (const frame of [...pending.keys()].sort((a, b) => a - b)) {
       if (previousFrame !== undefined && ranges.some(range => previousFrame < range.start && range.start <= frame)) {
-        merged.push(...encodeBlocks(segment, { fps, checkpointSeconds, blockSeconds }));
+        merged.push(...encodeSortedFrames(segment.values().map(frame => [frame, frames.pendingValue(frame)]), { fps, checkpointSeconds, blockSeconds }));
         segment = [];
       }
-      segment.push([frame, pending.get(frame)]);
+      segment.push(frame);
       previousFrame = frame;
     }
-    if (segment.length) merged.push(...encodeBlocks(segment, { fps, checkpointSeconds, blockSeconds }));
+    if (segment.length) merged.push(...encodeSortedFrames(segment.values().map(frame => [frame, frames.pendingValue(frame)]), { fps, checkpointSeconds, blockSeconds }));
     return merged.sort((a, b) => a.start - b.start);
   }
   const sorted = asEntries(frames).filter(([n, html]) => Number.isSafeInteger(Number(n)) && typeof html === 'string')
     .map(([n, html]) => [Number(n), html]).sort(([a], [b]) => a - b);
-  if (!sorted.length) return [];
+  return encodeSortedFrames(sorted, { fps, checkpointSeconds, blockSeconds });
+}
+
+function encodeSortedFrames(frames, { fps, checkpointSeconds, blockSeconds }) {
   const checkpointEvery = Math.max(1, Math.round(Number(fps) * Number(checkpointSeconds)) || 1);
   const blockEvery = Math.max(checkpointEvery, Math.round(Number(fps) * Number(blockSeconds)) || checkpointEvery);
   const blocks = [];
-  for (let at = 0; at < sorted.length;) {
-    const start = sorted[at][0], endLimit = start + blockEvery, records = [];
-    let previous = '', checkpointFrame = -Infinity, bytes = 2;
-    while (at < sorted.length && sorted[at][0] < endLimit) {
-      const [frame, html] = sorted[at];
-      const checkpoint = records.length === 0 || frame - checkpointFrame >= checkpointEvery;
-      const [prefix, suffix, middle] = checkpoint ? [0, 0, html] : delta(previous, html);
-      const record = [frame, checkpoint ? 1 : 0, prefix, suffix, middle];
-      const recordBytes = Buffer.byteLength(JSON.stringify(record)) + 1;
-      if (records.length && bytes + recordBytes > MAX_BLOCK_BYTES) break;
-      records.push(record); bytes += recordBytes; at++;
-      previous = html;
-      if (checkpoint) checkpointFrame = frame;
-    }
+  let records = [], previous = '', checkpointFrame = -Infinity, endLimit = -Infinity, bytes = 2;
+  const flush = () => {
+    if (!records.length) return;
     blocks.push({ start: records[0][0], end: records[records.length - 1][0], index: records.map(record => record[0]), data: b64(gzipSync(Buffer.from(JSON.stringify(records), 'utf8'))) });
+    records = []; previous = ''; checkpointFrame = -Infinity; bytes = 2;
+  };
+  for (const [frame, html] of frames) {
+    if (frame >= endLimit) flush();
+    let checkpoint = !records.length || frame - checkpointFrame >= checkpointEvery;
+    let [prefix, suffix, middle] = checkpoint ? [0, 0, html] : delta(previous, html);
+    // A substring can retain its multi-megabyte source through a V8 sliced
+    // string. Own the small delta so a tiny change does not pin a whole frame.
+    if (!checkpoint) middle = Buffer.from(middle, 'utf8').toString('utf8');
+    let record = [frame, checkpoint ? 1 : 0, prefix, suffix, middle];
+    let recordBytes = Buffer.byteLength(JSON.stringify(record)) + 1;
+    if (records.length && bytes + recordBytes > MAX_BLOCK_BYTES) {
+      flush(); checkpoint = true; record = [frame, 1, 0, 0, html];
+      recordBytes = Buffer.byteLength(JSON.stringify(record)) + 1;
+    }
+    if (!records.length) endLimit = frame + blockEvery;
+    records.push(record); bytes += recordBytes; previous = html;
+    if (checkpoint) checkpointFrame = frame;
   }
+  flush();
   return blocks;
 }
 
@@ -198,7 +211,7 @@ export class LazyFrameStore {
     this.removeSpill(frame);
     this.pendingSpill.delete(frame);
     this.cache.delete(frame);
-    while (this.overlay.size > MAX_EXPANDED_FRAMES) {
+    while (this.overlay.size > MAX_EXPANDED_FRAMES || this.expandedBytes(this.overlay) > MAX_EXPANDED_BYTES) {
       const old = this.overlay.keys().next().value;
       const oldValue = this.overlay.get(old);
       if (!this.writeSpill(old, oldValue)) break;
@@ -206,6 +219,12 @@ export class LazyFrameStore {
       this.pendingSpill.add(old);
     }
     return this;
+  }
+  expandedBytes(values) { let bytes = 0; for (const value of values.values()) bytes += value.length * 2; return bytes; }
+  pendingValue(frame) {
+    const value = this.overlay.has(frame) ? this.overlay.get(frame) : this.readSpill(frame);
+    if (value === undefined) throw new Error(`HTML frame cache ${frame} is missing or unreadable; rebuild the frame cache before saving.`);
+    return value;
   }
   pendingEntries() {
     const values = new Map(this.overlay);
@@ -225,7 +244,7 @@ export class LazyFrameStore {
     const spilled = this.readSpill(frame);
     if (spilled !== undefined) {
       this.cache.set(frame, spilled);
-      while (this.cache.size > MAX_EXPANDED_FRAMES) {
+      while (this.cache.size > MAX_EXPANDED_FRAMES || this.expandedBytes(this.cache) > MAX_EXPANDED_BYTES) {
         const old = this.cache.keys().next().value;
         const value = this.cache.get(old);
         this.cache.delete(old);
@@ -250,7 +269,7 @@ export class LazyFrameStore {
       previous = apply(previous, record);
       if (n === frame) {
         this.cache.set(frame, previous);
-        while (this.cache.size > MAX_EXPANDED_FRAMES) {
+        while (this.cache.size > MAX_EXPANDED_FRAMES || this.expandedBytes(this.cache) > MAX_EXPANDED_BYTES) {
           const old = this.cache.keys().next().value;
           const value = this.cache.get(old);
           this.cache.delete(old);
@@ -285,7 +304,49 @@ export function packFrames(key, frames, controls = new Map(), options = {}) {
     checkpointSeconds: Number(options.checkpointSeconds || FRAME_CHECKPOINT_SECONDS), blockSeconds: Number(options.blockSeconds || FRAME_BLOCK_SECONDS),
     blocks: encodeBlocks(frames, { fps, checkpointSeconds: options.checkpointSeconds, blockSeconds: options.blockSeconds }),
     controls: asEntries(controls).map(([id, values]) => [id, encodeBlocks(values, { fps, checkpointSeconds: options.checkpointSeconds, blockSeconds: options.blockSeconds })]) };
+  // Large local caches remain complete on disk; embedding hundreds of MB in
+  // a polling response or .proc would exhaust both Node and WebView heaps.
+  const size = [...doc.blocks, ...doc.controls.flatMap(([, blocks]) => blocks)].reduce((sum, block) => sum + (block.encodedBytes ?? block.data.length), 0);
+  if (size > (options.maxBytes ?? Infinity)) return null;
+  const portable = blocks => blocks.map(({ start, end, index, data }) => ({ start, end, index, data }));
+  doc.blocks = portable(doc.blocks); doc.controls = doc.controls.map(([id, blocks]) => [id, portable(blocks)]);
   return b64(gzipSync(Buffer.from(JSON.stringify(doc), 'utf8')));
+}
+
+/** Internal cache manifest: compressed blocks are immutable, content-addressed
+ * files. Only a requested block is loaded; portable v2 .proc archives remain
+ * readable and can still be exported when their size is reasonable. */
+export function packFrameCache(dir, key, frames, controls = new Map(), options = {}) {
+  const folder = path.join(dir, 'html-blocks');
+  fs.mkdirSync(folder, { recursive: true });
+  const persist = blocks => blocks.map(block => {
+    if (block.file && block.folder === folder && fs.existsSync(path.join(folder, block.file))) {
+      return { start: block.start, end: block.end, index: block.index, file: block.file, encodedBytes: block.encodedBytes };
+    }
+    const data = block.data;
+    const file = createHash('sha256').update(data).digest('hex') + '.base64';
+    const target = path.join(folder, file);
+    if (!fs.existsSync(target)) {
+      const temp = target + `.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
+      fs.writeFileSync(temp, data, 'utf8'); fs.renameSync(temp, target);
+    }
+    return { start: block.start, end: block.end, index: block.index, file, encodedBytes: data.length };
+  });
+  return JSON.stringify({ version: 1, key, fps: options.fps || 30,
+    blocks: persist(encodeBlocks(frames, options)),
+    controls: asEntries(controls).map(([id, values]) => [id, persist(encodeBlocks(values, options))]) });
+}
+
+export function unpackFrameCache(encoded, key, { dir, spillDir } = {}) {
+  const doc = JSON.parse(encoded);
+  if (doc.version !== 1 || doc.key !== key || !Array.isArray(doc.blocks) || !Array.isArray(doc.controls)) throw new Error('Incompatible frame cache');
+  const folder = path.join(dir, 'html-blocks');
+  const lazy = blocks => blocks.map(meta => {
+    if (!/^[a-f0-9]{64}\.base64$/.test(meta.file) || !Array.isArray(meta.index)) throw new Error('Corrupt frame cache path');
+    return { ...meta, folder, get data() { return fs.readFileSync(path.join(folder, meta.file), 'utf8'); } };
+  });
+  doc.blocks = lazy(doc.blocks); doc.controls = doc.controls.map(([id, blocks]) => [id, lazy(blocks)]);
+  return createFrameArchive({ doc, spillDir });
 }
 
 export function unpackFrameArchive(encoded, key, { spillDir = null } = {}) {
@@ -293,6 +354,11 @@ export function unpackFrameArchive(encoded, key, { spillDir = null } = {}) {
   if (doc.key !== key || !Array.isArray(doc.blocks || doc.deltas)) throw new Error('Incompatible frame archive');
   if (doc.version === 1) return { version: 1, frames: decodeLegacy(doc.deltas), controls: new Map((doc.controls || []).map(([id, deltas]) => [id, decodeLegacy(deltas)])) };
   if (doc.version !== FRAME_ARCHIVE_VERSION || !Array.isArray(doc.blocks)) throw new Error('Incompatible frame archive');
+  return createFrameArchive({ spillDir, doc });
+}
+
+/** Cold stores must have the same spill policy as reopened archives. */
+export function createFrameArchive({ spillDir = null, doc = { blocks: [], controls: [] } } = {}) {
   const spillBase = spillDir ? path.resolve(spillDir) : null;
   spillDir = prepareSpillDirectory(spillDir);
   const stageDir = spillDir ? path.join(spillDir, 'stage') : null;
@@ -304,6 +370,7 @@ export function unpackFrameArchive(encoded, key, { spillDir = null } = {}) {
       }
     },
     frames: new LazyFrameStore(doc.blocks, { spillDir: stageDir }),
+    createControl: id => new LazyFrameStore([], { spillDir: spillDir ? path.join(spillDir, 'controls', controlDirectoryName(id)) : null }),
     controls: new Map((doc.controls || []).map(([id, blocks]) => [id, new LazyFrameStore(blocks, { spillDir: spillDir ? path.join(spillDir, 'controls', controlDirectoryName(id)) : null })])),
     fps: doc.fps,
     checkpointSeconds: doc.checkpointSeconds,

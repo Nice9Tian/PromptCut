@@ -4,7 +4,7 @@ import { openBakery, bakeFrames, findFfmpeg } from '../scripts/export-frames.mjs
 import { captureSnapshot } from '../scripts/capture-snapshot.mjs';
 import { frameVideo } from '../scripts/frame-video.mjs';
 import { frameIdentity, trackPrefixes } from './frame-identity.mjs';
-import { packFrames, unpackFrameArchive } from './frame-archive.mjs';
+import { packFrames, unpackFrameArchive, createFrameArchive, packFrameCache, unpackFrameCache } from './frame-archive.mjs';
 import { MovFrameStore, PlaybackMovStore } from './frame-mov.mjs';
 import { FramePlayback } from './frame-playback.mjs';
 
@@ -63,14 +63,18 @@ export class FramePipeline {
     const code = this.code(project);
     const key = frameIdentity(project, code);
     if (!this.entries.has(key)) {
-      const entry = { key, code, project: structuredClone(project), html: new Map(), controls: new Map(), dir: path.join(this.root, key), status: 'idle', error: null };
+      const entry = { key, code, project: structuredClone(project), recordVersion: 0, html: new Map(), controls: new Map(), dir: path.join(this.root, key), status: 'idle', error: null };
+      const cold = createFrameArchive({ spillDir: path.join(entry.dir, 'html-cache') });
+      entry.html = cold.frames; entry.controls = cold.controls;
+      entry.createControl = cold.createControl; entry.disposeArchive = cold.dispose;
       entry.mov = new MovFrameStore({ dir: entry.dir, fps: project.fps || 30 });
       this.entries.set(key, entry);
-      entry.loading = fs.readFile(path.join(entry.dir, 'snapshots.base64'), 'utf8').then(encoded => {
+      entry.loading = this.loadArchive(entry).then(archive => {
         try {
-          const archive = unpackFrameArchive(encoded, key, { spillDir: path.join(entry.dir, 'html-cache') });
+          entry.disposeArchive?.();
           entry.html = archive.frames;
           entry.controls = archive.controls;
+          entry.createControl = archive.createControl;
           entry.disposeArchive = archive.dispose;
         } catch { /* Disposable cache. */ }
       }, () => {});
@@ -78,6 +82,21 @@ export class FramePipeline {
     const entry = this.entries.get(key);
     await entry.loading;
     return entry;
+  }
+  async loadArchive(entry) {
+    const options = { dir: entry.dir, spillDir: path.join(entry.dir, 'html-cache') };
+    try { return unpackFrameCache(await fs.readFile(path.join(entry.dir, 'html-manifest.json'), 'utf8'), entry.key, options); }
+    catch {
+      const file = path.join(entry.dir, 'snapshots.base64');
+      // Old monolithic local caches are disposable. Do not read a multi-GB
+      // legacy file into memory just to discover that it cannot be opened.
+      if ((await fs.stat(file)).size > 32 * 1024 * 1024) throw new Error('Legacy frame cache exceeds import budget');
+      return unpackFrameArchive(await fs.readFile(file, 'utf8'), entry.key, options);
+    }
+  }
+  async portableArchive(entry) {
+    await this.save(entry);
+    return packFrames(entry.key, entry.html, entry.controls, { fps: entry.project.fps || 30, maxBytes: 16 * 1024 * 1024 });
   }
   async bakery(project, lane = 'agent') {
     const empty = { ...project, tracks: [], media: [] };
@@ -429,7 +448,7 @@ export class FramePipeline {
     entry.recordVersion = (entry.recordVersion || 0) + 1;
     entry.html.set(n, html);
     for (const control of controls) {
-      if (!entry.controls.has(control.id)) entry.controls.set(control.id, new Map());
+      if (!entry.controls.has(control.id)) entry.controls.set(control.id, entry.createControl?.(control.id) || new Map());
       // The control cache is intentionally addressed by the control's own
       // local frame (the `t` used by the card), so it can be replayed without
       // knowing the clip's global start time.
@@ -443,20 +462,23 @@ export class FramePipeline {
   }
   async saveNow(entry) {
     const version = entry.recordVersion;
-    const encoded = packFrames(entry.key, entry.html, entry.controls, {
+    if (entry.savedVersion !== undefined && entry.savedVersion === version) return;
+    const encoded = packFrameCache(entry.dir, entry.key, entry.html, entry.controls, {
       fps: entry.project.fps || 30,
     });
-    await atomic(path.join(entry.dir, 'snapshots.base64'), encoded);
+    await atomic(path.join(entry.dir, 'html-manifest.json'), encoded);
+    entry.savedVersion = version;
     if (entry.recordVersion !== version) return;
     // Re-open our own archive so the hot pipeline keeps compressed blocks and
     // only a small expanded window, rather than every full HTML string.
-    const archive = unpackFrameArchive(encoded, entry.key, { spillDir: path.join(entry.dir, 'html-cache') });
+    const archive = unpackFrameCache(encoded, entry.key, { dir: entry.dir, spillDir: path.join(entry.dir, 'html-cache') });
     // Concurrent playback batches may record new frames during the disk write.
     // Do not replace their live map with the older archive snapshot.
     if (entry.recordVersion === version) {
       const dispose = entry.disposeArchive;
       entry.html = archive.frames;
       entry.controls = archive.controls;
+      entry.createControl = archive.createControl;
       entry.disposeArchive = archive.dispose;
       dispose?.();
     }
@@ -487,12 +509,12 @@ export class FramePipeline {
         // B has every frame in the canonical 0..count-1 range.
         const complete = entry.html.size === count && [...Array(count).keys()].every(n => entry.html.has(n));
         if (!complete) {
-          const blockFrames = Math.max(1, Math.round((project.fps || 30) * 60));
+          const blockFrames = Math.max(1, Math.min(16, Math.round(project.fps || 30)));
           await bakeFrames(bakery, { out: entry.dir, frames: `0-${count - 1}`, snapshotOnly: true,
             signal: controller.signal, onSnapshot: async (n, html, controls) => {
               this.record(entry, n, html, controls);
-              // Flush one independently compressed time block while the bake
-              // is still running. This bounds the full HTML held by Node.
+              // Publish small increments: a 60-second batch of frozen 1080p
+              // HTML can take seconds to compress even when spills bound RAM.
               if ((n + 1) % blockFrames === 0) await this.save(entry);
             } });
           await this.save(entry);
@@ -681,15 +703,15 @@ export class FramePipeline {
     // The separate background process flushes B before acknowledging yield.
     // Adopt those compressed blocks while preserving newer local samples.
     try {
-      const archive = unpackFrameArchive(await fs.readFile(path.join(entry.dir, 'snapshots.base64'), 'utf8'), entry.key,
-        { spillDir: path.join(entry.dir, 'html-cache') });
-      for (const [frame, html] of entry.html) if (!archive.frames.has(frame)) archive.frames.set(frame, html);
+      const archive = await this.loadArchive(entry);
+      for (const frame of entry.html.keys()) if (!archive.frames.has(frame)) archive.frames.set(frame, entry.html.get(frame));
       for (const [id, frames] of entry.controls) {
-        if (!archive.controls.has(id)) archive.controls.set(id, new Map(frames));
-        else for (const [frame, html] of frames) if (!archive.controls.get(id).has(frame)) archive.controls.get(id).set(frame, html);
+        if (!archive.controls.has(id)) archive.controls.set(id, archive.createControl(id));
+        for (const frame of frames.keys()) if (!archive.controls.get(id).has(frame)) archive.controls.get(id).set(frame, frames.get(frame));
       }
       const dispose = entry.disposeArchive;
       entry.html = archive.frames; entry.controls = archive.controls; entry.disposeArchive = archive.dispose;
+      entry.createControl = archive.createControl;
       entry.recordVersion = (entry.recordVersion || 0) + 1;
       dispose?.();
     } catch { /* A missing/corrupt disposable archive cannot block playback. */ }

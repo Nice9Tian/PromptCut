@@ -47,6 +47,16 @@ await fs.writeFile(path.join(app, 'src/cards/user/playback-test.tsx'), `export c
  Component: ({t}) => <div style={{position:'absolute',inset:0,background:'rgb('+Math.round(t*20)+',80,130)'}}/> };`);
 const server = await createServer({ configFile: false, root: app, cacheDir: path.join(out, 'vite'),
   plugins: [framesPlugin(), { name: 'player-test', configureServer(server) {
+    server.middlewares.use('/retry-test', async (_req, res) => {
+      res.setHeader('Content-Type', 'text/html');
+      res.end(await server.transformIndexHtml('/retry-test', `<html><head></head><body><div id="root"></div><script type="module">
+        import React from 'react'; import {createRoot} from 'react-dom/client';
+        import {UnifiedPreview} from '/src/editor/preview/UnifiedPreview.tsx';
+        const original=window.fetch; window.seeAttempts=0;
+        window.fetch=(url,opts)=>{if(url==='/api/frames/see' && ++window.seeAttempts===1) return Promise.reject(new TypeError('test backend offline')); return original(url,opts);};
+        createRoot(document.getElementById('root')).render(React.createElement(UnifiedPreview,{project:${JSON.stringify(project)},t:0,playing:false}));
+      </script></body></html>`));
+    });
     server.middlewares.use('/player-test', (_req, res) => {
       res.setHeader('Content-Type', 'text/html');
       res.end(`<canvas id="player" width="160" height="90"></canvas><script type="module">import {MovPlayer} from '/src/render/movPlayer.ts'; window.errors=[]; window.player=new MovPlayer(document.querySelector('canvas'),e=>errors.push(e));</script>`);
@@ -78,6 +88,7 @@ try {
   const puppeteer = (await import('puppeteer')).default;
   browser = await puppeteer.launch({ headless: true });
   const page = await browser.newPage();
+  page.on('pageerror', error => console.error('PAGE ERROR:', error.message));
   await page.goto(origin + '/player-test');
   await page.waitForFunction(() => !!window.player);
   const ready = { ...status, ...entry.playbackMovie.index(0, 59), movie: origin + status.movie, metrics: { stride: 1 } };
@@ -122,6 +133,10 @@ try {
   assert.ok(pipeline.playback.epoch <= 3, 'ordinary heartbeats cannot cause seek storms');
   assert.ok(pipeline.playback.rendered > 0, 'HTTP heartbeats and the renderer must share one service');
   console.log('PASS: live scheduler heartbeat / pause', pipeline.playback.status().metrics);
+  await page.goto(origin + '/retry-test');
+  await page.waitForFunction(() => window.seeAttempts >= 2 && [...document.images].some(img => img.complete && img.naturalWidth === 160), { timeout: 15000 });
+  assert.equal(await page.evaluate(() => [...document.querySelectorAll('[role="status"]')].some(el => el.textContent.includes('连接中断'))), false);
+  console.log('PASS: paused preview retries a backend outage without a seek or reload');
   await fs.writeFile(path.join(out, 'result.json'), JSON.stringify({ probe: probe(), streamed, metrics: pipeline.playback.status().metrics }, null, 2));
 } finally {
   await browser?.close(); await pipeline.close(); await server.close();
