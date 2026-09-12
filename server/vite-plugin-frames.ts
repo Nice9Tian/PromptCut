@@ -52,7 +52,7 @@ export function framesPlugin(): Plugin {
         // cumulative track renders are useful to callers that want to rebuild
         // only the edited upper part.  Keep both forms behind fixed-length
         // hexadecimal keys; no user supplied path segment reaches the disk.
-        const final = /^\/([a-f0-9]{64})\/(preview\.mp4|frames\/\d{6}\.png)$/.exec(url.pathname);
+        const final = /^\/([a-f0-9]{64})\/(preview\.mp4|mov\/full\.mov|mov\/frames\/\d{6}\.png|frames\/\d{6}\.png)$/.exec(url.pathname);
         const track = /^\/([a-f0-9]{64})\/tracks\/([a-f0-9]{64})\/(preview\.mp4|frames\/\d{6}\.png)$/.exec(url.pathname);
         if (!final && !track) return next();
         const file = final
@@ -64,7 +64,7 @@ export function framesPlugin(): Plugin {
           const end = range && range[2] ? Math.min(stat.size - 1, Number(range[2])) : stat.size - 1;
           if (start > end || start >= stat.size) { res.statusCode = 416; return res.end(); }
           res.statusCode = range ? 206 : 200;
-          res.setHeader("Content-Type", file.endsWith(".mp4") ? "video/mp4" : "image/png");
+          res.setHeader("Content-Type", file.endsWith(".mp4") ? "video/mp4" : file.endsWith(".mov") ? "video/quicktime" : "image/png");
           res.setHeader("Accept-Ranges", "bytes"); res.setHeader("Content-Length", end - start + 1);
           if (range) res.setHeader("Content-Range", `bytes ${start}-${end}/${stat.size}`);
           fs.createReadStream(file, { start, end }).on("error", () => res.destroy()).pipe(res);
@@ -84,7 +84,8 @@ export function framesPlugin(): Plugin {
           if (url.pathname === "/see") {
             const lane = input.lane === "agent" ? "agent" : input.lane === "background" ? "background" : "user";
             const frames = await service.see_frames(project, input.times || [0], { lane, signal: requestSignal(req, res) });
-            return json(200, { key: entry.key, frames: [...frames].map(([frame, value]: any) => ({ frame, source: value.source, url: `/api/frames/${entry.key}/frames/${String(frame).padStart(6, "0")}.png` })) });
+            const movReady = await fsp.access(path.join(entry.dir, "mov", "full.mov")).then(() => true, () => false);
+            return json(200, { key: entry.key, frames: [...frames].map(([frame, value]: any) => ({ frame, source: value.source, url: `/api/frames/${entry.key}/${value.source === "mov" ? "mov/frames" : "frames"}/${String(frame).padStart(6, "0")}.png` })), mov: movReady ? `/api/frames/${entry.key}/mov/full.mov` : null });
           }
           if (url.pathname === "/preload") await service.preload(project);
           else if (url.pathname === "/import" && typeof input.snapshots === "string") {
@@ -92,7 +93,7 @@ export function framesPlugin(): Plugin {
               // Restore the control index together with the HTML.  It is built from
               // the same snapshots and lets callers address a component at its
               // local frame without sampling the whole project again.
-              const archive = unpackFrameArchive(input.snapshots, entry.key);
+              const archive = unpackFrameArchive(input.snapshots, entry.key, { spillDir: path.join(entry.dir, "html-cache") });
               entry.html = archive.frames;
               entry.controls = archive.controls;
               await service.save(entry);
@@ -102,9 +103,12 @@ export function framesPlugin(): Plugin {
             await service.save(entry);
             return json(200, { key: entry.key, snapshots: await fsp.readFile(path.join(entry.dir, "snapshots.base64"), "utf8") });
           } else if (url.pathname !== "/status") return json(404, { error: "Unknown frame operation" });
+          await entry.mov?.ready;
           const videoReady = await fsp.access(path.join(entry.dir, "preview.mp4")).then(() => true, () => false);
-          return json(200, { key: entry.key, status: entry.status, sampled: entry.html.size, total: Math.max(1, Math.floor(project.duration * (project.fps || 30))), error: entry.error,
-            video: videoReady ? `/api/frames/${entry.key}/preview.mp4` : null });
+          const movReady = await fsp.access(path.join(entry.dir, "mov", "full.mov")).then(() => true, () => false);
+          return json(200, { key: entry.key, status: entry.status, sampled: entry.html.size, movSampled: entry.mov ? [...(entry.mov.frames || [])].length : 0, total: Math.max(1, Math.floor(project.duration * (project.fps || 30))), error: entry.error,
+            video: videoReady ? `/api/frames/${entry.key}/preview.mp4` : null,
+            mov: movReady ? `/api/frames/${entry.key}/mov/full.mov` : null });
         } catch (error: any) {
           const timedOut = Boolean(error?.timedOut || error?.code === "PRERENDER_TIMEOUT");
           const cancelled = Boolean(error?.cancelled || error?.name === "AbortError");

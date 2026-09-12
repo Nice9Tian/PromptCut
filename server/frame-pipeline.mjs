@@ -5,6 +5,7 @@ import { captureSnapshot } from '../scripts/capture-snapshot.mjs';
 import { frameVideo } from '../scripts/frame-video.mjs';
 import { frameIdentity, trackPrefixes } from './frame-identity.mjs';
 import { packFrames, unpackFrameArchive } from './frame-archive.mjs';
+import { MovFrameStore } from './frame-mov.mjs';
 
 const pad = n => String(n).padStart(6, '0');
 const exists = file => fs.access(file).then(() => true, () => false);
@@ -61,9 +62,14 @@ export class FramePipeline {
     const key = frameIdentity(project, code);
     if (!this.entries.has(key)) {
       const entry = { key, code, project: structuredClone(project), html: new Map(), controls: new Map(), dir: path.join(this.root, key), status: 'idle', error: null };
+      entry.mov = new MovFrameStore({ dir: entry.dir, fps: project.fps || 30 });
       this.entries.set(key, entry);
       entry.loading = fs.readFile(path.join(entry.dir, 'snapshots.base64'), 'utf8').then(encoded => {
-        try { const archive = unpackFrameArchive(encoded, key); entry.html = archive.frames; entry.controls = archive.controls; } catch { /* Disposable cache. */ }
+        try {
+          const archive = unpackFrameArchive(encoded, key, { spillDir: path.join(entry.dir, 'html-cache') });
+          entry.html = archive.frames;
+          entry.controls = archive.controls;
+        } catch { /* Disposable cache. */ }
       }, () => {});
     }
     const entry = this.entries.get(key);
@@ -284,36 +290,46 @@ export class FramePipeline {
   }
   async readFramesCore(entry, frames, lane = 'agent', signal) {
     const result = new Map();
+    const htmlFrames = [];
     const missing = [];
+    const hasMedia = (entry.project.media || []).length > 0;
+    await entry.mov?.ready;
+    // MOV is the first lookup: it is already the full scene with media and is
+    // the cheapest exact answer. HTML is the high-priority producer for a
+    // missing MOV frame, so random access can still avoid loading media.
     for (const frame of frames) {
-      const file = path.join(entry.dir, 'frames', pad(frame) + '.png');
-      try { result.set(frame, { buf: await fs.readFile(file), source: 'rendered' }); }
-      catch { missing.push(frame); }
+      const buf = await entry.mov?.get(frame);
+      if (buf) result.set(frame, { buf, source: 'mov' });
+      else {
+        // Compatibility with the pre-MOV cumulative PNG cache. It is still a
+        // valid full-scene result and lets old projects avoid a re-render.
+        try { result.set(frame, { buf: await fs.readFile(path.join(entry.dir, 'frames', pad(frame) + '.png')), source: 'rendered' }); }
+        catch { if (!hasMedia && entry.html?.has?.(frame)) htmlFrames.push(frame); else missing.push(frame); }
+      }
     }
-    if (!missing.length) return result;
+    if (!htmlFrames.length && !missing.length) return result;
     const userSession = lane === 'user' ? await this.acquireUser(entry.project, signal) : null;
     const bakery = userSession?.bakery || await this.acquire(lane, entry.project);
     try {
-      const uncached = missing.filter(n => !entry.html.has(n));
-      if (uncached.length) {
-        // A/Agent sparse requests still have to advance through every
-        // intermediate frame for deterministic Motion state, but retaining
-        // all of those HTML snapshots would turn a 60-frame random probe on
-        // a long timeline into a multi-gigabyte in-memory cache. B preload
-        // passes an explicit full range and continues to record every frame.
-        const requestedSnapshots = new Set(uncached);
-        await bakeFrames(bakery, { out: entry.dir, targetFrames: uncached, snapshotOnly: true, signal,
-          onSnapshot: (n, html, controls) => requestedSnapshots.has(n) && this.record(entry, n, html, controls) });
-        await this.save(entry);
-      }
-      for (const frame of missing) {
-        const html = entry.html.get(frame);
-        if (html === undefined) throw new Error(`Frame ${frame} was not sampled`);
+      // The full-scene MOV lane owns the result returned by see_frames. It
+      // still records HTML snapshots while it advances, so the next request
+      // can replay without loading media. HTML is the higher-priority cache;
+      // MOV only fills frames absent from its table.
+      const htmlReplay = async frame => {
         const prefixes = this.prefixes(entry);
         let buf;
         for (let i = 0; i < prefixes.length; i++) buf = await this.rasterPrefix(entry, bakery, frame, i, prefixes);
         await atomic(path.join(entry.dir, 'frames', pad(frame) + '.png'), buf);
-        result.set(frame, { buf, source: uncached.includes(frame) ? 'advance' : 'html' });
+        result.set(frame, { buf, source: 'html' });
+        await this.writeMov(entry, frame, buf);
+      };
+      for (const frame of htmlFrames) await htmlReplay(frame);
+      if (!missing.length) return result;
+      await this.renderMovFrames(entry, missing, bakery, signal);
+      for (const frame of missing) {
+        const buf = await entry.mov.get(frame);
+        if (!buf) throw new Error(`MOV frame ${frame} was not written`);
+        result.set(frame, { buf, source: 'mov' });
       }
     } finally {
       if (userSession) this.releaseUser(userSession);
@@ -321,14 +337,71 @@ export class FramePipeline {
     }
     return result;
   }
+  async renderMovFrames(entry, frames, bakery, signal) {
+    // Reuse HTML-complete frames first. This is the background equivalent of
+    // see_frames' HTML lookup and avoids loading media for frames already
+    // frozen by the higher-priority lane.
+    const hasMedia = (entry.project.media || []).length > 0;
+    const htmlFrames = hasMedia ? [] : frames.filter(frame => !entry.mov.has(frame) && entry.html.has(frame));
+    for (const frame of htmlFrames) {
+      const prefixes = this.prefixes(entry);
+      let buf;
+      for (let i = 0; i < prefixes.length; i++) buf = await this.rasterPrefix(entry, bakery, frame, i, prefixes);
+      await atomic(path.join(entry.dir, 'frames', pad(frame) + '.png'), buf);
+      await this.writeMov(entry, frame, buf);
+    }
+    const missing = frames.filter(frame => !entry.mov.has(frame));
+    if (!missing.length) return;
+    const requested = new Set(missing);
+    await bakeFrames(bakery, {
+      out: entry.dir, targetFrames: missing, snapshotOnly: false, fullFrame: true,
+      snapshotFrames: new Set(missing),
+      writeFrames: false, signal,
+      onFrame: async (frame, buf) => { if (requested.has(frame)) await this.writeMov(entry, frame, buf); },
+      // MOV passes still record HTML for the same live state, but only when the
+      // HTML lane did not already have that frame.
+      onSnapshot: (n, html, controls) => !entry.html.has(n) && requested.has(n) && this.record(entry, n, html, controls),
+    });
+    await this.save(entry);
+  }
+  async writeMov(entry, frame, buf) {
+    if (!entry.mov) return;
+    // Store the random-access copy first. Starting ffmpeg for an isolated
+    // high-numbered request would leave a pipe waiting forever for frame 0.
+    await entry.mov.put(frame, buf);
+    if (entry.mov.writer || entry.mov.writerError || await exists(entry.mov.movieFile)) return;
+    try {
+      if (frame === entry.mov.nextFrame) {
+        const ffmpeg = await findFfmpeg();
+        await entry.mov.start(ffmpeg);
+      }
+    } catch (error) {
+      // MOV is a secondary cache; preserve the PNG/HTML result if the local
+      // encoder is unavailable or exits unexpectedly.
+      entry.mov.writerError ||= error;
+    }
+  }
   record(entry, n, html, controls = []) {
     entry.html.set(n, html);
     for (const control of controls) {
       if (!entry.controls.has(control.id)) entry.controls.set(control.id, new Map());
+      // The control cache is intentionally addressed by the control's own
+      // local frame (the `t` used by the card), so it can be replayed without
+      // knowing the clip's global start time.
       entry.controls.get(control.id).set(control.frame, control.html);
     }
   }
-  save(entry) { return atomic(path.join(entry.dir, 'snapshots.base64'), packFrames(entry.key, entry.html, entry.controls)); }
+  async save(entry) {
+    const encoded = packFrames(entry.key, entry.html, entry.controls, {
+      fps: entry.project.fps || 30,
+    });
+    await atomic(path.join(entry.dir, 'snapshots.base64'), encoded);
+    // Re-open our own archive so the hot pipeline keeps compressed blocks and
+    // only a small expanded window, rather than every full HTML string.
+    const archive = unpackFrameArchive(encoded, entry.key, { spillDir: path.join(entry.dir, 'html-cache') });
+    entry.html = archive.frames;
+    entry.controls = archive.controls;
+  }
   async preload(project) {
     const entry = await this.entry(project);
     const owner = project.id || 'active';
@@ -351,19 +424,38 @@ export class FramePipeline {
         // B has every frame in the canonical 0..count-1 range.
         const complete = entry.html.size === count && [...Array(count).keys()].every(n => entry.html.has(n));
         if (!complete) {
+          const blockFrames = Math.max(1, Math.round((project.fps || 30) * 60));
           await bakeFrames(bakery, { out: entry.dir, frames: `0-${count - 1}`, snapshotOnly: true,
-            signal: controller.signal, onSnapshot: (n, html, controls) => { this.record(entry, n, html, controls); } });
+            signal: controller.signal, onSnapshot: async (n, html, controls) => {
+              this.record(entry, n, html, controls);
+              // Flush one independently compressed time block while the bake
+              // is still running. This bounds the full HTML held by Node.
+              if ((n + 1) % blockFrames === 0) await this.save(entry);
+            } });
           await this.save(entry);
         }
+        entry.status = 'mov';
+        // MOV must contain the full scene, including media. Its pass shares
+        // the already warm background Chrome but deliberately uses the live
+        // full-frame capture path; HTML snapshots have media removed.
+        await this.fillMov(entry, controller.signal, bakery);
         entry.status = 'video';
         await this.prerender(entry, bakery, controller.signal);
         entry.status = 'ready';
       } catch (e) {
         entry.status = controller.signal.aborted ? 'cancelled' : 'error';
         entry.error = controller.signal.aborted ? null : String(e.message || e);
-      } finally { this.release('background'); }
+      } finally { if (bakery) this.release('background'); }
     });
     return entry;
+  }
+  async fillMov(entry, signal, bakery) {
+    if (!entry.mov || await exists(entry.mov.movieFile)) return;
+    const fps = entry.project.fps || 30;
+    const count = Math.max(1, Math.floor(entry.project.duration * fps));
+    if (signal?.aborted) throw new Error('Cancelled');
+    await this.renderMovFrames(entry, Array.from({ length: count }, (_, i) => i), bakery, signal);
+    await entry.mov.finish();
   }
   prefixes(entry) {
     const prefixes = trackPrefixes(entry.project, entry.code);
@@ -437,5 +529,6 @@ export class FramePipeline {
     this.lanes.clear();
     await Promise.allSettled(this.userPool.map(session => session.bakery.close()));
     this.userPool.length = 0;
+    await Promise.allSettled([...this.entries.values()].map(entry => entry.mov?.close()));
   }
 }

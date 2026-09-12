@@ -1,17 +1,27 @@
 /** Installed before React. No media URLs are assigned during animation advancement. */
 export function installFrameMedia() {
   window.__pcHideFrameMedia = () => {
-    for (const v of document.querySelectorAll('video[data-pc-media-src]')) {
+    for (const v of document.querySelectorAll('video[data-pc-media-src], img[data-pc-media-src]')) {
       v.style.visibility = 'hidden';
       if (v.hasAttribute('src')) {
-        v.pause();
+        if (v.tagName === 'VIDEO') v.pause();
         v.removeAttribute('src');
-        v.load();
+        if (v.tagName === 'VIDEO') v.load();
       }
     }
   };
   window.__pcPrepareFrameMedia = async () => {
-    await Promise.all([...(document.getElementById('pc-frame-snapshot') || document).querySelectorAll('video[data-pc-media-src]')].map(v => new Promise((resolve, reject) => {
+    await Promise.all([...(document.getElementById('pc-frame-snapshot') || document).querySelectorAll('video[data-pc-media-src], img[data-pc-media-src]')].map(v => new Promise((resolve, reject) => {
+      if (v.tagName === 'IMG') {
+        const finishImage = error => error ? reject(error) : resolve();
+        const timer = setTimeout(() => finishImage(new Error(`Image load timed out: ${v.dataset.pcMediaSrc}`)), 20000);
+        v.addEventListener('load', () => { clearTimeout(timer); finishImage(); }, { once: true });
+        v.addEventListener('error', () => { clearTimeout(timer); finishImage(new Error(`Image load failed: ${v.dataset.pcMediaSrc}`)); }, { once: true });
+        v.style.visibility = 'visible';
+        v.src = v.dataset.pcMediaSrc;
+        if (v.complete && v.naturalWidth) { clearTimeout(timer); finishImage(); }
+        return;
+      }
       let sought = false;
       const events = ['loadedmetadata', 'loadeddata', 'seeked', 'canplay', 'error'];
       const finish = error => {

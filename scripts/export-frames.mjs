@@ -153,7 +153,16 @@ function PAGE_PRELUDE() {
       copy[i].setAttribute('style', s);
       if (orig[i].tagName === 'VIDEO' && orig[i].dataset.pcMediaSrc) {
         copy[i].removeAttribute('src');
+        copy[i].removeAttribute('data-pc-media-src');
         copy[i].setAttribute('preload', 'none');
+        copy[i].style.visibility = 'hidden';
+      }
+      // HTML replay deliberately carries no external image/video assets. MOV
+      // is the full-scene media lane; the HTML lane only needs deterministic
+      // control/layout state and must not trigger media fetches.
+      if (orig[i].tagName === 'IMG') {
+        copy[i].removeAttribute('src');
+        copy[i].removeAttribute('data-pc-media-src');
         copy[i].style.visibility = 'hidden';
       }
       if (orig[i].tagName === 'CANVAS') {
@@ -523,7 +532,11 @@ export async function bakeFrames(bakery, opts = {}) {
     ? new Set(opts.targetFrames.map((n) => Math.max(0, Math.round(Number(n)))))
     : null;
   if (targetFrames) {
-    startFrame = Math.min(...targetFrames);
+    // Full-scene MOV requests still need to replay from frame 0: Motion,
+    // particles and other cards integrate state across intermediate frames.
+    // HTML-only random replay can start at the first requested frame because
+    // it uses frozen DOM snapshots.
+    startFrame = opts.fullFrame ? 0 : Math.min(...targetFrames);
     endFrame = Math.max(...targetFrames);
   }
   const staticSkip = targetFrames ? false : wantStaticSkip;
@@ -539,6 +552,15 @@ export async function bakeFrames(bakery, opts = {}) {
 
   /** 截一张:发一拍并要这一拍的截图。此刻动画已钉住、页面时钟已量化,这一拍里画面不会再变 */
   const shoot = async () => {
+    // MOV/full-scene cache: keep the live scene (including video/image media)
+    // visible. HTML snapshots deliberately remove video sources, so they can
+    // never be used as the full-frame movie source.
+    if (opts.fullFrame) {
+      await prepareFrameMedia(bakery);
+      const r = await beginFrame({ screenshot: shotParams });
+      if (!r.screenshotData) throw new Error('beginFrame 这一拍没有返回截图');
+      return Buffer.from(r.screenshotData, 'base64');
+    }
     if (!opts.glassFrames) {
       // Pixel maps rasterize a hidden source video into a canvas. Load only the
       // requested frame before freezing HTML; otherwise __bfFreeze would copy
@@ -679,10 +701,11 @@ export async function bakeFrames(bakery, opts = {}) {
       if (opts.signal?.aborted) throw Object.assign(new Error('已取消'), { cancelled: true });
       const wantShot = targetFrames ? targetFrames.has(i) : i >= startFrame;
       const isStatic = await step(i, wantShot);
-      if (domDir || opts.onSnapshot) {
+      const snapshotWanted = domDir || (opts.onSnapshot && (!opts.snapshotFrames || opts.snapshotFrames.has(i)));
+      if (snapshotWanted) {
         const { html, lossy, controls } = await page.evaluate(() => window.__bfFreeze());
         if (lossy) throw new Error('HTML snapshot contains unreadable canvases');
-        if (opts.onSnapshot) await opts.onSnapshot(i, html, controls);
+        if (opts.onSnapshot && snapshotWanted) await opts.onSnapshot(i, html, controls);
         if (domDir) await fs.writeFile(path.join(domDir, String(i).padStart(6, '0') + '.html.gz'), gzip(Buffer.from(html, 'utf8')));
       }
       // Unified export first runs a complete HTML sampling pass (B).  That

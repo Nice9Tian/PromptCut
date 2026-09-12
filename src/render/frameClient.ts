@@ -53,6 +53,7 @@ export async function frameRequest(operation: string, project: Project, extra: R
     retryable: result.retryable,
   });
   if (result.video) result.video = new URL(result.video, new URL(url, location.href)).href;
+  if (result.mov) result.mov = new URL(result.mov, new URL(url, location.href)).href;
   if (result.frames) result.frames = result.frames.map((f: any) => ({ ...f, url: new URL(f.url, new URL(url, location.href)).href }));
   return result;
 }
