@@ -11,6 +11,9 @@ const exists = file => fs.access(file).then(() => true, () => false);
 // The interactive editor must never wait forever on a renderer that stopped
 // answering.  Agent/background renders have their own (longer) budgets; this
 // watchdog is only for the human preview lane.
+// TODO: 10 seconds may be too aggressive for complex projects or a cold media
+// decode. Keep this configurable until we have latency telemetry; raise it
+// with PROMPTCUT_USER_RENDER_TIMEOUT_MS when the preview needs more headroom.
 const USER_RENDER_TIMEOUT_MS = Math.max(1000, Number(process.env.PROMPTCUT_USER_RENDER_TIMEOUT_MS) || 10000);
 async function atomic(file, data) {
   await fs.mkdir(path.dirname(file), { recursive: true });
