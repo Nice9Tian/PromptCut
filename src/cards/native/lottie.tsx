@@ -3,6 +3,7 @@ import lottie, { type AnimationItem } from "lottie-web";
 import type { CardDef, CardProps } from "../../kernel/types";
 import { assetOptions } from "../catalogAssets";
 import { isExportMode } from "../../kernel/clock";
+import { beginFrameWork } from "../../kernel/frameReady";
 
 /**
  * Lottie 卡:把一段 Lottie 动画(After Effects 导出的 JSON)放到舞台上,按时间轴逐帧定位。
@@ -82,6 +83,7 @@ export function LottieView(params: LottieViewProps) {
   // 加载 / 换素材
   useEffect(() => {
     let dead = false;
+    const ready = beginFrameWork('lottie');
     const mount = (data: any) => {
       if (dead || !box.current) return;
       anim.current?.destroy();
@@ -109,18 +111,27 @@ export function LottieView(params: LottieViewProps) {
        * JSON 一定在推帧之前就位。
        */
       a.goToAndStop(meta.current.total ? frameAt(wantT.current) : 0, true);
+      const finish = () => {
+        if (dead) return;
+        a.goToAndStop(meta.current.total ? frameAt(wantT.current) : 0, true);
+        ready.ready();
+      };
+      if (a.isLoaded) finish();
+      else a.addEventListener('DOMLoaded', finish);
+      a.addEventListener('data_failed', () => ready.fail(new Error('Lottie data failed to load')));
       // 导出页里 lottie 自己的 rAF 循环只会空转(没有 autoplay 的动画),冻住它省得每帧都被判成「在变」
       // freeze() 是 lottie-web 公开 API,只是类型声明里漏了
       if (isExportMode()) (lottie as unknown as { freeze?: () => void }).freeze?.();
     };
     const inline = params.json.trim();
     if (inline) {
-      try { mount(JSON.parse(inline)); } catch (e) { console.warn("[lottie] json 参数不是合法的 Lottie JSON:", e); }
+      try { mount(JSON.parse(inline)); } catch (e) { ready.fail(e); console.warn("[lottie] json 参数不是合法的 Lottie JSON:", e); }
     } else if (params.src.trim()) {
-      fetch(params.src.trim()).then((r) => r.json()).then(mount).catch((e) => console.warn("[lottie] 加载失败:", params.src, e));
-    }
+      fetch(params.src.trim()).then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); }).then(mount).catch((e) => { ready.fail(e); console.warn("[lottie] 加载失败:", params.src, e); });
+    } else ready.ready();
     return () => {
       dead = true;
+      ready.dispose();
       anim.current?.destroy();
       anim.current = null;
     };

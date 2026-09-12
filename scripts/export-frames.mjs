@@ -1,5 +1,7 @@
 import puppeteer from 'puppeteer';
 import { captureSnapshot } from './capture-snapshot.mjs';
+import { captureFrame } from './capture-frame.mjs';
+import { waitFrameReady } from './frame-ready.mjs';
 import { installFrameMedia, prepareFrameMedia } from './frame-media.mjs';
 import path from 'path';
 import fs from 'fs/promises';
@@ -99,7 +101,7 @@ const CHROME_ARGS = [
  * 每个新文档加载前注入。挡掉 Vite 的 HMR / 心跳(它们会一直挂着网络请求),再放两个页面内的小工具:
  *   __bfSettle —— 让挂着的宏任务跑完,直到 DOM 不再变。React 经 Scheduler 的 MessageChannel 排的提交、
  *                 `v.on("change", setState)` 那条异步渲染都在这里落地;不排空的话它们会落到哪一帧取决于运气。
- *   __bfAssets —— 等图片 decode 和视频 seek(__pcFrameReady),各自最多 3 秒。
+ *   控件、字体、图片就绪由 waitFrameReady 等待,超时明确失败。
  * 没有虚拟时间以后,页面里的 setTimeout 是真的会走的,所以这两件事可以在页面里做,省几趟往返。
  */
 function PAGE_PRELUDE() {
@@ -123,11 +125,6 @@ function PAGE_PRELUDE() {
       await new Promise((r) => setTimeout(r, 0));
       if ((window.__pcMutationCount ?? 0) === b) return;
     }
-  };
-  window.__bfAssets = async () => {
-    const cap = (p) => Promise.race([p, new Promise((r) => setTimeout(r, 3000))]);
-    await cap(Promise.all([...document.images].map((img) => img.decode().catch(() => {}))));
-    await cap(window.__pcFrameReady ? window.__pcFrameReady() : Promise.resolve());
   };
   /*
    * 把此刻的舞台冻结成一份自给自足的 HTML(HTML 采样缓存,见 scripts/replay-frames.mjs)。
@@ -557,9 +554,7 @@ export async function bakeFrames(bakery, opts = {}) {
     // never be used as the full-frame movie source.
     if (opts.fullFrame) {
       await prepareFrameMedia(bakery);
-      const r = await beginFrame({ screenshot: shotParams });
-      if (!r.screenshotData) throw new Error('beginFrame 这一拍没有返回截图');
-      return Buffer.from(r.screenshotData, 'base64');
+      return captureFrame(bakery, shotParams, opts.signal);
     }
     if (!opts.glassFrames) {
       // Pixel maps rasterize a hidden source video into a canvas. Load only the
@@ -576,9 +571,7 @@ export async function bakeFrames(bakery, opts = {}) {
       return captureSnapshot(bakery, snapshot.html, shotParams);
     }
     await prepareFrameMedia(bakery);
-    const r = await beginFrame({ screenshot: shotParams });
-    if (!r.screenshotData) throw new Error('beginFrame 这一拍没有返回截图');
-    return Buffer.from(r.screenshotData, 'base64');
+    return captureFrame(bakery, shotParams, opts.signal);
   };
 
   // 一帧 = 下发时间 → 等网络 → 排空 → 推一拍(React 提交后的 rAF、Motion 建动画都在这一拍里)→ 等网络
@@ -602,12 +595,30 @@ export async function bakeFrames(bakery, opts = {}) {
      * 钉之后再排空:__pcSyncAnims 对越过终点的动画调 finish(),Motion 在 onfinish 回调里把终态写进 style ——
      * 那是排队的任务,排空后探针的 mut 才看得见它。
      */
-    const probe = await page.evaluate(async () => {
+    let probe = await page.evaluate(async () => {
       await window.__bfSettle();
       if (window.__pcSyncAnims) window.__pcSyncAnims();
       await window.__bfSettle();
       return window.__pcStaticProbe ? window.__pcStaticProbe() : null;
     });
+    if (probe?.finished) {
+      // WAAPI finish events and AnimatePresence's replacement child need a
+      // compositor tick, then a React commit and a second tick to create the
+      // entering animation. Drain these at the SAME timeline time. Otherwise
+      // taking an intermediate screenshot supplies those ticks by accident,
+      // and a random seek differs from a sequential export by one subtitle frame.
+      const finished = probe.finished;
+      for (let pass = 0; pass < 2; pass++) {
+        await beginFrame();
+        probe = await page.evaluate(async () => {
+          await window.__bfSettle();
+          window.__pcSyncAnims?.();
+          await window.__bfSettle();
+          return window.__pcStaticProbe?.();
+        });
+      }
+      if (probe) probe.finished += finished;
+    }
     if (trace && wantTrace) trace.push(await page.evaluate((i) => ({
       i, perfNow: performance.now(), timelineNow: document.timeline.currentTime, probeMs: window.__pcProbeMs,
       anims: document.getAnimations().map((a) => [a.playState, a.currentTime, a.startTime, a.effect && a.effect.target && a.effect.target.className && String(a.effect.target.className).slice(0, 24)]),
@@ -615,7 +626,7 @@ export async function bakeFrames(bakery, opts = {}) {
     // 再等一次网络:这一拍里新挂的组件发出的请求,requestWillBeSent 事件和 beginFrame 的回复谁先到 Node 没有保证,
     // 上面那次 waitNet 可能正好看见 0 个在途。经过一次页面内往返,事件已经追上;没有请求时这里不花时间。
     await waitNet();
-    await page.evaluate(() => window.__bfAssets());
+    await waitFrameReady(bakery, opts.signal);
     // 四个条件同时成立才算静止,少一个都会渲出坏帧 —— 理由见 ExportView 的 __pcStaticProbe。
     // finished:这一帧被 __pcSyncAnims 收束的动画数。动画在这一帧跳到终态,画面变了,但收束后 anims 里
     // 已经没有它、DOM 也没动 —— 只看 anims 会在动画结束那一帧误判静止。

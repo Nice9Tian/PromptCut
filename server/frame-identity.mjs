@@ -8,7 +8,7 @@ export const digest = value => createHash('sha256').update(stableJson(value)).di
 /** Audio, UI state and other cuts do not change this cut's pixels. */
 export function frameIdentity(project, code = '') {
   const { width, height, fps, duration, themeId, camera3dFov, tracks, media, filters, pixelMaps } = project;
-  return digest({ pipeline: 1, code, width, height, fps, duration, themeId, camera3dFov, tracks, media, filters, pixelMaps });
+  return digest({ pipeline: 2, code, width, height, fps, duration, themeId, camera3dFov, tracks, media, filters, pixelMaps });
 }
 export function trackPrefixes(project, code = '') {
   return [...project.tracks].reverse().filter(t => !t.hidden).map((track, i, bottomUp) => {

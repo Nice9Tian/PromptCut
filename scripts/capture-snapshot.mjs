@@ -1,4 +1,5 @@
 import { prepareFrameMedia } from './frame-media.mjs';
+import { captureFrame } from './capture-frame.mjs';
 
 /** A, B->C and export all rasterize the same frozen HTML in the same document. */
 export async function captureSnapshot(bakery, html, screenshot = { format: 'png', optimizeForSpeed: true }) {
@@ -31,14 +32,7 @@ export async function captureSnapshot(bakery, html, screenshot = { format: 'png'
       await document.fonts.ready;
     });
     await prepareFrameMedia(bakery);
-    let result;
-    for (let attempt = 0; attempt < 4; attempt++) {
-      result = await bakery.beginFrame({ screenshot });
-      if (result.screenshotData) break;
-      await new Promise(resolve => setTimeout(resolve, 8));
-    }
-    if (!result.screenshotData) throw new Error('Chrome did not return the requested frame');
-    return Buffer.from(result.screenshotData, 'base64');
+    return await captureFrame(bakery, screenshot);
   } finally {
     await bakery.page.evaluate(() => {
       const box = document.getElementById('pc-frame-snapshot');

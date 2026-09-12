@@ -13,18 +13,26 @@ export function installFrameMedia() {
   window.__pcPrepareFrameMedia = async () => {
     await Promise.all([...(document.getElementById('pc-frame-snapshot') || document).querySelectorAll('video[data-pc-media-src], img[data-pc-media-src]')].map(v => new Promise((resolve, reject) => {
       if (v.tagName === 'IMG') {
-        const finishImage = error => error ? reject(error) : resolve();
+        const loaded = () => finishImage();
+        const failed = () => finishImage(new Error(`Image load failed: ${v.dataset.pcMediaSrc}`));
+        const finishImage = error => {
+          clearTimeout(timer);
+          v.removeEventListener('load', loaded); v.removeEventListener('error', failed);
+          error ? reject(error) : resolve();
+        };
         const timer = setTimeout(() => finishImage(new Error(`Image load timed out: ${v.dataset.pcMediaSrc}`)), 20000);
-        v.addEventListener('load', () => { clearTimeout(timer); finishImage(); }, { once: true });
-        v.addEventListener('error', () => { clearTimeout(timer); finishImage(new Error(`Image load failed: ${v.dataset.pcMediaSrc}`)); }, { once: true });
-        v.style.visibility = 'visible';
+        v.addEventListener('load', loaded, { once: true });
+        v.addEventListener('error', failed, { once: true });
+        v.style.visibility = v.dataset.pcMediaHidden === 'true' ? 'hidden' : 'visible';
         v.src = v.dataset.pcMediaSrc;
         if (v.complete && v.naturalWidth) { clearTimeout(timer); finishImage(); }
         return;
       }
-      let sought = false;
+      let sought = false, finished = false;
       const events = ['loadedmetadata', 'loadeddata', 'seeked', 'canplay', 'error'];
       const finish = error => {
+        if (finished) return;
+        finished = true;
         clearTimeout(timer);
         events.forEach(e => v.removeEventListener(e, check));
         error ? reject(error) : resolve();
@@ -42,12 +50,13 @@ export function installFrameMedia() {
       };
       const timer = setTimeout(() => finish(new Error(`Video seek timed out: ${v.dataset.pcMediaSrc}`)), 20000);
       events.forEach(e => v.addEventListener(e, check));
-      v.style.visibility = 'visible';
+      v.style.visibility = v.dataset.pcMediaHidden === 'true' ? 'hidden' : 'visible';
       v.preload = 'auto';
       v.src = v.dataset.pcMediaSrc;
       v.load();
       check();
     })));
+    document.dispatchEvent(new Event('pc:frame-media-ready'));
   };
 }
 
@@ -63,4 +72,8 @@ export async function prepareFrameMedia(bakery) {
   }
   await pending;
   if (failure) throw failure;
+  // Commit the decoded/seeked media before requesting a screenshot. A paused
+  // video hidden behind another layer may never fire requestVideoFrameCallback;
+  // waiting on that callback would deadlock otherwise valid timeline frames.
+  await bakery.beginFrame();
 }

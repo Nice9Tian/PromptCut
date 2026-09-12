@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { CardDef, CardProps } from "../../kernel/types";
+import { beginFrameWork } from "../../kernel/frameReady";
 import { cameraFor, DEFAULT_FOV_DEG } from "../../kernel/space3d";
 import {
   addLights, applyTexture, geometryOf, materialOf, poseMesh, radiusFor, shapeOf,
@@ -79,8 +80,9 @@ function Scene3DCard({ params, t = 0, stage }: CardProps<Params>) {
 
   useEffect(() => {
     let dead = false;
-    loadThree().then((m) => { if (!dead) setTHREE(m); }).catch((e) => console.warn("[scene-3d] three 加载失败:", e));
-    return () => { dead = true; };
+    const ready = beginFrameWork('scene-3d engine');
+    loadThree().then((m) => { if (!dead) setTHREE(m); ready.ready(); }).catch((e) => { ready.fail(e); console.warn("[scene-3d] three 加载失败:", e); });
+    return () => { dead = true; ready.dispose(); };
   }, []);
 
   /*
@@ -131,12 +133,14 @@ function Scene3DCard({ params, t = 0, stage }: CardProps<Params>) {
      * 拿到图之后要手动再画一帧 —— 那时 t 不一定变,不能指望下面那个 effect 帮忙。
      */
     let texture: any = null;
+    const textureReady = params.texture ? beginFrameWork('scene-3d texture') : null;
     if (params.texture) {
       texture = applyTexture(THREE, material, params.texture, () => {
         if (!gl.current) return;
         poseMesh(mesh, params, tRef.current);
         gl.current.renderer.render(gl.current.scene, gl.current.camera);
-      });
+        textureReady?.ready();
+      }, error => textureReady?.fail(error));
     }
 
     /*
@@ -206,6 +210,7 @@ function Scene3DCard({ params, t = 0, stage }: CardProps<Params>) {
     ro.observe(el);
 
     return () => {
+      textureReady?.dispose();
       ro.disconnect();
       gl.current?.dispose();
       gl.current = null;

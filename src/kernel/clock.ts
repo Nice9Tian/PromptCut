@@ -19,6 +19,7 @@ declare global {
     __pcResetAnims?: () => void;
     /** 导出:本帧素材(视频 seek 等)就绪 */
     __pcFrameReady?: () => Promise<void>;
+    __pcFrameWorkStatus?: () => { label: string; error?: string }[];
     /**
      * 导出:经 exportClock 包过的 rAF 被注册了多少次。
      * rAF 驱动的 JS 动画(Motion 的 MotionValue)每帧都会重新注册下一帧,停了就不再注册,

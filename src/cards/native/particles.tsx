@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { beginFrameWork } from "../../kernel/frameReady";
 import { tsParticles, setRandom, type Container } from "@tsparticles/engine";
 import { loadSlim } from "@tsparticles/slim";
 import type { CardDef, CardProps } from "../../kernel/types";
@@ -117,6 +118,7 @@ export function ParticlesView({ resolve, seed, depsKey, t = 0 }: { resolve: () =
 
     // HMR 重跑这个模块时引擎已经 load 过,再注册插件会抛错;吞掉,插件本来就在
     engineReady ??= loadSlim(tsParticles).catch(() => {});
+    const ready = beginFrameWork('particles');
     Promise.all([engineReady, resolve()])
       .then(([, opts]) => {
         if (dead || !box.current) return undefined;
@@ -126,18 +128,20 @@ export function ParticlesView({ resolve, seed, depsKey, t = 0 }: { resolve: () =
         return tsParticles.load({ element: box.current, options: forceOurs(opts) });
       })
       .then((c) => {
-        if (!c) return;
+        if (!c) { ready.dispose(); return; }
         if (dead || gen !== state.current.gen) { c.destroy(); return; }
         // 掐掉引擎自己的帧循环:从现在起只有我们按 t 推它
         c.pause();
         state.current.container = c;
         state.current.atMs = 0;
         stepTo(state.current, seed, wantT.current);
+        ready.ready();
       })
-      .catch((e) => console.warn("[particles] 启动失败:", e));
+      .catch((e) => { ready.fail(e); console.warn("[particles] 启动失败:", e); });
 
     return () => {
       dead = true;
+      ready.dispose();
       state.current.container?.destroy();
       state.current.container = null;
     };

@@ -12,7 +12,8 @@ function PixelMappedMedia({ media, clip, t, project, style, def }: { media: any;
   const targetSource = useRef<HTMLVideoElement | HTMLImageElement>(null);
   const draw = useCallback(() => {
     const c = canvas.current; const s = source.current;
-    if (!c || !s || ((s as HTMLVideoElement).readyState != null && (s as HTMLVideoElement).readyState < 2)) return;
+    const ready = (el: HTMLVideoElement | HTMLImageElement) => el instanceof HTMLVideoElement ? el.readyState >= 2 : el.complete && el.naturalWidth > 0;
+    if (!c || !s || !ready(s)) return;
     const w = Math.max(1, Math.round(project.width)); const h = Math.max(1, Math.round(project.height));
     if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
     const ctx = c.getContext("2d", { willReadFrequently: true }); if (!ctx) return;
@@ -26,7 +27,7 @@ function PixelMappedMedia({ media, clip, t, project, style, def }: { media: any;
     const data = ctx.getImageData(0, 0, w, h); const d = data.data;
     let target: ImageData | null = null;
     const ts = targetSource.current;
-    if (def.to?.kind === "media" && ts && ((ts as HTMLVideoElement).readyState == null || (ts as HTMLVideoElement).readyState >= 2)) {
+    if (def.to?.kind === "media" && ts && ready(ts)) {
       const tc = document.createElement("canvas"); tc.width = w; tc.height = h;
       const tx = tc.getContext("2d");
       if (tx) { tx.drawImage(ts, 0, 0, w, h); target = tx.getImageData(0, 0, w, h); }
@@ -38,20 +39,21 @@ function PixelMappedMedia({ media, clip, t, project, style, def }: { media: any;
     }
     ctx.putImageData(data, 0, 0);
   }, [def, project.width, project.height, t]);
-  useEffect(() => { draw(); }, [draw]);
   useEffect(() => {
-    const timer = window.setInterval(draw, 40);
-    return () => window.clearInterval(timer);
+    // Source images/videos load only at capture time. Draw synchronously when
+    // all decoders are ready; a wall-clock timer can miss the screenshot.
+    document.addEventListener("pc:frame-media-ready", draw);
+    return () => document.removeEventListener("pc:frame-media-ready", draw);
   }, [draw]);
   const hidden: React.CSSProperties = { ...style, visibility: "hidden", position: "absolute" };
   const targetMedia = def.to?.kind === "media" ? project.media.find((m) => m.id === (def.to as Extract<PixelMapDef["to"], { kind: "media" }>).mediaId) : null;
   const targetHidden: React.CSSProperties = { ...hidden, pointerEvents: "none" };
   return <>
-    {isImageMedia(media) ? <img ref={source as any} src={media.url} alt="" style={hidden} /> :
-      <video ref={source as any} muted playsInline preload="none" data-pc-media-src={media.url}
+    {isImageMedia(media) ? <img ref={source as any} data-pc-media-src={media.url} data-pc-media-hidden="true" alt="" style={hidden} /> :
+      <video ref={source as any} muted playsInline preload="none" data-pc-media-src={media.url} data-pc-media-hidden="true"
         data-pc-media-time={Math.max(0, (clip.mediaOffset ?? 0) + t - clip.start)} style={hidden} />}
-    {targetMedia ? (isImageMedia(targetMedia) ? <img ref={targetSource as any} src={targetMedia.url} alt="" style={targetHidden} /> :
-      <video ref={targetSource as any} muted playsInline preload="none" data-pc-media-src={targetMedia.url}
+    {targetMedia ? (isImageMedia(targetMedia) ? <img ref={targetSource as any} data-pc-media-src={targetMedia.url} data-pc-media-hidden="true" alt="" style={targetHidden} /> :
+      <video ref={targetSource as any} muted playsInline preload="none" data-pc-media-src={targetMedia.url} data-pc-media-hidden="true"
         data-pc-media-time={Math.max(0, t)} style={targetHidden} />) : null}
     <canvas ref={canvas} data-pc-pixel-map={JSON.stringify(def)} data-pc-pixel-time={t} style={style} />
   </>;
@@ -74,7 +76,7 @@ export function FrameScene({ project, t, playToken }: { project: Project; t: num
           {clip.pixelMap && project.pixelMaps?.find((x) => x.id === clip.pixelMap!.id) ? (() => {
             const def = project.pixelMaps!.find((x) => x.id === clip.pixelMap!.id)!;
             return <PixelMappedMedia media={media} clip={clip} t={t} project={project} style={style} def={def} />;
-          })() : isImageMedia(media) ? <img src={media.url} alt="" style={style} /> :
+          })() : isImageMedia(media) ? <img data-pc-media-src={media.url} alt="" style={{ ...style, visibility: "hidden" }} /> :
             <video muted playsInline preload="none" data-pc-media-src={media.url}
               data-pc-media-time={Math.max(0, (clip.mediaOffset ?? 0) + t - clip.start)}
               style={{ ...style, visibility: "hidden" }} />}

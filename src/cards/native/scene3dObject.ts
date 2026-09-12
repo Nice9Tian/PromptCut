@@ -140,6 +140,7 @@ export function applyTexture(
   material: any,
   url: string,
   onReady: (tex: any) => void,
+  onError?: (error: unknown) => void,
 ): any {
   return new THREE.TextureLoader().load(
     url,
@@ -153,6 +154,6 @@ export function applyTexture(
       onReady(tex);
     },
     undefined,
-    () => console.warn("[scene-3d] 纹理加载失败:", url),
+    error => { console.warn("[scene-3d] 纹理加载失败:", url); onError?.(error); },
   );
 }

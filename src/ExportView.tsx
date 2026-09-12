@@ -6,6 +6,7 @@ import { installExportClock } from "./kernel/exportClock";
 import type { Timeline } from "./kernel/types";
 import { flattenOverlay, type Project } from "./kernel/project";
 import { themeStyle } from "./themes";
+import { frameWorkStatus, waitForFrameWork } from "./kernel/frameReady";
 import { demoTimeline } from "./demo";
 import "./cards";
 
@@ -80,7 +81,8 @@ export default function ExportView() {
         flushSync(() => setT(sec));
 
       };
-      window.__pcFrameReady = () => Promise.resolve();
+      window.__pcFrameReady = waitForFrameWork;
+      window.__pcFrameWorkStatus = frameWorkStatus;
 
       // flushSync:重挂载在这次调用里同步完成。否则 React 的调度任务落在下一格虚拟时间的哪个位置
       // 两次导出不一样,卡片的第一帧就会差一帧。
