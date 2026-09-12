@@ -148,24 +148,28 @@ export class FramePipeline {
     if (at >= 0) this.userPool.splice(at, 1);
     void session.bakery?.close().catch(() => {});
   }
-  async acquireUser(project, signal) {
+  async acquireUser(project, signal, onSession = () => {}) {
+    if (signal?.aborted) throw Object.assign(new Error('Frame request cancelled'), { cancelled: true });
     await this.prewarmUser(project);
     const waitStart = Date.now();
     for (;;) {
+      if (signal?.aborted) throw Object.assign(new Error('Frame request cancelled'), { cancelled: true });
       const session = this.userPool.find(s => !s.dead && !s.busy);
       if (session) {
         session.busy = true;
+        onSession(session);
         try {
           await session.bakery.reset(project, this.emptyUrl(project));
           await session.bakery.page.setViewport({ width: project.width, height: project.height, deviceScaleFactor: 1 });
           await session.bakery.client.send('Emulation.setDefaultBackgroundColorOverride', { color: { r: 0, g: 0, b: 0, a: 0 } });
+          if (signal?.aborted) throw Object.assign(new Error('Frame request cancelled'), { cancelled: true });
           return session;
         } catch (e) {
-          this.dropUserSession(session);
+          if (e.cancelled) this.releaseUser(session);
+          else this.dropUserSession(session);
           throw e;
         }
       }
-      if (signal?.aborted) throw Object.assign(new Error('Frame request cancelled'), { cancelled: true });
       // The pair is intentionally bounded.  Waiting here is short in normal
       // use; a watchdog around readFrames will kill a renderer that does not
       // release its slot.
@@ -178,11 +182,6 @@ export class FramePipeline {
   releaseUser(session) {
     if (!session || session.dead) return;
     session.busy = false;
-  }
-  dropBusyUsers() {
-    for (const session of [...this.userPool]) if (session.busy) this.dropUserSession(session);
-    // Replenish asynchronously so the next pointer event lands on a hot page.
-    void this.prewarmUser().catch(() => {});
   }
   release(lane) {
     const session = this.lanes.get(lane);
@@ -274,12 +273,15 @@ export class FramePipeline {
     if (lane === 'user') {
       const watchdog = new AbortController();
       const combined = signal ? AbortSignal.any([signal, watchdog.signal]) : watchdog.signal;
-      let timer;
-      const work = this.readFramesCore(entry, frames, lane, combined);
+      let timer, ownedSession;
+      const work = this.readFramesCore(entry, frames, lane, combined, session => { ownedSession = session; });
       const timeout = new Promise((_, reject) => {
         timer = setTimeout(() => {
           watchdog.abort();
-          this.dropBusyUsers();
+          // A stalled old request must not kill the other hot Chrome serving
+          // the latest pointer position. Ownership begins before reset awaits.
+          if (ownedSession && !ownedSession.dead) this.dropUserSession(ownedSession);
+          void this.prewarmUser(entry.project).catch(() => {});
           reject(Object.assign(new Error(`用户预览渲染超过 ${USER_RENDER_TIMEOUT_MS / 1000} 秒，已重启 Chrome。`), { status: 504, timedOut: true }));
         }, USER_RENDER_TIMEOUT_MS);
       });
@@ -288,7 +290,7 @@ export class FramePipeline {
     }
     return this.readFramesCore(entry, frames, lane, signal);
   }
-  async readFramesCore(entry, frames, lane = 'agent', signal) {
+  async readFramesCore(entry, frames, lane = 'agent', signal, onSession) {
     const result = new Map();
     const htmlFrames = [];
     const missing = [];
@@ -308,7 +310,7 @@ export class FramePipeline {
       }
     }
     if (!htmlFrames.length && !missing.length) return result;
-    const userSession = lane === 'user' ? await this.acquireUser(entry.project, signal) : null;
+    const userSession = lane === 'user' ? await this.acquireUser(entry.project, signal, onSession) : null;
     const bakery = userSession?.bakery || await this.acquire(lane, entry.project);
     try {
       // The full-scene MOV lane owns the result returned by see_frames. It
