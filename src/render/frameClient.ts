@@ -2,7 +2,7 @@ import type { Project } from "../kernel/project";
 import { invalidatePrerenderBase, prerenderUrl } from "../editor/prerender";
 
 export type FrameTarget = "user" | "prerender";
-export type FrameLane = "user" | "agent" | "background";
+export type FrameLane = "user" | "inter_face" | "agent" | "background";
 export interface FrameRequestOptions {
   /** 人类预览同源；长任务和后台预烘可显式走预渲染进程。 */
   target?: FrameTarget;

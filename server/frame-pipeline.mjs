@@ -43,6 +43,11 @@ export class FramePipeline {
     // renderer can be discarded while the other one takes the next request.
     this.userPool = [];
     this.userPrewarm = null;
+    // The editor can emit many pointer events before the previous render
+    // completes. Keep one generation only; stale user requests must never
+    // accumulate pages or force both hot Chromes to restart.
+    this.userGeneration = 0;
+    this.userGenerationController = null;
   }
   async entry(project) {
     project = { ...project, media: await Promise.all((project.media || []).map(async media => {
@@ -186,14 +191,36 @@ export class FramePipeline {
   }
   /** Shared public entry point. Independent requests in the same turn merge into one forward pass. */
   async see_frames(project, times, { signal, lane = 'agent' } = {}) {
-    lane = lane === 'user' || lane === 'background' ? lane : 'agent';
+    // `inter_face` is the explicit name used by the interactive client. Keep
+    // `user` as a backwards-compatible alias; both must use the two hot pages.
+    lane = lane === 'inter_face' || lane === 'user' ? 'user' : lane === 'background' ? 'background' : 'agent';
+    const generation = lane === 'user' ? ++this.userGeneration : 0;
+    const generationController = lane === 'user' ? new AbortController() : null;
+    if (generationController) {
+      this.userGenerationController?.abort();
+      this.userGenerationController = generationController;
+    }
+    const renderSignal = generationController
+      ? (signal ? AbortSignal.any([signal, generationController.signal]) : generationController.signal)
+      : signal;
     const entry = await this.entry(project);
     const fps = project.fps || 30;
     const max = Math.max(0, Math.floor(project.duration * fps) - 1);
     if (!times.length || times.some(t => !Number.isFinite(t))) throw new Error('Frame times must be finite numbers');
     const frames = [...new Set(times.map(t => Math.max(0, Math.min(max, Math.round(t * fps)))))];
     return new Promise((resolve, reject) => {
-      this.queue.push({ entry, frames, signal, lane, resolve, reject });
+      if (lane === 'user' && generation !== this.userGeneration) {
+        reject(Object.assign(new Error('交互帧请求已过期，已跳过旧请求。'), { status: 499, cancelled: true, superseded: true }));
+        return;
+      }
+      if (lane === 'user') {
+        // Remove requests that reached the queue before this pointer event.
+        // Agent/background queues are deliberately left untouched.
+        const stale = this.queue.filter(r => r.lane === 'user');
+        this.queue = this.queue.filter(r => r.lane !== 'user');
+        stale.forEach(r => r.reject(Object.assign(new Error('交互帧请求已被更新的请求替代。'), { status: 499, cancelled: true, superseded: true })));
+      }
+      this.queue.push({ entry, frames, signal: renderSignal, lane, generation, resolve, reject });
       if (!this.timer) this.timer = setTimeout(() => {
         this.timer = null;
         const requests = this.queue.splice(0);
@@ -218,7 +245,10 @@ export class FramePipeline {
   async flush(requests, lane = 'agent') {
     const groups = new Map();
     for (const request of requests) {
-      if (request.signal?.aborted) { request.reject(new Error('Frame request cancelled')); continue; }
+      if (request.signal?.aborted || (lane === 'user' && request.generation !== this.userGeneration)) {
+        request.reject(Object.assign(new Error('交互帧请求已过期，已跳过旧请求。'), { status: 499, cancelled: true, superseded: true }));
+        continue;
+      }
       const list = groups.get(request.entry.key) || [];
       list.push(request); groups.set(request.entry.key, list);
     }
@@ -228,7 +258,7 @@ export class FramePipeline {
       try {
         const result = await this.readFrames(entry, frames, lane, group.find(r => !r.signal?.aborted)?.signal);
         for (const request of group) {
-          if (request.signal?.aborted) request.reject(new Error('Frame request cancelled'));
+          if (request.signal?.aborted || (lane === 'user' && request.generation !== this.userGeneration)) request.reject(Object.assign(new Error('交互帧请求已过期，已跳过旧请求。'), { status: 499, cancelled: true, superseded: true }));
           else request.resolve(new Map(request.frames.map(n => [n, result.get(n)])));
         }
       } catch (e) { group.forEach(r => r.reject(e)); }
