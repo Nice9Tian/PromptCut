@@ -296,8 +296,14 @@ export class FramePipeline {
     try {
       const uncached = missing.filter(n => !entry.html.has(n));
       if (uncached.length) {
+        // A/Agent sparse requests still have to advance through every
+        // intermediate frame for deterministic Motion state, but retaining
+        // all of those HTML snapshots would turn a 60-frame random probe on
+        // a long timeline into a multi-gigabyte in-memory cache. B preload
+        // passes an explicit full range and continues to record every frame.
+        const requestedSnapshots = new Set(uncached);
         await bakeFrames(bakery, { out: entry.dir, targetFrames: uncached, snapshotOnly: true, signal,
-          onSnapshot: (n, html, controls) => this.record(entry, n, html, controls) });
+          onSnapshot: (n, html, controls) => requestedSnapshots.has(n) && this.record(entry, n, html, controls) });
         await this.save(entry);
       }
       for (const frame of missing) {
@@ -422,6 +428,8 @@ export class FramePipeline {
   }
   async close() {
     clearTimeout(this.timer);
+    this.userGenerationController?.abort();
+    this.userGenerationController = null;
     for (const r of this.queue.splice(0)) r.reject(new Error('Renderer closed'));
     for (const generation of this.generations.values()) generation.controller.abort();
     await Promise.allSettled([this.foreground, this.background, ...this.laneChains.values()]);
