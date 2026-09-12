@@ -1,7 +1,8 @@
-import { AnimatePresence, motion } from "motion/react";
+import { useMemo } from "react";
 import type { CardDef, CardProps } from "../../kernel/types";
 import { HudParams, hudControls, hudDefaults, getPositionClass, accentOf } from "./hud";
 import "./hud.css";
+import { compileCaptionFrames, captionFrameAt } from "../../render/captionFrame.mjs";
 
 interface Params extends HudParams {
   lines: string;
@@ -9,14 +10,6 @@ interface Params extends HudParams {
   strokeOn: string;
   strokeW: number;
   strokeColor: string;
-}
-
-function parseLines(raw: string) {
-  const parts = raw.split(/\n|\/\//).map((s) => s.trim()).filter(Boolean);
-  return parts.map((p) => {
-    const [startStr, endStr, zh, en] = p.split("|");
-    return { start: parseFloat(startStr), end: parseFloat(endStr), zh: zh || "", en: en || "" };
-  });
 }
 
 function genTextShadow(w: number, color: string) {
@@ -32,9 +25,9 @@ function genTextShadow(w: number, color: string) {
 }
 
 function CaptionTrackCard({ params, t = 0 }: CardProps<Params>) {
-  const lines = parseLines(params.lines);
-  const curIdx = lines.findIndex((l) => t >= l.start && t < l.end);
-  const curLine = curIdx >= 0 ? lines[curIdx] : null;
+  const compiled = useMemo(() => compileCaptionFrames(params.lines), [params.lines]);
+  const frame = captionFrameAt(compiled, t);
+  const curLine = frame?.line;
 
   if (!curLine) {
     return <div className={`hud-wrapper ${getPositionClass(params.position)}`} style={{ alignItems: "flex-end", paddingBottom: "120px" }} />;
@@ -45,13 +38,9 @@ function CaptionTrackCard({ params, t = 0 }: CardProps<Params>) {
 
   return (
     <div className={`hud-wrapper ${getPositionClass(params.position)}`} style={{ alignItems: "flex-end", paddingBottom: "120px" }}>
-      <AnimatePresence mode="wait">
-        <motion.div
-          key={curIdx}
-          initial={{ opacity: 0, y: 10 }}
-          animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0 }}
-          transition={{ duration: 0.2 }}
+        <div
+          key={frame!.index}
+          style={{ opacity: frame!.opacity, transform: frame!.y === 0 ? "none" : `translateY(${frame!.y}px)` }}
           className="flex flex-col items-center"
         >
           <div className="text-[56px] text-white text-center font-bold tracking-wide" style={strokeStyle}>
@@ -71,8 +60,7 @@ function CaptionTrackCard({ params, t = 0 }: CardProps<Params>) {
               {curLine.en}
             </div>
           )}
-        </motion.div>
-      </AnimatePresence>
+        </div>
     </div>
   );
 }
@@ -124,5 +112,6 @@ export const captionTrack: CardDef<Params> = {
     { id: "lines", label: "字幕行", role: "list", params: ["lines", "showEn", "strokeOn", "strokeW", "strokeColor"] },
   ],
   lifecycle: { after: "evolve", exit: ["fade"] },
+  frameMode: "direct",
   Component: CaptionTrackCard,
 };
