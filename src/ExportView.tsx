@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { flushSync } from "react-dom";
 import { FrameScene } from "./render/FrameScene";
 import { Stage } from "./kernel/Stage";
@@ -6,6 +6,9 @@ import { installExportClock } from "./kernel/exportClock";
 import type { Timeline } from "./kernel/types";
 import { flattenOverlay, type Project } from "./kernel/project";
 import { themeStyle } from "./themes";
+import { getCard } from "./kernel/registry";
+import { planFrameWindow } from "./render/frameWindow.mjs";
+import { clipFrameMode } from "./render/frameMode.mjs";
 import { frameWorkStatus, waitForFrameWork } from "./kernel/frameReady";
 import { demoTimeline } from "./demo";
 import "./cards";
@@ -34,9 +37,17 @@ function stripMedia(p: Project): Project {
  */
 export default function ExportView() {
   const [t, setT] = useState(0);
+  const [directT, setDirectT] = useState(0);
   const [timeline, setTimeline] = useState<Timeline | null>(null);
   const [project, setProject] = useState<Project | null>(null);
   const [playToken, setPlayToken] = useState(1);
+  const [frameClipIds, setFrameClipIds] = useState<Set<string> | null>(null);
+  const renderProject = useMemo(() => !project || !frameClipIds ? project : ({ ...project,
+    tracks: project.tracks.map(tr => ({ ...tr, clips: tr.clips.filter(c => !c.cardId || frameClipIds.has(c.id)) })),
+  }), [project, frameClipIds]);
+  const renderTimeline = useMemo(() => !timeline || !frameClipIds ? timeline : ({ ...timeline,
+    clips: timeline.clips.filter(c => frameClipIds.has(c.id)),
+  }), [timeline, frameClipIds]);
   useEffect(() => {
     document.documentElement.style.background = "transparent";
     document.body.style.background = "transparent";
@@ -46,13 +57,13 @@ export default function ExportView() {
     const url = new URLSearchParams(location.search).get("timeline");
     (url ? fetch(url).then((r) => r.json()) : Promise.resolve(demoTimeline))
       .then(async (json: unknown) => {
-        // Project 形状(有 tracks)先把素材预取成 blob:,再进入下面的常规流程
+        // 素材保持占位,到截图那一帧才加载。
         if (json && Array.isArray((json as Project).tracks)) return CARDS_ONLY ? stripMedia(json as Project) : (json as Project);
         return json;
       })
       // 命名函数表达式:函数体既是首次加载的装配流程,也是换项目时要重跑的那一套。
       // 取个名字就能在体内自己调用(见下面的 __pcLoadProject),不用把这一大块抽出去。
-      .then(function install(json: any) {
+      .then(function install(json: any, options?: { deferCards?: boolean }) {
       let tl: Timeline;
       let proj: Project | null = null;
 
@@ -65,11 +76,16 @@ export default function ExportView() {
 
       setProject(proj);
       setTimeline(tl);
+      setFrameClipIds(options?.deferCards ? new Set() : null);
+      setT(0);
+      setDirectT(0);
       window.__pcTimeline = tl;
+      window.__pcPlanFrameWindow = (frames, fps) => planFrameWindow(tl.clips, frames, fps,
+        clip => clipFrameMode(clip, getCard(clip.cardId)));
       window.__pcExportMs = 0;
 
 
-      window.__pcSetT = (sec: number) => {
+      window.__pcSetT = (sec: number, directSec = sec) => {
         window.__pcExportMs = sec * 1000;
         // flushSync:和下面 __pcRestartCards 同一个理由 —— 这一帧的渲染(尤其是 clip 边界上
         // 卡片的挂载/卸载)必须在这次调用里同步提交完。不然 React 把它排进调度器,落在
@@ -78,11 +94,25 @@ export default function ExportView() {
         // 看见,锚点差一帧,整段入场差一帧相位。实测 demo 时间轴 blur-fade 卡切进来那一段
         // (第 60~71 帧)连导两趟约一半概率全不同,就是它。同步提交之后,挂载在推进虚拟时间之前
         // 就已落地,第一次 rAF 里 Motion 就把动画建好,不再依赖截图耗时。
-        flushSync(() => setT(sec));
+        flushSync(() => { setT(sec); setDirectT(directSec); });
 
       };
       window.__pcFrameReady = waitForFrameWork;
       window.__pcFrameWorkStatus = frameWorkStatus;
+      window.__pcSetFrameWindow = (clipIds, startTime, directTime = startTime) => {
+        // Dispose the preceding pass before moving its clock. Mount only the
+        // selected cards, with the clock already at their first replay frame.
+        flushSync(() => setFrameClipIds(new Set()));
+        window.__pcExportMs = startTime * 1000;
+        window.__pcResetRandom?.(1);
+        window.__pcResetAnims?.();
+        flushSync(() => {
+          setT(startTime);
+          setDirectT(directTime);
+          setFrameClipIds(clipIds === null ? null : new Set(clipIds));
+          setPlayToken(n => n + 1);
+        });
+      };
 
       // flushSync:重挂载在这次调用里同步完成。否则 React 的调度任务落在下一格虚拟时间的哪个位置
       // 两次导出不一样,卡片的第一帧就会差一帧。
@@ -159,12 +189,12 @@ export default function ExportView() {
        * 起 Chrome + goto + 字体首次布局加起来是固定的几秒钟,每烘一次都重付一遍太贵。
        * 走的是 install 自己,和重新加载页面同一条路径,不会两套行为。
        */
-      window.__pcLoadProject = async (raw: unknown) => {
+      window.__pcLoadProject = async (raw: unknown, options?: { deferCards?: boolean }) => {
         window.__pcReady = false;
         const next = raw && Array.isArray((raw as Project).tracks)
           ? (CARDS_ONLY ? stripMedia(raw as Project) : (raw as Project))
           : raw;
-        install(next);
+        install(next, options);
       };
 
       window.__pcReady = true;
@@ -193,8 +223,8 @@ export default function ExportView() {
         ...themeStyle(timeline.themeId),
       }}
     >
-      {project ? <FrameScene project={project} t={t} playToken={playToken} />
-        : <Stage timeline={timeline} t={t} playToken={playToken} />}
+      {renderProject ? <FrameScene project={renderProject} t={t} directT={directT} playToken={playToken} />
+        : <Stage timeline={renderTimeline!} t={t} directT={directT} playToken={playToken} />}
 
     </div>
   );

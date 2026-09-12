@@ -1,6 +1,7 @@
 import puppeteer from 'puppeteer';
 import { captureSnapshot } from './capture-snapshot.mjs';
 import { captureFrame } from './capture-frame.mjs';
+import { framesInWindow } from '../src/render/frameWindow.mjs';
 import { waitFrameReady } from './frame-ready.mjs';
 import { installFrameMedia, prepareFrameMedia } from './frame-media.mjs';
 import path from 'path';
@@ -341,8 +342,8 @@ async function newSession(browser, url) {
      * 原地换一个项目再等就绪 —— 不重新导航。只在 reset() 里、在**全新 page** 上用;
      * 在用过的页面上原地换项目,动画锚点和已挂载的卡片都是上一趟的,拿到的不是第 0 帧。
      */
-    async loadProject(project) {
-      await page.evaluate((p) => window.__pcLoadProject(p), project);
+    async loadProject(project, options = {}) {
+      await page.evaluate((p, o) => window.__pcLoadProject(p, o), project, options);
       await waitReady();
     },
   };
@@ -427,10 +428,10 @@ export async function openBakery(opts = {}) {
      * 旧 page 必须关:每趟漏一个不关,renderer 进程线性泄漏(这台机器多开 Chrome 复现过 0xC0000142)。
      * `nextUrl` 换一个导出页地址再开 —— 常驻 worker 每趟烘的是不同的隔离项目,项目由页面自己去 fetch。
      */
-    async reset(project, nextUrl) {
+    async reset(project, nextUrl, options = {}) {
       const old = bakery.page;
       const s = await newSession(browser, nextUrl || url);
-      if (project) await s.loadProject(project);
+      if (project) await s.loadProject(project, options);
       Object.assign(bakery, s);
       await old.close();
     },
@@ -488,7 +489,8 @@ export async function openBakery(opts = {}) {
  *                     PNG 走 optimizeForSpeed:仍然无损(实测逐字节解码后与普通 PNG 相同),只是压得快、文件大一倍。
  *   staticSkip     —— 画面静止的帧直接复用上一张,连截都不截。判据见 ExportView 的 __pcStaticProbe
  *   verifyEvery    —— 连续复用多少帧就强制真截一张比对一次
- *   targetFrames   —— 只截这几帧(离散取样,给预烘用);仍从第 0 帧顺推,只是沿途只截这几张
+ *   targetFrames   —— 只截这几帧; fullFrame 时只回推目标所需卡片的历史
+ *   seekFromActiveClips —— false 保留从 0 推进的参考路径,用于逐像素回归比对
  *   glassFrames    —— Set<帧号>:这些帧底下有素材,截完卡片再截一张毛玻璃遮罩(PAGE_PRELUDE 的 __bfGlassOn)
  *                     到 <out>/glass/%06d.png。没有玻璃的帧不写文件;返回值的 glass 里有写了几张、玻璃的模糊量
  */
@@ -521,22 +523,33 @@ export async function bakeFrames(bakery, opts = {}) {
     endFrame = b;
   }
   /*
-   * 只截这几帧(离散取样)。仍然从第 0 帧顺推 —— 动画的锚点是「首次出现那一帧」,跳着推就没有锚点,
-   * 按 delta 积分的卡片也会走样。一趟推过去沿途截,推进只付一次(分 N 趟截 N 个时刻是 O(N²))。
+   * 只截这几帧(离散取样)。完整画面从目标所需卡片的最早历史帧顺推;HTML 采样仍覆盖全部历史。
+   * 保留卡片的原始挂载时刻,不跳过区间内的帧,避免按 delta 积分的动画走样。一趟推进沿途截图。
    * 静态跳过在这种模式下必须关死:lastBuf 可能是几十帧之前的,直接复用就是把时间轴压扁。
    */
   const targetFrames = Array.isArray(opts.targetFrames) && opts.targetFrames.length
     ? new Set(opts.targetFrames.map((n) => Math.max(0, Math.round(Number(n)))))
     : null;
   if (targetFrames) {
-    // Full-scene MOV requests still need to replay from frame 0: Motion,
-    // particles and other cards integrate state across intermediate frames.
-    // HTML-only random replay can start at the first requested frame because
-    // it uses frozen DOM snapshots.
-    startFrame = opts.fullFrame ? 0 : Math.min(...targetFrames);
+    startFrame = Math.min(...targetFrames);
     endFrame = Math.max(...targetFrames);
   }
   const staticSkip = targetFrames ? false : wantStaticSkip;
+  const frameWindow = opts.fullFrame && targetFrames && opts.seekFromActiveClips !== false && !opts.snapshotOnly && !opts.domCache
+    ? await page.evaluate(({ frames, fps }) => {
+      if (!window.__pcPlanFrameWindow) throw new Error('Frame window planner is unavailable');
+      return window.__pcPlanFrameWindow(frames, fps);
+    }, { frames: [...targetFrames], fps }) : null;
+  const advanceStartFrame = frameWindow?.startFrame ?? 0;
+  const renderRanges = frameWindow?.ranges ?? [[advanceStartFrame, endFrame]];
+  const sortedTargets = targetFrames ? [...targetFrames].sort((a, b) => a - b) : [];
+  const directFrameAt = frame => frameWindow ? (sortedTargets.find(n => n >= frame) ?? frame) : frame;
+  // Mount after planning, including the full-history / HTML paths. This also
+  // clears the selection when a bakery is reused for a different kind of pass.
+  await page.evaluate(({ clipIds, time, directTime }) => {
+    if (!window.__pcSetFrameWindow) throw new Error('Frame window API is unavailable');
+    window.__pcSetFrameWindow(clipIds, time, directTime);
+  }, { clipIds: frameWindow?.clipIds ?? null, time: advanceStartFrame / fps, directTime: directFrameAt(advanceStartFrame) / fps });
   await page.setViewport({ width, height, deviceScaleFactor: 1 });
 
   // 透明底一次性打开,不用 puppeteer 的 omitBackground(那个每截一张开关一次,开关本身会触发重绘)
@@ -578,12 +591,12 @@ export async function bakeFrames(bakery, opts = {}) {
   //       → 排空 → 钉动画 → 排空 → 探针 → 等素材。截不截图由调用方决定。返回这一帧画面静不静止。
   const step = async (frameIndex, wantTrace) => {
     // 两个计数器要在推进之前取、推进之后比;取值和下发时间合并成一次 evaluate
-    const before = await page.evaluate((sec) => {
+    const before = await page.evaluate(({ sec, directSec }) => {
       const n = { raf: window.__pcRafCount ?? 0, mut: window.__pcMutationCount ?? 0 };
       window.__pcHideFrameMedia?.();
-      window.__pcSetT(sec);
+      window.__pcSetT(sec, directSec);
       return n;
-    }, frameIndex / fps);
+    }, { sec: frameIndex / fps, directSec: directFrameAt(frameIndex) / fps });
     // 挂载时发出的请求(动态 import、素材)先落地,再推这一拍
     await waitNet();
     await page.evaluate(() => window.__bfSettle());
@@ -638,18 +651,21 @@ export async function bakeFrames(bakery, opts = {}) {
     return isStatic;
   };
 
-  // 预热:让字体、布局、首批挂载稳定下来,然后重新挂载全部卡片并清空动画锚点,正式从第 0 帧开始。
+  // 预热停在本次推帧起点,不能回到 0 挂载无关卡片、重置目标卡的入场相位。
   // 重挂载之后再走一整帧并丢掉:重挂载会让整页失效重绘,让这一次落在丢掉的帧上。
   const warmUp = async () => {
+    // Direct React cards need a layout/capture at t, not animation warm-up or
+    // a restart from their clip start. The ordinary step below commits them.
+    if (frameWindow && !frameWindow.replayClipIds.length) return;
     console.log(`Warm-up ${warmFrames} frames...`);
     for (let i = 0; i < warmFrames; i++) {
       // 预热也看取消:不看的话,取消要等预热走完、进了逐帧循环才生效,这段时间 worker 其实还占着
       if (opts.signal?.aborted) throw Object.assign(new Error('已取消'), { cancelled: true });
-      await step(0, false);
+      await step(advanceStartFrame, false);
       await beginFrame();
     }
     await page.evaluate(() => { window.__pcRestartCards && window.__pcRestartCards(); window.__pcResetAnims && window.__pcResetAnims(); });
-    await step(0, false);
+    await step(advanceStartFrame, false);
     await beginFrame();
     await page.evaluate(() => { window.__pcResetAnims && window.__pcResetAnims(); });
   };
@@ -704,7 +720,7 @@ export async function bakeFrames(bakery, opts = {}) {
       writes.push(fs.writeFile(file, data));
       if (writes.length >= 4) await Promise.all(writes.splice(0));
     };
-    for (let i = 0; i <= endFrame; i++) {
+    for (const i of framesInWindow(renderRanges)) {
       /*
        * 取消只在两帧之间生效:这时上一帧的推进、排空、截图都已经做完,页面不在半路上。
        * 调用方(render-worker)据此只换一张新页,不必把整个浏览器当成可疑的重开。
@@ -795,7 +811,9 @@ export async function bakeFrames(bakery, opts = {}) {
   const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
   console.log(`Export finished in ${elapsed}s (${totalFrames} frames${reused ? `, ${reused} reused` : ''}${glass.list.length ? `, ${glass.list.length} glass masks` : ''}).`);
   return {
-    framesDir, ext, fps, width, height, startFrame, endFrame, totalFrames, durationSec, reused, elapsed, domDir,
+    framesDir, ext, fps, width, height, startFrame, endFrame, advanceStartFrame,
+    advancedFrames: renderRanges.reduce((sum, [a, b]) => sum + b - a + 1, 0),
+    totalFrames, durationSec, reused, elapsed, domDir,
     glass: { dir: glass.dir, list: glass.list, blurs: [...glass.blurs] },
   };
 }

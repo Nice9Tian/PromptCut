@@ -1,5 +1,6 @@
 import type { ComponentType } from "react";
 import type { ClipEmphasis } from "./emphasis.ts";
+import type { FrameModeInput } from "../render/frameMode.mjs";
 
 /**
  * 控件的公共字段。
@@ -134,6 +135,13 @@ export interface CardDef<P = Record<string, unknown>> {
   lifecycle?: CardLifecycle;
   /** 按当前参数重算时序(见 CardTiming)。参数是和 defaults 合并后的全量 */
   timing?: (params: P) => CardTiming;
+  /** direct（直接求值动画）: output depends on params + local t, including transitions.
+   * stateful（状态推进动画）: requires Motion/CSS/rAF/simulation history.
+   * Independent of React usage. Missing = conservative stateful, except
+   * explicitly static (settleMs: 0, after: hold) legacy cards.
+   * Old react / non-react declarations remain accepted for .proc compatibility.
+   */
+  frameMode?: FrameModeInput;
 }
 
 /**

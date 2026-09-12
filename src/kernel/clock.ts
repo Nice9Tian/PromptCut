@@ -8,7 +8,7 @@ declare global {
   interface Window {
     __pcExportMs?: number;
     __pcClockRate?: number;
-    __pcSetT?: (sec: number) => void;
+    __pcSetT?: (sec: number, directSec?: number) => void;
     __pcReady?: boolean;
     __pcTimeline?: unknown;
     /** 导出:重新挂载全部卡片(playToken+1) */
@@ -38,7 +38,10 @@ declare global {
     /** 导出:把 Math.random 的种子拨回起点(每次重挂载卡片时调),让随机效果可复现 */
     __pcResetRandom?: (seed?: number) => void;
     /** 导出:原地换项目,不重新导航。常驻烘焙进程复用同一个页面时用。 */
-    __pcLoadProject?: (raw: unknown) => Promise<void>;
+    __pcLoadProject?: (raw: unknown, options?: { deferCards?: boolean }) => Promise<void>;
+    /** Restrict a sparse render to target-frame cards and seek before mounting. */
+    __pcSetFrameWindow?: (clipIds: string[] | null, startTime: number, directTime?: number) => void;
+    __pcPlanFrameWindow?: (frames: number[], fps: number) => import('../render/frameWindow.mjs').FrameWindow;
   }
 }
 

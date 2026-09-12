@@ -81,7 +81,7 @@ export class FramePipeline {
     const url = this.origin() + '/?export=1&timeline=' + encodeURIComponent('data:application/json,' + encodeURIComponent(JSON.stringify(empty)));
     const bakery = await openBakery({ url });
     try {
-      await bakery.loadProject(project);
+      await bakery.loadProject(project, { deferCards: true });
       await bakery.page.setViewport({ width: project.width, height: project.height, deviceScaleFactor: this.scaleForLane(lane) });
       await bakery.client.send('Emulation.setDefaultBackgroundColorOverride', { color: { r: 0, g: 0, b: 0, a: 0 } });
       return bakery;
@@ -100,7 +100,7 @@ export class FramePipeline {
       const empty = { ...project, tracks: [], media: [] };
       const url = this.origin() + '/?export=1&timeline=' + encodeURIComponent('data:application/json,' + encodeURIComponent(JSON.stringify(empty)));
       try {
-        await previous.bakery.reset(project, url);
+        await previous.bakery.reset(project, url, { deferCards: true });
         await previous.bakery.page.setViewport({ width: project.width, height: project.height, deviceScaleFactor: this.scaleForLane(lane) });
         await previous.bakery.client.send('Emulation.setDefaultBackgroundColorOverride', { color: { r: 0, g: 0, b: 0, a: 0 } });
         return previous.bakery;
@@ -159,7 +159,7 @@ export class FramePipeline {
         session.busy = true;
         onSession(session);
         try {
-          await session.bakery.reset(project, this.emptyUrl(project));
+          await session.bakery.reset(project, this.emptyUrl(project), { deferCards: true });
           await session.bakery.page.setViewport({ width: project.width, height: project.height, deviceScaleFactor: 1 });
           await session.bakery.client.send('Emulation.setDefaultBackgroundColorOverride', { color: { r: 0, g: 0, b: 0, a: 0 } });
           if (signal?.aborted) throw Object.assign(new Error('Frame request cancelled'), { cancelled: true });

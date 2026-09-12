@@ -13,6 +13,7 @@ import { connectMcpExecutor, EditorApi } from "../../ai/mcpExecutor";
 import { prerenderUrl } from "../prerender";
 import { getState, actions } from "../../store/project";
 import { allCards, getCard } from "../../kernel/registry";
+import { cardFrameMode } from "../../render/frameMode.mjs";
 import { applyEnvelope, assertNo3dOnMedia, envelopeOf, isComposite, rejectAudioVolumeKeys } from "../../kernel/envelope";
 import { addPart as addPartToTree, movePart as movePartInTree, removePart as removePartFromTree, updatePart as updatePartInTree, validatePartTree } from "../../kernel/parts";
 import { allParts, getPart } from "../../parts/registry";
@@ -344,6 +345,7 @@ export function RightPanel() {
         return wanted.map((c) => {
           const base = {
             id: c.id, name: c.name, description: c.description, source: c.source,
+            frameMode: cardFrameMode(c),
             ...(c.useWhen ? { useWhen: c.useWhen } : {}),
             ...(c.tags?.length ? { tags: c.tags } : {}),
           };

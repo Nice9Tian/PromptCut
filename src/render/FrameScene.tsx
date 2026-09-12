@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { Stage } from "../kernel/Stage";
 import { flattenOverlay, isImageMedia, videoLayersAt, type Project } from "../kernel/project";
 import { frameCss } from "../kernel/layout";
@@ -63,10 +63,11 @@ function PixelMappedMedia({ media, clip, t, project, style, def }: { media: any;
  * Video placeholders deliberately have no src: advancing React must never seek/decode media.
  * The capture phase installs src and seeks only the visible frame's video elements.
  */
-export function FrameScene({ project, t, playToken }: { project: Project; t: number; playToken: number }) {
+export function FrameScene({ project, t, directT = t, playToken }: { project: Project; t: number; directT?: number; playToken: number }) {
   const layers = videoLayersAt(project, t);
-  return <>{[...project.tracks].reverse().filter(tr => !tr.hidden).map((tr, index) => {
-    const timeline = flattenOverlay({ ...project, tracks: [tr] });
+  const tracks = useMemo(() => [...project.tracks].reverse().filter(tr => !tr.hidden)
+    .map(tr => ({ tr, timeline: flattenOverlay({ ...project, tracks: [tr] }) })), [project]);
+  return <>{tracks.map(({ tr, timeline }, index) => {
     return <div key={tr.id} data-pc-track={tr.id} style={{ position: "absolute", inset: 0, zIndex: index }}>
       {layers.filter(l => l.trackId === tr.id).map(({ clip, media, opacity }) => {
         const ops = project.filters?.length ? clipFilterOpsAt(project, clip, t) : null;
@@ -82,7 +83,7 @@ export function FrameScene({ project, t, playToken }: { project: Project; t: num
               style={{ ...style, visibility: "hidden" }} />}
         </div>;
       })}
-      <Stage timeline={timeline} t={t} playToken={playToken} />
+      <Stage timeline={timeline} t={t} directT={directT} playToken={playToken} />
     </div>;
   })}</>;
 }

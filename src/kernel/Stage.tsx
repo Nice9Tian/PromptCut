@@ -1,4 +1,5 @@
 import { AnimClock } from "./AnimClock";
+import { memo, useMemo } from "react";
 import { frameCss } from "./layout";
 import { perspectivePx } from "./space3d";
 import { motionAt } from "./motion";
@@ -7,7 +8,17 @@ import { emphasisFilter } from "./emphasis";
 import { getCard } from "./registry";
 import { PartTree } from "./PartTree";
 import { frameBox } from "./layout";
-import type { Timeline } from "./types";
+import type { CardDef, CardProps, Timeline } from "./types";
+import { cardMountedAt } from "../render/frameWindow.mjs";
+import { clipFrameMode } from "../render/frameMode.mjs";
+
+// Keep direct-evaluation cards at the requested time while other cards replay.
+// Their CSS/DOM stays in the same stacking tree (including paper/glass styles),
+// but their component is not run for each stateful history frame.
+const DirectCard = memo(function DirectCard({ def, params, ...props }: CardProps<any> & { def: CardDef<any> }) {
+  const C = def.Component;
+  return <C {...props} params={{ ...def.defaults, ...params }} />;
+});
 
 /**
  * 实体模式:浏览时把每张卡换成一个色块。给一个「这张卡该画成什么样」的查询函数,
@@ -17,18 +28,16 @@ import type { Timeline } from "./types";
  */
 export type ProxyRender = (clipId: string) => { color: string; box: { left: number; top: number; width: number; height: number } | null };
 
-/** 提前 0.05s 挂载,让进场动画的第一帧正卡在 start 上 */
-const LEAD = 0.05;
-
 /**
  * 舞台:按当前时刻挑出活跃 clip 并挂载。卡片以 clip.id + playToken 作 key,
  * 进入区间即重新挂载、从头播放(和导出时的行为一致)。
  */
-export function Stage({ timeline, t, playToken, speed = 1, proxy }: { timeline: Timeline; t: number; playToken: number; speed?: number; proxy?: ProxyRender }) {
-  const active = timeline.clips.filter((c) => t >= c.start - LEAD && t < c.end);
+export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy }: { timeline: Timeline; t: number; directT?: number; playToken: number; speed?: number; proxy?: ProxyRender }) {
+  const timeOf = (c: Timeline['clips'][number]) => clipFrameMode(c, getCard(c.cardId)) === 'direct' ? directT : t;
+  const active = timeline.clips.filter((c) => cardMountedAt(c, timeOf(c)));
   // 自带三维场景的卡(scene-3d)要用和 A 层同一台相机,所以把画幅和 fov 一起递下去。
   // 对象整体透传,别的卡收到了也不看。
-  const stageInfo = { width: timeline.width, height: timeline.height, camera3dFov: timeline.camera3dFov };
+  const stageInfo = useMemo(() => ({ width: timeline.width, height: timeline.height, camera3dFov: timeline.camera3dFov }), [timeline.width, timeline.height, timeline.camera3dFov]);
   return (
     <div
       className="pc-stage"
@@ -79,23 +88,25 @@ export function Stage({ timeline, t, playToken, speed = 1, proxy }: { timeline: 
           const def = getCard(clip.cardId);
           if (!def) return null;
           const C = def.Component;
+          const cardT = timeOf(clip);
 
           // 绑了轨迹的 clip 整层跟着目标平移。平移放在**外层**而不是交给卡片：
           // 卡片不知道自己被绑了，也不该知道——换一张卡，跟随照样生效。
-          const m = clip.motion ? motionAt(clip.motion, Math.max(0, t - clip.start)) : null;
+          const m = clip.motion ? motionAt(clip.motion, Math.max(0, cardT - clip.start)) : null;
           if (m && clip.motion!.whenHidden === "hide" && !m.visible) return null;
 
           // 卡片的框(位置/尺寸/锚点/缩放/旋转)和轨迹平移一样放在外层:卡片不知道自己被摆到了哪儿。
           // 没有 frame 时 frameCss 输出的就是以前那套 inset:0,老项目逐字节不变。
           // 不透明度 / 淡入淡出同理放外层,而且只在设了的时候才写 opacity —— 没设的卡 DOM 一个字不变。
-          const op = hasOpacityControls(clip) ? cardOpacityAt(clip, t) : 1;
+          const op = hasOpacityControls(clip) ? cardOpacityAt(clip, cardT) : 1;
           // 强调(阴影 / 描边)沿 alpha 边缘走,所以挂在卡片外层这一格上;没设就一个字不写
           const filter = emphasisFilter(clip.emphasis);
           return (
             <div
               key={`${clip.id}:${playToken}`}
               data-pc-clip={clip.id}
-              data-pc-local-frame={Math.round((t - clip.start) * timeline.fps)}
+              data-pc-local-frame={Math.round((cardT - clip.start) * timeline.fps)}
+              data-pc-frame-mode={clipFrameMode(clip, def)}
               className={proxy ? "pc-proxy" : undefined}
               style={{
                 ...frameCss(clip.frame, timeline, m ? { dx: m.dx, dy: m.dy } : undefined),
@@ -129,8 +140,10 @@ export function Stage({ timeline, t, playToken, speed = 1, proxy }: { timeline: 
               {clip.cardId === "composite" && clip.parts?.length ? (
                 // 组合卡:部件实例树逐级渲染,画布尺寸就是这张卡的框(没有框 = 整个舞台)
                 <PartTree parts={clip.parts} size={frameBox(clip.frame, timeline)} t={Math.max(0, t - clip.start)} playToken={playToken} />
+              ) : clipFrameMode(clip, def) === 'direct' ? (
+                <DirectCard def={def} params={clip.params} playToken={playToken} t={Math.max(0, cardT - clip.start)} duration={clip.end - clip.start} stage={stageInfo} />
               ) : (
-                <C params={{ ...def.defaults, ...clip.params }} playToken={playToken} t={Math.max(0, t - clip.start)} duration={clip.end - clip.start} stage={stageInfo} />
+                <C params={{ ...def.defaults, ...clip.params }} playToken={playToken} t={Math.max(0, cardT - clip.start)} duration={clip.end - clip.start} stage={stageInfo} />
               )}
               {/*
                 代理色块是卡片的**兄弟**,不是把卡片包起来 —— 真卡由 .pc-proxy 那条
