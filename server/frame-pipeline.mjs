@@ -8,6 +8,10 @@ import { packFrames, unpackFrameArchive } from './frame-archive.mjs';
 
 const pad = n => String(n).padStart(6, '0');
 const exists = file => fs.access(file).then(() => true, () => false);
+// The interactive editor must never wait forever on a renderer that stopped
+// answering.  Agent/background renders have their own (longer) budgets; this
+// watchdog is only for the human preview lane.
+const USER_RENDER_TIMEOUT_MS = Math.max(1000, Number(process.env.PROMPTCUT_USER_RENDER_TIMEOUT_MS) || 10000);
 async function atomic(file, data) {
   await fs.mkdir(path.dirname(file), { recursive: true });
   const temp = `${file}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
@@ -32,6 +36,10 @@ export class FramePipeline {
     this.background = Promise.resolve();
     this.generations = new Map();
     this.lanes = new Map();
+    // Keep two independent renderer processes ready for the editor.  A stuck
+    // renderer can be discarded while the other one takes the next request.
+    this.userPool = [];
+    this.userPrewarm = null;
   }
   async entry(project) {
     project = { ...project, media: await Promise.all((project.media || []).map(async media => {
@@ -88,6 +96,80 @@ export class FramePipeline {
     this.lanes.set(lane, { bakery });
     return bakery;
   }
+  emptyProject(project = {}) {
+    return {
+      width: Number(project.width) > 0 ? project.width : 1920,
+      height: Number(project.height) > 0 ? project.height : 1080,
+      fps: Number(project.fps) > 0 ? project.fps : 30,
+      duration: 1,
+      tracks: [],
+      media: [],
+    };
+  }
+  emptyUrl(project = {}) {
+    const empty = this.emptyProject(project);
+    return this.origin() + '/?export=1&timeline=' + encodeURIComponent('data:application/json,' + encodeURIComponent(JSON.stringify(empty)));
+  }
+  async prewarmUser(project = {}) {
+    if (this.userPrewarm) return this.userPrewarm;
+    this.userPrewarm = (async () => {
+      while (this.userPool.filter(s => !s.dead).length < 2) {
+        try {
+          const bakery = await this.bakery(this.emptyProject(project), 'user');
+          this.userPool.push({ bakery, busy: false, dead: false });
+        } catch (e) {
+          // A missing browser should be reported by the first request with the
+          // original error.  Do not make server startup fail just because the
+          // optional hot pair could not be warmed yet.
+          this.userPrewarm = null;
+          return;
+        }
+      }
+    })().finally(() => { this.userPrewarm = null; });
+    return this.userPrewarm;
+  }
+  dropUserSession(session) {
+    session.dead = true;
+    const at = this.userPool.indexOf(session);
+    if (at >= 0) this.userPool.splice(at, 1);
+    void session.bakery?.close().catch(() => {});
+  }
+  async acquireUser(project, signal) {
+    await this.prewarmUser(project);
+    const waitStart = Date.now();
+    for (;;) {
+      const session = this.userPool.find(s => !s.dead && !s.busy);
+      if (session) {
+        session.busy = true;
+        try {
+          await session.bakery.reset(project, this.emptyUrl(project));
+          await session.bakery.page.setViewport({ width: project.width, height: project.height, deviceScaleFactor: 1 });
+          await session.bakery.client.send('Emulation.setDefaultBackgroundColorOverride', { color: { r: 0, g: 0, b: 0, a: 0 } });
+          return session;
+        } catch (e) {
+          this.dropUserSession(session);
+          throw e;
+        }
+      }
+      if (signal?.aborted) throw Object.assign(new Error('Frame request cancelled'), { cancelled: true });
+      // The pair is intentionally bounded.  Waiting here is short in normal
+      // use; a watchdog around readFrames will kill a renderer that does not
+      // release its slot.
+      if (Date.now() - waitStart > USER_RENDER_TIMEOUT_MS) {
+        throw Object.assign(new Error(`用户预览等待 Chrome 超过 ${USER_RENDER_TIMEOUT_MS / 1000} 秒，已放弃这次旧请求。`), { status: 504, timedOut: true });
+      }
+      await new Promise(resolve => setTimeout(resolve, 25));
+    }
+  }
+  releaseUser(session) {
+    if (!session || session.dead) return;
+    session.busy = false;
+  }
+  dropBusyUsers() {
+    for (const session of [...this.userPool]) if (session.busy) this.dropUserSession(session);
+    // Replenish asynchronously so the next pointer event lands on a hot page.
+    void this.prewarmUser().catch(() => {});
+  }
   release(lane) {
     const session = this.lanes.get(lane);
     if (!session) return;
@@ -115,9 +197,17 @@ export class FramePipeline {
         for (const currentLane of ['user', 'agent', 'background']) {
           const laneRequests = requests.filter(r => r.lane === currentLane);
           if (!laneRequests.length) continue;
-          const chain = (this.laneChains.get(currentLane) || Promise.resolve()).catch(() => {}).then(() => this.flush(laneRequests, currentLane));
-          this.laneChains.set(currentLane, chain);
-          if (currentLane === 'user') this.foreground = chain;
+          // User requests are independent: the two hot Chrome slots are
+          // deliberately allowed to overlap.  Agent/background lanes remain
+          // serialized for deterministic animation state.
+          if (currentLane === 'user') {
+            const task = this.flush(laneRequests, currentLane);
+            this.foreground = task;
+            task.catch(() => {});
+          } else {
+            const chain = (this.laneChains.get(currentLane) || Promise.resolve()).catch(() => {}).then(() => this.flush(laneRequests, currentLane));
+            this.laneChains.set(currentLane, chain);
+          }
         }
       }, 12);
     });
@@ -142,6 +232,24 @@ export class FramePipeline {
     }
   }
   async readFrames(entry, frames, lane = 'agent', signal) {
+    if (lane === 'user') {
+      const watchdog = new AbortController();
+      const combined = signal ? AbortSignal.any([signal, watchdog.signal]) : watchdog.signal;
+      let timer;
+      const work = this.readFramesCore(entry, frames, lane, combined);
+      const timeout = new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          watchdog.abort();
+          this.dropBusyUsers();
+          reject(Object.assign(new Error(`用户预览渲染超过 ${USER_RENDER_TIMEOUT_MS / 1000} 秒，已重启 Chrome。`), { status: 504, timedOut: true }));
+        }, USER_RENDER_TIMEOUT_MS);
+      });
+      try { return await Promise.race([work, timeout]); }
+      finally { clearTimeout(timer); work.catch(() => {}); }
+    }
+    return this.readFramesCore(entry, frames, lane, signal);
+  }
+  async readFramesCore(entry, frames, lane = 'agent', signal) {
     const result = new Map();
     const missing = [];
     for (const frame of frames) {
@@ -150,7 +258,8 @@ export class FramePipeline {
       catch { missing.push(frame); }
     }
     if (!missing.length) return result;
-    const bakery = await this.acquire(lane, entry.project);
+    const userSession = lane === 'user' ? await this.acquireUser(entry.project, signal) : null;
+    const bakery = userSession?.bakery || await this.acquire(lane, entry.project);
     try {
       const uncached = missing.filter(n => !entry.html.has(n));
       if (uncached.length) {
@@ -167,7 +276,10 @@ export class FramePipeline {
         await atomic(path.join(entry.dir, 'frames', pad(frame) + '.png'), buf);
         result.set(frame, { buf, source: uncached.includes(frame) ? 'advance' : 'html' });
       }
-    } finally { this.release(lane); }
+    } finally {
+      if (userSession) this.releaseUser(userSession);
+      else this.release(lane);
+    }
     return result;
   }
   record(entry, n, html, controls = []) {
@@ -282,5 +394,7 @@ export class FramePipeline {
     await Promise.allSettled([this.foreground, this.background, ...this.laneChains.values()]);
     await Promise.allSettled([...this.lanes.values()].map(session => { clearTimeout(session.timer); return session.bakery.close(); }));
     this.lanes.clear();
+    await Promise.allSettled(this.userPool.map(session => session.bakery.close()));
+    this.userPool.length = 0;
   }
 }

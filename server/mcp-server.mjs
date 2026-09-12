@@ -129,6 +129,10 @@ function isConnRefused(err) {
   return found;
 }
 
+function isFetchFailure(err) {
+  return err?.name === 'TypeError' && /fetch failed/i.test(String(err?.message || ''));
+}
+
 /*
  * 每一次调用都有上限:这个工具自己声明的 timeoutMs(没有就 60 秒,和桥那边的默认一样)再加 30 秒。
  *
@@ -168,6 +172,11 @@ async function callBridge(tool, args) {
       if (err?.name === 'TimeoutError') {
         throw new Error(`PromptCut 在 ${host}:${port} 上 ${Math.round(bridgeTimeoutMs(tool) / 1000)} 秒没有回应(${tool})。`
           + '可能是这个端口被别的程序占着、或者编辑台卡住了;这次调用没有执行完,可以稍后重试。');
+      }
+      if (isFetchFailure(err)) {
+        const detail = err.cause?.code || err.cause?.message || err.message;
+        throw Object.assign(new Error(`PromptCut 连接预览服务失败：调用 ${tool} 时连接被关闭（${detail}）。`
+          + '可能是预渲染进程或 Chrome 正在重启，请稍后重试。'), { code: 'BRIDGE_UNAVAILABLE', retryable: true, cause: err });
       }
       throw err;
     }

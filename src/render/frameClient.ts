@@ -1,5 +1,5 @@
 import type { Project } from "../kernel/project";
-import { prerenderUrl } from "../editor/prerender";
+import { invalidatePrerenderBase, prerenderUrl } from "../editor/prerender";
 
 export type FrameTarget = "user" | "prerender";
 export type FrameLane = "user" | "agent" | "background";
@@ -19,11 +19,39 @@ export function restoreSnapshots(project: Project, snapshots?: string) {
     ? frameRequest("import", project, { snapshots: saved.snapshots }, undefined, { target: "user", lane: "user" }).then(() => undefined, () => undefined)
     : null;
 }
+function frameFetchError(error: any) {
+  if (error?.name === "AbortError") return error;
+  const detail = error?.cause?.code || error?.cause?.message || error?.message || String(error);
+  return Object.assign(new Error(`帧服务连接中断（${detail}）。渲染 Chrome 或服务可能正在重启，请稍后重试。`, { cause: error }), {
+    code: "FRAME_SERVICE_UNAVAILABLE",
+    retryable: true,
+  });
+}
 export async function frameRequest(operation: string, project: Project, extra: Record<string, unknown> = {}, signal?: AbortSignal, options: FrameRequestOptions = {}) {
-  const url = options.target === "prerender" ? await prerenderUrl(`/api/frames/${operation}`) : `/api/frames/${operation}`;
-  const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ project, lane: options.lane, ...extra }), signal });
-  const result = await res.json();
-  if (!res.ok) throw new Error(result.error || "帧读取失败");
+  let url = options.target === "prerender" ? await prerenderUrl(`/api/frames/${operation}`) : `/api/frames/${operation}`;
+  let res: Response;
+  const request = () => fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ project, lane: options.lane, ...extra }), signal });
+  try {
+    res = await request();
+  } catch (error) {
+    // A prerender restart changes its port.  Retry one time against the new
+    // health-checked address; never retry a caller cancellation.
+    if (options.target === "prerender" && (error as any)?.name !== "AbortError") {
+      invalidatePrerenderBase();
+      try {
+        url = await prerenderUrl(`/api/frames/${operation}`);
+        res = await request();
+      } catch (retryError) { throw frameFetchError(retryError); }
+    } else throw frameFetchError(error);
+  }
+  let result: any;
+  try { result = await res.json(); }
+  catch (error) { throw frameFetchError(error); }
+  if (!res.ok) throw Object.assign(new Error(result.error || "帧读取失败"), {
+    code: result.code,
+    status: res.status,
+    retryable: result.retryable,
+  });
   if (result.video) result.video = new URL(result.video, new URL(url, location.href)).href;
   if (result.frames) result.frames = result.frames.map((f: any) => ({ ...f, url: new URL(f.url, new URL(url, location.href)).href }));
   return result;

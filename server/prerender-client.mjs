@@ -22,6 +22,21 @@ export function prerenderState() {
   return { ...state };
 }
 
+function fetchFailure(pathname, error) {
+  const snapshot = prerenderState();
+  const cause = error?.cause;
+  const detail = cause?.code || cause?.message || error?.message || String(error);
+  const where = snapshot.url || "预渲染地址未知";
+  const message = `连接预渲染服务失败：请求 ${pathname} 时连接被关闭（${detail}）。` +
+    ` 预渲染状态：${snapshot.ready ? "ready" : "未就绪"}，地址：${where}，重启次数：${snapshot.restarts}。` +
+    " 可能是预渲染进程或 Chrome 崩溃/被回收，请稍后重试。";
+  return Object.assign(new Error(message, { cause: error }), {
+    code: "PRERENDER_UNAVAILABLE",
+    status: 503,
+    retryable: true,
+  });
+}
+
 /** 等预渲染就绪。起进程 + Vite 就绪一般一两秒;首次要预构建依赖,给到 60 秒 */
 export async function whenPrerenderReady(timeoutMs = 60000) {
   const t0 = Date.now();
@@ -42,12 +57,23 @@ export async function prerenderPost(pathname, body, { timeoutMs = 180000, signal
   const base = await whenPrerenderReady();
   const signals = [AbortSignal.timeout(timeoutMs)];
   if (signal) signals.push(signal);
-  const res = await fetch(base + pathname, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-    signal: AbortSignal.any(signals),
-  });
+  let res;
+  try {
+    res = await fetch(base + pathname, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal: AbortSignal.any(signals),
+    });
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    if (error?.name === "TimeoutError") {
+      throw Object.assign(new Error(`预渲染请求 ${pathname} 超过 ${Math.round(timeoutMs / 1000)} 秒没有回应。`), {
+        code: "PRERENDER_TIMEOUT", status: 504, retryable: true, cause: error,
+      });
+    }
+    throw fetchFailure(pathname, error);
+  }
   const data = await res.json().catch(() => ({ ok: false, error: `预渲染返回了非 JSON(HTTP ${res.status})` }));
   if (!res.ok && data && data.ok !== false) data.ok = false;
   return data;
@@ -70,7 +96,8 @@ export function proxyToPrerender(req, res) {
       if (res.headersSent) return res.destroy();
       res.statusCode = 502;
       res.setHeader("Content-Type", "application/json; charset=utf-8");
-      res.end(JSON.stringify({ ok: false, error: `转发到预渲染失败:${e.message}` }));
+      res.end(JSON.stringify({ ok: false, code: "PRERENDER_UNAVAILABLE", retryable: true,
+        error: `连接预渲染服务失败：转发 ${target.pathname} 时连接被关闭（${e.code || e.message}）。请稍后重试。` }));
     });
     // 用户那边断了就别让预渲染接着干:断开会传过去,预渲染按断开摘掉排队的活
     res.on("close", () => { if (!res.writableEnded) up.destroy(); });
@@ -78,6 +105,7 @@ export function proxyToPrerender(req, res) {
   }, (e) => {
     res.statusCode = 503;
     res.setHeader("Content-Type", "application/json; charset=utf-8");
-    res.end(JSON.stringify({ ok: false, error: e.message }));
+    res.end(JSON.stringify({ ok: false, code: "PRERENDER_UNAVAILABLE", retryable: true,
+      error: `连接预渲染服务失败：${e.message || e}` }));
   });
 }

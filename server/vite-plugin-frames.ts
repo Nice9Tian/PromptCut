@@ -82,7 +82,7 @@ export function framesPlugin(): Plugin {
           if (!Array.isArray(project.tracks) || !Number.isFinite(project.duration) || project.duration <= 0) throw new Error("Invalid project");
           const entry = await service.entry(project);
           if (url.pathname === "/see") {
-            const lane = input.lane === "agent" ? "agent" : "user";
+            const lane = input.lane === "agent" ? "agent" : input.lane === "background" ? "background" : "user";
             const frames = await service.see_frames(project, input.times || [0], { lane, signal: requestSignal(req, res) });
             return json(200, { key: entry.key, frames: [...frames].map(([frame, value]: any) => ({ frame, source: value.source, url: `/api/frames/${entry.key}/frames/${String(frame).padStart(6, "0")}.png` })) });
           }
@@ -105,7 +105,19 @@ export function framesPlugin(): Plugin {
           const videoReady = await fsp.access(path.join(entry.dir, "preview.mp4")).then(() => true, () => false);
           return json(200, { key: entry.key, status: entry.status, sampled: entry.html.size, total: Math.max(1, Math.floor(project.duration * (project.fps || 30))), error: entry.error,
             video: videoReady ? `/api/frames/${entry.key}/preview.mp4` : null });
-        } catch (error: any) { json(400, { error: error.message }); }
+        } catch (error: any) {
+          const timedOut = Boolean(error?.timedOut || error?.code === "PRERENDER_TIMEOUT");
+          const cancelled = Boolean(error?.cancelled || error?.name === "AbortError");
+          const status = timedOut ? 504 : cancelled ? 499 : Number(error?.status) >= 500 ? Number(error.status) : 400;
+          const code = timedOut ? "FRAME_TIMEOUT" : cancelled ? "FRAME_CANCELLED" : (error?.code || "FRAME_ERROR");
+          if (status >= 500) console.error(`[frames] ${code}:`, error?.stack || error?.message || error);
+          json(status, {
+            ok: false,
+            code,
+            retryable: timedOut || status >= 500,
+            error: error?.message || "帧渲染失败",
+          });
+        }
       });
     });
   } };

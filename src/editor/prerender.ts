@@ -24,6 +24,13 @@ let asking: Promise<string> | null = null;
 /** 头一次问:预渲染可能还在启动,多等一会儿;之后只问一次,没就绪就先用同源 */
 let firstAsk = true;
 
+/** Drop a cached port after a connection reset so the next request asks the
+ * editor for the freshly restarted prerender process. */
+export function invalidatePrerenderBase() {
+  base = null;
+  checkedAt = 0;
+}
+
 async function ask(tries: number): Promise<string> {
   for (let i = 0; i < tries; i++) {
     try {
