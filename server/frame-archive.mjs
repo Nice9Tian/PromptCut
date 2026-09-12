@@ -12,6 +12,9 @@ export const FRAME_ARCHIVE_VERSION = 2;
 export const FRAME_CHECKPOINT_SECONDS = 10;
 export const FRAME_BLOCK_SECONDS = 60;
 const MAX_EXPANDED_FRAMES = 16;
+// Frozen canvases can make a single HTML sample several megabytes. A time
+// bound alone lets legitimate blocks exceed the decoder's safety limit.
+const MAX_BLOCK_BYTES = 8 * 1024 * 1024;
 
 const asEntries = value => value instanceof Map ? [...value.entries()] : [...(value || [])];
 const b64 = value => Buffer.from(value).toString('base64');
@@ -84,12 +87,15 @@ function encodeBlocks(frames, { fps = 30, checkpointSeconds = FRAME_CHECKPOINT_S
   const blocks = [];
   for (let at = 0; at < sorted.length;) {
     const start = sorted[at][0], endLimit = start + blockEvery, records = [];
-    let previous = '', checkpointFrame = -Infinity;
+    let previous = '', checkpointFrame = -Infinity, bytes = 2;
     while (at < sorted.length && sorted[at][0] < endLimit) {
-      const [frame, html] = sorted[at++];
+      const [frame, html] = sorted[at];
       const checkpoint = records.length === 0 || frame - checkpointFrame >= checkpointEvery;
       const [prefix, suffix, middle] = checkpoint ? [0, 0, html] : delta(previous, html);
-      records.push([frame, checkpoint ? 1 : 0, prefix, suffix, middle]);
+      const record = [frame, checkpoint ? 1 : 0, prefix, suffix, middle];
+      const recordBytes = Buffer.byteLength(JSON.stringify(record)) + 1;
+      if (records.length && bytes + recordBytes > MAX_BLOCK_BYTES) break;
+      records.push(record); bytes += recordBytes; at++;
       previous = html;
       if (checkpoint) checkpointFrame = frame;
     }
@@ -123,20 +129,15 @@ function controlDirectoryName(id) {
   return createHash('sha1').update(String(id)).digest('hex');
 }
 
-function prepareSpillDirectory(spillDir, encoded) {
-  if (!spillDir) return;
-  const dir = path.resolve(spillDir);
-  const marker = path.join(dir, '.archive-sha256');
-  const signature = createHash('sha256').update(String(encoded)).digest('hex');
+function prepareSpillDirectory(spillDir) {
+  if (!spillDir) return null;
+  const base = path.resolve(spillDir);
+  // Every live store owns its spill files. Reopening a newer archive must not
+  // erase unsaved overlays owned by another batch or the prerender process.
   try {
-    const previous = fs.readFileSync(marker, 'utf8').trim();
-    if (previous !== signature) fs.rmSync(dir, { recursive: true, force: true });
-  } catch {
-    // Missing marker means the directory may contain an older archive's spill.
-    // Clearing it avoids returning stale HTML after an import or rebuild.
-    try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* Disposable cache. */ }
-  }
-  try { fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(marker, signature); } catch { /* Spill remains optional. */ }
+    fs.mkdirSync(base, { recursive: true });
+    return fs.mkdtempSync(path.join(base, `live-${process.pid}-`));
+  } catch { return null; }
 }
 
 export class LazyFrameStore {
@@ -292,10 +293,16 @@ export function unpackFrameArchive(encoded, key, { spillDir = null } = {}) {
   if (doc.key !== key || !Array.isArray(doc.blocks || doc.deltas)) throw new Error('Incompatible frame archive');
   if (doc.version === 1) return { version: 1, frames: decodeLegacy(doc.deltas), controls: new Map((doc.controls || []).map(([id, deltas]) => [id, decodeLegacy(deltas)])) };
   if (doc.version !== FRAME_ARCHIVE_VERSION || !Array.isArray(doc.blocks)) throw new Error('Incompatible frame archive');
-  prepareSpillDirectory(spillDir, encoded);
+  const spillBase = spillDir ? path.resolve(spillDir) : null;
+  spillDir = prepareSpillDirectory(spillDir);
   const stageDir = spillDir ? path.join(spillDir, 'stage') : null;
   return {
     version: FRAME_ARCHIVE_VERSION,
+    dispose: () => {
+      if (spillBase && spillDir && path.dirname(spillDir) === spillBase && path.basename(spillDir).startsWith(`live-${process.pid}-`)) {
+        try { fs.rmSync(spillDir, { recursive: true, force: true }); } catch { /* Disposable cache. */ }
+      }
+    },
     frames: new LazyFrameStore(doc.blocks, { spillDir: stageDir }),
     controls: new Map((doc.controls || []).map(([id, blocks]) => [id, new LazyFrameStore(blocks, { spillDir: spillDir ? path.join(spillDir, 'controls', controlDirectoryName(id)) : null })])),
     fps: doc.fps,

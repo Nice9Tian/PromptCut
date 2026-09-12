@@ -50,6 +50,20 @@ test('v1 archives remain readable', () => {
   const legacy = gzipSync(Buffer.from(JSON.stringify({ version: 1, key: 'legacy', deltas: [[0, 0, 0, '<p>x</p>'], [1, 3, 0, 'y</p>']], controls: [] }))).toString('base64');
   assert.deepEqual(unpackFrames(legacy, 'legacy'), new Map([[0, '<p>x</p>'], [1, '<p>y</p>']]));
 });
+
+test('large frozen HTML is split by bytes and remains editable across repeated saves', () => {
+  const frames = new Map(Array.from({ length: 12 }, (_, n) => [n, String.fromCharCode(65 + n).repeat(2 * 1024 * 1024)]));
+  let archive = unpackFrameArchive(packFrames('large', frames), 'large');
+  assert.ok(archive.frames.blocks.length >= 3);
+  for (const block of archive.frames.blocks) {
+    const gzip = Buffer.from(block.data, 'base64');
+    assert.ok(gzip.readUInt32LE(gzip.length - 4) <= 8 * 1024 * 1024);
+  }
+  archive.frames.set(6, 'edited');
+  archive = unpackFrameArchive(packFrames('large', archive.frames), 'large');
+  assert.equal(archive.frames.get(6), 'edited');
+  assert.equal(archive.frames.get(11), frames.get(11));
+});
 test('lazy HTML expansions spill to disk and recover after the memory window is evicted', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'promptcut-html-spill-'));
   try {
@@ -58,12 +72,12 @@ test('lazy HTML expansions spill to disk and recover after the memory window is 
       ['control-a', new Map(Array.from({ length: 20 }, (_, n) => [n, `<span>${n}</span>`]))],
     ])), 'spill', { spillDir: dir });
     for (let n = 0; n < 24; n++) assert.equal(archive.frames.get(n), frames.get(n));
-    const stageFiles = await fs.readdir(path.join(dir, 'stage'));
+    const stageFiles = await fs.readdir(archive.frames.spillDir);
     assert.ok(stageFiles.length > 0, 'evicted stage frames should be persisted');
     archive.frames.cache.clear();
     assert.equal(archive.frames.get(0), frames.get(0));
     for (let n = 0; n < 20; n++) assert.equal(archive.controls.get('control-a').get(n), `<span>${n}</span>`);
-    const controlDir = path.join(dir, 'controls');
+    const controlDir = archive.controls.get('control-a').spillDir;
     assert.ok((await fs.readdir(controlDir)).length > 0, 'control frames should have their own spill directory');
   } finally { await fs.rm(dir, { recursive: true, force: true }); }
 });
@@ -76,6 +90,22 @@ test('set invalidates a stale spilled expansion', async () => {
     archive.frames.cache.clear();
     assert.equal(archive.frames.get(0), 'new-0');
   } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+
+test('reopening an archive cannot delete another live archive pending spill files', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'promptcut-html-live-'));
+  const block = packFrames('live', new Map([[0, 'original']]));
+  const first = unpackFrameArchive(block, 'live', { spillDir: dir });
+  let second;
+  try {
+    const expected = new Map(Array.from({ length: 40 }, (_, n) => [n, `pending-${n}`]));
+    for (const [n, html] of expected) first.frames.set(n, html);
+    second = unpackFrameArchive(packFrames('live', new Map([[0, 'other']])), 'live', { spillDir: dir });
+    assert.notEqual(first.frames.spillDir, second.frames.spillDir);
+    assert.deepEqual(unpackFrames(packFrames('live', first.frames), 'live'), expected);
+    second.dispose();
+    assert.deepEqual(unpackFrames(packFrames('live', first.frames), 'live'), expected);
+  } finally { first.dispose(); second?.dispose(); await fs.rm(dir, { recursive: true, force: true }); }
 });
 test('unsaved HTML samples survive the memory window without a writable spill directory', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'promptcut-html-spill-fail-'));

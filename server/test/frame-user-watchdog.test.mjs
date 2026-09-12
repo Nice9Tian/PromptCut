@@ -4,6 +4,22 @@ import { FramePipeline } from '../frame-pipeline.mjs';
 
 const project = { width: 320, height: 180 };
 const makeService = () => new FramePipeline({ root: '.', origin: () => '' });
+
+test('healthy playback frames renew the watchdog even when the batch exceeds ten seconds', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const service = makeService(), closed = [];
+  const session = { dead: false, bakery: { close: async () => closed.push(true) } };
+  let emit, finish;
+  service.readFramesCore = async (_entry, _frames, _lane, _signal, own, onFrame) => {
+    own(session); emit = onFrame;
+    return new Promise(resolve => { finish = resolve; });
+  };
+  const work = service.readFrames({ project }, [0, 1, 2], 'playback');
+  for (let n = 0; n < 3; n++) { t.mock.timers.tick(9000); await emit(n, { buf: Buffer.from('frame') }); }
+  finish('stream complete');
+  assert.equal(await work, 'stream complete');
+  assert.deepEqual(closed, []);
+});
 test('a preview timeout kills only the Chrome owned by that request', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const service = makeService();

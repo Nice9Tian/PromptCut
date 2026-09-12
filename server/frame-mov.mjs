@@ -1,5 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { PNG } from 'pngjs';
 
 const pad = n => String(n).padStart(6, '0');
 const exists = file => fs.access(file).then(() => true, () => false);
@@ -69,8 +71,12 @@ export class MovFrameStore {
   async get(frame) {
     await this.ready;
     frame = Number(frame);
-    if (!this.frames.has(frame)) return undefined;
-    try { return await fs.readFile(path.join(this.frameDir, `${pad(frame)}.png`)); }
+    // The background service may have populated the shared cache since load.
+    try {
+      const buf = await fs.readFile(path.join(this.frameDir, `${pad(frame)}.png`));
+      if (!this.frames.has(frame)) { this.frames.add(frame); if (frame >= this.nextFrame) this.pending.add(frame); this.tableDirty = true; }
+      return buf;
+    }
     catch { this.frames.delete(frame); this.tableDirty = true; return undefined; }
   }
 
@@ -112,10 +118,17 @@ export class MovFrameStore {
   }
 
   async start(ffmpeg, streamFactory) {
+    if (this.starting) return this.starting;
+    this.starting = this.startNow(ffmpeg, streamFactory).finally(() => { this.starting = null; });
+    return this.starting;
+  }
+  async startNow(ffmpeg, streamFactory) {
+    const epoch = this.streamEpoch;
     await this.ready;
     if (this.writer || this.writerError || await exists(this.movieFile)) return;
     try {
       const create = streamFactory || (await import('../scripts/export-frames.mjs')).streamPngVideo;
+      if (epoch !== this.streamEpoch) return;
       this.writer = create(ffmpeg, this.tempMovie, this.fps);
       await this.flush();
     } catch (error) {
@@ -139,6 +152,7 @@ export class MovFrameStore {
   }
 
   async finish() {
+    await this.starting;
     await this.writeChain;
     await this.flush();
     if (this.writer) {
@@ -165,4 +179,103 @@ export class MovFrameStore {
   }
 
   async close() { await this.finish(); }
+
+  async suspend() {
+    this.streamEpoch = (this.streamEpoch || 0) + 1;
+    const writer = this.writer; this.writer = null;
+    await writer?.abort().catch(() => {});
+    await this.starting;
+    await this.writeChain.catch(() => {});
+    this.nextFrame = 0; this.pending = new Set(this.frames);
+    await this.persist();
+  }
+}
+
+const u32 = (...values) => { const b = Buffer.alloc(values.length * 4); values.forEach((v, i) => b.writeUInt32BE(v >>> 0, i * 4)); return b; };
+const atom = (type, ...parts) => { const body = Buffer.concat(parts); return Buffer.concat([u32(body.length + 8), Buffer.from(type), body]); };
+const matrix = () => u32(65536, 0, 0, 0, 65536, 0, 0, 0, 0x40000000);
+
+/** A complete, sparse PNG MOV. Every unfilled sample references ONE transparent
+ * PNG. Screenshots append to mdat, then their sample-table entries are patched.
+ * No encoder, frame-sized holes, or second Chrome/render path is involved.
+ * The live reader uses published immutable byte ranges, never a half-patched
+ * table. Ordinary MOV readers can open the file at any completed write. */
+export class PlaybackMovStore {
+  constructor({ dir, width, height, fps = 30, count }) {
+    this.fps = fps; this.count = count;
+    this.width = width; this.height = height;
+    this.name = `playback-${randomUUID()}.mov`;
+    this.movieFile = path.join(dir, 'mov', this.name);
+    this.samples = new Map();
+    this.writeChain = Promise.resolve();
+    this.ready = this.initialize();
+  }
+  async initialize() {
+    const { width, height, count, fps } = this;
+    if (![width, height, count].every(n => Number.isSafeInteger(n) && n > 0) || width > 65535 || height > 65535 || count > 10000000 || !Number.isFinite(fps) || fps <= 0) throw new Error('Invalid playback movie dimensions');
+    const transparent = PNG.sync.write(new PNG({ width, height }));
+    const timescale = Math.round(fps * 1000), duration = count * 1000;
+    if (duration > 0xffffffff || timescale > 0xffffffff) throw new Error('Playback movie duration is too large');
+    const mvhd = atom('mvhd', u32(0, 0, 0, timescale, duration, 65536, 0x01000000), Buffer.alloc(8), matrix(), Buffer.alloc(24), u32(2));
+    const tkhd = atom('tkhd', u32(7, 0, 0, 1, 0, duration), Buffer.alloc(16), matrix(), u32(width * 65536, height * 65536));
+    const mdhd = atom('mdhd', u32(0, 0, 0, timescale, duration, 0));
+    const hdlr = atom('hdlr', u32(0, 0), Buffer.from('vide'), Buffer.alloc(12), Buffer.from('PromptCut playback\0'));
+    const sample = Buffer.alloc(78);
+    sample.writeUInt16BE(1, 6); sample.writeUInt16BE(width, 24); sample.writeUInt16BE(height, 26);
+    sample.writeUInt32BE(72 * 65536, 28); sample.writeUInt32BE(72 * 65536, 32);
+    sample.writeUInt16BE(1, 40); sample.writeUInt16BE(32, 74); sample.writeInt16BE(-1, 76);
+    const stsz = atom('stsz', u32(0, 0, count), Buffer.alloc(count * 4));
+    const co64 = atom('co64', u32(0, count), Buffer.alloc(count * 8));
+    const stbl = atom('stbl', atom('stsd', u32(0, 1), atom('png ', sample)), atom('stts', u32(0, 1, count, 1000)),
+      atom('stsc', u32(0, 1, 1, 1, 1)), stsz, co64);
+    const minf = atom('minf', atom('vmhd', u32(1, 0, 0)), atom('dinf', atom('dref', u32(0, 1), atom('url ', u32(1)))), stbl);
+    const moov = atom('moov', mvhd, atom('trak', tkhd, atom('mdia', mdhd, hdlr, minf)));
+    const header = Buffer.concat([atom('ftyp', Buffer.from('qt  '), u32(0), Buffer.from('qt  ')), moov, u32(0), Buffer.from('mdat')]);
+    // The uniquely constructed table atoms are located before any PNG bytes.
+    this.sizeTable = header.indexOf(Buffer.from('stsz')) + 16;
+    this.offsetTable = header.indexOf(Buffer.from('co64')) + 12;
+    this.placeholder = { offset: header.length, size: transparent.length };
+    for (let n = 0; n < count; n++) {
+      header.writeUInt32BE(transparent.length, this.sizeTable + n * 4);
+      header.writeBigUInt64BE(BigInt(header.length), this.offsetTable + n * 8);
+    }
+    await fs.mkdir(path.dirname(this.movieFile), { recursive: true });
+    this.file = await fs.open(this.movieFile, 'wx+');
+    await this.writeAt(header, 0); await this.writeAt(transparent, header.length);
+    this.end = header.length + transparent.length;
+  }
+  async writeAt(buffer, position) {
+    let written = 0;
+    while (written < buffer.length) {
+      const { bytesWritten } = await this.file.write(buffer, written, buffer.length - written, position + written);
+      if (!bytesWritten) throw new Error('Playback MOV write made no progress');
+      written += bytesWritten;
+    }
+  }
+  has(frame) { return this.samples.has(frame); }
+  async put(frame, buffer) {
+    await this.ready;
+    if (!Number.isSafeInteger(frame) || frame < 0 || frame >= this.count) throw new Error('Invalid playback frame');
+    const work = this.writeChain.then(async () => {
+      if (this.samples.has(frame) || this.closed) return;
+      const offset = this.end;
+      await this.writeAt(buffer, offset);
+      this.end += buffer.length;
+      const encodedOffset = Buffer.alloc(8); encodedOffset.writeBigUInt64BE(BigInt(offset));
+      await this.writeAt(u32(buffer.length), this.sizeTable + frame * 4);
+      await this.writeAt(encodedOffset, this.offsetTable + frame * 8);
+      this.samples.set(frame, { offset, size: buffer.length });
+    });
+    this.writeChain = work.catch(() => {});
+    return work;
+  }
+  index(start, end) {
+    const frames = [];
+    for (let frame = Math.max(0, start); frame <= Math.min(this.count - 1, end); frame++) {
+      const sample = this.samples.get(frame);
+      if (sample) frames.push({ frame, ...sample });
+    }
+    return { fps: this.fps, count: this.count, width: this.width, height: this.height, placeholder: this.placeholder, frames };
+  }
+  async close() { await this.ready; await this.writeChain; this.closed = true; await this.file?.close(); }
 }
