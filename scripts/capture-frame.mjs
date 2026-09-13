@@ -4,9 +4,23 @@ import { pngIntegrityError } from './png-integrity.mjs';
 /** A compositor tick can acknowledge beginFrame before a surface is ready.
  * Retry at the same timeline time, bounded to four attempts. Never reset the
  * animation or return the previous frame when Chrome has not supplied pixels.
+ *
+ * `prime`: when no screenshot was requested for a while and the DOM changed a
+ * few ticks ago, Chrome's next screenshot can return an older drawn frame
+ * although the DOM is current (Tokyo project: sparse frame 200 came back at
+ * alpha 44 with the card at opacity 1; a `--frames 155-156` export's first
+ * frame showed the previous card; scripts/verify-stale-capture.mjs reproduces
+ * it). One discarded screenshot at the same timeline time brings the drawn
+ * output up to date. Measured: it does not change animation state (a primed
+ * and an unprimed capture of the same frame are pixel-identical). Callers skip
+ * it only when they captured the immediately preceding timeline frame.
  */
-export async function captureFrame(bakery, screenshot, signal) {
+export async function captureFrame(bakery, screenshot, signal, { prime = true } = {}) {
   if (bakery.page) await waitFrameReady(bakery, signal);
+  if (prime) {
+    if (signal?.aborted) throw Object.assign(new Error('Frame request cancelled'), { cancelled: true });
+    await bakery.beginFrame({ screenshot });
+  }
   let corruption = null;
   for (let attempt = 0; attempt < 4; attempt++) {
     if (signal?.aborted) throw Object.assign(new Error('Frame request cancelled'), { cancelled: true });

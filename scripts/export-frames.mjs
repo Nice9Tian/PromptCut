@@ -604,14 +604,16 @@ export async function bakeFrames(bakery, opts = {}) {
     ? { format: 'jpeg', quality }
     : { format: 'png', optimizeForSpeed: true };
 
-  /** 截一张:发一拍并要这一拍的截图。此刻动画已钉住、页面时钟已量化,这一拍里画面不会再变 */
-  const shoot = async () => {
+  /** 截一张:发一拍并要这一拍的截图。此刻动画已钉住、页面时钟已量化,这一拍里画面不会再变
+   *  prime:上一个时间点没截过图时先截一张丢掉,见 captureFrame。primeCapture:false 只给回归对照用 */
+  const shoot = async (prime = true) => {
+    const captureOpts = { prime: prime && opts.primeCapture !== false };
     // MOV/full-scene cache: keep the live scene (including video/image media)
     // visible. HTML snapshots deliberately remove video sources, so they can
     // never be used as the full-frame movie source.
     if (opts.fullFrame) {
       await prepareFrameMedia(bakery);
-      return captureFrame(bakery, shotParams, opts.signal);
+      return captureFrame(bakery, shotParams, opts.signal, captureOpts);
     }
     if (!opts.glassFrames) {
       // Pixel maps rasterize a hidden source video into a canvas. Load only the
@@ -628,7 +630,7 @@ export async function bakeFrames(bakery, opts = {}) {
       return captureSnapshot(bakery, snapshot.html, shotParams);
     }
     await prepareFrameMedia(bakery);
-    return captureFrame(bakery, shotParams, opts.signal);
+    return captureFrame(bakery, shotParams, opts.signal, captureOpts);
   };
 
   // 一帧 = 下发时间 → 等网络 → 排空 → 推一拍(React 提交后的 rAF、Motion 建动画都在这一拍里)→ 等网络
@@ -738,7 +740,8 @@ export async function bakeFrames(bakery, opts = {}) {
     if (!info) return null;
     for (const b of info.blurs) glass.blurs.add(b);
     try {
-      return await shoot();
+      // 同一时间点刚截过卡片图,画面已是最新,不用再预热
+      return await shoot(false);
     } finally {
       await page.evaluate(() => window.__bfGlassOff());
     }
@@ -747,6 +750,7 @@ export async function bakeFrames(bakery, opts = {}) {
   /** 跑一遍全部帧。allowSkip 为假时每帧老老实实真截。返回判错的帧号;没判错返回 null。 */
   const renderPass = async (allowSkip) => {
     let lastBuf = null;  // 上一张**真截**出来的图
+    let lastShotFrame = null; // 上一张真截对应的帧号:紧挨着的上一帧截过图才能省掉预热
     let lastDom = null;  // 上一份冻结下来的舞台(gzip 过的)
     let runLen = 0;      // 已经连续复用了几帧
     // 上一张真截对应的遮罩:undefined = 还没截过(null = 截了,没有玻璃)。静止帧复用卡片图时遮罩也一起复用
@@ -795,7 +799,8 @@ export async function bakeFrames(bakery, opts = {}) {
         runLen++;
         if (runLen % verifyEvery === 0) {
           // 便宜的保险:连续复用到第 verifyEvery 帧就强制真截一张比一次。对不上就整趟作废重跑
-          const real = await shoot();
+          const real = await shoot(lastShotFrame !== i - 1);
+          lastShotFrame = i;
           if (!real.equals(lastBuf)) { await Promise.all(writes.splice(0)); return i; }
           lastBuf = real;
           buf = real;
@@ -806,7 +811,8 @@ export async function bakeFrames(bakery, opts = {}) {
         }
       } else {
         runLen = 0;
-        buf = await shoot();
+        buf = await shoot(lastShotFrame !== i - 1);
+        lastShotFrame = i;
         lastBuf = buf;
       }
       const name = String(i).padStart(6, '0');
