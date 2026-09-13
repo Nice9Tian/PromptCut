@@ -52,11 +52,16 @@ const GET_PIP_NAME = 'get-pip.py';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 /** 仓库根:desktop/scripts → desktop → 根 */
-const ROOT = path.resolve(HERE, '..', '..');
+const DEFAULT_ROOT = path.resolve(HERE, '..', '..');
+const SOURCE_ARG = process.argv.indexOf('--source');
+// Runtime/cache always belong to this desktop checkout.  --source changes only
+// the Python source copied into it for a release worktree.
+const ROOT = DEFAULT_ROOT;
+const SOURCE_ROOT = SOURCE_ARG >= 0 ? path.resolve(process.argv[SOURCE_ARG + 1]) : ROOT;
 const CACHE_DIR = path.join(ROOT, 'desktop', '.cache');
 const RUNTIME_PY = path.join(ROOT, 'desktop', 'src-tauri', 'runtime', 'python');
 const SITE_PACKAGES = path.join(RUNTIME_PY, 'Lib', 'site-packages');
-const STT_SRC = path.join(ROOT, 'python', 'promptcut_stt');
+const STT_SRC = path.join(SOURCE_ROOT, 'python', 'promptcut_stt');
 const STT_DST = path.join(SITE_PACKAGES, 'promptcut_stt');
 const VERSION_FILE = path.join(RUNTIME_PY, 'PYTHON-VERSION.json');
 const PYTHON_EXE = path.join(RUNTIME_PY, 'python.exe');
@@ -406,7 +411,7 @@ function pipVersion() {
  * 这两个文件一直没进包,于是装好的软件里点「安装引擎」必然报「未找到 requirements 文件」。
  */
 function copyRequirements() {
-  const srcDir = path.join(ROOT, 'python');
+  const srcDir = path.join(SOURCE_ROOT, 'python');
   if (!fs.existsSync(srcDir)) return [];
   const files = fs.readdirSync(srcDir).filter((f) => /^requirements-.+.txt$/.test(f));
   for (const f of files) fs.copyFileSync(path.join(srcDir, f), path.join(RUNTIME_PY, f));
@@ -436,7 +441,7 @@ function copySttPackage() {
  * 每加一个包都改一次这里太容易漏，所以按前缀扫。
  */
 function copyPromptcutPackages() {
-  const srcDir = path.join(ROOT, 'python');
+  const srcDir = path.join(SOURCE_ROOT, 'python');
   if (!fs.existsSync(srcDir)) return [];
   const pkgs = fs.readdirSync(srcDir).filter(
     (f) => f.startsWith('promptcut_')
@@ -454,7 +459,7 @@ function copyPromptcutPackages() {
 }
 
 /**
- * 基础运行时自带的第三方库。目前只有 numpy。
+ * 基础运行时自带 numpy 和 Pillow，卡片像素算法可直接使用。
  *
  * 为什么 numpy 值得进基础包、torch 不值得：运动追踪的**兜底档**（模板匹配）
  * 只要 numpy 就能跑，而拓展包是 190 MB torch + 208 MB 权重。多数用户一开始
@@ -464,30 +469,29 @@ function copyPromptcutPackages() {
  * 装进 site-packages 而不是 pylibs：pylibs 是拓展包的地盘，用户卸拓展时
  * 会被清掉，基础能力不能跟着一起没。
  */
-const BASE_LIBS = ['numpy==2.2.6'];
+const BASE_LIBS = ['numpy==2.2.6', 'Pillow==12.3.0'];
+const BASE_LIB_PROBE = 'import numpy, PIL, sys; assert numpy.__version__ == "2.2.6"; assert PIL.__version__ == "12.3.0"; sys.stdout.write("numpy " + numpy.__version__ + ", Pillow " + PIL.__version__)';
 
 function installBaseLibs() {
-  const probe = runPython(['-I', '-c', 'import numpy, sys; sys.stdout.write(numpy.__version__)']);
+  const probe = runPython(['-I', '-c', BASE_LIB_PROBE]);
   if (probe.status === 0) {
-    log(`[5/6] 基础库已就位:numpy ${probe.stdout.trim()}`);
+    log(`[5/6] 基础库已就位:${probe.stdout.trim()}`);
     return true;
   }
   log(`[5/6] 安装基础库 ${BASE_LIBS.join(', ')} → Lib/site-packages`);
   const r = runPython(
-    ['-I', '-m', 'pip', 'install', '--no-warn-script-location',
+    ['-I', '-m', 'pip', 'install', '--only-binary=:all:', '--upgrade', '--no-warn-script-location',
      '--target', SITE_PACKAGES, ...BASE_LIBS],
     {}, { stdio: 'inherit' },
   );
   if (r.status !== 0) {
-    warn('[5/6] numpy 安装失败。运动追踪的兜底档会用不了(拓展装了的话不受影响)。');
-    return false;
+    throw new Error('基础卡片依赖安装失败，不能交付缺少 numpy/Pillow 的运行时。');
   }
-  const after = runPython(['-I', '-c', 'import numpy, sys; sys.stdout.write(numpy.__version__)']);
+  const after = runPython(['-I', '-c', BASE_LIB_PROBE]);
   if (after.status !== 0) {
-    warn('[5/6] numpy 装完仍然 import 不到,检查 ._pth 有没有放开 site-packages。');
-    return false;
+    throw new Error('基础依赖安装后校验失败，检查 ._pth 的 site-packages 配置。');
   }
-  log(`[5/6] numpy ${after.stdout.trim()} 就位(${mb(dirSize(path.join(SITE_PACKAGES, 'numpy')))})`);
+  log(`[5/6] ${after.stdout.trim()} 就位`);
   return true;
 }
 
@@ -612,6 +616,8 @@ function check() {
   add('python.exe 存在', hasExe, PYTHON_EXE);
 
   if (hasExe) {
+    const base = runPython(['-I', '-c', BASE_LIB_PROBE]);
+    add('numpy/Pillow 固定版本', base.status === 0, (base.stdout || base.stderr || '').trim());
     const r = runPython(['-I', '-c', 'import sys,pip;print(sys.version)']);
     add('import sys, pip', r.status === 0, r.status === 0 ? r.stdout.trim().replace(/\s+/g, ' ') : (r.stderr || '').trim().split('\n').pop());
 
@@ -621,9 +627,16 @@ function check() {
       s.status === 0,
       s.status === 0 ? s.stdout.trim() : 'STT 包未就绪 — ' + (s.stderr || '').trim().split('\n').pop(),
     );
+    const cards = runPython(['-I', '-c', 'import promptcut_cards, numpy, PIL;print(promptcut_cards.__file__)']);
+    add(
+      'import promptcut_cards (含 NumPy/Pillow)',
+      cards.status === 0,
+      cards.status === 0 ? cards.stdout.trim() : (cards.stderr || '').trim().split('\n').pop(),
+    );
   } else {
     add('import sys, pip', false, '跳过(没有 python.exe)');
     add('import promptcut_stt', false, '跳过(没有 python.exe)');
+    add('import promptcut_cards (含 NumPy/Pillow)', false, '跳过(没有 python.exe)');
   }
 
   const reqs = fs.existsSync(RUNTIME_PY)
