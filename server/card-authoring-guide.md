@@ -19,6 +19,58 @@
 
 ## 1. CardDef 契约
 
+### Python 自定义路线
+
+当需求需要现有参数没有的转场、滤镜、动画、强调或音频算法时，使用 `create_card({language:"python", ...})`。以下 TypeScript 章节仅约束旧 TSX 卡片。Python 不需要包装成 React，也不要修改软件内核。
+
+定义字段包括 `id`、`name`、`language:"python"`、`kind`（animation/filter/transition/emphasis/audio）、`entry`（class 名）、`source`、`defaults`、`need_prerendering`、`compositing`、`styleKeys`。源码以 JSON 字符串提交，随项目保存。`styleKeys:[]` 表示不用风格，指定键表示部分适配，省略表示整个 style。构造函数接收选中的全局风格；实例参数在执行前提供给 `self.params`。
+
+```python
+from promptcut_cards import GLSL
+
+class Crossfade:
+    need_prerendering = False
+
+    def __init__(self, style=None):
+        self.shader = GLSL('''
+            uniform sampler2D u_input0;
+            uniform sampler2D u_input1;
+            uniform float progress;
+            void main() {
+                outColor = mix(texture(u_input0, v_uv),
+                               texture(u_input1, v_uv), clamp(progress, 0., 1.));
+            }
+        ''')
+
+    def card(self, source, time):
+        return self.shader(source['A'].time(time), source['B'].time(time),
+                           progress=time / self.params['duration'])
+```
+
+用 `create_card` 提交上面源码，`entry:"Crossfade"`、`kind:"transition"`、`defaults:{duration:1}`。随后用 `apply_card({cardId,trackId,start,end,inputs:{A:{clipId:"clip-a"},B:{clipId:"clip-b"}}})` 创建实例；也可以指定 `clipId` 将滤镜直接应用于已有片段。`inputs` 引用 `nodeId` 时可串接另一张卡片的输出；`offset` 和 `rate` 定义该输入的局部时间映射。不要假设 `clipId` 引用会自动定位到素材末尾，应按需要设置 `offset`。
+
+`source.time(t)` 不改变共享播放位置；`t` 可以是秒数或 `(start,end)` 半开区间。多输入用 `source['A']`。帧可保持为惰性 GPU 描述，或通过 `.array()` / `.image()` 获取授权输入像素。自由 Python 可返回 Pillow 图片、NumPy `uint8[height,width,4]` RGBA 数组。使用实际打包的 NumPy 和 Pillow；不可访问任意用户文件或网络。
+
+`need_prerendering=False` 必须保证同一输入与时间能直接求值；依赖历史的模拟或逐帧算法设置 True。它与 `compositing:"independent"` 是不同承诺：独立合成必须不读取下层背景，依赖背景则用 context，不清楚用 unknown。Python class 与 JSON 元数据应一致。GLSL 输入纹理叫 `u_input0`、`u_input1`，UV 为 `v_uv`，输出为 `outColor`；着色器自行声明所用 uniforms。GLSL 调用的 `time=` 对应 `u_time`。可追踪的算术和 `sin/cos` 能注册到前端 GPU；分支、像素算法等不能自动转为 GLSL，会保留 Python 执行。
+
+音频的同一个 `card(source,time)` 接收 `TimeRange`，含 `start`（样本位置）、`count`、`sample_rate`。例如：
+
+```python
+from promptcut_cards import AudioBlock
+
+class Gain:
+    need_prerendering = False
+
+    def __init__(self, style=None): pass
+
+    def card(self, source, time):
+        block = source.block(time.start, time.count)
+        return AudioBlock(block.samples * self.params['gain'],
+                          time.sample_rate, time.start)
+```
+
+音频定义 `kind:"audio"`，数组布局为交错的 `float32[frames,channels]`。返回的样本数和起点必须与请求完全一致。预览与导出使用同一执行入口。改源码先 `get_card_source` 再 `edit_card`，不创建重复定义；同一定义可以有多个独立参数实例。完成后用 `see_frames` 检查实际效果，尚未就绪的占位不算最终渲染结果。
+
 每张卡是一个文件，导出一个 `CardDef`：
 
 ```tsx

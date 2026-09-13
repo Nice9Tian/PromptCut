@@ -21,6 +21,7 @@ fs.mkdirSync(OUT, { recursive: true });
 function compile(srcRel, outName, rewrites = []) {
   let src = fs.readFileSync(path.join(ROOT, srcRel), 'utf8');
   for (const [from, to] of rewrites) src = src.split(from).join(to);
+  src = src.replace(/from (["'])(\.\.[^"']+\.mjs)\1/g, (_m, _q, f) => `from '${pathToFileURL(path.resolve(ROOT, path.dirname(srcRel), f)).href}'`);
   const js = ts.transpileModule(src, {
     compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
   }).outputText;

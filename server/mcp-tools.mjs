@@ -1249,7 +1249,8 @@ export const tools = [
         file: { type: "string", description: "要改的文件相对路径，必须在 get_card_source 返回的 files 里；不传就改卡片定义文件" },
         find: { type: "string", description: "要被替换掉的原文，逐字照抄源码" },
         replace: { type: "string", description: "替换成的新内容" },
-        replaceAll: { type: "boolean", description: "find 有意匹配多处且都要改时传 true" }
+        replaceAll: { type: "boolean", description: "find 有意匹配多处且都要改时传 true" },
+        metadata: { type: "object", description: "Python定义可同时更新entry/kind/defaults/need_prerendering/compositing/styleKeys；源码仍使用find/replace" }
       },
       required: ["cardId", "find", "replace"]
     },
@@ -1364,17 +1365,36 @@ export const tools = [
   },
   {
     name: "create_card",
-    description: "新建一张动效卡片，源码写入 src/cards/user/<id>.tsx，热更新后自动注册，list_cards 立刻可见。只在现有卡片都满足不了需求时才建新卡——先用 list_cards 确认没有能用的。调用前必须先调 card_authoring_guide 看规则。落盘前会校验 id、CardDef 结构、禁用 API 和语法，不合格直接报错并说明原因。**只用来建新卡**：想改一张已经建好的卡，用 get_card_source + edit_card，不要用 overwrite 整篇重写。",
+    description: "创建可复用卡片定义。language=python时以JSON传入Python class源码，统一支持animation/filter/transition/emphasis/audio，源码随项目保存，在受限Python运行器执行。class提供__init__(style=None)和card(source,time)，source.time(t)随机查询且不改变播放位置，多输入用source['A']；音频time为TimeRange(start,count,sample_rate)，用source.block。GLSL(fragment)(source.time(time),time=time)返回GPU绘制描述；NumPy uint8 RGBA数组/Pillow图片返回像素，AudioBlock或float32 frames×channels数组返回音频。need_prerendering与compositing分别声明，未知历史/背景依赖保持保守。建完用apply_card应用到一个或多个片段；也可用apply一次创建并应用。省略language保持原TSX建卡行为，先读card_authoring_guide。改现有源码用get_card_source和edit_card。",
     inputSchema: {
       type: "object",
       properties: {
         id: { type: "string", description: "小写 kebab-case，全局唯一，例如 price-tag" },
-        source: { type: "string", description: "完整的 .tsx 源码，必须含 `export const xxx: CardDef<Params> = {...}`" },
+        source: { type: "string", description: "完整Python class源码，或默认TSX CardDef源码" },
+        language: { type: "string", enum: ["python", "tsx"] },
+        entry: { type: "string", description: "Python class名称，如CustomTransition" },
+        kind: { type: "string", enum: ["animation", "filter", "transition", "emphasis", "audio"] },
+        defaults: { type: "object", description: "实例默认参数，通过self.params读取" },
+        need_prerendering: { type: "boolean", description: "true按历史推进；false必须能按time直接求值" },
+        compositing: { type: "string", enum: ["independent", "context", "unknown"], description: "只有明确独立渲染的卡才能使用独立透明MOV" },
+        styleKeys: { type: "array", items: { type: "string" }, description: "不传使用全部全局style，[]不使用，或指定使用字段" },
+        apply: { type: "object", description: "可选apply_card参数，cardId自动取本定义id" },
         overwrite: { type: "boolean", description: "只在确实要把同名卡整篇换掉时传 true；改细节请用 edit_card" }
       },
       required: ["id", "source"]
     },
     side: "browser"
+  },
+  {
+    name: "apply_card",
+    description: "把项目中的Python卡片定义应用为实例。同一定义可用于多段素材。clipId为已有片段；或trackId/start/end创建新动画或音频片段。inputs以名称映射到{clipId}原始素材/旧卡源或{nodeId}另一卡输出，可加offset秒和rate倍率；默认单输入source为目标clip原始来源。多输入转场常用A/B。params通过self.params传入。nodeId不传自动生成，传当前clip.nodeId可编辑该实例参数和输入。",
+    inputSchema: { type: "object", properties: {
+      cardId: { type: "string" }, clipId: { type: "string" }, trackId: { type: "string" }, start: { type: "number" }, end: { type: "number" },
+      nodeId: { type: "string" }, params: { type: "object" }, frame: { type: "object" },
+      inputs: { type: "object", additionalProperties: { type: "object", properties: {
+        clipId: { type: "string" }, nodeId: { type: "string" }, offset: { type: "number" }, rate: { type: "number" }
+      } } }
+    }, required: ["cardId"] }, side: "browser"
   },
   {
     name: "web_open",

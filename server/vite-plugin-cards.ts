@@ -6,6 +6,8 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import ts from 'typescript';
+import { normalizeCardDefinition } from '../src/kernel/cardGraph.mjs';
+import { patchCardDefinition } from '../src/kernel/cardAuthoring.mjs';
 import { originOk as guardOriginOk } from './http-guard.mjs';
 import { isPrerender } from './render-role.mjs';
 import { proxyToPrerender } from './prerender-client.mjs';
@@ -1110,7 +1112,13 @@ export default function vitePluginCards(): Plugin {
         req.on('data', (c) => { body += c; if (body.length > MAX_EDIT_BYTES * 2) req.destroy(); });
         req.on('end', () => {
           try {
-            const { id, file, find, replace, replaceAll } = JSON.parse(body || '{}');
+            const input = JSON.parse(body || '{}');
+            const { id, file, find, replace, replaceAll } = input;
+            if (input.definition?.language === 'python') {
+              const definition = patchCardDefinition(normalizeCardDefinition(input.definition), input);
+              return sendJson(res, 200, { ok: true, id: definition.id, language: 'python', definition, source: definition.source,
+                validation: 'structure', hint: 'Python source is saved with the project and executes only inside the isolated card runtime.' });
+            }
             if (typeof id !== 'string' || typeof find !== 'string' || typeof replace !== 'string') {
               return sendJson(res, 400, { ok: false, error: 'id、find、replace 都必须是字符串' });
             }
@@ -1372,7 +1380,14 @@ export default function vitePluginCards(): Plugin {
         req.on('data', (c) => { body += c; if (body.length > MAX_SOURCE_BYTES * 2) req.destroy(); });
         req.on('end', () => {
           try {
-            const { id, source, existingIds, overwrite, projectId } = JSON.parse(body || '{}');
+            const input = JSON.parse(body || '{}');
+            const { id, source, existingIds, overwrite, projectId } = input;
+            if (input.language === 'python') {
+              const { overwrite: _overwrite, existingIds: _ids, projectId: _project, apply: _apply, ...raw } = input;
+              const definition = normalizeCardDefinition(raw);
+              return sendJson(res, 200, { ok: true, id, language: 'python', definition, source, validation: 'structure',
+                hint: 'Definition validated structurally; source imports and evaluation happen only in the isolated Python runtime.' });
+            }
             if (typeof id !== 'string' || typeof source !== 'string') {
               return sendJson(res, 400, { ok: false, error: 'id 和 source 都必须是字符串' });
             }

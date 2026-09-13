@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from "react";
 import { createEmptyProject, DEFAULT_CARD_DUR, DEFAULT_MEDIA_DUR, findClip, findSoundAsset, newId, newProjectId, soundAssetFrom, type MediaAsset, type Project, type Track, type TrackClip, type Transcript, type Shots, type Subjects } from "../kernel/project";
 import { getCard } from "../kernel/registry";
+import { cloneCardClipInstance } from "../kernel/cardAuthoring.mjs";
 import { normalizeEmphasis, type ClipEmphasis } from "../kernel/emphasis";
 import {
   CAPTION_CARD_ID,
@@ -237,6 +238,9 @@ export const actions = {
   },
   setProjectMeta(patch: Partial<Pick<Project, "name" | "width" | "height" | "fps" | "duration" | "themeId" | "camera3dFov">>) {
     setProject({ ...state.project, ...patch });
+  },
+  editCardProject(edit: (project: Project) => Project) {
+    setProject(edit(state.project));
   },
   /** 记住关三维之前用的视角(不落盘,换项目自动清)。见 EditorState.lastCamera3dFov */
   rememberCamera3dFov(fov: number | null) {
@@ -850,7 +854,9 @@ export const actions = {
     const len = hit.clip.end - hit.clip.start;
     let clip: TrackClip = { ...hit.clip, id: newId("c"), start: hit.clip.end, end: hit.clip.end + len, ...(hit.clip.parts ? { parts: JSON.parse(JSON.stringify(hit.clip.parts)) } : {}) };
     clip = placeOrShift(hit.track, clip);
-    setProject(updateTrack(p, hit.track.id, (t) => ({ ...t, clips: sortClips([...t.clips, clip]) })));
+    const cloned = cloneCardClipInstance(p, hit.clip.id, clip.id, hit.clip.nodeId);
+    if (cloned.nodeId !== hit.clip.nodeId) clip = { ...clip, nodeId: cloned.nodeId };
+    setProject(updateTrack(cloned.project, hit.track.id, (t) => ({ ...t, clips: sortClips([...t.clips, clip]) })));
     set({ selection: [clip.id] });
     return clip;
   },
@@ -862,8 +868,10 @@ export const actions = {
     // 切开会凭空多出一段,转场两头就对不上了 —— 先删转场
     if (timingLock(p, clipId)) return null;
     const left: TrackClip = { ...hit.clip, end: t };
-    const right: TrackClip = { ...hit.clip, id: newId("c"), start: t, mediaOffset: (hit.clip.mediaOffset ?? 0) + (t - hit.clip.start), ...(hit.clip.parts ? { parts: JSON.parse(JSON.stringify(hit.clip.parts)) } : {}) };
-    setProject(updateTrack(p, hit.track.id, (t2) => ({ ...t2, clips: sortClips([...t2.clips.filter((c) => c.id !== clipId), left, right]) })));
+    let right: TrackClip = { ...hit.clip, id: newId("c"), start: t, mediaOffset: (hit.clip.mediaOffset ?? 0) + (t - hit.clip.start), ...(hit.clip.parts ? { parts: JSON.parse(JSON.stringify(hit.clip.parts)) } : {}) };
+    const cloned = cloneCardClipInstance(p, hit.clip.id, right.id, hit.clip.nodeId, t - hit.clip.start);
+    if (cloned.nodeId !== hit.clip.nodeId) right = { ...right, nodeId: cloned.nodeId };
+    setProject(updateTrack(cloned.project, hit.track.id, (t2) => ({ ...t2, clips: sortClips([...t2.clips.filter((c) => c.id !== clipId), left, right]) })));
     return right;
   },
 

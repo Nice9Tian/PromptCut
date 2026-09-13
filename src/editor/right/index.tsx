@@ -13,6 +13,7 @@ import { connectMcpExecutor, EditorApi } from "../../ai/mcpExecutor";
 import { prerenderUrl } from "../prerender";
 import { getState, actions } from "../../store/project";
 import { allCards, getCard } from "../../kernel/registry";
+import { saveCardDefinition, applyCardDefinition } from "../../kernel/cardAuthoring.mjs";
 import { cardFrameMode } from "../../render/frameMode.mjs";
 import { applyEnvelope, assertNo3dOnMedia, envelopeOf, isComposite, rejectAudioVolumeKeys } from "../../kernel/envelope";
 import { addPart as addPartToTree, movePart as movePartInTree, removePart as removePartFromTree, updatePart as updatePartInTree, validatePartTree } from "../../kernel/parts";
@@ -329,6 +330,9 @@ export function RightPanel() {
        * 和 defaults 全量拉一遍,又贵又淹没重点。
        */
       listCards: (args) => {
+        const pythonDefinitions = getState().project.cardDefinitions?.filter(def => def.language === 'python') || [];
+        const python = pythonDefinitions.filter(def => !args?.cardId || def.id === args.cardId).map(def => ({ ...def, source: 'project', language: 'python', hint: '用apply_card创建实例；get_card_source读取Python源码' }));
+        if (args?.cardId && python.length) return python;
         /*
          * 卡片库对 Agent 暴露多少,由 editor/cardScope.ts 那三档决定 ——
          * 内置卡按组开关,用户卡看「是不是本项目建的 / 有没有标共享」。
@@ -342,7 +346,7 @@ export function RightPanel() {
           ? [findCard(args.cardId)]
           : allCards().filter((c) => isCardVisible(c, readVisibility(), cardScopes, getState().project.id ?? null, usedCardIds(getState().project)));
         const full = args?.detail === "full" || !!args?.cardId;
-        return wanted.map((c) => {
+        return [...python, ...wanted.map((c) => {
           const base = {
             id: c.id, name: c.name, description: c.description, source: c.source,
             frameMode: cardFrameMode(c),
@@ -355,7 +359,7 @@ export function RightPanel() {
             params: c.controls.map((ct) => (ct.required ? `${ct.key}*` : ct.key)),
             hint: "带 * 的是必填。要完整 schema 就用 list_cards({ cardId })。",
           };
-        });
+        })];
       },
       getProject: () => {
         const p = getState().project;
@@ -1843,6 +1847,7 @@ export function RightPanel() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
+            ...args,
             id: args.id,
             source: args.source,
             overwrite: args.overwrite === true,
@@ -1853,6 +1858,17 @@ export function RightPanel() {
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok || !data.ok) throw new Error(data.error || `建卡失败(HTTP ${res.status})`);
+        if (data.definition?.language === 'python') {
+          let instance: { clipId: string; nodeId: string } | undefined;
+          actions.editCardProject(project => {
+            const next = saveCardDefinition(project, data.definition, { overwrite: args.overwrite });
+            if (!args.apply) return next;
+            const result = applyCardDefinition(next, { ...args.apply, cardId: args.id });
+            instance = { clipId: result.clipId, nodeId: result.nodeId };
+            return result.project;
+          });
+          return { ...data, ...(instance || {}), savedWithProject: true };
+        }
         refreshScopes();
         return data;
       },
@@ -1861,6 +1877,9 @@ export function RightPanel() {
        * 带 file 读这张卡用到的某个部件 / vendor 文件。
        */
       getCardSource: async (args) => {
+        const definition = getState().project.cardDefinitions?.find(def => def.id === args.cardId);
+        if (definition?.language === 'python') return { ok: true, id: definition.id, language: 'python', definition,
+          source: definition.source, entry: definition.entry, savedWithProject: true };
         const q = new URLSearchParams({ id: args.cardId, ...(args.file ? { file: args.file } : {}) });
         const res = await fetch(`/api/cards/source?${q}`);
         const data = await res.json().catch(() => ({}));
@@ -1869,14 +1888,27 @@ export function RightPanel() {
       },
       /** 局部替换式改卡(带 file 改部件文件)。整篇重写交给 createCard,那条路只该走一次(建卡)。 */
       editCard: async (args) => {
+        const definition = getState().project.cardDefinitions?.find(def => def.id === args.cardId);
         const res = await fetch("/api/cards/edit", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ id: args.cardId, file: args.file, find: args.find, replace: args.replace, replaceAll: args.replaceAll === true }),
+          body: JSON.stringify({ id: args.cardId, file: args.file, find: args.find, replace: args.replace, replaceAll: args.replaceAll === true,
+            ...(definition?.language === 'python' ? { definition, metadata: args.metadata } : {}) }),
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok || !data.ok) throw new Error(data.error || `改卡失败(HTTP ${res.status})`);
+        if (data.definition) actions.editCardProject(project => {
+          if (project.cardDefinitions?.find(def => def.id === args.cardId)?.source !== definition?.source) throw new Error('Card changed while editing; read current source again');
+          return saveCardDefinition(project, data.definition, { overwrite: true });
+        });
         return data;
+      },
+      applyCard: (args) => {
+        let instance: { clipId: string; nodeId: string } | undefined;
+        actions.editCardProject(project => {
+          const result = applyCardDefinition(project, args); instance = { clipId: result.clipId, nodeId: result.nodeId }; return result.project;
+        });
+        return { ok: true, ...instance };
       },
       /**
        * 只读地看一张卡某一刻的 DOM 树(每个节点标出源码位置)。project 从这里带过去,理由和 see_frames 一样:
