@@ -100,6 +100,16 @@ export class CardService {
     try { return await work(); } finally { release(); }
   }
   async reserve(context, signal) {
+    if (this.closed || signal?.aborted) throw error('Card service is closed');
+    const runtimeAlive = !(this.runtime.scopes instanceof Map) || this.runtime.scopes.has(context.revision);
+    if (context.opened && !context.closing && runtimeAlive) {
+      // Reserve an existing scope synchronously before an admission can choose
+      // it as an idle eviction victim. A different scope's slow ACL setup or
+      // cleanup must not delay consumers of this already-authorized graph.
+      context.active++; context.lastUsed = Date.now();
+      try { return await context.opened; }
+      catch (e) { context.active--; throw e; }
+    }
     return this.admit(async () => {
       // Reserve before awaiting runtime.open so a just-created stateful scope
       // cannot be selected as an idle victim by a concurrent evaluation.

@@ -9,6 +9,25 @@ function context(revision) {
   return { revision, input: 'input', output: 'output', temp: 'temp', opened: null, active: 0, lastUsed: 0 };
 }
 
+test('an existing scope can be leased while another scope admission is pending', async () => {
+  let unblock, started;
+  const opening = new Promise(resolve => { unblock=resolve; });
+  const entered = new Promise(resolve => { started=resolve; });
+  const runtime={scopes:new Map([['ready',{}]]),async open(revision){this.scopes.set(revision,{});started();await opening;}};
+  const service=new CardService({root:process.cwd(),dir:process.cwd(),runtime,maxOpenedScopes:2});
+  service.runtimeDir=async()=> 'runtime';
+  const ready=context('ready'), cold=context('cold');ready.opened=Promise.resolve();
+  service.scopes.set('ready',ready);service.scopes.set('cold',cold);
+  const coldLease=service.lease(cold);
+  await entered;
+  let timer;
+  try{
+    const release=await Promise.race([service.lease(ready),new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('Existing scope was blocked by unrelated admission')),1000);})]);
+    assert.equal(ready.active,1);assert.equal(cold.active,1);
+    release();assert.equal(ready.active,0);
+  }finally{clearTimeout(timer);unblock();(await coldLease)();}
+});
+
 test('a replaced worker gets one retry under the same scope lease', async () => {
   let attempts=0,leases=0,releases=0;
   const runtime={async request(){assert.equal(leases-releases,1);if(++attempts===1)throw Object.assign(new Error('worker exited'),{code:'worker_exited'});return {registered:false};}};
