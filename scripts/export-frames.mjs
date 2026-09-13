@@ -11,6 +11,7 @@ import { spawn, execFileSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import { buildComposeArgs, clipFrameRange, composeLayers } from '../server/export-compose.mjs';
 import { buildAudioPlan, buildFfmpegArgs, hasAudioStream } from './mux-audio.mjs';
+import { launchHealthyChrome } from './chrome-health.mjs';
 
 /** Encode incoming screenshots immediately so Node retains at most one PNG. */
 export function streamPngVideo(ffmpeg, file, fps) {
@@ -411,7 +412,7 @@ export async function openBakery(opts = {}) {
   const launch = () => puppeteer.launch({ headless: 'shell', protocolTimeout: 60000, args: CHROME_ARGS });
   let browser;
   try {
-    browser = await launch();
+    browser = await launchHealthyChrome({ launch });
   } catch (e) {
     if (!/could not find/i.test(e?.message || '')) throw e;
     /*
@@ -428,12 +429,20 @@ export async function openBakery(opts = {}) {
         '桌面版请用完整安装包重装一次;开发机上跑 `npx puppeteer browsers install chrome-headless-shell`。原始错误:' + e.message,
       );
     }
-    browser = await launch();
+    browser = await launchHealthyChrome({ launch });
   }
 
+  let session;
+  try {
+    session = await newSession(browser, url);
+  } catch (error) {
+    // No caller owns this browser until the bakery object is returned.
+    await browser.close().catch(() => {});
+    throw error;
+  }
   const bakery = {
     browser,
-    ...(await newSession(browser, url)),
+    ...session,
     /**
      * 换一趟新的:开一个全新 page(可选地把项目灌进去),换掉 bakery 上的 page/client,再关掉旧 page。
      * 旧 page 必须关:每趟漏一个不关,renderer 进程线性泄漏(这台机器多开 Chrome 复现过 0xC0000142)。
