@@ -1,0 +1,10 @@
+[package]
+name = "promptcut-card-runtime"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+rappct = { git = "https://github.com/cpjet64/rappct.git", rev = "c02f9dd960645522009da3827a79bdc99f50c9c1" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
