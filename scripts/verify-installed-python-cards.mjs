@@ -123,11 +123,14 @@ const reopened=await page.evaluate(async()=> (await import('/src/store/project.t
 assert.deepEqual(reopened.cardDefinitions,authored.definitions,'Reopening changed card source');
 const firstCustom=authored.clips.find(c=>c.nodeId&&authored.nodes?.some(n=>n.id===c.nodeId));
 await page.evaluate(async(time)=>{const {actions}=await import('/src/store/project.ts');actions.seek(time);},firstCustom?.start||0);
+await page.waitForFunction((frame)=>{const img=document.querySelector('.pc-pv[data-pc="preview"] img');return img?.complete&&img.naturalWidth>0&&new URL(img.src).pathname.endsWith('/'+String(frame).padStart(6,'0')+'.png');},{timeout:120000},Math.round((firstCustom?.start||0)*authored.fps));
 await page.screenshot({path:path.join(output,'installed-preview.png')});
 
 // Observe, never synthesize, ten seconds of actual preview playback. The UI
 // may expose either a status attribute or a current timeline label; both are
 // retained as evidence. A static/absent signal is an explicit failure.
+async function measurePlayback(label) {
+await page.evaluate(async(time)=>{(await import('/src/store/project.ts')).actions.seek(time);},firstCustom?.start||0);
 const play = await page.$('button[title="播放"]');
 assert.ok(play, 'Preview Play button not found');
 await page.evaluate(async()=>{
@@ -147,23 +150,43 @@ for (let i = 0; i < 11; i++) {
     preview: preview?.getAttribute('data-status') || null, dropped: preview?.getAttribute('data-dropped') || null }; }));
   if (i < 10) await new Promise(resolve => setTimeout(resolve, 1000));
 }
-await fs.writeFile(path.join(output, 'playback-samples.json'), JSON.stringify(samples, null, 2));
+await fs.writeFile(path.join(output, `${label}-playback-samples.json`), JSON.stringify(samples, null, 2));
 assert.ok(new Set(samples.map(sample => `${sample.playheadLabel}:${sample.playheadLeft}`).filter(Boolean)).size > 1, 'Playback playhead did not advance for 10 seconds');
 const pause = await page.$('button[title="暂停"]');
 assert.ok(pause, 'Preview did not remain in playing state long enough to pause');
 await pause.click();
 const frameTrace=await page.evaluate(()=>{cancelAnimationFrame(window.__acceptanceRaf);return window.__acceptanceFrames;});
-await fs.writeFile(path.join(output,'playback-frame-trace.json'),JSON.stringify(frameTrace));
+await fs.writeFile(path.join(output,`${label}-playback-frame-trace.json`),JSON.stringify(frameTrace));
 const stableFrames=frameTrace.filter(x=>x.at-frameTrace[0].at>=2000),presentations=[];
 for(const item of stableFrames)if(item.shown>=0&&item.shown!==presentations.at(-1)?.shown)presentations.push(item);
 const measuredSeconds=stableFrames.length?(stableFrames.at(-1).at-stableFrames[0].at)/1000:0;
 const metrics={seconds:measuredSeconds,distinctPresentedFrames:presentations.length,presentedFps:presentations.length/Math.max(.01,measuredSeconds),maxGapMs:Math.max(0,...presentations.slice(1).map((x,i)=>x.at-presentations[i].at)),blankFraction:stableFrames.filter(x=>x.shown<0).length/Math.max(1,stableFrames.length)};
-await fs.writeFile(path.join(output,'playback-metrics.json'),JSON.stringify(metrics,null,2));
-console.log('PLAYBACK',JSON.stringify(metrics));
-assert.ok(metrics.presentedFps>=authored.fps*.8 && metrics.blankFraction<.05 && metrics.maxGapMs<300,'Playback did not meet measured smoothness acceptance');
+await fs.writeFile(path.join(output,`${label}-playback-metrics.json`),JSON.stringify(metrics,null,2));
+console.log('PLAYBACK',label,JSON.stringify(metrics));
+return metrics;
+}
+const coldPlayback=await measurePlayback('cold');
+// Produce every actual frame in the tested range through the installed frame
+// API, without changing the project or fabricating/repeating captured samples.
+// This separates renderer throughput from the completed-cache playback check.
+const warmStarted=Date.now(), warmBatches=[];
+const firstFrame=Math.round((firstCustom?.start||0)*authored.fps);
+const lastFrame=Math.min(Math.floor(reopened.duration*authored.fps)-1,firstFrame+Math.ceil(12*authored.fps));
+for(let frame=firstFrame;frame<=lastFrame;frame+=12){
+  const times=Array.from({length:Math.min(12,lastFrame-frame+1)},(_,i)=>(frame+i)/authored.fps);
+  const batchStarted=Date.now();
+  const result=await page.evaluate(async(times)=>{const {getState}=await import('/src/store/project.ts');const {see_frames}=await import('/src/render/frameClient.ts');return see_frames(getState().project,times,undefined,{target:'user',lane:'agent'});},times);
+  assert.equal(result.incomplete,false,'Warm-cache preparation returned placeholders');
+  assert.equal(result.frames.length,times.length,'Warm-cache preparation omitted frames');
+  warmBatches.push({frame,count:times.length,ms:Date.now()-batchStarted,sources:[...new Set(result.frames.map(f=>f.source))]});
+  await fs.writeFile(path.join(output,'warm-cache-preparation.json'),JSON.stringify({elapsedMs:Date.now()-warmStarted,batches:warmBatches},null,2));
+  console.log('WARM_CACHE',frame,lastFrame,warmBatches.at(-1).ms);
+}
+const warmPlayback=await measurePlayback('warm');
+assert.ok(warmPlayback.presentedFps>=authored.fps*.8 && warmPlayback.blankFraction<.05 && warmPlayback.maxGapMs<300,'Completed-cache playback did not meet measured smoothness acceptance');
 const after = await hash(original);
 assert.equal(after, before, 'Original project changed during acceptance run');
-await fs.writeFile(path.join(output, 'result.json'), JSON.stringify({ ok: true, originalSha256Before: before, originalSha256After: after, copy, ui, toolCalls: names, samples }, null, 2));
+await fs.writeFile(path.join(output, 'result.json'), JSON.stringify({ ok: true, originalSha256Before: before, originalSha256After: after, copy, ui, toolCalls: names, coldPlayback, warmPlayback, warmPreparationMs:Date.now()-warmStarted }, null, 2));
 console.log(`PASS installed Python-card acceptance evidence: ${output}`);
 
 } catch (error) {
