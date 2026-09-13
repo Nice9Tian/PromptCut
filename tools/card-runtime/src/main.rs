@@ -12,13 +12,82 @@ use std::{
     fs::File,
     io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, mpsc},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+        mpsc,
+    },
     thread,
     time::Duration,
+};
+#[cfg(windows)]
+use windows::{
+    Win32::{
+        Foundation::{CloseHandle, HANDLE},
+        System::Threading::{CreateMutexW, ReleaseMutex, WaitForSingleObject},
+    },
+    core::w,
 };
 const MAX: usize = 8 * 1024 * 1024;
 const RO: AccessMask = AccessMask(0x0012_00A9);
 const MAX_WORKERS: usize = 4;
+const STDERR_TAIL: usize = 8192;
+const ACL_TRANSACTION_TIMEOUT_MS: u32 = 30_000;
+static NEXT_WORKER: AtomicU64 = AtomicU64::new(1);
+
+// grant_to_package performs a read/modify/write of a filesystem DACL. Separate
+// broker processes use different ephemeral SIDs but may share runtime/python,
+// so their setup and exact-SID cleanup must not race each other.
+#[cfg(windows)]
+struct AclTransaction(HANDLE);
+#[cfg(windows)]
+impl AclTransaction {
+    fn acquire() -> Result<Self, String> {
+        unsafe {
+            let handle = CreateMutexW(
+                None,
+                false,
+                w!("Local\\PromptCut.CardRuntime.AclTransaction.v1"),
+            )
+            .map_err(|e| format!("create ACL transaction mutex: {e}"))?;
+            let wait = WaitForSingleObject(handle, ACL_TRANSACTION_TIMEOUT_MS);
+            // WAIT_OBJECT_0 and WAIT_ABANDONED both transfer ownership. An
+            // abandoned prior owner is safe here because this process repeats
+            // its own complete DACL transaction while holding the mutex.
+            if wait.0 == 0 || wait.0 == 0x80 {
+                Ok(Self(handle))
+            } else if wait.0 == 0x102 {
+                let _ = CloseHandle(handle);
+                Err(format!(
+                    "ACL transaction timed out after {ACL_TRANSACTION_TIMEOUT_MS}ms"
+                ))
+            } else {
+                let _ = CloseHandle(handle);
+                Err(format!("wait for ACL transaction mutex failed: {}", wait.0))
+            }
+        }
+    }
+}
+#[cfg(windows)]
+impl Drop for AclTransaction {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = ReleaseMutex(self.0);
+            let _ = CloseHandle(self.0);
+        }
+    }
+}
+#[cfg(not(windows))]
+struct AclTransaction;
+#[cfg(not(windows))]
+impl AclTransaction {
+    fn acquire() -> Result<Self, String> {
+        Err("Windows ACL transaction required".into())
+    }
+}
+fn next_worker() -> u64 {
+    NEXT_WORKER.fetch_add(1, Ordering::Relaxed)
+}
 fn emit(v: &Value) {
     let mut o = std::io::stdout();
     let _ = serde_json::to_writer(&mut o, v);
@@ -55,6 +124,7 @@ fn h(s: &str) -> usize {
 }
 struct W {
     input: Mutex<File>,
+    diagnostic: Arc<Mutex<String>>,
     _child: LaunchedIo,
 }
 struct Scope {
@@ -63,15 +133,19 @@ struct Scope {
     grants: Vec<PathBuf>,
     roots: Vec<PathBuf>,
     workers: Vec<Option<Arc<W>>>,
+    generations: Vec<u64>,
     queues: Vec<VecDeque<Value>>,
     active: Vec<Option<String>>,
     runtime: PathBuf,
     temp: PathBuf,
-    tx: mpsc::Sender<(String, Value)>,
+    tx: mpsc::Sender<(String, u64, Value)>,
     routes: HashMap<String, (usize, Value)>,
 }
 impl Scope {
-    fn close(self) {
+    fn close(self) -> Result<(), String> {
+        // Do not allow another runner to read/modify/write an overlapping ACL
+        // while this scope removes its exact SID and deletes its profile.
+        let _transaction = AclTransaction::acquire()?;
         drop(self.workers);
         for p in self.roots {
             let _ = std::process::Command::new("icacls")
@@ -94,7 +168,7 @@ impl Scope {
                 .stderr(std::process::Stdio::null())
                 .status();
         }
-        let _ = self.profile.delete();
+        self.profile.delete().map_err(|e| e.to_string())
     }
 }
 fn sanitize() {
@@ -160,10 +234,11 @@ fn ancestors(p: &Path, sid: &rappct::AppContainerSid, g: &mut Vec<PathBuf>) -> R
 }
 fn worker(
     scope: &str,
+    generation: u64,
     runtime: &Path,
     temp: &Path,
     caps: &rappct::SecurityCapabilities,
-    tx: mpsc::Sender<(String, Value)>,
+    tx: mpsc::Sender<(String, u64, Value)>,
 ) -> Result<Arc<W>, String> {
     let py = runtime.join("python.exe");
     if !py.is_file() {
@@ -190,11 +265,30 @@ fn worker(
         launch_in_container_with_io(caps, &opts).map_err(|e| format!("LPAC launch failed: {e}"))?;
     let i = c.stdin.take().ok_or("worker stdin unavailable")?;
     let o = c.stdout.take().ok_or("worker stdout unavailable")?;
+    let diagnostic = Arc::new(Mutex::new(String::new()));
     if let Some(e) = c.stderr.take() {
+        let diagnostic = diagnostic.clone();
         thread::spawn(move || {
             let mut r = BufReader::new(e);
-            let mut sink = Vec::new();
-            let _ = std::io::Read::read_to_end(&mut r, &mut sink);
+            let mut chunk = [0_u8; 1024];
+            loop {
+                match r.read(&mut chunk) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => {
+                        if let Ok(mut tail) = diagnostic.lock() {
+                            tail.push_str(&String::from_utf8_lossy(&chunk[..n]));
+                            if tail.len() > STDERR_TAIL {
+                                let bytes = tail.as_bytes();
+                                let mut start = bytes.len() - STDERR_TAIL;
+                                while start < bytes.len() && !tail.is_char_boundary(start) {
+                                    start += 1;
+                                }
+                                *tail = tail[start..].to_owned();
+                            }
+                        }
+                    }
+                }
+            }
         });
     }
     let s = scope.to_owned();
@@ -207,26 +301,40 @@ fn worker(
                 Ok(0) => break,
                 Ok(n) if n <= MAX && b.last() == Some(&b'\n') => match serde_json::from_slice(&b) {
                     Ok(v) => {
-                        let _ = tx.send((s.clone(), v));
+                        let _ = tx.send((s.clone(), generation, v));
                     }
                     Err(_) => {
-                        let _=tx.send((s.clone(),json!({"type":"broker_error","error":{"code":"worker_protocol","message":"malformed worker JSON"}})));
+                        let _ = tx.send((
+                            s.clone(),
+                            generation,
+                            json!({"type":"worker_dead","reason":"malformed worker JSON"}),
+                        ));
                         break;
                     }
                 },
                 _ => {
-                    let _=tx.send((s.clone(),json!({"type":"broker_error","error":{"code":"worker_protocol","message":"oversized worker reply"}})));
+                    let _ = tx.send((
+                        s.clone(),
+                        generation,
+                        json!({"type":"worker_dead","reason":"oversized worker reply"}),
+                    ));
                     break;
                 }
             }
         }
+        let _ = tx.send((
+            s,
+            generation,
+            json!({"type":"worker_dead","reason":"worker stdout closed"}),
+        ));
     });
     Ok(Arc::new(W {
         input: Mutex::new(i),
+        diagnostic,
         _child: c,
     }))
 }
-fn opening(r: &Value, tx: mpsc::Sender<(String, Value)>) -> Result<Scope, String> {
+fn opening(r: &Value, tx: mpsc::Sender<(String, u64, Value)>) -> Result<Scope, String> {
     let p = r.get("payload").ok_or("missing payload")?;
     let rt = cp(&p["runtimeDir"], "runtimeDir")?;
     let out = cp(&p["outputDir"], "outputDir")?;
@@ -251,6 +359,9 @@ fn opening(r: &Value, tx: mpsc::Sender<(String, Value)>) -> Result<Scope, String
     if n == 0 || n > MAX_WORKERS {
         return Err("workers must be 1 through 4".into());
     }
+    // This guard covers every DACL/profile mutation and initial worker launch.
+    // It deliberately drops when open returns: Python evaluation never holds it.
+    let _transaction = AclTransaction::acquire()?;
     let prof = AppContainerProfile::ensure(
         &format!(
             "PromptCut.CardRuntime.{}.{}",
@@ -291,24 +402,29 @@ fn opening(r: &Value, tx: mpsc::Sender<(String, Value)>) -> Result<Scope, String
             .build()
             .map_err(|e| e.to_string())?;
         let mut ws = Vec::new();
+        let mut generations = Vec::new();
         for _ in 0..n {
+            let generation = next_worker();
             ws.push(worker(
                 r["scope"].as_str().unwrap_or(""),
+                generation,
                 &rt,
                 &tmp,
                 &caps,
                 tx.clone(),
-            )?)
+            )?);
+            generations.push(generation)
         }
-        Ok::<_, String>(ws)
+        Ok::<_, String>((ws, generations))
     })();
     match made {
-        Ok(workers) => Ok(Scope {
+        Ok((workers, generations)) => Ok(Scope {
             profile: prof,
             sid,
             grants: g,
             roots: roots.clone(),
             workers: workers.into_iter().map(Some).collect(),
+            generations,
             queues: (0..n).map(|_| VecDeque::new()).collect(),
             active: (0..n).map(|_| None).collect(),
             runtime: rt,
@@ -358,12 +474,98 @@ fn write_worker(s: &mut Scope, ix: usize, r: Value) -> Result<(), String> {
     s.routes.insert(id, (ix, r));
     Ok(())
 }
-fn pump(s: &mut Scope, ix: usize) {
+fn fail_queue(s: &mut Scope, ix: usize, code: &str, message: &str) -> Vec<Value> {
+    let mut failed = Vec::new();
+    while let Some(request) = s.queues[ix].pop_front() {
+        if let Some(id) = request.get("id").and_then(Value::as_str) {
+            s.routes.remove(id);
+        }
+        failed.push(fail(&request, code, message));
+    }
+    failed
+}
+fn pump(s: &mut Scope, ix: usize) -> Vec<Value> {
+    let mut failed = Vec::new();
     if s.active[ix].is_none() {
         if let Some(r) = s.queues[ix].pop_front() {
-            let _ = write_worker(s, ix, r);
+            if let Err(e) = write_worker(s, ix, r.clone()) {
+                if let Some(id) = r.get("id").and_then(Value::as_str) {
+                    s.routes.remove(id);
+                }
+                failed.push(fail(&r, "worker_write", &e));
+                // A dispatch write means this slot cannot safely accept the
+                // remaining FIFO.  Do not recursively restart here: a new
+                // external request gets one bounded replacement attempt.
+                let old = s.workers[ix].take();
+                drop(old);
+                s.generations[ix] = next_worker();
+                failed.extend(fail_queue(
+                    s,
+                    ix,
+                    "worker_write",
+                    "worker pipe write failed",
+                ));
+            }
         }
     }
+    failed
+}
+fn recover_worker(s: &mut Scope, scope: &str, ix: usize) -> Result<(), String> {
+    if ix >= s.workers.len() {
+        return Err("worker slot unavailable".into());
+    }
+    // Advance before dropping the old job.  Its reader may still report EOF,
+    // but generation matching below makes that late event harmless.
+    let generation = next_worker();
+    s.generations[ix] = generation;
+    let old = s.workers[ix].take();
+    drop(old);
+    let caps = SecurityCapabilitiesBuilder::new(&s.profile.sid)
+        .with_lpac_defaults()
+        .build()
+        .map_err(|e| e.to_string())?;
+    let w = worker(scope, generation, &s.runtime, &s.temp, &caps, s.tx.clone())?;
+    s.workers[ix] = Some(w);
+    Ok(())
+}
+fn worker_dead(s: &mut Scope, scope: &str, ix: usize, generation: u64, reason: &str) -> Vec<Value> {
+    if ix >= s.workers.len() || s.generations[ix] != generation {
+        return Vec::new();
+    }
+    let detail = s.workers[ix]
+        .as_ref()
+        .and_then(|w| w.diagnostic.lock().ok().map(|x| x.clone()));
+    let message = match detail.filter(|x| !x.trim().is_empty()) {
+        Some(stderr) => format!("{reason}: {}", stderr.trim()),
+        None => reason.to_owned(),
+    };
+    let mut failed = Vec::new();
+    if let Some(id) = s.active[ix].take() {
+        if let Some((_, request)) = s.routes.remove(&id) {
+            failed.push(fail(&request, "worker_exited", &message));
+        }
+    }
+    // A dead job never receives queued work.  Keep its FIFO entries and their
+    // request routes for the replacement; only the request actually executing
+    // at the crash boundary is failed, never replayed.
+    let should_restart = !failed.is_empty() || !s.queues[ix].is_empty();
+    if should_restart && recover_worker(s, scope, ix).is_ok() {
+        failed.extend(pump(s, ix));
+    } else if !should_restart {
+        // EOF while idle must not create an unbounded respawn loop.  A later
+        // incoming request can make exactly one replacement attempt.
+        let old = s.workers[ix].take();
+        drop(old);
+        s.generations[ix] = next_worker();
+    } else {
+        failed.extend(fail_queue(
+            s,
+            ix,
+            "worker_restart_failed",
+            "LPAC worker could not be restarted",
+        ));
+    }
+    failed
 }
 fn main() {
     if rappct::supports_lpac().is_err() {
@@ -376,7 +578,7 @@ fn main() {
     }
     sanitize();
     let (htx, hrx) = mpsc::channel();
-    let (etx, erx) = mpsc::channel::<(String, Value)>();
+    let (etx, erx) = mpsc::channel::<(String, u64, Value)>();
     thread::spawn(move || {
         let mut r = BufReader::new(std::io::stdin());
         let mut b = Vec::new();
@@ -399,18 +601,48 @@ fn main() {
     });
     let mut scopes = HashMap::<String, Scope>::new();
     loop {
-        while let Ok((event_scope, v)) = erx.try_recv() {
-            if v.get("type").and_then(Value::as_str) != Some("input") {
-                if let Some(s) = scopes.get_mut(&event_scope) {
-                    if let Some(id) = v.get("id").and_then(Value::as_str) {
-                        if let Some((ix, _)) = s.routes.remove(id) {
+        while let Ok((event_scope, generation, v)) = erx.try_recv() {
+            let mut emit_event = true;
+            let mut failures = Vec::new();
+            if let Some(s) = scopes.get_mut(&event_scope) {
+                if v.get("type").and_then(Value::as_str) == Some("worker_dead") {
+                    if let Some(ix) = s.generations.iter().position(|x| *x == generation) {
+                        failures = worker_dead(
+                            s,
+                            &event_scope,
+                            ix,
+                            generation,
+                            v.get("reason")
+                                .and_then(Value::as_str)
+                                .unwrap_or("worker exited"),
+                        );
+                    }
+                    emit_event = false;
+                } else if let Some(id) = v.get("id").and_then(Value::as_str) {
+                    let route = s.routes.get(id).cloned();
+                    if let Some((ix, _)) = route {
+                        // A replaced worker may have a late reply in its pipe.
+                        // Do not let it complete an identically routed new job.
+                        if s.generations[ix] != generation {
+                            emit_event = false;
+                        } else if v.get("type").and_then(Value::as_str) != Some("input") {
+                            s.routes.remove(id);
                             s.active[ix] = None;
-                            pump(s, ix);
+                            failures.extend(pump(s, ix));
                         }
+                    } else {
+                        emit_event = false;
                     }
                 }
+            } else {
+                emit_event = false;
             }
-            emit(&v)
+            for failure in failures {
+                emit(&failure);
+            }
+            if emit_event {
+                emit(&v)
+            }
         }
         let r = match hrx.recv_timeout(Duration::from_millis(20)) {
             Ok(v) => v,
@@ -452,9 +684,13 @@ fn main() {
             }
             Some("close") => {
                 if let Some(s) = scopes.remove(&scope) {
-                    s.close()
+                    match s.close() {
+                        Ok(()) => emit(&answer(&r, json!({}))),
+                        Err(e) => emit(&fail(&r, "acl_cleanup", e)),
+                    }
+                } else {
+                    emit(&answer(&r, json!({})))
                 }
-                emit(&answer(&r, json!({})))
             }
             Some("cancel") => {
                 let target = r
@@ -478,15 +714,7 @@ fn main() {
                             for q in doomed {
                                 emit(&fail(&q, "card_cancelled", "worker job cancelled"))
                             }
-                            if let Ok(c) = SecurityCapabilitiesBuilder::new(&s.profile.sid)
-                                .with_lpac_defaults()
-                                .build()
-                            {
-                                if let Ok(w) = worker(&scope, &s.runtime, &s.temp, &c, s.tx.clone())
-                                {
-                                    s.workers[ix] = Some(w)
-                                }
-                            }
+                            let _ = recover_worker(s, &scope, ix);
                             emit(&answer(&r, json!({})))
                         } else {
                             emit(&fail(
@@ -528,23 +756,58 @@ fn main() {
                                 continue;
                             }
                         };
+                        if !is_input && s.workers[ix].is_none() {
+                            if let Err(e) = recover_worker(s, &scope, ix) {
+                                emit(&fail(&r, "worker_restart_failed", e));
+                                continue;
+                            }
+                        }
                         if !is_input {
                             s.routes.insert(id.to_string(), (ix, r.clone()));
                         }
                         if is_input {
-                            if let Some(w) = s.workers[ix].as_ref() {
+                            let write_error = if let Some(w) = s.workers[ix].as_ref() {
                                 let b = serde_json::to_vec(&r).unwrap();
-                                if let Ok(mut i) = w.input.lock() {
-                                    let _ = i
+                                match w.input.lock() {
+                                    Ok(mut i) => i
                                         .write_all(&b)
                                         .and_then(|_| i.write_all(b"\n"))
-                                        .and_then(|_| i.flush());
+                                        .and_then(|_| i.flush())
+                                        .err()
+                                        .map(|e| e.to_string()),
+                                    Err(_) => Some("worker input lock poisoned".into()),
                                 }
                             } else {
-                                emit(&fail(&r, "worker_io", "worker unavailable"))
+                                Some("worker unavailable".into())
+                            };
+                            if let Some(reason) = write_error {
+                                let generation = s.generations[ix];
+                                for failure in worker_dead(
+                                    s,
+                                    &scope,
+                                    ix,
+                                    generation,
+                                    &format!("worker pipe write failed: {reason}"),
+                                ) {
+                                    emit(&failure);
+                                }
                             }
                         } else if let Err(e) = write_worker(s, ix, r.clone()) {
-                            emit(&fail(&r, "worker_io", e))
+                            // The route was registered above so cancel can see queued work.
+                            // A failed direct write has no active slot yet; fail it explicitly,
+                            // replace the dead slot, and never retry user code implicitly.
+                            s.routes.remove(id);
+                            let generation = s.generations[ix];
+                            for failure in worker_dead(
+                                s,
+                                &scope,
+                                ix,
+                                generation,
+                                &format!("worker pipe write failed: {e}"),
+                            ) {
+                                emit(&failure);
+                            }
+                            emit(&fail(&r, "worker_write", e))
                         }
                     }
                     None => emit(&fail(&r, "scope_missing", "open scope first")),
@@ -554,6 +817,6 @@ fn main() {
         }
     }
     for (_, s) in scopes {
-        s.close()
+        let _ = s.close();
     }
 }
