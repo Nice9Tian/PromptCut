@@ -85,7 +85,9 @@ export async function exportUnified(project, opts) {
     const bakery = await openBakery({ ...opts, url: opts.url });
     try {
       const result = await bakeFrames(bakery, {
-        ...opts, out: partDir, url: opts.url, frames: `${a}-${b}`, workers: 1, onProgressLog: false,
+        // This movie is the final browser composition. The HTML-only snapshot
+        // path intentionally omits video sources and cannot produce its frames.
+        ...opts, fullFrame: true, out: partDir, url: opts.url, frames: `${a}-${b}`, workers: 1, onProgressLog: false,
         ...(stream ? { onFrame: (_frame, buf) => stream.write(buf), writeFrames: false } : {}),
         quiet: true,
         onProgress: (frame) => {

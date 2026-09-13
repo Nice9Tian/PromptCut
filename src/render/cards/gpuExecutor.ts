@@ -46,7 +46,10 @@ export class CardGpuExecutor {
   private disposed = false;
   private serial = Promise.resolve();
   constructor(public readonly canvas: HTMLCanvasElement, private readonly resolve: ValueResolver, private readonly maxPasses = 32, private readonly maxDepth = 32) {
-    const gl = canvas.getContext("webgl2", { alpha: true, premultipliedAlpha: false, antialias: false });
+    // A card draws when its inputs/time change, while capture may happen after
+    // further compositor ticks or freeze the canvas with toDataURL. The default
+    // disposable drawing buffer can become transparent between those steps.
+    const gl = canvas.getContext("webgl2", { alpha: true, premultipliedAlpha: false, antialias: false, preserveDrawingBuffer: true });
     if (!gl) throw new CardGpuError("unavailable", "WebGL2 is unavailable");
     this.gl = gl;
     const buffer = gl.createBuffer(), vao = gl.createVertexArray();

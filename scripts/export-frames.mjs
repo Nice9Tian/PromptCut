@@ -13,25 +13,49 @@ import { buildComposeArgs, clipFrameRange, composeLayers } from '../server/expor
 import { buildAudioPlan, buildFfmpegArgs, hasAudioStream } from './mux-audio.mjs';
 import { launchHealthyChrome } from './chrome-health.mjs';
 
-/** Encode incoming screenshots immediately so Node retains at most one PNG. */
+/** Encode incoming screenshots immediately so Node retains at most one PNG.
+ * The movie must hold exactly the frames written: a shorter file shifts every
+ * later shard in the concatenated export, so a mismatch is an error.
+ */
 export function streamPngVideo(ffmpeg, file, fps) {
-  const proc = spawn(ffmpeg, ['-y', '-hide_banner', '-loglevel', 'error', '-f', 'image2pipe', '-vcodec', 'png',
+  const proc = spawn(ffmpeg, ['-y', '-hide_banner', '-loglevel', 'error', '-progress', 'pipe:2', '-f', 'image2pipe', '-vcodec', 'png',
     '-framerate', String(fps), '-i', 'pipe:0', '-an', '-c:v', 'prores_ks', '-profile:v', '4444',
     '-pix_fmt', 'yuva444p10le', file], { stdio: ['pipe', 'ignore', 'pipe'], windowsHide: true });
-  let stderr = '', inputError = null;
-  proc.stderr.on('data', d => { stderr = (stderr + d).slice(-8000); });
+  let stderr = '', partial = '', inputError = null, written = 0;
+  const progress = {};
+  proc.stderr.on('data', d => {
+    const lines = (partial + d).split(/\r?\n/);
+    partial = lines.pop();
+    for (const line of lines) {
+      const m = /^(frame|drop_frames|dup_frames|progress)=(\S*)$/.exec(line);
+      if (m) progress[m[1]] = m[2];
+      else if (!/^[a-z_0-9]+=/.test(line)) stderr = (stderr + line + '\n').slice(-8000);
+    }
+  });
   proc.stdin.on('error', e => { inputError = e; });
   const done = new Promise((resolve, reject) => {
     proc.on('error', reject);
-    proc.on('close', code => code === 0 ? resolve() : reject(inputError || new Error(`ffmpeg ${code}: ${stderr}`)));
+    proc.on('close', code => {
+      if (partial && !/^[a-z_0-9]+=/.test(partial)) stderr = (stderr + partial).slice(-8000);
+      code === 0 ? resolve() : reject(inputError || new Error(`ffmpeg ${code}: ${stderr}`));
+    });
   });
   done.catch(() => {});
   return {
     async write(buffer) {
       if (inputError) throw inputError;
       await new Promise((resolve, reject) => proc.stdin.write(buffer, e => e ? reject(e) : resolve()));
+      written++;
     },
-    async finish() { proc.stdin.end(); await done; },
+    async finish() {
+      proc.stdin.end();
+      await done;
+      const encoded = Number(progress.frame);
+      if (process.env.PC_STREAM_DEBUG) console.log(`[stream-png] ${file}: written=${written} encoded=${progress.frame} drop=${progress.drop_frames} dup=${progress.dup_frames}`);
+      if (encoded !== written) {
+        throw new Error(`${file}: wrote ${written} frames but ffmpeg encoded ${progress.frame ?? 'unknown'} (drop=${progress.drop_frames}, dup=${progress.dup_frames}) ${stderr}`);
+      }
+    },
     async abort() { proc.stdin.destroy(); proc.kill(); await done.catch(() => {}); },
   };
 }

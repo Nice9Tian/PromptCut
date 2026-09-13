@@ -58,5 +58,7 @@ export function cardLocalTime(sampling, localFrame) {
 }
 
 export function cardCacheIdentity(nodeKey, sampling, duration, output = 'visual') {
-  return digest({ nodeKey, fps: sampling.fps, phase: sampling.phase, duration, output });
+  // Invalidate raster samples captured with disposable WebGL buffers, which
+  // could have stored a transparent canvas as a successfully rendered card.
+  return digest({ rasterVersion: 2, nodeKey, fps: sampling.fps, phase: sampling.phase, duration, output });
 }
