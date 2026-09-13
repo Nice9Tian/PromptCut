@@ -27,7 +27,7 @@ try {
     await gpu.execute({type:"glsl",inputs:[{type:"glsl",fragment:"void main(){outColor=vec4(0.,1.,0.,1.);}"}],fragment:"uniform sampler2D u_input0;void main(){outColor=texture(u_input0,v_uv);}"},0); const chain=px();
     await gpu.execute({type:"glsl",fragment:"uniform sampler2D u_input0;void main(){outColor=texture(u_input0,v_uv);}",inputs:[{type:"source",nodeId:"a",time:{type:"expr",op:"time"}}]},.25); const inputA=px();
     await gpu.execute({type:"glsl",fragment:"uniform sampler2D u_input0;void main(){outColor=texture(u_input0,v_uv);}",inputs:[{type:"source",nodeId:"a",time:{type:"expr",op:"time"}}]},.75); const inputB=px();
-    let err; try { await gpu.execute({type:"glsl",fragment:"void main(){bad syntax}"},0); } catch(e) { err={code:e.code,log:e.log}; }
+    let err; try { await gpu.execute({type:"glsl",fragment:"void main(){bad syntax}"},0); } catch(e) { err={code:e.code,log:e.log,message:e.message}; }
     let missing0, missing1; const shader="uniform sampler2D u_input0;uniform sampler2D u_input1;void main(){outColor=texture(u_input0,v_uv)+texture(u_input1,v_uv);}";
     try { await gpu.execute({type:"glsl",fragment:shader,inputs:[{type:"source",nodeId:"missing-0"},{type:"source",nodeId:"ok"}]},0); } catch(e) { missing0=e.code; }
     try { await gpu.execute({type:"glsl",fragment:shader,inputs:[{type:"source",nodeId:"ok"},{type:"source",nodeId:"missing-1"}]},0); } catch(e) { missing1=e.code; }
@@ -45,7 +45,7 @@ try {
   // readPixels returns bottom-to-top rows; the DOM canvas must show red/green
   // on the top row and blue/transparent on the bottom row.
   require(result.grid.join(",") === [0,0,255,255,0,0,0,0,255,0,0,255,0,255,0,255].join(","), "asymmetric 2x2 orientation/alpha changed");
-  require(result.err?.code === "shader-compile" && typeof result.err.log === "string", "structured shader error failed"); require(result.replaced[2] > 200, "shader source replacement left stale program");
+  require(result.err?.code === "shader-compile" && typeof result.err.log === "string" && result.err.message.includes(result.err.log.trim().slice(0,8192)), "shader diagnostic was lost from the transported error message"); require(result.replaced[2] > 200, "shader source replacement left stale program");
   require(result.counts[0] === result.counts[1] && result.counts[2] === result.counts[3], "resources were not released after error/dispose");
   console.log(JSON.stringify({ ...result, rendererMode: /swiftshader|llvmpipe/i.test(result.renderer) ? "software" : "hardware-or-unreported" }));
 } finally { await browser?.close(); await server.close(); }

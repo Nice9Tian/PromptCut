@@ -51,7 +51,7 @@ class Crossfade:
 
 `source.time(t)` 不改变共享播放位置；`t` 可以是秒数或 `(start,end)` 半开区间。多输入用 `source['A']`。帧可保持为惰性 GPU 描述，或通过 `.array()` / `.image()` 获取授权输入像素。自由 Python 可返回 Pillow 图片、NumPy `uint8[height,width,4]` RGBA 数组。使用实际打包的 NumPy 和 Pillow；不可访问任意用户文件或网络。
 
-`need_prerendering=False` 必须保证同一输入与时间能直接求值；依赖历史的模拟或逐帧算法设置 True。它与 `compositing:"independent"` 是不同承诺：独立合成必须不读取下层背景，依赖背景则用 context，不清楚用 unknown。Python class 与 JSON 元数据应一致。GLSL 输入纹理叫 `u_input0`、`u_input1`，UV 为 `v_uv`，输出为 `outColor`；着色器自行声明所用 uniforms。GLSL 调用的 `time=` 对应 `u_time`。可追踪的算术和 `sin/cos` 能注册到前端 GPU；分支、像素算法等不能自动转为 GLSL，会保留 Python 执行。
+`need_prerendering=False` 必须保证同一输入与时间能直接求值；依赖历史的模拟或逐帧算法设置 True。它与 `compositing:"independent"` 是不同承诺：独立合成必须不读取下层背景，依赖背景则用 context，不清楚用 unknown。Python class 与 JSON 元数据应一致。GLSL 输入纹理叫 `u_input0`、`u_input1`，UV 为 `v_uv`，输出为 `outColor`；着色器自行声明所用 uniforms。GLSL 调用的 `time=` 对应 `u_time`，使用它时必须在 GLSL 中写 `uniform float u_time;`，并在 Python 调用中传 `time=time`。传值不会自动补充 GLSL 变量声明；其他自定义 uniforms 也必须声明匹配的类型。可追踪的算术和 `sin/cos` 能注册到前端 GPU；分支、像素算法等不能自动转为 GLSL，会保留 Python 执行。
 
 音频的同一个 `card(source,time)` 接收 `TimeRange`，含 `start`（样本位置）、`count`、`sample_rate`。例如：
 

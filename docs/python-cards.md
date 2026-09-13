@@ -58,6 +58,8 @@ class Crossfade:
 
 这里的钳位在 GLSL 中完成。Python 符号时间支持明确的算术表达式及提供的 `sin`、`cos`，不支持把任意 Python 分支、库调用或算法自动编译成 GPU 程序。不支持注册的代码会按 Python 路径执行，而不会被当作已编译的实时程序。
 
+着色器必须声明所用的每个 uniform。Python 的 `time=time` 为 GLSL 的 `u_time` 传值；若源码使用 `u_time`，还必须写 `uniform float u_time;`。编译失败时，看帧错误会包含编译器诊断，供 Agent 修改同一份定义后重试。
+
 ## Python 像素算法与音频
 
 使用 `source.time(time).array()` 按需取得 NumPy 像素。输入是只读的；修改前调用 `.copy()`。返回值可为 `uint8` 的 RGBA 数组或 Pillow 图片。像素使用直通 Alpha。这个路径需要物化与传输像素，冷启动和复杂算法可能明显慢于注册的着色器。

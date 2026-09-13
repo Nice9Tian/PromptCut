@@ -7,7 +7,12 @@ export type GlslValue = { type: "glsl"; fragment: string; inputs?: CardGpuValue[
 export type CardGpuValue = SourceValue | PixelsValue | DrawValue | GlslValue;
 export type ValueResolver = (value: SourceValue | PixelsValue, time: number, signal?: AbortSignal) => Promise<TexImageSource | null>;
 export class CardGpuError extends Error {
-  constructor(public readonly code: "unavailable" | "shader-compile" | "shader-link" | "budget" | "cancelled" | "missing-source" | "invalid-value", message: string, public readonly log?: string) { super(message); }
+  constructor(public readonly code: "unavailable" | "shader-compile" | "shader-link" | "budget" | "cancelled" | "missing-source" | "invalid-value", message: string, public readonly log?: string) {
+    // Frame tickets and the see_frames transport retain Error.message. Include
+    // the compiler diagnostic there so an author can fix an undeclared uniform
+    // or syntax error without losing it at the browser/service boundary.
+    super(log?.trim() ? `${message}\n${log.trim().slice(0, 8192)}` : message);
+  }
 }
 type Target = { framebuffer: WebGLFramebuffer; texture: WebGLTexture; width: number; height: number };
 const VERTEX = `#version 300 es
