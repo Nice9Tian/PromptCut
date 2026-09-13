@@ -19,7 +19,7 @@ export function pythonVisualNode(project: Project, nodeId?: string) {
  * The frame-work ticket prevents a pending/failed GPU canvas from becoming a
  * completed screenshot. Interactive placeholders are a separate host policy. */
 export function PythonCard({ project, nodeId, time }: { project: Project; nodeId: string; time: number }) {
-  const [value, setValue] = useState<(Value & { time: number }) | null>(null);
+  const [value, setValue] = useState<(Value & { evaluatedTime: number; evaluatedProject: Project; evaluatedNodeId: string }) | null>(null);
   const [failure, setFailure] = useState("");
   const ticket = useRef<ReturnType<typeof beginFrameWork> | null>(null);
   const bitmaps = useRef(new Map<string, Promise<ImageBitmap>>());
@@ -42,7 +42,7 @@ export function PythonCard({ project, nodeId, time }: { project: Project; nodeId
       }
       return result as Value;
     });
-    void evaluate.then(result => { if (!controller.signal.aborted) setValue({ ...result, time }); })
+    void evaluate.then(result => { if (!controller.signal.aborted) setValue({ ...result, evaluatedTime: time, evaluatedProject: project, evaluatedNodeId: nodeId }); })
       .catch(error => { if (!controller.signal.aborted) { work.fail(error); setFailure(error.message); } });
     return () => { controller.abort(); work.dispose(); };
   }, [project, nodeId, time]);
@@ -74,11 +74,12 @@ export function PythonCard({ project, nodeId, time }: { project: Project; nodeId
   useLayoutEffect(() => { decoder.current = new CardMediaSource(); return () => {
     decoder.current.dispose(); for (const bitmap of bitmaps.current.values()) void bitmap.then(b => b.close(), () => {}); bitmaps.current.clear();
   }; }, [project]);
-  const ready = useCallback(() => { ticket.current?.ready(); }, []);
-  const failed = useCallback((error: CardGpuError) => { ticket.current?.fail(error); setFailure(error.message); }, []);
+  const ready = useCallback(() => { const work = ticket.current; work?.ready(); }, []);
+  const failed = useCallback((error: CardGpuError) => { const work = ticket.current; work?.fail(error); setFailure(error.message); }, []);
   return <div data-pc-python-node={nodeId} data-pc-card-error={failure || undefined} style={{ width: '100%', height: '100%' }}>
-    {value && value.time === time && <CardSurface value={value.value} width={project.width} height={project.height}
-      time={time} resolveSource={resolveSource} onReady={ready} onError={failed} />}
+    {value && <CardSurface value={value.value} width={project.width} height={project.height}
+      time={time} enabled={value.evaluatedTime === time && value.evaluatedProject === project && value.evaluatedNodeId === nodeId}
+      resolveSource={resolveSource} onReady={ready} onError={failed} />}
     {failure && <span role="status">{failure}</span>}
   </div>;
 }
