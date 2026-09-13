@@ -24,7 +24,6 @@
   background: var(--ui-panel, #171a1f);
   color: var(--ui-fg, #f5f7fa);
   border-bottom: 1px solid var(--ui-border, rgba(255, 255, 255, 0.1));
-  box-shadow: inset 0 1px 0 color-mix(in oklab, var(--ui-accent) 16%, transparent);
   font-family: var(--ui-font, system-ui, sans-serif);
   user-select: none;
 }

@@ -232,7 +232,16 @@ pub fn run() {
                 let _ = app.emit("pc-open-file", p);
             }
         }))
-        .plugin(tauri_plugin_window_state::Builder::default().build())
+        // 窗口边框不交给 window-state 记:旧版本存下的 "decorated": true 会在启动时
+        // 把系统标题栏装回来,和皮肤标题栏叠成两条。边框只由建窗口时的 decorations(false) 决定。
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_state_flags(
+                    tauri_plugin_window_state::StateFlags::all()
+                        & !tauri_plugin_window_state::StateFlags::DECORATIONS,
+                )
+                .build(),
+        )
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_shell::init());
 
