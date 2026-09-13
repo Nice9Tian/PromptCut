@@ -111,7 +111,22 @@ if(!args['verify-existing'])assert.deepEqual(providerErrors,[],'Agent reported a
 assert.ok(terminal, 'SSE ended without a terminal completion event');
 
 const authored=await page.evaluate(async()=>{const {getState}=await import('/src/store/project.ts');const s=getState();return {definitions:s.project.cardDefinitions,nodes:s.project.cardNodes,clips:s.project.tracks.flatMap(t=>t.clips),fps:s.project.fps};});
-for(const kind of ['transition','filter'])assert.ok(authored.definitions?.some(d=>d.language==='python'&&d.kind===kind),`Agent did not create a Python ${kind}`);
+for(const kind of ['transition','filter']){
+  const definitions=authored.definitions?.filter(d=>d.language==='python'&&d.kind===kind)||[];
+  assert.ok(definitions.length,`Agent did not create a Python ${kind}`);
+  const inspected=definitions.some(definition=>{
+    const nodeIds=new Set(authored.nodes?.filter(n=>n.definitionId===definition.id).map(n=>n.id));
+    const clips=authored.clips.filter(c=>nodeIds.has(c.nodeId));
+    const lastChange=Math.max(-1,...successful.filter(call=>/create.*card|edit.*card|apply.*card/i.test(call.name)&&(call.input?.cardId===definition.id||call.input?.id===definition.id)).map(call=>eventLog.indexOf(call)));
+    return successful.some(call=>{
+      if(!/see.*frames/i.test(call.name)||eventLog.indexOf(call)<=lastChange)return false;
+      const input=call.input||{};
+      const times=input.times?.length?input.times:Number.isFinite(input.t)?[input.t]:[];
+      return clips.some(clip=>(!input.clipId||input.clipId===clip.id)&&times.some(t=>t>=clip.start&&t<clip.end));
+    });
+  });
+  assert.ok(inspected,`No successful frame inspection of an applied ${kind} after its final source/application change`);
+}
 // openProcPath deliberately opens a copy and remembers only its display name.
 // Exercise the installed product's real draft-save entry point, including
 // serializeProc/withFrameSnapshots and its persisted .proc backend.
@@ -192,9 +207,20 @@ for(let frame=firstFrame;frame<=lastFrame;frame+=12){
 const warmPreparationMs=Date.now()-warmStarted;
 const warmPlayback=await measurePlayback('warm');
 assert.ok(warmPlayback.presentedFps>=authored.fps*.8 && warmPlayback.blankFraction<.05 && warmPlayback.maxGapMs<300,'Completed-cache playback did not meet measured smoothness acceptance');
+const effectPreviews=[];
+for(const kind of ['transition','filter']){
+  const definition=authored.definitions.find(d=>d.language==='python'&&d.kind===kind);
+  const nodeIds=new Set(authored.nodes.filter(n=>n.definitionId===definition.id).map(n=>n.id));
+  const clip=authored.clips.find(c=>nodeIds.has(c.nodeId));
+  const time=clip.start+Math.min((clip.end-clip.start)/2,2.5), frame=Math.round(time*authored.fps);
+  await page.evaluate(async(time)=>(await import('/src/store/project.ts')).actions.seek(time),time);
+  await page.waitForFunction((frame)=>{const img=document.querySelector('.pc-pv[data-pc="preview"] img');return img?.complete&&img.naturalWidth>0&&new URL(img.src).pathname.endsWith('/'+String(frame).padStart(6,'0')+'.png');},{timeout:120000},frame);
+  const file=`installed-${kind}.png`;await page.screenshot({path:path.join(output,file)});
+  effectPreviews.push({kind,time,frame,file,clipId:clip.id});
+}
 const after = await hash(original);
 assert.equal(after, before, 'Original project changed during acceptance run');
-await fs.writeFile(path.join(output, 'result.json'), JSON.stringify({ ok: true, agentCompleted:providerErrors.length===0,providerErrors,verificationOfExistingRun:!!args['verify-existing'],originalSha256Before: before, originalSha256After: after, copy, ui, toolCalls: names, coldPlayback, warmPlayback, warmPreparationMs }, null, 2));
+await fs.writeFile(path.join(output, 'result.json'), JSON.stringify({ ok: true, agentCompleted:providerErrors.length===0,providerErrors,verificationOfExistingRun:!!args['verify-existing'],originalSha256Before: before, originalSha256After: after, copy, ui, toolCalls: names, coldPlayback, warmPlayback, warmPreparationMs,effectPreviews }, null, 2));
 console.log(`PASS installed Python-card acceptance evidence: ${output}`);
 
 } catch (error) {

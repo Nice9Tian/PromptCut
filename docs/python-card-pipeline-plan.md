@@ -59,8 +59,8 @@ for the installed real-project check.
 5. Execute all runtime examples and acceptance matrix, fix gaps and document actual limitations.
 6. Create scoped commits, build and install unattended, run the complete installed-app/real-project/harness acceptance. Fix and repeat within the user's maximum of five release acceptance cycles. Work on a copy of the real project when modifications are needed, preserving its source.
 
-Release acceptance cycles performed: **3 / 5** (all failed full acceptance;
-preparing cycle 4). Development unit tests and isolation probes are not release/install cycles.
+Release acceptance cycles performed: **4 / 5** (all failed full acceptance;
+preparing cycle 5, the final permitted cycle). Development unit tests and isolation probes are not release/install cycles.
 
 Independent planning reviews live under `work/agy/python-pipeline-plan/`; isolation investigation under `work/agy/python-isolation/`. These are evidence, not completed product features.
 
@@ -198,3 +198,71 @@ A prior parallel
 recovery failure is retained in work/card-integration/cycle4-runtime-recovery.log.
 Cold real-project throughput and fully prepared cache playback will be measured
 and reported separately; a repeated-image decoder fixture is diagnostic only.
+
+## Cycle 4 installed result and cycle 5 preparation
+
+Cycle 4 built commit 24c0a77, produced a 409.4 MB full installer in 664 seconds,
+and silently installed it with exit 0. Installer SHA256:
+8729C0E83DFEEE3AE659A3076CBC1E3BF0B419A14B67E95D367C4D3F4694257F.
+Fourteen installed runtime/source/ANGLE files matched, and the shell passed the
+Tauri bundle-marker-aware comparison. Installed NumPy successfully evaluated
+three 1080p RGBA float arrays in 116 MiB private memory. Two actual installed
+runner processes completed three concurrent scope/crash/recovery/close rounds.
+An initial four-runner stress test caused one open operation to reach the
+30-second bounded ACL mutex timeout; this failure is retained, not hidden.
+
+The real Agent created and applied both effects, but repeatedly used u_time
+without declaring its GLSL uniform. The frame interface returned only a generic
+compile failure, losing the existing compiler log. The Agent eventually produced
+a valid static-color filter and successfully inspected it, while its gradual
+transition remained invalid. Actual save/reopen preserved the source and nodes;
+the full editor preview timed out after 120 seconds. Cycle 4 failed acceptance.
+Evidence is under work/installed-card-cycle-4; the protected original is unchanged.
+
+Cycle 5 carries the GLSL compiler log in the transported Error.message (bounded
+to 8,192 characters) and makes the uniform declaration rule explicit in the authoring guide.
+An actual LPAC/browser/vision HTTP regression now returns HTTP 500 with
+`missing_uniform: undeclared identifier`, proving the diagnostic reaches the
+Agent-facing boundary. The acceptance harness separately requires successful
+post-change frame inspection of each applied effect kind. Replaying actual
+cycle 3 and cycle 4 evidence passes the former's two-effect inspections and
+rejects the latter's filter-only result.
+
+ACL authorization and cleanup now deduplicate canonical inputs, parent grants,
+and direct roots. Recursive exact-SID removal remains in place; redundant root
+cleanup commands are omitted. The 30-second mutex bound and read/write masks
+are unchanged. Runtime recovery tests now record each operation's duration and
+use the product's per-request timeout rather than one 45-second deadline for
+the entire multi-operation scenario. The earlier fixture timeout occurred only
+after successful crash/FIFO/cancellation recovery while waiting for cleanup;
+that output is retained in work/card-integration/cycle5-runtime-recovery.log.
+
+Two further independent text-only AGY reviews are preserved under
+work/with-agy/cycle5-acl-review, including the root decision and rejected claims.
+Code inspection confirmed that synchronous Rust open/close blocked unrelated
+worker messages, and Node serialized already-open scopes behind admission.
+Node now reserves an existing non-closing scope before entering admission.
+Rust uses one bounded lifecycle worker with typed completions; the main thread
+continues handling worker messages, input, and cancellation. A four-scope cap
+includes pending work. The existing global ACL transaction is retained entirely
+inside lifecycle setup/cleanup, and EOF drains successful unadmitted opens.
+Actual testing with the installed Python held the real ACL mutex for five
+seconds: an existing card responded in 32 ms during another scope's pending
+open and 31 ms during its pending close. These response measurements cover
+worker routing, not full visual rendering throughput.
+
+Four independent broker processes starting together can still exhaust the
+30-second global ACL acquisition bound. The failure is explicit and closed;
+this stress result remains a capacity limitation, recorded separately from
+the normal two-broker product workflow and existing-worker responsiveness.
+
+The expanded actual lifecycle regression also rejects duplicate/pending scope
+operations and the fifth admission promptly, drains a valid pending open on
+stdin EOF, exits zero, and leaves no Python child of the owned runner. The full
+HTTP/LPAC/GLSL/Pillow/audio/stateful/control/full-MOV/style/persistence integration
+passed again with the final runner when run independently. An overlapping run
+with the intentional mutex-contention fixture hit the existing 10-second cold
+Chrome preview watchdog; that retryable 504 is preserved in
+work/card-integration/cycle5-final-integration.log. The independent pass is in
+work/card-integration/cycle5-final-integration-isolated.log. No test thresholds
+or production preview watchdog were changed to obtain that pass.
