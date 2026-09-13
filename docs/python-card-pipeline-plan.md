@@ -56,7 +56,7 @@ All entries start **pending**. An implementation or passing unit test alone is n
 5. Execute all runtime examples and acceptance matrix, fix gaps and document actual limitations.
 6. Create scoped commits, build and install unattended, run the complete installed-app/real-project/harness acceptance. Fix and repeat within the user's maximum of five release acceptance cycles. Work on a copy of the real project when modifications are needed, preserving its source.
 
-Release acceptance cycles performed: **0 / 5**. Development unit tests and isolation probes are not release/install cycles.
+Release acceptance cycles performed: **1 / 5** (failed; preparing cycle 2). Development unit tests and isolation probes are not release/install cycles.
 
 Independent planning reviews live under `work/agy/python-pipeline-plan/`; isolation investigation under `work/agy/python-isolation/`. These are evidence, not completed product features.
 
@@ -95,4 +95,13 @@ All rendering Chrome launches must be offscreen as well as headless: use
 `--window-position=-32000,-32000`, and supply negative left/top to headless-shell
 `Target.createTarget`; do not bring a window to the user's foreground.
 
-Installed-app/harness acceptance has **not started**. Release cycles remain **0/5**.
+Installed-app/harness cycle **1/5** built commit 4ec8f97, installed the full 0.5.9
+installer silently (exit 0), and verified installed runtime file hashes. The real
+Harness Agent created and applied Python transition/filter definitions in a copy
+of the Tokyo project, but clip-scoped see_frames failed: the old isolation helper
+deleted source clips/media. A separate full-project probe found missing optional
+style broke runtime identity hashing. A new exact-route development regression
+also found post-processing assumed every frame existed in frames/<n>.png, while
+the unified pipeline can return it directly from MOV. These are being fixed
+before cycle 2; installed acceptance is not yet passing. Evidence is under
+work/installed-card-cycle-1. The original project SHA-256 is unchanged.

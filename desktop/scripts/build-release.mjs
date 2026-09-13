@@ -10,6 +10,7 @@
  *   node scripts/build-release.mjs --patch-only   # 只出补丁，跳过 Rust 编译
  *   node scripts/build-release.mjs --skip-runtime # runtime 已就绪，直接编译打包
  *   node scripts/build-release.mjs --with-deps    # 补丁强制带上 node_modules
+ *   node scripts/build-release.mjs --installer-only # 外壳/Python runtime 变更时只出完整安装包
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -24,6 +25,7 @@ const BUNDLE_DIR = path.join(DESKTOP_DIR, "src-tauri", "target", "release", "bun
 
 const argv = process.argv.slice(2);
 const has = (f) => argv.includes(f);
+if (has("--installer-only") && has("--patch-only")) throw new Error("--installer-only and --patch-only are mutually exclusive");
 const t0 = Date.now();
 const elapsed = () => ((Date.now() - t0) / 1000).toFixed(0);
 
@@ -151,7 +153,7 @@ if (has("--from-head")) patchArgs.push("--skip-source-check");
 // 安装器那三个文件也要来自 HEAD,不能是工作区当前的样子(见上面抢文件那一段)
 if (installerSrc) patchArgs.push("--installer-src", installerSrc);
 if (has("--zip")) patchArgs.push("--zip");
-run("打更新补丁", "node", patchArgs);
+if (!has("--installer-only")) run("打更新补丁", "node", patchArgs);
 
 // ── 收集产物 ──────────────────────────────────────────────────────────
 fs.mkdirSync(RELEASE_DIR, { recursive: true });
@@ -179,12 +181,12 @@ if (!has("--patch-only")) {
   results.push(dest);
 }
 
-for (const ext of ["exe", "zip"]) {
+for (const ext of has("--installer-only") ? [] : ["exe", "zip"]) {
   const p = path.join(RELEASE_DIR, `PromptCut-patch-${appVersion}.${ext}`);
   if (fs.existsSync(p)) results.push(p);
 }
 
-const manifest = JSON.parse(
+const manifest = has("--installer-only") ? null : JSON.parse(
   fs.readFileSync(path.join(RELEASE_DIR, `manifest-${appVersion}.json`), "utf-8")
 );
 
@@ -192,6 +194,8 @@ console.log(`\n══ 完成（${elapsed()}s）══`);
 for (const f of results) {
   console.log(`  ${(fs.statSync(f).size / 1048576).toFixed(1).padStart(8)} MB  ${path.basename(f)}`);
 }
-console.log(`\n  补丁含依赖：${manifest.includesDeps ? "是" : "否"}（${manifest.depsReason}）`);
-console.log(`  补丁适用于：外壳 ${manifest.minShellVersion} 或更新`);
+if (manifest) {
+  console.log(`\n  补丁含依赖：${manifest.includesDeps ? "是" : "否"}（${manifest.depsReason}）`);
+  console.log(`  补丁适用于：外壳 ${manifest.minShellVersion} 或更新`);
+}
 console.log(`  产物目录：${RELEASE_DIR}`);

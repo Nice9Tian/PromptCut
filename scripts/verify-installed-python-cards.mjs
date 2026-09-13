@@ -35,16 +35,17 @@ await fs.access(exe); await fs.access(original);
 const before = await hash(original);
 const copy = args.copy ? path.resolve(args.copy) : path.join(output, `${path.basename(original, path.extname(original))}.acceptance-copy${path.extname(original)}`);
 assert.notEqual(copy.toLowerCase(), original.toLowerCase(), 'Acceptance requires a separate project copy');
-const copyName = path.basename(copy, path.extname(copy));
 if (args.copy) await fs.access(copy); else await fs.copyFile(original, copy);
 await fs.writeFile(path.join(output, 'manifest.json'), JSON.stringify({ original, copy, originalSha256Before: before, origin, cdp: Number(args.cdp), provider: args.provider, startedAt: new Date().toISOString() }, null, 2));
 if (args['prepare-only']) { console.log(JSON.stringify({ ok: true, copy, originalSha256: before })); process.exit(0); }
 
+let browser;
+try {
 // Shell check only: no browser launch fallback. Chrome's /json/version endpoint
 // is public CDP metadata and contains no application configuration or secrets.
 const version = await fetch(`http://127.0.0.1:${Number(args.cdp)}/json/version`, { signal: AbortSignal.timeout(5000) });
 assert.ok(version.ok, `CDP shell endpoint unavailable on ${args.cdp}`);
-const browser = await puppeteer.connect({ browserURL: `http://127.0.0.1:${Number(args.cdp)}`, defaultViewport: null });
+browser = await puppeteer.connect({ browserURL: `http://127.0.0.1:${Number(args.cdp)}`, defaultViewport: null });
 const pages = await browser.pages();
 const page = pages.find(candidate => candidate.url().startsWith(origin)) || pages.find(candidate => !candidate.url().startsWith('devtools://'));
 assert.ok(page, 'No desktop WebView2 page found through shell CDP');
@@ -54,11 +55,10 @@ const ui = await page.evaluate(async () => {
   return { url: location.href, title: document.title, ready: !!document.querySelector('#root'), filePath: state.filePath, projectId: state.project?.id };
 });
 assert.ok(ui.ready && await page.$('[data-pc="editor"]'), 'Connected page is not the PromptCut editor');
-assert.equal(path.resolve(ui.filePath || ''), copy, `The installed app must be launched/opened with --copy before acceptance; current editor project is ${ui.filePath || '(unsaved)'}`);
-// Save through the normal UI shortcut. If the shell presents a native picker,
-// the already-authorized operator completes that picker; the script never
-// writes project bytes as a substitute for product save behavior.
-await page.keyboard.down('Control'); await page.keyboard.press('KeyS'); await page.keyboard.up('Control');
+assert.equal(path.resolve(new URL(ui.url).searchParams.get('open') || ''), copy, 'The desktop launch URL must open the exact acceptance copy');
+assert.equal(ui.filePath, path.basename(copy), 'The product must have completed opening the copy');
+const inputDoc=JSON.parse(await fs.readFile(copy,'utf8'));
+assert.equal(ui.projectId,inputDoc.project.id,'The editor did not load the real project');
 
 function parseSse(text) {
   const events = [];
@@ -69,7 +69,7 @@ function parseSse(text) {
   }
   return events;
 }
-const prompt = `Installed acceptance run ${randomUUID()}. The copied project is already open in the desktop UI. Create and apply two minimal Python card definitions: one transition using two sources, and one pixel/filter card using a source. Make both visibly change frames, then call see_frames on their active time range. Use only actual project tools; finish with a concise terminal completion message.`;
+const prompt = `Installed acceptance run ${randomUUID()}. The copied project is already open in the desktop UI. Create and apply two minimal Python card definitions: one transition using two sources, and one pixel/filter card using a source. Read card_authoring_guide first. Make both visibly change frames within the first ten seconds, then call see_frames on each active time range. Use the documented SDK symbols; do not assume Python has a global clamp function. If a render fails, edit the same definition to fix it, without adding duplicate instances. Use only actual project tools; finish with a concise terminal completion message.`;
 const response = await fetch(`${origin}/api/ai/chat`, { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
   body: JSON.stringify({ provider: args.provider, prompt, conversationId: `installed_${Date.now()}` }), signal: AbortSignal.timeout(12 * 60_000) });
 assert.ok(response.ok, `/api/ai/chat failed: HTTP ${response.status}`);
@@ -82,7 +82,8 @@ for (;;) {
   if (cut < 0) continue;
   const batch = parseSse(pending.slice(0, cut + 2)); pending = pending.slice(cut + 2);
   eventLog.push(...batch.map(redact));
-  for (const event of batch) if (['tool_call','tool_result','error','done'].includes(event.type)) console.log(JSON.stringify({type:event.type,name:event.name,ok:event.ok,message:event.message?.slice(0,300)}));
+  await fs.writeFile(path.join(output, 'chat-sse.redacted.json'), JSON.stringify(eventLog, null, 2));
+  for (const event of batch) if (['tool_call','tool_result','error','done'].includes(event.type)) console.log(JSON.stringify({type:event.type,name:event.name,ok:event.ok,runId:event.runId,callId:event.callId,message:(event.message||event.summary)?.slice(0,1000)}));
 }
 eventLog.push(...parseSse(pending).map(redact));
 await fs.writeFile(path.join(output, 'chat-sse.redacted.json'), JSON.stringify(eventLog, null, 2));
@@ -102,14 +103,20 @@ assert.ok(terminal, 'SSE ended without a terminal completion event');
 
 const authored=await page.evaluate(async()=>{const {getState}=await import('/src/store/project.ts');const s=getState();return {definitions:s.project.cardDefinitions,nodes:s.project.cardNodes,clips:s.project.tracks.flatMap(t=>t.clips),fps:s.project.fps};});
 for(const kind of ['transition','filter'])assert.ok(authored.definitions?.some(d=>d.language==='python'&&d.kind===kind),`Agent did not create a Python ${kind}`);
-await page.keyboard.down('Control'); await page.keyboard.press('KeyS'); await page.keyboard.up('Control');
-await page.waitForFunction(async()=>!(await import('/src/store/project.ts')).getState().dirty,{timeout:30000});
-const savedDoc=JSON.parse(await fs.readFile(copy,'utf8'));
+// openProcPath deliberately opens a copy and remembers only its display name.
+// Exercise the installed product's real draft-save entry point, including
+// serializeProc/withFrameSnapshots and its persisted .proc backend.
+const draftId='acceptance-'+Date.now();
+await page.evaluate(async(id)=>{const io=await import('/src/editor/io/drafts.ts');await io.saveDraft(id);},draftId);
+const savedResponse=await fetch(origin+'/api/projects/'+draftId);
+assert.ok(savedResponse.ok,'Product draft save did not produce a readable project');
+const savedText=await savedResponse.text(), savedDoc=JSON.parse(savedText);
+await fs.writeFile(path.join(output,'saved-project.proc'),savedText);
 assert.deepEqual(savedDoc.project.cardDefinitions,authored.definitions,'Actual product save did not preserve Python source');
 assert.deepEqual(savedDoc.project.cardNodes,authored.nodes,'Actual product save did not preserve card instances');
-// Reload through the exact desktop launch URL; the product opens the saved file.
-await page.reload({waitUntil:'domcontentloaded'});
-await page.waitForFunction(async(expected)=>(await import('/src/store/project.ts')).getState().filePath===expected,{timeout:60000},copy);
+// Open the saved draft through the normal Shell route and a new document.
+await page.goto(origin+'/?draft='+draftId,{waitUntil:'domcontentloaded'});
+await page.waitForFunction(async(expected)=>(await import('/src/editor/io/drafts.ts')).getActiveDraftId()===expected,{timeout:60000},draftId);
 const reopened=await page.evaluate(async()=> (await import('/src/store/project.ts')).getState().project);
 assert.deepEqual(reopened.cardDefinitions,authored.definitions,'Reopening changed card source');
 const firstCustom=authored.clips.find(c=>c.nodeId&&authored.nodes?.some(n=>n.id===c.nodeId));
@@ -121,6 +128,14 @@ await page.screenshot({path:path.join(output,'installed-preview.png')});
 // retained as evidence. A static/absent signal is an explicit failure.
 const play = await page.$('button[title="播放"]');
 assert.ok(play, 'Preview Play button not found');
+await page.evaluate(async()=>{
+  const {getState}=await import('/src/store/project.ts');
+  window.__acceptanceFrames=[];
+  const tick=at=>{const s=getState(),c=document.querySelector('.pc-pv[data-pc="preview"] canvas');
+    if(s.playing)window.__acceptanceFrames.push({at,target:Math.round(s.t*s.project.fps),shown:Number(c?.dataset.frame??-1)});
+    window.__acceptanceRaf=requestAnimationFrame(tick);
+  };window.__acceptanceRaf=requestAnimationFrame(tick);
+});
 await play.click();
 const samples = [];
 for (let i = 0; i < 11; i++) {
@@ -135,8 +150,26 @@ assert.ok(new Set(samples.map(sample => `${sample.playheadLabel}:${sample.playhe
 const pause = await page.$('button[title="暂停"]');
 assert.ok(pause, 'Preview did not remain in playing state long enough to pause');
 await pause.click();
+const frameTrace=await page.evaluate(()=>{cancelAnimationFrame(window.__acceptanceRaf);return window.__acceptanceFrames;});
+await fs.writeFile(path.join(output,'playback-frame-trace.json'),JSON.stringify(frameTrace));
+const stableFrames=frameTrace.filter(x=>x.at-frameTrace[0].at>=2000),presentations=[];
+for(const item of stableFrames)if(item.shown>=0&&item.shown!==presentations.at(-1)?.shown)presentations.push(item);
+const measuredSeconds=stableFrames.length?(stableFrames.at(-1).at-stableFrames[0].at)/1000:0;
+const metrics={seconds:measuredSeconds,distinctPresentedFrames:presentations.length,presentedFps:presentations.length/Math.max(.01,measuredSeconds),maxGapMs:Math.max(0,...presentations.slice(1).map((x,i)=>x.at-presentations[i].at)),blankFraction:stableFrames.filter(x=>x.shown<0).length/Math.max(1,stableFrames.length)};
+await fs.writeFile(path.join(output,'playback-metrics.json'),JSON.stringify(metrics,null,2));
+console.log('PLAYBACK',JSON.stringify(metrics));
+assert.ok(metrics.presentedFps>=authored.fps*.8 && metrics.blankFraction<.05 && metrics.maxGapMs<300,'Playback did not meet measured smoothness acceptance');
 const after = await hash(original);
 assert.equal(after, before, 'Original project changed during acceptance run');
 await fs.writeFile(path.join(output, 'result.json'), JSON.stringify({ ok: true, originalSha256Before: before, originalSha256After: after, copy, ui, toolCalls: names, samples }, null, 2));
-await browser.disconnect();
 console.log(`PASS installed Python-card acceptance evidence: ${output}`);
+
+} catch (error) {
+  await fs.writeFile(path.join(output, 'failure.json'), JSON.stringify({message:error.message,stack:error.stack},null,2));
+  throw error;
+} finally {
+  const after=await hash(original);
+  await fs.writeFile(path.join(output,'original-integrity.json'),JSON.stringify({before,after,unchanged:before===after},null,2));
+  await browser?.disconnect();
+  assert.equal(after,before,'Original project changed during acceptance run');
+}
