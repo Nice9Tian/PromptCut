@@ -9,6 +9,28 @@ function context(revision) {
   return { revision, input: 'input', output: 'output', temp: 'temp', opened: null, active: 0, lastUsed: 0 };
 }
 
+test('a replaced worker gets one retry under the same scope lease', async () => {
+  let attempts=0,leases=0,releases=0;
+  const runtime={async request(){assert.equal(leases-releases,1);if(++attempts===1)throw Object.assign(new Error('worker exited'),{code:'worker_exited'});return {registered:false};}};
+  const service=new CardService({root:process.cwd(),dir:process.cwd(),runtime});
+  service.context=async()=>({revision:'same',nodes:new Map([['node',{}]]),graph:{definitions:[]},output:'out'});
+  service.lease=async()=>{leases++;return ()=>{releases++;};};
+  const result=await service.evaluate({fps:30},'node',0,{register:true});
+  assert.equal(result.registered,false);assert.equal(attempts,2);assert.equal(leases,1);assert.equal(releases,1);
+});
+
+test('worker recovery is bounded and never retries card-code errors or caller aborts', async () => {
+  for(const [code,abort,expected] of [['worker_exited',false,2],['worker_write',false,2],['card_cancelled',false,2],['card_exception',false,1],['card_cancelled',true,1],['CARD_CANCELLED',false,1],['worker_restart_failed',false,1]]){
+    const controller=new AbortController();let attempts=0,releases=0;
+    const runtime={async request(){attempts++;if(abort)controller.abort();throw Object.assign(new Error('failed'),{code});}};
+    const service=new CardService({root:process.cwd(),dir:process.cwd(),runtime});
+    service.context=async()=>({revision:'same',nodes:new Map([['node',{}]]),graph:{definitions:[]},output:'out'});
+    service.lease=async()=>()=>{releases++;};
+    await assert.rejects(service.evaluate({fps:30},'node',0,{register:true,signal:controller.signal}),{code});
+    assert.equal(attempts,expected);assert.equal(releases,1);
+  }
+});
+
 test('legacy projects without optional style or fps have a stable runtime scope', async () => {
   const directory=await fs.mkdtemp(path.join(os.tmpdir(),'pc-card-legacy-scope-'));
   try {

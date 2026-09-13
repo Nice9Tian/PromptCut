@@ -183,8 +183,21 @@ export class CardService {
     const payload = { graph: context.graph, definitions: context.graph.definitions.filter(d => d.language === 'python'),
       style: project.style || {}, nodeId, time, fps: project.fps || 30, outputDir: context.output, domain, start, count, sampleRate };
     let raw;
-    try { raw = await this.runtime.request(register ? 'register' : 'evaluate', context.revision, context.revision, payload,
-      { signal, input: query => this.input(context, query, signal) }); }
+    try {
+      for (let attempt = 0; ; attempt++) {
+        try {
+          raw = await this.runtime.request(register ? 'register' : 'evaluate', context.revision, context.revision, payload,
+            { signal, input: query => this.input(context, query, signal) });
+          break;
+        } catch (failure) {
+          // A dead/replaced LPAC slot or another request's cancellation may
+          // interrupt this consumer. Give the replacement one attempt while
+          // retaining the scope lease. User-code errors and caller aborts are
+          // never retried, and a persistently crashing card still fails.
+          if (attempt || signal?.aborted || !['worker_exited', 'worker_write', 'card_cancelled'].includes(failure.code)) throw failure;
+        }
+      }
+    }
     finally { release(); }
     if (domain === 'audio') {
       if (raw.type !== 'audio' || raw.frames !== count || raw.startSample !== start || raw.sampleRate !== sampleRate) throw error('Audio card returned a different sample range');
