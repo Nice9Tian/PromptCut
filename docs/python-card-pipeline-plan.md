@@ -266,3 +266,52 @@ Chrome preview watchdog; that retryable 504 is preserved in
 work/card-integration/cycle5-final-integration.log. The independent pass is in
 work/card-integration/cycle5-final-integration-isolated.log. No test thresholds
 or production preview watchdog were changed to obtain that pass.
+
+## Cycle 5 installed result — maximum cycle count reached
+
+Cycle 5 built source commit 3d19f56 in 666 seconds. The full installer is
+429,202,321 bytes and has SHA256
+FAF04A462D607234FA1D6842E1DB75448A0C90ACBF6D74F52397F51394FF98F8.
+Silent installation exited 0. Sixteen runtime/source/ANGLE files matched the
+package, including the GPU executor and authoring guide; the shell also passed
+the Tauri bundle-marker-aware comparison. The final development suite passed
+1,189 tests with no failures.
+
+The actual installed runner passed lifecycle responsiveness, scope limits,
+duplicate operations, pending-open EOF cleanup, worker crash/FIFO/cancellation
+recovery, and the NumPy memory case. Existing-scope responses took 30 ms while
+another scope opened and 31 ms while another closed. Three 1080p RGBA float
+arrays used 116 MiB private memory. These are actual isolated process tests.
+
+The real installed Harness Agent completed normally in eight model rounds:
+13 successful tool calls, zero failed tools, no provider error. It created and
+applied glsl-gradual-transition and glsl-color-pulse and successfully inspected
+each at 0.5, 2.5 and 4.5 seconds. The exact six images were archived from the
+product's existing visual records and visually checked: the first effect
+gradually mixes the bridge aerial view into the street scene; the filter adds
+a changing red/magenta tint. Actual save/reopen and paused preview passed.
+
+Full acceptance nevertheless FAILED. Cold playback presented no valid canvas
+frames in the measured stable interval. Preparing all 361 real frames from
+0 through 12 seconds took 292,778 ms. The subsequent actual UI playback still
+presented only nine distinct frames over 8.2523 measured seconds (1.0906 fps),
+with a maximum presentation gap of 4,396.9 ms. The canvas had no valid sample
+for 93.19% of observations; this metric does not independently prove that the
+entire preview was black, because the UI can also show an image or placeholder.
+
+Read-only playback response observation recorded repeated alternation between
+two cache keys, including a reset to zero published samples. MovPlayer resets
+its bitmap window when the movie changes. The final saved and live projects
+have equal fields used by frameIdentity, but this does not establish equality
+of every request, server media stamp, or code fingerprint. The cause of key
+alternation and its full contribution to poor playback remain unresolved.
+
+Evidence: work/installed-card-cycle-5/acceptance-report.json, failure.json,
+playback-status-observation.json, the cold/warm metrics and traces, saved-project.proc,
+and agent-transition-*.png / agent-filter-*.png. The original project hash is
+unchanged. The owned test application was closed normally. Five full build /
+install / acceptance cycles have been used; no sixth build was started.
+
+This is an implemented custom-card pipeline with a successful real Agent
+authoring test, not a release that passed the requested smooth-playback gate.
+See python-card-installed-acceptance.md for the delivery status and limits.
