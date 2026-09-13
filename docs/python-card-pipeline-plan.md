@@ -23,7 +23,10 @@ Reuse FramePipeline, bakery, MOV storage and prerender sidecar. One priority sch
 
 ## Requirement audit and planned evidence
 
-All entries start **pending**. An implementation or passing unit test alone is not proof of end-to-end completion.
+The implementation and development fixtures below are present and passing unless
+stated otherwise. **Installed acceptance remains incomplete after cycle 3.** The
+table retains the full acceptance scope; development fixtures do not substitute
+for the installed real-project check.
 
 | Objective | Deliverable | Required authoritative evidence | State |
 | --- | --- | --- | --- |
@@ -56,7 +59,8 @@ All entries start **pending**. An implementation or passing unit test alone is n
 5. Execute all runtime examples and acceptance matrix, fix gaps and document actual limitations.
 6. Create scoped commits, build and install unattended, run the complete installed-app/real-project/harness acceptance. Fix and repeat within the user's maximum of five release acceptance cycles. Work on a copy of the real project when modifications are needed, preserving its source.
 
-Release acceptance cycles performed: **1 / 5** (failed; preparing cycle 2). Development unit tests and isolation probes are not release/install cycles.
+Release acceptance cycles performed: **3 / 5** (all failed full acceptance;
+preparing cycle 4). Development unit tests and isolation probes are not release/install cycles.
 
 Independent planning reviews live under `work/agy/python-pipeline-plan/`; isolation investigation under `work/agy/python-isolation/`. These are evidence, not completed product features.
 
@@ -149,3 +153,48 @@ The acceptance harness now requires a successful frame inspection after the
 final card edit/application; a baseline frame taken before adding effects
 cannot satisfy the check. Cold sparse playback and complete-cache playback
 must be reported separately. Cycle 3 has not yet passed installed acceptance.
+
+## Cycle 3 installed result and cycle 4 preparation
+
+Cycle 3 built commit b507d60 and silently installed the full installer with SHA256
+A81B83ED867F8D3D5AB320BA8D3662295388D9260C5476EC767C461E8803B3EE.
+Installation exited 0; thirteen packaged runtime/source/ANGLE files matched the
+installed files. The installed shell matches the compiled shell except for
+Tauri's expected NSS versus UNK bundle-type marker.
+
+The actual Harness Agent created and applied a gradual GLSL transition and a
+GLSL filter to the copied Tokyo project. Both post-edit frame inspections
+succeeded. The provider then returned HTTP 400 during final completion; this
+error is preserved and is not counted as successful Agent completion. A separate
+verification using those existing tool events sent no new Agent request. It
+confirmed source/instance save and reopen, but the editor preview failed with a
+closed Python pipe before playback measurement. Cycle 3 therefore failed full
+acceptance. The original project remains byte-for-byte unchanged.
+
+The runner now reports unexpected Python exits with bounded stderr diagnostics,
+replaces dead worker slots, preserves queued work, and rejects stale-generation
+replies. Node gives a transient lifecycle failure at most one retry under the
+same scope lease, excluding caller aborts and Python code errors. A concurrent
+development test exposed a concrete PermissionError reading python311.zip while
+another broker modified the shared runtime ACL. Rappct's DACL read/modify/write
+operations are now serialized across broker processes using a Windows named
+mutex; worker evaluation does not hold the mutex. Actual concurrent LPAC tests
+exercise crash recovery and require writes to authorized read-only inputs to
+remain denied.
+
+An installed Chrome startup probe also found early processes without WebGL2,
+while a later identical process was healthy. The exact crash cause is unresolved.
+The rendering launcher now checks actual WebGL2 capability on the initial blank
+page, closes an unhealthy owned process, and retries at most once. It retains
+headless/offscreen startup and target positioning. The regression uses the actual
+installed headless-shell binary, with all owned test browsers closing cleanly.
+
+Cycle 4 preparation has passed 1,188 JavaScript tests and tsc -b. The full visual
+integration was repeated successfully with PROMPTCUT_CARD_RUNTIME selecting the
+new development runner, while two other new runner processes each performed
+eight concurrent ACL/recovery rounds against the same packaged Python runtime.
+All sixteen rounds and the separate cancellation/FIFO recovery test passed.
+A prior parallel
+recovery failure is retained in work/card-integration/cycle4-runtime-recovery.log.
+Cold real-project throughput and fully prepared cache playback will be measured
+and reported separately; a repeated-image decoder fixture is diagnostic only.

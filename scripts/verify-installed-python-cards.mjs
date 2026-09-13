@@ -18,7 +18,9 @@ import puppeteer from 'puppeteer';
 const usage = `Usage: node scripts/verify-installed-python-cards.mjs --exe <PromptCut.exe> --project <original.pcproj> --out <evidence-dir> [--origin http://127.0.0.1:5210] --cdp <port> --provider <agy|gemini|...>
 
 The script never launches --exe. Start the installed desktop app yourself with
-remote debugging enabled, open the printed project copy in its UI, then run it.`;
+remote debugging enabled, open the printed project copy in its UI, then run it.
+--verify-existing verifies saved tool events and the currently open project;
+it sends no new Agent request and preserves any provider completion error.`;
 const args = Object.fromEntries(process.argv.slice(2).reduce((out, value, i, all) => {
   if (value.startsWith('--')) out.push([value.slice(2), !all[i+1] || all[i+1].startsWith('--') ? true : all[i + 1]]); return out;
 }, []));
@@ -36,7 +38,7 @@ const before = await hash(original);
 const copy = args.copy ? path.resolve(args.copy) : path.join(output, `${path.basename(original, path.extname(original))}.acceptance-copy${path.extname(original)}`);
 assert.notEqual(copy.toLowerCase(), original.toLowerCase(), 'Acceptance requires a separate project copy');
 if (args.copy) await fs.access(copy); else await fs.copyFile(original, copy);
-await fs.writeFile(path.join(output, 'manifest.json'), JSON.stringify({ original, copy, originalSha256Before: before, origin, cdp: Number(args.cdp), provider: args.provider, startedAt: new Date().toISOString() }, null, 2));
+await fs.writeFile(path.join(output, args['verify-existing']?'verification-manifest.json':'manifest.json'), JSON.stringify({ original, copy, originalSha256Before: before, origin, cdp: Number(args.cdp), provider: args.provider, startedAt: new Date().toISOString() }, null, 2));
 if (args['prepare-only']) { console.log(JSON.stringify({ ok: true, copy, originalSha256: before })); process.exit(0); }
 
 let browser;
@@ -70,6 +72,9 @@ function parseSse(text) {
   return events;
 }
 const prompt = `Installed acceptance run ${randomUUID()}. The copied project is already open in the desktop UI. Create and apply two minimal Python card definitions: one gradual GLSL transition using two sources, and one visibly colored GLSL filter using a source. Read card_authoring_guide first. Make both visibly change frames within the first ten seconds, then call see_frames on each active time range after your final source edit. Use the documented SDK symbols; do not assume Python has a global clamp function. If a render fails, edit the same definition to fix it, without adding duplicate instances or replacing the gradual transition with a hard cut. Work in this conversation without messaging or delegating to other conversations. Use only actual project tools; finish with a concise terminal completion message and report any remaining render failure honestly.`;
+if(args['verify-existing']) {
+  eventLog.push(...JSON.parse(await fs.readFile(path.join(output,'chat-sse.redacted.json'),'utf8')));
+} else {
 const response = await fetch(`${origin}/api/ai/chat`, { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
   body: JSON.stringify({ provider: args.provider, prompt, conversationId: `installed_${Date.now()}` }), signal: AbortSignal.timeout(12 * 60_000) });
 assert.ok(response.ok, `/api/ai/chat failed: HTTP ${response.status}`);
@@ -87,6 +92,7 @@ for (;;) {
 }
 eventLog.push(...parseSse(pending).map(redact));
 await fs.writeFile(path.join(output, 'chat-sse.redacted.json'), JSON.stringify(eventLog, null, 2));
+}
 const calls = eventLog.filter(event => event.type === 'tool_call');
 const names = calls.map(event => event.name);
 const results = eventLog.filter(event => event.type === 'tool_result');
@@ -100,7 +106,8 @@ assert.ok(successful.filter(call=>/apply.*card/i.test(call.name)).length>=2, 'Tw
 assert.ok(successful.some(call=>/see.*frames/i.test(call.name)), 'Frame verification did not succeed');
 const lastCardChange=Math.max(...successful.filter(call=>/apply.*card|edit.*card/i.test(call.name)).map(call=>eventLog.indexOf(call)));
 assert.ok(successful.some(call=>/see.*frames/i.test(call.name)&&eventLog.indexOf(call)>lastCardChange),'No successful frame verification after the final card change');
-assert.equal(eventLog.some(event=>event.type==='error'),false,'Agent reported an error');
+const providerErrors=eventLog.filter(event=>event.type==='error').map(event=>event.message);
+if(!args['verify-existing'])assert.deepEqual(providerErrors,[],'Agent reported an error');
 assert.ok(terminal, 'SSE ended without a terminal completion event');
 
 const authored=await page.evaluate(async()=>{const {getState}=await import('/src/store/project.ts');const s=getState();return {definitions:s.project.cardDefinitions,nodes:s.project.cardNodes,clips:s.project.tracks.flatMap(t=>t.clips),fps:s.project.fps};});
@@ -182,15 +189,16 @@ for(let frame=firstFrame;frame<=lastFrame;frame+=12){
   await fs.writeFile(path.join(output,'warm-cache-preparation.json'),JSON.stringify({elapsedMs:Date.now()-warmStarted,batches:warmBatches},null,2));
   console.log('WARM_CACHE',frame,lastFrame,warmBatches.at(-1).ms);
 }
+const warmPreparationMs=Date.now()-warmStarted;
 const warmPlayback=await measurePlayback('warm');
 assert.ok(warmPlayback.presentedFps>=authored.fps*.8 && warmPlayback.blankFraction<.05 && warmPlayback.maxGapMs<300,'Completed-cache playback did not meet measured smoothness acceptance');
 const after = await hash(original);
 assert.equal(after, before, 'Original project changed during acceptance run');
-await fs.writeFile(path.join(output, 'result.json'), JSON.stringify({ ok: true, originalSha256Before: before, originalSha256After: after, copy, ui, toolCalls: names, coldPlayback, warmPlayback, warmPreparationMs:Date.now()-warmStarted }, null, 2));
+await fs.writeFile(path.join(output, 'result.json'), JSON.stringify({ ok: true, agentCompleted:providerErrors.length===0,providerErrors,verificationOfExistingRun:!!args['verify-existing'],originalSha256Before: before, originalSha256After: after, copy, ui, toolCalls: names, coldPlayback, warmPlayback, warmPreparationMs }, null, 2));
 console.log(`PASS installed Python-card acceptance evidence: ${output}`);
 
 } catch (error) {
-  await fs.writeFile(path.join(output, 'failure.json'), JSON.stringify({message:error.message,stack:error.stack},null,2));
+  await fs.writeFile(path.join(output, args['verify-existing']?'verification-failure.json':'failure.json'), JSON.stringify({message:error.message,stack:error.stack},null,2));
   throw error;
 } finally {
   const after=await hash(original);
