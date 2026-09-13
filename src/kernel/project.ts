@@ -231,6 +231,10 @@ export interface Cut {
 
 export interface Project {
   version: 1;
+  /** Source definitions are project assets; instances are immutable graph nodes. */
+  cardDefinitions?: import('./cardGraph.mjs').UnifiedCardDefinition[];
+  cardNodes?: import('./cardGraph.mjs').CardNode[];
+  style?: Record<string, unknown>;
   /**
    * 项目自己的身份,跟着 .proc 走。定制卡的归属表(src/cards/user/_scopes.json)认的就是它。
    *
@@ -327,6 +331,7 @@ export function flattenOverlay(p: Project): Timeline {
       // 绑定看起来存下了、时间轴上也显示绑了,可预览和导出都一动不动。
       clips.push({
         id: c.id, cardId: c.cardId, start: c.start, end: c.end, params: c.params,
+        ...(c.nodeId ? { nodeId: c.nodeId } : null),
         ...(c.motion ? { motion: c.motion } : null),
         // frame 同理:它是 Stage 摆卡片时才用的,漏在这里 set_position 就成了写了不生效。
         ...(c.frame ? { frame: c.frame } : null),

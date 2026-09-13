@@ -1,10 +1,13 @@
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { Stage } from "../kernel/Stage";
-import { flattenOverlay, isImageMedia, videoLayersAt, type Project } from "../kernel/project";
+import { flattenOverlay, isImageMedia, opacityAt, videoLayersAt, type Project } from "../kernel/project";
 import { frameCss } from "../kernel/layout";
 import { emphasisFilter } from "../kernel/emphasis";
 import { clipFilterOpsAt, cssFilter } from "../kernel/filters.mjs";
 import { mapRgba, type PixelMapDef } from "../kernel/pixelMap.mjs";
+import { PythonCard, pythonVisualNode } from "./cards/PythonCard";
+import { motionAt } from "../kernel/motion";
+import { perspectivePx } from "../kernel/space3d";
 
 function PixelMappedMedia({ media, clip, t, project, style, def }: { media: any; clip: any; t: number; project: Project; style: React.CSSProperties; def: PixelMapDef }) {
   const canvas = useRef<HTMLCanvasElement>(null);
@@ -63,13 +66,20 @@ function PixelMappedMedia({ media, clip, t, project, style, def }: { media: any;
  * Video placeholders deliberately have no src: advancing React must never seek/decode media.
  * The capture phase installs src and seeks only the visible frame's video elements.
  */
-export function FrameScene({ project, t, directT = t, playToken }: { project: Project; t: number; directT?: number; playToken: number }) {
+export function FrameScene({ project, sourceProject = project, t, directT = t, playToken }: { project: Project; sourceProject?: Project; t: number; directT?: number; playToken: number }) {
   const layers = videoLayersAt(project, t);
-  const tracks = useMemo(() => [...project.tracks].reverse().filter(tr => !tr.hidden)
-    .map(tr => ({ tr, timeline: flattenOverlay({ ...project, tracks: [tr] }) })), [project]);
-  return <>{tracks.map(({ tr, timeline }, index) => {
+  const frame = Math.round(directT * (project.fps || 30));
+  const runtime = (sourceProject as any)._cardRender as { frames?: Record<string, Record<number, string>>; missing?: Record<number, string[]> } | undefined;
+  const cached = (id: string) => runtime?.frames?.[id]?.[frame];
+  const missing = new Set(runtime?.missing?.[frame] || []);
+  const replaced = (id: string) => !!cached(id) || missing.has(id);
+  const tracks = [...project.tracks].reverse().filter((tr) => !tr.hidden);
+  const active = (clip: { start: number; end: number }) => directT >= clip.start && directT < clip.end;
+  const legacyTimeline = (tr: Project["tracks"][number], clip: Project["tracks"][number]["clips"][number]) =>
+    flattenOverlay({ ...project, tracks: [{ ...tr, clips: [clip] }] });
+  return <>{tracks.map((tr, index) => {
     return <div key={tr.id} data-pc-track={tr.id} style={{ position: "absolute", inset: 0, zIndex: index }}>
-      {layers.filter(l => l.trackId === tr.id).map(({ clip, media, opacity }) => {
+      {layers.filter(l => l.trackId === tr.id && !pythonVisualNode(sourceProject, l.clip.nodeId) && !replaced(l.clip.id)).map(({ clip, media, opacity }) => {
         const ops = project.filters?.length ? clipFilterOpsAt(project, clip, t) : null;
         const filter = [ops ? cssFilter(ops) : "", emphasisFilter(clip.emphasis) || ""].filter(Boolean).join(" ");
         const style = { display: "block", width: "100%", height: "100%", objectFit: "cover" as const, opacity, filter: filter || undefined };
@@ -83,7 +93,46 @@ export function FrameScene({ project, t, directT = t, playToken }: { project: Pr
               style={{ ...style, visibility: "hidden" }} />}
         </div>;
       })}
-      <Stage timeline={timeline} t={t} directT={directT} playToken={playToken} />
+      {tr.clips.map((clip, clipIndex) => {
+        if (!active(clip)) return null;
+        const layerStyle: React.CSSProperties = { position: "absolute", inset: 0, zIndex: clipIndex };
+        if (replaced(clip.id)) {
+          const url = cached(clip.id);
+          // Cached controls are full-stage PNGs. Their placement and motion have
+          // already been baked by the capture, so applying frameCss here would
+          // transform them twice. Opacity and fades are baked there as well.
+          return url
+            ? <div key={clip.id} data-pc-clip={clip.id} style={layerStyle}>
+              <img data-pc-cached-control={clip.id} src={url} alt="" style={{ display: "block", width: "100%", height: "100%" }} />
+            </div>
+            : <div key={clip.id} data-pc-clip={clip.id} data-pc-incomplete={clip.id} style={{ ...layerStyle, ...frameCss(clip.frame, project), border: "2px dashed #dcb66a", boxSizing: "border-box", display: "grid", placeItems: "center", background: "#1e273050", opacity: opacityAt(clip, directT) }}>
+              <span style={{ color: "#fff", fontSize: 28 }}>⌛</span>
+            </div>;
+        }
+        if (pythonVisualNode(sourceProject, clip.nodeId)) {
+          const movement = clip.motion ? motionAt(clip.motion, Math.max(0, directT - clip.start)) : null;
+          if (movement && clip.motion?.whenHidden === "hide" && !movement.visible) return null;
+          const ops = project.filters?.length ? clipFilterOpsAt(project, clip, directT) : null;
+          const filter = [ops ? cssFilter(ops) : "", emphasisFilter(clip.emphasis) || ""].filter(Boolean).join(" ");
+          // CSS perspective belongs on the direct parent of the transformed
+          // frame. Python cards do not go through Stage, so they need this
+          // equivalent parent for rotateX / rotateY / translateZ to project.
+          return <div key={clip.id} data-pc-python-layer={clip.id} style={{ ...layerStyle, ...(project.camera3dFov ? { perspective: `${perspectivePx(project, project.camera3dFov)}px`, perspectiveOrigin: "50% 50%" } : null) }}>
+            <div data-pc-clip={clip.id} style={{ overflow: "hidden", ...frameCss(clip.frame, project, movement ? { dx: movement.dx, dy: movement.dy } : undefined), opacity: opacityAt(clip, directT), filter: filter || undefined }}>
+              <PythonCard project={sourceProject} nodeId={clip.nodeId!} time={directT - clip.start} />
+            </div>
+          </div>;
+        }
+        const timeline = legacyTimeline(tr, clip);
+        // Media has already been painted below this block. A one-clip Stage
+        // keeps each legacy card at its original track position while retaining
+        // Stage's direct-child perspective and glass/backdrop context.
+        return timeline.clips.length
+          ? <div key={clip.id} data-pc-native-layer={clip.id} style={layerStyle}>
+            <Stage timeline={timeline} t={t} directT={directT} playToken={playToken} />
+          </div>
+          : null;
+      })}
     </div>;
   })}</>;
 }

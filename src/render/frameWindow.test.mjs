@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { cardMountedAt, planFrameWindow, framesInWindow } from './frameWindow.mjs';
-import { cardFrameMode, clipFrameMode } from './frameMode.mjs';
+import { cardFrameMode, clipFrameMode, cardCapabilities } from './frameMode.mjs';
 
 test('late preview replays only the active cards, independent of preceding timeline length', () => {
   const clips = [
@@ -59,17 +59,17 @@ test('unknown React wrappers retain history; static legacy cards and explicit di
   assert.equal(clipFrameMode({ parts: [{}] }, { frameMode: 'direct' }), 'stateful');
 });
 
-test('old embedded card declarations preserve replay windows under the new names', () => {
+test('framework-only legacy declarations retain history until time access is declared', () => {
   const clips = [
     { id: 'caption', cardId: 'caption', start: 0, end: 900, params: {} },
     { id: 'particles', cardId: 'particles', start: 599, end: 602, params: {} },
   ];
   const old = { caption: { frameMode: 'react' }, particles: { frameMode: 'non-react' } };
-  const current = { caption: { frameMode: 'direct' }, particles: { frameMode: 'stateful' } };
+  const current = { caption: { frameMode: 'stateful' }, particles: { frameMode: 'stateful' } };
   for (const clip of clips) assert.equal(clipFrameMode(clip, old[clip.cardId]), clipFrameMode(clip, current[clip.cardId]));
   const plan = defs => planFrameWindow(clips, [18015], 30, clip => clipFrameMode(clip, defs[clip.cardId]));
   assert.deepEqual(plan(old), plan(current));
-  assert.deepEqual(plan(old).replayClipIds, ['particles']);
+  assert.deepEqual(plan(old).replayClipIds, ['caption', 'particles']);
   // The exported planner also accepts old callbacks without losing history.
   assert.deepEqual(planFrameWindow(clips, [18015], 30, clip => old[clip.cardId].frameMode), plan(current));
 });
@@ -77,10 +77,22 @@ test('old embedded card declarations preserve replay windows under the new names
 test('explicit stateful declarations override static fallback, including old projects', () => {
   const paper = { lifecycle: { settleMs: 0, after: 'hold' } };
   for (const frameMode of ['stateful', 'non-react']) assert.equal(cardFrameMode({ ...paper, frameMode }), 'stateful');
-  for (const frameMode of ['direct', 'react']) {
+  for (const frameMode of ['direct']) {
     assert.equal(cardFrameMode({ frameMode }), 'direct');
     assert.equal(clipFrameMode({ parts: [{}] }, { frameMode }), 'stateful');
   }
   assert.equal(cardFrameMode({ frameMode: 'unknown' }), 'stateful');
   assert.equal(cardFrameMode({ timing() { throw new Error('broken declaration'); } }), 'stateful');
+});
+
+test('prerendering and independent compositing remain separate for all four combinations', () => {
+  for (const need_prerendering of [true, false]) for (const compositing of ['context', 'independent']) {
+    const caps = cardCapabilities({ need_prerendering, compositing });
+    assert.equal(caps.need_prerendering, need_prerendering);
+    assert.equal(caps.independentCache, compositing === 'independent');
+  }
+  assert.equal(cardCapabilities({ frameMode: 'direct' }).independentCache, false);
+  assert.equal(cardCapabilities({ frameMode: 'direct', need_prerendering: true }).need_prerendering, true);
+  assert.equal(cardFrameMode({ frameMode: 'react' }), 'stateful');
+  assert.equal(cardFrameMode({ frameMode: 'react', need_prerendering: false }), 'direct');
 });

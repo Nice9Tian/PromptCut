@@ -142,6 +142,12 @@ export interface CardDef<P = Record<string, unknown>> {
    * Old react / non-react declarations remain accepted for .proc compatibility.
    */
   frameMode?: FrameModeInput;
+  /** True requires ordered state advancement before arbitrary-time access.
+   * Missing declarations use the conservative legacy capability adapter. */
+  need_prerendering?: boolean;
+  /** Independently reviewed from time access. Background-dependent and unknown
+   * cards keep the complete Chrome compositing context. */
+  compositing?: import('../render/frameMode.mjs').CardCompositing;
 }
 
 /**
@@ -243,6 +249,8 @@ export interface PartInstance {
 /** 时间轴上的一张卡 */
 export interface Clip {
   id: string;
+  /** Output node in the project's common card graph, when present. */
+  nodeId?: string;
   cardId: string;
   start: number; // 秒
   end: number; // 秒

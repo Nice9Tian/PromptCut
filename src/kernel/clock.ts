@@ -11,6 +11,7 @@ declare global {
     __pcSetT?: (sec: number, directSec?: number) => void;
     __pcReady?: boolean;
     __pcTimeline?: unknown;
+    __pcCardPlan?: () => unknown;
     /** 导出:重新挂载全部卡片(playToken+1) */
     __pcRestartCards?: () => void;
     /** 导出:每帧推进完虚拟时间后,把所有 Web Animations 的 currentTime 钉到导出时间 */

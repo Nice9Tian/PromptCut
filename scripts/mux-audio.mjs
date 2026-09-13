@@ -11,6 +11,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { audioPlanOf } from "../src/kernel/audioPlan.mjs";
+import { audioFxOfClip } from "../src/kernel/audioFx.mjs";
 
 /** 导出时素材的 url 形如 /@export/<id>/media/<file>,真实文件在 outDir/media/<file> */
 export function localPathOf(url, outDir) {
@@ -33,12 +34,40 @@ export function buildAudioPlan(project, outDir, exists = fs.existsSync, sourceOf
   const out = [];
   // 谁出声、多响的规则在 kernel/audioPlan.mjs(和测响度、Chrome 离线混音同一份);这里只补文件在哪
   for (const e of audioPlanOf(project)) {
+    const sourceClip = (project.tracks ?? []).flatMap(track => track.clips ?? []).find(clip => clip.id === e.clipId);
+    // A generated node replaces its corresponding source-media input; applying both would double it.
+    if (isPythonAudioNode(project, sourceClip?.nodeId)) continue;
     const m = (project.media || []).find((x) => x.id === e.mediaId);
     const file = sourceOf(m);
     if (!file || (!/^https?:/i.test(file) && !exists(file))) continue;
     out.push({ file, clipId: e.clipId, start: e.start, dur: e.dur, offset: e.offset, volume: e.volume, fadeIn: e.fadeIn, fadeOut: e.fadeOut, fx: e.fx });
   }
+  // Python audio nodes have no ffmpeg-readable source file.  Keep them in the one common
+  // plan so Chrome's OfflineAudioContext can request their true WAV blocks.  A caller that
+  // explicitly selects the old --audio ffmpeg path must reject them, never silently omit them.
+  for (const track of project.tracks ?? []) {
+    if (track.hidden || track.muted) continue;
+    for (const clip of track.clips ?? []) {
+      if (clip.audioMuted || !isPythonAudioNode(project, clip.nodeId)) continue;
+      // Generated blocks are sample-addressed; do not quantize their timeline placement to
+      // the legacy 3 ms audio-plan precision before converting duration to frames.
+      const dur = clip.end - clip.start;
+      if (!(dur > 0)) continue;
+      const definition = audioFxOfClip(project, clip);
+      out.push({ cardAudio: true, nodeId: clip.nodeId, clipId: clip.id, start: clip.start, dur,
+        offset: 0, volume: (clip.opacity ?? 1) * (clip.audioVolume ?? 1), fadeIn: clip.fadeIn ?? 0, fadeOut: clip.fadeOut ?? 0,
+        fx: definition ? { def: definition, params: clip.audioFx?.params } : null });
+    }
+  }
   return out;
+}
+
+/** Kept local to this script so the project model need not invent a fake media asset for a generated node. */
+export function isPythonAudioNode(project, nodeId) {
+  if (!nodeId) return false;
+  const node = (project.cardNodes ?? []).find(value => value.id === nodeId);
+  const definition = node?.definitionId && (project.cardDefinitions ?? []).find(value => value.id === node.definitionId);
+  return node?.adapter === "python" && definition?.language === "python" && definition.kind === "audio";
 }
 
 /** 这个文件里有没有音频流(视频不一定有声轨,直接引用会让整条 filter 崩掉) */
@@ -57,6 +86,7 @@ export function hasAudioStream(file, ffprobeCmd) {
 
 /** 拼 ffmpeg 参数:视频流照抄,音频按计划混音 */
 export function buildFfmpegArgs(videoIn, plan, videoOut, durationSec) {
+  if (plan.some(p => p.cardAudio)) throw new Error("ffmpeg audio mux cannot render Python card audio; use the Chrome audio mixer");
   const args = ["-y", "-i", videoIn];
   const filters = [];
   plan.forEach((p, i) => {

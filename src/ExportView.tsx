@@ -6,7 +6,10 @@ import { installExportClock } from "./kernel/exportClock";
 import type { Timeline } from "./kernel/types";
 import { flattenOverlay, type Project } from "./kernel/project";
 import { themeStyle } from "./themes";
-import { getCard } from "./kernel/registry";
+import { allCards, getCard, userCardSources } from "./kernel/registry";
+import { cardSourceVersion } from "./render/cardSourceVersion.mjs";
+import { builtinCardSourceFiles } from "./render/cardSourceFiles.mjs";
+import { projectCardGraph } from "./kernel/cardGraph.mjs";
 import { planFrameWindow } from "./render/frameWindow.mjs";
 import { clipFrameMode } from "./render/frameMode.mjs";
 import { frameWorkStatus, waitForFrameWork } from "./kernel/frameReady";
@@ -43,7 +46,7 @@ export default function ExportView() {
   const [playToken, setPlayToken] = useState(1);
   const [frameClipIds, setFrameClipIds] = useState<Set<string> | null>(null);
   const renderProject = useMemo(() => !project || !frameClipIds ? project : ({ ...project,
-    tracks: project.tracks.map(tr => ({ ...tr, clips: tr.clips.filter(c => !c.cardId || frameClipIds.has(c.id)) })),
+    tracks: project.tracks.map(tr => ({ ...tr, clips: tr.clips.filter(c => (!c.cardId && !c.nodeId) || frameClipIds.has(c.id)) })),
   }), [project, frameClipIds]);
   const renderTimeline = useMemo(() => !timeline || !frameClipIds ? timeline : ({ ...timeline,
     clips: timeline.clips.filter(c => frameClipIds.has(c.id)),
@@ -51,6 +54,8 @@ export default function ExportView() {
   useEffect(() => {
     document.documentElement.style.background = "transparent";
     document.body.style.background = "transparent";
+    const root = document.getElementById("root");
+    if (root) root.style.background = "transparent";
   }, []);
 
   useEffect(() => {
@@ -80,8 +85,36 @@ export default function ExportView() {
       setT(0);
       setDirectT(0);
       window.__pcTimeline = tl;
-      window.__pcPlanFrameWindow = (frames, fps) => planFrameWindow(tl.clips, frames, fps,
-        clip => clipFrameMode(clip, getCard(clip.cardId)));
+      window.__pcCardPlan = () => {
+        if (!proj) return null;
+        const user = userCardSources();
+        const sourceVersions: Record<string, string> = {};
+        for (const card of allCards()) {
+          const file = user.fileOf[card.id];
+          if (file && user.files[file] !== undefined) {
+            // This is the exact TSX text received from cards/index.  A user
+            // edit changes the server's content key without making unrelated
+            // builtin controls cold.
+            sourceVersions[card.id] = `user:${cardSourceVersion(card, { ...builtinCardSourceFiles, ...user.dependencies }, `/src/cards/user/${file}.tsx`)}`;
+          } else {
+            // Builtins have no user-source file.  Component source plus the
+            // declarative runtime contract is a stable in-process dependency
+            // fingerprint and catches HMR replacement of their implementation.
+            sourceVersions[card.id] = `builtin:${cardSourceVersion(card, builtinCardSourceFiles)}`;
+          }
+        }
+        return { graph: projectCardGraph(proj, getCard), sourceVersions,
+          environment: { width: proj.width, height: proj.height, fps: proj.fps, theme: proj.themeId } };
+      };
+      const plannedClips = [...tl.clips, ...(proj?.tracks.filter(track => !track.hidden).flatMap(track => track.clips
+        .filter(clip => clip.nodeId && !clip.cardId).map(clip => ({ ...clip, cardId: '' }))) || [])];
+      window.__pcPlanFrameWindow = (frames, fps) => planFrameWindow(plannedClips, frames, fps,
+        clip => {
+          const runtime = (proj as any)?._cardRender;
+          const requested = frames.filter(frame => frame / fps >= clip.start && frame / fps < clip.end);
+          if (clip.nodeId || requested.length && requested.every(frame => runtime?.frames?.[clip.id]?.[frame] || runtime?.missing?.[frame]?.includes(clip.id))) return 'direct';
+          return clipFrameMode(clip, getCard(clip.cardId));
+        });
       window.__pcExportMs = 0;
 
 
@@ -223,7 +256,7 @@ export default function ExportView() {
         ...themeStyle(timeline.themeId),
       }}
     >
-      {renderProject ? <FrameScene project={renderProject} t={t} directT={directT} playToken={playToken} />
+      {renderProject ? <FrameScene project={renderProject} sourceProject={project!} t={t} directT={directT} playToken={playToken} />
         : <Stage timeline={renderTimeline!} t={t} directT={directT} playToken={playToken} />}
 
     </div>

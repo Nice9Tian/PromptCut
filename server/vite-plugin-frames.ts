@@ -70,11 +70,17 @@ export function framesPlugin(): Plugin {
       const url = new URL(req.url || "/", origin);
       const json = (status: number, data: unknown) => { res.statusCode = status; res.setHeader("Content-Type", "application/json"); res.end(JSON.stringify(data)); };
       if (req.method === "GET") {
+        const control = /^\/control\/([a-f0-9]{64})\/(\d{1,8})$/.exec(url.pathname);
+        if (control) {
+          void fsp.readFile(path.join(service.root, 'controls', control[1], 'mov', 'frames', control[2].padStart(6, '0') + '.png')).then(buf => {
+            res.setHeader('Content-Type', 'image/png'); res.setHeader('Cache-Control', 'private,max-age=31536000,immutable'); res.end(buf);
+          }, () => json(404, { error: 'Control frame is not ready' })); return;
+        }
         // The final cumulative render is used by the editor, while the
         // cumulative track renders are useful to callers that want to rebuild
         // only the edited upper part.  Keep both forms behind fixed-length
         // hexadecimal keys; no user supplied path segment reaches the disk.
-        const final = /^\/([a-f0-9]{64})\/(preview\.mp4|mov\/full\.mov|mov\/playback-[a-f0-9-]{36}\.mov|mov\/frames\/\d{6}\.png|frames\/\d{6}\.png)$/.exec(url.pathname);
+        const final = /^\/([a-f0-9]{64})\/(preview\.mp4|mov\/full\.mov|mov\/playback-[a-f0-9-]{36}\.mov|mov\/frames\/\d{6}\.png|frames\/\d{6}\.png|preview-frames\/\d{6}\.png)$/.exec(url.pathname);
         const track = /^\/([a-f0-9]{64})\/tracks\/([a-f0-9]{64})\/(preview\.mp4|frames\/\d{6}\.png)$/.exec(url.pathname);
         if (!final && !track) return next();
         const file = final
@@ -120,7 +126,9 @@ export function framesPlugin(): Plugin {
             const lane = input.lane === "agent" ? "agent" : input.lane === "background" ? "background" : "user";
             const frames = await service.see_frames(project, input.times || [0], { lane, signal: requestSignal(req, res) });
             const movReady = await fsp.access(path.join(entry.dir, "mov", "full.mov")).then(() => true, () => false);
-            return json(200, { key: entry.key, frames: [...frames].map(([frame, value]: any) => ({ frame, source: value.source, url: `/api/frames/${entry.key}/${value.source === "mov" ? "mov/frames" : "frames"}/${String(frame).padStart(6, "0")}.png` })), mov: movReady ? `/api/frames/${entry.key}/mov/full.mov` : null });
+            return json(200, { key: entry.key, incomplete: [...frames.values()].some((value: any) => value.incomplete),
+              frames: [...frames].map(([frame, value]: any) => ({ frame, source: value.source, incomplete: !!value.incomplete, missing: value.missing || [],
+                url: `/api/frames/${entry.key}/${value.incomplete ? 'preview-frames' : value.source === "mov" ? "mov/frames" : "frames"}/${String(frame).padStart(6, "0")}.png` })), mov: movReady ? `/api/frames/${entry.key}/mov/full.mov` : null });
           }
           if (url.pathname === "/preload") await service.preload(project);
           else if (url.pathname === "/import" && typeof input.snapshots === "string") {

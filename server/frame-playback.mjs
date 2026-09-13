@@ -34,6 +34,7 @@ export class FramePlayback {
     this.firstMs = 1000; this.frameMs = 150; this.jitterMs = 100;
     this.deliveryMs = 250;
     this.reserved = new Set(); this.jobs = new Set(); this.checked = new Map();
+    this.incomplete = new Map();
     this.sequence = -1; this.epoch = 0; this.playing = false;
     this.rendered = 0; this.cacheHits = 0; this.error = null;
   }
@@ -92,7 +93,8 @@ export class FramePlayback {
       for (const n of this.checked.keys()) if (n < current || n > end) this.checked.delete(n);
       while (epoch === this.epoch && this.playing && this.jobs.size < this.workers) {
         const plan = planPlaybackBatch({ frame: this.position(), fps: this.fps, rate: this.rate, count: this.count, workers: this.workers,
-          firstMs: this.firstMs, frameMs: this.frameMs, jitterMs: this.jitterMs, deliveryMs: this.deliveryMs, ready: n => this.movie.has(n), reserved: this.reserved });
+          firstMs: this.firstMs, frameMs: this.frameMs, jitterMs: this.jitterMs, deliveryMs: this.deliveryMs,
+          ready: n => this.movie.has(n) || this.clock() - (this.incomplete.get(n)?.at ?? -Infinity) < 1000, reserved: this.reserved });
         this.stride = plan.stride; this.lead = plan.lead;
         if (!plan.frames.length) break;
         const job = { controller: new AbortController(), frames: plan.frames };
@@ -110,6 +112,11 @@ export class FramePlayback {
         onFrame: async (frame, value) => {
           if (epoch !== this.epoch || job.controller.signal.aborted) return;
           const now = this.clock();
+          if (value.incomplete) {
+            this.incomplete.set(frame, { at: now, missing: value.missing || [] });
+            return; // A placeholder must never become a published MOV sample.
+          }
+          this.incomplete.delete(frame);
           if (value.source === 'live' || value.source === 'html') {
             const cost = now - (lastLive ?? started);
             if (lastLive === undefined) {
@@ -143,7 +150,12 @@ export class FramePlayback {
   }
   status() {
     const frame = Math.floor(this.position());
+    for (const n of this.incomplete.keys()) if (n < frame - this.fps || this.movie.has(n)) this.incomplete.delete(n);
+    const nearby = [...this.incomplete.keys()].filter(n => n <= frame && frame - n < this.fps).sort((a, b) => b - a)[0];
+    const preview = nearby === undefined ? null : { frame: nearby, missing: this.incomplete.get(nearby).missing,
+      url: `/api/frames/${this.entry.key}/preview-frames/${String(nearby).padStart(6, '0')}.png` };
     return { epoch: this.epoch, sequence: this.sequence, playing: this.playing,
+      preview, incomplete: !!preview,
       ...this.movie.index(frame - Math.min(this.stride || 1, this.fps), frame + Math.ceil(this.fps * this.rate * 3)),
       metrics: { firstMs: this.firstMs, frameMs: this.frameMs, deliveryMs: this.deliveryMs, lead: this.lead || 0, stride: this.stride || 1,
         workers: this.workers, inFlight: this.jobs.size, rendered: this.rendered, cacheHits: this.cacheHits }, error: this.error };

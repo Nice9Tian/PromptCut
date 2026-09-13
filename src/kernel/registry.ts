@@ -1,4 +1,5 @@
 import type { CardDef } from "./types";
+import { cardCapabilities } from "../render/frameMode.mjs";
 
 const map = new Map<string, CardDef<any>>();
 
@@ -14,7 +15,9 @@ export function registerCards(defs: CardDef<any>[]) {
   for (const d of defs) {
     if (seen.has(d.id)) throw new Error(`card id 重复: ${d.id}`);
     seen.add(d.id);
-    map.set(d.id, d);
+    const capabilities = cardCapabilities(d);
+    map.set(d.id, { ...d, need_prerendering: capabilities.need_prerendering, compositing: capabilities.compositing,
+      ...(!Object.hasOwn(d, 'need_prerendering') ? { _derivedPrerendering: true } : {}) });
   }
 }
 
@@ -39,12 +42,12 @@ export function allCards(): CardDef<any>[] {
  * 那会多出一条 cards/user → procCards → proc → drafts → headless 的依赖链,链上没有能接住
  * 热更新的模块,于是 Agent 每建 / 改一张卡,编辑器就整页刷新一次。
  */
-let userSources: { files: Record<string, string>; fileOf: Record<string, string> } = { files: {}, fileOf: {} };
+let userSources: { files: Record<string, string>; fileOf: Record<string, string>; dependencies: Record<string, string> } = { files: {}, fileOf: {}, dependencies: {} };
 
-export function setUserCardSources(files: Record<string, string>, fileOf: Record<string, string>) {
-  userSources = { files, fileOf };
+export function setUserCardSources(files: Record<string, string>, fileOf: Record<string, string>, dependencies: Record<string, string> = {}) {
+  userSources = { files, fileOf, dependencies };
 }
 
-export function userCardSources(): { files: Record<string, string>; fileOf: Record<string, string> } {
+export function userCardSources(): { files: Record<string, string>; fileOf: Record<string, string>; dependencies: Record<string, string> } {
   return userSources;
 }

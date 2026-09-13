@@ -12,7 +12,7 @@ export const cardMountedAt = (clip, t) => t >= clip.start - CARD_MOUNT_LEAD && t
 export function planFrameWindow(clips, targetFrames, fps, modeOf = () => 'stateful') {
   const frames = [...new Set(targetFrames)].sort((a, b) => a - b);
   if (!frames.length || !Number.isFinite(fps) || fps <= 0 || frames.some(n => !Number.isSafeInteger(n) || n < 0)) throw new Error('Invalid frame window');
-  const selected = (clips || []).filter(clip => clip.cardId && frames.some(n => cardMountedAt(clip, n / fps)));
+  const selected = (clips || []).filter(clip => (clip.cardId || clip.nodeId) && frames.some(n => cardMountedAt(clip, n / fps)));
   const replayClips = selected.filter(clip => normalizeFrameMode(modeOf(clip)) !== 'direct');
   const ranges = frames.map(frame => [frame, frame]);
   for (const clip of replayClips) {

@@ -81,6 +81,9 @@ export function streamPngVideo(ffmpeg, file, fps) {
 const FRAME_INTERVAL = 1000 / 60;
 
 const CHROME_ARGS = [
+  // Windows headless-shell can still own a blank native window. Keep both
+  // startup and every subsequently created target outside the desktop.
+  '--window-position=-32000,-32000', '--no-first-run', '--no-default-browser-check',
   // beginFrame 的前提:渲染器不再自己出帧,每一帧都等我们发 BeginFrame
   '--enable-begin-frame-control', '--run-all-compositor-stages-before-draw',
   '--hide-scrollbars',
@@ -262,7 +265,7 @@ async function newSession(browser, url) {
   const bs = await browser.target().createCDPSession();
   let targetId;
   try {
-    ({ targetId } = await bs.send('Target.createTarget', { url: 'about:blank', enableBeginFrameControl: true, width: 1920, height: 1080 }));
+    ({ targetId } = await bs.send('Target.createTarget', { url: 'about:blank', enableBeginFrameControl: true, left: -32000, top: -32000, width: 1920, height: 1080, focus: false }));
   } finally {
     await bs.detach().catch(() => {});
   }
@@ -1217,7 +1220,7 @@ export async function exportFrames(opts) {
           const ffprobeCmd = ffprobeOf(ffmpegCmd);
           // 和画面层同一套找素材的规则:素材库里的 /@media/<文件> 也要找得到,不然配乐 / 配音全被跳过
           const sourceOf = (m) => mediaSourceOf(m, { outDir, pageUrl: opts.url || DEFAULT_URL, mediaRoot: mediaRootDir() });
-          const plan = buildAudioPlan(proj, outDir, undefined, sourceOf).filter((c) => hasAudioStream(c.file, ffprobeCmd));
+          const plan = buildAudioPlan(proj, outDir, undefined, sourceOf).filter((c) => c.cardAudio || hasAudioStream(c.file, ffprobeCmd));
           if (plan.length > 0) {
             const preview = path.join(outDir, 'preview.mp4');
             const withAudio = path.join(outDir, 'preview-audio.mp4');
@@ -1229,12 +1232,13 @@ export async function exportFrames(opts) {
             let mixed = false;
             if (opts.audio !== 'ffmpeg') {
               try {
-                const r = await mixAudioInChrome({ ffmpegCmd, outDir, plan, pageUrl: opts.url || DEFAULT_URL, durationSec });
+                const r = await mixAudioInChrome({ ffmpegCmd, outDir, plan, project: proj, pageUrl: opts.url || DEFAULT_URL, durationSec });
                 await runFfmpeg(['-y', '-i', preview, '-i', r.mixWav, '-map', '0:v', '-map', '1:a', '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', '-t', String(durationSec), withAudio]);
                 mixed = true;
                 // 裁好的 float32 wav 和整条 mix.wav 一小时就是一两 GB,合进成片之后就没用了
                 await fs.rm(path.join(outDir, 'audio'), { recursive: true, force: true }).catch(() => {});
               } catch (e) {
+                if (plan.some(c => c.cardAudio)) throw e;
                 const fx = plan.filter((c) => c.fx).length;
                 console.error('Chrome 混音失败,退回 ffmpeg 直接混' + (fx ? '(' + fx + ' 段挂着的音频效果会丢)' : '') + ':', e.message);
               }
@@ -1251,7 +1255,7 @@ export async function exportFrames(opts) {
           }
         }
       } catch (e) {
-        console.error('Audio mux failed (video is still fine):', e.message);
+        throw new Error('Audio mux failed: ' + e.message, { cause: e });
       }
       console.log('Video synthesis complete.');
     } catch (e) {
@@ -1269,7 +1273,7 @@ export async function exportFrames(opts) {
  * 页面和预览用同一份效果链(src/audio/fxChain.ts),所以编辑台听到的就是导出的。
  * 需要页面地址里有 /@export/<id>/project.json —— 裁好的 wav 就靠这个 id 从 dev server 取。
  */
-async function mixAudioInChrome({ ffmpegCmd, outDir, plan, pageUrl, durationSec }) {
+export async function mixAudioInChrome({ ffmpegCmd, outDir, plan, project, pageUrl, durationSec }) {
   const u = new URL(pageUrl);
   const m = /^\/@export\/([^/]+)\/project\.json$/.exec(u.searchParams.get('timeline') || '');
   if (!m) throw new Error('页面地址里没有 /@export/<id>/project.json,混音页取不到裁好的 wav');
@@ -1293,6 +1297,11 @@ async function mixAudioInChrome({ ffmpegCmd, outDir, plan, pageUrl, durationSec 
     while (next < plan.length && !aborted) {
       const i = next++;
       const e = plan[i];
+      if (e.cardAudio) {
+        clips[i] = { clipId: e.clipId, url: '', start: e.start, dur: e.dur, volume: e.volume, fadeIn: e.fadeIn, fadeOut: e.fadeOut,
+          fx: e.fx, cardAudio: { project, nodeId: e.nodeId, frames: Math.max(1, Math.ceil(e.dur * 48000)) } };
+        continue;
+      }
       const wav = path.join(audioDir, 'clip-' + i + '.wav');
       await run(['-y', '-hide_banner', '-loglevel', 'error', '-ss', String(e.offset), '-t', String(e.dur), '-i', e.file,
         '-vn', '-sn', '-dn', '-ac', '2', '-ar', '48000', '-c:a', 'pcm_f32le', wav]);
@@ -1305,10 +1314,15 @@ async function mixAudioInChrome({ ffmpegCmd, outDir, plan, pageUrl, durationSec 
   await fs.writeFile(path.join(audioDir, 'plan.json'), JSON.stringify(mixPlan));
 
   console.log('Mixing ' + clips.length + ' audio clip(s) in Chrome...');
-  const browser = await puppeteer.launch({ headless: 'shell', protocolTimeout: 120000, args: ['--disable-gpu', '--autoplay-policy=no-user-gesture-required'] });
+  const browser = await puppeteer.launch({ headless: 'shell', protocolTimeout: 120000, args: ['--window-position=-32000,-32000', '--disable-gpu', '--autoplay-policy=no-user-gesture-required'] });
   let result;
   try {
-    const page = await browser.newPage();
+    const session = await browser.target().createCDPSession();
+    let targetId;
+    try { ({ targetId } = await session.send('Target.createTarget', { url: 'about:blank', left: -32000, top: -32000, width: 1280, height: 720, focus: false })); }
+    finally { await session.detach(); }
+    const target = await browser.waitForTarget(t => t._targetId === targetId);
+    const page = await target.page();
     page.on('console', (msg) => { if (msg.type() === 'error' || msg.type() === 'warn') console.log('MIX LOG:', msg.text()); });
     const mixUrl = u.origin + '/?audioMix=1&plan=' + encodeURIComponent('/@export/' + id + '/audio/plan.json') + '&out=' + encodeURIComponent('/api/export/audio-mix/' + id);
     const resp = await page.goto(mixUrl, { waitUntil: 'load', timeout: 60000 });

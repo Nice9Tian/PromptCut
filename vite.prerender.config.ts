@@ -7,6 +7,7 @@ import { exportPlugin } from "./server/vite-plugin-export";
 import { mediaPlugin } from "./server/vite-plugin-media";
 import vitePluginCards from "./server/vite-plugin-cards";
 import { visionPlugin } from "./server/vite-plugin-vision";
+import { cardRuntimePlugin } from "./server/vite-plugin-card-runtime";
 
 /**
  * 预渲染进程的 Vite(docs/decoupling-plan.md 第 3 节「预渲染」)。
@@ -58,7 +59,7 @@ export default defineConfig({
   cacheDir: process.env.PROMPTCUT_HEADLESS === "1" ? "node_modules/.vite-prerender-headless" : "node_modules/.vite-prerender",
   clearScreen: false,
   // 跨源守卫要排在所有接口前面(中间件按 configureServer 的调用顺序注册)
-  plugins: [corsForEditor(), apiGuardPlugin(), react(), tailwindcss(), exportPlugin(), framesPlugin(), mediaPlugin(), vitePluginCards(), visionPlugin()],
+  plugins: [corsForEditor(), apiGuardPlugin(), react(), tailwindcss(), exportPlugin(), framesPlugin(), mediaPlugin(), vitePluginCards(), cardRuntimePlugin(), visionPlugin()],
   server: {
     // 渲染页每一趟都是全新的页面,用不着热更新;源码改了照样重新变换(watcher 还开着)
     hmr: false,

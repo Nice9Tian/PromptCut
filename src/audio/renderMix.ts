@@ -13,6 +13,7 @@
 import { isAudioFxAnimated, type AudioFxDef } from "../kernel/audioFx.mjs";
 import { fadeEnvelope } from "../kernel/audioPlan.mjs";
 import { buildFxChain } from "./fxChain";
+import { decodeCardAudioClip, type CardAudioClip } from "./cardAudio";
 
 export interface MixPlanClip {
   clipId: string;
@@ -24,6 +25,8 @@ export interface MixPlanClip {
   fadeIn: number;
   fadeOut: number;
   fx: { def: AudioFxDef; params?: Record<string, number> } | null;
+  /** Generated Python audio. When present it replaces url completely and is always required. */
+  cardAudio?: CardAudioClip;
 }
 
 export interface MixPlan {
@@ -39,7 +42,7 @@ export interface MixResult {
   buffer: AudioBuffer;
   /** 渲染耗时(毫秒) */
   ms: number;
-  /** 各段解码 / 接线时的提醒(某段解不出来之类),不致命 */
+  /** 各段解码 / 接线时的提醒。失败会拒绝整个导出，不能静默漏一轨。 */
   notes: string[];
 }
 
@@ -50,23 +53,25 @@ export async function renderMix(plan: MixPlan, fetchImpl: typeof fetch = fetch):
   const notes: string[] = [];
   const t0 = performance.now();
 
-  // 先把所有 wav 解好(并行),再接线;解不出来的那段跳过并记一句
+  // 先把所有输入解好(并行),再接线。一个 Python 块短了、请求失败或普通 wav
+  // 读不到都必须让导出失败；以前这里返回 null 会产出一条悄悄漏轨的成片。
   const buffers = await Promise.all(
     plan.clips.map(async (c) => {
       try {
+        if (c.cardAudio) return await decodeCardAudioClip(ctx, c.cardAudio, fetchImpl);
         const res = await fetchImpl(c.url);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return await ctx.decodeAudioData(await res.arrayBuffer());
       } catch (e) {
-        notes.push(`${c.clipId} 的声音解不出来,这一段没声:${e instanceof Error ? e.message : String(e)}`);
-        return null;
+        const message = `${c.clipId} 的声音解不出来:${e instanceof Error ? e.message : String(e)}`;
+        notes.push(message);
+        throw new Error(message, { cause: e });
       }
     }),
   );
 
   plan.clips.forEach((c, i) => {
     const buf = buffers[i];
-    if (!buf) return;
     const src = ctx.createBufferSource();
     src.buffer = buf;
     const g = ctx.createGain();

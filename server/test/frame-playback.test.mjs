@@ -147,6 +147,7 @@ test('playback owner replacement rejects late heartbeats and only borrows the co
   try {
     await pipeline.updatePlayback(project, { owner: 'old', sequence: 1, t: 0, playing: false });
     await pipeline.updatePlayback(project, { owner: 'new', sequence: 1, t: 0, playing: true }, { borrow: async () => true });
+    await new Promise(resolve => setImmediate(resolve));
     assert.equal(pipeline.userPoolSize, 3);
     const stale = await pipeline.updatePlayback(project, { owner: 'old', sequence: 20, t: 0, playing: true });
     assert.equal(stale.closed, true); assert.equal(pipeline.playback.owner, 'new');
@@ -198,4 +199,28 @@ test('a release racing slow Chrome shutdown cannot resume work under a renewed l
     assert.ok(pipeline.backgroundLeaseUntil > Date.now());
     await pipeline.resumeBackground('same'); assert.equal(pipeline.backgroundLeaseUntil, 0);
   } finally { await pipeline.close(); }
+});
+
+test('isolated card project keeps same-track sibling source clips hidden and preserves their fields', () => {
+  const pipeline = new FramePipeline({ root: '.', origin: () => '' });
+  const project = { width: 100, height: 50, fps: 30, tracks: [
+    { id: 'track', clips: [
+      { id: 'target', cardId: 'python-card', start: 2.01, end: 3, params: { mode: 'mix' } },
+      { id: 'input-a', mediaId: 'a', start: 0, end: 8, mediaOffset: 1.25, customSourceFlag: 'keep' },
+      { id: 'input-b', cardId: 'other-card', start: 1, end: 4, params: { input: true } },
+    ] },
+    { id: 'below', clips: [{ id: 'input-c', mediaId: 'c', start: 0, end: 8, mediaOffset: 2 }] },
+  ] };
+  const isolated = pipeline.isolatedCardProject(project, { clipId: 'target', start: 2.01, end: 3,
+    count: 30, sampling: { phase: { numerator: '1', denominator: '100' } } });
+  const visible = isolated.tracks.find(track => !track.hidden);
+  assert.deepEqual(visible.clips.map(clip => clip.id), ['target']);
+  assert.equal(visible.clips[0].start, -0.01);
+  const siblingTrack = isolated.tracks.find(track => track.sourceOnly && track.clips.some(clip => clip.id === 'input-a'));
+  assert.ok(siblingTrack && siblingTrack.hidden);
+  assert.notEqual(siblingTrack.id, 'track');
+  assert.deepEqual(siblingTrack.clips.map(clip => clip.id), ['input-a', 'input-b']);
+  assert.equal(siblingTrack.clips[0].mediaOffset, 1.25);
+  assert.equal(siblingTrack.clips[0].customSourceFlag, 'keep');
+  assert.ok(isolated.tracks.find(track => track.id === 'below' && track.hidden && track.sourceOnly));
 });

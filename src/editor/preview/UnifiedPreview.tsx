@@ -2,11 +2,14 @@ import { useEffect, useRef, useState } from "react";
 import type { Project } from "../../kernel/project";
 import { collectSnapshots, frameRequest, see_frames } from "../../render/frameClient";
 import { MovPlayer } from "../../render/movPlayer";
+import { frameCss } from "../../kernel/layout";
 
 /** Paused exact frames and live MOV playback share see_frames and its caches. */
 export function UnifiedPreview({ project, t, playing }: { project: Project; t: number; playing: boolean }) {
   const [image, setImage] = useState<{ project: Project; url: string } | null>(null);
   const [error, setError] = useState("");
+  const [missing, setMissing] = useState<string[]>([]);
+  const [playbackPreview, setPlaybackPreview] = useState<string | null>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const latest = useRef({ t, playing }); latest.current = { t, playing };
   const requestFrame = useRef<() => void>(() => {});
@@ -17,7 +20,6 @@ export function UnifiedPreview({ project, t, playing }: { project: Project; t: n
     let timer: ReturnType<typeof setTimeout>;
     const poll = async () => {
       try {
-        if (latest.current.playing) { timer = setTimeout(poll, 1000); return; }
         const status = await frameRequest("preload", project, {}, undefined, { target: "prerender", lane: "background" });
         if (!active) return;
         if (status.sampled > archived) { await collectSnapshots(project); archived = status.sampled; }
@@ -47,6 +49,8 @@ export function UnifiedPreview({ project, t, playing }: { project: Project; t: n
           // A stale result can populate the common cache, but never the view.
           if (active && !latest.current.playing && Math.round(requested * fps) === Math.round(latest.current.t * fps)) {
             if (result.frames[0]) setImage({ project, url: result.frames[0].url });
+            setMissing(result.frames[0]?.missing || []);
+            if (result.incomplete) retry = setTimeout(() => { void draw(); }, 700);
             setError("");
           }
         } catch (e) {
@@ -86,6 +90,7 @@ export function UnifiedPreview({ project, t, playing }: { project: Project; t: n
           deliveryMs: Math.min(5000, player.deliveryMs + 150) }, controller.signal);
         if (active && !status.closed && clock.playing === latest.current.playing) {
           player.update(status);
+          if (clock.playing) { setMissing(status.preview?.missing || []); setPlaybackPreview(status.preview?.url || null); }
           if (status.error) setError(status.error); else if (clock.playing) setError("");
         }
       } catch (e) { if (active && !controller.signal.aborted) setError(String(e)); }
@@ -111,7 +116,13 @@ export function UnifiedPreview({ project, t, playing }: { project: Project; t: n
   const style = { position: "absolute" as const, inset: 0, width: "100%", height: "100%", pointerEvents: "none" as const };
   return <div style={style}>
     <canvas ref={canvas} width={project.width} height={project.height} style={{ ...style, display: playing ? "block" : "none" }} />
+    {playing && playbackPreview && <img src={playbackPreview} alt="" style={style} />}
     {!playing && image?.project === project && <img src={image.url} alt="" style={style} />}
+    <style>{`@keyframes pc-card-hourglass{0%,35%{transform:rotate(0)}65%,100%{transform:rotate(180deg)}}`}</style>
+    {project.tracks.flatMap(track => track.hidden ? [] : track.clips).filter(clip => missing.includes(clip.id) && t >= clip.start && t < clip.end).map(clip =>
+      <div key={clip.id} role="status" aria-label="正在预渲染" style={{ ...frameCss(clip.frame, project), display: 'grid', placeItems: 'center', border: '2px dashed #dcb66a', boxSizing: 'border-box' }}>
+        <span style={{ fontSize: 28, animation: 'pc-card-hourglass 1.8s ease-in-out infinite', background: '#202934', borderRadius: 8, padding: 8 }}>⌛</span>
+      </div>)}
     {error && <div role="status" style={{ position: "absolute", bottom: 8, left: 8, color: "white", background: "#842323", fontSize: 16 }}>{error}</div>}
   </div>;
 }

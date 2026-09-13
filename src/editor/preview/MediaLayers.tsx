@@ -1,8 +1,9 @@
-import { useLayoutEffect, useReducer, useRef, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState, useSyncExternalStore } from "react";
 import { emphasisFilter } from "../../kernel/emphasis";
 import { clipFilterOpsAt, cssFilter, type FilterDef } from "../../kernel/filters.mjs";
 import type { AudioFxDef } from "../../kernel/audioFx.mjs";
 import { releasePreviewAudio, routePreviewAudio } from "../../audio/previewAudio";
+import { CARD_AUDIO_SAMPLE_RATE, acquireCardAudioClipUrl, cardAudioNodeOf, generatedCardAudioClipsAt, shouldMuteNativeAudio } from "../../audio/cardAudio";
 import { frameCss } from "../../kernel/layout";
 import { audioClipsAt, isImageMedia, nextVideoLayerAfter, videoLayersAt, type MediaAsset, type Project, type TrackClip } from "../../kernel/project";
 import { isScrubbing, subscribeScrub } from "../timeline/useScrub";
@@ -148,6 +149,7 @@ function inClipRange(c: SlotClip, mediaTime: number) {
 }
 
 function VideoTrack({
+  project,
   cur,
   next,
   t,
@@ -159,6 +161,7 @@ function VideoTrack({
   filters,
   audioFx,
 }: {
+  project: Project;
   /** 项目的滤镜库(片段的 clip.filter 引用其中一条) */
   filters?: FilterDef[];
   /** 项目的音频效果库(片段的 clip.audioFx 引用其中一条);预览接 Web Audio,见 audio/previewAudio.ts */
@@ -227,7 +230,9 @@ function VideoTrack({
       if (!el) continue;
       if (i === plan.active && cur) {
         // 画面淡下去的同时声音也跟着淡:交叉溶解时两段的声音不会重叠成双倍
-        driveMedia(el, { target: targetTimeOf(cur.clip, t), playing, volume: muted || cur.clip.audioMuted ? 0 : cur.opacity * gain * (cur.clip.audioVolume ?? 1), scrubbing });
+        // A Python audio node replaces this video's native soundtrack. The visual remains in
+        // its usual slot while AudioLayer loads and plays the generated WAV separately.
+        driveMedia(el, { target: targetTimeOf(cur.clip, t), playing, volume: shouldMuteNativeAudio(project, cur.clip, muted) ? 0 : cur.opacity * gain * (cur.clip.audioVolume ?? 1), scrubbing });
         slots.current[i].opacity = cur.opacity;
         // 音频效果:音量(el.volume)之后、喇叭之前,和导出一个顺序。导出(muted)时页面不出声,不接
         if (!muted) routePreviewAudio(el, audioFx, cur.clip, t, playing);
@@ -293,13 +298,40 @@ function VideoTrack({
   );
 }
 
-function AudioLayer({ clip, media, volume, t, playing, scrubbing, audioFx }: { clip: TrackClip; media: MediaAsset; volume: number; t: number; playing: boolean; scrubbing: boolean; audioFx?: AudioFxDef[] }) {
+type CardState = "pending" | "ready" | "error";
+function AudioLayer({ project, clip, media, volume, t, playing, scrubbing, audioFx, onCardState }: { project: Project; clip: TrackClip; media?: MediaAsset; volume: number; t: number; playing: boolean; scrubbing: boolean; audioFx?: AudioFxDef[]; onCardState?: (clipId: string, state: CardState, message?: string) => void }) {
   const ref = useRef<HTMLAudioElement>(null);
-  const target = targetTimeOf(clip, t);
+  const nodeId = cardAudioNodeOf(project, clip);
+  // Card runtime blocks use clip-local samples; mediaOffset applies only to the old source media path.
+  const target = nodeId ? Math.max(0, t - clip.start) : targetTimeOf(clip, t);
+  const [cardUrl, setCardUrl] = useState<string | null>(null);
+  const [cardState, setCardState] = useState<"idle" | CardState>("idle");
+  useEffect(() => {
+    let current = true;
+    if (!nodeId) { setCardUrl(null); setCardState("idle"); return; }
+    setCardUrl(null); setCardState("pending");
+    onCardState?.(clip.id, "pending"); ref.current?.dispatchEvent(new CustomEvent("promptcut:card-audio-pending", { bubbles: true, detail: { nodeId, clipId: clip.id } }));
+    const frames = Math.max(1, Math.ceil((clip.end - clip.start) * CARD_AUDIO_SAMPLE_RATE));
+    let release: (() => void) | undefined;
+    void acquireCardAudioClipUrl({ project, nodeId, frames }).then((lease) => {
+      release = lease.release; const url = lease.url;
+      if (!current) { release(); return; }
+      setCardUrl(url); setCardState("ready"); onCardState?.(clip.id, "ready");
+      ref.current?.dispatchEvent(new CustomEvent("promptcut:card-audio-ready", { bubbles: true, detail: { nodeId, clipId: clip.id, url } }));
+    }, (error: unknown) => {
+      if (!current) return;
+      const message = error instanceof Error ? error.message : String(error); setCardState("error"); onCardState?.(clip.id, "error", message);
+      ref.current?.dispatchEvent(new CustomEvent("promptcut:card-audio-error", { bubbles: true, detail: { nodeId, clipId: clip.id, error: message } }));
+    });
+    return () => { current = false; release?.(); };
+  }, [project, nodeId, clip.id, clip.start, clip.end, onCardState]);
   useLayoutEffect(() => {
+    // While a Python node is loading or has failed there is deliberately no source URL.
+    // driveMedia may attempt play(), but it cannot emit source-media audio as a fallback.
+    if (nodeId && !cardUrl) return;
     driveMedia(ref.current, { target, playing, volume, scrubbing });
     routePreviewAudio(ref.current, audioFx, clip, t, playing);
-  }, [target, playing, volume, scrubbing, audioFx, clip, t]);
+  }, [nodeId, cardUrl, target, playing, volume, scrubbing, audioFx, clip, t]);
   useLayoutEffect(() => {
     const el = ref.current;
     return () => {
@@ -307,8 +339,9 @@ function AudioLayer({ clip, media, volume, t, playing, scrubbing, audioFx }: { c
       releasePreviewAudio(el);
     };
   }, []);
-  return <audio ref={ref} src={media.url} preload="auto" hidden />;
+  return <audio ref={ref} src={nodeId ? (cardUrl ?? undefined) : media?.url} preload="auto" hidden data-card-audio-state={nodeId ? cardState : undefined} data-card-audio-node={nodeId ?? undefined} />;
 }
+
 
 /** 有画面段(视频/图片)的序列,顺序和 videoLayersAt 同一个口径:倒着走,最后一个 = 最上层 */
 function visualTrackIds(p: Project): string[] {
@@ -344,6 +377,9 @@ export function MediaLayers({
   const layers = videoLayersAt(project, t);
   const nexts = nextVideoLayerAfter(project, t);
   const audios = muted ? [] : audioClipsAt(project, t);
+  const generated = muted ? [] : generatedCardAudioClipsAt(project, t);
+  const [cardStatus, setCardStatus] = useState<Record<string, { state: CardState; message?: string }>>({});
+  const setGeneratedStatus = useCallback((clipId: string, state: CardState, message?: string) => setCardStatus(status => ({ ...status, [clipId]: { state, message } })), []);
   const master = Math.max(0, Math.min(1, masterVolume));
   const stage = { width: project.width, height: project.height };
   return (
@@ -351,6 +387,7 @@ export function MediaLayers({
       {!audioOnly && visualTrackIds(project).map((id) => (
         <VideoTrack
           key={id}
+          project={project}
           cur={layers.find((l) => l.trackId === id) ?? null}
           next={nexts.find((n) => n.trackId === id) ?? null}
           t={t}
@@ -363,12 +400,17 @@ export function MediaLayers({
           audioFx={project.audioFx}
         />
       ))}
-      {audioOnly && !muted && layers.filter(l => !isImageMedia(l.media) && l.media.kind === "video" && !l.clip.audioMuted && !project.tracks.find(tr => tr.id === l.trackId)?.muted).map(l => (
-        <AudioLayer key={l.clip.id} clip={l.clip} media={l.media} volume={l.opacity * master * (l.clip.audioVolume ?? 1)} t={t} playing={playing} scrubbing={scrubbing} audioFx={project.audioFx} />
+      {audioOnly && !muted && layers.filter(l => !cardAudioNodeOf(project, l.clip) && !isImageMedia(l.media) && l.media.kind === "video" && !l.clip.audioMuted && !project.tracks.find(tr => tr.id === l.trackId)?.muted).map(l => (
+        <AudioLayer key={l.clip.id} project={project} clip={l.clip} media={l.media} volume={l.opacity * master * (l.clip.audioVolume ?? 1)} t={t} playing={playing} scrubbing={scrubbing} audioFx={project.audioFx} />
       ))}
-      {audios.map((a) => (
-        <AudioLayer key={a.clip.id} clip={a.clip} media={a.media} volume={a.volume * master} t={t} playing={playing} scrubbing={scrubbing} audioFx={project.audioFx} />
+      {audios.filter(a => !cardAudioNodeOf(project, a.clip)).map((a) => (
+        <AudioLayer key={a.clip.id} project={project} clip={a.clip} media={a.media} volume={a.volume * master} t={t} playing={playing} scrubbing={scrubbing} audioFx={project.audioFx} />
       ))}
+      {generated.map((a) => <AudioLayer key={`card-audio:${a.clip.id}`} project={project} clip={a.clip} media={a.media} volume={a.volume * master} t={t} playing={playing} scrubbing={scrubbing} audioFx={project.audioFx} onCardState={setGeneratedStatus} />)}
+      {generated.map(({ clip }) => {
+        const status = cardStatus[clip.id]; if (!status || status.state === "ready") return null;
+        return <div key={`card-audio-status:${clip.id}`} role="status" aria-live="polite" style={{ position: "absolute", left: 12, bottom: 12, zIndex: 100, padding: "6px 9px", borderRadius: 4, color: "#fff", background: status.state === "error" ? "#a11" : "#333", fontSize: 12 }}>{status.state === "pending" ? `正在生成音频：${clip.label ?? clip.id}` : `音频生成失败：${status.message ?? clip.label ?? clip.id}`}</div>;
+      })}
     </>
   );
 }

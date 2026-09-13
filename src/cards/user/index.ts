@@ -28,12 +28,19 @@ function isCardDef(value: unknown): value is CardDef<any> {
  * 而存盘是同步的,等不了一次请求;这里跟着 HMR 一起更新,拿到的永远是磁盘上的当前版本。
  */
 const raws = import.meta.glob<string>("./*.tsx", { eager: true, query: "?raw", import: "default" });
+const dependencyRaws = import.meta.glob<string>("./**/*.{ts,tsx,mjs,css}", { eager: true, query: "?raw", import: "default" });
 
 const baseOf = (path: string) => path.replace(/^\.\//, "").replace(/\.tsx$/, "");
 
 /** 文件名(不含 .tsx)→ 源码原文 */
 export const userCardFiles: Record<string, string> = Object.fromEntries(
   Object.entries(raws).map(([path, src]) => [baseOf(path), src]),
+);
+
+/** Raw dependency map for cache identity only.  Proc serialization still uses
+ * userCardFiles, which deliberately contains authored card entry files only. */
+export const userCardDependencies: Record<string, string> = Object.fromEntries(
+  Object.entries(dependencyRaws).map(([file, source]) => [`/src/cards/user/${file.replace(/^\.\//, '')}`, source]),
 );
 
 /** 卡片 id → 定义它的文件名。通常同名,手放进来的文件不一定 */

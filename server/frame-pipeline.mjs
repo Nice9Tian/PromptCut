@@ -7,6 +7,8 @@ import { frameIdentity, trackPrefixes } from './frame-identity.mjs';
 import { packFrames, unpackFrameArchive, createFrameArchive, packFrameCache, unpackFrameCache } from './frame-archive.mjs';
 import { MovFrameStore, PlaybackMovStore } from './frame-mov.mjs';
 import { FramePlayback } from './frame-playback.mjs';
+import { CardFrameCache } from './card-cache.mjs';
+import { cardMediaPath } from './card-media-path.mjs';
 
 const pad = n => String(n).padStart(6, '0');
 const exists = file => fs.access(file).then(() => true, () => false);
@@ -54,8 +56,7 @@ export class FramePipeline {
   }
   async entry(project) {
     project = { ...project, media: await Promise.all((project.media || []).map(async media => {
-      let file = media.path;
-      if (!file && String(media.url).startsWith('/@media/')) file = path.join(this.root, '..', 'media', decodeURIComponent(media.url.slice('/@media/'.length)));
+      const file = cardMediaPath(media, this.root);
       if (!file) return media;
       try { const stat = await fs.stat(file); return { ...media, _frameSourceStamp: `${stat.size}:${stat.mtimeMs}` }; }
       catch { return { ...media, _frameSourceStamp: 'missing' }; }
@@ -64,6 +65,10 @@ export class FramePipeline {
     const key = frameIdentity(project, code);
     if (!this.entries.has(key)) {
       const entry = { key, code, project: structuredClone(project), recordVersion: 0, html: new Map(), controls: new Map(), dir: path.join(this.root, key), status: 'idle', error: null };
+      // Controls are content addressed independently of the full-scene entry;
+      // a project edit that invalidates the scene can still reuse an unchanged
+      // card MOV from <pipeline-root>/controls/<control-key>.
+      entry.cardCache = new CardFrameCache({ root: this.root, project: entry.project });
       const cold = createFrameArchive({ spillDir: path.join(entry.dir, 'html-cache') });
       entry.html = cold.frames; entry.controls = cold.controls;
       entry.createControl = cold.createControl; entry.disposeArchive = cold.dispose;
@@ -362,6 +367,15 @@ export class FramePipeline {
     const userSession = lane === 'user' || lane === 'playback' ? await this.acquireUser(entry.project, signal, onSession) : null;
     const bakery = userSession?.bakery || await this.acquire(lane, entry.project);
     try {
+      // The browser owns graph planning because it is the only place that can
+      // prove a legacy Chrome card's capabilities.  Cache misses are supplied
+      // only to interactive rendering; agent/final lanes keep the real Chrome
+      // card so their result can never accidentally become a final placeholder.
+      const cardRender = await this.cardRender(entry, bakery, frames, lane);
+      const incompleteFor = frame => (lane === 'user' || lane === 'playback') ? (cardRender?.missing?.[frame] || []) : [];
+      if (cardRender && (Object.keys(cardRender.frames).length || (lane === 'user' || lane === 'playback') && Object.keys(cardRender.missing).length)) {
+        await this.installCardRender(bakery, entry.project, cardRender);
+      }
       // The full-scene MOV lane owns the result returned by see_frames. It
       // still records HTML snapshots while it advances, so the next request
       // can replay without loading media. HTML is the higher-priority cache;
@@ -371,18 +385,30 @@ export class FramePipeline {
         const prefixes = this.prefixes(entry);
         let buf;
         for (let i = 0; i < prefixes.length; i++) buf = await this.rasterPrefix(entry, bakery, frame, i, prefixes);
-        await atomic(path.join(entry.dir, 'frames', pad(frame) + '.png'), buf);
-        result.set(frame, { buf, source: 'html' });
-        await this.writeMov(entry, frame, buf);
-        await onFrame?.(frame, { buf, source: 'html' });
+        if (!incompleteFor(frame).length) await atomic(path.join(entry.dir, 'frames', pad(frame) + '.png'), buf);
+        const absent = incompleteFor(frame);
+        const value = absent.length ? { buf, source: 'preview', incomplete: true, missing: absent } : { buf, source: 'html' };
+        result.set(frame, value);
+        // A placeholder is a user-preview artifact.  It must never enter the
+        // durable full-scene MOV or HTML/final raster cache.
+        if (!absent.length) await this.writeMov(entry, frame, buf);
+        else await atomic(path.join(entry.dir, 'preview-frames', pad(frame) + '.png'), buf);
+        await onFrame?.(frame, value);
       };
       for (const frame of htmlFrames) await htmlReplay(frame);
       if (!missing.length) return result;
-      await this.renderMovFrames(entry, missing, bakery, signal, onFrame);
+      const transient = Object.keys(cardRender?.missing || {}).length ? new Map() : null;
+      await this.renderMovFrames(entry, missing, bakery, signal, async (frame, value) => {
+        const absent = incompleteFor(frame);
+        if (absent.length) await atomic(path.join(entry.dir, 'preview-frames', pad(frame) + '.png'), value.buf);
+        await onFrame?.(frame, absent.length ? { ...value, source: 'preview', incomplete: true, missing: absent } : value);
+      }, transient);
       for (const frame of missing) {
-        const buf = await entry.mov.get(frame);
-        if (!buf) throw new Error(`MOV frame ${frame} was not written`);
-        result.set(frame, { buf, source: 'mov' });
+        const buf = transient?.get(frame) || await entry.mov.get(frame);
+        const absent = incompleteFor(frame);
+        if (!buf && !absent.length) throw new Error(`MOV frame ${frame} was not written`);
+        if (absent.length) result.set(frame, { buf, source: 'preview', incomplete: true, missing: absent });
+        else result.set(frame, { buf, source: 'mov' });
       }
     } finally {
       if (userSession) this.releaseUser(userSession);
@@ -390,7 +416,30 @@ export class FramePipeline {
     }
     return result;
   }
-  async renderMovFrames(entry, frames, bakery, signal, onFrame) {
+  async browserCardPlan(bakery) {
+    try {
+      return await bakery.page.evaluate(() => typeof window.__pcCardPlan === 'function' ? window.__pcCardPlan() : null);
+    } catch { return null; }
+  }
+  async cardRender(entry, bakery, frames, lane) {
+    const browserPlan = await this.browserCardPlan(bakery);
+    if (!browserPlan) return null;
+    let plan;
+    try { plan = entry.cardCache.plan(browserPlan); } catch { return null; }
+    if (!plan.length) return null;
+    const state = await entry.cardCache.renderState(plan, frames);
+    // The final/agent path deliberately does not inject `missing`: an absent
+    // control must fall through to the original Chrome implementation.  The
+    // interactive path gets an explicit incomplete signal for its placeholder.
+    if (lane !== 'user' && lane !== 'playback') state.missing = {};
+    return state;
+  }
+  async installCardRender(bakery, project, cardRender) {
+    const rendered = { ...project, _cardRender: cardRender };
+    await bakery.loadProject(rendered, { deferCards: true });
+    await bakery.page.setViewport({ width: project.width, height: project.height, deviceScaleFactor: 1 });
+  }
+  async renderMovFrames(entry, frames, bakery, signal, onFrame, transient = null) {
     // Reuse HTML-complete frames first. This is the background equivalent of
     // see_frames' HTML lookup and avoids loading media for frames already
     // frozen by the higher-priority lane.
@@ -401,8 +450,8 @@ export class FramePipeline {
       const prefixes = this.prefixes(entry);
       let buf;
       for (let i = 0; i < prefixes.length; i++) buf = await this.rasterPrefix(entry, bakery, frame, i, prefixes);
-      await atomic(path.join(entry.dir, 'frames', pad(frame) + '.png'), buf);
-      await this.writeMov(entry, frame, buf);
+      if (!transient) await atomic(path.join(entry.dir, 'frames', pad(frame) + '.png'), buf);
+      if (transient) transient.set(frame, buf); else await this.writeMov(entry, frame, buf);
       await onFrame?.(frame, { buf, source: 'html' });
     }
     const missing = frames.filter(frame => !entry.mov.has(frame));
@@ -414,15 +463,15 @@ export class FramePipeline {
       writeFrames: false, signal,
       onFrame: async (frame, buf) => {
         if (requested.has(frame)) {
-          await this.writeMov(entry, frame, buf);
+          if (transient) transient.set(frame, buf); else await this.writeMov(entry, frame, buf);
           await onFrame?.(frame, { buf, source: 'live' });
         }
       },
       // MOV passes still record HTML for the same live state, but only when the
       // HTML lane did not already have that frame.
-      onSnapshot: (n, html, controls) => !entry.html.has(n) && requested.has(n) && this.record(entry, n, html, controls),
+      onSnapshot: (n, html, controls) => !transient && !entry.html.has(n) && requested.has(n) && this.record(entry, n, html, controls),
     });
-    await this.save(entry);
+    if (!transient) await this.save(entry);
   }
   async writeMov(entry, frame, buf) {
     if (!entry.mov) return;
@@ -431,7 +480,7 @@ export class FramePipeline {
     await entry.mov.put(frame, buf);
     // During playback the append-only PNG MOV is the sink. Do not start an
     // additional ffmpeg stream competing for the same CPU budget.
-    if (this.playback?.playing || this.backgroundYielding || this.backgroundLeaseUntil > Date.now()) return;
+    if ((this.playback?.playing || this.backgroundYielding || this.backgroundLeaseUntil > Date.now()) && entry.stage !== 'required') return;
     if (entry.mov.writer || entry.mov.writerError || await exists(entry.mov.movieFile)) return;
     try {
       if (frame === entry.mov.nextFrame) {
@@ -485,13 +534,9 @@ export class FramePipeline {
   }
   async preload(project) {
     const entry = await this.entry(project);
-    if (this.backgroundYielding || this.backgroundLeaseUntil > Date.now()) {
-      (this.pausedPreloads ||= new Map()).set(project.id || 'active', project);
-      return entry;
-    }
     const owner = project.id || 'active';
     const previous = this.generations.get(owner);
-    if (previous?.key === entry.key && !previous.controller.signal.aborted && !['error', 'cancelled'].includes(entry.status)) return entry;
+    if (previous?.key === entry.key && !previous.controller.signal.aborted && !['error', 'cancelled', 'partial'].includes(entry.status)) return entry;
     previous?.controller.abort();
     const controller = new AbortController();
     this.generations.set(owner, { key: entry.key, controller });
@@ -503,6 +548,15 @@ export class FramePipeline {
         entry.status = 'html';
         const count = Math.max(1, Math.floor(project.duration * (project.fps || 30)));
         bakery = await this.acquire('background', entry.project);
+        const browserPlan = await this.browserCardPlan(bakery);
+        let cardPlan = [];
+        try { cardPlan = browserPlan ? entry.cardCache.plan(browserPlan) : []; } catch {}
+        entry.stage = 'required';
+        await this.fillCardControls(entry, bakery, controller.signal, cardPlan.filter(c => c.cacheable && c.needPrerendering));
+        await this.fillRequiredScene(entry, bakery, controller.signal, cardPlan);
+        if (this.playback?.playing) { entry.status = 'partial'; return; }
+        entry.stage = 'direct';
+        await this.fillCardControls(entry, bakery, controller.signal, cardPlan.filter(c => c.cacheable && !c.needPrerendering));
         // `size === count` is not enough for a sparse archive: a foreground
         // request can contain exactly `count` entries while still missing one
         // frame and containing an out-of-range index.  C must only start after
@@ -527,10 +581,11 @@ export class FramePipeline {
         entry.status = 'video';
         await this.prerender(entry, bakery, controller.signal);
         entry.status = 'ready';
+        entry.stage = 'ready';
       } catch (e) {
         entry.status = controller.signal.aborted ? 'cancelled' : 'error';
         entry.error = controller.signal.aborted ? null : String(e.message || e);
-      } finally { if (bakery && this.lanes.get('background')?.bakery === bakery) this.release('background'); }
+      } finally { if (entry.stage !== 'ready') entry.stage = undefined; if (bakery && this.lanes.get('background')?.bakery === bakery) this.release('background'); }
     });
     return entry;
   }
@@ -542,6 +597,76 @@ export class FramePipeline {
     await entry.mov.start(await findFfmpeg());
     await this.renderMovFrames(entry, Array.from({ length: count }, (_, i) => i), bakery, signal);
     await entry.mov.finish();
+  }
+  async fillRequiredScene(entry, bakery, signal, controls) {
+    const fps = Number(entry.project.fps) || 30, wanted = new Set();
+    for (const control of controls) if (control.needPrerendering && !control.cacheable) {
+      for (let frame = control.sampling.firstFrame; frame / fps < control.end - 1e-9; frame++) wanted.add(frame);
+    }
+    if (wanted.size) await this.renderMovFrames(entry, [...wanted].sort((a, b) => a - b), bakery, signal);
+  }
+  async fillCardControls(entry, bakery, signal, controls = null) {
+    if (!controls) {
+      const browserPlan = await this.browserCardPlan(bakery);
+      if (!browserPlan) return;
+      try { controls = entry.cardCache.plan(browserPlan); } catch { return; }
+    }
+    for (const control of controls.filter(control => control.cacheable)) {
+      if (signal?.aborted) throw Object.assign(new Error('Cancelled'), { cancelled: true });
+      if (await entry.cardCache.hasComplete(control)) continue;
+      const isolated = this.isolatedCardProject(entry.project, control);
+      // A small batch retains Chrome state inside a stateful card, while every
+      // batch boundary remains cancellable/schedulable.  `fullFrame` is vital:
+      // the cache image is a full transparent stage, never a crop to be framed
+      // again during composition.
+      for (let first = 0; first < control.count; first += 4) {
+        if (signal?.aborted) throw Object.assign(new Error('Cancelled'), { cancelled: true });
+        const localFrames = Array.from({ length: Math.min(4, control.count - first) }, (_, n) => first + n);
+        await bakery.reset(isolated, this.emptyUrl(isolated), { deferCards: true });
+        await bakery.page.setViewport({ width: isolated.width, height: isolated.height, deviceScaleFactor: this.scaleForLane('background') });
+        await bakeFrames(bakery, { out: path.join(this.root, 'controls', control.key), targetFrames: localFrames,
+          snapshotOnly: false, fullFrame: true, writeFrames: false, signal,
+          onFrame: async (frame, png) => entry.cardCache.put(control.key, frame, png, () => !signal?.aborted) });
+      }
+      if (!signal?.aborted) await entry.cardCache.finish(control);
+    }
+    // `fillCardControls` shares the background Chrome with the mandatory
+    // complete-scene pass. Restore its normal project before snapshot/MOV.
+    await bakery.reset(entry.project, this.emptyUrl(entry.project), { deferCards: true });
+    await bakery.page.setViewport({ width: entry.project.width, height: entry.project.height, deviceScaleFactor: this.scaleForLane('background') });
+  }
+  isolatedCardProject(project, control) {
+    const targetId = control.clipId;
+    const phase = Number(control.sampling.phase.numerator) / Number(control.sampling.phase.denominator);
+    const duration = control.end - control.start;
+    let found = false;
+    const tracks = [];
+    const sourceTrackIds = new Set((project.tracks || []).map(track => track.id));
+    for (const track of project.tracks || []) {
+      const target = (track.clips || []).find(clip => clip.id === targetId);
+      if (target) {
+        found = true;
+        // The target is the only visible output.  Siblings can nevertheless be
+        // raw graph inputs (especially Python multi-input cards), so retain
+        // them in a separate hidden source track rather than dropping them.
+        tracks.push({ ...structuredClone(track), hidden: false, sourceOnly: false,
+          clips: [{ ...structuredClone(target), start: -phase, end: duration - phase }] });
+        const siblings = (track.clips || []).filter(clip => clip.id !== targetId);
+        if (siblings.length) {
+          let id = `__pc_source_${track.id}`; let suffix = 1;
+          while (sourceTrackIds.has(id)) id = `__pc_source_${track.id}_${suffix++}`;
+          sourceTrackIds.add(id);
+          tracks.push({ ...structuredClone(track), id, hidden: true, sourceOnly: true, clips: structuredClone(siblings) });
+        }
+        continue;
+      }
+      // Keep original clips available to graph/Python source resolution without
+      // letting them paint.  The browser's source-only tracks are deliberately
+      // explicit rather than attempting to infer graph dependencies here.
+      tracks.push({ ...structuredClone(track), hidden: true, sourceOnly: true });
+    }
+    if (!found) throw new Error(`Independent card clip is missing: ${targetId}`);
+    return { ...structuredClone(project), duration: Math.max(duration, control.count / (Number(project.fps) || 30)), tracks, _cardRender: { mode: 'final', frames: {}, missing: {} } };
   }
   prefixes(entry) {
     const prefixes = trackPrefixes(entry.project, entry.code);
@@ -617,13 +742,16 @@ export class FramePipeline {
     this.backgroundYielding = true;
     this.yielding = (async () => {
       this.pausedPreloads ||= new Map();
+      const requiredActive = [...this.generations.values()].some(generation => this.entries.get(generation.key)?.stage === 'required');
       for (const [id, generation] of this.generations) {
         const entry = this.entries.get(generation.key);
         if (entry && entry.status !== 'ready') this.pausedPreloads.set(id, entry.project);
-        generation.controller.abort();
+        // Required work is allowed to finish while playback starts. Direct
+        // control/HTML/MOV work observes this abort at its four-frame boundary.
+        if (entry?.stage !== 'required') generation.controller.abort();
       }
       const session = this.lanes.get('background');
-      if (session) { clearTimeout(session.timer); this.lanes.delete('background'); await session.bakery.close().catch(() => {}); }
+      if (session && !requiredActive) { clearTimeout(session.timer); this.lanes.delete('background'); await session.bakery.close().catch(() => {}); }
       await Promise.allSettled([...this.entries.values()].map(entry => entry.mov?.suspend()));
       await this.background.catch(() => {});
       await Promise.allSettled([...this.entries.values()].filter(entry => entry.html.size).map(entry => this.save(entry)));
@@ -674,16 +802,20 @@ export class FramePipeline {
     if (!playback.update(input)) return { ...playback.status(), key: entry.key, movie: `/api/frames/${entry.key}/mov/${entry.playbackMovie.name}` };
     if (input.playing) {
       playback.preparing = true;
-      await this.yieldBackground(input.owner);
-      playback.preparing = false; // The existing two hot slots can start now.
-      const wasBorrowed = playback.borrowed;
-      const borrowed = await borrow(input.owner);
-      playback.borrowed = borrowed;
-      if (borrowed && !wasBorrowed) await this.refreshSnapshots(entry);
       playback.release = release;
-      playback.setWorkers(borrowed ? 3 : 2);
-      this.userPoolSize = playback.workers;
-      playback.preparing = false;
+      // Playback must answer this heartbeat immediately. Yielding a low lane,
+      // borrowing a remote slot and adopting its snapshots are background
+      // housekeeping, never a prerequisite for the hot two local renderers.
+      playback.setWorkers(2); this.userPoolSize = 2; playback.preparing = false;
+      void this.yieldBackground(input.owner).catch(() => {});
+      void (async () => {
+        const wasBorrowed = playback.borrowed;
+        const borrowed = await borrow(input.owner);
+        if (this.playback !== playback || !playback.playing) { if (borrowed) await release(input.owner); return; }
+        playback.borrowed = borrowed;
+        playback.setWorkers(borrowed ? 3 : 2); this.userPoolSize = playback.workers;
+        if (borrowed && !wasBorrowed) await this.refreshSnapshots(entry);
+      })().catch(() => {});
     } else {
       this.userPoolSize = 2;
       for (const session of [...this.userPool].reverse()) if (!session.busy && this.userPool.length > 2) this.dropUserSession(session);
@@ -736,7 +868,7 @@ export class FramePipeline {
     this.lanes.clear();
     await Promise.allSettled(this.userPool.map(session => session.bakery.close()));
     this.userPool.length = 0;
-    await Promise.allSettled([...this.entries.values()].flatMap(entry => [entry.mov?.close(), entry.playbackMovie?.close()]));
+    await Promise.allSettled([...this.entries.values()].flatMap(entry => [entry.mov?.close(), entry.playbackMovie?.close(), entry.cardCache?.close()]));
     for (const entry of this.entries.values()) entry.disposeArchive?.();
   }
 }

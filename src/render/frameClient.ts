@@ -9,7 +9,7 @@ export interface FrameRequestOptions {
   lane?: FrameLane;
 }
 
-const signature = (project: Project) => JSON.stringify([project.width, project.height, project.fps, project.duration, project.themeId, project.camera3dFov, project.tracks, project.media, project.filters, project.pixelMaps, project.audioFx]);
+const signature = (project: Project) => JSON.stringify([project.width, project.height, project.fps, project.duration, project.themeId, project.camera3dFov, project.tracks, project.media, project.filters, project.pixelMaps, project.audioFx, project.cardDefinitions, project.cardNodes, project.style]);
 let saved: { signature: string; snapshots: string } | null = null;
 let restorePending: Promise<void> | null = null;
 export function snapshotsFor(project: Project) { return saved?.signature === signature(project) ? saved.snapshots : undefined; }
