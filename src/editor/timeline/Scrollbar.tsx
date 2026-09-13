@@ -117,7 +117,7 @@ export function Scrollbar() {
         看着像那一栏没接到底。这里用同样的宽度和同样的右边框把它接上去。
       */}
       <div
-        className="shrink-0 self-stretch border-r border-neutral-800"
+        className="pc-tl-headers shrink-0 self-stretch"
         style={{ width: headerW }}
         aria-hidden="true"
       />

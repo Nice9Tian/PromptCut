@@ -59,10 +59,12 @@ function TimelineInner() {
     <div data-pc="timeline" className="flex flex-col h-full bg-neutral-900 border-t border-neutral-800 text-neutral-300 select-none overflow-hidden text-sm relative">
       <CutTabs />
       <Toolbar />
-      <div className="flex-1 flex min-h-0 overflow-auto pc-tl-scroll" ref={scrollRef}>
+      <div className="flex-1 min-h-0 overflow-auto pc-tl-scroll" ref={scrollRef}>
+        {/* Keep both sticky columns as tall as the complete scroll content. */}
+        <div className="pc-tl-content flex min-h-full min-w-full w-max">
         
         {/* Left Headers Column */}
-        <div className="relative flex-shrink-0 border-r border-neutral-800 sticky left-0 bg-neutral-900 z-30 flex flex-col shadow-[4px_0_12px_rgba(0,0,0,0.5)]" style={{ width: headerW }}>
+        <div className="pc-tl-headers relative flex-shrink-0 sticky left-0 bg-neutral-900 z-30 flex flex-col" style={{ width: headerW }}>
           <div className="flex-shrink-0 sticky top-0 z-40 bg-neutral-950" style={{ height: RANGE_H }} />
           <div className="pc-tl-hdr flex-shrink-0 sticky bg-neutral-950 z-40" style={{ top: RANGE_H }}>
             序列
@@ -80,7 +82,7 @@ function TimelineInner() {
               </button>
             </div>
           </div>
-          <div className="absolute inset-y-0 right-0 w-1.5 z-40">
+          <div className="pc-tl-header-resize absolute inset-y-0 right-0 w-1.5 z-40">
             <ResizeHandle
               axis="x"
               value={headerW}
@@ -95,7 +97,7 @@ function TimelineInner() {
         </div>
 
         {/* Tracks Area */}
-        <div className="flex-1 relative flex flex-col" ref={trackAreaRef} style={{ minWidth: contentWidth }}>
+        <div className="pc-tl-tracks flex-1 relative flex flex-col" ref={trackAreaRef} style={{ minWidth: contentWidth }}>
           <div className="flex-shrink-0 sticky top-0 z-20" style={{ height: RANGE_H }}>
             <RangeBar />
           </div>
@@ -121,7 +123,7 @@ function TimelineInner() {
           </div>
           <Playhead top={RANGE_H} />
         </div>
-
+        </div>
       </div>
       <Scrollbar />
     </div>

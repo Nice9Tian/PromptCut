@@ -15,6 +15,15 @@
 /* 自定义横向滚动条接管后隐藏原生横条，竖条保留。 */
 .pc-tl-scroll::-webkit-scrollbar:horizontal { height: 0; }
 
+/* One continuous edge, shared with the footer. The resize hit target stays
+ * six pixels wide but must not draw a second line inside the header column. */
+.pc-tl-headers {
+  border-right: 1px solid var(--ui-border);
+}
+.pc-tl-header-resize [data-pc-resize="x"].pc-gutter {
+  background-image: none;
+}
+
 /* ── 时间线(配色诊断与修正 v2 整屏,底部) ───────────────────────────────
  * 整块 L1(见 editor/shell.css);选中的序列行 L2;控件 L3。 */
 
