@@ -124,6 +124,23 @@ fn sanitize() {
         env::set_var("TEMP", PathBuf::from(&root).join("Temp"));
         env::set_var("TMP", PathBuf::from(&root).join("Temp"));
         env::set_var("SystemDrive", "C:\\");
+        // The LPAC job limit is intentionally 512 MiB.  NumPy's BLAS backend
+        // otherwise sizes its native pool from the host CPU count; reserved
+        // worker stacks can consume the job's commit budget before a card
+        // allocates even one 1080p float32 frame.  These are runner-owned,
+        // fixed constants set before this process creates any threads.  They
+        // are inherited by Python because LaunchOptions deliberately has no
+        // caller-controlled environment override.
+        for key in [
+            "OPENBLAS_NUM_THREADS",
+            "OMP_NUM_THREADS",
+            "MKL_NUM_THREADS",
+            "NUMEXPR_NUM_THREADS",
+            "VECLIB_MAXIMUM_THREADS",
+            "BLIS_NUM_THREADS",
+        ] {
+            env::set_var(key, "1");
+        }
         for (k, v) in user {
             env::set_var(k, v)
         }
