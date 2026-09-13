@@ -6,6 +6,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { performance } from 'node:perf_hooks';
 import path from 'node:path';
 
 const root = process.cwd();
@@ -81,26 +82,38 @@ async function scenario(name) {
   })));
   await writeFile(path.join(dirs.input, 'fixture.txt'), name);
   const broker = new Broker(name, dirs);
+  const timings = [];
   try {
     for (let round = 0; round < rounds; round++) {
       const scope = `${name}-${round}`;
+      const openStart = performance.now();
       const open = await broker.request(`open-${round}`, 'open', scope, { runtimeDir: runtime, inputDirs: [dirs.input], outputDir: dirs.output, tempDir: dirs.temp, workers: 1 });
+      const openMs = Math.round(performance.now() - openStart);
       assert.equal(open.ok, true, `[${name}] open ${JSON.stringify(open)}`);
       // Send both before awaiting: the healthy request must survive the failed
       // active job and run in the replacement worker in FIFO order.
+      const crashStart = performance.now();
       const failed = broker.request(`crash-${round}`, 'evaluate', scope, { graph: graph('node', crash.id), definitions: [crash], style: {}, nodeId: 'node', time: 0, outputDir: dirs.output });
+      const healthyStart = performance.now();
       const okay = broker.request(`healthy-${round}`, 'evaluate', scope, { graph: graph('node', healthy(dirs.input).id), definitions: [healthy(dirs.input)], style: {}, nodeId: 'node', time: 0, outputDir: dirs.output });
       const [dead, result] = await Promise.all([failed, okay]);
+      const evaluateMs = Math.round(performance.now() - crashStart);
+      const healthyMs = Math.round(performance.now() - healthyStart);
       assert.equal(dead.ok, false, `[${name}] crash ${JSON.stringify(dead)}`);
       assert.equal(dead.error?.code, 'worker_exited', `[${name}] crash ${JSON.stringify(dead)}`);
       assert.match(dead.error?.message ?? '', /acl-concurrency forced exit/, `[${name}] crash stderr ${JSON.stringify(dead)}`);
       assert.equal(result.ok, true, `[${name}] healthy ${JSON.stringify(result)}`);
       assert.equal(result.result?.type, 'glsl', `[${name}] healthy ${JSON.stringify(result)}`);
       assert.equal(result.result?.uniforms?.denied, 1, `[${name}] input write was not denied ${JSON.stringify(result)}`);
+      const closeStart = performance.now();
       const close = await broker.request(`close-${round}`, 'close', scope, {});
+      const closeMs = Math.round(performance.now() - closeStart);
       assert.equal(close.ok, true, `[${name}] close ${JSON.stringify(close)}`);
+      timings.push({ round, openMs, crashAndReplacementMs: evaluateMs, queuedHealthyMs: healthyMs, closeMs });
     }
   } finally { await broker.stop(); }
+  return { runner: name, rounds: timings };
 }
-await Promise.all([scenario('runner-a'), scenario('runner-b')]);
+const reports = await Promise.all([scenario('runner-a'), scenario('runner-b')]);
 console.log(`LPAC_ACL_CONCURRENCY_SUCCESS runners=2 rounds=${rounds} sharedRuntime=${runtime}`);
+console.log(`LPAC_ACL_CONCURRENCY_TIMINGS ${JSON.stringify({ rounds, reports })}`);

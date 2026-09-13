@@ -6,7 +6,7 @@ use rappct::{
 };
 use serde_json::{Value, json};
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     env,
     ffi::OsString,
     fs::File,
@@ -146,29 +146,39 @@ impl Scope {
         // Do not allow another runner to read/modify/write an overlapping ACL
         // while this scope removes its exact SID and deletes its profile.
         let _transaction = AclTransaction::acquire()?;
-        drop(self.workers);
-        for p in self.roots {
+        let Scope {
+            profile,
+            sid,
+            grants,
+            roots,
+            workers,
+            ..
+        } = self;
+        drop(workers);
+        for p in &roots {
             let _ = std::process::Command::new("icacls")
                 .arg(p)
                 .arg("/remove")
-                .arg(format!("*{}", self.sid))
+                .arg(format!("*{sid}"))
                 .arg("/T")
                 .arg("/C")
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
                 .status();
         }
-        for p in self.grants {
+        // Direct roots were already cleaned recursively above. Only clean
+        // unique ancestor/direct grants that are not covered by that walk.
+        for p in grants.into_iter().filter(|p| !roots.contains(p)) {
             let _ = std::process::Command::new("icacls")
                 .arg(p)
                 .arg("/remove")
-                .arg(format!("*{}", self.sid))
+                .arg(format!("*{sid}"))
                 .arg("/C")
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
                 .status();
         }
-        self.profile.delete().map_err(|e| e.to_string())
+        profile.delete().map_err(|e| e.to_string())
     }
 }
 fn sanitize() {
@@ -220,15 +230,23 @@ fn sanitize() {
         }
     }
 }
+fn push_unique(paths: &mut Vec<PathBuf>, path: PathBuf) {
+    if !paths.contains(&path) {
+        paths.push(path);
+    }
+}
 fn ancestors(p: &Path, sid: &rappct::AppContainerSid, g: &mut Vec<PathBuf>) -> Result<(), String> {
     if let Some(d) = p.parent() {
-        grant_to_package(
-            ResourcePath::DirectoryCustom(d.to_path_buf(), AceInheritance::NONE),
-            sid,
-            RO,
-        )
-        .map_err(|e| e.to_string())?;
-        g.push(d.to_path_buf());
+        let d = d.to_path_buf();
+        if !g.contains(&d) {
+            grant_to_package(
+                ResourcePath::DirectoryCustom(d.clone(), AceInheritance::NONE),
+                sid,
+                RO,
+            )
+            .map_err(|e| e.to_string())?;
+            push_unique(g, d);
+        }
     }
     Ok(())
 }
@@ -345,6 +363,11 @@ fn opening(r: &Value, tx: mpsc::Sender<(String, u64, Value)>) -> Result<Scope, S
         .iter()
         .map(|x| cp(x, "inputDirs"))
         .collect::<Result<Vec<_>, _>>()?;
+    let mut unique_ins = Vec::new();
+    for input in ins {
+        push_unique(&mut unique_ins, input);
+    }
+    let ins = unique_ins;
     if ins.len() > 128
         || overlap(&rt, &out)
         || overlap(&rt, &tmp)
@@ -373,8 +396,10 @@ fn opening(r: &Value, tx: mpsc::Sender<(String, u64, Value)>) -> Result<Scope, S
     )
     .map_err(|e| e.to_string())?;
     let sid = prof.sid.as_string().to_string();
-    let mut roots = ins.clone();
-    roots.extend([rt.clone(), out.clone(), tmp.clone()]);
+    let mut roots = Vec::new();
+    for path in ins.iter().chain([&rt, &out, &tmp]) {
+        push_unique(&mut roots, path.clone());
+    }
     let mut g = Vec::new();
     let made = (|| {
         for x in ins.iter().chain([&rt, &out, &tmp]) {
@@ -382,11 +407,11 @@ fn opening(r: &Value, tx: mpsc::Sender<(String, u64, Value)>) -> Result<Scope, S
         }
         grant_to_package(ResourcePath::Directory(rt.clone()), &prof.sid, RO)
             .map_err(|e| e.to_string())?;
-        g.push(rt.clone());
+        push_unique(&mut g, rt.clone());
         for x in &ins {
             grant_to_package(ResourcePath::Directory(x.clone()), &prof.sid, RO)
                 .map_err(|e| e.to_string())?;
-            g.push(x.clone())
+            push_unique(&mut g, x.clone())
         }
         for x in [&out, &tmp] {
             grant_to_package(
@@ -395,7 +420,7 @@ fn opening(r: &Value, tx: mpsc::Sender<(String, u64, Value)>) -> Result<Scope, S
                 AccessMask::GENERIC_ALL,
             )
             .map_err(|e| e.to_string())?;
-            g.push(x.clone())
+            push_unique(&mut g, x.clone())
         }
         let caps = SecurityCapabilitiesBuilder::new(&prof.sid)
             .with_lpac_defaults()
@@ -567,6 +592,31 @@ fn worker_dead(s: &mut Scope, scope: &str, ix: usize, generation: u64, reason: &
     }
     failed
 }
+const MAX_SCOPES: usize = 4;
+const MAX_LIFECYCLE_JOBS: usize = 8;
+enum LifecycleJob {
+    Open {
+        request: Value,
+        scope: String,
+    },
+    Close {
+        request: Value,
+        scope: String,
+        state: Scope,
+    },
+}
+enum LifecycleDone {
+    Open {
+        request: Value,
+        scope: String,
+        result: Result<Scope, String>,
+    },
+    Close {
+        request: Value,
+        scope: String,
+        result: Result<(), String>,
+    },
+}
 fn main() {
     if rappct::supports_lpac().is_err() {
         for l in std::io::stdin().lock().lines() {
@@ -579,6 +629,35 @@ fn main() {
     sanitize();
     let (htx, hrx) = mpsc::channel();
     let (etx, erx) = mpsc::channel::<(String, u64, Value)>();
+    let (lifecycle_tx, lifecycle_rx) = mpsc::sync_channel::<LifecycleJob>(MAX_LIFECYCLE_JOBS);
+    let (done_tx, done_rx) = mpsc::channel::<LifecycleDone>();
+    let lifecycle_events = etx.clone();
+    let lifecycle_thread = thread::spawn(move || {
+        while let Ok(job) = lifecycle_rx.recv() {
+            match job {
+                LifecycleJob::Open { request, scope } => {
+                    let result = opening(&request, lifecycle_events.clone());
+                    let _ = done_tx.send(LifecycleDone::Open {
+                        request,
+                        scope,
+                        result,
+                    });
+                }
+                LifecycleJob::Close {
+                    request,
+                    scope,
+                    state,
+                } => {
+                    let result = state.close();
+                    let _ = done_tx.send(LifecycleDone::Close {
+                        request,
+                        scope,
+                        result,
+                    });
+                }
+            }
+        }
+    });
     thread::spawn(move || {
         let mut r = BufReader::new(std::io::stdin());
         let mut b = Vec::new();
@@ -600,7 +679,37 @@ fn main() {
         }
     });
     let mut scopes = HashMap::<String, Scope>::new();
+    let mut pending_scopes = HashSet::<String>::new();
     loop {
+        while let Ok(done) = done_rx.try_recv() {
+            match done {
+                LifecycleDone::Open {
+                    request,
+                    scope,
+                    result,
+                } => {
+                    pending_scopes.remove(&scope);
+                    match result {
+                        Ok(state) => {
+                            scopes.insert(scope, state);
+                            emit(&answer(&request, json!({})));
+                        }
+                        Err(e) => emit(&fail(&request, "isolation_startup", e)),
+                    }
+                }
+                LifecycleDone::Close {
+                    request,
+                    scope,
+                    result,
+                } => {
+                    pending_scopes.remove(&scope);
+                    match result {
+                        Ok(()) => emit(&answer(&request, json!({}))),
+                        Err(e) => emit(&fail(&request, "acl_cleanup", e)),
+                    }
+                }
+            }
+        }
         while let Ok((event_scope, generation, v)) = erx.try_recv() {
             let mut emit_event = true;
             let mut failures = Vec::new();
@@ -666,7 +775,7 @@ fn main() {
         };
         match r["op"].as_str() {
             Some("open") => {
-                if scopes.contains_key(&scope) {
+                if scopes.contains_key(&scope) || pending_scopes.contains(&scope) {
                     emit(&fail(
                         &r,
                         "scope_exists",
@@ -674,20 +783,61 @@ fn main() {
                     ));
                     continue;
                 }
-                match opening(&r, etx.clone()) {
-                    Ok(s) => {
-                        scopes.insert(scope, s);
-                        emit(&answer(&r, json!({})))
+                if scopes.len() + pending_scopes.len() >= MAX_SCOPES {
+                    emit(&fail(
+                        &r,
+                        "scope_capacity",
+                        "at most four scopes may be admitted",
+                    ));
+                    continue;
+                }
+                match lifecycle_tx.try_send(LifecycleJob::Open {
+                    request: r.clone(),
+                    scope: scope.clone(),
+                }) {
+                    Ok(()) => {
+                        pending_scopes.insert(scope);
                     }
-                    Err(e) => emit(&fail(&r, "isolation_startup", e)),
+                    Err(mpsc::TrySendError::Full(_)) => {
+                        emit(&fail(&r, "lifecycle_busy", "scope lifecycle queue is full"))
+                    }
+                    Err(mpsc::TrySendError::Disconnected(_)) => emit(&fail(
+                        &r,
+                        "lifecycle_unavailable",
+                        "scope lifecycle worker stopped",
+                    )),
                 }
             }
             Some("close") => {
                 if let Some(s) = scopes.remove(&scope) {
-                    match s.close() {
-                        Ok(()) => emit(&answer(&r, json!({}))),
-                        Err(e) => emit(&fail(&r, "acl_cleanup", e)),
+                    pending_scopes.insert(scope.clone());
+                    match lifecycle_tx.try_send(LifecycleJob::Close {
+                        request: r.clone(),
+                        scope: scope.clone(),
+                        state: s,
+                    }) {
+                        Ok(()) => {}
+                        Err(mpsc::TrySendError::Full(LifecycleJob::Close { state, .. })) => {
+                            pending_scopes.remove(&scope);
+                            scopes.insert(scope, state);
+                            emit(&fail(&r, "lifecycle_busy", "scope lifecycle queue is full"));
+                        }
+                        Err(mpsc::TrySendError::Disconnected(LifecycleJob::Close {
+                            state,
+                            ..
+                        })) => {
+                            pending_scopes.remove(&scope);
+                            scopes.insert(scope, state);
+                            emit(&fail(
+                                &r,
+                                "lifecycle_unavailable",
+                                "scope lifecycle worker stopped",
+                            ));
+                        }
+                        Err(_) => unreachable!(),
                     }
+                } else if pending_scopes.contains(&scope) {
+                    emit(&fail(&r, "scope_busy", "scope lifecycle is pending"))
                 } else {
                     emit(&answer(&r, json!({})))
                 }
@@ -816,6 +966,15 @@ fn main() {
             _ => emit(&fail(&r, "bad_op", "unsupported operation")),
         }
     }
+    drop(lifecycle_tx);
+    while let Ok(done) = done_rx.recv() {
+        if let LifecycleDone::Open { result, .. } = done {
+            if let Ok(scope) = result {
+                let _ = scope.close();
+            }
+        }
+    }
+    let _ = lifecycle_thread.join();
     for (_, s) in scopes {
         let _ = s.close();
     }
