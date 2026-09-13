@@ -9,6 +9,7 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
+import { isolateClip } from "./vision-project.mjs";
 import { cardsOnly, extractArgs, mediaLayersAt } from "./vision-compose.mjs";
 import { mediaDir } from "./vite-plugin-media";
 import { isInside, overLimit } from "./http-guard.mjs";
@@ -349,32 +350,6 @@ function resolveMediaUrls(project: any): { project: any; unresolved: string[] } 
 }
 
 /**
- * 只留下 clipId 那一段,其余全部拿掉。
- *
- * 「只看单张卡」的用处是把它和背景、和别的卡分开看:一张卡颜色不对,可能是它自己
- * 的问题,也可能是被上面压着的另一张卡盖住了。单独渲一遍就能分辨。
- * 保留它所在轨道的位置(叠放顺序不重要了,因为只剩一层),清空素材避免白等预热。
- */
-function isolateClip(project: any, clipId: string): { project: any; clip: any } | null {
-  for (const track of project.tracks || []) {
-    for (const clip of track.clips || []) {
-      if (clip.id !== clipId) continue;
-      const keepMedia = clip.mediaId ? (project.media || []).filter((m: any) => m.id === clip.mediaId) : [];
-      return {
-        clip,
-        project: {
-          ...project,
-          media: keepMedia,
-          tracks: [{ ...track, hidden: false, clips: [clip] }],
-        },
-      };
-    }
-  }
-  return null;
-}
-
-
-/**
  * 渲染进程该从哪个地址回连 dev server。
  *
  * 不能像导出那样写死 127.0.0.1:vite 默认只绑 localhost,而 Windows 上 localhost
@@ -577,7 +552,7 @@ export function bakeTarget(
    * 没有它的时候改了卡片源码,预烘的旧图照样命中,3D 视图里贴的一直是改之前的样子。
    */
   const key = createHash("sha1")
-    .update(JSON.stringify({ clip: plainClip, theme: project.themeId, at, renderBox, fit, bg: rgb ? rgb[1].toLowerCase() : null, code: cardCodeHash(iso.clip.cardId) }))
+    .update(JSON.stringify({ clip: plainClip, python: iso.clip.nodeId ? { definitions: project.cardDefinitions, nodes: project.cardNodes, media: project.media, tracks: project.tracks, style: project.style } : undefined, theme: project.themeId, at, renderBox, fit, bg: rgb ? rgb[1].toLowerCase() : null, code: cardCodeHash(iso.clip.cardId) }))
     .digest("hex").slice(0, 12);
   // 文件名带上 clipId 只是为了在素材目录里认得出来;真正保证唯一的是后面那段输入哈希
   const name = `bake-${clipId.replace(/[^\w.-]/g, "_")}-${key}.png`;
@@ -596,7 +571,7 @@ export function bakeTarget(
     width: renderBox.width,
     height: renderBox.height,
     duration: BAKE_LEAD + len + 1 / fps,
-    tracks: iso.project.tracks.map((tr: any) => ({ ...tr, clips: tr.clips.map(() => plainClip) })),
+    tracks: iso.project.tracks.map((tr: any) => ({ ...tr, clips: tr.clips.map((c: any) => c.id === clipId ? plainClip : c) })),
   };
   return { iso, plainClip, renderBox, target, at, askedT, rgb, key, name, url };
 }
@@ -1153,13 +1128,18 @@ async function renderFrames(root: string, origin: string, project: any, times: n
     const frames = await service.see_frames(normalized, times, { signal: o.signal, lane: "agent" });
     const result = new Map<number, FrameResult>();
     for (const [frame, value] of frames) {
+      if (value.incomplete) throw new Error(`画面尚未就绪：${(value.missing || []).join("、")}`);
       if (o.post && (o.post.shrink || o.post.bg || o.post.stats)) {
-        const file = path.join(entry.dir, "frames", String(frame).padStart(6, "0") + ".png");
-        const out = path.join(entry.dir, "post-" + process.pid + "-" + counter++ + ".png");
+        // The authoritative frame may come from MOV, a mixed control cache,
+        // or live rendering. None promises a duplicate in frames/<n>.png.
+        const stem = path.join(entry.dir, "post-" + process.pid + "-" + counter++);
+        const file = stem + "-input.png", out = stem + ".png";
         try {
+          await fsp.mkdir(entry.dir, { recursive: true });
+          await fsp.writeFile(file, value.buf);
           const info = await postFrame({ cards: file, layers: [], out, bg: o.post.bg ?? null, shrink: !!o.post.shrink, stats: !!o.post.stats });
           result.set(frame, { ...info, buf: await fsp.readFile(out) });
-        } finally { await fsp.rm(out, { force: true }); }
+        } finally { await Promise.all([fsp.rm(out, { force: true }), fsp.rm(file, { force: true })]); }
       } else result.set(frame, { buf: value.buf, width: project.width, height: project.height });
     }
     return result;
@@ -1564,7 +1544,7 @@ export function visionPlugin(): Plugin {
 
       async function saveCardSpec(project: any, clipId: string) {
         const visual = await visualLib();
-        const iso = isolateClip(resolveMediaUrls(project).project, clipId);
+        const iso = isolateClip(resolveMediaUrls(project).project, clipId, { preserveContext: true });
         if (!iso) return null;
         const times = visual.sampleTimes(iso.clip);
         const key = visual.specKey(iso.project, clipId);
@@ -1701,13 +1681,13 @@ export function visionPlugin(): Plugin {
               notes.push(`这些素材服务端取不到文件,画面里它们那一层是空的(不是卡片的问题):${resolved.unresolved.join("、")}。`);
             }
             if (clipId) {
-              const iso = isolateClip(target, clipId);
+              const iso = isolateClip(target, clipId, { preserveContext: true });
               if (!iso) return sendJson(res, 404, { ok: false, error: `时间轴上没有 id 为 ${clipId} 的片段。` });
               target = iso.project;
               // 没指定时间就取这一段的中点:起止两端常常正卡在进场 / 退场动画上,
               // 拿那一帧去判断「这张卡长什么样」会看到一个半透明的中间态。
               if (!Number.isFinite(at)) at = (iso.clip.start + iso.clip.end) / 2;
-              notes.push(`只渲染了片段 ${clipId},其余轨道和卡片都不在画面里。`);
+              notes.push(iso.context ? `渲染了片段 ${clipId}，并保留它需要的下方合成背景。` : `只显示片段 ${clipId}，其他片段仅保留为不可见的输入依赖。`);
             }
             if (!Number.isFinite(at)) at = 0;
 

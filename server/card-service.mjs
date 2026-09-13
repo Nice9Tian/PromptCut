@@ -80,7 +80,7 @@ export class CardService {
       try { stat = await fs.stat(this.sourcePath(node.media)); } catch { /* Evaluating that input reports the precise error. */ }
       node.media = { ...node.media, _frameSourceStamp: stat ? [stat.size, stat.mtimeMs, stat.ctimeMs] : 'missing' };
     }));
-    const revision = hash([graph, project.style, project.width, project.height, project.fps]);
+    const revision = hash([graph, project.style || {}, project.width, project.height, project.fps || 30]);
     if (!this.scopes.has(revision)) {
       const directory = path.join(this.dir, 'scopes', revision);
       const context = { revision, project: structuredClone(project), graph, nodes: new Map(graph.nodes.map(n => [n.id, n])),

@@ -106,6 +106,24 @@ class Card:
   assert.deepEqual(center(algorithmShot.get(3)),[255,100,0,255]);
   console.log('PASS Python input pixel materialization and filter');
 
+  // Exercise the exact see_frames HTTP path that failed after installation:
+  // optional legacy style omitted, plus dependencies on same/other tracks and
+  // an unrelated retained Python node. Hidden source clips must still exist.
+  const visionProject = structuredClone(algorithm);
+  delete visionProject.style;
+  visionProject.cardDefinitions.push(...transition.cardDefinitions);
+  visionProject.cardNodes.push(...transition.cardNodes);
+  visionProject.tracks[0].clips.unshift(visionProject.tracks[1].clips.shift());
+  const visionResponse = await fetch(origin+'/api/vision/snapshot', { method:'POST', headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({project:visionProject,clipId:'algorithm-clip',t:.3}),signal:AbortSignal.timeout(120000) });
+  const visionResult = await visionResponse.json();
+  assert.equal(visionResponse.status,200,JSON.stringify(visionResult));
+  assert.ok(visionResult.__image?.base64,'Actual see_frames route did not return an image');
+  const visionPng=PNG.sync.read(Buffer.from(visionResult.__image.base64,'base64'));
+  const offset=(Math.floor(visionPng.height/2)*visionPng.width+Math.floor(visionPng.width/2))*4;
+  assert.deepEqual([...visionPng.data.subarray(offset,offset+4)],[255,100,0,255]);
+  console.log('PASS real clip-scoped see_frames retains legacy project graph inputs');
+
   const cascade=apply(realtime,definition('cascade',`class Card:
     need_prerendering = False
     def __init__(self, style=None): pass

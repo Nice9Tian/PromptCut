@@ -1,10 +1,23 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { CardService } from '../card-service.mjs';
 
 function context(revision) {
   return { revision, input: 'input', output: 'output', temp: 'temp', opened: null, active: 0, lastUsed: 0 };
 }
+
+test('legacy projects without optional style or fps have a stable runtime scope', async () => {
+  const directory=await fs.mkdtemp(path.join(os.tmpdir(),'pc-card-legacy-scope-'));
+  try {
+    const service=new CardService({root:process.cwd(),dir:directory,runtime:{}});
+    const project={width:64,height:64,tracks:[],media:[]};
+    const a=await service.context(project),b=await service.context({...project,style:{},fps:30});
+    assert.equal(a.revision,b.revision);
+  } finally { await fs.rm(directory,{recursive:true,force:true}); }
+});
 
 test('CardService evicts only idle scope and waits while all scopes are leased', async () => {
   const opened = [], closed = [];
