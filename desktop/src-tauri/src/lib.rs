@@ -16,6 +16,7 @@ use tauri_plugin_shell::ShellExt;
 
 mod agent_webview;
 mod chrome_color;
+mod chrome_path;
 mod kill_on_close;
 mod proc_lock;
 mod skill_shell;
@@ -393,7 +394,7 @@ pub fn run() {
                 original_path,
             );
             envs.insert(path_key, new_path);
-            envs.insert("PUPPETEER_CACHE_DIR".into(), runtime_dir.join("chrome").to_string_lossy().into_owned());
+            envs.insert("PUPPETEER_CACHE_DIR".into(), chrome_path::cache_dir(&runtime_dir.join("chrome")));
             envs.insert("BROWSER".into(), "none".into());
             envs.insert("PROMPTCUT_EXPORT_DIR".into(), export_dir.to_string_lossy().into_owned());
             envs.insert("PROMPTCUT_PYTHON".into(), runtime_dir.join("python").join("python.exe").to_string_lossy().into_owned());
