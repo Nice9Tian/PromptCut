@@ -42,4 +42,5 @@ desktop/release/
 # 诊断报告收件箱的本机常量(tools/report-inbox-gui/):Worker 地址 + ADMIN_KEY。
 # ADMIN_KEY 能读所有人的报告,绝不能进仓库。要交接就发 inbox.local.example.json
 tools/report-inbox-gui/inbox.local.json
-/work/agy
+# 本地诊断、Agent 讨论、测试副本和验收产物
+/work/
