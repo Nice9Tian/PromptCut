@@ -105,3 +105,19 @@ also found post-processing assumed every frame existed in frames/<n>.png, while
 the unified pipeline can return it directly from MOV. These are being fixed
 before cycle 2; installed acceptance is not yet passing. Evidence is under
 work/installed-card-cycle-1. The original project SHA-256 is unchanged.
+
+## Cycle 2 preparation
+
+The exact clip-scoped vision route now preserves graph inputs and consumes the
+returned frame bytes regardless of cache tier. Legacy optional style/fps are
+normalized before hashing. The full development integration passed again, with
+a 24.4s legacy Chrome-to-Python capture; an isolated differential run took 15.7s.
+The export network gate now gives visual/source card jobs the runner's 120s
+budget while ordinary resources retain 30s and user preview retains its own
+10s watchdog. A controlled 35s HTTP response completed with the correct pixels.
+This fixes premature timeout classification; it is not a claim that arbitrary
+Python or a cold heavy project renders at real time.
+
+The real React lifecycle fixture proves GPU program reuse, cancellation of stale
+source work, and preservation of a pending frame ticket while old pixels remain
+on the mounted canvas. The unit suite passes 1,186 tests and tsc -b passes.

@@ -289,6 +289,7 @@ async function newSession(browser, url) {
     w.forEach((f) => f());
   };
   await client.send('Network.enable');
+  const cardRequests = new Set();
   client.on('Network.requestWillBeSent', (e) => {
     /*
      * <video>/<audio> 的媒体流不算。一段大视频挂在页面上,它的请求会一直开着边播边取,
@@ -297,12 +298,19 @@ async function newSession(browser, url) {
      * __pcFrameReady 逐层等 seek 到位,这里再等一遍既不需要也等不到。
      */
     if (e.type === 'Media') return;
+    // These are bounded render jobs, not ordinary asset downloads. LPAC cold
+    // start plus a nested Chrome source can exceed 30s on a busy machine; the
+    // card runner already enforces a 120s job limit. Interactive preview keeps
+    // its separate short watchdog and cancellation policy.
+    try {
+      if (/^\/api\/card-runtime\/(visual|source)$/.test(new URL(e.request.url).pathname)) cardRequests.add(e.requestId);
+    } catch { /* not an HTTP resource */ }
     inflight.set(e.requestId, `${e.type || '?'} ${String(e.request?.url || '').slice(0, 120)}`);
   });
   for (const ev of ['Network.loadingFinished', 'Network.loadingFailed', 'Network.requestServedFromCache']) {
-    client.on(ev, (e) => { inflight.delete(e.requestId); drained(); });
+    client.on(ev, (e) => { inflight.delete(e.requestId); cardRequests.delete(e.requestId); drained(); });
   }
-  const waitNet = (ms = 30000) => (inflight.size === 0 ? Promise.resolve() : new Promise((resolve, reject) => {
+  const waitNet = (ms = cardRequests.size ? 120000 : 30000) => (inflight.size === 0 ? Promise.resolve() : new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(
       `${inflight.size} 个网络请求 ${ms / 1000} 秒还没回来:页面可能挂着一直不结束的请求。`
       + `前几个:${[...inflight.values()].slice(0, 3).join(' | ')}`
