@@ -121,3 +121,31 @@ Python or a cold heavy project renders at real time.
 The real React lifecycle fixture proves GPU program reuse, cancellation of stale
 source work, and preservation of a pending frame ticket while old pixels remain
 on the mounted canvas. The unit suite passes 1,186 tests and tsc -b passes.
+
+## Cycle 2 installed result and cycle 3 preparation
+
+Cycle 2 silently installed commit a8aff01 (installer exit 0 and all nine
+runtime/source file hashes matched). The real Agent created and applied two
+cards, but no effect-after-edit see_frames call succeeded. Its later code
+workarounds did not fix the underlying runtime failures; playback measured
+zero presented frames. This cycle failed acceptance. Source, tool events,
+saved/reopened project, screenshots and original-file integrity evidence are
+under work/installed-card-cycle-2; the original SHA-256 remains unchanged.
+
+Two independent installed-environment causes were reproduced:
+
+- NumPy's native thread pools consumed the 512 MiB LPAC commit budget before
+  ordinary 1080p arrays could be allocated. The Rust runner now fixes numerical
+  thread counts to one. Actual LPAC evaluation with the bundled Python computed
+  three 1080p RGBA float32 arrays in 114 MiB private memory, with the job limit
+  unchanged and clean open/evaluate/close acknowledgments.
+- Chromium launched through a Windows verbatim executable path disabled ANGLE.
+  With the same installed binary and identical flags, ordinary paths created
+  WebGL2, while the verbatim path returned null. The shell now passes an ordinary
+  drive/UNC cache path to Puppeteer. A real installed-binary shader produced
+  RGBA [64,128,191,255]. LPAC authorization paths are unchanged.
+
+The acceptance harness now requires a successful frame inspection after the
+final card edit/application; a baseline frame taken before adding effects
+cannot satisfy the check. Cold sparse playback and complete-cache playback
+must be reported separately. Cycle 3 has not yet passed installed acceptance.

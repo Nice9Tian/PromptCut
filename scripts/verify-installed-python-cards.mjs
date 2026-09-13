@@ -69,7 +69,7 @@ function parseSse(text) {
   }
   return events;
 }
-const prompt = `Installed acceptance run ${randomUUID()}. The copied project is already open in the desktop UI. Create and apply two minimal Python card definitions: one transition using two sources, and one pixel/filter card using a source. Read card_authoring_guide first. Make both visibly change frames within the first ten seconds, then call see_frames on each active time range. Use the documented SDK symbols; do not assume Python has a global clamp function. If a render fails, edit the same definition to fix it, without adding duplicate instances. Use only actual project tools; finish with a concise terminal completion message.`;
+const prompt = `Installed acceptance run ${randomUUID()}. The copied project is already open in the desktop UI. Create and apply two minimal Python card definitions: one gradual GLSL transition using two sources, and one visibly colored GLSL filter using a source. Read card_authoring_guide first. Make both visibly change frames within the first ten seconds, then call see_frames on each active time range after your final source edit. Use the documented SDK symbols; do not assume Python has a global clamp function. If a render fails, edit the same definition to fix it, without adding duplicate instances or replacing the gradual transition with a hard cut. Work in this conversation without messaging or delegating to other conversations. Use only actual project tools; finish with a concise terminal completion message and report any remaining render failure honestly.`;
 const response = await fetch(`${origin}/api/ai/chat`, { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
   body: JSON.stringify({ provider: args.provider, prompt, conversationId: `installed_${Date.now()}` }), signal: AbortSignal.timeout(12 * 60_000) });
 assert.ok(response.ok, `/api/ai/chat failed: HTTP ${response.status}`);
@@ -98,6 +98,8 @@ assert.ok(names.some(name => /see.*frames/i.test(name)), `No real see_frames too
 assert.ok(successful.filter(call=>/create.*card|save.*card/i.test(call.name)).length>=2, 'Two card creations did not succeed');
 assert.ok(successful.filter(call=>/apply.*card/i.test(call.name)).length>=2, 'Two card applications did not succeed');
 assert.ok(successful.some(call=>/see.*frames/i.test(call.name)), 'Frame verification did not succeed');
+const lastCardChange=Math.max(...successful.filter(call=>/apply.*card|edit.*card/i.test(call.name)).map(call=>eventLog.indexOf(call)));
+assert.ok(successful.some(call=>/see.*frames/i.test(call.name)&&eventLog.indexOf(call)>lastCardChange),'No successful frame verification after the final card change');
 assert.equal(eventLog.some(event=>event.type==='error'),false,'Agent reported an error');
 assert.ok(terminal, 'SSE ended without a terminal completion event');
 
