@@ -176,17 +176,59 @@ function MediaTile({ m, onContextMenu }: { m: MediaAsset; onContextMenu: (e: Rea
   );
 }
 
-/** 总览里的缩略:图片 / 视频首帧 + 时长角标,纯展示 */
+/**
+ * 总览里的缩略:图片 / 视频首帧 + 时长角标。
+ * 视频:指针停在这一格上时静音从头循环播,移开就停下、回到首帧(只有悬停的那一格在播);
+ * 除此之外不接任何交互,点下去照样冒泡到组框上打开组。
+ * 格子被整块藏起来时(点开了组、切走分区、收起抽屉)不一定收得到 mouseleave,
+ * 所以播放中每次 timeupdate 顺手看一眼自己还有没有布局盒,没有就停。
+ */
 function MediaThumb({ m }: { m: MediaAsset }) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+
+  const stop = useCallback(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    v.pause();
+    try { v.currentTime = 0; } catch { /* 还没加载出元数据 */ }
+  }, []);
+
+  const onHover = useCallback(
+    (hot: boolean) => {
+      const v = videoRef.current;
+      if (!v) return;
+      if (!hot) {
+        stop();
+        return;
+      }
+      try { v.currentTime = 0; } catch { /* 还没加载出元数据 */ }
+      // 自动播放被浏览器拒了、或者还没播起来就移开了(play 被 pause 打断)都算了,首帧还在
+      v.play().catch(() => {});
+    },
+    [stop],
+  );
+
+  if (m.kind === "image") {
+    return <ThumbTile preview={<img src={m.url} alt="" draggable={false} />} />;
+  }
   return (
     <ThumbTile
-      badge={m.kind === "video" ? fmtDur(m.duration) : undefined}
+      badge={fmtDur(m.duration)}
+      onHover={onHover}
       preview={
-        m.kind === "image" ? (
-          <img src={m.url} alt="" draggable={false} />
-        ) : (
-          <video src={m.url} muted playsInline preload="metadata" draggable={false} />
-        )
+        <video
+          ref={videoRef}
+          src={m.url}
+          muted
+          loop
+          playsInline
+          preload="metadata"
+          draggable={false}
+          onTimeUpdate={(e) => {
+            const v = e.currentTarget;
+            if (!v.paused && v.getClientRects().length === 0) stop();
+          }}
+        />
       }
     />
   );

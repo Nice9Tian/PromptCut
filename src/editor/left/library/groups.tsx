@@ -3,7 +3,7 @@ import type { GroupLayout } from "./layout";
 import type { MediaAsset } from "../../../kernel/project";
 
 /**
- * 素材库 / 特效两个分区的「组定义」表。要挪组、改 layout、改名、换分类,只改这里。
+ * 素材库 / 动画 / 特效三个分区的「组定义」表。要挪组、改 layout、改名、换分类,只改这里。
  * 每个组的内容由对应的 *Group 钩子按搜索词算出来(GroupData),GroupBrowser 负责总览和详情。
  */
 
@@ -29,10 +29,15 @@ export interface GroupDef {
   hint?: string;
 }
 
+/** 素材库:导入进来的素材 */
 export const LIBRARY_GROUPS: readonly GroupDef[] = [
   { id: "videos", title: "视频", layout: "big_16_9", category: "视觉", empty: "import" },
   { id: "images", title: "图片", layout: "big_16_9", category: "视觉", empty: "import" },
   { id: "music", title: "音频", layout: "big_strip", category: "音频", empty: "import" },
+];
+
+/** 动画:各类卡片和部件,全是视觉类(GroupBrowser 据此不画分类胶囊行) */
+export const ANIMATION_GROUPS: readonly GroupDef[] = [
   {
     id: "user-cards",
     title: "定制卡片",
@@ -72,6 +77,7 @@ export const EFFECTS_GROUPS: readonly GroupDef[] = [
 ];
 
 export const LIBRARY_GROUP_IDS = LIBRARY_GROUPS.map((g) => g.id);
+export const ANIMATION_GROUP_IDS = ANIMATION_GROUPS.map((g) => g.id);
 export const EFFECTS_GROUP_IDS = EFFECTS_GROUPS.map((g) => g.id);
 
 /** 导入落到哪一类素材,就打开管这一类的组 */
@@ -87,7 +93,7 @@ export interface GroupItem {
 export interface GroupData {
   /** 当前搜索词下的全部项。详情里排的是它,组框上的「N 个项」数的也是它 */
   items: GroupItem[];
-  /** 总览组框里的缩略预览:纯展示、不可交互、不带自动化钩子。按组的 layout 取前几个 */
+  /** 总览组框里的缩略预览:纯展示、不带自动化钩子。按组的 layout 取前几个 */
   thumbs?: GroupItem[];
   /** 详情里放在项目上方 / 下方的附加内容(时长选择、已有转场列表、参考说明……) */
   detailTop?: ReactNode;

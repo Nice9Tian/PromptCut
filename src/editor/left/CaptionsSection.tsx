@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { importSrtFile } from "../io";
 import { IconImport } from "../../ui/icons";
 import { SearchBox } from "./SearchBox";
+import { SectionHead } from "./SectionHead";
 import { CaptionsTab } from "./CaptionsTab";
 
 /**
@@ -40,8 +41,7 @@ export function CaptionsSection({
 
   return (
     <div data-pc="captions" className="pc-left-section">
-      <div className="pc-left-head">
-        <div className="pc-section-title">字幕</div>
+      <SectionHead title="字幕">
         <button
           type="button"
           className="pc-btn-primary is-block pc-left-primary"
@@ -53,7 +53,7 @@ export function CaptionsSection({
           <span>导入 .srt / .vtt</span>
         </button>
         <SearchBox value={search} onChange={setSearch} placeholder="搜索字幕…" dataPc="caption-search" />
-      </div>
+      </SectionHead>
 
       <div className="pc-left-pane" style={{ display: "flex" }}>
         <CaptionsTab search={search} mediaId={mediaId} onPick={onPick} onGoImport={onGoImport} revealToken={revealToken} />

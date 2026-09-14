@@ -4,14 +4,17 @@ import type { GroupCategory, GroupData, GroupDef } from "./groups";
 /**
  * 打开一个组时顶部的胶囊行:`所有`(回总览)、这个组的分类(回总览并只看这一类)、
  * 组名胶囊(选中态,带 × 关闭)。
+ * 分区里只有一种分类时(「动画」)分类那颗和「所有」是一回事,`showCategory={false}` 不画它。
  */
 export function DetailChips({
   def,
+  showCategory = true,
   onAll,
   onCategory,
   onClose,
 }: {
   def: GroupDef;
+  showCategory?: boolean;
   onAll: () => void;
   onCategory: (cat: GroupCategory) => void;
   onClose: () => void;
@@ -21,15 +24,17 @@ export function DetailChips({
       <button type="button" className="pc-chip" data-pc-chip="all" onClick={onAll}>
         所有
       </button>
-      <button
-        type="button"
-        className="pc-chip"
-        data-pc-chip="category"
-        title={`回到总览,只看「${def.category}」类的组`}
-        onClick={() => onCategory(def.category)}
-      >
-        {def.category}
-      </button>
+      {showCategory && (
+        <button
+          type="button"
+          className="pc-chip"
+          data-pc-chip="category"
+          title={`回到总览,只看「${def.category}」类的组`}
+          onClick={() => onCategory(def.category)}
+        >
+          {def.category}
+        </button>
+      )}
       <span className="pc-chip is-on pc-lib-chip-group" data-pc-chip="group">
         <span className="pc-lib-chip-label">{def.title}</span>
         <button

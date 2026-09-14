@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Inspector } from "./Inspector";
 import { NodeGraphTab } from "../nodes/NodeGraphTab";
 import { readStored, writeStored } from "./stored";
+import { SectionHead } from "./SectionHead";
 
 type EditTab = "form" | "code" | "nodes";
 
@@ -27,8 +28,7 @@ export function EditSection() {
 
   return (
     <div data-pc="inspector" className="pc-left-section">
-      <div className="pc-left-head">
-        <div className="pc-section-title">编辑</div>
+      <SectionHead title="编辑">
         <div className="pc-lib-chips" role="tablist" aria-label="编辑分页">
           {EDIT_TABS.map((t) => (
             <button
@@ -44,7 +44,7 @@ export function EditSection() {
             </button>
           ))}
         </div>
-      </div>
+      </SectionHead>
 
       <div className="pc-left-pane" style={{ display: tab === "nodes" ? "none" : "flex" }}>
         <Inspector tab={tab === "code" ? "code" : "form"} />

@@ -44,54 +44,17 @@
   }
 }
 
-/* 多页容器:当前页占满卡片;别的页 display:none 但保持挂载(对话在跑) */
-.pc-agent-stack {
-  flex: 1 1 auto;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-}
-.pc-agent-stack > .ai-panel {
-  flex: 1 1 auto;
-  min-height: 0;
-  height: auto;
-}
-/* 这一条不能丢:没有它,不在前台的分页会一起摊出来 */
-.pc-agent-stack > .ai-panel[data-inactive="1"] {
-  display: none;
-}
-
-/* ── 右侧 rail:剧本 / 各助手分页 / 新开一页 ─────────────────────── */
-.pc-right-rail {
-  flex: 0 0 var(--ui-rail-w, 64px);
-  height: 100%;
-  min-height: 0;
-  box-sizing: border-box;
-}
 /*
- * 分页多了要能滚。容器拉满 rail 宽度(align-self: stretch)而不是缩到 56px 的项宽:
- * overflow 一开就会裁掉子项溢出的部分,选中项贴外侧的那条强调色竖条(right:-4px)
- * 正好落在这 4px 缝里,缩窄了竖条就被裁没了。
+ * 剧本页和各 AiPanel 不再堆在这张卡片里:它们各在一个页面节点里(dock/pageNodes),由宿主挪进挪出、
+ * 只显示这一侧选中的那一页 —— 节点样式和显隐见 dock/dock.css。
  */
-.pc-rr-tabs {
-  align-self: stretch;
-  flex: 0 1 auto;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-  overflow-y: auto;
-  scrollbar-width: none;
-}
-.pc-rr-tabs::-webkit-scrollbar {
-  display: none;
-}
+
+/* ── rail 上的 AI 类项:剧本 / 各助手分页(rail 本身左右共用,在 dock/RailBar.tsx + dock/dock.css) ── */
 .pc-rr-tab {
   position: relative;
   flex: 0 0 auto;
 }
-.pc-right-rail .pc-rail-item:focus-visible,
+.pc-dock-rail .pc-rail-item:focus-visible,
 .pc-rr-x:focus-visible {
   outline: none;
   box-shadow: var(--ui-focus-ring, 0 0 0 2px #00DBDB);
@@ -212,14 +175,26 @@
   min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 14px;
   color: var(--ui-fg, #F2F1F6);
 }
+/* 顶栏:高度、内边距、底边线和助手分页的 .ai-panel-header 一致,左边「收起面板」切页时不挪位置 */
 .pc-script-head {
+  flex: 0 0 auto;
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 8px;
+  min-height: 48px;
+  box-sizing: border-box;
+  padding: 6px 14px 6px 8px;
+  border-bottom: 1px solid var(--ui-border, #2A2932);
+}
+.pc-script-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
 }
 .pc-script-count {
   margin-left: auto;
@@ -299,7 +274,7 @@
   box-shadow: var(--ui-focus-ring, 0 0 0 2px #00DBDB);
 }
 
-/* ── 顶栏:标题 + 连接点,右边三个图标钮 ─────────────────────────── */
+/* ── 顶栏:左边「收起面板」+ 标题 + 连接点,右边三个图标钮 ─────────── */
 .ai-panel-header {
   flex: 0 0 auto;
   display: flex;
@@ -308,9 +283,13 @@
   gap: 8px;
   min-height: 48px;
   box-sizing: border-box;
-  padding: 6px 8px 6px 14px;
+  padding: 6px 8px;
   border-bottom: 1px solid var(--ui-border, #2A2932);
   min-width: 0;
+}
+/* 「收起面板」(CollapsePanelButton):助手分页和剧本页顶栏的最左边,标题再长也不许被挤窄 */
+.pc-collapse-btn {
+  flex: 0 0 auto;
 }
 .ai-panel-title {
   flex: 1 1 auto;
@@ -451,7 +430,8 @@
 /* ── 消息区 ─────────────────────────────────────────────────────── */
 .ai-messages {
   flex: 1 1 auto;
-  min-height: 0;
+  /* 输入框拖高、思考条和排队列表同时在时,输入框先缩,消息区至少留 80px(composerHeight.ts 的 MESSAGES_MIN_H) */
+  min-height: 80px;
   min-width: 0;
   overflow-y: auto;
   padding: 12px;
@@ -516,18 +496,28 @@
   font-variant-numeric: tabular-nums;
 }
 
+/*
+ * 气泡四边留一样的 10px;里面各块之间只靠 gap(8px)隔开,哪一块都不许自己带上下外边距 ——
+ * 以前只有一行「正在思考」的气泡上面 14px、下面 8px,单行内容看着不居中。
+ */
 .ai-message {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 8px;
   max-width: 85%;
   min-width: 0;
   box-sizing: border-box;
-  padding: 8px 12px;
+  padding: 10px;
   border-radius: var(--ui-radius-lg, 8px);
   font-size: 13px;
   line-height: 1.6;
   overflow-wrap: anywhere;
+}
+/* 兜底:直接子块的上下外边距一律清零。两个类名把特异性抬过各块自己的 margin 写法,不看样式表谁先加载 */
+.ai-message.assistant > *,
+.ai-message.user > * {
+  margin-top: 0;
+  margin-bottom: 0;
 }
 
 /* Agent 气泡:比消息区底色亮一档的面板色 */
@@ -617,16 +607,15 @@
   padding-left: 20px;
 }
 
+/* 和前后块的间距交给气泡的 gap,这几样自己不带外边距 */
 .ai-message-error {
   color: var(--ui-danger, #f87171);
   font-size: 12px;
-  margin-top: 4px;
 }
 
 /* 非正常收尾的说明:提示而不是报错,所以不用 danger 色 */
 .ai-message-outcome {
-  margin-top: 6px;
-  padding: 6px 8px;
+  padding: 8px;
   border-left: 2px solid var(--ui-border-strong, #3A3944);
   background: var(--ui-panel-2, #2C2B34);
   border-radius: 0 4px 4px 0;
@@ -636,14 +625,10 @@
 }
 
 /* ── 消息片段 ───────────────────────────────────────── */
+/* 详细模式里文字和工具交错出现,段与段之间的气口也是气泡的 gap,这里不再单独加上外边距 */
 .ai-message-attach {
   font-size: 11px;
   color: var(--ui-fg-muted, #A6A4B2);
-  margin-bottom: 4px;
-}
-/* 详细模式里文字和工具交错出现,段与段之间留点气口 */
-.ai-message.assistant .ai-message-text + .ai-message-text {
-  margin-top: 6px;
 }
 
 /* ── 模型回复里的 Markdown ───────────────────────────── */
@@ -659,8 +644,13 @@
 .ai-message-text h2 { font-size: 15px; }
 .ai-message-text h3 { font-size: 14px; }
 .ai-message-text h4 { font-size: 13px; }
+/* 首尾那一块不带外边距,气泡四边的留白才一样;列表项、独占一行的公式再往里一层也清掉 */
 .ai-message-text > :first-child { margin-top: 0; }
 .ai-message-text > :last-child { margin-bottom: 0; }
+.ai-message-text > :first-child > li:first-child,
+.ai-message-text > :first-child > .katex-display:first-child { margin-top: 0; }
+.ai-message-text > :last-child > li:last-child,
+.ai-message-text > :last-child > .katex-display:last-child { margin-bottom: 0; }
 
 .ai-message-text ol {
   margin: 8px 0;
@@ -740,6 +730,8 @@
  * 不设 overflow:hidden —— 「✦」「⋯」弹层从工具条往上弹,裁掉就看不见了。
  */
 .ai-composer {
+  /* 右上角拖柄(.ai-composer-grip)的定位参照;弹层仍以工具条为参照,不受影响 */
+  position: relative;
   flex: 0 0 calc(33.333% - 10px);
   min-height: 140px;
   min-width: 0;
@@ -748,11 +740,17 @@
   margin: 0 10px 10px;
   border: 1px solid var(--ui-border-strong, #3A3944);
   border-radius: var(--ui-radius-xl, 10px);
-  background: var(--ui-panel, #23222A);
+  /*
+   * 填 L3(--ui-panel-2)。以前是 L2,和四周卡片底色 L1 只差一档,深色皮肤里几乎看不出这是一块填了色的框;
+   * 浅色皮肤里 L2 是纯白、L3 是浅灰,L3 放在 L1 上也照样读得出「这里是输入框」。
+   * 框里的输入框、附件行、工具条都不铺底色,整块只有这一个颜色;
+   * 下拉、附件卡、按钮悬停改用 L4(--ui-float),在这层底上还分得出来。
+   */
+  background: var(--ui-panel-2, #2C2B34);
   transition: border-color 160ms ease, box-shadow 160ms ease;
 }
 
-/* 附件卡片在最上;多到一定程度自己滚,不把输入框挤没 */
+/* 附件卡片在最上;多到一定程度自己滚,不把输入框挤没。右边让出拖柄的位置 */
 .ai-attachments {
   flex: 0 0 auto;
   max-height: 40%;
@@ -760,7 +758,7 @@
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  padding: 10px 12px 0;
+  padding: 10px 26px 0 12px;
 }
 .ai-attachment-chip {
   display: inline-flex;
@@ -771,7 +769,7 @@
   padding: 2px 4px 2px 8px;
   border-radius: var(--ui-radius-sm, 4px);
   border: 1px solid var(--ui-border, #2A2932);
-  background: var(--ui-panel-2, #2C2B34);
+  background: var(--ui-float, #34333D);
   color: var(--ui-fg, #F2F1F6);
   font-size: 11px;
   overflow-wrap: anywhere;
@@ -815,7 +813,8 @@
   box-sizing: border-box;
   resize: none;
   overflow-y: auto;
-  padding: 12px 14px 6px;
+  /* 右边多让出 12px:第一行字和占位提示不钻到右上角的拖柄底下 */
+  padding: 12px 26px 6px 14px;
   border: 0;
   outline: none;
   background: transparent;
@@ -829,6 +828,37 @@
 }
 .ai-composer-input:disabled {
   opacity: 0.6;
+}
+/* 皮肤的滚动条 12px 宽、贴着输入框右边:滚动槽从拖柄下面开始,滑块顶端不会被拖柄盖住、点不到 */
+.ai-composer-input::-webkit-scrollbar-track {
+  margin-top: 20px;
+}
+
+/*
+ * 右上角的拖柄(Composer.tsx 的 ComposerGrip):14px 见方,离框的上边、右边各 6px,画的是一个「⌝」。
+ * 平时弱色,悬停和拖动时提亮;光标是上下双箭头。类名里不带 -btn,免得吃到皮肤给按钮加的悬停提亮 / 按下缩小。
+ */
+.ai-composer-grip {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 1;
+  width: 14px;
+  height: 14px;
+  display: grid;
+  place-items: center;
+  color: var(--ui-fg-faint, #6E6C7A);
+  cursor: ns-resize;
+  touch-action: none;
+  transition: color 120ms ease;
+}
+.ai-composer-grip svg {
+  display: block;
+  pointer-events: none;
+}
+.ai-composer-grip:hover,
+.ai-composer-grip.is-dragging {
+  color: var(--ui-fg, #F2F1F6);
 }
 /* 输入框本身没有描边,聚焦时整个圆角框换成强调色描边 + 一圈淡光,知道光标在这儿 */
 .ai-composer:focus-within {
@@ -870,10 +900,14 @@
   height: 28px;
   color: var(--ui-fg-muted, #A6A4B2);
 }
-.ai-composer-bar .ai-bar-btn:hover:not(:disabled),
-.ai-composer-bar .ai-bar-btn[aria-expanded="true"] {
+/*
+ * 悬停 / 弹层开着:L4 底。输入框本身已经是 L3,再用 L3 就看不出来。
+ * 前面多挂一层 .ai-composer:特异性压过 studio.css 里 .pc-icon-btn 的 L3 悬停,不看样式表加载顺序
+ */
+.ai-composer .ai-composer-bar .ai-bar-btn:hover:not(:disabled),
+.ai-composer .ai-composer-bar .ai-bar-btn[aria-expanded="true"] {
   color: var(--ui-fg, #F2F1F6);
-  background: var(--ui-panel-2, #2C2B34);
+  background: var(--ui-float, #34333D);
 }
 .ai-composer-bar .ai-bar-btn:disabled {
   opacity: 0.45;
@@ -904,7 +938,8 @@
   font: inherit;
   font-size: 12px;
   color: var(--ui-fg, #F2F1F6);
-  background: var(--ui-panel-2, #2C2B34);
+  /* L4:输入框底是 L3,下拉要比它再亮一档才看得出是个控件。实心底也保证下拉展开的选项列表不会退成白底 */
+  background: var(--ui-float, #34333D);
   border: 1px solid var(--ui-border, #2A2932);
   border-radius: var(--ui-radius-sm, 4px);
   text-overflow: ellipsis;
@@ -941,7 +976,8 @@
   filter: brightness(1.1);
 }
 .ai-composer-bar .ai-send-btn.is-stop {
-  background: var(--ui-panel-2, #2C2B34);
+  /* L4:放在 L3 的输入框底上还看得出是个按钮 */
+  background: var(--ui-float, #34333D);
   color: var(--ui-fg, #F2F1F6);
   box-shadow: inset 0 0 0 1px var(--ui-border-strong, #3A3944);
 }

@@ -1,5 +1,6 @@
 import { useTimelineContext } from "./TimelineContext";
 import { useStore } from "../../store/project";
+import { useDragPayload } from "../dnd";
 import { useScrub } from "./useScrub";
 import { xOfTime } from "./utils";
 
@@ -18,6 +19,9 @@ export function Playhead({ top = 0 }: { top?: number }) {
   const t = useStore((s) => s.t);
   const { pxPerSec } = useTimelineContext();
   const startScrub = useScrub();
+  // 从左栏拖卡片 / 素材(HTML5 拖放)经过时让开鼠标:片段层是独立层叠上下文(index.tsx),插入缝和轨道行整层都在播放头下面,
+  // dragover 落到这 11px 竖条上,插入缝会收到 dragleave 把落点预览清掉 —— 预览闪一下,这一条上松手也建不了新序列
+  const dropping = useDragPayload() !== null;
 
   return (
     <div
@@ -26,7 +30,7 @@ export function Playhead({ top = 0 }: { top?: number }) {
       // 播放头会画到贴住左边的序列栏上面去,红线和时间气泡直接穿过行头。
       // z-20 仍然高于轨道行(auto),也因为在 DOM 里排在标尺之后而盖得住标尺。
       className="absolute bottom-0 z-20 flex justify-center cursor-ew-resize w-[11px] touch-none"
-      style={{ left: `${xOfTime(t, pxPerSec)}px`, top, transform: "translateX(-50%)" }}
+      style={{ left: `${xOfTime(t, pxPerSec)}px`, top, transform: "translateX(-50%)", pointerEvents: dropping ? "none" : undefined }}
       onPointerDown={(e) => startScrub(e, { jumpToPointer: false })}
       title="拖动 = 移动播放头(按 Alt 不吸附)"
     >

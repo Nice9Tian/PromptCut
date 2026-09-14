@@ -334,9 +334,12 @@ export function AgentBubble(props: {
             // 步骤条一直显示。这些「**Clarifying article link and scope**」之类本来就是
             // 进度,不该被「显示思考」藏起来 —— 藏了用户就不知道它在干什么;
             // 而原样铺成文字又会把正文顶开。完整原文仍归那个开关管。
+            // 两样都没有就不出这一层:气泡靠 gap 排间距,空的 div 也会平白多占一道 gap
+            const steps = thinkingSteps(p.text);
+            if (!steps.length && !showThinking) return null;
             return (
-              <div key={pidx}>
-                <StepStrip steps={thinkingSteps(p.text)} live={live} />
+              <div key={pidx} className="ai-thinking-part">
+                <StepStrip steps={steps} live={live} />
                 {showThinking && (
                   <div className="ai-thinking">
                     <div className="ai-thinking-head">思考</div>
@@ -356,19 +359,20 @@ export function AgentBubble(props: {
         })
       )}
 
+      {/* 「正在做什么」和下面那行轮次小字包成一块:气泡里各块之间只靠 gap 隔开,这两行要贴得比 gap 近 */}
       {m.pending && (
-        <div className="ai-activity" role="status" aria-live="polite">
-          <span className="ai-spinner" aria-hidden />
-          <span className="ai-activity-text">{activityText(m, busyTool)}</span>
-          <span className="ai-activity-dots" aria-hidden>
-            <i />
-            <i />
-            <i />
-          </span>
+        <div className="ai-activity-block">
+          <div className="ai-activity" role="status" aria-live="polite">
+            <span className="ai-spinner" aria-hidden />
+            <span className="ai-activity-text">{activityText(m, busyTool)}</span>
+            <span className="ai-activity-dots" aria-hidden>
+              <i />
+              <i />
+              <i />
+            </span>
+          </div>
+          {progressMeta(m) && <div className="ai-activity-meta">{progressMeta(m)}</div>}
         </div>
-      )}
-      {m.pending && progressMeta(m) && (
-        <div className="ai-activity-meta">{progressMeta(m)}</div>
       )}
 
       {m.error && <div className="ai-message-error">{m.error}</div>}

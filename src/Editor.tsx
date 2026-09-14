@@ -12,6 +12,7 @@ import { nativeDemoClips } from "./cards/native";
 import { useSkin } from "./skins/useSkin";
 import { useLayoutMode } from "./editor/layoutMode";
 import { useRailCollapsed, isRailCollapsed, subscribeRails, RAIL_W } from "./editor/sideRails";
+import { useSideVisible } from "./editor/dock/railStore";
 import "./editor/shell.css";
 import { StatusBar } from "./editor/StatusBar";
 import { DependencyPrompt } from "./editor/DependencyPrompt";
@@ -74,6 +75,10 @@ export default function Editor() {
   const layoutMode = useLayoutMode();
   const leftCollapsed = useRailCollapsed("left");
   const rightCollapsed = useRailCollapsed("right");
+  // 两侧整列显不显示(侧边自由布局,editor/dock/):传统式两侧永远都在(拖空的 rail 也留着当落点);
+  // 对话式下 rail 只放 AI 类项(剧本 / Agent),哪一侧一个都没有,那一侧整列不显示
+  const showLeft = useSideVisible("left", layoutMode);
+  const showRight = useSideVisible("right", layoutMode);
   const gridRef = useRef<HTMLDivElement>(null);
   /** 这一行里能分的总宽度(拿不到就退回窗口宽) */
   const room = () => gridRef.current?.clientWidth ?? window.innerWidth;
@@ -82,31 +87,26 @@ export default function Editor() {
   const panelW = usePanelSize("pc.right.panelW", DEFAULT_PANEL_W, MIN_PANEL_W);
   const footer = usePanelSize("pc.timeline.h", DEFAULT_FOOTER_H, MIN_FOOTER_H);
 
+  // 宽度按侧记,不跟着项走:左侧用 drawerW、右侧用 panelW,不管那一侧此刻放的是分区还是 Agent
   const leftCol = RAIL_W + (leftCollapsed ? 0 : drawerW.value);
   const rightCol = RAIL_W + (rightCollapsed ? 0 : panelW.value);
 
   // 可用宽度变小(窗口拉窄、上次存的宽度放不下)时收缩面板,给预览留住 MIN_PREVIEW_W。
-  // 只收左抽屉宽 drawerW 和 AI 面板宽 panelW:rail 宽固定,也不会替用户自动收起面板;
-  // 已经收起的那一侧不占抽屉 / 面板宽,不计入总宽,也不参与收缩。
-  // chat 模式下没有左栏,右侧展开时才按需收 panelW,绝不动 drawerW;classic 模式按比例收两侧展开着的那几块。
+  // 只收左抽屉宽 drawerW 和右面板宽 panelW:rail 宽固定,也不会替用户自动收起面板;
+  // 已经收起、或者整列不显示的那一侧不占宽,不计入总宽,也不参与收缩;显示着的几块按比例收。
+  // (对话式下左侧通常整列不显示,于是只按需收 panelW,和以前一样)
   useEffect(() => {
     const el = gridRef.current;
     if (!el) return;
     const clamp = () => {
-      if (layoutMode === "chat") {
-        if (rightCollapsed) return;
-        const maxPanel = el.clientWidth - MIN_PREVIEW_W - HANDLE_W - RAIL_W;
-        if (maxPanel > 0 && panelW.value > maxPanel) {
-          panelW.set(Math.max(MIN_PANEL_W, maxPanel));
-        }
-        return;
-      }
-      const room = el.clientWidth - MIN_PREVIEW_W - HANDLE_W * 2 - RAIL_W * 2;
-      const total = (leftCollapsed ? 0 : drawerW.value) + (rightCollapsed ? 0 : panelW.value);
+      const leftOpen = showLeft && !leftCollapsed;
+      const rightOpen = showRight && !rightCollapsed;
+      const room = el.clientWidth - MIN_PREVIEW_W - (showLeft ? HANDLE_W + RAIL_W : 0) - (showRight ? HANDLE_W + RAIL_W : 0);
+      const total = (leftOpen ? drawerW.value : 0) + (rightOpen ? panelW.value : 0);
       if (room <= 0 || total <= room) return;
       const scale = room / total;
-      if (!leftCollapsed) drawerW.set(Math.max(MIN_DRAWER_W, Math.floor(drawerW.value * scale)));
-      if (!rightCollapsed) panelW.set(Math.max(MIN_PANEL_W, Math.floor(panelW.value * scale)));
+      if (leftOpen) drawerW.set(Math.max(MIN_DRAWER_W, Math.floor(drawerW.value * scale)));
+      if (rightOpen) panelW.set(Math.max(MIN_PANEL_W, Math.floor(panelW.value * scale)));
     };
     clamp();
     const ro = new ResizeObserver(clamp);
@@ -117,7 +117,7 @@ export default function Editor() {
       ro.disconnect();
       window.removeEventListener("resize", clamp);
     };
-  }, [layoutMode, drawerW.value, panelW.value, drawerW.set, panelW.set, leftCollapsed, rightCollapsed]);
+  }, [showLeft, showRight, drawerW.value, panelW.value, drawerW.set, panelW.set, leftCollapsed, rightCollapsed]);
 
   // 收起 / 展开两侧面板时,给网格挂 data-pc-rail-anim 一小会儿:列宽、抽屉 / 面板卡片走过渡(shell.css、left.css、chat.css)。
   // 必须在 sideRails 发通知的当下同步挂上,不能等 Editor 自己的 effect:同一次提交里别的布局效应会先读布局
@@ -177,8 +177,9 @@ export default function Editor() {
   // 不能写成 `isChat ? <整棵 A> : <整棵 B>`:那样 React 认为右栏换了位置,
   // 会把 RightPanel 连同里面的 AiPanel 卸载重建——正在跑的对话会当场断掉
   // (运行中的回复丢失、runId 丢了连「停止」都点不了)。
-  // 这里用 `{!isChat && …}` 逐个开关:JSX 的兄弟槽位是定长的,false 也占位,
+  // 这里用 `{showLeft && …}` / `{!isChat && …}` 逐个开关:JSX 的兄弟槽位是定长的,false 也占位,
   // 所以右栏在两种模式下始终是同一个槽位,组件实例得以保留。
+  // 所有页面(分区、剧本、各 AiPanel)都渲染在 RightPanel 里(dock/DockPages),左栏只是 rail + 宿主,卸载了也不连累页面。
   return (
     <div data-pc="editor" className="h-full min-h-0 flex flex-col" style={{ backgroundColor: "var(--ui-bg)", color: "var(--ui-fg)" }}>
       <MediaMigrationDialog />
@@ -190,9 +191,13 @@ export default function Editor() {
           className="flex-1 min-h-0 grid pc-editor-grid"
           style={
             {
-              gridTemplateColumns: isChat
-                ? `minmax(0, 1fr) ${HANDLE_W}px ${rightCol}px`
-                : `${leftCol}px ${HANDLE_W}px minmax(0, 1fr) ${HANDLE_W}px ${rightCol}px`,
+              // 列数跟着左侧整列显不显示走(5 列 / 3 列);右侧整列不显示时它那两列宽 0,但槽位还在
+              gridTemplateColumns: [
+                ...(showLeft ? [`${leftCol}px`, `${HANDLE_W}px`] : []),
+                "minmax(0, 1fr)",
+                `${showRight ? HANDLE_W : 0}px`,
+                `${showRight ? rightCol : 0}px`,
+              ].join(" "),
               // 抽屉 / AI 面板卡片按这两个宽度定死(left.css / chat.css):收起展开过渡时列宽在变、卡片宽不变,
               // 被列裁掉一截而不是逐帧挤窄 —— 瀑布流、消息区都不用跟着每帧重排
               "--pc-left-drawer-w": `${drawerW.value}px`,
@@ -200,7 +205,9 @@ export default function Editor() {
             } as React.CSSProperties
           }
         >
-          {!isChat && (
+          {/* 左栏按「左侧整列显不显示」开关(对话式下左侧有 Agent / 剧本时也会出现);槽位定长,右栏的槽位不受影响。
+              左栏卸载时它的宿主会先把页面节点收回停车位,页面本身挂在 RightPanel 里,不跟着卸载 */}
+          {showLeft && (
             <motion.aside
               initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.28, delay: 0, ease: [0.16, 1, 0.3, 1] }}
               className="min-h-0 overflow-hidden bg-transparent"
@@ -208,12 +215,12 @@ export default function Editor() {
               <LeftPanel />
             </motion.aside>
           )}
-          {!isChat && (
+          {showLeft && (
             <ResizeHandle
               axis="x"
               value={drawerW.value}
               min={MIN_DRAWER_W}
-              max={() => room() - RAIL_W - rightCol - MIN_PREVIEW_W - HANDLE_W * 2}
+              max={() => room() - RAIL_W - (showRight ? rightCol + HANDLE_W : 0) - MIN_PREVIEW_W - HANDLE_W}
               onChange={drawerW.set}
               onCommit={drawerW.commit}
               onReset={drawerW.reset}
@@ -229,24 +236,20 @@ export default function Editor() {
           </motion.main>
           {/*
             右栏拖杆两种布局都要有:对话式下右栏就是 AI 面板,没有拖杆就等于宽度写死。
-            可让出的空间两种模式不一样——传统式要扣掉左侧整列(leftCol,已含左 rail)和两根拖杆,对话式只有这一根。
-            这根拖杆只改 panelW,右 rail 的宽度 RAIL_W 不跟着变,所以两种模式都还要再扣一个 RAIL_W。
+            可让出的空间 = 总宽 − 右 rail − 预览最小宽 − 这根拖杆,左侧整列显示着的话再扣掉左侧整列(leftCol,已含左 rail)和左边那根拖杆。
+            这根拖杆只改 panelW,右 rail 的宽度 RAIL_W 不跟着变。右侧整列不显示时它不可拖。
           */}
           <ResizeHandle
             axis="x"
             value={panelW.value}
             min={MIN_PANEL_W}
-            max={() =>
-              isChat
-                ? room() - RAIL_W - MIN_PREVIEW_W - HANDLE_W
-                : room() - RAIL_W - leftCol - MIN_PREVIEW_W - HANDLE_W * 2
-            }
+            max={() => room() - RAIL_W - (showLeft ? leftCol + HANDLE_W : 0) - MIN_PREVIEW_W - HANDLE_W}
             invert
             onChange={panelW.set}
             onCommit={panelW.commit}
             onReset={panelW.reset}
             title="拖动调整右栏宽度,双击复位"
-            disabled={rightCollapsed}
+            disabled={rightCollapsed || !showRight}
           />
           <motion.aside
             initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.28, delay: 0.08, ease: [0.16, 1, 0.3, 1] }}

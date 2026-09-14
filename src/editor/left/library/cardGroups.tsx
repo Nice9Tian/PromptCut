@@ -15,7 +15,7 @@ type AnyCard = CardDef<any>;
 
 /**
  * 卡片库的唯一数据源:可见性三档(CardScopeBar)、归属表、按搜索词过滤、按来源分组。
- * 素材库分区只调一次,几个卡片组共用 —— 归属表只加载一次,筛选一改所有组一起变。
+ * 「动画」分区(AnimationsSection)只调一次,几个卡片组共用 —— 归属表只加载一次,筛选一改所有组一起变。
  */
 export interface CardLibrary {
   vis: CardVisibility;

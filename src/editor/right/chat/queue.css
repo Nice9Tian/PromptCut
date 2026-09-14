@@ -57,7 +57,8 @@
   gap: 4px;
   min-width: 0;
   min-height: 30px;
-  padding: 0 4px 0 6px;
+  /* 四边一样:22px 的行内按钮上下各留 4px,正好 30px 高 */
+  padding: 4px;
   box-sizing: border-box;
   border-radius: var(--ui-radius, 6px);
   background: var(--ui-panel, #23222A);
@@ -183,7 +184,7 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 8px 10px;
+  padding: 10px;
   border: 1px solid var(--ui-border-strong, #3A3944);
   border-radius: var(--ui-radius-lg, 8px);
   background: var(--ui-float, #34333D);
@@ -247,7 +248,7 @@
 @media (prefers-reduced-motion: no-preference) {
   @keyframes ai-queue-row-leave {
     from { height: 30px; min-height: 30px; opacity: 1; }
-    to { height: 0; min-height: 0; opacity: 0; }
+    to { height: 0; min-height: 0; padding-top: 0; padding-bottom: 0; opacity: 0; }
   }
   @keyframes ai-queue-head-leave {
     from { height: 28px; min-height: 28px; opacity: 1; }

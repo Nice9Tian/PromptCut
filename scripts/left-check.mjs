@@ -125,16 +125,21 @@ fs.mkdirSync('out/left', { recursive: true });
 
     const content = await page.content();
     const hasParts = await page.evaluate(() => {
-      return ['left', 'left-rail', 'left-drawer', 'library', 'effects', 'inspector', 'captions']
+      return ['left', 'left-rail', 'left-drawer', 'library', 'animations', 'effects', 'inspector', 'captions']
         .every((k) => !!document.querySelector(`[data-pc="${k}"]`)) &&
-        ['library', 'effects', 'edit', 'captions'].every((k) => !!document.querySelector(`[data-pc-rail="${k}"]`));
+        ['library', 'animations', 'effects', 'edit', 'captions'].every((k) => !!document.querySelector(`[data-pc-rail="${k}"]`));
     });
 
-    if (hasParts && content.includes('素材库') && content.includes('编辑')) {
-      logPass('01-initial: 找到了 rail 四项、抽屉和四个分区,以及文字「素材库」「编辑」');
+    if (hasParts && content.includes('素材库') && content.includes('动画') && content.includes('编辑')) {
+      logPass('01-initial: 找到了 rail 五项、抽屉和五个分区,以及文字「素材库」「动画」「编辑」');
     } else {
       logFail('01-initial: 没找到对应的文字或结构');
     }
+
+    // 五个分区头部各有一个「收起面板」钮(SectionHead)
+    const collapseBtns = await page.evaluate(() => document.querySelectorAll('[data-pc="left-collapse"]').length);
+    if (collapseBtns === 5) logPass('01-initial: 五个分区头部各有一个 left-collapse');
+    else logFail(`01-initial: left-collapse 数量不对 -> ${collapseBtns}`);
 
     // 左栏 = rail + 抽屉。点另一项 = 切分区(收着就顺手展开);点已选中项 = 收起 / 展开。
     // 所以先看当前状态再决定点不点,免得把要看的分区点收起来
@@ -155,24 +160,28 @@ fs.mkdirSync('out/left', { recursive: true });
         await wait(150);
       }
     };
-    // 素材库的卡片在分组里:先清搜索、回总览,再点开要的组
-    const openLibraryGroup = async (groupId) => {
-      await showSection('library');
-      const clear = await page.$('[data-pc="library"] .pc-left-search-clear');
+    // 分区里的东西在分组里:先清搜索、回总览,再点开要的组(groupId 给 null 就停在总览)。
+    // section 同时是 rail 键和分区根节点的 data-pc:素材(videos / images / music)在 library,卡片和部件在 animations
+    const openGroupIn = async (section, groupId) => {
+      await showSection(section);
+      const clear = await page.$(`[data-pc="${section}"] .pc-left-search-clear`);
       if (clear) {
         await clear.click();
         await wait(100);
       }
-      const opened = await page.evaluate(() =>
-        document.querySelector('[data-pc="library"] [data-pc-open-group]')?.getAttribute('data-pc-open-group') ?? null);
+      const opened = await page.evaluate((s) =>
+        document.querySelector(`[data-pc="${s}"] [data-pc-open-group]`)?.getAttribute('data-pc-open-group') ?? null, section);
       if (opened === groupId) return;
       if (opened) {
-        await page.click('[data-pc="library"] [data-pc-chip="all"]');
-      } else {
-        await page.click('[data-pc="library"] [data-pc-category="all"]');
+        await page.click(`[data-pc="${section}"] [data-pc-chip="all"]`);
+        await wait(150);
+      } else if (await page.$(`[data-pc="${section}"] [data-pc-category="all"]`)) {
+        // 「动画」只有视觉组,总览没有分类胶囊行
+        await page.click(`[data-pc="${section}"] [data-pc-category="all"]`);
+        await wait(150);
       }
-      await wait(150);
-      await page.click(`[data-pc="library"] [data-pc-group="${groupId}"]`);
+      if (!groupId) return;
+      await page.click(`[data-pc="${section}"] [data-pc-group="${groupId}"]`);
       await wait(250);
     };
     const showEdit = async (sub) => {
@@ -182,7 +191,14 @@ fs.mkdirSync('out/left', { recursive: true });
     };
 
     await runStep('02-hover', async () => {
-      await openLibraryGroup('magicui');
+      await openGroupIn('animations', 'magicui');
+      // 动画分区全是视觉组:组详情的胶囊行只有「所有 / 组名 ×」,不画分类那颗
+      const chipsOk = await page.evaluate(() =>
+        !!document.querySelector('[data-pc="animations"] [data-pc-chip="all"]') &&
+        !document.querySelector('[data-pc="animations"] [data-pc-chip="category"]') &&
+        !document.querySelector('[data-pc="animations"] [data-pc-category]'));
+      if (chipsOk) logPass('02-hover: 动画分区没有分类胶囊,详情里只剩「所有 / 组名」');
+      else logFail('02-hover: 动画分区的胶囊行不对');
       await page.hover('[data-pc-card="mu-number-ticker"]');
       await wait(900);
       await page.screenshot({ path: 'out/left/02-hover.png' });
@@ -204,7 +220,7 @@ fs.mkdirSync('out/left', { recursive: true });
     });
 
     await runStep('03-added', async () => {
-      await openLibraryGroup('native');
+      await openGroupIn('animations', 'native');
       await page.evaluate(() => window.__pcStoreLeft.actions.seek(24.5));
       const clipCountBefore = await page.evaluate(() => window.__pcStoreLeft.getState().project.tracks.flatMap(t=>t.clips).length);
 
@@ -379,6 +395,36 @@ fs.mkdirSync('out/left', { recursive: true });
       if (await shown('[data-pc="left-drawer"]')) logPass('07-sections: 再点一次展开抽屉');
       else logFail('07-sections: 再点一次没有展开抽屉');
 
+      // 分区头部右上角的「收起面板」钮(SectionHead)和点 rail 当前项走同一条收起路子
+      await page.click('[data-pc="inspector"] [data-pc="left-collapse"]');
+      await wait(300);
+      const btnCollapsedOk = !(await shown('[data-pc="left-drawer"]')) &&
+        (await page.evaluate(() => localStorage.getItem('pc.rail.left.collapsed'))) === '1';
+      if (btnCollapsedOk) logPass('07-sections: 头部「收起面板」钮收起了抽屉');
+      else logFail('07-sections: 头部「收起面板」钮没有收起抽屉');
+      await page.click('[data-pc-rail="edit"]');
+      await wait(150);
+      if (await shown('[data-pc="left-drawer"]')) logPass('07-sections: 收起后点 rail 当前项展开回来');
+      else logFail('07-sections: 收起后点 rail 当前项没有展开');
+
+      // 动画是独立分区:卡片搜索和卡片筛选在这里,素材库的搜索框藏着;打开过的卡片组记在 pc.left.group.animations
+      await showSection('animations');
+      const animOk = (await shown('[data-pc="animations-search"]')) && (await shown('[data-pc="scope-toggle"]')) &&
+        !(await shown('[data-pc="search"]'));
+      if (animOk) logPass('07-sections: 动画,素材库隐藏,卡片筛选钮在动画头部');
+      else logFail('07-sections: 动画 状态不对');
+      const groupKeys = await page.evaluate(() => [
+        localStorage.getItem('pc.left.section'),
+        localStorage.getItem('pc.left.group.animations'),
+        localStorage.getItem('pc.left.group.library'),
+      ]);
+      const cardGroupIds = ['user-cards', 'magicui', 'native', 'parts', 'lottie', 'particles'];
+      if (groupKeys[0] === 'animations' && cardGroupIds.includes(groupKeys[1]) && !cardGroupIds.includes(groupKeys[2])) {
+        logPass('07-sections: pc.left.section = animations,卡片组记在 pc.left.group.animations');
+      } else {
+        logFail('07-sections: 分组记忆不对 ' + JSON.stringify(groupKeys));
+      }
+
       await page.screenshot({ path: 'out/left/09-sections.png' });
     });
 
@@ -387,7 +433,19 @@ fs.mkdirSync('out/left', { recursive: true });
         window.__pcStoreLeft.actions.addMedia({ kind: "video", name: "测试片.mp4", url: "blob:fake", duration: 12.5 });
       });
       await wait(200);
-      await openLibraryGroup('videos');
+      // 总览组框里的视频缩略:悬停播放的那一格接指针(.is-hoverplay),<video> 本身不接,也不带 data-pc-media
+      await openGroupIn('library', null);
+      const thumbOk = await page.evaluate(() => {
+        const box = document.querySelector('[data-pc="library"] [data-pc-group="videos"]');
+        const tile = box?.querySelector('.pc-lib-card.is-hoverplay');
+        const video = tile?.querySelector('video');
+        return !!tile && !!video && !box.querySelector('[data-pc-media]') &&
+          getComputedStyle(tile).pointerEvents === 'auto' && getComputedStyle(video).pointerEvents === 'none' &&
+          video.getAttribute('preload') === 'metadata' && video.muted && video.loop;
+      });
+      if (thumbOk) logPass('08-media: 总览视频缩略能悬停播放、不带钩子');
+      else logFail('08-media: 总览视频缩略的悬停播放结构不对');
+      await openGroupIn('library', 'videos');
 
       const mediaItemText = await page.evaluate(() => {
         // 时长角标写成 m:ss

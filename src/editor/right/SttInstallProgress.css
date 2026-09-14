@@ -11,7 +11,7 @@
   min-width: 0;
   overflow-wrap: anywhere;
 }
-.stt-install.is-compact { padding: 8px 10px; }
+.stt-install.is-compact { padding: 10px; }
 .stt-install.done { border-color: var(--accent); }
 .stt-install.failed { border-color: var(--danger); }
 

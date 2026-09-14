@@ -1,4 +1,6 @@
 import { IconHistory, IconSettings } from "../../../ui/icons";
+import { useDockSide } from "../../dock/dockSide";
+import { CollapsePanelButton } from "./CollapsePanelButton";
 import "./chat.css";
 
 /** 「显示思考」按钮上的思考气泡。图标库里没有合适的,就地画一个,规格照 ui/icons:24 画幅、1.5 描边、currentColor */
@@ -23,17 +25,20 @@ export interface ChatHeaderProps {
 }
 
 /**
- * 助手分页的顶栏:左边标题 + 连接状态点,右边只有三个图标钮(思考 / 历史 / 设置)。
+ * 助手分页的顶栏:「收起面板」+ 标题 + 连接状态点,右边只有三个图标钮(思考 / 历史 / 设置)。
+ * 「收起面板」跟着这一页所在的一侧走(dock/):在右侧放最左边,在左侧放最右边(三个图标钮之后)。
  *
  * 原来挤在这里的一整排控件都搬走了:简洁 / 详细进了 AI 设置的「显示」小节,
  * 驱动方式和模型去了输入区底部工具条,分工模式、一键配特效、诊断、新对话收进工具条上的「✦」菜单,
- * 剧本变成右侧 rail 上的一页。顶栏只留每一轮都可能要点的东西。
+ * 剧本变成 rail 上的一页。顶栏只留每一轮都可能要点的东西。
  */
 export function ChatHeader(props: ChatHeaderProps) {
   const { title, mcpConnected, showThinking, onChangeShowThinking, onOpenHistory, onOpenSetup } = props;
+  const side = useDockSide("right");
   const conn = mcpConnected ? "已连接" : "未连接";
   return (
-    <div className="ai-panel-header">
+    <div className={`ai-panel-header${side === "left" ? " is-left" : ""}`}>
+      <CollapsePanelButton placement="start" />
       <div className="ai-panel-title">
         <span className="ai-chat-title" title={title}>{title}</span>
         {/* 连的是编辑台 MCP:断开时 AI 调不了任何编辑工具,只剩聊天 */}
@@ -72,6 +77,7 @@ export function ChatHeader(props: ChatHeaderProps) {
           <IconSettings size={16} />
         </button>
       </div>
+      <CollapsePanelButton placement="end" />
     </div>
   );
 }

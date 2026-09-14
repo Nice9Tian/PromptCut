@@ -13,8 +13,127 @@
   border-radius: 50%;
 }
 
+/* ── 时间轴的两条滚动条:右侧竖条(原生)和底部横条(Scrollbar.tsx)同一套样子 ──────────
+ * 可见部分都是 10px 粗、全圆角,同一个淡底槽、同一个滑块色;外面各留 2px,占位 14px。
+ * 竖条只在时间轴里改,全局皮肤那条 6px 的滚动条(skins.css)不动。
+ * 选择器前面挂 [data-pc="timeline"],特异性压过全局的 [data-skin] ::-webkit-scrollbar-*,
+ * 不用管两份 CSS 谁先加载。 */
+[data-pc="timeline"] {
+  --pc-tl-sb-track: color-mix(in oklab, var(--ui-fg, #e5e5e5) 6%, transparent);
+  --pc-tl-sb-thumb: var(--ui-scroll-thumb, #404040);
+  --pc-tl-sb-thumb-hover: var(--ui-scroll-thumb-hover, #737373);
+  /* 横条两端的把手帽:往前景色里混一点,深色皮肤里更亮、浅色皮肤里更深,总之比条身显眼 */
+  --pc-tl-sb-cap: color-mix(in oklab, var(--pc-tl-sb-thumb) 68%, var(--ui-fg, #e5e5e5));
+  --pc-tl-sb-cap-hover: color-mix(in oklab, var(--pc-tl-sb-thumb-hover) 72%, var(--ui-fg, #e5e5e5));
+  --pc-tl-sb-cap-active: color-mix(in oklab, var(--pc-tl-sb-thumb-hover) 42%, var(--ui-fg, #e5e5e5));
+  /* 把手上的竖纹往底色那边走,和把手帽反着来,两种明暗的皮肤里都看得见 */
+  --pc-tl-sb-grip: color-mix(in oklab, var(--ui-bg-2, #0a0a0a) 78%, transparent);
+}
+
 /* 自定义横向滚动条接管后隐藏原生横条，竖条保留。 */
-.pc-tl-scroll::-webkit-scrollbar:horizontal { height: 0; }
+[data-pc="timeline"] .pc-tl-scroll::-webkit-scrollbar:horizontal { height: 0; }
+[data-pc="timeline"] .pc-tl-scroll::-webkit-scrollbar:vertical { width: 14px; }
+/* 底槽和滑块都用 2px 透明边 + padding-box 裁掉,可见宽度正好 10px,和底部横条对齐 */
+[data-pc="timeline"] .pc-tl-scroll::-webkit-scrollbar-track {
+  background: var(--pc-tl-sb-track);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+  border-radius: 999px;
+}
+[data-pc="timeline"] .pc-tl-scroll::-webkit-scrollbar-thumb {
+  background: var(--pc-tl-sb-thumb);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+  border-radius: 999px;
+}
+[data-pc="timeline"] .pc-tl-scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--pc-tl-sb-thumb-hover);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+/* 底部横条:一行 14px 高 = 上 2 + 条身 10 + 下 2。
+ * 右边的 padding 由 Scrollbar.tsx 按竖条实际占的宽度写进来,底槽就停在竖条那一格的左边,
+ * 右下角空出一个 14×14 的角,和原生滚动条的拐角一样;没有竖条时底槽一直伸到右边。 */
+.pc-tl-hbar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  height: 14px;
+  background: var(--ui-bg-2, #0a0a0a);
+}
+.pc-tl-hbar-track {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  height: 10px;
+  margin: 0 2px;
+  border-radius: 999px;
+  background: var(--pc-tl-sb-track);
+  cursor: pointer;
+}
+.pc-tl-hbar-thumb {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  display: flex;
+  border-radius: 999px;
+  background: var(--pc-tl-sb-thumb);
+  cursor: grab;
+  transition: background-color 0.12s;
+}
+.pc-tl-hbar-thumb:hover,
+.pc-tl-hbar-thumb[data-drag] {
+  background: var(--pc-tl-sb-thumb-hover);
+}
+/* 中间一截:按住平移 */
+.pc-tl-hbar-pan {
+  flex: 1;
+  min-width: 0;
+  cursor: grab;
+}
+.pc-tl-hbar-thumb[data-drag="pan"],
+.pc-tl-hbar-thumb[data-drag="pan"] .pc-tl-hbar-pan {
+  cursor: grabbing;
+}
+/* 两端把手帽:12px 宽,常驻显示,颜色比条身亮一档,中间两道 1×6 的竖纹 */
+.pc-tl-hbar-grip {
+  position: relative;
+  flex: none;
+  width: 12px;
+  background: var(--pc-tl-sb-cap);
+  color: var(--pc-tl-sb-grip);
+  cursor: ew-resize;
+  transition: background-color 0.12s;
+}
+.pc-tl-hbar-grip.is-left {
+  border-radius: 999px 0 0 999px;
+}
+.pc-tl-hbar-grip.is-right {
+  border-radius: 0 999px 999px 0;
+}
+.pc-tl-hbar-grip::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  left: 50%;
+  width: 1px;
+  margin-left: -2px;
+  background: currentColor;
+  box-shadow: 3px 0 0 currentColor;
+  pointer-events: none;
+}
+.pc-tl-hbar-thumb:hover .pc-tl-hbar-grip,
+.pc-tl-hbar-thumb[data-drag] .pc-tl-hbar-grip {
+  background: var(--pc-tl-sb-cap-hover);
+}
+/* 指着的那个把手、正在拖的那个把手再亮一档 */
+.pc-tl-hbar-thumb .pc-tl-hbar-grip:hover,
+.pc-tl-hbar-thumb[data-drag="left"] .pc-tl-hbar-grip.is-left,
+.pc-tl-hbar-thumb[data-drag="right"] .pc-tl-hbar-grip.is-right {
+  background: var(--pc-tl-sb-cap-active);
+}
 
 /* One continuous edge, shared with the footer. The resize hit target stays
  * six pixels wide but must not draw a second line inside the header column. */
@@ -343,6 +462,20 @@
 }
 .pc-statusbar-dot.is-dirty {
   background: var(--ui-warn);
+}
+
+/* 时间轴右键菜单:portal 在 body 上(见 ContextMenu.tsx),不在 [data-pc="timeline"] 里,颜色直接取皮肤变量。
+   z 要高过编辑台里所有面板,和左栏右键菜单(z-[900])同一档。 */
+.pc-tl-ctxmenu {
+  z-index: 900;
+  background: var(--ui-float, #262626);
+  border: 1px solid var(--ui-border-strong, #404040);
+  border-radius: var(--ui-radius-lg, 8px);
+  box-shadow: var(--ui-shadow, 0 12px 32px rgba(0, 0, 0, 0.45));
+  color: var(--ui-fg, #e5e5e5);
+}
+.pc-tl-ctxmenu-item:hover {
+  background: var(--ui-panel-2, #404040);
 }
 
 /* ── 镜头切换标记 ─────────────────────────────────────────────

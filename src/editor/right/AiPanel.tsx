@@ -18,6 +18,7 @@ import { isTeamMode, setTeamMode, subscribeTeamMode } from "../../ai/teamMode";
 import { ChatHistoryDrawer } from "./ChatHistoryDrawer";
 import { useViewPrefs, setShowThinking } from "./chat/viewPrefs";
 import { ChatHeader } from "./chat/ChatHeader";
+import { CollapsePanelButton } from "./chat/CollapsePanelButton";
 import { MessageList } from "./chat/MessageList";
 import { ThinkingStrip } from "./chat/ThinkingStrip";
 import { QueueList } from "./chat/QueueList";
@@ -354,8 +355,10 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
     return (
       <aside className="panel panel-right ai-panel" data-inactive={active ? undefined : "1"} aria-hidden={active ? undefined : true}>
         <div className="ai-panel-header">
+          <CollapsePanelButton placement="start" />
           <div className="ai-panel-title">AI 助手</div>
           <button className="ai-gear-btn" title="AI 设置" aria-label="AI 设置" onClick={openSetup}><span aria-hidden="true">⚙</span><span>AI 设置</span></button>
+          <CollapsePanelButton placement="end" />
         </div>
         <div className="ai-empty-state">
           没找到 Claude Code / agy / Codex,装好任意一个后重启本地服务

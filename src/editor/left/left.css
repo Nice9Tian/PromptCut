@@ -1,5 +1,5 @@
 /*
- * 左栏(src/editor/left):竖向 rail + 抽屉卡片 + 四个分区(素材库 / 特效 / 编辑 / 字幕)。
+ * 左栏(src/editor/left):竖向 rail + 抽屉卡片 + 五个分区(素材库 / 动画 / 特效 / 编辑 / 字幕)。
  *
  * 共享类 .pc-rail* / .pc-card-surface / .pc-chip* / .pc-icon-btn / .pc-btn-primary / .pc-section-title
  * 在 skins/studio.css,这里不重写,只写左栏自己的 .pc-left-*(外壳、表单、通用小件)和 .pc-lib-*(分组浏览)。
@@ -79,6 +79,25 @@
   gap: 10px;
   padding: 14px 12px 10px;
 }
+/* 标题行(SectionHead):左边分区名,右上角「收起面板」。
+ * 按钮用负外边距吃掉比标题高出来的那截,标题行还是原来的高度、图标贴齐右边内容线 */
+.pc-left-titlerow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+.pc-left-titlerow .pc-left-collapse {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  margin: -4px -6px -4px 0;
+  color: var(--ui-fg-muted, #A6A4B2);
+}
+.pc-left-titlerow .pc-left-collapse:hover {
+  color: var(--ui-fg, #F2F1F6);
+}
 .pc-left-primary {
   gap: 6px;
 }
@@ -141,8 +160,8 @@
   color: var(--ui-fg, #F2F1F6);
 }
 /* 描边已经画在外面的 label 上,里面的输入框别再叠一圈焦点框 */
-[data-pc="left"] .pc-left-search input:focus,
-[data-pc="left"] .pc-left-search input:focus-visible {
+[data-pc-dock-kind="section"] .pc-left-search input:focus,
+[data-pc-dock-kind="section"] .pc-left-search input:focus-visible {
   outline: none;
   border-color: transparent;
 }
@@ -513,6 +532,14 @@
   inset: 0;
   width: 100%;
   height: 100%;
+}
+/* 视频缩略悬停播放(ThumbTile onHover):只有这一格把指针接回来,好知道悬停在哪一格;
+ * 点击照样冒泡到组框打开组。<video> 本身不接,右键不会弹浏览器自带的视频菜单 */
+.pc-lib-thumbs .pc-lib-card.is-hoverplay {
+  pointer-events: auto;
+}
+.pc-lib-card.is-hoverplay video {
+  pointer-events: none;
 }
 
 /* ── 详情:计数 + 附加块 + 瀑布流 ───────────────────────────────── */
@@ -1198,12 +1225,12 @@
 .pc-left-select:hover {
   border-color: var(--ui-border-strong, #3A3944);
 }
-[data-pc="left"] .pc-left-input:focus,
-[data-pc="left"] .pc-left-select:focus {
+[data-pc-dock-kind="section"] .pc-left-input:focus,
+[data-pc-dock-kind="section"] .pc-left-select:focus {
   border-color: var(--ui-accent, #00DBDB);
 }
-[data-pc="left"] .pc-left-input.is-error,
-[data-pc="left"] .pc-left-input.is-error:focus {
+[data-pc-dock-kind="section"] .pc-left-input.is-error,
+[data-pc-dock-kind="section"] .pc-left-input.is-error:focus {
   border-color: var(--ui-danger, #ef4444);
 }
 .pc-left-input::placeholder {
@@ -1243,12 +1270,12 @@
   font-size: 11px;
   line-height: 1.6;
 }
-[data-pc="left"] .pc-left-code:focus {
+[data-pc-dock-kind="section"] .pc-left-code:focus {
   border-color: var(--ui-accent, #00DBDB);
 }
 /* JSON 不合法:红框(scripts/left-check.mjs 按边框颜色断言) */
-[data-pc="left"] .pc-left-code.is-error,
-[data-pc="left"] .pc-left-code.is-error:focus {
+[data-pc-dock-kind="section"] .pc-left-code.is-error,
+[data-pc-dock-kind="section"] .pc-left-code.is-error:focus {
   border-color: var(--ui-danger, #ef4444);
 }
 

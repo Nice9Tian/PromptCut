@@ -1,10 +1,19 @@
-import type { KeyboardEvent, RefObject } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
 import { ModelBar } from "../ModelBar";
 import { IconPlus } from "../../../ui/icons";
 import type { AiProvider, ChatAttachment, ProviderInfo, PublicAiConfig } from "../../../ai/types";
 import type { Role } from "../../../ai/roles";
 import { attachIcon } from "./attachIcon";
 import { usePopover } from "./usePopover";
+import {
+  COMPOSER_MAX_RATIO,
+  COMPOSER_MIN_H,
+  MESSAGES_MIN_H,
+  persistComposerHeight,
+  resetComposerHeight,
+  setComposerHeight,
+  useComposerHeight,
+} from "./composerHeight";
 import "./chat.css";
 
 /** 「✦」菜单里的几样:不常点、但一点就改变这一轮怎么跑的东西,原来挤在顶栏上 */
@@ -129,6 +138,99 @@ function ComposerMenu(props: ComposerMenuProps & { streaming: boolean }) {
 }
 
 /**
+ * 输入区右上角的拖柄(⌝):竖着拖改输入区高度,往上拖变高;双击回到默认的三分之一。
+ *
+ * 高度记在 composerHeight 的模块级 store 里,所有分页一起变。上限是面板高度的 70%,
+ * 在按下那一刻量面板 —— 拖动过程中面板本身不会变高变矮,不用每帧再量。
+ * 拖动期间给 <body> 打 data-pc-resizing,和 ResizeHandle 一样:预览 iframe 这会儿不吃鼠标事件。
+ */
+function ComposerGrip({ boxRef }: { boxRef: RefObject<HTMLDivElement | null> }) {
+  const [dragging, setDragging] = useState(false);
+  /** 正在拖时的收尾。分页在拖动中途被关掉(组件卸载)也要执行,否则 <body> 上的拖动状态一直留着 */
+  const endDrag = useRef<(() => void) | null>(null);
+  useEffect(() => () => endDrag.current?.(), []);
+
+  const onPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const box = boxRef.current;
+    if (e.button !== 0 || !box) return;
+    e.preventDefault();
+    const grip = e.currentTarget;
+    const panel = box.closest<HTMLElement>(".ai-panel");
+    const panelH = panel?.clientHeight ?? window.innerHeight;
+    // 同一列里别的块(顶栏、思考条、排队列表)照实扣掉,消息区至少留 MESSAGES_MIN_H;再用比例夹一道
+    let others = 0;
+    for (const el of Array.from(box.parentElement?.children ?? [])) {
+      if (el !== box && !el.classList.contains("ai-messages")) others += (el as HTMLElement).offsetHeight;
+    }
+    const maxH = Math.max(COMPOSER_MIN_H, Math.min(Math.floor(panelH * COMPOSER_MAX_RATIO), panelH - others - MESSAGES_MIN_H - 10));
+    const startY = e.clientY;
+    const startH = box.getBoundingClientRect().height;
+    const pointerId = e.pointerId;
+    /** 真的拖动过才落盘:只点一下(双击复位的前两下也是)不能把默认的三分之一记成一个固定像素值 */
+    let moved = false;
+
+    try {
+      grip.setPointerCapture(pointerId);
+    } catch {
+      // 指针已经不在了(合成事件等),没有捕获也能拖
+    }
+    setDragging(true);
+    document.body.dataset.pcResizing = "y";
+    document.body.style.cursor = "ns-resize";
+    document.body.style.userSelect = "none";
+
+    const onMove = (ev: PointerEvent) => {
+      // 往上拖(clientY 变小)是变高
+      const dy = startY - ev.clientY;
+      if (!moved && dy === 0) return;
+      moved = true;
+      setComposerHeight(Math.min(maxH, Math.max(COMPOSER_MIN_H, startH + dy)));
+    };
+    const onUp = () => {
+      if (endDrag.current !== onUp) return;
+      endDrag.current = null;
+      grip.removeEventListener("pointermove", onMove);
+      grip.removeEventListener("pointerup", onUp);
+      grip.removeEventListener("pointercancel", onUp);
+      grip.removeEventListener("lostpointercapture", onUp);
+      try {
+        grip.releasePointerCapture(pointerId);
+      } catch {
+        // 已经放开了
+      }
+      setDragging(false);
+      delete document.body.dataset.pcResizing;
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      if (moved) persistComposerHeight();
+    };
+    endDrag.current = onUp;
+    grip.addEventListener("pointermove", onMove);
+    grip.addEventListener("pointerup", onUp);
+    grip.addEventListener("pointercancel", onUp);
+    grip.addEventListener("lostpointercapture", onUp);
+  };
+
+  return (
+    <div
+      className={`ai-composer-grip${dragging ? " is-dragging" : ""}`}
+      data-pc="ai-composer-resize"
+      role="separator"
+      aria-orientation="horizontal"
+      aria-label="调整输入框高度"
+      title="拖动调整输入框高度,双击复位"
+      onPointerDown={onPointerDown}
+      onDoubleClick={() => resetComposerHeight()}
+    >
+      {/* 一个转了 90° 的 L:上沿一横、右沿一竖,落在输入框的右上角 */}
+      <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <path d="M3.5 3.5h7v7" />
+      </svg>
+    </div>
+  );
+}
+
+/**
  * 输入区,占面板高度的 1/3:附件卡片在最上,输入框填满中间(不自动增高,超出在里面滚),
  * 底部一条 36px 工具条 —— 左边 附件「+」、「✦」菜单、驱动方式 + 模型、「⋯」运行选项,右边发送 / 停止。
  *
@@ -167,8 +269,18 @@ export function Composer(props: ComposerProps) {
     }
   };
 
+  /** 用户拖过的高度(所有分页共用);没拖过是 null,照 chat.css 占面板三分之一 */
+  const composerH = useComposerHeight();
+  const boxRef = useRef<HTMLDivElement>(null);
+  // 拖过就换成这个高度,但允许缩(最矮到 CSS 的 min-height):面板后来变矮、思考条和排队列表又占了地方时,
+  // 输入框先让出来,消息区保住 min-height。再用 70% 夹一道
+  const sizeStyle = composerH !== null
+    ? { flex: `0 1 ${composerH}px`, maxHeight: `${Math.round(COMPOSER_MAX_RATIO * 100)}%` }
+    : undefined;
+
   return (
-    <div className={`ai-composer${streaming ? " is-streaming" : ""}`} data-pc="ai-composer">
+    <div ref={boxRef} className={`ai-composer${streaming ? " is-streaming" : ""}`} data-pc="ai-composer" style={sizeStyle}>
+      <ComposerGrip boxRef={boxRef} />
       {attachments.length > 0 && (
         <div className="ai-attachments">
           {attachments.map((a, idx) => (

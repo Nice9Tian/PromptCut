@@ -7,7 +7,7 @@
   background: var(--ui-bg-2);
   border: 1px dashed var(--hairline);
   border-radius: 3px;
-  padding: 8px 12px;
+  padding: 10px;
   color: var(--ink-faint);
   font-size: 12px;
   line-height: 1.7;
@@ -35,7 +35,6 @@
   font-size: 11px;
   color: var(--ink-muted);
   cursor: pointer;
-  margin-top: 4px;
   max-width: 100%;
   min-width: 0;
   overflow-wrap: anywhere;
@@ -64,15 +63,20 @@
 .ai-tool-block {
   display: flex;
   flex-direction: column;
+  gap: 4px;
   min-width: 0;
 }
 .ai-tool-detail {
-  margin-top: 4px;
   padding-left: 8px;
   border-left: 2px solid var(--hairline);
   display: flex;
   flex-direction: column;
   gap: 2px;
+}
+/* 末尾那一块(结果 / 文件 / 原始数据里最后一段)的下外边距清掉:它可能正好是气泡里最后一样东西 */
+.ai-tool-detail > :last-child,
+.ai-tool-raw > :last-child {
+  margin-bottom: 0;
 }
 .ai-tool-label {
   font-size: 10px;
@@ -137,20 +141,31 @@
 /* ── 简洁模式:做过的操作折成一行 ───────────────────────── */
 
 /* ── 执行中动画 ─────────────────────────────────────── */
+/* 「正在做什么」+ 轮次小字这一块:两行之间 2px;和气泡里别的块之间仍是气泡的 gap */
+.ai-activity-block {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+/*
+ * 单行居中:行高取整数 17px,11px 的转圈图标上下各 3px、3px 的跳点上下各 7px,都落在整像素上,
+ * 和文字行盒的中线对齐。不带外边距,只有这一行的气泡四边留白才一样。
+ */
 .ai-activity {
   display: flex;
   align-items: center;
   gap: 6px;
-  margin-top: 6px;
   font-size: 11px;
+  line-height: 17px;
   color: var(--ink-muted);
 }
 .ai-activity-text {
   overflow-wrap: anywhere;
 }
-/* 轮次和成败,比正在做什么次要一档,所以缩进对齐在转圈图标之后 */
+/* 轮次和成败,比正在做什么次要一档,所以缩进对齐在转圈图标之后(11px 图标 + 6px 间距) */
 .ai-activity-meta {
-  margin: 2px 0 0 17px;
+  margin: 0 0 0 17px;
   font-size: 11px;
   color: var(--ink-muted);
   opacity: 0.8;
@@ -202,7 +217,6 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
-  margin: 6px 0;
   min-width: 0;
 }
 .ai-ops {
@@ -281,14 +295,11 @@
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding: 6px 8px;
+  padding: 8px;
   border-radius: var(--ui-radius, 6px);
   background: var(--ui-panel, rgb(255 255 255 / 0.03));
   border: 1px solid var(--ui-border, var(--hairline));
   min-width: 0;
-}
-.ai-op-list .ai-tool-chip {
-  margin-top: 0;
 }
 
 /*
@@ -368,11 +379,17 @@
  * 只有最后一条、且消息还没结束时才动(is-live)。已经过去的步骤是静止的小圆点,
  * 满屏都在呼吸的话反而看不出哪一步是当下。
  */
+/* 详细模式里的一段思考:步骤条 +(打开「显示思考」时)原文块,两者之间 6px,外面不带外边距 */
+.ai-thinking-part {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
 .ai-steps {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  margin: 2px 0 6px;
   min-width: 0;
 }
 .ai-step {
@@ -451,8 +468,8 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
-  margin: 6px 0;
-  padding: 8px 10px;
+  /* 四边内边距一样;和气泡里前后块的间距交给气泡的 gap,自己不带外边距 */
+  padding: 10px;
   border-radius: var(--ui-radius-lg, 8px);
   background: var(--ui-panel, rgb(255 255 255 / 0.04));
   border: 1px solid var(--ui-border, var(--hairline));
@@ -461,7 +478,7 @@
   min-width: 0;
 }
 .ai-report.is-final {
-  padding: 10px 12px;
+  padding: 12px;
   border-color: var(--ui-accent-soft, rgba(0, 219, 219, 0.45));
 }
 .ai-report-head {
@@ -520,8 +537,12 @@
 .ai-report-group.is-todo .ai-report-list {
   color: var(--ui-fg-muted, var(--ink-muted));
 }
+/* 条目之间 1px(和原来两边 1px 折叠后一样),首尾不带外边距:报告卡四边的内边距才一样 */
 .ai-report-list li {
-  margin: 1px 0;
+  margin: 0;
+}
+.ai-report-list li + li {
+  margin-top: 1px;
 }
 .ai-report-list li::marker {
   color: var(--ui-fg-faint, var(--ink-faint));
@@ -536,7 +557,6 @@
   align-items: baseline;
   flex-wrap: wrap;
   gap: 6px;
-  margin-top: 6px;
   font-size: 11px;
   color: var(--ui-fg-faint, var(--ink-faint));
 }
@@ -567,8 +587,8 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
-  margin-top: 8px;
-  padding: 6px 10px 8px;
+  /* 四边内边距一样;和上面报告卡之间的距离交给气泡的 gap */
+  padding: 10px;
   border-left: 2px solid var(--ui-border-strong, var(--hairline-strong));
   background: var(--ui-bg, rgb(0 0 0 / 0.12));
   border-radius: 0 var(--ui-radius, 6px) var(--ui-radius, 6px) 0;
@@ -617,7 +637,6 @@
   gap: 6px;
   width: 320px;
   max-width: 100%;
-  margin: 6px 0;
   min-width: 0;
 }
 .ai-carousel-frame {
@@ -743,7 +762,7 @@
   width: 100%;
   height: 100%;
   box-sizing: border-box;
-  padding: 10px 12px;
+  padding: 10px;
   overflow-y: auto;
 }
 .ai-carousel-caption {
@@ -814,10 +833,12 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  height: 28px;
+  /* 四边内边距一样:16px 的行高 + 上下各 8px = 32px 高,单行文字、圆点、计时都居中 */
+  min-height: 32px;
   box-sizing: border-box;
   margin: 0 8px 6px;
-  padding: 0 10px;
+  padding: 8px;
+  line-height: 16px;
   border-radius: var(--ui-radius, 6px);
   background: var(--ui-panel, var(--fill-subtle));
   color: var(--ui-fg-muted, var(--ink-muted));

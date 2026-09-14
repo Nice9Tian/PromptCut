@@ -39,7 +39,10 @@ function InsertZone({ index }: { index: number }) {
           <div className="absolute inset-x-0 top-1/2 h-[3px] -translate-y-1/2 rounded-full pointer-events-none bg-[var(--ui-accent)]" />
           <div
             className="absolute top-1/2 z-50 flex h-5 -translate-y-1/2 items-center whitespace-nowrap rounded px-1.5 text-[10px] text-white pointer-events-none bg-[var(--ui-accent)]"
-            style={{ left: `${xOfTime(plan.start, pxPerSec)}px` }}
+            // 最上面那条缝贴着片段层顶边:标签往上半挪会有 5px 钻到吸顶的绿条下面(片段层在它下面一层),改成从顶边往下放
+            style={index === 0
+              ? { left: `${xOfTime(plan.start, pxPerSec)}px`, top: 0, transform: "none", translate: "none" }
+              : { left: `${xOfTime(plan.start, pxPerSec)}px` }}
           >
             {plan.label} · 新建序列
           </div>

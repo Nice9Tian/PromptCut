@@ -1,7 +1,7 @@
 import type { SVGProps } from "react";
 
 /**
- * 左 rail 四项的图标:24 网格、1.6 描边、跟着文字色走。
+ * 左 rail 五项的图标:24 网格、1.6 描边、跟着文字色走。
  * 显示尺寸由共享样式 .pc-rail-item svg 定(22px),这里的 width / height 只是兜底。
  */
 const base: SVGProps<SVGSVGElement> = {
@@ -23,6 +23,16 @@ export function RailIconLibrary() {
       <path d="M7 4.5h11.5A2.5 2.5 0 0 1 21 7v8" />
       <rect x="3" y="7.5" width="15" height="12" rx="2.2" />
       <path d="M9.2 11.2v4.6l3.9-2.3z" />
+    </svg>
+  );
+}
+
+/** 动画:往右跑的播放三角,左边拖着三道动势线 */
+export function RailIconAnimations() {
+  return (
+    <svg {...base}>
+      <path d="M10.5 6.5v11l8.5-5.5z" />
+      <path d="M3 9h4M4.5 12H7M3 15h4" />
     </svg>
   );
 }

@@ -22,6 +22,22 @@
   (`Editor.tsx` 的 `.pc-editor-bottom` 左右各缩进 `RAIL_W`,某一侧收起时再多让一个 `HANDLE_W`,对齐预览卡边缘);抽屉和 AI 面板只占时间轴上方。
 - 两侧各一条 64px 竖向 rail(`RAIL_W`,`src/editor/sideRails.ts`)。点 rail 上已选中的项 = 收起 / 展开旁边的抽屉或面板,
   状态存 `pc.rail.left.collapsed` / `pc.rail.right.collapsed`。左侧整列宽 = `RAIL_W + (收起 ? 0 : drawerW)`,右侧同理。
+- **rail 自由布局**(`src/editor/dock/`):rail 上的项(五个左栏分区、`script`、每个 `agent:<tabId>`)都能拖 ——
+  同一条 rail 里换顺序,或者拖到另一条 rail;任何一侧的抽屉 / 面板都显示**这一侧 rail 当前选中项**的页面。
+  - 布局 `pc.rail.layout.v1` = `{ left: ItemId[], right: ItemId[], active: { left, right } }`;纯逻辑(校验、move、「+」位置、空侧)
+    在 `railLayout.ts`(有测试),store 在 `railStore.ts`(调试把手 `window.__pcRailLayout`)。读出来会校验:去掉已关的 Agent,
+    缺的分区补回左边末尾,缺的剧本补回右边顶上。Agent 分页的增删仍以 `agentTabs.ts` 为准,布局只记位置;选分区照样写 `pc.left.section`。
+  - 拖动 `railDrag.ts`:按下移动超过 4px 才算拖动(否则是原来的点击),跟手半透明图标 `data-pc="rail-drag-ghost"`、
+    落点线 `data-pc="rail-drop-indicator"`(只在拖动中出现),Esc 取消;落在 rail 矩形 ±8px 内才算数。放下后被拖项成为目标侧选中项并展开;
+    某一侧被拖空就保留空 rail 当落点、抽屉强制收起。
+  - **「+」**(`IconBubblePlus`,气泡里一个 +)不是可拖项:每一侧紧跟在**这一侧最后一个 Agent 项下面**;一侧没有 Agent 项就不画。
+    点它新建的 Agent 插在这一侧最后一个 Agent 后面、在这一侧打开。
+  - **rail 上的项之间不画分隔线**,只靠间距。
+  - **页面不因换侧卸载**(reverse portal):`DockPages` 在 `RightPanel` 里把每个页面各渲染一次,portal 进各自固定的 `div.pc-dock-page`
+    (`data-pc-dock-page=<ItemId>`);两侧的 `DockHost`(`data-pc-dock-host=left|right`)只把节点挪进来,React 树不动 ——
+    正在跑的对话、输入框草稿、滚动位置、搜索词在换侧后都还在。挪节点优先 `Element.moveBefore`,手动保存 / 写回滚动位置。
+  - 收起按钮跟着页面所在的一侧走:在左侧是右上角 `left-collapse`,在右侧是左上角 `right-collapse`(`dockSide.ts`)。
+  - 对话式布局:两条 rail 只显示剧本 / Agent;哪一侧一个 AI 类项都没有,那一侧整列不显示。
 - 抽屉宽 `pc.left.drawerW`(默认 240,正好是素材库 big 单列的宽度;最小 200)、AI 面板宽 `pc.right.panelW`(默认 360,最小 280)、
   时间轴高 `pc.timeline.h`(默认 272,最小 120,最大窗高 70%;分页栏和工具条变高之后 224 只露得出一条序列);拖动时改 state,松手才写 localStorage。
 - 某一侧收起时,那根拖杆照样渲染(槽位不变),只是不可拖。
@@ -44,24 +60,36 @@ LeftPanel / RightPanel 自己画 rail 和卡片,Editor.tsx 里的两个 `aside` 
 ## 左栏:竖向 rail + 分区抽屉(src/editor/left/)
 
 ```
-rail   素材库 | 特效 | 编辑 | 字幕
-抽屉   素材库 → 分组总览 ⇄ 组详情        特效 → 分组总览 ⇄ 组详情(视觉 / 音频在同一页,用胶囊筛)
-       编辑   → 参数 / 代码 / 节点          字幕 → 导入 .srt/.vtt + 搜索 + 转写列表
+rail   素材库 | 动画 | 特效 | 编辑 | 字幕
+抽屉   素材库 → 分组总览 ⇄ 组详情(视频 / 图片 / 音频)    动画 → 分组总览 ⇄ 组详情(各类卡片 + 部件,不画分类胶囊)
+       特效   → 分组总览 ⇄ 组详情(视觉 / 音频在同一页,用胶囊筛)
+       编辑   → 参数 / 代码 / 节点                        字幕 → 导入 .srt/.vtt + 搜索 + 转写列表
 ```
 
-- `index.tsx` 的 `LeftPanel` = `.pc-rail--left`(`data-pc="left-rail"`,四项 `data-pc-rail="library|effects|edit|captions"`)
-  + 抽屉 `.pc-card-surface`(`data-pc="left-drawer"`)。点另一项切分区并展开抽屉,点已选中的项收起 / 展开(`sideRails`)。
-  四个分区(`LibrarySection` / `EffectsSection` / `EditSection` / `CaptionsSection`)**都常驻挂载**,靠行内 `display` 显隐
+- `index.tsx` 的 `LeftPanel` = 左 rail(`dock/RailBar.tsx`,`data-pc="left-rail"`,默认五项 `data-pc-rail="library|animations|effects|edit|captions"`)
+  + 左侧宿主卡片(`DockHost side="left"`,`data-pc="left-drawer"`)。点另一项切页并展开抽屉,点已选中的项收起 / 展开(`sideRails`)。
+  分区也能被拖到右 rail,这时它在右侧卡片里显示(见「布局 → rail 自由布局」)。
+  五个分区(`LibrarySection` / `AnimationsSection` / `EffectsSection` / `EditSection` / `CaptionsSection`)第一次显示后**常驻挂载**(由 `DockPages` 渲染),靠行内 `display` 显隐
   (不要用 Tailwind 的 `hidden` 类:它和 `flex` 都是 display,谁生效取决于样式表顺序,不可靠),
   所以切分区不丢滚动位置、搜索词和代码框里没提交的草稿。
-- localStorage:`pc.left.section`(默认 library)、`pc.left.group.library` / `pc.left.group.effects`(打开着的组)、
-  `pc.left.editTab`(form / code / nodes)。
-- **分组**:组定义集中在 `library/groups.tsx`,每组有 `id / name / layout / category(视觉 | 音频)`;挪组、改排版只改这张表。
-  - 素材库:视频、图片(big_16_9)、音频(big_strip)、定制卡片、Magic UI、自家卡片、部件库、Lottie 动效(middle_cube)、粒子背景(big_16_9)。
+- **分区头部**统一用 `SectionHead.tsx`:标题行 = 分区名 + 右上角「收起面板」图标钮(`.pc-icon-btn`,`data-pc="left-collapse"`),
+  点它就是 `setRailCollapsed("left", true)`,和再点一次 rail 当前项走同一条收起动画;标题行下面放分区自己的主按钮 / 搜索 / 胶囊。
+- localStorage:`pc.left.section`(默认 library;library / animations / effects / edit / captions)、
+  `pc.left.group.library` / `pc.left.group.animations` / `pc.left.group.effects`(打开着的组)、`pc.left.editTab`(form / code / nodes)。
+  存的组 id 不在该分区的组表里就回总览(`useOpenGroup` 读的时候就滤掉,`GroupBrowser` 的 effect 再兜一层)——
+  拆分之前 `pc.left.group.library` 里存过卡片组,现在读出来就是素材库总览,不迁移。
+- **分组**:组定义集中在 `library/groups.tsx`(`LIBRARY_GROUPS` / `ANIMATION_GROUPS` / `EFFECTS_GROUPS`,各配一份 `*_GROUP_IDS`),
+  每组有 `id / name / layout / category(视觉 | 音频)`;挪组、改排版只改这张表。
+  - 素材库:视频、图片(big_16_9)、音频(big_strip)。
+  - 动画:定制卡片、Magic UI、自家卡片、部件库、Lottie 动效(middle_cube)、粒子背景(big_16_9)。
   - 特效:转场、滤镜、强调、全局风格(middle_cube,视觉)、音频效果、音频预设(big_strip,音频)。
-  - 总览是圆角组框(`GroupBox`:组名、「N 个项」、前几项静态缩略图),点组框打开组;组详情(`GroupDetail`)顶部胶囊行
+  - 总览是圆角组框(`GroupBox`:组名、「N 个项」、前几项缩略图),点组框打开组;组详情(`GroupDetail`)顶部胶囊行
     「所有 / 分类 / 组名 ×」,下面「N 个项目」和按该组排版的全部项目,组还可以带 `detailTop` / `detailBottom`(转场时长、已有转场、相接的两段等)。
+  - 缩略图(`ThumbTile`)不接点击 / 拖动 / 右键、不带钩子,点下去是打开组。唯一例外:视频缩略(`mediaGroups.tsx` 的 `MediaThumb`)
+    指针停在哪一格就静音从头循环播哪一格,移开停下回到首帧(`.is-hoverplay` 只让这一格接指针,`<video>` 本身不接;`preload="metadata"`);
+    格子被整块藏起来收不到 mouseleave 时,靠 timeupdate 发现自己没有布局盒就停。
   - 分区头部的分类胶囊 `所有 / 视觉 ▾ / 音频 ▾`(`CategoryChips`):点胶囊只看这一类,点 ▾ 列出这一类的组直接打开。
+    组表里只有一种分类时(「动画」),`GroupBrowser` 不画这一行,组详情的胶囊行也不画分类那颗、只剩「所有 / 组名 ×」。
     搜索在打开的组里过滤,在总览里按组过滤。
 - **排版**(纯函数 `library/layout.ts`,有测试):以 small_cube(`--pc-cube-s` = 64px,间距 8)为单位,
   `units = max(3, floor((内宽 + 8) / 72))`;small 列数 = units、middle = units / 2、big = units / 3(向下取整、至少 1),列宽拉伸填满。
@@ -70,9 +98,12 @@ rail   素材库 | 特效 | 编辑 | 字幕
   抽屉默认宽 240、左右内边距 12 → 内宽 216 → 3 单位,正好是 big 单列。
 - **预览卡** `PreviewCard.tsx`:按 aspect 给高度,媒体 `object-fit: cover`,左下角时长 badge;悬停才起动画 / 播视频。
   **不要**给它套皮肤里 `.cursor-grab.bg-neutral-900` 那组类:那条规则悬停时画一道 3px 的左侧强调色内阴影,预览一铺满就成了漏进画面的色边。
-- 素材库头部:「导入媒体」主按钮(`data-pc-add="media"`,导入后自动打开对应的组)、搜索框(`data-pc="search"`)、
-  筛选图标按钮(浮层里是 `CardScopeBar`)。卡片列表和可见性只有一个来源(`useCardLibrary`),所有卡片组共用。
-  右键菜单、确认框、定制卡菜单、提示条每个分区只挂一份、常驻挂载,总览、详情、搜索结果里都能用;视频卡右键有「以视频比例作为项目比例」。
+- 素材库头部:「导入媒体」主按钮(`data-pc-add="media"`,导入后自动打开对应的组)、搜索框(`data-pc="search"`,「搜索素材…」)。
+  素材右键菜单、确认框、提示条挂在分区这一级、常驻挂载,总览、详情、搜索结果里都能用;视频卡右键有「以视频比例作为项目比例」。
+- 动画头部:搜索框(`data-pc="animations-search"`,「搜索动画、卡片…」)+ 筛选图标按钮(`data-pc="scope-toggle"`,浮层里是 `CardScopeBar`,
+  有档位关着时按钮右上角一个小点)。卡片列表和可见性只有一个来源(`useCardLibrary`),所有卡片组共用;定制卡右键换档菜单(`UserCardMenu`)同样挂在分区一级。
+  `index.tsx` 必须**静态**导入 `AnimationsSection`:`index → AnimationsSection → cardGroups → CardCell → previewZoom → prewarmBoxes`
+  这条链把 `window.__pcPreviewBoxes` 挂上去,不要改成 lazy。
 - 时间轴上的视频 / 音频片段右键「转写字幕」走 `captionsBus.ts` 的 `pc-open-captions`:切到字幕分区、展开抽屉、定位那份素材。
   `CaptionsTab` 选素材 → 没转写就在这儿转,转过就列出每一段,点一段把播放头挪到时间轴上对应的位置(素材时间经所在片段的 `mediaOffset` 换算)。
 - 编辑分区:`Inspector` 接 `tab: "form" | "code"`,两页都常驻挂载(`CodeTab` 按 clipId 重建,草稿不会串到别的片段);
@@ -88,7 +119,9 @@ rail   素材库 | 特效 | 编辑 | 字幕
     第一次打开卡片页还会在屏幕外把表里缺的挨个补量(`prewarmBoxes.tsx`,一次一个、排在空闲时段)。
   canvas 里画了什么 DOM 看不见,所以 `contentBox.ts` 对 2D 画布直接扫像素定边界;粒子卡不进后台队列
   (53 张 canvas 引擎太贵),靠悬停时的像素扫描就够。卡片改了默认参数或动画,重跑 `npm run preview-boxes`。
-- 自动化钩子(`scripts/left-check.mjs` 依赖):`data-pc="left" / "library" / "inspector" / "search" / "code-editor" / "switch-card"`、
+- 自动化钩子(`scripts/left-check.mjs` 依赖):`data-pc="left" / "left-rail" / "left-drawer" / "library" / "animations" / "effects" / "inspector" / "captions"`、
+  `data-pc="search" / "animations-search" / "effects-search" / "caption-search" / "scope-toggle" / "left-collapse" / "code-editor" / "switch-card"`、
+  `data-pc-rail`、`data-pc-group`、`data-pc-open-group`、`data-pc-chip`、`data-pc-category`、
   `data-pc-top-tab`、`data-pc-tab`、`data-pc-card`、`data-pc-media`、`data-pc-param`。
 - 上下分屏(`pc.left.split`、`data-pc="split"`)已随两级分页去掉。
 
@@ -213,9 +246,20 @@ MIME 常量和拖动载荷都在 `src/editor/dnd.ts`:
   `setDurationManual(sec)`(RangeBar 拖动用,进撤销栈)、`syncDuration(sec)`(自动跟随用,不进撤销栈)。
   规则:没手动设过就跟着内容走(最后一个片段的 end + 2 秒,只伸不缩);手动设过就以手动值为底,
   内容超出继续伸、内容缩回退回手动值。
-- **底部自定义滚动条**(`timeline/Scrollbar.tsx`):条身 = `[0, duration]`,滑块 = 当前可视区间;
-  拖滑块中间平移(改 scrollLeft),拖两端把手改 `pxPerSec`(缩放),双击复位。原生横条用 CSS 隐藏了(竖条保留),
-  Ctrl+滚轮缩放行为不变。
+- **底部自定义滚动条**(`timeline/Scrollbar.tsx`):滑块宽 = 可视时长 / 总时长(最窄 48px),滑块位置 = 滚动进度 `scrollLeft / 最大滚动量`,
+  在 `[0, 条身宽 − 滑块宽]` 里摆;拖滑块中间平移,`scrollLeft = 起始值 + dx × 最大滚动量 / (条身宽 − 滑块宽)` —— 和摆滑块的换算互逆,
+  长项目里滑块被撑到 48px 时指针也不会和滑块脱开。拖两端把手改 `pxPerSec`(缩放,夹在 10~1000;夹过之后按夹完的缩放重算可视时长,
+  另一端才钉得住),双击复位。原生横条用 CSS 隐藏了(竖条保留),
+  Ctrl+滚轮缩放行为不变。滑块两端常驻 12px 的把手帽(`.pc-tl-hbar-grip`,两道竖纹),拖动中 `data-drag` 标出在拖哪一部分。
+- **层级**:片段层(`index.tsx` 的 `.pc-tl-rows`)和行头列里的行头都是 `isolation: isolate` 的独立层,
+  里面的 z(选中片段 20、落点预览 30、插入缝 40、拖动中的行 40、锁定遮罩 50)只在层内比大小,整层压在吸顶的范围条 / 标尺 / 绿条(z-20)
+  和左边行头列(z-30)下面 —— 竖向滚动时选中的片段钻到标尺下面,横向滚动时锁定遮罩不盖行头。
+  所以时间轴右键菜单 `ContextMenu.tsx` portal 到 body(`data-pc="tl-ctxmenu"`,颜色取皮肤变量 `.pc-tl-ctxmenu`;
+  Esc、任何滚动、窗口缩放、失焦都关掉它,靠窗口边缘时夹回视口),以后往片段层里加浮层也要 portal 出去,别指望调大 z-index。
+  反过来,片段层外面盖在它上面的东西会挡住拖放:播放头(z-20)在 HTML5 拖放进行中(`useDragPayload()` 非空)设 `pointer-events: none`,
+  不然 dragover 落到那 11px 竖条上,插入缝收到 dragleave 把预览清掉。
+- **两根滚动条同粗**:底部横条 10px 条身、14px 槽位;右侧竖条(`[data-pc="timeline"] .pc-tl-scroll::-webkit-scrollbar:vertical`)
+  14px 宽、2px 透明边框,画出来同样是 10px,圆角和颜色也一致。改其中一根要同步改另一根。
 
 ## 播放头 / 卡尺(scrub)
 
@@ -283,11 +327,20 @@ MIME 常量和拖动载荷都在 `src/editor/dnd.ts`:
 
 ## AI 栏:布局与 Agent 活动展示(src/editor/right/)
 
-- `RightPanel` = 一张卡片(剧本页 `chat/ScriptPage.tsx` + 所有 `AiPanel` 的堆叠)+ 贴窗口右边的 `chat/RightRail.tsx`:
-  最上面「剧本」,分隔线,每个 Agent 分页一项,最后「+」新开分页。当前页 `pc.right.page`(`script` / `agent`),哪个 Agent 页沿用 `agentTabs.ts`。
-  所有 `AiPanel` 常驻挂载,不在前台、面板收起都只是 `display:none`。
-- `AiPanel.tsx` 只做组合:`chat/ChatHeader`(右侧只有「显示思考」可激活按钮、历史、设置)→ 登录横幅 → `chat/MessageList` → `chat/ThinkingStrip`
-  → `chat/QueueList` → `chat/Composer`(占面板高度 1/3;底部工具条放附件、✦ 菜单〔分工模式 / 一键配特效 / 诊断 / 新对话〕、provider 与模型、⋯ 运行选项、发送 / 停止)。
+- `RightPanel` = 右侧宿主卡片(`DockHost side="right"`)+ 贴窗口右边的 rail(`dock/RailBar.tsx`),另外负责渲染 `DockPages`(所有页面的唯一渲染点)。
+  默认布局右 rail 最上面「剧本」,每个 Agent 分页一项,最后气泡「+」;但剧本和 Agent 都能拖到左边,见「布局 → rail 自由布局」。
+  `chat/RightRail.tsx` 只剩剧本图标 / Agent 头像字 / 标签截断 / 悬停说明这些画法小件;`pc.right.page` 已并进 `pc.rail.layout.v1`(读旧值做一次迁移)。
+  所有 `AiPanel` 常驻挂载,不在前台、面板收起、换侧都不卸载。
+- 收起按钮 `chat/CollapsePanelButton.tsx`(`data-pc="right-collapse"`)放在头部**左上角**(靠右侧的面板收起钮在左上、左侧抽屉的在右上),
+  `ChatHeader`、剧本页头部、没装驱动时的占位头部都用它;剧本页头部和 AI 头部同高(48px),切页时按钮不跳。
+- `AiPanel.tsx` 只做组合:`chat/ChatHeader`(左上收起钮;右侧只有「显示思考」可激活按钮、历史、设置)→ 登录横幅 → `chat/MessageList` → `chat/ThinkingStrip`
+  → `chat/QueueList` → `chat/Composer`(独立的圆角输入框,默认占面板高度 1/3;底部工具条放附件、✦ 菜单〔分工模式 / 一键配特效 / 诊断 / 新对话〕、provider 与模型、⋯ 运行选项、发送 / 停止)。
+- 输入框整块一个底色 `--ui-panel-2` + `--ui-border-strong` 描边,里面的 textarea / 附件行 / 工具条都不自带底色;
+  下拉框、附件胶囊、停止钮这类需要跟底色区分的用 `--ui-float`。
+- 输入框右上角有调高把手(`data-pc="ai-composer-resize"`,转 90° 的 L 形):往上拖变高,夹在 140px 与面板高 70% 之间,
+  松手且真的拖过才写 `pc.ai.composerH`(所有分页共用),双击清掉回到默认 1/3。拖动时沿用 `body.dataset.pcResizing = "y"`。
+- **气泡等距**:`.ai-message` 四边内边距一律 10px,子元素之间只用 `gap`,不许给子元素加单侧 margin(有一条兜底规则把直接子元素的上下 margin 清零);
+  气泡里的小框(报告卡、原文、思考、队列行、回退确认……)也各自四边等距。
 - 「详细模式」挪进 AI 设置对话框的「显示」小节;它和「显示思考」都是 `chat/viewPrefs.ts` 的模块级 store(键 `aiViewMode` / `aiShowThinking`,所有分页共享)。
 - **Agent 的文字回复默认不显示**。一条 Agent 消息(`chat/AgentBubble.tsx`)按先后切段:每段是一排操作图标(`chat/ToolIcons.tsx`)+ 段尾的
   `report_progress` 报告卡(已完成 / 待办 / 问题,空组不显示);正常结束却没交 `final: true` 报告时给一句「这一轮没有提交小结」。

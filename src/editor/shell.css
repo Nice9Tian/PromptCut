@@ -15,21 +15,23 @@
  */
 
 /* ── 素材库(左栏)抽屉 L1,控件 L3 ──────────────────────────────
- * 左栏根节点不刷底色:rail 要露出画布,底色由抽屉的 .pc-card-surface 给 */
-[data-skin] [data-pc="left"] .bg-neutral-950,
-[data-skin] [data-pc="left"] .bg-neutral-950\/60 {
+ * 左栏根节点不刷底色:rail 要露出画布,底色由抽屉的 .pc-card-surface 给。
+ * 分区能被拖到右侧 rail(editor/dock/),所以按分区页面节点的 data-pc-dock-kind="section" 挑,
+ * 不按「在不在 [data-pc=left] 里」—— 否则分区到了右边丢配色,Agent 到了左边反被刷成素材库的层级 */
+[data-skin] [data-pc-dock-kind="section"] .bg-neutral-950,
+[data-skin] [data-pc-dock-kind="section"] .bg-neutral-950\/60 {
   background-color: var(--ui-bg-2);
 }
-[data-skin] [data-pc="left"] .bg-neutral-900,
-[data-skin] [data-pc="left"] .bg-neutral-900\/60,
-[data-skin] [data-pc="left"] .bg-neutral-900\/40 {
+[data-skin] [data-pc-dock-kind="section"] .bg-neutral-900,
+[data-skin] [data-pc-dock-kind="section"] .bg-neutral-900\/60,
+[data-skin] [data-pc-dock-kind="section"] .bg-neutral-900\/40 {
   background-color: var(--ui-panel-2);
 }
-[data-skin] [data-pc="left"] .bg-neutral-800,
-[data-skin] [data-pc="left"] .bg-neutral-800\/60 {
+[data-skin] [data-pc-dock-kind="section"] .bg-neutral-800,
+[data-skin] [data-pc-dock-kind="section"] .bg-neutral-800\/60 {
   background-color: var(--ui-float);
 }
-[data-skin] [data-pc="left"] .hover\:bg-neutral-800:hover {
+[data-skin] [data-pc-dock-kind="section"] .hover\:bg-neutral-800:hover {
   background-color: var(--ui-float);
 }
 

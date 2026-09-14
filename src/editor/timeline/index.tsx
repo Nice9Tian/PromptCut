@@ -71,7 +71,8 @@ function TimelineInner() {
           </div>
           {/* 和右边那条绿条等高的占位:不补的话右边整体下移,轨道行和左边的表头就错开了 */}
           <div className="flex-shrink-0 sticky bg-neutral-950 z-40" style={{ top: RANGE_H + 26, height: RENDER_H }} />
-          <div className="flex-1 flex flex-col">
+          {/* 行头自成一层(isolation):拖动中的行头(z-40)只在这一层里压过别的行头,不会盖到上面吸顶的表头 */}
+          <div className="flex-1 flex flex-col" style={{ isolation: "isolate" }}>
             {tracks.map((track, i) => (
               <TrackHeader key={track.id} track={track} index={i} />
             ))}
@@ -108,8 +109,15 @@ function TimelineInner() {
           <div className="flex-shrink-0 sticky bg-neutral-950 z-20" style={{ top: RANGE_H + 26, height: RENDER_H }}>
             <RenderBar />
           </div>
+          {/*
+            片段层自成一层(isolation):选中片段(z-20)、落点预览(z-30)、插入缝(z-40)、拖动中的行(z-40)、锁定遮罩(z-50)
+            的 z 只在这一层里比大小,整层排在吸顶的范围条 / 标尺 / 绿条(z-20)和左边行头列(z-30)下面。
+            以前这一层不是独立的层叠上下文,选中片段和标尺同为 z-20、DOM 又在后面,竖向滚动时就会盖到标尺上。
+            右键菜单因此 portal 到 body(ContextMenu.tsx),不留在这一层里被标尺压住。
+          */}
           <div
-            className="flex-1 relative"
+            className="pc-tl-rows flex-1 relative"
+            style={{ isolation: "isolate" }}
             onDragLeave={(e) => {
               if (e.currentTarget.contains(e.relatedTarget as Node)) return;
               setDropPlan(null);

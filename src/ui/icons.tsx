@@ -195,11 +195,14 @@ export function IconHome(p: IconProps) {
   );
 }
 
-/** 配音设置(声波) */
+/** 配音设置:正在说话的小人(头、肩,嘴前两道声波)。以前是一排竖条声波,看着像语音识别 */
 export function IconVoice(p: IconProps) {
   return (
     <Stroked {...p}>
-      <path d="M4 10v4M8 7v10M12 4v16M16 8v8M20 11v2" />
+      <circle cx="9" cy="8" r="3.5" />
+      <path d="M2.5 20.5c0-3.6 2.9-6.5 6.5-6.5s6.5 2.9 6.5 6.5" />
+      <path d="M15.5 6a3.5 3.5 0 0 1 0 4.5" />
+      <path d="M18 3.5a7 7 0 0 1 0 9.5" />
     </Stroked>
   );
 }
@@ -311,6 +314,30 @@ export function IconPlus(p: IconProps) {
     <Stroked {...p}>
       <path d="M12 5v14M5 12h14" />
     </Stroked>
+  );
+}
+/**
+ * 新开 Agent 分页(rail 上的「+」):对话气泡轮廓(左下角带小尾巴)里面一个 +。
+ * 放在 rail 上,所以不走本文件的 1.5 描边方头规格,而是和 rail 图标(left/railIcons.tsx)同一套:
+ * 24 网格、1.6 描边、圆头圆角、currentColor;显示尺寸由 .pc-rail-item svg 定(22px)。
+ */
+export function IconBubblePlus({ size = 22, ...rest }: IconProps) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.6}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      {...rest}
+    >
+      <path d="M6 4.5h12A2.5 2.5 0 0 1 20.5 7v8a2.5 2.5 0 0 1-2.5 2.5h-6.2L7.5 20.5v-3H6A2.5 2.5 0 0 1 3.5 15V7A2.5 2.5 0 0 1 6 4.5z" />
+      <path d="M12 8.2v5.6M9.2 11h5.6" />
+    </svg>
   );
 }
 /** 搜索 */

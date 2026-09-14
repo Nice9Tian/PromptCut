@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { SearchBox } from "./SearchBox";
+import { SectionHead } from "./SectionHead";
 import { FlashBar, useFlash } from "./useFlash";
 import { useOpenGroup } from "./stored";
 import { EFFECTS_GROUPS, EFFECTS_GROUP_IDS, type GroupData } from "./library/groups";
@@ -38,10 +39,9 @@ export function EffectsSection() {
 
   return (
     <div data-pc="effects" className="pc-left-section">
-      <div className="pc-left-head">
-        <div className="pc-section-title">特效</div>
+      <SectionHead title="特效">
         <SearchBox value={search} onChange={setSearch} placeholder="搜索特效…" dataPc="effects-search" />
-      </div>
+      </SectionHead>
 
       <GroupBrowser
         groups={EFFECTS_GROUPS}

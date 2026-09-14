@@ -27,11 +27,14 @@ export interface GroupBrowserProps {
  *
  * - 打开组时搜索照常生效,只在这个组里过滤,不会把组关掉;
  * - 总览的滚动容器常驻挂载(只是隐藏),关掉组回来还停在原来的位置;
- * - 打开的组 id 不在表里(改版前存下的旧值)就在 effect 里退回总览,不在渲染期间改状态。
+ * - 打开的组 id 不在表里(改版前存下的旧值)就在 effect 里退回总览,不在渲染期间改状态;
+ * - 组表里只有一种分类(「动画」全是视觉组)时分类胶囊没得筛:总览不画胶囊行,
+ *   组详情的胶囊行也不画分类那一颗,只剩「所有 / 组名 ×」。按整张表判断,不按搜索后剩下的组,搜索时不会忽隐忽现。
  */
 export function GroupBrowser({ groups, data, searching, openId, onOpen, onImport, noMatch }: GroupBrowserProps) {
   const [category, setCategory] = useState<GroupCategory | null>(null);
   const open = openId ? (groups.find((g) => g.id === openId) ?? null) : null;
+  const singleCategory = new Set(groups.map((g) => g.category)).size <= 1;
 
   useEffect(() => {
     if (openId && !open) onOpen(null);
@@ -56,31 +59,37 @@ export function GroupBrowser({ groups, data, searching, openId, onOpen, onImport
   const countOf = (g: GroupDef) => data[g.id]?.items.length ?? 0;
   // 搜索时只留有命中的组;不搜时 0 项的卡片类组不显示,素材类组显示「导入…」占位
   const available = groups.filter((g) => (searching ? countOf(g) > 0 : countOf(g) > 0 || g.empty !== "hide"));
-  const visible = category ? available.filter((g) => g.category === category) : available;
+  const visible = category && !singleCategory ? available.filter((g) => g.category === category) : available;
 
   const byCategory: Record<GroupCategory, { id: string; title: string }[]> = { 视觉: [], 音频: [] };
   for (const g of available) byCategory[g.category].push({ id: g.id, title: g.title });
 
+  // 单一分类的总览没有胶囊行,整条 bar 不渲染(否则留下一截空的下内边距)
+  const showBar = open !== null || !singleCategory;
+
   return (
     <div className="pc-lib-browser">
-      <div className="pc-lib-bar" ref={barRef}>
-        {open ? (
-          <DetailChips
-            def={open}
-            onAll={() => {
-              setCategory(null);
-              onOpen(null);
-            }}
-            onCategory={(c) => {
-              setCategory(c);
-              onOpen(null);
-            }}
-            onClose={() => onOpen(null)}
-          />
-        ) : (
-          <CategoryChips active={category} onCategory={setCategory} onOpenGroup={onOpen} groupsByCategory={byCategory} />
-        )}
-      </div>
+      {showBar && (
+        <div className="pc-lib-bar" ref={barRef}>
+          {open ? (
+            <DetailChips
+              def={open}
+              showCategory={!singleCategory}
+              onAll={() => {
+                setCategory(null);
+                onOpen(null);
+              }}
+              onCategory={(c) => {
+                setCategory(c);
+                onOpen(null);
+              }}
+              onClose={() => onOpen(null)}
+            />
+          ) : (
+            <CategoryChips active={category} onCategory={setCategory} onOpenGroup={onOpen} groupsByCategory={byCategory} />
+          )}
+        </div>
+      )}
 
       <div className="pc-lib-scroll pc-left-scroll" ref={overviewRef} style={{ display: open ? "none" : "flex" }}>
         {visible.length === 0 ? (

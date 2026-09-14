@@ -23,7 +23,7 @@ export function Inspector({ tab }: { tab: "form" | "code" }) {
   if (!hit) {
     return (
       <div className="flex-1 flex items-center justify-center p-4 text-center text-xs pc-left-muted">
-        在时间轴上点一个片段,或在「素材库」里点一张卡片添加一个
+        在时间轴上点一个片段,或在「动画」里点一张卡片添加一个
       </div>
     );
   }
