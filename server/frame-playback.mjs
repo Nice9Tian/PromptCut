@@ -112,9 +112,11 @@ export class FramePlayback {
         onFrame: async (frame, value) => {
           if (epoch !== this.epoch || job.controller.signal.aborted) return;
           const now = this.clock();
-          if (value.incomplete) {
+          if (value.incomplete || value.unconfirmedClear) {
+            // A placeholder must never become a published MOV sample, and an
+            // empty render is only waiting for a confirming second render.
             this.incomplete.set(frame, { at: now, missing: value.missing || [] });
-            return; // A placeholder must never become a published MOV sample.
+            return;
           }
           this.incomplete.delete(frame);
           if (value.source === 'live' || value.source === 'html') {
@@ -151,7 +153,8 @@ export class FramePlayback {
   status() {
     const frame = Math.floor(this.position());
     for (const n of this.incomplete.keys()) if (n < frame - this.fps || this.movie.has(n)) this.incomplete.delete(n);
-    const nearby = [...this.incomplete.keys()].filter(n => n <= frame && frame - n < this.fps).sort((a, b) => b - a)[0];
+    // Only frames with missing cards have a placeholder image to show.
+    const nearby = [...this.incomplete.keys()].filter(n => n <= frame && frame - n < this.fps && this.incomplete.get(n).missing?.length).sort((a, b) => b - a)[0];
     const preview = nearby === undefined ? null : { frame: nearby, missing: this.incomplete.get(nearby).missing,
       url: `/api/frames/${this.entry.key}/preview-frames/${String(nearby).padStart(6, '0')}.png` };
     return { epoch: this.epoch, sequence: this.sequence, playing: this.playing,

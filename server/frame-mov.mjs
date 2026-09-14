@@ -2,6 +2,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { PNG } from 'pngjs';
+import { isFullyTransparentPng } from './frame-validity.mjs';
+import { readRenderRecord, withRenderRecord } from './png-record.mjs';
 
 const pad = n => String(n).padStart(6, '0');
 const exists = file => fs.access(file).then(() => true, () => false);
@@ -13,6 +15,23 @@ async function atomic(file, data) {
   await fs.rename(temp, file);
 }
 
+/** A fully transparent render is accepted only when a second render agrees. */
+export const CLEAR_CONFIRMATIONS = 2;
+
+/** What produced a cached frame: `capture` (capture code fingerprint),
+ * `scale` (device scale factor) and `cards` (the visible card keys at that
+ * frame). Fields absent from the expectation are not compared, and `cards`
+ * is compared only when both sides know it: a lookup made before the card
+ * plan exists must not throw away every frame. */
+export function signatureMatches(recorded, expected) {
+  if (!expected) return true;
+  if (!recorded) return false;
+  if (expected.capture !== undefined && recorded.capture !== expected.capture) return false;
+  if (expected.scale !== undefined && recorded.scale !== expected.scale) return false;
+  if (expected.cards != null && recorded.cards != null && recorded.cards !== expected.cards) return false;
+  return true;
+}
+
 /**
  * Full-scene MOV cache.
  *
@@ -21,6 +40,14 @@ async function atomic(file, data) {
  * be distinguished from a frame that has not been rendered yet.  The writer
  * consumes only a contiguous prefix (out-of-order see_frames requests stay on
  * disk until their gap is filled), which keeps the ffmpeg pipe bounded.
+ *
+ * Each PNG also carries a render record (png-record.mjs): what produced it and
+ * whether it was an empty (fully transparent) image. It lives in the PNG, not
+ * the table, because the editor server and the prerender worker share this
+ * directory and each rewrites the table from its own view. Lookups verify the
+ * record: a frame whose producer no longer matches is removed from the table,
+ * the PNG and any published movie; an empty frame counts as "waiting to
+ * render" until a second render confirms it really is empty.
  */
 export class MovFrameStore {
   constructor({ dir, fps = 30 } = {}) {
@@ -32,12 +59,18 @@ export class MovFrameStore {
     this.movieFile = path.join(this.movDir, 'full.mov');
     this.tempMovie = path.join(this.movDir, `full-${process.pid}.tmp.mov`);
     this.frames = new Set();
+    /** frame -> render record read from (or written into) its PNG */
+    this.records = new Map();
+    /** frames whose PNG was read and carries no record (written by older code) */
+    this.unrecorded = new Set();
     this.pending = new Set();
     this.nextFrame = 0;
     this.writer = null;
     this.writerError = null;
     this.writeChain = Promise.resolve();
     this.tableDirty = false;
+    /** Called with a frame number when its cached image is removed or replaced. */
+    this.onEvict = null;
     this.ready = this.load();
   }
 
@@ -68,6 +101,64 @@ export class MovFrameStore {
 
   has(frame) { return this.frames.has(Number(frame)); }
 
+  /** Rendered, produced as expected, and not an unconfirmed empty image. */
+  valid(frame, signature) {
+    frame = Number(frame);
+    if (!this.frames.has(frame)) return false;
+    const record = this.records.get(frame);
+    if (signature && !(record && signatureMatches(record.signature, signature))) return false;
+    return !(record?.clear && record.renders < CLEAR_CONFIRMATIONS);
+  }
+
+  /** An empty image that still needs a confirming render. */
+  unconfirmedClear(frame) {
+    const record = this.records.get(Number(frame));
+    return !!(record?.clear && record.renders < CLEAR_CONFIRMATIONS && this.frames.has(Number(frame)));
+  }
+
+  /** Cache what a PNG's embedded render record says, or that it has none. */
+  noteRecord(frame, found) {
+    if (found) {
+      this.records.set(frame, { signature: found.signature ?? null, clear: !!found.clear, renders: Number(found.renders) || 1 });
+      this.unrecorded.delete(frame);
+    } else {
+      this.records.delete(frame);
+      this.unrecorded.add(frame);
+    }
+  }
+
+  /** Read the render record from the start of a frame's PNG, which another
+   * process may have written or replaced. Returns false when the frame has no
+   * PNG; a PNG that is gone is forgotten. */
+  async hydrateNow(frame) {
+    let handle;
+    try { handle = await fs.open(path.join(this.frameDir, `${pad(frame)}.png`), 'r'); }
+    catch (error) {
+      if (error?.code === 'ENOENT') {
+        if (this.frames.delete(frame)) this.tableDirty = true;
+        this.records.delete(frame); this.unrecorded.delete(frame); this.pending.delete(frame);
+      }
+      return false;
+    }
+    try {
+      const head = Buffer.alloc(4096);
+      const { bytesRead } = await handle.read(head, 0, head.length, 0);
+      if (!this.frames.has(frame)) { this.frames.add(frame); if (frame >= this.nextFrame) this.pending.add(frame); this.tableDirty = true; }
+      this.noteRecord(frame, readRenderRecord(head.subarray(0, bytesRead)));
+      return true;
+    } catch { return false; }
+    finally { await handle.close().catch(() => {}); }
+  }
+
+  /** Make valid()/unconfirmedClear() see records of frames on disk. */
+  async hydrate(frames) {
+    await this.ready;
+    for (const value of frames) {
+      const frame = Number(value);
+      if (!this.records.has(frame) && !this.unrecorded.has(frame)) await this.hydrateNow(frame);
+    }
+  }
+
   async get(frame) {
     await this.ready;
     frame = Number(frame);
@@ -77,29 +168,113 @@ export class MovFrameStore {
       if (!this.frames.has(frame)) { this.frames.add(frame); if (frame >= this.nextFrame) this.pending.add(frame); this.tableDirty = true; }
       return buf;
     }
-    catch { this.frames.delete(frame); this.tableDirty = true; return undefined; }
+    catch { this.frames.delete(frame); this.records.delete(frame); this.unrecorded.delete(frame); this.tableDirty = true; return undefined; }
+  }
+
+  /** Cache lookup with verification. A frame produced by something other than
+   * `signature` is evicted. An unconfirmed empty frame, or a frame without any
+   * record (written by an older version or not yet persisted by another
+   * process), is reported missing so it is rendered again; the new render
+   * replaces it, so no file is deleted merely for lacking a record. */
+  async lookup(frame, signature) {
+    await this.ready;
+    frame = Number(frame);
+    const buf = await this.get(frame);
+    if (!buf) return undefined;
+    // Judge the bytes about to be served by the record inside them: another
+    // process sharing the cache may have replaced the file since this store
+    // last looked, so a record remembered in memory can be stale.
+    this.noteRecord(frame, readRenderRecord(buf));
+    const record = this.records.get(frame);
+    if (signature && record && !signatureMatches(record.signature, signature)) {
+      await this.evict(frame);
+      return undefined;
+    }
+    if (signature && !record) return undefined;
+    if (record?.clear && record.renders < CLEAR_CONFIRMATIONS) return undefined;
+    return buf;
   }
 
   async persist() {
     if (!this.tableDirty) return;
-    await atomic(this.tableFile, JSON.stringify({ version: 1, fps: this.fps, frames: [...this.frames].sort((a, b) => a - b), movie: path.basename(this.movieFile) }));
+    // An index only; render records live in the PNGs.
+    await atomic(this.tableFile, JSON.stringify({ version: 2, fps: this.fps, frames: [...this.frames].sort((a, b) => a - b),
+      movie: path.basename(this.movieFile) }));
     this.tableDirty = false;
   }
 
-  async put(frame, buffer) {
+  /** Remove one frame: table entry, PNG, any movie built from it, and let the
+   * owner reset derived samples (the playback movie) to transparent. */
+  async evict(frame) {
+    frame = Number(frame);
+    const work = this.writeChain.then(async () => {
+      await fs.rm(path.join(this.frameDir, `${pad(frame)}.png`), { force: true });
+      this.frames.delete(frame); this.records.delete(frame); this.unrecorded.delete(frame); this.pending.delete(frame);
+      this.tableDirty = true;
+      await this.resetMovie();
+      await this.onEvict?.(frame);
+      await this.persist();
+    });
+    this.writeChain = work.catch(() => {});
+    return work;
+  }
+
+  /** Must run inside writeChain. A published or streaming movie no longer
+   * matches the PNG table after a frame changed; rebuild it from the PNGs. */
+  async resetMovie() {
+    this.streamEpoch = (this.streamEpoch || 0) + 1;
+    const writer = this.writer; this.writer = null;
+    await writer?.abort().catch(() => {});
+    await fs.rm(this.tempMovie, { force: true }).catch(() => {});
+    await fs.rm(this.movieFile, { force: true }).catch(() => {});
+    this.writerError = null;
+    this.nextFrame = 0; this.pending = new Set(this.frames);
+  }
+
+  async put(frame, buffer, signature = null) {
     await this.ready;
     frame = Number(frame);
     if (!Number.isSafeInteger(frame) || frame < 0) throw new Error('Invalid MOV frame');
-    return this.writeChain = this.writeChain.then(async () => {
+    const work = this.writeChain.then(async () => {
+      const clear = isFullyTransparentPng(buffer);
+      const file = path.join(this.frameDir, `${pad(frame)}.png`);
+      // Another process sharing this cache may have written or replaced the
+      // frame since this store last looked: decide from what is on disk now.
+      await this.hydrateNow(frame);
+      const record = this.records.get(frame);
+      const stamped = next => (signature ? withRenderRecord(buffer, next) : buffer);
+      let replaced = false, wrote = false;
       if (!this.frames.has(frame)) {
-        await atomic(path.join(this.frameDir, `${pad(frame)}.png`), buffer);
+        const next = { signature, clear, renders: 1 };
+        await atomic(file, stamped(next));
+        wrote = true;
         this.frames.add(frame);
         this.pending.add(frame);
+        this.records.set(frame, next);
+        this.unrecorded.delete(frame);
+        this.tableDirty = true;
+      } else if (record ? !signatureMatches(record.signature, signature) || (record.clear && !clear) : !!signature) {
+        // Produced by something else, an unconfirmed empty image now painted,
+        // or an unverifiable legacy image: the fresh render wins.
+        const next = { signature, clear, renders: 1 };
+        await atomic(file, stamped(next));
+        this.records.set(frame, next);
+        this.unrecorded.delete(frame);
+        this.tableDirty = true;
+        replaced = true;
+      } else if (record?.clear && clear) {
+        // The same producer rendered an empty image again: it really is empty.
+        record.renders++;
+        if (signature) await atomic(file, withRenderRecord(await fs.readFile(file), record));
         this.tableDirty = true;
       }
-      // The common forward case goes directly from the in-memory screenshot
-      // buffer into ffmpeg. The PNG remains the durable random-access copy.
-      if (this.writer && frame === this.nextFrame && this.pending.has(frame)) {
+      if (replaced) {
+        await this.resetMovie();
+        await this.onEvict?.(frame);
+      } else if (wrote && this.writer && frame === this.nextFrame && this.pending.has(frame)) {
+        // The common forward case goes directly from the in-memory screenshot
+        // buffer into ffmpeg. The PNG remains the durable random-access copy.
+        // When the PNG on disk was kept instead, flush() streams that PNG.
         try {
           await this.writer.write(buffer);
           this.pending.delete(frame);
@@ -113,8 +288,11 @@ export class MovFrameStore {
       await this.flush();
       // Persist in small batches. A process crash can lose only the latest
       // batch; the PNGs are adopted automatically on the next load.
-      if (this.tableDirty && (this.frames.size % 16 === 0 || !this.writer)) await this.persist();
+      if (this.tableDirty && (this.frames.size % 16 === 0 || !this.writer || replaced)) await this.persist();
     });
+    // One failed write (e.g. a locked table file) must not reject every later put.
+    this.writeChain = work.catch(() => {});
+    return work;
   }
 
   async start(ffmpeg, streamFactory) {
@@ -134,18 +312,33 @@ export class MovFrameStore {
     } catch (error) {
       // MOV is an optimization. Random PNG access remains valid when ffmpeg
       // is unavailable, so do not make see_frames fail for the stream alone.
-      this.writerError = error;
-      this.writer = null;
+      // A stream already replaced by resetMovie is not this stream's failure.
+      if (epoch === this.streamEpoch) {
+        this.writerError = error;
+        this.writer = null;
+      }
     }
   }
 
   async flush() {
-    if (!this.writer) return;
-    while (this.pending.has(this.nextFrame)) {
+    const writer = this.writer, epoch = this.streamEpoch;
+    if (!writer) return;
+    // startNow runs this outside writeChain, so a replaced or evicted frame can
+    // reset the movie meanwhile. Stop once the stream this loop began with is gone.
+    const current = () => this.writer === writer && this.streamEpoch === epoch;
+    while (current() && this.pending.has(this.nextFrame)) {
       const frame = this.nextFrame;
-      const buffer = await fs.readFile(path.join(this.frameDir, `${pad(frame)}.png`));
-      try { await this.writer.write(buffer); }
-      catch (error) { this.writerError = error; await this.writer.abort().catch(() => {}); this.writer = null; return; }
+      let buffer;
+      try { buffer = await fs.readFile(path.join(this.frameDir, `${pad(frame)}.png`)); }
+      catch { return; }
+      if (!current()) return;
+      try { await writer.write(buffer); }
+      catch (error) {
+        if (current()) { this.writerError = error; this.writer = null; }
+        await writer.abort().catch(() => {});
+        return;
+      }
+      if (!current()) return;
       this.pending.delete(frame);
       this.nextFrame++;
     }
@@ -253,18 +446,34 @@ export class PlaybackMovStore {
     }
   }
   has(frame) { return this.samples.has(frame); }
-  async put(frame, buffer) {
+  async patch(frame, offset, size) {
+    const encodedOffset = Buffer.alloc(8); encodedOffset.writeBigUInt64BE(BigInt(offset));
+    await this.writeAt(u32(size), this.sizeTable + frame * 4);
+    await this.writeAt(encodedOffset, this.offsetTable + frame * 8);
+  }
+  /** `replace`: overwrite a published sample (its source frame was re-rendered). */
+  async put(frame, buffer, { replace = false } = {}) {
     await this.ready;
     if (!Number.isSafeInteger(frame) || frame < 0 || frame >= this.count) throw new Error('Invalid playback frame');
     const work = this.writeChain.then(async () => {
-      if (this.samples.has(frame) || this.closed) return;
+      if ((this.samples.has(frame) && !replace) || this.closed) return;
       const offset = this.end;
       await this.writeAt(buffer, offset);
       this.end += buffer.length;
-      const encodedOffset = Buffer.alloc(8); encodedOffset.writeBigUInt64BE(BigInt(offset));
-      await this.writeAt(u32(buffer.length), this.sizeTable + frame * 4);
-      await this.writeAt(encodedOffset, this.offsetTable + frame * 8);
+      await this.patch(frame, offset, buffer.length);
       this.samples.set(frame, { offset, size: buffer.length });
+    });
+    this.writeChain = work.catch(() => {});
+    return work;
+  }
+  /** Point a sample back at the transparent placeholder and unpublish it. */
+  async evict(frame) {
+    await this.ready;
+    if (!Number.isSafeInteger(frame) || frame < 0 || frame >= this.count) return;
+    const work = this.writeChain.then(async () => {
+      if (!this.samples.has(frame) || this.closed) return;
+      await this.patch(frame, this.placeholder.offset, this.placeholder.size);
+      this.samples.delete(frame);
     });
     this.writeChain = work.catch(() => {});
     return work;

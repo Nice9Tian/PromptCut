@@ -9,6 +9,8 @@ import { MovFrameStore, PlaybackMovStore } from './frame-mov.mjs';
 import { FramePlayback } from './frame-playback.mjs';
 import { CardFrameCache } from './card-cache.mjs';
 import { cardMediaPath } from './card-media-path.mjs';
+import { createHash } from 'node:crypto';
+import { isFullyTransparentPng } from './frame-validity.mjs';
 
 const pad = n => String(n).padStart(6, '0');
 const exists = file => fs.access(file).then(() => true, () => false);
@@ -30,10 +32,11 @@ async function atomic(file, data) {
  * Each lane owns its Chrome; foreground never waits for a background bake to finish.
  */
 export class FramePipeline {
-  constructor({ root, origin, code = () => '' }) {
+  constructor({ root, origin, code = () => '', captureCode = () => undefined }) {
     this.root = root;
     this.origin = origin;
     this.code = code;
+    this.captureCode = captureCode;
     this.entries = new Map();
     this.queue = [];
     // The human preview, Agent and background bake each own an independent
@@ -68,11 +71,15 @@ export class FramePipeline {
       // Controls are content addressed independently of the full-scene entry;
       // a project edit that invalidates the scene can still reuse an unchanged
       // card MOV from <pipeline-root>/controls/<control-key>.
-      entry.cardCache = new CardFrameCache({ root: this.root, project: entry.project });
+      entry.cardCache = new CardFrameCache({ root: this.root, project: entry.project,
+        capture: () => this.captureCode(), scale: () => this.scaleForLane('background') });
       const cold = createFrameArchive({ spillDir: path.join(entry.dir, 'html-cache') });
       entry.html = cold.frames; entry.controls = cold.controls;
       entry.createControl = cold.createControl; entry.disposeArchive = cold.dispose;
       entry.mov = new MovFrameStore({ dir: entry.dir, fps: project.fps || 30 });
+      // A removed or replaced full-scene frame must not stay published in the
+      // playback movie: put that sample back to transparent.
+      entry.mov.onEvict = frame => entry.playbackMovie?.evict(frame);
       this.entries.set(key, entry);
       entry.loading = this.loadArchive(entry).then(archive => {
         try {
@@ -119,6 +126,26 @@ export class FramePipeline {
     if (lane !== 'background') return 1;
     const value = Number(process.env.PROMPTCUT_PRERENDER_SCALE || 1);
     return Number.isFinite(value) && value > 0 ? Math.min(3, Math.max(0.5, value)) : 1;
+  }
+  /** What a full-scene frame must have been produced by to be served: the
+   * capture code and the keys of the cards visible at that frame. The entry key
+   * already covers the project; these are the inputs it does not. Card keys are
+   * unknown (null) until a browser plan has been computed for this entry.
+   *
+   * The device scale is deliberately not part of it: with
+   * PROMPTCUT_PRERENDER_SCALE set, the background lane and the 1x lanes would
+   * evict each other's frames forever and full.mov would never complete. Mixed
+   * scales in one store predate this check and remain as they were. */
+  // eslint-disable-next-line no-unused-vars
+  renderSignature(entry, frame, lane) {
+    const fps = Number(entry.project.fps) || 30;
+    let cards = null;
+    if (Array.isArray(entry.cardPlan)) {
+      const keys = entry.cardPlan.filter(control => frame >= control.sampling.firstFrame && frame / fps < control.end - 1e-9)
+        .map(control => control.key).sort();
+      cards = createHash('sha256').update(keys.join('\n')).digest('hex').slice(0, 32);
+    }
+    return { capture: this.captureCode() || undefined, cards };
   }
   async acquire(lane, project) {
     if (lane === 'background' && (this.backgroundYielding || this.backgroundLeaseUntil > Date.now())) throw Object.assign(new Error('Background yielded to playback'), { cancelled: true });
@@ -353,12 +380,17 @@ export class FramePipeline {
     // missing MOV frame, so random access can still avoid loading media.
     for (const frame of frames) {
       if (signal?.aborted) throw Object.assign(new Error('Frame request cancelled'), { cancelled: true });
-      const buf = await entry.mov?.get(frame);
+      const buf = await entry.mov?.lookup(frame, this.renderSignature(entry, frame, lane));
       if (buf) result.set(frame, { buf, source: 'mov' });
       else {
         // Compatibility with the pre-MOV cumulative PNG cache. It is still a
         // valid full-scene result and lets old projects avoid a re-render.
-        try { result.set(frame, { buf: await fs.readFile(path.join(entry.dir, 'frames', pad(frame) + '.png')), source: 'rendered' }); }
+        // It has no render record, so an empty image there is not trusted.
+        try {
+          const legacy = await fs.readFile(path.join(entry.dir, 'frames', pad(frame) + '.png'));
+          if (isFullyTransparentPng(legacy)) throw new Error('Empty legacy frame');
+          result.set(frame, { buf: legacy, source: 'rendered' });
+        }
         catch { if (!hasMedia && entry.html?.has?.(frame)) htmlFrames.push(frame); else missing.push(frame); }
       }
       if (result.has(frame)) await onFrame?.(frame, result.get(frame));
@@ -387,12 +419,13 @@ export class FramePipeline {
         for (let i = 0; i < prefixes.length; i++) buf = await this.rasterPrefix(entry, bakery, frame, i, prefixes);
         if (!incompleteFor(frame).length) await atomic(path.join(entry.dir, 'frames', pad(frame) + '.png'), buf);
         const absent = incompleteFor(frame);
-        const value = absent.length ? { buf, source: 'preview', incomplete: true, missing: absent } : { buf, source: 'html' };
-        result.set(frame, value);
         // A placeholder is a user-preview artifact.  It must never enter the
         // durable full-scene MOV or HTML/final raster cache.
-        if (!absent.length) await this.writeMov(entry, frame, buf);
+        if (!absent.length) await this.writeMov(entry, frame, buf, this.renderSignature(entry, frame, lane));
         else await atomic(path.join(entry.dir, 'preview-frames', pad(frame) + '.png'), buf);
+        const value = absent.length ? { buf, source: 'preview', incomplete: true, missing: absent }
+          : { buf, source: 'html', ...(entry.mov?.unconfirmedClear(frame) ? { unconfirmedClear: true } : {}) };
+        result.set(frame, value);
         await onFrame?.(frame, value);
       };
       for (const frame of htmlFrames) await htmlReplay(frame);
@@ -402,13 +435,13 @@ export class FramePipeline {
         const absent = incompleteFor(frame);
         if (absent.length) await atomic(path.join(entry.dir, 'preview-frames', pad(frame) + '.png'), value.buf);
         await onFrame?.(frame, absent.length ? { ...value, source: 'preview', incomplete: true, missing: absent } : value);
-      }, transient);
+      }, transient, lane);
       for (const frame of missing) {
         const buf = transient?.get(frame) || await entry.mov.get(frame);
         const absent = incompleteFor(frame);
         if (!buf && !absent.length) throw new Error(`MOV frame ${frame} was not written`);
         if (absent.length) result.set(frame, { buf, source: 'preview', incomplete: true, missing: absent });
-        else result.set(frame, { buf, source: 'mov' });
+        else result.set(frame, { buf, source: 'mov', ...(entry.mov.unconfirmedClear(frame) ? { unconfirmedClear: true } : {}) });
       }
     } finally {
       if (userSession) this.releaseUser(userSession);
@@ -426,6 +459,7 @@ export class FramePipeline {
     if (!browserPlan) return null;
     let plan;
     try { plan = entry.cardCache.plan(browserPlan); } catch { return null; }
+    entry.cardPlan = plan;
     if (!plan.length) return null;
     const state = await entry.cardCache.renderState(plan, frames);
     // The final/agent path deliberately does not inject `missing`: an absent
@@ -439,22 +473,29 @@ export class FramePipeline {
     await bakery.loadProject(rendered, { deferCards: true });
     await bakery.page.setViewport({ width: project.width, height: project.height, deviceScaleFactor: 1 });
   }
-  async renderMovFrames(entry, frames, bakery, signal, onFrame, transient = null) {
+  async renderMovFrames(entry, frames, bakery, signal, onFrame, transient = null, lane = 'background') {
+    // Every write and every "already rendered" decision is checked against
+    // what would produce the frame now (see renderSignature). An empty image
+    // stays "waiting to render" until a second render agrees with it.
+    const signature = frame => this.renderSignature(entry, frame, lane);
+    const flag = frame => !transient && entry.mov.unconfirmedClear(frame) ? { unconfirmedClear: true } : {};
+    // Frames the other process (editor server / prerender worker) already rendered count.
+    await entry.mov.hydrate(frames);
     // Reuse HTML-complete frames first. This is the background equivalent of
     // see_frames' HTML lookup and avoids loading media for frames already
     // frozen by the higher-priority lane.
     const hasMedia = (entry.project.media || []).length > 0;
-    const htmlFrames = hasMedia ? [] : frames.filter(frame => !entry.mov.has(frame) && entry.html.has(frame));
+    const htmlFrames = hasMedia ? [] : frames.filter(frame => !entry.mov.valid(frame, signature(frame)) && entry.html.has(frame));
     for (const frame of htmlFrames) {
       if (signal?.aborted) throw Object.assign(new Error('Frame request cancelled'), { cancelled: true });
       const prefixes = this.prefixes(entry);
       let buf;
       for (let i = 0; i < prefixes.length; i++) buf = await this.rasterPrefix(entry, bakery, frame, i, prefixes);
       if (!transient) await atomic(path.join(entry.dir, 'frames', pad(frame) + '.png'), buf);
-      if (transient) transient.set(frame, buf); else await this.writeMov(entry, frame, buf);
-      await onFrame?.(frame, { buf, source: 'html' });
+      if (transient) transient.set(frame, buf); else await this.writeMov(entry, frame, buf, signature(frame));
+      await onFrame?.(frame, { buf, source: 'html', ...flag(frame) });
     }
-    const missing = frames.filter(frame => !entry.mov.has(frame));
+    const missing = frames.filter(frame => !entry.mov.valid(frame, signature(frame)));
     if (!missing.length) return;
     const requested = new Set(missing);
     await bakeFrames(bakery, {
@@ -463,8 +504,8 @@ export class FramePipeline {
       writeFrames: false, signal,
       onFrame: async (frame, buf) => {
         if (requested.has(frame)) {
-          if (transient) transient.set(frame, buf); else await this.writeMov(entry, frame, buf);
-          await onFrame?.(frame, { buf, source: 'live' });
+          if (transient) transient.set(frame, buf); else await this.writeMov(entry, frame, buf, signature(frame));
+          await onFrame?.(frame, { buf, source: 'live', ...flag(frame) });
         }
       },
       // MOV passes still record HTML for the same live state, but only when the
@@ -473,11 +514,11 @@ export class FramePipeline {
     });
     if (!transient) await this.save(entry);
   }
-  async writeMov(entry, frame, buf) {
+  async writeMov(entry, frame, buf, signature = null) {
     if (!entry.mov) return;
     // Store the random-access copy first. Starting ffmpeg for an isolated
     // high-numbered request would leave a pipe waiting forever for frame 0.
-    await entry.mov.put(frame, buf);
+    await entry.mov.put(frame, buf, signature);
     // During playback the append-only PNG MOV is the sink. Do not start an
     // additional ffmpeg stream competing for the same CPU budget.
     if ((this.playback?.playing || this.backgroundYielding || this.backgroundLeaseUntil > Date.now()) && entry.stage !== 'required') return;
@@ -551,6 +592,7 @@ export class FramePipeline {
         const browserPlan = await this.browserCardPlan(bakery);
         let cardPlan = [];
         try { cardPlan = browserPlan ? entry.cardCache.plan(browserPlan) : []; } catch {}
+        if (browserPlan) entry.cardPlan = cardPlan;
         entry.stage = 'required';
         await this.fillCardControls(entry, bakery, controller.signal, cardPlan.filter(c => c.cacheable && c.needPrerendering));
         await this.fillRequiredScene(entry, bakery, controller.signal, cardPlan);
@@ -794,7 +836,10 @@ export class FramePipeline {
       await this.stopPlayback();
       this.playback = new FramePlayback({ entry, movie: entry.playbackMovie,
         render: (times, options) => this.see_frames(entry.project, times, options),
-        cached: async frame => await entry.mov.get(frame) || await fs.readFile(path.join(entry.dir, 'frames', pad(frame) + '.png')).catch(() => null),
+        // Warm frames are verified like see_frames lookups; an empty legacy
+        // raster is not trusted and goes back to the render queue instead.
+        cached: async frame => await entry.mov.lookup(frame, this.renderSignature(entry, frame, 'playback'))
+          || await fs.readFile(path.join(entry.dir, 'frames', pad(frame) + '.png')).then(buf => isFullyTransparentPng(buf) ? null : buf, () => null),
         stop: () => this.stopPlayback(), workers: 2 });
       this.playback.owner = input.owner;
     }

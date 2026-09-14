@@ -16,10 +16,15 @@ const exists = file => fs.access(file).then(() => true, () => false);
  * it with the live scene.
  */
 export class CardFrameCache {
-  constructor({ root, project }) {
+  /** `capture`/`scale` describe the renderer that writes samples. A sample is
+   * served only when it was captured by the current capture code for this
+   * card key, and an empty sample only after a second render confirmed it. */
+  constructor({ root, project, capture = () => undefined, scale = () => 1 }) {
     this.root = root; this.project = project; this.fps = Number(project.fps) || 30;
+    this.capture = capture; this.scale = scale;
     this.stores = new Map(); this.meta = new Map();
   }
+  expected(key) { return { capture: this.capture() || undefined, cards: key }; }
   async store(key) {
     if (!this.stores.has(key)) {
       const store = new MovFrameStore({ dir: path.join(this.root, 'controls', key), fps: this.fps });
@@ -79,7 +84,7 @@ export class CardFrameCache {
       for (const globalFrame of frames) {
         const local = globalFrame - control.sampling.firstFrame;
         if (local < 0 || local >= control.count || globalFrame / this.fps >= control.end - 1e-9) continue;
-        if (await store.get(local)) {
+        if (await store.lookup(local, this.expected(control.key))) {
           (values[control.clipId] ||= {})[globalFrame] = urlFor(control.key, local);
         } else if (control.needPrerendering) (missing[globalFrame] ||= []).push(control.clipId);
       }
@@ -90,12 +95,14 @@ export class CardFrameCache {
     if (!guard()) return false;
     const store = await this.store(key);
     if (!guard()) return false;
-    await store.put(localFrame, png);
+    await store.put(localFrame, png, { capture: this.capture() || undefined, scale: this.scale(), cards: key });
     return true;
   }
   async hasComplete(control) {
     const store = await this.store(control.key);
-    for (let n = 0; n < control.count; n++) if (!store.has(n)) return false;
+    const expected = this.expected(control.key);
+    await store.hydrate(Array.from({ length: control.count }, (_, n) => n));
+    for (let n = 0; n < control.count; n++) if (!store.valid(n, expected)) return false;
     return true;
   }
   async finish(control) {

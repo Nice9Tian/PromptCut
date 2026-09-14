@@ -2,7 +2,7 @@ import type { Plugin } from "vite";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { frameCode, invalidateFrameCode } from "./frame-code.mjs";
+import { captureCode, frameCode, invalidateFrameCode } from "./frame-code.mjs";
 import { FramePipeline } from "./frame-pipeline.mjs";
 import { unpackFrameArchive } from "./frame-archive.mjs";
 import { overLimit } from "./http-guard.mjs";
@@ -21,7 +21,8 @@ export function frameService(root: string, origin: string) {
   root = path.resolve(root);
   let service = services.get(root);
   if (!service) {
-    service = new FramePipeline({ root: path.join(process.env.PROMPTCUT_EXPORT_DIR || path.join(root, "out"), "frame-library"), origin: () => origin, code: () => frameCode(root) });
+    service = new FramePipeline({ root: path.join(process.env.PROMPTCUT_EXPORT_DIR || path.join(root, "out"), "frame-library"), origin: () => origin,
+      code: () => frameCode(root), captureCode: () => captureCode(root) });
     services.set(root, service);
   }
   return service;

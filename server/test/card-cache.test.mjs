@@ -3,7 +3,15 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { PNG } from 'pngjs';
 import { CardFrameCache } from '../card-cache.mjs';
+
+// Cached samples are PNGs carrying their render record; a lookup validates the bytes it reads.
+const paintedPng = () => {
+  const png = new PNG({ width: 16, height: 8 });
+  png.data.fill(255);
+  return PNG.sync.write(png);
+};
 
 const graph = compositing => ({ definitions: [], nodes: [{ id: 'card', adapter: 'chrome', cardId: 'demo', capabilities: { compositing, need_prerendering: false }, inputs: {} }],
   outputs: [{ nodeId: 'card', clipId: 'clip', start: 1.01, end: 1.2, opacity: 1, frame: { x: 0 } }] });
@@ -18,7 +26,7 @@ test('independent controls use local MOV coordinates and never admit unknown Chr
     assert.equal(control.count, 5);
     const before = await cache.renderState([control], [30, 31, 32]);
     assert.deepEqual(before.missing, {}, 'direct cards render live while their independent cache fills');
-    await cache.put(control.key, 0, Buffer.from('png'));
+    await cache.put(control.key, 0, paintedPng());
     const after = await cache.renderState([control], [31, 32]);
     assert.match(after.frames.clip[31], /\/api\/frames\/control\//);
     assert.deepEqual(after.missing, {});
