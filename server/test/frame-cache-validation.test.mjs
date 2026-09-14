@@ -136,6 +136,21 @@ test('frames written by another process sharing the cache are recognised', () =>
   await editor.close();
 }));
 
+test('a rename refused while another process holds the file is retried', t => withDir('pc-eperm-', async dir => {
+  const store = new MovFrameStore({ dir, fps: 30 });
+  await store.ready;
+  const rename = fs.rename;
+  let refused = 0;
+  t.mock.method(fs, 'rename', async (...args) => {
+    if (refused < 2) { refused++; throw Object.assign(new Error('EPERM: operation not permitted, rename'), { code: 'EPERM' }); }
+    return rename(...args);
+  });
+  await store.put(0, painted, sig());
+  assert.equal(refused, 2);
+  samePixels(await store.lookup(0, sig()), painted);
+  await store.close();
+}));
+
 test('a failed write does not reject the puts after it', () => withDir('pc-chain-', async dir => {
   const store = new MovFrameStore({ dir, fps: 30 });
   await store.ready;

@@ -5,7 +5,7 @@ import { captureSnapshot } from '../scripts/capture-snapshot.mjs';
 import { frameVideo } from '../scripts/frame-video.mjs';
 import { frameIdentity, trackPrefixes } from './frame-identity.mjs';
 import { packFrames, unpackFrameArchive, createFrameArchive, packFrameCache, unpackFrameCache } from './frame-archive.mjs';
-import { MovFrameStore, PlaybackMovStore } from './frame-mov.mjs';
+import { MovFrameStore, PlaybackMovStore, atomic } from './frame-mov.mjs';
 import { FramePlayback } from './frame-playback.mjs';
 import { CardFrameCache } from './card-cache.mjs';
 import { cardMediaPath } from './card-media-path.mjs';
@@ -21,12 +21,11 @@ const exists = file => fs.access(file).then(() => true, () => false);
 // decode. Keep this configurable until we have latency telemetry; raise it
 // with PROMPTCUT_USER_RENDER_TIMEOUT_MS when the preview needs more headroom.
 const USER_RENDER_TIMEOUT_MS = Math.max(1000, Number(process.env.PROMPTCUT_USER_RENDER_TIMEOUT_MS) || 10000);
-async function atomic(file, data) {
-  await fs.mkdir(path.dirname(file), { recursive: true });
-  const temp = `${file}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
-  await fs.writeFile(temp, data);
-  await fs.rename(temp, file);
-}
+// An open preview repeats its preload request every 2 s until the scene is
+// ready (UnifiedPreview). An owner that has not asked for this long has gone
+// away: its page was closed or reloaded, and a reloaded default project gets a
+// new id. Its background pass must not keep the current project waiting.
+export const PRELOAD_STALE_MS = 8000;
 
 /** A foreground batch queue, B complete HTML sampling, C cumulative-track rasterization.
  * Each lane owns its Chrome; foreground never waits for a background bake to finish.
@@ -396,6 +395,26 @@ export class FramePipeline {
       if (result.has(frame)) await onFrame?.(frame, result.get(frame));
     }
     if (!htmlFrames.length && !missing.length) return result;
+    // While a required card is still being prerendered, the paused stage asks
+    // for the same frame every 700 ms. Serve the placeholder already rendered
+    // for exactly the cards still missing instead of rendering another one.
+    if ((lane === 'user' || lane === 'playback') && entry.placeholders?.size && entry.cardPlan?.length) {
+      const waiting = [...htmlFrames, ...missing].filter(frame => entry.placeholders.has(frame));
+      const state = waiting.length ? await entry.cardCache.renderState(entry.cardPlan, waiting) : null;
+      for (const frame of waiting) {
+        const absent = state.missing[frame] || [];
+        if (!absent.length || entry.placeholders.get(frame) !== absent.join('\n')) continue;
+        const buf = await fs.readFile(path.join(entry.dir, 'preview-frames', pad(frame) + '.png')).catch(() => null);
+        if (!buf) continue;
+        const value = { buf, source: 'preview', incomplete: true, missing: absent };
+        result.set(frame, value);
+        await onFrame?.(frame, value);
+      }
+      for (const list of [htmlFrames, missing]) {
+        for (let i = list.length - 1; i >= 0; i--) if (result.has(list[i])) list.splice(i, 1);
+      }
+      if (!htmlFrames.length && !missing.length) return result;
+    }
     const userSession = lane === 'user' || lane === 'playback' ? await this.acquireUser(entry.project, signal, onSession) : null;
     const bakery = userSession?.bakery || await this.acquire(lane, entry.project);
     try {
@@ -422,7 +441,10 @@ export class FramePipeline {
         // A placeholder is a user-preview artifact.  It must never enter the
         // durable full-scene MOV or HTML/final raster cache.
         if (!absent.length) await this.writeMov(entry, frame, buf, this.renderSignature(entry, frame, lane));
-        else await atomic(path.join(entry.dir, 'preview-frames', pad(frame) + '.png'), buf);
+        else {
+          await atomic(path.join(entry.dir, 'preview-frames', pad(frame) + '.png'), buf);
+          (entry.placeholders ||= new Map()).set(frame, absent.join('\n'));
+        }
         const value = absent.length ? { buf, source: 'preview', incomplete: true, missing: absent }
           : { buf, source: 'html', ...(entry.mov?.unconfirmedClear(frame) ? { unconfirmedClear: true } : {}) };
         result.set(frame, value);
@@ -433,7 +455,10 @@ export class FramePipeline {
       const transient = Object.keys(cardRender?.missing || {}).length ? new Map() : null;
       await this.renderMovFrames(entry, missing, bakery, signal, async (frame, value) => {
         const absent = incompleteFor(frame);
-        if (absent.length) await atomic(path.join(entry.dir, 'preview-frames', pad(frame) + '.png'), value.buf);
+        if (absent.length) {
+          await atomic(path.join(entry.dir, 'preview-frames', pad(frame) + '.png'), value.buf);
+          (entry.placeholders ||= new Map()).set(frame, absent.join('\n'));
+        }
         await onFrame?.(frame, absent.length ? { ...value, source: 'preview', incomplete: true, missing: absent } : value);
       }, transient, lane);
       for (const frame of missing) {
@@ -573,14 +598,29 @@ export class FramePipeline {
       dispose?.();
     }
   }
+  /** Abort the background generations of owners that stopped asking (PRELOAD_STALE_MS).
+   * Background passes run one after another, so a generation nobody waits
+   * for would otherwise hold every later project behind its whole pipeline. */
+  retireStalePreloads(owner, now = Date.now()) {
+    for (const [other, generation] of this.generations) {
+      if (other === owner || now - generation.seenAt <= PRELOAD_STALE_MS) continue;
+      generation.controller.abort();
+      this.generations.delete(other);
+    }
+  }
   async preload(project) {
     const entry = await this.entry(project);
     const owner = project.id || 'active';
+    const now = Date.now();
+    this.retireStalePreloads(owner, now);
     const previous = this.generations.get(owner);
-    if (previous?.key === entry.key && !previous.controller.signal.aborted && !['error', 'cancelled', 'partial'].includes(entry.status)) return entry;
+    if (previous?.key === entry.key && !previous.controller.signal.aborted && !['error', 'cancelled', 'partial'].includes(entry.status)) {
+      previous.seenAt = now;
+      return entry;
+    }
     previous?.controller.abort();
     const controller = new AbortController();
-    this.generations.set(owner, { key: entry.key, controller });
+    this.generations.set(owner, { key: entry.key, controller, seenAt: now });
     entry.status = 'queued';
     this.background = this.background.catch(() => {}).then(async () => {
       if (controller.signal.aborted) return;
@@ -627,6 +667,10 @@ export class FramePipeline {
       } catch (e) {
         entry.status = controller.signal.aborted ? 'cancelled' : 'error';
         entry.error = controller.signal.aborted ? null : String(e.message || e);
+        // A cancelled MOV pass leaves its stream open; closing the pipeline
+        // later would publish that prefix as the whole movie. Drop the stream;
+        // the next pass replays the PNGs.
+        if (controller.signal.aborted) await entry.mov?.suspend().catch(() => {});
       } finally { if (entry.stage !== 'ready') entry.stage = undefined; if (bakery && this.lanes.get('background')?.bakery === bakery) this.release('background'); }
     });
     return entry;
