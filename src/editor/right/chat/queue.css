@@ -114,7 +114,7 @@
   color: var(--ui-fg, #F2F1F6);
 }
 .ai-queue-btn.is-accent {
-  background: var(--ui-accent, #7C4DFF);
+  background: var(--ui-accent, #00DBDB);
   color: var(--ui-accent-fg, #ffffff);
 }
 .ai-queue-btn.is-accent:hover:not(:disabled) {
@@ -131,7 +131,7 @@
 }
 .ai-queue-btn:focus-visible {
   outline: none;
-  box-shadow: var(--ui-focus-ring, 0 0 0 2px #7C4DFF);
+  box-shadow: var(--ui-focus-ring, 0 0 0 2px #00DBDB);
 }
 
 /* ── 用户气泡:悬停出现的小工具条 + 行内确认层 ───────────────────────── */
@@ -227,7 +227,7 @@
 }
 .ai-rewind-cancel:focus-visible {
   outline: none;
-  box-shadow: var(--ui-focus-ring, 0 0 0 2px #7C4DFF);
+  box-shadow: var(--ui-focus-ring, 0 0 0 2px #00DBDB);
 }
 
 @media (prefers-reduced-motion: reduce) {

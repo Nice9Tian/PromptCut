@@ -64,8 +64,8 @@
   color: var(--ui-fg, #F2F1F6);
 }
 .ai-modelbar-fast.is-on {
-  background: var(--ui-accent, #7C4DFF);
-  border-color: var(--ui-accent, #7C4DFF);
+  background: var(--ui-accent, #00DBDB);
+  border-color: var(--ui-accent, #00DBDB);
   color: var(--ui-accent-fg, #ffffff);
 }
 .ai-modelbar-fast:disabled {
@@ -75,5 +75,5 @@
 .ai-modelbar-fast:focus-visible,
 .ai-modelbar-select:focus-visible {
   outline: none;
-  box-shadow: var(--ui-focus-ring, 0 0 0 2px #7C4DFF);
+  box-shadow: var(--ui-focus-ring, 0 0 0 2px #00DBDB);
 }

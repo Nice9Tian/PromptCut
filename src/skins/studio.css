@@ -61,7 +61,7 @@
   top: 16px;
   bottom: 16px;
   width: 3px;
-  background-color: var(--ui-accent, #7C4DFF);
+  background-color: var(--ui-accent, #00DBDB);
   border-radius: 0 3px 3px 0;
 }
 .pc-rail--right .pc-rail-item.is-on::after {
@@ -71,7 +71,7 @@
   top: 16px;
   bottom: 16px;
   width: 3px;
-  background-color: var(--ui-accent, #7C4DFF);
+  background-color: var(--ui-accent, #00DBDB);
   border-radius: 3px 0 0 3px;
 }
 
@@ -114,7 +114,7 @@
   background-color: color-mix(in oklab, var(--ui-panel-2, #2C2B34) 78%, var(--ui-bg, #111016));
 }
 .pc-chip.is-on {
-  background-color: var(--ui-accent, #7C4DFF);
+  background-color: var(--ui-accent, #00DBDB);
   color: var(--ui-accent-fg, #ffffff);
 }
 .pc-chip.is-on:not(:disabled):hover {
@@ -162,18 +162,18 @@
   background-color: var(--ui-float, #383742);
 }
 .pc-icon-btn[aria-pressed="true"] {
-  background-color: var(--ui-accent-soft, rgba(124, 77, 255, 0.2));
-  color: var(--ui-accent, #7C4DFF);
+  background-color: var(--ui-accent-soft, rgba(0, 219, 219, 0.2));
+  color: var(--ui-accent, #00DBDB);
 }
 .pc-icon-btn[aria-pressed="true"]:not(:disabled):hover {
-  background-color: color-mix(in oklab, var(--ui-accent-soft, rgba(124, 77, 255, 0.2)) 72%, var(--ui-accent, #7C4DFF));
+  background-color: color-mix(in oklab, var(--ui-accent-soft, rgba(0, 219, 219, 0.2)) 72%, var(--ui-accent, #00DBDB));
 }
 
 /* ── 主按钮:强调色实心,36 高;.is-block 占满一行 ─────────────────────── */
 .pc-btn-primary {
   height: 36px;
   border-radius: var(--ui-radius, 6px);
-  background-color: var(--ui-accent, #7C4DFF);
+  background-color: var(--ui-accent, #00DBDB);
   color: var(--ui-accent-fg, #ffffff);
   display: inline-flex;
   align-items: center;
@@ -203,7 +203,7 @@
 .pc-icon-btn:focus-visible,
 .pc-btn-primary:focus-visible {
   outline: none;
-  box-shadow: var(--ui-focus-ring, 0 0 0 2px var(--ui-accent, #7C4DFF));
+  box-shadow: var(--ui-focus-ring, 0 0 0 2px var(--ui-accent, #00DBDB));
 }
 
 /* 禁用:半透明,悬停 / 按下都没有反应(上面各条悬停、按下规则都排除了 :disabled) */

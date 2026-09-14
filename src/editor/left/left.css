@@ -102,7 +102,7 @@
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--ui-accent, #7C4DFF);
+  background: var(--ui-accent, #00DBDB);
 }
 
 /* ── 搜索框 ────────────────────────────────────────────────────── */
@@ -123,7 +123,7 @@
   cursor: text;
 }
 .pc-left-search:focus-within {
-  border-color: var(--ui-accent, #7C4DFF);
+  border-color: var(--ui-accent, #00DBDB);
 }
 .pc-left-search svg {
   flex: none;
@@ -347,9 +347,9 @@
   color: var(--ui-fg, #F2F1F6);
 }
 .pc-lib-scope-chip.is-on {
-  background: var(--ui-accent-soft, rgba(124, 77, 255, 0.2));
-  border-color: var(--ui-accent, #7C4DFF);
-  color: var(--ui-accent, #7C4DFF);
+  background: var(--ui-accent-soft, rgba(0, 219, 219, 0.2));
+  border-color: var(--ui-accent, #00DBDB);
+  color: var(--ui-accent, #00DBDB);
 }
 .pc-lib-scope-caret {
   height: 24px;
@@ -390,7 +390,7 @@
   cursor: pointer;
 }
 .pc-lib-scope-option input {
-  accent-color: var(--ui-accent, #7C4DFF);
+  accent-color: var(--ui-accent, #00DBDB);
 }
 
 /* ── 总览:组框 ────────────────────────────────────────────────── */
@@ -470,8 +470,8 @@
   cursor: pointer;
 }
 .pc-lib-group-empty.is-action:hover {
-  background: var(--ui-accent-soft, rgba(124, 77, 255, 0.2));
-  border-color: var(--ui-accent, #7C4DFF);
+  background: var(--ui-accent-soft, rgba(0, 219, 219, 0.2));
+  border-color: var(--ui-accent, #00DBDB);
   color: var(--ui-fg, #F2F1F6);
 }
 
@@ -588,7 +588,7 @@
   cursor: pointer;
 }
 .pc-lib-color.is-on {
-  box-shadow: 0 0 0 2px var(--ui-bg-2, #1B1A21), 0 0 0 4px var(--ui-accent, #7C4DFF);
+  box-shadow: 0 0 0 2px var(--ui-bg-2, #1B1A21), 0 0 0 4px var(--ui-accent, #00DBDB);
 }
 .pc-lib-rows {
   display: flex;
@@ -631,8 +631,8 @@
   white-space: nowrap;
 }
 .pc-lib-tag.is-accent {
-  background: var(--ui-accent-soft, rgba(124, 77, 255, 0.2));
-  color: var(--ui-accent, #7C4DFF);
+  background: var(--ui-accent-soft, rgba(0, 219, 219, 0.2));
+  color: var(--ui-accent, #00DBDB);
 }
 .pc-lib-ellipsis {
   min-width: 0;
@@ -709,7 +709,7 @@
   cursor: grab;
 }
 .pc-lib-card.is-hot {
-  border-color: color-mix(in oklab, var(--ui-accent, #7C4DFF) 70%, var(--ui-border, #2A2932));
+  border-color: color-mix(in oklab, var(--ui-accent, #00DBDB) 70%, var(--ui-border, #2A2932));
   box-shadow: 0 6px 14px rgba(0, 0, 0, 0.35);
 }
 .pc-lib-card-view {
@@ -813,7 +813,7 @@
 }
 .pc-lib-card-bar-fill {
   height: 100%;
-  background: var(--ui-accent, #7C4DFF);
+  background: var(--ui-accent, #00DBDB);
   transition: width 120ms linear;
 }
 .pc-lib-card-err {
@@ -871,7 +871,7 @@
   inset: 0;
   width: 100%;
   height: 100%;
-  color: var(--ui-accent, #7C4DFF);
+  color: var(--ui-accent, #00DBDB);
   opacity: 0.22;
   pointer-events: none;
 }
@@ -952,7 +952,7 @@
   border-radius: var(--ui-radius, 6px);
 }
 .pc-lib-fxcard.is-on {
-  border-color: var(--ui-accent, #7C4DFF);
+  border-color: var(--ui-accent, #00DBDB);
 }
 .pc-lib-fxcard-swatch {
   flex: 1;
@@ -1012,8 +1012,8 @@
 }
 /* 当前主题:强调色选中轮廓 */
 .pc-lib-theme.is-on {
-  border-color: var(--ui-accent, #7C4DFF);
-  box-shadow: 0 0 0 1px var(--ui-accent, #7C4DFF);
+  border-color: var(--ui-accent, #00DBDB);
+  box-shadow: 0 0 0 1px var(--ui-accent, #00DBDB);
 }
 .pc-lib-theme.is-static {
   cursor: inherit;
@@ -1200,7 +1200,7 @@
 }
 [data-pc="left"] .pc-left-input:focus,
 [data-pc="left"] .pc-left-select:focus {
-  border-color: var(--ui-accent, #7C4DFF);
+  border-color: var(--ui-accent, #00DBDB);
 }
 [data-pc="left"] .pc-left-input.is-error,
 [data-pc="left"] .pc-left-input.is-error:focus {
@@ -1229,7 +1229,7 @@
   height: 24px;
 }
 .pc-left-range {
-  accent-color: var(--ui-accent, #7C4DFF);
+  accent-color: var(--ui-accent, #00DBDB);
 }
 .pc-left-code {
   padding: 8px;
@@ -1244,7 +1244,7 @@
   line-height: 1.6;
 }
 [data-pc="left"] .pc-left-code:focus {
-  border-color: var(--ui-accent, #7C4DFF);
+  border-color: var(--ui-accent, #00DBDB);
 }
 /* JSON 不合法:红框(scripts/left-check.mjs 按边框颜色断言) */
 [data-pc="left"] .pc-left-code.is-error,
@@ -1292,13 +1292,13 @@
 }
 .pc-left-btn.is-primary {
   height: 30px;
-  background: var(--ui-accent, #7C4DFF);
+  background: var(--ui-accent, #00DBDB);
   border-color: transparent;
   color: var(--ui-accent-fg, #ffffff);
   font-weight: 500;
 }
 .pc-left-btn.is-primary:hover:not(:disabled) {
-  background: var(--ui-accent-hover, var(--ui-accent, #7C4DFF));
+  background: var(--ui-accent-hover, var(--ui-accent, #00DBDB));
   color: var(--ui-accent-fg, #ffffff);
 }
 .pc-left-btn.is-danger {
@@ -1333,7 +1333,7 @@
 }
 .pc-left-progress-fill {
   height: 100%;
-  background: var(--ui-accent, #7C4DFF);
+  background: var(--ui-accent, #00DBDB);
   transition: width 200ms;
 }
 .pc-left-muted {

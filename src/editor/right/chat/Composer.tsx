@@ -168,7 +168,7 @@ export function Composer(props: ComposerProps) {
   };
 
   return (
-    <div className="ai-composer" data-pc="ai-composer">
+    <div className={`ai-composer${streaming ? " is-streaming" : ""}`} data-pc="ai-composer">
       {attachments.length > 0 && (
         <div className="ai-attachments">
           {attachments.map((a, idx) => (

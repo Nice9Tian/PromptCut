@@ -94,7 +94,7 @@
 .pc-right-rail .pc-rail-item:focus-visible,
 .pc-rr-x:focus-visible {
   outline: none;
-  box-shadow: var(--ui-focus-ring, 0 0 0 2px #7C4DFF);
+  box-shadow: var(--ui-focus-ring, 0 0 0 2px #00DBDB);
 }
 
 /* 剧本已经写了东西:图标右上角一个小圆点 */
@@ -105,7 +105,7 @@
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: var(--ui-accent, #7C4DFF);
+  background: var(--ui-accent, #00DBDB);
   box-shadow: 0 0 0 2px var(--ui-bg, #131218);
 }
 
@@ -123,8 +123,8 @@
   color: var(--ui-fg, #F2F1F6);
 }
 .pc-rail-item.is-on .pc-rr-glyph {
-  background: var(--ui-accent-soft, rgba(124, 77, 255, 0.2));
-  color: var(--ui-accent, #7C4DFF);
+  background: var(--ui-accent-soft, rgba(0, 219, 219, 0.2));
+  color: var(--ui-accent, #00DBDB);
 }
 /* 标签超过 4 个字在 JS 里截断;这里再兜一层省略号,防字体偏宽时撑出 56px */
 .pc-rail-item .pc-rr-label {
@@ -142,7 +142,7 @@
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: var(--ui-accent, #7C4DFF);
+  background: var(--ui-accent, #00DBDB);
   box-shadow: 0 0 0 2px var(--ui-bg, #131218);
   animation: pc-rr-pulse 1.4s ease-in-out infinite;
 }
@@ -161,7 +161,7 @@
   padding: 0 4px;
   box-sizing: border-box;
   border-radius: 8px;
-  background: var(--ui-accent, #7C4DFF);
+  background: var(--ui-accent, #00DBDB);
   color: var(--ui-accent-fg, #ffffff);
   font-size: 10px;
   font-weight: 600;
@@ -238,7 +238,7 @@
   font-size: 12px;
   line-height: 1.5;
   border-radius: var(--ui-radius, 6px);
-  background: var(--ui-accent-soft, rgba(124, 77, 255, 0.2));
+  background: var(--ui-accent-soft, rgba(0, 219, 219, 0.2));
   color: var(--ui-fg, #F2F1F6);
 }
 .pc-script-text {
@@ -258,7 +258,7 @@
   outline: none;
 }
 .pc-script-text:focus-visible {
-  border-color: var(--ui-accent, #7C4DFF);
+  border-color: var(--ui-accent, #00DBDB);
 }
 .pc-script-actions {
   display: flex;
@@ -296,7 +296,7 @@
 }
 .pc-script-page button:focus-visible {
   outline: none;
-  box-shadow: var(--ui-focus-ring, 0 0 0 2px #7C4DFF);
+  box-shadow: var(--ui-focus-ring, 0 0 0 2px #00DBDB);
 }
 
 /* ── 顶栏:标题 + 连接点,右边三个图标钮 ─────────────────────────── */
@@ -353,7 +353,7 @@
 }
 .ai-chat-actions .pc-icon-btn:focus-visible {
   outline: none;
-  box-shadow: var(--ui-focus-ring, 0 0 0 2px #7C4DFF);
+  box-shadow: var(--ui-focus-ring, 0 0 0 2px #00DBDB);
 }
 
 /* 一个驱动都没装时顶栏上唯一的按钮 */
@@ -397,7 +397,7 @@
   align-self: flex-start;
   max-width: 100%;
   padding: 4px 12px;
-  background: var(--ui-accent, #7C4DFF);
+  background: var(--ui-accent, #00DBDB);
   color: var(--ui-accent-fg, #ffffff);
   border: none;
   border-radius: var(--ui-radius-sm, 4px);
@@ -541,7 +541,7 @@
  * 用户消息数量少、每条都是一轮的起点,值得最醒目的那一档。
  */
 .ai-message.user {
-  background: var(--ui-accent, #7C4DFF);
+  background: var(--ui-accent, #00DBDB);
   color: var(--ui-accent-fg, #ffffff);
 }
 /* 强调色底上,链接、引用、代码块的默认颜色都会看不清,一律跟着气泡的字色走 */
@@ -684,7 +684,7 @@
   margin: 10px 0;
 }
 .ai-message-text a {
-  color: var(--ui-accent, #7C4DFF);
+  color: var(--ui-accent, #00DBDB);
   overflow-wrap: anywhere;
 }
 
@@ -734,15 +734,22 @@
 /*
  * 固定占三分之一而不是随内容增高:长提示词是常态,输入框一路长高会把消息区挤没,
  * 用户边写边对照上面的回复就看不到了。字多了在输入框里面滚。
+ *
+ * 做成一张独立的圆角输入框:四周离面板边留 10px,输入框、附件和底部工具条都装在框里,
+ * 和上面的消息区分得开,一眼看得出「这里是我写字的地方」。高度扣掉外边距后仍是三分之一。
+ * 不设 overflow:hidden —— 「✦」「⋯」弹层从工具条往上弹,裁掉就看不见了。
  */
 .ai-composer {
-  flex: 0 0 33.333%;
-  min-height: 150px;
+  flex: 0 0 calc(33.333% - 10px);
+  min-height: 140px;
   min-width: 0;
   display: flex;
   flex-direction: column;
-  border-top: 1px solid var(--ui-border, #2A2932);
-  background: var(--ui-bg-2, #1B1A21);
+  margin: 0 10px 10px;
+  border: 1px solid var(--ui-border-strong, #3A3944);
+  border-radius: var(--ui-radius-xl, 10px);
+  background: var(--ui-panel, #23222A);
+  transition: border-color 160ms ease, box-shadow 160ms ease;
 }
 
 /* 附件卡片在最上;多到一定程度自己滚,不把输入框挤没 */
@@ -753,7 +760,7 @@
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  padding: 8px 12px 0;
+  padding: 10px 12px 0;
 }
 .ai-attachment-chip {
   display: inline-flex;
@@ -808,7 +815,7 @@
   box-sizing: border-box;
   resize: none;
   overflow-y: auto;
-  padding: 10px 12px;
+  padding: 12px 14px 6px;
   border: 0;
   outline: none;
   background: transparent;
@@ -823,9 +830,18 @@
 .ai-composer-input:disabled {
   opacity: 0.6;
 }
-/* 输入框本身没有描边,聚焦时让输入区的上边线换成强调色,知道光标在这儿 */
+/* 输入框本身没有描边,聚焦时整个圆角框换成强调色描边 + 一圈淡光,知道光标在这儿 */
 .ai-composer:focus-within {
-  border-top-color: var(--ui-accent, #7C4DFF);
+  border-color: var(--ui-accent, #00DBDB);
+  box-shadow: 0 0 0 3px var(--ui-accent-soft, rgb(0 219 219 / 0.18));
+}
+/*
+ * 皮肤(motion.css)给所有聚焦的 textarea 挂描边和 glow;这里的输入框装在圆角框里,
+ * 聚焦由外面整个框表现,里面再发一圈光会在工具条上方画出一道横线。
+ */
+[data-skin] .ai-composer-input:focus {
+  border-color: transparent;
+  box-shadow: none;
 }
 
 /* 底部 36px 工具条:左边一组工具,右边发送 / 停止。弹层以它为定位参照 */
@@ -837,7 +853,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 0 8px 4px;
+  padding: 0 8px 6px;
   min-width: 0;
 }
 .ai-composer-tools {
@@ -875,7 +891,7 @@
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--ui-accent, #7C4DFF);
+  background: var(--ui-accent, #00DBDB);
 }
 /* 驱动方式 / 模型的紧凑下拉:窄栏时先缩它们,文字省略,按钮和发送键不动 */
 .ai-bar-select {
@@ -898,11 +914,19 @@
   opacity: 0.5;
   cursor: default;
 }
+/*
+ * 运行中右边要放「加入队列」和「■ 停止」两个按钮,窄栏里驱动 / 模型下拉会被挤成一个字母;
+ * 这一轮跑着的时候本来也不该换驱动和模型(模型那组已经是禁用的),干脆先收起来,跑完再出现。
+ */
+.ai-composer.is-streaming .ai-bar-select,
+.ai-composer.is-streaming .ai-composer-tools > :not(.ai-bar-btn):not(.ai-pop-anchor) {
+  display: none;
+}
 .ai-composer-bar .ai-bar-btn:focus-visible,
 .ai-bar-select:focus-visible,
 .ai-composer-bar .ai-send-btn:focus-visible {
   outline: none;
-  box-shadow: var(--ui-focus-ring, 0 0 0 2px #7C4DFF);
+  box-shadow: var(--ui-focus-ring, 0 0 0 2px #00DBDB);
 }
 
 /* 发送:小号主按钮;运行中换成中性色的「■ 停止」,别让「停」看着像「再发一次」 */
@@ -972,7 +996,7 @@
 .ai-menu-icon {
   flex: 0 0 18px;
   text-align: center;
-  color: var(--ui-accent, #7C4DFF);
+  color: var(--ui-accent, #00DBDB);
 }
 .ai-menu-sep {
   height: 1px;

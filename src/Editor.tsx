@@ -256,25 +256,33 @@ export default function Editor() {
           </motion.aside>
         </div>
         {!isChat && (
-          <ResizeHandle
-            axis="y"
-            value={footer.value}
-            min={MIN_FOOTER_H}
-            max={() => window.innerHeight * 0.7}
-            invert
-            onChange={footer.set}
-            onCommit={footer.commit}
-            onReset={footer.reset}
-            title="拖动调整时间轴高度,双击复位"
-          />
-        )}
-        {!isChat && (
-          <motion.footer
-            initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.28, delay: 0.12, ease: [0.16, 1, 0.3, 1] }}
-            className="pc-card-surface shrink-0 flex flex-col" style={{ height: footer.value }}
+          /*
+           * 时间轴卡片左右避开两侧 rail:左边对齐素材库抽屉卡、右边对齐 AI 面板卡,rail 那一列一直通到底。
+           * 某一侧收起时抽屉 / 面板没了,上方卡片边缘就是 rail 后面那条 8px 缝的另一侧,再让出一个 HANDLE_W 才对得齐预览卡。
+           * 拖杆和卡片一起包进来,纵向拖杆的 hover 线也跟着缩进。
+           */
+          <div
+            className="pc-editor-bottom shrink-0 flex flex-col"
+            style={{ marginLeft: RAIL_W + (leftCollapsed ? HANDLE_W : 0), marginRight: RAIL_W + (rightCollapsed ? HANDLE_W : 0) }}
           >
-            <TimelineView />
-          </motion.footer>
+            <ResizeHandle
+              axis="y"
+              value={footer.value}
+              min={MIN_FOOTER_H}
+              max={() => window.innerHeight * 0.7}
+              invert
+              onChange={footer.set}
+              onCommit={footer.commit}
+              onReset={footer.reset}
+              title="拖动调整时间轴高度,双击复位"
+            />
+            <motion.footer
+              initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.28, delay: 0.12, ease: [0.16, 1, 0.3, 1] }}
+              className="pc-card-surface shrink-0 flex flex-col" style={{ height: footer.value }}
+            >
+              <TimelineView />
+            </motion.footer>
+          </div>
         )}
       </div>
       <StatusBar />

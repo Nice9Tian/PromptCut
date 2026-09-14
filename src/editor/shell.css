@@ -105,3 +105,10 @@ body[data-pc-resizing] .pc-gutter::after {
 body[data-pc-resizing] .pc-editor-grid {
   transition: none;
 }
+
+/* 时间轴卡片左右缩进(避开两侧 rail)跟着收起 / 展开一起滑,和上面网格列宽同一条曲线 */
+@media (prefers-reduced-motion: no-preference) {
+  .pc-editor-bottom {
+    transition: margin 220ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+}

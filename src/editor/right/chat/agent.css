@@ -237,7 +237,7 @@
   transform: scale(1.06);
 }
 .ai-op:focus-visible {
-  outline: 2px solid var(--ui-accent, #7c4dff);
+  outline: 2px solid var(--ui-accent, #00DBDB);
   outline-offset: 2px;
 }
 /* 展开中的那个留一圈内描边,好知道下面的清单是谁的 */
@@ -247,11 +247,11 @@
 /* 轮播翻到的那一页属于这个图标:放大 + 强调色发光 */
 .ai-op.is-focus {
   transform: scale(1.12);
-  box-shadow: 0 0 0 2px var(--ui-accent, #7c4dff), 0 0 16px var(--ui-accent-soft, rgba(124, 77, 255, 0.35));
+  box-shadow: 0 0 0 2px var(--ui-accent, #00DBDB), 0 0 16px var(--ui-accent-soft, rgba(0, 219, 219, 0.35));
 }
 .ai-op.is-focus.is-open {
-  box-shadow: inset 0 0 0 2px rgb(255 255 255 / 0.6), 0 0 0 2px var(--ui-accent, #7c4dff),
-    0 0 16px var(--ui-accent-soft, rgba(124, 77, 255, 0.35));
+  box-shadow: inset 0 0 0 2px rgb(255 255 255 / 0.6), 0 0 0 2px var(--ui-accent, #00DBDB),
+    0 0 16px var(--ui-accent-soft, rgba(0, 219, 219, 0.35));
 }
 /* 叠了 2 个以上:右下角一个 ×n */
 .ai-op-count {
@@ -462,7 +462,7 @@
 }
 .ai-report.is-final {
   padding: 10px 12px;
-  border-color: var(--ui-accent-soft, rgba(124, 77, 255, 0.45));
+  border-color: var(--ui-accent-soft, rgba(0, 219, 219, 0.45));
 }
 .ai-report-head {
   font-size: 11px;
@@ -635,7 +635,7 @@
   outline: none;
 }
 .ai-carousel-frame:focus-visible {
-  box-shadow: var(--ui-focus-ring, 0 0 0 2px var(--ui-accent, #7c4dff));
+  box-shadow: var(--ui-focus-ring, 0 0 0 2px var(--ui-accent, #00DBDB));
 }
 .ai-carousel-frame.is-dragging {
   cursor: grabbing;
@@ -791,10 +791,10 @@
 .ai-carousel-dot.is-on {
   width: 14px;
   opacity: 1;
-  background-color: var(--ui-accent, #7c4dff);
+  background-color: var(--ui-accent, #00DBDB);
 }
 .ai-carousel-dot:focus-visible {
-  outline: 2px solid var(--ui-accent, #7c4dff);
+  outline: 2px solid var(--ui-accent, #00DBDB);
   outline-offset: -1px;
 }
 @media (prefers-reduced-motion: reduce) {
@@ -829,7 +829,7 @@
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--ui-accent, #7c4dff);
+  background: var(--ui-accent, #00DBDB);
   animation: ai-step-breathe 1.4s ease-in-out infinite;
 }
 .ai-tstrip-textwrap {

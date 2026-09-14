@@ -8,7 +8,7 @@
 ```
 ┌ WindowTitleBar / TopBar(和画布同色)                                              ┐
 │ [左 rail][左抽屉卡片] ║ [预览卡片]            ║ [AI 助手卡片][右 rail]              │
-├──────────────── TimelineView 卡片:横贯整个窗口宽度 ─────────────────────────────────┤
+│ [左 rail][──── TimelineView 卡片:左对齐抽屉卡、右对齐 AI 面板卡 ────][右 rail]              │
 └ StatusBar                                                                          ┘
 ```
 
@@ -18,7 +18,8 @@
 共享样式类(`.pc-card-surface`、`.pc-rail*`、`.pc-chip`、`.pc-icon-btn`、`.pc-btn-primary`、`.pc-section-title`)在 `src/skins/studio.css`。
 默认皮肤 `studio-dark`;还停在旧默认 `indigo-dark` 的用户会被迁移一次(标记 `pc.skin.studioMigrated`)。
 
-- **时间轴横贯全宽**,两侧的 rail 和面板只占时间轴上方。
+- **时间轴卡片夹在两条 rail 中间**:rail 那一列从上通到底,时间轴左边对齐素材库抽屉卡、右边对齐 AI 面板卡
+  (`Editor.tsx` 的 `.pc-editor-bottom` 左右各缩进 `RAIL_W`,某一侧收起时再多让一个 `HANDLE_W`,对齐预览卡边缘);抽屉和 AI 面板只占时间轴上方。
 - 两侧各一条 64px 竖向 rail(`RAIL_W`,`src/editor/sideRails.ts`)。点 rail 上已选中的项 = 收起 / 展开旁边的抽屉或面板,
   状态存 `pc.rail.left.collapsed` / `pc.rail.right.collapsed`。左侧整列宽 = `RAIL_W + (收起 ? 0 : drawerW)`,右侧同理。
 - 抽屉宽 `pc.left.drawerW`(默认 240,正好是素材库 big 单列的宽度;最小 200)、AI 面板宽 `pc.right.panelW`(默认 360,最小 280)、
