@@ -38,6 +38,23 @@ const T = (video: string, audio: string, image: string, text: string, fx: string
 
 export const palettes: Palette[] = [
   {
+    id: "studio",
+    name: "流光",
+    en: "Studio",
+    blurb: "深邃的现代生产力工具底色,流光紫色强调,分层清晰。",
+    dark: {
+      surfaces: ["#111016", "#1B1A21", "#23222A", "#2C2B34", "#383742"],
+      fg: "#F2F1F6", fgMuted: "#A6A4B2", accent: "#7C4DFF",
+      hairline: "#2A2932", borderStrong: "#3A3944", fgFaint: "#72707D",
+      tracks: T("#4FB3C9", "#5FBB8F", "#A98CF0", "#E0B356", "#E77FB0", "#7F95F5", "#E08A63"),
+    },
+    light: {
+      surfaces: ["#E6E5EB", "#F3F2F7", "#FFFFFF", "#EAE9F0", "#FFFFFF"],
+      fg: "#1B1A21", fgMuted: "#5D5B68", accent: "#6B3FF0", border: "#D3D1DB",
+      tracks: T("#23808F", "#2F7A58", "#6A4BC0", "#9A6F1C", "#B34B7F", "#4A5CC4", "#A9532C"),
+    },
+  },
+  {
     id: "steel",
     name: "钢蓝",
     en: "Steel",

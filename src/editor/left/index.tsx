@@ -1,234 +1,129 @@
 import "./debug";
 import "./left.css";
-import { useRef, useState, useEffect } from "react";
-import { CardsTab, type CardsTabHandle } from "./CardsTab";
-import { MediaTab } from "./MediaTab";
-import { CaptionsTab } from "./CaptionsTab";
-import { TransitionsTab } from "./TransitionsTab";
-import { AudioFxTab } from "./AudioFxTab";
-import { EmphasisTab } from "./EmphasisTab";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ComponentType } from "react";
 import { onCaptionsRequest } from "./captionsBus";
-import type { MediaAsset } from "../../kernel/project";
-import { StyleTab } from "./StyleTab";
-import { AssetToolbar } from "./AssetToolbar";
-import { Inspector } from "./Inspector";
-import { NodeGraphTab } from "../nodes/NodeGraphTab";
+import { setRailCollapsed, toggleRailCollapsed, useRailCollapsed } from "../sideRails";
+import { playEnter } from "../enterMotion";
+import { readStored, writeStored } from "./stored";
+import { RailIconCaptions, RailIconEdit, RailIconEffects, RailIconLibrary } from "./railIcons";
+import { LibrarySection } from "./LibrarySection";
+import { EffectsSection } from "./EffectsSection";
+import { EditSection } from "./EditSection";
+import { CaptionsSection } from "./CaptionsSection";
 
 /**
- * 左栏:两级分页。
- *   顶级  素材 | 编辑
- *   二级  素材 → 全局风格 / 卡片 / 转场 / 视频 / 图像 / 配乐 / 字幕     编辑 → 参数 / 代码
- * 分页选择记在 localStorage;各分页都常驻挂载(只是隐藏),切来切去不丢滚动位置和输入。
+ * 左栏 = 竖向 rail + 抽屉卡片。
+ *
+ *   rail   素材库 / 特效 / 编辑 / 字幕
+ *          点另一项 = 切换分区(收起着就顺手展开);点当前已选中项 = 收起 / 展开抽屉(sideRails)
+ *   抽屉   四个分区常驻挂载,只用行内 display 显隐 —— 切来切去不丢滚动位置、搜索词和草稿。
+ *          收起时整块 display:none,整列宽度由 Editor.tsx 按 sideRails 算。
+ *
+ * 选中分区记在 localStorage `pc.left.section`(默认 library)。
+ * 时间轴 / 素材库右键「转写字幕」走 captionsBus:切到字幕分区、展开抽屉、聚焦那份素材。
  */
-type TopTab = "assets" | "edit";
-type AssetTab = "style" | "cards" | "transitions" | "audiofx" | "emphasis" | "videos" | "images" | "music" | "captions" | "nodes";
-type EditTab = "form" | "code";
+type Section = "library" | "effects" | "edit" | "captions";
 
-const TOP_TABS: { key: TopTab; label: string }[] = [
-  { key: "assets", label: "素材" },
-  { key: "edit", label: "编辑" },
+const SECTIONS: { key: Section; label: string; Icon: ComponentType }[] = [
+  { key: "library", label: "素材库", Icon: RailIconLibrary },
+  { key: "effects", label: "特效", Icon: RailIconEffects },
+  { key: "edit", label: "编辑", Icon: RailIconEdit },
+  { key: "captions", label: "字幕", Icon: RailIconCaptions },
 ];
-const ASSET_TABS: { key: AssetTab; label: string }[] = [
-  { key: "style", label: "全局风格" },
-  { key: "cards", label: "卡片" },
-  { key: "transitions", label: "转场/滤镜" },
-  { key: "audiofx", label: "音频效果" },
-  { key: "emphasis", label: "强调" },
-  { key: "videos", label: "视频" },
-  { key: "images", label: "图片" },
-  { key: "music", label: "配乐" },
-  { key: "captions", label: "字幕" },
-  { key: "nodes", label: "节点" },
-];
-const ASSET_TAB_KEYS = ASSET_TABS.map((t) => t.key) as readonly AssetTab[];
-/** 三个素材分页各管一种素材,和导入时按内容类型归位的口径一致 */
-const VIDEO_KINDS: MediaAsset["kind"][] = ["video"];
-const IMAGE_KINDS: MediaAsset["kind"][] = ["image"];
-const AUDIO_KINDS: MediaAsset["kind"][] = ["audio"];
-/** 导入落到哪一类素材,就切到管这一类的分页 */
-const KIND_TAB: Record<MediaAsset["kind"], AssetTab> = { video: "videos", image: "images", audio: "music" };
-
-const EDIT_TABS: { key: EditTab; label: string }[] = [
-  { key: "form", label: "参数" },
-  { key: "code", label: "代码" },
-];
-
-/**
- * 卡片网格一行放几张:目标卡宽 = 顶栏「导出视频」按钮的宽度(100px),
- * 面板宽度能放下几个目标宽就几列,至少两列;不够再多一列时,格子按 1fr 拉宽填满。
- * 用 CSS 变量下发(--pc-l-cols),各个分页的网格(.pc-l-grid、Tailwind 的 grid-cols-2)
- * 在 left.css 里统一读它,不用每个分页各写一遍 ResizeObserver。
- */
-const CARD_TARGET_W = 100;
-function gridColumns(panelWidth: number): number {
-  return Math.max(2, Math.floor(panelWidth / CARD_TARGET_W));
-}
-
-function stored<T extends string>(key: string, allowed: readonly T[], fallback: T): T {
-  try {
-    const v = localStorage.getItem(key) as T | null;
-    if (v && allowed.includes(v)) return v;
-  } catch {}
-  return fallback;
-}
+const SECTION_KEYS = SECTIONS.map((s) => s.key);
+const SECTION_STORE = "pc.left.section";
 
 export function LeftPanel() {
-  const [top, setTop] = useState<TopTab>(() => stored("pc.left.tab", ["assets", "edit"] as const, "assets"));
-  const [assetTab, setAssetTab] = useState<AssetTab>(() => stored("pc.left.assetTab", ASSET_TAB_KEYS, "cards"));
-  const [editTab, setEditTab] = useState<EditTab>(() => stored("pc.left.editTab", ["form", "code"] as const, "form"));
+  const collapsed = useRailCollapsed("left");
+  const [section, setSection] = useState<Section>(() => readStored(SECTION_STORE, SECTION_KEYS, "library"));
   const [captionMediaId, setCaptionMediaId] = useState<string | null>(null);
+  const [revealToken, setRevealToken] = useState(0);
 
-  // 搜索词按分页各记各的，切分页时各自保持不变
-  // (「全局风格」没有搜索框,所以只有其余分页各占一格)
-  const [searches, setSearches] = useState<Record<Exclude<AssetTab, "style">, string>>({
-    cards: "",
-    transitions: "",
-    audiofx: "",
-    emphasis: "",
-    videos: "",
-    images: "",
-    music: "",
-    captions: "",
-    nodes: "",
-  });
-  const cardsTabRef = useRef<CardsTabHandle>(null);
-  const searchInputRef = useRef<HTMLInputElement>(null);
-  const rootRef = useRef<HTMLDivElement>(null);
-  const [cols, setCols] = useState(2);
-  useEffect(() => {
-    const el = rootRef.current;
-    if (!el) return;
-    const update = () => setCols(gridColumns(el.clientWidth));
-    update();
-    const ro = new ResizeObserver(update);
-    ro.observe(el);
-    return () => ro.disconnect();
+  const pick = useCallback((next: Section) => {
+    setSection(next);
+    writeStored(SECTION_STORE, next);
   }, []);
 
-  const pick = <T extends string>(key: string, set: (v: T) => void) => (v: T) => {
-    set(v);
-    try {
-      localStorage.setItem(key, v);
-    } catch {}
+  const onRail = (key: Section) => {
+    if (key === section) {
+      toggleRailCollapsed("left");
+      return;
+    }
+    pick(key);
+    setRailCollapsed("left", false);
   };
-  const pickTop = pick<TopTab>("pc.left.tab", setTop);
-  const pickAsset = pick<AssetTab>("pc.left.assetTab", setAssetTab);
-  const pickEdit = pick<EditTab>("pc.left.editTab", setEditTab);
 
-  const openCaptions = (mediaId: string) => {
-    setCaptionMediaId(mediaId);
-    pickAsset("captions");
-  };
-  // 时间轴上右键「转写字幕」也走这里:切到素材 → 字幕分页并聚焦那份素材
-  useEffect(() => onCaptionsRequest((id) => {
-    pickTop("assets");
-    openCaptions(id);
-  }), []); // eslint-disable-line react-hooks/exhaustive-deps
+  // 时间轴上右键「转写字幕」也走这里:切到字幕分区、把抽屉拉出来、聚焦那份素材
+  useEffect(
+    () =>
+      onCaptionsRequest((id) => {
+        pick("captions");
+        setRailCollapsed("left", false);
+        setCaptionMediaId(id);
+        setRevealToken((n) => n + 1);
+      }),
+    [pick],
+  );
 
-  const subTabs = top === "assets" ? ASSET_TABS : EDIT_TABS;
-  const subActive: string = top === "assets" ? assetTab : editTab;
-  const pickSub = (key: string) => (top === "assets" ? pickAsset(key as AssetTab) : pickEdit(key as EditTab));
+  // 切分区时新露出来的那一块淡入、上浮一点(enterMotion)。
+  // 收起着切、或者切的同时把抽屉展开了,交给抽屉自己的展开动画(left.css),不叠两层
+  const paneRefs = useRef<Partial<Record<Section, HTMLDivElement | null>>>({});
+  const prevShown = useRef({ section, collapsed });
+  useLayoutEffect(() => {
+    const prev = prevShown.current;
+    prevShown.current = { section, collapsed };
+    if (prev.section === section || collapsed || prev.collapsed) return;
+    playEnter(paneRefs.current[section], "pc-enter-rise");
+  }, [section, collapsed]);
 
-  const searchTab = (assetTab === "style" || assetTab === "nodes" ? "cards" : assetTab) as Exclude<AssetTab, "style">;
-  const currentSearch = searches[searchTab];
-  const setSearch = (val: string) => setSearches((s) => ({ ...s, [searchTab]: val }));
+  const shown = (key: Section) => ({ display: section === key ? "flex" : "none" });
 
   return (
-    <div ref={rootRef} data-pc="left" className="h-full flex flex-col min-h-0 overflow-hidden bg-neutral-950 text-neutral-100" style={{ "--pc-l-cols": cols } as React.CSSProperties}>
-      {/* 顶级分页:选中主文字 + 强调色下划线(配色诊断与修正 v2 左栏) */}
-      <div className="pc-l-tabs">
-        {TOP_TABS.map((tab) => (
-          <button
-            key={tab.key}
-            type="button"
-            data-pc-top-tab={tab.key}
-            className={`pc-l-tab${top === tab.key ? " is-on" : ""}`}
-            onClick={() => pickTop(tab.key)}
-          >
-            {tab.label}
-          </button>
-        ))}
-      </div>
+    <div data-pc="left" className="pc-left">
+      <nav className="pc-rail pc-rail--left" data-pc="left-rail" aria-label="左栏分区">
+        {SECTIONS.map(({ key, label, Icon }) => {
+          const on = section === key;
+          return (
+            <button
+              key={key}
+              type="button"
+              data-pc-rail={key}
+              className={`pc-rail-item${on ? " is-on" : ""}`}
+              aria-pressed={on}
+              aria-expanded={on ? !collapsed : undefined}
+              title={on ? (collapsed ? `展开「${label}」` : `收起「${label}」`) : label}
+              onClick={() => onRail(key)}
+            >
+              <Icon />
+              <span>{label}</span>
+            </button>
+          );
+        })}
+      </nav>
 
-      {/* 二级分页:胶囊,可换行 */}
-      <div className="pc-l-subtabs">
-        {subTabs.map((tab) => (
-          <button
-            key={tab.key}
-            type="button"
-            data-pc-tab={tab.key}
-            className={`pc-l-pill${subActive === tab.key ? " is-on" : ""}`}
-            onClick={() => pickSub(tab.key)}
-          >
-            {tab.label}
-          </button>
-        ))}
-      </div>
-
-      {/* 素材 */}
       <div
-        data-pc="library"
-        className="flex-1 min-h-0 flex flex-col overflow-hidden"
-        style={{ display: top === "assets" ? "flex" : "none" }}
+        className="pc-card-surface pc-left-drawer"
+        data-pc="left-drawer"
+        data-pc-collapsed={collapsed ? "" : undefined}
+        style={{ display: collapsed ? "none" : "flex" }}
       >
-        {/* 统一导航条: 「全局风格」没有可搜的列表,别的素材分页都显示 */}
-        {assetTab !== "style" && assetTab !== "nodes" && (
-          <AssetToolbar
-            captionMediaId={captionMediaId}
-            assetTab={assetTab}
-            search={currentSearch}
-            onSearchChange={setSearch}
-            onClearSearch={() => setSearch("")}
-            onScrollCardsToTop={() => cardsTabRef.current?.scrollToTop()}
-            searchInputRef={searchInputRef}
-            onImported={(kind) => pickAsset(KIND_TAB[kind])}
-          />
-        )}
-
-        <div className="flex-1 min-h-0 flex flex-col" style={{ display: assetTab === "style" ? "flex" : "none" }}>
-          <StyleTab />
+        <div className="pc-left-pane" ref={(el) => { paneRefs.current.library = el; }} style={shown("library")}>
+          <LibrarySection />
         </div>
-        <div className="flex-1 min-h-0 flex flex-col" style={{ display: assetTab === "cards" ? "flex" : "none" }}>
-          <CardsTab ref={cardsTabRef} search={searches.cards} />
+        <div className="pc-left-pane" ref={(el) => { paneRefs.current.effects = el; }} style={shown("effects")}>
+          <EffectsSection />
         </div>
-        <div className="flex-1 min-h-0 flex flex-col" style={{ display: assetTab === "transitions" ? "flex" : "none" }}>
-          <TransitionsTab />
+        <div className="pc-left-pane" ref={(el) => { paneRefs.current.edit = el; }} style={shown("edit")}>
+          <EditSection />
         </div>
-        <div className="flex-1 min-h-0 flex flex-col" style={{ display: assetTab === "audiofx" ? "flex" : "none" }}>
-          <AudioFxTab search={searches.audiofx} />
-        </div>
-        <div className="flex-1 min-h-0 flex flex-col" style={{ display: assetTab === "emphasis" ? "flex" : "none" }}>
-          <EmphasisTab />
-        </div>
-        <div className="flex-1 min-h-0 flex flex-col" style={{ display: assetTab === "videos" ? "flex" : "none" }}>
-          <MediaTab search={searches.videos} onOpenCaptions={openCaptions} kinds={VIDEO_KINDS} />
-        </div>
-        <div className="flex-1 min-h-0 flex flex-col" style={{ display: assetTab === "images" ? "flex" : "none" }}>
-          <MediaTab search={searches.images} onOpenCaptions={openCaptions} kinds={IMAGE_KINDS} />
-        </div>
-        <div className="flex-1 min-h-0 flex flex-col" style={{ display: assetTab === "music" ? "flex" : "none" }}>
-          <MediaTab search={searches.music} onOpenCaptions={openCaptions} kinds={AUDIO_KINDS} />
-        </div>
-        <div className="flex-1 min-h-0 flex flex-col" style={{ display: assetTab === "captions" ? "flex" : "none" }}>
-          <CaptionsTab
-            search={searches.captions}
+        <div className="pc-left-pane" ref={(el) => { paneRefs.current.captions = el; }} style={shown("captions")}>
+          <CaptionsSection
             mediaId={captionMediaId}
             onPick={setCaptionMediaId}
-            onGoImport={() => pickAsset("videos")}
+            revealToken={revealToken}
+            onGoImport={() => pick("library")}
           />
         </div>
-        <div className="flex-1 min-h-0 flex flex-col" style={{ display: assetTab === "nodes" ? "flex" : "none" }}>
-          <NodeGraphTab />
-        </div>
-      </div>
-
-      {/* 编辑 */}
-      <div
-        data-pc="inspector"
-        className="flex-1 min-h-0 flex-col overflow-hidden"
-        style={{ display: top === "edit" ? "flex" : "none" }}
-      >
-        <Inspector tab={editTab} />
       </div>
     </div>
   );

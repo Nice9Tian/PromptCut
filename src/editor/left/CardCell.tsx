@@ -17,7 +17,7 @@ import { usePreviewZoom, zoomFor } from "./previewZoom";
  * 之后每次悬停直接用缓存,不再量、不再晃。1920×1080 的画幅里一个 400px 的标题,
  * 按整幅缩进 130px 的卡只剩一粒,按盒子缩就能看清。
  */
-export function CardCell({ def }: { def: CardDef<any> }) {
+export function CardCell({ def, fill, aspect }: { def: CardDef<any>; fill?: boolean; aspect?: number }) {
   const [hot, setHot] = useState(false);
   const [box, setBox] = useState({ w: 0, h: 0 });
   const [error, setError] = useState(false);
@@ -63,9 +63,9 @@ export function CardCell({ def }: { def: CardDef<any> }) {
   const preview = (
     <div ref={viewRef} className="absolute inset-0">
       {!hot && (
-        <div className="pc-pcard-text">
-          <div className="pc-pcard-name">{def.name}</div>
-          <div className="pc-pcard-desc">{def.description}</div>
+        <div className="pc-lib-card-text">
+          <div className="pc-lib-card-name">{def.name}</div>
+          <div className="pc-lib-card-desc">{def.description}</div>
         </div>
       )}
       {hot && box.w > 0 && box.h > 0 && (
@@ -110,6 +110,8 @@ export function CardCell({ def }: { def: CardDef<any> }) {
       onClick={onClick}
       error={error ? "没有动效轨,先在时间轴新建一条" : null}
       titleAttr="点击 = 加到播放头;拖动 = 拖到时间轴的位置"
+      fill={fill}
+      aspect={aspect}
     />
   );
 }

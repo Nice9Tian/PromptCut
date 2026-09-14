@@ -37,7 +37,13 @@ export function redactDebug(value: unknown): unknown {
 export function recordTrace(message: ChatMessage, event: RunEvent): ChatMessage {
   const trace = message.trace || [];
   if ((trace.length >= 2000 || (message.traceBytes || 0) >= 1500000) && event.type !== 'done' && event.type !== 'error') return { ...message, traceTruncated: true };
-  const serialized = JSON.stringify(redactDebug(event));
+  // A tool result's full output (get_project returns the whole project) is never
+  // shown by the chat, and redacting plus serialising it on every result was the
+  // expensive part of tracing. The summary is kept; the output is marked omitted.
+  const traced = event.type === 'tool_result' && 'output' in event
+    ? { ...event, output: undefined, outputOmitted: true }
+    : event;
+  const serialized = JSON.stringify(redactDebug(traced));
   // Huge project/video results should not fill localStorage or freeze the UI.
   const safeEvent: RunEvent = serialized.length > 32000
     ? { type: 'diagnostic', stage: 'large_event_truncated', data: { originalType: event.type, chars: serialized.length, preview: serialized.slice(0, 32000) } }

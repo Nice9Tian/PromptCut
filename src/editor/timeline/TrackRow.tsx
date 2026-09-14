@@ -22,7 +22,7 @@ export function TrackRow({ track, index }: { track: Track; index: number }) {
   return (
     <div
       data-track-id={track.id}
-      className={`relative border-b border-neutral-800/50 box-border ${bgClass} ${offset.dragging ? "z-40 opacity-90" : ""}`}
+      className={`pc-tl-track relative border-b border-neutral-800/50 box-border ${bgClass} ${offset.dragging ? "z-40 opacity-90" : ""}`}
       style={{
         height: trackH,
         transform: offset.y ? `translateY(${offset.y}px)` : undefined,

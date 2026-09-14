@@ -11,21 +11,24 @@ import { magicuiDemoClips } from "./cards/magicui";
 import { nativeDemoClips } from "./cards/native";
 import { useSkin } from "./skins/useSkin";
 import { useLayoutMode } from "./editor/layoutMode";
+import { useRailCollapsed, isRailCollapsed, subscribeRails, RAIL_W } from "./editor/sideRails";
 import "./editor/shell.css";
 import { StatusBar } from "./editor/StatusBar";
 import { DependencyPrompt } from "./editor/DependencyPrompt";
 import { motion } from "motion/react";
 import { MediaMigrationDialog } from "./editor/MediaMigrationDialog";
 
-/** 拖杆宽度(px),和 ResizeHandle 里的 w-1.5 / h-1.5 对应 */
-const HANDLE_W = 6;
-const DEFAULT_LEFT_W = 300;
-const DEFAULT_RIGHT_W = 360;
-const DEFAULT_FOOTER_H = 224;
-const MIN_LEFT_W = 200;
-const MIN_RIGHT_W = 240;
+/** 拖杆宽度(px),和 ResizeHandle 里的 w-2 对应 */
+const HANDLE_W = 8;
+const DEFAULT_DRAWER_W = 240;
+const DEFAULT_PANEL_W = 360;
+const DEFAULT_FOOTER_H = 272;
+const MIN_DRAWER_W = 200;
+const MIN_PANEL_W = 280;
 const MIN_PREVIEW_W = 320;
 const MIN_FOOTER_H = 120;
+/** 收起 / 展开两侧面板时列宽过渡的时长,和 shell.css 里 .pc-editor-grid[data-pc-rail-anim] 一致 */
+const RAIL_ANIM_MS = 220;
 
 /**
  * 面板尺寸:拖动时改 state,松手才写 localStorage(拖一次不写几百条)。
@@ -69,33 +72,41 @@ function usePanelSize(key: string, initial: number, min: number) {
 export default function Editor() {
   useSkin(); // mount data-skin
   const layoutMode = useLayoutMode();
+  const leftCollapsed = useRailCollapsed("left");
+  const rightCollapsed = useRailCollapsed("right");
   const gridRef = useRef<HTMLDivElement>(null);
   /** 这一行里能分的总宽度(拿不到就退回窗口宽) */
   const room = () => gridRef.current?.clientWidth ?? window.innerWidth;
 
-  const left = usePanelSize("pc.left.w", DEFAULT_LEFT_W, MIN_LEFT_W);
-  const right = usePanelSize("pc.right.w", DEFAULT_RIGHT_W, MIN_RIGHT_W);
+  const drawerW = usePanelSize("pc.left.drawerW", DEFAULT_DRAWER_W, MIN_DRAWER_W);
+  const panelW = usePanelSize("pc.right.panelW", DEFAULT_PANEL_W, MIN_PANEL_W);
   const footer = usePanelSize("pc.timeline.h", DEFAULT_FOOTER_H, MIN_FOOTER_H);
 
+  const leftCol = RAIL_W + (leftCollapsed ? 0 : drawerW.value);
+  const rightCol = RAIL_W + (rightCollapsed ? 0 : panelW.value);
+
   // 可用宽度变小(窗口拉窄、上次存的宽度放不下)时收缩面板,给预览留住 MIN_PREVIEW_W。
-  // chat 模式下没有左栏,只在必要时收缩 right 且绝不动 left;classic 模式按比例收两侧。
+  // 只收左抽屉宽 drawerW 和 AI 面板宽 panelW:rail 宽固定,也不会替用户自动收起面板;
+  // 已经收起的那一侧不占抽屉 / 面板宽,不计入总宽,也不参与收缩。
+  // chat 模式下没有左栏,右侧展开时才按需收 panelW,绝不动 drawerW;classic 模式按比例收两侧展开着的那几块。
   useEffect(() => {
     const el = gridRef.current;
     if (!el) return;
     const clamp = () => {
       if (layoutMode === "chat") {
-        const maxRight = el.clientWidth - MIN_PREVIEW_W - HANDLE_W;
-        if (maxRight > 0 && right.value > maxRight) {
-          right.set(Math.max(MIN_RIGHT_W, maxRight));
+        if (rightCollapsed) return;
+        const maxPanel = el.clientWidth - MIN_PREVIEW_W - HANDLE_W - RAIL_W;
+        if (maxPanel > 0 && panelW.value > maxPanel) {
+          panelW.set(Math.max(MIN_PANEL_W, maxPanel));
         }
         return;
       }
-      const room = el.clientWidth - MIN_PREVIEW_W - HANDLE_W * 2;
-      const total = left.value + right.value;
+      const room = el.clientWidth - MIN_PREVIEW_W - HANDLE_W * 2 - RAIL_W * 2;
+      const total = (leftCollapsed ? 0 : drawerW.value) + (rightCollapsed ? 0 : panelW.value);
       if (room <= 0 || total <= room) return;
       const scale = room / total;
-      left.set(Math.max(MIN_LEFT_W, Math.floor(left.value * scale)));
-      right.set(Math.max(MIN_RIGHT_W, Math.floor(right.value * scale)));
+      if (!leftCollapsed) drawerW.set(Math.max(MIN_DRAWER_W, Math.floor(drawerW.value * scale)));
+      if (!rightCollapsed) panelW.set(Math.max(MIN_PANEL_W, Math.floor(panelW.value * scale)));
     };
     clamp();
     const ro = new ResizeObserver(clamp);
@@ -106,7 +117,31 @@ export default function Editor() {
       ro.disconnect();
       window.removeEventListener("resize", clamp);
     };
-  }, [layoutMode, left.value, right.value, left.set, right.set]);
+  }, [layoutMode, drawerW.value, panelW.value, drawerW.set, panelW.set, leftCollapsed, rightCollapsed]);
+
+  // 收起 / 展开两侧面板时,给网格挂 data-pc-rail-anim 一小会儿:列宽、抽屉 / 面板卡片走过渡(shell.css、left.css、chat.css)。
+  // 必须在 sideRails 发通知的当下同步挂上,不能等 Editor 自己的 effect:同一次提交里别的布局效应会先读布局
+  // (比如消息区贴底要读 scrollHeight),新列宽早被算过一遍,过渡就起不来了。
+  // 直接写 DOM 属性,不为了一个动画开关把整个编辑器重渲两遍。
+  useEffect(() => {
+    let last = `${isRailCollapsed("left")}|${isRailCollapsed("right")}`;
+    let timer = 0;
+    const off = subscribeRails(() => {
+      const now = `${isRailCollapsed("left")}|${isRailCollapsed("right")}`;
+      const el = gridRef.current;
+      if (now === last || !el) return;
+      last = now;
+      el.dataset.pcRailAnim = "";
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        delete el.dataset.pcRailAnim;
+      }, RAIL_ANIM_MS + 100);
+    });
+    return () => {
+      off();
+      window.clearTimeout(timer);
+    };
+  }, []);
 
   useEffect(() => {
     const p = getState().project;
@@ -145,92 +180,103 @@ export default function Editor() {
   // 这里用 `{!isChat && …}` 逐个开关:JSX 的兄弟槽位是定长的,false 也占位,
   // 所以右栏在两种模式下始终是同一个槽位,组件实例得以保留。
   return (
-    <div data-pc="editor" className="h-full min-h-0 flex flex-col bg-neutral-950 text-neutral-100">
+    <div data-pc="editor" className="h-full min-h-0 flex flex-col" style={{ backgroundColor: "var(--ui-bg)", color: "var(--ui-fg)" }}>
       <MediaMigrationDialog />
       <TopBar />
       <DependencyPrompt />
-      <div
-        ref={gridRef}
-        className="flex-1 min-h-0 grid"
-        style={{
-          gridTemplateColumns: isChat
-            ? `minmax(0, 1fr) ${HANDLE_W}px ${right.value}px`
-            : `${left.value}px ${HANDLE_W}px minmax(0, 1fr) ${HANDLE_W}px ${right.value}px`,
-        }}
-      >
-        {!isChat && (
-          <motion.aside
-            initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.28, delay: 0, ease: [0.16, 1, 0.3, 1] }}
-            className="min-h-0 border-r border-neutral-800 overflow-hidden"
+      <div className="flex-1 min-h-0 flex flex-col" style={{ padding: "var(--ui-gap)" }}>
+        <div
+          ref={gridRef}
+          className="flex-1 min-h-0 grid pc-editor-grid"
+          style={
+            {
+              gridTemplateColumns: isChat
+                ? `minmax(0, 1fr) ${HANDLE_W}px ${rightCol}px`
+                : `${leftCol}px ${HANDLE_W}px minmax(0, 1fr) ${HANDLE_W}px ${rightCol}px`,
+              // 抽屉 / AI 面板卡片按这两个宽度定死(left.css / chat.css):收起展开过渡时列宽在变、卡片宽不变,
+              // 被列裁掉一截而不是逐帧挤窄 —— 瀑布流、消息区都不用跟着每帧重排
+              "--pc-left-drawer-w": `${drawerW.value}px`,
+              "--pc-right-panel-w": `${panelW.value}px`,
+            } as React.CSSProperties
+          }
+        >
+          {!isChat && (
+            <motion.aside
+              initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.28, delay: 0, ease: [0.16, 1, 0.3, 1] }}
+              className="min-h-0 overflow-hidden bg-transparent"
+            >
+              <LeftPanel />
+            </motion.aside>
+          )}
+          {!isChat && (
+            <ResizeHandle
+              axis="x"
+              value={drawerW.value}
+              min={MIN_DRAWER_W}
+              max={() => room() - RAIL_W - rightCol - MIN_PREVIEW_W - HANDLE_W * 2}
+              onChange={drawerW.set}
+              onCommit={drawerW.commit}
+              onReset={drawerW.reset}
+              title="拖动调整左栏宽度,双击复位"
+              disabled={leftCollapsed}
+            />
+          )}
+          <motion.main
+            initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.28, delay: 0.04, ease: [0.16, 1, 0.3, 1] }}
+            className="min-h-0 min-w-0 pc-card-surface flex flex-col"
           >
-            <LeftPanel />
-          </motion.aside>
-        )}
-        {!isChat && (
+            <Preview />
+          </motion.main>
+          {/*
+            右栏拖杆两种布局都要有:对话式下右栏就是 AI 面板,没有拖杆就等于宽度写死。
+            可让出的空间两种模式不一样——传统式要扣掉左侧整列(leftCol,已含左 rail)和两根拖杆,对话式只有这一根。
+            这根拖杆只改 panelW,右 rail 的宽度 RAIL_W 不跟着变,所以两种模式都还要再扣一个 RAIL_W。
+          */}
           <ResizeHandle
             axis="x"
-            value={left.value}
-            min={MIN_LEFT_W}
-            max={() => room() - right.value - MIN_PREVIEW_W - HANDLE_W * 2}
-            onChange={left.set}
-            onCommit={left.commit}
-            onReset={left.reset}
-            title="拖动调整左栏宽度,双击复位"
+            value={panelW.value}
+            min={MIN_PANEL_W}
+            max={() =>
+              isChat
+                ? room() - RAIL_W - MIN_PREVIEW_W - HANDLE_W
+                : room() - RAIL_W - leftCol - MIN_PREVIEW_W - HANDLE_W * 2
+            }
+            invert
+            onChange={panelW.set}
+            onCommit={panelW.commit}
+            onReset={panelW.reset}
+            title="拖动调整右栏宽度,双击复位"
+            disabled={rightCollapsed}
+          />
+          <motion.aside
+            initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.28, delay: 0.08, ease: [0.16, 1, 0.3, 1] }}
+            className="min-h-0 overflow-hidden bg-transparent"
+          >
+            <RightPanel />
+          </motion.aside>
+        </div>
+        {!isChat && (
+          <ResizeHandle
+            axis="y"
+            value={footer.value}
+            min={MIN_FOOTER_H}
+            max={() => window.innerHeight * 0.7}
+            invert
+            onChange={footer.set}
+            onCommit={footer.commit}
+            onReset={footer.reset}
+            title="拖动调整时间轴高度,双击复位"
           />
         )}
-        <motion.main
-          initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.28, delay: 0.04, ease: [0.16, 1, 0.3, 1] }}
-          className="min-h-0 min-w-0 p-2"
-        >
-          <Preview />
-        </motion.main>
-        {/*
-          右栏拖杆两种布局都要有:对话式下右栏就是 AI 面板,没有拖杆就等于宽度写死。
-          可让出的空间两种模式不一样——传统式要扣掉左栏和两根拖杆,对话式只有这一根。
-        */}
-        <ResizeHandle
-          axis="x"
-          value={right.value}
-          min={MIN_RIGHT_W}
-          max={() =>
-            isChat
-              ? room() - MIN_PREVIEW_W - HANDLE_W
-              : room() - left.value - MIN_PREVIEW_W - HANDLE_W * 2
-          }
-          invert
-          onChange={right.set}
-          onCommit={right.commit}
-          onReset={right.reset}
-          title="拖动调整右栏宽度,双击复位"
-        />
-        <motion.aside
-          initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.28, delay: 0.08, ease: [0.16, 1, 0.3, 1] }}
-          className="min-h-0 border-l border-neutral-800 overflow-hidden"
-        >
-          <RightPanel />
-        </motion.aside>
+        {!isChat && (
+          <motion.footer
+            initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.28, delay: 0.12, ease: [0.16, 1, 0.3, 1] }}
+            className="pc-card-surface shrink-0 flex flex-col" style={{ height: footer.value }}
+          >
+            <TimelineView />
+          </motion.footer>
+        )}
       </div>
-      {!isChat && (
-        <ResizeHandle
-          axis="y"
-          value={footer.value}
-          min={MIN_FOOTER_H}
-          max={() => window.innerHeight * 0.7}
-          invert
-          onChange={footer.set}
-          onCommit={footer.commit}
-          onReset={footer.reset}
-          title="拖动调整时间轴高度,双击复位"
-        />
-      )}
-      {!isChat && (
-        <motion.footer
-          initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.28, delay: 0.12, ease: [0.16, 1, 0.3, 1] }}
-          className="border-t border-neutral-800 overflow-hidden shrink-0 flex flex-col" style={{ height: footer.value }}
-        >
-          <TimelineView />
-        </motion.footer>
-      )}
       <StatusBar />
     </div>
   );

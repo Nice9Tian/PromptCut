@@ -1,4 +1,5 @@
 import type { AiProvider, ChatMessage } from "./types";
+import { reportsOf, reportText } from "./progressReport.ts";
 
 /**
  * 换模型接手时的「前情」。
@@ -24,6 +25,19 @@ function clip(text: string, max: number): string {
   return t.length > max ? `${t.slice(0, max)}…(后面略)` : t;
 }
 
+/**
+ * 这条消息在前情里摘成什么。
+ *
+ * 改版后 Agent 的文字回复默认不给用户看,它可能一个字不说、只交 report_progress。
+ * 那样的回复只看 m.text 就是空的,前情里会像是它什么都没做 —— 回退之后新会话的模型
+ * 就不知道前面几轮已经做完了什么。文字为空时用报告拼一句「已完成:…;待办:…;问题:…」代替。
+ */
+function spokenText(m: ChatMessage): string {
+  const text = m.text?.trim() ?? "";
+  if (text || m.role !== "assistant") return text;
+  return reportsOf(m).map(reportText).filter(Boolean).join(" / ");
+}
+
 export function buildHandoff(
   history: ChatMessage[],
   provider: AiProvider,
@@ -43,14 +57,15 @@ export function buildHandoff(
   }
   const unseen = history.slice(from).filter((m) => !m.pending);
 
-  // 有会话 id 时,只有别家真的说过话才算有前情;自家报错、用户连发几句都不用补
-  const othersSpoke = unseen.some((m) => m.role === "assistant" && m.text?.trim() && m.runtime?.provider !== provider);
-  const anySpoke = unseen.some((m) => m.role === "assistant" && m.text?.trim());
+  // 有会话 id 时,只有别家真的说过话才算有前情;自家报错、用户连发几句都不用补。
+  // 只交了进度报告、没写文字的回复也算说过话
+  const othersSpoke = unseen.some((m) => m.role === "assistant" && spokenText(m) && m.runtime?.provider !== provider);
+  const anySpoke = unseen.some((m) => m.role === "assistant" && spokenText(m));
   if (hasSession ? !othersSpoke : !anySpoke) return "";
 
   const lines: string[] = [];
   for (const m of unseen) {
-    const text = m.text?.trim();
+    const text = spokenText(m);
     if (!text) continue;
     if (m.role === "user") lines.push(`用户:${clip(text, perMessage)}`);
     else if (m.role === "assistant") {

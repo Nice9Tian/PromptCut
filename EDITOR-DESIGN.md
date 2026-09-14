@@ -3,62 +3,82 @@
 第一阶段(DESIGN.md)验证了内核:Motion 动画 + Chrome 虚拟时间逐帧导出。第二阶段把它长成一个能用的编辑器。
 **先读 DESIGN.md,再读本文。** 内核目录 `src/kernel/` 的接口仍然冻结。
 
-## 布局(src/Editor.tsx,已写好)
+## 布局(src/Editor.tsx)
 
 ```
-┌ TopBar:项目名 · 播放/重播 · 撤销/重做 · 主题选择 · 导入视频/打开项目/保存项目/导出视频 ┐
-├ 左栏(可拖宽)   │ 中央 Preview(视频层 + 动效渲染面,自适应缩放) │ 右栏(可拖宽)        │
-│ LeftPanel       │                                              │ RightPanel(AI 助手)│
-├ 底部 224px:TimelineView(多序列时间轴)                                                  ┤
+┌ WindowTitleBar / TopBar(和画布同色)                                              ┐
+│ [左 rail][左抽屉卡片] ║ [预览卡片]            ║ [AI 助手卡片][右 rail]              │
+├──────────────── TimelineView 卡片:横贯整个窗口宽度 ─────────────────────────────────┤
+└ StatusBar                                                                          ┘
 ```
 
-三块面板的大小都能拖(`src/editor/ResizeHandle.tsx`,左右栏、时间轴共用同一根拖杆组件):
+整体是 Fluent 风格的深色 Studio 界面:最底层是画布(`--ui-bg`),面板是浮在画布上的圆角卡片(`.pc-card-surface`),
+卡片之间留 `--ui-gap`(8px)的缝,**这条缝本身就是拖杆**(`src/editor/ResizeHandle.tsx`,静止时不可见,hover 出一条细线)。
+设计变量(圆角四档、`--ui-gap`、`--ui-rail-w`、`--pc-cube-s` 等)由 `src/skins/skins.ts` 挂到所有皮肤上,
+共享样式类(`.pc-card-surface`、`.pc-rail*`、`.pc-chip`、`.pc-icon-btn`、`.pc-btn-primary`、`.pc-section-title`)在 `src/skins/studio.css`。
+默认皮肤 `studio-dark`;还停在旧默认 `indigo-dark` 的用户会被迁移一次(标记 `pc.skin.studioMigrated`)。
 
-- 左栏宽 `pc.left.w`(默认 300,最小 200)、右栏宽 `pc.right.w`(默认 360,最小 240)、
-  时间轴高 `pc.timeline.h`(默认 224,最小 120,最大窗高 70%);拖动时改 state,松手才写 localStorage。
-- 中间预览始终留 `MIN_PREVIEW_W = 320`;可用宽度不够(窗口拉窄、上次存的宽度放不下)时两侧按比例收回来,
+- **时间轴横贯全宽**,两侧的 rail 和面板只占时间轴上方。
+- 两侧各一条 64px 竖向 rail(`RAIL_W`,`src/editor/sideRails.ts`)。点 rail 上已选中的项 = 收起 / 展开旁边的抽屉或面板,
+  状态存 `pc.rail.left.collapsed` / `pc.rail.right.collapsed`。左侧整列宽 = `RAIL_W + (收起 ? 0 : drawerW)`,右侧同理。
+- 抽屉宽 `pc.left.drawerW`(默认 240,正好是素材库 big 单列的宽度;最小 200)、AI 面板宽 `pc.right.panelW`(默认 360,最小 280)、
+  时间轴高 `pc.timeline.h`(默认 272,最小 120,最大窗高 70%;分页栏和工具条变高之后 224 只露得出一条序列);拖动时改 state,松手才写 localStorage。
+- 某一侧收起时,那根拖杆照样渲染(槽位不变),只是不可拖。
+- 中间预览始终留 `MIN_PREVIEW_W = 320`;可用宽度不够时收抽屉 / 面板的宽度(不低于各自最小值),不会自动收起面板。
   ResizeObserver + window resize 两条路都盯着。
 - 双击拖杆复位到默认值。拖动期间 `<body>` 上有 `data-pc-resizing`,
   `index.css` 靠它把预览 iframe 的 `pointer-events` 关掉,免得鼠标滑进 iframe 就断了。
+- `RightPanel` 在网格里始终占同一个兄弟槽位,布局模式、收起状态都不能让它卸载重建(正在跑的 AI 对话会断)。
+- **动效**(全部 `cubic-bezier(0.16, 1, 0.3, 1)`,只在 `prefers-reduced-motion: no-preference` 下生效):
+  - 收起 / 展开时网格列宽过渡 220ms:`Editor.tsx` 只在收起状态切换那一刻给 `.pc-editor-grid` 挂一小会儿 `data-pc-rail-anim`,
+    拖杆拖宽度、窗口变窄自动收缩都不走过渡;过渡期间抽屉 / 面板卡片保持原宽被列裁掉(`--pc-left-drawer-w` / `--pc-right-panel-w`),内容不逐帧重排。
+  - 分区切换、组打开 / 关闭、右侧页切换、新消息行、报告卡、队列行的入场用 `src/editor/enterMotion.ts` 的 `playEnter(el, class)`
+    (关键帧 `.pc-enter-rise / -from-right / -from-left / -fade` 在 `skins/motion.css`),演完摘掉 class,重新显示时不重播。
+- 左栏预览框的后台补量(`prewarmBoxes.tsx`)只在 1.5s 没有点击 / 键盘 / 滚轮输入、且浏览器空闲时才跑;
+  `measureAcrossTime` 一趟里画布像素只读一次(拨 Web Animations 不会让画布重画)—— 以前它是界面交互卡顿的主要来源。
 
-四个插槽各由一个任务负责,**只暴露一个固定导出名**:`LeftPanel`、`RightPanel`、`TimelineView`,以及 `src/editor/io/index.ts` 的四个函数。Editor.tsx / TopBar.tsx / Preview.tsx 是壳,不要改;要壳配合的地方在回报里提。
+三个插槽**只暴露一个固定导出名**:`LeftPanel`、`RightPanel`、`TimelineView`,以及 `src/editor/io/index.ts` 的四个函数。
+LeftPanel / RightPanel 自己画 rail 和卡片,Editor.tsx 里的两个 `aside` 是透明的。TopBar.tsx / Preview.tsx 是壳,不要改;要壳配合的地方在回报里提。
 
-## 左栏:两级分页(src/editor/left/)
-
-> 二级分页栏**下面**还有一条统一导航条 `AssetToolbar.tsx`(素材下的三档共用):左边「+」按分页分流
-> (卡片=清空搜索回顶、视频=导入视频文件、字幕=选 .srt),右边搜索框(三档各记各的搜索词)。
-> 素材下第一档是 `StyleTab.tsx`「全局风格」——主题卡列表,切换调 `setProjectMeta({ themeId })`,
-> 顶栏不再有主题下拉。视频卡右键多一项「以视频比例作为项目比例」。
-> 参数表里 key 命中 speaker/talking/口播 之类的 text 控件会多一个「…」按钮,
-> 打开 `SpeakerPicker.tsx` 从素材或本地文件选口播视频。
+## 左栏:竖向 rail + 分区抽屉(src/editor/left/)
 
 ```
-顶级   素材 | 编辑
-二级   素材 → 卡片 / 视频 / 字幕        编辑 → 参数 / 代码
+rail   素材库 | 特效 | 编辑 | 字幕
+抽屉   素材库 → 分组总览 ⇄ 组详情        特效 → 分组总览 ⇄ 组详情(视觉 / 音频在同一页,用胶囊筛)
+       编辑   → 参数 / 代码 / 节点          字幕 → 导入 .srt/.vtt + 搜索 + 转写列表
 ```
 
-- `index.tsx` 只管分页壳:两条分页栏 + 五个面板。面板**都常驻挂载**,靠行内 `display` 显隐
+- `index.tsx` 的 `LeftPanel` = `.pc-rail--left`(`data-pc="left-rail"`,四项 `data-pc-rail="library|effects|edit|captions"`)
+  + 抽屉 `.pc-card-surface`(`data-pc="left-drawer"`)。点另一项切分区并展开抽屉,点已选中的项收起 / 展开(`sideRails`)。
+  四个分区(`LibrarySection` / `EffectsSection` / `EditSection` / `CaptionsSection`)**都常驻挂载**,靠行内 `display` 显隐
   (不要用 Tailwind 的 `hidden` 类:它和 `flex` 都是 display,谁生效取决于样式表顺序,不可靠),
-  所以切分页不丢滚动位置、搜索词和代码框里没提交的草稿。
-- 分页选择记在 localStorage:`pc.left.tab`(assets/edit)、`pc.left.assetTab`(cards/videos/captions)、
-  `pc.left.editTab`(form/code)。
-- `CardsTab` 搜索 + 卡片网格;`MediaTab` 视频 / 图像是方形预览卡、配乐是行(拖到时间轴,右键
-  「转写字幕 / 取比例 / 删除」;时间轴上的视频、音频片段右键也能转写,走 `captionsBus.ts` 的
-  `pc-open-captions` 事件);`CaptionsTab` 选素材 → 没转写就在这儿转,转过就列出每一段,
-  点一段把播放头挪到时间轴上对应的位置(素材时间经所在片段的 `mediaOffset` 换算)。
-- `Inspector` 只接一个 `tab: "form" | "code"` 的 prop,参数/代码这一级由分页壳控制;
+  所以切分区不丢滚动位置、搜索词和代码框里没提交的草稿。
+- localStorage:`pc.left.section`(默认 library)、`pc.left.group.library` / `pc.left.group.effects`(打开着的组)、
+  `pc.left.editTab`(form / code / nodes)。
+- **分组**:组定义集中在 `library/groups.tsx`,每组有 `id / name / layout / category(视觉 | 音频)`;挪组、改排版只改这张表。
+  - 素材库:视频、图片(big_16_9)、音频(big_strip)、定制卡片、Magic UI、自家卡片、部件库、Lottie 动效(middle_cube)、粒子背景(big_16_9)。
+  - 特效:转场、滤镜、强调、全局风格(middle_cube,视觉)、音频效果、音频预设(big_strip,音频)。
+  - 总览是圆角组框(`GroupBox`:组名、「N 个项」、前几项静态缩略图),点组框打开组;组详情(`GroupDetail`)顶部胶囊行
+    「所有 / 分类 / 组名 ×」,下面「N 个项目」和按该组排版的全部项目,组还可以带 `detailTop` / `detailBottom`(转场时长、已有转场、相接的两段等)。
+  - 分区头部的分类胶囊 `所有 / 视觉 ▾ / 音频 ▾`(`CategoryChips`):点胶囊只看这一类,点 ▾ 列出这一类的组直接打开。
+    搜索在打开的组里过滤,在总览里按组过滤。
+- **排版**(纯函数 `library/layout.ts`,有测试):以 small_cube(`--pc-cube-s` = 64px,间距 8)为单位,
+  `units = max(3, floor((内宽 + 8) / 72))`;small 列数 = units、middle = units / 2、big = units / 3(向下取整、至少 1),列宽拉伸填满。
+  big_16_9 单列时横竖混排、竖屏最高到 4:3(居中裁掉上下),多列按素材比例瀑布流;middle 已知比例时也瀑布流;
+  big_strip 固定 56px 高(音频条画整段波形,复用 `AudioWaveform.tsx` 的 `loadWave`)。瀑布流 `Masonry.tsx` 按最矮列放置。
+  抽屉默认宽 240、左右内边距 12 → 内宽 216 → 3 单位,正好是 big 单列。
+- **预览卡** `PreviewCard.tsx`:按 aspect 给高度,媒体 `object-fit: cover`,左下角时长 badge;悬停才起动画 / 播视频。
+  **不要**给它套皮肤里 `.cursor-grab.bg-neutral-900` 那组类:那条规则悬停时画一道 3px 的左侧强调色内阴影,预览一铺满就成了漏进画面的色边。
+- 素材库头部:「导入媒体」主按钮(`data-pc-add="media"`,导入后自动打开对应的组)、搜索框(`data-pc="search"`)、
+  筛选图标按钮(浮层里是 `CardScopeBar`)。卡片列表和可见性只有一个来源(`useCardLibrary`),所有卡片组共用。
+  右键菜单、确认框、定制卡菜单、提示条每个分区只挂一份、常驻挂载,总览、详情、搜索结果里都能用;视频卡右键有「以视频比例作为项目比例」。
+- 时间轴上的视频 / 音频片段右键「转写字幕」走 `captionsBus.ts` 的 `pc-open-captions`:切到字幕分区、展开抽屉、定位那份素材。
+  `CaptionsTab` 选素材 → 没转写就在这儿转,转过就列出每一段,点一段把播放头挪到时间轴上对应的位置(素材时间经所在片段的 `mediaOffset` 换算)。
+- 编辑分区:`Inspector` 接 `tab: "form" | "code"`,两页都常驻挂载(`CodeTab` 按 clipId 重建,草稿不会串到别的片段);
   「代码」页显示的是这张卡的**约定封装**(`src/kernel/envelope.ts`:card + lifecycle / time / frame / blend / motion / parts / params),
   不是原始的 `{ cardId, start, end, params }`,也不是组件源码;Agent 的 `get_clip` / `set_clip` 看到和改的是同一份;
-  选中的是组合卡(cardId `composite`,内容是 `clip.parts` 部件实例树)时「参数」页换成 `PartsForm`:一棵可增删改移的部件树,
-  卡片页多一组「部件库」(`PartCell`),点一下加进选中的组合卡或新建一张;
-  片段头部(卡名、换卡、开始/结束)在两个二级分页里都在。
-- **统一的方形预览卡**(`PreviewCard.tsx`,样式 `left.css` 的 `.pc-pcard*`):动效卡、部件、
-  转场、视频、图像共用一个壳 —— 正方形画面区 + 底边标题条 + 贴底的强调色进度条。悬停才起动画 /
-  播视频。**不要**给它套皮肤里 `.cursor-grab.bg-neutral-900` 那组类:那条规则悬停时画一道 3px 的
-  左侧强调色内阴影,预览一铺满就成了漏进画面的色边。
-- **列数按面板宽度算**:`index.tsx` 的 `gridColumns` = `max(2, floor(面板宽 / 100))`(100 是顶栏
-  「导出视频」按钮的宽),写成 CSS 变量 `--pc-l-cols` 挂在左栏根节点上,`.pc-l-grid` 和卡片页的
-  `grid-cols-2` 都读它;不够再多一列时格子按 `1fr` 拉宽填满。
+  选中的是组合卡(cardId `composite`,内容是 `clip.parts` 部件实例树)时「参数」页换成 `PartsForm`;「节点」页是 `NodeGraphTab`。
+  参数表里 key 命中 speaker/talking/口播 之类的 text 控件多一个「…」按钮,打开 `SpeakerPicker.tsx` 从素材或本地文件选口播视频。
 - **预览按动效的包围盒推近**,不按整幅画幅 —— 1920×1080 缩进 130px 的格子,标题卡只剩一粒。盒子分两层:
   - **算好的**:`src/cards/preview-boxes.json` 静态表(`npm run preview-boxes` 离线生成、入库、随包发)
     和本机 localStorage 缓存,悬停时直接用,一步到位;
@@ -260,6 +280,22 @@ MIME 常量和拖动载荷都在 `src/editor/dnd.ts`:
 
 `themes: Theme[]`、`getTheme(id)`、`themeStyle(id)` → 一组 `--pc-*` CSS 变量,Editor 和 Preview 已经把它挂到根元素和舞台上。卡片只读变量:`--pc-accent`、`--pc-fg`、`--pc-fg-muted`、`--pc-fg-faint`、`--pc-glass-bg`、`--pc-glass-border`、`--pc-glass-blur`、`--pc-radius`、`--pc-font`、`--pc-font-mono`、`--pc-shadow`。
 
+## AI 栏:布局与 Agent 活动展示(src/editor/right/)
+
+- `RightPanel` = 一张卡片(剧本页 `chat/ScriptPage.tsx` + 所有 `AiPanel` 的堆叠)+ 贴窗口右边的 `chat/RightRail.tsx`:
+  最上面「剧本」,分隔线,每个 Agent 分页一项,最后「+」新开分页。当前页 `pc.right.page`(`script` / `agent`),哪个 Agent 页沿用 `agentTabs.ts`。
+  所有 `AiPanel` 常驻挂载,不在前台、面板收起都只是 `display:none`。
+- `AiPanel.tsx` 只做组合:`chat/ChatHeader`(右侧只有「显示思考」可激活按钮、历史、设置)→ 登录横幅 → `chat/MessageList` → `chat/ThinkingStrip`
+  → `chat/QueueList` → `chat/Composer`(占面板高度 1/3;底部工具条放附件、✦ 菜单〔分工模式 / 一键配特效 / 诊断 / 新对话〕、provider 与模型、⋯ 运行选项、发送 / 停止)。
+- 「详细模式」挪进 AI 设置对话框的「显示」小节;它和「显示思考」都是 `chat/viewPrefs.ts` 的模块级 store(键 `aiViewMode` / `aiShowThinking`,所有分页共享)。
+- **Agent 的文字回复默认不显示**。一条 Agent 消息(`chat/AgentBubble.tsx`)按先后切段:每段是一排操作图标(`chat/ToolIcons.tsx`)+ 段尾的
+  `report_progress` 报告卡(已完成 / 待办 / 问题,空组不显示);正常结束却没交 `final: true` 报告时给一句「这一轮没有提交小结」。
+  「显示思考」打开时,气泡底部多一块「思考与原文」(文字一律走 `LiveMarkdown`,流式期间节流解析)。
+- 操作图标是 `--pc-cube-s`(64px)的方块:相邻同类操作合成一个图标,**每个最多装 5 个**,第 6 个开新图标(纯函数 `chat/iconRuns.ts`,有测试)。
+- `chat/ActivityCarousel.tsx`:把 Agent 看过的图(视觉记录里的 `images`、旧消息的 `files`)和能可视化的操作(修改前后动图、参数 diff)做成轮播,
+  支持拖动、点两侧、横向滚动、方向键翻页;翻到哪页,那页所属的图标放大发光。视觉记录由 `ToolVisual.tsx` 的 `loadVisualRecord` 按 id 缓存。
+- `chat/ThinkingStrip.tsx`:输入区上方一条,只显示这一页正在跑的消息的**当前一步**(`thinkingSteps.currentStep`,没有步骤时显示正在跑的工具)和已用时间。
+
 ## AI 栏:会话历史与附件
 
 - 历史存在服务端:`server/vite-plugin-chats.ts` 提供 list/get/save/delete,落盘 `<项目根>/.pc-chats/<id>.json`
@@ -278,6 +314,12 @@ AI 助手在浏览器外(node 进程)跑,通过 MCP 工具操作项目。工具�
 `AI 进程 → (SSE/WS) → 浏览器 src/ai/mcpExecutor → actions.*`。工具清单至少:
 `list_cards`(含 controls 和 defaults)、`get_project`、`get_selection`、`add_clip`、`update_clip`(params/时段/换卡)、`remove_clip`、序列管理(`list_tracks` / `add_track` / `remove_track` / `update_track` / `move_track`,见 `src/editor/right/trackTools.ts`)、滤镜库(`list_filters` / `create_filter` / `update_filter` / `remove_filter` / `apply_filter`,数值和三条合成管线的翻译在 `src/kernel/filters.mjs`,门槛在 `src/editor/right/filterTools.ts`)、音频效果库(`list_audio_fx` / `create_audio_fx` / `update_audio_fx` / `remove_audio_fx` / `apply_audio_fx` / `measure_audio`,数值在 `src/kernel/audioFx.mjs`,预览和导出共用的 Web Audio 节点图在 `src/audio/fxChain.ts`,门槛在 `src/editor/right/audioFxTools.ts`;导出的混音在 Chrome 的 OfflineAudioContext 里渲,见 `src/audio/renderMix.ts` 和 `scripts/export-frames.mjs` 的 mixAudioInChrome)、`seek`、`play/pause`、`set_theme`。
 工具 schema 从 `CardDef.controls` 自动生成,这样加卡不用改工具。
+
+**进度报告 `report_progress`(服务端工具)**:Agent 的文字回复默认不显示给用户,用户看的是它在每个小阶段结束(`final: false`)
+和任务收尾 / 需要用户操作时(`final: true`)交上来的 `{ final, stage?, has_done, has_todo, has_problem, done[], todo[], problems[] }`。
+声明在 `server/mcp-tools.mjs`,校验与规范化在 `server/progress-report.mjs`(条目截到 60 字、每组最多 8 条、布尔以数组为准),
+执行分支在 `server/vite-plugin-ai.ts` 的 `callToolInternal`;界面直接读 `tool_call` 事件的 `input`,解析在 `src/ai/progressReport.ts`
+(工具名兼容 `mcp__promptcut__` 等前缀)。用法规则写在 `server/ai-system-prompt.md` 的「向用户汇报」一节。
 
 ## 目录归属(并行时不要越界)
 

@@ -368,6 +368,15 @@ export default function vitePluginAi(): Plugin {
             await new Promise((r) => setTimeout(r, secs * 1000));
             return { ok: true, waited: secs };
           }
+          if (tool === 'report_progress') {
+            // 进度报告只做校验和规范化,界面直接读 tool_call 事件里的 input。
+            const { validateProgressReport } = await import(new URL('./progress-report.mjs', import.meta.url).href);
+            const checked = validateProgressReport(args);
+            if (!checked.ok) {
+              return { ok: false, error: checked.error };
+            }
+            return { ok: true, message: '已记录进度报告', report: checked.value };
+          }
           return { ok: false, error: `服务端工具 ${tool} 没有实现` };
         }
 
@@ -949,7 +958,11 @@ export default function vitePluginAi(): Plugin {
               onEvent: (ev: any) => {
                 if (ev.type === 'done') hasDone = true;
                 if (ev.type === 'text' && typeof ev.delta === 'string') replyBytes += Buffer.byteLength(ev.delta, 'utf8');
-                res.write(`data: ${JSON.stringify(ev)}\n\n`);
+                // The chat never reads a tool result's full output (get_project is the whole
+                // project); sending it made the editor parse and trace megabytes per result.
+                // Server-side consumers of onEvent still receive it unchanged.
+                const outbound = ev.type === 'tool_result' && ev.output !== undefined ? { ...ev, output: undefined, outputOmitted: true } : ev;
+                res.write(`data: ${JSON.stringify(outbound)}\n\n`);
               }
             });
 

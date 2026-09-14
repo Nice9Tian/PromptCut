@@ -10,6 +10,7 @@ import { SETUP_ENTRIES, isCliEntry, readFace, writeFace } from "./setupEntries";
 import type { SetupEntry, SetupEntryId } from "./setupEntries";
 import { redactDebug } from "../../ai/debug";
 import { CAPABILITIES } from "../../ai/modelOptions";
+import { setViewMode, useViewPrefs } from "./chat/viewPrefs";
 import type { ProviderInfo, AiProvider, SttInfo, PublicAiConfig, AiConfigPatch, ApiVendor, CliSetupJob, LoginState, KeyKind } from "../../ai/types";
 
 /**
@@ -143,6 +144,8 @@ export function AiSetupDialog(props: {
     diagToastTimer.current = window.setTimeout(() => setDiagToast(""), 6000);
   };
   useEffect(() => () => { if (diagToastTimer.current) window.clearTimeout(diagToastTimer.current); }, []);
+  /** 「显示」小节读写的是所有分页共用的显示偏好(chat/viewPrefs),不是这个对话框自己的状态 */
+  const viewPrefs = useViewPrefs();
 
   /*
    * 导航状态只在「对话框被打开」这一刻重置。
@@ -777,6 +780,27 @@ export function AiSetupDialog(props: {
                   </button>
                 );
               })}
+            </div>
+            {/*
+              「显示」:原来 AI 面板顶栏上的「简洁 / 详细」切换搬到这里。它是看习惯定一次就不怎么动的偏好,
+              不值得在每个分页的顶栏上常驻一个分段按钮;不收进「更多」,因为它不危险,找得到比防误触要紧。
+            */}
+            <div className="ais-more ais-display">
+              <div className="ais-more-title">显示</div>
+              <label className="ais-more-row">
+                <input
+                  type="checkbox"
+                  data-pc="ai-verbose-mode"
+                  checked={viewPrefs.view === "verbose"}
+                  onChange={(e) => setViewMode(e.target.checked ? "verbose" : "simple")}
+                />
+                <span className="ais-more-body">
+                  <span className="ais-more-name">详细模式(逐条显示工具调用)</span>
+                  <span className="ais-detail">
+                    关着时按阶段显示操作图标和 Agent 交的报告卡，点图标再看细节；打开后按发生顺序逐条列出每一次工具调用。
+                  </span>
+                </span>
+              </label>
             </div>
             {/*
               文本协议模式收进「更多」里。它以前是这一页上一个裸的勾选框,谁都可能顺手点一下,

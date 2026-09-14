@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
@@ -56,7 +56,35 @@ export function renderMarkdown(text: string): ReactNode {
   return node;
 }
 
+/** A streaming reply is re-parsed at most this often. */
+const LIVE_RENDER_MS = 250;
+
+/**
+ * Markdown for a message that may still be streaming.
+ *
+ * While `live`, the text changes several times a second and each version is a
+ * cache miss, so parsing the whole reply every time is O(n²) over the reply.
+ * Re-parse at most every LIVE_RENDER_MS (the latest text always lands), keep
+ * intermediate versions out of the cache, and render the final text through
+ * the cached path as soon as the reply finishes.
+ */
+export const LiveMarkdown = memo(function LiveMarkdown({ text, live }: { text: string; live: boolean }) {
+  const [shown, setShown] = useState(text);
+  const renderedAt = useRef(0);
+  useEffect(() => {
+    if (!live) return;
+    const wait = LIVE_RENDER_MS - (performance.now() - renderedAt.current);
+    const show = () => { renderedAt.current = performance.now(); setShown(text); };
+    if (wait <= 0) { show(); return; }
+    const timer = window.setTimeout(show, wait);
+    return () => window.clearTimeout(timer);
+  }, [text, live]);
+  const liveNode = useMemo(() => (live ? renderMarkdownUncached(shown) : null), [live, shown]);
+  return <>{live ? liveNode : renderMarkdown(text)}</>;
+});
+
 function renderMarkdownUncached(text: string): ReactNode {
+  if (!text) return null;
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm, remarkMath]}

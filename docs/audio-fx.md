@@ -34,7 +34,7 @@ scripts/export-frames.mjs   mixAudioInChrome:ffmpeg 裁每段用到的那一截 
                             失败退回 scripts/mux-audio.mjs 的 ffmpeg 滤镜图(没有效果);--audio ffmpeg 强制走老路
 server/vite-plugin-audio.ts POST /api/audio/measure:ffmpeg ebur128 测素材 / 片段 / 整条时间轴
 src/editor/right/audioFxTools.ts   list / create / update / remove / apply_audio_fx 的校验和门槛(Agent 和界面共用)
-src/editor/left/AudioFxTab.tsx     素材库「音频效果」页;ClipAudioFxForm.tsx 编辑页里素材段的效果栏
+src/editor/left/library/audioFxGroups.tsx  左栏「特效」里的「音频效果 / 音频预设」两组;ClipAudioFxForm.tsx 编辑分区里素材段的效果栏
 ```
 
 效果种类:gain(能超过 0 dB)、highpass、lowpass、peaking、lowshelf、highshelf、compressor、limiter、delay、reverb、pan。

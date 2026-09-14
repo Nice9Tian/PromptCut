@@ -1,7 +1,8 @@
 /*
  * 工具栏(设计稿「工具栏组件表」第 01/02/05 节)。
- * 尺寸:条高 36 · 按钮高 28 · 内边距 6/14 · 间距 6 · 圆角 4 · 字号 13。
- * 层级:条底 L2(--ui-panel),按钮 L3(--ui-panel-2),悬浮 L4(--ui-float);按钮永远比它所在的条亮一级。
+ * 尺寸:条高 48 · 按钮高 28 · 内边距 6/14 · 间距 6 · 圆角 6 · 字号 13。
+ * 层级:条底和画布同色(L0 --ui-bg),不画底边线,和下面的画布融成一片;
+ * 按钮 L3(--ui-panel-2),悬浮 L4(--ui-float);按钮永远比它所在的条亮。
  * 一条里只有一个强调色实心按钮(主按钮),放最右。数值文字用等宽、主文字色、不加容器、左右各 8px。
  * 颜色全部走 --ui-*,所以五套主题深浅十份取值都能直接换。
  */
@@ -18,7 +19,7 @@
 }
 html.pc-has-menubar .pc-bar-fade {
   height: 10px;
-  background: linear-gradient(to bottom, var(--pc-menubar), var(--ui-panel));
+  background: linear-gradient(to bottom, var(--pc-menubar), var(--ui-bg));
 }
 
 .pc-bar {
@@ -27,11 +28,9 @@ html.pc-has-menubar .pc-bar-fade {
   flex-wrap: nowrap;
   overflow: hidden;
   gap: 6px;
-  height: 36px;
+  height: 48px;
   padding: 0 6px;
-  background: var(--ui-panel);
-  border-bottom: 1px solid var(--ui-border);
-  box-shadow: inset 0 -1px 0 var(--ui-accent-soft);
+  background: var(--ui-bg);
   font-size: 13px;
   color: var(--ui-fg);
 }
@@ -57,7 +56,7 @@ html.pc-has-menubar .pc-bar-fade {
   height: 28px;
   padding: 0 14px;
   border: 1px solid var(--ui-border-strong);
-  border-radius: var(--ui-radius, 4px);
+  border-radius: var(--ui-radius, 6px);
   background: var(--ui-panel-2);
   color: var(--ui-fg);
   font-size: 13px;
@@ -171,7 +170,7 @@ html.pc-has-menubar .pc-bar-fade {
   height: 28px;
   padding: 0 6px;
   border: 1px solid var(--ui-border-strong);
-  border-radius: var(--ui-radius, 4px);
+  border-radius: var(--ui-radius, 6px);
   background: var(--ui-panel-2);
   color: var(--ui-fg);
   font-size: 13px;
@@ -238,7 +237,7 @@ html.pc-has-menubar .pc-bar-fade {
   padding: 10px;
   background: var(--ui-float);
   border: 1px solid var(--ui-border-strong);
-  border-radius: var(--ui-radius, 4px);
+  border-radius: var(--ui-radius-lg, 8px);
   box-shadow: var(--ui-shadow, 0 8px 24px rgba(0, 0, 0, 0.35));
   display: flex;
   flex-direction: column;
@@ -268,7 +267,7 @@ html.pc-has-menubar .pc-bar-fade {
   height: 7px;
   border-radius: 50%;
   background: var(--ui-accent);
-  box-shadow: 0 0 0 2px var(--ui-panel, #111);
+  box-shadow: 0 0 0 2px var(--ui-bg, #111);
 }
 .pc-proj-item .pc-proj-dirty { position: static; box-shadow: none; margin-left: auto; }
 
@@ -279,7 +278,7 @@ html.pc-has-menubar .pc-bar-fade {
   padding: 6px;
   background: var(--ui-float);
   border: 1px solid var(--ui-border-strong);
-  border-radius: 8px;
+  border-radius: var(--ui-radius-lg, 8px);
   box-shadow: var(--ui-shadow, 0 12px 32px rgba(0, 0, 0, 0.4));
   display: flex;
   flex-direction: column;
@@ -297,7 +296,7 @@ html.pc-has-menubar .pc-bar-fade {
   width: 100%;
   padding: 7px 10px;
   border: 1px solid transparent;
-  border-radius: 6px;
+  border-radius: var(--ui-radius, 6px);
   background: transparent;
   color: var(--ui-text, inherit);
   text-align: left;
@@ -314,7 +313,7 @@ html.pc-has-menubar .pc-bar-fade {
 .pc-proj-item svg { width: 16px; height: 16px; flex: none; opacity: 0.85; }
 .pc-proj-text { display: flex; flex-direction: column; gap: 1px; line-height: 1.25; }
 .pc-proj-text b { font-size: 12.5px; font-weight: 600; }
-.pc-proj-text small { font-size: 11px; color: var(--ui-text-muted, #999); }
+.pc-proj-text small { font-size: 11px; color: var(--ui-fg-muted); }
 .pc-proj-sep { height: 1px; margin: 4px 6px; background: var(--ui-border-strong); opacity: 0.6; }
 
 /* 项目设置对话框 */
@@ -371,7 +370,7 @@ html.pc-has-menubar .pc-bar-fade {
   height: 28px;
   padding: 0 14px;
   border: 1px solid var(--ui-border-strong);
-  border-radius: var(--ui-radius, 4px);
+  border-radius: var(--ui-radius, 6px);
   background: var(--ui-panel-2);
   color: var(--ui-fg);
   font-size: 13px;
@@ -417,17 +416,15 @@ html.pc-has-menubar .pc-bar-fade {
 }
 
 
-/* ── 配色诊断与修正 v2 整屏:顶栏 52 · 按钮 30 · 字号 12 ─────────────────
- * 组件表那一节定的是 36/28/13;整屏 mock 把顶栏放大到 52 高、控件 30 高、字号 12,
- * 分隔线不再叠强调色内阴影,只留一条 hairline。预览区和时间线的小条另有各自的类,
- * 不跟着这里的 --main 走。 */
+/* ── 配色诊断与修正 v2 整屏:顶栏 48 · 按钮 30 · 字号 12 ─────────────────
+ * 组件表那一节定的是 36/28/13;整屏把顶栏放大到 48 高、控件 30 高、字号 12。
+ * 顶栏和画布同色,底下不画 hairline、也不叠强调色内阴影,和画布融为一体。
+ * 预览区和时间线的小条另有各自的类,不跟着这里的 --main 走。 */
 .pc-bar--main {
-  height: 52px;
+  height: 48px;
   padding: 0 14px;
   gap: 14px;
   font-size: 12px;
-  box-shadow: none;
-  border-bottom: 1px solid var(--ui-border);
 }
 .pc-bar--main .pc-bar-group {
   gap: 7px;
@@ -476,7 +473,7 @@ html.pc-has-menubar .pc-bar-fade {
   background: transparent;
   padding: 2px 4px;
   margin: 0 -4px;
-  border-radius: var(--ui-radius, 4px);
+  border-radius: var(--ui-radius-sm, 4px);
   font: inherit;
   color: inherit;
   letter-spacing: inherit;
@@ -495,7 +492,7 @@ html.pc-has-menubar .pc-bar-fade {
   padding: 2px 4px;
   margin: 0 -4px;
   border: 1px solid var(--ui-accent);
-  border-radius: var(--ui-radius, 4px);
+  border-radius: var(--ui-radius-sm, 4px);
   background: var(--ui-panel-2);
   color: var(--ui-fg);
   font: inherit;

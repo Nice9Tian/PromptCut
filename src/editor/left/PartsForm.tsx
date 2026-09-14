@@ -33,12 +33,12 @@ export function PartsForm({ clip }: { clip: TrackClip }) {
 
   return (
     <div className="flex flex-col gap-2 py-2 text-xs">
-      <div className="flex items-center gap-2 px-2">
+      <div className="flex items-center gap-2 px-3">
         <select
           data-pc="parts-add"
           value={adding}
           onChange={(e) => onAdd(e.target.value)}
-          className="flex-1 h-6 px-1 bg-neutral-900 border border-neutral-800 rounded text-neutral-200 outline-none"
+          className="flex-1 pc-left-select"
           title="从部件库里加一个部件到这张卡"
         >
           <option value="">+ 加部件…</option>
@@ -47,9 +47,9 @@ export function PartsForm({ clip }: { clip: TrackClip }) {
           ))}
         </select>
       </div>
-      {tree.length === 0 && <div className="px-4 py-3 text-center text-neutral-500">这张组合卡还是空的,从上面挑一个部件加进来</div>}
+      {tree.length === 0 && <div className="px-4 py-3 text-center pc-left-muted">这张组合卡还是空的,从上面挑一个部件加进来</div>}
       <PartList clip={clip} tree={tree} list={tree} depth={0} commit={commit} />
-      {error && <div className="mx-2 px-2 py-1 rounded border border-red-900 bg-red-950/40 text-red-400 whitespace-pre-wrap">{error}</div>}
+      {error && <div className="mx-3 px-2 py-1 rounded border border-red-900 bg-red-950/40 text-red-400 whitespace-pre-wrap">{error}</div>}
     </div>
   );
 }
@@ -72,22 +72,22 @@ function PartRow({ clip, tree, inst, index, count, depth, commit }: { clip: Trac
   const set = (patch: Parameters<typeof updatePart>[2]) => commit(() => updatePart(tree, inst.id, patch, getPart).tree);
   const frame = inst.frame;
   const setFrame = (k: "x" | "y" | "w" | "h", v: number) => set({ frame: { x: frame?.x ?? 0, y: frame?.y ?? 0, ...(frame?.w ? { w: frame.w } : {}), ...(frame?.h ? { h: frame.h } : {}), ...(frame?.anchor ? { anchor: frame.anchor } : {}), ...(frame?.scale ? { scale: frame.scale } : {}), ...(frame?.rotate ? { rotate: frame.rotate } : {}), [k]: v } });
-  const num = "w-16 h-6 px-1 bg-neutral-900 border border-neutral-800 rounded text-neutral-200 outline-none";
-  const btn = "text-[10px] px-1.5 h-5 rounded border border-neutral-700 bg-neutral-800 hover:bg-neutral-700 text-neutral-300 disabled:opacity-40";
+  const num = "w-16 pc-left-input is-sm";
+  const btn = "pc-left-btn is-sm";
 
   return (
-    <div data-pc-part-row={inst.id} className="rounded border border-neutral-800 bg-neutral-900/40" style={{ marginLeft: 8 + depth * 12, marginRight: 8 }}>
+    <div data-pc-part-row={inst.id} className="pc-left-box" style={{ marginLeft: 12 + depth * 12, marginRight: 12 }}>
       <div className="flex items-center gap-1 px-2 py-1">
-        <button type="button" className="text-neutral-500 w-4" onClick={() => setOpen((o) => !o)} aria-label={open ? "收起" : "展开"}>{open ? "▾" : "▸"}</button>
-        <span className="flex-1 truncate text-neutral-200 font-medium" title={`${inst.partId} · ${inst.id}`}>{inst.label || def?.name || inst.partId}</span>
-        <span className="text-[10px] text-neutral-500">{def?.role ?? "?"}</span>
+        <button type="button" className="pc-left-faint w-4" onClick={() => setOpen((o) => !o)} aria-label={open ? "收起" : "展开"}>{open ? "▾" : "▸"}</button>
+        <span className="flex-1 truncate pc-left-strong font-medium" title={`${inst.partId} · ${inst.id}`}>{inst.label || def?.name || inst.partId}</span>
+        <span className="text-[10px] pc-left-faint">{def?.role ?? "?"}</span>
         <button type="button" className={btn} disabled={index === 0} onClick={() => commit(() => movePart(tree, inst.id, { parentId, index: index - 1 }))} title="往下一层(先画)">↑</button>
         <button type="button" className={btn} disabled={index >= count - 1} onClick={() => commit(() => movePart(tree, inst.id, { parentId, index: index + 1 }))} title="往上一层(后画)">↓</button>
-        <button type="button" className={`${btn} hover:text-red-400`} onClick={() => commit(() => removePart(tree, inst.id))} title="删掉这个部件(连子部件)">✕</button>
+        <button type="button" className={`${btn} is-danger-hover`} onClick={() => commit(() => removePart(tree, inst.id))} title="删掉这个部件(连子部件)">✕</button>
       </div>
       {open && (
         <div className="flex flex-col gap-1 px-2 pb-2">
-          <div className="flex items-center gap-1 text-neutral-400 flex-wrap">
+          <div className="flex items-center gap-1 pc-left-muted flex-wrap">
             <span className="w-8">框</span>
             <span>x</span><input type="number" className={num} value={frame?.x ?? 0} onChange={(e) => setFrame("x", Number(e.target.value))} />
             <span>y</span><input type="number" className={num} value={frame?.y ?? 0} onChange={(e) => setFrame("y", Number(e.target.value))} />
@@ -95,12 +95,12 @@ function PartRow({ clip, tree, inst, index, count, depth, commit }: { clip: Trac
             <span>h</span><input type="number" className={num} value={frame?.h ?? ""} placeholder="满" onChange={(e) => { const v = Number(e.target.value); if (v > 0) setFrame("h", v); }} />
             <button type="button" className={btn} onClick={() => set({ frame: null })} title="清掉框,铺满父框">铺满</button>
           </div>
-          <div className="flex items-center gap-1 text-neutral-400">
+          <div className="flex items-center gap-1 pc-left-muted">
             <span className="w-8">进场</span>
             <input type="number" className={num} min={0} step={50} value={inst.enterMs ?? 0} onChange={(e) => set({ enterMs: Math.max(0, Number(e.target.value) || 0) })} />
             <span>ms</span>
             <span className="ml-2">名字</span>
-            <input type="text" className="flex-1 min-w-0 h-6 px-1 bg-neutral-900 border border-neutral-800 rounded text-neutral-200 outline-none" value={inst.label ?? ""} placeholder={def?.name} onChange={(e) => set({ label: e.target.value })} />
+            <input type="text" className="flex-1 pc-left-input is-sm" value={inst.label ?? ""} placeholder={def?.name} onChange={(e) => set({ label: e.target.value })} />
           </div>
           {(def?.controls ?? []).map((ctrl) => (
             <ControlRow key={ctrl.key} ctrl={ctrl} value={merged[ctrl.key]} onChange={(v) => set({ params: { [ctrl.key]: v } })} />
@@ -110,7 +110,7 @@ function PartRow({ clip, tree, inst, index, count, depth, commit }: { clip: Trac
             <select
               value=""
               onChange={(e) => { if (e.target.value) commit(() => addPart(tree, { partId: e.target.value }, getPart, { parentId: inst.id }).tree); }}
-              className="h-6 px-1 bg-neutral-900 border border-neutral-800 rounded text-neutral-500 outline-none"
+              className="pc-left-select is-sm pc-left-faint"
               title="加一个子部件(它的框相对这个部件的框)"
             >
               <option value="">+ 子部件…</option>
@@ -125,25 +125,25 @@ function PartRow({ clip, tree, inst, index, count, depth, commit }: { clip: Trac
 
 /** 一行控件:和 ParamsForm 同一套类型,但值的读写走部件实例而不是 clip.params */
 function ControlRow({ ctrl, value, onChange }: { ctrl: Control; value: unknown; onChange: (v: unknown) => void }) {
-  const cls = "flex-1 min-w-0 h-6 px-1.5 bg-neutral-900 border border-neutral-800 rounded text-neutral-200 outline-none";
+  const cls = "flex-1 pc-left-input is-sm";
   return (
     <div className="flex items-center gap-2">
-      <div className="w-20 shrink-0 text-[11px] text-neutral-400 truncate" title={ctrl.hint ? `${ctrl.label}:${ctrl.hint}` : ctrl.label}>{ctrl.label}</div>
+      <div className="w-20 shrink-0 text-[11px] pc-left-muted truncate" title={ctrl.hint ? `${ctrl.label}:${ctrl.hint}` : ctrl.label}>{ctrl.label}</div>
       {ctrl.type === "text" && <input type="text" className={cls} value={String(value ?? "")} onChange={(e) => onChange(e.target.value)} />}
       {ctrl.type === "number" && <input type="number" className={cls} value={Number(value ?? 0)} min={ctrl.min} max={ctrl.max} step={ctrl.step} onChange={(e) => { const v = Number(e.target.value); if (Number.isFinite(v)) onChange(v); }} />}
       {ctrl.type === "select" && (
-        <select className={cls} value={String(value ?? "")} onChange={(e) => onChange(e.target.value)}>
+        <select className="flex-1 pc-left-select is-sm" value={String(value ?? "")} onChange={(e) => onChange(e.target.value)}>
           {ctrl.options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
         </select>
       )}
       {ctrl.type === "color" && (
         <div className="flex flex-1 items-center gap-1">
-          <input type="color" value={/^#([0-9A-Fa-f]{3}){1,2}$/.test(String(value ?? "")) ? String(value) : "#ffffff"} onChange={(e) => onChange(e.target.value)} className="w-6 h-6 p-0 border border-neutral-800 rounded bg-transparent" />
+          <input type="color" value={/^#([0-9A-Fa-f]{3}){1,2}$/.test(String(value ?? "")) ? String(value) : "#ffffff"} onChange={(e) => onChange(e.target.value)} className="pc-left-color is-sm" />
           <input type="text" className={cls} value={String(value ?? "")} placeholder="留空用主题色" onChange={(e) => onChange(e.target.value)} />
         </div>
       )}
       {ctrl.type === "asset" && (
-        <select className={cls} value={ctrl.options.some((o) => o.value === String(value ?? "")) ? String(value) : ""} onChange={(e) => onChange(e.target.value)}>
+        <select className="flex-1 pc-left-select is-sm" value={ctrl.options.some((o) => o.value === String(value ?? "")) ? String(value) : ""} onChange={(e) => onChange(e.target.value)}>
           <option value="">— 不用素材 —</option>
           {ctrl.options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
         </select>

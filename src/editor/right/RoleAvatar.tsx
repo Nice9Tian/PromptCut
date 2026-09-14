@@ -60,3 +60,9 @@ export function RoleHeader(props: { roleId?: string }) {
     </div>
   );
 }
+
+/** 只有名字。聊天行左边已经有头像了,气泡里再放一个头像就重复了 */
+export function RoleName(props: { roleId?: string }) {
+  const role = props.roleId ? ALL_ROLES.find((r) => r.id === props.roleId) : undefined;
+  return <span className="pc-role-name">{role?.name ?? "AI 助手"}</span>;
+}

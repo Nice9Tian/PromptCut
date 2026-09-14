@@ -144,6 +144,7 @@ read_url_content / run_command 这些内建工具。**在这里基本都用不�
 | 处理用户发来的附件 | \`import_media({ url })\`,url 取消息里的**站内地址**;别去 view_file 那个磁盘路径 |
 | 等几秒再查后台作业 | \`wait({ seconds })\`,别用 run_command 去 sleep |
 | 查某个工具怎么调 | 它的参数说明**已经在你的工具清单里**了,直接看;不要去读磁盘上的 schema json |
+| 每个小阶段结束、整个任务收尾时向用户汇报 | \`report_progress\` |
 `;
 
 /**

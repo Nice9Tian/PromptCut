@@ -17,7 +17,7 @@ export function visualIdOf(summary?: string): string | null {
   return m ? m[1] : null;
 }
 
-interface VisualRecord {
+export interface VisualRecord {
   tool: string;
   images?: { url: string; label?: string }[];
   before?: { gif: string };
@@ -25,20 +25,68 @@ interface VisualRecord {
   diff?: { key: string; from: string; to: string }[];
 }
 
-export function ToolVisual({ id }: { id: string }): JSX.Element {
-  const [rec, setRec] = useState<VisualRecord | null>(null);
-  const [err, setErr] = useState("");
-  const base = usePrerenderBase();
+/**
+ * 记录的模块级缓存:同一个 id 只取一次。
+ *
+ * 气泡里的轮播(chat/ActivityCarousel.tsx)要把一条消息看过的画面一起列出来,点开操作清单时
+ * ToolVisual 又要显示同一份记录;各取各的话,一条消息几十次操作就是几十个重复请求。
+ * 存的是 Promise,同一时刻好几处要同一个 id 也只发一次请求。
+ * 取失败的不留在缓存里 —— 和原来每次挂载都重新取一样,下次打开还能再试。
+ */
+const inflight = new Map<string, Promise<VisualRecord>>();
+const loaded = new Map<string, VisualRecord>();
+
+export function loadVisualRecord(id: string): Promise<VisualRecord> {
+  const hit = inflight.get(id);
+  if (hit) return hit;
+  const p = prerenderUrl(`/api/ai/visual/${id}.json`)
+    .then((u) => fetch(u))
+    .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+    .then((d) => {
+      const rec = (d?.record ?? d) as VisualRecord;
+      loaded.set(id, rec);
+      return rec;
+    });
+  inflight.set(id, p);
+  p.catch(() => {
+    if (inflight.get(id) === p) inflight.delete(id);
+  });
+  return p;
+}
+
+/** 已经取回来的记录,同步读;还没取回来或者取失败时是 undefined */
+export function peekVisualRecord(id: string): VisualRecord | undefined {
+  return loaded.get(id);
+}
+
+/** 取一份记录给界面用:缓存里有就直接给(不闪「正在取回」),没有就去取,取失败把原因带出来 */
+export function useVisualRecord(id: string | null): { rec: VisualRecord | null; err: string } {
+  const [state, setState] = useState<{ id: string | null; rec: VisualRecord | null; err: string }>(
+    () => ({ id, rec: (id && loaded.get(id)) || null, err: "" }),
+  );
 
   useEffect(() => {
+    if (!id) return;
     let alive = true;
-    prerenderUrl(`/api/ai/visual/${id}.json`)
-      .then((u) => fetch(u))
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
-      .then((d) => { if (alive) setRec(d.record ?? d); })
-      .catch((e) => { if (alive) setErr(String(e?.message || e)); });
+    loadVisualRecord(id).then(
+      (rec) => {
+        if (alive) setState((s) => (s.id === id && s.rec === rec && !s.err ? s : { id, rec, err: "" }));
+      },
+      (e) => {
+        if (alive) setState({ id, rec: null, err: String(e?.message || e) });
+      },
+    );
     return () => { alive = false; };
   }, [id]);
+
+  // id 换了、效果还没跑到:别拿上一个 id 的结果冒充这一个
+  if (state.id !== id) return { rec: (id && loaded.get(id)) || null, err: "" };
+  return { rec: state.rec, err: state.err };
+}
+
+export function ToolVisual({ id }: { id: string }): JSX.Element {
+  const { rec, err } = useVisualRecord(id);
+  const base = usePrerenderBase();
 
   if (err) return <div className="ai-visual-note">这一步的画面取不回来了({err})</div>;
   if (!rec) return <div className="ai-visual-note">正在取回画面…</div>;
@@ -86,8 +134,11 @@ export function ToolVisual({ id }: { id: string }): JSX.Element {
   );
 }
 
-/** 动图第一次打开时服务端才去渲(8 帧 + 编码),要等几秒到几十秒 —— 转圈,失败了能重试 */
-function Gif({ src, label }: { src: string; label: string }): JSX.Element {
+/**
+ * 动图第一次打开时服务端才去渲(8 帧 + 编码),要等几秒到几十秒 —— 转圈,失败了能重试。
+ * 轮播也用它;挂载即开始加载,所以别在还没翻到的页里挂它。
+ */
+export function Gif({ src, label }: { src: string; label: string }): JSX.Element {
   const [state, setState] = useState<"loading" | "ok" | "err">("loading");
   const [attempt, setAttempt] = useState(0);
   return (

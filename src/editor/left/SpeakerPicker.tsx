@@ -89,7 +89,7 @@ export function SpeakerPicker({ open, onClose, onSelect }: SpeakerPickerProps) {
         {/* 来源一：已导入素材 */}
         <div className="flex flex-col gap-1.5 min-h-0">
           <div className="text-xs text-neutral-400 font-medium">从项目素材库选择</div>
-          <div className="max-h-48 overflow-y-auto pc-l-scroll border border-neutral-800 rounded bg-neutral-950/60 p-1 flex flex-col gap-1">
+          <div className="max-h-48 overflow-y-auto pc-left-scrollborder border-neutral-800 rounded bg-neutral-950/60 p-1 flex flex-col gap-1">
             {videoMedia.length === 0 ? (
               <div className="p-3 text-center text-xs text-neutral-500">
                 还没有素材，用下面的选择文件导入

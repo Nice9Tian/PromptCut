@@ -10,7 +10,7 @@
   height: 28px;
   padding: 2px;
   border: 1px solid var(--ui-border-strong);
-  border-radius: var(--ui-radius, 4px);
+  border-radius: var(--ui-radius, 6px);
   background: var(--ui-panel-2);
   /* 顶栏放不下时整体收缩,但别被压扁到看不清 */
   min-width: 186px;
@@ -24,7 +24,7 @@
   left: 2px;
   width: calc((100% - 4px) / 3);
   height: calc(100% - 4px);
-  border-radius: calc(var(--ui-radius, 4px) - 1px);
+  border-radius: calc(var(--ui-radius, 6px) - 1px);
   background: var(--ui-accent-soft);
   border: 1px solid var(--ui-accent);
   transition: transform 180ms cubic-bezier(0.16, 1, 0.3, 1), background 180ms, border-color 180ms;
@@ -50,7 +50,7 @@
   line-height: 1;
   white-space: nowrap;
   cursor: pointer;
-  border-radius: calc(var(--ui-radius, 4px) - 1px);
+  border-radius: calc(var(--ui-radius, 6px) - 1px);
   transition: color 180ms;
 }
 .pc-modeswitch-item:hover:not(:disabled):not(.is-on) {

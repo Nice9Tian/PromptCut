@@ -47,7 +47,7 @@ export function Frame3DForm({ clip }: { clip: TrackClip }) {
     hint: string,
   ) => (
     <div className="flex items-center gap-2" key={key} title={hint}>
-      <span className="w-14 shrink-0 text-neutral-400">{label}</span>
+      <span className="w-14 shrink-0 pc-left-muted">{label}</span>
       <input
         data-pc={`frame3d-${key}`}
         type="range"
@@ -56,7 +56,7 @@ export function Frame3DForm({ clip }: { clip: TrackClip }) {
         step={step}
         value={f[key]}
         onChange={(e) => patch({ [key]: Number(e.target.value) })}
-        className="flex-1 min-w-0 accent-cyan-500"
+        className="flex-1 min-w-0 pc-left-range"
       />
       <input
         type="number"
@@ -66,22 +66,23 @@ export function Frame3DForm({ clip }: { clip: TrackClip }) {
           const v = Number(e.target.value);
           if (Number.isFinite(v)) patch({ [key]: v });
         }}
-        className="w-16 h-6 px-1 bg-neutral-900 border border-neutral-800 rounded text-neutral-200 outline-none"
+        className="w-16 pc-left-input is-sm"
       />
-      <span className="w-6 shrink-0 text-neutral-600">{unit}</span>
+      <span className="w-6 shrink-0 pc-left-faint">{unit}</span>
     </div>
   );
 
   const is3D = f.rotateX !== 0 || f.rotateY !== 0 || f.translateZ !== 0;
 
   return (
-    <div className="p-2 flex flex-col gap-2 text-xs border-t border-neutral-800">
+    <div className="px-3 py-2 flex flex-col gap-2 text-xs pc-left-divider">
       <div className="flex items-center justify-between">
-        <span className="font-bold text-neutral-300">三维</span>
-        <label className="flex items-center gap-1 text-neutral-400" title="整个项目一档:一个画面只有一台相机">
+        <span className="font-semibold pc-left-strong">三维</span>
+        <label className="flex items-center gap-1 pc-left-muted" title="整个项目一档:一个画面只有一台相机">
           <input
             data-pc="frame3d-camera"
             type="checkbox"
+            className="pc-left-range"
             checked={on}
             onChange={(e) =>
               actions.setProjectMeta({ camera3dFov: e.target.checked ? (project.camera3dFov ?? DEFAULT_FOV_DEG) : undefined })
@@ -110,7 +111,7 @@ export function Frame3DForm({ clip }: { clip: TrackClip }) {
       {row("深度", "translateZ", -2000, 1200, 10, "px", "正值朝观众(变大),负值往里(变小)")}
 
       {on && (
-        <div className="flex items-center gap-2 text-neutral-400" title="越小透视越弱(接近正交),越大越夸张。相机距离由它和画幅推出来,不单独设">
+        <div className="flex items-center gap-2 pc-left-muted" title="越小透视越弱(接近正交),越大越夸张。相机距离由它和画幅推出来,不单独设">
           <span className="w-14 shrink-0">视角</span>
           <input
             data-pc="frame3d-fov"
@@ -120,21 +121,21 @@ export function Frame3DForm({ clip }: { clip: TrackClip }) {
             step={1}
             value={fov}
             onChange={(e) => actions.setProjectMeta({ camera3dFov: clampFov(Number(e.target.value)) })}
-            className="flex-1 min-w-0 accent-cyan-500"
+            className="flex-1 min-w-0 pc-left-range"
           />
-          <span className="w-16 text-right text-neutral-500">{fov}°</span>
+          <span className="w-16 text-right pc-left-faint">{fov}°</span>
           <span className="w-6" />
         </div>
       )}
 
-      <div className="flex items-center justify-between text-[10px] text-neutral-600">
+      <div className="flex items-center justify-between text-[10px] pc-left-faint">
         <span>
           {on
             ? `相机距画面 ${Math.round(perspectivePx(stage, fov))}px`
             : "整个项目共用一台相机"}
         </span>
         {is3D && (
-          <button type="button" onClick={() => patch(RESET)} className="text-neutral-400 hover:text-neutral-200 underline">
+          <button type="button" onClick={() => patch(RESET)} className="pc-left-link">
             归零
           </button>
         )}

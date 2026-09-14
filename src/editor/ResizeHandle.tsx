@@ -16,6 +16,7 @@ export function ResizeHandle({
   min,
   max,
   invert = false,
+  disabled = false,
   onChange,
   onCommit,
   onReset,
@@ -26,6 +27,7 @@ export function ResizeHandle({
   min: number;
   max: number | (() => number);
   invert?: boolean;
+  disabled?: boolean;
   onChange: (next: number) => void;
   onCommit: () => void;
   onReset?: () => void;
@@ -35,7 +37,7 @@ export function ResizeHandle({
   latest.current = value;
 
   const handlePointerDown = (e: React.PointerEvent) => {
-    if (e.button !== 0) return;
+    if (disabled || e.button !== 0) return;
     e.preventDefault();
     const el = e.currentTarget as HTMLElement;
     const start = axis === "x" ? e.clientX : e.clientY;
@@ -75,14 +77,18 @@ export function ResizeHandle({
     el.addEventListener("pointercancel", onUp);
   };
 
+  const cursorClass = disabled ? "" : (axis === "x" ? "cursor-col-resize" : "cursor-row-resize");
+  const disabledClass = disabled ? "is-disabled" : "";
+
   return (
     <div
       data-pc-resize={axis}
       role="separator"
       aria-orientation={axis === "x" ? "vertical" : "horizontal"}
-      className={`pc-gutter shrink-0 touch-none ${
-        axis === "x" ? "w-1.5 h-full cursor-col-resize" : "h-1.5 w-full cursor-row-resize"
-      }`}
+      style={{ pointerEvents: disabled ? "none" : "auto" }}
+      className={`pc-gutter shrink-0 touch-none flex items-center justify-center ${
+        axis === "x" ? "w-2 h-full" : "h-2 w-full"
+      } ${cursorClass} ${disabledClass}`}
       title={title ?? (onReset ? "拖动调整大小,双击复位" : "拖动调整大小")}
       onPointerDown={handlePointerDown}
       onDoubleClick={onReset}

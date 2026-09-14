@@ -14,7 +14,7 @@ export function DropGhost({ plan }: { plan: DropPlan }) {
       ? "border-red-500 bg-red-500/20 text-red-100"
       : plan.status === "shift"
         ? "border-amber-400 bg-amber-400/20 text-amber-100"
-        : "border-sky-400 bg-sky-400/25 text-sky-50";
+        : "border-[var(--ui-accent)] bg-[var(--ui-accent-soft)] text-[var(--ui-fg)]";
 
   return (
     <div

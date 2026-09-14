@@ -36,9 +36,9 @@ function InsertZone({ index }: { index: number }) {
     >
       {plan && (
         <>
-          <div className="absolute inset-x-0 top-1/2 h-[3px] -translate-y-1/2 rounded-full bg-sky-400 pointer-events-none" />
+          <div className="absolute inset-x-0 top-1/2 h-[3px] -translate-y-1/2 rounded-full pointer-events-none bg-[var(--ui-accent)]" />
           <div
-            className="absolute top-1/2 z-50 flex h-5 -translate-y-1/2 items-center whitespace-nowrap rounded bg-sky-500 px-1.5 text-[10px] text-white pointer-events-none"
+            className="absolute top-1/2 z-50 flex h-5 -translate-y-1/2 items-center whitespace-nowrap rounded px-1.5 text-[10px] text-white pointer-events-none bg-[var(--ui-accent)]"
             style={{ left: `${xOfTime(plan.start, pxPerSec)}px` }}
           >
             {plan.label} · 新建序列

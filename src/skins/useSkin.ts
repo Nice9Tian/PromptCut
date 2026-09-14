@@ -9,7 +9,16 @@ import { expandOverrides, subscribeOverrides } from "./overrides";
  */
 let currentSkin = DEFAULT_SKIN;
 try {
-  const saved = localStorage.getItem("pc.skin");
+  let saved = localStorage.getItem("pc.skin");
+  // 旧默认 indigo-dark 迁到 studio-dark 只在第一次启动做一回;标记不管迁没迁都写上,
+  // 之后用户在皮肤里主动挑回 indigo-dark 不会再被改掉
+  if (!localStorage.getItem("pc.skin.studioMigrated")) {
+    if (saved === "indigo-dark") {
+      saved = "studio-dark";
+      localStorage.setItem("pc.skin", saved);
+    }
+    localStorage.setItem("pc.skin.studioMigrated", "1");
+  }
   if (saved && skins.some((s) => s.id === saved)) currentSkin = saved;
 } catch {
   // ignore

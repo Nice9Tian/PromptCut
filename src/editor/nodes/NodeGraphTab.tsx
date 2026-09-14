@@ -3,12 +3,12 @@ import { useStore, actions } from "../../store/project";
 import { graphOf } from "./layout";
 import "./nodeGraph.css";
 
+/** 编辑分区 → 节点:当前播放头处的节点管线(媒体 → 滤镜 / 像素映射 / 音频 → 输出) */
 export function NodeGraphTab() {
   const project = useStore((s) => s.project);
   const time = useStore((s) => s.t);
   const graph = useMemo(() => graphOf(project, time), [project, time]);
-  const out = graph.nodes.find((n) => n.id === "out")!;
-  return <div className="pc-node-page">
+  return <div className="pc-node-page pc-left-scroll" data-pc="node-graph">
     <div className="pc-node-help">节点管线 · 拖动播放头查看当前连接</div>
     <div className="pc-node-canvas" style={{ minWidth: graph.width, minHeight: graph.height }}>
       <svg className="pc-node-edges" width={graph.width} height={graph.height} aria-hidden="true">

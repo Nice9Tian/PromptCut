@@ -1,4 +1,5 @@
 import { recordTrace } from './debug';
+import { appendTextPart, applyDeltas, isDeltaEvent } from './streamBatch';
 import { useState, useEffect, useRef, useCallback } from "react";
 import type { AiProvider, ChatMessage, ChatAttachment, MessagePart, MessageRuntime, ProviderInfo, RunEvent, SttInfo, LoginState, PublicAiConfig, AiConfigPatch, CliSetupJob, KeyKind } from "./types";
 import { parseSseChunks } from "./sse";
@@ -14,6 +15,11 @@ import { runRoleTask } from "./runRoleTask";
 import { getState } from "../store/project";
 import { mediaCardUrl } from "./mediaRef";
 import { buildHandoff } from "./handoff";
+import { getQueueState, remove as removeQueued } from "./chatQueue";
+import { rewindAt, type RewindResult } from "./rewind";
+
+/** 回退时这一页每家驱动的会话 id 都要清,清单在这里 */
+const ALL_PROVIDERS: AiProvider[] = ["claude", "agy", "codex", "api"];
 
 /**
  * 把素材库里的素材整理成附件清单的形状,跟着每次发送一起带上(服务端单列成「素材库」一段)。
@@ -41,23 +47,8 @@ function mediaAsAttachments(): ChatAttachment[] {
   }
 }
 
-/** 往有序片段里追加文字(接在末尾的文字片段后面,不新开一段) */
-function appendTextPart(parts: MessagePart[] | undefined, delta: string): MessagePart[] {
-  const next = parts ? [...parts] : [];
-  const last = next[next.length - 1];
-  if (last && last.kind === "text") next[next.length - 1] = { kind: "text", text: last.text + delta };
-  else next.push({ kind: "text", text: delta });
-  return next;
-}
-
-/** 同上,但追加的是思考片段。思考和正文各自成段,不会互相吞并 */
-function appendThinkingPart(parts: MessagePart[] | undefined, delta: string): MessagePart[] {
-  const next = parts ? [...parts] : [];
-  const last = next[next.length - 1];
-  if (last && last.kind === "thinking") next[next.length - 1] = { kind: "thinking", text: last.text + delta };
-  else next.push({ kind: "thinking", text: delta });
-  return next;
-}
+/** Streaming text/thinking deltas are applied to state at most this often. */
+const DELTA_FLUSH_MS = 80;
 
 /** 给最近一个同名、还没有结果的工具片段补上结果 */
 function completeToolPart(
@@ -104,8 +95,35 @@ export function useAiChat(opts?: { mock?: boolean; tabId?: string; getConversati
   /** 分工模式这一轮的编排状态。界面(OrchestrationBlock)直接读它。 */
   const [orchestration, setOrchestration] = useState<OrchestrationState | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+  /*
+   * 一轮的生命周期,给输入队列用(见 chatQueue.ts、下面的 pumpQueue):
+   * - sendSeqRef:每次 abort()(包括 send 开头那一次)加一。一轮落定时序号没变,
+   *   才说明它既没被用户停掉、也没被新的一次发送顶掉;
+   * - busyRef:send 开始到这一轮落定之间为 true。和 streaming 不同,它是同步读的,
+   *   分工模式过入口闸那几秒也算在内;
+   * - autoContinueTimerRef:出错自动续跑已经排上、还没发出去的那一次;
+   * - orchEpochRef:编排状态的「代」。新的一次发送、回退都换代,旧编排晚到的状态更新一律丢掉;
+   *   用户点停止不换代,「已取消」照常显示;
+   * - workflowRef:一键配特效正在串行跑,队列等它跑完再发。
+   */
+  const sendSeqRef = useRef(0);
+  const busyRef = useRef(false);
+  const autoContinueTimerRef = useRef<number | null>(null);
+  const orchEpochRef = useRef(0);
+  const workflowRef = useRef(false);
+  const unmountedRef = useRef(false);
+  /** 最新一次渲染的 send。落定后发队首、自动续跑都用它:旧闭包里那份的 provider / config 可能已经换了 */
+  const sendRef = useRef<(text: string, attachments?: ChatAttachment[], sendOpts?: { auto?: boolean }) => Promise<boolean>>(async () => false);
   // 这一页被关掉(多 Agent 分页关页)时把还在跑的请求掐掉:连接一断服务端就会 abort 那一轮
-  useEffect(() => () => { abortControllerRef.current?.abort(); }, []);
+  useEffect(() => {
+    unmountedRef.current = false;
+    return () => {
+      unmountedRef.current = true;
+      if (autoContinueTimerRef.current !== null) window.clearTimeout(autoContinueTimerRef.current);
+      autoContinueTimerRef.current = null;
+      abortControllerRef.current?.abort();
+    };
+  }, []);
   const currentRunId = useRef<string | null>(null);
   const setupGateRef = useRef(false);
   const [setupJobs, setSetupJobs] = useState<CliSetupJob[]>([]);
@@ -363,6 +381,14 @@ export function useAiChat(opts?: { mock?: boolean; tabId?: string; getConversati
   };
 
   const abort = useCallback(() => {
+    // 先让正在跑的这一轮「过期」:它之后落定时序号对不上,就不会去发队首
+    sendSeqRef.current += 1;
+    busyRef.current = false;
+    // 还没发出去的自动续跑一并取消:用户停了就是停了,新发的消息也不该被续跑打断
+    if (autoContinueTimerRef.current !== null) {
+      window.clearTimeout(autoContinueTimerRef.current);
+      autoContinueTimerRef.current = null;
+    }
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
@@ -379,6 +405,59 @@ export function useAiChat(opts?: { mock?: boolean; tabId?: string; getConversati
     setStreaming(false);
   }, [opts?.mock]);
 
+  /** 这一页此刻算不算在跑:发送进行中,或者排着一次自动续跑。Composer 交上来的话据此决定直接发还是进队列 */
+  const isBusy = useCallback(() => busyRef.current || autoContinueTimerRef.current !== null, []);
+
+  /**
+   * 空闲时发出输入队列的队首。调用点:一轮真正落定(finishRun)、用户点「继续」、一键配特效跑完。
+   * 暂停着、还排着一次自动续跑、一键配特效没跑完、此刻还在忙,都不发 —— 不会出现两条同时发出去。
+   *
+   * 先发再出队:send 的同步部分已经把 busyRef 置上,出队触发的订阅(AiPanel 里 agentBus 的自动投递)
+   * 看到的就是「忙」,不会趁这一下空当再塞一条进来。
+   */
+  const pumpQueue = useCallback((): boolean => {
+    if (unmountedRef.current || busyRef.current || autoContinueTimerRef.current !== null || workflowRef.current) return false;
+    const q = getQueueState(tabId);
+    if (q.paused || q.items.length === 0) return false;
+    const head = q.items[0];
+    void sendRef.current(head.text, head.attachments);
+    removeQueued(tabId, head.id);
+    return true;
+  }, [tabId]);
+
+  /** 一轮真正落定(增量已 flush、outcome 已写进消息,而且没被停掉 / 顶掉)时调 */
+  const finishRun = useCallback(() => {
+    busyRef.current = false;
+    pumpQueue();
+  }, [pumpQueue]);
+
+  /**
+   * 回退到某条用户消息之前。入口在 UserBubble,确认之后由 AiPanel 调;返回 null 表示 id 不对。
+   *   1. 正在跑就先停,分工模式的编排状态一并清掉(换代,旧编排晚到的更新不再写回来);
+   *   2. 这一页的消息换成截断后的那份;
+   *   3. 这一页**所有驱动**的会话 id 都清掉:下一次发送后端从头开会话,留下的几轮由「前情」带过去(buildHandoff)。
+   * 放回输入框、归档整份覆盖由 AiPanel 接着做;输入队列不动。
+   */
+  const rewindTo = (userMessageId: string): RewindResult | null => {
+    if (!rewindAt(store.get(), userMessageId)) return null;
+    if (busyRef.current || autoContinueTimerRef.current !== null || abortControllerRef.current) abort();
+    orchEpochRef.current += 1;
+    setOrchestration(null);
+    // abort() 会把还在跑的消息标成已中止,按标完之后的那份再算一遍
+    const result = rewindAt(store.get(), userMessageId);
+    if (!result) return null;
+    setMessages(result.kept);
+    for (const p of ALL_PROVIDERS) {
+      try {
+        localStorage.removeItem(sessKey(p));
+      } catch {
+        /* 存储不可用就只清 state */
+      }
+    }
+    setSessionIds({});
+    return result;
+  };
+
   /**
    * 分工模式：主管拆活 → 划依赖 → 按 DAG 并行派给各角色。
    *
@@ -386,14 +465,23 @@ export function useAiChat(opts?: { mock?: boolean; tabId?: string; getConversati
    * 所以这里不再判断划不划算。任何一步出错都**退回普通提问**而不是报错终止——
    * 编排只是加速手段，它失灵不该让用户连话都问不了。
    */
-  const runTeamMode = async (text: string): Promise<boolean> => {
+  const runTeamMode = async (text: string, epoch: number): Promise<boolean> => {
     const manager = ALL_ROLES.find((r) => r.id === "manager");
     if (!manager || !provider) return false;
+
+    /*
+     * 编排状态只认这一代:换过代(新的一次发送、回退)之后,这一轮编排晚到的更新
+     * (比如被打断后推上来的「已取消」)不再写回来 —— 否则会盖掉新一轮的编排块,
+     * 或者挂到回退后另一条用户消息的下面。
+     */
+    const setOrch: typeof setOrchestration = (s) => {
+      if (epoch === orchEpochRef.current) setOrchestration(s);
+    };
 
     const ac = new AbortController();
     abortControllerRef.current = ac;
     setStreaming(true);
-    setOrchestration({
+    setOrch({
       phase: "planning", query: text, plan: "", dag: "", tasks: [], waves: [],
     });
 
@@ -435,17 +523,21 @@ export function useAiChat(opts?: { mock?: boolean; tabId?: string; getConversati
             },
           });
         },
-        setOrchestration,
+        setOrch,
         ac.signal,
       );
       return true;
     } catch (e) {
       // 编排本身失败（多半是没配 API 直连）：把原因显示出来，然后照常问一遍
-      setOrchestration((s) =>
+      setOrch((s) =>
         s ? { ...s, phase: "error", error: e instanceof Error ? e.message : String(e) } : s);
       return false;
     } finally {
-      setStreaming(false);
+      /*
+       * streaming 不在这里放下。成功时由 send 在落定那一刻放下,和发队首在同一个同步段里,
+       * 界面上不会闪出一帧「空闲」让 agentBus 的投递插进来;失败时 send 紧接着走普通流程又会置上;
+       * 被停掉 / 被顶掉的那次,abort() 已经放过了 —— 在这里无条件放下反而会把新一轮的 streaming 关掉。
+       */
       if (abortControllerRef.current === ac) abortControllerRef.current = null;
     }
   };
@@ -453,12 +545,18 @@ export function useAiChat(opts?: { mock?: boolean; tabId?: string; getConversati
   // 第三个参数叫 sendOpts 不叫 opts:这个函数体里到处在读**外层 hook 的** opts
   // (opts.mock、opts.getConversationId),重名会把它整个遮住,而且遮得悄无声息 ——
   // 类型对不上才炸出来,不然就是运行时读到 undefined。
-  const send = async (text: string, attachments?: ChatAttachment[], sendOpts?: { auto?: boolean }) => {
-    if (!provider) return;
+  //
+  // 返回这一轮是否正常落定(没被停掉、没被新的发送顶掉);一键配特效据此决定还跑不跑下一个角色。
+  const send = async (text: string, attachments?: ChatAttachment[], sendOpts?: { auto?: boolean }): Promise<boolean> => {
+    if (!provider) return false;
     // 用户自己发的才重置额度;自动续跑那次不重置,否则「续跑 → 又错 → 再续」能一直转下去
     if (!sendOpts?.auto) autoContinueLeftRef.current = 1;
 
     abort();
+    // 这一次发送的序号和编排的「代」:每个 await 回来都对一下,对不上就是中途被停掉或被顶掉了
+    const seq = sendSeqRef.current;
+    const epoch = ++orchEpochRef.current;
+    busyRef.current = true;
 
     // 用户那句话**发送的这一瞬间**就进消息流。以前分工模式下要等入口闸(可能打一次模型)
     // 和主管三步拆解全回来才追加,那几秒到几十秒里界面纹丝不动,用户以为没发出去。
@@ -475,8 +573,22 @@ export function useAiChat(opts?: { mock?: boolean; tabId?: string; getConversati
     // 用户能看见有东西在转;判定不值得编排就把块撤掉,走普通问答。
     if (isTeamMode() && !attachments?.length) {
       setOrchestration({ phase: "planning", query: text, plan: "", dag: "", tasks: [], waves: [] });
+      // 过闸那几秒也算在跑:「■ 停止」要在,这时再交的话要进队列,而不是再发一条把这条顶掉
+      setStreaming(true);
       const verdict = await shouldOrchestrate(text);
-      if (verdict.parallel && (await runTeamMode(text))) return;
+      if (seq !== sendSeqRef.current) {
+        // 过闸期间被用户停掉:撤掉「正在拆解」的块。被新的发送顶掉就别碰,那一轮有自己的编排状态
+        if (epoch === orchEpochRef.current) setOrchestration(null);
+        return false;
+      }
+      if (verdict.parallel && (await runTeamMode(text, epoch))) {
+        if (seq !== sendSeqRef.current) return false;
+        // 分工这一轮落定:放下 streaming、发队首在同一个同步段里(理由见 runTeamMode 的 finally)
+        setStreaming(false);
+        finishRun();
+        return true;
+      }
+      if (seq !== sendSeqRef.current) return false;
       if (!verdict.parallel) setOrchestration(null);
     }
 
@@ -537,6 +649,11 @@ export function useAiChat(opts?: { mock?: boolean; tabId?: string; getConversati
       let i = 0;
       const msg = "这是内置假流回复内容。我将调用一个工具看看效果。";
       const timer = setInterval(() => {
+        // 被停掉或被新的发送顶掉:假流也跟着停,别往已中止的消息里接着写、也别事后把 streaming 关掉
+        if (seq !== sendSeqRef.current) {
+          clearInterval(timer);
+          return;
+        }
         if (i < msg.length) {
           // 每帧写「到目前为止的整段文字」,不做增量拼接:
           // 第一次 tick 有可能赶在助手消息真正入列之前,那一次增量更新会静默丢掉,
@@ -554,6 +671,7 @@ export function useAiChat(opts?: { mock?: boolean; tabId?: string; getConversati
             parts: [...(m.parts || []), { kind: "tool", name: "get_editor_state", input: {} }],
           } : m));
           setTimeout(() => {
+            if (seq !== sendSeqRef.current) return;
             setMessages(prev => prev.map(m => {
               if (m.id !== asstMsgId) return m;
               const tools = [...(m.tools || [])];
@@ -579,19 +697,42 @@ export function useAiChat(opts?: { mock?: boolean; tabId?: string; getConversati
               "$$N = \\lceil (t_1 - t_0) \\times fps \\rceil$$",
             ].join("\n");
             setTimeout(() => {
+              if (seq !== sendSeqRef.current) return;
               setMessages(prev => prev.map(m => m.id === asstMsgId
                 ? { ...m, text: m.text + "\n" + tail, parts: appendTextPart(m.parts, "\n" + tail), pending: false }
                 : m));
               setStreaming(false);
+              // 假流这一轮落定:和真实流一样在这里发队首
+              finishRun();
             }, 600);
           }, 1000);
         }
       }, 50);
-      return;
+      return true;
     }
 
     const ac = new AbortController();
     abortControllerRef.current = ac;
+    /** 这一轮是否正常落定(见 finally 里发队首的那段) */
+    let settled = false;
+
+    /*
+     * Deltas arrive many times per second. Applying each as its own state update
+     * re-rendered the panel and re-parsed the reply's Markdown per token: a
+     * synthetic 1500-delta reply kept the editor's main thread in long tasks for
+     * 58% of the stream. Queue deltas in arrival order and apply them together at
+     * most every DELTA_FLUSH_MS; every other event, the end of the stream and
+     * errors flush the queue first, so ordering is unchanged.
+     */
+    let queuedDeltas: RunEvent[] = [];
+    let deltaTimer: number | null = null;
+    const flushDeltas = () => {
+      if (deltaTimer !== null) { window.clearTimeout(deltaTimer); deltaTimer = null; }
+      if (!queuedDeltas.length) return;
+      const batch = queuedDeltas;
+      queuedDeltas = [];
+      setMessages(prev => prev.map(m => m.id === asstMsgId ? applyDeltas(m, batch, recordTrace) : m));
+    };
 
     try {
       /*
@@ -657,27 +798,19 @@ export function useAiChat(opts?: { mock?: boolean; tabId?: string; getConversati
         buffer = rest;
 
         for (const ev of events as RunEvent[]) {
+          // 文字和思考增量排队合并(思考只进 parts,不进 m.text,见 applyDeltas)
+          if (isDeltaEvent(ev)) {
+            queuedDeltas.push(ev);
+            if (deltaTimer === null) deltaTimer = window.setTimeout(flushDeltas, DELTA_FLUSH_MS);
+            continue;
+          }
+          flushDeltas();
           setMessages(prev => prev.map(m => m.id === asstMsgId ? recordTrace(m, ev) : m));
           if (ev.type === "run" && ev.runId) {
             currentRunId.current = ev.runId;
           } else if (ev.type === "session" && ev.sessionId) {
             setSessionIds((prev) => ({ ...prev, [provider]: ev.sessionId! }));
             localStorage.setItem(sessKey(provider), ev.sessionId!);
-          } else if (ev.type === "text" && ev.delta) {
-            setMessages((prev) =>
-              prev.map((m) =>
-                m.id === asstMsgId
-                  ? { ...m, text: m.text + ev.delta!, parts: appendTextPart(m.parts, ev.delta!) }
-                  : m
-              )
-            );
-          } else if (ev.type === "thinking" && ev.delta) {
-            // 只进 parts,不进 m.text:m.text 是「回复正文」,会存进历史、也是简洁模式显示的内容
-            setMessages((prev) =>
-              prev.map((m) =>
-                m.id === asstMsgId ? { ...m, parts: appendThinkingPart(m.parts, ev.delta!) } : m
-              )
-            );
           } else if (ev.type === "tool_call" && ev.name) {
             setMessages((prev) =>
               prev.map((m) => {
@@ -749,7 +882,12 @@ export function useAiChat(opts?: { mock?: boolean; tabId?: string; getConversati
             if (ev.retryable && ev.retryPrompt && autoContinueLeftRef.current > 0) {
               autoContinueLeftRef.current -= 1;
               const prompt = ev.retryPrompt;
-              setTimeout(() => { void send(prompt, undefined, { auto: true }); }, 0);
+              // 记下这次排着的续跑:发出去之前这一页仍算忙,输入队列不能抢在它前面(见 pumpQueue);
+              // 用户在这之前点了停止,abort() 会把它取消
+              autoContinueTimerRef.current = window.setTimeout(() => {
+                autoContinueTimerRef.current = null;
+                void sendRef.current(prompt, undefined, { auto: true });
+              }, 0);
             }
           } else if (ev.type === "done") {
             setMessages((prev) =>
@@ -761,6 +899,7 @@ export function useAiChat(opts?: { mock?: boolean; tabId?: string; getConversati
         }
       }
 
+      flushDeltas();
       setMessages((prev) =>
         prev.map((m) =>
           m.id === asstMsgId ? { ...m, pending: false } : m
@@ -768,6 +907,8 @@ export function useAiChat(opts?: { mock?: boolean; tabId?: string; getConversati
       );
 
     } catch (e: unknown) {
+      // Keep whatever text already arrived before the stream stopped.
+      flushDeltas();
       if (e instanceof Error && e.name !== "AbortError") {
         setMessages((prev) =>
           prev.map((m) =>
@@ -783,23 +924,42 @@ export function useAiChat(opts?: { mock?: boolean; tabId?: string; getConversati
         currentRunId.current = null;
         setStreaming(false);
       }
+      /*
+       * 输入队列的自动发送挂在这里:走到 finally 时增量已经 flush、outcome 已经写进消息,这一轮才算真正落定。
+       * 序号没变 = 没被用户停掉(停掉的那次 outcome 是 aborted)、也没被新的发送顶掉;
+       * 连接被卸载掐断(关分页)的也不算。还排着一次出错自动续跑的话,pumpQueue 会让续跑先走。
+       */
+      if (seq === sendSeqRef.current && !ac.signal.aborted) {
+        settled = true;
+        finishRun();
+      }
     }
+    return settled;
   };
+  sendRef.current = send;
 
   /**
    * 一键配特效:按顺序把 src/ai/roles/ 里的角色各跑一轮。
    *
    * 串行而不是拼成一段长提示词 —— 剪辑导演要先看齐全部素材才排得了片,
    * 特效助理要先有文字稿才配得了字幕和动效,合在一轮里模型会顾此失彼。
-   * 每一轮都是完整的一次 send,所以中途出错或被用户停掉,后面的角色不会再跑。
+   * 每一轮都是完整的一次 send,所以被用户停掉之后,后面的角色不会再跑。
+   *
+   * 跑着的时候输入队列先等着(pumpQueue 看 workflowRef):不然前一个角色一落定就发队首,
+   * 下一个角色一开跑又把它打断。整串跑完再发。
    */
   const runWorkflow = useCallback(async () => {
-    for (const role of WORKFLOW_ROLES) {
-      await send(role.prompt);
-      // 用户按了停止就别继续下一个角色了
-      if (abortControllerRef.current?.signal.aborted) break;
+    workflowRef.current = true;
+    try {
+      for (const role of WORKFLOW_ROLES) {
+        // 没正常落定(用户按了停止、被别的发送顶掉)就别继续下一个角色了
+        if (!(await sendRef.current(role.prompt))) break;
+      }
+    } finally {
+      workflowRef.current = false;
     }
-  }, [provider, sessionIds]);
+    pumpQueue();
+  }, [pumpQueue]);
 
   return {
     messages,
@@ -814,6 +974,12 @@ export function useAiChat(opts?: { mock?: boolean; tabId?: string; getConversati
     streaming,
     send,
     abort,
+    /** 此刻算不算在跑(同步读,含分工模式过闸、排着的自动续跑);Composer 交上来的话据此决定直接发还是进队列 */
+    isBusy,
+    /** 空闲且没暂停时发出输入队列的队首(队列「继续」用;一轮落定时内部自己会调) */
+    pumpQueue,
+    /** 回退到某条用户消息之前:停掉运行、截断消息、清会话 id;返回放回输入框的内容 */
+    rewindTo,
     newChat,
     error,
     setMessages,

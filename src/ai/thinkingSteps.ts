@@ -68,3 +68,21 @@ export function stepsOfThinking(texts: string[]): string[] {
   }
   return out;
 }
+
+/**
+ * 一条消息此刻走到的那一步:所有 think 段里的最后一个步骤标题。
+ *
+ * 输入框上方的思考条带只显示这一行。以前是气泡里竖排整串步骤,几十步之后把气泡撑得很长,
+ * 真正要看的「现在」反而沉在最底下。
+ *
+ * 只认 kind === "thinking" 的片段,文字、工具、状态片段一律跳过。
+ * 没有可显示的步骤(没有思考,或者思考是整段推理)时返回 null,由调用方退回「正在跑哪个工具」。
+ */
+export function currentStep(parts: ReadonlyArray<{ kind: string; text?: string }>): string | null {
+  const texts: string[] = [];
+  for (const p of parts || []) {
+    if (p.kind === "thinking" && typeof p.text === "string") texts.push(p.text);
+  }
+  const steps = stepsOfThinking(texts);
+  return steps.length ? steps[steps.length - 1] : null;
+}

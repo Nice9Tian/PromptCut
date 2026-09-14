@@ -63,7 +63,29 @@ export function useChatHistory(opts: {
     }
   }, []);
 
-  // 监听 messages 变化，防抖 800ms 自动存盘；messages 为空时不存
+  /**
+   * 回退之后立刻把截断的那份整份写回归档,**空列表也写**。
+   *
+   * 保存接口本身是整份覆盖,截断后的非空列表走下面的防抖存盘就对了;但回退到第一条时
+   * 消息是空的,防抖那边「为空不存」,归档里就还是回退前的整段 —— 非主页刷新回来会从归档
+   * 把回退掉的消息原样找回来。这里不能改成「变空就存」:换项目时主页的消息也会变空而
+   * 会话 id 不变,那样会把上一个项目的归档清掉。所以只让回退显式调这一个。
+   */
+  const overwrite = useCallback((messages: ChatMessage[]) => {
+    if (saveTimerRef.current !== null) {
+      window.clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+    messagesRef.current = messages;
+    void saveChat({
+      id: conversationIdRef.current,
+      provider: optsRef.current.provider || undefined,
+      sessionId: optsRef.current.sessionId,
+      messages: messages.filter((m) => !m.pending),
+    });
+  }, []);
+
+  // 监听 messages 变化，防抖 800ms 自动存盘；messages 为空时不存(回退清空走 overwrite)
   useEffect(() => {
     const toSave = opts.messages.filter((m) => !m.pending);
     if (toSave.length === 0) return;
@@ -165,5 +187,6 @@ export function useChatHistory(opts: {
     startNewChat,
     removeChat,
     flush,
+    overwrite,
   };
 }

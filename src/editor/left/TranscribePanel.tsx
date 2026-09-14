@@ -85,7 +85,7 @@ export function TranscribePanel({ mediaId, onClose }: TranscribePanelProps) {
     setInstalling(true);
     setInstallLogs([]);
     try {
-      const { ok, log } = await sttInstall(engine, (line) => {
+      const { ok } = await sttInstall(engine, (line) => {
         setInstallLogs((prev) => [...prev, line]);
       });
       if (ok) {
@@ -154,12 +154,12 @@ export function TranscribePanel({ mediaId, onClose }: TranscribePanelProps) {
   return (
     <div
       data-pc="transcribe-panel"
-      className="bg-neutral-900 border border-neutral-800 rounded p-2 mt-1 text-xs"
+      className="pc-left-box p-2 mt-1 text-xs"
     >
       {/* 头部:参数选择 */}
       <div className="flex flex-wrap gap-1.5 mb-2">
         <select
-          className="h-6 px-1 rounded bg-neutral-800 border border-neutral-700 text-neutral-200 text-xs"
+          className="pc-left-select is-sm"
           value={engine}
           onChange={(e) => setEngine(e.target.value)}
         >
@@ -168,7 +168,7 @@ export function TranscribePanel({ mediaId, onClose }: TranscribePanelProps) {
           ))}
         </select>
         <select
-          className="h-6 px-1 rounded bg-neutral-800 border border-neutral-700 text-neutral-200 text-xs"
+          className="pc-left-select is-sm"
           value={model}
           onChange={(e) => setModel(e.target.value)}
         >
@@ -177,7 +177,7 @@ export function TranscribePanel({ mediaId, onClose }: TranscribePanelProps) {
           ))}
         </select>
         <select
-          className="h-6 px-1 rounded bg-neutral-800 border border-neutral-700 text-neutral-200 text-xs"
+          className="pc-left-select is-sm"
           value={language}
           onChange={(e) => setLanguage(e.target.value)}
         >
@@ -186,8 +186,10 @@ export function TranscribePanel({ mediaId, onClose }: TranscribePanelProps) {
           ))}
         </select>
         <button
-          className="ml-auto h-6 px-1.5 rounded bg-neutral-700 hover:bg-neutral-600 text-neutral-400 text-xs"
+          type="button"
+          className="ml-auto pc-left-btn is-sm"
           onClick={onClose}
+          title="收起转写面板"
         >
           ✕
         </button>
@@ -195,13 +197,13 @@ export function TranscribePanel({ mediaId, onClose }: TranscribePanelProps) {
 
       {/* 状态区 */}
       {loadingStatus && (
-        <div className="text-neutral-500 mb-1">检查引擎状态…</div>
+        <div className="pc-left-faint mb-1">检查引擎状态…</div>
       )}
       {statusError && (
         <div className="text-red-400 mb-1 break-all">{statusError}</div>
       )}
       {!loadingStatus && !statusError && statusData && (
-        <div className="text-neutral-500 mb-1">
+        <div className="pc-left-faint mb-1">
           Python {statusData.python ?? "?"} · {engine}{" "}
           {engineInstalled
             ? <span className="text-green-400">已安装</span>
@@ -213,8 +215,9 @@ export function TranscribePanel({ mediaId, onClose }: TranscribePanelProps) {
       {/* 下载引擎按钮 */}
       {showInstallBtn && !installing && (
         <button
+          type="button"
           data-pc="install-engine-btn"
-          className="w-full h-7 mb-2 rounded bg-blue-700 hover:bg-blue-600 text-white text-xs font-medium"
+          className="pc-left-btn is-primary is-block mb-2"
           onClick={handleInstall}
         >
           下载引擎 ({engine})
@@ -225,12 +228,12 @@ export function TranscribePanel({ mediaId, onClose }: TranscribePanelProps) {
       {(installing || installLogs.length > 0) && (
         <div
           ref={installLogRef}
-          className="h-24 overflow-y-auto font-mono text-[10px] text-neutral-400 bg-black/30 rounded p-1 mb-2 whitespace-pre-wrap break-all"
+          className="h-24 overflow-y-auto font-mono text-[10px] pc-left-muted bg-black/30 rounded p-1 mb-2 whitespace-pre-wrap break-all"
         >
           {installLogs.map((l, i) => (
             <div key={i}>{l}</div>
           ))}
-          {installing && <div className="text-neutral-500 animate-pulse">安装中…</div>}
+          {installing && <div className="pc-left-faint animate-pulse">安装中…</div>}
         </div>
       )}
 
@@ -241,23 +244,24 @@ export function TranscribePanel({ mediaId, onClose }: TranscribePanelProps) {
             <>
               {progress && (
                 <div className="mb-1">
-                  <div className="flex justify-between text-neutral-500 mb-0.5">
+                  <div className="flex justify-between pc-left-faint mb-0.5">
                     <span>转写中…</span>
                     <span>{progress.done.toFixed(0)}s / {progress.total.toFixed(0)}s</span>
                   </div>
-                  <div className="h-1.5 rounded bg-neutral-800 overflow-hidden">
+                  <div className="pc-left-progress">
                     <div
-                      className="h-full bg-blue-500 transition-all"
+                      className="pc-left-progress-fill"
                       style={{ width: progress.total > 0 ? `${Math.min(100, (progress.done / progress.total) * 100)}%` : "0%" }}
                     />
                   </div>
                 </div>
               )}
               {!progress && (
-                <div className="text-neutral-500 mb-1 animate-pulse">转写中…(正在加载模型)</div>
+                <div className="pc-left-faint mb-1 animate-pulse">转写中…(正在加载模型)</div>
               )}
               <button
-                className="w-full h-7 rounded bg-neutral-700 hover:bg-neutral-600 text-neutral-300 text-xs"
+                type="button"
+                className="pc-left-btn is-block"
                 onClick={handleCancel}
               >
                 取消
@@ -265,8 +269,9 @@ export function TranscribePanel({ mediaId, onClose }: TranscribePanelProps) {
             </>
           ) : (
             <button
+              type="button"
               data-pc="start-transcribe-btn"
-              className="w-full h-7 rounded bg-indigo-700 hover:bg-indigo-600 text-white text-xs font-medium"
+              className="pc-left-btn is-primary is-block"
               onClick={handleTranscribe}
             >
               {totalSegments !== null ? "重新转写" : "开始转写"}
@@ -277,7 +282,7 @@ export function TranscribePanel({ mediaId, onClose }: TranscribePanelProps) {
 
       {/* 转写日志(仅在转写中显示,静音提示) */}
       {transcribing && transcribeLogs.length > 0 && (
-        <div className="h-12 overflow-y-auto font-mono text-[10px] text-neutral-600 bg-black/20 rounded p-1 mb-1 whitespace-pre-wrap break-all">
+        <div className="h-12 overflow-y-auto font-mono text-[10px] pc-left-faint bg-black/20 rounded p-1 mb-1 whitespace-pre-wrap break-all">
           {transcribeLogs.slice(-20).map((l, i) => <div key={i}>{l}</div>)}
         </div>
       )}
@@ -290,12 +295,12 @@ export function TranscribePanel({ mediaId, onClose }: TranscribePanelProps) {
       {/* 转写结果预览 */}
       {totalSegments !== null && segments.length > 0 && (
         <div>
-          <div className="text-neutral-500 mb-0.5">
+          <div className="pc-left-faint mb-0.5">
             共 {totalSegments} 段(前 {segments.length} 段预览)
           </div>
           {segments.map((seg, i) => (
-            <div key={i} className="flex gap-1.5 text-[10px] text-neutral-400 py-0.5 border-t border-neutral-800/50">
-              <span className="text-neutral-600 tabular-nums shrink-0">
+            <div key={i} className="flex gap-1.5 text-[10px] pc-left-muted py-0.5 pc-left-divider">
+              <span className="pc-left-faint tabular-nums shrink-0">
                 [{fmtTime(seg.start)}]
               </span>
               <span className="truncate">{seg.text}</span>

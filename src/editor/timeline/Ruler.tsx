@@ -3,9 +3,16 @@ import { useStore } from "../../store/project";
 import { useScrub } from "./useScrub";
 import { xOfTime } from "./utils";
 
+/** 主刻度标签:m:ss(0:05、1:30)。步长 0.5 秒时主刻度会落在 2.5 秒这种位置,补一位小数(0:02.5) */
+function mss(t: number): string {
+  const m = Math.floor(t / 60);
+  const s = Math.round((t - m * 60) * 1000) / 1000;
+  return Number.isInteger(s) ? `${m}:${String(s).padStart(2, "0")}` : `${m}:${s.toFixed(1).padStart(4, "0")}`;
+}
+
 /**
- * 时间标尺(配色诊断与修正 v2 整屏):26 高,主刻度每 5 格一条 L4 竖线并标秒数,
- * 次刻度 L3 竖线。数字用次文字色,不再是弱文字——它是读时间用的。
+ * 时间标尺:26 高。次刻度是直径 2px 的小圆点,主刻度(每 5 格)不画线,只标一个 m:ss 时间。
+ * 数字用次文字色,不是弱文字——它是读时间用的。
  */
 export function Ruler() {
   const { pxPerSec } = useTimelineContext();
@@ -47,10 +54,10 @@ export function Ruler() {
             className="absolute bottom-0 flex flex-col items-start pointer-events-none"
             style={{ left: `${xOfTime(tick, pxPerSec)}px`, height: isMajor ? "100%" : "40%" }}
           >
-            <div className={`pc-tl-tick flex-1${isMajor ? " is-major" : ""}`} />
+            <div className={`pc-tl-tick mt-auto mb-[2px]${isMajor ? " is-major" : ""}`} />
             {isMajor && (
               <span className="pc-tl-tick-label absolute" style={{ left: 5, bottom: 5 }}>
-                {tick}s
+                {mss(tick)}
               </span>
             )}
           </div>

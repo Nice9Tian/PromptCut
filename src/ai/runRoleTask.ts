@@ -92,38 +92,60 @@ export async function runRoleTask(opts: {
   const decoder = new TextDecoder();
   let buffer = "";
   let failed: string | null = null;
+  // 文字增量攒一小会儿再写进气泡(同 useAiChat 的 DELTA_FLUSH_MS):逐 token 写的话,
+  // 几个角色并行时每秒上百次重渲染,人这边点什么都卡。别的事件到来前先把攒着的写掉,保证先后顺序
+  const TEXT_FLUSH_MS = 80;
+  let queuedText = "";
+  let textTimer: ReturnType<typeof setTimeout> | null = null;
+  const flushText = () => {
+    if (textTimer !== null) {
+      clearTimeout(textTimer);
+      textTimer = null;
+    }
+    if (!queuedText) return;
+    const delta = queuedText;
+    queuedText = "";
+    hooks.updateMessage(msgId, (m) => ({ ...m, text: m.text + delta, parts: appendText(m.parts, delta) }));
+  };
 
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    const { events, rest } = parseSseChunks(buffer, decoder.decode(value, { stream: true }));
-    buffer = rest;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const { events, rest } = parseSseChunks(buffer, decoder.decode(value, { stream: true }));
+      buffer = rest;
 
-    for (const ev of events as RunEvent[]) {
-      if (ev.type === "text" && ev.delta) {
-        hooks.updateMessage(msgId, (m) => ({
-          ...m, text: m.text + ev.delta, parts: appendText(m.parts, ev.delta),
-        }));
-      } else if (ev.type === "tool_call") {
-        hooks.updateMessage(msgId, (m) => ({
-          ...m,
-          tools: [...(m.tools ?? []), { name: ev.name!, input: ev.input, callId: ev.callId }],
-          parts: [...(m.parts ?? []), { kind: "tool", name: ev.name!, input: ev.input, callId: ev.callId }],
-        }));
-      } else if (ev.type === "tool_result") {
-        // tools 和 parts **两处都要打**。气泡上那排小方块是按 parts 渲染的
-        // （见 AiPanel 的 simpleBlocks(parts)），只更新 tools 的话方块会
-        // 永远停在「进行中」——本机端到端跑的时候就是这个样子，工具其实早就
-        // 返回了，界面上却像是卡住了。
-        hooks.updateMessage(msgId, (m) => ({
-          ...m,
-          tools: stampLast(m.tools ?? [], ev.callId, ev.name, ev.ok, ev.summary),
-          parts: stampLastPart(m.parts ?? [], ev.callId, ev.name, ev.ok, ev.summary),
-        }));
-      } else if (ev.type === "error" && ev.message) {
-        failed = ev.message;
+      for (const ev of events as RunEvent[]) {
+        if (ev.type === "text" && ev.delta) {
+          queuedText += ev.delta;
+          if (textTimer === null) textTimer = setTimeout(flushText, TEXT_FLUSH_MS);
+          continue;
+        }
+        flushText();
+        if (ev.type === "tool_call") {
+          hooks.updateMessage(msgId, (m) => ({
+            ...m,
+            tools: [...(m.tools ?? []), { name: ev.name!, input: ev.input, callId: ev.callId }],
+            parts: [...(m.parts ?? []), { kind: "tool", name: ev.name!, input: ev.input, callId: ev.callId }],
+          }));
+        } else if (ev.type === "tool_result") {
+          // tools 和 parts **两处都要打**。气泡上那排小方块是按 parts 渲染的
+          // （见 chat/AgentBubble.tsx 的 segmentsOf(parts)），只更新 tools 的话方块会
+          // 永远停在「进行中」——本机端到端跑的时候就是这个样子，工具其实早就
+          // 返回了，界面上却像是卡住了。
+          hooks.updateMessage(msgId, (m) => ({
+            ...m,
+            tools: stampLast(m.tools ?? [], ev.callId, ev.name, ev.ok, ev.summary),
+            parts: stampLastPart(m.parts ?? [], ev.callId, ev.name, ev.ok, ev.summary),
+          }));
+        } else if (ev.type === "error" && ev.message) {
+          failed = ev.message;
+        }
       }
     }
+  } finally {
+    // 被中止(reader.read 抛错)时也把已经收到的文字落进气泡,并清掉计时器
+    flushText();
   }
 
   hooks.updateMessage(msgId, (m) => ({

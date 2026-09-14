@@ -1,4 +1,5 @@
 @import "./motion.css";
+@import "./studio.css";
 
 /* 1. 变量:各皮肤的 --ui-* 由 useSkin 在运行时写到 <html>(数据在 skins.ts / palettes.ts)。
    这里只把 AI 面板与设置对话框样式里用的无前缀变量接到 --ui-* 上。 */
@@ -100,40 +101,39 @@ html.skin-swapping * {
 
 /* 4. 滚动条覆盖 */
 [data-skin] ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 12px;
+  height: 12px;
 }
 [data-skin] ::-webkit-scrollbar-track {
   background: transparent;
 }
 [data-skin] ::-webkit-scrollbar-thumb {
   background: var(--ui-scroll-thumb);
-  border-radius: 4px;
+  border-radius: 6px;
+  border: 3px solid transparent;
+  background-clip: padding-box;
 }
 [data-skin] ::-webkit-scrollbar-thumb:hover {
   background: var(--ui-scroll-thumb-hover);
-}
-[data-skin] .pc-l-scroll::-webkit-scrollbar-thumb {
-  background: var(--ui-scroll-thumb);
-}
-[data-skin] .pc-l-scroll::-webkit-scrollbar-thumb:hover {
-  background: var(--ui-scroll-thumb-hover);
+  border: 3px solid transparent;
+  background-clip: padding-box;
 }
 
 /* ============================================================
  * 4. 打磨层:让主色真正出现在界面里,给面板和控件加层次
  * ============================================================ */
 
-/* 应用底色:深色皮肤带一点朝向主色的径向光,浅色皮肤保持干净。
+/* 应用底色:深色皮肤带一点朝向主色的径向光,浅色皮肤保持干净;流光(studio)系列是扁平风格,不要光晕。
  * 只铺在编辑器根节点上。原来选的是所有 .bg-neutral-950,时间轴里那些 20px 高的
  * 小条(范围条、「序列」表头、标尺、底部滚动条)也各自铺了一份 1200×600 的光,
- * 在那么矮的条里整条都落在 14% 强调色那一段,看上去就是一道横穿序列栏的强调色带。 */
-[data-skin] [data-pc="editor"].bg-neutral-950 {
+ * 在那么矮的条里整条都落在 14% 强调色那一段,看上去就是一道横穿序列栏的强调色带。
+ * 深浅直接写进选择器,不再靠后面补一条浅色的 background-image:none 去压:
+ * 带 :not() 的这条特异性更高,那样浅色皮肤反而会被刷上光晕。 */
+[data-skin-mode="dark"]:not([data-skin^="studio-"]) [data-pc="editor"] {
   background-image:
     radial-gradient(1200px 600px at 20% -10%, color-mix(in oklab, var(--ui-accent) 14%, transparent), transparent 60%),
     radial-gradient(900px 500px at 100% 110%, color-mix(in oklab, var(--ui-accent) 8%, transparent), transparent 60%);
 }
-[data-skin-mode="light"] [data-pc="editor"].bg-neutral-950 { background-image: none; }
 
 /* 通用按钮:双层表面 + 细边 + 悬停时主色描边 */
 [data-skin] button.bg-neutral-800,
@@ -193,18 +193,6 @@ html.skin-swapping * {
   box-shadow: inset 3px 0 0 var(--ui-accent), var(--ui-glow), 0 6px 14px rgba(0, 0, 0, 0.35);
 }
 
-/* 分栏边线与拖动把手 */
-[data-skin] aside.border-r, [data-skin] aside.border-l, [data-skin] footer.border-t {
-  border-color: var(--ui-border);
-  background: color-mix(in oklab, var(--ui-bg) 70%, var(--ui-bg-2));
-}
-[data-skin] .cursor-row-resize.bg-neutral-800 {
-  background: linear-gradient(90deg, transparent, var(--ui-border) 20%, var(--ui-border) 80%, transparent);
-}
-[data-skin] .cursor-row-resize.bg-neutral-800:hover {
-  background: linear-gradient(90deg, transparent, var(--ui-accent) 20%, var(--ui-accent) 80%, transparent);
-}
-
 /* 时间轴刻度区与轨道头 */
 [data-skin] footer .bg-neutral-900 { background: var(--ui-bg-2); }
 [data-skin] footer .bg-neutral-800 { background: var(--ui-panel); }
@@ -215,10 +203,6 @@ html.skin-swapping * {
  * ============================================================ */
 
 /* 浅色模式:不加底部径向光,面板靠阴影分层(设计稿:L4 = 白 + 阴影) */
-
-[data-skin-mode="light"] aside.border-r, [data-skin-mode="light"] aside.border-l, [data-skin-mode="light"] footer.border-t {
-  background: var(--ui-bg-2);
-}
 
 /* 悬浮层 L4:菜单、弹窗、悬浮态 */
 [data-skin] .ais-dialog { background: var(--ui-float); box-shadow: var(--ui-shadow); }
@@ -244,8 +228,11 @@ html.skin-swapping * {
 .pc-clip {
   --clip: var(--ui-track-text);
   --clip-ink: var(--ui-track-ink-text);
+  border-radius: var(--ui-radius, 6px);
   background: linear-gradient(180deg, color-mix(in oklab, var(--clip) 92%, white), color-mix(in oklab, var(--clip) 88%, black));
-  border-color: color-mix(in oklab, var(--clip) 70%, black);
+  /* 描边画在内侧:1px 半透明亮线,不占盒子宽度 */
+  border: none;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.2);
   /* 字色按轨道色亮度挑黑或白(见 skins.ts 的 trackInk),深浅皮肤都过 4.5:1 */
   color: var(--clip-ink);
 }
@@ -258,12 +245,21 @@ html.skin-swapping * {
 .pc-clip[data-track-kind="sticker"] { --clip: var(--ui-track-sticker); --clip-ink: var(--ui-track-ink-sticker); }
 .pc-clip:not(.is-selected):hover {
   background: linear-gradient(180deg, color-mix(in oklab, var(--clip) 84%, white), var(--clip));
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.3), 0 0 10px color-mix(in oklab, var(--clip) 50%, transparent);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.3), 0 0 10px color-mix(in oklab, var(--clip) 50%, transparent);
 }
-/* 选中:设计稿是片段内描一圈 2px 主文字色,不动填充 */
+/* 选中:片段外面描一圈 2px 主文字色轮廓(outline 不占盒子、不压住片段里的内容),不动填充 */
 .pc-clip.is-selected {
-  border-color: var(--ui-fg);
-  box-shadow: inset 0 0 0 2px var(--ui-fg);
+  outline: 2px solid var(--ui-fg);
+  outline-offset: 0;
+}
+/* 跨轨拖到放不下的位置(ClipView 的 dragState.forbidden):半透明红底 + 红色虚线框。
+   上面 .pc-clip 把 Tailwind 的 border 和底色都盖掉了,「放不下」的提示要在这里补回来;
+   拖动时鼠标正压在片段上,也不能被 :hover 的渐变冲掉 */
+.pc-clip.is-forbidden,
+.pc-clip.is-forbidden:hover {
+  background: color-mix(in oklab, var(--ui-danger) 50%, transparent);
+  border: 1px dashed var(--ui-danger);
+  box-shadow: none;
 }
 
 /* 转场:片段两端的淡化区间画一层往边缘变暗的渐变,宽度就是淡入淡出的秒数。
@@ -355,10 +351,7 @@ html.skin-swapping * {
   outline: none;
 }
 [data-skin] .ring-2, [data-skin] .ring-white, [data-skin] .outline-white { --tw-ring-color: var(--ui-accent); outline-color: var(--ui-accent); }
-[data-skin] footer .bg-neutral-900 { background: var(--ui-bg-2); }
-[data-skin] footer .bg-neutral-800 { background: var(--ui-panel); }
 
-/* 播放头:配色诊断与修正 v2 改回语义红(#E2564D)——它是全屏唯一的红,
-   一眼能在一片钢蓝里找到播放位置;强调色留给操作和选中。 */
-[data-skin] [data-pc="playhead"] .bg-red-500 { background-color: var(--ui-danger); box-shadow: none; }
-[data-skin] [data-pc="playhead"] .clip-playhead { background-color: var(--ui-danger); }
+/* 播放头:竖线和圆形把手(都是 playhead 的直接子 div)统一用主文字色,
+   深色皮肤下近白、浅色皮肤下仍看得见;扁平,不加辉光。时间标签的胶囊样式在 timeline.css */
+[data-skin] [data-pc="playhead"] > div { background-color: var(--ui-fg); box-shadow: none; }

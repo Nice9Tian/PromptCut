@@ -118,23 +118,18 @@ export function CodeTab({ clip }: { clip: TrackClip }) {
   const lifecycleLine = describeLifecycle(envelope);
 
   return (
-    <div className="flex flex-col h-full p-2">
+    <div className="flex-1 min-h-0 flex flex-col p-3">
       <div className="flex items-center gap-2 mb-2 shrink-0 flex-wrap">
-        <span className="text-[11px] text-neutral-400" title={ENVELOPE_TITLE}>约定封装</span>
-        <button
-          onClick={handleCopy}
-          className="text-[11px] px-2 py-1 bg-neutral-800 hover:bg-neutral-700 text-neutral-300 rounded border border-neutral-700"
-        >
+        <span className="text-[11px] pc-left-muted" title={ENVELOPE_TITLE}>约定封装</span>
+        <button type="button" onClick={handleCopy} className="pc-left-btn">
           {copied ? "✓ 已复制" : "复制"}
         </button>
-        <button
-          onClick={handleReset}
-          className="text-[11px] px-2 py-1 bg-neutral-800 hover:bg-neutral-700 text-neutral-300 rounded border border-neutral-700"
-        >
+        <button type="button" onClick={handleReset} className="pc-left-btn">
           参数重置为默认
         </button>
         {missing.length > 0 && (
           <button
+            type="button"
             onClick={handleReset}
             title={`这张卡后来新增了参数,当前 clip 里没有:${missing.join(", ")}。点「参数重置为默认」把它们补齐(会一并丢掉已有的改动)`}
             className="text-[11px] px-2 py-1 bg-amber-950 hover:bg-amber-900 text-amber-400 rounded border border-amber-800"
@@ -145,7 +140,7 @@ export function CodeTab({ clip }: { clip: TrackClip }) {
         {applied && <span className="text-[11px] text-green-500 ml-auto">{applied}</span>}
       </div>
 
-      <div data-pc="code-lifecycle" className="mb-1 shrink-0 text-[10px] text-neutral-500 truncate" title={lifecycleLine}>
+      <div data-pc="code-lifecycle" className="mb-1 shrink-0 text-[10px] pc-left-faint truncate" title={lifecycleLine}>
         {lifecycleLine}
       </div>
 
@@ -155,9 +150,9 @@ export function CodeTab({ clip }: { clip: TrackClip }) {
         平时根本看不到。而三维那三项没设过的时候 JSON 里压根不出现,
         光看这段 JSON 是不知道它们存在的,这一页偏偏正是给想直接写值的人用的。
       */}
-      <div className="mb-2 shrink-0 text-[10px] leading-relaxed text-neutral-600">
+      <div className="mb-2 shrink-0 text-[10px] leading-relaxed pc-left-faint">
         frame.local:x / y / w / h / anchor / scale / rotate,以及三维的{" "}
-        <span className="text-neutral-400">rotateX / rotateY / translateZ</span>
+        <span className="pc-left-muted">rotateX / rotateY / translateZ</span>
         (三维要在「参数」页打开透视相机才有近大远小,否则只是斜切)
       </div>
 
@@ -168,20 +163,20 @@ export function CodeTab({ clip }: { clip: TrackClip }) {
         onBlur={apply}
         onKeyDown={onKeyDown}
         spellCheck={false}
-        className={`w-full h-full font-mono text-[11px] leading-relaxed bg-neutral-950 border rounded p-2 outline-none resize-none text-neutral-200 ${errorMsg ? 'border-red-500' : 'border-neutral-800'}`}
+        className={`pc-left-code flex-1 min-h-0 w-full${errorMsg ? " is-error" : ""}`}
       />
 
       <div data-pc="code-status" className="mt-2 shrink-0 h-4">
         {errorMsg ? (
           <div className="text-[10px] text-red-500 truncate" title={errorMsg}>{errorMsg}</div>
         ) : dirty ? (
-          <div className="text-[10px] text-neutral-400">有未应用的修改 · Ctrl+Enter 应用 / 失焦应用</div>
+          <div className="text-[10px] pc-left-muted">有未应用的修改 · Ctrl+Enter 应用 / 失焦应用</div>
         ) : missing.length > 0 ? (
           <div className="text-[10px] text-amber-500 truncate" title={missing.join(", ")}>
             缺 {missing.length} 项参数,正靠默认值兜底渲染:{missing.join(", ")}
           </div>
         ) : (
-          <div className="text-[10px] text-neutral-500">可改:card.id / time / frame.local / blend / parts(组合卡整棵可增删改)/ params;world、motion、lifecycle 只读</div>
+          <div className="text-[10px] pc-left-faint">可改:card.id / time / frame.local / blend / parts(组合卡整棵可增删改)/ params;world、motion、lifecycle 只读</div>
         )}
       </div>
     </div>

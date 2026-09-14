@@ -28,14 +28,14 @@ export function ClipAudioFxForm({ clip }: { clip: TrackClip }) {
   };
 
   return (
-    <div className="mt-2 pt-2 border-t border-neutral-800" data-pc="clip-audiofx">
+    <div className="mt-2 pt-2 pc-left-divider" data-pc="clip-audiofx">
       <div className="flex items-center gap-2 mb-1">
-        <span className="text-neutral-400 shrink-0">音频效果</span>
+        <span className="pc-left-muted shrink-0">音频效果</span>
         <select
           data-pc="clip-audiofx-select"
           value={cur?.id ?? ""}
           onChange={(e) => apply(e.target.value)}
-          className="h-6 flex-1 min-w-0 text-xs bg-neutral-900 border border-neutral-800 rounded px-1 text-neutral-200 outline-none"
+          className="flex-1 pc-left-select is-sm"
         >
           <option value="">无</option>
           {audioFxList.map((f) => (
@@ -45,16 +45,16 @@ export function ClipAudioFxForm({ clip }: { clip: TrackClip }) {
           ))}
         </select>
       </div>
-      {audioFxList.length === 0 && <div className="text-neutral-500">效果库是空的:让 Agent 建一个,或去素材库「音频效果」页从预设新建</div>}
+      {audioFxList.length === 0 && <div className="pc-left-faint">效果库是空的:让 Agent 建一个,或去「特效」分区的「音频预设」组新建</div>}
       {cur && (
-        <div className="text-neutral-500 mb-1 truncate" title={describeAudioFx(cur)}>
+        <div className="pc-left-faint mb-1 truncate" title={describeAudioFx(cur)}>
           {describeAudioFx(cur)}
         </div>
       )}
       {cur?.params &&
         Object.entries(cur.params).map(([k, spec]) => (
           <label key={k} className="flex items-center gap-2 mb-1">
-            <span className="w-16 truncate text-neutral-400" title={k}>
+            <span className="w-16 truncate pc-left-muted" title={k}>
               {spec.label ?? k}
             </span>
             <input
@@ -72,7 +72,7 @@ export function ClipAudioFxForm({ clip }: { clip: TrackClip }) {
                 const kept = Object.fromEntries(Object.entries(clip.audioFx?.params ?? {}).filter(([key]) => cur.params && key in cur.params));
                 if (Number.isFinite(n)) apply(cur.id, { ...kept, [k]: n });
               }}
-              className="w-20 h-6 px-1 bg-neutral-900 border border-neutral-800 rounded text-neutral-200 outline-none"
+              className="w-20 pc-left-input is-sm"
             />
           </label>
         ))}

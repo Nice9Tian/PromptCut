@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { startShotDetection, waitForShots } from "../../ai/shots";
 import { scenesOf, planSequences, frameTimes, transcriptFor } from "../../ai/sequences";
 import { installTrack, startTracking, trackStatus, waitForTrack, type TrackResult } from "../../ai/track";
@@ -7,7 +7,10 @@ import {
 } from "../../ai/subject";
 import { buildClipMotion } from "../../kernel/motion";
 import { AiPanel } from "./AiPanel";
-import { AgentTabs } from "./AgentTabs";
+import { RightRail, useRightPage } from "./chat/RightRail";
+import { ScriptPage } from "./chat/ScriptPage";
+import { useRailCollapsed } from "../sideRails";
+import { playEnter } from "../enterMotion";
 import { useAgentTabs } from "../../ai/agentTabs";
 import { connectMcpExecutor, EditorApi } from "../../ai/mcpExecutor";
 import { prerenderUrl } from "../prerender";
@@ -2133,14 +2136,45 @@ export function RightPanel() {
     return cleanup;
   }, []);
 
+  // 右栏整列:左边一张卡片(剧本页 + 各助手分页),右边贴窗口边缘的竖向 rail。
+  // 收起 / 切到剧本页都只是 display:none,AiPanel 一个都不卸载 —— 正在跑的对话不能断
+  const collapsed = useRailCollapsed("right");
+  const page = useRightPage();
+
+  // 切到剧本页 / 换一个助手分页时,新露出来的那一页淡入、上浮一点(enterMotion)。
+  // 收起着切、或者切的同时把面板展开了,交给卡片自己的展开动画(chat.css),不叠两层
+  const cardRef = useRef<HTMLDivElement>(null);
+  const prevShown = useRef({ page, activeId, collapsed });
+  useLayoutEffect(() => {
+    const prev = prevShown.current;
+    prevShown.current = { page, activeId, collapsed };
+    const card = cardRef.current;
+    if (!card || collapsed || prev.collapsed) return;
+    if (page === "script") {
+      if (prev.page !== "script") playEnter(card.querySelector('[data-pc="script-page"]'), "pc-enter-rise");
+    } else if (prev.page !== page || prev.activeId !== activeId) {
+      playEnter(card.querySelector('.pc-agent-stack > .ai-panel:not([data-inactive="1"])'), "pc-enter-rise");
+    }
+  }, [page, activeId, collapsed]);
+
   return (
     <>
-      {/* 多 Agent 分页:每页一个 AiPanel 实例都挂着(对话在后台照跑),只显示当前页 */}
-      <div className="pc-agent-stack">
-        <AgentTabs />
-        {tabs.map((t) => (
-          <AiPanel key={t.id} tabId={t.id} active={t.id === activeId} mcpConnected={mcpConnected} />
-        ))}
+      <div className="pc-right" data-pc="right">
+        <div
+          ref={cardRef}
+          className="pc-card-surface pc-right-card"
+          data-pc-collapsed={collapsed ? "" : undefined}
+          style={{ display: collapsed ? "none" : undefined }}
+        >
+          <ScriptPage active={page === "script"} />
+          {/* 多 Agent 分页:每页一个 AiPanel 实例都挂着(对话在后台照跑),只显示当前页 */}
+          <div className="pc-agent-stack" style={{ display: page === "script" ? "none" : undefined }}>
+            {tabs.map((t) => (
+              <AiPanel key={t.id} tabId={t.id} active={t.id === activeId} mcpConnected={mcpConnected} />
+            ))}
+          </div>
+        </div>
+        <RightRail />
       </div>
       {/* 站点登录框:开始页的卡和 collect_login 工具都会打开它,挂在这里才能在编辑台里出现 */}
       <CollectLoginDialog />

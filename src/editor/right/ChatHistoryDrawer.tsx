@@ -12,6 +12,8 @@ export interface ChatHistoryDrawerProps {
   currentId: string;
   onPick(id: string): void;
   onDelete(id: string): void;
+  /** 头部的「新对话」:清掉当前分页的消息、另起一段会话归档(「✦」菜单里也有同一项) */
+  onNewChat?(): void;
 }
 
 /** 格式化会话更新时间：今天的显示 HH:MM，今年的显示 M月D日，更早显示 YYYY-M-D */
@@ -46,23 +48,32 @@ export function ChatHistoryDrawer(props: ChatHistoryDrawerProps) {
     currentId,
     onPick,
     onDelete,
+    onNewChat,
   } = props;
 
   if (!open) return null;
 
   return (
     <div className="chat-history-drawer" role="dialog" aria-label="对话历史">
-      {/* 头部标题与关闭按钮 */}
+      {/* 头部:标题、新对话、关闭 */}
       <div className="chat-drawer-header">
         <span className="chat-drawer-title">对话历史</span>
-        <button
-          className="chat-drawer-close-btn"
-          title="关闭"
-          aria-label="关闭"
-          onClick={onClose}
-        >
-          ✕
-        </button>
+        <div className="chat-drawer-head-actions">
+          {onNewChat && (
+            <button type="button" className="chat-drawer-new-btn" data-pc="chat-new" onClick={onNewChat}>
+              新对话
+            </button>
+          )}
+          <button
+            type="button"
+            className="chat-drawer-close-btn"
+            title="关闭"
+            aria-label="关闭"
+            onClick={onClose}
+          >
+            ✕
+          </button>
+        </div>
       </div>
 
       {/* 搜索框 */}

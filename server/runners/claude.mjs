@@ -33,7 +33,8 @@ Bash / PowerShell / WebFetch / WebSearch。**在这里它们全部会被拒**:�
 | 处理用户发来的附件 | \`import_media({ url })\`,url 取附件清单里的站内地址 |
 | 看某张卡的源码 / 改卡 | \`get_card_source\` / \`edit_card\` |
 | 等几秒再查后台作业 | \`wait({ seconds })\` |
-| 找之前的对话记录、交接笔记 | 没有这种文件可找。消息开头附了「前情」就是全部;不够就直接问用户 |
+| 找之前的对话记录、交接笔记 | 没有这种文件可找。消息开头附了「前情」就是全部;不够就调 \`report_progress\` 在 todo 里问用户 |
+| 每个小阶段结束、整个任务收尾时向用户汇报 | \`report_progress\` |
 `;
 
 function getAllowedToolsArgv() {

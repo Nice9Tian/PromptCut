@@ -14,14 +14,19 @@ import {
   type EffortLevel,
   type SchemaCompat,
 } from "../../ai/modelOptions";
+import { IconMore } from "../../ui/icons";
+import { usePopover } from "./chat/usePopover";
 import "./ModelBar.css";
 
 /**
- * 输入框旁边的一条:模型 / 推理强度 / 加速。
+ * 输入区底部工具条上的一组:模型下拉 + 「⋯」运行选项(推理强度 / 加速 / 深度自主 / 参数兼容)。
  *
- * 三样都是「这一次要怎么跑」,所以贴着输入框放,不进 AI 设置 —— 设置里管的是
+ * 这几样都是「这一次要怎么跑」,所以贴着输入框放,不进 AI 设置 —— 设置里管的是
  * 「有哪些可选」,这里管的是「现在用哪个」。选择按 provider 分开记在本地,
  * 从 Claude 切到 Codex 不会把对面不存在的模型名带过去。
+ *
+ * 模型常换,留在工具条上;其余几样不常动,收进「⋯」弹层,有非默认值时按钮上挂个点。
+ * 两块读写同一份 choice,所以写在同一个组件里,渲染成工具条上的两个兄弟节点。
  *
  * 某一家不支持的就灰掉并说明原因,不做点了没反应的假开关:
  * 加速只有 Claude Code 有(设置项 fastMode),推理强度 API 直连还没接。
@@ -33,6 +38,7 @@ export function ModelBar(props: {
 }): JSX.Element | null {
   const { provider, config, disabled } = props;
   const [choice, setChoice] = useState(() => ({ model: "", effort: "" as EffortLevel, fast: false, deepAuto: false, schemaCompat: "auto" as SchemaCompat }));
+  const pop = usePopover();
 
   // 换 provider 就把那一家自己的选择读出来
   useEffect(() => {
@@ -103,85 +109,113 @@ export function ModelBar(props: {
       : provider === "agy" ? "Antigravity 没有加速档"
       : "API 直连没有加速档";
 
+  // 「⋯」收起来之后看不见里面开了什么:思考档、加速、深度自主有一样不是默认,按钮上就挂个点
+  const tuned = effort !== "" || (cap.fast && choice.fast) || choice.deepAuto;
+  const optionsTitle = [
+    "运行选项",
+    `思考 ${EFFORT_LABEL[effort] ?? effort}`,
+    cap.fast && choice.fast ? "Fast" : "",
+    choice.deepAuto ? "深度自主" : "",
+    compat.applies && compat.on ? "参数兼容" : "",
+  ].filter(Boolean).join(" · ");
+
   return (
-    <div className="ai-modelbar">
-      <label className="ai-modelbar-item">
-        <span className="ai-modelbar-label">模型</span>
-        <select
-          className="ai-modelbar-select"
-          value={model}
-          disabled={disabled || models.length === 0}
-          title={models.length === 0 ? `还没配可选模型：${cap.modelsHint}` : "这次用哪个模型"}
-          onChange={(e) => update({ model: e.target.value })}
-        >
-          <option value="">默认</option>
-          {models.map((m) => (
-            <option key={m} value={m}>{m}</option>
-          ))}
-        </select>
-      </label>
-
-      <label className="ai-modelbar-item">
-        <span className="ai-modelbar-label">思考</span>
-        <select
-          className="ai-modelbar-select"
-          value={effort}
-          disabled={disabled || efforts.length === 0}
-          title={
-            efforts.length === 0
-              ? (provider === "agy" ? `${model} 不支持调思考档` : "API 直连这边还没接推理强度")
-              : provider === "agy" && model
-                ? `推理强度：越高想得越久。agy 把档位编在模型名里，这里选好就会发 --model ${model} --effort <档>`
-                : "推理强度：越高想得越久"
-          }
-          onChange={(e) => update({ effort: e.target.value as EffortLevel })}
-        >
-          {efforts.length === 0
-            ? <option value="">不支持</option>
-            : efforts.map((lv) => (
-                <option key={lv} value={lv}>{EFFORT_LABEL[lv]}</option>
-              ))}
-        </select>
-      </label>
-
-      <button
-        type="button"
-        className={`ai-modelbar-fast${choice.fast && cap.fast ? " is-on" : ""}`}
-        disabled={disabled || !cap.fast}
-        title={fastHint}
-        aria-pressed={cap.fast && choice.fast}
-        onClick={() => update({ fast: !choice.fast })}
+    <>
+      <select
+        className="ai-bar-select ai-model-select"
+        data-pc="ai-model"
+        aria-label="模型"
+        value={model}
+        disabled={disabled || models.length === 0}
+        title={models.length === 0 ? `还没配可选模型：${cap.modelsHint}` : `这次用哪个模型${model ? `:${model}` : ""}`}
+        onChange={(e) => update({ model: e.target.value })}
       >
-        Fast
-      </button>
+        <option value="">默认</option>
+        {models.map((m) => (
+          <option key={m} value={m}>{m}</option>
+        ))}
+      </select>
 
-      <button
-        type="button"
-        data-pc="deep-auto"
-        className={`ai-modelbar-fast${choice.deepAuto ? " is-on" : ""}`}
-        disabled={disabled}
-        title={deepHint}
-        aria-pressed={choice.deepAuto}
-        onClick={() => update({ deepAuto: !choice.deepAuto })}
-      >
-        深度自主
-      </button>
-
-      {/* 这条路上这个开关不经手(比如 agy 走 MCP,压根不过 sanitizeSchema)就别显示 ——
-          摆一个按下去什么也不会发生的按钮,比没有这个按钮更误导 */}
-      {compat.applies && (
+      <div className="ai-pop-anchor" ref={pop.anchorRef}>
         <button
           type="button"
-          data-pc="schema-compat"
-          className={`ai-modelbar-fast${compat.on ? " is-on" : ""}`}
-          disabled={disabled || compat.locked}
-          title={compatHint}
-          aria-pressed={compat.on}
-          onClick={() => update({ schemaCompat: compat.on ? "off" : "on" })}
+          className="pc-icon-btn ai-bar-btn"
+          data-pc="ai-run-options"
+          aria-haspopup="true"
+          aria-expanded={pop.open}
+          aria-label="运行选项"
+          title={optionsTitle}
+          onClick={pop.toggle}
         >
-          参数兼容
+          <IconMore size={16} />
+          {tuned && <i className="ai-bar-dot" aria-hidden="true" />}
         </button>
-      )}
-    </div>
+        <div className="ai-pop ai-modelbar" role="group" aria-label="运行选项" data-pop style={{ display: pop.open ? undefined : "none" }}>
+          <label className="ai-modelbar-item">
+            <span className="ai-modelbar-label">思考强度</span>
+            <select
+              className="ai-modelbar-select"
+              value={effort}
+              disabled={disabled || efforts.length === 0}
+              title={
+                efforts.length === 0
+                  ? (provider === "agy" ? `${model} 不支持调思考档` : "API 直连这边还没接推理强度")
+                  : provider === "agy" && model
+                    ? `推理强度：越高想得越久。agy 把档位编在模型名里，这里选好就会发 --model ${model} --effort <档>`
+                    : "推理强度：越高想得越久"
+              }
+              onChange={(e) => update({ effort: e.target.value as EffortLevel })}
+            >
+              {efforts.length === 0
+                ? <option value="">不支持</option>
+                : efforts.map((lv) => (
+                    <option key={lv} value={lv}>{EFFORT_LABEL[lv]}</option>
+                  ))}
+            </select>
+          </label>
+
+          <div className="ai-modelbar-toggles">
+            <button
+              type="button"
+              className={`ai-modelbar-fast${choice.fast && cap.fast ? " is-on" : ""}`}
+              disabled={disabled || !cap.fast}
+              title={fastHint}
+              aria-pressed={cap.fast && choice.fast}
+              onClick={() => update({ fast: !choice.fast })}
+            >
+              Fast
+            </button>
+
+            <button
+              type="button"
+              data-pc="deep-auto"
+              className={`ai-modelbar-fast${choice.deepAuto ? " is-on" : ""}`}
+              disabled={disabled}
+              title={deepHint}
+              aria-pressed={choice.deepAuto}
+              onClick={() => update({ deepAuto: !choice.deepAuto })}
+            >
+              深度自主
+            </button>
+
+            {/* 这条路上这个开关不经手(比如 agy 走 MCP,压根不过 sanitizeSchema)就别显示 ——
+                摆一个按下去什么也不会发生的按钮,比没有这个按钮更误导 */}
+            {compat.applies && (
+              <button
+                type="button"
+                data-pc="schema-compat"
+                className={`ai-modelbar-fast${compat.on ? " is-on" : ""}`}
+                disabled={disabled || compat.locked}
+                title={compatHint}
+                aria-pressed={compat.on}
+                onClick={() => update({ schemaCompat: compat.on ? "off" : "on" })}
+              >
+                参数兼容
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    </>
   );
 }

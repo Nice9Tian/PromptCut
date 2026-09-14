@@ -5,7 +5,7 @@ import {
 } from "../cardScope";
 
 /**
- * 素材库搜索框下面那一行筛选钮:**基础 / 自定义 / 项目**。
+ * 素材库「卡片筛选」浮层里那一行筛选钮:**基础 / 自定义 / 项目**。
  *
  * 这三个钮对应卡片的三档来源(见 editor/cardScope.ts):
  *   基础   内置的三组(自家库 / 第三方 / Lottie·粒子),随包发,永远在
@@ -39,19 +39,15 @@ export function CardScopeBar({ onChange }: { onChange: (v: CardVisibility) => vo
 
   const enabledGroups = ALL_GROUPS.filter((g) => v.groups[g] !== false).length;
 
-  const chip = (on: boolean) =>
-    `px-2 py-0.5 rounded text-[11px] border transition-colors ${
-      on
-        ? "border-[var(--ui-accent,#3b82f6)] text-[var(--ui-accent,#3b82f6)] bg-[color-mix(in_srgb,var(--ui-accent,#3b82f6)_12%,transparent)]"
-        : "border-neutral-700 text-neutral-500 hover:text-neutral-300"
-    }`;
+  const chip = (on: boolean) => `pc-lib-scope-chip${on ? " is-on" : ""}`;
 
   return (
-    <div ref={wrapRef} className="relative flex items-center gap-1 px-2 pb-1" data-pc="card-scope-bar">
+    <div ref={wrapRef} className="pc-lib-scope" data-pc="card-scope-bar">
       <button
         type="button"
         data-pc="scope-base"
         className={chip(v.base)}
+        aria-pressed={v.base}
         title={v.base ? `基础素材:开(${enabledGroups}/3 组)。再点一下关掉;右键或长按点开分组` : "基础素材:关"}
         onClick={() => apply({ ...v, base: !v.base })}
         onContextMenu={(e) => { e.preventDefault(); setGroupsOpen((o) => !o); }}
@@ -63,7 +59,8 @@ export function CardScopeBar({ onChange }: { onChange: (v: CardVisibility) => vo
       <button
         type="button"
         data-pc="scope-groups"
-        className="px-1 text-[10px] text-neutral-500 hover:text-neutral-300"
+        className="pc-lib-scope-caret"
+        aria-expanded={groupsOpen}
         title="选择基础素材里放出哪几组"
         onClick={() => setGroupsOpen((o) => !o)}
       >
@@ -74,6 +71,7 @@ export function CardScopeBar({ onChange }: { onChange: (v: CardVisibility) => vo
         type="button"
         data-pc="scope-custom"
         className={chip(v.custom)}
+        aria-pressed={v.custom}
         title="自定义素材:标了共享的定制卡,跨项目可见"
         onClick={() => apply({ ...v, custom: !v.custom })}
       >
@@ -84,6 +82,7 @@ export function CardScopeBar({ onChange }: { onChange: (v: CardVisibility) => vo
         type="button"
         data-pc="scope-project"
         className={chip(v.project)}
+        aria-pressed={v.project}
         title="项目素材:只属于当前项目的定制卡"
         onClick={() => apply({ ...v, project: !v.project })}
       >
@@ -91,13 +90,10 @@ export function CardScopeBar({ onChange }: { onChange: (v: CardVisibility) => vo
       </button>
 
       {groupsOpen && (
-        <div
-          className="absolute left-2 top-full z-30 mt-1 rounded border border-neutral-700 bg-[var(--ui-panel,#161a22)] p-2 shadow-lg"
-          data-pc="scope-groups-panel"
-        >
-          <div className="mb-1 text-[10px] uppercase tracking-wide text-neutral-500">基础素材放出哪几组</div>
+        <div className="pc-lib-scope-panel" data-pc="scope-groups-panel">
+          <div className="pc-lib-scope-panel-title">基础素材放出哪几组</div>
           {ALL_GROUPS.map((g: BaseGroup) => (
-            <label key={g} className="flex cursor-pointer items-center gap-1.5 py-0.5 text-[11px] text-neutral-300">
+            <label key={g} className="pc-lib-scope-option">
               <input
                 type="checkbox"
                 checked={v.groups[g] !== false}

@@ -339,7 +339,7 @@
 [magic-index]: <../src/cards/magicui/index.ts>
 [user-index]: <../src/cards/user/index.ts>
 [asset-index]: <../src/cards/assets/index.ts>
-[cards-tab]: <../src/editor/left/CardsTab.tsx>
+[cards-tab]: <../src/editor/left/library/cardGroups.tsx>
 [frame-mode]: <../src/render/frameMode.mjs>
 [package]: <../package.json>
 [hud]: <../src/cards/native/hud.ts>

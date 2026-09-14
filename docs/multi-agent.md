@@ -1,6 +1,7 @@
 # 多 Agent 并行(AI 面板分页)
 
-AI 助手面板顶上有一条分页栏(`src/editor/right/AgentTabs.tsx`),一页一个 Agent,可以同时跑。
+AI 助手面板右边有一条竖向 rail(`src/editor/right/chat/RightRail.tsx`):最上面是「剧本」页,下面每一项是一个 Agent 分页,
+最后一个「+」开新页。一页一个 Agent,可以同时跑;点当前已选中的项收起 / 展开面板。
 传统式和对话式布局都经 `RightPanel` 渲染,所以两种布局都有。
 
 ## 页和身份

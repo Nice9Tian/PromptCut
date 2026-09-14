@@ -14,11 +14,8 @@
  * data-pc 区域再覆盖一层。只改层级归属,不改任何色值。
  */
 
-/* ── 素材库(左栏)整块 L1,控件 L3 ─────────────────────────────── */
-[data-skin] [data-pc="left"],
-[data-skin] [data-pc="left"].bg-neutral-950 {
-  background-color: var(--ui-bg-2);
-}
+/* ── 素材库(左栏)抽屉 L1,控件 L3 ──────────────────────────────
+ * 左栏根节点不刷底色:rail 要露出画布,底色由抽屉的 .pc-card-surface 给 */
 [data-skin] [data-pc="left"] .bg-neutral-950,
 [data-skin] [data-pc="left"] .bg-neutral-950\/60 {
   background-color: var(--ui-bg-2);
@@ -56,27 +53,55 @@
 }
 
 /*
- * 面板之间的缝:设计稿是 1px 的分隔线(grid gap 1px + #262c32)。
- * 拖杆要留 6px 好抓,但只画中间那 1px,看上去就是一条线;悬浮时整条亮起来提示可拖。
+ * 拖杆是 8px 缝隙,静止时完全不可见,hover 时中间出现一条 2px 圆头的 --ui-accent-soft 线。
  */
 .pc-gutter {
-  background-color: transparent;
-  background-repeat: no-repeat;
-  transition: background-color 120ms;
+  background: transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
-[data-pc-resize="x"].pc-gutter {
-  background-image: linear-gradient(to right, transparent calc(50% - 0.5px), var(--ui-border) calc(50% - 0.5px), var(--ui-border) calc(50% + 0.5px), transparent calc(50% + 0.5px));
-}
-[data-pc-resize="y"].pc-gutter {
-  background-image: linear-gradient(to bottom, transparent calc(50% - 0.5px), var(--ui-border) calc(50% - 0.5px), var(--ui-border) calc(50% + 0.5px), transparent calc(50% + 0.5px));
-}
-.pc-gutter:hover,
-body[data-pc-resizing] .pc-gutter {
+.pc-gutter::after {
+  content: "";
   background-color: var(--ui-accent-soft);
+  border-radius: 99px;
+  opacity: 0;
+  transition: opacity 120ms;
 }
-/* 有了缝线,面板自己的边线就多余了(否则 2px) */
-[data-skin] [data-pc="editor"] > .grid > aside,
-[data-skin] [data-pc="editor"] > .grid > main {
+[data-pc-resize="x"].pc-gutter::after {
+  width: 2px;
+  height: 32px;
+}
+[data-pc-resize="y"].pc-gutter::after {
+  height: 2px;
+  width: 32px;
+}
+.pc-gutter:hover::after,
+body[data-pc-resizing] .pc-gutter::after {
+  opacity: 1;
+}
+.pc-gutter.is-disabled::after {
+  display: none !important;
+}
+
+[data-skin] [data-pc="editor"] > div > .grid > aside,
+[data-skin] [data-pc="editor"] > div > .grid > main {
   border-left: 0;
   border-right: 0;
+}
+
+/*
+ * 两侧抽屉 / AI 面板收起、展开时,网格列宽过渡过去。
+ * data-pc-rail-anim 只在收起状态切换的那一刻由 Editor.tsx 挂上一小会儿:拖杆拖宽度、
+ * 窗口变窄时自动收缩面板都不走过渡(否则列宽追着鼠标慢半拍);拖动期间再强制关一次保险。
+ * 过渡期间抽屉 / 面板卡片保持原宽、被列裁掉一截(left.css / chat.css),里面的内容不跟着逐帧重排;
+ * 卡片自己的淡入淡出也挂在这个属性下面。
+ */
+@media (prefers-reduced-motion: no-preference) {
+  .pc-editor-grid[data-pc-rail-anim] {
+    transition: grid-template-columns 220ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+}
+body[data-pc-resizing] .pc-editor-grid {
+  transition: none;
 }

@@ -136,6 +136,25 @@ export const tools = [
     },
     side: "server",
   },
+  {
+    name: "report_progress",
+    description: "给用户看的唯一进度汇报渠道。每完成一个小阶段调一次(final: false),整个任务结束前必须调一次(final: true),因为出错或卡住而停下来也算结束;先填三个布尔再填列表;每条一句简洁中文、不超过 40 字、每类不超过 8 条。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        final: { type: "boolean" },
+        has_done: { type: "boolean" },
+        has_todo: { type: "boolean" },
+        has_problem: { type: "boolean" },
+        stage: { type: "string" },
+        done: { type: "array", items: { type: "string" } },
+        todo: { type: "array", items: { type: "string" } },
+        problems: { type: "array", items: { type: "string" } }
+      },
+      required: ["final", "has_done", "has_todo", "has_problem", "done", "todo", "problems"]
+    },
+    side: "server"
+  },
   { name: "background_job_status", description: "查询 stt_install 或 transcribe_media 返回的 jobId，得到 done、ok、error 和进度；done=true 且 ok=false 表示失败，不要继续轮询。", inputSchema: { type: "object", properties: { jobId: { type: "string" } }, required: ["jobId"] }, side: "browser" },
   {
     name: "list_cards",

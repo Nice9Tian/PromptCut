@@ -195,7 +195,7 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
     "pc-clip absolute top-1 bottom-1 rounded flex items-center px-2 text-xs overflow-hidden select-none border",
     track.locked ? "" : "cursor-pointer",
     isSelected ? "is-selected z-20" : "z-10",
-    dragState?.forbidden ? "bg-red-500/50 border-red-500 border-dashed" : "",
+    dragState?.forbidden ? "is-forbidden bg-red-500/50 border-red-500 border-dashed" : "",
   ].join(" ");
 
   // 计算跨轨拖动时的垂直偏移量，视觉上把色块移到目标轨道
@@ -225,7 +225,7 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
       >
         <div
           ref={resizeLeftRef}
-          className={`absolute left-0 top-0 bottom-0 w-2 z-30 ${track.locked ? "" : "cursor-col-resize hover:bg-white/30"}`}
+          className={`absolute left-0 top-0 bottom-0 w-2 z-30 ${track.locked ? "" : "cursor-col-resize pc-clip-trim"}`}
         />
         
         {isCaption && capCount > 0 ? (
@@ -265,7 +265,7 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
 
         <div
           ref={resizeRightRef}
-          className={`absolute right-0 top-0 bottom-0 w-2 z-30 ${track.locked ? "" : "cursor-col-resize hover:bg-white/30"}`}
+          className={`absolute right-0 top-0 bottom-0 w-2 z-30 ${track.locked ? "" : "cursor-col-resize pc-clip-trim"}`}
         />
       </div>
 

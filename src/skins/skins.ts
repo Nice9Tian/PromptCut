@@ -118,10 +118,18 @@ function sideToVars(side: PaletteSide, mode: SkinMode): Record<string, string> {
     "ui-track-ink-fx": trackInk(side.tracks.fx),
     "ui-track-ink-transition": trackInk(side.tracks.transition),
     "ui-track-ink-sticker": trackInk(side.tracks.sticker),
-    "ui-radius": "4px",
+    "ui-radius-sm": "4px",
+    "ui-radius": "6px",
+    "ui-radius-lg": "8px",
+    "ui-radius-xl": "10px",
+    "ui-gap": "8px",
+    "ui-rail-w": "64px",
+    "pc-cube-s": "64px",
+    "pc-cube-gap": "8px",
+    "ui-focus-ring": "0 0 0 2px var(--ui-accent)",
     "ui-shadow": dark ? "0 6px 18px rgba(0, 0, 0, 0.45)" : "0 8px 24px rgba(20, 22, 24, 0.14)",
     "ui-glow": `0 0 10px ${mix(side.accent, "transparent", 45)}`,
-    "ui-font": "ui-sans-serif, system-ui, sans-serif",
+    "ui-font": '"Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "PingFang SC", system-ui, sans-serif',
     "ui-font-mono": "ui-monospace, SFMono-Regular, monospace",
     "ui-backdrop": dark ? mix(l0, "transparent", 72) : "rgba(20, 22, 24, 0.35)",
     "ui-scroll-thumb": borderStrong,
@@ -138,7 +146,8 @@ function paletteSkins(p: Palette): Skin[] {
 
 /** 额外皮肤:只给基础变量,其余(悬浮层、强调色状态、语义色、轨道色)按钢蓝深色补齐 */
 function extra(id: string, name: string, description: string, vars: Record<string, string>): Skin {
-  const base = sideToVars(palettes[0].dark, "dark");
+  const steelPalette = palettes.find((p) => p.id === "steel") ?? palettes[0];
+  const base = sideToVars(steelPalette.dark, "dark");
   return { id, name, group: "更多", mode: "dark", description, vars: { ...base, ...vars } };
 }
 
@@ -148,7 +157,7 @@ export const skins: Skin[] = [
     "ui-bg": "#070b14", "ui-bg-2": "#0c1220", "ui-panel": "#121b2d", "ui-panel-2": "#1a263c", "ui-float": "#22304a",
     "ui-border": "#283854", "ui-border-strong": "#3d557f", "ui-fg": "#e2ebf8", "ui-fg-muted": "#8da4c8", "ui-fg-faint": "#56719b",
     "ui-accent": "#14b8a6", "ui-accent-hover": "#2fd0bd", "ui-accent-press": "#0f9384", "ui-accent-fg": "#031311", "ui-accent-soft": "rgba(20, 184, 166, 0.2)",
-    "ui-info": "#14b8a6", "ui-radius": "6px", "ui-glow": "0 0 12px rgba(20, 184, 166, 0.6)", "ui-backdrop": "rgba(7, 11, 20, 0.7)",
+    "ui-info": "#14b8a6", "ui-radius-sm": "6px", "ui-radius": "8px", "ui-radius-lg": "10px", "ui-radius-xl": "12px", "ui-glow": "0 0 12px rgba(20, 184, 166, 0.6)", "ui-backdrop": "rgba(7, 11, 20, 0.7)",
     "ui-scroll-thumb": "#283854", "ui-scroll-thumb-hover": "#3d557f",
   }),
   extra("amber", "琥珀 (Amber)", "暖黑底,橙金主色", {
@@ -162,12 +171,12 @@ export const skins: Skin[] = [
     "ui-bg": "#08080a", "ui-bg-2": "#0f0f14", "ui-panel": "#171720", "ui-panel-2": "#222230", "ui-float": "#2b2b3c",
     "ui-border": "#3a123e", "ui-border-strong": "#631d68", "ui-fg": "#ffffff", "ui-fg-muted": "#9e9eb8", "ui-fg-faint": "#5a5a75",
     "ui-accent": "#ec4899", "ui-accent-hover": "#f472b6", "ui-accent-press": "#be2f78", "ui-accent-fg": "#08080a", "ui-accent-soft": "rgba(236, 72, 153, 0.2)",
-    "ui-info": "#ec4899", "ui-radius": "0px", "ui-shadow": "0 4px 16px rgba(0, 0, 0, 0.8)", "ui-glow": "0 0 16px rgba(236, 72, 153, 0.8)",
+    "ui-info": "#ec4899", "ui-radius-sm": "0px", "ui-radius": "0px", "ui-radius-lg": "0px", "ui-radius-xl": "0px", "ui-shadow": "0 4px 16px rgba(0, 0, 0, 0.8)", "ui-glow": "0 0 16px rgba(236, 72, 153, 0.8)",
     "ui-backdrop": "rgba(8, 8, 10, 0.8)", "ui-scroll-thumb": "#3a123e", "ui-scroll-thumb-hover": "#ec4899",
   }),
 ];
 
-export const DEFAULT_SKIN = "indigo-dark";
+export const DEFAULT_SKIN = "studio-dark";
 
 export function getSkin(id: string): Skin {
   return skins.find((s) => s.id === id) ?? skins[0];

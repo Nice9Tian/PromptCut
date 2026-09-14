@@ -1,16 +1,18 @@
 /*
- * 预览区(配色诊断与修正 v2 整屏,中栏)。
- * 整块画布 L0;工具行直接铺在画布上,没有条底;播放栏是一张 L1 卡片带 hairline。
+ * 预览区(中栏)。
+ * 整块装在 Editor.tsx 的 .pc-card-surface 卡片里(--ui-bg-2 底、--ui-radius-xl 圆角),
+ * 自己不铺底色、内边距收小,免得卡片里再套一层画布色、出现双层留白。
+ * 工具行是悬浮的圆角分组框(L2 底);播放栏是一张带 hairline 的圆角卡片。
  * 工具按钮 28 方:选中 L3 底 + 强调色描边,未选 L2 底 + hairline。
  */
 .pc-pv {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  padding: 16px 18px;
+  padding: 10px 12px;
   height: 100%;
   min-height: 0;
-  background: var(--ui-bg);
+  background: transparent;
 }
 
 /* ── 工具行 ─────────────────────────────────────────────────────────── */
@@ -19,6 +21,10 @@
   align-items: center;
   gap: 7px;
   flex-shrink: 0;
+  background: var(--ui-panel);
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-lg, 8px);
+  padding: 4px 8px;
 }
 .pc-pv-tool {
   width: 28px;
@@ -28,7 +34,7 @@
   padding: 0;
   background: var(--ui-panel);
   border: 1px solid var(--ui-border);
-  border-radius: 4px;
+  border-radius: var(--ui-radius-sm, 4px);
   color: var(--ui-fg-muted);
   cursor: pointer;
 }
@@ -53,7 +59,7 @@
   color: color-mix(in oklab, var(--ui-accent) 80%, var(--ui-fg));
   font-size: 10.5px;
   padding: 3px 8px;
-  border-radius: 3px;
+  border-radius: var(--ui-radius-sm, 4px);
   white-space: nowrap;
 }
 /*
@@ -89,10 +95,10 @@
   appearance: none;
   border: 0;
   background: transparent;
-  color: var(--ui-text-2, #94a3b8);
+  color: var(--ui-fg-muted);
   font: 12px/1 system-ui, sans-serif;
   padding: 5px 12px;
-  border-radius: 5px 5px 0 0;
+  border-radius: var(--ui-radius-sm, 4px) var(--ui-radius-sm, 4px) 0 0;
   cursor: pointer;
 }
 .pc-pv-tabs button:hover { color: var(--ui-fg); }
@@ -136,6 +142,7 @@
   flex-shrink: 0;
   background: var(--ui-bg-2);
   border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-lg, 8px);
   padding: 10px 12px;
   display: flex;
   flex-direction: column;
@@ -179,7 +186,7 @@
   padding: 0;
   background: var(--ui-panel-2);
   border: 1px solid var(--ui-border-strong);
-  border-radius: 4px;
+  border-radius: var(--ui-radius-sm, 4px);
   color: var(--ui-fg-muted);
   cursor: pointer;
 }
@@ -191,23 +198,27 @@
   border-color: var(--ui-accent);
   color: var(--ui-accent);
 }
-/* 播放键是这张卡片里唯一的实心强调色 */
+/* 播放键:主文字色底的圆形 + 画布色图标。深色皮肤下是白底深图标,
+   浅色皮肤下反过来成深底浅图标,落在白卡片上也看得见 */
 .pc-pv-btn--play {
-  background: var(--ui-accent);
-  border-color: var(--ui-accent);
-  color: var(--ui-accent-fg);
+  background: var(--ui-fg);
+  border-color: var(--ui-fg);
+  color: var(--ui-bg);
+  border-radius: 50%;
 }
 .pc-pv-btn--play:hover {
-  background: var(--ui-accent-hover);
-  color: var(--ui-accent-fg);
+  background: color-mix(in oklab, var(--ui-fg) 88%, var(--ui-bg));
+  border-color: color-mix(in oklab, var(--ui-fg) 88%, var(--ui-bg));
+  color: var(--ui-bg);
 }
 .pc-pv-time {
   font-family: var(--ui-font-mono);
-  font-weight: 500;
+  font-weight: 700;
   font-size: 15px;
   letter-spacing: 0.02em;
   color: var(--ui-fg);
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
   cursor: text;
 }
 .pc-pv-time input {
@@ -222,8 +233,9 @@
 .pc-pv-time-total {
   font-family: var(--ui-font-mono);
   font-size: 13px;
-  color: var(--ui-fg-faint);
+  color: var(--ui-fg-muted);
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 /* 音量:扬声器 + 64×3 的滑条,滑条用次文字色而不是强调色(它不是主操作) */
 .pc-pv-vol {
@@ -336,7 +348,7 @@
 .pc-3d-note,
 .pc-3d-toggle {
   padding: 4px 10px;
-  border-radius: 6px;
+  border-radius: var(--ui-radius, 6px);
   font: 12px/1.6 system-ui, sans-serif;
   background: color-mix(in srgb, var(--ui-panel) 92%, transparent);
   box-shadow: 0 1px 6px rgb(0 0 0 / 35%);

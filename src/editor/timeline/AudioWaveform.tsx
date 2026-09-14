@@ -4,7 +4,7 @@ import type { MediaAsset, TrackClip } from "../../kernel/project";
 type Wave = { peaks: number[]; duration: number };
 // Share decoding across all cuts of a source, keeping only compact peaks.
 const cache = new Map<string, Promise<Wave | null>>();
-function loadWave(url: string): Promise<Wave | null> {
+export function loadWave(url: string): Promise<Wave | null> {
   const existing = cache.get(url);
   if (existing) return existing;
   const pending = (async () => {

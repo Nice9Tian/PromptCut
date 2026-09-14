@@ -161,7 +161,8 @@ export function matchInstallJob(
   tool: { name: string; summary?: string; ok?: boolean },
   list: InstallJob[],
 ): InstallJob | undefined {
-  if (tool.name !== "stt_install") return undefined;
+  // Claude Code 报上来的工具名带 mcp__promptcut__ 前缀,别家是裸名;两种都要认
+  if (tool.name.replace(/^mcp__.+?__/, "") !== "stt_install") return undefined;
   const id = typeof tool.summary === "string" ? tool.summary.match(/install-[a-z-]+-[a-z0-9]+/i)?.[0] : undefined;
   if (id) return list.find((j) => j.jobId === id);
   if (tool.ok === undefined) return list.find((j) => j.phase !== "done" && j.phase !== "failed");

@@ -4,7 +4,7 @@ import type { MediaAsset, Project, TranscriptSegment } from "../../kernel/projec
 import { TranscribePanel } from "./TranscribePanel";
 
 /**
- * 素材 → 字幕:一棵两级树。
+ * 字幕分区的主体:一棵两级树。
  * 父节点是「转写来自哪个视频」,子节点才是段落。
  * 这样一次搜索能扫过所有素材,不必先切素材再找;点一段仍然把播放头挪到时间轴上对应位置。
  */
@@ -24,12 +24,15 @@ export function CaptionsTab({
   mediaId,
   onPick,
   onGoImport,
+  revealToken = 0,
 }: {
   search: string;
   mediaId: string | null;
   onPick: (id: string | null) => void;
-  /** 空态里「前往导入」:切到「视频」分页 */
+  /** 空态里「前往导入」:切到素材库分区 */
   onGoImport?: () => void;
+  /** 外部(右键「转写字幕」)请求聚焦时 +1:把 mediaId 那一项展开并滚进视野 */
+  revealToken?: number;
 }) {
   const project = useStore((s) => s.project);
   const t = useStore((s) => s.t);
@@ -54,6 +57,18 @@ export function CaptionsTab({
     // 换搜索词就把手动折叠清掉,否则上一轮折起来的节点会把这一轮的命中藏住
     setSearchOpenMap({});
   }, [q]);
+
+  useEffect(() => {
+    // 外部请求聚焦:哪怕之前手动折起来过,也要展开,并滚到那一项
+    if (!revealToken || !mediaId) return;
+    setOpenMap((prev) => ({ ...prev, [mediaId]: true }));
+    setSearchOpenMap((prev) => ({ ...prev, [mediaId]: true }));
+    const raf = requestAnimationFrame(() => {
+      const sel = `[data-pc-caption-media="${typeof CSS !== "undefined" && CSS.escape ? CSS.escape(mediaId) : mediaId}"]`;
+      document.querySelector(sel)?.scrollIntoView({ block: "nearest" });
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [revealToken]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!flash) return;
@@ -83,23 +98,23 @@ export function CaptionsTab({
 
   if (spoken.length === 0) {
     return (
-      <div className="pc-l-empty">
+      <div className="pc-left-empty">
         <div>
-          <div className="pc-l-empty-icon" aria-hidden="true">
+          <div className="pc-left-empty-icon" aria-hidden="true">
             <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-              <rect x="3" y="5" width="18" height="14" />
+              <rect x="3" y="5" width="18" height="14" rx="2" />
               <path d="M7 15h7M7 11h4" />
             </svg>
           </div>
-          <div className="pc-l-empty-text">
+          <div className="pc-left-empty-text">
             还没有素材。
             <br />
-            先在「视频」分页导入,
+            先在「素材库」导入视频或音频,
             <br />
             再回来转字幕。
           </div>
           {onGoImport && (
-            <button type="button" className="pc-l-empty-btn" onClick={onGoImport}>
+            <button type="button" className="pc-left-empty-btn" onClick={onGoImport}>
               前往导入
             </button>
           )}
@@ -124,21 +139,15 @@ export function CaptionsTab({
 
   return (
     <div className="flex-1 min-h-0 flex flex-col">
-      {flash && (
-        <div className="flex-none px-2 py-1.5 text-[11px] text-neutral-300 bg-neutral-800/60 border-b border-neutral-800">
-          {flash}
-        </div>
-      )}
+      {flash && <div className="pc-left-flash is-top">{flash}</div>}
 
       {nothingTranscribed && !q && (
-        <div className="flex-none px-2 py-1.5 text-[11px] text-neutral-500 border-b border-neutral-800">
-          还没有字幕。点开下面的素材开始转写,或用工具栏的「+」导入 .srt。
-        </div>
+        <div className="pc-left-hint is-bar">还没有字幕。点开下面的素材开始转写,或用上面的「导入 .srt / .vtt」导入字幕。</div>
       )}
 
-      <div className="flex-1 min-h-0 overflow-y-auto pc-l-scroll" role="tree">
+      <div className="flex-1 min-h-0 overflow-y-auto pc-left-scroll" role="tree">
         {visible.length === 0 ? (
-          <div className="p-4 text-center text-xs text-neutral-500">没有匹配的字幕</div>
+          <div className="p-4 text-center text-xs pc-left-muted">没有匹配的字幕</div>
         ) : (
           visible.map((node) => (
             <MediaNode
@@ -211,18 +220,16 @@ function MediaNode({
   const count = filtering && rows.length !== total ? `${rows.length}/${total} 段` : `${total} 段`;
 
   return (
-    <div className="border-b border-neutral-800/60" role="treeitem" aria-expanded={open}>
+    <div className="pc-left-cap-node" role="treeitem" aria-expanded={open}>
       <button
         type="button"
         data-pc-caption-media={media.id}
-        className={`w-full flex items-center gap-1.5 px-2 py-1.5 text-left text-xs ${
-          focused ? "bg-neutral-800/60 text-neutral-100" : "text-neutral-300 hover:bg-neutral-800/40"
-        }`}
+        className={`pc-left-cap-head${focused ? " is-focused" : ""}`}
         onClick={() => onToggle(!open)}
         title={media.name}
       >
         <svg
-          className={`shrink-0 text-neutral-500 ${open ? "rotate-90" : ""}`}
+          className={`shrink-0 pc-left-faint ${open ? "rotate-90" : ""}`}
           width="10"
           height="10"
           viewBox="0 0 10 10"
@@ -230,14 +237,14 @@ function MediaNode({
         >
           <path d="M3.5 1.5 L7 5 L3.5 8.5" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
-        <span className="shrink-0 text-neutral-500" aria-hidden="true">
+        <span className="shrink-0 pc-left-faint" aria-hidden="true">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6">
             <rect x="3" y="5" width="18" height="14" rx="2" />
             <path d="M7 15h7M7 11h4" />
           </svg>
         </span>
         <span className="flex-1 truncate">{media.name}</span>
-        <span className="shrink-0 tabular-nums text-[10px] text-neutral-500">
+        <span className="shrink-0 tabular-nums text-[10px] pc-left-faint">
           {transcript ? count : "未转写"}
           {media.duration ? ` · ${fmt(media.duration)}` : ""}
         </span>
@@ -250,7 +257,7 @@ function MediaNode({
           </div>
         ) : (
           <div role="group">
-            <div className="flex items-center gap-2 pl-5 pr-2 py-1 text-[10px] text-neutral-500">
+            <div className="flex items-center gap-2 pl-5 pr-2 py-1 text-[10px] pc-left-faint">
               <span className="truncate">
                 {transcript.engine} · {transcript.model}
                 {transcript.language ? ` · ${transcript.language}` : ""}
@@ -259,22 +266,18 @@ function MediaNode({
                   人在这儿看完文字稿就没路可走了 —— 现在一键建字幕卡,时间轴上就有字幕轨了 */}
               <button
                 type="button"
-                className="ml-auto shrink-0 h-5 px-1.5 rounded border border-neutral-700 text-neutral-400 hover:text-neutral-200 hover:border-neutral-600"
+                className="ml-auto pc-left-btn is-sm"
                 onClick={onBuild}
                 title="把这份文字稿铺成时间轴上的字幕轨"
               >
                 铺成字幕轨
               </button>
-              <button
-                type="button"
-                className="shrink-0 h-5 px-1.5 rounded border border-neutral-700 text-neutral-400 hover:text-neutral-200 hover:border-neutral-600"
-                onClick={onRetranscribe}
-              >
+              <button type="button" className="pc-left-btn is-sm" onClick={onRetranscribe}>
                 重新转写
               </button>
             </div>
             {rows.length === 0 ? (
-              <div className="pl-5 pr-2 pb-1.5 text-[11px] text-neutral-600">这份转写里没有匹配的段落</div>
+              <div className="pl-5 pr-2 pb-1.5 text-[11px] pc-left-faint">这份转写里没有匹配的段落</div>
             ) : (
               <div className="pb-1">
                 {rows.map(({ seg, index }) => {
@@ -285,16 +288,14 @@ function MediaNode({
                       key={index}
                       type="button"
                       data-pc-caption-seg={index}
-                      className={`w-full text-left flex gap-2 pl-5 pr-2 py-1 text-xs ${
-                        active ? "bg-neutral-800 text-neutral-100" : "text-neutral-300 hover:bg-neutral-800/60"
-                      } ${tl == null ? "opacity-50" : ""}`}
+                      className={`pc-left-cap-seg${active ? " is-active" : ""}${tl == null ? " is-offline" : ""}`}
                       title={tl == null ? "这段素材还没放到时间轴上" : "点一下把播放头挪过去"}
                       onClick={() => {
                         onPickSelf();
                         if (tl != null) actions.seek(tl);
                       }}
                     >
-                      <span className="shrink-0 tabular-nums text-neutral-500 w-10">{fmt(seg.start)}</span>
+                      <span className="shrink-0 tabular-nums pc-left-faint w-10">{fmt(seg.start)}</span>
                       <span className="flex-1 whitespace-pre-wrap break-words">{seg.text}</span>
                     </button>
                   );

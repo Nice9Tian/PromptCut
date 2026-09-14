@@ -24,7 +24,7 @@ import { usePreviewZoom, zoomFor } from "./previewZoom";
  * 点一下:当前选中的是组合卡就把部件加进去;否则在播放头新建一张组合卡,里面就这一个部件。
  * 部件不能单独上时间轴,它一定住在组合卡里。
  */
-export function PartCell({ def }: { def: PartDef<any> }) {
+export function PartCell({ def, fill, aspect }: { def: PartDef<any>; fill?: boolean; aspect?: number }) {
   const [msg, setMsg] = useState<string | null>(null);
   const [hot, setHot] = useState(false);
   const [box, setBox] = useState({ w: 0, h: 0 });
@@ -87,9 +87,9 @@ export function PartCell({ def }: { def: PartDef<any> }) {
   const view = (
     <div ref={viewRef} className="absolute inset-0">
       {!hot && (
-        <div className="pc-pcard-text">
-          <div className="pc-pcard-name">{def.name}</div>
-          <div className="pc-pcard-desc">{def.description}</div>
+        <div className="pc-lib-card-text">
+          <div className="pc-lib-card-name">{def.name}</div>
+          <div className="pc-lib-card-desc">{def.description}</div>
         </div>
       )}
       {hot && box.w > 0 && box.h > 0 && (
@@ -130,6 +130,8 @@ export function PartCell({ def }: { def: PartDef<any> }) {
       onClick={onClick}
       error={msg}
       titleAttr={`${def.description}\n点击 = 加进选中的组合卡;没选中组合卡就在播放头新建一张`}
+      fill={fill}
+      aspect={aspect}
     />
   );
 }

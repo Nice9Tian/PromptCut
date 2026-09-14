@@ -80,6 +80,29 @@ function textRect(el: Element): DOMRect | null {
  * 和其他几种量法口径一致。
  */
 export function canvasBox(el: HTMLCanvasElement): DOMRect | null {
+  return canvasRect(el, canvasPixels(el));
+}
+
+/** 画布里画了东西的那块,按画布像素记;step 是取样步长。null = 整块空白或读不到像素 */
+interface CanvasPixels {
+  l: number;
+  t: number;
+  r: number;
+  b: number;
+  step: number;
+  w: number;
+  h: number;
+}
+
+/**
+ * 读一遍画布像素,框出画了东西的范围(画布像素坐标)。
+ *
+ * 这是整个测量里最贵的一步:一张 1920×1080 的画布要 drawImage + getImageData 读回八百万字节,
+ * 一次十几毫秒。measureAcrossTime 一趟要拨几十档,档档都读的话一张三维卡就是几百毫秒的长任务。
+ * 所以拆成「读像素」和「换算到屏幕」两半:同一趟里画布内容不会变(拨 Web Animations 不跑 JS,
+ * 画布只在 requestAnimationFrame 里重画),像素范围读一次就够,每档只重新取元素矩形。
+ */
+function canvasPixels(el: HTMLCanvasElement): CanvasPixels | null {
   const w = el.width, h = el.height;
   if (!w || !h) return null;
   let data: Uint8ClampedArray;
@@ -116,7 +139,13 @@ export function canvasBox(el: HTMLCanvasElement): DOMRect | null {
     }
   }
   if (r < l || b < t) return null; // 整块空白
-  // 取样是跳着走的,边界各外扩一格免得把内容切掉;再换算到屏幕坐标
+  return { l, t, r, b, step, w, h };
+}
+
+/** 像素范围换算到屏幕坐标:取样是跳着走的,边界各外扩一格免得把内容切掉 */
+function canvasRect(el: HTMLCanvasElement, px: CanvasPixels | null): DOMRect | null {
+  if (!px) return null;
+  const { l, t, r, b, step, w, h } = px;
   const rect = el.getBoundingClientRect();
   const sx = rect.width / w, sy = rect.height / h;
   const x0 = Math.max(0, l - step), y0 = Math.max(0, t - step);
@@ -126,13 +155,14 @@ export function canvasBox(el: HTMLCanvasElement): DOMRect | null {
 
 /**
  * @param stage  舞台元素(.pc-stage),它的屏幕矩形就是舞台坐标系的原点和比例
+ * @param canvasCache  同一趟连续量好几档时传同一个 Map:每张画布的像素只读一次(见 canvasPixels)
  * @returns 舞台坐标下的包围盒;什么都没量到、或者内容本来就铺满舞台时返回 null
  *
  * 比例不从外面传:舞台正在被 transform 过渡的时候,样式里写的目标比例和屏幕上
  * 此刻画出来的比例不是一个数,拿目标比例去除会把坐标算歪。屏幕矩形 / 布局宽度
  * 就是此刻真实的比例,和元素矩形同一瞬间取的,永远对得上。
  */
-export function measureContentBox(stage: HTMLElement): Box | null {
+export function measureContentBox(stage: HTMLElement, canvasCache?: Map<HTMLCanvasElement, CanvasPixels | null>): Box | null {
   const sr = stage.getBoundingClientRect();
   const scale = stage.offsetWidth > 0 ? sr.width / stage.offsetWidth : 0;
   if (sr.width <= 0 || sr.height <= 0 || scale <= 0) return null;
@@ -157,7 +187,16 @@ export function measureContentBox(stage: HTMLElement): Box | null {
     if (cs.display === "none" || cs.visibility === "hidden" || parseFloat(cs.opacity) === 0) continue;
     if (REPLACED.has(el.tagName.toUpperCase())) {
       // canvas 先扫像素:画布多半铺满整幅,真正画了东西的只是其中一块
-      const painted = el.tagName.toUpperCase() === "CANVAS" ? canvasBox(el as HTMLCanvasElement) : null;
+      let painted: DOMRect | null = null;
+      if (el.tagName.toUpperCase() === "CANVAS") {
+        const cv = el as HTMLCanvasElement;
+        let px = canvasCache?.get(cv);
+        if (px === undefined) {
+          px = canvasPixels(cv);
+          canvasCache?.set(cv, px);
+        }
+        painted = canvasRect(cv, px);
+      }
       add(painted ?? el.getBoundingClientRect());
       continue;
     }
@@ -326,9 +365,11 @@ export function measureAcrossTime(stage: HTMLElement, totalMs: number, stepMs = 
     }
   };
   let union: Box | null = null;
+  // 画布像素这一趟只读一次:拨动画不会让画布重画(见 canvasPixels),每档只重取元素矩形
+  const canvasCache = new Map<HTMLCanvasElement, CanvasPixels | null>();
   for (let t = 0; t <= totalMs; t += stepMs) {
     seek(t);
-    union = unionBox(union, measureContentBox(stage));
+    union = unionBox(union, measureContentBox(stage, canvasCache));
   }
   seek(0);
   return union;

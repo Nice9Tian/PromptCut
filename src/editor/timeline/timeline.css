@@ -8,8 +8,9 @@
   );
 }
 
+/* 播放头把手:卡尺那一格里的圆形(Playhead.tsx 的 .clip-playhead;颜色见 skins.css 末尾) */
 .clip-playhead {
-  clip-path: polygon(0 0, 100% 0, 50% 100%);
+  border-radius: 50%;
 }
 
 /* 自定义横向滚动条接管后隐藏原生横条，竖条保留。 */
@@ -27,12 +28,13 @@
 /* ── 时间线(配色诊断与修正 v2 整屏,底部) ───────────────────────────────
  * 整块 L1(见 editor/shell.css);选中的序列行 L2;控件 L3。 */
 
-/* 顶部工具行:9/14 内边距,hairline 分隔 */
+/* 顶部工具行:40 高 */
 .pc-tl-bar {
   display: flex;
   align-items: center;
   gap: 14px;
-  padding: 9px 14px;
+  padding: 0 14px;
+  height: 40px;
   border-bottom: 1px solid var(--ui-border);
   flex-shrink: 0;
   font-size: 11.5px;
@@ -41,7 +43,7 @@
 .pc-tl-seg {
   display: flex;
   border: 1px solid var(--ui-border-strong);
-  border-radius: 4px;
+  border-radius: var(--ui-radius, 6px);
   overflow: hidden;
 }
 .pc-tl-seg button {
@@ -73,22 +75,22 @@
   background: var(--ui-float);
 }
 .pc-tl-iconbtn {
-  width: 26px;
-  height: 26px;
+  width: 32px;
+  height: 32px;
   display: grid;
   place-items: center;
   padding: 0;
-  background: var(--ui-panel-2);
-  border: 1px solid var(--ui-border-strong);
-  border-radius: 4px;
-  color: var(--ui-fg-muted);
+  background: transparent;
+  border: none;
+  border-radius: var(--ui-radius, 6px);
+  color: var(--ui-fg);
   cursor: pointer;
 }
 .pc-tl-iconbtn:hover {
-  color: var(--ui-fg);
+  background: var(--ui-panel-2);
 }
 .pc-tl-iconbtn.is-on {
-  border-color: var(--ui-accent);
+  background: var(--ui-accent-soft);
   color: var(--ui-accent);
 }
 .pc-tl-zoom {
@@ -96,6 +98,11 @@
   display: flex;
   align-items: center;
   gap: 8px;
+  padding: 0 10px;
+  height: 28px;
+  border-radius: var(--ui-radius-lg, 8px);
+  background: var(--ui-panel);
+  border: 1px solid var(--ui-border);
 }
 .pc-tl-zoom-track {
   position: relative;
@@ -180,6 +187,7 @@
   padding: 1px 4px;
   font: inherit;
   font-size: 12.5px;
+  border-radius: var(--ui-radius-sm, 4px);
 }
 .pc-tl-row-acts {
   display: flex;
@@ -187,16 +195,18 @@
   color: var(--ui-fg-faint);
 }
 .pc-tl-row-acts button {
-  background: none;
+  background: transparent;
   border: 0;
   padding: 0;
   display: grid;
   place-items: center;
   color: inherit;
   cursor: pointer;
+  border-radius: var(--ui-radius-sm, 4px);
 }
 .pc-tl-row-acts button:hover {
   color: var(--ui-fg);
+  background: var(--ui-panel-2);
 }
 .pc-tl-row-acts button.is-active {
   color: var(--ui-danger);
@@ -210,7 +220,7 @@
   gap: 6px;
   background: var(--ui-panel-2);
   border: 1px solid var(--ui-border-strong);
-  border-radius: 4px;
+  border-radius: var(--ui-radius, 6px);
   padding: 5px 11px;
   color: var(--ui-fg);
   font-size: 11.5px;
@@ -221,21 +231,24 @@
   background: var(--ui-float);
 }
 
-/* 标尺:26 高,主刻度每 5 格一条 L4 线,次刻度 L3 线,数字次文字色 */
+/* 标尺:26 高。次刻度是直径 2px 的小圆点(--ui-panel-2 落在时间轴的 --ui-bg-2 底上几乎看不见,
+   所以用强描边色);主刻度不画点也不画线,只标 m:ss 时间 */
 .pc-tl-ruler {
   height: 26px;
   border-bottom: 1px solid var(--ui-border);
 }
 .pc-tl-tick {
-  background: var(--ui-panel-2);
-  width: 1px;
+  background: var(--ui-border-strong);
+  width: 2px;
+  height: 2px;
+  border-radius: 50%;
 }
 .pc-tl-tick.is-major {
-  background: var(--ui-float);
+  display: none;
 }
 .pc-tl-tick-label {
   font-family: var(--ui-font-mono);
-  font-size: 10px;
+  font-size: 11px;
   color: var(--ui-fg-muted);
 }
 
@@ -244,7 +257,7 @@
   height: 26px;
   background: color-mix(in oklab, var(--ui-accent) 7%, transparent);
   border: 1px dashed var(--ui-border-strong);
-  border-radius: 2px;
+  border-radius: var(--ui-radius-lg, 8px);
   display: flex;
   align-items: center;
   padding: 0 10px;
@@ -260,32 +273,58 @@
   background: var(--ui-accent-soft);
 }
 
-/* 播放头上的时间标签:红底深字,等宽 600 */
+/* 片段两端的修剪把手:悬停时出一条居中的圆角白条 */
+.pc-clip-trim:hover::after {
+  content: "";
+  position: absolute;
+  top: 30%;
+  bottom: 30%;
+  left: 50%;
+  width: 3px;
+  transform: translateX(-50%);
+  background: white;
+  border-radius: 1.5px;
+}
+
+/* 空轨道占位:轨道行(TrackRow 根上的 .pc-tl-track)里一个片段都没有时,内缩画一个 1px 虚线、
+   圆角的框,提示这里能放东西。不加元素、不加文字,片段一放进来框就消失。
+   伪元素不吃鼠标,拖放照样落在行上;落点预览(z-30)和锁定遮罩(z-50)都盖在它上面。
+   隐藏的轨道不渲染片段,所以也会显示这个框。 */
+.pc-tl-track:not(:has(.pc-clip))::before {
+  content: "";
+  position: absolute;
+  inset: 4px 8px;
+  border: 1px dashed var(--ui-border-strong);
+  border-radius: var(--ui-radius-lg, 8px);
+  pointer-events: none;
+}
+
+/* 播放头上的时间标签:胶囊底色字色 */
 .pc-tl-playhead-label {
   position: absolute;
   top: -1px;
   left: -24px;
-  background: var(--ui-danger);
-  color: #1a0503;
+  background: var(--ui-fg);
+  color: var(--ui-bg);
   font-family: var(--ui-font-mono);
   font-weight: 600;
   font-size: 10px;
   padding: 2px 6px;
+  border-radius: 999px;
   letter-spacing: 0.02em;
   white-space: nowrap;
   pointer-events: none;
 }
 
-/* 底部状态栏:28 高,窗口栏同色,等宽小字 */
+/* 底部状态栏:细一点,放在画布上 */
 .pc-statusbar {
   display: flex;
   align-items: center;
   gap: 16px;
-  height: 28px;
+  height: 24px;
   padding: 0 14px;
   flex-shrink: 0;
-  background: color-mix(in oklab, var(--ui-bg) 55%, var(--ui-bg-2));
-  border-top: 1px solid color-mix(in oklab, var(--ui-border) 70%, var(--ui-bg));
+  background: transparent;
   font-family: var(--ui-font-mono);
   font-size: 10.5px;
   color: var(--ui-fg-faint);
@@ -399,15 +438,15 @@
 
 .pc-audio-waveform { position: absolute; left: 0; bottom: 1px; width: 100%; height: 16px; opacity: .45; pointer-events: none; }
 
-.pc-clip-volume-dialog { margin: auto; width: min(360px, calc(100vw - 32px)); padding: 20px; border: 1px solid var(--ui-border); border-radius: 12px; background: var(--ui-bg-2); color: var(--ui-fg); box-shadow: 0 12px 48px #0008; font-size: 13px; }
+.pc-clip-volume-dialog { margin: auto; width: min(360px, calc(100vw - 32px)); padding: 20px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-xl, 12px); background: var(--ui-bg-2); color: var(--ui-fg); box-shadow: 0 12px 48px #0008; font-size: 13px; }
 .pc-clip-volume-dialog::backdrop { background: #0008; }
 .pc-clip-volume-dialog h3 { margin: 0 0 8px; font-size: 16px; font-weight: 600; }
 .pc-clip-volume-dialog p { margin: 10px 0; color: var(--ui-fg-muted); font-size: 12px; }
 .pc-volume-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pc-volume-controls { display: flex; align-items: center; gap: 12px; margin: 20px 0; }
 .pc-volume-controls input[type=range] { flex: 1; min-width: 0; accent-color: var(--ui-accent); }
-.pc-volume-controls input[type=number] { width: 64px; border: 1px solid var(--ui-border); border-radius: 4px; padding: 4px; background: var(--ui-bg); color: var(--ui-fg); }
+.pc-volume-controls input[type=number] { width: 64px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-sm, 4px); padding: 4px; background: var(--ui-bg); color: var(--ui-fg); }
 .pc-volume-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
-.pc-volume-actions button { padding: 6px 10px; border: 1px solid var(--ui-border); border-radius: 6px; cursor: pointer; }
+.pc-volume-actions button { padding: 6px 10px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius, 6px); cursor: pointer; }
 .pc-volume-actions button[type=submit] { background: var(--ui-accent); color: white; }
 .pc-volume-actions button:disabled { opacity: .4; cursor: default; }
