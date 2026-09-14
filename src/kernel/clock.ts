@@ -43,6 +43,8 @@ declare global {
     /** Restrict a sparse render to target-frame cards and seek before mounting. */
     __pcSetFrameWindow?: (clipIds: string[] | null, startTime: number, directTime?: number) => void;
     __pcPlanFrameWindow?: (frames: number[], fps: number) => import('../render/frameWindow.mjs').FrameWindow;
+    /** Parallel export: every card clip with its frame mode, for choosing safe shard cuts. */
+    __pcClipFrameModes?: () => { id: string; start: number; end: number; mode: string | undefined }[];
   }
 }
 

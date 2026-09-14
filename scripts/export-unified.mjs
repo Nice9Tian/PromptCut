@@ -3,6 +3,8 @@ import fs from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { bakeFrames, findFfmpeg, openBakery, resolveWorkers, streamPngVideo } from './export-frames.mjs';
+import { resumableSink, retryOnBrowserLoss, useBakery } from './browser-loss.mjs';
+import { planShardRanges } from '../src/render/shardPlan.mjs';
 
 function concatPath(file) {
   return String(file).replace(/\\/g, '/').replace(/'/g, "'\\''");
@@ -25,35 +27,12 @@ async function concatVideos(ffmpeg, parts, output) {
   } finally { await fs.rm(list, { force: true }); }
 }
 
-/** Safe cuts only at card boundaries; Motion/WAAPI cards are never cut mid-life. */
-export function safeShardRanges(project, startFrame, endFrame, workers) {
-  const fps = project.fps || 30;
-  const cuts = new Set([startFrame, endFrame + 1]);
-  for (const track of project.tracks || []) for (const clip of track.clips || []) for (const t of [clip.start, clip.end]) {
-    const f = Math.round(Number(t) * fps);
-    if (Number.isFinite(f) && f > startFrame && f <= endFrame) cuts.add(f);
-  }
-  const points = [...cuts].sort((a, b) => a - b);
-  const segments = [];
-  for (let i = 0; i + 1 < points.length; i++) segments.push([points[i], points[i + 1] - 1]);
-  if (segments.length <= workers) return segments;
-  const out = [];
-  let at = 0;
-  for (let shard = 0; shard < workers; shard++) {
-    const slots = workers - shard;
-    const remaining = segments.slice(at).reduce((n, r) => n + r[1] - r[0] + 1, 0);
-    const target = Math.ceil(remaining / slots);
-    let count = 0;
-    let next = at;
-    while (next < segments.length && (count === 0 || count + segments[next][1] - segments[next][0] + 1 <= target || slots === 1)) {
-      count += segments[next][1] - segments[next][0] + 1;
-      next++;
-      if (slots > 1 && count >= target) break;
-    }
-    out.push([segments[at][0], segments[next - 1][1]]);
-    at = next;
-  }
-  return out;
+/** Card clips of a project with an unknown frame mode, which the planner treats
+ * as stateful. Used only when the export page cannot report modes. */
+export function projectCardClips(project) {
+  return (project.tracks || []).filter(track => !track.hidden)
+    .flatMap(track => (track.clips || []).filter(clip => clip.cardId || clip.nodeId))
+    .map(clip => ({ id: clip.id, start: Number(clip.start), end: Number(clip.end) }));
 }
 
 /** Stream each shard through Chrome/bakeFrames without retaining the HTML archive. */
@@ -67,46 +46,88 @@ export async function exportUnified(project, opts) {
   const allFrames = targetFrames || Array.from({ length: endFrame - startFrame + 1 }, (_, i) => i + startFrame);
   const out = opts.out || 'out';
   const requestedWorkers = targetFrames ? 1 : await resolveWorkers(opts.workers);
-  const ranges = targetFrames ? [[startFrame, endFrame]] : safeShardRanges(project, startFrame, endFrame, requestedWorkers);
-  const partVideos = !opts.noVideo && ranges.length > 1 && !targetFrames;
-  const ffmpeg = partVideos ? await findFfmpeg() : null;
-  const partsDir = partVideos ? path.join(out, 'parts') : null;
-  if (partsDir) await fs.mkdir(partsDir, { recursive: true });
+  // Only the export page knows each card's frame mode, so it plans the cuts.
+  // That page then renders the first shard instead of costing another Chrome.
+  let plannerBakery = null;
+  let ranges = [[startFrame, endFrame]];
+  let partVideos = false, ffmpeg = null, partsDir = null;
+  try {
+    if (!targetFrames && requestedWorkers > 1) {
+      plannerBakery = await openBakery({ ...opts, url: opts.url });
+      const clips = await plannerBakery.page.evaluate(() => window.__pcClipFrameModes?.() ?? null);
+      ranges = planShardRanges(clips ?? projectCardClips(project), startFrame, endFrame, fps, requestedWorkers);
+      console.log(`分片导出:${ranges.length} 段 ${ranges.map(([a, b]) => `${a}-${b}`).join(' ')}`);
+    }
+    partVideos = !opts.noVideo && ranges.length > 1 && !targetFrames;
+    ffmpeg = partVideos ? await findFfmpeg() : null;
+    partsDir = partVideos ? path.join(out, 'parts') : null;
+    if (partsDir) await fs.mkdir(partsDir, { recursive: true });
+  } catch (error) {
+    await plannerBakery?.close().catch(() => {});
+    throw error;
+  }
   const started = Date.now();
   let completed = 0;
   let first = null;
   const shardProgress = new Map();
   const render = async ([a, b], shardIndex) => {
+    // Shard 0 owns the planner's Chrome until it hands it to useBakery. If the
+    // shard fails before that (e.g. its part directory cannot be created), close it.
+    let plannerHandedOver = false;
+    const releasePlanner = async () => {
+      if (shardIndex !== 0 || !plannerBakery || plannerHandedOver) return;
+      plannerHandedOver = true;
+      await plannerBakery.close().catch(() => {});
+    };
     const partDir = partsDir ? path.join(partsDir, String(shardIndex).padStart(3, '0')) : out;
-    if (partsDir) await fs.mkdir(partDir, { recursive: true });
     const partFile = partsDir ? path.join(partDir, 'overlay.mov') : null;
-    const stream = partFile ? streamPngVideo(ffmpeg, partFile, fps) : null;
-    let finished = false;
-    const bakery = await openBakery({ ...opts, url: opts.url });
+    let stream = null;
     try {
-      const result = await bakeFrames(bakery, {
-        // This movie is the final browser composition. The HTML-only snapshot
-        // path intentionally omits video sources and cannot produce its frames.
-        ...opts, fullFrame: true, out: partDir, url: opts.url, frames: `${a}-${b}`, workers: 1, onProgressLog: false,
-        ...(stream ? { onFrame: (_frame, buf) => stream.write(buf), writeFrames: false } : {}),
-        quiet: true,
-        onProgress: (frame) => {
-          const local = Math.max(0, Math.min(b, frame) - a + 1);
-          const previous = shardProgress.get(a) || 0;
-          if (local <= previous) return;
-          shardProgress.set(a, local);
-          completed += local - previous;
-          console.log(`Exported frame ${frame} (${completed}/${allFrames.length})`);
-        },
-      });
+      if (partsDir) await fs.mkdir(partDir, { recursive: true });
+      stream = partFile ? streamPngVideo(ffmpeg, partFile, fps) : null;
+    } catch (error) {
+      await releasePlanner();
+      throw error;
+    }
+    // A lost Chrome (scripts/browser-loss.mjs) restarts the shard from its safe
+    // cut in a new browser; frames already delivered are not written twice.
+    const deliver = stream ? (_frame, buf) => stream.write(buf) : opts.onFrame;
+    const sink = deliver ? resumableSink(deliver) : null;
+    let finished = false;
+    try {
+      const result = await retryOnBrowserLoss(async (attempt) => {
+        sink?.begin();
+        const usePlanner = attempt === 0 && shardIndex === 0 && plannerBakery && !plannerHandedOver;
+        if (usePlanner) plannerHandedOver = true;
+        const bakery = usePlanner ? plannerBakery : await openBakery({ ...opts, url: opts.url });
+        return useBakery(bakery, () => bakeFrames(bakery, {
+          // This movie is the final browser composition. The HTML-only snapshot
+          // path intentionally omits video sources and cannot produce its frames.
+          ...opts, fullFrame: true, out: partDir, url: opts.url, frames: `${a}-${b}`, workers: 1, onProgressLog: false,
+          // A static-skip mismatch re-runs the whole pass, which would stream
+          // the frames before the mismatch a second time.
+          ...(sink ? { onFrame: sink.write, staticSkip: false } : {}),
+          ...(stream ? { writeFrames: false } : {}),
+          quiet: true,
+          onProgress: (frame) => {
+            const local = Math.max(0, Math.min(b, frame) - a + 1);
+            const previous = shardProgress.get(a) || 0;
+            if (local <= previous) return;
+            shardProgress.set(a, local);
+            completed += local - previous;
+            console.log(`Exported frame ${frame} (${completed}/${allFrames.length})`);
+          },
+        }));
+      }, { label: `分片 ${a}-${b}` });
       if (stream) { await stream.finish(); finished = true; }
       result.part = { startFrame: a, endFrame: b, file: partFile };
       first ||= result;
       return result;
     } catch (error) {
       if (stream && !finished) await stream.abort().catch(() => {});
+      await releasePlanner();
       throw error;
-    } finally { await bakery.close().catch(() => {}); }
+    }
   };
   const results = await Promise.all(ranges.map((range, index) => render(range, index)));
   let cardsVideo = null;

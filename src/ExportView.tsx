@@ -108,6 +108,10 @@ export default function ExportView() {
       };
       const plannedClips = [...tl.clips, ...(proj?.tracks.filter(track => !track.hidden).flatMap(track => track.clips
         .filter(clip => clip.nodeId && !clip.cardId).map(clip => ({ ...clip, cardId: '' }))) || [])];
+      // Parallel export cuts only where no stateful card is mounted on both sides.
+      // Python cards are evaluated at their time, as in the frame window planner.
+      window.__pcClipFrameModes = () => plannedClips.map(clip => ({ id: clip.id, start: clip.start, end: clip.end,
+        mode: clip.nodeId ? 'direct' : clipFrameMode(clip, getCard(clip.cardId)) }));
       window.__pcPlanFrameWindow = (frames, fps) => planFrameWindow(plannedClips, frames, fps,
         clip => {
           const runtime = (proj as any)?._cardRender;

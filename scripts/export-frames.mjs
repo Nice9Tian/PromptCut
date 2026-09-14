@@ -2,6 +2,7 @@ import puppeteer from 'puppeteer';
 import { captureSnapshot } from './capture-snapshot.mjs';
 import { captureFrame } from './capture-frame.mjs';
 import { framesInWindow } from '../src/render/frameWindow.mjs';
+import { planShardRanges } from '../src/render/shardPlan.mjs';
 import { waitFrameReady } from './frame-ready.mjs';
 import { installFrameMedia, prepareFrameMedia } from './frame-media.mjs';
 import path from 'path';
@@ -916,41 +917,6 @@ export function balancedShards(start, end, n) {
 }
 
 /**
- * Prefer boundaries where a card mounts/unmounts. Cutting inside an active
- * card can change the first-frame anchor of Motion/WAAPI animations in a
- * parallel bakery. If there are too few boundaries, return fewer shards.
- */
-export function safeTimelineShards(timeline, start, end, n) {
-  const fps = timeline?.fps || 30;
-  const cuts = new Set([start, end + 1]);
-  for (const clip of timeline?.clips || []) {
-    for (const t of [clip.start, clip.end]) {
-      const f = Math.round(Number(t) * fps);
-      if (Number.isFinite(f) && f > start && f <= end) cuts.add(f);
-    }
-  }
-  const segments = [...cuts].sort((a, b) => a - b).map((a, i, all) => [a, all[i + 1] - 1]).filter(r => r[0] <= r[1]);
-  if (segments.length <= n) return segments;
-  const result = [];
-  let at = 0;
-  for (let k = 0; k < n; k++) {
-    const left = segments.length - at;
-    const slots = n - k;
-    const remainingFrames = segments.slice(at).reduce((sum, r) => sum + r[1] - r[0] + 1, 0);
-    const target = Math.ceil(remainingFrames / slots);
-    let count = 0, next = at;
-    while (next < segments.length && (count === 0 || count + segments[next][1] - segments[next][0] + 1 <= target || slots === 1)) {
-      count += segments[next][1] - segments[next][0] + 1;
-      next++;
-      if (slots > 1 && count >= target) break;
-    }
-    result.push([segments[at][0], segments[next - 1][1]]);
-    at = next;
-  }
-  return result;
-}
-
-/**
  * 开几个分片。'auto':每个 Chrome 约 1.9 个核、约 750 MB(实测),按核数和空闲内存一起夹,最多 8
  * (旧管线实测 8 个是拐点,12 个反而更慢)。
  */
@@ -973,7 +939,10 @@ async function bakeSharded(opts, n) {
     let start = 0;
     let end = Math.floor((timeline.duration || 20) * fps) - 1;
     if (opts.frames) [start, end] = opts.frames.split('-').map(Number);
-    const shards = safeTimelineShards(timeline, start, end, n);
+    // Same cut policy as the unified export; flattened clips without a reported
+    // mode are treated as stateful.
+    const clips = await first.page.evaluate(() => window.__pcClipFrameModes?.() ?? null);
+    const shards = planShardRanges(clips ?? (timeline.clips || []), start, end, fps, n);
     console.log(`分片导出:${shards.length} 个进程,段 ${shards.map(([a, b]) => `${a}-${b}`).join(' ')}`);
     while (bakeries.length < shards.length) bakeries.push(await openBakery(opts));
     const t0 = Date.now();
