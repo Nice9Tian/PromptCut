@@ -25,7 +25,7 @@ export interface ChatHeaderProps {
 }
 
 /**
- * 助手分页的顶栏:「收起面板」+ 标题 + 连接状态点,右边只有三个图标钮(思考 / 历史 / 设置)。
+ * 助手分页的顶栏:「收起面板」+ 标题 + 连接状态点,右边只有三个图标钮(显示思考 / 历史 / 设置)。
  * 「收起面板」跟着这一页所在的一侧走(dock/):在右侧放最左边,在左侧放最右边(三个图标钮之后)。
  *
  * 原来挤在这里的一整排控件都搬走了:简洁 / 详细进了 AI 设置的「显示」小节,
@@ -54,7 +54,7 @@ export function ChatHeader(props: ChatHeaderProps) {
           onClick={() => onChangeShowThinking(!showThinking)}
         >
           <IconThought />
-          <span>思考</span>
+          <span>显示思考</span>
         </button>
         <button
           type="button"

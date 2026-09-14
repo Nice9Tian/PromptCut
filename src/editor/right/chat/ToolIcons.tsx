@@ -29,13 +29,16 @@ function summaryLine(summary?: string): string {
   return s.length > 80 ? s.slice(0, 79) + "…" : s;
 }
 
-/** 一个工具片段:标题行 + 可展开的入参 / 结果 / 文件 */
+/**
+ * 一个工具片段:标题行 + 可展开的入参 / 结果 / 文件。
+ * 只有详细模式(AI 设置里的「详细」)逐条渲染时用;简洁模式的详细内容都在操作详细预览控件里。
+ */
 export function ToolDetail(props: {
   t: ToolCallInfo;
   open: boolean;
   installJobs: ReturnType<typeof useInstallJobs>;
   onToggle: () => void;
-  /** 标题行再带上耗时和结果摘要(图标点开的操作清单用;详细模式的逐条渲染不带) */
+  /** 标题行再带上耗时和结果摘要 */
   meta?: boolean;
 }) {
   const { t, open, installJobs, onToggle, meta } = props;
@@ -134,40 +137,69 @@ export function ToolDetail(props: {
   );
 }
 
+/** 图标行里操作之外的图标:收到的 Agent 消息(行首)、阶段 / 本轮小结(行尾) */
+export interface ExtraIcon {
+  /** 和操作详细预览控件里那一项的 key 一样 */
+  key: string;
+  /** 决定底色和字形的类名,如 `ai-op--agent`、`ai-op--summary tone-ok` */
+  className: string;
+  label: string;
+  /** 大于 1 时右下角标 ×n */
+  count?: number;
+}
+
 /**
- * 一段操作的图标行,加上点开的那个图标的操作清单。
+ * 一段的图标行。
  *
  * 一次调用不再是一个 16px 的小方块,而是 small_cube 大小的图标:相邻的同类操作叠进同一个图标
  * (最多 5 个,见 iconRuns),颜色区分动作类型,新的会弹出来 —— 用户看得见条目在变多,不会以为卡住了。
- * 点一下在这一排下面摊开它装的几次操作;每一行还能再点开看画面或原始数据。
+ * 收到的 Agent 消息是行首一个对话图标,阶段 / 本轮小结是行尾一个绿 ✓ / 黄 ! / 红 ! 的图标。
+ * 点图标**不在这里摊开任何清单**:所有详细内容都在气泡里那个操作详细预览控件里,点一下只让它跳到这一项。
  */
 export function ToolIcons(props: {
-  /** 这一段的操作,按先后顺序;报告工具混在里面也没关系,不出图标 */
+  /** 这一段的操作,按先后顺序;报告工具混在里面也没关系,不出操作图标 */
   tools: ToolCallInfo[];
   /** 上层已经算好的分组,省得再算一遍;不给就在这里算 */
   runs?: IconRun[];
   /**
    * 图标 key 的前缀,形如 `<消息id>:i<段号>`。必须以消息 id 开头:
-   * MessageList 的 memo 靠这个前缀认出展开状态属于哪条消息。
+   * 操作详细预览控件的页靠这个完整 key 认出自己属于哪个图标。
    */
   keyPrefix: string;
   installJobs: ReturnType<typeof useInstallJobs>;
-  expanded: Set<string>;
-  /** 轮播翻到的那一页属于哪个图标(完整 key):这个图标放大发光 */
+  /** 行首的额外图标(收到的 Agent 消息) */
+  lead?: ExtraIcon | null;
+  /** 行尾的额外图标(小结) */
+  tail?: ExtraIcon | null;
+  /** 用户点过 / 翻过之后,控件当前显示的那一项:强调色描边 + 略放大 */
+  selectedKey?: string | null;
+  /** 还没点过、消息在跑时,控件当前显示的那一项:只发光 */
   focusKey?: string | null;
-  /** 点图标。上层用 toggleChip 开合,保证整栏同一时间只展开一个 */
-  onToggleIcon: (key: string, run: IconRun) => void;
-  /** 点清单里的一行:开合它的画面 / 原始数据 */
-  onToggleTool: (key: string) => void;
+  /** 点图标:上层让控件跳到它那一项 */
+  onToggleIcon: (key: string) => void;
 }) {
-  const { tools, keyPrefix, installJobs, expanded, focusKey, onToggleIcon, onToggleTool } = props;
+  const { tools, keyPrefix, installJobs, lead, tail, selectedKey, focusKey, onToggleIcon } = props;
   const runs = props.runs ?? iconRuns(tools);
-  if (!runs.length) return null;
-  const openRun = runs.find((r) => expanded.has(`${keyPrefix}:${r.key}`));
+  if (!runs.length && !lead && !tail) return null;
+  const state = (key: string) => `${selectedKey === key ? " is-selected" : ""}${focusKey === key ? " is-focus" : ""}`;
+  const extra = (x: ExtraIcon) => (
+    <button
+      key={x.key}
+      type="button"
+      className={`ai-op ${x.className}${state(x.key)}`}
+      title={x.label}
+      aria-label={x.label}
+      data-pc-op={x.key}
+      onClick={() => onToggleIcon(x.key)}
+    >
+      {x.count && x.count > 1 ? <span className="ai-op-count" aria-hidden>×{x.count}</span> : null}
+    </button>
+  );
 
   return (
     <div className="ai-ops-wrap">
       <div className="ai-ops">
+        {lead ? extra(lead) : null}
         {runs.map((run) => {
           const key = `${keyPrefix}:${run.key}`;
           const first = tools[run.items[0]];
@@ -183,33 +215,22 @@ export function ToolIcons(props: {
           const n = run.items.length;
           const names = [...new Set(run.items.map((i) => bareToolName(tools[i].name)))].join("、");
           const label = run.state === "err" ? "失败" : KIND_LABEL[run.kind];
-          const open = expanded.has(key);
           return (
             <button
               key={key}
               type="button"
-              className={`ai-op ai-op--${run.kind} is-${run.state}${open ? " is-open" : ""}${focusKey === key ? " is-focus" : ""}`}
+              className={`ai-op ai-op--${run.kind} is-${run.state}${state(key)}`}
               title={`${label}${n > 1 ? ` ×${n}` : ""}：${names}`}
-              aria-expanded={open}
               aria-label={`${label} ${n} 次${run.state === "run" ? ",有进行中的" : ""}:${names}`}
-              onClick={() => onToggleIcon(key, run)}
+              data-pc-op={key}
+              onClick={() => onToggleIcon(key)}
             >
               {n > 1 ? <span className="ai-op-count" aria-hidden>×{n}</span> : null}
             </button>
           );
         })}
+        {tail ? extra(tail) : null}
       </div>
-      {/* 点开的那个图标把它装的操作一行一个摊在这一排下面 */}
-      {openRun ? (
-        <div className="ai-op-list">
-          {openRun.items.map((i) => {
-            const k = `${keyPrefix}:${openRun.key}:${i}`;
-            return (
-              <ToolDetail key={k} t={tools[i]} open={expanded.has(k)} meta installJobs={installJobs} onToggle={() => onToggleTool(k)} />
-            );
-          })}
-        </div>
-      ) : null}
     </div>
   );
 }

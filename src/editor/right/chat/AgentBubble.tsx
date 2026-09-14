@@ -1,14 +1,15 @@
-import React, { useLayoutEffect, useRef, useState } from "react";
+import React, { useCallback, useLayoutEffect, useRef, useState } from "react";
 import { playEnter } from "../../enterMotion";
 import type { ChatMessage, MessagePart, ToolCallInfo } from "../../../ai/types";
 import { RoleName } from "../RoleAvatar";
 import { LiveMarkdown } from "../../../ai/Markdown";
-import { ToolDetail, ToolIcons } from "./ToolIcons";
+import { ToolDetail, ToolIcons, type ExtraIcon } from "./ToolIcons";
 import { bareToolName, iconRuns, type IconRun } from "./iconRuns";
-import { ActivityCarousel, useActivityPages, type ActivitySource } from "./ActivityCarousel";
+import { OpDetailPreview, SUMMARY_TONE_TEXT, useDetailPages, type DetailItem, type SummaryTone } from "./OpDetailPreview";
+import type { InboundAgentMessage } from "../../../ai/types";
 import { thinkingSteps } from "../../../ai/thinkingSteps";
 import { isReportTool, parseProgressReport, type ProgressReport } from "../../../ai/progressReport";
-import { setShowThinking, type ViewMode } from "./viewPrefs";
+import type { ViewMode } from "./viewPrefs";
 import { useInstallJobs } from "../../../ai/sttInstallStore";
 import "./agent.css";
 
@@ -126,6 +127,21 @@ export function segmentsOf(parts: MessagePart[]): Segment[] {
   return out;
 }
 
+/**
+ * 一轮回复切好的段和每段的图标分组。消息对象不可变,按对象缓存:
+ * 合并了好几轮的气泡在流式时只有正在跑的那一轮对象会变,别的轮次不用每个片段都重新切一遍。
+ */
+const roundCache = new WeakMap<ChatMessage, { segments: Segment[]; runs: IconRun[][] }>();
+function roundCalc(m: ChatMessage): { segments: Segment[]; runs: IconRun[][] } {
+  let v = roundCache.get(m);
+  if (!v) {
+    const segments = segmentsOf(partsOf(m));
+    v = { segments, runs: segments.map((s) => iconRuns(s.tools)) };
+    roundCache.set(m, v);
+  }
+  return v;
+}
+
 const REPORT_GROUPS = [
   { field: "done", label: "已完成", mark: "✓", cls: "is-done" },
   { field: "todo", label: "待办", mark: "○", cls: "is-todo" },
@@ -176,15 +192,23 @@ export function ReportCard({ r, enter }: { r: ProgressReport; enter?: boolean })
  * 文字回复默认不显示了(结论看报告卡),但排查时还得看得到它说了什么、想了什么。
  * 按发生顺序铺:相邻的文字并成一段、相邻的思考并成一段,读起来是「想 → 说 → 再想」。
  * 能折起来:原文往往很长,看完就收,不用去顶栏把开关关掉。
+ * 合并了几轮的气泡按轮分节(sections):只在同一轮里并段,只有正在跑的那一轮按流式解析 ——
+ * 不然整组几百轮的原文并成一段,每 250ms 整个重新解析一遍。
  */
-function RawLog({ parts, live }: { parts: MessagePart[]; live: boolean }) {
+function RawLog({ sections }: { sections: { key: string; parts: MessagePart[]; live: boolean }[] }) {
   const [open, setOpen] = useState(true);
-  const items: { kind: "text" | "thinking"; text: string }[] = [];
-  for (const p of parts) {
-    if (p.kind !== "text" && p.kind !== "thinking") continue;
-    const last = items[items.length - 1];
-    if (last && last.kind === p.kind) last.text += p.kind === "thinking" ? "\n\n" + p.text : p.text;
-    else items.push({ kind: p.kind, text: p.text });
+  const items: { key: string; kind: "text" | "thinking"; text: string; live: boolean }[] = [];
+  for (const sec of sections) {
+    let local = 0;
+    let last: (typeof items)[number] | null = null;
+    for (const p of sec.parts) {
+      if (p.kind !== "text" && p.kind !== "thinking") continue;
+      if (last && last.kind === p.kind) last.text += p.kind === "thinking" ? "\n\n" + p.text : p.text;
+      else {
+        last = { key: `${sec.key}:${local++}`, kind: p.kind, text: p.text, live: sec.live };
+        items.push(last);
+      }
+    }
   }
   if (!items.some((it) => it.text.trim())) return null;
   return (
@@ -195,15 +219,15 @@ function RawLog({ parts, live }: { parts: MessagePart[]; live: boolean }) {
       </button>
       {open && (
         <div className="ai-rawlog-body">
-          {items.map((it, i) => {
+          {items.map((it) => {
             if (!it.text.trim()) return null;
             // 文字一律走 LiveMarkdown:流式时逐 token 全量解析 Markdown / KaTeX 会把界面卡死
             return it.kind === "text" ? (
-              <div key={i} className="ai-message-text">
-                <LiveMarkdown text={it.text} live={live} />
+              <div key={it.key} className="ai-message-text">
+                <LiveMarkdown text={it.text} live={it.live} />
               </div>
             ) : (
-              <div key={i} className="ai-rawlog-thinking">{it.text}</div>
+              <div key={it.key} className="ai-rawlog-thinking">{it.text}</div>
             );
           })}
         </div>
@@ -221,57 +245,135 @@ export function AgentBubble(props: {
   /** 旧的「×N 折叠 / 摊开」用的。图标改成每个最多叠 5 个之后不再读它,留着是为了 MessageList 不用改 */
   openRuns?: Set<string>;
   on: { toggleTool: (key: string) => void; toggleChip: (key: string) => void; toggleRun: (key: string) => void };
+  /** 这条回复之前收到的其他 Agent 的消息(MessageList 从那条不画出来的用户消息里拆出来的) */
+  inbound?: InboundAgentMessage[];
+  /**
+   * 合并进这个气泡的后续几轮回复(MessageList 算好的):上一轮没交本轮小结,下一轮的图标就接着累计在这个气泡里,
+   * 交了本轮小结才另起一个气泡。只在简洁模式合并;中间用户说的话照常在原位置显示。
+   */
+  followers?: ChatMessage[];
+  /** followers 各自之前收到的其他 Agent 消息,和 followers 一一对应 */
+  followerInbound?: (InboundAgentMessage[] | undefined)[];
 }) {
   const { m, view, showThinking, installJobs, expanded, on } = props;
-  const { toggleTool, toggleChip } = on;
+  const { toggleTool } = on;
 
-  // 「转圈 + 正在做什么」跟着 m.pending 走，不再要求它是最后一条。
+  const simple = view !== "verbose";
+  // 这个气泡装的几轮:自己 + 合并进来的后续几轮(只在简洁模式合并)
+  const rounds: { m: ChatMessage; inbound?: InboundAgentMessage[] }[] = [
+    { m, inbound: props.inbound },
+    ...(simple ? (props.followers ?? []).map((f, i) => ({ m: f, inbound: props.followerInbound?.[i] })) : []),
+  ];
+  const latest = rounds[rounds.length - 1].m;
+
+  // 「转圈 + 正在做什么」跟着 pending 走，不再要求它是最后一条。
   // 分工模式下同一批角色的气泡是同时 pending 的，按「最后一条」判的话
   // 只有最下面那个有动静，上面几个看着像卡死了。
   //
   // 单线模式下同时只可能有一条 pending，两种写法等价；abort() 会把所有
-  // pending 一起清掉，不会留下永远转圈的旧气泡。
+  // pending 一起清掉，不会留下永远转圈的旧气泡。合并了几轮的气泡看其中正在跑的那一轮。
   const parts = partsOf(m);
-  const busyTool = m.pending ? runningTool(parts) : null;
-  const live = !!m.pending;
-  const simple = view !== "verbose";
+  const pendingRound = rounds.find((r) => r.m.pending)?.m ?? null;
+  const busyTool = pendingRound ? runningTool(partsOf(pendingRound)) : null;
+  const live = !!pendingRound;
 
-  // 简洁模式:切段、分组,顺手收集轮播的来源(每个做完的操作 + 它所属图标的 key,和 ToolIcons 里拼法一致)
-  const segments = simple ? segmentsOf(parts) : [];
-  const segPrefix = (si: number) => `${m.id}:i${si}`;
-  const runsBySeg: IconRun[][] = [];
-  const sources: ActivitySource[] = [];
-  segments.forEach((s, si) => {
-    const runs = iconRuns(s.tools);
-    runsBySeg.push(runs);
-    for (const run of runs) {
-      for (const i of run.items) {
-        const t = s.tools[i];
-        if (t.ok !== undefined) sources.push({ runKey: `${segPrefix(si)}:${run.key}`, tool: t });
+  // 简洁模式:把几轮排成「排组」。每轮的段和图标分组按轮缓存(roundCalc),只有正在跑的那一轮重算。
+  //   - 上一轮正常收尾(没出错、没被停)、这一轮也没收到其他 Agent 的消息:这一轮的第一段续在上一排最后那段里
+  //     (那段没交小结的话),图标接着累计在同一排;
+  //   - 否则另起一排:收到消息的行首一个对话图标;出错 / 被停的那一轮,自己的报错和「已停止」留在它那一排后面。
+  // 每段一排图标,段尾是小结图标,小结的颜色看它自己那一轮。排完再按排的顺序出操作详细预览控件的项(key 和 ToolIcons 里拼法一致)
+  type RowSeg = { tools: ToolCallInfo[]; report: ProgressReport | null; runs: IconRun[]; tone: SummaryTone | null };
+  const rows: {
+    prefix: string;
+    inbound: InboundAgentMessage[] | null;
+    inboundIcon: ExtraIcon | null;
+    segs: RowSeg[];
+    notes: { key: string; error?: string; outcome: string | null }[];
+  }[] = [];
+  if (simple) {
+    let prevClean = false;
+    rounds.forEach((r, ri) => {
+      const calc = roundCalc(r.m);
+      const inbound = r.inbound?.length ? r.inbound : null;
+      const stitch = ri > 0 && prevClean && !inbound && rows.length > 0;
+      const row = stitch
+        ? rows[rows.length - 1]
+        : {
+            prefix: r.m.id,
+            inbound,
+            inboundIcon: inbound
+              ? { key: `${r.m.id}:in`, className: "ai-op--agent", label: `收到 ${inbound.length} 条其他 Agent 的消息`, count: inbound.length }
+              : null,
+            segs: [] as RowSeg[],
+            notes: [] as { key: string; error?: string; outcome: string | null }[],
+          };
+      if (!stitch) rows.push(row);
+      calc.segments.forEach((s, si) => {
+        // 小结的颜色:它自己那一轮出错收尾(那一轮最后一段的小结)是红,报了问题是黄,否则绿
+        const tone: SummaryTone | null = s.report
+          ? si === calc.segments.length - 1 && (r.m.error || r.m.outcome === "error")
+            ? "err"
+            : s.report.problems.length
+              ? "warn"
+              : "ok"
+          : null;
+        const last = row.segs[row.segs.length - 1];
+        if (si === 0 && stitch && last && !last.report) {
+          const tools = last.tools.concat(s.tools);
+          row.segs[row.segs.length - 1] = { tools, report: s.report, runs: iconRuns(tools), tone };
+        } else {
+          row.segs.push({ tools: s.tools, report: s.report, runs: calc.runs[si], tone });
+        }
+      });
+      // 前几轮自己的报错 / 结局留在它那一排后面;最后一轮的照旧放在气泡最下面
+      const out = r.m.pending ? null : outcomeText(r.m);
+      if (ri < rounds.length - 1 && (r.m.error || out)) row.notes.push({ key: r.m.id, error: r.m.error, outcome: out });
+      prevClean = !r.m.error && (!r.m.outcome || r.m.outcome === "completed");
+    });
+  }
+  const items: DetailItem[] = [];
+  for (const row of rows) {
+    if (row.inbound) items.push({ type: "inbound", key: `${row.prefix}:in`, messages: row.inbound });
+    row.segs.forEach((seg, si) => {
+      for (const run of seg.runs) {
+        const tools = run.items.map((i) => seg.tools[i]);
+        // 装引擎在图标行里有自己的进度条,不进操作详细预览
+        if (bareToolName(tools[0].name) === "stt_install") continue;
+        items.push({ type: "run", key: `${row.prefix}:i${si}:${run.key}`, tools });
       }
-    }
-  });
-  const pages = useActivityPages(sources);
+      if (seg.report && seg.tone) items.push({ type: "report", key: `${row.prefix}:i${si}:report`, report: seg.report, tone: seg.tone });
+    });
+  }
+  const pages = useDetailPages(items);
 
-  /** 轮播翻到的那一页属于哪个图标 */
+  /** 操作详细预览控件此刻显示的那一项 */
   const [focusKey, setFocusKey] = useState<string | null>(null);
-  /** 点图标让轮播跳页:seq 每点一次加一,同一个图标连点也能跳回它的第一页 */
+  /** 用户在这个气泡里点过图标 / 翻过页:之后当前项的图标强调色描边 + 略放大;没点过、消息在跑时只发光 */
+  const [interacted, setInteracted] = useState(false);
+  /** 点图标让控件跳页:seq 每点一次加一,同一个图标连点也能跳回它的第一页 */
   const [jump, setJump] = useState<{ key: string; seq: number } | null>(null);
 
+  // 点图标不在图标下面摊开任何清单(所有详细内容都在操作详细预览控件里):只让控件跳到它那一项
   const onToggleIcon = (key: string) => {
-    toggleChip(key);
-    if (pages.some((p) => p.runKey === key)) {
-      setFocusKey(key);
-      setJump((j) => ({ key, seq: (j?.seq ?? 0) + 1 }));
-    }
+    setInteracted(true);
+    setFocusKey(key);
+    setJump((j) => ({ key, seq: (j?.seq ?? 0) + 1 }));
+  };
+  const onPage = useCallback((key: string, byUser: boolean) => {
+    setFocusKey(key);
+    if (byUser) setInteracted(true);
+  }, []);
+  const selectedKey = interacted ? focusKey : null;
+  const glowKey = !interacted && live ? focusKey : null;
+  const reportIcon = (prefix: string, seg: { report: ProgressReport | null; tone: SummaryTone | null }, si: number): ExtraIcon | null => {
+    const { report, tone } = seg;
+    if (!report || !tone) return null;
+    const title = report.final ? "本轮小结" : report.stage ? `阶段 · ${report.stage}` : "阶段小结";
+    return { key: `${prefix}:i${si}:report`, className: `ai-op--summary tone-${tone}`, label: `${title}:${SUMMARY_TONE_TEXT[tone]}` };
   };
 
-  const hasFinal = parts.some(
-    (p) => p.kind === "tool" && isReportTool(p.name) && parseProgressReport(p.input)?.final === true,
-  );
-  // 正常跑完却没交本轮小结:文字回复又默认不显示,用户会以为它什么都没说。给一句话 + 去看原文的入口
-  const noSummary = !live && !m.error && m.outcome !== "aborted" && m.outcome !== "error" && !hasFinal;
-  const outcome = live ? null : outcomeText(m);
+  // 出错 / 结局看最后一轮
+  const outcome = live ? null : outcomeText(latest);
 
   return (
     <div className="ai-message assistant">
@@ -286,31 +388,47 @@ export function AgentBubble(props: {
       )}
 
       {simple ? (
-        // 简洁模式:按先后切段,每段是「做了几件事(一排图标)→ 交一份报告(卡片)」。
-        // 文字回复不在这里铺 —— 结论看报告卡,原文收进底部的「思考与原文」
-        segments.map((s, si) => {
-          const last = si === segments.length - 1;
-          return (
-            <React.Fragment key={si}>
-              {s.tools.length > 0 && (
+        // 简洁模式:按先后切段,每段一排图标(收到的 Agent 消息在最前,小结在段尾)。
+        // 文字回复不在这里铺;所有详细内容(画面、操作、小结、收到的消息)都在最下面那个操作详细预览控件里,一个气泡只放一个
+        <>
+          {rows.map((row) => (
+            <React.Fragment key={row.prefix}>
+              {row.segs.length === 0 && row.inboundIcon ? (
                 <ToolIcons
-                  tools={s.tools}
-                  runs={runsBySeg[si]}
-                  keyPrefix={segPrefix(si)}
+                  tools={[]}
+                  runs={[]}
+                  keyPrefix={`${row.prefix}:i0`}
                   installJobs={installJobs}
-                  expanded={expanded}
-                  focusKey={focusKey}
+                  lead={row.inboundIcon}
+                  selectedKey={selectedKey}
+                  focusKey={glowKey}
                   onToggleIcon={onToggleIcon}
-                  onToggleTool={toggleTool}
                 />
-              )}
-              {/* 轮播每条消息只放一个:最后一段的图标之后、本轮小结之前 ——
-                  读下来是「做了什么 → 改成什么样 → 结论」 */}
-              {last && <ActivityCarousel pages={pages} jump={jump} onFocus={setFocusKey} live={live} />}
-              {s.report && <ReportCard r={s.report} enter={live} />}
+              ) : null}
+              {row.segs.map((seg, si) => (
+                <ToolIcons
+                  key={si}
+                  tools={seg.tools}
+                  runs={seg.runs}
+                  keyPrefix={`${row.prefix}:i${si}`}
+                  installJobs={installJobs}
+                  lead={si === 0 ? row.inboundIcon : null}
+                  tail={reportIcon(row.prefix, seg, si)}
+                  selectedKey={selectedKey}
+                  focusKey={glowKey}
+                  onToggleIcon={onToggleIcon}
+                />
+              ))}
+              {row.notes.map((note) => (
+                <React.Fragment key={note.key}>
+                  {note.error ? <div className="ai-message-error">{note.error}</div> : null}
+                  {note.outcome ? <div className="ai-message-outcome">{note.outcome}</div> : null}
+                </React.Fragment>
+              ))}
             </React.Fragment>
-          );
-        })
+          ))}
+          <OpDetailPreview pages={pages} items={items} jump={jump} onPage={onPage} live={live} />
+        </>
       ) : (
         // 详细模式:按真实发生顺序渲染,工具行、状态、步骤交错;报告工具那一行换成报告卡。
         // 文字和思考原文和简洁模式一样,只在「显示思考」打开时出现
@@ -360,35 +478,25 @@ export function AgentBubble(props: {
       )}
 
       {/* 「正在做什么」和下面那行轮次小字包成一块:气泡里各块之间只靠 gap 隔开,这两行要贴得比 gap 近 */}
-      {m.pending && (
+      {pendingRound && (
         <div className="ai-activity-block">
           <div className="ai-activity" role="status" aria-live="polite">
             <span className="ai-spinner" aria-hidden />
-            <span className="ai-activity-text">{activityText(m, busyTool)}</span>
+            <span className="ai-activity-text">{activityText(pendingRound, busyTool)}</span>
             <span className="ai-activity-dots" aria-hidden>
               <i />
               <i />
               <i />
             </span>
           </div>
-          {progressMeta(m) && <div className="ai-activity-meta">{progressMeta(m)}</div>}
+          {progressMeta(pendingRound) && <div className="ai-activity-meta">{progressMeta(pendingRound)}</div>}
         </div>
       )}
 
-      {m.error && <div className="ai-message-error">{m.error}</div>}
+      {latest.error && <div className="ai-message-error">{latest.error}</div>}
       {outcome && <div className="ai-message-outcome">{outcome}</div>}
-      {noSummary && (
-        <div className="ai-nosummary">
-          这一轮没有提交小结
-          {!showThinking && (
-            <button type="button" className="ai-link-btn" onClick={() => setShowThinking(true)}>
-              显示思考
-            </button>
-          )}
-        </div>
-      )}
 
-      {simple && showThinking && <RawLog parts={parts} live={live} />}
+      {simple && showThinking && <RawLog sections={rounds.map((r) => ({ key: r.m.id, parts: partsOf(r.m), live: !!r.m.pending }))} />}
     </div>
   );
 }

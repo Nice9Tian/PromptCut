@@ -28,7 +28,7 @@ export interface VisualRecord {
 /**
  * 记录的模块级缓存:同一个 id 只取一次。
  *
- * 气泡里的轮播(chat/ActivityCarousel.tsx)要把一条消息看过的画面一起列出来,点开操作清单时
+ * 气泡里的操作详细预览控件(chat/OpDetailPreview.tsx)要把一条消息看过的画面一起列出来,点开操作清单时
  * ToolVisual 又要显示同一份记录;各取各的话,一条消息几十次操作就是几十个重复请求。
  * 存的是 Promise,同一时刻好几处要同一个 id 也只发一次请求。
  * 取失败的不留在缓存里 —— 和原来每次挂载都重新取一样,下次打开还能再试。
@@ -138,7 +138,8 @@ export function ToolVisual({ id }: { id: string }): JSX.Element {
  * 动图第一次打开时服务端才去渲(8 帧 + 编码),要等几秒到几十秒 —— 转圈,失败了能重试。
  * 轮播也用它;挂载即开始加载,所以别在还没翻到的页里挂它。
  */
-export function Gif({ src, label }: { src: string; label: string }): JSX.Element {
+/** onSettled:动图出来或确定失败时调(操作详细预览控件靠它判断这一页渲染好没有,好了才让翻过去) */
+export function Gif({ src, label, onSettled }: { src: string; label: string; onSettled?: () => void }): JSX.Element {
   const [state, setState] = useState<"loading" | "ok" | "err">("loading");
   const [attempt, setAttempt] = useState(0);
   return (
@@ -153,8 +154,8 @@ export function Gif({ src, label }: { src: string; label: string }): JSX.Element
               key={attempt}
               src={attempt ? `${src}?retry=${attempt}` : src}
               alt={label}
-              onLoad={() => setState("ok")}
-              onError={() => setState("err")}
+              onLoad={() => { setState("ok"); onSettled?.(); }}
+              onError={() => { setState("err"); onSettled?.(); }}
             />
           </>
         )}

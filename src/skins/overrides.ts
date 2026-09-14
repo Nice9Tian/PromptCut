@@ -1,4 +1,5 @@
 import type { SkinMode } from "./skins";
+import { agentColorFor } from "./agentColor";
 
 /**
  * 自定义配色:压在预设皮肤之上的一层覆盖。
@@ -91,6 +92,8 @@ function derive(key: string, value: string, mode: SkinMode): SkinOverrides {
     "ui-accent-soft": mix(dark ? "#000000" : "#ffffff", dark ? 24 : 14),
     "ui-info": value,
     "ui-glow": `0 0 10px ${mix("transparent", 45)}`,
+    // Agent 头像色跟着新强调色重算(同明度同纯度的黄,强调色本身黄橙时换紫);取色器给的一定是 #rrggbb
+    "ui-agent": agentColorFor(value),
   };
 }
 

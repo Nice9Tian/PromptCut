@@ -1,3 +1,4 @@
+import { agentColorFor } from "./agentColor";
 import { palettes, semantic, type Palette, type PaletteSide } from "./palettes";
 
 /**
@@ -104,6 +105,8 @@ function sideToVars(side: PaletteSide, mode: SkinMode): Record<string, string> {
     "ui-warn": sem.warn,
     "ui-success": sem.success,
     "ui-info": side.accent,
+    // Agent 专属色:和强调色同明度、同纯度的黄(agentColor.ts),rail 上 Agent 头像用
+    "ui-agent": agentColorFor(side.accent),
     "ui-track-video": side.tracks.video,
     "ui-track-audio": side.tracks.audio,
     "ui-track-image": side.tracks.image,
@@ -148,7 +151,9 @@ function paletteSkins(p: Palette): Skin[] {
 function extra(id: string, name: string, description: string, vars: Record<string, string>): Skin {
   const steelPalette = palettes.find((p) => p.id === "steel") ?? palettes[0];
   const base = sideToVars(steelPalette.dark, "dark");
-  return { id, name, group: "更多", mode: "dark", description, vars: { ...base, ...vars } };
+  // Agent 色跟着这套皮肤自己的强调色重算,不能沿用钢蓝的
+  const agent = vars["ui-agent"] ?? agentColorFor(vars["ui-accent"] ?? base["ui-accent"]);
+  return { id, name, group: "更多", mode: "dark", description, vars: { ...base, ...vars, "ui-agent": agent } };
 }
 
 export const skins: Skin[] = [

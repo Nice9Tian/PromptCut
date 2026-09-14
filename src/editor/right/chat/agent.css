@@ -211,7 +211,7 @@
 
 /* ── 简洁模式:一排图标代表刚做过的几件事 ──────────────
    相邻的同类操作叠进一个图标(最多 5 个,见 iconRuns.ts),颜色区分动作类型,新的会弹出来 ——
-   用户看得见条目在变多,不会以为卡住了。点一下在这一排下面摊开它装的操作清单。
+   用户看得见条目在变多,不会以为卡住了。点一下让气泡里的操作详细预览控件跳到它那一项(不在这里摊开清单)。
    图标边长用 small_cube(--pc-cube-s),和素材库的方块同一个尺度。 */
 .ai-ops-wrap {
   display: flex;
@@ -254,19 +254,38 @@
   outline: 2px solid var(--ui-accent, #00DBDB);
   outline-offset: 2px;
 }
-/* 展开中的那个留一圈内描边,好知道下面的清单是谁的 */
-.ai-op.is-open {
-  box-shadow: inset 0 0 0 2px rgb(255 255 255 / 0.6);
-}
-/* 轮播翻到的那一页属于这个图标:放大 + 强调色发光 */
+/*
+ * 操作详细预览控件当前显示的那一项:
+ *   用户在这个气泡里点过图标 / 翻过页 → is-selected:强调色描边 + 略放大;
+ *   还没点过、消息在跑(自动跟踪最新)→ is-focus:只发光。
+ */
 .ai-op.is-focus {
-  transform: scale(1.12);
-  box-shadow: 0 0 0 2px var(--ui-accent, #00DBDB), 0 0 16px var(--ui-accent-soft, rgba(0, 219, 219, 0.35));
+  box-shadow: 0 0 16px var(--ui-accent-soft, rgba(0, 219, 219, 0.35));
 }
-.ai-op.is-focus.is-open {
-  box-shadow: inset 0 0 0 2px rgb(255 255 255 / 0.6), 0 0 0 2px var(--ui-accent, #00DBDB),
-    0 0 16px var(--ui-accent-soft, rgba(0, 219, 219, 0.35));
+.ai-op.is-selected {
+  transform: scale(1.06);
+  box-shadow: 0 0 0 2px var(--ui-accent, #00DBDB), 0 0 12px var(--ui-accent-soft, rgba(0, 219, 219, 0.35));
 }
+/*
+ * 小结图标:外面一张折了角的文档,里面画 ✓ 或 !。和操作失败的「红底一个大 !」分得开 ——
+ * 绿底文档 ✓ = 没问题,黄底文档 ! = 报了问题,红底文档 ! = 这一轮出错收尾
+ */
+.ai-op--summary.tone-ok { --chip: var(--ui-success, #4f9e5c); --chip-icon: url("data:image/svg+xml,%3Csvg%20xmlns%3D'http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg'%20viewBox%3D'0%200%2014%2014'%20fill%3D'none'%20stroke%3D'%23fff'%20stroke-linecap%3D'round'%20stroke-linejoin%3D'round'%3E%3Cpath%20stroke-width%3D'1.4'%20d%3D'M2.1%201h6.7l3.1%203.1V13H2.1z'%2F%3E%3Cpath%20stroke-width%3D'1.4'%20d%3D'M8.8%201v3.1h3.1'%2F%3E%3Cpath%20stroke-width%3D'1.5'%20d%3D'M4.7%208.4l1.6%201.6%203.1-3.4'%2F%3E%3C%2Fsvg%3E"); }
+.ai-op--summary.tone-warn,
+.ai-op--summary.tone-err { --chip-icon: url("data:image/svg+xml,%3Csvg%20xmlns%3D'http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg'%20viewBox%3D'0%200%2014%2014'%20fill%3D'none'%20stroke%3D'%23fff'%20stroke-linecap%3D'round'%20stroke-linejoin%3D'round'%3E%3Cpath%20stroke-width%3D'1.4'%20d%3D'M2.1%201h6.7l3.1%203.1V13H2.1z'%2F%3E%3Cpath%20stroke-width%3D'1.4'%20d%3D'M8.8%201v3.1h3.1'%2F%3E%3Cpath%20stroke-width%3D'1.5'%20d%3D'M7%205.6v3.1'%2F%3E%3Ccircle%20cx%3D'7'%20cy%3D'10.6'%20r%3D'.8'%20fill%3D'%23fff'%20stroke%3D'none'%2F%3E%3C%2Fsvg%3E"); }
+/*
+ * 文档字形画在 14 格里(别的图标是 12 格),上下才放得下;背景取 32px —— 偶数,(64 − 32) / 2 落在整像素上,
+ * 不会被浏览器把位置吸附到半像素而偏到一边。比例尺比别的图标略小一点(32/14 对 28/12),
+ * 所以文档画宽一点(2.1 ~ 11.8+ 描边,关于中线对称),量出来和「查看」的眼睛一样宽
+ */
+.ai-op--summary {
+  background-size: 32px 32px;
+}
+.ai-op.ai-op--summary.ai-opcard-chip {
+  background-size: 14px 14px;
+}
+.ai-op--summary.tone-warn { --chip: var(--ui-warn, #e0a13a); }
+.ai-op--summary.tone-err { --chip: var(--ui-danger, #e2564d); }
 /* 叠了 2 个以上:右下角一个 ×n */
 .ai-op-count {
   position: absolute;
@@ -288,17 +307,6 @@
 /* 装引擎的进度条占整行,不挤在图标中间 */
 .ai-ops-install {
   flex: 1 1 100%;
-  min-width: 0;
-}
-/* 点开的图标:它装的几次操作一行一个,每行还能再点开看画面或原始数据 */
-.ai-op-list {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 8px;
-  border-radius: var(--ui-radius, 6px);
-  background: var(--ui-panel, rgb(255 255 255 / 0.03));
-  border: 1px solid var(--ui-border, var(--hairline));
   min-width: 0;
 }
 
@@ -364,7 +372,7 @@
     transition: none;
   }
   .ai-op:hover,
-  .ai-op.is-focus {
+  .ai-op.is-selected {
     transform: none;
   }
 }
@@ -551,34 +559,6 @@
   color: var(--ui-fg-faint, var(--ink-faint));
 }
 
-/* 跑完了却没交小结:一行弱文字 + 打开「显示思考」的小链接,让人能去原文里找结论 */
-.ai-nosummary {
-  display: flex;
-  align-items: baseline;
-  flex-wrap: wrap;
-  gap: 6px;
-  font-size: 11px;
-  color: var(--ui-fg-faint, var(--ink-faint));
-}
-.ai-link-btn {
-  padding: 0;
-  border: 0;
-  background: none;
-  font: inherit;
-  color: var(--ui-accent, var(--accent));
-  cursor: pointer;
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
-.ai-link-btn:hover {
-  color: var(--ui-accent-hover, var(--ui-accent, var(--accent)));
-}
-.ai-link-btn:focus-visible {
-  outline: 2px solid var(--ui-accent, var(--accent));
-  outline-offset: 2px;
-  border-radius: 2px;
-}
-
 /*
  * 「思考与原文」。文字回复和思考原文默认都不显示,打开「显示思考」才在气泡底部出现这一块:
  * 左边一道 2px 竖线、底色退一档,一眼看出这是过程材料,不是交给用户的结论。
@@ -625,25 +605,27 @@
 }
 
 /*
- * 看图 / 操作轮播(ActivityCarousel.tsx)。一条消息只放一个,把它看过的画面和做过的修改一页页排开。
- * 画框 16:9、最高 180px:聊天栏只有三百来像素宽,再高就把报告卡顶出一屏了。
+ * 操作详细预览控件(OpDetailPreview.tsx)。一个气泡只放一个,画面、操作卡、小结、收到的消息都一页页排在这里。
+ * 画框固定 180px 高:聊天栏只有三百来像素宽,再高就把下一条消息顶出一屏;文字页在框里滚。
  * 翻页靠 translateX 平移整条轨道;拖动时关掉过渡,画面跟手。
  */
-/* 助手气泡的宽度跟着内容走:画框自己没有内容宽度,只写 100% 的话气泡只有一个图标那么宽,
-   轮播跟着缩成一条。给个首选宽度把气泡撑开,再用 max-width 夹回气泡里 */
+/* 助手气泡的宽度本来跟着内容走,画框自己没有内容宽度,气泡会缩成一个图标那么宽。
+   所以带轮播的气泡直接占满它能占的宽度(和 .ai-message 的 max-width 一致),轮播铺满气泡;
+   画框高度封顶 180px,图片按原尺寸显示(只缩不放),在画框里居中 */
+.ai-message.assistant:has(.ai-carousel) {
+  width: 85%;
+}
 .ai-carousel {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  width: 320px;
-  max-width: 100%;
+  width: 100%;
   min-width: 0;
 }
 .ai-carousel-frame {
   position: relative;
   width: 100%;
-  aspect-ratio: 16 / 9;
-  max-height: 180px;
+  height: 180px;
   border-radius: var(--ui-radius-lg, 8px);
   background: var(--ui-bg, #0d0d10);
   overflow: hidden;
@@ -669,6 +651,7 @@
   transition: none;
 }
 .ai-carousel-page {
+  position: relative;
   flex: 0 0 100%;
   height: 100%;
   min-width: 0;
@@ -682,10 +665,23 @@
   -webkit-user-drag: none;
 }
 .ai-carousel-img {
-  width: 100%;
-  height: 100%;
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: 100%;
   object-fit: contain;
   display: block;
+  pointer-events: none;
+}
+/* 当前页还没渲染好:盖一层提示,不露出半截图 */
+.ai-carousel-wait {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  color: var(--ui-fg-faint, var(--ink-faint));
+  background: var(--ui-bg, #0d0d10);
   pointer-events: none;
 }
 .ai-carousel-note {
@@ -740,8 +736,11 @@
   flex: 1 1 auto;
   min-height: 0;
   align-items: stretch;
+  /* 气泡变宽时动图不跟着拉宽,成对居中 */
+  justify-content: center;
 }
-.ai-carousel-change .ai-visual-gif {
+.ai-carousel-change .ai-visual-gifs .ai-visual-gif {
+  flex: 0 1 240px;
   min-height: 0;
 }
 .ai-carousel-change .ai-visual-gif .box {
@@ -765,13 +764,243 @@
   padding: 10px;
   overflow-y: auto;
 }
-.ai-carousel-caption {
+/* 文字页(操作卡、小结、收到的消息)和画面页的「详情」:卡片一张张竖排,在画框里滚;文字能选中复制 */
+.ai-carousel-page.is-ops,
+.ai-carousel-page.is-summary,
+.ai-carousel-page.is-inbound {
+  align-items: stretch;
+  justify-content: stretch;
+}
+.ai-odp-text {
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  padding: 8px;
+  overflow-y: auto;
   display: flex;
-  align-items: baseline;
+  flex-direction: column;
+  gap: 6px;
+  cursor: auto;
+  user-select: text;
+}
+/* 一次操作 / 一条收到的消息一张卡:头一行类别小方块 + 类别 + 名字 + 耗时,下面是内容 */
+.ai-opcard {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  padding: 8px;
+  border-radius: var(--ui-radius, 6px);
+  background: var(--ui-panel, #23222a);
+}
+.ai-opcard.is-err {
+  box-shadow: inset 2px 0 0 var(--ui-danger, #e2564d);
+}
+.ai-opcard-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 12px;
+}
+/* 行首小方块复用操作图标的底色和字形(ai-op--*、tone-*),缩成 20px,不吃鼠标、不弹不放大 */
+.ai-op.ai-opcard-chip {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  background-size: 12px 12px;
+  animation: none;
+  transform: none;
+  box-shadow: none;
+  cursor: default;
+  pointer-events: none;
+}
+.ai-opcard-kind {
+  flex: none;
+  font-weight: 600;
+  color: var(--ui-fg, #f2f1f6);
+}
+.ai-opcard-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--ui-font-mono, monospace);
+  font-size: 11px;
+  color: var(--ui-fg-muted, #a6a4b2);
+}
+.ai-opcard-name.is-plain {
+  font-family: inherit;
+}
+.ai-opcard-dur {
+  flex: none;
+  margin-left: auto;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ui-fg-faint, #6b6a75);
+}
+.ai-opcard-params {
+  font-size: 11px;
+  color: var(--ui-fg-faint, #6b6a75);
+  overflow-wrap: anywhere;
+}
+.ai-opcard-text {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--ui-fg, #f2f1f6);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.ai-opcard-text.is-faint {
+  color: var(--ui-fg-faint, #6b6a75);
+}
+.ai-opcard-to {
+  font-size: 11px;
+  color: var(--ui-fg-muted, #a6a4b2);
+}
+.ai-opcard-msg + .ai-opcard-msg {
+  margin-top: 4px;
+}
+.ai-opcard-error {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--ui-danger, #e2564d);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.ai-opcard-fields {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+}
+.ai-opcard-fields .row {
+  display: grid;
+  grid-template-columns: minmax(56px, max-content) minmax(0, 1fr);
   gap: 8px;
+}
+.ai-opcard-fields dt {
+  font-family: var(--ui-font-mono, monospace);
+  font-size: 11px;
+  color: var(--ui-fg-muted, #a6a4b2);
+}
+.ai-opcard-fields dd {
+  margin: 0;
+  color: var(--ui-fg, #f2f1f6);
+  overflow-wrap: anywhere;
+}
+.ai-opcard-list {
+  margin: 2px 0 0;
+  padding-left: 16px;
+  font-size: 12px;
+  color: var(--ui-fg, #f2f1f6);
+  overflow-wrap: anywhere;
+}
+.ai-opcard-list li.more {
+  list-style: none;
+  color: var(--ui-fg-faint, #6b6a75);
+}
+/* 画面页上叠的两层:上方这次操作的头一行(字加阴影,压在亮画面上也看得清),下方结果里的 note(半透明加深底)。都不吃鼠标 */
+.ai-odp-over-head {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  padding: 8px 10px;
+  pointer-events: none;
+}
+.ai-odp-over-head .ai-opcard-kind,
+.ai-odp-over-head .ai-opcard-name,
+.ai-odp-over-head .ai-opcard-dur {
+  color: #fff;
+  text-shadow: 0 1px 3px rgb(0 0 0 / 0.8);
+}
+.ai-odp-over-head .ai-opcard-name,
+.ai-odp-over-head .ai-opcard-dur {
+  color: rgb(255 255 255 / 0.85);
+}
+.ai-odp-over-note {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 6px 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #fff;
+  background: rgb(0 0 0 / 0.55);
+  overflow-wrap: anywhere;
+  pointer-events: none;
+  /* 太长就截成两行 */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+/* 修改页 / 差异页自己有标签和文字:给上下两层让出位置 */
+.ai-carousel-page:has(> .ai-odp-over-head) > .ai-carousel-change,
+.ai-carousel-page:has(> .ai-odp-over-head) > .ai-carousel-diff {
+  padding-top: 36px;
+}
+.ai-carousel-page:has(> .ai-odp-over-note) > .ai-carousel-change,
+.ai-carousel-page:has(> .ai-odp-over-note) > .ai-carousel-diff {
+  padding-bottom: 32px;
+}
+/* 顶部一行:这一页是什么 +「详情」+ 不在跟踪最新时的「点击跟踪最新」 */
+.ai-odp-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 22px;
+  min-width: 0;
   font-size: 11px;
   color: var(--ui-fg-muted, var(--ink-muted));
-  min-width: 0;
+}
+/* 「点击跟踪最新」:图标 + 文字,平时没有底色,鼠标移上去才出底色 */
+.ai-odp-follow {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: var(--ui-radius-sm, 4px);
+  background: transparent;
+  font: inherit;
+  font-size: 11px;
+  color: var(--ui-accent, #00DBDB);
+  cursor: pointer;
+  transition: background-color 120ms ease;
+}
+.ai-odp-follow svg {
+  width: 12px;
+  height: 12px;
+}
+.ai-odp-follow:hover {
+  background: var(--ui-accent-soft, rgba(0, 219, 219, 0.2));
+}
+.ai-odp-follow:focus-visible {
+  outline: 2px solid var(--ui-accent, #00DBDB);
+  outline-offset: 1px;
+}
+/* 底部一行:圆点居中,页数靠右 */
+.ai-odp-foot {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 12px;
+}
+.ai-odp-foot .ai-carousel-count {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 11px;
 }
 .ai-carousel-label {
   flex: 1 1 auto;
@@ -802,7 +1031,7 @@
   background-clip: content-box;
   opacity: 0.55;
   cursor: pointer;
-  transition: width 160ms ease, opacity 160ms ease, background-color 160ms ease;
+  transition: width 160ms ease, opacity 160ms ease, background-color 160ms ease, transform 160ms ease;
 }
 .ai-carousel-dot:hover {
   opacity: 0.9;
@@ -816,11 +1045,29 @@
   outline: 2px solid var(--ui-accent, #00DBDB);
   outline-offset: -1px;
 }
+/* 圆点只显示当前页附近几个(OpDetailPreview 的 MAX_DOTS):窗口外还有页时最外侧的点缩小 */
+.ai-carousel-dot.is-edge {
+  transform: scale(0.6);
+}
+/* 还没渲染好的页:点更淡;点过它(等它好了自动切)就一闪一闪 */
+.ai-carousel-dot.is-pending {
+  opacity: 0.25;
+  cursor: progress;
+}
+.ai-carousel-dot.is-wanted {
+  animation: ai-carousel-wanted 1s ease-in-out infinite;
+}
+@keyframes ai-carousel-wanted {
+  50% { opacity: 0.8; }
+}
 @media (prefers-reduced-motion: reduce) {
   .ai-carousel-track,
   .ai-carousel-dot,
   .ai-carousel-arrow {
     transition: none;
+  }
+  .ai-carousel-dot.is-wanted {
+    animation: none;
   }
 }
 

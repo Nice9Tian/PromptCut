@@ -7,11 +7,20 @@ import { useLayoutMode } from "../layoutMode";
 import { RailIconAnimations, RailIconCaptions, RailIconEdit, RailIconEffects, RailIconLibrary } from "../left/railIcons";
 import { IconScript, glyphOf, shortLabel, tabTooltip } from "../right/chat/RightRail";
 import { useRailCollapsed } from "../sideRails";
+import { useAgentAttentionMap } from "./agentAttention";
 import { beginRailPointer } from "./railDrag";
 import { agentIdOf, effectiveActive, isSectionItem, plusAnchor, visibleItems, type ItemId, type SectionId, type Side } from "./railLayout";
 import { addAgentOnSide, clickRailItem, useRailLayout } from "./railStore";
 import "../right/chat/chat.css";
 import "./dock.css";
+
+/** Agent 项悬停说明末尾补一行状态 */
+const AGENT_STATE_TIP: Record<"busy" | "done" | "interrupted" | "idle", string> = {
+  busy: "正在运行",
+  done: "已完成,等你查看",
+  interrupted: "已中断,等你查看",
+  idle: "",
+};
 
 const SECTION_META: Record<SectionId, { label: string; Icon: ComponentType }> = {
   library: { label: "素材库", Icon: RailIconLibrary },
@@ -39,6 +48,7 @@ export function RailBar({ side }: { side: Side }) {
   const collapsed = useRailCollapsed(side);
   const { tabs } = useAgentTabs();
   const script = useScript();
+  const attention = useAgentAttentionMap();
 
   const items = visibleItems(layout[side], mode);
   const active = effectiveActive(layout, side, mode);
@@ -97,6 +107,9 @@ export function RailBar({ side }: { side: Side }) {
     const t = tabs[index];
     if (!t) return null;
     const closable = tabs.length > 1 && t.id !== MAIN_TAB;
+    // 跑的时候头像背景流光;跑完 / 中断且用户还没看这一页时一个小点(蓝 / 黄),见 agentAttention.tsx
+    const state = t.busy ? "busy" : attention.get(t.id) ?? "idle";
+    const stateTip = AGENT_STATE_TIP[state];
     return (
       <div key={id} className="pc-dock-slot pc-rr-tab" data-pc-dock-item={id}>
         <button
@@ -105,12 +118,13 @@ export function RailBar({ side }: { side: Side }) {
           aria-expanded={expanded}
           className={`pc-rail-item pc-rr-agent${on ? " is-on" : ""}${t.busy ? " is-busy" : ""}`}
           data-pc-agent-tab={t.id}
-          title={tabTooltip(t)}
+          data-pc-agent-state={state}
+          title={stateTip ? `${tabTooltip(t)}\n${stateTip}` : tabTooltip(t)}
           {...handlers}
         >
           <span className="pc-rr-glyph" aria-hidden="true">{glyphOf(t, index)}</span>
           <span className="pc-rr-label">{shortLabel(t.title)}</span>
-          {t.busy && <i className="pc-rr-busy" aria-hidden="true" />}
+          {(state === "done" || state === "interrupted") && <i className={`pc-rr-state is-${state}`} aria-hidden="true" />}
           {t.unread > 0 && (
             <b className="pc-rr-badge" title={`${t.unread} 条其他 Agent 的消息待处理`}>{t.unread}</b>
           )}

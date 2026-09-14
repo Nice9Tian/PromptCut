@@ -547,7 +547,8 @@ export function useAiChat(opts?: { mock?: boolean; tabId?: string; getConversati
   // 类型对不上才炸出来,不然就是运行时读到 undefined。
   //
   // 返回这一轮是否正常落定(没被停掉、没被新的发送顶掉);一键配特效据此决定还跑不跑下一个角色。
-  const send = async (text: string, attachments?: ChatAttachment[], sendOpts?: { auto?: boolean }): Promise<boolean> => {
+  // sendOpts.inbound:这条其实是其他 Agent 发来的消息(AiPanel 自动投递),原样挂到用户消息上给界面认
+  const send = async (text: string, attachments?: ChatAttachment[], sendOpts?: { auto?: boolean; inbound?: ChatMessage["inbound"] }): Promise<boolean> => {
     if (!provider) return false;
     // 用户自己发的才重置额度;自动续跑那次不重置,否则「续跑 → 又错 → 再续」能一直转下去
     if (!sendOpts?.auto) autoContinueLeftRef.current = 1;
@@ -565,6 +566,7 @@ export function useAiChat(opts?: { mock?: boolean; tabId?: string; getConversati
       role: "user",
       text,
       attachments,
+      ...(sendOpts?.inbound?.length ? { inbound: sendOpts.inbound } : {}),
     };
     setMessages((prev) => [...prev, userMsg]);
 
@@ -699,7 +701,7 @@ export function useAiChat(opts?: { mock?: boolean; tabId?: string; getConversati
             setTimeout(() => {
               if (seq !== sendSeqRef.current) return;
               setMessages(prev => prev.map(m => m.id === asstMsgId
-                ? { ...m, text: m.text + "\n" + tail, parts: appendTextPart(m.parts, "\n" + tail), pending: false }
+                ? { ...m, text: m.text + "\n" + tail, parts: appendTextPart(m.parts, "\n" + tail), pending: false, outcome: "completed" }
                 : m));
               setStreaming(false);
               // 假流这一轮落定:和真实流一样在这里发队首

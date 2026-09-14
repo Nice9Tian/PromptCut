@@ -316,6 +316,14 @@ export function IconPlus(p: IconProps) {
     </Stroked>
   );
 }
+/** 曲别针(添加附件):一根绕了两圈的回形针,整体斜 45° 放 */
+export function IconPaperclip(p: IconProps) {
+  return (
+    <Stroked {...p}>
+      <path d="M16.5 6.5v9.5a4.5 4.5 0 0 1-9 0V5a3 3 0 0 1 6 0v10a1.5 1.5 0 0 1-3 0V7" transform="rotate(45 12 12)" />
+    </Stroked>
+  );
+}
 /**
  * 新开 Agent 分页(rail 上的「+」):对话气泡轮廓(左下角带小尾巴)里面一个 +。
  * 放在 rail 上,所以不走本文件的 1.5 描边方头规格,而是和 rail 图标(left/railIcons.tsx)同一套:

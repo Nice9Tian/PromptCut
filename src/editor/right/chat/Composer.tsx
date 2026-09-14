@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
 import { ModelBar } from "../ModelBar";
-import { IconPlus } from "../../../ui/icons";
+import { IconPaperclip } from "../../../ui/icons";
 import type { AiProvider, ChatAttachment, ProviderInfo, PublicAiConfig } from "../../../ai/types";
 import type { Role } from "../../../ai/roles";
 import { attachIcon } from "./attachIcon";
@@ -38,7 +38,7 @@ export interface ComposerProps {
   textareaRef: RefObject<HTMLTextAreaElement | null>;
   attachments: ChatAttachment[];
   uploading: boolean;
-  /** 点「+」:AiPanel 去点它自己那个隐藏的 file input */
+  /** 点曲别针:AiPanel 去点它自己那个隐藏的 file input */
   onPickFiles: () => void;
   onRetryAttachment: (id: string, srcPath: string | null) => void;
   onRemoveAttachment: (idx: number) => void;
@@ -232,7 +232,7 @@ function ComposerGrip({ boxRef }: { boxRef: RefObject<HTMLDivElement | null> }) 
 
 /**
  * 输入区,占面板高度的 1/3:附件卡片在最上,输入框填满中间(不自动增高,超出在里面滚),
- * 底部一条 36px 工具条 —— 左边 附件「+」、「✦」菜单、驱动方式 + 模型、「⋯」运行选项,右边发送 / 停止。
+ * 底部一条 36px 工具条 —— 左边 附件(曲别针)、「✦」菜单、驱动方式 + 模型、「⋯」运行选项,右边发送 / 停止。
  *
  * 这里不直接碰 useAiChat:发送、停止都交给 onSubmit / onStop,草稿也是受控的,
  * 发什么、什么时候清空由 AiPanel 决定。
@@ -333,7 +333,7 @@ export function Composer(props: ComposerProps) {
             onClick={onPickFiles}
             disabled={uploading}
           >
-            <IconPlus size={16} />
+            <IconPaperclip size={16} />
           </button>
           <ComposerMenu {...menu} streaming={streaming} />
           {/* 当前用哪个驱动是这一页的身份,再窄也留在工具条上 */}

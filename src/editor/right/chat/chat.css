@@ -72,8 +72,14 @@
   box-shadow: 0 0 0 2px var(--ui-bg, #131218);
 }
 
-/* 分页头像:圆形字形(编号或标题首字)。studio.css 里 .pc-rail-item span 的 11px 要在这里盖掉 */
+/*
+ * Agent 头像:圆形字形(编号或标题首字)。颜色用 Agent 专属色 --ui-agent —— 和强调色同明度、同纯度的黄
+ * (skins/agentColor.ts 算的),和普通图标、选中用的强调色分开。studio.css 里 .pc-rail-item span 的 11px 要在这里盖掉。
+ * isolation:下面流光的两个伪元素(z-index:-1)留在头像这一层里,不钻到 rail 背后。
+ */
 .pc-rail-item .pc-rr-glyph {
+  position: relative;
+  isolation: isolate;
   width: 24px;
   height: 24px;
   border-radius: 50%;
@@ -82,12 +88,46 @@
   font-size: 12px;
   font-weight: 600;
   line-height: 1;
-  background: var(--ui-panel-2, #2C2B34);
-  color: var(--ui-fg, #F2F1F6);
+  background: color-mix(in oklab, var(--ui-agent, #d6b13c) 14%, var(--ui-panel-2, #2C2B34));
+  color: var(--ui-agent, #d6b13c);
 }
 .pc-rail-item.is-on .pc-rr-glyph {
-  background: var(--ui-accent-soft, rgba(0, 219, 219, 0.2));
-  color: var(--ui-accent, #00DBDB);
+  background: color-mix(in oklab, var(--ui-agent, #d6b13c) 26%, var(--ui-panel-2, #2C2B34));
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--ui-agent, #d6b13c) 45%, transparent);
+}
+
+/*
+ * 正在跑:头像背后一圈转动的锥形渐变,模糊成流动的光;里圈再盖一层底色,只留一圈亮边,字照样看得清。
+ * 转的是 transform(合成层),不逐帧重绘渐变。
+ */
+.pc-rail-item.is-busy .pc-rr-glyph::before,
+.pc-rail-item.is-busy .pc-rr-glyph::after {
+  content: "";
+  position: absolute;
+  border-radius: 50%;
+  z-index: -1;
+  pointer-events: none;
+}
+.pc-rail-item.is-busy .pc-rr-glyph::before {
+  inset: -4px;
+  background: conic-gradient(
+    transparent 0turn,
+    var(--ui-agent, #d6b13c) 0.18turn,
+    transparent 0.36turn,
+    transparent 0.5turn,
+    var(--ui-agent, #d6b13c) 0.68turn,
+    transparent 0.86turn
+  );
+  filter: blur(2.5px);
+  will-change: transform;
+  animation: pc-rr-flow 1.6s linear infinite;
+}
+.pc-rail-item.is-busy .pc-rr-glyph::after {
+  inset: 1.5px;
+  background: color-mix(in oklab, var(--ui-agent, #d6b13c) 22%, var(--ui-panel-2, #2C2B34));
+}
+@keyframes pc-rr-flow {
+  to { transform: rotate(1turn); }
 }
 /* 标签超过 4 个字在 JS 里截断;这里再兜一层省略号,防字体偏宽时撑出 56px */
 .pc-rail-item .pc-rr-label {
@@ -97,21 +137,22 @@
   white-space: nowrap;
 }
 
-/* 忙碌:头像右下角一个呼吸的小圆点,空闲时没有 */
-.pc-rr-busy {
+/* 跑完 / 中断、用户还没看这一页:头像右下角一个小点。蓝 = 完成(强调色),黄 = 中断(警告色)。跑的时候没有点,只有流光 */
+.pc-rr-state {
   position: absolute;
   top: 26px;
   left: calc(50% + 7px);
-  width: 7px;
-  height: 7px;
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
-  background: var(--ui-accent, #00DBDB);
   box-shadow: 0 0 0 2px var(--ui-bg, #131218);
-  animation: pc-rr-pulse 1.4s ease-in-out infinite;
+  pointer-events: none;
 }
-@keyframes pc-rr-pulse {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: 0.35; transform: scale(0.8); }
+.pc-rr-state.is-done {
+  background: var(--ui-accent, #00DBDB);
+}
+.pc-rr-state.is-interrupted {
+  background: var(--ui-warn, #E0A13A);
 }
 
 /* 其他 Agent 投来的消息还没送达:右上角角标。悬停时让位给关闭按钮 */
@@ -164,9 +205,9 @@
   background: var(--ui-float, #34333D);
 }
 
-/* 跟随系统「减少动态效果」:忙碌点不呼吸,只留颜色 */
+/* 跟随系统「减少动态效果」:流光不转,只留一圈静止的光 */
 @media (prefers-reduced-motion: reduce) {
-  .pc-rr-busy { animation: none; }
+  .pc-rail-item.is-busy .pc-rr-glyph::before { animation: none; }
 }
 
 /* ── 剧本页:内嵌在右栏卡片里,和助手分页并列 ─────────────────────── */
@@ -494,6 +535,13 @@
   font-size: 11px;
   color: var(--ui-fg-faint, #6E6C7A);
   font-variant-numeric: tabular-nums;
+}
+/* 收到了其他 Agent 的消息、后面还没有回复可挂(MessageList):原位一行小字,不画成用户气泡 */
+.ai-inbound-note {
+  align-self: center;
+  padding: 2px 8px;
+  font-size: 11px;
+  color: var(--ui-fg-faint, #6E6C7A);
 }
 
 /*

@@ -207,9 +207,21 @@ export interface MessageRuntime {
   toolProtocol: boolean;
 }
 
+/** 其他 Agent 用 send_message 发来的一条消息 */
+export interface InboundAgentMessage {
+  /** 发来的 Agent 的对话 ID;不知道时是「未知」 */
+  from: string;
+  text: string;
+}
+
 export interface ChatMessage {
   id: string;
   role: "user" | "assistant";
+  /**
+   * 这条用户消息其实是其他 Agent 发来的(AiPanel 自动投递时带上,text 仍是给模型看的 agentBus.formatInbound 全文)。
+   * 界面据此不画用户气泡,交给紧跟着的回复在操作详细预览控件里展示;不靠正文前缀认,用户自己发的消息不会被误判。
+   */
+  inbound?: InboundAgentMessage[];
   /**
    * 分工模式下,这条回复是哪个角色产出的(角色卡的 id,如 director)。
    * 界面用它取头像和角色名;普通对话没有这个字段,退回中性的「AI 助手」。

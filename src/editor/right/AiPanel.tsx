@@ -108,7 +108,8 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
       const msgs = agentBus.takeInbox(convId, true);
       if (msgs.length === 0) return;
       agentBus.beginRun(convId, Math.max(...msgs.map((m) => m.hops)));
-      void send(agentBus.formatInbound(msgs));
+      // 模型读 formatInbound 的全文;界面认 inbound 字段(不画成用户气泡,放进回复的操作详细预览控件)
+      void send(agentBus.formatInbound(msgs), undefined, { inbound: msgs.map((x) => ({ from: x.from ?? "未知", text: x.text })) });
     };
     deliver();
     const offBus = agentBus.subscribeBus(deliver);

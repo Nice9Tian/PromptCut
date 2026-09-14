@@ -11,6 +11,7 @@ import { EditSection } from "../left/EditSection";
 import { CaptionsSection } from "../left/CaptionsSection";
 import { AiPanel } from "../right/AiPanel";
 import { ScriptPage } from "../right/chat/ScriptPage";
+import { AgentAttentionTracker } from "./agentAttention";
 import { DockPageContext } from "./dockSide";
 import { pageNode, placePages, registerDockPark, releasePageNodes } from "./pageNodes";
 import { SECTION_IDS, agentItem, effectiveActive, sideOf, type ItemId, type SectionId } from "./railLayout";
@@ -97,6 +98,8 @@ export function DockPages({ mcpConnected }: { mcpConnected: boolean }) {
     <>
       {/* 停车位:宿主没挂载的一侧(对话式下整列不显示)的页面节点停在这里,不脱离文档 */}
       <div ref={parkRef} className="pc-dock-park" data-pc-dock-park="" aria-hidden="true" style={{ display: "none" }} />
+      {/* rail 上 Agent 项的「跑完 / 中断,等你查看」标记 */}
+      <AgentAttentionTracker />
       {section("library", <LibraryPage />)}
       {section("animations", <AnimationsPage />)}
       {section("effects", <EffectsPage />)}
