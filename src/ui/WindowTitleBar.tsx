@@ -1,11 +1,16 @@
 import { useEffect, useRef, useState } from "react";
-import type { JSX } from "react";
+import type { JSX, MouseEvent as ReactMouseEvent } from "react";
 import "./WindowTitleBar.css";
+
+type ResizeDirection = "North" | "NorthEast" | "NorthWest";
 
 type WindowApi = {
   minimize?: () => Promise<unknown>;
   toggleMaximize?: () => Promise<unknown>;
   close?: () => Promise<unknown>;
+  startResizeDragging?: (direction: ResizeDirection) => Promise<unknown>;
+  isMaximized?: () => Promise<boolean>;
+  onResized?: (handler: () => void) => Promise<() => void>;
 };
 
 type TauriGlobal = {
@@ -84,6 +89,7 @@ function sendCommand(command: string) {
  */
 export function WindowTitleBar(): JSX.Element {
   const [open, setOpen] = useState<MenuId | null>(null);
+  const [maximized, setMaximized] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const canUseWindowApi = Boolean((window as unknown as { __TAURI__?: TauriGlobal }).__TAURI__?.window?.getCurrentWindow);
 
@@ -102,13 +108,50 @@ export function WindowTitleBar(): JSX.Element {
     };
   }, []);
 
+  // 最大化时顶边不能拉伸,拉伸带要撤掉,让屏幕最顶上那几像素还是标题栏
+  useEffect(() => {
+    const win = canUseWindowApi ? tauriWindow() : null;
+    if (!win) return;
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    const sync = () => {
+      void win.isMaximized?.()?.then((value) => {
+        if (!disposed) setMaximized(value);
+      }).catch(() => {});
+    };
+    sync();
+    void win.onResized?.(sync)?.then((fn) => {
+      if (disposed) fn();
+      else unlisten = fn;
+    }).catch(() => {});
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [canUseWindowApi]);
+
   const choose = (command?: string) => {
     setOpen(null);
     if (command) sendCommand(command);
   };
 
+  const startResize = (direction: ResizeDirection) => (event: ReactMouseEvent) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    void tauriWindow()?.startResizeDragging?.(direction)?.catch(() => {});
+  };
+
   return (
     <header ref={rootRef} className={`pc-titlebar${canUseWindowApi ? " is-desktop" : ""}`} data-tauri-drag-region={canUseWindowApi ? "deep" : undefined}>
+      {canUseWindowApi && !maximized && (
+        // 顶边拉伸带:系统给无边框窗口的顶边只留 ~4px,紧下面就是拖动区,很难按准,这里补到 8px、两头当斜角。
+        // data-tauri-drag-region="false" 挡住外层的 deep 拖动区,不然按下去先变成拖窗口
+        <div className="pc-titlebar-resize" data-tauri-drag-region="false" aria-hidden="true">
+          <span className="pc-titlebar-resize-nw" onMouseDown={startResize("NorthWest")} />
+          <span className="pc-titlebar-resize-n" onMouseDown={startResize("North")} />
+          <span className="pc-titlebar-resize-ne" onMouseDown={startResize("NorthEast")} />
+        </div>
+      )}
       <nav className="pc-titlebar-menus" aria-label="应用菜单">
         {menus.map((menu) => (
           <div className="pc-titlebar-menu-wrap" key={menu.id}>
