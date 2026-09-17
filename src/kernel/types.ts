@@ -107,6 +107,38 @@ export interface CardTiming {
   after?: "hold" | "loop" | "evolve";
 }
 
+/**
+ * 图卡的一路输入。`at()` 只返回一个**引用**(执行器自己解析,不落像素),
+ * `pixels()` 才真的解出像素,`block()` 取音频采样。
+ */
+export interface GraphCardSource {
+  /** 这路输入指向的图节点 id */
+  nodeId: string;
+  /** 输入在 `t`(缺省 = 本次求值的时间)的结果引用,直接喂给 `glsl()` */
+  at(t?: number): import("../render/cards/gpuExecutor").SourceValue;
+  /** 真的把输入解成像素。比 `at()` 慢得多,只有 CPU 像素算法才用 */
+  pixels(t?: number, signal?: AbortSignal): Promise<ImageBitmap>;
+  /** 取 [start, start + count) 这段采样(交错多声道) */
+  block(start: number, count: number): Promise<Float32Array>;
+}
+
+/** 图卡求值时的画幅信息。`stage` 和 CardProps.stage 同一个口径。 */
+export interface GraphCardContext {
+  fps: number;
+  width: number;
+  height: number;
+  /** 片段时长(秒) */
+  duration: number;
+  stage?: { width: number; height: number; camera3dFov?: number };
+}
+
+/** 音频图卡的采样区间。按采样点算,不按帧取整。 */
+export interface GraphAudioRange {
+  start: number;
+  count: number;
+  sampleRate: number;
+}
+
 /** 卡片契约。所有卡片(自家写的、Magic UI 适配的、AI 现场建的)都长这样。 */
 export interface CardDef<P = Record<string, unknown>> {
   id: string;
@@ -128,7 +160,34 @@ export interface CardDef<P = Record<string, unknown>> {
   tags?: string[];
   defaults: P;
   controls: Control[];
-  Component: ComponentType<CardProps<P>>;
+  /**
+   * DOM 卡的 React 组件。**图卡(写了 `card` / `audio`)不写它**,由 `GraphCard` 代渲;
+   * 两者都没有的定义既不是 DOM 卡也不是图卡,`Stage` 会整段跳过。
+   */
+  Component?: ComponentType<CardProps<P>>;
+  /** 图卡的类别(同 cardGraph.mjs 的 CARD_KINDS)。缺省 = `animation`。 */
+  kind?: "animation" | "filter" | "transition" | "emphasis" | "audio";
+  /**
+   * 图卡的输入名。缺省按 kind 推:`filter` / `emphasis` / `audio` 是 `{ source: {} }`,
+   * `transition` 是 `{ A: {}, B: {} }`,`animation` 没有输入。
+   */
+  inputs?: Record<string, { description?: string }>;
+  /**
+   * 视觉图卡:按片段本地时间 `t`(秒)算出一份 GPU 描述,由宿主在 WebGL 上执行。
+   * `sources[name]` 见 `src/render/cards/GraphCard.tsx`;帮助函数在 `src/render/cards/graphValues.ts`。
+   */
+  card?: (
+    sources: Record<string, GraphCardSource>,
+    t: number,
+    params: P,
+    ctx: GraphCardContext,
+  ) => import("../render/cards/gpuExecutor").CardGpuValue | Promise<import("../render/cards/gpuExecutor").CardGpuValue>;
+  /** 音频图卡:按采样区间产出交错的 Float32 采样块。 */
+  audio?: (
+    sources: Record<string, GraphCardSource>,
+    range: GraphAudioRange,
+    params: P,
+  ) => Float32Array | Promise<Float32Array>;
   /** 部件树(约定封装的结构)。没写 = 整张卡是一个部件,所有参数都归它 */
   parts?: CardPart[];
   /** 生命周期(约定封装的时间)。没写 = 按「有进场动画、之后停住、只支持淡出」处理 */
@@ -148,6 +207,9 @@ export interface CardDef<P = Record<string, unknown>> {
   /** Independently reviewed from time access. Background-dependent and unknown
    * cards keep the complete Chrome compositing context. */
   compositing?: import('../render/frameMode.mjs').CardCompositing;
+  /** 画布卡(2D canvas / WebGL):走共享 WebGL 渲染器、快照要先栅格成 img。
+   * 缺省 = 纯 DOM 卡。和 frameMode / compositing 一样是审阅结论,不猜源码。 */
+  canvasHeavy?: boolean;
 }
 
 /**
@@ -284,6 +346,12 @@ export interface Timeline {
   fps: number;
   duration: number; // 秒
   clips: Clip[];
+  /**
+   * 图卡的节点图。**只有两个宿主算它**(ExportView / StageView),`flattenOverlay`
+   * 只负责原样带过来 —— 它自己不算图(算了就是每帧每片段重算一遍全图)。
+   * 算不出来(片段删了留下悬空输入之类)时是 `undefined`,舞台按「图卡不画」兜底。
+   */
+  graph?: ReturnType<typeof import("./cardGraph.mjs").projectCardGraph>;
   /**
    * 三维透视强度,从 project.camera3dFov 带过来。不开三维时**这个键根本不存在** ——
    * 老项目的 timeline 对象要逐字段和以前一样。

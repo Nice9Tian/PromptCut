@@ -115,11 +115,11 @@
   color: var(--ui-fg, #F2F1F6);
 }
 .ai-queue-btn.is-accent {
-  background: var(--ui-accent, #00DBDB);
+  background: var(--ui-accent-grad, #00DBDB);
   color: var(--ui-accent-fg, #ffffff);
 }
 .ai-queue-btn.is-accent:hover:not(:disabled) {
-  background: var(--ui-accent-hover, #9571FF);
+  background: var(--ui-accent-grad-hover, #9571FF);
   color: var(--ui-accent-fg, #ffffff);
 }
 .ai-queue-x {

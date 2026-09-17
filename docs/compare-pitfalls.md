@@ -87,3 +87,62 @@ Motion 靠 `Object.hasOwnProperty.call(Element.prototype, 'animate')` 判断浏�
 - 任何 dev server 启动时都会把自己的端口写进全局的 `%TEMP%\promptcut\port.json`(`server/vite-plugin-ai.ts`),没有指定端口的 MCP 客户端会照它去连。
 - 实验用的服务器要把 `TEMP` 指到 scratch 目录再启动,或者用 Vite 的 middlewareMode,不监听端口。
 - 用户的真实软件在 5210(`AppData\Local\PromptCut`),实验端口要避开它。
+
+## 9. SVG url(#id) 序列化形式（探针结论）
+
+冻结快照(`export-frames.mjs` 的 `__bfFreeze`)要把 id 统一改名,并同步改掉 `url(#…)` / `href="#…"`。
+现有正则 `:215` 的字符类是 `[^)"'&]*`,把 `&` 排除在外。疑点:预渲染页地址含 `&`
+(`server/frame-pipeline.mjs:183` 的 `'/?export=1&timeline='`),要是 Chrome 把 `fill` 解析成
+**带页面 URL 的绝对形式**,`outerHTML` 会把 `&` 写成 `&amp;`,这条正则就一条都匹配不上 ——
+共享快照挂到多个片段上时渐变会串台。
+
+探针:`node scripts/probes/svg-url-serialize-probe.mjs`(自起 vite 5208,开一条 `growth-curve` 片段的导出页)。
+Chrome 152 headless 实测:
+
+```
+page url                 http://127.0.0.1:5208/?export=1&timeline=data%3Aapplication%2Fjson%2C%257B…
+gradient ids             ["_r_0_"]
+getAttribute("fill")     "url(#_r_0_)"
+computed .fill           "url(\"#_r_0_\")"
+cssText 里的 fill          "fill:url(\"#_r_0_\")"
+冻结后 outerHTML 里的 fill:
+  ;fill:url(&quot;#_r_0_&quot;)
+el.style.fill=computed 后的 outerHTML:
+  <path d="…" fill="url(#_r_0_)" opacity="0" style="fill: url(&quot;#_r_0_&quot;);"></path>
+整棵 control 冻结后(516806 字节)出现过的形式:
+  url(…#…)               ["url(#_r_0_)","url(&quot;#_r_0_&quot;)"]
+  href="#…"              []
+  id="…"                 [" id=\"_r_0_\""]
+  含 &amp;                false
+DOMParser 收 id           ["_r_0_"]
+正则扫描收 id               ["_r_0_"]
+两条路径一致                 true
+```
+
+结论:
+
+- **计算样式是相对形式**,Chrome 不把页面 URL 补进 `url()`。整份快照里不含 `&amp;`,`&` 的担心不成立。
+- 冻结后实际只有两种形式:属性上的 `url(#id)`,和计算样式内联出来的 `url(&quot;#id&quot;)`
+  (`setAttribute('style', …)` 之后 `outerHTML` 把 `"` 转义成 `&quot;`)。两种现有正则都能命中。
+- React 19 的 `useId()` 产出 `_r_0_`,**不再是 `:r1:`**。改名仍按原字符串匹配、不用 `CSS.escape`,
+  含冒号的 id 照样能改(消费侧 `src/render/snapshotRename.ts` 有单测钉住)。
+- 收 id 的两条路径在这份真快照上给出同一个集合:浏览器里走 `DOMParser`,Node 单测里没有 `DOMParser`,
+  落到正则扫描。注意 `DOMParser` 给回来的是**解码后**的 id,要再按属性值序列化规则
+  (`&`→`&amp;`、`"`→`&quot;`、U+00A0→`&nbsp;`)转回去,才和「在原字符串上改名」对得齐。
+
+消费侧改名(`src/render/snapshotRename.ts`,A2(7))采用的最终正则,比 `:215` 放开一格:
+
+```
+id 属性   /\sid=(["'])([^"']*)\1/
+href 引用 /(?:xlink:)?href=(["'])#([^"']*)\1/
+url 引用  /url\((&quot;|["'])?([^)"']*?)(&quot;|["'])?\)/   取最后一个 `#` 之后的片段当 id
+```
+
+字符类放开成 `[^)"']*` 是防御性的:万一换个 Chrome 版本、换个属性真序列化成绝对形式,这条仍然命中。
+命中后**把 `#` 之前的整段前缀丢掉**,重写成 `url(#新id)` —— 快照要挂到别的页面(舞台页,端口和查询串
+都和预渲染页不一样)上,不能带着预渲染页的地址。不带 `#` 的 `url()`(`/@media/<hash>` 那类)不碰。
+
+三条并成**一条**交替正则跑一趟,不是分三轮:分轮改的话第二轮会撞上第一轮刚写出来的新 id。
+`<style>` 文本里的 `#id` **选择器**不改名(和预渲染侧 `__r` 一样)——`__bfFreeze` 已经把计算样式
+整份内联,样式表规则已被内联值盖掉;全仓两处 `<defs>` 也都写在卡片自己的 `<svg>` 里,不靠样式表选中。
+`<style>` 里的 `url(#id)` 则会跟着元素一起改,方向是安全的。

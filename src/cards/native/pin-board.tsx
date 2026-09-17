@@ -66,6 +66,8 @@ export const pinBoard: CardDef<Params> = {
   useWhen: "带中英主副标题的小看板,罗列 3 到 5 条并列要点逐条钉上板子 —— 适合给一段内容做小结,不是零散列表。position 填 left 会摆到左下角。",
   tags: ["要点","钉板","罗列"],
   source: "native",
+  // 帧模式:审计固化(A0.1)。值 = 固化前 cardFrameMode(def, def.defaults) 的返回值。
+  frameMode: "stateful",
   defaults: {
     ...hudDefaults,
     position: "left",

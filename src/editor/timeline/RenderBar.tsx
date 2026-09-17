@@ -9,10 +9,10 @@ import {
 import { xOfTime } from "./utils";
 
 /** 进度条高度(px)。够看见、又不抢时间轴的地方 */
-export const RENDER_H = 5;
+export const RENDER_H = 2;
 
 /**
- * 预渲染进度条(AE 顶上那条)。紧贴在时间标尺下面。
+ * 预渲染进度条(AE 顶上那条)。就是时间标尺(Ruler)的底边线。
  *
  * # 两种颜色说的是两件事
  *

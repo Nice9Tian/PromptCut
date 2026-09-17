@@ -17,6 +17,14 @@ import { publishMediaMigrations, type MediaKindMigration } from "./mediaMigratio
  * 这个文件不引任何运行时模块,单测可以直接加载(见 mediaUrls.test.mjs)。
  */
 
+/**
+ * 素材键(内容 sha256)的地址。A1 之后这是素材地址的唯一正解:
+ * 换文件名、改 mtime、换一台机器打开,只要内容一样就还是这个地址。
+ */
+export function mediaUrlFromHash(hash: string | undefined): string | null {
+  return hash && /^[0-9a-f]{64}$/i.test(hash) ? `/@media/${hash.toLowerCase()}` : null;
+}
+
 /** 服务端素材目录里这个文件的地址。没有 path 返回 null */
 export function mediaUrlFromPath(path: string | undefined, opts: { external?: boolean } = {}): string | null {
   const base = path ? path.split(/[/\\]/).pop() : "";
@@ -40,7 +48,8 @@ const MISSING = "(缺失) ";
 /**
  * 从文件里读回来的素材表 → 能播的素材表。不改入参。
  *
- * - 有 path:换成 /@media/<文件名>(和旧格式导入一样,path 优先);
+ * - 有 hash(A1 之后导入的):换成 /@media/<hash>,优先级最高 —— 哈希是身份,文件在内容库里;
+ * - 只有 path(迁移期的老 .proc):换成 /@media/<文件名>(和旧格式导入一样);
  * - 没 path 但地址本来就能用:原样;
  * - 其余(死掉的 blob:、裸文件名):清空 url、名字前面标「(缺失)」,并记进 missing ——
  *   空 url 的素材预览和导出都会跳过,不会再拿一个打不开的地址去等。
@@ -54,12 +63,16 @@ export function restoreMediaUrls(media: MediaAsset[], opts: { externalPathUrl?: 
     const shouldMove = !!extKind && extKind !== m.kind && !(m.kind === "audio" && m.soundOf);
     const normalized = shouldMove ? { ...m, kind: extKind as AssetKind } : m;
     if (shouldMove) moved.push({ id: m.id, name: m.name, from: m.kind, to: extKind as AssetKind });
+    // 有内容哈希就只认 /@media/<hash> —— 文件在内容库里按哈希存,path 只是它当时的落点。
+    // pending 是「这一次会话里还没传完」,从文件读回来时一定已经过期,顺手清掉。
+    const fromHash = mediaUrlFromHash(normalized.hash);
+    if (fromHash) return { ...normalized, url: fromHash, pending: undefined };
     const fromPath = mediaUrlFromPath(normalized.path, { external: opts.externalPathUrl });
-    if (fromPath) return { ...normalized, url: fromPath };
+    if (fromPath) return { ...normalized, url: fromPath, pending: undefined };
     const url = normalized.url || "";
-    if (!url || isDurable(url)) return normalized;
+    if (!url || isDurable(url)) return normalized.pending ? { ...normalized, pending: undefined } : normalized;
     missing.push(normalized);
-    return { ...normalized, url: "", name: normalized.name.startsWith(MISSING) ? normalized.name : `${MISSING}${normalized.name}` };
+    return { ...normalized, url: "", pending: undefined, name: normalized.name.startsWith(MISSING) ? normalized.name : `${MISSING}${normalized.name}` };
   });
   publishMediaMigrations(moved);
   return { media: out, missing, moved };

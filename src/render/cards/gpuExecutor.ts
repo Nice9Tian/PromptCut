@@ -4,7 +4,9 @@ export type SourceValue = { type: "source"; nodeId: string; time?: Expr; offset?
 export type PixelsValue = { type: "pixels"; url?: string; width: number; height: number };
 export type DrawValue = { type: "draw"; commands: Array<{ type: "solid" | "rect"; color: [number, number, number, number]; x?: number; y?: number; width?: number; height?: number }> };
 export type GlslValue = { type: "glsl"; fragment: string; inputs?: CardGpuValue[]; uniforms?: Record<string, Expr | Expr[]> };
-export type CardGpuValue = SourceValue | PixelsValue | DrawValue | GlslValue;
+/** 已经算好的一张位图(CPU 像素算法的出口)。宿主直接上传,不再解析任何输入。 */
+export type BitmapValue = { type: "bitmap"; image: ImageBitmap | ImageData | OffscreenCanvas };
+export type CardGpuValue = SourceValue | PixelsValue | DrawValue | GlslValue | BitmapValue;
 export type ValueResolver = (value: SourceValue | PixelsValue, time: number, signal?: AbortSignal) => Promise<TexImageSource | null>;
 export class CardGpuError extends Error {
   constructor(public readonly code: "unavailable" | "shader-compile" | "shader-link" | "budget" | "cancelled" | "missing-source" | "invalid-value", message: string, public readonly log?: string) {
@@ -45,11 +47,18 @@ export class CardGpuExecutor {
   private targets = new Map<number, Target>();
   private disposed = false;
   private serial = Promise.resolve();
-  constructor(public readonly canvas: HTMLCanvasElement, private readonly resolve: ValueResolver, private readonly maxPasses = 32, private readonly maxDepth = 32) {
+  constructor(public readonly canvas: HTMLCanvasElement | OffscreenCanvas, private readonly resolve: ValueResolver, private readonly maxPasses = 32, private readonly maxDepth = 32) {
     // A card draws when its inputs/time change, while capture may happen after
     // further compositor ticks or freeze the canvas with toDataURL. The default
     // disposable drawing buffer can become transparent between those steps.
-    const gl = canvas.getContext("webgl2", { alpha: true, premultipliedAlpha: false, antialias: false, preserveDrawingBuffer: true });
+    //
+    // 离屏画布(图卡递归解析上游时用的那种)和 DOM 画布的 getContext 是两个不同的重载,
+    // strict 下对联合类型直接调编不过,所以各调各的再收窄。
+    const attributes = { alpha: true, premultipliedAlpha: false, antialias: false, preserveDrawingBuffer: true };
+    const context = canvas instanceof OffscreenCanvas
+      ? canvas.getContext("webgl2", attributes)
+      : canvas.getContext("webgl2", attributes);
+    const gl = context as WebGL2RenderingContext | null;
     if (!gl) throw new CardGpuError("unavailable", "WebGL2 is unavailable");
     this.gl = gl;
     const buffer = gl.createBuffer(), vao = gl.createVertexArray();
@@ -162,6 +171,10 @@ export class CardGpuExecutor {
             else context.fillRect(command.x??0,command.y??0,command.width??0,command.height??0);
           }
           this.image(canvas,target,time);
+        } else if (value.type === "bitmap") {
+          // CPU 像素算法的出口:已经是一张图了,直接按上传-拷贝那条路走(COPY_IMAGE 负责翻 Y)
+          if (!value.image) throw new CardGpuError("missing-source", "Bitmap value has no image");
+          this.image(value.image,target,time);
         } else if (value.type === "glsl") {
           const inputs:WebGLTexture[]=[];
           for(const input of value.inputs||[])inputs.push(await render(input,depth+1));

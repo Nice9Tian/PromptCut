@@ -1,72 +1,85 @@
-/* 时间轴顶部的剪辑选项栏(CutTabs.tsx)。全部走 --ui-* 变量:原来写死 #0a0a0a 那一套,换皮肤时这一条还是黑的 */
-.pc-tl-cuts {
+/*
+ * 侧边 rail 上的剪辑组(CutTabs.tsx 的 CutsRailGroup)。每条剪辑一格 rail 项,和 Agent 分页同一个样子:
+ * 共享的 .pc-rail-item(56 方、选中 L2 底 + 外侧强调色竖条)、.pc-rr-tab / .pc-rr-x(悬停出 ×)、.pc-rr-label(名字截断)。
+ * 这里只补胶片图标方块、组本身、「▾」和子窗口。全部走 --ui-* 变量。
+ */
+.pc-rail-cuts {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 8px;
-  padding: 8px 14px;
-  background: transparent;
-  border-bottom: 1px solid var(--ui-border);
-  flex-shrink: 0;
-  overflow-x: auto;
-  scrollbar-width: none;
+  gap: 4px;
+  touch-action: none;
 }
-.pc-tl-cuts::-webkit-scrollbar { display: none; }
+/* 被拖着的整组原位变淡 */
+.pc-rail-cuts[data-pc-dragging] {
+  opacity: 0.35;
+}
+.pc-rail-cuts[data-pc-dragging] .pc-rr-x {
+  display: none;
+}
+/* 跟手克隆出来的整组:.pc-dock-ghost 给了底色和描边,这里补圆角 */
+.pc-rail-cuts.pc-dock-ghost {
+  border-radius: var(--ui-radius-lg, 8px);
+}
 
-.pc-tl-cut {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 12px;
-  border-radius: var(--ui-radius, 6px);
-  background: var(--ui-panel-2);
-  color: var(--ui-fg-muted);
-  font-size: 13px;
-  line-height: 20px;
-  border: 1px solid transparent;
+.pc-rail-cut {
   cursor: pointer;
   user-select: none;
-  white-space: nowrap;
-  max-width: 200px;
+  touch-action: none;
 }
-.pc-tl-cut:hover { color: var(--ui-fg); background: var(--ui-float); }
-.pc-tl-cut.is-on {
-  background: var(--ui-panel);
-  color: var(--ui-fg);
-  border: 1px solid var(--ui-border-strong);
-}
-.pc-tl-cut-name { overflow: hidden; text-overflow: ellipsis; }
-.pc-tl-cut input {
-  background: transparent;
-  border: none;
+.pc-rail-cut:focus-visible {
   outline: none;
-  color: inherit;
-  font: inherit;
-  width: 7em;
-  padding: 0;
+  box-shadow: var(--ui-focus-ring, 0 0 0 2px #00DBDB);
 }
-.pc-tl-cut-x {
-  opacity: 0;
-  font-size: 12px;
-  line-height: 1;
-  padding: 1px 3px;
-  border-radius: var(--ui-radius-sm, 4px);
-  color: inherit;
-  background: transparent;
-  border: none;
-  cursor: pointer;
-}
-.pc-tl-cut:hover .pc-tl-cut-x { opacity: 0.6; }
-.pc-tl-cut-x:hover { opacity: 1 !important; background: var(--ui-panel-2); }
 
-.pc-tl-cut-add {
-  padding: 3px 8px 5px;
-  color: var(--ui-fg-faint);
-  font-size: 15px;
-  line-height: 1;
-  background: transparent;
-  border: none;
-  cursor: pointer;
-  border-radius: var(--ui-radius-sm, 4px);
+/* 胶片图标:24 方圆角块(Agent 是 24 圆),选中时换强调色 */
+.pc-rail-cut-glyph {
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+  background: color-mix(in oklab, var(--ui-fg, #F2F1F6) 8%, var(--ui-panel-2, #2C2B34));
+  color: var(--ui-fg-muted, #A6A4B2);
 }
-.pc-tl-cut-add:hover { color: var(--ui-fg); background: var(--ui-panel); }
+/* 共享的 .pc-rail-item svg 会把图标撑到 22px,这里压回 14px */
+.pc-rail-item .pc-rail-cut-glyph svg {
+  width: 14px;
+  height: 14px;
+}
+.pc-rail-cut.is-on .pc-rail-cut-glyph {
+  background: var(--ui-accent-soft, rgba(0, 219, 219, 0.2));
+  color: var(--ui-accent, #00DBDB);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--ui-accent, #00DBDB) 45%, transparent);
+}
+
+.pc-rail-cut-input {
+  width: 52px;
+  box-sizing: border-box;
+  padding: 0 2px;
+  border: 0;
+  border-radius: 3px;
+  outline: 1px solid var(--ui-accent, #00DBDB);
+  background: var(--ui-bg, #111016);
+  color: var(--ui-fg, #F2F1F6);
+  font: inherit;
+  font-size: 11px;
+  line-height: 14px;
+  text-align: center;
+}
+
+.pc-rail-item.pc-rail-cut-add {
+  height: 32px;
+}
+
+
+/* 子窗口(railOverflow 的 .pc-rail-menu)里:图标块小一号 */
+.pc-rail-menu .pc-rail-cut-glyph {
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+}
+.pc-rail-menu .pc-rail-item .pc-rail-cut-glyph svg {
+  width: 12px;
+  height: 12px;
+}

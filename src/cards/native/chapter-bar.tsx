@@ -120,6 +120,8 @@ export const chapterBar: CardDef<Params> = {
   useWhen: "视频分成了几个章节,需要一条常驻顶部的进度指示告诉观众讲到第几节。**chapters 每行格式是「章节名 空格 起始秒数」**,漏了秒数进度会失效;横排单行只放得下 3 到 5 个短章节名。这张卡跟着时间轴走,clip 要覆盖整段而不是一小截。",
   tags: ["章节","导航","进度","常驻"],
   source: "native",
+  // 帧模式:审计固化(A0.1)。值 = 固化前 cardFrameMode(def, def.defaults) 的返回值。
+  frameMode: "stateful",
   defaults: {
     ...hudDefaults,
     position: "center",

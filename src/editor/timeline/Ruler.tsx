@@ -2,17 +2,23 @@ import { useTimelineContext } from "./TimelineContext";
 import { useStore } from "../../store/project";
 import { useScrub } from "./useScrub";
 import { xOfTime } from "./utils";
+import { RenderBar } from "./RenderBar";
 
-/** 主刻度标签:m:ss(0:05、1:30)。步长 0.5 秒时主刻度会落在 2.5 秒这种位置,补一位小数(0:02.5) */
+/** 主刻度标签:mm:ss(00:05、01:30)。步长 0.5 秒时主刻度会落在 2.5 秒这种位置,补一位小数(00:02.5) */
 function mss(t: number): string {
   const m = Math.floor(t / 60);
   const s = Math.round((t - m * 60) * 1000) / 1000;
-  return Number.isInteger(s) ? `${m}:${String(s).padStart(2, "0")}` : `${m}:${s.toFixed(1).padStart(4, "0")}`;
+  const mm = String(m).padStart(2, "0");
+  return Number.isInteger(s) ? `${mm}:${String(s).padStart(2, "0")}` : `${mm}:${s.toFixed(1).padStart(4, "0")}`;
 }
 
+/** 标尺高度(px)。序列栏的表头(index.tsx)和播放头把手的位置都按它排 */
+export const RULER_H = 22;
+
 /**
- * 时间标尺:26 高。次刻度是直径 2px 的小圆点,主刻度(每 5 格)不画线,只标一个 m:ss 时间。
- * 数字用次文字色,不是弱文字——它是读时间用的。
+ * 时间标尺:时间轴顶上唯一的一条(不再有开始—结束范围条)。
+ * 主刻度(每 5 格)一道竖线、右边跟 mm:ss 时间;次刻度是短竖线。都用弱色,不抢片段的眼。
+ * 底边那条线就是预渲染进度(RenderBar),不另占一行。
  */
 export function Ruler() {
   const { pxPerSec } = useTimelineContext();
@@ -43,6 +49,7 @@ export function Ruler() {
     <div
       data-pc="ruler"
       className="pc-tl-ruler relative cursor-ew-resize overflow-hidden select-none touch-none"
+      style={{ height: RULER_H }}
       onPointerDown={(e) => startScrub(e, { jumpToPointer: true })}
       title="按住拖动 = 移动播放头(按 Alt 不吸附)"
     >
@@ -51,18 +58,16 @@ export function Ruler() {
         return (
           <div
             key={tick}
-            className="absolute bottom-0 flex flex-col items-start pointer-events-none"
-            style={{ left: `${xOfTime(tick, pxPerSec)}px`, height: isMajor ? "100%" : "40%" }}
+            className={`pc-tl-tick${isMajor ? " is-major" : ""}`}
+            style={{ left: `${xOfTime(tick, pxPerSec)}px` }}
           >
-            <div className={`pc-tl-tick mt-auto mb-[2px]${isMajor ? " is-major" : ""}`} />
-            {isMajor && (
-              <span className="pc-tl-tick-label absolute" style={{ left: 5, bottom: 5 }}>
-                {mss(tick)}
-              </span>
-            )}
+            {isMajor && <span className="pc-tl-tick-label">{mss(tick)}</span>}
           </div>
         );
       })}
+      <div className="pc-tl-ruler-progress">
+        <RenderBar />
+      </div>
     </div>
   );
 }

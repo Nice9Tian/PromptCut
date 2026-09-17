@@ -60,6 +60,8 @@ export const animatedCircularProgressBarCard: CardDef<Params> = {
   useWhen: "全屏居中的大环形进度(环 + 中心百分比 + 下方说明文字),没有底板。要毛玻璃底板、或要摆在角落/底部而不是正中,用 ring-metric;要中英引导字和数据来源注脚用 stat-proof。",
   tags: ["百分比","环形","进度"],
   source: "magicui",
+  // 帧模式:审计固化(A0.1)。值 = 固化前 cardFrameMode(def, def.defaults) 的返回值。
+  frameMode: "stateful",
   defaults: { value: 75, label: "加载中", accent: "" },
   controls: [
     { key: "value", label: "目标值", type: "number" },

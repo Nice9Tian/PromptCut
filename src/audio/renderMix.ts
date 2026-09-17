@@ -25,7 +25,7 @@ export interface MixPlanClip {
   fadeIn: number;
   fadeOut: number;
   fx: { def: AudioFxDef; params?: Record<string, number> } | null;
-  /** Generated Python audio. When present it replaces url completely and is always required. */
+  /** 音频图卡产的声音。有它就完全取代 url,而且一定要拿到。 */
   cardAudio?: CardAudioClip;
 }
 
@@ -53,7 +53,7 @@ export async function renderMix(plan: MixPlan, fetchImpl: typeof fetch = fetch):
   const notes: string[] = [];
   const t0 = performance.now();
 
-  // 先把所有输入解好(并行),再接线。一个 Python 块短了、请求失败或普通 wav
+  // 先把所有输入解好(并行),再接线。一个图卡块短了、求值失败或普通 wav
   // 读不到都必须让导出失败；以前这里返回 null 会产出一条悄悄漏轨的成片。
   const buffers = await Promise.all(
     plan.clips.map(async (c) => {

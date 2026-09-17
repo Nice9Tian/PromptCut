@@ -84,7 +84,7 @@ export function canvasBox(el: HTMLCanvasElement): DOMRect | null {
 }
 
 /** 画布里画了东西的那块,按画布像素记;step 是取样步长。null = 整块空白或读不到像素 */
-interface CanvasPixels {
+export interface CanvasPixels {
   l: number;
   t: number;
   r: number;
@@ -102,7 +102,31 @@ interface CanvasPixels {
  * 所以拆成「读像素」和「换算到屏幕」两半:同一趟里画布内容不会变(拨 Web Animations 不跑 JS,
  * 画布只在 requestAnimationFrame 里重画),像素范围读一次就够,每档只重新取元素矩形。
  */
-function canvasPixels(el: HTMLCanvasElement): CanvasPixels | null {
+/**
+ * 读像素用的离屏画布只留**一张**,按需放大、每次先清空。
+ * 每次都 createElement 一张 1920×1080 的话,连续几次读(选框心跳、冻结快照、探针)之间 GC 来不及回收,
+ * Chrome 的画布内存预算一到,getContext("2d") 就开始回 null —— 实测第三次冻结起 canvas 的实体框就量不到了,
+ * 而且不报错(只是退回整块画布)。
+ */
+let scratch: { canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D } | null = null;
+function scratchContext(w: number, h: number): CanvasRenderingContext2D | null {
+  if (!scratch) {
+    const canvas = document.createElement("canvas");
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    if (!ctx) return null;
+    scratch = { canvas, ctx };
+  }
+  const { canvas, ctx } = scratch;
+  if (canvas.width !== w || canvas.height !== h) {
+    canvas.width = w;   // 改尺寸本身就清空了画布
+    canvas.height = h;
+  } else {
+    ctx.clearRect(0, 0, w, h);
+  }
+  return ctx;
+}
+
+export function canvasPixels(el: HTMLCanvasElement): CanvasPixels | null {
   const w = el.width, h = el.height;
   if (!w || !h) return null;
   let data: Uint8ClampedArray;
@@ -116,10 +140,7 @@ function canvasPixels(el: HTMLCanvasElement): CanvasPixels | null {
      * `drawImage` 到一张离屏 2D 画布上则两种上下文都通(WebGL 那边靠
      * scene-3d 建渲染器时的 preserveDrawingBuffer:true 保证读得到内容)。
      */
-    const off = document.createElement("canvas");
-    off.width = w;
-    off.height = h;
-    const ctx = off.getContext("2d", { willReadFrequently: true });
+    const ctx = scratchContext(w, h);
     if (!ctx) return null;
     ctx.drawImage(el, 0, 0);
     data = ctx.getImageData(0, 0, w, h).data;

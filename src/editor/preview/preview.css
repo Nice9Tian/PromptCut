@@ -148,6 +148,10 @@
   flex-direction: column;
   gap: 10px;
 }
+/* 浅色皮肤:L1 和卡片底色一样灰,改用 L2 纯白,和按钮选中后的颜色一致 */
+[data-skin-mode="light"] .pc-pv-ctrl {
+  background: var(--ui-panel);
+}
 .pc-pv-progress {
   position: relative;
   height: 3px;

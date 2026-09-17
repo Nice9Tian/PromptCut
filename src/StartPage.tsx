@@ -5,6 +5,7 @@ import { Logo } from "./ui/Logo";
 import { listDrafts, openDraft, deleteDraft, newDraftId, setActiveDraftId } from "./editor/io/drafts";
 import type { DraftInfo } from "./editor/io/drafts";
 import { newProject, loadProc, PROC_EXT } from "./editor/io/proc";
+import { PROCP_EXT, isProcpFile, loadProcpFile } from "./editor/io/procp";
 import { actions } from "./store/project";
 import { sttStatus } from "./editor/io/stt";
 import type { SttStatus, SttEngineStatus } from "./editor/io/stt";
@@ -107,8 +108,11 @@ export function StartPage(props: { onEnterEditor: () => void }): JSX.Element {
   const openFile = async (file: File) => {
     setError("");
     try {
-      const project = loadProc(await file.text());
-      actions.loadProject(project, file.name);
+      // .procp(编排 + 素材的 zip 包,A1)先拆包落库再载入;别对它 .text(),
+      // 那是把一个可能几 GB 的包整份读进页面。
+      const packed = await isProcpFile(file);
+      const project = packed ? await loadProcpFile(file) : loadProc(await file.text());
+      actions.loadProject(project, packed ? file.name.replace(/\.procp$/i, PROC_EXT) : file.name);
       // 从文件打开的不属于任何草稿,保存时再新建一份
       setActiveDraftId(null);
       onEnterEditor();
@@ -189,7 +193,7 @@ export function StartPage(props: { onEnterEditor: () => void }): JSX.Element {
       <input
         ref={fileInput}
         type="file"
-        accept={`${PROC_EXT},.json`}
+        accept={`${PROC_EXT},${PROCP_EXT},.json`}
         hidden
         onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) void openFile(f); }}
       />

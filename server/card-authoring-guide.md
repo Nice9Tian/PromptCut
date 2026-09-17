@@ -19,57 +19,154 @@
 
 ## 1. CardDef 契约
 
-### Python 自定义路线
+### 图卡路线
 
-当需求需要现有参数没有的转场、滤镜、动画、强调或音频算法时，使用 `create_card({language:"python", ...})`。以下 TypeScript 章节仅约束旧 TSX 卡片。Python 不需要包装成 React，也不要修改软件内核。
+当需求需要现有参数做不到的**滤镜、转场、音频算法或多输入合成**时，写一张**图卡**。图卡不是另一套体系：它就是一张普通的 `CardDef`，源码同样是 `src/cards/user/<id>.tsx` 一个文件，同样用 `create_card` 落盘、`get_card_source` + `edit_card` 修改。区别只在于它不写 React `Component`，而是写 `card()`（视觉）或 `audio()`（音频），由宿主代为渲染。
 
-定义字段包括 `id`、`name`、`language:"python"`、`kind`（animation/filter/transition/emphasis/audio）、`entry`（class 名）、`source`、`defaults`、`need_prerendering`、`compositing`、`styleKeys`。源码以 JSON 字符串提交，随项目保存。`styleKeys:[]` 表示不用风格，指定键表示部分适配，省略表示整个 style。构造函数接收选中的全局风格；实例参数在执行前提供给 `self.params`。
+建卡和应用是**两步**：`create_card({ id, source })` 落盘定义，再 `apply_card({ cardId, clipId, ... })` 建实例。
 
-```python
-from promptcut_cards import GLSL
+#### 契约
 
-class Crossfade:
-    need_prerendering = False
+在普通 `CardDef` 的字段之上，图卡多这几项：
 
-    def __init__(self, style=None):
-        self.shader = GLSL('''
-            uniform sampler2D u_input0;
-            uniform sampler2D u_input1;
-            uniform float progress;
-            void main() {
-                outColor = mix(texture(u_input0, v_uv),
-                               texture(u_input1, v_uv), clamp(progress, 0., 1.));
-            }
-        ''')
+| 字段 | 说明 |
+|---|---|
+| `kind` | `"animation"` / `"filter"` / `"transition"` / `"emphasis"` / `"audio"`，缺省 `"animation"` |
+| `inputs` | `Record<string, { description?: string }>`。`filter` / `emphasis` / `audio` 缺省 `{ source: {} }`，`transition` 缺省 `{ A: {}, B: {} }`，`animation` 缺省无输入 |
+| `card` | `(sources, t, params, ctx) => CardGpuValue \| Promise<CardGpuValue>`，视觉图卡的出口 |
+| `audio` | `(sources, range, params) => Float32Array \| Promise<Float32Array>`，音频图卡的出口 |
+| `Component` | **图卡不写**。`Component` / `card` / `audio` 三者至少有一个，有 `card` 或 `audio` 就不写 `Component` |
 
-    def card(self, source, time):
-        return self.shader(source['A'].time(time), source['B'].time(time),
-                           progress=time / self.params['duration'])
+- `sources[name]` = `{ nodeId, at(t?), pixels(t?, signal?), block(start, count) }`。
+  - `at(t)` 返回一个**惰性引用**（不落像素），直接喂给 GLSL；这是默认、也是最便宜的一条路。
+  - `pixels(t)` 才真的解出 `ImageBitmap`，CPU 像素算法才用它，会明显变慢。
+  - `block(start, count)` 取音频采样块。
+- `t` 是**片段本地秒**（不是时间轴绝对时间）。
+- `range` = `{ start, count, sampleRate: 48000 }`，`start` / `count` 是采样位置和采样数；返回的样本数和起点必须和请求**完全一致**。
+- `ctx` = `{ fps, width, height, duration, stage }`。
+- `params` 是 `defaults` 合并实例参数后的结果，和 TSX 卡里的 `params` 同一口径。
+
+帮助函数在 `src/render/cards/graphValues`：
+
+- `glsl(fragment, inputs, uniforms)` —— GPU 片元着色器。输入纹理依次叫 `u_input0`、`u_input1`…，UV 是 `v_uv`，输出写进 `outColor`；**着色器必须自己声明用到的每一个 uniform**，传值不会自动补声明。
+- `draw(commands)` —— 绘制指令。
+- `bitmap(image)` —— 把 `ImageBitmap` / `ImageData` / `OffscreenCanvas` 直接当结果交出去，是 CPU 像素算法的出口。
+
+**能力声明只写 `frameMode`**：只用 `at()` + GLSL 的图卡写 `"direct"`；用了 `pixels()` 或自带状态的写 `"stateful"`。**不要在源码里写 `compositing`**（写了会被 `create_card` 拒掉）——它只认人工审阅表 `src/cards/capabilities.json`；卡建出来之前按 `unknown` 走最保守的一条路，由人审阅后再加 `independent`。第一版图卡也**不要**声明 `canvasHeavy`。
+
+#### 例一：GLSL 反色滤镜
+
+```tsx
+import type { CardDef } from "../../kernel/types";
+import { glsl } from "../../render/cards/graphValues";
+
+interface Params { amount: number }
+
+export const invertFilter: CardDef<Params> = {
+  id: "invert-filter",
+  name: "反色滤镜",
+  description: "把输入画面按强度混向它的反色，0 是原样、1 是完全反色",
+  source: "user",
+  useWhen: "要给一段素材或一张图卡加整体反色 / 负片观感时用。只调色温亮度用调色参数，不要为此建卡。",
+  tags: ["滤镜", "反色", "负片"],
+  kind: "filter",
+  frameMode: "direct",
+  inputs: { source: { description: "要处理的画面" } },
+  defaults: { amount: 0.5 },
+  controls: [
+    { key: "amount", label: "强度", type: "number", min: 0, max: 1, step: 0.01 },
+  ],
+  card: (sources, t, params) => glsl(
+    `uniform sampler2D u_input0;
+     uniform float amount;
+     void main() {
+       vec4 c = texture(u_input0, v_uv);
+       outColor = vec4(mix(c.rgb, 1.0 - c.rgb, amount), c.a);
+     }`,
+    [sources.source.at(t)],
+    { amount: params.amount },
+  ),
+};
 ```
 
-用 `create_card` 提交上面源码，`entry:"Crossfade"`、`kind:"transition"`、`defaults:{duration:1}`。随后用 `apply_card({cardId,trackId,start,end,inputs:{A:{clipId:"clip-a"},B:{clipId:"clip-b"}}})` 创建实例；也可以指定 `clipId` 将滤镜直接应用于已有片段。`inputs` 引用 `nodeId` 时可串接另一张卡片的输出；`offset` 和 `rate` 定义该输入的局部时间映射。不要假设 `clipId` 引用会自动定位到素材末尾，应按需要设置 `offset`。
+用 `create_card({ id: "invert-filter", source })` 落盘，再 `apply_card({ cardId: "invert-filter", clipId: "clip-a" })` 套到某一段上。不传 `inputs` 时：那个片段上已经有图卡就自动接它的输出（「先反色再模糊」是自然动作），否则接这一段的原始素材。
 
-`source.time(t)` 不改变共享播放位置；`t` 可以是秒数或 `(start,end)` 半开区间。多输入用 `source['A']`。帧可保持为惰性 GPU 描述，或通过 `.array()` / `.image()` 获取授权输入像素。自由 Python 可返回 Pillow 图片、NumPy `uint8[height,width,4]` RGBA 数组。使用实际打包的 NumPy 和 Pillow；不可访问任意用户文件或网络。
+#### 例二：双输入 crossfade 转场
 
-`need_prerendering=False` 必须保证同一输入与时间能直接求值；依赖历史的模拟或逐帧算法设置 True。它与 `compositing:"independent"` 是不同承诺：独立合成必须不读取下层背景，依赖背景则用 context，不清楚用 unknown。Python class 与 JSON 元数据应一致。GLSL 输入纹理叫 `u_input0`、`u_input1`，UV 为 `v_uv`，输出为 `outColor`；着色器自行声明所用 uniforms。GLSL 调用的 `time=` 对应 `u_time`，使用它时必须在 GLSL 中写 `uniform float u_time;`，并在 Python 调用中传 `time=time`。传值不会自动补充 GLSL 变量声明；其他自定义 uniforms 也必须声明匹配的类型。可追踪的算术和 `sin/cos` 能注册到前端 GPU；分支、像素算法等不能自动转为 GLSL，会保留 Python 执行。
+```tsx
+import type { CardDef } from "../../kernel/types";
+import { glsl } from "../../render/cards/graphValues";
 
-音频的同一个 `card(source,time)` 接收 `TimeRange`，含 `start`（样本位置）、`count`、`sample_rate`。例如：
+interface Params { duration: number }
 
-```python
-from promptcut_cards import AudioBlock
-
-class Gain:
-    need_prerendering = False
-
-    def __init__(self, style=None): pass
-
-    def card(self, source, time):
-        block = source.block(time.start, time.count)
-        return AudioBlock(block.samples * self.params['gain'],
-                          time.sample_rate, time.start)
+export const crossfade: CardDef<Params> = {
+  id: "crossfade",
+  name: "交叉溶解",
+  description: "A 画面在给定时长内均匀溶解到 B 画面",
+  source: "user",
+  useWhen: "两段素材之间要一个最朴素的溶解转场时用。要带方向的推拉擦除另建卡。",
+  tags: ["转场", "溶解", "crossfade"],
+  kind: "transition",
+  frameMode: "direct",
+  inputs: { A: { description: "转场前的画面" }, B: { description: "转场后的画面" } },
+  defaults: { duration: 1 },
+  controls: [
+    { key: "duration", label: "时长(秒)", type: "number", min: 0.1, max: 5, step: 0.1 },
+  ],
+  card: (sources, t, params) => glsl(
+    `uniform sampler2D u_input0;
+     uniform sampler2D u_input1;
+     uniform float progress;
+     void main() {
+       outColor = mix(texture(u_input0, v_uv), texture(u_input1, v_uv), clamp(progress, 0.0, 1.0));
+     }`,
+    [sources.A.at(t), sources.B.at(t)],
+    { progress: t / Math.max(1e-6, params.duration) },
+  ),
+};
 ```
 
-音频定义 `kind:"audio"`，数组布局为交错的 `float32[frames,channels]`。返回的样本数和起点必须与请求完全一致。预览与导出使用同一执行入口。改源码先 `get_card_source` 再 `edit_card`，不创建重复定义；同一定义可以有多个独立参数实例。完成后用 `see_frames` 检查实际效果，尚未就绪的占位不算最终渲染结果。
+钳位写在 GLSL 里。两个输入用 `apply_card` 指名：`apply_card({ cardId: "crossfade", trackId: "main", start: 3, end: 4, inputs: { A: { clipId: "clip-a" }, B: { clipId: "clip-b" } } })`。`inputs` 里的 `{ clipId }` 指素材段就是该素材，指图卡片段就是那张图卡的输出；`{ nodeId }` 直接接另一个节点的输出；`offset`（秒）和 `rate`（倍率）定义该输入的局部时间映射。
+
+#### 例三：增益音频卡
+
+```tsx
+import type { CardDef } from "../../kernel/types";
+
+interface Params { gain: number }
+
+export const gainAudio: CardDef<Params> = {
+  id: "gain-audio",
+  name: "增益",
+  description: "把输入音频按倍数放大或衰减，采样范围原样返回",
+  source: "user",
+  useWhen: "一段声音整体偏轻或偏响，又不想改素材本身时用。",
+  tags: ["音频", "增益", "音量"],
+  kind: "audio",
+  frameMode: "direct",
+  inputs: { source: { description: "要处理的声音" } },
+  defaults: { gain: 1.5 },
+  controls: [
+    { key: "gain", label: "增益", type: "number", min: 0, max: 4, step: 0.05 },
+  ],
+  audio: async (sources, range, params) => {
+    const block = await sources.source.block(range.start, range.count);
+    const out = new Float32Array(block.length);
+    for (let i = 0; i < block.length; i++) out[i] = block[i] * params.gain;
+    return out;
+  },
+};
+```
+
+音频卡 `kind: "audio"`，样本是交错的 `float32`（frames × channels）。**返回的样本数和起点必须和 `range` 完全一致**，非有限样本会被拒绝。音频图卡只写 `clip.nodeId`、不写 `clip.cardId`，所以画面上不会多出一层；同一个片段**不能**同时挂音频图卡和视觉图卡（要两样就先复制片段）。输入边上的 `rate ≠ 1` 第一版不支持。
+
+#### 第一版的边界
+
+- 图卡的输入只接**素材节点**和**别的图卡节点**；接 DOM 卡（普通 TSX 卡）会被 `apply_card` 拒掉。
+- 传当前 `clip.nodeId` 给 `apply_card` = 原地改这个实例的参数和输入（不传 `inputs` 时继承旧的），不会接成自指。
+- 改源码先 `get_card_source` 再 `edit_card`，不要建重复定义；同一张定义可以有多个参数不同的实例。做完用 `see_frames` 看实际效果。
+
+### DOM 卡路线（普通 TSX 卡）
 
 每张卡是一个文件，导出一个 `CardDef`：
 
@@ -129,7 +226,7 @@ export const priceTag: CardDef<Params> = {
 | `tags` | 建议 | 检索关键词 |
 | `defaults` | ✓ | 每个参数的默认值。见下面「默认值规则」 |
 | `controls` | ✓ | 参数控件表。界面面板和 AI 都靠它了解 schema |
-| `Component` | ✓ | React 组件 |
+| `Component` | ✓ | React 组件。**图卡例外**：写了 `card` 或 `audio` 的定义不写它（见上面「图卡路线」） |
 | `frameMode` | 建议 | `"direct"`（直接求值动画）：包括过渡在内，画面由 `params` 和局部时间 `t` 直接计算，可随机访问；`"stateful"`（状态推进动画）：依赖 Motion、CSS 动画、rAF 或模拟的历史，需要推进。是否使用 React 与这个分类无关。未填写默认保留历史；旧卡明确声明 `settleMs: 0, after: "hold"` 时自动按静态直接求值处理。 |
 | `parts` | 建议 | **部件树**(约定封装的结构):这张卡对外由哪几块组成,每块由哪些参数驱动、什么时候进场、多久落定。代码页和 `get_clip` 按它组织参数。见下面「部件树与生命周期」 |
 | `lifecycle` | 建议 | **生命周期**(约定封装的时间):进场多久落定(`settleMs`)、之后 `hold` 停住 / `loop` 循环 / `evolve` 持续变化、支持的退场(`exit`,目前都是 `["fade"]`) |

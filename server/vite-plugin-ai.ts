@@ -12,6 +12,8 @@ import { overLimit } from './http-guard.mjs';
  * 磁盘上的另一份模块实例,状态永远是空的 —— 实测服务端 see_frames 在 whenPrerenderReady 里干等 60 秒。
  */
 import { prerenderPost } from './prerender-client.mjs';
+// 镜像的存储本体在镜像插件里(两个进程都挂);这里只读当前编辑页 session 的最新一版
+import { latestMirror, latestPlayhead } from './vite-plugin-mirror';
 
 
 /**
@@ -187,44 +189,19 @@ export default function vitePluginAi(): Plugin {
        * PROMPTCUT_AGENT 带上来,API 直连那条路由 startRun 的 callTool 闭包带;编辑台拿它记「谁改了哪儿」。
        */
       /*
-       * 数据管理的只读镜像(docs/decoupling-plan.md 第 3.2 节,阶段 4)。
+       * 数据管理的只读镜像(docs/decoupling-plan.md 第 3.2 节,阶段 4;A7)。
        *
-       * 连着桥的编辑器页面把项目(带版本号)和停下时的播放头推过来(src/editor/dataMirror.ts)。
-       * 有了它,Agent 的读和渲染 —— get_project / see_frames(成片)/ get_gif / bake_card / inspect_card_dom ——
-       * 就在这里直接拿镜像去问预渲染进程,**完全不经过编辑器页面**:以前这些调用要经 SSE 转给页面,
-       * 页面再发渲染请求,请求一挂几分钟,占的是编辑器那个源的连接,界面因此卡死而 CPU 一点都不忙。
+       * 编辑页把项目(带版本号)推给**镜像插件**(server/vite-plugin-mirror.ts,两个进程都挂),
+       * 播放头走它的 /api/data/playhead。这里只读:Agent 的读和渲染 —— get_project /
+       * see_frames(成片)/ get_gif / bake_card / inspect_card_dom —— 直接拿镜像去问预渲染进程,
+       * **完全不经过编辑器页面**:以前这些调用要经 SSE 转给页面,页面再发渲染请求,请求一挂几分钟,
+       * 占的是编辑器那个源的连接,界面因此卡死而 CPU 一点都不忙。
        * 写操作仍然经过页面(撤销 / 重做都在那边),页面在回结果之前会先把改动推过来,读后写一致。
        * 页面关掉之后镜像还留在内存里,Agent 照样能读、能看画面。
+       *
+       * 镜像本身(存储、版本窗口、两层 diff、转发给预渲染)搬到镜像插件里了 —— ai 插件只在
+       * 编辑器那一端挂,而预渲染进程也要按键取项目。
        */
-      let mirror: { session: string; rev: number; project: any; t: number; at: number } | null = null;
-      server.middlewares.use('/api/data/project', (req, res) => {
-        if (req.method === 'GET') {
-          return sendJson(res, mirror ? 200 : 404, mirror ? { ok: true, rev: mirror.rev, t: mirror.t, at: mirror.at, project: mirror.project } : { ok: false, error: '还没有镜像:编辑器页面没打开过' });
-        }
-        if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: 'GET / POST only' });
-        let body = '';
-        let size = 0;
-        req.on('data', (c) => { size += c.length; if (size > 64 * 1024 * 1024) { req.destroy(); return; } body += c; });
-        req.on('end', () => {
-          try {
-            const d = JSON.parse(body || '{}');
-            if (!d.project || !Array.isArray(d.project.tracks)) return sendJson(res, 400, { ok: false, error: '缺少 project' });
-            const session = String(d.session || '');
-            const rev = Number(d.rev) || 0;
-            /*
-             * 同一个页面会话里只收更新的版本:页面那边已经一次只推一个,这里再兜一道,
-             * 万一两次推送乱序到达,旧的也盖不掉新的。换了页面(刷新、重开)版本号从头数,按会话区分。
-             */
-            if (mirror && mirror.session === session && rev <= mirror.rev) {
-              return sendJson(res, 200, { ok: true, rev: mirror.rev, stale: true });
-            }
-            mirror = { session, rev, project: d.project, t: Number.isFinite(Number(d.t)) ? Number(d.t) : 0, at: Date.now() };
-            sendJson(res, 200, { ok: true, rev: mirror.rev });
-          } catch (e: any) {
-            sendJson(res, 400, { ok: false, error: e?.message || String(e) });
-          }
-        });
-      });
 
       /** 这几个工具在服务端就地执行(有镜像时);其余照旧经编辑器页面 */
       const MIRRORED_TOOLS = new Set(['get_project', 'see_frames', 'get_gif', 'bake_card', 'inspect_card_dom']);
@@ -234,6 +211,7 @@ export default function vitePluginAi(): Plugin {
        * 出错就抛(和经页面那条路一样:桥把 error 原样交给 Agent)。
        */
       async function runMirroredTool(tool: string, args: any, toolDef: any): Promise<any> {
+        const mirror = latestMirror();
         if (!MIRRORED_TOOLS.has(tool) || !mirror) return undefined;
         const required: string[] = toolDef?.inputSchema?.required ?? [];
         const missing = required.filter((k) => args?.[k] === undefined || args?.[k] === null);
@@ -263,7 +241,7 @@ export default function vitePluginAi(): Plugin {
           const times = Array.isArray(rest.times) ? rest.times.filter((x: unknown) => typeof x === 'number').slice(0, 10) : [];
           const body = times.length
             ? { project, times, clipId: rest.clipId }
-            : { project, t: typeof rest.t === 'number' ? rest.t : (rest.clipId ? undefined : mirror.t), clipId: rest.clipId };
+            : { project, t: typeof rest.t === 'number' ? rest.t : (rest.clipId ? undefined : (latestPlayhead()?.t ?? 0)), clipId: rest.clipId };
           const data = await prerenderPost('/api/vision/snapshot', body, { timeoutMs });
           if (!data?.ok) throw new Error(data?.error || '渲染画面失败');
           let result: any = times.length ? { ok: true, frames: data.frames, note: data.note, __images: data.__images } : data;

@@ -1,4 +1,4 @@
-import type { ComponentType, PointerEvent as ReactPointerEvent, ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ComponentType, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { closeTab, useAgentTabs } from "../../ai/agentTabs";
 import { MAIN_TAB } from "../../ai/liveChat";
 import { useScript } from "../../ai/script";
@@ -9,10 +9,16 @@ import { IconScript, glyphOf, shortLabel, tabTooltip } from "../right/chat/Right
 import { useRailCollapsed } from "../sideRails";
 import { useAgentAttentionMap } from "./agentAttention";
 import { beginRailPointer } from "./railDrag";
-import { agentIdOf, effectiveActive, isSectionItem, plusAnchor, visibleItems, type ItemId, type SectionId, type Side } from "./railLayout";
+import { RAIL_MORE_H, RailMoreButton, RailOverflowMenu } from "./railOverflow";
+import { CutsRailGroup } from "../timeline/CutTabs";
+import { CUTS_ITEM, agentIdOf, effectiveActive, isSectionItem, plusAnchor, visibleItems, type ItemId, type SectionId, type Side } from "./railLayout";
 import { addAgentOnSide, clickRailItem, useRailLayout } from "./railStore";
 import "../right/chat/chat.css";
 import "./dock.css";
+
+/** rail 项 56 高 + 4 间距;「+」40 高 + 4 间距(studio.css / dock.css) */
+const SLOT_H = 60;
+const PLUS_H = 44;
 
 /** Agent 项悬停说明末尾补一行状态 */
 const AGENT_STATE_TIP: Record<"busy" | "done" | "interrupted" | "idle", string> = {
@@ -42,7 +48,14 @@ const SECTION_META: Record<SectionId, { label: string; Icon: ComponentType }> = 
  * 每项外层 `.pc-dock-slot[data-pc-dock-item=<ItemId>]`,里面的按钮照旧 `data-pc-rail=<分区 | script>` / `data-pc-agent-tab=<tabId>`,
  * 「+」`data-pc="agent-tab-add"` + `data-pc-dock-add=<side>`。
  */
-export function RailBar({ side }: { side: Side }) {
+/**
+ * 一侧 rail 分成两截:head 在上半区(抽屉 / 面板旁边),tail 在时间轴卡片旁边、顶边和时间轴顶边对齐。
+ * 剪辑组管的是时间轴,所以它连同排在它后面的项画在 tail;两截是同一条 rail(同一份列表、同一个 data-pc-dock-rail),
+ * 拖放在两截之间照常挪。
+ */
+export type RailPart = "head" | "tail";
+
+export function RailBar({ side, part = "head" }: { side: Side; part?: RailPart }) {
   const layout = useRailLayout();
   const mode = useLayoutMode();
   const collapsed = useRailCollapsed(side);
@@ -50,17 +63,72 @@ export function RailBar({ side }: { side: Side }) {
   const script = useScript();
   const attention = useAgentAttentionMap();
 
-  const items = visibleItems(layout[side], mode);
-  const active = effectiveActive(layout, side, mode);
-  const anchor = plusAnchor(items);
+  // 上半截竖向放不下时,末尾几项收进「▾」子窗口:量列表可用高度
+  const listRef = useRef<HTMLDivElement>(null);
+  const [listH, setListH] = useState(Infinity);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const moreRef = useRef<HTMLButtonElement>(null);
 
-  const renderSlot = (id: ItemId): ReactNode => {
+  const all = visibleItems(layout[side], mode);
+  const active = effectiveActive(layout, side, mode);
+  const anchor = plusAnchor(all);
+  // 剪辑组和排在它后面的项画在时间轴旁边那截(tail),前面的画在上面(head)。没有剪辑组时整条都在 head
+  const cut = all.indexOf(CUTS_ITEM);
+  const split = cut < 0 ? all.length : cut;
+  const offset = part === "tail" ? split : 0;
+  const items = part === "tail" ? all.slice(split) : all.slice(0, split);
+  const empty = items.length === 0;
+
+  useLayoutEffect(() => {
+    const el = listRef.current;
+    if (!el || part === "tail") return;
+    const measure = () => setListH(el.clientHeight);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [part, empty]);
+
+  // 放得下几项:按顺序累加(「+」跟在 anchor 那一项后面也占高度),全放下就不要「▾」;
+  // 放不下就给「▾」留出位置再数一遍。只收末尾的项 —— 拖放落点按画出来的项数算,收中间的会对不上
+  let fit = items.length;
+  if (part === "head") {
+    const heightOf = (n: number) => {
+      let h = n * SLOT_H;
+      if (anchor >= 0 && anchor < n) h += PLUS_H;
+      return h;
+    };
+    if (heightOf(items.length) > listH) {
+      fit = 0;
+      while (fit < items.length && heightOf(fit + 1) + RAIL_MORE_H <= listH) fit++;
+    }
+  }
+  const hidden = items.slice(fit);
+  const plusHidden = anchor >= fit && anchor < items.length;
+  useEffect(() => {
+    if (hidden.length === 0) setMenuOpen(false);
+  }, [hidden.length]);
+
+  if (part === "tail" && empty) return null;
+
+  const renderSlot = (id: ItemId, inMenu = false): ReactNode => {
     const on = id === active;
     const expanded = on ? !collapsed : undefined;
-    const handlers = {
-      onClick: () => clickRailItem(side, id),
-      onPointerDown: (e: ReactPointerEvent<HTMLButtonElement>) => beginRailPointer(e, id),
-    };
+    // 子窗口里的项:点了切过去并关窗口,不能从这里拖
+    const handlers = inMenu
+      ? {
+          onClick: () => {
+            clickRailItem(side, id);
+            setMenuOpen(false);
+          },
+        }
+      : {
+          onClick: () => clickRailItem(side, id),
+          onPointerDown: (e: ReactPointerEvent<HTMLButtonElement>) => beginRailPointer(e, id),
+        };
+
+    // 剪辑组:整组一项,自己处理点击 / 改名 / 拖动(按住组里任何一格拖的都是整组),不开抽屉
+    if (id === CUTS_ITEM) return <CutsRailGroup key={id} />;
 
     if (isSectionItem(id)) {
       const { label, Icon } = SECTION_META[id];
@@ -148,37 +216,63 @@ export function RailBar({ side }: { side: Side }) {
   };
 
   // 「+」和各项放在同一个带 key 的数组里:新开一页后它挪到新项下面是移动,不是卸载重建
+  const plusButton = (inMenu: boolean) => (
+    <button
+      key="+"
+      type="button"
+      className="pc-rail-item pc-dock-add"
+      data-pc="agent-tab-add"
+      data-pc-dock-add={inMenu ? undefined : side}
+      title="新助手分页"
+      aria-label="新助手分页"
+      onClick={() => {
+        addAgentOnSide(side);
+        if (inMenu) setMenuOpen(false);
+      }}
+    >
+      <IconBubblePlus />
+      {inMenu && <span>新助手分页</span>}
+    </button>
+  );
   const children: ReactNode[] = [];
-  items.forEach((id, i) => {
+  items.slice(0, fit).forEach((id, i) => {
     children.push(renderSlot(id));
-    if (i === anchor) {
-      children.push(
-        <button
-          key="+"
-          type="button"
-          className="pc-rail-item pc-dock-add"
-          data-pc="agent-tab-add"
-          data-pc-dock-add={side}
-          title="新助手分页"
-          aria-label="新助手分页"
-          onClick={() => addAgentOnSide(side)}
-        >
-          <IconBubblePlus />
-        </button>,
-      );
-    }
+    if (i + offset === anchor) children.push(plusButton(false));
   });
+  if (hidden.length > 0) {
+    children.push(
+      <RailMoreButton
+        key="more"
+        ref={moreRef}
+        dataPc={`${side}-rail-more`}
+        count={hidden.length}
+        open={menuOpen}
+        hasActive={!!active && hidden.includes(active)}
+        title={`还有 ${hidden.length} 项`}
+        onToggle={() => setMenuOpen((v) => !v)}
+      />,
+    );
+  }
 
   return (
     <nav
-      className={`pc-rail pc-rail--${side} pc-dock-rail`}
-      data-pc={`${side}-rail`}
+      className={`pc-rail pc-rail--${side} pc-dock-rail${part === "tail" ? " pc-dock-rail--tail" : ""}`}
+      data-pc={part === "tail" ? `${side}-rail-tail` : `${side}-rail`}
       data-pc-dock-rail={side}
-      aria-label={side === "left" ? "左栏分区" : "右栏分页"}
+      aria-label={side === "left" ? (part === "tail" ? "左栏剪辑" : "左栏分区") : part === "tail" ? "右栏剪辑" : "右栏分页"}
     >
-      <div className="pc-dock-rail-list" data-pc-dock-list={side}>
+      {/* 时间轴旁边那一截顶上一道小横线,和上半部分分开 */}
+      {part === "tail" && <div className="pc-rail-sep pc-dock-tail-sep" aria-hidden="true" />}
+      {/* data-pc-dock-offset:这一截前面还有几项(在 head 里),拖放算落点时加上 */}
+      <div ref={listRef} className="pc-dock-rail-list" data-pc-dock-list={side} data-pc-dock-offset={offset}>
         {children}
       </div>
+      {menuOpen && hidden.length > 0 && (
+        <RailOverflowMenu dataPc={`${side}-rail-menu`} anchor={moreRef.current} onClose={() => setMenuOpen(false)}>
+          {hidden.map((id) => renderSlot(id, true))}
+          {plusHidden && plusButton(true)}
+        </RailOverflowMenu>
+      )}
     </nav>
   );
 }

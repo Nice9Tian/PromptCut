@@ -49,8 +49,8 @@
   cursor: pointer;
   font-family: inherit;
   color: var(--on-accent);
-  /* 和截图里那条渐变横幅一个意思,但用皮肤的主色,换皮肤会跟着变 */
-  background: linear-gradient(120deg, var(--accent), color-mix(in srgb, var(--accent) 45%, #7b5cff));
+  /* 品牌渐变,定义在 skins.ts 的 --ui-accent-grad;换皮肤会跟着变 */
+  background: var(--ui-accent-grad, linear-gradient(100deg, var(--accent), color-mix(in srgb, var(--accent) 10%, #7b5cff)));
 }
 .sp-hero:hover { filter: brightness(1.06); }
 .sp-hero:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }

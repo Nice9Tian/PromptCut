@@ -83,6 +83,8 @@ export const stepTimeline: CardDef<Params> = {
   useWhen: "口播在讲有先后顺序的步骤或流程(「第一」「首先」「然后」「最后」「步骤」)时,用横向时间线依次点亮。底板固定横屏宽度,**最多 5 步、每步步名不超过 4 字**,超了会横向叠字。这是挂载即播的入场动画,不跟时间轴走,做不了贯穿全片的进度条(那个用 chapter-bar)。没有先后关系的并列要点用 checklist。",
   tags: ["步骤","流程","时间线","顺序"],
   source: "native",
+  // 帧模式:审计固化(A0.1)。值 = 固化前 cardFrameMode(def, def.defaults) 的返回值。
+  frameMode: "stateful",
   defaults: {
     ...hudDefaults,
     steps: "选题|脚本|拍摄|剪辑|发布",

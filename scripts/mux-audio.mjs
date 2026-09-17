@@ -36,19 +36,19 @@ export function buildAudioPlan(project, outDir, exists = fs.existsSync, sourceOf
   for (const e of audioPlanOf(project)) {
     const sourceClip = (project.tracks ?? []).flatMap(track => track.clips ?? []).find(clip => clip.id === e.clipId);
     // A generated node replaces its corresponding source-media input; applying both would double it.
-    if (isPythonAudioNode(project, sourceClip?.nodeId)) continue;
+    if (isCardAudioNode(project, sourceClip?.nodeId)) continue;
     const m = (project.media || []).find((x) => x.id === e.mediaId);
     const file = sourceOf(m);
     if (!file || (!/^https?:/i.test(file) && !exists(file))) continue;
     out.push({ file, clipId: e.clipId, start: e.start, dur: e.dur, offset: e.offset, volume: e.volume, fadeIn: e.fadeIn, fadeOut: e.fadeOut, fx: e.fx });
   }
-  // Python audio nodes have no ffmpeg-readable source file.  Keep them in the one common
+  // 音频图卡节点 have no ffmpeg-readable source file.  Keep them in the one common
   // plan so Chrome's OfflineAudioContext can request their true WAV blocks.  A caller that
   // explicitly selects the old --audio ffmpeg path must reject them, never silently omit them.
   for (const track of project.tracks ?? []) {
     if (track.hidden || track.muted) continue;
     for (const clip of track.clips ?? []) {
-      if (clip.audioMuted || !isPythonAudioNode(project, clip.nodeId)) continue;
+      if (clip.audioMuted || !isCardAudioNode(project, clip.nodeId)) continue;
       // Generated blocks are sample-addressed; do not quantize their timeline placement to
       // the legacy 3 ms audio-plan precision before converting duration to frames.
       const dur = clip.end - clip.start;
@@ -62,12 +62,12 @@ export function buildAudioPlan(project, outDir, exists = fs.existsSync, sourceOf
   return out;
 }
 
-/** Kept local to this script so the project model need not invent a fake media asset for a generated node. */
-export function isPythonAudioNode(project, nodeId) {
+/** Kept local to this script so the project model need not invent a fake media asset for a generated node.
+ *  只看节点:Node 侧脚本读不到 TSX 定义,kind 是 H2 从定义抄进节点的那一份。 */
+export function isCardAudioNode(project, nodeId) {
   if (!nodeId) return false;
   const node = (project.cardNodes ?? []).find(value => value.id === nodeId);
-  const definition = node?.definitionId && (project.cardDefinitions ?? []).find(value => value.id === node.definitionId);
-  return node?.adapter === "python" && definition?.language === "python" && definition.kind === "audio";
+  return node?.adapter === "card" && node.kind === "audio";
 }
 
 /** 这个文件里有没有音频流(视频不一定有声轨,直接引用会让整条 filter 崩掉) */
@@ -86,7 +86,7 @@ export function hasAudioStream(file, ffprobeCmd) {
 
 /** 拼 ffmpeg 参数:视频流照抄,音频按计划混音 */
 export function buildFfmpegArgs(videoIn, plan, videoOut, durationSec) {
-  if (plan.some(p => p.cardAudio)) throw new Error("ffmpeg audio mux cannot render Python card audio; use the Chrome audio mixer");
+  if (plan.some(p => p.cardAudio)) throw new Error("ffmpeg audio mux cannot render card audio; use the Chrome audio mixer");
   const args = ["-y", "-i", videoIn];
   const filters = [];
   plan.forEach((p, i) => {

@@ -19,7 +19,8 @@ function isCardDef(value: unknown): value is CardDef<any> {
     typeof c.name === "string" &&
     typeof c.defaults === "object" &&
     Array.isArray(c.controls) &&
-    typeof c.Component === "function"
+    // 图卡(card / audio)不写 Component,由宿主组件代渲;三者有其一就算一张卡
+    (typeof c.Component === "function" || typeof c.card === "function" || typeof c.audio === "function")
   );
 }
 

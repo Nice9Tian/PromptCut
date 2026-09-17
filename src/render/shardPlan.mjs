@@ -1,4 +1,4 @@
-import { CARD_MOUNT_LEAD } from './frameWindow.mjs';
+import { mountFrameOf } from './frameWindow.mjs';
 import { normalizeFrameMode } from './frameMode.mjs';
 
 /** Frames during which Stage keeps a clip mounted, as [first, last], or null.
@@ -6,10 +6,7 @@ import { normalizeFrameMode } from './frameMode.mjs';
  * lead and floating-point boundaries such as 10.05 - 0.05.
  */
 export function clipFrameSpan(clip, fps) {
-  const lead = clip.start - CARD_MOUNT_LEAD;
-  let first = Math.max(0, Math.ceil(lead * fps));
-  while (first > 0 && (first - 1) / fps >= lead) first--;
-  while (first / fps < lead) first++;
+  const first = mountFrameOf(clip, fps);
   let last = Math.ceil(clip.end * fps);
   while (last >= 0 && last / fps >= clip.end) last--;
   while ((last + 1) / fps < clip.end) last++;
@@ -22,7 +19,7 @@ export function clipFrameSpan(clip, fps) {
  * screenshot still moves Motion/WAAPI anchors (Tokyo project: step-timeline at
  * frame 1962 differed by a frame depending on whether 1961 was captured). A cut
  * inside a stateful card's mounted life therefore changes pixels. Direct cards,
- * media and Python cards are evaluated at their time and may be cut anywhere.
+ * media and 图卡 are evaluated at their time and may be cut anywhere.
  * An unknown mode is treated as stateful.
  */
 export function shardCutCandidates(clips, startFrame, endFrame, fps) {

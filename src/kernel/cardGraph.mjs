@@ -1,8 +1,8 @@
-import { cardCapabilities } from '../render/frameMode.mjs';
+import { cardCapabilities, COMPOSITING_VALUES } from '../render/frameMode.mjs';
 
 export const CARD_RUNTIME_ABI = 1;
 export const CARD_KINDS = ['animation', 'filter', 'transition', 'emphasis', 'audio'];
-export const CARD_ADAPTERS = ['python', 'chrome', 'media', 'filter', 'audio', 'emphasis', 'transition'];
+export const CARD_ADAPTERS = ['card', 'chrome', 'media', 'filter', 'audio', 'emphasis', 'transition'];
 const own = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
 const fail = message => { throw new Error(`Card graph: ${message}`); };
 const object = value => value && typeof value === 'object' && !Array.isArray(value);
@@ -25,14 +25,10 @@ export function cardJson(value) {
 export function normalizeCardDefinition(raw) {
   if (!object(raw)) fail('definition must be an object');
   const id = identifier(raw.id, 'definition id');
-  if (!['python', 'tsx', 'builtin'].includes(raw.language)) fail(`${id}: invalid language`);
+  if (!['tsx', 'builtin'].includes(raw.language)) fail(`${id}: invalid language`);
   if (!CARD_KINDS.includes(raw.kind)) fail(`${id}: invalid kind`);
-  if (raw.language === 'python') {
-    if (typeof raw.source !== 'string' || !raw.source.trim() || raw.source.length > 512 * 1024) fail(`${id}: invalid Python source`);
-    if (typeof raw.entry !== 'string' || !/^[A-Za-z_]\w*$/.test(raw.entry)) fail(`${id}: invalid class name`);
-  }
   if (raw.need_prerendering !== undefined && typeof raw.need_prerendering !== 'boolean') fail(`${id}: need_prerendering must be boolean`);
-  if (raw.compositing !== undefined && !['independent', 'context', 'unknown'].includes(raw.compositing)) fail(`${id}: invalid compositing`);
+  if (raw.compositing !== undefined && !COMPOSITING_VALUES.includes(raw.compositing)) fail(`${id}: invalid compositing`);
   const styleKeys = raw.styleKeys ?? null;
   if (styleKeys !== null && (!Array.isArray(styleKeys) || styleKeys.some(k => typeof k !== 'string' || !k))) fail(`${id}: invalid styleKeys`);
   const definition = { ...raw, id, defaults: raw.defaults ?? {}, styleKeys,
@@ -68,6 +64,19 @@ export function validateCardGraph(raw) {
     const inputs = Object.fromEntries(Object.entries(value.inputs ?? {}).map(([name, ref]) => [name, normalizeCardInput(ref)]));
     nodes.set(id, { ...structuredClone(value), inputs });
   }
+  /*
+   * 指向已删片段的输入(`@clip/<id>/…`)是「片段被删了」,不是图写错了:丢边、记名字,
+   * 不 fail —— 否则「给素材段套滤镜图卡再删掉这段」之后整份图算不出来,所有图卡陪葬。
+   *
+   * 丢边必须在下面算 dependencies **之前**做:只在循环里 continue 的话 remaining
+   * 已经按含悬空边的数量定死,缺失节点永远不进任何 level,最后撞 'dependency cycle'。
+   */
+  for (const [, node] of nodes) {
+    const missing = Object.entries(node.inputs).filter(([, ref]) => !nodes.has(ref.nodeId) && ref.nodeId.startsWith('@clip/')).map(([name]) => name);
+    if (!missing.length) continue;
+    for (const name of missing) delete node.inputs[name];
+    node.missingInputs = [...new Set([...(node.missingInputs ?? []), ...missing])].sort();
+  }
   const dependants = new Map(), remaining = new Map();
   for (const [id, node] of nodes) {
     const dependencies = new Set(Object.values(node.inputs).map(ref => ref.nodeId));
@@ -98,15 +107,14 @@ export function validateCardGraph(raw) {
   return { nodes: [...nodes.values()], outputs, levels };
 }
 
-/** Adapt the existing project into the same graph used by Python cards.
+/** Adapt the existing project into the same graph used by 图卡 (graph cards).
  * Existing fields stay readable; native effects are adapter nodes, not a
  * separate public effect-definition or scheduling API.
  */
 export function projectCardGraph(project, getLegacyCard = () => undefined) {
-  const definitions = (project.cardDefinitions ?? []).map(normalizeCardDefinition);
-  const byDefinition = new Map(definitions.map(def => [def.id, def]));
-  if (byDefinition.size !== definitions.length) fail('duplicate definition');
   const nodes = structuredClone(project.cardNodes ?? []), outputs = [];
+  /** 图卡片段(定义来自注册表、写了 card / audio)。判据只看定义,不看节点。 */
+  const graphCard = id => { const def = getLegacyCard(id); return def && (typeof def.card === 'function' || typeof def.audio === 'function') ? def : undefined; };
   const nodeIds = new Set(nodes.map(node => node.id));
   const media = new Map((project.media ?? []).map(value => [value.id, value]));
   const add = node => {
@@ -116,17 +124,35 @@ export function projectCardGraph(project, getLegacyCard = () => undefined) {
   for (const track of [...(project.tracks ?? [])].reverse()) {
     for (const clip of track.clips ?? []) {
       let baseId;
+      const graphDef = clip.cardId ? graphCard(clip.cardId) : undefined;
       if (clip.mediaId) {
         const source = media.get(clip.mediaId);
         baseId = add({ id: `@clip/${clip.id}/source`, adapter: 'media', media: source, clipId: clip.id,
           offset: clip.mediaOffset ?? 0, inputs: {}, capabilities: { need_prerendering: false, compositing: 'independent' } });
-      } else if (clip.cardId) {
+      } else if (clip.cardId && !graphDef) {
+        // 图卡片段**不合成 chrome 基节点**:它的输出就是它自己那个 'card' 节点
         const def = getLegacyCard(clip.cardId);
         baseId = add({ id: `@clip/${clip.id}/source`, adapter: 'chrome', cardId: clip.cardId, clipId: clip.id,
-          params: { ...def?.defaults, ...clip.params }, parts: clip.parts, inputs: {}, capabilities: cardCapabilities(def, { ...def?.defaults, ...clip.params }) });
+          params: { ...def?.defaults, ...clip.params }, parts: clip.parts, inputs: {}, capabilities: cardCapabilities(def, { ...def?.defaults, ...clip.params }, clip.parts) });
       }
       let nodeId = clip.nodeId || baseId;
+      // 面板拖入 / add_clip 建的图卡片段只有 cardId,就地合成一个渲染用的节点。
+      // 这个 id 只给渲染用 —— 片段一旦被 apply_card 碰过就由物化规则换成真节点。
+      if (!nodeId && graphDef) nodeId = add({ id: `@clip/${clip.id}/card`, adapter: 'card', cardId: clip.cardId,
+        kind: graphDef.kind ?? 'animation', inputs: {}, params: { ...graphDef.defaults, ...clip.params } });
       if (!nodeId) continue;
+      /*
+       * 实例参数:节点自己存一份,但**片段指向的那个节点以 clip.params 为准**。
+       * 右栏改参数只动最外层那张,链上内层节点保留建卡时那份(要改走 apply_card 传 nodeId)。
+       * digest 读的就是图里这份,所以视觉、音频、身份三处同一口径。
+       */
+      if (clip.nodeId) {
+        const instance = nodes.find(node => node.id === clip.nodeId);
+        if (instance?.adapter === 'card') {
+          const def = getLegacyCard(instance.cardId);
+          instance.params = { ...def?.defaults, ...clip.params };
+        }
+      }
       for (const [field, library, adapter] of [['filter', 'filters', 'filter'], ['audioFx', 'audioFx', 'audio']]) {
         if (!clip[field]) continue;
         const def = project[library]?.find(value => value.id === clip[field].id);
@@ -139,14 +165,16 @@ export function projectCardGraph(project, getLegacyCard = () => undefined) {
         frame: clip.frame, opacity: clip.opacity, fadeIn: clip.fadeIn, fadeOut: clip.fadeOut, motion: clip.motion });
     }
   }
-  for (const node of nodes) if (node.adapter === 'python' && !byDefinition.has(node.definitionId)) fail(`${node.id}: missing definition ${node.definitionId}`);
   const graph = validateCardGraph({ nodes, outputs });
   const normalized = new Map(graph.nodes.map(node => [node.id, node]));
   for (const level of graph.levels) for (const id of level) {
     const node = normalized.get(id);
-    if (node.adapter === 'python') {
-      const definition = byDefinition.get(node.definitionId);
-      node.capabilities = { need_prerendering: definition.need_prerendering, compositing: definition.compositing };
+    if (node.adapter === 'card') {
+      // 定义没了(用户卡文件被删)不 fail:一张卡的定义没了不能让整份图算不出来。
+      // 能力留 unknown,片段由 Stage 的取 def 那一格 return null 处理。
+      const def = getLegacyCard(node.cardId);
+      node.capabilities = def ? cardCapabilities(def, { ...def.defaults, ...node.params })
+        : { need_prerendering: true, compositing: 'unknown' };
     } else if (!node.capabilities) {
       const upstream = Object.values(node.inputs).map(input => normalized.get(input.nodeId).capabilities);
       node.capabilities = { need_prerendering: upstream.some(c => c?.need_prerendering),
@@ -154,5 +182,5 @@ export function projectCardGraph(project, getLegacyCard = () => undefined) {
     }
   }
   for (const output of graph.outputs) output.capabilities = normalized.get(output.nodeId).capabilities;
-  return { abi: CARD_RUNTIME_ABI, definitions, ...graph };
+  return { abi: CARD_RUNTIME_ABI, ...graph };
 }

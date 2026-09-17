@@ -87,6 +87,8 @@ export const uiCallout: CardDef<Params> = {
   useWhen: "底层是录屏画面、要圈出界面上某块区域并引出标签时用。定位靠 position(居中/底部/靠左/靠右四个锚点)加 offsetX/offsetY 像素偏移,**没有绝对坐标参数**,还要给圈的宽高 ringW/ringH 和引线方向 side。位置说不清就别选,默认会圈在画面正中心。",
   tags: ["界面","标注","圈选","教程"],
   source: "native",
+  // 帧模式:审计固化(A0.1)。值 = 固化前 cardFrameMode(def, def.defaults) 的返回值。
+  frameMode: "stateful",
   defaults: {
     ...hudDefaults,
     ...hudOffsetDefaults,

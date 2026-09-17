@@ -67,6 +67,8 @@ export const muAnimatedShinyText: CardDef<Params> = {
   useWhen: "一个词或短句要「发光」地强调时用;高光 8 秒一循环、不会停,适合浅色底。不做数字滚动,不做多词轮换。",
   tags: ["文字", "高光", "闪光"],
   source: "magicui",
+  // 帧模式:审计固化(A0.1)。值 = 固化前 cardFrameMode(def, def.defaults) 的返回值。
+  frameMode: "stateful",
   defaults: { text: "PromptCut", shimmerWidth: 200 },
   controls: [
     { key: "text", label: "文字", type: "text" },

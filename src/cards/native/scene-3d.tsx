@@ -244,6 +244,8 @@ export const scene3dCard: CardDef<Params> = {
     "**它和用 set_camera3d 打开的三维默认就是同一台相机**(fov 留 0 即可),所以它和摆进空间的卡片透视强度一致、叠起来不用调。只有想让它单独用一个视角时才填 fov。",
   tags: ["三维", "3D", "立体", "模型", "旋转", "几何", "canvas", "webgl"],
   source: "native",
+  // 帧模式:审计固化(A0.1)。值 = 固化前 cardFrameMode(def, def.defaults) 的返回值。
+  frameMode: "stateful",
   defaults: {
     shape: "knot", color: "#8ab4ff", metal: 0.6, rough: 0.25, size: 0.55,
     spinY: 0.15, spinX: 0, tilt: -18, light: "studio", fov: 0, wire: "no", texture: "",

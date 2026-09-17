@@ -45,6 +45,8 @@ export const punchPill: CardDef<Params> = {
   useWhen: "极短的重点词、卖点标签或口号(2 到 8 字,不要求感叹号)做成发光胶囊弹入。字号很大且单行不折行,太长会撑破圆角。完整的强调句用 blur-text,引述原话用 quote-lockup。",
   tags: ["金句","标语","短句","感叹"],
   source: "native",
+  // 帧模式:审计固化(A0.1)。值 = 固化前 cardFrameMode(def, def.defaults) 的返回值。
+  frameMode: "stateful",
   defaults: {
     ...hudDefaults,
     position: "center",

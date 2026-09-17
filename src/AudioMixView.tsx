@@ -8,6 +8,9 @@
  * 不走 ExportView 的虚拟时钟:这一页没有画面,离线渲染自己有时间轴。
  */
 import { useEffect, useState } from "react";
+// 音频图卡在这一页里求值,注册表和 configureCardAudio 必须先跑过。同一棵模块树里
+// App / ExportView / StageView 已经各自 import 过它了,这行只是把依赖写明。
+import "./cards";
 import { encodeWavFloat32, peakOf, renderMix, type MixPlan } from "./audio/renderMix";
 
 declare global {

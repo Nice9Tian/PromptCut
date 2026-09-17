@@ -9,12 +9,6 @@ import { projectCardGraph } from "../../kernel/cardGraph.mjs";
 type Value = { value: CardGpuValue; revision: string; registered?: boolean };
 const registrations = new WeakMap<Project, Map<string, Value>>();
 
-export function pythonVisualNode(project: Project, nodeId?: string) {
-  if (!nodeId) return false;
-  const node = project.cardNodes?.find(node => node.id === nodeId);
-  return !!node && project.cardDefinitions?.find(def => def.id === node.definitionId)?.kind !== "audio";
-}
-
 /** The same asynchronous canvas is used by preview, Agent capture and export.
  * The frame-work ticket prevents a pending/failed GPU canvas from becoming a
  * completed screenshot. Interactive placeholders are a separate host policy. */

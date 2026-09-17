@@ -24,6 +24,8 @@ export const compositeCard: CardDef<Record<string, never>> = {
   useWhen: "现成的卡都不合适、要按内容自己搭一张(标题 + 要点 + 指标随意组合)时用。先 add_composite 建一张空的,再 list_parts 挑部件 add_part 进去,或者一次把 parts 传给 add_composite。",
   tags: ["组合", "部件", "自定义"],
   source: "native",
+  // 帧模式:审计固化(A0.1)。值 = 固化前 cardFrameMode(def, def.defaults) 的返回值。
+  frameMode: "stateful",
   defaults: {},
   controls: [],
   lifecycle: { after: "hold", exit: ["fade"] },

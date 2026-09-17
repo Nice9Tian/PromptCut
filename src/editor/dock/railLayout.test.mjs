@@ -9,6 +9,8 @@ import assert from "node:assert/strict";
 
 import {
   SECTION_IDS,
+  CUTS_ITEM,
+  hasPages,
   agentItem,
   defaultLayout,
   validateLayout,
@@ -31,9 +33,9 @@ const L = (left, right, active = {}) => ({
   active: { left: active.left ?? left[0] ?? null, right: active.right ?? right[0] ?? null },
 });
 
-test("默认布局 = 改版前:左边五个分区,右边剧本 + 各 Agent;选中项沿用旧键", () => {
+test("默认布局 = 改版前:左边五个分区 + 剪辑组,右边剧本 + 各 Agent;选中项沿用旧键", () => {
   const d = defaultLayout(["main", "t2"]);
-  assert.deepEqual(d.left, [...SECTION_IDS]);
+  assert.deepEqual(d.left, [...SECTION_IDS, CUTS_ITEM]);
   assert.deepEqual(d.right, ["script", A("main"), A("t2")]);
   assert.deepEqual(d.active, { left: "library", right: A("main") });
 
@@ -58,21 +60,21 @@ test("校验:去掉已不存在的 Agent 和不认识的项,重复的只留第�
     active: { left: "edit", right: A("main") },
   };
   const v = validateLayout(raw, ["main"]);
-  assert.deepEqual(v.left, ["edit", "library"]);
+  assert.deepEqual(v.left, ["edit", "library", CUTS_ITEM]);
   assert.deepEqual(v.right, [A("main"), "script", "captions", "animations", "effects"]);
   assert.deepEqual(v.active, { left: "edit", right: A("main") });
 });
 
 test("校验:缺的分区按固定顺序补回左边末尾,缺的剧本补回右边顶上", () => {
   const v = validateLayout({ left: ["captions"], right: [A("main")], active: {} }, ["main"]);
-  assert.deepEqual(v.left, ["captions", "library", "animations", "effects", "edit"]);
+  assert.deepEqual(v.left, ["captions", "library", "animations", "effects", "edit", CUTS_ITEM]);
   assert.deepEqual(v.right, ["script", A("main")]);
 });
 
 test("校验:剧本和分区在另一侧也算数,不重复补", () => {
-  const v = validateLayout({ left: ["script", ...SECTION_IDS], right: [A("main")], active: { left: "script" } }, ["main"]);
+  const v = validateLayout({ left: ["script", ...SECTION_IDS], right: [A("main"), CUTS_ITEM], active: { left: "script" } }, ["main"]);
   assert.deepEqual(v.left, ["script", ...SECTION_IDS]);
-  assert.deepEqual(v.right, [A("main")]);
+  assert.deepEqual(v.right, [A("main"), CUTS_ITEM]);
   assert.equal(v.active.left, "script");
 });
 
@@ -92,7 +94,8 @@ test("校验:active 不在那一侧就退回 fallback 的选中项,再退回第�
   assert.equal(v.active.right, A("main"), "fallback 的 agent:main 还在右边");
 
   const empty = validateLayout({ left: [], right: ["script", ...SECTION_IDS, A("main")], active: { left: "library" } }, ["main"]);
-  assert.deepEqual(empty.left, []);
+  assert.deepEqual(empty.left, [CUTS_ITEM], "老布局没有剪辑组:补回左边");
+  assert.equal(empty.active.left, null, "只剩剪辑组的一侧没有选中项");
   assert.equal(empty.active.left, null);
   assert.equal(empty.active.right, A("main"), "没存 right 的选中项:默认布局的 agent:main 还在右边,就用它");
 
@@ -246,4 +249,41 @@ test("withActive / sameLayout", () => {
   assert.equal(withActive(base, A("nope")), base);
   assert.equal(sameLayout(base, JSON.parse(JSON.stringify(base))), true);
   assert.equal(sameLayout(base, next), false);
+});
+
+test("剪辑组:不是页面,永远不当选中项;只剩它的一侧算空", () => {
+  // 存下来的 active 指着剪辑组(不该出现,但要兜住):退回那一侧第一个页面项
+  const v = validateLayout({ left: [CUTS_ITEM, "library"], right: ["script", A("main")], active: { left: CUTS_ITEM } }, ["main"]);
+  assert.equal(v.active.left, "library");
+  assert.equal(effectiveActive(L([CUTS_ITEM], ["script"], { left: CUTS_ITEM }), "left", "classic"), null);
+  assert.equal(effectiveActive(L([CUTS_ITEM, "edit"], ["script"], { left: null }), "left", "classic"), "edit");
+  assert.equal(withActive(L(["library", CUTS_ITEM], ["script"]), CUTS_ITEM).active.left, "library");
+  assert.equal(hasPages([CUTS_ITEM]), false);
+  assert.equal(hasPages([CUTS_ITEM, "script"]), true);
+  // 对话式下时间轴不显示,剪辑组跟分区一样藏起来
+  assert.deepEqual(visibleItems([CUTS_ITEM, "script"], "chat"), ["script"]);
+});
+
+test("剪辑组:整组拖到另一侧,两侧选中项都不变;源侧只剩它时报空", () => {
+  const base = L(["library", CUTS_ITEM], ["script", A("main")], { left: "library", right: A("main") });
+  const r = moveItem(base, CUTS_ITEM, "right", 1);
+  assert.deepEqual(r.layout.left, ["library"]);
+  assert.deepEqual(r.layout.right, ["script", CUTS_ITEM, A("main")]);
+  assert.deepEqual(r.layout.active, { left: "library", right: A("main") });
+  assert.equal(r.emptied, null);
+
+  // 左边的页面项都拖走了,只剩剪辑组:左边算空,选中项置 null
+  const onlyCuts = moveItem(L(["library", CUTS_ITEM], ["script"], { left: "library" }), "library", "right", 0);
+  assert.deepEqual(onlyCuts.layout.left, [CUTS_ITEM]);
+  assert.equal(onlyCuts.layout.active.left, null);
+  assert.equal(onlyCuts.emptied, "left");
+
+  // 选中项被拖走时,相邻项里跳过剪辑组
+  const skip = moveItem(L(["library", CUTS_ITEM, "edit"], ["script"], { left: "library" }), "library", "right", 0);
+  assert.equal(skip.layout.active.left, "edit");
+
+  // 关掉 Agent 后那一侧只剩剪辑组:同样算空
+  const synced = syncAgents(L([...SECTION_IDS], [A("t2"), CUTS_ITEM], { right: A("t2") }), ["main"]);
+  assert.deepEqual(synced.layout.right.includes(CUTS_ITEM), true);
+  assert.equal(synced.layout.active.right === CUTS_ITEM, false);
 });

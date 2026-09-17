@@ -29,6 +29,16 @@ declare global {
     __pcRafCount?: number;
     /** 导出:未被计数的原始 rAF。导出脚本自己等帧用它,免得把 __pcRafCount 顶起来。 */
     __pcRealRaf?: (cb: FrameRequestCallback) => number;
+    /** 舞台:被接管之前的 performance.now(量探针 / RPC 耗时用,舞台时间是虚拟的) */
+    __pcRealNow?: () => number;
+    /** 舞台:真 setTimeout(暂停态虚拟时钟不动,兜底计时要靠它) */
+    __pcRealSetTimeout?: (cb: () => void, ms?: number) => number;
+    /** 导出页 / 预渲染快照页:实体几何的导出面(见 render/solid.ts),给 puppeteer 侧 page.evaluate 用 */
+    __pcSolid?: import('../render/solid').SolidApi;
+    /** 导出页:canvas 的实体框(画布像素坐标),同 __pcSolid.canvasPaintedBox */
+    __pcCanvasBox?: import('../render/solid').SolidApi['canvasPaintedBox'];
+    /** 舞台页:RPC 方法表(父页走 postMessage;这里挂着只给测试页 / puppeteer 直接调) */
+    __pcStage?: import('../render/stageRpc').StageRpcApi;
     /**
      * 导出:DOM 变动次数。静态帧判定的主力 —— Motion 的 JS 动画绕开了被替换的 rAF,
      * 但它每帧都要把新值写回 style / 文本节点,这个躲不掉。理由详见 exportClock.ts。
@@ -45,6 +55,14 @@ declare global {
     __pcPlanFrameWindow?: (frames: number[], fps: number) => import('../render/frameWindow.mjs').FrameWindow;
     /** Parallel export: every card clip with its frame mode, for choosing safe shard cuts. */
     __pcClipFrameModes?: () => { id: string; start: number; end: number; mode: string | undefined }[];
+    /** 导出:把素材层的 src 摘掉(推进动画的过程中不加载任何素材) */
+    __pcHideFrameMedia?: () => void;
+    /** 导出:按 data-pc-media-* 把这一帧的素材装回来并 seek 到位 */
+    __pcPrepareFrameMedia?: () => Promise<void>;
+    /** 导出:排空挂着的宏任务,直到 DOM 不再变(见 render/snapshotSettle.ts) */
+    __bfSettle?: () => Promise<void>;
+    /** 导出 / 舞台:把此刻的 [data-pc-scene] 冻结成自给自足的 HTML(见 render/snapshotFreeze.ts) */
+    __bfFreeze?: () => import('../render/snapshotFreeze').FrozenScene;
   }
 }
 

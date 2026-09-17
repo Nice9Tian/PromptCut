@@ -28,6 +28,8 @@ export const blurFadeCard: CardDef<Params> = {
   useWhen: "Magic UI 的整块模糊浮现。要词块逐个浮现的节奏感优先用 blur-text。",
   tags: ["浮现","模糊","文字"],
   source: "magicui",
+  // 帧模式:审计固化(A0.1)。值 = 固化前 cardFrameMode(def, def.defaults) 的返回值。
+  frameMode: "stateful",
   defaults: { text: "你好世界", accent: "", position: "center" },
   controls: [
     { key: "text", label: "文本", type: "text" },

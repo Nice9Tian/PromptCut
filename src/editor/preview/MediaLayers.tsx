@@ -3,7 +3,7 @@ import { emphasisFilter } from "../../kernel/emphasis";
 import { clipFilterOpsAt, cssFilter, type FilterDef } from "../../kernel/filters.mjs";
 import type { AudioFxDef } from "../../kernel/audioFx.mjs";
 import { releasePreviewAudio, routePreviewAudio } from "../../audio/previewAudio";
-import { CARD_AUDIO_SAMPLE_RATE, acquireCardAudioClipUrl, cardAudioNodeOf, generatedCardAudioClipsAt, shouldMuteNativeAudio } from "../../audio/cardAudio";
+import { CARD_AUDIO_SAMPLE_RATE, acquireCardAudioClipUrl, cardAudioNodeOf, generatedCardAudioClipsAt, getCardAudioEpoch, shouldMuteNativeAudio, subscribeCardAudioEpoch } from "../../audio/cardAudio";
 import { frameCss } from "../../kernel/layout";
 import { audioClipsAt, isImageMedia, nextVideoLayerAfter, videoLayersAt, type MediaAsset, type Project, type TrackClip } from "../../kernel/project";
 import { isScrubbing, subscribeScrub } from "../timeline/useScrub";
@@ -230,7 +230,7 @@ function VideoTrack({
       if (!el) continue;
       if (i === plan.active && cur) {
         // 画面淡下去的同时声音也跟着淡:交叉溶解时两段的声音不会重叠成双倍
-        // A Python audio node replaces this video's native soundtrack. The visual remains in
+        // An 音频图卡 node replaces this video's native soundtrack. The visual remains in
         // its usual slot while AudioLayer loads and plays the generated WAV separately.
         driveMedia(el, { target: targetTimeOf(cur.clip, t), playing, volume: shouldMuteNativeAudio(project, cur.clip, muted) ? 0 : cur.opacity * gain * (cur.clip.audioVolume ?? 1), scrubbing });
         slots.current[i].opacity = cur.opacity;
@@ -268,7 +268,11 @@ function VideoTrack({
    * 以前素材层不认这个字段,于是给视频摆位置写进去了却一动不动,只有卡片才看得出效果。
    */
   const boxOf = (clip: TrackClip | null) => ({ position: "absolute" as const, overflow: "hidden" as const, ...frameCss(clip?.frame, stage) });
-  const image = cur && isImageMedia(cur.media) ? cur : null;
+  const image = cur && isImageMedia(cur.media) && cur.media.url ? cur : null;
+  // A1:入库(上传 + 边落盘边算哈希)还没完成的素材没有地址,这一层画「上传中」占位 ——
+  // 不挂空 src(空 src 会被当成页面地址,<img> 出裂图、<video> 报解码错)。
+  // 传完 media.url 变成 /@media/<hash>,占位自动消失。
+  const uploading = cur && cur.media.pending && !cur.media.url ? cur : null;
   return (
     <>
       {[0, 1].map((i) => {
@@ -294,6 +298,15 @@ function VideoTrack({
           <img src={image.media.url} alt="" style={{ display: "block", width: "100%", height: "100%", objectFit: "cover", opacity: image.opacity, filter: filterOf(image.clip, filters, t) }} />
         </div>
       )}
+      {uploading && (
+        <div
+          key={`pending-${uploading.clip.id}`}
+          data-pc-media-pending="1"
+          style={{ ...boxOf(uploading.clip), display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,.35)", color: "rgba(255,255,255,.72)", fontSize: 14 }}
+        >
+          上传中…
+        </div>
+      )}
     </>
   );
 }
@@ -306,6 +319,9 @@ function AudioLayer({ project, clip, media, volume, t, playing, scrubbing, audio
   const target = nodeId ? Math.max(0, t - clip.start) : targetTimeOf(clip, t);
   const [cardUrl, setCardUrl] = useState<string | null>(null);
   const [cardState, setCardState] = useState<"idle" | CardState>("idle");
+  // 换了图卡(HMR 重跑 src/cards/index.ts)之后 project 引用不变,effect 不会自己重跑;
+  // configureCardAudio 每调一次 +1 的这个版本号就是重取的触发。
+  const cardAudioEpoch = useSyncExternalStore(subscribeCardAudioEpoch, getCardAudioEpoch, getCardAudioEpoch);
   useEffect(() => {
     let current = true;
     if (!nodeId) { setCardUrl(null); setCardState("idle"); return; }
@@ -324,9 +340,9 @@ function AudioLayer({ project, clip, media, volume, t, playing, scrubbing, audio
       ref.current?.dispatchEvent(new CustomEvent("promptcut:card-audio-error", { bubbles: true, detail: { nodeId, clipId: clip.id, error: message } }));
     });
     return () => { current = false; release?.(); };
-  }, [project, nodeId, clip.id, clip.start, clip.end, onCardState]);
+  }, [project, nodeId, clip.id, clip.start, clip.end, onCardState, cardAudioEpoch]);
   useLayoutEffect(() => {
-    // While a Python node is loading or has failed there is deliberately no source URL.
+    // While a 图卡 node is loading or has failed there is deliberately no source URL.
     // driveMedia may attempt play(), but it cannot emit source-media audio as a fallback.
     if (nodeId && !cardUrl) return;
     driveMedia(ref.current, { target, playing, volume, scrubbing });

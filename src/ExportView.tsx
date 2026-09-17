@@ -11,13 +11,20 @@ import { cardSourceVersion } from "./render/cardSourceVersion.mjs";
 import { builtinCardSourceFiles } from "./render/cardSourceFiles.mjs";
 import { projectCardGraph } from "./kernel/cardGraph.mjs";
 import { planFrameWindow } from "./render/frameWindow.mjs";
+import { freezeScene } from "./render/snapshotFreeze";
+import { solidApi } from "./render/solid";
+import { settleDom } from "./render/snapshotSettle";
+import { installFrameMedia } from "./render/frameMedia";
 import { clipFrameMode } from "./render/frameMode.mjs";
+import { fontFingerprintOf } from "./render/fontFingerprint";
 import { frameWorkStatus, waitForFrameWork } from "./kernel/frameReady";
 import { demoTimeline } from "./demo";
 import "./cards";
 
 // 只要进了导出视图就把页面时钟量化到导出帧(见 exportClock.ts),必须早于任何卡片挂载
 if (new URLSearchParams(location.search).has("export")) installExportClock();
+// 素材装载器也必须早于任何卡片挂载:推进动画的过程中一律不给素材赋 URL(原 scripts/frame-media.mjs)
+if (new URLSearchParams(location.search).has("export")) installFrameMedia();
 
 /*
  * ?cardsOnly=1:素材(视频 / 图片)一概不挂,只渲卡片的透明层。
@@ -71,10 +78,17 @@ export default function ExportView() {
       .then(function install(json: any, options?: { deferCards?: boolean }) {
       let tl: Timeline;
       let proj: Project | null = null;
+      /*
+       * 整个 install() 只算这一次图,下面的 __pcCardPlan 闭包和渲染体都复用它。
+       * **必须兜底**:projectCardGraph 会对悬空输入抛(删掉套了滤镜图卡的素材段就是这种),
+       * 在这一层不接住就是舞台整棵树卸载、预渲染页永远不 ready。
+       */
+      let graph: ReturnType<typeof projectCardGraph> | undefined;
 
       if (json && Array.isArray(json.tracks)) {
         proj = json as Project;
-        tl = flattenOverlay(proj);
+        try { graph = projectCardGraph(proj, getCard); } catch { graph = undefined; }
+        tl = flattenOverlay(proj, graph);
       } else {
         tl = json as Timeline;
       }
@@ -103,23 +117,40 @@ export default function ExportView() {
             sourceVersions[card.id] = `builtin:${cardSourceVersion(card, builtinCardSourceFiles)}`;
           }
         }
-        return { graph: projectCardGraph(proj, getCard), sourceVersions,
-          environment: { width: proj.width, height: proj.height, fps: proj.fps, theme: proj.themeId } };
+        return { graph: graph ?? projectCardGraph(proj, getCard), sourceVersions,
+          environment: { width: proj.width, height: proj.height, fps: proj.fps, theme: proj.themeId,
+            // I0:这一帧排版实际用上的字体集合。共享快照键要它 —— 缺字体的机器
+            // 画出来的 HTML 不一样,不能和有字体的机器共用一份快照。
+            fontFingerprint: fontFingerprintOf(document.fonts as unknown as Iterable<{ family: string; status: string }>) } };
       };
+      /** 音频图卡的片段:有 nodeId、没有 cardId(按 H2 它不写 cardId) */
+      const audioNode = (nodeId?: string) => !!nodeId && !!proj?.cardNodes?.some(node => node.id === nodeId && node.kind === 'audio');
+      /*
+       * 音频图卡的片段整个排除:它没有 cardId,照字面收进来就是 getCard('') → 兜底 stateful,
+       * 于是一条铺满全片的音频卡被算进 replayClips,每个导出分片都从第 0 帧回放。
+       */
       const plannedClips = [...tl.clips, ...(proj?.tracks.filter(track => !track.hidden).flatMap(track => track.clips
-        .filter(clip => clip.nodeId && !clip.cardId).map(clip => ({ ...clip, cardId: '' }))) || [])];
+        .filter(clip => clip.nodeId && !clip.cardId && !audioNode(clip.nodeId)).map(clip => ({ ...clip, cardId: '' }))) || [])];
       // Parallel export cuts only where no stateful card is mounted on both sides.
-      // Python cards are evaluated at their time, as in the frame window planner.
+      // 只有**不出画**的音频图卡才无条件 direct;其余图卡片段照它自己的声明算 ——
+      // 沿用「有节点就 direct」会让声明 stateful 的图卡在导出里不进回放窗口,
+      // 而预览按 clipFrameMode 给它回放钟,两边时间口径静默分叉且不报错。
       window.__pcClipFrameModes = () => plannedClips.map(clip => ({ id: clip.id, start: clip.start, end: clip.end,
-        mode: clip.nodeId ? 'direct' : clipFrameMode(clip, getCard(clip.cardId)) }));
+        mode: audioNode(clip.nodeId) ? 'direct' : clipFrameMode(clip, getCard(clip.cardId)) }));
       window.__pcPlanFrameWindow = (frames, fps) => planFrameWindow(plannedClips, frames, fps,
         clip => {
           const runtime = (proj as any)?._cardRender;
           const requested = frames.filter(frame => frame / fps >= clip.start && frame / fps < clip.end);
-          if (clip.nodeId || requested.length && requested.every(frame => runtime?.frames?.[clip.id]?.[frame] || runtime?.missing?.[frame]?.includes(clip.id))) return 'direct';
+          if (audioNode(clip.nodeId) || requested.length && requested.every(frame => runtime?.frames?.[clip.id]?.[frame] || runtime?.missing?.[frame]?.includes(clip.id))) return 'direct';
           return clipFrameMode(clip, getCard(clip.cardId));
         });
       window.__pcExportMs = 0;
+      // 排空 / 冻结:原来由 export-frames.mjs 的 PAGE_PRELUDE 注入,现在是页面 bundle 的一部分(J1)。
+      window.__bfSettle = settleDom;
+      window.__bfFreeze = () => freezeScene(document.querySelector("[data-pc-scene]"));
+      // D3(c):实体几何的导出面,只给 puppeteer 侧 page.evaluate 用(/api/cards/layout 对快照 DOM 量 contentBox),页面内部不经它
+      window.__pcSolid = solidApi;
+      window.__pcCanvasBox = solidApi.canvasPaintedBox;
 
 
       window.__pcSetT = (sec: number, directSec = sec) => {
@@ -242,6 +273,7 @@ export default function ExportView() {
 
   return (
     <div
+      data-pc-scene=""
       style={{
         position: "relative",
         width: timeline.width,
@@ -260,7 +292,7 @@ export default function ExportView() {
         ...themeStyle(timeline.themeId),
       }}
     >
-      {renderProject ? <FrameScene project={renderProject} sourceProject={project!} t={t} directT={directT} playToken={playToken} />
+      {renderProject ? <FrameScene project={renderProject} sourceProject={project!} t={t} directT={directT} playToken={playToken} graph={timeline.graph} />
         : <Stage timeline={renderTimeline!} t={t} directT={directT} playToken={playToken} />}
 
     </div>

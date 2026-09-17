@@ -1,4 +1,8 @@
-import { registerCards, resetCards, allCards, setUserCardSources } from "../kernel/registry";
+import { registerCards, resetCards, allCards, setUserCardSources, getCard, userCardSources } from "../kernel/registry";
+import { configureCardAudio } from "../audio/cardAudio";
+import { cardSourceVersion } from "../render/cardSourceVersion.mjs";
+import { builtinCardSourceFiles } from "../render/cardSourceFiles.mjs";
+import { cyrb53 } from "../render/cyrb53.mjs";
 import { magicuiCards } from "./magicui";
 import { nativeCards } from "./native";
 import { userCards, userCardFiles, userCardFileOf, userCardDependencies } from "./user";
@@ -29,3 +33,28 @@ const safeUserCards = userCards.filter((c) => {
 registerCards(safeUserCards);
 // 定制卡源码原文交给注册表,存 .proc 时打包用(为什么不让 procCards 直接 import,见 registry.ts)
 setUserCardSources(userCardFiles, userCardFileOf, userCardDependencies);
+
+/**
+ * 音频图卡在页面里求值,`src/audio/cardAudio.ts` 要的定义和源码版本从这里注入
+ * (模块级,不逐层传参)。每次 HMR 重跑这个模块都会再调一次,`cardAudio` 那边的
+ * 版本号跟着 +1 —— 换了卡之后 project 引用不变,靠它让预览重新取块。
+ *
+ * `userCardSources()` **每次调用时才取**:`setUserCardSources` 排在 registerCards 之后,
+ * 注册时快照下来是空表。源码版本的算法照 ExportView.tsx 那份(第二参是 dependencies,
+ * 不是 files —— files 的键是剥掉 `./` 和 `.tsx` 的裸文件名,cardSourceVersion 按 /src/… 路径解析)。
+ */
+configureCardAudio({
+  getCard,
+  sourceVersionOf: (id: string) => {
+    const card = getCard(id);
+    if (!card) return `missing:${id}`;
+    const user = userCardSources();
+    const file = user.fileOf[id];
+    const source = file && user.files[file] !== undefined
+      ? `user:${cardSourceVersion(card, { ...builtinCardSourceFiles, ...user.dependencies }, `/src/cards/user/${file}.tsx`)}`
+      : `builtin:${cardSourceVersion(card, builtinCardSourceFiles)}`;
+    // 整段源码闭包正文过一次同步的非密码学哈希(key() 是同步的,src/ 里没有 node:crypto,
+    // crypto.subtle.digest 是 Promise)
+    return cyrb53(source);
+  },
+});

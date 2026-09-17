@@ -8,9 +8,11 @@ import { packFrames, unpackFrameArchive, createFrameArchive, packFrameCache, unp
 import { MovFrameStore, PlaybackMovStore, atomic } from './frame-mov.mjs';
 import { FramePlayback } from './frame-playback.mjs';
 import { CardFrameCache } from './card-cache.mjs';
+import { SnapshotStore, snapshotTier } from './snapshot-store.mjs';
 import { cardMediaPath } from './card-media-path.mjs';
 import { createHash } from 'node:crypto';
 import { isFullyTransparentPng } from './frame-validity.mjs';
+import { resolveFrameSize } from '../src/kernel/frameSize.mjs';
 
 const pad = n => String(n).padStart(6, '0');
 const exists = file => fs.access(file).then(() => true, () => false);
@@ -26,6 +28,50 @@ const USER_RENDER_TIMEOUT_MS = Math.max(1000, Number(process.env.PROMPTCUT_USER_
 // away: its page was closed or reloaded, and a reloaded default project gets a
 // new id. Its background pass must not keep the current project waiting.
 export const PRELOAD_STALE_MS = 8000;
+
+const roundBox = b => ({ left: Math.round(b.left), top: Math.round(b.top), width: Math.round(b.width), height: Math.round(b.height) });
+
+/**
+ * 素材段的 `contentBox` **一律等于它的 `frameCss` 框**(D4(b)):不在快照里量,按项目数据算。
+ * 和 `src/kernel/layout.ts` 的 `frameBox` 同一个式子(锚点在 (x,y),左上角 = (x,y) 减锚点偏移),
+ * 宽高走 `src/kernel/frameSize.mjs` 的 `resolveFrameSize` —— 舞台和服务端共用的唯一一份。
+ */
+export function frameContentBox(frame, stage) {
+  const { w, h } = resolveFrameSize(frame, stage);
+  const anchor = frame?.anchor ?? [0, 0];
+  return roundBox({ left: (frame?.x ?? 0) - (anchor[0] ?? 0) * w, top: (frame?.y ?? 0) - (anchor[1] ?? 0) * h, width: w, height: h });
+}
+
+/**
+ * D4(b) 回包的**纯计算**部分:片段分成「素材段(按 frameBox 算)」和「卡片(按冻结快照量)」,
+ * 再把量出来的实体框并回去。`measured` = `window.__pcSolid.rectsWithBounds` 的返回值,
+ * 传 null 表示还没量(只要名单)。不传 `clipIds` 就是全部片段(卡片 + 素材段)。
+ *
+ * 取 `bounds ?? rect`、四舍五入到整数 —— 和页面侧 `measureContentBoxes` 一字不差。
+ */
+export function layoutClips(project, clipIds, measured = null, t = 0) {
+  const stage = { width: Number(project?.width) > 0 ? project.width : 1920, height: Number(project?.height) > 0 ? project.height : 1080 };
+  const byId = new Map();
+  for (const track of project?.tracks || []) for (const clip of track?.clips || []) if (clip?.id && !byId.has(clip.id)) byId.set(clip.id, clip);
+  const ids = clipIds?.length ? [...new Set(clipIds.map(String))] : [...byId.keys()];
+  const clips = {};
+  const cardIds = [];
+  for (const id of ids) {
+    const clip = byId.get(id);
+    if (!clip) { clips[id] = { contentBox: null, contentNote: `找不到 clip ${id}` }; continue; }
+    // 素材段:不进快照测量,框由项目数据决定
+    if (!clip.cardId) { clips[id] = { contentBox: frameContentBox(clip.frame, stage) }; continue; }
+    cardIds.push(id);
+    if (!measured) { clips[id] = { contentBox: null }; continue; }
+    const hit = measured.find(m => m?.clipId === id);
+    if (!hit) {
+      clips[id] = { contentBox: null, contentNote: `这张卡此刻不在画面上(t=${t}s 不在它的 ${clip.start}~${clip.end}s 区间内),先 seek 进它的时段再读` };
+      continue;
+    }
+    clips[id] = { contentBox: roundBox(hit.bounds ?? hit.rect) };
+  }
+  return { stage, clips, cardIds };
+}
 
 /** A foreground batch queue, B complete HTML sampling, C cumulative-track rasterization.
  * Each lane owns its Chrome; foreground never waits for a background bake to finish.
@@ -372,7 +418,6 @@ export class FramePipeline {
     const result = new Map();
     const htmlFrames = [];
     const missing = [];
-    const hasMedia = (entry.project.media || []).length > 0;
     await entry.mov?.ready;
     // MOV is the first lookup: it is already the full scene with media and is
     // the cheapest exact answer. HTML is the high-priority producer for a
@@ -390,7 +435,7 @@ export class FramePipeline {
           if (isFullyTransparentPng(legacy)) throw new Error('Empty legacy frame');
           result.set(frame, { buf: legacy, source: 'rendered' });
         }
-        catch { if (!hasMedia && entry.html?.has?.(frame)) htmlFrames.push(frame); else missing.push(frame); }
+        catch { if (entry.html?.has?.(frame)) htmlFrames.push(frame); else missing.push(frame); }
       }
       if (result.has(frame)) await onFrame?.(frame, result.get(frame));
     }
@@ -509,8 +554,7 @@ export class FramePipeline {
     // Reuse HTML-complete frames first. This is the background equivalent of
     // see_frames' HTML lookup and avoids loading media for frames already
     // frozen by the higher-priority lane.
-    const hasMedia = (entry.project.media || []).length > 0;
-    const htmlFrames = hasMedia ? [] : frames.filter(frame => !entry.mov.valid(frame, signature(frame)) && entry.html.has(frame));
+    const htmlFrames = frames.filter(frame => !entry.mov.valid(frame, signature(frame)) && entry.html.has(frame));
     for (const frame of htmlFrames) {
       if (signal?.aborted) throw Object.assign(new Error('Frame request cancelled'), { cancelled: true });
       const prefixes = this.prefixes(entry);
@@ -569,9 +613,66 @@ export class FramePipeline {
       // knowing the clip's global start time.
       entry.controls.get(control.id).set(control.frame, control.html);
     }
+    this.recordSnapshots(entry, controls);
+  }
+  /** clipId → { tier, key }:整场景路冻出来的 control 子树该落到哪个档、哪个键。
+   * 只有 `card-cache.mjs` 的 `plan` 手里有共享键(`cardSnapshotIdentity` 算的),
+   * 所以这里认 `entry.cardPlan`(`preload` 里存下来的那份);拿不到就不写快照库。 */
+  snapshotTargets(entry) {
+    const plan = entry.cardPlan;
+    if (!plan?.length) return null;
+    if (entry.snapshotPlan !== plan) {
+      entry.snapshotPlan = plan;
+      entry.snapshotTargetMap = new Map(plan
+        .filter(control => control.clipId && control.snapshotKey)
+        .map(control => [control.clipId, { tier: control.tier || snapshotTier(control.capabilities), key: control.snapshotKey }])
+        .filter(([, target]) => target.tier === 'shared' || target.tier === 'local'));
+    }
+    return entry.snapshotTargetMap;
+  }
+  /**
+   * 整场景路(C2)冻出来的 control HTML 同时写进 A3a 的快照库
+   * (`<root>/controls-html/<共享键>/` 与 `<root>/controls-local/<entry.key>/<共享键>/`)。
+   *
+   * 老的 `entry.controls` → `html-manifest.json` **一并保留**:今天的回放和导出
+   * 还从那份 manifest 读(`renderState` / `unpackFrameCache`),现在抽掉会直接缺料。
+   * 两处并存期间快照库是「去向」、manifest 是「现状」,第 4 步之后才换读侧。
+   *
+   * `belowDependent`(毛玻璃)只能由这条整场景路产:它的结果受下层影响,隔离工程
+   * 里画不出来。它的本地档键这一版按 A3a 先用整项目的 `entry.key` 兜底
+   * (更粗:项目里任何改动都会换 `entry.key`、整棵本地档作废),`localSceneKey`
+   * 和「下层活跃控件的共享键 + 位置」是后面的事。
+   */
+  recordSnapshots(entry, controls) {
+    const targets = this.snapshotTargets(entry);
+    if (!targets?.size || !controls?.length) return;
+    for (const control of controls) {
+      const target = targets.get(control.id);
+      if (!target || !Number.isInteger(control.frame)) continue;
+      const entryKey = target.tier === 'local' ? entry.key : undefined;
+      const batches = (entry.snapshotPending ||= new Map());
+      const id = `${target.tier} ${entryKey ?? ''} ${target.key}`;
+      if (!batches.has(id)) batches.set(id, { tier: target.tier, entryKey, key: target.key, frames: [] });
+      batches.get(id).frames.push(control.frame);
+      const html = control.html;
+      entry.snapshotChain = (entry.snapshotChain || Promise.resolve()).then(async () => {
+        // 快照库是旁路:写失败不能把整条预渲染管线带下去(老 manifest 仍然写成了)。
+        try { await this.snapshots().writeSnapshot({ tier: target.tier, entryKey, key: target.key, localFrame: control.frame, html }); } catch {}
+      });
+    }
+  }
+  /** 等这一批帧文件落盘,再把它们并进各自的 index.json —— 每批一次,不是每帧。 */
+  async flushSnapshots(entry) {
+    try { await entry.snapshotChain; } catch {}
+    const batches = entry.snapshotPending;
+    if (!batches?.size) return;
+    entry.snapshotPending = new Map();
+    for (const batch of batches.values()) {
+      try { await this.snapshots().updateIndex(batch); } catch {}
+    }
   }
   async save(entry) {
-    const work = (entry.saveChain || Promise.resolve()).catch(() => {}).then(() => this.saveNow(entry));
+    const work = (entry.saveChain || Promise.resolve()).catch(() => {}).then(() => this.saveNow(entry)).then(() => this.flushSnapshots(entry));
     entry.saveChain = work;
     return work;
   }
@@ -691,6 +792,10 @@ export class FramePipeline {
     }
     if (wanted.size) await this.renderMovFrames(entry, [...wanted].sort((a, b) => a - b), bakery, signal);
   }
+  /** A3a 的 HTML 快照库(<root>/controls-html、<root>/controls-local)。
+   * 和 `entry.cardCache`(PNG/MOV,legacy 整帧通道和导出用)并存 —— 后者随
+   * legacy 通道一起删,在那之前照常写,不然导出和旧播放路会缺料。 */
+  snapshots() { return this._snapshots ||= new SnapshotStore(this.root); }
   async fillCardControls(entry, bakery, signal, controls = null) {
     if (!controls) {
       const browserPlan = await this.browserCardPlan(bakery);
@@ -700,6 +805,14 @@ export class FramePipeline {
     for (const control of controls.filter(control => control.cacheable)) {
       if (signal?.aborted) throw Object.assign(new Error('Cancelled'), { cancelled: true });
       if (await entry.cardCache.hasComplete(control)) continue;
+      // 走哪一档由审阅表的 capabilities 决定,不由 `cacheable` 决定:
+      // 共享档 = independent / sourceDependent 且 stateful;其余 stateful
+      // (含 belowDependent)本地档;unknown 和非 stateful 不产快照。
+      // 本地档在这里只可能出现在显式传进来的 controls 上 —— 常规路径上
+      // belowDependent 的快照由 C2 的整场景路产,不是这条隔离路。
+      // 没有共享键就没法寻址(手工构造的 control、以及还没接上键的调用方),不写快照。
+      const tier = control.snapshotKey ? (control.tier || snapshotTier(control.capabilities)) : 'none';
+      const entryKey = tier === 'local' ? entry.key : undefined;
       const isolated = this.isolatedCardProject(entry.project, control);
       // A small batch retains Chrome state inside a stateful card, while every
       // batch boundary remains cancellable/schedulable.  `fullFrame` is vital:
@@ -710,9 +823,27 @@ export class FramePipeline {
         const localFrames = Array.from({ length: Math.min(4, control.count - first) }, (_, n) => first + n);
         await bakery.reset(isolated, this.emptyUrl(isolated), { deferCards: true });
         await bakery.page.setViewport({ width: isolated.width, height: isolated.height, deviceScaleFactor: this.scaleForLane('background') });
+        const written = [];
         await bakeFrames(bakery, { out: path.join(this.root, 'controls', control.key), targetFrames: localFrames,
           snapshotOnly: false, fullFrame: true, writeFrames: false, signal,
-          onFrame: async (frame, png) => entry.cardCache.put(control.key, frame, png, () => !signal?.aborted) });
+          snapshotFrames: tier === 'none' ? new Set() : new Set(localFrames),
+          onFrame: async (frame, png) => entry.cardCache.put(control.key, frame, png, () => !signal?.aborted),
+          // 隔离工程里目标片段是唯一可见输出,所以这一帧的 control 列表里认
+          // `control.clipId` 那一条就是这张卡的子树。`data-pc-local-frame` 是卡片
+          // 自己的本地帧,和隔离工程的帧号一致(片段被平移到了 -phase),但仍以
+          // 冻结结果里带的那个为准 —— 目录是按本地帧寻址的。
+          onSnapshot: async (frame, html, produced) => {
+            if (tier === 'none' || signal?.aborted) return;
+            const own = (produced || []).find(item => item.id === control.clipId);
+            if (!own || !Number.isInteger(own.frame)) return;
+            await this.snapshots().writeSnapshot({ tier, entryKey, key: control.snapshotKey, localFrame: own.frame, html: own.html });
+            written.push(own.frame);
+          } });
+        // 每批写完更新一次 index.json(不是每帧):一个键几千帧时,读-改-写
+        // 一个小 JSON 也比不上批量摊薄。
+        if (written.length && !signal?.aborted) {
+          await this.snapshots().updateIndex({ tier, entryKey, key: control.snapshotKey, frames: written });
+        }
       }
       if (!signal?.aborted) await entry.cardCache.finish(control);
     }
@@ -733,7 +864,7 @@ export class FramePipeline {
       if (target) {
         found = true;
         // The target is the only visible output.  Siblings can nevertheless be
-        // raw graph inputs (especially Python multi-input cards), so retain
+        // raw graph inputs (especially multi-input 图卡), so retain
         // them in a separate hidden source track rather than dropping them.
         tracks.push({ ...structuredClone(track), hidden: false, sourceOnly: false,
           clips: [{ ...structuredClone(target), start: -phase, end: duration - phase }] });
@@ -746,7 +877,7 @@ export class FramePipeline {
         }
         continue;
       }
-      // Keep original clips available to graph/Python source resolution without
+      // Keep original clips available to 图卡 source resolution without
       // letting them paint.  The browser's source-only tracks are deliberately
       // explicit rather than attempting to infer graph dependencies here.
       tracks.push({ ...structuredClone(track), hidden: true, sourceOnly: true });
@@ -780,6 +911,67 @@ export class FramePipeline {
     const buf = await captureSnapshot(bakery, html);
     await atomic(path.join(dir, `${pad(frame)}.png`), buf);
     return buf;
+  }
+  /**
+   * D4(b) `/api/cards/layout`:Agent 的 `get_layout` —— **整场景**在 t 时刻的实体框,跑在预渲染进程
+   * (pinned 架构 4:Agent 的 query 走预渲染,用户交互的 query 走自己的离屏舞台)。
+   *
+   * 一次请求只渲**一遍**,和问了几个 clipId 无关:`entry.html` 有这一帧就直接拿它,没有就
+   * `bakeFrames` 出这一帧并 `record`(下次就命中)。**MOV/PNG 命中不能短路** —— 实体框要 DOM,
+   * 像素答不了;所以只看 `entry.html`,不看 `entry.mov`。
+   *
+   * 量法:把冻结 HTML 注进 `#pc-frame-snapshot`(和 `rasterPrefix` 同一条 `captureSnapshot` 路),
+   * 在 `document.fonts.ready` 之后、`prepareFrameMedia` 之前对 `#pc-frame-snapshot [data-pc-scene]`
+   * 调 `window.__pcSolid.rectsWithBounds({ pixels: 'none' })` —— 快照里 canvas 已经换成
+   * 带 `data-pc-painted-box` 的 `<img>`,所以不用(也不能)读像素。`screenshot: false` 让这一趟
+   * 不白付一张 1080p PNG。
+   *
+   * agent 车道串行:和 `see_frames` 的 agent 队列排同一条链,免得两边抢同一个 Chrome。
+   */
+  async layout(project, options = {}) {
+    const chain = (this.laneChains.get('agent') || Promise.resolve()).catch(() => {}).then(() => this.layoutNow(project, options));
+    this.laneChains.set('agent', chain.catch(() => {}));
+    return chain;
+  }
+  async layoutNow(project, { t = 0, clipIds = null, signal } = {}) {
+    const lane = 'agent';
+    const entry = await this.entry(project);
+    const fps = Number(entry.project.fps) > 0 ? entry.project.fps : 30;
+    const max = Math.max(0, Math.floor((Number(entry.project.duration) || 0) * fps) - 1);
+    const frame = Math.max(0, Math.min(max, Math.round((Number(t) || 0) * fps)));
+    const at = frame / fps;
+    const { cardIds } = layoutClips(entry.project, clipIds, null, at);
+    let baked = false;
+    let measured = [];
+    // 只问素材段(或问的片段一个都不存在)时不用开浏览器:它们的框全由项目数据决定
+    if (!cardIds.length) {
+      const { stage, clips } = layoutClips(entry.project, clipIds, [], at);
+      return { stage, t: at, frame, clips, baked };
+    }
+    const bakery = await this.acquire(lane, entry.project);
+    try {
+      if (!entry.html?.has?.(frame)) {
+        baked = true;
+        await bakeFrames(bakery, {
+          out: entry.dir, targetFrames: [frame], snapshotOnly: true, writeFrames: false,
+          snapshotFrames: new Set([frame]), signal,
+          onSnapshot: (n, html, controls) => { if (n === frame) this.record(entry, n, html, controls); },
+        });
+        await this.save(entry);
+      }
+      const html = entry.html?.get?.(frame);
+      if (typeof html !== 'string' || !html) throw new Error(`第 ${frame} 帧没有冻结快照，量不到实体框`);
+      measured = await captureSnapshot(bakery, html, undefined, {
+        screenshot: false,
+        afterFonts: page => page.evaluate(ids => {
+          const root = document.querySelector('#pc-frame-snapshot [data-pc-scene]');
+          if (!root || typeof window.__pcSolid?.rectsWithBounds !== 'function') return [];
+          return window.__pcSolid.rectsWithBounds(root, { pixels: 'none', ...(ids ? { clipIds: ids } : null) });
+        }, cardIds.length ? cardIds : null),
+      }) || [];
+    } finally { this.release(lane); }
+    const { stage, clips } = layoutClips(entry.project, clipIds, measured, at);
+    return { stage, t: at, frame, clips, baked };
   }
   async prerender(entry, bakery, signal) {
     const prefixes = this.prefixes(entry);

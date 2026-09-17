@@ -178,6 +178,8 @@ export const growthCurve: CardDef<Params> = {
   useWhen: "有一串随时间变化的数值要画成走势时用折线。底板固定横屏宽度;**只有最高点会标出数值**,其余点只显示标签名。只有单个数字用 odometer 或 stat-proof,多项比大小用 rank-bars。",
   tags: ["折线","走势","增长","图表"],
   source: "native",
+  // 帧模式:审计固化(A0.1)。值 = 固化前 cardFrameMode(def, def.defaults) 的返回值。
+  frameMode: "stateful",
   defaults: {
     ...hudDefaults,
     kicker: "GROWTH TREND",

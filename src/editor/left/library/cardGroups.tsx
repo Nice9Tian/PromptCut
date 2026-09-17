@@ -62,6 +62,9 @@ export function useCardLibrary(q: string): CardLibrary {
   const lists = useMemo(() => {
     const used = new Set(usedKey ? usedKey.split("\n") : []);
     const all = allCards()
+      // 音频图卡不进卡片面板:拖进去的音频图卡没有 nodeId,既不出声也不出画,是个空片段。
+      // 它只能经 apply_card 挂到片段上。
+      .filter((c) => c.kind !== "audio")
       .filter((c) => isCardVisible(c, vis, scopes, projectId, used))
       .filter((c) => cardMatches(c, q));
     return {

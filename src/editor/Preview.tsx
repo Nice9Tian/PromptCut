@@ -6,7 +6,8 @@ import { themeStyle } from "../themes";
 import { actions, getState, useStore } from "../store/project";
 import { videoLayersAt, findClip } from "../kernel/project";
 import { frameBox, nudgeFrame } from "../kernel/layout";
-import type { PcStageApi } from "../StageView";
+import { createStageRpc, type HostCapabilities, type StageRpcClient } from "../render/stageRpc";
+import { setStageClient, syncProject } from "./stageBridge";
 import { ControlBar } from "./preview/ControlBar";
 import { ToolBar, ToolType } from "./preview/ToolBar";
 import { MiniScrubber } from "./preview/MiniScrubber";
@@ -16,6 +17,7 @@ import { useLayoutMode } from "./layoutMode";
 import { fitView, frameOrigin, panBy, wheelZoomFactor, zoomAt, type View2D } from "./preview/viewport2d";
 import "./preview/preview.css";
 import { atFrameGrid } from "../render/frameGrid";
+import { contentStartOf } from "./timeline/utils";
 
 /**
  * 中央预览:视频层 + 动效渲染面,按容器缩放。播放循环也在这里(rAF 推进 store.t)。
@@ -95,18 +97,16 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
   // 记录拖动工具过程中的位移预览状态
   const [dragPreview, setDragPreview] = useState<{ clipId: string; dx: number; dy: number } | null>(null);
 
-  const stage = useCallback((): PcStageApi | null => {
-    return frameRef.current?.contentWindow?.__pcStage ?? null;
-  }, []);
-
-  // 把 getter 挂到主窗口,AI 的定位工具(get_layout 等)靠它量卡片的实体内容框。
-  // 挂的是 getter 不是 api 本身:iframe 重载后 api 会换,getter 每次都取最新的。
-  useEffect(() => {
-    window.__pcPreviewStage = stage;
-    return () => {
-      if (window.__pcPreviewStage === stage) delete window.__pcPreviewStage;
-    };
-  }, [stage]);
+  /**
+   * 舞台的 RPC 客户端(E0):一个 iframe 实例一个,`pc-stage-ready` 握手到了就换新的、旧的 dispose。
+   * 主文档和舞台之间只有 postMessage,不再摸 iframe 里的 window.__pcStage。
+   * 右栏的定位工具经 stageBridge 拿同一个客户端(D4 页面侧),这里每换一次就登记一次。
+   */
+  const rpcRef = useRef<StageRpcClient | null>(null);
+  const hostCapsRef = useRef<HostCapabilities | null>(null);
+  const stage = useCallback((): StageRpcClient | null => rpcRef.current, []);
+  const selectionRef = useRef(selection);
+  selectionRef.current = selection;
 
   /*
    * 播放循环。**播放头只停在成片真有的那些帧上。**
@@ -117,13 +117,21 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
    * 量化之后 2D 播放显示的就是导出会写出来的那一帧,3D 贴的也是同一帧。
    *
    * 累加器 acc 必须保持不量化,不然每帧丢掉的那点余数会累起来,播放越走越慢。
+   *
+   * 播放范围 = 最早的卡片 ~ 最晚的卡片(project.duration 由时间轴按内容末尾同步)。
+   * 按播放时播放头不在这个范围里(在第一张卡前面,或者已经播到头),从最早那张卡开始播。
    */
+  const contentStart = contentStartOf(project.tracks);
   useEffect(() => {
     if (!playing) return;
     const fps = Math.max(1, project.fps || 30);
     let raf = 0;
     let last = performance.now();
     let acc = tRef.current;      // 真实推进到哪儿(不量化)
+    if (acc < contentStart || acc >= project.duration - 0.5 / fps) {
+      acc = contentStart;
+      actions.seek(contentStart);
+    }
     let wrote = atFrameGrid(acc, fps);  // 上一次交出去的帧时刻
     const tick = (now: number) => {
       /*
@@ -145,6 +153,8 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
+    // contentStart 不进依赖:播放中挪了第一张卡不该把播放头拽回去
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playing, project.duration, project.fps]);
 
   /*
@@ -259,14 +269,26 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
     };
   }, [project.width, project.height, view]);
 
-  // 渲染面就绪:它挂载完会 postMessage 过来;刷新顺序不定,onLoad 里再探一次
+  // 渲染面就绪:它挂载完会 postMessage 过来(带 J4 的宿主能力表);每来一次就建一个新的 RPC 客户端
   useEffect(() => {
     const onMessage = (e: MessageEvent) => {
+      const win = frameRef.current?.contentWindow;
+      if (!win || e.source !== win || (e.data as any)?.type !== "pc-stage-ready") return;
+      rpcRef.current?.dispose();
+      const client = createStageRpc(win);
+      rpcRef.current = client;
+      hostCapsRef.current = (e.data as { hostCapabilities?: HostCapabilities }).hostCapabilities ?? null;
+      setStageClient("front", client);
       // 每来一次就 +1:同一个值再赋一遍不会触发重渲染,而新挂的 iframe 需要重新收一遍 project 和时间
-      if (e.source === frameRef.current?.contentWindow && (e.data as any)?.type === "pc-stage-ready") setStageReady((n) => n + 1);
+      setStageReady((n) => n + 1);
     };
     window.addEventListener("message", onMessage);
-    return () => window.removeEventListener("message", onMessage);
+    return () => {
+      window.removeEventListener("message", onMessage);
+      rpcRef.current?.dispose();
+      rpcRef.current = null;
+      setStageClient("front", null);
+    };
   }, []);
 
   /**
@@ -285,15 +307,27 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
     return videoLayersAt(project, t).map((l) => ({ clipId: l.clip.id, ...frameBox(l.clip.frame, stageSize) }));
   }, [project, t]);
 
-  const refreshRects = useCallback(() => {
+  /**
+   * 一次往返拿全部活跃片段的外框 + 实体范围(rectsWithBounds,合并了以前 rects() 后逐个 bounds() 的 N+1)。
+   * 心跳只带 pixels: 'selected':只对选中的卡扫 canvas 像素(选中描边不回退到整块画布),
+   * 未选中的卡用元素矩形 —— 它们的框只进 rects 列表、不画描边。'all' 只在用户点击那一次用。
+   * 回包乱序时旧的一次不能盖掉新的,用代数守着。
+   */
+  const rectsGen = useRef(0);
+  const refreshRects = useCallback(async (pixels: "selected" | "all" = "selected") => {
     const s = stage();
-    const list = s?.rects ? s.rects() : [];
-    const cards = s?.bounds
-      ? list.map((r) => {
-          const b = s.bounds!(r.clipId);
-          return b ? { clipId: r.clipId, ...b } : r;
-        })
-      : list;
+    const gen = ++rectsGen.current;
+    let cards: { clipId: string; left: number; top: number; width: number; height: number }[] = [];
+    if (s) {
+      try {
+        const list = await s.rectsWithBounds(pixels === "selected" ? { pixels, clipIds: selectionRef.current } : { pixels });
+        cards = list.map((r) => ({ clipId: r.clipId, ...(r.bounds ?? r.rect) }));
+      } catch {
+        // iframe 正在换(detached):这一次作废,新的 ready 会再刷一遍
+        return;
+      }
+    }
+    if (gen !== rectsGen.current) return;
     // 素材段在下、卡片在上(DOM 里 MediaLayers 排在舞台 iframe 前面),命中时也按这个顺序找
     setRects([...mediaRects(), ...cards]);
   }, [stage, mediaRects]);
@@ -307,29 +341,31 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
    * 透明容器穿过去——字幕卡在最上层也不会挡住下面的卡。老渲染面没有 hitTest 时
    * 退回按包裹层外框找最上层的那个。
    */
-  const hitAt = (e: { clientX: number; clientY: number; currentTarget: EventTarget & Element }) => {
+  const hitAt = async (e: { clientX: number; clientY: number; currentTarget: EventTarget & Element }) => {
     const rect = e.currentTarget.getBoundingClientRect();
     const x = (e.clientX - rect.left) / scale;
     const y = (e.clientY - rect.top) / scale;
     const s = stage();
-    // 卡片在上层:先问舞台。没点中卡片再看素材段(它们在主文档里,舞台看不见)
-    const card = s?.hitTest ? s.hitTest(x, y) : null;
+    // 卡片在上层:先问舞台(一次 RPC 往返)。没点中卡片再看素材段(它们在主文档里,舞台看不见)
+    let card: { clipId: string; left: number; top: number; width: number; height: number } | null = null;
+    if (s) {
+      try { card = await s.hitTest(x, y); } catch { card = null; }
+    }
     const inside = (r: { left: number; top: number; width: number; height: number }) =>
       x >= r.left && x <= r.left + r.width && y >= r.top && y <= r.top + r.height;
     const hit =
       card ??
       [...mediaRects()].reverse().find(inside) ??
-      (s?.hitTest ? null : [...rects].reverse().find(inside)) ??
+      (s ? null : [...rects].reverse().find(inside)) ??
       null;
     return { hit, overlayRect: rect };
   };
 
-  // 项目文档变了就整份发过去(渲染面自己判断要不要重跑这一帧)
+  // 项目文档变了就发过去:经 stageBridge 只发变了的片段(两层 diff),没有基线时整份 + reset
   useEffect(() => {
     if (!stageReady) return;
-    stage()?.setProject(project);
-    setTimeout(refreshRects, 50);
-  }, [stageReady, project, stage, refreshRects]);
+    void syncProject("front", project).then(() => refreshRects(), () => {});
+  }, [stageReady, project, refreshRects]);
 
   // 时间变了就下发。播放中是连续推进;拖播放头 / 跳转 / 重播(playToken 变)都按跳转处理:
   // 重挂载 + 从入点补跑到那一刻。两者合在一个 effect 里,一次 seek 只渲染一帧。
@@ -339,52 +375,91 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
    * 重挂载活跃的卡、从入点逐帧补跑到播放头,实测播放头在 60 秒处每次 230~350 ms 的主线程,
    * 而项目变了该不该补跑,setProject 那边(StageView)已经按「哪张卡变了、在不在画面上」判过了。
    */
+  /*
+   * E0:暂停、拖动只发 setTime(不重挂载、不递增 playToken —— 时钟拨过去、提交 React、钉动画);
+   * 父页对可见舞台**不再**发 render(jump)。
+   *
+   * 播放中按目标设计由舞台自己按帧节拍推进(K4,第 4 步);K4 落地之前这里过渡地每帧也发 setTime:
+   * 往前不到半秒的 dt 在舞台里按连续播放同步推几帧,和以前的连续路一样。K4 接上后这一支改成不发。
+   * 先同步项目再拨时间,两条 RPC 顺序不能反(setTime 要在新项目上算活跃卡)。
+   */
   const lastRenderKey = useRef("");
   useEffect(() => {
     if (!stageReady) return;
     const key = `${stageReady}|${t}|${playToken}`;
     if (key === lastRenderKey.current) return;
     lastRenderKey.current = key;
-    stage()?.render(t, { jump: !playingRef.current });
-    refreshRects();
+    const s = stage();
+    if (!s) return;
+    void syncProject("front", getState().project)
+      .then(() => s.setTime(t))
+      .then(() => refreshRects(), () => {});
   }, [stageReady, t, playToken, stage, refreshRects]);
 
   // 画面层和声音层都由 MediaLayers 管:可以同时有多条画面(重叠+淡化=交叉溶解),音频段单独出声
 
   // 命中测试与拖拽逻辑
-  const handleOverlayPointerDown = (e: React.PointerEvent) => {
+  /**
+   * 命中是一次异步往返(舞台在 iframe 里),但**起点不能丢**:pointerdown 时先同步抓住指针、记下起点,
+   * 再 await hitTest;await 期间到达的 pointermove / pointerup 先累积,命中结果回来后再决定是选中还是开始拖动 ——
+   * 「点画布后立刻拖动」的那几个 move 事件不会漏,松手早于回包也不会留下一个永远在拖的状态。
+   */
+  const handleOverlayPointerDown = async (e: React.PointerEvent) => {
     if (e.button !== 0) return;
-    const { hit: targetRect } = hitAt(e);
+    const overlay = e.currentTarget as HTMLElement;
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const pointerId = e.pointerId;
+    try { overlay.setPointerCapture(pointerId); } catch { /* 指针已经没了,照样能算命中 */ }
+
+    // await 期间的事件先记着
+    let lastX = startX;
+    let lastY = startY;
+    let released = false;
+    const onEarlyMove = (ev: PointerEvent) => { if (ev.pointerId === pointerId) { lastX = ev.clientX; lastY = ev.clientY; } };
+    const onEarlyUp = (ev: PointerEvent) => { if (ev.pointerId === pointerId) released = true; };
+    window.addEventListener("pointermove", onEarlyMove);
+    window.addEventListener("pointerup", onEarlyUp);
+    window.addEventListener("pointercancel", onEarlyUp);
+
+    const { hit: targetRect } = await hitAt({ clientX: startX, clientY: startY, currentTarget: overlay });
+
+    window.removeEventListener("pointermove", onEarlyMove);
+    window.removeEventListener("pointerup", onEarlyUp);
+    window.removeEventListener("pointercancel", onEarlyUp);
+
+    const release = () => { try { if (overlay.hasPointerCapture(pointerId)) overlay.releasePointerCapture(pointerId); } catch { /* 已经放开了 */ } };
 
     if (tool === "select") {
+      release();
       // 选择工具：点在实体上则选中并闪一下描边，点空白(或透明区域下面没东西)则取消选中
       if (targetRect) {
         actions.select([targetRect.clipId]);
         flashClip(targetRect.clipId);
+        // 点击那一次用 'all':新选中的 canvas 卡描边按像素框来,不回退到整块画布
+        void refreshRects("all");
       } else {
         actions.select([]);
       }
     } else if (tool === "move") {
       // 移动工具：按下开始拖拽，移动时更新本地拖拽状态，松开才写入 store 记录撤销
-      if (!targetRect) return;
+      if (!targetRect) { release(); return; }
       actions.select([targetRect.clipId]);
       flashClip(targetRect.clipId);
       const clipId = targetRect.clipId;
-      const startX = e.clientX;
-      const startY = e.clientY;
 
       let currentDx = 0;
       let currentDy = 0;
-
-      const onMove = (ev: PointerEvent) => {
+      const applyMove = (cx: number, cy: number) => {
         // 覆盖层是按 scale 缩放显示的,位移换算回舞台像素,和 frame 用的是同一套单位
-        currentDx = (ev.clientX - startX) / scale;
-        currentDy = (ev.clientY - startY) / scale;
+        currentDx = (cx - startX) / scale;
+        currentDy = (cy - startY) / scale;
         setDragPreview({ clipId, dx: currentDx, dy: currentDy });
       };
-
+      const onMove = (ev: PointerEvent) => { if (ev.pointerId === pointerId) applyMove(ev.clientX, ev.clientY); };
       const onUp = () => {
         setDragPreview(null);
+        release();
         if (Math.abs(currentDx) > 0.5 || Math.abs(currentDy) > 0.5) {
           /*
            * 拖动改的是 clip 的 frame(位置框),不是卡片参数:卡片没有 x / y 参数,以前往 params 里
@@ -400,17 +475,24 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
         }
         window.removeEventListener("pointermove", onMove);
         window.removeEventListener("pointerup", onUp);
+        window.removeEventListener("pointercancel", onUp);
       };
-      
+
+      // 回包之前已经动过 / 松过手的,现在补上
+      if (lastX !== startX || lastY !== startY) applyMove(lastX, lastY);
+      if (released) { onUp(); return; }
       window.addEventListener("pointermove", onMove);
       window.addEventListener("pointerup", onUp);
+      window.addEventListener("pointercancel", onUp);
+    } else {
+      release();
     }
   };
 
   // 文字工具逻辑
-  const handleOverlayDoubleClick = (e: React.MouseEvent) => {
+  const handleOverlayDoubleClick = async (e: React.MouseEvent) => {
     if (tool !== "text") return;
-    const { hit: targetRect, overlayRect: rect } = hitAt(e);
+    const { hit: targetRect, overlayRect: rect } = await hitAt(e);
     if (!targetRect) return;
     flashClip(targetRect.clipId);
 
@@ -436,15 +518,16 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
     });
   };
 
-  const handleOverlayContextMenu = (e: React.MouseEvent) => {
+  const handleOverlayContextMenu = async (e: React.MouseEvent) => {
     e.preventDefault();
-    const { hit: targetRect } = hitAt(e);
+    const { clientX, clientY, currentTarget } = e;
+    const { hit: targetRect } = await hitAt({ clientX, clientY, currentTarget });
     if (targetRect) {
       const clip = project.tracks.flatMap((tr) => tr.clips).find((c) => c.id === targetRect.clipId);
       if (clip) {
         actions.select([clip.id]);
         flashClip(clip.id);
-        setContextMenu({ x: e.clientX, y: e.clientY, clipId: clip.id, cardId: clip.cardId });
+        setContextMenu({ x: clientX, y: clientY, clipId: clip.id, cardId: clip.cardId });
       }
     }
   };
@@ -521,11 +604,7 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
                  * 播放时换成色块就把这条破了 —— 用户按播放是要看成片长什么样,
                  * 不是要看构图草图。代理只活在 3D 视图里,而且只是烘焙没跟上时的过渡。
                  */
-                src={`${location.pathname}?stage=1`}
-                onLoad={() => {
-                  // 和上面的 postMessage 同一条路:也要 +1,不然消息比 onLoad 早到时这一次就白探了
-                  if (frameRef.current?.contentWindow?.__pcStage) setStageReady((n) => n + 1);
-                }}
+                src={`${location.pathname}?stage=1&id=front`}
                 style={{
                   position: "absolute",
                   inset: 0,

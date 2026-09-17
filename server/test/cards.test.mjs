@@ -41,7 +41,7 @@ const pluginUrl = compile('server/vite-plugin-cards.ts', 'cards-plugin.mjs', [["
 
 const { registerCards } = await import(registryUrl);
 const { validateCardParams, findCard } = await import(cardParamsUrl);
-const { checkCardSource, applyCardPatch, translateCardSource, reviewCardSource, suggestControls, installBundledCards } = await import(pluginUrl);
+const { checkCardSource, checkSourceEdit, applyCardPatch, translateCardSource, reviewCardSource, suggestControls, installBundledCards } = await import(pluginUrl);
 
 // 一张最小的假卡,形状和真卡一致
 registerCards([{
@@ -112,6 +112,7 @@ function C({ params }: CardProps<Params>) {
 }
 export const priceTag: CardDef<Params> = {
   id: "price-tag", name: "价格", description: "d", source: "user",
+  frameMode: "stateful",
   defaults: { text: "¥1" },
   controls: [{ key: "text", label: "文字", type: "text" }],
   Component: C,
@@ -119,58 +120,118 @@ export const priceTag: CardDef<Params> = {
 `;
 
 test('合格源码 → 通过', () => {
-  const r = checkCardSource('price-tag', GOOD, ['odometer']);
+  const r = checkCardSource('price-tag', GOOD, ['odometer'], { mode: 'author' });
   assert.equal(r.ok, true, r.errors.join('\n'));
 });
 
 test('id 不是 kebab-case → 拒绝', () => {
-  assert.match(checkCardSource('PriceTag', GOOD, []).errors.join('\n'), /kebab-case/);
+  assert.match(checkCardSource('PriceTag', GOOD, [], { mode: 'author' }).errors.join('\n'), /kebab-case/);
 });
 
 test('id 和源码里的 id 不一致 → 拒绝', () => {
-  const r = checkCardSource('other-id', GOOD, []);
+  const r = checkCardSource('other-id', GOOD, [], { mode: 'author' });
   assert.match(r.errors.join('\n'), /price-tag.*不一致|不一致/s);
 });
 
 test('id 撞车 → 拒绝', () => {
-  assert.match(checkCardSource('price-tag', GOOD, ['price-tag']).errors.join('\n'), /已经有 id/);
+  assert.match(checkCardSource('price-tag', GOOD, ['price-tag'], { mode: 'author' }).errors.join('\n'), /已经有 id/);
 });
 
 test('mu- 前缀 → 拒绝', () => {
   const src = GOOD.replace('id: "price-tag"', 'id: "mu-thing"');
-  assert.match(checkCardSource('mu-thing', src, []).errors.join('\n'), /mu- 前缀/);
+  assert.match(checkCardSource('mu-thing', src, [], { mode: 'author' }).errors.join('\n'), /mu- 前缀/);
 });
 
 test('没有 CardDef 具名导出 → 拒绝', () => {
   const src = GOOD.replace('export const priceTag: CardDef<Params>', 'const priceTag: any');
-  assert.match(checkCardSource('price-tag', src, []).errors.join('\n'), /具名导出/);
+  assert.match(checkCardSource('price-tag', src, [], { mode: 'author' }).errors.join('\n'), /具名导出/);
 });
 
 test('用了 Date.now → 拒绝', () => {
   const src = GOOD.replace('params.text', 'params.text + Date.now()');
-  assert.match(checkCardSource('price-tag', src, []).errors.join('\n'), /Date\.now/);
+  assert.match(checkCardSource('price-tag', src, [], { mode: 'author' }).errors.join('\n'), /Date\.now/);
 });
 
 test('用了 setInterval → 拒绝', () => {
   const src = GOOD.replace('return <motion', 'setInterval(() => {}, 16);\n  return <motion');
-  assert.match(checkCardSource('price-tag', src, []).errors.join('\n'), /setTimeout \/ setInterval/);
+  assert.match(checkCardSource('price-tag', src, [], { mode: 'author' }).errors.join('\n'), /setTimeout \/ setInterval/);
 });
 
 test('用了 IntersectionObserver → 拒绝', () => {
   const src = GOOD.replace('return <motion', 'new IntersectionObserver(() => {});\n  return <motion');
-  assert.match(checkCardSource('price-tag', src, []).errors.join('\n'), /IntersectionObserver/);
+  assert.match(checkCardSource('price-tag', src, [], { mode: 'author' }).errors.join('\n'), /IntersectionObserver/);
 });
 
 test('语法错误 → 拒绝并给出行号', () => {
   const src = GOOD.replace('defaults: { text: "¥1" },', 'defaults: { text: "¥1" ,');
-  const r = checkCardSource('price-tag', src, []);
+  const r = checkCardSource('price-tag', src, [], { mode: 'author' });
   assert.equal(r.ok, false);
   assert.match(r.errors.join('\n'), /语法错误/);
 });
 
 test('缺 controls 字段 → 拒绝', () => {
   const src = GOOD.replace('  controls: [{ key: "text", label: "文字", type: "text" }],\n', '');
-  assert.match(checkCardSource('price-tag', src, []).errors.join('\n'), /缺少 controls/);
+  assert.match(checkCardSource('price-tag', src, [], { mode: 'author' }).errors.join('\n'), /缺少 controls/);
+});
+
+// ── A0:审阅表是 independent 的唯一权威 + frameMode 必填 ──────────────
+// 这两条错了不报错,只会让一张毛玻璃卡拿到「独立卡」的待遇:死素材单独存、上云共享,
+// 换个下层就糊着别人的画面。所以三条路(内置卡 edit、用户卡 edit、create)各钉一条。
+const INDEPENDENT = '  compositing: "independent",\n';
+
+test("A0:用户卡 edit_card 新增 compositing: independent → 拒绝", () => {
+  const after = GOOD.replace('  defaults:', INDEPENDENT + '  defaults:');
+  const r = checkCardSource('price-tag', after, [], { mode: 'author', before: GOOD });
+  assert.equal(r.ok, false);
+  assert.match(r.errors.join('\n'), /审阅表/);
+});
+
+test("A0:用户卡 edit_card 只改文案 → 通过", () => {
+  const after = GOOD.replace('name: "价格"', 'name: "价钱"');
+  const r = checkCardSource('price-tag', after, [], { mode: 'author', before: GOOD });
+  assert.equal(r.ok, true, r.errors.join('\n'));
+});
+
+test("A0:用户卡本来就写了 independent、这次没新增 → 不追究(差量口径)", () => {
+  const withIt = GOOD.replace('  defaults:', INDEPENDENT + '  defaults:');
+  const after = withIt.replace('name: "价格"', 'name: "价钱"');
+  const r = checkCardSource('price-tag', after, [], { mode: 'author', before: withIt });
+  assert.equal(r.ok, true, r.errors.join('\n'));
+});
+
+test("A0:create_card 源码里带 compositing: independent → 拒绝(before 是空串,出现即拒)", () => {
+  const src = GOOD.replace('  defaults:', INDEPENDENT + '  defaults:');
+  const r = checkCardSource('price-tag', src, [], { mode: 'author', before: '' });
+  assert.equal(r.ok, false);
+  assert.match(r.errors.join('\n'), /capabilities\.json/);
+});
+
+test("A0:内置卡 edit_card(checkSourceEdit)新增 independent → 拒绝", () => {
+  const after = GOOD.replace('  defaults:', INDEPENDENT + '  defaults:');
+  const r = checkSourceEdit('src/cards/native/price-tag.tsx', GOOD, after);
+  assert.equal(r.ok, false);
+  assert.match(r.errors.join('\n'), /capabilities\.json/);
+});
+
+test("A0:author 模式缺 frameMode → 拒绝;install 模式照收", () => {
+  const src = GOOD.replace('  frameMode: "stateful",\n', '');
+  assert.match(checkCardSource('price-tag', src, [], { mode: 'author' }).errors.join('\n'), /缺少 frameMode/);
+  const installed = checkCardSource('price-tag', src, [], { mode: 'install' });
+  assert.equal(installed.ok, true, installed.errors.join('\n'));
+});
+
+test("A0:内置 CardDef 文件改完丢了 frameMode → 拒绝", () => {
+  const after = GOOD.replace('  frameMode: "stateful",\n', '');
+  const r = checkSourceEdit('src/cards/native/price-tag.tsx', GOOD, after);
+  assert.equal(r.ok, false);
+  assert.match(r.errors.join('\n'), /缺少 frameMode/);
+});
+
+test("A0:CardDef<any>[] 聚合文件没有 frameMode 也能改", () => {
+  const before = 'import type { CardDef } from "../../kernel/types";\nimport { a } from "./a";\nexport const nativeCards: CardDef<any>[] = [a];\n';
+  const after = before.replace('[a]', '[a, a]');
+  const r = checkSourceEdit('src/cards/native/index.ts', before, after);
+  assert.equal(r.ok, true, r.errors.join('\n'));
 });
 
 // ── 翻译器:机械翻译 + 审查门 + controls 建议 ─────────────────────────
@@ -253,7 +314,7 @@ test('review 来源/许可证:搬来的没声明 → 拒绝;Commons Clause → �
 
 test('checkCardSource 把审查发现并进 errors,带档位标签', () => {
   const src = GOOD.replace('return <motion', 'renderer.setAnimationLoop((ms) => draw(ms));\n  return <motion');
-  const r = checkCardSource('price-tag', src, []);
+  const r = checkCardSource('price-tag', src, [], { mode: 'author' });
   assert.equal(r.ok, false);
   assert.match(r.errors.join('\n'), /\[第二档·管线暂不支持\] 自带帧循环/);
   assert.equal(r.findings.length, 1);
@@ -261,7 +322,7 @@ test('checkCardSource 把审查发现并进 errors,带档位标签', () => {
 
 test('mu- 前缀:文件头声明来源 magicui 的可以用', () => {
   const src = '/**\n * 来源: https://magicui.design/docs/components/thing\n * MIT License\n */\n' + GOOD.replace('id: "price-tag"', 'id: "mu-thing"');
-  const r = checkCardSource('mu-thing', src, []);
+  const r = checkCardSource('mu-thing', src, [], { mode: 'author' });
   assert.equal(r.ok, true, r.errors.join('\n'));
 });
 

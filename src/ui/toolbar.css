@@ -131,7 +131,7 @@ html.pc-has-menubar .pc-bar-fade {
 
 /* 主按钮:一条里唯一的强调色实心,图标跟随按钮前景色 */
 .pc-btn--primary {
-  background: var(--ui-accent);
+  background: var(--ui-accent-grad);
   border-color: var(--ui-accent-press);
   color: var(--ui-accent-fg);
   font-weight: 600;
@@ -140,14 +140,14 @@ html.pc-has-menubar .pc-bar-fade {
   color: var(--ui-accent-fg);
 }
 .pc-btn--primary:hover {
-  background: var(--ui-accent-hover);
+  background: var(--ui-accent-grad-hover);
   border-color: var(--ui-accent);
 }
 .pc-btn--primary:hover svg {
   color: var(--ui-accent-fg);
 }
 .pc-btn--primary:active {
-  background: var(--ui-accent-press);
+  background: var(--ui-accent-grad-press);
 }
 
 /* 数值文字:等宽、主文字色、无容器、左右 8px */

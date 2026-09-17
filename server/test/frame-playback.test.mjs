@@ -205,7 +205,7 @@ test('isolated card project keeps same-track sibling source clips hidden and pre
   const pipeline = new FramePipeline({ root: '.', origin: () => '' });
   const project = { width: 100, height: 50, fps: 30, tracks: [
     { id: 'track', clips: [
-      { id: 'target', cardId: 'python-card', start: 2.01, end: 3, params: { mode: 'mix' } },
+      { id: 'target', cardId: 'graph-card', nodeId: 'graph-node', start: 2.01, end: 3, params: { mode: 'mix' } },
       { id: 'input-a', mediaId: 'a', start: 0, end: 8, mediaOffset: 1.25, customSourceFlag: 'keep' },
       { id: 'input-b', cardId: 'other-card', start: 1, end: 4, params: { input: true } },
     ] },

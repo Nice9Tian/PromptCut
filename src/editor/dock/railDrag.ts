@@ -33,6 +33,8 @@ interface Session {
   pointerId: number;
   item: ItemId;
   button: HTMLElement;
+  /** 跟手克隆的元素:普通项是按钮本身,成组的项是整组 */
+  grab: HTMLElement;
   slot: HTMLElement | null;
   startX: number;
   startY: number;
@@ -52,12 +54,16 @@ export function beginRailPointer(e: ReactPointerEvent<HTMLElement>, item: ItemId
   if (e.button !== 0 || !e.isPrimary) return;
   if (session) finish();
   const button = e.currentTarget;
-  const rect = button.getBoundingClientRect();
+  const slot = button.closest<HTMLElement>("[data-pc-dock-item]");
+  // 成组的项(剪辑组):按住组里任何一个按钮,拖起来的是整组
+  const grab = slot?.hasAttribute("data-pc-dock-group") ? slot : button;
+  const rect = grab.getBoundingClientRect();
   session = {
     pointerId: e.pointerId,
     item,
     button,
-    slot: button.closest<HTMLElement>("[data-pc-dock-item]"),
+    grab,
+    slot,
     startX: e.clientX,
     startY: e.clientY,
     offsetX: e.clientX - rect.left,
@@ -123,11 +129,11 @@ function onBlur() {
 
 function startDrag(s: Session) {
   s.dragging = true;
-  const rect = s.button.getBoundingClientRect();
-  const ghost = s.button.cloneNode(true) as HTMLElement;
+  const rect = s.grab.getBoundingClientRect();
+  const ghost = s.grab.cloneNode(true) as HTMLElement;
   // 克隆出来的不许再被当成 rail 项找到
   for (const el of [ghost, ...Array.from(ghost.querySelectorAll<HTMLElement>("*"))]) {
-    for (const attr of ["id", "data-pc", "data-pc-rail", "data-pc-agent-tab", "data-pc-dock-item", "aria-pressed", "aria-expanded", "aria-current"]) {
+    for (const attr of ["id", "data-pc", "data-pc-rail", "data-pc-agent-tab", "data-pc-dock-item", "data-pc-dock-group", "data-pc-cut", "aria-pressed", "aria-expanded", "aria-current", "aria-selected"]) {
       el.removeAttribute(attr);
     }
   }
@@ -184,6 +190,8 @@ function updateTarget(s: Session, x: number, y: number) {
   const side = rail.dataset.pcDockRail === "left" ? "left" : "right";
   const list = rail.querySelector<HTMLElement>("[data-pc-dock-list]") ?? rail;
   const slots = Array.from(list.querySelectorAll<HTMLElement>("[data-pc-dock-item]"));
+  // 一侧 rail 分上下两截(RailBar 的 head / tail):下面那截的落点要加上上面那截的项数
+  const offset = Number(list.dataset.pcDockOffset) || 0;
   // 落点 = 中线在指针上方的项数
   let gap = 0;
   for (const slot of slots) {
@@ -191,7 +199,7 @@ function updateTarget(s: Session, x: number, y: number) {
     if (y < r.top + r.height / 2) break;
     gap++;
   }
-  s.target = { side, gap };
+  s.target = { side, gap: gap + offset };
 
   // 指示线画在两项之间那 4px 缝的中间。落点前一项是这一侧最后一个 Agent(下面紧跟着「+」)时:
   // 拖的是 Agent 就画在 Agent 和「+」之间(放下后它排在「+」上面),拖别的就画在「+」下面
@@ -208,7 +216,7 @@ function updateTarget(s: Session, x: number, y: number) {
     lineY = (add && !isAgentItem(s.item) ? add : prev).getBoundingClientRect().bottom + 2;
   }
   lineY = Math.max(listRect.top + 1, Math.min(listRect.bottom - 1, lineY));
-  showLine(s, rail.getBoundingClientRect(), lineY, side, gap);
+  showLine(s, rail.getBoundingClientRect(), lineY, side, gap + offset);
 }
 
 function showLine(s: Session, railRect: DOMRect, y: number, side: Side, gap: number) {

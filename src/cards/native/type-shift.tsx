@@ -79,6 +79,8 @@ export const typeShift: CardDef<Params> = {
   useWhen: "做标题过渡、想要文字自动重排的草稿感时用。**内容必须多行且有层级**:首行是主标题、`*` 开头是次重点、`—` 开头是署名。单行标题体现不出重排效果。",
   tags: ["排版","转场","标题","重排"],
   source: "native",
+  // 帧模式:审计固化(A0.1)。值 = 固化前 cardFrameMode(def, def.defaults) 的返回值。
+  frameMode: "stateful",
   defaults: {
     ...hudDefaults,
     position: "center",

@@ -97,6 +97,8 @@ export const rankBars: CardDef<Params> = {
   useWhen: "3 到 5 个项目比大小、排榜单时用条形图,条长和整数数值一起滚动,最大值那条自动高亮。**卡片不会自动排序**,rows 要按数值从大到小传进来;项目名不超过 5 字,超出会被截断。单个数字不要用,两项对决用 versus-card,时间走势用 growth-curve。",
   tags: ["排名","条形图","对比","榜单"],
   source: "native",
+  // 帧模式:审计固化(A0.1)。值 = 固化前 cardFrameMode(def, def.defaults) 的返回值。
+  frameMode: "stateful",
   defaults: {
     ...hudDefaults,
     title: "TOP 渠道转化率",

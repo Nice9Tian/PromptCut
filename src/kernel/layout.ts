@@ -16,6 +16,7 @@
 import type { CSSProperties } from "react";
 import type { ClipFrame } from "./types";
 import { cameraFor, projectStage } from "./space3d.ts";
+import { resolveFrameSize } from "./frameSize.mjs";
 
 export interface Size {
   width: number;
@@ -49,11 +50,13 @@ export interface FrameResolved {
 
 /** 补全默认值:没有 frame = 铺满父坐标系 */
 export function resolveFrame(frame: ClipFrame | undefined, parent: Size): FrameResolved {
+  // w/h 走 src/kernel/frameSize.mjs:服务端的共享快照键要算出一模一样的框宽高。
+  const size = resolveFrameSize(frame, parent);
   return {
     x: frame?.x ?? 0,
     y: frame?.y ?? 0,
-    w: frame?.w ?? parent.width,
-    h: frame?.h ?? parent.height,
+    w: size.w,
+    h: size.h,
     anchor: frame?.anchor ?? [0, 0],
     scale: frame?.scale ?? 1,
     rotate: frame?.rotate ?? 0,

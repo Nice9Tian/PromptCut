@@ -99,6 +99,17 @@ function sideToVars(side: PaletteSide, mode: SkinMode): Record<string, string> {
     "ui-accent-press": relLuminance(side.accent) > 0.55
       ? mix(side.accent, "#000000", 76)
       : mix(side.accent, "#000000", dark ? 78 : 74),
+    // 品牌渐变:和开始页「开始创作」横幅同一条,强调色过渡到紫色。
+    // 终点几乎是纯紫(只掺 10% 强调色):掺多了两端都偏蓝,按钮、胶囊这种小块上看不出是渐变。
+    // 角度 100°:接近水平,沿着按钮的长边铺开,短而宽的控件上也拉得开色差。
+    // 前 30% 保持强调色,紫色只在尾端出现。
+    // 只给主操作按钮(主按钮、导出、发送、开始页横幅)用;选中态、指示条、圆点、进度、用户气泡、文字描边仍用单色 --ui-accent,
+    // 全铺渐变的话界面里紫色太多。
+    // 写成 var() 表达式而不是算好的色值:用户在皮肤编辑里改了强调色,渐变跟着变。
+    "ui-accent-2": "color-mix(in srgb, var(--ui-accent) 10%, #7b5cff)",
+    "ui-accent-grad": "linear-gradient(100deg, var(--ui-accent) 30%, var(--ui-accent-2))",
+    "ui-accent-grad-hover": "linear-gradient(100deg, var(--ui-accent-hover) 30%, color-mix(in srgb, var(--ui-accent-hover) 10%, #7b5cff))",
+    "ui-accent-grad-press": "linear-gradient(100deg, var(--ui-accent-press) 30%, color-mix(in srgb, var(--ui-accent-press) 10%, #7b5cff))",
     "ui-accent-fg": dark ? l0 : "#ffffff",
     "ui-accent-soft": dark ? mix(side.accent, l1, 24) : mix(side.accent, "#ffffff", 14),
     "ui-danger": sem.danger,

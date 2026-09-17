@@ -30,6 +30,8 @@ export const wordRotateCard: CardDef<Params> = {
   useWhen: "一个固定前缀后面跟多个同级词循环轮换(如「你是」+「优秀|卓越|完美」),适合并列排比。每词停留 1 秒且写死不可调,循环播放不会停在最后一个词。做不了「不只是 A,更是 B」这种前后半句都变的递进句。",
   tags: ["轮换","排比","词语"],
   source: "magicui",
+  // 帧模式:审计固化(A0.1)。值 = 固化前 cardFrameMode(def, def.defaults) 的返回值。
+  frameMode: "stateful",
   defaults: { words: "优秀|卓越|完美|无瑕", prefix: "你是" },
   controls: [
     { key: "words", label: "轮换词(用|分隔)", type: "text" },

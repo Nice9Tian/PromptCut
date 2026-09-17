@@ -1,6 +1,6 @@
 /** A decoder belongs to one card canvas. Seeking it never touches a timeline
  * media element or another card's source cursor. GPU registration can therefore
- * sample video locally without a Python round trip or per-frame PNG transfer. */
+ * sample video locally without a server round trip or per-frame PNG transfer. */
 export class CardMediaSource {
   private sources = new Map<string, Promise<HTMLVideoElement | HTMLImageElement>>();
   private disposed = false;

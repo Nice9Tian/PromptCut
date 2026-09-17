@@ -69,6 +69,8 @@ export const probeCard: CardDef<Record<string, never>> = {
   name: "探针卡",
   description: "测试渲染管线稳定性",
   source: "native",
+  // 帧模式:审计固化(A0.1)。值 = 固化前 cardFrameMode(def, def.defaults) 的返回值。
+  frameMode: "stateful",
   defaults: {},
   controls: [],
   Component: ProbeCard,

@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { actions, useStore } from "../store/project";
 import { cancelExport, exportVideo, streamExportFile, revealExport, importProjectFile } from "./io";
 import { newProject, pickSaveTarget, serializeProc, writeProcToDisk, loadProc, forgetSaveTarget, PROC_EXT, PROC_FORMAT } from "./io/proc";
+import { PROCP_EXT, isProcpFile, loadProcpFile, packProcp } from "./io/procp";
 import { ExportDialog, type ExportState } from "./ExportDialog";
 import { ensureActiveDraftId, saveDraft, setActiveDraftId } from "./io/drafts";
 import { Logo } from "../ui/Logo";
@@ -317,6 +318,43 @@ export function TopBar() {
   };
 
   /**
+   * 打包保存:.procp = 编排 + 项目用到的素材(A1)。
+   *
+   * 和保存项目同一条规矩 —— pickSaveTarget 要用户手势,所以它必须是第一个 await,
+   * 装包(从本地内容库按哈希取素材)只能排在挑好落点之后。包里素材按内容哈希去重,
+   * 同一份素材被几条片段引用也只有一份字节。
+   */
+  const savePackedProject = async () => {
+    const fileName = `${name}${PROCP_EXT}`;
+    let target: FileSystemFileHandle | null = null;
+    try {
+      target = await pickSaveTarget(fileName, "PromptCut 打包项目", { "application/zip": [PROCP_EXT] });
+    } catch (e) {
+      if ((e as Error)?.name === "AbortError") return; // 用户取消,不是错误
+      alert(String((e as Error).message));
+      return;
+    }
+    try {
+      const blob = await packProcp();
+      if (target) {
+        const writable = await target.createWritable();
+        await writable.write(blob);
+        await writable.close();
+      } else {
+        // 这个 WebView 没有文件系统访问 API,退回浏览器下载
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = fileName;
+        a.click();
+        URL.revokeObjectURL(a.href);
+        alert(`当前环境不支持选择目录，已保存到浏览器的下载位置：${fileName}`);
+      }
+    } catch (e) {
+      alert(String((e as Error).message));
+    }
+  };
+
+  /**
    * 导出视频。
    *
    * 和保存项目同一套路子:showSaveFilePicker 要用户手势,所以先弹「另存为」拿到
@@ -391,6 +429,15 @@ export function TopBar() {
    */
   const openProjectFile = async (file: File) => {
     if (dirty && !confirm("当前项目还有未保存的改动，打开别的项目会丢掉它们。继续？")) return;
+    // .procp 是「编排 + 素材」的 zip 包(A1):先把素材按哈希拆进本地内容库,
+    // 再拿里面那条 project.proc 走和 .proc 完全一样的路。不能先 file.text() ——
+    // 那会把一个可能几 GB 的 zip 整份读进页面。
+    if (await isProcpFile(file)) {
+      actions.loadProject(await loadProcpFile(file), file.name.replace(/\.procp$/i, PROC_EXT));
+      setActiveDraftId(null);
+      forgetSaveTarget();
+      return;
+    }
     const text = await file.text();
     let isProc = false;
     try { isProc = JSON.parse(text)?.format === PROC_FORMAT; } catch { /* 交给下面报错 */ }
@@ -611,6 +658,17 @@ ${summarizeCombine(report)}
             <span className="pc-proj-text"><b>保存项目</b><small>{dirty ? "有没保存的改动" : "已是最新"}</small></span>
             {dirty && <span className="pc-proj-dirty" />}
           </button>
+          <button
+            type="button"
+            role="menuitem"
+            className="pc-proj-item"
+            disabled={viewOnly}
+            title={viewOnly ? "只读查看模式:改不了这个项目" : "编排和素材打成一个包,换台机器直接打开"}
+            onClick={() => { setProjOpen(false); void savePackedProject(); }}
+          >
+            <IconSave />
+            <span className="pc-proj-text"><b>打包保存…</b><small>{PROCP_EXT} 连素材一起</small></span>
+          </button>
           <div className="pc-proj-sep" role="separator" />
           <button type="button" role="menuitem" className="pc-proj-item" onClick={() => { setProjOpen(false); setSettingsOpen(true); }}>
             <IconSettings />
@@ -665,7 +723,7 @@ ${summarizeCombine(report)}
       <input
         ref={projectInput}
         type="file"
-        accept={`${PROC_EXT},.json`}
+        accept={`${PROC_EXT},${PROCP_EXT},.json`}
         hidden
         onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) run(() => openProjectFile(f))(); }}
       />
@@ -676,7 +734,7 @@ ${summarizeCombine(report)}
       <input
         ref={mergeInput}
         type="file"
-        accept={`${PROC_EXT},.json`}
+        accept={`${PROC_EXT},${PROCP_EXT},.json`}
         hidden
         onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) void mergeFromFile(f); }}
       />

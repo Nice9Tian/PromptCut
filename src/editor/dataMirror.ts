@@ -1,8 +1,10 @@
+import type { Project } from "../kernel/project";
 import { getState, subscribe } from "../store/project";
+import { changedClips, projectHash, type ProjectPatch } from "../render/changedClips.mjs";
 
 /**
- * 数据管理的只读镜像:编辑器页面把项目(带版本号)推给服务端一份
- * (docs/decoupling-plan.md 第 3.2 节「数据管理 → 项目」,阶段 4)。
+ * 数据管理的只读镜像:编辑页把项目(带版本号)推给服务端一份
+ * (docs/decoupling-plan.md 第 3.2 节「数据管理 → 项目」,阶段 4;A7)。
  *
  * # 为什么
  *
@@ -12,58 +14,124 @@ import { getState, subscribe } from "../store/project";
  *
  * 有了镜像,Agent 的读和渲染(get_project / see_frames / get_gif / bake_card / inspect_card_dom)
  * 由服务端直接拿镜像去问预渲染,完全不碰页面;写操作仍经过页面,撤销 / 重做不变。
+ * **帧请求也一样**:body 里不再带项目,只带 `{session, localRev}`,服务端按键从镜像插件取
+ * (src/render/frameClient.ts、server/vite-plugin-mirror.ts)。
+ *
+ * # 什么时候开始推
+ *
+ * **编辑页一加载就推**,不再等「连上 MCP 桥」—— 帧请求要靠镜像拿项目,没有 Agent 的时候
+ * 预览也得能画。判据从「连着桥」换成「页面角色是编辑页」:只读观看页(`?observe` / `?view`)、
+ * 舞台页、导出页一律不推(两个页面同时推会互相覆盖)。
+ *
+ * # 版本号
+ *
+ * `localRev` 在 **`project` 引用变化**时 +1(store 是不可变更新)。它是帧请求的键的一半,
+ * 所以只能在这里加 —— 在推送的时候才加的话,同一个号会指向两份不同的项目。
  *
  * # 一致性
  *
- * - 用户的编辑:防抖 250 ms 推一次。
+ * - 用户的编辑:防抖 250 ms 推一次,能做增量就发两层 diff(src/render/changedClips.mjs)。
  * - Agent 的写操作:mcpExecutor 在回结果之前调 flushDataMirror(),所以 Agent「改完马上看」
- *   看到的一定是改完的那份(读后写一致)。
- * - 播放头 t 只在停下来时推(播放时每帧都变,推了也没人要):see_frames 不给时刻时用它。
+ *   看到的一定是改完的那份(读后写一致)。取帧之前也会对齐(alignMirror)。
+ * - 播放头 `{t, playing}` 走 `/api/data/playhead`,和项目分开:它是「停下来报一次当前时刻」,
+ *   混进项目那条路的话,拖一次播放头要带着整份项目再飞一趟。
  * - **推送一次只飞一个**,后一次等前一次落地再发:两次同时在路上的话,到达顺序没保证,
- *   旧的可能把新的盖掉。服务端也按「页面会话 + 版本号」拒收旧的(vite-plugin-ai)。
- * - **推失败(网络错误、HTTP 非 2xx)就当没推过**,过一会儿自己再推;不然镜像会一直停在旧版,
- *   直到下一次有人改东西。
+ *   旧的可能把新的盖掉。链上最多排一个等着的 —— 它跑起来时读的是最新状态,排十个没有意义。
+ * - **推失败(网络错误、HTTP 非 2xx)就当没推过**,过一会儿自己再推;不然镜像会一直停在旧版。
+ * - 服务端回 409 = 补丁对不上(基线滑出 8 版窗口,或者应用完哈希不等):当场整份重推。
  */
 
 /** 这个页面这次打开的会话 id:刷新页面版本号从头数,服务端靠它分辨「新页面」和「旧推送」 */
 const session = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-let rev = 0;
-let pushedProject: unknown = null;
+
+/** 项目引用变一次 +1。0 = 还没开始镜像 */
+let localRev = 0;
+/** 已经推上去、服务端确认收下的那一版 */
+let pushedRev = -1;
+let pushedProject: Project | null = null;
 let pushedT = -1;
+let pushedPlaying: boolean | null = null;
+
 let timer: ReturnType<typeof setTimeout> | null = null;
+let headTimer: ReturnType<typeof setTimeout> | null = null;
 let chain: Promise<void> = Promise.resolve();
+let queued = false;
 let started = false;
 
-async function pushNow(): Promise<void> {
-  const s = getState();
-  const project = s.project;
-  const t = s.t;
-  if (project === pushedProject && t === pushedT) return;
-  const body = JSON.stringify({ session, rev: ++rev, project, t, playing: s.playing });
-  let ok = false;
+/**
+ * 这个页面该不该推镜像。只读观看页、舞台页、导出页都不推 —— 它们看的是别人的项目,
+ * 推上去会把编辑页那一份盖掉。
+ */
+function isMirrorPage(): boolean {
   try {
-    const res = await fetch("/api/data/project", {
+    const p = new URLSearchParams(location.search);
+    if (p.has("observe") || p.get("view")) return false;
+    if (p.has("export") || p.has("stage")) return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function post(path: string, body: unknown): Promise<{ ok: boolean; status: number }> {
+  try {
+    const res = await fetch(path, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body,
+      body: JSON.stringify(body),
       signal: AbortSignal.timeout(10000),
     });
-    ok = res.ok;
+    // body 读完再走,免得连接挂在那儿
+    await res.json().catch(() => null);
+    return { ok: res.ok, status: res.status };
   } catch {
-    ok = false;
+    return { ok: false, status: 0 };
   }
-  if (ok) {
+}
+
+async function pushNow(): Promise<void> {
+  if (!started) return;
+  const project = getState().project as Project | undefined;
+  if (!project) return;
+  if (project === pushedProject && pushedRev === localRev) return;
+
+  const rev = localRev;
+  const hash = projectHash(project);
+  const patch: ProjectPatch = pushedProject && pushedRev >= 0
+    ? changedClips(pushedProject, project)
+    : { kind: "full", project };
+
+  let result = { ok: false, status: 0 };
+  if (patch.kind === "tracks") {
+    // 空补丁也发:引用变了但内容没变时,服务端也得把这个号记上,不然帧请求按它取不到
+    result = await post("/api/data/diff", { session, fromLocalRev: pushedRev, toLocalRev: rev, projectHash: hash, patch });
+    // 409:服务端对不上(基线滑出窗口 / 哈希不等)。整份重推,别在错的基线上接着打补丁
+    if (!result.ok) pushedProject = null;
+  }
+  if (!result.ok) {
+    result = await post("/api/data/project", { session, localRev: rev, project, projectHash: hash });
+  }
+
+  if (result.ok) {
     pushedProject = project;
-    pushedT = t;
+    pushedRev = rev;
+    // 项目和播放头一起变过(比如 Agent 改完就跳时间)时顺手把播放头也对上
+    if (headTimer === null && !getState().playing) schedulePlayhead(0);
   } else if (started) {
     // 推不上:过两秒再试。服务端没有新镜像时 Agent 的工具退回经页面执行,不会用到过期的这一份
     schedule(2000);
   }
 }
 
-/** 排进推送链:前一次落地之后才发下一次 */
+/**
+ * 排进推送链:前一次落地之后才发下一次。链上最多排一个 —— 它跑起来时读的是当时最新的
+ * 状态,排一串等于把同一份项目推很多遍。
+ */
 function push(): Promise<void> {
-  chain = chain.then(pushNow, pushNow);
+  if (queued) return chain;
+  queued = true;
+  const run = () => { queued = false; return pushNow(); };
+  chain = chain.then(run, run);
   return chain;
 }
 
@@ -75,28 +143,58 @@ function schedule(delay: number) {
   }, delay);
 }
 
-/** 开始镜像。只在连着 MCP 桥的那个编辑器页面上调(只读观看页不推,免得两个页面互相覆盖) */
+async function pushPlayheadNow(): Promise<void> {
+  if (!started) return;
+  const s = getState();
+  if (s.t === pushedT && s.playing === pushedPlaying) return;
+  const t = s.t, playing = s.playing;
+  const res = await post("/api/data/playhead", { session, t, playing });
+  if (res.ok) { pushedT = t; pushedPlaying = playing; }
+}
+
+function schedulePlayhead(delay: number) {
+  if (headTimer) clearTimeout(headTimer);
+  headTimer = setTimeout(() => {
+    headTimer = null;
+    void pushPlayheadNow();
+  }, delay);
+}
+
+/**
+ * 开始镜像。**编辑页加载即调**;只读观看页 / 舞台页 / 导出页调了也空转。
+ * 重复调用无副作用(返回的 disposer 只对第一次有效)。
+ */
 export function startDataMirror(): () => void {
   if (started) return () => {};
+  if (!isMirrorPage()) return () => {};
   started = true;
+  localRev = 1;
   let lastProject = getState().project;
   let lastPlaying = getState().playing;
   schedule(0);
+  schedulePlayhead(0);
   const off = subscribe(() => {
     const s = getState();
     if (s.project !== lastProject) {
+      // 版本号跟着**引用**走:帧请求的键就是它,只能在这里加
       lastProject = s.project;
+      localRev++;
       schedule(250);
-    } else if (!s.playing && (lastPlaying || s.t !== pushedT)) {
+    }
+    if (!s.playing && (lastPlaying || s.t !== pushedT)) {
       // 播放中不推 t;停下来(或暂停时拖了播放头)才推一次
-      schedule(400);
+      schedulePlayhead(400);
+    } else if (s.playing !== pushedPlaying) {
+      schedulePlayhead(0);
     }
     lastPlaying = s.playing;
   });
   return () => {
     off();
     if (timer) clearTimeout(timer);
+    if (headTimer) clearTimeout(headTimer);
     timer = null;
+    headTimer = null;
     started = false;
   };
 }
@@ -109,4 +207,39 @@ export async function flushDataMirror(): Promise<void> {
     timer = null;
   }
   await push();
+}
+
+/**
+ * 整份重推一次并等它落地。帧请求收到 409 `MIRROR_MISSING` 时调 —— 那说明**某一个进程**
+ * 手里没有这个键(多半是预渲染刚重启,转发正好丢在那一下),再打补丁只会接着落空。
+ * 把基线清掉,下一次推送就是整份;编辑器那一端收到整份会无条件转给预渲染(见
+ * server/vite-plugin-mirror.ts 的转发说明),所以这一次重推是真的能补到对面的。
+ */
+export async function resyncDataMirror(): Promise<void> {
+  if (!started) return;
+  pushedProject = null;
+  pushedRev = -1;
+  await flushDataMirror();
+}
+
+/** 这个页面镜像里的键;不做镜像的页面返回 null */
+export function mirrorKey(): { session: string; localRev: number } | null {
+  return started ? { session, localRev } : null;
+}
+
+/**
+ * 帧请求之前的对齐:号和已推送的对不上就先 flush 一次,再把键交给调用方。
+ *
+ * 返回 null = 这个页面不做镜像(只读观看页 / 舞台页 / 导出页)。调用方这时把整份项目
+ * 塞进 body —— 服务端的 prologue 认这条迁移路,读写都不经镜像。
+ */
+export async function alignMirror(): Promise<{ session: string; localRev: number } | null> {
+  if (!started) {
+    if (!isMirrorPage()) return null;
+    // 打开项目时 import 可能抢在右栏挂载之前:这里补一次,别让第一趟请求落空
+    startDataMirror();
+    if (!started) return null;
+  }
+  if (localRev !== pushedRev) await flushDataMirror();
+  return { session, localRev };
 }

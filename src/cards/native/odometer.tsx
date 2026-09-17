@@ -66,6 +66,8 @@ export const odometer: CardDef<Params> = {
   useWhen: "大整数累计量(播放量、用户数、粉丝数)做成机械滚轮翻牌主视觉,配小字 kicker 和一行说明。只支持非负整数,小数会被截断,也没有涨跌符号。要打出带正负号的涨跌幅(+80%、-30%)或需要中英注脚背书,用 stat-proof;百分比进度用 ring-metric。",
   tags: ["数字","增长","翻牌","变化"],
   source: "native",
+  // 帧模式:审计固化(A0.1)。值 = 固化前 cardFrameMode(def, def.defaults) 的返回值。
+  frameMode: "stateful",
   defaults: {
     ...hudDefaults,
     value: 12480,

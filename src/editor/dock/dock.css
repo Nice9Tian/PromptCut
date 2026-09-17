@@ -141,3 +141,20 @@ body[data-pc-rail-dragging] iframe {
 .ai-panel-header.is-left {
   padding-left: 14px;
 }
+
+/* ── rail 在时间轴旁边的那一截(RailBar part="tail",Editor.tsx 的 .pc-rail-tail-slot)──────── */
+.pc-rail-tail-slot {
+  position: absolute;
+  bottom: 0;
+  display: flex;
+  justify-content: center;
+}
+/* 顶边和时间轴卡片顶边对齐:不要 .pc-rail 的上内边距 */
+.pc-dock-rail--tail {
+  padding-top: 0;
+}
+/* 那一截顶上的小横线:标出时间轴旁边这一截和上半部分的界限 */
+.pc-dock-tail-sep {
+  flex: none;
+  margin: 0 0 6px;
+}

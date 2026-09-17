@@ -8,6 +8,7 @@ import { unpackFrameArchive } from "./frame-archive.mjs";
 import { overLimit } from "./http-guard.mjs";
 import { prerenderState } from "./prerender-client.mjs";
 import { isPrerender } from "./render-role.mjs";
+import { ensureMirror } from "./vite-plugin-mirror";
 
 const services = new Map<string, FramePipeline>();
 function requestSignal(req: any, res: any) {
@@ -35,6 +36,20 @@ export function renderProject(project: any) {
     // A legacy .proc may say /@media/<name> while the actual file lives in
     // the shared Videos/PromptCut/media folder.  Resolve through the guarded
     // media endpoint so the export/Agent page sees the same file as the editor.
+    //
+    // A1: a hash IS the asset's identity.  Media that carries one is served by
+    // /@media/<hash> (vite-plugin-media resolves it in the local content store,
+    // with the right Content-Type and Range support), so leave that address
+    // alone — rewriting it by path would pin the renderer to one machine's
+    // file layout and, from step 5 on, defeat tier switching.  Only migration
+    // era media (no hash) is still rewritten by its durable path.  A hashed
+    // asset that somehow still carries a page-private address (blob: / data:,
+    // or nothing at all) gets the hash address instead — same rule as
+    // vite-plugin-vision.ts's resolveMediaUrls, so both paths agree.
+    if (m.hash) {
+      const u = String(m.url || "");
+      return !u || u.startsWith("blob:") || u.startsWith("data:") ? { ...m, url: `/@media/${m.hash}` } : m;
+    }
     if (m.path && (!m.url || m.url.startsWith("blob:") || !m.url.startsWith("/@export/"))) {
       return { ...m, url: "/api/media/file?path=" + encodeURIComponent(String(m.path)) };
     }
@@ -65,6 +80,45 @@ export function framesPlugin(): Plugin {
     };
     server.watcher.on("change", file => { if (/^(src|scripts)\//.test(path.relative(root, file).replaceAll("\\", "/"))) invalidateFrameCode(root); });
     server.httpServer?.once("close", () => { const s = services.get(root); services.delete(root); void s?.close(); });
+    /*
+     * D4(b) `/api/cards/layout`:Agent 的 `get_layout` —— 按 t 在**整场景**上实测实体框
+     * (pinned 架构 4:Agent 的 query 跑预渲染进程;用户交互的 query 走自己的离屏舞台,不走这里)。
+     * body `{ session, localRev, t, clipIds? }`,项目来路和 `/preload` / `/playback` / `/see`
+     * 同一套(A7 的镜像前奏,迁移期仍收 `project`)。
+     * 和 `/playback` 一样**两边都能答**:编辑器进程手里也有 FramePipeline,不另开一层转发。
+     */
+    server.middlewares.use("/api/cards/layout", (req, res, next) => {
+      if (req.method !== "POST") return next();
+      const origin = `http://127.0.0.1:${(server.httpServer?.address() as any)?.port}`;
+      const json = (status: number, data: unknown) => { res.statusCode = status; res.setHeader("Content-Type", "application/json"); res.end(JSON.stringify(data)); };
+      let body = "", over = false;
+      req.on("data", chunk => { if (!over) { body += chunk; over = overLimit(req, res, body.length, 64 * 1024 * 1024, "Layout request too large"); } });
+      req.on("end", async () => {
+        if (over) return;
+        try {
+          const input = JSON.parse(body || "{}");
+          let source = input.project;
+          if (!source) {
+            const version = await ensureMirror(String(input.session || ""), input.localRev);
+            if (!version) return json(409, { error: `镜像里没有这一版项目(session=${input.session}, localRev=${input.localRev})，请整份重推后重试。`, code: "MIRROR_MISSING", retryable: true });
+            source = version.project;
+          }
+          const project = renderProject(source);
+          if (!Array.isArray(project.tracks) || !Number.isFinite(project.duration) || project.duration <= 0) throw new Error("Invalid project");
+          if (input.t !== undefined && !Number.isFinite(input.t)) throw new Error("t 要是秒数");
+          if (input.clipIds !== undefined && input.clipIds !== null && (!Array.isArray(input.clipIds) || input.clipIds.some((id: unknown) => typeof id !== "string")))
+            throw new Error("clipIds 要是字符串数组");
+          const service = frameService(root, origin);
+          return json(200, await service.layout(project, { t: Number(input.t) || 0, clipIds: input.clipIds ?? null, signal: requestSignal(req, res) }));
+        } catch (error: any) {
+          const timedOut = Boolean(error?.timedOut || error?.code === "PRERENDER_TIMEOUT");
+          const cancelled = Boolean(error?.cancelled || error?.name === "AbortError");
+          const status = timedOut ? 504 : cancelled ? 499 : Number(error?.status) >= 500 ? Number(error.status) : 400;
+          json(status, { ok: false, code: timedOut ? "FRAME_TIMEOUT" : cancelled ? "FRAME_CANCELLED" : (error?.code || "LAYOUT_ERROR"),
+            retryable: timedOut || status >= 500, error: error?.message || "实体框测量失败" });
+        }
+      });
+    });
     server.middlewares.use("/api/frames", (req, res, next) => {
       const origin = `http://127.0.0.1:${(server.httpServer?.address() as any)?.port}`;
       const service = frameService(root, origin);
@@ -114,7 +168,19 @@ export function framesPlugin(): Plugin {
             else await service.yieldBackground(input.owner, 5000);
             return json(200, { yielded: input.ttl !== 0 });
           }
-          const project = renderProject(input.project);
+          /*
+           * 项目从哪儿来(A7)。body 里带 `project` 的是迁移期的调用方(脚本、只读观看页、
+           * 舞台页、导出页)—— 照旧用它。编辑页只带 `{session, localRev}`:按这个键从
+           * **本进程**的镜像插件取,本进程没有就按 PROMPTCUT_EDITOR_URL 回拉一次。
+           * 还是取不到就回 409 MIRROR_MISSING,页面整份重推之后重试。
+           */
+          let source = input.project;
+          if (!source) {
+            const version = await ensureMirror(String(input.session || ""), input.localRev);
+            if (!version) return json(409, { error: `镜像里没有这一版项目(session=${input.session}, localRev=${input.localRev})，请整份重推后重试。`, code: "MIRROR_MISSING", retryable: true });
+            source = version.project;
+          }
+          const project = renderProject(source);
           if (!Array.isArray(project.tracks) || !Number.isFinite(project.duration) || project.duration <= 0) throw new Error("Invalid project");
           const entry = await service.entry(project);
           if (url.pathname === "/playback") {

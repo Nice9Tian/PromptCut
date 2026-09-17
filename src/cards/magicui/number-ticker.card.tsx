@@ -33,6 +33,8 @@ export const numberTickerCard: CardDef<Params> = {
   useWhen: "全屏居中的单个大数字弹簧滚动,自带单位和一行说明,数字带千位逗号(12,480)。要机械翻牌滚轮手感用 odometer;要中英引导字加数据来源注脚的实证版式用 stat-proof。",
   tags: ["数字","滚动"],
   source: "magicui",
+  // 帧模式:审计固化(A0.1)。值 = 固化前 cardFrameMode(def, def.defaults) 的返回值。
+  frameMode: "stateful",
   defaults: { value: 100, label: "已完成目标", unit: "%", accent: "" },
   controls: [
     { key: "value", label: "目标值", type: "number" },

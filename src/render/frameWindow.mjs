@@ -5,6 +5,18 @@ import { normalizeFrameMode } from './frameMode.mjs';
 export const CARD_MOUNT_LEAD = 0.05;
 export const cardMountedAt = (clip, t) => t >= clip.start - CARD_MOUNT_LEAD && t < clip.end;
 
+/** The frame at which Stage mounts this clip: the first frame n with n / fps >= start - lead.
+ * Exact comparisons only (no 1e-6 tolerance): at a 1 ulp boundary preview and export
+ * both mount one frame late, which keeps them identical. This is the single mount formula;
+ * preview, shard planning and the frame window all derive from it. */
+export function mountFrameOf(clip, fps) {
+  const lead = clip.start - CARD_MOUNT_LEAD;
+  let n = Math.max(0, Math.ceil(lead * fps));
+  while (n > 0 && (n - 1) / fps >= lead) n--;
+  while (n / fps < lead) n++;
+  return n;
+}
+
 /** Only animation cards visible at one of the requested frames need history.
  * Video/image offsets are direct seeks and never extend the replay window.
  * A batch keeps one forward pass; later cards mount at their own boundaries.
@@ -16,11 +28,8 @@ export function planFrameWindow(clips, targetFrames, fps, modeOf = () => 'statef
   const replayClips = selected.filter(clip => normalizeFrameMode(modeOf(clip)) !== 'direct');
   const ranges = frames.map(frame => [frame, frame]);
   for (const clip of replayClips) {
-    // Adjust using the same comparison as Stage, including floating-point
-    // boundaries (e.g. 10.05 - 0.05), rather than changing the mount phase.
-    let n = Math.max(0, Math.ceil((clip.start - CARD_MOUNT_LEAD) * fps));
-    while (n > 0 && (n - 1) / fps >= clip.start - CARD_MOUNT_LEAD) n--;
-    while (n / fps < clip.start - CARD_MOUNT_LEAD) n++;
+    // Same comparison as Stage, including floating-point boundaries (e.g. 10.05 - 0.05).
+    const n = mountFrameOf(clip, fps);
     ranges.push([n, Math.max(...frames.filter(frame => cardMountedAt(clip, frame / fps)))]);
   }
   const merged = [];

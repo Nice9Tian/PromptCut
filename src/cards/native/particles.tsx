@@ -250,6 +250,8 @@ export const particlesCard: CardDef<Params> = {
   useWhen: "整段画面需要一层动态的科技感 / 星空感底纹时用,通常放最底层、盖住整段时长。两种用法:不填 config 就用颜色/数量/速度几个简单参数;要雪花、星空、气泡、彩带这类现成效果,从 config 控件的 options 里挑一个 URL 填进 config(软件自带 50 多种),此时简单参数不起作用。粒子位置由 seed 决定,同一个 seed 每次导出都一样;想换一种排布就换 seed。它是背景不是主角,别指望它传达信息;要强调数字或文字用别的卡叠在上面。",
   tags: ["粒子", "背景", "科技", "星空", "雪花", "canvas"],
   source: "native",
+  // 帧模式:审计固化(A0.1)。值 = 固化前 cardFrameMode(def, def.defaults) 的返回值。
+  frameMode: "stateful",
   defaults: { config: "", color: "#8ab4ff", quantity: 80, speed: 1.2, size: 3, links: "yes", seed: 1 },
   controls: [
     { key: "config", label: "现成配置", type: "asset", kind: "particles", options: assetOptions("particles"), hint: "从素材目录里挑一个(options 里的 URL),或填别的 URL / 内联 JSON;填了就用它,下面的颜色/数量/速度不起作用" },

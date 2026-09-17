@@ -173,7 +173,7 @@
 .pc-btn-primary {
   height: 36px;
   border-radius: var(--ui-radius, 6px);
-  background-color: var(--ui-accent, #00DBDB);
+  background: var(--ui-accent-grad, #00DBDB);
   color: var(--ui-accent-fg, #ffffff);
   display: inline-flex;
   align-items: center;
@@ -185,10 +185,10 @@
   cursor: pointer;
 }
 .pc-btn-primary:not(:disabled):hover {
-  background-color: var(--ui-accent-hover, #9571FF);
+  background: var(--ui-accent-grad-hover, #9571FF);
 }
 .pc-btn-primary:not(:disabled):active {
-  background-color: var(--ui-accent-press, #613CC7);
+  background: var(--ui-accent-grad-press, #613CC7);
 }
 .pc-btn-primary.is-block {
   width: 100%;

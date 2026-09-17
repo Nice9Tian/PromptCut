@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { isPrerender } from "./render-role.mjs";
 import { prerenderState, setPrerender } from "./prerender-client.mjs";
+import { repushMirror } from "./vite-plugin-mirror";
 
 /**
  * 拉起并看护预渲染进程(docs/decoupling-plan.md 第 3 节「预渲染」,阶段 2)。
@@ -78,6 +79,13 @@ export function prerenderPlugin(): Plugin {
             ...process.env,
             PROMPTCUT_ROLE: "prerender",
             PROMPTCUT_CORS_ORIGINS: editorOrigins(server).join(","),
+            /*
+             * 编辑器那一端的地址,给镜像插件回拉整份项目用(A7)。帧请求的 body 里只有
+             * `{session, localRev}`,转发丢了或者这个进程刚起来的时候,它就按这个键
+             * 去 `GET /api/data/project?session=&localRev=` 把那一版要回来。
+             * (将来 `agent` 模式的预渲染进程不带它 —— 那一份的项目由 Agent 服务端推,I2。)
+             */
+            PROMPTCUT_EDITOR_URL: editorOrigins(server)[0],
           },
           stdio: ["ignore", "pipe", "pipe"],
           windowsHide: true,
@@ -107,6 +115,12 @@ export function prerenderPlugin(): Plugin {
             const r = await fetch(`${url}/api/prerender/health`, { signal: AbortSignal.timeout(2000) });
             if (r.ok) {
               setPrerender({ ready: true, error: null, restarts: 0 });
+              /*
+               * 它刚起来(或刚崩完重起),手里一份项目都没有。把每个 session 的最新一版
+               * 补推过去,不然下一个帧请求只能靠回拉兜 —— 回拉是一趟额外的往返,
+               * 而且崩溃重启往往正赶上用户在拖时间轴。
+               */
+              void repushMirror(url).catch(() => {});
               return;
             }
           } catch { /* 还没起来 */ }

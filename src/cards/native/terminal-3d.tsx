@@ -113,6 +113,8 @@ export const terminal3d: CardDef<Params> = {
   useWhen: "演示命令行、代码或技术操作时,用 3D 终端把命令逐字打出来。**行首符号决定颜色**:`$` 白、`#` 灰、`❯` 青、`✓` 绿,排版一半靠它。播放时长等于总字符数除以 cps,clip 太短会打不完。普通文字打字机用 mu-typing。",
   tags: ["终端","命令行","代码","打字机"],
   source: "native",
+  // 帧模式:审计固化(A0.1)。值 = 固化前 cardFrameMode(def, def.defaults) 的返回值。
+  frameMode: "stateful",
   defaults: {
     ...hudDefaults,
     position: "center",

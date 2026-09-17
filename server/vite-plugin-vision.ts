@@ -337,6 +337,13 @@ function outRoot(root: string): string {
 function resolveMediaUrls(project: any): { project: any; unresolved: string[] } {
   const unresolved: string[] = [];
   const media = (project.media || []).map((m: any) => {
+    // A1:有内容哈希就一律 /@media/<hash> —— 哈希是身份,本地内容库按它存,
+    // 渲染进程取到的和编辑器是同一份字节。已经是能用的地址就原样(导出期的
+    // /@export/<id>/media/<文件> 也是能用的),只有空地址和页面私有的 blob: / data: 才换。
+    if (m?.hash) {
+      const u = String(m.url || "");
+      return !u || u.startsWith("blob:") || u.startsWith("data:") ? { ...m, url: `/@media/${m.hash}` } : m;
+    }
     const url = String(m?.url || "");
     if (!url || (!url.startsWith("blob:") && !url.startsWith("data:"))) return m;
     const base = m?.path ? String(m.path).split(/[/\\]/).pop() : "";
@@ -417,6 +424,30 @@ async function evictBakes(root: string, keys: unknown): Promise<{ deleted: strin
     try { await fsp.unlink(path.join(dir, f.name)); deleted.push(f.key); freedBytes += f.bytes; } catch { /* 已经没了 */ }
   }
   return { deleted, freedBytes };
+}
+
+/**
+ * 这张图卡片段用到的全部图卡源码指纹(自己 + 上游整条链)。
+ *
+ * 隔离缓存键里只带 `cardCodeHash(clip.cardId)` 是不够的:片段指向的是 `cardNodes` 里的
+ * 图卡节点,它的输入可以再接另一张图卡。改了上游那张卡的源码而不改这张,键一个字节没变,
+ * `inspect_card_dom` / `bake_card` 就吃到旧缓存 —— 而且不报错,只是画面不跟着改。
+ * 按节点 id 去重、按 id 排序,同一张图算出来的值和遍历顺序无关。
+ */
+function graphCardCode(project: any, nodeId?: string): string[] | undefined {
+  if (!nodeId) return undefined;
+  const nodes = new Map<string, any>((project?.cardNodes || []).map((n: any) => [n.id, n]));
+  const seen = new Set<string>(), codes = new Set<string>();
+  const walk = (id?: string) => {
+    if (!id || seen.has(id)) return;
+    seen.add(id);
+    const node = nodes.get(id);
+    if (!node) return;
+    if (node.adapter === 'card' && node.cardId) codes.add(node.cardId + ':' + cardCodeHash(node.cardId));
+    for (const input of Object.values(node.inputs || {}) as any[]) walk(input?.nodeId);
+  };
+  walk(nodeId);
+  return codes.size ? [...codes].sort() : undefined;
 }
 
 /**
@@ -552,7 +583,7 @@ export function bakeTarget(
    * 没有它的时候改了卡片源码,预烘的旧图照样命中,3D 视图里贴的一直是改之前的样子。
    */
   const key = createHash("sha1")
-    .update(JSON.stringify({ clip: plainClip, python: iso.clip.nodeId ? { definitions: project.cardDefinitions, nodes: project.cardNodes, media: project.media, tracks: project.tracks, style: project.style } : undefined, theme: project.themeId, at, renderBox, fit, bg: rgb ? rgb[1].toLowerCase() : null, code: cardCodeHash(iso.clip.cardId) }))
+    .update(JSON.stringify({ clip: plainClip, graph: iso.clip.nodeId ? { nodes: project.cardNodes, media: project.media, tracks: project.tracks, style: project.style } : undefined, theme: project.themeId, at, renderBox, fit, bg: rgb ? rgb[1].toLowerCase() : null, code: cardCodeHash(iso.clip.cardId), graphCode: graphCardCode(project, iso.clip.nodeId) }))
     .digest("hex").slice(0, 12);
   // 文件名带上 clipId 只是为了在素材目录里认得出来;真正保证唯一的是后面那段输入哈希
   const name = `bake-${clipId.replace(/[^\w.-]/g, "_")}-${key}.png`;

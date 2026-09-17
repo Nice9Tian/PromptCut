@@ -69,6 +69,8 @@ export const entityChips: CardDef<Params> = {
   useWhen: "介绍团队成员、嘉宾或合作机构时,把 2 到 5 个实体做成**竖排**胶囊名牌逐条滑入。chips 用换行分条(不是竖线),每条格式为 `dark 或 light|姓名|头衔`;右侧可另加 note 分类旁注。单人出镜讲解用 focus-card。",
   tags: ["人物","机构","名牌","实体"],
   source: "native",
+  // 帧模式:审计固化(A0.1)。值 = 固化前 cardFrameMode(def, def.defaults) 的返回值。
+  frameMode: "stateful",
   defaults: {
     ...hudDefaults,
     position: "left",

@@ -225,7 +225,7 @@ export const tools = [
   },
   {
     name: "set_position",
-    description: "给卡片定位:把它的锚点放到画面上某个坐标,可选尺寸、缩放、旋转。**这是把任何卡片摆到任何位置的正道**——不再受卡片自带 position 档位(center/bottom/…)限制,不用为了位置换卡。坐标系:舞台像素,原点左上角,1920×1080 时中心是 960,540。anchor 决定 x,y 指的是框内哪个点([0,0] 左上、[0.5,0.5] 中心、[1,1] 右下),缩放和旋转也绕它;例如把卡片中心放到左半屏正中:{ x:480, y:540, anchor:[0.5,0.5] }。只传的字段会改,其余保留;传 clear:true 恢复铺满全屏。w/h 是卡片的**画布**尺寸(大多数卡按 1920×1080 设计,缩小画布不等于缩小内容,整体缩小用 scale)。space 对卡片级 world/local 等价(父坐标系就是舞台),将来部件级才有区别。**三维**:rotateX / rotateY / translateZ 把卡片摆进空间,但要先调 set_camera3d 打开透视,否则看到的是仿射拉伸不是透视。返回 layout(见 get_layout)和 look。",
+    description: "给卡片定位:把它的锚点放到画面上某个坐标,可选尺寸、缩放、旋转。**这是把任何卡片摆到任何位置的正道**——不再受卡片自带 position 档位(center/bottom/…)限制,不用为了位置换卡。坐标系:舞台像素,原点左上角,1920×1080 时中心是 960,540。anchor 决定 x,y 指的是框内哪个点([0,0] 左上、[0.5,0.5] 中心、[1,1] 右下),缩放和旋转也绕它;例如把卡片中心放到左半屏正中:{ x:480, y:540, anchor:[0.5,0.5] }。只传的字段会改,其余保留;传 clear:true 恢复铺满全屏。w/h 是卡片的**画布**尺寸(大多数卡按 1920×1080 设计,缩小画布不等于缩小内容,整体缩小用 scale)。space 对卡片级 world/local 等价(父坐标系就是舞台),将来部件级才有区别。**三维**:rotateX / rotateY / translateZ 把卡片摆进空间,但要先调 set_camera3d 打开透视,否则看到的是仿射拉伸不是透视。返回 layout 的 local / world 和 look;实体框 contentBox 要另调 get_layout。",
     inputSchema: {
       type: "object",
       properties: {
@@ -250,7 +250,7 @@ export const tools = [
   },
   {
     name: "set_rect",
-    description: "把卡片放进画面上的一个矩形(两个对角点,顺序随意)。**要把卡放到「空的那一边」首选它**。mode 默认 fit:画布不动,整体缩放到刚好装进矩形、保持比例,按 align 对齐在矩形里(默认居中)——大多数卡按 1920×1080 设计,这样缩放后的内容一定在矩形内。mode:canvas 则画布就是这个矩形(内容按卡片自己的规则重新布局,可能溢出,只在你确实要改画布尺寸时用)。返回 layout(看 world.visualBox 核对)和 look。和 set_position / align / nudge 改的是同一个框,只是说法不同。",
+    description: "把卡片放进画面上的一个矩形(两个对角点,顺序随意)。**要把卡放到「空的那一边」首选它**。mode 默认 fit:画布不动,整体缩放到刚好装进矩形、保持比例,按 align 对齐在矩形里(默认居中)——大多数卡按 1920×1080 设计,这样缩放后的内容一定在矩形内。mode:canvas 则画布就是这个矩形(内容按卡片自己的规则重新布局,可能溢出,只在你确实要改画布尺寸时用)。返回 layout 的 local / world(看 world.visualBox 核对)和 look,不含 contentBox。和 set_position / align / nudge 改的是同一个框,只是说法不同。",
     inputSchema: {
       type: "object",
       properties: {
@@ -266,7 +266,7 @@ export const tools = [
   },
   {
     name: "align",
-    description: "把卡片贴到画面的边或中心,带边距:h 是 left/center/right,v 是 top/center/bottom,只传一个另一个方向不动。锚点会跟着对齐方式走,缩放过的卡片贴的是可见框的边。**铺满全屏又没缩小的卡片对齐看不出效果**(画布和舞台一样大),返回里会带 note 提醒——先 set_rect 或 nudge scaleBy 缩小再对齐。返回 layout 和 look。",
+    description: "把卡片贴到画面的边或中心,带边距:h 是 left/center/right,v 是 top/center/bottom,只传一个另一个方向不动。锚点会跟着对齐方式走,缩放过的卡片贴的是可见框的边。**铺满全屏又没缩小的卡片对齐看不出效果**(画布和舞台一样大),返回里会带 note 提醒——先 set_rect 或 nudge scaleBy 缩小再对齐。返回 layout 的 local / world 和 look,不含 contentBox。",
     inputSchema: {
       type: "object",
       properties: {
@@ -281,7 +281,7 @@ export const tools = [
   },
   {
     name: "nudge",
-    description: "在现有位置上微调:dx/dy 加像素(右、下为正),scaleBy 乘倍数(0.8 = 缩小两成),rotateBy 加角度(顺时针)。看完 look 觉得「再往左一点、再小一点」就用它,不用重算绝对坐标。返回 layout 和 look。",
+    description: "在现有位置上微调:dx/dy 加像素(右、下为正),scaleBy 乘倍数(0.8 = 缩小两成),rotateBy 加角度(顺时针)。看完 look 觉得「再往左一点、再小一点」就用它,不用重算绝对坐标。返回 layout 的 local / world 和 look,不含 contentBox。",
     inputSchema: {
       type: "object",
       properties: {
@@ -402,7 +402,7 @@ export const tools = [
   },
   {
     name: "get_layout",
-    description: "读卡片的布局:local(存下来的框,没设过为 null 即铺满全屏)、world(算出来的画面绝对位置:锚点坐标、尺寸、box 是画布矩形、visualBox 是缩放旋转之后画布真正占的矩形)和 **contentBox(量出来的实体内容框:文字、图片、有底色的盒子的并集,透明容器不算)**。判断「这张卡会不会盖住人」看 contentBox —— 默认卡的画布铺满全屏,看 box/visualBox 永远是「会盖住」;判断「会不会出画」看 visualBox。contentBox 按当前播放头时刻在预览里实测,卡片此刻不在画面上时为 null 并附 contentNote(先 seek 进它的时段)。不传 clipId 返回全部卡片的加舞台尺寸。set_position / set_rect / align / nudge 四个工具改的都是同一个框,任何一个改完都能在这里读到一致的结果。",
+    description: "读卡片的布局:local(存下来的框,没设过为 null 即铺满全屏)、world(算出来的画面绝对位置:锚点坐标、尺寸、box 是画布矩形、visualBox 是缩放旋转之后画布真正占的矩形)和 **contentBox(量出来的实体内容框:文字、图片、有底色的盒子的并集,透明容器不算)**。判断「这张卡会不会盖住人」看 contentBox —— 默认卡的画布铺满全屏,看 box/visualBox 永远是「会盖住」;判断「会不会出画」看 visualBox。contentBox 由预渲染按整场景在指定时刻实测,卡片此刻不在画面上时为 null 并附 contentNote(先 seek 进它的时段)。不传 clipId 返回全部卡片和素材段的加舞台尺寸。set_position / set_rect / align / nudge 四个工具改的都是同一个框,任何一个改完都能在这里读到一致的结果。",
     inputSchema: {
       type: "object",
       properties: {
@@ -1268,8 +1268,7 @@ export const tools = [
         file: { type: "string", description: "要改的文件相对路径，必须在 get_card_source 返回的 files 里；不传就改卡片定义文件" },
         find: { type: "string", description: "要被替换掉的原文，逐字照抄源码" },
         replace: { type: "string", description: "替换成的新内容" },
-        replaceAll: { type: "boolean", description: "find 有意匹配多处且都要改时传 true" },
-        metadata: { type: "object", description: "Python定义可同时更新entry/kind/defaults/need_prerendering/compositing/styleKeys；源码仍使用find/replace" }
+        replaceAll: { type: "boolean", description: "find 有意匹配多处且都要改时传 true" }
       },
       required: ["cardId", "find", "replace"]
     },
@@ -1384,20 +1383,12 @@ export const tools = [
   },
   {
     name: "create_card",
-    description: "创建可复用卡片定义。language=python时以JSON传入Python class源码，统一支持animation/filter/transition/emphasis/audio，源码随项目保存，在受限Python运行器执行。class提供__init__(style=None)和card(source,time)，source.time(t)随机查询且不改变播放位置，多输入用source['A']；音频time为TimeRange(start,count,sample_rate)，用source.block。GLSL(fragment)(source.time(time),time=time)返回GPU绘制描述；NumPy uint8 RGBA数组/Pillow图片返回像素，AudioBlock或float32 frames×channels数组返回音频。need_prerendering与compositing分别声明，未知历史/背景依赖保持保守。建完用apply_card应用到一个或多个片段；也可用apply一次创建并应用。省略language保持原TSX建卡行为，先读card_authoring_guide。改现有源码用get_card_source和edit_card。",
+    description: "创建可复用卡片定义：TSX `CardDef`；要多输入或 GPU 滤镜、转场、音频时写 `kind` / `inputs` / `card` / `audio`，先读 `card_authoring_guide`。建完用 apply_card 把它应用到片段。改现有源码用 get_card_source 和 edit_card，不要用 create_card + overwrite 整篇重写。",
     inputSchema: {
       type: "object",
       properties: {
         id: { type: "string", description: "小写 kebab-case，全局唯一，例如 price-tag" },
-        source: { type: "string", description: "完整Python class源码，或默认TSX CardDef源码" },
-        language: { type: "string", enum: ["python", "tsx"] },
-        entry: { type: "string", description: "Python class名称，如CustomTransition" },
-        kind: { type: "string", enum: ["animation", "filter", "transition", "emphasis", "audio"] },
-        defaults: { type: "object", description: "实例默认参数，通过self.params读取" },
-        need_prerendering: { type: "boolean", description: "true按历史推进；false必须能按time直接求值" },
-        compositing: { type: "string", enum: ["independent", "context", "unknown"], description: "只有明确独立渲染的卡才能使用独立透明MOV" },
-        styleKeys: { type: "array", items: { type: "string" }, description: "不传使用全部全局style，[]不使用，或指定使用字段" },
-        apply: { type: "object", description: "可选apply_card参数，cardId自动取本定义id" },
+        source: { type: "string", description: "完整 TSX CardDef 源码" },
         overwrite: { type: "boolean", description: "只在确实要把同名卡整篇换掉时传 true；改细节请用 edit_card" }
       },
       required: ["id", "source"]
@@ -1406,7 +1397,7 @@ export const tools = [
   },
   {
     name: "apply_card",
-    description: "把项目中的Python卡片定义应用为实例。同一定义可用于多段素材。clipId为已有片段；或trackId/start/end创建新动画或音频片段。inputs以名称映射到{clipId}原始素材/旧卡源或{nodeId}另一卡输出，可加offset秒和rate倍率；默认单输入source为目标clip原始来源。多输入转场常用A/B。params通过self.params传入。nodeId不传自动生成，传当前clip.nodeId可编辑该实例参数和输入。",
+    description: "把一张图卡定义应用为实例。同一定义可用于多段素材。clipId为已有片段；或trackId/start/end创建新动画或音频片段。inputs以名称映射到{clipId}（指素材段 = 该素材，指图卡片段 = 那张图卡的输出）或{nodeId}另一卡输出，可加offset秒和rate倍率；不传inputs时：片段上已有图卡就接它的输出，否则接目标clip的原始素材。多输入转场常用A/B。params作为实例参数传入。nodeId不传自动生成，传当前clip.nodeId可编辑该实例参数和输入。",
     inputSchema: { type: "object", properties: {
       cardId: { type: "string" }, clipId: { type: "string" }, trackId: { type: "string" }, start: { type: "number" }, end: { type: "number" },
       nodeId: { type: "string" }, params: { type: "object" }, frame: { type: "object" },

@@ -16,7 +16,10 @@ export function registerCards(defs: CardDef<any>[]) {
     if (seen.has(d.id)) throw new Error(`card id 重复: ${d.id}`);
     seen.add(d.id);
     const capabilities = cardCapabilities(d);
+    // compositing / canvasHeavy 的权威是审阅表(src/cards/capabilities.json),不是卡片源码,
+    // 所以注册时统一盖成审阅结论 —— 后面谁拿 getCard(id) 都读到同一个答案。
     map.set(d.id, { ...d, need_prerendering: capabilities.need_prerendering, compositing: capabilities.compositing,
+      canvasHeavy: capabilities.canvasHeavy,
       ...(!Object.hasOwn(d, 'need_prerendering') ? { _derivedPrerendering: true } : {}) });
   }
 }

@@ -1,6 +1,7 @@
 import type { MediaAsset } from "../../kernel/project";
 import { actions } from "../../store/project";
 import { importVideoFiles, registerMediaFile } from "../io";
+import { applyUploadedMedia, uploadMediaFile } from "../io/mediaUpload";
 import { classifyFileDetailed, EXT_KIND } from "../io/mediaKinds";
 
 export type AssetKind = MediaAsset["kind"];
@@ -13,8 +14,8 @@ export type AssetKind = MediaAsset["kind"];
  * (导出和语音转写靠 getMediaFile 取原文件)、并把片段放到播放头处,自己另写一套只会和它走岔。
  * 音频和图片在 io 里没有对应入口(importVideoFiles 的 kind 是写死的 "video"),所以在这里登记,
  * 但**登记完必须调 registerMediaFile 把原始 File 交回 io** —— 语音转写和导出都靠
- * io.getMediaFile 取原文件,漏了这一步,导入的 mp3 转写时会报「素材文件不在内存里」,
- * 而上传失败退回 blob: 的素材导出时会被直接清空。两处都不会提示是导入漏登记造成的。
+ * io.getMediaFile 取原文件,漏了这一步,导入的 mp3 转写时会报「素材文件不在内存里」。
+ * 不会提示是导入漏登记造成的。
  */
 
 /** 文件选择器的 accept:MIME 通配打头,再补一串后缀,免得系统不认 MIME 时把文件灰掉 */
@@ -72,42 +73,28 @@ function probeImage(url: string, name: string): Promise<{ width?: number; height
 /**
  * 登记一条音频 / 图片素材。
  *
- * 上传成功就直接拿 /@media/<文件名> 当素材地址,而不是留着 blob: ——
+ * 素材地址一律是 /@media/<内容哈希>(A1),不留 blob: ——
  * 渲染进程和导出进程都在浏览器之外,够不着 blob:,而 io 里那张「blob → File」的表是私有的,
- * 外面登记的素材进不去。走服务端地址就绕开了这条断路;上传失败(比如没起 dev server)再退回 blob:。
+ * 外面登记的素材进不去。blob: 只在这里当一次性的探测地址(探时长 / 宽高),探完就撤。
+ * 入库(上传 + 算哈希)期间素材先挂 pending,素材层画「上传中」占位;
+ * 失败不退回 blob:,留空地址(见 io/mediaUpload.ts)。
  */
 export async function registerAsset(file: File, kind: "audio" | "image"): Promise<string> {
   const blobUrl = URL.createObjectURL(file);
   const meta = kind === "audio" ? await probeAudio(blobUrl, file.name) : await probeImage(blobUrl, file.name);
-
-  let url = blobUrl;
-  let path: string | undefined;
-  try {
-    const res = await fetch(`/api/media/upload/${encodeURIComponent(file.name)}`, { method: "POST", body: file });
-    if (res.ok) {
-      const data = await res.json();
-      if (data?.ok && data.url) {
-        url = data.url as string;
-        path = data.path as string | undefined;
-      }
-    } else {
-      console.warn(`[left] 上传素材失败: ${file.name}`);
-    }
-  } catch (err) {
-    console.warn(`[left] 上传素材异常: ${file.name}`, err);
-  }
-  if (url !== blobUrl) URL.revokeObjectURL(blobUrl);
+  URL.revokeObjectURL(blobUrl);
 
   const media = actions.addMedia({
     kind,
     name: file.name,
-    url,
-    path,
+    url: "",
+    pending: true,
     duration: (meta as { duration?: number }).duration,
     width: (meta as { width?: number }).width,
     height: (meta as { height?: number }).height,
   });
   registerMediaFile(media.id, file);
+  applyUploadedMedia(media.id, await uploadMediaFile(file));
   return media.id;
 }
 

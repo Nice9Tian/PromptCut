@@ -43,7 +43,8 @@ export interface EditorApi {
   setRect(args: { clipId: string; x1: number; y1: number; x2: number; y2: number; mode?: "fit" | "canvas"; align?: [number, number] }): any;
   align(args: { clipId: string; h?: "left" | "center" | "right"; v?: "top" | "center" | "bottom"; margin?: number }): any;
   nudge(args: { clipId: string; dx?: number; dy?: number; scaleBy?: number; rotateBy?: number; clamp?: boolean }): any;
-  getLayout(args?: { clipId?: string }): any;
+  /** 异步:contentBox 要问舞台一次往返(D4 页面侧)。写工具仍是同步的 */
+  getLayout(args?: { clipId?: string }): Promise<any>;
   getClip(args: { clipId: string }): any;
   listParts(args?: { partId?: string; detail?: string }): any;
   addComposite(args: { start: number; duration?: number; trackId?: string; parts?: unknown[] }): any;
@@ -139,10 +140,10 @@ export interface EditorApi {
   collectLogin(args: { site?: string; method?: "qr" | "browser"; force?: boolean }): Promise<any>;
   collectLoginCheck(args: { site?: string; hide?: boolean }): Promise<any>;
   collectLogout(args: { site?: string }): Promise<any>;
-  createCard(args: { id: string; source: string; overwrite?: boolean; language?: 'python' | 'tsx'; entry?: string; kind?: string; defaults?: Record<string, unknown>; need_prerendering?: boolean; compositing?: string; styleKeys?: string[]; apply?: any }): Promise<any>;
+  createCard(args: { id: string; source: string; overwrite?: boolean }): Promise<any>;
   applyCard(args: any): any;
   getCardSource(args: { cardId: string; file?: string }): Promise<any>;
-  editCard(args: { cardId: string; file?: string; find: string; replace: string; replaceAll?: boolean; metadata?: Record<string, unknown> }): Promise<any>;
+  editCard(args: { cardId: string; file?: string; find: string; replace: string; replaceAll?: boolean }): Promise<any>;
   /** 只读 DOM 树(inspect_card_dom):每个节点标出源码位置,改动一律走 editCard */
   inspectCardDom(args: { clipId: string; t?: number; ref?: number | string; depth?: number }): Promise<any>;
   seePreview(args: { t?: number; clipId?: string; times?: number[] }): Promise<any>;
@@ -340,6 +341,15 @@ export function connectMcpExecutor(getApi: () => EditorApi, onStatus?: (s: { con
     return () => {};
   }
 
+  /*
+   * 这个页面是「编辑台」,由它把项目镜像给服务端(数据管理的只读镜像,见 src/editor/dataMirror.ts)。
+   * 只读观看页(observe / view)上面已经 return 了,不会走到这里 —— 两个页面同时推会互相覆盖。
+   *
+   * **不再等桥连上**(A7):帧请求的 body 里只有 `{session, localRev}`,项目由服务端从镜像取 ——
+   * 没有 Agent 连着的时候,编辑页自己的预览也得能画。判据从「连着 MCP 桥」换成「页面角色是编辑页」。
+   */
+  startDataMirror();
+
   const connect = () => {
     if (!active) return;
     source = new EventSource(
@@ -348,11 +358,6 @@ export function connectMcpExecutor(getApi: () => EditorApi, onStatus?: (s: { con
 
     source.onopen = () => {
       onStatus?.({ connected: true });
-      /*
-       * 连着桥的这个页面才是「编辑台」,由它把项目镜像给服务端(数据管理的只读镜像,见 src/editor/dataMirror.ts)。
-       * 只读观看页(observe / view)上面已经 return 了,不会走到这里 —— 两个页面同时推会互相覆盖。
-       */
-      startDataMirror();
     };
 
     source.onmessage = async (e) => {
@@ -421,7 +426,7 @@ export function connectMcpExecutor(getApi: () => EditorApi, onStatus?: (s: { con
           else if (tool === "set_rect") result = api.setRect(args);
           else if (tool === "align") result = api.align(args);
           else if (tool === "nudge") result = api.nudge(args);
-          else if (tool === "get_layout") result = api.getLayout(args);
+          else if (tool === "get_layout") result = await api.getLayout(args);
           else if (tool === "get_clip") result = api.getClip(args);
           else if (tool === "list_parts") result = api.listParts(args);
           else if (tool === "add_composite") result = api.addComposite(args);

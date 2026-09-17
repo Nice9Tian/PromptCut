@@ -79,6 +79,8 @@ export const versusCard: CardDef<Params> = {
   useWhen: "口播在做对比(「相比」「而不是」「区别在于」「vs」)时,用左右两栏对照,可以高亮胜出的一方。",
   tags: ["对比","versus","左右","对照"],
   source: "native",
+  // 帧模式:审计固化(A0.1)。值 = 固化前 cardFrameMode(def, def.defaults) 的返回值。
+  frameMode: "stateful",
   defaults: {
     ...hudDefaults,
     aKicker: "OPTION A",

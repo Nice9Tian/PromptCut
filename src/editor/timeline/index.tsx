@@ -8,14 +8,11 @@ import { TimelineProvider, useTimelineContext } from "./TimelineContext";
 import { TrackHeader } from "./TrackHeader";
 import { xOfTime, HEADER_W_MIN, HEADER_W_MAX, TAIL_SLACK_PX, contentEndOf } from "./utils";
 import { TrackRow } from "./TrackRow";
-import { Ruler } from "./Ruler";
-import { RangeBar, RANGE_H } from "./RangeBar";
-import { RenderBar, RENDER_H } from "./RenderBar";
+import { Ruler, RULER_H } from "./Ruler";
 import { InsertZones } from "./InsertZones";
 import { NewTrackZone } from "./NewTrackZone";
 import { Playhead } from "./Playhead";
 import { Toolbar } from "./Toolbar";
-import { CutTabs } from "./CutTabs";
 import { Scrollbar } from "./Scrollbar";
 import { ResizeHandle } from "../ResizeHandle";
 import { IconPlus } from "../../ui/icons";
@@ -30,7 +27,7 @@ function TimelineInner() {
   const tracks = useStore((s) => s.project.tracks);
   const duration = useStore((s) => s.project.duration);
   const durationManual = useStore((s) => s.durationManual);
-  const { scrollRef, trackAreaRef, pxPerSec, setDropPlan, headerW, setHeaderW, commitHeaderW, resetHeaderW } = useTimelineContext();
+  const { scrollRef, trackAreaRef, pxPerSec, setDropPlan, headerW, setHeaderW, commitHeaderW, resetHeaderW, trackH } = useTimelineContext();
   const t = useStore(s => s.t);
   
   // 播放范围跟着可见内容走。
@@ -54,10 +51,11 @@ function TimelineInner() {
 
   // 内容层从 MIN_TIME 起算(0 秒前面那段间距也要占宽度),右边再留一截好拖
   const contentWidth = xOfTime(Math.max(duration, t + 5), pxPerSec) + TAIL_SLACK_PX;
+  // 标尺 + 下面的空行 = 正好一行序列高:第一条序列上方空出的就是一个序列的高度。行高比标尺还矮时不留空行
+  const topGapH = Math.max(0, trackH - RULER_H);
 
   return (
     <div data-pc="timeline" className="flex flex-col h-full bg-neutral-900 border-t border-neutral-800 text-neutral-300 select-none overflow-hidden text-sm relative">
-      <CutTabs />
       <Toolbar />
       <div className="flex-1 min-h-0 overflow-auto pc-tl-scroll" ref={scrollRef}>
         {/* Keep both sticky columns as tall as the complete scroll content. */}
@@ -65,12 +63,11 @@ function TimelineInner() {
         
         {/* Left Headers Column */}
         <div className="pc-tl-headers relative flex-shrink-0 sticky left-0 bg-neutral-900 z-30 flex flex-col" style={{ width: headerW }}>
-          <div className="flex-shrink-0 sticky top-0 z-40 bg-neutral-950" style={{ height: RANGE_H }} />
-          <div className="pc-tl-hdr flex-shrink-0 sticky bg-neutral-950 z-40" style={{ top: RANGE_H }}>
-            序列
-          </div>
-          {/* 和右边那条绿条等高的占位:不补的话右边整体下移,轨道行和左边的表头就错开了 */}
-          <div className="flex-shrink-0 sticky bg-neutral-950 z-40" style={{ top: RANGE_H + 26, height: RENDER_H }} />
+          {/* 和标尺等高的空表头:不写字,只占位,让下面的行头和右边的轨道行对齐 */}
+          <div className="pc-tl-hdr flex-shrink-0 sticky top-0 bg-neutral-950 z-40" style={{ height: RULER_H }} aria-hidden="true" />
+          {/* 标尺下面补一截空行,和标尺合起来正好一个序列高(跟着当前行高);右边轨道区同样补一截 */}
+          <div className="pc-tl-toprow flex-shrink-0" style={{ height: topGapH }} aria-hidden="true" />
+
           {/* 行头自成一层(isolation):拖动中的行头(z-40)只在这一层里压过别的行头,不会盖到上面吸顶的表头 */}
           <div className="flex-1 flex flex-col" style={{ isolation: "isolate" }}>
             {tracks.map((track, i) => (
@@ -99,16 +96,11 @@ function TimelineInner() {
 
         {/* Tracks Area */}
         <div className="pc-tl-tracks flex-1 relative flex flex-col" ref={trackAreaRef} style={{ minWidth: contentWidth }}>
-          <div className="flex-shrink-0 sticky top-0 z-20" style={{ height: RANGE_H }}>
-            <RangeBar />
-          </div>
-          <div className="flex-shrink-0 sticky bg-neutral-950 z-20" style={{ top: RANGE_H, height: 26 }}>
+          <div className="flex-shrink-0 sticky top-0 bg-neutral-950 z-20" style={{ height: RULER_H }}>
             <Ruler />
           </div>
-          {/* 预渲染绿条:紧贴标尺下沿(AE 的位置) */}
-          <div className="flex-shrink-0 sticky bg-neutral-950 z-20" style={{ top: RANGE_H + 26, height: RENDER_H }}>
-            <RenderBar />
-          </div>
+          {/* 和左边行头列那截空行等高:片段层(下面 .pc-tl-rows)整体往下让,层内的位置计算都是相对它自己的,不受影响 */}
+          <div className="pc-tl-toprow flex-shrink-0" style={{ height: topGapH }} aria-hidden="true" />
           {/*
             片段层自成一层(isolation):选中片段(z-20)、落点预览(z-30)、插入缝(z-40)、拖动中的行(z-40)、锁定遮罩(z-50)
             的 z 只在这一层里比大小,整层排在吸顶的范围条 / 标尺 / 绿条(z-20)和左边行头列(z-30)下面。
@@ -129,7 +121,7 @@ function TimelineInner() {
             <NewTrackZone />
             <InsertZones />
           </div>
-          <Playhead top={RANGE_H} />
+          <Playhead />
         </div>
         </div>
       </div>

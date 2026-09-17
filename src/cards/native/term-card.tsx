@@ -57,6 +57,8 @@ export const termCard: CardDef<Params> = {
   useWhen: "口播在下定义、解释名词(「所谓」「叫做」「是指」「指的是」)时,把术语和解释做成卡片。**en 小注会被强制大写**,所以只适合放英文,别放拼音。",
   tags: ["术语","定义","名词","解释"],
   source: "native",
+  // 帧模式:审计固化(A0.1)。值 = 固化前 cardFrameMode(def, def.defaults) 的返回值。
+  frameMode: "stateful",
   defaults: {
     ...hudDefaults,
     position: "center",

@@ -6,8 +6,6 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import ts from 'typescript';
-import { normalizeCardDefinition } from '../src/kernel/cardGraph.mjs';
-import { patchCardDefinition } from '../src/kernel/cardAuthoring.mjs';
 import { originOk as guardOriginOk } from './http-guard.mjs';
 import { isPrerender } from './render-role.mjs';
 import { proxyToPrerender } from './prerender-client.mjs';
@@ -111,6 +109,24 @@ export function sharedByCounts(root: string): Map<string, number> {
   return counts;
 }
 
+/** 源码里新增的 `compositing: 'independent'` —— 这个值的唯一权威是审阅表(A0.2) */
+const COMPOSITING_INDEPENDENT = /compositing\s*:\s*['"`]independent['"`]/g;
+
+/**
+ * 这个文件里有没有 CardDef **对象**的具名导出。
+ *
+ * `export const nativeCards: CardDef<any>[] = [...]` 这 7 个聚合数组文件也长得像
+ * `export const xxx: CardDef`,但它们没有对象可以写字段 —— frameMode 必填不能套到它们头上,
+ * 否则一编辑就被无条件拒绝。所以按「`:` 和 `=` 之间是不是 `[]` 结尾」把数组声明排除掉。
+ */
+const CARDDEF_DECL = /export\s+const\s+\w+\s*:\s*CardDef\b([^=]*)=/g;
+export function hasCardDefObject(source: string): boolean {
+  for (const m of source.matchAll(CARDDEF_DECL)) {
+    if (!/\[\s*\]\s*$/.test(m[1])) return true;
+  }
+  return false;
+}
+
 /** 改完之后不许**新**出现的写法:导出按帧推时间,这些东西不跟着帧走。已有的不追究(那是原作者的事) */
 const RISKY_PATTERNS: [RegExp, string][] = [
   [/\bDate\.now\s*\(/g, 'Date.now():要读时间就用组件收到的 t'],
@@ -118,6 +134,7 @@ const RISKY_PATTERNS: [RegExp, string][] = [
   [/\bsetTimeout\s*\(|\bsetInterval\s*\(/g, 'setTimeout / setInterval 驱动动画:用 motion 的 animate,或者读 t'],
   [/\bIntersectionObserver\b/g, 'IntersectionObserver:卡片挂载即播放,没有「滚进视口」'],
   [/\bsetAnimationLoop\b/g, 'setAnimationLoop:三维画面写成 t 的纯函数,t 变了再显式 render 一次(照 scene-3d.tsx)'],
+  [COMPOSITING_INDEPENDENT, "compositing: 'independent':「只画自己、能单独预渲染上云」是审阅结论,只能写进审阅表 src/cards/capabilities.json(A0.2),源码里声明不作数"],
 ];
 
 /** 内置 / 共用文件的一次编辑能不能落盘 */
@@ -145,6 +162,11 @@ export function checkSourceEdit(rel: string, before: string, after: string): { o
     if (!/export\s+const\s+\w+\s*:\s*CardDef/.test(after)) errors.push('改完没有 `export const xxx: CardDef` 了 —— 注册表靠它认卡。');
     const idOf = (s: string) => (s.match(/\bid:\s*["'`]([^"'`]+)["'`]/) || [])[1];
     if (idOf(before) !== idOf(after)) errors.push(`CardDef 的 id 从 "${idOf(before)}" 变成了 "${idOf(after)}" —— 卡片 id 不能改,时间轴上的片段靠它找卡。`);
+    // frameMode 是绝对检查,不是差量:A0.1 已经把 31 个 CardDef 对象文件全写上了,
+    // 改完不能把它丢掉 —— 丢了就退回「按 timing 动态推导」,调度会静悄悄换一条路。
+    if ((hasCardDefObject(before) || hasCardDefObject(after)) && !/\bframeMode\s*:/.test(after)) {
+      errors.push('CardDef 里缺少 frameMode 字段 —— 帧怎么得到(direct / stateful)必须写死,不能靠推导。');
+    }
   }
   return { ok: errors.length === 0, errors };
 }
@@ -681,10 +703,18 @@ export function checkCardSource(
   id: string,
   source: string,
   existingIds: string[],
-  /** vendored:翻译器已经确认这是搬来的代码(改写过 @/lib/utils 之类),来源声明就是必填 */
-  hints?: { vendored?: boolean },
+  /**
+   * mode 没有默认值,三个生产调用点各自写死(A0.1(c)):
+   *   - `author`:Agent / 用户现写的卡(create_card、用户卡 edit_card)。frameMode 必填,
+   *     而且不许新增 `compositing: 'independent'` —— `before` 是编辑前的源码,新建卡传空串。
+   *   - `install`:装机时把随包的卡铺开(installBundledCards)。这两条都不查:
+   *     那些源码是仓库里审过的,装机不是一次创作。
+   * vendored:翻译器已经确认这是搬来的代码(改写过 @/lib/utils 之类),来源声明就是必填
+   */
+  hints: { mode: 'author' | 'install'; before?: string; vendored?: boolean },
 ): CardCheck {
   const errors: string[] = [];
+  const authoring = hints.mode === 'author';
 
   if (!ID_RE.test(id)) {
     errors.push(`卡片 id "${id}" 不合法:要用小写 kebab-case(例如 my-title-card),只能有字母、数字和连字符。`);
@@ -715,9 +745,29 @@ export function checkCardSource(
   } else if (idInSource[1] !== id) {
     errors.push(`CardDef 里的 id 是 "${idInSource[1]}",和传进来的 id "${id}" 不一致,两者必须相同。`);
   }
-  for (const field of ['name', 'description', 'defaults', 'controls', 'Component']) {
+  const required = ['name', 'description', 'defaults', 'controls'];
+  // frameMode:现写的卡必须自己声明帧怎么得到;装机铺开随包卡时不查(A0.1(c))
+  if (authoring) required.push('frameMode');
+  for (const field of required) {
     if (!new RegExp(`\\b${field}\\s*:`).test(source)) {
       errors.push(`CardDef 里缺少 ${field} 字段。`);
+    }
+  }
+
+  /*
+   * 画面从哪来:DOM 卡写 `Component`,图卡写 `card`(视觉)或 `audio`(音频),三者至少一个。
+   * 不能只认 `Component` —— 图卡按 H1 就是不写它的,认死了三张示例图卡在 create_card 就被 400 拒掉。
+   */
+  if (!/\bComponent\s*:/.test(source) && !/\bcard\s*:/.test(source) && !/\baudio\s*:/.test(source)) {
+    errors.push('CardDef 里 Component / card / audio 一个都没有 —— DOM 卡写 Component,图卡写 card(视觉)或 audio(音频),三者至少出现一个。');
+  }
+
+  // 和 checkSourceEdit 同一条差量规则:新建卡 before = '',所以出现即拒
+  if (authoring) {
+    const n0 = ((hints.before ?? '').match(COMPOSITING_INDEPENDENT) || []).length;
+    const n1 = (source.match(COMPOSITING_INDEPENDENT) || []).length;
+    if (n1 > n0) {
+      errors.push("不要在源码里写 compositing: 'independent':「只画自己、能单独预渲染上云」是审阅结论,由审阅表 src/cards/capabilities.json 说了算,写在这里不作数。");
     }
   }
 
@@ -844,7 +894,7 @@ export function installBundledCards(opts: {
 
     const translated = translateCardSource(source);
     const finalSource = translated.source;
-    const check = checkCardSource(id, finalSource, opts.existingIds, { vendored: translated.rewrites.length > 0 });
+    const check = checkCardSource(id, finalSource, opts.existingIds, { vendored: translated.rewrites.length > 0, mode: 'install' });
     if (!check.ok) {
       out.push({ id, status: 'rejected', error: check.errors.join('\n') });
       continue;
@@ -1114,11 +1164,6 @@ export default function vitePluginCards(): Plugin {
           try {
             const input = JSON.parse(body || '{}');
             const { id, file, find, replace, replaceAll } = input;
-            if (input.definition?.language === 'python') {
-              const definition = patchCardDefinition(normalizeCardDefinition(input.definition), input);
-              return sendJson(res, 200, { ok: true, id: definition.id, language: 'python', definition, source: definition.source,
-                validation: 'structure', hint: 'Python source is saved with the project and executes only inside the isolated card runtime.' });
-            }
             if (typeof id !== 'string' || typeof find !== 'string' || typeof replace !== 'string') {
               return sendJson(res, 400, { ok: false, error: 'id、find、replace 都必须是字符串' });
             }
@@ -1144,7 +1189,7 @@ export default function vitePluginCards(): Plugin {
 
             const isUserDef = target === defFile && defFile.startsWith('src/cards/user/');
             // 用户卡的定义文件和 create 走同一套校验:局部替换一样能把文件改到编译不过
-            const check = isUserDef ? checkCardSource(id, after, []) : checkSourceEdit(target, before, after);
+            const check = isUserDef ? checkCardSource(id, after, [], { mode: 'author', before }) : checkSourceEdit(target, before, after);
             if (!check.ok) {
               return sendJson(res, 400, { ok: false, error: check.errors.join('\n'), errors: check.errors });
             }
@@ -1382,12 +1427,6 @@ export default function vitePluginCards(): Plugin {
           try {
             const input = JSON.parse(body || '{}');
             const { id, source, existingIds, overwrite, projectId } = input;
-            if (input.language === 'python') {
-              const { overwrite: _overwrite, existingIds: _ids, projectId: _project, apply: _apply, ...raw } = input;
-              const definition = normalizeCardDefinition(raw);
-              return sendJson(res, 200, { ok: true, id, language: 'python', definition, source, validation: 'structure',
-                hint: 'Definition validated structurally; source imports and evaluation happen only in the isolated Python runtime.' });
-            }
             if (typeof id !== 'string' || typeof source !== 'string') {
               return sendJson(res, 400, { ok: false, error: 'id 和 source 都必须是字符串' });
             }
@@ -1416,6 +1455,8 @@ export default function vitePluginCards(): Plugin {
             const finalSource = translated.source;
             const check = checkCardSource(id, finalSource, Array.isArray(existingIds) && !already ? existingIds : [], {
               vendored: translated.rewrites.length > 0,
+              mode: 'author',
+              before: '',
             });
             if (!check.ok) {
               return sendJson(res, 400, {

@@ -135,6 +135,53 @@ function updateTrack(p: Project, trackId: string, fn: (t: Track) => Track): Proj
 }
 
 /**
+ * 删片段 / 删序列之后剔掉没人要的图卡节点。
+ *
+ * cardNodes 的写入方只有 cardAuthoring,片段是它唯一的入口,所以判据就是
+ * 「从还在的片段出发走不走得到」。走不到的、以及输入指着已删片段那个合成源
+ * (`@clip/<id>/source`)的,连同它的下游一起剔掉 —— 留着的话 projectCardGraph
+ * 每次都要靠丢边规则兜,而那条规则是留给「图已经存盘」的旧项目的。
+ */
+function pruneCardNodes(p: Project): Project {
+  const nodes = p.cardNodes;
+  if (!nodes?.length) return p;
+  const clips = p.tracks.flatMap((t) => t.clips);
+  const liveClipIds = new Set(clips.map((c) => c.id));
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const refsOf = (n: (typeof nodes)[number]) =>
+    Object.values(n.inputs ?? {}).map((r) => (typeof r === "string" ? r : r?.nodeId)).filter((x): x is string => !!x);
+  const keep = new Set<string>();
+  const walk = (id?: string) => {
+    if (!id || keep.has(id) || !byId.has(id)) return;
+    keep.add(id);
+    for (const ref of refsOf(byId.get(id)!)) walk(ref);
+  };
+  for (const clip of clips) walk(clip.nodeId);
+  for (let changed = true; changed; ) {
+    changed = false;
+    for (const id of [...keep]) {
+      const dangling = refsOf(byId.get(id)!).some((ref) => {
+        if (ref.startsWith("@clip/")) {
+          const owner = /^@clip\/(.+)\/[^/]+$/.exec(ref);
+          return !owner || !liveClipIds.has(owner[1]);
+        }
+        return !keep.has(ref);
+      });
+      if (dangling) { keep.delete(id); changed = true; }
+    }
+  }
+  if (keep.size === nodes.length) return p;
+  const next: Project = { ...p, cardNodes: nodes.filter((n) => keep.has(n.id)) };
+  if (!clips.some((c) => c.nodeId && !keep.has(c.nodeId))) return next;
+  // 节点没了的片段把 nodeId 一并擦掉:留着就是一个指向不存在节点的引用
+  return { ...next, tracks: p.tracks.map((t) => ({ ...t, clips: t.clips.map((c) => {
+    if (!c.nodeId || keep.has(c.nodeId)) return c;
+    const { nodeId: _gone, ...rest } = c;
+    return rest;
+  }) })) };
+}
+
+/**
  * 把一组片段整体平移 dt 秒。轨内不能重叠、不能被推到 0 之前 —— 有一处放不下就整组不动
  * (返回 null),不做「挪一半」这种半吊子结果。组内的相对关系原样保留,所以转场不会散。
  */
@@ -320,7 +367,7 @@ export const actions = {
     set({ playing: !state.playing });
   },
   /**
-   * 重播:回到开头从头播一遍。
+   * 重播:回到最早那张卡片,从头播一遍。
    *
    * 以前这里只加 playToken —— 那只是让「当前时刻活跃的卡片」重新挂载一次,
    * 用来重看入场动画。可播放到头时循环会 pause 并把 t 停在 duration,
@@ -334,7 +381,10 @@ export const actions = {
    * 点一下进度条即可。
    */
   replay() {
-    set({ t: 0, playing: true, playToken: state.playToken + 1 });
+    // 播放范围从最早的卡片开始(和 Preview 的播放循环一致)
+    let start = Infinity;
+    for (const tr of state.project.tracks) for (const c of tr.clips) start = Math.min(start, c.start);
+    set({ t: Number.isFinite(start) ? Math.max(0, start) : 0, playing: true, playToken: state.playToken + 1 });
   },
   /** 预览音量 0–1;调到非 0 顺手取消静音,和播放器习惯一致 */
   setVolume(v: number) {
@@ -379,7 +429,7 @@ export const actions = {
     let next: Project = { ...p, tracks: p.tracks.filter((t) => !ids.has(t.id)) };
     for (const tr of doomed) next = clearTransitionFades(next, tr);
     if (doomed.length) next = { ...next, transitions: transitionsOf(next).filter((tr) => !doomed.includes(tr)) };
-    setProject(next);
+    setProject(pruneCardNodes(next));
     if (state.selection.some((id) => gone.has(id))) set({ selection: state.selection.filter((id) => !gone.has(id)) });
   },
   updateTrack(trackId: string, patch: Partial<Pick<Track, "name" | "hidden" | "locked" | "muted">>) {
@@ -399,6 +449,9 @@ export const actions = {
   addCardClip(cardId: string, start: number, opts: { trackId?: string; duration?: number; params?: Record<string, unknown>; parts?: PartInstance[] } = {}): TrackClip | null {
     const def = getCard(cardId);
     if (!def) return null;
+    // 音频图卡拖进时间轴是个既无声又无画的空片段(没有 nodeId,消费方只看节点):
+    // 它只能经 apply_card 挂到片段上。
+    if (def.kind === "audio") throw new Error("音频图卡请用 apply_card");
     const p = state.project;
     const track = opts.trackId ? p.tracks.find((t) => t.id === opts.trackId) : p.tracks[0];
     if (!track) return null;
@@ -844,7 +897,7 @@ export const actions = {
     let next = updateTrack(p, hit.track.id, (t) => ({ ...t, clips: t.clips.filter((c) => c.id !== clipId) }));
     for (const tr of doomed) next = clearTransitionFades(next, tr);
     if (doomed.length) next = { ...next, transitions: transitionsOf(next).filter((tr) => !doomed.includes(tr)) };
-    setProject(next);
+    setProject(pruneCardNodes(next));
     set({ selection: state.selection.filter((id) => id !== clipId) });
   },
   duplicateClip(clipId: string): TrackClip | null {

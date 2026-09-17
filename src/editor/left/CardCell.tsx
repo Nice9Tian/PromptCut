@@ -28,7 +28,14 @@ export function CardCell({ def, fill, aspect }: { def: CardDef<any>; fill?: bool
 
   // 动画多长:卡片声明的落定时刻(按默认参数算),没有就按 1.5s
   const animMs = animMsOf(def);
-  const zoom = usePreviewZoom(`card:${def.id}`, stageRef, hot, animMs);
+  /*
+   * 图卡(`card` / `audio`)没有 React 组件,库里跑不起来:悬停不换成动画预览,
+   * 一直显示名字 + 说明那张静态占位。量包围盒也一并跳过(没有 DOM 可量)。
+   */
+  const live = hot && typeof def.Component === "function";
+  // `live` 为真时它必然是函数;JSX 里写不了非空断言,所以在这里取一次
+  const Live = def.Component!;
+  const zoom = usePreviewZoom(`card:${def.id}`, stageRef, live, animMs);
 
   useLayoutEffect(() => {
     if (hot && viewRef.current) {
@@ -62,13 +69,13 @@ export function CardCell({ def, fill, aspect }: { def: CardDef<any>; fill?: bool
 
   const preview = (
     <div ref={viewRef} className="absolute inset-0">
-      {!hot && (
+      {!live && (
         <div className="pc-lib-card-text">
           <div className="pc-lib-card-name">{def.name}</div>
           <div className="pc-lib-card-desc">{def.description}</div>
         </div>
       )}
-      {hot && box.w > 0 && box.h > 0 && (
+      {live && box.w > 0 && box.h > 0 && (
         <div data-pc="preview" className="absolute inset-0 overflow-hidden bg-black/60 pointer-events-none" style={{ ...themeStyle(project.themeId) }}>
           <div
             style={{
@@ -86,7 +93,7 @@ export function CardCell({ def, fill, aspect }: { def: CardDef<any>; fill?: bool
           >
             <div ref={stageRef} className="pc-stage" style={{ position: "relative", width: "100%", height: "100%" }} key={zoom.token}>
               <AnimClock speed={1}>
-                <def.Component params={def.defaults} playToken={zoom.token} />
+                <Live params={def.defaults} playToken={zoom.token} />
               </AnimClock>
             </div>
           </div>

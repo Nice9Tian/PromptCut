@@ -86,13 +86,33 @@ test('explicit stateful declarations override static fallback, including old pro
 });
 
 test('prerendering and independent compositing remain separate for all four combinations', () => {
-  for (const need_prerendering of [true, false]) for (const compositing of ['context', 'independent']) {
-    const caps = cardCapabilities({ need_prerendering, compositing });
+  // A0.2:independent 的唯一权威是审阅表 src/cards/capabilities.json,所以这里用真的卡 id ——
+  // punch-pill 表里是 independent,blur-text 是 belowDependent(毛玻璃)。
+  for (const need_prerendering of [true, false]) for (const [id, independent] of [['blur-text', false], ['punch-pill', true]]) {
+    const caps = cardCapabilities({ id, need_prerendering });
     assert.equal(caps.need_prerendering, need_prerendering);
-    assert.equal(caps.independentCache, compositing === 'independent');
+    assert.equal(caps.independentCache, independent);
   }
+  // 源码里写 compositing: 'independent' 一律不作数:审阅表里没有这张卡就是 unknown
+  assert.equal(cardCapabilities({ id: 'no-such-card', compositing: 'independent' }).compositing, 'unknown');
+  assert.equal(cardCapabilities({ id: 'no-such-card', compositing: 'context' }).compositing, 'context');
   assert.equal(cardCapabilities({ frameMode: 'direct' }).independentCache, false);
   assert.equal(cardCapabilities({ frameMode: 'direct', need_prerendering: true }).need_prerendering, true);
   assert.equal(cardFrameMode({ frameMode: 'react' }), 'stateful');
   assert.equal(cardFrameMode({ frameMode: 'react', need_prerendering: false }), 'direct');
+});
+
+test('mountFrameOf is the single mount formula: first frame not earlier than start - lead, exact comparisons', async () => {
+  const { mountFrameOf, CARD_MOUNT_LEAD } = await import('./frameWindow.mjs');
+  for (const fps of [10, 24, 25, 30, 60]) for (const start of [0, 0.02, 1, 1.05, 2, 10.05, 29 / 30, 300.017]) {
+    const clip = { id: 'x', cardId: 'x', start, end: start + 1 };
+    const n = mountFrameOf(clip, fps);
+    assert.ok(Number.isSafeInteger(n) && n >= 0);
+    assert.ok(n / fps >= start - CARD_MOUNT_LEAD, `fps=${fps} start=${start}: frame ${n} mounts before the lead`);
+    if (n > 0) assert.ok((n - 1) / fps < start - CARD_MOUNT_LEAD, `fps=${fps} start=${start}: frame ${n - 1} already mounted`);
+    assert.equal(planFrameWindow([clip], [n + 3], fps).startFrame, n, 'planFrameWindow must start at the same frame');
+  }
+  // 1.05 - 0.05 = 1 exactly in floating point? Whatever it is, Stage and planner agree by construction.
+  assert.equal(mountFrameOf({ start: 1.05, end: 2 }, 30), 30);
+  assert.equal(mountFrameOf({ start: 0, end: 2 }, 30), 0);
 });

@@ -217,10 +217,10 @@ html.skin-swapping * {
 
 /* 强调色状态:悬浮 / 按下(主操作按钮与选中) */
 [data-skin] .bg-sky-600, [data-skin] .bg-blue-500.rounded, [data-skin] button.bg-blue-600 {
-  background: var(--ui-accent); color: var(--ui-accent-fg); border-color: var(--ui-accent-press);
+  background: var(--ui-accent-grad); color: var(--ui-accent-fg); border-color: var(--ui-accent-press);
 }
-[data-skin] button.bg-blue-600:hover { background: var(--ui-accent-hover); }
-[data-skin] button.bg-blue-600:active { background: var(--ui-accent-press); }
+[data-skin] button.bg-blue-600:hover { background: var(--ui-accent-grad-hover); }
+[data-skin] button.bg-blue-600:active { background: var(--ui-accent-grad-press); }
 
 /* 轨道色:片段按素材类型取色(配色规范 03 条)。
    之前卡片段全是一个色,颜色占满了却不传递信息;现在 data-track-kind 决定用哪一档,

@@ -55,6 +55,8 @@ export const blurText: CardDef<Params> = {
   useWhen: "口播里出现「记住」「关键在于」「本质上」「核心是」这类强调句时,把整句做成词块逐个模糊浮现。**必须用 `|` 手动切词块**,不切就是整句一次性浮现;`*星号*` 包住的词用主色高亮。字号很大,控制在 15 字以内。",
   tags: ["强调","金句","浮现","重点"],
   source: "native",
+  // 帧模式:审计固化(A0.1)。值 = 固化前 cardFrameMode(def, def.defaults) 的返回值。
+  frameMode: "stateful",
   defaults: {
     ...hudDefaults,
     text: "走心的句子|从虚焦里|*慢慢浮现*",

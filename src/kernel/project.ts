@@ -107,6 +107,16 @@ export interface Subjects {
   fallbackReason?: string;
 }
 
+/**
+ * 同一份素材的两档(A1 第 5 步:先小后大),值是各自的内容哈希。
+ * `original` 就是 MediaAsset.hash;`small` 是 800×600 以内的 H.264 档。
+ * 眼下只声明形状,没人产也没人换档 —— 换档逻辑见 src/render/mediaTier.ts 的 TODO。
+ */
+export interface MediaTiers {
+  small?: string;
+  original: string;
+}
+
 export interface MediaAsset {
   /** 镜头切换识别结果(可选,由 detect_shots 写入) */
   shots?: Shots;
@@ -121,6 +131,24 @@ export interface MediaAsset {
   url: string;
   /** 服务端可读的绝对磁盘路径，由导入时上传得到，可能不存在 */
   path?: string;
+  /**
+   * 素材键 = 文件内容的 sha256(64 位小写 hex),导入时由服务端边落盘边算
+   * (server/vite-plugin-media.ts 的 storeMediaStream)。有它就一律走
+   * /@media/<hash>:换了文件名、改了 mtime、拷到另一台机器都还是同一个键。
+   * 没有 hash 的是迁移期的老 .proc —— 那种继续按 path / 文件名找文件。
+   */
+  hash?: string;
+  /** 原文件扩展名(不含点,小写)。内容库里存成 <hash>.<ext>,回放靠它定 Content-Type */
+  ext?: string;
+  /** 原文件字节数 */
+  size?: number;
+  /**
+   * 还在入库(上传 / 算哈希)中:这一层先画「上传中」占位,不挂空 src。
+   * 只在编辑器会话内有意义,存盘再打开时由 restoreMediaUrls 清掉。
+   */
+  pending?: boolean;
+  /** A1 第 5 步:同一素材的两档(先小后大)。眼下不产、不换档 */
+  tiers?: MediaTiers;
   duration?: number; // 秒
   width?: number;
   height?: number;
@@ -231,8 +259,7 @@ export interface Cut {
 
 export interface Project {
   version: 1;
-  /** Source definitions are project assets; instances are immutable graph nodes. */
-  cardDefinitions?: import('./cardGraph.mjs').UnifiedCardDefinition[];
+  /** 图卡的实例节点。定义不在项目里 —— 它是 `src/cards/user/<id>.tsx` 文件,从注册表取。 */
   cardNodes?: import('./cardGraph.mjs').CardNode[];
   style?: Record<string, unknown>;
   /**
@@ -321,7 +348,12 @@ export function createEmptyProject(name = "未命名"): Project {
  * 产出的数组仍然是「靠后的画在上面」,Stage 直接按顺序渲染即可。
  * 素材段(有 mediaId)不进舞台,走视频层。
  */
-export function flattenOverlay(p: Project): Timeline {
+/**
+ * `graph` 原样放进返回的 Timeline,**这里自己不算图** —— 算图要遍历全项目,
+ * 而 FrameScene 每个片段都会调一次这个函数(还是拿只剩一条轨道的裁剪版调的)。
+ * 图只在两个宿主算:ExportView 和 StageView。
+ */
+export function flattenOverlay(p: Project, graph?: Timeline["graph"]): Timeline {
   const clips: Clip[] = [];
   for (const tr of [...p.tracks].reverse()) {
     if (tr.hidden) continue;
@@ -348,7 +380,7 @@ export function flattenOverlay(p: Project): Timeline {
     }
   }
   // 三维只在真开了的时候才带这个键:老项目的 timeline 对象要和以前完全一样
-  return { width: p.width, height: p.height, fps: p.fps, duration: p.duration, clips, ...(p.camera3dFov ? { camera3dFov: p.camera3dFov } : null), ...(p.themeId ? { themeId: p.themeId } : null) };
+  return { width: p.width, height: p.height, fps: p.fps, duration: p.duration, clips, ...(p.camera3dFov ? { camera3dFov: p.camera3dFov } : null), ...(p.themeId ? { themeId: p.themeId } : null), ...(graph ? { graph } : null) };
 }
 
 /** 某时刻该播哪一段素材(按序列顺序找第一条命中的素材段) */

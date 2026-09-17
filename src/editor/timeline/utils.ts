@@ -37,12 +37,18 @@ export function contentEndOf(tracks: Track[]): number {
 }
 
 /**
- * 手动拖出来的播放范围下限(秒)。
- *
- * 和 store 里 setDurationManual / syncDuration 的 Math.max(1, sec) 保持一致 ——
- * 写小于 1 也会被那边夹回 1,拖动时就显示 1,免得松手后数字自己跳。
+ * 可见内容的开头:最早一个片段的开始时间。没有任何片段就是 0。
+ * 播放从这里开始 —— 播放范围是「最早的卡片 ~ 最晚的卡片」。
  */
-export const MIN_RANGE_SEC = 1;
+export function contentStartOf(tracks: Track[]): number {
+  let start = Infinity;
+  for (const track of tracks) {
+    for (const clip of track.clips) {
+      if (clip.start < start) start = clip.start;
+    }
+  }
+  return Number.isFinite(start) ? Math.max(0, start) : 0;
+}
 
 /**
  * 0 秒前面留的一点间距(px,和缩放无关)。纯粹是留白,不代表时间——时间没有负数。

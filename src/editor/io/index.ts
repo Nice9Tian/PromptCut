@@ -4,6 +4,8 @@ import { createEmptyProject } from "../../kernel/project";
 import { resetProjectAi } from "../../ai/projectAi";
 import { getCard } from "../../kernel/registry";
 import { mediaUrlFromPath, restoreMediaUrls } from "./mediaUrls";
+import { dropPythonNodes, publishPythonDrop } from "./pythonDrop";
+import { adoptServerMedia, applyUploadedMedia, uploadMediaFile } from "./mediaUpload";
 import { prerenderBase } from "../prerender";
 
 // 模块级变量存 File，供阶段 2 导出时使用
@@ -30,7 +32,13 @@ export function registerMediaFile(id: string, file: File): void {
   mediaFiles.set(id, file);
 }
 
-/** 选一个或多个视频文件,登记成 MediaAsset(blob URL + 探测时长/宽高),并放到视频轨播放头处。返回登记的素材 id。 */
+/**
+ * 选一个或多个视频文件,登记成 MediaAsset(探测时长/宽高),并放到视频轨播放头处。返回登记的素材 id。
+ *
+ * 地址一律是 /@media/<内容哈希>(A1):blob: 只用来探元数据,探完就撤 ——
+ * 留着它渲染进程 / 导出进程都打不开。入库(上传 + 边落盘边算 sha256)期间素材挂
+ * pending,片段已经在时间轴上、素材层先画「上传中」占位,传完自动出画。
+ */
 export async function importVideoFiles(files: FileList | File[]): Promise<string[]> {
   const fileArray = Array.from(files);
   const mediaIds: string[] = [];
@@ -56,11 +64,13 @@ export async function importVideoFiles(files: FileList | File[]): Promise<string
     });
 
     document.body.removeChild(video);
+    URL.revokeObjectURL(url);
 
     const media = actions.addMedia({
       kind: "video",
       name: file.name,
-      url,
+      url: "",
+      pending: true,
       duration,
       width: videoWidth,
       height: videoHeight,
@@ -76,22 +86,7 @@ export async function importVideoFiles(files: FileList | File[]): Promise<string
       console.warn(`[io] addMediaClip 返回 null, mediaId: ${media.id}`);
     }
 
-    try {
-      const res = await fetch(`/api/media/upload/${encodeURIComponent(file.name)}`, {
-        method: "POST",
-        body: file,
-      });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.ok && data.path) {
-          actions.setMediaPath(media.id, data.path);
-        }
-      } else {
-        console.warn(`[io] 上传素材失败: ${file.name}`);
-      }
-    } catch (err) {
-      console.warn(`[io] 上传素材异常: ${file.name}`, err);
-    }
+    applyUploadedMedia(media.id, await uploadMediaFile(file));
   }
 
   return mediaIds;
@@ -127,16 +122,22 @@ export async function importVideoFromServer(opts: { url: string; path: string; n
   });
   document.body.removeChild(video);
 
+  URL.revokeObjectURL(url);
+
   const media = actions.addMedia({
     kind: "video",
     name,
-    url,
+    // 文件本来就在素材目录里,先挂它的 /@media/<文件名> 地址(迁移期那条路由);
+    // 下面 adoptServerMedia 在服务端就地算出内容哈希后换成 /@media/<hash>。
+    // 补算失败就一直停在文件名这条路上 —— 能播,只是进不了 .procp、也不跨机器去重。
+    url: opts.url,
     duration: meta.duration,
     width: meta.videoWidth,
     height: meta.videoHeight,
   });
   mediaFiles.set(media.id, file);
   actions.setMediaPath(media.id, opts.path);
+  applyUploadedMedia(media.id, await adoptServerMedia(opts.path));
   const clip = actions.addMediaClip(media.id, getState().t);
   if (!clip) console.warn(`[io] addMediaClip 返回 null, mediaId: ${media.id}`);
   return media.id;
@@ -171,6 +172,8 @@ export async function importAudioFromServer(opts: { url: string; path: string; n
 export async function importProjectFile(file: File): Promise<Project> {
   const text = await file.text();
   const json = JSON.parse(text);
+  // 和打开 .proc 同一条规矩:Python 卡已归档,转成 Project 之前就把定义和节点丢掉。
+  publishPythonDrop(dropPythonNodes(json));
 
   if (json.version === 1 && Array.isArray(json.tracks)) {
     const empty = createEmptyProject();
@@ -296,7 +299,7 @@ export async function importSrtFile(
 /** 把当前项目序列化成 JSON 字符串(blob URL 换成相对路径) */
 export function exportProjectJson(): string {
   const p = JSON.parse(JSON.stringify(getState().project)) as Project & { _note?: string };
-  p._note = "这个文件只记录编排；素材按 media[].path 在服务端素材目录里找回（/@media/<文件名>）。没有 path 的素材只记了文件名，重新打开后要用「导入视频」重新导入同名素材。";
+  p._note = "这个文件只记录编排；素材按 media[].hash（文件内容的 sha256）在本地内容库里找回（/@media/<hash>）。想把素材一起带走，用「打包保存…」存成 .procp。老文件里没有 hash 的素材按 media[].path 的文件名找（/@media/<文件名>），连 path 都没有的重新打开后要用「导入视频」重新导入。";
 
   for (const m of p.media) {
     if (m.url.startsWith("blob:")) {

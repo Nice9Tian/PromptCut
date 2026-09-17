@@ -1,22 +1,23 @@
 import type { Project } from "../kernel/project";
 import { invalidatePrerenderBase, prerenderUrl } from "../editor/prerender";
+import { alignMirror, resyncDataMirror } from "../editor/dataMirror";
 
 export type FrameTarget = "user" | "prerender";
-export type FrameLane = "user" | "inter_face" | "agent" | "background";
+export type FrameLane = "user" | "inter_face" | "agent" | "background" | "archive" | "playback";
 export interface FrameRequestOptions {
   /** 人类预览同源；长任务和后台预烘可显式走预渲染进程。 */
   target?: FrameTarget;
   lane?: FrameLane;
 }
 
-const signature = (project: Project) => JSON.stringify([project.width, project.height, project.fps, project.duration, project.themeId, project.camera3dFov, project.tracks, project.media, project.filters, project.pixelMaps, project.audioFx, project.cardDefinitions, project.cardNodes, project.style]);
+const signature = (project: Project) => JSON.stringify([project.width, project.height, project.fps, project.duration, project.themeId, project.camera3dFov, project.tracks, project.media, project.filters, project.pixelMaps, project.audioFx, project.cardNodes, project.style]);
 let saved: { signature: string; snapshots: string } | null = null;
 let restorePending: Promise<void> | null = null;
 export function snapshotsFor(project: Project) { return saved?.signature === signature(project) ? saved.snapshots : undefined; }
 export function restoreSnapshots(project: Project, snapshots?: string) {
   saved = typeof snapshots === "string" ? { signature: signature(project), snapshots } : null;
   restorePending = saved
-    ? frameRequest("import", project, { snapshots: saved.snapshots }, undefined, { target: "user", lane: "user" }).then(() => undefined, () => undefined)
+    ? frameRequest("import", project, { snapshots: saved.snapshots }, undefined, { target: "user", lane: "archive" }).then(() => undefined, () => undefined)
     : null;
 }
 function frameFetchError(error: any) {
@@ -27,10 +28,21 @@ function frameFetchError(error: any) {
     retryable: true,
   });
 }
-export async function frameRequest(operation: string, project: Project, extra: Record<string, unknown> = {}, signal?: AbortSignal, options: FrameRequestOptions = {}) {
+/**
+ * 一次帧请求。**body 里不带项目**,只带 `{session, localRev, lane, ...extra}`(A7):
+ * 服务端按这个键从本进程的镜像插件取项目(server/vite-plugin-mirror.ts)。发之前先对齐 ——
+ * 号和已推上去的对不上就 flush 一次,不然服务端拿到的是上一版,拖一格看到的还是上一格。
+ *
+ * 不做镜像的页面(只读观看页 / 舞台页 / 导出页)拿不到键,退回迁移期那条路:body 里带项目。
+ */
+export async function frameRequest(operation: string, project: Project, extra: Record<string, unknown> = {}, signal?: AbortSignal, options: FrameRequestOptions = {}, resynced = false): Promise<any> {
   let url = options.target === "prerender" ? await prerenderUrl(`/api/frames/${operation}`) : `/api/frames/${operation}`;
   let res: Response;
-  const request = () => fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ project, lane: options.lane, ...extra }), signal });
+  const key = await alignMirror();
+  const payload = key
+    ? { session: key.session, localRev: key.localRev, lane: options.lane, ...extra }
+    : { project, lane: options.lane, ...extra };
+  const request = () => fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload), signal });
   try {
     res = await request();
   } catch (error) {
@@ -47,6 +59,12 @@ export async function frameRequest(operation: string, project: Project, extra: R
   let result: any;
   try { result = await res.json(); }
   catch (error) { throw frameFetchError(error); }
+  // 那一端的镜像里没有这个键(多半是预渲染刚重启、转发正好丢在那一下):整份重推一次再来过。
+  // 只补一次 —— 补完还取不到就是别的毛病,接着重试只会把 409 刷成一串。
+  if (res.status === 409 && result?.code === "MIRROR_MISSING" && key && !resynced && !signal?.aborted) {
+    await resyncDataMirror();
+    return frameRequest(operation, project, extra, signal, options, true);
+  }
   if (!res.ok) throw Object.assign(new Error(result.error || "帧读取失败"), {
     code: result.code,
     status: res.status,
@@ -59,7 +77,7 @@ export async function frameRequest(operation: string, project: Project, extra: R
   return result;
 }
 export async function collectSnapshots(project: Project) {
-  const result = await frameRequest("archive", project, {}, undefined, { target: "user", lane: "user" });
+  const result = await frameRequest("archive", project, {}, undefined, { target: "user", lane: "archive" });
   saved = typeof result.snapshots === "string" ? { signature: signature(project), snapshots: result.snapshots } : null;
   restorePending = null;
 }

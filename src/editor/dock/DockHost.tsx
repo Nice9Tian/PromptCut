@@ -3,7 +3,7 @@ import { playEnter } from "../enterMotion";
 import { useLayoutMode } from "../layoutMode";
 import { useRailCollapsed } from "../sideRails";
 import { peekPageNode, placePages, registerDockHost } from "./pageNodes";
-import { effectiveActive, visibleItems, type Side } from "./railLayout";
+import { effectiveActive, hasPages, visibleItems, type Side } from "./railLayout";
 import { useRailLayout } from "./railStore";
 import "./dock.css";
 
@@ -13,7 +13,7 @@ import "./dock.css";
  *
  * 宽度按侧走,不按项走:左侧仍是 .pc-left-drawer(--pc-left-drawer-w,pc.left.drawerW),右侧仍是 .pc-right-card
  * (--pc-right-panel-w,pc.right.panelW);收起 / 展开的淡入淡出也还是 left.css / chat.css 那两套。
- * 这一侧一个看得见的项都没有(被拖空)时强制收起。
+ * 这一侧一个看得见的页面项都没有(被拖空,或者只剩剪辑组)时强制收起。
  *
  * 选中项换了(点 rail、拖进来一项)而抽屉本来就开着:新露出来的那一页淡入、上浮一点(enterMotion);
  * 收起着切、或者同时展开了,交给卡片自己的展开动画,不叠两层。
@@ -22,7 +22,7 @@ export function DockHost({ side }: { side: Side }) {
   const layout = useRailLayout();
   const mode = useLayoutMode();
   const collapsedFlag = useRailCollapsed(side);
-  const collapsed = collapsedFlag || visibleItems(layout[side], mode).length === 0;
+  const collapsed = collapsedFlag || !hasPages(visibleItems(layout[side], mode));
   const active = effectiveActive(layout, side, mode);
   const ref = useRef<HTMLDivElement>(null);
 

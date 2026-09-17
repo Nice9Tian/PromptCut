@@ -82,3 +82,36 @@ test("派生声音素材即使源文件是 mp4 也不被迁移回视频", () => 
   assert.equal(media[0].kind, "audio");
   assert.deepEqual(moved, []);
 });
+
+/* ---------------- A1:素材键(内容 sha256)优先于一切 ---------------- */
+
+const HASH = "c28c081b3ffbc80cf0feafd8efba149355609f625e4968b62b7375d2954b31cb";
+
+test("mediaUrlFromHash:64 位 hex 才认,大写归一,其余给 null", async () => {
+  const { mediaUrlFromHash } = await import("./mediaUrls.ts");
+  assert.equal(mediaUrlFromHash(HASH), `/@media/${HASH}`);
+  assert.equal(mediaUrlFromHash(HASH.toUpperCase()), `/@media/${HASH}`);
+  assert.equal(mediaUrlFromHash("deadbeef"), null);
+  assert.equal(mediaUrlFromHash(undefined), null);
+});
+
+test("有 hash 就一律 /@media/<hash> —— path 换了机器也不影响,pending 顺手清掉", () => {
+  const { media, missing } = restoreMediaUrls([
+    // 存盘时那台机器的落点,这台机器上根本不存在
+    { id: "h", kind: "video", name: "a.mp4", url: "", hash: HASH, ext: "mp4", path: "D:/别人的机器/media/a.mp4", pending: true },
+    // 死掉的 blob: 也照样被 hash 救回来
+    { id: "b", kind: "image", name: "b.png", url: "blob:http://127.0.0.1:5204/x", hash: HASH },
+  ]);
+  assert.equal(media[0].url, `/@media/${HASH}`);
+  assert.equal(media[0].pending, undefined, "pending 只在导入那一次的会话里有意义");
+  assert.equal(media[1].url, `/@media/${HASH}`);
+  assert.deepEqual(missing, [], "有 hash 就不算缺失");
+});
+
+test("没有 hash 的老 .proc 照旧按 path 的文件名找得回来", () => {
+  const { media, missing } = restoreMediaUrls([
+    { id: "old", kind: "video", name: "旧片.mp4", url: "blob:http://127.0.0.1:5190/y", path: "C:\\m\\旧片.mp4" },
+  ]);
+  assert.equal(media[0].url, `/@media/${encodeURIComponent("旧片.mp4")}`);
+  assert.deepEqual(missing, []);
+});

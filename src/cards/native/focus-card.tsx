@@ -122,6 +122,8 @@ export const focusCard: CardDef<Params> = {
   useWhen: "人物出镜讲解的全屏版式:不透明实色背景会完全盖住底层画面,仅限 16:9 横屏。必须给独立口播视频地址 camSrc,否则那半屏只是写着「口播视频」的占位块;另一侧放 2 到 3 条要点。要点文字固定白色,所以 bg 要用深色。只想在原视频上叠要点浮层,改用 pin-board 或 checklist。",
   tags: ["人物","半屏","出镜","要点"],
   source: "native",
+  // 帧模式:审计固化(A0.1)。值 = 固化前 cardFrameMode(def, def.defaults) 的返回值。
+  frameMode: "stateful",
   defaults: {
     ...hudDefaults,
     bg: "dark",

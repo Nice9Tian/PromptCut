@@ -417,7 +417,7 @@
   align-self: flex-start;
   max-width: 100%;
   padding: 4px 12px;
-  background: var(--ui-accent, #00DBDB);
+  background: var(--ui-accent-grad, #00DBDB);
   color: var(--ui-accent-fg, #ffffff);
   border: none;
   border-radius: var(--ui-radius-sm, 4px);
@@ -797,6 +797,10 @@
   background: var(--ui-panel-2, #2C2B34);
   transition: border-color 160ms ease, box-shadow 160ms ease;
 }
+/* 浅色皮肤里 L3 浅灰显得发闷,改用 L2 纯白,和 rail 选中项、模式切换选中格同一个颜色 */
+[data-skin-mode="light"] .ai-composer {
+  background: var(--ui-panel, #FFFFFF);
+}
 
 /* 附件卡片在最上;多到一定程度自己滚,不把输入框挤没。右边让出拖柄的位置 */
 .ai-attachments {
@@ -912,6 +916,10 @@
 .ai-composer:focus-within {
   border-color: var(--ui-accent, #00DBDB);
   box-shadow: 0 0 0 3px var(--ui-accent-soft, rgb(0 219 219 / 0.18));
+}
+/* 浅色皮肤的 --ui-accent-soft 接近白色,外圈光看上去像底色溢出边框;只留强调色描边 */
+[data-skin-mode="light"] .ai-composer:focus-within {
+  box-shadow: none;
 }
 /*
  * 皮肤(motion.css)给所有聚焦的 textarea 挂描边和 glow;这里的输入框装在圆角框里,

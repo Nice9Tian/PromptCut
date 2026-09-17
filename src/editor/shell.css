@@ -53,6 +53,13 @@
 [data-skin] .ai-panel {
   background-color: var(--ui-panel);
 }
+/*
+ * 浅色皮肤:L2 是纯白,消息区是 L1 浅灰,输入框也是白的 —— 输入框外面那 10px 边距露出白底,
+ * 看上去像输入框的白色溢到了面板边上。整块改成和消息区同一个 L1,白色输入框落在连续的灰底上。
+ */
+[data-skin][data-skin-mode="light"] .ai-panel {
+  background-color: var(--ui-bg-2);
+}
 
 /*
  * 拖杆是 8px 缝隙,静止时完全不可见,hover 时中间出现一条 2px 圆头的 --ui-accent-soft 线。

@@ -42,6 +42,8 @@ function lottieCardOf(a: CatalogAsset): CardDef<any> {
     useWhen: `${whenToUse(a)}动画本身 ${a.seconds ?? "?"}s(${a.w}×${a.h});clip 给到这个时长就完整播一遍,更长就停在最后一帧或循环。`,
     tags: ["lottie", "素材", ...a.tags],
     source: "asset",
+    // 帧模式:审计固化(A0.1)。Lottie 播放器按自己的时间线推进,任何参数下都是 stateful。
+    frameMode: "stateful",
     defaults: { speed: 1, loop: "no", fit: "contain" },
     controls: [
       { key: "speed", label: "速度倍率", type: "number", min: 0.1, max: 8, step: 0.1 },
@@ -80,6 +82,8 @@ function particlesCardOf(a: CatalogAsset): CardDef<any> | null {
     useWhen: `${whenToUse(a)}它是背景,通常放最底层、盖住整段时长;粒子位置由 seed 决定,同一个 seed 每次导出都一样。`,
     tags: ["粒子", "背景", "素材", ...a.tags],
     source: "asset",
+    // 帧模式:审计固化(A0.1)。tsParticles 逐帧积分位置,任何参数下都是 stateful。
+    frameMode: "stateful",
     defaults: { ...knobs.defaults, seed: 1 },
     controls: [
       ...knobs.controls,

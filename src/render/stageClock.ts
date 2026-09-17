@@ -59,6 +59,12 @@ export interface StageClock {
     /** 跑完这一帧的 rAF 回调之后调:钉动画(这一帧里新建的动画要在这时候才拿得到) */
     afterFrame?: (ms: number) => void;
     abort?: () => boolean;
+    /**
+     * 每推这么多帧就让出一个**宏任务**(真 setTimeout 0),不只是微任务。
+     * 后台舞台的探针(K1)用它:一张卡推几百帧时主线程不能一直被占着,
+     * 父页的 RPC 消息、iframe 自己的 resize 都得有机会进来。缺省不让(只让微任务)。
+     */
+    yieldEvery?: number;
   }): Promise<void>;
 }
 
@@ -77,6 +83,13 @@ export function installStageClock(): StageClock {
   let nextId = 1;
   let queue: { id: number; cb: FrameRequestCallback }[] = [];
 
+  /*
+   * 真墙钟留一份(J4 / K1):接管之后 performance.now 恒等于舞台时间,量探针耗时、
+   * RPC 回包里的 elapsedMs、K4 的拍长都不能再用它。setTimeout 同理留一份真的(E4b:
+   * 暂停态虚拟时钟不动,.pc-awaiting 的 500 ms 兜底要靠真时钟)。
+   */
+  window.__pcRealNow = performance.now.bind(performance);
+  window.__pcRealSetTimeout = window.setTimeout.bind(window);
   performance.now = () => now;
   /*
    * 原始 rAF 留一份。**接管之后页面里就再没有「等浏览器画一帧」的办法了** —— 而有些活儿
@@ -158,9 +171,13 @@ export function installStageClock(): StageClock {
        * 让出微任务是给跨不过同步块的东西留口子(Motion 解析关键帧、粒子引擎异步装载)。
        */
       let ms = now;
+      let ran = 0;
+      const realTimeout = window.__pcRealSetTimeout ?? window.setTimeout.bind(window);
       while (ms < target) {
-        await Promise.resolve();
+        if (opts.yieldEvery && ran > 0 && ran % opts.yieldEvery === 0) await new Promise<void>((r) => realTimeout(r, 0));
+        else await Promise.resolve();
         if (opts.abort?.()) return;
+        ran++;
         ms = Math.min(target, ms + step);
         now = ms;                 // 先拨时钟:React 渲染时读到的就是这一帧
         opts.onFrame?.(ms);       // 提交

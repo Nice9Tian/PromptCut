@@ -184,9 +184,12 @@ function buildQueue(w: number, h: number, force: boolean): Job[] {
   for (const def of allCards()) {
     // 粒子卡不排队:见上面的说明
     if (assetCardKind(def) === "particles") continue;
+    // 图卡没有 React 组件,离屏量不出包围盒 —— 库里也只显示静态占位,不用预热
+    const Component = def.Component;
+    if (typeof Component !== "function") continue;
     const key = `card:${def.id}`;
     if (known.has(key)) continue;
-    jobs.push({ key, animMs: cardAnimMs(def), node: () => <def.Component params={def.defaults} playToken={1} /> });
+    jobs.push({ key, animMs: cardAnimMs(def), node: () => <Component params={def.defaults} playToken={1} /> });
   }
   for (const def of allParts()) {
     const key = `part:${def.id}`;

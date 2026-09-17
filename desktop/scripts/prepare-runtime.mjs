@@ -634,59 +634,11 @@ function stepPython() {
   } catch (e) {
     assert(false, `内置 Python 存在但跑不起来: ${e.message}\n         用 npm run prepare-python -- --force 重装。`);
   }
-  const cardSource = path.join(PROJECT_ROOT, "python", "promptcut_cards");
-  const cardDest = path.join(RUNTIME_DIR, "python", "Lib", "site-packages", "promptcut_cards");
-  assert(fs.existsSync(cardSource), `Card SDK source missing: ${cardSource}`);
-  const digest = (dir) => {
-    const hash = createHash("sha256");
-    const walk = (base, rel = "") => {
-      for (const ent of fs.readdirSync(base, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
-        const next = path.join(base, ent.name), child = path.join(rel, ent.name);
-        if (ent.isDirectory()) walk(next, child);
-        else { hash.update(child); hash.update(fs.readFileSync(next)); }
-      }
-    };
-    walk(dir); return hash.digest("hex");
-  };
-  if (CHECK_ONLY) {
-    assert(fs.existsSync(cardDest), `Card SDK missing from runtime: ${cardDest}`);
-    assert(digest(cardSource) === digest(cardDest), "Runtime promptcut_cards does not match --source card SDK");
-  } else {
-    rmrf(cardDest); copyRecursive(cardSource, cardDest);
-    assert(digest(cardSource) === digest(cardDest), "Card SDK copy verification failed");
-  }
   console.log(`  Python found: ${ver} [${((Date.now() - stepT) / 1000).toFixed(1)}s]`);
   return ver;
 }
 
-// ── Step 6: Card LPAC runner ───────────────────────────────────────────
-
-function stepCardRuntime() {
-  const stepT = Date.now();
-  const crate = path.join(PROJECT_ROOT, 'tools', 'card-runtime');
-  const built = path.join(crate, 'target', 'release', 'promptcut-card-runtime.exe');
-  const destDir = path.join(RUNTIME_DIR, 'card-runtime');
-  const dest = path.join(destDir, 'promptcut-card-runtime.exe');
-  console.log("\n── Step 6: Card LPAC runner ──");
-  if (CHECK_ONLY) {
-    assert(fs.existsSync(dest), `Card LPAC runner not found: ${dest}`);
-    const cards = path.join(RUNTIME_DIR, 'python', 'Lib', 'site-packages', 'promptcut_cards', '__main__.py');
-    assert(fs.existsSync(cards), `promptcut_cards package not found: ${cards}`);
-    const python = path.join(RUNTIME_DIR, 'python', 'python.exe');
-    const probe = spawnSync(python, ['-I', '-c', 'import promptcut_cards,numpy,PIL;print(numpy.__version__,PIL.__version__)'], { encoding: 'utf8', windowsHide: true });
-    assert(probe.status === 0, `Card Python dependencies unavailable: ${probe.stderr || probe.stdout}`);
-    console.log(`  ✓ runner + SDK + ${probe.stdout.trim()} [${((Date.now() - stepT) / 1000).toFixed(1)}s]`);
-    return;
-  }
-  assert(fs.existsSync(path.join(crate, 'Cargo.toml')), `Card runtime crate missing: ${crate}`);
-  const builtResult = spawnSync('cargo', ['build', '--release', '--locked'], { cwd: crate, stdio: 'inherit', shell: process.platform === 'win32' });
-  assert(builtResult.status === 0 && fs.existsSync(built), 'Card LPAC runner release build failed');
-  mkdirp(destDir);
-  fs.copyFileSync(built, dest);
-  console.log(`  ✓ ${built} → ${dest} [${((Date.now() - stepT) / 1000).toFixed(1)}s]`);
-}
-
-// ── Step 7: VERSIONS.json ───────────────────────────────────────────────
+// ── Step 6: VERSIONS.json ───────────────────────────────────────────────
 
 /*
  * 源码指纹:相对路径 + 大小,**不算 mtime**。
@@ -787,7 +739,6 @@ function main() {
   const chromeVer = stepChrome(appDir);
   const ffmpegVer = stepFfmpeg();
   const pythonVer = stepPython();
-  stepCardRuntime();
 
   // Node version
   let nodeVer = "unknown";

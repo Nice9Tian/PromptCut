@@ -3,6 +3,11 @@ import { useStore } from "../../store/project";
 import { useDragPayload } from "../dnd";
 import { useScrub } from "./useScrub";
 import { xOfTime } from "./utils";
+import { RULER_H } from "./Ruler";
+import { RENDER_H } from "./RenderBar";
+
+/** 标尺行扣掉底边进度线后的中线:胶囊、刻度线、刻度时间都按它竖向居中 */
+const MID_Y = (RULER_H - RENDER_H) / 2;
 
 /** 播放头上的时间标签:0:00.0 这种「分:秒.十分之一秒」,读起来比纯秒数快 */
 function stamp(t: number): string {
@@ -12,10 +17,11 @@ function stamp(t: number): string {
 }
 
 /**
- * 播放头:2px 主文字色竖线贯穿所有轨,卡尺里一个圆形把手,顶上一枚圆角胶囊时间标签。
- * 线和把手的颜色走 --ui-fg(skins.css 映射),把手的圆形和标签胶囊在 timeline.css。
+ * 播放头:1px 主文字色竖线贯穿所有轨,标尺那一行里一枚主文字色胶囊写着当前时间,
+ * 和标尺上的刻度时间在同一个高度(都在标尺行里竖向居中),拖它移动播放头。
+ * 线的颜色走 --ui-fg(skins.css 映射),胶囊在 timeline.css。
  */
-export function Playhead({ top = 0 }: { top?: number }) {
+export function Playhead() {
   const t = useStore((s) => s.t);
   const { pxPerSec } = useTimelineContext();
   const startScrub = useScrub();
@@ -30,14 +36,12 @@ export function Playhead({ top = 0 }: { top?: number }) {
       // 播放头会画到贴住左边的序列栏上面去,红线和时间气泡直接穿过行头。
       // z-20 仍然高于轨道行(auto),也因为在 DOM 里排在标尺之后而盖得住标尺。
       className="absolute bottom-0 z-20 flex justify-center cursor-ew-resize w-[11px] touch-none"
-      style={{ left: `${xOfTime(t, pxPerSec)}px`, top, transform: "translateX(-50%)", pointerEvents: dropping ? "none" : undefined }}
+      style={{ left: `${xOfTime(t, pxPerSec)}px`, top: 0, transform: "translateX(-50%)", pointerEvents: dropping ? "none" : undefined }}
       onPointerDown={(e) => startScrub(e, { jumpToPointer: false })}
       title="拖动 = 移动播放头(按 Alt 不吸附)"
     >
-      <div className="absolute top-0 bottom-0 w-[2px] bg-white pointer-events-none" />
-      {/* 抓手:卡尺那一格里的圆形把手,拖它最顺手;圆形由 timeline.css 的 .clip-playhead 画 */}
-      <div className="clip-playhead absolute top-[14px] w-[12px] h-[12px] bg-white pointer-events-none" />
-      <span className="pc-tl-playhead-label">{stamp(t)}</span>
+      <div className="absolute bottom-0 w-px bg-white pointer-events-none" style={{ top: MID_Y }} />
+      <span className="pc-tl-playhead-label" style={{ top: MID_Y }}>{stamp(t)}</span>
     </div>
   );
 }

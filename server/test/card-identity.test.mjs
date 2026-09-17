@@ -2,22 +2,32 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { cardNodeIdentities, cardSampling, cardLocalTime, cardCacheIdentity } from '../card-identity.mjs';
 import { frameIdentity } from '../frame-identity.mjs';
-const graph = () => ({ definitions: [{ id: 'd', source: 'code', styleKeys: ['color'] }], nodes: [
+const graph = () => ({ nodes: [
   { id: 'source', adapter: 'media', media: { stamp: '1' } },
-  { id: 'effect', adapter: 'python', definitionId: 'd', inputs: { source: 'source' } },
+  { id: 'effect', adapter: 'card', cardId: 'invert', kind: 'filter', params: { amount: .5 }, inputs: { source: 'source' } },
+  { id: 'dom', adapter: 'chrome', cardId: 'title', inputs: {} },
   { id: 'unrelated', adapter: 'media', media: { stamp: '2' } },
 ], outputs: [{ nodeId: 'effect', start: 10, end: 11 }] });
+const style = () => ({ color: 'red', font: 'sans' });
 test('node identity invalidates downstream source/code/used style, preserves unrelated nodes', () => {
   const value = graph();
-  const base = cardNodeIdentities(value, { style: { color: 'red', font: 'sans' } });
+  const base = cardNodeIdentities(value, { style: style() });
   value.outputs[0].start = 20;
-  const moved = cardNodeIdentities(value, { style: { color: 'red', font: 'serif' } });
-  assert.deepEqual(base, moved);
-  const restyled = cardNodeIdentities(value, { style: { color: 'blue' } });
+  const moved = cardNodeIdentities(value, { style: style() });
+  assert.deepEqual(base, moved); // 时间轴位置不进身份
+  const restyled = cardNodeIdentities(value, { style: { color: 'blue', font: 'sans' } });
   assert.equal(base.get('source'), restyled.get('source'));
-  assert.notEqual(base.get('effect'), restyled.get('effect'));
+  // 图卡**有意**不吃 project.style(要用的样式值写进 params),改全局风格不换它的身份;
+  // DOM 卡照旧整份吃 style,用例挂在它身上。
+  assert.equal(base.get('effect'), restyled.get('effect'));
+  assert.notEqual(base.get('dom'), restyled.get('dom'));
+  const retuned = cardNodeIdentities({ ...value, nodes: value.nodes.map(n => n.id === 'effect' ? { ...n, params: { amount: .9 } } : n) }, { style: style() });
+  assert.notEqual(base.get('effect'), retuned.get('effect'));
+  // 输入片段删没删是不同的画面:丢边之后 missingInputs 进 digest
+  const deleted = cardNodeIdentities({ ...value, nodes: value.nodes.map(n => n.id === 'effect' ? { ...n, inputs: { source: 'source', gone: '@clip/x/source' } } : n) }, { style: style() });
+  assert.notEqual(base.get('effect'), deleted.get('effect'));
   value.nodes[0].media.stamp = 'edited';
-  const edit = cardNodeIdentities(value);
+  const edit = cardNodeIdentities(value, { style: style() });
   assert.notEqual(edit.get('effect'), base.get('effect'));
   assert.equal(edit.get('unrelated'), base.get('unrelated'));
 });
@@ -32,10 +42,11 @@ test('local MOV sampling retains subframe phase and reuses integer-frame transla
   assert.notEqual(cardCacheIdentity('same', sample, 1), cardCacheIdentity('same', cardSampling(10.006, 60), 1));
   assert.equal(cardSampling(0.1, 30).phase.numerator, '0');
 });
-test('whole scene cache includes Python source, graph and global style', () => {
-  const project = { tracks: [], media: [], cardDefinitions: [{ source: 'a' }], cardNodes: [], style: { tint: 'red' } };
+test('whole scene cache includes the card graph nodes and global style', () => {
+  // 图卡的源码不在项目里(它是 src/cards/user/<id>.tsx 文件),整片缓存看的是节点
+  const project = { tracks: [], media: [], cardNodes: [{ id: 'n', adapter: 'card', cardId: 'invert', params: { amount: .5 } }], style: { tint: 'red' } };
   const before = frameIdentity(project);
-  project.cardDefinitions[0].source = 'b'; assert.notEqual(frameIdentity(project), before);
+  project.cardNodes[0].params.amount = .9; assert.notEqual(frameIdentity(project), before);
   const code = frameIdentity(project); project.style.tint = 'blue'; assert.notEqual(frameIdentity(project), code);
 });
 test('Chrome TSX source versions and stamped media invalidate only their downstream card key', () => {

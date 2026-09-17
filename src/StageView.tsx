@@ -1,11 +1,27 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { Stage } from "./kernel/Stage";
 import { flattenOverlay, type Project } from "./kernel/project";
+import { projectCardGraph } from "./kernel/cardGraph.mjs";
+import { getCard } from "./kernel/registry";
 import { installStageClock } from "./render/stageClock";
-import { onFrameGrid } from "./render/frameGrid";
+import { cardMountedAt, mountFrameOf } from "./render/frameWindow.mjs";
 import { createAnimationPinner } from "./render/pinAnimations";
-import { canvasBox } from "./editor/left/contentBox";
+import { freezeScene } from "./render/snapshotFreeze";
+import { hitTest as solidHitTest, rectsWithBounds as solidRectsWithBounds } from "./render/solid";
+import { applyProjectPatch, type ProjectPatch } from "./render/changedClips.mjs";
+import {
+  detectHostCapabilities,
+  postStageEvent,
+  postStageReady,
+  serveStageRpc,
+  type BackJob,
+  type RenderReply,
+  type SetTimeReply,
+  type StageRole,
+  type StageRpcApi,
+} from "./render/stageRpc";
+import type { CardCostRecord } from "./render/cardCostKey.mjs";
 import { ensureProxyStyle, proxyAllowed, proxyOf, resetInk, sampleAll } from "./render/solidMode";
 import { themeStyle } from "./themes";
 import "./cards";
@@ -13,83 +29,55 @@ import "./cards";
 /**
  * 渲染面(?stage=1)。编辑器把它放在一个 iframe 里,只下发「现在是时间轴的第几秒」,
  * 由它渲染出那一秒的画面。它自己不按墙上时钟播:时间被 stageClock 接管,
- * 卡片的 Motion 帧循环和 rAF 都由 render() 显式推进,所以
+ * 卡片的 Motion 帧循环和 rAF 都由这里显式推进,所以
  *   - 拖播放头到片段中间 = 直接出那一刻的画面(不会从头重播一遍进场动画)
  *   - 播放 = 编辑器每帧下发新的 t,这里推进一帧
  * 和导出视图(?export=1)是同一套办法、同一份卡片代码,预览所见 = 导出所得。
+ *
+ * **和父页只经 postMessage RPC 说话(E0,见 render/stageRpc.ts),时间一律秒。**
+ * 角色(`front` / `back`)是运行时状态(J4):同一份代码,`front` 是可见的播放器舞台,
+ * `back` 是探针 / 补跑用的后台舞台;第 3 步只有一个舞台、默认 `front`。
+ *
+ * 第 3 步的两条路:
+ *   - `setTime(t)`:暂停 / 拖动时父页发它。**不重挂载、不递增 playToken**:时钟拨过去、提交 React、
+ *     钉动画 —— 任何 dt 都一样(唯一例外:往前且不到半秒,按连续播放同步推几帧)。
+ *     stateful 卡往回拖 / 远跳之后的组件状态是错的,第 4 步由快照平面盖住(C3 / C4);
+ *     direct 卡、素材层、`data-pc-local-frame`、命中测试都跟着它走。
+ *   - `render(t, { jump })`:只给后台舞台(K1 探针):重挂载 + 从挂载帧逐帧推到 t,
+ *     Promise 在推完之后才 resolve;被新的 render / setProject 掐掉时按 `superseded` / `project` 回。
+ *
+ * `?preview=legacy`:保留旧路(setProject 立刻按跳转重算这一帧),给对比和回退用。
  */
 
 const isStageRoute = typeof window !== "undefined" && new URLSearchParams(location.search).has("stage");
+const LEGACY = typeof window !== "undefined" && new URLSearchParams(location.search).get("preview") === "legacy";
 // 时间必须在任何卡片挂载之前接管
 const clock = isStageRoute ? installStageClock() : null;
 const pinner = createAnimationPinner();
 
-/** 和 Stage 里的提前量保持一致:卡片提前 0.05s 挂载,进场动画的第一帧正卡在 start 上 */
-const LEAD = 0.05;
 /** 时间差小于这个值(秒)且往前走,当成连续播放,只推进不重挂载 */
 const CONTINUOUS_MAX = 0.5;
 
-/** 改参数停手多久之后重算这一帧(毫秒) */
+/** 改参数停手多久之后重算这一帧(毫秒)—— 只在 legacy 路上用 */
 const SETTLE_MS = 200;
 
-/** 「这一帧长什么样」只取决于这些;它变了才需要重挂载重跑,改卡片参数不算 */
+/** 「这一帧长什么样」只取决于这些;它变了才需要重挂载重跑,改卡片参数不算(legacy 路) */
 function layoutKeyOf(p: Project): string {
   const clips = flattenOverlay(p).clips.map((c) => `${c.id}:${c.cardId}:${c.start}:${c.end}`).join("|");
   return `${p.width}x${p.height}#${p.themeId}#${clips}`;
 }
 
-export interface PcStageApi {
-  /** 换项目文档(卡片参数、轨道、主题变了都走它) */
-  setProject(project: Project): void;
-  /** 渲染时间轴 t 秒那一帧。jump=true 强制按跳转处理,replay=true 重挂载重播 */
-  render(t: number, opts?: { jump?: boolean; replay?: boolean }): void;
-  /** 舞台尺寸,给编辑器算缩放 */
-  size(): { width: number; height: number };
-  /**
-   * 实体模式:true = 画色块(浏览、播放、拖动时用),false = 真渲(暂停时用)。
-   * 只在 ?stage=1&proxy=1 的页面上有效,别处调了不生效也不报错。
-   */
-  setProxy(on: boolean): void;
-  /** 取活跃卡片的位置(包裹层的外框——每张卡都是整屏的,只能当兜底用) */
-  rects(): { clipId: string; left: number; top: number; width: number; height: number }[];
-  /**
-   * 实体命中测试:舞台坐标 (x, y) 处,从最上层往下找第一个「画了东西」的元素——
-   * 文字、图片、视频、有底色 / 描边的盒子——透明的容器一律穿过去。
-   * 返回它属于哪个片段,以及那个实体元素自己的外框;什么都没点到返回 null。
-   */
-  hitTest(x: number, y: number): StageHit | null;
-  /**
-   * 片段的实体范围:它所有实体元素外框的并集。给选中描边用——
-   * 字幕卡包裹层占满整屏,描边要贴着字幕本身而不是绕屏幕一圈。
-   */
-  bounds(clipId: string): StageRect | null;
-}
+/** 真墙钟:接管之后 performance.now 是舞台时间,量耗时要用 stageClock 留下的那份 */
+const realNow = () => (window.__pcRealNow ?? (() => Date.now()))();
+/** 等浏览器真画一帧(接管之后 requestAnimationFrame 进的是舞台队列) */
+const realRaf = () => new Promise<void>((r) => (window.__pcRealRaf ?? window.requestAnimationFrame)(() => r()));
 
-export interface StageRect {
-  left: number;
-  top: number;
-  width: number;
-  height: number;
-}
-export interface StageHit extends StageRect {
-  clipId: string;
-}
-
-declare global {
-  interface Window {
-    __pcStage?: PcStageApi;
-    /**
-     * 编辑器主窗口用:拿到预览 iframe 里的 __pcStage(Preview.tsx 挂上去)。
-     * 给 AI 工具量卡片的实体内容框(get_layout 的 contentBox)—— bounds() 只在 iframe 里有,
-     * 而工具跑在主窗口。
-     */
-    __pcPreviewStage?: () => PcStageApi | null;
-  }
-}
+const isProjectPatch = (v: unknown): v is ProjectPatch =>
+  !!v && typeof v === "object" && (((v as ProjectPatch).kind === "full" && "project" in (v as object)) || ((v as ProjectPatch).kind === "tracks" && "order" in (v as object)));
 
 /**
  * 两份项目之间变了的卡片段(按对象引用比:store 是不可变更新,没动过的 clip 引用不变)。
- * 新增 / 删除的也算变了。只看卡片段:素材段由视频层画,和舞台无关。
+ * 新增 / 删除的也算变了。只看卡片段:素材段由视频层画,和舞台无关。(legacy 路用)
  */
 function changedCardClips(prev: Project | null, next: Project): { id: string; start: number; end: number }[] {
   const before = new Map<string, unknown>();
@@ -107,6 +95,13 @@ function changedCardClips(prev: Project | null, next: Project): { id: string; st
   return out;
 }
 
+interface PendingRender {
+  gen: number;
+  startedAt: number;
+  frames: () => number;
+  resolve: (r: RenderReply) => void;
+}
+
 export default function StageView() {
   const [project, setProject] = useState<Project | null>(null);
   const [t, setT] = useState(0);
@@ -116,11 +111,44 @@ export default function StageView() {
    * 导出页 ?export=1 拿不到它 —— 退化方向必须是「慢但正确」。
    */
   const [proxy, setProxy] = useState(false);
-  const ref = useRef({ project: null as Project | null, t: 0, layoutKey: "", settle: 0, proxy: false });
-  /** 落定补拍的代数:又渲了一帧就作废上一次挂着的补拍(见 renderAt 里 settle 的说明) */
+  /** 场景根:带 data-pc-scene 的那个 relative div。实体几何(solid.ts)的一切查询都从它出发 */
+  const rootRef = useRef<HTMLDivElement>(null);
+  const ref = useRef({
+    project: null as Project | null,
+    t: 0,
+    layoutKey: "",
+    settle: 0,
+    proxy: false,
+    role: "front" as StageRole,
+    job: undefined as BackJob | undefined,
+    plan: null as { plan: unknown; costs: CardCostRecord[] } | null,
+    snapshots: new Map<string, string>(),
+    suppressed: new Set<string>(),
+    streamPlanes: [] as Array<{ clipIds: string[] }>,
+    scrubbing: false,
+    playing: false,
+    mediaT: 0,
+    localHashes: [] as string[],
+    pending: null as PendingRender | null,
+  });
+  /** 落定补拍的代数:又渲了一帧就作废上一次挂着的补拍(见 settle 的说明) */
   const settleGen = useRef(0);
-  /** 渲染代数:又来一次渲染就作废上一次还在飞的异步补跑(见 renderAt 里的说明) */
+  /** 渲染代数:又来一次渲染 / 换项目就作废上一次还在飞的异步补跑;和 RPC 请求一一对应 */
   const renderGen = useRef(0);
+
+  /*
+   * 卡片图(H3):图卡的输入在这里解。projectCardGraph 对悬空输入会 throw
+   * (删片段不清 cardNodes),所以包 try —— 一张坏卡不能让整台舞台卸载。
+   * 放在 `if (!project) return null` 之前:hooks 不能条件调用。
+   */
+  const graph = useMemo(() => {
+    if (!project) return undefined;
+    try {
+      return projectCardGraph(project, getCard);
+    } catch {
+      return undefined;
+    }
+  }, [project]);
 
   useEffect(() => {
     document.documentElement.style.background = "transparent";
@@ -157,49 +185,57 @@ export default function StageView() {
       });
     };
 
-    const renderAt = (target: number, opts: { jump?: boolean; replay?: boolean } = {}) => {
+    /*
+     * 真渲之后采一次墨色(实体模式的色块要用)。
+     *
+     * 「每次真渲都是一次采样机会」—— 用得越久,实体模式越准:用户改了主色、换了文案,
+     * 方块跟着变。播放中是实体模式,不会走到这里,所以不会拖慢播放。
+     * 防抖是因为连续拖播放头会一帧一个 setTime,而采样要遍历每张卡的所有元素读 computed style。
+     */
+    let sampleTimer = 0;
+    const scheduleSample = () => {
+      if (!proxyAllowed() || ref.current.proxy) return;
+      window.clearTimeout(sampleTimer);
+      sampleTimer = window.setTimeout(() => {
+        const root = rootRef.current;
+        if (root && !ref.current.proxy) sampleAll(root);
+      }, 120);
+    };
+
+    /** 掐掉还在飞的 render:回包按 reason 给,不允许静默丢 */
+    const abortPending = (reason: "superseded" | "project") => {
+      const p = ref.current.pending;
+      if (!p) return;
+      ref.current.pending = null;
+      p.resolve({ aborted: true, reason, elapsedMs: realNow() - p.startedAt, frames: p.frames() });
+    };
+
+    /** 片段的入点(冻结 probe-frame 时算本地帧号用) */
+    const clipStart = (clipId: string): number => {
       const p = ref.current.project;
-      if (!p) {
-        ref.current.t = target;
-        return;
-      }
+      if (!p) return 0;
+      for (const tr of p.tracks) for (const c of tr.clips) if (c.id === clipId) return c.start;
+      return 0;
+    };
+
+    /**
+     * 重挂载定位:把此刻活跃的卡全部重挂载,时钟拨到它们里最早的挂载帧,空跑两拍。
+     * 返回从哪一秒起推。render(jump) 用;legacy 的 setProject 也走它。
+     */
+    const remountAt = (target: number, fps: number): number => {
+      const p = ref.current.project!;
       const clips = flattenOverlay(p).clips;
-      const prev = ref.current.t;
-      const dt = target - prev;
-      ref.current.t = target;
-
-      // 连续播放:接着往下跑一两帧就行
-      if (!opts.jump && !opts.replay && dt >= 0 && dt < CONTINUOUS_MAX) {
-        renderGen.current++;   // 掐掉可能还在飞的上一次补跑
-        flushSync(() => setT(target));
-        clock.advanceTo(Math.max(0, target) * 1000, { onFrame: (ms) => pinner.sync(ms) });
-        settle(target);
-        scheduleSample();
-        return;
-      }
-
-      // 跳转 / 重播:把这一刻活跃的卡全部重挂载,从各自的入点补跑到 target,
-      // 于是画面等于「从入点一路播到 target」的那一帧,而不是「刚开始播」的第一帧。
-      const active = clips.filter((c) => target >= c.start - LEAD && target < c.end);
-
+      const active = clips.filter((c) => cardMountedAt(c, target));
       /*
        * **挂载时刻必须落在帧格上** —— 不然「预览所见 = 导出所得」在每个卡片入点都破一次。
        *
        * 导出是一帧一帧推的:一张卡在第一个 ≥ start-LEAD 的**帧**上挂载,时间原点就是那一帧,
-       * 而不是 start-LEAD 本身。跳转这条路以前直接把时钟设到连续的 start-LEAD,原点比导出
-       * 早了不到一帧;补跑又按 60fps 走,而导出按项目 fps 走。于是凡是「挂载即播」的卡
-       * (绝大多数卡都是)在入点附近和成片对不上。
-       *
-       * 实测 mu-circular-progress(1.2s easeOut cubic、入点 1.0s、30fps),同一个 t=1.0:
-       * 导出 6%,预览 9%。差的就是 33.3ms(一帧)和 50ms(LEAD)这一格。easeOut 开头最陡,
-       * 半帧的偏差在画面上就是两位数的百分比 —— 用户切 2D/3D 一眼能看出来。
+       * 而不是 start-LEAD 本身。挂载帧统一由 frameWindow.mjs 的 mountFrameOf 给
+       * (预览、导出、分片同一个算式)。夹一下:target 本身不在帧格上时,对齐后可能反超它。
        */
-      const fps = Math.max(1, p.fps || 30);
-      const onGrid = (sec: number) => onFrameGrid(sec, fps);
-      const rawFrom = active.length ? Math.max(0, Math.min(...active.map((c) => c.start - LEAD))) : Math.max(0, target);
-      // 夹一下:target 本身不在帧格上时(编辑器给的 t 理论上都在),对齐后可能反超它
-      const from = Math.min(onGrid(rawFrom), Math.max(0, target));
-
+      const from = active.length
+        ? Math.min(Math.min(...active.map((c) => mountFrameOf(c, fps))) / fps, Math.max(0, target))
+        : Math.max(0, target);
       pinner.reset();
       clock.set(from * 1000);
       flushSync(() => {
@@ -220,37 +256,18 @@ export default function StageView() {
       clock.tick(from * 1000);
       clock.tick(from * 1000);
       pinner.sync(from * 1000);
+      return from;
+    };
 
-      /*
-       * **补跑的每一帧都提交一次 React**,和导出一模一样(ExportView 每帧 flushSync)。
-       *
-       * 以前只在「跨到某张卡的入点」时提交,其余帧只推时钟。省下的是 React 的活儿,丢掉的是
-       * 两样东西,而且都不报错:
-       *   - **卡片自己改的状态**:同步补跑期间的 setState 一次都没被提交。实测 word-rotate
-       *     在 t=1.8s 上整个轮换词**消失**(AnimatePresence 把旧词退场了、新词还没挂上),
-       *     导出是「你是 卓越」。
-       *   - **按 t 自己往前推的卡**:particles / lottie 这类不注册 rAF,全靠每帧拿到新的 t。
-       *     只在最后给一次 t,粒子就从 0 一口气推到 target,累积出来的画面和逐帧推不一样。
-       *
-       * 试过一条省事的判据「这一帧有 rAF 跑过才提交」,正是被上面第二类卡否掉的 —— 它们一个
-       * rAF 都不注册。既然导出就是每帧提交,预览照做才是最不容易再分叉的写法。
-       * 代价:跳 6 秒(补跑上限)约 86ms,单次点击跳转感觉不出来。
-       *
-       * entries 那套(clip 入点 + 组合卡部件的 enterMs)因此不再需要:每帧都提交,
-       * 该挂的自然在它该挂的那一帧挂上。
-       */
-
-      /*
-       * 补跑**每帧之间让出一个微任务**(advanceToAsync),而不是一个同步块跑完。
-       *
-       * 同步跑完的画面和「一帧一帧推过去」不是同一张:跨不过同步块的东西全被落下 ——
-       * Motion 解析关键帧、AnimatePresence 换人、粒子引擎异步装载。实测同一个预览页、
-       * 同一个 t=1.8s,跳过去 vs 逐帧推过去:particles 差 12.9 万像素、word-rotate 差 2.2 万。
-       * 而导出永远是逐帧推的那一种,所以要对齐的是它。
-       *
-       * 于是这条路变成异步的。gen 是防串台的:拖播放头时上一次补跑可能还在飞,
-       * 新的一次进来就把它掐掉,不然两次补跑会交替往同一个时钟上写。
-       */
+    /**
+     * legacy 路的跳转渲染(?preview=legacy):重挂载 + 异步逐帧补跑到 target,不回包。
+     * 和第 3 步之前的 renderAt 一样;新路不走它。
+     */
+    const legacyJump = (target: number) => {
+      const p = ref.current.project;
+      if (!p) return;
+      const fps = Math.max(1, p.fps || 30);
+      remountAt(target, fps);
       const gen = ++renderGen.current;
       void (async () => {
         await clock.advanceToAsync(Math.max(0, target) * 1000, {
@@ -268,159 +285,201 @@ export default function StageView() {
       })();
     };
 
-    /*
-     * 真渲之后采一次墨色(实体模式的色块要用)。
-     *
-     * 「每次真渲都是一次采样机会」—— 用得越久,实体模式越准:用户改了主色、换了文案,
-     * 方块跟着变。播放中是实体模式,不会走到这里,所以不会拖慢播放。
-     * 防抖是因为连续拖播放头会一帧一个 renderAt,而采样要遍历每张卡的所有元素读 computed style。
-     */
-    let sampleTimer = 0;
-    const scheduleSample = () => {
-      if (!proxyAllowed() || ref.current.proxy) return;
-      window.clearTimeout(sampleTimer);
-      sampleTimer = window.setTimeout(() => {
-        const stageEl = document.querySelector<HTMLElement>(".pc-stage");
-        if (stageEl && !ref.current.proxy) sampleAll(stageEl);
-      }, 120);
-    };
-
-    /** 舞台左上角在文档里的位置,把元素外框换算成舞台坐标 */
-    const stageOrigin = () => {
-      const stageEl = document.querySelector(".pc-stage");
-      return stageEl ? stageEl.getBoundingClientRect() : null;
-    };
-    const toStage = (r: DOMRect, origin: DOMRect): StageRect => ({
-      left: r.left - origin.left,
-      top: r.top - origin.top,
-      width: r.width,
-      height: r.height,
-    });
-
-    /**
-     * 这个元素在这一点上算不算「实体」。
-     * 实体 = 用户看得见、点下去合理的东西:文字、图片 / 视频 / 画布 / SVG 图形,
-     * 或者自己画了底色、背景图、描边、阴影的盒子。只做布局用的透明容器不算——
-     * 卡片的包裹层是整屏的,不穿过它就永远点不到下面那张卡。
-     */
-    const REPLACED = new Set(["IMG", "VIDEO", "CANVAS", "svg", "path", "rect", "circle", "ellipse", "line", "polygon", "polyline", "text", "use"]);
-    const paintedColor = (v: string) => {
-      // rgba(0,0,0,0) / transparent 都算没画;其余只要 alpha > 0 就算画了
-      if (!v || v === "transparent") return false;
-      const m = /rgba?\(([^)]+)\)/.exec(v);
-      if (!m) return true; // 关键字色、color() 等,当作画了
-      const parts = m[1].split(/[\s,/]+/).filter(Boolean);
-      return parts.length < 4 || parseFloat(parts[3]) > 0;
-    };
-    const isSolid = (el: Element): boolean => {
-      if (el === document.documentElement || el === document.body) return false;
-      if (el.classList.contains("pc-stage") || (el as HTMLElement).hasAttribute?.("data-pc-clip")) return false;
-      const cs = getComputedStyle(el);
-      if (cs.visibility === "hidden" || parseFloat(cs.opacity) === 0 || cs.pointerEvents === "none") return false;
-      if (REPLACED.has(el.tagName)) return true;
-      // 直接持有非空白文本节点 → 是文字本身
-      for (const n of el.childNodes) {
-        if (n.nodeType === Node.TEXT_NODE && (n.textContent ?? "").trim()) return true;
-      }
-      if (paintedColor(cs.backgroundColor)) return true;
-      if (cs.backgroundImage && cs.backgroundImage !== "none") return true;
-      if (cs.boxShadow && cs.boxShadow !== "none") return true;
-      const bw = ["borderTopWidth", "borderRightWidth", "borderBottomWidth", "borderLeftWidth"] as const;
-      const bc = ["borderTopColor", "borderRightColor", "borderBottomColor", "borderLeftColor"] as const;
-      for (let i = 0; i < 4; i++) {
-        if (parseFloat(cs[bw[i]]) > 0 && paintedColor(cs[bc[i]])) return true;
-      }
-      return false;
-    };
-
-    const api: PcStageApi = {
-      hitTest(x, y) {
-        const origin = stageOrigin();
-        if (!origin) return null;
-        // elementsFromPoint 按绘制顺序从最上层往下给;透明容器一路穿过去
-        const stack = document.elementsFromPoint(x + origin.left, y + origin.top);
-        for (const el of stack) {
-          if (!isSolid(el)) continue;
-          const wrap = el.closest("[data-pc-clip]");
-          const clipId = wrap?.getAttribute("data-pc-clip");
-          if (!clipId) continue;
-          return { clipId, ...toStage(el.getBoundingClientRect(), origin) };
-        }
-        return null;
-      },
-      bounds(clipId) {
-        const origin = stageOrigin();
-        if (!origin) return null;
-        const wrap = document.querySelector(`[data-pc-clip="${CSS.escape(clipId)}"]`);
-        if (!wrap) return null;
-        let l = Infinity, t = Infinity, r = -Infinity, b = -Infinity;
-        const walk = (el: Element) => {
-          if (isSolid(el)) {
-            /*
-             * canvas 要先扫像素:元素矩形永远是整块画布,而三维卡(scene-3d)、粒子卡多半
-             * 铺满整幅、四周全是透明的。不扫的话 get_layout 的 contentBox 会报「这张卡占满全屏」,
-             * 而工具描述明写「判断会不会盖住人看 contentBox」—— Agent 会以为字幕无处可放。
-             * 扫不出来(画布被污染、真的整块都画了)就退回元素矩形。
-             */
-            const painted = el.tagName === "CANVAS" ? canvasBox(el as HTMLCanvasElement) : null;
-            const rc = painted ?? el.getBoundingClientRect();
-            if (rc.width > 0 && rc.height > 0) {
-              l = Math.min(l, rc.left); t = Math.min(t, rc.top);
-              r = Math.max(r, rc.right); b = Math.max(b, rc.bottom);
-            }
-            return; // 实体元素的子孙都在它外框里,不用再往下
-          }
-          for (const c of el.children) walk(c);
-        };
-        for (const c of wrap.children) walk(c);
-        // 一个实体都没有(纯透明卡)退回包裹层外框,至少还能选中
-        const rc = Number.isFinite(l) ? new DOMRect(l, t, r - l, b - t) : wrap.getBoundingClientRect();
-        // 夹回舞台内:文字动画常把元素甩到屏幕外,描边不该跟着跑出去
-        const cl = Math.max(rc.left, origin.left), ct = Math.max(rc.top, origin.top);
-        const cr = Math.min(rc.right, origin.right), cb = Math.min(rc.bottom, origin.bottom);
-        if (cr <= cl || cb <= ct) return toStage(wrap.getBoundingClientRect(), origin);
-        return toStage(new DOMRect(cl, ct, cr - cl, cb - ct), origin);
-      },
-      setProject(next) {
+    const api: StageRpcApi = {
+      /**
+       * 换项目文档。patch 复用 A7 的 changedClips 结构,合并时**保持未变片段的对象引用**
+       * (applyProjectPatch 就是这么做的);full 带 reset。
+       * 两种角色都**不再**按跳转重算这一帧:front 只更新项目(第 4 步 D5 接「按 changedClips
+       * 让变了的层重新查索引」);back 在飞的探针推帧被掐断后回 { aborted, reason: 'project' }。
+       */
+      async setProject(next, opts = {}) {
         const prev = ref.current.project;
-        // clipId 会在不同项目里复用,不清掉就会张冠李戴
-        if (next !== prev) resetInk();
-        const prevKey = ref.current.layoutKey;
-        const nextKey = layoutKeyOf(next);
-        ref.current.project = next;
-        ref.current.layoutKey = nextKey;
-        flushSync(() => setProject(next));
-        window.clearTimeout(ref.current.settle);
-        if (prevKey !== nextKey) {
-          // 片段的位置 / 时长 / 用哪张卡 / 画布尺寸变了 → 这一帧立刻重算
-          renderAt(ref.current.t, { jump: true });
-          return;
+        let full: Project;
+        if (isProjectPatch(next)) {
+          if (next.kind === "full") full = next.project;
+          else {
+            if (!prev) throw new Error("setProject: 收到增量补丁但舞台上还没有项目(先发一份 full)");
+            full = applyProjectPatch(prev, next);
+          }
+        } else {
+          full = next;
         }
-        /*
-         * 只改了卡片参数:先原样重渲染(打字时画面不闪),停手 200ms 后再重算这一帧。
-         * 不重算不行——改参数可能让卡片长出新的动画,而新动画在没人推时钟时会停在 initial。
-         *
-         * 但**哪张卡都没变的改动**(改视频段的不透明度、挂滤镜、加音频效果、改素材……)和
-         * **改的卡此刻不在画面上**的改动,都不用补跑:补跑要把活跃的卡全部重挂载、从入点逐帧
-         * 提交到播放头,实测 Agent 每写一次 65~350 ms 的主线程 —— 一轮几十次写就是十几秒卡顿。
-         * store 是不可变更新,没动过的 clip 对象引用不变,按引用比一遍就知道谁变了。
-         */
-        const changed = changedCardClips(prev, next);
-        if (!changed.length) return;
-        const t = ref.current.t;
-        if (!changed.some((c) => t >= c.start - LEAD && t < c.end)) return;
-        ref.current.settle = window.setTimeout(() => renderAt(ref.current.t, { jump: true }), SETTLE_MS);
+        if (opts.reset || full !== prev) {
+          // clipId 会在不同项目里复用,不清掉就会张冠李戴
+          if (full !== prev) resetInk();
+        }
+        const prevKey = ref.current.layoutKey;
+        const nextKey = layoutKeyOf(full);
+        ref.current.project = full;
+        ref.current.layoutKey = nextKey;
+        flushSync(() => setProject(full));
+        window.clearTimeout(ref.current.settle);
+        // 项目变了,在飞的补跑作废:探针会按新项目重发
+        renderGen.current++;
+        abortPending("project");
+        if (LEGACY) {
+          if (prevKey !== nextKey) {
+            legacyJump(ref.current.t);
+          } else {
+            const changed = changedCardClips(prev, full);
+            const tt = ref.current.t;
+            if (changed.length && changed.some((c) => cardMountedAt(c, tt))) {
+              ref.current.settle = window.setTimeout(() => legacyJump(ref.current.t), SETTLE_MS);
+            }
+          }
+        }
+        return { ok: true as const };
       },
-      render: renderAt,
-      size() {
+
+      /**
+       * 拨到 tSec(暂停 / 拖动的唯一入口)。独立路径,不复用 render:
+       *   clock.set → flushSync(setT) → pinner.sync → settle。不递增 playToken,组件实例不变。
+       * 唯一例外:往前且不到 CONTINUOUS_MAX 秒,按连续播放用 advanceTo 同步推几帧(≤ 30 步)。
+       * 远跳或向后一律不 advanceTo(会同步空转几百次 tick)。
+       * probe: 一律走跳转路径(量的必须是单帧),等一次真 rAF、冻一次控件 HTML,回包带 elapsedMs。
+       * snapshots / awaiting / settle 是第 4 步的(C4 / E7 / K5),这里先收下、不动画面。
+       */
+      async setTime(tSec, opts = {}) {
+        const target = Math.max(0, Number(tSec) || 0);
+        const started = realNow();
+        const p = ref.current.project;
+        const prev = ref.current.t;
+        const dt = target - prev;
+        ref.current.t = target;
+        if (opts.snapshots) {
+          for (const [id, html] of Object.entries(opts.snapshots)) {
+            if (html === null) ref.current.snapshots.delete(id);
+            else ref.current.snapshots.set(id, html);
+          }
+        }
+        if (!p) return { path: "set" } satisfies SetTimeReply;
+        // 暂停 / 拖动时来了 setTime,就没有「还在飞的补跑」这回事了
+        renderGen.current++;
+        abortPending("superseded");
+        const fps = Math.max(1, p.fps || 30);
+
+        if (!opts.probe && dt >= 0 && dt < CONTINUOUS_MAX) {
+          // 连续播放:接着往下跑一两帧就行(≤ 30 步,同步)
+          flushSync(() => setT(target));
+          clock.advanceTo(target * 1000, { step: 1000 / fps, maxCatchUp: CONTINUOUS_MAX * 1000, onFrame: (ms) => pinner.sync(ms) });
+          settle(target);
+          scheduleSample();
+          return { path: "continuous" } satisfies SetTimeReply;
+        }
+
+        clock.set(target * 1000);
+        flushSync(() => setT(target));
+        pinner.sync(target * 1000);
+        settle(target);
+        scheduleSample();
+        if (opts.probe) {
+          // K1:frameMs 含把该控件冻结成 HTML 的时间(J1)
+          await realRaf();
+          const root = rootRef.current;
+          if (root) freezeScene(root);
+          return { path: "set", elapsedMs: realNow() - started } satisfies SetTimeReply;
+        }
+        return { path: "set" } satisfies SetTimeReply;
+      },
+
+      /**
+       * 后台舞台的补跑(K1 探针 / K3(b) 续推)。
+       *   jump: true  —— 重挂载并从 mountFrameOf 推到 tSec;probe 时每推一帧就冻结控件 HTML 并 post
+       *                  `probe-frame`,maxFrames 到或累计墙钟超过 B(1000/fps×70%)就截断:
+       *                  回 { aborted: true, reason: 'timeout', elapsedMs, frames, truncated: true }。
+       *   jump 缺省   —— 续推:不重挂载、不动 playToken,从 clock.now() 推到 tSec;
+       *                  tSec 在当前时刻之前直接回 { aborted, reason: 'superseded' }。
+       * Promise 在推完之后才 resolve;被新 render 掐掉回 'superseded',被 setProject 掐掉回 'project'。
+       */
+      async render(tSec, opts = {}) {
+        const target = Math.max(0, Number(tSec) || 0);
+        const started = realNow();
+        const p = ref.current.project;
+        if (!p) return { aborted: true, reason: "project", elapsedMs: 0 } satisfies RenderReply;
+        const fps = Math.max(1, p.fps || 30);
+        const budgetMs = (1000 / fps) * 0.7;
+        const probe = !!opts.probe;
+        const maxFrames = opts.maxFrames ?? Infinity;
+
+        const gen = ++renderGen.current;
+        abortPending("superseded");
+        window.clearTimeout(ref.current.settle);
+
+        let remounted = false;
+        if (opts.jump) {
+          remountAt(target, fps);
+          remounted = true;
+        } else if (target * 1000 < clock.now()) {
+          // 续推不支持倒退
+          return { aborted: true, reason: "superseded", elapsedMs: realNow() - started } satisfies RenderReply;
+        }
+
+        let frames = 0;
+        let truncated = false;
+        return await new Promise<RenderReply>((resolve) => {
+          ref.current.pending = { gen, startedAt: started, frames: () => frames, resolve };
+          void (async () => {
+            await clock.advanceToAsync(target * 1000, {
+              step: 1000 / fps,
+              maxCatchUp: opts.maxCatchUp,
+              yieldEvery: 8,
+              abort: () => {
+                if (gen !== renderGen.current) return true;
+                if (probe && (frames >= maxFrames || realNow() - started > budgetMs)) {
+                  truncated = true;
+                  return true;
+                }
+                return false;
+              },
+              onFrame: (ms) => flushSync(() => setT(ms / 1000)),
+              afterFrame: (ms) => {
+                pinner.sync(ms);
+                if (!probe) return;
+                frames++;
+                const root = rootRef.current;
+                if (!root) return;
+                // 探针推过的帧直接存成死素材(K1):本地帧号按探针自己的步序算,不取 data-pc-local-frame
+                const frozen = freezeScene(root);
+                for (const c of frozen.controls) {
+                  postStageEvent({ type: "probe-frame", clipId: c.id, localFrame: Math.round((ms / 1000 - clipStart(c.id)) * fps), html: c.html });
+                }
+              },
+            });
+            if (gen !== renderGen.current) return; // 已被 abortPending 按 reason 回包
+            ref.current.pending = null;
+            const elapsedMs = realNow() - started;
+            if (truncated) {
+              resolve({ aborted: true, reason: "timeout", elapsedMs, frames, truncated: true });
+              return;
+            }
+            flushSync(() => setT(target));
+            clock.tick(target * 1000);
+            pinner.sync(target * 1000);
+            settle(target);
+            scheduleSample();
+            ref.current.t = target;
+            resolve({ remounted, caughtUpAtSec: clock.now() / 1000, elapsedMs, ...(probe ? { frames, truncated: false } : {}) });
+          })();
+        });
+      },
+
+      async hitTest(x, y) {
+        const root = rootRef.current;
+        return root ? solidHitTest(root, x, y) : null;
+      },
+      async rectsWithBounds(opts = { pixels: "none" }) {
+        const root = rootRef.current;
+        return root ? solidRectsWithBounds(root, opts) : [];
+      },
+      async size() {
         const p = ref.current.project;
         return { width: p?.width ?? 1920, height: p?.height ?? 1080 };
       },
-      setProxy(on) {
+      async setProxy(on) {
         // 只有显式带了 ?proxy=1 的页面才允许开。导出页永远进不来这一条。
-        if (!proxyAllowed()) return;
+        if (!proxyAllowed()) return { ok: true as const };
         const want = !!on;
-        if (want === ref.current.proxy) return;
+        if (want === ref.current.proxy) return { ok: true as const };
         ref.current.proxy = want;
         if (want) ensureProxyStyle();
         /*
@@ -430,46 +489,104 @@ export default function StageView() {
          */
         flushSync(() => setProxy(want));
         if (!want) {
-          const stageEl = document.querySelector<HTMLElement>(".pc-stage");
-          if (stageEl) sampleAll(stageEl);
+          const root = rootRef.current;
+          if (root) sampleAll(root);
         }
+        return { ok: true as const };
       },
-      rects() {
-        const stageEl = document.querySelector(".pc-stage");
-        if (!stageEl) return [];
-        const stageRect = stageEl.getBoundingClientRect();
-        const els = document.querySelectorAll("[data-pc-clip]");
-        const result: { clipId: string; left: number; top: number; width: number; height: number }[] = [];
-        for (let i = 0; i < els.length; i++) {
-          const el = els[i] as HTMLElement;
-          const rect = el.getBoundingClientRect();
-          const clipId = el.getAttribute("data-pc-clip");
-          if (clipId) {
-            result.push({
-              clipId,
-              left: rect.left - stageRect.left,
-              top: rect.top - stageRect.top,
-              width: rect.width,
-              height: rect.height,
-            });
+      /**
+       * 角色是运行时状态(J4)。收到 back:停节拍循环(K4,第 4 步)、清空快照 / 抑制 / 流平面、
+       * 去掉全部平面和类,组件不重挂载。bake 在本地模式不支持(预渲染者是预渲染进程)。
+       */
+      async setRole(role, opts = {}) {
+        if (role === "back" && opts.job === "bake") return { ok: false, reason: "unsupported" as const };
+        ref.current.role = role;
+        ref.current.job = role === "back" ? opts.job ?? "probe" : undefined;
+        if (role === "back") {
+          ref.current.snapshots.clear();
+          ref.current.suppressed.clear();
+          ref.current.streamPlanes = [];
+        }
+        return { ok: true };
+      },
+      async setPlan(plan) {
+        ref.current.plan = plan;
+        return { ok: true as const };
+      },
+      // K4(第 4 步):可见舞台自己按帧节拍播放。第 3 步父页每帧发 setTime,这两个先明确说不支持。
+      async play() {
+        return { ok: false, reason: "unsupported" };
+      },
+      async pause() {
+        return { ok: false, reason: "unsupported" };
+      },
+      async setSuppressed(clipIds) {
+        ref.current.suppressed = new Set(clipIds);
+        return { ok: true as const };
+      },
+      async setStreamPlanes(planes) {
+        ref.current.streamPlanes = planes;
+        return { ok: true as const };
+      },
+      async setScrubbing(on) {
+        ref.current.scrubbing = !!on;
+        return { ok: true as const };
+      },
+      async setPlaying(on) {
+        ref.current.playing = !!on;
+        return { ok: true as const };
+      },
+      async setMediaT(tSec) {
+        ref.current.mediaT = Number(tSec) || 0;
+        return { ok: true as const };
+      },
+      async setLocalHashes(hashes) {
+        ref.current.localHashes = [...hashes];
+        return { ok: true as const };
+      },
+      /**
+       * A3c:patch 是相对上次投递的增量(null = 摘掉),reset = 先清空全部再应用。
+       * 第 3 步只存起来、回投递的字节数;挂成快照平面是第 4 步 E7 的事。
+       */
+      async setSnapshots(patch, opts = {}) {
+        if (opts.reset) ref.current.snapshots.clear();
+        let bytes = 0;
+        for (const [id, html] of Object.entries(patch)) {
+          if (html === null) ref.current.snapshots.delete(id);
+          else {
+            ref.current.snapshots.set(id, html);
+            bytes += html.length;
           }
         }
-        return result;
+        return { ok: true as const, bytes };
       },
     };
+
+    const stopRpc = serveStageRpc(api);
     window.__pcStage = api;
-    window.parent?.postMessage({ type: "pc-stage-ready" }, "*");
+    // K1 探针 / L1 / probe-frame 的冻结都在舞台页调它;导出页挂的是同一个 freezeScene(J1)。
+    // 场景根就是 rootRef 指着的那个 [data-pc-scene] div(不走 document.querySelector:预渲染页上 #root 只是 display:none)。
+    window.__bfFreeze = () => {
+      const root = rootRef.current;
+      if (!root) throw new Error("stage: 还没有项目,没什么可冻结的");
+      return freezeScene(root);
+    };
+    postStageReady(detectHostCapabilities());
     return () => {
+      stopRpc();
       window.clearTimeout(ref.current.settle);
+      window.clearTimeout(sampleTimer);
       if (window.__pcStage === api) delete window.__pcStage;
     };
   }, []);
 
   if (!project) return null;
-  const timeline = flattenOverlay(project);
+  const timeline = flattenOverlay(project, graph);
 
   return (
     <div
+      ref={rootRef}
+      data-pc-scene=""
       style={{
         position: "relative",
         width: project.width,
@@ -479,7 +596,7 @@ export default function StageView() {
         // 和 ExportView 读同一处(Timeline),不是各读各的 project —— 见 Timeline.themeId 的说明
         ...themeStyle(timeline.themeId),
         /*
-         * 三维的 perspective **不在这里**。这一格和卡片之间还隔着 .pc-stage 和 AnimClock
+         * 三维的 perspective **不在这里**。这一格和卡片之间还隔着 Stage 的根和 AnimClock
          * 两层 div,而 CSS 的 perspective 只作用于直接子元素 —— 挂在这里等于没挂
          * (实测卡片高度纹丝不动,rotateY 只剩仿射拉伸,而且不报错)。
          * 它挂在 kernel/Stage.tsx 里卡片的直接父元素上,预览和导出共用同一处。

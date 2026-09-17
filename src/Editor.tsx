@@ -13,6 +13,7 @@ import { useSkin } from "./skins/useSkin";
 import { useLayoutMode } from "./editor/layoutMode";
 import { useRailCollapsed, isRailCollapsed, subscribeRails, RAIL_W } from "./editor/sideRails";
 import { useSideVisible } from "./editor/dock/railStore";
+import { RailBar } from "./editor/dock/RailBar";
 import "./editor/shell.css";
 import { StatusBar } from "./editor/StatusBar";
 import { DependencyPrompt } from "./editor/DependencyPrompt";
@@ -265,9 +266,22 @@ export default function Editor() {
            * 拖杆和卡片一起包进来,纵向拖杆的 hover 线也跟着缩进。
            */
           <div
-            className="pc-editor-bottom shrink-0 flex flex-col"
+            className="pc-editor-bottom shrink-0 flex flex-col relative"
             style={{ marginLeft: RAIL_W + (leftCollapsed ? HANDLE_W : 0), marginRight: RAIL_W + (rightCollapsed ? HANDLE_W : 0) }}
           >
+            {/*
+              两侧 rail 在时间轴旁边的那一截(剪辑组和排在它后面的项):贴在时间轴卡片外侧的 rail 列里,
+              顶边 = 卡片顶边(让过上面那根 HANDLE_W 高的拖杆)。水平位置用 right/left: 100% 再让出收起时多出来的那个 HANDLE_W,
+              正好落回上面 rail 的那一列
+            */}
+            <div className="pc-rail-tail-slot is-left" style={{ top: HANDLE_W, right: `calc(100% + ${leftCollapsed ? HANDLE_W : 0}px)`, width: RAIL_W }}>
+              <RailBar side="left" part="tail" />
+            </div>
+            {showRight && (
+              <div className="pc-rail-tail-slot is-right" style={{ top: HANDLE_W, left: `calc(100% + ${rightCollapsed ? HANDLE_W : 0}px)`, width: RAIL_W }}>
+                <RailBar side="right" part="tail" />
+              </div>
+            )}
             <ResizeHandle
               axis="y"
               value={footer.value}

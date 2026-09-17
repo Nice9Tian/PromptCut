@@ -627,16 +627,9 @@ function check() {
       s.status === 0,
       s.status === 0 ? s.stdout.trim() : 'STT 包未就绪 — ' + (s.stderr || '').trim().split('\n').pop(),
     );
-    const cards = runPython(['-I', '-c', 'import promptcut_cards, numpy, PIL;print(promptcut_cards.__file__)']);
-    add(
-      'import promptcut_cards (含 NumPy/Pillow)',
-      cards.status === 0,
-      cards.status === 0 ? cards.stdout.trim() : (cards.stderr || '').trim().split('\n').pop(),
-    );
   } else {
     add('import sys, pip', false, '跳过(没有 python.exe)');
     add('import promptcut_stt', false, '跳过(没有 python.exe)');
-    add('import promptcut_cards (含 NumPy/Pillow)', false, '跳过(没有 python.exe)');
   }
 
   const reqs = fs.existsSync(RUNTIME_PY)

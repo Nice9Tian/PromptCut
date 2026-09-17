@@ -1,5 +1,5 @@
 import { AnimClock } from "./AnimClock";
-import { memo, useMemo } from "react";
+import { memo, useEffect, useMemo, useRef } from "react";
 import { frameCss } from "./layout";
 import { perspectivePx } from "./space3d";
 import { motionAt } from "./motion";
@@ -7,16 +7,20 @@ import { cardOpacityAt, hasOpacityControls } from "./project";
 import { emphasisFilter } from "./emphasis";
 import { getCard } from "./registry";
 import { PartTree } from "./PartTree";
+import { GraphCard } from "../render/cards/GraphCard";
 import { frameBox } from "./layout";
 import type { CardDef, CardProps, Timeline } from "./types";
 import { cardMountedAt } from "../render/frameWindow.mjs";
 import { clipFrameMode } from "../render/frameMode.mjs";
+import { guardCompositing, shouldGuard } from "../render/capabilityGuard";
 
 // Keep direct-evaluation cards at the requested time while other cards replay.
 // Their CSS/DOM stays in the same stacking tree (including paper/glass styles),
 // but their component is not run for each stateful history frame.
 const DirectCard = memo(function DirectCard({ def, params, ...props }: CardProps<any> & { def: CardDef<any> }) {
-  const C = def.Component;
+  // 图卡没有 Component,但它在下面的分支顺序里排在这一支**前面**,走到这里必有组件。
+  // 这里**不能**改成 `if (!C) return null` —— 分支顺序万一写错,那就是一张静默的空白卡。
+  const C = def.Component!;
   return <C {...props} params={{ ...def.defaults, ...params }} />;
 });
 
@@ -38,8 +42,25 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy }:
   // 自带三维场景的卡(scene-3d)要用和 A 层同一台相机,所以把画幅和 fov 一起递下去。
   // 对象整体透传,别的卡收到了也不看。
   const stageInfo = useMemo(() => ({ width: timeline.width, height: timeline.height, camera3dFov: timeline.camera3dFov }), [timeline.width, timeline.height, timeline.camera3dFov]);
+  /*
+   * 审阅表（src/cards/capabilities.json）说 independent、画面上却量到 backdrop-filter 的卡，
+   * 挂上之后报一次警并降级成 belowDependent（render/capabilityGuard.ts）。
+   * 每张卡一辈子只量一次，且只在开发态的交互舞台上跑 —— 导出 / 预渲染那条路 shouldGuard() 直接 false，
+   * 一个 getComputedStyle 都不会执行，逐像素基线不受影响。DOM 一个字不改（只加了个 ref）。
+   */
+  const stageRef = useRef<HTMLDivElement>(null);
+  const guardKey = active.map((c) => c.cardId).join("|");
+  useEffect(() => {
+    if (!shouldGuard()) return;
+    const handle = requestAnimationFrame(() => {
+      guardCompositing(stageRef.current, active.map((c) => ({ id: c.id, cardId: c.cardId })));
+    });
+    return () => cancelAnimationFrame(handle);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [guardKey]);
   return (
     <div
+      ref={stageRef}
       className="pc-stage"
       style={{ position: "relative", width: timeline.width, height: timeline.height, overflow: "hidden", background: "transparent" }}
     >
@@ -86,8 +107,14 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy }:
       >
         {active.map((clip, i) => {
           const def = getCard(clip.cardId);
-          if (!def) return null;
-          const C = def.Component;
+          /*
+           * 三道都在取 def 这一格剔掉,不放到分支里:
+           *  - 定义没了(用户卡文件被删)——图卡的 def 在注册表里必然取得到,挡不住下面两种;
+           *  - 既没有 card 也没有 Component:音频图卡万一带着 cardId 进来也不炸;
+           *  - 图卡但没有图(projectCardGraph 抛了):没有图解不出输入,画不出东西。
+           */
+          if (!def || (!def.card && !def.Component) || (def.card && !timeline.graph)) return null;
+          const C = def.Component!;
           const cardT = timeOf(clip);
 
           // 绑了轨迹的 clip 整层跟着目标平移。平移放在**外层**而不是交给卡片：
@@ -140,6 +167,10 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy }:
               {clip.cardId === "composite" && clip.parts?.length ? (
                 // 组合卡:部件实例树逐级渲染,画布尺寸就是这张卡的框(没有框 = 整个舞台)
                 <PartTree parts={clip.parts} size={frameBox(clip.frame, timeline)} t={Math.max(0, t - clip.start)} playToken={playToken} />
+              ) : def.card ? (
+                // 图卡:经 Stage、有包裹层,hitTest / rects / 快照 / 抑制全部照常
+                <GraphCard def={def} clip={clip} graph={timeline.graph} fps={timeline.fps}
+                  t={Math.max(0, cardT - clip.start)} params={{ ...def.defaults, ...clip.params }} stage={stageInfo} />
               ) : clipFrameMode(clip, def) === 'direct' ? (
                 <DirectCard def={def} params={clip.params} playToken={playToken} t={Math.max(0, cardT - clip.start)} duration={clip.end - clip.start} stage={stageInfo} />
               ) : (

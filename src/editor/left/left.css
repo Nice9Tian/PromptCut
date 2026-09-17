@@ -1319,13 +1319,13 @@
 }
 .pc-left-btn.is-primary {
   height: 30px;
-  background: var(--ui-accent, #00DBDB);
+  background: var(--ui-accent-grad, #00DBDB);
   border-color: transparent;
   color: var(--ui-accent-fg, #ffffff);
   font-weight: 500;
 }
 .pc-left-btn.is-primary:hover:not(:disabled) {
-  background: var(--ui-accent-hover, var(--ui-accent, #00DBDB));
+  background: var(--ui-accent-grad-hover, var(--ui-accent, #00DBDB));
   color: var(--ui-accent-fg, #ffffff);
 }
 .pc-left-btn.is-danger {

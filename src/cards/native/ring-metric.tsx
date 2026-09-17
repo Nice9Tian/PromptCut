@@ -84,6 +84,8 @@ export const ringMetric: CardDef<Params> = {
   useWhen: "单个百分比或完成度指标,用环形进度加中心数字表现。",
   tags: ["百分比","环形","进度","指标"],
   source: "native",
+  // 帧模式:审计固化(A0.1)。值 = 固化前 cardFrameMode(def, def.defaults) 的返回值。
+  frameMode: "stateful",
   defaults: {
     ...hudDefaults,
     value: 75,

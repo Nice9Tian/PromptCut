@@ -8,11 +8,6 @@
   );
 }
 
-/* 播放头把手:卡尺那一格里的圆形(Playhead.tsx 的 .clip-playhead;颜色见 skins.css 末尾) */
-.clip-playhead {
-  border-radius: 50%;
-}
-
 /* ── 时间轴的两条滚动条:右侧竖条(原生)和底部横条(Scrollbar.tsx)同一套样子 ──────────
  * 可见部分都是 10px 粗、全圆角,同一个淡底槽、同一个滑块色;外面各留 2px,占位 14px。
  * 竖条只在时间轴里改,全局皮肤那条 6px 的滚动条(skins.css)不动。
@@ -139,6 +134,9 @@
  * six pixels wide but must not draw a second line inside the header column. */
 .pc-tl-headers {
   border-right: 1px solid var(--ui-border);
+  /* 序列栏往右投一道窄阴影,和右边的片段区分开;横向滚动时片段从阴影底下滑过去。
+     列是 sticky + z-30,阴影盖在轨道上面。深浅皮肤用同一个黑,浅色里淡、深色里几乎只加深边缘 */
+  box-shadow: 6px 0 10px -6px rgba(0, 0, 0, 0.28);
 }
 .pc-tl-header-resize [data-pc-resize="x"].pc-gutter {
   background-image: none;
@@ -254,9 +252,8 @@
   cursor: pointer;
 }
 
-/* 序列列表头:26 高,等宽小字,字距拉开 */
+/* 序列列表头:和标尺同高(index.tsx 按 RULER_H 行内给),等宽小字,字距拉开 */
 .pc-tl-hdr {
-  height: 26px;
   padding: 0 12px;
   display: flex;
   align-items: center;
@@ -264,7 +261,11 @@
   font-size: 10.5px;
   letter-spacing: 0.1em;
   color: var(--ui-fg-faint);
-  border-bottom: 1px solid var(--ui-border);
+}
+/* 标尺下面那一行空行(index.tsx 的 .pc-tl-toprow):行头列这一侧底边画分隔线,线紧贴在第一条序列上方。
+   用内阴影不用 border,不占高度,两侧空行保持和行高一样 */
+.pc-tl-headers > .pc-tl-toprow {
+  box-shadow: inset 0 -1px 0 var(--ui-border);
 }
 /* 序列行:拖动把手 + 名字 + 右侧常驻的两个图标(不再悬停才出现) */
 .pc-tl-row {
@@ -350,25 +351,43 @@
   background: var(--ui-float);
 }
 
-/* 标尺:26 高。次刻度是直径 2px 的小圆点(--ui-panel-2 落在时间轴的 --ui-bg-2 底上几乎看不见,
-   所以用强描边色);主刻度不画点也不画线,只标 m:ss 时间 */
+/* 标尺:高度由 Ruler.tsx 的 RULER_H 行内给;底边线由预渲染进度(.pc-tl-ruler-progress)画 */
 .pc-tl-ruler {
-  height: 26px;
-  border-bottom: 1px solid var(--ui-border);
+  box-sizing: border-box;
 }
+/* 次刻度:1×4 短竖线;主刻度:1×10 竖线,右边 4px 跟时间。都在标尺行里竖向居中 */
 .pc-tl-tick {
+  position: absolute;
+  top: 8px;
+  width: 1px;
+  height: 4px;
   background: var(--ui-border-strong);
-  width: 2px;
-  height: 2px;
-  border-radius: 50%;
+  pointer-events: none;
 }
 .pc-tl-tick.is-major {
-  display: none;
+  top: 5px;
+  height: 10px;
+  background: color-mix(in oklab, var(--ui-fg-faint) 70%, transparent);
 }
 .pc-tl-tick-label {
+  position: absolute;
+  left: 4px;
+  /* 竖向中心和主刻度线中心、播放头时间胶囊中心对齐:标尺行扣掉底边 2px 进度线后的中线(22 高 → 10px)。
+     标签挂在主刻度线(top 5、高 10)里面,所以相对它是 5px */
+  top: 5px;
+  transform: translateY(-50%);
   font-family: var(--ui-font-mono);
-  font-size: 11px;
-  color: var(--ui-fg-muted);
+  font-size: 10.5px;
+  line-height: 12px;
+  color: var(--ui-fg-faint);
+  white-space: nowrap;
+}
+/* 底边线 = 预渲染进度 */
+.pc-tl-ruler-progress {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
 }
 
 /* 新建序列落区:26 高,虚线控件描边,淡强调色底 */
@@ -418,17 +437,19 @@
   pointer-events: none;
 }
 
-/* 播放头上的时间标签:胶囊底色字色 */
+/* 播放头上的时间胶囊:主文字色底、底色字。竖向中心 = 标尺行中线(top 由 Playhead.tsx 给),
+   和标尺上的刻度时间同一个高度;按自身宽度水平居中在播放头上 */
 .pc-tl-playhead-label {
   position: absolute;
-  top: -1px;
-  left: -24px;
+  left: 50%;
+  transform: translate(-50%, -50%);
   background: var(--ui-fg);
   color: var(--ui-bg);
   font-family: var(--ui-font-mono);
   font-weight: 600;
   font-size: 10px;
-  padding: 2px 6px;
+  line-height: 14px;
+  padding: 0 6px;
   border-radius: 999px;
   letter-spacing: 0.02em;
   white-space: nowrap;
@@ -548,9 +569,7 @@
 /* ── 预渲染绿条(AE 顶上那条)──────────────────────────────────
    绿 = 拖过去立刻有画面;空白 = 要等它烘完(一张约 4 秒)。
    段的算法在 src/editor/preview/bakeCoverage.ts,画法上宁可少画不能多画。 */
-.pc-tl-renderbar {
-  border-bottom: 1px solid var(--ui-border);
-}
+
 /* 底槽:整条片子多长。比面板底色亮一点,好看出"还有多少没预渲染" */
 .pc-tl-renderbar-track {
   background: var(--ui-panel-2);
@@ -581,5 +600,5 @@
 .pc-volume-controls input[type=number] { width: 64px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-sm, 4px); padding: 4px; background: var(--ui-bg); color: var(--ui-fg); }
 .pc-volume-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
 .pc-volume-actions button { padding: 6px 10px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius, 6px); cursor: pointer; }
-.pc-volume-actions button[type=submit] { background: var(--ui-accent); color: white; }
+.pc-volume-actions button[type=submit] { background: var(--ui-accent-grad); color: white; }
 .pc-volume-actions button:disabled { opacity: .4; cursor: default; }

@@ -1,13 +1,12 @@
 import { useCallback, useEffect, useRef } from "react";
 import { Stage } from "../kernel/Stage";
 import { flattenOverlay, isImageMedia, opacityAt, videoLayersAt, type Project } from "../kernel/project";
+import type { Timeline } from "../kernel/types";
 import { frameCss } from "../kernel/layout";
 import { emphasisFilter } from "../kernel/emphasis";
 import { clipFilterOpsAt, cssFilter } from "../kernel/filters.mjs";
 import { mapRgba, type PixelMapDef } from "../kernel/pixelMap.mjs";
-import { PythonCard, pythonVisualNode } from "./cards/PythonCard";
-import { motionAt } from "../kernel/motion";
-import { perspectivePx } from "../kernel/space3d";
+import { graphVisualNode } from "./cards/GraphCard";
 
 function PixelMappedMedia({ media, clip, t, project, style, def }: { media: any; clip: any; t: number; project: Project; style: React.CSSProperties; def: PixelMapDef }) {
   const canvas = useRef<HTMLCanvasElement>(null);
@@ -66,7 +65,7 @@ function PixelMappedMedia({ media, clip, t, project, style, def }: { media: any;
  * Video placeholders deliberately have no src: advancing React must never seek/decode media.
  * The capture phase installs src and seeks only the visible frame's video elements.
  */
-export function FrameScene({ project, sourceProject = project, t, directT = t, playToken }: { project: Project; sourceProject?: Project; t: number; directT?: number; playToken: number }) {
+export function FrameScene({ project, sourceProject = project, t, directT = t, playToken, graph }: { project: Project; sourceProject?: Project; t: number; directT?: number; playToken: number; graph?: Timeline["graph"] }) {
   const layers = videoLayersAt(project, t);
   const frame = Math.round(directT * (project.fps || 30));
   const runtime = (sourceProject as any)._cardRender as { frames?: Record<string, Record<number, string>>; missing?: Record<number, string[]> } | undefined;
@@ -76,14 +75,17 @@ export function FrameScene({ project, sourceProject = project, t, directT = t, p
   const tracks = [...project.tracks].reverse().filter((tr) => !tr.hidden);
   const active = (clip: { start: number; end: number }) => directT >= clip.start && directT < clip.end;
   const legacyTimeline = (tr: Project["tracks"][number], clip: Project["tracks"][number]["clips"][number]) =>
-    flattenOverlay({ ...project, tracks: [{ ...tr, clips: [clip] }] });
+    // 图**不能**从裁剪版算(只留一条轨道一个片段,跨片段输入解不出),也不能按 project
+    // 引用 memo(这里每次都新建对象,永不命中)—— 由宿主算好、原样带进来。
+    ({ ...flattenOverlay({ ...project, tracks: [{ ...tr, clips: [clip] }] }), graph });
   return <>{tracks.map((tr, index) => {
     return <div key={tr.id} data-pc-track={tr.id} style={{ position: "absolute", inset: 0, zIndex: index }}>
-      {layers.filter(l => l.trackId === tr.id && !pythonVisualNode(sourceProject, l.clip.nodeId) && !replaced(l.clip.id)).map(({ clip, media, opacity }) => {
+      {layers.filter(l => l.trackId === tr.id && !graphVisualNode(graph, l.clip.nodeId) && !replaced(l.clip.id)).map(({ clip, media, opacity }) => {
         const ops = project.filters?.length ? clipFilterOpsAt(project, clip, t) : null;
         const filter = [ops ? cssFilter(ops) : "", emphasisFilter(clip.emphasis) || ""].filter(Boolean).join(" ");
         const style = { display: "block", width: "100%", height: "100%", objectFit: "cover" as const, opacity, filter: filter || undefined };
-        return <div key={clip.id} data-pc-clip={clip.id} data-pc-local-frame={Math.round((t - clip.start) * project.fps)} style={{ position: "absolute", overflow: "hidden", ...frameCss(clip.frame, project) }}>
+        // data-pc-media:冻结时 controls 的选择器靠它把素材层排除掉(见 render/snapshotFreeze.ts)
+        return <div key={clip.id} data-pc-clip={clip.id} data-pc-media="" data-pc-local-frame={Math.round((t - clip.start) * project.fps)} style={{ position: "absolute", overflow: "hidden", ...frameCss(clip.frame, project) }}>
           {clip.pixelMap && project.pixelMaps?.find((x) => x.id === clip.pixelMap!.id) ? (() => {
             const def = project.pixelMaps!.find((x) => x.id === clip.pixelMap!.id)!;
             return <PixelMappedMedia media={media} clip={clip} t={t} project={project} style={style} def={def} />;
@@ -108,20 +110,6 @@ export function FrameScene({ project, sourceProject = project, t, directT = t, p
             : <div key={clip.id} data-pc-clip={clip.id} data-pc-incomplete={clip.id} style={{ ...layerStyle, ...frameCss(clip.frame, project), border: "2px dashed #dcb66a", boxSizing: "border-box", display: "grid", placeItems: "center", background: "#1e273050", opacity: opacityAt(clip, directT) }}>
               <span style={{ color: "#fff", fontSize: 28 }}>⌛</span>
             </div>;
-        }
-        if (pythonVisualNode(sourceProject, clip.nodeId)) {
-          const movement = clip.motion ? motionAt(clip.motion, Math.max(0, directT - clip.start)) : null;
-          if (movement && clip.motion?.whenHidden === "hide" && !movement.visible) return null;
-          const ops = project.filters?.length ? clipFilterOpsAt(project, clip, directT) : null;
-          const filter = [ops ? cssFilter(ops) : "", emphasisFilter(clip.emphasis) || ""].filter(Boolean).join(" ");
-          // CSS perspective belongs on the direct parent of the transformed
-          // frame. Python cards do not go through Stage, so they need this
-          // equivalent parent for rotateX / rotateY / translateZ to project.
-          return <div key={clip.id} data-pc-python-layer={clip.id} style={{ ...layerStyle, ...(project.camera3dFov ? { perspective: `${perspectivePx(project, project.camera3dFov)}px`, perspectiveOrigin: "50% 50%" } : null) }}>
-            <div data-pc-clip={clip.id} style={{ overflow: "hidden", ...frameCss(clip.frame, project, movement ? { dx: movement.dx, dy: movement.dy } : undefined), opacity: opacityAt(clip, directT), filter: filter || undefined }}>
-              <PythonCard project={sourceProject} nodeId={clip.nodeId!} time={directT - clip.start} />
-            </div>
-          </div>;
         }
         const timeline = legacyTimeline(tr, clip);
         // Media has already been painted below this block. A one-clip Stage

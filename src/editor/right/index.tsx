@@ -15,7 +15,7 @@ import { connectMcpExecutor, EditorApi } from "../../ai/mcpExecutor";
 import { prerenderUrl } from "../prerender";
 import { getState, actions } from "../../store/project";
 import { allCards, getCard } from "../../kernel/registry";
-import { saveCardDefinition, applyCardDefinition } from "../../kernel/cardAuthoring.mjs";
+import { applyCardDefinition } from "../../kernel/cardAuthoring.mjs";
 import { cardFrameMode } from "../../render/frameMode.mjs";
 import { applyEnvelope, assertNo3dOnMedia, envelopeOf, isComposite, rejectAudioVolumeKeys } from "../../kernel/envelope";
 import { addPart as addPartToTree, movePart as movePartInTree, removePart as removePartFromTree, updatePart as updatePartInTree, validatePartTree } from "../../kernel/parts";
@@ -38,9 +38,11 @@ import { createAudioFxTools } from "./audioFxTools";
 import { createPixelMapTools } from "./pixelMapTools";
 import { audioPlanOf, soundingAt } from "../../kernel/audioPlan.mjs";
 import {
-  framePatchFromArgs, worldOf, rectToFrame, alignToFrame, alignIsInvisible, nudgeFrame, clampToStage, rectForSafeSide,
+  framePatchFromArgs, worldOf, rectToFrame, alignToFrame, alignIsInvisible, nudgeFrame, clampToStage, rectForSafeSide, frameBox,
   type Size,
 } from "../../kernel/layout";
+import { backRole, backStage, syncProject } from "../stageBridge";
+import type { RectWithBounds } from "../../render/solid";
 import { listCuts, resolveCut } from "../../kernel/cuts";
 import { invalidateScopes, isCardVisible, loadScopes, readVisibility, usedCardIds, type ScopeEntry } from "../cardScope";
 import { cameraFor, clampFov, DEFAULT_FOV_DEG, MAX_FOV_DEG, MIN_FOV_DEG } from "../../kernel/space3d";
@@ -56,53 +58,80 @@ function stageSize(): Size {
   return { width: p.width, height: p.height };
 }
 
+type ContentBox = { left: number; top: number; width: number; height: number } | null;
+const roundBox = (b: { left: number; top: number; width: number; height: number }): ContentBox =>
+  ({ left: Math.round(b.left), top: Math.round(b.top), width: Math.round(b.width), height: Math.round(b.height) });
+
 /**
  * 卡片的**实体内容**框:文字、图片、有底色的盒子这些真正画了东西的元素的并集,透明容器穿过去。
  * 判「会不会盖住人」要看它,不是画布框 —— 默认卡的画布 1920 宽,拿画布判永远是"会盖住"。
  *
- * 量的是预览 iframe 里真实渲染出来的 DOM(StageView 的 bounds),所以:
- *   - 先把当前 project 推给预览并同步渲染到播放头时刻(两者都是 flushSync),量到的是改完之后的样子;
- *   - 卡片此刻不在画面上(播放头不在它的区间)就量不到,返回 null 并说明,别当成"没内容"。
+ * **批量、一次往返**(D4 页面侧):把全部 clipId 一起问后台舞台(pinned 架构 4:用户交互的查询
+ * 跑在自己的离屏舞台,不打预渲染;第 3 步只有一个舞台,先对它测)——
+ *   先把当前 project 同步过去、setTime 到播放头,再 rectsWithBounds({ pixels: 'all' }) 一次拿回全部实体框。
+ * 素材段的 contentBox 一律等于其 frameCss 框(不在舞台里,按项目数据算)。
+ * 卡片此刻不在画面上(播放头不在它的区间)就量不到:contentBox 为 null 并附 contentNote,别当成"没内容"。
  */
-function measureContentBox(clipId: string): { contentBox: { left: number; top: number; width: number; height: number } | null; contentNote?: string } {
-  const s = window.__pcPreviewStage?.();
-  if (!s?.bounds) return { contentBox: null, contentNote: "预览窗口没就绪,量不到内容框;稍后再 get_layout" };
+async function measureContentBoxes(clipIds: string[]): Promise<Map<string, { contentBox: ContentBox; contentNote?: string }>> {
   const st = getState();
+  const out = new Map<string, { contentBox: ContentBox; contentNote?: string }>();
+  const stage = stageSize();
+  const cardIds: string[] = [];
+  for (const id of clipIds) {
+    const hit = findClip(st.project, id);
+    if (!hit) { out.set(id, { contentBox: null, contentNote: `找不到 clip ${id}` }); continue; }
+    if (!hit.clip.cardId) { out.set(id, { contentBox: roundBox(frameBox(hit.clip.frame, stage)) }); continue; }
+    cardIds.push(id);
+  }
+  if (!cardIds.length) return out;
+  const s = backStage();
+  if (!s) {
+    for (const id of cardIds) out.set(id, { contentBox: null, contentNote: "预览窗口没就绪,量不到内容框;稍后再 get_layout" });
+    return out;
+  }
+  let list: RectWithBounds[] = [];
   try {
-    /*
-     * 量之前先退出实体模式:播放中画面上是色块,量到的就是色块的框而不是内容的框。
-     * Agent 拿 contentBox 判「会不会盖住人」,量错了它会去挪本来不用挪的东西。
-     * 量完按当前播放状态放回去 —— 用户还在播就继续画色块。
-     */
-    s.setProxy?.(false);
-    s.setProject(st.project);
-    s.render(st.t, { jump: true });
-  } catch {
-    // 预览没准备好时 render 可能抛,量不到就量不到,别让整个工具失败
+    await syncProject(backRole(), st.project);
+    // 量之前先退出实体模式:播放中画面上是色块,量到的就是色块的框而不是内容的框(只在 ?proxy=1 的页面有效)
+    await s.setProxy(false);
+    await s.setTime(st.t);
+    list = await s.rectsWithBounds({ pixels: "all", clipIds: cardIds });
+  } catch (err) {
+    for (const id of cardIds) out.set(id, { contentBox: null, contentNote: `舞台没回应,量不到内容框:${err instanceof Error ? err.message : String(err)}` });
+    return out;
+  } finally {
+    try { await s.setProxy(st.playing); } catch { /* 恢复失败不该让工具失败 */ }
   }
-  const box = s.bounds(clipId);
-  try {
-    s.setProxy?.(st.playing);
-  } catch {
-    // 同上,恢复失败不该让工具失败
+  for (const id of cardIds) {
+    const r = list.find((x) => x.clipId === id);
+    if (!r) {
+      const hit = findClip(st.project, id);
+      const range = hit ? `${hit.clip.start}~${hit.clip.end}s` : "?";
+      out.set(id, { contentBox: null, contentNote: `这张卡此刻不在画面上(播放头 ${st.t}s 不在它的 ${range} 区间内),先 seek 进它的时段再读` });
+      continue;
+    }
+    out.set(id, { contentBox: roundBox(r.bounds ?? r.rect) });
   }
-  if (!box) {
-    const hit = findClip(st.project, clipId);
-    const range = hit ? `${hit.clip.start}~${hit.clip.end}s` : "?";
-    return { contentBox: null, contentNote: `这张卡此刻不在画面上(播放头 ${st.t}s 不在它的 ${range} 区间内),先 seek 进它的时段再读` };
-  }
-  const r = (v: number) => Math.round(v);
-  return { contentBox: { left: r(box.left), top: r(box.top), width: r(box.width), height: r(box.height) } };
+  return out;
 }
 
 /**
- * 定位工具返回的布局:local 是存下来的框(没设过为 null),world 是算出来的画面绝对位置
- * (box 画布、visualBox 缩放旋转后),contentBox 是量出来的实体内容框(见 measureContentBox)。
+ * 定位工具返回的布局(**纯计算**,不打舞台):local 是存下来的框(没设过为 null),world 是算出来的画面
+ * 绝对位置(box 画布、visualBox 缩放旋转后)。写工具(set_position / set_rect / align / nudge)只回这个;
+ * 实体内容框 contentBox 要另调 get_layout(contentLayoutOf)。
  */
-function layoutOf(clipId: string) {
+function frameLayoutOf(clipId: string) {
   const hit = findClip(getState().project, clipId);
   const frame = (hit?.clip as { frame?: ClipFrame } | undefined)?.frame;
-  return { clipId, local: frame ?? null, world: worldOf(frame, stageSize(), getState().project.camera3dFov), ...measureContentBox(clipId) };
+  return { clipId, local: frame ?? null, world: worldOf(frame, stageSize(), getState().project.camera3dFov) };
+}
+
+/** frameLayoutOf + 量出来的 contentBox(一次往返量全部 clipIds,见 measureContentBoxes) */
+async function contentLayoutOf(clipIds: string[]) {
+  const measured = await measureContentBoxes(clipIds);
+  const out: Record<string, ReturnType<typeof frameLayoutOf> & { contentBox: ContentBox; contentNote?: string }> = {};
+  for (const id of clipIds) out[id] = { ...frameLayoutOf(id), ...(measured.get(id) ?? { contentBox: null }) };
+  return out;
 }
 
 /**
@@ -128,7 +157,7 @@ function withFrame(clipId: string, next: (prev: ClipFrame | undefined, stage: Si
   if (!hit) throw new Error(`找不到 clip ${clipId}`);
   const prev = (hit.clip as { frame?: ClipFrame }).frame;
   actions.setClipFrame(clipId, next(prev, stageSize()));
-  return { ok: true, clipId, layout: layoutOf(clipId), look: lookHint(clipId) };
+  return { ok: true, clipId, layout: frameLayoutOf(clipId), look: lookHint(clipId) };
 }
 
 /**
@@ -331,9 +360,6 @@ export function RightPanel() {
        * 和 defaults 全量拉一遍,又贵又淹没重点。
        */
       listCards: (args) => {
-        const pythonDefinitions = getState().project.cardDefinitions?.filter(def => def.language === 'python') || [];
-        const python = pythonDefinitions.filter(def => !args?.cardId || def.id === args.cardId).map(def => ({ ...def, source: 'project', language: 'python', hint: '用apply_card创建实例；get_card_source读取Python源码' }));
-        if (args?.cardId && python.length) return python;
         /*
          * 卡片库对 Agent 暴露多少,由 editor/cardScope.ts 那三档决定 ——
          * 内置卡按组开关,用户卡看「是不是本项目建的 / 有没有标共享」。
@@ -347,7 +373,7 @@ export function RightPanel() {
           ? [findCard(args.cardId)]
           : allCards().filter((c) => isCardVisible(c, readVisibility(), cardScopes, getState().project.id ?? null, usedCardIds(getState().project)));
         const full = args?.detail === "full" || !!args?.cardId;
-        return [...python, ...wanted.map((c) => {
+        return wanted.map((c) => {
           const base = {
             id: c.id, name: c.name, description: c.description, source: c.source,
             frameMode: cardFrameMode(c),
@@ -360,7 +386,7 @@ export function RightPanel() {
             params: c.controls.map((ct) => (ct.required ? `${ct.key}*` : ct.key)),
             hint: "带 * 的是必填。要完整 schema 就用 list_cards({ cardId })。",
           };
-        })];
+        });
       },
       getProject: () => {
         const p = getState().project;
@@ -599,15 +625,15 @@ export function RightPanel() {
           look: lookHint(args.clipId), timeline: timelineDigest(getState().project),
         };
       },
-      getLayout: (args) => {
+      getLayout: async (args) => {
         const p = getState().project;
         if (args?.clipId) {
           if (!findClip(p, args.clipId)) throw new Error(`找不到 clip ${args.clipId}`);
-          return layoutOf(args.clipId);
+          return (await contentLayoutOf([args.clipId]))[args.clipId];
         }
-        const clips: Record<string, ReturnType<typeof layoutOf>> = {};
-        for (const tr of p.tracks) for (const c of tr.clips) if (c.cardId) clips[c.id] = layoutOf(c.id);
-        return { stage: stageSize(), clips };
+        // 全部卡片和素材段,一次往返(素材段的 contentBox = 它的 frameCss 框)
+        const ids = p.tracks.flatMap((tr) => tr.clips.map((c) => c.id));
+        return { stage: stageSize(), clips: await contentLayoutOf(ids) };
       },
       removeClip: (args) => {
         // 门槛:删自己刚建的卡、或一口气连删一串,要 force + reason。理由回显给用户。见 toolEcho.ts。
@@ -1859,17 +1885,6 @@ export function RightPanel() {
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok || !data.ok) throw new Error(data.error || `建卡失败(HTTP ${res.status})`);
-        if (data.definition?.language === 'python') {
-          let instance: { clipId: string; nodeId: string } | undefined;
-          actions.editCardProject(project => {
-            const next = saveCardDefinition(project, data.definition, { overwrite: args.overwrite });
-            if (!args.apply) return next;
-            const result = applyCardDefinition(next, { ...args.apply, cardId: args.id });
-            instance = { clipId: result.clipId, nodeId: result.nodeId };
-            return result.project;
-          });
-          return { ...data, ...(instance || {}), savedWithProject: true };
-        }
         refreshScopes();
         return data;
       },
@@ -1878,9 +1893,6 @@ export function RightPanel() {
        * 带 file 读这张卡用到的某个部件 / vendor 文件。
        */
       getCardSource: async (args) => {
-        const definition = getState().project.cardDefinitions?.find(def => def.id === args.cardId);
-        if (definition?.language === 'python') return { ok: true, id: definition.id, language: 'python', definition,
-          source: definition.source, entry: definition.entry, savedWithProject: true };
         const q = new URLSearchParams({ id: args.cardId, ...(args.file ? { file: args.file } : {}) });
         const res = await fetch(`/api/cards/source?${q}`);
         const data = await res.json().catch(() => ({}));
@@ -1889,25 +1901,19 @@ export function RightPanel() {
       },
       /** 局部替换式改卡(带 file 改部件文件)。整篇重写交给 createCard,那条路只该走一次(建卡)。 */
       editCard: async (args) => {
-        const definition = getState().project.cardDefinitions?.find(def => def.id === args.cardId);
         const res = await fetch("/api/cards/edit", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ id: args.cardId, file: args.file, find: args.find, replace: args.replace, replaceAll: args.replaceAll === true,
-            ...(definition?.language === 'python' ? { definition, metadata: args.metadata } : {}) }),
+          body: JSON.stringify({ id: args.cardId, file: args.file, find: args.find, replace: args.replace, replaceAll: args.replaceAll === true }),
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok || !data.ok) throw new Error(data.error || `改卡失败(HTTP ${res.status})`);
-        if (data.definition) actions.editCardProject(project => {
-          if (project.cardDefinitions?.find(def => def.id === args.cardId)?.source !== definition?.source) throw new Error('Card changed while editing; read current source again');
-          return saveCardDefinition(project, data.definition, { overwrite: true });
-        });
         return data;
       },
       applyCard: (args) => {
         let instance: { clipId: string; nodeId: string } | undefined;
         actions.editCardProject(project => {
-          const result = applyCardDefinition(project, args); instance = { clipId: result.clipId, nodeId: result.nodeId }; return result.project;
+          const result = applyCardDefinition(project, args, getCard); instance = { clipId: result.clipId, nodeId: result.nodeId }; return result.project;
         });
         return { ok: true, ...instance };
       },

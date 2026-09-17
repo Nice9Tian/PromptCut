@@ -4,7 +4,7 @@ import { captureFrame } from './capture-frame.mjs';
 import { framesInWindow } from '../src/render/frameWindow.mjs';
 import { planShardRanges } from '../src/render/shardPlan.mjs';
 import { waitFrameReady } from './frame-ready.mjs';
-import { installFrameMedia, prepareFrameMedia } from './frame-media.mjs';
+import { prepareFrameMedia } from './frame-media.mjs';
 import path from 'path';
 import fs from 'fs/promises';
 import fsSync from 'node:fs';
@@ -128,11 +128,12 @@ const CHROME_ARGS = [
 ];
 
 /**
- * 每个新文档加载前注入。挡掉 Vite 的 HMR / 心跳(它们会一直挂着网络请求),再放两个页面内的小工具:
- *   __bfSettle —— 让挂着的宏任务跑完,直到 DOM 不再变。React 经 Scheduler 的 MessageChannel 排的提交、
- *                 `v.on("change", setState)` 那条异步渲染都在这里落地;不排空的话它们会落到哪一帧取决于运气。
- *   控件、字体、图片就绪由 waitFrameReady 等待,超时明确失败。
- * 没有虚拟时间以后,页面里的 setTimeout 是真的会走的,所以这两件事可以在页面里做,省几趟往返。
+ * 每个新文档加载前注入。挡掉 Vite 的 HMR / 心跳(它们会一直挂着网络请求),再放毛玻璃遮罩那一套。
+ *
+ * `__bfSettle`(排空)、`__bfFreeze`(冻结成 HTML)和素材装载器(`__pcHideFrameMedia` /
+ * `__pcPrepareFrameMedia`)不在这里了:它们是页面 bundle 的一部分,见 `src/render/snapshotSettle.ts`、
+ * `src/render/snapshotFreeze.ts`、`src/render/frameMedia.ts`,由 `ExportView` / `StageView` 挂上
+ * (J1)。留在这里的只有 puppeteer 专用、页面自己用不着的东西。
  */
 function PAGE_PRELUDE() {
   const originalFetch = window.fetch;
@@ -149,77 +150,6 @@ function PAGE_PRELUDE() {
   }
   window.WebSocket = MockWebSocket;
   window.location.reload = () => console.log('Intercepted location.reload');
-  window.__bfSettle = async () => {
-    for (let k = 0; k < 4; k++) {
-      const b = window.__pcMutationCount ?? 0;
-      await new Promise((r) => setTimeout(r, 0));
-      if ((window.__pcMutationCount ?? 0) === b) return;
-    }
-  };
-  /*
-   * 把此刻的舞台冻结成一份自给自足的 HTML(HTML 采样缓存,见 scripts/replay-frames.mjs)。
-   * 三件事都是实测踩过的:
-   *   - 全部计算样式内联,并写死 animation:none / transition:none —— 注入后不能再有任何还在走的钟;
-   *   - id 统一改名并同步改掉 url(#…) / href="#…" —— SVG 渐变按 id 引用,重放页里要是还能解析到别的
-   *     同名元素,填充整片错掉(growth-curve 实测);
-   *   - canvas 换成同尺寸的图(读得出像素的话)—— 克隆出来的画布是空的,粒子和三维画面会整个消失。
-   *     读不出来(被污染、WebGL 没开 preserveDrawingBuffer)就留空画布,返回里 lossy 计数。
-   */
-  window.__bfFreeze = () => {
-    const stage = document.getElementById('root')?.firstElementChild;
-    if (!stage) return { html: '', lossy: 0 };
-    const clone = stage.cloneNode(true);
-    const orig = [stage, ...stage.querySelectorAll('*')];
-    const copy = [clone, ...clone.querySelectorAll('*')];
-    let lossy = 0;
-    for (let i = 0; i < orig.length; i++) {
-      const cs = getComputedStyle(orig[i]);
-      let s = '';
-      for (let k = 0; k < cs.length; k++) { const q = cs.item(k); s += q + ':' + cs.getPropertyValue(q) + ';'; }
-      s += 'animation:none !important;transition:none !important;';
-      copy[i].setAttribute('style', s);
-      if (orig[i].tagName === 'VIDEO' && orig[i].dataset.pcMediaSrc) {
-        copy[i].removeAttribute('src');
-        copy[i].removeAttribute('data-pc-media-src');
-        copy[i].setAttribute('preload', 'none');
-        copy[i].style.visibility = 'hidden';
-      }
-      // HTML replay deliberately carries no external image/video assets. MOV
-      // is the full-scene media lane; the HTML lane only needs deterministic
-      // control/layout state and must not trigger media fetches.
-      if (orig[i].tagName === 'IMG') {
-        copy[i].removeAttribute('src');
-        copy[i].removeAttribute('data-pc-media-src');
-        copy[i].style.visibility = 'hidden';
-      }
-      if (orig[i].tagName === 'CANVAS') {
-        let src = null;
-        try { src = orig[i].toDataURL('image/png'); } catch { src = null; }
-        if (src && src.length > 22) {
-          const img = document.createElement('img');
-          img.setAttribute('style', s);
-          img.setAttribute('width', String(orig[i].width));
-          img.setAttribute('height', String(orig[i].height));
-          img.src = src;
-          copy[i].replaceWith(img);
-        } else lossy++;
-      }
-    }
-    let html = clone.outerHTML;
-    const ids = new Set([...stage.querySelectorAll('[id]')].map((e) => e.id).concat(stage.id ? [stage.id] : []));
-    const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    for (const id of ids) {
-      const e = esc(id);
-      html = html
-        .replace(new RegExp(`(\\sid=")${e}(")`, 'g'), `$1${id}__r$2`)
-        .replace(new RegExp(`(url\\((?:&quot;|["'])?[^)"'&]*#)${e}((?:&quot;|["'])?\\))`, 'g'), `$1${id}__r$2`)
-        .replace(new RegExp(`((?:xlink:)?href="#)${e}(")`, 'g'), `$1${id}__r$2`);
-    }
-    const controls = [...clone.querySelectorAll('[data-pc-clip][data-pc-local-frame]')].map(el => ({
-      id: el.getAttribute('data-pc-clip'), frame: Number(el.getAttribute('data-pc-local-frame')), html: el.outerHTML,
-    }));
-    return { html, lossy, controls };
-  };
   /*
    * 毛玻璃遮罩(只渲卡片的导出用,见 server/export-compose.mjs 的 mask)。
    *
@@ -315,7 +245,6 @@ async function newSession(browser, url) {
     w.forEach((f) => f());
   };
   await client.send('Network.enable');
-  const cardRequests = new Set();
   client.on('Network.requestWillBeSent', (e) => {
     /*
      * <video>/<audio> 的媒体流不算。一段大视频挂在页面上,它的请求会一直开着边播边取,
@@ -324,19 +253,12 @@ async function newSession(browser, url) {
      * __pcFrameReady 逐层等 seek 到位,这里再等一遍既不需要也等不到。
      */
     if (e.type === 'Media') return;
-    // These are bounded render jobs, not ordinary asset downloads. LPAC cold
-    // start plus a nested Chrome source can exceed 30s on a busy machine; the
-    // card runner already enforces a 120s job limit. Interactive preview keeps
-    // its separate short watchdog and cancellation policy.
-    try {
-      if (/^\/api\/card-runtime\/(visual|source)$/.test(new URL(e.request.url).pathname)) cardRequests.add(e.requestId);
-    } catch { /* not an HTTP resource */ }
     inflight.set(e.requestId, `${e.type || '?'} ${String(e.request?.url || '').slice(0, 120)}`);
   });
   for (const ev of ['Network.loadingFinished', 'Network.loadingFailed', 'Network.requestServedFromCache']) {
-    client.on(ev, (e) => { inflight.delete(e.requestId); cardRequests.delete(e.requestId); drained(); });
+    client.on(ev, (e) => { inflight.delete(e.requestId); drained(); });
   }
-  const waitNet = (ms = cardRequests.size ? 120000 : 30000) => (inflight.size === 0 ? Promise.resolve() : new Promise((resolve, reject) => {
+  const waitNet = (ms = 30000) => (inflight.size === 0 ? Promise.resolve() : new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(
       `${inflight.size} 个网络请求 ${ms / 1000} 秒还没回来:页面可能挂着一直不结束的请求。`
       + `前几个:${[...inflight.values()].slice(0, 3).join(' | ')}`
@@ -367,7 +289,6 @@ async function newSession(browser, url) {
   };
 
   await page.evaluateOnNewDocument(PAGE_PRELUDE);
-  await page.evaluateOnNewDocument(installFrameMedia);
   console.log(`Navigating to ${url}...`);
   await client.send('Page.navigate', { url });
   console.log('Waiting for window.__pcReady...');

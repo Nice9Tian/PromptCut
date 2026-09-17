@@ -86,8 +86,9 @@ export function UnifiedPreview({ project, t, playing }: { project: Project; t: n
       clearTimeout(timer); running = true; pending = false;
       const clock = { ...latest.current };
       try {
+        // 播放走预渲染进程那条独立的泳道(A7):它挂得久,留在编辑器那个源上会占满浏览器的 6 条连接
         const status = await frameRequest("playback", project, { owner, sequence: ++sequence, ...clock, rate: 1, sentAt: Date.now(),
-          deliveryMs: Math.min(5000, player.deliveryMs + 150) }, controller.signal);
+          deliveryMs: Math.min(5000, player.deliveryMs + 150) }, controller.signal, { target: "prerender", lane: "playback" });
         if (active && !status.closed && clock.playing === latest.current.playing) {
           player.update(status);
           if (clock.playing) { setMissing(status.preview?.missing || []); setPlaybackPreview(status.preview?.url || null); }
@@ -108,7 +109,9 @@ export function UnifiedPreview({ project, t, playing }: { project: Project; t: n
     void pulse(); // Create the full-duration transparent MOV when opening a project.
     return () => {
       active = false; controller.abort(); clearTimeout(timer); cancelAnimationFrame(raf); player.close();
-      void frameRequest("playback", project, { owner, sequence: ++sequence, t: latest.current.t, playing: false, close: true }).catch(() => {});
+      // 关这一路也得发到同一个进程上,不然预渲染那边的这一路永远不收摊
+      void frameRequest("playback", project, { owner, sequence: ++sequence, t: latest.current.t, playing: false, close: true },
+        undefined, { target: "prerender", lane: "playback" }).catch(() => {});
     };
   }, [project]);
   useEffect(() => { wakePlayback.current(); }, [playing, project]);

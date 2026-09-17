@@ -10,7 +10,9 @@ import {
   defaultLayout,
   effectiveActive,
   gapToFullIndex,
+  hasPages,
   isAiItem,
+  isPageItem,
   isSectionItem,
   moveItem,
   sameLayout,
@@ -75,8 +77,8 @@ function persist(next: RailLayout) {
 
 let layout: RailLayout = initialLayout();
 persist(layout);
-// 拖空的一侧抽屉强制收起:上次关掉编辑器时就是空的,sideRails 那边的键又被清过,也要收着
-for (const side of SIDES) if (layout[side].length === 0) setRailCollapsed(side, true);
+// 拖空的一侧抽屉强制收起(只剩剪辑组也算空):上次关掉编辑器时就是空的,sideRails 那边的键又被清过,也要收着
+for (const side of SIDES) if (!hasPages(layout[side])) setRailCollapsed(side, true);
 
 const listeners = new Set<() => void>();
 
@@ -156,7 +158,8 @@ export function moveRailItem(item: ItemId, side: Side, shownGap: number): void {
   commit(res.layout);
   noteActivated(item);
   if (res.emptied) setRailCollapsed(res.emptied, true);
-  setRailCollapsed(side, false);
+  // 剪辑组没有页面:挪过去不用展开目标侧的抽屉
+  if (isPageItem(item)) setRailCollapsed(side, false);
 }
 
 /** 这一侧的「+」:新开一个 Agent 分页,插在这一侧最后一个 Agent 后面,并在这一侧打开 */
