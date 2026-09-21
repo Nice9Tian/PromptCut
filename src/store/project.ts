@@ -1,7 +1,10 @@
 // Facade for backward compatibility
+// 这里只转出拆分前 project.ts 本来就对外公开的那几个名字(EditorState / planPlacement /
+// getState / subscribe / useStore,再加下面拼出来的 actions)。core.ts 里的 state、set、
+// setProject、history、future、listeners、emit 等是包内原语,只给 src/store/actions 用,
+// 不从这里转出去。
 export type { EditorState } from "./core";
-export { getState, subscribe, useStore } from "./core";
-export * from "./core";
+export { getState, subscribe, useStore, planPlacement } from "./core";
 
 import { coreActions } from "./actions/coreActions";
 import { projectMeta } from "./actions/projectMeta";

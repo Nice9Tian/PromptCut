@@ -4,7 +4,6 @@ import {
 } from "../../kernel/cuts";
 
 import { state, set, setProject } from "../core";
-import { actions } from "../project";
 
 export const cuts = {
 
@@ -24,7 +23,7 @@ export const cuts = {
   addCut(name?: string, opts: { switchTo?: boolean } = {}) {
     const { project, cut } = addCutPure(state.project, name);
     setProject(project);
-    if (opts.switchTo !== false) actions.switchCut(cut.id);
+    if (opts.switchTo !== false) cuts.switchCut(cut.id);
     return cut;
   },
   renameCut(cutId: string, name: string) {

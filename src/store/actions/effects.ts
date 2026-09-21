@@ -5,7 +5,6 @@ import type { ClipPixelMap, PixelMapDef } from "../../kernel/pixelMap.mjs";
 import { checkCrossfade, checkFade, clampDur, transitionsOf, type Transition, type TransitionKind } from "../../kernel/transitions";
 
 import { state, setProject, clearTransitionFades, updateTrack, sortClips } from "../core";
-import { actions } from "../project";
 
 export const effects = {
 
@@ -180,6 +179,6 @@ export const effects = {
    * 的话谁都能随手挪走其中一段,溶解就悄悄散了。
    */
   applyCrossfade(aId: string, bId: string, dur: number): boolean {
-    return actions.addTransition({ kind: "crossfade", clipId: aId, otherClipId: bId, dur }).ok;
+    return effects.addTransition({ kind: "crossfade", clipId: aId, otherClipId: bId, dur }).ok;
   },
 };

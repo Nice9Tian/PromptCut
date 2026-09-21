@@ -3,7 +3,6 @@ import { stripAudioFxFromCuts, withoutAudioFx } from "../../kernel/cuts";
 import type { AudioFxDef, ClipAudioFx } from "../../kernel/audioFx.mjs";
 
 import { state, setProject, updateTrack } from "../core";
-import { actions } from "../project";
 
 export const audio = {
 
@@ -75,7 +74,7 @@ export const audio = {
     const hit = findClip(state.project, clipId);
     if (!hit) return { ok: false, error: `找不到片段 ${clipId}` };
     if (!hit.clip.mediaId) return { ok: false, error: "这段是卡片,不是素材,没有声音可转" };
-    const r = actions.audioFromVideo(hit.clip.mediaId);
+    const r = audio.audioFromVideo(hit.clip.mediaId);
     if (!r.ok) return r;
     if (r.media.id === hit.clip.mediaId) return { ok: true, mediaId: r.media.id, created: false, already: true };
     const p = state.project; // audioFromVideo 已经写过一次,这里要拿新的
