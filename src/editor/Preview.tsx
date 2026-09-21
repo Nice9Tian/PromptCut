@@ -1,5 +1,6 @@
 import { UnifiedPreview } from "./preview/UnifiedPreview";
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
+import { isScrubbing, subscribeScrub } from "./timeline/useScrub";
 import { MediaLayers } from "./preview/MediaLayers";
 import { Scene3DView } from "./preview/Scene3DView";
 import { themeStyle } from "../themes";
@@ -359,9 +360,16 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
    * 和卡片一起参与命中和描边。矩形就是片段的框,没设框就是整幅画面。
    */
   const mediaRects = useCallback((): { clipId: string; left: number; top: number; width: number; height: number }[] => {
+    /*
+     * R3:非 legacy 下素材层已经在舞台里了(E7 第 1 条),舞台的 `rects()` / `hitTest`
+     * 自己就认得它们(`data-pc-clip` 写在显示着的视频槽位和图片层上,D3 第 4 步)。
+     * 再补一份就会同一个 clipId 出现两次、命中时挑到错的那个。
+     * 这个 `useCallback` 整个删掉是 R7(D5 的「删主文档的 mediaRects」),那一步 legacy 也不要了。
+     */
+    if (dual) return [];
     const stageSize = { width: project.width, height: project.height };
     return videoLayersAt(project, t).map((l) => ({ clipId: l.clip.id, ...frameBox(l.clip.frame, stageSize) }));
-  }, [project, t]);
+  }, [dual, project, t]);
 
   /**
    * 一次往返拿全部活跃片段的外框 + 实体范围(rectsWithBounds,合并了以前 rects() 后逐个 bounds() 的 N+1)。
@@ -451,6 +459,34 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
       .then(() => s.setTime(t))
       .then(() => refreshRects(), () => {});
   }, [stageReady, t, playToken, stage, refreshRects]);
+
+  /*
+   * R3 的最小接线:非 legacy 下素材层在**舞台里**(E7 第 1 条),它要三样东西才动得起来 ——
+   * `mediaT`(跟哪一刻)、`scrubbing`(seek 放疏一点)、`playing`(只管素材层,不碰 K4 的节拍循环)。
+   *
+   * **两个舞台都发**(E3:「素材层 `mediaT = t`,两种角色一样」):K5 第二路互换前
+   * `back` 的素材必须已经在目标拍上,不然互换后偏差过 `HARD_SEEK_SEC`、必付一次硬 seek。
+   * 父页什么时候发 `setSnapshots` / `setSuppressed` 是 R5 的事,这里不发。
+   * legacy 下一条都不发 —— 那边素材层还在主文档。
+   */
+  const scrubbing = useSyncExternalStore(subscribeScrub, isScrubbing, isScrubbing);
+  useEffect(() => {
+    if (!dual || !stageReady) return;
+    for (const id of STAGE_IDS) {
+      const c = rpcRef.current[id];
+      if (!c) continue;
+      void c.setScrubbing(scrubbing).catch(() => {});
+      void c.setPlaying(playing).catch(() => {});
+    }
+  }, [dual, stageReady, scrubbing, playing]);
+  useEffect(() => {
+    if (!dual || !stageReady) return;
+    for (const id of STAGE_IDS) {
+      const c = rpcRef.current[id];
+      if (!c) continue;
+      void c.setMediaT(t).catch(() => {});
+    }
+  }, [dual, stageReady, t]);
 
   // 画面层和声音层都由 MediaLayers 管:可以同时有多条画面(重叠+淡化=交叉溶解),音频段单独出声
 

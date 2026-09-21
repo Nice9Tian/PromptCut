@@ -13,6 +13,8 @@ import type { CardDef, CardProps, Timeline } from "../kernel/types";
 import { cardMountedAt } from "./frameWindow.mjs";
 import { clipFrameMode } from "../kernel/frameMode.mjs";
 import { guardCompositing, shouldGuard } from "./capabilityGuard";
+import { ensurePlaneStyle } from "./planeStyle";
+import { renameSnapshotIds } from "./snapshotRename";
 
 // Keep direct-evaluation cards at the requested time while other cards replay.
 // Their CSS/DOM stays in the same stacking tree (including paper/glass styles),
@@ -32,13 +34,85 @@ const DirectCard = memo(function DirectCard({ def, params, ...props }: CardProps
  */
 export type ProxyRender = (clipId: string) => { color: string; box: { left: number; top: number; width: number; height: number } | null };
 
+/** G1 的一条流分组:长度 1 = 单卡流,> 1 = 组流(R8 之前恒空) */
+export interface StreamPlaneGroup {
+  clipIds: string[];
+}
+
+/**
+ * 舞台的六个可选 prop(E7)。**一个都不传 = 今天的行为一个字不差**(导出页、legacy 走的就是这条)。
+ * 机制统一照 `solidMode.ts` 的实体模式:组件永远挂着,包裹层加一个类、样式表藏掉子树,
+ * 要显示的东西是包裹层里的兄弟平面 —— 不改 key、不换子节点类型。
+ */
+export interface StagePlaneProps {
+  /** C3 / C4 的 HTML 快照,按 clipId。挂上 = 包裹层加 `.pc-snapshot` + 一个兄弟快照平面 */
+  snapshots?: ReadonlyMap<string, string>;
+  /** 播放中的重卡(E7 第 5 条):藏子树、传给组件的 `t` 冻在抑制开始那一刻 */
+  suppressed?: ReadonlySet<string>;
+  /** G1 的流平面分组(R8 之前恒空,渲染位置和 prop 先就位) */
+  streamPlanes?: readonly StreamPlaneGroup[];
+  /** K3:按片段重挂载的代数。key 和传给组件的 `playToken` 都换成它,**不传时退回整舞台 playToken** */
+  remountGen?: ReadonlyMap<string, number>;
+  /** K5 第一路:正在用子树虚拟时间追帧的片段 → 它此刻的**全局舞台毫秒** */
+  settling?: ReadonlyMap<string, number>;
+  /** E0 的 `setTime({ awaiting })`:这一帧的快照还没到,先藏着等 */
+  awaiting?: ReadonlySet<string>;
+}
+
+const EMPTY_SET: ReadonlySet<string> = new Set();
+
 /**
  * 舞台:按当前时刻挑出活跃 clip 并挂载。卡片以 clip.id + playToken 作 key,
  * 进入区间即重新挂载、从头播放(和导出时的行为一致)。
  */
-export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy }: { timeline: Timeline; t: number; directT?: number; playToken: number; speed?: number; proxy?: ProxyRender }) {
+export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, snapshots, suppressed, streamPlanes, remountGen, settling, awaiting }: { timeline: Timeline; t: number; directT?: number; playToken: number; speed?: number; proxy?: ProxyRender } & StagePlaneProps) {
   const timeOf = (c: Timeline['clips'][number]) => clipFrameMode(c, getCard(c.cardId)) === 'direct' ? directT : t;
   const active = timeline.clips.filter((c) => cardMountedAt(c, timeOf(c)));
+
+  /*
+   * 四种平面的样式表(E7)。只有真的用上这几个 prop 的宿主才注入 ——
+   * 导出页和 legacy 一个 prop 都不传,这张表不会出现在它们的文档里。
+   */
+  const usesPlanes = !!(snapshots || suppressed || streamPlanes || settling || awaiting);
+  useEffect(() => {
+    if (usesPlanes) ensurePlaneStyle();
+  }, [usesPlanes]);
+
+  /*
+   * 被抑制的卡传给组件的那个 `t` 要**冻在抑制开始那一刻**(E7 第 5 条)。
+   * 「进入抑制那一刻」用 ref 存上一次 render 的 suppressed 集合、在本次 render 里对比:
+   * 从不在到在 → 记当前 `cardT − clip.start`;从在到不在 → 删条目。
+   *
+   * 只冻**传给组件的那一支**。`cardT` 的其余用途(活跃判据、轨迹、不透明度、
+   * `data-pc-local-frame`)照常用实时值 —— 否则被抑制的卡永不下场,包裹层的轨迹停住
+   * 而流的 `<canvas>` 跟着错位。
+   *
+   * 放 Map 而不是单个值:live 路径下每个 clip 一个单片段 Stage、Map 里只有一条,
+   * 但同一份代码也服务导出 / legacy 的多片段 Stage。
+   */
+  const frozenT = useRef(new Map<string, number>());
+  const prevSuppressed = useRef<ReadonlySet<string>>(EMPTY_SET);
+  const supNow = suppressed ?? EMPTY_SET;
+  for (const c of active) {
+    if (supNow.has(c.id) && !prevSuppressed.current.has(c.id)) frozenT.current.set(c.id, Math.max(0, timeOf(c) - c.start));
+  }
+  for (const id of [...frozenT.current.keys()]) if (!supNow.has(id)) frozenT.current.delete(id);
+  prevSuppressed.current = supNow;
+
+  /**
+   * 传给组件的那个本地时间。三档,按优先级:
+   *   1. 正在追帧(`settling`)—— 读它自己的虚拟时间(值是全局舞台毫秒,这里现算本地);
+   *   2. 被抑制 —— 冻在抑制开始那一刻;
+   *   3. 平时 —— 实时值。
+   * 四支(组合卡 / 图卡 / DirectCard / 普通卡)口径一致,都走这里。
+   */
+  const localTOf = (clip: Timeline["clips"][number], base: number): number => {
+    const ms = settling?.get(clip.id);
+    if (ms !== undefined) return Math.max(0, ms / 1000 - clip.start);
+    const frozen = frozenT.current.get(clip.id);
+    if (frozen !== undefined) return frozen;
+    return Math.max(0, base - clip.start);
+  };
   // 自带三维场景的卡(scene-3d)要用和 A 层同一台相机,所以把画幅和 fov 一起递下去。
   // 对象整体透传,别的卡收到了也不看。
   const stageInfo = useMemo(() => ({ width: timeline.width, height: timeline.height, camera3dFov: timeline.camera3dFov }), [timeline.width, timeline.height, timeline.camera3dFov]);
@@ -128,13 +202,36 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy }:
           const op = hasOpacityControls(clip) ? cardOpacityAt(clip, cardT) : 1;
           // 强调(阴影 / 描边)沿 alpha 边缘走,所以挂在卡片外层这一格上;没设就一个字不写
           const filter = emphasisFilter(clip.emphasis);
+          /*
+           * K3:重挂载的粒度是片段。key 和**传给组件的 `playToken`** 都换成 `remountGen`,
+           * 不传时退回整舞台 `playToken`(导出页、legacy 行为不变)。两处必须一起换:
+           * `layoutId` 靠它换新、三维 / 终端卡靠它重播,只换 key 的话 Motion 会把重播当共享布局过渡。
+           */
+          const gen = remountGen?.get(clip.id) ?? playToken;
+          const isSettling = settling?.has(clip.id) ?? false;
+          const snapshotHtml = snapshots?.get(clip.id);
+          /*
+           * 平面的渲染条件是「在 `snapshots` 里」,类名是另一件事:
+           * **`.pc-settling` 与 `.pc-snapshot` 互斥** —— settling 期间只加 `.pc-settling`,
+           * 否则并集里 `display:none` 赢,子树没有布局盒、CSS 动画被取消成 idle,`syncIn` 一步都钉不上。
+           * `.pc-settling` 与 `.pc-suppressed` 同样互斥(两个集合本来就不相交,这里再兜一道)。
+           */
+          const cls = [
+            proxy ? "pc-proxy" : "",
+            !isSettling && snapshotHtml !== undefined ? "pc-snapshot" : "",
+            !isSettling && supNow.has(clip.id) ? "pc-suppressed" : "",
+            awaiting?.has(clip.id) ? "pc-awaiting" : "",
+            isSettling ? "pc-settling" : "",
+          ].filter(Boolean).join(" ");
+          // 这张卡该不该挂流平面(G1:单卡流挂在包裹层里;组流挂舞台根下的 [data-pc-group-plane])
+          const ownStream = streamPlanes?.some((g) => g.clipIds.length === 1 && g.clipIds[0] === clip.id) ?? false;
           return (
             <div
-              key={`${clip.id}:${playToken}`}
+              key={`${clip.id}:${gen}`}
               data-pc-clip={clip.id}
               data-pc-local-frame={Math.round((cardT - clip.start) * timeline.fps)}
               data-pc-frame-mode={clipFrameMode(clip, def)}
-              className={proxy ? "pc-proxy" : undefined}
+              className={cls || undefined}
               style={{
                 ...frameCss(clip.frame, timeline, m ? { dx: m.dx, dy: m.dy } : undefined),
                 ...(op < 1 ? { opacity: op } : null),
@@ -166,15 +263,15 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy }:
               */}
               {clip.cardId === "composite" && clip.parts?.length ? (
                 // 组合卡:部件实例树逐级渲染,画布尺寸就是这张卡的框(没有框 = 整个舞台)
-                <PartTree parts={clip.parts} size={frameBox(clip.frame, timeline)} t={Math.max(0, t - clip.start)} playToken={playToken} />
+                <PartTree parts={clip.parts} size={frameBox(clip.frame, timeline)} t={localTOf(clip, t)} playToken={gen} />
               ) : def.card ? (
                 // 图卡:经 Stage、有包裹层,hitTest / rects / 快照 / 抑制全部照常
                 <GraphCard def={def} clip={clip} graph={timeline.graph} fps={timeline.fps}
-                  t={Math.max(0, cardT - clip.start)} params={{ ...def.defaults, ...clip.params }} stage={stageInfo} />
+                  t={localTOf(clip, cardT)} params={{ ...def.defaults, ...clip.params }} stage={stageInfo} />
               ) : clipFrameMode(clip, def) === 'direct' ? (
-                <DirectCard def={def} params={clip.params} playToken={playToken} t={Math.max(0, cardT - clip.start)} duration={clip.end - clip.start} stage={stageInfo} />
+                <DirectCard def={def} params={clip.params} playToken={gen} t={localTOf(clip, cardT)} duration={clip.end - clip.start} stage={stageInfo} />
               ) : (
-                <C params={{ ...def.defaults, ...clip.params }} playToken={playToken} t={Math.max(0, cardT - clip.start)} duration={clip.end - clip.start} stage={stageInfo} />
+                <C params={{ ...def.defaults, ...clip.params }} playToken={gen} t={localTOf(clip, cardT)} duration={clip.end - clip.start} stage={stageInfo} />
               )}
               {/*
                 代理色块是卡片的**兄弟**,不是把卡片包起来 —— 真卡由 .pc-proxy 那条
@@ -198,10 +295,45 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy }:
                   />
                 );
               })() : null}
+              {/*
+                快照平面(E7 第 4 条)。和代理平面同一个位置:卡片的**兄弟**,不是把卡片包起来 ——
+                包一层 div 会让 React 在挂上 / 摘掉那一刻重挂载卡片,锚点就丢了。
+
+                **必须显式 `position:absolute; inset:0`**:不能假设所有卡根都是绝对定位
+                (odometer / checklist 的根是 `.hud-wrapper`,靠 hud.css 才是 absolute)。
+
+                `renameSnapshotIds` 按本片段 clipId 改名(A2(7)):共享快照会挂到多个片段上,
+                不改名的话 SVG 的 `url(#id)` 会解析到第一个,后挂的那片渐变整片错掉。
+                C4 换成同一片段的另一帧就是这个平面 innerHTML 的原子替换,前后两张不共存。
+              */}
+              {snapshotHtml !== undefined ? (
+                <div data-pc-snapshot-plane="" style={{ position: "absolute", inset: 0 }}
+                  dangerouslySetInnerHTML={{ __html: renameSnapshotIds(snapshotHtml, clip.id) }} />
+              ) : null}
+              {/*
+                流平面(E7 第 5 条,R8 才有内容)。`streamPlayer` 只往这个**已经存在的** `<canvas>`
+                上画,不做外部 `insertBefore` —— 否则会和代理平面、快照平面抢兄弟位置。
+                层序、overflow、zIndex 自动跟着包裹层走。
+              */}
+              {ownStream ? (
+                <canvas data-pc-stream-plane="" width={timeline.width} height={timeline.height}
+                  style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }} />
+              ) : null}
             </div>
           );
         })}
       </AnimClock>
+      {/*
+        组流平面(G1:一条流盖住相邻的好几张重卡)。它跨片段,挂不进任何一个包裹层,
+        所以落在舞台根下。z 序取组里最上面那张卡的那一层 —— 和包裹层用的是同一套 zIndex
+        (`active` 已经是画家顺序)。R8 之前 `streamPlanes` 恒空,这里一个节点都不会出现。
+      */}
+      {streamPlanes?.filter((g) => g.clipIds.length > 1).map((g) => {
+        const top = active.reduce((acc, c, i) => (g.clipIds.includes(c.id) ? Math.max(acc, i + 1) : acc), 0);
+        return <canvas key={g.clipIds.join(",")} data-pc-group-plane="" data-pc-stream-group={g.clipIds.join(",")}
+          width={timeline.width} height={timeline.height}
+          style={{ position: "absolute", inset: 0, width: "100%", height: "100%", zIndex: top }} />;
+      })}
     </div>
   );
 }
