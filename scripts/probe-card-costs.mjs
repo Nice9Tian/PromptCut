@@ -73,6 +73,9 @@
  * `${identityKey} ${device}`,拼进去之后旧记录自然不命中、会被重测,两套量法的成绩各占一条。
  * `COST_SCALE` **不拼** —— 它只影响怎么用这些数(判重和权重),不影响量出来的数本身。
  *
+ * 拼法本身在 `src/render/costDevice.mjs`,**常驻探针(`src/editor/probeRunner.ts`)import 同一份**:
+ * 两条路各写一遍的话任何一处顺序 / 空格不一致,两套记录就互相看不见(R4a 报告 §8 第 10 条)。
+ *
  * # dev 还是 build
  *
  * `--mode` 缺省自动判:`GET <origin>/@vite/client` 回 JS 模块就是 dev server,回别的
@@ -90,6 +93,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import puppeteer from 'puppeteer';
 
+import { costDeviceString } from '../src/render/costDevice.mjs';
 import { budgetOf, clipWeight } from '../src/render/pipelinePlan.mjs';
 import { DEFAULT_TUNING, PROBE_MAX_FRAMES, PROBE_MAX_MS, resolveTuning, robustStep } from '../src/render/pipelineTuning.mjs';
 
@@ -189,21 +193,14 @@ window.__kit = (async () => {
 })();
 
 /* 本机身份(J4):UA + WebGL 渲染器 + lowMemory / offscreenGl / glRoute。
-   一次性的丢弃上下文在**宿主页**里开,不碰舞台自己那个共享 WebGL 上下文。 */
-window.__deviceParts = () => {
-  let renderer = 'unknown';
-  try {
-    const cv = document.createElement('canvas');
-    const gl = cv.getContext('webgl2') || cv.getContext('webgl');
-    if (gl) {
-      const ext = gl.getExtension('WEBGL_debug_renderer_info');
-      renderer = String(ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER));
-      try { gl.getExtension('WEBGL_lose_context')?.loseContext(); } catch {}
-    }
-  } catch {}
+   一次性的丢弃上下文在**宿主页**里开,不碰舞台自己那个共享 WebGL 上下文。
+   读法和拼法都在 src/render/costDevice.mjs,常驻探针 import 的是同一份。 */
+window.__deviceParts = async () => {
+  const { readGpuRenderer, resolveGlRoute } = await import('/src/render/costDevice.mjs');
   const caps = window.__caps || {};
-  return { ua: navigator.userAgent, renderer, lowMemory: !!caps.lowMemory, offscreenGl: !!caps.offscreenGl,
-    glRoute: caps.lowMemory ? 'shared' : 'perDocument' };
+  const lowMemory = !!caps.lowMemory;
+  return { ua: navigator.userAgent, renderer: readGpuRenderer(document), lowMemory,
+    offscreenGl: !!caps.offscreenGl, glRoute: resolveGlRoute(null, lowMemory) };
 };
 
 /* 缩水项目:一条轨道一个 clip(形状同 FrameScene.tsx 的 legacyTimeline) */
@@ -488,9 +485,9 @@ try {
    * dev 那一趟和 build 那一趟会互相覆盖,而两组都要留着(见文件头)。服务端只把 device 当
    * 不透明字符串,不解析,所以键的代码不用动。
    * 量法的两个系数同理:改了它们旧成绩就不是一回事了,拼进去旧记录自然不命中、会被重测。
+   * 拼法住在 `src/render/costDevice.mjs`,常驻探针用的是同一个函数。
    */
-  const device = [parts.ua, parts.renderer, `lowMemory=${parts.lowMemory}`, `offscreenGl=${parts.offscreenGl}`,
-    `glRoute=${parts.glRoute}`, `mode=${mode}`, `stepP=${tuning.STEP_PERCENTILE}`, `stepN=${tuning.STEP_MIN_SAMPLES}`].join(' | ');
+  const device = costDeviceString({ ...parts, mode, tuning });
   console.log(`mode: ${mode}（${origin}）`);
   console.log(`tuning: COST_SCALE=${tuning.COST_SCALE} STEP_PERCENTILE=${tuning.STEP_PERCENTILE} STEP_MIN_SAMPLES=${tuning.STEP_MIN_SAMPLES}`
     + (JSON.stringify(tuning) === JSON.stringify(DEFAULT_TUNING) ? '（缺省）' : '（out/pipeline-tuning.json 覆盖过）'));
