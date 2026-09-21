@@ -48,7 +48,7 @@ declare global {
     __pcStaticProbe?: () => { anims: number; finished: number; raf: number; mut: number; video: boolean; canvas: boolean };
     /** 导出:把 Math.random 的种子拨回起点(每次重挂载卡片时调),让随机效果可复现 */
     __pcResetRandom?: (seed?: number) => void;
-    /** 导出:原地换项目,不重新导航。常驻烘焙进程复用同一个页面时用。 */
+    /** 导出:原地换项目,不重新导航。常驻预渲染进程复用同一个页面时用。 */
     __pcLoadProject?: (raw: unknown, options?: { deferCards?: boolean }) => Promise<void>;
     /** Restrict a sparse render to target-frame cards and seek before mounting. */
     __pcSetFrameWindow?: (clipIds: string[] | null, startTime: number, directTime?: number) => void;

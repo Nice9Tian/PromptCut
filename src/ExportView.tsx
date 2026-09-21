@@ -29,7 +29,7 @@ if (new URLSearchParams(location.search).has("export")) installFrameMedia();
 /*
  * ?cardsOnly=1:素材(视频 / 图片)一概不挂,只渲卡片的透明层。
  * 默认导出和 see_frames 走完整的 Chrome FrameScene；显式 --media=ffmpeg 时才走这条
- * 卡片透明层旁路。保留 cardsOnly 是为了兼容旁路和需要只烘卡片的调用。
+ * 卡片透明层旁路。保留 cardsOnly 是为了兼容旁路和需要只渲卡片的调用。
  */
 const CARDS_ONLY = new URLSearchParams(location.search).get("cardsOnly") === "1";
 function stripMedia(p: Project): Project {
@@ -253,8 +253,8 @@ export default function ExportView() {
         }),
       });
       /**
-       * 原地换一个项目,不重新导航。常驻烘焙进程靠它复用同一个页面:
-       * 起 Chrome + goto + 字体首次布局加起来是固定的几秒钟,每烘一次都重付一遍太贵。
+       * 原地换一个项目,不重新导航。常驻预渲染进程靠它复用同一个页面:
+       * 起 Chrome + goto + 字体首次布局加起来是固定的几秒钟,每渲一次都重付一遍太贵。
        * 走的是 install 自己,和重新加载页面同一条路径,不会两套行为。
        */
       window.__pcLoadProject = async (raw: unknown, options?: { deferCards?: boolean }) => {

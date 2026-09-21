@@ -81,21 +81,21 @@ async function run() {
       
       let page = null;
       try {
-        // 1. 烘焙 A (start=0.5)
+        // 1. 预渲染 A (start=0.5)
         const tlA = { width: 1920, height: 1080, fps: 30, duration: 4.5, clips: [{ id: 'c1', cardId: id, start: 0.5, end: 3.5, params: {} }] };
         const urlA = base + '&timeline=' + encodeURIComponent('data:application/json,' + encodeURIComponent(JSON.stringify(tlA)));
         await bakery.reset(null, urlA);
         const outA = path.resolve('out', 'card-audit', id, 'a');
         await bakeFrames(bakery, { out: outA, format: 'png', targetFrames: A_FRAMES, warm: 3 });
 
-        // 2. 烘焙 B (start=7.3)
+        // 2. 预渲染 B (start=7.3)
         const tlB = { width: 1920, height: 1080, fps: 30, duration: 11.5, clips: [{ id: 'c1', cardId: id, start: 7.3, end: 10.3, params: {} }] };
         const urlB = base + '&timeline=' + encodeURIComponent('data:application/json,' + encodeURIComponent(JSON.stringify(tlB)));
         await bakery.reset(null, urlB);
         const outB = path.resolve('out', 'card-audit', id, 'b');
         await bakeFrames(bakery, { out: outB, format: 'png', targetFrames: B_FRAMES, warm: 3 });
 
-        // 3. 烘焙 A2 (再次烘焙 start=0.5)
+        // 3. 预渲染 A2 (再次预渲染 start=0.5)
         await bakery.reset(null, urlA);
         const outA2 = path.resolve('out', 'card-audit', id, 'a2');
         await bakeFrames(bakery, { out: outA2, format: 'png', targetFrames: A_FRAMES, warm: 3 });

@@ -1,7 +1,7 @@
 /**
  * 逐帧导出的**命令行入口**(`npm run export`)。
  *
- * 渲染引擎本身不在这里了:整套库(找 ffmpeg、开烘焙间、逐帧烘、分片、素材解析、整片编排、
+ * 渲染引擎本身不在这里了:整套库(找 ffmpeg、开预渲染间、逐帧渲、分片、素材解析、整片编排、
  * Chrome 内混音)搬进了 `server/bakery/`,见 `server/bakery/index.mjs`。
  * 这个文件只剩两件事:解析参数,以及把参数交给 `exportFrames`。
  *

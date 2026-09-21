@@ -26,7 +26,7 @@ export function bareToolName(name: string): string {
 }
 
 /*
- * 「处理」是兜底,只该剩下真正要跑一阵的活儿(转写、追踪、检测、烘焙、自动流程)。
+ * 「处理」是兜底,只该剩下真正要跑一阵的活儿(转写、追踪、检测、预渲染、自动流程)。
  * 新工具落进「处理」的话,先想想它其实是在收集、改、读还是在点界面。
  */
 export function toolKind(rawName: string): ToolKind {

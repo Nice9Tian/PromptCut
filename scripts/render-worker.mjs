@@ -6,26 +6,26 @@ import { postFrame } from '../server/png-post.mjs';
  *
  * # 为什么要有它
  *
- * 以前每烘一次就 spawn 一个 node、起一个 Chrome、goto 一次导出页,这笔钱是**固定的**:
+ * 以前每渲一次就 spawn 一个 node、起一个 Chrome、goto 一次导出页,这笔钱是**固定的**:
  * 实测 `--frames 0-0`(起进程 + 起 Chrome + 加载页面 + 推第 0 帧 + 截 1 张)4211ms,
  * 其中推帧和截图加起来只占约 100ms。也就是说用户在 3D 视图里拖到一个新位置、
  * 板子还是色块的那几秒里,**四秒是在等一个浏览器开机**。
  *
- * 而 server/bakery 早就把「烘焙间」拆出来了(openBakery / bakery.reset / bakeFrames),
+ * 而 server/bakery 早就把「预渲染间」拆出来了(openBakery / bakery.reset / bakeFrames),
  * 并且验过复用的确定性:新开一个 page 是一个全新的 renderer,从没被启用过虚拟时间,
  * 和全新起一个浏览器等价 —— 见 openBakery 和 reset 的注释。这里只是把那套东西
  * 放进一个不退出的进程里。
  *
  * # 为什么用 IPC 而不是 stdin/stdout
  *
- * 烘焙过程本身往 stdout 写 `PAGE LOG:` 和进度,出错时父进程要拿最后几行当错误信息。
+ * 预渲染过程本身往 stdout 写 `PAGE LOG:` 和进度,出错时父进程要拿最后几行当错误信息。
  * 再往同一条管子里塞协议消息,两边都得先猜「这一行是日志还是消息」。走 `process.send`
  * 是另一条通道,互不干扰。
  *
  * # 消息
  *
  *   prewarm    { url }            现在就起 Chrome、停在导出页上,别等活来了才开机
- *   bake       { id, opts }       烘一趟(server/bakery 的 bakeFrames)
+ *   bake       { id, opts }       渲一趟(server/bakery 的 bakeFrames)
  *   post       { id, items }      这一帧交出去之前的像素活(合成素材层、压底色、缩图),见 server/png-post.mjs。
  *                                 放在这里做,是为了不占父进程(给编辑器供模块的 Vite)的事件循环
  *   cancel     { id }             不要这一趟了。**只换页,不换浏览器**(见下面第 1 条的例外)
@@ -36,18 +36,18 @@ import { postFrame } from '../server/png-post.mjs';
  *
  * # 三条自保规矩
  *
- * 1. **出过错的 bakery 一律丢掉。** 烘焙中途失败时页面可能挂着没排空的任务 —— 下一趟在这样的
- *    页面上接着烘,烘出来的东西不可信,而且**不报错**。所以宁可多付一次 3 秒的重开。
+ * 1. **出过错的 bakery 一律丢掉。** 预渲染中途失败时页面可能挂着没排空的任务 —— 下一趟在这样的
+ *    页面上接着渲,渲出来的东西不可信,而且**不报错**。所以宁可多付一次 3 秒的重开。
  *    例外是**取消**:它停在两帧之间(bakeFrames 每帧开头看一眼 signal),页面不在半路上,
  *    而下一趟本来就要换一张全新的页(resetWith),旧页随之关掉 —— 用不着重开浏览器。
- * 2. **烘够 MAX_JOBS 趟主动重开。** Chrome 长时间跑会慢慢涨内存(每趟一个新 renderer,
+ * 2. **渲够 MAX_JOBS 趟主动重开。** Chrome 长时间跑会慢慢涨内存(每趟一个新 renderer,
  *    旧的关掉但浏览器进程自己的堆不回落)。这台机器上多开 Chrome 踩过 0xC0000142,
  *    宁可定期换一个新的。
- * 3. **闲够 IDLE_EXIT_MS 就自己退。** 一个 worker 约 300~500MB,预烘一停就是纯占着。
+ * 3. **闲够 IDLE_EXIT_MS 就自己退。** 一个 worker 约 300~500MB,预渲染一停就是纯占着。
  *    退掉之后父进程下次要活时重新拉起来 —— 那时候用户已经在等了,但只等一次。
  */
 
-/** 烘几趟就换一个新浏览器 */
+/** 渲几趟就换一个新浏览器 */
 const MAX_JOBS = Number(process.env.PROMPTCUT_WORKER_MAX_JOBS) || 40;
 /**
  * 闲多久就自己退出(毫秒)。
@@ -60,12 +60,12 @@ const rawIdle = process.env.PROMPTCUT_WORKER_IDLE_MS;
 const IDLE_EXIT_MS = rawIdle === undefined || rawIdle === "" ? 180000 : Number(rawIdle);
 
 let bakery = null;
-/** 这个 bakery 已经烘过几趟 */
+/** 这个 bakery 已经渲过几趟 */
 let jobsDone = 0;
 let idleTimer = null;
 /** 正在跑的那一趟:取消消息靠 id 找到它的 AbortController */
 let current = null;
-/** 已经收到、还没做完的烘焙活(含排在本进程链上的)。只有它为 0 时才报 hot */
+/** 已经收到、还没做完的预渲染活(含排在本进程链上的)。只有它为 0 时才报 hot */
 let jobsInHand = 0;
 /** 还排在本进程链上、没开跑就被取消的活。只在手上还有活时才记,并且设上限,不会一直涨 */
 const cancelledEarly = new Set();
@@ -101,7 +101,7 @@ async function dropBakery() {
  *
  * 三种情形:没有 → 开一个(openBakery 自己会 goto);有但停在别的地址 → reset 换一个新 page;
  * 有且就停在这个地址 → **仍然要 reset**。最后这条容易被当成可以省掉的一步,不能省:
- * 上一趟烘完页面已经被推到了片尾、动画锚点全都建好了,原地再烘一趟拿到的不是第 0 帧的画面。
+ * 上一趟渲完页面已经被推到了片尾、动画锚点全都建好了,原地再渲一趟拿到的不是第 0 帧的画面。
  */
 async function bakeryFor(url) {
   lastUrl = url;
@@ -229,7 +229,7 @@ process.on('message', (msg) => {
         process.send?.({ type: 'error', id: msg.id, message: e?.message || String(e) });
       }
       /*
-       * 后处理做完再报一次 hot。烘帧那一趟收尾时报过,但那时父进程还在等这一步后处理、这台还算忙,
+       * 后处理做完再报一次 hot。渲帧那一趟收尾时报过,但那时父进程还在等这一步后处理、这台还算忙,
        * 那一声被忽略了(父进程只在空闲时认 hot);不在这里补的话,「热」就一直停在 0,
        * 热备调度退回到「挑一台空着的」,新活可能落到还在开备用页的那台上。
        */

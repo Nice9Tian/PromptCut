@@ -1,5 +1,5 @@
 /**
- * 烘焙间(bakery)—— 逐帧渲染引擎的统一出口。
+ * 预渲染间(bakery)—— 逐帧渲染引擎的统一出口。
  *
  * 原来整套代码挤在 `scripts/export-frames.mjs` 里(名义上是命令行脚本,实际被 `server/` 下
  * 一堆模块 import,形成 `server ↔ scripts` 双向依赖)。现在库在这里,`scripts/` 只剩命令行入口。
@@ -7,8 +7,8 @@
  *
  * 模块划分:
  *   `ffmpeg.mjs`         —— 找 ffmpeg / ffprobe、PNG 流式编码、读 ffmpeg 进度
- *   `chrome.mjs`         —— chrome-headless-shell 的启动参数、受帧控制的 page、烘焙间生命周期
- *   `bake.mjs`           —— 在一个烘焙间上逐帧推进并截图
+ *   `chrome.mjs`         —— chrome-headless-shell 的启动参数、受帧控制的 page、预渲染间生命周期
+ *   `bake.mjs`           —— 在一个预渲染间上逐帧推进并截图
  *   `shards.mjs`         —— 分片切法与并发度
  *   `media.mjs`          —— 素材来源解析、素材层规划、毛玻璃遮罩补齐
  *   `export.mjs`         —— 整片导出编排(卡片层 → 素材合成 → 音轨)

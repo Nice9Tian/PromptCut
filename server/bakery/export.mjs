@@ -1,5 +1,5 @@
 /**
- * 整片导出编排:开烘焙间 / 分片 / 统一管线 → 卡片层 → 素材合成 → 音轨。
+ * 整片导出编排:开预渲染间 / 分片 / 统一管线 → 卡片层 → 素材合成 → 音轨。
  *
  * 从 scripts/export-frames.mjs 拆出来(纯重构,逐字搬运)。命令行入口在 scripts/export-frames.mjs。
  */
@@ -21,7 +21,7 @@ import { mixAudioInChrome } from './audio-mix.mjs';
 import { exportUnified } from './export-unified.mjs';
 
 /**
- * 一次性导出:自己开 bakery、烘帧、合成视频、关掉。CLI 和现有的 /api/export 走这条。
+ * 一次性导出:自己开 bakery、渲帧、合成视频、关掉。CLI 和现有的 /api/export 走这条。
  * opts.workers:数字 / 'auto'（默认）。离散取样(targetFrames)和外部传进来的 bakery 一律单进程。
  * opts.media:素材怎么进成片。
  *   'chrome'(默认)—— 预览、see_frames、导出共用 FramePipeline/Chrome 页面，视频素材在截图帧才加载。

@@ -10,7 +10,7 @@ C1(挂载算式统一)和 H7 的验收口径是一句话:**不含 Python 卡的�
 ## 0. 前置:两棵树、两台 dev server、一份素材
 
 基线必须跑 **HEAD 那棵树自己的** `scripts/export-frames.mjs`(引擎在 `server/bakery/`)(引擎在 `server/bakery/`) —— 这次重构改的就是它,
-拿工作树的脚本去烘基线不是 apples-to-apples。所以基线用 git worktree,不动主树的 git 状态:
+拿工作树的脚本去渲基线不是 apples-to-apples。所以基线用 git worktree,不动主树的 git 状态:
 
 ```bash
 cd C:/Users/admin/Documents/PromptCut

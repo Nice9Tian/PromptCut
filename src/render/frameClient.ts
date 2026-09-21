@@ -5,7 +5,7 @@ import { alignMirror, resyncDataMirror } from "./dataMirror";
 export type FrameTarget = "user" | "prerender";
 export type FrameLane = "user" | "inter_face" | "agent" | "background" | "archive" | "playback";
 export interface FrameRequestOptions {
-  /** 人类预览同源；长任务和后台预烘可显式走预渲染进程。 */
+  /** 人类预览同源；长任务和后台预渲染可显式走预渲染进程。 */
   target?: FrameTarget;
   lane?: FrameLane;
 }

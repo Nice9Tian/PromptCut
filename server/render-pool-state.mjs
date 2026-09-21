@@ -5,7 +5,7 @@
  * 同样吃核。所以池子算「还剩几个槽位」时要把它算进去,而且按计划 3.3 节:
  *
  *   - 导出优先级最低,最多占「池子总数 − 1」个槽位,永远给 Agent 留一个;
- *   - 导出期间**暂停空闲预烘** —— 预烘是给 3D 视图猜着先烘的,这时用户多半不在看,
+ *   - 导出期间**暂停空闲预渲染** —— 预渲染是给 3D 视图猜着先渲的,这时用户多半不在看,
  *     让它和导出正常排,导出反而要排在一堆投机性的活后面。
  *
  * 两个插件(vite-plugin-export 记账,vite-plugin-vision 查账)在同一个进程里,共用这一份模块状态。
@@ -36,7 +36,7 @@ export function exportsRunning() {
   return exporting;
 }
 
-/** 导出开始 / 结束时通知(渲染池靠它在导出结束后接着派被暂停的预烘) */
+/** 导出开始 / 结束时通知(渲染池靠它在导出结束后接着派被暂停的预渲染) */
 export function onPoolChange(fn) {
   listeners.add(fn);
   return () => listeners.delete(fn);

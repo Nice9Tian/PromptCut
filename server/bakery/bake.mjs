@@ -1,7 +1,7 @@
 /**
- * 在一个已经开着的 bakery 上逐帧烘焙。
+ * 在一个已经开着的 bakery 上逐帧预渲染。
  *
- * 从 scripts/export-frames.mjs 拆出来(纯重构,逐字搬运);烘焙间本身在 ./chrome.mjs。
+ * 从 scripts/export-frames.mjs 拆出来(纯重构,逐字搬运);预渲染间本身在 ./chrome.mjs。
  */
 
 import path from 'path';
@@ -13,10 +13,10 @@ import { waitFrameReady } from './frame-ready.mjs';
 import { prepareFrameMedia } from './frame-media.mjs';
 
 /**
- * 在一个已经开着的 bakery 上烘一段帧。返回给 ffmpeg 用的那些参数。
+ * 在一个已经开着的 bakery 上渲一段帧。返回给 ffmpeg 用的那些参数。
  *
  * opts:
- *   format/quality —— 'png' 带 alpha(导出交付物要),'jpeg' 不带(预览烘焙够用)。
+ *   format/quality —— 'png' 带 alpha(导出交付物要),'jpeg' 不带(预览用的预渲染够用)。
  *                     PNG 走 optimizeForSpeed:仍然无损(实测逐字节解码后与普通 PNG 相同),只是压得快、文件大一倍。
  *   staticSkip     —— 画面静止的帧直接复用上一张,连截都不截。判据见 ExportView 的 __pcStaticProbe
  *   verifyEvery    —— 连续复用多少帧就强制真截一张比对一次

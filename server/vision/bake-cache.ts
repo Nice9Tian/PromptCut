@@ -9,10 +9,10 @@ import path from "node:path";
 import { mediaDir } from "../vite-plugin-media";
 
 /**
- * 磁盘上现有的烘焙文件。键就是文件名尾巴上那 12 位输入哈希(见 bakeTarget)。
+ * 磁盘上现有的预渲染文件。键就是文件名尾巴上那 12 位输入哈希(见 bakeTarget)。
  *
- * 预烘焙的调度要先知道「哪些已经有了、各自多大」才能排队和算占用 ——
- * 而这个答案只有服务端有:浏览器那边关一次页面就忘了,上次开着编辑器烘出来的文件
+ * 预渲染的调度要先知道「哪些已经有了、各自多大」才能排队和算占用 ——
+ * 而这个答案只有服务端有:浏览器那边关一次页面就忘了,上次开着编辑器预渲染出来的文件
  * 它一个都不认识。
  */
 export async function listBakes(root: string): Promise<{ key: string; name: string; bytes: number }[]> {
@@ -36,10 +36,10 @@ export async function listBakes(root: string): Promise<{ key: string; name: stri
 }
 
 /**
- * 删掉指定的烘焙文件。**只认键,不认路径。**
+ * 删掉指定的预渲染文件。**只认键,不认路径。**
  *
  * 客户端传来的键要和服务端**自己列出来的目录**逐个比对,只有对得上的才删。
- * 所以传什么进来都跑不出 out/media,也碰不到烘焙以外的文件 ——
+ * 所以传什么进来都跑不出 out/media,也碰不到预渲染以外的文件 ——
  * 安全性来自「拿列表比对」,不来自对字符串长什么样的猜测。
  */
 export async function evictBakes(root: string, keys: unknown): Promise<{ deleted: string[]; freedBytes: number }> {

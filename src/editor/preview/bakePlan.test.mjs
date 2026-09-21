@@ -1,12 +1,12 @@
 /**
- * 预烘焙排队算法的单测。跑:node --test src/editor/preview/bakePlan.test.mjs
+ * 预渲染排队算法的单测。跑:node --test src/editor/preview/bakePlan.test.mjs
  *
  * 这套东西错了不会报错,只会「有时候要等五秒」或者「out/media 里悄悄堆几千个文件」——
  * 最难查的那一类。所以把意图钉死:
  *   - 屏幕上正显示的那几个时刻永远排最前,而且**不受预算限制**;
  *   - 其余按离播放头的距离两侧交替,一样远时优先往后;
  *   - 更远的从 0 开始按时间铺;
- *   - 占用只算**已经烘出来的文件的真实字节**,没烘的不占,不估;
+ *   - 占用只算**已经渲出来的文件的真实字节**,没渲的不占,不估;
  *   - 对不上号的文件排最后:空间够就留着,不够才最先被挤出去。
  *
  * 这些用例做过变异测试:把上面每一条分别改坏,都至少有一个用例挂。
@@ -46,7 +46,7 @@ test("一张卡在播,也只有「最贴近现在」的那个时刻算 current",
   const cur = p.jobs.filter((j) => j.phase === "current");
   assert.equal(cur.length, 1, "同一张卡只有一个时刻是 current");
   assert.equal(cur[0].t, 4);
-  // 同一张卡后面几秒的样子也要烘,只是不和「现在这一帧」抢优先级
+  // 同一张卡后面几秒的样子也要渲,只是不和「现在这一帧」抢优先级
   assert.equal(p.jobs.length, 5);
   assert.deepEqual(p.jobs.slice(1).map((j) => j.phase), ["near", "near", "near", "near"]);
 });
@@ -301,7 +301,7 @@ test("归一让低帧率成为逐帧的子集 —— 这是 canonFrameT 现在�
 
   /*
    * 先证明**不归一就是对不上的**:30fps 下 0.25 秒 = 7.5 帧,所以 0.25 / 0.75 / 1.25 / 1.75
-   * 根本不落在帧格子上。对不上的后果是同一瞬间烘两遍,而且低帧率那张不算进绿条的覆盖。
+   * 根本不落在帧格子上。对不上的后果是同一瞬间渲两遍,而且低帧率那张不算进绿条的覆盖。
    */
   const fineSetRaw = new Set(fineRaw);
   const missRaw = coarseRaw.filter((t) => !fineSetRaw.has(t));

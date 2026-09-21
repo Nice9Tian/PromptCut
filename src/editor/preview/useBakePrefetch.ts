@@ -5,29 +5,29 @@ import { isScrubbing } from "../timeline/useScrub";
 import { prerenderUrl } from "../../render/prerender";
 
 /**
- * 空闲时把贴图预先烘好。排队规则见 bakePlan.ts,这里只管**什么时候动手**。
+ * 空闲时把贴图预先渲好。排队规则见 bakePlan.ts,这里只管**什么时候动手**。
  *
  * # 三条不能破的规矩
  *
- * 1. **不跟用户抢。** 烘一张要起一个 Chrome、四五秒,而且服务端那条渲染路是**串行**的
- *    (enqueue)。所以用户正在看的那张要是排在预烘后面,就得干等 —— 本来是来提速的,
- *    反而卡了一下。于是:只在浏览器空闲时发,而且前台一有烘焙请求就立刻让路(见下面那道闸)。
- * 2. **一次只烘一张。** 并发发过去也是在服务端排队,只会让「让路」变得不可能。
+ * 1. **不跟用户抢。** 预渲染一张要起一个 Chrome、四五秒,而且服务端那条渲染路是**串行**的
+ *    (enqueue)。所以用户正在看的那张要是排在预渲染后面,就得干等 —— 本来是来提速的,
+ *    反而卡了一下。于是:只在浏览器空闲时发,而且前台一有渲染请求就立刻让路(见下面那道闸)。
+ * 2. **一次只渲一张。** 并发发过去也是在服务端排队,只会让「让路」变得不可能。
  * 3. **拖动时不动手。** 拖进度条会连续改 t,每一格都重排一次队没有意义。
  *    等它停下来一会儿再说(IDLE_MS)。
  *
  * # 为什么盘点要问服务端
  *
- * 缓存在磁盘上,浏览器关一次页面就全忘了 —— 上次开编辑器烘出来的文件,前端一个都不认识。
+ * 缓存在磁盘上,浏览器关一次页面就全忘了 —— 上次开编辑器预渲染出来的文件,前端一个都不认识。
  * 所以每轮先问一次 /api/vision/bake-status:哪些已经有了、各自多大、还有哪些是没人认领的旧文件。
  * 不问的话占用永远算不准,out/media 只会一直涨。
  *
- * 顺带解决了另一件事:**键只认服务端算的那一个**。烘焙、盘点、清理三方共用 `bakeTarget`,
- * 前端不自己算一套 —— 两处各算各的,迟早会「明明烘过却当成没烘」,而且不报错。
+ * 顺带解决了另一件事:**键只认服务端算的那一个**。预渲染、盘点、清理三方共用 `bakeTarget`,
+ * 前端不自己算一套 —— 两处各算各的,迟早会「明明预渲染过却当成没渲」,而且不报错。
  *
- * # 烘哪几个时刻不由这里决定
+ * # 预渲染哪几个时刻不由这里决定
  *
- * 一张卡在它那几秒里是会动的,要烘的是**若干个时刻**;挑哪几个是 `bakeTime.ts` 的事,
+ * 一张卡在它那几秒里是会动的,要渲的是**若干个时刻**;挑哪几个是 `bakeTime.ts` 的事,
  * 由调用方算好了传进来。这里只管「什么时候动手」和「按什么顺序、留多少」。
  */
 
@@ -38,23 +38,23 @@ const REST_MS = 4000;
 /**
  * 没活干的时候歇多久。
  *
- * 全烘完之后如果还按 REST_MS 去问,就是**每 4 秒列一次目录、stat 上百个文件,一直到关页面为止**。
+ * 全渲完之后如果还按 REST_MS 去问,就是**每 4 秒列一次目录、stat 上百个文件,一直到关页面为止**。
  * 实测就是这样:界面上什么都没发生,网络面板里 bake-status 一条接一条。
  * 所以没活干就逐次翻倍往后退,退到一分钟一次;用户一改东西立刻退回 REST_MS(见 backoff 的重置)。
  */
 const IDLE_MAX_MS = 60000;
 
 /**
- * 前台烘焙的让路闸。
+ * 前台渲染的让路闸。
  *
- * 3D 视图看到缺贴图会自己发一次烘焙请求(那是用户正盯着的),
- * 而服务端渲染是串行的。前台开工前后各调一次,预烘就会停下来等它。
+ * 3D 视图看到缺贴图会自己发一次渲染请求(那是用户正盯着的),
+ * 而服务端渲染是串行的。前台开工前后各调一次,预渲染就会停下来等它。
  */
 let foreground = 0;
 export function beginForegroundBake() { foreground++; }
 export function endForegroundBake() { foreground = Math.max(0, foreground - 1); }
 
-/** 要烘的一个时刻。哪几个时刻由调用方挑(见 bakeTime.ts 的 sampleTimesFor) */
+/** 要预渲染的一个时刻。哪几个时刻由调用方挑(见 bakeTime.ts 的 sampleTimesFor) */
 export interface WantedMoment {
   clipId: string;
   t: number;
@@ -68,15 +68,15 @@ export interface WantedMoment {
 
 export interface PrefetchStatus {
   /**
-   * 已经烘好的:`<clipId>@<t>` → 贴图 URL。
-   * 键带上时刻,因为同一张卡会烘好几个时刻,只按 clipId 存会互相覆盖。
+   * 已经渲好的:`<clipId>@<t>` → 贴图 URL。
+   * 键带上时刻,因为同一张卡会渲好几个时刻,只按 clipId 存会互相覆盖。
    */
   ready: Map<string, string>;
-  /** 已经烘好的文件一共占多少磁盘(实测字节) */
+  /** 已经渲好的文件一共占多少磁盘(实测字节) */
   footprintBytes: number;
   budgetBytes: number;
   fileCount: number;
-  /** 正在烘的那张(给状态条显示) */
+  /** 正在渲的那张(给状态条显示) */
   baking: { clipId: string; phase: string } | null;
   /** 还排着多少张 */
   queued: number;
@@ -118,7 +118,7 @@ export function useBakePrefetch({
 }: {
   project: any;
   t: number;
-  /** 整条片子要烘的所有时刻。调用方算好传进来(bakeTime.ts 的 sampleTimesFor) */
+  /** 整条片子要预渲染的所有时刻。调用方算好传进来(bakeTime.ts 的 sampleTimesFor) */
   moments: WantedMoment[];
   enabled: boolean;
   budgetBytes?: number;
@@ -126,7 +126,7 @@ export function useBakePrefetch({
   const [status, setStatus] = useState<PrefetchStatus>(EMPTY);
   /*
    * project / t / moments 走 ref:它们每拖一下都在变,进 effect 依赖会让整轮调度不停重启,
-   * 结果就是永远停在「盘点」那一步,一张也烘不出来。
+   * 结果就是永远停在「盘点」那一步,一张也渲不出来。
    * effect 只认 enabled,循环里每次都读最新值。
    */
   const projRef = useRef(project);
@@ -157,14 +157,14 @@ export function useBakePrefetch({
     let dead = false;
     let cancelIdle: (() => void) | null = null;
     const ready = new Map<string, string>();
-    /** 这一刻正在烘(给绿条标出来)。烘完置回 null */
+    /** 这一刻正在渲(给绿条标出来)。渲完置回 null */
     let latestBakingAt: number | null = null;
 
-    /** 等到「浏览器空闲」且「用户停手」且「前台没在烘」 */
+    /** 等到「浏览器空闲」且「用户停手」且「前台没在渲」 */
     const waitIdle = () => new Promise<void>((resolve) => {
       const attempt = () => {
         if (dead) return resolve();
-        // 手还按在播放头上就一律不动手 —— 拖动时每一格都会改 t,烘出来的全是一闪而过的位置
+        // 手还按在播放头上就一律不动手 —— 拖动时每一格都会改 t,渲出来的全是一闪而过的位置
         const quiet = Date.now() - touchedAt.current >= IDLE_MS && !isScrubbing();
         if (quiet && foreground === 0) return resolve();
         cancelIdle = onIdle(attempt);
@@ -173,7 +173,7 @@ export function useBakePrefetch({
     });
 
     /**
-     * 把覆盖情况发给绿条。`bakingAt` 从 `latestBakingAt` 读 —— 它在烘的过程中会变,
+     * 把覆盖情况发给绿条。`bakingAt` 从 `latestBakingAt` 读 —— 它在渲的过程中会变,
      * 而这个函数在每轮盘点后调一次,不能把当时那个瞬间的值封进闭包。
      */
     const publishBaked = (all: BakeMoment[], known: Map<string, number>, fpAtRequest: Map<string, string>) => {
@@ -184,7 +184,7 @@ export function useBakePrefetch({
       /*
        * **按卡分开发布**,每条带上这张卡当时的内容指纹。
        *
-       * 合成一整条的话,就只有这个循环能更新它 —— 而这个循环要等当前这批烘完、
+       * 合成一整条的话,就只有这个循环能更新它 —— 而这个循环要等当前这批渲完、
        * 再盘点一次才轮得到发布,于是「改完卡片条子纹丝不动」。分卡存之后,
        * 画条子的那一侧拿当前项目的指纹一对就知道哪条作废了,不用等这里。
        */
@@ -203,7 +203,7 @@ export function useBakePrefetch({
          *
          * 盘点是异步的:请求发出去之后用户可能已经改了这张卡。拿"现在的指纹"去盖一份
          * "改之前的盘点结果",等于把过期数据盖上有效的戳 —— 实测过:改完 29ms 条子正确变白,
-         * 591ms 那个在途的盘点回来,又把它涂回去了,而那一刻它根本还没重烘。
+         * 591ms 那个在途的盘点回来,又把它涂回去了,而那一刻它根本还没重渲。
          * 条子说有、拖过去要等五秒,正是最不能接受的那种骗人。
          *
          * 带上当时的指纹之后,这种过期结果和当前项目对不上,画条子那一侧自动滤掉。
@@ -221,7 +221,7 @@ export function useBakePrefetch({
             t: m.t, start: m.start, end: m.end, tier: m.tier, fine: m.fine,
           })),
         });
-        // 盘点问回来「这个键在磁盘上」的,就是已经烘好的那些时刻
+        // 盘点问回来「这个键在磁盘上」的,就是已经渲好的那些时刻
         for (const m of ms) if (isBaked(m)) baked.add(momentId(m.clipId, m.t));
       }
       publishCoverage({ clips, baked, bakingAt: latestBakingAt, bytes });
@@ -229,7 +229,7 @@ export function useBakePrefetch({
 
     const post = async (url: string, payload: unknown, signal?: AbortSignal) => {
       /*
-       * 预烘挂得久、一次两批,发到**预渲染进程的源**上,不占编辑器自己那个源的连接
+       * 预渲染挂得久、一次两批,发到**预渲染进程的源**上,不占编辑器自己那个源的连接
        * (浏览器同源只给约 6 条;挤满了编辑器要的模块、素材、接口全都得排队,见 src/render/prerender.ts)。
        */
       const res = await fetch(await prerenderUrl(url), {
@@ -249,7 +249,7 @@ export function useBakePrefetch({
     /**
      * 歇着,但**用户一动就立刻醒**。
      *
-     * 原来这里是一句 `await sleep(backoff)`,而 backoff 全烘完之后会翻倍到 60 秒。
+     * 原来这里是一句 `await sleep(backoff)`,而 backoff 全渲完之后会翻倍到 60 秒。
      * 后果:改一张卡的参数 —— 它那几段缓存当场作废 —— 而进度条上的黄绿条还挂着,
      * 板子上还贴着改之前的图,**最长要等一分钟**才刷新。用户看到的就是"改了没反应"。
      *
@@ -290,13 +290,13 @@ export function useBakePrefetch({
 
           /*
            * 键一律用服务端算的那个(bakeTarget)。前端不自己算一套 ——
-           * 两处各算各的,迟早会「明明烘过却当成没烘」,而且不报错,只是白白多等五秒。
+           * 两处各算各的,迟早会「明明预渲染过却当成没渲」,而且不报错,只是白白多等五秒。
            * 盘点是按 (clipId, t) 一一对应回来的,所以顺序就是 wanted 的顺序。
            */
           const known = new Map<string, number>();
           const planMoments: BakeMoment[] = [];
           for (const it of st.items ?? []) {
-            // 烘不了的(素材段之类)服务端会带 error 回来,跳过,别一直重试
+            // 渲不了的(素材段之类)服务端会带 error 回来,跳过,别一直重试
             if (!it.key) continue;
             const w = wanted.find((m) => m.clipId === it.clipId && m.t === it.t);
             if (!w) continue;
@@ -318,7 +318,7 @@ export function useBakePrefetch({
            * 把「哪几段已经能立刻看到画面」发给时间轴顶上那条绿条。
            *
            * 用**这一轮盘点的结果**发,而不是用前端记的那份:盘点是问服务端要的,
-           * 上次开编辑器烘出来的文件也算数;只按这次会话烘过的算,绿条会从零开始涨,
+           * 上次开编辑器预渲染出来的文件也算数;只按这次会话渲过的算,绿条会从零开始涨,
            * 明明磁盘上早就有了。
            */
           publishBaked(planMoments, known, fpAtRequest);
@@ -326,7 +326,7 @@ export function useBakePrefetch({
           /* ② 排队:眼前 → 两侧 → 从 0 铺;同一份名单顺便算出该删哪些 */
           const plan = planBakes({ moments: planMoments, t: now, budgetBytes: budget, known });
 
-          /* ③ 先删再烘:腾出来的空间这一轮就能用上 */
+          /* ③ 先删再渲:腾出来的空间这一轮就能用上 */
           let evicted = 0;
           if (plan.evict.length) {
             // 键全是服务端给的,它那边还会再拿目录比对一次,删不到 out/media 以外的东西
@@ -344,7 +344,7 @@ export function useBakePrefetch({
           });
 
           /*
-           * ④ **一批一批烘**,每批填满服务端的渲染池。
+           * ④ **一批一批渲**,每批填满服务端的渲染池。
            *
            * 以前是一张一张发的,而服务端一次能并行跑好几个(28 核的机器上是 7 个)——
            * 一张一张发等于让池子空着 6 个槽位干等。批的大小跟着服务端报的 concurrency 走,
@@ -358,21 +358,21 @@ export function useBakePrefetch({
            * 同时挂几个请求在飞。
            *
            * **一批刚好填满池子,不等于池子一直是满的。** 一批里那几张卡的活儿长短差很多
-           * (烘一张卡要从第 0 帧顺推到它所在的帧,所以贵在它排在时间轴多靠后,和它自己
+           * (预渲染一张卡要从第 0 帧顺推到它所在的帧,所以贵在它排在时间轴多靠后,和它自己
            * 长不长没关系)。一个请求要等**最慢的那张**才返回,于是每批的尾巴上池子都在塌:
-           * 先烘完的那几个槽位空着,干等最后一张。批越大,尾巴越长。
+           * 先渲完的那几个槽位空着,干等最后一张。批越大,尾巴越长。
            *
            * 所以同时挂两批:A 收尾的时候 B 的活已经在池子里了,槽位不落空。
            *
            * 为什么是 2 而不是更多:浏览器对同一个源只给约 6 条 HTTP/1.1 连接,而**贴图本身
-           * 也要走这些连接**取回来。Scene3DView 那边踩过一次:挂了 4 个烘焙请求之后,
-           * 连取一张已经烘好的图的 GET 都排不进去,表现成「拖回已经预烘过的地方也不刷新」。
+           * 也要走这些连接**取回来。Scene3DView 那边踩过一次:挂了 4 个渲染请求之后,
+           * 连取一张已经渲好的图的 GET 都排不进去,表现成「拖回已经预渲染过的地方也不刷新」。
            * 两批(前台那张再占一条)还剩三条给图,够用。
            */
           const INFLIGHT = 2;
           /**
            * 一趟最多捎多少个同卡时刻。**顺路的那部分几乎免费**:服务端从第 0 帧顺推,
-           * 「烘第 F 帧」已经把 0..F 推了一遍,同一张卡其余 ≤F 的时刻只多花一次截图(约 78ms),
+           * 「渲第 F 帧」已经把 0..F 推了一遍,同一张卡其余 ≤F 的时刻只多花一次截图(约 78ms),
            * 而单独开一趟要 4400ms。封顶是怕一个请求跑太久 —— 用户拖走时掐掉的那一趟越长越亏
            * (虽然不浪费:服务端照样落盘)。
            */
@@ -399,7 +399,7 @@ export function useBakePrefetch({
               try {
                 /*
                  * 用户一动就把这批掐掉。实测:不掐的话「改完一张卡到进度条更新」要 11.8 秒,
-                 * 其中 7.8 秒是干等这批烘完 —— 而这批烘的还是**改之前**那一版,早就作废了。
+                 * 其中 7.8 秒是干等这批渲完 —— 而这批渲的还是**改之前**那一版,早就作废了。
                  *
                  * 掐掉不浪费:服务端不会因此停手,图照样落盘(见 bakeOne 的 bakeInFlight),
                  * 只是这一轮不再等它。
@@ -428,7 +428,7 @@ export function useBakePrefetch({
                   if (j && typeof b.bytes === "number") known.set(j.key, b.bytes);
                 }
               } catch (e: any) {
-                // 一批烘不出来不该让整轮停摆,下一轮盘点会重新遇到它们;
+                // 一批渲不出来不该让整轮停摆,下一轮盘点会重新遇到它们;
                 // 被掐掉的更不算错 —— 那是项目变了、我们自己主动放弃的
                 if (!dead && e?.name !== "AbortError") setStatus((s) => ({ ...s, error: String(e?.message || e) }));
               } finally {
@@ -478,7 +478,7 @@ export function useBakePrefetch({
             }
             if (dead) return;
             /*
-             * 满了就停。**最多超出还在飞的那几批**(几十 KB × INFLIGHT)—— 因为没烘出来之前
+             * 满了就停。**最多超出还在飞的那几批**(几十 KB × INFLIGHT)—— 因为没渲出来之前
              * 不知道它多大,而为了这几十 KB 去估一个大小,反而会把整套东西建在猜测上。
              */
             if (footprint >= budget) break;
@@ -511,7 +511,7 @@ export function useBakePrefetch({
           }
           /*
            * 这一轮的活全排出去了,等挂着的那几批回来再进下一轮盘点。
-           * 不等的话下一轮会拿着「还没落盘」的盘点结果重排一遍,把正在烘的那些又排一次。
+           * 不等的话下一轮会拿着「还没落盘」的盘点结果重排一遍,把正在渲的那些又排一次。
            */
           await Promise.allSettled([...flying].map((f) => f.p));
         } catch (e: any) {
@@ -519,7 +519,7 @@ export function useBakePrefetch({
         }
         /*
          * 这一轮干了活,或者用户在这期间动过东西 → 下一轮马上来;
-         * 否则说明已经烘齐了,逐次翻倍往后退,免得空转着一直问服务端。
+         * 否则说明已经渲齐了,逐次翻倍往后退,免得空转着一直问服务端。
          */
         /*
          * 因为**有变化**才回到这里的:立刻重排,别再歇。手上这份计划已经作废了,

@@ -6,7 +6,7 @@
  *   2. compare —— 把两个 frames 目录逐帧比 sha256,报第一处不同、并对不同的帧数像素差。
  *
  * 为什么 run 要带 --tree:基线跑的必须是 **HEAD 那棵树自己的** scripts/export-frames.mjs(引擎在 server/bakery/)(引擎在 server/bakery/)
- * (这次重构改的就是它),拿工作树的脚本去烘基线就不是 apples-to-apples 了。
+ * (这次重构改的就是它),拿工作树的脚本去渲基线就不是 apples-to-apples 了。
  * 所以 run 只负责 `node scripts/export-frames.mjs …`,cwd 指到哪棵树就用哪棵树的代码。
  * cwd 还决定素材目录:server/bakery/media.mjs 的 mediaRootDir() = <cwd>/out/media
  * (PROMPTCUT_EXPORT_DIR 没设时),/@media/<文件名> 两边都得有那份文件。

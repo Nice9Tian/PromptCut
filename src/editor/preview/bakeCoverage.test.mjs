@@ -3,8 +3,8 @@
  *
  * 这条绿条要么是可信的,要么就该拆掉:它承诺的是「绿的地方拖过去立刻有画面」。
  * 画多了就是骗人(拖过去还要等五秒,条却是绿的),画少了就白等。所以把意图钉死:
- *   - 一个烘好的时刻覆盖到**同一张卡的下一个时刻**为止,最后一个管到卡结束;
- *   - 没烘的时刻不产生任何绿色;
+ *   - 一个预渲染好的时刻覆盖到**同一张卡的下一个时刻**为止,最后一个管到卡结束;
+ *   - 没渲的时刻不产生任何绿色;
  *   - 相邻的段要合并,不能画成一排带缝的小块;
  *   - 覆盖范围不能超出这张卡自己的区间。
  */
@@ -20,7 +20,7 @@ const none = () => false;
 
 test("一个烘好的时刻,管到同一张卡的下一个时刻为止", () => {
   const m = spread("a", 0, 4, [0, 1, 2]);
-  // 只有 t=1 烘好了 → 覆盖 [1,2),不该蔓延到 0 或 2 之后
+  // 只有 t=1 渲好了 → 覆盖 [1,2),不该蔓延到 0 或 2 之后
   const segs = coverageSegments(m, (x) => x.t === 1);
   assert.deepEqual(segs, [{ start: 1, end: 2 }]);
 });
@@ -48,7 +48,7 @@ test("烘到一半:前半段绿、后半段不绿 —— 整段涂绿会骗人",
 
 test("中间断开的两段不能合并", () => {
   const m = spread("a", 0, 5, [0, 1, 2, 3, 4]);
-  // 烘了 0 和 3,中间 1、2 没烘
+  // 渲了 0 和 3,中间 1、2 没渲
   const segs = coverageSegments(m, (x) => x.t === 0 || x.t === 3);
   assert.deepEqual(segs, [{ start: 0, end: 1 }, { start: 3, end: 4 }]);
 });
@@ -107,7 +107,7 @@ const { visibleCoverage, clipFingerprint, momentId } = await import("./bakeCover
 
 /**
  * 造一张卡的覆盖:[a,b) 里按 step 铺时刻。覆盖表存的是**事实**(有哪些时刻),
- * 段落由 visibleCoverage 现算 —— 这样前台烘完只要往 baked 里加一个 id 就行。
+ * 段落由 visibleCoverage 现算 —— 这样前台渲完只要往 baked 里加一个 id 就行。
  */
 const CC = (clipId, fp, a, b, step = 1) => {
   const moments = [];
@@ -116,7 +116,7 @@ const CC = (clipId, fp, a, b, step = 1) => {
   }
   return { clipId, fp, start: a, moments };
 };
-/** 把这几张卡的所有时刻都标成已烘 */
+/** 把这几张卡的所有时刻都标成已渲 */
 const allBaked = (clips) => new Set(clips.flatMap((c) => c.moments.map((m) => m.id)));
 const COV = (clips, baked) => ({ clips, baked: baked ?? allBaked(clips), bakingAt: null, bytes: 0 });
 
@@ -155,11 +155,11 @@ test("全改了:条子整条空,不是留着旧的骗人", () => {
 
 test("没烘的时刻不产生颜色,烘一个就多一段 —— 段是现算的,不是存死的", () => {
   const a = CC("a", "fpA", 0, 3);           // 三个时刻:0 / 1 / 2
-  const cov = COV([a], new Set());           // 一个都没烘
+  const cov = COV([a], new Set());           // 一个都没渲
   const live = new Map([["fpA", 0]]);
   assert.deepEqual(visibleCoverage(cov, live).coarse, [], "一个都没烘就没有颜色");
 
-  // 只烘中间那一刻 → 只覆盖 [1,2)
+  // 只渲中间那一刻 → 只覆盖 [1,2)
   const one = { ...cov, baked: new Set([momentId("a", 1)]) };
   assert.deepEqual(visibleCoverage(one, live).coarse, [{ start: 1, end: 2 }]);
   assert.equal(visibleCoverage(one, live).coarseBaked, 1);
@@ -175,7 +175,7 @@ test("指纹只认「决定像素」的东西:改参数会变,挪位置不会", 
   assert.notEqual(clipFingerprint(edited), clipFingerprint(base), "改参数必须作废");
 });
 
-/* ── 前台现烘完也要记账,否则条子慢半拍 ─────────────────────────── */
+/* ── 前台现场渲染完也要记账,否则条子慢半拍 ─────────────────────── */
 
 test("markBaked 让「刚烘好的那一刻」立刻算进覆盖", async () => {
   const m = await import("./bakeCoverage.ts");
@@ -184,7 +184,7 @@ test("markBaked 让「刚烘好的那一刻」立刻算进覆盖", async () => {
   const live = new Map([["fpA", 0]]);
   assert.deepEqual(m.visibleCoverage(m.getCoverage(), live).coarse, [], "还没烘,没有颜色");
 
-  // 前台现烘完了那一刻 —— 只给一个 id,不用重新盘点、不用重算段
+  // 前台现场渲染完了那一刻 —— 只给一个 id,不用重新盘点、不用重算段
   m.markBaked([momentId("a", 1)]);
   assert.deepEqual(m.visibleCoverage(m.getCoverage(), live).coarse, [{ start: 1, end: 2 }],
     "画面出来了,条子必须同一刻就跟上");
@@ -205,7 +205,7 @@ test("markBaked 会通知订阅者(条子靠这个重画)", async () => {
 
 /* ── 挪一下位置 / 剪短一点:条子必须当帧说实话 ─────────────────────
  *
- * 这两条是从一次实测来的:项目里六张卡全部烘好、条子全绿,把 [20,24] 那张挪到 27 秒,
+ * 这两条是从一次实测来的:项目里六张卡全部渲好、条子全绿,把 [20,24] 那张挪到 27 秒,
  * 条子**仍然在 [20,24] 上画着绿**,而那块时间轴已经空了,`stale` 还报 0。
  * 指纹里故意不带时间轴位置(挪一下像素不变),所以光看指纹看不出卡挪没挪;
  * 而每个时刻记的都是绝对秒,卡走了它们还留在原地。
@@ -249,11 +249,11 @@ test("指纹是黑名单:clip 上除了位置,别的字段改了都要作废", (
   }
 });
 
-/* ── 本来就没东西要烘的那几段,也该是有色的 ──────────────────────
+/* ── 本来就没东西要渲的那几段,也该是有色的 ──────────────────────
  *
  * 用户报的现象:「有时候某一段时间没有素材,时间条那里永远不会变绿」。
  * 那几秒拖过去立刻就是它该有的样子(空的),按条子的契约就该有色;
- * 一直留白的话,用户分不清「还没烘」和「本来就没东西」,看上去像预烘卡死了。
+ * 一直留白的话,用户分不清「还没渲」和「本来就没东西」,看上去像预渲染卡死了。
  */
 const { idleSpans } = await import("./bakeCoverage.ts");
 

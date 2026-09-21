@@ -333,7 +333,7 @@ export async function exportVideo(
 ): Promise<{ outDir: string; id: string }> {
   const p = JSON.parse(JSON.stringify(getState().project)) as Project;
   /*
-   * 导出在**预渲染进程**上跑(它和渲染池共用槽位记账,导出期间暂停空闲预烘,见 render-pool-state.mjs)。
+   * 导出在**预渲染进程**上跑(它和渲染池共用槽位记账,导出期间暂停空闲预渲染,见 render-pool-state.mjs)。
    * 上传、提交、进度推送都直接发到它的源上:进度流要挂整整一趟导出,挤在编辑器自己的源上会占着连接。
    */
   const base = await prerenderBase();
