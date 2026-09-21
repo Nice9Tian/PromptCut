@@ -15,6 +15,7 @@ const control = (clipId, count, firstFrame = 0) => ({ clipId, count, sampling: {
 const scheduler = wanted => ({
   playhead: () => ({ t: 0, playing: true, wanted }),
   playheadWanted: FramePipeline.prototype.playheadWanted,
+  notePromotion: FramePipeline.prototype.notePromotion,
   nextBatchStart: FramePipeline.prototype.nextBatchStart,
 });
 
@@ -42,8 +43,22 @@ test('wanted 落在哪一批,哪一批就提前(本地帧 = 全局帧 - firstFra
   assert.equal(scheduler([{ clipId: 'a', frame: 50 }]).nextBatchStart(pending, control('a', 1000, 100)), 0);
   assert.equal(scheduler([{ clipId: 'a', frame: 99999 }]).nextBatchStart(pending, control('a', 1000, 100)), 0);
   // 读不到播放头(编辑器还没推过)时不抛
-  const blind = { playhead: () => { throw new Error('没有镜像'); }, playheadWanted: FramePipeline.prototype.playheadWanted, nextBatchStart: FramePipeline.prototype.nextBatchStart };
+  const blind = { playhead: () => { throw new Error('没有镜像'); }, playheadWanted: FramePipeline.prototype.playheadWanted,
+    notePromotion: FramePipeline.prototype.notePromotion, nextBatchStart: FramePipeline.prototype.nextBatchStart };
   assert.equal(blind.nextBatchStart(pending, control('a', 1000, 100)), 0);
+});
+
+test('插队记进诊断(预渲染进程的 stdout 被编辑器进程收走了,探针只能从这里看)', () => {
+  const pipeline = scheduler([{ clipId: 'a', frame: 1000 }]);
+  const pending = new Set(Array.from({ length: 250 }, (_, i) => i * 4));
+  pipeline.nextBatchStart(pending, control('a', 1000, 100));
+  assert.equal(pipeline.promotions.length, 1);
+  assert.equal(pipeline.promotions[0].clipId, 'a');
+  assert.equal(pipeline.promotions[0].start, 900);
+  assert.equal(pipeline.promotions[0].instead, 0);
+  // 留最近 32 条,不无限长
+  for (let n = 0; n < 40; n++) pipeline.nextBatchStart(pending, control('a', 1000, 100));
+  assert.equal(pipeline.promotions.length, 32);
 });
 
 test('wanted 指向的正是顺序批时不重排(也就不会刷日志)', () => {
