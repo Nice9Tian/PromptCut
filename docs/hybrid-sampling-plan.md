@@ -53,7 +53,7 @@
 **已经做到的:**
 
 - 同一张卡的多个时刻合成一趟渲染(`renderFrames`)。实测 7 个时刻从 31.0 s 降到 2.7 s,输出逐字节相同(`vite-plugin-vision.ts:1013`)。
-- 编辑器预览烘焙、`get_gif` 都走这条路。
+- 编辑器预览的预渲染、`get_gif` 都走这条路。
 
 **还在反复付准备时间的地方:**
 
@@ -78,7 +78,7 @@
 
 - 做了:`--dom-cache` 每帧冻结整棵 DOM,gzip 后每帧 8~15 KB;乱序重放 300/300 相同。
 - 没做:「变化量 + 数值表」,以及拟合回 React 组件。
-- 只有 `server/bakery/bake.mjs` 和 `scripts/replay-frames.mjs` 用到这套缓存;see_frames、烘焙、导出都没接。
+- 只有 `server/bakery/bake.mjs` 和 `scripts/replay-frames.mjs` 用到这套缓存;see_frames、预渲染、导出都没接。
 - 重放截图和实时截图有边缘差异:rank-bars 60 帧里 35 帧相同、最大通道差 71;growth-curve 最大差 95。
 - 重放截图每帧 66~90 ms。
 - 出处:`docs/render-rebuild-plan.md:143-154`。

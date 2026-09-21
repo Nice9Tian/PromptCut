@@ -6,7 +6,7 @@
 |---|---|---|
 | 0 字体地基 | 完成(第 3 条除外) | 主题字体栈补齐 Consolas / Segoe UI Symbol / 中文字体,`themeStyle` 把 `--font-mono` 接到主题;`scripts/font-audit.mjs` 零告警。**第 3 条「字体随包分发」没做**:要换掉系统字体(雅黑 / 苹方不能随包分发),成片观感会变,等设计决定 |
 | 1 beginFrame 后端 | 完成 | `scripts/export-frames.mjs`(引擎后来搬到 `server/bakery/`),接口不变;旧后端归档到 `scripts/archive/`。全长 1800 帧 107.7 → 26.9 ms/帧 |
-| 2 常驻 worker + 打包 | 完成 | render-worker / `/api/export` / see_frames / bake_card / 预烘都走同一个 `openBakery`,自动换上新后端;`prepare-runtime.mjs` 带上 headless-shell;打补丁升上来缺它时自动安装 |
+| 2 常驻 worker + 打包 | 完成 | render-worker / `/api/export` / see_frames / bake_card / 预渲染都走同一个 `openBakery`,自动换上新后端;`prepare-runtime.mjs` 带上 headless-shell;打补丁升上来缺它时自动安装 |
 | 3 卡片审计 | 完成(脚本 + 首次实跑),**3 张卡待修** | `scripts/card-audit.mjs`,89 张:确定性 89/89;位置无关不过 3 张 —— `mu-word-rotate`(最大通道差 250)、`versus-card`(40)、`lottie-bodymovin`(42);结构不稳定 2 张(`chapter-bar`、`terminal-3d`);`particles-nasa` 挂载时访问外网 |
 | 4 HTML 采样缓存 | 完成 | `--dom-cache` + `scripts/replay-frames.mjs`;id 改名、画布转图、关动画;乱序重放 300/300 相同 |
 | 5 分片并行 | 完成但**不提速** | `--workers N` 输出逐字节相同,但 1/4/8 个进程 54.8/44.8/62.4 秒;默认单进程 |
@@ -119,8 +119,8 @@ beginFrame 采样器(chrome-headless-shell,我们给帧时间)
    出处:"实测 `--frames 0-0`(起进程 + 起 Chrome + 加载页面 + 推第 0 帧 + 截 1 张)4211ms,其中推帧和截图加起来只占约 100ms"——`scripts/render-worker.mjs` 头注释。beginFrame 省的是每帧的钱,开机那 4 秒要靠常驻 worker 省,两件事叠加。
 2. 打包带上 headless-shell。现在是专门排除的:
    出处:"Skip headless shell to save ~200 MB"——`desktop/scripts/prepare-runtime.mjs` 拷贝 Chrome 那一段(约 461 行)。实测 headless-shell 152 占 270 MB,完整 Chrome 429 MB。
-   两个选项:**(a) 两个都带**,安装包 +270 MB;**(b) 导出/烘焙链路只用 headless-shell**,完整 Chrome 只留给需要真浏览器的采集/网页工具(`server/web/browser.mjs`)。推荐 (a) 先上,确认稳定后再评估 (b)。
-3. 3D 视图的预烘(`src/editor/preview/bakePlan.ts` / `bakeTime.ts` / `useBakePrefetch.ts`)走同一个后端。预烘排的是「时刻」,烘一个时刻变快,绿条(`bakeCoverage.ts`)铺得更快,不用改排队逻辑。
+   两个选项:**(a) 两个都带**,安装包 +270 MB;**(b) 导出/预渲染链路只用 headless-shell**,完整 Chrome 只留给需要真浏览器的采集/网页工具(`server/web/browser.mjs`)。推荐 (a) 先上,确认稳定后再评估 (b)。
+3. 3D 视图的预渲染(`src/editor/preview/bakePlan.ts` / `bakeTime.ts` / `useBakePrefetch.ts`)走同一个后端。预渲染排的是「时刻」,渲一个时刻变快,绿条(`bakeCoverage.ts`)铺得更快,不用改排队逻辑。
 
 ### 阶段 3:全卡片适配审计(2 天)
 
@@ -174,7 +174,7 @@ beginFrame 采样器(chrome-headless-shell,我们给帧时间)
 
 粒子、scene-3d 这类本来就在画布上的内容,可以不截图,直接 `VideoFrame(canvas).copyTo` 读回 RGBA(实测约 8.4 ms/帧),再由 ffmpeg 按层序合成。
 
-**硬限制:画布层上面不能压着毛玻璃卡。** 出处:"`backdrop-filter` 会坏掉。`hud.css` 的毛玻璃按定义采样它背后的东西,单独烘焙时背后什么都没有"——`docs/3d-layers.md`「为什么默认不烘焙」。19 张卡用了毛玻璃,所以只有画布层在最上面或和毛玻璃卡不重叠的时段才能拆。
+**硬限制:画布层上面不能压着毛玻璃卡。** 出处:"`backdrop-filter` 会坏掉。`hud.css` 的毛玻璃按定义采样它背后的东西,单独预渲染时背后什么都没有"——`docs/3d-layers.md`「为什么默认不预渲染」。19 张卡用了毛玻璃,所以只有画布层在最上面或和毛玻璃卡不重叠的时段才能拆。
 
 ## 不做的事(都实测或核实过)
 
