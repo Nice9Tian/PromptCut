@@ -43,14 +43,19 @@ try {
   const aFrame = PNG.sync.read(frames.get(8).buf).data;
   const direct = PNG.sync.read(late).data;
   assert.ok(aFrame.every((v, i) => Math.abs(v - direct[i]) <= 2), "track bitmap round-trip differs by at most two channel levels");
-  assert.equal((await service.see_frames(project, [.8])).get(8).source, 'rendered');
+  // 第二次取同一帧是缓存命中。整帧缓存从累积 PNG 换成 MOV 之后(8774613),命中的来源叫 'mov';
+  // 'rendered' 只剩读旧 PNG 缓存那条兼容路。
+  assert.equal((await service.see_frames(project, [.8])).get(8).source, 'mov');
   await service.preload(project); await service.background;
   assert.equal(entry.status, 'ready', entry.error);
   const prerendered = (await service.see_frames(project, [.8])).get(8).buf;
   assert.ok(PNG.sync.read(prerendered).data.equals(aFrame), 'C must exactly match the A pipeline');
   const probe = JSON.parse(execFileSync(ffmpeg.replace(/ffmpeg(\.exe)?$/, 'ffprobe$1'), ['-v', 'error', '-count_frames', '-show_entries', 'stream=nb_read_frames', '-of', 'json', path.join(entry.dir, 'preview.mp4')], { encoding: 'utf8' }));
   assert.equal(Number(probe.streams[0].nb_read_frames), 10);
-  const exported = await exportUnified(project, { url: origin + '/?export=1', out: path.join(root, 'exported'), targetFrames: [8] });
+  // 导出页自己不知道要渲哪个项目,得经 ?timeline= 带进去(同 verify-export-frame-content.mjs);
+  // 不带的话它渲的是页面默认项目,和这里的 320×180 对不上。
+  const exportUrl = `${origin}/?export=1&timeline=${encodeURIComponent('data:application/json,' + encodeURIComponent(JSON.stringify(project)))}`;
+  const exported = await exportUnified(project, { url: exportUrl, out: path.join(root, 'exported'), targetFrames: [8] });
   const exportedFrame = PNG.sync.read(await fs.readFile(path.join(exported.framesDir, '000008.png'))).data;
   assert.ok(exportedFrame.equals(aFrame), 'export must exactly match see_frames');
   console.log('PASS: no video during B; all HTML frames; exact video seek; random replay; cache hits; cumulative C equals A; streamed video contains all 10 frames.');
