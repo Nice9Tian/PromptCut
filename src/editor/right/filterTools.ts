@@ -11,7 +11,7 @@ import {
   describeFilter, EXPR_HELP, FILTER_KINDS, isAnimated, normalizeClipParams, normalizeFilterDef,
   type ClipFilter, type FilterDef,
 } from "../../kernel/filters.mjs";
-import { lookHint } from "./toolEcho";
+import { lookHint } from "../../mcp/tools/toolEcho";
 
 export interface FilterStore {
   getState(): { project: Project };

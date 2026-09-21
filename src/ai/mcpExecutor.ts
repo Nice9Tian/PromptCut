@@ -64,7 +64,7 @@ export interface EditorApi {
   listTransitions(): any;
   addTransition(args: { kind: string; clipId: string; otherClipId?: string; dur?: number }): any;
   removeTransition(args: { transitionId: string }): any;
-  // 序列(轨道)。校验和门槛在 editor/right/trackTools.ts
+  // 序列(轨道)。校验和门槛在 mcp/tools/trackTools.ts
   addTrack(args: { name?: string; index?: number }): any;
   listTracks(): any;
   removeTrack(args: { trackId?: string; trackIds?: string[]; force?: boolean; reason?: string }): any;

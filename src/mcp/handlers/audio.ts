@@ -1,6 +1,6 @@
 import { EditorApi } from "../../ai/mcpExecutor";
 import { getState, actions } from "../../store/project";
-import { timelineDigest } from "../../editor/right/toolEcho";
+import { timelineDigest } from "../tools/toolEcho";
 import { generateVoice, getVoiceConfig } from "../../ai/voice";
 import { importAudioFromServer } from "../../editor/io";
 

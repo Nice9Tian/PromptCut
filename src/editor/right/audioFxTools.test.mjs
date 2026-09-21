@@ -11,7 +11,7 @@ test("音频效果库:建、挂、改、删,门槛、撤销、跨剪辑清理、
     const { actions, getState } = await server.ssrLoadModule("/src/store/project.ts");
     const { createEmptyProject } = await server.ssrLoadModule("/src/kernel/project.ts");
     const { createAudioFxTools } = await server.ssrLoadModule("/src/editor/right/audioFxTools.ts");
-    const { timelineDigest } = await server.ssrLoadModule("/src/editor/right/toolEcho.ts");
+    const { timelineDigest } = await server.ssrLoadModule("/src/mcp/tools/toolEcho.ts");
     const at = createAudioFxTools({ getState, actions });
     const p = createEmptyProject();
     p.media = [

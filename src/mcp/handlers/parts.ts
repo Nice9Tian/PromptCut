@@ -6,7 +6,7 @@ import { addPart as addPartToTree, movePart as movePartInTree, removePart as rem
 import { allParts, getPart } from "../../parts/registry";
 import { COMPOSITE_CARD_ID } from "../../cards/native/composite";
 import type { PartInstance } from "../../kernel/types";
-import { timelineDigest, lookHint } from "../../editor/right/toolEcho";
+import { timelineDigest, lookHint } from "../tools/toolEcho";
 
 import { stageSize, withParts, clipGuard } from "../common";
 

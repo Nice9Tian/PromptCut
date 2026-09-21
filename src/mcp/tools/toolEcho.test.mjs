@@ -1,5 +1,5 @@
 /**
- * 时间轴工具回显与删除门槛的单测。跑：node --test src/editor/right/toolEcho.test.mjs
+ * 时间轴工具回显与删除门槛的单测。跑：node --test src/mcp/tools/toolEcho.test.mjs
  *
  * 钉住的是一份真实对话复盘里的三个失败形状（见 toolEcho.ts 头注释）：
  * 删自己刚建的卡、连删一串清空重铺、拿着已删的 clipId 继续操作。

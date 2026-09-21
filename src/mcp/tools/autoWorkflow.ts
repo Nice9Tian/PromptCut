@@ -1,6 +1,6 @@
 import { getState, actions } from "../../store/project";
 import { getCard } from "../../kernel/registry";
-import { sttStatus, transcribeMedia } from "../io/stt";
+import { sttStatus, transcribeMedia } from "../../editor/io/stt";
 import type { TranscriptSegment } from "../../kernel/project";
 
 const autoWorkflowJobs = new Map<string, any>();

@@ -7,7 +7,7 @@ import { timingLock } from "../../kernel/transitions";
 import { describeEmphasis } from "../../kernel/emphasis";
 import { CAPTION_CARD_ID } from "../../kernel/captions";
 import { findClip } from "../../kernel/project";
-import { timelineDigest, lookHint } from "../../editor/right/toolEcho";
+import { timelineDigest, lookHint } from "../tools/toolEcho";
 
 import { stageSize, clipGuard } from "../common";
 
