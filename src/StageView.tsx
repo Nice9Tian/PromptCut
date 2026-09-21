@@ -36,9 +36,12 @@ import "./cards";
  *
  * **和父页只经 postMessage RPC 说话(E0,见 render/stageRpc.ts),时间一律秒。**
  * 角色(`front` / `back`)是运行时状态(J4):同一份代码,`front` 是可见的播放器舞台,
- * `back` 是探针 / 补跑用的后台舞台;第 3 步只有一个舞台、默认 `front`。
+ * `back` 是探针 / 补跑用的后台舞台。**查询串里的 `id=A` / `id=B` 只是实例名,不是角色**
+ * (E1);默认角色是 `front`,父页握手之后立刻用 `setRole` 把两个实例各就各位。
+ * `render` 和带 `probe: true` 的 `setTime` 有**角色闸门**:不是 `back` 就回
+ * `{ aborted: true, reason: 'role' }`,父页当错误、不重发。
  *
- * 第 3 步的两条路:
+ * 两条路:
  *   - `setTime(t)`:暂停 / 拖动时父页发它。**不重挂载、不递增 playToken**:时钟拨过去、提交 React、
  *     钉动画 —— 任何 dt 都一样(唯一例外:往前且不到半秒,按连续播放同步推几帧)。
  *     stateful 卡往回拖 / 远跳之后的组件状态是错的,第 4 步由快照平面盖住(C3 / C4);
@@ -125,12 +128,23 @@ export default function StageView() {
     snapshots: new Map<string, string>(),
     suppressed: new Set<string>(),
     streamPlanes: [] as Array<{ clipIds: string[] }>,
+    /** 这一拍要加 `.pc-awaiting` 的片段(E7,R3 才真正挂类;R2 只放状态位) */
+    awaiting: new Set<string>(),
+    /** 正在用子树虚拟时间追帧的片段(K5 第一路,R5 才填;R2 只放状态位) */
+    settling: new Set<string>(),
     scrubbing: false,
     playing: false,
     mediaT: 0,
     localHashes: [] as string[],
+    /** K4 的节拍循环停着没有(R5 才有循环本体;`setRole('back')` 要能停它) */
+    beatPaused: true,
     pending: null as PendingRender | null,
   });
+  /**
+   * 第一路追帧的代数(K5):`setRole('back')` 和任何新的 `setTime` / `play` / `setProject`
+   * 都递增它,把可见舞台里正在进行的子树追帧中止掉。R5 往里填实现时不用再动这里。
+   */
+  const catchUpGen = useRef(0);
   /** 落定补拍的代数:又渲了一帧就作废上一次挂着的补拍(见 settle 的说明) */
   const settleGen = useRef(0);
   /** 渲染代数:又来一次渲染 / 换项目就作废上一次还在飞的异步补跑;和 RPC 请求一一对应 */
@@ -340,6 +354,13 @@ export default function StageView() {
        * snapshots / awaiting / settle 是第 4 步的(C4 / E7 / K5),这里先收下、不动画面。
        */
       async setTime(tSec, opts = {}) {
+        /*
+         * 角色闸门(E1)。带 `probe: true` 的这一支量的是 K1 的成绩,只有后台舞台能接 ——
+         * 可见舞台正在给用户播画面,在它上面跑探针既量不准(要和用户的交互抢主线程),
+         * 又会把画面拨到探针的时刻去。不带 `probe` 的 `setTime` 两种角色都收
+         * (拖动发给 `front`、D4 的页面侧测量发给 `back`),所以闸门只挡 `probe`。
+         */
+        if (opts.probe && ref.current.role !== "back") return { aborted: true, reason: "role" as const };
         const target = Math.max(0, Number(tSec) || 0);
         const started = realNow();
         const p = ref.current.project;
@@ -352,10 +373,14 @@ export default function StageView() {
             else ref.current.snapshots.set(id, html);
           }
         }
+        // 本次要加 `.pc-awaiting` 的片段由父页点名(E0:两个判据只有父页知道);R3 挂类
+        ref.current.awaiting = new Set(opts.awaiting ?? []);
         if (!p) return { path: "set" } satisfies SetTimeReply;
         // 暂停 / 拖动时来了 setTime,就没有「还在飞的补跑」这回事了
         renderGen.current++;
         abortPending("superseded");
+        // 新的 setTime 同样中止正在进行的第一路追帧(K5;R5 填实现)
+        catchUpGen.current++;
         const fps = Math.max(1, p.fps || 30);
 
         if (!opts.probe && dt >= 0 && dt < CONTINUOUS_MAX) {
@@ -398,6 +423,14 @@ export default function StageView() {
        * Promise 在推完之后才 resolve;被新 render 掐掉回 'superseded',被 setProject 掐掉回 'project'。
        */
       async render(tSec, opts = {}) {
+        /*
+         * 角色闸门(E1)。`render` 会重挂载整台戏、逐帧推过去 —— 落在可见舞台上就是
+         * 用户眼前的画面从入点重播一遍。父页本来就只发给 `back`,这道闸门是**兜底**:
+         * 角色互换(K5)那一拍父页手里的「谁是 back」可能比舞台晚一步,宁可回
+         * `{ aborted: true, reason: 'role' }` 让父页当错误,也不能让可见舞台开始推帧。
+         * 父页收到 `role` 不重发 —— 重发也还是同一个角色。
+         */
+        if (ref.current.role !== "back") return { aborted: true, reason: "role" } satisfies RenderReply;
         const target = Math.max(0, Number(tSec) || 0);
         const started = realNow();
         const p = ref.current.project;
@@ -511,17 +544,31 @@ export default function StageView() {
         return { ok: true as const };
       },
       /**
-       * 角色是运行时状态(J4)。收到 back:停节拍循环(K4,第 4 步)、清空快照 / 抑制 / 流平面、
-       * 去掉全部平面和类,组件不重挂载。bake 在本地模式不支持(预渲染者是预渲染进程)。
+       * 角色是运行时状态(J4)。收到 `back` 就地转成后台舞台,**组件不重挂载** ——
+       * 互换(K5)靠的正是「同一棵树换个身份」,重挂载等于把追了半天的状态扔掉。
+       *
+       * 清理的全集(E0 的 `setRole` 那条,两条互换路都不再逐条列):
+       *   1. 停 K4 的节拍循环(循环每拍开头和 post `frame` 之前都查 `beatPaused` / 角色);
+       *   2. 清空 `suppressed` / `snapshots` / `streamPlanes` —— `back` 永远不收它们的非空集合;
+       *   3. 停 `streamPlayer` 并 `close()` 所有 `VideoFrame`(R8 的轨道流,这一步还没有);
+       *   4. 去掉全部平面和类(快照 / 抑制 / 等待 / 追帧;R3 才真正有平面);
+       *   5. 中止可见舞台里正在进行的第一路追帧(`catchUpGen` 递增)并清空 `settling` / `awaiting`。
+       * R2 里第 1～5 条的**集合和状态位**就位,平面本体(R3)和循环本体(R5)按这张单子往里填。
+       *
+       * `bake` 在本地模式不支持(预渲染者是预渲染进程),回 `unsupported`、不抛。
        */
       async setRole(role, opts = {}) {
         if (role === "back" && opts.job === "bake") return { ok: false, reason: "unsupported" as const };
         ref.current.role = role;
         ref.current.job = role === "back" ? opts.job ?? "probe" : undefined;
         if (role === "back") {
+          ref.current.beatPaused = true;
           ref.current.snapshots.clear();
           ref.current.suppressed.clear();
           ref.current.streamPlanes = [];
+          ref.current.awaiting.clear();
+          ref.current.settling.clear();
+          catchUpGen.current++;
         }
         return { ok: true };
       },
@@ -529,7 +576,11 @@ export default function StageView() {
         ref.current.plan = plan;
         return { ok: true as const };
       },
-      // K4(第 4 步):可见舞台自己按帧节拍播放。第 3 步父页每帧发 setTime,这两个先明确说不支持。
+      /*
+       * K4(R5):可见舞台自己按帧节拍播放。R2 里节拍循环本体还没有,父页照旧每帧发 `setTime`,
+       * 这两个仍然明确说不支持 —— 但回包已经是统一后的 `PlayReply`(`ok` 不可选),
+       * R5 往里填循环时只改这两个函数体,协议面不用再动。
+       */
       async play() {
         return { ok: false, reason: "unsupported" };
       },
