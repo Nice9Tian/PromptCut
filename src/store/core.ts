@@ -1,3 +1,7 @@
+// 本文件导出的内部可变状态与写入原语(state、listeners、history、future、emit、set、
+// setProject 以及各个纯函数辅助)只给 src/store/actions 用,属于包内可见性;
+// 外部一律走 project.ts —— 它只转出 EditorState / planPlacement / getState /
+// subscribe / useStore / actions 这几个公开名字。
 import { useSyncExternalStore } from "react";
 import { createEmptyProject, type Project, type Track, type TrackClip } from "../kernel/project";
 import { type Transition } from "../kernel/transitions";

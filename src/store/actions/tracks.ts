@@ -2,7 +2,6 @@ import { newId, type Project, type Track } from "../../kernel/project";
 import { transitionsOf } from "../../kernel/transitions";
 
 import { state, set, setProject, clearTransitionFades, updateTrack, pruneCardNodes } from "../core";
-import { actions } from "../project";
 
 export const tracks = {
 
@@ -18,7 +17,7 @@ export const tracks = {
     return track;
   },
   removeTrack(trackId: string) {
-    actions.removeTracks([trackId]);
+    tracks.removeTracks([trackId]);
   },
   /**
    * 删几条序列(一步撤销)。上面片段挂着的转场一并撤掉、留在别的序列上那一头的淡化擦干净 ——

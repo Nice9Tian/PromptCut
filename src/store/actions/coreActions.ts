@@ -2,7 +2,6 @@ import { createEmptyProject, newProjectId, type Project } from "../../kernel/pro
 import { normalizeCuts } from "../../kernel/cuts";
 
 import { state, history, future, set } from "../core";
-import { actions } from "../project";
 
 export const coreActions = {
   /* ---------- 文档 ---------- */
@@ -16,7 +15,7 @@ export const coreActions = {
     set({ project: normalized, filePath, dirty: false, t: 0, playing: false, selection: [], playToken: state.playToken + 1, durationManual: null, lastCamera3dFov: null });
   },
   newProject(name?: string) {
-    actions.loadProject(createEmptyProject(name));
+    coreActions.loadProject(createEmptyProject(name));
   },
   markSaved(filePath: string | null) {
     set({ filePath, dirty: false });

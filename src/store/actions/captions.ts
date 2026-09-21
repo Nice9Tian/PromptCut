@@ -12,7 +12,8 @@ import {
 } from "../../kernel/captions";
 
 import { state } from "../core";
-import { actions } from "../project";
+import { clips as clipActions } from "./clips";
+import { tracks as trackActions } from "./tracks";
 
 export const captions = {
   /**
@@ -24,7 +25,7 @@ export const captions = {
   ensureCaptionTrack(): Track {
     const found = state.project.tracks.find((t) => t.name === CAPTION_TRACK_NAME);
     if (found) return found;
-    return actions.addTrack(CAPTION_TRACK_NAME, { index: 0 });
+    return trackActions.addTrack(CAPTION_TRACK_NAME, { index: 0 });
   },
   /**
    * 一键把某份素材的文字稿铺成字幕轨:字幕序列 → 一张 caption-track 卡 → 灌进 lines。
@@ -44,16 +45,16 @@ export const captions = {
     const plan = captionsFromTranscript(clips, mediaId, segments);
     if (plan.lines.length === 0) return { ok: false, reason: "这份素材还没放到时间轴上,先把它拖上去再铺字幕" };
 
-    const track = actions.ensureCaptionTrack();
+    const track = captions.ensureCaptionTrack();
     // 同一时段已经有字幕卡就复用它(重新转写之后再铺一次是常事,不该越铺越多)
     const exist = track.clips.find((c) => isCaptionClip(c) && Math.max(c.start, plan.from) < Math.min(c.end, plan.to));
     if (exist) {
       const re = captionsFromTranscript(clips, mediaId, segments, { from: exist.start, to: exist.end });
       if (re.lines.length === 0) return { ok: false, reason: "文字稿没有落在那张字幕卡的时段里" };
-      actions.setClipParams(exist.id, { lines: formatCaptions(re.lines) });
+      clipActions.setClipParams(exist.id, { lines: formatCaptions(re.lines) });
       return { ok: true, clipId: exist.id, count: re.lines.length };
     }
-    const clip = actions.addCardClip(CAPTION_CARD_ID, plan.from, {
+    const clip = clipActions.addCardClip(CAPTION_CARD_ID, plan.from, {
       duration: plan.to - plan.from,
       trackId: track.id,
       params: { lines: formatCaptions(plan.lines), showEn: "false" },
@@ -74,7 +75,7 @@ export const captions = {
     const lines = captionsOf(hit.clip);
     const res = editCaptionLine(lines, index, patch, hit.clip.end - hit.clip.start);
     if (res.index < 0) return -1;
-    actions.setClipParams(clipId, { lines: formatCaptions(res.lines) });
+    clipActions.setClipParams(clipId, { lines: formatCaptions(res.lines) });
     return res.index;
   },
   /** 删掉一条字幕 */
@@ -83,7 +84,7 @@ export const captions = {
     if (!hit || !isCaptionClip(hit.clip)) return false;
     const lines = captionsOf(hit.clip);
     if (index < 0 || index >= lines.length) return false;
-    actions.setClipParams(clipId, { lines: formatCaptions(removeCaptionLine(lines, index)) });
+    clipActions.setClipParams(clipId, { lines: formatCaptions(removeCaptionLine(lines, index)) });
     return true;
   },
   /** 在字幕卡里插一条(start 是相对卡片起点的秒);挤不下返回 -1 */
@@ -92,7 +93,7 @@ export const captions = {
     if (!hit || !isCaptionClip(hit.clip)) return -1;
     const res = insertCaption(captionsOf(hit.clip), at, hit.clip.end - hit.clip.start);
     if (res.index < 0) return -1;
-    actions.setClipParams(clipId, { lines: formatCaptions(res.lines) });
+    clipActions.setClipParams(clipId, { lines: formatCaptions(res.lines) });
     return res.index;
   },
 };
