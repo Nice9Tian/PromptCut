@@ -179,7 +179,8 @@ export function registerPrerenderSide(server: ViteDevServer, root: string) {
        * 第一次 GET 才排队渲染、编码、落盘,之后读缓存。渲染走后台优先级(0),不和模型正阻塞等着的
        * see_frames 抢槽位 —— Agent 调工具只多一次本地写文件。get_gif 是模型自己要的,走前台优先级(1)。
        */
-      const visualLib = () => import(new URL("./ai-visual.mjs", import.meta.url).href);
+      // 搬进 server/vision/ 之后这条相对路径要多退一级(原文件在 server/ 下,写的是 "./ai-visual.mjs")
+      const visualLib = () => import(new URL("../ai-visual.mjs", import.meta.url).href);
       const visualDir = () => path.join(outRoot(root), "ai-visual");
       const gifInflight = new Map<string, Promise<{ gif: string; grid: string; times: number[] }>>();
 
