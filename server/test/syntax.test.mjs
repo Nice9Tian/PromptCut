@@ -27,7 +27,7 @@ import ts from "typescript";
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 /** 要看的目录。深度有限,不递归进 node_modules / 产物目录 */
-const DIRS = ["scripts", "server", "server/runners", "server/test", "desktop/scripts", "tools/report-worker"];
+const DIRS = ["scripts", "server", "server/vision", "server/runners", "server/test", "desktop/scripts", "tools/report-worker"];
 const SKIP_DIR = new Set(["node_modules", "target", "catalog", ".cache", "runtime", "release", "out", "dist"]);
 
 function collect(ext) {
