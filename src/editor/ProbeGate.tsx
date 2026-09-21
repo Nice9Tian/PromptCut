@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useStore } from "../store/project";
 import { previewMode } from "./previewMode";
+import { setPlanProject } from "./planDispatch";
 import { onProbeProgress, probeProgress, syncProbeRun, type ProbeProgress } from "./probeRunner";
 import "./ProbeGate.css";
 
@@ -36,6 +37,8 @@ export function ProbeGate() {
    */
   useEffect(() => {
     if (!enabled) return;
+    // K2 的分派表也跟着项目走（E0 的 setPlan；`costs` / `tuning` 由 probeRunner 喂）
+    setPlanProject(project);
     syncProbeRun(project);
   }, [enabled, project]);
 

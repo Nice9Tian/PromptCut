@@ -50,17 +50,15 @@
  * 重新拉一次 `costs`、重新算 `identityKey`、重新排。新添加或 `cardCostKey` 变了的卡自然补测。
  */
 import type { Project } from "../kernel/project";
-import { projectCardGraph } from "../kernel/cardGraph.mjs";
-import { allCards, getCard, userCardSources } from "../kernel/registry";
-import { cardSourceVersion } from "../render/cardSourceVersion.mjs";
-import { builtinCardSourceFiles } from "../render/cardSourceFiles.mjs";
 import { costDeviceString, readGpuRenderer, resolveGlRoute } from "../render/costDevice.mjs";
-import { clipCostIndex, budgetOf } from "../render/pipelinePlan.mjs";
+import { budgetOf } from "../render/pipelinePlan.mjs";
 import { resolveTuning, PROBE_MAX_FRAMES, type PipelineTuning } from "../render/pipelineTuning.mjs";
 import { summarizeProbe } from "../render/probeSummary.mjs";
 import type { CardCostRecord } from "../render/cardCostKey.mjs";
 import type { RenderAborted, RenderReply, SetTimeAborted, SetTimeReply, SnapshotCost, StageEvent, StageRpcClient } from "../render/stageRpc";
 import { mirrorKey } from "../render/dataMirror";
+import { clipIdentityOf } from "./costIdentity";
+import { mergePlanCosts, setPlanCosts } from "./planDispatch";
 import { onStageEvent, pushProject, stageCapabilities, whenStageReady } from "./stageBridge";
 import { MAX_PROJECT_RESENDS, currentBackJob, renderAbortAction, runBackJob } from "./stageJobs";
 
@@ -117,19 +115,6 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 /* ------------------------------------------------------------------ 身份与设备 */
 
-/** 源码版本，照 `ExportView.tsx` 的 `__pcCardPlan` 那份算法 */
-function sourceVersionsOf(): Record<string, string> {
-  const user = userCardSources();
-  const out: Record<string, string> = {};
-  for (const card of allCards()) {
-    const file = user.fileOf[card.id];
-    out[card.id] = file && user.files[file] !== undefined
-      ? `user:${cardSourceVersion(card, { ...builtinCardSourceFiles, ...user.dependencies }, `/src/cards/user/${file}.tsx`)}`
-      : `builtin:${cardSourceVersion(card, builtinCardSourceFiles)}`;
-  }
-  return out;
-}
-
 /** `import.meta.env.DEV`：桌面版跑的就是 vite dev server，分派用当前运行模式的记录（3.1） */
 const RUN_MODE: "dev" | "build" = import.meta.env.DEV ? "dev" : "build";
 
@@ -182,21 +167,9 @@ function shrinkProject(project: Project, track: Project["tracks"][number], clip:
 }
 
 function planJobs(project: Project, costs: CardCostRecord[], device: string): ProbeJob[] {
-  let graph;
-  try {
-    graph = projectCardGraph(project, getCard);
-  } catch {
-    // 一张坏卡（悬空输入）不该让整轮探针跑不起来：没有图就没有身份键，这一轮不测
-    return [];
-  }
-  const versions = sourceVersionsOf();
-  const { identityKeys } = clipCostIndex(project, graph, (node) => versions[(node as { cardId?: string }).cardId ?? ""] ?? null);
-  const capsOf = new Map<string, Record<string, unknown>>();
-  for (const node of graph.nodes ?? []) {
-    if (typeof node.clipId === "string" && !capsOf.has(node.clipId)) {
-      capsOf.set(node.clipId, (node.capabilities ?? {}) as Record<string, unknown>);
-    }
-  }
+  // 身份键和能力表和 `planDispatch` 共用同一份（`costIdentity.ts`）：
+  // 探针写进去的记录和分派表查的键必须是同一个算法算出来的
+  const { identityKeys, capabilities: capsOf } = clipIdentityOf(project);
 
   // 已有记录且 demoted !== true 的整张跳过（pinned 渲染 5 末句）
   const known = new Set(costs.filter((r) => r.device === device && r.demoted !== true).map((r) => r.identityKey));
@@ -490,6 +463,8 @@ async function runLoop(): Promise<void> {
 
       const { costs, tuning } = await getCosts();
       const device = deviceStringOf(tuning);
+      // K2 的表跟着 `costs` / `tuning` 走（E0 的 setPlan）
+      setPlanCosts(costs, tuning);
       if (gen !== generation) continue;          // 拉 costs 期间项目又变了：重排
 
       const jobs = planJobs(project, costs, device);
@@ -502,8 +477,13 @@ async function runLoop(): Promise<void> {
         setProgress({ card: job.cardId, done });
         const record = await probeCard(job, tuning, device, () => gen !== generation);
         if (gen !== generation) break;
-        if (record) await putCosts([record]);
-        else failed.push(job.cardId);
+        if (record) {
+          await putCosts([record]);
+          // 表跟着新记录走。就地合并,不再 GET 一次 —— 这条记录本来就在手上
+          mergePlanCosts([record]);
+        } else {
+          failed.push(job.cardId);
+        }
         done++;
         setProgress({ done, failed: [...failed] });
       }

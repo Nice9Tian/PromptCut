@@ -1,6 +1,6 @@
 import type { Plugin, ViteDevServer } from "vite";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { loadCosts, loadTuning, upsertCosts, filterCosts } from "./costs-store.mjs";
+import { loadCosts, loadTuning, saveTuning, upsertCosts, filterCosts } from "./costs-store.mjs";
 import { isPrerender } from "./render-role.mjs";
 import { prerenderState } from "./prerender-client.mjs";
 
@@ -9,6 +9,16 @@ import { prerenderState } from "./prerender-client.mjs";
  *
  *   GET  /api/data/costs?device=<字符串>[&mode=dev|build]   → { ok, device, mode, costs, tuning }
  *   PUT  /api/data/costs  { records: [] }  → { ok, count, added, updated }
+ *   PUT  /api/data/costs/tuning  { tuning: {…} | null }  → { ok, tuning }
+ *
+ * # 为什么 tuning 的写入口挂在这个前缀下
+ *
+ * R4a 只做了读(改系数靠人手编辑 `out/pipeline-tuning.json`),「不改代码就能调」只剩半条。
+ * 写入口挂成 `/api/data/costs/tuning` 而不是另开一个顶层路由,是因为 connect 的
+ * `middlewares.use(前缀)` 本来就把子路径一起收进来了 —— 读写同一份数据的两个口子在同一个
+ * 中间件里,转发给预渲染进程那一段也能原样复用(两端必须用同一份系数,否则算不出同一张表)。
+ * 请求体是 `{ tuning: {…} }`;`tuning` 给 `null` / 不是对象 = **清掉覆盖、全用缺省**(删文件)。
+ * 落盘的是夹取之后的一份(见 `costs-store.mjs` 的 `saveTuning`)。不做界面。
  *
  * # 为什么 `tuning` 搭这趟车
  *
@@ -80,17 +90,17 @@ function query(req: IncomingMessage, key: string): string | null {
 let forwardChain: Promise<unknown> = Promise.resolve();
 
 /** 把这一次 PUT 转给当前就绪的预渲染进程。只有编辑器进程做这件事,而且不等回复 */
-function forwardToPrerender(records: unknown[]) {
+function forwardToPrerender(path: string, body: unknown) {
   if (isPrerender) return;
   const remote = prerenderState();
   if (!remote.ready || !remote.url) return;
-  const url = remote.url + "/api/data/costs";
+  const url = remote.url + path;
   forwardChain = forwardChain.then(async () => {
     try {
       await fetch(url, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ records }),
+        body: JSON.stringify(body),
         signal: AbortSignal.timeout(15000),
       });
     } catch { /* 预渲染没就绪 / 正在重启:下一批探针 PUT 会把记录再带过去 */ }
@@ -104,6 +114,31 @@ export function costsPlugin(): Plugin {
       const root = server.config.root;
       server.middlewares.use("/api/data/costs", (req, res) => {
         const method = String(req.method || "GET").toUpperCase();
+        // connect 把前缀摘掉了:`/api/data/costs/tuning` 进来时 req.url 是 `/tuning`
+        let sub = "/";
+        try { sub = new URL(req.url || "/", "http://127.0.0.1").pathname.replace(/\/+$/, "") || "/"; } catch { sub = "/"; }
+
+        if (sub === "/tuning") {
+          if (method !== "PUT" && method !== "POST") return sendJson(res, 405, { ok: false, error: "PUT only" });
+          return readBody(req, res, (d) => {
+            /*
+             * body 是 `{ tuning: {…} }`;裸对象也收(和 records 那一支一个待遇)。
+             * `tuning: null` = 清掉覆盖、全用缺省。同源守卫由 vite-plugin-api-guard 统一挡在前面,
+             * 这里不重复判(它已经保证:跨源 Origin 拒、带 body 必须是 application/json)。
+             */
+            const raw = d && typeof d === "object" && "tuning" in d ? d.tuning : d;
+            try {
+              const tuning = saveTuning(root, raw);
+              sendJson(res, 200, { ok: true, tuning });
+              // 两端必须用同一份系数,否则 planPipelines 算不出同一张表(K2)
+              forwardToPrerender("/api/data/costs/tuning", { tuning: raw });
+            } catch (e: any) {
+              sendJson(res, 500, { ok: false, error: e?.message || String(e) });
+            }
+          });
+        }
+        if (sub !== "/") return sendJson(res, 404, { ok: false, error: `没有这个接口:${sub}` });
+
         if (method === "GET") {
           const device = query(req, "device");
           // mode(dev | build):分派用当前运行模式的记录(任务书 3.1);缺字段的旧记录当 dev
@@ -119,7 +154,7 @@ export function costsPlugin(): Plugin {
           try {
             const out = upsertCosts(root, records);
             sendJson(res, 200, { ok: true, count: out.count, added: out.added, updated: out.updated });
-            forwardToPrerender(records);
+            forwardToPrerender("/api/data/costs", { records });
           } catch (e: any) {
             sendJson(res, 500, { ok: false, error: e?.message || String(e) });
           }
