@@ -12,6 +12,7 @@
  * 这里 `[...set]` 的迭代顺序因此是确定的，两端序列化出来的 JSON 逐字节相同。
  */
 import type { PipelinePlan } from "./pipelinePlan.mjs";
+import { resolveTuning, type PipelineTuning } from "./pipelineTuning.mjs";
 import type { CardCostRecord } from "./cardCostKey.mjs";
 
 /** 线上的分段：集合换成数组 */
@@ -25,19 +26,63 @@ export interface WireSegment {
 export interface WirePlan {
   segments: WireSegment[];
   prerenderSet: string[];
+  /**
+   * clipId → `cardCostKey`（K1 / K2 的 `clipCostIndex`）。
+   *
+   * **舞台非要它不可**：K3 的 (a′) / (a) / (b) 和 K5 的两路都要读那张卡的 `vtOk` /
+   * `seekOk` / `seekMs` / `catchUpMs`，而 `costs` 是按 `identityKey` 索引的、
+   * `CardCostRecord` 里没有 `clipId`（它是内容寻址的，同一张卡的两个片段共用一条）。
+   * 父页在 `clipIdentityOf(project)` 里本来就算好了这一份，搭 `setPlan` 的车捎过去。
+   */
+  identityKeys?: Record<string, string>;
+  /** clipId → 声明的帧模式（`direct` / `stateful`）；没有成本记录时舞台按它兜底 */
+  frameModes?: Record<string, string>;
+  /** K2 的可调系数。舞台用 `clipWeight` 判 (a′) / (a) / (b) 时必须和父页同一份，否则两边分档不一致 */
+  tuning?: PipelineTuning;
 }
 
-/** 舞台手里的那一份：回填成 `Set` 之后就是 `pipelineAt` 认的形状，外加原始 `costs` */
+/** 舞台手里的那一份：回填成 `Set` 之后就是 `pipelineAt` 认的形状，外加按 clipId 索引好的 `costs` */
 export interface StagePlan {
   plan: PipelinePlan;
   costs: CardCostRecord[];
+  /** clipId → 这张卡的成本记录（没测过的取不到） */
+  byClip: Map<string, CardCostRecord>;
+  /** clipId → 声明的帧模式 */
+  frameModes: Map<string, string>;
+  /** 已解析的可调系数（和父页同一份） */
+  tuning: PipelineTuning;
 }
 
-/** `planPipelines` 的结果 → 线上的形状 */
-export function wirePlan(plan: PipelinePlan): WirePlan {
+/** `planPipelines` 的结果 → 线上的形状。`index` 是 `clipIdentityOf(project)` 的前两项 */
+export function wirePlan(
+  plan: PipelinePlan,
+  index?: { identityKeys?: Record<string, string>; frameModes?: Record<string, string> },
+  tuning?: PipelineTuning,
+): WirePlan {
   return {
     segments: plan.segments.map((s) => ({ fromSec: s.fromSec, toSec: s.toSec, heavy: [...s.heavy], light: [...s.light] })),
     prerenderSet: [...plan.prerenderSet],
+    ...(index?.identityKeys ? { identityKeys: index.identityKeys } : {}),
+    ...(index?.frameModes ? { frameModes: index.frameModes } : {}),
+    ...(tuning ? { tuning } : {}),
+  };
+}
+
+/** 线上的形状 + `costs` → 舞台手里那一份 */
+export function reviveStagePlan(wire: WirePlan | null | undefined, costs: CardCostRecord[]): StagePlan {
+  const byKey = new Map<string, CardCostRecord>();
+  for (const record of costs) if (record && typeof record.identityKey === "string") byKey.set(record.identityKey, record);
+  const byClip = new Map<string, CardCostRecord>();
+  for (const [clipId, key] of Object.entries(wire?.identityKeys ?? {})) {
+    const hit = byKey.get(key);
+    if (hit) byClip.set(clipId, hit);
+  }
+  return {
+    plan: revivePlan(wire),
+    costs,
+    byClip,
+    frameModes: new Map(Object.entries(wire?.frameModes ?? {})),
+    tuning: resolveTuning(wire?.tuning),
   };
 }
 

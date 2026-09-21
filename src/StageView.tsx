@@ -27,8 +27,8 @@ import {
 } from "./render/stageRpc";
 import { PROBE_BOOL_FRAMES, PROBE_BOOL_MS, PROBE_MAX_FRAMES, PROBE_MAX_MS } from "./render/pipelineTuning.mjs";
 import { compareSnapshotHtml } from "./render/snapshotCompare.mjs";
-import { pipelineAt } from "./render/pipelinePlan.mjs";
-import { revivePlan, type StagePlan, type WirePlan } from "./render/wirePlan";
+import { budgetOf, CATCHUP_STEPS_PER_BEAT, clipWeight, pipelineAt } from "./render/pipelinePlan.mjs";
+import { reviveStagePlan, type StagePlan, type WirePlan } from "./render/wirePlan";
 import { ensureProxyStyle, proxyAllowed, proxyOf, resetInk, sampleAll } from "./render/solidMode";
 import { themeStyle } from "./themes";
 import "./cards";
@@ -87,6 +87,12 @@ const ARM_TIMEOUT_MS = 5000;
 
 /** K6 的窗口长度(ms) */
 const K6_WINDOW_MS = 1000;
+
+/** 按片段追帧每推这么多步就让出一个宏任务(E4 的调用约定) */
+const CATCHUP_YIELD_STEPS = 8;
+
+/** E3:拖动中向后重推节流到每 100 ms 至多一次,其间保持上一状态 */
+const SCRUB_REPUSH_MS = 100;
 // 时间必须在任何卡片挂载之前接管
 const clock = isStageRoute ? installStageClock() : null;
 const pinner = createAnimationPinner();
@@ -180,8 +186,16 @@ export default function StageView() {
     awaitTimer: 0,
     /** 正在用子树虚拟时间追帧的片段 → 它此刻的全局舞台毫秒(K5 第一路,R5 才填) */
     settling: new Map<string, number>() as ReadonlyMap<string, number>,
-    /** K3:按片段重挂载的代数(R5 才填;空表时 `Stage` 退回整舞台 playToken) */
+    /** K3:按片段重挂载的代数(空表时 `Stage` 退回整舞台 playToken) */
     remountGen: new Map<string, number>() as ReadonlyMap<string, number>,
+    /** 正在跑的按片段追帧(K3(a) / K3(b) / K5 第一路共用一套驱动) */
+    catchUps: new Map<string, { clipId: string; stageMs: number; targetMs: number; stepMs: number; announce: boolean; gen: number }>(),
+    /** 这个片段上一次的目标帧号(K3(a′):目标帧变小 = 向后跳,要先走重挂载定位配方) */
+    lastTargetFrame: new Map<string, number>(),
+    /** 这个片段上一次重推的真实时刻(E3:拖动中向后重推节流到每 100 ms 至多一次) */
+    repushAt: new Map<string, number>(),
+    /** 上一拍活跃的卡(K3(b):播放头**刚进入**哪张卡) */
+    lastActive: new Set<string>() as ReadonlySet<string>,
     scrubbing: false,
     playing: false,
     mediaT: 0,
@@ -464,6 +478,301 @@ export default function StageView() {
         settle(target);
         scheduleSample();
       })();
+    };
+
+    /* ------------------------------------------ K3 / K5 第一路:按片段的子树虚拟时间追帧 */
+
+    /** 项目里这个片段(入点出点) */
+    const clipById = (clipId: string): { id: string; start: number; end: number } | null => {
+      const p = ref.current.project;
+      if (!p) return null;
+      for (const tr of p.tracks) for (const c of tr.clips) if (c.id === clipId) return c;
+      return null;
+    };
+
+    /** 这张卡的包裹层(`Stage` 挂的 `[data-pc-clip]`) */
+    const wrapOf = (clipId: string): Element | null => {
+      const root = rootRef.current;
+      return root ? clipWrapper(root, clipId) : null;
+    };
+
+    /** `settling` 表整份换一个(`Stage` 按引用判「谁刚变」) */
+    const setSettlingAt = (clipId: string, stageMs: number | null): void => {
+      const next = new Map(ref.current.settling);
+      if (stageMs === null) next.delete(clipId);
+      else next.set(clipId, stageMs);
+      ref.current.settling = next;
+    };
+
+    /**
+     * **重挂载定位配方**,片段粒度(K3;K3(a′) 向后跳、K3(a) 的重推、K5 第一路的起步都用它)。
+     * 一步都不许省:
+     *
+     *   `resetIn(包裹层)` → 重挂载(`remountGen` 递增)+ `flushSync`
+     *   → `clock.tick(clock.now())` **两次** → `pinner.syncIn(包裹层, mountMs)`
+     *
+     * `tick` 传**当前全局毫秒**、不是 `mountMs`:`tick(ms)` 先 `now = ms` 再排空 rAF 队列,
+     * 传 `mountMs` 会把可见舞台的全局时钟拨回挂载帧、settle 结束后没人还原,
+     * 下一次 `play` 第一拍要同步补 6000 ms。传当前值时钟不动,只是把队列排空 ——
+     * 第一拍跑卡片自己注册的 rAF 把动画建起来,第二拍让 Motion 做第一次推进。
+     *
+     * 最后钉一次**挂载帧**锚点:`patchAnimate` 让新动画出生即 `pause()` + `currentTime = 0`,
+     * 少了这一次锚点会记成目标毫秒、画面停在第 0 帧。
+     *
+     * **配方到钉挂载帧锚点为止**,之后怎么走由调用方定。
+     */
+    const remountClipRecipe = (clipId: string, mountMs: number): Element | null => {
+      const before = wrapOf(clipId);
+      if (before) pinner.resetIn(before);
+      // 组件这一次要按**挂载帧**渲(`Stage` 的 `localTOf` 读 `settling`),所以先写表再提交
+      setSettlingAt(clipId, mountMs);
+      const next = new Map(ref.current.remountGen);
+      next.set(clipId, (next.get(clipId) ?? 0) + 1);
+      ref.current.remountGen = next;
+      flushSync(() => bumpPlanes());
+      clock.tick(clock.now());
+      clock.tick(clock.now());
+      const after = wrapOf(clipId);
+      if (after) pinner.syncIn(after, mountMs);
+      return after;
+    };
+
+    /** 一次按片段的追帧 */
+    interface CatchUpTask {
+      clipId: string;
+      /** 已经推到的全局舞台毫秒 */
+      stageMs: number;
+      targetMs: number;
+      stepMs: number;
+      /** 追上之后 post `{ type: 'settled', clipIds: [clipId] }`(K5 第一路 / 重卡才要) */
+      announce: boolean;
+      gen: number;
+    }
+
+    /** 追帧被中止 / 追完:摘 `.pc-settling`,**把该片段留在 `snapshots` 里**(平面还挂着,不闪) */
+    const endCatchUp = (task: CatchUpTask, caughtUp: boolean): void => {
+      ref.current.catchUps.delete(task.clipId);
+      setSettlingAt(task.clipId, null);
+      if (caughtUp && task.announce) {
+        // 舞台自己摘掉这张卡的快照平面;父页收到 `settled` 把 clipId 从投递基线里删掉(A3c)
+        const rest = new Map(ref.current.snapshots);
+        rest.delete(task.clipId);
+        ref.current.snapshots = rest;
+      }
+      commitPlanes();
+      if (caughtUp && task.announce) postStageEvent({ type: "settled", sec: ref.current.t, clipIds: [task.clipId] });
+    };
+
+    /**
+     * 往前推几步。**只推它子树的本地时间**:每步 `stageMs += 1000 / fps`,
+     * `pinner.syncIn(包裹层, stageMs)` + 给该组件 `t = stageMs / 1000`(`settling` 表)+ `flushSync`。
+     * **全局时钟不动**,全局的 `pinner.sync(nowMs, skip)` 跳过 `.pc-settling` 子树(`skipWrappers`)。
+     *
+     * 回 `true` 表示追上了(或被中止),调用方该收摊。
+     */
+    const advanceCatchUp = (task: CatchUpTask, steps: number): boolean => {
+      if (task.gen !== catchUpGen.current) {
+        endCatchUp(task, false);
+        return true;
+      }
+      const wrap = wrapOf(task.clipId);
+      for (let i = 0; i < steps && task.stageMs < task.targetMs; i++) {
+        task.stageMs = Math.min(task.targetMs, task.stageMs + task.stepMs);
+        if (wrap) pinner.syncIn(wrap, task.stageMs);
+        setSettlingAt(task.clipId, task.stageMs);
+        flushSync(() => bumpPlanes());
+      }
+      if (task.stageMs < task.targetMs) return false;
+      /*
+       * 追到目标那一步:锚点本来就在全局基上,交回全局 `pinner.sync` 天然连续,
+       * 不需要额外动作 —— 摘了 `.pc-settling` 它就是精确的活组件。
+       */
+      endCatchUp(task, true);
+      return true;
+    };
+
+    /**
+     * 一路推到底,**每 8 步让出一个宏任务**(E4;让出点检查 `catchUpGen`)。
+     * K3(b) 的跳转 / 拖动、K5 第一路的暂停态追帧走它。
+     */
+    const runCatchUpAsync = async (task: CatchUpTask): Promise<void> => {
+      const breathe = () => new Promise<void>((r) => realSetTimeout(r, 0));
+      for (;;) {
+        if (advanceCatchUp(task, CATCHUP_YIELD_STEPS)) return;
+        await breathe();
+      }
+    };
+
+    /**
+     * 一拍内推完(K3(a)):帧间**只让微任务**、不让宏任务 —— 微任务之间浏览器不绘制,
+     * 所以中间态一帧都画不出来。`catchUpMs` 是估计值,所以带**墙钟兜底**:
+     * 累计超过 `1000 / fps` 还没推完就改走 (b)(K3:不让主线程被估错的卡长时间占住)。
+     */
+    const runCatchUpSync = async (task: CatchUpTask, budgetMs: number): Promise<void> => {
+      const started = realNow();
+      for (;;) {
+        if (advanceCatchUp(task, 1)) return;
+        if (realNow() - started > budgetMs) {
+          // 改走 (b):后面的步数每 8 步让一个宏任务,画面继续被 `.pc-settling` 藏着
+          void runCatchUpAsync(task);
+          return;
+        }
+        await Promise.resolve();
+      }
+    };
+
+    /** 登记一个追帧任务:先走重挂载定位配方,再从挂载帧逐步推 */
+    const startCatchUp = (clipId: string, targetMs: number, fps: number, announce: boolean): CatchUpTask | null => {
+      const clip = clipById(clipId);
+      if (!clip) return null;
+      const mountMs = (mountFrameOf(clip, fps) / fps) * 1000;
+      if (mountMs >= targetMs) return null;
+      const old = ref.current.catchUps.get(clipId);
+      if (old) endCatchUp(old, false);
+      remountClipRecipe(clipId, mountMs);
+      const task: CatchUpTask = { clipId, stageMs: mountMs, targetMs, stepMs: 1000 / fps, announce, gen: catchUpGen.current };
+      ref.current.catchUps.set(clipId, task);
+      return task;
+    };
+
+    /** 全部中止(新的 `setTime` / `play` / `setProject` / `setRole` / `setSuppressed` 都走它) */
+    const abortCatchUps = (): void => {
+      if (!ref.current.catchUps.size) return;
+      for (const task of [...ref.current.catchUps.values()]) endCatchUp(task, false);
+    };
+
+    /**
+     * K4 每一拍多推几步(K3(b) 的播放态追帧):每拍除本拍那一帧外最多再多推
+     * `CATCHUP_STEPS_PER_BEAT` 步本地时间(即最快 5 倍速)。每拍的追帧成本按实测计入
+     * K6 的一秒窗口 —— 追帧把窗口顶爆就由 K6 降最贵的那张。
+     */
+    const stepCatchUps = (fps: number): void => {
+      if (!ref.current.catchUps.size) return;
+      const nowMs = ref.current.t * 1000;
+      for (const task of [...ref.current.catchUps.values()]) {
+        // 播放中目标跟着播放头走:不然追上的那一刻它已经落后了
+        task.targetMs = Math.max(task.targetMs, nowMs);
+        task.stepMs = 1000 / fps;
+        advanceCatchUp(task, CATCHUP_STEPS_PER_BEAT);
+      }
+    };
+
+    /* ------------------------------------------------ K3:三条跳转路 */
+
+    /** 这一刻活跃的**卡**片段(口径同 `Stage`:含 LEAD) */
+    const cardClipsAt = (sec: number): { id: string; start: number; end: number }[] => {
+      const p = ref.current.project;
+      if (!p) return [];
+      return flattenOverlay(p).clips
+        .filter((c) => (c as { cardId?: string; nodeId?: string }).cardId || (c as { nodeId?: string }).nodeId)
+        .filter((c) => cardMountedAt(c, sec));
+    };
+
+    const mountMsOf = (clip: { start: number; end: number }, fps: number): number => (mountFrameOf(clip, fps) / fps) * 1000;
+
+    /**
+     * 这张卡走哪一档 —— 用的是 K2 的 `clipWeight`,**和父页、预渲染进程同一份纯函数**
+     * (`tuning` 随 `setPlan` 一起下来,两边系数一致)。
+     * `tier`: `direct` / `seek`(a′) / `catchup-a`(a) / `catchup-b`(b) / `capped` / `over-catchup` / 声明兜底。
+     */
+    const tierOf = (clipId: string, fps: number) => {
+      const sp = ref.current.plan;
+      const record = sp?.byClip.get(clipId);
+      return { tier: clipWeight(record, sp?.frameModes.get(clipId), fps, sp?.tuning).tier as string, record };
+    };
+
+    /** 拖动中向后重推的节流(E3):这张卡刚推过就保持上一状态 */
+    const repushAllowed = (clipId: string, now: number): boolean => {
+      if (!ref.current.scrubbing) return true;
+      const last = ref.current.repushAt.get(clipId);
+      if (last !== undefined && now - last < SCRUB_REPUSH_MS) return false;
+      ref.current.repushAt.set(clipId, now);
+      return true;
+    };
+
+    /**
+     * K5 第一路的起步:`setTime(t, { settle: true })` 之后,`vtOk` 的**重卡**在可见舞台里
+     * 用子树虚拟时间追到精确活渲。`vtOk = false` 的由父页走第二路(整场景在后台补跑后互换),
+     * 舞台这边什么都不做。
+     */
+    const routeSettle = (target: number, fps: number): void => {
+      const plan = ref.current.plan?.plan ?? null;
+      for (const clip of cardClipsAt(target)) {
+        if (pipelineAt(plan, clip.id, target) !== "heavy") continue;
+        const { record } = tierOf(clip.id, fps);
+        if (record?.vtOk !== true) continue;
+        const task = startCatchUp(clip.id, target * 1000, fps, true);
+        if (task) void runCatchUpAsync(task);
+      }
+    };
+
+    /**
+     * K3 的三条跳转路(远跳 / 向后那一支;向前且 `dt < CONTINUOUS_MAX` 的连续路在 `setTime` 里
+     * 已经由全局 `advanceTo` 走完了)。**可见舞台里永远看不到推帧过程。**
+     *
+     * - **(a′) `seekOk` 且 `seekMs ≤ B`**:直接定位。向前不用做什么(全局 `pinner.sync` 已经钉过);
+     *   **向后**要先走重挂载定位配方 —— 越过结尾的动画被 `finish()` 收了、此后永久跳过,
+     *   不重挂载就停在终态。
+     * - **(a) `catchUpMs ≤ B`**:按片段重挂载 + 从 `mountFrameOf` 逐帧推,帧间**只让微任务**
+     *   (中间态一帧都画不出来),带墙钟兜底,超了改走 (b)。
+     * - **(b)**:`vtOk` 的在可见舞台里用子树虚拟时间追(每 8 步让宏任务,追上摘 `.pc-settling`);
+     *   `vtOk = false` 的走 K5 第二路(父页的事)。
+     */
+    const routeJump = (target: number, fps: number): void => {
+      const targetMs = target * 1000;
+      const targetFrame = Math.round(target * fps);
+      const now = realNow();
+      const plan = ref.current.plan?.plan ?? null;
+      for (const clip of cardClipsAt(target)) {
+        const prevFrame = ref.current.lastTargetFrame.get(clip.id);
+        const backwards = prevFrame !== undefined && targetFrame < prevFrame;
+        ref.current.lastTargetFrame.set(clip.id, targetFrame);
+        // 重卡在跳转里贴快照,追到活渲是 `settle` 的事(routeSettle)
+        if (pipelineAt(plan, clip.id, target) === "heavy") continue;
+        const { tier, record } = tierOf(clip.id, fps);
+        if (tier === "direct" || tier === "declared-light") continue;   // 随机访问:跟着 setTime 走
+        if (tier === "seek") {
+          if (!backwards) continue;
+          if (!repushAllowed(clip.id, now)) continue;
+          const wrap = remountClipRecipe(clip.id, mountMsOf(clip, fps));
+          // 一步到位:钉目标毫秒,组件 `t` 交回全局(把它从 `settling` 里拿掉)
+          setSettlingAt(clip.id, null);
+          if (wrap) pinner.syncIn(wrap, targetMs);
+          commitPlanes();
+          continue;
+        }
+        if (tier === "catchup-a") {
+          if (!repushAllowed(clip.id, now)) continue;
+          const task = startCatchUp(clip.id, targetMs, fps, false);
+          if (task) void runCatchUpSync(task, 1000 / fps);
+          continue;
+        }
+        if (tier === "catchup-b") {
+          if (record?.vtOk !== true) continue;   // 第二路由父页发起
+          if (!repushAllowed(clip.id, now)) continue;
+          const task = startCatchUp(clip.id, targetMs, fps, false);
+          if (task) void runCatchUpAsync(task);
+        }
+      }
+    };
+
+    /**
+     * 播放头**刚进入**一张 (b) 档 `vtOk` 轻卡:让它从 `mountFrameOf` 起追(K3(b))。
+     * 追上之前这一层透明 —— 轻卡没有快照平面,`.pc-settling` 是 `visibility: hidden`。
+     */
+    const enterCatchUps = (sec: number, fps: number): void => {
+      const plan = ref.current.plan?.plan ?? null;
+      const active = new Set<string>();
+      for (const clip of cardClipsAt(sec)) {
+        active.add(clip.id);
+        if (ref.current.lastActive.has(clip.id)) continue;
+        if (ref.current.catchUps.has(clip.id)) continue;
+        if (pipelineAt(plan, clip.id, sec) !== "light") continue;
+        const { tier, record } = tierOf(clip.id, fps);
+        if (tier !== "catchup-b" || record?.vtOk !== true) continue;
+        startCatchUp(clip.id, sec * 1000, fps, false);
+      }
+      ref.current.lastActive = active;
     };
 
     /* ------------------------------------------------ K1 的两趟布尔探针(vtOk / seekOk / seekMs) */
@@ -755,6 +1064,9 @@ export default function StageView() {
           ref.current.cardCost.clear();
           flushSync(() => setT(sec));
           clock.advanceTo(sec * 1000, { step: period, onFrame: (ms) => pinner.sync(ms, skipWrappers()) });
+          // K3(b) 的播放态追帧:这一拍除了本拍那一帧,再多推几步它自己的本地时间
+          enterCatchUps(sec, fps);
+          stepCatchUps(fps);
           await realRaf();
           /*
            * 补一拍落定。`settle()` 排的是微任务,而这里本来就在 `await` 之后 ——
@@ -832,6 +1144,9 @@ export default function StageView() {
         renderGen.current++;
         projectGen.current++;
         abortPending("project");
+        // 换项目同样中止第一路追帧(K5:五个 RPC 各递增一次)
+        catchUpGen.current++;
+        abortCatchUps();
         if (LEGACY) {
           if (prevKey !== nextKey) {
             legacyJump(ref.current.t);
@@ -878,16 +1193,19 @@ export default function StageView() {
         // 暂停 / 拖动时来了 setTime,就没有「还在飞的补跑」这回事了
         renderGen.current++;
         abortPending("superseded");
-        // 新的 setTime 同样中止正在进行的第一路追帧(K5;R5 填实现)
+        // 新的 setTime 中止正在进行的第一路追帧(K5:五个 RPC 各递增一次)
         catchUpGen.current++;
+        abortCatchUps();
         const fps = Math.max(1, p.fps || 30);
 
         if (!opts.probe && dt >= 0 && dt < CONTINUOUS_MAX) {
-          // 连续播放:接着往下跑一两帧就行(≤ 30 步,同步)
+          // 连续播放:接着往下跑一两帧就行(≤ 30 步,同步)。轻卡跟着全局时钟走,K3 不用再分路
           flushSync(() => setT(target));
           clock.advanceTo(target * 1000, { step: 1000 / fps, maxCatchUp: CONTINUOUS_MAX * 1000, onFrame: (ms) => pinner.sync(ms, skipWrappers()) });
+          for (const clip of cardClipsAt(target)) ref.current.lastTargetFrame.set(clip.id, Math.round(target * fps));
           settle(target);
           scheduleSample();
+          if (opts.settle) routeSettle(target, fps);
           return { path: "continuous" } satisfies SetTimeReply;
         }
 
@@ -896,6 +1214,11 @@ export default function StageView() {
         pinner.sync(target * 1000, skipWrappers());
         settle(target);
         scheduleSample();
+        if (!opts.probe) {
+          // K3 的三条跳转路;`settle: true` 时再起 K5 第一路
+          routeJump(target, fps);
+          if (opts.settle) routeSettle(target, fps);
+        }
         if (opts.probe) {
           /*
            * K1 的四个数(任务书 3.8)。`stepMs` 在**等 rAF 之前**取 —— 那一次真 rAF 至少是一个
@@ -1120,6 +1443,8 @@ export default function StageView() {
           ref.current.suppressed = new Set();
           ref.current.streamPlanes = [];
           ref.current.settling = new Map();
+          ref.current.catchUps.clear();
+          ref.current.lastActive = new Set();
           setAwaiting([]);
           catchUpGen.current++;
           // 同一次提交里把全部平面和类去掉 —— 互换那一拍新 `back` 不能还盖着旧画面
@@ -1140,7 +1465,7 @@ export default function StageView() {
        */
       async setPlan(plan) {
         const wire = (plan?.plan ?? null) as WirePlan | null;
-        ref.current.plan = { plan: revivePlan(wire), costs: Array.isArray(plan?.costs) ? plan.costs : [] };
+        ref.current.plan = reviveStagePlan(wire, Array.isArray(plan?.costs) ? plan.costs : []);
         return { ok: true as const };
       },
       /**
@@ -1163,9 +1488,11 @@ export default function StageView() {
         ref.current.beatLastSec = from;
         ref.current.beatLastFrame = Math.round(from * fps);
         ref.current.k6.beats = [];
+        ref.current.lastActive = new Set();
         ref.current.beatPaused = false;
         // 按下播放同样中止第一路追帧(K5:五个 RPC 各递增一次)
         catchUpGen.current++;
+        abortCatchUps();
         void runBeatLoop(from);
         return { ok: true, stoppedAt: from };
       },
