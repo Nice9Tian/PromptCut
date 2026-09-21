@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import "./cards";
 import { TopBar } from "./editor/TopBar";
 import { Preview } from "./editor/Preview";
+import { ProbeGate } from "./editor/ProbeGate";
 import { LeftPanel } from "./editor/left";
 import { RightPanel } from "./editor/right";
 import { TimelineView } from "./editor/timeline";
@@ -234,6 +235,12 @@ export default function Editor() {
             className="min-h-0 min-w-0 pc-card-surface flex flex-col"
           >
             <Preview />
+            {/*
+              K1 的加载遮罩(ProbeGate)。和 <Preview /> 同一层渲,自己 position: fixed 盖住
+              整个编辑器界面 —— **不另起 iframe**,两个舞台 iframe 照常由 Preview 挂(E1),
+              探针跑在后台那一个上。legacy 下、以及成本记录全命中时它回 null,一帧都不出现。
+            */}
+            <ProbeGate />
           </motion.main>
           {/*
             右栏拖杆两种布局都要有:对话式下右栏就是 AI 面板,没有拖杆就等于宽度写死。

@@ -43,6 +43,17 @@ export const TUNING_RANGE = Object.freeze({
 export const PROBE_MAX_FRAMES = 300;
 export const PROBE_MAX_MS = 500;
 
+/**
+ * 两趟布尔探针（`vtOk` / `seekOk` / `seekMs`）另算的一份上限（任务书 K1）：
+ * **各 8 帧或 200 ms 封顶**，比对趟超了就记 `false`，量 `seekMs` 那一趟超了就记 `null`。
+ * 它们不占计时趟 / 快照趟的额度。
+ *
+ * 8 这个数是判据本身的一部分（pinned 划分轴一「如何区分 SeekOK」明写「推到第 8 帧」），
+ * 不是可调系数，所以不进 `device` 串、也不进 `resolveTuning`。
+ */
+export const PROBE_BOOL_FRAMES = 8;
+export const PROBE_BOOL_MS = 200;
+
 const clamp = (value, { min, max }) => (value < min ? min : value > max ? max : value);
 
 /**

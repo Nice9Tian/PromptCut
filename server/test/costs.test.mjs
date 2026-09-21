@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { loadCosts, loadTuning, upsertCosts, mergeCosts, filterCosts, costsPath, tuningPath } from '../costs-store.mjs';
+import { loadCosts, loadTuning, saveTuning, upsertCosts, mergeCosts, filterCosts, costsPath, tuningPath } from '../costs-store.mjs';
 import { DEFAULT_TUNING } from '../../src/render/pipelineTuning.mjs';
 
 /** 每个用例一个干净的根;PROMPTCUT_DATA_DIR 会把落点挪走,测试期间一律摘掉 */
@@ -165,6 +165,48 @@ test('系数和成本记录住同一个目录,互不干扰', () => {
     assert.equal(path.dirname(tuningPath(root)), path.dirname(costsPath(root)));
     assert.equal(loadTuning(root).COST_SCALE, 3, '写记录没有把系数文件冲掉');
     assert.equal(loadCosts(root).length, 1);
+  });
+});
+
+/* ---------------------------------------------- saveTuning(PUT /api/data/costs/tuning) */
+
+test('saveTuning 写进去的是夹取之后的一份,loadTuning 读得回来', () => {
+  withRoot((root) => {
+    const out = saveTuning(root, { COST_SCALE: 2, STEP_PERCENTILE: 0.95 });
+    assert.deepEqual({ ...out }, { COST_SCALE: 2, STEP_PERCENTILE: 0.95, STEP_MIN_SAMPLES: DEFAULT_TUNING.STEP_MIN_SAMPLES });
+    assert.deepEqual({ ...loadTuning(root) }, { ...out });
+    // 文件里躺着的也是夹取后的,不是请求里的原话
+    assert.deepEqual(JSON.parse(fs.readFileSync(tuningPath(root), 'utf8')), { ...out });
+  });
+});
+
+test('saveTuning 夹取超范围的值,坏值退回缺省', () => {
+  withRoot((root) => {
+    assert.equal(saveTuning(root, { COST_SCALE: 100 }).COST_SCALE, 4);
+    assert.equal(loadTuning(root).COST_SCALE, 4);
+    assert.equal(saveTuning(root, { COST_SCALE: 0 }).COST_SCALE, 0.25);
+    assert.equal(saveTuning(root, { COST_SCALE: 'x' }).COST_SCALE, DEFAULT_TUNING.COST_SCALE);
+  });
+});
+
+test('saveTuning(null) 清掉覆盖:删文件,而不是写一份缺省值进去', () => {
+  withRoot((root) => {
+    saveTuning(root, { COST_SCALE: 3 });
+    assert.equal(fs.existsSync(tuningPath(root)), true);
+    assert.deepEqual({ ...saveTuning(root, null) }, { ...DEFAULT_TUNING });
+    assert.equal(fs.existsSync(tuningPath(root)), false, '「没有这个文件 = 全用缺省」是 K2 明写的');
+    assert.deepEqual({ ...loadTuning(root) }, { ...DEFAULT_TUNING });
+    // 本来就没有文件时再清一次也不抛
+    assert.deepEqual({ ...saveTuning(root, [1, 2]) }, { ...DEFAULT_TUNING });
+  });
+});
+
+test('saveTuning 不碰成本记录', () => {
+  withRoot((root) => {
+    upsertCosts(root, [rec()]);
+    saveTuning(root, { STEP_MIN_SAMPLES: 32 });
+    assert.equal(loadCosts(root).length, 1);
+    assert.equal(loadTuning(root).STEP_MIN_SAMPLES, 32);
   });
 });
 

@@ -60,9 +60,31 @@ export interface SnapshotCost {
  * - `'snapshot'` **快照趟**:每帧先推进、再生成快照并 post `probe-frame`,量三段快照耗时;
  *   仍受一拍预算约束,它的截断不影响任何判定。
  *
+ * - `'booleans'` **两趟布尔探针**(R4b 加):`vtOk` / `seekOk` / `seekMs`。整趟都在舞台里跑
+ *   (它要 `pinner.syncIn` 钉子树虚拟时间,父页够不到),回包带 `booleans`。
+ *   三趟各自先按 K3 的「重挂载定位配方」复位,各 `PROBE_BOOL_FRAMES` 帧或 `PROBE_BOOL_MS` 封顶;
+ *   **生成的快照一律不 post `probe-frame`**(它们按定义可能与正确帧不同,存下去会覆盖正确的死素材)。
+ *
  * `true` 等于 `'snapshot'`(兼容旧调用方)。
  */
-export type ProbeMode = "time" | "snapshot";
+export type ProbeMode = "time" | "snapshot" | "booleans";
+
+/**
+ * K1 的两趟布尔探针结果(pinned 划分轴一「如何区分 SeekOK」)。
+ *
+ * - `vtOk`:能不能只用**子树虚拟时间**推(`pinner.syncIn` + 组件本地 `t`,全局时钟不动)。
+ *   决定 K3(b) / K5 走哪条追帧路。读全局帧循环时间戳的 Motion JS 动画推不动,是 `false`。
+ * - `seekOk`:能不能**一步钉到**目标帧(不经中间帧),结果和逐帧推到那一帧相同。
+ *   **只看结果一致,不看代价** —— 代价是 K2 的事。
+ * - `seekMs`:从第 0 帧直接钉到片段最后一帧的墙钟(`__pcRealNow`)。
+ *   超过 `PROBE_BOOL_MS` 记 `null`(未知)—— 记上限值再线性缩放得到的是乐观的下界,
+ *   K2 对 `null` 一律按推帧卡规则走,和 `catchUpMs` 截断时的外推口径一样是保守的。
+ */
+export interface ProbeBooleans {
+  vtOk: boolean;
+  seekOk: boolean;
+  seekMs: number | null;
+}
 
 export interface RenderResult {
   remounted: boolean;
@@ -84,6 +106,17 @@ export interface RenderResult {
    * 限 2 核下同一张卡两次实测的单帧最差能差十几倍,越线的是偶发卡顿、不是稳定成本。
    */
   steps?: number[];
+  /**
+   * 只在 `probe: 'snapshot'` 时有:**每一帧**生成快照那三段的耗时。
+   *
+   * 同一趟的 `snapshot` 是这些的**累加**(给「这一趟花了多久」用),而成本记录要的是
+   * **单帧的稳健值**(`robustStep`,任务书 K1),累加值换算不回来。离线探针为了拿逐帧数
+   * 只好一帧发一次 `render`(40 次往返);常驻探针在加载遮罩下跑,40 × N 次往返太慢,
+   * 所以这里和 `steps` 对称地把逐帧样本一起带回去,一次往返就够。
+   */
+  snapshotSteps?: SnapshotCost[];
+  /** 只在 `probe: 'booleans'` 时有 */
+  booleans?: ProbeBooleans;
 }
 /**
  * `render` 被掐断 / 拒绝时的回包。父页对每个 reason 的规矩不一样(E0):
@@ -104,6 +137,7 @@ export interface RenderAborted {
   truncated?: boolean;
   snapshot?: SnapshotCost;
   steps?: number[];
+  snapshotSteps?: SnapshotCost[];
 }
 export type RenderReply = RenderResult | RenderAborted;
 
