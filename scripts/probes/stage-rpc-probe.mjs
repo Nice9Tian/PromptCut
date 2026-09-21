@@ -25,10 +25,16 @@
  * puppeteer 的 frame 句柄(`page.frames()` 对跨源 iframe 照样给得出),不再是
  * `document.getElementById('f').contentWindow`。
  *
- * 测试页由 puppeteer 请求拦截临时提供,仓库里不留静态页。
+ * 测试页由本进程临时起的一个 http 服务(随机空端口)提供,仓库里不留静态页。
+ * **不能再用 puppeteer 的请求拦截来发这张页**:`Fetch.fulfillRequest` 造出来的响应没有远端 IP,
+ * Chrome 把这个文档的 address space 判成非本地,于是它去 127.0.0.1 的两个舞台端口取 iframe 时
+ * 被 Local Network Access 拦掉(实测 `net::ERR_BLOCKED_BY_LOCAL_NETWORK_ACCESS_CHECKS`)。
+ * 同源那一版碰不到这条是因为 iframe 和文档同源、走的是另一条判定。
+ *
  * 输出 JSON 结论到 stdout;任何一条不过就以非零退出。
  */
 import puppeteer from 'puppeteer';
+import { serve, closeAll } from './probe-connect.mjs';
 
 const args = process.argv.slice(2);
 const origin = (args.includes('--origin') ? args[args.indexOf('--origin') + 1] : null) || process.env.PC_STAGE_TEST_URL || 'http://127.0.0.1:5197';
@@ -82,21 +88,23 @@ const fails = [];
 const check = (cond, label, extra) => { if (!cond) fails.push(label + (extra !== undefined ? ' :: ' + JSON.stringify(extra) : '')); return cond; };
 
 const [originA, originB] = await stageOrigins();
+const hostServer = await serve(0, (req, res) => {
+  if (new URL(req.url, 'http://x').pathname !== HOST_PATH) { res.statusCode = 404; res.end(); return; }
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-store');
+  res.end(hostHtml(originA, originB));
+}, '127.0.0.1');
+const hostUrl = `http://127.0.0.1:${hostServer.address().port}${HOST_PATH}`;
 const browser = await puppeteer.launch({ headless: true, args: ['--window-position=-32000,-32000', '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1'] });
-const out = { mode: legacy ? 'legacy' : 'cross-origin', originA, originB };
+const out = { mode: legacy ? 'legacy' : 'cross-origin', originA, originB, host: hostUrl };
 try {
   const page = await browser.newPage();
   await page.setViewport({ width: 1920, height: 1080 });
-  await page.setRequestInterception(true);
-  page.on('request', (req) => {
-    if (new URL(req.url()).pathname === HOST_PATH) req.respond({ status: 200, contentType: 'text/html; charset=utf-8', body: hostHtml(originA, originB) });
-    else req.continue();
-  });
   const errors = [];
   page.on('pageerror', (e) => errors.push(String(e)));
   page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
   page.on('response', (r) => { if (r.status() >= 400 && !/favicon/.test(r.url())) errors.push(`HTTP ${r.status()} ${r.url()}`); });
-  await page.goto(origin + HOST_PATH, { waitUntil: 'domcontentloaded', timeout: 120000 });
+  await page.goto(hostUrl, { waitUntil: 'domcontentloaded', timeout: 120000 });
   await page.evaluate(() => Promise.race([window.__ready, new Promise((_, rej) => setTimeout(() => rej(new Error('stage ready timeout')), 120000))]));
 
   /*
@@ -329,6 +337,7 @@ try {
   fails.push('exception: ' + (err && err.stack || err));
 } finally {
   await browser.close();
+  await closeAll([hostServer]);
 }
 out.fails = fails;
 console.log(JSON.stringify(out, null, 2));

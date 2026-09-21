@@ -160,6 +160,40 @@ try {
   out.play = play;
   check(play.t > 1.0 && play.frames.every((n) => Math.abs(n - Math.round(play.t * 30)) <= 1), 'after 1s of playback the stage local frame follows store.t', play);
 
+  // get_layout 的页面侧(D4):经后台舞台的单飞队列量实体框。legacy 下队列退回可见舞台,
+  // 跨源双舞台下它先 setRole('back', { job: 'catchup' })、量完交还 —— 两边回的数该一样
+  const layout = await page.evaluate(async (odo) => {
+    const { contentLayoutOf } = await import('/src/mcp/common.ts');
+    const r = await contentLayoutOf([odo]);
+    return r[odo];
+  }, ids.odo);
+  out.layout = layout;
+  check(layout && layout.contentBox && layout.contentBox.width > 0 && layout.contentBox.width < 1920 * 0.9,
+    'get_layout (contentLayoutOf) measures a content box through the back-stage job queue', layout);
+
+  // 移动工具拖一下:命中 → 拖 → 松手写 frame。这条走的是 hitTest 的异步往返 + nudgeFrame
+  const dragStart = await page.evaluate(async (odo) => {
+    const { actions } = await import('/src/store/project.ts');
+    actions.select([odo]);
+    // 工具行第二个钮是「移动」
+    document.querySelectorAll('.pc-pv-tool')[1].click();
+    await new Promise((r) => setTimeout(r, 200));
+    const hit = document.querySelector('.pc-pv-hit').getBoundingClientRect();
+    return { x: hit.left + hit.width / 2, y: hit.top + hit.height / 2 };
+  }, ids.odo);
+  await page.mouse.move(dragStart.x, dragStart.y);
+  await page.mouse.down();
+  await page.mouse.move(dragStart.x + 40, dragStart.y + 24, { steps: 8 });
+  await page.mouse.up();
+  await sleep(600);
+  out.drag = await page.evaluate(async (odo) => {
+    const { getState } = await import('/src/store/project.ts');
+    const { findClip } = await import('/src/kernel/project.ts');
+    return findClip(getState().project, odo)?.clip.frame ?? null;
+  }, ids.odo);
+  check(out.drag && Number.isFinite(out.drag.x) && Number.isFinite(out.drag.y), 'dragging with the move tool writes a clip frame', out.drag);
+  await page.evaluate(() => { document.querySelectorAll('.pc-pv-tool')[0].click(); });
+
   // 其它 agent 改文件会让 vite 整页重载,那样的一轮结果不可信:标记丢了就报出来
   out.reloaded = await page.evaluate(() => window.__smokeMarker !== 1);
   check(!out.reloaded, 'page was not reloaded by HMR during the run (rerun when the tree is quiet)');
