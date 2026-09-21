@@ -1,5 +1,5 @@
 /**
- * mediaSync 的单测。跑:node --test src/editor/preview/mediaSync.test.mjs
+ * mediaSync 的单测。跑:node --test src/render/mediaSync.test.mjs
  *
  * 钉死的是一条:**纠偏本身不能制造下一次纠偏的理由**。
  * 原来那版「偏差 > 0.2s 就 seek」在时间轴中段会自持循环 —— 中段 seek 要从上一个关键帧

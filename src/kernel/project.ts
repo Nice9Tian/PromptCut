@@ -448,13 +448,18 @@ export function videoLayersAt(
  * 中段 seek 要先解出最多 150 帧才出画,切一次就黑/卡一两百毫秒;真实项目 88.7 秒里切了 25 次,
  * 而且同一个文件内部的切换在原片里**没有一次是连续的**,光复用播放器也省不掉那次 seek。
  * 所以预览每条序列备两个播放器,离下一段起点还有一点时间时就把它装进空着的那个、
- * seek 到起点停好(见 editor/preview/MediaLayers.tsx)—— 这里就是回答「下一段是谁」。
+ * seek 到起点停好(见 render/VideoTrack.tsx)—— 这里就是回答「下一段是谁」。
  *
  * 不看不透明度:下一段开头若是淡入,起点那一刻是 0,但要提前装好的恰恰是它。
+ *
+ * `skip`:**过滤必须下推进来**(E7 第 1 条)。这个函数每条序列只回一段,事后在外面滤掉
+ * (比如图卡接管的素材段)就等于这条序列没有 `next` —— 双 `<video>` 预装整条失效。
+ * 给了谓词就接着往后找这条序列上的下一段。
  */
 export function nextVideoLayerAfter(
   p: Project,
   t: number,
+  skip?: (clip: TrackClip) => boolean,
 ): Array<{ trackId: string; clip: TrackClip; media: MediaAsset }> {
   const out: Array<{ trackId: string; clip: TrackClip; media: MediaAsset }> = [];
   for (const tr of [...p.tracks].reverse()) {
@@ -462,7 +467,7 @@ export function nextVideoLayerAfter(
     let best: { clip: TrackClip; media: MediaAsset } | null = null;
     // 不假设 clips 已按 start 排好:读进来的老文件未必排过,找最早的那段就是
     for (const c of tr.clips) {
-      if (!c.mediaId || c.start <= t) continue;
+      if (!c.mediaId || c.start <= t || skip?.(c)) continue;
       if (best && c.start >= best.clip.start) continue;
       const media = p.media.find((m) => m.id === c.mediaId);
       if (!media || media.kind === "audio") continue;
