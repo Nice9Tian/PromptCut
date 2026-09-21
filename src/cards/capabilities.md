@@ -143,7 +143,7 @@ JSON 放不下注释，所以审阅结论和理由写在这里。**改 `capabili
 
 推导拿的是**部件出处的卡 id**（`PartDef.from`，26 个部件全都写了）。
 但是 `clip.parts` 上存的是 `PartInstance.partId`（部件 id），要换成卡 id 得查部件注册表
-（`src/parts/registry.ts`，只有浏览器侧的 `.tsx` 能加载）。`cardGraph.mjs` 两端都跑，
+（`src/kernel/partRegistry.ts`，只有浏览器侧的 `.tsx` 能加载）。`cardGraph.mjs` 两端都跑，
 **不能一端查得到、一端查不到**，否则身份 digest 会在浏览器和 Node 之间分叉。
 所以 `cardGraph.mjs` 只把 `clip.parts` 原样传进去，解析不出卡 id 的部件按 `unknown` 计：
 

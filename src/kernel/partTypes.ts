@@ -1,5 +1,5 @@
 import type { ComponentType } from "react";
-import type { ClipFrame, Control } from "../kernel/types";
+import type { ClipFrame, Control } from "./types";
 
 /**
  * 部件库的契约。

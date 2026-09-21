@@ -3,7 +3,7 @@ import { getState, actions } from "../../store/project";
 import { getCard } from "../../kernel/registry";
 import { envelopeOf } from "../../kernel/envelope";
 import { addPart as addPartToTree, movePart as movePartInTree, removePart as removePartFromTree, updatePart as updatePartInTree, validatePartTree } from "../../kernel/parts";
-import { allParts, getPart } from "../../parts/registry";
+import { allParts, getPart } from "../../kernel/partRegistry";
 import { COMPOSITE_CARD_ID } from "../../cards/native/composite";
 import type { PartInstance } from "../../kernel/types";
 import { timelineDigest, lookHint } from "../tools/toolEcho";

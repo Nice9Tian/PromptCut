@@ -1,7 +1,7 @@
 import type { CardDef, CardProps } from "../../kernel/types";
 
 /**
- * 组合卡:内容不是一整块 JSX,而是 clip.parts 上的一棵**部件实例树**(见 src/parts/types.ts)。
+ * 组合卡:内容不是一整块 JSX,而是 clip.parts 上的一棵**部件实例树**(见 src/kernel/partTypes.ts)。
  *
  * 舞台(render/Stage.tsx)看到 cardId 是 composite 就不走这个 Component,改走 PartTree 逐级渲染;
  * 这里的 Component 只在卡片库悬停预览、或者 clip 上一个部件都没有时出现,画一句提示。

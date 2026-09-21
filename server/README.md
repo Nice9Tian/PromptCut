@@ -40,7 +40,7 @@ AI 面板的分页栏、Agent 之间的范围声明与互相通知（`declare_sc
 
 ### 部件库与组合卡（src/parts、src/kernel/parts.ts）
 
-* 部件（`PartDef`，src/parts/types.ts）是可独立渲染的最小单元，一个文件一个放在 src/parts/lib/，glob 自动收集；组合卡（cardId `composite`）的 `clip.parts` 是一棵部件实例树，舞台（render/PartTree.tsx）按树逐级渲染摆位，每个实例的框相对父框、进场时机相对父级。
+* 部件（`PartDef`，src/kernel/partTypes.ts）是可独立渲染的最小单元，一个文件一个放在 src/parts/lib/，glob 自动收集；组合卡（cardId `composite`）的 `clip.parts` 是一棵部件实例树，舞台（render/PartTree.tsx）按树逐级渲染摆位，每个实例的框相对父框、进场时机相对父级。
 * MCP 工具 `list_parts`、`add_composite`、`add_part`、`set_part`、`remove_part`、`move_part`；`get_clip` / `set_clip` 对组合卡返回 / 接受整棵实例树（带 partId、frame.local 可写、frame.world 只读、settleMs）。树的增删改移和校验都是 kernel/parts.ts 的纯函数，参数面板（PartsForm）和 Agent 走同一条路。
 
 ### Skill 任务（server/vite-plugin-skill.ts）

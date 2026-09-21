@@ -1,5 +1,5 @@
 import { frameCss, frameBox, type Size } from "../kernel/layout";
-import { getPart } from "../parts/registry";
+import { getPart } from "../kernel/partRegistry";
 import type { PartInstance } from "../kernel/types";
 
 /**

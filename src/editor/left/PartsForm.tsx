@@ -3,7 +3,7 @@ import { actions } from "../../store/project";
 import type { TrackClip } from "../../kernel/project";
 import type { Control, PartInstance } from "../../kernel/types";
 import { addPart, findPart, movePart, removePart, updatePart } from "../../kernel/parts";
-import { allParts, getPart } from "../../parts/registry";
+import { allParts, getPart } from "../../kernel/partRegistry";
 
 /**
  * 组合卡的参数面板:一棵部件实例树,每个实例可以改参数、框、进场时机、次序,也能加减部件。

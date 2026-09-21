@@ -1,14 +1,14 @@
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 import { allCards } from "../../kernel/registry";
-import { allParts } from "../../parts/registry";
+import { allParts } from "../../kernel/partRegistry";
 import { assetCardKind } from "../../cards/assets";
 import { AnimClock } from "../../kernel/AnimClock";
 import { PartTree } from "../../render/PartTree";
 import { themeStyle } from "../../themes";
 import { getState } from "../../store/project";
 import type { CardDef, PartInstance } from "../../kernel/types";
-import type { PartDef } from "../../parts/types";
+import type { PartDef } from "../../kernel/partTypes";
 import { measureAcrossTime, unionBox, type Box } from "../../render/contentBox";
 import { knownKeys, rememberBox, dumpBoxes } from "./previewBoxes";
 
