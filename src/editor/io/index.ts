@@ -319,7 +319,7 @@ export function exportProjectJson(): string {
 }
 
 /**
- * 导出视频:把当前项目交给渲染内核(scripts/export-frames.mjs)逐帧渲染。
+ * 导出视频:把当前项目交给渲染内核(server/bakery/)逐帧渲染。
  * 浏览器里没法直接起 puppeteer,所以走 dev server 的 /api/export 接口(vite 插件,由本任务实现),
  * 返回一个进度回调可订阅的 job。
  */

@@ -1,9 +1,9 @@
 /**
  * 导出的混音:在 OfflineAudioContext 里把整条时间轴的声音渲成一段 PCM。
  *
- * 输入是 scripts/export-frames.mjs 写好的 plan.json:每段一个 ffmpeg 已经裁好的 wav(只含时间轴用到的那一截,
+ * 输入是 server/bakery/audio-mix.mjs 写好的 plan.json:每段一个 ffmpeg 已经裁好的 wav(只含时间轴用到的那一截,
  * 48 kHz 立体声 float),加上它在时间轴的位置、音量、淡入淡出、挂的效果。这里做的事和 ffmpeg 那条老路
- * (scripts/mux-audio.mjs)一一对应:adelay = start(source.start(at)),afade = 增益自动化(线性,和 afade 默认的 tri 一样),
+ * (server/bakery/mux-audio.mjs)一一对应:adelay = start(source.start(at)),afade = 增益自动化(线性,和 afade 默认的 tri 一样),
  * volume = 增益,amix normalize=0 = 直接相加 —— 多出来的只有效果链(src/audio/fxChain.ts,和预览同一份)。
  *
  * 为什么不把整个素材文件塞给 decodeAudioData:一段 10 分钟的 4K 视频文件就是 1 GB,浏览器要整份读进内存再解;

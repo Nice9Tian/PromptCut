@@ -444,7 +444,7 @@ function stepChrome(appDir) {
    * 两个浏览器都要:
    *   chrome                —— 完整 Chrome,给网页工具 / 采集用(server/web/browser.mjs)
    *   chrome-headless-shell —— 导出和预烘用。0.4 起渲染后端是 HeadlessExperimental.beginFrame,
-   *                            这个 CDP 域只在 headless-shell 里有(见 scripts/export-frames.mjs 文件头)。
+   *                            这个 CDP 域只在 headless-shell 里有(见 server/bakery/chrome.mjs 文件头)。
    *                            以前为了省约 200 MB 专门不拷它,现在少了它导出直接起不来。
    * puppeteer 按 PUPPETEER_CACHE_DIR(= runtime/chrome,lib.rs 里设)下的 <browser>/win64-<版本> 找它们。
    */

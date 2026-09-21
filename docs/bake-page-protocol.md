@@ -3,8 +3,8 @@
 预渲染页（`?export=1`，`src/ExportView.tsx`）从打开到逐帧的**全部页内调用**就是这份协议。
 Node 侧只经 `window.__*` 驱动页面，除此之外不碰页面内部；页面侧不知道是谁在驱动它。
 
-清单由 `scripts/verify-bake-protocol.mjs` 守住：它扫 `scripts/export-frames.mjs`、
-`scripts/frame-ready.mjs`、`scripts/capture-frame.mjs`、`scripts/frame-media.mjs` 里全部
+清单由 `scripts/verify-bake-protocol.mjs` 守住：它扫 `server/bakery/` 的 `chrome.mjs`、`bake.mjs`、`shards.mjs`、`media.mjs`、`ffmpeg.mjs`、`export.mjs`、`audio-mix.mjs`、
+`frame-ready.mjs`、`capture-frame.mjs`、`frame-media.mjs` 里全部
 `window.__…` 的读写，不在下面两栏里的名字直接失败（两栏和脚本必须字字对上）。
 `npm test` 里的落点是 `server/test/bake-protocol.test.mjs`。
 
@@ -19,23 +19,23 @@ Node 侧只经 `window.__*` 驱动页面，除此之外不碰页面内部；页�
 
 | 名字 | 谁调 | 做什么 |
 | --- | --- | --- |
-| `__pcReady` | `export-frames.mjs`（`waitReady`；`newSession` 等它，`openBakery` 经它建页） | 页面装配完毕的信号，布尔量 |
-| `__pcLoadProject` | `export-frames.mjs`（`loadProject`） | 原地换项目文档，不重新导航 |
-| `__pcTimeline` | `export-frames.mjs` | 摊平后的时间轴（fps / duration / clips），分片规划要读 |
-| `__pcPlanFrameWindow` | `export-frames.mjs` | 一批帧要挂哪些片段、时钟拨到哪一帧（`render/frameWindow.mjs`） |
-| `__pcSetFrameWindow` | `export-frames.mjs` | 按上面的计划重挂场景，并把时钟拨到挂载帧 |
-| `__pcHideFrameMedia` | `export-frames.mjs`（`step()` 的开头） | 摘掉素材层的 `src`：推进动画的过程中一律不加载素材 |
-| `__pcPrepareFrameMedia` | `frame-media.mjs` 的 `prepareFrameMedia`（`export-frames.mjs` 与 `capture-snapshot.mjs`） | 按 `data-pc-media-*` 把这一帧的素材装回来并 seek 到位 |
-| `__pcSetT` | `export-frames.mjs` | 下发这一帧的时间（写 `__pcExportMs` + `flushSync` 提交） |
-| `__pcSyncAnims` | `export-frames.mjs` | 把所有 Web Animations 的 `currentTime` 钉到导出时间 |
-| `__pcStaticProbe` | `export-frames.mjs` | 这一帧画面静不静止（静止才敢复用上一帧） |
-| `__bfSettle` | `frame-ready.mjs`、`export-frames.mjs` | 排空挂着的宏任务，直到 DOM 不再变 |
+| `__pcReady` | `chrome.mjs`（`waitReady`；`newSession` 等它，`openBakery` 经它建页） | 页面装配完毕的信号，布尔量 |
+| `__pcLoadProject` | `chrome.mjs`（`loadProject`） | 原地换项目文档，不重新导航 |
+| `__pcTimeline` | `bake.mjs`、`shards.mjs` | 摊平后的时间轴（fps / duration / clips），分片规划要读 |
+| `__pcPlanFrameWindow` | `bake.mjs` | 一批帧要挂哪些片段、时钟拨到哪一帧（`render/frameWindow.mjs`） |
+| `__pcSetFrameWindow` | `bake.mjs` | 按上面的计划重挂场景，并把时钟拨到挂载帧 |
+| `__pcHideFrameMedia` | `bake.mjs`（`step()` 的开头） | 摘掉素材层的 `src`：推进动画的过程中一律不加载素材 |
+| `__pcPrepareFrameMedia` | `frame-media.mjs` 的 `prepareFrameMedia`（`bake.mjs` 与 `capture-snapshot.mjs`） | 按 `data-pc-media-*` 把这一帧的素材装回来并 seek 到位 |
+| `__pcSetT` | `bake.mjs` | 下发这一帧的时间（写 `__pcExportMs` + `flushSync` 提交） |
+| `__pcSyncAnims` | `bake.mjs` | 把所有 Web Animations 的 `currentTime` 钉到导出时间 |
+| `__pcStaticProbe` | `bake.mjs` | 这一帧画面静不静止（静止才敢复用上一帧） |
+| `__bfSettle` | `frame-ready.mjs`、`bake.mjs` | 排空挂着的宏任务，直到 DOM 不再变 |
 | `__pcFrameReady` | `frame-ready.mjs`（`waitFrameReady`） | 控件 / 字体 / 图片就绪 |
 | `__pcFrameWorkStatus` | `frame-ready.mjs`、`capture-frame.mjs` | 还有哪些异步加载没落地（超时报错要用） |
-| `__pcRestartCards` | `export-frames.mjs`（`warmUp`） | 重挂载全部卡片（随机种子先拨回起点） |
-| `__pcResetAnims` | `export-frames.mjs`（`warmUp`） | 清空动画锚点 |
-| `__pcClipFrameModes` | `export-frames.mjs`（并行分片的规划步） | 每个卡片片段的帧模式，用来选安全的分片切点 |
-| `__bfFreeze` | `export-frames.mjs`（`shoot()` 与逐帧循环） | 把 `[data-pc-scene]` 冻结成 `{ html, lossy, controls }` |
+| `__pcRestartCards` | `bake.mjs`（`warmUp`） | 重挂载全部卡片（随机种子先拨回起点） |
+| `__pcResetAnims` | `bake.mjs`（`warmUp`） | 清空动画锚点 |
+| `__pcClipFrameModes` | `shards.mjs`、`export-unified.mjs`（并行分片的规划步） | 每个卡片片段的帧模式，用来选安全的分片切点 |
+| `__bfFreeze` | `bake.mjs`（`shoot()` 与逐帧循环） | 把 `[data-pc-scene]` 冻结成 `{ html, lossy, controls }` |
 
 ## PNG 路 / puppeteer 专用
 
@@ -45,14 +45,14 @@ Node 侧只经 `window.__*` 驱动页面，除此之外不碰页面内部；页�
 
 | 名字 | 谁读 | 做什么 |
 | --- | --- | --- |
-| `__pcMutationCount` | `export-frames.mjs`（只读） | DOM 变动计数，静态判定 |
+| `__pcMutationCount` | `bake.mjs`（只读） | DOM 变动计数，静态判定 |
 | `__pcExportMs` | `capture-frame.mjs`（只读） | 当前帧的导出毫秒，截图前核对页面时钟 |
-| `__pcRafCount` | `export-frames.mjs`（只读） | 被计数的 rAF 注册次数，静态判定 |
-| `__pcProbeMs` | `export-frames.mjs`（只读，`trace`） | 探针耗时，只用于 trace |
-| `__bfGlassOn` | `export-frames.mjs` | 毛玻璃遮罩：把除玻璃外的一切藏起来、玻璃涂白 |
-| `__bfGlassOff` | `export-frames.mjs` | 撤掉遮罩，分两步还原以免惊动动画 |
-| `__bfGlassEls` | `export-frames.mjs` | 遮罩期间被标记的元素表（`__bfGlassOn` / `Off` 之间传递） |
-| `__pcAudioMix` | `export-frames.mjs` | 音轨混音（`?audioMix`），不参与画面 |
+| `__pcRafCount` | `bake.mjs`（只读） | 被计数的 rAF 注册次数，静态判定 |
+| `__pcProbeMs` | `bake.mjs`（只读，`trace`） | 探针耗时，只用于 trace |
+| `__bfGlassOn` | `chrome.mjs`（注入）、`bake.mjs`（调用） | 毛玻璃遮罩：把除玻璃外的一切藏起来、玻璃涂白 |
+| `__bfGlassOff` | `chrome.mjs`（注入）、`bake.mjs`（调用） | 撤掉遮罩，分两步还原以免惊动动画 |
+| `__bfGlassEls` | `chrome.mjs` | 遮罩期间被标记的元素表（`__bfGlassOn` / `Off` 之间传递） |
+| `__pcAudioMix` | `audio-mix.mjs` | 音轨混音（`?audioMix`），不参与画面 |
 
 外加不带名字的两样，也只在这条路上：`captureFrame` 的 `Page.captureScreenshot`，
 以及 `HeadlessExperimental.beginFrame` 推进的 CDP 虚拟时间。

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { PNG } from 'pngjs';
-import { captureFrame } from '../../scripts/capture-frame.mjs';
+import { captureFrame } from '../bakery/capture-frame.mjs';
 
 // PNG screenshots are integrity-checked, so fixtures must be real PNGs.
 function framePng(seed = 0) {

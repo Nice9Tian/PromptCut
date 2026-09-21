@@ -5,7 +5,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import puppeteer from 'puppeteer';
 import { fileURLToPath } from 'node:url';
-import { launchHealthyChrome } from './chrome-health.mjs';
+import { launchHealthyChrome } from '../server/bakery/chrome-health.mjs';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const runtime = process.argv[2] || path.join(process.env.LOCALAPPDATA, 'PromptCut', 'runtime', 'chrome');

@@ -8,7 +8,7 @@ import { MovFrameStore, PlaybackMovStore, signatureMatches } from '../frame-mov.
 import { readRenderRecord, withRenderRecord } from '../png-record.mjs';
 import { CardFrameCache } from '../card-cache.mjs';
 import { FramePlayback } from '../frame-playback.mjs';
-import { pngIntegrityError } from '../../scripts/png-integrity.mjs';
+import { pngIntegrityError } from '../bakery/png-integrity.mjs';
 import { isFullyTransparentPng } from '../frame-validity.mjs';
 
 const image = alpha => {

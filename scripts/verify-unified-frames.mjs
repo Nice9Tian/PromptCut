@@ -4,9 +4,9 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { PNG } from 'pngjs';
 import { FramePipeline } from '../server/frame-pipeline.mjs';
-import { bakeFrames, findFfmpeg } from './export-frames.mjs';
-import { exportUnified } from './export-unified.mjs';
-import { captureSnapshot } from './capture-snapshot.mjs';
+import { bakeFrames, findFfmpeg } from '../server/bakery/index.mjs';
+import { exportUnified } from '../server/bakery/export-unified.mjs';
+import { captureSnapshot } from '../server/bakery/capture-snapshot.mjs';
 
 const origin = process.env.PC_FRAME_TEST_URL || 'http://127.0.0.1:5192';
 const root = path.resolve('out', `frame-verification-${Date.now()}`);

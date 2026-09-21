@@ -11,8 +11,13 @@ const APP_ROOT = path.resolve(fileURLToPath(import.meta.url), '../..');
 /** Code that decides which pixels a screenshot contains. A fix here (e.g. a
  * readiness wait or a stale-screenshot guard) must retire frames captured by
  * the old code, including card caches whose keys do not contain frameCode. */
-const CAPTURE_FILES = ['scripts/export-frames.mjs', 'scripts/capture-frame.mjs', 'scripts/capture-snapshot.mjs', 'scripts/frame-media.mjs',
-  'scripts/frame-ready.mjs', 'scripts/png-integrity.mjs'];
+/* `scripts/export-frames.mjs` 那一整个文件现在是 `server/bakery/` 里的七个模块
+ * (chrome / bake / shards / media / ffmpeg / export / audio-mix),七个一起列出来 ——
+ * 哈希到的内容和搬家前完全一样,既不多也不少。 */
+const BAKERY_FILES = ['server/bakery/chrome.mjs', 'server/bakery/bake.mjs', 'server/bakery/shards.mjs',
+  'server/bakery/media.mjs', 'server/bakery/ffmpeg.mjs', 'server/bakery/export.mjs', 'server/bakery/audio-mix.mjs'];
+const CAPTURE_FILES = [...BAKERY_FILES, 'server/bakery/capture-frame.mjs', 'server/bakery/capture-snapshot.mjs', 'server/bakery/frame-media.mjs',
+  'server/bakery/frame-ready.mjs', 'server/bakery/png-integrity.mjs'];
 const hashFiles = (hash, root, files) => {
   for (const file of files) {
     hash.update(file);
@@ -44,14 +49,15 @@ export function captureCode(root) {
 /**
  * 冻结代码指纹 —— 共享快照键(A3a)里唯一一项「渲染器版本」。
  *
- * 只哈希 CAPTURE_FILES 里**和冻结有关**的两个:`export-frames.mjs`(`__bfFreeze`
- * 本体:内联计算样式、id 改名、canvas 转 img、按 data-pc-clip 切 control 子树)和
+ * 只哈希 CAPTURE_FILES 里**和冻结有关**的两个:原 `export-frames.mjs`(`__bfFreeze`
+ * 本体:内联计算样式、id 改名、canvas 转 img、按 data-pc-clip 切 control 子树;搬家后是
+ * `server/bakery/` 的那七个模块)和
  * `capture-snapshot.mjs`(把冻好的 HTML 塞回文档栅格化);再加页面侧的
  * `src/render/snapshotFreeze.ts` / `src/render/snapshotRename.ts`。
  * 其余 CAPTURE_FILES(capture-frame / frame-media / frame-ready / png-integrity)
  * 决定的是**截图**,不决定快照 HTML 的内容,不进这个指纹。
  *
- * J1 联动(必须一起读):J1 把冻结逻辑从 export-frames.mjs 搬进 src/ 的那两个模块
+ * J1 联动(必须一起读):J1 把冻结逻辑从原 export-frames.mjs 搬进 src/ 的那两个模块
  * 之后,**这里不再加文件** —— 集合已经把要搬进去的两个文件写死在里面了。于是:
  *   - 改冻结代码 ⇒ 指纹变 ⇒ 共享键变 ⇒ 旧快照自然失效,不会被错误复用;
  *   - 不改冻结代码 ⇒ 指纹不变 ⇒ 旧快照跨机器照常复用,搬家本身不作废任何快照。
@@ -61,7 +67,7 @@ export function captureCode(root) {
  * 缺文件按 `hashFiles` 的老规矩记 `'missing'`:snapshotFreeze / snapshotRename 还
  * 没落地时指纹是确定的,J1 落地那一刻变一次(本来就该变)。
  */
-const FREEZE_FILES = ['scripts/export-frames.mjs', 'scripts/capture-snapshot.mjs',
+const FREEZE_FILES = [...BAKERY_FILES, 'server/bakery/capture-snapshot.mjs',
   'src/render/snapshotFreeze.ts', 'src/render/snapshotRename.ts'];
 export function freezeCode(root = APP_ROOT) {
   if (freezes.has(root)) return freezes.get(root);

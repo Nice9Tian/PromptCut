@@ -16,13 +16,13 @@
 | 项 | 结论 | 实测 |
 |---|---|---|
 | **E0** 起一趟拆分 | 第 0 节里「每趟 4~5 s」是旧数据:常驻 worker 里 Chrome 已经起好,一趟的准备只剩换页 | worker 冷启动(起 Chrome + 首页就绪)5.6 s,只付一次;之后每趟换页(新 page + 导航 + 加载模块 + 就绪)约 310 ms;把项目灌进已就绪的空页只要 3~4 ms |
-| **A2** 预热页面池 | **已做**。`export-frames.mjs` 的 bakery 新增 `preload` / `resetWith`;`render-worker.mjs` 每做完一趟就备好下一张空页,来活只灌项目 | 每趟省约 310 ms。备用页和现开的页渲出的同一帧逐字节相同:3 张卡 × 3 次,9/9;经 `/api/vision/snapshot` 端到端同样相同 |
+| **A2** 预热页面池 | **已做**。`server/bakery/chrome.mjs` 的 bakery 新增 `preload` / `resetWith`;`render-worker.mjs` 每做完一趟就备好下一张空页,来活只灌项目 | 每趟省约 310 ms。备用页和现开的页渲出的同一帧逐字节相同:3 张卡 × 3 次,9/9;经 `/api/vision/snapshot` 端到端同样相同 |
 | **A1** see_frames 多时刻合成一趟 | **已做**。`/api/vision/snapshot` 接受 `times`,走 `renderFrames` 一趟推到最晚那个时刻;前端 `seePreview` 一次请求 | 8 个时刻 23.2 s → 11.7 s,快 2.0 倍;和逐张渲逐字节相同,8/8。推帧才是大头,省的主要是重复推帧 |
 | **A3** 不同卡串成一趟 | **不做** | 4 张卡:各起一趟 3.08 s,串成一趟 2.29~2.55 s,只快 17~25%(同帧字节 4/4 相同)。但各起一趟会分到渲染池的多个 worker 上并行,串成一趟只能用一个;串得越长推帧越多;一张卡出错整趟失败。旧管线也试过、也没快(`vite-plugin-vision.ts:1358-1361`) |
 | **E1** 提问地图 | **「Chrome 只推开头」对 88/89 张卡成立** | 89 张卡:31 张从不问;54 张粒子卡只在片内 -1..1 帧问(粒子库初始化);step-timeline、type-shift、scene-3d 只在挂载那一帧问;**只有 chapter-bar 每帧都问**(Motion 布局动画 `getBoundingClientRect`,204 次,一直问到最后一帧)。导出内核自己也会问(ExportView 静态探针读计算样式),纯算法里由替代代码接管,不算 |
 | **E2a** 只看 DOM 能否还原真实画面 | **不能逐字节还原,差在动画中间值,不差结构和时间** | 正常导出(Motion 走 WAAPI)vs 关掉 WAAPI(Motion 走 JS、数值写进内联样式),片内 90 帧:mu-number-ticker 90/90 相同;rank-bars 65/90(最大通道差 17);mu-blur-fade 85/90(31);checklist 48/90(42);stat-proof 61/90(2)。错开 ±1、±2 帧反而对得更少,排除时间偏移。目视四张最差帧:位置、结构完全一致,差的是透明度和模糊的中间值。推测是 WAAPI 由 Chrome 求缓动、弹簧近似成 `linear()`,和 Motion 在 JS 里自己算有细微差别 |
 | JS 动画模式的确定性 | **确定** | 关 WAAPI 连跑两遍:rank-bars、checklist 各 90/90 帧逐字节相同 |
-| **E2b** 纯算法雏形 | **不问浏览器的卡能对上,但更慢;第三方库按环境分叉的卡,回放了答案也对不上** | 做法:happy-dom + Vite SSR,在 Node 里跑同一份源码,照 export-frames 的每帧步骤推进。和 Chrome(关 WAAPI)逐帧比 DOM,比之前经 CSSOM 规整样式、属性排序、数值按 1e-4 容差。**不问浏览器的 6 张卡**:mu-number-ticker、mu-blur-fade 逐字节 90/90;stat-proof、type-shift 容差内 90/90;rank-bars 88/90、checklist 89/90,剩下的是科学计数法写法的 1e-9 量级差。**会问的 step-timeline 49/90**:不回放时,CSS 变量解析不了;按 Chrome 录下的计算样式回放(命中 25、缺失 0),仍是 49/90。Motion 在 happy-dom 里对 `transparent` 报「不可动画」,走了和 Chrome 不同的分支,整段颜色动画没跑。**速度**:启动 4.2~4.7 s(Vite SSR 变换整张模块图);每帧 65~83 ms,**比 beginFrame 直出(26.9 ms/帧)慢 2.5~3 倍** |
+| **E2b** 纯算法雏形 | **不问浏览器的卡能对上,但更慢;第三方库按环境分叉的卡,回放了答案也对不上** | 做法:happy-dom + Vite SSR,在 Node 里跑同一份源码,照 `server/bakery/bake.mjs` 的每帧步骤推进。和 Chrome(关 WAAPI)逐帧比 DOM,比之前经 CSSOM 规整样式、属性排序、数值按 1e-4 容差。**不问浏览器的 6 张卡**:mu-number-ticker、mu-blur-fade 逐字节 90/90;stat-proof、type-shift 容差内 90/90;rank-bars 88/90、checklist 89/90,剩下的是科学计数法写法的 1e-9 量级差。**会问的 step-timeline 49/90**:不回放时,CSS 变量解析不了;按 Chrome 录下的计算样式回放(命中 25、缺失 0),仍是 49/90。Motion 在 happy-dom 里对 `transparent` 报「不可动画」,走了和 Chrome 不同的分支,整段颜色动画没跑。**速度**:启动 4.2~4.7 s(Vite SSR 变换整张模块图);每帧 65~83 ms,**比 beginFrame 直出(26.9 ms/帧)慢 2.5~3 倍** |
 
 ### 结论
 
@@ -58,7 +58,7 @@
 **还在反复付准备时间的地方:**
 
 1. **see_frames 带多个时刻时,一张一张单独起任务**(`src/editor/right/index.tsx:1911-1918`)。每张都从第 0 帧重推,10 个时刻就是 10 次准备时间。
-2. **每个任务都新开一个页面、重新加载整个导出页**(`scripts/export-frames.mjs:320-326`)。必须开新页面的理由写在 `scripts/render-worker.mjs:75-86`:上一趟跑完,动画起点都已建好,原地再用拿不到第 0 帧的画面。
+2. **每个任务都新开一个页面、重新加载整个导出页**(`server/bakery/chrome.mjs` 的 `newSession`)。必须开新页面的理由写在 `scripts/render-worker.mjs:75-86`:上一趟跑完,动画起点都已建好,原地再用拿不到第 0 帧的画面。
 3. **不同的卡各起一趟。**
 
 **为什么卡片不能直接跳到任意时刻渲染:**
@@ -78,7 +78,7 @@
 
 - 做了:`--dom-cache` 每帧冻结整棵 DOM,gzip 后每帧 8~15 KB;乱序重放 300/300 相同。
 - 没做:「变化量 + 数值表」,以及拟合回 React 组件。
-- 只有 `scripts/export-frames.mjs` 和 `scripts/replay-frames.mjs` 用到这套缓存;see_frames、烘焙、导出都没接。
+- 只有 `server/bakery/bake.mjs` 和 `scripts/replay-frames.mjs` 用到这套缓存;see_frames、烘焙、导出都没接。
 - 重放截图和实时截图有边缘差异:rank-bars 60 帧里 35 帧相同、最大通道差 71;growth-curve 最大差 95。
 - 重放截图每帧 66~90 ms。
 - 出处:`docs/render-rebuild-plan.md:143-154`。
@@ -96,7 +96,7 @@
 
 ### A2. 预热页面池
 
-- **做法**:render worker 空闲时先开好下一个新页面,导航到导出页并等到就绪。任务来了,用现成的「在新页面上原地换项目」接口灌进项目(`scripts/export-frames.mjs:231-237`),不再现开现加载。
+- **做法**:render worker 空闲时先开好下一个新页面,导航到导出页并等到就绪。任务来了,用现成的「在新页面上原地换项目」接口灌进项目(`server/bakery/chrome.mjs` 的 `loadProject`),不再现开现加载。
 - **不破坏确定性的理由**:每个任务用的仍然是一个全新、没跑过的页面,只是提前开好了。
 - **验收**:
   - 单任务从派活到第一帧的耗时下降,先测出下降多少;
@@ -240,8 +240,8 @@ lynx / w3m 这类文本浏览器不跑 JS,用不上。
 
 - **完整导出(`/api/export`)仍然把视频塞进 Chrome 逐帧跳帧截图。**
   - 视频和图片都挂在导出舞台里(`src/ExportView.tsx:336-363`),每帧设 `currentTime` 并等待跳帧完成(`:161-167`)。
-  - 画面里有视频的帧,静态跳过不生效(`scripts/export-frames.mjs:439-440`)。
-  - `/api/export` 没传 `--workers`,命令行默认是 auto,最多 4 个分片(`scripts/export-frames.mjs:741-742`),每个分片都从第 0 帧推起。
+  - 画面里有视频的帧,静态跳过不生效(`server/bakery/bake.mjs` 的 `isStatic`)。
+  - `/api/export` 没传 `--workers`,命令行默认是 auto,最多 4 个分片(`scripts/export-frames.mjs` 的命令行默认值),每个分片都从第 0 帧推起。
   - 修法和 see_frames 一样:Chrome 只渲卡片,素材交给 ffmpeg 合成(`server/vision-compose.mjs`)。
 - **Agent 渲染时,编辑器界面可能卡住但 CPU 很低。**
   - 编辑器和所有接口在同一个 HTTP/1.1 源下,Chrome 对同一个源只给约 6 条连接(`src/editor/preview/useBakePrefetch.ts:362-365`)。

@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { PNG } from 'pngjs';
-import { exportFrames } from './export-frames.mjs';
+import { exportFrames } from '../server/bakery/index.mjs';
 
 async function verify() {
   const args = process.argv.slice(2);

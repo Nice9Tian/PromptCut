@@ -187,7 +187,7 @@ A 层是 DOM、B 层是同一棵 DOM 里的一个 canvas，浏览器一次就合
 
 ### 硬规矩：绝不进 Agent 的眼睛
 
-`see_frames` 走 `scripts/export-frames.mjs` 另起一个 Chrome、加载 `?export=1`，
+`see_frames` 走 `server/bakery/` 另起一个 Chrome、加载 `?export=1`，
 **根本不经过编辑台那个窗口**。所以只要实体模式活在 `?stage=1` 这条路上，vision 那边读都读不到。
 
 参数必须是**显式打开**：
@@ -337,7 +337,7 @@ frame 斜切但没有透视(素材层渲染在主文档里,祖先没有 perspect
 **那个推理漏了第三条,而且是最自然的那条:烘一次,存成素材。**
 
 关键在于「不要求**当场**栅格化」。烘焙是一次性的、发生在更早的一步,画那张图的就是导出成片的
-那个渲染器(`scripts/export-frames.mjs`,和 `see_frames` 同一条管线)。之后预览和导出都只是
+那个渲染器(`server/bakery/`,和 `see_frames` 同一条管线)。之后预览和导出都只是
 **加载同一个文件**,谁都没有在栅格化。分叉的前提是两边各算各的,而这里没有人在算。
 
 实测:同一张烘出来的贴图,预览(`?stage=1`)和导出(`?export=1`)的同一帧,

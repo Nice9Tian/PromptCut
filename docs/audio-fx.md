@@ -30,8 +30,8 @@ src/audio/fxChain.ts    一步 → Web Audio 节点;整条链 + 随时间改参�
 src/audio/previewAudio.ts   预览:<video>/<audio> 第一次需要效果时接进 AudioContext(createMediaElementSource)
 src/audio/renderMix.ts      导出:OfflineAudioContext 按位置 / 音量 / 淡入淡出 / 效果渲成 wav
 src/AudioMixView.tsx        ?audioMix=1 页面:读 plan.json → renderMix → POST /api/export/audio-mix/<id>
-scripts/export-frames.mjs   mixAudioInChrome:ffmpeg 裁每段用到的那一截 → 开混音页 → mix.wav 合进 preview.mp4;
-                            失败退回 scripts/mux-audio.mjs 的 ffmpeg 滤镜图(没有效果);--audio ffmpeg 强制走老路
+server/bakery/audio-mix.mjs mixAudioInChrome:ffmpeg 裁每段用到的那一截 → 开混音页 → mix.wav 合进 preview.mp4;
+                            失败退回 server/bakery/mux-audio.mjs 的 ffmpeg 滤镜图(没有效果);--audio ffmpeg 强制走老路
 server/vite-plugin-audio.ts POST /api/audio/measure:ffmpeg ebur128 测素材 / 片段 / 整条时间轴
 src/editor/right/audioFxTools.ts   list / create / update / remove / apply_audio_fx 的校验和门槛(Agent 和界面共用)
 src/editor/left/library/audioFxGroups.tsx  左栏「特效」里的「音频效果 / 音频预设」两组;ClipAudioFxForm.tsx 编辑分区里素材段的效果栏

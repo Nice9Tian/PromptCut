@@ -2,9 +2,12 @@ import path from 'node:path';
 import fs from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { bakeFrames, findFfmpeg, openBakery, resolveWorkers, streamPngVideo } from './export-frames.mjs';
+import { bakeFrames } from './bake.mjs';
+import { openBakery } from './chrome.mjs';
+import { findFfmpeg, streamPngVideo } from './ffmpeg.mjs';
+import { resolveWorkers } from './shards.mjs';
 import { resumableSink, retryOnBrowserLoss, useBakery } from './browser-loss.mjs';
-import { planShardRanges } from '../src/render/shardPlan.mjs';
+import { planShardRanges } from '../../src/render/shardPlan.mjs';
 
 function concatPath(file) {
   return String(file).replace(/\\/g, '/').replace(/'/g, "'\\''");
@@ -89,7 +92,7 @@ export async function exportUnified(project, opts) {
       await releasePlanner();
       throw error;
     }
-    // A lost Chrome (scripts/browser-loss.mjs) restarts the shard from its safe
+    // A lost Chrome (server/bakery/browser-loss.mjs) restarts the shard from its safe
     // cut in a new browser; frames already delivered are not written twice.
     const deliver = stream ? (_frame, buf) => stream.write(buf) : opts.onFrame;
     const sink = deliver ? resumableSink(deliver) : null;

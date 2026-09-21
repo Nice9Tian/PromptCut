@@ -19,7 +19,7 @@ process.env.PUPPETEER_CACHE_DIR ||= path.join(repo, 'desktop/src-tauri/runtime/c
 process.env.PROMPTCUT_DATA_DIR = path.join(out, 'data');
 const testFont = await fs.readFile(path.join(process.env.WINDIR || 'C:/Windows', 'Fonts/arial.ttf')).catch(() => null);
 const { FramePipeline } = await import('../server/frame-pipeline.mjs');
-const { bakeFrames, findFfmpeg } = await import('./export-frames.mjs');
+const { bakeFrames, findFfmpeg } = await import('../server/bakery/index.mjs');
 const arg = process.argv.indexOf('--project');
 const document = arg < 0 ? null : JSON.parse(await fs.readFile(process.argv[arg + 1], 'utf8'));
 await fs.mkdir(app, { recursive: true });

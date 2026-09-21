@@ -317,7 +317,7 @@ export class MovFrameStore {
     await this.ready;
     if (this.writer || this.writerError || await exists(this.movieFile)) return;
     try {
-      const create = streamFactory || (await import('../scripts/export-frames.mjs')).streamPngVideo;
+      const create = streamFactory || (await import('./bakery/index.mjs')).streamPngVideo;
       if (epoch !== this.streamEpoch) return;
       this.writer = create(ffmpeg, this.tempMovie, this.fps);
       await this.flush();

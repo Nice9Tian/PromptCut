@@ -12,7 +12,7 @@ import {
  *
  * # 确定性是这张卡唯一的难点
  *
- * 这个项目逐帧导出,同一个时间轴导两遍必须逐字节相同(见 scripts/export-frames.mjs)。
+ * 这个项目逐帧导出,同一个时间轴导两遍必须逐字节相同(见 server/bakery/)。
  * three.js 的常规用法是 `renderer.setAnimationLoop(...)` —— 自己跑 rAF、按 delta 累积。
  * **那条路在这里是错的**,而且错得不报警:
  *   - delta 累积意味着"第 30 帧长什么样"取决于前面每一帧各推了多久,机器一忙就漂;
@@ -40,7 +40,7 @@ import {
  * # WebGL 在导出里要一个开关
  *
  * 导出那套 Chrome 参数为了确定性关掉了 GPU,连带把 WebGL 关死(getContext 返回 null、不报错)。
- * scripts/export-frames.mjs 里加了 `--enable-unsafe-swiftshader` 把软件 WebGL 打开。
+ * server/bakery/chrome.mjs 里加了 `--enable-unsafe-swiftshader` 把软件 WebGL 打开。
  * 那个标志要是被谁删了,这张卡在导出里会变成一张空画布,而且**预览里还是好的** —— 只会在成片里发现。
  */
 

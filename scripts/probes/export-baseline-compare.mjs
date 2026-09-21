@@ -5,10 +5,10 @@
  *   1. run     —— 在指定的仓库树里跑一趟**全长** PNG 导出(不出视频),产物是 <out>/frames/%06d.png;
  *   2. compare —— 把两个 frames 目录逐帧比 sha256,报第一处不同、并对不同的帧数像素差。
  *
- * 为什么 run 要带 --tree:基线跑的必须是 **HEAD 那棵树自己的** scripts/export-frames.mjs
+ * 为什么 run 要带 --tree:基线跑的必须是 **HEAD 那棵树自己的** scripts/export-frames.mjs(引擎在 server/bakery/)(引擎在 server/bakery/)
  * (这次重构改的就是它),拿工作树的脚本去烘基线就不是 apples-to-apples 了。
  * 所以 run 只负责 `node scripts/export-frames.mjs …`,cwd 指到哪棵树就用哪棵树的代码。
- * cwd 还决定素材目录:export-frames.mjs 的 mediaRootDir() = <cwd>/out/media
+ * cwd 还决定素材目录:server/bakery/media.mjs 的 mediaRootDir() = <cwd>/out/media
  * (PROMPTCUT_EXPORT_DIR 没设时),/@media/<文件名> 两边都得有那份文件。
  *
  * ───────────── 这一轮实际跑的命令(照抄即可复现) ─────────────
@@ -48,7 +48,7 @@
  * - 两边必须同 fps、同分片数、同一条动画路径。这里一律 --workers 1:分片计划(shardPlan)
  *   本身也在重构范围内,分片数不同会把「分片边界重挂载」的差异混进来。
  * - --no-video:验收比的是帧,不是编码产物;ffmpeg / prores 不进对账。
- * - Chrome 参数(--disable-gpu、--font-render-hinting=none、软件光栅化…)都在 export-frames.mjs
+ * - Chrome 参数(--disable-gpu、--font-render-hinting=none、软件光栅化…)都在 server/bakery/chrome.mjs
  *   的 CHROME_ARGS 里,两棵树各自用自己的那份——这正是要比的东西之一,不要在这里覆盖。
  */
 import fs from 'node:fs';
@@ -89,7 +89,7 @@ export function exportUrlOf(origin, project) {
   return `${origin.replace(/\/$/, '')}/?export=1&timeline=${encodeURIComponent(timeline)}`;
 }
 
-/** 跑一趟全长 PNG 导出。cwd = 哪棵树,就用哪棵树的 export-frames.mjs 和 out/media */
+/** 跑一趟全长 PNG 导出。cwd = 哪棵树,就用哪棵树的 scripts/export-frames.mjs 和 out/media */
 export async function runExport({ tree, origin, project, out, fps, workers, frames }) {
   const proj = JSON.parse(await fsp.readFile(project, 'utf8'));
   const url = exportUrlOf(origin, proj);

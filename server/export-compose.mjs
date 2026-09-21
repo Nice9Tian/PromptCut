@@ -5,7 +5,7 @@
  *
  * 以前导出页把每段素材都挂成 <video>,每一帧对画面里的每一层 seek 一次、等它 seek 完再截图
  * (ExportView 的 __pcSetT / __pcFrameReady)。1080p H.264 的一次 seek 要解码到目标帧,几十到几百毫秒,
- * 一帧里有交叉溶解就是两次;画面里有视频的帧也永远判不了静止(export-frames.mjs 的 isStatic)。
+ * 一帧里有交叉溶解就是两次;画面里有视频的帧也永远判不了静止(server/bakery/bake.mjs 的 isStatic)。
  * 而最后 ffmpeg 只是把 PNG 序列铺在灰底上 —— 视频像素是 Chrome 缩放好烤进 PNG 的。
  * see_frames 早就换成了「页面只渲卡片、素材 ffmpeg 抽帧」(vision-compose.mjs),这里把同一个思路搬到整条导出:
  * 素材层按 ExportView / 预览 MediaLayers 同一套规则拼成一张 filter graph,一趟 ffmpeg 解码、摆位、淡化、叠卡片、编码。

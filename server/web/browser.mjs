@@ -3,7 +3,7 @@
  *
  * 差别不是洁癖,是三条硬冲突:
  *
- * 1. **启动参数相反**。scripts/export-frames.mjs 那个挂着一整套为字节级可复现调出来的
+ * 1. **启动参数相反**。server/bakery/chrome.mjs 那个挂着一整套为字节级可复现调出来的
  *    参数(--disable-gpu-rasterization / --disable-partial-raster / --disable-threaded-animation),
  *    那是为了同一份时间轴导出两次要逐字节一致。网页浏览要的恰恰是正常渲染 —— 站点的
  *    懒加载、动画、GPU 合成都得照常跑,不然看到的画面和用户在自己浏览器里看到的不是一回事。

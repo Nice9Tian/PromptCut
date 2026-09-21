@@ -91,15 +91,15 @@ test('freezeCode covers only the freeze files and reports missing ones determini
     await fs.mkdir(path.join(root, path.dirname(file)), { recursive: true });
     await fs.writeFile(path.join(root, file), text);
   };
-  await write('scripts/export-frames.mjs', 'freeze v1');
-  await write('scripts/capture-snapshot.mjs', 'restore v1');
+  await write('server/bakery/chrome.mjs', 'freeze v1');
+  await write('server/bakery/capture-snapshot.mjs', 'restore v1');
   // 截图相关但和冻结无关的文件不进指纹。
-  await write('scripts/capture-frame.mjs', 'shot v1');
+  await write('server/bakery/capture-frame.mjs', 'shot v1');
   const first = freezeCode(root);
-  await write('scripts/capture-frame.mjs', 'shot v2');
+  await write('server/bakery/capture-frame.mjs', 'shot v2');
   invalidateFrameCode(root);
   assert.equal(freezeCode(root), first, 'screenshot-only code must not retire snapshots');
-  await write('scripts/export-frames.mjs', 'freeze v2');
+  await write('server/bakery/chrome.mjs', 'freeze v2');
   invalidateFrameCode(root);
   assert.notEqual(freezeCode(root), first, 'changing freeze code must change the key');
   // J1:冻结逻辑搬进 src/ 之后集合不变,但那两个文件从 'missing' 变成有内容,

@@ -8,7 +8,7 @@
  *
  * 视频滤镜要在 CSS 和 ffmpeg 里各实现一遍、逐像素对齐(见 filters.mjs 头注释)。声音这边不这么干:
  * 编辑台预览用浏览器的 Web Audio 实时播,导出时在同一个 Chrome 里用 OfflineAudioContext 把同一张节点图
- * 离线渲成 wav,再由 ffmpeg 合进成片(scripts/export-frames.mjs 的 mixAudioInChrome)。
+ * 离线渲成 wav,再由 ffmpeg 合进成片(server/bakery/audio-mix.mjs 的 mixAudioInChrome)。
  * 同一份代码(src/audio/fxChain.ts)、同一套 DSP,天然一致 —— 压缩器、混响这类东西 ffmpeg 和浏览器的算法
  * 本来就不一样,硬对是对不齐的。实测:OfflineAudioContext 同一输入渲两次逐样本相同,88.7 秒立体声
  * 过「高通 + 压缩 + 2 秒卷积 + 增益」0.82 秒;highpass 和 ffmpeg 的同参数差 -91.8 dB。

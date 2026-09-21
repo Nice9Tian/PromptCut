@@ -15,7 +15,7 @@ const bakeCalls = [];
 const captureCalls = [];
 let measured = [];
 
-mock.module(new URL('../../scripts/export-frames.mjs', import.meta.url).href, {
+mock.module(new URL('../bakery/index.mjs', import.meta.url).href, {
   exports: {
     openBakery: async () => { throw new Error('openBakery is not used by the layout path'); },
     findFfmpeg: async () => 'ffmpeg',
@@ -25,7 +25,7 @@ mock.module(new URL('../../scripts/export-frames.mjs', import.meta.url).href, {
     },
   },
 });
-mock.module(new URL('../../scripts/capture-snapshot.mjs', import.meta.url).href, {
+mock.module(new URL('../bakery/capture-snapshot.mjs', import.meta.url).href, {
   exports: {
     captureSnapshot: async (_bakery, html, screenshot, options = {}) => {
       captureCalls.push({ html, screenshot, options });

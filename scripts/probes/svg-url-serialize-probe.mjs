@@ -1,7 +1,7 @@
 /*
  * Probe: 导出页里一个 fill="url(#id)" 的 SVG 形状,序列化出来到底是相对形式还是带页面 URL 的绝对形式?
  *
- * 为什么要问:A2(7) 的消费侧改名(src/render/snapshotRename.ts)照抄了 export-frames.mjs:215 的正则
+ * 为什么要问:A2(7) 的消费侧改名(src/render/snapshotRename.ts)照抄了当年 export-frames.mjs(现 src/render/snapshotFreeze.ts)的正则
  *   (url\((?:&quot;|["'])?[^)"'&]*#)<id>((?:&quot;|["'])?\))
  * 那条 `[^)"'&]*` 把 `&` 排除在外。而导出页地址本身含 `&`(server/frame-pipeline.mjs:183 的
  * '/?export=1&timeline='),`outerHTML` 会把 `&` 序列化成 `&amp;`。只要 Chrome 在冻结时把 fill
@@ -11,7 +11,7 @@
  * (自己起 vite 5208;用户的编辑台在 5190 / 验证在 5197,别碰。)
  *
  * 启动参数抄 scripts/headless.mjs:204-216 那一套(headless:true + swiftshader),
- * 不用 export-frames.mjs 的 CHROME_ARGS:那边的 --enable-begin-frame-control 要靠 CDP
+ * 不用 server/bakery/chrome.mjs 的 CHROME_ARGS:那边的 --enable-begin-frame-control 要靠 CDP
  * 手动发 BeginFrame 才出帧,页面里的 rAF 会挂住。fill 的序列化形式和出帧管线无关。
  */
 import { spawn } from 'node:child_process';
@@ -74,7 +74,7 @@ try {
     const cs = getComputedStyle(el);
     const before = el.outerHTML;
 
-    // 冻结过程的写法,照 export-frames.mjs:176-180:把全部计算样式内联成 style 属性
+    // 冻结过程的写法,照当年 export-frames.mjs 的冻结写法:把全部计算样式内联成 style 属性
     const clone = el.cloneNode(true);
     let s = '';
     for (let k = 0; k < cs.length; k++) { const q = cs.item(k); s += q + ':' + cs.getPropertyValue(q) + ';'; }
@@ -165,7 +165,7 @@ try {
     ? '计算样式是【绝对形式】url("<页面 URL>#id");属性值仍是相对形式 url(#id)。'
     : '计算样式是【相对形式】url(#id)。');
   console.log(hasAmp
-    ? '冻结后的 outerHTML 里含 &amp;(页面 URL 的 & 被序列化),export-frames.mjs:215 的 [^)"\'&]* 会漏。'
+    ? '冻结后的 outerHTML 里含 &amp;(页面 URL 的 & 被序列化),当年 export-frames.mjs 的 [^)"\'&]* 会漏。'
     : '冻结后的 outerHTML 里不含 &amp;。');
   console.log(absolute || hasAmp
     ? '→ 改名正则必须放开到 [^)"\']*,并把绝对前缀整段丢掉,改写成 url(#新id),快照才与 host 无关。'

@@ -15,7 +15,7 @@ import fsSync from "node:fs";
 import path from "node:path";
 import { PNG } from "pngjs";
 import { createServer } from "vite";
-import { openBakery, bakeFrames } from "./export-frames.mjs";
+import { openBakery, bakeFrames } from "../server/bakery/index.mjs";
 import { applyCardDefinition } from "../src/kernel/cardAuthoring.mjs";
 
 const CARD_ID = "__probe-opaque-red";

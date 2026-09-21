@@ -462,7 +462,7 @@ export function exportPlugin(): Plugin {
         }
 
         // POST /api/export/audio-mix/<id> —— 混音页(src/AudioMixView.tsx)把渲好的 mix.wav 原样交回来,
-        // 写到 export-<id>/audio/mix.wav,export-frames 再用 ffmpeg 合进 preview.mp4。
+        // 写到 export-<id>/audio/mix.wav,server/bakery 再用 ffmpeg 合进 preview.mp4。
         // 路径是「前缀 + id」的形状,因为 api-guard 只按前缀放行原始体(RAW_BODY_PREFIXES)
         const mixMatch = req.method === "POST" && req.url.match(/^\/api\/export\/audio-mix\/([^/?]+)$/);
         if (mixMatch) {

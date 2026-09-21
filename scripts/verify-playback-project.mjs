@@ -175,7 +175,7 @@ if (worker) {
     results.playbackEpochs=[...new Set(statuses.map(s=>s.epoch))];
     results.statusErrors=[...new Set(statuses.map(s=>s.error).filter(Boolean))];
     assert.deepEqual(results.errors,[]); assert.deepEqual(results.statusErrors,[]);
-    const {findFfmpeg}=await import('./export-frames.mjs');const ffprobe=(await findFfmpeg()).replace(/ffmpeg(\.exe)?$/i,'ffprobe$1');
+    const {findFfmpeg}=await import('../server/bakery/index.mjs');const ffprobe=(await findFfmpeg()).replace(/ffmpeg(\.exe)?$/i,'ffprobe$1');
     const entry=await pipeline.entry(project);
     results.mov=JSON.parse(execFileSync(ffprobe,['-v','error','-show_entries','stream=codec_name,nb_frames,duration,width,height','-of','json',entry.playbackMovie.movieFile],{windowsHide:true}).toString());
     results.inputUnchanged=inputHash===createHash('sha256').update(await fs.readFile(arg('--project'))).digest('hex');

@@ -1,10 +1,10 @@
 /**
  * 这一帧的素材(视频 seek / 图片加载)。
  *
- * 原来写在 `scripts/frame-media.mjs`、由 puppeteer 的 `evaluateOnNewDocument` 注入;现在是页面
+ * 原来写在 `server/bakery/frame-media.mjs`(当时在 `scripts/`)、由 puppeteer 的 `evaluateOnNewDocument` 注入;现在是页面
  * bundle 的一部分(J1),但 `window.__pcHideFrameMedia` / `window.__pcPrepareFrameMedia` 这两个
- * 名字和语义原样不动 —— `scripts/frame-media.mjs` 的 `prepareFrameMedia`(Node 侧)和
- * `scripts/capture-snapshot.mjs` 还是照旧调它们。
+ * 名字和语义原样不动 —— `server/bakery/frame-media.mjs` 的 `prepareFrameMedia`(Node 侧)和
+ * `server/bakery/capture-snapshot.mjs` 还是照旧调它们。
  *
  * 必须在 React 之前装好:推进动画的过程中一律不给素材赋 URL。
  */

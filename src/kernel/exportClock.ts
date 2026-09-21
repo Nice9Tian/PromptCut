@@ -15,7 +15,7 @@ import { installPinnedEntropy } from "./pinEntropy";
  *   1. performance.now() —— 被这里钉到 __pcExportMs,每趟从 0 起。
  *   2. CDP 虚拟时间 —— 导出脚本每帧推一格。
  *   3. document.timeline.currentTime —— WAAPI 自己的时间线,**单调递增、从不归零**,
- *      而且 export-frames.mjs 的 shoot() 里那段不带预算的 policy:'advance' 会让它在页面
+ *      而且 server/bakery/bake.mjs 的 shoot() 里那段不带预算的 policy:'advance' 会让它在页面
  *      静止的帧上一口气涨十几亿毫秒(实测一趟累计 26 亿 ≈ 33 天)。
  * Motion 建 WAAPI 动画时把 startTime 写成 time.now(),也就是 1 号时钟的读数(导出毫秒),
  * 而 WAAPI 按 3 号时钟解读它 —— 两个坐标系对不上,动画一出生就可能越过 endTime 直接
@@ -109,9 +109,9 @@ export function installExportClock(): void {
  * 实测(90 帧 / 1920x1080 / 30fps / PNG 逐字节比):复用 bakery 连烘两次 rank-bars 26 → 0 帧;
  * 两个全新浏览器之间 rank-bars 16 → 0 帧;odometer / ring-metric / type-shift 本来就 0,没被带坏。
  * growth-curve 的 65 帧也没了,但它另有一类每帧固定 23 个像素的残差(玻璃板圆角的抗锯齿,
- * 新鲜 vs 新鲜同样发生,和这条修法无关),见 scripts/export-frames.mjs 的文件头注释。
+ * 新鲜 vs 新鲜同样发生,和这条修法无关),见 server/bakery/chrome.mjs 的文件头注释。
  *
- * ⚠ 这一改必须和 export-frames.mjs 里每帧的 settle()(排空 React 挂起的提交)配套:动画真的
+ * ⚠ 这一改必须和 server/bakery/bake.mjs 里每帧的 settle()(排空 React 挂起的提交)配套:动画真的
  * 会播之后,「卡片挂载提交落在哪一帧」才开始影响画面,而那件事以前是在截图窗口里和截图抢跑的。
  * 只加这一层、不加 settle,demo 时间轴上 npm run verify 会在卡片切换处红 12 帧;两个都在则 90/90。
  *

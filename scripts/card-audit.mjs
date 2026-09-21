@@ -16,7 +16,7 @@ import puppeteer from 'puppeteer';
 import path from 'path';
 import fs from 'node:fs';
 import { PNG } from 'pngjs';
-import { openBakery, bakeFrames } from './export-frames.mjs';
+import { openBakery, bakeFrames } from '../server/bakery/index.mjs';
 
 const args = process.argv.slice(2);
 const opt = (name) => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : undefined; };
