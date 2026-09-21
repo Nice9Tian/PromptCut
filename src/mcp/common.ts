@@ -13,6 +13,7 @@ import { createPixelMapTools } from "./tools/pixelMapTools";
 import { audioPlanOf, soundingAt } from "../kernel/audioPlan.mjs";
 import { worldOf, rectForSafeSide, frameBox, type Size } from "../kernel/layout";
 import { backRole, backStage, syncProject } from "../editor/stageBridge";
+import { runBackJob } from "../editor/stageJobs";
 import type { RectWithBounds } from "../render/solid";
 import { invalidateScopes, loadScopes, type ScopeEntry } from "../editor/cardScope";
 
@@ -34,10 +35,15 @@ export const roundBox = (b: { left: number; top: number; width: number; height: 
  * 判「会不会盖住人」要看它,不是画布框 —— 默认卡的画布 1920 宽,拿画布判永远是"会盖住"。
  *
  * **批量、一次往返**(D4 页面侧):把全部 clipId 一起问后台舞台(pinned 架构 4:用户交互的查询
- * 跑在自己的离屏舞台,不打预渲染;第 3 步只有一个舞台,先对它测)——
+ * 跑在自己的离屏舞台,不打预渲染)——
  *   先把当前 project 同步过去、setTime 到播放头,再 rectsWithBounds({ pixels: 'all' }) 一次拿回全部实体框。
  * 素材段的 contentBox 一律等于其 frameCss 框(不在舞台里,按项目数据算)。
  * 卡片此刻不在画面上(播放头不在它的区间)就量不到:contentBox 为 null 并附 contentNote,别当成"没内容"。
+ *
+ * **整段排进后台舞台的单飞队列**(D4):后台舞台的项目有三种占用者(补跑 / 这里的测量 / 探针),
+ * 测量排在补跑后面、探针前面。开工前由队列发 `setRole('back', { job: 'catchup' })` 把探针挂起,
+ * 量完交还给下一个占用者 —— 不这么做的话,探针的缩水项目会在两句 RPC 之间把舞台换掉,
+ * 量回来的是另一台戏的框。legacy 的单舞台下队列不发 `setRole`,行为和以前一样。
  */
 export async function measureContentBoxes(clipIds: string[]): Promise<Map<string, { contentBox: ContentBox; contentNote?: string }>> {
   const st = getState();
@@ -51,24 +57,31 @@ export async function measureContentBoxes(clipIds: string[]): Promise<Map<string
     cardIds.push(id);
   }
   if (!cardIds.length) return out;
-  const s = backStage();
-  if (!s) {
+  /*
+   * 舞台还没就绪就当场说清楚,**不排队等** —— 队列会一直等到有舞台为止,而这条路上
+   * 接着的是 Agent 的 get_layout:与其把一次工具调用挂在那里,不如让它拿到这句话再来一次。
+   */
+  if (!backStage()) {
     for (const id of cardIds) out.set(id, { contentBox: null, contentNote: "预览窗口没就绪,量不到内容框;稍后再 get_layout" });
     return out;
   }
-  let list: RectWithBounds[] = [];
-  try {
-    await syncProject(backRole(), st.project);
-    // 量之前先退出实体模式:播放中画面上是色块,量到的就是色块的框而不是内容的框(只在 ?proxy=1 的页面有效)
-    await s.setProxy(false);
-    await s.setTime(st.t);
-    list = await s.rectsWithBounds({ pixels: "all", clipIds: cardIds });
-  } catch (err) {
+  const list = await runBackJob("measure", async ({ stage: s }) => {
+    let rects: RectWithBounds[] = [];
+    try {
+      await syncProject(backRole(), st.project);
+      // 量之前先退出实体模式:播放中画面上是色块,量到的就是色块的框而不是内容的框(只在 ?proxy=1 的页面有效)
+      await s.setProxy(false);
+      await s.setTime(st.t);
+      rects = await s.rectsWithBounds({ pixels: "all", clipIds: cardIds });
+    } finally {
+      try { await s.setProxy(st.playing); } catch { /* 恢复失败不该让工具失败 */ }
+    }
+    return rects;
+  }).catch((err: unknown) => {
     for (const id of cardIds) out.set(id, { contentBox: null, contentNote: `舞台没回应,量不到内容框:${err instanceof Error ? err.message : String(err)}` });
-    return out;
-  } finally {
-    try { await s.setProxy(st.playing); } catch { /* 恢复失败不该让工具失败 */ }
-  }
+    return null;
+  });
+  if (!list) return out;
   for (const id of cardIds) {
     const r = list.find((x) => x.clipId === id);
     if (!r) {
