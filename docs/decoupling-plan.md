@@ -12,7 +12,7 @@
 | 1 视频预览 | 双缓冲播放器 + 拖动节流(子任务,见各自的提交) | `src/editor/preview/MediaLayers.tsx`、`mediaSync.ts`、`src/editor/timeline/useScrub.ts`、`src/kernel/project.ts` |
 | 2 预渲染独立 | 编辑器那一端的 dev server 拉起第二个 Vite(`vite.prerender.config.ts`,`PROMPTCUT_ROLE=prerender`),独立端口、进程优先级**低于正常**(子进程继承);渲染池、Agent 看图、动图、DOM 树、导出都在它上面;跨源只放行编辑器那一端的源;PNG 的像素活挪进渲染 worker(`server/png-post.mjs`) | `server/vite-plugin-prerender.ts`、`vite.prerender.config.ts`、`server/prerender-client.mjs`、`server/render-role.mjs`、`server/png-post.mjs`、`server/http-guard.mjs` |
 | 3 常驻离屏渲染器 | 编辑器那一端守两台 Chrome(A / B,正常优先级、永不闲置退出),`/api/ui-render/bake-batch`;调度:交给热的那台 → 两台都忙时打断才开始 150 ms 以内的那台 → 都腾不出来就只留最新一个;请求方断开也按 150 ms 门槛判 | `server/vite-plugin-vision.ts` 的 `createUiRenderer`、`src/editor/preview/Scene3DView.tsx` |
-| 4 数据管理(只读镜像) | 连着桥的编辑器页面把项目和停下时的播放头推给服务端(`/api/data/project`),写工具回结果之前先推(读后写一致);`get_project` / `see_frames`(成片)/ `get_gif` / `bake_card` / `inspect_card_dom` 在服务端直接问预渲染,不经过页面;没有镜像时退回经页面 | `src/editor/dataMirror.ts`、`server/vite-plugin-ai.ts` 的 `runMirroredTool` |
+| 4 数据管理(只读镜像) | 连着桥的编辑器页面把项目和停下时的播放头推给服务端(`/api/data/project`),写工具回结果之前先推(读后写一致);`get_project` / `see_frames`(成片)/ `get_gif` / `bake_card` / `inspect_card_dom` 在服务端直接问预渲染,不经过页面;没有镜像时退回经页面 | `src/render/dataMirror.ts`、`server/vite-plugin-ai.ts` 的 `runMirroredTool` |
 | 5 卡片归数据管理 | 见下面「和原计划不一样的地方」 | `server/card-overrides.mjs`、`server/vite-plugin-cards.ts` |
 | 6 导出不再截素材 | Chrome 只渲卡片透明层,素材由 ffmpeg 合成(子任务,见各自的提交) | `server/vite-plugin-export.ts`、`scripts/export-frames.mjs`、`server/vision-compose.mjs` |
 | 7 数据管理成为唯一正本 | 没做(计划里就是可选) | — |

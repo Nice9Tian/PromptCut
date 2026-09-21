@@ -9,7 +9,7 @@ import { themeStyle } from "../../themes";
 import { getState } from "../../store/project";
 import type { CardDef, PartInstance } from "../../kernel/types";
 import type { PartDef } from "../../parts/types";
-import { measureAcrossTime, unionBox, type Box } from "./contentBox";
+import { measureAcrossTime, unionBox, type Box } from "../../render/contentBox";
 import { knownKeys, rememberBox, dumpBoxes } from "./previewBoxes";
 
 /**

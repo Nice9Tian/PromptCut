@@ -7,8 +7,8 @@ import { requestAgentBrowser, closeAgentBrowser } from "./agentBrowserStore";
 import * as agentBus from "./agentBus";
 import { TOOL_ROUTES } from "../mcp/routes.mjs";
 import { getState } from "../store/project";
-import { prerenderUrl } from "../editor/prerender";
-import { flushDataMirror, startDataMirror } from "../editor/dataMirror";
+import { prerenderUrl } from "../render/prerender";
+import { flushDataMirror, startDataMirror } from "../render/dataMirror";
 const TOOL_SPECS = RAW_TOOL_SPECS as { name: string; inputSchema?: { required?: string[] } }[];
 
 /**
@@ -343,7 +343,7 @@ export function connectMcpExecutor(getApi: () => EditorApi, onStatus?: (s: { con
   }
 
   /*
-   * 这个页面是「编辑台」,由它把项目镜像给服务端(数据管理的只读镜像,见 src/editor/dataMirror.ts)。
+   * 这个页面是「编辑台」,由它把项目镜像给服务端(数据管理的只读镜像,见 src/render/dataMirror.ts)。
    * 只读观看页(observe / view)上面已经 return 了,不会走到这里 —— 两个页面同时推会互相覆盖。
    *
    * **不再等桥连上**(A7):帧请求的 body 里只有 `{session, localRev}`,项目由服务端从镜像取 ——

@@ -42,7 +42,7 @@ profile 里 `advanceToAsync @ stageClock.ts:90` / `onFrame @ StageView.tsx:183` 
 ## 次因(每次写都有,但小)
 
 - `src/ai/mcpExecutor.ts:384`:改卡工具前 `structuredClone` 整个项目,`withVisual` 再 `JSON.stringify` 一份 before + after 发给预渲染源(不占编辑台连接)。实测 ~2 ms / 次。
-- `src/editor/dataMirror.ts:37-62`:每个写工具回结果前 `flushDataMirror()`,整个项目 `JSON.stringify`(85 KB)同源 POST,服务端同步 `JSON.parse`。实测页面侧 ~1.6 ms / 次,服务端 ~1 ms。agy 的静态分析把它排第一,数字不支持。
+- `src/render/dataMirror.ts:37-62`:每个写工具回结果前 `flushDataMirror()`,整个项目 `JSON.stringify`(85 KB)同源 POST,服务端同步 `JSON.parse`。实测页面侧 ~1.6 ms / 次,服务端 ~1 ms。agy 的静态分析把它排第一,数字不支持。
 - 每次 `setProject` 整棵编辑器重渲:左栏常驻挂载的全部分页(卡片格 / 字幕 / 转场)、时间轴每段的 `AudioWaveform` 重算 paths、`TrackHeader`……没有 memo。profile 里合计约 10 ms / 次。
 - **桌面版跑的是 vite dev server**(`desktop/src-tauri/src/lib.rs:386` 直接起 `vite.js`),所以用户拿到的是 React 开发版:`jsxDEV` / `validateProperty` / `logComponentRender` 在写工具的 profile 里占 ~20%。
 

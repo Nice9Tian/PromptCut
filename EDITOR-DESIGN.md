@@ -115,9 +115,9 @@ rail   素材库 | 动画 | 特效 | 编辑 | 字幕
   - **算好的**:`src/cards/preview-boxes.json` 静态表(`npm run preview-boxes` 离线生成、入库、随包发)
     和本机 localStorage 缓存,悬停时直接用,一步到位;
   - **现场量**:表里没有(用户 / AI 新建的卡、刚加的部件)就藏着舞台跑一遍,把 Web Animations 逐档拨过去
-    量并集(`contentBox.ts` 的 `measureAcrossTime`),量完存进缓存。
+    量并集(`render/contentBox.ts` 的 `measureAcrossTime`),量完存进缓存。
     第一次打开卡片页还会在屏幕外把表里缺的挨个补量(`prewarmBoxes.tsx`,一次一个、排在空闲时段)。
-  canvas 里画了什么 DOM 看不见,所以 `contentBox.ts` 对 2D 画布直接扫像素定边界;粒子卡不进后台队列
+  canvas 里画了什么 DOM 看不见,所以 `render/contentBox.ts` 对 2D 画布直接扫像素定边界;粒子卡不进后台队列
   (53 张 canvas 引擎太贵),靠悬停时的像素扫描就够。卡片改了默认参数或动画,重跑 `npm run preview-boxes`。
 - 自动化钩子(`scripts/left-check.mjs` 依赖):`data-pc="left" / "left-rail" / "left-drawer" / "library" / "animations" / "effects" / "inspector" / "captions"`、
   `data-pc="search" / "animations-search" / "effects-search" / "caption-search" / "scope-toggle" / "left-collapse" / "code-editor" / "switch-card"`、

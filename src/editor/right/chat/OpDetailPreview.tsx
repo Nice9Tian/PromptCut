@@ -5,7 +5,7 @@ import type { ProgressReport } from "../../../ai/progressReport";
 import type { InboundAgentMessage } from "../../../ai/types";
 import { findTabByConversation } from "../../../ai/agentTabs";
 import { Gif, loadVisualRecord, peekVisualRecord, visualIdOf, type VisualRecord } from "../ToolVisual";
-import { usePrerenderBase, withBase } from "../../prerender";
+import { usePrerenderBase, withBase } from "../../../render/prerender";
 import { KIND_LABEL, bareToolName, toolKind } from "./iconRuns";
 import "./agent.css";
 

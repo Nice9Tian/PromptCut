@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type RefObject } from "react";
-import { measureAcrossTime, type Box } from "./contentBox";
+import { measureAcrossTime, type Box } from "../../render/contentBox";
 import { lookupBox, rememberBox } from "./previewBoxes";
 import { startPrewarm } from "./prewarmBoxes";
 import { getState } from "../../store/project";

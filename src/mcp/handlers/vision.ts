@@ -1,7 +1,7 @@
 import { startShotDetection, waitForShots } from "../../ai/shots";
 import { scenesOf, planSequences, frameTimes, transcriptFor } from "../../ai/sequences";
 import { EditorApi } from "../../ai/mcpExecutor";
-import { prerenderUrl } from "../../editor/prerender";
+import { prerenderUrl } from "../../render/prerender";
 import { getState, actions } from "../../store/project";
 import { subjectForRange } from "../../kernel/project";
 import { mediaCardUrl, isImageMedia } from "../../ai/mediaRef";

@@ -10,7 +10,7 @@
  * `canvasPaintedBox` 返回**画布像素坐标**(冻结快照写进 `data-pc-painted-box` 用,
  * 同一份共享快照挂到不同位置和框的片段上时各自按 `<img>` 的实际框换算)。
  */
-import { canvasBox, canvasPixels, type CanvasPixels } from "../editor/left/contentBox";
+import { canvasBox, canvasPixels, type CanvasPixels } from "./contentBox";
 
 export { canvasBox };
 

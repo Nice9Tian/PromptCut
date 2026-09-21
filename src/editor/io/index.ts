@@ -6,7 +6,7 @@ import { getCard } from "../../kernel/registry";
 import { mediaUrlFromPath, restoreMediaUrls } from "./mediaUrls";
 import { dropPythonNodes, publishPythonDrop } from "./pythonDrop";
 import { adoptServerMedia, applyUploadedMedia, uploadMediaFile } from "./mediaUpload";
-import { prerenderBase } from "../prerender";
+import { prerenderBase } from "../../render/prerender";
 
 // 模块级变量存 File，供阶段 2 导出时使用
 const mediaFiles = new Map<string, File>();
