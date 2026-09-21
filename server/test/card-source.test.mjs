@@ -37,16 +37,16 @@ test('内置卡按 id 找到定义文件', () => {
 
 test('不存在的 id、带路径的 id 一律找不到', () => {
   assert.equal(findCardFile(ROOT, 'no-such-card-xyz'), null);
-  assert.equal(findCardFile(ROOT, '../kernel/Stage'), null);
+  assert.equal(findCardFile(ROOT, '../render/Stage'), null);
 });
 
 // ── 能改的范围 ────────────────────────────────────────────────────
 test('只开到卡片目录和部件库,内核 / 测试 / 越界路径一律不开', () => {
   assert.equal(isEditablePath('src/cards/native/hud.css'), true);
   assert.equal(isEditablePath('src/parts/lib/chart-rank.tsx'), true);
-  assert.equal(isEditablePath('src/kernel/Stage.tsx'), false);
+  assert.equal(isEditablePath('src/render/Stage.tsx'), false);
   assert.equal(isEditablePath('server/vite-plugin-cards.ts'), false);
-  assert.equal(isEditablePath('src/cards/../kernel/Stage.tsx'), false);
+  assert.equal(isEditablePath('src/cards/../render/Stage.tsx'), false);
   assert.equal(isEditablePath('src/parts/lib/x.test.ts'), false);
   assert.equal(isEditablePath('src/cards/user/_scopes.json'), false);
 });

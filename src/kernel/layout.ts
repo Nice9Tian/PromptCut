@@ -295,7 +295,7 @@ export function frameCss(frame: ClipFrame | undefined, parent: Size, translate?:
      * 只有真的用到三维才写 preserve-3d,没用三维的卡走的还是和以前一模一样的那条路。
      *
      * 它管的是**这张卡内部的子元素**能不能有自己的空间关系,不管这张卡自己怎么被投影 ——
-     * 卡片自身的透视由父层的 perspective 决定(见 kernel/Stage.tsx)。
+     * 卡片自身的透视由父层的 perspective 决定(见 render/Stage.tsx)。
      *
      * 顺带记一条实测,因为它反直觉:`opacity` / `filter` / `overflow:hidden` 确实会把
      * 这个元素的 transform-style **打回 flat**,但那只影响它的子树,

@@ -345,7 +345,7 @@
 [hud]: <../src/cards/native/hud.ts>
 [hud-css]: <../src/cards/native/hud.css>
 [magic-css]: <../src/cards/magicui/vendor/magicui-animations.css>
-[part-tree]: <../src/kernel/PartTree.tsx>
+[part-tree]: <../src/render/PartTree.tsx>
 [particle-knobs]: <../src/cards/assets/particlesKnobs.ts>
 [card-api]: <../server/vite-plugin-cards.ts>
 [overrides]: <../server/card-overrides.mjs>

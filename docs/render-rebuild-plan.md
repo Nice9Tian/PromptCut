@@ -86,7 +86,7 @@ beginFrame 采样器(chrome-headless-shell,我们给帧时间)
 | `page.screenshot` + 截图时切 `advance` | `beginFrame({ screenshot: { format:'png', optimizeForSpeed:true } })` |
 | 预热 3 帧 → `__pcRestartCards` → 再丢 1 帧 | 同 |
 
-**等网络这一步不能省。** 出处:验证 —— 不等网络时 600 帧里第 119 帧对不上:scene-3d 在那一帧提前挂载(`src/kernel/Stage.tsx:21` 的 `LEAD = 0.05`),动态 `import("three")`(`src/cards/native/scene-3d.tsx:56`)还没回来,三维画面晚一帧出现;补上之后 600/600。
+**等网络这一步不能省。** 出处:验证 —— 不等网络时 600 帧里第 119 帧对不上:scene-3d 在那一帧提前挂载(`src/render/Stage.tsx:21` 的 `LEAD = 0.05`),动态 `import("three")`(`src/cards/native/scene-3d.tsx:56`)还没回来,三维画面晚一帧出现;补上之后 600/600。
 
 **实测**(两边字体对齐:beginFrame 侧把通用等宽字体设成现在成片里的 NSimSun)
 

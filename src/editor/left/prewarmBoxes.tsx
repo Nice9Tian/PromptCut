@@ -4,7 +4,7 @@ import { allCards } from "../../kernel/registry";
 import { allParts } from "../../parts/registry";
 import { assetCardKind } from "../../cards/assets";
 import { AnimClock } from "../../kernel/AnimClock";
-import { PartTree } from "../../kernel/PartTree";
+import { PartTree } from "../../render/PartTree";
 import { themeStyle } from "../../themes";
 import { getState } from "../../store/project";
 import type { CardDef, PartInstance } from "../../kernel/types";

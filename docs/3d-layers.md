@@ -101,7 +101,7 @@ three.js 默认相机朝 **−z** 看，放在 `(0,0,+d)` 看向原点才是自�
 **这个遮蔽标识不用新建，它就是序列顺序**：`get_project` 里 `tracks[0]` 是时间轴最上面
 那条、也是最上层，正好就是「0 在最前面」。再引入一套编号只会和 `trackId` 打架。
 
-实现在 `kernel/Stage.tsx`：`flattenOverlay` 产出的数组已经是画家顺序（倒着遍历 tracks，
+实现在 `render/Stage.tsx`：`flattenOverlay` 产出的数组已经是画家顺序（倒着遍历 tracks，
 所以最后一个是最上层），Stage 按下标写 `z-index: i + 1`。
 
 **方向要写死在这里**，因为 CSS 是数字越大越靠前，和这个约定相反。不写下来必然有人搞反。

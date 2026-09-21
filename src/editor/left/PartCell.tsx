@@ -8,7 +8,7 @@ import type { PartInstance } from "../../kernel/types";
 import { COMPOSITE_CARD_ID } from "../../cards/native/composite";
 import { isComposite } from "../../kernel/envelope";
 import { AnimClock } from "../../kernel/AnimClock";
-import { PartTree } from "../../kernel/PartTree";
+import { PartTree } from "../../render/PartTree";
 import { themeStyle } from "../../themes";
 import { PreviewCard } from "./PreviewCard";
 import { usePreviewZoom, zoomFor } from "./previewZoom";

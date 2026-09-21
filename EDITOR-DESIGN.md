@@ -301,7 +301,7 @@ MIME 常量和拖动载荷都在 `src/editor/dnd.ts`:
 - `ControlBar.tsx` 底部控制栏:播放/暂停、重播(纯图标),时间显示「当前 / 总时长」,点当前时间就地变输入框,
   支持 `12.5` 和 `0:12.5` 两种写法,回车生效、Esc 取消。播放控制原来在顶栏,已经搬到这里,顶栏不再有。
 - `ToolBar.tsx` 顶部工具条:箭头(选择) / T(文字) / 十字(移动),`ToolType = "select" | "text" | "move"`。
-- 画布交互:`kernel/Stage.tsx` 给每个 clip 的包装 div 加了 `data-pc-clip`(**只加了这一个属性,接口没动**),
+- 画布交互:`render/Stage.tsx` 给每个 clip 的包装 div 加了 `data-pc-clip`(**只加了这一个属性,接口没动**),
   `StageView` 增加 `rects()` 返回活跃卡片在舞台坐标里的矩形;Preview 在 iframe 上盖一层覆盖层做命中测试。
   移动工具只在 pointerup 写一次 `setClipParams(id, {x, y})`(拖动中写会冲垮撤销栈);
   文字工具双击改第一个 text 控件;右键菜单两项:引用到 AI、删除。

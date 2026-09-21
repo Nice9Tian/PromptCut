@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { flushSync } from "react-dom";
 import { FrameScene } from "./render/FrameScene";
-import { Stage } from "./kernel/Stage";
+import { Stage } from "./render/Stage";
 import { installExportClock } from "./kernel/exportClock";
 import type { Timeline } from "./kernel/types";
 import { flattenOverlay, type Project } from "./kernel/project";
