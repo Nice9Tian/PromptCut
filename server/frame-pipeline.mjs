@@ -8,11 +8,14 @@ import { packFrames, unpackFrameArchive, createFrameArchive, packFrameCache, unp
 import { MovFrameStore, PlaybackMovStore, atomic } from './frame-mov.mjs';
 import { FramePlayback } from './frame-playback.mjs';
 import { CardFrameCache } from './card-cache.mjs';
-import { SnapshotStore, snapshotTier } from './snapshot-store.mjs';
+import { SnapshotStore, snapshotTier, rangeHas } from './snapshot-store.mjs';
+import { createReadyIndex, kindOfTier, wireSnapshotKey } from './ready-index.mjs';
+import { prerenderSetOfPlan } from './prerender-set.mjs';
 import { cardMediaPath } from './card-media-path.mjs';
 import { createHash } from 'node:crypto';
 import { isFullyTransparentPng } from './frame-validity.mjs';
 import { resolveFrameSize } from '../src/kernel/frameSize.mjs';
+import { anchorFrames } from '../src/render/snapshotPick.mjs';
 
 const pad = n => String(n).padStart(6, '0');
 const exists = file => fs.access(file).then(() => true, () => false);
@@ -76,12 +79,34 @@ export function layoutClips(project, clipIds, measured = null, t = 0) {
 /** A foreground batch queue, B complete HTML sampling, C cumulative-track rasterization.
  * Each lane owns its Chrome; foreground never waits for a background bake to finish.
  */
+/** C4:没接镜像插件时的播放头(`frameService` 会把真的那个注进来) */
+const NO_PLAYHEAD = () => /** @type {{ t: number, playing: boolean, wanted?: { clipId: string, frame: number }[] } | null} */ (null);
+
 export class FramePipeline {
-  constructor({ root, origin, code = () => '', captureCode = () => undefined }) {
+  /**
+   * `interactive`(D5):这个实例要不要为页面的交互帧请求养一对热 Chrome。
+   *
+   *   预渲染进程 `interactive: true` —— 热池在这里,改叫 `streamPool`(G 的分段和
+   *     C2 的锚帧用它;大小是 G0-b 的输出参数,初值 2);
+   *   编辑器进程 `interactive: false` —— `user` / `playback` lane 立即拒绝
+   *     `USE_PRERENDER`,不进 `acquireUser`,两处 `prewarmUser` 都不调。
+   *
+   * **R6 只加参数和代码路径,默认值保持今天的行为**(两个进程都 `true`);真正把
+   * 编辑器进程切成 `false` 是 R7 的原子切换。播放热池的借还和 `stopPlayback()`
+   * 还在用,没有删(计划 3.4 末条:底稿说「已删除」是错的)。
+   *
+   * `playhead`:C4 的 `wanted` 从哪儿读(镜像插件的 `latestPlayhead()`)。
+   * frame-pipeline 是 .mjs、镜像插件是 .ts,所以由 `frameService()` 注进来。
+   */
+  constructor({ root, origin, code = () => '', captureCode = () => undefined, interactive = true, playhead = NO_PLAYHEAD }) {
     this.root = root;
     this.origin = origin;
     this.code = code;
     this.captureCode = captureCode;
+    this.interactive = interactive !== false;
+    this.playhead = playhead;
+    /** C3 的就绪索引。SSE 端点(`GET /api/frames/ready`)直接订阅它 */
+    this.readyIndex = createReadyIndex();
     this.entries = new Map();
     this.queue = [];
     // The human preview, Agent and background bake each own an independent
@@ -101,6 +126,34 @@ export class FramePipeline {
     // accumulate pages or force both hot Chromes to restart.
     this.userGeneration = 0;
     this.userGenerationController = null;
+  }
+  /**
+   * 热池在预渲染进程里的名字(D5)。R8 的轨道流按分段借还它
+   * (`leaseStreamBakery()` / `returnStreamBakery()`,连同 G4 租约的 `dirty` 位:
+   * 任何非 `bakeStream` 的调用跑完就置 `dirty`,下一次 `bakeStream` 见 `dirty`
+   * 当租约断掉、付一次完整回放)—— 那两个方法是 R8 的,这里只留位。
+   */
+  get streamPool() { return this.userPool; }
+  get streamPoolSize() { return this.userPoolSize; }
+  set streamPoolSize(value) { this.userPoolSize = value; }
+  /** 这个实例接不接页面的交互 / 播放 lane(D5 的 `interactive`) */
+  laneRefused(lane) {
+    if (this.interactive) return null;
+    if (lane !== 'user' && lane !== 'playback') return null;
+    return Object.assign(new Error('交互帧请求请直接打预渲染进程。'), { status: 503, code: 'USE_PRERENDER' });
+  }
+  /** C4:镜像插件里这一刻的 `wanted`(页面报的「播放头附近现在缺哪些层」) */
+  playheadWanted() {
+    try { return this.playhead()?.wanted ?? []; } catch { return []; }
+  }
+  /** C4:`wanted` 让哪一批插了队。只给诊断看,留最近 32 条 */
+  notePromotion(record) {
+    (this.promotions ||= []).push({ ...record, at: Date.now() });
+    while (this.promotions.length > 32) this.promotions.shift();
+  }
+  /** 端到端探针的读口:超限帧(A3c)和 `wanted` 的插队(C4) */
+  diagnostics() {
+    return { oversize: this._snapshots?.oversize ?? [], promotions: this.promotions ?? [] };
   }
   async entry(project) {
     project = { ...project, media: await Promise.all((project.media || []).map(async media => {
@@ -229,6 +282,8 @@ export class FramePipeline {
     return this.origin() + '/?export=1&timeline=' + encodeURIComponent('data:application/json,' + encodeURIComponent(JSON.stringify(empty)));
   }
   async prewarmUser(project = {}) {
+    // D5:`interactive: false` 的实例(R7 之后的编辑器进程)不养热 Chrome
+    if (!this.interactive) return;
     if (this.userPrewarm) return this.userPrewarm;
     this.userPrewarm = (async () => {
       while (!this.closed && this.userPool.filter(s => !s.dead).length < this.userPoolSize) {
@@ -381,6 +436,9 @@ export class FramePipeline {
     }
   }
   async readFrames(entry, frames, lane = 'agent', signal, onFrame) {
+    // D5:`interactive: false` 时这两条 lane 立即拒绝,不进 `acquireUser`
+    const refused = this.laneRefused(lane);
+    if (refused) throw refused;
     if (lane === 'user' || lane === 'playback') {
       const watchdog = new AbortController();
       const combined = signal ? AbortSignal.any([signal, watchdog.signal]) : watchdog.signal;
@@ -529,7 +587,7 @@ export class FramePipeline {
     if (!browserPlan) return null;
     let plan;
     try { plan = entry.cardCache.plan(browserPlan); } catch { return null; }
-    entry.cardPlan = plan;
+    this.adoptCardPlan(entry, plan);
     if (!plan.length) return null;
     const state = await entry.cardCache.renderState(plan, frames);
     // The final/agent path deliberately does not inject `missing`: an absent
@@ -625,7 +683,7 @@ export class FramePipeline {
       entry.snapshotPlan = plan;
       entry.snapshotTargetMap = new Map(plan
         .filter(control => control.clipId && control.snapshotKey)
-        .map(control => [control.clipId, { tier: control.tier || snapshotTier(control.capabilities), key: control.snapshotKey }])
+        .map(control => [control.clipId, { tier: control.tier || snapshotTier(control.capabilities), key: control.snapshotKey, capabilities: control.capabilities }])
         .filter(([, target]) => target.tier === 'shared' || target.tier === 'local'));
     }
     return entry.snapshotTargetMap;
@@ -652,23 +710,32 @@ export class FramePipeline {
       const entryKey = target.tier === 'local' ? entry.key : undefined;
       const batches = (entry.snapshotPending ||= new Map());
       const id = `${target.tier} ${entryKey ?? ''} ${target.key}`;
-      if (!batches.has(id)) batches.set(id, { tier: target.tier, entryKey, key: target.key, frames: [] });
-      batches.get(id).frames.push(control.frame);
+      if (!batches.has(id)) batches.set(id, { tier: target.tier, entryKey, key: target.key, frames: [], clipId: control.id });
       const html = control.html;
+      // A3c 的通用兜底:超限的那一帧**照常落盘**(下一次不用重渲),但不进就绪索引、
+      // 不投递 —— 那一层按缺料处理(贴更早的合格快照,没有就透明),并记一条诊断。
+      if (this.snapshots().noteSnapshotSize({ clipId: control.id, key: target.key, localFrame: control.frame, html, capabilities: target.capabilities })) {
+        batches.get(id).frames.push(control.frame);
+      }
       entry.snapshotChain = (entry.snapshotChain || Promise.resolve()).then(async () => {
         // 快照库是旁路:写失败不能把整条预渲染管线带下去(老 manifest 仍然写成了)。
         try { await this.snapshots().writeSnapshot({ tier: target.tier, entryKey, key: target.key, localFrame: control.frame, html }); } catch {}
       });
     }
   }
-  /** 等这一批帧文件落盘,再把它们并进各自的 index.json —— 每批一次,不是每帧。 */
+  /** 等这一批帧文件落盘,再把它们并进各自的 index.json —— 每批一次,不是每帧。
+   * 并完就按 C3 把这一层此刻的全部就绪区间发出去(全量语义)。 */
   async flushSnapshots(entry) {
     try { await entry.snapshotChain; } catch {}
     const batches = entry.snapshotPending;
     if (!batches?.size) return;
     entry.snapshotPending = new Map();
     for (const batch of batches.values()) {
-      try { await this.snapshots().updateIndex(batch); } catch {}
+      if (!batch.frames.length) continue;
+      try {
+        const index = await this.snapshots().updateIndex(batch);
+        this.publishLayer({ clipId: batch.clipId, snapshotKey: batch.key }, batch.tier, index.frames, batch.entryKey);
+      } catch {}
     }
   }
   async save(entry) {
@@ -733,9 +800,13 @@ export class FramePipeline {
         const browserPlan = await this.browserCardPlan(bakery);
         let cardPlan = [];
         try { cardPlan = browserPlan ? entry.cardCache.plan(browserPlan) : []; } catch {}
-        if (browserPlan) entry.cardPlan = cardPlan;
+        if (browserPlan) this.adoptCardPlan(entry, cardPlan);
         entry.stage = 'required';
+        // C2:**锚帧全部就绪前不开始其余后台预渲染**。
+        await this.fillAnchorSnapshots(entry, bakery, controller.signal);
         await this.fillCardControls(entry, bakery, controller.signal, cardPlan.filter(c => c.cacheable && c.needPrerendering));
+        // C2 本地档那一趟:一趟整场景服务该帧上全部本地档卡(毛玻璃 / unknown)
+        await this.renderLocalSnapshots(entry, await this.missingSnapshotFrames(entry, { tiers: ['local'] }), bakery, controller.signal);
         await this.fillRequiredScene(entry, bakery, controller.signal, cardPlan);
         if (this.playback?.playing) { entry.status = 'partial'; return; }
         entry.stage = 'direct';
@@ -796,6 +867,196 @@ export class FramePipeline {
    * 和 `entry.cardCache`(PNG/MOV,legacy 整帧通道和导出用)并存 —— 后者随
    * legacy 通道一起删,在那之前照常写,不然导出和旧播放路会缺料。 */
   snapshots() { return this._snapshots ||= new SnapshotStore(this.root); }
+  /**
+   * F5 预渲染进程重启后的恢复:起来先扫
+   * `controls-html/<共享键>/index.json` 和 `controls-local/<entry.key>/<共享键>/index.json`,
+   * 重建 C3 的就绪索引。
+   *
+   * **扫盘只得到「键 → 区间」** —— 目录名是剥掉 clipId 的共享键,所以这里只把它们
+   * 挂在键上(`stageByKey`),不发 `layer`;等 `ensureMirror` 回拉 / `repushMirror`
+   * 补推把项目送回来、`adoptCardPlan` 重算出 card plan,再按
+   * `control.clipId` ↔ `control.snapshotKey` 反查、一次 `reset` + 全量 `layer`。
+   *
+   * (轨道流目录的分段清单是 R8 的,扫到再说 —— `kind: 'stream'` 在索引里已经留位。)
+   */
+  async rescanSnapshots() {
+    const store = this.snapshots();
+    const read = async target => {
+      try { return await store.snapshotIndex(target); } catch { return { count: 0, frames: [] }; }
+    };
+    const list = async dir => { try { return await fs.readdir(dir, { withFileTypes: true }); } catch { return []; } };
+    let found = 0;
+    for (const item of await list(path.join(this.root, 'controls-html'))) {
+      if (!item.isDirectory()) continue;
+      const index = await read({ tier: 'shared', key: item.name });
+      if (!index.count) continue;
+      this.readyIndex.stageByKey({ kind: 'html', key: item.name, ranges: index.frames });
+      found++;
+    }
+    for (const outer of await list(path.join(this.root, 'controls-local'))) {
+      if (!outer.isDirectory()) continue;
+      for (const item of await list(path.join(this.root, 'controls-local', outer.name))) {
+        if (!item.isDirectory()) continue;
+        const index = await read({ tier: 'local', entryKey: outer.name, key: item.name });
+        if (!index.count) continue;
+        // 本地档的线上 `key` 自带一个斜杠:`<entry.key>/<共享键>`(C3 / J3)
+        this.readyIndex.stageByKey({ kind: 'local', key: `${outer.name}/${item.name}`, ranges: index.frames });
+        found++;
+      }
+    }
+    return found;
+  }
+  /**
+   * card plan 到位(F5)。扫盘只得到「键 → 区间」,`layer` 和页面的 `readyIndex`
+   * 却都按 clipId 索引 —— 所以重启之后要等项目回来、重算 card plan,才能用
+   * `control.clipId` ↔ `control.snapshotKey` 反查。认领成功时索引自己会先发
+   * `reset` 再发全量 `layer`(C3 本来就是全量语义,不加新端点)。
+   *
+   * 顺带把「产哪些卡」记在 entry 上(`prerenderSetOf` 的窄接口;TODO(R4a))。
+   */
+  adoptCardPlan(entry, plan) {
+    entry.cardPlan = plan;
+    entry.prerenderSet = prerenderSetOfPlan(plan);
+    const layers = [];
+    for (const control of plan ?? []) {
+      const tier = control.snapshotKey ? (control.tier || snapshotTier(control.capabilities)) : 'none';
+      const kind = kindOfTier(tier);
+      const key = wireSnapshotKey(tier, entry.key, control.snapshotKey);
+      if (kind && key && control.clipId) layers.push({ clipId: control.clipId, kind, key });
+    }
+    try { this.readyIndex.claim(layers, this.readyIndex.localRev); } catch {}
+    return plan;
+  }
+  /** C3:把某一层此刻的全部就绪区间发出去(全量语义,`ready-index.mjs`)。 */
+  publishLayer(control, tier, ranges, entryKey) {
+    const kind = kindOfTier(tier);
+    const key = wireSnapshotKey(tier, entryKey, control?.snapshotKey);
+    if (!kind || !key || !control?.clipId) return;
+    this.readyIndex.setLayer({ clipId: control.clipId, kind, key, ranges });
+  }
+  /**
+   * C4 的调度点:这一批该从哪个本地帧开始。
+   *
+   * 镜像插件里有页面报的 `wanted`(播放头附近缺的层)时,含它的那一批先跑;
+   * 没有就回到顺序批。**不打断正在跑的那一批** —— 这个函数只在批与批之间被调。
+   */
+  nextBatchStart(pending, control) {
+    const ordered = [...pending].sort((a, b) => a - b);
+    for (const item of this.playheadWanted()) {
+      if (item?.clipId !== control.clipId) continue;
+      const local = Number(item.frame) - control.sampling.firstFrame;
+      if (!Number.isInteger(local) || local < 0 || local >= control.count) continue;
+      const start = local - (local % 4);
+      if (!pending.has(start) || start === ordered[0]) continue;
+      console.log(`[frames] wanted: 片段 ${control.clipId} 的第 ${start}~${Math.min(start + 3, control.count - 1)} 批提前(顺序批本来是 ${ordered[0]})`);
+      // 预渲染进程的 stdout 被编辑器进程收走了(`vite-plugin-prerender` 的 `keep`),
+      // 端到端探针看不见上面那行;所以同一件事也记一条,经 `/api/frames/diagnostics` 读。
+      this.notePromotion({ clipId: control.clipId, start, instead: ordered[0], frame: Number(item.frame) });
+      return start;
+    }
+    return ordered[0];
+  }
+  /**
+   * C2 的本地档那一趟:**一趟整场景渲染服务该帧上全部本地档卡**(不是每卡一趟)。
+   *
+   * 为什么不能走隔离单卡:`isolatedCardProject` 剥掉了下层场景,毛玻璃没有背景
+   * 可采;`unknown` 卡(定制卡、带部件的组合卡片段)同理拿不到自己要的上下文。
+   *
+   * 为什么不能复用 `renderMovFrames` 现成的回调:它的 `requested` 只含 MOV 缺的帧,
+   * `onSnapshot` 还被 `!entry.html.has(n)` 挡着,`htmlFrames` 重放路根本不进 `bakeFrames`。
+   *
+   * 参数照 C2 钉死:`targetFrames: frames`、`fullFrame: true`(不带它 `bake.mjs:69`
+   * 的帧窗规划不生效)、`snapshotOnly: false`(`bake.mjs:281` 的守卫;改成 `true`
+   * 会关掉帧窗规划、也跳过 `shoot` 里的 `prepareFrameMedia`,而本地档正是毛玻璃 /
+   * `unknown` 卡 —— 素材层没准备好,快照里就是错的画面)、`writeFrames: false`、
+   * `snapshotFrames: new Set(frames)`。**每帧因此多截一张没人消费的 PNG,这是已知代价。**
+   *
+   * `frames` = 本地档索引里任一本地档卡缺的**全局**帧的并集。
+   */
+  async renderLocalSnapshots(entry, frames, bakery, signal) {
+    const targets = this.snapshotTargets(entry);
+    if (!targets?.size) return;
+    const locals = new Map([...targets].filter(([, target]) => target.tier === 'local'));
+    const list = [...new Set(frames ?? [])].filter(n => Number.isInteger(n) && n >= 0).sort((a, b) => a - b);
+    if (!locals.size || !list.length) return;
+    const capabilities = new Map((entry.cardPlan ?? []).map(control => [control.clipId, control.capabilities]));
+    const written = new Map();
+    await bakeFrames(bakery, {
+      out: entry.dir, targetFrames: list, snapshotOnly: false, fullFrame: true, writeFrames: false, signal,
+      snapshotFrames: new Set(list),
+      // `__pcCreateSnapshot` 的产物每项只有 id(= clipId)/ frame / html,**不含共享键** ——
+      // 键用 card plan 的 `control.clipId` ↔ `control.snapshotKey` 反查。
+      onSnapshot: async (_frame, _html, produced) => {
+        if (signal?.aborted) return;
+        for (const item of produced ?? []) {
+          const target = locals.get(item.id);
+          if (!target || !Number.isInteger(item.frame)) continue;
+          try { await this.snapshots().writeSnapshot({ tier: 'local', entryKey: entry.key, key: target.key, localFrame: item.frame, html: item.html }); }
+          catch { continue; }
+          if (!this.snapshots().noteSnapshotSize({ clipId: item.id, key: target.key, localFrame: item.frame, html: item.html, capabilities: capabilities.get(item.id) })) continue;
+          if (!written.has(item.id)) written.set(item.id, { key: target.key, frames: [] });
+          written.get(item.id).frames.push(item.frame);
+        }
+      },
+    });
+    if (signal?.aborted) return;
+    for (const [clipId, batch] of written) {
+      const index = await this.snapshots().updateIndex({ tier: 'local', entryKey: entry.key, key: batch.key, frames: batch.frames });
+      this.publishLayer({ clipId, snapshotKey: batch.key }, 'local', index.frames, entry.key);
+    }
+  }
+  /**
+   * 整场景路要渲哪些**全局**帧:某一档的卡在这一帧还缺快照,这一帧就得渲(并集 ——
+   * 一趟整场景渲染服务该帧上全部同档卡)。顺带把已有的区间发成 `layer`(C3)。
+   *
+   *   `tiers`      只看这几档(本地档那一趟传 `['local']`,锚帧那一趟两档都要);
+   *   `restrictTo` 只在这些全局帧里挑(锚帧那一趟传锚帧集合;不传 = 全部)。
+   */
+  async missingSnapshotFrames(entry, { tiers = ['local'], restrictTo = null } = {}) {
+    const plan = entry.cardPlan;
+    if (!plan?.length) return [];
+    const fps = Number(entry.project.fps) || 30;
+    const only = restrictTo ? new Set(restrictTo) : null;
+    const wanted = new Set();
+    for (const control of plan) {
+      const tier = control.snapshotKey ? (control.tier || snapshotTier(control.capabilities)) : 'none';
+      if (!tiers.includes(tier)) continue;
+      const entryKey = tier === 'local' ? entry.key : undefined;
+      const index = await this.snapshots().snapshotIndex({ tier, entryKey, key: control.snapshotKey });
+      if (index.count) this.publishLayer(control, tier, index.frames, entryKey);
+      if (index.count === control.count) continue;
+      for (let local = 0; local < control.count; local++) {
+        if (rangeHas(index.frames, local)) continue;
+        const global = local + control.sampling.firstFrame;
+        if (global / fps >= control.end - 1e-9) break;
+        if (!only || only.has(global)) wanted.add(global);
+      }
+    }
+    return [...wanted].sort((a, b) => a - b);
+  }
+  /**
+   * C2 **先预渲染锚帧**:锚帧全部就绪前不开始其余后台预渲染。
+   *
+   * 锚帧集合 = 每个片段的 `mountFrameOf`、`clipFrameSpan` 的 `last + 1`、第 0 帧
+   * (C1 末句;算式在 `src/render/snapshotPick.mjs`,两端同一份)。这一趟走整场景
+   * 路,所以共享档和本地档的卡一起产 —— C4 的「同区间内回溯」靠的正是段起点那一帧
+   * 早早就绪,冷缓存拖到第 1000 帧才有东西可贴。
+   */
+  async fillAnchorSnapshots(entry, bakery, signal) {
+    const fps = Number(entry.project.fps) || 30;
+    const count = Math.max(1, Math.floor(entry.project.duration * fps));
+    const clips = (entry.project.tracks || []).flatMap(track => track.clips || []);
+    const anchors = anchorFrames(clips, fps).filter(frame => frame >= 0 && frame < count);
+    const frames = await this.missingSnapshotFrames(entry, { tiers: ['shared', 'local'], restrictTo: anchors });
+    if (!frames.length) return this.readyIndex.markDone();
+    await bakeFrames(bakery, {
+      out: entry.dir, targetFrames: frames, snapshotOnly: false, fullFrame: true, writeFrames: false, signal,
+      snapshotFrames: new Set(frames),
+      onSnapshot: (n, html, controls) => this.record(entry, n, html, controls),
+    });
+    await this.flushSnapshots(entry);
+    if (!signal?.aborted) this.readyIndex.markDone();
+  }
   async fillCardControls(entry, bakery, signal, controls = null) {
     if (!controls) {
       const browserPlan = await this.browserCardPlan(bakery);
@@ -804,45 +1065,66 @@ export class FramePipeline {
     }
     for (const control of controls.filter(control => control.cacheable)) {
       if (signal?.aborted) throw Object.assign(new Error('Cancelled'), { cancelled: true });
-      if (await entry.cardCache.hasComplete(control)) continue;
       // 走哪一档由审阅表的 capabilities 决定,不由 `cacheable` 决定:
       // 共享档 = independent / sourceDependent 且 stateful;其余 stateful
-      // (含 belowDependent)本地档;unknown 和非 stateful 不产快照。
+      // (含 belowDependent 和 unknown)本地档;非 stateful 不产快照。
       // 本地档在这里只可能出现在显式传进来的 controls 上 —— 常规路径上
-      // belowDependent 的快照由 C2 的整场景路产,不是这条隔离路。
+      // belowDependent / unknown 的快照由 C2 的整场景路(`renderLocalSnapshots`)产。
       // 没有共享键就没法寻址(手工构造的 control、以及还没接上键的调用方),不写快照。
       const tier = control.snapshotKey ? (control.tier || snapshotTier(control.capabilities)) : 'none';
       const entryKey = tier === 'local' ? entry.key : undefined;
+      const target = tier === 'none' ? null : { tier, entryKey, key: control.snapshotKey };
+      // C2:HTML 侧另有一条完整性判据 —— `index.json` 的 `count` 是**已有帧数**
+      // (`snapshot-store.mjs` 的 `rangeCount`),完整 = `index.count === control.count`。
+      // PNG 侧的 `hasComplete` 管不到它:同一趟里 PNG 可能齐了而快照缺一段。
+      let index = target ? await this.snapshots().snapshotIndex(target) : { count: 0, frames: [] };
+      if (target && index.count) this.publishLayer(control, tier, index.frames, entryKey);
+      const htmlComplete = !target || index.count === control.count;
+      if (htmlComplete && await entry.cardCache.hasComplete(control)) continue;
       const isolated = this.isolatedCardProject(entry.project, control);
       // A small batch retains Chrome state inside a stateful card, while every
       // batch boundary remains cancellable/schedulable.  `fullFrame` is vital:
       // the cache image is a full transparent stage, never a crop to be framed
       // again during composition.
-      for (let first = 0; first < control.count; first += 4) {
+      //
+      // C4:批次边界是可调度点 —— 每批开始前读镜像插件的 `latestPlayhead().wanted`,
+      // 含它的那一批先跑,再回到顺序批(`nextBatchStart`)。
+      const pending = new Set();
+      for (let first = 0; first < control.count; first += 4) pending.add(first);
+      while (pending.size) {
         if (signal?.aborted) throw Object.assign(new Error('Cancelled'), { cancelled: true });
+        const first = this.nextBatchStart(pending, control);
+        pending.delete(first);
         const localFrames = Array.from({ length: Math.min(4, control.count - first) }, (_, n) => first + n);
+        // C2:帧集合收窄成**本卡缺的那些帧**(按该键 `index.json` 已有区间扣除)。
+        // PNG 那一支照旧要全部帧(`targetFrames` 不动),只有生成快照这一支收窄。
+        const missing = target ? localFrames.filter(n => !rangeHas(index.frames, n)) : [];
         await bakery.reset(isolated, this.emptyUrl(isolated), { deferCards: true });
         await bakery.page.setViewport({ width: isolated.width, height: isolated.height, deviceScaleFactor: this.scaleForLane('background') });
         const written = [];
         await bakeFrames(bakery, { out: path.join(this.root, 'controls', control.key), targetFrames: localFrames,
           snapshotOnly: false, fullFrame: true, writeFrames: false, signal,
-          snapshotFrames: tier === 'none' ? new Set() : new Set(localFrames),
+          snapshotFrames: new Set(missing),
           onFrame: async (frame, png) => entry.cardCache.put(control.key, frame, png, () => !signal?.aborted),
           // 隔离工程里目标片段是唯一可见输出,所以这一帧的 control 列表里认
           // `control.clipId` 那一条就是这张卡的子树。`data-pc-local-frame` 是卡片
           // 自己的本地帧,和隔离工程的帧号一致(片段被平移到了 -phase),但仍以
           // 冻结结果里带的那个为准 —— 目录是按本地帧寻址的。
           onSnapshot: async (frame, html, produced) => {
-            if (tier === 'none' || signal?.aborted) return;
+            if (!target || signal?.aborted) return;
             const own = (produced || []).find(item => item.id === control.clipId);
             if (!own || !Number.isInteger(own.frame)) return;
-            await this.snapshots().writeSnapshot({ tier, entryKey, key: control.snapshotKey, localFrame: own.frame, html: own.html });
+            await this.snapshots().writeSnapshot({ ...target, localFrame: own.frame, html: own.html });
+            // A3c:超限的帧照常落盘,但不进就绪索引、不投递(诊断记在快照库里)
+            if (!this.snapshots().noteSnapshotSize({ clipId: control.clipId, key: target.key, localFrame: own.frame, html: own.html, capabilities: control.capabilities })) return;
             written.push(own.frame);
           } });
         // 每批写完更新一次 index.json(不是每帧):一个键几千帧时,读-改-写
         // 一个小 JSON 也比不上批量摊薄。
         if (written.length && !signal?.aborted) {
-          await this.snapshots().updateIndex({ tier, entryKey, key: control.snapshotKey, frames: written });
+          index = await this.snapshots().updateIndex({ ...target, frames: written });
+          // C3:这一层的区间长了就发一条全量 `layer`
+          this.publishLayer(control, tier, index.frames, entryKey);
         }
       }
       if (!signal?.aborted) await entry.cardCache.finish(control);

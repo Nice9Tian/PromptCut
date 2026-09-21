@@ -1,0 +1,175 @@
+import { mergeRanges } from './snapshot-store.mjs';
+
+/**
+ * C3 就绪索引:**按层**记「这一层现在有哪些本地帧」,并把变化推给页面。
+ *
+ * 一层 = (片段 clipId, 档位 kind)。同一张重卡的 `stream` 表和 `html` 表并存、
+ * 互不覆盖 —— 播放贴流、拖动贴快照,两条路各查各的。
+ *
+ * # 档位名的三处同义
+ *
+ *   目录 `controls-html`  ↔ `snapshotTier()` 的 `'shared'` ↔ 线上 `kind: 'html'`
+ *   目录 `controls-local` ↔ `snapshotTier()` 的 `'local'`  ↔ 线上 `kind: 'local'`
+ *   轨道流(R8)                                            ↔ 线上 `kind: 'stream'`
+ *
+ * `snapshotTier` 的返回值由调用方用 `kindOfTier` 映射成 `kind`。K1 记录里的
+ * `kind: 'random' | 'stepped'` 是探针方法,同字不同物。
+ *
+ * # 消息三种(格式定死,C3)
+ *
+ *   { type: 'reset', localRev }                       项目版本换了,页面清表
+ *   { type: 'layer', clipId, kind, key, ranges, groupClipIds? }
+ *                                                     该层当前**全部**就绪的本地帧
+ *                                                     闭区间,**每次发全量、不发增量**
+ *   { type: 'done', localRev }                        锚帧全部就绪(C2 的门槛)
+ *
+ * 全量语义是刻意的:一条消息丢了不会让页面的表永远缺一段,下一条同层消息就补回来;
+ * 重连时服务端先发 `reset` 再发全量 `layer`,所以不需要轮询端点(J3 / F5 共用这条路)。
+ *
+ * # 为什么 `layer` 要等项目到位(F5)
+ *
+ * 扫盘只得到「键 → 区间」:目录名是剥掉 clipId 的共享键,而 `layer` 和页面的
+ * `readyIndex` 都按 clipId 索引。所以重启后先把区间挂在键上(`stageByKey`),
+ * 等 card plan 算出来(`control.clipId` ↔ `control.snapshotKey`)再反查、
+ * 一次性 `reset` + 全量 `layer`。项目没到之前一条 `layer` 都不发。
+ */
+
+/** `snapshotTier()` → 线上的 `kind`;不产快照的档回 null */
+export function kindOfTier(tier) {
+  if (tier === 'shared') return 'html';
+  if (tier === 'local') return 'local';
+  return null;
+}
+
+export const READY_KINDS = ['html', 'local', 'stream'];
+
+/**
+ * 线上的 `key`(C3 / J3):共享档就是共享键;本地档**自带一个斜杠** ——
+ * `<entry.key>/<共享键>`,因为同一个共享键在不同项目下各有一棵本地档子树。
+ * 目录形状(`snapshot-store.mjs` 的两层目录)和线上的键在这里对齐,只此一处。
+ */
+export function wireSnapshotKey(tier, entryKey, snapshotKey) {
+  if (!snapshotKey) return null;
+  if (tier === 'shared') return snapshotKey;
+  if (tier === 'local') return entryKey ? `${entryKey}/${snapshotKey}` : null;
+  return null;
+}
+
+const layerId = (clipId, kind) => `${kind}:${clipId}`;
+
+export function createReadyIndex() {
+  /** layerId -> { clipId, kind, key, ranges, groupClipIds? } */
+  const layers = new Map();
+  /** 还没认领的「键 → 区间」(F5 扫盘的产物):`${kind}\0${key}` -> { kind, key, ranges } */
+  const staged = new Map();
+  const subscribers = new Set();
+  let localRev = 0;
+  let done = false;
+
+  function emit(message) {
+    for (const send of subscribers) { try { send(message); } catch { /* 一个订阅者断了不影响别人 */ } }
+  }
+
+  /** 项目版本换了:清表、通知页面清表。`layer` 从这一刻起重新长。 */
+  function reset(rev = localRev) {
+    localRev = Number(rev) || 0;
+    layers.clear();
+    done = false;
+    emit({ type: 'reset', localRev });
+  }
+
+  /**
+   * 把这一批新帧并进某一层,并发一条**全量** `layer`。
+   * `frames` 可以是帧号、闭区间,或两者混排(`mergeRanges` 的口径)。
+   */
+  function addFrames({ clipId, kind, key, frames, groupClipIds = undefined }) {
+    if (!clipId || !READY_KINDS.includes(kind) || !key) return null;
+    const id = layerId(clipId, kind);
+    const before = layers.get(id);
+    // 换了键(卡的参数变了)就从头记:旧键的区间和新键没有关系
+    const base = before && before.key === key ? before.ranges : [];
+    const ranges = mergeRanges([...base, ...(frames ?? [])]);
+    const layer = { clipId, kind, key, ranges, ...(groupClipIds ? { groupClipIds } : {}) };
+    layers.set(id, layer);
+    emit({ type: 'layer', ...layer });
+    return layer;
+  }
+
+  /** 整层直接给一份区间表(F5 的重建路);和 `addFrames` 一样发全量 `layer`。 */
+  function setLayer({ clipId, kind, key, ranges, groupClipIds = undefined }) {
+    if (!clipId || !READY_KINDS.includes(kind) || !key) return null;
+    const layer = { clipId, kind, key, ranges: mergeRanges(ranges), ...(groupClipIds ? { groupClipIds } : {}) };
+    layers.set(layerId(clipId, kind), layer);
+    emit({ type: 'layer', ...layer });
+    return layer;
+  }
+
+  /** 锚帧全部就绪(C2 的门槛)。重复调只发一次。 */
+  function markDone() {
+    if (done) return;
+    done = true;
+    emit({ type: 'done', localRev });
+  }
+
+  /** 扫盘得到的「键 → 区间」:先挂着,等 card plan 到位再认领(F5) */
+  function stageByKey({ kind, key, ranges }) {
+    if (!READY_KINDS.includes(kind) || !key) return;
+    const id = `${kind}:${key}`;
+    const before = staged.get(id);
+    staged.set(id, { kind, key, ranges: mergeRanges([...(before?.ranges ?? []), ...(ranges ?? [])]) });
+  }
+
+  /**
+   * card plan 到位:用 `control.clipId` ↔ `control.snapshotKey` 把挂着的区间认领成层。
+   * `layers` = [{ clipId, kind, key }],`key` 已经是**线上的键**(本地档是
+   * `<entry.key>/<共享键>`,C3),由调用方用 `wireSnapshotKey` 拼好。返回认领了几层。
+   *
+   * 认领是**全量重发**:先 `reset`(页面清表),再对每一层发一条 `layer`。这和 C3
+   * 的语义一致,所以不需要新端点。
+   */
+  function claim(layers_, rev = localRev) {
+    const claimed = [];
+    for (const item of layers_ ?? []) {
+      if (!READY_KINDS.includes(item?.kind) || !item.clipId || !item.key) continue;
+      const hit = staged.get(`${item.kind}:${item.key}`);
+      if (!hit?.ranges?.length) continue;
+      claimed.push({ clipId: item.clipId, kind: item.kind, key: item.key, ranges: hit.ranges });
+    }
+    if (!claimed.length) return 0;
+    localRev = Number(rev) || 0;
+    layers.clear();
+    done = false;
+    emit({ type: 'reset', localRev });
+    for (const layer of claimed) {
+      layers.set(layerId(layer.clipId, layer.kind), layer);
+      emit({ type: 'layer', ...layer });
+    }
+    return claimed.length;
+  }
+
+  /** 连上 SSE 时先灌的那一份:`reset` + 每层一条全量 `layer`(+ 已经 done 的话再一条) */
+  function backlog() {
+    const out = [{ type: 'reset', localRev }];
+    for (const layer of layers.values()) out.push({ type: 'layer', ...layer });
+    if (done) out.push({ type: 'done', localRev });
+    return out;
+  }
+
+  function subscribe(send) {
+    subscribers.add(send);
+    for (const message of backlog()) { try { send(message); } catch { /* 刚连上就断了 */ } }
+    return () => subscribers.delete(send);
+  }
+
+  return {
+    reset, addFrames, setLayer, markDone, stageByKey, claim, backlog, subscribe,
+    get localRev() { return localRev; },
+    set localRev(value) { localRev = Number(value) || 0; },
+    get done() { return done; },
+    /** 测试 / 探针用 */
+    list: () => [...layers.values()].map(layer => ({ ...layer })),
+    stagedKeys: () => [...staged.values()].map(item => ({ ...item })),
+    subscriberCount: () => subscribers.size,
+    clear: () => { layers.clear(); staged.clear(); done = false; },
+  };
+}
