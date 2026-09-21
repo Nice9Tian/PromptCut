@@ -26,7 +26,7 @@ const DirectCard = memo(function DirectCard({ def, params, ...props }: CardProps
 
 /**
  * 实体模式:浏览时把每张卡换成一个色块。给一个「这张卡该画成什么样」的查询函数,
- * Stage 只负责摆位置 —— 颜色怎么来的、什么时候采样,是 solidMode.ts 的事。
+ * Stage 只负责摆位置 —— 颜色怎么来的、什么时候采样,是 render/solidMode.ts 的事。
  *
  * 不传 = 真渲,DOM 和以前**一个字都不差**(导出走的就是这条路)。
  */
