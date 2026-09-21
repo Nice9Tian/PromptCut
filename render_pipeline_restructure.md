@@ -1,6 +1,6 @@
 # 渲染管线重整计划（render_pipeline_restructure）
 
-基线：本地 main `30917d2`（2026-09-22）。必读：`user_pinned_goal.md`（2026-09-17 之后未改动，本文逐条遵循；引用写「pinned 架构 N / 渲染 N / 划分 轴N / 平台」）。
+基线：第 1、2 节的核对做在本地 main `30917d2`（2026-09-22）；之后 main 上又落了探针（`5157f91`）、滤镜两种新 op（`7f10ebe`）、第 75 轮审查材料（`dfef7e8`）。必读：`user_pinned_goal.md`（2026-09-22 经弹窗确认改过三处：渲染 5、渲染 10、架构 1，本文逐条遵循；引用写「pinned 架构 N / 渲染 N / 划分 轴N / 平台」）。
 本文接替 `AGY-TASK-cloud-doc-and-write-race.md`（第 111 版）里**渲染管线那一半**：协议全文（E0、K1～K6、G、M 的细节）仍以那份为底稿，按**节名**查，不要再按它的 `file:line` 查——解耦之后那些行号和一部分路径已经失效；本文第 3、4 节的更正优先于底稿。云端 / 文档服务那一半（第 5～10 步）不在本文范围，第 6 节只列审查结论的去向。
 
 ---
@@ -32,7 +32,7 @@
 
 **已落地、已提交**：原任务书第 1、2、2b、3 步（`b5c65dc`）——能力审计与审阅表、镜像插件与两层 diff、素材按哈希寻址、快照格式（`freezeScene`）、共享键与快照库、挂载算式统一、JS 图卡、舞台 postMessage RPC（`stageRpc.ts` / `stageBridge.ts`）、`solid.ts`、成本记录的键与端点、离线成本探针。之后是 PR #1 和这次的五项解耦。
 
-**已做、未提交**（主工作区）：桌面壳探针——`scripts/probes/probe-connect.mjs`、`videodecoder-probe.mjs`（新），`backdrop-probe.mjs` / `oac-probe.mjs`（改），报告 `docs/g0-a-webview2-probe.md`。三项全过：WebView2 153 硬解 H.264（1080p 稳态 1.5 ms / 帧，上下拼合的 1920×2176 约 2.5 ms / 帧）；跨源 iframe 里视频下的毛玻璃正确；带 `Origin-Agent-Cluster: ?1` 时舞台 iframe 独立进程（父页最坏帧间隔 7 ms）。
+**已提交（`5157f91`）**：桌面壳探针——`scripts/probes/probe-connect.mjs`、`videodecoder-probe.mjs`（新），`backdrop-probe.mjs` / `oac-probe.mjs`（改），报告 `docs/g0-a-webview2-probe.md`。三项全过：WebView2 153 硬解 H.264（1080p 稳态 1.5 ms / 帧，上下拼合的 1920×2176 约 2.5 ms / 帧）；跨源 iframe 里视频下的毛玻璃正确；带 `Origin-Agent-Cluster: ?1` 时舞台 iframe 独立进程（父页最坏帧间隔 7 ms）。
 
 **已核、无代码改动**：能力审计的两条验收都过——仓库注册表 89 张卡里 `unknown` 为 0、54 张粒子卡全部 `canvasHeavy`；5 份旧 `.proc`（含没写 `frameMode` 的定制卡、裸 Project、Python 卡样本、全部素材无哈希）都能打开。
 
@@ -63,7 +63,7 @@
 | 其中连 30 fps 的 23.3 ms 也超的 | 0 | 2 张（orbit、snow） |
 | 次一档（接近门槛） | — | `mu-blur-fade` 10.5、`particles-star` 9.4、`particles-random` 8.6、`checklist` 8.2、`particles-spin` 8.1 |
 
-结论：**我上一版说「按现在的卡库没有一张卡会用到重管线」只对高配机、30 fps 成立**。低配机或 60 fps 下，粒子卡会判重；几张卡叠在同一位置时，合计耗时更容易越线（次一档那五张任意两张相加就超 11.67 ms）。所以重管线不是可有可无，R8 的先后要按这个数重新考虑（见第 7 节第 2 条）。
+结论：**我上一版说「按现在的卡库没有一张卡会用到重管线」只对高配机、30 fps 成立**。低配机或 60 fps 下，粒子卡会判重；几张卡叠在同一位置时，合计耗时更容易越线（次一档那五张任意两张相加就超 11.67 ms）。所以重管线不是可有可无，R8 的先后要按这个数重新考虑（见第 7 节第 1 条）。
 
 **(b) 给素材做颜色映射会不会成为重活。** 同一段 1080p H.264 视频，三条路各量单帧的主线程耗时（无限核，脚本和原始数据在 scratchpad `colormap-bench.mjs` / `.json`）：
 
@@ -73,7 +73,7 @@
 | **像素映射 `pixelMap`**（`FrameScene.tsx` 的 `PixelMappedMedia`：`getImageData` → 逐像素调 `mapRgba` 解释表达式 → `putImageData`） | `create_pixel_map` / `apply_pixel_map` | **416～483 ms**（其中逐像素循环 337～402 ms、读回像素 35～84 ms）；720p 也要 203～232 ms | 超 30 fps 门槛约 20 倍，任何机器都重 |
 | WebGL 片元着色器 + 33³ 三维查找表 | 还没有；GPU 图卡 / 共享 WebGL 渲染器可以这样做 | 0.1 ms（提交 + `gl.finish`；这个数小得可疑，只能说明主线程提交很便宜，GPU 真实耗时要用计时查询再量） | 是达芬奇那种调色该走的路 |
 
-**由此暴露的计划缺口**：像素映射挂在**素材层**上，素材层不是卡片——不被探针测、不进轻重分派、没有死素材。今天的编辑器预览（`MediaLayers`）根本不画像素映射，只有导出页和 `see_frames` 画；R3 把素材层搬进舞台、R7 露出舞台之后，带像素映射的素材段会在每一拍里同步跑 400 多毫秒，整个舞台的节拍被它拖成 2 fps。处理办法二选一，见第 7 节第 6 条。
+**由此暴露的计划缺口**：像素映射挂在**素材层**上，素材层不是卡片——不被探针测、不进轻重分派、没有死素材。今天的编辑器预览（`MediaLayers`）根本不画像素映射，只有导出页和 `see_frames` 画；R3 把素材层搬进舞台、R7 露出舞台之后，带像素映射的素材段会在每一拍里同步跑 400 多毫秒，整个舞台的节拍被它拖成 2 fps。处理办法已定：工具主动分流 + WebGL 后端，见 3.9 和 R1b。
 
 ---
 
@@ -83,7 +83,7 @@
 
 1. **桌面版跑的是 vite dev server，不读 `dist/`**（`desktop/src-tauri/src/lib.rs:434` 用 sidecar 的 node 起 `vite --port 5210`；`desktop/scripts/prepare-runtime.mjs:257` 注释写明）。所以底稿第 110 版「成本探针以构建产物为准、分派只认 build 记录」作废：**分派用当前运行模式的记录**——`mode=dev|build` 拼进 `device` 串，dev 的应用只看 dev 记录，将来的在线浏览器模式（构建产物）只看 build 记录。
 2. **`unknown` 卡不能一律判重**。真实项目的 10 张定制卡和所有带部件的组合卡片段都是 `unknown`；底稿规定它们「每个位置都判重、没有死素材、只能透明」，照做会让它们在播放和拖动时全部消失。改成：**`unknown` 一律按下层依赖卡（`belowDependent`）处理**——照测、照实测分派，判轻就活渲；判重用本地档快照，不上云、不进流。代码跟一处：`server/snapshot-store.mjs` 的 `snapshotTier` 对 `unknown` 的 stateful 卡回 `'local'`。
-3. **判重门槛只看活渲耗时（用户 2026-09-22 同意）**。含生成快照的时间时 62 张里 37 张判重；只看活渲耗时 0 张判重，最贵的一张 6.9 ms。生成快照只在探针和预渲染时发生，活渲每拍并不做。`capped = stepMs > B`；生成快照的耗时拆开单独记（见 3.8），只用来排探针和预渲染的产能。
+3. **判重门槛只看活渲耗时（用户 2026-09-22 同意）**。含生成快照的时间时 62 张里 37 张判重；只看活渲耗时，本机（28 核、30 fps）0 张判重、最贵的一张 6.9 ms，限 2 核、60 fps 时 3 张粒子卡判重（2.1(a)）——判重的是真正重的卡，而不是「生成快照慢」的卡。生成快照只在探针和预渲染时发生，活渲每拍并不做。`capped = stepMs > B`；生成快照的耗时拆开单独记（见 3.8），只用来排探针和预渲染的产能。
 
 ### 3.2 舞台与协议
 
@@ -106,32 +106,6 @@
 - 成本记录：舞台的 `probe` 事件只报测量值；`device`、`measuredAt`、`mode`、`demoted: false` 由父页补齐后整条 PUT（`costs-store` 是整条替换）。
 - **只用 `demoted` 一面旗**：K6 降级 = 父页查出旧记录，整条 PUT `{ ...旧记录, capped: true, demoted: true }`（不写 `null`）；探针写回显式带 `demoted: false`；`pinnedHeavy` 留给将来的人工钉死，本任务不写它。分派时 `demoted` 和 `pinnedHeavy` 都当 `capped`。
 - `catchUpMs` 只有一个定义：逐帧推进耗时之和、不含冻结；探针每帧分「推进」「冻结」两段计时；被预算截断时按已推帧的平均外推。
-
-### 3.8 生成快照：命名与指标拆开（用户 2026-09-22 提出）
-
-「冻结」这个词以后不用了：它把两条原理、瓶颈、产物大小都不同的技术路线说成了一件事，而且和「被抑制的卡 `t` 冻住」撞词。文档里改叫**生成快照**，其中两步分别叫**样式内联**和**画布栅格化**。
-
-- **代码结构**（R1 一起做，反正 R1 本来就要换 `freezeCode` 的哈希、作废全部旧快照）：`src/render/snapshotFreeze.ts` 改名 `src/render/createSnapshot.ts`，导出 `createSnapshot(root)`；里面按顺序调五个独立函数——`cloneScene`（复制 DOM）→ `inlineDOMStyles`（读计算样式、按差异口径写进 `style`；瓶颈是元素数 × 属性数）→ `rasterizeCanvas`（读像素、压成图片、写实体框；瓶颈是画布面积和编码器）→ `stripMedia`（素材层只留占位属性）→ `serializeScene`（`outerHTML`、整场景的 id 改名、逐控件取包裹层 `innerHTML`）。`inlineDOMStyles` 和 `rasterizeCanvas` 各自一个文件（`src/render/snapshot/inlineStyles.ts`、`src/render/snapshot/rasterizeCanvas.ts`），互不 import；worktree 里那份差异内联的逻辑（`ensureBaselines` / `animatedProps` / `forcedProps` / `buildStyle`）整体归 `inlineStyles.ts`。
-- **跟着改名的地方**（b5c65dc 以来约 20 个文件引用旧名）：页面协议 `window.__bfFreeze` → `window.__pcCreateSnapshot`（`src/StageView.tsx`、`src/ExportView.tsx`、`src/kernel/clock.ts` 的类型、`server/bakery/bake.mjs` 的两处 `page.evaluate`、`docs/bake-page-protocol.md` 的清单、`scripts/verify-bake-protocol.mjs` 和它的测试）；`freezeCode` → `snapshotCode`（`server/frame-code.mjs`、`server/card-identity.mjs`、`server/card-cache.mjs`、`card-snapshot-identity.test.mjs`；`FREEZE_FILES` 清单同步新文件）；类型 `FrozenScene` / `FrozenControl` → `SceneSnapshot` / `ControlSnapshot`；四个探针脚本。**共享键里那个字段的名字也跟着换**，键值本来就要变，不多付一次失效。
-- **探针分开上报**：成本记录从一个 `frameMs` 拆成四个数——`stepMs`（活渲单帧最差，**唯一进判重的数**）、`inlineMs`（样式内联单帧最差）、`rasterMs`（画布栅格化单帧最差，没有画布的卡为 0）、`serializeMs`（序列化单帧最差）；`catchUpMs` 照 3.3 只算活渲。`frameMs` 字段删掉，不留兼容（`out/card-costs.json` 重测一遍就有）。舞台的 `probe` 事件、`CardCostRecord` 类型、`docs/snapshot-size-audit.md` 的「冻结 ms」一列同步拆。哪类卡超标一眼可见：`inlineMs` 高 = DOM 太复杂（lottie 的两千多个节点），`rasterMs` 高 = 画布太大。
-- **顺带修一个量法问题**（`reply_to_users_goal.md` 第 9 条）：带 `probe: true` 的 `setTime` 会先等一次真实 rAF 再生成快照，随机访问卡量出来的数因此至少含一个垂直同步（约 17 ms）。四个数都只量各自那一段，rAF 等待不计入任何一个。
-- **给以后留的口子**：两步拆开之后，`rasterizeCanvas` 可以单独换成 webp、单独改成异步（`convertToBlob`），不牵动样式内联；到那一步 `createSnapshot` 会变成 async，页面协议的调用方（`bake.mjs` 的 `page.evaluate` 本来就 await）不用改，舞台里同步调用它的两处（`StageView.tsx` 的探针分支）到时改 await。共享 WebGL 渲染器（R9）落地后，画布卡的像素来自 Worker 交回的位图，`rasterizeCanvas` 是唯一要改的文件。
-- **产能预算怎么用这三个数**：预渲染一帧的成本 ≈ `stepMs + inlineMs + rasterMs + serializeMs`；探针阶段「整段推完要多久」按它估，超过遮罩可接受的时长就只测不存（探针推过的帧不当预渲染存），把生成快照留给后台预渲染。
-
-### 3.9 像素映射：工具主动分流（用户 2026-09-22 定）
-
-`create_pixel_map` / `update_pixel_map` 不再无条件接单。落库之前先给定义分类（新纯函数 `classifyPixelMap(def)`，放 `src/kernel/pixelMap.mjs`，浏览器和 Node 共用、可单测），按类别走三条路：
-
-| 类别 | 判据（都能从已编译的表达式里静态看出来） | 走哪条路 | 工具怎么回 |
-|---|---|---|---|
-| A 通道曲线 / 线性混色 / 按亮度的渐变映射 | `where` 恒为 1（不引用 `r g b a luma x y t`）；`to` 是 `expr` 且每个通道只依赖自己（`r→f(r)`）或是 `r g b` 的线性组合；或 `colorSequence` 只按 `luma` 取色 | **CSS / SVG 滤镜**：`feComponentTransfer type="table"`（把 f 在 33 个点上取样）、`feColorMatrix` | **拒绝并给出等价物**：抛错，错误体里带一份可以直接传给 `create_filter` 的 `ops`（见下），Agent 照着重发即可 |
-| B 要逐像素判断的 | `where` 引用颜色做选区（抠色）、引用 `x / y / t`；`to` 是 `transparent`、另一段素材、或通道互相依赖的非线性表达式 | **WebGL**：表达式翻译成 GLSL 片元着色器（解析器的函数集 `sin cos abs min max pow clamp lerp step smoothstep` 与 GLSL 一一对应，`lerp → mix`），视频帧当纹理 | 接单，回包带 `backend: 'webgl'` |
-| C 翻译不了的 | 出现 GLSL 没有对应物的写法 | 无 | 拒绝，说明哪一处翻译不了 |
-
-- **滤镜的两种新 op 已落地（2026-09-22，未提交）**：`src/kernel/filters.mjs` 加了 `curves`（每通道 2～33 点的取样表、线性插值，`rgb` 是三通道简写）和 `matrix`（行优先 3×3，外加混色截断之后再加的 `offset`）；预览走 SVG 滤镜（`svgFilterMarkup` / `ensureSvgFilter`，定义按内容哈希去重、收在 `body` 末尾一个 0×0 的 `<svg>` 里，不进 HTML 快照），导出走 `lutrgb`（`tableLutExpr`：不含逗号的分段线性表达式）和 `colorchannelmixer`，标了 `fixed` 的步骤 `sendcmd` 不逐帧重发；一个滤镜最多 4 步 `curves`；`create_filter` 的描述和 schema、`list_filters` 的回包、类型声明同步；`server/export-compose.mjs` 在滤镜图超过 12000 字符时改用 `-/filter_complex <文件>`（本机和随包的 ffmpeg 都是 9.0.1，`-filter_complex_script` 在 9 里已经没了，实测过）。**实测预览与导出的像素差**（同一张图，Chrome 截图对 ffmpeg 输出）：单步 `curves` / `matrix` 最大差 1 级、带 `offset` 的 2 级；三步叠加（含原有的 `contrast`）最大 5 级、0.3% 的通道差超过 2 级。`tsc` 零错误，`npm test` 1466 / 1465 通过 / 0 失败 / 1 跳过（新增 4 条单测；`filterTools.test.mjs` 里钉死「8 种 kind」的那条按新口径改成 10 种）。下面是当初的理由——今天 `create_filter` 只有八种函数式 op（`filters.mjs` 的 `cssFilter`，`:371`），没有查表和矩阵。新增 `curves`（每通道一张 0～1 的取样表）和 `matrix`（4×5 颜色矩阵）；`cssFilter` 对它们输出 `url(#pc-f-<哈希>)`，对应的 `<filter>` 由素材层所在的文档按哈希去重注入一次。实测这条路 1080p 播放 0 长任务、0 掉帧（2.1(b)）。导出走同一份 CSS，`server/export-compose.mjs` 里若有 ffmpeg 直通的滤镜翻译，要同步补这两种（落地时核）。
-- **B 类的 WebGL 后端就在本计划里做完（用户 2026-09-22 定：不走「先拒绝」的过渡）**：新模块 `src/render/pixelMapGl.ts`——每个文档一个 WebGL2 上下文（离屏 canvas），按定义哈希缓存编译好的 program；`compilePixelMapGlsl(def)`（放 `src/kernel/pixelMap.mjs`，纯函数可单测）把 `where` / `to.expr` / 颜色序列翻译成片元着色器，变量 `r g b a luma x y t` 对应 uniform / 纹理取样；视频帧 `texImage2D` 进纹理，目标素材是第二张纹理；画完 `drawImage` 到素材层自己的 `<canvas>`。`PixelMappedMedia` 改调它，**逐像素的 CPU 循环整体删除、不留退路**（实测 1080p 每帧 416～483 ms）。预览、导出页、`see_frames` 三处共用这一份，所以导出的像素基线会变一次：验收用旧 CPU 实现在同一帧上出对照图，逐像素差 ≤ 2 级（`mapRgba` 保留为单测和对照用的参考实现，不再进任何渲染路径）。以后共享 WebGL 渲染器（R9）落地时，把这个上下文并进去即可，契约不变。
-- 先后：两种新 op 已做；`classifyPixelMap` + A 类拒绝并回等价 `ops`、B 类的 WebGL 后端、C 类拒绝，都在 R1b 里做完，**不等 R9**；R3 把素材层搬进舞台之前 R1b 必须完成。
-- 工具描述（`server/tools/effects.mjs` 的 `create_pixel_map`）同步改：开头写明「整帧调色请用 create_filter 的 curves / matrix；这个工具只给要逐像素选区的活」，让 Agent 多数时候一开始就选对，少走一次被拒。
 
 ### 3.4 数据面
 
@@ -165,6 +139,32 @@
 
 canvas 重卡**不活渲**（与 pinned 渲染 7、平台一节、不做清单冲突）：和 DOM 重卡同一规则，按拍换快照，装不下就透明，暂停追到活渲。
 
+### 3.8 生成快照：命名与指标拆开（用户 2026-09-22 提出）
+
+「冻结」这个词以后不用了：它把两条原理、瓶颈、产物大小都不同的技术路线说成了一件事，而且和「被抑制的卡 `t` 冻住」撞词。文档里改叫**生成快照**，其中两步分别叫**样式内联**和**画布栅格化**。
+
+- **代码结构**（R1 一起做，反正 R1 本来就要换 `freezeCode` 的哈希、作废全部旧快照）：`src/render/snapshotFreeze.ts` 改名 `src/render/createSnapshot.ts`，导出 `createSnapshot(root)`；里面按顺序调五个独立函数——`cloneScene`（复制 DOM）→ `inlineDOMStyles`（读计算样式、按差异口径写进 `style`；瓶颈是元素数 × 属性数）→ `rasterizeCanvas`（读像素、压成图片、写实体框；瓶颈是画布面积和编码器）→ `stripMedia`（素材层只留占位属性）→ `serializeScene`（`outerHTML`、整场景的 id 改名、逐控件取包裹层 `innerHTML`）。`inlineDOMStyles` 和 `rasterizeCanvas` 各自一个文件（`src/render/snapshot/inlineStyles.ts`、`src/render/snapshot/rasterizeCanvas.ts`），互不 import；worktree 里那份差异内联的逻辑（`ensureBaselines` / `animatedProps` / `forcedProps` / `buildStyle`）整体归 `inlineStyles.ts`。
+- **跟着改名的地方**（b5c65dc 以来约 20 个文件引用旧名）：页面协议 `window.__bfFreeze` → `window.__pcCreateSnapshot`（`src/StageView.tsx`、`src/ExportView.tsx`、`src/kernel/clock.ts` 的类型、`server/bakery/bake.mjs` 的两处 `page.evaluate`、`docs/bake-page-protocol.md` 的清单、`scripts/verify-bake-protocol.mjs` 和它的测试）；`freezeCode` → `snapshotCode`（`server/frame-code.mjs`、`server/card-identity.mjs`、`server/card-cache.mjs`、`card-snapshot-identity.test.mjs`；`FREEZE_FILES` 清单同步新文件）；类型 `FrozenScene` / `FrozenControl` → `SceneSnapshot` / `ControlSnapshot`；四个探针脚本。**共享键里那个字段的名字也跟着换**，键值本来就要变，不多付一次失效。
+- **探针分开上报**：成本记录从一个 `frameMs` 拆成四个数——`stepMs`（活渲单帧最差，**唯一进判重的数**）、`inlineMs`（样式内联单帧最差）、`rasterMs`（画布栅格化单帧最差，没有画布的卡为 0）、`serializeMs`（序列化单帧最差）；`catchUpMs` 照 3.3 只算活渲。`frameMs` 字段删掉，不留兼容（`out/card-costs.json` 重测一遍就有）。舞台的 `probe` 事件、`CardCostRecord` 类型、`docs/snapshot-size-audit.md` 的「冻结 ms」一列同步拆。哪类卡超标一眼可见：`inlineMs` 高 = DOM 太复杂（lottie 的两千多个节点），`rasterMs` 高 = 画布太大。
+- **顺带修一个量法问题**（`reply_to_users_goal.md` 第 9 条）：带 `probe: true` 的 `setTime` 会先等一次真实 rAF 再生成快照，随机访问卡量出来的数因此至少含一个垂直同步（约 17 ms）。四个数都只量各自那一段，rAF 等待不计入任何一个。
+- **给以后留的口子**：两步拆开之后，`rasterizeCanvas` 可以单独换成 webp、单独改成异步（`convertToBlob`），不牵动样式内联；到那一步 `createSnapshot` 会变成 async，页面协议的调用方（`bake.mjs` 的 `page.evaluate` 本来就 await）不用改，舞台里同步调用它的两处（`StageView.tsx` 的探针分支）到时改 await。共享 WebGL 渲染器（R9）落地后，画布卡的像素来自 Worker 交回的位图，`rasterizeCanvas` 是唯一要改的文件。
+- **产能预算怎么用这三个数**：预渲染一帧的成本 ≈ `stepMs + inlineMs + rasterMs + serializeMs`；探针阶段「整段推完要多久」按它估，超过遮罩可接受的时长就只测不存（探针推过的帧不当预渲染存），把生成快照留给后台预渲染。
+
+### 3.9 像素映射：工具主动分流（用户 2026-09-22 定）
+
+`create_pixel_map` / `update_pixel_map` 不再无条件接单。落库之前先给定义分类（新纯函数 `classifyPixelMap(def)`，放 `src/kernel/pixelMap.mjs`，浏览器和 Node 共用、可单测），按类别走三条路：
+
+| 类别 | 判据（都能从已编译的表达式里静态看出来） | 走哪条路 | 工具怎么回 |
+|---|---|---|---|
+| A 通道曲线 / 线性混色 / 按亮度的渐变映射 | `where` 恒为 1（不引用 `r g b a luma x y t`）；`to` 是 `expr` 且每个通道只依赖自己（`r→f(r)`）或是 `r g b` 的线性组合；或 `colorSequence` 只按 `luma` 取色 | **CSS / SVG 滤镜**：`feComponentTransfer type="table"`（把 f 在 33 个点上取样）、`feColorMatrix` | **拒绝并给出等价物**：抛错，错误体里带一份可以直接传给 `create_filter` 的 `ops`（见下），Agent 照着重发即可 |
+| B 要逐像素判断的 | `where` 引用颜色做选区（抠色）、引用 `x / y / t`；`to` 是 `transparent`、另一段素材、或通道互相依赖的非线性表达式 | **WebGL**：表达式翻译成 GLSL 片元着色器（解析器的函数集 `sin cos abs min max pow clamp lerp step smoothstep` 与 GLSL 一一对应，`lerp → mix`），视频帧当纹理 | 接单，回包带 `backend: 'webgl'` |
+| C 翻译不了的 | 出现 GLSL 没有对应物的写法 | 无 | 拒绝，说明哪一处翻译不了 |
+
+- **滤镜的两种新 op 已落地（`7f10ebe`）**：`src/kernel/filters.mjs` 加了 `curves`（每通道 2～33 点的取样表、线性插值，`rgb` 是三通道简写）和 `matrix`（行优先 3×3，外加混色截断之后再加的 `offset`）；预览走 SVG 滤镜（`svgFilterMarkup` / `ensureSvgFilter`，定义按内容哈希去重、收在 `body` 末尾一个 0×0 的 `<svg>` 里，不进 HTML 快照），导出走 `lutrgb`（`tableLutExpr`：不含逗号的分段线性表达式）和 `colorchannelmixer`，标了 `fixed` 的步骤 `sendcmd` 不逐帧重发；一个滤镜最多 4 步 `curves`；`create_filter` 的描述和 schema、`list_filters` 的回包、类型声明同步；`server/export-compose.mjs` 在滤镜图超过 12000 字符时改用 `-/filter_complex <文件>`（本机和随包的 ffmpeg 都是 9.0.1，`-filter_complex_script` 在 9 里已经没了，实测过）。**实测预览与导出的像素差**（同一张图，Chrome 截图对 ffmpeg 输出）：单步 `curves` / `matrix` 最大差 1 级、带 `offset` 的 2 级；三步叠加（含原有的 `contrast`）最大 5 级、0.3% 的通道差超过 2 级。`tsc` 零错误，`npm test` 1466 / 1465 通过 / 0 失败 / 1 跳过（新增 4 条单测；`filterTools.test.mjs` 里钉死「8 种 kind」的那条按新口径改成 10 种）。
+- **B 类的 WebGL 后端就在本计划里做完（用户 2026-09-22 定：不走「先拒绝」的过渡）**：新模块 `src/render/pixelMapGl.ts`——每个文档一个 WebGL2 上下文（离屏 canvas），按定义哈希缓存编译好的 program；`compilePixelMapGlsl(def)`（放 `src/kernel/pixelMap.mjs`，纯函数可单测）把 `where` / `to.expr` / 颜色序列翻译成片元着色器，变量 `r g b a luma x y t` 对应 uniform / 纹理取样；视频帧 `texImage2D` 进纹理，目标素材是第二张纹理；画完 `drawImage` 到素材层自己的 `<canvas>`。`PixelMappedMedia` 改调它，**逐像素的 CPU 循环整体删除、不留退路**（实测 1080p 每帧 416～483 ms）。预览、导出页、`see_frames` 三处共用这一份，所以导出的像素基线会变一次：验收用旧 CPU 实现在同一帧上出对照图，逐像素差 ≤ 2 级（`mapRgba` 保留为单测和对照用的参考实现，不再进任何渲染路径）。以后共享 WebGL 渲染器（R9）落地时，把这个上下文并进去即可，契约不变。
+- 先后：两种新 op 已做；`classifyPixelMap` + A 类拒绝并回等价 `ops`、B 类的 WebGL 后端、C 类拒绝，都在 R1b 里做完，**不等 R9**；R3 把素材层搬进舞台之前 R1b 必须完成。
+- 工具描述（`server/tools/effects.mjs` 的 `create_pixel_map`）同步改：开头写明「整帧调色请用 create_filter 的 curves / matrix；这个工具只给要逐像素选区的活」，让 Agent 多数时候一开始就选对，少走一次被拒。
+
 ---
 
 ## 4. 路径对照（解耦之后；底稿里的旧路径一律按这张表换）
@@ -196,9 +196,9 @@ pinned 架构 4 / 5 的落点因为 vision 拆分而变清楚了：**Agent 专�
 ## 5. 重整后的步骤（只含渲染管线；每步单独可验收、可回滚）
 
 ### R0 清账（半天）
-1. 主工作区的探针改动和 `docs/g0-a-webview2-probe.md` 提交（等你点头；内容见第 2 节）。
+1. （已做，`5157f91`）主工作区的探针改动和 `docs/g0-a-webview2-probe.md` 提交。
 2. `result_decouple.md` 6.2 的遗留：`vite.config.ts:76-80` 的 `server.watch.ignored` **已经有** `**/out/**`，报告说冷启动仍被 `out/frame-library/` 拖慢——先量一次仓库根 dev server 的冷启动，确认慢在哪（监听器初扫还是别处）再动；最省事的兜底是给 `frame-library` 加 GC（原 F1）。
-3. 给 `AGY-TASK-cloud-doc-and-write-race.md` 文首加一句「渲染管线部分以 `render_pipeline_restructure.md` 为准」。
+3. （已做）给 `AGY-TASK-cloud-doc-and-write-race.md` 文首加一句「渲染管线部分以 `render_pipeline_restructure.md` 为准」。
 
 ### R1 差异样式内联收尾（原 3b 步）
 - 把 worktree 里的改动挪到当前 main 上重做一遍（它基于 `b5c65dc`，`frame-code.mjs` 和探针脚本引用的路径都已搬家，直接合并会冲突；`src/render/snapshotFreeze.ts` 和新模块 `freezeStyleProps.mjs` 可以原样取）。
@@ -232,7 +232,7 @@ pinned 架构 4 / 5 的落点因为 vision 拆分而变清楚了：**Agent 专�
 摘掉舞台 iframe 的 `opacity: 0`、删主文档的 `mediaRects`、非 legacy 下停掉 `Preview` 的 rAF 循环、`?preview=legacy` 回滚。R2～R6 都在同一分支上、都在 legacy 后面，这一步才翻开关。验收：底稿「D5 + E + K」那一条总验收 + 零卡顿（主文档长任务为 0）。
 
 ### R8 轨道流（G）
-先做编码原型（吞吐、编码耗时、alpha 误差、严格 GOP 参数、裁剪矩形取法），再按 3.5 实现，挂 `streams` 开关。**是否现在做，见第 7 节第 2 条。**
+先做编码原型（吞吐、编码耗时、alpha 误差、严格 GOP 参数、裁剪矩形取法），再按 3.5 实现，挂 `streams` 开关。**是否现在做，见第 7 节第 1 条。**
 
 ### R9 共享 WebGL 渲染器（M）
 先 `gl-atlas-probe.mjs`，再按 3.6 做两条路线，迁移 `scene-3d` 和三张用户卡。
@@ -243,15 +243,22 @@ pinned 架构 4 / 5 的落点因为 vision 拆分而变清楚了：**Agent 专�
 
 ## 6. 不在本文范围、但已经有审查结论的部分
 
-第 75 轮对云端 / 文档服务那一半（原第 5～10 步）查出的问题和我的处理意见，逐条记在旧 scratchpad 的 `r75/fold-notes.md`（173 行），要点：第 5、6 步顺序倒置（卡片源码同步和快照清单要用本机文档服务，应挪到第 6 步）；内容库要补一套 WebSocket 消息；素材上传统一走分片并补「已收分片」查询；`uploaded` 要按两档分开记；B4 的期望版本只约束 Agent 写工具；模式切换时 `projectRev` 不能归零；拆分模式下 AI 菜单的动图预览不能被路由进 Agent 专用 Chrome。**素材两档（pinned 架构 1，2026-09-22 定稿）**：和底稿第 5 步一致——小版由导入方本机用 ffmpeg 转出（云端小规模运行，没有转码能力），小版和原片都分片上传；要补的只有上传队列的顺序：**逐个素材，同一个素材先小版后原片，两份都 `uploaded` 才轮到下一个素材**（底稿是「所有素材的小版先传、原片后传」，要改）；`uploaded` 仍按两档分开记（第 75 轮的结论不变）；拉取方有小版先拉小版、原片落盘后换档，没有小版直接拉原片；换档前仍要过「原片能不能在浏览器里播放」那一关，放不了的预览一直停在小版，导出才用原片；在线浏览器模式**能拉小版、但产不出小版**：拉取侧和桌面版完全一样（云端有小版就先拉小版）；只有在浏览器里导入的素材，因为没有本机 ffmpeg，上传时只有原片一档，别人拉它时按 pinned「还没有小版就直接拉原片」走。用户 2026-09-22 定：现在就这样，不补；「桌面版发现云端缺小版就补转一份传上去」记在 `future_planning.md` 第 1 条，以后再做；不在页面里用 WebCodecs 转。这些我已经在任务书的一份**副本**上改了三部分（`unknown` 口径、文档服务与 B / D 节、数据面与 F 节，共 46 处），**没有落到正本**；要不要继续把任务书正本更新到第 112 版，等你说。
+第 75 轮对云端 / 文档服务那一半（原第 5～10 步）查出的问题和我的处理意见，逐条记在 `docs/plan/r75/fold-notes.md`（十份报告原文在同一目录），要点：第 5、6 步顺序倒置（卡片源码同步和快照清单要用本机文档服务，应挪到第 6 步）；内容库要补一套 WebSocket 消息；素材上传统一走分片并补「已收分片」查询；`uploaded` 要按两档分开记；B4 的期望版本只约束 Agent 写工具；模式切换时 `projectRev` 不能归零；拆分模式下 AI 菜单的动图预览不能被路由进 Agent 专用 Chrome。**素材两档（pinned 架构 1，2026-09-22 定稿）**：和底稿第 5 步一致——小版由导入方本机用 ffmpeg 转出（云端小规模运行，没有转码能力），小版和原片都分片上传；要补的只有上传队列的顺序：**逐个素材，同一个素材先小版后原片，两份都 `uploaded` 才轮到下一个素材**（底稿是「所有素材的小版先传、原片后传」，要改）；`uploaded` 仍按两档分开记（第 75 轮的结论不变）；拉取方有小版先拉小版、原片落盘后换档，没有小版直接拉原片；换档前仍要过「原片能不能在浏览器里播放」那一关，放不了的预览一直停在小版，导出才用原片；在线浏览器模式**能拉小版、但产不出小版**：拉取侧和桌面版完全一样（云端有小版就先拉小版）；只有在浏览器里导入的素材，因为没有本机 ffmpeg，上传时只有原片一档，别人拉它时按 pinned「还没有小版就直接拉原片」走。用户 2026-09-22 定：现在就这样，不补；「桌面版发现云端缺小版就补转一份传上去」记在 `future_planning.md` 第 1 条，以后再做；不在页面里用 WebCodecs 转。这些我已经在任务书的一份**副本**上改了三部分（`unknown` 口径、文档服务与 B / D 节、数据面与 F 节，共 46 处），**没有落到正本**；要不要继续把任务书正本更新到第 112 版，等你说。
 
 ---
 
 ## 7. 需要你拍板的
 
-1. **（已定，2026-09-22）判重门槛只看活渲耗时；生成快照的耗时拆成样式内联 / 画布栅格化 / 序列化三个数单独上报。** pinned 渲染 5 的那一句已按你在弹窗里确认的原文替换。以下是当时的依据——pinned 渲染 2 的 t_m_c / t_c 是渲染耗时；pinned 渲染 5 说探针「记得加上截图 or HTML 保存花费时间 t_s_c」，底稿（第 57 版起，按你当时的决定）把它加进了判重的那个数。实测后果见第 2 节：含冻结 37 / 62 判重，不含 0 / 62。我的建议：**判重只看不含冻结的单帧最差 `stepMs`；冻结时间单独记，只用来排探针和预渲染的产能**。这样绝大多数卡全程活渲，重管线只服务真正重的卡。
-2. **轨道流的先后。** 2.1(a) 的压力实测推翻了我原先的理由：2 核、60 fps 下有 3 张粒子卡判重，叠卡时更多。没有流时，判重的卡播放中只能贴静止快照或透明——粒子卡会在播放时定住。我现在的建议：R8 仍排在 R7 之后（R2～R7 是它的前置，先后本来就改不了多少），但**编码原型和 R2 同时开工**，R7 一过立刻接 R8，不再写「等出现重卡再说」。另一条更省的路是 R9（共享 WebGL 渲染器）：粒子卡搬进 Worker 之后主线程成本会大降，可能直接回到判轻；但粒子卡今天是 2D canvas + 主线程库（`dom2d`），底稿明确不迁，要不要为此改主意也请你定。
-3. **（已定，2026-09-22，pinned 架构 1 已按弹窗确认的原文改写）素材两档的分工（同一天改过两次，以这一版为准）：**小版由上传方在自己机器上转码（云端不转码）**，小版和原片都上传，分片、断点续传；**逐个素材上传，同一个素材先传小版、再传原片，两份都传完才进入下一个素材**；拉取时云端有小版就先拉小版、再拉原片替换，没有就直接拉原片。「单词操作块」已改成「单次操作块」。** 这和底稿第 5 步基本一致，只多了「逐个素材、两份都完才下一个」的顺序（见第 6 节）。以下是当时的问题，留作记录——pinned 架构 1 的两处措辞（审查者的建议，我没动）：「H264 流式传输」是否也约束原片（我的读法：H264 指先传的小分辨率版，原片保持原编码；另加一条——原片不是浏览器可放的编码时预览不换档）；「单词操作块」疑为「单次操作块」的错字。
-4. **（已定，2026-09-22，pinned 渲染 10 已按弹窗确认的原文改写：同一个舞台的所有 canvas 卡共用一个上下文和一个 Worker，放在哪见两条路线，导出页自己开一个。）** 以下是当时的问题，留作记录——pinned 渲染 10 首句「每个舞台文档只开一个 WebGL 上下文……舞台 iframe 里开的一个 Web Worker」和同段后文的路线 2（上下文在父页）行文对不上，要不要调整句序。
-6. **（已定，2026-09-22）像素映射：工具主动分流，整帧调色走 `create_filter` 的 `curves` / `matrix`（已落地），要逐像素的走 WebGL 后端，后端就在 R1b 里做完、不设「先拒绝」的过渡期，见 3.9。** 以下是当时列的两个选项，留作记录—— 实测 1080p 每帧 416～483 ms（2.1(b)）。(甲) 改成 GPU 实现：表达式翻译成 GLSL、在 WebGL 里对视频帧做，单帧主线程成本可忽略，预览和导出共用一份——这是正路，但表达式解析器要多一个 GLSL 后端，导出像素基线会变。(乙) 先不改实现，把带像素映射的素材段当成一张 `sourceDependent` 的重卡：探针照测、必然判重、由预渲染产死素材，播放贴流或快照。(乙) 省事但完全依赖重管线。我倾向 (甲)，排在 R9 旁边。
-5. `src/editor/Preview.tsx:116` 和 `:605` 的注释里各有一处约定禁用的旧词，顺手改不改。
+**还没定的**
+
+1. **轨道流的先后。** 2.1(a) 的压力实测说明低配机或 60 fps 下粒子卡会判重，叠卡时更多。没有流时，判重的卡播放中只能贴静止快照或透明——粒子卡会在播放时定住。我的建议：R8 仍排在 R7 之后（R2～R7 是它的前置），但**编码原型和 R2 同时开工**，R7 一过立刻接 R8。另一条更省的路是 R9：粒子卡搬进 Worker 之后主线程成本会大降，可能直接回到判轻；但粒子卡今天是 2D canvas + 主线程库（`dom2d`），底稿明确不迁，要不要为此改主意请你定。
+2. 两张仍超 300 KB 的 `lottie-*` 卡：改走 lottie 的 canvas 渲染器，还是在审阅表标 `prerender: false`（R1 的遗留）。
+3. `src/editor/Preview.tsx:116` 和 `:605` 的注释里各有一处约定禁用的旧词，顺手改不改。
+4. 任务书正本（`AGY-TASK-cloud-doc-and-write-race.md`）里云端那一半要不要更新到第 112 版（第 6 节）。
+
+**已定的（2026-09-22，pinned 的对应条目都已按弹窗确认的原文改写）**
+
+- 判重门槛只看活渲耗时；生成快照的耗时拆成样式内联 / 画布栅格化 / 序列化三个数单独上报（pinned 渲染 5；本文 3.1 第 3 条、3.8）。
+- 素材两档：小版由上传方本机转码、云端不转码；逐个素材先小版后原片，两份都传完才下一个；拉取时有小版先拉小版再换原片（pinned 架构 1；本文第 6 节）。「单词操作块」改成了「单次操作块」。
+- 同一个舞台的所有 canvas 卡共用一个 WebGL 上下文和一个 Worker，放在哪见两条路线，导出页自己开一个（pinned 渲染 10；本文 3.6）。
+- 像素映射由工具主动分流：整帧调色走 `create_filter` 的 `curves` / `matrix`，要逐像素的走 WebGL 后端，R1b 里做完，不设「先拒绝」的过渡期（本文 3.9）。
