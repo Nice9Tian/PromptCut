@@ -153,6 +153,45 @@ function anchorsOf(project: Project, fps: number): number[] {
   return anchors;
 }
 
+/**
+ * K6：已经降级、但死素材还没就绪的卡。**照常活渲**（用户看到的画面不变，只是可能慢），
+ * 就绪之后的下一拍才切进 `suppressed` / `snapshots` —— 和别的重卡同一机制。
+ *
+ * 「就绪」写死为（K6）：`readyIndex` 里该 clipId 的 `'stream'` 表至少一个分段，或
+ * `'html'` / `'local'` 任一表的 `ranges` **从当前播放头所在本地帧起**覆盖
+ * `min(fps, 该片段剩余帧数)` 帧。用 `'html'` 还是 `'local'` 由 A3a 的档位决定，
+ * 这里不猜档位、两张表哪张够就算哪张（毛玻璃卡只产 `controls-local`，不看 `local` 它永远不就绪）。
+ */
+const pendingDemote = new Set<string>();
+
+export function markPendingDemote(clipId: string): void {
+  pendingDemote.add(clipId);
+}
+
+export function pendingDemotes(): ReadonlySet<string> {
+  return pendingDemote;
+}
+
+/** 闭区间表（已合并有序）有没有整段盖住 `[from, to]` */
+function rangesCover(ranges: readonly (readonly number[])[] | undefined, from: number, to: number): boolean {
+  if (to < from) return true;
+  for (const range of ranges ?? []) {
+    if (range[0] <= from && range[1] >= to) return true;
+  }
+  return false;
+}
+
+function demoteReady(clipId: string, localFrame: number, count: number, fps: number): boolean {
+  const stream = layerOf(readyIndex, clipId, "stream");
+  if (stream && stream.ranges.length) return true;
+  const need = Math.max(0, Math.min(fps, count - localFrame) - 1);
+  for (const kind of ["html", "local"] as const) {
+    const layer = layerOf(readyIndex, clipId, kind);
+    if (layer && rangesCover(layer.ranges, localFrame, localFrame + need)) return true;
+  }
+  return false;
+}
+
 /** 这一刻活跃的卡片段（口径同 `Stage` / `FrameScene` 的 live 路：含 LEAD） */
 function activeCardClips(project: Project, t: number): TrackClip[] {
   const out: TrackClip[] = [];
@@ -195,8 +234,13 @@ export function planFeed({ project, t }: Playhead): FeedPlan {
   const wanted: { clipId: string; frame: number }[] = [];
   for (const clip of activeCardClips(project, t)) {
     if (pipelineAt(plan, clip.id, t) !== "heavy") continue;
-    heavy.push(clip.id);
     const { firstFrame, count } = samplingOf(clip, fps);
+    if (pendingDemote.has(clip.id)) {
+      // K6：死素材就绪之前照常活渲，**不进 heavy**（也就不会被抑制、不会贴快照）
+      if (!demoteReady(clip.id, globalFrame - firstFrame, count, fps)) continue;
+      pendingDemote.delete(clip.id);
+    }
+    heavy.push(clip.id);
     let picked: Pick | null = null;
     for (const kind of KIND_ORDER) {
       const layer = layerOf(readyIndex, clip.id, kind);

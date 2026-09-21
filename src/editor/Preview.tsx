@@ -20,8 +20,9 @@ import { fitView, frameOrigin, panBy, wheelZoomFactor, zoomAt, type View2D } fro
 import "./preview/preview.css";
 import { atFrameGrid } from "../render/frameGrid";
 import { contentStartOf } from "./timeline/utils";
-import { deliverSnapshots, markBaselineReset, noteSettled, pickForSetTime, stopSnapshotFeed, suppressedAt, syncSnapshotSubscription } from "./snapshotFeed";
+import { deliverSnapshots, markBaselineReset, noteSettled, pendingDemotes, pickForSetTime, stopSnapshotFeed, suppressedAt, syncSnapshotSubscription } from "./snapshotFeed";
 import { playingCatchUpTargets, runPlayingSwap, runSettleSwap, setSwapHost, swapInFlight } from "./stageSwap";
+import { demotedClips, onStageDemote } from "./demote";
 import { flushSync } from "react-dom";
 
 /**
@@ -438,6 +439,21 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
   /** 这一轮播放已经为哪几张卡发起过互换(别每拍都发一次) */
   const swapTriedRef = useRef(new Set<string>());
 
+  /* 验收探针的观察口:父页这一侧的状态(哪个 iframe 是 front、素材掐住没有、降级到哪一步) */
+  useEffect(() => {
+    if (!dual) return;
+    const w = window as unknown as { __pcPreviewDiag?: () => unknown };
+    w.__pcPreviewDiag = () => ({
+      frontId: frontIdRef.current,
+      mediaStalled: stalledRef.current,
+      suppressed: suppressedRef.current ? suppressedRef.current.split("|") : [],
+      pendingDemote: [...pendingDemotes()],
+      demoted: [...demotedClips()],
+      swapInFlight: swapInFlight(),
+    });
+    return () => { delete w.__pcPreviewDiag; };
+  }, [dual]);
+
   /*
    * 舞台事件的分发(E0 的七种;来源过滤在 stageBridge 里按角色做完了)。
    *
@@ -489,6 +505,7 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
         break;
       case "demote":
         // K6:这张卡降级,父页整条 PUT { ...旧记录, capped: true, demoted: true }
+        void onStageDemote(e.clipId);
         break;
       case "probe":
       case "probe-frame":

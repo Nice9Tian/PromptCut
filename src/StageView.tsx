@@ -1631,6 +1631,30 @@ export default function StageView() {
      * 没有表时 `pipelineAt` 回 `'heavy'` —— 保守侧,和「没有记录按声明兜底」同一个方向。
      */
     window.__pcStagePlan = () => ref.current.plan;
+    /*
+     * 验收探针的观察口(K4 / K3 / K5 / K6):跨源摸不到 iframe 的 document,
+     * 所以把「此刻的内部状态」摊成一个可结构化克隆的对象,探针用 CDP 在舞台上下文里读。
+     * 只读,没有副作用。
+     */
+    window.__pcStageDiag = () => ({
+      role: ref.current.role,
+      job: ref.current.job ?? null,
+      t: ref.current.t,
+      beatRunning: ref.current.beatRunning,
+      beatPaused: ref.current.beatPaused,
+      beatLastSec: ref.current.beatLastSec,
+      beatLastFrame: ref.current.beatLastFrame,
+      armedFrame: ref.current.beatArmed?.frame ?? null,
+      settling: [...ref.current.settling.keys()],
+      suppressed: [...ref.current.suppressed],
+      snapshots: [...ref.current.snapshots.keys()],
+      awaiting: [...ref.current.awaiting],
+      remountGen: [...ref.current.remountGen.entries()],
+      catchUps: [...ref.current.catchUps.values()].map((c) => ({ clipId: c.clipId, stageMs: c.stageMs, targetMs: c.targetMs })),
+      pendingDemote: [...ref.current.k6.pending],
+      k6Beats: ref.current.k6.beats.length,
+      k6Over: ref.current.k6.beats.reduce((n, b) => n + b.over, 0),
+    });
     window.__pcStagePipelineAt = (clipId: string, tSec: number) => pipelineAt(ref.current.plan?.plan ?? null, clipId, tSec);
     postStageReady(detectHostCapabilities());
     return () => {
@@ -1640,6 +1664,7 @@ export default function StageView() {
       window.clearTimeout(sampleTimer);
       if (window.__pcStage === api) delete window.__pcStage;
       delete window.__pcStagePlan;
+      delete window.__pcStageDiag;
       delete window.__pcStagePipelineAt;
     };
   }, [skipWrappers]);

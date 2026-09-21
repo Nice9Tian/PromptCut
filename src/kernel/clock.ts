@@ -50,6 +50,12 @@ declare global {
      * 消费它的是 K3 / K5(R5);挂在这里给验收探针看「表到没到、算出来的是轻是重」。
      */
     __pcStagePlan?: () => unknown;
+    /**
+     * 舞台页:此刻的内部状态摊平(角色、节拍、四个集合、追帧任务、K6 的窗口)。
+     * **只读、无副作用**,给验收探针用 —— 跨源摸不到 iframe 的 document,
+     * 只能让舞台自己把状态交出来(形状写 `unknown`,理由同 `__pcStagePlan`)。
+     */
+    __pcStageDiag?: () => unknown;
     /** 舞台页:按 K2 的表查这一刻这个片段走哪条管线(`pipelineAt`)。没有表时一律 `'heavy'` */
     __pcStagePipelineAt?: (clipId: string, tSec: number) => 'light' | 'heavy';
     /**
