@@ -368,13 +368,16 @@ export default function StageView() {
      * 此刻这张卡的控件 HTML(比对的那一份)。`lossy > 0` 时回 null ——
      * WebGL 画布读不出像素、两趟都是空画布,比对没有意义,K1 明写这时两个布尔一律记 `false`。
      * 组合卡有多个控件,按文档序拼起来一起比(两趟序列化的是同一棵树,顺序一致)。
+     * 分隔符用一条 HTML 注释:`compareSnapshotHtml` 的词法分析把它当一个 comment 记号逐字比,
+     * 两边都有、位置一样,不会影响判定;比用不可打印字符省心(源码里留不可打印字符会让
+     * git 把整个文件当二进制,而 R3 正在同时改这个文件)。
      */
     const probeControlHtml = (): string | null => {
       const root = rootRef.current;
       if (!root) return null;
       const snap = createSnapshot(root);
       if (snap.lossy > 0) return null;
-      return snap.controls.map((c) => c.html).join(" ");
+      return snap.controls.map((c) => c.html).join("<!--pc-next-control-->");
     };
 
     /**
