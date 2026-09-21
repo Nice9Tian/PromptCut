@@ -8,7 +8,7 @@ import { validateCardParams } from "../../kernel/cardParams";
 import { captionsFromTranscript, captionsOf, describeCaption, formatCaptions } from "../../kernel/captions";
 import { findClip, subjectForRange, subjectSampleTimes, suggestPosition, MAX_SUBJECT_TIMES } from "../../kernel/project";
 import { sttStatus, transcribeMedia } from "../../editor/io/stt";
-import { runAutoWorkflow, getAutoWorkflowStatus } from "../../editor/right/autoWorkflow";
+import { runAutoWorkflow, getAutoWorkflowStatus } from "../tools/autoWorkflow";
 import { getJob as getInstallJob } from "../../ai/sttInstallStore";
 import { runSttInstall } from "../../editor/io/runSttInstall";
 

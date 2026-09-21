@@ -1,5 +1,5 @@
 // 序列工具(list/remove/update/move_track)的门槛和 store 的连带清理。
-// 跑法:node --test src/editor/right/trackTools.test.mjs
+// 跑法:node --test src/mcp/tools/trackTools.test.mjs
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "vite";
@@ -23,7 +23,7 @@ test("序列工具:列、删、改、挪,门槛和撤销", async () => {
   try {
     const { actions, getState } = await server.ssrLoadModule("/src/store/project.ts");
     const { createEmptyProject } = await server.ssrLoadModule("/src/kernel/project.ts");
-    const { createTrackTools } = await server.ssrLoadModule("/src/editor/right/trackTools.ts");
+    const { createTrackTools } = await server.ssrLoadModule("/src/mcp/tools/trackTools.ts");
     const { diffScopes } = await server.ssrLoadModule("/src/ai/agentBus.ts");
     const tt = createTrackTools({ getState, actions });
     const p = createEmptyProject();

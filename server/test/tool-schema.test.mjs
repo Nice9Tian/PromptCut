@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { toolToVendor, sanitizeSchema } from '../harness/schema.mjs';
 import { tools as mcpTools } from '../mcp-tools.mjs';
+import { TOOL_ROUTES } from '../../src/mcp/routes.mjs';
 import { buildParamsSchema, injectCardParams, injectPartParams, buildPartParamsSchema } from '../card-params-schema.mjs';
 
 /** 两张形状不同的卡,够覆盖 text / number / select / required */
@@ -114,6 +115,8 @@ test('注入不会污染共享的 mcpTools 常量', () => {
 // 一个工具要能被调用，得同时出现在三个地方：mcp-tools.mjs 的声明、mcpExecutor 的
 // 分发、EditorApi 的实现。缺哪一处都是「模型看得见但调不动」，而且只在模型真的
 // 去调的时候才暴露 —— 那时候一次任务已经跑废了。
+// 一对一转发的那一百来个工具现在走 src/mcp/routes.mjs 的路由表,不再是逐个 tool === 分支;
+// 对账的细账在 server/test/mcp-routes.test.mjs,这里只守「声明了就得有地方接住」。
 test('mcp-tools 里每个 browser 工具，执行器里都有对应的分发分支', () => {
   const src = readFileSync(new URL('../../src/ai/mcpExecutor.ts', import.meta.url), 'utf8');
   // web_* 走的是前缀分发 + runWebTool 里的 switch，不是逐个 tool === 分支。守卫的意思没变：
@@ -121,7 +124,7 @@ test('mcp-tools 里每个 browser 工具，执行器里都有对应的分发分�
   const missing = mcpTools
     .filter((t) => t.side === 'browser')
     .map((t) => t.name)
-    .filter((n) => !src.includes(`tool === "${n}"`) && !src.includes(`case "${n}":`));
+    .filter((n) => !(n in TOOL_ROUTES) && !src.includes(`tool === "${n}"`) && !src.includes(`case "${n}":`));
   assert.deepEqual(missing, [], `执行器里没有分支的工具：${missing.join('、')}`);
 });
 
@@ -129,6 +132,7 @@ test('执行器分发的每个工具名，mcp-tools 里都真的有声明', () =
   const src = readFileSync(new URL('../../src/ai/mcpExecutor.ts', import.meta.url), 'utf8');
   const declared = new Set(mcpTools.map((t) => t.name));
   const dispatched = [
+    ...Object.keys(TOOL_ROUTES),
     ...[...src.matchAll(/tool === "([a-z_]+)"/g)].map((m) => m[1]),
     ...[...src.matchAll(/case "(web_[a-z_]+)":/g)].map((m) => m[1]),
   ];

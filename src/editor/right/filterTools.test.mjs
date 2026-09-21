@@ -11,7 +11,7 @@ test("滤镜库:建、挂、改、删,门槛、撤销、跨剪辑清理", async 
     const { actions, getState } = await server.ssrLoadModule("/src/store/project.ts");
     const { createEmptyProject } = await server.ssrLoadModule("/src/kernel/project.ts");
     const { createFilterTools } = await server.ssrLoadModule("/src/editor/right/filterTools.ts");
-    const { timelineDigest } = await server.ssrLoadModule("/src/editor/right/toolEcho.ts");
+    const { timelineDigest } = await server.ssrLoadModule("/src/mcp/tools/toolEcho.ts");
     const ft = createFilterTools({ getState, actions });
     const p = createEmptyProject();
     p.media = [

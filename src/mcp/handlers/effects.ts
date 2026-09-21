@@ -1,7 +1,7 @@
 import { EditorApi } from "../../ai/mcpExecutor";
 import { getState, actions } from "../../store/project";
 import { describeTransition, transitionsOf, type TransitionKind } from "../../kernel/transitions";
-import { timelineDigest } from "../../editor/right/toolEcho";
+import { timelineDigest } from "../tools/toolEcho";
 import { listCuts, resolveCut } from "../../kernel/cuts";
 
 import { clipGuard, filterTools, pixelMapTools } from "../common";
