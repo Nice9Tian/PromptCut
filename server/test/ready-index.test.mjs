@@ -7,7 +7,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createReadyIndex, kindOfTier, READY_KINDS } from '../ready-index.mjs';
+import { createReadyIndex, kindOfTier, READY_KINDS, wireSnapshotKey } from '../ready-index.mjs';
 
 const collect = index => { const seen = []; const off = index.subscribe(m => seen.push(m)); return { seen, off }; };
 
@@ -18,6 +18,11 @@ test('tier names map onto the wire kinds (three-way synonym)', () => {
   assert.equal(kindOfTier(undefined), null);
   // 'stream' 是 R8 的,类型里留位即可
   assert.deepEqual(READY_KINDS, ['html', 'local', 'stream']);
+  // 线上的 key:共享档就是共享键;本地档自带一个斜杠(`<entry.key>/<共享键>`)
+  assert.equal(wireSnapshotKey('shared', 'ENTRY', 'KEY'), 'KEY');
+  assert.equal(wireSnapshotKey('local', 'ENTRY', 'KEY'), 'ENTRY/KEY');
+  assert.equal(wireSnapshotKey('local', undefined, 'KEY'), null);
+  assert.equal(wireSnapshotKey('none', 'ENTRY', 'KEY'), null);
 });
 
 test('a new subscriber gets reset first, then one full layer message per layer', () => {
@@ -79,10 +84,10 @@ test('F5: disk scan stages key → ranges, and nothing is published until the ca
   assert.deepEqual(index.list(), []);
   // 项目到位 → 重算 card plan → 用 control.clipId ↔ control.snapshotKey 反查
   const claimed = index.claim([
-    { clipId: 'clip-1', snapshotKey: 'SHARED-KEY', tier: 'shared' },
-    { clipId: 'clip-2', snapshotKey: 'ENTRY/BLUR-KEY', tier: 'local' },
-    { clipId: 'clip-3', snapshotKey: 'NOT-ON-DISK', tier: 'shared' },
-    { clipId: 'clip-4', snapshotKey: 'SHARED-KEY', tier: 'none' },
+    { clipId: 'clip-1', kind: 'html', key: 'SHARED-KEY' },
+    { clipId: 'clip-2', kind: 'local', key: wireSnapshotKey('local', 'ENTRY', 'BLUR-KEY') },
+    { clipId: 'clip-3', kind: 'html', key: 'NOT-ON-DISK' },
+    { clipId: 'clip-4', kind: null, key: 'SHARED-KEY' },
   ], 12);
   assert.equal(claimed, 2, '盘上没有的键和不产快照的档都不认领');
   // 先一条 reset,再对每一层发一条全量 layer(C3 本来就是全量语义,不加新端点)

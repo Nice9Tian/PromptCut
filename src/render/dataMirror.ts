@@ -160,6 +160,77 @@ function schedulePlayhead(delay: number) {
   }, delay);
 }
 
+/* ------------------------------------------------------------------ C4 wanted */
+
+/**
+ * C4:父页按层选快照时顺带得出「播放头附近现在缺哪些层」,经这里报给预渲染进程,
+ * 它在 4 帧批次的边界读到之后把含这些帧的批提到前面。
+ *
+ * **单开一条发送路,不走上面的播放头路**,因为那一条的四个性质对 `wanted` 全是错的:
+ *
+ * - `:184` 的 `!s.playing` 闸门 —— 播放中根本不推,而播放正是最需要给播放头前方铺路的时候;
+ * - `:149` 的「`t` 和 `playing` 没变就早退」—— 拖动停在同一帧、缺的层换了一张,发不出去;
+ * - `:186` 的 400 ms 可重入防抖 —— 连续拖动期间一次都不触发;
+ * - `post()` 既 `await` 又读完响应体、还带 10 秒超时 —— 一份「提示」不值得占一条连接。
+ *
+ * 这里的口径:**100 ms 固定节流**(不是防抖:节流窗口到点就发最后一份,连续拖动
+ * 期间每 100 ms 稳定发一条)、`keepalive: true`、**不读响应**、失败静默。
+ * 原有的播放头推送路径行为不变。
+ */
+export type WantedFrame = { clipId: string; frame: number };
+
+/** C4 原文:最多 8 条 */
+const MAX_WANTED = 8;
+/** 固定节流窗口 */
+const WANTED_MS = 100;
+
+let wantedTimer: ReturnType<typeof setTimeout> | null = null;
+let wantedPending: WantedFrame[] | null = null;
+let wantedSentAt = 0;
+
+function sendWanted(wanted: WantedFrame[]) {
+  wantedSentAt = Date.now();
+  try {
+    // 不 await、不读 body:它是一份提示,晚一拍到也只是少插一次队。
+    void fetch("/api/data/playhead", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session, t: getState().t, playing: getState().playing, wanted }),
+      keepalive: true,
+    }).catch(() => {});
+  } catch { /* 页面正在卸载 / 网络断了:下一拍再说 */ }
+}
+
+/**
+ * 报一次缺口。同一个 100 ms 窗口里调多少次都只飞一条(最后一份为准);
+ * 空数组表示「现在什么都不缺」,不发。
+ */
+export function pushWanted(wanted: WantedFrame[]): void {
+  if (!started || !Array.isArray(wanted) || !wanted.length) return;
+  const list = wanted
+    .filter((item) => item && typeof item.clipId === "string" && item.clipId && Number.isInteger(item.frame) && item.frame >= 0)
+    .slice(0, MAX_WANTED);
+  if (!list.length) return;
+  const since = Date.now() - wantedSentAt;
+  if (since >= WANTED_MS && wantedTimer === null) return sendWanted(list);
+  wantedPending = list;
+  if (wantedTimer !== null) return;
+  wantedTimer = setTimeout(() => {
+    wantedTimer = null;
+    const next = wantedPending;
+    wantedPending = null;
+    if (next) sendWanted(next);
+  }, Math.max(0, WANTED_MS - since));
+}
+
+/** 测试用:把节流状态清干净 */
+export function resetWantedThrottle(): void {
+  if (wantedTimer !== null) clearTimeout(wantedTimer);
+  wantedTimer = null;
+  wantedPending = null;
+  wantedSentAt = 0;
+}
+
 /**
  * 开始镜像。**编辑页加载即调**;只读观看页 / 舞台页 / 导出页调了也空转。
  * 重复调用无副作用(返回的 disposer 只对第一次有效)。
@@ -195,6 +266,7 @@ export function startDataMirror(): () => void {
     if (headTimer) clearTimeout(headTimer);
     timer = null;
     headTimer = null;
+    resetWantedThrottle();
     started = false;
   };
 }

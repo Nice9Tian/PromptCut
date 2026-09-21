@@ -21,6 +21,8 @@ import { applyProjectPatch, projectHash } from "../src/render/changedClips.mjs";
 
 /** 每个 session 留几版 */
 export const MAX_VERSIONS = 8;
+/** 一次播放头推送里最多带几条 `wanted`(C4) */
+export const MAX_WANTED = 8;
 
 export function createMirrorStore() {
   /** session -> { versions: Version[](按 localRev 升序), maxRev } */
@@ -124,9 +126,36 @@ export function createMirrorStore() {
     return out;
   }
 
-  function setPlayhead(session, t, playing) {
+  /**
+   * C4 的 `wanted`:页面每帧把「播放头附近现在缺哪些层」报上来,预渲染进程在
+   * 4 帧批次的边界读它、把含这些帧的批提到前面。
+   *
+   * **最多 8 条**(C4 原文),多的截掉:它是一份提示,不是队列 —— 报得再多也只
+   * 影响下一批往哪儿跳,而每 100 ms 就会来一份新的。坏条目直接丢,不让一个
+   * NaN 把整份提示作废。
+   */
+  function normalizeWanted(value) {
+    if (!Array.isArray(value)) return undefined;
+    const out = [];
+    for (const item of value) {
+      const clipId = typeof item?.clipId === "string" ? item.clipId : "";
+      const frame = Number(item?.frame);
+      if (!clipId || !Number.isInteger(frame) || frame < 0) continue;
+      out.push({ clipId, frame });
+      if (out.length >= MAX_WANTED) break;
+    }
+    return out.length ? out : undefined;
+  }
+
+  function setPlayhead(session, t, playing, wanted) {
     if (!session) throw new Error("缺少 session");
-    const entry = { session, t: Number.isFinite(Number(t)) ? Number(t) : 0, playing: !!playing, at: Date.now() };
+    const list = normalizeWanted(wanted);
+    const previous = playheads.get(session);
+    const entry = { session, t: Number.isFinite(Number(t)) ? Number(t) : 0, playing: !!playing, at: Date.now(),
+      // 只带 `wanted` 的那一趟(C4 的 100 ms 节流路)不该把上一次报的 t / playing 冲掉,
+      // 但 `wanted` 本身每次都以最新的为准;这一趟没带就沿用上一次的,免得拖动中
+      // 两条路交替把提示抹掉。
+      wanted: list ?? previous?.wanted };
     playheads.set(session, entry);
     latestPlayheadSession = session;
     return entry;

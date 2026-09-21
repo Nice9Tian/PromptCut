@@ -43,8 +43,10 @@ export function latestMirror(): MirrorVersion | null { return store.latestMirror
 export function getMirror(session: string, localRev?: number | string | null): MirrorVersion | null {
   return store.getMirror(session, localRev as any) as MirrorVersion | null;
 }
+/** C4:页面报上来的「播放头附近现在缺哪些层」,最多 8 条 */
+export type WantedFrame = { clipId: string; frame: number };
 /** 当前编辑页 session 的播放头 */
-export function latestPlayhead(): { session: string; t: number; playing: boolean; at: number } | null {
+export function latestPlayhead(): { session: string; t: number; playing: boolean; at: number; wanted?: WantedFrame[] } | null {
   return store.latestPlayhead() as any;
 }
 
@@ -219,6 +221,12 @@ export function mirrorPlugin(): Plugin {
       /*
        * 播放头单独一条路。它和项目的节奏完全不同:项目是「改了才推」,播放头是
        * 「停下来的时候报一次当前时刻」—— 混在一起的话,拖播放头会带着整份项目再飞一趟。
+       *
+       * C4 的 `wanted` 搭在同一条路上(最多 8 条 `{clipId, frame}`):页面每 100 ms
+       * 至多报一次「播放头附近现在缺哪些层」,编辑器进程**和 diff 一样原样转发**给
+       * 预渲染进程、不等回复,预渲染进程的 `latestPlayhead()` 才带得上它。
+       * 转发体漏掉 `wanted` 就等于整条提示静默丢掉,所以这里和 `setPlayhead` 的
+       * 白名单必须一起改。
        */
       server.middlewares.use("/api/data/playhead", (req, res) => {
         if (req.method === "GET") {
@@ -229,9 +237,9 @@ export function mirrorPlugin(): Plugin {
         readBody(req, res, 64 * 1024, (d) => {
           try {
             const session = String(d.session || "");
-            const head = store.setPlayhead(session, d.t, d.playing);
+            const head = store.setPlayhead(session, d.t, d.playing, d.wanted);
             sendJson(res, 200, { ok: true, ...head });
-            forward("/api/data/playhead", { session, t: head.t, playing: head.playing }, () => null);
+            forward("/api/data/playhead", { session, t: head.t, playing: head.playing, ...(head.wanted ? { wanted: head.wanted } : {}) }, () => null);
           } catch (e: any) {
             sendJson(res, 400, { ok: false, error: e?.message || String(e) });
           }

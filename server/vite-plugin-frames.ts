@@ -10,6 +10,10 @@ import { prerenderState } from "./prerender-client.mjs";
 import { isPrerender } from "./render-role.mjs";
 import { ensureMirror } from "./vite-plugin-mirror";
 
+import { latestPlayhead, ensureMirror as ensureMirrorVersion } from "./vite-plugin-mirror";
+import { snapshotTier } from "./snapshot-store.mjs";
+import { kindOfTier, wireSnapshotKey } from "./ready-index.mjs";
+
 const services = new Map<string, FramePipeline>();
 function requestSignal(req: any, res: any) {
   const controller = new AbortController();
@@ -23,8 +27,22 @@ export function frameService(root: string, origin: string) {
   let service = services.get(root);
   if (!service) {
     service = new FramePipeline({ root: path.join(process.env.PROMPTCUT_EXPORT_DIR || path.join(root, "out"), "frame-library"), origin: () => origin,
-      code: () => frameCode(root), captureCode: () => captureCode(root) });
+      code: () => frameCode(root), captureCode: () => captureCode(root),
+      /*
+       * D5 的 `interactive`。**R6 只加参数和代码路径,默认值保持今天的行为** ——
+       * 两个进程都是 `true`,编辑器进程照旧养那对热 Chrome。R7 的原子切换才把
+       * 编辑器进程这一侧改成 `!isPrerender ? false : true`。
+       */
+      interactive: true,
+      /** C4:`wanted` 从镜像插件读(frame-pipeline 是 .mjs,镜像插件是 .ts) */
+      playhead: () => latestPlayhead(),
+    });
     services.set(root, service);
+    /*
+     * F5:预渲染进程起来先扫盘重建「键 → 区间」。只挂在键上,不发 `layer` ——
+     * `clipId` 要等项目到位、重算 card plan 之后才反查得出来(`adoptCardPlan`)。
+     */
+    void service.rescanSnapshots().catch(() => {});
   }
   return service;
 }
@@ -124,7 +142,56 @@ export function framesPlugin(): Plugin {
       const service = frameService(root, origin);
       const url = new URL(req.url || "/", origin);
       const json = (status: number, data: unknown) => { res.statusCode = status; res.setHeader("Content-Type", "application/json"); res.end(JSON.stringify(data)); };
+      /*
+       * C3 就绪索引的 SSE。**页面直连预渲染进程**(和 J3 的快照字节同源,同走
+       * `PROMPTCUT_CORS_ORIGINS`);编辑器进程不代理 —— D5 的 `/api/frames/*`
+       * 保留清单里没有它,这里的中间件对不认识的路径一律 `next()`。
+       *
+       * 连上先灌 `reset` + 每层一条全量 `layer`(已经 done 的再补一条 `done`),
+       * 之后增量。断线由页面按 1s / 2s / 4s / 8s 退避重连同一条 SSE(J3),
+       * 重连就是再走一次这里 —— 和 F5 共用一条恢复路径,没有轮询端点。
+       */
+      if (req.method === "GET" && url.pathname === "/ready") {
+        res.statusCode = 200;
+        res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+        res.setHeader("Cache-Control", "no-store");
+        res.setHeader("Connection", "keep-alive");
+        // 反向代理和 vite 的 compression 都可能攒着不发,SSE 攒一下就等于断线
+        res.setHeader("X-Accel-Buffering", "no");
+        res.flushHeaders?.();
+        const send = (message: unknown) => { if (!res.writableEnded) res.write(`data: ${JSON.stringify(message)}\n\n`); };
+        const off = service.readyIndex.subscribe(send);
+        // 空闲连接被中间的代理掐掉之前先说句话(注释行不是事件,页面收不到)
+        const beat = setInterval(() => { if (!res.writableEnded) res.write(": beat\n\n"); }, 15000);
+        beat.unref?.();
+        const stop = () => { clearInterval(beat); off(); };
+        req.on("close", stop);
+        res.on("close", stop);
+        return;
+      }
       if (req.method === "GET") {
+        /*
+         * J3 / C3 的快照字节:`GET /api/frames/snapshot/<kind>/<key>/<localFrame>`。
+         * `kind` 为 `local` 时 `key` = `<entry.key>/<共享键>`,所以有两个键段。
+         * 键是内容寻址的,所以可以 immutable 缓存一年。
+         */
+        const snapshot = /^\/snapshot\/(html|local)\/([a-f0-9]{64})(?:\/([a-f0-9]{64}))?\/(\d{1,8})$/.exec(url.pathname);
+        if (snapshot) {
+          const local = snapshot[1] === "local";
+          if (local && !snapshot[3]) return json(404, { error: "本地档的键是 <entry.key>/<共享键>" });
+          void service.snapshots().readSnapshot({
+            tier: local ? "local" : "shared",
+            entryKey: local ? snapshot[2] : undefined,
+            key: local ? snapshot[3] : snapshot[2],
+            localFrame: Number(snapshot[4]),
+          }).then((html: string | null) => {
+            if (html === null) return json(404, { error: "Snapshot is not ready" });
+            res.setHeader("Content-Type", "text/html; charset=utf-8");
+            res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+            res.end(html);
+          }, () => json(404, { error: "Snapshot is not ready" }));
+          return;
+        }
         const control = /^\/control\/([a-f0-9]{64})\/(\d{1,8})$/.exec(url.pathname);
         if (control) {
           void fsp.readFile(path.join(service.root, 'controls', control[1], 'mov', 'frames', control[2].padStart(6, '0') + '.png')).then(buf => {
@@ -153,6 +220,62 @@ export function framesPlugin(): Plugin {
           if (range) res.setHeader("Content-Range", `bytes ${start}-${end}/${stat.size}`);
           fs.createReadStream(file, { start, end }).on("error", () => res.destroy()).pipe(res);
         }, () => json(404, { error: "Frame is not ready" }));
+        return;
+      }
+      /*
+       * K1:**探针推过的帧直接存成死素材**。后台舞台第一趟(全局时钟逐帧推)每生成
+       * 一帧快照就把 `{ session, localRev, clipId, localFrame, html }` 报上来,经编辑器
+       * 进程转到这里。`kind` / `key` 由**预渲染进程**按镜像里的项目用 A3a 的规则算
+       * (共享键要 `card-identity.mjs` 的 `digest`,本地模式里页面不算它)。
+       *
+       * **只存审阅表 `independent` 的卡**(pinned 渲染 5 末句):`sourceDependent`
+       * (链上的源在缩水项目里没有)和 `belowDependent` / `unknown`(没有下层背景)
+       * 在缩水项目里都拿不到输入,存下去等于把错画面当死素材发出去;它们的本地档
+       * 仍由 C2 的整场景路产。
+       *
+       * 写进同一棵目录、进 C3 的索引,预渲染不再重新预渲染这些帧。
+       */
+      if (req.method === "PUT" && url.pathname === "/snapshot") {
+        let probeBody = "", probeOver = false;
+        req.on("data", chunk => { if (!probeOver) { probeBody += chunk; probeOver = overLimit(req, res, probeBody.length, 32 * 1024 * 1024, "Probe snapshot too large"); } });
+        req.on("end", async () => {
+          if (probeOver) return;
+          try {
+            const input = JSON.parse(probeBody || "{}");
+            if (!isPrerender) {
+              // 编辑器进程只转发,不存 —— 快照库在预渲染进程那一侧
+              const remote = prerenderState();
+              if (!remote.ready || !remote.url) return json(503, { ok: false, code: "PRERENDER_UNAVAILABLE", error: "预渲染进程还没就绪" });
+              const forwarded = await fetch(remote.url + "/api/frames/snapshot", { method: "PUT", headers: { "Content-Type": "application/json" },
+                body: probeBody, signal: AbortSignal.timeout(10000) });
+              return json(forwarded.status, await forwarded.json().catch(() => ({ ok: forwarded.ok })));
+            }
+            const clipId = String(input.clipId || "");
+            const localFrame = Number(input.localFrame);
+            const html = typeof input.html === "string" ? input.html : null;
+            if (!clipId || !Number.isInteger(localFrame) || localFrame < 0 || html === null) throw new Error("探针帧要带 clipId / localFrame / html");
+            const version = await ensureMirrorVersion(String(input.session || ""), input.localRev);
+            if (!version) return json(409, { ok: false, code: "MIRROR_MISSING", retryable: true, error: "镜像里没有这一版项目" });
+            const entry = await service.entry(renderProject(version.project));
+            // 键从 card plan 反查(`control.clipId` ↔ `control.snapshotKey`)。plan 要
+            // 浏览器才算得出来,还没算过就先不存 —— 下一次预渲染自己会产这一帧。
+            const control = (entry.cardPlan || []).find((item: any) => item.clipId === clipId);
+            if (!control?.snapshotKey) return json(202, { ok: false, code: "PLAN_PENDING", stored: false, error: "card plan 还没算出来" });
+            const compositing = control.capabilities?.compositing;
+            const tier = snapshotTier(control.capabilities);
+            if (compositing !== "independent" || tier !== "shared") return json(200, { ok: true, stored: false, reason: "NOT_INDEPENDENT" });
+            await service.snapshots().writeSnapshot({ tier: "shared", key: control.snapshotKey, localFrame, html });
+            // A3c:超限的探针帧同样不进索引
+            if (!service.snapshots().noteSnapshotSize({ clipId, key: control.snapshotKey, localFrame, html, capabilities: control.capabilities })) {
+              return json(200, { ok: true, stored: true, indexed: false, reason: "OVER_LIMIT" });
+            }
+            const index = await service.snapshots().updateIndex({ tier: "shared", key: control.snapshotKey, frames: [localFrame] });
+            service.readyIndex.setLayer({ clipId, kind: kindOfTier(tier)!, key: wireSnapshotKey(tier, entry.key, control.snapshotKey)!, ranges: index.frames });
+            return json(200, { ok: true, stored: true, indexed: true, count: index.count });
+          } catch (error: any) {
+            json(400, { ok: false, code: "PROBE_SNAPSHOT_ERROR", error: error?.message || "探针帧没存下" });
+          }
+        });
         return;
       }
       if (req.method !== "POST") return next();
