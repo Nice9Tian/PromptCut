@@ -18,46 +18,60 @@
  * - `identityKey = cardCostKey(node, sourceVersion, fps, durationFrames)`,`node` 取
  *   `projectCardGraph(缩水项目, getCard).nodes` 里那个片段的节点,`sourceVersion` 照
  *   `ExportView.tsx:108-118` 的算法(user 卡带 dependencies、内置卡带 builtinCardSourceFiles)。
- * - `direct` 卡:固定随机抽 8 个本地帧,各发一次 `setTime(t, { probe: true })`,
- *   `stepMs = max(回包 stepMs)`、`catchUpMs = 0`、`kind: 'random'`。
- * - `stateful` 卡:`render(片段最后一帧, { jump: true, probe: true, maxCatchUp: Infinity })`
- *   从挂载帧一直推,舞台自己按一拍上限 B = 1000/fps × 70% 截断(`StageView.tsx` 的 `budgetMs`);
- *   推完 `catchUpMs` = 实测总时间(**活渲部分**,不含生成快照),被截断的按
- *   「已推帧的平均 × 片段总帧数」外推。
- * - `capped = stepMs > B`。
+ * - `direct` 卡:固定随机抽本地帧,各发一次 `setTime(t, { probe: true })`,`catchUpMs = 0`、
+ *   `kind: 'random'`。**抽满 `STEP_MIN_SAMPLES` 帧** —— 任务书 K1「8 次抽样不够
+ *   `STEP_MIN_SAMPLES` 就补抽」,不补的话 8 个样本走不到百分位、`robustStep` 只好退回取最大。
+ * - `stateful` 卡**分两趟**(任务书 K1,用户 2026-09-22 确认):见下一节。
+ * - `capped = stepMs × COST_SCALE > B`。
  * - `vtOk` / `seekOk` / `seekMs` **离线不测**(留空):它们要在舞台里按 K3 的重挂载配方复位、
  *   用 `pinner.syncIn` 钉子树虚拟时间,那是第 4 步常驻探针的事,父页这一侧够不到 `pinner`。
  *
- * # 四个数(任务书 3.8)
+ * # 两趟(任务书 K1)
+ *
+ * **计时趟** `render(最后一帧, { jump: true, probe: 'time', maxCatchUp: Infinity })`:
+ * 只推进,不生成快照、不 post `probe-frame`。**不按一拍预算截断** —— 旧做法(这一次 `render`
+ * 的累计墙钟超过 B 就停,而那个预算里还含生成快照)让 61 张推帧卡全部只推了 1～10 帧,
+ * `catchUpMs` 靠含挂载成本的前几帧外推、偏大 1.7～3.6 倍,5 张每帧 1 ms 的便宜卡因此被追帧
+ * 上界错判成重。现在只为长片段留 `PROBE_MAX_FRAMES = 300` 帧 / `PROBE_MAX_MS = 500` ms 的封顶。
+ * 回包带**每一帧**的活渲耗时 `steps`,统计由这个脚本做:
+ *   - `stepMs`    = `robustStep(steps)`(第 `STEP_PERCENTILE` 百分位,样本不足时取最大);
+ *   - `stepMaxMs` = 单次最大,**只作诊断**,不进判重和分派;
+ *   - `catchUpMs` = 各帧之和;封顶没推完的,剩下的帧按**除首帧外的中位数**补上 —— 不用平均值,
+ *     首帧要建树、解析关键帧,拿它进平均会系统性偏大(这就是上面那 1.7～3.6 倍的来源)。
+ *
+ * **快照趟**:先按 K3 的「重挂载定位配方」复位(`render(0, { jump: true })`),再逐帧
+ * `render(k / fps, { probe: 'snapshot' })`,每帧生成一次快照;`inlineMs` / `rasterMs` /
+ * `serializeMs` 同样取稳健值。逐帧单独发是因为整趟 `render` 的回包只报**累计**、拿不到逐帧数
+ * (`probe-frame` 事件到父页的时间也不行:`advanceToAsync` 的 `yieldEvery: 8` 让 8 条
+ * postMessage 在同一个让出点成批送达,时间戳几乎相同)。帧数由 `--worst-frames` 给(缺省 40),
+ * 够不到片段尾部的长卡在表里标 `snapN`;没推到的帧交给后台预渲染,快照趟的截断不影响任何判定。
+ *
+ * # 五个数(任务书 3.8 + K1)
  *
  * 旧的 `frameMs`(含生成快照的单帧最差)**已删,不留兼容**。现在分开量、分开报:
- *   - `stepMs`    活渲单帧最差,**唯一进判重的数**;
- *   - `inlineMs`  样式内联单帧最差;
- *   - `rasterMs`  画布栅格化单帧最差(没有画布的卡是 0);
- *   - `serializeMs` 序列化单帧最差。
+ *   - `stepMs`      活渲单帧的**稳健值**,唯一进判重的数;
+ *   - `stepMaxMs`   活渲单帧的单次最大,只作诊断;
+ *   - `inlineMs`    样式内联单帧的稳健值;
+ *   - `rasterMs`    画布栅格化单帧的稳健值(没有画布的卡是 0);
+ *   - `serializeMs` 序列化单帧的稳健值。
  * 带 `probe: true` 的 `setTime` 里那次**真实 rAF 等待不计入任何一个数**(舞台在等 rAF 之前
  * 就取了 `stepMs`,三段快照耗时由 `createSnapshot` 自己量)—— 不这么做的话随机访问卡的
  * 成绩里至少含一个垂直同步(约 17 ms)。
  *
- * # 单帧最差是怎么量出来的(和第 4 步的差别,必须知道)
- *
- * `render({ probe: true })` 的回包只报**整趟**的累计,没有逐帧数;而 `probe-frame` 事件到
- * 父页的时间不能拿来当逐帧耗时 —— `stageClock.advanceToAsync` 的 `yieldEvery: 8` 只在每 8 帧
- * 让出一个宏任务,这 8 条 postMessage 是在同一个让出点成批送达的,时间戳几乎相同。
- * 所以这里改用**逐帧单独发 render**:先 `render(mountSec, { jump: true })` 复位,
- * 再对第 1…N 帧各发一次续推 `render(t, { probe: true })`。续推一次正好推一帧,回包的
- * `stepMs` / `snapshot.*` 是舞台用 `__pcRealNow` 量的、**不含 RPC 往返**,于是每一帧都有
- * 四个独立的数,各取最差。
- * **`stepMs` 另跑一趟不带 `probe` 的**(舞台就不生成快照),取最差 —— 那才是纯活渲,
- * 和任务书第 2 节已有的两组数(28 核 30 fps / 2 核 60 fps)口径一致、可以直接并排比。
- * 逐帧发 render 会比一趟推完略贵(每帧多一次 flushSync + tick + pin),所以这里的
- * 四个数都是**偏保守(偏大)**的估计;整趟的平均值一并打印出来做对照。
- * N 由 `--worst-frames` 给(缺省 40 帧 ≈ 入场动画全段),够不到片段尾部的长卡在表里标 `worstN`。
+ * 统计全在 Node 这一侧做(页面只负责量、只回原始数组),`--json` 里留的因此是**原始样本**:
+ * 换了系数重算、两次跑比判重名单差异,都不用重测。
  *
  * # 已测过的卡会跳过
  *
  * 开跑前 `GET /api/data/costs?device=<本机>`,`(identityKey, device)` 已有记录
  * **且 `demoted !== true`** 的整张跳过(pinned 渲染 5 末句:身份没变就直接复用)。`--force` 强制重测。
+ *
+ * # 系数变了 = 换了量法
+ *
+ * `STEP_PERCENTILE` / `STEP_MIN_SAMPLES` 决定 `stepMs` 怎么从样本里取,改了它们等于换了量法,
+ * 旧成绩不该再用。所以这两个数**拼进 `device` 串**(和 `mode` 同一个办法):去重键是
+ * `${identityKey} ${device}`,拼进去之后旧记录自然不命中、会被重测,两套量法的成绩各占一条。
+ * `COST_SCALE` **不拼** —— 它只影响怎么用这些数(判重和权重),不影响量出来的数本身。
  *
  * # dev 还是 build
  *
@@ -75,6 +89,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import puppeteer from 'puppeteer';
+
+import { budgetOf, clipWeight } from '../src/render/pipelinePlan.mjs';
+import { DEFAULT_TUNING, PROBE_MAX_FRAMES, PROBE_MAX_MS, resolveTuning, robustStep } from '../src/render/pipelineTuning.mjs';
 
 /* ------------------------------------------------------------------ 参数 */
 
@@ -100,8 +117,6 @@ const modeArg = flag('--mode');
 const outJson = flag('--json');
 
 const HOST_PATH = '/__probe-card-costs-host';
-/** 用户 pinned 渲染 5 的一拍预算 */
-const budgetOf = (fps) => (1000 / fps) * 0.7;
 
 /* ------------------------------------------------------------------ 宿主页 */
 
@@ -223,16 +238,14 @@ window.__highFrequencyIds = async () => {
   return kit.allCards().map((c) => c.id).filter((id) => !id.startsWith('particles-') || kit.featuredParticleIds.has(id));
 };
 
-/* -------- 一张卡的实测。整趟都在页面里跑,免得每帧一次 puppeteer 往返 -------- */
+/* -------- 一张卡的实测。整趟都在页面里跑,免得每帧一次 puppeteer 往返。
+      **这里只负责量,不做统计** —— 分位数、外推、判重全在 Node 那一侧(见文件头)。 -------- */
 const seedOf = (s) => { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return h >>> 0; };
 const mulberry32 = (a) => () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
-const maxOf = (xs) => xs.reduce((m, x) => (Number.isFinite(x) && x > m ? x : m), 0);
-const pct = (xs, p) => { const s = [...xs].sort((a, b) => a - b); return s.length ? s[Math.min(s.length - 1, Math.floor(s.length * p))] : 0; };
 
 window.__probeOne = async (job) => {
   const rpc = window.__rpc;
   const { cardId, fps, lenSec, params, mode, identityKey, durationFrames } = job;
-  const budget = (1000 / fps) * 0.7;
   const out = { cardId, identityKey, fps, mode, durationFrames };
   const project = window.__mkProject(cardId, fps, lenSec, params);
   await rpc.setRole('back', { job: 'probe' });
@@ -252,87 +265,66 @@ window.__probeOne = async (job) => {
   }
 
   if (mode === 'direct') {
-    // 固定随机抽 8 个本地帧(按 cardId 播种,复跑同一台机器结果可比)
+    /*
+     * 固定随机抽本地帧(按 cardId 播种,复跑同一台机器结果可比)。
+     * **抽满 job.minSamples 帧**(任务书 K1:8 次不够 STEP_MIN_SAMPLES 就补抽);
+     * 片段比这还短的按帧数抽满、不重复。
+     */
+    const want = Math.max(8, Math.min(job.minSamples, durationFrames));
     const rnd = mulberry32(seedOf(cardId));
     const picks = new Set();
-    for (let i = 0; i < 64 && picks.size < Math.min(8, durationFrames); i++) picks.add(Math.floor(rnd() * durationFrames));
+    for (let i = 0; i < want * 64 && picks.size < Math.min(want, durationFrames); i++) picks.add(Math.floor(rnd() * durationFrames));
     const frames = [...picks].sort((a, b) => a - b);
-    const each = [], inline = [], raster = [], serialize = [];
+    const steps = [], inline = [], raster = [], serialize = [];
     for (const n of frames) {
       const r = await rpc.setTime(n / fps, { probe: true });
       // stepMs 是舞台在等那一次真 rAF **之前**取的,所以这里拿到的已经不含垂直同步(3.8 末条)
-      each.push(Number(r?.stepMs) || 0);
+      steps.push(Number(r?.stepMs) || 0);
       inline.push(Number(r?.snapshot?.inlineMs) || 0);
       raster.push(Number(r?.snapshot?.rasterMs) || 0);
       serialize.push(Number(r?.snapshot?.serializeMs) || 0);
     }
     out.kind = 'random';
-    out.stepMs = maxOf(each);
-    out.inlineMs = maxOf(inline);
-    out.rasterMs = maxOf(raster);
-    out.serializeMs = maxOf(serialize);
-    out.catchUpMs = 0;
-    out.samples = each.length;
-    out.each = each;
-    out.stepP50 = pct(each, 0.5);
-    out.stepP90 = pct(each, 0.9);
-    out.firstMs = each[0] ?? 0;
+    out.steps = steps;
+    out.inline = inline;
+    out.raster = raster;
+    out.serialize = serialize;
+    out.pushedFrames = steps.length;
+    out.totalFrames = durationFrames;
     out.truncated = false;
-    out.capped = out.stepMs > budget;
     return out;
   }
 
-  /* stateful:第一趟按任务书那样整趟推(舞台自己按一拍上限截断),拿 catchUpMs */
+  /* ---- 计时趟:只推进、不生成快照,按 PROBE_MAX_* 封顶,回包带每帧耗时 ---- */
   const target = Math.max(0, lenSec - 1 / fps);
   const totalFrames = Math.max(1, Math.round(target * fps) + 1);
   window.__probeFrames = 0;
-  const pass = await rpc.render(target, { jump: true, probe: true, maxCatchUp: Infinity });
-  const frames = Number(pass?.frames) || 0;
-  const elapsed = Number(pass?.elapsedMs) || 0;
-  // catchUpMs 只算活渲(任务书 3.3):舞台回的 stepMs 已经是 elapsedMs 减掉这一趟生成快照的时间
-  const live = Number(pass?.stepMs);
-  const liveMs = Number.isFinite(live) ? live : elapsed;
-  const truncated = !!pass?.truncated;
+  const timePass = await rpc.render(target, { jump: true, probe: 'time', maxCatchUp: Infinity, maxFrames: job.maxProbeFrames });
   out.kind = 'stepped';
-  out.runFrames = frames;
-  out.runMs = elapsed;
-  out.runStepMs = liveMs;
-  out.truncated = truncated;
-  out.avgFrameMs = frames ? liveMs / frames : liveMs;
-  out.probeFrameEvents = window.__probeFrames;
-  // 推完了就是实测总时间;被截断的按已推帧的平均外推到整段(任务书 K1)
-  out.catchUpMs = truncated ? (frames ? (liveMs / frames) * totalFrames : liveMs) : liveMs;
+  out.steps = Array.isArray(timePass?.steps) ? timePass.steps.map(Number) : [];
+  out.pushedFrames = Number(timePass?.frames) || out.steps.length;
+  out.totalFrames = totalFrames;
+  out.runMs = Number(timePass?.elapsedMs) || 0;
+  out.truncated = !!timePass?.truncated;
+  // 计时趟一帧快照都不该生成,这个数应当恒为 0;不为 0 就是舞台那一侧的分支串了
+  out.timePassProbeFrames = window.__probeFrames;
 
-  /* 第二、三趟:逐帧单独发 render,拿真正的「单帧最差」。见文件头的说明。 */
+  /* ---- 快照趟:按 K3 的重挂载定位配方复位,再逐帧生成一次快照 ---- */
   const n = Math.max(1, Math.min(totalFrames - 1, job.worstFrames));
-  out.worstN = n;
-  const step = async (probe) => {
-    await rpc.render(0, { jump: true, maxCatchUp: Infinity });   // 按重挂载配方复位到挂载帧
-    const each = [];
-    for (let k = 1; k <= n; k++) {
-      const r = await rpc.render(k / fps, probe ? { probe: true, maxCatchUp: Infinity } : { maxCatchUp: Infinity });
-      each.push(probe
-        ? { inline: Number(r?.snapshot?.inlineMs) || 0, raster: Number(r?.snapshot?.rasterMs) || 0, serialize: Number(r?.snapshot?.serializeMs) || 0 }
-        : Number(r?.stepMs ?? r?.elapsedMs) || 0);
-    }
-    return each;
-  };
+  out.snapN = n;
   window.__probeFrames = 0;
-  const withSnapshot = await step(true);
-  const bare = await step(false);
-  out.inlineMs = maxOf(withSnapshot.map((s) => s.inline));
-  out.rasterMs = maxOf(withSnapshot.map((s) => s.raster));
-  out.serializeMs = maxOf(withSnapshot.map((s) => s.serialize));
-  out.stepMs = maxOf(bare);
-  // 单帧最差几乎总是落在重挂载后的头一两帧(React 建树 + 第一次 getComputedStyle 全量求值),
-  // 所以把分位数和「最差落在第几帧」一并记下来,免得只看 max 时误以为整段都这么贵。
-  out.stepP50 = pct(bare, 0.5);
-  out.stepP90 = pct(bare, 0.9);
-  out.inlineP50 = pct(withSnapshot.map((s) => s.inline), 0.5);
-  out.inlineP90 = pct(withSnapshot.map((s) => s.inline), 0.9);
-  out.firstMs = bare[0] ?? 0;
-  out.stepMaxAt = bare.indexOf(out.stepMs) + 1;
-  out.capped = out.stepMs > budget;
+  await rpc.render(0, { jump: true, maxCatchUp: Infinity });   // 重挂载定位配方:复位到挂载帧
+  const inline = [], raster = [], serialize = [];
+  for (let k = 1; k <= n; k++) {
+    const r = await rpc.render(k / fps, { probe: 'snapshot', maxCatchUp: Infinity });
+    inline.push(Number(r?.snapshot?.inlineMs) || 0);
+    raster.push(Number(r?.snapshot?.rasterMs) || 0);
+    serialize.push(Number(r?.snapshot?.serializeMs) || 0);
+  }
+  out.inline = inline;
+  out.raster = raster;
+  out.serialize = serialize;
+  out.snapPassProbeFrames = window.__probeFrames;
   return out;
 };
 </script></body></html>`;
@@ -374,12 +366,16 @@ async function detectMode() {
   }
 }
 
+/**
+ * `GET /api/data/costs` 一并回 K2 的可调系数(`out/pipeline-tuning.json`,没有这个文件 = 全用缺省)。
+ * 插件还没挂上 / `--dry-run` 时用缺省,这一趟的量法就和缺省那一套一致。
+ */
 async function getCosts(device) {
-  const res = await fetch(`${origin}/api/data/costs?device=${encodeURIComponent(device)}`);
-  if (res.status === 404) return { missing: true, costs: [] };
+  const res = await fetch(`${origin}/api/data/costs${device ? `?device=${encodeURIComponent(device)}` : ''}`);
+  if (res.status === 404) return { missing: true, costs: [], tuning: resolveTuning(null) };
   if (!res.ok) throw new Error(`GET /api/data/costs → HTTP ${res.status}`);
   const data = await res.json();
-  return { missing: false, costs: Array.isArray(data?.costs) ? data.costs : [] };
+  return { missing: false, costs: Array.isArray(data?.costs) ? data.costs : [], tuning: resolveTuning(data?.tuning) };
 }
 
 async function putCosts(records) {
@@ -396,6 +392,54 @@ async function putCosts(records) {
 /* ------------------------------------------------------------------ 主流程 */
 
 const num = (x, d = 1) => (Number.isFinite(x) ? x.toFixed(d) : '—');
+const finite = (xs) => (Array.isArray(xs) ? xs.map(Number).filter((x) => Number.isFinite(x)) : []);
+const maxOf = (xs) => finite(xs).reduce((m, x) => (x > m ? x : m), 0);
+const sumOf = (xs) => finite(xs).reduce((a, x) => a + x, 0);
+/** 升序最近秩分位(和 robustStep 同一口径,只为打表用) */
+const pct = (xs, p) => {
+  const s = finite(xs).sort((a, b) => a - b);
+  return s.length ? s[Math.min(s.length, Math.max(1, Math.ceil(p * s.length))) - 1] : 0;
+};
+const median = (xs) => {
+  const s = finite(xs).sort((a, b) => a - b);
+  if (!s.length) return 0;
+  return s.length % 2 ? s[(s.length - 1) / 2] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2;
+};
+
+/**
+ * 把页面回来的原始样本折成一条成本记录该有的几个数(任务书 K1)。
+ *
+ * - `stepMs` 取稳健值、`stepMaxMs` 记单次最大(只作诊断);
+ * - `catchUpMs` = 各帧之和;计时趟被 `PROBE_MAX_*` 封顶时,没推到的帧按**除首帧外的中位数**补上
+ *   —— 不用平均值:首帧要建树、解析关键帧,把它算进平均会系统性偏大(旧做法偏大 1.7～3.6 倍);
+ * - 三段快照耗时同样取稳健值。
+ */
+function summarize(out, tuning) {
+  const steps = finite(out.steps);
+  const rest = steps.slice(1);
+  const pushed = steps.length;
+  const remaining = out.kind === 'stepped' ? Math.max(0, (Number(out.totalFrames) || 0) - pushed) : 0;
+  const tailMs = remaining > 0 ? median(rest) * remaining : 0;
+  return {
+    stepMs: robustStep(steps, tuning),
+    stepMaxMs: maxOf(steps),
+    inlineMs: robustStep(out.inline, tuning),
+    rasterMs: robustStep(out.raster, tuning),
+    serializeMs: robustStep(out.serialize, tuning),
+    catchUpMs: out.kind === 'random' ? 0 : sumOf(steps) + tailMs,
+    // 打表和 --json 用
+    samples: pushed,
+    stepP50: pct(steps, 0.5),
+    stepP90: pct(steps, 0.9),
+    firstMs: steps[0] ?? 0,
+    restMedianMs: median(rest),
+    extrapolatedMs: tailMs,
+    remainingFrames: remaining,
+    /** 旧口径(「已推帧的平均 × 片段总帧数」)算出来会是多少,给报告并排比 */
+    legacyCatchUpMs: out.kind === 'random' ? 0
+      : (out.truncated && pushed ? (sumOf(steps) / pushed) * (Number(out.totalFrames) || pushed) : sumOf(steps)),
+  };
+}
 function table(rows, columns) {
   const head = columns.map((c) => c.title);
   const body = rows.map((r) => columns.map((c) => String(c.get(r) ?? '')));
@@ -431,14 +475,26 @@ try {
 
   const parts = await page.evaluate(() => window.__deviceParts());
   if (glRouteArg) parts.glRoute = glRouteArg;
+
+  /*
+   * 系数要先拿到:`STEP_PERCENTILE` / `STEP_MIN_SAMPLES` 既决定 `stepMs` 怎么从样本里取,
+   * 又要拼进 `device` 串(见文件头「系数变了 = 换了量法」),所以这一次 GET 不带 device。
+   */
+  const boot = dryRun ? { missing: true, costs: [], tuning: resolveTuning(null) } : await getCosts(null);
+  const tuning = boot.tuning;
+
   /*
    * `mode` 也拼进 device:`costs-store.mjs` 的去重键是 `${identityKey} ${device}`,不拼进去的话
    * dev 那一趟和 build 那一趟会互相覆盖,而两组都要留着(见文件头)。服务端只把 device 当
    * 不透明字符串,不解析,所以键的代码不用动。
+   * 量法的两个系数同理:改了它们旧成绩就不是一回事了,拼进去旧记录自然不命中、会被重测。
    */
   const device = [parts.ua, parts.renderer, `lowMemory=${parts.lowMemory}`, `offscreenGl=${parts.offscreenGl}`,
-    `glRoute=${parts.glRoute}`, `mode=${mode}`].join(' | ');
+    `glRoute=${parts.glRoute}`, `mode=${mode}`, `stepP=${tuning.STEP_PERCENTILE}`, `stepN=${tuning.STEP_MIN_SAMPLES}`].join(' | ');
   console.log(`mode: ${mode}（${origin}）`);
+  console.log(`tuning: COST_SCALE=${tuning.COST_SCALE} STEP_PERCENTILE=${tuning.STEP_PERCENTILE} STEP_MIN_SAMPLES=${tuning.STEP_MIN_SAMPLES}`
+    + (JSON.stringify(tuning) === JSON.stringify(DEFAULT_TUNING) ? '（缺省）' : '（out/pipeline-tuning.json 覆盖过）'));
+  console.log(`probe caps: PROBE_MAX_FRAMES=${PROBE_MAX_FRAMES} PROBE_MAX_MS=${PROBE_MAX_MS}`);
   console.log(`device: ${device}\n`);
 
   let jobs;
@@ -467,28 +523,40 @@ try {
     seen.add(j.identityKey);
     const hit = known.get(j.identityKey);
     if (!force && hit && hit.demoted !== true) { skipped.push({ ...j, hit }); continue; }
-    todo.push({ ...j, worstFrames });
+    todo.push({ ...j, worstFrames, minSamples: tuning.STEP_MIN_SAMPLES, maxProbeFrames: PROBE_MAX_FRAMES });
   }
   console.log(`共 ${identified.length} 个片段 → ${todo.length} 张要测,${skipped.length} 张已有记录跳过,${broken.length} 张有问题。\n`);
 
+  const B = budgetOf(fpsArg);
   const records = [], results = [];
   for (const [i, job] of todo.entries()) {
     process.stdout.write(`[${i + 1}/${todo.length}] ${job.cardId} (${job.mode}) … `);
-    let out;
+    let raw;
     try {
-      out = await page.evaluate((j) => window.__probeOne(j), job);
+      raw = await page.evaluate((j) => window.__probeOne(j), job);
     } catch (err) {
       console.log('失败');
       results.push({ ...job, error: String(err && err.message || err) });
       continue;
     }
-    console.log(`stepMs=${num(out.stepMs, 2)} inline=${num(out.inlineMs, 1)} raster=${num(out.rasterMs, 1)} serial=${num(out.serializeMs, 1)} catchUpMs=${num(out.catchUpMs, 0)}${out.capped ? ' CAPPED' : ''}`);
+    // 统计在这一侧做:页面只回原始样本(见文件头)
+    const out = { ...raw, ...summarize(raw, tuning) };
+    out.capped = out.stepMs * tuning.COST_SCALE > B;
+    /*
+     * 这张卡按 K2 会走哪一档、哪些位置判重 —— 只作诊断打印,真正的分派由 `planPipelines`
+     * 对着整个项目算(轻重是「(位置, 卡)」的属性,单张卡本身没有轻重)。离线探针不测
+     * `seekOk`,所以这里的档位对可定位的长 CSS 卡偏保守,和 K2 对 `seekOk` 缺席时的兜底一致。
+     */
+    out.tier = clipWeight({ ...out, capped: out.capped }, job.mode, out.fps, tuning).tier;
+    console.log(`stepMs=${num(out.stepMs, 2)}(max ${num(out.stepMaxMs, 2)}) inline=${num(out.inlineMs, 1)} raster=${num(out.rasterMs, 1)}`
+      + ` serial=${num(out.serializeMs, 1)} catchUpMs=${num(out.catchUpMs, 0)} ${out.tier}${out.capped ? ' CAPPED' : ''}`);
     results.push(out);
     records.push({
       identityKey: out.identityKey,
       fps: out.fps,
-      // 四个数分开报(任务书 3.8);旧的 frameMs 已删,不留兼容
+      // 五个数分开报(任务书 3.8 + K1);旧的 frameMs 已删,不留兼容
       stepMs: Number(out.stepMs.toFixed(3)),
+      stepMaxMs: Number(out.stepMaxMs.toFixed(3)),
       inlineMs: Number(out.inlineMs.toFixed(3)),
       rasterMs: Number(out.rasterMs.toFixed(3)),
       serializeMs: Number(out.serializeMs.toFixed(3)),
@@ -508,26 +576,41 @@ try {
     });
   }
 
-  const B = budgetOf(fpsArg);
   console.log(`\nB = 1000/${fpsArg} × 70% = ${B.toFixed(2)} ms\n`);
   console.log(table(results.filter((r) => !r.error), [
     { title: 'card', get: (r) => r.cardId },
     { title: 'kind', get: (r) => r.kind },
     { title: 'stepMs', get: (r) => num(r.stepMs, 2) },
+    { title: 'stepMax', get: (r) => num(r.stepMaxMs, 2) },
     { title: 'inlineMs', get: (r) => num(r.inlineMs, 2) },
     { title: 'rasterMs', get: (r) => num(r.rasterMs, 2) },
     { title: 'serialMs', get: (r) => num(r.serializeMs, 2) },
     { title: 'catchUpMs', get: (r) => num(r.catchUpMs, 0) },
+    { title: 'oldCatchUp', get: (r) => num(r.legacyCatchUpMs, 0) },
     { title: 'stepP50', get: (r) => num(r.stepP50, 2) },
     { title: 'stepP90', get: (r) => num(r.stepP90, 2) },
     { title: '1st', get: (r) => num(r.firstMs, 2) },
-    { title: 'avg/frame', get: (r) => num(r.avgFrameMs, 2) },
-    { title: 'run', get: (r) => (r.kind === 'stepped' ? `${r.runFrames}/${r.durationFrames}` : `${r.samples}`) },
-    { title: 'worstN', get: (r) => r.worstN ?? '—' },
-    { title: 'maxAt', get: (r) => r.stepMaxAt ?? '—' },
+    { title: 'run', get: (r) => (r.kind === 'stepped' ? `${r.samples}/${r.totalFrames}` : `${r.samples}`) },
+    { title: 'snapN', get: (r) => r.snapN ?? '—' },
     { title: 'trunc', get: (r) => (r.truncated ? 'yes' : 'no') },
+    { title: 'tier', get: (r) => r.tier ?? '' },
     { title: 'capped', get: (r) => (r.capped ? 'YES' : '') },
   ]));
+
+  /* 按 K2 的三档分一分 —— 报告要的「各多少张、哪些卡被追帧上界判重」 */
+  const ok = results.filter((r) => !r.error);
+  const byTier = new Map();
+  for (const r of ok) byTier.set(r.tier, [...(byTier.get(r.tier) ?? []), r.cardId]);
+  console.log('\n按 K2 的档位分（离线不测 seekOk，所以长 CSS 卡也落在推帧那几档）：');
+  for (const [tier, list] of [...byTier].sort((a, b) => b[1].length - a[1].length)) {
+    console.log(`  ${tier.padEnd(14)} ${String(list.length).padStart(3)} 张  ${list.join(', ')}`);
+  }
+  const steps = ok.map((r) => r.stepMs);
+  console.log(`\nstepMs p50 / p90 / max = ${num(pct(steps, 0.5), 2)} / ${num(pct(steps, 0.9), 2)} / ${num(maxOf(steps), 2)} ms`);
+  const cappedCards = ok.filter((r) => r.capped).map((r) => r.cardId);
+  console.log(`单帧越过 B 的（capped）：${cappedCards.length} 张${cappedCards.length ? ' —— ' + cappedCards.join(', ') : ''}`);
+  const overCatchUp = ok.filter((r) => r.tier === 'over-catchup' && !r.capped).map((r) => r.cardId);
+  console.log(`被追帧上界判重的：${overCatchUp.length} 张${overCatchUp.length ? ' —— ' + overCatchUp.join(', ') : ''}`);
 
   const failed = results.filter((r) => r.error);
   if (failed.length) {
@@ -551,7 +634,8 @@ try {
   if (outJson) {
     const file = path.resolve(outJson);
     fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, JSON.stringify({ origin, mode, device, fps: fpsArg, clipSec, worstFrames, B: budgetOf(fpsArg),
+    fs.writeFileSync(file, JSON.stringify({ origin, mode, device, fps: fpsArg, clipSec, worstFrames, B,
+      tuning, probeCaps: { PROBE_MAX_FRAMES, PROBE_MAX_MS },
       at: new Date().toISOString(), results, skipped: skipped.map((s) => s.cardId),
       broken: broken.map((b) => ({ cardId: b.cardId, error: b.error })) }, null, 2), 'utf8');
     console.log(`\n原始数据写到 ${file}`);

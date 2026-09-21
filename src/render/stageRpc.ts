@@ -51,6 +51,19 @@ export interface SnapshotCost {
   serializeMs: number;
 }
 
+/**
+ * K1 的探针分两趟(任务书 K1,用户 2026-09-22 确认)。
+ * - `'time'` **计时趟**:只推进,不生成快照、不 post `probe-frame`;按
+ *   `PROBE_MAX_FRAMES` / `PROBE_MAX_MS` 封顶(**不按一拍预算截断**——旧做法让 61 张推帧卡
+ *   全部只推了 1～10 帧);回包带 `steps`(每帧的活渲耗时),`stepMs` 取它的稳健值、
+ *   `catchUpMs` 取它的和。
+ * - `'snapshot'` **快照趟**:每帧先推进、再生成快照并 post `probe-frame`,量三段快照耗时;
+ *   仍受一拍预算约束,它的截断不影响任何判定。
+ *
+ * `true` 等于 `'snapshot'`(兼容旧调用方)。
+ */
+export type ProbeMode = "time" | "snapshot";
+
 export interface RenderResult {
   remounted: boolean;
   caughtUpAtSec: number;
@@ -60,11 +73,17 @@ export interface RenderResult {
    * 只有它进判重(`capped = stepMs > B`)。不带 `probe` 时 = `elapsedMs`。
    */
   stepMs: number;
-  /** probe 第一趟:推了几帧、有没有被一拍上限截断 */
+  /** probe 第一趟:推了几帧、有没有被上限截断 */
   frames?: number;
   truncated?: boolean;
   /** 只在 probe 时有 */
   snapshot?: SnapshotCost;
+  /**
+   * 只在 `probe: 'time'` 时有:**每一帧**的活渲耗时(`__pcRealNow` 量,不含帧间让出的时间、
+   * 不含生成快照)。`stepMs` 要取它的百分位(`robustStep`)而不是单次最大 ——
+   * 限 2 核下同一张卡两次实测的单帧最差能差十几倍,越线的是偶发卡顿、不是稳定成本。
+   */
+  steps?: number[];
 }
 /**
  * `render` 被掐断 / 拒绝时的回包。父页对每个 reason 的规矩不一样(E0):
@@ -84,6 +103,7 @@ export interface RenderAborted {
   frames?: number;
   truncated?: boolean;
   snapshot?: SnapshotCost;
+  steps?: number[];
 }
 export type RenderReply = RenderResult | RenderAborted;
 
@@ -127,7 +147,9 @@ export interface RenderOptions {
   /** true = 重挂载并从 mountFrameOf 推到 tSec;缺省 = 续推(不重挂载,从 clock.now() 推到 tSec) */
   jump?: boolean;
   maxCatchUp?: number;
-  probe?: true;
+  /** K1 探针的趟别(见 `ProbeMode`)。`true` 等于 `'snapshot'`。 */
+  probe?: true | ProbeMode;
+  /** 封顶帧数。计时趟不给就用 `PROBE_MAX_FRAMES`。 */
   maxFrames?: number;
 }
 
