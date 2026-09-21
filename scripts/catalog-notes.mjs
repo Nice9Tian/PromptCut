@@ -56,7 +56,7 @@ async function sheets(o) {
       items.push({ kind, name: it.name, seconds: spec.seconds, clip: spec.clip(it) });
     }
   }
-  console.log(`${items.length} 个素材,每个烘一段再抽 6 帧…`);
+  console.log(`${items.length} 个素材,每个渲染一段再抽 6 帧…`);
 
   const bakery = await openBakery({ url });
   const sheetBrowser = await puppeteer.launch({ headless: true, args: ['--disable-gpu'] });

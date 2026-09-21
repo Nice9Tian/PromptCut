@@ -130,7 +130,7 @@ export function enqueue<T>(job: () => Promise<T>, priority = 0, queueTimeoutMs =
         renderWaiting.splice(at, 1);
         fail(new Error(
           `排队等渲染超过 ${Math.round(queueTimeoutMs / 1000)} 秒还没轮到(前面有 ${renderRunning} 个正在渲)。`
-          + `不是这张卡的问题 —— 过一会儿再看,或者等手上的导出 / 预烘跑完。`,
+          + `不是这张卡的问题 —— 过一会儿再看,或者等手上的导出 / 预渲染跑完。`,
         ));
       }, queueTimeoutMs);
     }

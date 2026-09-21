@@ -268,7 +268,7 @@ export default function vitePluginAi(): Plugin {
 
         if (tool === 'bake_card') {
           const data = await prerenderPost('/api/vision/bake', { project, clipId: args.clipId, t: args.t, size: args.size, bg: args.bg }, { timeoutMs });
-          if (!data?.ok) throw new Error(data?.error || '烘焙失败');
+          if (!data?.ok) throw new Error(data?.error || '渲染失败');
           return data;
         }
 

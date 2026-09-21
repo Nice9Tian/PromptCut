@@ -146,7 +146,7 @@ if (HALF === 'produce' || HALF === 'both') {
     }
     console.log(`  resetMs（换页 + 灌项目 + 等就绪）：p50 ${stats(produce.resetMs).p50} ms（${produce.resetMs.join('/')}）`);
 
-    // 2) 回放曲线：每次从干净会话开始，烘 0..N，量总墙钟
+    // 2) 回放曲线：每次从干净会话开始，预渲染 0..N，量总墙钟
     const bakeTo = async (n, dir) => {
       await bakery.reset(mkProject(CARD, lenSec), `${ORIGIN}/?export=1`);
       const t0 = performance.now();
@@ -157,7 +157,7 @@ if (HALF === 'produce' || HALF === 'both') {
       const ms = [];
       for (let r = 0; r < REPEATS; r++) ms.push(await bakeTo(n, path.join(outBase, `n${n}-r${r}`)));
       produce.replay.push({ toFrame: n, frames: n + 1, ms: stats(ms), list: ms });
-      console.log(`  烘到第 ${String(n).padStart(2)} 帧（${n + 1} 帧）：p50 ${stats(ms).p50} ms（${ms.join('/')}）`);
+      console.log(`  预渲染到第 ${String(n).padStart(2)} 帧（${n + 1} 帧）：p50 ${stats(ms).p50} ms（${ms.join('/')}）`);
     }
     // 斜率 = 稳态 frameMs；截距 = 这一趟的固定开销（挂载 + 热身），不含 reset
     const a = produce.replay.find((x) => x.toFrame === 4), b = produce.replay.find((x) => x.toFrame === 44);
@@ -180,7 +180,7 @@ if (HALF === 'produce' || HALF === 'both') {
     await Promise.all(loops);
     const busyFrameMs = +((stats(ms).p50 - fixedMs) / 45).toFixed(2);
     produce.withEncoders = { bakeMs: stats(ms), list: ms, approxFrameMs: busyFrameMs, idleFrameMs: frameMs, ratio: +(busyFrameMs / frameMs).toFixed(2) };
-    console.log(`  两个编码器并存时烘 45 帧：p50 ${stats(ms).p50} ms（${ms.join('/')}）-> 约 ${busyFrameMs} ms/帧，是空闲时的 ${produce.withEncoders.ratio} 倍`);
+    console.log(`  两个编码器并存时预渲染 45 帧：p50 ${stats(ms).p50} ms（${ms.join('/')}）-> 约 ${busyFrameMs} ms/帧，是空闲时的 ${produce.withEncoders.ratio} 倍`);
   } finally {
     await bakery.close().catch(() => {});
   }

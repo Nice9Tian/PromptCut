@@ -199,7 +199,7 @@ export const visionHandlers = {
       signal: AbortSignal.timeout(150000),
     });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok || !data.ok) throw new Error(data.error || `烘焙失败(HTTP ${res.status})`);
+    if (!res.ok || !data.ok) throw new Error(data.error || `渲染失败(HTTP ${res.status})`);
     return data;
   },
   /**

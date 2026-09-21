@@ -88,12 +88,12 @@ test("超出「身边」窗口的从 0 开始按时间顺序铺", () => {
   assert.deepEqual(p.jobs.slice(1).map((j) => j.phase), ["rest", "rest", "rest"]);
 });
 
-test("还没烘的不占空间 —— 磁盘上根本没这个文件", () => {
+test("还没预渲染的不占空间 —— 磁盘上根本没这个文件", () => {
   const moments = [...spread("a", 0, 5, 4), ...spread("b", 10, 15, 4)];
   const p = plan({ moments, t: 1, budgetBytes: 1 });
-  assert.equal(p.footprintBytes, 0, "一个都没烘,占用就是 0");
+  assert.equal(p.footprintBytes, 0, "一个都没预渲染,占用就是 0");
   assert.equal(p.dropped, 0, "预算只有 1 字节也不该丢 —— 它们本来就不占");
-  assert.equal(p.jobs.length, 8, "八个时刻都该排进待烘队列");
+  assert.equal(p.jobs.length, 8, "八个时刻都该排进待预渲染队列");
 });
 
 test("占用是**实测字节**加出来的,不同大小的文件算得不一样", () => {
@@ -114,10 +114,10 @@ test("预算按字节截断,不是按张数", () => {
   assert.equal(p.dropped, 1);
 });
 
-test("已经烘好的不再进 jobs", () => {
+test("已经预渲染好的不再进 jobs", () => {
   const moments = [M("a", 1, 0, 5), M("b", 12, 10, 15)];
   const p = plan({ moments, t: 1, known: new Map([["a@1", 40000]]) });
-  assert.deepEqual(p.jobs.map((j) => j.clipId), ["b"], "a 已经有了,不用再烘");
+  assert.deepEqual(p.jobs.map((j) => j.clipId), ["b"], "a 已经有了,不用再渲染");
   assert.deepEqual(p.keep.map((k) => k.clipId), ["a"]);
   assert.equal(p.footprintBytes, 40000);
 });
@@ -167,7 +167,7 @@ test("要留的和要删的绝不重叠,而且磁盘上每个文件都有个说�
 test("同一个键出现两次只算一份", () => {
   const dup = M("dup", 1, 0, 5);
   const p = plan({ moments: [dup, { ...dup }], t: 1 });
-  assert.equal(p.jobs.length, 1, "同一个键只烘一次");
+  assert.equal(p.jobs.length, 1, "同一个键只渲染一次");
   const p2 = plan({ moments: [dup, { ...dup }], t: 1, known: new Map([["dup@1", 40000]]) });
   assert.equal(p2.keep.length, 1);
   assert.equal(p2.footprintBytes, 40000, "不能算两遍");

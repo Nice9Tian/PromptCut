@@ -58,13 +58,13 @@ test("evolve 的卡整段都要采,不能只采进场那一截", () => {
   assert.ok(evolve[evolve.length - 1] > 4, "一直在变的卡,后半段也得有采样点");
 });
 
-test("前台吸附的格子必须落在预烘排的格子上,否则预烘白排", () => {
+test("前台吸附的格子必须落在预渲染排的格子上,否则预渲染白排", () => {
   const c = clip({ end: 4 });
   const motion = { settleMs: 4000, after: "hold" }; // 整段都在动 → 不抽稀
   const planned = new Set(sampleTimesFor(c, motion, { maxPerClip: 999 }).map((x) => x.toFixed(3)));
   for (let t = 0; t < 4; t += 0.05) {
     const got = pickBakeT(c, motion, t).toFixed(3);
-    assert.ok(planned.has(got), `t=${t.toFixed(2)} 要的是 ${got},预烘名单里没有`);
+    assert.ok(planned.has(got), `t=${t.toFixed(2)} 要的是 ${got},预渲染名单里没有`);
   }
 });
 
@@ -77,7 +77,7 @@ test("前台吸附的格子必须落在预烘排的格子上,否则预烘白排"
  * 于是**预渲染出来的图显示端一张都问不到,还不报错** —— 只表现为「明明预渲染过还要现场渲染」。
  * 所以这里比的是**逐位相等**(===),不是 toFixed 之后相等。
  */
-test("非二进制精确的步长(逐帧那一档)也要对得上 —— 差 2.8e-17 就等于预烘全白做", () => {
+test("非二进制精确的步长(逐帧那一档)也要对得上 —— 差 2.8e-17 就等于预渲染全白做", () => {
   for (const [name, step] of [["1/30", 1 / 30], ["1/24", 1 / 24], ["1/29.97", 1 / 29.97], ["0.1", 0.1]]) {
     const c = clip({ end: 3 });
     const motion = { settleMs: 3000, after: "hold" };
@@ -90,7 +90,7 @@ test("非二进制精确的步长(逐帧那一档)也要对得上 —— 差 2.8
     }
     // 也测格子之间的位置:往回吸附到的那一刻必须在名单里
     for (let t = 0; t < 3; t += 0.017) {
-      assert.ok(set.has(pickBakeT(c, motion, t, { stepSec: step })), `${name}:t=${t} 吸附到的那一刻不在预烘名单里`);
+      assert.ok(set.has(pickBakeT(c, motion, t, { stepSec: step })), `${name}:t=${t} 吸附到的那一刻不在预渲染名单里`);
     }
   }
 });
@@ -126,7 +126,7 @@ test("timing(params) 比 lifecycle 准,写坏了也不能把视图带崩", () =>
 test("没写 lifecycle 的卡按保守值处理:宁可多采,不要显示旧帧", () => {
   const c = clip({ end: 10 });
   const got = sampleTimesFor(c, {});
-  assert.ok(got.length > 1, "不能退化成只烘一张");
+  assert.ok(got.length > 1, "不能退化成只渲染一张");
   assert.equal(got[got.length - 1], DEFAULT_SETTLE_MS / 1000);
 });
 

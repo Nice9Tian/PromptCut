@@ -604,7 +604,7 @@ export function registerPrerenderSide(server: ViteDevServer, root: string) {
           try {
             const { project, clipId, t, size, bg } = JSON.parse(body || "{}");
             if (!project || !Array.isArray(project.tracks)) return sendJson(res, 400, { ok: false, error: "缺少 project" });
-            if (!clipId) return sendJson(res, 400, { ok: false, error: "缺少 clipId:烘焙只能对着一张卡" });
+            if (!clipId) return sendJson(res, 400, { ok: false, error: "缺少 clipId:一次只能渲染一张卡" });
             // 和 /snapshot 同理:bake_card 是模型正阻塞着等的一次调用,在预渲染池里排最前(priority 1),
             // 不该排在空闲预渲染后面。fit 保持默认的 square —— 贴图要正方形
             const signal = abortOnClose(res);

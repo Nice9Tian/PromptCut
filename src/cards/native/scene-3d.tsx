@@ -268,7 +268,7 @@ export const scene3dCard: CardDef<Params> = {
     ] },
     { key: "fov", label: "视角(度)", type: "number", min: 0, max: 120, step: 1, hint: "0 = 跟着项目的相机走(默认,推荐);填正数 = 这张卡单独用一个视角,和别的卡就不在同一个空间里了" },
     { key: "wire", label: "线框", type: "select", options: [{ value: "no", label: "实体" }, { value: "yes", label: "线框" }] },
-    { key: "texture", label: "贴图", type: "text", hint: "图片 URL。用 bake_card 把一张卡烘成透明底 PNG 再贴上来最直接;素材库里的图片也行。留空 = 纯色" },
+    { key: "texture", label: "贴图", type: "text", hint: "图片 URL。用 bake_card 把一张卡渲染成透明底 PNG 再贴上来最直接;素材库里的图片也行。留空 = 纯色" },
   ],
   parts: [{ id: "object", label: "物件", role: "media", params: ["shape", "color", "metal", "rough", "size", "spinY", "spinX", "tilt", "light", "fov", "wire", "texture"] }],
   // 没有进场动画:它一挂载就是最终形态,之后一直转

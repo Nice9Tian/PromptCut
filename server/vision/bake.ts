@@ -73,7 +73,7 @@ export function bakeTarget(
 ) {
   const iso = isolateClip(project, clipId);
   if (!iso) throw new Error(`时间轴上没有 id 为 ${clipId} 的片段。`);
-  if (iso.clip.mediaId) throw new Error("这是素材段(视频 / 图片),本来就是位图,直接把它的 URL 当纹理用即可,不用烘。");
+  if (iso.clip.mediaId) throw new Error("这是素材段(视频 / 图片),本来就是位图,直接把它的 URL 当纹理用即可,不用渲染。");
 
   /*
    * **把 frame 摘掉再渲。**
@@ -249,8 +249,8 @@ export async function bakeOne(
 
   const hint = rgb
     ? "不透明贴图:贴上去是「实心物体表面印着这张卡」。把 url 填进 scene-3d 的 texture 参数。"
-    : "透明底贴图:贴上去物体在卡片没画的地方也是透空的,内容像浮在空间里(适合标志 / 招牌)。想要「实心立方体表面印着这张卡」就重烘一次并传 bg(比如 bg:\"#0b0f17\")。";
-  const note = "这是一张**快照**:卡片的动画定格在 t 这一帧,之后改卡片参数贴图不会跟着变,要重新烘。";
+    : "透明底贴图:贴上去物体在卡片没画的地方也是透空的,内容像浮在空间里(适合标志 / 招牌)。想要「实心立方体表面印着这张卡」就重新渲染一次并传 bg(比如 bg:\"#0b0f17\")。";
+  const note = "这是一张**快照**:卡片的动画定格在 t 这一帧,之后改卡片参数贴图不会跟着变,要重新渲染一次。";
 
   // 缓存命中:同样的输入渲过了,直接给 URL
   try {

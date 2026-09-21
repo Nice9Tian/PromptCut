@@ -18,7 +18,7 @@ const spread = (clipId, start, end, ts) => ts.map((t) => ({ clipId, t, start, en
 const all = () => true;
 const none = () => false;
 
-test("一个烘好的时刻,管到同一张卡的下一个时刻为止", () => {
+test("一个预渲染好的时刻,管到同一张卡的下一个时刻为止", () => {
   const m = spread("a", 0, 4, [0, 1, 2]);
   // 只有 t=1 渲好了 → 覆盖 [1,2),不该蔓延到 0 或 2 之后
   const segs = coverageSegments(m, (x) => x.t === 1);
@@ -31,19 +31,19 @@ test("最后一个时刻一直管到这张卡结束", () => {
   assert.deepEqual(segs, [{ start: 2, end: 4 }], "2 是最后一个,后面整段都靠它");
 });
 
-test("全烘好 = 整张卡连成一段,不是一排带缝的小块", () => {
+test("全部预渲染好 = 整张卡连成一段,不是一排带缝的小块", () => {
   const m = spread("a", 0, 4, [0, 1, 2]);
   assert.deepEqual(coverageSegments(m, all), [{ start: 0, end: 4 }]);
 });
 
-test("一个都没烘就没有绿色", () => {
+test("一个都没预渲染就没有绿色", () => {
   assert.deepEqual(coverageSegments(spread("a", 0, 4, [0, 1, 2]), none), []);
 });
 
-test("烘到一半:前半段绿、后半段不绿 —— 整段涂绿会骗人", () => {
+test("预渲染到一半:前半段绿、后半段不绿 —— 整段涂绿会骗人", () => {
   const m = spread("a", 0, 4, [0, 1, 2, 3]);
   const segs = coverageSegments(m, (x) => x.t <= 1);
-  assert.deepEqual(segs, [{ start: 0, end: 2 }], "0 和 1 连起来是 [0,2),2 之后还没烘");
+  assert.deepEqual(segs, [{ start: 0, end: 2 }], "0 和 1 连起来是 [0,2),2 之后还没预渲染");
 });
 
 test("中间断开的两段不能合并", () => {
@@ -60,7 +60,7 @@ test("一个时刻管到下一个时刻为止,**不跨卡**去找", () => {
   assert.deepEqual(segs, [{ start: 0, end: 2 }], "只覆盖 a 自己那两秒");
 });
 
-test("首尾相接的两张卡都烘好了,画成连续的一整条", () => {
+test("首尾相接的两张卡都预渲染好了,画成连续的一整条", () => {
   const m = [...spread("a", 0, 2, [0, 1]), ...spread("b", 2, 4, [2, 3])];
   assert.deepEqual(coverageSegments(m, all), [{ start: 0, end: 4 }], "挨着就该并成一段");
 });
@@ -153,11 +153,11 @@ test("全改了:条子整条空,不是留着旧的骗人", () => {
   assert.equal(v.stale, 2);
 });
 
-test("没烘的时刻不产生颜色,烘一个就多一段 —— 段是现算的,不是存死的", () => {
+test("没预渲染的时刻不产生颜色,预渲染一个就多一段 —— 段是现算的,不是存死的", () => {
   const a = CC("a", "fpA", 0, 3);           // 三个时刻:0 / 1 / 2
   const cov = COV([a], new Set());           // 一个都没渲
   const live = new Map([["fpA", 0]]);
-  assert.deepEqual(visibleCoverage(cov, live).coarse, [], "一个都没烘就没有颜色");
+  assert.deepEqual(visibleCoverage(cov, live).coarse, [], "一个都没预渲染就没有颜色");
 
   // 只渲中间那一刻 → 只覆盖 [1,2)
   const one = { ...cov, baked: new Set([momentId("a", 1)]) };
@@ -171,18 +171,18 @@ test("指纹只认「决定像素」的东西:改参数会变,挪位置不会", 
   const resized = { ...base, frame: { x: 0, y: 0, w: 1920, h: 1080 } };
   const edited = { ...base, params: { a: 2 } };
   assert.equal(clipFingerprint(moved), clipFingerprint(base), "只挪位置,像素没变,不该让覆盖作废");
-  assert.notEqual(clipFingerprint(resized), clipFingerprint(base), "画幅变了,烘出来就不一样");
+  assert.notEqual(clipFingerprint(resized), clipFingerprint(base), "画幅变了,渲染出来就不一样");
   assert.notEqual(clipFingerprint(edited), clipFingerprint(base), "改参数必须作废");
 });
 
 /* ── 前台现场渲染完也要记账,否则条子慢半拍 ─────────────────────── */
 
-test("markBaked 让「刚烘好的那一刻」立刻算进覆盖", async () => {
+test("markBaked 让「刚预渲染好的那一刻」立刻算进覆盖", async () => {
   const m = await import("./bakeCoverage.ts");
   const a = CC("a", "fpA", 0, 3);
   m.publishCoverage({ clips: [a], baked: new Set(), bakingAt: null, bytes: 0 });
   const live = new Map([["fpA", 0]]);
-  assert.deepEqual(m.visibleCoverage(m.getCoverage(), live).coarse, [], "还没烘,没有颜色");
+  assert.deepEqual(m.visibleCoverage(m.getCoverage(), live).coarse, [], "还没预渲染,没有颜色");
 
   // 前台现场渲染完了那一刻 —— 只给一个 id,不用重新盘点、不用重算段
   m.markBaked([momentId("a", 1)]);
@@ -216,8 +216,8 @@ test("卡挪到别处:绿段跟着挪过去,不是留在原地骗人", () => {
   // 指纹没变(挪位置不改像素),但起点从 20 变成 27
   const v = visibleCoverage(cov, new Map([["fpA", 27]]));
   assert.deepEqual(v.coarse, [{ start: 27, end: 31 }], "绿的该在卡片现在待的地方");
-  assert.equal(v.stale, 0, "挪位置不作废 —— 烘好的图还能用");
-  assert.equal(v.coarseBaked, 4, "平移不该动「烘没烘」这本账");
+  assert.equal(v.stale, 0, "挪位置不作废 —— 预渲染好的图还能用");
+  assert.equal(v.coarseBaked, 4, "平移不该动「预渲染过没有」这本账");
 });
 
 test("卡挪走之后,老地方一点颜色都不能剩", () => {
@@ -231,7 +231,7 @@ test("剪短一点:指纹就该变 —— 长度进了缓存键,老图不作数�
   const base = { id: "c1", cardId: "odometer", params: {}, start: 3, end: 7 };
   const trimmed = { ...base, end: 5 };
   const moved = { ...base, start: 17, end: 21 };
-  assert.notEqual(clipFingerprint(trimmed), clipFingerprint(base), "剪短了,烘出来是另一张");
+  assert.notEqual(clipFingerprint(trimmed), clipFingerprint(base), "剪短了,渲染出来是另一张");
   assert.equal(clipFingerprint(moved), clipFingerprint(base), "整段平移,长度没变,还是同一张");
 });
 

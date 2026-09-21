@@ -809,7 +809,7 @@ export function Scene3DView({ project, t }: Props) {
         const data = await res.json().catch(() => ({}));
         if (!res.ok || !data.ok) {
           if (dead) return;
-          throw new Error(data.error || `烘焙失败(HTTP ${res.status})`);
+          throw new Error(data.error || `渲染失败(HTTP ${res.status})`);
         }
         for (const b of data.baked ?? []) {
           const a = asks.find((x) => x.clip.id === b.clipId);
@@ -834,7 +834,7 @@ export function Scene3DView({ project, t }: Props) {
         if (dead) return;
         // 渲成了就让这个 effect 再跑一轮:刚落地的可能只是粗粒度那张,停住时还要补精确帧
         if (data.baked?.length) setBakeGen((g) => g + 1);
-        if (data.failed?.length) setErr(`${data.failed.length} 张没烘出来:${data.failed[0].error}`);
+        if (data.failed?.length) setErr(`${data.failed.length} 张没渲染出来:${data.failed[0].error}`);
       } catch (e: any) {
         // 被 cleanup 掐掉的不算出错:那是用户挪走了播放头,本来就不该再等它
         if (!dead && e?.name !== "AbortError") setErr(String(e?.message || e));
@@ -894,7 +894,7 @@ export function Scene3DView({ project, t }: Props) {
           type="button"
           /*
            * **不要再挂 `.pc-3d-note`**(以前挂过)。那个 class 的意思是「浮在格子上的状态提示」,
-           * 按它去找「正在烘…」那条会连这个按钮一起匹配到 —— 已经有人写测试时踩过一次。
+           * 按它去找「正在渲染…」那条会连这个按钮一起匹配到 —— 已经有人写测试时踩过一次。
            * 长得像不是共用类名的理由:一样的底和圆角在 CSS 里合成一条规则就够了。
            */
           className={`pc-3d-toggle${frustumOn ? " is-on" : ""}`}
@@ -919,8 +919,8 @@ export function Scene3DView({ project, t }: Props) {
           }}
         >
           {err ?? (bakingAt === null
-            ? `正在烘 ${pending} 张卡的贴图…色块是占位,烘好会自动换上`
-            : `正在烘第 ${bakingAt.toFixed(2)} 秒的画面(共 ${pending} 张)…色块是占位,不是别的时刻的画面`)}
+            ? `正在渲染 ${pending} 张卡的贴图…色块是占位,渲染好会自动换上`
+            : `正在渲染第 ${bakingAt.toFixed(2)} 秒的画面(共 ${pending} 张)…色块是占位,不是别的时刻的画面`)}
         </div>
       )}
       {!mods && !err && (
