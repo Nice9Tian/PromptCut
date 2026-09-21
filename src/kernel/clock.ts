@@ -61,8 +61,8 @@ declare global {
     __pcPrepareFrameMedia?: () => Promise<void>;
     /** 导出:排空挂着的宏任务,直到 DOM 不再变(见 render/snapshotSettle.ts) */
     __bfSettle?: () => Promise<void>;
-    /** 导出 / 舞台:把此刻的 [data-pc-scene] 冻结成自给自足的 HTML(见 render/snapshotFreeze.ts) */
-    __bfFreeze?: () => import('../render/snapshotFreeze').FrozenScene;
+    /** 导出 / 舞台:把此刻的 [data-pc-scene] 生成一份自给自足的 HTML 快照(见 render/createSnapshot.ts) */
+    __pcCreateSnapshot?: () => import('../render/createSnapshot').SceneSnapshot;
   }
 }
 

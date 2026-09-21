@@ -5,7 +5,7 @@
  * 做三件事:
  *   1. 扫 Node 侧的抓帧代码,收集全部 `window.__…` 的读写;
  *   2. 解析文档的两张表(HTML 路必需 / PNG 路 · puppeteer 专用),两边求对称差,不为空就失败;
- *   3. 断言导出页和舞台页都挂了 `__bfFreeze`(舞台页也提供 `__bfFreeze`)。
+ *   3. 断言导出页和舞台页都挂了 `__pcCreateSnapshot`(舞台页也提供 `__pcCreateSnapshot`)。
  *
  * 直接跑:`node scripts/verify-bake-protocol.mjs`。进 npm test 的落点是
  * `server/test/bake-protocol.test.mjs`。
@@ -91,15 +91,15 @@ export function verifyBakeProtocol() {
     }
   }
 
-  // 舞台页也提供 __bfFreeze:两页同一份 src/render/snapshotFreeze.ts。
+  // 舞台页也提供 __pcCreateSnapshot:两页同一份 src/render/createSnapshot.ts。
   for (const page of ['src/ExportView.tsx', 'src/StageView.tsx']) {
     const text = fs.readFileSync(path.join(root, page), 'utf8');
-    if (!/window\.__bfFreeze\s*=/.test(text)) problems.push(`${page} 没有挂 window.__bfFreeze`);
-    if (!/freezeScene\s*\(/.test(text)) problems.push(`${page} 没有调用 freezeScene()`);
-    if (!/\[data-pc-scene\]/.test(text)) problems.push(`${page} 的冻结调用没有走 [data-pc-scene] 场景根`);
+    if (!/window\.__pcCreateSnapshot\s*=/.test(text)) problems.push(`${page} 没有挂 window.__pcCreateSnapshot`);
+    if (!/createSnapshot\s*\(/.test(text)) problems.push(`${page} 没有调用 createSnapshot()`);
+    if (!/\[data-pc-scene\]/.test(text)) problems.push(`${page} 的生成快照调用没有走 [data-pc-scene] 场景根`);
   }
-  if (!/舞台页也提供\s*`__bfFreeze`/.test(fs.readFileSync(path.join(root, DOC), 'utf8'))) {
-    problems.push(`${DOC} 缺少「舞台页也提供 \`__bfFreeze\`」那一行`);
+  if (!/舞台页也提供\s*`__pcCreateSnapshot`/.test(fs.readFileSync(path.join(root, DOC), 'utf8'))) {
+    problems.push(`${DOC} 缺少「舞台页也提供 \`__pcCreateSnapshot\`」那一行`);
   }
   return { problems, usage, lists };
 }
@@ -112,5 +112,5 @@ if (isMain) {
     for (const p of problems) console.error('  - ' + p);
     process.exit(1);
   }
-  console.log(`PASS: ${usage.size} 个 window.__* 全部在 ${DOC} 的两栏里(HTML 路 ${lists.html.size} 个 / PNG 路 ${lists.png.size} 个),导出页与舞台页都挂了 __bfFreeze。`);
+  console.log(`PASS: ${usage.size} 个 window.__* 全部在 ${DOC} 的两栏里(HTML 路 ${lists.html.size} 个 / PNG 路 ${lists.png.size} 个),导出页与舞台页都挂了 __pcCreateSnapshot。`);
 }

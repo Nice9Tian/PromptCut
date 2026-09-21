@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { cardNodeIdentities, cardSampling, cardCacheIdentity, cardSnapshotIdentity } from './card-identity.mjs';
-import { freezeCode } from './frame-code.mjs';
+import { snapshotCode } from './frame-code.mjs';
 import { snapshotTier } from './snapshot-store.mjs';
 import { MovFrameStore } from './frame-mov.mjs';
 import { findFfmpeg } from './bakery/index.mjs';
@@ -87,7 +87,7 @@ export class CardFrameCache {
         fps: this.fps, sampling, duration: end - start,
         stage: { width: this.project.width, height: this.project.height, camera3dFov: this.project.camera3dFov },
         frame: output.frame, themeId: this.project.themeId,
-        fontFingerprint: value?.environment?.fontFingerprint || '', freezeCode: freezeCode(),
+        fontFingerprint: value?.environment?.fontFingerprint || '', snapshotCode: snapshotCode(),
       });
       controls.push({ key, snapshotKey, tier: snapshotTier(caps), capabilities: caps,
         clipId: output.clipId || node?.clipId, nodeId: output.nodeId, start, end, count, sampling, compositing, cacheable,

@@ -7,7 +7,7 @@ import { getCard } from "./kernel/registry";
 import { installStageClock } from "./render/stageClock";
 import { cardMountedAt, mountFrameOf } from "./render/frameWindow.mjs";
 import { createAnimationPinner } from "./render/pinAnimations";
-import { freezeScene } from "./render/snapshotFreeze";
+import { createSnapshot } from "./render/createSnapshot";
 import { hitTest as solidHitTest, rectsWithBounds as solidRectsWithBounds } from "./render/solid";
 import { applyProjectPatch, type ProjectPatch } from "./render/changedClips.mjs";
 import {
@@ -373,11 +373,17 @@ export default function StageView() {
         settle(target);
         scheduleSample();
         if (opts.probe) {
-          // K1:frameMs 含把该控件冻结成 HTML 的时间(J1)
+          /*
+           * K1 的四个数(任务书 3.8)。`stepMs` 在**等 rAF 之前**取 —— 那一次真 rAF 至少是一个
+           * 垂直同步(60 Hz 屏约 17 ms),计进去的话随机访问卡的成绩全是这个常数,
+           * 而它不属于活渲、也不属于生成快照的任何一段(3.8 末条点名要修的量法问题)。
+           */
+          const stepMs = realNow() - started;
           await realRaf();
           const root = rootRef.current;
-          if (root) freezeScene(root);
-          return { path: "set", elapsedMs: realNow() - started } satisfies SetTimeReply;
+          const snap = root ? createSnapshot(root).timing : { inlineMs: 0, rasterMs: 0, serializeMs: 0 };
+          return { path: "set", elapsedMs: realNow() - started, stepMs,
+            snapshot: { inlineMs: snap.inlineMs, rasterMs: snap.rasterMs, serializeMs: snap.serializeMs } } satisfies SetTimeReply;
         }
         return { path: "set" } satisfies SetTimeReply;
       },
@@ -416,6 +422,12 @@ export default function StageView() {
 
         let frames = 0;
         let truncated = false;
+        /*
+         * 生成快照的三段耗时按帧累加(任务书 3.8)。`stepMs = elapsedMs − 这三段之和` ——
+         * 判重只看 `stepMs`(3.3),生成快照的时间只排探针和预渲染的产能。
+         */
+        const snapshot = { inlineMs: 0, rasterMs: 0, serializeMs: 0 };
+        const stepOf = (elapsed: number) => Math.max(0, elapsed - snapshot.inlineMs - snapshot.rasterMs - snapshot.serializeMs);
         return await new Promise<RenderReply>((resolve) => {
           ref.current.pending = { gen, startedAt: started, frames: () => frames, resolve };
           void (async () => {
@@ -439,8 +451,11 @@ export default function StageView() {
                 const root = rootRef.current;
                 if (!root) return;
                 // 探针推过的帧直接存成死素材(K1):本地帧号按探针自己的步序算,不取 data-pc-local-frame
-                const frozen = freezeScene(root);
-                for (const c of frozen.controls) {
+                const snap = createSnapshot(root);
+                snapshot.inlineMs += snap.timing.inlineMs;
+                snapshot.rasterMs += snap.timing.rasterMs;
+                snapshot.serializeMs += snap.timing.serializeMs;
+                for (const c of snap.controls) {
                   postStageEvent({ type: "probe-frame", clipId: c.id, localFrame: Math.round((ms / 1000 - clipStart(c.id)) * fps), html: c.html });
                 }
               },
@@ -449,7 +464,7 @@ export default function StageView() {
             ref.current.pending = null;
             const elapsedMs = realNow() - started;
             if (truncated) {
-              resolve({ aborted: true, reason: "timeout", elapsedMs, frames, truncated: true });
+              resolve({ aborted: true, reason: "timeout", elapsedMs, stepMs: stepOf(elapsedMs), frames, truncated: true, snapshot });
               return;
             }
             flushSync(() => setT(target));
@@ -458,7 +473,8 @@ export default function StageView() {
             settle(target);
             scheduleSample();
             ref.current.t = target;
-            resolve({ remounted, caughtUpAtSec: clock.now() / 1000, elapsedMs, ...(probe ? { frames, truncated: false } : {}) });
+            resolve({ remounted, caughtUpAtSec: clock.now() / 1000, elapsedMs, stepMs: stepOf(elapsedMs),
+              ...(probe ? { frames, truncated: false, snapshot } : {}) });
           })();
         });
       },
@@ -564,12 +580,12 @@ export default function StageView() {
 
     const stopRpc = serveStageRpc(api);
     window.__pcStage = api;
-    // K1 探针 / L1 / probe-frame 的冻结都在舞台页调它;导出页挂的是同一个 freezeScene(J1)。
+    // K1 探针 / L1 / probe-frame 生成快照都在舞台页调它;导出页挂的是同一个 createSnapshot(J1)。
     // 场景根就是 rootRef 指着的那个 [data-pc-scene] div(不走 document.querySelector:预渲染页上 #root 只是 display:none)。
-    window.__bfFreeze = () => {
+    window.__pcCreateSnapshot = () => {
       const root = rootRef.current;
-      if (!root) throw new Error("stage: 还没有项目,没什么可冻结的");
-      return freezeScene(root);
+      if (!root) throw new Error("stage: 还没有项目,没什么可生成快照的");
+      return createSnapshot(root);
     };
     postStageReady(detectHostCapabilities());
     return () => {

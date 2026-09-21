@@ -140,7 +140,7 @@ worker 池只取队列的 `cancelError`，队列完全不认识 worker。`ui-ren
 ### 代码指纹（`server/frame-code.mjs`）
 
 `vite-plugin-vision.ts` **不在**任何一张指纹清单里（`BAKERY_FILES` / `CAPTURE_FILES` /
-`FREEZE_FILES` 里只有 `server/bakery/*.mjs` 和 `server/frame-*.mjs`），所以拆出去的模块
+`SNAPSHOT_FILES` 里只有 `server/bakery/*.mjs` 和 `server/frame-*.mjs`），所以拆出去的模块
 也不需要补进清单，**指纹不会变**。
 
 ### 测试清单同步

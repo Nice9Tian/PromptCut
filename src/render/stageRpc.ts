@@ -35,20 +35,42 @@ export interface StageReadyMessage {
   hostCapabilities: HostCapabilities;
 }
 
+/**
+ * 生成快照的三段耗时(任务书 3.8):在一次 `render` / `setTime` 里**累加**本次推过的每一帧。
+ * 三个都不进判重 —— 判重只看活渲的 `stepMs`。
+ */
+export interface SnapshotCost {
+  /** 样式内联(含复制 DOM) */
+  inlineMs: number;
+  /** 画布栅格化(没有画布的卡是 0) */
+  rasterMs: number;
+  /** 素材层占位 + 序列化 */
+  serializeMs: number;
+}
+
 export interface RenderResult {
   remounted: boolean;
   caughtUpAtSec: number;
   elapsedMs: number;
+  /**
+   * **活渲耗时**:`elapsedMs` 减掉本次生成快照花的时间(任务书 3.3 / 3.8)。
+   * 只有它进判重(`capped = stepMs > B`)。不带 `probe` 时 = `elapsedMs`。
+   */
+  stepMs: number;
   /** probe 第一趟:推了几帧、有没有被一拍上限截断 */
   frames?: number;
   truncated?: boolean;
+  /** 只在 probe 时有 */
+  snapshot?: SnapshotCost;
 }
 export interface RenderAborted {
   aborted: true;
   reason: "superseded" | "project" | "timeout" | "detached";
   elapsedMs?: number;
+  stepMs?: number;
   frames?: number;
   truncated?: boolean;
+  snapshot?: SnapshotCost;
 }
 export type RenderReply = RenderResult | RenderAborted;
 
@@ -59,12 +81,21 @@ export interface SetTimeOptions {
   awaiting?: string[];
   /** 启动 K5 的暂停态活渲(第 4 步) */
   settle?: true;
-  /** K1 探针:走跳转路径、等一次真 rAF、冻一次本控件 HTML,回包 { elapsedMs } */
+  /** K1 探针:走跳转路径、等一次真 rAF、生成一次本控件的快照,回包带四个数 */
   probe?: true;
 }
 export interface SetTimeReply {
-  /** 只在 probe 时有:`__pcRealNow` 量的墙钟 */
+  /** 只在 probe 时有:`__pcRealNow` 量的墙钟(含那一次真 rAF 的等待) */
   elapsedMs?: number;
+  /**
+   * 只在 probe 时有:**活渲耗时**,唯一进判重的数(任务书 3.3 / 3.8)。
+   * 量的是 `clock.set` → `flushSync` → 钉动画 → `settle` 这一段,
+   * **不含**那一次真 rAF 的等待(它至少是一个垂直同步,约 17 ms,见 3.8 末条),
+   * 也不含生成快照。
+   */
+  stepMs?: number;
+  /** 只在 probe 时有:生成快照的三段耗时 */
+  snapshot?: SnapshotCost;
   /** 这次 setTime 走的路径,给验收和调试看 */
   path: "continuous" | "set";
 }
@@ -125,7 +156,13 @@ export type StageEvent =
   | { type: "frame"; sec: number }
   | { type: "ended"; sec: number }
   | { type: "settled"; sec: number; clipIds: string[] }
-  | { type: "probe"; identityKey: string; fps: number; frameMs: number; stepMs: number | null; catchUpMs: number; capped?: boolean; kind: "random" | "stepped"; vtOk?: boolean; seekOk?: boolean; seekMs?: number | null }
+  /**
+   * K1 的一条成绩。只报**测量值** —— `device` / `measuredAt` / `mode` / `demoted` 由父页补齐
+   * 后整条 PUT(任务书 3.3)。四个数分开报(3.8):`stepMs` 是活渲单帧最差、唯一进判重的数;
+   * `inlineMs` / `rasterMs` / `serializeMs` 是生成快照那三段各自的单帧最差,只排产能。
+   * 旧的 `frameMs`(含生成快照的单帧最差)已删,不留兼容。
+   */
+  | { type: "probe"; identityKey: string; fps: number; stepMs: number; inlineMs: number; rasterMs: number; serializeMs: number; catchUpMs: number; capped?: boolean; kind: "random" | "stepped"; vtOk?: boolean; seekOk?: boolean; seekMs?: number | null }
   | { type: "demote"; clipId: string }
   | { type: "probe-frame"; clipId: string; localFrame: number; html: string };
 

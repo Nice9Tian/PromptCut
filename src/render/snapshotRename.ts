@@ -73,7 +73,7 @@ export function collectIds(html: string): Set<string> {
  * 分三条正则轮流改的话,第二条可能撞上第一条刚写出来的新 id;并成一条交替、查表决定改不改就没这问题。
  *
  * **不处理 <style> 文本里的 `#id` 选择器**(和预渲染侧当年 export-frames.mjs 的 `__r` 一样不处理)。
- * 理由:control 快照是卡片包裹层的 innerHTML,而 __bfFreeze 已经把每个元素的计算样式整份内联成
+ * 理由:control 快照是卡片包裹层的 innerHTML,而 __pcCreateSnapshot 已经把每个元素要用的计算样式内联成
  * style 属性,`<style>` 规则即使还在也已被内联值盖掉,改不改名都不影响呈现;全仓两处 <defs> 也都直接
  * 写在卡片自己的 <svg> 里(growth-curve.tsx / chart-growth.tsx),不靠样式表选中。注意 `<style>` 文本里
  * 的 `url(#id)` 反而会被下面这条 url 分支改掉 —— 这方向是安全的(跟着元素一起改),单测钉了。

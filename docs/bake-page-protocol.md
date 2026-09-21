@@ -8,8 +8,8 @@ Node 侧只经 `window.__*` 驱动页面，除此之外不碰页面内部；页�
 `window.__…` 的读写，不在下面两栏里的名字直接失败（两栏和脚本必须字字对上）。
 `npm test` 里的落点是 `server/test/bake-protocol.test.mjs`。
 
-**舞台页也提供 `__bfFreeze`**（`src/StageView.tsx`，和导出页同一份 `src/render/snapshotFreeze.ts`；
-两页的场景根都是 `[data-pc-scene]`）。K1 探针、`probe-frame`、`frameMs` 的冻结时间、L1 都在舞台页调它。
+**舞台页也提供 `__pcCreateSnapshot`**（`src/StageView.tsx`，和导出页同一份 `src/render/createSnapshot.ts`；
+两页的场景根都是 `[data-pc-scene]`）。K1 探针、`probe-frame`、生成快照的三段耗时、L1 都在舞台页调它。
 
 ## HTML 路必需
 
@@ -35,7 +35,7 @@ Node 侧只经 `window.__*` 驱动页面，除此之外不碰页面内部；页�
 | `__pcRestartCards` | `bake.mjs`（`warmUp`） | 重挂载全部卡片（随机种子先拨回起点） |
 | `__pcResetAnims` | `bake.mjs`（`warmUp`） | 清空动画锚点 |
 | `__pcClipFrameModes` | `shards.mjs`、`export-unified.mjs`（并行分片的规划步） | 每个卡片片段的帧模式，用来选安全的分片切点 |
-| `__bfFreeze` | `bake.mjs`（`shoot()` 与逐帧循环） | 把 `[data-pc-scene]` 冻结成 `{ html, lossy, controls }` |
+| `__pcCreateSnapshot` | `bake.mjs`（`shoot()` 与逐帧循环） | 把 `[data-pc-scene]` 生成快照 `{ html, lossy, controls, timing }` |
 
 ## PNG 路 / puppeteer 专用
 

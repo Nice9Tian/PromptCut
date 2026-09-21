@@ -1,7 +1,7 @@
 /*
  * Probe: 导出页里一个 fill="url(#id)" 的 SVG 形状,序列化出来到底是相对形式还是带页面 URL 的绝对形式?
  *
- * 为什么要问:A2(7) 的消费侧改名(src/render/snapshotRename.ts)照抄了当年 export-frames.mjs(现 src/render/snapshotFreeze.ts)的正则
+ * 为什么要问:A2(7) 的消费侧改名(src/render/snapshotRename.ts)照抄了当年 export-frames.mjs(现 src/render/createSnapshot.ts)的正则
  *   (url\((?:&quot;|["'])?[^)"'&]*#)<id>((?:&quot;|["'])?\))
  * 那条 `[^)"'&]*` 把 `&` 排除在外。而导出页地址本身含 `&`(server/frame-pipeline.mjs:183 的
  * '/?export=1&timeline='),`outerHTML` 会把 `&` 序列化成 `&amp;`。只要 Chrome 在冻结时把 fill
@@ -89,7 +89,7 @@ try {
     probe.style.fill = cs.fill;
     const inlineOnly = probe.outerHTML;
 
-    // 整个 control 子树按 __bfFreeze 的写法冻一遍,把里面出现的全部 url(…) / href="#…" 形式列出来。
+    // 整个 control 子树按 __pcCreateSnapshot 的写法走一遍,把里面出现的全部 url(…) / href="#…" 形式列出来。
     // 只看一个 <path> 容易漏掉别处(mask / filter / clip-path)可能有的绝对形式。
     const host = el.closest('[data-pc-clip]') ?? el.closest('svg') ?? el.parentElement;
     const subtree = host.cloneNode(true);

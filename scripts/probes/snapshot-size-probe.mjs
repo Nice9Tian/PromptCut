@@ -17,11 +17,11 @@
  * 本机 `.pc-work/opened/` 里的项目用到的卡也并进来。
  *
  * 量什么:
- *   - `freezeScene`(`window.__bfFreeze`)返回的 `controls[0].html` —— 那就是包裹层 innerHTML,
+ *   - `createSnapshot`(`window.__pcCreateSnapshot`)返回的 `controls[0].html` —— 那就是包裹层 innerHTML,
  *     是快照投递的原始体积(投递前的 deflate + base64 另算,A3c 的编码后数已在任务书里);
  *   - 整场景 `html` 的体积(给「一次投递 ≤ 2 MB」做对照);
  *   - 控件里有没有 `<canvas` / `data:image`,以及位图占了多少 —— canvas 卡另立口径;
- *   - 冻结本身的墙钟(K1 的 `frameMs` 含它,所以顺手记下来);
+ *   - 生成快照本身的墙钟,按任务书 3.8 拆成样式内联 / 画布栅格化 / 序列化三段(不进判重,只排产能);
  *   - 最大的 10 张卡:把那份 html 赋给一个游离 div 的 `innerHTML`,量解析耗时,
  *     对照 A3c 的「拖动 3 秒内舞台主线程 `innerHTML` 解析合计 ≤ 200 ms」。
  *
@@ -203,14 +203,15 @@ window.__measure = async (job) => {
     else await rpc.render(t, { jump: true, maxCatchUp: Infinity });   // 推帧卡必须真推到那一刻,否则量的是初始态
     await new Promise((r) => setTimeout(r, 0));   // 让 settle 那一拍微任务跑掉
     const t0 = w.__pcRealNow();
-    const frozen = w.__bfFreeze();
-    const freezeMs = w.__pcRealNow() - t0;
-    const control = frozen.controls[0];
+    const snap = w.__pcCreateSnapshot();
+    const snapshotMs = w.__pcRealNow() - t0;
+    const control = snap.controls[0];
     const html = control ? control.html : '';
     samples.push({
-      t, freezeMs, lossy: frozen.lossy, controls: frozen.controls.length,
-      controlBytes: bytes(html), sceneBytes: bytes(frozen.html),
-      // freezeScene 已经把 <canvas> 换成同尺寸的 <img data:…>,所以不能按标签判;
+      t, snapshotMs, inlineMs: snap.timing.inlineMs, rasterMs: snap.timing.rasterMs, serializeMs: snap.timing.serializeMs,
+      lossy: snap.lossy, controls: snap.controls.length,
+      controlBytes: bytes(html), sceneBytes: bytes(snap.html),
+      // createSnapshot 已经把 <canvas> 换成同尺寸的 <img data:…>,所以不能按标签判;
       // 用审阅表的 canvasHeavy,再用「有没有内联位图」兜一层
       hasCanvas: !!job.canvasHeavy || dataImageBytes(html) > 0,
       imgBytes: dataImageBytes(html), styleBytes: styleBytes(html),
@@ -350,7 +351,10 @@ try {
     { title: 'canvas', get: (r) => (r.max.hasCanvas ? 'yes' : '') },
     { title: 'lossy', get: (r) => (r.max.lossy ? String(r.max.lossy) : '') },
     { title: 'tags', get: (r) => r.max.nodes },
-    { title: 'freezeMs', get: (r) => r.max.freezeMs.toFixed(1) },
+    { title: 'snapMs', get: (r) => r.max.snapshotMs.toFixed(1) },
+    { title: 'inlineMs', get: (r) => r.max.inlineMs.toFixed(1) },
+    { title: 'rasterMs', get: (r) => r.max.rasterMs.toFixed(1) },
+    { title: 'serialMs', get: (r) => r.max.serializeMs.toFixed(1) },
     { title: 'over', get: (r) => (r.max.controlBytes > (r.max.hasCanvas ? CANVAS_LIMIT : DOM_LIMIT) ? 'OVER' : '') },
   ]));
 
@@ -389,10 +393,10 @@ try {
 
 实测日期 ${now}。跑法：\`node scripts/probes/snapshot-size-probe.mjs --origin ${origin}\`，
 dev 模式的 dev server（\`/src/*\` 现场变换），后台舞台（\`?stage=1&id=back\`，\`setRole('back', { job: 'probe' })\`）。
-每张卡一条轨道一个 \`${clipSec}\` 秒的 clip、参数取默认值，fps ${fps}；在 0.3 s / 中点 / 收尾前 0.1 s 三个本地时刻各冻一次
+每张卡一条轨道一个 \`${clipSec}\` 秒的 clip、参数取默认值，fps ${fps}；在 0.3 s / 中点 / 收尾前 0.1 s 三个本地时刻各生成一次快照
 （\`stateful\` 卡用 \`render(t, { jump: true, maxCatchUp: Infinity })\` 真推到那一刻，\`direct\` 卡用 \`setTime(t)\`），
-取三次里最大的一帧。量的是 \`window.__bfFreeze()\` 回来的 \`controls[0].html\` —— 也就是包裹层 innerHTML、
-计算样式已全部内联的**原始**体积，不含投递前的 deflate + base64。
+取三次里最大的一帧。量的是 \`window.__pcCreateSnapshot()\` 回来的 \`controls[0].html\` —— 也就是包裹层 innerHTML、
+差异样式已内联的**原始**体积，不含投递前的 deflate + base64。
 
 机器：${(await page.evaluate(() => navigator.userAgent))}。
 
@@ -415,7 +419,27 @@ dev 模式的 dev server（\`/src/*\` 现场变换），后台舞台（\`?stage=
 - 超 300 KB 的 DOM 卡 **${overDom.length}** 张；超 1 MB 的 canvas 卡 **${overCanvas.length}** 张。
 - 按 p90 估一次「10 张活跃卡全换」的投递：约 **${(p90All * 10 / MB).toFixed(2)} MB**${p90All * 10 > DELIVERY_LIMIT ? `，> 2 MB，得按 A3c 拆成两次投递` : '，在 2 MB 以内'}。
 
-## 3. 按族的 p50 / p90 / max
+## 3. 按 DOM / canvas 分列的 p50 / p90 / max
+
+差异样式内联的验收口径是**分列**的（任务书 A2(8)：「不要拿 62 张混算的 p90 当门槛」）——
+全体 p50 / p90 那两个样本落在粒子 canvas 卡上，而差异样式内联碰不到它们的位图。
+
+${(() => {
+  const domNoLottie = domCards.filter((r) => !r.cardId.startsWith('lottie-'));
+  const row = (name, list, get = (r) => r.max.controlBytes) => {
+    const xs = list.map(get);
+    return [name, String(list.length), kb(pct(xs, 0.5)), kb(pct(xs, 0.9)), kb(Math.max(...xs, 0))];
+  };
+  return mdTable(['口径', '张数', 'p50 KB', 'p90 KB', 'max KB'], [
+    row('**DOM 卡**（门槛 300 KB）', domCards),
+    row('DOM 卡（排除 `lottie-*`）', domNoLottie),
+    row('**canvas 卡**位图（门槛 1 MB）', canvasCards, (r) => r.max.imgBytes),
+    row('canvas 卡整份 control', canvasCards),
+    row('全体（仅供对照，不是门槛）', ok),
+  ]);
+})()}
+
+## 3b. 按族的 p50 / p90 / max
 
 ${mdTable(['族', '张数', 'p50 KB', 'p90 KB', 'max KB'], familyRows.map((r) => [r.fam, String(r.n), kb(r.p50), kb(r.p90), kb(r.max)]))}
 
@@ -435,11 +459,12 @@ ${mdTable(['卡', '族', '最大帧 KB', '其中位图 KB', '建议'],
 ` : ''}
 ## 5. 逐卡（三个时刻里最大的一帧）
 
-${mdTable(['卡', '族', '帧模式', '控件 KB', '整场景 KB', '其中位图 KB', '内联样式 KB', '样式占比', 'canvas', '标签数', '冻结 ms'],
+${mdTable(['卡', '族', '帧模式', '控件 KB', '整场景 KB', '其中位图 KB', '内联样式 KB', '样式占比', 'canvas', '标签数', '生成快照 ms', '样式内联 ms', '画布栅格化 ms', '序列化 ms'],
   [...ok].sort((a, b) => b.max.controlBytes - a.max.controlBytes).map((r) => [
     r.cardId, r.family, r.mode, kb(r.max.controlBytes), kb(r.max.sceneBytes), kb(r.max.imgBytes), kb(r.max.styleBytes),
     r.max.controlBytes ? Math.round(r.max.styleBytes * 100 / r.max.controlBytes) + '%' : '—',
-    r.max.hasCanvas ? '是' : '', String(r.max.nodes), r.max.freezeMs.toFixed(1)]))}
+    r.max.hasCanvas ? '是' : '', String(r.max.nodes), r.max.snapshotMs.toFixed(1),
+    r.max.inlineMs.toFixed(1), r.max.rasterMs.toFixed(1), r.max.serializeMs.toFixed(1)]))}
 
 ${results.filter((r) => r.error).length ? `失败的卡：${results.filter((r) => r.error).map((r) => `\`${r.cardId}\`（${r.error}）`).join('、')}` : ''}
 
@@ -455,11 +480,13 @@ C4 拖一格通常只换一两张卡；按最慢的一张算，3 秒 90 格里�
 
 ## 7. 顺带记下的两件事
 
-- **\`freezeScene\` 的耗时**（上表「冻结 ms」）量的是整场景一次冻结。K1 的 \`frameMs\` 按任务书**含**这一步，
-  所以它直接决定轻重判定：本次实测冻结本身就在 ${(() => { const f = ok.map((r) => r.max.freezeMs); return `${pct(f, 0.5).toFixed(0)}～${Math.max(...f).toFixed(0)}`; })()} ms 量级，
-  已经大于 B = 1000/${fps} × 70% = ${((1000 / fps) * 0.7).toFixed(1)} ms。dev 模式偏慢是一部分原因，
-  另一部分是 \`freezeScene\` 对场景里**每一个元素**都要 \`getComputedStyle\` 并整份内联。
-- **canvas 位图现在还是 PNG**：\`snapshotFreeze.ts\` 里是 \`toDataURL()\`（默认 PNG）。A3c 要求换成
+- **\`createSnapshot\` 的耗时**（上表最后四列）量的是整场景一次生成快照。按任务书 3.8，它**不进判重** ——
+  判重只看活渲的 \`stepMs\`（生成快照只在探针和预渲染时发生，活渲每拍并不做），这三段只用来排
+  探针和预渲染的产能。本次实测整场景一次在 ${(() => { const f = ok.map((r) => r.max.snapshotMs); return `${pct(f, 0.5).toFixed(0)}～${Math.max(...f).toFixed(0)}`; })()} ms 量级
+  （B = 1000/${fps} × 70% = ${((1000 / fps) * 0.7).toFixed(1)} ms，仅供对照）。dev 模式偏慢是一部分原因，
+  另一部分是样式内联对场景里**每一个元素**都要 \`getComputedStyle\`。
+  哪类卡贵一眼可见：样式内联高 = DOM 太复杂，画布栅格化高 = 画布太大。
+- **canvas 位图现在还是 PNG**：\`snapshot/rasterizeCanvas.ts\` 里是 \`toDataURL()\`（默认 PNG）。A3c 要求换成
   \`toDataURL('image/webp', 0.9)\`，那是 M4 的改动，本审计只按现状量。
 `;
 

@@ -72,9 +72,9 @@ const CHROME_ARGS = [
 /**
  * 每个新文档加载前注入。挡掉 Vite 的 HMR / 心跳(它们会一直挂着网络请求),再放毛玻璃遮罩那一套。
  *
- * `__bfSettle`(排空)、`__bfFreeze`(冻结成 HTML)和素材装载器(`__pcHideFrameMedia` /
+ * `__bfSettle`(排空)、`__pcCreateSnapshot`(生成 HTML 快照)和素材装载器(`__pcHideFrameMedia` /
  * `__pcPrepareFrameMedia`)不在这里了:它们是页面 bundle 的一部分,见 `src/render/snapshotSettle.ts`、
- * `src/render/snapshotFreeze.ts`、`src/render/frameMedia.ts`,由 `ExportView` / `StageView` 挂上
+ * `src/render/createSnapshot.ts`、`src/render/frameMedia.ts`,由 `ExportView` / `StageView` 挂上
  * (J1)。留在这里的只有 puppeteer 专用、页面自己用不着的东西。
  */
 function PAGE_PRELUDE() {

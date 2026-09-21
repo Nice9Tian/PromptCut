@@ -104,7 +104,7 @@ export async function bakeFrames(bakery, opts = {}) {
     }
     if (!opts.glassFrames) {
       // Pixel maps rasterize a hidden source video into a canvas. Load only the
-      // requested frame before freezing HTML; otherwise __bfFreeze would copy
+      // requested frame before creating the HTML snapshot; otherwise __pcCreateSnapshot would copy
       // an empty canvas into the snapshot and every cache replay would stay blank.
       const hasPixelMap = await page.evaluate(() => !!document.querySelector("canvas[data-pc-pixel-map]"));
       if (hasPixelMap) {
@@ -112,7 +112,7 @@ export async function bakeFrames(bakery, opts = {}) {
         await beginFrame();
         await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
       }
-      const snapshot = await page.evaluate(() => window.__bfFreeze());
+      const snapshot = await page.evaluate(() => window.__pcCreateSnapshot());
       if (snapshot.lossy) throw new Error(`Cannot snapshot ${snapshot.lossy} canvas elements`);
       return captureSnapshot(bakery, snapshot.html, shotParams);
     }
@@ -265,7 +265,7 @@ export async function bakeFrames(bakery, opts = {}) {
       const isStatic = await step(i, wantShot);
       const snapshotWanted = domDir || (opts.onSnapshot && (!opts.snapshotFrames || opts.snapshotFrames.has(i)));
       if (snapshotWanted) {
-        const { html, lossy, controls } = await page.evaluate(() => window.__bfFreeze());
+        const { html, lossy, controls } = await page.evaluate(() => window.__pcCreateSnapshot());
         if (lossy) throw new Error('HTML snapshot contains unreadable canvases');
         if (opts.onSnapshot && snapshotWanted) await opts.onSnapshot(i, html, controls);
         if (domDir) await fs.writeFile(path.join(domDir, String(i).padStart(6, '0') + '.html.gz'), gzip(Buffer.from(html, 'utf8')));

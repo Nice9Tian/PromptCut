@@ -84,7 +84,7 @@ export function FrameScene({ project, sourceProject = project, t, directT = t, p
         const ops = project.filters?.length ? clipFilterOpsAt(project, clip, t) : null;
         const filter = [ops ? cssFilter(ops) : "", emphasisFilter(clip.emphasis) || ""].filter(Boolean).join(" ");
         const style = { display: "block", width: "100%", height: "100%", objectFit: "cover" as const, opacity, filter: filter || undefined };
-        // data-pc-media:冻结时 controls 的选择器靠它把素材层排除掉(见 render/snapshotFreeze.ts)
+        // data-pc-media:生成快照时 controls 的选择器靠它把素材层排除掉(见 render/createSnapshot.ts)
         return <div key={clip.id} data-pc-clip={clip.id} data-pc-media="" data-pc-local-frame={Math.round((t - clip.start) * project.fps)} style={{ position: "absolute", overflow: "hidden", ...frameCss(clip.frame, project) }}>
           {clip.pixelMap && project.pixelMaps?.find((x) => x.id === clip.pixelMap!.id) ? (() => {
             const def = project.pixelMaps!.find((x) => x.id === clip.pixelMap!.id)!;

@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { cardNodeIdentities, cardSnapshotIdentity, cardSampling } from '../card-identity.mjs';
-import { freezeCode, invalidateFrameCode } from '../frame-code.mjs';
+import { snapshotCode, invalidateFrameCode } from '../frame-code.mjs';
 
 /** 同一张卡、同参数,放在两个片段里:`cardGraph` 合成节点时写进去的 `clipId` 不同。 */
 const node = (clipId, overrides = {}) => ({
@@ -20,7 +20,7 @@ const base = () => ({
   fps: 30, sampling: cardSampling(10, 30), duration: 3,
   stage: { width: 1920, height: 1080, camera3dFov: 50 },
   frame: { x: 0, y: 0, w: 800, h: 600 },
-  themeId: 'dark', fontFingerprint: 'ff00ff00', freezeCode: 'abc123',
+  themeId: 'dark', fontFingerprint: 'ff00ff00', snapshotCode: 'abc123',
 });
 
 const key = (clipId, opts = {}, nodeOverrides = {}) => cardSnapshotIdentity(node(clipId, nodeOverrides), { ...base(), ...opts });
@@ -60,7 +60,7 @@ test('shared key is sensitive to duration, phase, fps, theme, font fingerprint a
   assert.notEqual(key('clip-a', { fps: 60 }), plain);
   assert.notEqual(key('clip-a', { themeId: 'light' }), plain);
   assert.notEqual(key('clip-a', { fontFingerprint: 'deadbeef' }), plain);
-  assert.notEqual(key('clip-a', { freezeCode: 'def456' }), plain);
+  assert.notEqual(key('clip-a', { snapshotCode: 'def456' }), plain);
   // 整数 fps 和有理数对写法必须同键,否则换个调用方就全体失效。
   assert.equal(key('clip-a', { fps: { numerator: '60', denominator: '2' } }), plain);
 });
@@ -85,7 +85,7 @@ test('upstream input keys enter the shared key explicitly, never via cardNodeIde
   assert.notEqual(chained, key('clip-a', { inputKeys: { source: { key: 'upstream-2', offset: 0, rate: 1 } } }));
 });
 
-test('freezeCode covers only the freeze files and reports missing ones deterministically', async () => {
+test('snapshotCode covers only the snapshot files and reports missing ones deterministically', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'pc-freeze-'));
   const write = async (file, text) => {
     await fs.mkdir(path.join(root, path.dirname(file)), { recursive: true });
@@ -95,19 +95,19 @@ test('freezeCode covers only the freeze files and reports missing ones determini
   await write('server/bakery/capture-snapshot.mjs', 'restore v1');
   // 截图相关但和冻结无关的文件不进指纹。
   await write('server/bakery/capture-frame.mjs', 'shot v1');
-  const first = freezeCode(root);
+  const first = snapshotCode(root);
   await write('server/bakery/capture-frame.mjs', 'shot v2');
   invalidateFrameCode(root);
-  assert.equal(freezeCode(root), first, 'screenshot-only code must not retire snapshots');
+  assert.equal(snapshotCode(root), first, 'screenshot-only code must not retire snapshots');
   await write('server/bakery/chrome.mjs', 'freeze v2');
   invalidateFrameCode(root);
-  assert.notEqual(freezeCode(root), first, 'changing freeze code must change the key');
+  assert.notEqual(snapshotCode(root), first, 'changing snapshot code must change the key');
   // J1:冻结逻辑搬进 src/ 之后集合不变,但那两个文件从 'missing' 变成有内容,
   // 指纹必然变一次 —— 这正是搬家那一刻该发生的事。
-  await write('src/render/snapshotFreeze.ts', 'export function freezeScene() {}');
+  await write('src/render/createSnapshot.ts', 'export function createSnapshot() {}');
   invalidateFrameCode(root);
-  const moved = freezeCode(root);
-  assert.notEqual(moved, freezeCode(path.join(root, 'nowhere')));
+  const moved = snapshotCode(root);
+  assert.notEqual(moved, snapshotCode(path.join(root, 'nowhere')));
   await fs.rm(root, { recursive: true, force: true });
 });
 
