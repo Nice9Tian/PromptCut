@@ -44,3 +44,4 @@ desktop/release/
 tools/report-inbox-gui/inbox.local.json
 # 本地诊断、Agent 讨论、测试副本和验收产物
 /work/
+reply_to_users_goal.md
