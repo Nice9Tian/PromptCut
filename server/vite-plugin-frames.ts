@@ -169,6 +169,13 @@ export function framesPlugin(): Plugin {
         res.on("close", stop);
         return;
       }
+      /*
+       * 诊断读口:A3c 的超限帧(卡 id、字节数)和 C4 的批次插队。预渲染进程的
+       * stdout 被编辑器进程收走了,端到端探针只能从这里看这两件事。
+       */
+      if (req.method === "GET" && url.pathname === "/diagnostics") {
+        return json(200, { ok: true, ...service.diagnostics() });
+      }
       if (req.method === "GET") {
         /*
          * J3 / C3 的快照字节:`GET /api/frames/snapshot/<kind>/<key>/<localFrame>`。

@@ -146,6 +146,15 @@ export class FramePipeline {
   playheadWanted() {
     try { return this.playhead()?.wanted ?? []; } catch { return []; }
   }
+  /** C4:`wanted` 让哪一批插了队。只给诊断看,留最近 32 条 */
+  notePromotion(record) {
+    (this.promotions ||= []).push({ ...record, at: Date.now() });
+    while (this.promotions.length > 32) this.promotions.shift();
+  }
+  /** 端到端探针的读口:超限帧(A3c)和 `wanted` 的插队(C4) */
+  diagnostics() {
+    return { oversize: this._snapshots?.oversize ?? [], promotions: this.promotions ?? [] };
+  }
   async entry(project) {
     project = { ...project, media: await Promise.all((project.media || []).map(async media => {
       const file = cardMediaPath(media, this.root);
@@ -940,6 +949,9 @@ export class FramePipeline {
       const start = local - (local % 4);
       if (!pending.has(start) || start === ordered[0]) continue;
       console.log(`[frames] wanted: 片段 ${control.clipId} 的第 ${start}~${Math.min(start + 3, control.count - 1)} 批提前(顺序批本来是 ${ordered[0]})`);
+      // 预渲染进程的 stdout 被编辑器进程收走了(`vite-plugin-prerender` 的 `keep`),
+      // 端到端探针看不见上面那行;所以同一件事也记一条,经 `/api/frames/diagnostics` 读。
+      this.notePromotion({ clipId: control.clipId, start, instead: ordered[0], frame: Number(item.frame) });
       return start;
     }
     return ordered[0];
