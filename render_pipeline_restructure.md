@@ -213,7 +213,8 @@ pinned 架构 4 / 5 的落点因为 vision 拆分而变清楚了：**Agent 专�
 - 两张仍超 300 KB 的 `lottie-*`：不处理（见第 7 节「已定的」）。
 - `configurePreviewServer` 那部分降级：不再是后续步骤的准入，做完了就留着给在线浏览器模式用。
 
-### R1b 像素映射分流与 GPU 后端（不依赖别的步骤；R3 之前必须完成）
+### R1b 像素映射分流与 GPU 后端——已完成，合并提交 `dd58cb5`（2026-09-22）
+**结果**（合并后我在 main 上重跑过）：`tsc` 零错误，`npm test` 1481 / 1480 通过 / 0 失败 / 1 跳过；`node scripts/probes/pixelmap-gl-probe.mjs`（真 GPU：RTX 3080 / D3D11）八个用例里七个 GPU 对 CPU 最大差 ≤ 1 级（1080p，829 万个通道值），1080p 视频单帧主线程提交 p50 0.2 ms、GPU 计时查询 0.016 ms（CPU 旧实现 416～483 ms）；报告另称图片素材挂抠色映射的真实导出对 `mapRgba` 最大差 0 级（这一项我没重跑）。**一条已知的超标**：continuous 颜色序列有 13 / 207 万像素差 255 级——这些像素到两个 `from` 色精确等距，`mapRgba` 让 `Math.hypot` 的末位舍入决定取哪个，着色器稳定取靠前那个；不改。**实现时对 3.9 的更正**：① `colorSequence` 一律判 B（它按最近邻取色，取样成表差两百多级，A 类那条「只按 luma 取色」的判据永远不成立）；② A 类除了看表达式形状，还要把等价 `ops` 在 0～255 全值域上逐值核对，差 > 1 级就退回 B（`step()` 和矩阵的截断顺序会漏过形状判据）；③ `curves` / `matrix` 改不了 alpha，A 类的等价只在不透明素材上成立，回包带 `alphaNote`；④ C 类不是「GLSL 没有对应函数」（白名单函数一个不缺），真正翻译不了的是负底数配非整数常量指数的乘方；⑤ 画完不用 `drawImage`，用 `transferToImageBitmap` + `bitmaprenderer`（`drawImage` 的预乘来回会吃掉低 alpha，抠色正是产生低 alpha 的活），素材层那张画布因此不能再有 2D 上下文；⑥ 着色器里的 x / y 从 `gl_FragCoord` 算、行从上往下；⑦ 验收里「1080p 播放 0 长任务」量不了（编辑器预览今天不画像素映射），改成「单帧主线程 < 1 ms」。**遗留**：`normalizePixelMapDef` 忽略 `colorSequence.mode`（只认顶层 `mode`，工具描述已写明），要不要改行为另开一条。以下是动工前写的范围，留作记录。
 已做：滤镜新增 `curves` / `matrix` 两种 op 与 SVG 注入（见 3.9）。待做：`classifyPixelMap`、`create_pixel_map` / `update_pixel_map` 对 A 类的拒绝与等价 `ops` 回包、`compilePixelMapGlsl` + `src/render/pixelMapGl.ts`、删掉 CPU 逐像素循环、工具描述。验收：调色类定义被拒且回包里的 `ops` 直接可用，两者画面逐像素对比差 ≤ 2 / 255；1080p 播放 0 长任务；抠色类定义按 3.9 处理。
 
 ### R2 双舞台与协议补齐（不改用户可见行为；legacy 默认开）
