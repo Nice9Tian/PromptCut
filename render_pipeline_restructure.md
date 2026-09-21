@@ -1,0 +1,215 @@
+# 渲染管线重整计划（render_pipeline_restructure）
+
+基线：本地 main `30917d2`（2026-09-22）。必读：`user_pinned_goal.md`（2026-09-17 之后未改动，本文逐条遵循；引用写「pinned 架构 N / 渲染 N / 划分 轴N / 平台」）。
+本文接替 `AGY-TASK-cloud-doc-and-write-race.md`（第 111 版）里**渲染管线那一半**：协议全文（E0、K1～K6、G、M 的细节）仍以那份为底稿，按**节名**查，不要再按它的 `file:line` 查——解耦之后那些行号和一部分路径已经失效；本文第 3、4 节的更正优先于底稿。云端 / 文档服务那一半（第 5～10 步）不在本文范围，第 6 节只列审查结论的去向。
+
+---
+
+## 1. `result_decouple.md` 逐项查收（2026-09-22，我独立核对，未用子 Agent）
+
+| 项 | 报告的说法 | 我核对的方法 | 结果 |
+|---|---|---|---|
+| 2.1 store 解环 | `actions/*` 不再 import `../project`；`project.ts` 只转出门面 | `grep` `src/store/actions`；读 `src/store/project.ts` 的 export | 属实：零命中；export 只有 `EditorState` / `getState` / `subscribe` / `useStore` / `planPlacement` / `actions` |
+| 2.2 MCP 路由表 | 103 条 `else if` → `src/mcp/routes.mjs`；4 个工具模块下沉到 `src/mcp/tools/` | 数 `routes.mjs` 的 `method:`；数 `mcpExecutor.ts` 剩余的 `else if (tool ===` | 属实：路由 103 条；`mcpExecutor.ts` 只剩 5 条，都是报告列的特殊分支；`src/mcp/tools/` 四个模块与单测在位 |
+| 2.3 渲染引擎搬家 | `scripts/export-frames.mjs` 1406 → 42 行；`server/bakery/` 七个模块 + 11 个传递依赖；`server → scripts` 断开 | `wc -l`；`grep` `server/**` 对 `scripts/` 的 import | 属实：42 行；`server/bakery/` 19 个文件、行数与报告一致；`server/**`（测试除外）零处 import `scripts/` |
+| 2.4 分层 | 9 个文件 `git mv`（`Stage` / `PartTree` 上移到 `render`，`frameMode` 下沉到 `kernel`，`prerender` / `dataMirror` / `contentBox` 从 `editor` 移到 `render`，部件契约下沉，新建 `kernel/cardGpu.ts`） | 逐个看新旧路径 | 属实：9 个新路径都在，6 个旧路径都不在 |
+| 2.5 vision 拆分 | 外壳 56 行 + `server/vision/` 九个模块 | `wc -l` | 属实：行数逐个对上（56 / 387 / 118 / 82 / 142 / 153 / 618 / 163 / 369） |
+| 3 #10 指纹清单 | `frame-code.mjs` 的 `CAPTURE_FILES` / `FREEZE_FILES` 改指 `server/bakery/*` | 读 `server/frame-code.mjs:19` / `:70` | 属实。后果见下「要记住的两件事」 |
+| 4 守门测试 | 5 个新测试文件 | 看文件在不在，并跑全量 | 5 个都在 |
+| 5 验证数字 | `tsc -b --force` 零错误；`npm test` 1462 / 1461 pass / 0 fail / 1 skipped | 我在 main 上重跑了一遍 | **完全一致**：`tsc` 退出码 0；1462 / 1461 / 0 / 1 |
+| 6.5 别的会话的 worktree | `.claude/worktrees/agent-af0dae85c12674862` 有 18 个未提交改动，未动 | `git status` | 属实。它是我上一轮派出去做「差异样式内联」的那个，见第 2 节 |
+
+没有查出与报告不符的地方。没核的部分：报告第 5 节的四次真实渲染冒烟和 STT 端到端（需要起服务看图，我这次没重做）；对外接口「逐项序列化比较」那几行我只核了结果面（测试全过、路由条数），没有重跑它的对账脚本。
+
+**要记住的两件事**（对渲染计划有直接影响）：
+
+1. **全部帧缓存和共享快照已经失效过一次**（路径进了 `frameCode` / `captureCode` / `freezeCode` 的哈希）。差异样式内联落地时会再失效一次，两次合成一次处理即可，不需要兼容旧快照。
+2. **报告 6.2 说 `out/frame-library/` 的文件量会拖垮 vite 的文件监听**。我看了 `vite.config.ts:76-80`，`**/out/**` 已在忽略名单里，所以真正的原因还没钉死；桌面版跑的就是 vite dev server（见 3.1），用户冷启动同样受影响，列进 R0 先量再改。
+
+---
+
+## 2. 现在手上有什么（截至 `30917d2`）
+
+**已落地、已提交**：原任务书第 1、2、2b、3 步（`b5c65dc`）——能力审计与审阅表、镜像插件与两层 diff、素材按哈希寻址、快照格式（`freezeScene`）、共享键与快照库、挂载算式统一、JS 图卡、舞台 postMessage RPC（`stageRpc.ts` / `stageBridge.ts`）、`solid.ts`、成本记录的键与端点、离线成本探针。之后是 PR #1 和这次的五项解耦。
+
+**已做、未提交**（主工作区）：桌面壳探针——`scripts/probes/probe-connect.mjs`、`videodecoder-probe.mjs`（新），`backdrop-probe.mjs` / `oac-probe.mjs`（改），报告 `docs/g0-a-webview2-probe.md`。三项全过：WebView2 153 硬解 H.264（1080p 稳态 1.5 ms / 帧，上下拼合的 1920×2176 约 2.5 ms / 帧）；跨源 iframe 里视频下的毛玻璃正确；带 `Origin-Agent-Cluster: ?1` 时舞台 iframe 独立进程（父页最坏帧间隔 7 ms）。
+
+**已核、无代码改动**：能力审计的两条验收都过——仓库注册表 89 张卡里 `unknown` 为 0、54 张粒子卡全部 `canvasHeavy`；5 份旧 `.proc`（含没写 `frameMode` 的定制卡、裸 Project、Python 卡样本、全部素材无哈希）都能打开。
+
+**做了一大半、被额度打断**（worktree `.claude/worktrees/agent-af0dae85c12674862`，基于 `b5c65dc`，18 个未提交改动，**没有交付报告**）：差异样式内联（`src/render/snapshotFreeze.ts` +225 行，新模块 `src/render/freezeStyleProps.mjs`）、四个插件补 `configurePreviewServer`、成本记录加 `mode`、三个新探针、两份探针重跑的数据（存在旧 scratchpad 的 `opus-3b/`）。它的验收跑到哪一步不知道，**一律按未验收处理**。数据本身可用：
+
+| 量 | 差异内联之前 | 之后 |
+|---|---|---|
+| 单帧快照 max | 23107 KB | 956 KB |
+| 超 300 KB 的 DOM 卡 | 12 张 | 2 张（都是 `lottie-*`） |
+| DOM 卡 p90（排除 `lottie-*`） | — | 47.8 KB |
+| canvas 卡位图 p90 / max | — | 466 KB / 628 KB（上限 1 MB） |
+
+| 成本探针（62 张高频卡，fps 30，预算 B = 23.3 ms） | dev 模式 | 构建产物 |
+|---|---|---|
+| 含冻结的单帧最差 `frameMs`：p50 / p90 | 34.6 / 46.8 ms | 23.7 / 44.4 ms |
+| 按 `frameMs > B` 判重的张数 | 37 | 32 |
+| **不含冻结的单帧最差 `stepMs`：p50 / p90 / max** | **1.3 / 2.5 / 6.9 ms** | 0.4 / 1.6 / 6.9 ms |
+| **按 `stepMs > B` 判重的张数** | **0** | 0 |
+
+---
+
+## 3. 对底稿的更正（第 75 轮十份分步审查 + 三项实测的结论；优先于底稿）
+
+### 3.1 改变前提的三条
+
+1. **桌面版跑的是 vite dev server，不读 `dist/`**（`desktop/src-tauri/src/lib.rs:434` 用 sidecar 的 node 起 `vite --port 5210`；`desktop/scripts/prepare-runtime.mjs:257` 注释写明）。所以底稿第 110 版「成本探针以构建产物为准、分派只认 build 记录」作废：**分派用当前运行模式的记录**——`mode=dev|build` 拼进 `device` 串，dev 的应用只看 dev 记录，将来的在线浏览器模式（构建产物）只看 build 记录。
+2. **`unknown` 卡不能一律判重**。真实项目的 10 张定制卡和所有带部件的组合卡片段都是 `unknown`；底稿规定它们「每个位置都判重、没有死素材、只能透明」，照做会让它们在播放和拖动时全部消失。改成：**`unknown` 一律按下层依赖卡（`belowDependent`）处理**——照测、照实测分派，判轻就活渲；判重用本地档快照，不上云、不进流。代码跟一处：`server/snapshot-store.mjs` 的 `snapshotTier` 对 `unknown` 的 stateful 卡回 `'local'`。
+3. **判重门槛只看活渲耗时（用户 2026-09-22 同意）**。含生成快照的时间时 62 张里 37 张判重；只看活渲耗时 0 张判重，最贵的一张 6.9 ms。生成快照只在探针和预渲染时发生，活渲每拍并不做。`capped = stepMs > B`；生成快照的耗时拆开单独记（见 3.8），只用来排探针和预渲染的产能。
+
+### 3.2 舞台与协议
+
+- `render` 和 `setTime({ probe: true })` 在舞台侧都加角色闸门：不是 `back` 就回 `{ aborted: true, reason: 'role' }`。`render` 回包的 `reason` 全集是 `superseded | project | timeout | role | detached`；`detached`（iframe 换掉时客户端自己造的）= 丢弃回包、按新客户端重发。
+- `stageId` 与角色无关：两个 iframe 的地址用 `?stage=1&id=A` / `id=B`，角色只经 `setRole`（今天传的是 `id=front`）。
+- 舞台地址**第一次加载**就必须带 `Origin-Agent-Cluster: ?1`，补加无效；`window.originAgentCluster` 恒回 true，验收看 CDP 里有没有 `type: 'iframe'` 的 target。
+- `stageBridge.ts` 加两个口子：`whenStageReady(role)`（加载遮罩靠它知道后台舞台就绪）、`pushProject(role, project, { reset })`（探针、整场景补跑、页面侧测量对后台舞台换项目一律走它，否则 `syncProject` 的基线会让下一次同步静默不发）。
+- 对后台舞台的「掐断后不重发」例外按工作项判（`job: 'catchup'` 期间收到的 `'project'` 一律丢弃），不按 `settling` 标志判。
+- `play` / `pause` 回包统一成 `{ ok: true, stoppedAt }` / `{ ok: true, passed: true }` / `{ ok: false, reason }`；循环已停时 `pause()` 立即回最后一拍。`setPlaying(on)` 只管素材层，不碰节拍循环。
+- 节拍按绝对时刻排：`nextDue = playStart + n × 1000/fps`，干完活循环等真实帧直到 `nextDue − 1 ms`；慢帧把时间轴整体后移，不追。（一次 rAF 在 60 Hz 屏上只有 16.6 ms，30 fps 等不满一拍。）
+- 播放到头的收尾：写 store + `setPlaying(false)` + `pause()` 拿 `stoppedAt` + `setTime(stoppedAt, { settle: true })`，否则最后一帧的重卡永远停在抑制态。
+- 非 legacy 下 `Preview.tsx` 的 rAF 播放循环不启动，播放头由舞台的 `frame` 事件推进。
+- 快照是**兄弟平面**，卡片组件照常挂着（底稿 A4 那句「替换组件」作废）。
+- 素材层搬家清单补全：`VideoTrack` + `interface Slot` + 三个辅助函数进 `src/render/VideoTrack.tsx`；`targetTimeOf` / `filterOf` / `driveMedia` 一族和三个 `WeakMap` 进 `src/render/mediaDrive.ts`；`mediaSync.ts`（纯函数）搬到 `src/render/mediaSync.ts`。`FrameScene` 新 props 补上 `remountGen` / `settling` / `awaiting`。
+- 子树虚拟时间追帧要改 `Stage` 里**四支**传 `t` 的地方（组合卡、图卡、`DirectCard`、普通卡），底稿漏了图卡。
+- 已经落地、底稿还写成待办的：`advanceToAsync` 的 `yieldEvery`；`__pcRealNow` / `__pcRealSetTimeout` / `__pcRealRaf`（只差 `__pcRealDateNow` / `__pcRealSetInterval`）；一次 `rectsWithBounds` 取框；`rects()` 遍历全部包裹层；`getLayout` 含素材段。
+
+### 3.3 探针、分派、降级
+
+- 成本记录：舞台的 `probe` 事件只报测量值；`device`、`measuredAt`、`mode`、`demoted: false` 由父页补齐后整条 PUT（`costs-store` 是整条替换）。
+- **只用 `demoted` 一面旗**：K6 降级 = 父页查出旧记录，整条 PUT `{ ...旧记录, capped: true, demoted: true }`（不写 `null`）；探针写回显式带 `demoted: false`；`pinnedHeavy` 留给将来的人工钉死，本任务不写它。分派时 `demoted` 和 `pinnedHeavy` 都当 `capped`。
+- `catchUpMs` 只有一个定义：逐帧推进耗时之和、不含冻结；探针每帧分「推进」「冻结」两段计时；被预算截断时按已推帧的平均外推。
+
+### 3.8 生成快照：命名与指标拆开（用户 2026-09-22 提出）
+
+「冻结」这个词以后不用了：它把两条原理、瓶颈、产物大小都不同的技术路线说成了一件事，而且和「被抑制的卡 `t` 冻住」撞词。文档里改叫**生成快照**，其中两步分别叫**样式内联**和**画布栅格化**。
+
+- **代码结构**（R1 一起做，反正 R1 本来就要换 `freezeCode` 的哈希、作废全部旧快照）：`src/render/snapshotFreeze.ts` 改名 `src/render/createSnapshot.ts`，导出 `createSnapshot(root)`；里面按顺序调五个独立函数——`cloneScene`（复制 DOM）→ `inlineDOMStyles`（读计算样式、按差异口径写进 `style`；瓶颈是元素数 × 属性数）→ `rasterizeCanvas`（读像素、压成图片、写实体框；瓶颈是画布面积和编码器）→ `stripMedia`（素材层只留占位属性）→ `serializeScene`（`outerHTML`、整场景的 id 改名、逐控件取包裹层 `innerHTML`）。`inlineDOMStyles` 和 `rasterizeCanvas` 各自一个文件（`src/render/snapshot/inlineStyles.ts`、`src/render/snapshot/rasterizeCanvas.ts`），互不 import；worktree 里那份差异内联的逻辑（`ensureBaselines` / `animatedProps` / `forcedProps` / `buildStyle`）整体归 `inlineStyles.ts`。
+- **跟着改名的地方**（b5c65dc 以来约 20 个文件引用旧名）：页面协议 `window.__bfFreeze` → `window.__pcCreateSnapshot`（`src/StageView.tsx`、`src/ExportView.tsx`、`src/kernel/clock.ts` 的类型、`server/bakery/bake.mjs` 的两处 `page.evaluate`、`docs/bake-page-protocol.md` 的清单、`scripts/verify-bake-protocol.mjs` 和它的测试）；`freezeCode` → `snapshotCode`（`server/frame-code.mjs`、`server/card-identity.mjs`、`server/card-cache.mjs`、`card-snapshot-identity.test.mjs`；`FREEZE_FILES` 清单同步新文件）；类型 `FrozenScene` / `FrozenControl` → `SceneSnapshot` / `ControlSnapshot`；四个探针脚本。**共享键里那个字段的名字也跟着换**，键值本来就要变，不多付一次失效。
+- **探针分开上报**：成本记录从一个 `frameMs` 拆成四个数——`stepMs`（活渲单帧最差，**唯一进判重的数**）、`inlineMs`（样式内联单帧最差）、`rasterMs`（画布栅格化单帧最差，没有画布的卡为 0）、`serializeMs`（序列化单帧最差）；`catchUpMs` 照 3.3 只算活渲。`frameMs` 字段删掉，不留兼容（`out/card-costs.json` 重测一遍就有）。舞台的 `probe` 事件、`CardCostRecord` 类型、`docs/snapshot-size-audit.md` 的「冻结 ms」一列同步拆。哪类卡超标一眼可见：`inlineMs` 高 = DOM 太复杂（lottie 的两千多个节点），`rasterMs` 高 = 画布太大。
+- **顺带修一个量法问题**（`reply_to_users_goal.md` 第 9 条）：带 `probe: true` 的 `setTime` 会先等一次真实 rAF 再生成快照，随机访问卡量出来的数因此至少含一个垂直同步（约 17 ms）。四个数都只量各自那一段，rAF 等待不计入任何一个。
+- **给以后留的口子**：两步拆开之后，`rasterizeCanvas` 可以单独换成 webp、单独改成异步（`convertToBlob`），不牵动样式内联；到那一步 `createSnapshot` 会变成 async，页面协议的调用方（`bake.mjs` 的 `page.evaluate` 本来就 await）不用改，舞台里同步调用它的两处（`StageView.tsx` 的探针分支）到时改 await。共享 WebGL 渲染器（R9）落地后，画布卡的像素来自 Worker 交回的位图，`rasterizeCanvas` 是唯一要改的文件。
+- **产能预算怎么用这三个数**：预渲染一帧的成本 ≈ `stepMs + inlineMs + rasterMs + serializeMs`；探针阶段「整段推完要多久」按它估，超过遮罩可接受的时长就只测不存（探针推过的帧不当预渲染存），把生成快照留给后台预渲染。
+
+### 3.4 数据面
+
+- 就绪事件流（SSE）由页面**直连预渲染进程**，编辑器进程不代理。
+- `wanted` 要改四处：服务端三处白名单（`mirror-store.mjs` 的 `setPlayhead`、`vite-plugin-mirror.ts` 的调用与转发体）+ 页面侧 `src/render/dataMirror.ts` 的播放头路径（播放中不推的闸门、`t` 不变就早退、400 ms 可重入防抖、`await` + 读 body 的 `post`）——`wanted` 单开一个 100 ms 固定节流、`keepalive`、不读响应的发送函数。
+- 预渲染进程重启后重建就绪索引：扫盘只得到「键 → 区间」，`clipId` 要等项目到位后重算 card plan 反查（`control.clipId` ↔ `control.snapshotKey`）。
+- 本地档快照那一趟保持 `snapshotOnly: false` + `fullFrame: true`（每帧多截一张丢弃的 PNG 是已知代价）；完整性判据 = `index.count === control.count`；`onSnapshot` / `snapshotFrames` 已落地，只差把帧集合收窄成缺的那些。
+- 回滚开关 `?preview=legacy` **合并**舞台里已有的同名开关；「服务端旧调度器」= 预渲染进程保留的 `user` / `playback` lane 旧路径，legacy 页面照今天的方式发请求，服务端不另读开关。
+- 播放热池的借还和 `stopPlayback()` **还在**（`server/frame-pipeline.mjs:1084-1107`），底稿说「已删除」是错的。
+
+### 3.5 轨道流
+
+- 每条流的会话加载**该流的隔离工程**（只留这条流的卡和它的源依赖链，素材轨和其它卡剔掉，时间不平移，背景透明），截图加 `clip` 矩形；否则整页截图会把重叠的别的卡截进来。
+- 画面尺寸外扩到偶数宽高（`yuv420p` 要求）；色半区存预乘色（滤镜链开头加 `format=gbrap,premultiply=inplace=1`），着色器按预乘输出。
+- 组流平面加 `pointer-events: none`、不参与实体框；组内被抑制的卡命中退回包裹层框。
+- 解码帧预算按字节算（≤ 80 MB；上下拼合的 1080p 一帧约 6.3 MB，约 12 帧），不是按 24 帧。
+- Node 端按 MP4 box 切 `init.mp4` / 分段、丢 `mfra`；`-c:v` 要写；各编码器的严格 GOP 参数分列；`FramePipeline` 给流会话单开 `leaseStreamBakery()` / `returnStreamBakery()`。
+- 裁剪矩形第一版用包裹层框在整段 motion 下的包围盒（从项目数据算）；要不要改成实测实体框并集，由编码原型定。
+
+### 3.6 共享 WebGL 渲染器
+
+- **函数进不了 Worker**：契约拆两半——`CardDef.canvas = { kind, programId }`（可序列化）+ 同目录的独立模块 `<id>.gl.ts`（不 import React / DOM，导出 `uniforms` / `build` / `draw`）；Worker 是模块 Worker，经注册表 `src/render/gl/programs.ts`（`import.meta.glob`）按 `programId` 取；主线程退路用同一张表。
+- 两条路线统一画法：上下文 `antialias: false`，每个图集画在多重采样 FBO 上，`blitFramebuffer` 解析到默认帧缓冲再裁位图（WebGL2 不允许往多重采样的绘制缓冲 blit）。探针 `gl-atlas-probe.mjs` 第一件事先验这条。
+- 一拍的顺序写死：推时钟并提交 DOM → `beat` → 等 `done`（慢帧等在这里）→ 贴位图 → 等真实一帧 → 发 `frame`。导出页在 `__pcSetT` 触发的那次 `useLayoutEffect` 里发 `beat` 并领帧票。
+- 三种契约共用 `textures?` 声明；`dom2d` 不带函数（卡自己在主线程画，只登记同拍落定）。
+- 三张 three.js 用户卡不在仓库，在 `%LOCALAPPDATA%\PromptCut\runtime\app\src\cards\user\`；没迁移的旧 canvas 卡照旧能跑。
+- `costs.device` 里的路线取**生效值**（项目选项优先，否则按低内存档）。
+- 验收分路线写：路线 1 每个舞台文档恰好 1 个上下文、在 Worker 里；路线 2 舞台文档 0 个、父页 Worker 里 1 个。
+
+### 3.7 在线浏览器模式里与渲染有关的一条
+
+canvas 重卡**不活渲**（与 pinned 渲染 7、平台一节、不做清单冲突）：和 DOM 重卡同一规则，按拍换快照，装不下就透明，暂停追到活渲。
+
+---
+
+## 4. 路径对照（解耦之后；底稿里的旧路径一律按这张表换）
+
+| 底稿里的写法 | 现在 |
+|---|---|
+| `src/kernel/Stage.tsx`、`src/kernel/PartTree.tsx` | `src/render/Stage.tsx`、`src/render/PartTree.tsx` |
+| `src/render/frameMode.mjs` | `src/kernel/frameMode.mjs` |
+| `src/editor/dataMirror.ts`、`src/editor/prerender.ts`、`src/editor/left/contentBox.ts` | `src/render/` 下同名文件 |
+| `src/parts/types.ts`、`src/parts/registry.ts` | `src/kernel/partTypes.ts`、`src/kernel/partRegistry.ts` |
+| `right/index.tsx` 的 `frameLayoutOf` / `contentLayoutOf` / `measureContentBoxes` | `src/mcp/common.ts:90` / `:97` / `:42` |
+| `mcpExecutor.ts` 里按工具名的 `else if` 分支 | `src/mcp/routes.mjs` 的路由表（`get_layout` 的 `awaited` 在表里） |
+| `scripts/export-frames.mjs` 的 `bakeFrames` / `step` / `warmUp` / `__pcSetFrameWindow` 调用 / `onSnapshot` / `snapshotOnly` 守卫 / `onFrame` | `server/bakery/bake.mjs:28` / `:125` / `:189` / `:81-82` / `:266-270` / `:281` / `:309` |
+| `export-frames.mjs` 的 `newSession` / `openBakery` | `server/bakery/chrome.mjs:162` / `:298` |
+| `scripts/capture-snapshot.mjs`、`capture-frame.mjs`、`frame-media.mjs`、`frame-ready.mjs` | `server/bakery/` 下同名文件 |
+| `findFfmpeg` | `server/bakery/ffmpeg.mjs` |
+| `vite-plugin-vision.ts` 的 `ensureGif` | `server/vision/routes.ts:198` |
+| `vite-plugin-vision.ts` 的 `enqueue`（优先级队列） | `server/vision/render-queue.ts:115` |
+| `vite-plugin-vision.ts` 里写死 `lane: 'agent'` 的那一支 | `server/vision/render.ts:73` |
+| 常驻 Chrome worker 池 | `server/vision/worker-pool.ts` |
+| `frameCode` 的 `CAPTURE_FILES` / `FREEZE_FILES` | `server/frame-code.mjs:19` / `:70`（内容已指向 `server/bakery/*`） |
+
+没动的：`src/StageView.tsx`、`src/ExportView.tsx`、`src/editor/Preview.tsx`、`src/render/{stageRpc,snapshotFreeze,snapshotRename,solid,FrameScene,stageClock,pinAnimations,frameWindow,changedClips,cardCostKey}`、`src/editor/stageBridge.ts`、`server/{frame-pipeline,card-identity,card-cache,snapshot-store,mirror-store,costs-store}.mjs`、`server/vite-plugin-{mirror,costs,frames,media,cards,prerender,ai}.ts`。其中 `server/frame-pipeline.mjs`（1155 行）是后面改动最集中的文件，行号以当前文件为准：`acquireUser:256`、`fillCardControls:799`、`isolatedCardProject:855`、`rasterPrefix:893`、`layout:931`、`updatePlayback:1049`、`stopPlayback:1107`。
+
+pinned 架构 4 / 5 的落点因为 vision 拆分而变清楚了：**Agent 专用 Chrome 的优先通道改 `worker-pool.ts` 的取任务逻辑；AI 菜单操作预览的插队改 `render-queue.ts` 的入队位置**，两处互不牵连。
+
+---
+
+## 5. 重整后的步骤（只含渲染管线；每步单独可验收、可回滚）
+
+### R0 清账（半天）
+1. 主工作区的探针改动和 `docs/g0-a-webview2-probe.md` 提交（等你点头；内容见第 2 节）。
+2. `result_decouple.md` 6.2 的遗留：`vite.config.ts:76-80` 的 `server.watch.ignored` **已经有** `**/out/**`，报告说冷启动仍被 `out/frame-library/` 拖慢——先量一次仓库根 dev server 的冷启动，确认慢在哪（监听器初扫还是别处）再动；最省事的兜底是给 `frame-library` 加 GC（原 F1）。
+3. 给 `AGY-TASK-cloud-doc-and-write-race.md` 文首加一句「渲染管线部分以 `render_pipeline_restructure.md` 为准」。
+
+### R1 差异样式内联收尾（原 3b 步）
+- 把 worktree 里的改动挪到当前 main 上重做一遍（它基于 `b5c65dc`，`frame-code.mjs` 和探针脚本引用的路径都已搬家，直接合并会冲突；`src/render/snapshotFreeze.ts` 和新模块 `freezeStyleProps.mjs` 可以原样取）。
+- **先按 3.8 改名拆文件**（`createSnapshot` / `inlineDOMStyles` / `rasterizeCanvas`，页面协议和 `snapshotCode` 一起改），再把差异内联的逻辑放进 `inlineStyles.ts`。
+- 探针和成本记录按 3.8 拆成 `stepMs` / `inlineMs` / `rasterMs` / `serializeMs`，判重只看 `stepMs`。
+- 比对口径照底稿第 111 版 A2(8)：继承属性和父元素的计算值比、布局解析值属性一律内联、其余和同标签基线比；基线按 `namespaceURI + tagName + themeId` 缓存，SVG 用 `createElementNS`；canvas 换 `<img>` 按 IMG 的基线另算。
+- 成本记录：`mode` 拼进 `device`；探针写回显式 `demoted: false`；类型声明补 `mode`。
+- **验收（那个 worktree 没交报告，全部重跑）**：`scripts/verify-unified-frames.mjs` 通过；`lottie-bodymovin` / `growth-curve` / `odometer` / `scene-3d` 内联前后位图逐像素比对；导出逐字节基线不变；DOM 卡 p90 ≤ 300 KB、canvas 卡位图 ≤ 1 MB；`npm test`、`tsc`。
+- 两张仍超 300 KB 的 `lottie-*`：改走 lottie 的 canvas 渲染器，或在审阅表标 `prerender: false`（新开关），二选一。
+- `configurePreviewServer` 那部分降级：不再是后续步骤的准入，做完了就留着给在线浏览器模式用。
+
+### R2 双舞台与协议补齐（不改用户可见行为；legacy 默认开）
+第二个舞台 iframe、两个舞台端口、跨源 + OAC 头、`stageId` A / B、角色闸门、`whenStageReady` / `pushProject`、`play` / `pause` / 六种事件的真实实现、`RenderAborted` 补全、单飞队列（补跑 > 页面侧测量 > 探针）。验收：`stage-rpc-probe.mjs` 在跨源下复跑；A 舞台死循环 2.5 秒时父页最坏帧间隔 < 20 ms。
+
+### R3 舞台内容（E7 + E4b）
+素材层搬进舞台（3.2 的搬家清单）、`FrameScene` 的 live 变体与全部新 props、快照 / 抑制 / 等待三种类与样式表、四种计时方式虚拟化。验收：`placeholder` 模式全长导出逐字节不变；快照挂上、摘掉、换帧时卡片组件实例不变。
+
+### R4 探针与分派（K1 常驻半、K2）
+加载遮罩下逐张测（靠 `whenStageReady('back')`）、两趟布尔探针（`vtOk` / `seekOk`）、`planPipelines`（两端同一份纯函数）、成本记录链（3.3、3.8）。门槛 = `stepMs > B`。 验收：底稿 K 节的四个算例；`unknown` 卡照常参加贪心。
+
+### R5 播放与追帧（K3、K4、K5、K6）
+轻卡三条跳转路、节拍器（3.2 的绝对时刻排程）、两路追帧与角色互换、降级闭环。验收：60 Hz 屏上 24 / 25 / 30 / 60 fps 的 `frame` 间隔；暂停后重卡追到活渲；播放到头后最后一帧是活渲。
+
+### R6 数据面（C2～C5、J3、F5、D5 的服务端部分）
+锚帧优先、就绪索引与 SSE 直连、`wanted` 四处、快照来源接口、重启恢复、`interactive` 参数与 `streamPool`。验收：冷缓存拖动贴区间起点快照；杀掉预渲染进程再拖，索引按键重建。
+
+### R7 露出舞台（原子切换）
+摘掉舞台 iframe 的 `opacity: 0`、删主文档的 `mediaRects`、非 legacy 下停掉 `Preview` 的 rAF 循环、`?preview=legacy` 回滚。R2～R6 都在同一分支上、都在 legacy 后面，这一步才翻开关。验收：底稿「D5 + E + K」那一条总验收 + 零卡顿（主文档长任务为 0）。
+
+### R8 轨道流（G）
+先做编码原型（吞吐、编码耗时、alpha 误差、严格 GOP 参数、裁剪矩形取法），再按 3.5 实现，挂 `streams` 开关。**是否现在做，见第 7 节第 2 条。**
+
+### R9 共享 WebGL 渲染器（M）
+先 `gl-atlas-probe.mjs`，再按 3.6 做两条路线，迁移 `scene-3d` 和三张用户卡。
+
+依赖：R1 → R4（探针数据）；R2 → R3 → R5；R4 → R5；R6 可与 R3～R5 并行；R7 在 R2～R6 之后；R8 依赖 R5、R6；R9 依赖 R3、R5。
+
+---
+
+## 6. 不在本文范围、但已经有审查结论的部分
+
+第 75 轮对云端 / 文档服务那一半（原第 5～10 步）查出的问题和我的处理意见，逐条记在旧 scratchpad 的 `r75/fold-notes.md`（173 行），要点：第 5、6 步顺序倒置（卡片源码同步和快照清单要用本机文档服务，应挪到第 6 步）；内容库要补一套 WebSocket 消息；素材上传统一走分片并补「已收分片」查询；`uploaded` 要按两档分开记；B4 的期望版本只约束 Agent 写工具；模式切换时 `projectRev` 不能归零；拆分模式下 AI 菜单的动图预览不能被路由进 Agent 专用 Chrome。这些我已经在任务书的一份**副本**上改了三部分（`unknown` 口径、文档服务与 B / D 节、数据面与 F 节，共 46 处），**没有落到正本**；要不要继续把任务书正本更新到第 112 版，等你说。
+
+---
+
+## 7. 需要你拍板的
+
+1. **（已定，2026-09-22）判重门槛只看活渲耗时；生成快照的耗时拆成样式内联 / 画布栅格化 / 序列化三个数单独上报。** pinned 渲染 5 的那一句已按你在弹窗里确认的原文替换。以下是当时的依据——pinned 渲染 2 的 t_m_c / t_c 是渲染耗时；pinned 渲染 5 说探针「记得加上截图 or HTML 保存花费时间 t_s_c」，底稿（第 57 版起，按你当时的决定）把它加进了判重的那个数。实测后果见第 2 节：含冻结 37 / 62 判重，不含 0 / 62。我的建议：**判重只看不含冻结的单帧最差 `stepMs`；冻结时间单独记，只用来排探针和预渲染的产能**。这样绝大多数卡全程活渲，重管线只服务真正重的卡。
+2. **轨道流现在做不做。** 如果第 1 条按我的建议定，高频清单里没有一张卡需要流；pinned 渲染 10 要求有流，我的建议是保留 R8，但排在 R7（露出舞台）之后，等出现真实的重卡再开工，先只做编码原型。
+3. pinned 架构 1 的两处措辞（审查者的建议，我没动）：「H264 流式传输」是否也约束原片（我的读法：H264 指先传的小分辨率版，原片保持原编码；另加一条——原片不是浏览器可放的编码时预览不换档）；「单词操作块」疑为「单次操作块」的错字。
+4. pinned 渲染 10 首句「每个舞台文档只开一个 WebGL 上下文……舞台 iframe 里开的一个 Web Worker」和同段后文的路线 2（上下文在父页）行文对不上，要不要调整句序。
+5. `src/editor/Preview.tsx:116` 和 `:605` 的注释里各有一处约定禁用的旧词，顺手改不改。
