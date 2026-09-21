@@ -51,6 +51,8 @@ export interface EntropyHost {
   __pcStageClock?: { now(): number };
   __pcResetRandom?: (seed?: number) => void;
   __pcEntropyPinned?: boolean;
+  /** 接管前的真 `Date.now`(E4b 的口子;舞台那边 stageClock 会更早存一次,这里不覆盖) */
+  __pcRealDateNow?: () => number;
 }
 
 export function installPinnedEntropy(host: EntropyHost = window as unknown as EntropyHost): void {
@@ -79,6 +81,8 @@ export function installPinnedEntropy(host: EntropyHost = window as unknown as En
   };
   const pinnedNow = () => PINNED_EPOCH_MS + Math.round(pageMs());
   const RealDate = host.Date;
+  // E4b 的口子:接管之后 Date.now() 是虚拟时间,量真墙钟的地方要拿得到原来那份
+  host.__pcRealDateNow ??= RealDate.now.bind(RealDate);
   // 共用原型:`x instanceof Date`、`Date.prototype` 上的方法都照旧
   function PinnedDate(this: unknown, ...args: unknown[]) {
     if (!new.target) return new RealDate(pinnedNow()).toString();          // Date() 当函数调 = 读时钟

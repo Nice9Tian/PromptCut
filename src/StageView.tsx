@@ -75,6 +75,14 @@ function layoutKeyOf(p: Project): string {
 const realNow = () => (window.__pcRealNow ?? (() => Date.now()))();
 /** 等浏览器真画一帧(接管之后 requestAnimationFrame 进的是舞台队列) */
 const realRaf = () => new Promise<void>((r) => (window.__pcRealRaf ?? window.requestAnimationFrame)(() => r()));
+/**
+ * **舞台自身的墙钟定时器一律用真实的**(E4b)。`window.setTimeout` 被 `stageClock` 换成了
+ * 登记在虚拟时钟上的 fake timer —— 暂停态虚拟时钟不动,用它的话 `.pc-awaiting` 的 500 ms 兜底
+ * 一辈子不响、卡片永久隐身;legacy 那条 `SETTLE_MS` 防抖同理会永远不触发。
+ * 虚拟定时器的 id 从 1e9 起,所以被接管后的 `clearTimeout` 对真 id 会自己转交回去,直接用即可。
+ */
+const realSetTimeout = (cb: () => void, ms: number): number =>
+  (window.__pcRealSetTimeout ?? window.setTimeout.bind(window))(cb, ms);
 
 const isProjectPatch = (v: unknown): v is ProjectPatch =>
   !!v && typeof v === "object" && (((v as ProjectPatch).kind === "full" && "project" in (v as object)) || ((v as ProjectPatch).kind === "tracks" && "order" in (v as object)));
@@ -211,7 +219,7 @@ export default function StageView() {
     const scheduleSample = () => {
       if (!proxyAllowed() || ref.current.proxy) return;
       window.clearTimeout(sampleTimer);
-      sampleTimer = window.setTimeout(() => {
+      sampleTimer = realSetTimeout(() => {
         const root = rootRef.current;
         if (root && !ref.current.proxy) sampleAll(root);
       }, 120);
@@ -339,7 +347,7 @@ export default function StageView() {
             const changed = changedCardClips(prev, full);
             const tt = ref.current.t;
             if (changed.length && changed.some((c) => cardMountedAt(c, tt))) {
-              ref.current.settle = window.setTimeout(() => legacyJump(ref.current.t), SETTLE_MS);
+              ref.current.settle = realSetTimeout(() => legacyJump(ref.current.t), SETTLE_MS);
             }
           }
         }
