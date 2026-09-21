@@ -210,7 +210,7 @@ pinned 架构 4 / 5 的落点因为 vision 拆分而变清楚了：**Agent 专�
 - 比对口径照底稿第 111 版 A2(8)：继承属性和父元素的计算值比、布局解析值属性一律内联、其余和同标签基线比；基线按 `namespaceURI + tagName + themeId` 缓存，SVG 用 `createElementNS`；canvas 换 `<img>` 按 IMG 的基线另算。
 - 成本记录：`mode` 拼进 `device`；探针写回显式 `demoted: false`；类型声明补 `mode`。
 - **验收（那个 worktree 没交报告，全部重跑）**：`scripts/verify-unified-frames.mjs` 通过；`lottie-bodymovin` / `growth-curve` / `odometer` / `scene-3d` 内联前后位图逐像素比对；导出逐字节基线不变；DOM 卡 p90 ≤ 300 KB、canvas 卡位图 ≤ 1 MB；`npm test`、`tsc`。
-- 两张仍超 300 KB 的 `lottie-*`：改走 lottie 的 canvas 渲染器，或在审阅表标 `prerender: false`（新开关），二选一。
+- 两张仍超 300 KB 的 `lottie-*`：不处理（见第 7 节「已定的」）。
 - `configurePreviewServer` 那部分降级：不再是后续步骤的准入，做完了就留着给在线浏览器模式用。
 
 ### R1b 像素映射分流与 GPU 后端（不依赖别的步骤；R3 之前必须完成）
@@ -255,13 +255,13 @@ pinned 架构 4 / 5 的落点因为 vision 拆分而变清楚了：**Agent 专�
 **还没定的**
 
 1. **（已定，2026-09-22）轨道流的编码原型现在就做、不等 R7**：用户明确要面向低配机、60 fps 下保证流畅。原型（原 G0-b：解码吞吐、编码耗时与 alpha 误差、严格 GOP 参数、fMP4 切分、裁剪矩形取法）已派 Opus 在子 worktree 里做，只产出探针、数据和报告，不碰主线；R8 的实现仍排在 R7 之后。粒子卡迁不迁进 Worker 还没定——我的建议是不迁（tsParticles 是 2D canvas + 主线程库，迁 = 用 WebGL 重写粒子引擎，而它的稳定活渲成本只有 1.4～3.8 ms）。
-2. 两张仍超 300 KB 的 `lottie-*` 卡：改走 lottie 的 canvas 渲染器，还是在审阅表标 `prerender: false`（R1 的遗留）。
-3. `src/editor/Preview.tsx:116` 和 `:605` 的注释里各有一处约定禁用的旧词，顺手改不改。
-4. 任务书正本（`AGY-TASK-cloud-doc-and-write-race.md`）里云端那一半要不要更新到第 112 版（第 6 节）。
+2. `src/editor/Preview.tsx:116` 和 `:605` 的注释里各有一处约定禁用的旧词，顺手改不改。
+3. 任务书正本（`AGY-TASK-cloud-doc-and-write-race.md`）里云端那一半要不要更新到第 112 版（第 6 节）。
 
 **已定的（2026-09-22，pinned 的对应条目都已按弹窗确认的原文改写）**
 
 - 判重门槛只看活渲耗时；生成快照的耗时拆成样式内联 / 画布栅格化 / 序列化三个数单独上报（pinned 渲染 5；本文 3.1 第 3 条、3.8）。
 - 素材两档：小版由上传方本机转码、云端不转码；逐个素材先小版后原片，两份都传完才下一个；拉取时有小版先拉小版再换原片（pinned 架构 1；本文第 6 节）。「单词操作块」改成了「单次操作块」。
 - 同一个舞台的所有 canvas 卡共用一个 WebGL 上下文和一个 Worker，放在哪见两条路线，导出页自己开一个（pinned 渲染 10；本文 3.6）。
+- 两张仍超 300 KB 的 lottie 卡不做专门处理：它们不判重、不进预渲染集合、根本不生成快照；原来的二选一作废，换成一条通用兜底——任何超限的快照帧不进就绪索引、不投递，那一层按缺料处理并记诊断（`docs/plan/r2-r7-task.md` 的 A3c）。
 - 像素映射由工具主动分流：整帧调色走 `create_filter` 的 `curves` / `matrix`，要逐像素的走 WebGL 后端，R1b 里做完，不设「先拒绝」的过渡期（本文 3.9）。
