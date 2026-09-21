@@ -35,6 +35,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { createRequire } from 'node:module';
 import { spawn } from 'node:child_process';
 import puppeteer from 'puppeteer';
 
@@ -53,8 +54,17 @@ const keep = has('--keep');
 const outJson = flag('--json');
 const origin = (originArg || `http://127.0.0.1:${port}`).replace(/\/+$/, '');
 
+/**
+ * **带 `headless=1`**:`Editor.tsx:148-158` 在项目里一张卡都没有时会塞 10 张演示卡,
+ * 只有 `?headless=1` 不塞。不带的话「第一轮」测的是那 10 张演示卡,等验收用的那 20 张
+ * 建好时遮罩已经不该再出现了(K1:新添加的卡在后台补测、不挡界面),
+ * 验收的第 1 条就验不成了。`headless` 只影响演示卡、素材迁移对话框和左栏预热,
+ * 和探针、舞台、成本记录都不相干。
+ */
+const EDITOR_URL = '/?editor&headless=1&preview=stage';
+
 const fails = [];
-const out = { origin, stagePorts: stagePortsOf(port) };
+const out = { origin, editorUrl: EDITOR_URL, stagePorts: stagePortsOf(port) };
 const check = (cond, label, extra) => {
   if (!cond) fails.push(label + (extra !== undefined ? ' :: ' + JSON.stringify(extra) : ''));
   return cond;
@@ -69,8 +79,15 @@ let server = null;
 
 async function startServer() {
   if (originArg) return null;   // 挂到别人起的那台上（那时 out/ 的隔离由调用方负责）
-  const proc = spawn(process.platform === 'win32' ? 'npx.cmd' : 'npx',
-    ['vite', '--port', String(port), '--strictPort', '--host', '127.0.0.1'],
+  /*
+   * 直接拿 node 跑 vite 的 bin,不走 `npx` —— Windows 上 spawn 一个 .cmd 不带 shell 会 EINVAL,
+   * 带 shell 又要为路径里的空格操心。bin 的位置由 Node 自己解析(worktree 里没有
+   * node_modules,解析会沿目录往上找到主仓库那一份)。
+   */
+  // `vite/bin/vite.js` 不在 package.json 的 exports 里,解析包根再自己拼路径
+  const viteBin = path.join(path.dirname(createRequire(import.meta.url).resolve('vite/package.json')), 'bin', 'vite.js');
+  const proc = spawn(process.execPath,
+    [viteBin, '--port', String(port), '--strictPort', '--host', '127.0.0.1'],
     { cwd: path.resolve(import.meta.dirname, '../..'), env: { ...process.env, PROMPTCUT_DATA_DIR: dataDir }, stdio: ['ignore', 'pipe', 'pipe'] });
   const log = [];
   proc.stdout.on('data', (b) => log.push(String(b)));
@@ -111,7 +128,8 @@ const GATE_WATCHER = () => {
     window.__gateNow = !!el;
     if (el) window.__gateSeen = true;
   };
-  new MutationObserver(scan).observe(document.documentElement, { childList: true, subtree: true });
+  // `evaluateOnNewDocument` 跑在 documentElement 存在**之前**,所以观察的是 document 本身
+  new MutationObserver(scan).observe(document, { childList: true, subtree: true });
   scan();
 };
 
@@ -158,7 +176,7 @@ try {
   page.on('pageerror', (e) => errors.push(String(e)));
   page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
   await page.evaluateOnNewDocument(GATE_WATCHER);
-  await page.goto(origin + '/?editor&preview=stage', { waitUntil: 'domcontentloaded', timeout: 180000 });
+  await page.goto(origin + EDITOR_URL, { waitUntil: 'domcontentloaded', timeout: 180000 });
   await page.waitForSelector('iframe[data-pc="stage-frame"]', { timeout: 180000 });
   // 两个跨源舞台都登记好了(E1)
   await page.waitForFunction(async () => {
@@ -292,7 +310,7 @@ try {
   const page2 = await browser.newPage();
   await page2.setViewport({ width: 1600, height: 1000 });
   await page2.evaluateOnNewDocument(GATE_WATCHER);
-  await page2.goto(origin + '/?editor&preview=stage', { waitUntil: 'domcontentloaded', timeout: 180000 });
+  await page2.goto(origin + EDITOR_URL, { waitUntil: 'domcontentloaded', timeout: 180000 });
   await page2.waitForSelector('iframe[data-pc="stage-frame"]', { timeout: 180000 });
   await page2.waitForFunction(async () => {
     const m = await import('/src/editor/stageBridge.ts');
@@ -317,7 +335,7 @@ try {
   const page3 = await browser.newPage();
   await page3.setViewport({ width: 1600, height: 1000 });
   await page3.evaluateOnNewDocument(GATE_WATCHER);
-  await page3.goto(origin + '/?editor&preview=stage', { waitUntil: 'domcontentloaded', timeout: 180000 });
+  await page3.goto(origin + EDITOR_URL, { waitUntil: 'domcontentloaded', timeout: 180000 });
   await page3.waitForSelector('iframe[data-pc="stage-frame"]', { timeout: 180000 });
   await page3.waitForFunction(async () => {
     const m = await import('/src/editor/stageBridge.ts');
