@@ -211,7 +211,7 @@ async function handleExportStart(req: Connect.IncomingMessage, res: ServerRespon
       job.child = child;
       /*
        * 记账(render-pool-state.mjs):导出也起 Chrome、也吃核,渲染池算槽位时要把它算进去,
-       * 而且导出期间暂停空闲预烘(docs/decoupling-plan.md 3.3 节「导出优先级最低」)。
+       * 而且导出期间暂停空闲预渲染(docs/decoupling-plan.md 3.3 节「导出优先级最低」)。
        * 结束只记一次:子进程起不来时可能只有 error 没有 close,两条路都要收。
        */
       exportBegin();

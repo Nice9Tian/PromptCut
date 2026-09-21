@@ -25,7 +25,7 @@ import { exportsRunning, onPoolChange } from "../render-pool-state.mjs";
  * # 为什么分优先级
  *
  * 原来这里是一条 promise 链,严格先来后到 —— 那时候队里只有用户自己触发的请求,先来后到
- * 就是对的。有了空闲预烘之后队里长期排着一堆没人等的活,用户一拖进度条,他正盯着的那张
+ * 就是对的。有了空闲预渲染之后队里长期排着一堆没人等的活,用户一拖进度条,他正盯着的那张
  * 就得排在它们后面:实测跳到一个新位置要 **19.5 秒**才出画面,而单张只要 4 秒。
  *
  * 插队只插**还没开始**的:正在跑的那几个 Chrome 不打断(打断等于白烧几秒)。
@@ -54,7 +54,7 @@ export function maxConcurrentRenders(): number {
 /**
  * **永远给前台留一个槽位。**
  *
- * 插队(priority)只解决「谁先排」,解决不了「有没有位子」:空闲预烘会把池子填满,
+ * 插队(priority)只解决「谁先排」,解决不了「有没有位子」:空闲预渲染会把池子填满,
  * 于是用户改完一张卡、正盯着屏幕等的那一张,得先等某个没人等的活跑完才有槽位。
  * 实测过一次 13.6 秒 —— 插队是生效的,可它前面那 7 个都已经在跑了,插队插不进正在跑的。
  *
@@ -67,7 +67,7 @@ function pumpRenderQueue() {
   const max = maxConcurrentRenders();
   /*
    * 导出也占槽位(它自己起 Chrome,不走这个队列,见 render-pool-state.mjs)。
-   * 按计划 3.3 节:导出期间**空闲预烘整个暂停** —— 预烘是给 3D 视图猜着先烘的,导出时用户多半
+   * 按计划 3.3 节:导出期间**空闲预渲染整个暂停** —— 预渲染是给 3D 视图猜着先渲的,导出时用户多半
    * 不在看;Agent 的活照常,还能用上导出之外的全部槽位(导出最多占 max - 1 个,默认按资源自动分片)。
    */
   const exporting = exportsRunning();
@@ -89,7 +89,7 @@ function pumpRenderQueue() {
 }
 
 /**
- * priority 越大越先跑。前台(用户正等着看的)传 1,空闲预烘用默认的 0。
+ * priority 越大越先跑。前台(用户正等着看的)传 1,空闲预渲染用默认的 0。
  *
  * `queueTimeoutMs`:**排队等太久就别等了。**
  *
@@ -104,7 +104,7 @@ export function cancelError(): Error {
   return Object.assign(new Error("请求方已经不要这张图了,渲染已取消"), { cancelled: true });
 }
 
-// 导出一结束,被暂停的预烘接着派
+// 导出一结束,被暂停的预渲染接着派
 onPoolChange(() => pumpRenderQueue());
 
 /**

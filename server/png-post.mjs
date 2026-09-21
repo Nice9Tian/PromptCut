@@ -68,7 +68,7 @@ export function shrink(png, maxEdge = MAX_EDGE) {
 /**
  * 把透明底压平到一个底色上(原地改)。`hex` 是六位十六进制(不带 #)。
  *
- * 这个选择只该在**烘的时候**做一次:不传 = 透明底,物体在卡片没画的地方也透空(挖空观感,
+ * 这个选择只该在**预渲染的时候**做一次:不传 = 透明底,物体在卡片没画的地方也透空(挖空观感,
  * 适合标志 / 招牌);传了 = 实心物体表面印着这张卡。
  */
 export function flatten(png, hex) {
@@ -84,7 +84,7 @@ export function flatten(png, hex) {
   return png;
 }
 
-/** 全透明像素占比,保留三位小数。烘出一张空图时它是 1 —— bake_card 靠它提醒「这张卡在这一刻没画东西」 */
+/** 全透明像素占比,保留三位小数。渲出一张空图时它是 1 —— bake_card 靠它提醒「这张卡在这一刻没画东西」 */
 export function transparentRatio(png) {
   let clear = 0;
   for (let i = 3; i < png.data.length; i += 4) if (png.data[i] === 0) clear++;

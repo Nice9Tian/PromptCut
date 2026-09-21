@@ -16,7 +16,7 @@ import { repushMirror } from "./vite-plugin-mirror";
  * (Windows 上子进程默认继承父进程的 BELOW_NORMAL),所以 Agent 同时开几个 Chrome 在渲,
  * 系统也会先把 CPU 分给编辑器和界面自己那对热备渲染器。
  *
- * 页面从 /api/prerender/info 拿到它的地址,挂得久的请求(预烘、动图、导出进度)直接发过去。
+ * 页面从 /api/prerender/info 拿到它的地址,挂得久的请求(预渲染、动图、导出进度)直接发过去。
  */
 
 /** 连续崩几次就不再重启,免得一个起不来的进程被无限拉起 */

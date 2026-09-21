@@ -20,7 +20,7 @@ export const RENDER_TIMEOUT_MS = 120000;
  */
 export const CANCEL_GRACE_MS = 15000;
 
-/** 一趟烘焙要告诉渲染进程的全部东西。字段名和 server/bakery 的 opts 一致 */
+/** 一趟预渲染要告诉渲染进程的全部东西。字段名和 server/bakery 的 opts 一致 */
 export interface RenderJobOpts {
   url: string;
   out: string;
@@ -33,7 +33,7 @@ export interface RenderJobOpts {
 /**
  * # 常驻渲染 worker 池
  *
- * 以前每烘一次就 spawn 一个 node、起一个 Chrome、烘完整个进程退掉。**这笔固定开销比烘焙本身
+ * 以前每渲一次就 spawn 一个 node、起一个 Chrome、渲完整个进程退掉。**这笔固定开销比预渲染本身
  * 大一个数量级**,实测(1920×1080,只要第 0 帧,vite 和 Chrome 都已经热着):
  *
  * ```
@@ -53,7 +53,7 @@ export interface RenderJobOpts {
  *
  * 不是这里保证的,是 server/bakery/chrome.mjs 里 `bakery.reset()` 保证的:每趟开一个**全新的 page**
  * (全新 renderer,从没被启用过虚拟时间,和全新起一个浏览器等价),旧 page 立刻关掉。
- * 那边有逐字节比对过的实测数据(复用烘的 vs 全新起浏览器烘的,四趟两两 6/6 全 0 帧)。
+ * 那边有逐字节比对过的实测数据(复用渲的 vs 全新起浏览器渲的,四趟两两 6/6 全 0 帧)。
  * 这里只负责**别把一个可疑的 worker 继续用下去**:超时、崩了、报过错的一律杀掉重开
  * (worker 自己那边还有一层,见 render-worker.mjs 的「三条自保规矩」)。
  *
@@ -91,7 +91,7 @@ export interface RenderWorker {
    * 前台专用。**后台的活一律不许碰它。**
    *
    * 池子按并发上限分配槽位本来就给前台留了一格,但那只解决「有没有位子」,解决不了
-   * 「位子上那个 Chrome 是不是热的」:后台预烘会把所有已有的 worker 占满,于是用户
+   * 「位子上那个 Chrome 是不是热的」:后台预渲染会把所有已有的 worker 占满,于是用户
    * 松手要图时只能现开一个 —— 又是一次开机。留一个专属的、预热好的、永不闲置退出的,
    * 用户拖到哪儿松手都有人立刻接住。
    */
@@ -185,8 +185,8 @@ export function spawnWorker(root: string, reserved = false): RenderWorker {
  *
  *   前台(用户松手正等着看的那一张)—— 只用 reserved 那个:它是热的、专属的、永不闲置退出,
  *     后台再忙也占不到它。派走之后**立刻再备一个热的**,免得用户连着拖两次时第二次没人接。
- *   后台(空闲预烘)—— 只用非 reserved 的,没有空闲的就再开一个。
- *     **绝不碰 reserved**:预烘一个活五六秒,占住它这套东西就白做了。
+ *   后台(空闲预渲染)—— 只用非 reserved 的,没有空闲的就再开一个。
+ *     **绝不碰 reserved**:预渲染一个活五六秒,占住它这套东西就白做了。
  *
  * 池子的并发上限(见 pumpRenderQueue)管的是「有没有位子」,这里管的是
  * 「位子上那个 Chrome 是不是热的」—— 两件事,缺一个用户都得干等一次开机。
@@ -203,17 +203,17 @@ function pickWorker(root: string, priority: number): RenderWorker {
   return w;
 }
 
-/** 手上没有空闲的前台 worker 了就再开一个并预热 —— 「开烘之后立刻备一个」的落点 */
+/** 手上没有空闲的前台 worker 了就再开一个并预热 —— 「开渲之后立刻备一个」的落点 */
 function ensureSpareWorker(root: string) {
   if (renderWorkers.some((x) => x.reserved && !x.busy && !x.dead)) return;
   spawnWorker(root, true);
 }
 
 /**
- * 跑一趟烘焙。单张和批量共用同一套超时 / 报错处理。
+ * 跑一趟预渲染。单张和批量共用同一套超时 / 报错处理。
  *
  * 超时的处理和以前一样是**杀进程**,但杀的是整个 worker(连它守着的 Chrome)——
- * 卡住的页面留着比重开一个贵:下一趟在它上面烘出来的东西不可信,而且不报错。
+ * 卡住的页面留着比重开一个贵:下一趟在它上面渲出来的东西不可信,而且不报错。
  */
 /** 一帧交出去之前的像素活,由渲染 worker 做(server/png-post.mjs 的 postFrame) */
 export interface PostItem {
@@ -226,7 +226,7 @@ export interface PostItem {
 }
 
 /**
- * 一趟渲染活:先烘帧(opts),再可选地做后处理(post 在烘帧结束后才调,那时素材层也抽好了)。
+ * 一趟渲染活:先渲帧(opts),再可选地做后处理(post 在渲帧结束后才调,那时素材层也抽好了)。
  * post 返回 null = 什么都不用做,调用方直接读帧文件。
  */
 export interface RenderJob2 {
@@ -239,9 +239,9 @@ export type Runner = (job: RenderJob2, signal?: AbortSignal) => Promise<any[] | 
 
 /**
  * 给一个 worker 发一条消息,等它回话。超时就连 worker 带 Chrome 一起杀掉
- * (卡住的页面留着比重开一个贵:下一趟在它上面烘出来的东西不可信,而且不报错)。
+ * (卡住的页面留着比重开一个贵:下一趟在它上面渲出来的东西不可信,而且不报错)。
  *
- * `signal` 拨了就不等了:烘帧那一种顺手叫 worker 停下(它在两帧之间停,只换页不换浏览器),
+ * `signal` 拨了就不等了:渲帧那一种顺手叫 worker 停下(它在两帧之间停,只换页不换浏览器),
  * 这边立刻返回「已取消」。worker 那边随后回来的那条 error 找不到等它的人,直接丢掉。
  */
 function callWorker(
@@ -297,7 +297,7 @@ function callWorker(
 }
 
 /**
- * 在这个 worker 上跑完一整趟:烘帧,然后(需要的话)后处理。**同一个 worker 做两步**:
+ * 在这个 worker 上跑完一整趟:渲帧,然后(需要的话)后处理。**同一个 worker 做两步**:
  * 帧文件就在它刚写的目录里,而且整趟算一个槽位,调度那边不用拆开记账。
  * 结束时放掉 busy —— 不管成功、失败还是取消。
  */
@@ -312,7 +312,7 @@ export async function runOnWorker(w: RenderWorker, job: RenderJob2, signal?: Abo
       throw Object.assign(e instanceof Error ? e : new Error(String(e)), { notStarted: !entry.started });
     }
     if (!job.post) return null;
-    // 烘完帧才发现调用方已经不要了:后处理就不做了
+    // 渲完帧才发现调用方已经不要了:后处理就不做了
     if (signal?.aborted) throw cancelError();
     const items = await job.post();
     if (!items || !items.length) return null;

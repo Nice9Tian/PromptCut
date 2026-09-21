@@ -1,5 +1,5 @@
 /**
- * 素材来源解析:页面按地址 fetch 的那些素材,ffmpeg 该去哪儿读,以及烘帧前的素材层规划。
+ * 素材来源解析:页面按地址 fetch 的那些素材,ffmpeg 该去哪儿读,以及渲帧前的素材层规划。
  *
  * 从 scripts/export-frames.mjs 拆出来(纯重构,逐字搬运)。
  */
@@ -110,7 +110,7 @@ async function loadProject(url, outDir) {
 }
 
 /**
- * 烘帧之前先把素材层规划好:每段素材从哪儿读、有没有 alpha,以及哪些帧底下有素材
+ * 渲帧之前先把素材层规划好:每段素材从哪儿读、有没有 alpha,以及哪些帧底下有素材
  * (那些帧要截毛玻璃遮罩;底下没素材的帧,玻璃背后只有灰底,模不模糊都一样)。
  */
 async function planMedia(opts, outDir, ffmpegCmd) {

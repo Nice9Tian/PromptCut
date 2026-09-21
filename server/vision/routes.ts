@@ -30,7 +30,7 @@ import { createUiRenderer } from "./ui-renderer";
  * 编辑器这一端的 vision 接口。
  *
  * 渲染池、导出、Agent 看图都在预渲染进程里(vite.prerender.config.ts),这里只留:
- *   - /api/ui-render/bake-batch:用户前台烘焙,走上面那对热备渲染器;
+ *   - /api/ui-render/bake-batch:用户前台渲染,走上面那对热备渲染器;
  *   - 老地址(/api/vision/*、/api/ai/visual):原样转给预渲染,给还没改成直连的调用方兜底。
  */
 export function registerEditorSide(server: ViteDevServer, root: string) {
@@ -69,7 +69,7 @@ export function registerEditorSide(server: ViteDevServer, root: string) {
          *
          * 热备渲染器的打断 / 挤掉规则是给「用户又换了一个时刻」用的:新请求来了,旧请求才开始的那张就不要了。
          * 要是把同一批的几张一起交出去,它们会互相打断、互相挤掉 —— 实测一批 N 张只成两三张,其余回
-         * 「被新请求替换」,3D 视图还会弹一句「N 张没烘出来」。一个请求的几张是一体的,不该互相竞争。
+         * 「被新请求替换」,3D 视图还会弹一句「N 张没渲出来」。一个请求的几张是一体的,不该互相竞争。
          * 顺序渲不慢:热备是为「立刻有人接」,不是为一批里的并行。
          */
         for (const [clipId, ts] of byClip) {
@@ -390,7 +390,7 @@ export function registerPrerenderSide(server: ViteDevServer, root: string) {
              *
              * see_frames 是模型正阻塞着等的那一张 —— 前台里最前台的。可它原来用默认
              * priority,于是掉进 pumpRenderQueue 给后台留的那道限制里:后台只能用到
-             * `max - 1` 个槽位,而且要和空闲预烘按先来后到排。也就是说,那个「永远给
+             * `max - 1` 个槽位,而且要和空闲预渲染按先来后到排。也就是说,那个「永远给
              * 前台留一个槽位」的设计恰好把真正的前台挡在了外面。
              *
              * 排队看门狗给 25 秒:加上渲染自己的 120 秒上限,合起来 145 秒,刚好落在
@@ -423,34 +423,34 @@ export function registerPrerenderSide(server: ViteDevServer, root: string) {
       });
 
       /**
-       * POST /api/vision/bake { project, clipId, t, size } —— 把一张卡烘成透明底 PNG 存进素材库。
+       * POST /api/vision/bake { project, clipId, t, size } —— 把一张卡预渲染成透明底 PNG 存进素材库。
        *
        * 和 /snapshot 是同一条渲染管线(isolateClip + renderOneFrame),差别只有两点:
        * 不缩图(纹理要原尺寸),以及把结果**落盘**成 `/@media/<name>.png` 而不是塞进上下文给模型看。
        *
        * # 为什么这条路不会让预览和导出分叉
        *
-       * 因为烘焙是**一次性的、发生在更早**的一步:画这张图的就是导出成片的那个渲染器
+       * 因为预渲染是**一次性的、发生在更早**的一步:画这张图的就是导出成片的那个渲染器
        * (server/bakery/)。之后预览和导出都只是加载同一个文件,谁都不做栅格化。
        * 「浏览器里没有 DOM → 位图的原语」这句话是对的,但它推不出「所以做不了」——
        * 只要不要求**当场**栅格化,服务端这条管线本来就产得出那张位图。
        *
        * # 它是快照,不是活的
        *
-       * 卡片的动画定格在 t 那一帧;卡片参数改了纹理不会跟着变,要重新烘。
+       * 卡片的动画定格在 t 那一帧;卡片参数改了纹理不会跟着变,要重新渲。
        * 这个限制看得见(画面明显停住),所以可以接受 —— 静默的分叉才是不能接受的那种。
        */
       /**
        * POST /api/vision/bake-batch { project, clips: [{clipId, t}], size, bg } —— 一次问一批。
        *
        * 给 3D 视图用的(不是 MCP 工具,Agent 那边用单张的 bake_card 就够)。
-       * 实现上就是**顺着烘**,快在缓存:文件名按「输入」算哈希(卡片内容 + t + size + bg),
+       * 实现上就是**顺着渲**,快在缓存:文件名按「输入」算哈希(卡片内容 + t + size + bg),
        * 所以同一张卡同样的参数只会真渲一次,之后开多少次 3D 视图都是文件已存在、直接返回。
        *
        * 试过把 N 张摊进一个项目的 N 个时间槽、一趟渲完,实测 4 张 18.7 秒,而单张 4.7~6.5 秒 ——
        * 一点没快:瓶颈不是起 Chrome,是那条路要**逐帧走完整条时间轴**(4 张卡摊开就是 120 帧),
        * 而 bakeFrames 的 --frames 只收连续区间,挑不出那 4 帧。所以那条路撤掉了,
-       * 真正的快法是命中缓存 —— 用户手里的卡大多是烘过的,这也正是「一般不用代理」的前提。
+       * 真正的快法是命中缓存 —— 用户手里的卡大多是预渲染过的,这也正是「一般不用代理」的前提。
        */
       server.middlewares.use("/api/vision/bake-batch", (req, res) => {
         if (req.method !== "POST") return sendJson(res, 405, { ok: false, error: "POST only" });
@@ -467,15 +467,15 @@ export function registerPrerenderSide(server: ViteDevServer, root: string) {
             const baked: any[] = [];
             const failed: any[] = [];
             const pri = Number(priority) > 0 ? 1 : 0;
-            // 预烘那边一换计划就会掐掉在飞的批次:断开之后这一批还没开渲的全部摘掉,别占着 Chrome
+            // 预渲染那边一换计划就会掐掉在飞的批次:断开之后这一批还没开渲的全部摘掉,别占着 Chrome
             const signal = abortOnClose(res);
             /*
              * **先按卡分组。** 同一张卡的几个时刻合成一趟渲(见 bakeClip):导出脚本从第 0 帧顺推,
-             * 「烘第 F 帧」已经把 0..F 推了一遍,同一张卡里其余 ≤F 的时刻是顺路白捡的。
+             * 「渲第 F 帧」已经把 0..F 推了一遍,同一张卡里其余 ≤F 的时刻是顺路白捡的。
              * 实测同一张卡 7 个时刻:分趟 31.0s → 一趟 2.7s,而且逐字节相同。
              *
              * 分组**不改批次的先后**:调用方按离播放头的距离排好序发过来,这里用 Map 保持首次出现的
-             * 顺序,所以最近的那张卡仍然第一个开渲 —— 「先烘播放头附近」这条没有被牺牲。
+             * 顺序,所以最近的那张卡仍然第一个开渲 —— 「先渲播放头附近」这条没有被牺牲。
              */
             const byClip = new Map<string, number[]>();
             for (const c of clips) {
@@ -502,17 +502,17 @@ export function registerPrerenderSide(server: ViteDevServer, root: string) {
         });
       });
       /**
-       * POST /api/vision/bake-status { project, clips: [{clipId, t}], size, bg } —— 预烘焙的「盘点」。
+       * POST /api/vision/bake-status { project, clips: [{clipId, t}], size, bg } —— 预渲染的「盘点」。
        *
-       * 只查不烘:告诉调度器**哪些已经烘好了、各自多大**,以及磁盘上还躺着哪些
+       * 只查不渲:告诉调度器**哪些已经渲好了、各自多大**,以及磁盘上还躺着哪些
        * 这个项目里已经用不到的旧文件(orphans)。
        *
        * 为什么必须由服务端来答:缓存在磁盘上,而浏览器关一次页面就全忘了 ——
-       * 上次开编辑器烘出来的文件,前端一个都不认识。要是让前端只按自己这次的记录算占用,
+       * 上次开编辑器预渲染出来的文件,前端一个都不认识。要是让前端只按自己这次的记录算占用,
        * 那 out/media 会一直涨,因为没人认领的文件永远不会被数到,也就永远不会被删。
        *
-       * 键的算法只有 bakeTarget 一处(烘焙、盘点、清理三方共用),所以不会出现
-       * 「明明烘过却当成没烘」或者「把正在用的文件删了」这种对不上账的事。
+       * 键的算法只有 bakeTarget 一处(预渲染、盘点、清理三方共用),所以不会出现
+       * 「明明预渲染过却当成没渲」或者「把正在用的文件删了」这种对不上账的事。
        */
       server.middlewares.use("/api/vision/bake-status", (req, res) => {
         if (req.method !== "POST") return sendJson(res, 405, { ok: false, error: "POST only" });
@@ -536,7 +536,7 @@ export function registerPrerenderSide(server: ViteDevServer, root: string) {
                 const hit = onDisk.get(key);
                 items.push({ clipId: c.clipId, t: Number(c.t), key, name, url, bytes: hit ? hit.bytes : null });
               } catch (e: any) {
-                // 素材段之类烘不了的,如实报出来,别让调度器一直重试
+                // 素材段之类渲不了的,如实报出来,别让调度器一直重试
                 items.push({ clipId: c.clipId, t: Number(c.t), key: null, bytes: null, error: e?.message || String(e) });
               }
             }
@@ -548,7 +548,7 @@ export function registerPrerenderSide(server: ViteDevServer, root: string) {
             const orphans = [...onDisk.values()].filter((f) => !mine.has(f.key));
             const totalBytes = [...onDisk.values()].reduce((s, f) => s + f.bytes, 0);
             /*
-             * concurrency:池子多大,预烘按它决定一次发几张才喂得满。
+             * concurrency:池子多大,预渲染按它决定一次发几张才喂得满。
              * running:此刻真有几个渲染在跑。后台最多用到 concurrency-1(留一个给前台),
              *   所以这两个数是「槽位有没有留住」唯一可信的观测口。
              *
@@ -559,7 +559,7 @@ export function registerPrerenderSide(server: ViteDevServer, root: string) {
             sendJson(res, 200, {
               ok: true, items, orphans, totalBytes, fileCount: onDisk.size,
               concurrency: maxConcurrentRenders(), running: renderRunning,
-              // 常驻 worker 有几个活着。冷的时候是 0,烘过之后应该稳定在并发用到的那个数上;
+              // 常驻 worker 有几个活着。冷的时候是 0,渲过之后应该稳定在并发用到的那个数上;
               // 要是它一直等于 running 又不停变,说明 worker 在被反复杀掉重开(见 killWorker)
               workers: renderWorkers.length,
               // 前台专属的那个热 Chrome 在不在。它应该长期是 1 —— 掉到 0 就说明常驻没留住
@@ -572,10 +572,10 @@ export function registerPrerenderSide(server: ViteDevServer, root: string) {
       });
 
       /**
-       * POST /api/vision/bake-evict { keys: ["a1b2c3d4e5f6", ...] } —— 删掉这些烘焙文件。
+       * POST /api/vision/bake-evict { keys: ["a1b2c3d4e5f6", ...] } —— 删掉这些预渲染文件。
        *
        * 传的是键(12 位哈希),不是路径:要删哪个文件由服务端列目录比对,
-       * 所以这个口子碰不到 out/media 以外的东西,也碰不到烘焙以外的文件。
+       * 所以这个口子碰不到 out/media 以外的东西,也碰不到预渲染以外的文件。
        */
       server.middlewares.use("/api/vision/bake-evict", (req, res) => {
         if (req.method !== "POST") return sendJson(res, 405, { ok: false, error: "POST only" });
@@ -606,7 +606,7 @@ export function registerPrerenderSide(server: ViteDevServer, root: string) {
             if (!project || !Array.isArray(project.tracks)) return sendJson(res, 400, { ok: false, error: "缺少 project" });
             if (!clipId) return sendJson(res, 400, { ok: false, error: "缺少 clipId:烘焙只能对着一张卡" });
             // 和 /snapshot 同理:bake_card 是模型正阻塞着等的一次调用,在预渲染池里排最前(priority 1),
-            // 不该排在空闲预烘后面。fit 保持默认的 square —— 贴图要正方形
+            // 不该排在空闲预渲染后面。fit 保持默认的 square —— 贴图要正方形
             const signal = abortOnClose(res);
             const out = await bakeOne(root, originOf(server), resolveMediaUrls(project).project, clipId, Number(t), size, bg, "square", 1, undefined, { signal });
             sendJson(res, 200, { ok: true, ...out });

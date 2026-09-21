@@ -154,7 +154,7 @@ function PAGE_PRELUDE() {
 /**
  * 在一个已经起好的浏览器里开一个**全新的、受帧控制的 page**,导航到导出页、等页面就绪。
  *
- * 为什么每趟都开新 page:页面上有动画锚点、已挂载的卡片、推到片尾的状态,原地再烘一趟拿到的不是
+ * 为什么每趟都开新 page:页面上有动画锚点、已挂载的卡片、推到片尾的状态,原地再渲一趟拿到的不是
  * 第 0 帧的画面。新 page 是一个全新的 renderer,和全新起一个浏览器等价。
  * 页面必须用 `Target.createTarget({ enableBeginFrameControl: true })` 开 —— `browser.newPage()`
  * 开出来的页面不受帧控制,beginFrame 对它无效。
@@ -290,10 +290,10 @@ async function installHeadlessShell() {
 const DEFAULT_URL = 'http://127.0.0.1:5190/?export=1';
 
 /**
- * 开一个「烘焙间」:起浏览器、导航到导出页、等页面就绪。
+ * 开一个「预渲染间」:起浏览器、导航到导出页、等页面就绪。
  *
  * 单独拆出来是为了让常驻进程(scripts/render-worker.mjs)复用同一个浏览器:冷启动要几秒,
- * 复用只要换一个 page。复用姿势:每趟烘帧之前调一次 `await bakery.reset(project, url)`,然后 bakeFrames。
+ * 复用只要换一个 page。复用姿势:每趟渲帧之前调一次 `await bakery.reset(project, url)`,然后 bakeFrames。
  */
 export async function openBakery(opts = {}) {
   const url = opts.url || DEFAULT_URL;
@@ -336,7 +336,7 @@ export async function openBakery(opts = {}) {
     /**
      * 换一趟新的:开一个全新 page(可选地把项目灌进去),换掉 bakery 上的 page/client,再关掉旧 page。
      * 旧 page 必须关:每趟漏一个不关,renderer 进程线性泄漏(这台机器多开 Chrome 复现过 0xC0000142)。
-     * `nextUrl` 换一个导出页地址再开 —— 常驻 worker 每趟烘的是不同的隔离项目,项目由页面自己去 fetch。
+     * `nextUrl` 换一个导出页地址再开 —— 常驻 worker 每趟渲的是不同的隔离项目,项目由页面自己去 fetch。
      */
     async reset(project, nextUrl, options = {}) {
       const old = bakery.page;
