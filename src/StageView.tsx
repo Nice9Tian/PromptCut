@@ -1434,6 +1434,8 @@ export default function StageView() {
        */
       async setRole(role, opts = {}) {
         if (role === "back" && opts.job === "bake") return { ok: false, reason: "unsupported" as const };
+        // K5 (6):刚补跑完的后台舞台转正时要报一次 `settled`,父页据此收尾
+        const wasCatchUp = ref.current.role === "back" && ref.current.job === "catchup";
         ref.current.role = role;
         ref.current.job = role === "back" ? opts.job ?? "probe" : undefined;
         if (role === "back") {
@@ -1449,6 +1451,9 @@ export default function StageView() {
           catchUpGen.current++;
           // 同一次提交里把全部平面和类去掉 —— 互换那一拍新 `back` 不能还盖着旧画面
           commitPlanes();
+        } else if (wasCatchUp) {
+          // K5 (6):新 `front` post 一次 `{ type: 'settled', sec, clipIds: [] }`
+          postStageEvent({ type: "settled", sec: ref.current.t, clipIds: [] });
         }
         return { ok: true };
       },

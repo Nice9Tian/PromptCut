@@ -345,9 +345,22 @@ export async function deliverSnapshots(stage: StageRpcClient, role: StageRole, h
   return sent;
 }
 
+/**
+ * K3(b)：播放中正在等后台补跑的 `vtOk = false` **轻卡**也要抑制（藏子树、`t` 冻住）。
+ * 它没有流平面也没有快照，抑制 = 透明 —— 这就是 pinned 渲染 6 的「不可见」，
+ * 等待期间用户看不到它用错状态跳变。互换之后这份就清空（新 `front` 的 `H(T)` 里没有它）。
+ */
+let extraSuppressed: readonly string[] = [];
+export function setExtraSuppressed(clipIds: readonly string[]): void {
+  extraSuppressed = [...clipIds];
+}
+
 /** 这一刻该抑制哪几张（播放中才有，C5 / K5） */
 export function suppressedAt(head: Playhead): string[] {
-  return head.playing ? planFeed(head).heavy : [];
+  if (!head.playing) return [];
+  const heavy = planFeed(head).heavy;
+  if (!extraSuppressed.length) return heavy;
+  return [...new Set([...heavy, ...extraSuppressed])].sort();
 }
 
 /** 测试用 */

@@ -21,6 +21,8 @@ import "./preview/preview.css";
 import { atFrameGrid } from "../render/frameGrid";
 import { contentStartOf } from "./timeline/utils";
 import { deliverSnapshots, markBaselineReset, noteSettled, pickForSetTime, stopSnapshotFeed, suppressedAt, syncSnapshotSubscription } from "./snapshotFeed";
+import { playingCatchUpTargets, runPlayingSwap, runSettleSwap, setSwapHost, swapInFlight } from "./stageSwap";
+import { flushSync } from "react-dom";
 
 /**
  * 中央预览:视频层 + 动效渲染面,按容器缩放。播放循环也在这里(rAF 推进 store.t)。
@@ -304,7 +306,12 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
       for (const id of STAGE_IDS) {
         const win = frames[id].current?.contentWindow;
         if (!win || e.source !== win) continue;
-        const role = INITIAL_ROLE_OF[id];
+        /*
+         * 这个实例此刻该是什么角色。**不能一律照 `INITIAL_ROLE_OF` 走** ——
+         * K5 的互换之后 A 可能已经是后台那一个了,它热重载一次就会顶着 `front` 回来、
+         * 把真正的可见舞台顶掉。
+         */
+        const role = frontIdRef.current === id ? "front" : "back";
         rpcRef.current[id]?.dispose();
         const client = createStageRpc(win, stageTargetOrigin(id));
         rpcRef.current[id] = client;
@@ -391,6 +398,47 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
   }, [dual, stageReady]);
 
   /*
+   * K5 (4) 的角色互换。**A / B 只是实例名**,谁是 `front` 由这个 state 说了算 ——
+   * 起手 A,互换之后就换过来了。两件事必须在**一次 React 提交**里做完:
+   * 对调两个 iframe 的可见性,和把「当前 front」指针切过去(`stageBridge` 的登记)。
+   *
+   * 后台那个只能用 `opacity: 0; pointer-events: none` 藏 —— `display: none` /
+   * `visibility: hidden` 会让整份 OOPIF 退出渲染树,`requestVideoFrameCallback` 不再回调,
+   * K5 (3) 的 `mediaReady` 就只能等到超时(见 K5 (4) 的说明)。
+   */
+  const [frontId, setFrontId] = useState<StageId>("A");
+  const frontIdRef = useRef<StageId>("A");
+  frontIdRef.current = frontId;
+  const swapRoles = useCallback(() => {
+    const cur = frontIdRef.current;
+    const nextId: StageId = cur === "A" ? "B" : "A";
+    const nextFront = rpcRef.current[nextId];
+    if (!nextFront) return null;
+    const nextBack = rpcRef.current[cur];
+    frontIdRef.current = nextId;
+    flushSync(() => setFrontId(nextId));
+    setStageClient("front", nextFront, hostCapsRef.current[nextId]);
+    setStageClient("back", nextBack, hostCapsRef.current[cur]);
+    // 新 front 的抑制集合从零开始记
+    suppressedRef.current = "";
+    return { front: nextFront, back: nextBack };
+  }, []);
+  useEffect(() => {
+    if (!dual) return;
+    setSwapHost({
+      swapRoles,
+      // 2D 预览**不加 proxy=1**(见下面 iframe 那段注释),所以互换后重发的也是 false
+      proxy: () => false,
+      // A1 的换档那条路还没有消费方(R3 只把口子留在签名上)
+      localHashes: () => [],
+    });
+    return () => setSwapHost(null);
+  }, [dual, swapRoles]);
+
+  /** 这一轮播放已经为哪几张卡发起过互换(别每拍都发一次) */
+  const swapTriedRef = useRef(new Set<string>());
+
+  /*
    * 舞台事件的分发(E0 的七种;来源过滤在 stageBridge 里按角色做完了)。
    *
    * 监听只登记一次,所以里面读的一律是 ref / store,不读闭包里的 state。
@@ -405,6 +453,17 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
         actions.tick(e.sec);
         // 这一拍的抑制集合和快照(C5:播放中发 setSuppressed(H(t)) + setSnapshots)
         void pumpRef.current();
+        /*
+         * K3(b) 的 `vtOk = false` 轻卡:播放头刚进入它时整场景在后台补跑后互换。
+         * 每张卡这一轮播放只发起一次 —— 补跑一次要几百毫秒,每拍发一次只会互相掐。
+         */
+        if (!swapInFlight()) {
+          const targets = playingCatchUpTargets(getState().project, e.sec).filter((id) => !swapTriedRef.current.has(id));
+          if (targets.length) {
+            for (const id of targets) swapTriedRef.current.add(id);
+            void runPlayingSwap(targets);
+          }
+        }
         if (!prev) break;
         const stalled = now - prev > MEDIA_STALL_MS;
         if (stalled === stalledRef.current) break;
@@ -574,6 +633,11 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
     }
     void refreshRects();
     void pumpRef.current();
+    /*
+     * K5 第二路:只要这一刻有一张判重卡是 `vtOk = false`,就让后台舞台整场景补跑、
+     * 补完互换成精确活渲。`vtOk` 的那些已经在可见舞台里自己追了(K5 第一路,舞台侧)。
+     */
+    if (dualRef.current && opts.settle) void runSettleSwap(sec);
   }, [stage, refreshRects]);
   useEffect(() => {
     if (!stageReady) return;
@@ -609,6 +673,7 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
       lastFrameAtRef.current = 0;
       stalledRef.current = false;
       setMediaStalled(false);
+      swapTriedRef.current = new Set();
       void (async () => {
         try {
           const reply = await s.play(tRef.current);
@@ -884,8 +949,10 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
                   display: "block",
                   background: "transparent",
                   colorScheme: "normal",
-                  // R7 才摘掉它(那一步露出舞台);R2 两个 iframe 都照旧全透明
+                  // R7 才摘掉它(那一步露出舞台);R5 两个 iframe 都照旧全透明
                   opacity: 0,
+                  // 后台那个还要挡掉指针 —— K5 互换之后 A 可能就是后台那一个
+                  ...(frontId === "A" ? null : { pointerEvents: "none" as const }),
                 }}
               />
               {dual && (
@@ -910,7 +977,7 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
                      * 量出来的实体框退回整屏。`opacity: 0` 保留布局和渲染,只是看不见。
                      */
                     opacity: 0,
-                    pointerEvents: "none",
+                    ...(frontId === "B" ? null : { pointerEvents: "none" as const }),
                   }}
                 />
               )}

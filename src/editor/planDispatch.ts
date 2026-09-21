@@ -46,6 +46,11 @@ export function currentCosts(): CardCostRecord[] {
   return costs;
 }
 
+/** 这一刻生效的可调系数（舞台经 `setPlan` 拿的是同一份，K3 / K5 分档要一致） */
+export function currentTuning(): PipelineTuning {
+  return tuning;
+}
+
 function recompute(): void {
   if (!project) {
     plan = null;
