@@ -5,7 +5,7 @@ import { buildAudioPlan } from "../../server/bakery/mux-audio.mjs";
 import { tools } from "../../server/mcp-tools.mjs";
 
 test("clip volume: independent gain, validation, undo, split, separation and export", async () => {
-  const server = await createServer({ configFile: false, server: { middlewareMode: true }, appType: "custom", optimizeDeps: { noDiscovery: true, include: [] } });
+  const server = await createServer({ configFile: false, server: { middlewareMode: true, hmr: false, watch: null }, appType: "custom", optimizeDeps: { noDiscovery: true, include: [] } });
   try {
     const { actions, getState } = await server.ssrLoadModule("/src/store/project.ts");
     const { createEmptyProject, audioClipsAt, videoLayersAt } = await server.ssrLoadModule("/src/kernel/project.ts");

@@ -19,7 +19,7 @@ function fixture() {
 }
 
 test("序列工具:列、删、改、挪,门槛和撤销", async () => {
-  const server = await createServer({ configFile: false, server: { middlewareMode: true }, appType: "custom", optimizeDeps: { noDiscovery: true, include: [] } });
+  const server = await createServer({ configFile: false, server: { middlewareMode: true, hmr: false, watch: null }, appType: "custom", optimizeDeps: { noDiscovery: true, include: [] } });
   try {
     const { actions, getState } = await server.ssrLoadModule("/src/store/project.ts");
     const { createEmptyProject } = await server.ssrLoadModule("/src/kernel/project.ts");

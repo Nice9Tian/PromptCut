@@ -6,7 +6,7 @@ import { createServer } from "vite";
 import { tools } from "../../../server/mcp-tools.mjs";
 
 test("音频效果库:建、挂、改、删,门槛、撤销、跨剪辑清理、音画分离跟着走", async () => {
-  const server = await createServer({ configFile: false, server: { middlewareMode: true }, appType: "custom", optimizeDeps: { noDiscovery: true, include: [] } });
+  const server = await createServer({ configFile: false, server: { middlewareMode: true, hmr: false, watch: null }, appType: "custom", optimizeDeps: { noDiscovery: true, include: [] } });
   try {
     const { actions, getState } = await server.ssrLoadModule("/src/store/project.ts");
     const { createEmptyProject } = await server.ssrLoadModule("/src/kernel/project.ts");
