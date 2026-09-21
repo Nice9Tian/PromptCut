@@ -81,7 +81,7 @@ export function paintedBoxRect(el: Element, box: PaintedBox): DOMRect | null {
 
 /**
  * 画布里真正画了东西的那块,**画布像素坐标**,已按取样步长外扩一格并夹回 0..w / 0..h。
- * 冻结快照(snapshotFreeze)把它写成 `data-pc-painted-box`;null = 整块空白或读不到像素。
+ * 生成快照(snapshot/rasterizeCanvas)把它写成 `data-pc-painted-box`;null = 整块空白或读不到像素。
  * 不做视口换算 —— 现有 `canvasBox` 返回的是视口 DOMRect,写进属性会让快照绑死在预渲染时的位置。
  */
 export function canvasPaintedBox(el: HTMLCanvasElement, px: CanvasPixels | null = canvasPixels(el)): PaintedBox | null {

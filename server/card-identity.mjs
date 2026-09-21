@@ -93,14 +93,14 @@ const ratio = value => {
  * 不进键:x / y / anchor / scale / rotate、不透明度、淡入淡出、motion、强调 ——
  * A2(5) 之后这些不在快照里,同一份共享快照挂到两个位置,各自画在自己的框里。
  * 进键:参数、源码版本、片段时长、采样相位、fps、框宽高、画幅、`camera3dFov`、
- * parts、主题 id、`fontFingerprint`、`freezeCode`、`capabilities`(审阅表内容,
+ * parts、主题 id、`fontFingerprint`、`snapshotCode`、`capabilities`(审阅表内容,
  * 已经在节点里)。
  */
 export function cardSnapshotIdentity(node, {
   definition, style = {}, environment = {}, sourceVersions = {}, sourceVersion,
   inputKeys = {}, fps, sampling, phase = sampling?.phase, duration,
   stage = {}, frame, frameWidth, frameHeight,
-  themeId, fontFingerprint = '', freezeCode = '',
+  themeId, fontFingerprint = '', snapshotCode = '',
 } = {}) {
   const { id: _id, inputs: _inputs, definitionId: _definitionId, clipId: _clipId, ...stripped } = node ?? {};
   const usedStyle = definition ? selectedCardStyle(definition, style) : stripped.adapter === 'chrome' ? style : {};
@@ -116,7 +116,7 @@ export function cardSnapshotIdentity(node, {
       fps: ratio(fps), phase: ratio(phase), duration,
       stage: { width: parent.width, height: parent.height, camera3dFov: stage.camera3dFov },
       frame: { width: frameWidth ?? size.w, height: frameHeight ?? size.h },
-      themeId, fontFingerprint, freezeCode,
+      themeId, fontFingerprint, snapshotCode,
     },
   });
 }

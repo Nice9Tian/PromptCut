@@ -90,7 +90,7 @@ Motion 靠 `Object.hasOwnProperty.call(Element.prototype, 'animate')` 判断浏�
 
 ## 9. SVG url(#id) 序列化形式（探针结论）
 
-冻结快照(`server/bakery/bake.mjs` 调的 `__bfFreeze`)要把 id 统一改名,并同步改掉 `url(#…)` / `href="#…"`。
+生成快照(`server/bakery/bake.mjs` 调的 `__pcCreateSnapshot`)要把 id 统一改名,并同步改掉 `url(#…)` / `href="#…"`。
 现有正则 `:215` 的字符类是 `[^)"'&]*`,把 `&` 排除在外。疑点:预渲染页地址含 `&`
 (`server/frame-pipeline.mjs:183` 的 `'/?export=1&timeline='`),要是 Chrome 把 `fill` 解析成
 **带页面 URL 的绝对形式**,`outerHTML` 会把 `&` 写成 `&amp;`,这条正则就一条都匹配不上 ——
@@ -143,6 +143,6 @@ url 引用  /url\((&quot;|["'])?([^)"']*?)(&quot;|["'])?\)/   取最后一个 `#
 都和预渲染页不一样)上,不能带着预渲染页的地址。不带 `#` 的 `url()`(`/@media/<hash>` 那类)不碰。
 
 三条并成**一条**交替正则跑一趟,不是分三轮:分轮改的话第二轮会撞上第一轮刚写出来的新 id。
-`<style>` 文本里的 `#id` **选择器**不改名(和预渲染侧 `__r` 一样)——`__bfFreeze` 已经把计算样式
+`<style>` 文本里的 `#id` **选择器**不改名(和预渲染侧 `__r` 一样)——`__pcCreateSnapshot` 已经把计算样式
 整份内联,样式表规则已被内联值盖掉;全仓两处 `<defs>` 也都写在卡片自己的 `<svg>` 里,不靠样式表选中。
 `<style>` 里的 `url(#id)` 则会跟着元素一起改,方向是安全的。

@@ -12,7 +12,7 @@
  *     setProject 掐掉在飞的 render 回 { aborted: true, reason: 'project' };
  *     render({ probe: true }) 每帧 post 一条 probe-frame,frames 与事件数一致;
  *   - hitTest / rectsWithBounds 照常工作,17 轨 × 10 卡下 rectsWithBounds({ pixels: 'selected' }) ≤ 5 ms;
- *   - 舞台页挂了 __bfFreeze,冻出来的 controls 是包裹层 innerHTML(不含 data-pc-clip)。
+ *   - 舞台页挂了 __pcCreateSnapshot,快照的 controls 是包裹层 innerHTML(不含 data-pc-clip)。
  *
  * 测试页由 puppeteer 请求拦截临时提供(同源,免得 CORS / postMessage 的 targetOrigin 问题),仓库里不留静态页。
  * 输出 JSON 结论到 stdout;任何一条不过就以非零退出。
@@ -177,7 +177,7 @@ try {
   await page.evaluate(async () => { await window.__rpc.setTime(2); await new Promise((r) => setTimeout(r, 800)); });
   const frozen = await page.evaluate(() => {
     const w = document.getElementById('f').contentWindow;
-    const f = w.__bfFreeze();
+    const f = w.__pcCreateSnapshot();
     const c3 = f.controls.find((c) => c.id === 'c-3d');
     // 不用 <img[^>]* 正则:内联样式几十万字节,回溯太慢;直接找属性
     const pi = c3 ? c3.html.indexOf('data-pc-painted-box="') : -1;
@@ -185,7 +185,7 @@ try {
     return { controls: f.controls.length, first: f.controls[0] ? { id: f.controls[0].id, hasClipAttr: /data-pc-clip=/.test(f.controls[0].html), hasProxyPlane: /data-pc-proxy-plane/.test(f.controls[0].html), len: f.controls[0].html.length } : null, sceneAttr: /data-pc-scene/.test(f.html), painted: painted ? painted.slice(1).map(Number) : null, canvasLeft: c3 ? /<canvas/.test(c3.html) : null };
   });
   out.frozen = frozen;
-  check(frozen.controls > 0 && frozen.first && !frozen.first.hasClipAttr && !frozen.first.hasProxyPlane, 'stage __bfFreeze controls are wrapper innerHTML without data-pc-clip', frozen);
+  check(frozen.controls > 0 && frozen.first && !frozen.first.hasClipAttr && !frozen.first.hasProxyPlane, 'stage __pcCreateSnapshot controls are wrapper innerHTML without data-pc-clip', frozen);
   // A2(4):三维卡的 canvas 换成了带 data-pc-painted-box 的 <img>,坐标是画布像素坐标(小于整块画布)
   check(frozen.painted && frozen.canvasLeft === false && frozen.painted[2] > 0 && frozen.painted[2] < 1920, 'frozen scene-3d canvas became <img data-pc-painted-box> in canvas pixel coords', frozen);
 

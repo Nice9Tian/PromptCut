@@ -11,7 +11,7 @@ import { cardSourceVersion } from "./render/cardSourceVersion.mjs";
 import { builtinCardSourceFiles } from "./render/cardSourceFiles.mjs";
 import { projectCardGraph } from "./kernel/cardGraph.mjs";
 import { planFrameWindow } from "./render/frameWindow.mjs";
-import { freezeScene } from "./render/snapshotFreeze";
+import { createSnapshot } from "./render/createSnapshot";
 import { solidApi } from "./render/solid";
 import { settleDom } from "./render/snapshotSettle";
 import { installFrameMedia } from "./render/frameMedia";
@@ -145,9 +145,9 @@ export default function ExportView() {
           return clipFrameMode(clip, getCard(clip.cardId));
         });
       window.__pcExportMs = 0;
-      // 排空 / 冻结:原来由 export-frames.mjs(现 server/bakery/chrome.mjs)的 PAGE_PRELUDE 注入,现在是页面 bundle 的一部分(J1)。
+      // 排空 / 生成快照:原来由 export-frames.mjs(现 server/bakery/chrome.mjs)的 PAGE_PRELUDE 注入,现在是页面 bundle 的一部分(J1)。
       window.__bfSettle = settleDom;
-      window.__bfFreeze = () => freezeScene(document.querySelector("[data-pc-scene]"));
+      window.__pcCreateSnapshot = () => createSnapshot(document.querySelector("[data-pc-scene]"));
       // D3(c):实体几何的导出面,只给 puppeteer 侧 page.evaluate 用(/api/cards/layout 对快照 DOM 量 contentBox),页面内部不经它
       window.__pcSolid = solidApi;
       window.__pcCanvasBox = solidApi.canvasPaintedBox;

@@ -7,7 +7,7 @@ import { prerenderState } from "./prerender-client.mjs";
 /**
  * K1 探针记录的 HTTP 面(目标 K/K1)。**两个进程都挂这一份插件**,和 A7 的镜像一样。
  *
- *   GET  /api/data/costs?device=<字符串>   → { ok, device, costs }
+ *   GET  /api/data/costs?device=<字符串>[&mode=dev|build]   → { ok, device, mode, costs }
  *   PUT  /api/data/costs  { records: [] }  → { ok, count, added, updated }
  *
  * # 为什么预渲染那一端也要挂
@@ -95,8 +95,10 @@ export function costsPlugin(): Plugin {
         const method = String(req.method || "GET").toUpperCase();
         if (method === "GET") {
           const device = query(req, "device");
-          const costs = filterCosts(loadCosts(root), device);
-          return sendJson(res, 200, { ok: true, device: device ?? null, costs });
+          // mode(dev | build):分派用当前运行模式的记录(任务书 3.1);缺字段的旧记录当 dev
+          const mode = query(req, "mode");
+          const costs = filterCosts(loadCosts(root), device, mode);
+          return sendJson(res, 200, { ok: true, device: device ?? null, mode: mode ?? null, costs });
         }
         if (method !== "PUT" && method !== "POST") return sendJson(res, 405, { ok: false, error: "GET / PUT only" });
         readBody(req, res, (d) => {

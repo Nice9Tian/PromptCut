@@ -34,14 +34,14 @@ const FORBIDDEN = {
  *
  * `src/kernel/clock.ts` 里是 `declare global { interface Window { … } }`:
  * 页面上那些 `window.__pc*` 全局钩子由渲染层安装(solid / stageRpc / frameWindow /
- * snapshotFreeze),声明却必须集中在一处,不然每个用到 window.__pcSolid 的文件都要
+ * createSnapshot),声明却必须集中在一处,不然每个用到 window.__pcSolid 的文件都要
  * 自己 declare 一遍、还会互相冲突。它是**纯类型**的 `import('…')`,编译后一行代码
  * 都不剩;真要拆,得把这些全局的类型也一起搬进 kernel,而那些类型描述的就是渲染
  * 层对象本身,搬下来等于把渲染层的接口抄一份。代价大于收益,先留着。
  */
 const ALLOWED = new Set([
   "src/kernel/clock.ts -> src/render/frameWindow.mjs",
-  "src/kernel/clock.ts -> src/render/snapshotFreeze.ts",
+  "src/kernel/clock.ts -> src/render/createSnapshot.ts",
   "src/kernel/clock.ts -> src/render/solid.ts",
   "src/kernel/clock.ts -> src/render/stageRpc.ts",
 ]);

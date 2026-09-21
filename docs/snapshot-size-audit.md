@@ -1,11 +1,11 @@
 # A3c 快照体积审计（高频清单实测）
 
-实测日期 2026-09-17。跑法：`node scripts/probes/snapshot-size-probe.mjs --origin http://127.0.0.1:5197`，
+实测日期 2026-09-22。跑法：`node scripts/probes/snapshot-size-probe.mjs --origin http://127.0.0.1:5197`，
 dev 模式的 dev server（`/src/*` 现场变换），后台舞台（`?stage=1&id=back`，`setRole('back', { job: 'probe' })`）。
-每张卡一条轨道一个 `4` 秒的 clip、参数取默认值，fps 30；在 0.3 s / 中点 / 收尾前 0.1 s 三个本地时刻各冻一次
+每张卡一条轨道一个 `4` 秒的 clip、参数取默认值，fps 30；在 0.3 s / 中点 / 收尾前 0.1 s 三个本地时刻各生成一次快照
 （`stateful` 卡用 `render(t, { jump: true, maxCatchUp: Infinity })` 真推到那一刻，`direct` 卡用 `setTime(t)`），
-取三次里最大的一帧。量的是 `window.__bfFreeze()` 回来的 `controls[0].html` —— 也就是包裹层 innerHTML、
-计算样式已全部内联的**原始**体积，不含投递前的 deflate + base64。
+取三次里最大的一帧。量的是 `window.__pcCreateSnapshot()` 回来的 `controls[0].html` —— 也就是包裹层 innerHTML、
+差异样式已内联的**原始**体积，不含投递前的 deflate + base64。
 
 机器：Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/152.0.0.0 Safari/537.36。
 
@@ -17,113 +17,117 @@ dev 模式的 dev server（`/src/*` 现场变换），后台舞台（`?stage=1&i
 | canvas 卡：位图 `toDataURL('image/webp', 0.9)`（带 alpha），单帧 | **≤ 1 MB** |
 | 一次 `setSnapshots(patch, opts)` 投递 | **≤ 2 MB** |
 
-超出 300 KB 的卡按任务书先做「相对 UA + 主题基线的差异样式内联」。
+「相对 UA + 主题基线的差异样式内联」已在 R1 落地（`src/render/snapshot/inlineStyles.ts`），
+本次实测是落地**之后**的数。
 
 ## 2. 清单与总览
 
 - 高频清单 62 张 = inventory `:19` 的默认可见卡（非粒子卡全要 + 目录标 `featured` 的粒子卡）
   + 12 个 `hud-glass` 文件里的卡。
 - 测通 62 张，失败 0 张。
-- 全体最大帧：p50 **227.0 KB**、p90 **658.1 KB**、max **23106.8 KB**。
-- 超 300 KB 的 DOM 卡 **12** 张；超 1 MB 的 canvas 卡 **0** 张。
-- 按 p90 估一次「10 张活跃卡全换」的投递：约 **6.43 MB**，> 2 MB，得按 A3c 拆成两次投递。
+- 全体最大帧：p50 **95.5 KB**、p90 **384.8 KB**、max **915.3 KB**。
+- 超 300 KB 的 DOM 卡 **2** 张；超 1 MB 的 canvas 卡 **0** 张。
+- 按 p90 估一次「10 张活跃卡全换」的投递：约 **3.76 MB**，> 2 MB，得按 A3c 拆成两次投递。
 
-## 3. 按族的 p50 / p90 / max
+## 3. 按 DOM / canvas 分列的 p50 / p90 / max
+
+差异样式内联的验收口径是**分列**的（任务书 A2(8)：「不要拿 62 张混算的 p90 当门槛」）——
+全体 p50 / p90 那两个样本落在粒子 canvas 卡上，而差异样式内联碰不到它们的位图。
+
+| 口径 | 张数 | p50 KB | p90 KB | max KB |
+|---|---|---|---|---|
+| **DOM 卡**（门槛 300 KB） | 34 | 23.9 | 185.8 | 915.3 |
+| DOM 卡（排除 `lottie-*`） | 29 | 20.9 | 47.8 | 143.1 |
+| **canvas 卡**位图（门槛 1 MB） | 28 | 193.6 | 465.6 | 628.0 |
+| canvas 卡整份 control | 28 | 204.3 | 476.3 | 638.8 |
+| 全体（仅供对照，不是门槛） | 62 | 95.5 | 384.8 | 915.3 |
+
+## 3b. 按族的 p50 / p90 / max
 
 | 族 | 张数 | p50 KB | p90 KB | max KB |
 |---|---|---|---|---|
-| MagicUI | 6 | 90.0 | 126.7 | 126.7 |
-| hud-glass 自家卡 | 11 | 323.8 | 577.0 | 2200.6 |
-| lottie-*(DOM/SVG) | 5 | 4649.7 | 23106.8 | 23106.8 |
-| particles-*(canvas) | 26 | 227.4 | 430.5 | 658.1 |
-| three.js / canvas 通用卡 | 3 | 270.9 | 543.9 | 543.9 |
-| 其它自家卡 | 11 | 126.4 | 252.6 | 306.7 |
+| MagicUI | 6 | 14.6 | 17.4 | 17.4 |
+| hud-glass 自家卡 | 11 | 27.9 | 48.9 | 143.1 |
+| lottie-*(DOM/SVG) | 5 | 296.3 | 915.3 | 915.3 |
+| particles-*(canvas) | 26 | 201.8 | 410.1 | 638.8 |
+| three.js / canvas 通用卡 | 3 | 227.1 | 519.1 | 519.1 |
+| 其它自家卡 | 11 | 16.2 | 25.2 | 25.5 |
 
 ## 4. 超标的卡
 
-### 4.1 DOM 卡超 300 KB（12 张）
+### 4.1 DOM 卡超 300 KB（2 张）
 
 | 卡 | 族 | 最大帧 KB | 整场景 KB | 标签数 | 内联样式 KB | 样式占比 | 建议 |
 |---|---|---|---|---|---|---|---|
-| lottie-bodymovin | lottie-*(DOM/SVG) | 23106.8 | 23179.3 | 2534 | 22839.9 | 99% | 相对 UA + 主题基线的差异样式内联 |
-| lottie-navidad | lottie-*(DOM/SVG) | 19152.0 | 19226.0 | 2090 | 18870.5 | 99% | 相对 UA + 主题基线的差异样式内联 |
-| lottie-happy2016 | lottie-*(DOM/SVG) | 4649.7 | 4721.7 | 498 | 4519.8 | 97% | 相对 UA + 主题基线的差异样式内联 |
-| lottie-adrock | lottie-*(DOM/SVG) | 4171.0 | 4242.9 | 456 | 4115.3 | 99% | 相对 UA + 主题基线的差异样式内联 |
-| odometer | hud-glass 自家卡 | 2200.6 | 2272.5 | 244 | 2193.4 | 100% | 相对 UA + 主题基线的差异样式内联 |
-| lottie-gatin | lottie-*(DOM/SVG) | 1659.3 | 1731.2 | 182 | 1640.0 | 99% | 相对 UA + 主题基线的差异样式内联 |
-| rank-bars | hud-glass 自家卡 | 577.0 | 649.0 | 64 | 575.4 | 100% | 相对 UA + 主题基线的差异样式内联 |
-| step-timeline | hud-glass 自家卡 | 559.2 | 631.2 | 62 | 557.4 | 100% | 相对 UA + 主题基线的差异样式内联 |
-| checklist | hud-glass 自家卡 | 541.4 | 613.4 | 60 | 539.1 | 100% | 相对 UA + 主题基线的差异样式内联 |
-| growth-curve | hud-glass 自家卡 | 488.1 | 560.1 | 54 | 485.5 | 99% | 相对 UA + 主题基线的差异样式内联 |
-| term-card | hud-glass 自家卡 | 323.8 | 395.7 | 36 | 323.2 | 100% | 相对 UA + 主题基线的差异样式内联 |
-| focus-card | 其它自家卡 | 306.7 | 378.6 | 34 | 305.7 | 100% | 相对 UA + 主题基线的差异样式内联 |
+| lottie-bodymovin | lottie-*(DOM/SVG) | 915.3 | 928.2 | 2534 | 648.4 | 71% | 差异样式内联已落地；仍超标的两条路见任务书 R1 末条（改走 lottie 的 canvas 渲染器 / 审阅表标 `prerender: false`） |
+| lottie-navidad | lottie-*(DOM/SVG) | 855.0 | 869.5 | 2090 | 573.5 | 67% | 差异样式内联已落地；仍超标的两条路见任务书 R1 末条（改走 lottie 的 canvas 渲染器 / 审阅表标 `prerender: false`） |
 
 ## 5. 逐卡（三个时刻里最大的一帧）
 
-| 卡 | 族 | 帧模式 | 控件 KB | 整场景 KB | 其中位图 KB | 内联样式 KB | 样式占比 | canvas | 标签数 | 冻结 ms |
-|---|---|---|---|---|---|---|---|---|---|---|
-| lottie-bodymovin | lottie-*(DOM/SVG) | stateful | 23106.8 | 23179.3 | 0.0 | 22839.9 | 99% |  | 2534 | 2735.0 |
-| lottie-navidad | lottie-*(DOM/SVG) | stateful | 19152.0 | 19226.0 | 0.0 | 18870.5 | 99% |  | 2090 | 5822.6 |
-| lottie-happy2016 | lottie-*(DOM/SVG) | stateful | 4649.7 | 4721.7 | 0.0 | 4519.8 | 97% |  | 498 | 283.9 |
-| lottie-adrock | lottie-*(DOM/SVG) | stateful | 4171.0 | 4242.9 | 0.0 | 4115.3 | 99% |  | 456 | 279.0 |
-| odometer | hud-glass 自家卡 | stateful | 2200.6 | 2272.5 | 0.0 | 2193.4 | 100% |  | 244 | 69.0 |
-| lottie-gatin | lottie-*(DOM/SVG) | stateful | 1659.3 | 1731.2 | 0.0 | 1640.0 | 99% |  | 182 | 112.4 |
-| particles-basic | particles-*(canvas) | stateful | 658.1 | 730.0 | 622.1 | 35.9 | 5% | 是 | 3 | 34.0 |
-| rank-bars | hud-glass 自家卡 | stateful | 577.0 | 649.0 | 0.0 | 575.4 | 100% |  | 64 | 21.7 |
-| step-timeline | hud-glass 自家卡 | stateful | 559.2 | 631.2 | 0.0 | 557.4 | 100% |  | 62 | 18.1 |
-| scene-3d | three.js / canvas 通用卡 | stateful | 543.9 | 615.9 | 508.0 | 35.9 | 7% | 是 | 3 | 54.3 |
-| checklist | hud-glass 自家卡 | stateful | 541.4 | 613.4 | 0.0 | 539.1 | 100% |  | 60 | 19.5 |
-| growth-curve | hud-glass 自家卡 | stateful | 488.1 | 560.1 | 0.0 | 485.5 | 99% |  | 54 | 18.0 |
-| particles-big | particles-*(canvas) | stateful | 435.4 | 507.3 | 399.4 | 35.9 | 8% | 是 | 3 | 24.1 |
-| particles-life | particles-*(canvas) | stateful | 430.5 | 502.4 | 394.5 | 35.9 | 8% | 是 | 3 | 31.5 |
-| particles-poisson | particles-*(canvas) | stateful | 410.1 | 482.0 | 374.1 | 35.9 | 9% | 是 | 3 | 23.2 |
-| particles-bigBlend | particles-*(canvas) | stateful | 349.9 | 421.8 | 313.9 | 35.9 | 10% | 是 | 3 | 21.1 |
-| particles-random | particles-*(canvas) | stateful | 341.1 | 413.1 | 305.2 | 35.9 | 11% | 是 | 3 | 26.9 |
-| term-card | hud-glass 自家卡 | stateful | 323.8 | 395.7 | 0.0 | 323.2 | 100% |  | 36 | 10.8 |
-| particles-parallax | particles-*(canvas) | stateful | 313.7 | 385.7 | 277.7 | 35.9 | 11% | 是 | 3 | 29.5 |
-| focus-card | 其它自家卡 | stateful | 306.7 | 378.6 | 0.0 | 305.7 | 100% |  | 34 | 10.1 |
-| particles-plasma | particles-*(canvas) | stateful | 282.7 | 354.7 | 246.8 | 35.9 | 13% | 是 | 3 | 25.5 |
-| particles-repulse | particles-*(canvas) | stateful | 271.1 | 343.0 | 235.1 | 35.9 | 13% | 是 | 3 | 23.5 |
-| terminal-3d | three.js / canvas 通用卡 | stateful | 270.9 | 342.9 | 0.0 | 269.9 | 100% |  | 30 | 19.2 |
-| entity-chips | 其它自家卡 | stateful | 252.6 | 324.6 | 0.0 | 251.8 | 100% |  | 28 | 10.9 |
-| particles | three.js / canvas 通用卡 | stateful | 240.4 | 312.4 | 204.4 | 35.9 | 15% | 是 | 3 | 60.4 |
-| particles-colorAnimation | particles-*(canvas) | stateful | 237.2 | 309.1 | 201.2 | 35.9 | 15% | 是 | 3 | 19.8 |
-| stat-proof | hud-glass 自家卡 | stateful | 234.5 | 306.5 | 0.0 | 233.8 | 100% |  | 26 | 8.8 |
-| particles-fallingConfetti | particles-*(canvas) | stateful | 230.8 | 302.7 | 194.8 | 35.9 | 16% | 是 | 3 | 18.6 |
-| particles-linkTriangles | particles-*(canvas) | stateful | 229.7 | 301.7 | 193.7 | 35.9 | 16% | 是 | 3 | 28.4 |
-| particles-slow | particles-*(canvas) | stateful | 227.4 | 299.4 | 191.5 | 35.9 | 16% | 是 | 3 | 24.2 |
-| particles-twinkle | particles-*(canvas) | stateful | 227.0 | 298.9 | 191.0 | 35.9 | 16% | 是 | 3 | 19.8 |
-| particles-vibrate | particles-*(canvas) | stateful | 225.8 | 297.8 | 189.8 | 35.9 | 16% | 是 | 3 | 19.8 |
-| particles-lch | particles-*(canvas) | stateful | 205.1 | 277.1 | 169.2 | 35.9 | 18% | 是 | 3 | 22.8 |
-| versus-card | hud-glass 自家卡 | stateful | 198.9 | 270.9 | 0.0 | 198.0 | 100% |  | 22 | 13.3 |
-| chapter-bar | hud-glass 自家卡 | stateful | 198.7 | 270.6 | 0.0 | 198.2 | 100% |  | 22 | 13.4 |
-| ring-metric | hud-glass 自家卡 | stateful | 198.4 | 270.3 | 0.0 | 197.6 | 100% |  | 22 | 15.9 |
-| blur-text | hud-glass 自家卡 | stateful | 197.9 | 269.9 | 0.0 | 197.7 | 100% |  | 22 | 15.0 |
-| particles-star | particles-*(canvas) | stateful | 182.1 | 254.0 | 146.1 | 35.9 | 20% | 是 | 3 | 19.0 |
-| particles-gradients | particles-*(canvas) | stateful | 174.5 | 246.5 | 138.5 | 35.9 | 21% | 是 | 3 | 17.6 |
-| pin-board | 其它自家卡 | stateful | 163.1 | 235.0 | 0.0 | 162.4 | 100% |  | 18 | 11.7 |
-| lottie | 其它自家卡 | stateful | 162.8 | 234.8 | 0.0 | 161.9 | 99% |  | 18 | 8.6 |
-| particles-strokeAnimation | particles-*(canvas) | stateful | 156.6 | 228.6 | 120.7 | 35.9 | 23% | 是 | 3 | 20.2 |
-| particles-groups | particles-*(canvas) | stateful | 147.1 | 219.0 | 111.1 | 35.9 | 24% | 是 | 3 | 21.2 |
-| quote-lockup | 其它自家卡 | stateful | 144.8 | 216.7 | 0.0 | 144.3 | 100% |  | 16 | 6.4 |
-| particles-triangles | particles-*(canvas) | stateful | 142.2 | 214.1 | 106.2 | 35.9 | 25% | 是 | 3 | 20.1 |
-| particles-orbit | particles-*(canvas) | stateful | 137.3 | 209.2 | 101.3 | 35.9 | 26% | 是 | 3 | 22.6 |
-| particles-spin | particles-*(canvas) | stateful | 133.7 | 205.7 | 97.7 | 35.9 | 27% | 是 | 3 | 18.3 |
-| mu-circular-progress | MagicUI | stateful | 126.7 | 198.6 | 0.0 | 126.0 | 99% |  | 14 | 8.2 |
-| ui-callout | 其它自家卡 | stateful | 126.4 | 198.3 | 0.0 | 125.8 | 100% |  | 14 | 9.0 |
-| particles-snow | particles-*(canvas) | stateful | 120.2 | 192.1 | 84.2 | 35.9 | 30% | 是 | 3 | 17.5 |
-| particles-nasa | particles-*(canvas) | stateful | 116.1 | 188.1 | 80.1 | 36.0 | 31% | 是 | 3 | 20.7 |
-| particles-bubble | particles-*(canvas) | stateful | 112.0 | 183.9 | 76.0 | 35.9 | 32% | 是 | 3 | 17.9 |
-| type-shift | 其它自家卡 | stateful | 108.3 | 180.2 | 0.0 | 108.0 | 100% |  | 12 | 6.7 |
-| probe | 其它自家卡 | stateful | 90.7 | 162.6 | 0.0 | 90.2 | 99% |  | 10 | 9.0 |
-| mu-number-ticker | MagicUI | stateful | 90.2 | 162.1 | 0.0 | 89.9 | 100% |  | 10 | 4.8 |
-| mu-word-rotate | MagicUI | stateful | 90.0 | 161.9 | 0.0 | 89.8 | 100% |  | 10 | 4.8 |
-| punch-pill | 其它自家卡 | stateful | 72.3 | 144.2 | 0.0 | 72.0 | 100% |  | 8 | 4.1 |
-| mu-blur-fade | MagicUI | stateful | 54.0 | 125.9 | 0.0 | 53.9 | 100% |  | 6 | 4.1 |
-| mu-animated-shiny-text | MagicUI | stateful | 37.0 | 108.9 | 0.0 | 36.5 | 99% |  | 4 | 6.2 |
-| mu-typing | MagicUI | stateful | 36.1 | 108.1 | 0.0 | 35.9 | 99% |  | 4 | 5.6 |
-| composite | 其它自家卡 | stateful | 18.0 | 90.0 | 0.0 | 18.0 | 100% |  | 2 | 2.6 |
-| caption-track | 其它自家卡 | direct | 18.0 | 89.9 | 0.0 | 18.0 | 100% |  | 2 | 2.6 |
+| 卡 | 族 | 帧模式 | 控件 KB | 整场景 KB | 其中位图 KB | 内联样式 KB | 样式占比 | canvas | 标签数 | 生成快照 ms | 样式内联 ms | 画布栅格化 ms | 序列化 ms |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| lottie-bodymovin | lottie-*(DOM/SVG) | stateful | 915.3 | 928.2 | 0.0 | 648.4 | 71% |  | 2534 | 419.4 | 365.6 | 0.1 | 53.7 |
+| lottie-navidad | lottie-*(DOM/SVG) | stateful | 855.0 | 869.5 | 0.0 | 573.5 | 67% |  | 2090 | 440.6 | 316.2 | 0.1 | 124.3 |
+| particles-basic | particles-*(canvas) | stateful | 638.8 | 651.1 | 628.0 | 10.6 | 2% | 是 | 3 | 26.0 | 2.4 | 22.3 | 1.3 |
+| scene-3d | three.js / canvas 通用卡 | stateful | 519.1 | 531.4 | 508.3 | 10.6 | 2% | 是 | 3 | 26.4 | 2.6 | 22.6 | 1.1 |
+| particles-life | particles-*(canvas) | stateful | 476.3 | 488.7 | 465.6 | 10.6 | 2% | 是 | 3 | 22.8 | 2.9 | 18.7 | 1.2 |
+| particles-big | particles-*(canvas) | stateful | 410.1 | 422.5 | 399.4 | 10.6 | 3% | 是 | 3 | 26.5 | 2.7 | 22.9 | 0.9 |
+| particles-poisson | particles-*(canvas) | stateful | 384.8 | 397.2 | 374.1 | 10.6 | 3% | 是 | 3 | 20.8 | 2.5 | 17.3 | 1.0 |
+| particles-bigBlend | particles-*(canvas) | stateful | 324.7 | 337.0 | 313.9 | 10.6 | 3% | 是 | 3 | 23.2 | 2.5 | 20.0 | 0.7 |
+| particles-random | particles-*(canvas) | stateful | 313.1 | 325.4 | 302.3 | 10.7 | 3% | 是 | 3 | 21.0 | 2.6 | 17.6 | 0.8 |
+| lottie-happy2016 | lottie-*(DOM/SVG) | stateful | 296.3 | 308.7 | 0.0 | 166.3 | 56% |  | 498 | 79.9 | 77.2 | 0.0 | 2.7 |
+| particles-parallax | particles-*(canvas) | stateful | 288.5 | 300.9 | 277.7 | 10.6 | 4% | 是 | 3 | 23.1 | 2.5 | 20.0 | 0.6 |
+| particles-plasma | particles-*(canvas) | stateful | 257.5 | 269.9 | 246.8 | 10.6 | 4% | 是 | 3 | 19.3 | 2.4 | 16.3 | 0.6 |
+| particles-repulse | particles-*(canvas) | stateful | 250.7 | 263.1 | 240.0 | 10.6 | 4% | 是 | 3 | 19.2 | 2.4 | 16.2 | 0.6 |
+| particles | three.js / canvas 通用卡 | stateful | 227.1 | 239.4 | 216.3 | 10.6 | 5% | 是 | 3 | 24.5 | 2.5 | 21.5 | 0.5 |
+| particles-colorAnimation | particles-*(canvas) | stateful | 211.9 | 224.3 | 201.2 | 10.6 | 5% | 是 | 3 | 22.6 | 2.4 | 19.7 | 0.5 |
+| particles-linkTriangles | particles-*(canvas) | stateful | 204.4 | 216.7 | 193.6 | 10.6 | 5% | 是 | 3 | 18.5 | 2.4 | 15.5 | 0.6 |
+| particles-fallingConfetti | particles-*(canvas) | stateful | 204.3 | 216.7 | 193.6 | 10.6 | 5% | 是 | 3 | 18.8 | 2.4 | 15.8 | 0.6 |
+| particles-twinkle | particles-*(canvas) | stateful | 201.8 | 214.2 | 191.1 | 10.6 | 5% | 是 | 3 | 18.7 | 2.4 | 15.9 | 0.4 |
+| particles-vibrate | particles-*(canvas) | stateful | 200.6 | 213.0 | 189.9 | 10.6 | 5% | 是 | 3 | 18.9 | 2.6 | 15.8 | 0.5 |
+| particles-slow | particles-*(canvas) | stateful | 199.7 | 212.1 | 189.0 | 10.6 | 5% | 是 | 3 | 19.1 | 2.4 | 16.2 | 0.5 |
+| lottie-adrock | lottie-*(DOM/SVG) | stateful | 185.8 | 198.2 | 0.0 | 130.2 | 70% |  | 456 | 73.2 | 71.2 | 0.0 | 2.0 |
+| particles-lch | particles-*(canvas) | stateful | 179.9 | 192.3 | 169.2 | 10.6 | 6% | 是 | 3 | 18.7 | 2.5 | 15.7 | 0.5 |
+| particles-star | particles-*(canvas) | stateful | 156.9 | 169.2 | 146.1 | 10.6 | 7% | 是 | 3 | 22.1 | 2.4 | 19.3 | 0.4 |
+| particles-gradients | particles-*(canvas) | stateful | 149.3 | 161.6 | 138.5 | 10.6 | 7% | 是 | 3 | 17.9 | 2.7 | 14.7 | 0.5 |
+| odometer | hud-glass 自家卡 | stateful | 143.1 | 155.5 | 0.0 | 135.9 | 95% |  | 244 | 42.6 | 42.1 | 0.0 | 0.5 |
+| particles-strokeAnimation | particles-*(canvas) | stateful | 131.4 | 143.8 | 120.7 | 10.6 | 8% | 是 | 3 | 18.0 | 2.4 | 15.1 | 0.4 |
+| particles-groups | particles-*(canvas) | stateful | 121.9 | 134.2 | 111.1 | 10.6 | 9% | 是 | 3 | 19.3 | 4.2 | 14.8 | 0.3 |
+| particles-triangles | particles-*(canvas) | stateful | 117.0 | 129.3 | 106.2 | 10.6 | 9% | 是 | 3 | 18.7 | 2.4 | 16.0 | 0.3 |
+| particles-orbit | particles-*(canvas) | stateful | 112.1 | 124.5 | 101.3 | 10.7 | 10% | 是 | 3 | 20.4 | 2.4 | 17.6 | 0.4 |
+| particles-spin | particles-*(canvas) | stateful | 108.5 | 120.8 | 97.7 | 10.6 | 10% | 是 | 3 | 22.0 | 2.4 | 19.2 | 0.4 |
+| particles-snow | particles-*(canvas) | stateful | 95.5 | 107.9 | 84.8 | 10.6 | 11% | 是 | 3 | 19.5 | 2.3 | 16.9 | 0.3 |
+| particles-nasa | particles-*(canvas) | stateful | 91.6 | 103.9 | 80.6 | 10.8 | 12% | 是 | 3 | 18.1 | 2.4 | 15.5 | 0.2 |
+| particles-bubble | particles-*(canvas) | stateful | 86.7 | 99.1 | 76.0 | 10.6 | 12% | 是 | 3 | 20.5 | 2.5 | 17.8 | 0.2 |
+| lottie-gatin | lottie-*(DOM/SVG) | stateful | 74.6 | 86.9 | 0.0 | 55.3 | 74% |  | 182 | 29.2 | 28.4 | 0.0 | 0.8 |
+| step-timeline | hud-glass 自家卡 | stateful | 48.9 | 61.3 | 0.0 | 47.1 | 96% |  | 62 | 11.8 | 11.7 | 0.0 | 0.1 |
+| rank-bars | hud-glass 自家卡 | stateful | 47.8 | 60.1 | 0.0 | 46.1 | 97% |  | 64 | 13.6 | 13.4 | 0.0 | 0.2 |
+| checklist | hud-glass 自家卡 | stateful | 46.9 | 59.3 | 0.0 | 44.5 | 95% |  | 60 | 12.4 | 12.1 | 0.0 | 0.3 |
+| growth-curve | hud-glass 自家卡 | stateful | 41.4 | 53.8 | 0.0 | 38.8 | 94% |  | 54 | 12.0 | 11.6 | 0.0 | 0.4 |
+| term-card | hud-glass 自家卡 | stateful | 27.9 | 40.3 | 0.0 | 27.3 | 98% |  | 36 | 7.9 | 7.7 | 0.0 | 0.2 |
+| terminal-3d | three.js / canvas 通用卡 | stateful | 27.3 | 39.7 | 0.0 | 26.3 | 96% |  | 30 | 7.7 | 7.4 | 0.0 | 0.3 |
+| focus-card | 其它自家卡 | stateful | 25.5 | 37.8 | 0.0 | 24.4 | 96% |  | 34 | 7.5 | 7.3 | 0.1 | 0.1 |
+| entity-chips | 其它自家卡 | stateful | 25.2 | 37.5 | 0.0 | 24.4 | 97% |  | 28 | 6.6 | 6.5 | 0.0 | 0.1 |
+| chapter-bar | hud-glass 自家卡 | stateful | 24.6 | 37.0 | 0.0 | 24.1 | 98% |  | 22 | 5.5 | 5.4 | 0.0 | 0.1 |
+| stat-proof | hud-glass 自家卡 | stateful | 24.5 | 36.9 | 0.0 | 23.8 | 97% |  | 26 | 6.4 | 6.3 | 0.0 | 0.1 |
+| versus-card | hud-glass 自家卡 | stateful | 23.9 | 36.2 | 0.0 | 22.9 | 96% |  | 22 | 6.6 | 6.4 | 0.0 | 0.1 |
+| ring-metric | hud-glass 自家卡 | stateful | 21.8 | 34.1 | 0.0 | 21.0 | 96% |  | 22 | 5.6 | 5.3 | 0.0 | 0.3 |
+| pin-board | 其它自家卡 | stateful | 21.1 | 33.5 | 0.0 | 20.4 | 97% |  | 18 | 5.1 | 5.0 | 0.0 | 0.1 |
+| blur-text | hud-glass 自家卡 | stateful | 20.9 | 33.2 | 0.0 | 20.6 | 99% |  | 22 | 5.7 | 5.5 | 0.0 | 0.2 |
+| quote-lockup | 其它自家卡 | stateful | 17.8 | 30.2 | 0.0 | 17.3 | 97% |  | 16 | 4.5 | 4.4 | 0.0 | 0.1 |
+| mu-circular-progress | MagicUI | stateful | 17.4 | 29.8 | 0.0 | 16.8 | 96% |  | 14 | 5.6 | 5.4 | 0.0 | 0.2 |
+| probe | 其它自家卡 | stateful | 17.4 | 29.8 | 0.0 | 16.9 | 97% |  | 10 | 4.1 | 4.0 | 0.0 | 0.1 |
+| ui-callout | 其它自家卡 | stateful | 16.2 | 28.5 | 0.0 | 15.7 | 97% |  | 14 | 4.8 | 4.7 | 0.0 | 0.1 |
+| type-shift | 其它自家卡 | stateful | 16.1 | 28.4 | 0.0 | 15.7 | 98% |  | 12 | 4.1 | 3.9 | 0.1 | 0.1 |
+| mu-number-ticker | MagicUI | stateful | 15.3 | 27.6 | 0.0 | 15.0 | 98% |  | 10 | 3.8 | 3.8 | 0.0 | 0.0 |
+| lottie | 其它自家卡 | stateful | 14.8 | 27.2 | 0.0 | 13.9 | 94% |  | 18 | 6.6 | 6.2 | 0.0 | 0.3 |
+| mu-word-rotate | MagicUI | stateful | 14.6 | 26.9 | 0.0 | 14.3 | 98% |  | 10 | 3.5 | 3.3 | 0.0 | 0.2 |
+| punch-pill | 其它自家卡 | stateful | 13.6 | 26.0 | 0.0 | 13.4 | 98% |  | 8 | 3.1 | 3.1 | 0.0 | 0.0 |
+| mu-animated-shiny-text | MagicUI | stateful | 12.7 | 25.1 | 0.0 | 12.3 | 97% |  | 4 | 2.5 | 2.5 | 0.0 | 0.0 |
+| mu-blur-fade | MagicUI | stateful | 12.0 | 24.3 | 0.0 | 11.8 | 99% |  | 6 | 3.8 | 3.6 | 0.0 | 0.2 |
+| mu-typing | MagicUI | stateful | 11.7 | 24.1 | 0.0 | 11.5 | 98% |  | 4 | 2.8 | 2.7 | 0.0 | 0.1 |
+| composite | 其它自家卡 | stateful | 10.7 | 23.1 | 0.0 | 10.6 | 100% |  | 2 | 2.0 | 2.0 | 0.0 | 0.0 |
+| caption-track | 其它自家卡 | direct | 10.2 | 22.6 | 0.0 | 10.2 | 100% |  | 2 | 2.1 | 2.0 | 0.0 | 0.1 |
 
 
 
@@ -134,27 +138,27 @@ A3c 的预算是「拖动 3 秒内舞台主线程 `innerHTML` 解析合计 ≤ 2
 
 | 卡 | KB | 中位 ms | 最快 ms | 最慢 ms |
 |---|---|---|---|---|
-| lottie-bodymovin | 23106.8 | 293.00 | 286.90 | 319.30 |
-| lottie-navidad | 19152.0 | 259.70 | 234.00 | 295.60 |
-| lottie-happy2016 | 4649.7 | 58.10 | 56.70 | 59.20 |
-| lottie-adrock | 4171.0 | 51.00 | 50.40 | 53.60 |
-| odometer | 2200.6 | 25.90 | 25.60 | 26.10 |
-| lottie-gatin | 1659.0 | 20.70 | 20.60 | 22.00 |
-| particles-basic | 658.1 | 2.80 | 2.80 | 3.90 |
-| rank-bars | 576.9 | 6.70 | 6.60 | 6.90 |
-| step-timeline | 558.7 | 6.50 | 6.50 | 6.60 |
-| scene-3d | 543.9 | 2.20 | 2.20 | 3.00 |
+| lottie-bodymovin | 915.3 | 6.20 | 6.20 | 6.70 |
+| lottie-navidad | 855.0 | 5.60 | 5.40 | 5.90 |
+| particles-basic | 638.8 | 1.60 | 1.60 | 2.30 |
+| scene-3d | 519.1 | 1.30 | 1.10 | 1.70 |
+| particles-life | 330.7 | 0.80 | 0.80 | 1.10 |
+| particles-big | 390.4 | 1.00 | 0.90 | 1.10 |
+| particles-poisson | 380.2 | 0.90 | 0.90 | 1.20 |
+| particles-bigBlend | 324.7 | 0.80 | 0.80 | 1.00 |
+| particles-random | 313.1 | 0.80 | 0.80 | 1.00 |
+| lottie-happy2016 | 296.2 | 1.70 | 1.70 | 2.00 |
 
-这 10 张里中位 **25.90 ms**、最慢 **293.00 ms**。
-C4 拖一格通常只换一两张卡：按这 10 张里中位的那一张算，3 秒内还能换 **7** 张才吃满 200 ms；
-但**最大的那一张单独就要 293 ms**，占整个预算的 **147%** —— 换一次就超了。
-换句话说，200 ms 的解析预算**不是被「换得太频繁」吃掉的，是被单张卡的体积吃掉的**，和第 4 节是同一件事。
+这 10 张里中位 **2.07 ms**、最慢 **6.20 ms**。
+C4 拖一格通常只换一两张卡；按最慢的一张算，3 秒 90 格里能换 **32** 次最大的卡还留在 200 ms 预算里。
 
 ## 7. 顺带记下的两件事
 
-- **`freezeScene` 的耗时**（上表「冻结 ms」）量的是整场景一次冻结。K1 的 `frameMs` 按任务书**含**这一步，
-  所以它直接决定轻重判定：本次实测冻结本身就在 19～5823 ms 量级，
-  已经大于 B = 1000/30 × 70% = 23.3 ms。dev 模式偏慢是一部分原因，
-  另一部分是 `freezeScene` 对场景里**每一个元素**都要 `getComputedStyle` 并整份内联。
-- **canvas 位图现在还是 PNG**：`snapshotFreeze.ts` 里是 `toDataURL()`（默认 PNG）。A3c 要求换成
+- **`createSnapshot` 的耗时**（上表最后四列）量的是整场景一次生成快照。按任务书 3.8，它**不进判重** ——
+  判重只看活渲的 `stepMs`（生成快照只在探针和预渲染时发生，活渲每拍并不做），这三段只用来排
+  探针和预渲染的产能。本次实测整场景一次在 19～441 ms 量级
+  （B = 1000/30 × 70% = 23.3 ms，仅供对照）。dev 模式偏慢是一部分原因，
+  另一部分是样式内联对场景里**每一个元素**都要 `getComputedStyle`。
+  哪类卡贵一眼可见：样式内联高 = DOM 太复杂，画布栅格化高 = 画布太大。
+- **canvas 位图现在还是 PNG**：`snapshot/rasterizeCanvas.ts` 里是 `toDataURL()`（默认 PNG）。A3c 要求换成
   `toDataURL('image/webp', 0.9)`，那是 M4 的改动，本审计只按现状量。
