@@ -19,6 +19,7 @@ import {
   type ProbeBooleans,
   type RenderReply,
   type SetTimeReply,
+  type SnapshotCost,
   type StageRole,
   type StageRpcApi,
 } from "./render/stageRpc";
@@ -662,6 +663,8 @@ export default function StageView() {
         const stepOf = (elapsed: number) => Math.max(0, elapsed - snapshot.inlineMs - snapshot.rasterMs - snapshot.serializeMs);
         /* 计时趟:每帧的活渲耗时(提交 React → 跑 rAF 回调 → 钉动画),帧间让出的时间不算进来 */
         const steps: number[] = [];
+        /* 快照趟:每帧三段的耗时。`snapshot` 是它们的累加,而成本记录要的是单帧稳健值 */
+        const snapshotSteps: SnapshotCost[] = [];
         let frameStarted = 0;
         return await new Promise<RenderReply>((resolve) => {
           ref.current.pending = { gen, startedAt: started, frames: () => frames, resolve };
@@ -710,6 +713,7 @@ export default function StageView() {
                 snapshot.inlineMs += snap.timing.inlineMs;
                 snapshot.rasterMs += snap.timing.rasterMs;
                 snapshot.serializeMs += snap.timing.serializeMs;
+                snapshotSteps.push({ inlineMs: snap.timing.inlineMs, rasterMs: snap.timing.rasterMs, serializeMs: snap.timing.serializeMs });
                 for (const c of snap.controls) {
                   postStageEvent({ type: "probe-frame", clipId: c.id, localFrame: Math.round((ms / 1000 - clipStart(c.id)) * fps), html: c.html });
                 }
@@ -720,7 +724,7 @@ export default function StageView() {
             const elapsedMs = realNow() - started;
             if (truncated) {
               resolve({ aborted: true, reason: "timeout", elapsedMs, stepMs: stepOf(elapsedMs), frames, truncated: true, snapshot,
-                ...(timing ? { steps } : {}) });
+                ...(timing ? { steps } : { snapshotSteps }) });
               return;
             }
             flushSync(() => setT(target));
@@ -730,7 +734,8 @@ export default function StageView() {
             scheduleSample();
             ref.current.t = target;
             resolve({ remounted, caughtUpAtSec: clock.now() / 1000, elapsedMs, stepMs: stepOf(elapsedMs),
-              ...(probe ? { frames, truncated: false, snapshot } : {}), ...(timing ? { steps } : {}) });
+              ...(probe ? { frames, truncated: false, snapshot } : {}),
+              ...(timing ? { steps } : probe ? { snapshotSteps } : {}) });
           })();
         });
       },

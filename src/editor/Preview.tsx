@@ -296,8 +296,10 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
         rpcRef.current[id]?.dispose();
         const client = createStageRpc(win, stageTargetOrigin(id));
         rpcRef.current[id] = client;
-        hostCapsRef.current[id] = (e.data as { hostCapabilities?: HostCapabilities }).hostCapabilities ?? null;
-        setStageClient(role, client);
+        const caps = (e.data as { hostCapabilities?: HostCapabilities }).hostCapabilities ?? null;
+        hostCapsRef.current[id] = caps;
+        // 能力表一起登记:K1 的 device 串要 lowMemory / offscreenGl,而它必须是**舞台**探到的那一份
+        setStageClient(role, client, caps);
         void client.setRole(role).catch(() => { /* iframe 又换了,下一次握手会重发 */ });
         // 每来一次就 +1:同一个值再赋一遍不会触发重渲染,而新挂的 iframe 需要重新收一遍 project 和时间
         if (role === "front") setStageReady((n) => n + 1);

@@ -106,6 +106,15 @@ export interface RenderResult {
    * 限 2 核下同一张卡两次实测的单帧最差能差十几倍,越线的是偶发卡顿、不是稳定成本。
    */
   steps?: number[];
+  /**
+   * 只在 `probe: 'snapshot'` 时有:**每一帧**生成快照那三段的耗时。
+   *
+   * 同一趟的 `snapshot` 是这些的**累加**(给「这一趟花了多久」用),而成本记录要的是
+   * **单帧的稳健值**(`robustStep`,任务书 K1),累加值换算不回来。离线探针为了拿逐帧数
+   * 只好一帧发一次 `render`(40 次往返);常驻探针在加载遮罩下跑,40 × N 次往返太慢,
+   * 所以这里和 `steps` 对称地把逐帧样本一起带回去,一次往返就够。
+   */
+  snapshotSteps?: SnapshotCost[];
   /** 只在 `probe: 'booleans'` 时有 */
   booleans?: ProbeBooleans;
 }
@@ -128,6 +137,7 @@ export interface RenderAborted {
   truncated?: boolean;
   snapshot?: SnapshotCost;
   steps?: number[];
+  snapshotSteps?: SnapshotCost[];
 }
 export type RenderReply = RenderResult | RenderAborted;
 

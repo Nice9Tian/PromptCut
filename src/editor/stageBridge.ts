@@ -1,7 +1,7 @@
 import type { Project } from "../kernel/project";
 import { changedClips, isEmptyPatch } from "../render/changedClips.mjs";
 // 显式 .ts 后缀:`stageEventRole` 是运行期的值,单测在 node 里直接 import 这个模块(见 stageBridge.test.mjs)
-import { stageEventRole, type StageEvent, type StageRole, type StageRpcClient } from "../render/stageRpc.ts";
+import { stageEventRole, type HostCapabilities, type StageEvent, type StageRole, type StageRpcClient } from "../render/stageRpc.ts";
 
 /**
  * 主文档里「现在哪个 iframe 是舞台」的登记处(E0 / E1 / D4 页面侧)。
@@ -27,6 +27,8 @@ import { stageEventRole, type StageEvent, type StageRole, type StageRpcClient } 
  */
 interface Slot {
   client: StageRpcClient | null;
+  /** 握手时舞台报的宿主能力表(J4)。K1 的 `device` 串要 `lowMemory` / `offscreenGl` */
+  caps: HostCapabilities | null;
   /** 上次成功推给这个客户端的项目(增量 diff 的基线) */
   pushed: Project | null;
   /** 推送串行化:两次推送交错时,后一次等前一次落定再比 */
@@ -43,7 +45,7 @@ function pendingReady(): Slot["ready"] {
   return { promise, resolve, settled: false };
 }
 
-const newSlot = (): Slot => ({ client: null, pushed: null, chain: Promise.resolve(), ready: pendingReady(), off: null });
+const newSlot = (): Slot => ({ client: null, caps: null, pushed: null, chain: Promise.resolve(), ready: pendingReady(), off: null });
 
 const slots: Record<StageRole, Slot> = { front: newSlot(), back: newSlot() };
 
@@ -56,12 +58,13 @@ const eventListeners = new Set<(e: StageEvent, role: StageRole) => void>();
  * 事件转发也挂在这里:**只有这里同时知道「哪个客户端」和「它此刻是什么角色」**,
  * 而 `event.source` 的过滤两样都要(E0 末条)。`createStageRpc` 那一层只管住了前半个问题。
  */
-export function setStageClient(role: StageRole, client: StageRpcClient | null): void {
+export function setStageClient(role: StageRole, client: StageRpcClient | null, caps: HostCapabilities | null = null): void {
   const slot = slots[role];
   if (slot.client === client) return;
   slot.off?.();
   slot.off = null;
   slot.client = client;
+  slot.caps = caps;
   slot.pushed = null;
   slot.chain = Promise.resolve();
   if (!client) {
@@ -126,6 +129,18 @@ export function backStage(): StageRpcClient | null {
  */
 export function whenStageReady(role: StageRole): Promise<StageRpcClient> {
   return slots[role].ready.promise;
+}
+
+/**
+ * 这个位置上的舞台握手时报的宿主能力表(J4)。
+ *
+ * K1 的 `device` 串要 `lowMemory` / `offscreenGl`,而它们必须和**舞台那一侧**探测到的一致 ——
+ * 离线探针拿的就是舞台 `pc-stage-ready` 里的这一份。主文档自己再探一遍是第二份实现,
+ * 会悄悄走偏(比如主文档和 iframe 的 `deviceMemory` 上报不同)。
+ * 还没握手时回 `null`,调用方按保守值兜底。
+ */
+export function stageCapabilities(role: StageRole): HostCapabilities | null {
+  return slots[role].caps ?? slots.front.caps;
 }
 
 /** 两个推送口子共用的一段:串行化 + 基线维护 */

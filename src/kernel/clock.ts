@@ -40,10 +40,12 @@ declare global {
     /** 舞台页:RPC 方法表(父页走 postMessage;这里挂着只给测试页 / puppeteer 直接调) */
     __pcStage?: import('../render/stageRpc').StageRpcApi;
     /**
-     * 舞台页:`setPlan` 收下的那份 K2 分派表(集合已回填)+ K1 的每卡记录。
+     * 舞台页:`setPlan` 收下的那份 K2 分派表(集合已回填)+ K1 的每卡记录,
+     * 形状是 `src/render/wirePlan.ts` 的 `StagePlan`(这里写 `unknown` 是为了不给
+     * kernel → render 再添一条反向边,见 `src/layering.test.mjs` 的白名单)。
      * 消费它的是 K3 / K5(R5);挂在这里给验收探针看「表到没到、算出来的是轻是重」。
      */
-    __pcStagePlan?: () => import('../render/wirePlan').StagePlan | null;
+    __pcStagePlan?: () => unknown;
     /** 舞台页:按 K2 的表查这一刻这个片段走哪条管线(`pipelineAt`)。没有表时一律 `'heavy'` */
     __pcStagePipelineAt?: (clipId: string, tSec: number) => 'light' | 'heavy';
     /**

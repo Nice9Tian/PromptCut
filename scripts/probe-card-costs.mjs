@@ -95,7 +95,8 @@ import puppeteer from 'puppeteer';
 
 import { costDeviceString } from '../src/render/costDevice.mjs';
 import { budgetOf, clipWeight } from '../src/render/pipelinePlan.mjs';
-import { DEFAULT_TUNING, PROBE_MAX_FRAMES, PROBE_MAX_MS, resolveTuning, robustStep } from '../src/render/pipelineTuning.mjs';
+import { DEFAULT_TUNING, PROBE_MAX_FRAMES, PROBE_MAX_MS, resolveTuning } from '../src/render/pipelineTuning.mjs';
+import { maxOf, percentile, summarizeProbe } from '../src/render/probeSummary.mjs';
 
 /* ------------------------------------------------------------------ 参数 */
 
@@ -389,54 +390,9 @@ async function putCosts(records) {
 /* ------------------------------------------------------------------ 主流程 */
 
 const num = (x, d = 1) => (Number.isFinite(x) ? x.toFixed(d) : '—');
-const finite = (xs) => (Array.isArray(xs) ? xs.map(Number).filter((x) => Number.isFinite(x)) : []);
-const maxOf = (xs) => finite(xs).reduce((m, x) => (x > m ? x : m), 0);
-const sumOf = (xs) => finite(xs).reduce((a, x) => a + x, 0);
-/** 升序最近秩分位(和 robustStep 同一口径,只为打表用) */
-const pct = (xs, p) => {
-  const s = finite(xs).sort((a, b) => a - b);
-  return s.length ? s[Math.min(s.length, Math.max(1, Math.ceil(p * s.length))) - 1] : 0;
-};
-const median = (xs) => {
-  const s = finite(xs).sort((a, b) => a - b);
-  if (!s.length) return 0;
-  return s.length % 2 ? s[(s.length - 1) / 2] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2;
-};
+/** 统计全在 `src/render/probeSummary.mjs` 里,常驻探针 import 的是同一份(见文件头) */
+const pct = percentile;
 
-/**
- * 把页面回来的原始样本折成一条成本记录该有的几个数(任务书 K1)。
- *
- * - `stepMs` 取稳健值、`stepMaxMs` 记单次最大(只作诊断);
- * - `catchUpMs` = 各帧之和;计时趟被 `PROBE_MAX_*` 封顶时,没推到的帧按**除首帧外的中位数**补上
- *   —— 不用平均值:首帧要建树、解析关键帧,把它算进平均会系统性偏大(旧做法偏大 1.7～3.6 倍);
- * - 三段快照耗时同样取稳健值。
- */
-function summarize(out, tuning) {
-  const steps = finite(out.steps);
-  const rest = steps.slice(1);
-  const pushed = steps.length;
-  const remaining = out.kind === 'stepped' ? Math.max(0, (Number(out.totalFrames) || 0) - pushed) : 0;
-  const tailMs = remaining > 0 ? median(rest) * remaining : 0;
-  return {
-    stepMs: robustStep(steps, tuning),
-    stepMaxMs: maxOf(steps),
-    inlineMs: robustStep(out.inline, tuning),
-    rasterMs: robustStep(out.raster, tuning),
-    serializeMs: robustStep(out.serialize, tuning),
-    catchUpMs: out.kind === 'random' ? 0 : sumOf(steps) + tailMs,
-    // 打表和 --json 用
-    samples: pushed,
-    stepP50: pct(steps, 0.5),
-    stepP90: pct(steps, 0.9),
-    firstMs: steps[0] ?? 0,
-    restMedianMs: median(rest),
-    extrapolatedMs: tailMs,
-    remainingFrames: remaining,
-    /** 旧口径(「已推帧的平均 × 片段总帧数」)算出来会是多少,给报告并排比 */
-    legacyCatchUpMs: out.kind === 'random' ? 0
-      : (out.truncated && pushed ? (sumOf(steps) / pushed) * (Number(out.totalFrames) || pushed) : sumOf(steps)),
-  };
-}
 function table(rows, columns) {
   const head = columns.map((c) => c.title);
   const body = rows.map((r) => columns.map((c) => String(c.get(r) ?? '')));
@@ -537,7 +493,7 @@ try {
       continue;
     }
     // 统计在这一侧做:页面只回原始样本(见文件头)
-    const out = { ...raw, ...summarize(raw, tuning) };
+    const out = { ...raw, ...summarizeProbe(raw, tuning) };
     out.capped = out.stepMs * tuning.COST_SCALE > B;
     /*
      * 这张卡按 K2 会走哪一档、哪些位置判重 —— 只作诊断打印,真正的分派由 `planPipelines`
