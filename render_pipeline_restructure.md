@@ -210,7 +210,7 @@ pinned 架构 4 / 5 的落点因为 vision 拆分而变清楚了：**Agent 专�
 
 ### R0 清账（半天）
 1. （已做，`5157f91`）主工作区的探针改动和 `docs/g0-a-webview2-probe.md` 提交。
-2. `scripts/verify-unified-frames.mjs` 在 `7f10ebe` 上就不过（见 R1 的遗留）：查清「`see_frames` 第二次取帧从 mov 出」和「导出与 `see_frames` 不再逐字节相等」是哪次改动引入的，是脚本过期还是行为回退。
+2. `scripts/verify-unified-frames.mjs`：查清了——脚本有两处过期（缓存命中的来源现在叫 `mov`；导出页要经 `?timeline=` 带项目，不带就渲成了页面默认项目），已改（`eec7a08`）。改完**还剩一条真问题**：同一帧上「整帧导出」和「HTML 快照重放」里 `punch-pill` 的弹簧动画状态不同（10 fps 下 28% 的通道不同），R1 之前就有；怀疑两条路的挂载提前量 / 热身帧不一致。已另派排查，结论回来记在这里。
 3. `result_decouple.md` 6.2 的遗留：`vite.config.ts:76-80` 的 `server.watch.ignored` **已经有** `**/out/**`，报告说冷启动仍被 `out/frame-library/` 拖慢——先量一次仓库根 dev server 的冷启动，确认慢在哪（监听器初扫还是别处）再动；最省事的兜底是给 `frame-library` 加 GC（原 F1）。
 4. （已做）给 `AGY-TASK-cloud-doc-and-write-race.md` 文首加一句「渲染管线部分以 `render_pipeline_restructure.md` 为准」。
 
@@ -264,7 +264,7 @@ pinned 架构 4 / 5 的落点因为 vision 拆分而变清楚了：**Agent 专�
 | 波次 | 任务 | 状态 |
 |---|---|---|
 | 前置 | R1、R1b、用词清理、分册抽取、轨道流编码原型 | 已合并 |
-| 第一波（互不碰文件） | R2 双舞台与协议；R4a 分派纯函数 + 可调系数 + 离线探针两趟；R6 服务端数据面 | R2、R4a 已合并（main 上 `tsc` 零错误、`npm test` 1547 / 1546 / 0 失败）；R6 在跑 |
+| 第一波（互不碰文件） | R2 双舞台与协议；R4a 分派纯函数 + 可调系数 + 离线探针两趟；R6 服务端数据面 | 三项都已合并（main 上 `tsc` 零错误、`npm test` 1572 / 1571 / 0 失败）。R6 留了一个接线：`server/prerender-set.mjs` 的 `prerenderSetOf` 还是按声明兜底，换成 `planPipelines(...).prerenderSet` 要先让预渲染进程拿到成本记录和系数，放在 R5 一起做 |
 | 第二波 | R3 舞台内容（依赖 R2、R1b）；R4b `ProbeGate` 与常驻探针（依赖 R2、R4a） | 2026-09-22 派出 |
 | 第三波 | R5 播放与追帧（依赖 R3、R4、R6 的快照来源） | |
 | 第四波 | R7 露出舞台（原子切换）+ 总验收 | |
