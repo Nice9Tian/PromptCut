@@ -5,6 +5,7 @@ import { tools as RAW_TOOL_SPECS } from "../../server/mcp-tools.mjs";
 import { webOpen, webView, webClick, webType, webScroll, webRead, webHandoff, webClose } from "./web";
 import { requestAgentBrowser, closeAgentBrowser } from "./agentBrowserStore";
 import * as agentBus from "./agentBus";
+import { TOOL_ROUTES } from "../mcp/routes.mjs";
 import { getState } from "../store/project";
 import { prerenderUrl } from "../editor/prerender";
 import { flushDataMirror, startDataMirror } from "../editor/dataMirror";
@@ -396,6 +397,8 @@ export function connectMcpExecutor(getApi: () => EditorApi, onStatus?: (s: { con
         // 聊天栏要画「改之前」的那张卡:只有改卡 / 删卡的工具才拍这一份
         const visualBefore = CLIP_EDIT_TOOLS.has(tool) || tool === "remove_clip" ? cloneProject(getState().project) : null;
         const api = getApi();
+        // 一对一转发的工具在路由表里;表外的(公告板、see_frames、get_gif、web_*)各自有分支
+        const route = TOOL_ROUTES[tool];
         let ok = true;
         let result: unknown;
         let error: string | undefined;
@@ -410,108 +413,12 @@ export function connectMcpExecutor(getApi: () => EditorApi, onStatus?: (s: { con
           else if (tool === "list_agents") result = agentBus.listAgents(agent);
           else if (tool === "send_message") result = agentBus.sendMessage(agent, args);
           else if (tool === "check_messages") result = agentBus.checkMessages(agent);
-          else if (tool === "background_job_status") result = api.backgroundJobStatus(args);
-          else if (tool === "list_cards") result = api.listCards(args);
-          else if (tool === "get_project") result = api.getProject();
-          else if (tool === "list_media") result = api.listMedia();
-          else if (tool === "get_selection") result = api.getSelection();
-          else if (tool === "add_clip") result = api.addClip(args);
-          else if (tool === "update_clip") result = api.updateClip(args);
-          else if (tool === "list_cuts") result = api.listCuts();
-          else if (tool === "switch_cut") result = api.switchCut(args);
-          else if (tool === "add_cut") result = api.addCut(args);
-          else if (tool === "rename_cut") result = api.renameCut(args);
-          else if (tool === "remove_cut") result = api.removeCut(args);
-          else if (tool === "set_position") result = api.setPosition(args);
-          else if (tool === "set_rect") result = api.setRect(args);
-          else if (tool === "align") result = api.align(args);
-          else if (tool === "nudge") result = api.nudge(args);
-          else if (tool === "get_layout") result = await api.getLayout(args);
-          else if (tool === "get_clip") result = api.getClip(args);
-          else if (tool === "list_parts") result = api.listParts(args);
-          else if (tool === "add_composite") result = api.addComposite(args);
-          else if (tool === "add_part") result = api.addPart(args);
-          else if (tool === "set_part") result = api.setPart(args);
-          else if (tool === "remove_part") result = api.removePart(args);
-          else if (tool === "move_part") result = api.movePart(args);
-          else if (tool === "set_clip") result = api.setClip(args);
-          else if (tool === "remove_clip") result = api.removeClip(args);
-          else if (tool === "duplicate_clip") result = api.duplicateClip(args);
-          else if (tool === "split_clip") result = api.splitClip(args);
-          else if (tool === "set_clip_volume") result = api.setClipVolume(args);
-          else if (tool === "separate_audio") result = api.separateAudio(args);
-          else if (tool === "create_audio") result = api.createAudio(args);
-          else if (tool === "set_emphasis") result = api.setEmphasis(args);
-          else if (tool === "list_transitions") result = api.listTransitions();
-          else if (tool === "add_transition") result = api.addTransition(args);
-          else if (tool === "remove_transition") result = api.removeTransition(args);
-          else if (tool === "add_track") result = api.addTrack(args);
-          else if (tool === "list_tracks") result = api.listTracks();
-          else if (tool === "remove_track") result = api.removeTrack(args);
-          else if (tool === "update_track") result = api.updateTrack(args);
-          else if (tool === "move_track") result = api.moveTrack(args);
-          else if (tool === "list_filters") result = api.listFilters();
-          else if (tool === "create_filter") result = api.createFilter(args);
-          else if (tool === "update_filter") result = api.updateFilter(args);
-          else if (tool === "remove_filter") result = api.removeFilter(args);
-          else if (tool === "apply_filter") result = api.applyFilter(args);
-          else if (tool === "list_pixel_maps") result = api.listPixelMaps();
-          else if (tool === "create_pixel_map") result = api.createPixelMap(args);
-          else if (tool === "update_pixel_map") result = api.updatePixelMap(args);
-          else if (tool === "remove_pixel_map") result = api.removePixelMap(args);
-          else if (tool === "apply_pixel_map") result = api.applyPixelMap(args);
-          else if (tool === "list_media_effects") result = api.listMediaEffects(args);
-          else if (tool === "list_audio_fx") result = api.listAudioFx();
-          else if (tool === "create_audio_fx") result = api.createAudioFx(args);
-          else if (tool === "update_audio_fx") result = api.updateAudioFx(args);
-          else if (tool === "remove_audio_fx") result = api.removeAudioFx(args);
-          else if (tool === "apply_audio_fx") result = api.applyAudioFx(args);
-          else if (tool === "measure_audio") result = await api.measureAudio(args);
-          else if (tool === "seek") result = api.seek(args);
-          else if (tool === "play") result = api.play();
-          else if (tool === "pause") result = api.pause();
-          else if (tool === "set_theme") result = api.setTheme(args);
-          else if (tool === "set_project_meta") result = api.setProjectMeta(args);
-          else if (tool === "set_camera3d") result = api.setCamera3d(args);
-          else if (tool === "bake_card") result = await api.bakeCard(args);
-          else if (tool === "stt_status") result = await api.sttStatus();
-          else if (tool === "stt_install") result = await api.sttInstall(args);
-          else if (tool === "transcribe_media") result = await api.transcribeMedia(args);
-          else if (tool === "get_transcript") result = api.getTranscript(args);
-          else if (tool === "detect_shots") result = await api.detectShots(args);
-          else if (tool === "list_shots") result = api.listShots(args);
-          else if (tool === "track_points") result = await api.trackPoints(args);
-          else if (tool === "get_track") result = api.getTrack(args);
-          else if (tool === "track_status") result = await api.trackStatus();
-          else if (tool === "track_install") result = await api.trackInstall();
-          else if (tool === "detect_subjects") result = await api.detectSubjects(args);
-          else if (tool === "list_subjects") result = api.listSubjects(args);
-          else if (tool === "subject_status") result = await api.subjectStatus();
-          else if (tool === "subject_install") result = await api.subjectInstall();
-          else if (tool === "attach_clip_motion") result = api.attachClipMotion(args);
-          else if (tool === "detach_clip_motion") result = api.detachClipMotion(args);
-          else if (tool === "auto_workflow") result = await api.autoWorkflow(args);
-          else if (tool === "auto_workflow_status") result = api.autoWorkflowStatus(args);
-          else if (tool === "fill_captions") result = api.fillCaptions(args);
-          else if (tool === "list_captions") result = api.listCaptions(args);
-          else if (tool === "edit_caption") result = api.editCaption(args);
-          else if (tool === "import_media") result = await api.importMedia(args);
-          else if (tool === "voice_list") result = await api.voiceList();
-          else if (tool === "voice_generate") result = await api.voiceGenerate(args);
-          else if (tool === "collect_status") result = await api.collectStatus();
-          else if (tool === "collect_search") result = await api.collectSearch(args);
-          else if (tool === "collect_install") result = await api.collectInstall();
-          else if (tool === "collect_probe") result = await api.collectProbe(args);
-          else if (tool === "collect_download") result = await api.collectDownload(args);
-          else if (tool === "collect_job") result = await api.collectJob(args);
-          else if (tool === "collect_login") result = await api.collectLogin(args);
-          else if (tool === "collect_login_check") result = await api.collectLoginCheck(args);
-          else if (tool === "collect_logout") result = await api.collectLogout(args);
-          else if (tool === "create_card") result = await api.createCard(args);
-          else if (tool === "apply_card") result = await api.applyCard(args);
-          else if (tool === "get_card_source") result = await api.getCardSource(args);
-          else if (tool === "edit_card") result = await api.editCard(args);
-          else if (tool === "inspect_card_dom") result = await api.inspectCardDom(args);
+          // 一对一转发 EditorApi 的那一百来个工具走路由表(src/mcp/routes.mjs)。
+          // await 与否照抄原分发链:表里说 awaited 才 await,不做统一。
+          else if (route) {
+            result = route.passArgs ? api[route.method](args) : api[route.method]();
+            if (route.awaited) result = await result;
+          }
           else if (tool === "see_frames") {
             // 一个工具两种画面:成片(timeline)走 seePreview,素材镜头拼图(media)走 seeSequences
             const { source, ...rest } = (args ?? {}) as any;
@@ -526,7 +433,6 @@ export function connectMcpExecutor(getApi: () => EditorApi, onStatus?: (s: { con
             }
           }
           else if (tool === "get_gif") result = await getGif(args);
-          else if (tool === "card_authoring_guide") result = await api.cardAuthoringGuide();
           // 网页操作不经过 EditorApi:浏览器整个在服务端,这些工具不碰编辑台的任何状态。
           // 挂进 EditorApi 只会逼编辑台那边实现 8 个纯转发的方法。
           else if (tool.startsWith("web_")) result = await runWebTool(tool, args);
