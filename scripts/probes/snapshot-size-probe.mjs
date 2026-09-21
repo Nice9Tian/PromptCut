@@ -408,7 +408,8 @@ dev 模式的 dev server（\`/src/*\` 现场变换），后台舞台（\`?stage=
 | canvas 卡：位图 \`toDataURL('image/webp', 0.9)\`（带 alpha），单帧 | **≤ 1 MB** |
 | 一次 \`setSnapshots(patch, opts)\` 投递 | **≤ 2 MB** |
 
-超出 300 KB 的卡按任务书先做「相对 UA + 主题基线的差异样式内联」。
+「相对 UA + 主题基线的差异样式内联」已在 R1 落地（\`src/render/snapshot/inlineStyles.ts\`），
+本次实测是落地**之后**的数。
 
 ## 2. 清单与总览
 
@@ -450,7 +451,8 @@ ${overDom.length === 0 && overCanvas.length === 0 ? '本次实测没有卡超过
 ${mdTable(['卡', '族', '最大帧 KB', '整场景 KB', '标签数', '内联样式 KB', '样式占比', '建议'],
   [...overDom].sort((a, b) => b.max.controlBytes - a.max.controlBytes)
     .map((r) => [r.cardId, r.family, kb(r.max.controlBytes), kb(r.max.sceneBytes), String(r.max.nodes), kb(r.max.styleBytes),
-      r.max.controlBytes ? Math.round(r.max.styleBytes * 100 / r.max.controlBytes) + '%' : '—', '相对 UA + 主题基线的差异样式内联']))}
+      r.max.controlBytes ? Math.round(r.max.styleBytes * 100 / r.max.controlBytes) + '%' : '—',
+      '差异样式内联已落地；仍超标的两条路见任务书 R1 末条（改走 lottie 的 canvas 渲染器 / 审阅表标 \`prerender: false\`）']))}
 ` : ''}${overCanvas.length ? `### 4.2 canvas 卡超 1 MB（${overCanvas.length} 张）
 
 ${mdTable(['卡', '族', '最大帧 KB', '其中位图 KB', '建议'],
