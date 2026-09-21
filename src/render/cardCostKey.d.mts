@@ -19,6 +19,13 @@ export interface CardCostRecord {
    * measured before the real-rAF wait) — with `frameMs` gone there is nothing else to cap on.
    */
   stepMs: number;
+  /**
+   * 单次最大的活渲帧（ms）。**只作诊断，不进判重和分派**（任务书 3.3 / K1）：限 2 核下同一张卡
+   * 两次实测的单次最大能差十几倍（`particles-orbit` 33 ms 对 2.2 ms），越线的是偶发的一帧卡顿、
+   * 不是卡的稳定成本，所以 `stepMs` 改取百分位、单次最大另记在这里。
+   * 只有计时趟留得下逐帧样本，所以只有 `kind: 'stepped'` 和补抽够样本的 `direct` 卡有这一项。
+   */
+  stepMaxMs?: number;
   /** Worst single frame spent inlining styles (DOM clone + computed-style pass). */
   inlineMs: number;
   /** Worst single frame spent rasterising canvases (0 for cards without a canvas). */
