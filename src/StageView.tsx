@@ -17,6 +17,7 @@ import {
   postStageReady,
   serveStageRpc,
   type BackJob,
+  type PlayReply,
   type ProbeBooleans,
   type RenderReply,
   type SetTimeReply,
@@ -71,6 +72,21 @@ const LIVE = typeof window !== "undefined" && new URLSearchParams(location.searc
 
 /** `.pc-awaiting` 的兜底时长(E0):快照没来也要在这之后露出活组件,不能永久隐身 */
 const AWAIT_FALLBACK_MS = 500;
+
+/**
+ * K4 的节拍按**绝对时刻**排:`nextDue = playStart + n × 1000 / fps`。等到 `nextDue − 这个值`
+ * 就开工 —— 真 rAF 的粒度是一个垂直同步(60 Hz 上 16.6 ms),差这一点点不该再多等一整帧。
+ */
+const BEAT_SLACK_MS = 1;
+
+/**
+ * 武装停(`pause({ atSec })`)的兜底(真墙钟,E4b)。武装的那一拍正常情况下几十毫秒就到,
+ * 但要是循环因为别的原因卡住了,RPC 不能永不回包 —— 超时按「循环此刻停在哪儿」回。
+ */
+const ARM_TIMEOUT_MS = 5000;
+
+/** K6 的窗口长度(ms) */
+const K6_WINDOW_MS = 1000;
 // 时间必须在任何卡片挂载之前接管
 const clock = isStageRoute ? installStageClock() : null;
 const pinner = createAnimationPinner();
@@ -170,8 +186,22 @@ export default function StageView() {
     playing: false,
     mediaT: 0,
     localHashes: [] as readonly string[],
-    /** K4 的节拍循环停着没有(R5 才有循环本体;`setRole('back')` 要能停它) */
+    /** K4 的节拍循环停着没有(`setRole('back')` / `pause()` 要能停它) */
     beatPaused: true,
+    /** 循环真的还在跑(`pause()` 置了 `beatPaused` 之后本拍还要走完) */
+    beatRunning: false,
+    /** 最后一拍的 `sec`:`pause()` 回包的 `stoppedAt` */
+    beatLastSec: 0,
+    /** 最后一拍的**帧序号**(武装停按它比,不比浮点) */
+    beatLastFrame: -1,
+    /** 武装停(`pause({ atSec })`):post 完这一拍就停 */
+    beatArmed: null as { frame: number; atSec: number; resolve: (r: PlayReply) => void; timer: number } | null,
+    /** 等循环停下来的那些 `pause()` 调用 */
+    beatWaiters: [] as ((r: PlayReply) => void)[],
+    /** K6 的一秒窗口:每拍的总耗时和每张卡的耗时(都用 `__pcRealNow`) */
+    k6: { beats: [] as { at: number; over: number; byClip: Map<string, number> }[], pending: new Set<string>() as ReadonlySet<string> },
+    /** 这一拍每张卡的 React 渲染耗时(`<Profiler>` 报的,每拍清空) */
+    cardCost: new Map<string, number>(),
     pending: null as PendingRender | null,
   });
   /**
@@ -244,6 +274,15 @@ export default function StageView() {
   const onMediaFrame = useCallback(() => {
     if (ref.current.role !== "back") return;
     postStageEvent({ type: "mediaReady", sec: ref.current.mediaT });
+  }, []);
+
+  /**
+   * 这一拍这张卡花了多少毫秒(K6)。`FrameScene` 的 live 路给每个片段套了一个
+   * `<Profiler>`,一拍里同一个片段可能提交不止一次,所以是累加;每拍开头清空。
+   */
+  const onCardCost = useCallback((clipId: string, ms: number) => {
+    const cur = ref.current.cardCost;
+    cur.set(clipId, (cur.get(clipId) ?? 0) + ms);
   }, []);
 
   useEffect(() => {
@@ -588,6 +627,178 @@ export default function StageView() {
       return { booleans: { vtOk, seekOk, seekMs: elapsed > PROBE_BOOL_MS ? null : elapsed } };
     };
 
+    /* ------------------------------------------------------------------ K4 节拍器 */
+
+    /**
+     * K6 自动再平衡(**只降不升**)。任一 1 秒窗口内累计超时(每拍耗时超出 1/fps 的部分之和)
+     * > 1/fps,就把本窗口**实测**累计耗时最大的那张轻卡降级:post `{ type: 'demote', clipId }`,
+     * 父页查旧记录整条 PUT `{ ...旧记录, capped: true, demoted: true }`。
+     *
+     * 「最贵」按实测算、不按探针的 `stepMs`(pinned 渲染 6)。
+     *
+     * **`pendingDemote` 的卡不计入窗口、也不当候选**:死素材就绪之前它照常活渲(用户看到的
+     * 画面不变),它这一拍的耗时照记诊断 —— 但再让它参与判定的话,它会继续把窗口顶爆,
+     * 每秒再降一张,直到轻管线为空。就绪后父页把它切进 `suppressed`,那时才从集合里移出。
+     */
+    const checkDemote = (fps: number, sec: number): void => {
+      const beats = ref.current.k6.beats;
+      if (beats.length < 2) return;
+      let over = 0;
+      for (const b of beats) over += b.over;
+      if (over <= 1000 / fps) return;
+      const pending = ref.current.k6.pending;
+      const plan = ref.current.plan?.plan ?? null;
+      const total = new Map<string, number>();
+      for (const b of beats) {
+        for (const [id, ms] of b.byClip) {
+          if (pending.has(id)) continue;
+          // 只降轻卡:重卡本来就在贴死素材,降它没有意义
+          if (pipelineAt(plan, id, sec) !== "light") continue;
+          total.set(id, (total.get(id) ?? 0) + ms);
+        }
+      }
+      let worst: string | null = null;
+      let worstMs = 0;
+      // 同分时按 clipId 定序,免得两次跑降到不同的卡上
+      for (const id of [...total.keys()].sort()) {
+        const ms = total.get(id)!;
+        if (ms > worstMs) { worst = id; worstMs = ms; }
+      }
+      if (!worst) return;
+      ref.current.k6.pending = new Set([...pending, worst]);
+      // 窗口清零:下一张要重新攒够超时才降,不然一秒之内会连降好几张
+      ref.current.k6.beats = [];
+      postStageEvent({ type: "demote", clipId: worst });
+    };
+
+    /**
+     * 这一拍的账(K6 的一秒窗口)。**超时**只算每拍耗时超出 1/fps 的那一部分;
+     * 每张卡的耗时来自 `<Profiler>`(`FrameScene` 的 live 路每个片段一个,E7),
+     * 每拍清空一次。窗口只留最近 `K6_WINDOW_MS` 毫秒。
+     *
+     * 降级的判定在 `checkDemote`(K6),这里只记账 —— 记账本身是节拍的一部分。
+     */
+    const noteBeat = (beatCost: number, fps: number, sec: number): void => {
+      const at = realNow();
+      const over = Math.max(0, beatCost - 1000 / fps);
+      const byClip = new Map(ref.current.cardCost);
+      const beats = ref.current.k6.beats;
+      beats.push({ at, over, byClip });
+      while (beats.length && at - beats[0].at > K6_WINDOW_MS) beats.shift();
+      checkDemote(fps, sec);
+    };
+
+    /**
+     * 停下节拍循环,并把等着的 `pause()` 回包落定。
+     *
+     * **三处入口**:`pause()`(立即停)、武装停到达、`setRole('back')` / 播放到头。
+     * 不管从哪儿来,挂着的 RPC 都必须回包 —— 循环停了没人再去 resolve 它们。
+     */
+    const settleBeatWaiters = (): void => {
+      const armed = ref.current.beatArmed;
+      const waiters = ref.current.beatWaiters;
+      ref.current.beatArmed = null;
+      ref.current.beatWaiters = [];
+      const stoppedAt = ref.current.beatLastSec;
+      if (armed) {
+        window.clearTimeout(armed.timer);
+        armed.resolve({ ok: true, stoppedAt });
+      }
+      for (const resolve of waiters) resolve({ ok: true, stoppedAt });
+    };
+
+    /** 停循环(`setRole('back')`、`pause()`、播放到头都走它) */
+    const stopBeat = (): void => {
+      ref.current.beatPaused = true;
+      if (!ref.current.beatRunning) settleBeatWaiters();
+    };
+
+    /**
+     * 节拍循环(K4)。**只有 `front` 跑**,每拍:
+     *
+     *   `t += 1 / fps` → `clock.advanceTo(t × 1000, { step: 1000 / fps })` 推轻卡并提交
+     *   → 贴平面(平面状态在 `ref` 里,和 `setT` 同一次提交) → 等**真实**一帧
+     *   → 补一拍落定(`clock.tick` + `pinner.sync`,让 Motion 把新值写回 DOM)
+     *   → post `{ type: 'frame', sec }` → 下一拍。
+     *
+     * **节拍按绝对时刻排**:`nextDue = playStart + n × 1000 / fps`(`__pcRealNow`),
+     * 一拍的活干完之后 `await __pcRealRaf()` 直到 `__pcRealNow() ≥ nextDue − 1 ms`。
+     * 60 Hz 屏上一次 rAF 只有 16.6 ms,30 fps 等一次等不满一拍,所以是个循环;
+     * 24 / 25 fps 自然落成 2 / 3 帧交替,均值仍是 1000 / fps。
+     *
+     * **慢帧就等**:只有**这一拍的活本身**超过了 `nextDue` 才把时间轴整体后移
+     * (`playStart += 超出量`),不补、不跳帧、不往前冲 —— 所以连续两条 `frame` 的
+     * `sec` 差恒为 1/fps。等 rAF 那一下的粒度溢出**不后移**:每拍都后移一点的话,
+     * 30 fps 以外的帧率会被一路推成「每拍整数个垂直同步」,均值就不是 1000/fps 了。
+     */
+    const runBeatLoop = async (fromSec: number): Promise<void> => {
+      const p = ref.current.project;
+      if (!p) return;
+      const fps = Math.max(1, p.fps || 30);
+      const period = 1000 / fps;
+      const duration = Math.max(0, Number(p.duration) || 0);
+      // 拍序号按帧格算,`sec` 一律是 `帧号 / fps` —— 连续累加浮点会飘
+      const fromFrame = Math.round(fromSec * fps);
+      let playStart = realNow();
+      ref.current.beatRunning = true;
+      try {
+        for (let n = 1; ; n++) {
+          // 每拍开头查 `paused` / 角色(E0)
+          if (ref.current.beatPaused || ref.current.role !== "front") break;
+          const rawSec = (fromFrame + n) / fps;
+          const ended = rawSec >= duration - 1e-9;
+          const sec = ended ? duration : rawSec;
+          const beatStarted = realNow();
+
+          /* ---- 一拍的活 ---- */
+          ref.current.t = sec;
+          ref.current.cardCost.clear();
+          flushSync(() => setT(sec));
+          clock.advanceTo(sec * 1000, { step: period, onFrame: (ms) => pinner.sync(ms, skipWrappers()) });
+          await realRaf();
+          /*
+           * 补一拍落定。`settle()` 排的是微任务,而这里本来就在 `await` 之后 ——
+           * 直接同步做完即可,顺手作废还挂着的那一次(又渲了一帧,上一次补拍不作数)。
+           */
+          settleGen.current++;
+          clock.tick(sec * 1000);
+          pinner.sync(sec * 1000, skipWrappers());
+          const beatCost = realNow() - beatStarted;
+
+          // post `frame` 之前再查一次角色(E0):互换那一拍新 `back` 不能还在报
+          if (ref.current.role !== "front") break;
+          ref.current.beatLastSec = sec;
+          ref.current.beatLastFrame = fromFrame + n;
+          if (ended) {
+            postStageEvent({ type: "ended", sec: duration });
+            break;
+          }
+          postStageEvent({ type: "frame", sec });
+          noteBeat(beatCost, fps, sec);
+
+          // 武装停(E0):post 完 `frame(atSec)` 那一拍就停在那一帧,平面不摘
+          const armed = ref.current.beatArmed;
+          if (armed && ref.current.beatLastFrame >= armed.frame) break;
+
+          /* ---- 等到下一拍的绝对时刻 ---- */
+          const nextDue = playStart + n * period;
+          const workEnd = realNow();
+          if (workEnd > nextDue) {
+            playStart += workEnd - nextDue;
+          } else {
+            while (realNow() < nextDue - BEAT_SLACK_MS) {
+              await realRaf();
+              if (ref.current.beatPaused || ref.current.role !== "front") break;
+            }
+          }
+        }
+      } finally {
+        ref.current.beatRunning = false;
+        ref.current.beatPaused = true;
+        settleBeatWaiters();
+      }
+    };
+
     const api: StageRpcApi = {
       /**
        * 换项目文档。patch 复用 A7 的 changedClips 结构,合并时**保持未变片段的对象引用**
@@ -903,7 +1114,8 @@ export default function StageView() {
         ref.current.role = role;
         ref.current.job = role === "back" ? opts.job ?? "probe" : undefined;
         if (role === "back") {
-          ref.current.beatPaused = true;
+          // 1. 停 K4 的节拍循环(挂着的 pause() 回包一并落定)
+          stopBeat();
           ref.current.snapshots = new Map();
           ref.current.suppressed = new Set();
           ref.current.streamPlanes = [];
@@ -931,16 +1143,69 @@ export default function StageView() {
         ref.current.plan = { plan: revivePlan(wire), costs: Array.isArray(plan?.costs) ? plan.costs : [] };
         return { ok: true as const };
       },
-      /*
-       * K4(R5):可见舞台自己按帧节拍播放。R2 里节拍循环本体还没有,父页照旧每帧发 `setTime`,
-       * 这两个仍然明确说不支持 —— 但回包已经是统一后的 `PlayReply`(`ok` 不可选),
-       * R5 往里填循环时只改这两个函数体,协议面不用再动。
+      /**
+       * K4:可见舞台是节拍器。`play(fromSec)` 只是**起**循环 —— 立刻回包,不等第一拍,
+       * 父页拿它的回包时刻当「相邻两条 `frame` 的到达间隔」的起点(`mediaStalled`)。
+       *
+       * 只有 `front` 跑:`back` 要么在做探针、要么在补跑,起循环会把它的时钟一路推走。
        */
-      async play() {
-        return { ok: false, reason: "unsupported" };
+      async play(fromSec) {
+        if (ref.current.role !== "front") return { ok: false, reason: "role" };
+        const p = ref.current.project;
+        if (!p) return { ok: false, reason: "no-project" };
+        const from = Math.max(0, Number(fromSec) || 0);
+        // 连着来两条 `play`:先让上一轮收摊,不然两个循环会各推各的时钟
+        if (ref.current.beatRunning) {
+          ref.current.beatPaused = true;
+          await new Promise<PlayReply>((resolve) => { ref.current.beatWaiters.push(resolve); });
+        }
+        const fps = Math.max(1, p.fps || 30);
+        ref.current.beatLastSec = from;
+        ref.current.beatLastFrame = Math.round(from * fps);
+        ref.current.k6.beats = [];
+        ref.current.beatPaused = false;
+        // 按下播放同样中止第一路追帧(K5:五个 RPC 各递增一次)
+        catchUpGen.current++;
+        void runBeatLoop(from);
+        return { ok: true, stoppedAt: from };
       },
-      async pause() {
-        return { ok: false, reason: "unsupported" };
+      /**
+       * `pause()` 立即停:**本拍走完、post 完这一拍的 `frame` 后**停,回 `{ stoppedAt }`
+       * (= 最后一拍的 `sec`)。循环已经停着(`ended` 之后、重复 `pause()`)立即回最后一拍。
+       *
+       * `pause({ atSec })` 是**武装停**(K3(b) 的播放态互换用):post 完 `frame(atSec)`
+       * 那一拍就停在那一帧、平面不摘,回 `{ stoppedAt: atSec }`。那一拍**已经 post 过**
+       * (当前拍序号 ≥ `atSec` 的拍序号,**等号也算过了**)时不停、回 `{ passed: true }` ——
+       * 否则永远等不到那一拍、RPC 永不回包。拍序号按帧号比,不比浮点。
+       */
+      async pause(opts = {}) {
+        const atSec = opts?.atSec;
+        const fps = Math.max(1, ref.current.project?.fps || 30);
+        if (!ref.current.beatRunning) return { ok: true, stoppedAt: ref.current.beatLastSec };
+        if (typeof atSec === "number" && Number.isFinite(atSec)) {
+          const frame = Math.round(atSec * fps);
+          if (ref.current.beatLastFrame >= frame) return { ok: true, passed: true };
+          // 只保留最后一次武装:上一次作废(按 `passed` 回,告诉父页别再等它)
+          const prev = ref.current.beatArmed;
+          if (prev) {
+            window.clearTimeout(prev.timer);
+            ref.current.beatArmed = null;
+            prev.resolve({ ok: true, passed: true });
+          }
+          return await new Promise<PlayReply>((resolve) => {
+            // 兜底用**真** setTimeout(E4b):循环要是卡住了,RPC 不能永不回包
+            const timer = realSetTimeout(() => {
+              if (ref.current.beatArmed?.timer !== timer) return;
+              ref.current.beatArmed = null;
+              resolve({ ok: true, stoppedAt: ref.current.beatLastSec });
+            }, ARM_TIMEOUT_MS);
+            ref.current.beatArmed = { frame, atSec, resolve, timer };
+          });
+        }
+        return await new Promise<PlayReply>((resolve) => {
+          ref.current.beatWaiters.push(resolve);
+          stopBeat();
+        });
       },
       /**
        * 播放中被判重的卡(E7 第 5 条):`Stage` 给包裹层加 `.pc-suppressed`、藏子树,
@@ -954,6 +1219,15 @@ export default function StageView() {
       async setSuppressed(clipIds) {
         const next = new Set(clipIds);
         ref.current.suppressed = next;
+        /*
+         * K6:被切进 `suppressed` 就说明死素材就绪了,从 `pendingDemote` 里移出 ——
+         * 它此后是重卡,本来就不参加 K6 的判定。
+         */
+        if (ref.current.k6.pending.size) {
+          const rest = new Set(ref.current.k6.pending);
+          for (const id of next) rest.delete(id);
+          if (rest.size !== ref.current.k6.pending.size) ref.current.k6.pending = rest;
+        }
         if (ref.current.settling.size) {
           const rest = new Map(ref.current.settling);
           let changed = false;
@@ -1087,6 +1361,7 @@ export default function StageView() {
           awaiting={ref.current.awaiting}
           localHashes={ref.current.localHashes}
           onMediaFrame={onMediaFrame}
+          onCardCost={onCardCost}
         />
       ) : (
         <Stage timeline={timeline} t={t} playToken={token} proxy={proxy ? proxyOf : undefined} />

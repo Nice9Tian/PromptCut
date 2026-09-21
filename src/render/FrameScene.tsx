@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef } from "react";
+import { Profiler, useCallback, useEffect, useLayoutEffect, useRef } from "react";
 import { Stage, type ProxyRender, type StagePlaneProps } from "./Stage";
 import { flattenOverlay, isImageMedia, nextVideoLayerAfter, opacityAt, videoLayersAt, type MediaAsset, type Project, type TrackClip } from "../kernel/project";
 import type { Timeline } from "../kernel/types";
@@ -128,7 +128,7 @@ function PixelMappedMedia({ media, clip, t, project, style, def, live = false, p
 export function FrameScene({
   project, sourceProject = project, t, directT = t, playToken, graph,
   mediaMode = "placeholder", mediaT = t, scrubbing = false, playing = false, proxy,
-  suppressed, streamPlanes, snapshots, remountGen, settling, awaiting, localHashes, onMediaFrame,
+  suppressed, streamPlanes, snapshots, remountGen, settling, awaiting, localHashes, onMediaFrame, onCardCost,
 }: {
   project: Project; sourceProject?: Project; t: number; directT?: number; playToken: number; graph?: Timeline["graph"];
   /** 素材层怎么画:导出页 / legacy 的占位,还是舞台里真的在放的那套(E7 第 1 条) */
@@ -145,6 +145,19 @@ export function FrameScene({
   localHashes?: readonly string[];
   /** live:后台舞台的素材层画出一帧了(K5 第 (4) 步的 `mediaReady`) */
   onMediaFrame?: (mediaTime: number) => void;
+  /**
+   * K6:这一拍这张卡花了多少毫秒。**只有 live 路有**,`<Profiler>` 报的
+   * `actualDuration`(这个片段的子树这一次提交渲染花的时间)。
+   *
+   * 为什么用 `Profiler` 而不是自己掐表:一拍是一次 `flushSync`,整棵树一起提交,
+   * 外面掐表只量得到总数;而 K6 要的是「本窗口实测累计耗时最大的那张轻卡」。
+   * live 路每个片段本来就是一个独立的单片段 `Stage`,套一层 `Profiler` 不产生任何 DOM。
+   *
+   * **限制**:它量的是 React 渲染 / 提交,不含卡片自己 rAF 回调里的时间
+   * (那些跑在 `clock.tick` 里,回调和片段之间没有可靠的归属关系)。
+   * 见报告里的更正建议。
+   */
+  onCardCost?: (clipId: string, ms: number) => void;
 } & StagePlaneProps) {
   const live = mediaMode === "live";
   void localHashes;
@@ -258,13 +271,26 @@ export function FrameScene({
         // Stage's direct-child perspective and glass/backdrop context.
         // E7 第 3～5 条:`proxy` 和六个平面 prop 原样透传给每个内部单片段 `Stage`。
         // `placeholder` 路一个都不传(宿主本来就不给),DOM 一个字不变。
-        return timeline.clips.length
-          ? <div key={clip.id} data-pc-native-layer={clip.id} style={layerStyle}>
-            <Stage timeline={timeline} t={t} directT={directT} playToken={playToken}
-              proxy={proxy} snapshots={snapshots} suppressed={suppressed} streamPlanes={streamPlanes}
-              remountGen={remountGen} settling={settling} awaiting={awaiting} />
+        if (!timeline.clips.length) return null;
+        const stage = (
+          <Stage timeline={timeline} t={t} directT={directT} playToken={playToken}
+            proxy={proxy} snapshots={snapshots} suppressed={suppressed} streamPlanes={streamPlanes}
+            remountGen={remountGen} settling={settling} awaiting={awaiting} />
+        );
+        /*
+         * K6 的每卡耗时。**包不包这一层由 `live` 决定、不由 `onCardCost` 在不在决定** ——
+         * 中途多包一层 / 少包一层会让 React 认成另一棵树、把卡片重挂载,锚点就丢了。
+         * `placeholder`(导出 / legacy)永远不包,DOM 和渲染路径一个字不变。
+         */
+        return (
+          <div key={clip.id} data-pc-native-layer={clip.id} style={layerStyle}>
+            {live ? (
+              <Profiler id={clip.id} onRender={(_id, _phase, actualDuration) => onCardCost?.(clip.id, actualDuration)}>
+                {stage}
+              </Profiler>
+            ) : stage}
           </div>
-          : null;
+        );
       })}
     </div>;
   })}</>;
