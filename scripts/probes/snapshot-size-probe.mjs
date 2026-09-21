@@ -102,7 +102,7 @@ try {
 </script>
 </head>
 <body style="margin:0;background:#111">
-<iframe id="f" src="/?stage=1&id=back&prerender=1" style="width:1920px;height:1080px;border:0;display:block"></iframe>
+<iframe id="f" src="/?stage=1&id=B&prerender=1" style="width:1920px;height:1080px;border:0;display:block"></iframe>
 <script type="module">
 function createStageRpc(target) {
   let nextId = 1; const pending = new Map();
@@ -392,7 +392,7 @@ try {
   const md = `# A3c 快照体积审计（高频清单实测）
 
 实测日期 ${now}。跑法：\`node scripts/probes/snapshot-size-probe.mjs --origin ${origin}\`，
-dev 模式的 dev server（\`/src/*\` 现场变换），后台舞台（\`?stage=1&id=back\`，\`setRole('back', { job: 'probe' })\`）。
+dev 模式的 dev server（\`/src/*\` 现场变换），后台舞台（\`?stage=1&id=B\`，\`setRole('back', { job: 'probe' })\`）。
 每张卡一条轨道一个 \`${clipSec}\` 秒的 clip、参数取默认值，fps ${fps}；在 0.3 s / 中点 / 收尾前 0.1 s 三个本地时刻各生成一次快照
 （\`stateful\` 卡用 \`render(t, { jump: true, maxCatchUp: Infinity })\` 真推到那一刻，\`direct\` 卡用 \`setTime(t)\`），
 取三次里最大的一帧。量的是 \`window.__pcCreateSnapshot()\` 回来的 \`controls[0].html\` —— 也就是包裹层 innerHTML、

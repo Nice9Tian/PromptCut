@@ -6,6 +6,7 @@ import os from 'node:os';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { overLimit } from './http-guard.mjs';
+import { stagePortsOf } from './stage-ports.mjs';
 /*
  * 必须静态 import:vite 打包配置时,别的插件静态引入的 prerender-client.mjs 被打进同一个包里,
  * 状态(预渲染的地址、就绪没有)在那一份上。这里要是换成 import(new URL(...)) 动态加载,拿到的是
@@ -162,6 +163,13 @@ export default function vitePluginAi(): Plugin {
             fs.writeFileSync(path.join(tmpDir, 'port.json'), JSON.stringify({
               port,
               host,
+              /*
+               * 两个舞台端口(E1)。编辑器端口 +1 / +2 的反向代理,舞台 iframe 从它们加载 ——
+               * 写进来是给**页面之外**的人看的:桌面壳要按它给 WebView2 放行 / 探端口占用,
+               * 探针脚本不用再自己推算。页面不读这里(端口表由 vite-plugin-stage-ports 注入)。
+               * 代理没起来(端口被占)时页面退回同源单舞台,这张表仍然是「本该是哪两个」。
+               */
+              stagePorts: stagePortsOf(port),
               pid: process.pid,
               startedAt: Date.now()
             }));

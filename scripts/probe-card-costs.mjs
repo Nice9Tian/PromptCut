@@ -122,7 +122,7 @@ try {
 </script>
 </head>
 <body style="margin:0;background:#111">
-<iframe id="f" src="/?stage=1&id=back&prerender=1" style="width:1920px;height:1080px;border:0;display:block"></iframe>
+<iframe id="f" src="/?stage=1&id=B&prerender=1" style="width:1920px;height:1080px;border:0;display:block"></iframe>
 <script type="module">
 // 最小 RPC 客户端(和 src/render/stageRpc.ts 同一协议),内联着写是为了这张页也能打产物包
 function createStageRpc(target) {

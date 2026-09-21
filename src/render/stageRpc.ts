@@ -26,7 +26,10 @@ export interface HostCapabilities {
   offscreenGl: boolean;
   /** navigator.deviceMemory ≤ 4 或 Safari */
   lowMemory: boolean;
-  /** 父页在 src 查询串里给的舞台 id */
+  /**
+   * 父页在 src 查询串里给的舞台 id(`A` / `B`)。**只是实例名,和角色无关**(E1):
+   * 角色只经 `setRole` 定,两个 iframe 谁当 `front` 都行、中途还会互换(K5)。
+   */
   stageId: string;
 }
 
@@ -63,9 +66,19 @@ export interface RenderResult {
   /** 只在 probe 时有 */
   snapshot?: SnapshotCost;
 }
+/**
+ * `render` 被掐断 / 拒绝时的回包。父页对每个 reason 的规矩不一样(E0):
+ *   - `superseded`:父页自己的新 `render` 掐的,**直接丢弃**,重发只会再掐掉新的那次;
+ *   - `project`:`setProject` 掐的,按当前目标重发(最多 3 次);**例外**是 `back` 正处在
+ *     `job: 'catchup'` 期间(补跑 / 页面侧测量自己灌的项目),那时一律丢弃 —— 闸门按工作项判、
+ *     不按 `settling` 标志判(stageJobs.ts 的 `renderAbortAction`);
+ *   - `timeout`:K1 探针的封顶,既不重发也不当错误(截断 ≠ `capped`);
+ *   - `role`:E1 的角色闸门,收到的舞台不是 `back`。**当错误、不重发** —— 重发也还是同一个角色;
+ *   - `detached`:RPC 客户端在 iframe 换掉 / 卸载时自己造的。丢弃回包、按新客户端重发当前目标。
+ */
 export interface RenderAborted {
   aborted: true;
-  reason: "superseded" | "project" | "timeout" | "detached";
+  reason: "superseded" | "project" | "timeout" | "role" | "detached";
   elapsedMs?: number;
   stepMs?: number;
   frames?: number;
@@ -84,7 +97,7 @@ export interface SetTimeOptions {
   /** K1 探针:走跳转路径、等一次真 rAF、生成一次本控件的快照,回包带四个数 */
   probe?: true;
 }
-export interface SetTimeReply {
+export interface SetTimeResult {
   /** 只在 probe 时有:`__pcRealNow` 量的墙钟(含那一次真 rAF 的等待) */
   elapsedMs?: number;
   /**
@@ -99,6 +112,16 @@ export interface SetTimeReply {
   /** 这次 setTime 走的路径,给验收和调试看 */
   path: "continuous" | "set";
 }
+/**
+ * 带 `probe: true` 的 `setTime` 撞上角色闸门(E1):收到的舞台不是 `back`。
+ * 和 `render` 的 `role` 同一条规矩 —— 父页当错误、不重发。不带 `probe` 的 `setTime`
+ * 两种角色都收(拖动发给 `front`、D4 的页面侧测量发给 `back`),不会走到这里。
+ */
+export interface SetTimeAborted {
+  aborted: true;
+  reason: "role";
+}
+export type SetTimeReply = SetTimeResult | SetTimeAborted;
 
 export interface RenderOptions {
   /** true = 重挂载并从 mountFrameOf 推到 tSec;缺省 = 续推(不重挂载,从 clock.now() 推到 tSec) */
@@ -119,12 +142,22 @@ export interface SetRoleReply {
   ok: boolean;
   reason?: "unsupported";
 }
-export interface PauseReply {
-  stoppedAt?: number;
-  passed?: true;
-  ok?: boolean;
-  reason?: string;
-}
+/**
+ * `play` / `pause` 共用的回包(K4)。第 3 步 `play` 的内联回包和 `PauseReply` 是两个形状,
+ * R2 统一成这一个,**`ok` 不可选** —— 调用方先看 `ok` 再取别的字段,不用猜缺省值。
+ *
+ * 三种情况:
+ *   - `{ ok: true, stoppedAt }`:停在这一秒(= 最后一拍的 `sec`)。不带 `atSec` 的立即停、
+ *     带 `atSec` 的武装停到达、以及循环本来就停着(`ended` 之后 / 重复 `pause()`)都回它;
+ *   - `{ ok: true, passed: true }`:武装停的那一拍**已经 post 过**(当前拍序号 ≥ `atSec` 的拍序号),
+ *     不停 —— 否则永远等不到那一拍、RPC 永不回包;
+ *   - `{ ok: false, reason }`:做不了。R2 的舞台还没有节拍循环(K4 是 R5 的活),
+ *     `play` / `pause` 一律回 `{ ok: false, reason: 'unsupported' }`。
+ */
+export type PlayReply =
+  | { ok: true; stoppedAt: number; passed?: undefined }
+  | { ok: true; stoppedAt?: undefined; passed: true }
+  | { ok: false; reason: string };
 
 /** 舞台对父页暴露的方法(全部异步、带请求 id) */
 export interface StageRpcApi {
@@ -138,9 +171,9 @@ export interface StageRpcApi {
   setRole(role: StageRole, opts?: SetRoleOptions): Promise<SetRoleReply>;
   /** K2 的分派表 + K1 的每卡记录(第 4 步用;第 3 步舞台只存起来) */
   setPlan(plan: { plan: unknown; costs: CardCostRecord[] }): Promise<{ ok: true }>;
-  /** K4(第 4 步):第 3 步回 { ok: false, reason: 'unsupported' } */
-  play(fromSec: number): Promise<{ ok: boolean; reason?: string }>;
-  pause(opts?: { atSec?: number }): Promise<PauseReply>;
+  /** K4(R5):R2 的舞台还没有节拍循环,两个都回 { ok: false, reason: 'unsupported' } */
+  play(fromSec: number): Promise<PlayReply>;
+  pause(opts?: { atSec?: number }): Promise<PlayReply>;
   setSuppressed(clipIds: string[]): Promise<{ ok: true }>;
   setStreamPlanes(planes: Array<{ clipIds: string[] }>): Promise<{ ok: true }>;
   setScrubbing(on: boolean): Promise<{ ok: true }>;
@@ -167,6 +200,24 @@ export type StageEvent =
   | { type: "probe-frame"; clipId: string; localFrame: number; html: string };
 
 export const STAGE_EVENT_TYPES = new Set<StageEvent["type"]>(["mediaReady", "frame", "ended", "settled", "probe", "demote", "probe-frame"]);
+
+/**
+ * 每种事件**只认哪个角色**发来的(E0 末条:父页按 `event.source` 过滤来源)。
+ *
+ * `frame` / `ended` / `settled` / `demote` 是播放器舞台的事,只认当前 `front` 那个 iframe;
+ * `mediaReady` / `probe` / `probe-frame` 是后台舞台的事,只认当前 `back` 的。
+ * **不过滤就会重复 `tick`**:K5 的角色互换那一拍两个舞台都可能 post
+ * (旧 `front` 走完本拍才停,新 `front` 已经开始报 `frame`)。
+ *
+ * 过滤落在 `stageBridge.ts` 的 `onStageEvent`:只有那里同时知道「哪个客户端」和
+ * 「它此刻是什么角色」。`createStageRpc` 那一层的 `e.source !== target` 只解决前半个问题。
+ */
+const FRONT_EVENT_TYPES = new Set<StageEvent["type"]>(["frame", "ended", "settled", "demote"]);
+
+/** 这种事件该由哪个角色的舞台发出来 */
+export function stageEventRole(type: StageEvent["type"]): StageRole {
+  return FRONT_EVENT_TYPES.has(type) ? "front" : "back";
+}
 
 interface RpcRequest {
   type: "pc-rpc";
@@ -327,6 +378,8 @@ export function detectHostCapabilities(): HostCapabilities {
     prerender: q.get("prerender") === "1",
     offscreenGl,
     lowMemory: (typeof mem === "number" && mem <= 4) || safari,
-    stageId: q.get("id") || "front",
+    // stageId **只是实例名,和角色无关**(E1):两个 iframe 是 `A` / `B`,谁是 front / back
+    // 只经 setRole 定。缺省给 `A` 而不是 `front`,免得又把实例名读成角色名。
+    stageId: q.get("id") || "A",
   };
 }
