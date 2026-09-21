@@ -1,32 +1,66 @@
 /**
- * 编辑台冒烟(第 3 步 E0 / D3 页面侧):真的打开编辑台(?editor),经 store 加两张卡、seek,
+ * 编辑台冒烟(E0 / E1 / D3 页面侧):真的打开编辑台(?editor),经 store 加两张卡、seek,
  * 看 Preview 是否只经 RPC 把项目和时间送到了舞台 iframe、命中测试和选中描边是否照常工作。
  *
- *   node scripts/probes/editor-preview-smoke.mjs [--origin http://127.0.0.1:5197]
+ *   node scripts/probes/editor-preview-smoke.mjs [--origin http://127.0.0.1:5211] [--stage]
+ *
+ * 不带 `--stage` 就是缺省的 legacy:一个同源舞台 iframe,和今天一模一样;
+ * 带 `--stage` 打开 `?preview=stage`,两个跨源舞台 iframe(E1),可见行为必须逐项一样。
+ *
+ * **舞台里的 DOM 一律走 puppeteer 的 frame 句柄**(`page.frames()` 对跨源 iframe 照样给得出),
+ * 不用 `iframe.contentDocument` —— 跨源模式下父页碰不到它。
  */
 import puppeteer from 'puppeteer';
 
 const args = process.argv.slice(2);
 const origin = (args.includes('--origin') ? args[args.indexOf('--origin') + 1] : null) || process.env.PC_STAGE_TEST_URL || 'http://127.0.0.1:5197';
+const stageMode = args.includes('--stage');
 const fails = [];
 const check = (cond, label, extra) => { if (!cond) fails.push(label + (extra !== undefined ? ' :: ' + JSON.stringify(extra) : '')); return cond; };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const browser = await puppeteer.launch({ headless: true, args: ['--window-position=-32000,-32000', '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1'] });
-const out = {};
+const out = { mode: stageMode ? 'stage' : 'legacy' };
 try {
   const page = await browser.newPage();
   await page.setViewport({ width: 1600, height: 1000 });
   const errors = [];
   page.on('pageerror', (e) => errors.push(String(e)));
   page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
-  await page.goto(origin + '/?editor', { waitUntil: 'domcontentloaded', timeout: 120000 });
+  await page.goto(origin + (stageMode ? '/?editor&preview=stage' : '/?editor'), { waitUntil: 'domcontentloaded', timeout: 120000 });
   await page.waitForSelector('iframe[data-pc="stage-frame"]', { timeout: 120000 });
   // 舞台握手 → stageBridge 里登记了 front 客户端
   await page.waitForFunction(async () => {
     const m = await import('/src/editor/stageBridge.ts');
     return !!m.frontStage();
   }, { timeout: 120000, polling: 500 });
+  /** 可见舞台那个 iframe 的 frame 句柄(跨源时父页摸不到它的 document) */
+  const stageFrame = () => page.frames().find((f) => f.url().includes('stage=1') && f.url().includes('id=A'));
+  out.roles = await page.evaluate(async () => {
+    const m = await import('/src/editor/stageBridge.ts');
+    return { backRole: m.backRole(), hasBack: m.backStage() !== m.frontStage() };
+  });
+  if (stageMode) {
+    // E1:第二个 iframe 在、而且真的登记成了 back
+    await page.waitForFunction(async () => {
+      const m = await import('/src/editor/stageBridge.ts');
+      return m.backRole() === 'back';
+    }, { timeout: 120000, polling: 500 });
+    out.roles = await page.evaluate(async () => {
+      const m = await import('/src/editor/stageBridge.ts');
+      return { backRole: m.backRole(), hasBack: m.backStage() !== m.frontStage() };
+    });
+    const origins = await page.evaluate(() => ({
+      frames: [...document.querySelectorAll('iframe[data-pc^="stage-frame"]')].map((f) => new URL(f.src).origin),
+      page: location.origin,
+    }));
+    out.stageOrigins = origins;
+    check(origins.frames.length === 2 && origins.frames[0] !== origins.frames[1] && origins.frames.every((o) => o !== origins.page),
+      'two stage iframes, each on its own origin and neither is the editor origin', origins);
+    check(out.roles.backRole === 'back' && out.roles.hasBack, 'the second iframe is registered as the back stage', out.roles);
+  } else {
+    check(out.roles.backRole === 'front' && !out.roles.hasBack, 'legacy keeps a single same-origin stage (back falls back to front)', out.roles);
+  }
 
   await page.evaluate(() => { window.__smokeMarker = 1; });
   const ids = await page.evaluate(async () => {
@@ -41,16 +75,15 @@ try {
   check(ids.odo && ids.pill, 'clips added', ids);
   await sleep(1500);
 
-  const stageState = await page.evaluate(async () => {
+  const wraps = await stageFrame().evaluate(() =>
+    [...document.querySelectorAll('[data-pc-clip]')].map((el) => ({ id: el.getAttribute('data-pc-clip'), frame: el.getAttribute('data-pc-local-frame') })));
+  const stageState = await page.evaluate(async (wraps) => {
     const { frontStage, pushedProject } = await import('/src/editor/stageBridge.ts');
     const { getState } = await import('/src/store/project.ts');
-    const f = document.querySelector('iframe[data-pc="stage-frame"]');
-    const doc = f.contentDocument;
-    const wraps = [...doc.querySelectorAll('[data-pc-clip]')].map((el) => ({ id: el.getAttribute('data-pc-clip'), frame: el.getAttribute('data-pc-local-frame') }));
     const synced = pushedProject('front') === getState().project;
     const size = await frontStage().size();
     return { wraps, synced, size, t: getState().t };
-  });
+  }, wraps);
   out.stage = stageState;
   check(stageState.wraps.length === 2 && stageState.wraps.every((w) => w.frame === '45'), 'stage shows both clips at local frame 45 (t=1.5s @30fps)', stageState);
   check(stageState.synced, 'stageBridge baseline equals the store project after sync', stageState.synced);
@@ -114,16 +147,16 @@ try {
   check(out.blankSelection.length === 0, 'clicking blank deselects', out.blankSelection);
 
   // 播放 1 秒:store 的 t 前进,舞台跟着(过渡期父页每帧发 setTime)
-  const play = await page.evaluate(async () => {
+  const playT = await page.evaluate(async () => {
     const { actions, getState } = await import('/src/store/project.ts');
     actions.seek(0.5); actions.play();
     await new Promise((r) => setTimeout(r, 1000));
     actions.pause();
-    const t = getState().t;
-    const f = document.querySelector('iframe[data-pc="stage-frame"]');
-    const frames = [...f.contentDocument.querySelectorAll('[data-pc-clip]')].map((el) => Number(el.getAttribute('data-pc-local-frame')));
-    return { t, frames };
+    return getState().t;
   });
+  const playFrames = await stageFrame().evaluate(() =>
+    [...document.querySelectorAll('[data-pc-clip]')].map((el) => Number(el.getAttribute('data-pc-local-frame'))));
+  const play = { t: playT, frames: playFrames };
   out.play = play;
   check(play.t > 1.0 && play.frames.every((n) => Math.abs(n - Math.round(play.t * 30)) <= 1), 'after 1s of playback the stage local frame follows store.t', play);
 

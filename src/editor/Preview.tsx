@@ -7,7 +7,8 @@ import { actions, getState, useStore } from "../store/project";
 import { videoLayersAt, findClip } from "../kernel/project";
 import { frameBox, nudgeFrame } from "../kernel/layout";
 import { createStageRpc, type HostCapabilities, type StageRpcClient } from "../render/stageRpc";
-import { setStageClient, syncProject } from "./stageBridge";
+import { onStageEvent, setStageClient, syncProject } from "./stageBridge";
+import { INITIAL_ROLE_OF, STAGE_IDS, dualStage, stageSrc, stageTargetOrigin, type StageId } from "./previewMode";
 import { ControlBar } from "./preview/ControlBar";
 import { ToolBar, ToolType } from "./preview/ToolBar";
 import { MiniScrubber } from "./preview/MiniScrubber";
@@ -41,7 +42,14 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
   const muted = useStore((s) => s.muted);
   const selection = useStore((s) => s.selection);
   const boxRef = useRef<HTMLDivElement>(null);
-  const frameRef = useRef<HTMLIFrameElement>(null);
+  /**
+   * 两个舞台 iframe(E1)。`A` / `B` **只是实例名,和角色无关** —— 起手 A 当可见舞台、
+   * B 当后台舞台(`INITIAL_ROLE_OF`),角色只经 `setRole` 定,K5 的互换之后就换过来了。
+   * legacy(缺省)下只挂 A 那一个、同源,和今天一模一样。
+   */
+  const frameARef = useRef<HTMLIFrameElement>(null);
+  const frameBRef = useRef<HTMLIFrameElement>(null);
+  const dual = dualStage();
   /**
    * 怎么看这块画布:缩放多少、平移到哪、是不是还跟着窗口自动适应。换算见 preview/viewport2d.ts。
    *
@@ -102,9 +110,10 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
    * 主文档和舞台之间只有 postMessage,不再摸 iframe 里的 window.__pcStage。
    * 右栏的定位工具经 stageBridge 拿同一个客户端(D4 页面侧),这里每换一次就登记一次。
    */
-  const rpcRef = useRef<StageRpcClient | null>(null);
-  const hostCapsRef = useRef<HostCapabilities | null>(null);
-  const stage = useCallback((): StageRpcClient | null => rpcRef.current, []);
+  const rpcRef = useRef<Record<StageId, StageRpcClient | null>>({ A: null, B: null });
+  const hostCapsRef = useRef<Record<StageId, HostCapabilities | null>>({ A: null, B: null });
+  /** 下面那一堆(拖动、命中、心跳)问的都是**可见舞台**;起手它是 A */
+  const stage = useCallback((): StageRpcClient | null => rpcRef.current.A, []);
   const selectionRef = useRef(selection);
   selectionRef.current = selection;
 
@@ -269,27 +278,74 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
     };
   }, [project.width, project.height, view]);
 
-  // 渲染面就绪:它挂载完会 postMessage 过来(带 J4 的宿主能力表);每来一次就建一个新的 RPC 客户端
+  /*
+   * 渲染面就绪:它挂载完会 postMessage 过来(带 J4 的宿主能力表);每来一次就给**那一个实例**
+   * 建一个新的 RPC 客户端。跨源时 `targetOrigin` 必须点名舞台的源(不能再用 `location.origin`)。
+   *
+   * 握手之后立刻发一次 `setRole` 把实例和角色对上:舞台自己的缺省角色是 `front`,
+   * B 那个 iframe 不发就会顶着 `front` 的身份收探针(角色闸门会挡下来,但那是兜底不是设计)。
+   */
   useEffect(() => {
+    const frames: Record<StageId, React.RefObject<HTMLIFrameElement | null>> = { A: frameARef, B: frameBRef };
     const onMessage = (e: MessageEvent) => {
-      const win = frameRef.current?.contentWindow;
-      if (!win || e.source !== win || (e.data as any)?.type !== "pc-stage-ready") return;
-      rpcRef.current?.dispose();
-      const client = createStageRpc(win);
-      rpcRef.current = client;
-      hostCapsRef.current = (e.data as { hostCapabilities?: HostCapabilities }).hostCapabilities ?? null;
-      setStageClient("front", client);
-      // 每来一次就 +1:同一个值再赋一遍不会触发重渲染,而新挂的 iframe 需要重新收一遍 project 和时间
-      setStageReady((n) => n + 1);
+      if ((e.data as { type?: string } | null)?.type !== "pc-stage-ready") return;
+      for (const id of STAGE_IDS) {
+        const win = frames[id].current?.contentWindow;
+        if (!win || e.source !== win) continue;
+        const role = INITIAL_ROLE_OF[id];
+        rpcRef.current[id]?.dispose();
+        const client = createStageRpc(win, stageTargetOrigin(id));
+        rpcRef.current[id] = client;
+        hostCapsRef.current[id] = (e.data as { hostCapabilities?: HostCapabilities }).hostCapabilities ?? null;
+        setStageClient(role, client);
+        void client.setRole(role).catch(() => { /* iframe 又换了,下一次握手会重发 */ });
+        // 每来一次就 +1:同一个值再赋一遍不会触发重渲染,而新挂的 iframe 需要重新收一遍 project 和时间
+        if (role === "front") setStageReady((n) => n + 1);
+        return;
+      }
     };
     window.addEventListener("message", onMessage);
     return () => {
       window.removeEventListener("message", onMessage);
-      rpcRef.current?.dispose();
-      rpcRef.current = null;
-      setStageClient("front", null);
+      for (const id of STAGE_IDS) {
+        rpcRef.current[id]?.dispose();
+        rpcRef.current[id] = null;
+        setStageClient(INITIAL_ROLE_OF[id], null);
+      }
     };
   }, []);
+
+  /*
+   * 舞台事件的分发骨架(E0 的七种;来源过滤在 stageBridge 里按角色做完了)。
+   *
+   * **R2 这一步一条都不会来**:`play` / `pause` 还回 `unsupported`,所以没有节拍循环、
+   * 没有 `frame` / `ended` / `settled`;探针(R4)和降级(K6)也还没有。骨架先摆好,
+   * R4 / R5 往对应的分支里填实现时不用再动协议面和过滤。
+   */
+  useEffect(() => onStageEvent((e) => {
+    switch (e.type) {
+      case "frame":
+        // K4(R5):可见舞台每渲完一拍报一次 t,播放头跟它走(那时 Preview 的 rAF 循环不启动)
+        break;
+      case "ended":
+        // K4(R5):播放到头的收尾 —— 写 store、setPlaying(false)、pause() 拿 stoppedAt、
+        // 再 setTime(stoppedAt, { settle: true }) 进 K5,否则最后一帧的重卡永远停在抑制态
+        break;
+      case "settled":
+        // K5(R5):暂停态活渲就绪,摘掉这几张卡的快照平面
+        break;
+      case "demote":
+        // K6(R5):这张卡降级,父页整条 PUT { ...旧记录, capped: true, demoted: true }
+        break;
+      case "probe":
+      case "probe-frame":
+        // K1(R4):探针的成绩和它顺手推出来的死素材
+        break;
+      case "mediaReady":
+        // K5 第 (4) 步(R5):后台舞台的素材层画出一帧了,可以互换
+        break;
+    }
+  }), []);
 
   /**
    * 选中描边用的外框:不用包裹层(每张卡都占满整屏),用片段的实体范围——
@@ -596,7 +652,7 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
             <div style={{ position: "relative", width: project.width, height: project.height }}>
               <MediaLayers project={project} t={t} playing={playing} masterVolume={muted ? 0 : volume} audioOnly />
               <iframe
-                ref={frameRef}
+                ref={frameARef}
                 data-pc="stage-frame"
                 title="预览舞台"
                 /*
@@ -604,7 +660,7 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
                  * 播放时换成色块就把这条破了 —— 用户按播放是要看成片长什么样,
                  * 不是要看构图草图。代理只活在 3D 视图里,而且只是预渲染没跟上时的过渡。
                  */
-                src={`${location.pathname}?stage=1&id=front`}
+                src={stageSrc("A")}
                 style={{
                   position: "absolute",
                   inset: 0,
@@ -614,9 +670,36 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
                   display: "block",
                   background: "transparent",
                   colorScheme: "normal",
+                  // R7 才摘掉它(那一步露出舞台);R2 两个 iframe 都照旧全透明
                   opacity: 0,
                 }}
               />
+              {dual && (
+                <iframe
+                  ref={frameBRef}
+                  data-pc="stage-frame-back"
+                  title="后台舞台"
+                  src={stageSrc("B")}
+                  style={{
+                    position: "absolute",
+                    inset: 0,
+                    width: project.width,
+                    height: project.height,
+                    border: 0,
+                    display: "block",
+                    background: "transparent",
+                    colorScheme: "normal",
+                    /*
+                     * 后台舞台**只能这么藏**(K5 (4)):`display: none` 会让里面的
+                     * `<video>` 和 rAF 停掉、布局全归零,补跑出来的画面和可见舞台对不上;
+                     * `visibility: hidden` 会让 `solid.ts` 的 `isSolid` 判它不是实体,
+                     * 量出来的实体框退回整屏。`opacity: 0` 保留布局和渲染,只是看不见。
+                     */
+                    opacity: 0,
+                    pointerEvents: "none",
+                  }}
+                />
+              )}
               <UnifiedPreview project={project} t={t} playing={playing} />
             </div>
           </div>

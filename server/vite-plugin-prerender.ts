@@ -7,6 +7,7 @@ import path from "node:path";
 import { isPrerender } from "./render-role.mjs";
 import { prerenderState, setPrerender } from "./prerender-client.mjs";
 import { repushMirror } from "./vite-plugin-mirror";
+import { stageOriginsOf } from "./stage-ports.mjs";
 
 /**
  * 拉起并看护预渲染进程(docs/decoupling-plan.md 第 3 节「预渲染」,阶段 2)。
@@ -35,10 +36,15 @@ function freePort(): Promise<number> {
 }
 
 /** 编辑器那一端可能被浏览器以哪几种写法打开 —— 预渲染的跨源放行名单 */
+/**
+ * 放行给预渲染进程的源。编辑器自己那个源,**外加两个舞台端口的源**(E1):
+ * 舞台 iframe 里的页面打预渲染进程(J3 的快照字节、C3 的 SSE)时带的 Origin 是它自己的源,
+ * 不是编辑器的源 —— 漏掉就是一片 403。
+ */
 function editorOrigins(server: ViteDevServer): string[] {
   const addr = server.httpServer?.address() as AddressInfo | null;
   const port = addr?.port || server.config.server.port || 5190;
-  return [`http://127.0.0.1:${port}`, `http://localhost:${port}`, `http://[::1]:${port}`];
+  return [`http://127.0.0.1:${port}`, `http://localhost:${port}`, `http://[::1]:${port}`, ...stageOriginsOf(port)];
 }
 
 function killTree(child: ChildProcess | null) {

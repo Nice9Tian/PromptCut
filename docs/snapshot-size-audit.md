@@ -1,7 +1,7 @@
 # A3c 快照体积审计（高频清单实测）
 
 实测日期 2026-09-22。跑法：`node scripts/probes/snapshot-size-probe.mjs --origin http://127.0.0.1:5197`，
-dev 模式的 dev server（`/src/*` 现场变换），后台舞台（`?stage=1&id=back`，`setRole('back', { job: 'probe' })`）。
+dev 模式的 dev server（`/src/*` 现场变换），后台舞台（`?stage=1&id=B`，`setRole('back', { job: 'probe' })`）。
 每张卡一条轨道一个 `4` 秒的 clip、参数取默认值，fps 30；在 0.3 s / 中点 / 收尾前 0.1 s 三个本地时刻各生成一次快照
 （`stateful` 卡用 `render(t, { jump: true, maxCatchUp: Infinity })` 真推到那一刻，`direct` 卡用 `setTime(t)`），
 取三次里最大的一帧。量的是 `window.__pcCreateSnapshot()` 回来的 `controls[0].html` —— 也就是包裹层 innerHTML、
