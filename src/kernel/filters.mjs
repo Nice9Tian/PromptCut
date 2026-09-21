@@ -104,6 +104,40 @@ function normalizeTableOp(op, i) {
   return { kind: "matrix", values, offset };
 }
 
+/**
+ * 一张取样表在 0~1 上的值(均匀铺开、线性插值),和 SVG 那边 feFuncR / feFuncG / feFuncB
+ * 的 type="table"、导出那边的 tableLutExpr 同一个公式。
+ */
+export function sampleTable(table, v) {
+  const n = table.length - 1;
+  if (n <= 0) return table[0] ?? 0;
+  const q = clamp(v, 0, 1) * n;
+  const i = Math.min(n - 1, Math.floor(q));
+  return table[i] + (table[i + 1] - table[i]) * (q - i);
+}
+
+/**
+ * 一步查表 / 矩阵在数值上做什么(输入输出都是 0~1 的 [r, g, b])。
+ * 预览的 SVG 滤镜和导出的 lutrgb / colorchannelmixer 都按这个算,像素映射的分类器
+ * 拿它核对「等价滤镜」到底等不等价。每一步各自截到 0~1,矩阵的 offset 在混色截断**之后**再加。
+ */
+export function applyTableOp(op, rgb) {
+  if (op.kind === "curves") {
+    return ["r", "g", "b"].map((ch, i) => clamp(sampleTable(op[ch] ?? IDENTITY_TABLE, clamp(rgb[i], 0, 1)), 0, 1));
+  }
+  const m = op.values ?? IDENTITY_MATRIX;
+  const off = op.offset ?? [0, 0, 0];
+  const [r, g, b] = [0, 1, 2].map((i) => clamp(rgb[i], 0, 1));
+  return [0, 1, 2].map((k) => clamp(clamp(m[k * 3] * r + m[k * 3 + 1] * g + m[k * 3 + 2] * b, 0, 1) + off[k], 0, 1));
+}
+
+/** 依次跑完几步查表 / 矩阵(其余种类的步骤原样跳过 —— 分类器只生成这两种) */
+export function applyTableOps(ops, rgb) {
+  let out = rgb;
+  for (const op of ops) if (isTableKind(op.kind)) out = applyTableOp(op, out);
+  return out;
+}
+
 const sameList = (a, b) => a.length === b.length && a.every((v, k) => v === b[k]);
 /** 这一步是不是原样(导出时省掉、预览时不挂滤镜) */
 export function isNeutralOp(op) {
@@ -164,10 +198,17 @@ function tokenize(src) {
 }
 
 /**
- * 编译成一个求值函数。vars 是允许出现的变量名(t/d/p + 滤镜声明的参数)。
- * 返回 { fn(env) → number, uses: Set<变量名> }。语法错、未知名字都在这里抛,文案写给模型看。
+ * 解析成一棵语法树。vars 是允许出现的变量名(t/d/p + 滤镜声明的参数)。
+ * 返回 { ast, uses: Set<变量名> }。语法错、未知名字都在这里抛,文案写给模型看。
+ *
+ * 节点形状(像素映射的分类器和 GLSL 翻译要按形状看,所以是数据不是闭包):
+ *   { t: "num", v }                     数字字面量和 PI / E
+ *   { t: "var", name }                  变量
+ *   { t: "neg", a }                     一元负号
+ *   { t: "bin", op: "+-* /%^", a, b }   二元运算
+ *   { t: "call", name, args }           白名单函数
  */
-export function compileExpr(src, vars = BASE_VARS) {
+export function parseExpr(src, vars = BASE_VARS) {
   if (typeof src !== "string") throw new FilterExprError("表达式要是字符串");
   if (src.length > MAX_EXPR_LEN) throw new FilterExprError(`表达式太长(上限 ${MAX_EXPR_LEN} 字符)`);
   const allowed = new Set(vars);
@@ -182,17 +223,16 @@ export function compileExpr(src, vars = BASE_VARS) {
     pos++;
     return tk;
   };
-  const node = (f) => {
+  const node = (n) => {
     if (++nodes > MAX_NODES) throw new FilterExprError("表达式太复杂了");
-    return f;
+    return n;
   };
 
   const add = () => {
     let l = mul();
     while (peek() && (peek().k === "+" || peek().k === "-")) {
       const op = toks[pos++].k;
-      const a = l, b = mul();
-      l = node(op === "+" ? (e) => a(e) + b(e) : (e) => a(e) - b(e));
+      l = node({ t: "bin", op, a: l, b: mul() });
     }
     return l;
   };
@@ -200,8 +240,7 @@ export function compileExpr(src, vars = BASE_VARS) {
     let l = unary();
     while (peek() && (peek().k === "*" || peek().k === "/" || peek().k === "%")) {
       const op = toks[pos++].k;
-      const a = l, b = unary();
-      l = node(op === "*" ? (e) => a(e) * b(e) : op === "/" ? (e) => a(e) / b(e) : (e) => FUNCS.mod[1](a(e), b(e)));
+      l = node({ t: "bin", op, a: l, b: unary() });
     }
     return l;
   };
@@ -209,7 +248,7 @@ export function compileExpr(src, vars = BASE_VARS) {
     if (peek() && (peek().k === "-" || peek().k === "+")) {
       const neg = toks[pos++].k === "-";
       const a = unary();
-      return neg ? node((e) => -a(e)) : a;
+      return neg ? node({ t: "neg", a }) : a;
     }
     return power();
   };
@@ -217,15 +256,14 @@ export function compileExpr(src, vars = BASE_VARS) {
     const base = atom();
     if (peek() && peek().k === "^") {
       pos++;
-      const ex = unary();
-      return node((e) => Math.pow(base(e), ex(e)));
+      return node({ t: "bin", op: "^", a: base, b: unary() });
     }
     return base;
   };
   const atom = () => {
     const tk = peek();
     if (!tk) throw new FilterExprError("表达式不完整");
-    if (tk.k === "num") { pos++; const v = tk.v; return node(() => v); }
+    if (tk.k === "num") { pos++; return node({ t: "num", v: tk.v }); }
     if (tk.k === "(") { pos++; const inner = add(); eat(")"); return inner; }
     if (tk.k === "id") {
       pos++;
@@ -241,25 +279,58 @@ export function compileExpr(src, vars = BASE_VARS) {
           while (peek() && peek().k === ",") { pos++; args.push(add()); }
         }
         eat(")");
-        const [arity, f] = spec;
+        const arity = spec[0];
         if (arity > 0 && args.length !== arity) throw new FilterExprError(`${name} 要 ${arity} 个参数,给了 ${args.length} 个`);
         if (arity < 0 && args.length < -arity) throw new FilterExprError(`${name} 至少要 ${-arity} 个参数`);
-        return node((e) => f(...args.map((a) => a(e))));
+        return node({ t: "call", name, args });
       }
-      if (Object.hasOwn(CONSTS, name)) { const v = CONSTS[name]; return node(() => v); }
+      if (Object.hasOwn(CONSTS, name)) return node({ t: "num", v: CONSTS[name] });
       if (!allowed.has(name)) {
         throw new FilterExprError(`不认识「${name}」。能用的变量:${[...allowed].join(" ")}(参数名要先在 params 里声明)`);
       }
       uses.add(name);
-      return node((e) => e[name]);
+      return node({ t: "var", name });
     }
     throw new FilterExprError(`第 ${tk.at + 1} 个字符「${tk.k}」放错了地方`);
   };
 
-  const fn = add();
+  const ast = add();
   if (pos < toks.length) throw new FilterExprError(`第 ${toks[pos].at + 1} 个字符开始多出来了`);
-  return { fn, uses };
+  return { ast, uses };
 }
+
+/** 语法树 → 求值闭包。形状和 parseExpr 的注释一一对应 */
+export function astToFn(n) {
+  if (n.t === "num") { const v = n.v; return () => v; }
+  if (n.t === "var") { const name = n.name; return (e) => e[name]; }
+  if (n.t === "neg") { const a = astToFn(n.a); return (e) => -a(e); }
+  if (n.t === "bin") {
+    const a = astToFn(n.a), b = astToFn(n.b);
+    switch (n.op) {
+      case "+": return (e) => a(e) + b(e);
+      case "-": return (e) => a(e) - b(e);
+      case "*": return (e) => a(e) * b(e);
+      case "/": return (e) => a(e) / b(e);
+      case "%": return (e) => FUNCS.mod[1](a(e), b(e));
+      default: return (e) => Math.pow(a(e), b(e));
+    }
+  }
+  const f = FUNCS[n.name][1];
+  const args = n.args.map(astToFn);
+  return (e) => f(...args.map((g) => g(e)));
+}
+
+/**
+ * 编译成一个求值函数。vars 是允许出现的变量名(t/d/p + 滤镜声明的参数)。
+ * 返回 { fn(env) → number, uses: Set<变量名> }。语法错、未知名字都在这里抛,文案写给模型看。
+ */
+export function compileExpr(src, vars = BASE_VARS) {
+  const { ast, uses } = parseExpr(src, vars);
+  return { fn: astToFn(ast), uses, ast };
+}
+
+/** 白名单函数名与各自的参数个数(负数 = 至少这么多);像素映射翻译 GLSL 时要逐个对上 */
+export const FUNC_ARITY = Object.freeze(Object.fromEntries(Object.entries(FUNCS).map(([k, v]) => [k, v[0]])));
 
 const compiled = new Map();
 /** 带缓存的 compileExpr(同一条表达式预览每帧都要算) */

@@ -90,8 +90,22 @@ export class FilterExprError extends Error {}
 
 export const RESERVED: Set<string>;
 export function normalizeParamDecls(rawParams: unknown, extraReserved?: Set<string>): Record<string, FilterParamSpec>;
-export function compiledOf(src: string, vars: string[]): { fn: (env: Record<string, number>) => number; uses: Set<string> };
-export function compileExpr(src: string, vars?: string[]): { fn: (env: Record<string, number>) => number; uses: Set<string> };
+export function compiledOf(src: string, vars: string[]): { fn: (env: Record<string, number>) => number; uses: Set<string>; ast?: ExprNode };
+export function compileExpr(src: string, vars?: string[]): { fn: (env: Record<string, number>) => number; uses: Set<string>; ast: ExprNode };
+
+/** 表达式语法树:像素映射的分类器和 GLSL 翻译按形状看,所以是数据不是闭包 */
+export type ExprNode =
+  | { t: "num"; v: number }
+  | { t: "var"; name: string }
+  | { t: "neg"; a: ExprNode }
+  | { t: "bin"; op: "+" | "-" | "*" | "/" | "%" | "^"; a: ExprNode; b: ExprNode }
+  | { t: "call"; name: string; args: ExprNode[] };
+export function parseExpr(src: string, vars?: string[]): { ast: ExprNode; uses: Set<string> };
+export function astToFn(ast: ExprNode): (env: Record<string, number>) => number;
+export const FUNC_ARITY: Readonly<Record<string, number>>;
+export function sampleTable(table: number[], v: number): number;
+export function applyTableOp(op: CurvesOp | MatrixOp, rgb: number[]): number[];
+export function applyTableOps(ops: ResolvedOp[], rgb: number[]): number[];
 export function normalizeFilterDef(input: unknown): Omit<FilterDef, "id" | "createdBy" | "createdAt">;
 export function normalizeClipParams(def: FilterDef, input: unknown): Record<string, number> | undefined;
 export function resolveOps(def: Pick<FilterDef, "ops" | "params">, clipParams: Record<string, number> | undefined, t: number, d: number): ResolvedOp[];
