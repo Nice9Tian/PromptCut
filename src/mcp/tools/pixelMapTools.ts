@@ -1,6 +1,6 @@
 /** MCP / 编辑器共用的像素映射库工具。映射定义由 kernel/pixelMap.mjs 做安全校验。 */
 import { findClip, newId, type Project } from "../../kernel/project";
-import { normalizePixelMapDef, type PixelMapDef, type ClipPixelMap } from "../../kernel/pixelMap.mjs";
+import { normalizePixelMapDef, classifyPixelMap, type PixelMapDef, type ClipPixelMap } from "../../kernel/pixelMap.mjs";
 import { lookHint } from "./toolEcho";
 
 export interface PixelMapStore {
@@ -50,6 +50,27 @@ export function createPixelMapTools(store: PixelMapStore) {
     if (def.to.kind === "media") media(p, def.to.mediaId, "to");
   };
   const summary = (p: Project, def: PixelMapDef) => ({ pixelMapId: def.id, name: def.name, description: def.description, source: def.source, where: def.where, to: def.to, mode: def.mode, colorSequence: def.colorSequence, usedBy: pixelMapUsesOf(p, def.id) });
+  /*
+   * 落库之前主动分流(render_pipeline_restructure.md 3.9)。整帧调色(A)不接:它由 GPU 合成器
+   * 做的滤镜就能完成,不占预览的每拍预算;逐像素的 CPU 实现实测 1080p 每帧 416~483 ms,
+   * 所以这个工具只留给真的要逐像素选区的活(B,走 WebGL 后端)。翻译不了的(C)当场说清楚。
+   * 工具的回包只剩一条 message 能带到模型那边,所以等价 ops 直接拼进错误正文。
+   */
+  const gate = (def: PixelMapDef) => {
+    const c = classifyPixelMap(def);
+    if (c.kind === "A") {
+      throw new Error(
+        `这是整帧调色,不该用像素映射:${c.reason}\n` +
+        `改用 create_filter,下面这份 ops 和你写的定义逐像素等价(0~255 全值域最大差 ${c.diff} 级),直接照抄:\n` +
+        `create_filter ${JSON.stringify({ name: def.name, ...(def.description ? { description: def.description } : null), ops: c.ops })}\n` +
+        `再用 apply_filter 把它挂到片段上。` +
+        (c.alphaNote ? `\n注意:${c.alphaNote}` : "") +
+        `\n（滤镜由合成器在 GPU 上做、不占预览的每拍预算;像素映射要逐像素算,1080p 每帧 400 毫秒以上。）`,
+      );
+    }
+    if (c.kind === "C") throw new Error(`这条定义翻译不成着色器:${c.reason}`);
+    return c;
+  };
   return {
     listPixelMaps() {
       const p = project();
@@ -64,18 +85,20 @@ export function createPixelMapTools(store: PixelMapStore) {
     createPixelMap(args: any) {
       const base = normalizePixelMapDef(args);
       const def: PixelMapDef = { id: newId("pm"), ...base, createdBy: args?.createdBy === "user" ? "user" : "agent", createdAt: Date.now() };
+      const cls = gate(def);
       validateMediaRefs(project(), def);
       let appliedTo: string | undefined;
       if (args?.clipId !== undefined) { const hit = mediaClip(project(), args.clipId); store.actions.addPixelMap(def, { clipId: hit.clip.id, pixelMap: { id: def.id } }); appliedTo = hit.clip.id; }
       else store.actions.addPixelMap(def);
-      return { ok: true, pixelMapId: def.id, pixelMap: summary(project(), def), ...(appliedTo ? { appliedTo, look: lookHint(appliedTo) } : null), note: "已创建通用像素映射。预览、导出和 see_frames 使用同一份定义;完成后用 see_frames 复核。" };
+      return { ok: true, pixelMapId: def.id, backend: cls.backend, pixelMap: summary(project(), def), ...(appliedTo ? { appliedTo, look: lookHint(appliedTo) } : null), note: "已创建通用像素映射,按逐像素选区处理(WebGL 片元着色器)。预览、导出和 see_frames 使用同一份定义;完成后用 see_frames 复核。" };
     },
     updatePixelMap(args: any) {
       const cur = findDef(project(), args?.pixelMapId);
       const next = { ...normalizePixelMapDef({ ...cur, ...args }), id: cur.id, ...(cur.createdBy ? { createdBy: cur.createdBy } : null), ...(cur.createdAt ? { createdAt: cur.createdAt } : null) };
+      const cls = gate(next);
       validateMediaRefs(project(), next);
       store.actions.updatePixelMap(cur.id, next);
-      return { ok: true, pixelMap: summary(project(), next), usedBy: pixelMapUsesOf(project(), cur.id) };
+      return { ok: true, backend: cls.backend, pixelMap: summary(project(), next), usedBy: pixelMapUsesOf(project(), cur.id) };
     },
     removePixelMap(args: any) {
       const p = project(); const cur = findDef(p, args?.pixelMapId); const uses = pixelMapUsesOf(p, cur.id);

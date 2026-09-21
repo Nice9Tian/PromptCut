@@ -5,42 +5,51 @@ import type { Timeline } from "../kernel/types";
 import { frameCss } from "../kernel/layout";
 import { emphasisFilter } from "../kernel/emphasis";
 import { clipFilterOpsAt, cssFilter } from "../kernel/filters.mjs";
-import { mapRgba, type PixelMapDef } from "../kernel/pixelMap.mjs";
+import { type PixelMapDef } from "../kernel/pixelMap.mjs";
+import { drawPixelMap } from "./pixelMapGl";
 import { graphVisualNode } from "./cards/GraphCard";
 
+/**
+ * 素材层上的像素映射。画面由 WebGL2 片元着色器算(render/pixelMapGl.ts):表达式在
+ * kernel/pixelMap.mjs 里翻译成 GLSL,视频 / 图片帧当纹理,`to` 是另一段素材时用第二张纹理。
+ * 这张 <canvas> 只有 bitmaprenderer 上下文 —— 着色器画完整块位图转移过来。
+ * 原先的逐像素 CPU 循环(getImageData → mapRgba → putImageData)已整体删除、不留退路:
+ * 实测 1080p 每帧 416～483 ms,超 30 fps 的每拍预算约二十倍。
+ */
 function PixelMappedMedia({ media, clip, t, project, style, def }: { media: any; clip: any; t: number; project: Project; style: React.CSSProperties; def: PixelMapDef }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const source = useRef<HTMLVideoElement | HTMLImageElement>(null);
   const targetSource = useRef<HTMLVideoElement | HTMLImageElement>(null);
+  // stage=after_filters 时先把滤镜套在一张中转画布上,再当纹理上传(滤镜由合成器在 GPU 上做,
+  // 不读回像素)。stage=origin 直接上传素材元素,少一次重采样。
+  const staged = useRef<HTMLCanvasElement | null>(null);
   const draw = useCallback(() => {
     const c = canvas.current; const s = source.current;
     const ready = (el: HTMLVideoElement | HTMLImageElement) => el instanceof HTMLVideoElement ? el.readyState >= 2 : el.complete && el.naturalWidth > 0;
     if (!c || !s || !ready(s)) return;
     const w = Math.max(1, Math.round(project.width)); const h = Math.max(1, Math.round(project.height));
-    if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
-    const ctx = c.getContext("2d", { willReadFrequently: true }); if (!ctx) return;
-    ctx.clearRect(0, 0, w, h);
+    let src: CanvasImageSource = s;
     if (def.source.stage === "after_filters" && clip.filter) {
       const ops = project.filters?.length ? clipFilterOpsAt(project, clip, t) : null;
-      ctx.filter = ops ? cssFilter(ops) : "none";
+      const css = ops ? cssFilter(ops) : "";
+      if (css) {
+        const mid = staged.current ?? (staged.current = document.createElement("canvas"));
+        if (mid.width !== w || mid.height !== h) { mid.width = w; mid.height = h; }
+        const mx = mid.getContext("2d");
+        if (mx) { mx.clearRect(0, 0, w, h); mx.filter = css; mx.drawImage(s, 0, 0, w, h); mx.filter = "none"; src = mid; }
+      }
     }
-    ctx.drawImage(s, 0, 0, w, h);
-    ctx.filter = "none";
-    const data = ctx.getImageData(0, 0, w, h); const d = data.data;
-    let target: ImageData | null = null;
     const ts = targetSource.current;
-    if (def.to?.kind === "media" && ts && ready(ts)) {
-      const tc = document.createElement("canvas"); tc.width = w; tc.height = h;
-      const tx = tc.getContext("2d");
-      if (tx) { tx.drawImage(ts, 0, 0, w, h); target = tx.getImageData(0, 0, w, h); }
+    const target = def.to?.kind === "media" && ts && ready(ts) ? ts : null;
+    try {
+      drawPixelMap(c, { def, source: src as TexImageSource, target: target as TexImageSource | null, width: w, height: h, t });
+      c.removeAttribute("data-pc-pixel-error");
+    } catch (err) {
+      // 画不出来就让这一层空着,别把整个场景树拖垮;属性留给验收脚本和排错看
+      c.setAttribute("data-pc-pixel-error", err instanceof Error ? err.message : String(err));
+      console.error("[pixelMap]", err);
     }
-    for (let i = 0; i < d.length; i += 4) {
-      const targetRgba = target ? [target.data[i] / 255, target.data[i + 1] / 255, target.data[i + 2] / 255, target.data[i + 3] / 255] : null;
-      const p = mapRgba(def, [d[i] / 255, d[i + 1] / 255, d[i + 2] / 255, d[i + 3] / 255], { x: (i / 4) % w / w, y: Math.floor(i / 4 / w) / h, t }, targetRgba);
-      d[i] = Math.round(p[0] * 255); d[i + 1] = Math.round(p[1] * 255); d[i + 2] = Math.round(p[2] * 255); d[i + 3] = Math.round(p[3] * 255);
-    }
-    ctx.putImageData(data, 0, 0);
-  }, [def, project.width, project.height, t]);
+  }, [def, clip, project, t]);
   useEffect(() => {
     // Source images/videos load only at capture time. Draw synchronously when
     // all decoders are ready; a wall-clock timer can miss the screenshot.
@@ -57,7 +66,8 @@ function PixelMappedMedia({ media, clip, t, project, style, def }: { media: any;
     {targetMedia ? (isImageMedia(targetMedia) ? <img ref={targetSource as any} data-pc-media-src={targetMedia.url} data-pc-media-hidden="true" alt="" style={targetHidden} /> :
       <video ref={targetSource as any} muted playsInline preload="none" data-pc-media-src={targetMedia.url} data-pc-media-hidden="true"
         data-pc-media-time={Math.max(0, t)} style={targetHidden} />) : null}
-    <canvas ref={canvas} data-pc-pixel-map={JSON.stringify(def)} data-pc-pixel-time={t} style={style} />
+    <canvas ref={canvas} width={Math.max(1, Math.round(project.width))} height={Math.max(1, Math.round(project.height))}
+      data-pc-pixel-map={JSON.stringify(def)} data-pc-pixel-time={t} style={style} />
   </>;
 }
 
