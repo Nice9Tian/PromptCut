@@ -20,6 +20,7 @@ import { fitView, frameOrigin, panBy, wheelZoomFactor, zoomAt, type View2D } fro
 import "./preview/preview.css";
 import { atFrameGrid } from "../render/frameGrid";
 import { contentStartOf } from "./timeline/utils";
+import { deliverSnapshots, markBaselineReset, noteSettled, pickForSetTime, stopSnapshotFeed, suppressedAt, syncSnapshotSubscription } from "./snapshotFeed";
 
 /**
  * 中央预览:视频层 + 动效渲染面,按容器缩放。播放循环也在这里(rAF 推进 store.t)。
@@ -349,6 +350,47 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
   const lastFrameAtRef = useRef(0);
 
   /*
+   * 快照 / 抑制的投递(C4、C5、A3c;排程在 `snapshotFeed.ts`)。
+   *
+   * 三处叫它:每拍收到 `frame` 之后(播放中)、`setTime` 发完之后(暂停 / 拖动),
+   * 以及快照字节 / 新的就绪层到货之后。33 ms 的节流在 `deliverSnapshots` 里,
+   * 所以这三处可以放心地多叫几次。
+   */
+  const dualRef = useRef(dual);
+  dualRef.current = dual;
+  /** 上一次发出去的抑制集合(拼成一条字符串比,省掉没变也发) */
+  const suppressedRef = useRef("");
+  const pumpFeed = useCallback(async () => {
+    if (!dualRef.current) return;
+    const s = frontStage();
+    if (!s) return;
+    const head = { project: getState().project, t: tRef.current, playing: playingRef.current };
+    // 抑制只在播放中有(C5 / K5:拖动和暂停下不抑制、改贴快照)
+    const want = head.playing ? suppressedAt(head).join("|") : "";
+    if (want !== suppressedRef.current) {
+      suppressedRef.current = want;
+      void s.setSuppressed(want ? want.split("|") : []).catch(() => {});
+    }
+    await deliverSnapshots(s, "front", head);
+  }, []);
+  const pumpRef = useRef(pumpFeed);
+  pumpRef.current = pumpFeed;
+
+  /* C3 的就绪索引:页面直连预渲染进程的那条 SSE(`snapshotSource.ts`) */
+  useEffect(() => {
+    if (!dual) return;
+    syncSnapshotSubscription(() => { void pumpRef.current(); });
+    return () => stopSnapshotFeed();
+  }, [dual, project]);
+
+  /* 换了 iframe:那一份投递基线跟着作废,下一次带 `reset`(A3c) */
+  useEffect(() => {
+    if (!dual || !stageReady) return;
+    markBaselineReset("front");
+    suppressedRef.current = "";
+  }, [dual, stageReady]);
+
+  /*
    * 舞台事件的分发(E0 的七种;来源过滤在 stageBridge 里按角色做完了)。
    *
    * 监听只登记一次,所以里面读的一律是 ref / store,不读闭包里的 state。
@@ -361,6 +403,8 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
         const prev = lastFrameAtRef.current;
         lastFrameAtRef.current = now;
         actions.tick(e.sec);
+        // 这一拍的抑制集合和快照(C5:播放中发 setSuppressed(H(t)) + setSnapshots)
+        void pumpRef.current();
         if (!prev) break;
         const stalled = now - prev > MEDIA_STALL_MS;
         if (stalled === stalledRef.current) break;
@@ -382,6 +426,7 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
         break;
       case "settled":
         // K5:暂停态活渲就绪 —— 把这几张卡从投递基线里删掉(A3c),平面舞台自己摘了
+        noteSettled("front", e.clipIds);
         break;
       case "demote":
         // K6:这张卡降级,父页整条 PUT { ...旧记录, capped: true, demoted: true }
@@ -511,12 +556,24 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
     if (!s) return;
     try {
       await syncProject("front", getState().project);
-      await s.setTime(sec, opts);
+      /*
+       * C4 的快照增量和 `t` 在**同一次 React 提交**里生效(E0):拖过一张 stateful 卡的
+       * 入点时,新挂载的组件和它的快照平面同帧出现、不闪初始态。手里没有的那几帧当场
+       * 发起取字节(不等),由 `.pc-awaiting` 藏 500 ms 兜底。
+       */
+      const feed = dualRef.current ? pickForSetTime({ project: getState().project, t: sec, playing: false })
+        : { snapshots: {} as Record<string, string | null>, awaiting: [] as string[] };
+      await s.setTime(sec, {
+        ...opts,
+        ...(Object.keys(feed.snapshots).length ? { snapshots: feed.snapshots } : {}),
+        ...(feed.awaiting.length ? { awaiting: feed.awaiting } : {}),
+      });
     } catch {
       // iframe 正在换(detached):新的 ready 会重发
       return;
     }
     void refreshRects();
+    void pumpRef.current();
   }, [stage, refreshRects]);
   useEffect(() => {
     if (!stageReady) return;
