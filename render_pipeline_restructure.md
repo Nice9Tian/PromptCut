@@ -210,7 +210,7 @@ pinned 架构 4 / 5 的落点因为 vision 拆分而变清楚了：**Agent 专�
 
 ### R0 清账（半天）
 1. （已做，`5157f91`）主工作区的探针改动和 `docs/g0-a-webview2-probe.md` 提交。
-2. `scripts/verify-unified-frames.mjs`：查清了——脚本有两处过期（缓存命中的来源现在叫 `mov`；导出页要经 `?timeline=` 带项目，不带就渲成了页面默认项目），已改（`eec7a08`）。改完**还剩一条真问题**：同一帧上「整帧导出」和「HTML 快照重放」里 `punch-pill` 的弹簧动画状态不同（10 fps 下 28% 的通道不同），R1 之前就有；怀疑两条路的挂载提前量 / 热身帧不一致。已另派排查，结论回来记在这里。
+2. `scripts/verify-unified-frames.mjs`：脚本本身两处过期已改（`eec7a08`）。改完剩下的真问题查清并修了一半——**根因一（已修，合并提交见 git log「生成快照前先让 Motion 的 JS 帧循环跑一拍」）**：在 begin-frame 控制下，Motion 自己的 JS 帧循环（spring、MotionValue）只在真截图时才推进；整帧导出每帧截图所以对，HTML 快照在截图之前生成、纯采样那一趟一张图都不截，于是**快照里所有 JS 帧循环驱动的动画整段冻在第 1 帧**（30 fps 下 `punch-pill` 的药丸整段小 33%）。修法是生成快照前先画一拍把图丢掉；导出 60 / 60 帧逐字节不变；代价是快照趟每帧多约 20～30 ms（1080p）；`bake.mjs` 在指纹清单里，旧共享快照全部失效（本来就是错的）。差异从 65607 个通道缩到 27080 个、超过 2 级的只剩 15 个。**根因二（未修）**：快照重放时重新排版丢了 1/64 px（`getComputedStyle().width` 只给三位小数，316.15625 → 316.140625），`blur(32px)` 对此极敏感、能差出 255 级；无滤镜的卡最大差 3。修它要改 `inlineStyles.ts` 的几何内联口径、作废全部共享快照，三个修法和代价在 `docs/plan/` 之外的排查报告里（scratchpad `replay-mismatch-report.md`），R7 露出舞台前定。在此之前这条脚本仍以最后一条断言不过为已知状态。
 3. `result_decouple.md` 6.2 的遗留：`vite.config.ts:76-80` 的 `server.watch.ignored` **已经有** `**/out/**`，报告说冷启动仍被 `out/frame-library/` 拖慢——先量一次仓库根 dev server 的冷启动，确认慢在哪（监听器初扫还是别处）再动；最省事的兜底是给 `frame-library` 加 GC（原 F1）。
 4. （已做）给 `AGY-TASK-cloud-doc-and-write-race.md` 文首加一句「渲染管线部分以 `render_pipeline_restructure.md` 为准」。
 
