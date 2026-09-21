@@ -321,7 +321,7 @@
 /* 下载:和「处理」同色(都是要等的活儿),白色下箭头 + 托盘把它认出来 —— 光靠蓝方块看不出在下东西 */
 .ai-op--download { --chip: var(--ui-accent, #60a5fa); --chip-icon: url("data:image/svg+xml,%3Csvg%20xmlns%3D'http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg'%20viewBox%3D'0%200%2012%2012'%20fill%3D'none'%20stroke%3D'%23fff'%20stroke-width%3D'1.6'%20stroke-linecap%3D'round'%20stroke-linejoin%3D'round'%3E%3Cpath%20d%3D'M6%202.1v5.3M3.7%205.9L6%208.2l2.3-2.3M2.9%2010h6.2'%2F%3E%3C%2Fsvg%3E"); }
 /*
- * 处理(转写、追踪、检测、烘焙、自动流程这类要跑一阵的):深黄底 + 一圈白点。
+ * 处理(转写、追踪、检测、预渲染、自动流程这类要跑一阵的):深黄底 + 一圈白点。
  * 先算出 10 个圆心,从正上方顺时针排(起点 -> 末尾),末尾 4 个透明度 0.8 / 0.6 / 0.4 / 0.2 递减,
  * 看着像转圈的加载,一眼知道是在跑的活儿。和「修改」的黄绿分得开:这边偏橙
  */

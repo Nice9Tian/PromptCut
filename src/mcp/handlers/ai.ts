@@ -481,7 +481,7 @@ export const aiHandlers = {
    * 没有任何东西消费它。
    *
    * 数据不经过模型:模型只说「clip X 跟 point 0」,逐帧坐标在应用内部
-   * 从 trackResults 直接烘进 clip。让模型把 900 组坐标读进来再写回去,
+   * 从 trackResults 直接写进 clip。让模型把 900 组坐标读进来再写回去,
    * 既烧上下文又必然出错。
    */
   attachClipMotion: (args) => {

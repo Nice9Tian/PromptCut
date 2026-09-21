@@ -5,7 +5,7 @@
  *   1. 卡片本身(`scene-3d.tsx`),画在自己的 canvas 上,进预览和导出;
  *   2. 3D 检视视图(`src/editor/preview/Scene3DView.tsx`),把它当**真的立体物件**摆进场景里。
  *
- * 第二处一开始是拿一张烘出来的贴图糊在平板上的 —— 那是错的:绕着转它还是一张画,
+ * 第二处一开始是拿一张预渲染出来的贴图糊在平板上的 —— 那是错的:绕着转它还是一张画,
  * 而这个视图存在的理由就是"看清楚东西在空间里是怎么摆的"。三维的东西在三维视图里就得是三维的。
  *
  * 所以几何、材质、灯光、姿势全部收在这里,两边都从这儿取。分开写的话两边迟早长得不一样,
@@ -131,7 +131,7 @@ export function poseMesh(mesh: any, params: Scene3DParams, t: number) {
 }
 
 /**
- * 贴图。URL 通常是 `bake_card` 烘出来的 `/@media/xxx.png`。
+ * 贴图。URL 通常是 `bake_card` 预渲染出来的 `/@media/xxx.png`。
  * 加载是异步的,拿到之后要调 `onReady` 让调用方重画一帧 —— 那时 t 不一定变,
  * 不能指望渲染循环自己跟上。
  */
@@ -148,7 +148,7 @@ export function applyTexture(
       // 颜色空间要标对,否则贴上去整体偏暗(three 默认按线性解释)
       tex.colorSpace = THREE.SRGBColorSpace;
       material.map = tex;
-      // 烘出来的卡是透明底,不开 transparent 的话四周会变成黑块
+      // 预渲染出来的卡是透明底,不开 transparent 的话四周会变成黑块
       material.transparent = true;
       material.needsUpdate = true;
       onReady(tex);

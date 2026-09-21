@@ -94,19 +94,19 @@ export function installExportClock(): void {
  *
  * 为什么要这么做:Motion 建 WAAPI 动画时会把 startTime 写成 time.now()(= 被钉住的
  * performance.now,也就是导出毫秒,每趟从 0 起),而 WAAPI 按 document.timeline.currentTime
- * 解读 startTime —— 后者单调递增从不归零,烘一趟就能涨到十几亿(见文件头「三个时钟」)。
- * 于是「开烘那一刻 timeline 已经是多少」直接决定了新建的动画会不会一出生就 finished:
- *   - 复用同一个 document 连烘两次:第二趟 timeline 已到 164 亿,全部动画出生即 finished,
+ * 解读 startTime —— 后者单调递增从不归零,渲一趟就能涨到十几亿(见文件头「三个时钟」)。
+ * 于是「开渲那一刻 timeline 已经是多少」直接决定了新建的动画会不会一出生就 finished:
+ *   - 复用同一个 document 连渲两次:第二趟 timeline 已到 164 亿,全部动画出生即 finished,
  *     __pcSyncAnims 又跳过 finished,卡片直接渲成终态 —— rank-bars 差 26 帧、growth-curve 差 65 帧。
- *   - 就算每趟都开全新的页面也不安全:开烘那一刻 timeline 是 590 还是 650ms 取决于这次加载
+ *   - 就算每趟都开全新的页面也不安全:开渲那一刻 timeline 是 590 还是 650ms 取决于这次加载
  *     花了多久,endTime 落在这个区间里的动画(rank-bars 第一行:delay 0 / dur 500)就随机
- *     出生即 finished。实测两个全新浏览器烘同一张 rank-bars 差 16 帧(第 0~11 帧整行入场没播),
+ *     出生即 finished。实测两个全新浏览器渲同一张 rank-bars 差 16 帧(第 0~11 帧整行入场没播),
  *     也就是说**现有的一次性导出路径本来就不是确定的**,只是掷硬币两次常常掷到同一面。
  *
  * 修法:把动画一建出来就 pause 并钉到 0,并把这个实例的 startTime 这个 JS setter 吞掉
  * (Motion 自己在 NativeAnimationExtended 的注释里就写了「给 paused 的 WAAPI 动画设
  * startTime 会把它 unpause」)。此后动画时间完全来自 __pcSyncAnims 的锚点,和 timeline 无关。
- * 实测(90 帧 / 1920x1080 / 30fps / PNG 逐字节比):复用 bakery 连烘两次 rank-bars 26 → 0 帧;
+ * 实测(90 帧 / 1920x1080 / 30fps / PNG 逐字节比):复用 bakery 连渲两次 rank-bars 26 → 0 帧;
  * 两个全新浏览器之间 rank-bars 16 → 0 帧;odometer / ring-metric / type-shift 本来就 0,没被带坏。
  * growth-curve 的 65 帧也没了,但它另有一类每帧固定 23 个像素的残差(玻璃板圆角的抗锯齿,
  * 新鲜 vs 新鲜同样发生,和这条修法无关),见 server/bakery/chrome.mjs 的文件头注释。
@@ -117,7 +117,7 @@ export function installExportClock(): void {
  *
  * ⚠ 约定:导出页里 animation.startTime 恒为 null,不要拿它做算术。a.finish() 走的是规范内部
  * 逻辑、不经过这个访问器,照常收束到 endTime。
- * ⚠ 导出产物会变(变对了):endTime 小于「开烘那一刻 timeline」的动画以前从来没播过入场,
+ * ⚠ 导出产物会变(变对了):endTime 小于「开渲那一刻 timeline」的动画以前从来没播过入场,
  * 现在会正常淡入。任何逐像素基线快照都要重新生成。
  *
  * 渲染面(?stage=1,render/stageClock.ts)也装这一层,理由完全相同:那边 performance.now

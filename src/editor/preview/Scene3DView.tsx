@@ -27,7 +27,7 @@ import "./preview.css";
  * 这个视图回答的是另一个问题:**这些东西在空间里是怎么摆的**。所以它不追求逐像素等同,
  * 它追求的是"层和层之间的前后、倾斜、间距一眼看得出来"。相机可以随便转,这本来就不是成片的机位。
  *
- * # 板子上贴的是烘出来的真图,不是重画一遍
+ * # 板子上贴的是预渲染出来的真图,不是重画一遍
  *
  * 每块板子的贴图来自 `/api/vision/bake-batch`,而那条路画图的就是导出成片的那个渲染器。
  * 所以板子上的内容和成片里的**是同一批像素**,不是这里另外实现一遍卡片。
@@ -42,8 +42,8 @@ import "./preview.css";
  *
  * # 代理色块只是过渡
  *
- * 贴图没到位之前先画一块半透明色块占位,**烘好了立刻换上**。
- * 烘焙按输入做了缓存(见 bakeOne),同一张卡同样的参数只真渲一次,之后开这个视图是零成本 ——
+ * 贴图没到位之前先画一块半透明色块占位,**渲好了立刻换上**。
+ * 预渲染按输入做了缓存(见 bakeOne),同一张卡同样的参数只真渲一次,之后开这个视图是零成本 ——
  * 所以正常情况下你看到的一直是真贴图,色块只在第一次、或者刚改完卡的那几秒出现。
  */
 
@@ -58,7 +58,7 @@ const loadMods = (): Promise<[ThreeMod, OrbitMod]> =>
     import("three/examples/jsm/controls/OrbitControls.js"),
   ]));
 
-/** 没贴图时的占位色。半透明,一眼看得出"这块还在烘" */
+/** 没贴图时的占位色。半透明,一眼看得出"这块还在渲" */
 const PROXY_COLOR = 0x64748b;
 
 /**
@@ -76,7 +76,7 @@ const PROXY_COLOR = 0x64748b;
  *
  * # 为什么要有上限,而且淘汰时要跳过正在用的
  *
- * 一张 1920×1080 的贴图在显存里约 8MB,而预烘会烘出几百个时刻 —— 不设上限,用户把时间轴
+ * 一张 1920×1080 的贴图在显存里约 8MB,而预渲染会渲出几百个时刻 —— 不设上限,用户把时间轴
  * 从头拖到尾就能把显存撑爆。上限之外还有一条:**正在板子上的那几张一律不淘汰**,
  * 淘汰时 dispose 掉一张还挂在 material.map 上的贴图,那块板子会直接变黑,而且不报错。
  */
@@ -109,7 +109,7 @@ export function Scene3DView({ project, t }: Props) {
   const [mods, setMods] = useState<[ThreeMod, OrbitMod] | null>(null);
   const [pending, setPending] = useState(0);
   /**
-   * 正在烘哪一刻。有值 = 板子上现在是**色块**,这一刻的图还没渲出来。
+   * 正在渲哪一刻。有值 = 板子上现在是**色块**,这一刻的图还没渲出来。
    * 说出来是因为原来那个 bug 最坏的地方不是慢,是**沉默地显示另一个时刻** ——
    * 界面上写着 0.2 秒,板子上是 1.0 秒的画,没有任何提示。
    */
@@ -132,7 +132,7 @@ export function Scene3DView({ project, t }: Props) {
    * 只用 clipId 有两个错:换个项目 clipId 会重复(都是 c1 / n1 这种),新项目会看到上个项目的
    * 贴图;改了卡片参数之后 clipId 没变,贴图也不会更新,画面停在旧的样子还不报错。
    *
-   * 位置和三维变换不在里面 —— 服务端烘的时候会把 frame 整个摘掉(见 bakeOne 的说明),
+   * 位置和三维变换不在里面 —— 服务端预渲染的时候会把 frame 整个摘掉(见 bakeOne 的说明),
    * 所以转一下卡片、推一下深度,贴图一个像素都不会变。把整个 frame 塞进去的后果是:
    * 在「三维」面板里拖滑杆,每一格都算变了,于是每一格重建一次场景。
    */
@@ -158,7 +158,7 @@ export function Scene3DView({ project, t }: Props) {
       : [c.id, c.cardId, box].join("|");
   };
   /**
-   * **播放头这一刻**该显示哪一刻烘出来的图,以及那张图的缓存键。
+   * **播放头这一刻**该显示哪一刻预渲染出来的图,以及那张图的缓存键。
    *
    * 原来这里只有一个答案:片段中点。于是任何带动画的卡在 3D 里显示的都不是当前这一刻 ——
    * mu-number-ticker(滚动 1.6 秒)放在 [0,2],播放头 0.23 秒时 2D 是 81%,3D 是 100%。
@@ -167,8 +167,8 @@ export function Scene3DView({ project, t }: Props) {
   /*
    * 有原始帧率那一张就用它,没有才退回低帧率那一档。
    *
-   * 不这么挑的话,逐帧预烘出来的那几百张**一张都不会被显示** —— 显示端永远只问 0.25 秒
-   * 那个格子要图,烘再多也是白烧。
+   * 不这么挑的话,逐帧预渲染出来的那几百张**一张都不会被显示** —— 显示端永远只问 0.25 秒
+   * 那个格子要图,渲再多也是白烧。
    *
    * 退回低帧率仍然守着原来那条规矩:`pickBakeT` 只往回取(floor),所以看到的一定是
    * **已经发生过的**那一刻,最多差 0.25 秒,不会把还没播到的画面提前显示出来。
@@ -188,7 +188,7 @@ export function Scene3DView({ project, t }: Props) {
   };
   const momentKey = (c: TimedClip) => texKeyOf(c, bakeTOf(c));
   /*
-   * 播放头**停住**了没有。停住 = 用户在盯着这一帧看,那就值得把它自己那一帧烘出来。
+   * 播放头**停住**了没有。停住 = 用户在盯着这一帧看,那就值得把它自己那一帧渲出来。
    *
    * 为什么要分这一下:粗粒度那一档(黄条)是 0.25 秒一格的替身,拖动时它很划算 ——
    * 一张图管一片区域,拖过去不用每落一个位置就渲一次(单张四五秒)。但停下来之后它就
@@ -196,19 +196,19 @@ export function Scene3DView({ project, t }: Props) {
    * 拖动中不补(省渲染),停下来才补(要准),两头都占得住。
    */
   /*
-   * 前台烘成功一次就 +1。**只有成功才加。**
+   * 前台渲成功一次就 +1。**只有成功才加。**
    *
    * 要它是因为 momentSig 盯不住这件事:贴图缓存是个 ref,粗粒度那张落地之后 momentSig 一个字都没变
-   * (bakeTOf 前后都返回同一个粗粒度时刻),效果不重跑,下面「停住了就补烘精确帧」那条路就永远够不着。
-   * 失败不加是防死循环:失败后要烘的还是那几张,加了就会一直重试。
+   * (bakeTOf 前后都返回同一个粗粒度时刻),效果不重跑,下面「停住了就补渲精确帧」那条路就永远够不着。
+   * 失败不加是防死循环:失败后要渲的还是那几张,加了就会一直重试。
    */
   const [bakeGen, setBakeGen] = useState(0);
   /**
    * 手还按在播放头上没有(见 timeline/useScrub 的 isScrubbing)。
    *
-   * **按着的时候一张都不烘。** 拖动时播放头每跨过一个 0.25 秒的格子就换一个时刻,
-   * 于是按着不放拖过去一路就是一串前台烘焙,每一个都占住一个 Chrome 好几秒 ——
-   * 而它们烘的全是用户一闪而过、根本没停下来看的位置。等用户真的松手停在某处,
+   * **按着的时候一张都不渲。** 拖动时播放头每跨过一个 0.25 秒的格子就换一个时刻,
+   * 于是按着不放拖过去一路就是一串前台渲染,每一个都占住一个 Chrome 好几秒 ——
+   * 而它们渲的全是用户一闪而过、根本没停下来看的位置。等用户真的松手停在某处,
    * 他要的那一张反而排在这堆注定作废的活后面。
    *
    * 用「松手」这个事件而不是防抖 N 毫秒:松手是明确的,不用猜多久算停下;
@@ -218,13 +218,13 @@ export function Scene3DView({ project, t }: Props) {
   const [parked, setParked] = useState(false);
   useEffect(() => {
     setParked(false);
-    // 手还按着就不算「停住」——那时候连粗粒度那张都不该烘,更别说补精确帧
+    // 手还按着就不算「停住」——那时候连粗粒度那张都不该渲,更别说补精确帧
     if (scrubbing) return;
     const id = setTimeout(() => setParked(true), 500);
     return () => clearTimeout(id);
   }, [t, scrubbing]);
   /**
-   * 按**时刻**存的贴图:`texKeyOf(clip, 那一刻)` → URL。前台现烘的和预烘拿回来的都进这里,
+   * 按**时刻**存的贴图:`texKeyOf(clip, 那一刻)` → URL。前台现场渲染的和预渲染拿回来的都进这里,
    * 一个键只对应一张图,所以「板子上贴的到底是哪一刻」永远是确定的。
    *
    * 板子上只会出现这个表里、且键正好等于此刻 `momentKey(clip)` 的那一张。别的一律不贴 ——
@@ -240,7 +240,7 @@ export function Scene3DView({ project, t }: Props) {
    * 调用方必须先自己对过账,不能指望「随便一张总比色块强」。
    */
   const swap = useRef(new Map<string, (url: string, precise?: boolean) => void>());
-  /** 把板子打回色块:clipId → 复位函数。换到了没烘过的时刻就立刻退回去,不留着旧图冒充 */
+  /** 把板子打回色块:clipId → 复位函数。换到了没渲过的时刻就立刻退回去,不留着旧图冒充 */
   const proxy = useRef(new Map<string, () => void>());
   /** 三维物件每帧要按 t 摆姿势(会转的那种)。渲染循环里调,所以要读最新的 t */
   const posers = useRef<((t: number) => void)[]>([]);
@@ -269,17 +269,17 @@ export function Scene3DView({ project, t }: Props) {
   const projRef = useRef(project);
   projRef.current = project;
   /*
-   * 整条片子要预烘哪几个时刻。**按每张卡自己的动画节奏抽样**(sampleTimesFor),
+   * 整条片子要预渲染哪几个时刻。**按每张卡自己的动画节奏抽样**(sampleTimesFor),
    * 不是一段一张中点 —— 中点那张多半不是用户正看的那一刻,那正是「3D 里显示的不是当前帧」的病根。
    *
    * 只算一次(project 没变就不重算):这个列表每轮调度都要用,而它只跟项目内容有关,
-   * 和播放头无关 —— 播放头只决定**先烘哪个**,那是 bakePlan 的事。
+   * 和播放头无关 —— 播放头只决定**先渲哪个**,那是 bakePlan 的事。
    */
   const wantedMoments = useMemo(() => {
     const out: { clipId: string; t: number; start: number; end: number; tier: "coarse" | "full"; fine: boolean }[] = [];
     const fps = Math.max(1, project.fps || 30);
     for (const c of flattenOverlay(project).clips) {
-      // 素材段本来就是位图,不用烘;scene-3d 在这个视图里是真几何,也不用
+      // 素材段本来就是位图,不用渲;scene-3d 在这个视图里是真几何,也不用
       if ((c as any).mediaId || c.cardId === "scene-3d") continue;
       const motion = motionOf(getCard(c.cardId) as any, c.params);
       /*
@@ -293,7 +293,7 @@ export function Scene3DView({ project, t }: Props) {
         slots.set(t, { t, tier: "coarse", fine: false });
       }
       /*
-       * 原始帧率那一档:逐帧。**排在低帧率全部铺完之后**才会被烘(顺序由 bakePlan 定)。
+       * 原始帧率那一档:逐帧。**排在低帧率全部铺完之后**才会被渲(顺序由 bakePlan 定)。
        * maxPerClip 按这一段自己的帧数给,不用默认的 12 —— 默认那个是为低帧率定的,
        * 拿它来限制逐帧会把一段两秒的卡抽稀成 12 张,那就不叫原始帧率了。
        */
@@ -301,7 +301,7 @@ export function Scene3DView({ project, t }: Props) {
       for (const raw of sampleTimesFor(c as TimedClip, motion, { stepSec: 1 / fps, maxPerClip: frames })) {
         const t = canonFrameT(raw, c.start, fps);
         const had = slots.get(t);
-        // 两档都落在这一刻:排队上算低帧率(先烘),但它同时也是逐帧那一档的一格
+        // 两档都落在这一刻:排队上算低帧率(先渲),但它同时也是逐帧那一档的一格
         if (had) had.fine = true;
         else slots.set(t, { t, tier: "full", fine: true });
       }
@@ -310,8 +310,8 @@ export function Scene3DView({ project, t }: Props) {
     return out;
   }, [project]);
   /*
-   * 空闲时把这些时刻预先烘好(排队规则见 bakePlan.ts)。
-   * 这个视图挂着的时候才开:烘一张要起一个 Chrome、四五秒,
+   * 空闲时把这些时刻预先渲好(排队规则见 bakePlan.ts)。
+   * 这个视图挂着的时候才开:预渲染一张要起一个 Chrome、四五秒,
    * 没打开三维页的人不该为它一直付这笔账。
    */
   const prefetch = useBakePrefetch({ project, t, moments: wantedMoments, enabled: true });
@@ -489,7 +489,7 @@ export function Scene3DView({ project, t }: Props) {
         continue;
       }
 
-      /* 二维的卡:一块贴着「烘出来的真图」的板子 */
+      /* 二维的卡:一块贴着「预渲染出来的真图」的板子 */
       const geo = new THREE.PlaneGeometry(pl.size.width, pl.size.height);
       const mat = new THREE.MeshBasicMaterial({
         color: PROXY_COLOR,
@@ -511,7 +511,7 @@ export function Scene3DView({ project, t }: Props) {
       /*
        * **只贴当前这一刻的图,别的一律退回色块。**
        *
-       * 一度写成「精确的那张没到就先拿预烘那张垫着,总比一块灰色色块强」——那是错的。
+       * 一度写成「精确的那张没到就先拿预渲染那张垫着,总比一块灰色色块强」——那是错的。
        * 垫上去的是另一个时刻的真实画面,它长得和成片一模一样,没人看得出它是垫的;
        * 而色块**自明**地不是成品(和实体模式同一条道理,见 render/solidMode.ts)。
        * 一张看着像真的、其实是别的时刻的画面,会被当成这一刻的依据传下去 ——
@@ -524,7 +524,7 @@ export function Scene3DView({ project, t }: Props) {
        * 外形一模一样,里面 70~90% 是全透明的。一摞这样的透明片摆在空间里,
        * 「东西是怎么摆的」根本看不出来,而那正是这个视图存在的理由。
        *
-       * 内容框从**贴图自己**量(alpha 包围盒)。烘焙的排版尺寸修对之后,贴图画布和卡片的框
+       * 内容框从**贴图自己**量(alpha 包围盒)。预渲染的排版尺寸修对之后,贴图画布和卡片的框
        * 是 1:1 的,所以量出来的相对位置直接就是「四个角在这张卡的框里的位置」——
        * 拿它从这块屏幕平面上裁一小块,再把贴图的对应区域映上去,位置天然是对的。
        *
@@ -560,7 +560,7 @@ export function Scene3DView({ project, t }: Props) {
         renderer.render(scene, camera);
       };
       const apply = (url: string, precise = false) => {
-        if (!precise) return; // 预烘那条路不带时刻,它给的图只进缓存,不上板子
+        if (!precise) return; // 预渲染那条路不带时刻,它给的图只进缓存,不上板子
         boundUrl = url;
         texInUse.add(url);
         /*
@@ -573,7 +573,7 @@ export function Scene3DView({ project, t }: Props) {
         const hit = texCache.get(url);
         if (hit) {
           mat.map = hit;
-          // 烘出来的卡是透明底,不开 transparent 四周会变成黑块(和 applyTexture 里同一个理由)
+          // 预渲染出来的卡是透明底,不开 transparent 四周会变成黑块(和 applyTexture 里同一个理由)
           mat.transparent = true;
           mat.needsUpdate = true;
           cacheTexture(url, hit); // 挪到队尾:它是最近用过的
@@ -590,7 +590,7 @@ export function Scene3DView({ project, t }: Props) {
          * (相对键之后,同一张卡的两个副本共用同一个文件),dispose 会让那块板子直接变黑。
          */
       };
-      /** 退回色块:这一刻的图还没烘出来,或者换到了别的时刻 */
+      /** 退回色块:这一刻的图还没渲出来,或者换到了别的时刻 */
       const toProxy = () => {
         if (boundUrl) { texInUse.delete(boundUrl); boundUrl = null; }
         if (!mat.map) return;
@@ -716,37 +716,37 @@ export function Scene3DView({ project, t }: Props) {
     // t 故意不在依赖里:姿势由渲染循环按 tRef 每帧更新,进依赖会让整个场景每帧重建
   }, [mods, sig, project.width, project.height, project.camera3dFov]);
 
-  /* ── 换到哪一刻就贴哪一刻;没有的先退回色块,再去烘 ─────────────── */
+  /* ── 换到哪一刻就贴哪一刻;没有的先退回色块,再去渲 ─────────────── */
   useEffect(() => {
     /*
      * 只给**二维的卡**要贴图。scene-3d 那种在这个视图里是真几何,不需要贴图 ——
-     * 一开始没排除它,结果每开一次都白烘一张(单张 4.7~6.5 秒),而且烘出来根本没人用。
+     * 一开始没排除它,结果每开一次都白渲一张(单张 4.7~6.5 秒),而且渲出来根本没人用。
      */
     const flat = active.filter((c) => c.cardId !== "scene-3d");
     const need: typeof flat = [];
     for (const c of flat) {
       const url = moments.current.get(momentKey(c));
-      // 有这一刻的就贴上(这条也覆盖「拖回刚才那一刻」:缓存命中,一张都不用重烘)
+      // 有这一刻的就贴上(这条也覆盖「拖回刚才那一刻」:缓存命中,一张都不用重渲)
       if (url) swap.current.get(c.id)?.(url, true);
       // 没有就**立刻**打回色块。留着上一刻的图不动,等于把一个错的画面继续传下去
       else { proxy.current.get(c.id)?.(); need.push(c); }
     }
     /*
-     * 这一轮要烘哪些、各烘哪一刻。两种情形:
-     *   need 非空 —— 板子上现在是色块,按 bakeTOf 烘。那可能是粗粒度那一档(0.25 秒一格),
+     * 这一轮要渲哪些、各渲哪一刻。两种情形:
+     *   need 非空 —— 板子上现在是色块,按 bakeTOf 渲。那可能是粗粒度那一档(0.25 秒一格),
      *                拖动时这很划算:一张图管一片区域,不用每落一个位置就渲四五秒。
      *   need 为空、但播放头**停住**了 —— 画面已经有了,可它可能只是那个替身。
-     *                用户在盯着看,补烘播放头自己那一帧(实测停在第 121 帧时,
+     *                用户在盯着看,补渲播放头自己那一帧(实测停在第 121 帧时,
      *                三维拿的是第 120 帧,和二维差整整一帧)。
      * 拖动中不补(省渲染),停住才补(要准)。
      */
     /*
-     * **手还按着就到此为止:贴图照换(缓存里有的立刻贴上),但一张都不烘。**
+     * **手还按着就到此为止:贴图照换(缓存里有的立刻贴上),但一张都不渲。**
      *
      * 上面那个循环已经把该贴的贴了、该打回色块的打回了 —— 那是免费的。往下才是花钱的部分:
-     * 拖过去的每一个格子都发一次烘焙,每个占住一个 Chrome 好几秒,而它们烘的都是
+     * 拖过去的每一个格子都发一次渲染,每个占住一个 Chrome 好几秒,而它们渲的都是
      * 用户一闪而过的位置。松手之后 scrubbing 变 false,这个 effect 会立刻再跑一遍,
-     * 那时才真的开烘 —— 用户停在哪儿就烘哪儿,一次都不浪费。
+     * 那时才真的开渲 —— 用户停在哪儿就渲哪儿,一次都不浪费。
      */
     if (scrubbing) { setPending(0); setBakingAt(null); return; }
     const asks = need.length
@@ -756,9 +756,9 @@ export function Scene3DView({ project, t }: Props) {
         : [];
     if (!asks.length) {
       /*
-       * 一张都不用烘(拖回了已经预渲染的地方)。**这里必须把「正在烘」清掉** ——
+       * 一张都不用渲(拖回了已经预渲染的地方)。**这里必须把「正在渲」清掉** ——
        * 上一次的 effect 是被 cleanup 掐掉的(dead),它 finally 里那句清理带着 `!dead` 判断,
-       * 所以不会执行。不在这儿清的话,画面已经好了,提示却一直挂着"正在烘第 X 秒"。
+       * 所以不会执行。不在这儿清的话,画面已经好了,提示却一直挂着"正在渲第 X 秒"。
        */
       setPending(0);
       setBakingAt(null);
@@ -770,25 +770,25 @@ export function Scene3DView({ project, t }: Props) {
     /*
      * **换到别的时刻就把上一次的请求掐掉。**
      *
-     * 不掐的后果实测过:在没预渲染的区域连着挪 8 次播放头,发出 9 个前台烘焙请求、
+     * 不掐的后果实测过:在没预渲染的区域连着挪 8 次播放头,发出 9 个前台渲染请求、
      * 同时有 4 个挂着。而浏览器对同一个源只给约 6 条连接 —— 挂满之后,
-     * **连取一张已经烘好的贴图的 GET 都排不进去**,于是"拖回已经预渲染的地方也不刷新,
-     * 非要等前面那个没烘完的先完成"。
+     * **连取一张已经渲好的贴图的 GET 都排不进去**,于是"拖回已经预渲染的地方也不刷新,
+     * 非要等前面那个没渲完的先完成"。
      *
      * 掐掉不浪费:服务端那边不会因此停手,而且同键并发是合并的(见 bakeOne 的 bakeInFlight),
      * 图照样会落盘。下次要它的时候直接命中缓存。
      */
     const ac = new AbortController();
     /*
-     * 告诉预烘让路。服务端渲染是串行的,预烘要是正占着,这一张 —— 用户此刻正盯着的那张 ——
+     * 告诉预渲染让路。服务端渲染是串行的,预渲染要是正占着,这一张 —— 用户此刻正盯着的那张 ——
      * 就得排在它后面多等四五秒。本来是来提速的,反而卡了一下。
      */
     beginForegroundBake();
     (async () => {
       try {
         /*
-         * 前台烘焙走**编辑器自己的常驻热备渲染器**(两台 Chrome 轮换,见 vite-plugin-vision 的 uiRenderer),
-         * 不进预渲染池:用户正盯着的这一张最高优先级,一毫秒都不该排在 Agent 或预烘后面。
+         * 前台渲染走**编辑器自己的常驻热备渲染器**(两台 Chrome 轮换,见 vite-plugin-vision 的 uiRenderer),
+         * 不进预渲染池:用户正盯着的这一张最高优先级,一毫秒都不该排在 Agent 或预渲染后面。
          */
         const res = await fetch("/api/ui-render/bake-batch", {
           method: "POST",
@@ -799,7 +799,7 @@ export function Scene3DView({ project, t }: Props) {
             clips: asks.map((a) => ({ clipId: a.clip.id, t: a.at })),
             size: 1024,
             /*
-             * 插队。用户正盯着这块板子等它变成真图,而队里可能排着一长串没人等的预烘 ——
+             * 插队。用户正盯着这块板子等它变成真图,而队里可能排着一长串没人等的预渲染 ——
              * 不插队实测要 19.5 秒才出画面,插了队最坏只等正在跑的那一个(约 5 秒)。
              */
             priority: 1,
@@ -814,25 +814,25 @@ export function Scene3DView({ project, t }: Props) {
         for (const b of data.baked ?? []) {
           const a = asks.find((x) => x.clip.id === b.clipId);
           /*
-           * **烘出来的一定进缓存,哪怕播放头已经挪走了**(dead)。花了四五秒渲的这一张,
+           * **渲出来的一定进缓存,哪怕播放头已经挪走了**(dead)。花了四五秒渲的这一张,
            * 键就是「那一刻」,扔掉的话拖回去还得再等一遍。
            * 但只有播放头还停在这一刻时才往板子上贴 —— 挪走了还贴,贴的就是别的时刻的画面。
            */
-          // 存到**我们要的那一刻**上,不是 momentKey —— 补烘精确帧时这两个键不是同一个
+          // 存到**我们要的那一刻**上,不是 momentKey —— 补渲精确帧时这两个键不是同一个
           if (a) moments.current.set(texKeyOf(a.clip, a.at), b.url);
           // 存完再算 momentKey:精确帧一进缓存,bakeTOf 就改口选它,这里正好对上、换上去
           if (!dead && a && texKeyOf(a.clip, a.at) === momentKey(a.clip)) swap.current.get(b.clipId)?.(b.url, true);
           /*
            * **同时告诉时间轴那条进度条。**
            *
-           * 前台现烘和空闲预烘是两条路,而覆盖表原来只有预烘那条会写。于是前台烘完、
+           * 前台现场渲染和空闲预渲染是两条路,而覆盖表原来只有预渲染那条会写。于是前台渲完、
            * 画面已经换成真图了,时间轴上那一段还是空的 —— 要等下一轮盘点(最长几秒)才补上,
            * 看起来就是"条子慢半拍"。这里补一句,两条路就都记账了。
            */
           markBaked([momentId(b.clipId, a ? a.at : b.t)]);
         }
         if (dead) return;
-        // 烘成了就让这个 effect 再跑一轮:刚落地的可能只是粗粒度那张,停住时还要补精确帧
+        // 渲成了就让这个 effect 再跑一轮:刚落地的可能只是粗粒度那张,停住时还要补精确帧
         if (data.baked?.length) setBakeGen((g) => g + 1);
         if (data.failed?.length) setErr(`${data.failed.length} 张没烘出来:${data.failed[0].error}`);
       } catch (e: any) {
@@ -849,12 +849,12 @@ export function Scene3DView({ project, t }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sig, momentSig, parked, bakeGen, scrubbing]);
 
-  /* ── 预烘好的贴图一到就收进「按时刻」的缓存,轮到那一刻就用得上 ─────── */
+  /* ── 预渲染好的贴图一到就收进「按时刻」的缓存,轮到那一刻就用得上 ───── */
   useEffect(() => {
     if (!prefetch.ready.size) return;
     const all = projRef.current.tracks.flatMap((tr: any) => tr.clips ?? []);
     for (const [id, url] of prefetch.ready) {
-      // 预烘的键是 `<clipId>@<t>`(见 useBakePrefetch 的 momentId)。clipId 里不会有 @
+      // 预渲染的键是 `<clipId>@<t>`(见 useBakePrefetch 的 momentId)。clipId 里不会有 @
       const at = id.lastIndexOf("@");
       if (at < 0) continue;
       const clipId = id.slice(0, at);
@@ -866,12 +866,12 @@ export function Scene3DView({ project, t }: Props) {
       moments.current.set(k, url);
       /*
        * **只有它正好就是这块板子此刻该显示的那一刻,才换上去。**
-       * 预烘会把整条片子的很多时刻都烘出来,拿其中任意一张往板子上贴,
+       * 预渲染会把整条片子的很多时刻都渲出来,拿其中任意一张往板子上贴,
        * 贴的就是别的时刻的画面 —— 那正是要修的那个 bug。
        */
       if (k === momentKey(c)) swap.current.get(clipId)?.(url, true);
     }
-    // momentSig 在依赖里:预烘的结果和「此刻该显示哪一刻」是两个都会变的量,
+    // momentSig 在依赖里:预渲染的结果和「此刻该显示哪一刻」是两个都会变的量,
     // 任一个变了都要重新对一次账
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [prefetch.ready, momentSig]);
@@ -886,7 +886,7 @@ export function Scene3DView({ project, t }: Props) {
       <div ref={host} style={{ position: "absolute", inset: 0 }} />
 
       {/*
-        「2D 视角框」开关。放右上角:左下角那条是烘焙进度,别抢地方。
+        「2D 视角框」开关。放右上角:左下角那条是预渲染进度,别抢地方。
         只有加载完(mods 到位、场景建起来了)才显示 —— 场景还没有的时候点它什么都不会发生。
       */}
       {mods && (
