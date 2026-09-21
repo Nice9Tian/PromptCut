@@ -3,7 +3,7 @@
  *
  * 流程一共三步,中间那步靠外部模型,不在这个脚本里:
  *   1. node scripts/catalog-notes.mjs sheets --url http://127.0.0.1:5190/?export=1 [--out <dir>] [--only lottie:gatin,particles:snow]
- *      每个素材在导出管线上烘一段(Lottie 3 秒、粒子 2 秒),按时间顺序抽 6 帧,横排拼成一张
+ *      每个素材在导出管线上预渲染一段(Lottie 3 秒、粒子 2 秒),按时间顺序抽 6 帧,横排拼成一张
  *      带序号和时间戳的长图(深底,粒子的白点看得见),写到 <out>/<kind>__<name>.png。
  *   2. 把 <out> 交给会看图的模型(用 subagent-agy 技能派 manager 跑 gemini-3.8-flash),
  *      让它对每张写 note(6 帧里发生了什么,≤40 字)、use(适合什么场合)、3 个 tags,

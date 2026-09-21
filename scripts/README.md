@@ -19,7 +19,7 @@ node scripts/export-frames.mjs --url "http://127.0.0.1:5197/?export=1" --frames 
 |---|---|
 | `--url` | 导出视图地址。可带 `&timeline=<url>` 指定时间轴(Timeline 或 Project 形状;data URL 也行) |
 | `--frames a-b` | 只落盘这一段;时间仍从第 0 帧顺序推进(动画锚点、按 delta 积分的卡片、随机数流都依赖前面推过哪些帧) |
-| `--target-frames a,b,c` | 只截这几帧(离散取样,给预烘用),一趟推过去沿途截 |
+| `--target-frames a,b,c` | 只截这几帧(离散取样,给预渲染用),一趟推过去沿途截 |
 | `--out` | 输出目录,帧在 `<out>/frames/%06d.png` |
 | `--fps` | 覆盖时间轴 fps |
 | `--warm` | 预热帧数,默认 3 |

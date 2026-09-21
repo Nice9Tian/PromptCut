@@ -1,5 +1,5 @@
 /**
- * 给时间轴上的每一个 clip 各烘一张定格图 → out/card-shots/NN-<cardId>.png,再拼一张总览图。
+ * 给时间轴上的每一个 clip 各预渲染一张定格图 → out/card-shots/NN-<cardId>.png,再拼一张总览图。
  *
  *   node scripts/card-shots.mjs                       # 自己起一份 vite(端口 5245,不写全局 port.json)
  *   node scripts/card-shots.mjs --url http://127.0.0.1:5190   # 用现成的开发服务器
