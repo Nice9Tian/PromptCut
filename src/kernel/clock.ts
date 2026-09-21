@@ -40,6 +40,13 @@ declare global {
     /** 舞台页:RPC 方法表(父页走 postMessage;这里挂着只给测试页 / puppeteer 直接调) */
     __pcStage?: import('../render/stageRpc').StageRpcApi;
     /**
+     * 舞台页:`setPlan` 收下的那份 K2 分派表(集合已回填)+ K1 的每卡记录。
+     * 消费它的是 K3 / K5(R5);挂在这里给验收探针看「表到没到、算出来的是轻是重」。
+     */
+    __pcStagePlan?: () => import('../render/wirePlan').StagePlan | null;
+    /** 舞台页:按 K2 的表查这一刻这个片段走哪条管线(`pipelineAt`)。没有表时一律 `'heavy'` */
+    __pcStagePipelineAt?: (clipId: string, tSec: number) => 'light' | 'heavy';
+    /**
      * 导出:DOM 变动次数。静态帧判定的主力 —— Motion 的 JS 动画绕开了被替换的 rAF,
      * 但它每帧都要把新值写回 style / 文本节点,这个躲不掉。理由详见 exportClock.ts。
      */

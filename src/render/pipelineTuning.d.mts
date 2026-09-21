@@ -18,6 +18,10 @@ export const TUNING_RANGE: Readonly<Record<keyof PipelineTuning, Readonly<{ min:
 export const PROBE_MAX_FRAMES: number;
 export const PROBE_MAX_MS: number;
 
+/** 两趟布尔探针另算的上限（任务书 K1）：各 8 帧或 200 ms，超了记 `false` / `null`。 */
+export const PROBE_BOOL_FRAMES: number;
+export const PROBE_BOOL_MS: number;
+
 export function resolveTuning(overrides?: PipelineTuningOverrides): Readonly<PipelineTuning>;
 
 /**

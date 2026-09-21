@@ -16,13 +16,16 @@ import {
   postStageReady,
   serveStageRpc,
   type BackJob,
+  type ProbeBooleans,
   type RenderReply,
   type SetTimeReply,
   type StageRole,
   type StageRpcApi,
 } from "./render/stageRpc";
-import type { CardCostRecord } from "./render/cardCostKey.mjs";
-import { PROBE_MAX_FRAMES, PROBE_MAX_MS } from "./render/pipelineTuning.mjs";
+import { PROBE_BOOL_FRAMES, PROBE_BOOL_MS, PROBE_MAX_FRAMES, PROBE_MAX_MS } from "./render/pipelineTuning.mjs";
+import { compareSnapshotHtml } from "./render/snapshotCompare.mjs";
+import { pipelineAt } from "./render/pipelinePlan.mjs";
+import { revivePlan, type StagePlan, type WirePlan } from "./render/wirePlan";
 import { ensureProxyStyle, proxyAllowed, proxyOf, resetInk, sampleAll } from "./render/solidMode";
 import { themeStyle } from "./themes";
 import "./cards";
@@ -125,7 +128,8 @@ export default function StageView() {
     proxy: false,
     role: "front" as StageRole,
     job: undefined as BackJob | undefined,
-    plan: null as { plan: unknown; costs: CardCostRecord[] } | null,
+    /** K2 的分派表(已回填成 `Set`)+ K1 的每卡记录。查询走下面的 `pipelineOf` */
+    plan: null as StagePlan | null,
     snapshots: new Map<string, string>(),
     suppressed: new Set<string>(),
     streamPlanes: [] as Array<{ clipIds: string[] }>,
@@ -150,6 +154,12 @@ export default function StageView() {
   const settleGen = useRef(0);
   /** 渲染代数:又来一次渲染 / 换项目就作废上一次还在飞的异步补跑;和 RPC 请求一一对应 */
   const renderGen = useRef(0);
+  /**
+   * 换了几次项目。两趟布尔探针那一支不走 `abortPending`(它自己 `return`,不是 resolve
+   * 挂着的那个 pending),所以要另有一样东西分得清「被 `setProject` 掐的」和「被新 `render`
+   * 掐的」—— 两者的重发规矩不一样(E0:`'project'` 重发,`'superseded'` 丢弃)。
+   */
+  const projectGen = useRef(0);
 
   /*
    * 卡片图(H3):图卡的输入在这里解。projectCardGraph 对悬空输入会 throw
@@ -234,23 +244,28 @@ export default function StageView() {
     };
 
     /**
+     * 此刻活跃的卡里最早的那个挂载帧(秒)。
+     *
+     * **挂载时刻必须落在帧格上** —— 不然「预览所见 = 导出所得」在每个卡片入点都破一次。
+     *
+     * 导出是一帧一帧推的:一张卡在第一个 ≥ start-LEAD 的**帧**上挂载,时间原点就是那一帧,
+     * 而不是 start-LEAD 本身。挂载帧统一由 frameWindow.mjs 的 mountFrameOf 给
+     * (预览、导出、分片同一个算式)。夹一下:target 本身不在帧格上时,对齐后可能反超它。
+     */
+    const mountSecOf = (target: number, fps: number): number => {
+      const p = ref.current.project;
+      const active = p ? flattenOverlay(p).clips.filter((c) => cardMountedAt(c, target)) : [];
+      return active.length
+        ? Math.min(Math.min(...active.map((c) => mountFrameOf(c, fps))) / fps, Math.max(0, target))
+        : Math.max(0, target);
+    };
+
+    /**
      * 重挂载定位:把此刻活跃的卡全部重挂载,时钟拨到它们里最早的挂载帧,空跑两拍。
      * 返回从哪一秒起推。render(jump) 用;legacy 的 setProject 也走它。
      */
     const remountAt = (target: number, fps: number): number => {
-      const p = ref.current.project!;
-      const clips = flattenOverlay(p).clips;
-      const active = clips.filter((c) => cardMountedAt(c, target));
-      /*
-       * **挂载时刻必须落在帧格上** —— 不然「预览所见 = 导出所得」在每个卡片入点都破一次。
-       *
-       * 导出是一帧一帧推的:一张卡在第一个 ≥ start-LEAD 的**帧**上挂载,时间原点就是那一帧,
-       * 而不是 start-LEAD 本身。挂载帧统一由 frameWindow.mjs 的 mountFrameOf 给
-       * (预览、导出、分片同一个算式)。夹一下:target 本身不在帧格上时,对齐后可能反超它。
-       */
-      const from = active.length
-        ? Math.min(Math.min(...active.map((c) => mountFrameOf(c, fps))) / fps, Math.max(0, target))
-        : Math.max(0, target);
+      const from = mountSecOf(target, fps);
       pinner.reset();
       clock.set(from * 1000);
       flushSync(() => {
@@ -300,6 +315,164 @@ export default function StageView() {
       })();
     };
 
+    /* ------------------------------------------------ K1 的两趟布尔探针(vtOk / seekOk / seekMs) */
+
+    /**
+     * 这一张卡的包裹层(`Stage.tsx` 挂的 `[data-pc-clip]`)。
+     *
+     * 探针**只在缩水项目上跑**(K1:一条轨道一个 clip),所以舞台里恰好一棵卡片子树,
+     * 第一个匹配就是最外层那个包裹层 —— 组合卡的部件包裹层嵌在它里面,
+     * `getAnimations({ subtree: true })` 一并覆盖。`:not([data-pc-media])` 排掉素材层
+     * (`FrameScene` 的素材层也带 `data-pc-clip`)。
+     */
+    const probeWrap = (): Element | null =>
+      rootRef.current?.querySelector("[data-pc-clip]:not([data-pc-media])") ?? null;
+
+    /**
+     * **K3 的「重挂载定位配方」,片段粒度**(K1 的两趟布尔探针复位用;K3(a′) 向后跳、
+     * K5 第一路起步是 R5 的事,用的是同一段)。一步都不许省:
+     *
+     *   `resetIn(包裹层)` → 重挂载(`remountGen` / 这里是 `playToken`)
+     *   → `clock.tick(clock.now())` **两次** → `pinner.syncIn(包裹层, mountMs)`
+     *
+     * 为什么要复位:计时趟已经把这张卡推到了片段最后一帧,越过结尾的动画被
+     * `pinAnimations` 的 `finish()` 收了、此后永久跳过 —— 不复位就是在终态实例上比对,
+     * 两个布尔必然记 `false`。
+     *
+     * 为什么 `tick` 传 `clock.now()` 而不是 `mountMs`:`tick(ms)` 先 `now = ms` 再排空 rAF 队列,
+     * 传别的值等于把全局时钟拨走。这里上一行刚 `clock.set(mountMs)`,两者正好相等,
+     * 写成 `clock.now()` 是为了和 K3 里「当前全局毫秒」那条统一。
+     *
+     * 为什么最后要钉一次挂载帧锚点:`patchAnimate` 让新动画出生即 `pause()` + `currentTime = 0`,
+     * 少了这一次,锚点会记成第一次 `syncIn` 的目标毫秒,画面停在第 0 帧。
+     */
+    const remountClipAt = (mountSec: number): Element | null => {
+      const before = probeWrap();
+      // 探针的缩水项目里只有这一张卡,没有包裹层(还没挂上)时退回整份重建
+      if (before) pinner.resetIn(before);
+      else pinner.reset();
+      clock.set(mountSec * 1000);
+      flushSync(() => {
+        setToken((n) => n + 1);
+        setT(mountSec);
+      });
+      clock.tick(clock.now());
+      clock.tick(clock.now());
+      const after = probeWrap();
+      if (after) pinner.syncIn(after, mountSec * 1000);
+      return after;
+    };
+
+    /**
+     * 此刻这张卡的控件 HTML(比对的那一份)。`lossy > 0` 时回 null ——
+     * WebGL 画布读不出像素、两趟都是空画布,比对没有意义,K1 明写这时两个布尔一律记 `false`。
+     * 组合卡有多个控件,按文档序拼起来一起比(两趟序列化的是同一棵树,顺序一致)。
+     */
+    const probeControlHtml = (): string | null => {
+      const root = rootRef.current;
+      if (!root) return null;
+      const snap = createSnapshot(root);
+      if (snap.lossy > 0) return null;
+      return snap.controls.map((c) => c.html).join(" ");
+    };
+
+    /**
+     * 两趟布尔探针(K1 / pinned 划分轴一「如何区分 SeekOK」)。四趟,各自先走复位配方:
+     *
+     *   1. **基线趟**:全局时钟从挂载帧逐帧推 8 帧,第 8 帧的控件 HTML 留在**内存里**
+     *      (K1:不依赖父页回传)。推法和计时 / 快照趟逐字一致 —— 同一个 `advanceToAsync`、
+     *      同一组 `onFrame` / `afterFrame`,否则比的就不是同一件事了。
+     *   2. **`vtOk` 趟**:**不动全局时钟**,只 `pinner.syncIn(包裹层, 该帧的全局舞台毫秒)`
+     *      + 给组件本地 `t`,推 8 帧。全局 rAF 队列没人排空,读全局帧循环时间戳的
+     *      Motion JS 动画因此推不动 —— 这正是 `vtOk = false` 要抓的那一类。
+     *      帧间同样只让微任务(和基线趟的 `advanceToAsync` 一致),不多让也不少让。
+     *   3. **`seekOk` 趟**:一步钉到第 8 帧(不经 1～7 帧),再比。
+     *   4. **`seekMs`**:从第 0 帧直接钉到片段最后一帧,`__pcRealNow` 量这一次的墙钟。
+     *
+     * 「给组件本地 `t`」在这里就是 `setT` —— 缩水项目里只有这一张卡,舞台的全局 `t` 就是它的
+     * 本地时间基。R5 要在整份项目上对**单张**卡做同样的事时才需要 `Stage` 的 `settling` prop
+     * (K5 第一路),探针不需要,所以这一步不碰 `Stage.tsx`。
+     *
+     * 各趟 `PROBE_BOOL_FRAMES` 帧或 `PROBE_BOOL_MS` 毫秒封顶;比对趟超了记 `false`,
+     * 量 `seekMs` 那一趟超了记 `null`。**生成的快照一律不 post `probe-frame`**(K1)。
+     */
+    const runBooleanProbe = async (lastSec: number, fps: number, gen: number): Promise<{ booleans?: ProbeBooleans; aborted?: true }> => {
+      const step = 1000 / fps;
+      const mountSec = mountSecOf(lastSec, fps);
+      const mountMs = mountSec * 1000;
+      const frames = PROBE_BOOL_FRAMES;
+      const stale = () => gen !== renderGen.current;
+      /** 帧间让出一个宏任务:让父页的 RPC 消息、iframe 自己的 resize 有机会进来(趟与趟之间用) */
+      const breathe = () => new Promise<void>((r) => (window.__pcRealSetTimeout ?? window.setTimeout)(r, 0));
+
+      /* ---- 1. 基线趟:全局时钟推 8 帧 ---- */
+      remountClipAt(mountSec);
+      let pushed = 0;
+      const baseStarted = realNow();
+      await clock.advanceToAsync(mountMs + frames * step, {
+        step,
+        maxCatchUp: Infinity,
+        abort: () => stale() || pushed >= frames || realNow() - baseStarted > PROBE_BOOL_MS,
+        onFrame: (ms) => flushSync(() => setT(ms / 1000)),
+        afterFrame: (ms) => {
+          pinner.sync(ms);
+          pushed++;
+        },
+      });
+      if (stale()) return { aborted: true };
+      // 第 8 帧之前就被截断的卡没有基线,两个布尔一律记 false、不比对(K1)
+      const baseline = pushed >= frames ? probeControlHtml() : null;
+
+      /* ---- 2. vtOk 趟:只推子树虚拟时间 ---- */
+      await breathe();
+      if (stale()) return { aborted: true };
+      let vtHtml: string | null = null;
+      if (baseline !== null) {
+        const wrap = remountClipAt(mountSec);
+        const vtStarted = realNow();
+        let done = 0;
+        for (let k = 1; k <= frames; k++) {
+          // 和基线趟的 advanceToAsync 一样:帧间只让微任务(Motion 解析关键帧要一个边界)
+          await Promise.resolve();
+          if (stale()) return { aborted: true };
+          if (realNow() - vtStarted > PROBE_BOOL_MS) break;
+          const ms = mountMs + k * step;
+          if (wrap) pinner.syncIn(wrap, ms);
+          flushSync(() => setT(ms / 1000));
+          done++;
+        }
+        if (done >= frames) vtHtml = probeControlHtml();
+      }
+      const vtOk = baseline !== null && vtHtml !== null && compareSnapshotHtml(baseline, vtHtml).same;
+
+      /* ---- 3. seekOk 趟:一步钉到第 8 帧 ---- */
+      await breathe();
+      if (stale()) return { aborted: true };
+      let seekHtml: string | null = null;
+      if (baseline !== null) {
+        const wrap = remountClipAt(mountSec);
+        const seekStarted = realNow();
+        const ms = mountMs + frames * step;
+        if (wrap) pinner.syncIn(wrap, ms);
+        flushSync(() => setT(ms / 1000));
+        if (realNow() - seekStarted <= PROBE_BOOL_MS) seekHtml = probeControlHtml();
+      }
+      const seekOk = baseline !== null && seekHtml !== null && compareSnapshotHtml(baseline, seekHtml).same;
+
+      /* ---- 4. seekMs:第 0 帧直接钉到最后一帧的墙钟 ---- */
+      await breathe();
+      if (stale()) return { aborted: true };
+      const wrap = remountClipAt(mountSec);
+      const lastMs = Math.max(mountMs, lastSec * 1000);
+      const seekStarted = realNow();
+      if (wrap) pinner.syncIn(wrap, lastMs);
+      flushSync(() => setT(lastMs / 1000));
+      const elapsed = realNow() - seekStarted;
+      ref.current.t = lastMs / 1000;
+
+      return { booleans: { vtOk, seekOk, seekMs: elapsed > PROBE_BOOL_MS ? null : elapsed } };
+    };
+
     const api: StageRpcApi = {
       /**
        * 换项目文档。patch 复用 A7 的 changedClips 结构,合并时**保持未变片段的对象引用**
@@ -331,6 +504,7 @@ export default function StageView() {
         window.clearTimeout(ref.current.settle);
         // 项目变了,在飞的补跑作废:探针会按新项目重发
         renderGen.current++;
+        projectGen.current++;
         abortPending("project");
         if (LEGACY) {
           if (prevKey !== nextKey) {
@@ -450,6 +624,24 @@ export default function StageView() {
         const gen = ++renderGen.current;
         abortPending("superseded");
         window.clearTimeout(ref.current.settle);
+
+        /*
+         * 两趟布尔探针走自己那一支:它不是「推到 tSec」,而是四趟各自复位再比对
+         * (K1)。`tSec` 在这里的含义是**片段最后一帧**,只用来量 `seekMs`。
+         * 掐断和别的探针一样按 `renderGen` 判,回 `superseded` / `project`。
+         */
+        if (probeMode === "booleans") {
+          const pg = projectGen.current;
+          const out = await runBooleanProbe(target, fps, gen);
+          const elapsedMs = realNow() - started;
+          if (out.aborted || gen !== renderGen.current) {
+            // 和别的路一样:被 setProject 掐的回 'project',被新 render 掐的回 'superseded'
+            return { aborted: true, reason: projectGen.current !== pg ? "project" : "superseded", elapsedMs } satisfies RenderReply;
+          }
+          scheduleSample();
+          return { remounted: true, caughtUpAtSec: clock.now() / 1000, elapsedMs, stepMs: elapsedMs,
+            booleans: out.booleans } satisfies RenderReply;
+        }
 
         let remounted = false;
         if (opts.jump) {
@@ -603,8 +795,20 @@ export default function StageView() {
         }
         return { ok: true };
       },
+      /**
+       * K2 的分派表 + K1 的每卡记录(E0)。父页在 `costs` / 项目 / `tuning` 变了时算好发过来,
+       * **集合在线上是数组**(`wirePlan.ts`),这里回填成 `Set`,消费侧照常用 `pipelineAt`。
+       *
+       * `back` 也收得下(只是存着不用):角色转正(K5 (5) / K3(b) (5))时父页会在
+       * `setRole('front')` 之后的同一批里先补发一次,那时它就派上用场了。
+       *
+       * 消费它的是 K3 / K5(R5):`pipelineAt(plan, clipId, t)` 决定这一拍活渲还是贴死素材,
+       * `costs` 里的 `vtOk` / `seekOk` / `catchUpMs` 决定走 (a′) / (a) / (b) 和 K5 的两路。
+       * 这一步只把表存进来、并把查询口子放好。
+       */
       async setPlan(plan) {
-        ref.current.plan = plan;
+        const wire = (plan?.plan ?? null) as WirePlan | null;
+        ref.current.plan = { plan: revivePlan(wire), costs: Array.isArray(plan?.costs) ? plan.costs : [] };
         return { ok: true as const };
       },
       /*
@@ -669,12 +873,21 @@ export default function StageView() {
       if (!root) throw new Error("stage: 还没有项目,没什么可生成快照的");
       return createSnapshot(root);
     };
+    /*
+     * K2 的表的查询口子。R5 的 K3 / K5 在舞台内部直接读 `ref.current.plan`,
+     * 挂在 window 上这一份是给验收探针和 puppeteer 看的(表到没到、这一刻判轻还是判重)。
+     * 没有表时 `pipelineAt` 回 `'heavy'` —— 保守侧,和「没有记录按声明兜底」同一个方向。
+     */
+    window.__pcStagePlan = () => ref.current.plan;
+    window.__pcStagePipelineAt = (clipId: string, tSec: number) => pipelineAt(ref.current.plan?.plan ?? null, clipId, tSec);
     postStageReady(detectHostCapabilities());
     return () => {
       stopRpc();
       window.clearTimeout(ref.current.settle);
       window.clearTimeout(sampleTimer);
       if (window.__pcStage === api) delete window.__pcStage;
+      delete window.__pcStagePlan;
+      delete window.__pcStagePipelineAt;
     };
   }, []);
 
