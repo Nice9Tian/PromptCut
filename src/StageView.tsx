@@ -22,6 +22,7 @@ import {
   type StageRpcApi,
 } from "./render/stageRpc";
 import type { CardCostRecord } from "./render/cardCostKey.mjs";
+import { PROBE_MAX_FRAMES, PROBE_MAX_MS } from "./render/pipelineTuning.mjs";
 import { ensureProxyStyle, proxyAllowed, proxyOf, resetInk, sampleAll } from "./render/solidMode";
 import { themeStyle } from "./themes";
 import "./cards";
@@ -390,9 +391,12 @@ export default function StageView() {
 
       /**
        * 后台舞台的补跑(K1 探针 / K3(b) 续推)。
-       *   jump: true  —— 重挂载并从 mountFrameOf 推到 tSec;probe 时每推一帧就冻结控件 HTML 并 post
-       *                  `probe-frame`,maxFrames 到或累计墙钟超过 B(1000/fps×70%)就截断:
-       *                  回 { aborted: true, reason: 'timeout', elapsedMs, frames, truncated: true }。
+       *   jump: true  —— 重挂载并从 mountFrameOf 推到 tSec;
+       *                  `probe: 'snapshot'`(或 `true`)每推一帧就生成控件快照并 post `probe-frame`,
+       *                  maxFrames 到或累计墙钟超过 B(1000/fps×70%)就截断;
+       *                  `probe: 'time'` 只推进、不生成快照、不 post,按 PROBE_MAX_FRAMES /
+       *                  PROBE_MAX_MS 封顶,回包带每帧的活渲耗时 `steps`(K1 的计时趟)。
+       *                  截断都回 { aborted: true, reason: 'timeout', elapsedMs, frames, truncated: true }。
        *   jump 缺省   —— 续推:不重挂载、不动 playToken,从 clock.now() 推到 tSec;
        *                  tSec 在当前时刻之前直接回 { aborted, reason: 'superseded' }。
        * Promise 在推完之后才 resolve;被新 render 掐掉回 'superseded',被 setProject 掐掉回 'project'。
@@ -404,8 +408,11 @@ export default function StageView() {
         if (!p) return { aborted: true, reason: "project", elapsedMs: 0 } satisfies RenderReply;
         const fps = Math.max(1, p.fps || 30);
         const budgetMs = (1000 / fps) * 0.7;
-        const probe = !!opts.probe;
-        const maxFrames = opts.maxFrames ?? Infinity;
+        // K1 的两趟(任务书 K1):`true` 按老调用方的意思等于快照趟
+        const probeMode = opts.probe === true ? "snapshot" : opts.probe || null;
+        const probe = probeMode !== null;
+        const timing = probeMode === "time";
+        const maxFrames = opts.maxFrames ?? (timing ? PROBE_MAX_FRAMES : Infinity);
 
         const gen = ++renderGen.current;
         abortPending("superseded");
@@ -428,6 +435,9 @@ export default function StageView() {
          */
         const snapshot = { inlineMs: 0, rasterMs: 0, serializeMs: 0 };
         const stepOf = (elapsed: number) => Math.max(0, elapsed - snapshot.inlineMs - snapshot.rasterMs - snapshot.serializeMs);
+        /* 计时趟:每帧的活渲耗时(提交 React → 跑 rAF 回调 → 钉动画),帧间让出的时间不算进来 */
+        const steps: number[] = [];
+        let frameStarted = 0;
         return await new Promise<RenderReply>((resolve) => {
           ref.current.pending = { gen, startedAt: started, frames: () => frames, resolve };
           void (async () => {
@@ -437,17 +447,37 @@ export default function StageView() {
               yieldEvery: 8,
               abort: () => {
                 if (gen !== renderGen.current) return true;
+                /*
+                 * 计时趟**不按一拍预算截断**(任务书 K1):那样 61 张推帧卡全部只推得了 1～10 帧,
+                 * catchUpMs 靠含挂载成本的前几帧外推、偏大 1.7～3.6 倍。这里的封顶只为长片段留,
+                 * 剩下的帧由父页按「首帧实测 + 其余帧中位数 × 剩余帧数」外推。
+                 */
+                if (timing) {
+                  if (frames >= maxFrames || realNow() - started > PROBE_MAX_MS) {
+                    truncated = true;
+                    return true;
+                  }
+                  return false;
+                }
                 if (probe && (frames >= maxFrames || realNow() - started > budgetMs)) {
                   truncated = true;
                   return true;
                 }
                 return false;
               },
-              onFrame: (ms) => flushSync(() => setT(ms / 1000)),
+              onFrame: (ms) => {
+                if (timing) frameStarted = realNow();
+                flushSync(() => setT(ms / 1000));
+              },
               afterFrame: (ms) => {
                 pinner.sync(ms);
                 if (!probe) return;
                 frames++;
+                // 计时趟:只留下这一帧的耗时,不生成快照、不 post probe-frame
+                if (timing) {
+                  steps.push(realNow() - frameStarted);
+                  return;
+                }
                 const root = rootRef.current;
                 if (!root) return;
                 // 探针推过的帧直接存成死素材(K1):本地帧号按探针自己的步序算,不取 data-pc-local-frame
@@ -464,7 +494,8 @@ export default function StageView() {
             ref.current.pending = null;
             const elapsedMs = realNow() - started;
             if (truncated) {
-              resolve({ aborted: true, reason: "timeout", elapsedMs, stepMs: stepOf(elapsedMs), frames, truncated: true, snapshot });
+              resolve({ aborted: true, reason: "timeout", elapsedMs, stepMs: stepOf(elapsedMs), frames, truncated: true, snapshot,
+                ...(timing ? { steps } : {}) });
               return;
             }
             flushSync(() => setT(target));
@@ -474,7 +505,7 @@ export default function StageView() {
             scheduleSample();
             ref.current.t = target;
             resolve({ remounted, caughtUpAtSec: clock.now() / 1000, elapsedMs, stepMs: stepOf(elapsedMs),
-              ...(probe ? { frames, truncated: false, snapshot } : {}) });
+              ...(probe ? { frames, truncated: false, snapshot } : {}), ...(timing ? { steps } : {}) });
           })();
         });
       },
