@@ -12,13 +12,20 @@
  *   7. 杀掉预渲染进程再起来:索引按键重建、**项目到位之后才发 `layer`**(F5);
  *   8. `wanted` 发出后对应片段的批被提前(C4 服务端消费侧)。
  *
- *   node scripts/probes/ready-index-probe.mjs [--port 5231] [--keep]
+ *   node scripts/probes/ready-index-probe.mjs [--port 5231] [--out <dir>] [--keep]
  *
- * `--keep` 不关 dev server(调试用)。默认跑完就关。
+ * `--keep` 不关 dev server、也不删产物(调试用)。默认跑完就关、跑完就删。
+ *
+ * **每次都从冷缓存开始**:`PROMPTCUT_EXPORT_DIR` 指到一个新建的临时目录,所以
+ * 「锚帧先于其他帧就绪」这一条量的是真的冷启动,而不是上一次跑剩下的盘。
+ * 它由子进程继承,预渲染进程崩了重起也还是同一个目录(F5 那一条要靠它)。
  */
 import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
+import fsSync from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
+import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { pickSnapshotFrame, segmentStartOf, anchorFrames } from '../../src/render/snapshotPick.mjs';
@@ -28,9 +35,12 @@ const args = process.argv.slice(2);
 const PORT = Number(args.includes('--port') ? args[args.indexOf('--port') + 1] : 5231);
 const KEEP = args.includes('--keep');
 const EDITOR = `http://127.0.0.1:${PORT}`;
+const EXPORT_DIR = path.resolve(args.includes('--out') ? args[args.indexOf('--out') + 1]
+  : path.join(os.tmpdir(), `pc-r6-probe-${Date.now().toString(36)}`));
+const LIBRARY = path.join(EXPORT_DIR, 'frame-library');
 
 const fails = [];
-const out = { port: PORT };
+const out = { port: PORT, exportDir: EXPORT_DIR };
 const check = (cond, label, extra) => { if (!cond) fails.push(label + (extra === undefined ? '' : ' :: ' + JSON.stringify(extra))); return cond; };
 
 const SESSION = `r6-${Date.now().toString(36)}`;
@@ -108,11 +118,23 @@ function indexOf(messages) {
   return table;
 }
 
+/** 这个工作副本没有自己的 node_modules(Node 往上走到主仓库那一份),所以按模块解析;
+ *  vite 的 `exports` 不放行 `./bin/vite.js`,解析主入口再回到包根。 */
+function viteBin() {
+  const local = path.join(ROOT, 'node_modules', 'vite', 'bin', 'vite.js');
+  if (fsSync.existsSync(local)) return local;
+  const main = createRequire(import.meta.url).resolve('vite');
+  const at = main.lastIndexOf(`${path.sep}vite${path.sep}`);
+  return path.join(main.slice(0, at + 6), 'bin', 'vite.js');
+}
+
 let editor = null;
 const editorLog = [];
 async function startEditor() {
-  editor = spawn(process.execPath, [path.join(ROOT, 'node_modules', 'vite', 'bin', 'vite.js'),
-    '--port', String(PORT), '--strictPort', '--host', '127.0.0.1'], { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+  editor = spawn(process.execPath, [viteBin(),
+    '--port', String(PORT), '--strictPort', '--host', '127.0.0.1'], { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
+    // 冷缓存:产物落在一个新建的临时目录,预渲染子进程继承这个变量
+    env: { ...process.env, PROMPTCUT_EXPORT_DIR: EXPORT_DIR } });
   const keep = c => { const text = c.toString(); editorLog.push(text); if (editorLog.length > 400) editorLog.shift(); };
   editor.stdout.on('data', keep);
   editor.stderr.on('data', keep);
@@ -215,7 +237,7 @@ try {
     const localFrame = statefulLayer.ranges[0][0];
     const overHttp = await fetch(`${base}/api/frames/snapshot/html/${statefulLayer.key}/${localFrame}`);
     const httpText = await overHttp.text();
-    const file = path.join(ROOT, 'out', 'frame-library', 'controls-html', statefulLayer.key, `${localFrame}.html`);
+    const file = path.join(LIBRARY, 'controls-html', statefulLayer.key, `${localFrame}.html`);
     const onDisk = await fs.readFile(file, 'utf8').catch(() => null);
     out.snapshot = { status: overHttp.status, bytes: httpText.length, file, sameBytes: onDisk !== null && onDisk === httpText };
     check(overHttp.ok, '③ GET /api/frames/snapshot/... 取得到', out.snapshot);
@@ -230,7 +252,7 @@ try {
   check(oversize.length > 0, '⑤ 超限帧记了诊断(卡 id、字节数)', diagnostics.body?.oversize?.slice(0, 3));
   if (oversize.length) {
     check(oversize[0].bytes > oversize[0].limit && oversize[0].limit === 300 * 1024, '⑤ DOM 卡的上限是 300 KB', oversize[0]);
-    const onDisk = await fs.stat(path.join(ROOT, 'out', 'frame-library', 'controls-html', oversize[0].key, `${oversize[0].localFrame}.html`)).then(s => s.size, () => 0);
+    const onDisk = await fs.stat(path.join(LIBRARY, 'controls-html', oversize[0].key, `${oversize[0].localFrame}.html`)).then(s => s.size, () => 0);
     check(onDisk > 300 * 1024, '⑤ 超限帧照常落盘(下一次不用重渲)', { onDisk });
     const hugeLayer = indexOf(ready.messages).get('clip-huge/html');
     const indexed = hugeLayer ? hugeLayer.ranges.some(([from, to]) => oversize[0].localFrame >= from && oversize[0].localFrame <= to) : false;
@@ -295,8 +317,9 @@ try {
 } catch (error) {
   fails.push('exception: ' + (error?.stack || error));
 } finally {
-  if (!KEEP) stopEditor();
-  else out.kept = true;
+  stopEditor();
+  if (KEEP) out.kept = EXPORT_DIR;
+  else { await delay(500); await fs.rm(EXPORT_DIR, { recursive: true, force: true }).catch(() => {}); }
 }
 
 out.fails = fails;

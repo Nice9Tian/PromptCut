@@ -1,9 +1,11 @@
 import type { Plugin, ViteDevServer } from "vite";
 import type { AddressInfo } from "node:net";
 import { spawn, type ChildProcess } from "node:child_process";
+import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { createRequire } from "node:module";
 import { isPrerender } from "./render-role.mjs";
 import { prerenderState, setPrerender } from "./prerender-client.mjs";
 import { repushMirror } from "./vite-plugin-mirror";
@@ -41,6 +43,28 @@ function editorOrigins(server: ViteDevServer): string[] {
   return [`http://127.0.0.1:${port}`, `http://localhost:${port}`, `http://[::1]:${port}`];
 }
 
+/**
+ * 起第二个 Vite 用的那个 bin 在哪。
+ *
+ * 先看 `<root>/node_modules/vite/bin/vite.js`(常规安装),**找不到就按模块解析** ——
+ * git worktree 里没有自己的 `node_modules`(Node 会往上走到主仓库那一份),
+ * pnpm 的非提升布局同理。写死路径的话这两种情况下预渲染进程根本起不来,
+ * 而症状只是「一直没就绪」,很难看出是解析问题。
+ *
+ * vite 的 `exports` 不放行 `./bin/vite.js`,所以解析主入口再回到包根。
+ */
+function viteBin(root: string): string {
+  const local = path.join(root, "node_modules", "vite", "bin", "vite.js");
+  if (fs.existsSync(local)) return local;
+  try {
+    const main = createRequire(import.meta.url).resolve("vite");
+    const at = main.lastIndexOf(`${path.sep}vite${path.sep}`);
+    if (at < 0) return local;
+    const guess = path.join(main.slice(0, at + 6), "bin", "vite.js");
+    return fs.existsSync(guess) ? guess : local;
+  } catch { return local; }
+}
+
 function killTree(child: ChildProcess | null) {
   if (!child || child.exitCode !== null || !child.pid) return;
   // 预渲染自己还拉着渲染 worker 和 Chrome,只杀它会留孤儿
@@ -69,9 +93,8 @@ export function prerenderPlugin(): Plugin {
       const start = async () => {
         const port = await freePort();
         const url = `http://127.0.0.1:${port}`;
-        const viteBin = path.join(root, "node_modules", "vite", "bin", "vite.js");
         child = spawn(process.execPath, [
-          viteBin, "--config", path.join(root, "vite.prerender.config.ts"),
+          viteBin(root), "--config", path.join(root, "vite.prerender.config.ts"),
           "--port", String(port), "--strictPort", "--host", "127.0.0.1",
         ], {
           cwd: root,
