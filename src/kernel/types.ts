@@ -115,7 +115,7 @@ export interface GraphCardSource {
   /** 这路输入指向的图节点 id */
   nodeId: string;
   /** 输入在 `t`(缺省 = 本次求值的时间)的结果引用,直接喂给 `glsl()` */
-  at(t?: number): import("../render/cards/gpuExecutor").SourceValue;
+  at(t?: number): import("./cardGpu").SourceValue;
   /** 真的把输入解成像素。比 `at()` 慢得多,只有 CPU 像素算法才用 */
   pixels(t?: number, signal?: AbortSignal): Promise<ImageBitmap>;
   /** 取 [start, start + count) 这段采样(交错多声道) */
@@ -181,7 +181,7 @@ export interface CardDef<P = Record<string, unknown>> {
     t: number,
     params: P,
     ctx: GraphCardContext,
-  ) => import("../render/cards/gpuExecutor").CardGpuValue | Promise<import("../render/cards/gpuExecutor").CardGpuValue>;
+  ) => import("./cardGpu").CardGpuValue | Promise<import("./cardGpu").CardGpuValue>;
   /** 音频图卡:按采样区间产出交错的 Float32 采样块。 */
   audio?: (
     sources: Record<string, GraphCardSource>,

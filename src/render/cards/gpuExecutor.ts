@@ -1,13 +1,9 @@
-/** Explicit GPU descriptions. No Python or string-expression compilation occurs here. */
-export type Expr = number | { type: "expr"; op: "time" | "add" | "sub" | "mul" | "div" | "neg" | "sin" | "cos" | "min" | "max"; args?: Expr[] };
-export type SourceValue = { type: "source"; nodeId: string; time?: Expr; offset?: number; rate?: number };
-export type PixelsValue = { type: "pixels"; url?: string; width: number; height: number };
-export type DrawValue = { type: "draw"; commands: Array<{ type: "solid" | "rect"; color: [number, number, number, number]; x?: number; y?: number; width?: number; height?: number }> };
-export type GlslValue = { type: "glsl"; fragment: string; inputs?: CardGpuValue[]; uniforms?: Record<string, Expr | Expr[]> };
-/** 已经算好的一张位图(CPU 像素算法的出口)。宿主直接上传,不再解析任何输入。 */
-export type BitmapValue = { type: "bitmap"; image: ImageBitmap | ImageData | OffscreenCanvas };
-export type CardGpuValue = SourceValue | PixelsValue | DrawValue | GlslValue | BitmapValue;
-export type ValueResolver = (value: SourceValue | PixelsValue, time: number, signal?: AbortSignal) => Promise<TexImageSource | null>;
+/** Explicit GPU descriptions. No Python or string-expression compilation occurs here.
+ * 这些类型搬到了 src/kernel/cardGpu.ts —— CardDef 要用它们声明 `card()` 的返回值,
+ * 类型留在渲染层的话 kernel 就在类型上依赖 render 了。这里原样 re-export,
+ * `from "./gpuExecutor"` 的写法一个都没变。 */
+export type { Expr, SourceValue, PixelsValue, DrawValue, GlslValue, BitmapValue, CardGpuValue, ValueResolver } from "../../kernel/cardGpu";
+import type { CardGpuValue, Expr, PixelsValue, SourceValue, ValueResolver } from "../../kernel/cardGpu";
 export class CardGpuError extends Error {
   constructor(public readonly code: "unavailable" | "shader-compile" | "shader-link" | "budget" | "cancelled" | "missing-source" | "invalid-value", message: string, public readonly log?: string) {
     // Frame tickets and the see_frames transport retain Error.message. Include
