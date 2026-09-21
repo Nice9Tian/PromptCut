@@ -35,6 +35,11 @@ const VARIANTS = [
   { id: 'B-straight-bt709-tag', premultiplied: false, colorMatrix: 'bt709', tagColor: true, srcPremultiplied: false },
   { id: 'C-premul-bt709-notag', premultiplied: true, colorMatrix: 'bt709', tagColor: false, srcPremultiplied: true },
   { id: 'D-premul-nomatrix-tag', premultiplied: true, colorMatrix: null, tagColor: true, srcPremultiplied: true },
+  // E 是本探针给出的**建议口径**：限定范围 + 预乘 + 着色器钳 rgb <= a。
+  // pc 全范围在 Chrome 的 VideoFrame -> 纹理路径上被当成 tv 展开（见 (5) 的 calib），
+  // 不钳时预乘色在透明区的编码噪声不受衰减地直接输出。
+  { id: 'E-tv-premul-clamp', premultiplied: true, colorMatrix: 'bt709', tagColor: true, range: 'tv', srcPremultiplied: true, clampToAlpha: true },
+  { id: 'F-tv-premul-noclamp', premultiplied: true, colorMatrix: 'bt709', tagColor: true, range: 'tv', srcPremultiplied: true },
 ];
 
 fs.rmSync(workDir, { recursive: true, force: true });
@@ -76,7 +81,7 @@ for (const cardId of CARDS) {
     for (let r = 0; r < REPEATS; r++) {
       last = await encodeSegment(ffmpeg, pngs, {
         encoder: ENCODER, fps: FPS,
-        premultiplied: v.premultiplied, colorMatrix: v.colorMatrix, tagColor: v.tagColor,
+        premultiplied: v.premultiplied, colorMatrix: v.colorMatrix, tagColor: v.tagColor, range: v.range ?? 'pc',
       });
       msList.push(last.ms);
     }
@@ -138,11 +143,11 @@ try {
        * 参考帧先全部拉到页面里（15 x 8.3 MB），因为 output 回调是同步的、不能 await。
        */
       const r = await page.evaluate(async (opts) => {
-        const { dir, cardId, W, H, fps, srcPremul } = opts;
+        const { dir, cardId, W, H, fps, srcPremul, clamp } = opts;
         const initBuf = await (await fetch(`/${dir}/init.mp4`)).arrayBuffer();
         const segBuf = await (await fetch(`/${dir}/seg-000.m4s`)).arrayBuffer();
         const init = PCStream.parseInit(initBuf);
-        const comp = PCStream.makeCompositor(document.getElementById('c'), { premultipliedAlpha: true, srcPremultiplied: srcPremul });
+        const comp = PCStream.makeCompositor(document.getElementById('c'), { premultipliedAlpha: true, srcPremultiplied: srcPremul, clampToAlpha: clamp });
 
         const refs = [];
         for (let i = 0; i < 15; i++) refs.push(new Uint8Array(await (await fetch(`/${cardId}/ref-${String(i).padStart(2, '0')}.raw`)).arrayBuffer()));
@@ -233,7 +238,7 @@ try {
           edge: { n: a.edgeN, alphaMax: a.edgeAlphaMax, alphaMean: +(a.edgeAlphaSum / Math.max(1, a.edgeN)).toFixed(4), rgbMax: a.edgeRgbMax, rgbMean: +(a.edgeRgbSum / Math.max(1, a.edgeN * 3)).toFixed(4) },
           opaque: { n: a.opN, alphaMax: a.opAlphaMax, rgbMax: a.opRgbMax, rgbMean: +(a.opRgbSum / Math.max(1, a.opN * 3)).toFixed(4) },
         };
-      }, { dir: v.dir, cardId: card.cardId, W: card.width, H: card.height, fps: FPS, srcPremul: v.srcPremultiplied });
+      }, { dir: v.dir, cardId: card.cardId, W: card.width, H: card.height, fps: FPS, srcPremul: v.srcPremultiplied, clamp: !!v.clampToAlpha });
 
       v.pixels = r;
       console.log(`  ${v.id.padEnd(22)} codedSize ${r.codedSize}  alpha 最大 ${r.alpha.max} 均值 ${r.alpha.mean} >2 ${r.alpha.over2Pct}%  |  ` +

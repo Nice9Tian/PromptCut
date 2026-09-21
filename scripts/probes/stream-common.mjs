@@ -60,13 +60,13 @@ export async function probeEncoders(ffmpeg, names = ['libx264', 'h264_nvenc', 'h
  * 上下拼合：上半预乘 RGB（H 行）+ 8 行填充 + 下半 alpha 灰度（H 行）+ 8 行填充。
  * `premultiplied: false` 只用来做对照（量渗边），线上口径是 true。
  */
-export function stackFilter({ premultiplied = true, colorMatrix = 'bt709', pixFmt = 'yuv420p' } = {}) {
+export function stackFilter({ premultiplied = true, colorMatrix = 'bt709', pixFmt = 'yuv420p', range = 'pc' } = {}) {
   const head = premultiplied
     ? 'format=gbrap,premultiply=inplace=1,format=rgba,split=2[c][a]'
     : 'format=rgba,split=2[c][a]';
   const tail = colorMatrix
-    ? `scale=out_range=pc:out_color_matrix=${colorMatrix},format=${pixFmt}`
-    : `scale=out_range=pc,format=${pixFmt}`;
+    ? `scale=out_range=${range}:out_color_matrix=${colorMatrix},format=${pixFmt}`
+    : `scale=out_range=${range},format=${pixFmt}`;
   return `[0:v]${head};` +
     '[c]format=rgb24,pad=iw:ih+8:0:0:black[rgb];' +
     '[a]alphaextract,format=gray,format=rgb24,pad=iw:ih+8:0:0:black[mask];' +
@@ -106,16 +106,16 @@ export const QUALITY_DEFAULT = {
 export const PIX_FMT = { h264_mf: 'nv12', h264_mf_sw: 'nv12' };
 
 /** G3 的整条命令行（不含 -i 之前的输入声明和最后的输出）。 */
-export function encodeArgs({ encoder, fps, quality, premultiplied = true, colorMatrix = 'bt709', tagColor = true, pixFmt }) {
+export function encodeArgs({ encoder, fps, quality, premultiplied = true, colorMatrix = 'bt709', tagColor = true, pixFmt, range = 'pc' }) {
   const enc = ENCODER_ARGS[encoder];
   if (!enc) throw new Error(`未知编码器 ${encoder}`);
   if (quality == null) quality = QUALITY_DEFAULT[encoder] ?? 16;
   if (pixFmt == null) pixFmt = PIX_FMT[encoder] ?? 'yuv420p';
   return [
     '-reinit_filter', '0', '-f', 'image2pipe', '-c:v', 'png', '-framerate', String(fps), '-i', 'pipe:0',
-    '-filter_complex', stackFilter({ premultiplied, colorMatrix, pixFmt }),
+    '-filter_complex', stackFilter({ premultiplied, colorMatrix, pixFmt, range }),
     ...enc(quality),
-    ...(tagColor ? ['-color_range', 'pc', '-colorspace', 'bt709', '-color_primaries', 'bt709', '-color_trc', 'bt709'] : []),
+    ...(tagColor ? ['-color_range', range, '-colorspace', 'bt709', '-color_primaries', 'bt709', '-color_trc', 'bt709'] : []),
     '-video_track_timescale', String(fps),
     '-movflags', 'frag_keyframe+empty_moov+default_base_moof', '-an',
   ];
