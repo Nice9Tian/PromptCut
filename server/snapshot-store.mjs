@@ -54,18 +54,43 @@ export const rangeHas = (ranges, frame) => ranges.some(([from, to]) => frame >= 
  *
  *   共享档:审阅表 independent / sourceDependent **且** stateful —— canvas 卡同样
  *           按这个判据(它的快照里 [data-pc-gl-plane] 已转成 <img>,M4);
- *   本地档:其余 stateful,含 belowDependent 毛玻璃卡和需要整场景上下文的 context;
- *   不预渲染:unknown(拿不准就不能当死素材贴),以及非 stateful 的轻卡
- *           (渲染 9:在所有位置都判轻的不产快照)。
+ *   本地档:其余 stateful,含 belowDependent 毛玻璃卡、需要整场景上下文的 context,
+ *           **以及 unknown**(计划 3.1(2):真实项目里的定制卡和带部件的组合卡片段
+ *           都是 unknown,底稿的「一律判重、没有死素材、只能透明」会让它们在播放和
+ *           拖动时整片消失;改成一律按下层依赖卡 belowDependent 处理 —— 照测、照实测
+ *           分派,判轻就活渲,判重用本地档快照,不上云、不进流);
+ *   不预渲染:非 stateful 的轻卡(渲染 9:在所有位置都判轻的不产快照)。
  */
 export function snapshotTier(capabilities) {
   const caps = capabilities ?? {};
   const stateful = caps.frameMode === 'stateful' || caps.need_prerendering === true || caps.needPrerendering === true;
   if (!stateful) return 'none';
   const compositing = caps.compositing || 'unknown';
-  if (compositing === 'unknown') return 'none';
   if (compositing === 'independent' || compositing === 'sourceDependent') return 'shared';
   return 'local';
+}
+
+/**
+ * A3c 的单帧快照体积上限。超过它的那一帧**照常落盘**(下一次不用重渲),但
+ * 不进就绪索引、不投递 —— 那一层按缺料处理(贴更早的合格快照,没有就透明),
+ * 并记一条诊断(卡 id、字节数)。
+ *
+ * 两档:DOM 卡 300 KB;canvas 卡 1 MB —— 它的字节 84%～95% 是 `toDataURL` 出来的
+ * 位图(`docs/snapshot-size-audit.md`),差异样式内联对它无效,按位图的那一档算。
+ * 判据是审阅表的 `canvasHeavy`(`src/kernel/frameMode.mjs` 的 `cardCapabilities`)。
+ */
+export const DOM_SNAPSHOT_LIMIT = 300 * 1024;
+export const CANVAS_SNAPSHOT_LIMIT = 1024 * 1024;
+export function snapshotLimit(capabilities) {
+  return capabilities?.canvasHeavy === true ? CANVAS_SNAPSHOT_LIMIT : DOM_SNAPSHOT_LIMIT;
+}
+/** 这一帧快照的字节数(UTF-8,和落盘的完全一致)。 */
+export const snapshotBytes = html => Buffer.byteLength(String(html ?? ''), 'utf8');
+/** 超限就返回 `{ bytes, limit }`,合格返回 null。 */
+export function overSnapshotLimit(html, capabilities) {
+  const bytes = snapshotBytes(html);
+  const limit = snapshotLimit(capabilities);
+  return bytes > limit ? { bytes, limit } : null;
 }
 
 /** 目录形状的唯一一处实现。`entryKey` 只有本地档要。 */
@@ -86,14 +111,33 @@ const frameFile = (dir, localFrame) => {
 
 const EMPTY = { count: 0, frames: [] };
 
+/** 诊断环形缓冲的容量:超限帧是少数,留最近这么多条够看清是哪张卡 */
+const OVERSIZE_LOG = 64;
+
 export class SnapshotStore {
   constructor(root) {
     this.root = root;
     // 同一个键目录上的 index.json 串行读改写:一个键的多批次可能并发落盘,
     // 读-改-写之间插进另一批就会丢掉一段区间。
     this.chains = new Map();
+    /** A3c 超限帧的诊断(最近 OVERSIZE_LOG 条):{ clipId, key, localFrame, bytes, limit } */
+    this.oversize = [];
   }
   dir(target) { return snapshotDir(this.root, target); }
+
+  /**
+   * A3c 的通用兜底。返回 true = 这一帧合格、可以进就绪索引;false = 超限,
+   * 已落盘但不进索引、不投递,并记一条诊断。
+   */
+  noteSnapshotSize({ clipId, key, localFrame, html, capabilities }) {
+    const over = overSnapshotLimit(html, capabilities);
+    if (!over) return true;
+    const record = { clipId: clipId ?? null, key: key ?? null, localFrame, ...over, at: Date.now() };
+    this.oversize.push(record);
+    while (this.oversize.length > OVERSIZE_LOG) this.oversize.shift();
+    console.warn(`[snapshot] 快照超限,不进就绪索引:卡 ${record.clipId ?? key} 本地帧 ${localFrame} ${record.bytes} 字节 > ${record.limit}`);
+    return false;
+  }
 
   /** 只写帧文件,不碰 index —— index 由 `updateIndex` 每批更新一次。 */
   async writeSnapshot({ tier, entryKey, key, localFrame, html }) {
