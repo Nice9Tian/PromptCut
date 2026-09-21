@@ -4,7 +4,7 @@
 
 **怎么来的**（2026-09-22）：正文取自任务书第 111 版的目标 G，逐条折进了四样东西——第 75 轮第 5 份分步审查里已采纳的处理意见（4 条阻塞 + 7 条非阻塞，原文在 `docs/plan/r75/agy-r75-05.md`，逐条结论在 `docs/plan/r75/fold-notes.md`）、Opus-A 的 G0-a 桌面壳探针结论（`docs/g0-a-webview2-probe.md`）、`render_pipeline_restructure.md` 第 3.5 / 3.8 节的更正、以及 2026-09-22 和用户定下的几条（判重只看活渲耗时 `stepMs`、生成快照改名、粒子卡不迁 Worker、长粒子片段交给轨道流）。
 
-**还没做的事**：这份文件**没有经过独立审查**。第 75 轮审的是折叠之前的第 111 版；折叠本身只有我自己核过锚点和措辞。另外 **G0-b 编码原型还在另一个 worktree 里跑，结论没回来**——正文里凡是标了「待 G0-b 原型定稿」的数都是第 111 版的初值，不是结论，原型报告回来之后要逐处回填再动工。
+**还没做的事**：这份文件**没有经过独立审查**。第 75 轮审的是折叠之前的第 111 版；折叠本身只有我自己核过锚点和措辞。**G0-b 编码原型的结论已在 2026-09-22 回填**（G0 节末的「G0-b 结论」和正文各处）；没量成的几项在那里列着。
 
 ## 读法
 
@@ -40,7 +40,7 @@
 2. 毛玻璃 9 个用例全过，数字与 Chrome 152 逐位相同；**跨源 OOPIF 里 `<video>` 下的毛玻璃模糊正确**，1280×720 复跑仍正确。跨源 OOPIF 里的玻璃能模糊父文档的 canvas 和 video。
 3. OAC 双端口隔离成立：带 `Origin-Agent-Cluster: ?1` 时 iframe 是独立进程，A 舞台死循环 2.5 秒下父页最坏 rAF 间隔 7 ms、B 6 ms。**使用前提**（这条归 E1，本文只是引用）：舞台 origin 在同一个 browsing context group 里的**第一次加载**就必须带这个头，之后补加无效（Chromium 按 BrowsingInstance 缓存 origin-keyed 决定）；`window.originAgentCluster` 恒回 true、不能当判据，验收要看 CDP `Target.getTargets` 里有没有 `type: 'iframe'` 的 target。
 
-**G0-b 编码原型（一周，与 R2～R7 并行；正在另一个 worktree 里做，结论未回）。** 它定下面这些数，本文正文里凡是标「待 G0-b 原型定稿」的都等它：
+**G0-b 编码原型（一周，与 R2～R7 并行；已完成，2026-09-22，报告 `docs/g0-b-stream-prototype.md`，探针 `scripts/probes/stream-*.mjs`；解码侧的数都是 Chrome 152 上量的，没在桌面壳里复测）。** 它要定的数如下表，结论已回填到正文各节，汇总见表后的「G0-b 结论」：
 
 | 项 | 内容 | 定死什么 |
 |---|---|---|
@@ -51,13 +51,26 @@
 | (8) | 重复帧稀疏分段的实际码率 | `stride` 的可取值 |
 | (10) | 裁剪矩形取法：第一版的「包裹层框在整段 motion 下的包围盒」够不够，要不要改成实测实体框并集 | G1 的裁剪矩形 |
 
+### G0-b 结论（2026-09-22，全文见 `docs/g0-b-stream-prototype.md`）
+
+1. **`streams` 第一版默认关。** 1080p 全幅卡空闲时页面侧每帧出图 30.46 ms，30 fps 的实时预算 33.3 ms，只剩 9% 余量；两个分段编码器并存时变 68.9 ms，一个 worker 追不上一条流。要默认开，先同时做到：裁剪矩形收紧、`stride ≥ 2`、把编码器和预渲染 worker 的 CPU 竞争隔开。`streamPool` 建议 1、最多 2；解码器预算 N = 6 确认。
+2. **`out_range=pc` 在 Chrome 上不生效，必须用 `tv`。** 全范围数据会被当成限定范围再展开一次（`decoded = clamp((a − 16) × 255 / 219)`），alpha 平均误差 8.4 / 255，和 CRF 无关，着色器里补救不了（两头已被钳掉）；改 `out_range=tv` + `-color_range tv` 后 0.06。`out_color_matrix=bt709` 和容器的色彩标注改不改逐位相同，留着无害。
+3. **预乘色要配着色器里的钳位**（G5）；**单个解码器同时持有 ≤ 8 帧**（G5）。
+4. **缺省编码器 `libx264`**（`-preset veryfast -crf 16` + 严格 GOP 参数）：本机唯一实测全过，耗时、体积、profile 三项都最好。探测顺序 `h264_nvenc → h264_qsv → h264_amf → libx264 → h264_mf`；**`probeEncoders()` 必须真的编一小段再判定**——本机四个硬件编码器都是「`ffmpeg -encoders` 里列着但跑不了」。`h264_mf`（MediaFoundation）可作最后兜底，但只收 `nv12`（像素格式要按编码器分列）、只出 Constrained Baseline、慢一倍。nvenc / qsv / amf 的参数行本机没跑成，是照第 75 轮意见原样保留的，不是实测结论。
+5. **alpha 验收只看平均值**（≤ 0.5 / 255；四张真卡实测 0.016～0.063）。单像素最大误差 26～65，集中在半透明边缘和硬边，是 4:2:0 + 有损编码的固有代价，CRF 压到 1 也只降到 21、体积涨 3.6 倍，不加这条验收。
+6. **`stride` 只省页面侧的出图次数，不省 ffmpeg 的编码墙钟**（stride 3 的编码耗时是满密度的 102%）；体积是满密度的 52～77%。
+7. **G4 的 `firstMs` 要加每趟约 80 ms 的挂载 / 热身固定开销**；可行性条件里的每帧出图耗时必须用**有编码器在跑时**的数（是空闲时的 2.26 倍）。`resetMs` 实测 399 ms。
+8. fMP4 切分全过：`init.mp4` 逐字节相同、`mfra` 丢掉、每段恰 15 个样本且首帧 IDR、只给 init + 任一分段就能解、时间戳逐个对上；冷 seek 到段内最坏的第 14 帧 38 ms。**codec 串从 `avcC` 拼**——`avc1.640028`、`640033` 都只是举例，这次同一套参数拿到的是 `640032`。
+9. 一秒钟 1080p 全幅流：墙钟约 1.0 s（空闲、编码与出图重叠）到 2.1 s（有编码器竞争），字节 74～336 KB；同一秒的 HTML 快照原始字节是它的 17～46 倍（快照那边是压缩前的数，折算压缩后流仍小 2～9 倍）。
+10. **没做成的**：nvenc 的二选一（驱动版本不够）；桌面壳 WebView2 上的复测；带 `motion` 的卡上两种裁剪矩形的对比；组流（多卡合并）。
+
 ### G1 流的划分与层抑制
 
 **一条流 = 一张预渲染集合（`plan.prerenderSet`）里的卡**，裁到该片段实体框的并集、每张卡单独一条（`canvasHeavy` 只在探针到达前按声明兜底进集合；图卡按 K 进了集合也做流）。
 
-**裁剪矩形怎么取。** 第一版用**包裹层框在整段 motion 下的包围盒 ∩ 画布**，从项目数据算、不实测。**流的画面尺寸 = 这个矩形外扩到偶数宽、偶数高**——`format=yuv420p` 严格要求宽高都是偶数，G3 的 `pad=iw:ih+8` 只保证了高，实体框宽为奇数时 ffmpeg 直接崩；取整做在截图的 `clip` 矩形上，**滤镜链不动**。索引里每条流记 `rect: { x, y, w, h }`（舞台像素，已外扩）。是否改成实测实体框的并集，**待 G0-b 原型定稿（(10) 的交付项）**。
+**裁剪矩形怎么取。** **用实测实体框的并集（G0-b (10) 定）**：先按「包裹层框在整段 motion 下的包围盒 ∩ 画布」（从项目数据算）当上界，第一趟生产顺带量各帧实体框的并集，第二段起收紧到它（矩形变了就换流签名）。实测三张卡上面积省 63.8%、编码耗时省 40.6%、解码帧字节省 63.6%，分段体积几乎不变（0.85%）；带 `motion` 的卡上这个比值原型没量到，实现时补量。**流的画面尺寸 = 这个矩形外扩到偶数宽、偶数高**——`format=yuv420p` 严格要求宽高都是偶数，G3 的 `pad=iw:ih+8` 只保证了高，实体框宽为奇数时 ffmpeg 直接崩；取整做在截图的 `clip` 矩形上，**滤镜链不动**。索引里每条流记 `rect: { x, y, w, h }`（舞台像素，已外扩）。（已定：用实测实体框的并集，见本节开头。）
 
-**合并成组流。** 同时活跃的流超过解码器预算（**初值 6，待 G0-b 原型定稿**）时，预渲染把超出的相邻重卡（都在预渲染集合里、在该段位置都判重的卡）合并成一条组流。「相邻卡一组」只在这时用，**这是唯一的合并规则**。
+**合并成组流。** 同时活跃的流超过解码器预算（**6，G0-b 实测确认**：6 个解码器同解 1920×2176 各 72 fps；合计吞吐与 N 无关，约 1.78 Gpx/s，裁剪流可按面积折算）时，预渲染把超出的相邻重卡（都在预渲染集合里、在该段位置都判重的卡）合并成一条组流。「相邻卡一组」只在这时用，**这是唯一的合并规则**。
 
 **组流的几何与宿主。** 组流裁到组内各卡实体框的并集、坐标是舞台像素；它的 `<canvas>` 不挂在任何一张卡的包裹层里，而是 `Stage` 渲在**与卡包裹层同一层级**（`AnimClock` 的透视父层里、和各卡包裹层是兄弟——项目设了 `camera3dFov` 时那一层有 `perspective`、是独立层叠上下文，挂在 `.pc-stage` 根下会整体压在所有卡之上或之下）的独立平面 `[data-pc-group-plane]`，`zIndex` = 组内最上面那张卡的 `zIndex`（组只由 z 序相邻的卡组成，所以组内没有别的卡插在中间），不受任何包裹层的 `frameCss` / `opacity` / `filter` / `motion` / `isolation` 影响——这些在预渲染截流时已经画进流里。组内各卡照常 `.pc-suppressed` 藏子树、各自不挂单卡流平面。`setStreamPlanes` 的元素是 `{ clipIds: string[] }`（单卡流就是长度 1；这个形状已经落地，`stageRpc.ts:145`）。
 
@@ -69,7 +82,7 @@
 
 **粒子卡。** 粒子卡（tsParticles，2D canvas + 主线程库；R9 里是 `dom2d` 契约，不迁进 Worker）的稳定活渲成本只有 1.4～3.8 ms，多数位置判轻、活渲；**长的粒子片段（超过约 8 秒，按 K2 的追帧上界判重）交给轨道流**，和别的重卡同一条路。被抑制的粒子卡照 E7 第 5 条藏子树、`t` 冻住，`<canvas>` 的像素在抑制期间不变。
 
-**三个数的关系**：`流数 ≤ N`（解码器预算，**初值 6，待 G0-b 原型定稿**）、`并发 run = streamPool`（**待 G0-b 原型定稿**）、`同时存活的分段编码器 ≤ 2 × streamPool`。
+**三个数的关系**：`流数 ≤ N`（解码器预算，**6，G0-b 实测确认**：6 个解码器同解 1920×2176 各 72 fps；合计吞吐与 N 无关，约 1.78 Gpx/s，裁剪流可按面积折算）、`并发 run = streamPool`（**G0-b：建议 1、最多 2**——两个分段编码器并存时页面侧每帧出图从 30.5 ms 变成 68.9 ms；实现里按实测自适应：带编码器的每帧耗时超过空闲时的 2 倍就不再加）、`同时存活的分段编码器 ≤ 2 × streamPool`。
 
 ### G2 分段是生产和随机访问的单位
 
@@ -77,7 +90,7 @@
 
 **谁来剥 `init.mp4` 和 `mfra`。** ffmpeg 的 `-movflags frag_keyframe+empty_moov+default_base_moof` 输出的是一条连贯的 MP4 字节流，切分在 **Node 端**做：读 ffmpeg 的管道输出、按 MP4 box 结构切——`ftyp + moov` 写成 `init.mp4`（每条流只写一次，**后续分段算出来的必须与它逐字节相同，不同就换流签名**），`moof + mdat` 写成分段文件，`mfra` 丢弃。
 
-**稀疏分段**用重复帧（每张 PNG 连续喂 `stride` 次，timescale 和 `avcC` 不变；画面最多滞后 `stride − 1` 帧），之后满密度替换。**注意**：要凑满「恰好 15 个样本」，`stride` 只能取 15 的因数（1 / 3 / 5 / 15）；`stride` 的可取值集合**待 G0-b 原型定稿（(8) 的交付项）**，如果原型要用别的值，就要同时决定末段之外的样本数怎么算。
+**稀疏分段**用重复帧（每张 PNG 连续喂 `stride` 次，timescale 和 `avcC` 不变；画面最多滞后 `stride − 1` 帧），之后满密度替换。**注意**：要凑满「恰好 15 个样本」，`stride` 只能取 15 的因数（1 / 3 / 5 / 15）；原型只量了 `stride = 3`（体积 0.52～0.77 倍、编码墙钟不省），`stride` 的可取值集合仍没定，如果原型要用别的值，就要同时决定末段之外的样本数怎么算。
 
 **分段签名** = 流签名 + 分段号 + `stride` + 编码器名 + 编码参数哈希。同一条流的分段按分段号递增生产；单个分段的重新生产是它自己的一个 run。
 
@@ -92,9 +105,9 @@
   "[0:v]format=gbrap,premultiply=inplace=1,format=rgba,split=2[c][a];
    [c]format=rgb24,pad=iw:ih+8:0:0:black[rgb];
    [a]alphaextract,format=gray,format=rgb24,pad=iw:ih+8:0:0:black[mask];
-   [rgb][mask]vstack=inputs=2,scale=out_range=pc:out_color_matrix=bt709,format=yuv420p"
+   [rgb][mask]vstack=inputs=2,scale=out_range=tv:out_color_matrix=bt709,format=yuv420p"
 -c:v <编码器> <编码器参数与严格 GOP 参数，见下表>
--color_range pc -colorspace bt709 -color_primaries bt709 -color_trc bt709
+-color_range tv -colorspace bt709 -color_primaries bt709 -color_trc bt709
 -video_track_timescale <fps>
 -movflags frag_keyframe+empty_moov+default_base_moof -an
 ```
@@ -103,14 +116,14 @@
 - **色半区存预乘色。** 首句是 `format=gbrap,premultiply=inplace=1,format=rgba`（不是直接 `format=rgba`）：PNG 的透明像素可能带 RGB 垃圾值，`format=rgb24` 只丢 alpha、不清理透明区的 RGB，H.264 的 4:2:0 色度下采样会把它渗到不透明边缘造成杂色。预乘之后 alpha 为 0 处的 RGB 恒为纯黑。**G5 的着色器因此按预乘输出**（`premultipliedAlpha: true`），不再做 `rgb × a`。alpha 误差在 G0-b (5) 里量。
 - **布局**：上半 RGB `H` 行 + 8 行填充 + 下半 alpha 灰度 `H` 行 + 8 行填充，编码高度 = `2 × (H + 8)`（`docs/async-track-playback.md:52`）。
 - **宽高**：`iw` / `ih` 已经是 G1 外扩过的偶数，滤镜链不再取整。
-- **色彩标注**：`out_color_matrix=bt709` 和 `-colorspace` / `-color_primaries` / `-color_trc` 这一套是理论推导，原型实测命令（`docs/async-track-playback.md:55-71`）里没有。**待 G0-b (5) 验色差**，不过就退回原型那一套。
+- **色彩标注**：`out_color_matrix=bt709` 和 `-colorspace` / `-color_primaries` / `-color_trc` 这一套是理论推导，原型实测命令（`docs/async-track-playback.md:55-71`）里没有。**G0-b (5) 已验**：这一套标注改不改，解码结果逐位相同，留着无害；真正起作用的是 `out_range`，必须是 `tv`。
 
 **编码器参数与严格 GOP 参数**（每个编码器一行，不要拿公共块去拼——`-sc_threshold` 等不是所有编码器都认）：
 
 | 编码器 | 参数 |
 |---|---|
 | `libx264` | `-c:v libx264 -preset veryfast -crf 16 -g 15 -keyint_min 15 -sc_threshold 0 -bf 0` |
-| `h264_nvenc` | `-c:v h264_nvenc -preset p4 -rc vbr -cq 16 -b:v 0 -g 15 -bf 0 -no-scenecut 1 -forced-idr 1 -strict_gop 1`（`-tune ll` 与 `-rc vbr -cq` 二选一，**待 G0-b (7) 定稿**） |
+| `h264_nvenc` | `-c:v h264_nvenc -preset p4 -rc vbr -cq 16 -b:v 0 -g 15 -bf 0 -no-scenecut 1 -forced-idr 1 -strict_gop 1`（`-tune ll` 与 `-rc vbr -cq` 二选一**没测成**：ffmpeg 9.0.1 要 nvenc API 13.1，本机驱动只有 13.0，要 NVIDIA 驱动 ≥ 610.00；换机器或升驱动后跑一次 `stream-encoder-params.mjs` 补） |
 | `h264_qsv` | `-c:v h264_qsv -preset veryfast -global_quality 16 -g 15 -bf 0`（其余以 G0-b (7) 实测为准） |
 | `h264_amf` | `-c:v h264_amf -quality speed -rc cqp -qp_i 16 -qp_p 16`（严格 GOP 参数以 G0-b (7) 实测为准） |
 
@@ -144,9 +157,9 @@
 
 自写 fMP4 解封装；`EncodedVideoChunk.timestamp = (分段号 × 15 + 样本序号) × 1e6 / fps`。随机访问从 IDR 解到目标；连续播放预解下一分段。
 
-`VideoFrame` 直接 `texImage2D`，片元着色器按 `docs/async-track-playback.md:73-78` 的公式（`alphaTop = (H + 8) / (2H + 16)`、`half_ = H / (2H + 16)`）拆两半；**色半区是预乘色**（G3），所以上下文按 `premultipliedAlpha: true` 输出，不再做 `rgb × a`。
+`VideoFrame` 直接 `texImage2D`，片元着色器按 `docs/async-track-playback.md:73-78` 的公式（`alphaTop = (H + 8) / (2H + 16)`、`half_ = H / (2H + 16)`）拆两半；**色半区是预乘色**（G3），**而且着色器必须钳一次 `rgb = min(rgb, vec3(a))`**（G0-b (5)：不钳时透明区的编码噪声原样输出，彩色杂点最高 146 / 255；钳后 59，与直通口径持平），所以上下文按 `premultipliedAlpha: true` 输出，不再做 `rgb × a`。
 
-**解码帧预算按字节算，不按帧数。** 解码出来的 `VideoFrame` 是**上下拼合后的编码画面**：1080p 流的编码画面是 1920 × 2176，NV12 按 1.5 字节 / 像素 ≈ **6.27 MB 一帧**。总预算 **≤ 80 MB**（1080p 全幅流约 12 帧），按流优先级分配、**每流保底 3 帧**。每个 `VideoFrame` 用完立刻 `close()`。分段文件 `fetch` 整段拉，每流最多 2 个在途请求。具体数字**待 G0-b (4)(6) 原型定稿**。
+**单个 `VideoDecoder` 同时持有的 `VideoFrame` ≤ 8 帧（硬约束，G0-b (4)）**：攒到 11～12 帧解码器就死锁、`flush()` 永不返回，这是帧数上限、与分辨率无关——裁剪小的流离字节预算很远照样卡死。**在这之上，解码帧预算按字节算，不按帧数。** 解码出来的 `VideoFrame` 是**上下拼合后的编码画面**：1080p 流的编码画面是 1920 × 2176，NV12 按 1.5 字节 / 像素 ≈ **6.27 MB 一帧**。总预算 **≤ 80 MB**（1080p 全幅流约 12 帧），按流优先级分配、**每流保底 3 帧**。每个 `VideoFrame` 用完立刻 `close()`。分段文件 `fetch` 整段拉，每流最多 2 个在途请求。G0-b 定的数：单解码器同时持有 ≤ 8 帧（硬约束）、总量 ≤ 80 MB、解码器预算 6。
 
 ### G6 校验与替换
 
@@ -170,7 +183,7 @@
 
 数字以 G0-b 实测为准（下面是第 111 版的初值）。
 
-- **编码**：一条 1080p 流 15 帧分段编码 ≤ 300 ms；分段文件 ≤ 1 MB；每分段样本数恰为 15；`stride = 3` 的稀疏分段文件 ≤ 满密度的 1.3 倍、画面滞后 ≤ 2 帧；alpha 平均误差 ≤ 0.5 / 255；预乘之后透明区边缘无杂色；色差在 G0-b (5) 的判据内。
+- **编码**：一条 1080p 流 15 帧分段编码 ≤ 300 ms（前提：没有别的编码器争 CPU；实测 220～252 ms，裁剪后 93～220 ms）；分段文件 ≤ 512 KB（实测 35～168 KB）；每分段样本数恰为 15；`stride = 3` 的稀疏分段文件 ≤ 满密度的 1.0 倍（实测 0.52～0.77 倍）、画面滞后 ≤ 2 帧；alpha 平均误差 ≤ 0.5 / 255；预乘之后透明区边缘无杂色；色差在 G0-b (5) 的判据内。
 - **切分与索引**：`init.mp4` 每条流只写一次，后续分段算出来的 `ftyp + moov` 与它逐字节相同；`mfra` 不落盘；单独重新生产第 5 段后索引正确；替换后 5 秒内旧文件删除。
 - **解码与播放**：冷 seek 到解出目标帧 ≤ 60 ms；N 条流同时播 30 fps 不掉帧；**解码帧总内存 ≤ 80 MB**（前提：1080p 流的编码画面是 1920 × 2176、NV12 6.27 MB / 帧，所以是约 12 帧而不是 24 帧）、每流保底 3 帧；毛玻璃卡叠在流 `<canvas>` 和 `<video>` 上时模糊正确。
 - **连续生产**：`bakeStream` 连续生产 10 个分段只付一次换页、**不调 `__pcSetFrameWindow`**；`bakeStream` 的 `__pcSetFrameWindow` 调用 `clipIds` 恒为 `null`，连续模式里新进入的卡正常挂载；同时存活的分段编码器 ≤ 2 × `streamPool`。
