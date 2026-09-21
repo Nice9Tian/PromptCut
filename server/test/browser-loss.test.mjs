@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { browserExitNote, isBrowserLoss, resumableSink, retryOnBrowserLoss, useBakery } from '../../scripts/browser-loss.mjs';
+import { browserExitNote, isBrowserLoss, resumableSink, retryOnBrowserLoss, useBakery } from '../bakery/browser-loss.mjs';
 
 const named = (name, message) => Object.assign(new Error(message), { name });
 // The error the Tokyo export reported when its shard's Chrome exited.

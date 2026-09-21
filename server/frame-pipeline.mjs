@@ -1,8 +1,8 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { openBakery, bakeFrames, findFfmpeg } from '../scripts/export-frames.mjs';
-import { captureSnapshot } from '../scripts/capture-snapshot.mjs';
-import { frameVideo } from '../scripts/frame-video.mjs';
+import { openBakery, bakeFrames, findFfmpeg } from './bakery/index.mjs';
+import { captureSnapshot } from './bakery/capture-snapshot.mjs';
+import { frameVideo } from './bakery/frame-video.mjs';
 import { frameIdentity, trackPrefixes } from './frame-identity.mjs';
 import { packFrames, unpackFrameArchive, createFrameArchive, packFrameCache, unpackFrameCache } from './frame-archive.mjs';
 import { MovFrameStore, PlaybackMovStore, atomic } from './frame-mov.mjs';

@@ -4,7 +4,7 @@ import { cardNodeIdentities, cardSampling, cardCacheIdentity, cardSnapshotIdenti
 import { freezeCode } from './frame-code.mjs';
 import { snapshotTier } from './snapshot-store.mjs';
 import { MovFrameStore } from './frame-mov.mjs';
-import { findFfmpeg } from '../scripts/export-frames.mjs';
+import { findFfmpeg } from './bakery/index.mjs';
 
 const exists = file => fs.access(file).then(() => true, () => false);
 

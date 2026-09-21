@@ -1,4 +1,4 @@
-import { openBakery, bakeFrames } from './export-frames.mjs';
+import { openBakery, bakeFrames } from '../server/bakery/index.mjs';
 import { postFrame } from '../server/png-post.mjs';
 
 /**
@@ -11,7 +11,7 @@ import { postFrame } from '../server/png-post.mjs';
  * 其中推帧和截图加起来只占约 100ms。也就是说用户在 3D 视图里拖到一个新位置、
  * 板子还是色块的那几秒里,**四秒是在等一个浏览器开机**。
  *
- * 而 export-frames 早就把「烘焙间」拆出来了(openBakery / bakery.reset / bakeFrames),
+ * 而 server/bakery 早就把「烘焙间」拆出来了(openBakery / bakery.reset / bakeFrames),
  * 并且验过复用的确定性:新开一个 page 是一个全新的 renderer,从没被启用过虚拟时间,
  * 和全新起一个浏览器等价 —— 见 openBakery 和 reset 的注释。这里只是把那套东西
  * 放进一个不退出的进程里。
@@ -25,7 +25,7 @@ import { postFrame } from '../server/png-post.mjs';
  * # 消息
  *
  *   prewarm    { url }            现在就起 Chrome、停在导出页上,别等活来了才开机
- *   bake       { id, opts }       烘一趟(export-frames 的 bakeFrames)
+ *   bake       { id, opts }       烘一趟(server/bakery 的 bakeFrames)
  *   post       { id, items }      这一帧交出去之前的像素活(合成素材层、压底色、缩图),见 server/png-post.mjs。
  *                                 放在这里做,是为了不占父进程(给编辑器供模块的 Vite)的事件循环
  *   cancel     { id }             不要这一趟了。**只换页,不换浏览器**(见下面第 1 条的例外)
@@ -110,7 +110,7 @@ async function bakeryFor(url) {
     return bakery;
   }
   /*
-   * 有备用页就不导航:把这趟的项目直接灌进一个提前开好的全新空页(见 export-frames 的 resetWith)。
+   * 有备用页就不导航:把这趟的项目直接灌进一个提前开好的全新空页(见 server/bakery/chrome.mjs 的 resetWith)。
    * 拿不到项目(地址里没有 timeline、取不回来)就退回老路 —— 新开 page 导航过去。
    */
   const project = await projectOf(url).catch(() => null);

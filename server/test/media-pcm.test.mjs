@@ -3,7 +3,7 @@
 //
 // 和 media-hash.test.mjs 一个路数:插件是 .ts,转译到临时目录再 import,路由单独导出成
 // mediaMiddleware,直接架在一个裸 http server 上。差别是 pcm 那支会惰性 import
-// scripts/export-frames.mjs 取 findFfmpeg,临时目录里解析不到相对路径,所以转译后把
+// server/bakery 取 findFfmpeg,临时目录里解析不到相对路径,所以转译后把
 // 那个说明符换成仓库里的绝对 file:// —— 真的 findFfmpeg 照跑,不给生产代码留测试后门。
 import fs from 'node:fs';
 import os from 'node:os';
@@ -24,21 +24,21 @@ const OUT = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-media-pcm-'));
 delete process.env.PROMPTCUT_EXPORT_DIR;
 delete process.env.PROMPTCUT_MEDIA_DIR;
 
-const EXPORT_FRAMES = pathToFileURL(path.join(ROOT, 'scripts', 'export-frames.mjs')).href;
+const BAKERY = pathToFileURL(path.join(ROOT, 'server', 'bakery', 'index.mjs')).href;
 
 function compile(srcRel, outName) {
   const src = fs.readFileSync(path.join(ROOT, srcRel), 'utf8');
   let js = ts.transpileModule(src, {
     compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
   }).outputText;
-  js = js.replace(/(["'])\.\.\/scripts\/export-frames\.mjs\1/g, JSON.stringify(EXPORT_FRAMES));
+  js = js.replace(/(["'])\.\/bakery\/index\.mjs\1/g, JSON.stringify(BAKERY));
   const file = path.join(OUT, outName);
   fs.writeFileSync(file, js);
   return pathToFileURL(file).href;
 }
 
 const media = await import(compile('server/vite-plugin-media.ts', 'media.mjs'));
-const { findFfmpeg } = await import(EXPORT_FRAMES);
+const { findFfmpeg } = await import(BAKERY);
 
 const projectRoot = path.join(OUT, 'project');
 fs.mkdirSync(media.mediaDir(projectRoot), { recursive: true });

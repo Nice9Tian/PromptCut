@@ -5,7 +5,7 @@
  *   node scripts/card-shots.mjs --url http://127.0.0.1:5190   # 用现成的开发服务器
  *   node scripts/card-shots.mjs --at 0.75 --bg "#0b0e14"
  *
- * 和 export-frames.mjs 的区别:那边要逐帧确定性,这边只要「看一眼每张卡长什么样」,
+ * 和 server/bakery/ 的区别:那边要逐帧确定性,这边只要「看一眼每张卡长什么样」,
  * 所以不上虚拟时间,而是用页面自己的导出钟(__pcSetT + __pcSyncAnims)按固定步长走到目标时刻。
  *
  * 为什么要"走"而不是一步跳过去:__pcSyncAnims 把每条 Web Animation 的 currentTime 钉到

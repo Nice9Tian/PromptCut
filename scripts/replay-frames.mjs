@@ -3,7 +3,7 @@
  *
  * # 它是干什么的
  *
- * `export-frames.mjs --dom-cache` 在导出那一趟里,每截完一帧就把舞台冻结成一份 HTML(全部计算样式内联、
+ * `scripts/export-frames.mjs --dom-cache` 在导出那一趟里,每截完一帧就把舞台冻结成一份 HTML(全部计算样式内联、
  * 动画关掉、id 改名、画布换成同尺寸的图),存到 `<out>/dom/%06d.html.gz`。这个脚本拿这些快照重截:
  *
  *   - **不需要从第 0 帧顺推**:每一帧的状态就在快照里,想截第几帧就截第几帧;
@@ -29,8 +29,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
-import { captureSnapshot } from './capture-snapshot.mjs';
-import { openBakery } from './export-frames.mjs';
+import { captureSnapshot } from '../server/bakery/capture-snapshot.mjs';
+import { openBakery } from '../server/bakery/index.mjs';
 
 /** 解析 --frames:「a-b」或「a,b,c」;不给就是缓存里全部的帧 */
 function pickFrames(spec, available) {

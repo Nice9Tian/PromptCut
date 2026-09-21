@@ -11,8 +11,8 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'vite';
 import { PNG } from 'pngjs';
-import { openBakery } from './export-frames.mjs';
-import { captureFrame } from './capture-frame.mjs';
+import { openBakery } from '../server/bakery/index.mjs';
+import { captureFrame } from '../server/bakery/capture-frame.mjs';
 
 process.env.PROMPTCUT_ROLE = 'prerender';
 const port = 5195;

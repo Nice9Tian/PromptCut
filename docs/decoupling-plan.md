@@ -8,13 +8,13 @@
 
 | 阶段 | 做法 | 主要文件 |
 |---|---|---|
-| 0 止血 | 页面发出的渲染请求都加了超时(和工具的 `timeoutMs` 对齐);服务端在请求断开时撤掉排队的活、叫停在跑的活(`abortOnClose` + `enqueue(signal)` + worker `cancel`);没有素材层时不再解码再编码;`/api/export` 显式单进程 | `server/vite-plugin-vision.ts`、`scripts/render-worker.mjs`、`scripts/export-frames.mjs`、`src/editor/right/index.tsx`、`src/ai/mcpExecutor.ts` |
+| 0 止血 | 页面发出的渲染请求都加了超时(和工具的 `timeoutMs` 对齐);服务端在请求断开时撤掉排队的活、叫停在跑的活(`abortOnClose` + `enqueue(signal)` + worker `cancel`);没有素材层时不再解码再编码;`/api/export` 显式单进程 | `server/vite-plugin-vision.ts`、`scripts/render-worker.mjs`、`server/bakery/`、`src/editor/right/index.tsx`、`src/ai/mcpExecutor.ts` |
 | 1 视频预览 | 双缓冲播放器 + 拖动节流(子任务,见各自的提交) | `src/editor/preview/MediaLayers.tsx`、`mediaSync.ts`、`src/editor/timeline/useScrub.ts`、`src/kernel/project.ts` |
 | 2 预渲染独立 | 编辑器那一端的 dev server 拉起第二个 Vite(`vite.prerender.config.ts`,`PROMPTCUT_ROLE=prerender`),独立端口、进程优先级**低于正常**(子进程继承);渲染池、Agent 看图、动图、DOM 树、导出都在它上面;跨源只放行编辑器那一端的源;PNG 的像素活挪进渲染 worker(`server/png-post.mjs`) | `server/vite-plugin-prerender.ts`、`vite.prerender.config.ts`、`server/prerender-client.mjs`、`server/render-role.mjs`、`server/png-post.mjs`、`server/http-guard.mjs` |
 | 3 常驻离屏渲染器 | 编辑器那一端守两台 Chrome(A / B,正常优先级、永不闲置退出),`/api/ui-render/bake-batch`;调度:交给热的那台 → 两台都忙时打断才开始 150 ms 以内的那台 → 都腾不出来就只留最新一个;请求方断开也按 150 ms 门槛判 | `server/vite-plugin-vision.ts` 的 `createUiRenderer`、`src/editor/preview/Scene3DView.tsx` |
 | 4 数据管理(只读镜像) | 连着桥的编辑器页面把项目和停下时的播放头推给服务端(`/api/data/project`),写工具回结果之前先推(读后写一致);`get_project` / `see_frames`(成片)/ `get_gif` / `bake_card` / `inspect_card_dom` 在服务端直接问预渲染,不经过页面;没有镜像时退回经页面 | `src/editor/dataMirror.ts`、`server/vite-plugin-ai.ts` 的 `runMirroredTool` |
 | 5 卡片归数据管理 | 见下面「和原计划不一样的地方」 | `server/card-overrides.mjs`、`server/vite-plugin-cards.ts` |
-| 6 导出不再截素材 | Chrome 只渲卡片透明层,素材由 ffmpeg 合成(子任务,见各自的提交) | `server/vite-plugin-export.ts`、`scripts/export-frames.mjs`、`server/vision-compose.mjs` |
+| 6 导出不再截素材 | Chrome 只渲卡片透明层,素材由 ffmpeg 合成(子任务,见各自的提交) | `server/vite-plugin-export.ts`、`server/bakery/`、`server/vision-compose.mjs` |
 | 7 数据管理成为唯一正本 | 没做(计划里就是可选) | — |
 
 ### 和原计划不一样的地方
@@ -287,7 +287,7 @@ c8e3a71 提交后做了一轮只读审查。agy 第一轮报的 4 条它自己�
 - **常驻离屏渲染器：两台 Chrome 热备轮换（A / B）**。专给用户的前台烘焙用（3D 视图的贴图、拖动播放头时要的那一帧），**不和任何人共用、从不排队**。
   - 用户原话：「交互端需要留两个 chrome 渲染，永远保持一个是热状态……如果 A 正在渲染，这时候接到了新的任务，立刻交给热状态的 B，同时清空 A，之后 B 在渲染，A 热状态待机」。
   - **为什么要两台**：一台 Chrome 被打断之后，页面状态已经不可信，必须换一张新页面才能再用（`render-worker.mjs:128`「这个页面已经不可信了」）。只有一台的话，新请求就得等它换完。**实测**（[hybrid-sampling-plan.md](hybrid-sampling-plan.md) E0）：换一张新页面约 310 ms，冷启动整个 Chrome 5.6 s；往已经就绪的空页面里灌项目只要 3~4 ms。两台轮换，新请求永远落在已经就绪的那台上，只付这 3~4 ms，换页的 310 ms 放到后台去付。
-  - **"清空"具体做什么**：默认是换页，即关掉旧页面、打开提前开好的全新空页面。现成的零件是 `export-frames.mjs:339-355` 的 `preload` / `resetWith`，以及 `render-worker.mjs:114-116` 的 `preloadNext`。只有页面卡死、超时或崩溃时，才整个重启这台 Chrome，这时另一台照常顶着。两台用两个独立进程而不是同一个 Chrome 里的两张页面，就是为了这一点：一台崩了不连累另一台。
+  - **"清空"具体做什么**：默认是换页，即关掉旧页面、打开提前开好的全新空页面。现成的零件是 `server/bakery/chrome.mjs` 的 `preload` / `resetWith`，以及 `render-worker.mjs:114-116` 的 `preloadNext`。只有页面卡死、超时或崩溃时，才整个重启这台 Chrome，这时另一台照常顶着。两台用两个独立进程而不是同一个 Chrome 里的两张页面，就是为了这一点：一台崩了不连累另一台。
   - **调度规则**（下面的毫秒数都是估计，按实测再定）：
     1. 新请求到达、另一台是热的：交给热的那台。正在渲的那台如果只做了一小段（例如已渲不到 150 ms），就打断并清空；否则让它渲完，结果照样显示，渲完再去清空。
     2. 新请求到达、两台都不是热的（一台在渲，一台正在换页）：新请求放进"待办"，只保留最新一个，后来的覆盖先来的。哪台先变热就接哪个。
@@ -305,9 +305,9 @@ c8e3a71 提交后做了一轮只读审查。agy 第一轮报的 4 条它自己�
 - 进程优先级设为"低于正常"，池子的大小给界面的常驻渲染器留出核。
 - **完整导出也走这里**：Chrome 只渲卡片的透明层，素材交给 ffmpeg 合成，照 see_frames 已有的 `cardsOnly` + `composeFrame` 做法（`vision-compose.mjs:16-21`）。
   - 现状是完整导出仍然把视频挂进 Chrome、逐帧 seek（`ExportView.tsx` 的 `visualMedia` 和 `__pcSetT`）。
-  - 而且 `/api/export` 不传 `--workers`，命令行默认是 `'auto'`（`scripts/export-frames.mjs:783`），最多会开 4 个分片，每个分片都从第 0 帧开始 seek。
+  - 而且 `/api/export` 不传 `--workers`，命令行默认是 `'auto'`（`scripts/export-frames.mjs`），最多会开 4 个分片，每个分片都从第 0 帧开始 seek。
 
-**两种渲染器必须逐像素一致**：同一套 `export-frames.mjs`、同一个 chrome-headless-shell 版本、同样的启动参数。这样预烘出来的缓存和常驻渲染器现场渲出来的可以混用。
+**两种渲染器必须逐像素一致**：同一套 `server/bakery/`、同一个 chrome-headless-shell 版本、同样的启动参数。这样预烘出来的缓存和常驻渲染器现场渲出来的可以混用。
 
 ### 3.3 优先级总表
 
@@ -334,10 +334,10 @@ c8e3a71 提交后做了一轮只读审查。agy 第一轮报的 4 条它自己�
 | **0 止血** | 页面发出的渲染请求加超时，时长和工具的 `timeoutMs` 对齐；服务端在请求断开时撤掉还在排队的任务；删掉多余的 PNG 编码；`/api/export` 显式传 `--workers 1` | `right/index.tsx`、`mcpExecutor.ts`、`vite-plugin-vision.ts`、`vite-plugin-export.ts` | 用第 1.1 节的连接池探针：Agent 调 see_frames 期间，界面发出的轻请求 p99 < 50 ms |
 | **1 视频预览** | 第 2 节的修法 1 和修法 2 | `MediaLayers.tsx`、`mediaSync.ts`、`useScrub.ts`、`kernel/project.ts` | 第 2 节各自的验收 |
 | **2 预渲染独立** | 预渲染挪到独立进程和端口；PNG 处理挪进 worker；池内按"Agent > 预烘"排队；进程优先级调低 | 新增 `server/prerender/`，`vite-plugin-vision.ts` 改成转发 | Agent 连续渲染 5 分钟期间，界面的 rAF 最大间隔 < 50 ms，轻请求 p99 < 50 ms |
-| **3 常驻离屏渲染器** | 界面专用的两台 Chrome 热备轮换（A / B），按 3.2 节的调度规则收请求：交给热的那台、做了一小段才打断、两台都忙时只留最新一个；另一台后台换页，卡死才重启进程 | 新增 `server/ui-renderer/`，复用 `export-frames` 的 `preload` / `resetWith`；3D 视图、拖动取帧改走它 | ① 从收到请求到开始渲染：中位数 < 10 ms（热的那台只需灌项目，E0 实测 3~4 ms）；② 缓存未命中的出图延迟中位数（估计 < 0.5 s，先测基线再定目标）；③ 连续匀速拖动 3 秒，屏幕上出图不少于 5 张（估计值），停手后 0.5 s 内落在最终位置；④ 手动杀掉其中一台，下一个请求照常出图；⑤ Agent 满负荷时 ①~③ 不变 |
+| **3 常驻离屏渲染器** | 界面专用的两台 Chrome 热备轮换（A / B），按 3.2 节的调度规则收请求：交给热的那台、做了一小段才打断、两台都忙时只留最新一个；另一台后台换页，卡死才重启进程 | 新增 `server/ui-renderer/`，复用 `server/bakery/chrome.mjs` 的 `preload` / `resetWith`；3D 视图、拖动取帧改走它 | ① 从收到请求到开始渲染：中位数 < 10 ms（热的那台只需灌项目，E0 实测 3~4 ms）；② 缓存未命中的出图延迟中位数（估计 < 0.5 s，先测基线再定目标）；③ 连续匀速拖动 3 秒，屏幕上出图不少于 5 张（估计值），停手后 0.5 s 内落在最终位置；④ 手动杀掉其中一台，下一个请求照常出图；⑤ Agent 满负荷时 ①~③ 不变 |
 | **4 数据管理（只读镜像）** | 项目加版本号，页面推送；Agent 的读和渲染不再经过页面 | 新增 `server/data/`，`mcp-tools` 的读取类工具改成服务端直接执行 | 关掉编辑器页面，Agent 仍能 get_project / see_frames |
 | **5 卡片归数据管理** | 源码、编译、哈希、共享运行时 + import map、改动推送、内置卡底版与用户改动层 | `vite-plugin-cards.ts` 拆进 `server/data/`，卡片注册表改成动态加载 | 改一张卡：界面和预渲染在 1 s 内都换上新版本；导出和改动前逐像素一致；打补丁后改动仍在 |
-| **6 导出不再截素材** | 完整导出改成卡片透明层 + ffmpeg 合素材 | `vite-plugin-export.ts`、`export-frames.mjs`、`vision-compose.mjs` | 60 秒视频加 15 张卡的项目，导出耗时对比改前；成片和改前逐帧目视无差（视频部分不再经过浏览器缩放，像素级不要求一致） |
+| **6 导出不再截素材** | 完整导出改成卡片透明层 + ffmpeg 合素材 | `vite-plugin-export.ts`、`server/bakery/`、`vision-compose.mjs` | 60 秒视频加 15 张卡的项目，导出耗时对比改前；成片和改前逐帧目视无差（视频部分不再经过浏览器缩放，像素级不要求一致） |
 | 7（可选） | 数据管理成为唯一正本：写操作也走它，界面只订阅 | 撤销栈、保存 .proc 都要重做 | 多个 Agent 同时编辑不冲突 |
 
 阶段 0、1、6 互不依赖，可以并行。阶段 2 → 3、4 → 5 有先后顺序。

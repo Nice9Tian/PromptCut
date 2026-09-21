@@ -16,7 +16,7 @@ import { measureContentBox, measureInk, type Ink } from "../editor/left/contentB
  *
  * # 硬规矩:绝不进 Agent 的眼睛
  *
- * `see_frames` 走 `scripts/export-frames.mjs` 另起一个 Chrome、加载 `?export=1`,
+ * `see_frames` 走 `server/bakery/` 另起一个 Chrome、加载 `?export=1`,
  * 根本不经过编辑台那个窗口。所以只要实体模式活在 `?stage=1` 这条路上,vision 那边读都读不到。
  *
  * 而且必须**显式打开**:

@@ -23,7 +23,7 @@ import "./cards";
 
 // 只要进了导出视图就把页面时钟量化到导出帧(见 exportClock.ts),必须早于任何卡片挂载
 if (new URLSearchParams(location.search).has("export")) installExportClock();
-// 素材装载器也必须早于任何卡片挂载:推进动画的过程中一律不给素材赋 URL(原 scripts/frame-media.mjs)
+// 素材装载器也必须早于任何卡片挂载:推进动画的过程中一律不给素材赋 URL(原 scripts/frame-media.mjs,现 server/bakery/frame-media.mjs)
 if (new URLSearchParams(location.search).has("export")) installFrameMedia();
 
 /*
@@ -145,7 +145,7 @@ export default function ExportView() {
           return clipFrameMode(clip, getCard(clip.cardId));
         });
       window.__pcExportMs = 0;
-      // 排空 / 冻结:原来由 export-frames.mjs 的 PAGE_PRELUDE 注入,现在是页面 bundle 的一部分(J1)。
+      // 排空 / 冻结:原来由 export-frames.mjs(现 server/bakery/chrome.mjs)的 PAGE_PRELUDE 注入,现在是页面 bundle 的一部分(J1)。
       window.__bfSettle = settleDom;
       window.__bfFreeze = () => freezeScene(document.querySelector("[data-pc-scene]"));
       // D3(c):实体几何的导出面,只给 puppeteer 侧 page.evaluate 用(/api/cards/layout 对快照 DOM 量 contentBox),页面内部不经它

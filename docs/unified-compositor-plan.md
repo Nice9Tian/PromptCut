@@ -105,7 +105,7 @@ chrome-headless-shell 152、1920×1080,每项 120 帧、预热 10 帧,单位 ms/
 | **导出实际步骤**(空拍 + 截 PNG 快速) | **24.5** | **52.3** |
 
 - 卡片层 24.5 和 `docs/render-rebuild-plan.md` 的 26.9 对得上,测法可信。
-- 坑:headless-shell 里 `Target.createTarget` 传的 width / height 不生效,截出来是 800×600,必须再调一次 `page.setViewport`(`scripts/export-frames.mjs` 的 `bakeFrames` 已经这样做)。
+- 坑:headless-shell 里 `Target.createTarget` 传的 width / height 不生效,截出来是 800×600,必须再调一次 `page.setViewport`(`server/bakery/bake.mjs` 的 `bakeFrames` 已经这样做)。
 
 ### 第一轮(`page.screenshot` 测法,已被上表取代)
 

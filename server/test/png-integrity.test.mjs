@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { PNG } from 'pngjs';
-import { pngIntegrityError } from '../../scripts/png-integrity.mjs';
+import { pngIntegrityError } from '../bakery/png-integrity.mjs';
 
 function samplePng() {
   const png = new PNG({ width: 64, height: 32 });

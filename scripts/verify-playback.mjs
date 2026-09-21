@@ -16,7 +16,7 @@ const out = path.join(repo, 'out', `playback-check-${Date.now()}`);
 const app = path.join(out, 'app');
 process.env.PUPPETEER_CACHE_DIR ||= path.join(repo, 'desktop/src-tauri/runtime/chrome');
 process.env.PROMPTCUT_EXPORT_DIR = path.join(out, 'exports');
-const { findFfmpeg } = await import('./export-frames.mjs');
+const { findFfmpeg } = await import('../server/bakery/index.mjs');
 const ffmpeg = await findFfmpeg();
 const ffprobe = ffmpeg.replace(/ffmpeg(\.exe)?$/i, 'ffprobe$1');
 await fs.mkdir(app, { recursive: true });

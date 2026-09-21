@@ -5,7 +5,7 @@
 | 阶段 | 状态 | 落在哪 / 实测 |
 |---|---|---|
 | 0 字体地基 | 完成(第 3 条除外) | 主题字体栈补齐 Consolas / Segoe UI Symbol / 中文字体,`themeStyle` 把 `--font-mono` 接到主题;`scripts/font-audit.mjs` 零告警。**第 3 条「字体随包分发」没做**:要换掉系统字体(雅黑 / 苹方不能随包分发),成片观感会变,等设计决定 |
-| 1 beginFrame 后端 | 完成 | `scripts/export-frames.mjs`,接口不变;旧后端归档到 `scripts/archive/`。全长 1800 帧 107.7 → 26.9 ms/帧 |
+| 1 beginFrame 后端 | 完成 | `scripts/export-frames.mjs`(引擎后来搬到 `server/bakery/`),接口不变;旧后端归档到 `scripts/archive/`。全长 1800 帧 107.7 → 26.9 ms/帧 |
 | 2 常驻 worker + 打包 | 完成 | render-worker / `/api/export` / see_frames / bake_card / 预烘都走同一个 `openBakery`,自动换上新后端;`prepare-runtime.mjs` 带上 headless-shell;打补丁升上来缺它时自动安装 |
 | 3 卡片审计 | 完成(脚本 + 首次实跑),**3 张卡待修** | `scripts/card-audit.mjs`,89 张:确定性 89/89;位置无关不过 3 张 —— `mu-word-rotate`(最大通道差 250)、`versus-card`(40)、`lottie-bodymovin`(42);结构不稳定 2 张(`chapter-bar`、`terminal-3d`);`particles-nasa` 挂载时访问外网 |
 | 4 HTML 采样缓存 | 完成 | `--dom-cache` + `scripts/replay-frames.mjs`;id 改名、画布转图、关动画;乱序重放 300/300 相同 |
@@ -71,7 +71,7 @@ beginFrame 采样器(chrome-headless-shell,我们给帧时间)
 
 完成的标志:字体审计两后端都零告警;两后端 demo 全长逐字节一致。
 
-### 阶段 1:beginFrame 后端进 `scripts/export-frames.mjs`(1~2 天)
+### 阶段 1:beginFrame 后端进 `scripts/export-frames.mjs`(引擎现为 `server/bakery/`)(1~2 天)
 
 作为**可选后端**加进去(`--backend beginframe`),默认仍是现在的虚拟时间后端,两者并存一段时间。
 

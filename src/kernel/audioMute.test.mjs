@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { audioClipsAt, videoLayersAt } from "./project.ts";
-import { buildAudioPlan } from "../../scripts/mux-audio.mjs";
+import { buildAudioPlan } from "../../server/bakery/mux-audio.mjs";
 
 const fixture = () => ({
   media: [

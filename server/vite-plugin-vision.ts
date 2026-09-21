@@ -24,7 +24,7 @@ import { cardCodeHash, onCardSourceChange } from "./card-overrides.mjs";
  * 为什么不在浏览器里截:编辑器的预览是一个 iframe(?stage=1),页面脚本没有任何
  * 办法把 iframe 的画面读成位图。所以只能在服务端渲染。
  *
- * 为什么直接复用 scripts/export-frames.mjs 而不是自己再起一个 puppeteer:
+ * 为什么直接复用 server/bakery/ 而不是自己再起一个 puppeteer:
  * 那个脚本里那套虚拟时钟、动画钉位、素材预热的做法是导出确定性的**全部**依据
  * (见它文件头的说明)。另起一套的话「模型看到的画面」和「用户导出的画面」会
  * 悄悄分叉 —— 那比没有视觉更糟:模型会照着一张不存在的画面去改。代价是每次要起
@@ -60,7 +60,7 @@ const CANCEL_GRACE_MS = 15000;
 const BAKE_LEAD = 0.5;
 
 /**
- * ffmpeg 在哪:PATH 上的优先;没有就用 winget 装的那份(和 scripts/export-frames.mjs 同一个兜底);
+ * ffmpeg 在哪:PATH 上的优先;没有就用 winget 装的那份(和 server/bakery/ffmpeg.mjs 同一个兜底);
  * 都没有返回 null,素材那一层就不画、在 note 里说清楚。结果缓存,别每次看图都 spawn 一遍 -version。
  */
 let ffmpegResolved: string | null | undefined;
@@ -781,7 +781,7 @@ async function bakeClip(
   return await Promise.all(uniq.map((t) => bakeOne(root, origin, project, clipId, t, size, bg, fit, priority, byT.get(t), o)));
 }
 
-/** 一趟烘焙要告诉渲染进程的全部东西。字段名和 export-frames 的 opts 一致 */
+/** 一趟烘焙要告诉渲染进程的全部东西。字段名和 server/bakery 的 opts 一致 */
 interface RenderJobOpts {
   url: string;
   out: string;
@@ -812,7 +812,7 @@ interface RenderJobOpts {
  *
  * ## 复用的确定性靠什么保证
  *
- * 不是这里保证的,是 export-frames 里 `bakery.reset()` 保证的:每趟开一个**全新的 page**
+ * 不是这里保证的,是 server/bakery/chrome.mjs 里 `bakery.reset()` 保证的:每趟开一个**全新的 page**
  * (全新 renderer,从没被启用过虚拟时间,和全新起一个浏览器等价),旧 page 立刻关掉。
  * 那边有逐字节比对过的实测数据(复用烘的 vs 全新起浏览器烘的,四趟两两 6/6 全 0 帧)。
  * 这里只负责**别把一个可疑的 worker 继续用下去**:超时、崩了、报过错的一律杀掉重开
@@ -1820,7 +1820,7 @@ export function visionPlugin(): Plugin {
        * # 为什么这条路不会让预览和导出分叉
        *
        * 因为烘焙是**一次性的、发生在更早**的一步:画这张图的就是导出成片的那个渲染器
-       * (scripts/export-frames.mjs)。之后预览和导出都只是加载同一个文件,谁都不做栅格化。
+       * (server/bakery/)。之后预览和导出都只是加载同一个文件,谁都不做栅格化。
        * 「浏览器里没有 DOM → 位图的原语」这句话是对的,但它推不出「所以做不了」——
        * 只要不要求**当场**栅格化,服务端这条管线本来就产得出那张位图。
        *
@@ -1838,7 +1838,7 @@ export function visionPlugin(): Plugin {
        *
        * 试过把 N 张摊进一个项目的 N 个时间槽、一趟渲完,实测 4 张 18.7 秒,而单张 4.7~6.5 秒 ——
        * 一点没快:瓶颈不是起 Chrome,是那条路要**逐帧走完整条时间轴**(4 张卡摊开就是 120 帧),
-       * 而 export-frames 的 --frames 只收连续区间,挑不出那 4 帧。所以那条路撤掉了,
+       * 而 bakeFrames 的 --frames 只收连续区间,挑不出那 4 帧。所以那条路撤掉了,
        * 真正的快法是命中缓存 —— 用户手里的卡大多是烘过的,这也正是「一般不用代理」的前提。
        */
       server.middlewares.use("/api/vision/bake-batch", (req, res) => {

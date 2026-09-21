@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "vite";
-import { buildAudioPlan } from "../../scripts/mux-audio.mjs";
+import { buildAudioPlan } from "../../server/bakery/mux-audio.mjs";
 import { tools } from "../../server/mcp-tools.mjs";
 
 test("clip volume: independent gain, validation, undo, split, separation and export", async () => {

@@ -90,7 +90,7 @@ Motion 靠 `Object.hasOwnProperty.call(Element.prototype, 'animate')` 判断浏�
 
 ## 9. SVG url(#id) 序列化形式（探针结论）
 
-冻结快照(`export-frames.mjs` 的 `__bfFreeze`)要把 id 统一改名,并同步改掉 `url(#…)` / `href="#…"`。
+冻结快照(`server/bakery/bake.mjs` 调的 `__bfFreeze`)要把 id 统一改名,并同步改掉 `url(#…)` / `href="#…"`。
 现有正则 `:215` 的字符类是 `[^)"'&]*`,把 `&` 排除在外。疑点:预渲染页地址含 `&`
 (`server/frame-pipeline.mjs:183` 的 `'/?export=1&timeline='`),要是 Chrome 把 `fill` 解析成
 **带页面 URL 的绝对形式**,`outerHTML` 会把 `&` 写成 `&amp;`,这条正则就一条都匹配不上 ——

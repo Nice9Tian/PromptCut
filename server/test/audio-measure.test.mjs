@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert";
 import { parseEbur128, timelineMeasureArgs } from "../audio-measure.mjs";
-import { buildFfmpegArgs } from "../../scripts/mux-audio.mjs";
+import { buildFfmpegArgs } from "../bakery/mux-audio.mjs";
 
 test("parseEbur128 parses full log", () => {
   const stderr = [

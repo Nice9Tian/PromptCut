@@ -1,7 +1,7 @@
 /**
  * 把此刻的舞台冻结成一份自给自足的 HTML(HTML 采样缓存,见 scripts/replay-frames.mjs)。
  *
- * 原来写在 `scripts/export-frames.mjs` 的 `PAGE_PRELUDE` 里、由 `evaluateOnNewDocument` 注入;
+ * 原来写在 `scripts/export-frames.mjs`(引擎现为 `server/bakery/chrome.mjs`)的 `PAGE_PRELUDE` 里、由 `evaluateOnNewDocument` 注入;
  * 现在是页面 bundle 的一部分,导出页(`ExportView`)和舞台页(`StageView`)共用同一份实现,
  * 两页的场景根都是 `[data-pc-scene]`,所以调用点不再写死 `#root.firstElementChild`。
  *

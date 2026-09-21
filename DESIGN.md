@@ -19,7 +19,7 @@
   `src/render/pinAnimations.ts` 钉住。预览显示的是「时间轴 t 那一帧」,不按墙上时钟自己播。
   时钟必须比 motion 先装,所以 `src/main.tsx` 第一行 import 的是 `./render/stageClockEntry`。
   详见 EDITOR-DESIGN.md「预览契约」
-- `scripts/export-frames.mjs` 导出脚本;`scripts/verify-determinism.mjs` 导两遍比对
+- `scripts/export-frames.mjs` 导出命令行入口(引擎在 `server/bakery/`);`scripts/verify-determinism.mjs` 导两遍比对
 
 ## 卡片怎么写
 
@@ -62,7 +62,7 @@ export const myCard: CardDef<Params> = {
 5. 中文文案、深色背景下可读(舞台默认透明,预览是深色棋盘)。
 6. 每张卡写完加进 `src/demo.ts` 的 clips(每张 2 秒顺序排,不要和别人的时段重叠:magicui 卡占 0–10 秒,native 卡占 10–20 秒),params 留空即用 defaults。
 
-## 导出脚本契约(scripts/export-frames.mjs)
+## 导出脚本契约(命令行 `scripts/export-frames.mjs`,引擎 `server/bakery/`)
 
 细节和实测数据见 `scripts/README.md`。要点:
 

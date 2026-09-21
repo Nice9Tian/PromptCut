@@ -581,7 +581,7 @@ export function reviewCardSource(source: string, hints?: { vendored?: boolean })
 
   // ── 第二档:管线接不住 ──
   // canvas 和 Math.random 曾经在这一档,现在不在了:导出页把 Math.random 钉成带种子的、截图期间
-  // 关掉脚本执行(exportClock.ts / export-frames.mjs 的 shoot),静态跳过的探针也看得见 canvas。
+  // 关掉脚本执行(exportClock.ts / server/bakery/bake.mjs 的 shoot),静态跳过的探针也看得见 canvas。
   // 实测 tsParticles 粒子卡「新鲜 vs 复用 vs 跳过」逐字节 0 差异。
   //
   // WebGL 也曾经在这一档,现在不在了。当初的理由(「走 GPU 路径,两次不完全一致」)其实是**反的**:
@@ -1229,7 +1229,7 @@ export default function vitePluginCards(): Plugin {
       /*
        * 只读 DOM 树(inspect_card_dom 的服务端)。
        *
-       * 用导出同一条渲染管线(scripts/export-frames.mjs)把单独这一个片段渲到指定那一帧,
+       * 用导出同一条渲染管线(server/bakery/)把单独这一个片段渲到指定那一帧,
        * 在页面里采出折叠过包装层的树,再用 source map 把每个节点的渲染位置换回源码行号。
        * 自己留一个 bakery(闲 90 秒自动关),不占 vite-plugin-vision 的渲染池 —— 两边互不牵制。
        * 同一时刻的树缓存起来:模型「往下看」一个 ref 时不用重渲一遍。源码一改,缓存全清。
@@ -1269,7 +1269,7 @@ export default function vitePluginCards(): Plugin {
         domProjects.clear(); // 一次只渲一个(domChain 排队),上一份用不着了
         domProjects.set(pid, JSON.stringify(isoProject));
         const url = `${origin}/?export=1&timeline=/@cards-dom/${pid}/project.json`;
-        const mod = await import(pathToFileURL(path.join(server.config.root, 'scripts', 'export-frames.mjs')).href);
+        const mod = await import(pathToFileURL(path.join(server.config.root, 'server', 'bakery', 'index.mjs')).href);
         if (domIdle) clearTimeout(domIdle);
         try {
           if (!domBakery) domBakery = await mod.openBakery({ url });

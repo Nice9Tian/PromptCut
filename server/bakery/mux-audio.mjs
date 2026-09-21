@@ -10,8 +10,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { audioPlanOf } from "../src/kernel/audioPlan.mjs";
-import { audioFxOfClip } from "../src/kernel/audioFx.mjs";
+import { audioPlanOf } from "../../src/kernel/audioPlan.mjs";
+import { audioFxOfClip } from "../../src/kernel/audioFx.mjs";
 
 /** 导出时素材的 url 形如 /@export/<id>/media/<file>,真实文件在 outDir/media/<file> */
 export function localPathOf(url, outDir) {

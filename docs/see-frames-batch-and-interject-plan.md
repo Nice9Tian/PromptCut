@@ -10,7 +10,7 @@
 工作区里(未提交)`see_frames` 的多个时刻已经合成一次请求、一趟渲完:
 - 出处:"**一次请求、服务端一趟渲完**(从第 0 帧顺推,沿途截这几帧)"——`src/editor/right/index.tsx:1908`(工作区版本)
 - 出处:"准备一趟(常驻 worker 里换页)只要约 0.3 秒"——`server/vite-plugin-vision.ts:1303`
-- 正在跑的会话「执行中:实施渲染提速计划」在改 `vite-plugin-vision.ts`、`index.tsx`、`scripts/render-worker.mjs`、`scripts/export-frames.mjs`。**本计划排在它提交之后**,不和它同时碰这几个文件。
+- 正在跑的会话「执行中:实施渲染提速计划」在改 `vite-plugin-vision.ts`、`index.tsx`、`scripts/render-worker.mjs`、`server/bakery/`。**本计划排在它提交之后**,不和它同时碰这几个文件。
 
 **2. 「流式插入上下文」对三个 CLI 后端做不到,只能做成「分批」。**
 - 一次 MCP `tools/call` 只回一次结果;我们的 MCP 服务器没有 `notifications/progress`(`server/mcp-server.mjs`,全文无 progressToken)。
@@ -48,7 +48,7 @@
 
 ### 第一部分:see_frames 分批返回
 
-1. **边渲边收。** 导出脚本本来就是截一帧写一帧:出处 `writes.push(fs.writeFile(path.join(framesDir, \`${name}.${ext}\`), buf));`——`scripts/export-frames.mjs:540`。给 `renderFrames` 加 `onFrame` 回调:目标帧的 PNG 一落盘,就合成素材层、缩到 768,放进作业表。写盘是异步的,读到的文件可能不完整,解析失败就等下一次再读(或者改成 worker 显式通知,那要动 render-worker,排在提速会话之后)。
+1. **边渲边收。** 导出脚本本来就是截一帧写一帧:出处 `writes.push(fs.writeFile(path.join(framesDir, \`${name}.${ext}\`), buf));`——`server/bakery/bake.mjs` 的 `renderPass`。给 `renderFrames` 加 `onFrame` 回调:目标帧的 PNG 一落盘,就合成素材层、缩到 768,放进作业表。写盘是异步的,读到的文件可能不完整,解析失败就等下一次再读(或者改成 worker 显式通知,那要动 render-worker,排在提速会话之后)。
 2. **软截止先交。** snapshot 变成作业:`{ jobId, 已完成帧, 总数, 已推到第几秒, done }`。到软截止(先定 40 秒,远低于 180 秒硬上限)时:
    - 有帧就把已完成的交回,附一行"还有 N 张在渲,已推到 X 秒;用 `see_frames({ jobId })` 取剩下的";
    - 一张没有也不报错,回"仍在渲,已推到 X 秒",带 jobId。**这一条单独就能消灭超时**。
@@ -93,7 +93,7 @@
 - **超时不再等于白干。** 软截止回的是进度和 jobId,不是报错。
   出处:现在超时是 `resolve({ ok: false, error: … 已放弃等待。 })`——`server/vite-plugin-ai.ts:261`。
 - **渲染和模型看图重叠。** 模型看首批时后面还在渲,看够了可以不取剩下的。
-  出处:导出沿途逐帧写盘——`scripts/export-frames.mjs:540`。
+  出处:导出沿途逐帧写盘——`server/bakery/bake.mjs` 的 `renderPass`。
 - **分批对四个后端通用。** 它只是普通的工具调用,不依赖 CLI 支持 progress。
   出处:"informational only"——Claude Code 文档 mcp.md(文档助手摘录)。
 - **插话和分批互相成全。** 工具返回得越早,插话送达的点就越早。

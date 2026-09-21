@@ -9,7 +9,7 @@ C1(挂载算式统一)和 H7 的验收口径是一句话:**不含 Python 卡的�
 
 ## 0. 前置:两棵树、两台 dev server、一份素材
 
-基线必须跑 **HEAD 那棵树自己的** `scripts/export-frames.mjs` —— 这次重构改的就是它,
+基线必须跑 **HEAD 那棵树自己的** `scripts/export-frames.mjs`(引擎在 `server/bakery/`)(引擎在 `server/bakery/`) —— 这次重构改的就是它,
 拿工作树的脚本去烘基线不是 apples-to-apples。所以基线用 git worktree,不动主树的 git 状态:
 
 ```bash
@@ -95,7 +95,7 @@ node scripts/probes/export-baseline-compare.mjs \
 - `--workers 1`:分片计划(`src/render/shardPlan.mjs`)本身也在重构范围内,
   两边分片数不同会把「分片边界重新挂载」的差异混进来,那不是要测的东西。
 - Chrome 参数(`--disable-gpu`、软件光栅化、`--font-render-hinting=none`、
-  `--disable-partial-raster` …)都在各自那棵树的 `export-frames.mjs` `CHROME_ARGS` 里,
+  `--disable-partial-raster` …)都在各自那棵树的 `server/bakery/chrome.mjs` `CHROME_ARGS` 里,
   探针**不覆盖** —— 它们正是要比的东西之一。
 - fps 取项目里的 30,两边同一个值。
 

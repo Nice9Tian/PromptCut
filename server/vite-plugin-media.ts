@@ -337,11 +337,11 @@ const PCM_CHANNELS = 2;
 const PCM_MAX_BYTES = 256 * 1024 * 1024;
 
 /**
- * ffmpeg 在哪。**惰性**取:vite 配置加载时不该把整个 scripts/export-frames.mjs 拖进来,
+ * ffmpeg 在哪。**惰性**取:vite 配置加载时不该把整个 server/bakery 拖进来,
  * 而且 server/test 里把这个插件转译到临时目录再 import 的那几个测试也不能因此解析失败。
  */
 async function ffmpegCommand(): Promise<string> {
-  const { findFfmpeg } = await import("../scripts/export-frames.mjs");
+  const { findFfmpeg } = await import("./bakery/index.mjs");
   return findFfmpeg();
 }
 

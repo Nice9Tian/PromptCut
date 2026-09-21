@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { PNG } from 'pngjs';
-import { shrink } from '../server/png-post.mjs';
+import { shrink } from '../png-post.mjs';
 
 /** PNG pipe with backpressure; a video is published only after ffmpeg exits successfully. */
 export function frameVideo(ffmpeg, file, fps) {

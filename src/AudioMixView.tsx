@@ -1,7 +1,7 @@
 /**
  * ?audioMix=1&plan=<plan.json 地址>&out=<POST 地址>:导出的混音页。
  *
- * scripts/export-frames.mjs 用 puppeteer 打开它,等 window.__pcAudioMix 出现。页面做的事只有一件:
+ * server/bakery/audio-mix.mjs 用 puppeteer 打开它,等 window.__pcAudioMix 出现。页面做的事只有一件:
  * 读 plan.json → renderMix(OfflineAudioContext,和预览同一套效果链)→ 32 位浮点 wav → POST 回服务端,
  * 服务端写成 export-<id>/audio/mix.wav,ffmpeg 再把它合进 preview.mp4。
  *

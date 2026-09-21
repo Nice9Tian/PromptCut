@@ -18,10 +18,16 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 /** 只扫这几个:预渲染页的驱动全在这里(capture-snapshot.mjs 没有 window.__,不用扫) */
 export const SCANNED_FILES = [
-  'scripts/export-frames.mjs',
-  'scripts/frame-ready.mjs',
-  'scripts/capture-frame.mjs',
-  'scripts/frame-media.mjs',
+  'server/bakery/chrome.mjs',
+  'server/bakery/bake.mjs',
+  'server/bakery/shards.mjs',
+  'server/bakery/media.mjs',
+  'server/bakery/ffmpeg.mjs',
+  'server/bakery/export.mjs',
+  'server/bakery/audio-mix.mjs',
+  'server/bakery/frame-ready.mjs',
+  'server/bakery/capture-frame.mjs',
+  'server/bakery/frame-media.mjs',
 ];
 
 export const DOC = 'docs/bake-page-protocol.md';

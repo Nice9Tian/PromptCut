@@ -9,7 +9,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { createServer } from "vite";
 import { PNG } from "pngjs";
-import { openBakery, bakeFrames } from "./export-frames.mjs";
+import { openBakery, bakeFrames } from "../server/bakery/index.mjs";
 
 process.env.PROMPTCUT_ROLE = "prerender";
 const root = process.cwd(), output = path.join(root, "work", "card-legacy");

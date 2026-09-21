@@ -31,7 +31,7 @@
 
 > **0.5.0 已解决**:命令行默认单进程,`--workers` 真正被解析了(以前命令行根本不认这个参数,一律 `auto` 开 4 个分片),`/api/export` 也显式传 `--workers 1`(见 [decoupling-plan.md](decoupling-plan.md) 阶段 6)。
 
-- **来源**:`scripts/export-frames.mjs:742` 的命令行默认是 `workers: 'auto'`(最多 4 个进程),但同文件 563、651 行的注释和 `scripts/README.md:25` 都写默认单进程。
+- **来源**:`scripts/export-frames.mjs` 的命令行默认是 `workers: 'auto'`(最多 4 个进程),但 `server/bakery/bake.mjs`、`server/bakery/shards.mjs` 的注释和 `scripts/README.md:25` 都写默认单进程。
 - **要做**:按文档改成默认 1。实测 4 个进程只快约 18%(54.8 → 44.8 秒),却要占 4 份内存和 CPU,不值得作为默认。
 - **验收**:不带参数运行时只起 1 个 headless-shell。
 
