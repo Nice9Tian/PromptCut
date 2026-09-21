@@ -91,6 +91,26 @@ export async function bakeFrames(bakery, opts = {}) {
     ? { format: 'jpeg', quality }
     : { format: 'png', optimizeForSpeed: true };
 
+  /*
+   * 生成快照前把 Motion 的 JS 帧循环推一拍。
+   *
+   * 卡片上有两种动画,定住的办法不一样:
+   *   - 交给 WAAPI 的那些(opacity、tween 的 transform)由 __pcSyncAnims 每帧显式钉 currentTime,
+   *     getComputedStyle 立刻反映,快照拿到的就是对的;
+   *   - Motion 自己的 JS 帧循环驱动的那些(spring、MotionValue)只在批处理跑一拍时才把新值
+   *     写进 inline style,没有任何东西钉它。
+   * 而这一拍**只有真正画一帧才会跑**:实测不带截图的 beginFrame(包括 noDisplayUpdates、
+   * 先制造 DOM damage 再发)一律推不动 Motion 的 frameData.timestamp,带 screenshot 的能。
+   * 于是整帧路每帧截图、DOM 总是当前帧的;HTML 快照在截图之前生成,拿到的是上一次画帧时
+   * 写下的旧值 —— 纯采样的 snapshotOnly 一趟里一张图都不截,整段冻在第一帧的相位上
+   * (punch-pill 的弹簧:第 1 帧之后永远是 scale(0.933311),而导出是正确的 1.0678 → 1.0037 → …)。
+   *
+   * 所以生成快照之前先画一拍、把图丢掉。只加在快照这一侧:整帧导出不生成快照,
+   * 一步也不多走,逐字节基线不受影响。图要最便宜的(jpeg quality 0),反正立刻扔掉。
+   */
+  const FLUSH_SHOT = { format: 'jpeg', quality: 0 };
+  const flushFrameLoop = () => beginFrame({ screenshot: FLUSH_SHOT });
+
   /** 截一张:发一拍并要这一拍的截图。此刻动画已钉住、页面时钟已量化,这一拍里画面不会再变
    *  prime:上一个时间点没截过图时先截一张丢掉,见 captureFrame。primeCapture:false 只给回归对照用 */
   const shoot = async (prime = true) => {
@@ -112,6 +132,7 @@ export async function bakeFrames(bakery, opts = {}) {
         await beginFrame();
         await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
       }
+      await flushFrameLoop();
       const snapshot = await page.evaluate(() => window.__pcCreateSnapshot());
       if (snapshot.lossy) throw new Error(`Cannot snapshot ${snapshot.lossy} canvas elements`);
       return captureSnapshot(bakery, snapshot.html, shotParams);
@@ -265,6 +286,7 @@ export async function bakeFrames(bakery, opts = {}) {
       const isStatic = await step(i, wantShot);
       const snapshotWanted = domDir || (opts.onSnapshot && (!opts.snapshotFrames || opts.snapshotFrames.has(i)));
       if (snapshotWanted) {
+        await flushFrameLoop();
         const { html, lossy, controls } = await page.evaluate(() => window.__pcCreateSnapshot());
         if (lossy) throw new Error('HTML snapshot contains unreadable canvases');
         if (opts.onSnapshot && snapshotWanted) await opts.onSnapshot(i, html, controls);
