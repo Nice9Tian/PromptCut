@@ -8,7 +8,7 @@
 
 - 暂停：`see_frames` 渲一张整帧 PNG，`<img>` 显示（`src/editor/preview/UnifiedPreview.tsx`）。
 - 播放：`FramePlayback` 在无头 Chrome 里提前渲整帧 PNG，追加进 PNG 编码的 MOV（`server/frame-playback.mjs`、`server/frame-mov.mjs` 的 `PlaybackMovStore`）；浏览器每帧一次 Range 请求取回 PNG，`createImageBitmap` 解码后画到 canvas（`src/render/movPlayer.ts`）。
-- 内置卡片几乎都被推导成 `frameMode: stateful`、`compositing: unknown`（`src/render/frameMode.mjs`），不能单独缓存。播放通道把它们所在的帧标成 incomplete，不发布到 MOV，界面只能显示沙漏占位。
+- 内置卡片几乎都被推导成 `frameMode: stateful`、`compositing: unknown`（`src/kernel/frameMode.mjs`），不能单独缓存。播放通道把它们所在的帧标成 incomplete，不发布到 MOV，界面只能显示沙漏占位。
 - 安装版实测：热缓存播放约 1.09 fps，最长 4.4 秒没有新帧（`docs/python-card-installed-acceptance.md`）。
 
 瓶颈不是编码格式，而是「每一帧都要一台软件光栅化的 Chrome 把整个画面重画一遍」。只要画面里有一张重卡片，整帧就都得等它。

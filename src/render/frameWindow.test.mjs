@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { cardMountedAt, planFrameWindow, framesInWindow } from './frameWindow.mjs';
-import { cardFrameMode, clipFrameMode, cardCapabilities } from './frameMode.mjs';
+import { cardFrameMode, clipFrameMode, cardCapabilities } from '../kernel/frameMode.mjs';
 
 test('late preview replays only the active cards, independent of preceding timeline length', () => {
   const clips = [

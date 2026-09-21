@@ -8,7 +8,7 @@
  * 漏登记当场测试失败。
  *
  * 写成纯数据的 .mjs(类型在同名 .d.mts)是为了让 node:test 能直接 import 它;
- * 仓库里 src/render/frameMode.mjs 等已经是这个写法。
+ * 仓库里 src/kernel/frameMode.mjs 等已经是这个写法。
  *
  * 每项逐条照抄原来那条分支的语义,不做统一:
  *   - passArgs:原分支传不传 args(`api.getProject()` 和 `api.listCards(args)` 是两种写法,

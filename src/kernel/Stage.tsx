@@ -11,7 +11,7 @@ import { GraphCard } from "../render/cards/GraphCard";
 import { frameBox } from "./layout";
 import type { CardDef, CardProps, Timeline } from "./types";
 import { cardMountedAt } from "../render/frameWindow.mjs";
-import { clipFrameMode } from "../render/frameMode.mjs";
+import { clipFrameMode } from "./frameMode.mjs";
 import { guardCompositing, shouldGuard } from "../render/capabilityGuard";
 
 // Keep direct-evaluation cards at the requested time while other cards replay.

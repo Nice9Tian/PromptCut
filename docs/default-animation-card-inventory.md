@@ -340,7 +340,7 @@
 [user-index]: <../src/cards/user/index.ts>
 [asset-index]: <../src/cards/assets/index.ts>
 [cards-tab]: <../src/editor/left/library/cardGroups.tsx>
-[frame-mode]: <../src/render/frameMode.mjs>
+[frame-mode]: <../src/kernel/frameMode.mjs>
 [package]: <../package.json>
 [hud]: <../src/cards/native/hud.ts>
 [hud-css]: <../src/cards/native/hud.css>

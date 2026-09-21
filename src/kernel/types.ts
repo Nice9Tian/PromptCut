@@ -1,6 +1,6 @@
 import type { ComponentType } from "react";
 import type { ClipEmphasis } from "./emphasis.ts";
-import type { FrameModeInput } from "../render/frameMode.mjs";
+import type { FrameModeInput } from "./frameMode.mjs";
 
 /**
  * 控件的公共字段。
@@ -206,7 +206,7 @@ export interface CardDef<P = Record<string, unknown>> {
   need_prerendering?: boolean;
   /** Independently reviewed from time access. Background-dependent and unknown
    * cards keep the complete Chrome compositing context. */
-  compositing?: import('../render/frameMode.mjs').CardCompositing;
+  compositing?: import('./frameMode.mjs').CardCompositing;
   /** 画布卡(2D canvas / WebGL):走共享 WebGL 渲染器、快照要先栅格成 img。
    * 缺省 = 纯 DOM 卡。和 frameMode / compositing 一样是审阅结论,不猜源码。 */
   canvasHeavy?: boolean;

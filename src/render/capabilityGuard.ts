@@ -14,7 +14,7 @@
  *
  * 开销：只在开发态跑一次（`shouldGuard`），导出 / 冻结快照那条路上一个字都不执行。
  */
-import { degradeCard, reviewedCard } from "./frameMode.mjs";
+import { degradeCard, reviewedCard } from "../kernel/frameMode.mjs";
 
 export type StyleReader = (el: Element) => { backdropFilter?: string | null; webkitBackdropFilter?: string | null };
 

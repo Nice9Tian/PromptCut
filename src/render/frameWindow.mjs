@@ -1,4 +1,4 @@
-import { normalizeFrameMode } from './frameMode.mjs';
+import { normalizeFrameMode } from '../kernel/frameMode.mjs';
 
 // Shared with Stage: include the pre-mount frame so Motion's animation anchor
 // is identical to a sequential render. Clip start/end remain absolute.

@@ -1,4 +1,4 @@
-import { cardCapabilities, COMPOSITING_VALUES } from '../render/frameMode.mjs';
+import { cardCapabilities, COMPOSITING_VALUES } from './frameMode.mjs';
 
 export const CARD_RUNTIME_ABI = 1;
 export const CARD_KINDS = ['animation', 'filter', 'transition', 'emphasis', 'audio'];
