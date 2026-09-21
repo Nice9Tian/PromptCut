@@ -218,6 +218,11 @@ try {
   if (bad.length) { console.log('!! 超过 2 级的用例:', bad.map((b) => `${b.case}=${b.worst}`).join(' ')); process.exitCode = 1; }
 } finally {
   if (browser) await browser.close().catch(() => {});
+  /*
+   * Windows 上 vite 是经 npx.cmd + shell 起的,`kill()` 只打到那层 shell,真正占着 5199 的
+   * node 会活下来(实测跑完之后端口还 LISTENING)。所以整棵进程树一起收。
+   */
+  if (process.platform === 'win32' && vite.pid) spawnSync('taskkill', ['/F', '/T', '/PID', String(vite.pid)], { stdio: 'ignore' });
   vite.kill();
   try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* 临时目录清不掉不影响结论 */ }
 }
