@@ -1,64 +1,26 @@
-import { useSyncExternalStore } from "react";
-import { createEmptyProject, DEFAULT_CARD_DUR, DEFAULT_MEDIA_DUR, findClip, findSoundAsset, newId, newProjectId, soundAssetFrom, type MediaAsset, type Project, type Track, type TrackClip, type Transcript, type Shots, type Subjects } from "../../kernel/project";
-import { getCard } from "../../kernel/registry";
-import { cloneCardClipInstance } from "../../kernel/cardAuthoring.mjs";
-import { normalizeEmphasis, type ClipEmphasis } from "../../kernel/emphasis";
 import {
-  CAPTION_CARD_ID,
-  CAPTION_TRACK_NAME,
-  captionsFromTranscript,
-  captionsOf,
-  editCaption as editCaptionLine,
-  formatCaptions,
-  insertCaption,
-  isCaptionClip,
-  removeCaption as removeCaptionLine,
-} from "../../kernel/captions";
-import type { ClipFrame, ClipMotion, PartInstance } from "../../kernel/types";
-import {
-  normalizeCuts, switchCut as switchCutPure, addCut as addCutPure, renameCut as renameCutPure,
-  removeCut as removeCutPure, stripMediaFromCuts, stripFilterFromCuts, withoutFilter, stripAudioFxFromCuts, withoutAudioFx,
+  switchCut as switchCutPure, addCut as addCutPure, renameCut as renameCutPure,
+  removeCut as removeCutPure
 } from "../../kernel/cuts";
-import type { ClipFilter, FilterDef } from "../../kernel/filters.mjs";
-import type { AudioFxDef, ClipAudioFx } from "../../kernel/audioFx.mjs";
-import type { ClipPixelMap, PixelMapDef } from "../../kernel/pixelMap.mjs";
-import {
-  checkCrossfade, checkFade, clampDur, fadeOwner, groupOf, timingLock,
-  transitionsOf, transitionsOfClip, type Transition, type TransitionKind,
-} from "../../kernel/transitions";
 
-import {
-  VOLUME_KEY,
-  readVolume,
-  state,
-  listeners,
-  history,
-  future,
-  emit,
-  set,
-  setProject,
-  clearTransitionFades,
-  updateTrack,
-  pruneCardNodes,
-  shiftClipsBy,
-  sortClips,
-  resolveOverlap,
-  placeOrShift,
-  planPlacement,
-  pickTrack,
-  getState,
-  subscribe,
-  useStore
-} from "../core";
+import { state, set, setProject } from "../core";
 import { actions } from "../project";
 
 export const cuts = {
+
+  /* ---------- 剪辑(多条时间轴) ---------- */
+  /**
+   * 切到另一条剪辑。当前的 tracks / duration / 播放头存回它的条目,目标的换进来。
+   * 进撤销栈(整份 project 一起,撤销就是切回去);选中清空、停播、总时长手动值清掉 —— 这些都是
+   * 上一条剪辑的东西。播放头用目标上次离开时的。
+   */
   switchCut(cutId: string) {
     const { project, t } = switchCutPure(state.project, cutId, state.t);
     if (project === state.project) return;
     setProject(project);
     set({ t, playing: false, selection: [], playToken: state.playToken + 1, durationManual: null });
   },
+  /** 新建一条剪辑,默认切过去(和剪辑软件新建序列的习惯一致) */
   addCut(name?: string, opts: { switchTo?: boolean } = {}) {
     const { project, cut } = addCutPure(state.project, name);
     setProject(project);
@@ -68,6 +30,7 @@ export const cuts = {
   renameCut(cutId: string, name: string) {
     setProject(renameCutPure(state.project, cutId, name));
   },
+  /** 删一条剪辑。删激活那条会先切到相邻的;最后一条不能删(纯逻辑里会抛) */
   removeCut(cutId: string) {
     const { project, switchedTo, t } = removeCutPure(state.project, cutId, state.t);
     setProject(project);

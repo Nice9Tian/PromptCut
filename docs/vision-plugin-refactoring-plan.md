@@ -8,7 +8,7 @@
 - Vite 插件钩子与 HTTP 路由 (Express 中间件)
 - Puppeteer 无头浏览器生命周期与并发调度池 (Priority Queue)
 - FFmpeg 进程调度与路径安全防护 (Path Traversal 防护)
-- 卡片烘焙逻辑与缓存驱逐 (LRU/Orphan Eviction)
+- 卡片预渲染逻辑与缓存驱逐 (LRU/Orphan Eviction)
 
 这导致了难以排查的竞态问题，也使得新增渲染功能时 Token 成本极高。
 
@@ -33,13 +33,13 @@
 - **转移内容**：`renderWaiting`, `bakeInFlight`, `renderRunning`, `maxConcurrentRenders()`。
 - **逻辑剥离**：彻底将“排队系统”和“渲染具体什么东西”解耦。提供 `enqueueRender(job, priority)` 这样的纯粹调度 API，处理诸如 `CANCEL_GRACE_MS` 和死锁检测的机制。
 
-### 4. `server/vision/baker.ts` (图卡合成与烘焙引擎)
+### 4. `server/vision/baker.ts` (图卡合成与预渲染引擎)
 **职责**：承上启下，拿到 FFmpeg 的素材层后，指挥 Browser Pool 去拍 DOM 快照，最后合成最终图像。
 - **转移内容**：`bakeTarget`, `bakeOne`, `bakeClip`, `resolveMediaUrls`。
 - **剥离收益**：这是最容易因需求变更而修改的地方（例如新增一种裁切模式），单独成文件后，修改时不用再面对网络层和 FFmpeg 的干扰。
 
 ### 5. `server/vision/cache.ts` (磁盘缓存与生命周期)
-**职责**：记录烘焙文件的哈希键值，清理孤儿文件，防止磁盘溢出。
+**职责**：记录预渲染文件的哈希键值，清理孤儿文件，防止磁盘溢出。
 - **转移内容**：`listBakes`, `evictBakes`, 及 `/api/vision/bake-status` 中有关 orphan 计算和 `totalBytes` 的统筹逻辑。
 
 ### 6. `server/vision/security.ts` (路径安全与防护层)

@@ -142,7 +142,8 @@ test('执行器分发的每个工具名，mcp-tools 里都真的有声明', () =
 // get_gif 一趟渲 8 帧再编动图,bake_card 渲单帧。
 test('放宽超时的只有这三个渲染类工具；都要大于自己那条管线的上限，否则报错信息会被桥的超时盖掉', () => {
   const withTimeout = mcpTools.filter((t) => t.timeoutMs);
-  assert.deepEqual(withTimeout.map((t) => t.name), ['see_frames', 'get_gif', 'bake_card']);
+  // 只钉名单,不钉顺序:工具表按领域拆进 server/tools/ 之后,先后次序由聚合顺序决定,没有含义
+  assert.deepEqual(withTimeout.map((t) => t.name).sort(), ['bake_card', 'get_gif', 'see_frames']);
   for (const t of withTimeout) assert.ok(t.timeoutMs > 120000, `${t.name} 要大于 vite-plugin-vision 里 120 秒的渲染上限`);
 });
 

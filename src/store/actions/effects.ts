@@ -1,58 +1,16 @@
-import { useSyncExternalStore } from "react";
-import { createEmptyProject, DEFAULT_CARD_DUR, DEFAULT_MEDIA_DUR, findClip, findSoundAsset, newId, newProjectId, soundAssetFrom, type MediaAsset, type Project, type Track, type TrackClip, type Transcript, type Shots, type Subjects } from "../../kernel/project";
-import { getCard } from "../../kernel/registry";
-import { cloneCardClipInstance } from "../../kernel/cardAuthoring.mjs";
-import { normalizeEmphasis, type ClipEmphasis } from "../../kernel/emphasis";
-import {
-  CAPTION_CARD_ID,
-  CAPTION_TRACK_NAME,
-  captionsFromTranscript,
-  captionsOf,
-  editCaption as editCaptionLine,
-  formatCaptions,
-  insertCaption,
-  isCaptionClip,
-  removeCaption as removeCaptionLine,
-} from "../../kernel/captions";
-import type { ClipFrame, ClipMotion, PartInstance } from "../../kernel/types";
-import {
-  normalizeCuts, switchCut as switchCutPure, addCut as addCutPure, renameCut as renameCutPure,
-  removeCut as removeCutPure, stripMediaFromCuts, stripFilterFromCuts, withoutFilter, stripAudioFxFromCuts, withoutAudioFx,
-} from "../../kernel/cuts";
+import { findClip, newId, type Track, type TrackClip } from "../../kernel/project";
+import { stripFilterFromCuts, withoutFilter } from "../../kernel/cuts";
 import type { ClipFilter, FilterDef } from "../../kernel/filters.mjs";
-import type { AudioFxDef, ClipAudioFx } from "../../kernel/audioFx.mjs";
 import type { ClipPixelMap, PixelMapDef } from "../../kernel/pixelMap.mjs";
-import {
-  checkCrossfade, checkFade, clampDur, fadeOwner, groupOf, timingLock,
-  transitionsOf, transitionsOfClip, type Transition, type TransitionKind,
-} from "../../kernel/transitions";
+import { checkCrossfade, checkFade, clampDur, transitionsOf, type Transition, type TransitionKind } from "../../kernel/transitions";
 
-import {
-  VOLUME_KEY,
-  readVolume,
-  state,
-  listeners,
-  history,
-  future,
-  emit,
-  set,
-  setProject,
-  clearTransitionFades,
-  updateTrack,
-  pruneCardNodes,
-  shiftClipsBy,
-  sortClips,
-  resolveOverlap,
-  placeOrShift,
-  planPlacement,
-  pickTrack,
-  getState,
-  subscribe,
-  useStore
-} from "../core";
+import { state, setProject, clearTransitionFades, updateTrack, sortClips } from "../core";
 import { actions } from "../project";
 
 export const effects = {
+
+  /* ---------- 滤镜库(项目级,和素材一样所有剪辑共用) ---------- */
+  /** 入库;给了 attach 就同一步挂到那一段上(一次 setProject = 一步撤销,不然撤销一次只摘掉、库里还留着) */
   addFilter(def: FilterDef, attach?: { clipId: string; filter: ClipFilter }) {
     const p = state.project;
     let tracks = p.tracks;
@@ -65,6 +23,7 @@ export const effects = {
   updateFilter(filterId: string, def: FilterDef) {
     setProject({ ...state.project, filters: (state.project.filters ?? []).map((f) => (f.id === filterId ? def : f)) });
   },
+  /** 删滤镜:激活剪辑和停放剪辑里挂着它的段一并摘掉,不留指向已删滤镜的引用 */
   removeFilter(filterId: string) {
     const p = state.project;
     setProject(stripFilterFromCuts({
@@ -73,6 +32,8 @@ export const effects = {
       tracks: p.tracks.map((t) => ({ ...t, clips: t.clips.map((c) => (c.filter?.id === filterId ? withoutFilter(c) : c)) })),
     }, filterId));
   },
+
+  /** 挂 / 换 / 摘片段上的滤镜(null = 摘掉)。找不到片段返回 false;校验在调用方 */
   setClipFilter(clipId: string, filter: ClipFilter | null): boolean {
     const p = state.project;
     const hit = findClip(p, clipId);
@@ -83,6 +44,8 @@ export const effects = {
     })));
     return true;
   },
+
+  /* ---------- 通用像素映射 ---------- */
   addPixelMap(def: PixelMapDef, attach?: { clipId: string; pixelMap: ClipPixelMap }) {
     const p = state.project;
     let tracks = p.tracks;
@@ -106,6 +69,18 @@ export const effects = {
     setProject(updateTrack(p, hit.track.id, (t) => ({ ...t, clips: t.clips.map((c) => c.id === clipId ? (pixelMap ? { ...c, pixelMap } : (() => { const { pixelMap: _, ...rest } = c; return rest; })()) : c) })));
     return true;
   },
+
+  /* ---------- 转场:加了就把相关片段绑成一组(规矩在 kernel/transitions.ts) ---------- */
+
+  /**
+   * 加一处转场。
+   *
+   *   - crossfade:要两段首尾相接的片段。同一条序列内不能重叠,所以会把后一段往前拉出
+   *     重叠、必要时挪到另一条序列(挪之前的位置记在 prevB 里,删转场时放回去);
+   *   - fadeIn / fadeOut:只认一段,分别写在它的头和尾。
+   *
+   * 整件事一次 setProject 落地 —— 撤销一步就能全撤,不会留下「挪了但没绑」的半截状态。
+   */
   addTransition(args: { kind: TransitionKind; clipId: string; otherClipId?: string; dur?: number }):
     { ok: true; transition: Transition } | { ok: false; error: string } {
     const p = state.project;
@@ -157,6 +132,11 @@ export const effects = {
     setProject({ ...p, tracks, transitions: [...transitionsOf(p), tr] });
     return { ok: true, transition: tr };
   },
+
+  /**
+   * 删一处转场:淡化擦掉、记录去掉,交叉溶解还会尽量把后一段放回加转场之前的位置
+   * (那儿被占了就留在原地,返回 note 说明)。删完这几段就自由了。
+   */
   removeTransition(transitionId: string): { ok: true; note?: string } | { ok: false; error: string } {
     const p = state.project;
     const tr = transitionsOf(p).find((x) => x.id === transitionId);
@@ -189,6 +169,16 @@ export const effects = {
     setProject({ ...next, transitions: transitionsOf(next).filter((x) => x.id !== transitionId) });
     return { ok: true, ...(note ? { note } : {}) };
   },
+  /**
+   * 把两段相接的素材接成交叉溶解:后一段往前拉出 dur 秒的重叠,两边各加 dur 秒的淡化。
+   * 同一条序列内不允许重叠,所以后一段必须落在别的序列上——现有序列都放不下就新建一条。
+   * 返回是否成功。
+   */
+  /**
+   * 老名字,留着给已有调用方用:现在等价于 addTransition({ kind: "crossfade" })。
+   * 一定要走那条路 —— 只有它会写下转场记录,把两段绑成一组;光设 fadeIn / fadeOut
+   * 的话谁都能随手挪走其中一段,溶解就悄悄散了。
+   */
   applyCrossfade(aId: string, bId: string, dur: number): boolean {
     return actions.addTransition({ kind: "crossfade", clipId: aId, otherClipId: bId, dur }).ok;
   },

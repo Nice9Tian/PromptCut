@@ -1,56 +1,7 @@
-import { useSyncExternalStore } from "react";
-import { createEmptyProject, DEFAULT_CARD_DUR, DEFAULT_MEDIA_DUR, findClip, findSoundAsset, newId, newProjectId, soundAssetFrom, type MediaAsset, type Project, type Track, type TrackClip, type Transcript, type Shots, type Subjects } from "../../kernel/project";
-import { getCard } from "../../kernel/registry";
-import { cloneCardClipInstance } from "../../kernel/cardAuthoring.mjs";
-import { normalizeEmphasis, type ClipEmphasis } from "../../kernel/emphasis";
-import {
-  CAPTION_CARD_ID,
-  CAPTION_TRACK_NAME,
-  captionsFromTranscript,
-  captionsOf,
-  editCaption as editCaptionLine,
-  formatCaptions,
-  insertCaption,
-  isCaptionClip,
-  removeCaption as removeCaptionLine,
-} from "../../kernel/captions";
-import type { ClipFrame, ClipMotion, PartInstance } from "../../kernel/types";
-import {
-  normalizeCuts, switchCut as switchCutPure, addCut as addCutPure, renameCut as renameCutPure,
-  removeCut as removeCutPure, stripMediaFromCuts, stripFilterFromCuts, withoutFilter, stripAudioFxFromCuts, withoutAudioFx,
-} from "../../kernel/cuts";
-import type { ClipFilter, FilterDef } from "../../kernel/filters.mjs";
-import type { AudioFxDef, ClipAudioFx } from "../../kernel/audioFx.mjs";
-import type { ClipPixelMap, PixelMapDef } from "../../kernel/pixelMap.mjs";
-import {
-  checkCrossfade, checkFade, clampDur, fadeOwner, groupOf, timingLock,
-  transitionsOf, transitionsOfClip, type Transition, type TransitionKind,
-} from "../../kernel/transitions";
+import { newId, type MediaAsset, type Transcript, type Shots, type Subjects } from "../../kernel/project";
+import { stripMediaFromCuts } from "../../kernel/cuts";
 
-import {
-  VOLUME_KEY,
-  readVolume,
-  state,
-  listeners,
-  history,
-  future,
-  emit,
-  set,
-  setProject,
-  clearTransitionFades,
-  updateTrack,
-  pruneCardNodes,
-  shiftClipsBy,
-  sortClips,
-  resolveOverlap,
-  placeOrShift,
-  planPlacement,
-  pickTrack,
-  getState,
-  subscribe,
-  useStore
-} from "../core";
-import { actions } from "../project";
+import { state, setProject } from "../core";
 
 export const media = {
   addMedia(asset: Omit<MediaAsset, "id"> & { id?: string }): MediaAsset {
@@ -58,6 +9,7 @@ export const media = {
     setProject({ ...state.project, media: [...state.project.media, m] }, { undoable: false });
     return m;
   },
+  /** 写入 / 清除素材的语音转文字结果(不进撤销栈) */
   setMediaShots(mediaId: string, shots: Shots | null) {
     const p = state.project;
     setProject(
@@ -65,6 +17,7 @@ export const media = {
       { undoable: false },
     );
   },
+  /** 写入 / 清除素材的主体检测结果(不进撤销栈,和镜头识别同一个道理) */
   setMediaSubjects(mediaId: string, subjects: Subjects | null) {
     const p = state.project;
     // 素材可能在检测跑完之前就被删了。不查一下的话 map 空转一圈、

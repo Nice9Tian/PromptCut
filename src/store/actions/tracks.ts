@@ -1,58 +1,13 @@
-import { useSyncExternalStore } from "react";
-import { createEmptyProject, DEFAULT_CARD_DUR, DEFAULT_MEDIA_DUR, findClip, findSoundAsset, newId, newProjectId, soundAssetFrom, type MediaAsset, type Project, type Track, type TrackClip, type Transcript, type Shots, type Subjects } from "../../kernel/project";
-import { getCard } from "../../kernel/registry";
-import { cloneCardClipInstance } from "../../kernel/cardAuthoring.mjs";
-import { normalizeEmphasis, type ClipEmphasis } from "../../kernel/emphasis";
-import {
-  CAPTION_CARD_ID,
-  CAPTION_TRACK_NAME,
-  captionsFromTranscript,
-  captionsOf,
-  editCaption as editCaptionLine,
-  formatCaptions,
-  insertCaption,
-  isCaptionClip,
-  removeCaption as removeCaptionLine,
-} from "../../kernel/captions";
-import type { ClipFrame, ClipMotion, PartInstance } from "../../kernel/types";
-import {
-  normalizeCuts, switchCut as switchCutPure, addCut as addCutPure, renameCut as renameCutPure,
-  removeCut as removeCutPure, stripMediaFromCuts, stripFilterFromCuts, withoutFilter, stripAudioFxFromCuts, withoutAudioFx,
-} from "../../kernel/cuts";
-import type { ClipFilter, FilterDef } from "../../kernel/filters.mjs";
-import type { AudioFxDef, ClipAudioFx } from "../../kernel/audioFx.mjs";
-import type { ClipPixelMap, PixelMapDef } from "../../kernel/pixelMap.mjs";
-import {
-  checkCrossfade, checkFade, clampDur, fadeOwner, groupOf, timingLock,
-  transitionsOf, transitionsOfClip, type Transition, type TransitionKind,
-} from "../../kernel/transitions";
+import { newId, type Project, type Track } from "../../kernel/project";
+import { transitionsOf } from "../../kernel/transitions";
 
-import {
-  VOLUME_KEY,
-  readVolume,
-  state,
-  listeners,
-  history,
-  future,
-  emit,
-  set,
-  setProject,
-  clearTransitionFades,
-  updateTrack,
-  pruneCardNodes,
-  shiftClipsBy,
-  sortClips,
-  resolveOverlap,
-  placeOrShift,
-  planPlacement,
-  pickTrack,
-  getState,
-  subscribe,
-  useStore
-} from "../core";
+import { state, set, setProject, clearTransitionFades, updateTrack, pruneCardNodes } from "../core";
 import { actions } from "../project";
 
 export const tracks = {
+
+  /* ---------- 轨道 ---------- */
+  /** 加一条序列。opts.index 给了就插在那个位置(时间轴上「拖到序列之间」新建用),不给就加在数组末尾。 */
   addTrack(name?: string, opts: { index?: number } = {}): Track {
     const n = state.project.tracks.length + 1;
     const track: Track = { id: newId("t"), name: name ?? `序列 ${n}`, clips: [] };
@@ -65,6 +20,10 @@ export const tracks = {
   removeTrack(trackId: string) {
     actions.removeTracks([trackId]);
   },
+  /**
+   * 删几条序列(一步撤销)。上面片段挂着的转场一并撤掉、留在别的序列上那一头的淡化擦干净 ——
+   * 和 removeClip 一个道理;以前只删序列不管转场,会留下指向不存在片段的转场。
+   */
   removeTracks(trackIds: string[]) {
     const p = state.project;
     const ids = new Set(trackIds);

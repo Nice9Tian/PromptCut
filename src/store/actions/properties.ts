@@ -1,58 +1,15 @@
-import { useSyncExternalStore } from "react";
-import { createEmptyProject, DEFAULT_CARD_DUR, DEFAULT_MEDIA_DUR, findClip, findSoundAsset, newId, newProjectId, soundAssetFrom, type MediaAsset, type Project, type Track, type TrackClip, type Transcript, type Shots, type Subjects } from "../../kernel/project";
-import { getCard } from "../../kernel/registry";
-import { cloneCardClipInstance } from "../../kernel/cardAuthoring.mjs";
+import { findClip } from "../../kernel/project";
 import { normalizeEmphasis, type ClipEmphasis } from "../../kernel/emphasis";
-import {
-  CAPTION_CARD_ID,
-  CAPTION_TRACK_NAME,
-  captionsFromTranscript,
-  captionsOf,
-  editCaption as editCaptionLine,
-  formatCaptions,
-  insertCaption,
-  isCaptionClip,
-  removeCaption as removeCaptionLine,
-} from "../../kernel/captions";
 import type { ClipFrame, ClipMotion, PartInstance } from "../../kernel/types";
-import {
-  normalizeCuts, switchCut as switchCutPure, addCut as addCutPure, renameCut as renameCutPure,
-  removeCut as removeCutPure, stripMediaFromCuts, stripFilterFromCuts, withoutFilter, stripAudioFxFromCuts, withoutAudioFx,
-} from "../../kernel/cuts";
-import type { ClipFilter, FilterDef } from "../../kernel/filters.mjs";
-import type { AudioFxDef, ClipAudioFx } from "../../kernel/audioFx.mjs";
-import type { ClipPixelMap, PixelMapDef } from "../../kernel/pixelMap.mjs";
-import {
-  checkCrossfade, checkFade, clampDur, fadeOwner, groupOf, timingLock,
-  transitionsOf, transitionsOfClip, type Transition, type TransitionKind,
-} from "../../kernel/transitions";
 
-import {
-  VOLUME_KEY,
-  readVolume,
-  state,
-  listeners,
-  history,
-  future,
-  emit,
-  set,
-  setProject,
-  clearTransitionFades,
-  updateTrack,
-  pruneCardNodes,
-  shiftClipsBy,
-  sortClips,
-  resolveOverlap,
-  placeOrShift,
-  planPlacement,
-  pickTrack,
-  getState,
-  subscribe,
-  useStore
-} from "../core";
-import { actions } from "../project";
+import { state, setProject, updateTrack } from "../core";
 
 export const properties = {
+  /** 换卡片类型(保留时段)。keepParams 为 true 时,保留新卡也有的同名参数。 */
+  /**
+   * 组合卡的部件实例树:整棵替换。树的增删改移在 kernel/parts.ts 里算好(纯函数、已校验),这里只负责存。
+   * 空数组 = 清掉字段。
+   */
   setClipParts(clipId: string, parts: PartInstance[]) {
     const p = state.project;
     const hit = findClip(p, clipId);
@@ -70,6 +27,10 @@ export const properties = {
     })));
     return true;
   },
+  /**
+   * 给一段加 / 去掉强调(阴影、描边)。传 null 就是去掉。
+   * 参数在 kernel/emphasis.ts 里补全和夹范围,kind 不认识就当没设。
+   */
   setClipEmphasis(clipId: string, emphasis: Partial<ClipEmphasis> | null): { ok: boolean; emphasis: ClipEmphasis | null; error?: string } {
     const p = state.project;
     const hit = findClip(p, clipId);
@@ -90,6 +51,14 @@ export const properties = {
     })));
     return { ok: true, emphasis: next };
   },
+
+  /**
+   * 绑定 / 解绑一条运动轨迹。传 undefined 就是解绑。
+   *
+   * 和 updateClip 分开而不是并进它的 patch:motion 是一坨逐帧数据,不是
+   * 淡入淡出那种一眼看完的标量,混在同一个 patch 里会让「随手改个不透明度」
+   * 和「换掉整条轨迹」长得一模一样。
+   */
   setClipMotion(clipId: string, motion: ClipMotion | undefined) {
     const p = state.project;
     const hit = findClip(p, clipId);
@@ -107,6 +76,12 @@ export const properties = {
     })));
     return true;
   },
+  /**
+   * 设 / 清卡片的框(位置、尺寸、锚点、缩放、旋转)。传 undefined 就是清掉,恢复铺满全屏。
+   * 传进来的 frame 是**完整的局部坐标**,不做合并 —— 合并(只改传了的字段)和 world→local
+   * 换算都在调用方(kernel/layout.ts 的 framePatchFromArgs)做完了,这里只负责存。
+   * 和 motion 一样单独一个 action,不并进 updateClip 的 patch。
+   */
   setClipFrame(clipId: string, frame: ClipFrame | undefined) {
     const p = state.project;
     const hit = findClip(p, clipId);

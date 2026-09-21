@@ -1,58 +1,18 @@
-import { useSyncExternalStore } from "react";
-import { createEmptyProject, DEFAULT_CARD_DUR, DEFAULT_MEDIA_DUR, findClip, findSoundAsset, newId, newProjectId, soundAssetFrom, type MediaAsset, type Project, type Track, type TrackClip, type Transcript, type Shots, type Subjects } from "../../kernel/project";
-import { getCard } from "../../kernel/registry";
-import { cloneCardClipInstance } from "../../kernel/cardAuthoring.mjs";
-import { normalizeEmphasis, type ClipEmphasis } from "../../kernel/emphasis";
-import {
-  CAPTION_CARD_ID,
-  CAPTION_TRACK_NAME,
-  captionsFromTranscript,
-  captionsOf,
-  editCaption as editCaptionLine,
-  formatCaptions,
-  insertCaption,
-  isCaptionClip,
-  removeCaption as removeCaptionLine,
-} from "../../kernel/captions";
-import type { ClipFrame, ClipMotion, PartInstance } from "../../kernel/types";
-import {
-  normalizeCuts, switchCut as switchCutPure, addCut as addCutPure, renameCut as renameCutPure,
-  removeCut as removeCutPure, stripMediaFromCuts, stripFilterFromCuts, withoutFilter, stripAudioFxFromCuts, withoutAudioFx,
-} from "../../kernel/cuts";
-import type { ClipFilter, FilterDef } from "../../kernel/filters.mjs";
+import { findClip, findSoundAsset, newId, soundAssetFrom, type MediaAsset, type Track, type TrackClip } from "../../kernel/project";
+import { stripAudioFxFromCuts, withoutAudioFx } from "../../kernel/cuts";
 import type { AudioFxDef, ClipAudioFx } from "../../kernel/audioFx.mjs";
-import type { ClipPixelMap, PixelMapDef } from "../../kernel/pixelMap.mjs";
-import {
-  checkCrossfade, checkFade, clampDur, fadeOwner, groupOf, timingLock,
-  transitionsOf, transitionsOfClip, type Transition, type TransitionKind,
-} from "../../kernel/transitions";
 
-import {
-  VOLUME_KEY,
-  readVolume,
-  state,
-  listeners,
-  history,
-  future,
-  emit,
-  set,
-  setProject,
-  clearTransitionFades,
-  updateTrack,
-  pruneCardNodes,
-  shiftClipsBy,
-  sortClips,
-  resolveOverlap,
-  placeOrShift,
-  planPlacement,
-  pickTrack,
-  getState,
-  subscribe,
-  useStore
-} from "../core";
+import { state, setProject, updateTrack } from "../core";
 import { actions } from "../project";
 
 export const audio = {
+
+  /* ---------- 素材 ---------- */
+
+  /**
+   * 「创建为声音」:给一段视频派生出只有声音的那一份素材(素材库里多一条,进配乐页)。
+   * 同一段视频只派生一份,再调返回的是同一条。图片没有声音;本来就是声音的原样返回。
+   */
   setClipVolume(clipId: string, volume: number) {
     const p = state.project;
     const hit = findClip(p, clipId);
@@ -68,6 +28,7 @@ export const audio = {
     }
     return { ok: true, clipId, volume, muted: !!(hit.clip.audioMuted || hit.track.muted), hidden: !!hit.track.hidden };
   },
+
   separateAudio(clipId: string) {
     const p = state.project;
     const hit = findClip(p, clipId);
@@ -91,6 +52,7 @@ export const audio = {
     setProject({ ...p, tracks, media: p.media.includes(media) ? p.media : [...p.media, media] });
     return { ok: true, clipId, audioClipId: audio.id, trackId: track.id, mediaId: media.id };
   },
+
   audioFromVideo(mediaId: string): { ok: true; media: MediaAsset; created: boolean } | { ok: false; error: string } {
     const p = state.project;
     const src = p.media.find((m) => m.id === mediaId);
@@ -104,6 +66,11 @@ export const audio = {
     setProject({ ...p, media: [...p.media, media] }, { undoable: false });
     return { ok: true, media, created: true };
   },
+
+  /**
+   * 把时间轴上的一段视频**就地**转成声音:画面没了,声音照旧(位置、长度、素材内偏移、
+   * 淡入淡出全部保留)。素材库里同时会多出那份声音素材,以后能直接再拖。
+   */
   convertClipToAudio(clipId: string): { ok: true; mediaId: string; created: boolean; already?: boolean } | { ok: false; error: string } {
     const hit = findClip(state.project, clipId);
     if (!hit) return { ok: false, error: `找不到片段 ${clipId}` };
@@ -119,6 +86,8 @@ export const audio = {
     })));
     return { ok: true, mediaId: r.media.id, created: r.created };
   },
+  /* ---------- 音频效果库(项目级,和滤镜库一个路数) ---------- */
+  /** 入库;给了 attach 就同一步挂到那一段上(一步撤销,同 addFilter) */
   addAudioFx(def: AudioFxDef, attach?: { clipId: string; fx: ClipAudioFx }) {
     const p = state.project;
     let tracks = p.tracks;
@@ -131,6 +100,7 @@ export const audio = {
   updateAudioFx(fxId: string, def: AudioFxDef) {
     setProject({ ...state.project, audioFx: (state.project.audioFx ?? []).map((f) => (f.id === fxId ? def : f)) });
   },
+  /** 删效果:激活剪辑和停放剪辑里挂着它的段一并摘掉 */
   removeAudioFx(fxId: string) {
     const p = state.project;
     setProject(stripAudioFxFromCuts({
@@ -139,6 +109,7 @@ export const audio = {
       tracks: p.tracks.map((t) => ({ ...t, clips: t.clips.map((c) => (c.audioFx?.id === fxId ? withoutAudioFx(c) : c)) })),
     }, fxId));
   },
+  /** 挂 / 换 / 摘片段上的音频效果(null = 摘掉)。找不到片段返回 false;校验在调用方 */
   setClipAudioFx(clipId: string, fx: ClipAudioFx | null): boolean {
     const p = state.project;
     const hit = findClip(p, clipId);

@@ -1,41 +1,11 @@
-import { useSyncExternalStore } from "react";
-import { createEmptyProject, DEFAULT_CARD_DUR, DEFAULT_MEDIA_DUR, findClip, findSoundAsset, newId, newProjectId, soundAssetFrom, type MediaAsset, type Project, type Track, type TrackClip, type Transcript, type Shots, type Subjects } from "../../kernel/project";
+import { DEFAULT_CARD_DUR, DEFAULT_MEDIA_DUR, findClip, newId, type Track, type TrackClip } from "../../kernel/project";
 import { getCard } from "../../kernel/registry";
 import { cloneCardClipInstance } from "../../kernel/cardAuthoring.mjs";
-import { normalizeEmphasis, type ClipEmphasis } from "../../kernel/emphasis";
-import {
-  CAPTION_CARD_ID,
-  CAPTION_TRACK_NAME,
-  captionsFromTranscript,
-  captionsOf,
-  editCaption as editCaptionLine,
-  formatCaptions,
-  insertCaption,
-  isCaptionClip,
-  removeCaption as removeCaptionLine,
-} from "../../kernel/captions";
-import type { ClipFrame, ClipMotion, PartInstance } from "../../kernel/types";
-import {
-  normalizeCuts, switchCut as switchCutPure, addCut as addCutPure, renameCut as renameCutPure,
-  removeCut as removeCutPure, stripMediaFromCuts, stripFilterFromCuts, withoutFilter, stripAudioFxFromCuts, withoutAudioFx,
-} from "../../kernel/cuts";
-import type { ClipFilter, FilterDef } from "../../kernel/filters.mjs";
-import type { AudioFxDef, ClipAudioFx } from "../../kernel/audioFx.mjs";
-import type { ClipPixelMap, PixelMapDef } from "../../kernel/pixelMap.mjs";
-import {
-  checkCrossfade, checkFade, clampDur, fadeOwner, groupOf, timingLock,
-  transitionsOf, transitionsOfClip, type Transition, type TransitionKind,
-} from "../../kernel/transitions";
+import type { PartInstance } from "../../kernel/types";
+import { fadeOwner, groupOf, timingLock, transitionsOf, transitionsOfClip } from "../../kernel/transitions";
 
 import {
-  VOLUME_KEY,
-  readVolume,
-  state,
-  listeners,
-  history,
-  future,
-  emit,
-  set,
+  state, set,
   setProject,
   clearTransitionFades,
   updateTrack,
@@ -43,16 +13,13 @@ import {
   shiftClipsBy,
   sortClips,
   resolveOverlap,
-  placeOrShift,
-  planPlacement,
-  pickTrack,
-  getState,
-  subscribe,
-  useStore
+  placeOrShift, pickTrack
 } from "../core";
-import { actions } from "../project";
 
 export const clips = {
+
+  /* ---------- clip ---------- */
+  /** 往序列里加一张卡。不给 trackId 就挑一条这段时间空着的序列。返回 clip。 */
   addCardClip(cardId: string, start: number, opts: { trackId?: string; duration?: number; params?: Record<string, unknown>; parts?: PartInstance[] } = {}): TrackClip | null {
     const def = getCard(cardId);
     if (!def) return null;
@@ -74,6 +41,7 @@ export const clips = {
     set({ selection: [clip.id] });
     return clip;
   },
+  /** 往序列里加一段素材。不给 trackId 就挑一条这段时间空着的序列。 */
   addMediaClip(mediaId: string, start: number, opts: { trackId?: string; duration?: number; mediaOffset?: number } = {}): TrackClip | null {
     const p = state.project;
     const media = p.media.find((m) => m.id === mediaId);
@@ -90,6 +58,10 @@ export const clips = {
     set({ selection: [clip.id] });
     return clip;
   },
+  /**
+   * 新建一条序列,并把片段直接落上去。一次手势 = 一步撤销(时间轴上「拖到序列之间」和「拖到新建落区」用)。
+   * 新序列是空的,所以片段一定落在 start 上,不会被顺延。
+   */
   addClipOnNewTrack(spec: { index?: number; cardId?: string; mediaId?: string; start: number; duration?: number }): TrackClip | null {
     const p = state.project;
     const start = Math.max(0, spec.start);
@@ -113,6 +85,7 @@ export const clips = {
     set({ selection: [clip.id] });
     return clip;
   },
+  /** 移动 / 缩放 clip(可跨序列)。 */
   moveClip(clipId: string, patch: { start?: number; end?: number; trackId?: string }) {
     const p = state.project;
     const hit = findClip(p, clipId);
@@ -148,6 +121,10 @@ export const clips = {
     next = updateTrack(next, target.id, (t) => ({ ...t, clips: sortClips([...t.clips, placed]) }));
     setProject(next);
   },
+  /**
+   * 改片段自身的属性(不是卡片参数):淡入淡出、整体不透明度、显示名。
+   * 两段素材重叠 + 各自淡化 = 交叉溶解,所以「转场」不需要单独的对象,改这几个字段就够。
+   */
   updateClip(clipId: string, patch: Partial<Pick<TrackClip, "fadeIn" | "fadeOut" | "opacity" | "label">>): { ok: boolean; blocked?: ("fadeIn" | "fadeOut")[] } {
     const p = state.project;
     const hit = findClip(p, clipId);
@@ -194,6 +171,7 @@ export const clips = {
     set({ selection: [clip.id] });
     return clip;
   },
+  /** 在 t 处把 clip 一切为二 */
   splitClip(clipId: string, t: number): TrackClip | null {
     const p = state.project;
     const hit = findClip(p, clipId);
@@ -207,6 +185,7 @@ export const clips = {
     setProject(updateTrack(cloned.project, hit.track.id, (t2) => ({ ...t2, clips: sortClips([...t2.clips.filter((c) => c.id !== clipId), left, right]) })));
     return right;
   },
+
   setClipParams(clipId: string, params: Record<string, unknown>, opts: { merge?: boolean } = { merge: true }) {
     const p = state.project;
     const hit = findClip(p, clipId);

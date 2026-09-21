@@ -1,8 +1,4 @@
-import { useSyncExternalStore } from "react";
-import { createEmptyProject, DEFAULT_CARD_DUR, DEFAULT_MEDIA_DUR, findClip, findSoundAsset, newId, newProjectId, soundAssetFrom, type MediaAsset, type Project, type Track, type TrackClip, type Transcript, type Shots, type Subjects } from "../../kernel/project";
-import { getCard } from "../../kernel/registry";
-import { cloneCardClipInstance } from "../../kernel/cardAuthoring.mjs";
-import { normalizeEmphasis, type ClipEmphasis } from "../../kernel/emphasis";
+import { findClip, type Track } from "../../kernel/project";
 import {
   CAPTION_CARD_ID,
   CAPTION_TRACK_NAME,
@@ -14,50 +10,29 @@ import {
   isCaptionClip,
   removeCaption as removeCaptionLine,
 } from "../../kernel/captions";
-import type { ClipFrame, ClipMotion, PartInstance } from "../../kernel/types";
-import {
-  normalizeCuts, switchCut as switchCutPure, addCut as addCutPure, renameCut as renameCutPure,
-  removeCut as removeCutPure, stripMediaFromCuts, stripFilterFromCuts, withoutFilter, stripAudioFxFromCuts, withoutAudioFx,
-} from "../../kernel/cuts";
-import type { ClipFilter, FilterDef } from "../../kernel/filters.mjs";
-import type { AudioFxDef, ClipAudioFx } from "../../kernel/audioFx.mjs";
-import type { ClipPixelMap, PixelMapDef } from "../../kernel/pixelMap.mjs";
-import {
-  checkCrossfade, checkFade, clampDur, fadeOwner, groupOf, timingLock,
-  transitionsOf, transitionsOfClip, type Transition, type TransitionKind,
-} from "../../kernel/transitions";
 
-import {
-  VOLUME_KEY,
-  readVolume,
-  state,
-  listeners,
-  history,
-  future,
-  emit,
-  set,
-  setProject,
-  clearTransitionFades,
-  updateTrack,
-  pruneCardNodes,
-  shiftClipsBy,
-  sortClips,
-  resolveOverlap,
-  placeOrShift,
-  planPlacement,
-  pickTrack,
-  getState,
-  subscribe,
-  useStore
-} from "../core";
+import { state } from "../core";
 import { actions } from "../project";
 
 export const captions = {
+  /**
+   * 字幕专用序列:有就用,没有就建一条。
+   *
+   * 建在**最上面**(tracks[0]):时间轴上靠上的序列画在上层,字幕本来就该压在画面之上 ——
+   * 以前用 addTrack 追加到末尾,叠放顺序翻正之后那等于把字幕塞到了所有画面底下。
+   */
   ensureCaptionTrack(): Track {
     const found = state.project.tracks.find((t) => t.name === CAPTION_TRACK_NAME);
     if (found) return found;
     return actions.addTrack(CAPTION_TRACK_NAME, { index: 0 });
   },
+  /**
+   * 一键把某份素材的文字稿铺成字幕轨:字幕序列 → 一张 caption-track 卡 → 灌进 lines。
+   *
+   * 以前只有 AI 走 auto_workflow / fill_captions 能铺字幕,人在界面上转写完就没有下一步了。
+   * 时段按这份素材在时间轴上真正铺开的范围算(认 mediaOffset,素材被挪过、修过头也对得上)。
+   * 已经有一张覆盖同一段时间的字幕卡就往那张里灌,不再多建一张。
+   */
   buildCaptions(mediaId: string): { ok: true; clipId: string; count: number } | { ok: false; reason: string } {
     const p = state.project;
     const media = p.media.find((m) => m.id === mediaId);
@@ -86,6 +61,13 @@ export const captions = {
     if (!clip) return { ok: false, reason: "建字幕卡失败" };
     return { ok: true, clipId: clip.id, count: plan.lines.length };
   },
+  /**
+   * 改字幕卡里的一条字幕(挪位置、修边、改文字)。
+   *
+   * 字幕存在卡片的 lines 参数里(`起|止|中|英` 一行一条),所以这三个动作都是
+   * 「解析 → 在 kernel/captions 里算 → 写回同一个字符串」。时间会被夹在左右邻居之间,
+   * 不会拖出一条压着别人的字幕。返回改完之后它排到第几位,-1 = 没改成。
+   */
   editCaption(clipId: string, index: number, patch: { start?: number; end?: number; zh?: string; en?: string }): number {
     const hit = findClip(state.project, clipId);
     if (!hit || !isCaptionClip(hit.clip)) return -1;
@@ -95,6 +77,7 @@ export const captions = {
     actions.setClipParams(clipId, { lines: formatCaptions(res.lines) });
     return res.index;
   },
+  /** 删掉一条字幕 */
   removeCaption(clipId: string, index: number): boolean {
     const hit = findClip(state.project, clipId);
     if (!hit || !isCaptionClip(hit.clip)) return false;
@@ -103,6 +86,7 @@ export const captions = {
     actions.setClipParams(clipId, { lines: formatCaptions(removeCaptionLine(lines, index)) });
     return true;
   },
+  /** 在字幕卡里插一条(start 是相对卡片起点的秒);挤不下返回 -1 */
   addCaption(clipId: string, at: { start: number; end?: number; zh?: string; en?: string }): number {
     const hit = findClip(state.project, clipId);
     if (!hit || !isCaptionClip(hit.clip)) return -1;

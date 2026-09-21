@@ -27,4 +27,4 @@ export const editorApi: EditorApi = {
   ...collectHandlers,
   ...playbackHandlers,
   ...systemHandlers,
-} as EditorApi;
+};
