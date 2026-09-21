@@ -23,6 +23,8 @@
   "particles-*": { "compositing": "independent", "canvasHeavy": true },
   "pin-board": { "compositing": "independent" },
   "probe": { "compositing": "independent" },
+  "probe-countdown": { "compositing": "independent" },
+  "probe-typewriter": { "compositing": "independent" },
   "punch-pill": { "compositing": "independent" },
   "quote-lockup": { "compositing": "independent" },
   "rank-bars": { "compositing": "belowDependent" },
