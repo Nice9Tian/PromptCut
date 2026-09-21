@@ -1,14 +1,25 @@
 import type { Plugin, ViteDevServer } from "vite";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { loadCosts, upsertCosts, filterCosts } from "./costs-store.mjs";
+import { loadCosts, loadTuning, upsertCosts, filterCosts } from "./costs-store.mjs";
 import { isPrerender } from "./render-role.mjs";
 import { prerenderState } from "./prerender-client.mjs";
 
 /**
  * K1 探针记录的 HTTP 面(目标 K/K1)。**两个进程都挂这一份插件**,和 A7 的镜像一样。
  *
- *   GET  /api/data/costs?device=<字符串>[&mode=dev|build]   → { ok, device, mode, costs }
+ *   GET  /api/data/costs?device=<字符串>[&mode=dev|build]   → { ok, device, mode, costs, tuning }
  *   PUT  /api/data/costs  { records: [] }  → { ok, count, added, updated }
+ *
+ * # 为什么 `tuning` 搭这趟车
+ *
+ * K2 的三个可调系数(`COST_SCALE` / `STEP_PERCENTILE` / `STEP_MIN_SAMPLES`)覆盖值存在本机
+ * `out/pipeline-tuning.json`(没有这个文件 = 全用缺省)。`planPipelines` 在页面和预渲染进程
+ * 各算一次、两端必须用**同一份系数**,而两端本来就都要拉 `costs` —— 再开一个端点只会多一个
+ * 「一端拿到新系数、另一端还是旧的」的窗口。所以 GET 回包里**加一个 `tuning` 字段**,
+ * 原有的 `{ ok, device, mode, costs }` 一个都不动:`scripts/probe-card-costs.mjs`、
+ * `server/test/costs.test.mjs` 和将来的页面侧只读自己认识的字段,不受影响
+ * (任务书 K2 写的是 `{ records, tuning }`,那会把 `costs` 改名、连带改掉全部现有调用方;
+ *  加字段能达到同样的效果,代价小得多)。
  *
  * # 为什么预渲染那一端也要挂
  *
@@ -98,7 +109,8 @@ export function costsPlugin(): Plugin {
           // mode(dev | build):分派用当前运行模式的记录(任务书 3.1);缺字段的旧记录当 dev
           const mode = query(req, "mode");
           const costs = filterCosts(loadCosts(root), device, mode);
-          return sendJson(res, 200, { ok: true, device: device ?? null, mode: mode ?? null, costs });
+          // tuning 是加出来的字段,原来四项一个不动(见文件头「为什么 tuning 搭这趟车」)
+          return sendJson(res, 200, { ok: true, device: device ?? null, mode: mode ?? null, costs, tuning: loadTuning(root) });
         }
         if (method !== "PUT" && method !== "POST") return sendJson(res, 405, { ok: false, error: "GET / PUT only" });
         readBody(req, res, (d) => {

@@ -4,7 +4,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { loadCosts, upsertCosts, mergeCosts, filterCosts, costsPath } from '../costs-store.mjs';
+import { loadCosts, loadTuning, upsertCosts, mergeCosts, filterCosts, costsPath, tuningPath } from '../costs-store.mjs';
+import { DEFAULT_TUNING } from '../../src/render/pipelineTuning.mjs';
 
 /** 每个用例一个干净的根;PROMPTCUT_DATA_DIR 会把落点挪走,测试期间一律摘掉 */
 function withRoot(fn) {
@@ -117,6 +118,53 @@ test('落盘是原子的:存档文件之外不留临时文件', () => {
     const raw = JSON.parse(fs.readFileSync(costsPath(root), 'utf8'));
     assert.equal(raw.version, 1);
     assert.equal(raw.costs.length, 1);
+  });
+});
+
+/* ------------------------------------------------ K2 的可调系数(out/pipeline-tuning.json) */
+
+const writeTuning = (root, text) => {
+  fs.mkdirSync(path.dirname(tuningPath(root)), { recursive: true });
+  fs.writeFileSync(tuningPath(root), text, 'utf8');
+};
+
+test('没有 out/pipeline-tuning.json 就全用缺省', () => {
+  withRoot((root) => {
+    assert.deepEqual({ ...loadTuning(root) }, { ...DEFAULT_TUNING });
+  });
+});
+
+test('覆盖值读得出来,而且按 K2 的范围夹取', () => {
+  withRoot((root) => {
+    writeTuning(root, JSON.stringify({ COST_SCALE: 2, STEP_PERCENTILE: 0.95 }));
+    assert.deepEqual({ ...loadTuning(root) },
+      { COST_SCALE: 2, STEP_PERCENTILE: 0.95, STEP_MIN_SAMPLES: DEFAULT_TUNING.STEP_MIN_SAMPLES }, '没提到的那一项用缺省');
+
+    writeTuning(root, JSON.stringify({ COST_SCALE: 99, STEP_MIN_SAMPLES: 0 }));
+    const clamped = loadTuning(root);
+    assert.equal(clamped.COST_SCALE, 4);
+    assert.equal(clamped.STEP_MIN_SAMPLES, 8);
+  });
+});
+
+test('坏文件 / 不是对象都当「没有覆盖」,不抛', () => {
+  withRoot((root) => {
+    writeTuning(root, '{ 半截');
+    assert.deepEqual({ ...loadTuning(root) }, { ...DEFAULT_TUNING });
+    writeTuning(root, '[1,2,3]');
+    assert.deepEqual({ ...loadTuning(root) }, { ...DEFAULT_TUNING });
+    writeTuning(root, 'null');
+    assert.deepEqual({ ...loadTuning(root) }, { ...DEFAULT_TUNING });
+  });
+});
+
+test('系数和成本记录住同一个目录,互不干扰', () => {
+  withRoot((root) => {
+    writeTuning(root, JSON.stringify({ COST_SCALE: 3 }));
+    upsertCosts(root, [rec()]);
+    assert.equal(path.dirname(tuningPath(root)), path.dirname(costsPath(root)));
+    assert.equal(loadTuning(root).COST_SCALE, 3, '写记录没有把系数文件冲掉');
+    assert.equal(loadCosts(root).length, 1);
   });
 });
 
