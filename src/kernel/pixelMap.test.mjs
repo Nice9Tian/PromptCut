@@ -155,6 +155,10 @@ test("compilePixelMapGlsl:颜色序列照 sequenceTarget 的语义翻译", () =>
   const disc = compilePixelMapGlsl(pm({ name: "离散", where: "1", to: "#fff", mode: "discrete", colorSequence: { from: ["#000", "#fff"], to: ["#ff0000", "#00ff00"], mode: "discrete" } })).fragment;
   assert.match(disc, /const vec4 PC_FROM\[2\] = vec4\[2\]\(/);
   assert.match(disc, /float dd = dot\(dv, dv\);/);
+  // 并列时取靠前那个(sequenceTarget 用的是严格小于):float32 在精确并列上会往两边乱舍,
+  // 所以比较要减掉一个比 float32 噪声大、比相邻非并列距离差小得多的量
+  assert.match(disc, /const float PC_SEQ_EPS = 1e-6;/);
+  assert.match(disc, /if \(dd < best - PC_SEQ_EPS\)/);
   assert.match(disc, /target = PC_TO\[min\(idx, 1\)\];/);
   const cont = compilePixelMapGlsl(pm({ name: "连续", where: "1", to: "#fff", colorSequence: { from: ["#000", "#808080", "#fff"], to: ["#001133", "#ffcc88", "#ffffff"], mode: "continuous" } })).fragment;
   assert.match(cont, /float seqP = float\(idx\) \/ 2\.0;/);

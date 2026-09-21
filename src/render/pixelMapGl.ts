@@ -217,6 +217,14 @@ export function readPixelMap(opts: PixelMapDrawOpts): Uint8ClampedArray {
   return out;
 }
 
+/**
+ * 探针专用:把这个文档的 WebGL2 上下文交出去,好在 drawPixelMap 外面套一层
+ * EXT_disjoint_timer_query_webgl2 量 GPU 真实耗时。渲染路径不用它。
+ */
+export function pixelMapGlContext(): WebGL2RenderingContext {
+  return ensure();
+}
+
 /** 真在 GPU 上跑吗:验收时把 renderer 串写进报告,免得拿软件渲染的数当 GPU 的数 */
 export function pixelMapGlInfo(): { vendor: string; renderer: string; version: string } | null {
   try {

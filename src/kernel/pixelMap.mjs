@@ -459,13 +459,22 @@ function sequenceGlsl(def) {
   const from = def.colorSequence.from.map(parseColor);
   const to = def.colorSequence.to.map(parseColor);
   const nf = from.length, nt = to.length;
-  const decls = `const vec4 PC_FROM[${nf}] = vec4[${nf}](${from.map(vec4Of).join(", ")});\n`
+  const decls = `const float PC_SEQ_EPS = 1e-6;\n`
+    + `const vec4 PC_FROM[${nf}] = vec4[${nf}](${from.map(vec4Of).join(", ")});\n`
     + `const vec4 PC_TO[${nt}] = vec4[${nt}](${to.map(vec4Of).join(", ")});\n`;
+  /*
+   * 距离比的是平方(和 Math.hypot 的大小顺序一样,少一次开方)。减 PC_SEQ_EPS 是为了对上
+   * sequenceTarget 的「并列时取靠前那个」:JS 在 float64 上算,GLSL 只有 float32,正好并列的
+   * 像素两边会各自往不同方向舍入 —— 实测 testsrc2 上 from = [#000, #808080, #fff] 时
+   * r+g+b 恰好等于 192 的像素就是精确并列,不加这一下会选到后一个、整块颜色跳掉。
+   * 取 1e-6:float32 在 0~3 这个量级的误差约 1e-7,而 8 位输入能产生的相邻非并列距离差
+   * 至少是 2·v/255 量级(灰阶序列约 4e-3),差着三个数量级,不会误伤。
+   */
   let body = `  int idx = 0;\n  float best = 1e30;\n`
     + `  for (int i = 0; i < ${nf}; i++) {\n`
     + `    vec3 dv = src.rgb - PC_FROM[i].rgb;\n`
     + `    float dd = dot(dv, dv);\n`
-    + `    if (dd < best) { best = dd; idx = i; }\n  }\n`;
+    + `    if (dd < best - PC_SEQ_EPS) { best = dd; idx = i; }\n  }\n`;
   if (def.mode === "discrete" || nt === 1) {
     body += `  target = PC_TO[min(idx, ${nt - 1})];\n`;
   } else {
