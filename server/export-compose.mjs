@@ -428,6 +428,16 @@ export function buildComposeArgs(opts) {
   graph.push(`[${base}]format=yuv420p[base]`, `[1:v]format=rgba[cards]`, `[base][cards]overlay=eof_action=endall[out]`);
   const g = graph.join(";");
   // 帧数用 -frames:v 卡死:按秒截(-t)时时长在三位小数取整,会多出或少一帧
-  args.push("-filter_complex", g, "-map", "[out]", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-frames:v", String(frames), out);
+  /*
+   * 滤镜图太长就写成文件再用 -/filter_complex 读(ffmpeg 7 起的写法;-filter_complex_script 在 9 里已经没了):
+   * Windows 的命令行上限是 32767 个字符,几段素材各挂一条 33 点的曲线就能逼近它。
+   */
+  const LONG_GRAPH = 12000;
+  if (g.length > LONG_GRAPH) {
+    const file = `${String(opts.sidecarDir || ".").replace(/\\/g, "/")}/filter-graph.txt`;
+    sidecars.push({ file, text: g });
+    args.push("-/filter_complex", file);
+  } else args.push("-filter_complex", g);
+  args.push("-map", "[out]", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-frames:v", String(frames), out);
   return { args, graph: g, notes, used, sidecars };
 }

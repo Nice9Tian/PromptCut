@@ -18,11 +18,27 @@ export interface FilterParamSpec {
   label?: string;
 }
 
+export type TableFilterKind = "curves" | "matrix";
+
 /** 一步:数字,或随时间变化的表达式字符串(变量 t / d / p + 声明的参数) */
-export interface FilterOp {
+export interface ScalarFilterOp {
   kind: FilterKind;
   value: number | string;
 }
+/** 曲线:每通道一张 0~1 的取样表(2~33 点,线性插值)。存进工程的是补齐后的三张表 */
+export interface CurvesOp {
+  kind: "curves";
+  r: number[];
+  g: number[];
+  b: number[];
+}
+/** 颜色矩阵:values 行优先 3×3,offset 在混色截断之后每通道再加 */
+export interface MatrixOp {
+  kind: "matrix";
+  values: number[];
+  offset: number[];
+}
+export type FilterOp = ScalarFilterOp | CurvesOp | MatrixOp;
 
 /** 滤镜库里的一条(project.filters),素材库「转场/滤镜」页列的就是它 */
 export interface FilterDef {
@@ -41,18 +57,30 @@ export interface ClipFilter {
   params?: Record<string, number>;
 }
 
-export interface ResolvedOp {
+export interface ResolvedScalarOp {
   kind: FilterKind;
   value: number;
 }
+export type ResolvedOp = ResolvedScalarOp | CurvesOp | MatrixOp;
 
 export interface FfmpegStage {
   filter: "lutrgb" | "colorchannelmixer" | "gblur";
   opts: Record<string, number | string>;
   linear?: { slope: number; icpt: number };
+  /** 查表 / 矩阵的步骤:不随时间变,sendcmd 不重发 */
+  fixed?: boolean;
 }
 
 export const FILTER_KINDS: Record<FilterKind, FilterKindSpec>;
+export const TABLE_KINDS: Record<TableFilterKind, { label: string; hint: string }>;
+export const MAX_TABLE_POINTS: number;
+export const MAX_CURVES_OPS: number;
+export function isTableKind(kind: unknown): kind is TableFilterKind;
+export function isNeutralOp(op: ResolvedOp): boolean;
+export function svgFilterId(op: CurvesOp | MatrixOp): string;
+export function svgFilterMarkup(op: CurvesOp | MatrixOp): string;
+export function ensureSvgFilter(op: CurvesOp | MatrixOp, doc?: Document | null): string;
+export function tableLutExpr(table: number[]): string;
 export const MAX_OPS: number;
 export const MAX_PARAMS: number;
 export const MAX_EXPR_LEN: number;

@@ -89,5 +89,9 @@ test("滤镜工具的声明:必填项", () => {
   for (const n of ["list_filters", "create_filter", "update_filter", "remove_filter", "apply_filter"]) assert.equal(byName[n]?.side, "browser", n);
   assert.deepEqual(byName.create_filter.inputSchema.required, ["name", "ops"]);
   assert.deepEqual(byName.apply_filter.inputSchema.required, ["clipId", "filterId"]);
-  assert.deepEqual(byName.create_filter.inputSchema.properties.ops.items.properties.kind.enum.length, 8);
+  // 八种带数值的 + curves / matrix 两种查表类;后两种不写 value,所以 ops 每项只必填 kind
+  const item = byName.create_filter.inputSchema.properties.ops.items;
+  assert.deepEqual(item.properties.kind.enum.length, 10);
+  assert.deepEqual(item.properties.kind.enum.slice(-2), ["curves", "matrix"]);
+  assert.deepEqual(item.required, ["kind"]);
 });

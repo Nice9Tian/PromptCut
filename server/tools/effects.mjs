@@ -7,7 +7,7 @@ export const effectsTools = [
   },
   {
     name: "create_filter",
-    description: "新建一个滤镜,放进素材库「转场/滤镜」页 —— 用户能看到、能复用,你也能挂到任意视频 / 图片片段上。ops 是依次作用的几步,kind 八种:brightness 亮度(1 原样,0~3,乘法)、contrast 对比度(1 原样,0~3)、saturate 饱和度(1 原样,0~2)、hue 色相旋转(度,-180~180)、grayscale 黑白(0~1)、sepia 复古褐(0~1)、invert 反色(0~1)、blur 模糊(片段框内的像素,0~40;框缩小了模糊跟着缩)。value 写数字,或写**随时间变化的表达式字符串**:t = 片段内秒数(从片段开头算,所以同一个滤镜挂到哪段都一样用)、d = 片段时长、p = t/d(0~1 进度),还能引用 params 里声明的参数;函数有 sin cos abs min max pow clamp lerp step smoothstep 等,常量 PI。例:{ name:'呼吸感', params:{ amount:{ default:0.15, min:0, max:0.5, label:'幅度' } }, ops:[{ kind:'brightness', value:'1 + amount*sin(t*2*PI)' }] };整段褪成黑白:{ kind:'grayscale', value:'p' }。传 clipId 就顺手挂到那一段上。预览、导出、see_frames 算的是同一份数值。",
+    description: "新建一个滤镜,放进素材库「转场/滤镜」页 —— 用户能看到、能复用,你也能挂到任意视频 / 图片片段上。整帧调色(曲线、通道混色、色偏、按亮度换色调)用这里的 curves / matrix —— 它们由 GPU 合成器做、不占预览的每拍预算;**不要为整帧调色去用 create_pixel_map**(那是逐像素选区用的)。ops 是依次作用的几步。查表 / 矩阵两种(不随时间变,不写 value):curves 曲线 { kind:'curves', rgb?:[…], r?:[…], g?:[…], b?:[…] },每张表 2~33 个 0~1 的数、均匀铺在输入 0~1 上、点之间线性插值,rgb 是三通道共用的简写,例:提亮中间调 { kind:'curves', rgb:[0,0.3,0.62,0.86,1] }、压暗蓝通道高光 { kind:'curves', b:[0,0.5,0.88] };matrix 颜色矩阵 { kind:'matrix', values:[rr,rg,rb, gr,gg,gb, br,bg,bb], offset?:[r,g,b] },values 每个 -4~4(原样是 [1,0,0,0,1,0,0,0,1]),offset 每通道 -1~1、在混色截断之后再加,例:青橙 { kind:'matrix', values:[1.1,0.05,0, 0,1,0.05, 0.02,0,0.9], offset:[-0.02,0,0.03] }。带数值的 kind 八种:brightness 亮度(1 原样,0~3,乘法)、contrast 对比度(1 原样,0~3)、saturate 饱和度(1 原样,0~2)、hue 色相旋转(度,-180~180)、grayscale 黑白(0~1)、sepia 复古褐(0~1)、invert 反色(0~1)、blur 模糊(片段框内的像素,0~40;框缩小了模糊跟着缩)。value 写数字,或写**随时间变化的表达式字符串**:t = 片段内秒数(从片段开头算,所以同一个滤镜挂到哪段都一样用)、d = 片段时长、p = t/d(0~1 进度),还能引用 params 里声明的参数;函数有 sin cos abs min max pow clamp lerp step smoothstep 等,常量 PI。例:{ name:'呼吸感', params:{ amount:{ default:0.15, min:0, max:0.5, label:'幅度' } }, ops:[{ kind:'brightness', value:'1 + amount*sin(t*2*PI)' }] };整段褪成黑白:{ kind:'grayscale', value:'p' }。传 clipId 就顺手挂到那一段上。预览、导出、see_frames 算的是同一份数值。",
     inputSchema: {
       type: "object",
       properties: {
@@ -33,10 +33,16 @@ export const effectsTools = [
           items: {
             type: "object",
             properties: {
-              kind: { type: "string", enum: ["brightness", "contrast", "saturate", "hue", "grayscale", "sepia", "invert", "blur"] },
-              value: { anyOf: [{ type: "number" }, { type: "string" }], description: "数字,或含 t / d / p / 参数名的表达式字符串" }
+              kind: { type: "string", enum: ["brightness", "contrast", "saturate", "hue", "grayscale", "sepia", "invert", "blur", "curves", "matrix"] },
+              value: { anyOf: [{ type: "number" }, { type: "string" }], description: "八种带数值的 kind 用:数字,或含 t / d / p / 参数名的表达式字符串。curves / matrix 不写" },
+              rgb: { type: "array", items: { type: "number" }, description: "curves:三通道共用的取样表,2~33 个 0~1 的数" },
+              r: { type: "array", items: { type: "number" }, description: "curves:红通道的表(优先于 rgb)" },
+              g: { type: "array", items: { type: "number" }, description: "curves:绿通道的表" },
+              b: { type: "array", items: { type: "number" }, description: "curves:蓝通道的表" },
+              values: { type: "array", items: { type: "number" }, description: "matrix:行优先 3×3,9 个 -4~4 的数" },
+              offset: { type: "array", items: { type: "number" }, description: "matrix:可选,[r,g,b] 每个 -1~1" }
             },
-            required: ["kind", "value"]
+            required: ["kind"]
           }
         },
         clipId: { type: "string", description: "可选:建完直接挂到这一段(视频 / 图片)" },

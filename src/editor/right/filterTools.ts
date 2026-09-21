@@ -8,7 +8,7 @@
 
 import { findClip, newId, type Project } from "../../kernel/project";
 import {
-  describeFilter, EXPR_HELP, FILTER_KINDS, isAnimated, normalizeClipParams, normalizeFilterDef,
+  describeFilter, EXPR_HELP, FILTER_KINDS, TABLE_KINDS, isAnimated, normalizeClipParams, normalizeFilterDef,
   type ClipFilter, type FilterDef,
 } from "../../kernel/filters.mjs";
 import { lookHint } from "../../mcp/tools/toolEcho";
@@ -81,6 +81,7 @@ export function createFilterTools(store: FilterStore) {
         kinds: Object.fromEntries(
           Object.entries(FILTER_KINDS).map(([k, s]) => [k, { label: s.label, min: s.min, max: s.max, neutral: s.neutral, hint: s.hint }]),
         ),
+        tableKinds: Object.fromEntries(Object.entries(TABLE_KINDS).map(([k, s]) => [k, { label: s.label, hint: s.hint }])),
         expressions: EXPR_HELP,
       };
     },

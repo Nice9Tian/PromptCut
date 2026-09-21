@@ -42,6 +42,76 @@ export const FILTER_KINDS = {
   blur: { label: "模糊", min: 0, max: 40, neutral: 0, unit: "px", hint: "高斯模糊,单位是片段框内的像素(框缩小了模糊也跟着缩;铺满画面的段就是画布像素)" },
 };
 
+/**
+ * 查表 / 矩阵类的步骤:整帧调色(曲线、通道混色、按通道偏移)。它们不是一个数,是一张表,所以不走
+ * value / 表达式那一套,也不随时间变(要动起来就和上面八种叠着用)。预览走 SVG 滤镜
+ * (feComponentTransfer type=table、feColorMatrix —— 合成器在 GPU 上做,不占主线程),导出走
+ * lutrgb / colorchannelmixer,两边都是「分段线性 + 每步截到 0~1」,口径一致。
+ *
+ *   { kind: "curves", rgb?: number[], r?: number[], g?: number[], b?: number[] }
+ *       每张表 2~33 个 0~1 的数,均匀铺在输入 0~1 上、点之间线性插值;rgb 是三个通道共用的简写,
+ *       单独给的通道优先;没给的通道原样。
+ *   { kind: "matrix", values: number[9], offset?: number[3] }
+ *       values 行优先 3×3:[rr rg rb  gr gg gb  br bg bb],每个 -4~4;offset 每通道 -1~1,
+ *       在混色**截断之后**再加(两边后端同一顺序)。
+ */
+export const TABLE_KINDS = {
+  curves: { label: "曲线", hint: "每通道一张 0~1 的取样表(2~33 点,线性插值);rgb 是三通道共用的简写" },
+  matrix: { label: "颜色矩阵", hint: "values 是行优先 3×3 混色矩阵(-4~4),offset 是混色之后每通道再加的量(-1~1)" },
+};
+export const MAX_TABLE_POINTS = 33;
+/** 一个滤镜里最多几步 curves:导出时每步是三条 lutrgb 表达式,太多会把 ffmpeg 的滤镜串撑得很长 */
+export const MAX_CURVES_OPS = 4;
+const IDENTITY_TABLE = [0, 1];
+const IDENTITY_MATRIX = [1, 0, 0, 0, 1, 0, 0, 0, 1];
+export const isTableKind = (kind) => Object.hasOwn(TABLE_KINDS, kind);
+
+function tableOf(raw, label) {
+  if (!Array.isArray(raw) || raw.length < 2 || raw.length > MAX_TABLE_POINTS) throw new FilterExprError(`${label} 要是 2~${MAX_TABLE_POINTS} 个 0~1 的数`);
+  return raw.map((v, k) => {
+    if (typeof v !== "number" || !Number.isFinite(v) || v < 0 || v > 1) throw new FilterExprError(`${label}[${k}] 要在 0~1 之间,收到 ${v}`);
+    return round6(v);
+  });
+}
+
+/** 校验并补齐一步查表 / 矩阵(存进工程的就是补齐后的形状) */
+function normalizeTableOp(op, i) {
+  if (op.value !== undefined) throw new FilterExprError(`ops[${i}] ${op.kind} 不用 value:curves 给 rgb / r / g / b 表,matrix 给 values(和 offset)`);
+  if (op.kind === "curves") {
+    const shared = op.rgb === undefined ? null : tableOf(op.rgb, `ops[${i}].rgb`);
+    const out = { kind: "curves" };
+    let any = !!shared;
+    for (const ch of ["r", "g", "b"]) {
+      if (op[ch] !== undefined) { out[ch] = tableOf(op[ch], `ops[${i}].${ch}`); any = true; }
+      else out[ch] = shared ? [...shared] : [...IDENTITY_TABLE];
+    }
+    if (!any) throw new FilterExprError(`ops[${i}] curves 至少给 rgb / r / g / b 里的一张表,例:{ "kind": "curves", "rgb": [0, 0.2, 0.55, 0.85, 1] }`);
+    return out;
+  }
+  if (!Array.isArray(op.values) || op.values.length !== 9) throw new FilterExprError(`ops[${i}] matrix 的 values 要是 9 个数(行优先 3×3),原样是 [1,0,0, 0,1,0, 0,0,1]`);
+  const values = op.values.map((v, k) => {
+    if (typeof v !== "number" || !Number.isFinite(v) || v < -4 || v > 4) throw new FilterExprError(`ops[${i}].values[${k}] 要在 -4~4 之间,收到 ${v}`);
+    return round6(v);
+  });
+  let offset = [0, 0, 0];
+  if (op.offset !== undefined) {
+    if (!Array.isArray(op.offset) || op.offset.length !== 3) throw new FilterExprError(`ops[${i}].offset 要是 3 个数 [r, g, b]`);
+    offset = op.offset.map((v, k) => {
+      if (typeof v !== "number" || !Number.isFinite(v) || v < -1 || v > 1) throw new FilterExprError(`ops[${i}].offset[${k}] 要在 -1~1 之间,收到 ${v}`);
+      return round6(v);
+    });
+  }
+  return { kind: "matrix", values, offset };
+}
+
+const sameList = (a, b) => a.length === b.length && a.every((v, k) => v === b[k]);
+/** 这一步是不是原样(导出时省掉、预览时不挂滤镜) */
+export function isNeutralOp(op) {
+  if (op.kind === "curves") return ["r", "g", "b"].every((ch) => sameList(op[ch] ?? IDENTITY_TABLE, IDENTITY_TABLE));
+  if (op.kind === "matrix") return sameList(op.values ?? IDENTITY_MATRIX, IDENTITY_MATRIX) && (op.offset ?? [0, 0, 0]).every((v) => v === 0);
+  return op.value === FILTER_KINDS[op.kind].neutral;
+}
+
 export const MAX_OPS = 12;
 export const MAX_PARAMS = 8;
 export const MAX_EXPR_LEN = 300;
@@ -258,8 +328,9 @@ export function normalizeFilterDef(input) {
   if (input.ops.length > MAX_OPS) throw new FilterExprError(`ops 最多 ${MAX_OPS} 步`);
   const ops = input.ops.map((op, i) => {
     const kind = op && op.kind;
+    if (isTableKind(kind)) return normalizeTableOp(op, i);
     const spec = Object.hasOwn(FILTER_KINDS, kind) ? FILTER_KINDS[kind] : null;
-    if (!spec) throw new FilterExprError(`ops[${i}].kind「${kind}」不认识,只有:${Object.keys(FILTER_KINDS).join(" / ")}`);
+    if (!spec) throw new FilterExprError(`ops[${i}].kind「${kind}」不认识,只有:${[...Object.keys(FILTER_KINDS), ...Object.keys(TABLE_KINDS)].join(" / ")}`);
     const value = op.value;
     if (typeof value === "number") {
       if (!Number.isFinite(value)) throw new FilterExprError(`ops[${i}].value 不是有限数字`);
@@ -275,6 +346,7 @@ export function normalizeFilterDef(input) {
     return { kind, value: value.trim() };
   });
 
+  if (ops.filter((op) => op.kind === "curves").length > MAX_CURVES_OPS) throw new FilterExprError(`curves 最多 ${MAX_CURVES_OPS} 步(几条曲线先合成一张表再给)`);
   const def = { name, ...(description ? { description } : null), ...(keys.length ? { params } : null), ops };
   // 抽几个时刻试算一遍:算出 NaN / 无穷(比如 log(0)、除以 0)当场说,别等到导出
   for (const d of [1, 10]) {
@@ -324,6 +396,11 @@ export function resolveOps(def, clipParams, t, d) {
   const vars = [...BASE_VARS, ...Object.keys(def.params || {})];
   const env = envOf(def, clipParams, t, d);
   return def.ops.map((op) => {
+    // 查表 / 矩阵不随时间变,原样带过去(工程文件里存的就是补齐后的形状;手改坏了的按原样算)
+    if (isTableKind(op.kind)) {
+      if (op.kind === "curves") return { kind: "curves", r: Array.isArray(op.r) ? op.r : IDENTITY_TABLE, g: Array.isArray(op.g) ? op.g : IDENTITY_TABLE, b: Array.isArray(op.b) ? op.b : IDENTITY_TABLE };
+      return { kind: "matrix", values: Array.isArray(op.values) && op.values.length === 9 ? op.values : IDENTITY_MATRIX, offset: Array.isArray(op.offset) && op.offset.length === 3 ? op.offset : [0, 0, 0] };
+    }
     const spec = FILTER_KINDS[op.kind];
     let v;
     // 表达式来自工程文件,可能是别的版本存的、手改过的(引用了已删掉的参数名):编译失败按中性算,
@@ -356,6 +433,8 @@ export function isAnimated(def) {
 export function describeFilter(def) {
   return def.ops
     .map((op) => {
+      if (op.kind === "curves") return `${TABLE_KINDS.curves.label} ${["r", "g", "b"].map((ch) => `${ch}:${(op[ch] ?? IDENTITY_TABLE).length}点`).join(" ")}`;
+      if (op.kind === "matrix") return `${TABLE_KINDS.matrix.label}${(op.offset ?? []).some((v) => v !== 0) ? " + 偏移" : ""}`;
       const spec = FILTER_KINDS[op.kind];
       return `${spec.label} ${typeof op.value === "number" ? `${op.value}${spec.unit ?? ""}` : op.value}`;
     })
@@ -370,7 +449,12 @@ export function describeFilter(def) {
  */
 export function cssFilter(ops, pxScale = 1) {
   const parts = [];
-  for (const { kind, value: v } of ops) {
+  for (const op of ops) {
+    const { kind, value: v } = op;
+    if (isTableKind(kind)) {
+      if (!isNeutralOp(op)) parts.push(`url(#${ensureSvgFilter(op)})`);
+      continue;
+    }
     if (v === FILTER_KINDS[kind].neutral) continue;
     if (kind === "brightness") parts.push(`brightness(${v})`);
     else if (kind === "contrast") parts.push(`contrast(${v})`);
@@ -382,6 +466,71 @@ export function cssFilter(ops, pxScale = 1) {
     else if (kind === "blur") parts.push(`blur(${round6(v * pxScale)}px)`);
   }
   return parts.join(" ");
+}
+
+/* ------------------------------------------------------------------ 预览:查表 / 矩阵的 SVG 滤镜 */
+
+const fmt = (list) => list.map((v) => round6(v)).join(" ");
+
+/** 同一份内容同一个 id:挂到多少段上文档里都只有一份 <filter> */
+export function svgFilterId(op) {
+  const text = JSON.stringify(op.kind === "curves" ? [op.r, op.g, op.b] : [op.values, op.offset]);
+  let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return `pc-f-${op.kind[0]}${(4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36)}`;
+}
+
+/**
+ * <filter> 里面的内容。color-interpolation-filters 必须是 sRGB:SVG 滤镜缺省在线性光里算,
+ * 而 CSS 的滤镜函数和导出那边的 lutrgb / colorchannelmixer 都是直接在 sRGB 数值上算。
+ * matrix 的 offset 单独成一步(feComponentTransfer linear),和导出那边「混色截断之后再加」同一顺序。
+ */
+export function svgFilterMarkup(op) {
+  if (op.kind === "curves") {
+    return `<feComponentTransfer>${["R", "G", "B"].map((C) => `<feFunc${C} type="table" tableValues="${fmt(op[C.toLowerCase()])}"/>`).join("")}</feComponentTransfer>`;
+  }
+  const m = op.values;
+  const mix = `<feColorMatrix type="matrix" values="${fmt([m[0], m[1], m[2], 0, 0, m[3], m[4], m[5], 0, 0, m[6], m[7], m[8], 0, 0, 0, 0, 0, 1, 0])}"/>`;
+  const off = op.offset ?? [0, 0, 0];
+  if (off.every((v) => v === 0)) return mix;
+  return `${mix}<feComponentTransfer>${["R", "G", "B"].map((C, k) => `<feFunc${C} type="linear" slope="1" intercept="${round6(off[k])}"/>`).join("")}</feComponentTransfer>`;
+}
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+const DEFS_ID = "pc-filter-defs";
+
+/**
+ * 保证当前文档里有这一步的 <filter>,返回它的 id。没有 document(Node 侧算导出链)时只回 id。
+ * 定义收在 body 末尾一个 0×0 的 <svg> 里 —— 不在场景根下面,所以不会进 HTML 快照,也不挡命中。
+ * 只增不删:一个工程用到的不同表有限,留着比在 render 里做引用计数便宜。
+ */
+export function ensureSvgFilter(op, doc = typeof document === "undefined" ? null : document) {
+  const id = svgFilterId(op);
+  if (!doc || !doc.body || doc.getElementById(id)) return id;
+  let host = doc.getElementById(DEFS_ID);
+  if (!host) {
+    host = doc.createElementNS(SVG_NS, "svg");
+    host.setAttribute("id", DEFS_ID);
+    host.setAttribute("width", "0");
+    host.setAttribute("height", "0");
+    host.setAttribute("aria-hidden", "true");
+    host.setAttribute("style", "position:absolute;width:0;height:0;overflow:hidden;pointer-events:none");
+    doc.body.appendChild(host);
+  }
+  const filter = doc.createElementNS(SVG_NS, "filter");
+  filter.setAttribute("id", id);
+  filter.setAttribute("color-interpolation-filters", "sRGB");
+  // 只改颜色、不扩边:滤镜区域就是元素自己的框(缺省会往外多算 10%)
+  filter.setAttribute("x", "0"); filter.setAttribute("y", "0"); filter.setAttribute("width", "100%"); filter.setAttribute("height", "100%");
+  filter.innerHTML = svgFilterMarkup(op);
+  host.appendChild(filter);
+  return id;
 }
 
 /* ------------------------------------------------------------------ 导出 / see_frames:ffmpeg */
@@ -432,8 +581,39 @@ function linearLut(slope, icpt) {
  * 结构只由种类决定(同一个滤镜不管 t 是多少,步骤的个数和种类都一样),导出逐帧改参数靠这一点。
  * blurScale:画布 1 像素在这条 ffmpeg 链里是多少像素(素材层按缩放后的框尺寸处理时就是框的 scale)。
  */
+/**
+ * 分段线性表 → lutrgb 表达式(val 是 0~255)。表达式里不能有逗号(sendcmd 和滤镜串都拿逗号当分隔),
+ * 所以不用 clip / min / max:写成「首段直线 + 每个拐点一个折页」,max(0, u) = (u + abs(u)) / 2。
+ * 末尾 +0.5 同 linearLut(lutrgb 先截断再夹)。斜率没变的拐点省掉,所以直线段多的表很短。
+ */
+export function tableLutExpr(table) {
+  const n = table.length - 1;
+  const w = 255 / n;
+  const slopeOf = (k) => (table[k + 1] - table[k]) * n; // 输出 0~255 对输入 0~255 的斜率
+  const signed = (c, body) => (c === 0 ? "" : `${c < 0 ? "-" : "+"}${Math.abs(c)}${body}`);
+  let expr = String(round6(table[0] * 255 + 0.5)) + signed(round6(slopeOf(0)), "*val");
+  for (let k = 1; k < n; k++) {
+    const x = round6(k * w);
+    expr += signed(round6((slopeOf(k) - slopeOf(k - 1)) / 2), `*(val-${x}+abs(val-${x}))`);
+  }
+  return expr;
+}
+
 export function ffmpegStages(ops, blurScale = 1) {
-  return ops.map(({ kind, value: v }) => {
+  return ops.flatMap((op) => {
+    const { kind, value: v } = op;
+    if (kind === "curves") return [{ filter: "lutrgb", fixed: true, opts: { r: tableLutExpr(op.r), g: tableLutExpr(op.g), b: tableLutExpr(op.b) } }];
+    if (kind === "matrix") {
+      const opts = {};
+      MIXER_KEYS.forEach((k, i) => { opts[k] = round6(op.values[i]); });
+      const stages = [{ filter: "colorchannelmixer", fixed: true, opts }];
+      const off = op.offset ?? [0, 0, 0];
+      if (off.some((x) => x !== 0)) {
+        const add = (x) => { const c = round6(x * 255 + 0.5); return `val${c < 0 ? "" : "+"}${c}`; };
+        stages.push({ filter: "lutrgb", fixed: true, opts: { r: add(off[0]), g: add(off[1]), b: add(off[2]) } });
+      }
+      return stages;
+    }
     if (kind === "brightness") return linearLut(v, 0);
     if (kind === "contrast") return linearLut(v, 0.5 - 0.5 * v);
     if (kind === "invert") return linearLut(1 - 2 * v, v);
@@ -477,7 +657,7 @@ export function ffmpegChain(stages, tag, blurPad) {
 
 /** 不随时间变的滤镜:中性的步骤直接省掉,全是中性返回 ""(调用方就不往链上接东西) */
 export function ffmpegStaticChain(ops, blurScale = 1) {
-  const live = ops.filter((op) => op.value !== FILTER_KINDS[op.kind].neutral);
+  const live = ops.filter((op) => !isNeutralOp(op));
   return live.length ? ffmpegChain(ffmpegStages(live, blurScale)) : "";
 }
 
@@ -496,6 +676,7 @@ export function sendcmdScript(def, clipParams, d, frames, tag, blurScale = 1, fp
     const stages = ffmpegStages(resolveOps(def, clipParams, t, d), blurScale);
     const cmds = [];
     stages.forEach((s, i) => {
+      if (s.fixed) return; // 查表 / 矩阵不随时间变,建链时给的就是终值,不用逐帧重发
       const name = `${s.filter}@${tag}_${i}`;
       const keys = s.filter === "colorchannelmixer" ? MIXER_KEYS : s.filter === "lutrgb" ? LUT_KEYS : ["sigma"];
       for (const k of keys) cmds.push(`${name} ${k} ${s.opts[k]}`);

@@ -181,3 +181,59 @@ test("sendcmd 脚本:数值没变的帧不发命令", () => {
   const { script } = sendcmdScript(def, undefined, 2, frames, "d", 1, 30);
   assert.equal(script.trim().split("\n").length, 2, "0 和 1 处各一次");
 });
+
+// ---------------------------------------------------------------- curves / matrix(查表与颜色矩阵)
+{
+  const F = await import("./filters.mjs");
+  test("curves / matrix:补齐形状、原样判定、描述", () => {
+    const def = F.normalizeFilterDef({ name: "调色", ops: [{ kind: "curves", rgb: [0, 0.3, 1], b: [0.1, 0.9] }, { kind: "matrix", values: [1, 0, 0, 0, 1, 0, 0, 0, 1] }] });
+    assert.deepEqual(def.ops[0], { kind: "curves", r: [0, 0.3, 1], g: [0, 0.3, 1], b: [0.1, 0.9] });
+    assert.deepEqual(def.ops[1], { kind: "matrix", values: [1, 0, 0, 0, 1, 0, 0, 0, 1], offset: [0, 0, 0] });
+    const ops = F.resolveOps(def, undefined, 0.5, 2);
+    assert.equal(F.isNeutralOp(ops[0]), false);
+    assert.equal(F.isNeutralOp(ops[1]), true);
+    assert.equal(F.isAnimated(def), false);
+    assert.match(F.describeFilter(def), /曲线/);
+  });
+  test("curves / matrix:不合规的当场拒", () => {
+    const bad = (ops, re) => assert.throws(() => F.normalizeFilterDef({ name: "x", ops }), re);
+    bad([{ kind: "curves" }], /至少给/);
+    bad([{ kind: "curves", rgb: [0.5] }], /2~33/);
+    bad([{ kind: "curves", rgb: [0, 1.2] }], /0~1/);
+    bad([{ kind: "curves", rgb: [0, 1], value: 1 }], /不用 value/);
+    bad([{ kind: "matrix", values: [1, 0, 0] }], /9 个数/);
+    bad([{ kind: "matrix", values: [9, 0, 0, 0, 1, 0, 0, 0, 1] }], /-4~4/);
+    bad([{ kind: "matrix", values: [1, 0, 0, 0, 1, 0, 0, 0, 1], offset: [2, 0, 0] }], /-1~1/);
+    bad(Array.from({ length: 5 }, () => ({ kind: "curves", rgb: [0, 0.5, 1] })), /最多 4 步/);
+  });
+  test("curves:lutrgb 表达式就是那张分段线性表,而且不含逗号", () => {
+    for (const table of [[0, 0.3, 0.62, 0.86, 1], [0.03, 0.5, 0.92], [1, 0], Array.from({ length: 33 }, (_, k) => Math.round(Math.pow(k / 32, 1.6) * 1e6) / 1e6)]) {
+      const expr = F.tableLutExpr(table);
+      assert.equal(expr.includes(","), false);
+      const fn = new Function("val", "abs", "return " + expr);
+      const n = table.length - 1;
+      for (let v = 0; v <= 255; v++) {
+        const x = (v / 255) * n, k = Math.min(n - 1, Math.floor(x));
+        const want = (table[k] + (x - k) * (table[k + 1] - table[k])) * 255 + 0.5;
+        assert.ok(Math.abs(fn(v, Math.abs) - want) < 1e-3, `table ${table.length} 点, val=${v}`);
+      }
+    }
+    assert.equal(F.tableLutExpr([0, 1]), "0.5+1*val");
+  });
+  test("curves / matrix:预览是 url(#id),同内容同 id;导出是固定步骤,sendcmd 不重发", () => {
+    const def = F.normalizeFilterDef({ name: "x", ops: [{ kind: "matrix", values: [1.1, 0.05, 0, 0, 1, 0.05, 0.02, 0, 0.9], offset: [-0.02, 0, 0.03] }, { kind: "curves", rgb: [0, 0.2, 1] }, { kind: "brightness", value: "1+0.1*sin(t)" }] });
+    const ops = F.resolveOps(def, undefined, 1, 4);
+    const css = F.cssFilter(ops);
+    assert.match(css, /^url\(#pc-f-m[0-9a-z]+\) url\(#pc-f-c[0-9a-z]+\) brightness\(/);
+    assert.equal(F.svgFilterId(ops[1]), F.svgFilterId({ kind: "curves", r: [0, 0.2, 1], g: [0, 0.2, 1], b: [0, 0.2, 1] }));
+    assert.match(F.svgFilterMarkup(ops[0]), /<feColorMatrix type="matrix" values="1.1 0.05 0 0 0 0 1 0.05 0 0 0.02 0 0.9 0 0 0 0 0 1 0"\/><feComponentTransfer><feFuncR type="linear" slope="1" intercept="-0.02"\/>/);
+    assert.match(F.svgFilterMarkup(ops[1]), /<feFuncG type="table" tableValues="0 0.2 1"\/>/);
+    const stages = F.ffmpegStages(ops);
+    assert.deepEqual(stages.map((s) => [s.filter, !!s.fixed]), [["colorchannelmixer", true], ["lutrgb", true], ["lutrgb", true], ["lutrgb", false]]);
+    const { script } = F.sendcmdScript(def, undefined, 4, [{ ts: 0, t: 0 }, { ts: 1, t: 1 }], "fx0");
+    assert.equal(/colorchannelmixer@/.test(script), false);
+    assert.match(script, /lutrgb@fx0_3 r val\*/); // 只有会动的那一步(下标 3)在发命令,下标和建链时一致
+    assert.equal(/lutrgb@fx0_[12] /.test(script), false);
+    assert.equal(F.ffmpegStaticChain(F.resolveOps(F.normalizeFilterDef({ name: "n", ops: [{ kind: "curves", rgb: [0, 1] }] }), undefined, 0, 1)), "");
+  });
+}
