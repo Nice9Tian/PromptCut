@@ -21,7 +21,7 @@ function withRoot(fn) {
 }
 
 const rec = (over = {}) => ({
-  identityKey: 'k1', fps: 30, frameMs: 4, stepMs: 3, catchUpMs: 120,
+  identityKey: 'k1', fps: 30, stepMs: 3, inlineMs: 40, rasterMs: 0, serializeMs: 6, catchUpMs: 120,
   kind: 'stepped', measuredAt: 1, device: 'dev-A', ...over,
 });
 
@@ -36,18 +36,18 @@ test('空 / 坏文件都当空表,不抛', () => {
 
 test('按 (identityKey, device) 去重:同键覆盖、异 device 并存', () => {
   withRoot((root) => {
-    const first = upsertCosts(root, [rec(), rec({ device: 'dev-B', frameMs: 40 })]);
+    const first = upsertCosts(root, [rec(), rec({ device: 'dev-B', stepMs: 40 })]);
     assert.equal(first.count, 2);
     assert.equal(first.added, 2);
 
-    const second = upsertCosts(root, [rec({ frameMs: 9, measuredAt: 2 })]);
+    const second = upsertCosts(root, [rec({ stepMs: 9, measuredAt: 2 })]);
     assert.equal(second.count, 2, '同键不新增一行');
     assert.equal(second.updated, 1);
 
     const all = loadCosts(root);
     assert.equal(all.length, 2);
-    assert.equal(all.find((r) => r.device === 'dev-A').frameMs, 9);
-    assert.equal(all.find((r) => r.device === 'dev-B').frameMs, 40, '另一台机器的成绩不受影响');
+    assert.equal(all.find((r) => r.device === 'dev-A').stepMs, 9);
+    assert.equal(all.find((r) => r.device === 'dev-B').stepMs, 40, '另一台机器的成绩不受影响');
   });
 });
 
@@ -62,9 +62,9 @@ test('demoted / pinnedHeavy 在复测时粘住,显式带值才覆盖', () => {
   withRoot((root) => {
     upsertCosts(root, [rec({ demoted: true, pinnedHeavy: true })]);
     // 探针复测上报的记录里没有这两个字段
-    upsertCosts(root, [rec({ frameMs: 11 })]);
+    upsertCosts(root, [rec({ stepMs: 11 })]);
     const kept = loadCosts(root)[0];
-    assert.equal(kept.frameMs, 11);
+    assert.equal(kept.stepMs, 11);
     assert.equal(kept.demoted, true, '降级旗被抹掉的话 K1 会永远跳过这张卡');
     assert.equal(kept.pinnedHeavy, true);
 
@@ -86,10 +86,18 @@ test('缺键的记录整条丢掉,不污染存档', () => {
 test('mergeCosts 是纯函数:不改入参', () => {
   const existing = [rec({ demoted: true })];
   const snapshot = JSON.stringify(existing);
-  const out = mergeCosts(existing, [rec({ frameMs: 7 })]);
+  const out = mergeCosts(existing, [rec({ stepMs: 7 })]);
   assert.equal(JSON.stringify(existing), snapshot);
-  assert.equal(out.costs[0].frameMs, 7);
+  assert.equal(out.costs[0].stepMs, 7);
   assert.equal(out.costs[0].demoted, true);
+});
+
+test('filterCosts 按 mode 过滤;缺字段的旧记录当 dev', () => {
+  const costs = [rec({ mode: 'dev' }), rec({ identityKey: 'k2', mode: 'build' }), rec({ identityKey: 'k3' })];
+  assert.deepEqual(filterCosts(costs, null, 'dev').map((r) => r.identityKey), ['k1', 'k3'], 'R1 之前的记录没有 mode,它们全是 dev 模式量的');
+  assert.deepEqual(filterCosts(costs, null, 'build').map((r) => r.identityKey), ['k2']);
+  assert.equal(filterCosts(costs, null, null).length, 3, '不给 mode 就不筛');
+  assert.equal(filterCosts(costs, 'dev-A', 'build').length, 1, '两个条件一起生效');
 });
 
 test('filterCosts 按 device 过滤;不给 device 就全给', () => {

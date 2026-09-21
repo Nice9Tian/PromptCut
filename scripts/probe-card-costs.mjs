@@ -6,6 +6,7 @@
  *                                     [--cards odometer,punch-pill | --project path/to/x.proc]
  *                                     [--fps 30] [--clip-sec 4] [--worst-frames 40]
  *                                     [--force] [--dry-run] [--limit N] [--gl-route perDocument]
+ *                                     [--mode dev|build] [--json out/xxx.json]
  *
  * 第 4 步的常驻探针(`ProbeGate` + `back`)做的是同一件事,只是由编辑器在加载遮罩里驱动;
  * 这个脚本是它的离线版,用来在第 4 步准入前把成绩先跑出来、把端点和键跑通。
@@ -18,32 +19,58 @@
  *   `projectCardGraph(缩水项目, getCard).nodes` 里那个片段的节点,`sourceVersion` 照
  *   `ExportView.tsx:108-118` 的算法(user 卡带 dependencies、内置卡带 builtinCardSourceFiles)。
  * - `direct` 卡:固定随机抽 8 个本地帧,各发一次 `setTime(t, { probe: true })`,
- *   `frameMs = max(elapsedMs)`、`stepMs = null`、`catchUpMs = 0`、`kind: 'random'`。
+ *   `stepMs = max(回包 stepMs)`、`catchUpMs = 0`、`kind: 'random'`。
  * - `stateful` 卡:`render(片段最后一帧, { jump: true, probe: true, maxCatchUp: Infinity })`
  *   从挂载帧一直推,舞台自己按一拍上限 B = 1000/fps × 70% 截断(`StageView.tsx` 的 `budgetMs`);
- *   推完 `catchUpMs` = 实测总时间,被截断的按「已推帧的平均 × 片段总帧数」外推。
- * - `capped = frameMs > B`。
+ *   推完 `catchUpMs` = 实测总时间(**活渲部分**,不含生成快照),被截断的按
+ *   「已推帧的平均 × 片段总帧数」外推。
+ * - `capped = stepMs > B`。
  * - `vtOk` / `seekOk` / `seekMs` **离线不测**(留空):它们要在舞台里按 K3 的重挂载配方复位、
  *   用 `pinner.syncIn` 钉子树虚拟时间,那是第 4 步常驻探针的事,父页这一侧够不到 `pinner`。
  *
- * # `frameMs` 是怎么量出来的(和第 4 步的差别,必须知道)
+ * # 四个数(任务书 3.8)
  *
- * `render({ probe: true })` 的回包只报**整趟**的 `{ elapsedMs, frames, truncated }`,没有逐帧数;
- * 而 `probe-frame` 事件到父页的时间不能拿来当逐帧耗时 —— `stageClock.advanceToAsync` 的
- * `yieldEvery: 8` 只在每 8 帧让出一个宏任务,这 8 条 postMessage 是在同一个让出点成批送达的,
- * 时间戳几乎相同。所以这里改用**逐帧单独发 render**:先 `render(mountSec, { jump: true })` 复位,
- * 再对第 1…N 帧各发一次续推 `render(t, { probe: true })`。续推一次正好推一帧,
- * 回包的 `elapsedMs` 是舞台用 `__pcRealNow` 量的、**不含 RPC 往返**(`StageView.tsx` 在
- * 尾部的 flushSync/tick/pin 之前就取了值),于是每一帧都有一个独立的墙钟数,取最差即 `frameMs`。
- * 同一段再跑一遍、这次**不带** `probe`(舞台就不冻结),取最差即 `stepMs`(不含 `__bfFreeze` 的单帧最差)。
+ * 旧的 `frameMs`(含生成快照的单帧最差)**已删,不留兼容**。现在分开量、分开报:
+ *   - `stepMs`    活渲单帧最差,**唯一进判重的数**;
+ *   - `inlineMs`  样式内联单帧最差;
+ *   - `rasterMs`  画布栅格化单帧最差(没有画布的卡是 0);
+ *   - `serializeMs` 序列化单帧最差。
+ * 带 `probe: true` 的 `setTime` 里那次**真实 rAF 等待不计入任何一个数**(舞台在等 rAF 之前
+ * 就取了 `stepMs`,三段快照耗时由 `createSnapshot` 自己量)—— 不这么做的话随机访问卡的
+ * 成绩里至少含一个垂直同步(约 17 ms)。
+ *
+ * # 单帧最差是怎么量出来的(和第 4 步的差别,必须知道)
+ *
+ * `render({ probe: true })` 的回包只报**整趟**的累计,没有逐帧数;而 `probe-frame` 事件到
+ * 父页的时间不能拿来当逐帧耗时 —— `stageClock.advanceToAsync` 的 `yieldEvery: 8` 只在每 8 帧
+ * 让出一个宏任务,这 8 条 postMessage 是在同一个让出点成批送达的,时间戳几乎相同。
+ * 所以这里改用**逐帧单独发 render**:先 `render(mountSec, { jump: true })` 复位,
+ * 再对第 1…N 帧各发一次续推 `render(t, { probe: true })`。续推一次正好推一帧,回包的
+ * `stepMs` / `snapshot.*` 是舞台用 `__pcRealNow` 量的、**不含 RPC 往返**,于是每一帧都有
+ * 四个独立的数,各取最差。
+ * **`stepMs` 另跑一趟不带 `probe` 的**(舞台就不生成快照),取最差 —— 那才是纯活渲,
+ * 和任务书第 2 节已有的两组数(28 核 30 fps / 2 核 60 fps)口径一致、可以直接并排比。
  * 逐帧发 render 会比一趟推完略贵(每帧多一次 flushSync + tick + pin),所以这里的
- * `frameMs` / `stepMs` 是**偏保守(偏大)**的估计;整趟的平均值一并打印出来做对照。
+ * 四个数都是**偏保守(偏大)**的估计;整趟的平均值一并打印出来做对照。
  * N 由 `--worst-frames` 给(缺省 40 帧 ≈ 入场动画全段),够不到片段尾部的长卡在表里标 `worstN`。
  *
  * # 已测过的卡会跳过
  *
  * 开跑前 `GET /api/data/costs?device=<本机>`,`(identityKey, device)` 已有记录
  * **且 `demoted !== true`** 的整张跳过(pinned 渲染 5 末句:身份没变就直接复用)。`--force` 强制重测。
+ *
+ * # dev 还是 build
+ *
+ * `--mode` 缺省自动判:`GET <origin>/@vite/client` 回 JS 模块就是 dev server,回别的
+ * (`vite preview` 走 SPA 兜底把 `dist/index.html` 回过来,**状态码同样是 200**)就是构建产物。
+ * 记录里带 `mode`,而且 **`mode` 同时拼进 `device` 串** —— `costs-store.mjs` 的去重键是
+ * `${identityKey} ${device}`,不拼进去的话两种模式会互相覆盖,而两组数都要留着
+ * (任务书 3.1:桌面版跑的就是 dev server,dev 的数才是真实运行环境;build 的数是给将来的
+ *  在线浏览器模式的)。服务端把 `device` 当不透明字符串,所以键的代码一行都不用改。
+ *
+ * **注意**:宿主页的卡片注册表是直接 `import('/src/cards/index.ts')` 拿的,只有 dev server
+ * 供得起;要在 `vite preview` 的构建产物上跑,还得先把注册表打成一个独立的探针 kit
+ * (参考实现里的 `scripts/probes/build-probe-kit.mjs`),R1 没做,见报告。
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -68,6 +95,9 @@ const glRouteArg = flag('--gl-route');
 const limit = Number(flag('--limit', '0')) || 0;
 const force = has('--force');
 const dryRun = has('--dry-run');
+const modeArg = flag('--mode');
+/** 这一趟的全部原始数(每卡的分位数、trunc、maxAt…),给报告和「跑两遍比差异」用 */
+const outJson = flag('--json');
 
 const HOST_PATH = '/__probe-card-costs-host';
 /** 用户 pinned 渲染 5 的一拍预算 */
@@ -227,22 +257,28 @@ window.__probeOne = async (job) => {
     const picks = new Set();
     for (let i = 0; i < 64 && picks.size < Math.min(8, durationFrames); i++) picks.add(Math.floor(rnd() * durationFrames));
     const frames = [...picks].sort((a, b) => a - b);
-    const each = [];
+    const each = [], inline = [], raster = [], serialize = [];
     for (const n of frames) {
       const r = await rpc.setTime(n / fps, { probe: true });
-      each.push(Number(r?.elapsedMs) || 0);
+      // stepMs 是舞台在等那一次真 rAF **之前**取的,所以这里拿到的已经不含垂直同步(3.8 末条)
+      each.push(Number(r?.stepMs) || 0);
+      inline.push(Number(r?.snapshot?.inlineMs) || 0);
+      raster.push(Number(r?.snapshot?.rasterMs) || 0);
+      serialize.push(Number(r?.snapshot?.serializeMs) || 0);
     }
     out.kind = 'random';
-    out.frameMs = maxOf(each);
-    out.stepMs = null;
+    out.stepMs = maxOf(each);
+    out.inlineMs = maxOf(inline);
+    out.rasterMs = maxOf(raster);
+    out.serializeMs = maxOf(serialize);
     out.catchUpMs = 0;
     out.samples = each.length;
     out.each = each;
-    out.frameP50 = pct(each, 0.5);
-    out.frameP90 = pct(each, 0.9);
+    out.stepP50 = pct(each, 0.5);
+    out.stepP90 = pct(each, 0.9);
     out.firstMs = each[0] ?? 0;
     out.truncated = false;
-    out.capped = out.frameMs > budget;
+    out.capped = out.stepMs > budget;
     return out;
   }
 
@@ -253,15 +289,19 @@ window.__probeOne = async (job) => {
   const pass = await rpc.render(target, { jump: true, probe: true, maxCatchUp: Infinity });
   const frames = Number(pass?.frames) || 0;
   const elapsed = Number(pass?.elapsedMs) || 0;
+  // catchUpMs 只算活渲(任务书 3.3):舞台回的 stepMs 已经是 elapsedMs 减掉这一趟生成快照的时间
+  const live = Number(pass?.stepMs);
+  const liveMs = Number.isFinite(live) ? live : elapsed;
   const truncated = !!pass?.truncated;
   out.kind = 'stepped';
   out.runFrames = frames;
   out.runMs = elapsed;
+  out.runStepMs = liveMs;
   out.truncated = truncated;
-  out.avgFrameMs = frames ? elapsed / frames : elapsed;
+  out.avgFrameMs = frames ? liveMs / frames : liveMs;
   out.probeFrameEvents = window.__probeFrames;
   // 推完了就是实测总时间;被截断的按已推帧的平均外推到整段(任务书 K1)
-  out.catchUpMs = truncated ? (frames ? (elapsed / frames) * totalFrames : elapsed) : elapsed;
+  out.catchUpMs = truncated ? (frames ? (liveMs / frames) * totalFrames : liveMs) : liveMs;
 
   /* 第二、三趟:逐帧单独发 render,拿真正的「单帧最差」。见文件头的说明。 */
   const n = Math.max(1, Math.min(totalFrames - 1, job.worstFrames));
@@ -271,25 +311,28 @@ window.__probeOne = async (job) => {
     const each = [];
     for (let k = 1; k <= n; k++) {
       const r = await rpc.render(k / fps, probe ? { probe: true, maxCatchUp: Infinity } : { maxCatchUp: Infinity });
-      each.push(Number(r?.elapsedMs) || 0);
+      each.push(probe
+        ? { inline: Number(r?.snapshot?.inlineMs) || 0, raster: Number(r?.snapshot?.rasterMs) || 0, serialize: Number(r?.snapshot?.serializeMs) || 0 }
+        : Number(r?.stepMs ?? r?.elapsedMs) || 0);
     }
     return each;
   };
   window.__probeFrames = 0;
-  const withFreeze = await step(true);
+  const withSnapshot = await step(true);
   const bare = await step(false);
-  out.frameMs = maxOf(withFreeze);
+  out.inlineMs = maxOf(withSnapshot.map((s) => s.inline));
+  out.rasterMs = maxOf(withSnapshot.map((s) => s.raster));
+  out.serializeMs = maxOf(withSnapshot.map((s) => s.serialize));
   out.stepMs = maxOf(bare);
   // 单帧最差几乎总是落在重挂载后的头一两帧(React 建树 + 第一次 getComputedStyle 全量求值),
   // 所以把分位数和「最差落在第几帧」一并记下来,免得只看 max 时误以为整段都这么贵。
-  out.frameP50 = pct(withFreeze, 0.5);
-  out.frameP90 = pct(withFreeze, 0.9);
   out.stepP50 = pct(bare, 0.5);
   out.stepP90 = pct(bare, 0.9);
-  out.firstMs = withFreeze[0] ?? 0;
-  out.frameMaxAt = withFreeze.indexOf(out.frameMs) + 1;
-  out.freezeMs = Math.max(0, out.frameP50 - out.stepP50);
-  out.capped = out.frameMs > budget;
+  out.inlineP50 = pct(withSnapshot.map((s) => s.inline), 0.5);
+  out.inlineP90 = pct(withSnapshot.map((s) => s.inline), 0.9);
+  out.firstMs = bare[0] ?? 0;
+  out.stepMaxAt = bare.indexOf(out.stepMs) + 1;
+  out.capped = out.stepMs > budget;
   return out;
 };
 </script></body></html>`;
@@ -315,6 +358,21 @@ function jobsFromProject(file, fps) {
 }
 
 /* ------------------------------------------------------------------ 端点 */
+
+/**
+ * dev server 还是 `vite preview` 的构建产物。判据是 `/@vite/client` 回的 **Content-Type**:
+ * dev server 回 JS 模块,`vite preview` 走 SPA 兜底把 `dist/index.html` 回过来
+ * (**状态码同样是 200**,所以不能拿 `res.ok` 判)。`--mode` 可以强制。
+ */
+async function detectMode() {
+  if (modeArg === 'dev' || modeArg === 'build') return modeArg;
+  try {
+    const res = await fetch(`${origin}/@vite/client`, { method: 'GET' });
+    return res.ok && /javascript|ecmascript/i.test(res.headers.get('content-type') || '') ? 'dev' : 'build';
+  } catch {
+    return 'build';
+  }
+}
 
 async function getCosts(device) {
   const res = await fetch(`${origin}/api/data/costs?device=${encodeURIComponent(device)}`);
@@ -346,6 +404,8 @@ function table(rows, columns) {
   return [line(head), width.map((w) => '-'.repeat(w)).join('  '), ...body.map(line)].join('\n');
 }
 
+const mode = await detectMode();
+
 const browser = await puppeteer.launch({
   headless: true,
   // 关掉后台节流:舞台补跑每 8 帧让出一个真 setTimeout(stageClock 的 yieldEvery),
@@ -371,7 +431,14 @@ try {
 
   const parts = await page.evaluate(() => window.__deviceParts());
   if (glRouteArg) parts.glRoute = glRouteArg;
-  const device = [parts.ua, parts.renderer, `lowMemory=${parts.lowMemory}`, `offscreenGl=${parts.offscreenGl}`, `glRoute=${parts.glRoute}`].join(' | ');
+  /*
+   * `mode` 也拼进 device:`costs-store.mjs` 的去重键是 `${identityKey} ${device}`,不拼进去的话
+   * dev 那一趟和 build 那一趟会互相覆盖,而两组都要留着(见文件头)。服务端只把 device 当
+   * 不透明字符串,不解析,所以键的代码不用动。
+   */
+  const device = [parts.ua, parts.renderer, `lowMemory=${parts.lowMemory}`, `offscreenGl=${parts.offscreenGl}`,
+    `glRoute=${parts.glRoute}`, `mode=${mode}`].join(' | ');
+  console.log(`mode: ${mode}（${origin}）`);
   console.log(`device: ${device}\n`);
 
   let jobs;
@@ -415,16 +482,27 @@ try {
       results.push({ ...job, error: String(err && err.message || err) });
       continue;
     }
-    console.log(`frameMs=${num(out.frameMs, 2)} catchUpMs=${num(out.catchUpMs, 0)}${out.capped ? ' CAPPED' : ''}`);
+    console.log(`stepMs=${num(out.stepMs, 2)} inline=${num(out.inlineMs, 1)} raster=${num(out.rasterMs, 1)} serial=${num(out.serializeMs, 1)} catchUpMs=${num(out.catchUpMs, 0)}${out.capped ? ' CAPPED' : ''}`);
     results.push(out);
     records.push({
       identityKey: out.identityKey,
       fps: out.fps,
-      frameMs: Number(out.frameMs.toFixed(3)),
-      stepMs: out.stepMs === null ? null : Number(out.stepMs.toFixed(3)),
+      // 四个数分开报(任务书 3.8);旧的 frameMs 已删,不留兼容
+      stepMs: Number(out.stepMs.toFixed(3)),
+      inlineMs: Number(out.inlineMs.toFixed(3)),
+      rasterMs: Number(out.rasterMs.toFixed(3)),
+      serializeMs: Number(out.serializeMs.toFixed(3)),
       catchUpMs: Number(out.catchUpMs.toFixed(3)),
       ...(out.capped ? { capped: true } : {}),
       kind: out.kind,
+      mode,
+      /*
+       * **显式写 false**(任务书 3.3):`costs-store.mjs` 的 STICKY_FLAGS 是「新记录没带这个字段
+       * 就沿用旧值,带了哪怕 false 也以新的为准」,而存档是落盘的 —— 不显式带,K6 写过一次 true
+       * 之后每次重测都会被贴回 true,这张卡就永久判重了。「只在本次会话生效」正是靠这一条成立。
+       * `pinnedHeavy` 留给将来的人工钉死,本任务不写它(3.3)。
+       */
+      demoted: false,
       measuredAt: Date.now(),
       device,
     });
@@ -435,17 +513,18 @@ try {
   console.log(table(results.filter((r) => !r.error), [
     { title: 'card', get: (r) => r.cardId },
     { title: 'kind', get: (r) => r.kind },
-    { title: 'frameMs', get: (r) => num(r.frameMs, 2) },
-    { title: 'stepMs', get: (r) => (r.stepMs === null || r.stepMs === undefined ? '—' : num(r.stepMs, 2)) },
+    { title: 'stepMs', get: (r) => num(r.stepMs, 2) },
+    { title: 'inlineMs', get: (r) => num(r.inlineMs, 2) },
+    { title: 'rasterMs', get: (r) => num(r.rasterMs, 2) },
+    { title: 'serialMs', get: (r) => num(r.serializeMs, 2) },
     { title: 'catchUpMs', get: (r) => num(r.catchUpMs, 0) },
-    { title: 'p50', get: (r) => num(r.frameP50, 2) },
-    { title: 'p90', get: (r) => num(r.frameP90, 2) },
+    { title: 'stepP50', get: (r) => num(r.stepP50, 2) },
+    { title: 'stepP90', get: (r) => num(r.stepP90, 2) },
     { title: '1st', get: (r) => num(r.firstMs, 2) },
-    { title: 'freeze≈', get: (r) => (r.kind === 'stepped' ? num(r.freezeMs, 2) : '—') },
     { title: 'avg/frame', get: (r) => num(r.avgFrameMs, 2) },
     { title: 'run', get: (r) => (r.kind === 'stepped' ? `${r.runFrames}/${r.durationFrames}` : `${r.samples}`) },
     { title: 'worstN', get: (r) => r.worstN ?? '—' },
-    { title: 'maxAt', get: (r) => r.frameMaxAt ?? '—' },
+    { title: 'maxAt', get: (r) => r.stepMaxAt ?? '—' },
     { title: 'trunc', get: (r) => (r.truncated ? 'yes' : 'no') },
     { title: 'capped', get: (r) => (r.capped ? 'YES' : '') },
   ]));
@@ -467,6 +546,15 @@ try {
     if (missing.length) exitCode = 1;
   } else if (dryRun) {
     console.log('\n--dry-run:没有写 /api/data/costs。');
+  }
+
+  if (outJson) {
+    const file = path.resolve(outJson);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({ origin, mode, device, fps: fpsArg, clipSec, worstFrames, B: budgetOf(fpsArg),
+      at: new Date().toISOString(), results, skipped: skipped.map((s) => s.cardId),
+      broken: broken.map((b) => ({ cardId: b.cardId, error: b.error })) }, null, 2), 'utf8');
+    console.log(`\n原始数据写到 ${file}`);
   }
 
   const noise = errors.filter((e) => !/favicon|React DevTools|Failed to load resource/i.test(e));
