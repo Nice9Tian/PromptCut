@@ -198,8 +198,8 @@ pinned 架构 4 / 5 的落点因为 vision 拆分而变清楚了：**Agent 专�
 ### R0 清账（半天）
 1. （已做，`5157f91`）主工作区的探针改动和 `docs/g0-a-webview2-probe.md` 提交。
 2. `scripts/verify-unified-frames.mjs` 在 `7f10ebe` 上就不过（见 R1 的遗留）：查清「`see_frames` 第二次取帧从 mov 出」和「导出与 `see_frames` 不再逐字节相等」是哪次改动引入的，是脚本过期还是行为回退。
-4. `result_decouple.md` 6.2 的遗留：`vite.config.ts:76-80` 的 `server.watch.ignored` **已经有** `**/out/**`，报告说冷启动仍被 `out/frame-library/` 拖慢——先量一次仓库根 dev server 的冷启动，确认慢在哪（监听器初扫还是别处）再动；最省事的兜底是给 `frame-library` 加 GC（原 F1）。
-3. （已做）给 `AGY-TASK-cloud-doc-and-write-race.md` 文首加一句「渲染管线部分以 `render_pipeline_restructure.md` 为准」。
+3. `result_decouple.md` 6.2 的遗留：`vite.config.ts:76-80` 的 `server.watch.ignored` **已经有** `**/out/**`，报告说冷启动仍被 `out/frame-library/` 拖慢——先量一次仓库根 dev server 的冷启动，确认慢在哪（监听器初扫还是别处）再动；最省事的兜底是给 `frame-library` 加 GC（原 F1）。
+4. （已做）给 `AGY-TASK-cloud-doc-and-write-race.md` 文首加一句「渲染管线部分以 `render_pipeline_restructure.md` 为准」。
 
 ### R1 差异样式内联收尾（原 3b 步）——已完成，合并提交 `e67390e`（2026-09-22）
 **结果**：`tsc` 零错误，`npm test` 1472 / 1471 通过 / 0 失败 / 1 跳过；新旧快照重放逐像素比对 8 / 8 相同（`lottie-bodymovin` / `growth-curve` / `odometer` / `scene-3d` 各两帧，探针 `scripts/probes/snapshot-diff-compare.mjs`）；导出 240 / 240 帧逐字节相同。单帧快照 max 23107 → 915 KB，超 300 KB 的 DOM 卡只剩 `lottie-bodymovin`（915 KB）和 `lottie-navidad`（855 KB），DOM 卡 p90 185.8 KB（不算 lottie 47.8 KB），canvas 位图 p90 / max 466 / 628 KB。成本探针 62 张全部测通并落盘（dev 模式，`demoted: false`）：30 fps 下 `stepMs` p50 / p90 / max = 1.3 / 2.7 / 6.6 ms、0 张判重；2 核 60 fps 下 2.4 / 4.9 / 21.2 ms、3 张越线。`inlineMs` p50 / p90 / max = 6.1 / 23 / 367 ms，`rasterMs` 0.1 / 36 / 94 ms，`serializeMs` 0.8 / 1.9 / 149 ms。**实现时补定的三条**：`direct` 卡也有 `stepMs`（在等 rAF 之前取），类型收紧成 `number`；`cloneScene` 的时间并进 `inlineMs`、`stripMedia` 并进 `serializeMs`；`SNAPSHOT_FILES` 随拆出来的三个模块一起加（`solid.ts` 照旧不进）。**没做**：`configurePreviewServer` 和 build 模式那一趟（光补四个插件跑不起来，`dist/` 里没有 `/src/**`，还要一套探针 kit；留给在线浏览器模式）。**遗留给 R0**：`scripts/verify-unified-frames.mjs` 在 R1 之前的 `7f10ebe` 上就不过（`:46` 的 `'mov' !== 'rendered'`，放宽后 `:55` 导出与 `see_frames` 不等），不是 R1 弄坏的。以下是动工前写的范围，留作记录。
