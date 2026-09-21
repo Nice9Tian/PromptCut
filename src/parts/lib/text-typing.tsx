@@ -1,4 +1,4 @@
-import type { PartDef, PartProps } from "../types";
+import type { PartDef, PartProps } from "../../kernel/partTypes";
 import { TypingAnimation } from "../../cards/magicui/vendor/typing-animation";
 import { fitOr } from "../fit";
 

@@ -1,6 +1,6 @@
 import type { Project } from "../kernel/project";
-import { invalidatePrerenderBase, prerenderUrl } from "../editor/prerender";
-import { alignMirror, resyncDataMirror } from "../editor/dataMirror";
+import { invalidatePrerenderBase, prerenderUrl } from "./prerender";
+import { alignMirror, resyncDataMirror } from "./dataMirror";
 
 export type FrameTarget = "user" | "prerender";
 export type FrameLane = "user" | "inter_face" | "agent" | "background" | "archive" | "playback";

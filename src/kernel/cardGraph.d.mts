@@ -5,7 +5,7 @@ export interface UnifiedCardDefinition {
   id: string; name?: string; language: 'tsx' | 'builtin';
   kind: 'animation' | 'filter' | 'transition' | 'emphasis' | 'audio';
   entry?: string; source?: string; defaults?: Record<string, unknown>;
-  need_prerendering?: boolean; compositing?: import('../render/frameMode.mjs').CardCompositing;
+  need_prerendering?: boolean; compositing?: import('./frameMode.mjs').CardCompositing;
   styleKeys?: string[] | null;
 }
 export interface CardInput { nodeId: string; offset?: number; rate?: number }

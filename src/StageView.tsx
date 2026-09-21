@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
-import { Stage } from "./kernel/Stage";
+import { Stage } from "./render/Stage";
 import { flattenOverlay, type Project } from "./kernel/project";
 import { projectCardGraph } from "./kernel/cardGraph.mjs";
 import { getCard } from "./kernel/registry";
@@ -599,7 +599,7 @@ export default function StageView() {
          * 三维的 perspective **不在这里**。这一格和卡片之间还隔着 Stage 的根和 AnimClock
          * 两层 div,而 CSS 的 perspective 只作用于直接子元素 —— 挂在这里等于没挂
          * (实测卡片高度纹丝不动,rotateY 只剩仿射拉伸,而且不报错)。
-         * 它挂在 kernel/Stage.tsx 里卡片的直接父元素上,预览和导出共用同一处。
+         * 它挂在 render/Stage.tsx 里卡片的直接父元素上,预览和导出共用同一处。
          */
       }}
     >

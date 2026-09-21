@@ -1,4 +1,4 @@
-import type { PartDef, PartProps } from "../types";
+import type { PartDef, PartProps } from "../../kernel/partTypes";
 import { ParticlesView } from "../../cards/native/particles";
 import { assetOptions } from "../../cards/catalogAssets";
 

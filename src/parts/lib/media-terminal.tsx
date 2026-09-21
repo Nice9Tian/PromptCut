@@ -1,4 +1,4 @@
-import type { PartDef, PartProps } from "../types";
+import type { PartDef, PartProps } from "../../kernel/partTypes";
 import "../../cards/native/hud.css";
 import { fitOr } from "../fit";
 

@@ -1,5 +1,5 @@
 import type { ClipFrame, Control, PartInstance } from "./types";
-import type { PartDef } from "../parts/types";
+import type { PartDef } from "./partTypes";
 import { frameBox, resolveFrame, type Box, type Size } from "./layout.ts";
 
 /**

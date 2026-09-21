@@ -1,6 +1,6 @@
 import { motion, useMotionValue, animate } from "motion/react";
 import { useEffect, useId, useRef } from "react";
-import type { PartDef, PartProps } from "../types";
+import type { PartDef, PartProps } from "../../kernel/partTypes";
 import { easeExpoOut, accentOf } from "../../cards/native/hud";
 import { fitOr } from "../fit";
 

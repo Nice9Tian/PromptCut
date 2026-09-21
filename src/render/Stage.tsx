@@ -1,18 +1,18 @@
-import { AnimClock } from "./AnimClock";
+import { AnimClock } from "../kernel/AnimClock";
 import { memo, useEffect, useMemo, useRef } from "react";
-import { frameCss } from "./layout";
-import { perspectivePx } from "./space3d";
-import { motionAt } from "./motion";
-import { cardOpacityAt, hasOpacityControls } from "./project";
-import { emphasisFilter } from "./emphasis";
-import { getCard } from "./registry";
+import { frameCss } from "../kernel/layout";
+import { perspectivePx } from "../kernel/space3d";
+import { motionAt } from "../kernel/motion";
+import { cardOpacityAt, hasOpacityControls } from "../kernel/project";
+import { emphasisFilter } from "../kernel/emphasis";
+import { getCard } from "../kernel/registry";
 import { PartTree } from "./PartTree";
-import { GraphCard } from "../render/cards/GraphCard";
-import { frameBox } from "./layout";
-import type { CardDef, CardProps, Timeline } from "./types";
-import { cardMountedAt } from "../render/frameWindow.mjs";
-import { clipFrameMode } from "../render/frameMode.mjs";
-import { guardCompositing, shouldGuard } from "../render/capabilityGuard";
+import { GraphCard } from "./cards/GraphCard";
+import { frameBox } from "../kernel/layout";
+import type { CardDef, CardProps, Timeline } from "../kernel/types";
+import { cardMountedAt } from "./frameWindow.mjs";
+import { clipFrameMode } from "../kernel/frameMode.mjs";
+import { guardCompositing, shouldGuard } from "./capabilityGuard";
 
 // Keep direct-evaluation cards at the requested time while other cards replay.
 // Their CSS/DOM stays in the same stacking tree (including paper/glass styles),

@@ -1,6 +1,6 @@
 import type { Project } from "../kernel/project";
 import { getState, subscribe } from "../store/project";
-import { changedClips, projectHash, type ProjectPatch } from "../render/changedClips.mjs";
+import { changedClips, projectHash, type ProjectPatch } from "./changedClips.mjs";
 
 /**
  * 数据管理的只读镜像:编辑页把项目(带版本号)推给服务端一份

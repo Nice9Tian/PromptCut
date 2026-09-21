@@ -1,5 +1,5 @@
 import { mountFrameOf } from './frameWindow.mjs';
-import { normalizeFrameMode } from './frameMode.mjs';
+import { normalizeFrameMode } from '../kernel/frameMode.mjs';
 
 /** Frames during which Stage keeps a clip mounted, as [first, last], or null.
  * Same comparisons as planFrameWindow and cardMountedAt, including the mount

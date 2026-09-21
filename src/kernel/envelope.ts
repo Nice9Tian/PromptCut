@@ -1,5 +1,5 @@
 import type { CardDef, CardPart, CardTiming, ClipFrame, PartInstance } from "./types";
-import { getPart } from "../parts/registry.ts";
+import { getPart } from "./partRegistry.ts";
 import { partsTiming, placeParts, validatePartTree, type PartLookup } from "./parts.ts";
 import type { Project, TrackClip } from "./project";
 import { findClip } from "./project.ts";

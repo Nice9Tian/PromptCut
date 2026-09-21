@@ -7,7 +7,7 @@
  * 所以文字、图形、抠像的边缘会被准确地描出来。描边就是同一招绕一圈:
  * 八个方向各投一次零模糊的影,合起来就是一圈等宽的边。
  *
- * 纯字符串计算,不碰 DOM:舞台(kernel/Stage.tsx)、预览的素材层、导出逐帧截图
+ * 纯字符串计算,不碰 DOM:舞台(render/Stage.tsx)、预览的素材层、导出逐帧截图
  * 用的是同一份 filter,所以预览什么样导出就什么样。
  */
 export type EmphasisKind = "shadow" | "outline";

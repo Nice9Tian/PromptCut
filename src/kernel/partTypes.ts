@@ -1,5 +1,5 @@
 import type { ComponentType } from "react";
-import type { ClipFrame, Control } from "../kernel/types";
+import type { ClipFrame, Control } from "./types";
 
 /**
  * 部件库的契约。
@@ -7,7 +7,7 @@ import type { ClipFrame, Control } from "../kernel/types";
  * 部件是**可独立渲染的最小单元**:一个标题、一列要点、一个环形进度、一段 Lottie。
  * 卡片以前是一整块 JSX,部件在外面只是「说明书」(CardDef.parts);现在部件真的能单独摆、
  * 单独进场、单独换参数 —— 组合卡(cardId "composite")的 clip.parts 就是一棵部件实例树,
- * 舞台按树逐级渲染和摆位(kernel/PartTree.tsx)。Agent 用 add_part / set_part / remove_part
+ * 舞台按树逐级渲染和摆位(render/PartTree.tsx)。Agent 用 add_part / set_part / remove_part
  * 增删改这棵树,操作的仍然是封装(kernel/envelope.ts),从没碰过组件源码。
  *
  * 部件和卡片的分工:卡片是「一种组合方式」(一整套配好的部件 + 位置 + 时序),部件是零件。

@@ -146,7 +146,7 @@ function Scene3DCard({ params, t = 0, stage }: CardProps<Params>) {
     /*
      * `preserveDrawingBuffer: true` 不是可有可无的:没有它,画完之后画布的像素随时可能被清掉,
      * `drawImage(canvas)` 读回来是空的。而编辑器有两处要读这张画布的像素 ——
-     * `contentBox.ts` 量「这张卡真正画了东西的那一块」(不读就退回整块画布,
+     * `render/contentBox.ts` 量「这张卡真正画了东西的那一块」(不读就退回整块画布,
      * Agent 会以为它盖住全屏),以及实体模式取墨色。代价是每帧多留一份缓冲。
      */
     const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true, preserveDrawingBuffer: true });

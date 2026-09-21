@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { JSX } from "react";
-import { prerenderUrl, usePrerenderBase, withBase } from "../prerender";
+import { prerenderUrl, usePrerenderBase, withBase } from "../../render/prerender";
 
 /**
  * 聊天栏里一步工具的「看得见的结果」:当时返回的位图、改了哪几个参数、前后两段动图。

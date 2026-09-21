@@ -1,4 +1,4 @@
-import { measureContentBox, measureInk, type Ink } from "../editor/left/contentBox";
+import { measureContentBox, measureInk, type Ink } from "./contentBox";
 
 /**
  * 实体模式:浏览时把每张卡画成一个色块,不渲真内容。暂停了再渲真的。

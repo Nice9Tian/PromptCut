@@ -49,7 +49,7 @@ export const rangeHas = (ranges, frame) => ranges.some(([from, to]) => frame >= 
 
 /**
  * 每个控件走哪一档(A3a)。输入是审阅表给的 capabilities
- * (`src/render/frameMode.mjs` 的 `cardCapabilities`,或 `cardGraph` 给合成节点
+ * (`src/kernel/frameMode.mjs` 的 `cardCapabilities`,或 `cardGraph` 给合成节点
  * 写的那一份)。
  *
  *   共享档:审阅表 independent / sourceDependent **且** stateful —— canvas 卡同样

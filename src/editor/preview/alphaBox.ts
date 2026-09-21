@@ -4,7 +4,7 @@
  * # 为什么 3D 这边要自己量
  *
  * 2D 的排版**不用**内容框:一张卡按它的 `frame` 摆,没写 `frame.w/h` 的就铺满舞台。
- * 项目里那个 `measureContentBox`(editor/left/contentBox.ts)是量 DOM 的,给实体模式
+ * 项目里那个 `measureContentBox`(render/contentBox.ts)是量 DOM 的,给实体模式
  * 画色块用 —— 而 3D 视图手上没有卡片的 DOM,只有烘出来的 PNG。
  *
  * 好在烘焙的排版尺寸修对之后(见 bakeTarget 的 renderBox),PNG 的画布和卡片的框是

@@ -269,7 +269,7 @@ Agent 和代码页看到的不是组件源码,而是一份固定形状的**封�
 - 有文字的部件都带 `size` 参数,`size` 填 0 = 按框自适应(默认),填正数 = 固定像素;不确定就留 0,只摆框。
 - 部件的框相对**父框**:根部件的父框是组合卡的画布(默认整个舞台,set_rect 缩小组合卡整棵跟着缩),子部件的父框是父部件的框。次序靠后的画在上面。
 
-写新部件(给部件库添零件)放 src/parts/lib/<id>.tsx,契约见 src/parts/types.ts:根元素 absolute inset 0、在自己的框里排版、不带整屏定位参数、给 defaultFrame 和 settleMs;有文字就加 `size` 参数(默认 0),用 `fitOr(params.size, { width, height, text })` 算字号。
+写新部件(给部件库添零件)放 src/parts/lib/<id>.tsx,契约见 src/kernel/partTypes.ts:根元素 absolute inset 0、在自己的框里排版、不带整屏定位参数、给 defaultFrame 和 settleMs;有文字就加 `size` 参数(默认 0),用 `fitOr(params.size, { width, height, text })` 算字号。
 
 ### 素材封装卡(不要再手写)
 

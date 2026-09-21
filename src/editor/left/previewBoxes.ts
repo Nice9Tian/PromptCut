@@ -1,4 +1,4 @@
-import type { Box } from "./contentBox";
+import type { Box } from "../../render/contentBox";
 import staticFile from "../../cards/preview-boxes.json";
 
 /**

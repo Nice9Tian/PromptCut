@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { CardDef } from "../../../kernel/types";
-import type { PartDef } from "../../../parts/types";
+import type { PartDef } from "../../../kernel/partTypes";
 import { allCards } from "../../../kernel/registry";
-import { allParts } from "../../../parts/registry";
+import { allParts } from "../../../kernel/partRegistry";
 import { assetCardKind, featuredParticleIds } from "../../../cards/assets";
 import { isCardVisible, loadScopes, readVisibility, usedCardIds, type CardVisibility, type ScopeEntry } from "../../cardScope";
 import { useStore } from "../../../store/project";

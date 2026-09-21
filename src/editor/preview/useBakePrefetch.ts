@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { planBakes, defaultBudgetBytes, type BakeMoment, type BakeTier } from "./bakePlan";
 import { clipFingerprint, momentId, publishCoverage, type ClipCoverage } from "./bakeCoverage";
 import { isScrubbing } from "../timeline/useScrub";
-import { prerenderUrl } from "../prerender";
+import { prerenderUrl } from "../../render/prerender";
 
 /**
  * 空闲时把贴图预先烘好。排队规则见 bakePlan.ts,这里只管**什么时候动手**。
@@ -230,7 +230,7 @@ export function useBakePrefetch({
     const post = async (url: string, payload: unknown, signal?: AbortSignal) => {
       /*
        * 预烘挂得久、一次两批,发到**预渲染进程的源**上,不占编辑器自己那个源的连接
-       * (浏览器同源只给约 6 条;挤满了编辑器要的模块、素材、接口全都得排队,见 src/editor/prerender.ts)。
+       * (浏览器同源只给约 6 条;挤满了编辑器要的模块、素材、接口全都得排队,见 src/render/prerender.ts)。
        */
       const res = await fetch(await prerenderUrl(url), {
         method: "POST",

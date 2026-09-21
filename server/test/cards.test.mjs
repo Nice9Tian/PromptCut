@@ -21,7 +21,12 @@ fs.mkdirSync(OUT, { recursive: true });
 function compile(srcRel, outName, rewrites = []) {
   let src = fs.readFileSync(path.join(ROOT, srcRel), 'utf8');
   for (const [from, to] of rewrites) src = src.split(from).join(to);
-  src = src.replace(/from (["'])(\.\.[^"']+\.mjs)\1/g, (_m, _q, f) => `from '${pathToFileURL(path.resolve(ROOT, path.dirname(srcRel), f)).href}'`);
+  // 源文件里真实存在的相对 .mjs(`./frameMode.mjs`、`../xxx.mjs`)指回原地;
+  // 上面 rewrites 刚造出来的 `./registry.mjs` 这种只存在于临时目录,原地找不到,原样留着
+  src = src.replace(/from (["'])(\.\.?\/[^"']+\.mjs)\1/g, (m, _q, f) => {
+    const abs = path.resolve(ROOT, path.dirname(srcRel), f);
+    return fs.existsSync(abs) ? `from '${pathToFileURL(abs).href}'` : m;
+  });
   const js = ts.transpileModule(src, {
     compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
   }).outputText;

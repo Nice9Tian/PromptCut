@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef } from "react";
-import { Stage } from "../kernel/Stage";
+import { Stage } from "./Stage";
 import { flattenOverlay, isImageMedia, opacityAt, videoLayersAt, type Project } from "../kernel/project";
 import type { Timeline } from "../kernel/types";
 import { frameCss } from "../kernel/layout";

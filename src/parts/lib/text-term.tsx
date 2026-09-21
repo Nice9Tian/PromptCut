@@ -1,5 +1,5 @@
 import { motion } from "motion/react";
-import type { PartDef, PartProps } from "../types";
+import type { PartDef, PartProps } from "../../kernel/partTypes";
 import { easeExpoOut } from "../../cards/native/hud";
 import "../../cards/native/hud.css";
 import { fitOr } from "../fit";

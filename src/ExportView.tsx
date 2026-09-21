@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { flushSync } from "react-dom";
 import { FrameScene } from "./render/FrameScene";
-import { Stage } from "./kernel/Stage";
+import { Stage } from "./render/Stage";
 import { installExportClock } from "./kernel/exportClock";
 import type { Timeline } from "./kernel/types";
 import { flattenOverlay, type Project } from "./kernel/project";
@@ -15,7 +15,7 @@ import { freezeScene } from "./render/snapshotFreeze";
 import { solidApi } from "./render/solid";
 import { settleDom } from "./render/snapshotSettle";
 import { installFrameMedia } from "./render/frameMedia";
-import { clipFrameMode } from "./render/frameMode.mjs";
+import { clipFrameMode } from "./kernel/frameMode.mjs";
 import { fontFingerprintOf } from "./render/fontFingerprint";
 import { frameWorkStatus, waitForFrameWork } from "./kernel/frameReady";
 import { demoTimeline } from "./demo";

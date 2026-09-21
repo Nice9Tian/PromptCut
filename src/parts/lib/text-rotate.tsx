@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import type { PartDef, PartProps } from "../types";
+import type { PartDef, PartProps } from "../../kernel/partTypes";
 import { WordRotate } from "../../cards/magicui/vendor/word-rotate";
 import { fitOr } from "../fit";
 

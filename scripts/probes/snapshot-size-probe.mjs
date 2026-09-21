@@ -129,7 +129,7 @@ window.__ready = new Promise((res, rej) => {
 window.__kit = (async () => {
   await import('/src/cards/index.ts');
   const registry = await import('/src/kernel/registry.ts');
-  const { cardFrameMode, reviewedCard } = await import('/src/render/frameMode.mjs');
+  const { cardFrameMode, reviewedCard } = await import('/src/kernel/frameMode.mjs');
   const assets = await import('/src/cards/assets/index.ts');
   return { ...registry, cardFrameMode, reviewedCard, featuredParticleIds: assets.featuredParticleIds };
 })();

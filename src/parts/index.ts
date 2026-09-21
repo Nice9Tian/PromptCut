@@ -1,5 +1,5 @@
-import type { PartDef } from "./types";
-import { registerParts, resetParts } from "./registry";
+import type { PartDef } from "../kernel/partTypes";
+import { registerParts, resetParts } from "../kernel/partRegistry";
 
 /**
  * 部件库:src/parts/lib/ 下一个文件一个部件,glob 自动收集,**不用改这个文件**。
@@ -41,5 +41,5 @@ registerParts(
   }),
 );
 
-export { getPart, allParts } from "./registry";
-export type { PartDef, PartProps } from "./types";
+export { getPart, allParts } from "../kernel/partRegistry";
+export type { PartDef, PartProps } from "../kernel/partTypes";

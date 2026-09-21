@@ -1,4 +1,4 @@
-import type { PartDef, PartProps } from "../types";
+import type { PartDef, PartProps } from "../../kernel/partTypes";
 import { NumberTicker } from "../../cards/magicui/vendor/number-ticker";
 import { accentOf } from "../../cards/native/hud";
 import { fitOr } from "../fit";

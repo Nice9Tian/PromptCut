@@ -1,6 +1,6 @@
-import { frameCss, frameBox, type Size } from "./layout";
-import { getPart } from "../parts/registry";
-import type { PartInstance } from "./types";
+import { frameCss, frameBox, type Size } from "../kernel/layout";
+import { getPart } from "../kernel/partRegistry";
+import type { PartInstance } from "../kernel/types";
 
 /**
  * 组合卡的渲染:把部件实例树逐级挂到画布上。

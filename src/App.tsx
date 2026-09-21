@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Stage } from "./kernel/Stage";
+import { Stage } from "./render/Stage";
 import { allCards } from "./kernel/registry";
 import type { Timeline } from "./kernel/types";
 import { demoTimeline } from "./demo";

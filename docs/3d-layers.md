@@ -101,7 +101,7 @@ three.js 默认相机朝 **−z** 看，放在 `(0,0,+d)` 看向原点才是自�
 **这个遮蔽标识不用新建，它就是序列顺序**：`get_project` 里 `tracks[0]` 是时间轴最上面
 那条、也是最上层，正好就是「0 在最前面」。再引入一套编号只会和 `trackId` 打架。
 
-实现在 `kernel/Stage.tsx`：`flattenOverlay` 产出的数组已经是画家顺序（倒着遍历 tracks，
+实现在 `render/Stage.tsx`：`flattenOverlay` 产出的数组已经是画家顺序（倒着遍历 tracks，
 所以最后一个是最上层），Stage 按下标写 `z-index: i + 1`。
 
 **方向要写死在这里**，因为 CSS 是数字越大越靠前，和这个约定相反。不写下来必然有人搞反。
@@ -170,7 +170,7 @@ A 层是 DOM、B 层是同一棵 DOM 里的一个 canvas，浏览器一次就合
 **这张表是封闭的。** 其余一律烘死进纹理。一旦开了「把 CSS 效果翻译成材质」这个口子，
 `filter`、`mix-blend-mode`、`mask`、`text-shadow` 每一条都想进来，最后就是在重新实现一个浏览器。
 
-属性从哪儿取：`src/editor/left/contentBox.ts` 已经在 `stage.querySelectorAll("*")` 上逐个
+属性从哪儿取：`src/render/contentBox.ts` 已经在 `stage.querySelectorAll("*")` 上逐个
 `getComputedStyle`，里面 `paintsItself()` 判的正是有没有底色/描边 —— 要抓的属性和它已经在看的
 是同一批。而且 `getComputedStyle` 返回解析后的最终值，`--pc-glass-bg` 那些变量自动落成具体颜色，
 **卡片不需要声明任何东西，30 张卡一张都不用改**。
@@ -247,7 +247,7 @@ A 层是 DOM、B 层是同一棵 DOM 里的一个 canvas，浏览器一次就合
 一起写进 `src/cards/preview-boxes.json` 即可，`rev` 那套失效机制照旧复用。
 
 canvas 类的卡（粒子、以后的 three.js）必须走真取色，静态表里默认参数的颜色对它们没意义。
-`contentBox.ts` 里已有「canvas 扫像素」的先例，扫的时候顺手把 RGBA 累加出来，一次遍历两个结果。
+`render/contentBox.ts` 里已有「canvas 扫像素」的先例，扫的时候顺手把 RGBA 累加出来，一次遍历两个结果。
 
 ### 渐进式的调度
 

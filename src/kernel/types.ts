@@ -1,6 +1,6 @@
 import type { ComponentType } from "react";
 import type { ClipEmphasis } from "./emphasis.ts";
-import type { FrameModeInput } from "../render/frameMode.mjs";
+import type { FrameModeInput } from "./frameMode.mjs";
 
 /**
  * 控件的公共字段。
@@ -115,7 +115,7 @@ export interface GraphCardSource {
   /** 这路输入指向的图节点 id */
   nodeId: string;
   /** 输入在 `t`(缺省 = 本次求值的时间)的结果引用,直接喂给 `glsl()` */
-  at(t?: number): import("../render/cards/gpuExecutor").SourceValue;
+  at(t?: number): import("./cardGpu").SourceValue;
   /** 真的把输入解成像素。比 `at()` 慢得多,只有 CPU 像素算法才用 */
   pixels(t?: number, signal?: AbortSignal): Promise<ImageBitmap>;
   /** 取 [start, start + count) 这段采样(交错多声道) */
@@ -181,7 +181,7 @@ export interface CardDef<P = Record<string, unknown>> {
     t: number,
     params: P,
     ctx: GraphCardContext,
-  ) => import("../render/cards/gpuExecutor").CardGpuValue | Promise<import("../render/cards/gpuExecutor").CardGpuValue>;
+  ) => import("./cardGpu").CardGpuValue | Promise<import("./cardGpu").CardGpuValue>;
   /** 音频图卡:按采样区间产出交错的 Float32 采样块。 */
   audio?: (
     sources: Record<string, GraphCardSource>,
@@ -206,7 +206,7 @@ export interface CardDef<P = Record<string, unknown>> {
   need_prerendering?: boolean;
   /** Independently reviewed from time access. Background-dependent and unknown
    * cards keep the complete Chrome compositing context. */
-  compositing?: import('../render/frameMode.mjs').CardCompositing;
+  compositing?: import('./frameMode.mjs').CardCompositing;
   /** 画布卡(2D canvas / WebGL):走共享 WebGL 渲染器、快照要先栅格成 img。
    * 缺省 = 纯 DOM 卡。和 frameMode / compositing 一样是审阅结论,不猜源码。 */
   canvasHeavy?: boolean;

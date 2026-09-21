@@ -1,5 +1,5 @@
 import type { CardDef } from "./types";
-import { cardCapabilities } from "../render/frameMode.mjs";
+import { cardCapabilities } from "./frameMode.mjs";
 
 const map = new Map<string, CardDef<any>>();
 

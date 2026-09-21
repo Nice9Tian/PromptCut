@@ -9,7 +9,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 const { usesBackdropFilter, needsGuard, guardCompositing, resetGuardScans } = await import("./capabilityGuard.ts");
-const { cardCapabilities, degradedCards, resetDegradedCards } = await import("./frameMode.mjs");
+const { cardCapabilities, degradedCards, resetDegradedCards } = await import("../kernel/frameMode.mjs");
 
 /** 最小的假 DOM:只需要 querySelector / querySelectorAll 和一张 style 表 */
 function fakeStage(clips) {

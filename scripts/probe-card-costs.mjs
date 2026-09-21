@@ -130,7 +130,7 @@ window.__kit = (async () => {
   const { cardCostKey } = await import('/src/render/cardCostKey.mjs');
   const { cardSourceVersion } = await import('/src/render/cardSourceVersion.mjs');
   const { builtinCardSourceFiles } = await import('/src/render/cardSourceFiles.mjs');
-  const { cardFrameMode, reviewedCard } = await import('/src/render/frameMode.mjs');
+  const { cardFrameMode, reviewedCard } = await import('/src/kernel/frameMode.mjs');
   const assets = await import('/src/cards/assets/index.ts');
   // 源码版本照 ExportView.tsx:108-118 那份算法
   const sourceVersionOf = (card) => {

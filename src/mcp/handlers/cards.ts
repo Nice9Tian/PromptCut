@@ -2,7 +2,7 @@ import { EditorApi } from "../../ai/mcpExecutor";
 import { getState, actions } from "../../store/project";
 import { allCards, getCard } from "../../kernel/registry";
 import { applyCardDefinition } from "../../kernel/cardAuthoring.mjs";
-import { cardFrameMode } from "../../render/frameMode.mjs";
+import { cardFrameMode } from "../../kernel/frameMode.mjs";
 import { findCard } from "../../kernel/cardParams";
 import { isCardVisible, readVisibility, usedCardIds } from "../../editor/cardScope";
 
