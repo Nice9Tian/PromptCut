@@ -98,13 +98,13 @@ export const effectsTools = [
   },
   {
     name: "list_pixel_maps",
-    description: "列出项目里的通用像素映射。像素映射用安全表达式统一表达换色、抠色、透明和素材替换：where 允许 r/g/b/a/luma/x/y/t，to 可以是 {kind:'media',mediaId,stage:'origin'|'after_filters'}、{kind:'color',value:'#ff0000'}、{kind:'transparent'} 或 {kind:'expr',r,g,b,a}。先调用 list_media 找素材 id，再用 list_media_effects 看已有滤镜和映射。",
+    description: "列出项目里的通用像素映射。像素映射只做**要逐像素判断的选区**（抠色、按位置/时间的选区、换成另一段素材）；整帧调色请用 create_filter 的 curves / matrix。where 允许 r/g/b/a/luma/x/y/t，to 可以是 {kind:'media',mediaId,stage:'origin'|'after_filters'}、{kind:'color',value:'#ff0000'}、{kind:'transparent'} 或 {kind:'expr',r,g,b,a}。先调用 list_media 找素材 id，再用 list_media_effects 看已有滤镜和映射。",
     inputSchema: { type: "object", properties: {} },
     side: "browser"
   },
   {
     name: "create_pixel_map",
-    description: "创建通用像素映射并放入项目库，可选 clipId 直接挂到视频/图片片段。where 是 0~1 软选区，例如 'smoothstep(0.35,0.8,g-r)*(1-smoothstep(0.15,0.45,b))'；to 可写 {kind:'media',mediaId:'B',stage:'origin'|'after_filters'}、{kind:'color',value:'#ff0000'}、{kind:'transparent'} 或每通道表达式 {kind:'expr',r:'r^1.6',g:'g^1.6',b:'b^1.6',a:'a'}。mode=continuous 会混合，discrete 会选离散颜色。颜色序列可传 colorSequence:{from:['#000000','#ffffff'],to:['#001133','#ffcc88'],mode:'continuous'}，两端长度不等时按首尾对齐插值。表达式只翻译不执行 JavaScript。创建后用 see_frames 复核。",
+    description: "**整帧调色请用 create_filter 的 curves / matrix，这个工具只给要逐像素选区的活。**（曲线、通道混色、色偏、按亮度换色调都是整帧调色——它们由 GPU 合成器做、不占预览的每拍预算；像素映射要逐像素算，1080p 每帧 400 毫秒以上。传进来的定义如果算整帧调色会被当场拒绝，错误里会附一份可以直接照抄的 create_filter ops。）适合这个工具的：抠色（where 引用 r/g/b/luma 做选区）、按位置或时间的选区（引用 x/y/t）、to 是 transparent 或另一段素材、通道互相依赖的非线性表达式。创建后走 WebGL 片元着色器，可选 clipId 直接挂到视频/图片片段。where 是 0~1 软选区，例如 'smoothstep(0.35,0.8,g-r)*(1-smoothstep(0.15,0.45,b))'；to 可写 {kind:'media',mediaId:'B',stage:'origin'|'after_filters'}、{kind:'color',value:'#ff0000'}、{kind:'transparent'} 或每通道表达式 {kind:'expr',r:'r^1.6',g:'g^1.6',b:'b^1.6',a:'a'}。mode=continuous 会混合，discrete 会选离散颜色（顶层 mode 说了算，colorSequence 里的 mode 只是回显）。颜色序列可传 colorSequence:{from:['#000000','#ffffff'],to:['#001133','#ffcc88']}，取色是对 from 做 RGB 最近邻、两端长度不等时按首尾对齐插值。表达式只翻译不执行 JavaScript，函数集和普通滤镜相同；底数可能为负的乘方要把底数包进 abs() 或把指数写成整数常量，否则翻译不成着色器。创建后用 see_frames 复核。",
     inputSchema: {
       type: "object",
       properties: {
@@ -123,7 +123,7 @@ export const effectsTools = [
   },
   {
     name: "update_pixel_map",
-    description: "更新项目里的像素映射。给出的字段会替换定义；挂载它的片段都会跟着变。改完用 see_frames 看真实效果。",
+    description: "更新项目里的像素映射。给出的字段会替换定义；挂载它的片段都会跟着变。改完用 see_frames 看真实效果。和 create_pixel_map 一样只收要逐像素选区的活：改完之后如果变成了整帧调色（where 成了常数、to 只是颜色到颜色的函数），会被拒绝并附上等价的 create_filter ops。",
   inputSchema: { type: "object", properties: { pixelMapId: { type: "string" }, name: { type: "string" }, description: { type: "string" }, source: { type: "object" }, where: { type: "string" }, to: { description: "字符串颜色/transparent/素材 id，或目标对象" }, mode: { type: "string", enum: ["continuous", "discrete"] }, colorSequence: { type: "object" } }, required: ["pixelMapId"] },
     side: "browser"
   },
