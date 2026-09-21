@@ -134,15 +134,18 @@
   // 色半区存的是**预乘**色（r75-05 第 2 条），所以直接输出、不做 rgb × a。
   const VS = `attribute vec2 p; varying vec2 uv;
     void main(){ uv = vec2((p.x+1.0)*0.5, (1.0-p.y)*0.5); gl_Position = vec4(p,0.0,1.0); }`;
+  // `srcPremul` = 1：色半区存的是预乘色（r75-05 第 2 条的线上口径），直接输出。
+  // `srcPremul` = 0：色半区存的是直通色（对照组，用来量透明区的 RGB 渗边），要自己乘 a。
   const FS = `precision mediump float; uniform sampler2D tex; uniform float alphaTop; uniform float half_;
+    uniform float srcPremul;
     varying vec2 uv;
     void main(){
       vec3 rgb = texture2D(tex, vec2(uv.x, uv.y * half_)).rgb;
       float a  = texture2D(tex, vec2(uv.x, alphaTop + uv.y * half_)).r;
-      gl_FragColor = vec4(rgb, a);   // 预乘口径：不再乘 a
+      gl_FragColor = vec4(mix(rgb * a, rgb, srcPremul), a);
     }`;
 
-  function makeCompositor(canvas, { premultipliedAlpha = true } = {}) {
+  function makeCompositor(canvas, { premultipliedAlpha = true, srcPremultiplied = true } = {}) {
     const gl = canvas.getContext('webgl', { premultipliedAlpha, alpha: true, preserveDrawingBuffer: true, antialias: false });
     if (!gl) throw new Error('拿不到 WebGL 上下文');
     const sh = (type, src) => {
@@ -173,6 +176,7 @@
     gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
     const uAlphaTop = gl.getUniformLocation(prog, 'alphaTop');
     const uHalf = gl.getUniformLocation(prog, 'half_');
+    gl.uniform1f(gl.getUniformLocation(prog, 'srcPremul'), srcPremultiplied ? 1 : 0);
 
     return {
       gl,
