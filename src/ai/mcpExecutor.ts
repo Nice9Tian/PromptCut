@@ -397,8 +397,10 @@ export function connectMcpExecutor(getApi: () => EditorApi, onStatus?: (s: { con
         // 聊天栏要画「改之前」的那张卡:只有改卡 / 删卡的工具才拍这一份
         const visualBefore = CLIP_EDIT_TOOLS.has(tool) || tool === "remove_clip" ? cloneProject(getState().project) : null;
         const api = getApi();
-        // 一对一转发的工具在路由表里;表外的(公告板、see_frames、get_gif、web_*)各自有分支
-        const route = TOOL_ROUTES[tool];
+        // 一对一转发的工具在路由表里;表外的(公告板、see_frames、get_gif、web_*)各自有分支。
+        // 用 Object.hasOwn 查:直接下标的话,tool 叫 "toString" / "constructor" 会摸到
+        // Object.prototype 上的东西,本该回「未知工具」的却变成了别的报错。
+        const route = Object.hasOwn(TOOL_ROUTES, tool) ? TOOL_ROUTES[tool] : undefined;
         let ok = true;
         let result: unknown;
         let error: string | undefined;
