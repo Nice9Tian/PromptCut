@@ -93,7 +93,7 @@ const NOTHING: SyncPlan = { seekTo: null, rate: null, play: false, pause: false,
  * 调用方拿到结果照做即可;`seekTo` 非空时要把 `lastSeekAt` 更新成 `now`。
  *
  * seeking 期间来的新位置这里一律不理,所以调用方还要在 `seeked` 时拿**最新的**目标再调一次 ——
- * 不然最后一次拖动恰好落在 seek 中间时,最终位置永远补不上(MediaLayers.tsx 的 driveMedia)。
+ * 不然最后一次拖动恰好落在 seek 中间时,最终位置永远补不上(render/mediaDrive.ts 的 driveMedia)。
  */
 export function planSync(input: SyncInput): SyncPlan {
   const { elTime, seeking, paused, target, playing, scrubbing, now, lastSeekAt } = input;
@@ -149,7 +149,7 @@ export function planSync(input: SyncInput): SyncPlan {
  * 等 requestVideoFrameCallback 说「这一帧画出来了」;到了交界只换显示、让它接着放。
  *
  * 下面是纯函数:给它两个槽位眼下装着什么、当前段和下一段是谁,它说每个槽位该装什么、
- * 哪个在播、哪个在备、这一帧显示哪个。执行在 MediaLayers.tsx。
+ * 哪个在播、哪个在备、这一帧显示哪个。执行在 render/VideoTrack.tsx。
  */
 
 /** 离下一段起点还剩这么久时开始提前装(秒)。实测 1080p、5 秒关键帧的中段 seek 落定要 70~600ms */

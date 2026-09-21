@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { flushSync } from "react-dom";
-import { Stage } from "./render/Stage";
+import { Stage, type StreamPlaneGroup } from "./render/Stage";
+import { FrameScene } from "./render/FrameScene";
 import { flattenOverlay, type Project } from "./kernel/project";
 import { projectCardGraph } from "./kernel/cardGraph.mjs";
 import { getCard } from "./kernel/registry";
@@ -8,7 +9,7 @@ import { installStageClock } from "./render/stageClock";
 import { cardMountedAt, mountFrameOf } from "./render/frameWindow.mjs";
 import { createAnimationPinner } from "./render/pinAnimations";
 import { createSnapshot } from "./render/createSnapshot";
-import { hitTest as solidHitTest, rectsWithBounds as solidRectsWithBounds } from "./render/solid";
+import { clipWrapper, hitTest as solidHitTest, rectsWithBounds as solidRectsWithBounds } from "./render/solid";
 import { applyProjectPatch, type ProjectPatch } from "./render/changedClips.mjs";
 import {
   detectHostCapabilities,
@@ -55,6 +56,17 @@ import "./cards";
 
 const isStageRoute = typeof window !== "undefined" && new URLSearchParams(location.search).has("stage");
 const LEGACY = typeof window !== "undefined" && new URLSearchParams(location.search).get("preview") === "legacy";
+/**
+ * 舞台内容走哪条路(R3)。**`?preview=stage` 由父页写进 iframe 的 src**
+ * (`editor/previewMode.ts` 的 `stageSrc`),只有真的开了双舞台的那一次才带。
+ *
+ * 带了 = 渲 `FrameScene` 的 **live 变体**:素材层在舞台里(E7 第 1 条)、六个平面 prop 生效。
+ * 不带(缺省,今天用户手里那份编辑台)= 照旧只渲 `Stage`,一个字都不变。
+ */
+const LIVE = typeof window !== "undefined" && new URLSearchParams(location.search).get("preview") === "stage";
+
+/** `.pc-awaiting` 的兜底时长(E0):快照没来也要在这之后露出活组件,不能永久隐身 */
+const AWAIT_FALLBACK_MS = 500;
 // 时间必须在任何卡片挂载之前接管
 const clock = isStageRoute ? installStageClock() : null;
 const pinner = createAnimationPinner();
@@ -75,6 +87,14 @@ function layoutKeyOf(p: Project): string {
 const realNow = () => (window.__pcRealNow ?? (() => Date.now()))();
 /** 等浏览器真画一帧(接管之后 requestAnimationFrame 进的是舞台队列) */
 const realRaf = () => new Promise<void>((r) => (window.__pcRealRaf ?? window.requestAnimationFrame)(() => r()));
+/**
+ * **舞台自身的墙钟定时器一律用真实的**(E4b)。`window.setTimeout` 被 `stageClock` 换成了
+ * 登记在虚拟时钟上的 fake timer —— 暂停态虚拟时钟不动,用它的话 `.pc-awaiting` 的 500 ms 兜底
+ * 一辈子不响、卡片永久隐身;legacy 那条 `SETTLE_MS` 防抖同理会永远不触发。
+ * 虚拟定时器的 id 从 1e9 起,所以被接管后的 `clearTimeout` 对真 id 会自己转交回去,直接用即可。
+ */
+const realSetTimeout = (cb: () => void, ms: number): number =>
+  (window.__pcRealSetTimeout ?? window.setTimeout.bind(window))(cb, ms);
 
 const isProjectPatch = (v: unknown): v is ProjectPatch =>
   !!v && typeof v === "object" && (((v as ProjectPatch).kind === "full" && "project" in (v as object)) || ((v as ProjectPatch).kind === "tracks" && "order" in (v as object)));
@@ -126,21 +146,35 @@ export default function StageView() {
     role: "front" as StageRole,
     job: undefined as BackJob | undefined,
     plan: null as { plan: unknown; costs: CardCostRecord[] } | null,
-    snapshots: new Map<string, string>(),
-    suppressed: new Set<string>(),
-    streamPlanes: [] as Array<{ clipIds: string[] }>,
-    /** 这一拍要加 `.pc-awaiting` 的片段(E7,R3 才真正挂类;R2 只放状态位) */
-    awaiting: new Set<string>(),
-    /** 正在用子树虚拟时间追帧的片段(K5 第一路,R5 才填;R2 只放状态位) */
-    settling: new Set<string>(),
+    /*
+     * 下面这几个集合**一律整份替换,不就地改**:`Stage` 靠「上一次 render 的 suppressed 集合」
+     * 判「谁刚进入抑制」,就地 mutate 的话它看到的前后两份是同一个对象,永远判不出变化。
+     */
+    snapshots: new Map<string, string>() as ReadonlyMap<string, string>,
+    suppressed: new Set<string>() as ReadonlySet<string>,
+    streamPlanes: [] as readonly StreamPlaneGroup[],
+    /** 这一帧的快照还没到、先藏着等的片段(E0 的 `setTime({ awaiting })`) */
+    awaiting: new Set<string>() as ReadonlySet<string>,
+    /** `.pc-awaiting` 的 500 ms 兜底(真定时器:暂停态虚拟时钟不动) */
+    awaitTimer: 0,
+    /** 正在用子树虚拟时间追帧的片段 → 它此刻的全局舞台毫秒(K5 第一路,R5 才填) */
+    settling: new Map<string, number>() as ReadonlyMap<string, number>,
+    /** K3:按片段重挂载的代数(R5 才填;空表时 `Stage` 退回整舞台 playToken) */
+    remountGen: new Map<string, number>() as ReadonlyMap<string, number>,
     scrubbing: false,
     playing: false,
     mediaT: 0,
-    localHashes: [] as string[],
+    localHashes: [] as readonly string[],
     /** K4 的节拍循环停着没有(R5 才有循环本体;`setRole('back')` 要能停它) */
     beatPaused: true,
     pending: null as PendingRender | null,
   });
+  /**
+   * 平面状态(快照 / 抑制 / 流 / 等待 / 追帧)改了就敲一下,让这一帧重渲。
+   * 真值放在 `ref.current` 里 —— RPC 方法要能**同步**读到最新值,React state 做不到;
+   * 而渲染只要一个「变了」的信号,读的仍是 `ref.current`。
+   */
+  const [, bumpPlanes] = useReducer((n: number) => n + 1, 0);
   /**
    * 第一路追帧的代数(K5):`setRole('back')` 和任何新的 `setTime` / `play` / `setProject`
    * 都递增它,把可见舞台里正在进行的子树追帧中止掉。R5 往里填实现时不用再动这里。
@@ -173,6 +207,34 @@ export default function StageView() {
     if (root) root.style.background = "transparent";
   }, []);
 
+  /**
+   * 全局钉动画时要跳过谁(K5 第一路 / E7 第 5 条):正在用子树虚拟时间追帧(`.pc-settling`)
+   * 和被抑制(`.pc-suppressed`)的片段,它们的动画不能被全局时钟拨回去。
+   * 收的是**包裹层**(`[data-pc-clip]`),`pinner.sync` 对每条动画取目标元素往上最近的那个查表。
+   */
+  const skipWrappers = useCallback((): ReadonlySet<Element> | undefined => {
+    const { settling, suppressed } = ref.current;
+    if (!settling.size && !suppressed.size) return undefined;
+    const root = rootRef.current;
+    if (!root) return undefined;
+    const out = new Set<Element>();
+    for (const id of [...settling.keys(), ...suppressed]) {
+      const el = clipWrapper(root, id);
+      if (el) out.add(el);
+    }
+    return out.size ? out : undefined;
+  }, []);
+
+  /**
+   * 素材层画出一帧了(K5 第 (4) 步)。**只有 `back` 报**:父页要的是「后台舞台的素材也到位了,
+   * 可以互换」这一条;可见舞台在播放时每帧都有新的视频帧,照报就是每秒几十条 postMessage。
+   * 父页按 `event.source` 只认当前 `back` 发来的 `mediaReady`,这里再把源头收一道。
+   */
+  const onMediaFrame = useCallback(() => {
+    if (ref.current.role !== "back") return;
+    postStageEvent({ type: "mediaReady", sec: ref.current.mediaT });
+  }, []);
+
   useEffect(() => {
     if (!clock) return;
 
@@ -196,7 +258,7 @@ export default function StageView() {
         if (gen !== settleGen.current || !clock) return;
         const ms = Math.max(0, target) * 1000;
         clock.tick(ms);
-        pinner.sync(ms);
+        pinner.sync(ms, skipWrappers());
       });
     };
 
@@ -211,10 +273,59 @@ export default function StageView() {
     const scheduleSample = () => {
       if (!proxyAllowed() || ref.current.proxy) return;
       window.clearTimeout(sampleTimer);
-      sampleTimer = window.setTimeout(() => {
+      sampleTimer = realSetTimeout(() => {
         const root = rootRef.current;
         if (root && !ref.current.proxy) sampleAll(root);
       }, 120);
+    };
+
+    /** 平面状态改了:同步一次 React 提交,让这一帧就带上新的类和平面 */
+    const commitPlanes = () => flushSync(() => bumpPlanes());
+
+    /**
+     * 应用一次快照增量(A3c):`null` = 摘掉,`reset` = 先清空全部再应用。
+     * **整份换一个新 Map**,不就地改 —— `Stage` 按引用判「谁刚变」。
+     * 快照到了的片段同时从 `awaiting` 里去掉:`.pc-snapshot` 接管,不用再等兜底。
+     * 回的是本次投递的字节数(父页按它判「一次投递 ≤ 2 MB」要不要拆)。
+     */
+    const applySnapshots = (patch: Record<string, string | null>, reset: boolean): number => {
+      const next = new Map(reset ? [] : ref.current.snapshots);
+      const arrived: string[] = [];
+      let bytes = 0;
+      for (const [id, html] of Object.entries(patch)) {
+        if (html === null) next.delete(id);
+        else {
+          next.set(id, html);
+          bytes += html.length;
+          arrived.push(id);
+        }
+      }
+      ref.current.snapshots = next;
+      if (arrived.some((id) => ref.current.awaiting.has(id))) {
+        const rest = new Set(ref.current.awaiting);
+        for (const id of arrived) rest.delete(id);
+        setAwaiting(rest);
+      }
+      return bytes;
+    };
+
+    /**
+     * `.pc-awaiting` 的两条退出路(E0,**必有一个**):快照到达(上面那条),
+     * 或 **500 ms 兜底**超时后摘掉、改露活组件 —— 宁可露初始态也不能永久隐身:
+     * `visibility:hidden` 会让 `solid.ts` 的 `isSolid` 判它不是实体,`hitTest` 点不中、
+     * `bounds` 退回整屏框。兜底用**真** `setTimeout`:暂停态虚拟时钟不动,虚拟定时器永远不响。
+     */
+    const setAwaiting = (ids: Iterable<string>) => {
+      ref.current.awaiting = new Set(ids);
+      window.clearTimeout(ref.current.awaitTimer);
+      ref.current.awaitTimer = 0;
+      if (!ref.current.awaiting.size) return;
+      ref.current.awaitTimer = realSetTimeout(() => {
+        ref.current.awaitTimer = 0;
+        if (!ref.current.awaiting.size) return;
+        ref.current.awaiting = new Set();
+        commitPlanes();
+      }, AWAIT_FALLBACK_MS);
     };
 
     /** 掐掉还在飞的 render:回包按 reason 给,不允许静默丢 */
@@ -270,7 +381,7 @@ export default function StageView() {
        */
       clock.tick(from * 1000);
       clock.tick(from * 1000);
-      pinner.sync(from * 1000);
+      pinner.sync(from * 1000, skipWrappers());
       return from;
     };
 
@@ -289,12 +400,12 @@ export default function StageView() {
           step: 1000 / fps,
           abort: () => gen !== renderGen.current,
           onFrame: (ms) => flushSync(() => setT(ms / 1000)),
-          afterFrame: (ms) => pinner.sync(ms),
+          afterFrame: (ms) => pinner.sync(ms, skipWrappers()),
         });
         if (gen !== renderGen.current) return;
         flushSync(() => setT(target));
         clock.tick(Math.max(0, target) * 1000);
-        pinner.sync(Math.max(0, target) * 1000);
+        pinner.sync(Math.max(0, target) * 1000, skipWrappers());
         settle(target);
         scheduleSample();
       })();
@@ -339,7 +450,7 @@ export default function StageView() {
             const changed = changedCardClips(prev, full);
             const tt = ref.current.t;
             if (changed.length && changed.some((c) => cardMountedAt(c, tt))) {
-              ref.current.settle = window.setTimeout(() => legacyJump(ref.current.t), SETTLE_MS);
+              ref.current.settle = realSetTimeout(() => legacyJump(ref.current.t), SETTLE_MS);
             }
           }
         }
@@ -352,7 +463,10 @@ export default function StageView() {
        * 唯一例外:往前且不到 CONTINUOUS_MAX 秒,按连续播放用 advanceTo 同步推几帧(≤ 30 步)。
        * 远跳或向后一律不 advanceTo(会同步空转几百次 tick)。
        * probe: 一律走跳转路径(量的必须是单帧),等一次真 rAF、冻一次控件 HTML,回包带 elapsedMs。
-       * snapshots / awaiting / settle 是第 4 步的(C4 / E7 / K5),这里先收下、不动画面。
+       *
+       * **`snapshots` / `awaiting` 和 `t` 在同一次 React 提交里生效**(E0):拖过一张 stateful 卡的
+       * 入点时,新挂载的组件和它的快照平面同帧出现,不闪初始态。所以这两样在 `flushSync(setT)`
+       * **之前**写进 `ref.current` —— 渲染读的就是它。`settle` 是 K5 的暂停态活渲(R5)。
        */
       async setTime(tSec, opts = {}) {
         /*
@@ -368,14 +482,9 @@ export default function StageView() {
         const prev = ref.current.t;
         const dt = target - prev;
         ref.current.t = target;
-        if (opts.snapshots) {
-          for (const [id, html] of Object.entries(opts.snapshots)) {
-            if (html === null) ref.current.snapshots.delete(id);
-            else ref.current.snapshots.set(id, html);
-          }
-        }
-        // 本次要加 `.pc-awaiting` 的片段由父页点名(E0:两个判据只有父页知道);R3 挂类
-        ref.current.awaiting = new Set(opts.awaiting ?? []);
+        if (opts.snapshots) applySnapshots(opts.snapshots, false);
+        // 本次要加 `.pc-awaiting` 的片段由父页点名(E0:两个判据只有父页知道)
+        setAwaiting(opts.awaiting ?? []);
         if (!p) return { path: "set" } satisfies SetTimeReply;
         // 暂停 / 拖动时来了 setTime,就没有「还在飞的补跑」这回事了
         renderGen.current++;
@@ -387,7 +496,7 @@ export default function StageView() {
         if (!opts.probe && dt >= 0 && dt < CONTINUOUS_MAX) {
           // 连续播放:接着往下跑一两帧就行(≤ 30 步,同步)
           flushSync(() => setT(target));
-          clock.advanceTo(target * 1000, { step: 1000 / fps, maxCatchUp: CONTINUOUS_MAX * 1000, onFrame: (ms) => pinner.sync(ms) });
+          clock.advanceTo(target * 1000, { step: 1000 / fps, maxCatchUp: CONTINUOUS_MAX * 1000, onFrame: (ms) => pinner.sync(ms, skipWrappers()) });
           settle(target);
           scheduleSample();
           return { path: "continuous" } satisfies SetTimeReply;
@@ -395,7 +504,7 @@ export default function StageView() {
 
         clock.set(target * 1000);
         flushSync(() => setT(target));
-        pinner.sync(target * 1000);
+        pinner.sync(target * 1000, skipWrappers());
         settle(target);
         scheduleSample();
         if (opts.probe) {
@@ -503,7 +612,7 @@ export default function StageView() {
                 flushSync(() => setT(ms / 1000));
               },
               afterFrame: (ms) => {
-                pinner.sync(ms);
+                pinner.sync(ms, skipWrappers());
                 if (!probe) return;
                 frames++;
                 // 计时趟:只留下这一帧的耗时,不生成快照、不 post probe-frame
@@ -533,7 +642,7 @@ export default function StageView() {
             }
             flushSync(() => setT(target));
             clock.tick(target * 1000);
-            pinner.sync(target * 1000);
+            pinner.sync(target * 1000, skipWrappers());
             settle(target);
             scheduleSample();
             ref.current.t = target;
@@ -582,9 +691,10 @@ export default function StageView() {
        *   1. 停 K4 的节拍循环(循环每拍开头和 post `frame` 之前都查 `beatPaused` / 角色);
        *   2. 清空 `suppressed` / `snapshots` / `streamPlanes` —— `back` 永远不收它们的非空集合;
        *   3. 停 `streamPlayer` 并 `close()` 所有 `VideoFrame`(R8 的轨道流,这一步还没有);
-       *   4. 去掉全部平面和类(快照 / 抑制 / 等待 / 追帧;R3 才真正有平面);
+       *   4. 去掉全部平面和类(快照 / 抑制 / 等待 / 追帧);
        *   5. 中止可见舞台里正在进行的第一路追帧(`catchUpGen` 递增)并清空 `settling` / `awaiting`。
-       * R2 里第 1～5 条的**集合和状态位**就位,平面本体(R3)和循环本体(R5)按这张单子往里填。
+       * R3 把第 2、4、5 条接到真实状态上(平面本体已经有了);循环本体(第 1 条)和
+       * `streamPlayer`(第 3 条)分别在 R5 / R8。
        *
        * `bake` 在本地模式不支持(预渲染者是预渲染进程),回 `unsupported`、不抛。
        */
@@ -594,12 +704,14 @@ export default function StageView() {
         ref.current.job = role === "back" ? opts.job ?? "probe" : undefined;
         if (role === "back") {
           ref.current.beatPaused = true;
-          ref.current.snapshots.clear();
-          ref.current.suppressed.clear();
+          ref.current.snapshots = new Map();
+          ref.current.suppressed = new Set();
           ref.current.streamPlanes = [];
-          ref.current.awaiting.clear();
-          ref.current.settling.clear();
+          ref.current.settling = new Map();
+          setAwaiting([]);
           catchUpGen.current++;
+          // 同一次提交里把全部平面和类去掉 —— 互换那一拍新 `back` 不能还盖着旧画面
+          commitPlanes();
         }
         return { ok: true };
       },
@@ -618,44 +730,70 @@ export default function StageView() {
       async pause() {
         return { ok: false, reason: "unsupported" };
       },
+      /**
+       * 播放中被判重的卡(E7 第 5 条):`Stage` 给包裹层加 `.pc-suppressed`、藏子树,
+       * 传给组件的那个 `t` 冻在抑制开始那一刻;包裹层留在布局树里,几何不变,
+       * `rects()` / `hitTest` 照常点得中它。
+       *
+       * **`.pc-suppressed` 与 `.pc-settling` 互斥**:K6 在追帧中途把一张卡降为重时走的就是这条,
+       * 所以这里先把它从 `settling` 里删掉、并递增 `catchUpGen` 中止那一路追帧,再同一次提交里
+       * 加上抑制 —— 两个类不会同帧共存。
+       */
       async setSuppressed(clipIds) {
-        ref.current.suppressed = new Set(clipIds);
+        const next = new Set(clipIds);
+        ref.current.suppressed = next;
+        if (ref.current.settling.size) {
+          const rest = new Map(ref.current.settling);
+          let changed = false;
+          for (const id of next) if (rest.delete(id)) changed = true;
+          if (changed) {
+            ref.current.settling = rest;
+            catchUpGen.current++;
+          }
+        }
+        commitPlanes();
         return { ok: true as const };
       },
+      /** G1 的流平面分组(R8 之前父页恒发空表);渲染位置在 `Stage`(包裹层里 / 舞台根下) */
       async setStreamPlanes(planes) {
-        ref.current.streamPlanes = planes;
+        ref.current.streamPlanes = planes.map((g) => ({ clipIds: [...g.clipIds] }));
+        commitPlanes();
         return { ok: true as const };
       },
+      /** 手按着播放头拖:素材层 seek 放疏一点(`mediaSync` 的 SCRUB_SEEK_MIN_MS) */
       async setScrubbing(on) {
         ref.current.scrubbing = !!on;
+        commitPlanes();
         return { ok: true as const };
       },
+      /** **只管素材层**(`VideoTrack` 的 `playing`):不碰 K4 的节拍循环,那个只由 play / pause / setRole 起停 */
       async setPlaying(on) {
         ref.current.playing = !!on;
+        commitPlanes();
         return { ok: true as const };
       },
+      /**
+       * 素材层跟的时刻。平时等于 `t`;K5 第二路补跑时父页单独给 `back` 下发目标拍 ——
+       * `VideoTrack` 见偏差过了 `PAUSED_SEEK_SEC` 就补注册一次 rVFC,出画即 post `mediaReady`,
+       * 不用等满 300 ms 兜底。
+       */
       async setMediaT(tSec) {
         ref.current.mediaT = Number(tSec) || 0;
+        commitPlanes();
         return { ok: true as const };
       },
+      /** A1 的本地素材哈希表。R3 只存,换档那条路在 A1 / L */
       async setLocalHashes(hashes) {
         ref.current.localHashes = [...hashes];
         return { ok: true as const };
       },
       /**
        * A3c:patch 是相对上次投递的增量(null = 摘掉),reset = 先清空全部再应用。
-       * 第 3 步只存起来、回投递的字节数;挂成快照平面是第 4 步 E7 的事。
+       * 回包的 `bytes` 就是「一次投递 ≤ 2 MB」的实测口子,父页超了就拆。
        */
       async setSnapshots(patch, opts = {}) {
-        if (opts.reset) ref.current.snapshots.clear();
-        let bytes = 0;
-        for (const [id, html] of Object.entries(patch)) {
-          if (html === null) ref.current.snapshots.delete(id);
-          else {
-            ref.current.snapshots.set(id, html);
-            bytes += html.length;
-          }
-        }
+        const bytes = applySnapshots(patch, !!opts.reset);
+        commitPlanes();
         return { ok: true as const, bytes };
       },
     };
@@ -673,10 +811,11 @@ export default function StageView() {
     return () => {
       stopRpc();
       window.clearTimeout(ref.current.settle);
+      window.clearTimeout(ref.current.awaitTimer);
       window.clearTimeout(sampleTimer);
       if (window.__pcStage === api) delete window.__pcStage;
     };
-  }, []);
+  }, [skipWrappers]);
 
   if (!project) return null;
   const timeline = flattenOverlay(project, graph);
@@ -701,7 +840,36 @@ export default function StageView() {
          */
       }}
     >
-      <Stage timeline={timeline} t={t} playToken={token} proxy={proxy ? proxyOf : undefined} />
+      {LIVE ? (
+        /*
+         * E7:舞台页渲 `FrameScene` 的**活播放变体** —— 素材层在舞台里(第 1 条)、
+         * 卡片活跃判据用 `cardMountedAt`(第 2 条)、六个平面 prop 原样透传(第 3～5 条)。
+         * `graph` 就是上面那个 `useMemo`:**漏传的话** `graphVisualNode` 恒为 false、
+         * 素材段被画两层,而且 `timeline.graph` 为空、图卡解不出输入,编译器不会拦。
+         */
+        <FrameScene
+          project={project}
+          graph={graph}
+          t={t}
+          directT={t}
+          mediaT={ref.current.mediaT}
+          playToken={token}
+          mediaMode="live"
+          proxy={proxy ? proxyOf : undefined}
+          scrubbing={ref.current.scrubbing}
+          playing={ref.current.playing}
+          suppressed={ref.current.suppressed}
+          streamPlanes={ref.current.streamPlanes}
+          snapshots={ref.current.snapshots}
+          remountGen={ref.current.remountGen}
+          settling={ref.current.settling}
+          awaiting={ref.current.awaiting}
+          localHashes={ref.current.localHashes}
+          onMediaFrame={onMediaFrame}
+        />
+      ) : (
+        <Stage timeline={timeline} t={t} playToken={token} proxy={proxy ? proxyOf : undefined} />
+      )}
     </div>
   );
 }

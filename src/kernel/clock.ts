@@ -33,6 +33,10 @@ declare global {
     __pcRealNow?: () => number;
     /** 舞台:真 setTimeout(暂停态虚拟时钟不动,兜底计时要靠它) */
     __pcRealSetTimeout?: (cb: () => void, ms?: number) => number;
+    /** 舞台:真 setInterval(E4b 之后 window.setInterval 登记在虚拟时钟上) */
+    __pcRealSetInterval?: (cb: () => void, ms?: number) => number;
+    /** 舞台 / 导出页:被 pinEntropy 钉住之前的 Date.now(E4b) */
+    __pcRealDateNow?: () => number;
     /** 导出页 / 预渲染快照页:实体几何的导出面(见 render/solid.ts),给 puppeteer 侧 page.evaluate 用 */
     __pcSolid?: import('../render/solid').SolidApi;
     /** 导出页:canvas 的实体框(画布像素坐标),同 __pcSolid.canvasPaintedBox */

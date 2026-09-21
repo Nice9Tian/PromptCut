@@ -17,8 +17,31 @@
  * 在 100ms,预览页 20 个全部 finished。exportClock 的 patchAnimate 就是治这个的,这里同样要装。
  *
  * 只能装在渲染面的 iframe 里。装到编辑器主文档上会把编辑器自己的 UI 动画一起冻住。
+ *
+ * # 四种计时方式(E4b)
+ *
+ * 光接管 performance.now / rAF 不够:卡片还能用 `setTimeout` / `setInterval` 计时
+ * (打字机、interval 推进的数字)。它们在虚拟时间下按墙钟乱跑 —— 探针量到的是一张跟着
+ * 真实时间走的卡,补跑出来的状态和导出对不上。所以这里把四个函数换成登记在虚拟时钟上的
+ * fake timers,`tick` 推进 `now` 时按到期顺序触发(同一 `now` 内按登记顺序),
+ * `advanceTo` / `advanceToAsync` 每步都结算。
+ *
+ * **`set(ms)` 的跳转和 `maxCatchUp` 削起点时不结算**:跳过的那段时间里的定时器不触发、
+ * 每个挂起定时器的剩余时间保持(相当于跳转期间时钟停了),所以 `setTime` 不会一口气跑
+ * 几百个 `setInterval` 回调。靠定时器累积状态的卡本来就是 `vtOk = false`,它的正确状态由
+ * 后台舞台逐步补跑(每步结算)得到,可见舞台的跳转只求不卡。
+ *
+ * **舞台自身的墙钟定时器一律用真实的**:RPC 超时、`pause({ atSec })` 武装超时、
+ * `mediaReady` 的 300 ms、`.pc-awaiting` 的 500 ms 兜底(暂停态虚拟时钟不动,用虚拟定时器
+ * 它永远不响、卡片永久隐身)、素材层。口子是 `__pcRealSetTimeout` / `__pcRealSetInterval`;
+ * 虚拟定时器的 id 从 `1e9` 起编号,所以 `clearTimeout(真 id)` 照样落到真的那份上。
+ *
+ * 第四样(`Date.now()` / 无参 `new Date()`)**不在这个文件里**:`kernel/pinEntropy.ts` 已经把它
+ * 钉成「固定纪元 + 当前帧毫秒」,而且读的正是这个时钟(`__pcStageClock.now()`),导出页同一份。
+ * 这里只负责在接管之前把真的那份存进 `__pcRealDateNow`。
  */
 import { patchAnimate } from "../kernel/exportClock";
+import { createVirtualTimers } from "./virtualTimers";
 
 export interface StageClock {
   now(): number;
@@ -32,6 +55,10 @@ export interface StageClock {
    * 补跑几百帧时,大部分帧其实什么都没发生,不必每帧都渲一遍。
    */
   tick(ms: number): number;
+  /**
+   * 眼下还挂着几个虚拟定时器(单测 / 探针用:`clearInterval` 到底有没有摘掉)。
+   */
+  pendingTimers(): number;
   /**
    * 从当前时刻推进到 target,分步跑帧。
    * 一定要分步:Motion 的帧循环会把单帧 delta 夹到 40ms 上限(防切回标签页时跳变),
@@ -90,6 +117,9 @@ export function installStageClock(): StageClock {
    */
   window.__pcRealNow = performance.now.bind(performance);
   window.__pcRealSetTimeout = window.setTimeout.bind(window);
+  window.__pcRealSetInterval = window.setInterval.bind(window);
+  // Date.now 由 pinEntropy 接管(它读的就是这个时钟);这里只在接管前把真的那份留下来
+  window.__pcRealDateNow ??= Date.now.bind(Date);
   performance.now = () => now;
   /*
    * 原始 rAF 留一份。**接管之后页面里就再没有「等浏览器画一帧」的办法了** —— 而有些活儿
@@ -107,8 +137,33 @@ export function installStageClock(): StageClock {
     queue = queue.filter((e) => e.id !== id);
   };
 
+  /* ── E4b:setTimeout / setInterval 换成登记在虚拟时钟上的 fake timers ── */
+
+  const realClearTimeout = window.clearTimeout.bind(window);
+  const realClearInterval = window.clearInterval.bind(window);
+  const timers = createVirtualTimers();
+
+  /**
+   * 拨钟但**不结算**(`set` 的跳转、`maxCatchUp` 削起点)。
+   * 每个挂起定时器的剩余时间保持 —— 相当于跳过的那段时间里时钟停了。
+   */
+  const jumpTo = (ms: number): void => {
+    timers.shift(ms - now);
+    now = ms;
+  };
+
+  window.setTimeout = ((handler: TimerHandler, ms?: number, ...args: unknown[]) =>
+    timers.set(handler, ms, args, false, now)) as typeof window.setTimeout;
+  window.setInterval = ((handler: TimerHandler, ms?: number, ...args: unknown[]) =>
+    timers.set(handler, ms, args, true, now)) as typeof window.setInterval;
+  // 真 id(舞台自己的墙钟定时器)转交给真的那份:两边的 id 空间靠 VIRTUAL_TIMER_BASE 分开
+  window.clearTimeout = ((id?: number) => { if (!timers.clear(id) && typeof id === "number") realClearTimeout(id); }) as typeof window.clearTimeout;
+  window.clearInterval = ((id?: number) => { if (!timers.clear(id) && typeof id === "number") realClearInterval(id); }) as typeof window.clearInterval;
+
   const tick = (ms: number): number => {
     now = ms;
+    // 时间先到,定时器先响:同一拍里 rAF 回调读到的状态就是定时器推过之后的
+    timers.settle(now);
     // 先取走再跑:回调里重新注册的 rAF 属于下一帧,不然会在同一帧里无限自我调用
     const due = queue;
     queue = [];
@@ -125,19 +180,22 @@ export function installStageClock(): StageClock {
   const clock: StageClock = {
     now: () => now,
     set: (ms) => {
-      now = ms;
+      // E4b:跳转不结算定时器,每个挂起定时器的剩余时间保持
+      jumpTo(ms);
     },
     tick,
+    pendingTimers: () => timers.size(),
     advanceTo(target, opts = {}) {
       const step = opts.step ?? DEFAULT_STEP;
       const maxCatchUp = opts.maxCatchUp ?? DEFAULT_MAX_CATCH_UP;
       if (target < now) {
-        // 往回走:调用方负责重挂载,这里只把时钟拨过去
-        now = target;
+        // 往回走:调用方负责重挂载,这里只把时钟拨过去(E4b:倒退是跳转,不结算定时器)
+        jumpTo(target);
         opts.onFrame?.(target, tick(target));
         return;
       }
-      if (target - now > maxCatchUp) now = target - maxCatchUp;
+      // 削起点同样是跳转:被削掉那一段里的定时器不触发(E4b)
+      if (target - now > maxCatchUp) jumpTo(target - maxCatchUp);
       let ms = now;
       while (ms < target) {
         ms = Math.min(target, ms + step);
@@ -151,13 +209,13 @@ export function installStageClock(): StageClock {
       const step = opts.step ?? DEFAULT_STEP;
       const maxCatchUp = opts.maxCatchUp ?? DEFAULT_MAX_CATCH_UP;
       if (target < now) {
-        now = target;
+        jumpTo(target);
         opts.onFrame?.(target);
         tick(target);
         opts.afterFrame?.(target);
         return;
       }
-      if (target - now > maxCatchUp) now = target - maxCatchUp;
+      if (target - now > maxCatchUp) jumpTo(target - maxCatchUp);
       /*
        * 一帧里的顺序:**让出微任务 → 拨时钟 → 提交 React → 跑 rAF 回调 → 钉动画**。
        *

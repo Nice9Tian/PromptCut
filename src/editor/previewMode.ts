@@ -62,10 +62,17 @@ export function dualStage(): boolean {
   return previewMode() === "stage" && stageOrigins() !== null;
 }
 
-/** 舞台 iframe 的地址。legacy(或端口没起来)时是同源,只有 A 那一个 */
+/**
+ * 舞台 iframe 的地址。legacy(或端口没起来)时是同源,只有 A 那一个。
+ *
+ * **开了双舞台才带 `&preview=stage`**(R3):舞台页靠它决定渲 `FrameScene` 的 live 变体
+ * (素材层进舞台、六个平面 prop 生效)还是照旧只渲 `Stage`。不带 = 今天用户手里那份编辑台,
+ * 舞台内容一个字不变 —— 这就是「新行为只在非 legacy 下生效」的落点。
+ */
 export function stageSrc(id: StageId): string {
-  const origins = dualStage() ? stageOrigins() : null;
-  return `${origins ? origins[id] : ""}${location.pathname}?stage=1&id=${id}`;
+  const dual = dualStage();
+  const origins = dual ? stageOrigins() : null;
+  return `${origins ? origins[id] : ""}${location.pathname}?stage=1&id=${id}${dual ? "&preview=stage" : ""}`;
 }
 
 /** 给 `createStageRpc` 的 `targetOrigin`:跨源时必须点名,不能用 `location.origin` */
