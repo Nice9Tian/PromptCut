@@ -1,6 +1,6 @@
 # restructure_planning
 
-渲染管线重整的全部计划文档都在这个文件夹里（2026-09-22 从仓库根和 `docs/` 集中过来）。**总入口是 `render_pipeline_restructure.md`**，各步的协议全文、实测报告和过程材料在它旁边。旧任务书 `AGY-TASK-cloud-doc-and-write-race.md` 已在 2026-09-22 整体舍弃，还有价值的内容都在下面这几份里。
+渲染管线重整的全部计划文档都在这个文件夹里（2026-09-22 从仓库根和 `docs/` 集中过来）。**总入口是 `render_pipeline_restructure.md`**（只放计划本身）；**做了什么、没做什么、验到了什么在 `render_pipeline_restructure_check.md`**，章节和总入口一一对应；各步的协议全文、实测报告和过程材料在它们旁边。旧任务书 `AGY-TASK-cloud-doc-and-write-race.md` 已在 2026-09-22 整体舍弃，还有价值的内容都在下面这几份里。
 
 - `r2-r7-task.md`：R2～R7 六步的协议全文（约 150 KB），自成一体。由任务书第 111 版的对应节折进第 75 轮的处理意见和 2026-09-22 的几条决定而成；**折叠稿还没经过独立审查**，文首写了读法、路径表和六步各读哪几节。
 - `r8-streams-task.md`：R8 轨道流的协议全文（旧任务书目标 G + 第 75 轮意见）。编码原型（`g0-b-stream-prototype.md`）的结论已回填。未经独立审查。

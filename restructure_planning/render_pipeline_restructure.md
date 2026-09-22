@@ -1,7 +1,7 @@
 # 渲染管线重整计划（render_pipeline_restructure）
 
 基线：第 1、2 节的核对做在本地 main `30917d2`（2026-09-22）；之后 main 上又落了探针（`5157f91`）、滤镜两种新 op（`7f10ebe`）、第 75 轮审查材料（`dfef7e8`）。必读：`user_pinned_goal.md`（2026-09-22 经弹窗确认改过三处：渲染 5、渲染 10、架构 1，本文逐条遵循；引用写「pinned 架构 N / 渲染 N / 划分 轴N / 平台」）。
-**本文是整个计划的总入口。** 旧任务书 `AGY-TASK-cloud-doc-and-write-race.md`（第 111 版）已按用户 2026-09-22 的决定**整体舍弃**，还有价值的内容都搬进了仓库里受版本控制的分册，动工读分册：
+**本文是整个计划的总入口，只放计划本身（范围、依赖、更正、决策）；做了什么、没做什么、验到了什么在 `render_pipeline_restructure_check.md`，章节一一对应。** 旧任务书 `AGY-TASK-cloud-doc-and-write-race.md`（第 111 版）已按用户 2026-09-22 的决定**整体舍弃**，还有价值的内容都搬进了仓库里受版本控制的分册，动工读分册：
 
 | 分册 | 管什么 |
 |---|---|
@@ -74,7 +74,7 @@
 | 其中连 30 fps 的 23.3 ms 也超的 | 0 | 2 张（orbit、snow） |
 | 次一档（接近门槛） | — | `mu-blur-fade` 10.5、`particles-star` 9.4、`particles-random` 8.6、`checklist` 8.2、`particles-spin` 8.1 |
 
-结论（2026-09-22 按 R1 的重测和追帧上界修订）：**谁会用到重管线，要分两条判据看。** (1) **单帧太慢**（`stepMs > B`）：按现在的卡库没有——R4a 改成百分位之后 62 张卡在两种配置下各连跑两趟都是 0 张、名单一致；下面是改之前的数：本机 30 fps 下 0 张；限 2 核 60 fps 下两次实测各有 3 张越线，但两次的三张完全不重合、同一张卡能差十几倍，是偶发的慢帧而不是卡的稳定成本（所以判重改取百分位、不取单次最大，见 3.3）。(2) **整段追不上**（K2 的追帧上界：要逐帧推、不能直接定位的卡，从第 0 帧追到最后一帧 2 秒内追不完就每个位置判重、整段进预渲染）：每拍最多多推 4 步，换算下来**片段超过约 8 秒就触发，和每帧多便宜无关**。粒子卡正是这一类（靠时间逐格推进，`particles.tsx` 的 `MAX_STEPS = 1200` 之外画面还会错），一张铺满 20 秒的粒子背景按规则就是重卡，播放中要靠轨道流才会动。**重管线的主要用户是「长的、有状态的卡」，不是「慢的卡」**——所以轨道流原型现在就做（第 7 节）。
+结论（2026-09-22 按 R1 的重测和追帧上界修订）：**谁会用到重管线，要分两条判据看。** (1) **单帧太慢**（`stepMs > B`）：按现在的卡库基本没有——本机 30 fps 下 0 张；限 2 核 60 fps 下两次实测各有 3 张越线，但两次的三张完全不重合、同一张卡能差十几倍，是偶发的慢帧而不是卡的稳定成本（所以判重改取百分位、不取单次最大，见 3.3）。(2) **整段追不上**（K2 的追帧上界：要逐帧推、不能直接定位的卡，从第 0 帧追到最后一帧 2 秒内追不完就每个位置判重、整段进预渲染）：每拍最多多推 4 步，换算下来**片段超过约 8 秒就触发，和每帧多便宜无关**。粒子卡正是这一类（靠时间逐格推进，`particles.tsx` 的 `MAX_STEPS = 1200` 之外画面还会错），一张铺满 20 秒的粒子背景按规则就是重卡，播放中要靠轨道流才会动。**重管线的主要用户是「长的、有状态的卡」，不是「慢的卡」**——所以轨道流原型现在就做（第 7 节）。
 
 **(b) 给素材做颜色映射会不会成为重活。** 同一段 1080p H.264 视频，三条路各量单帧的主线程耗时（无限核，脚本和原始数据在 scratchpad `colormap-bench.mjs` / `.json`）：
 
@@ -209,25 +209,23 @@ pinned 架构 4 / 5 的落点因为 vision 拆分而变清楚了：**Agent 专�
 ## 5. 重整后的步骤（只含渲染管线；每步单独可验收、可回滚）
 
 ### R0 清账（半天）
-1. （已做，`5157f91`）主工作区的探针改动和 `restructure_planning/g0-a-webview2-probe.md` 提交。
-2. `scripts/verify-unified-frames.mjs`：脚本本身两处过期已改（`eec7a08`）。改完剩下的真问题查清并修了一半——**根因一（已修，合并提交见 git log「生成快照前先让 Motion 的 JS 帧循环跑一拍」）**：在 begin-frame 控制下，Motion 自己的 JS 帧循环（spring、MotionValue）只在真截图时才推进；整帧导出每帧截图所以对，HTML 快照在截图之前生成、纯采样那一趟一张图都不截，于是**快照里所有 JS 帧循环驱动的动画整段冻在第 1 帧**（30 fps 下 `punch-pill` 的药丸整段小 33%）。修法是生成快照前先画一拍把图丢掉；导出 60 / 60 帧逐字节不变；代价是快照趟每帧多约 20～30 ms（1080p）；`bake.mjs` 在指纹清单里，旧共享快照全部失效（本来就是错的）。差异从 65607 个通道缩到 27080 个、超过 2 级的只剩 15 个。**根因二（未修）**：快照重放时重新排版丢了 1/64 px（`getComputedStyle().width` 只给三位小数，316.15625 → 316.140625），`blur(32px)` 对此极敏感、能差出 255 级；无滤镜的卡最大差 3。修它要改 `inlineStyles.ts` 的几何内联口径、作废全部共享快照，三个修法和代价在 `restructure_planning/` 之外的排查报告里（scratchpad `replay-mismatch-report.md`），R7 露出舞台前定。在此之前这条脚本仍以最后一条断言不过为已知状态。
+1. 主工作区的探针改动和 `restructure_planning/g0-a-webview2-probe.md` 提交。
+2. `scripts/verify-unified-frames.mjs` 要能整条通过：脚本本身有两处过期写法要改；改完若还有不一致，查根因、修到「整帧导出」和「HTML 快照重放」逐字节相同为止（这两条路一致是拖动贴快照的前提）。
 3. `result_decouple.md` 6.2 的遗留：`vite.config.ts:76-80` 的 `server.watch.ignored` **已经有** `**/out/**`，报告说冷启动仍被 `out/frame-library/` 拖慢——先量一次仓库根 dev server 的冷启动，确认慢在哪（监听器初扫还是别处）再动；最省事的兜底是给 `frame-library` 加 GC（原 F1）。
-4. （已做）给 `AGY-TASK-cloud-doc-and-write-race.md` 文首加一句「渲染管线部分以 `restructure_planning/render_pipeline_restructure.md` 为准」。
+4. 给 `AGY-TASK-cloud-doc-and-write-race.md` 文首加一句「渲染管线部分以 `restructure_planning/render_pipeline_restructure.md` 为准」。
 
-### R1 差异样式内联收尾（原 3b 步）——已完成，合并提交 `e67390e`（2026-09-22）
-**结果**：`tsc` 零错误，`npm test` 1472 / 1471 通过 / 0 失败 / 1 跳过；新旧快照重放逐像素比对 8 / 8 相同（`lottie-bodymovin` / `growth-curve` / `odometer` / `scene-3d` 各两帧，探针 `scripts/probes/snapshot-diff-compare.mjs`）；导出 240 / 240 帧逐字节相同。单帧快照 max 23107 → 915 KB，超 300 KB 的 DOM 卡只剩 `lottie-bodymovin`（915 KB）和 `lottie-navidad`（855 KB），DOM 卡 p90 185.8 KB（不算 lottie 47.8 KB），canvas 位图 p90 / max 466 / 628 KB。成本探针 62 张全部测通并落盘（dev 模式，`demoted: false`）：30 fps 下 `stepMs` p50 / p90 / max = 1.3 / 2.7 / 6.6 ms、0 张判重；2 核 60 fps 下 2.4 / 4.9 / 21.2 ms、3 张越线。`inlineMs` p50 / p90 / max = 6.1 / 23 / 367 ms，`rasterMs` 0.1 / 36 / 94 ms，`serializeMs` 0.8 / 1.9 / 149 ms。**实现时补定的三条**：`direct` 卡也有 `stepMs`（在等 rAF 之前取），类型收紧成 `number`；`cloneScene` 的时间并进 `inlineMs`、`stripMedia` 并进 `serializeMs`；`SNAPSHOT_FILES` 随拆出来的三个模块一起加（`solid.ts` 照旧不进）。**没做**：`configurePreviewServer` 和 build 模式那一趟（光补四个插件跑不起来，`dist/` 里没有 `/src/**`，还要一套探针 kit；留给在线浏览器模式）。**遗留给 R0**：`scripts/verify-unified-frames.mjs` 在 R1 之前的 `7f10ebe` 上就不过（`:46` 的 `'mov' !== 'rendered'`，放宽后 `:55` 导出与 `see_frames` 不等），不是 R1 弄坏的。以下是动工前写的范围，留作记录。
+### R1 差异样式内联收尾（原 3b 步）
 - 把 worktree 里的改动挪到当前 main 上重做一遍（它基于 `b5c65dc`，`frame-code.mjs` 和探针脚本引用的路径都已搬家，直接合并会冲突；`src/render/snapshotFreeze.ts` 和新模块 `freezeStyleProps.mjs` 可以原样取）。
 - **先按 3.8 改名拆文件**（`createSnapshot` / `inlineDOMStyles` / `rasterizeCanvas`，页面协议和 `snapshotCode` 一起改），再把差异内联的逻辑放进 `inlineStyles.ts`。
 - 探针和成本记录按 3.8 拆成 `stepMs` / `inlineMs` / `rasterMs` / `serializeMs`，判重只看 `stepMs`。
 - 比对口径照底稿第 111 版 A2(8)：继承属性和父元素的计算值比、布局解析值属性一律内联、其余和同标签基线比；基线按 `namespaceURI + tagName + themeId` 缓存，SVG 用 `createElementNS`；canvas 换 `<img>` 按 IMG 的基线另算。
 - 成本记录：`mode` 拼进 `device`；探针写回显式 `demoted: false`；类型声明补 `mode`。
 - **验收（那个 worktree 没交报告，全部重跑）**：`scripts/verify-unified-frames.mjs` 通过；`lottie-bodymovin` / `growth-curve` / `odometer` / `scene-3d` 内联前后位图逐像素比对；导出逐字节基线不变；DOM 卡 p90 ≤ 300 KB、canvas 卡位图 ≤ 1 MB；`npm test`、`tsc`。
-- 两张仍超 300 KB 的 `lottie-*`：不处理（见第 7 节「已定的」）。
+- 两张仍超 300 KB 的 `lottie-*`：不做专门处理（第 7 节「已定的」）。
 - `configurePreviewServer` 那部分降级：不再是后续步骤的准入，做完了就留着给在线浏览器模式用。
 
-### R1b 像素映射分流与 GPU 后端——已完成，合并提交 `dd58cb5`（2026-09-22）
-**结果**（合并后我在 main 上重跑过）：`tsc` 零错误，`npm test` 1481 / 1480 通过 / 0 失败 / 1 跳过；`node scripts/probes/pixelmap-gl-probe.mjs`（真 GPU：RTX 3080 / D3D11）八个用例里七个 GPU 对 CPU 最大差 ≤ 1 级（1080p，829 万个通道值），1080p 视频单帧主线程提交 p50 0.2 ms、GPU 计时查询 0.016 ms（CPU 旧实现 416～483 ms）；报告另称图片素材挂抠色映射的真实导出对 `mapRgba` 最大差 0 级（这一项我没重跑）。**一条已知的超标**：continuous 颜色序列有 13 / 207 万像素差 255 级——这些像素到两个 `from` 色精确等距，`mapRgba` 让 `Math.hypot` 的末位舍入决定取哪个，着色器稳定取靠前那个；不改。**实现时对 3.9 的更正**：① `colorSequence` 一律判 B（它按最近邻取色，取样成表差两百多级，A 类那条「只按 luma 取色」的判据永远不成立）；② A 类除了看表达式形状，还要把等价 `ops` 在 0～255 全值域上逐值核对，差 > 1 级就退回 B（`step()` 和矩阵的截断顺序会漏过形状判据）；③ `curves` / `matrix` 改不了 alpha，A 类的等价只在不透明素材上成立，回包带 `alphaNote`；④ C 类不是「GLSL 没有对应函数」（白名单函数一个不缺），真正翻译不了的是负底数配非整数常量指数的乘方；⑤ 画完不用 `drawImage`，用 `transferToImageBitmap` + `bitmaprenderer`（`drawImage` 的预乘来回会吃掉低 alpha，抠色正是产生低 alpha 的活），素材层那张画布因此不能再有 2D 上下文；⑥ 着色器里的 x / y 从 `gl_FragCoord` 算、行从上往下；⑦ 验收里「1080p 播放 0 长任务」量不了（编辑器预览今天不画像素映射），改成「单帧主线程 < 1 ms」。**遗留**：`normalizePixelMapDef` 忽略 `colorSequence.mode`（只认顶层 `mode`，工具描述已写明），要不要改行为另开一条。以下是动工前写的范围，留作记录。
-已做：滤镜新增 `curves` / `matrix` 两种 op 与 SVG 注入（见 3.9）。待做：`classifyPixelMap`、`create_pixel_map` / `update_pixel_map` 对 A 类的拒绝与等价 `ops` 回包、`compilePixelMapGlsl` + `src/render/pixelMapGl.ts`、删掉 CPU 逐像素循环、工具描述。验收：调色类定义被拒且回包里的 `ops` 直接可用，两者画面逐像素对比差 ≤ 2 / 255；1080p 播放 0 长任务；抠色类定义按 3.9 处理。
+### R1b 像素映射分流与 GPU 后端（不依赖别的步骤；R3 之前必须完成）
+滤镜新增 `curves` / `matrix` 两种 op 与 SVG 注入（见 3.9）；`classifyPixelMap`、`create_pixel_map` / `update_pixel_map` 对 A 类的拒绝与等价 `ops` 回包、`compilePixelMapGlsl` + `src/render/pixelMapGl.ts`、删掉 CPU 逐像素循环、工具描述。验收：调色类定义被拒且回包里的 `ops` 直接可用，两者画面逐像素对比差 ≤ 2 / 255；1080p 播放 0 长任务；抠色类定义按 3.9 处理。
 
 ### R2 双舞台与协议补齐（不改用户可见行为；legacy 默认开）
 第二个舞台 iframe、两个舞台端口、跨源 + OAC 头、`stageId` A / B、角色闸门、`whenStageReady` / `pushProject`、`play` / `pause` / 六种事件的真实实现、`RenderAborted` 补全、单飞队列（补跑 > 页面侧测量 > 探针）。验收：`stage-rpc-probe.mjs` 在跨源下复跑；A 舞台死循环 2.5 秒时父页最坏帧间隔 < 20 ms。
@@ -256,19 +254,6 @@ pinned 架构 4 / 5 的落点因为 vision 拆分而变清楚了：**Agent 专�
 依赖：R1 → R4（探针数据）；R2 → R3 → R5；R4 → R5；R6 可与 R3～R5 并行；R7 在 R2～R6 之后；R8 依赖 R5、R6；R9 依赖 R3、R5。
 
 ---
-
-### 执行记录（用户 2026-09-22：「直接按照 plan 一口气做完」）
-
-做法：我在 main 上统筹，可解耦的子任务派 Opus 在子 worktree 里做，每个回来都由我审查、重跑类型检查和全量测试后 `--no-ff` 合并。分册的独立审查不另派——实现的人就是第一批逐句对照代码读任务书的人，他们报上来的「任务书要改的句子」由我折回分册。R2～R6 全部藏在回滚开关后面（R2 起非 legacy 要显式打开），R7 才翻默认值。
-
-| 波次 | 任务 | 状态 |
-|---|---|---|
-| 前置 | R1、R1b、用词清理、分册抽取、轨道流编码原型 | 已合并 |
-| 第一波（互不碰文件） | R2 双舞台与协议；R4a 分派纯函数 + 可调系数 + 离线探针两趟；R6 服务端数据面 | 三项都已合并（main 上 `tsc` 零错误、`npm test` 1572 / 1571 / 0 失败）。R6 留了一个接线：`server/prerender-set.mjs` 的 `prerenderSetOf` 还是按声明兜底，换成 `planPipelines(...).prerenderSet` 要先让预渲染进程拿到成本记录和系数，放在 R5 一起做 |
-| 第二波 | R3 舞台内容；R4b `ProbeGate` 与常驻探针；另加一项排查（快照重放里 Motion 的 JS 帧循环动画整段冻住，已修） | 三项都已合并（`npm test` 1625 / 1624 / 0 失败） |
-| 第三波 | R5 播放与追帧（K3～K6、C4 消费方、预渲染进程接上 `planPipelines`） | 已合并（六块全做完；`npm test` 1632 / 1631 / 0 失败）。留给 R7：要预渲染进程才验得了的三条 K6 闭环、有头浏览器下的帧间隔 |
-| 第四波 | R7 露出舞台（原子切换）+ 总验收 + 桌面壳两处配合 | 已合并，**开关已翻**（`npm test` 1633 / 1632 / 0 失败；导出 60 / 60 逐字节不变；有头浏览器下 24 / 30 / 60 fps 帧间隔均值 41.76 / 33.34 / 16.67 ms、主文档长任务 0、拖动往返最大 11 ms；我自己在 5203 上开编辑器看过：两个跨源舞台 iframe、前台可见、主文档无整帧图无素材元素、播放 3 秒推进 3.000 秒、长任务 0）。R7 没验到的：拖动 / `contentBox` 与 legacy 的跨模式逐位比对、K6 的三条闭环、回滚路的截图逐字节比对、桌面壳只 `cargo check` 没真跑 |
-| 之后 | R8 轨道流；R9 共享 WebGL 渲染器；云端那一半 | |
 
 ## 6. 不在本文范围、但已经有审查结论的部分
 
