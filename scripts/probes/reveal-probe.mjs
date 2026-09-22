@@ -230,11 +230,18 @@ const launchOpts = {
   headless: !headed,
   protocolTimeout: 240000,
   args: ['--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1',
-    '--disable-background-timer-throttling', '--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding',
-    // R2 报告:不带这两个,这台机器上无头 Chrome 的 rAF 退到 10 Hz,节拍循环根本等不到帧
-    '--disable-gpu-vsync', '--disable-frame-rate-limit'],
+    '--disable-background-timer-throttling', '--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding'],
 };
-if (!headed) launchOpts.args.unshift('--window-position=-32000,-32000');
+if (headed) {
+  /*
+   * **有头下不关垂直同步**:这一趟的意义就是量用户真正看到的那个数。关掉 vsync
+   * 量到的是「主线程最快能推多少拍」,不是屏幕上真实的节拍。
+   */
+} else {
+  // R2 报告:不带这两个,这台机器上无头 Chrome 的 rAF 退到 10 Hz,节拍循环根本等不到帧
+  launchOpts.args.push('--disable-gpu-vsync', '--disable-frame-rate-limit');
+  launchOpts.args.unshift('--window-position=-32000,-32000');
+}
 
 const browser = await puppeteer.launch(launchOpts);
 let exitCode = 0;
