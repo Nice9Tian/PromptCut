@@ -21,7 +21,8 @@
  *
  * # 播放态互换（K3(b)）
  *
- * 目标不是 `store.t` 而是**目标拍 `T`**（= `store.t` + 预估补跑时长，取整到拍格）：(1)(2)(3) 的实参
+ * 目标不是 `store.t` 而是**目标拍 `T`**（= `store.t` + 预估补跑时长，取整到拍格；预估按播放位置
+ * 算，见 `guessCatchUpMs`）：(1)(2)(3) 的实参
  * 全部是 `T`（拿 `store.t` 会让互换后新 `front` 的 `mediaT` 偏差约一秒、必走硬 seek）。补完之后对
  * 旧 `front` 发 `pause({ atSec: T })` **武装停**，收到 `frame.sec === T`（按拍序号比，不比浮点）
  * 再做 (4)(5)，(5) 末尾改成 `play(T)` + `setPlaying(true)`。可见舞台先走到了 `T`（回 `passed`）
@@ -30,6 +31,7 @@
 import { getState } from "../store/project";
 import type { Project } from "../kernel/project";
 import { cardMountedAt } from "../render/frameWindow.mjs";
+import { catchUpEstimateMs } from "../render/catchUpEstimate.mjs";
 import { clipWeight, pipelineAt } from "../render/pipelinePlan.mjs";
 import type { CardCostRecord } from "../render/cardCostKey.mjs";
 import type { StageEvent, StageRpcClient } from "../render/stageRpc";
@@ -146,10 +148,35 @@ export function playingCatchUpTargets(project: Project, t: number): string[] {
   return out;
 }
 
-/** 这张卡估计要补跑多久（K3(b) 的目标拍 `T` 用） */
-function guessCatchUpMs(project: Project, clipIds: readonly string[]): number {
+/**
+ * 这张卡估计要补跑多久（K3(b) 的目标拍 `T` 用）。
+ *
+ * **按播放位置估，不再一律用整段最差代价**（pinned 渲染 4；分册 K3(b)「实际要追的帧数按
+ * pinned 渲染 4 的公式取播放头落点」）：长 motion 走的是虚拟时间，播放头此刻踩在它身上的
+ * 第几帧，就只要追这么多帧 ——
+ *
+ *   `t_c = (t − t_start) × fps × t_oc`
+ *
+ * `t_oc` 是单帧最差耗时，取成本记录的 `stepMaxMs`（K1 量的就是「推帧过程中最慢一帧」），
+ * 没有就退回 p90 的 `stepMs`。整段 `catchUpMs` 是从第 0 帧冲到**最后一帧**的总代价 ——
+ * 播放头刚进入片段时按它估，目标拍 `T` 会被推出去好几秒：可见舞台白等，那张卡在
+ * `suppressed` 里多透明一大截，而 `back` 其实几十毫秒就补完了。
+ *
+ * 位置估算**封顶在整段代价上**（两者取小）：`t_oc` 是单帧最差，乘满整段会比实测的整段
+ * 总代价还悲观。算不出位置（没有 `t_oc`、或拿不到片段）就退回整段代价，都没有就 1 秒。
+ *
+ * **只改「追多少」这个实际取值**：K2 的轻重分派仍按整段最差判（pinned 渲染 3、
+ * `clipWeight` 一个字不动）。
+ */
+export function guessCatchUpMs(project: Project, clipIds: readonly string[], t: number): number {
+  const fps = Math.max(1, project.fps || 30);
+  const starts = new Map(activeCardClips(project, t).map((c) => [c.id, c.start]));
   let worst = 0;
-  for (const id of clipIds) worst = Math.max(worst, Number(recordOf(project, id)?.catchUpMs) || 0);
+  for (const id of clipIds) {
+    const start = starts.get(id);
+    const frames = start === undefined ? 0 : (t - start) * fps;
+    worst = Math.max(worst, catchUpEstimateMs(recordOf(project, id), frames));
+  }
   return worst > 0 ? worst : DEFAULT_CATCHUP_GUESS_MS;
 }
 
@@ -278,7 +305,7 @@ export async function runPlayingSwap(pendingIds: readonly string[]): Promise<boo
   setExtraSuppressed(pendingIds);
   try {
     const fps = Math.max(1, project.fps || 30);
-    lastGuessMs = guessCatchUpMs(project, pendingIds);
+    lastGuessMs = guessCatchUpMs(project, pendingIds, getState().t);
     const beatOf = (sec: number) => Math.round(sec * fps);
     let target = Math.ceil((getState().t + lastGuessMs / 1000) * fps) / fps;
     let ready = await catchUpBack(project, target);
