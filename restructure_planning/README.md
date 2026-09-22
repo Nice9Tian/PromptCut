@@ -9,6 +9,9 @@
 - `landed-notes.md`：已落地那几步在旧任务书里留下的验收口径和「不做」条目，原文照录。
 - `future_planning.md`：以后再做的事（第 1 条：桌面版给只有原片的云端素材补转小版）。
 - `g0-a-webview2-probe.md` / `g0-b-stream-prototype.md`：桌面壳探针（硬解、毛玻璃、进程隔离）和轨道流编码原型的实测报告。
+- `hand_off.md`：**交接文档**，接手先读它。
+- `hunman_read.md` / `task_recheck.md`：独立复核（条目版 / 证据版），比执行方的 check 更可信。
+- `reports/`：每一步实现者的原始报告（r1～r7、排查、文档抽取）。
 - `r75/agy-r75-NN.md`：第 75 轮十份分步审查报告（2026-09-19，每份只审一步；1～6 号是执行者走查加行号核对，7～10 号是设计级）。报告里的任务书行号指的是 `AGY-TASK-cloud-doc-and-write-race.md` 第 111 版，源码行号指的是提交 `b5c65dc`——解耦之后一部分已经过期。
 - `r75/fold-notes.md`：主会话对这十份报告和三项实测逐条的处理意见（采纳 / 不采纳 / 改哪一句）。`restructure_planning/render_pipeline_restructure.md` 第 3 节是它的摘要；云端 / 文档服务那一半的结论只在这里有。
 - `r75/a0-acceptance.md`：能力审计两条验收的补核结果（89 张卡 `unknown` 为 0；5 份旧 `.proc` 都能打开）。
