@@ -5,12 +5,12 @@
 
 | 分册 | 管什么 |
 |---|---|
-| `docs/plan/r2-r7-task.md` | R2～R7：双舞台、舞台内容、探针与分派、播放与追帧、数据面、露出舞台 |
-| `docs/plan/r8-streams-task.md` | R8 轨道流（依赖编码原型的数标了「待 G0-b 原型定稿」） |
-| `docs/plan/r9-webgl-task.md` | R9 共享 WebGL 渲染器 |
-| `docs/plan/cloud-task.md` | 云端 / 文档服务那一半（旧第 5～10 步），排在 R7 之后 |
-| `docs/plan/landed-notes.md` | 已落地那几步留下的验收口径和「不做」条目 |
-| `docs/plan/r75/` | 第 75 轮十份分步审查和逐条处理意见（过程材料） |
+| `restructure_planning/r2-r7-task.md` | R2～R7：双舞台、舞台内容、探针与分派、播放与追帧、数据面、露出舞台 |
+| `restructure_planning/r8-streams-task.md` | R8 轨道流（依赖编码原型的数标了「待 G0-b 原型定稿」） |
+| `restructure_planning/r9-webgl-task.md` | R9 共享 WebGL 渲染器 |
+| `restructure_planning/cloud-task.md` | 云端 / 文档服务那一半（旧第 5～10 步），排在 R7 之后 |
+| `restructure_planning/landed-notes.md` | 已落地那几步留下的验收口径和「不做」条目 |
+| `restructure_planning/r75/` | 第 75 轮十份分步审查和逐条处理意见（过程材料） |
 
 分册都已折进本文第 3 节的更正和第 75 轮的处理意见，但**都还没经过独立审查**。本文下面提到「底稿」的地方，指的就是已舍弃的旧任务书，留作来历说明；内容以分册为准。
 
@@ -43,7 +43,7 @@
 
 **已落地、已提交**：原任务书第 1、2、2b、3 步（`b5c65dc`）——能力审计与审阅表、镜像插件与两层 diff、素材按哈希寻址、快照格式（`freezeScene`）、共享键与快照库、挂载算式统一、JS 图卡、舞台 postMessage RPC（`stageRpc.ts` / `stageBridge.ts`）、`solid.ts`、成本记录的键与端点、离线成本探针。之后是 PR #1 和这次的五项解耦。
 
-**已提交（`5157f91`）**：桌面壳探针——`scripts/probes/probe-connect.mjs`、`videodecoder-probe.mjs`（新），`backdrop-probe.mjs` / `oac-probe.mjs`（改），报告 `docs/g0-a-webview2-probe.md`。三项全过：WebView2 153 硬解 H.264（1080p 稳态 1.5 ms / 帧，上下拼合的 1920×2176 约 2.5 ms / 帧）；跨源 iframe 里视频下的毛玻璃正确；带 `Origin-Agent-Cluster: ?1` 时舞台 iframe 独立进程（父页最坏帧间隔 7 ms）。
+**已提交（`5157f91`）**：桌面壳探针——`scripts/probes/probe-connect.mjs`、`videodecoder-probe.mjs`（新），`backdrop-probe.mjs` / `oac-probe.mjs`（改），报告 `restructure_planning/g0-a-webview2-probe.md`。三项全过：WebView2 153 硬解 H.264（1080p 稳态 1.5 ms / 帧，上下拼合的 1920×2176 约 2.5 ms / 帧）；跨源 iframe 里视频下的毛玻璃正确；带 `Origin-Agent-Cluster: ?1` 时舞台 iframe 独立进程（父页最坏帧间隔 7 ms）。
 
 **已核、无代码改动**：能力审计的两条验收都过——仓库注册表 89 张卡里 `unknown` 为 0、54 张粒子卡全部 `canvasHeavy`；5 份旧 `.proc`（含没写 `frameMode` 的定制卡、裸 Project、Python 卡样本、全部素材无哈希）都能打开。
 
@@ -116,8 +116,8 @@
 
 - 成本记录：舞台的 `probe` 事件只报测量值；`device`、`measuredAt`、`mode`、`demoted: false` 由父页补齐后整条 PUT（`costs-store` 是整条替换）。
 - **只用 `demoted` 一面旗**：K6 降级 = 父页查出旧记录，整条 PUT `{ ...旧记录, capped: true, demoted: true }`（不写 `null`）；探针写回显式带 `demoted: false`；`pinnedHeavy` 留给将来的人工钉死，本任务不写它。分派时 `demoted` 和 `pinnedHeavy` 都当 `capped`。
-- **`stepMs` 取稳健统计值、不取单次最大，并保留可调系数（用户 2026-09-22 定）**：2 核下同一张卡两次实测的单帧最差能差十几倍，越线的是偶发卡顿。`stepMs` = 每帧活渲耗时的第 `STEP_PERCENTILE`（缺省 0.9）百分位、至少 `STEP_MIN_SAMPLES`（缺省 16）帧，单次最大另记 `stepMaxMs` 只作诊断；判重比较式 `stepMs × COST_SCALE > B`（缺省 1），贪心权重同样乘。三个系数放 `src/render/pipelineTuning.mjs`，覆盖值在本机 `out/pipeline-tuning.json`、随成本记录一起发给两端，不改代码就能调；不动 pinned 的 70% 预算公式。细则见 `docs/plan/r2-r7-task.md` 的 K1 / K2。
-- `catchUpMs` 只有一个定义：逐帧推进耗时之和、不含生成快照；探针每帧分「推进」「生成快照」两段计时；被预算截断时按已推帧的平均外推。**R1 的实测里 61 张推帧卡全部被截断**（旧截断判据是「这一次 `render` 累计墙钟超过 B」，预算里还含生成快照，只推得了 1～10 帧），`catchUpMs` 靠含挂载成本的前几帧外推、偏大 1.7～3.6 倍，5 张便宜卡因此被追帧上界错判成重。**已定（2026-09-22，pinned 渲染 5 已按弹窗确认的原文补写）**：探针分两趟——计时趟只推进不生成快照，按单帧（稳健值）判「太慢」，不按累计时间截断，只为长片段留 300 帧 / 500 ms 的封顶并用中位数外推；快照趟才生成快照，仍受一拍预算约束。细则见 `docs/plan/r2-r7-task.md` 的 K1。
+- **`stepMs` 取稳健统计值、不取单次最大，并保留可调系数（用户 2026-09-22 定）**：2 核下同一张卡两次实测的单帧最差能差十几倍，越线的是偶发卡顿。`stepMs` = 每帧活渲耗时的第 `STEP_PERCENTILE`（缺省 0.9）百分位、至少 `STEP_MIN_SAMPLES`（缺省 16）帧，单次最大另记 `stepMaxMs` 只作诊断；判重比较式 `stepMs × COST_SCALE > B`（缺省 1），贪心权重同样乘。三个系数放 `src/render/pipelineTuning.mjs`，覆盖值在本机 `out/pipeline-tuning.json`、随成本记录一起发给两端，不改代码就能调；不动 pinned 的 70% 预算公式。细则见 `restructure_planning/r2-r7-task.md` 的 K1 / K2。
+- `catchUpMs` 只有一个定义：逐帧推进耗时之和、不含生成快照；探针每帧分「推进」「生成快照」两段计时；被预算截断时按已推帧的平均外推。**R1 的实测里 61 张推帧卡全部被截断**（旧截断判据是「这一次 `render` 累计墙钟超过 B」，预算里还含生成快照，只推得了 1～10 帧），`catchUpMs` 靠含挂载成本的前几帧外推、偏大 1.7～3.6 倍，5 张便宜卡因此被追帧上界错判成重。**已定（2026-09-22，pinned 渲染 5 已按弹窗确认的原文补写）**：探针分两趟——计时趟只推进不生成快照，按单帧（稳健值）判「太慢」，不按累计时间截断，只为长片段留 300 帧 / 500 ms 的封顶并用中位数外推；快照趟才生成快照，仍受一拍预算约束。细则见 `restructure_planning/r2-r7-task.md` 的 K1。
 
 ### 3.4 数据面
 
@@ -209,10 +209,10 @@ pinned 架构 4 / 5 的落点因为 vision 拆分而变清楚了：**Agent 专�
 ## 5. 重整后的步骤（只含渲染管线；每步单独可验收、可回滚）
 
 ### R0 清账（半天）
-1. （已做，`5157f91`）主工作区的探针改动和 `docs/g0-a-webview2-probe.md` 提交。
-2. `scripts/verify-unified-frames.mjs`：脚本本身两处过期已改（`eec7a08`）。改完剩下的真问题查清并修了一半——**根因一（已修，合并提交见 git log「生成快照前先让 Motion 的 JS 帧循环跑一拍」）**：在 begin-frame 控制下，Motion 自己的 JS 帧循环（spring、MotionValue）只在真截图时才推进；整帧导出每帧截图所以对，HTML 快照在截图之前生成、纯采样那一趟一张图都不截，于是**快照里所有 JS 帧循环驱动的动画整段冻在第 1 帧**（30 fps 下 `punch-pill` 的药丸整段小 33%）。修法是生成快照前先画一拍把图丢掉；导出 60 / 60 帧逐字节不变；代价是快照趟每帧多约 20～30 ms（1080p）；`bake.mjs` 在指纹清单里，旧共享快照全部失效（本来就是错的）。差异从 65607 个通道缩到 27080 个、超过 2 级的只剩 15 个。**根因二（未修）**：快照重放时重新排版丢了 1/64 px（`getComputedStyle().width` 只给三位小数，316.15625 → 316.140625），`blur(32px)` 对此极敏感、能差出 255 级；无滤镜的卡最大差 3。修它要改 `inlineStyles.ts` 的几何内联口径、作废全部共享快照，三个修法和代价在 `docs/plan/` 之外的排查报告里（scratchpad `replay-mismatch-report.md`），R7 露出舞台前定。在此之前这条脚本仍以最后一条断言不过为已知状态。
+1. （已做，`5157f91`）主工作区的探针改动和 `restructure_planning/g0-a-webview2-probe.md` 提交。
+2. `scripts/verify-unified-frames.mjs`：脚本本身两处过期已改（`eec7a08`）。改完剩下的真问题查清并修了一半——**根因一（已修，合并提交见 git log「生成快照前先让 Motion 的 JS 帧循环跑一拍」）**：在 begin-frame 控制下，Motion 自己的 JS 帧循环（spring、MotionValue）只在真截图时才推进；整帧导出每帧截图所以对，HTML 快照在截图之前生成、纯采样那一趟一张图都不截，于是**快照里所有 JS 帧循环驱动的动画整段冻在第 1 帧**（30 fps 下 `punch-pill` 的药丸整段小 33%）。修法是生成快照前先画一拍把图丢掉；导出 60 / 60 帧逐字节不变；代价是快照趟每帧多约 20～30 ms（1080p）；`bake.mjs` 在指纹清单里，旧共享快照全部失效（本来就是错的）。差异从 65607 个通道缩到 27080 个、超过 2 级的只剩 15 个。**根因二（未修）**：快照重放时重新排版丢了 1/64 px（`getComputedStyle().width` 只给三位小数，316.15625 → 316.140625），`blur(32px)` 对此极敏感、能差出 255 级；无滤镜的卡最大差 3。修它要改 `inlineStyles.ts` 的几何内联口径、作废全部共享快照，三个修法和代价在 `restructure_planning/` 之外的排查报告里（scratchpad `replay-mismatch-report.md`），R7 露出舞台前定。在此之前这条脚本仍以最后一条断言不过为已知状态。
 3. `result_decouple.md` 6.2 的遗留：`vite.config.ts:76-80` 的 `server.watch.ignored` **已经有** `**/out/**`，报告说冷启动仍被 `out/frame-library/` 拖慢——先量一次仓库根 dev server 的冷启动，确认慢在哪（监听器初扫还是别处）再动；最省事的兜底是给 `frame-library` 加 GC（原 F1）。
-4. （已做）给 `AGY-TASK-cloud-doc-and-write-race.md` 文首加一句「渲染管线部分以 `render_pipeline_restructure.md` 为准」。
+4. （已做）给 `AGY-TASK-cloud-doc-and-write-race.md` 文首加一句「渲染管线部分以 `restructure_planning/render_pipeline_restructure.md` 为准」。
 
 ### R1 差异样式内联收尾（原 3b 步）——已完成，合并提交 `e67390e`（2026-09-22）
 **结果**：`tsc` 零错误，`npm test` 1472 / 1471 通过 / 0 失败 / 1 跳过；新旧快照重放逐像素比对 8 / 8 相同（`lottie-bodymovin` / `growth-curve` / `odometer` / `scene-3d` 各两帧，探针 `scripts/probes/snapshot-diff-compare.mjs`）；导出 240 / 240 帧逐字节相同。单帧快照 max 23107 → 915 KB，超 300 KB 的 DOM 卡只剩 `lottie-bodymovin`（915 KB）和 `lottie-navidad`（855 KB），DOM 卡 p90 185.8 KB（不算 lottie 47.8 KB），canvas 位图 p90 / max 466 / 628 KB。成本探针 62 张全部测通并落盘（dev 模式，`demoted: false`）：30 fps 下 `stepMs` p50 / p90 / max = 1.3 / 2.7 / 6.6 ms、0 张判重；2 核 60 fps 下 2.4 / 4.9 / 21.2 ms、3 张越线。`inlineMs` p50 / p90 / max = 6.1 / 23 / 367 ms，`rasterMs` 0.1 / 36 / 94 ms，`serializeMs` 0.8 / 1.9 / 149 ms。**实现时补定的三条**：`direct` 卡也有 `stepMs`（在等 rAF 之前取），类型收紧成 `number`；`cloneScene` 的时间并进 `inlineMs`、`stripMedia` 并进 `serializeMs`；`SNAPSHOT_FILES` 随拆出来的三个模块一起加（`solid.ts` 照旧不进）。**没做**：`configurePreviewServer` 和 build 模式那一趟（光补四个插件跑不起来，`dist/` 里没有 `/src/**`，还要一套探针 kit；留给在线浏览器模式）。**遗留给 R0**：`scripts/verify-unified-frames.mjs` 在 R1 之前的 `7f10ebe` 上就不过（`:46` 的 `'mov' !== 'rendered'`，放宽后 `:55` 导出与 `see_frames` 不等），不是 R1 弄坏的。以下是动工前写的范围，留作记录。
@@ -272,7 +272,7 @@ pinned 架构 4 / 5 的落点因为 vision 拆分而变清楚了：**Agent 专�
 
 ## 6. 不在本文范围、但已经有审查结论的部分
 
-第 75 轮对云端 / 文档服务那一半（原第 5～10 步）查出的问题和我的处理意见，逐条记在 `docs/plan/r75/fold-notes.md`（十份报告原文在同一目录），要点：第 5、6 步顺序倒置（卡片源码同步和快照清单要用本机文档服务，应挪到第 6 步）；内容库要补一套 WebSocket 消息；素材上传统一走分片并补「已收分片」查询；`uploaded` 要按两档分开记；B4 的期望版本只约束 Agent 写工具；模式切换时 `projectRev` 不能归零；拆分模式下 AI 菜单的动图预览不能被路由进 Agent 专用 Chrome。**素材两档（pinned 架构 1，2026-09-22 定稿）**：和底稿第 5 步一致——小版由导入方本机用 ffmpeg 转出（云端小规模运行，没有转码能力），小版和原片都分片上传；要补的只有上传队列的顺序：**逐个素材，同一个素材先小版后原片，两份都 `uploaded` 才轮到下一个素材**（底稿是「所有素材的小版先传、原片后传」，要改）；`uploaded` 仍按两档分开记（第 75 轮的结论不变）；拉取方有小版先拉小版、原片落盘后换档，没有小版直接拉原片；换档前仍要过「原片能不能在浏览器里播放」那一关，放不了的预览一直停在小版，导出才用原片；在线浏览器模式**能拉小版、但产不出小版**：拉取侧和桌面版完全一样（云端有小版就先拉小版）；只有在浏览器里导入的素材，因为没有本机 ffmpeg，上传时只有原片一档，别人拉它时按 pinned「还没有小版就直接拉原片」走。用户 2026-09-22 定：现在就这样，不补；「桌面版发现云端缺小版就补转一份传上去」记在 `future_planning.md` 第 1 条，以后再做；不在页面里用 WebCodecs 转。**这一节的内容已全部折进 `docs/plan/cloud-task.md`**（2026-09-22），以它为准；它文末列了 6 个动工前要定的问题。
+第 75 轮对云端 / 文档服务那一半（原第 5～10 步）查出的问题和我的处理意见，逐条记在 `restructure_planning/r75/fold-notes.md`（十份报告原文在同一目录），要点：第 5、6 步顺序倒置（卡片源码同步和快照清单要用本机文档服务，应挪到第 6 步）；内容库要补一套 WebSocket 消息；素材上传统一走分片并补「已收分片」查询；`uploaded` 要按两档分开记；B4 的期望版本只约束 Agent 写工具；模式切换时 `projectRev` 不能归零；拆分模式下 AI 菜单的动图预览不能被路由进 Agent 专用 Chrome。**素材两档（pinned 架构 1，2026-09-22 定稿）**：和底稿第 5 步一致——小版由导入方本机用 ffmpeg 转出（云端小规模运行，没有转码能力），小版和原片都分片上传；要补的只有上传队列的顺序：**逐个素材，同一个素材先小版后原片，两份都 `uploaded` 才轮到下一个素材**（底稿是「所有素材的小版先传、原片后传」，要改）；`uploaded` 仍按两档分开记（第 75 轮的结论不变）；拉取方有小版先拉小版、原片落盘后换档，没有小版直接拉原片；换档前仍要过「原片能不能在浏览器里播放」那一关，放不了的预览一直停在小版，导出才用原片；在线浏览器模式**能拉小版、但产不出小版**：拉取侧和桌面版完全一样（云端有小版就先拉小版）；只有在浏览器里导入的素材，因为没有本机 ffmpeg，上传时只有原片一档，别人拉它时按 pinned「还没有小版就直接拉原片」走。用户 2026-09-22 定：现在就这样，不补；「桌面版发现云端缺小版就补转一份传上去」记在 `restructure_planning/future_planning.md` 第 1 条，以后再做；不在页面里用 WebCodecs 转。**这一节的内容已全部折进 `restructure_planning/cloud-task.md`**（2026-09-22），以它为准；它文末列了 6 个动工前要定的问题。
 
 ---
 
@@ -281,7 +281,7 @@ pinned 架构 4 / 5 的落点因为 vision 拆分而变清楚了：**Agent 专�
 **还没定的**
 
 1. R2～R7、R8、R9、云端四份分册都还没经过独立审查：R2 动工前要不要派、派谁。
-2. `docs/plan/cloud-task.md` 文末的 6 个问题（A3b 要不要整体挪到第 6 步、原片可播放性怎么探、`uploaded` 在本地模式的取值、流的键名对齐、在线重型控件渲染服务的鉴权与上限、第 8 步归哪一半）——云端那一半动工前定。
+2. `restructure_planning/cloud-task.md` 文末的 6 个问题（A3b 要不要整体挪到第 6 步、原片可播放性怎么探、`uploaded` 在本地模式的取值、流的键名对齐、在线重型控件渲染服务的鉴权与上限、第 8 步归哪一半）——云端那一半动工前定。
 3. R8 / R9 分册留的三个细节（稀疏分段的步长是否只能取 15 的因数、G4 里生产侧 `frameMs` 要不要换名、M2 一处长句的读法）——各自动工时定。
 
 **已定的（2026-09-22，pinned 的对应条目都已按弹窗确认的原文改写）**
@@ -289,10 +289,10 @@ pinned 架构 4 / 5 的落点因为 vision 拆分而变清楚了：**Agent 专�
 - 判重门槛只看活渲耗时；生成快照的耗时拆成样式内联 / 画布栅格化 / 序列化三个数单独上报（pinned 渲染 5；本文 3.1 第 3 条、3.8）。
 - 素材两档：小版由上传方本机转码、云端不转码；逐个素材先小版后原片，两份都传完才下一个；拉取时有小版先拉小版再换原片（pinned 架构 1；本文第 6 节）。「单词操作块」改成了「单次操作块」。
 - 同一个舞台的所有 canvas 卡共用一个 WebGL 上下文和一个 Worker，放在哪见两条路线，导出页自己开一个（pinned 渲染 10；本文 3.6）。
-- 两张仍超 300 KB 的 lottie 卡不做专门处理：它们不判重、不进预渲染集合、根本不生成快照；原来的二选一作废，换成一条通用兜底——任何超限的快照帧不进就绪索引、不投递，那一层按缺料处理并记诊断（`docs/plan/r2-r7-task.md` 的 A3c）。
+- 两张仍超 300 KB 的 lottie 卡不做专门处理：它们不判重、不进预渲染集合、根本不生成快照；原来的二选一作废，换成一条通用兜底——任何超限的快照帧不进就绪索引、不投递，那一层按缺料处理并记诊断（`restructure_planning/r2-r7-task.md` 的 A3c）。
 - **粒子卡不迁进共享 WebGL 渲染器的 Worker**（R9 的迁移名单里没有它）：54 张粒子卡共用一份 tsParticles（2D 画布 + 主线程库，`dom2d` 契约），迁 = 用 WebGL 重写粒子引擎、54 份配置逐张对画面、导出基线重立；整库搬进 Worker 也不行（它依赖 DOM，项目还把它的离屏画布机制短路掉了，`particles.tsx` 的 `withRealCanvas`）；而且迁了也解决不了真正的问题——Worker 里的粒子一样要从头逐步推。它的稳定活渲成本只有 1.4～3.8 ms，短片段本来就判轻；**长粒子片段（超过约 8 秒）按追帧上界判重，交给轨道流**。「模拟状态检查点」仍在不做清单里。
 - 轨道流的编码原型现在就做、不等 R7：用户明确要面向低配机、60 fps 下保证流畅。原型（原 G0-b：解码吞吐、编码耗时与 alpha 误差、严格 GOP 参数、fMP4 切分、裁剪矩形取法）已派 Opus 在子 worktree 里做，只产出探针、数据和报告，不碰主线；R8 的实现仍排在 R7 之后。
 - 代码注释和文档里的禁用旧词做一次全仓清理（只动注释和文档，字符串字面量只列不改），已派出去，单独合并、不混进 R2～R7。
 - 轨道流的 `streams` 开关**默认开、生产限速**：只在空闲时生产、同时一条、用户操作时让路；裁剪矩形用实测实体框；先稀疏（`stride = 3`）后补密；流没录好时界面要有「预渲染中」的提示（样式 R8 动工时定）。原型的三条硬结论已写进 R8 分册：`out_range` 必须是 `tv`、预乘色配着色器钳位、单个解码器同时持有 ≤ 8 帧。
-- 旧任务书整体舍弃，有价值的内容搬进 `docs/plan/` 下的分册（见文首的表）。
+- 旧任务书整体舍弃，有价值的内容搬进 `restructure_planning/` 下的分册（见文首的表）。
 - 像素映射由工具主动分流：整帧调色走 `create_filter` 的 `curves` / `matrix`，要逐像素的走 WebGL 后端，R1b 里做完，不设「先拒绝」的过渡期（本文 3.9）。

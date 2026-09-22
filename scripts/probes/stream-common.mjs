@@ -1,7 +1,7 @@
 // 轨道流（目标 G）编码原型的共用件：G0-b 的各支探针都从这里拿 ffmpeg 路径、G3 滤镜链、
 // 严格 GOP 参数、fMP4 按 box 切分、以及生成 / 读取带透明的 PNG。
 //
-// 口径按 docs/plan/r75/fold-notes.md 的 r75-05（已采纳）：
+// 口径按 restructure_planning/r75/fold-notes.md 的 r75-05（已采纳）：
 //   - 画面尺寸外扩到偶数宽高（yuv420p 要求）
 //   - 色半区存**预乘**色：滤镜链开头 format=gbrap,premultiply=inplace=1
 //   - Node 端按 MP4 box 切 init.mp4 / 分段、丢 mfra

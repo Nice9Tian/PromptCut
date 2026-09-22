@@ -1,10 +1,10 @@
 # G0-b 轨道流编码原型报告（七项全部完成，(7) 的 nvenc 子项留白）
 
-R8 轨道流（`docs/plan/r8-streams-task.md`，原任务书目标 G）的 **G0-b** 编码原型，2026-09-22。原始数据（12 个 JSON / log）留在当时会话的临时目录，没有进仓库；各项都能用「复现」一节的命令重跑。
+R8 轨道流（`restructure_planning/r8-streams-task.md`，原任务书目标 G）的 **G0-b** 编码原型，2026-09-22。原始数据（12 个 JSON / log）留在当时会话的临时目录，没有进仓库；各项都能用「复现」一节的命令重跑。
 只产出探针脚本、实测数据和结论，**不改任何产品代码**。
 
 分支 `worktree-agent-a17aa99022b191c1c`，worktree `C:\Users\admin\Documents\PromptCut\.claude\worktrees\agent-a17aa99022b191c1c`，起点 `43644d9`（已 ff 到 main）。
-口径按 `docs/plan/r75/fold-notes.md` 的 r75-05 采纳后版本。
+口径按 `restructure_planning/r75/fold-notes.md` 的 r75-05 采纳后版本。
 
 ## 进度清单
 

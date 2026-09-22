@@ -157,7 +157,7 @@ export function mapRgba(def, rgba, env = {}, targetRgba = null) {
 /* ================================================================== 分类:A 整帧调色 / B 逐像素 / C 翻译不了 */
 
 /**
- * 像素映射有三条去向(见 render_pipeline_restructure.md 3.9):
+ * 像素映射有三条去向(见 restructure_planning/render_pipeline_restructure.md 3.9):
  *
  *   A 整帧调色  where 恒定、to 只是颜色到颜色的函数 → 等价于一串 curves / matrix 滤镜步骤。
  *              这种活交给 create_filter:预览走 SVG 滤镜、导出走 lutrgb / colorchannelmixer,

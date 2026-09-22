@@ -138,13 +138,13 @@
 - 非阻塞 3.8 **采纳** `VideoFrame` 预算与 80 MB 验收对不上（解码帧是上下拼合后的 1920×2176，NV12 ≈ 6.27 MB / 帧，24 帧 ≈ 150 MB）：预算按字节算——总量 ≤ 80 MB（1080p 全幅流约 12 帧）、每流保底 3 帧；L234 写明分辨率前提。
 - 对 pinned 无建议。agy pro 配额在这一份最后一轮返工时耗尽，manager 补做。
 
-## Opus-A G0-a 桌面壳探针 —— 三项全过（真壳 WebView2 153.0.4234.32、RTX 3080），报告 docs/g0-a-webview2-probe.md，原始数据 opus-g0a/
+## Opus-A G0-a 桌面壳探针 —— 三项全过（真壳 WebView2 153.0.4234.32、RTX 3080），报告 restructure_planning/g0-a-webview2-probe.md，原始数据 opus-g0a/
 
 - (1) `VideoDecoder.isConfigSupported(avc1.640028, prefer-hardware)` = true，且真解码：1080p 稳态 1.5 ms / 帧（p50）、首帧 1.9～9.6 ms；1920×2176（1080p 上下拼合）2.4～2.7 ms / 帧、首帧 5.9～7.3 ms；硬解与软解的 `codedSize` 不同（1920×1088 vs 1920×1090），证明真走了硬件。`isConfigSupported` **不校验 level 与分辨率**（L4.0 配 1920×2176 也回 true）；实际 SPS 会写成 `avc1.640033`，G5「codec 从 `avcC` 拼」所以线上不会用错。
 - (2) 毛玻璃 9 个用例全过，数字与 Chrome 152 逐位相同；「跨源 OOPIF 里 `<video>` 下的毛玻璃」模糊正确；1280×720 复跑仍正确。附带事实：跨源 OOPIF 里的玻璃能模糊父文档的 canvas 和 video。
 - (3) OAC：带 `Origin-Agent-Cluster: ?1` 时 iframe 独立进程，A 死循环 2.5 s 下父页最坏 rAF 间隔 7 ms、B 6 ms。**给 E1 的使用前提（要写进任务书）**：舞台 origin 在同一个 browsing context group 里的**第一次加载**就必须带这个头，之后补加无效（Chromium 按 BrowsingInstance 缓存 origin-keyed 决定；WebView2 只能同页导航，第一轮因此出过假阴性）；`window.originAgentCluster` 恒回 true、不能当判据，验收要看 CDP `Target.getTargets` 里有没有 `type: 'iframe'` 的 target。
 - WebView2 上 CDP 的两个坑（写进了探针注释）：`Target.createTarget` 不报错直接挂死、还会把 agent webview 导航成 `about:blank`；连着浏览器时 `server.close()` 不返回，要 `closeAllConnections()`。
-- 改动文件：`scripts/probes/probe-connect.mjs`（新）、`videodecoder-probe.mjs`（新）、`backdrop-probe.mjs` / `oac-probe.mjs`（加 `--connect` 等开关，原 Chrome 跑法回归过）、`docs/g0-a-webview2-probe.md`（新）。未提交。
+- 改动文件：`scripts/probes/probe-connect.mjs`（新）、`videodecoder-probe.mjs`（新）、`backdrop-probe.mjs` / `oac-probe.mjs`（加 `--connect` 等开关，原 Chrome 跑法回归过）、`restructure_planning/g0-a-webview2-probe.md`（新）。未提交。
 - **任务书要改**：顺序表第 4 步准入「G0-a 通过（未跑）」→「已过（2026-09-19，报告路径）」；G0 段记结论；E1 加 OAC 头的使用前提与验收判据；现状「探针实测」条更新到 WebView2 153 的结果。G0-b 仍未做（与第 4 步并行）。
 
 ## r75-03 第 4 步·舞台面（E0～E7、A4、D3 用户命中、D4 单飞队列、F2）—— 3 阻塞 / 15 非阻塞 / 范围外 3；agy 的 4.1 表约七成是假文本、被 manager 整张作废，manager 用脚本按行号直读源码重做 130 行。结论「有条件能」
