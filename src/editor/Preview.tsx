@@ -141,6 +141,9 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
    * 按播放时播放头不在这个范围里(在第一张卡前面,或者已经播到头),从最早那张卡开始播。
    */
   const contentStart = contentStartOf(project.tracks);
+  /** 舞台那一路的 `playing` effect 依赖只有三项(见那里的说明),播放起点从这里读 */
+  const contentStartRef = useRef(contentStart);
+  contentStartRef.current = contentStart;
   useEffect(() => {
     /*
      * E6:**非 legacy 下这个循环不启动** —— 播放头由 K4 的 `frame` 事件推进
@@ -338,8 +341,17 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
   }, []);
 
   /**
-   * 素材和音频按墙钟播:相邻两条 `frame` 到得比这个还慢就暂停它们(K4 / pinned 架构 10;
-   * `mediaSync.ts` 的 `IN_SYNC_SEC` 同值)。下一拍准时到达时再放回去 —— 这就是用户能感到的「小卡」。
+   * 素材和音频按墙钟播:**一拍的名义时长之外再慢这么多**就暂停它们
+   * (K4 / pinned 架构 10;`mediaSync.ts` 的 `IN_SYNC_SEC` 同值)。
+   * 下一拍准时到达时再放回去 —— 这就是用户能感到的「小卡」。
+   *
+   * 阈值按 pinned 固定 40 毫秒、不按帧算;**量的是「停顿」而不是两条 `frame` 之间的
+   * 总间隔** —— 一拍本来就要 `1000/fps` 毫秒,把它算进卡顿是把正常节拍当成了停顿。
+   * 24 / 25 fps 尤其明显:60 Hz 屏上一拍 41.7 / 40 ms 排不进 16.7 ms 的格子,
+   * 实际到达是 33 / 50 交替(`StageView.tsx` 的节拍循环自己也这么说),
+   * 按总间隔判的话每隔一拍就误判一次卡顿、音频每 ~80 ms 暂停恢复一次。
+   * 按「超出名义拍长多少」判:24 fps 的 50 ms 拍只超出 8.3 ms,60 fps 掉一次 vsync
+   * 也只超出 16.7 ms,都进不了 40 ms;而真的卡一下(比如 300 ms)照样当场判出来。
    */
   const MEDIA_STALL_MS = 40;
   /** E6:播放中 `refreshRects` 改成定时器,别每拍都往返一次 */
@@ -356,6 +368,9 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
   const stalledRef = useRef(false);
   /** 上一条 `frame` 的**真实**到达时刻(首拍以 `play()` 回包时刻为起点) */
   const lastFrameAtRef = useRef(0);
+  /** 验收口:这一轮播放判过几次卡顿、最大的一次超出名义拍长多少毫秒 */
+  const stallCountRef = useRef(0);
+  const gapMaxRef = useRef(0);
 
   /*
    * 快照 / 抑制的投递(C4、C5、A3c;排程在 `snapshotFeed.ts`)。
@@ -454,6 +469,9 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
     w.__pcPreviewDiag = () => ({
       frontId: frontIdRef.current,
       mediaStalled: stalledRef.current,
+      // K4 / pinned 架构 10:这一轮播放里判过几次卡顿(正常播放应当是 0)
+      mediaStallCount: stallCountRef.current,
+      mediaGapMaxMs: gapMaxRef.current,
       suppressed: suppressedRef.current ? suppressedRef.current.split("|") : [],
       pendingDemote: [...pendingDemotes()],
       demoted: [...demotedClips()],
@@ -489,8 +507,12 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
           }
         }
         if (!prev) break;
-        const stalled = now - prev > MEDIA_STALL_MS;
+        // 一拍的名义时长之外还慢了多少(见 MEDIA_STALL_MS 上面那段)
+        const overBeat = now - prev - 1000 / Math.max(1, getState().project.fps || 30);
+        if (overBeat > gapMaxRef.current) gapMaxRef.current = overBeat;
+        const stalled = overBeat > MEDIA_STALL_MS;
         if (stalled === stalledRef.current) break;
+        if (stalled) stallCountRef.current++;
         stalledRef.current = stalled;
         setMediaStalled(stalled);
         // 舞台侧的素材层同步掐住 / 放回;主文档的音频由 MediaLayers 的 playing prop 管
@@ -656,15 +678,34 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
   /** K4 的起 / 停节拍只认 `playing`,所以那个 effect 读这一份、不把 `sendSetTime` 进依赖 */
   const sendSetTimeRef = useRef(sendSetTime);
   sendSetTimeRef.current = sendSetTime;
+  /** 上一次这个 effect 看到的 `playing` —— 「刚从播放翻成暂停」那一次要让给收尾那个 effect */
+  const wasPlayingRef = useRef(false);
   useEffect(() => {
     if (!stageReady) return;
     // K4:播放中播放头由舞台的 `frame` 推,父页一拍都不发
-    if (dual && playing) return;
-    const key = `${stageReady}|${t}|${playToken}`;
+    if (dual && playing) { wasPlayingRef.current = true; return; }
+    /*
+     * **刚暂停的那一次不在这里发**(E0 / R5-4)。收尾是下面那个 effect 的事,它按
+     * `pause()` 回包的 `stoppedAt` 发;这里手上只有 `store.t`,可能比舞台落后一拍,
+     * 抢着发一次会走向后跳路径(全场 stateful 卡重挂载、`.pc-settling` 闪一下),
+     * 而且把 K5 的追帧 / 互换白启动一遍。播放到头(`ended`)走的是同一段。
+     */
+    const justPaused = dual && wasPlayingRef.current;
+    wasPlayingRef.current = false;
+    if (justPaused) return;
+    /*
+     * **`scrubbing` 也进键**(E3 / pinned 架构 9)。拖动松开、在时间轴上点一下,
+     * `t` 都可能一点没变(松手坐标等于最后一次 flush 的位置;点击时 `seek` 和
+     * `beginScrub` 在同一个 React 事件里批成一次渲染,那一次 `scrubbing` 已经是 true)。
+     * 键里不带这一位的话,拖动 / 点击结束之后永远补不上那条 `settle: true`,
+     * 判重卡就停在快照上 —— 正是「点时间轴、拖动松开后不精确活渲」那条。
+     * legacy 下 `dual` 为 false,后缀恒定,不会多发。
+     */
+    const key = `${stageReady}|${t}|${playToken}|${dual && scrubbing ? "scrub" : "settle"}`;
     if (key === lastRenderKey.current) return;
     lastRenderKey.current = key;
     void sendSetTime(t, dual && !scrubbingRef.current ? { settle: true } : {});
-  }, [stageReady, dual, playing, t, playToken, sendSetTime]);
+  }, [stageReady, dual, playing, t, playToken, scrubbing, sendSetTime]);
 
   /* E6:播放中 `refreshRects` 改成定时器,一次往返、结果按序号丢过期的 */
   useEffect(() => {
@@ -680,7 +721,26 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
    * **以舞台最后一拍的 `t` 为准,不用 `store.t`**(E0):store 的 `t` 可能比舞台落后一拍,
    * 按它发会走向后跳路径、全场 stateful 卡重挂载。
    * 播放到头(`ended`)走的是同一段 —— 那边只写 store,`playing` 翻 false 之后落到这里。
+   *
+   * 起播位置见 `playStartOf`:播放头不在内容范围里就回到最早那张卡(和 legacy 循环同一条规矩)。
    */
+  /**
+   * 这一次按播放从哪一秒起。和 legacy 的墙钟循环(`:155-158`)逐字同一条规矩:
+   * 播放头在第一张卡之前、或者已经播到头,就从最早那张卡重播。
+   *
+   * R7 把缺省翻成舞台之后这条规矩漏了,播到头再按播放会在舞台第一拍就
+   * `rawSec >= duration`、立刻 post `ended` —— 按下去什么都不发生(R7-11 的回归)。
+   */
+  const playStartOf = useCallback((): number => {
+    const project = getState().project;
+    const fps = Math.max(1, project.fps || 30);
+    const start = contentStartRef.current;
+    const from = tRef.current;
+    if (from >= start && from < project.duration - 0.5 / fps) return from;
+    // store 也要跟着回到起点:时间轴、素材层、`ended` 之后的那次 settle 都按 store.t 走
+    actions.seek(start);
+    return start;
+  }, []);
   useEffect(() => {
     if (!dual || !stageReady) return;
     let alive = true;
@@ -689,11 +749,13 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
     if (playing) {
       lastFrameAtRef.current = 0;
       stalledRef.current = false;
+      stallCountRef.current = 0;
+      gapMaxRef.current = 0;
       setMediaStalled(false);
       swapTriedRef.current = new Set();
       void (async () => {
         try {
-          const reply = await s.play(tRef.current);
+          const reply = await s.play(playStartOf());
           // 首拍的到达间隔以 `play()` 回包时刻为起点(K4)
           if (alive && reply.ok) lastFrameAtRef.current = performance.now();
         } catch { /* iframe 正在换 */ }
