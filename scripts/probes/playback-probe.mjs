@@ -51,6 +51,8 @@ const origin = (originArg || `http://127.0.0.1:${port}`).replace(/\/+$/, '');
 const wants = (name) => !only.length || only.includes(name);
 
 const EDITOR_URL = '/?editor&headless=1&preview=stage';
+/** 页面视口宽(时间轴那一节按它裁看得见的 x,见 xAt) */
+const VIEWPORT_W = 1600;
 
 const fails = [];
 const out = { origin, editorUrl: EDITOR_URL, stagePorts: stagePortsOf(port), seconds, cases: {} };
@@ -207,6 +209,19 @@ const READ_RECORDERS = () => ({ frames: window.__pcFrames, events: window.__pcEv
 
 /* ------------------------------------------------------------------ 小工具 */
 
+/**
+ * 时间轴标尺上按比例取一个**看得见**的 x。
+ *
+ * 标尺元素比视口宽得多（30 秒 × pxPerSec 轻松几千像素，横向靠 `.pc-tl-scroll` 滚动），
+ * 按 `box.width` 取比例会算出一个在视口外的坐标 —— `page.mouse` 点过去什么都不会发生。
+ * 这里只在「标尺左边缘 ~ 视口右边缘」这一段里取。
+ */
+const xAt = (box, frac) => {
+  const left = box.x + 24;
+  const right = Math.min(box.x + box.width, VIEWPORT_W) - 24;
+  return left + Math.max(0, right - left) * frac;
+};
+
 const stats = (xs) => {
   if (!xs.length) return null;
   const s = [...xs].sort((a, b) => a - b);
@@ -255,7 +270,7 @@ let page = null;
 try {
   server = await startServer();
   page = await browser.newPage();
-  await page.setViewport({ width: 1600, height: 1000 });
+  await page.setViewport({ width: VIEWPORT_W, height: 1000 });
   const errors = [];
   page.on('pageerror', (e) => errors.push(String(e)));
   page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
@@ -294,6 +309,8 @@ try {
       await page.evaluate(async () => { const { actions } = await import('/src/store/project.ts'); actions.pause(); });
       await sleep(400);
       const rec = await page.evaluate(READ_RECORDERS);
+      // pinned 架构 10:正常播放一次都不该判卡顿(24 / 25 fps 是 R5-6 说的误触发档)
+      const stallDiag = await page.evaluate(() => (typeof window.__pcPreviewDiag === 'function' ? window.__pcPreviewDiag() : null));
       const gaps = [];
       const secDiffs = [];
       for (let i = 1; i < rec.frames.length; i++) {
@@ -305,7 +322,11 @@ try {
       const wrongSec = secDiffs.filter((d) => Math.abs(d - 1 / fps) > 1e-6).length;
       // 「短拍」= 到达间隔不到一拍的一半:真跳了一拍才算,rAF 的抖动不算
       const shortBeats = gaps.filter((x) => x < want * 0.5).length;
-      cadence[fps] = { beats: rec.frames.length, want: +want.toFixed(3), gap: g, secDiffWrong: wrongSec, shortBeats, longTasks: rec.longTasks.length };
+      cadence[fps] = { beats: rec.frames.length, want: +want.toFixed(3), gap: g, secDiffWrong: wrongSec, shortBeats, longTasks: rec.longTasks.length,
+        mediaStallCount: stallDiag?.mediaStallCount ?? null, mediaGapMaxMs: stallDiag ? +Number(stallDiag.mediaGapMaxMs).toFixed(3) : null };
+      check(stallDiag && stallDiag.mediaStallCount === 0,
+        `${fps} fps:播 ${seconds} 秒 mediaStalled 触发 0 次(pinned 架构 10)`,
+        { count: stallDiag?.mediaStallCount, overBeatMaxMs: stallDiag?.mediaGapMaxMs });
       check(g && Math.abs(g.mean - want) <= 1, `${fps} fps:frame 到达间隔的均值 = ${want.toFixed(2)} ± 1 ms`, g);
       check(wrongSec === 0, `${fps} fps:连续两条 frame 的 sec 差恒为 1/fps`, { wrongSec, n: secDiffs.length });
       /*
@@ -349,6 +370,28 @@ try {
     check(Math.abs(state.t - state.duration) < 1e-6, 'ended 之后 store.t = duration', state);
     check(diag.stage && diag.stage.beatRunning === false, 'ended 之后节拍循环停了', diag.stage);
     check(diag.stage && diag.stage.suppressed.length === 0, '最后一帧不停在抑制态(suppressed 空)', diag.stage?.suppressed);
+
+    /*
+     * R7-11 的回归:播放头停在末尾时**再按播放要从最早那张卡重播**,不是立刻 ended。
+     * legacy 的墙钟循环一直是这么做的(`Preview.tsx:155-158`),翻开关之后漏了。
+     */
+    await page.evaluate(RESET_RECORDERS);
+    await page.evaluate(async () => { const { actions } = await import('/src/store/project.ts'); actions.play(); });
+    await sleep(800);
+    const replay = await page.evaluate(READ_RECORDERS);
+    const replayState = await page.evaluate(async () => {
+      const { getState } = await import('/src/store/project.ts');
+      const s = getState();
+      return { t: s.t, playing: s.playing };
+    });
+    await page.evaluate(async () => { const { actions } = await import('/src/store/project.ts'); actions.pause(); });
+    await sleep(300);
+    const firstSec = replay.frames[0]?.sec ?? null;
+    out.cases['到头重播'] = { frames: replay.frames.length, firstSec, lastSec: replay.frames.at(-1)?.sec ?? null,
+      endedAgain: replay.events.filter((e) => e.type === 'ended').length, state: replayState };
+    check(replay.frames.length > 5, '播到头再按播放:真的开始播了(收到多条 frame)', out.cases['到头重播']);
+    check(firstSec !== null && firstSec < 0.5, '播到头再按播放:从最早那张卡(0 秒)起,不是从 duration 起', out.cases['到头重播']);
+    check(out.cases['到头重播'].endedAgain === 0, '播到头再按播放:不再立刻 ended', out.cases['到头重播']);
   }
 
   /* ============================================================ 3. 暂停后重卡追到活渲(第一路 / 第二路) */
@@ -457,6 +500,85 @@ try {
     check(genOf(back, clipId) === gen55 + 1, '(a′) 向后跳恰好重挂载一次', { gen55, gen20: genOf(back, clipId) });
     check(Math.abs((back.stage?.t ?? 0) - 20) < 1e-6, '(a′) 向后跳之后一步到位', back.stage?.t);
     check((back.stage?.settling ?? []).length === 0, '(a′) 不留在追帧态', back.stage?.settling);
+  }
+
+  /* ====================================== 4b. 时间轴点击 / 拖动松开后精确活渲(pinned 架构 9) */
+  if (wants('时间轴')) {
+    /*
+     * 这一条量的是**真的鼠标**,不是 `actions.seek()` —— R5-16 的缺口正在这里:
+     * 松手坐标通常等于最后一次 flush 的位置(`t` 没变),在标尺上点一下时
+     * `seek` 和 `beginScrub` 又在同一个 React 事件里批成一次渲染(那一刻
+     * `scrubbing` 已经是 true)。两种情况下如果 `scrubbing` 不进 `setTime` 的去重键,
+     * 那条 `settle: true` 就永远补不上,判重卡停在快照上。
+     *
+     * 判据用 K5 第一路的 `settled`:只有收到 `setTime(t, { settle: true })` 才会起跑。
+     */
+    const built = await page.evaluate(BUILD, { fps: 30, duration: 30, cards: [{ id: 'probe-css', duration: 30 }] });
+    await waitProbeIdle(page);
+    const cssClip = built.byCard['probe-css'][0];
+    await page.evaluate(SET_COSTS, {
+      specs: { 'probe-css': { stepMs: 1, catchUpMs: 10, vtOk: true, seekOk: false, seekMs: null, capped: true } },
+    });
+    await page.evaluate(async () => { const { actions } = await import('/src/store/project.ts'); actions.seek(1); });
+    await sleep(800);
+    /*
+     * 这台机器上没装 Claude Code / agy / codex 时,AI 面板会自动弹出设置对话框,
+     * 它的 `.ais-backdrop` 盖住整页 —— 不关掉的话鼠标一个字都落不到时间轴上
+     * (`elementFromPoint` 命中的是遮罩)。按 Esc 关,最多三次。
+     */
+    for (let i = 0; i < 3; i++) {
+      if (!(await page.evaluate(() => !!document.querySelector('.ais-backdrop, .pc-dialog-mask')))) break;
+      await page.keyboard.press('Escape');
+      await sleep(300);
+    }
+    const ruler = await page.$('[data-pc="ruler"]');
+    const box = ruler ? await ruler.boundingBox() : null;
+    check(!!box, '时间轴标尺在页面上', box);
+    if (box) {
+      // 点击点真的落在标尺上(而不是某个遮罩上)——不验这一条的话下面两条会以「没发 settle」的面目失败
+      const hit = await page.evaluate(([px, py]) => {
+        const el = document.elementFromPoint(px, py);
+        return { tag: el ? `${el.tagName}.${el.className}`.slice(0, 80) : null, onRuler: !!el?.closest('[data-pc="ruler"]') };
+      }, [xAt(box, 0.25), box.y + box.height / 2]);
+      out.cases['时间轴点击命中'] = hit;
+      check(hit.onRuler, '点击点落在时间轴标尺上(没有遮罩挡着)', hit);
+    }
+    const waitSettled = (id) => page.waitForFunction(
+      (clip) => (window.__pcEvents ?? []).some((e) => e.type === 'settled' && (e.clipIds ?? []).includes(clip)),
+      { timeout: 30000, polling: 50 }, id).then(() => true, () => false);
+    if (box) {
+      const y = box.y + box.height / 2;
+
+      /* ---- ① 在标尺上点一下 ---- */
+      await page.evaluate(RESET_RECORDERS);
+      const beforeClick = await page.evaluate(async () => (await import('/src/store/project.ts')).getState().t);
+      await page.mouse.move(xAt(box, 0.25), y);
+      await page.mouse.down();
+      await page.mouse.up();
+      const clickSettled = await waitSettled(cssClip);
+      const afterClick = await page.evaluate(async () => (await import('/src/store/project.ts')).getState().t);
+
+      /* ---- ② 按住拖一段再松手 ---- */
+      await page.evaluate(RESET_RECORDERS);
+      await page.mouse.move(xAt(box, 0.45), y);
+      await page.mouse.down();
+      for (const f of [0.55, 0.65, 0.75, 0.85]) {
+        await page.mouse.move(xAt(box, f), y);
+        await sleep(60);
+      }
+      await sleep(200);           // 让最后一次 flush 把 t 交出去:松手坐标因此和 store.t 相同
+      await page.mouse.up();
+      const dragSettled = await waitSettled(cssClip);
+      const afterDrag = await page.evaluate(async () => (await import('/src/store/project.ts')).getState().t);
+      const diag = await frontDiag(page);
+
+      out.cases['时间轴'] = { clipId: cssClip, beforeClick, afterClick, afterDrag, clickSettled, dragSettled, stage: diag.stage };
+      check(Math.abs(afterClick - beforeClick) > 1e-6, '点标尺把播放头挪走了', { beforeClick, afterClick });
+      check(clickSettled, '点时间轴之后 settled 到达(判重卡追成精确活渲)', out.cases['时间轴']);
+      check(dragSettled, '拖动松开之后 settled 到达', out.cases['时间轴']);
+      check(diag.stage && !diag.stage.settling.includes(cssClip), '松手之后 .pc-settling 摘掉了', diag.stage?.settling);
+      check(diag.stage && !diag.stage.snapshots.includes(cssClip), '松手之后它不在 snapshots 里', diag.stage?.snapshots);
+    }
   }
 
   /* ============================================================ 5. K6 降级 */

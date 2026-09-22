@@ -10,6 +10,12 @@ export interface ProjectSettingsDialogProps {
 }
 
 type AspectRatio = "16:9" | "4:3";
+/** pinned 架构 7：项目选项里可切的帧率。新项目默认 30（`src/kernel/project.ts`） */
+const FPS_OPTIONS = [24, 25, 30, 60] as const;
+type Fps = (typeof FPS_OPTIONS)[number];
+const FALLBACK_FPS: Fps = 30;
+/** 项目里存着的帧率不在选项里（手改过工程文件）时退回 30，不悄悄改掉用户的值以外的东西 */
+const asFps = (value: number): Fps => (FPS_OPTIONS as readonly number[]).includes(value) ? (value as Fps) : FALLBACK_FPS;
 type Orientation = "horizontal" | "vertical";
 
 const RESOLUTION_MAP: Record<AspectRatio, Record<Orientation, { width: number; height: number }>> = {
@@ -49,10 +55,12 @@ export function ProjectSettingsDialog({ open, onClose }: ProjectSettingsDialogPr
   const curW = useStore((s) => s.project.width);
   const curH = useStore((s) => s.project.height);
   const curName = useStore((s) => s.project.name);
+  const curFps = useStore((s) => s.project.fps);
 
   const [name, setName] = useState("");
   const [ratio, setRatio] = useState<AspectRatio>("16:9");
   const [orientation, setOrientation] = useState<Orientation>("horizontal");
+  const [fps, setFps] = useState<Fps>(FALLBACK_FPS);
 
   const currentRes = RESOLUTION_MAP[ratio][orientation];
 
@@ -62,6 +70,9 @@ export function ProjectSettingsDialog({ open, onClose }: ProjectSettingsDialogPr
       name: name.trim() || "未命名",
       width: currentRes.width,
       height: currentRes.height,
+      // pinned 架构 7：所有步长按 1/fps。成本键含 fps（`cardCostKey`），换了帧率
+      // 全部卡的记录都失配 —— `probeRunner` 据此重挡一次遮罩、重测一轮。
+      fps,
     });
     onClose();
   };
@@ -85,8 +96,9 @@ export function ProjectSettingsDialog({ open, onClose }: ProjectSettingsDialogPr
       setRatio(initial.ratio);
       setOrientation(initial.orientation);
       setName(curName);
+      setFps(asFps(curFps));
     }
-  }, [open, curW, curH, curName]);
+  }, [open, curW, curH, curName, curFps]);
 
   useEffect(() => {
     if (!open) return;
@@ -169,6 +181,20 @@ export function ProjectSettingsDialog({ open, onClose }: ProjectSettingsDialogPr
                 竖版
               </button>
             </div>
+          </div>
+          <div className="pc-dialog-row">
+            <label className="pc-dialog-label" htmlFor="pc-proj-fps">帧率</label>
+            <select
+              id="pc-proj-fps"
+              data-pc="fps-select"
+              className="pc-dialog-select"
+              value={fps}
+              onChange={(e) => setFps(asFps(Number(e.target.value)))}
+            >
+              {FPS_OPTIONS.map((n) => (
+                <option key={n} value={n}>{n} fps</option>
+              ))}
+            </select>
           </div>
           <div className="pc-dialog-row">
             <span className="pc-dialog-label">应用分辨率</span>

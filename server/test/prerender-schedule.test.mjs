@@ -91,3 +91,108 @@ test('prerenderSetOf 的兜底口径:direct 不产,其余都产(TODO(R4a) 接真
   ] }] };
   assert.deepEqual([...prerenderSetOf(project)], ['card-1'], '素材段不进预渲染集合');
 });
+
+/* ------------------------------------------------------------------------ *
+ * pinned 渲染 9:预渲染集合是**消费方** —— 在所有位置都判轻的卡不产快照、
+ * 不进就绪索引。集合压根没算过(没走过 `adoptCardPlan`)时不过滤。
+ * ------------------------------------------------------------------------ */
+
+const statefulControl = (clipId, count = 8) => ({
+  clipId, count, snapshotKey: `key-${clipId}`, sampling: { firstFrame: 0 }, end: 100,
+  capabilities: { frameMode: 'stateful', compositing: 'independent' },
+});
+const picker = (entry, index = { count: 0, frames: [], oversize: [] }) => ({
+  entries: new Map([[entry.key, entry]]),
+  prerenderPicked: FramePipeline.prototype.prerenderPicked,
+  snapshotTargets: FramePipeline.prototype.snapshotTargets,
+  planDiagnostics: FramePipeline.prototype.planDiagnostics,
+  missingSnapshotFrames: FramePipeline.prototype.missingSnapshotFrames,
+  publishLayer() {},
+  snapshots: () => ({ snapshotIndex: async () => index }),
+});
+
+test('渲染 9:不在预渲染集合里的卡拿不到快照 target', () => {
+  const entry = { key: 'E', project: { fps: 30 }, cardPlan: [statefulControl('heavy'), statefulControl('light')],
+    prerenderSet: new Set(['heavy']) };
+  const targets = picker(entry).snapshotTargets(entry);
+  assert.deepEqual([...targets.keys()], ['heavy'], '判轻的卡不产快照');
+  assert.equal(targets.get('heavy').tier, 'shared');
+});
+
+test('渲染 9:集合没算过(undefined)时不过滤,行为和接上之前一致', () => {
+  const entry = { key: 'E', project: { fps: 30 }, cardPlan: [statefulControl('a'), statefulControl('b')] };
+  assert.deepEqual([...picker(entry).snapshotTargets(entry).keys()], ['a', 'b']);
+});
+
+test('渲染 9:空集合(全判轻)就一张快照都不产', () => {
+  const entry = { key: 'E', project: { fps: 30 }, cardPlan: [statefulControl('a')], prerenderSet: new Set() };
+  assert.equal(picker(entry).snapshotTargets(entry).size, 0);
+});
+
+test('渲染 9:集合换了之后 snapshotTargets 的缓存跟着换', () => {
+  const plan = [statefulControl('a'), statefulControl('b')];
+  const entry = { key: 'E', project: { fps: 30 }, cardPlan: plan, prerenderSet: new Set(['a', 'b']) };
+  const pipeline = picker(entry);
+  assert.equal(pipeline.snapshotTargets(entry).size, 2);
+  entry.prerenderSet = new Set(['a']);            // K6 降级 / 重算之后集合变了,cardPlan 没变
+  assert.deepEqual([...pipeline.snapshotTargets(entry).keys()], ['a']);
+});
+
+test('渲染 9:判轻的卡不算「缺帧」,整场景那一趟不会为它多渲', async () => {
+  const entry = { key: 'E', project: { fps: 30, duration: 1 },
+    cardPlan: [statefulControl('heavy', 3), statefulControl('light', 3)], prerenderSet: new Set(['heavy']) };
+  const frames = await picker(entry).missingSnapshotFrames(entry, { tiers: ['shared'] });
+  assert.deepEqual(frames, [0, 1, 2], '只有 heavy 那张卡缺的帧');
+  entry.prerenderSet = new Set();
+  assert.deepEqual(await picker(entry).missingSnapshotFrames(entry, { tiers: ['shared'] }), []);
+});
+
+test('R6-7:换一版项目时先让页面清表(reset),旧层不残留', () => {
+  const messages = [];
+  const readyIndex = {
+    localRev: 3,
+    reset(rev) { messages.push({ type: 'reset', rev }); },
+    claim(layers) { messages.push({ type: 'claim', n: layers.length }); return layers.length; },
+  };
+  const pipeline = {
+    readyIndex,
+    prerenderPicked: FramePipeline.prototype.prerenderPicked,
+    adoptCardPlan: FramePipeline.prototype.adoptCardPlan,
+  };
+  const plan = [{ clipId: 'a', snapshotKey: 'KA', tier: 'shared', capabilities: { frameMode: 'stateful', compositing: 'independent' } }];
+  const entryA = { key: 'E1', project: { fps: 30 } };
+  pipeline.adoptCardPlan(entryA, plan);
+  assert.deepEqual(messages.map(m => m.type), ['reset', 'claim'], '第一次认领前先 reset');
+  assert.equal(messages[0].rev, 3, 'reset 带当前的 localRev');
+
+  // 同一版项目再来一次(比如重新 preload):不重复 reset
+  messages.length = 0;
+  pipeline.adoptCardPlan(entryA, plan);
+  assert.deepEqual(messages.map(m => m.type), ['claim']);
+
+  // 换一版项目(entry.key 是内容寻址的):再 reset 一次
+  messages.length = 0;
+  pipeline.adoptCardPlan({ key: 'E2', project: { fps: 30 } }, plan);
+  assert.deepEqual(messages.map(m => m.type), ['reset', 'claim']);
+});
+
+test('R6-14:超限被丢掉的帧不再算「缺」,下一趟不重渲', async () => {
+  const entry = { key: 'E', project: { fps: 30, duration: 1 },
+    cardPlan: [statefulControl('heavy', 3)], prerenderSet: new Set(['heavy']) };
+  // 第 1 帧上一趟判了超限:剩下第 0、2 帧才算缺
+  const index = { count: 0, frames: [], oversize: [[1, 1]] };
+  assert.deepEqual(await picker(entry, index).missingSnapshotFrames(entry, { tiers: ['shared'] }), [0, 2]);
+  // 三帧全判过(一帧就绪、两帧超限)= 这张卡处理完了,一帧都不用再渲
+  const done = { count: 1, frames: [[0, 0]], oversize: [[1, 2]] };
+  assert.deepEqual(await picker(entry, done).missingSnapshotFrames(entry, { tiers: ['shared'] }), []);
+});
+
+test('渲染 9:诊断露出集合和 costKey(探针的读口)', () => {
+  const entry = { key: 'E', project: { fps: 30 },
+    cardPlan: [{ ...statefulControl('heavy'), costKey: 'ck-heavy' }, { ...statefulControl('light'), costKey: 'ck-light' }],
+    prerenderSet: new Set(['heavy']) };
+  const [plan] = picker(entry).planDiagnostics();
+  assert.deepEqual(plan.prerenderSet, ['heavy']);
+  assert.deepEqual(plan.controls.map(c => [c.clipId, c.costKey, c.picked]),
+    [['heavy', 'ck-heavy', true], ['light', 'ck-light', false]]);
+});

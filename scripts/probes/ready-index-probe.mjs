@@ -10,7 +10,11 @@
  *   5. 超限帧不出现在索引里(A3c),但盘上有;
  *   6. `unknown` 卡出现在 `'local'` 表里(计划 3.1(2));
  *   7. 杀掉预渲染进程再起来:索引按键重建、**项目到位之后才发 `layer`**(F5);
- *   8. `wanted` 发出后对应片段的批被提前(C4 服务端消费侧)。
+ *   8. `wanted` 发出后对应片段的批被提前(C4 服务端消费侧);
+ *   9. **在所有位置都判轻的卡不产快照、不进就绪索引**(pinned 渲染 9)——
+ *      给一张 stateful 卡写一条便宜的成本记录,它就该从预渲染集合里掉出去。
+ *
+ * 成本记录也隔离在临时目录(`PROMPTCUT_DATA_DIR`),不碰仓库的 `out/card-costs.json`。
  *
  *   node scripts/probes/ready-index-probe.mjs [--port 5231] [--out <dir>] [--keep]
  *
@@ -38,6 +42,11 @@ const EDITOR = `http://127.0.0.1:${PORT}`;
 const EXPORT_DIR = path.resolve(args.includes('--out') ? args[args.indexOf('--out') + 1]
   : path.join(os.tmpdir(), `pc-r6-probe-${Date.now().toString(36)}`));
 const LIBRARY = path.join(EXPORT_DIR, 'frame-library');
+/** 成本记录（`card-costs.json`）也落在临时目录里，见 `startEditor` */
+const DATA_DIR = path.join(EXPORT_DIR, 'data');
+fsSync.mkdirSync(DATA_DIR, { recursive: true });
+/** ⑨ 自己写的成本记录挂在这个假 device 上（服务端只当不透明字符串用） */
+const PROBE_DEVICE = 'r6-probe-device';
 
 const fails = [];
 const out = { port: PORT, exportDir: EXPORT_DIR };
@@ -134,7 +143,9 @@ async function startEditor() {
   editor = spawn(process.execPath, [viteBin(),
     '--port', String(PORT), '--strictPort', '--host', '127.0.0.1'], { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
     // 冷缓存:产物落在一个新建的临时目录,预渲染子进程继承这个变量
-    env: { ...process.env, PROMPTCUT_EXPORT_DIR: EXPORT_DIR } });
+    // 成本记录也隔离到临时目录:⑨ 要自己写几条记录,不能污染仓库的 out/card-costs.json,
+    // 也不能让仓库里 R1 / R4 留下的记录影响「没有记录时按声明兜底」那一条
+    env: { ...process.env, PROMPTCUT_EXPORT_DIR: EXPORT_DIR, PROMPTCUT_DATA_DIR: DATA_DIR } });
   const keep = c => { const text = c.toString(); editorLog.push(text); if (editorLog.length > 400) editorLog.shift(); };
   editor.stdout.on('data', keep);
   editor.stderr.on('data', keep);
@@ -314,6 +325,96 @@ try {
       await after.close();
     }
   }
+  /* ---- ⑨ pinned 渲染 9:在所有位置都判轻的卡不产快照、不进就绪索引 ---- */
+  // ⑦ 重启过一次,预渲染进程换了端口 —— 这里重新取一次地址
+  const base9 = (await until('⑨ 预渲染进程地址', prerenderUrl, 60000)) || base;
+  out.prerender9 = base9;
+  // 第一阶段一条成本记录都没有 → `prerenderSetOfPlan` 按声明兜底,四张 stateful 卡都在集合里。
+  const diag0 = await json(`${base9}/api/frames/diagnostics`);
+  const plan0 = (diag0.body?.plans || []).find(p => (p.controls || []).some(c => c.clipId === 'clip-stateful'));
+  out.planBefore = plan0 ? { key: plan0.key, prerenderSet: plan0.prerenderSet } : null;
+  check(!!plan0?.prerenderSet, '⑨ 诊断露出预渲染集合', diag0.body?.plans);
+  check(!!plan0?.prerenderSet?.includes('clip-stateful'), '⑨ 没有成本记录时按声明兜底:stateful 卡都在集合里', out.planBefore);
+  const statefulControl = (plan0?.controls || []).find(c => c.clipId === 'clip-stateful');
+  const statefulKey = statefulControl?.snapshotKey;
+  const statefulDir = statefulKey ? path.join(LIBRARY, 'controls-html', statefulKey) : null;
+  check(!!statefulDir && fsSync.existsSync(statefulDir), '⑨ 判重时 clip-stateful 确实产了快照目录', statefulDir);
+
+  // 给 clip-stateful 写一条「便宜的随机访问卡」记录 → 每个位置都判轻;其余三张钉死为重,
+  // 这样成本记录非空(不走声明兜底),而集合里只少了 clip-stateful 这一张。
+  const records = [];
+  for (const control of plan0?.controls || []) {
+    if (!control.costKey) continue;
+    records.push(control.clipId === 'clip-stateful'
+      ? { identityKey: control.costKey, device: PROBE_DEVICE, mode: 'dev', kind: 'random',
+          stepMs: 0.1, seekOk: true, seekMs: 0.1, catchUpMs: 0.1, capped: false, demoted: false, pinnedHeavy: false, measuredAt: Date.now() }
+      : { identityKey: control.costKey, device: PROBE_DEVICE, mode: 'dev', kind: 'stateful',
+          stepMs: 1, seekOk: false, seekMs: null, catchUpMs: 1, capped: true, demoted: false, pinnedHeavy: false, measuredAt: Date.now() });
+  }
+  const putCosts = await json(EDITOR + '/api/data/costs', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ records }) });
+  out.costs = { put: putCosts.body, count: records.length };
+  check(putCosts.ok && records.length >= 2, '⑨ 成本记录写进去了', out.costs);
+  await until('预渲染进程读得到这几条成本记录', async () => {
+    const got = await json(`${base9}/api/data/costs?device=${PROBE_DEVICE}`);
+    return (got.body?.costs || []).length >= records.length || null;
+  }, 60000);
+
+  /*
+   * 再推一版项目、再开一趟预渲染。`frameIdentity` **不看 `id` / `name`**,所以
+   * `entry.key` 和第一版是同一个(卡和片段一字没动),换的只是 `owner`(= `project.id`)
+   * —— 于是 `preload` 不会走「同一个 entry 直接返回」那条早退,而是对同一个 entry
+   * 重跑一趟:`adoptCardPlan` 按**新的 costs** 重算 `prerenderSet`,这正是要验的东西。
+   */
+  const PROJECT_B = { ...PROJECT, id: `${PROJECT.id}-b`, name: 'R6 数据面探针(第二版)' };
+  const readyB = openReady(base9);
+  await until('第二版的 SSE 连上', () => readyB.messages.length > 0 || null, 30000);
+  const pushedB = await postJson(EDITOR + '/api/data/project', { session: SESSION, localRev: 2, project: PROJECT_B });
+  check(pushedB.ok, '⑨ 第二版项目推进镜像', pushedB.body);
+  await until('预渲染进程手里有第二版', async () => (await json(`${base9}/api/data/project?session=${SESSION}&localRev=2`)).ok || null, 30000);
+  const preloadB = await postJson(`${base9}/api/frames/preload`, { session: SESSION, localRev: 2 });
+  check(preloadB.ok, '⑨ 第二版开跑', preloadB.body);
+
+  // 按「clip-stateful 这张卡没被挑中」找,不按 entry.key 找(它和第一版是同一个)
+  const planB = await until('按新 costs 重算出的预渲染集合', async () => {
+    const d = await json(`${base9}/api/frames/diagnostics`);
+    out.plansSeen = (d.body?.plans || []).map(p => ({ key: p.key, set: p.prerenderSet }));
+    return (d.body?.plans || []).find(p => Array.isArray(p.prerenderSet)
+      && (p.controls || []).some(c => c.clipId === 'clip-stateful' && c.picked === false)) || null;
+  }, 180000, 500);
+  out.planAfter = planB ? { key: planB.key, prerenderSet: planB.prerenderSet,
+    picked: (planB.controls || []).map(c => [c.clipId, c.picked]) } : null;
+  check(!!planB, '⑨ 按新 costs 重算出了预渲染集合', out.plansSeen);
+  check(!!planB && !planB.prerenderSet.includes('clip-stateful'), '⑨ 判轻的卡不在预渲染集合里', out.planAfter);
+  check(!!planB && planB.prerenderSet.includes('clip-canvas'), '⑨ 判重的卡还在集合里', out.planAfter);
+
+  // 等第二版真的产起来(判重的那张卡长出了层),再看判轻的那张有没有动静
+  await until('第二版里判重的卡开始就绪', () => indexOf(readyB.messages).has('clip-canvas/html') || null, 300000, 500);
+  const tableB = indexOf(readyB.messages);
+  out.layersB = [...tableB.keys()].sort();
+  check(!tableB.has('clip-stateful/html'), '⑨ 判轻的卡不进就绪索引', out.layersB);
+
+  /*
+   * 「不产快照」:**重算之后**才删那棵目录 —— 第一版那一趟后台预渲染可能还在飞,
+   * 早删会被它写回来(那一趟拿的还是旧的 `prerenderSet`)。删完再等 `clip-canvas`
+   * 的区间继续长(证明这一趟确实还在产东西),那时判轻的那张仍然没有目录才算数。
+   */
+  if (statefulDir) await fs.rm(statefulDir, { recursive: true, force: true });
+  const msgsBefore = readyB.messages.length;
+  const PROJECT_C = { ...PROJECT, id: `${PROJECT.id}-c`, name: 'R6 数据面探针(第三版)' };
+  await postJson(EDITOR + '/api/data/project', { session: SESSION, localRev: 3, project: PROJECT_C });
+  await until('预渲染进程手里有第三版', async () => (await json(`${base9}/api/data/project?session=${SESSION}&localRev=3`)).ok || null, 30000);
+  await postJson(`${base9}/api/frames/preload`, { session: SESSION, localRev: 3 });
+  const rescanned = await until('删掉之后又跑了一趟(索引重新发了层)',
+    () => readyB.messages.length > msgsBefore || null, 120000, 300);
+  await delay(3000);
+  out.statefulDirBack = statefulDir ? fsSync.existsSync(statefulDir) : null;
+  out.canvasDir = fsSync.existsSync(path.join(LIBRARY, 'controls-html',
+    (planB?.controls || []).find(c => c.clipId === 'clip-canvas')?.snapshotKey || 'none'));
+  check(!!rescanned, '⑨ 删目录之后确实又跑了一趟预渲染');
+  check(out.canvasDir === true, '⑨ 同一趟里判重的卡照样有快照目录', out.canvasDir);
+  check(out.statefulDirBack === false, '⑨ 判轻的卡不产快照(目录删掉之后没长回来)', { statefulDir });
+  await readyB.close();
+
 } catch (error) {
   fails.push('exception: ' + (error?.stack || error));
 } finally {

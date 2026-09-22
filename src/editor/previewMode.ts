@@ -12,8 +12,10 @@
  * **为什么必须和 D5 的其余几条一起原子地翻**见 `restructure_planning/r2-r7-task.md` 的 D5 末尾。
  *
  * `StageView` 自己那个 `LEGACY`(`?preview=legacy` 时 `setProject` 立刻按跳转重算这一帧)
- * 是**另一件事**,而且 `Preview` 从来不把 `preview` 参数传进 iframe,所以这里加的值
- * 一个字都不影响它。
+ * 是回滚的**另一半**:R7-6 之前 `Preview` 从来不把 `preview` 参数传进 iframe,它永远
+ * 不生效;现在 `stageSrc` 在 legacy 下把 `&preview=legacy` 一并传进去,D5 说的
+ * 「两件事都生效」才成立。`?preview=stage` 那一支不受影响(舞台里只认 `preview=stage`
+ * 开 live 变体,两个值互斥)。
  */
 
 /** 舞台实例名。**只是实例名,和角色无关**(E1):谁当 `front` 由 `setRole` 定 */
@@ -74,11 +76,18 @@ export function dualStage(): boolean {
  * **开了双舞台才带 `&preview=stage`**(R3):舞台页靠它决定渲 `FrameScene` 的 live 变体
  * (素材层进舞台、六个平面 prop 生效)还是照旧只渲 `Stage`。不带 = 今天用户手里那份编辑台,
  * 舞台内容一个字不变 —— 这就是「新行为只在非 legacy 下生效」的落点。
+ *
+ * **`?preview=legacy` 同样传进去**(D5 / R7-6):`StageView` 里那个同名的 `LEGACY`
+ * (`setProject` 立刻按跳转重算这一帧)是回滚的另一半,以前从来收不到这个参数、
+ * 永远不生效 —— legacy 下改了项目之后,在下一次 `setTime` 之前舞台 DOM 停在旧状态,
+ * 而 legacy 正是靠舞台做命中测试和实体框的。端口没起来的退回**不传**:那不是回滚,
+ * 是双舞台开不出来,舞台内容应当照缺省走。
  */
 export function stageSrc(id: StageId): string {
   const dual = dualStage();
   const origins = dual ? stageOrigins() : null;
-  return `${origins ? origins[id] : ""}${location.pathname}?stage=1&id=${id}${dual ? "&preview=stage" : ""}`;
+  const mode = dual ? "&preview=stage" : previewMode() === "legacy" ? "&preview=legacy" : "";
+  return `${origins ? origins[id] : ""}${location.pathname}?stage=1&id=${id}${mode}`;
 }
 
 /** 给 `createStageRpc` 的 `targetOrigin`:跨源时必须点名,不能用 `location.origin` */

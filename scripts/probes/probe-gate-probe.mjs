@@ -24,7 +24,9 @@
  * 5. 两趟布尔探针的三张判例：`probe-css` → `vtOk` 且 `seekOk`；粒子卡 → `vtOk`；
  *    `probe-motion-js` → `vtOk: false`；
  * 6. **项目在探针中途改了**：队列按新项目重排，而且**不把全量项目上的全部卡一起推**
- *    （验「先换缩水项目再 `render`」：任何时刻后台舞台上的卡片包裹层只有一个）。
+ *    （验「先换缩水项目再 `render`」：任何时刻后台舞台上的卡片包裹层只有一个）；
+ * 7. **项目选项里的 fps 下拉**（pinned 架构 7）：四档是 24 / 25 / 30 / 60、新项目默认 30；
+ *    切成 60 之后**遮罩重走**，重测出来的成本记录 `fps` 字段是 60。
  *
  * # 关于帧间隔这条
  *
@@ -389,6 +391,82 @@ try {
   await page3.waitForFunction(async () => (await import('/src/editor/probeRunner.ts')).probeProgress().running === false,
     { timeout: 180000, polling: 300 }).catch(() => {});
   await page3.close();
+
+  /* ---------------- 项目选项的 fps 下拉:切成 60 之后遮罩重走(pinned 架构 7) ---------------- */
+  const page4 = await browser.newPage();
+  await page4.setViewport({ width: 1600, height: 1000 });
+  await page4.evaluateOnNewDocument(GATE_WATCHER);
+  await page4.goto(origin + EDITOR_URL, { waitUntil: 'domcontentloaded', timeout: 180000 });
+  await page4.waitForSelector('iframe[data-pc="stage-frame"]', { timeout: 180000 });
+  await page4.waitForFunction(async () => {
+    const m = await import('/src/editor/stageBridge.ts');
+    return m.backRole() === 'back';
+  }, { timeout: 180000, polling: 500 });
+  // 只放两张卡:这一节要跑两轮探针(30 fps 一轮、60 fps 一轮),卡多了太慢
+  await page4.evaluate(async () => {
+    await import('/src/cards/index.ts');
+    const { actions } = await import('/src/store/project.ts');
+    actions.newProject('probe-gate-fps');
+    actions.addCardClip('probe-css', 0, { duration: 3 });
+    actions.addCardClip('probe-motion-js', 0, { duration: 3 });
+  });
+  // 先把 30 fps 那一轮跑完(第一轮本来就挡遮罩)
+  await page4.waitForFunction(async () => (await import('/src/editor/probeRunner.ts')).probeProgress().running === false,
+    { timeout: 180000, polling: 300 }).catch(() => {});
+  await sleep(500);
+
+  /*
+   * 这台机器上没装 Claude Code / agy / codex 时,AI 面板会自动弹设置对话框,
+   * 它的 `.ais-backdrop` 盖住整页 —— 不关掉的话顶栏一个按钮都点不着。按 Esc,最多三次。
+   */
+  for (let i = 0; i < 3; i++) {
+    if (!(await page4.evaluate(() => !!document.querySelector('.ais-backdrop')))) break;
+    await page4.keyboard.press('Escape');
+    await sleep(300);
+  }
+  // 打开项目设置对话框,找 fps 下拉
+  await page4.click('.pc-proj-btn');
+  await page4.waitForSelector('.pc-proj-item', { timeout: 10000 });
+  const openedSettings = await page4.evaluate(() => {
+    const item = [...document.querySelectorAll('.pc-proj-item')].find((b) => (b.textContent || '').includes('项目设置'));
+    if (!item) return false;
+    item.click();
+    return true;
+  });
+  check(openedSettings, '项目菜单里有「项目设置…」');
+  await page4.waitForSelector('select[data-pc="fps-select"]', { timeout: 10000 }).catch(() => {});
+  out.fpsSelect = await page4.evaluate(() => {
+    const el = document.querySelector('select[data-pc="fps-select"]');
+    if (!el) return null;
+    return { value: el.value, options: [...el.options].map((o) => Number(o.value)) };
+  });
+  check(!!out.fpsSelect, 'pinned 架构 7:项目选项里有 fps 下拉', out.fpsSelect);
+  check(!!out.fpsSelect && JSON.stringify(out.fpsSelect.options) === JSON.stringify([24, 25, 30, 60]),
+    'fps 下拉的四档是 24 / 25 / 30 / 60', out.fpsSelect);
+  check(!!out.fpsSelect && Number(out.fpsSelect.value) === 30, '新项目默认 30', out.fpsSelect);
+
+  // 切成 60 并确定 —— 遮罩这一刻起应当重新出现
+  await page4.evaluate(() => { window.__gateSeen = false; });
+  await page4.select('select[data-pc="fps-select"]', '60');
+  await page4.evaluate(() => {
+    const ok = document.querySelector('.pc-dialog .pc-btn--primary');
+    ok?.click();
+  });
+  out.fpsAfterConfirm = await page4.evaluate(async () => (await import('/src/store/project.ts')).getState().project.fps);
+  check(out.fpsAfterConfirm === 60, '确定之后项目的 fps 是 60', out.fpsAfterConfirm);
+
+  const regated = await page4.waitForFunction(() => window.__gateSeen === true, { timeout: 60000, polling: 50 })
+    .then(() => true, () => false);
+  out.gateAfterFpsChange = regated;
+  check(regated, '切 fps 之后遮罩重走(pinned 架构 7 / 渲染 5)');
+  await page4.waitForFunction(async () => (await import('/src/editor/probeRunner.ts')).probeProgress().running === false,
+    { timeout: 180000, polling: 300 }).catch(() => {});
+  await sleep(800);
+  const costsAfterFps = JSON.parse(fs.readFileSync(costsFile, 'utf8'));
+  const list60 = (Array.isArray(costsAfterFps) ? costsAfterFps : costsAfterFps.costs || []).filter((r) => r.fps === 60);
+  out.costs60 = { count: list60.length, sample: list60.slice(0, 2).map((r) => ({ fps: r.fps, stepMs: r.stepMs, identityKey: r.identityKey })) };
+  check(list60.length >= 2, '切 fps 之后重测出来的成本记录 fps 字段是 60', out.costs60);
+  await page4.close();
 
   out.pageErrors = errors.filter((e) => !/favicon|React DevTools|Failed to load resource|ResizeObserver/i.test(e)).slice(0, 8);
 } catch (err) {

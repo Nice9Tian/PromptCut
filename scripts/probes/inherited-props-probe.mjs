@@ -1,5 +1,5 @@
 /**
- * A2(8) 的属性表对账:`src/render/freezeStyleProps.mjs` 的 `INHERITED_PROPS` 到底和
+ * A2(8) 的属性表对账:`src/render/snapshot/snapshotStyleProps.mjs` 的 `INHERITED_PROPS` 到底和
  * Chrome 的实际继承行为对不对得上。
  *
  *   node scripts/probes/inherited-props-probe.mjs [--json out/inherited-props.json]
@@ -16,7 +16,7 @@
  *
  * 退出码 1 的两种情况:
  *   - 表里写了、Chrome 说它**不继承**(多内联几个字节,不致错,但表该改);
- *   - Chrome 说它继承、表里**没写**(顶层元素之外都安全,见 freezeStyleProps.mjs 的说明;
+ *   - Chrome 说它继承、表里**没写**(顶层元素之外都安全,见 snapshotStyleProps.mjs 的说明;
  *     顶层元素会因此漏掉这个属性 —— 该补)。
  * 两种都只打印,由人决定改表还是改探针的候选值。
  */
@@ -24,7 +24,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import puppeteer from 'puppeteer';
-import { INHERITED_PROPS, LAYOUT_USED_VALUE_PROPS } from '../../src/render/freezeStyleProps.mjs';
+import { INHERITED_PROPS, LAYOUT_USED_VALUE_PROPS } from '../../src/render/snapshot/snapshotStyleProps.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const argv = process.argv.slice(2);

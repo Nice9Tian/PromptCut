@@ -17,8 +17,10 @@ import { atomic } from './frame-mov.mjs';
  * 可直接被 HTTP 静态服务,再套一层编码只会让每次取快照都多一次解压。
  * 单帧体积上限按 A3c 的 300 KB 算(这里不强制,留给 A3c)。
  *
- * 每个 <共享键>/ 目录一份 index.json = { count, frames: [[from, to], …] }:
- * 已有本地帧的**闭区间**、合并有序。为什么不靠 readdir:一个键几千帧时
+ * 每个 <共享键>/ 目录一份 index.json = { count, frames: [[from, to], …],
+ * oversize?: [[from, to], …] }:`frames` 是已有**且合格**的本地帧闭区间、合并有序;
+ * `oversize` 是 A3c 判超限、被丢掉的那些帧(R6-14:不记的话它们永远算「缺」,
+ * 每趟后台预渲染都会把同一批帧重渲一遍再丢)。为什么不靠 readdir:一个键几千帧时
  * readdir + parse 比读一个小 JSON 慢得多,而「哪些帧已经有了」是播放调度每次
  * 都要问的问题。`fillCardControls` 每批写完更新一次(不是每帧),批大小 4。
  */
@@ -109,7 +111,7 @@ const frameFile = (dir, localFrame) => {
   return path.join(dir, `${localFrame}.html`);
 };
 
-const EMPTY = { count: 0, frames: [] };
+const EMPTY = { count: 0, frames: [], oversize: [] };
 
 /** 诊断环形缓冲的容量:超限帧是少数,留最近这么多条够看清是哪张卡 */
 const OVERSIZE_LOG = 64;
@@ -159,20 +161,30 @@ export class SnapshotStore {
     try {
       const value = JSON.parse(await fs.readFile(file, 'utf8'));
       const frames = mergeRanges(value?.frames ?? []);
-      return { count: rangeCount(frames), frames };
-    } catch { return { ...EMPTY }; }
+      const oversize = mergeRanges(value?.oversize ?? []);
+      return { count: rangeCount(frames), frames, oversize };
+    } catch { return { count: 0, frames: [], oversize: [] }; }
   }
 
-  /** 把这一批新帧并进 index.json。返回合并后的 index。 */
-  async updateIndex({ tier, entryKey, key, frames }) {
+  /**
+   * 把这一批新帧并进 index.json。返回合并后的 index。
+   *
+   * `oversize` 是 A3c 里**超限被丢掉**的那些本地帧(R6-14)。它们不进 `frames`
+   * (不就绪、不投递),但记在这里:缺帧是按 `frames` 算的,不记的话它们永远算「缺」,
+   * 每一趟后台预渲染都会把同一批帧重渲一遍、再判超限、再丢掉。
+   * 记下来之后下一趟直接跳过 —— 两张大 lottie 卡不用每趟整段重渲。
+   * 帧文件照常在盘上(`writeSnapshot` 先写、判超限在后),所以这只是「别再白渲一次」。
+   */
+  async updateIndex({ tier, entryKey, key, frames, oversize }) {
     const dir = this.dir({ tier, entryKey, key });
     const chain = (this.chains.get(dir) || Promise.resolve()).catch(() => {}).then(async () => {
       const current = await this.snapshotIndex({ tier, entryKey, key });
       const merged = mergeRanges([...current.frames, ...(frames ?? [])]);
-      const index = { count: rangeCount(merged), frames: merged };
+      const over = mergeRanges([...current.oversize, ...(oversize ?? [])]);
+      const index = { count: rangeCount(merged), frames: merged, ...(over.length ? { oversize: over } : {}) };
       await fs.mkdir(dir, { recursive: true });
       await atomic(path.join(dir, 'index.json'), Buffer.from(JSON.stringify(index), 'utf8'));
-      return index;
+      return { ...index, oversize: over };
     });
     this.chains.set(dir, chain);
     return chain;
@@ -185,8 +197,11 @@ export class SnapshotStore {
     try { names = await fs.readdir(dir); } catch { return { ...EMPTY }; }
     const frames = names.map(name => /^(\d+)\.html$/.exec(name)).filter(Boolean).map(match => Number(match[1]));
     const merged = mergeRanges(frames);
-    const index = { count: rangeCount(merged), frames: merged };
+    // 超限名单从旧 index 里留着:盘上有帧文件不代表它合格(A3c 先写文件再判超限),
+    // 丢了这份名单下一趟就会把那些帧再渲一遍、再判超限、再丢掉(R6-14)。
+    const { oversize } = await this.snapshotIndex({ tier, entryKey, key });
+    const index = { count: rangeCount(merged), frames: merged, ...(oversize.length ? { oversize } : {}) };
     await atomic(path.join(dir, 'index.json'), Buffer.from(JSON.stringify(index), 'utf8'));
-    return index;
+    return { ...index, oversize };
   }
 }
