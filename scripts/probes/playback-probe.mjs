@@ -51,6 +51,8 @@ const origin = (originArg || `http://127.0.0.1:${port}`).replace(/\/+$/, '');
 const wants = (name) => !only.length || only.includes(name);
 
 const EDITOR_URL = '/?editor&headless=1&preview=stage';
+/** 页面视口宽(时间轴那一节按它裁看得见的 x,见 xAt) */
+const VIEWPORT_W = 1600;
 
 const fails = [];
 const out = { origin, editorUrl: EDITOR_URL, stagePorts: stagePortsOf(port), seconds, cases: {} };
@@ -207,6 +209,19 @@ const READ_RECORDERS = () => ({ frames: window.__pcFrames, events: window.__pcEv
 
 /* ------------------------------------------------------------------ 小工具 */
 
+/**
+ * 时间轴标尺上按比例取一个**看得见**的 x。
+ *
+ * 标尺元素比视口宽得多（30 秒 × pxPerSec 轻松几千像素，横向靠 `.pc-tl-scroll` 滚动），
+ * 按 `box.width` 取比例会算出一个在视口外的坐标 —— `page.mouse` 点过去什么都不会发生。
+ * 这里只在「标尺左边缘 ~ 视口右边缘」这一段里取。
+ */
+const xAt = (box, frac) => {
+  const left = box.x + 24;
+  const right = Math.min(box.x + box.width, VIEWPORT_W) - 24;
+  return left + Math.max(0, right - left) * frac;
+};
+
 const stats = (xs) => {
   if (!xs.length) return null;
   const s = [...xs].sort((a, b) => a - b);
@@ -255,7 +270,7 @@ let page = null;
 try {
   server = await startServer();
   page = await browser.newPage();
-  await page.setViewport({ width: 1600, height: 1000 });
+  await page.setViewport({ width: VIEWPORT_W, height: 1000 });
   const errors = [];
   page.on('pageerror', (e) => errors.push(String(e)));
   page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
@@ -506,9 +521,28 @@ try {
     });
     await page.evaluate(async () => { const { actions } = await import('/src/store/project.ts'); actions.seek(1); });
     await sleep(800);
+    /*
+     * 这台机器上没装 Claude Code / agy / codex 时,AI 面板会自动弹出设置对话框,
+     * 它的 `.ais-backdrop` 盖住整页 —— 不关掉的话鼠标一个字都落不到时间轴上
+     * (`elementFromPoint` 命中的是遮罩)。按 Esc 关,最多三次。
+     */
+    for (let i = 0; i < 3; i++) {
+      if (!(await page.evaluate(() => !!document.querySelector('.ais-backdrop, .pc-dialog-mask')))) break;
+      await page.keyboard.press('Escape');
+      await sleep(300);
+    }
     const ruler = await page.$('[data-pc="ruler"]');
     const box = ruler ? await ruler.boundingBox() : null;
     check(!!box, '时间轴标尺在页面上', box);
+    if (box) {
+      // 点击点真的落在标尺上(而不是某个遮罩上)——不验这一条的话下面两条会以「没发 settle」的面目失败
+      const hit = await page.evaluate(([px, py]) => {
+        const el = document.elementFromPoint(px, py);
+        return { tag: el ? `${el.tagName}.${el.className}`.slice(0, 80) : null, onRuler: !!el?.closest('[data-pc="ruler"]') };
+      }, [xAt(box, 0.25), box.y + box.height / 2]);
+      out.cases['时间轴点击命中'] = hit;
+      check(hit.onRuler, '点击点落在时间轴标尺上(没有遮罩挡着)', hit);
+    }
     const waitSettled = (id) => page.waitForFunction(
       (clip) => (window.__pcEvents ?? []).some((e) => e.type === 'settled' && (e.clipIds ?? []).includes(clip)),
       { timeout: 30000, polling: 50 }, id).then(() => true, () => false);
@@ -518,7 +552,7 @@ try {
       /* ---- ① 在标尺上点一下 ---- */
       await page.evaluate(RESET_RECORDERS);
       const beforeClick = await page.evaluate(async () => (await import('/src/store/project.ts')).getState().t);
-      await page.mouse.move(box.x + box.width * 0.35, y);
+      await page.mouse.move(xAt(box, 0.25), y);
       await page.mouse.down();
       await page.mouse.up();
       const clickSettled = await waitSettled(cssClip);
@@ -526,10 +560,10 @@ try {
 
       /* ---- ② 按住拖一段再松手 ---- */
       await page.evaluate(RESET_RECORDERS);
-      await page.mouse.move(box.x + box.width * 0.5, y);
+      await page.mouse.move(xAt(box, 0.45), y);
       await page.mouse.down();
-      for (const f of [0.55, 0.6, 0.65, 0.7]) {
-        await page.mouse.move(box.x + box.width * f, y);
+      for (const f of [0.55, 0.65, 0.75, 0.85]) {
+        await page.mouse.move(xAt(box, f), y);
         await sleep(60);
       }
       await sleep(200);           // 让最后一次 flush 把 t 交出去:松手坐标因此和 store.t 相同
