@@ -28,6 +28,17 @@
 - **计时趟撞封顶回的 `{ aborted: true, reason: 'timeout' }` 是长片段的正常路径**，不是失败。
 - **判重的实测现状**（62 张高频卡，新口径）：30 fps 和限 2 核 60 fps 各连跑两趟，因单帧太慢判重的都是 0 张、两趟名单一致；旧口径（单次最大）限 2 核下两趟是 11 张和 9 张、交集 6 张。追帧上界换算成片段长度 p50 约 12 秒、最短 8 秒（`scene-3d`）；20 秒片段的 8 张样本里 6 张被追帧上界判重。
 
+### R7 落地后的更正（2026-09-22）
+
+- **露出舞台的判据是 `dualStage()`，不是 `previewMode() === 'stage'`。** 舞台页只有 `dual` 时才带 `&preview=stage`（`stageSrc`）、才渲 `FrameScene` 的 live 变体、才把素材层画在自己里面；端口被占退回同源单舞台时那一份还是 `placeholder` 内容，露出来会是一张没有素材的画面。所以 `opacity: dual && frontId === 'A' ? 1 : 0`，`UnifiedPreview` 的整帧 `<img>` 在 `!dual` 时照渲。正文 D5 只说「对 `front` 去掉」，没写端口起不来那一档。
+- **`mediaRects` 连 legacy 一起删。** D3 第 4 步的原话就是这个意思（R3 在代码注释里也写了「那一步 legacy 也不要了」）。代价：legacy 下素材段不再由主文档补进命中列表，命中测试和实体框全部走舞台的 `hitTest` / `rectsWithBounds`；legacy 的舞台是 `placeholder` 模式、里面没有素材层，所以 legacy 下点素材段选不中。`?preview=legacy` 是回滚开关、不是长期形态，记在这里。
+- **`frameClient.ts` 的 `see_frames` 缺省 `target` 改成 `"prerender"`**（D5 回滚开关那条的必然推论）。编辑器进程现在是 `interactive: false`，`user` / `playback` 两条 lane 立即回 `USE_PRERENDER`；缺省留在同源等于每次都先撞一堵墙，legacy 的整帧 `<img>` 也因此打预渲染源。
+- **`usePrerenderBase()` 回 `string | null`**（正文只说「初值跟着处理」）。`null` = 还不知道 / 预渲染不可用；两个消费方（`ToolVisual`、`OpDetailPreview`）在 `null` 时明示「预渲染进程还没就绪」，不去拼地址——拼出来正是被删掉的那条同源退路。`snapshotSource` 的 SSE 同理：拿不到源就退避重连，不再连到编辑器自己的源上空转。
+- **桌面壳的舞台端口预检只警告、不拦启动。** `probe_port` 拆成带端口参数的 `probe_port_at`，新增 `occupied_stage_ports` 查 5211 / 5212，弹窗点名是哪一个。**不 `exit(1)`**：编辑器那一侧遇到端口被占只是不起那一个反向代理、页面退回同源单舞台，照样能用；拦掉反而比网页版更糟。5210 那一条照旧是错误 + 退出。`smoke-boot.mjs` 新增 Step 2b：等两个舞台端口各回一次 200 且带 `origin-agent-cluster: ?1`。`capabilities/remote.json` 和 `on_navigation` 按 R2 报告的复核结论没有改。
+- **`setRole` 的「同一个工作项不重发」改成按 `{ client, job }` 一对判**（R5 报告第 7 条的隐患）。`back` 这个位置上的客户端会换人（K5 互换、iframe 重载），只记工作项的话换人之后会漏发一次 `setRole`，新 `back` 就留在 `front` 角色上。
+- **`server/frame-pipeline.mjs` 里两个字面 NUL 换成 ` ` 转义**，git 恢复按文本处理这个文件。
+- **`editor-preview-smoke.mjs` 必须一台全新的 dev server 跑一次。** 它只 `addCardClip`、从不 `newProject`，同一台 server 上连跑会让片段累积、浮层盖住点击点、`.pc-pv-hit` 的第一个不再是它要拖的那一张。实测同一台 server 连跑三次：过、挂（两条）、过。这不是被测代码的问题，是探针的卫生问题；R7 的总验收因此改成「每个探针一台全新 server + 全新数据目录」。
+
 ## 六步各做什么、读哪几节、怎么验收
 
 R2～R6 都在同一条分支上、都藏在 `?preview=legacy`（默认开）后面，用户看到的行为不变；R7 才翻开关。**为什么必须这样**见 D5 末尾「为什么必须原子」。依赖：R1 → R4（探针数据要差异内联之后的）；R1b → R3（带像素映射的素材段进舞台之前必须先换成 WebGL）；R2 → R3 → R5；R4 → R5；R6 可以和 R3～R5 并行；R7 在 R2～R6 之后。
