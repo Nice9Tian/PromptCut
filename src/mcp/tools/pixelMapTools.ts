@@ -65,7 +65,7 @@ export function createPixelMapTools(store: PixelMapStore) {
         `create_filter ${JSON.stringify({ name: def.name, ...(def.description ? { description: def.description } : null), ops: c.ops })}\n` +
         `再用 apply_filter 把它挂到片段上。` +
         (c.alphaNote ? `\n注意:${c.alphaNote}` : "") +
-        `\n（滤镜由合成器在 GPU 上做、不占预览的每拍预算;像素映射要逐像素算,1080p 每帧 400 毫秒以上。）`,
+        `\n（滤镜由合成器在 GPU 上做、不占预览的每拍预算;像素映射走自己的 WebGL 片元着色器,逐像素算、每张图各编一个 program。）`,
       );
     }
     if (c.kind === "C") throw new Error(`这条定义翻译不成着色器:${c.reason}`);
