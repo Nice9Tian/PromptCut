@@ -4,19 +4,36 @@
     {
       "name": "dev",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev"],
+      "runtimeArgs": [
+        "run",
+        "dev"
+      ],
       "port": 5190
     },
     {
       "name": "dev-test",
       "runtimeExecutable": "npx",
-      "runtimeArgs": ["vite", "--port", "5197", "--strictPort", "--host", "127.0.0.1"],
-      "port": 5197
+      "runtimeArgs": [
+        "vite",
+        "--port",
+        "5203",
+        "--strictPort",
+        "--host",
+        "127.0.0.1"
+      ],
+      "port": 5203
     },
     {
       "name": "dev-2d",
       "runtimeExecutable": "npx",
-      "runtimeArgs": ["vite", "--port", "5198", "--strictPort", "--host", "127.0.0.1"],
+      "runtimeArgs": [
+        "vite",
+        "--port",
+        "5198",
+        "--strictPort",
+        "--host",
+        "127.0.0.1"
+      ],
       "port": 5198
     }
   ]
