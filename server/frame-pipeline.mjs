@@ -151,9 +151,31 @@ export class FramePipeline {
     (this.promotions ||= []).push({ ...record, at: Date.now() });
     while (this.promotions.length > 32) this.promotions.shift();
   }
-  /** 端到端探针的读口:超限帧(A3c)和 `wanted` 的插队(C4) */
+  /** 端到端探针的读口:超限帧(A3c)、`wanted` 的插队(C4)、预渲染集合(pinned 渲染 9) */
   diagnostics() {
-    return { oversize: this._snapshots?.oversize ?? [], promotions: this.promotions ?? [] };
+    return { oversize: this._snapshots?.oversize ?? [], promotions: this.promotions ?? [], plans: this.planDiagnostics() };
+  }
+  /**
+   * 每个 entry 此刻的预渲染集合和它的 card plan 摘要 —— `ready-index-probe` 靠它
+   * 证明「在所有位置都判轻的卡不产快照」,顺带把 `costKey` 露出来,探针才能为某张卡
+   * PUT 一条成本记录(那个键只有 `card-cache.mjs` 的 `plan()` 算得出来)。只读、不改状态。
+   */
+  planDiagnostics() {
+    const list = [];
+    for (const entry of this.entries?.values?.() ?? []) {
+      if (!entry?.cardPlan?.length) continue;
+      list.push({
+        key: entry.key,
+        prerenderSet: entry.prerenderSet instanceof Set ? [...entry.prerenderSet].sort() : null,
+        controls: entry.cardPlan.map(control => ({
+          clipId: control.clipId, costKey: control.costKey, snapshotKey: control.snapshotKey,
+          frameMode: control.frameMode ?? control.capabilities?.frameMode ?? null,
+          tier: control.snapshotKey ? (control.tier || snapshotTier(control.capabilities)) : 'none',
+          picked: this.prerenderPicked(entry, control.clipId),
+        })),
+      });
+    }
+    return list;
   }
   async entry(project) {
     project = { ...project, media: await Promise.all((project.media || []).map(async media => {
@@ -673,16 +695,32 @@ export class FramePipeline {
     }
     this.recordSnapshots(entry, controls);
   }
+  /**
+   * pinned 渲染 9:**只预渲染预渲染集合 `plan.prerenderSet`(任一位置判重的卡的并集)
+   * 里的卡** —— 在所有位置都判轻的卡不产快照、不进就绪索引。
+   *
+   * 集合由 `adoptCardPlan` 用两端同一份 `planPipelines` 按实测 `costs` 算;一条成本
+   * 记录都没有时 `prerenderSetOfPlan` 自己按声明兜底(`declaredHeavy`)。集合压根没
+   * 算过(没走过 `adoptCardPlan`,比如手工构造 entry 的调用方)时不过滤。
+   */
+  prerenderPicked(entry, clipId) {
+    const set = entry?.prerenderSet;
+    if (!(set instanceof Set)) return true;
+    return set.has(clipId);
+  }
   /** clipId → { tier, key }:整场景路冻出来的 control 子树该落到哪个档、哪个键。
    * 只有 `card-cache.mjs` 的 `plan` 手里有共享键(`cardSnapshotIdentity` 算的),
-   * 所以这里认 `entry.cardPlan`(`preload` 里存下来的那份);拿不到就不写快照库。 */
+   * 所以这里认 `entry.cardPlan`(`preload` 里存下来的那份);拿不到就不写快照库。
+   * 不在预渲染集合里的卡一律不给 target —— 整场景路(`recordSnapshots` /
+   * `renderLocalSnapshots`)因此对它什么都不产(pinned 渲染 9)。 */
   snapshotTargets(entry) {
     const plan = entry.cardPlan;
     if (!plan?.length) return null;
-    if (entry.snapshotPlan !== plan) {
+    if (entry.snapshotPlan !== plan || entry.snapshotTargetSet !== entry.prerenderSet) {
       entry.snapshotPlan = plan;
+      entry.snapshotTargetSet = entry.prerenderSet;
       entry.snapshotTargetMap = new Map(plan
-        .filter(control => control.clipId && control.snapshotKey)
+        .filter(control => control.clipId && control.snapshotKey && this.prerenderPicked(entry, control.clipId))
         .map(control => [control.clipId, { tier: control.tier || snapshotTier(control.capabilities), key: control.snapshotKey, capabilities: control.capabilities }])
         .filter(([, target]) => target.tier === 'shared' || target.tier === 'local'));
     }
@@ -912,7 +950,9 @@ export class FramePipeline {
    * `control.clipId` ↔ `control.snapshotKey` 反查。认领成功时索引自己会先发
    * `reset` 再发全量 `layer`(C3 本来就是全量语义,不加新端点)。
    *
-   * 顺带把「产哪些卡」记在 entry 上(`prerenderSetOf` 的窄接口;TODO(R4a))。
+   * 顺带把「产哪些卡」记在 entry 上(`prerenderSetOf` 的窄接口)。这个集合是
+   * **消费方**:`prerenderPicked` 把它接进 `snapshotTargets` / `missingSnapshotFrames` /
+   * `fillCardControls` / 就绪索引认领,在所有位置都判轻的卡因此什么都不产(pinned 渲染 9)。
    */
   adoptCardPlan(entry, plan) {
     entry.cardPlan = plan;
@@ -920,6 +960,8 @@ export class FramePipeline {
     entry.prerenderSet = prerenderSetOfPlan(plan, { fps: Number(entry.project?.fps) || 30, root: this.root });
     const layers = [];
     for (const control of plan ?? []) {
+      // pinned 渲染 9:在所有位置都判轻的卡不进就绪索引
+      if (!this.prerenderPicked(entry, control.clipId)) continue;
       const tier = control.snapshotKey ? (control.tier || snapshotTier(control.capabilities)) : 'none';
       const kind = kindOfTier(tier);
       const key = wireSnapshotKey(tier, entry.key, control.snapshotKey);
@@ -1020,6 +1062,8 @@ export class FramePipeline {
     const only = restrictTo ? new Set(restrictTo) : null;
     const wanted = new Set();
     for (const control of plan) {
+      // pinned 渲染 9:不在预渲染集合里的卡不产快照,也就没有「缺帧」可言
+      if (!this.prerenderPicked(entry, control.clipId)) continue;
       const tier = control.snapshotKey ? (control.tier || snapshotTier(control.capabilities)) : 'none';
       if (!tiers.includes(tier)) continue;
       const entryKey = tier === 'local' ? entry.key : undefined;
@@ -1072,7 +1116,11 @@ export class FramePipeline {
       // 本地档在这里只可能出现在显式传进来的 controls 上 —— 常规路径上
       // belowDependent / unknown 的快照由 C2 的整场景路(`renderLocalSnapshots`)产。
       // 没有共享键就没法寻址(手工构造的 control、以及还没接上键的调用方),不写快照。
-      const tier = control.snapshotKey ? (control.tier || snapshotTier(control.capabilities)) : 'none';
+      // pinned 渲染 9:不在预渲染集合里的卡走 `target = null` —— 不写快照、不更新
+      // index.json、不发 `layer`。PNG 那一支(legacy 整帧通道与 `renderState` 的料)
+      // 照旧,不然 `?preview=legacy` 会缺料。
+      const tier = control.snapshotKey && this.prerenderPicked(entry, control.clipId)
+        ? (control.tier || snapshotTier(control.capabilities)) : 'none';
       const entryKey = tier === 'local' ? entry.key : undefined;
       const target = tier === 'none' ? null : { tier, entryKey, key: control.snapshotKey };
       // C2:HTML 侧另有一条完整性判据 —— `index.json` 的 `count` 是**已有帧数**

@@ -173,6 +173,7 @@ test('record routes control HTML into the snapshot store, shared and local side 
   const pipeline = { root, _snapshots: new SnapshotStore(root),
     snapshots: FramePipeline.prototype.snapshots,
     snapshotTargets: FramePipeline.prototype.snapshotTargets,
+    prerenderPicked: FramePipeline.prototype.prerenderPicked,
     recordSnapshots: FramePipeline.prototype.recordSnapshots,
     flushSnapshots: FramePipeline.prototype.flushSnapshots };
   const entry = { key: 'ENTRY', cardPlan: [
