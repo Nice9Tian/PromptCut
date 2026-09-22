@@ -1,0 +1,362 @@
+{
+  "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/152.0.0.0 Safari/537.36",
+  "hw": 28,
+  "cost": {
+    "sine": {
+      "coldFirstBlockMs": 1.2,
+      "totalRtf": 0.0011,
+      "p50Rtf": 0.0012,
+      "p90Rtf": 0.0014,
+      "maxRtf": 0.0018,
+      "lastBlockRtf": 0.0012,
+      "maxWindow2sRtf": 0.0015,
+      "pure": true,
+      "sampledP90Rtf": [
+        0.0014,
+        0.0014,
+        0.0016,
+        0.0014,
+        0.0014
+      ]
+    },
+    "additive64": {
+      "coldFirstBlockMs": 20.8,
+      "totalRtf": 0.0652,
+      "p50Rtf": 0.0668,
+      "p90Rtf": 0.0688,
+      "maxRtf": 0.0696,
+      "lastBlockRtf": 0.0686,
+      "maxWindow2sRtf": 0.0692,
+      "pure": true,
+      "sampledP90Rtf": [
+        0.0686,
+        0.0688,
+        0.0692,
+        0.069,
+        0.0692
+      ]
+    },
+    "fir1024": {
+      "coldFirstBlockMs": 27.5,
+      "totalRtf": 0.0524,
+      "p50Rtf": 0.0518,
+      "p90Rtf": 0.0522,
+      "maxRtf": 0.0834,
+      "lastBlockRtf": 0.0514,
+      "maxWindow2sRtf": 0.0681,
+      "pure": true,
+      "sampledP90Rtf": [
+        0.052,
+        0.052,
+        0.052,
+        0.0518,
+        0.052
+      ]
+    },
+    "fir4096": {
+      "coldFirstBlockMs": 102.7,
+      "totalRtf": 0.2052,
+      "p50Rtf": 0.205,
+      "p90Rtf": 0.2062,
+      "maxRtf": 0.2086,
+      "lastBlockRtf": 0.2094,
+      "maxWindow2sRtf": 0.2065,
+      "pure": true,
+      "sampledP90Rtf": [
+        0.206,
+        0.207,
+        0.207,
+        0.209,
+        0.2074
+      ]
+    },
+    "iirFromZero": {
+      "coldFirstBlockMs": 0.6,
+      "totalRtf": 0.0127,
+      "p50Rtf": 0.0126,
+      "p90Rtf": 0.0224,
+      "maxRtf": 0.026,
+      "lastBlockRtf": 0.0244,
+      "maxWindow2sRtf": 0.0257,
+      "pure": true,
+      "sampledP90Rtf": [
+        0.0216,
+        0.0232,
+        0.0234,
+        0.021,
+        0.0212
+      ]
+    },
+    "chain": {
+      "coldFirstBlockMs": 46.6,
+      "totalRtf": 0.1196,
+      "p50Rtf": 0.1216,
+      "p90Rtf": 0.123,
+      "maxRtf": 0.1298,
+      "lastBlockRtf": 0.1232,
+      "maxWindow2sRtf": 0.1245,
+      "pure": true,
+      "sampledP90Rtf": [
+        0.123,
+        0.123,
+        0.123,
+        0.123,
+        0.123
+      ]
+    },
+    "spiky": {
+      "coldFirstBlockMs": 0.5,
+      "totalRtf": 0.0215,
+      "p50Rtf": 0.0012,
+      "p90Rtf": 0.0016,
+      "maxRtf": 0.2078,
+      "lastBlockRtf": 0.0014,
+      "maxWindow2sRtf": 0.104,
+      "pure": true,
+      "sampledP90Rtf": [
+        0.2056,
+        0.2046,
+        0.2054,
+        0.0014,
+        0.0014
+      ]
+    },
+    "tailSpike": {
+      "coldFirstBlockMs": 0.4,
+      "totalRtf": 0.0148,
+      "p50Rtf": 0.0012,
+      "p90Rtf": 0.0014,
+      "maxRtf": 0.8246,
+      "lastBlockRtf": 0.82,
+      "maxWindow2sRtf": 0.4113,
+      "pure": true,
+      "sampledP90Rtf": [
+        0.0014,
+        0.0014,
+        0.0014,
+        0.0018,
+        0.0014
+      ]
+    },
+    "impure": {
+      "coldFirstBlockMs": 0.6,
+      "totalRtf": 0.0009,
+      "p50Rtf": 0.001,
+      "p90Rtf": 0.0012,
+      "maxRtf": 0.0012,
+      "lastBlockRtf": 0.0012,
+      "maxWindow2sRtf": 0.0012,
+      "pure": false,
+      "sampledP90Rtf": [
+        0.0012,
+        0.0012,
+        0.0012,
+        0.0012,
+        0.0012
+      ]
+    }
+  },
+  "codec": {
+    "encoder": {
+      "opus": true,
+      "mp4a.40.2": true,
+      "flac": false,
+      "mp3": false,
+      "vorbis": false,
+      "pcm-f32": false,
+      "pcm-s16": false
+    },
+    "decoder": {
+      "opus": true,
+      "mp4a.40.2": true,
+      "flac": "throw:TypeError",
+      "mp3": true,
+      "vorbis": "throw:TypeError",
+      "pcm-f32": true,
+      "pcm-s16": true
+    },
+    "roundtrip": {
+      "music:opus": {
+        "bitrate": 128000,
+        "bytes": 438504,
+        "encRtf": 0.0049,
+        "decRtf": 0.0026,
+        "primingSamples": 0,
+        "decodedFrames": 1440648,
+        "maxRel": 0.9085,
+        "rmsDb": -11.4
+      },
+      "music:mp4a.40.2": {
+        "bitrate": 192000,
+        "bytes": 720678,
+        "encRtf": 0.0048,
+        "decRtf": 0.0015,
+        "primingSamples": 0,
+        "decodedFrames": 1440768,
+        "maxRel": 0.5407,
+        "rmsDb": -12.8
+      },
+      "tonal:opus": {
+        "bitrate": 128000,
+        "bytes": 437993,
+        "encRtf": 0.0045,
+        "decRtf": 0.0022,
+        "primingSamples": 2400,
+        "decodedFrames": 1440648,
+        "maxRel": 1.026,
+        "rmsDb": -20.7
+      },
+      "tonal:mp4a.40.2": {
+        "bitrate": 192000,
+        "bytes": 720608,
+        "encRtf": 0.0048,
+        "decRtf": 0.0016,
+        "primingSamples": 0,
+        "decodedFrames": 1440768,
+        "maxRel": 0.0251,
+        "rmsDb": -47.5
+      }
+    },
+    "storage": {
+      "music": {
+        "f32Bytes": 11520000,
+        "s16Bytes": 5760000,
+        "s16DeflateBytes": 4871919,
+        "s16MaxRel": 0.0000181,
+        "bytesPerSecF32": 384000
+      },
+      "tonal": {
+        "f32Bytes": 11520000,
+        "s16Bytes": 5760000,
+        "s16DeflateBytes": 66014,
+        "s16MaxRel": 0.0000343,
+        "bytesPerSecF32": 384000
+      }
+    }
+  },
+  "chunk": {
+    "voice": {
+      "oneShotMs": 204.7,
+      "deterministic": true,
+      "preroll": {
+        "0s": {
+          "maxRel": 0.8433,
+          "rmsDb": -26.6,
+          "ms": 227.4
+        },
+        "0.25s": {
+          "maxRel": 0.02315,
+          "rmsDb": -67,
+          "ms": 225.8
+        },
+        "0.5s": {
+          "maxRel": 0.000004644,
+          "rmsDb": -135.2,
+          "ms": 235.9
+        },
+        "1s": {
+          "maxRel": 0.000004644,
+          "rmsDb": -137.5,
+          "ms": 245.2
+        },
+        "2s": {
+          "maxRel": 0,
+          "rmsDb": -354.9,
+          "ms": 254.9
+        },
+        "4s": {
+          "maxRel": 0,
+          "rmsDb": -354.9,
+          "ms": 289.4
+        },
+        "8s": {
+          "maxRel": 0,
+          "rmsDb": -354.9,
+          "ms": 357
+        }
+      }
+    },
+    "longTail": {
+      "oneShotMs": 546.4,
+      "deterministic": true,
+      "preroll": {
+        "0s": {
+          "maxRel": 0.7886,
+          "rmsDb": -19.8,
+          "ms": 615.8
+        },
+        "0.25s": {
+          "maxRel": 0.4377,
+          "rmsDb": -23,
+          "ms": 624
+        },
+        "0.5s": {
+          "maxRel": 0.2542,
+          "rmsDb": -25.9,
+          "ms": 627.8
+        },
+        "1s": {
+          "maxRel": 0.1535,
+          "rmsDb": -30.5,
+          "ms": 661.2
+        },
+        "2s": {
+          "maxRel": 0.04234,
+          "rmsDb": -41.9,
+          "ms": 704.2
+        },
+        "4s": {
+          "maxRel": 0.004041,
+          "rmsDb": -63.7,
+          "ms": 786.5
+        },
+        "8s": {
+          "maxRel": 0.00001814,
+          "rmsDb": -110,
+          "ms": 977.1
+        }
+      }
+    },
+    "all": {
+      "oneShotMs": 678,
+      "deterministic": true,
+      "preroll": {
+        "0s": {
+          "maxRel": 0.8644,
+          "rmsDb": -21.7,
+          "ms": 734.9
+        },
+        "0.25s": {
+          "maxRel": 0.3235,
+          "rmsDb": -30.7,
+          "ms": 745
+        },
+        "0.5s": {
+          "maxRel": 0.08604,
+          "rmsDb": -39.6,
+          "ms": 766.3
+        },
+        "1s": {
+          "maxRel": 0.01223,
+          "rmsDb": -56.6,
+          "ms": 794.8
+        },
+        "2s": {
+          "maxRel": 0.0002772,
+          "rmsDb": -89.1,
+          "ms": 851.4
+        },
+        "4s": {
+          "maxRel": 1.796e-7,
+          "rmsDb": -142.8,
+          "ms": 962.4
+        },
+        "8s": {
+          "maxRel": 1.796e-7,
+          "rmsDb": -143.1,
+          "ms": 1179.2
+        }
+      }
+    }
+  }
+}

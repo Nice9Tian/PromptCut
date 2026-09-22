@@ -10,6 +10,7 @@
 - `future_planning.md`：以后再做的事（第 1 条：桌面版给只有原片的云端素材补转小版）。
 - `g0-a-webview2-probe.md` / `g0-b-stream-prototype.md`：桌面壳探针（硬解、毛玻璃、进程隔离）和轨道流编码原型的实测报告。
 - `hand_off.md`：**交接文档**，接手先读它。
+- `audio_determine_plan.md` / `audio_structure_plan.md`（2026-09-23）：音频图卡判重的测试计划（含已做的实测）、音频整体改成浏览器端 JS 的重构计划（A0～A7）。探针 `scripts/probes/audio-determine-probe.mjs`，结果 `reports/audio-probe-2026-09-23.json`。
 - `hunman_read.md` / `task_recheck.md`：独立复核（条目版 / 证据版），比执行方的 check 更可信。
 - `reports/`：每一步实现者的原始报告（r1～r7、排查、文档抽取）。
 - `r75/agy-r75-NN.md`：第 75 轮十份分步审查报告（2026-09-19，每份只审一步；1～6 号是执行者走查加行号核对，7～10 号是设计级）。报告里的任务书行号指的是 `AGY-TASK-cloud-doc-and-write-race.md` 第 111 版，源码行号指的是提交 `b5c65dc`——解耦之后一部分已经过期。
