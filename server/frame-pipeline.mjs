@@ -709,7 +709,7 @@ export class FramePipeline {
       if (!target || !Number.isInteger(control.frame)) continue;
       const entryKey = target.tier === 'local' ? entry.key : undefined;
       const batches = (entry.snapshotPending ||= new Map());
-      const id = `${target.tier} ${entryKey ?? ''} ${target.key}`;
+      const id = `${target.tier}\u0000${entryKey ?? ''}\u0000${target.key}`;
       if (!batches.has(id)) batches.set(id, { tier: target.tier, entryKey, key: target.key, frames: [], clipId: control.id });
       const html = control.html;
       // A3c 的通用兜底:超限的那一帧**照常落盘**(下一次不用重渲),但不进就绪索引、
