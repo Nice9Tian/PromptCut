@@ -1,8 +1,8 @@
 # 渲染管线重整计划——执行核对（render_pipeline_restructure_check）
 
-这份文件**只记做了什么、没做什么、验到了什么**，章节编号和 `render_pipeline_restructure.md` 一一对应；计划本身（范围、依赖、更正、决策）只在那边，这边不重复。每次合并一步就更新这里。最后更新：2026-09-22，main `e7eeb3a` 之后。
+这份文件**只记做了什么、没做什么、验到了什么**，章节编号和 `render_pipeline_restructure.md` 一一对应；计划本身（范围、依赖、更正、决策）只在那边，这边不重复。每次合并一步就更新这里。最后更新：2026-09-22，R7b 合并之后。
 
-**先看独立复核**：`hunman_read.md` / `task_recheck.md`（2026-09-22 17:30，5 个 Opus 分段对照代码复核）判定本文件**偏乐观**——R5、R6、R7 标「已完成」但各有子项没落实，另有 5 处不符合 pinned 目标（渲染 9、架构 7、架构 9、架构 10、渲染 4）和 1 条回归。两份冲突时以复核为准；交接看 `hand_off.md`。
+**先看独立复核**：`hunman_read.md` / `task_recheck.md`（2026-09-22 17:30，5 个 Opus 分段对照代码复核）判定本文件**偏乐观**——R5、R6、R7 标「已完成」但各有子项没落实，另有 5 处不符合 pinned 目标（渲染 9、架构 7、架构 9、架构 10、渲染 4）和 1 条回归——**这 6 条已由 R7b 修掉**（见下文 R7b）。两份冲突时以复核为准；交接看 `hand_off.md`。
 
 **总状态**：R0～R7 完成（R0 剩两条），**舞台已露出、缺省已翻成跨源双舞台**；R8、R9 未开始；云端那一半未开始。main 上 `tsc -b --force` 零错误，`npm test` 1633 / 1632 通过 / 0 失败 / 1 跳过。
 
@@ -105,6 +105,14 @@
 - **做成什么样**：`probe_port` → `probe_port_at(port, timeout)`，新增 `occupied_stage_ports` 查 5211 / 5212 并在弹窗里点名，**被占只警告不拦启动**；`smoke-boot.mjs` 新增 Step 2b 等两个舞台端口各回 200 + OAC 头；`remote.json` / `on_navigation` 没改；`editor-preview-smoke` 原来是 order-dependent 的（只 `addCardClip` 从不 `newProject`），总验收改成一探针一台新 server，并给它加 `--legacy`。
 - **没验到 / 没做**：拖动 `frame` / `contentBox` 与 legacy 的跨模式逐位比对；K6 那三条；回滚路的截图逐字节比对（只验了结构等价）；「零卡顿」只到「预渲染在跑 + 后台舞台空闲」（探针几百毫秒就收工，压不住「同时」）；桌面壳没真构建、没真跑；`verify-unified-frames.mjs` 挂在「导出页 60 秒没就绪」——退回 main 复跑挂在同一行，可能是环境问题，没查根因。
 - **已知代价**：legacy 模式下点素材段会选不中（主文档的 `mediaRects` 删了，任务书明写的）。
+
+### R7b 对齐 pinned 的 5 处 + 回归 + R5～R7 零碎——已完成，合并见 git log「合并 R7b」
+
+- **我验**：`tsc` 零错误；`npm test` 1648 / 1647 / 0 失败 / 1 跳过（新增 15 条）；合并无冲突。
+- **Agent 自报**（每条必修各有一条探针断言）：渲染 9——预渲染集合接进四个消费点（`snapshotTargets` / `missingSnapshotFrames` / `fillCardControls` / 就绪索引认领），给一张 stateful 卡写便宜记录后它不再进就绪索引、快照目录删掉不长回来；架构 7——项目设置加帧率下拉（24 / 25 / 30 / 60），切 60 后遮罩重走、记录 `fps: 60`；架构 9——settle effect 依赖补 `scrubbing`，真鼠标点标尺、拖动松手都收到 `settled`（去掉那一位两条全红，反向对照成立）；架构 10——阈值仍是 pinned 的 40 ms，改成判「超拍量」`now − prev − 1000/fps > 40`，24 / 25 / 30 / 60 fps 各播 10 秒 `mediaStalled` 全 0；渲染 4——新纯函数 `src/render/catchUpEstimate.mjs`（`frames × stepMaxMs` 封顶在整段 `catchUpMs`），分派不动；回归——播放头在末尾按播放从 0 起，25 条 frame 首条 sec 0.033。探针全绿（`reveal`、`playback` 10 个 case、`stage-content`、`probe-gate`、`ready-index`、`stage-rpc` ×2、`editor-preview-smoke` ×3、`inherited-props`）；导出逐字节 120 / 120 相同。
+- **顺手清了 8 条**：R5-11（互换两次失败走 K6 降级）、R5-12（`vtOk = false` 的卡暂停 / 跳转 / 拖动松开后补跑）、R5-15（连点记最后一次）、R6-7（换项目时就绪索引 reset）、R6-14（超限帧记进 `index.json` 的 `oversize` 名单、下一趟跳过）、R7-6（`?preview=legacy` 合并舞台同名开关）、S39-8（过期文案）、S38-6（`inherited-props-probe` 修到能跑）。
+- **没做成**：① `stageSwap` / `snapshotFeed` / `demote` / 节拍循环的单测——这三个 `.ts` 的 import 无扩展名，`node --test` 不认，补后缀牵连大，只把能抽成纯函数的部分测了；② 渲染 9 只停了快照没停 PNG（判轻的卡仍渲 PNG 进 `cardCache`，legacy 整帧通道要用，legacy 删掉才省得下来）；③ 架构 10 的「事后判据」——停顿进行中音频照播，要不要加播放中的 40 ms 看门狗，等用户定。
+- **对分册的更正建议 8 条**在 `reports/r7b-report.md` 第 4 节，未折回分册。
 
 ### R8 轨道流——未开始
 
