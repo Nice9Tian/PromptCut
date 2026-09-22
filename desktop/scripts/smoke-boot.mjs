@@ -6,7 +6,8 @@
  *
  * Prerequisite: the exe must already be running (this script does not start it).
  * Waits up to 90 seconds for the process to appear, the window title to contain
- * "PromptCut", and the dev server at 127.0.0.1:5210 to respond.
+ * "PromptCut", the dev server at 127.0.0.1:5210 to respond, and both stage
+ * ports (5211 / 5212) to answer 200 with `Origin-Agent-Cluster: ?1`.
  */
 import { execSync } from "child_process";
 import fs from "fs";
@@ -21,12 +22,17 @@ const STATE_FILE = path.resolve(__dirname, "..", ".smoke-state.json");
 const exeName = process.argv[2] || "promptcut.exe";
 const TIMEOUT_MS = 90_000;
 
+/** Editor port, and the two stage ports the editor reverse-proxies (+1 / +2). */
+const EDITOR_PORT = 5210;
+const STAGE_PORT_A = EDITOR_PORT + 1;
+const STAGE_PORT_B = EDITOR_PORT + 2;
+
 function httpGet(urlStr) {
   return new Promise((resolve, reject) => {
     const req = http.get(urlStr, { timeout: 5000 }, (res) => {
       let body = "";
       res.on("data", (c) => (body += c));
-      res.on("end", () => resolve({ status: res.statusCode, body }));
+      res.on("end", () => resolve({ status: res.statusCode, body, headers: res.headers }));
     });
     req.on("error", reject);
     req.on("timeout", () => { req.destroy(); reject(new Error("timeout")); });
@@ -104,6 +110,46 @@ async function main() {
     process.exit(1);
   }
 
+  /*
+   * Step 2b: the two stage ports (editor port +1 / +2).
+   *
+   * R7 makes the cross-origin dual stage the default, so a desktop boot is only
+   * healthy when both proxies are up AND each one answers with
+   * `Origin-Agent-Cluster: ?1`.  That header is what actually buys the process
+   * isolation (same host, different port is NOT isolated on its own — measured
+   * on Chrome 152); without it both stage iframes land back in the editor's
+   * renderer process and a busy stage freezes the whole UI.  It has to be on the
+   * very first response: the browser latches the origin's cluster policy then.
+   */
+  const stagePorts = [STAGE_PORT_A, STAGE_PORT_B];
+  const stageResults = [];
+  for (const port of stagePorts) {
+    let ok = false;
+    let oac = "";
+    let status = 0;
+    while (Date.now() - t0 < TIMEOUT_MS) {
+      try {
+        const res = await httpGet(`http://127.0.0.1:${port}/`);
+        status = res.status;
+        oac = String(res.headers["origin-agent-cluster"] || "");
+        if (status === 200 && oac === "?1") { ok = true; break; }
+      } catch { /* retry */ }
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    stageResults.push({ port, ok, status, originAgentCluster: oac });
+    if (ok) console.log(`  Stage port ${port} ready (200, origin-agent-cluster: ?1)`);
+  }
+  const badStage = stageResults.filter((s) => !s.ok);
+  if (badStage.length > 0) {
+    for (const s of badStage) {
+      console.error(
+        `[FAIL] Stage port ${s.port}: status=${s.status || "no response"}, ` +
+        `origin-agent-cluster=${s.originAgentCluster || "(absent)"} (want 200 + "?1").`
+      );
+    }
+    process.exit(1);
+  }
+
   // Step 3: GET /api/stt/status (record only, not a pass/fail condition)
   let sttStatus = 0;
   let sttBody = "";
@@ -154,6 +200,7 @@ async function main() {
     htmlBytes,
     sttStatus,
     sttBody,
+    stagePorts: stageResults,
   };
   console.log(`BOOT_RESULT_JSON ${JSON.stringify(result)}`);
 }
