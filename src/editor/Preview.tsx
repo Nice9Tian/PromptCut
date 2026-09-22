@@ -8,7 +8,7 @@ import { actions, getState, useStore } from "../store/project";
 import { videoLayersAt, findClip } from "../kernel/project";
 import { frameBox, nudgeFrame } from "../kernel/layout";
 import { createStageRpc, type HostCapabilities, type StageRpcClient } from "../render/stageRpc";
-import { frontStage, onStageEvent, setStageClient, syncProject } from "./stageBridge";
+import { frontStage, markPushed, onStageEvent, setStageClient, syncProject } from "./stageBridge";
 import { INITIAL_ROLE_OF, STAGE_IDS, dualStage, stageSrc, stageTargetOrigin, type StageId } from "./previewMode";
 import { ControlBar } from "./preview/ControlBar";
 import { ToolBar, ToolType } from "./preview/ToolBar";
@@ -420,6 +420,14 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
     flushSync(() => setFrontId(nextId));
     setStageClient("front", nextFront, hostCapsRef.current[nextId]);
     setStageClient("back", nextBack, hostCapsRef.current[cur]);
+    /*
+     * 两个 iframe 手里本来就都是这份整份项目(第二路的 (1) 给 `back` 灌的就是它),
+     * 只是 `setStageClient` 换客户端时把基线清成了 null。补回去,免得互换之后
+     * 第一次 `syncProject` 又整份重灌一遍、顺手掐掉刚起的节拍。
+     */
+    const project = getState().project;
+    markPushed("front", project);
+    markPushed("back", project);
     // 新 front 的抑制集合从零开始记
     suppressedRef.current = "";
     return { front: nextFront, back: nextBack };

@@ -114,6 +114,26 @@ const realNow = () => (window.__pcRealNow ?? (() => Date.now()))();
 /** 等浏览器真画一帧(接管之后 requestAnimationFrame 进的是舞台队列) */
 const realRaf = () => new Promise<void>((r) => (window.__pcRealRaf ?? window.requestAnimationFrame)(() => r()));
 /**
+ * 等一次真帧,但**不许无限等**(K4 的节拍循环用)。
+ *
+ * 跨源 iframe 被浏览器判成「不可见」时(滚出视口、被整块盖住、窗口挪到屏幕外)rAF 会被
+ * 节流到零 —— 实测 `editor-preview-smoke --stage` 里可见舞台走完第一拍就再也没有下一帧,
+ * 节拍循环永远挂在这里:`pause()` 回不了包、`play()` 等不到上一轮收摊、K5 的武装停等不到
+ * `frame(T)`,整条链一起僵住。总规则是「永远不等」,所以超时就当这一帧已经画过,
+ * 循环照常往下走(画面来不及渲是允许的退化,循环僵死不是)。
+ */
+const realRafOrAfter = (ms: number) => new Promise<boolean>((resolve) => {
+  let done = false;
+  const finish = (painted: boolean) => { if (done) return; done = true; resolve(painted); };
+  (window.__pcRealRaf ?? window.requestAnimationFrame)(() => finish(true));
+  (window.__pcRealSetTimeout ?? window.setTimeout.bind(window))(() => finish(false), ms);
+});
+
+/** 连着这么多拍都等不到真帧,就认定这个 iframe 被节流了,此后不再为它等 */
+const RAF_MISS_GIVEUP = 3;
+/** 判定被节流之后,每拍只象征性地让一个宏任务(Motion 解析关键帧要一个任务边界) */
+const RAF_GIVEUP_MS = 4;
+/**
  * **舞台自身的墙钟定时器一律用真实的**(E4b)。`window.setTimeout` 被 `stageClock` 换成了
  * 登记在虚拟时钟上的 fake timer —— 暂停态虚拟时钟不动,用它的话 `.pc-awaiting` 的 500 ms 兜底
  * 一辈子不响、卡片永久隐身;legacy 那条 `SETTLE_MS` 防抖同理会永远不触发。
@@ -1054,6 +1074,10 @@ export default function StageView() {
       const fps = Math.max(1, p.fps || 30);
       const period = 1000 / fps;
       const duration = Math.max(0, Number(p.duration) || 0);
+      /** 平时等真帧的上限:一拍,至少 20 ms */
+      const rafBudget = Math.max(20, period);
+      /** 连着几拍没等到真帧了(被节流的 iframe 会一直等不到) */
+      let rafMisses = 0;
       // 拍序号按帧格算,`sec` 一律是 `帧号 / fps` —— 连续累加浮点会飘
       const fromFrame = Math.round(fromSec * fps);
       let playStart = realNow();
@@ -1075,7 +1099,13 @@ export default function StageView() {
           // K3(b) 的播放态追帧:这一拍除了本拍那一帧,再多推几步它自己的本地时间
           enterCatchUps(sec, fps);
           stepCatchUps(fps);
-          await realRaf();
+          /*
+           * 等真实一帧,**带超时**(见 `realRafOrAfter`)。连着几拍都等不到就认定这个 iframe
+           * 被浏览器节流了 —— 那时画面本来就不在刷,再为它等只会把拍长拖成节流周期;
+           * 改成只让一个宏任务(Motion 解析关键帧要的是任务边界,不是真帧)。
+           */
+          const painted = await realRafOrAfter(rafMisses >= RAF_MISS_GIVEUP ? RAF_GIVEUP_MS : rafBudget);
+          rafMisses = painted ? 0 : rafMisses + 1;
           /*
            * 补一拍落定。`settle()` 排的是微任务,而这里本来就在 `await` 之后 ——
            * 直接同步做完即可,顺手作废还挂着的那一次(又渲了一帧,上一次补拍不作数)。
@@ -1107,7 +1137,7 @@ export default function StageView() {
             playStart += workEnd - nextDue;
           } else {
             while (realNow() < nextDue - BEAT_SLACK_MS) {
-              await realRaf();
+              await realRafOrAfter(Math.max(BEAT_SLACK_MS, nextDue - realNow()));
               if (ref.current.beatPaused || ref.current.role !== "front") break;
             }
           }

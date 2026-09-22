@@ -107,7 +107,17 @@ export function needsBackCatchUp(project: Project, t: number): string[] {
   const out: string[] = [];
   for (const clip of activeCardClips(project, t)) {
     if (pipelineAt(plan, clip.id, t) !== "heavy") continue;
-    if (recordOf(project, clip.id)?.vtOk === true) continue;   // 第一路自己追
+    const record = recordOf(project, clip.id);
+    /*
+     * **没有成本记录的卡不走这条路**（K1 末段：兜底分派只用于「新卡还没测完」那几秒）。
+     * 没记录时 `clipWeight` 按声明把 stateful 卡一律判重，而 `vtOk` 是 `undefined`——
+     * 照「不是 true 就走第二路」读的话，**刚打开一个项目、探针还没测完就会整场景补跑 + 互换**：
+     * 实测 `editor-preview-smoke --stage` 里，加两张卡再 `seek` 一下就换了一次身份，
+     * 而那时后台舞台正在跑 K1 探针（补跑排在 `catchup` 档，会把探针整体挤掉）。
+     * 记录一到 `setPlan` 就会重算，那时该走哪条路自然就定了。
+     */
+    if (!record) continue;
+    if (record.vtOk === true) continue;   // 第一路自己追
     out.push(clip.id);
   }
   return out;
@@ -127,7 +137,9 @@ export function playingCatchUpTargets(project: Project, t: number): string[] {
   for (const clip of activeCardClips(project, t)) {
     if (pipelineAt(plan, clip.id, t) !== "light") continue;
     const record = recordOf(project, clip.id);
-    if (record?.vtOk === true) continue;    // 在可见舞台里自己追（K5 第一路的机制）
+    // 同 `needsBackCatchUp`：没测过的卡不发起互换
+    if (!record) continue;
+    if (record.vtOk === true) continue;    // 在可见舞台里自己追（K5 第一路的机制）
     if (clipWeight(record, frameModes[clip.id], fps, currentTuning()).tier !== "catchup-b") continue;
     out.push(clip.id);
   }
