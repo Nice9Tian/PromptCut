@@ -446,6 +446,14 @@ const hasCardClip = (p: Project | null): boolean =>
  */
 export function syncProbeRun(project: Project | null): void {
   if (project === currentProject) return;
+  /*
+   * **切 fps 要重走遮罩**（pinned 架构 7 的项目选项 + 渲染 5 的「每次打开项目都测」）。
+   * `cardCostKey` 把 fps 吃进了身份键，换帧率之后全部卡的记录都失配、一张都不能复用，
+   * 这一轮要测的张数和打开新项目时一样多 —— 不挡遮罩的话用户会看到一段边测边编辑的
+   * 空窗期，分派表在那期间还是兜底的那份。所以把 `firstPassDone` 拨回去，
+   * 让这一轮重新 `blocking`。预算 `B = 1000/fps × 70%` 也跟着变，重测正是必须的。
+   */
+  if (project && currentProject && Number(project.fps) !== Number(currentProject.fps)) firstPassDone = false;
   currentProject = project;
   generation++;
   if (!looping) void runLoop();
