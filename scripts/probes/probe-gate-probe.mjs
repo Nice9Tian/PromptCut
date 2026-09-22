@@ -415,6 +415,15 @@ try {
     { timeout: 180000, polling: 300 }).catch(() => {});
   await sleep(500);
 
+  /*
+   * 这台机器上没装 Claude Code / agy / codex 时,AI 面板会自动弹设置对话框,
+   * 它的 `.ais-backdrop` 盖住整页 —— 不关掉的话顶栏一个按钮都点不着。按 Esc,最多三次。
+   */
+  for (let i = 0; i < 3; i++) {
+    if (!(await page4.evaluate(() => !!document.querySelector('.ais-backdrop')))) break;
+    await page4.keyboard.press('Escape');
+    await sleep(300);
+  }
   // 打开项目设置对话框,找 fps 下拉
   await page4.click('.pc-proj-btn');
   await page4.waitForSelector('.pc-proj-item', { timeout: 10000 });
