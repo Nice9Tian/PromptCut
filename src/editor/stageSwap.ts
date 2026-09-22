@@ -40,6 +40,7 @@ import { runBackJob } from "./stageJobs";
 import { currentCosts, currentPlan, currentTuning, sendPlanTo } from "./planDispatch";
 import { clipIdentityOf } from "./costIdentity";
 import { deliverSnapshots, markBaselineReset, setExtraSuppressed, suppressedAt } from "./snapshotFeed";
+import { onStageDemote } from "./demote";
 
 /** K5 (3)：等后台舞台的素材层画出一帧，最多等这么久（真墙钟），超时照样换 */
 export const MEDIA_READY_TIMEOUT_MS = 300;
@@ -73,6 +74,8 @@ export function setSwapHost(next: SwapHost | null): void {
 let running = false;
 /** 上一次的预估补跑时长（K3(b) 第二次翻倍） */
 let lastGuessMs = 0;
+/** 第二路正在跑时又来的 settle：只记**最后**那一次，当前这次结束后补做（R5-15） */
+let pendingSettleT: number | null = null;
 
 export function swapInFlight(): boolean {
   return running;
@@ -146,6 +149,23 @@ export function playingCatchUpTargets(project: Project, t: number): string[] {
     out.push(clip.id);
   }
   return out;
+}
+
+/**
+ * **暂停 / 点时间轴 / 拖动松开**时要靠后台补跑才能变精确的全部卡（R5-12）。
+ *
+ * 两类并起来：
+ *   - 判**重**且 `vtOk = false` 的（`needsBackCatchUp`）——第二路原本就收它；
+ *   - 判**轻**、(b) 档、`vtOk = false` 的（`playingCatchUpTargets`）——舞台的 `routeJump`
+ *     对它 `continue`（注释写「第二路由父页发起」），而父页暂停态只看前一类，
+ *     于是跳转之后它停在全局 `clock.set` 给出的错误状态上，没有任何一方去补，
+ *     违背 pinned 架构 9（暂停时精确活渲）。
+ *
+ * 第二路本来就是**整场景**补跑再互换，多收这一类不多花一分钱：只是让「只有这类卡过期」
+ * 的那一刻也真的走一次互换。
+ */
+export function staleOnBackCatchUp(project: Project, t: number): string[] {
+  return [...new Set([...needsBackCatchUp(project, t), ...playingCatchUpTargets(project, t)])].sort();
 }
 
 /**
@@ -273,18 +293,35 @@ async function swapAndDress(sec: number, playing: boolean): Promise<StageRpcClie
  * `vtOk = false` 就走它。
  */
 export async function runSettleSwap(t: number): Promise<boolean> {
-  if (running) return false;
-  const project = getState().project;
-  if (!needsBackCatchUp(project, t).length) return false;
+  /*
+   * **运行中来的新请求不丢，记下最后那一个**（R5-15）。以前这里直接 `return false`：
+   * 真实地连点时间轴（间隔小于一次补跑的几百毫秒），最后一次点击的位置永远不互换，
+   * 判重的 `vtOk = false` 卡就停在快照上。现在当前这一次完成或中止之后，
+   * 按最后那一次的 `t` 再做一遍；中间被盖掉的那些本来就不用做。
+   */
+  if (running) { pendingSettleT = t; return false; }
   running = true;
   try {
-    const ready = await catchUpBack(project, t);
-    if (!ready) return false;
-    // 补跑期间用户又动了：这一次作废（新的 setTime 会重新发起）
-    if (Math.abs(getState().t - t) > 1e-6 || getState().playing) return false;
-    return !!(await swapAndDress(t, false));
+    let target = t;
+    for (;;) {
+      pendingSettleT = null;
+      let swapped = false;
+      const project = getState().project;
+      if (staleOnBackCatchUp(project, target).length) {
+        const ready = await catchUpBack(project, target);
+        // 补跑期间用户又动了：这一次作废（下面那一轮按最新的 `t` 重来）
+        if (ready && Math.abs(getState().t - target) <= 1e-6 && !getState().playing) {
+          swapped = !!(await swapAndDress(target, false));
+        }
+      }
+      const next = pendingSettleT;
+      // 没有新请求、或新请求就是刚做完的这一拍：收工
+      if (next === null || Math.abs(next - target) <= 1e-6 || getState().playing) return swapped;
+      target = next;
+    }
   } finally {
     running = false;
+    pendingSettleT = null;
   }
 }
 
@@ -303,6 +340,21 @@ export async function runPlayingSwap(pendingIds: readonly string[]): Promise<boo
   running = true;
   // 等待期间这几张卡进 front 的 suppressed（藏子树、t 冻住 —— 没有平面就是透明）
   setExtraSuppressed(pendingIds);
+  /**
+   * 两次都追不上：**改判为重（K6），而且不回到活渲**（R5-11）。
+   *
+   * 计划明写这张卡是例外：它活渲出来的状态本来就是错的（`vtOk = false`，子树虚拟
+   * 时间推不动它），追不上才等在 `suppressed` 里，所以死素材就绪之前它留在
+   * `suppressed`（透明），不像别的降级卡那样「就绪前照常活渲」。
+   * 以前这里直接 `return false`，`finally` 的 `setExtraSuppressed([])` 又把它放回活渲，
+   * `swapTried` 还让这一轮播放不再重试 —— 状态是错的、也没人去修。
+   */
+  const giveUp = async (): Promise<false> => {
+    gaveUp = true;
+    for (const id of pendingIds) { try { await onStageDemote(id); } catch { /* 没有记录 / PUT 失败:下一拍 K6 还会来 */ } }
+    return false;
+  };
+  let gaveUp = false;
   try {
     const fps = Math.max(1, project.fps || 30);
     lastGuessMs = guessCatchUpMs(project, pendingIds, getState().t);
@@ -317,7 +369,8 @@ export async function runPlayingSwap(pendingIds: readonly string[]): Promise<boo
       const reply = await oldFront.pause({ atSec: target });
       if (reply.ok && reply.passed) {
         // 可见舞台先走到了 T：重取 T' 并对 back **续推**（不带 jump，从 T 接着推）
-        if (attempt >= 1) return false;
+        // 两次都追不上 → 改判为重（K6）并留在 suppressed（R5-11）
+        if (attempt >= 1) return giveUp();
         lastGuessMs *= 2;
         target = Math.ceil((getState().t + lastGuessMs / 1000) * fps) / fps;
         const back = backStage();
@@ -335,10 +388,11 @@ export async function runPlayingSwap(pendingIds: readonly string[]): Promise<boo
       setExtraSuppressed([]);
       return !!(await swapAndDress(target, true));
     }
-    return false;
+    return giveUp();
   } finally {
     running = false;
-    setExtraSuppressed([]);
+    // 放弃那一次**不清**：那张卡活渲出来的状态是错的，死素材就绪前留在 suppressed（R5-11）
+    if (!gaveUp) setExtraSuppressed([]);
   }
 }
 
