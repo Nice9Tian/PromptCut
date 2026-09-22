@@ -200,6 +200,24 @@ canvas 重卡**不活渲**（与 pinned 渲染 7、平台一节、不做清单�
 | 常驻 Chrome worker 池 | `server/vision/worker-pool.ts` |
 | `frameCode` 的 `CAPTURE_FILES` / `FREEZE_FILES` | `server/frame-code.mjs:19` / `:70`（内容已指向 `server/bakery/*`） |
 
+**R1～R7 期间新建 / 搬家的文件（2026-09-22 回填，接手先看这张）**：
+
+| 文件 | 管什么 | 哪一步 |
+|---|---|---|
+| `src/render/createSnapshot.ts`、`src/render/snapshot/inlineStyles.ts`、`snapshot/rasterizeCanvas.ts`、`snapshot/snapshotStyleProps.mjs` | 生成快照五步；差异样式内联；画布栅格化（原 `snapshotFreeze.ts`，已删） | R1 |
+| `src/kernel/pixelMap.mjs`（扩）、`src/render/pixelMapGl.ts` | 像素映射分类、GLSL 编译；WebGL2 后端 | R1b |
+| `src/editor/previewMode.ts` | `?preview=stage` / `legacy` 开关、舞台地址、`stageId` | R2 / R7 |
+| `server/stage-ports.mjs`、`server/vite-plugin-stage-ports.ts` | 舞台端口 = 编辑器端口 +1 / +2 的反向代理、OAC 头 | R2 |
+| `src/editor/stageJobs.ts` | 单飞队列（补跑 > 页面侧测量 > 探针） | R2 |
+| `src/render/VideoTrack.tsx`、`src/render/mediaDrive.ts`、`src/render/mediaSync.ts`（从 `src/editor/preview/` 搬来） | 素材层进舞台 | R3 |
+| `src/render/virtualTimers.ts`、`src/render/planeStyle.ts` | E4b 定时器虚拟化；四种平面的样式 | R3 |
+| `src/render/pipelinePlan.mjs`、`src/render/pipelineTuning.mjs`、`src/render/wirePlan.ts` | K2 分派纯函数；三个可调系数；分派表的序列化 | R4 |
+| `src/render/costDevice.mjs`、`src/render/snapshotCompare.mjs` | `device` 串共享；布尔探针的比对 | R4 |
+| `src/editor/probeRunner.ts`、`src/editor/ProbeGate.tsx`、`src/editor/planDispatch.ts` | 常驻探针驱动；加载遮罩；`setPlan` 下发 | R4 |
+| `src/editor/snapshotFeed.ts`、`src/editor/stageSwap.ts`、`src/editor/demote.ts` | 父页快照 / 抑制投递；角色互换；K6 降级 | R5 |
+| `server/ready-index.mjs`、`server/prerender-set.mjs`、`src/render/snapshotSource.ts`、`src/render/snapshotPick.mjs` | 就绪索引与 SSE；预渲染集合接口；页面侧快照来源；C4 回溯选帧 | R6 |
+| `scripts/probes/stage-*.mjs`、`probe-gate-probe.mjs`、`playback-probe.mjs`、`ready-index-probe.mjs`、`reveal-probe.mjs`、`stream-*.mjs`、`pixelmap-gl-probe.mjs` | 各步验收探针；轨道流编码原型 | 各步 |
+
 没动的：`src/StageView.tsx`、`src/ExportView.tsx`、`src/editor/Preview.tsx`、`src/render/{stageRpc,snapshotFreeze,snapshotRename,solid,FrameScene,stageClock,pinAnimations,frameWindow,changedClips,cardCostKey}`、`src/editor/stageBridge.ts`、`server/{frame-pipeline,card-identity,card-cache,snapshot-store,mirror-store,costs-store}.mjs`、`server/vite-plugin-{mirror,costs,frames,media,cards,prerender,ai}.ts`。其中 `server/frame-pipeline.mjs`（1155 行）是后面改动最集中的文件，行号以当前文件为准：`acquireUser:256`、`fillCardControls:799`、`isolatedCardProject:855`、`rasterPrefix:893`、`layout:931`、`updatePlayback:1049`、`stopPlayback:1107`。
 
 pinned 架构 4 / 5 的落点因为 vision 拆分而变清楚了：**Agent 专用 Chrome 的优先通道改 `worker-pool.ts` 的取任务逻辑；AI 菜单操作预览的插队改 `render-queue.ts` 的入队位置**，两处互不牵连。
