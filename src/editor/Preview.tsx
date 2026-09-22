@@ -8,7 +8,7 @@ import { actions, getState, useStore } from "../store/project";
 import { videoLayersAt, findClip } from "../kernel/project";
 import { frameBox, nudgeFrame } from "../kernel/layout";
 import { createStageRpc, type HostCapabilities, type StageRpcClient } from "../render/stageRpc";
-import { onStageEvent, setStageClient, syncProject } from "./stageBridge";
+import { frontStage, markPushed, onStageEvent, setStageClient, syncProject } from "./stageBridge";
 import { INITIAL_ROLE_OF, STAGE_IDS, dualStage, stageSrc, stageTargetOrigin, type StageId } from "./previewMode";
 import { ControlBar } from "./preview/ControlBar";
 import { ToolBar, ToolType } from "./preview/ToolBar";
@@ -20,6 +20,10 @@ import { fitView, frameOrigin, panBy, wheelZoomFactor, zoomAt, type View2D } fro
 import "./preview/preview.css";
 import { atFrameGrid } from "../render/frameGrid";
 import { contentStartOf } from "./timeline/utils";
+import { deliverSnapshots, markBaselineReset, noteSettled, pendingDemotes, pickForSetTime, stopSnapshotFeed, suppressedAt, syncSnapshotSubscription } from "./snapshotFeed";
+import { playingCatchUpTargets, runPlayingSwap, runSettleSwap, setSwapHost, swapInFlight } from "./stageSwap";
+import { demotedClips, onStageDemote } from "./demote";
+import { flushSync } from "react-dom";
 
 /**
  * 中央预览:视频层 + 动效渲染面,按容器缩放。播放循环也在这里(rAF 推进 store.t)。
@@ -113,8 +117,13 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
    */
   const rpcRef = useRef<Record<StageId, StageRpcClient | null>>({ A: null, B: null });
   const hostCapsRef = useRef<Record<StageId, HostCapabilities | null>>({ A: null, B: null });
-  /** 下面那一堆(拖动、命中、心跳)问的都是**可见舞台**;起手它是 A */
-  const stage = useCallback((): StageRpcClient | null => rpcRef.current.A, []);
+  /**
+   * 下面那一堆(拖动、命中、心跳、节拍)问的都是**可见舞台**。
+   *
+   * 起手是 A,但 **K5 的角色互换之后就不是了** —— 所以问 `stageBridge` 要「此刻谁是 `front`」,
+   * 不能写死 `rpcRef.current.A`。legacy 的单舞台照样成立(它只登记了一个 `front`)。
+   */
+  const stage = useCallback((): StageRpcClient | null => frontStage(), []);
   const selectionRef = useRef(selection);
   selectionRef.current = selection;
 
@@ -133,6 +142,11 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
    */
   const contentStart = contentStartOf(project.tracks);
   useEffect(() => {
+    /*
+     * E6:**非 legacy 下这个循环不启动** —— 播放头由 K4 的 `frame` 事件推进
+     * (可见舞台自己按帧节拍,每拍渲完才报)。墙钟循环只留给 `?preview=legacy`。
+     */
+    if (dual) return;
     if (!playing) return;
     const fps = Math.max(1, project.fps || 30);
     let raf = 0;
@@ -165,7 +179,7 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
     return () => cancelAnimationFrame(raf);
     // contentStart 不进依赖:播放中挪了第一张卡不该把播放头拽回去
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [playing, project.duration, project.fps]);
+  }, [dual, playing, project.duration, project.fps]);
 
   /*
    * 量一次窗口有多大,顺便在「自动适应」还开着时重新算缩放比。
@@ -293,7 +307,12 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
       for (const id of STAGE_IDS) {
         const win = frames[id].current?.contentWindow;
         if (!win || e.source !== win) continue;
-        const role = INITIAL_ROLE_OF[id];
+        /*
+         * 这个实例此刻该是什么角色。**不能一律照 `INITIAL_ROLE_OF` 走** ——
+         * K5 的互换之后 A 可能已经是后台那一个了,它热重载一次就会顶着 `front` 回来、
+         * 把真正的可见舞台顶掉。
+         */
+        const role = frontIdRef.current === id ? "front" : "back";
         rpcRef.current[id]?.dispose();
         const client = createStageRpc(win, stageTargetOrigin(id));
         rpcRef.current[id] = client;
@@ -318,34 +337,190 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
     };
   }, []);
 
-  /*
-   * 舞台事件的分发骨架(E0 的七种;来源过滤在 stageBridge 里按角色做完了)。
+  /**
+   * 素材和音频按墙钟播:相邻两条 `frame` 到得比这个还慢就暂停它们(K4 / pinned 架构 10;
+   * `mediaSync.ts` 的 `IN_SYNC_SEC` 同值)。下一拍准时到达时再放回去 —— 这就是用户能感到的「小卡」。
+   */
+  const MEDIA_STALL_MS = 40;
+  /** E6:播放中 `refreshRects` 改成定时器,别每拍都往返一次 */
+  const RECTS_POLL_MS = 500;
+
+  /**
+   * 播放中素材层 / 音频是不是被掐住了(K4 的 `mediaStalled`)。
    *
-   * **R2 这一步一条都不会来**:`play` / `pause` 还回 `unsupported`,所以没有节拍循环、
-   * 没有 `frame` / `ended` / `settled`;探针(R4)和降级(K6)也还没有。骨架先摆好,
-   * R4 / R5 往对应的分支里填实现时不用再动协议面和过滤。
+   * **通道写死**:`MediaLayers` 的 `playing` prop 改成 `playing && !mediaStalled`,舞台侧经
+   * `setPlaying(false)` 同步。直接对元素 `pause()` 没用 —— `planSync` 在播放态的每个分支
+   * 都返回 `play: paused`,下一拍就被 `play()` 回来了。
+   */
+  const [mediaStalled, setMediaStalled] = useState(false);
+  const stalledRef = useRef(false);
+  /** 上一条 `frame` 的**真实**到达时刻(首拍以 `play()` 回包时刻为起点) */
+  const lastFrameAtRef = useRef(0);
+
+  /*
+   * 快照 / 抑制的投递(C4、C5、A3c;排程在 `snapshotFeed.ts`)。
+   *
+   * 三处叫它:每拍收到 `frame` 之后(播放中)、`setTime` 发完之后(暂停 / 拖动),
+   * 以及快照字节 / 新的就绪层到货之后。33 ms 的节流在 `deliverSnapshots` 里,
+   * 所以这三处可以放心地多叫几次。
+   */
+  const dualRef = useRef(dual);
+  dualRef.current = dual;
+  /** 上一次发出去的抑制集合(拼成一条字符串比,省掉没变也发) */
+  const suppressedRef = useRef("");
+  const pumpFeed = useCallback(async () => {
+    if (!dualRef.current) return;
+    const s = frontStage();
+    if (!s) return;
+    const head = { project: getState().project, t: tRef.current, playing: playingRef.current };
+    // 抑制只在播放中有(C5 / K5:拖动和暂停下不抑制、改贴快照)
+    const want = head.playing ? suppressedAt(head).join("|") : "";
+    if (want !== suppressedRef.current) {
+      suppressedRef.current = want;
+      void s.setSuppressed(want ? want.split("|") : []).catch(() => {});
+    }
+    await deliverSnapshots(s, "front", head);
+  }, []);
+  const pumpRef = useRef(pumpFeed);
+  pumpRef.current = pumpFeed;
+
+  /* C3 的就绪索引:页面直连预渲染进程的那条 SSE(`snapshotSource.ts`) */
+  useEffect(() => {
+    if (!dual) return;
+    syncSnapshotSubscription(() => { void pumpRef.current(); });
+    return () => stopSnapshotFeed();
+  }, [dual, project]);
+
+  /* 换了 iframe:那一份投递基线跟着作废,下一次带 `reset`(A3c) */
+  useEffect(() => {
+    if (!dual || !stageReady) return;
+    markBaselineReset("front");
+    suppressedRef.current = "";
+  }, [dual, stageReady]);
+
+  /*
+   * K5 (4) 的角色互换。**A / B 只是实例名**,谁是 `front` 由这个 state 说了算 ——
+   * 起手 A,互换之后就换过来了。两件事必须在**一次 React 提交**里做完:
+   * 对调两个 iframe 的可见性,和把「当前 front」指针切过去(`stageBridge` 的登记)。
+   *
+   * 后台那个只能用 `opacity: 0; pointer-events: none` 藏 —— `display: none` /
+   * `visibility: hidden` 会让整份 OOPIF 退出渲染树,`requestVideoFrameCallback` 不再回调,
+   * K5 (3) 的 `mediaReady` 就只能等到超时(见 K5 (4) 的说明)。
+   */
+  const [frontId, setFrontId] = useState<StageId>("A");
+  const frontIdRef = useRef<StageId>("A");
+  frontIdRef.current = frontId;
+  const swapRoles = useCallback(() => {
+    const cur = frontIdRef.current;
+    const nextId: StageId = cur === "A" ? "B" : "A";
+    const nextFront = rpcRef.current[nextId];
+    if (!nextFront) return null;
+    const nextBack = rpcRef.current[cur];
+    frontIdRef.current = nextId;
+    flushSync(() => setFrontId(nextId));
+    setStageClient("front", nextFront, hostCapsRef.current[nextId]);
+    setStageClient("back", nextBack, hostCapsRef.current[cur]);
+    /*
+     * 两个 iframe 手里本来就都是这份整份项目(第二路的 (1) 给 `back` 灌的就是它),
+     * 只是 `setStageClient` 换客户端时把基线清成了 null。补回去,免得互换之后
+     * 第一次 `syncProject` 又整份重灌一遍、顺手掐掉刚起的节拍。
+     */
+    const project = getState().project;
+    markPushed("front", project);
+    markPushed("back", project);
+    // 新 front 的抑制集合从零开始记
+    suppressedRef.current = "";
+    return { front: nextFront, back: nextBack };
+  }, []);
+  useEffect(() => {
+    if (!dual) return;
+    setSwapHost({
+      swapRoles,
+      // 2D 预览**不加 proxy=1**(见下面 iframe 那段注释),所以互换后重发的也是 false
+      proxy: () => false,
+      // A1 的换档那条路还没有消费方(R3 只把口子留在签名上)
+      localHashes: () => [],
+    });
+    return () => setSwapHost(null);
+  }, [dual, swapRoles]);
+
+  /** 这一轮播放已经为哪几张卡发起过互换(别每拍都发一次) */
+  const swapTriedRef = useRef(new Set<string>());
+
+  /* 验收探针的观察口:父页这一侧的状态(哪个 iframe 是 front、素材掐住没有、降级到哪一步) */
+  useEffect(() => {
+    if (!dual) return;
+    const w = window as unknown as { __pcPreviewDiag?: () => unknown };
+    w.__pcPreviewDiag = () => ({
+      frontId: frontIdRef.current,
+      mediaStalled: stalledRef.current,
+      suppressed: suppressedRef.current ? suppressedRef.current.split("|") : [],
+      pendingDemote: [...pendingDemotes()],
+      demoted: [...demotedClips()],
+      swapInFlight: swapInFlight(),
+    });
+    return () => { delete w.__pcPreviewDiag; };
+  }, [dual]);
+
+  /*
+   * 舞台事件的分发(E0 的七种;来源过滤在 stageBridge 里按角色做完了)。
+   *
+   * 监听只登记一次,所以里面读的一律是 ref / store,不读闭包里的 state。
    */
   useEffect(() => onStageEvent((e) => {
     switch (e.type) {
-      case "frame":
-        // K4(R5):可见舞台每渲完一拍报一次 t,播放头跟它走(那时 Preview 的 rAF 循环不启动)
+      case "frame": {
+        // K4:可见舞台每渲完一拍报一次 t,播放头跟它走(那时 Preview 的 rAF 循环不启动)
+        const now = performance.now();
+        const prev = lastFrameAtRef.current;
+        lastFrameAtRef.current = now;
+        actions.tick(e.sec);
+        // 这一拍的抑制集合和快照(C5:播放中发 setSuppressed(H(t)) + setSnapshots)
+        void pumpRef.current();
+        /*
+         * K3(b) 的 `vtOk = false` 轻卡:播放头刚进入它时整场景在后台补跑后互换。
+         * 每张卡这一轮播放只发起一次 —— 补跑一次要几百毫秒,每拍发一次只会互相掐。
+         */
+        if (!swapInFlight()) {
+          const targets = playingCatchUpTargets(getState().project, e.sec).filter((id) => !swapTriedRef.current.has(id));
+          if (targets.length) {
+            for (const id of targets) swapTriedRef.current.add(id);
+            void runPlayingSwap(targets);
+          }
+        }
+        if (!prev) break;
+        const stalled = now - prev > MEDIA_STALL_MS;
+        if (stalled === stalledRef.current) break;
+        stalledRef.current = stalled;
+        setMediaStalled(stalled);
+        // 舞台侧的素材层同步掐住 / 放回;主文档的音频由 MediaLayers 的 playing prop 管
+        void frontStage()?.setPlaying(!stalled && playingRef.current).catch(() => {});
         break;
+      }
       case "ended":
-        // K4(R5):播放到头的收尾 —— 写 store、setPlaying(false)、pause() 拿 stoppedAt、
-        // 再 setTime(stoppedAt, { settle: true }) 进 K5,否则最后一帧的重卡永远停在抑制态
+        /*
+         * K4 播放到头:写 store(`pause()` + `seek(duration)`)。剩下三步
+         * (`setPlaying(false)`、`pause()` 拿 `stoppedAt`、`setTime(stoppedAt, { settle: true })`)
+         * 和按暂停**是同一段收尾** —— `playing` 翻成 false 之后由下面那个 effect 统一做,
+         * 少了最后一步的话最后一帧的重卡永远停在抑制态(pinned 架构 9)。
+         */
+        actions.pause();
+        actions.seek(e.sec);
         break;
       case "settled":
-        // K5(R5):暂停态活渲就绪,摘掉这几张卡的快照平面
+        // K5:暂停态活渲就绪 —— 把这几张卡从投递基线里删掉(A3c),平面舞台自己摘了
+        noteSettled("front", e.clipIds);
         break;
       case "demote":
-        // K6(R5):这张卡降级,父页整条 PUT { ...旧记录, capped: true, demoted: true }
+        // K6:这张卡降级,父页整条 PUT { ...旧记录, capped: true, demoted: true }
+        void onStageDemote(e.clipId);
         break;
       case "probe":
       case "probe-frame":
-        // K1(R4):探针的成绩和它顺手推出来的死素材
+        // K1(R4):探针的成绩和它顺手推出来的死素材(消费方在 probeRunner)
         break;
       case "mediaReady":
-        // K5 第 (4) 步(R5):后台舞台的素材层画出一帧了,可以互换
+        // K5 第 (4) 步:后台舞台的素材层画出一帧了(消费方在 catchUp.ts,它自己订阅)
         break;
     }
   }), []);
@@ -370,8 +545,15 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
      */
     if (dual) return [];
     const stageSize = { width: project.width, height: project.height };
-    return videoLayersAt(project, t).map((l) => ({ clipId: l.clip.id, ...frameBox(l.clip.frame, stageSize) }));
-  }, [dual, project, t]);
+    /*
+     * `t` 走 ref,**不进依赖**。它每拍都在变,进了依赖就会让 `mediaRects` → `refreshRects`
+     * → `sendSetTime` 这一串回调每拍换一个新身份,挂着它们的 effect 跟着每拍重跑一次 ——
+     * 其中就有 K4 那个「playing 翻转时起 / 停节拍」的 effect,于是暂停之后它每次
+     * `actions.tick(stoppedAt)` 又把自己触发一遍,React 直接报 Maximum update depth。
+     * 这个回调只在事件里被叫,读 ref 拿到的本来就是最新值。
+     */
+    return videoLayersAt(project, tRef.current).map((l) => ({ clipId: l.clip.id, ...frameBox(l.clip.frame, stageSize) }));
+  }, [dual, project]);
 
   /**
    * 一次往返拿全部活跃片段的外框 + 实体范围(rectsWithBounds,合并了以前 rects() 后逐个 bounds() 的 N+1)。
@@ -445,22 +627,119 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
    * E0:暂停、拖动只发 setTime(不重挂载、不递增 playToken —— 时钟拨过去、提交 React、钉动画);
    * 父页对可见舞台**不再**发 render(jump)。
    *
-   * 播放中按目标设计由舞台自己按帧节拍推进(K4,第 4 步);K4 落地之前这里过渡地每帧也发 setTime:
-   * 往前不到半秒的 dt 在舞台里按连续播放同步推几帧,和以前的连续路一样。K4 接上后这一支改成不发。
+   * **E6:这个 effect 拆成了两半。** 发 `setTime(t)` 那半**播放中不跑**(K4 由舞台自己按帧节拍
+   * 推进,父页再发就是两个人抢方向盘);`refreshRects()` 那半改成播放中每 500 ms 一次的定时器
+   * (见下面那个 effect),结果按请求序号丢弃过期的(`refreshRects` 里的 `rectsGen`)。
    * 先同步项目再拨时间,两条 RPC 顺序不能反(setTime 要在新项目上算活跃卡)。
    */
+  const scrubbing = useSyncExternalStore(subscribeScrub, isScrubbing, isScrubbing);
+  const scrubbingRef = useRef(scrubbing);
+  scrubbingRef.current = scrubbing;
   const lastRenderKey = useRef("");
+  /**
+   * 给可见舞台拨一次时间。**暂停和拖动的唯一入口**(播放走 K4)。
+   *
+   * `settle: true` 启动 K5 的暂停态活渲:点时间轴、拖动松开、按暂停、播放到头都带它,
+   * **拖动过程中不带**(E3)。
+   */
+  const sendSetTime = useCallback(async (sec: number, opts: { settle?: true } = {}) => {
+    const s = stage();
+    if (!s) return;
+    try {
+      await syncProject("front", getState().project);
+      /*
+       * C4 的快照增量和 `t` 在**同一次 React 提交**里生效(E0):拖过一张 stateful 卡的
+       * 入点时,新挂载的组件和它的快照平面同帧出现、不闪初始态。手里没有的那几帧当场
+       * 发起取字节(不等),由 `.pc-awaiting` 藏 500 ms 兜底。
+       */
+      const feed = dualRef.current ? pickForSetTime({ project: getState().project, t: sec, playing: false })
+        : { snapshots: {} as Record<string, string | null>, awaiting: [] as string[] };
+      await s.setTime(sec, {
+        ...opts,
+        ...(Object.keys(feed.snapshots).length ? { snapshots: feed.snapshots } : {}),
+        ...(feed.awaiting.length ? { awaiting: feed.awaiting } : {}),
+      });
+    } catch {
+      // iframe 正在换(detached):新的 ready 会重发
+      return;
+    }
+    void refreshRects();
+    void pumpRef.current();
+    /*
+     * K5 第二路:只要这一刻有一张判重卡是 `vtOk = false`,就让后台舞台整场景补跑、
+     * 补完互换成精确活渲。`vtOk` 的那些已经在可见舞台里自己追了(K5 第一路,舞台侧)。
+     */
+    if (dualRef.current && opts.settle) void runSettleSwap(sec).catch(() => { /* 后台舞台正在换:下一次 setTime 会重来 */ });
+  }, [stage, refreshRects]);
+  /** K4 的起 / 停节拍只认 `playing`,所以那个 effect 读这一份、不把 `sendSetTime` 进依赖 */
+  const sendSetTimeRef = useRef(sendSetTime);
+  sendSetTimeRef.current = sendSetTime;
   useEffect(() => {
     if (!stageReady) return;
+    // K4:播放中播放头由舞台的 `frame` 推,父页一拍都不发
+    if (dual && playing) return;
     const key = `${stageReady}|${t}|${playToken}`;
     if (key === lastRenderKey.current) return;
     lastRenderKey.current = key;
+    void sendSetTime(t, dual && !scrubbingRef.current ? { settle: true } : {});
+  }, [stageReady, dual, playing, t, playToken, sendSetTime]);
+
+  /* E6:播放中 `refreshRects` 改成定时器,一次往返、结果按序号丢过期的 */
+  useEffect(() => {
+    if (!dual || !stageReady || !playing) return;
+    const id = window.setInterval(() => { void refreshRects(); }, RECTS_POLL_MS);
+    return () => window.clearInterval(id);
+  }, [dual, stageReady, playing, refreshRects]);
+
+  /*
+   * K4 的父页侧:`playing` 翻成 true 就 `play(t)` 起节拍,翻成 false 就走收尾
+   * (`setPlaying(false)` → `pause()` 拿 `stoppedAt` → `setTime(stoppedAt, { settle: true })`)。
+   *
+   * **以舞台最后一拍的 `t` 为准,不用 `store.t`**(E0):store 的 `t` 可能比舞台落后一拍,
+   * 按它发会走向后跳路径、全场 stateful 卡重挂载。
+   * 播放到头(`ended`)走的是同一段 —— 那边只写 store,`playing` 翻 false 之后落到这里。
+   */
+  useEffect(() => {
+    if (!dual || !stageReady) return;
+    let alive = true;
     const s = stage();
     if (!s) return;
-    void syncProject("front", getState().project)
-      .then(() => s.setTime(t))
-      .then(() => refreshRects(), () => {});
-  }, [stageReady, t, playToken, stage, refreshRects]);
+    if (playing) {
+      lastFrameAtRef.current = 0;
+      stalledRef.current = false;
+      setMediaStalled(false);
+      swapTriedRef.current = new Set();
+      void (async () => {
+        try {
+          const reply = await s.play(tRef.current);
+          // 首拍的到达间隔以 `play()` 回包时刻为起点(K4)
+          if (alive && reply.ok) lastFrameAtRef.current = performance.now();
+        } catch { /* iframe 正在换 */ }
+      })();
+    } else {
+      void (async () => {
+        // **发 pause() 的这一处同步清空 lastRenderKey**(E6),否则下一次 setTime 被去重吞掉
+        lastRenderKey.current = "";
+        stalledRef.current = false;
+        setMediaStalled(false);
+        let stoppedAt = tRef.current;
+        try {
+          const reply = await s.pause();
+          if (reply.ok && typeof reply.stoppedAt === "number") stoppedAt = reply.stoppedAt;
+        } catch { /* iframe 正在换 */ }
+        if (!alive) return;
+        if (Math.abs(getState().t - stoppedAt) > 1e-6) actions.tick(stoppedAt);
+        await sendSetTimeRef.current(stoppedAt, { settle: true });
+      })();
+    }
+    return () => { alive = false; };
+    /*
+     * **依赖只有三项**。`t` 每拍都在变,`stage` / `sendSetTime` 的身份也会跟着换 ——
+     * 进了依赖这个 effect 就每拍重跑一次:播放中会把刚起的节拍循环停掉重起,
+     * 暂停中那一支的 `actions.tick(stoppedAt)` 会把自己再触发一遍(无限更新)。
+     */
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dual, stageReady, playing]);
 
   /*
    * R3 的最小接线:非 legacy 下素材层在**舞台里**(E7 第 1 条),它要三样东西才动得起来 ——
@@ -468,19 +747,19 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
    *
    * **两个舞台都发**(E3:「素材层 `mediaT = t`,两种角色一样」):K5 第二路互换前
    * `back` 的素材必须已经在目标拍上,不然互换后偏差过 `HARD_SEEK_SEC`、必付一次硬 seek。
-   * 父页什么时候发 `setSnapshots` / `setSuppressed` 是 R5 的事,这里不发。
    * legacy 下一条都不发 —— 那边素材层还在主文档。
+   *
+   * `playing` 带上 `mediaStalled`(K4):舞台的素材层和主文档的音频一起掐、一起放。
    */
-  const scrubbing = useSyncExternalStore(subscribeScrub, isScrubbing, isScrubbing);
   useEffect(() => {
     if (!dual || !stageReady) return;
     for (const id of STAGE_IDS) {
       const c = rpcRef.current[id];
       if (!c) continue;
       void c.setScrubbing(scrubbing).catch(() => {});
-      void c.setPlaying(playing).catch(() => {});
+      void c.setPlaying(playing && !mediaStalled).catch(() => {});
     }
-  }, [dual, stageReady, scrubbing, playing]);
+  }, [dual, stageReady, scrubbing, playing, mediaStalled]);
   useEffect(() => {
     if (!dual || !stageReady) return;
     for (const id of STAGE_IDS) {
@@ -688,7 +967,8 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
         >
           <div style={{ transform: `scale(${scale})`, transformOrigin: "0 0", position: "absolute", left: 0, top: 0, ...themeStyle(project.themeId) }}>
             <div style={{ position: "relative", width: project.width, height: project.height }}>
-              <MediaLayers project={project} t={t} playing={playing} masterVolume={muted ? 0 : volume} audioOnly />
+              {/* K4 的 `mediaStalled`:舞台连着两拍来得比 40 ms 还慢时,音频跟着停一下 */}
+              <MediaLayers project={project} t={t} playing={playing && !mediaStalled} masterVolume={muted ? 0 : volume} audioOnly />
               <iframe
                 ref={frameARef}
                 data-pc="stage-frame"
@@ -708,8 +988,10 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
                   display: "block",
                   background: "transparent",
                   colorScheme: "normal",
-                  // R7 才摘掉它(那一步露出舞台);R2 两个 iframe 都照旧全透明
+                  // R7 才摘掉它(那一步露出舞台);R5 两个 iframe 都照旧全透明
                   opacity: 0,
+                  // 后台那个还要挡掉指针 —— K5 互换之后 A 可能就是后台那一个
+                  ...(frontId === "A" ? null : { pointerEvents: "none" as const }),
                 }}
               />
               {dual && (
@@ -734,7 +1016,7 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
                      * 量出来的实体框退回整屏。`opacity: 0` 保留布局和渲染,只是看不见。
                      */
                     opacity: 0,
-                    pointerEvents: "none",
+                    ...(frontId === "B" ? null : { pointerEvents: "none" as const }),
                   }}
                 />
               )}

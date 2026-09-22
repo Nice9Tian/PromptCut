@@ -328,8 +328,15 @@ try {
     front: await window.__rpc.setRole('front'),
   }));
   out.misc = misc;
-  // PlayReply:ok 不可选,R2 里两个都还是 unsupported
-  check(misc.play.ok === false && misc.play.reason === 'unsupported' && misc.pause.ok === false && misc.pause.reason === 'unsupported', 'play/pause reply with the unified PlayReply (unsupported until K4)', misc);
+  /*
+   * PlayReply:`ok` 不可选。**R5 之后两个都有真实现了**(K4 的节拍循环),
+   * 这里的舞台此刻还是 `back`(上面把 A 换成了后台舞台),所以:
+   *   - `play` 撞角色闸门,回 `{ ok: false, reason: 'role' }` —— 只有 `front` 跑节拍;
+   *   - `pause` 在「循环本来就停着」时立即回 `{ ok: true, stoppedAt: 最后一拍的 sec }`,
+   *     这里一拍都没走过,`stoppedAt` 是 0。
+   */
+  check(misc.play.ok === false && misc.play.reason === 'role', 'play on a back stage hits the role gate', misc.play);
+  check(misc.pause.ok === true && misc.pause.stoppedAt === 0, 'pause on a stopped loop replies immediately with the last beat', misc.pause);
   check(misc.snaps.ok === true && misc.snaps.bytes === 12 && misc.plan.ok && misc.lh.ok && misc.sup.ok && misc.front.ok, 'misc replies', misc);
   out.pageErrors = errors.filter((e) => !/favicon|Download the React DevTools|Failed to load resource/i.test(e));
   check(out.pageErrors.length === 0, 'no page errors', out.pageErrors.slice(0, 5));

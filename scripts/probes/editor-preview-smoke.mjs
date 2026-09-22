@@ -35,7 +35,13 @@ try {
     return !!m.frontStage();
   }, { timeout: 120000, polling: 500 });
   /** 可见舞台那个 iframe 的 frame 句柄(跨源时父页摸不到它的 document) */
-  const stageFrame = () => page.frames().find((f) => f.url().includes('stage=1') && f.url().includes('id=A'));
+  /**
+   * 可见舞台那个 iframe。**不能写死 id=A**:K5 的角色互换(R5)之后可见舞台可能是 B,
+   * 而那时 A 手里多半是探针的缩水项目 —— 照 A 去读 `data-pc-local-frame` 量到的是另一台戏。
+   * 谁是 front 由父页的 `__pcPreviewDiag()` 说了算;legacy / 还没就绪时退回 A。
+   */
+  const frontId = async () => (await page.evaluate(() => (typeof window.__pcPreviewDiag === 'function' ? window.__pcPreviewDiag().frontId : 'A'))) || 'A';
+  const stageFrame = (id = 'A') => page.frames().find((f) => f.url().includes('stage=1') && f.url().includes(`id=${id}`));
   out.roles = await page.evaluate(async () => {
     const m = await import('/src/editor/stageBridge.ts');
     return { backRole: m.backRole(), hasBack: m.backStage() !== m.frontStage() };
@@ -75,7 +81,7 @@ try {
   check(ids.odo && ids.pill, 'clips added', ids);
   await sleep(1500);
 
-  const wraps = await stageFrame().evaluate(() =>
+  const wraps = await stageFrame(await frontId()).evaluate(() =>
     [...document.querySelectorAll('[data-pc-clip]')].map((el) => ({ id: el.getAttribute('data-pc-clip'), frame: el.getAttribute('data-pc-local-frame') })));
   const stageState = await page.evaluate(async (wraps) => {
     const { frontStage, pushedProject } = await import('/src/editor/stageBridge.ts');
@@ -154,9 +160,17 @@ try {
     actions.pause();
     return getState().t;
   });
-  const playFrames = await stageFrame().evaluate(() =>
+  const playFrames = await stageFrame(await frontId()).evaluate(() =>
     [...document.querySelectorAll('[data-pc-clip]')].map((el) => Number(el.getAttribute('data-pc-local-frame'))));
   const play = { t: playT, frames: playFrames };
+  // 播放没跟上时要看得见是谁停的(K4 的节拍在舞台里,父页只收 frame)
+  play.preview = await page.evaluate(() => (typeof window.__pcPreviewDiag === 'function' ? window.__pcPreviewDiag() : null));
+  play.stages = {};
+  for (const f of page.frames()) {
+    if (!f.url().includes('stage=1')) continue;
+    const id = f.url().includes('id=A') ? 'A' : 'B';
+    play.stages[id] = await f.evaluate(() => (typeof window.__pcStageDiag === 'function' ? window.__pcStageDiag() : null)).catch(() => null);
+  }
   out.play = play;
   check(play.t > 1.0 && play.frames.every((n) => Math.abs(n - Math.round(play.t * 30)) <= 1), 'after 1s of playback the stage local frame follows store.t', play);
 

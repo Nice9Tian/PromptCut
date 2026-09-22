@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { cardNodeIdentities, cardSampling, cardCacheIdentity, cardSnapshotIdentity } from './card-identity.mjs';
+import { cardCostKey } from '../src/render/cardCostKey.mjs';
 import { snapshotCode } from './frame-code.mjs';
 import { snapshotTier } from './snapshot-store.mjs';
 import { MovFrameStore } from './frame-mov.mjs';
@@ -89,7 +90,15 @@ export class CardFrameCache {
         frame: output.frame, themeId: this.project.themeId,
         fontFingerprint: value?.environment?.fontFingerprint || '', snapshotCode: snapshotCode(),
       });
-      controls.push({ key, snapshotKey, tier: snapshotTier(caps), capabilities: caps,
+      /*
+       * K1 / K2 的成本键(R5)。**必须在这里算** —— `cardCostKey` 要的是 graph 的**节点**
+       * 和它的源码版本,两样都只在这一层拿得到(`adoptCardPlan` 收到的只是 controls)。
+       * 口径逐字对齐页面侧的 `clipCostIndex`(`src/render/pipelinePlan.mjs`):
+       * 同一份输入两端算出同一个键,`planPipelines` 才会得出同一张表(K2 末条)。
+       */
+      const costKey = cardCostKey(node ?? {}, (value?.sourceVersions || {})[node?.cardId] ?? null,
+        this.fps, Math.max(1, Math.round((end - start) * this.fps)));
+      controls.push({ key, snapshotKey, costKey, frameMode: caps.frameMode, tier: snapshotTier(caps), capabilities: caps,
         clipId: output.clipId || node?.clipId, nodeId: output.nodeId, start, end, count, sampling, compositing, cacheable,
         needPrerendering: caps.need_prerendering === true || caps.needPrerendering === true || node?.need_prerendering === true || node?.needPrerendering === true, appearance });
     }

@@ -46,6 +46,11 @@ export function currentCosts(): CardCostRecord[] {
   return costs;
 }
 
+/** 这一刻生效的可调系数（舞台经 `setPlan` 拿的是同一份，K3 / K5 分档要一致） */
+export function currentTuning(): PipelineTuning {
+  return tuning;
+}
+
 function recompute(): void {
   if (!project) {
     plan = null;
@@ -63,7 +68,8 @@ export async function sendPlanTo(role: StageRole, opts: { force?: boolean } = {}
   if (!plan) return false;
   const stage = role === "front" ? frontStage() : backStage();
   if (!stage || stage.disposed) return false;
-  const wire = wirePlan(plan);
+  // clipId → identityKey / frameMode 一起带过去:舞台要按 clipId 查 vtOk / seekOk（K3 / K5）
+  const wire = wirePlan(plan, clipIdentityOf(project), tuning);
   const serialized = JSON.stringify(wire);
   // 补发(force)一律发:新 front 作为 back 时手里没有表,「和上次发的一样」对它不成立
   if (!opts.force && role === "front" && serialized === sentWire) return false;

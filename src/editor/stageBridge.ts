@@ -186,6 +186,18 @@ export function pushedProject(role: StageRole): Project | null {
   return slots[role].pushed;
 }
 
+/**
+ * 直接把某个位置的基线记成这一份项目(K5 的角色互换用)。
+ *
+ * 互换的时候两个 iframe 都**已经**拿着这份整份项目了(第二路的 (1) 就是
+ * `pushProject('back', 当前项目, { reset: true })`),只是 `setStageClient` 换客户端时
+ * 把基线清成了 `null`。不补这一下的话,互换之后第一次 `syncProject` 会把整份项目
+ * 再灌一遍 —— 白花一次 `setProject(full, { reset: true })`,而且那一下会掐掉刚起的活。
+ */
+export function markPushed(role: StageRole, project: Project | null): void {
+  slots[role].pushed = project;
+}
+
 /** 测试用:把登记处恢复成刚加载的样子 */
 export function resetStageBridge(): void {
   for (const role of ["front", "back"] as StageRole[]) {

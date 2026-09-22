@@ -916,7 +916,8 @@ export class FramePipeline {
    */
   adoptCardPlan(entry, plan) {
     entry.cardPlan = plan;
-    entry.prerenderSet = prerenderSetOfPlan(plan);
+    // K2 / K6:真的按 planPipelines 的表算(costs / tuning 由编辑器进程转发过来、落在本机那一份)
+    entry.prerenderSet = prerenderSetOfPlan(plan, { fps: Number(entry.project?.fps) || 30, root: this.root });
     const layers = [];
     for (const control of plan ?? []) {
       const tier = control.snapshotKey ? (control.tier || snapshotTier(control.capabilities)) : 'none';
