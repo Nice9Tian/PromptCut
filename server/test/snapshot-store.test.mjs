@@ -117,22 +117,23 @@ test('local tier writes under <root>/controls-local/<entry.key>/<shared key>/ an
 test('index.json is per key dir, updated per batch, and merges across batches', async () => withRoot(async root => {
   const store = new SnapshotStore(root);
   const target = { tier: 'shared', key: 'KEY1' };
-  assert.deepEqual(await store.snapshotIndex(target), { count: 0, frames: [] }, 'no index yet is not an error');
+  assert.deepEqual(await store.snapshotIndex(target), { count: 0, frames: [], oversize: [] }, 'no index yet is not an error');
   // fillCardControls 的批大小是 4:写完一批更新一次。
   for (const frame of [0, 1, 2, 3]) await store.writeSnapshot({ ...target, localFrame: frame, html: `f${frame}` });
-  assert.deepEqual(await store.updateIndex({ ...target, frames: [0, 1, 2, 3] }), { count: 4, frames: [[0, 3]] });
+  assert.deepEqual(await store.updateIndex({ ...target, frames: [0, 1, 2, 3] }), { count: 4, frames: [[0, 3]], oversize: [] });
   for (const frame of [4, 5, 6, 7]) await store.writeSnapshot({ ...target, localFrame: frame, html: `f${frame}` });
   await store.updateIndex({ ...target, frames: [4, 5, 6, 7] });
   // 相邻批次并成一个区间,不是两条。
-  assert.deepEqual(await store.snapshotIndex(target), { count: 8, frames: [[0, 7]] });
+  assert.deepEqual(await store.snapshotIndex(target), { count: 8, frames: [[0, 7]], oversize: [] });
   // 一段被取消、后来补上的洞:先有 12～13,再补 8～11,最后并成一条。
   for (const frame of [12, 13]) await store.writeSnapshot({ ...target, localFrame: frame, html: `f${frame}` });
   await store.updateIndex({ ...target, frames: [12, 13] });
-  assert.deepEqual(await store.snapshotIndex(target), { count: 10, frames: [[0, 7], [12, 13]] });
+  assert.deepEqual(await store.snapshotIndex(target), { count: 10, frames: [[0, 7], [12, 13]], oversize: [] });
   for (const frame of [8, 9, 10, 11]) await store.writeSnapshot({ ...target, localFrame: frame, html: `f${frame}` });
   await store.updateIndex({ ...target, frames: [8, 9, 10, 11] });
-  assert.deepEqual(await store.snapshotIndex(target), { count: 14, frames: [[0, 13]] });
+  assert.deepEqual(await store.snapshotIndex(target), { count: 14, frames: [[0, 13]], oversize: [] });
   const raw = JSON.parse(await fs.readFile(path.join(root, SHARED_DIR, 'KEY1', 'index.json'), 'utf8'));
+  // 盘上那份没有超限帧时**不写** `oversize` 字段:老 index.json 原样读得回来
   assert.deepEqual(raw, { count: 14, frames: [[0, 13]] });
   // index.json 住在键目录里、和帧文件同级:一个键的「有哪些帧」读一个小 JSON 就够,
   // 不用 readdir 几千个文件。
@@ -142,12 +143,31 @@ test('index.json is per key dir, updated per batch, and merges across batches', 
   assert.equal(await store.readSnapshot({ ...target, localFrame: 13 }), 'f13');
 }));
 
+test('R6-14:超限帧记进 index.json 的 oversize,跨进程留得住', async () => withRoot(async root => {
+  const store = new SnapshotStore(root);
+  const target = { tier: 'shared', key: 'BIGK' };
+  // 一批 4 帧:两帧合格、两帧超限
+  const index = await store.updateIndex({ ...target, frames: [0, 1], oversize: [2, 3] });
+  assert.deepEqual(index, { count: 2, frames: [[0, 1]], oversize: [[2, 3]] });
+  // 两份名单互不相干,后面的批次各并各的
+  await store.updateIndex({ ...target, frames: [4], oversize: [5] });
+  assert.deepEqual(await store.snapshotIndex(target), { count: 3, frames: [[0, 1], [4, 4]], oversize: [[2, 3], [5, 5]] });
+  // 盘上那份带 oversize —— 换一个 SnapshotStore(重启预渲染进程)照样读得回来
+  const raw = JSON.parse(await fs.readFile(path.join(root, SHARED_DIR, 'BIGK', 'index.json'), 'utf8'));
+  assert.deepEqual(raw.oversize, [[2, 3], [5, 5]]);
+  assert.deepEqual(await new SnapshotStore(root).snapshotIndex(target), { count: 3, frames: [[0, 1], [4, 4]], oversize: [[2, 3], [5, 5]] });
+  // rebuildIndex 按盘上的帧文件重建 frames,但**留着**超限名单:
+  // 帧文件在盘上不代表它合格(先写文件、后判超限),丢了名单下一趟又白渲一遍
+  for (const frame of [0, 1, 2, 3, 4, 5]) await store.writeSnapshot({ ...target, localFrame: frame, html: 'x' });
+  assert.deepEqual(await store.rebuildIndex(target), { count: 6, frames: [[0, 5]], oversize: [[2, 3], [5, 5]] });
+}));
+
 test('concurrent batches on one key never lose a range', async () => withRoot(async root => {
   const store = new SnapshotStore(root);
   const target = { tier: 'local', entryKey: 'E', key: 'K' };
   // 读-改-写之间插进另一批就会丢段;`updateIndex` 按目录串行。
   await Promise.all([[0, 1], [2, 3], [4, 5], [10, 11]].map(frames => store.updateIndex({ ...target, frames })));
-  assert.deepEqual(await store.snapshotIndex(target), { count: 8, frames: [[0, 5], [10, 11]] });
+  assert.deepEqual(await store.snapshotIndex(target), { count: 8, frames: [[0, 5], [10, 11]], oversize: [] });
 }));
 
 test('rebuildIndex recovers the index from the frame files on disk', async () => withRoot(async root => {
@@ -155,9 +175,9 @@ test('rebuildIndex recovers the index from the frame files on disk', async () =>
   const target = { tier: 'shared', key: 'KEY2' };
   for (const frame of [0, 1, 2, 5]) await store.writeSnapshot({ ...target, localFrame: frame, html: 'x' });
   // 掉过电、index.json 没写成:按盘上实际的 <localFrame>.html 重建。
-  assert.deepEqual(await store.rebuildIndex(target), { count: 4, frames: [[0, 2], [5, 5]] });
-  assert.deepEqual(await store.snapshotIndex(target), { count: 4, frames: [[0, 2], [5, 5]] });
-  assert.deepEqual(await store.rebuildIndex({ tier: 'shared', key: 'ABSENT' }), { count: 0, frames: [] });
+  assert.deepEqual(await store.rebuildIndex(target), { count: 4, frames: [[0, 2], [5, 5]], oversize: [] });
+  assert.deepEqual(await store.snapshotIndex(target), { count: 4, frames: [[0, 2], [5, 5]], oversize: [] });
+  assert.deepEqual(await store.rebuildIndex({ tier: 'shared', key: 'ABSENT' }), { count: 0, frames: [], oversize: [] });
 }));
 
 /**
@@ -202,8 +222,8 @@ test('record routes control HTML into the snapshot store, shared and local side 
   const store = pipeline.snapshots();
   assert.equal(await store.readSnapshot({ tier: 'shared', key: 'SHARED-KEY', localFrame: 1 }), '<i>shared 1</i>');
   assert.equal(await store.readSnapshot({ tier: 'local', entryKey: 'ENTRY', key: 'BLUR-KEY', localFrame: 1 }), '<i>blur 1</i>');
-  assert.deepEqual(await store.snapshotIndex({ tier: 'shared', key: 'SHARED-KEY' }), { count: 2, frames: [[0, 1]] });
-  assert.deepEqual(await store.snapshotIndex({ tier: 'local', entryKey: 'ENTRY', key: 'BLUR-KEY' }), { count: 2, frames: [[0, 1]] });
+  assert.deepEqual(await store.snapshotIndex({ tier: 'shared', key: 'SHARED-KEY' }), { count: 2, frames: [[0, 1]], oversize: [] });
+  assert.deepEqual(await store.snapshotIndex({ tier: 'local', entryKey: 'ENTRY', key: 'BLUR-KEY' }), { count: 2, frames: [[0, 1]], oversize: [] });
   // unknown 卡进本地档,和毛玻璃同一棵树。
   assert.equal(await store.readSnapshot({ tier: 'local', entryKey: 'ENTRY', key: 'U-KEY', localFrame: 0 }), '<i>unknown 0</i>');
   // 共享档目录下不该出现 entry.key 那一层;本地档里没有判轻的卡、也没有无键的卡。
@@ -212,7 +232,7 @@ test('record routes control HTML into the snapshot store, shared and local side 
   // 下一批接着并,不重开一段。
   pipeline.recordSnapshots(entry, [{ id: 'clip-shared', frame: 2, html: '<i>shared 2</i>' }]);
   await pipeline.flushSnapshots(entry);
-  assert.deepEqual(await store.snapshotIndex({ tier: 'shared', key: 'SHARED-KEY' }), { count: 3, frames: [[0, 2]] });
+  assert.deepEqual(await store.snapshotIndex({ tier: 'shared', key: 'SHARED-KEY' }), { count: 3, frames: [[0, 2]], oversize: [] });
   // 没有 cardPlan 的 entry(前台单帧路)什么都不写,也不报错。
   const bare = { key: 'BARE' };
   bare.cardPlan = undefined;

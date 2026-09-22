@@ -101,7 +101,7 @@ const statefulControl = (clipId, count = 8) => ({
   clipId, count, snapshotKey: `key-${clipId}`, sampling: { firstFrame: 0 }, end: 100,
   capabilities: { frameMode: 'stateful', compositing: 'independent' },
 });
-const picker = (entry, index = { count: 0, frames: [] }) => ({
+const picker = (entry, index = { count: 0, frames: [], oversize: [] }) => ({
   entries: new Map([[entry.key, entry]]),
   prerenderPicked: FramePipeline.prototype.prerenderPicked,
   snapshotTargets: FramePipeline.prototype.snapshotTargets,
@@ -145,6 +145,46 @@ test('渲染 9:判轻的卡不算「缺帧」,整场景那一趟不会为它多�
   assert.deepEqual(frames, [0, 1, 2], '只有 heavy 那张卡缺的帧');
   entry.prerenderSet = new Set();
   assert.deepEqual(await picker(entry).missingSnapshotFrames(entry, { tiers: ['shared'] }), []);
+});
+
+test('R6-7:换一版项目时先让页面清表(reset),旧层不残留', () => {
+  const messages = [];
+  const readyIndex = {
+    localRev: 3,
+    reset(rev) { messages.push({ type: 'reset', rev }); },
+    claim(layers) { messages.push({ type: 'claim', n: layers.length }); return layers.length; },
+  };
+  const pipeline = {
+    readyIndex,
+    prerenderPicked: FramePipeline.prototype.prerenderPicked,
+    adoptCardPlan: FramePipeline.prototype.adoptCardPlan,
+  };
+  const plan = [{ clipId: 'a', snapshotKey: 'KA', tier: 'shared', capabilities: { frameMode: 'stateful', compositing: 'independent' } }];
+  const entryA = { key: 'E1', project: { fps: 30 } };
+  pipeline.adoptCardPlan(entryA, plan);
+  assert.deepEqual(messages.map(m => m.type), ['reset', 'claim'], '第一次认领前先 reset');
+  assert.equal(messages[0].rev, 3, 'reset 带当前的 localRev');
+
+  // 同一版项目再来一次(比如重新 preload):不重复 reset
+  messages.length = 0;
+  pipeline.adoptCardPlan(entryA, plan);
+  assert.deepEqual(messages.map(m => m.type), ['claim']);
+
+  // 换一版项目(entry.key 是内容寻址的):再 reset 一次
+  messages.length = 0;
+  pipeline.adoptCardPlan({ key: 'E2', project: { fps: 30 } }, plan);
+  assert.deepEqual(messages.map(m => m.type), ['reset', 'claim']);
+});
+
+test('R6-14:超限被丢掉的帧不再算「缺」,下一趟不重渲', async () => {
+  const entry = { key: 'E', project: { fps: 30, duration: 1 },
+    cardPlan: [statefulControl('heavy', 3)], prerenderSet: new Set(['heavy']) };
+  // 第 1 帧上一趟判了超限:剩下第 0、2 帧才算缺
+  const index = { count: 0, frames: [], oversize: [[1, 1]] };
+  assert.deepEqual(await picker(entry, index).missingSnapshotFrames(entry, { tiers: ['shared'] }), [0, 2]);
+  // 三帧全判过(一帧就绪、两帧超限)= 这张卡处理完了,一帧都不用再渲
+  const done = { count: 1, frames: [[0, 0]], oversize: [[1, 2]] };
+  assert.deepEqual(await picker(entry, done).missingSnapshotFrames(entry, { tiers: ['shared'] }), []);
 });
 
 test('渲染 9:诊断露出集合和 costKey(探针的读口)', () => {

@@ -8,7 +8,7 @@ import { packFrames, unpackFrameArchive, createFrameArchive, packFrameCache, unp
 import { MovFrameStore, PlaybackMovStore, atomic } from './frame-mov.mjs';
 import { FramePlayback } from './frame-playback.mjs';
 import { CardFrameCache } from './card-cache.mjs';
-import { SnapshotStore, snapshotTier, rangeHas } from './snapshot-store.mjs';
+import { SnapshotStore, snapshotTier, rangeHas, rangeCount } from './snapshot-store.mjs';
 import { createReadyIndex, kindOfTier, wireSnapshotKey } from './ready-index.mjs';
 import { prerenderSetOfPlan } from './prerender-set.mjs';
 import { cardMediaPath } from './card-media-path.mjs';
@@ -748,12 +748,15 @@ export class FramePipeline {
       const entryKey = target.tier === 'local' ? entry.key : undefined;
       const batches = (entry.snapshotPending ||= new Map());
       const id = `${target.tier}\u0000${entryKey ?? ''}\u0000${target.key}`;
-      if (!batches.has(id)) batches.set(id, { tier: target.tier, entryKey, key: target.key, frames: [], clipId: control.id });
+      if (!batches.has(id)) batches.set(id, { tier: target.tier, entryKey, key: target.key, frames: [], oversize: [], clipId: control.id });
       const html = control.html;
-      // A3c 的通用兜底:超限的那一帧**照常落盘**(下一次不用重渲),但不进就绪索引、
-      // 不投递 —— 那一层按缺料处理(贴更早的合格快照,没有就透明),并记一条诊断。
+      // A3c 的通用兜底:超限的那一帧**照常落盘**,但不进就绪索引、不投递 —— 那一层按
+      // 缺料处理(贴更早的合格快照,没有就透明),并记一条诊断。R6-14:帧号同时记进
+      // index.json 的 `oversize`,下一趟直接跳过,不再白渲一遍再丢一次。
       if (this.snapshots().noteSnapshotSize({ clipId: control.id, key: target.key, localFrame: control.frame, html, capabilities: target.capabilities })) {
         batches.get(id).frames.push(control.frame);
+      } else {
+        batches.get(id).oversize.push(control.frame);
       }
       entry.snapshotChain = (entry.snapshotChain || Promise.resolve()).then(async () => {
         // 快照库是旁路:写失败不能把整条预渲染管线带下去(老 manifest 仍然写成了)。
@@ -769,10 +772,11 @@ export class FramePipeline {
     if (!batches?.size) return;
     entry.snapshotPending = new Map();
     for (const batch of batches.values()) {
-      if (!batch.frames.length) continue;
+      // 这一批全是超限帧时也要写 index —— `oversize` 那份名单就是下一趟跳过的依据(R6-14)
+      if (!batch.frames.length && !batch.oversize?.length) continue;
       try {
         const index = await this.snapshots().updateIndex(batch);
-        this.publishLayer({ clipId: batch.clipId, snapshotKey: batch.key }, batch.tier, index.frames, batch.entryKey);
+        if (batch.frames.length) this.publishLayer({ clipId: batch.clipId, snapshotKey: batch.key }, batch.tier, index.frames, batch.entryKey);
       } catch {}
     }
   }
@@ -956,6 +960,16 @@ export class FramePipeline {
    */
   adoptCardPlan(entry, plan) {
     entry.cardPlan = plan;
+    /*
+     * C3 的 `reset`(R6-7:以前 `ready-index.mjs` 的 `reset()` 压根没有调用方)。
+     * `entry.key` 是内容寻址的 —— 换项目、改编排都会换一个 key,那一刻页面手里的表
+     * 还挂着上一版的层(已删片段的旧层会一直留着,第二个项目的 `done` 也不会再发)。
+     * 认领路(`claim`)只有扫盘挂着东西时才 reset,常规路径上走不到,所以在这里补一次。
+     */
+    if (this.adoptedEntryKey !== entry.key) {
+      this.adoptedEntryKey = entry.key;
+      try { this.readyIndex.reset(this.readyIndex.localRev); } catch {}
+    }
     // K2 / K6:真的按 planPipelines 的表算(costs / tuning 由编辑器进程转发过来、落在本机那一份)
     entry.prerenderSet = prerenderSetOfPlan(plan, { fps: Number(entry.project?.fps) || 30, root: this.root });
     const layers = [];
@@ -1036,16 +1050,20 @@ export class FramePipeline {
           if (!target || !Number.isInteger(item.frame)) continue;
           try { await this.snapshots().writeSnapshot({ tier: 'local', entryKey: entry.key, key: target.key, localFrame: item.frame, html: item.html }); }
           catch { continue; }
-          if (!this.snapshots().noteSnapshotSize({ clipId: item.id, key: target.key, localFrame: item.frame, html: item.html, capabilities: capabilities.get(item.id) })) continue;
-          if (!written.has(item.id)) written.set(item.id, { key: target.key, frames: [] });
-          written.get(item.id).frames.push(item.frame);
+          if (!written.has(item.id)) written.set(item.id, { key: target.key, frames: [], oversize: [] });
+          // A3c / R6-14:超限的帧不进 `frames`,但记进 `oversize`,下一趟不再重渲
+          if (this.snapshots().noteSnapshotSize({ clipId: item.id, key: target.key, localFrame: item.frame, html: item.html, capabilities: capabilities.get(item.id) })) {
+            written.get(item.id).frames.push(item.frame);
+          } else {
+            written.get(item.id).oversize.push(item.frame);
+          }
         }
       },
     });
     if (signal?.aborted) return;
     for (const [clipId, batch] of written) {
-      const index = await this.snapshots().updateIndex({ tier: 'local', entryKey: entry.key, key: batch.key, frames: batch.frames });
-      this.publishLayer({ clipId, snapshotKey: batch.key }, 'local', index.frames, entry.key);
+      const index = await this.snapshots().updateIndex({ tier: 'local', entryKey: entry.key, key: batch.key, frames: batch.frames, oversize: batch.oversize });
+      if (batch.frames.length) this.publishLayer({ clipId, snapshotKey: batch.key }, 'local', index.frames, entry.key);
     }
   }
   /**
@@ -1069,9 +1087,10 @@ export class FramePipeline {
       const entryKey = tier === 'local' ? entry.key : undefined;
       const index = await this.snapshots().snapshotIndex({ tier, entryKey, key: control.snapshotKey });
       if (index.count) this.publishLayer(control, tier, index.frames, entryKey);
-      if (index.count === control.count) continue;
+      // R6-14:超限被丢掉的帧不算「缺」—— 它们已经渲过一次、也已经判过一次超限
+      if (index.count + rangeCount(index.oversize) >= control.count) continue;
       for (let local = 0; local < control.count; local++) {
-        if (rangeHas(index.frames, local)) continue;
+        if (rangeHas(index.frames, local) || rangeHas(index.oversize, local)) continue;
         const global = local + control.sampling.firstFrame;
         if (global / fps >= control.end - 1e-9) break;
         if (!only || only.has(global)) wanted.add(global);
@@ -1126,9 +1145,11 @@ export class FramePipeline {
       // C2:HTML 侧另有一条完整性判据 —— `index.json` 的 `count` 是**已有帧数**
       // (`snapshot-store.mjs` 的 `rangeCount`),完整 = `index.count === control.count`。
       // PNG 侧的 `hasComplete` 管不到它:同一趟里 PNG 可能齐了而快照缺一段。
-      let index = target ? await this.snapshots().snapshotIndex(target) : { count: 0, frames: [] };
+      let index = target ? await this.snapshots().snapshotIndex(target) : { count: 0, frames: [], oversize: [] };
       if (target && index.count) this.publishLayer(control, tier, index.frames, entryKey);
-      const htmlComplete = !target || index.count === control.count;
+      // R6-14:超限被丢掉的帧算「已经处理过」—— 不然 `htmlComplete` 永远为 false,
+      // 每一趟都把整张卡重渲一遍、再判一遍超限、再丢一遍。
+      const htmlComplete = !target || index.count + rangeCount(index.oversize) >= control.count;
       if (htmlComplete && await entry.cardCache.hasComplete(control)) continue;
       const isolated = this.isolatedCardProject(entry.project, control);
       // A small batch retains Chrome state inside a stateful card, while every
@@ -1147,10 +1168,11 @@ export class FramePipeline {
         const localFrames = Array.from({ length: Math.min(4, control.count - first) }, (_, n) => first + n);
         // C2:帧集合收窄成**本卡缺的那些帧**(按该键 `index.json` 已有区间扣除)。
         // PNG 那一支照旧要全部帧(`targetFrames` 不动),只有生成快照这一支收窄。
-        const missing = target ? localFrames.filter(n => !rangeHas(index.frames, n)) : [];
+        // R6-14:已经判过超限的那些帧也扣掉,不再白渲一遍
+        const missing = target ? localFrames.filter(n => !rangeHas(index.frames, n) && !rangeHas(index.oversize, n)) : [];
         await bakery.reset(isolated, this.emptyUrl(isolated), { deferCards: true });
         await bakery.page.setViewport({ width: isolated.width, height: isolated.height, deviceScaleFactor: this.scaleForLane('background') });
-        const written = [];
+        const written = [], oversized = [];
         await bakeFrames(bakery, { out: path.join(this.root, 'controls', control.key), targetFrames: localFrames,
           snapshotOnly: false, fullFrame: true, writeFrames: false, signal,
           snapshotFrames: new Set(missing),
@@ -1164,16 +1186,20 @@ export class FramePipeline {
             const own = (produced || []).find(item => item.id === control.clipId);
             if (!own || !Number.isInteger(own.frame)) return;
             await this.snapshots().writeSnapshot({ ...target, localFrame: own.frame, html: own.html });
-            // A3c:超限的帧照常落盘,但不进就绪索引、不投递(诊断记在快照库里)
-            if (!this.snapshots().noteSnapshotSize({ clipId: control.clipId, key: target.key, localFrame: own.frame, html: own.html, capabilities: control.capabilities })) return;
+            // A3c:超限的帧照常落盘,但不进就绪索引、不投递(诊断记在快照库里);
+            // R6-14:帧号记进 `oversize`,下一趟跳过
+            if (!this.snapshots().noteSnapshotSize({ clipId: control.clipId, key: target.key, localFrame: own.frame, html: own.html, capabilities: control.capabilities })) {
+              oversized.push(own.frame);
+              return;
+            }
             written.push(own.frame);
           } });
         // 每批写完更新一次 index.json(不是每帧):一个键几千帧时,读-改-写
         // 一个小 JSON 也比不上批量摊薄。
-        if (written.length && !signal?.aborted) {
-          index = await this.snapshots().updateIndex({ ...target, frames: written });
+        if ((written.length || oversized.length) && !signal?.aborted) {
+          index = await this.snapshots().updateIndex({ ...target, frames: written, oversize: oversized });
           // C3:这一层的区间长了就发一条全量 `layer`
-          this.publishLayer(control, tier, index.frames, entryKey);
+          if (written.length) this.publishLayer(control, tier, index.frames, entryKey);
         }
       }
       if (!signal?.aborted) await entry.cardCache.finish(control);
