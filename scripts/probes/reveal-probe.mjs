@@ -156,6 +156,7 @@ const SCAN_MAIN_DOC = () => {
   const canvases = [...box.querySelectorAll('canvas')].map((el) => ({ w: el.width, h: el.height }));
   const frames = [...box.querySelectorAll('iframe[data-pc^="stage-frame"]')].map((el) => ({
     which: el.getAttribute('data-pc'),
+    src: String(el.getAttribute('src') || ''),
     opacity: getComputedStyle(el).opacity,
     display: getComputedStyle(el).display,
     visibility: getComputedStyle(el).visibility,
@@ -423,6 +424,17 @@ try {
     const lfront = (lscan.frames ?? [])[0];
     check((lscan.frames ?? []).length === 1, 'legacy 下只有一个舞台 iframe', (lscan.frames ?? []).length);
     check(lfront && lfront.opacity === '0', 'legacy 下舞台仍然是 opacity: 0(整帧 <img> 在上面)', lfront);
+    /*
+     * D5 / R7-6:回滚要把舞台里那个同名的 `LEGACY` 一起翻过去(`setProject` 立刻按跳转
+     * 重算这一帧)。以前 `stageSrc` 从不传 `preview`,舞台侧那一半永远不生效。
+     */
+    check(!!lfront && /[?&]preview=legacy(&|$)/.test(lfront.src || ''),
+      'legacy 下 ?preview=legacy 传进了舞台 iframe(舞台里的同名开关也翻过去)', lfront?.src);
+    const lstage = lp.frames().find((fr) => fr.url().includes('stage=1'));
+    const lstageUrl = lstage ? lstage.url() : null;
+    out.cases['回滚'].stageUrl = lstageUrl;
+    check(!!lstageUrl && lstageUrl.includes('preview=legacy') && !lstageUrl.includes('preview=stage'),
+      'legacy 下舞台页自己的 URL 是 preview=legacy(不是 stage)', lstageUrl);
     await lp.close().catch(() => {});
   }
 } catch (err) {
