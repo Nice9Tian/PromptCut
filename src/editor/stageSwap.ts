@@ -202,9 +202,10 @@ async function swapAndDress(sec: number, playing: boolean): Promise<StageRpcClie
   try { await next.setRole("front"); } catch { return null; }
 
   /* (5) 它作为 back 时没有表、没有哈希、实体模式是默认值 —— 一条都不能省 */
-  await sendPlanTo("front", { force: true });
   const project = getState().project;
   try {
+    // 补发分派表:它作为 `back` 时没有(E0 的「角色转正时必须补发」)
+    await sendPlanTo("front", { force: true });
     await next.setLocalHashes(host?.localHashes() ?? []);
     if (playing) {
       // 播放态互换：先把三个集合摆好，再 play(T)

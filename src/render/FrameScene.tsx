@@ -1,4 +1,4 @@
-import { Profiler, useCallback, useEffect, useLayoutEffect, useRef } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef } from "react";
 import { Stage, type ProxyRender, type StagePlaneProps } from "./Stage";
 import { flattenOverlay, isImageMedia, nextVideoLayerAfter, opacityAt, videoLayersAt, type MediaAsset, type Project, type TrackClip } from "../kernel/project";
 import type { Timeline } from "../kernel/types";
@@ -109,6 +109,28 @@ function PixelMappedMedia({ media, clip, t, project, style, def, live = false, p
     <canvas ref={canvas} width={Math.max(1, Math.round(project.width))} height={Math.max(1, Math.round(project.height))}
       data-pc-pixel-map={JSON.stringify(def)} data-pc-pixel-time={t} style={style} />
   </>;
+}
+
+/**
+ * K6 的每卡耗时:**靠渲染顺序给一个片段的子树掐表**。
+ *
+ * 不能用 React 的 `<Profiler>`:它的 `actualDuration` 读 `performance.now()`,而舞台把
+ * `performance.now` 换成了虚拟时钟(`stageClock`)—— 一拍之内它是个常数,所以 `Profiler`
+ * 报的每一张卡都是 0(实测)。量耗时一律用 `__pcRealNow`(接管前存下的真墙钟)。
+ *
+ * 做法:在这个片段的 `Stage` **前后各放一个只跑一次回调、不产生 DOM 的兄弟组件**。
+ * React 的渲染是深度优先、兄弟从左到右,所以「前面那个的回调 → 整棵子树渲染 → 后面那个的回调」
+ * 顺序是确定的(同步 `flushSync` 下没有中断)。两次 `__pcRealNow()` 之差就是这张卡这一拍的
+ * 渲染耗时;子树因为 props 没变而跳过时自然就接近 0 —— 那本来就是它这一拍的真实成本。
+ *
+ * **只量渲染阶段**,不含提交到 DOM 的那一段。见报告里的更正建议。
+ */
+const realNow = (): number => (typeof window !== "undefined" && window.__pcRealNow ? window.__pcRealNow() : performance.now());
+/** 上一个 `CostMark` 记下的时刻。渲染是单线程顺序的,一个模块级变量就够 */
+let costMarkAt = 0;
+function CostMark({ at }: { at: (now: number) => void }) {
+  at(realNow());
+  return null;
 }
 
 /**
@@ -278,17 +300,16 @@ export function FrameScene({
             remountGen={remountGen} settling={settling} awaiting={awaiting} />
         );
         /*
-         * K6 的每卡耗时。**包不包这一层由 `live` 决定、不由 `onCardCost` 在不在决定** ——
-         * 中途多包一层 / 少包一层会让 React 认成另一棵树、把卡片重挂载,锚点就丢了。
-         * `placeholder`(导出 / legacy)永远不包,DOM 和渲染路径一个字不变。
+         * K6 的每卡耗时。**加不加这两个兄弟由 `live` 决定、不由 `onCardCost` 在不在决定** ——
+         * 中途多一个 / 少一个兄弟会让 React 按位置重新对账、把卡片重挂载,锚点就丢了。
+         * `placeholder`(导出 / legacy)永远不加,DOM 和渲染路径一个字不变
+         * (`CostMark` 本身回 `null`,live 路的 DOM 也一个节点都不多)。
          */
         return (
           <div key={clip.id} data-pc-native-layer={clip.id} style={layerStyle}>
-            {live ? (
-              <Profiler id={clip.id} onRender={(_id, _phase, actualDuration) => onCardCost?.(clip.id, actualDuration)}>
-                {stage}
-              </Profiler>
-            ) : stage}
+            {live ? <CostMark at={(now) => { costMarkAt = now; }} /> : null}
+            {stage}
+            {live ? <CostMark at={(now) => onCardCost?.(clip.id, now - costMarkAt)} /> : null}
           </div>
         );
       })}

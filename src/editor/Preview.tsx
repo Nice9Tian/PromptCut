@@ -537,8 +537,15 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
      */
     if (dual) return [];
     const stageSize = { width: project.width, height: project.height };
-    return videoLayersAt(project, t).map((l) => ({ clipId: l.clip.id, ...frameBox(l.clip.frame, stageSize) }));
-  }, [dual, project, t]);
+    /*
+     * `t` 走 ref,**不进依赖**。它每拍都在变,进了依赖就会让 `mediaRects` → `refreshRects`
+     * → `sendSetTime` 这一串回调每拍换一个新身份,挂着它们的 effect 跟着每拍重跑一次 ——
+     * 其中就有 K4 那个「playing 翻转时起 / 停节拍」的 effect,于是暂停之后它每次
+     * `actions.tick(stoppedAt)` 又把自己触发一遍,React 直接报 Maximum update depth。
+     * 这个回调只在事件里被叫,读 ref 拿到的本来就是最新值。
+     */
+    return videoLayersAt(project, tRef.current).map((l) => ({ clipId: l.clip.id, ...frameBox(l.clip.frame, stageSize) }));
+  }, [dual, project]);
 
   /**
    * 一次往返拿全部活跃片段的外框 + 实体范围(rectsWithBounds,合并了以前 rects() 后逐个 bounds() 的 N+1)。
@@ -654,8 +661,11 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
      * K5 第二路:只要这一刻有一张判重卡是 `vtOk = false`,就让后台舞台整场景补跑、
      * 补完互换成精确活渲。`vtOk` 的那些已经在可见舞台里自己追了(K5 第一路,舞台侧)。
      */
-    if (dualRef.current && opts.settle) void runSettleSwap(sec);
+    if (dualRef.current && opts.settle) void runSettleSwap(sec).catch(() => { /* 后台舞台正在换:下一次 setTime 会重来 */ });
   }, [stage, refreshRects]);
+  /** K4 的起 / 停节拍只认 `playing`,所以那个 effect 读这一份、不把 `sendSetTime` 进依赖 */
+  const sendSetTimeRef = useRef(sendSetTime);
+  sendSetTimeRef.current = sendSetTime;
   useEffect(() => {
     if (!stageReady) return;
     // K4:播放中播放头由舞台的 `frame` 推,父页一拍都不发
@@ -711,13 +721,17 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
         } catch { /* iframe 正在换 */ }
         if (!alive) return;
         if (Math.abs(getState().t - stoppedAt) > 1e-6) actions.tick(stoppedAt);
-        await sendSetTime(stoppedAt, { settle: true });
+        await sendSetTimeRef.current(stoppedAt, { settle: true });
       })();
     }
     return () => { alive = false; };
-    // t 不进依赖:它每拍都在变,进来就会把刚起的节拍循环停掉重起
+    /*
+     * **依赖只有三项**。`t` 每拍都在变,`stage` / `sendSetTime` 的身份也会跟着换 ——
+     * 进了依赖这个 effect 就每拍重跑一次:播放中会把刚起的节拍循环停掉重起,
+     * 暂停中那一支的 `actions.tick(stoppedAt)` 会把自己再触发一遍(无限更新)。
+     */
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dual, stageReady, playing, stage, sendSetTime]);
+  }, [dual, stageReady, playing]);
 
   /*
    * R3 的最小接线:非 legacy 下素材层在**舞台里**(E7 第 1 条),它要三样东西才动得起来 ——

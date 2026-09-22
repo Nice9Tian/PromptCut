@@ -283,19 +283,21 @@ function fetchMissing(picks: Map<string, Pick>): void {
  * 手里已经有的那些拼成一份增量（相对该 iframe 的基线）。**不改基线** ——
  * 真的发出去之后才改（`commit`）。
  */
-function diffAgainst(role: StageRole, picks: Map<string, Pick>): { patch: Record<string, string | null>; next: Map<string, string> } {
+function diffAgainst(role: StageRole, picks: Map<string, Pick>, reset = false): { patch: Record<string, string | null>; next: Map<string, string> } {
   const base = baselines[role];
+  // 带 `reset` 的那一次:舞台上的快照会被先清空,所以基线也要从零算起、把该挂的重新投一遍
+  const mounted = reset ? new Map<string, string>() : base.mounted;
   const patch: Record<string, string | null> = {};
-  const next = new Map(base.mounted);
+  const next = new Map(mounted);
   for (const [clipId, pick] of picks) {
-    if (base.mounted.get(clipId) === pick.id) continue;
+    if (mounted.get(clipId) === pick.id) continue;
     const html = have.get(pick.id);
     if (html === undefined) continue;   // 还没到货：这一层保持上一张，不闪
     patch[clipId] = html;
     next.set(clipId, pick.id);
   }
   // 不再判重 / 不再活跃 / 选不出帧的：摘掉
-  for (const clipId of base.mounted.keys()) {
+  for (const clipId of mounted.keys()) {
     if (picks.has(clipId)) continue;
     patch[clipId] = null;
     next.delete(clipId);
@@ -368,8 +370,8 @@ export async function deliverSnapshots(stage: StageRpcClient, role: StageRole, h
   const base = baselines[role];
   const now = performance.now();
   if (!base.needsReset && now - base.lastSentAt < SNAPSHOT_THROTTLE_MS) return 0;
-  const { patch, next } = diffAgainst(role, feed.picks);
   const reset = base.needsReset;
+  const { patch, next } = diffAgainst(role, feed.picks, reset);
   if (!reset && !Object.keys(patch).length) return 0;
   const chunks = splitPatch(patch);
   base.mounted = next;

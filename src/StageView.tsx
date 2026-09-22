@@ -989,8 +989,16 @@ export default function StageView() {
      */
     const noteBeat = (beatCost: number, fps: number, sec: number): void => {
       const at = realNow();
-      const over = Math.max(0, beatCost - 1000 / fps);
       const byClip = new Map(ref.current.cardCost);
+      /*
+       * **`pendingDemote` 的卡这一拍的耗时不计入窗口**(K6)。只把它从「谁最贵」的候选里
+       * 摘掉是不够的 —— 它照常活渲、照常把这一拍拖到 60 ms,窗口还是每秒都爆,
+       * 于是每秒再降一张,直到轻管线为空(实测:两张卡的项目里第二张也被降了)。
+       * 所以连**它那一份耗时**一起从这一拍的超时里扣掉。
+       */
+      let excused = 0;
+      for (const id of ref.current.k6.pending) excused += byClip.get(id) ?? 0;
+      const over = Math.max(0, beatCost - excused - 1000 / fps);
       const beats = ref.current.k6.beats;
       beats.push({ at, over, byClip });
       while (beats.length && at - beats[0].at > K6_WINDOW_MS) beats.shift();
@@ -1434,8 +1442,15 @@ export default function StageView() {
        */
       async setRole(role, opts = {}) {
         if (role === "back" && opts.job === "bake") return { ok: false, reason: "unsupported" as const };
-        // K5 (6):刚补跑完的后台舞台转正时要报一次 `settled`,父页据此收尾
-        const wasCatchUp = ref.current.role === "back" && ref.current.job === "catchup";
+        /*
+         * K5 (6):**从 `back` 转正**的舞台要报一次 `settled`(`clipIds` 为空数组)。
+         *
+         * 判据是「上一刻是不是 `back`」,**不看工作项** —— 单飞队列在补跑那个活做完之后
+         * 会把工作项交还成 `'probe'`(`stageJobs` 的 `pump`),那条 `setRole('back', { job: 'probe' })`
+         * 和互换的 `setRole('front')` 是两条并行的 RPC,谁先到没有保证。按工作项判的话
+         * 交还先到就永远报不出 `settled`,父页那边等到超时。
+         */
+        const wasBack = ref.current.role === "back";
         ref.current.role = role;
         ref.current.job = role === "back" ? opts.job ?? "probe" : undefined;
         if (role === "back") {
@@ -1451,7 +1466,7 @@ export default function StageView() {
           catchUpGen.current++;
           // 同一次提交里把全部平面和类去掉 —— 互换那一拍新 `back` 不能还盖着旧画面
           commitPlanes();
-        } else if (wasCatchUp) {
+        } else if (wasBack) {
           // K5 (6):新 `front` post 一次 `{ type: 'settled', sec, clipIds: [] }`
           postStageEvent({ type: "settled", sec: ref.current.t, clipIds: [] });
         }
@@ -1654,6 +1669,8 @@ export default function StageView() {
       pendingDemote: [...ref.current.k6.pending],
       k6Beats: ref.current.k6.beats.length,
       k6Over: ref.current.k6.beats.reduce((n, b) => n + b.over, 0),
+      /** 最后一拍每张卡的耗时(`<Profiler>` 报的);K6 挑「最贵的那张」就按它 */
+      cardCost: [...ref.current.cardCost.entries()],
     });
     window.__pcStagePipelineAt = (clipId: string, tSec: number) => pipelineAt(ref.current.plan?.plan ?? null, clipId, tSec);
     postStageReady(detectHostCapabilities());
