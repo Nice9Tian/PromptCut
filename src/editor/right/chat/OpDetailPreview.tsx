@@ -535,7 +535,8 @@ export function OpDetailPreview(props: {
     const note = call ? noteOf(call) : "";
     return (
       <>
-        <PageBody p={p} base={base} loadGif={loading(p.id)} onReady={markReady} />
+        {/* D5:同源退回已经删掉,拿不到预渲染的源就没有地址可拼 */}
+        {base === null ? <div className="ai-visual-note">预渲染进程还没就绪,画面取不回来</div> : <PageBody p={p} base={base} loadGif={loading(p.id)} onReady={markReady} />}
         {call ? (
           <div className="ai-odp-over-head" data-pc="odp-over-head">
             <OpHead t={call} />

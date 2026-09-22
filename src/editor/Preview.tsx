@@ -5,8 +5,8 @@ import { MediaLayers } from "./preview/MediaLayers";
 import { Scene3DView } from "./preview/Scene3DView";
 import { themeStyle } from "../themes";
 import { actions, getState, useStore } from "../store/project";
-import { videoLayersAt, findClip } from "../kernel/project";
-import { frameBox, nudgeFrame } from "../kernel/layout";
+import { findClip } from "../kernel/project";
+import { nudgeFrame } from "../kernel/layout";
 import { createStageRpc, type HostCapabilities, type StageRpcClient } from "../render/stageRpc";
 import { frontStage, markPushed, onStageEvent, setStageClient, syncProject } from "./stageBridge";
 import { INITIAL_ROLE_OF, STAGE_IDS, dualStage, stageSrc, stageTargetOrigin, type StageId } from "./previewMode";
@@ -529,31 +529,14 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
    * 选中描边用的外框:不用包裹层(每张卡都占满整屏),用片段的实体范围——
    * 字幕卡的描边贴着字幕本身,而不是绕屏幕一圈。老渲染面没有 bounds 就退回包裹层。
    */
-  /**
-   * 此刻画面上的素材段(视频 / 图片)和它们的矩形。
+  /*
+   * R7(D3 第 4 步 / D5):主文档的 `mediaRects` 已经删掉。
    *
-   * 它们由**主文档**的 MediaLayers 画,不在舞台 iframe 里 —— 所以 iframe 的 hitTest
-   * 看不见它们,点一下视频等于点了个寂寞(选不中、拖不动)。这里把它们补上,
-   * 和卡片一起参与命中和描边。矩形就是片段的框,没设框就是整幅画面。
+   * 素材段现在由舞台自己画(E7 第 1 条,R3 落地),`data-pc-clip` 写在显示着的视频槽位
+   * 和图片层上,所以舞台的 `rects()` / `hitTest` 本来就认得它们 —— 主文档再补一份,
+   * 同一个 clipId 就会出现两次、命中时挑到错的那个。命中测试和实体框**全部走舞台**的
+   * `hitTest` / `rectsWithBounds`。
    */
-  const mediaRects = useCallback((): { clipId: string; left: number; top: number; width: number; height: number }[] => {
-    /*
-     * R3:非 legacy 下素材层已经在舞台里了(E7 第 1 条),舞台的 `rects()` / `hitTest`
-     * 自己就认得它们(`data-pc-clip` 写在显示着的视频槽位和图片层上,D3 第 4 步)。
-     * 再补一份就会同一个 clipId 出现两次、命中时挑到错的那个。
-     * 这个 `useCallback` 整个删掉是 R7(D5 的「删主文档的 mediaRects」),那一步 legacy 也不要了。
-     */
-    if (dual) return [];
-    const stageSize = { width: project.width, height: project.height };
-    /*
-     * `t` 走 ref,**不进依赖**。它每拍都在变,进了依赖就会让 `mediaRects` → `refreshRects`
-     * → `sendSetTime` 这一串回调每拍换一个新身份,挂着它们的 effect 跟着每拍重跑一次 ——
-     * 其中就有 K4 那个「playing 翻转时起 / 停节拍」的 effect,于是暂停之后它每次
-     * `actions.tick(stoppedAt)` 又把自己触发一遍,React 直接报 Maximum update depth。
-     * 这个回调只在事件里被叫,读 ref 拿到的本来就是最新值。
-     */
-    return videoLayersAt(project, tRef.current).map((l) => ({ clipId: l.clip.id, ...frameBox(l.clip.frame, stageSize) }));
-  }, [dual, project]);
 
   /**
    * 一次往返拿全部活跃片段的外框 + 实体范围(rectsWithBounds,合并了以前 rects() 后逐个 bounds() 的 N+1)。
@@ -576,9 +559,9 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
       }
     }
     if (gen !== rectsGen.current) return;
-    // 素材段在下、卡片在上(DOM 里 MediaLayers 排在舞台 iframe 前面),命中时也按这个顺序找
-    setRects([...mediaRects(), ...cards]);
-  }, [stage, mediaRects]);
+    // R7:素材段也在舞台里了(E7 第 1 条),`rectsWithBounds` 一次就把卡片和素材段都带回来
+    setRects(cards);
+  }, [stage]);
 
   /** 刚被点中的片段:描边闪一下,让用户看清点到的是谁 */
   const [flash, setFlash] = useState<{ clipId: string; token: number } | null>(null);
@@ -594,18 +577,17 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
     const x = (e.clientX - rect.left) / scale;
     const y = (e.clientY - rect.top) / scale;
     const s = stage();
-    // 卡片在上层:先问舞台(一次 RPC 往返)。没点中卡片再看素材段(它们在主文档里,舞台看不见)
+    /*
+     * R7:卡片和素材段都在舞台里,一次 `hitTest` 往返就是最终答案(D3)。
+     * 主文档只在**完全没有舞台**时(还没握手 / iframe 正在换)退回上一轮 `rects` 找一下。
+     */
     let card: { clipId: string; left: number; top: number; width: number; height: number } | null = null;
     if (s) {
       try { card = await s.hitTest(x, y); } catch { card = null; }
     }
     const inside = (r: { left: number; top: number; width: number; height: number }) =>
       x >= r.left && x <= r.left + r.width && y >= r.top && y <= r.top + r.height;
-    const hit =
-      card ??
-      [...mediaRects()].reverse().find(inside) ??
-      (s ? null : [...rects].reverse().find(inside)) ??
-      null;
+    const hit = card ?? (s ? null : [...rects].reverse().find(inside)) ?? null;
     return { hit, overlayRect: rect };
   };
 
@@ -988,8 +970,16 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
                   display: "block",
                   background: "transparent",
                   colorScheme: "normal",
-                  // R7 才摘掉它(那一步露出舞台);R5 两个 iframe 都照旧全透明
-                  opacity: 0,
+                  /*
+                   * R7:**舞台露出来**(D5)。可见的那一个不再是全透明的,用户看到的
+                   * 就是舞台 iframe 本身,不再是主文档里那张整帧 `<img>`。
+                   *
+                   * 判据是 `dual` 而不是「`?preview=stage`」:舞台页只有在 `dual` 时才
+                   * 带上 `&preview=stage`(见 `stageSrc`),也才渲 `FrameScene` 的 live 变体、
+                   * 才把素材层画在自己里面。端口被占退回同源单舞台时那一份还是 placeholder 内容,
+                   * 露出来会是一张没有素材的画面 —— 那时候要继续用 `UnifiedPreview` 的整帧。
+                   */
+                  opacity: dual && frontId === "A" ? 1 : 0,
                   // 后台那个还要挡掉指针 —— K5 互换之后 A 可能就是后台那一个
                   ...(frontId === "A" ? null : { pointerEvents: "none" as const }),
                 }}
@@ -1014,13 +1004,20 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
                      * `<video>` 和 rAF 停掉、布局全归零,补跑出来的画面和可见舞台对不上;
                      * `visibility: hidden` 会让 `solid.ts` 的 `isSolid` 判它不是实体,
                      * 量出来的实体框退回整屏。`opacity: 0` 保留布局和渲染,只是看不见。
+                     *
+                     * R7:互换之后 B 可能是可见的那一个,那时它跟着露出来。
                      */
-                    opacity: 0,
+                    opacity: frontId === "B" ? 1 : 0,
                     ...(frontId === "B" ? null : { pointerEvents: "none" as const }),
                   }}
                 />
               )}
-              <UnifiedPreview project={project} t={t} playing={playing} />
+              {/*
+                * R7(D5):整帧 `<img>` / `MovPlayer` canvas **只留在 legacy 分支**。
+                * 露出舞台之后再画一层整帧,等于把舞台盖住,而且那一层要等 HTTP
+                * ——「暂停拖动画面同一帧内更新、不等待 HTTP」这条就没了。
+                */}
+              {!dual && <UnifiedPreview project={project} t={t} playing={playing} />}
             </div>
           </div>
           

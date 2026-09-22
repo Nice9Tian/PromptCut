@@ -1,14 +1,15 @@
 /**
  * 预览走哪条路:**回滚开关 `?preview=legacy` 与双舞台开关 `?preview=stage`**(D5 / F2)。
  *
- * R2～R6 的新东西全藏在这个开关后面,**这几步里 legacy 是缺省** —— 不带参数、带
- * `?preview=legacy`、带任何别的值,看到的都是今天这套:**一个同源的舞台 iframe**,
- * 播放头由 `Preview` 的 rAF 循环推,父页每帧发 `setTime`。要看新路得显式写
- * `?preview=stage`。R7 才把缺省翻过来(那一步同时摘掉 `front` 的 `opacity: 0`)。
+ * **R7 已经把缺省翻过来了**:不带参数、带 `?preview=stage`、带任何别的值,走的都是
+ * 跨源双舞台 —— 舞台 iframe 直接露出来,播放头由可见舞台按帧节拍推(K4),
+ * 主文档只留音频。要回到老路得显式写 `?preview=legacy`:一个同源舞台 iframe、
+ * 整帧 `<img>` 预览、播放头由 `Preview` 的 rAF 循环推。
  *
- * 为什么另起一个值而不是「没有 `legacy` 就是新路」:R2 的新行为是**跨源双舞台**,
- * 它要多起两个端口、要 iframe 换源。用户手里那份编辑台随便刷新一下就会踩上去,
- * 而 R2 的验收条件是「可见行为逐项不变」。显式开关才对得上这一条。
+ * R2～R6 期间缺省是 legacy,新东西全藏在 `?preview=stage` 后面 —— 那几步的验收条件是
+ * 「可见行为逐项不变」,而新行为要多起两个端口、要 iframe 换源,用户手里那份编辑台
+ * 随便刷新一下就会踩上去。R7 是第一步**故意**改用户可见行为的,所以这一步才翻。
+ * **为什么必须和 D5 的其余几条一起原子地翻**见 `docs/plan/r2-r7-task.md` 的 D5 末尾。
  *
  * `StageView` 自己那个 `LEGACY`(`?preview=legacy` 时 `setProject` 立刻按跳转重算这一帧)
  * 是**另一件事**,而且 `Preview` 从来不把 `preview` 参数传进 iframe,所以这里加的值
@@ -27,9 +28,14 @@ export type PreviewMode = "legacy" | "stage";
 
 const paramOf = (): string => (typeof location === "undefined" ? "" : new URLSearchParams(location.search).get("preview") || "");
 
-/** 缺省是 legacy;只有显式 `?preview=stage` 才走 R2 的跨源双舞台 */
+/**
+ * **缺省是 stage(R7 的原子切换)**;只有显式 `?preview=legacy` 才退回单舞台 + 整帧那条路。
+ *
+ * `?preview=stage` 仍然认 —— 它现在和不带参数一个意思,留着是因为 R2～R6 的探针、
+ * 文档和用户手里的书签都写着它。别的值(打错的、老链接)一律按缺省走 stage。
+ */
 export function previewMode(): PreviewMode {
-  return paramOf() === "stage" ? "stage" : "legacy";
+  return paramOf() === "legacy" ? "legacy" : "stage";
 }
 
 /**

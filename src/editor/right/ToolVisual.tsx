@@ -90,6 +90,8 @@ export function ToolVisual({ id }: { id: string }): JSX.Element {
 
   if (err) return <div className="ai-visual-note">这一步的画面取不回来了({err})</div>;
   if (!rec) return <div className="ai-visual-note">正在取回画面…</div>;
+  // D5:同源退回已经删掉,拿不到预渲染的源就没有地址可拼(拼出来是编辑器自己的源)
+  if (base === null) return <div className="ai-visual-note">预渲染进程还没就绪,画面取不回来</div>;
 
   const hasGif = !!(rec.before || rec.after);
   const afterLabel = rec.before ? "修改后" : rec.tool === "get_gif" ? "整段动效" : "新加的卡片";

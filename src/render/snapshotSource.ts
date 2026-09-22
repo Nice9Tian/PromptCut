@@ -120,8 +120,13 @@ export class HttpSnapshotSource implements SnapshotSource {
 
     const connect = async () => {
       if (stopped) return;
-      let base = "";
-      try { base = await this.base(); } catch { base = ""; }
+      /*
+       * D5「同源退回删除」:拿不到预渲染的源就**不连**,退避之后重新问。
+       * 以前这里退回空串(同源),EventSource 于是连到编辑器自己的源上 ——
+       * 那里没有这个端点,连上就错、错了又重连,白占一条连接还把真实故障藏起来。
+       */
+      let base: string;
+      try { base = await this.base(); } catch { return retry(); }
       if (stopped) return;
       const url = `${base}/api/frames/ready?session=${encodeURIComponent(session)}&localRev=${encodeURIComponent(String(localRev))}`;
       try {

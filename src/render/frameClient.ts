@@ -87,5 +87,11 @@ export async function see_frames(project: Project, times: number[], signal?: Abo
   // that import before the first foreground request so a freshly opened
   // project can actually hit its saved B/C cache instead of starting A again.
   await restorePending;
-  return frameRequest("see", project, { times }, signal, { target: options.target ?? "user", lane: options.lane ?? "user" });
+  /*
+   * D5:缺省打**预渲染的源**(R7 之前是 `"user"`,也就是编辑器自己的源)。
+   * 编辑器进程现在是 `interactive: false`,`user` / `playback` 两条 lane 立即回
+   * `USE_PRERENDER` —— 缺省留在同源等于每一次都先撞一堵墙。`?preview=legacy`
+   * 的整帧 `<img>` 也走这里,所以它的 `see` 同样打预渲染源(D5 回滚开关那条)。
+   */
+  return frameRequest("see", project, { times }, signal, { target: options.target ?? "prerender", lane: options.lane ?? "user" });
 }

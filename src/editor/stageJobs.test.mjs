@@ -89,6 +89,19 @@ test("开工前发 setRole,页面侧测量映射到 job: 'catchup';队列空了�
   assert.deepEqual(c.roles, [], "队列交还时已经是 probe,不该再发一遍");
 });
 
+test("back 换了客户端(K5 互换 / iframe 重载)后,同一个工作项要对新客户端重发一次", async () => {
+  const a = fakeClient();
+  bridge.setStageClient("back", a);
+  await runBackJob("probe", async () => {});
+  assert.deepEqual(a.roles, ["back:probe"]);
+
+  // K5 的互换:另一个 iframe 接任 back。新客户端的缺省角色是 front,从没收到过 setRole
+  const b = fakeClient();
+  bridge.setStageClient("back", b);
+  await runBackJob("probe", async () => {});
+  assert.deepEqual(b.roles, ["back:probe"], "工作项没变但换了人 —— 不重发的话新 back 会留在 front 角色上");
+});
+
 test("legacy 的单舞台(只有 front)不发 setRole —— 发了会把可见舞台的画面清掉", async () => {
   const c = fakeClient();
   bridge.setStageClient("front", c);

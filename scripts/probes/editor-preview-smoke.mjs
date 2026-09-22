@@ -2,10 +2,18 @@
  * 编辑台冒烟(E0 / E1 / D3 页面侧):真的打开编辑台(?editor),经 store 加两张卡、seek,
  * 看 Preview 是否只经 RPC 把项目和时间送到了舞台 iframe、命中测试和选中描边是否照常工作。
  *
- *   node scripts/probes/editor-preview-smoke.mjs [--origin http://127.0.0.1:5211] [--stage]
+ *   node scripts/probes/editor-preview-smoke.mjs [--origin http://127.0.0.1:5211] [--stage | --legacy]
  *
- * 不带 `--stage` 就是缺省的 legacy:一个同源舞台 iframe,和今天一模一样;
- * 带 `--stage` 打开 `?preview=stage`,两个跨源舞台 iframe(E1),可见行为必须逐项一样。
+ * `--stage` 打开 `?preview=stage`(两个跨源舞台 iframe,E1),`--legacy` 打开
+ * `?preview=legacy`(一个同源舞台 iframe)。**两个都不带就是「缺省是什么就验什么」**。
+ *
+ * R7 之前缺省是 legacy,所以不带参数 = legacy;**R7 把缺省翻成了 stage**,
+ * 不带参数就成了 stage。回滚那一条因此要显式写 `--legacy` —— 不然翻开关之后
+ * 「验 legacy」的那一趟其实打开的是新路,断言必然对不上。
+ *
+ * **这个探针要一台全新的 dev server 跑一次**:它只 `addCardClip`、从不 `newProject`,
+ * 同一台 server 上连跑会让片段累积、浮层盖住点击点、`.pc-pv-hit` 的第一个不再是
+ * 它要拖的那一张。实测同一台 server 连跑三次:过、挂(两条)、过。
  *
  * **舞台里的 DOM 一律走 puppeteer 的 frame 句柄**(`page.frames()` 对跨源 iframe 照样给得出),
  * 不用 `iframe.contentDocument` —— 跨源模式下父页碰不到它。
@@ -14,20 +22,25 @@ import puppeteer from 'puppeteer';
 
 const args = process.argv.slice(2);
 const origin = (args.includes('--origin') ? args[args.indexOf('--origin') + 1] : null) || process.env.PC_STAGE_TEST_URL || 'http://127.0.0.1:5197';
-const stageMode = args.includes('--stage');
+const forceStage = args.includes('--stage');
+const forceLegacy = args.includes('--legacy');
+/** 缺省不带参数:开 `/?editor`,页面自己按 `previewMode()` 的缺省决定走哪条路 */
+const editorQuery = forceStage ? '/?editor&preview=stage' : forceLegacy ? '/?editor&preview=legacy' : '/?editor';
 const fails = [];
 const check = (cond, label, extra) => { if (!cond) fails.push(label + (extra !== undefined ? ' :: ' + JSON.stringify(extra) : '')); return cond; };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const browser = await puppeteer.launch({ headless: true, args: ['--window-position=-32000,-32000', '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1'] });
-const out = { mode: stageMode ? 'stage' : 'legacy' };
+/** 显式指定时就是它;不带参数时等页面加载完按「有没有第二个舞台」认出来 */
+let stageMode = forceStage;
+const out = { mode: forceStage ? 'stage' : forceLegacy ? 'legacy' : '(默认,待认)', modeFrom: forceStage || forceLegacy ? 'flag' : 'default' };
 try {
   const page = await browser.newPage();
   await page.setViewport({ width: 1600, height: 1000 });
   const errors = [];
   page.on('pageerror', (e) => errors.push(String(e)));
   page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
-  await page.goto(origin + (stageMode ? '/?editor&preview=stage' : '/?editor'), { waitUntil: 'domcontentloaded', timeout: 120000 });
+  await page.goto(origin + editorQuery, { waitUntil: 'domcontentloaded', timeout: 120000 });
   await page.waitForSelector('iframe[data-pc="stage-frame"]', { timeout: 120000 });
   // 舞台握手 → stageBridge 里登记了 front 客户端
   await page.waitForFunction(async () => {
@@ -40,6 +53,17 @@ try {
    * 而那时 A 手里多半是探针的缩水项目 —— 照 A 去读 `data-pc-local-frame` 量到的是另一台戏。
    * 谁是 front 由父页的 `__pcPreviewDiag()` 说了算;legacy / 还没就绪时退回 A。
    */
+  /*
+   * 不带参数时:缺省是什么就验什么。判据是「页面真的挂了两个舞台 iframe」——
+   * `?preview=stage` 但端口被占的那一档只有一个 iframe,行为和 legacy 一样,
+   * 该按 legacy 验。给 back 一点时间登记再认。
+   */
+  if (!forceStage && !forceLegacy) {
+    await page.waitForFunction(() => document.querySelectorAll('iframe[data-pc^="stage-frame"]').length === 2,
+      { timeout: 8000, polling: 200 }).catch(() => {});
+    stageMode = await page.evaluate(() => document.querySelectorAll('iframe[data-pc^="stage-frame"]').length === 2);
+    out.mode = stageMode ? 'stage' : 'legacy';
+  }
   const frontId = async () => (await page.evaluate(() => (typeof window.__pcPreviewDiag === 'function' ? window.__pcPreviewDiag().frontId : 'A'))) || 'A';
   const stageFrame = (id = 'A') => page.frames().find((f) => f.url().includes('stage=1') && f.url().includes(`id=${id}`));
   out.roles = await page.evaluate(async () => {

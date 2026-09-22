@@ -23,6 +23,17 @@ mod skill_shell;
 
 const EDITOR_URL: &str = "http://127.0.0.1:5210/";
 
+/// 编辑器自己的端口(`EDITOR_URL` 里那个)。
+const EDITOR_PORT: u16 = 5210;
+
+/// 两个舞台端口 = 编辑器端口 +1 / +2(`server/stage-ports.mjs`)。
+///
+/// R7 之后缺省就是跨源双舞台,这两个端口由编辑器进程起反向代理
+/// (`server/vite-plugin-stage-ports.ts`,带 `Origin-Agent-Cluster: ?1`)。
+/// 被别的程序占住时编辑器**不会**起不来:它只是不起那一个代理、页面退回同源单舞台,
+/// 两个舞台 iframe 也就掉回一个。所以这里只提醒、不拦启动 —— 拦了反而比网页版更糟。
+const STAGE_PORTS: [u16; 2] = [EDITOR_PORT + 1, EDITOR_PORT + 2];
+
 /// 启动参数里的 .proc 文件(双击文件、右键「打开方式」)。只认真实存在的文件。
 fn proc_arg<I: Iterator<Item = String>>(args: I) -> Option<String> {
     args.filter(|a| a.to_lowercase().ends_with(".proc"))
@@ -157,11 +168,14 @@ fn status_eval_script(message: &str) -> String {
     )
 }
 
-/// Try a raw HTTP GET to `127.0.0.1:5210` and return the response body
+/// Try a raw HTTP GET to `127.0.0.1:<port>` and return the response body
 /// (up to 64 KiB) if the connection succeeds within `timeout`.
-fn probe_port(timeout: Duration) -> Result<String, String> {
+///
+/// `Err` 就是「连不上」,也就是这个端口没人占 —— 舞台端口的预检靠的正是这一条。
+fn probe_port_at(port: u16, timeout: Duration) -> Result<String, String> {
+    let addr = format!("127.0.0.1:{port}");
     let mut stream =
-        TcpStream::connect_timeout(&"127.0.0.1:5210".parse().unwrap(), timeout)
+        TcpStream::connect_timeout(&addr.parse().map_err(|_| addr.clone())?, timeout)
             .map_err(|e| e.to_string())?;
     stream
         .set_read_timeout(Some(timeout))
@@ -187,6 +201,20 @@ fn probe_port(timeout: Duration) -> Result<String, String> {
         }
     }
     Ok(String::from_utf8_lossy(&buf[..total]).to_string())
+}
+
+/// 编辑器端口的预检(老调用点的形状没变)。
+fn probe_port(timeout: Duration) -> Result<String, String> {
+    probe_port_at(EDITOR_PORT, timeout)
+}
+
+/// 哪几个舞台端口已经被占住了。连得上就算被占。
+fn occupied_stage_ports(timeout: Duration) -> Vec<u16> {
+    STAGE_PORTS
+        .iter()
+        .copied()
+        .filter(|p| probe_port_at(*p, timeout).is_ok())
+        .collect()
 }
 
 /// Resolve the runtime directory: honour `PROMPTCUT_RUNTIME_DIR` if set,
@@ -277,10 +305,40 @@ pub fn run() {
                     // Port is occupied by something else.
                     rfd::MessageDialog::new()
                         .set_title("PromptCut")
-                        .set_description("端口被占用\n\n端口 5210 被别的程序占用，请关掉它再启动。")
+                        .set_description(&format!(
+                            "端口被占用\n\n端口 {EDITOR_PORT} 被别的程序占用，请关掉它再启动。"
+                        ))
                         .set_level(rfd::MessageLevel::Error)
                         .show();
                     std::process::exit(1);
+                }
+            }
+
+            /*
+             * 两个舞台端口的预检(R7)。只在「这一份要自己起编辑器」时查 ——
+             * 已经有一份 PromptCut 在跑的话,5211 / 5212 本来就该是它占着的。
+             *
+             * 被占**不拦启动**:编辑器那一侧只是不起那一个反向代理、页面退回同源单舞台,
+             * 照样能用。拦掉反而比网页版更糟。但要点名是哪一个,不然用户只会看到
+             * 「预览怎么变慢了」而无从查起。
+             */
+            if !existing_instance {
+                let busy = occupied_stage_ports(Duration::from_millis(400));
+                if !busy.is_empty() {
+                    let list = busy
+                        .iter()
+                        .map(|p| p.to_string())
+                        .collect::<Vec<_>>()
+                        .join("、");
+                    rfd::MessageDialog::new()
+                        .set_title("PromptCut")
+                        .set_description(&format!(
+                            "舞台端口被占用\n\n端口 {list} 被别的程序占用。\n\n\
+                             PromptCut 照常启动，但预览舞台会退回同源单舞台模式（后台预渲染舞台用不上，\
+                             拖动和播放会比平时吃力）。关掉占用这些端口的程序再重启就能恢复。"
+                        ))
+                        .set_level(rfd::MessageLevel::Warning)
+                        .show();
                 }
             }
 

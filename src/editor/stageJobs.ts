@@ -143,20 +143,27 @@ async function resolveStage(): Promise<StageRpcClient> {
 }
 
 /**
- * 把工作项发给后台舞台。**同一个工作项不重发** —— `setRole('back')` 每次都会清空
- * 快照 / 抑制 / 流平面并中止追帧(E0),白发一次等于白清一次。
+ * 把工作项发给后台舞台。**同一个客户端上的同一个工作项不重发** —— `setRole('back')`
+ * 每次都会清空快照 / 抑制 / 流平面并中止追帧(E0),白发一次等于白清一次。
  * legacy 的单舞台不发(见文件头)。
+ *
+ * **记的是「哪个客户端 + 哪个工作项」,不只是工作项**(R7):`back` 这个位置上的客户端会换人 ——
+ * K5 的互换让另一个 iframe 接任 `back`,iframe 重载也会换一个新客户端。只记工作项的话,
+ * 新客户端从没收到过 `setRole`(它的缺省角色是 `front`),而这里却因为「工作项没变」跳过发送,
+ * 于是新 `back` 一直留在 `front` 角色上:它不认 `render`(回 `reason: 'role'`)、
+ * 也不按 `back` 的规矩走,探针和补跑就此停摆。带上客户端身份之后,换人必然不等于上一条记录,
+ * 一定会重发一次。
  */
-let lastSentJob: BackJob | null = null;
+let lastSent: { client: StageRpcClient; job: BackJob } | null = null;
 async function sendJob(stage: StageRpcClient | null, job: BackJob): Promise<void> {
   if (backRole() !== "back" || !stage) return;
-  if (lastSentJob === job) return;
+  if (lastSent && lastSent.client === stage && lastSent.job === job) return;
   try {
     await stage.setRole("back", { job });
-    lastSentJob = job;
+    lastSent = { client: stage, job };
   } catch {
-    // iframe 正在换:下一个活开工时会重发(新客户端的缺省角色是 front,一定和 lastSentJob 不同)
-    lastSentJob = null;
+    // iframe 正在换:下一个活开工时会重发
+    lastSent = null;
   }
 }
 
@@ -214,5 +221,5 @@ export function resetStageJobs(): void {
   queue.length = 0;
   running?.abort.abort();
   seqNo = 0;
-  lastSentJob = null;
+  lastSent = null;
 }
