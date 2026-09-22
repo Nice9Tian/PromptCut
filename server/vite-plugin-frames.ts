@@ -29,11 +29,18 @@ export function frameService(root: string, origin: string) {
     service = new FramePipeline({ root: path.join(process.env.PROMPTCUT_EXPORT_DIR || path.join(root, "out"), "frame-library"), origin: () => origin,
       code: () => frameCode(root), captureCode: () => captureCode(root),
       /*
-       * D5 的 `interactive`。**R6 只加参数和代码路径,默认值保持今天的行为** ——
-       * 两个进程都是 `true`,编辑器进程照旧养那对热 Chrome。R7 的原子切换才把
-       * 编辑器进程这一侧改成 `!isPrerender ? false : true`。
+       * D5 的 `interactive`(R7 的原子切换把编辑器进程这一侧翻了过来)。
+       *
+       * **预渲染进程 `true`**:热池在它这里,改叫 `streamPool`,给 G 的分段和 C2 锚帧用;
+       * `?preview=legacy` 的服务端旧调度器(`acquireUser` / `updatePlayback`)也留在它这里 ——
+       * legacy 页面照今天的方式发 `user` / `playback` lane,只是打到预渲染的源上
+       * (`frameClient` 的缺省 `target` 已经是 `"prerender"`),服务端不另读开关。
+       *
+       * **编辑器进程 `false`**:不再养那对无头 Chrome。`user` / `playback` 两条 lane
+       * 立即回 `USE_PRERENDER`、不进 `acquireUser`,两处 `prewarmUser` 都不调。
+       * 页面侧的热渲染是可见舞台 iframe,和 Node 侧的热池不是一回事(总规则倒数第二条)。
        */
-      interactive: true,
+      interactive: isPrerender,
       /** C4:`wanted` 从镜像插件读(frame-pipeline 是 .mjs,镜像插件是 .ts) */
       playhead: () => latestPlayhead(),
     });
