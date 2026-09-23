@@ -202,6 +202,14 @@ export function registerPrerenderSide(server: ViteDevServer, root: string) {
        */
       // 搬进 server/vision/ 之后这条相对路径要多退一级(原文件在 server/ 下,写的是 "./ai-visual.mjs")
       const visualLib = () => import(new URL("../ai-visual.mjs", import.meta.url).href);
+      /*
+       * 渲染规格(spec-<key>.json)、可视化记录(v-*.json)、位图和动图都落在这一个**几个进程共用的目录**里
+       * (T1a 审查 #13):`outRoot` = `PROMPTCUT_EXPORT_DIR`(缺省 `<root>/out`),编辑器进程拉起的预渲染进程
+       * 继承同一个值,拆分(cloud-task.md I4(d))时 `user` / `agent` 两个进程也一样。所以模型的 `get_gif` 在
+       * `agent` 进程里写下的规格,用户点开动图时路由到 `user` 进程(I4(c) 的例外)照样 GET 得到。
+       * 写一律先写临时文件再改名(`ai-visual.mjs` 的 `atomicWrite`),另一个进程读不到半截。
+       * `gifInflight` 只在本进程里去重:两个进程同时点开同一张没渲过的动图会各渲一遍,结果一样,后改名的覆盖先到的。
+       */
       const visualDir = () => path.join(outRoot(root), "ai-visual");
       const gifInflight = new Map<string, Promise<{ gif: string; grid: string; times: number[] }>>();
 
