@@ -13,9 +13,15 @@
  * 不带参数就成了 stage。回滚那一条因此要显式写 `--legacy` —— 不然翻开关之后
  * 「验 legacy」的那一趟其实打开的是新路,断言必然对不上。
  *
- * **这个探针要一台全新的 dev server 跑一次**:它只 `addCardClip`、从不 `newProject`,
- * 同一台 server 上连跑会让片段累积、浮层盖住点击点、`.pc-pv-hit` 的第一个不再是
- * 它要拖的那一张。实测同一台 server 连跑三次:过、挂(两条)、过。
+ * **同一台 dev server 上可以连跑**,每一趟都从同一个起点开始:
+ *   - 先 `newProject` 换成空项目,再加两张卡,并断言项目里只有这两张;
+ *   - 两张卡的文字参数带上本趟的标记。dev server 把每张卡的成本记录存在盘上
+ *     (`out/card-costs.json`,跨趟、跨重启都在),按卡片身份(卡 + 参数 + 长度 + …)取用,
+ *     K6 打上的 `demoted` 还会粘住。参数不变的话,下一趟一开场就按上一趟的降级记录走,
+ *     实测那一趟 seek 之后舞台上两张卡的本地帧读到 0,「本地帧 45」那条挂。换了参数就是一张没见过的卡。
+ *     代价是每趟往那台 server 的记录里多添几条;
+ *   - 编辑台带 `nosetup=1`:首启 AI 设置对话框要等 `/api/ai/providers` 回来才弹,早晚不定,
+ *     弹出来正好盖在点击点上,点不中预览。
  *
  * **舞台里的 DOM 一律走 puppeteer 的 frame 句柄**(`page.frames()` 对跨源 iframe 照样给得出),
  * 不用 `iframe.contentDocument` —— 跨源模式下父页碰不到它。
@@ -28,7 +34,9 @@ const origin = devOrigin(args);
 const forceStage = args.includes('--stage');
 const forceLegacy = args.includes('--legacy');
 /** 缺省不带参数:开 `/?editor`,页面自己按 `previewMode()` 的缺省决定走哪条路 */
-const editorQuery = forceStage ? '/?editor&preview=stage' : forceLegacy ? '/?editor&preview=legacy' : '/?editor';
+const editorQuery = '/?editor&nosetup=1' + (forceStage ? '&preview=stage' : forceLegacy ? '&preview=legacy' : '');
+/** 本趟的标记,写进两张卡的文字参数:同一台 server 上前几趟留下的成本记录对不上这两张卡(见文件头) */
+const runTag = Date.now().toString(36);
 const fails = [];
 const check = (cond, label, extra) => { if (!cond) fails.push(label + (extra !== undefined ? ' :: ' + JSON.stringify(extra) : '')); return cond; };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -96,16 +104,18 @@ try {
   }
 
   await page.evaluate(() => { window.__smokeMarker = 1; });
-  const ids = await page.evaluate(async () => {
+  const ids = await page.evaluate(async (runTag) => {
     const { actions, getState } = await import('/src/store/project.ts');
-    actions.newProject('smoke'); // 编辑台可能带着上次的草稿进来,先换成空项目
-    const a = actions.addCardClip('odometer', 0, { duration: 10 });
-    const b = actions.addCardClip('punch-pill', 0, { duration: 10, params: { text: '冒烟' } });
+    actions.newProject('smoke'); // 编辑台开场会往空项目里塞演示卡,先换成空项目
+    const a = actions.addCardClip('odometer', 0, { duration: 10, params: { label: `冒烟 ${runTag}` } });
+    const b = actions.addCardClip('punch-pill', 0, { duration: 10, params: { text: `冒烟 ${runTag}` } });
     actions.seek(1.5);
     return { odo: a?.id, pill: b?.id, tracks: getState().project.tracks.map((t) => t.clips.length) };
-  });
+  }, runTag);
+  out.runTag = runTag;
   out.ids = ids;
   check(ids.odo && ids.pill, 'clips added', ids);
+  check(ids.tracks.reduce((n, k) => n + k, 0) === 2, 'the run starts from an empty project (only its own two clips)', ids.tracks);
   await sleep(1500);
 
   const wraps = await stageFrame(await frontId()).evaluate(() =>
