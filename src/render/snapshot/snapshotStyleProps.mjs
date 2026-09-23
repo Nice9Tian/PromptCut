@@ -109,7 +109,7 @@ export const LAYOUT_USED_VALUE_PROPS = new Set([
  * Chrome 排版用 LayoutUnit(1/64 px 的定点数),这些属性的使用值一定是 n/64;但
  * `getComputedStyle` 按 **6 位有效数字**序列化(`316.15625px` → `316.156px`),重放时 Chrome
  * 把 316.156 × 64 = 20233.98 **截断**成 20233,比原值少 1/64 px。硬边元素看不出来,
- * `filter: blur()` 却能因此差出几十级(`restructure_planning/reports/replay-mismatch-report.md` §6)。
+ * `filter: blur()` 却能因此差出几十级(`docs/archive/restructure_planning/reports/replay-mismatch-report.md` §6)。
  *
  * 为什么对齐回去的一定是原值:6 位有效数字在 10000 px 以内的舍入误差 ≤ 0.005 px,
  * 小于半格(1/128 ≈ 0.0078 px),最近的那一格只能是原值;而 n/64 的十进制写法是有限小数
