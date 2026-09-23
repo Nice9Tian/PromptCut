@@ -2,7 +2,7 @@
 
 做渲染对账(两条管线逐帧比像素、逐帧比 DOM)时,先读这一篇。下面每一条都是 2026-09-11 实测撞过的墙:程序报「不同」,真正的原因却在比对方法上,不在被比的东西上。
 
-**第一条规矩:程序报不同,先用眼睛看。** 把差异最大的那一帧拼成「A | B | 差异 × 8」三联图,只裁有差异的区域,再下结论。这一轮就是看了图,才发现差异是动画中间值的细微差别,而不是错帧。拼图脚本的做法见 `docs/hybrid-sampling-plan.md` 的 E2a。
+**第一条规矩:程序报不同,先用眼睛看。** 把差异最大的那一帧拼成「A | B | 差异 × 8」三联图,只裁有差异的区域,再下结论。这一轮就是看了图,才发现差异是动画中间值的细微差别,而不是错帧。拼图脚本的做法见 `docs/archive/topics/hybrid-sampling-plan.md` 的 E2a。
 
 ---
 
@@ -79,7 +79,7 @@ Motion 靠 `Object.hasOwnProperty.call(Element.prototype, 'animate')` 判断浏�
 
 - **定时器**:`GlobalRegistrator.register()` 会把全局 `setTimeout` 换成 happy-dom 的,它的返回值没有 `.unref()`,Vite 会崩。做法:先起 Vite,再注册 happy-dom,然后把 Node 原生的定时器装回全局。
 - **画布**:卡片注册表会一次性导入所有卡。lottie-web 在**模块加载时**就拿 canvas 的 2D 上下文,happy-dom 给 null,直接崩。做法:给 `getContext` 一个什么都收下的 Proxy 桩。画布卡本来就不在纯算法范围内。
-- **CSS 变量解析不了**:动画起点值写成 `var(--pc-accent)` 时,Motion 要靠浏览器把它解析成真实颜色才能插值。happy-dom 解析不了,于是插值停在字符串上。step-timeline 就是这样:Chrome 算出 `rgba(200, 214, 255, 0.498)`,纯算法停在 `var(--pc-accent, #4f8cff)`,片内 41 帧不同。这正是 E1 里「挂载时有提问」的那类卡,必须用 Chrome 录下的答案回放,见 `docs/hybrid-sampling-plan.md` 的方向 B。
+- **CSS 变量解析不了**:动画起点值写成 `var(--pc-accent)` 时,Motion 要靠浏览器把它解析成真实颜色才能插值。happy-dom 解析不了,于是插值停在字符串上。step-timeline 就是这样:Chrome 算出 `rgba(200, 214, 255, 0.498)`,纯算法停在 `var(--pc-accent, #4f8cff)`,片内 41 帧不同。这正是 E1 里「挂载时有提问」的那类卡,必须用 Chrome 录下的答案回放,见 `docs/archive/topics/hybrid-sampling-plan.md` 的方向 B。
 - **回放了答案也可能不够。** 给 step-timeline 回放 Chrome 录下的计算样式(命中 25、缺失 0),结果仍然 49/90。Motion 在 happy-dom 里对 `backgroundColor: "transparent"` 报「不可动画」(`value-not-animatable`),走了另一条分支,整段颜色动画没跑;Chrome 里同一段代码没有这个警告。第三方库**按运行环境选分支**,光拦住「问浏览器要数」的接口兜不住这一类。纯算法跑完先看有没有库的警告:`node e2b-pure.mjs <卡> 2>&1 | sort | uniq -c`。
 
 ## 8. 实验服务器别碰真实软件

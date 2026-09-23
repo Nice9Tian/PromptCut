@@ -3,7 +3,7 @@
 JSON 放不下注释，所以审阅结论和理由写在这里。**改 `capabilities.json` 必须同时改这份文档。**
 
 审阅日期：2026-09-17（目标 A0）。范围：仓库默认注册的 **89 张卡**
-（`docs/default-animation-card-inventory.md`：MagicUI 6 + 自家功能卡 24 + Lottie 素材卡 5 + 粒子素材卡 53 + 探针 1）。
+（`docs/archive/topics/default-animation-card-inventory.md`：MagicUI 6 + 自家功能卡 24 + Lottie 素材卡 5 + 粒子素材卡 53 + 探针 1）。
 
 ## 1. 这张表管什么
 

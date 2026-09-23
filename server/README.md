@@ -21,7 +21,7 @@
 
 ### 多 Agent 并行
 
-AI 面板的分页栏、Agent 之间的范围声明与互相通知（`declare_scope` / `list_agents` / `send_message` / `check_messages`），以及 `conversationId → PROMPTCUT_AGENT` 的透传，见 [docs/multi-agent.md](../docs/multi-agent.md)。
+AI 面板的分页栏、Agent 之间的范围声明与互相通知（`declare_scope` / `list_agents` / `send_message` / `check_messages`），以及 `conversationId → PROMPTCUT_AGENT` 的透传，见 [docs/archive/topics/multi-agent.md](../docs/archive/topics/multi-agent.md)。
 
 ### 约定封装（src/kernel/envelope.ts）
 

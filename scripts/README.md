@@ -1,7 +1,7 @@
 # 渲染内核脚本
 
 0.4 起导出后端是 chrome-headless-shell 的 `HeadlessExperimental.beginFrame`。为什么换、换了多少,见
-`docs/render-rebuild-plan.md`;旧的 CDP 虚拟时间后端归档在 `scripts/archive/`(仍可单独运行,用来对账)。
+`docs/archive/topics/render-rebuild-plan.md`;旧的 CDP 虚拟时间后端归档在 `scripts/archive/`(仍可单独运行,用来对账)。
 
 **渲染引擎本身不在 `scripts/` 里**:它是 `server/bakery/`(见 `server/bakery/index.mjs` 的模块划分)。
 `scripts/export-frames.mjs` 只是命令行入口 —— 解析参数、调 `exportFrames`,用法和输出一如既往。
