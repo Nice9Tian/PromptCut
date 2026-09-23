@@ -85,6 +85,11 @@ export async function applyCaptureClip(bakery, clip) {
     ...(next ? { viewport: { x: next.x, y: next.y, width: next.w, height: next.h, scale: 1 } } : {}),
   });
   bakery.captureClip = next;
+  // The drawn surface changes size with the override. The first ticks after a
+  // resize can come back without pixels (measured: four empty compositor
+  // screenshots in a row on a freshly reset page). Spend one discarded, cheap
+  // tick here so the next real capture lands on the resized surface.
+  await bakery.beginFrame?.({ screenshot: { format: 'jpeg', quality: 0 } }).catch(() => {});
 }
 
 /** The device metrics were reset elsewhere (e.g. `page.setViewport`): the next clip must be sent again. */

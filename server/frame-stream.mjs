@@ -32,6 +32,7 @@
 import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
 import path from 'node:path';
+import zlib from 'node:zlib';
 import { createHash } from 'node:crypto';
 import { bakeStream } from './bakery/bake.mjs';
 import { findFfmpeg, openStreamSegmentEncoder, pickStreamEncoder, STREAM_ENCODERS, streamFilter, STREAM_SEGMENT_FRAMES } from './bakery/ffmpeg.mjs';
@@ -79,6 +80,7 @@ export function streamPoolLimit(env = process.env) {
 }
 
 const sha = (data, n = 64) => createHash('sha256').update(data).digest('hex').slice(0, n);
+const zlibInflate = data => zlib.inflateSync(data);
 const sleep = ms => new Promise(resolve => { const t = setTimeout(resolve, ms); t.unref?.(); });
 
 /* ======================================================================== *
@@ -197,6 +199,65 @@ export function segmentInfo(seg) {
   }
   const eff = firstFlags ?? defaultFlags;
   return { moofs, sampleCount, firstSampleIsSync: eff === null ? null : (eff & 0x00010000) === 0 };
+}
+
+/* ======================================================================== *
+ * 实测实体框:截下来的 PNG 里 alpha > 0 的包围盒(G1「用实测实体框的并集」;G0-b (10) 的量法)
+ *
+ * 不用页面里 `__pcSolid` 的实体框:那一套按元素外框算,`box-shadow` / 发光这类画在框外的像素
+ * 不在里面(实测金句药丸的外发光被裁掉一圈)。截图本来就在手上,直接看像素最准。
+ * ======================================================================== */
+
+/**
+ * PNG(8 位,RGBA / 灰度 + alpha,不隔行)里 alpha > `threshold` 的像素的包围盒,坐标是图片像素;
+ * 一个都没有回 null;读不懂的格式回 `{ full: true }`(调用方当「整张都算」)。
+ */
+export function pngAlphaBox(buf, threshold = 0) {
+  if (!Buffer.isBuffer(buf) || buf.length < 33 || buf.readUInt32BE(0) !== 0x89504e47) return { full: true };
+  let off = 8, width = 0, height = 0, depth = 0, color = 0, interlace = 0;
+  const idat = [];
+  while (off + 8 <= buf.length) {
+    const len = buf.readUInt32BE(off);
+    const type = buf.toString('latin1', off + 4, off + 8);
+    const data = buf.subarray(off + 8, off + 8 + len);
+    if (type === 'IHDR') { width = data.readUInt32BE(0); height = data.readUInt32BE(4); depth = data[8]; color = data[9]; interlace = data[12]; }
+    else if (type === 'IDAT') idat.push(data);
+    else if (type === 'IEND') break;
+    off += 12 + len;
+  }
+  const bpp = color === 6 ? 4 : color === 4 ? 2 : 0;
+  if (depth !== 8 || interlace || !bpp || !width || !height) return { full: true };
+  let raw;
+  try { raw = zlibInflate(Buffer.concat(idat)); } catch { return { full: true }; }
+  const stride = width * bpp;
+  if (raw.length < (stride + 1) * height) return { full: true };
+  let prev = new Uint8Array(stride), cur = new Uint8Array(stride);
+  let minX = width, minY = -1, maxX = -1, maxY = -1;
+  for (let y = 0; y < height; y++) {
+    const base = y * (stride + 1) + 1;
+    const f = raw[base - 1];
+    if (f === 0) { for (let i = 0; i < stride; i++) cur[i] = raw[base + i]; }
+    else if (f === 1) { for (let i = 0; i < stride; i++) cur[i] = (raw[base + i] + (i >= bpp ? cur[i - bpp] : 0)) & 255; }
+    else if (f === 2) { for (let i = 0; i < stride; i++) cur[i] = (raw[base + i] + prev[i]) & 255; }
+    else if (f === 3) { for (let i = 0; i < stride; i++) cur[i] = (raw[base + i] + (((i >= bpp ? cur[i - bpp] : 0) + prev[i]) >> 1)) & 255; }
+    else if (f === 4) {
+      for (let i = 0; i < stride; i++) {
+        const a = i >= bpp ? cur[i - bpp] : 0, b = prev[i], c = i >= bpp ? prev[i - bpp] : 0;
+        const p = a + b - c, pa = Math.abs(p - a), pb = Math.abs(p - b), pc = Math.abs(p - c);
+        cur[i] = (raw[base + i] + (pa <= pb && pa <= pc ? a : pb <= pc ? b : c)) & 255;
+      }
+    } else return { full: true };
+    let first = -1, last = -1;
+    for (let x = 0, i = bpp - 1; x < width; x++, i += bpp) if (cur[i] > threshold) { if (first < 0) first = x; last = x; }
+    if (first >= 0) {
+      if (minY < 0) minY = y;
+      maxY = y;
+      if (first < minX) minX = first;
+      if (last > maxX) maxX = last;
+    }
+    const t = prev; prev = cur; cur = t;
+  }
+  return maxY < 0 ? null : { x: minX, y: minY, w: maxX - minX + 1, h: maxY - minY + 1 };
 }
 
 /* ======================================================================== *
@@ -576,8 +637,8 @@ export class StreamProducer {
       streams: [...this.streams.values()].map(state => ({
         streamKey: state.spec.streamKey, kind: state.spec.kind, clipIds: state.spec.clipIds,
         firstSegment: state.spec.firstSegment, lastSegment: state.spec.lastSegment,
-        bound: state.spec.bound, tight: state.manifest?.tight ?? null,
-        segments: Object.fromEntries(Object.entries(state.manifest?.segments ?? {}).map(([n, s]) => [n, { stride: s.stride, init: s.init, bytes: s.bytes, encodeMs: s.encodeMs }])),
+        bound: state.spec.bound, tight: state.manifest?.tight ?? null, resets: state.resets ?? null,
+        segments: Object.fromEntries(Object.entries(state.manifest?.segments ?? {}).map(([n, s]) => [n, { stride: s.stride, init: s.init, bytes: s.bytes, encodeMs: s.encodeMs, tailMs: s.tailMs }])),
         inits: Object.keys(state.manifest?.inits ?? {}),
       })),
       log: this.log.slice(-40),
@@ -807,6 +868,8 @@ export class StreamProducer {
       bakery.streamLease = null;
       this.stats.resets++;
       this.stats.setFrameWindowCalls++;
+      state.resets = state.resets ?? { sparse: 0, dense: 0 };
+      state.resets[stride > 1 ? 'sparse' : 'dense']++;
     }
     const abort = new AbortController();
     const stale = () => this.closed || state.generation !== generation || this.streams.get(spec.streamKey) !== state;
@@ -819,9 +882,9 @@ export class StreamProducer {
       const result = await bakeStream(bakery, {
         streamSignature: spec.streamKey, fromFrame, toFrame, stride, fps, mountFrame: spec.mountFrame,
         clip: captureRect, hasMedia: false, signal: abort.signal,
-        beforeCapture: measuring ? frame => this.measureBounds(bakery, state, frame) : undefined,
         onFrame: async (frame, png) => {
           if (stale()) throw Object.assign(new Error('流已作废'), { cancelled: true });
+          if (measuring) this.measurePng(state, frame, png, rect);
           if (!enc) {
             // 第一张图出来时还没有这个分段的编码器在跑:这一张的出图耗时算「空闲」样本
             await this.encoderSlot();
@@ -858,24 +921,14 @@ export class StreamProducer {
     return true;
   }
 
-  /** 稀疏那一趟顺带量实体框(G1):舞台上这条流各卡此刻的实体框并集,换回平面坐标 */
-  async measureBounds(bakery, state, frame) {
-    const { spec } = state;
-    let boxes = null;
-    try {
-      boxes = await bakery.page.evaluate((ids) => {
-        const root = document.querySelector('[data-pc-scene]');
-        const api = window.__pcSolid;
-        if (!root || !api?.rectsWithBounds) return null;
-        return api.rectsWithBounds(root, { pixels: 'all', clipIds: ids }).map(r => r.bounds).filter(Boolean);
-      }, spec.clipIds);
-    } catch { return; }
-    if (!boxes) { state.measureFailed = true; return; }
-    for (const b of boxes) {
-      if (!(b.width > 0 && b.height > 0)) continue;
-      const r = { x: b.left - spec.offset.x, y: b.top - spec.offset.y, w: b.width, h: b.height };
-      state.measured = unionRect(state.measured, r);
-    }
+  /**
+   * 稀疏那一趟顺带量实体框(G1):这一张截图里 alpha > 0 的包围盒,换回平面坐标并进并集。
+   * 截图矩形就是 `rect`(平面坐标),所以图片像素 (x, y) 在平面上是 (rect.x + x, rect.y + y)。
+   */
+  measurePng(state, frame, png, rect) {
+    const box = pngAlphaBox(png);
+    if (box?.full) { state.measureFailed = true; return; }
+    if (box) state.measured = unionRect(state.measured, { x: rect.x + box.x, y: rect.y + box.y, w: box.w, h: box.h });
     state.measuredSegments.add(Math.floor(frame / SEGMENT_FRAMES));
   }
 
@@ -922,12 +975,18 @@ export class StreamProducer {
     const file = `${segment}-${sha(segments[0], 16)}.m4s`;
     await atomic(this.store.segFile(spec.streamKey, file), segments[0]);
     const old = manifest.segments[segment];
-    manifest.segments[segment] = { file, init: initId, stride, samples, bytes: segments[0].length, encodeMs: out.encodeMs,
+    manifest.segments[segment] = { file, init: initId, stride, samples, bytes: segments[0].length, encodeMs: out.encodeMs, tailMs: out.tailMs,
       sig: segmentSignature({ streamKey: spec.streamKey, segment, stride, encoder, rect }), dropped, at: Date.now() };
     if (stride > 1) this.maybeTighten(state);
     await this.store.save(manifest);
     this.stats.segments++;
     this.publish(state);
+    if (old && old.stride > 1 && stride === 1) {
+      // 验收「稀疏分段 ≤ 满密度 1.0 倍」要的对照:同一段、稀疏与满密度各自的字节和矩形
+      (this.stats.sparseVsDense ||= []).push({ stream: spec.streamKey.slice(0, 8), segment, sparse: old.bytes, dense: segments[0].length,
+        sameRect: JSON.stringify(manifest.inits[old.init]?.rect) === JSON.stringify(rect) });
+      while (this.stats.sparseVsDense.length > 100) this.stats.sparseVsDense.shift();
+    }
     if (old && old.file !== file) {
       const stalePath = this.store.segFile(spec.streamKey, old.file);
       const timer = setTimeout(() => {

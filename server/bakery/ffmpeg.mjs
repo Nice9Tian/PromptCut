@@ -219,9 +219,11 @@ export function openStreamSegmentEncoder(ffmpeg, { encoder = 'libx264', fps }) {
       written++;
     },
     async finish() {
+      const endedAt = Date.now();
       proc.stdin.end();
       const bytes = await done;
-      return { bytes, encodeMs: Date.now() - startedAt, written };
+      // encodeMs:从开编码器到出完字节(和出帧重叠);tailMs:喂完最后一帧之后还要等多久
+      return { bytes, encodeMs: Date.now() - startedAt, tailMs: Date.now() - endedAt, written };
     },
     async abort() { try { proc.stdin.destroy(); } catch {} proc.kill(); await done.catch(() => {}); },
   };

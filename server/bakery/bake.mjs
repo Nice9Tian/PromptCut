@@ -7,7 +7,7 @@
 import path from 'path';
 import fs from 'fs/promises';
 import { captureSnapshot } from './capture-snapshot.mjs';
-import { captureFrame, forgetCaptureClip } from './capture-frame.mjs';
+import { captureFrame, forgetCaptureClip, applyCaptureClip } from './capture-frame.mjs';
 import { framesInWindow } from '../../src/render/frameWindow.mjs';
 import { waitFrameReady } from './frame-ready.mjs';
 import { prepareFrameMedia } from './frame-media.mjs';
@@ -468,6 +468,8 @@ export async function bakeStream(bakery, opts) {
     await page.setViewport({ width, height, deviceScaleFactor: 1 });
     forgetCaptureClip(bakery);
     await client.send('Emulation.setDefaultBackgroundColorOverride', { color: { r: 0, g: 0, b: 0, a: 0 } });
+    // 截图矩形在预热之前就定下来:改设备度量会让合成面换尺寸,预热那几拍正好把它推稳
+    if (opts.clip !== undefined) await applyCaptureClip(bakery, opts.clip);
     await warmUpAt(bakery, stepper, { startFrame, warmFrames: opts.warm ?? 3, frameWindow: null, signal });
     lease = bakery.streamLease = { streamSignature, lastFrame: startFrame - 1, lastShot: null, stepper, dirty: false, fps };
     reset = true;
