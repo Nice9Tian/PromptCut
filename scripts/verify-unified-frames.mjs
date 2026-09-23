@@ -8,7 +8,8 @@ import { bakeFrames, findFfmpeg } from '../server/bakery/index.mjs';
 import { exportUnified } from '../server/bakery/export-unified.mjs';
 import { captureSnapshot } from '../server/bakery/capture-snapshot.mjs';
 
-const origin = process.env.PC_FRAME_TEST_URL || 'http://127.0.0.1:5192';
+// 缺省打验证用的 dev-test(.claude/launch.json,5203)。5190～5192 是用户常驻的编辑台和它的舞台端口,别碰
+const origin = process.env.PC_FRAME_TEST_URL || 'http://127.0.0.1:5203';
 const root = path.resolve('out', `frame-verification-${Date.now()}`);
 await fs.mkdir('out/media', { recursive: true });
 const name = `frame-verification-${Date.now()}.webm`;

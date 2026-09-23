@@ -232,7 +232,17 @@ async function newSession(browser, url) {
 
   await page.evaluateOnNewDocument(PAGE_PRELUDE);
   console.log(`Navigating to ${url}...`);
-  await client.send('Page.navigate', { url });
+  /*
+   * 导航失败(端口上没有服务器之类)Page.navigate 不抛错,只在返回值里带 errorText,页面停在 Chrome 的
+   * 错误页上。不看它的话 waitReady 要白等满 60 秒,报的还是一句像页面代码出了问题的话。
+   * 地址里常带整份项目 JSON(?timeline=data:…),太长时报错只留源和路径。
+   */
+  const { errorText } = await client.send('Page.navigate', { url });
+  if (errorText) {
+    const u = new URL(url);
+    const where = url.length > 120 ? `${u.origin}${u.pathname}…` : url;
+    throw new Error(`打不开导出页 ${where}:${errorText} —— 这个地址上的 dev server 起了吗?`);
+  }
   console.log('Waiting for window.__pcReady...');
   await waitReady();
 

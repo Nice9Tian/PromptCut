@@ -17,8 +17,9 @@ execFileSync('ffmpeg',['-y','-hide_banner','-loglevel','error',
   '-c:v','libx264','-pix_fmt','yuv420p',media],{windowsHide:true});
 process.env.PROMPTCUT_ROLE='prerender';
 process.env.PROMPTCUT_MEDIA_DIR=out;
-const server=await createServer({configFile:'vite.prerender.config.ts',server:{host:'127.0.0.1',port:5196,strictPort:true}});
-const origin='http://127.0.0.1:5196';
+// 自己起的服务器用 5226:5190～5199 留给用户的编辑台和别的常驻服务,5203～5205 是验证用的 dev-test
+const server=await createServer({configFile:'vite.prerender.config.ts',server:{host:'127.0.0.1',port:5226,strictPort:true}});
+const origin='http://127.0.0.1:5226';
 const project={id:'export-frame-content',width:64,height:64,fps:30,duration:1,themeId:'default',tracks:[],media:[]};
 const url=p=>`${origin}/?export=1&timeline=${encodeURIComponent('data:application/json,'+encodeURIComponent(JSON.stringify(p)))}`;
 const pixel=buf=>{const p=PNG.sync.read(buf),i=(32*p.width+32)*4;return [...p.data.subarray(i,i+4)];};
