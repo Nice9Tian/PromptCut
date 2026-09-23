@@ -406,6 +406,11 @@ scene-3d、type-shift）改动前后都是 0。
 
 ### 12.5 还剩的残差（没修，原因）
 
+> **2026-09-23 更正（第三轮，§13）**：这一节三条都要改。① punch-pill 的 376 / 255 不是预乘舍入，是变换只写了
+> 6 位有效数字，§13 的修法下 30 帧全部归零。② 「弹簧停下的那一帧」的时序说反了：`transform: none` 是在这一帧
+> **画之前**写进 DOM 的，合成器里这一层的变换也已经是新值；导出画出旧样子，是因为这个合成层之前按非 1 的缩放
+> 画过、文字的栅格结果带着历史，见 §13.4。③ 最后一行那几张卡已查完，见 §13。下面保留原文。
+
 - **透明底上的低 alpha 像素**：punch-pill 的光晕边缘 alpha 只有十几、二十几，预乘值差 1，反预乘后 RGB 被放大成几十级。
   垫上不透明的东西（verify 脚本里垫着视频）就没了。
 - **弹簧停下的那一帧**（verify 那个项目的第 6、7 帧，约 410 个通道、最大 57，只在一个字形上）：
@@ -461,3 +466,187 @@ R7 报告自己写了「跑的时候 5188～5200 没有任何监听者」。CDP 
 `src/render/snapshot/inlineStyles.ts`、`src/render/snapshot/snapshotStyleProps.mjs`（及 `.d.mts`）、
 `server/bakery/bake.mjs`、`server/test/snapshot-style-props.test.mjs`（新增 7 条）。
 探针都放在 `out/probe/`（不进仓库）。
+
+## 13. 第三轮（2026-09-23）：§12.4 表尾那几张卡查清，四处修法落地
+
+分支：`claude/charming-hofstadter-f8fb05`（先合进 `claude/wonderful-mayer-blc7xr`，即 §12 的两个提交）。
+环境：Windows 开发机、puppeteer 自带的 chrome-headless-shell 152、dev server 5203（`.claude/launch.json` 的 dev-test）。
+探针都在 `out/probe/`（不进仓库）：`residual.mjs`（逐卡逐帧对账）、`exp.mjs` + `v-*.mjs`（同一拍里改写快照再重放）、
+`pp-*.mjs`（punch-pill 的时序、层、历史）、`anim-boundary.mjs`（提层判据）、`tri.mjs`（三联图）。
+
+### 13.1 口径
+
+每张卡一条 640×360 / 10 fps / 3 秒的片段、参数取默认值，**30 帧全比**（§12 是 4 个时间点，所以这次多查出几张）。
+每张卡三趟，各开一个新的 bakery：
+
+- **A**：纯整帧导出（`fullFrame`，不生成快照）—— 和导出同一条路，是对账的标准答案；
+- **B**：`fullFrame` + `onSnapshot`，拿同一拍的截图和快照；S = B 那一趟的快照用 `captureSnapshot` 重放；
+- **C**：纯采样（`snapshotOnly`）那一趟的快照重放 —— 生产里 HTML 采样走的就是这条。
+
+两条先验结论：**B 和 A 在 28 张卡 × 30 帧上全部逐字节相同**（生成快照前推的那一拍不改活渲）；
+**C 和 S 在每一帧上的差异都一模一样**（纯采样那一趟生成的快照和整帧那一趟的等价）。下文的「差异」都是 S 对 A。
+
+### 13.2 四个根因（每条都在同一拍的替换实验里修到逐字节相同）
+
+做法照 §12.1：顺推到出问题的那一帧，在生成快照的同一拍里按变体改写快照（页面内做，拿得到 live 元素），逐个重放比像素。
+
+**① 变换只写了 6 位有效数字。** `getComputedStyle` 把整串变换折成一个矩阵，数按 6 位有效数字写：
+
+| 卡 / 帧 | 快照里写的 | 真实值（Typed OM） | 原样 → 换成全精度 |
+|---|---|---|---|
+| odometer 第 9 帧 | `matrix(1, 0, 0, 1, 0, -2156.5)` | `translate(0px, -2156.501953125px)` | 3139 / 233 → **0** |
+| terminal-3d 第 20 帧 | `matrix3d(0.990268, 0, 0.139173, …)` | `rotateY(-8deg)` | 34 / 2 → **0** |
+| versus-card 第 8 帧 | `matrix(1.00414, …)`、`matrix(1.04, …)` | `scale(1.00414…)`、`scale(1.04)` | 3065 / 4 → **0** |
+| punch-pill（verify 项目）第 5 帧 | `matrix(1.00047, …)` | `scale(1.0004741…)` | 1427 / 12 → **0** |
+
+odometer 那一格最典型：四位数的位移只剩两位小数，`-2156.5` 正好落在像素取整边界的另一侧，整个「8」上下错一格。
+修法：`inlineStyles.ts` 的 `exactTransform` 用 `computedStyleMap().get('transform')` 读分量，
+`snapshotStyleProps.mjs` 的 `serializeTransformList` **按函数形式、全精度**写回（`translate(…)`、`rotateY(…)`、`scale(…)`，
+百分比原样留着），认不出的分量（`calc()` 之类）才退回矩阵。实测写成全精度矩阵和写成函数形式在这几格上都是 0；
+选函数形式是设计上的理由（没有单独测像素）：`rotate(-90deg)` 折成矩阵是 `matrix(6.12323e-17, -1, 1, 6.12323e-17, 0, 0)`，
+残下的 1e-17 让它不再轴对齐；`translateZ(0)` 折成 2D 单位阵会丢掉那一层合成层（目录里有几张卡这样写）。
+
+**② SVG 表现属性被 6 位的内联值盖掉。** `d` / `cx` / `stroke-dasharray` 这类写在 SVG 属性上的值，
+克隆体上带着全精度的原文，可快照又把 6 位有效数字的计算值写进内联样式，而**内联样式的优先级高于属性**：
+
+| 卡 / 帧 | 属性原文 | 快照内联的 | 原样 → 不内联 |
+|---|---|---|---|
+| growth-curve 第 15 帧 | `d="M 40,234.2857142857143 C 96.66666666666666,…"` | `d:path("M 40 234.286 C 96.6667 …")` | 626 / 11 → **0** |
+| ring-metric 第 4 帧 | `stroke-dasharray="1407.4335088082273"`、`stroke-dashoffset="515.6416080223909"` | `1407.43px`、`515.642px` | 200 / 52 → **0** |
+| lottie-bodymovin 第 19 帧 | `transform` / `d` 属性（lottie 每帧改写属性） | 6 位的矩阵和路径 | 253 / 14 → **0**（只修变换是 12 / 14） |
+
+Typed OM 对 `d` 给的也是 6 位的字符串，帮不上。修法：SVG 内部元素上**由它自己的属性给出、又没被内联样式和动画改写**的属性
+不内联（`presentationProps`），重放时照样由克隆下来的属性给出；继承属性照样记进给子元素比对的那一份。
+这是「布局解析值一律内联」唯一的例外：SVG 内部元素的 `width` / `height` 不是排版值。
+
+**③ 相邻文本节点被合并。** mu-circular-progress 的中心文字是 React 渲的 `{75}%`，DOM 里是「75」「%」两个文本节点；
+HTML 序列化再解析会把它们并成一个「75%」。差异落在「5」的右半边、正是「%」模糊阴影（`text-shadow: 0 4px 24px`）
+能够到的地方：两段文字各自先画阴影再画字，「%」的阴影压在「5」上；并成一段后阴影全在字底下（这条机理是按差异的位置推的）。
+在相邻文本节点之间插一个空注释（`<!---->`，不产生排版对象）：第 15 帧 1541 / 10 → **0**。
+修法在 `createSnapshot.ts` 的 `keepTextBoundaries`，HTML 原始文本元素（`style`、`textarea` 等）里不插。
+
+**④ 合成层的判据是 relevant，不只是 current。** stat-proof 第 12 帧：活渲有一层 `312x48 ActiveOpacityAnimation`，重放里没有。
+那条透明度动画 `delay 0.4 s + duration 0.8 s`，`__pcSyncAnims` 把它钉在 1200 ms——JS 里 `1200 < endTime = 1200.0000000000002`，
+所以没 `finish()`——可 `getComputedTiming().localTime` 读回来等于 `endTime`，按规范已在结束后，§12 的 `isCurrentAnimation` 判它不是 current。
+受控实验（13.5）表明 Blink 给**放完了、靠 `fill` 停在终态**的动画照样提层，判据是 Web Animations 的 relevant（current 或 in effect）。
+改成 `isRelevantAnimation`（in effect 就是 `getComputedTiming().progress` 不为 null）：3 / 2 → **0**，
+重放里的 `WillChangeOpacity` 层对上活渲的 `ActiveOpacityAnimation`。
+
+### 13.3 修改后 28 张卡全量
+
+「不同通道 / 最大差」两列各取 30 帧里最大的一个（不一定是同一帧）；快照体积是整场景 HTML 30 帧里最大的一份。
+
+| 卡 | 修改前：有差异的帧 | 修改前：通道 / 最大差 | 修改后：有差异的帧 | 修改后：通道 / 最大差 | 快照体积（字节） |
+|---|---|---|---|---|---|
+| focus-card | 5 / 30 | 1066 / 2 | 0 | 0 | 40143 → 40143 |
+| growth-curve | 28 / 30 | 645 / 69 | 0 | 0 | 56472 → 55697 |
+| punch-pill | 11 / 30 | 376 / 255 | 0 | 0 | 27988 → 28002 |
+| checklist | 1 / 30 | 8 / 10 | 0 | 0 | 62155 → 61868 |
+| pin-board | 6 / 30 | 35 / 9 | 0 | 0 | 35703 → 35765 |
+| ui-callout | 3 / 30 | 201 / 255 | 0 | 0 | 30579 → 30456 |
+| stat-proof | 1 / 30 | 3 / 2 | 0 | 0 | 39164 → 39170 |
+| step-timeline | 2 / 30 | 43 / 11 | 0 | 0 | 64259 → 64217 |
+| odometer | 1 / 30 | 3139 / 233 | 0 | 0 | 161024 → 161052 |
+| mu-circular-progress | 30 / 30 | 2151 / 255 | 3 / 30 | 34 / 7 | 31822 → 31633 |
+| ring-metric | 13 / 30 | 246 / 52 | 0 | 0 | 36242 → 35983 |
+| lottie-bodymovin | 29 / 30 | 253 / 15 | 0 | 0 | 1038501 → 873328 |
+| versus-card | 5 / 30 | 3065 / 5 | 0 | 0 | 38499 → 38588 |
+| terminal-3d | 30 / 30 | 34 / 3 | 0 | 0 | 41963 → 41892 |
+| chapter-bar | 4 / 30 | 39240 / 17 | 3 / 30 | 2 / 2 | 39171 → 39183 |
+
+其余 13 张（blur-text、rank-bars、mu-blur-fade、entity-chips、term-card、quote-lockup、mu-animated-shiny-text、mu-number-ticker、
+mu-typing、mu-word-rotate、particles、scene-3d、type-shift）修改前后 30 帧都是 0。
+修改前的数是这台机器上量的，和 §12.4（云端容器、4 个时间点）不完全一样，比如 mu-circular-progress 那边是 2595 / 26。
+focus-card、checklist、pin-board、ui-callout、step-timeline 是 30 帧比对新查出来的，同一批修法下归零，没有逐张归因。
+
+verify 那个项目（punch-pill、320×180、10 fps、`Unified`、无视频）：修改前第 2～7 帧有差异（第 5 帧 1427 / 12 最多），
+修改后只剩第 6、7 帧（819 / 64、819 / 65），见 13.4。
+
+### 13.4 不修的三处
+
+**punch-pill「弹簧停下的那一帧」（verify 项目第 6、7 帧，819 个通道、最大 65，只在「f」「e」两个字形上）。
+根因在导出那一侧：合成层的栅格结果带着历史。**
+
+- **不是写进 DOM 晚了**（更正 §12.5）。给药丸挂 MutationObserver、配一个自己的 rAF 计数：`transform: none` 在第 6 帧推时间那一步
+  写进去（rAF 计数 34），截图前读是 `none`，截图后读也是 `none`。
+- **合成器里这一层的变换也已经是新值**。每帧截图后读 CDP LayerTree（开着它导出的 10 帧和不开时逐字节相同）：
+  第 5 帧药丸层缩放 1.000474，第 6、7 帧缩放 1、平移 (2, 18)，合成原因一直是 `ActiveOpacityAnimation`；
+  第 8 帧透明度动画收尾、原因变成 `Overlap`，这一层重建。
+- **可画出来的文字还是旧样子**：文字区域（154,68 – 229,116）导出的第 5、6 帧逐字节相同，第 8 帧才跳到「新层」的样子；
+  拿第 5 帧的快照（`scale(1.00047)`）重放，文字区域和导出第 6 帧逐字节相同。
+- **在重放页里复现出了这段历史**：先把药丸按某个变换画一拍，再原地改成 `none` 画一拍，比文字区域：
+
+| 之前画过的 | 药丸是合成层（`will-change: opacity`） | 药丸不是合成层 |
+|---|---|---|
+| `scale(1.00047)` / `1.01` / `1.1` / `0.9` | 等于导出第 6 帧（0 / 0），不等于新挂的 `none`（819 / 64） | 等于新挂的 `none` |
+| `translate(0.3px, 0.3px)` | 等于新挂的 `none` | 等于新挂的 `none` |
+
+  结果和之前缩放多少无关，所以不是「沿用旧缩放的栅格」；加 `--disable-lcd-text` 结果完全一样，也不是 LCD 文字。
+  能说的是：**一个合成层只要按非 1 的缩放画过，回到缩放 1 之后文字的栅格结果就和新建的层不同，直到这一层重建**。
+  Chrome 内部是哪条机制没查。
+- **为什么不修**：快照是一份静态 DOM，重放时这一层是新建的，带不了「之前缩放过」这段历史；改导出不允许；
+  §12.5 提的「在画帧那一刻生成快照」也没用——那一刻 DOM 已经是 `none` 了。要对齐只能在快照里编码合成器的历史，
+  依赖 Chrome 内部行为，又只影响「缩放动画停下后、这一层重建前」那一两帧，不值得。
+
+**mu-circular-progress 第 1～3 帧（最多 34 个通道、最大 7）。根因：卡片把全精度的数写进了自己的内联样式，DOM 里读不到原值。**
+进度环的 `stroke-dasharray` 是 React 写的 `2π·45 = 282.7433388230814`；换成这个精确值重放：34 / 4 → **0**。
+可元素自己的 `style` 属性已经被 Chrome 序列化成 `stroke-dasharray: 282.743;`，`getComputedStyle` 是 `282.743px`，
+Typed OM 不把这种列表值转成数值（给的是同样 6 位的 `CSSStyleValue`）。快照这一侧能读到的每一种形式都是 6 位。
+
+**chapter-bar 第 21～23 帧（1～2 个通道、最大 2，一个像素）。根因同上。** 高亮块用 `layoutId` 做共享布局动画，
+Motion 缩放时把 `borderRadius: 9999px` 改写成相对盒子的百分比做校正：精确值是 `9999 / 160 = 6249.375%`、
+`9999 / 104 = 9614.4230769…%`，读出来是 `6249.38% 9614.42%`（Typed OM 同样）。换成精确值重放：2 / 1 → **0**。
+
+**这两处为什么不修**：原值只在 JS 写样式的那一刻出现过。要拿到它就得在页面里拦下所有写样式的入口
+（`CSSStyleDeclaration` 上几百个属性的 setter 和 `setProperty`），每张卡每次写样式都多一层开销，改动面和风险都远大于这几个像素。
+
+### 13.5 合成层判据实测（Chrome 152）
+
+一条透明度动画 `delay 400 / duration 800` 暂停在各个时刻，画两拍后读 `LayerTree.compositingReasons`：
+
+| fill | 100（delay 里） | 800（活跃段） | 1200（结尾） | 1500（结尾之后） |
+|---|---|---|---|---|
+| `both` | 提层 | 提层 | 提层 | 提层 |
+| `none` | 提层 | 提层 | 不提 | 不提 |
+| `forwards` | 提层 | — | — | 提层 |
+| `backwards` | 提层 | — | — | 不提 |
+
+另外：`fill: both` 在 `finish()` 之后仍提层；反向播放停在结尾提层。14 格全部符合「current 或 in effect」。
+顺带记一个怪现象：`delay 400 + duration 800` 的动画 `currentTime` 设成 1200，`localTime` 读回来是 `1200.0000000000002`
+（`0.4 + 0.8` 在双精度下的值）；`delay 0 + duration 500` 设 499.999，`localTime` 读回来是 500。
+
+### 13.6 验收
+
+| 项 | 结果 |
+|---|---|
+| 28 张卡「活渲 vs 快照重放」（30 帧，13.3） | 26 张 30 帧全部逐字节相同；剩 mu-circular-progress、chapter-bar 各 3 帧，根因见 13.4 |
+| verify 项目的 punch-pill | 只剩第 6、7 帧，根因见 13.4 |
+| `scripts/verify-unified-frames.mjs`（5203） | ✅ PASS，退出码 0 |
+| 导出逐字节（`docs/archive/topics/export-baseline-compare.md` 的 fixture） | ✅ **240 / 240 逐字节相同**，见下 |
+| `scripts/verify-determinism.mjs`（同一个 fixture，5203） | ✅ 240 / 240 相同 |
+| `scripts/verify-bake-protocol.mjs` | ✅ PASS |
+| `npx tsc -b --force` | ✅ 0 错误 |
+| `npm test` | ✅ 1660 条：1659 过、0 失败、1 跳过；新增 5 条（`serializeTransformList` 4 条、`isRelevantAnimation` 1 条） |
+
+导出对账的做法：这次只改了页面侧的三个文件（Node 侧的导出脚本一字未动），所以只用 5203 一台服务器——
+先用改后的代码导 240 帧（候选），再把 `createSnapshot.ts` / `inlineStyles.ts` / `snapshotStyleProps.mjs(.d.mts)` 临时换回
+改动前（合并提交 `2a4d363`）的版本导 240 帧（基线；导出前确认服务器发的确实是旧模块），导完立刻换回，工作区确认干净。
+fixture 按那份文档第 1 节的表自己生成（1280×720、30 fps、8 秒；punch-pill / odometer / mu-word-rotate、chapter-bar、growth-curve、
+scene-3d、particles、一段 testsrc2 视频），`--workers 1 --no-video`。`export-baseline-compare.mjs` 报「逐字节:相同 240/240」、退出码 0。
+这也和代码结构一致：默认导出（媒体模式 `chrome`）走 `exportUnified` → `fullFrame`，不调 `__pcCreateSnapshot`。
+
+### 13.7 影响面
+
+- **作废**：三个文件都在 `SNAPSHOT_FILES` 里 → `snapshotCode` 变，**全部共享快照作废一次**；`createSnapshot.ts` 等在 `src/` 下 →
+  `frameCode` 变，MOV 帧缓存和卡片缓存跟着作废一次。`server/bakery/` 一字未动，`captureCode` 不变。
+- **像素会变的路径**：「生成快照 → 重放截图」出图的地方——`--media ffmpeg` 的兜底导出、`vite-plugin-cards` 的卡片预览、
+  舞台里贴快照的重卡——画面会变，方向是更接近活渲。默认导出不变（13.6）。
+- **快照体积**：lottie 这类 SVG 卡变小（整场景 HTML 1038501 → 873328 字节，属性不再在内联样式里重复一份）；
+  其余卡增减几十到几百字节（变换写全精度多几位数，相邻文本节点多一个 `<!---->`）。
+- **两趟布尔探针**（`StageView` 的 `vtOk` / `seekOk`，`snapshotCompare.mjs`）：两边序列化的是同一种结构，插的注释逐字相同；
+  变换里的数仍在 `style` 属性里，照旧按 1e-6 相对容差比。
+
+### 13.8 改了哪些文件
+
+`src/render/snapshot/inlineStyles.ts`、`src/render/snapshot/snapshotStyleProps.mjs`（及 `.d.mts`）、`src/render/createSnapshot.ts`、
+`server/test/snapshot-style-props.test.mjs`（新增 5 条）。

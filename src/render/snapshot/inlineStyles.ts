@@ -38,18 +38,31 @@
  * 两条都靠「强制内联」解决:前者读 `el.style`,后者读一次 `root.getAnimations({ subtree: true })`
  * 的关键帧属性名。
  *
- * # 两处不照抄计算值(重放要和活渲逐字节相同,见 replay-mismatch-report.md 第二轮)
+ * # 四处不照抄计算值(重放要和活渲逐字节相同)
  *
- *   1. **合成层**:活渲时,有 current 动画改写 opacity / transform / filter 的元素会被 Chrome
- *      单独提一层;快照写死了 `animation:none`,这层就没了,`filter: blur()` 换一条栅格化路径,
- *      能差出上百级。所以给这些元素补一条 `will-change`(`COMPOSITED_ANIMATION_PROPS`)。
+ * 出处是 `docs/archive/restructure_planning/reports/replay-mismatch-report.md`:前两条是第二轮(§12),
+ * 后两条是第三轮(§13)。
+ *
+ *   1. **合成层**:活渲时,有 relevant 动画(current 或 in effect,见 `isRelevantAnimation`)改写
+ *      opacity / transform / filter 的元素会被 Chrome 单独提一层;快照写死了 `animation:none`,这层就没了,
+ *      `filter: blur()` 换一条栅格化路径,能差出上百级。所以给这些元素补一条 `will-change`
+ *      (`COMPOSITED_ANIMATION_PROPS`)。第二轮只按 current 判,第三轮按实测改成 relevant。
  *   2. **1/64 px**:`getComputedStyle` 只给 6 位有效数字,排版值回灌时掉一格;
  *      `LAYOUT_UNIT_PROPS` 里的 px 数写之前对齐回 1/64 格(`snapLayoutUnits`)。
- * 两条都只改快照里写什么,不碰活渲 —— 整帧导出不生成快照,逐字节基线不受影响。
+ *   3. **变换**:`getComputedStyle` 把变换折成一个 6 位有效数字的矩阵 —— 大位移丢到 0.01 px、
+ *      旋转的 cos / sin 丢到 1e-6、`rotate(-90deg)` 残下 1e-17 不再轴对齐。改用 Typed OM 读分量,
+ *      按函数形式全精度写回(`exactTransform` → `serializeTransformList`),读不出来才退回矩阵。
+ *   4. **SVG 表现属性**:`d` / `cx` / `stroke-dasharray` 这类写在 SVG 属性上的值,计算值同样只有
+ *      6 位有效数字,而**内联样式的优先级高于属性**,写进去就把克隆体上全精度的原文盖掉
+ *      (growth-curve 的曲线、ring-metric 的描边端点、lottie 的路径)。SVG 内部元素上由它自己的属性
+ *      给出、又没被内联样式和动画改写的属性不内联(`presentationProps`),重放时照样由那个属性给出。
+ *      这是「② 布局解析值一律内联」唯一的例外:SVG 内部元素的 `width` / `height` 不是排版值。
+ * 四条都只改快照里写什么,不碰活渲 —— 整帧导出不生成快照,逐字节基线不受影响。
  */
 
 import {
-  INHERITED_PROPS, LAYOUT_USED_VALUE_PROPS, LAYOUT_UNIT_PROPS, COMPOSITED_ANIMATION_PROPS, snapLayoutUnits, isCurrentAnimation,
+  INHERITED_PROPS, LAYOUT_USED_VALUE_PROPS, LAYOUT_UNIT_PROPS, COMPOSITED_ANIMATION_PROPS, snapLayoutUnits, isRelevantAnimation,
+  serializeTransformList,
 } from "./snapshotStyleProps.mjs";
 
 export const HTML_NS = "http://www.w3.org/1999/xhtml";
@@ -144,7 +157,7 @@ interface AnimatedProps {
   /** 被动画 / 过渡改写的属性:一律强制内联(文件头「两条必须有的兜底」第 2 条) */
   written: Map<Element, Set<string>>;
   /**
-   * 因为有 current 动画而被 Chrome 单独提层的属性(`COMPOSITED_ANIMATION_PROPS` 里的那些)。
+   * 因为有 relevant 动画而被 Chrome 单独提层的属性(`COMPOSITED_ANIMATION_PROPS` 里的那些)。
    * 快照写死了 `animation:none`,这层在重放页里就没了,所以要补成 `will-change`,见 `buildStyle`。
    */
   promoted: Map<Element, Set<string>>;
@@ -176,7 +189,7 @@ function animatedProps(root: Element): AnimatedProps {
     for (const frame of frames) for (const name in frame) if (!KEYFRAME_META.has(name)) names.add(dashed(name));
     for (const name of names) set.add(name);
     // 伪元素上的动画提的是伪元素的层,内联样式够不着,不补
-    if (effect!.pseudoElement || !isCurrentAnimation(effect!.getComputedTiming(), anim.playbackRate, anim.playState)) continue;
+    if (effect!.pseudoElement || !isRelevantAnimation(effect!.getComputedTiming(), anim.playbackRate, anim.playState)) continue;
     for (const name of names) {
       if (!COMPOSITED_ANIMATION_PROPS.has(name)) continue;
       let promoted = out.promoted.get(target);
@@ -200,17 +213,55 @@ function forcedProps(el: Element, animated: AnimatedProps): Set<string> | null {
 
 type BuiltStyle = { text: string; inherited: Record<string, string> | null };
 
+/** SVG 内部元素(父元素也是 SVG)。最外层 `<svg>` 自己是 CSS 盒子,不算 */
+const isSvgInner = (el: Element) => el.namespaceURI === SVG_NS && el.parentElement?.namespaceURI === SVG_NS;
+
 /**
  * 这个元素的几何值能不能按 1/64 px 对齐(`snapLayoutUnits`,口径见 `LAYOUT_UNIT_PROPS`)。
  * 只有走 CSS 排版的盒子才在 LayoutUnit 网格上:
- *   - SVG 内部元素(父元素也是 SVG)的 `width` / `height` 是浮点几何,对齐会挪动图形,不对齐;
+ *   - SVG 内部元素的 `width` / `height` 是浮点几何,对齐会挪动图形,不对齐;
  *     最外层 `<svg>` 自己是 CSS 盒子,照常对齐;
  *   - `zoom` 不为 1 的子树里,计算样式给的是缩放前的值,网格不再是 1/64,保持原样。
  */
 function onLayoutGrid(el: Element, cs: CSSStyleDeclaration, parentZoomed: boolean): { snap: boolean; zoomed: boolean } {
   const zoomed = parentZoomed || (cs.zoom !== "" && cs.zoom !== "1");
-  const svgInner = el.namespaceURI === SVG_NS && el.parentElement?.namespaceURI === SVG_NS;
-  return { snap: !zoomed && !svgInner, zoomed };
+  return { snap: !zoomed && !isSvgInner(el), zoomed };
+}
+
+/**
+ * SVG 内部元素上**由它自己的表现属性(presentation attribute)给出**的那些属性:不内联(文件头第 4 条)。
+ *
+ * 克隆体原样带着这些属性,重放时的层叠又和生成快照时相同(见 `snapshotStyleProps.mjs` 文件头),
+ * 所以不写也还是那个值,而且是属性里的全精度原文;写了反而用 6 位有效数字的计算值把它盖掉。
+ * 元素自己内联样式里写过的、被动画 / 过渡改写的(`forced`)不在此列:那两类的值不来自属性,
+ * 照旧强制内联。
+ *
+ * 按属性名收:SVG 的表现属性和 CSS 属性同名。收进来的名字里不是 CSS 属性的(`class`、`id`、`offset`…)
+ * 永远对不上 `getComputedStyle` 的属性名,不起作用;是 CSS 属性、但在这个元素上不是表现属性的
+ * (`<text>` 的 `x`)计算值就是初始值,本来也和基线相同、不会写。
+ */
+function presentationProps(el: Element, forced: Set<string> | null): Set<string> | null {
+  if (!el.attributes.length || !isSvgInner(el)) return null;
+  let out: Set<string> | null = null;
+  for (const attr of el.attributes) {
+    if (forced && forced.has(attr.name)) continue;
+    (out ??= new Set()).add(attr.name);
+  }
+  return out;
+}
+
+/**
+ * 变换按 Typed OM 的分量写回(文件头第 3 条,`serializeTransformList`);拿不到就返回 null、退回计算值。
+ * 只对计算值不是 `none` 的元素调 —— `computedStyleMap()` 每次都新建一个映射。
+ */
+function exactTransform(el: Element): string | null {
+  let value: CSSStyleValue | undefined;
+  try {
+    value = el.computedStyleMap().get("transform");
+  } catch {
+    return null;
+  }
+  return value instanceof CSSTransformValue ? serializeTransformList(value) : null;
 }
 
 /**
@@ -219,12 +270,16 @@ function onLayoutGrid(el: Element, cs: CSSStyleDeclaration, parentZoomed: boolea
  * 返回的 `inherited` 在「一个都没变」时**直接复用父元素那个对象**,不新建 —— lottie 一张卡
  * 几千个元素,每个都存一份上百项的记录会把内存吃光。
  *
- * 另有两处不是「照抄计算值」(都是为了让重放逐字节等于活渲,见 `snapshotStyleProps.mjs`):
+ * 另有四处不是「照抄计算值」(都是为了让重放逐字节等于活渲,见文件头):
  *   - `snap`:`LAYOUT_UNIT_PROPS` 里的 px 数对齐回 1/64 格,补回 6 位有效数字丢掉的那一点;
- *   - `promote`:有 current 动画的元素补一条 `will-change`,要回活渲时的合成层。
+ *   - `transform`:按 Typed OM 的分量全精度写回(`exactTransform`),读不出来才用计算值;
+ *   - `fromAttr`:SVG 内部元素上由自己的属性给出的属性不写(`presentationProps`),
+ *     继承属性照样记进给子元素比对的那一份;
+ *   - `promote`:有 relevant 动画的元素补一条 `will-change`,要回活渲时的合成层。
  *     元素自己本来就写了 `will-change` 的,合并成一条,不另起一条去盖它。
  */
 function buildStyle(
+  el: Element,
   cs: CSSStyleDeclaration,
   isTop: boolean,
   parentInherited: Record<string, string> | null,
@@ -232,6 +287,7 @@ function buildStyle(
   baseline: Baseline | undefined,
   snap: boolean,
   promote: Set<string> | undefined,
+  fromAttr: Set<string> | null,
 ): BuiltStyle {
   const compareParent = !isTop && parentInherited;
   let inherited: Record<string, string> | null = compareParent ? parentInherited : null;
@@ -247,7 +303,13 @@ function buildStyle(
   for (let k = 0; k < cs.length; k++) {
     const prop = cs.item(k);
     if (promote && prop === "will-change") continue;   // 循环后合并着写
-    const value = snap && LAYOUT_UNIT_PROPS.has(prop) ? snapLayoutUnits(cs.getPropertyValue(prop)) : cs.getPropertyValue(prop);
+    let value = snap && LAYOUT_UNIT_PROPS.has(prop) ? snapLayoutUnits(cs.getPropertyValue(prop)) : cs.getPropertyValue(prop);
+    if (fromAttr && fromAttr.has(prop)) {
+      // SVG 表现属性:不写,重放时由克隆下来的属性给出。继承属性的值照样留给子元素比
+      if (isInherited(prop) && !(compareParent && parentInherited![prop] === value)) ensureOwn()[prop] = value;
+      continue;
+    }
+    if (prop === "transform" && value !== "none") value = exactTransform(el) ?? value;
     if (isInherited(prop)) {
       // ① 继承属性:和父元素的计算值比。顶层元素没有可信的父元素,一律内联。
       if (compareParent && parentInherited![prop] === value && !(forced && forced.has(prop))) continue;
@@ -315,8 +377,9 @@ export function inlineDOMStyles(
     const isTop = from === root || isClipWrapper(parent);
     const parentInherited = isTop || !parent ? null : inheritedOf.get(parent) ?? null;
     const grid = onLayoutGrid(from, cs, !!parent && (zoomedOf.get(parent) ?? false));
-    const built = buildStyle(cs, isTop, parentInherited, forcedProps(from, animated), baselines.get(keyOf(from)),
-      grid.snap, animated.promoted.get(from));
+    const forced = forcedProps(from, animated);
+    const built = buildStyle(from, cs, isTop, parentInherited, forced, baselines.get(keyOf(from)),
+      grid.snap, animated.promoted.get(from), isTop ? null : presentationProps(from, forced));
     inheritedOf.set(from, built.inherited);
     topOf.set(from, isTop);
     zoomedOf.set(from, grid.zoomed);
@@ -331,8 +394,9 @@ export function inlineDOMStyles(
       const parentInherited = isTop || !parent ? null : inheritedOf.get(parent) ?? null;
       const cs = getComputedStyle(el);
       const snap = snapOf.get(el) ?? onLayoutGrid(el, cs, !!parent && (zoomedOf.get(parent) ?? false)).snap;
-      const built = buildStyle(cs, isTop, parentInherited, forcedProps(el, animated), baselines.get(tagKey(ns, tag)),
-        snap, animated.promoted.get(el));
+      // 换上来的是 HTML 元素(canvas → img),没有 SVG 表现属性这一说
+      const built = buildStyle(el, cs, isTop, parentInherited, forcedProps(el, animated), baselines.get(tagKey(ns, tag)),
+        snap, animated.promoted.get(el), null);
       return built.text + STOP_CLOCKS;
     },
   };

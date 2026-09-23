@@ -1,8 +1,8 @@
 /**
  * 差异样式内联的属性表和几个纯函数(`snapshot/inlineStyles.ts` 的 `inlineDOMStyles` 用)。
  * 前两张表(继承 / 布局解析值)决定**省掉哪些属性**,见下;后面的 `LAYOUT_UNIT_PROPS` /
- * `snapLayoutUnits` / `COMPOSITED_ANIMATION_PROPS` / `isCurrentAnimation` 决定**写进去的值
- * 怎么才能让重放和活渲逐字节相同**,各自的注释里有出处。
+ * `snapLayoutUnits` / `serializeTransformList` / `COMPOSITED_ANIMATION_PROPS` / `isRelevantAnimation`
+ * 决定**写进去的值怎么才能让重放和活渲逐字节相同**,各自的注释里有出处。
  *
  * 单独成文件有两个理由:
  *   1. 它是**纯数据和纯函数**,`server/test/snapshot-style-props.test.mjs` 要直接 import 来对账
@@ -118,8 +118,8 @@ export const LAYOUT_USED_VALUE_PROPS = new Set([
  *
  * 比 `LAYOUT_USED_VALUE_PROPS` 多了逻辑属性写法(`inset-*` / `margin-block-*` …):它们和物理属性
  * 映射到同一个值,两种写法都会出现在快照里,只对齐一边的话,后写的那条会把对齐过的盖回去。
- * 不含 `transform` / `transform-origin` / `perspective-origin`:它们是浮点、不在网格上
- * (实测把这几项换成全精度,像素一个都不变)。
+ * 不含 `transform` / `transform-origin` / `perspective-origin`:它们是浮点、不在网格上,
+ * 对齐到 1/64 反而会改值。`transform` 的精度另有写法,见 `serializeTransformList`。
  */
 export const LAYOUT_UNIT_PROPS = new Set([
   'width', 'height', 'inline-size', 'block-size',
@@ -148,6 +148,102 @@ export function snapLayoutUnits(value) {
 }
 
 /**
+ * 把 Typed OM 读出来的计算变换(`el.computedStyleMap().get('transform')`,一个 `CSSTransformValue`)
+ * 按分量写回成 `transform` 的文本:**函数形式不变、数值全精度**。任何一个分量或数值认不出来就返回
+ * `null`,调用方退回 `getComputedStyle` 的矩阵。
+ *
+ * 为什么不用 `getComputedStyle` 的矩阵(`replay-mismatch-report.md` §13):
+ *   - 它把数折成 **6 位有效数字**。四位数的位移只剩两位小数:odometer 的滚轮真实位移是
+ *     `-2156.501953125px`,写成 `-2156.5`,正好落在像素取整的边界另一侧,整个字形错一格
+ *     (3139 个通道、最大 233);3D 旋转的 cos / sin 丢到 1e-6(terminal-3d);
+ *     快停下的弹簧 `scale(1.00047…)` 也一样(versus-card、punch-pill)。
+ *   - 它把整串变换**折成一个矩阵**:`rotate(-90deg)` 变成 `matrix(6.12323e-17, -1, 1, 6.12323e-17, 0, 0)`,
+ *     残下的 1e-17 让它不再是轴对齐变换;`translateZ(0)` 折成 2D 单位阵,那一层合成层就没了。
+ *     写回原来的函数,Chrome 重放时走的是和活渲同一条算法。
+ *
+ * 数值取的是 Blink 计算值里存的那个数(odometer 的 `-2156.501953125` 正是长度存成 float 之后的值),
+ * `String(n)` 原样写回;
+ * 百分比原样留着 —— 重放时对着同一个(尺寸已内联的)参考盒再解析一遍,和活渲一样。
+ * 分派按构造函数名(`CSSTranslate` …),单测里用同名的类造同样形状的对象。
+ */
+export function serializeTransformList(list) {
+  const parts = [];
+  for (const component of list) {
+    const text = transformComponentText(component);
+    if (text === null) return null;
+    parts.push(text);
+  }
+  return parts.length ? parts.join(' ') : null;
+}
+
+/** `CSSUnitValue` → `12.5px` / `-50%` / `0.8`;不是单一数值(`calc()`、关键字)返回 null */
+function unitText(v) {
+  if (!v || typeof v.value !== 'number' || typeof v.unit !== 'string' || !Number.isFinite(v.value)) return null;
+  const unit = v.unit === 'number' ? '' : v.unit === 'percent' ? '%' : v.unit;
+  return String(v.value) + unit;
+}
+
+function argsText(...values) {
+  const out = values.map(unitText);
+  return out.includes(null) ? null : out.join(', ');
+}
+
+/** 绕坐标轴的 3D 旋转写回 rotateX / rotateY / rotateZ,和源码里最常见的写法同一条路径 */
+function rotateText(c) {
+  if (c.is2D) {
+    const a = argsText(c.angle);
+    return a && `rotate(${a})`;
+  }
+  const axis = [c.x, c.y, c.z].map((v) => (v && typeof v.value === 'number' ? v.value : NaN));
+  const angle = argsText(c.angle);
+  if (angle === null) return null;
+  if (axis[0] === 1 && axis[1] === 0 && axis[2] === 0) return `rotateX(${angle})`;
+  if (axis[0] === 0 && axis[1] === 1 && axis[2] === 0) return `rotateY(${angle})`;
+  if (axis[0] === 0 && axis[1] === 0 && axis[2] === 1) return `rotateZ(${angle})`;
+  const a = argsText(c.x, c.y, c.z, c.angle);
+  return a && `rotate3d(${a})`;
+}
+
+function matrixText(m) {
+  if (!m) return null;
+  const values = m.is2D
+    ? [m.a, m.b, m.c, m.d, m.e, m.f]
+    : [m.m11, m.m12, m.m13, m.m14, m.m21, m.m22, m.m23, m.m24, m.m31, m.m32, m.m33, m.m34, m.m41, m.m42, m.m43, m.m44];
+  if (!values.every((v) => typeof v === 'number' && Number.isFinite(v))) return null;
+  return `${m.is2D ? 'matrix' : 'matrix3d'}(${values.map(String).join(', ')})`;
+}
+
+function transformComponentText(c) {
+  let a;
+  switch (c && c.constructor && c.constructor.name) {
+    case 'CSSTranslate':
+      a = c.is2D ? argsText(c.x, c.y) : argsText(c.x, c.y, c.z);
+      return a && `${c.is2D ? 'translate' : 'translate3d'}(${a})`;
+    case 'CSSScale':
+      a = c.is2D ? argsText(c.x, c.y) : argsText(c.x, c.y, c.z);
+      return a && `${c.is2D ? 'scale' : 'scale3d'}(${a})`;
+    case 'CSSRotate':
+      return rotateText(c);
+    case 'CSSSkew':
+      a = argsText(c.ax, c.ay);
+      return a && `skew(${a})`;
+    case 'CSSSkewX':
+      a = argsText(c.ax);
+      return a && `skewX(${a})`;
+    case 'CSSSkewY':
+      a = argsText(c.ay);
+      return a && `skewY(${a})`;
+    case 'CSSPerspective':
+      a = argsText(c.length);
+      return a && `perspective(${a})`;
+    case 'CSSMatrixComponent':
+      return matrixText(c.matrix);
+    default:
+      return null;
+  }
+}
+
+/**
  * 当前动画会让 Chrome **单独提一个合成层**的属性(Blink 的合成原因 `ActiveOpacityAnimation` /
  * `ActiveTransformAnimation` / `ActiveFilterAnimation` / `ActiveBackdropFilterAnimation`,
  * `translate` / `rotate` / `scale` 归在变换一类)。
@@ -155,24 +251,44 @@ export function snapLayoutUnits(value) {
  * 快照写死了 `animation:none`,重放页里没有动画,这层就没了:元素改画进父层,
  * `filter: blur()` 走的是另一条栅格化路径,和活渲差出上百级(同一张 punch-pill,
  * 活渲的光晕层 `LayerTree.compositingReasons` 实测就是 `ActiveOpacityAnimation`)。
- * 所以 `inlineDOMStyles` 给「此刻有 current 动画改写这些属性」的元素补一条
- * `will-change: <这些属性>` —— 它是 CSS 里唯一能在没有动画时要到同一个合成层的写法。
+ * 所以 `inlineDOMStyles` 给「此刻有 relevant 动画改写这些属性」的元素(`isRelevantAnimation`)
+ * 补一条 `will-change: <这些属性>` —— 它是 CSS 里唯一能在没有动画时要到同一个合成层的写法。
  */
 export const COMPOSITED_ANIMATION_PROPS = new Set([
   'opacity', 'transform', 'translate', 'rotate', 'scale', 'filter', 'backdrop-filter',
 ]);
 
 /**
- * 一个动画此刻是不是 Web Animations 说的 **current**(Blink 的 `AnimationEffect::IsCurrent`)——
- * Blink 只给 current 的动画挂上面那几种合成原因。current =
+ * 一个动画此刻是不是 Web Animations 说的 **relevant**(current 或 in effect)—— Blink 给
+ * 上面那几种合成原因的判据是这个,**不只是 current**。
+ *
+ * 2026-09-23 在 Chrome 152 上实测(`replay-mismatch-report.md` §13.5,一条 delay 400 / duration 800 的
+ * 透明度动画暂停在各个时刻,读 `LayerTree.compositingReasons`):
+ *
+ * | fill | delay 里 | 活跃段 | 结尾 | 结尾之后 |
+ * |---|---|---|---|---|
+ * | `both` | 提层 | 提层 | 提层 | 提层(`finish()` 之后也提) |
+ * | `forwards` | 提层 | — | — | 提层 |
+ * | `backwards` | 提层 | — | — | 不提 |
+ * | `none` | 提层 | 提层 | 不提 | 不提 |
+ *
+ * 只按 current 判(第二轮的写法)会漏掉「放完了、靠 `fill` 停在终态」的那一种:stat-proof 第 12 帧
+ * 一条 `delay 0.4 + duration 0.8` 的动画被 `__pcSyncAnims` 钉在 1200 ms(JS 里 `1200 < 1200.0000000000002`,
+ * 没 `finish()`),`localTime` 读回来却等于 `endTime`,按规范已在结束后;Blink 照样提层。
+ *
+ * in effect 就是 `getComputedTiming().progress` 不是 null。纯函数、不碰 DOM,好在 Node 里单测。
+ * 参数取自 `effect.getComputedTiming()`(毫秒)、`animation.playbackRate`、`animation.playState`。
+ */
+export function isRelevantAnimation(timing, playbackRate, playState) {
+  return timing.progress != null || isCurrentAnimation(timing, playbackRate, playState);
+}
+
+/**
+ * 一个动画此刻是不是 Web Animations 说的 **current**(`isRelevantAnimation` 的一半)。current =
  *   - 在活跃段里、且没放完(暂停的也算:`__pcSyncAnims` 钉住的动画全是暂停的);
  *   - 或者正向播放、还在开始前(delay 里);
  *   - 或者反向播放、还在结束后。
- * 放完了、只靠 `fill` 停在终态的**不算**。段的边界照规范:`before-active` / `active-after`
- * 两个边界点归哪一段看播放方向。
- *
- * 纯函数、不碰 DOM,好在 Node 里单测。参数取自 `effect.getComputedTiming()`(毫秒)、
- * `animation.playbackRate`、`animation.playState`。
+ * 段的边界照规范:`before-active` / `active-after` 两个边界点归哪一段看播放方向。
  */
 export function isCurrentAnimation(timing, playbackRate, playState) {
   if (timing.localTime == null) return false;

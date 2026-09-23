@@ -12,17 +12,21 @@
  *   `inlineDOMStyles` 读计算样式、按差异口径写进 `style`(`snapshot/inlineStyles.ts`)
  *   `rasterizeCanvas` 读像素、压成图片、写实体框(`snapshot/rasterizeCanvas.ts`)
  *   `stripMedia`      素材层只留占位属性
- *   `serializeScene`  `outerHTML`、整场景的 id 改名、逐控件取包裹层 `innerHTML`
+ *   `serializeScene`  相邻文本节点插注释、`outerHTML`、整场景的 id 改名、逐控件取包裹层 `innerHTML`
  *
  * 中间两步各自一个文件、**互不 import**:canvas 换 `<img>` 时要按 IMG 的基线另算一份
  * 样式串,那个衔接写在这里(`inlineDOMStyles` 交出 `styleAs`,转给 `rasterizeCanvas`)。
  *
- * # 三件实测踩过的事
+ * # 四件实测踩过的事
  *
  *   - 样式内联并写死 animation:none / transition:none —— 注入后不能再有任何还在走的钟;
  *   - 整场景 html 的 id 统一改名并同步改掉 url(#…) / href="#…" —— SVG 渐变按 id 引用,
  *     重放页里要是还能解析到别的同名元素,填充整片错掉(growth-curve 实测);
- *   - canvas 换成同尺寸的图 —— 克隆出来的画布是空的,粒子和三维画面会整个消失。
+ *   - canvas 换成同尺寸的图 —— 克隆出来的画布是空的,粒子和三维画面会整个消失;
+ *   - 相邻的文本节点之间插一个空注释(`keepTextBoundaries`)—— HTML 序列化再解析会把它们并成一个。
+ *     React 渲 `{n}%` 是「75」「%」两个文本节点、两段文字,各自先画阴影再画字,「%」的模糊
+ *     `text-shadow` 压在「5」上;并成一段后阴影全在字底下(mu-circular-progress 每帧差上千个通道,
+ *     见 `replay-mismatch-report.md` §13)。空注释不产生任何排版对象,只保住分界。
  *
  * 素材(video / img)只剥 `src`,`data-pc-media-*` 原样留着:重放时由 `__pcPrepareFrameMedia`
  * 按 `data-pc-media-src` / `data-pc-media-time` 把那一帧装回来。判据是 `dataset.pcMediaSrc`,
@@ -107,8 +111,28 @@ function stripMedia(orig: Element[], copy: Element[]): void {
   }
 }
 
+/** 内容按原始文本解析的 HTML 元素:往里插注释,重放时会变成字面文字 */
+const RAW_TEXT_TAGS = new Set(["STYLE", "SCRIPT", "TEXTAREA", "TITLE", "XMP", "IFRAME", "NOEMBED", "NOFRAMES", "NOSCRIPT", "PLAINTEXT"]);
+
+/**
+ * 相邻的文本节点之间插一个空注释,序列化再解析后仍是两个文本节点(文件头「四件实测踩过的事」)。
+ * 在克隆体上改,live DOM 不动;`orig` / `copy` 只数元素,注释不影响两者的对应。
+ */
+function keepTextBoundaries(clone: Element): void {
+  const walker = document.createTreeWalker(clone, NodeFilter.SHOW_TEXT);
+  const split: Text[] = [];
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    const parent = node.parentElement;
+    if (node.previousSibling?.nodeType !== Node.TEXT_NODE) continue;
+    if (parent && parent.namespaceURI === HTML_NS && RAW_TEXT_TAGS.has(parent.tagName)) continue;
+    split.push(node as Text);
+  }
+  for (const text of split) text.before(document.createComment(""));
+}
+
 /** 第五步:`outerHTML` + 整场景的 id 改名 + 逐控件取包裹层 `innerHTML`。 */
 function serializeScene(root: Element, clone: Element): { html: string; controls: ControlSnapshot[] } {
+  keepTextBoundaries(clone);
   let html = clone.outerHTML;
   const ids = new Set(
     [...root.querySelectorAll("[id]")].map((e) => e.id).concat(root.id ? [root.id] : []),
