@@ -3,6 +3,7 @@ import type { AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
 import type { Plugin, ViteDevServer } from "vite";
 import { STAGE_PORTS, stagePortsOf } from "./stage-ports.mjs";
+import { STAGE_CLIENT_HEADER } from "./http-guard.mjs";
 
 /**
  * 两个舞台端口(E1)。编辑器端口 +1 / +2 各起一个**透明反向代理**,原样转回同一份 vite,
@@ -36,6 +37,13 @@ import { STAGE_PORTS, stagePortsOf } from "./stage-ports.mjs";
  *
  * 端口被占就**不起那一个代理**,注入给页面的端口表里也就没有它;页面看到表不全就退回
  * 同源单舞台(`previewMode.ts`)。dev server 不能因为一个多出来的端口起不来就挂掉。
+ *
+ * # 监听在哪
+ *
+ * vite 绑在哪(`127.0.0.1`,或 `npm run dev` 的 `0.0.0.0`),两个舞台端口就绑在哪 —— 局域网设备打开编辑台时,
+ * 舞台 iframe 的地址按 `location.hostname` 拼(`previewMode.ts`),舞台端口也得在局域网上。
+ * 转回 vite 一律走 127.0.0.1,所以 vite 看到的对端永远是回环:代理把真实对端写进
+ * `STAGE_CLIENT_HEADER`(覆盖请求自带的同名头),`/api/**` 的本机判据据此分辨(`http-guard.mjs` 的 `fromLocalClient`)。
  */
 
 /** 页面靠这个全局知道有哪几个舞台端口真的起来了;起不来就是空表,页面退回同源单舞台 */
@@ -47,12 +55,15 @@ export function stagePortsPlugin(): Plugin {
   /** 代理起完了没有。注入端口表之前要等它 —— 否则第一次打开页面可能拿到一张空表 */
   let ready: Promise<void> = Promise.resolve();
 
+  /** 转给 vite 的请求头:原样,只把真实对端写进 STAGE_CLIENT_HEADER(覆盖请求自带的,防伪造) */
+  const forwardHeaders = (req: http.IncomingMessage) => ({ ...req.headers, [STAGE_CLIENT_HEADER]: req.socket.remoteAddress || "" });
+
   /** 一个舞台端口的代理:全部转回 127.0.0.1:<vite 端口>,响应加 OAC 头 */
   const makeProxy = (listenHost: string, listenPort: number, targetPort: number): Promise<http.Server | null> =>
     new Promise((resolve) => {
       const proxy = http.createServer((req, res) => {
         const up = http.request(
-          { host: "127.0.0.1", port: targetPort, method: req.method, path: req.url, headers: req.headers },
+          { host: "127.0.0.1", port: targetPort, method: req.method, path: req.url, headers: forwardHeaders(req) },
           (pres) => {
             /*
              * Host 头原样转过去,所以 vite 那边看到的 Host 还是舞台端口 —— `/api/**` 的同源守卫
@@ -68,7 +79,7 @@ export function stagePortsPlugin(): Plugin {
       });
       // vite 的 HMR WebSocket:客户端打的是舞台端口,原样接到 vite 上
       proxy.on("upgrade", (req, socket: Duplex, head: Buffer) => {
-        const up = http.request({ host: "127.0.0.1", port: targetPort, method: req.method, path: req.url, headers: req.headers });
+        const up = http.request({ host: "127.0.0.1", port: targetPort, method: req.method, path: req.url, headers: forwardHeaders(req) });
         up.on("upgrade", (pres, psocket, phead) => {
           const lines = [`HTTP/1.1 ${pres.statusCode} ${pres.statusMessage}`];
           for (const [k, v] of Object.entries(pres.headers)) {
@@ -106,7 +117,8 @@ export function stagePortsPlugin(): Plugin {
       server.httpServer?.on("listening", () => {
         const addr = server.httpServer?.address() as AddressInfo | null;
         if (!addr || typeof addr === "string") return;
-        const host = addr.address === "::" || addr.address === "0.0.0.0" ? "127.0.0.1" : addr.address;
+        // 和 vite 绑在同一处:vite 绑全部网卡(0.0.0.0 / ::)时舞台端口也绑全部网卡,局域网设备才打得开舞台
+        const host = addr.address;
         ready = (async () => {
           for (const p of stagePortsOf(addr.port)) {
             const s = await makeProxy(host, p, addr.port);

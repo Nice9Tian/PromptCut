@@ -1,5 +1,5 @@
 import type { Plugin, ViteDevServer } from "vite";
-import { originOk, jsonContentType, apiPath, isAssetServicePath } from "./http-guard.mjs";
+import { originOk, jsonContentType, apiPath, isAssetServicePath, fromLocalClient, lanApiAllowed } from "./http-guard.mjs";
 
 /**
  * `/api/**` 的同源守卫。**一个卡口,不是十二个。**
@@ -67,6 +67,11 @@ export function apiGuardPlugin(): Plugin {
           res.setHeader("Cache-Control", "no-store");
           res.end(JSON.stringify({ ok: false, error }));
         };
+
+        // 局域网监听之后「不带 Origin 当自己人」只对本机成立,理由见 http-guard.mjs 的 fromLocalClient
+        if (!lanApiAllowed() && !fromLocalClient(req)) {
+          return deny("局域网设备只能访问素材服务;要开放其它接口,启动时设 PROMPTCUT_LAN_API=1");
+        }
 
         if (!originOk(req)) {
           return deny(`跨源请求被拒绝(Origin: ${req.headers.origin})`);
