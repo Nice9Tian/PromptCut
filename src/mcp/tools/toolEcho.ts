@@ -44,11 +44,9 @@ export interface TimelineDigest {
 /**
  * 工具结果里回显的时间轴一览。只有 id / 卡或素材 / 起止，不带 params，省 token。
  *
- * duration 和 contentEnd 必须一起给出来 —— 这两个数不一样是**看不见的**:
- * 项目时长只涨不缩(store 里 addClip 才 Math.max 一下,removeClip 根本不动它,
- * 卡片类的 clip 连涨都不涨),所以「删完冗余内容」之后时长还停在老的最大值,
- * 片尾挂着一段黑;反过来往后铺卡片铺过了头,超出的部分直接被切掉。
- * 以前这份回显只有轨道和 clip,模型每一步都看不到这个错位,自然也想不到去修。
+ * duration 和 contentEnd 一起给出来:时长缺省跟着内容走,平时两者相等;
+ * duration 比 contentEnd 小说明片子被截断了(规则见 kernel/duration.ts),
+ * 模型得看得到这件事,才知道后面那截内容播不到。
  */
 export function timelineDigest(p: Project): TimelineDigest {
   const tracks = p.tracks.map((tr) => ({
