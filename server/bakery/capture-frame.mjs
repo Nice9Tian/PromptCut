@@ -14,8 +14,19 @@ import { pngIntegrityError } from './png-integrity.mjs';
  * output up to date. Measured: it does not change animation state (a primed
  * and an unprimed capture of the same frame are pixel-identical). Callers skip
  * it only when they captured the immediately preceding timeline frame.
+ *
+ * `clip` (R8 / G1, optional): capture only this stage rectangle `{ x, y, w, h }`
+ * (integers, already expanded to even width and height by the caller). The
+ * beginFrame screenshot has no clip parameter of its own, so the rectangle is
+ * applied as the visible viewport of the device-metrics override: layout is
+ * not affected (the page still sees its full viewport; measured: innerWidth and
+ * element boxes unchanged), only the drawn surface shrinks. It also makes the
+ * PNG encode proportionally cheaper (1920×1080 → 400×240: 29 ms → 3 ms per
+ * shot on this machine). `clip: null` restores the full viewport. Callers that
+ * never pass `clip` are unaffected: no CDP call is made for them.
  */
-export async function captureFrame(bakery, screenshot, signal, { prime = true } = {}) {
+export async function captureFrame(bakery, screenshot, signal, { prime = true, clip } = {}) {
+  if (clip !== undefined) await applyCaptureClip(bakery, clip);
   if (bakery.page) await waitFrameReady(bakery, signal);
   if (prime) {
     if (signal?.aborted) throw Object.assign(new Error('Frame request cancelled'), { cancelled: true });
@@ -53,4 +64,35 @@ export async function captureFrame(bakery, screenshot, signal, { prime = true } 
   throw new Error(corruption
     ? `Chrome returned a corrupt PNG after 4 compositor ticks: ${corruption}`
     : 'Chrome did not return the requested frame after 4 compositor ticks');
+}
+
+const sameClip = (a, b) => (!a && !b) || (!!a && !!b && a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h);
+
+/**
+ * Apply (or clear) the capture rectangle on this page. Remembered on the bakery
+ * so an unchanged rectangle costs nothing per frame. Anything that resets the
+ * device metrics (`page.setViewport`) must forget it: `forgetCaptureClip`.
+ */
+export async function applyCaptureClip(bakery, clip) {
+  const next = clip ? { x: Math.round(clip.x), y: Math.round(clip.y), w: Math.round(clip.w), h: Math.round(clip.h) } : null;
+  if (next && (next.w <= 0 || next.h <= 0 || next.w % 2 || next.h % 2)) throw new Error(`capture clip must have a positive even size: ${JSON.stringify(clip)}`);
+  if (bakery.captureClip !== undefined && sameClip(bakery.captureClip, next)) return;
+  const view = bakery.page?.viewport?.() || {};
+  const width = view.width || bakery.viewportWidth || 1920;
+  const height = view.height || bakery.viewportHeight || 1080;
+  await bakery.client.send('Emulation.setDeviceMetricsOverride', {
+    width, height, deviceScaleFactor: view.deviceScaleFactor || 1, mobile: false,
+    ...(next ? { viewport: { x: next.x, y: next.y, width: next.w, height: next.h, scale: 1 } } : {}),
+  });
+  bakery.captureClip = next;
+  // The drawn surface changes size with the override. The first ticks after a
+  // resize can come back without pixels (measured: four empty compositor
+  // screenshots in a row on a freshly reset page). Spend one discarded, cheap
+  // tick here so the next real capture lands on the resized surface.
+  await bakery.beginFrame?.({ screenshot: { format: 'jpeg', quality: 0 } }).catch(() => {});
+}
+
+/** The device metrics were reset elsewhere (e.g. `page.setViewport`): the next clip must be sent again. */
+export function forgetCaptureClip(bakery) {
+  bakery.captureClip = undefined;
 }

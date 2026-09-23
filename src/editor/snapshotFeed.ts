@@ -33,6 +33,7 @@ import { mirrorKey, pushWanted } from "../render/dataMirror";
 import type { Project, TrackClip } from "../kernel/project";
 import type { StageRole, StageRpcClient } from "../render/stageRpc";
 import { currentPlan } from "./planDispatch";
+import { rangesHave, SEGMENT_FRAMES, streamPlanesFor, type StreamPlaneRequest } from "../render/streamPlayer";
 
 /** C4：换 DOM 每 rAF 至多一次、间隔 ≥ 33 ms */
 export const SNAPSHOT_THROTTLE_MS = 33;
@@ -40,8 +41,23 @@ export const SNAPSHOT_THROTTLE_MS = 33;
 export const SNAPSHOT_DELIVERY_MAX_BYTES = 2 * 1024 * 1024;
 /** C4：一次最多报 8 条缺口给预渲染进程 */
 export const MAX_WANTED = 8;
-/** 没有 `stream` 表时优先 `html`、再 `local`（A3a 的档位由预渲染进程按审阅表定，这里只看有没有） */
-const KIND_ORDER: ReadyKind[] = ["stream", "html", "local"];
+/**
+ * 快照按 `html`、再 `local` 的顺序选（A3a 的档位由预渲染进程按审阅表定，这里只看有没有）。
+ * **`stream` 不是快照**：它的区间单位是分段号、字节是 fMP4，由舞台里的 `streamPlayer` 解（R8）。
+ */
+const KIND_ORDER: ReadyKind[] = ["html", "local"];
+
+/** 这张卡此刻所在的分段有没有流（单卡流挂在它自己身上；组流挂在组里最上面那张上、带 `groupClipIds`） */
+function streamCovers(clipId: string, globalFrame: number): boolean {
+  const seg = Math.floor(Math.max(0, globalFrame) / SEGMENT_FRAMES);
+  for (const [owner, byKind] of readyIndex) {
+    const layer = byKind.get("stream");
+    if (!layer) continue;
+    const members = layer.groupClipIds?.length ? layer.groupClipIds : [owner];
+    if (members.includes(clipId) && rangesHave(layer.ranges, seg)) return true;
+  }
+  return false;
+}
 
 /** 这一刻某张卡选中的那一帧 */
 export interface Pick {
@@ -224,7 +240,7 @@ export interface FeedPlan {
 /**
  * 这一刻的投递计划。**纯算，不 fetch、不发 RPC**，所以验收探针可以单独看它。
  */
-export function planFeed({ project, t }: Playhead): FeedPlan {
+export function planFeed({ project, t, playing }: Playhead): FeedPlan {
   const plan = currentPlan();
   const fps = Math.max(1, project.fps || 30);
   const globalFrame = Math.max(0, Math.floor(t * fps + 1e-6));
@@ -241,6 +257,8 @@ export function planFeed({ project, t }: Playhead): FeedPlan {
       pendingDemote.delete(clip.id);
     }
     heavy.push(clip.id);
+    // A3c：播放中**有流分段**的抑制卡不投快照（贴流）；缺分段 / 暂停 / 拖动时照投
+    if (playing && streamCovers(clip.id, globalFrame)) continue;
     let picked: Pick | null = null;
     for (const kind of KIND_ORDER) {
       const layer = layerOf(readyIndex, clip.id, kind);
@@ -399,6 +417,22 @@ export async function deliverSnapshots(stage: StageRpcClient, role: StageRole, h
 let extraSuppressed: readonly string[] = [];
 export function setExtraSuppressed(clipIds: readonly string[]): void {
   extraSuppressed = [...clipIds];
+}
+
+/**
+ * R8：这一刻的流平面（C3 末段：由就绪索引里 `kind: 'stream'` 的层合成）。只在播放中、只给被抑制的卡。
+ * 父页在发 `setSuppressed(H(t))` 的同一处发 `setStreamPlanes(...)`。
+ */
+export function streamPlanesAt(head: Playhead): StreamPlaneRequest[] {
+  if (!head.playing) return [];
+  const layers: { clipId: string; key: string; ranges: Array<[number, number]>; groupClipIds?: string[] }[] = [];
+  for (const [clipId, byKind] of readyIndex) {
+    const layer = byKind.get("stream");
+    if (layer) layers.push({ clipId, key: layer.key, ranges: layer.ranges as Array<[number, number]>, groupClipIds: layer.groupClipIds });
+  }
+  if (!layers.length) return [];
+  const fps = Math.max(1, head.project.fps || 30);
+  return streamPlanesFor(layers, new Set(suppressedAt(head)), Math.floor(head.t * fps + 1e-6));
 }
 
 /** 这一刻该抑制哪几张（播放中才有，C5 / K5） */

@@ -31,6 +31,7 @@ import { budgetOf, CATCHUP_STEPS_PER_BEAT, clipWeight, pipelineAt } from "./rend
 import { beatAt, createK6State, noteK6Beat, scheduleNextBeat } from "./render/beatLoop.mjs";
 import { reviveStagePlan, type StagePlan, type WirePlan } from "./render/wirePlan";
 import { ensureProxyStyle, proxyAllowed, proxyOf, resetInk, sampleAll } from "./render/solidMode";
+import { StreamPlayer } from "./render/streamPlayer";
 import { themeStyle } from "./themes";
 import "./cards";
 
@@ -319,6 +320,17 @@ export default function StageView() {
 
   useEffect(() => {
     if (!clock) return;
+
+    /*
+     * 轨道流的解码与合成(R8 / G5)。**只在 `front` 角色下工作**:`setRole('back')` 停掉它、
+     * `close()` 全部 `VideoFrame`;`back` 不收 `streamPlanes`,也就不建 decoder、不画(K5)。
+     * 它往 `Stage` 已经渲好的 `[data-pc-stream-plane]` / `[data-pc-group-plane]` 上画。
+     */
+    const player = new StreamPlayer({ root: () => rootRef.current });
+    const presentStreams = (sec: number) => {
+      if (ref.current.role !== "front" || !ref.current.streamPlanes.length) return;
+      player.present(sec);
+    };
 
     /*
      * 补一拍「落定」。**同步补跑完的那一瞬间,Motion 还没把新值写回 DOM。**
@@ -1045,6 +1057,8 @@ export default function StageView() {
           ref.current.cardCost.clear();
           flushSync(() => setT(sec));
           clock.advanceTo(sec * 1000, { step: period, onFrame: (ms) => pinner.sync(ms, skipWrappers()) });
+          // 重卡贴流(K5 / G5):这一拍的帧手里有就当场画上,没有就留着上一张或透明 —— 从不等它
+          presentStreams(sec);
           // K3(b) 的播放态追帧:这一拍除了本拍那一帧,再多推几步它自己的本地时间
           enterCatchUps(sec, fps);
           stepCatchUps(fps);
@@ -1192,6 +1206,7 @@ export default function StageView() {
           settle(target);
           scheduleSample();
           if (opts.settle) routeSettle(target, fps);
+          presentStreams(target);
           return { path: "continuous" } satisfies SetTimeReply;
         }
 
@@ -1204,6 +1219,7 @@ export default function StageView() {
           // K3 的三条跳转路;`settle: true` 时再起 K5 第一路
           routeJump(target, fps);
           if (opts.settle) routeSettle(target, fps);
+          presentStreams(target);
         }
         if (opts.probe) {
           /*
@@ -1397,6 +1413,8 @@ export default function StageView() {
          * 采样排在这一帧提交之后(真卡已经画出来了),所以放 flushSync 后面。
          */
         flushSync(() => setProxy(want));
+        // 实体模式开着时 `.pc-proxy` 连流平面一起藏:停解码,不占解码帧预算(E7 第 4 条)
+        player.setProxy(want);
         if (!want) {
           const root = rootRef.current;
           if (root) sampleAll(root);
@@ -1410,11 +1428,11 @@ export default function StageView() {
        * 清理的全集(E0 的 `setRole` 那条,两条互换路都不再逐条列):
        *   1. 停 K4 的节拍循环(循环每拍开头和 post `frame` 之前都查 `beatPaused` / 角色);
        *   2. 清空 `suppressed` / `snapshots` / `streamPlanes` —— `back` 永远不收它们的非空集合;
-       *   3. 停 `streamPlayer` 并 `close()` 所有 `VideoFrame`(R8 的轨道流,这一步还没有);
+       *   3. 停 `streamPlayer` 并 `close()` 所有 `VideoFrame`(R8 的轨道流);
        *   4. 去掉全部平面和类(快照 / 抑制 / 等待 / 追帧);
        *   5. 中止可见舞台里正在进行的第一路追帧(`catchUpGen` 递增)并清空 `settling` / `awaiting`。
-       * R3 把第 2、4、5 条接到真实状态上(平面本体已经有了);循环本体(第 1 条)和
-       * `streamPlayer`(第 3 条)分别在 R5 / R8。
+       * R3 把第 2、4、5 条接到真实状态上(平面本体已经有了);循环本体(第 1 条)在 R5,
+       * `streamPlayer`(第 3 条)在 R8。
        *
        * `bake` 在本地模式不支持(预渲染者是预渲染进程),回 `unsupported`、不抛。
        */
@@ -1437,6 +1455,8 @@ export default function StageView() {
           ref.current.snapshots = new Map();
           ref.current.suppressed = new Set();
           ref.current.streamPlanes = [];
+          // 3. 停 `streamPlayer` 并 `close()` 全部 `VideoFrame`(R8)
+          player.stop();
           ref.current.settling = new Map();
           ref.current.catchUps.clear();
           ref.current.lastActive = new Set();
@@ -1565,10 +1585,30 @@ export default function StageView() {
         commitPlanes();
         return { ok: true as const };
       },
-      /** G1 的流平面分组(R8 之前父页恒发空表);渲染位置在 `Stage`(包裹层里 / 舞台根下) */
+      /**
+       * G1 的流平面分组;渲染位置在 `Stage`(包裹层里 / 舞台根下),解码与合成在 `streamPlayer`。
+       * 每条带流键 `key` 和就绪的分段号 `ranges`(C3 的 `stream` 表);不带 `key` 的只占位、不解码。
+       * **`back` 不收非空集合**(K5:三个集合只发给 `front`),收到也只清空。
+       */
       async setStreamPlanes(planes) {
-        ref.current.streamPlanes = planes.map((g) => ({ clipIds: [...g.clipIds] }));
+        if (ref.current.role !== "front") {
+          ref.current.streamPlanes = [];
+          player.stop();
+          commitPlanes();
+          return { ok: true as const };
+        }
+        ref.current.streamPlanes = (Array.isArray(planes) ? planes : [])
+          .filter((g) => Array.isArray(g?.clipIds) && g.clipIds.length)
+          .map((g) => ({
+            clipIds: g.clipIds.map(String),
+            ...(typeof g.key === "string" && g.key ? { key: g.key } : {}),
+            ...(Array.isArray(g.ranges) ? { ranges: g.ranges.map((r) => [Number(r[0]), Number(r[1])] as [number, number]) } : {}),
+          }));
         commitPlanes();
+        const fps = Math.max(1, ref.current.project?.fps || 30);
+        player.setPlanes(ref.current.streamPlanes, fps);
+        // 画布刚随这次提交挂上:当场画一次,不等下一拍
+        presentStreams(ref.current.t);
         return { ok: true as const };
       },
       /** 手按着播放头拖:素材层 seek 放疏一点(`mediaSync` 的 SCRUB_SEEK_MIN_MS) */
@@ -1649,11 +1689,15 @@ export default function StageView() {
       k6Over: ref.current.k6.beats.reduce((n, b) => n + b.over, 0),
       /** 最后一拍每张卡的耗时(`<Profiler>` 报的);K6 挑「最贵的那张」就按它 */
       cardCost: [...ref.current.cardCost.entries()],
+      /** R8:流平面与解码器的状态(持有的帧数 / 字节、每条流画了几帧、当前变体……) */
+      streamPlanes: ref.current.streamPlanes.map((g) => ({ clipIds: g.clipIds, key: g.key ?? null, ranges: g.ranges ?? null })),
+      streams: player.diag(),
     });
     window.__pcStagePipelineAt = (clipId: string, tSec: number) => pipelineAt(ref.current.plan?.plan ?? null, clipId, tSec);
     postStageReady(detectHostCapabilities());
     return () => {
       stopRpc();
+      player.stop();
       window.clearTimeout(ref.current.settle);
       window.clearTimeout(ref.current.awaitTimer);
       window.clearTimeout(sampleTimer);
@@ -1666,6 +1710,19 @@ export default function StageView() {
 
   if (!project) return null;
   const timeline = flattenOverlay(project, graph);
+  /*
+   * 组流平面挂在组里**此刻活跃的最上面那张卡**那一层(G1)。live 路每个片段一个单片段 `Stage`,
+   * 哪张卡此刻在场只有这里知道;`timeline.clips` 已经是画家顺序(最后一个在最上面)。
+   */
+  const streamPlanes = ref.current.streamPlanes.some((g) => g.clipIds.length > 1)
+    ? ref.current.streamPlanes.map((g) => {
+      if (g.clipIds.length < 2) return g;
+      const members = new Set(g.clipIds);
+      const live = timeline.clips.filter((c) => members.has(c.id) && cardMountedAt(c, t));
+      const host = live.length ? live[live.length - 1].id : g.clipIds[g.clipIds.length - 1];
+      return g.host === host ? g : { ...g, host };
+    })
+    : ref.current.streamPlanes;
 
   return (
     <div
@@ -1706,7 +1763,7 @@ export default function StageView() {
           scrubbing={ref.current.scrubbing}
           playing={ref.current.playing}
           suppressed={ref.current.suppressed}
-          streamPlanes={ref.current.streamPlanes}
+          streamPlanes={streamPlanes}
           snapshots={ref.current.snapshots}
           remountGen={ref.current.remountGen}
           settling={ref.current.settling}

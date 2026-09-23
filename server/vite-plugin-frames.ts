@@ -46,6 +46,11 @@ export function frameService(root: string, origin: string) {
     });
     services.set(root, service);
     /*
+     * R8:轨道流分段的读口挂在下面的 `/api/frames/*` 上 —— 生产者要读口接上了才开工、才发 `stream` 层
+     * (`StreamProducer.routeAttached`)。编辑器进程(`interactive: false`)没有生产者,这里是空操作。
+     */
+    service.streamProducer()?.attachRoute();
+    /*
      * F5:预渲染进程起来先扫盘重建「键 → 区间」。只挂在键上,不发 `layer` ——
      * `clipId` 要等项目到位、重算 card plan 之后才反查得出来(`adoptCardPlan`)。
      */
@@ -184,6 +189,12 @@ export function framesPlugin(): Plugin {
         return json(200, { ok: true, ...service.diagnostics() });
       }
       if (req.method === "GET") {
+        /*
+         * R8 轨道流的字节(清单 / init / 分段),和快照字节同源、同走 `PROMPTCUT_CORS_ORIGINS`。
+         * 只有预渲染进程(`interactive: true`)有生产者;编辑器进程这里是 null,不答。
+         */
+        const producer = service.streamProducer();
+        if (producer && producer.handle(req, res, url.pathname)) return;
         /*
          * J3 / C3 的快照字节:`GET /api/frames/snapshot/<kind>/<key>/<localFrame>`。
          * `kind` 为 `local` 时 `key` = `<entry.key>/<共享键>`,所以有两个键段。

@@ -15,6 +15,9 @@ import type { Project } from "../kernel/project";
 import type { RectWithBounds, RectsWithBoundsOptions, StageHit } from "./solid";
 import type { ProjectPatch } from "./changedClips.mjs";
 import type { CardCostRecord } from "./cardCostKey.mjs";
+import type { StreamPlaneRequest } from "./streamPlayer";
+
+export type { StreamPlaneRequest };
 
 export type StageRole = "front" | "back";
 export type BackJob = "probe" | "catchup" | "bake";
@@ -231,7 +234,12 @@ export interface StageRpcApi {
   play(fromSec: number): Promise<PlayReply>;
   pause(opts?: { atSec?: number }): Promise<PlayReply>;
   setSuppressed(clipIds: string[]): Promise<{ ok: true }>;
-  setStreamPlanes(planes: Array<{ clipIds: string[] }>): Promise<{ ok: true }>;
+  /**
+   * G1 / C3 的流平面(父页按就绪索引里 `kind: 'stream'` 的层合成)。元素的形状仍是 `{ clipIds }`,
+   * R8 加了两个可选字段:`key`(流键)和 `ranges`(就绪的分段号闭区间)—— 舞台里的 `streamPlayer`
+   * 凭它们去拉分段;不带 `key` 的平面只占位、不解码(R8 之前的调用方照旧只发 `clipIds`)。
+   */
+  setStreamPlanes(planes: StreamPlaneRequest[]): Promise<{ ok: true }>;
   setScrubbing(on: boolean): Promise<{ ok: true }>;
   setPlaying(on: boolean): Promise<{ ok: true }>;
   setMediaT(tSec: number): Promise<{ ok: true }>;

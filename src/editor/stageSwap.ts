@@ -39,7 +39,7 @@ import { backStage, frontStage, onStageEvent, pushProject } from "./stageBridge"
 import { runBackJob } from "./stageJobs";
 import { currentCosts, currentPlan, currentTuning, sendPlanTo } from "./planDispatch";
 import { clipIdentityOf } from "./costIdentity";
-import { deliverSnapshots, markBaselineReset, setExtraSuppressed, suppressedAt } from "./snapshotFeed";
+import { deliverSnapshots, markBaselineReset, setExtraSuppressed, streamPlanesAt, suppressedAt } from "./snapshotFeed";
 import { onStageDemote } from "./demote";
 
 /** K5 (3)：等后台舞台的素材层画出一帧，最多等这么久（真墙钟），超时照样换 */
@@ -269,7 +269,7 @@ async function swapAndDress(sec: number, playing: boolean): Promise<StageRpcClie
     if (playing) {
       // 播放态互换：先把三个集合摆好，再 play(T)
       await next.setSuppressed(suppressedAt({ project, t: sec, playing: true }));
-      await next.setStreamPlanes([]);
+      await next.setStreamPlanes(streamPlanesAt({ project, t: sec, playing: true }));
       markBaselineReset("front");
       await deliverSnapshots(next, "front", { project, t: sec, playing: true });
       await next.setScrubbing(false);

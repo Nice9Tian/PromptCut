@@ -20,7 +20,7 @@ import { fitView, frameOrigin, panBy, wheelZoomFactor, zoomAt, type View2D } fro
 import "./preview/preview.css";
 import { atFrameGrid } from "../render/frameGrid";
 import { contentStartOf } from "./timeline/utils";
-import { deliverSnapshots, markBaselineReset, noteSettled, pendingDemotes, pickForSetTime, stopSnapshotFeed, suppressedAt, syncSnapshotSubscription } from "./snapshotFeed";
+import { deliverSnapshots, markBaselineReset, noteSettled, pendingDemotes, pickForSetTime, stopSnapshotFeed, streamPlanesAt, suppressedAt, syncSnapshotSubscription } from "./snapshotFeed";
 import { playingCatchUpTargets, runPlayingSwap, runSettleSwap, setSwapHost, swapInFlight } from "./stageSwap";
 import { demotedClips, onStageDemote } from "./demote";
 import { flushSync } from "react-dom";
@@ -383,6 +383,8 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
   dualRef.current = dual;
   /** 上一次发出去的抑制集合(拼成一条字符串比,省掉没变也发) */
   const suppressedRef = useRef("");
+  /** 上一次发出去的流平面(R8;同样拼成字符串比) */
+  const streamPlanesRef = useRef("[]");
   const pumpFeed = useCallback(async () => {
     if (!dualRef.current) return;
     const s = frontStage();
@@ -393,6 +395,13 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
     if (want !== suppressedRef.current) {
       suppressedRef.current = want;
       void s.setSuppressed(want ? want.split("|") : []).catch(() => {});
+    }
+    // R8:和抑制集合同一处发流平面(播放中贴流;暂停 / 拖动时清空,改贴快照)
+    const planes = streamPlanesAt(head);
+    const planesKey = JSON.stringify(planes);
+    if (planesKey !== streamPlanesRef.current) {
+      streamPlanesRef.current = planesKey;
+      void s.setStreamPlanes(planes).catch(() => {});
     }
     await deliverSnapshots(s, "front", head);
   }, []);

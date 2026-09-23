@@ -16,6 +16,8 @@ import { createHash } from 'node:crypto';
 import { isFullyTransparentPng } from './frame-validity.mjs';
 import { resolveFrameSize } from '../src/kernel/frameSize.mjs';
 import { anchorFrames } from '../src/render/snapshotPick.mjs';
+import { StreamProducer, STREAM_POOL_DEFAULT, STREAM_POOL_MAX } from './frame-stream.mjs';
+import { dirtyStreamLease } from './bakery/bake.mjs';
 
 const pad = n => String(n).padStart(6, '0');
 const exists = file => fs.access(file).then(() => true, () => false);
@@ -126,6 +128,11 @@ export class FramePipeline {
     // accumulate pages or force both hot Chromes to restart.
     this.userGeneration = 0;
     this.userGenerationController = null;
+    /**
+     * R8 的 `streamPool`(D5):轨道流自己的裸 bakery,**不经 `acquireUser`、不进 `laneChains`**,
+     * 和 legacy 的 `userPool` 热池不共用会话。数量由 `StreamProducer` 定(缺省 1,最多 2)。
+     */
+    this.streamSessions = [];
   }
   /**
    * 热池在预渲染进程里的名字(D5)。R8 的轨道流按分段借还它
@@ -133,9 +140,92 @@ export class FramePipeline {
    * 任何非 `bakeStream` 的调用跑完就置 `dirty`,下一次 `bakeStream` 见 `dirty`
    * 当租约断掉、付一次完整回放)—— 那两个方法是 R8 的,这里只留位。
    */
-  get streamPool() { return this.userPool; }
-  get streamPoolSize() { return this.userPoolSize; }
-  set streamPoolSize(value) { this.userPoolSize = value; }
+  get streamPool() { return this.streamSessions; }
+  get streamPoolSize() { return this._streams?.pool ?? STREAM_POOL_DEFAULT; }
+  set streamPoolSize(value) { if (this._streams) this._streams.pool = Math.max(1, Math.min(STREAM_POOL_MAX, Math.round(value) || 1)); }
+  /**
+   * 轨道流的生产者(R8 / G4)。**只在接交互的那个实例(预渲染进程,`interactive: true`)里有** ——
+   * 编辑器进程不产流;`streams` 开关关着(`PROMPTCUT_STREAMS=0`)时它在,但什么都不做。
+   */
+  streamProducer() {
+    if (!this.interactive || this.closed) return null;
+    return this._streams ||= new StreamProducer(this);
+  }
+  /**
+   * 借一个轨道流会话(G4「会话从哪来」)。空闲的先借;没有就新开一个裸 bakery
+   * (停在空项目页上,第一次 `bakeStream` 之前由生产者把隔离工程灌进来)。
+   * 同时开着的会话不超过 `STREAM_POOL_MAX`。
+   */
+  async leaseStreamBakery() {
+    for (;;) {
+      if (this.closed) throw Object.assign(new Error('Renderer closed'), { cancelled: true });
+      const free = this.streamSessions.find(s => !s.busy && !s.dead && s.bakery);
+      if (free) {
+        free.busy = true;
+        clearTimeout(free.idleTimer);
+        return free.bakery;
+      }
+      if (this.streamSessions.filter(s => !s.dead).length < STREAM_POOL_MAX) {
+        const session = { bakery: null, busy: true, dead: false, idleTimer: null };
+        this.streamSessions.push(session);
+        try {
+          session.bakery = await openBakery({ url: this.emptyUrl() });
+          session.bakery.streamLease = null;
+          return session.bakery;
+        } catch (error) {
+          session.dead = true;
+          const at = this.streamSessions.indexOf(session);
+          if (at >= 0) this.streamSessions.splice(at, 1);
+          throw error;
+        }
+      }
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+  }
+  /**
+   * 还回轨道流会话。`dirty`:借去做了别的(非 `bakeStream`)事 —— 租约作废(D5)。
+   * `dead`:会话坏了,关掉。空闲 60 秒的会话也关掉(预渲染进程自建池,不常驻热池)。
+   */
+  returnStreamBakery(bakery, { dirty = false, dead = false } = {}) {
+    const session = this.streamSessions.find(s => s.bakery === bakery);
+    if (!session) return;
+    if (dirty) dirtyStreamLease(bakery);
+    if (dead || this.closed) {
+      session.dead = true;
+      const at = this.streamSessions.indexOf(session);
+      if (at >= 0) this.streamSessions.splice(at, 1);
+      void bakery.close().catch(() => {});
+      return;
+    }
+    session.busy = false;
+    clearTimeout(session.idleTimer);
+    session.idleTimer = setTimeout(() => {
+      if (session.busy || session.dead) return;
+      session.dead = true;
+      const at = this.streamSessions.indexOf(session);
+      if (at >= 0) this.streamSessions.splice(at, 1);
+      void bakery.close().catch(() => {});
+    }, 60000);
+    session.idleTimer.unref?.();
+  }
+  /**
+   * 现在是不是「忙」(G0-b 结论 1:只在机器空闲时生产;用户拖动或播放时生产暂停让路)。
+   * 判据:legacy 播放热池在用 / 后台让路租约在期;镜像插件报的播放头「在播」且 5 秒内有过音讯
+   * (播放中页面按 100 ms 节流报 `wanted`,停下也会报一次);或者 800 ms 内刚动过(拖动)。
+   */
+  streamBusy(now = Date.now()) {
+    if (this.closed) return true;
+    if (this.playback?.playing) return true;
+    if (this.backgroundLeaseUntil > now) return true;
+    let head = null;
+    try { head = this.playhead(); } catch {}
+    const at = Number(head?.at);
+    if (Number.isFinite(at)) {
+      if (head.playing && now - at < 5000) return true;
+      if (now - at < 800) return true;
+    }
+    return false;
+  }
   /** 这个实例接不接页面的交互 / 播放 lane(D5 的 `interactive`) */
   laneRefused(lane) {
     if (this.interactive) return null;
@@ -153,7 +243,8 @@ export class FramePipeline {
   }
   /** 端到端探针的读口:超限帧(A3c)、`wanted` 的插队(C4)、预渲染集合(pinned 渲染 9) */
   diagnostics() {
-    return { oversize: this._snapshots?.oversize ?? [], promotions: this.promotions ?? [], plans: this.planDiagnostics() };
+    return { oversize: this._snapshots?.oversize ?? [], promotions: this.promotions ?? [], plans: this.planDiagnostics(),
+      streams: this._streams?.status() ?? null };
   }
   /**
    * 每个 entry 此刻的预渲染集合和它的 card plan 摘要 —— `ready-index-probe` 靠它
@@ -846,6 +937,9 @@ export class FramePipeline {
         entry.stage = 'required';
         // C2:**锚帧全部就绪前不开始其余后台预渲染**。
         await this.fillAnchorSnapshots(entry, bakery, controller.signal);
+        // R8 / G4:锚帧就绪之后轨道流开始生产。它有自己的会话(`streamPool`),不占这条 lane,
+        // 也不等它 —— 这里只是把这一版的流交给生产者
+        if (!controller.signal.aborted) void this.streamProducer()?.update(entry).catch(() => {});
         await this.fillCardControls(entry, bakery, controller.signal, cardPlan.filter(c => c.cacheable && c.needPrerendering));
         // C2 本地档那一趟:一趟整场景服务该帧上全部本地档卡(毛玻璃 / unknown)
         await this.renderLocalSnapshots(entry, await this.missingSnapshotFrames(entry, { tiers: ['local'] }), bakery, controller.signal);
@@ -919,7 +1013,7 @@ export class FramePipeline {
    * 补推把项目送回来、`adoptCardPlan` 重算出 card plan,再按
    * `control.clipId` ↔ `control.snapshotKey` 反查、一次 `reset` + 全量 `layer`。
    *
-   * (轨道流目录的分段清单是 R8 的,扫到再说 —— `kind: 'stream'` 在索引里已经留位。)
+   * 轨道流(R8)的清单 `<库根>/streams/<streamKey>/stream.json` 同样扫一遍、挂在键上(`kind: 'stream'`)。
    */
   async rescanSnapshots() {
     const store = this.snapshots();
@@ -946,6 +1040,7 @@ export class FramePipeline {
         found++;
       }
     }
+    try { found += (await this.streamProducer()?.rescan()) ?? 0; } catch {}
     return found;
   }
   /**
@@ -981,7 +1076,11 @@ export class FramePipeline {
       const key = wireSnapshotKey(tier, entry.key, control.snapshotKey);
       if (kind && key && control.clipId) layers.push({ clipId: control.clipId, kind, key });
     }
+    // R8:已经在生产者手里的流一并认领(F5 扫盘挂着的流键也在这里认)
+    for (const layer of this._streams?.claimLayers() ?? []) layers.push(layer);
     try { this.readyIndex.claim(layers, this.readyIndex.localRev); } catch {}
+    // 认领是「清表后全量重发」,组流的 `groupClipIds` 不在认领表里 —— 由生产者按清单补发一次
+    this._streams?.republish();
     return plan;
   }
   /** C3:把某一层此刻的全部就绪区间发出去(全量语义,`ready-index.mjs`)。 */
@@ -1502,6 +1601,8 @@ export class FramePipeline {
     for (const r of this.queue.splice(0)) r.reject(new Error('Renderer closed'));
     for (const generation of this.generations.values()) generation.controller.abort();
     await Promise.allSettled([this.foreground, this.background, ...this.laneChains.values()]);
+    await this._streams?.close();
+    await Promise.allSettled(this.streamSessions.splice(0).map(session => { clearTimeout(session.idleTimer); return session.bakery?.close(); }));
     await Promise.allSettled([...this.lanes.values()].map(session => { clearTimeout(session.timer); return session.bakery.close(); }));
     this.lanes.clear();
     await Promise.allSettled(this.userPool.map(session => session.bakery.close()));
