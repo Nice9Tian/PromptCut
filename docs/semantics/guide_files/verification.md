@@ -8,7 +8,7 @@
 |---|---|---|---|
 | 类型检查 | `npx tsc -b --force` | 零错误 | 每次 |
 | 全量测试 | `npm test` | 零失败 | 每次 |
-| 导出确定性 | `node scripts/verify-determinism.mjs` | 同一段导两遍，逐像素相同 | 改到渲染、导出、卡片 |
+| 导出确定性 | `node scripts/verify-determinism.mjs --url "http://127.0.0.1:5203/?export=1"` | 同一段导两遍，逐像素相同 | 改到渲染、导出、卡片 |
 | 导出与快照重放一致 | `node scripts/verify-unified-frames.mjs` | 整条通过 | 改到快照、预渲染、渲染 |
 | 画面 | 看图，或跑 `scripts/probes/` 下对应的探针（用法见各脚本文件头） | 画面正确、探针全过 | 改到用户看得见的画面 |
 
@@ -19,7 +19,7 @@
 
 ## 验证环境
 
-- 验证用 `.claude/launch.json` 的 `dev-test`（5203）。不用 5190（`npm run dev`），那台通常是用户在用的。
+- 验证用 `.claude/launch.json` 的 `dev-test`（5203）。不用 5190～5192：5190（`npm run dev`）通常是用户在用的，5191、5192 是它的舞台端口。
 - 每台 dev server 另占「端口 +1」「端口 +2」当舞台端口，三个连号都要空着。
 
 ## 会造成真实损失的操作
