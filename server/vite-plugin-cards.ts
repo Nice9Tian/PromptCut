@@ -1231,12 +1231,12 @@ export default function vitePluginCards(): Plugin {
        *
        * 用导出同一条渲染管线(server/bakery/)把单独这一个片段渲到指定那一帧,
        * 在页面里采出折叠过包装层的树,再用 source map 把每个节点的渲染位置换回源码行号。
-       * 自己留一个 bakery(闲 90 秒自动关),不占 vite-plugin-vision 的渲染池 —— 两边互不牵制。
+       * **借 agent lane 的那一个 bakery**(`FramePipeline.runAgentTask`,T1a 审查 #12):和 `see_frames` 的
+       * agent 批、`/api/cards/layout`、D3 的实体矩形排同一条队,同一时刻只有一个任务驱动那个页面;
+       * 空闲关闭也由 pipeline 统一管(cloud-task.md I1:一个 Chrome、空闲 10 分钟关)。
+       * 以前这里自己留一个 bakery、自己一条 `domChain`,会和在飞的 `see_frames` 各开一个 Chrome、互不排队。
        * 同一时刻的树缓存起来:模型「往下看」一个 ref 时不用重渲一遍。源码一改,缓存全清。
        */
-      let domBakery: any = null;
-      let domIdle: ReturnType<typeof setTimeout> | null = null;
-      let domChain: Promise<unknown> = Promise.resolve();
       const domTrees = new Map<string, { nodes: DomNode[]; header: string }>();
       const mapCache = new Map<string, number[][][] | null>();
       server.watcher?.on('change', () => { mapCache.clear(); domTrees.clear(); });
@@ -1264,38 +1264,40 @@ export default function vitePluginCards(): Plugin {
         res.setHeader('Content-Type', 'application/json');
         res.end(body);
       });
-      const renderDomTree = async (origin: string, isoProject: any, frame: number): Promise<DomNode[]> => {
+      /*
+       * 本进程的 FramePipeline(和 vite-plugin-frames 的 `/api/frames/*`、`/api/cards/layout` 同一个实例)。
+       * 惰性 import:单测把本文件单独转译到临时目录再 import,静态 import 兄弟 .ts 会解析失败。
+       */
+      const agentPipeline = async () => {
+        const { frameService } = await import('./vite-plugin-frames');
+        const port = (server.httpServer?.address() as any)?.port;
+        return frameService(server.config.root, `http://127.0.0.1:${port}`);
+      };
+      /** `lease`:`runAgentTask` 交进来的借 bakery 函数;bakery 的还和空闲关闭都归 pipeline */
+      const renderDomTree = async (origin: string, isoProject: any, frame: number, lease: (project: any, opts?: { asIs?: boolean }) => Promise<any>): Promise<DomNode[]> => {
         const pid = crypto.randomBytes(8).toString('hex');
-        domProjects.clear(); // 一次只渲一个(domChain 排队),上一份用不着了
+        domProjects.clear(); // 一次只渲一个(agent lane 排队),上一份用不着了
         domProjects.set(pid, JSON.stringify(isoProject));
         const url = `${origin}/?export=1&timeline=/@cards-dom/${pid}/project.json`;
         const mod = await import(pathToFileURL(path.join(server.config.root, 'server', 'bakery', 'index.mjs')).href);
-        if (domIdle) clearTimeout(domIdle);
+        // `asIs`:马上就 reset 到 DOM 页,不用先按项目重置一遍。`project` 必须是这里的对象
+        // (`acquire` 冷启动时读 `project.width`),不能从 `domProjects` 取字符串(cloud-task.md I1)。
+        const bakery = await lease(isoProject, { asIs: true });
+        await bakery.reset(null, url);
+        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-dom-'));
         try {
-          if (!domBakery) domBakery = await mod.openBakery({ url });
-          else await domBakery.reset(null, url);
-          const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-dom-'));
-          try {
-            await mod.bakeFrames(domBakery, { out: tmp, targetFrames: [frame], format: 'jpeg', quality: 40 });
-          } finally {
-            fs.rmSync(tmp, { recursive: true, force: true });
-          }
-          const nodes: DomNode[] = await domBakery.page.evaluate(EXTRACT_DOM);
-          for (const n of nodes) {
-            if (!n.site) continue;
-            const dec = await mapFor(n.site.path);
-            const o = dec ? originalPosition(dec, n.site.line, n.site.col) : null;
-            n.where = `${n.site.path.slice(1)}:${o ? o.line : `${n.site.line}(转换后行号)`}`;
-          }
-          return nodes;
-        } catch (e) {
-          try { await domBakery?.close(); } catch { /* ignore */ }
-          domBakery = null;
-          throw e;
+          await mod.bakeFrames(bakery, { out: tmp, targetFrames: [frame], format: 'jpeg', quality: 40 });
         } finally {
-          domIdle = setTimeout(() => { domBakery?.close().catch(() => {}); domBakery = null; }, 90_000);
-          domIdle.unref?.();
+          fs.rmSync(tmp, { recursive: true, force: true });
         }
+        const nodes: DomNode[] = await bakery.page.evaluate(EXTRACT_DOM);
+        for (const n of nodes) {
+          if (!n.site) continue;
+          const dec = await mapFor(n.site.path);
+          const o = dec ? originalPosition(dec, n.site.line, n.site.col) : null;
+          n.where = `${n.site.path.slice(1)}:${o ? o.line : `${n.site.line}(转换后行号)`}`;
+        }
+        return nodes;
       };
 
       server.middlewares.use('/api/cards/dom', (req, res) => {
@@ -1309,8 +1311,8 @@ export default function vitePluginCards(): Plugin {
         let body = '';
         req.on('data', (c) => { body += c; if (body.length > 32 * 1024 * 1024) req.destroy(); });
         req.on('end', () => {
-          // 一次只渲一个:共用一个 bakery,并发进来的排队
-          domChain = domChain.then(async () => {
+          // 一次只渲一个:借 agent lane 的 bakery,和 see_frames / layout 排同一条队(#12)
+          void agentPipeline().then(pipeline => pipeline.runAgentTask(async (lease: any) => {
             try {
               const { project, clipId, t, ref, depth } = JSON.parse(body || '{}');
               if (!project || typeof clipId !== 'string') return sendJson(res, 400, { ok: false, error: 'project 和 clipId 必填' });
@@ -1343,7 +1345,7 @@ export default function vitePluginCards(): Plugin {
               let entry = domTrees.get(key);
               const cached = !!entry;
               if (!entry) {
-                const nodes = await renderDomTree(`http://${req.headers.host}`, renderProject, renderFrame);
+                const nodes = await renderDomTree(`http://${req.headers.host}`, renderProject, renderFrame, lease);
                 entry = { nodes, header: `片段 ${clipId}(${clip.cardId ?? '素材'})第 ${frame} 帧(t=${(frame / fps).toFixed(3)}s,片内第 ${inClip} 帧),折叠包装层后 ${nodes.length} 个节点。` };
                 domTrees.set(key, entry);
                 if (domTrees.size > 20) domTrees.delete(domTrees.keys().next().value as string);
@@ -1362,7 +1364,10 @@ export default function vitePluginCards(): Plugin {
             } catch (e: any) {
               sendJson(res, 500, { ok: false, error: e?.message || String(e) });
             }
-          }).catch(() => {});
+          })).catch((e: any) => {
+            // 进不了队(比如这个进程没有 Agent lane)就如实回
+            sendJson(res, Number(e?.status) || 500, { ok: false, code: e?.code, retryable: e?.retryable, error: e?.message || String(e) });
+          });
         });
       });
 

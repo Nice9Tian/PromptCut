@@ -33,6 +33,8 @@ const USER_RENDER_TIMEOUT_MS = Math.max(1000, Number(process.env.PROMPTCUT_USER_
 // away: its page was closed or reloaded, and a reloaded default project gets a
 // new id. Its background pass must not keep the current project waiting.
 export const PRELOAD_STALE_MS = 8000;
+/** Agent lane 的 Chrome 空闲这么久就关,下次查询再拉起(cloud-task.md I1) */
+export const AGENT_IDLE_MS = 10 * 60 * 1000;
 
 const roundBox = b => ({ left: Math.round(b.left), top: Math.round(b.top), width: Math.round(b.width), height: Math.round(b.height) });
 
@@ -269,11 +271,49 @@ export class FramePipeline {
     }
     return false;
   }
-  /** 这个实例接不接页面的交互 / 播放 lane(D5 的 `interactive`) */
+  /**
+   * 这个实例接不接页面的交互 / 播放 lane(D5 的 `interactive`),以及 Agent lane。
+   *
+   * `interactive: false` 的实例(编辑器进程)**没有 Agent lane**:Agent 的查询(`see_frames` 的
+   * agent 批、`layout`、`entityRects`、`/api/cards/dom`)只在预渲染进程里跑
+   * (`docs/semantics/architecture/rendering.md`「查询渲染与预渲染进程」)。编辑器进程里
+   * 走到这里就回 `503 NO_AGENT_LANE`,不在编辑器这一侧开 Chrome。
+   */
   laneRefused(lane) {
     if (this.interactive) return null;
+    if (lane === 'agent') return Object.assign(new Error('这个进程没有 Agent lane:Agent 的查询只在预渲染进程里跑。'), { status: 503, code: 'NO_AGENT_LANE', retryable: true });
     if (lane !== 'user' && lane !== 'playback') return null;
     return Object.assign(new Error('交互帧请求请直接打预渲染进程。'), { status: 503, code: 'USE_PRERENDER' });
+  }
+  /**
+   * **Agent lane 的唯一入队口**(T1a 审查 #12)。`see_frames` 的 agent 批、`layout`、`entityRects`、
+   * `/api/cards/dom`(`vite-plugin-cards.ts`)都经它排进同一条链:每个任务「等前一个 → 借 bakery →
+   * 干活 → 还」,所以同一时刻至多一个任务在驱动 agent lane 的那一个页面,谁也绕不过谁。
+   *
+   * 以前 `layout` / `entityRects` 各自 `laneChains.get('agent')` 再 `set` 回去,`/api/cards/dom`
+   * 另有一条 `domChain` 和一个自己的 Chrome —— 后者和在飞的 `see_frames` 同时驱动页面是可能的。
+   *
+   * `work(lease)`:`lease(project)` 借 agent lane 的 bakery,按 `project` 重置同一个页面
+   * (一个任务里可以借多次,比如一批里有两个项目);`lease(project, { asIs: true })` 不重置、
+   * 原样交出(调用方马上自己 `reset`,省一次开页)。**借过才还,还由这里统一做**,调用方不调
+   * `release('agent')`。空闲关闭见 `release`。
+   */
+  runAgentTask(work) {
+    const refused = this.laneRefused('agent');
+    if (refused) return Promise.reject(refused);
+    const task = (this.laneChains.get('agent') || Promise.resolve()).catch(() => {}).then(async () => {
+      let leased = false;
+      const lease = async (project, { asIs = false } = {}) => {
+        leased = true;
+        const current = this.lanes.get('agent');
+        if (asIs && current) { clearTimeout(current.timer); return current.bakery; }
+        return this.acquire('agent', project);
+      };
+      try { return await work(lease); }
+      finally { if (leased) this.release('agent'); }
+    });
+    this.laneChains.set('agent', task.catch(() => {}));
+    return task;
   }
   /** C4:镜像插件里这一刻的 `wanted`(页面报的「播放头附近现在缺哪些层」) */
   playheadWanted() {
@@ -500,15 +540,21 @@ export class FramePipeline {
     session.busy = false;
     if (this.userPool.length > this.userPoolSize) this.dropUserSession(session);
   }
+  /**
+   * 还 lane 的 bakery,起空闲计时器。`background` 30 秒没人借就关;`agent` 10 分钟
+   * (`docs/plan/cloud-task.md` I1:一个 Chrome、按需拉起、空闲 10 分钟关 —— 以前 `/api/cards/dom`
+   * 自己那个 Chrome 闲 90 秒关,并进 agent lane 之后统一由这里管)。下一次 `acquire` 清掉计时器。
+   */
   release(lane) {
     const session = this.lanes.get(lane);
     if (!session) return;
-    if (lane === 'user' || lane === 'agent') return;
+    if (lane === 'user') return;
+    clearTimeout(session.timer);
     session.timer = setTimeout(() => {
       if (this.lanes.get(lane) !== session) return;
       this.lanes.delete(lane);
       void session.bakery.close().catch(() => {});
-    }, 30000);
+    }, lane === 'agent' ? AGENT_IDLE_MS : 30000);
     session.timer.unref?.();
   }
   /** Shared public entry point. Independent requests in the same turn merge into one forward pass. */
@@ -559,6 +605,10 @@ export class FramePipeline {
             const task = this.flush(laneRequests, currentLane);
             this.foreground = task;
             task.catch(() => {});
+          } else if (currentLane === 'agent') {
+            // #12:agent 批和 layout / entityRects / DOM 查询排同一条队,bakery 由 runAgentTask 借还
+            this.runAgentTask(lease => this.flush(laneRequests, currentLane, lease))
+              .catch(error => laneRequests.forEach(r => r.reject(error)));
           } else {
             const chain = (this.laneChains.get(currentLane) || Promise.resolve()).catch(() => {}).then(() => this.flush(laneRequests, currentLane));
             this.laneChains.set(currentLane, chain);
@@ -567,7 +617,8 @@ export class FramePipeline {
       }, 12);
     });
   }
-  async flush(requests, lane = 'agent') {
+  /** `lease`:agent 批由 `runAgentTask` 传进来的借 bakery 函数;其余 lane 不传,照旧自己 `acquire` */
+  async flush(requests, lane = 'agent', lease) {
     const groups = new Map();
     for (const request of requests) {
       if (request.signal?.aborted || (lane === 'user' && request.generation !== this.userGeneration)) {
@@ -583,7 +634,7 @@ export class FramePipeline {
       try {
         const result = await this.readFrames(entry, frames, lane, group.find(r => !r.signal?.aborted)?.signal, async (frame, value) => {
           for (const request of group) if (!request.signal?.aborted && request.frames.includes(frame)) await request.onFrame?.(frame, value);
-        });
+        }, lease);
         for (const request of group) {
           if (request.signal?.aborted || (lane === 'user' && request.generation !== this.userGeneration)) request.reject(Object.assign(new Error('交互帧请求已过期，已跳过旧请求。'), { status: 499, cancelled: true, superseded: true }));
           else request.resolve(new Map(request.frames.map(n => [n, result.get(n)])));
@@ -591,7 +642,7 @@ export class FramePipeline {
       } catch (e) { group.forEach(r => r.reject(e)); }
     }
   }
-  async readFrames(entry, frames, lane = 'agent', signal, onFrame) {
+  async readFrames(entry, frames, lane = 'agent', signal, onFrame, lease) {
     // D5:`interactive: false` 时这两条 lane 立即拒绝,不进 `acquireUser`
     const refused = this.laneRefused(lane);
     if (refused) throw refused;
@@ -626,9 +677,10 @@ export class FramePipeline {
       try { return await Promise.race([work, timeout, cancelled]); }
       finally { clearTimeout(timer); signal?.removeEventListener('abort', cancel); work.catch(() => {}); }
     }
-    return this.readFramesCore(entry, frames, lane, signal, undefined, onFrame);
+    return this.readFramesCore(entry, frames, lane, signal, undefined, onFrame, lease);
   }
-  async readFramesCore(entry, frames, lane = 'agent', signal, onSession, onFrame) {
+  /** `lease`:见 `flush`。传了就用它借 bakery、不自己还(`runAgentTask` 统一还) */
+  async readFramesCore(entry, frames, lane = 'agent', signal, onSession, onFrame, lease) {
     const result = new Map();
     const htmlFrames = [];
     const missing = [];
@@ -675,7 +727,7 @@ export class FramePipeline {
       if (!htmlFrames.length && !missing.length) return result;
     }
     const userSession = lane === 'user' || lane === 'playback' ? await this.acquireUser(entry.project, signal, onSession) : null;
-    const bakery = userSession?.bakery || await this.acquire(lane, entry.project);
+    const bakery = userSession?.bakery || await (lease ? lease(entry.project) : this.acquire(lane, entry.project));
     try {
       // The browser owns graph planning because it is the only place that can
       // prove a legacy Chrome card's capabilities.  Cache misses are supplied
@@ -729,7 +781,7 @@ export class FramePipeline {
       }
     } finally {
       if (userSession) this.releaseUser(userSession);
-      else this.release(lane);
+      else if (!lease) this.release(lane);
     }
     return result;
   }
@@ -1425,14 +1477,13 @@ export class FramePipeline {
    * 带 `data-pc-painted-box` 的 `<img>`,所以不用(也不能)读像素。`screenshot: false` 让这一趟
    * 不白付一张 1080p PNG。
    *
-   * agent 车道串行:和 `see_frames` 的 agent 队列排同一条链,免得两边抢同一个 Chrome。
+   * agent 车道串行:经 `runAgentTask` 和 `see_frames` 的 agent 批、`entityRects`、DOM 查询排同一条队(#12)。
    */
   async layout(project, options = {}) {
-    const chain = (this.laneChains.get('agent') || Promise.resolve()).catch(() => {}).then(() => this.layoutNow(project, options));
-    this.laneChains.set('agent', chain.catch(() => {}));
-    return chain;
+    return this.runAgentTask(lease => this.layoutNow(project, options, lease));
   }
-  async layoutNow(project, { t = 0, clipIds = null, signal } = {}) {
+  /** `lease` 缺省时自己 `acquire` / `release`;经 `layout` 进来时由 `runAgentTask` 借还 */
+  async layoutNow(project, { t = 0, clipIds = null, signal } = {}, lease = null) {
     const lane = 'agent';
     const entry = await this.entry(project);
     const fps = Number(entry.project.fps) > 0 ? entry.project.fps : 30;
@@ -1447,7 +1498,7 @@ export class FramePipeline {
       const { stage, clips } = layoutClips(entry.project, clipIds, [], at);
       return { stage, t: at, frame, clips, baked };
     }
-    const bakery = await this.acquire(lane, entry.project);
+    const bakery = await (lease ? lease(entry.project) : this.acquire(lane, entry.project));
     try {
       if (!entry.html?.has?.(frame)) {
         baked = true;
@@ -1468,7 +1519,7 @@ export class FramePipeline {
           return window.__pcSolid.rectsWithBounds(root, { pixels: 'none', ...(ids ? { clipIds: ids } : null) });
         }, cardIds.length ? cardIds : null),
       }) || [];
-    } finally { this.release(lane); }
+    } finally { if (!lease) this.release(lane); }
     const { stage, clips } = layoutClips(entry.project, clipIds, measured, at);
     return { stage, t: at, frame, clips, baked };
   }
@@ -1478,14 +1529,12 @@ export class FramePipeline {
    * 和 `layoutNow` 同一个道理:像素命中(MOV / PNG)答不了实体框,只看 `entry.html`。`see_frames`
    * 刚渲过的帧多半已经 `record` 进去了(MOV 那一趟边推边记快照),直接注回去量;没有的一次
    * `bakeFrames` 补齐(只生成快照、不产 PNG)。每帧只注一次快照、`screenshot: false`,不装素材。
-   * 走 agent 车道的同一条链。
+   * 经 `runAgentTask` 走 agent 车道的同一条队(#12)。
    */
   async entityRects(project, times, options = {}) {
-    const chain = (this.laneChains.get('agent') || Promise.resolve()).catch(() => {}).then(() => this.entityRectsNow(project, times, options));
-    this.laneChains.set('agent', chain.catch(() => {}));
-    return chain;
+    return this.runAgentTask(lease => this.entityRectsNow(project, times, options, lease));
   }
-  async entityRectsNow(project, times, { signal } = {}) {
+  async entityRectsNow(project, times, { signal } = {}, lease = null) {
     const lane = 'agent';
     const entry = await this.entry(project);
     const fps = Number(entry.project.fps) > 0 ? entry.project.fps : 30;
@@ -1493,7 +1542,7 @@ export class FramePipeline {
     const frames = [...new Set(times.map(t => Math.max(0, Math.min(max, Math.round((Number(t) || 0) * fps)))))].sort((a, b) => a - b);
     const out = new Map();
     if (!frames.length) return out;
-    const bakery = await this.acquire(lane, entry.project);
+    const bakery = await (lease ? lease(entry.project) : this.acquire(lane, entry.project));
     try {
       const missing = frames.filter(frame => !entry.html?.has?.(frame));
       if (missing.length) {
@@ -1512,7 +1561,7 @@ export class FramePipeline {
           ? (await captureSnapshot(bakery, html, undefined, { screenshot: false, afterFonts: measureEntityRects })) ?? null
           : null);
       }
-    } finally { this.release(lane); }
+    } finally { if (!lease) this.release(lane); }
     return out;
   }
   async prerender(entry, bakery, signal) {
