@@ -141,6 +141,8 @@ export function createGlHost(opts: {
   let workerFailed: string | null = null;
   let transport: Transport | null = null;
   let disposed = false;
+  /** `release` 的代数:补拍(见 PREPARE_RETRY_MS)只补释放之前那一拍的,释放之后不许它把图集又建回来 */
+  let releaseGen = 0;
 
   let seq = 0;
   let appliedSeq = 0;
@@ -394,7 +396,8 @@ export function createGlHost(opts: {
        * 所以这里自己隔一会儿补一拍,直到都画出来。播放中下一拍本来就会来,补的这一拍被合并掉。
        */
       if (!o.strict && Object.values(done.skipped ?? {}).includes("preparing")) {
-        realSetTimeout(() => { if (!inflight && !disposed) void beat({ t: o.t }); }, PREPARE_RETRY_MS);
+        const gen = releaseGen;
+        realSetTimeout(() => { if (!inflight && !disposed && gen === releaseGen) void beat({ t: o.t }); }, PREPARE_RETRY_MS);
       }
       if (done.error === "context-lost") dropTransport();
       const hardErrors = Object.entries(done.skipped ?? {}).filter(([, why]) => why !== "preparing");
@@ -455,6 +458,7 @@ export function createGlHost(opts: {
     beat,
     hasPlanes: () => planes().length > 0,
     release() {
+      releaseGen++;
       if (!transport) return;
       transport.send({ type: "release", stageId });
       stats.releases++;

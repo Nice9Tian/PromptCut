@@ -80,6 +80,40 @@ const browser = await puppeteer.launch({
     '--disable-gpu-vsync', '--disable-frame-rate-limit'],
 });
 
+
+/**
+ * 自己写 scene-3d 的成本记录(同 playback-probe 的做法):`heavy` = 判重、`vtOk`(K5 第一路追帧);否则判轻(播放中活渲)。
+ * 记录落在 dev server 的 out/card-costs.json 里、下一轮还在,所以每段开头都要按自己要的轻重重写一遍。
+ */
+const SET_COSTS = async ({ heavy }) => {
+  const { getState } = await import('/src/store/project.ts');
+  const { clipIdentityOf } = await import('/src/editor/costIdentity.ts');
+  const { setPlanCosts } = await import('/src/editor/planDispatch.ts');
+  const project = getState().project;
+  const { identityKeys } = clipIdentityOf(project);
+  const existing = (await (await fetch('/api/data/costs')).json())?.costs ?? [];
+  // 沿用 K1 常驻探针给**这几张卡**写下的那个 device(同一 device 才是覆盖;换一个只会多一条、真实测的那条还在)
+  const mine = new Set(Object.values(identityKeys));
+  const device = existing.find((r) => mine.has(r.identityKey))?.device ?? existing[0]?.device ?? 'gl-stage-probe';
+  const seen = new Set();
+  const records = [];
+  for (const tr of project.tracks) for (const clip of tr.clips) {
+    const key = identityKeys[clip.id];
+    if (clip.cardId !== 'scene-3d' || !key || seen.has(key)) continue;
+    seen.add(key);
+    records.push({ identityKey: key, device, mode: 'dev', fps: project.fps, stepMs: 1, stepMaxMs: 1, inlineMs: 1, rasterMs: 1, serializeMs: 1,
+      catchUpMs: heavy ? 10 : 0, kind: heavy ? 'stepped' : 'random', vtOk: true, seekOk: !heavy, seekMs: heavy ? null : 1, capped: heavy, demoted: false, measuredAt: Date.now() });
+  }
+  const put = await (await fetch('/api/data/costs', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ records }) })).json();
+  const after = await (await fetch('/api/data/costs')).json();
+  const tuning = after?.tuning ?? null;
+  // 整份 costs 一起给(只给这几条的话,常驻探针下一轮 GET 回来的那份会把它盖掉)
+  setPlanCosts(after?.costs ?? records, tuning);
+  await new Promise((r) => setTimeout(r, 100));
+  const stored = (after?.costs ?? []).filter((r) => mine.has(r.identityKey)).map((r) => ({ key: r.identityKey, device: r.device === device, capped: r.capped, kind: r.kind }));
+  return { n: records.length, put, stored };
+};
+
 /** 等这个舞台把 gl 平面都贴上位图(每个平面都有 data-pc-gl-frame 且等于包裹层的本地帧号) */
 const WAIT_PAINTED = async (n) => {
   // 舞台页的 setTimeout / performance.now 是虚拟时钟(暂停时不走),轮询一律用真的那份
@@ -237,7 +271,9 @@ try {
       for (let i = 0; i < n; i++) actions.addCardClip('scene-3d', 0, { duration: 6 });
       actions.editCardProject((p) => ({ ...p, glRoute: route }));
       const ids = getState().project.tracks.flatMap((t) => t.clips.filter((c) => c.cardId === 'scene-3d').map((c) => c.id));
-      ids.forEach((id, i) => actions.setClipParams(id, { shape: ['knot', 'cube', 'torus'][i % 3], spinY: 0.2 + i * 0.1 }, { merge: true }));
+      // 每轮换一个颜色:成本记录按 identityKey(含参数)落在 dev server 上、跨轮还在,换了参数就不会撞上上一轮写的
+      const salt = Math.floor(Math.random() * 0xffffff).toString(16).padStart(6, '0');
+      ids.forEach((id, i) => actions.setClipParams(id, { shape: ['knot', 'cube', 'torus'][i % 3], spinY: 0.2 + i * 0.1, color: '#' + salt }, { merge: true }));
       actions.seek(0.5);
       return ids;
     }, { n, route });
@@ -287,6 +323,7 @@ try {
     /* ---- 播放节拍 + Worker 睡 100 ms ---- */
     await build(3, 'perDocument');
     await waitProbeIdle();
+    result.cases.lightCosts = await page.evaluate(SET_COSTS, { heavy: false });
     const front = frameOf(await page.evaluate(() => window.__pcPreviewDiag?.().frontId));
     await front.evaluate(WAIT_PAINTED, 3);
     const recordPlay = async (ms) => {
@@ -298,20 +335,30 @@ try {
         }
       });
       await page.evaluate(async () => { const { actions } = await import('/src/store/project.ts'); actions.seek(0); actions.play(); });
-      await new Promise((r) => setTimeout(r, ms));
+      await new Promise((r) => setTimeout(r, ms / 2));
+      const mid = await page.evaluate(() => window.__pcPreviewDiag?.());
+      const midStage = await frameOf(mid?.frontId ?? 'A').evaluate(() => {
+        const d = window.__pcStageDiag();
+        const id = document.querySelector('[data-pc-gl-plane]')?.getAttribute('data-pc-gl-plane');
+        return { suppressed: d.suppressed, at: id ? window.__pcStagePipelineAt?.(id, d.t) : null, byClip: id ? window.__pcStagePlan?.()?.byClip?.get(id) ?? null : null };
+      });
+      await new Promise((r) => setTimeout(r, ms / 2));
       await page.evaluate(async () => { const { actions } = await import('/src/store/project.ts'); actions.pause(); });
       await new Promise((r) => setTimeout(r, 300));
       const frames = await page.evaluate(() => window.__glFrames);
       const secDiffs = frames.slice(1).map((f, i) => +(f.sec - frames[i].sec).toFixed(6));
       const gaps = frames.slice(1).map((f, i) => f.at - frames[i].at);
-      return { n: frames.length, badSec: secDiffs.filter((d) => Math.abs(d - 1 / 30) > 1e-6).length, gapMean: gaps.reduce((a, b) => a + b, 0) / Math.max(1, gaps.length), gapMin: Math.min(...gaps), gapMax: Math.max(...gaps) };
+      return { mid: { front: mid?.frontId, ...midStage }, n: frames.length, badSec: secDiffs.filter((d) => Math.abs(d - 1 / 30) > 1e-6).length, gapMean: gaps.reduce((a, b) => a + b, 0) / Math.max(1, gaps.length), gapMin: Math.min(...gaps), gapMax: Math.max(...gaps) };
     };
     const normal = await recordPlay(2000);
     const glNormal = await front.evaluate(() => window.__pcStageDiag().gl);
-    await front.evaluate(() => { window.__pcGlDebugSleepMs = 100; });
+    for (const id of ['A', 'B']) await frameOf(id).evaluate(() => { window.__pcGlDebugSleepMs = 100; });
+    const slowBefore = await front.evaluate(() => { const d = window.__pcStageDiag(); return { beats: d.gl.beats, suppressed: d.suppressed }; });
     const slow = await recordPlay(2000);
+    slow.glBeats = (await front.evaluate(() => window.__pcStageDiag().gl.beats)) - slowBefore.beats;
+    slow.suppressedBefore = slowBefore.suppressed;
     const stall = await page.evaluate(() => window.__pcPreviewDiag?.());
-    await front.evaluate(() => { window.__pcGlDebugSleepMs = 0; });
+    for (const id of ['A', 'B']) await frameOf(id).evaluate(() => { window.__pcGlDebugSleepMs = 0; });
     const rt = [...glNormal.roundTrips].sort((a, b) => a - b);
     result.cases.play = { normal, slow, stallCount: stall?.mediaStallCount, gapMax: stall?.mediaGapMaxMs,
       roundTrip: { p50: rt[Math.floor(rt.length / 2)], p90: rt[Math.floor(rt.length * 0.9)], max: rt[rt.length - 1], timeouts: glNormal.timeouts } };
@@ -320,58 +367,45 @@ try {
     check((stall?.mediaStallCount ?? 0) > 0, 'Worker 睡 100 ms:主文档判卡顿(40 ms 后暂停音频 / 素材)', stall);
 
     /* ---- 追帧(K5 第一路)---- */
-    const setCosts = await page.evaluate(async () => {
-      const { getState } = await import('/src/store/project.ts');
-      const { clipIdentityOf } = await import('/src/editor/costIdentity.ts');
-      const { setPlanCosts } = await import('/src/editor/planDispatch.ts');
-      const project = getState().project;
-      const { identityKeys } = clipIdentityOf(project);
-      const existing = (await (await fetch('/api/data/costs')).json())?.costs ?? [];
-      const device = existing[0]?.device ?? 'gl-stage-probe';
-      const seen = new Set();
-      const records = [];
-      for (const tr of project.tracks) for (const clip of tr.clips) {
-        const key = identityKeys[clip.id];
-        if (clip.cardId !== 'scene-3d' || !key || seen.has(key)) continue;
-        seen.add(key);
-        records.push({ identityKey: key, device, mode: 'dev', fps: project.fps, stepMs: 1, stepMaxMs: 1, inlineMs: 1, rasterMs: 1, serializeMs: 1,
-          catchUpMs: 10, kind: 'stepped', vtOk: true, seekOk: false, seekMs: null, capped: true, demoted: false, measuredAt: Date.now() });
-      }
-      await fetch('/api/data/costs', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ records }) });
-      const tuning = (await (await fetch('/api/data/costs')).json())?.tuning ?? null;
-      setPlanCosts(records, tuning);
-      await new Promise((r) => setTimeout(r, 100));
-      return records.length;
-    });
+    const setCosts = await page.evaluate(SET_COSTS, { heavy: true });
     const fstage = frameOf(await page.evaluate(() => window.__pcPreviewDiag?.().frontId));
     const catchup = await fstage.evaluate(async () => {
       const clipId = document.querySelector('[data-pc-gl-plane]').getAttribute('data-pc-gl-plane');
+      const sp = window.__pcStagePlan?.();
+      const planInfo = { at3: window.__pcStagePipelineAt?.(clipId, 3.0), vtOk: sp?.byClip?.get(clipId)?.vtOk ?? null, hasPlan: !!sp?.plan };
       const wrap = () => document.querySelector(`[data-pc-clip="${clipId}"]`);
       const beats0 = window.__pcStageDiag().gl.beats;
       let sawSettling = false;
+      let settlingBeats = null;
       const unset = [];
       const obs = new MutationObserver(() => {
         const w = wrap();
         if (!w) return;
-        if (w.classList.contains('pc-settling')) { sawSettling = true; return; }
+        if (w.classList.contains('pc-settling')) {
+          if (!sawSettling) settlingBeats = window.__pcStageDiag().gl.beats;
+          sawSettling = true;
+          return;
+        }
         if (sawSettling && !unset.length) {
           const plane = w.querySelector('[data-pc-gl-plane]');
           unset.push({ glFrame: plane?.getAttribute('data-pc-gl-frame'), localFrame: w.getAttribute('data-pc-local-frame'), beats: window.__pcStageDiag().gl.beats });
         }
       });
-      obs.observe(document.body, { subtree: true, attributes: true, attributeFilter: ['class'] });
+      obs.observe(document.body, { subtree: true, attributes: true, attributeFilter: ['class'], childList: true });
       await window.__pcStage.setTime(3.0, { settle: true });
       const now = window.__pcRealNow, later = (ms) => new Promise((r) => window.__pcRealSetTimeout(r, ms));
       const t0 = now();
       while (!unset.length && now() - t0 < 10000) await later(20);
       obs.disconnect();
-      return { clipId, sawSettling, unset: unset[0] ?? null, beats0, beatsEnd: window.__pcStageDiag().gl.beats };
+      return { clipId, planInfo, sawSettling, settlingBeats, unset: unset[0] ?? null, beats0, beatsEnd: window.__pcStageDiag().gl.beats };
     });
     result.cases.catchup = { setCosts, ...catchup };
     check(catchup.sawSettling, '追帧:判重、vtOk 的 canvas 卡进了 .pc-settling(K5 第一路)', catchup);
     check(!!catchup.unset && catchup.unset.glFrame === catchup.unset.localFrame, '追帧:摘 .pc-settling 的那一刻平面上已是目标帧的位图(gl-frame = 本地帧号)', catchup.unset);
     // setTime 自己一拍 + 追上那一拍;中间步(3 秒 × 30 帧 = 90 步)一拍都不发
-    check(catchup.unset && catchup.unset.beats - catchup.beats0 <= 2, '追帧中间步不发 beat(整个过程 ≤ 2 拍:setTime 那一拍 + 追上那一拍)', catchup);
+    // 从进 .pc-settling 到摘掉:只有追上那一拍(3 秒 × 30 帧 = 90 步的中间步一拍都不发)
+    // 进 .pc-settling 之后:setTime 自己落定那一拍(卡被 .pc-settling 藏着,画的是挂载帧)+ 追上那一拍;90 个中间步一拍不发
+    check(catchup.unset && catchup.settlingBeats !== null && catchup.unset.beats - catchup.settlingBeats <= 2, '追帧中间步不发 beat(进 .pc-settling 到摘掉之间 ≤ 2 拍:setTime 那一拍 + 追上那一拍)', catchup);
     result.cases.editorErrors = errors;
     await page.close();
   }
