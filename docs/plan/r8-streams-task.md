@@ -1,6 +1,6 @@
 # R8 任务书：轨道流（H.264 上下拼合 alpha，挂 `streams` 开关）
 
-这份文件是 `docs/archive/restructure_planning/render_pipeline_restructure.md` 第 5 节 R8 一步的**协议全文**，自成一体：动工的人读 `docs/archive/user_pinned_goal.md`、`docs/archive/restructure_planning/render_pipeline_restructure.md`（总览、实测数据、步骤依赖）、`docs/archive/restructure_planning/r2-r7-task.md`（R8 依赖的 E、K、C、D 各节）和这一份就够，不需要再翻 `AGY-TASK-cloud-doc-and-write-race.md`。
+这份文件是 `docs/archive/restructure_planning/render_pipeline_restructure.md` 第 5 节 R8 一步的**协议全文**，自成一体：动工的人读 `docs/semantics/architecture/rendering.md`（现行语义；原出处 `docs/archive/user_pinned_goal.md` 已归档）、`docs/archive/restructure_planning/render_pipeline_restructure.md`（总览、实测数据、步骤依赖）、`docs/archive/restructure_planning/r2-r7-task.md`（R8 依赖的 E、K、C、D 各节）和这一份就够，不需要再翻 `AGY-TASK-cloud-doc-and-write-race.md`。
 
 **怎么来的**（2026-09-22）：正文取自任务书第 111 版的目标 G，逐条折进了四样东西——第 75 轮第 5 份分步审查里已采纳的处理意见（4 条阻塞 + 7 条非阻塞，原文在 `docs/archive/restructure_planning/r75/agy-r75-05.md`，逐条结论在 `docs/archive/restructure_planning/r75/fold-notes.md`）、Opus-A 的 G0-a 桌面壳探针结论（`docs/archive/restructure_planning/g0-a-webview2-probe.md`）、`docs/archive/restructure_planning/render_pipeline_restructure.md` 第 3.5 / 3.8 节的更正、以及 2026-09-22 和用户定下的几条（判重只看活渲耗时 `stepMs`、生成快照改名、粒子卡不迁 Worker、长粒子片段交给轨道流）。
 
@@ -20,7 +20,7 @@
 
 | | |
 |---|---|
-| **做什么** | 给预渲染集合里的卡产「轨道流」：每张（或每组）重卡一条 H.264 流，上半 RGB、下半 alpha 灰度，裁到实体框，按 15 帧切成 fMP4 分段；页面侧自写解封装、`VideoDecoder` 硬解、WebGL 拆两半合成，贴在 `Stage` 渲的兄弟平面上。这是 pinned 渲染 10 的**播放态形态**（暂停和拖动态是 HTML 快照，见 `docs/archive/restructure_planning/r2-r7-task.md` 的 A3a / C4）。 |
+| **做什么** | 给预渲染集合里的卡产「轨道流」：每张（或每组）重卡一条 H.264 流，上半 RGB、下半 alpha 灰度，裁到实体框，按 15 帧切成 fMP4 分段；页面侧自写解封装、`VideoDecoder` 硬解、WebGL 拆两半合成，贴在 `Stage` 渲的兄弟平面上。这是 `docs/semantics/architecture/rendering.md`「重管线：预渲染」里的**播放态形态**（暂停和拖动态是 HTML 快照，见 `docs/archive/restructure_planning/r2-r7-task.md` 的 A3a / C4）。 |
 | **先做什么** | G0-b 编码原型（另一个 worktree 在跑）。**原型没定稿不动工**：解码器预算、`streamPool`、各编码器参数、裁剪矩形取法、`streams` 默认值都等它。 |
 | **依赖哪几步** | R5（K3～K6：抑制、追帧、角色互换、降级）；R6（C2～C5：就绪索引与 SSE、`wanted` 优先级、`FramePipeline` 的 `streamPool`）。R2～R4 是它们的前置。 |
 | **读哪几节** | 本文 G0～G7；`docs/archive/restructure_planning/r2-r7-task.md` 的 E7 第 5 条（`suppressed` / `streamPlanes` 与兄弟平面）、K5（播放中贴流、暂停后追到活渲）、C3（就绪索引与 SSE）、C4（缺分段时贴最近快照）、D5（预渲染进程自建池、编辑器进程不留热池）、F5（重启后重建索引、租约作废）。 |
@@ -53,7 +53,7 @@
 
 ### G0-b 结论（2026-09-22，全文见 `docs/plan/g0-b-stream-prototype.md`）
 
-1. **`streams` 默认开，生产限速（用户 2026-09-22 定；原型原本建议第一版默认关）。** 播放侧很便宜（6 条 1080p 流同时解各 72 fps，硬件解码、不占主线程），慢的是生产：1080p 全幅卡空闲时页面侧每帧出图 30.46 ms（30 fps 的一拍 33.3 ms），两个分段编码器并存时 68.9 ms——录 1 秒画面要 1～2 秒。但生产是后台提前做的、做好的流按键复用，受影响的只是「刚打开项目 / 刚改完一张重卡、流还没录好」那一段，那段时间这张卡播放中贴最近快照。关着的话长粒子背景播放时永远不动，正是要解决的问题，所以默认开，并把生产管住：(a) **只在机器空闲时生产、同时只跑一条**（`streamPool = 1`，最多 2，按实测自适应）；用户拖动或播放时生产暂停让路；(b) 裁剪矩形用实测实体框的并集（G1）；(c) **先稀疏后补密**：先按 `stride = 3` 把整段快速铺满（截图次数少三分之二，画面最多滞后 2 帧），再用满密度分段替换；(d) **流没录好的那段时间界面上要有提示**（这张卡上一个小的「预渲染中」标记，否则用户会以为卡坏了）——样式属于交互设计（pinned 交互 1～3），R8 动工时另定，本文只要求有这个状态可供界面读取（就绪索引里该片段的 `'stream'` 表为空或未覆盖当前播放头）。解码器预算 N = 6 确认。
+1. **`streams` 默认开，生产限速（用户 2026-09-22 定；原型原本建议第一版默认关）。** 播放侧很便宜（6 条 1080p 流同时解各 72 fps，硬件解码、不占主线程），慢的是生产：1080p 全幅卡空闲时页面侧每帧出图 30.46 ms（30 fps 的一拍 33.3 ms），两个分段编码器并存时 68.9 ms——录 1 秒画面要 1～2 秒。但生产是后台提前做的、做好的流按键复用，受影响的只是「刚打开项目 / 刚改完一张重卡、流还没录好」那一段，那段时间这张卡播放中贴最近快照。关着的话长粒子背景播放时永远不动，正是要解决的问题，所以默认开，并把生产管住：(a) **只在机器空闲时生产、同时只跑一条**（`streamPool = 1`，最多 2，按实测自适应）；用户拖动或播放时生产暂停让路；(b) 裁剪矩形用实测实体框的并集（G1）；(c) **先稀疏后补密**：先按 `stride = 3` 把整段快速铺满（截图次数少三分之二，画面最多滞后 2 帧），再用满密度分段替换；(d) **流没录好的那段时间界面上要有提示**（这张卡上一个小的「预渲染中」标记，否则用户会以为卡坏了）——样式属于交互设计（语义文件里还没有，只在已归档的 `docs/archive/user_pinned_goal.md` 交互 1～3），R8 动工时另定，本文只要求有这个状态可供界面读取（就绪索引里该片段的 `'stream'` 表为空或未覆盖当前播放头）。解码器预算 N = 6 确认。
 2. **`out_range=pc` 在 Chrome 上不生效，必须用 `tv`。** 全范围数据会被当成限定范围再展开一次（`decoded = clamp((a − 16) × 255 / 219)`），alpha 平均误差 8.4 / 255，和 CRF 无关，着色器里补救不了（两头已被钳掉）；改 `out_range=tv` + `-color_range tv` 后 0.06。`out_color_matrix=bt709` 和容器的色彩标注改不改逐位相同，留着无害。
 3. **预乘色要配着色器里的钳位**（G5）；**单个解码器同时持有 ≤ 8 帧**（G5）。
 4. **缺省编码器 `libx264`**（`-preset veryfast -crf 16` + 严格 GOP 参数）：本机唯一实测全过，耗时、体积、profile 三项都最好。探测顺序 `h264_nvenc → h264_qsv → h264_amf → libx264 → h264_mf`；**`probeEncoders()` 必须真的编一小段再判定**——本机四个硬件编码器都是「`ffmpeg -encoders` 里列着但跑不了」。`h264_mf`（MediaFoundation）可作最后兜底，但只收 `nv12`（像素格式要按编码器分列）、只出 Constrained Baseline、慢一倍。nvenc / qsv / amf 的参数行本机没跑成，是照第 75 轮意见原样保留的，不是实测结论。
@@ -78,7 +78,7 @@
 
 **抑制与开关是两件事。** 抑制由该位置的实时判定决定（`H(位置)`，不是预渲染集合——集合里的卡在判轻的位置活渲、不抑制），**与 `streams` 开关无关**：照 `docs/archive/restructure_planning/r2-r7-task.md` 的 E7 第 5 条，挂着不卸载，包裹层加 `.pc-suppressed` 藏子树、`t` 冻住；流的 `<canvas>` 是该卡包裹层里的兄弟平面；`suppressed` / `streamPlanes` / `snapshots` 只发给 `front`，`back` 永远全活渲（K5）。`streams` 开关只决定有没有流平面，关着时重卡贴 C4 的最近快照或透明。
 
-**哪些卡不进流。** 毛玻璃卡（`belowDependent`）不进流——它要采样下层，截出来的流和下层对不上；抑制照 K5 走：判重时照常 `.pc-suppressed`，贴 C4 从 `controls-local` 选出的最近快照，没有就透明。`unknown` 卡（审阅表没覆盖到的卡——用户定制卡、带部件的组合卡片段在真实项目里都是它）**一律按 `belowDependent` 处理**（`docs/archive/restructure_planning/r2-r7-task.md` 的「组件与术语」一节），同样不上云、不进流。
+**哪些卡不进流。** 毛玻璃卡（`belowDependent`）不进流——它要采样下层，截出来的流和下层对不上；抑制照 K5 走：判重时照常 `.pc-suppressed`，贴 C4 从 `controls-local` 选出的最近快照，没有就透明。`unknown` 卡（审阅表没覆盖到的卡——用户定制卡、带部件的组合卡片段在真实项目里都是它）**一律按 `belowDependent` 处理**（`docs/archive/restructure_planning/r2-r7-task.md` 的「组件与术语」一节），同样不进流；它的快照照样推送到素材服务，只是排在低优先级（`cloud-task.md` 的 A3b）。
 
 **粒子卡。** 粒子卡（tsParticles，2D canvas + 主线程库；R9 里是 `dom2d` 契约，不迁进 Worker）的稳定活渲成本只有 1.4～3.8 ms，多数位置判轻、活渲；**长的粒子片段（超过约 8 秒，按 K2 的追帧上界判重）交给轨道流**，和别的重卡同一条路。被抑制的粒子卡照 E7 第 5 条藏子树、`t` 冻住，`<canvas>` 的像素在抑制期间不变。
 
@@ -176,7 +176,7 @@
 - **帧率制：上限 60 fps。** 项目 `fps` 提供 24 / 25 / 30 / 60 四档，在项目选项面板里切换；`identityKey` 含 fps，所以全部 `costs` 和全部死素材（含轨道流）同时作废，流按新 fps 重新预渲染。分段的 `-video_track_timescale` 和 `-framerate` 都跟项目 fps。整条约束的全文见 `docs/archive/restructure_planning/r2-r7-task.md` 的「约束」第 1 条。
 - **编辑器进程（Node 侧）不再有无头 Chrome 热池；轨道流的池由预渲染进程自建**（`streamPool`，D5）。页面侧的热渲染是可见舞台 iframe，两者不是一回事。
 - **渲染永远在「看图的那一方」旁边。** 轨道流只在有本机进程的宿主上产（`user` / `full` 模式的预渲染进程）；在线浏览器模式没有 ffmpeg、没有流，按拍换快照（L4）。`agent` 模式的进程不产流。
-- **像素缓存不上云**：PNG / MOV / 轨道流都只在本机，云端只有 HTML 快照块（A3b）。
+- **预渲染产物一律入库**：轨道流的 init / 分段和 PNG / MOV 生成后都推送到素材服务，素材服务在本机时也一样（`docs/semantics/architecture/asset-storage.md`「预渲染的产物」）。推送和清单由 `cloud-task.md` 的 A3b（第 6 步）实现，本任务只保证产物按内容哈希可取；`streamKey` 的命名在本任务定，A3b 回头对齐。
 - 不改导出像素基线：`bakeStream` 是 `bakeFrames` 之外的新入口，`bakeFrames` 的行为一字不改；`FrameScene` 的 `placeholder` 分支不动。
 
 ## 验收
@@ -207,7 +207,7 @@
 - `streamPlayer` 用 `insertBefore` 往包裹层塞 canvas（由 `Stage` 按 `streamPlanes` 渲）。
 - 给**有流分段的**被抑制的卡投快照（`streams` 关着、这一拍缺分段、在线浏览器模式时照投）。
 - 不在预渲染集合里的卡产流；播放中为等分段停住播放头（缺就透明）。
-- 像素缓存（PNG / MOV / 轨道流）上云。
+- 实现轨道流的推送与清单（归 `cloud-task.md` 的 A3b）。
 - 在线浏览器模式做流（L4 的按拍换快照是那个模式的唯一例外）。
 - 把粒子卡迁进 Worker（它是 `dom2d`，长片段交给轨道流；见 R9 的 M5）。
 - 卸载被抑制的卡，或在包裹层上 `display:none`（照实体模式：藏子树、留兄弟平面）。

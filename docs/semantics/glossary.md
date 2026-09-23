@@ -25,13 +25,16 @@
 |---|---|---|
 | 编辑界面 | 用户看和操作的地方 | `architecture.md` |
 | 文档服务 | 项目文档的唯一修改入口 | `architecture.md`、architecture/document-service.md |
-| 素材存储 | 按内容哈希存字节的仓库 | `architecture.md`、architecture/asset-storage.md |
+| 素材服务 | 字节的唯一读写入口，按内容哈希寻址，位置无关；取代旧名「素材存储」「素材云」 | `architecture.md`、architecture/asset-storage.md |
 | 成片渲染 | 把项目渲染成给人看的画面 | `architecture.md`、architecture/rendering.md |
 | 查询渲染 | 按 Agent 指定的时刻渲染画面，供 Agent 观察 | `architecture.md`、architecture/rendering.md |
-| 本地模式、云端模式 | 文档服务在本机或在云端；本地模式不经过素材存储 | architecture/document-service.md |
+| 本地文档服务、远程文档服务 | 按所连文档服务的位置区分：跑在本机的，和部署在局域网其它机器或公网云端的 | architecture/document-service.md |
+| 本地素材服务、远程素材服务 | 按所连素材服务的位置区分，同上；与文档服务的位置可任意组合。这两组词取代旧词「本地模式」「云端模式」 | architecture/document-service.md、architecture/asset-storage.md |
+| 连接发现 | 预留接口：由文档服务交换设备之间的地址映射，帮它们直连；文档服务不承担素材传输流量 | architecture/document-service.md |
+| 桌面运行环境 | 带预渲染进程的桌面应用（或本机 dev server）所在的运行环境，和「在线浏览器模式」对举；可以连本地或远程的服务 | architecture/platforms.md |
 | 在线浏览器模式 | 只有页面、没有本机进程的运行形态 | architecture/platforms.md |
 | 低内存档 | 平板、手机等内存受限设备的运行档位 | architecture/platforms.md |
-| 本地内容库 | 每台设备上按哈希存素材字节的目录 | architecture/asset-storage.md |
+| 本地内容库 | 素材服务在某台设备上按哈希存字节的存储或缓存，不是绕过素材服务的直读通道 | architecture/asset-storage.md |
 | 小版、原片 | 同一素材的两档：800×600 以内的 H.264，和保持原编码的原文件 | architecture/asset-storage.md |
 
 ## 项目数据

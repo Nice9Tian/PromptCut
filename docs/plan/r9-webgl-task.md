@@ -1,6 +1,6 @@
 # R9 任务书：canvas 卡的共享 WebGL 渲染器
 
-这份文件是 `docs/archive/restructure_planning/render_pipeline_restructure.md` 第 5 节 R9 一步的**协议全文**，自成一体：动工的人读 `docs/archive/user_pinned_goal.md`（渲染 10 是这一步的出处）、`docs/archive/restructure_planning/render_pipeline_restructure.md`（总览、3.6 的更正、步骤依赖）、`docs/archive/restructure_planning/r2-r7-task.md`（R9 依赖的 E、K 各节）和这一份就够，不需要再翻 `AGY-TASK-cloud-doc-and-write-race.md`。
+这份文件是 `docs/archive/restructure_planning/render_pipeline_restructure.md` 第 5 节 R9 一步的**协议全文**，自成一体：动工的人读 `docs/semantics/architecture/rendering.md` 的「canvas 卡的共享 WebGL 渲染器」（现行语义；原出处是已归档的 `docs/archive/user_pinned_goal.md` 渲染 10）、`docs/archive/restructure_planning/render_pipeline_restructure.md`（总览、3.6 的更正、步骤依赖）、`docs/archive/restructure_planning/r2-r7-task.md`（R9 依赖的 E、K 各节）和这一份就够，不需要再翻 `AGY-TASK-cloud-doc-and-write-race.md`。
 
 **怎么来的**（2026-09-22）：正文取自任务书第 111 版的目标 M，逐条折进了三样东西——第 75 轮第 6 份分步审查里已采纳的处理意见（8 条阻塞 + 1 条非阻塞 + manager 补的 3 条前置接口不符，原文在 `docs/archive/restructure_planning/r75/agy-r75-06.md`，逐条结论在 `docs/archive/restructure_planning/r75/fold-notes.md`）、`docs/archive/restructure_planning/render_pipeline_restructure.md` 第 3.6 / 3.8 / 3.9 节的更正、以及 2026-09-22 和用户定下的几条（判重只看活渲耗时 `stepMs`、生成快照改名拆文件、画布位图换 webp 搁置、粒子卡不迁进 Worker）。
 
@@ -20,7 +20,7 @@
 
 | | |
 |---|---|
-| **做什么** | **舞台只开一个 WebGL 上下文，放在 Worker 的 OffscreenCanvas 里**，canvas 卡不再自己拿上下文。每张卡自带 GLSL、各编各的 program、纹理只上传一次；每拍收 `t` 画进一张图集，按卡裁成位图交回各自的 `<canvas>`，回 `done` 主线程才推进一拍。本地模式和在线浏览器模式一样，不依赖预渲染进程；预渲染进程产死素材时加载的也是导出页，走同一套。 |
+| **做什么** | **舞台只开一个 WebGL 上下文，放在 Worker 的 OffscreenCanvas 里**，canvas 卡不再自己拿上下文。每张卡自带 GLSL、各编各的 program、纹理只上传一次；每拍收 `t` 画进一张图集，按卡裁成位图交回各自的 `<canvas>`，回 `done` 主线程才推进一拍。桌面运行环境和在线浏览器模式一样，不依赖预渲染进程；预渲染进程产死素材时加载的也是导出页，走同一套。 |
 | **为什么要做** | 今天 5 张 canvas 卡各自拿上下文：`particles`（2D canvas，`particles.tsx:235` 把 `transferControlToOffscreen` 短路成真画布）、`scene-3d`（`scene-3d.tsx:152` 自建 `THREE.WebGLRenderer`、开了 `preserveDrawingBuffer`）和三张 runtime 用户卡 `logo-3d-9tian` / `route-globe-wa-3d` / `rpk-3d-showcase`（都是 three.js）。每张一个 WebGL 上下文，发指令的 JS 全在舞台主线程；Chrome 一页最多约 16 个活的上下文，多了丢最早的（`webglcontextlost`）。 |
 | **先做什么** | `gl-atlas-probe.mjs`。第一件事先验「MSAA FBO → `blitFramebuffer` → `createImageBitmap`」两条路线都成立，再量 20 张卡每拍 `createImageBitmap` + transfer 的主线程耗时。不达标就走 M3 末尾的退路。 |
 | **依赖哪几步** | R3（E7 的兄弟平面与四条类选择器）、R5（K3 的跳转、K4 的节拍、K5 的追帧与角色互换）。 |
@@ -37,7 +37,7 @@
 
 - **可序列化的那一半收进 `CardDef` 的一个独立字段** `canvas?: { kind: 'gl' | 'three' | '2d' | 'dom2d'; programId?: string; textures?: Array<{ name: string; mediaId?: string; url?: string }> }`。**不用顶层 `kind`**——H1 已给 `CardDef` 加了 `kind?: 'animation' | … | 'audio'`，同名不同值在 `strict` 下编不过。有 `canvas` 字段的卡就是 canvas 卡（`canvasHeavy` 只在探针到达前当兜底）。
 - **函数那一半放独立模块** `<卡文件同目录>/<id>.gl.ts`，**不 import React、不碰 DOM**，导出 `program`。类型定义在 `CanvasCardProgram.ts`。
-- **注册表** `programs.ts`：`import.meta.glob('../../cards/**/*.gl.ts', { eager: true })`，按 `programId` 取。Worker 是**模块 Worker**（`new Worker(new URL('./glWorker.ts', import.meta.url), { type: 'module' })`），import 这张表；M2 的主线程退路 import 同一张表。用户卡的 `.gl.ts` 在本地模式由 vite 照常服务；在线浏览器模式只有内置卡（那个模式根本加载不了用户卡）。
+- **注册表** `programs.ts`：`import.meta.glob('../../cards/**/*.gl.ts', { eager: true })`，按 `programId` 取。Worker 是**模块 Worker**（`new Worker(new URL('./glWorker.ts', import.meta.url), { type: 'module' })`），import 这张表；M2 的主线程退路 import 同一张表。用户卡的 `.gl.ts` 在桌面运行环境由 vite 照常服务；在线浏览器模式只有内置卡（那个模式根本加载不了用户卡）。
 
 **三种进 Worker 的契约**：
 
@@ -61,7 +61,7 @@
 
 **Worker 的创建放在两个宿主共用的模块** `glHost.ts`：`createGlHost(sceneRoot)`，**`StageView` 和 `ExportView` 挂载时都调它**——预渲染进程加载的是导出页（`frame-pipeline.mjs:160` / `:229` 的 `?export=1`），不建就没有 Worker、gl 平面永远是空的。
 
-**两条路线同时实现**（pinned 渲染 10 末句）。项目选项 `glRoute: 'perDocument' | 'shared'`（字段加在 `project.ts:260` 的 `Project` 接口上；默认值、切换后重建 `glHost` 并重走 K1 的 `ProbeGate` 遮罩，见「约束」第 1 条）。桌面默认 `perDocument`、低内存档默认 `shared`。**两条只在 `glHost` 的建法上不同，M1 契约、M3 协议、M4 探针一字不改。**
+**两条路线同时实现**（`rendering.md`「canvas 卡的共享 WebGL 渲染器」）。项目选项 `glRoute: 'perDocument' | 'shared'`（字段加在 `project.ts:260` 的 `Project` 接口上；默认值、切换后重建 `glHost` 并重走 K1 的 `ProbeGate` 遮罩，见「约束」第 1 条）。桌面默认 `perDocument`、低内存档默认 `shared`。**两条只在 `glHost` 的建法上不同，M1 契约、M3 协议、M4 探针一字不改。**
 
 - **路线 1 `perDocument`**：`front` / `back` / 导出页各持一个 Worker、一个上下文；`back` 的探针和补跑用它自己的。
 - **路线 2 `shared`**：父页（编辑器文档）`new Worker` 一次、持唯一的上下文和图集，`new MessageChannel()` 两次，把 `port1` 分别 `postMessage(port, [port])` 转进 `front` 和 `back`（`MessagePort` 可跨源转移，E1 的两个 iframe 是跨源的），两个舞台的 `glHost` 用拿到的端口而不是自己的 Worker 收发同一套 `beat` / `done` / `measure` / `release` 消息。GL 线程落在编辑器进程里（独立线程，不碰主线程），舞台的进程隔离对它不成立，这是路线 2 的代价；**导出页在预渲染进程里没有父页，永远走路线 1**。
@@ -148,7 +148,7 @@ canvas 卡都按 `t` 求值、都是 `vtOk: true`；K5 第一路对它就是追�
 
 ### M6 uber-shader 是可选优化，不做
 
-pinned 渲染 10 说的不是这个基础方案。留一个 `fragmentOnly: true` 的声明位给将来合并纯片元卡，本任务不实现。
+`rendering.md` 的共享 WebGL 渲染器说的不是这个基础方案。留一个 `fragmentOnly: true` 的声明位给将来合并纯片元卡，本任务不实现。
 
 ### M7 把像素映射的上下文并进来
 

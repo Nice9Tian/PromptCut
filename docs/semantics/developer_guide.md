@@ -24,7 +24,7 @@
 | 编辑界面（`src/editor/`） | `user-workflow.md`、`workflow/editing.md` |
 | Agent 与工具（`src/ai/`、`src/mcp/`、`server/tools/`、`server/runners/`、`server/harness/`） | `architecture/agent.md`、`workflow/production.md` |
 | 素材导入、感知类工具（`server/vite-plugin-media.ts` 等、`python/`） | `workflow/materials.md`、`architecture/asset-storage.md` |
-| 文档服务、云端、协作 | `architecture/document-service.md`、`architecture/asset-storage.md` |
+| 文档服务、素材服务、云端、协作 | `architecture/document-service.md`、`architecture/asset-storage.md` |
 | 桌面壳、平台差异（`desktop/`） | `architecture/platforms.md` |
 | 产品方向或架构本身 | `product-purpose.md`、`architecture.md` |
 | 遇到不认识的术语 | `glossary.md`，只查那一条 |

@@ -8,14 +8,17 @@
 |---|---|---|
 | 轨道流：重卡在播放时贴的 alpha 视频流 | `docs/plan/r8-streams-task.md`；编码原型报告 `docs/plan/g0-b-stream-prototype.md` | 未开始，编码原型已做完 |
 | 共享 WebGL 渲染器：canvas 卡共用一个 WebGL 上下文 | `docs/plan/r9-webgl-task.md` | 未开始 |
-| 云端：素材上云、文档服务、改动竞态、Agent 的查询进程、在线浏览器模式 | `docs/plan/cloud-task.md`，文末有 6 个动工前要定的问题 | 未开始 |
+| 素材服务与文档服务（本地或远程，可任意组合部署）、产物入库、改动竞态、Agent 的查询进程、在线浏览器模式 | `docs/plan/cloud-task.md`；动工前的问题已定，见文末「已定的决议」。2026-09-24 按路线 B 改写，尚未独立审查 | 未开始 |
 | 音频整体改成浏览器端 JS | `docs/plan/audio_structure_plan.md`（A0～A7）；判重测试计划 `docs/plan/audio_determine_plan.md` | 计划已写，未动工 |
 | 以后再做：桌面版给只有原片的云端素材补转小版；导出页装虚拟定时器 | `docs/plan/future_planning.md` | 暂缓 |
+
+**路线 B**（2026-09-24 用户定）：素材服务是字节的唯一读写出口，素材服务在本机时也经它，Agent 进程和预渲染进程同样只走它的 HTTP API；预渲染产物（HTML 快照、PNG、MOV、轨道流）生成后一律推送到素材服务；两个服务部署不设限、可任意组合，素材服务允许局域网跨源访问，文档服务预留连接发现 / 信令接口；第 5 步只建素材服务空壳与底层 API 契约，A1 的其余部分、A5、A3b 在第 6 步；`uploaded` 字段废除，同步状态只问素材服务；原第 8 步移交 R 系列。
 
 ## 已做步骤的遗留
 
 - **R0**：仓库根 dev server 的冷启动量测没做。（`scripts/verify-unified-frames.mjs` 已整条通过；快照重放和整帧导出的残差查到只剩三处快照这一侧修不了的，见 `docs/archive/restructure_planning/reports/replay-mismatch-report.md` §12、§13。）
 - **R7b 没做成的**：`stageSwap`、`snapshotFeed`、`demote` 和节拍循环没有单测；只预渲染重卡集合那一条只停了快照、没停 PNG；R7b 报告第 4 节的 8 条更正没折回 `docs/archive/restructure_planning/r2-r7-task.md`。
+- **see_frames 回包附实体矩形**：原云端计划第 8 步，协议在 `docs/archive/restructure_planning/r2-r7-task.md` 的 D3，归 R 系列，可与云端计划并行推进。
 - **待用户定**：播放停顿期间要不要加音频看门狗，让音频立刻停。试验的实测结论见 `docs/branch_review_report.md` 的 probe/audio-watchdog 一节。
 
 各步的详细状态见 `docs/archive/restructure_planning/hand_off.md`；独立复核的结论见 `docs/archive/restructure_planning/hunman_read.md`。
@@ -27,7 +30,7 @@
 - **工作方式**：去掉对话式布局；SKILL 改为桌面 APP 经 MCP 直接接入同一个项目（现在是把项目快照进独立任务目录、由无头实例改副本、最后三方合并）；关闭编辑界面转为托盘和悬浮窗后台运行。
 - **Agent**：三档创造力等级（项目默认、对话可改）；主 Agent 拉起子 Agent 并附加角色，现有的分工模式归档；Agent 用 JS 自定义测量；看或改用户正在编辑的内容时返回「用户正在编辑」。
 - **文档服务**：还不存在，项目的真身现在在页面里；Agent 的写操作现在经页面执行，没有经文档服务；覆盖通知覆盖方和被覆盖方都要知道。
-- **素材存储**：还不存在；两档素材的字段只是占位；预渲染的产物要能上云，供无渲染能力的设备查看。旧计划里「像素缓存不上云」的规则以 `docs/semantics/architecture.md` 为准作废。
+- **素材服务**：还不存在；桌面运行环境现在直读本机素材目录，没有经服务接口；两档素材的字段只是占位；预渲染产物还没有入库，只留在本机。
 - **查询渲染**：Agent 专用渲染实例的优先通道、AI 栏操作预览的插队只有雏形。
 - **在线浏览器模式**：还不存在。
 - **Agent 系统提示词**：`server/ai-system-prompt.md` 说总时长不跟着内容走，和代码、语义都不符，要改。
