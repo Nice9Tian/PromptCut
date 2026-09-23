@@ -149,7 +149,7 @@ chrome-headless-shell 152、1920×1080,每项 120 帧、预热 10 帧,单位 ms/
 - 做什么:ffmpeg 按现有取帧规则(`fps=round=up`)边解码边供帧(不先全部落盘),页面槽位按帧号取图;帧就绪条件并入现有的 `__pcFrameReady`。
 - 产出:`export-frames --media img`。
 - 预计:2~3 天。
-- 完成的标志:60 秒测试项目上和现在的导出逐帧对账,均差量级和阶段 6 一致(1~2/255);墙钟时间记进本文。对账方法照 `docs/compare-pitfalls.md`。
+- 完成的标志:60 秒测试项目上和现在的导出逐帧对账,均差量级和阶段 6 一致(1~2/255);墙钟时间记进本文。对账方法照 `docs/guides/compare-pitfalls.md`。
 
 ### 3. see_frames 换同一个页面
 - 做什么:看第 t 秒 = 导出页只截那几帧,素材帧同样由 ffmpeg 抽好喂进去。

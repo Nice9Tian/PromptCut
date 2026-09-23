@@ -56,7 +56,7 @@ node scripts/export-frames.mjs --url "http://127.0.0.1:5197/?export=1" --frames 
 | `archive/export-frames-virtual-time.mjs` | 旧后端,只留作对账 |
 | `diaglog.py <报告> overview\|anomalies\|pages\|page N\|show I\|find RE\|env\|split` | 读「对话诊断」报告(一两 MB 的单个 JSON):总表、异常归类、按页读、拆成小文件;也能 `from diaglog import load` 当对象用。`py -3` 跑,用法见文件头 |
 
-**做逐帧对账之前先读 [`docs/compare-pitfalls.md`](../docs/compare-pitfalls.md)。** 里面记着「画面看着一样,程序却说不一样」的几种成因:预热截图错位、样式写法、属性顺序、浮点末位、WAAPI 和 JS 两条动画路径的差别、被钉住的时钟、纯 DOM 环境的坑、实验服务器改写全局端口文件。
+**做逐帧对账之前先读 [`docs/guides/compare-pitfalls.md`](../docs/guides/compare-pitfalls.md)。** 里面记着「画面看着一样,程序却说不一样」的几种成因:预热截图错位、样式写法、属性顺序、浮点末位、WAAPI 和 JS 两条动画路径的差别、被钉住的时钟、纯 DOM 环境的坑、实验服务器改写全局端口文件。
 
 ## 确定性模型(beginFrame 后端)
 
@@ -80,3 +80,44 @@ node scripts/export-frames.mjs --url "http://127.0.0.1:5197/?export=1" --frames 
 | 分片 1 / 4 / 8 个进程 | 54.8s / 44.8s / 62.4s,三者两两 1800/1800 相同 —— 推进省不掉、多个软件光栅化进程互抢 CPU |
 | `--dom-cache` 300 帧 | 冻结约 +56 ms/帧,带粒子 / 三维画布时约 333 KB/帧(画布存成 PNG);乱序 vs 顺序重放 300/300 相同 |
 | 重放 vs 实时截图 | 不是逐字节相同(边缘有细小残差,旋转元素最明显),所以同一次交付只走一条路 |
+
+## 测法
+
+各种手动测法先记在这里。哪一种做成了一条命令能跑的脚本，就把对应的这段换成那条命令。验证的规则在 `docs/semantics/agent/verification.md`，按症状排障在 `docs/guides/troubleshooting.md`。
+
+### 编辑器的地址参数
+
+- `?editor`：直接进编辑器，不停在开始页。
+- `?open=<.proc 的绝对路径>`：先复制一份再打开，和双击文件同一条路。
+- `?nosetup=1`：不弹首次 AI 设置对话框。
+
+### 导出端到端
+
+- 在命令行里起一台 dev server，把 `PROMPTCUT_EXPORT_DIR` 设成 scratch 下的一个目录，测试产物不会落进用户的导出目录。
+- 测试项目放在 `<导出目录>/export-<id>/project.json`，页面里的地址是 `/@export/<id>/project.json`。
+- 跑 `node scripts/export-frames.mjs --url "http://127.0.0.1:<端口>/?export=1&timeline=/@export/<id>/project.json" --frames a-b --no-video`，可以和 `verify-determinism.mjs` 并行。测音频时 `--out` 必须就是 `export-<id>` 目录，Chrome 混音页从 `/@export/<id>/audio/` 取裁好的音频。
+- 要用真实素材，可以在导出目录里建一个 `media` junction 指向用户的素材目录（默认 `%USERPROFILE%\Videos\PromptCut\media`）。删目录前先拆掉它，做法见 `docs/semantics/agent/verification.md`。
+- 驱动编辑器页面时，用同一个 URL 动态引入（如 `await import('/src/store/project.ts')`），拿到的就是页面正在用的那份模块。`window.__pcPreviewAudio()` 返回接进 Web Audio 的元素数。
+
+### 长时间真跑审查环路
+
+- 一趟要 20～35 分钟，编辑器页面要一直连着 `/api/mcp/events`。不要用 Claude 桌面版的内置浏览器面板承载编辑器，面板隐藏时页面被重载过。
+- 起一台 dev server，用 puppeteer 无头打开 `/?editor`，轮询 `/api/mcp/status` 直到 `editorConnected` 为真，再发 `/api/ai/chat`（`provider: 'api'`、`reviewLoop: true`）。测试素材放 `.pc-work/<id>/`，页面里的地址是 `/@pcwork/<id>/<文件>`。
+- 现在的无头实例（`scripts/headless.mjs`）在 SKILL 关着时拒绝一切工具，不能拿它测普通对话。
+- 一趟完整运行约消耗 600 万输入 token。
+
+### 不用真模型测 AI 栏卡顿
+
+- 在 `evaluateOnNewDocument` 里替换 `window.fetch`：`/api/ai/providers` 回一个可用的 provider，`/api/ai/chat` 回一个按节奏吐 SSE 的流。
+- 先设 `localStorage.aiViewMode = 'verbose'`，否则回复原文不进 DOM。
+- 用 PerformanceObserver 的 longtask 加 50 ms 定时器的漂移量主线程。灌完项目先等 3 秒没有长任务再发。
+
+### 壳内 Agent 浏览器
+
+Agent 的浏览器是桌面壳主窗口里的子 webview，靠 WebView2 的远程调试端口让 puppeteer 连上。测它不用打包：
+
+1. 设 `PROMPTCUT_AGENT_CDP=9333`，把仓库的 vite 起在 5210。壳探到 5210 上已有 PromptCut 就不再起自己的 sidecar。
+2. 同样设 `PROMPTCUT_AGENT_CDP=9333`，再设 `PROMPTCUT_RUNTIME_DIR=desktop/src-tauri/runtime`，启动 `desktop/src-tauri/target/debug/promptcut.exe`。
+3. `http://127.0.0.1:9333/json/list` 里出现 `about:blank#promptcut-agent` 就连通了。用 puppeteer 的 `connect({ browserURL })` 驱动编辑器页面，再 `POST 5210/api/mcp/call` 调 `web_handoff` 看效果。
+
+壳启动后窗口可能是最小化的，要还原窗口才截得到图。测完关掉 debug exe。

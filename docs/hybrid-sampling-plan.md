@@ -36,7 +36,7 @@
   1. 把导出切成 JS 动画模式。已测它本身是确定的:2 张卡 × 2 遍,90/90 逐字节相同。这样导出、预览、纯算法三方共用同一条动画路径。
   2. 换一个更接近浏览器语义的无渲染运行环境,比如 Lightpanda,不用 happy-dom;或者把「环境分叉」的检测纳入每张卡的审计。
   3. 去掉每张卡 4 秒多的 SSR 变换启动,排空环节也不要再靠 `setTimeout(0)` 轮询。
-- 这一轮踩过的比对陷阱都记在 [`compare-pitfalls.md`](compare-pitfalls.md)。
+- 这一轮踩过的比对陷阱都记在 [`compare-pitfalls.md`](guides/compare-pitfalls.md)。
 
 ---
 

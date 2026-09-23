@@ -5,7 +5,7 @@ C1(挂载算式统一)和 H7 的验收口径是一句话:**不含 Python 卡的�
 
 口径是 sha256 逐字节,不是「看着一样」。只有在**已经不同**的帧上才再算一次像素差 ——
 那一步只用来区分「抗锯齿末位差几个像素」和「真的画错了」,两种都不通过。
-方法学上的坑见 `docs/compare-pitfalls.md`(预热错帧、样式写法、浮点末位、WAAPI 与 JS 两条动画路径)。
+方法学上的坑见 `docs/guides/compare-pitfalls.md`(预热错帧、样式写法、浮点末位、WAAPI 与 JS 两条动画路径)。
 
 ## 0. 前置:两棵树、两台 dev server、一份素材
 
@@ -30,7 +30,7 @@ cp pc-baseline-fixture.mp4 <scratch>/pc-head/out/media/
 
 两台服务器。**端口避开用户的 5190(编辑台)和 5197(dev-test)**;
 `TEMP` 指到 scratch,别让实验服务器覆盖全局的 `%TEMP%\promptcut\port.json`
-(`docs/compare-pitfalls.md` 第 8 条):
+(`docs/guides/compare-pitfalls.md` 第 8 条):
 
 ```bash
 cd <scratch>/pc-head && TEMP=<scratch>/tmp-head TMP=<scratch>/tmp-head npx vite --port 5215 --strictPort --host 127.0.0.1
@@ -121,7 +121,7 @@ node scripts/probes/export-baseline-compare.mjs \
 ```
 
 「像素差几个、最大通道差 1~2」是抗锯齿末位那一类;
-「像素差几十万、最大通道差 200 以上」是错帧或真的画错了 —— 先按 `docs/compare-pitfalls.md`
+「像素差几十万、最大通道差 200 以上」是错帧或真的画错了 —— 先按 `docs/guides/compare-pitfalls.md`
 第一条规矩,把那一帧拼成「A | B | 差异 ×8」看一眼再下结论。
 
 ## 5. 2026-09-17 的一次实跑
