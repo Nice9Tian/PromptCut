@@ -19,13 +19,15 @@ const isInside = (file, dir) => {
 
 /**
  * 素材在 ffmpeg 那边从哪儿读。页面是按 m.url 去 fetch 的,这里按同一个地址找:
- *   /@export/<id>/media/<文件> → <out>/media/<文件>(导出时浏览器上传的素材);
- *   /@media/<文件>、或 path 字段 → 素材目录里的文件(素材库);
- *   都不在本机就和页面一样走 HTTP 找 dev server 要(两处都支持 Range,ffmpeg 能 seek)。
- * 和 vite-plugin-vision 的 mediaFileOf 同一道边界:磁盘路径只认落在素材目录 / 产物目录里的,
- * HTTP 只认页面同源的 —— project.json 是浏览器发来的,不能让它指使 ffmpeg 读任意文件。
+ *   /@export/<id>/media/<文件> → <out>/media/<文件>(导出时浏览器上传的素材,落在这一趟导出自己的产物目录);
+ *   其余一律和页面一样走 HTTP,找页面的源要(/@media/<hash>、/api/media/file?path=… 都支持 Range,ffmpeg 能 seek)。
+ * 页面的源在编辑器拉起的预渲染进程里就是预渲染进程,它把 /@media/*、/api/media/* 原样转给素材服务
+ * (vite.prerender.config.ts 的 mediaRoutes);单独跑的脚本从 dev server 加载页面,那里的 /@media 就是素材服务本身。
+ * 所以这里**不读本地内容库的目录**,也不认 m.path(docs/semantics/architecture/asset-storage.md「职责」:
+ * 预渲染进程只经素材服务的接口读素材)。磁盘路径的白名单由素材服务那一侧守;
+ * 这里 HTTP 只认页面同源的 —— project.json 是浏览器发来的,不能让它指使 ffmpeg 去读任意地址。
  */
-export function mediaSourceOf(m, { outDir, pageUrl, mediaRoot }) {
+export function mediaSourceOf(m, { outDir, pageUrl }) {
   const url = String(m?.url || '');
   if (!url || /^(blob|data):/i.test(url)) return null;
   const exportMedia = path.resolve(outDir, 'media');
@@ -33,16 +35,6 @@ export function mediaSourceOf(m, { outDir, pageUrl, mediaRoot }) {
   if (url.startsWith('/@export/') && marker !== -1) {
     const f = path.join(exportMedia, decodeURIComponent(url.slice(marker + '/media/'.length).split('?')[0]));
     if (isInside(f, exportMedia) && fsSync.existsSync(f)) return f;
-  }
-  if (m.path) {
-    const f = path.resolve(String(m.path));
-    const roots = [mediaRoot, ...legacyMediaRoots()];
-    if (roots.some((root) => isInside(f, root)) && fsSync.existsSync(f)) return f;
-  }
-  if (url.startsWith('/@media/')) {
-    const f = path.join(mediaRoot, decodeURIComponent(url.slice('/@media/'.length).split('?')[0]));
-    const roots = [mediaRoot, ...legacyMediaRoots()];
-    if (roots.some((root) => isInside(f, root)) && fsSync.existsSync(f)) return f;
   }
   try {
     const u = new URL(url, pageUrl);
@@ -73,17 +65,6 @@ function probeVisual(ffprobeCmd, src) {
   } catch {
     return null;
   }
-}
-
-/** 素材库目录(/@media/<文件> 落在这里)。画面层和音轨都按它找素材 */
-const mediaRootDir = () => path.resolve(process.env.PROMPTCUT_EXPORT_DIR || path.resolve('out'), 'media');
-// Older .proc files keep absolute paths in %USERPROFILE%/Videos/PromptCut/media.
-// Keep ffmpeg's lookup in sync with the browser media endpoint so legacy
-// projects render the same footage they show in the editor.
-function legacyMediaRoots() {
-  const roots = [path.join(process.env.USERPROFILE || process.env.HOME || '', 'Videos', 'PromptCut', 'media')];
-  if (process.env.PROMPTCUT_MEDIA_DIR) roots.push(path.resolve(process.env.PROMPTCUT_MEDIA_DIR));
-  return roots.filter(Boolean);
 }
 
 /** 页面拿的是哪份项目,ffmpeg 就用哪份:按导出页地址里的 timeline 去取;取不到再看 <out>/project.json */
@@ -119,11 +100,10 @@ async function planMedia(opts, outDir, ffmpegCmd) {
   if (!project) return null;
   const all = composeLayers(project);
   if (!all.length) return { project, layers: [], glassFrames: new Set() };
-  const mediaRoot = mediaRootDir();
   const ffprobeCmd = ffprobeOf(ffmpegCmd);
   const probed = new Map();
   const layers = all.map((l) => {
-    let src = mediaSourceOf(l.media, { outDir, pageUrl: url, mediaRoot });
+    let src = mediaSourceOf(l.media, { outDir, pageUrl: url });
     let info = null;
     if (src) {
       if (!probed.has(src)) probed.set(src, probeVisual(ffprobeCmd, src));
@@ -161,4 +141,4 @@ async function fillGlassGaps(dir, startFrame, endFrame, width, height) {
   await Promise.all(writes);
 }
 
-export { mediaRootDir, loadProject, planMedia, fillGlassGaps };
+export { loadProject, planMedia, fillGlassGaps };
