@@ -28,6 +28,7 @@ import { beginFrameWork } from "../../kernel/frameReady";
 import type { GlBeatCard, GlFromWorker, GlLayoutCard, GlToWorker, GlWorkerDiag } from "./CanvasCardProgram";
 import { glPlanes, type GlPlaneEntry } from "./planes";
 import type { GlRenderer } from "./renderer";
+import { spawnGlWorker } from "./spawnWorker";
 
 export type GlRoute = "perDocument" | "shared";
 
@@ -121,7 +122,13 @@ export function glOffscreenForcedOff(): boolean {
   }
 }
 
-export function createGlHost(opts: { stageId: string; lowMemory: boolean; route: GlRoute }): GlHost {
+export function createGlHost(opts: {
+  stageId: string;
+  lowMemory: boolean;
+  route: GlRoute;
+  /** 不开 Worker,一律走主线程那条(导出页现在用它,见 `ExportView.tsx` 的说明) */
+  mainThread?: boolean;
+}): GlHost {
   const stageId = opts.stageId;
   let route: GlRoute = opts.route;
   let role: "front" | "back" = "front";
@@ -151,7 +158,7 @@ export function createGlHost(opts: { stageId: string; lowMemory: boolean; route:
   /* ---------------------------------------------------------------- 接哪条路 */
 
   const desired = (): TransportKind | "waiting-port" => {
-    if (workerFailed || glOffscreenForcedOff()) return "main";
+    if (opts.mainThread || workerFailed || glOffscreenForcedOff()) return "main";
     if (route === "shared" && !portWaitTimedOut) {
       if (offeredPort) return "port";
       if (offeredPort === undefined) return "waiting-port";
@@ -197,7 +204,7 @@ export function createGlHost(opts: { stageId: string; lowMemory: boolean; route:
   const openWorker = (): Transport => {
     let worker: Worker;
     try {
-      worker = new Worker(new URL("./glWorker.ts", import.meta.url), { type: "module" });
+      worker = spawnGlWorker();
     } catch (e) {
       workerFailed = e instanceof Error ? e.message : String(e);
       return openMain();

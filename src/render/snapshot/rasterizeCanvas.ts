@@ -40,6 +40,18 @@ export function rasterizeCanvas(
     const from = orig[i];
     if (from.tagName !== "CANVAS") continue;
     const canvas = from as HTMLCanvasElement;
+    /*
+     * gl 平面(R9 M4):位图来自共享渲染器、`bitmaprenderer` 上下文,`toDataURL` 总能读出 ——
+     * **可空画布照样成功**(下面 `src.length > 22` 也拦不住)。所以按帧号核对:`glHost` 每次贴上位图
+     * 写 `data-pc-gl-frame`,和包裹层的 `data-pc-local-frame` 同一个算式;没有、或对不上,
+     * 就是这一帧的位图还没贴上(或贴的是别的帧),记 `lossy`,`bake.mjs` 的 `if (lossy) throw` 才拦得住空图。
+     * 直接比字符串,不需要 fps。
+     */
+    if (canvas.hasAttribute("data-pc-gl-plane")) {
+      const got = canvas.getAttribute("data-pc-gl-frame");
+      const want = canvas.closest("[data-pc-local-frame]")?.getAttribute("data-pc-local-frame");
+      if (got === null || want == null || got !== want) { lossy++; continue; }
+    }
     let src: string | null = null;
     try {
       src = canvas.toDataURL("image/png");
