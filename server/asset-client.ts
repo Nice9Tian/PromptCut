@@ -73,8 +73,9 @@ export function mediaHttpUrl(m: any, origin: string | null = assetServiceOrigin(
   const raw = String(m?.url || m?.path || "");
   if (!raw || /^(blob|data):/i.test(raw)) return null;
   let base = raw.split("?")[0].split(/[/\\]/).pop() || "";
+  // 解码之后再切一次:`a%2F..%2Fx` 按斜杠切不开,解码完才露出斜杠
   try { base = decodeURIComponent(base); } catch { /* 原样 */ }
-  base = base.replace(/\.\./g, "");
+  base = (base.split(/[/\\]/).pop() || "").replace(/\.\./g, "");
   if (!base) return null;
   return `${origin}/@media/${encodeURIComponent(base)}`;
 }

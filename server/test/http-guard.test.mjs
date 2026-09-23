@@ -89,3 +89,16 @@ test("jsonContentType:只认 application/json,带 charset 也算", () => {
   assert.equal(jsonContentType(req("multipart/form-data; boundary=x")), false);
   assert.equal(jsonContentType(req(undefined)), false);
 });
+
+test("isAssetServicePath:只认素材服务那几种路径,判的是归一化之后的形式", async () => {
+  const { isAssetServicePath } = await import("../http-guard.mjs");
+  const h = "0f".repeat(32);
+  for (const ok of [`/api/asset/media/${h}`, `/api/asset/media/${h}/chunks`, `/api/asset/media/${h}/complete`,
+    `/api/asset/media/${h}/12`, `/API/Asset/media/${h.toUpperCase()}/0?x=1`, `//api//asset/media/${h}/chunks`]) {
+    assert.equal(isAssetServicePath(ok), true, ok);
+  }
+  for (const no of ["/api/asset/", `/api/asset/media/${h}/`, `/api/asset/media/${h}/chunks/1`, `/api/asset/media/${h}/../x`,
+    `/api/asset/media/${h.slice(1)}`, `/api/media/upload/${h}`, `/@media/${h}`, `/api/asset/media/${h}/12345678901`]) {
+    assert.equal(isAssetServicePath(no), false, no);
+  }
+});

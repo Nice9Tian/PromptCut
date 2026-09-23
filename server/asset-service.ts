@@ -75,7 +75,7 @@ import type { Connect } from "vite";
 import type { IncomingMessage, ServerResponse } from "http";
 import path from "path";
 import fs from "fs/promises";
-import type { FileHandle } from "fs/promises";
+import { createReadStream, createWriteStream } from "fs";
 import crypto from "crypto";
 import { Transform } from "stream";
 import { pipeline } from "stream/promises";
@@ -181,6 +181,13 @@ function sendJson(res: ServerResponse, status: number, body: unknown) {
 
 /** 回完错误再掐断:请求体还在路上,别让它继续往服务端灌(和 http-guard.mjs 的 overLimit 同一个理由) */
 function reject(req: IncomingMessage, res: ServerResponse, status: number, body: unknown) {
+  // 声明了长度、且不超过一片的请求体:读完扔掉再回,客户端能干净地收到这个 4xx(不然它还在发、
+  // 我们先掐了连接,它看到的只是 ECONNRESET)。长度不明或超过一片的才直接掐。
+  const declared = Number(req.headers["content-length"]);
+  if (Number.isSafeInteger(declared) && declared >= 0 && declared <= ASSET_CHUNK_SIZE && !req.readableEnded) {
+    void drain(req).then(() => sendJson(res, status, body));
+    return;
+  }
   res.setHeader("Connection", "close");
   sendJson(res, status, body);
   res.once("finish", () => req.destroy());
@@ -247,18 +254,13 @@ async function handlePutChunk(req: IncomingMessage, res: ServerResponse, root: s
       cb(null, chunk.length > room ? chunk.subarray(0, room) : chunk);
     },
   });
-  let handle: FileHandle | null = null;
   try {
-    handle = await fs.open(path.join(dir, "data"), "r+");
-    await pipeline(req, counter, handle.createWriteStream({ start: n * ASSET_CHUNK_SIZE, autoClose: false }));
+    // r+:原位写,不截断别的片已经写进去的字节。pipeline 等到文件句柄关掉才返回
+    await pipeline(req, counter, createWriteStream(path.join(dir, "data"), { flags: "r+", start: n * ASSET_CHUNK_SIZE }));
   } catch (err) {
-    await handle?.close().catch(() => {});
-    handle = null;
     // 断线:对面已经不在了,回什么都收不到;这一片的标记没补,对账时报「没收到」
     if (!res.headersSent && !res.destroyed) sendJson(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
     return;
-  } finally {
-    await handle?.close().catch(() => {});
   }
   if (bytes !== expected) return sendJson(res, 400, { ok: false, error: "chunk-length", expected, got: bytes });
   // 标记落在暂存目录里;这期间要是被收尾丢弃了(409),目录不在,标记也就不写
@@ -281,12 +283,8 @@ async function handleComplete(res: ServerResponse, root: string, hash: string) {
     const dir = stagingDir(root, hash);
     const data = path.join(dir, "data");
     const digest = crypto.createHash("sha256");
-    const handle = await fs.open(data, "r");
-    try {
-      await pipeline(handle.createReadStream({ start: 0, end: meta.size - 1, autoClose: false }), digest);
-    } finally {
-      await handle.close();
-    }
+    // 句柄在 pipeline 返回前就关了,下面才能改名(Windows 上开着的文件改不了名)
+    await pipeline(createReadStream(data, { start: 0, end: meta.size - 1 }), digest);
     const actual = digest.digest("hex");
     if (actual !== hash) {
       await fs.rm(dir, { recursive: true, force: true });
