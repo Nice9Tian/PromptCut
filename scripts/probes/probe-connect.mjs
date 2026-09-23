@@ -8,8 +8,13 @@
 // WebView2 (PROMPTCUT_AGENT_CDP=9333, see desktop/src-tauri/src/agent_webview.rs):
 // WebView2 speaks the same debugging protocol, but it will not let us open new
 // targets, so in connect mode every case reuses one existing page and navigates it.
+import fs from 'node:fs';
 import http from 'node:http';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import puppeteer from 'puppeteer';
+
+const LAUNCH_JSON = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../.claude/launch.json');
 
 /** `--connect [url]` -> endpoint string, or null when the probe should launch Chrome. */
 export function connectArg(argv = process.argv.slice(2)) {
@@ -25,6 +30,26 @@ export function flagArg(name, fallback = null, argv = process.argv.slice(2)) {
   if (i === -1) return fallback;
   const next = argv[i + 1];
   return next && !next.startsWith('--') ? next : fallback;
+}
+
+/**
+ * The dev server a probe attaches to: `--origin`, else `PC_STAGE_TEST_URL`, else the port of
+ * the `dev-test` entry in `.claude/launch.json` (the verification server, see
+ * docs/semantics/agent/verification.md). There is deliberately no hard-coded port to fall
+ * back to: the old 5197 went stale and probes quietly hit whatever else was listening there.
+ * Throws when none of the three gives an origin.
+ */
+export function devOrigin(argv = process.argv.slice(2), launchJson = LAUNCH_JSON) {
+  const given = flagArg('origin', null, argv) || process.env.PC_STAGE_TEST_URL;
+  if (given) return given.replace(/\/+$/, '');
+  let port;
+  try {
+    port = JSON.parse(fs.readFileSync(launchJson, 'utf8')).configurations?.find((c) => c.name === 'dev-test')?.port;
+  } catch (e) {
+    throw new Error(`读不到 ${launchJson}(${e.message}):用 --origin 或 PC_STAGE_TEST_URL 指定 dev server`);
+  }
+  if (!Number.isInteger(port)) throw new Error(`${launchJson} 里没有带 port 的 dev-test 配置:用 --origin 或 PC_STAGE_TEST_URL 指定 dev server`);
+  return `http://127.0.0.1:${port}`;
 }
 
 /**

@@ -12,7 +12,7 @@ import { repushMirror } from "./vite-plugin-mirror";
 import { stageOriginsOf } from "./stage-ports.mjs";
 
 /**
- * 拉起并看护预渲染进程(docs/decoupling-plan.md 第 3 节「预渲染」,阶段 2)。
+ * 拉起并看护预渲染进程(docs/archive/topics/decoupling-plan.md 第 3 节「预渲染」,阶段 2)。
  *
  * 编辑器这一端的 dev server 一开始监听,就用同一个 node 起第二个 Vite(vite.prerender.config.ts),
  * 放在另一个端口上,**进程优先级设成低于正常**。之后它拉起的渲染 worker 和 Chrome 都继承这个优先级

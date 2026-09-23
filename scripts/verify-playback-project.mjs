@@ -2,6 +2,7 @@
  * node scripts/verify-playback-project.mjs --project <file.proc> [--seconds 12]
  */
 import fs from 'node:fs/promises';
+import { existsSync, lstatSync, unlinkSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
@@ -49,6 +50,34 @@ if(location.search.includes('export=1'))root.render(<ExportView/>);
 else fetch('/test-project').then(r=>r.json()).then(p=>root.render(<Test project={p}/>));
 `;
 
+/*
+ * app/ 下这几个目录是指回仓库的 junction。out 目录要留给人看,可谁以后递归删它,都会顺着
+ * junction 删进仓库(主仓库的 node_modules 就这样被清空过),所以跑完就拆,失败、Ctrl+C 也拆。
+ * 只拆链接本身:unlink 删的是 junction 这一项,不进目标目录。拆完确认链接没了、仓库里的目标还在。
+ * 必须是同步的:兜底挂在 process 'exit' 上,那里跑不了异步。
+ */
+const LINKED = ['node_modules', 'public', 'server', 'scripts'];
+/** 建链接时仓库里真有的那几个目标;null = 还没建,或者已经拆过 */
+let linkedTargets = null;
+function unlinkJunctions() {
+  if (!linkedTargets) return;
+  const targets = linkedTargets;
+  linkedTargets = null;
+  const removed = [];
+  const fail = (message) => { console.error('JUNCTION ' + message); process.exitCode = 1; };
+  for (const folder of LINKED) {
+    const link = path.join(app, folder);
+    const st = lstatSync(link, { throwIfNoEntry: false });
+    if (!st) continue;
+    if (!st.isSymbolicLink()) { fail(`${link} 不是链接,没动它`); continue; }
+    try { unlinkSync(link); } catch (e) { fail(`拆不掉 ${link}(${e.code || e}):删 ${out} 之前先在 PowerShell 里 [System.IO.Directory]::Delete('${link}')`); continue; }
+    if (lstatSync(link, { throwIfNoEntry: false })) fail(`${link} 拆过了还在`);
+    else removed.push(folder);
+  }
+  for (const target of targets) if (!existsSync(target)) fail(`拆完之后仓库里的 ${target} 不见了`);
+  if (removed.length) console.log('UNLINKED', removed.join(','));
+}
+
 let doc, inputHash;
 if (!worker) {
   assert.ok(arg('--project'), 'Provide --project <file.proc>');
@@ -58,7 +87,12 @@ if (!worker) {
   await fs.mkdir(app, { recursive: true });
   await fs.cp(path.join(repo, 'src'), path.join(app, 'src'), { recursive: true });
   await fs.copyFile(path.join(repo, 'index.html'), path.join(app, 'index.html'));
-  for (const folder of ['node_modules', 'public', 'server', 'scripts']) await fs.symlink(path.join(repo, folder), path.join(app, folder), 'junction');
+  // 先挂兜底再建链接:建到一半失败也要拆。Ctrl+C 默认不走 'exit',改成正常退出
+  linkedTargets = LINKED.map((folder) => path.join(repo, folder)).filter((target) => existsSync(target));
+  process.on('exit', unlinkJunctions);
+  process.once('SIGINT', () => process.exit(130));
+  process.once('SIGTERM', () => process.exit(143));
+  for (const folder of LINKED) await fs.symlink(path.join(repo, folder), path.join(app, folder), 'junction');
   for (const card of doc.cards || []) {
     assert.match(card.id, /^[\w-]+$/);
     await fs.writeFile(path.join(app, 'src/cards/user', card.id + '.tsx'), card.source);
@@ -187,6 +221,8 @@ if (worker) {
     await fs.writeFile(path.join(out,'renders.json'),JSON.stringify(renders,null,2));
     await browser?.close(); await pipeline.close(); await server.close();
     if(remote?.connected){remote.send('close');await new Promise(resolve=>{remote.once('exit',resolve);setTimeout(()=>{remote.kill();resolve();},10000).unref();});}
+    // 两台 vite(本进程和 worker)都关了才拆:worker 的根也是 app/
+    unlinkJunctions();
   }
   console.log('ARTIFACTS',out);
 }

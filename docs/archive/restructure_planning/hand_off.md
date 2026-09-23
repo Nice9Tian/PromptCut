@@ -35,7 +35,7 @@ R0～R7 的代码已合并进 main，**舞台已露出、缺省已翻成跨源�
 
 | 步 | 状态 | 要接手的人知道的 |
 |---|---|---|
-| R0 清账 | 🟡 | `verify-unified-frames.mjs` 最后一条断言仍红：快照重放丢 1/64 px，`blur(32px)` 下差 255 级；修法在 `reports/replay-mismatch-report.md` §6，会作废全部共享快照。冷启动量测没做。 |
+| R0 清账 | 🟡 | `verify-unified-frames.mjs` **已整条通过**（2026-09-23）：主因其实是合成层（快照写死 `animation:none` 后丢了活渲时由动画撑起的那一层），1/64 px 排第二，两处都修了；不连续取帧时生成快照前推一拍不够的问题也一起修了。全部共享快照和 MOV 帧缓存作废一次。详情和剩余残差见 `reports/replay-mismatch-report.md` §12。`npm test` 要在 Windows 开发机上复跑确认。**冷启动量测没做。** |
 | R1 | ✅ | `inherited-props-probe.mjs` 引用的文件不存在，脚本跑不起来（S38-6）。 |
 | R1b | ✅ | `effects.mjs:107`、`pixelMapTools.ts:73` 还写着「1080p 每帧 400 毫秒以上」的过期文案，会误导 Agent（S39-8）。 |
 | R2 | ✅ | `hostCapabilities.prerender` 恒为 false（R2-14）。 |

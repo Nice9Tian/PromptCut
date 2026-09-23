@@ -1,6 +1,6 @@
 # Agent
 
-展开 `../02-architecture.md` 的「Agent」角色。从属于 02，与它冲突时以 02 为准。用户怎么选接入方式、创造力等级、多 Agent 和保护规则，见 `../03-user-workflow.md`。
+展开 `../architecture.md` 的「Agent」角色。从属于 `architecture.md`，与它冲突时以它为准。用户怎么选接入方式、创造力等级、多 Agent 和保护规则，见 `../user-workflow.md`。
 
 ## 接入
 

@@ -51,7 +51,7 @@ export function createPixelMapTools(store: PixelMapStore) {
   };
   const summary = (p: Project, def: PixelMapDef) => ({ pixelMapId: def.id, name: def.name, description: def.description, source: def.source, where: def.where, to: def.to, mode: def.mode, colorSequence: def.colorSequence, usedBy: pixelMapUsesOf(p, def.id) });
   /*
-   * 落库之前主动分流(restructure_planning/render_pipeline_restructure.md 3.9)。整帧调色(A)不接:它由 GPU 合成器
+   * 落库之前主动分流(docs/archive/restructure_planning/render_pipeline_restructure.md 3.9)。整帧调色(A)不接:它由 GPU 合成器
    * 做的滤镜就能完成,不占预览的每拍预算;逐像素的 CPU 实现实测 1080p 每帧 416~483 ms,
    * 所以这个工具只留给真的要逐像素选区的活(B,走 WebGL 后端)。翻译不了的(C)当场说清楚。
    * 工具的回包只剩一条 message 能带到模型那边,所以等价 ops 直接拼进错误正文。

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 
 /**
- * 预渲染进程的地址(docs/decoupling-plan.md 第 3 节「预渲染」)。
+ * 预渲染进程的地址(docs/archive/topics/decoupling-plan.md 第 3 节「预渲染」)。
  *
  * 编辑器页面里**挂得久**的请求 —— 3D 视图的空闲预渲染、聊天栏里的动图、导出进度 —— 直接发到
  * 预渲染那个源上,不走编辑器自己的源。原因是浏览器对同一个源只开约 6 条 HTTP/1.1 连接:

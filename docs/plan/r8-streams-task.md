@@ -1,29 +1,29 @@
 # R8 任务书：轨道流（H.264 上下拼合 alpha，挂 `streams` 开关）
 
-这份文件是 `restructure_planning/render_pipeline_restructure.md` 第 5 节 R8 一步的**协议全文**，自成一体：动工的人读 `user_pinned_goal.md`、`restructure_planning/render_pipeline_restructure.md`（总览、实测数据、步骤依赖）、`restructure_planning/r2-r7-task.md`（R8 依赖的 E、K、C、D 各节）和这一份就够，不需要再翻 `AGY-TASK-cloud-doc-and-write-race.md`。
+这份文件是 `docs/archive/restructure_planning/render_pipeline_restructure.md` 第 5 节 R8 一步的**协议全文**，自成一体：动工的人读 `docs/archive/user_pinned_goal.md`、`docs/archive/restructure_planning/render_pipeline_restructure.md`（总览、实测数据、步骤依赖）、`docs/archive/restructure_planning/r2-r7-task.md`（R8 依赖的 E、K、C、D 各节）和这一份就够，不需要再翻 `AGY-TASK-cloud-doc-and-write-race.md`。
 
-**怎么来的**（2026-09-22）：正文取自任务书第 111 版的目标 G，逐条折进了四样东西——第 75 轮第 5 份分步审查里已采纳的处理意见（4 条阻塞 + 7 条非阻塞，原文在 `restructure_planning/r75/agy-r75-05.md`，逐条结论在 `restructure_planning/r75/fold-notes.md`）、Opus-A 的 G0-a 桌面壳探针结论（`restructure_planning/g0-a-webview2-probe.md`）、`restructure_planning/render_pipeline_restructure.md` 第 3.5 / 3.8 节的更正、以及 2026-09-22 和用户定下的几条（判重只看活渲耗时 `stepMs`、生成快照改名、粒子卡不迁 Worker、长粒子片段交给轨道流）。
+**怎么来的**（2026-09-22）：正文取自任务书第 111 版的目标 G，逐条折进了四样东西——第 75 轮第 5 份分步审查里已采纳的处理意见（4 条阻塞 + 7 条非阻塞，原文在 `docs/archive/restructure_planning/r75/agy-r75-05.md`，逐条结论在 `docs/archive/restructure_planning/r75/fold-notes.md`）、Opus-A 的 G0-a 桌面壳探针结论（`docs/archive/restructure_planning/g0-a-webview2-probe.md`）、`docs/archive/restructure_planning/render_pipeline_restructure.md` 第 3.5 / 3.8 节的更正、以及 2026-09-22 和用户定下的几条（判重只看活渲耗时 `stepMs`、生成快照改名、粒子卡不迁 Worker、长粒子片段交给轨道流）。
 
 **还没做的事**：这份文件**没有经过独立审查**。第 75 轮审的是折叠之前的第 111 版；折叠本身只有我自己核过锚点和措辞。**G0-b 编码原型的结论已在 2026-09-22 回填**（G0 节末的「G0-b 结论」和正文各处）；没量成的几项在那里列着。
 
 ## 读法
 
-- **步骤名的对应**：「第 1 / 2 / 2b / 3 步」都已落地（提交 `b5c65dc`）；「3b 步」= R1（差异样式内联，已完成，`e67390e`）；R1b（像素映射分流与 WebGL2 后端）已完成（`dd58cb5`）；「第 4 步」= R2～R7（见 `restructure_planning/r2-r7-task.md`）加上本文的 R8 和 R9（`restructure_planning/r9-webgl-task.md`）；「第 5～10 步」是云端 / 文档服务那一半，不在本文范围。**R8 依赖 R5（K3～K6 的播放与追帧）和 R6（C2～C5 的数据面、`streamPool`）**，排在 R7 之后。
-- **`streams` 开关**：R8 之前它恒为关——判重的卡在播放中贴 C4 的最近快照或透明（`restructure_planning/r2-r7-task.md` 的 K5）。本文做的就是把它打开之后的那一路。
+- **步骤名的对应**：「第 1 / 2 / 2b / 3 步」都已落地（提交 `b5c65dc`）；「3b 步」= R1（差异样式内联，已完成，`e67390e`）；R1b（像素映射分流与 WebGL2 后端）已完成（`dd58cb5`）；「第 4 步」= R2～R7（见 `docs/archive/restructure_planning/r2-r7-task.md`）加上本文的 R8 和 R9（`docs/plan/r9-webgl-task.md`）；「第 5～10 步」是云端 / 文档服务那一半，不在本文范围。**R8 依赖 R5（K3～K6 的播放与追帧）和 R6（C2～C5 的数据面、`streamPool`）**，排在 R7 之后。
+- **`streams` 开关**：R8 之前它恒为关——判重的卡在播放中贴 C4 的最近快照或透明（`docs/archive/restructure_planning/r2-r7-task.md` 的 K5）。本文做的就是把它打开之后的那一路。
 - **行号**：正文里的 `文件:行号` 分两类。**未标注的是 2026-09-22 当前 main（`048074c`）上逐条打开核对过的**；标了「`b5c65dc` 的行号，仅作提示」的没有核对，以符号名和引用的代码原句为准。引用的符号在当前代码里都 grep 得到，标「新」的是本任务要创建的文件。
 - **用词**：一律说「预渲染」「生成快照」（`createSnapshot`：`cloneScene → inlineDOMStyles → rasterizeCanvas → stripMedia → serializeScene`）。「冻住」只用来说被抑制的卡的 `t` 停在某一刻，和生成快照无关。代码标识符里残留的 `bake*` 不受这条约束。
 - **时间单位**：舞台 RPC 接口、`frame` 消息、`t` 一律用**秒**；分段号、本地帧号一律是整数帧。编码器和调度器里的 `*Ms` 是毫秒。
 
-**路径缩写表**（正文里的裸文件名都指下面这些；2026-09-22 按解耦后的位置核过，标「新」的文件还不存在、由本任务创建）：`bake.mjs` = `server/bakery/bake.mjs`；`chrome.mjs` = `server/bakery/chrome.mjs`；`capture-frame.mjs` = `server/bakery/capture-frame.mjs`；`ffmpeg.mjs` = `server/bakery/ffmpeg.mjs`；`frame-pipeline.mjs` = `server/frame-pipeline.mjs`；`frame-playback.mjs` = `server/frame-playback.mjs`；`card-identity.mjs` = `server/card-identity.mjs`；`snapshot-store.mjs` = `server/snapshot-store.mjs`；`frame-stream.mjs` = `server/frame-stream.mjs`（新）；`Stage.tsx` = `src/render/Stage.tsx`；`StageView.tsx` = `src/StageView.tsx`；`ExportView.tsx` = `src/ExportView.tsx`；`solid.ts` = `src/render/solid.ts`；`stageRpc.ts` = `src/render/stageRpc.ts`；`frameMedia.ts` = `src/render/frameMedia.ts`；`frameWindow.mjs` = `src/render/frameWindow.mjs`；`streamPlayer.ts` = `src/render/streamPlayer.ts`（新）；`particles.tsx` = `src/cards/native/particles.tsx`。底稿里写 `scripts/export-frames.mjs` 的地方，内容已经拆进 `bake.mjs`（帧循环）和 `chrome.mjs`（会话与页面），按 `restructure_planning/render_pipeline_restructure.md` 第 4 节的对照表换。
+**路径缩写表**（正文里的裸文件名都指下面这些；2026-09-22 按解耦后的位置核过，标「新」的文件还不存在、由本任务创建）：`bake.mjs` = `server/bakery/bake.mjs`；`chrome.mjs` = `server/bakery/chrome.mjs`；`capture-frame.mjs` = `server/bakery/capture-frame.mjs`；`ffmpeg.mjs` = `server/bakery/ffmpeg.mjs`；`frame-pipeline.mjs` = `server/frame-pipeline.mjs`；`frame-playback.mjs` = `server/frame-playback.mjs`；`card-identity.mjs` = `server/card-identity.mjs`；`snapshot-store.mjs` = `server/snapshot-store.mjs`；`frame-stream.mjs` = `server/frame-stream.mjs`（新）；`Stage.tsx` = `src/render/Stage.tsx`；`StageView.tsx` = `src/StageView.tsx`；`ExportView.tsx` = `src/ExportView.tsx`；`solid.ts` = `src/render/solid.ts`；`stageRpc.ts` = `src/render/stageRpc.ts`；`frameMedia.ts` = `src/render/frameMedia.ts`；`frameWindow.mjs` = `src/render/frameWindow.mjs`；`streamPlayer.ts` = `src/render/streamPlayer.ts`（新）；`particles.tsx` = `src/cards/native/particles.tsx`。底稿里写 `scripts/export-frames.mjs` 的地方，内容已经拆进 `bake.mjs`（帧循环）和 `chrome.mjs`（会话与页面），按 `docs/archive/restructure_planning/render_pipeline_restructure.md` 第 4 节的对照表换。
 
 ## 这一步做什么、依赖什么、怎么验收
 
 | | |
 |---|---|
-| **做什么** | 给预渲染集合里的卡产「轨道流」：每张（或每组）重卡一条 H.264 流，上半 RGB、下半 alpha 灰度，裁到实体框，按 15 帧切成 fMP4 分段；页面侧自写解封装、`VideoDecoder` 硬解、WebGL 拆两半合成，贴在 `Stage` 渲的兄弟平面上。这是 pinned 渲染 10 的**播放态形态**（暂停和拖动态是 HTML 快照，见 `restructure_planning/r2-r7-task.md` 的 A3a / C4）。 |
+| **做什么** | 给预渲染集合里的卡产「轨道流」：每张（或每组）重卡一条 H.264 流，上半 RGB、下半 alpha 灰度，裁到实体框，按 15 帧切成 fMP4 分段；页面侧自写解封装、`VideoDecoder` 硬解、WebGL 拆两半合成，贴在 `Stage` 渲的兄弟平面上。这是 pinned 渲染 10 的**播放态形态**（暂停和拖动态是 HTML 快照，见 `docs/archive/restructure_planning/r2-r7-task.md` 的 A3a / C4）。 |
 | **先做什么** | G0-b 编码原型（另一个 worktree 在跑）。**原型没定稿不动工**：解码器预算、`streamPool`、各编码器参数、裁剪矩形取法、`streams` 默认值都等它。 |
 | **依赖哪几步** | R5（K3～K6：抑制、追帧、角色互换、降级）；R6（C2～C5：就绪索引与 SSE、`wanted` 优先级、`FramePipeline` 的 `streamPool`）。R2～R4 是它们的前置。 |
-| **读哪几节** | 本文 G0～G7；`restructure_planning/r2-r7-task.md` 的 E7 第 5 条（`suppressed` / `streamPlanes` 与兄弟平面）、K5（播放中贴流、暂停后追到活渲）、C3（就绪索引与 SSE）、C4（缺分段时贴最近快照）、D5（预渲染进程自建池、编辑器进程不留热池）、F5（重启后重建索引、租约作废）。 |
+| **读哪几节** | 本文 G0～G7；`docs/archive/restructure_planning/r2-r7-task.md` 的 E7 第 5 条（`suppressed` / `streamPlanes` 与兄弟平面）、K5（播放中贴流、暂停后追到活渲）、C3（就绪索引与 SSE）、C4（缺分段时贴最近快照）、D5（预渲染进程自建池、编辑器进程不留热池）、F5（重启后重建索引、租约作废）。 |
 | **单步验收** | 见本文「验收」一节；`streams` 关着时全部功能与 R7 结束时逐项相同。 |
 
 ---
@@ -34,13 +34,13 @@
 
 分两段，都在桌面版 WebView2 窗口里跑。
 
-**G0-a 纯探针——已过（2026-09-19，报告 `restructure_planning/g0-a-webview2-probe.md`，真壳 WebView2 153.0.4234.32 + RTX 3080）。** 三项结论：
+**G0-a 纯探针——已过（2026-09-19，报告 `docs/archive/restructure_planning/g0-a-webview2-probe.md`，真壳 WebView2 153.0.4234.32 + RTX 3080）。** 三项结论：
 
 1. `VideoDecoder.isConfigSupported({ codec: 'avc1.640028', hardwareAcceleration: 'prefer-hardware' })` = true，且**真的走了硬解**（硬解与软解的 `codedSize` 不同：1920×1088 vs 1920×1090）。实测解码耗时：1080p 稳态 1.5 ms / 帧（p50）、首帧 1.9～9.6 ms；**1920×2176（1080p 上下拼合，本任务的真实画面尺寸）2.4～2.7 ms / 帧、首帧 5.9～7.3 ms**。附带两条要写进 G5 的事实：`isConfigSupported` **不校验 level 与分辨率**（L4.0 配 1920×2176 也回 true，不能拿它当能力判据）；实际 SPS 会写成 `avc1.640033`，所以 G5 的「`codec` 从 `avcC` 拼」不是可选项。
 2. 毛玻璃 9 个用例全过，数字与 Chrome 152 逐位相同；**跨源 OOPIF 里 `<video>` 下的毛玻璃模糊正确**，1280×720 复跑仍正确。跨源 OOPIF 里的玻璃能模糊父文档的 canvas 和 video。
 3. OAC 双端口隔离成立：带 `Origin-Agent-Cluster: ?1` 时 iframe 是独立进程，A 舞台死循环 2.5 秒下父页最坏 rAF 间隔 7 ms、B 6 ms。**使用前提**（这条归 E1，本文只是引用）：舞台 origin 在同一个 browsing context group 里的**第一次加载**就必须带这个头，之后补加无效（Chromium 按 BrowsingInstance 缓存 origin-keyed 决定）；`window.originAgentCluster` 恒回 true、不能当判据，验收要看 CDP `Target.getTargets` 里有没有 `type: 'iframe'` 的 target。
 
-**G0-b 编码原型（一周，与 R2～R7 并行；已完成，2026-09-22，报告 `restructure_planning/g0-b-stream-prototype.md`，探针 `scripts/probes/stream-*.mjs`；解码侧的数都是 Chrome 152 上量的，没在桌面壳里复测）。** 它要定的数如下表，结论已回填到正文各节，汇总见表后的「G0-b 结论」：
+**G0-b 编码原型（一周，与 R2～R7 并行；已完成，2026-09-22，报告 `docs/plan/g0-b-stream-prototype.md`，探针 `scripts/probes/stream-*.mjs`；解码侧的数都是 Chrome 152 上量的，没在桌面壳里复测）。** 它要定的数如下表，结论已回填到正文各节，汇总见表后的「G0-b 结论」：
 
 | 项 | 内容 | 定死什么 |
 |---|---|---|
@@ -51,7 +51,7 @@
 | (8) | 重复帧稀疏分段的实际码率 | `stride` 的可取值 |
 | (10) | 裁剪矩形取法：第一版的「包裹层框在整段 motion 下的包围盒」够不够，要不要改成实测实体框并集 | G1 的裁剪矩形 |
 
-### G0-b 结论（2026-09-22，全文见 `restructure_planning/g0-b-stream-prototype.md`）
+### G0-b 结论（2026-09-22，全文见 `docs/plan/g0-b-stream-prototype.md`）
 
 1. **`streams` 默认开，生产限速（用户 2026-09-22 定；原型原本建议第一版默认关）。** 播放侧很便宜（6 条 1080p 流同时解各 72 fps，硬件解码、不占主线程），慢的是生产：1080p 全幅卡空闲时页面侧每帧出图 30.46 ms（30 fps 的一拍 33.3 ms），两个分段编码器并存时 68.9 ms——录 1 秒画面要 1～2 秒。但生产是后台提前做的、做好的流按键复用，受影响的只是「刚打开项目 / 刚改完一张重卡、流还没录好」那一段，那段时间这张卡播放中贴最近快照。关着的话长粒子背景播放时永远不动，正是要解决的问题，所以默认开，并把生产管住：(a) **只在机器空闲时生产、同时只跑一条**（`streamPool = 1`，最多 2，按实测自适应）；用户拖动或播放时生产暂停让路；(b) 裁剪矩形用实测实体框的并集（G1）；(c) **先稀疏后补密**：先按 `stride = 3` 把整段快速铺满（截图次数少三分之二，画面最多滞后 2 帧），再用满密度分段替换；(d) **流没录好的那段时间界面上要有提示**（这张卡上一个小的「预渲染中」标记，否则用户会以为卡坏了）——样式属于交互设计（pinned 交互 1～3），R8 动工时另定，本文只要求有这个状态可供界面读取（就绪索引里该片段的 `'stream'` 表为空或未覆盖当前播放头）。解码器预算 N = 6 确认。
 2. **`out_range=pc` 在 Chrome 上不生效，必须用 `tv`。** 全范围数据会被当成限定范围再展开一次（`decoded = clamp((a − 16) × 255 / 219)`），alpha 平均误差 8.4 / 255，和 CRF 无关，着色器里补救不了（两头已被钳掉）；改 `out_range=tv` + `-color_range tv` 后 0.06。`out_color_matrix=bt709` 和容器的色彩标注改不改逐位相同，留着无害。
@@ -76,9 +76,9 @@
 
 **组流平面的命中与实体框。** `[data-pc-group-plane]` 不在任何 `[data-pc-clip]` 里，`solid.ts:165` 的 `el.closest("[data-pc-clip]")` 取不到 `clipId`、`:167` 就 `continue` 略过它，点击会穿透到背后图层。所以：组流平面加 `pointer-events: none`；`solid.ts:197` 的平面排除名单（今天是 `data-pc-proxy-plane` / `data-pc-snapshot-plane` / `data-pc-stream-plane` 三条）加上 `data-pc-group-plane`，不参与 `bounds` / `rects`；组内被抑制的卡没有自己的流平面，`hitTest` / `bounds` 对它们退回包裹层框（`frameCss` 框）。
 
-**抑制与开关是两件事。** 抑制由该位置的实时判定决定（`H(位置)`，不是预渲染集合——集合里的卡在判轻的位置活渲、不抑制），**与 `streams` 开关无关**：照 `restructure_planning/r2-r7-task.md` 的 E7 第 5 条，挂着不卸载，包裹层加 `.pc-suppressed` 藏子树、`t` 冻住；流的 `<canvas>` 是该卡包裹层里的兄弟平面；`suppressed` / `streamPlanes` / `snapshots` 只发给 `front`，`back` 永远全活渲（K5）。`streams` 开关只决定有没有流平面，关着时重卡贴 C4 的最近快照或透明。
+**抑制与开关是两件事。** 抑制由该位置的实时判定决定（`H(位置)`，不是预渲染集合——集合里的卡在判轻的位置活渲、不抑制），**与 `streams` 开关无关**：照 `docs/archive/restructure_planning/r2-r7-task.md` 的 E7 第 5 条，挂着不卸载，包裹层加 `.pc-suppressed` 藏子树、`t` 冻住；流的 `<canvas>` 是该卡包裹层里的兄弟平面；`suppressed` / `streamPlanes` / `snapshots` 只发给 `front`，`back` 永远全活渲（K5）。`streams` 开关只决定有没有流平面，关着时重卡贴 C4 的最近快照或透明。
 
-**哪些卡不进流。** 毛玻璃卡（`belowDependent`）不进流——它要采样下层，截出来的流和下层对不上；抑制照 K5 走：判重时照常 `.pc-suppressed`，贴 C4 从 `controls-local` 选出的最近快照，没有就透明。`unknown` 卡（审阅表没覆盖到的卡——用户定制卡、带部件的组合卡片段在真实项目里都是它）**一律按 `belowDependent` 处理**（`restructure_planning/r2-r7-task.md` 的「组件与术语」一节），同样不上云、不进流。
+**哪些卡不进流。** 毛玻璃卡（`belowDependent`）不进流——它要采样下层，截出来的流和下层对不上；抑制照 K5 走：判重时照常 `.pc-suppressed`，贴 C4 从 `controls-local` 选出的最近快照，没有就透明。`unknown` 卡（审阅表没覆盖到的卡——用户定制卡、带部件的组合卡片段在真实项目里都是它）**一律按 `belowDependent` 处理**（`docs/archive/restructure_planning/r2-r7-task.md` 的「组件与术语」一节），同样不上云、不进流。
 
 **粒子卡。** 粒子卡（tsParticles，2D canvas + 主线程库；R9 里是 `dom2d` 契约，不迁进 Worker）的稳定活渲成本只有 1.4～3.8 ms，多数位置判轻、活渲；**长的粒子片段（超过约 8 秒，按 K2 的追帧上界判重）交给轨道流**，和别的重卡同一条路。被抑制的粒子卡照 E7 第 5 条藏子树、`t` 冻住，`<canvas>` 的像素在抑制期间不变。
 
@@ -114,9 +114,9 @@
 
 - **`-reinit_filter 0` 必须有。**
 - **色半区存预乘色。** 首句是 `format=gbrap,premultiply=inplace=1,format=rgba`（不是直接 `format=rgba`）：PNG 的透明像素可能带 RGB 垃圾值，`format=rgb24` 只丢 alpha、不清理透明区的 RGB，H.264 的 4:2:0 色度下采样会把它渗到不透明边缘造成杂色。预乘之后 alpha 为 0 处的 RGB 恒为纯黑。**G5 的着色器因此按预乘输出**（`premultipliedAlpha: true`），不再做 `rgb × a`。alpha 误差在 G0-b (5) 里量。
-- **布局**：上半 RGB `H` 行 + 8 行填充 + 下半 alpha 灰度 `H` 行 + 8 行填充，编码高度 = `2 × (H + 8)`（`docs/async-track-playback.md:52`）。
+- **布局**：上半 RGB `H` 行 + 8 行填充 + 下半 alpha 灰度 `H` 行 + 8 行填充，编码高度 = `2 × (H + 8)`（`docs/archive/topics/async-track-playback.md:52`）。
 - **宽高**：`iw` / `ih` 已经是 G1 外扩过的偶数，滤镜链不再取整。
-- **色彩标注**：`out_color_matrix=bt709` 和 `-colorspace` / `-color_primaries` / `-color_trc` 这一套是理论推导，原型实测命令（`docs/async-track-playback.md:55-71`）里没有。**G0-b (5) 已验**：这一套标注改不改，解码结果逐位相同，留着无害；真正起作用的是 `out_range`，必须是 `tv`。
+- **色彩标注**：`out_color_matrix=bt709` 和 `-colorspace` / `-color_primaries` / `-color_trc` 这一套是理论推导，原型实测命令（`docs/archive/topics/async-track-playback.md:55-71`）里没有。**G0-b (5) 已验**：这一套标注改不改，解码结果逐位相同，留着无害；真正起作用的是 `out_range`，必须是 `tv`。
 
 **编码器参数与严格 GOP 参数**（每个编码器一行，不要拿公共块去拼——`-sc_threshold` 等不是所有编码器都认）：
 
@@ -157,7 +157,7 @@
 
 自写 fMP4 解封装；`EncodedVideoChunk.timestamp = (分段号 × 15 + 样本序号) × 1e6 / fps`。随机访问从 IDR 解到目标；连续播放预解下一分段。
 
-`VideoFrame` 直接 `texImage2D`，片元着色器按 `docs/async-track-playback.md:73-78` 的公式（`alphaTop = (H + 8) / (2H + 16)`、`half_ = H / (2H + 16)`）拆两半；**色半区是预乘色**（G3），**而且着色器必须钳一次 `rgb = min(rgb, vec3(a))`**（G0-b (5)：不钳时透明区的编码噪声原样输出，彩色杂点最高 146 / 255；钳后 59，与直通口径持平），所以上下文按 `premultipliedAlpha: true` 输出，不再做 `rgb × a`。
+`VideoFrame` 直接 `texImage2D`，片元着色器按 `docs/archive/topics/async-track-playback.md:73-78` 的公式（`alphaTop = (H + 8) / (2H + 16)`、`half_ = H / (2H + 16)`）拆两半；**色半区是预乘色**（G3），**而且着色器必须钳一次 `rgb = min(rgb, vec3(a))`**（G0-b (5)：不钳时透明区的编码噪声原样输出，彩色杂点最高 146 / 255；钳后 59，与直通口径持平），所以上下文按 `premultipliedAlpha: true` 输出，不再做 `rgb × a`。
 
 **单个 `VideoDecoder` 同时持有的 `VideoFrame` ≤ 8 帧（硬约束，G0-b (4)）**：攒到 11～12 帧解码器就死锁、`flush()` 永不返回，这是帧数上限、与分辨率无关——裁剪小的流离字节预算很远照样卡死。**在这之上，解码帧预算按字节算，不按帧数。** 解码出来的 `VideoFrame` 是**上下拼合后的编码画面**：1080p 流的编码画面是 1920 × 2176，NV12 按 1.5 字节 / 像素 ≈ **6.27 MB 一帧**。总预算 **≤ 80 MB**（1080p 全幅流约 12 帧），按流优先级分配、**每流保底 3 帧**。每个 `VideoFrame` 用完立刻 `close()`。分段文件 `fetch` 整段拉，每流最多 2 个在途请求。G0-b 定的数：单解码器同时持有 ≤ 8 帧（硬约束）、总量 ≤ 80 MB、解码器预算 6。
 
@@ -173,7 +173,7 @@
 
 ## 约束
 
-- **帧率制：上限 60 fps。** 项目 `fps` 提供 24 / 25 / 30 / 60 四档，在项目选项面板里切换；`identityKey` 含 fps，所以全部 `costs` 和全部死素材（含轨道流）同时作废，流按新 fps 重新预渲染。分段的 `-video_track_timescale` 和 `-framerate` 都跟项目 fps。整条约束的全文见 `restructure_planning/r2-r7-task.md` 的「约束」第 1 条。
+- **帧率制：上限 60 fps。** 项目 `fps` 提供 24 / 25 / 30 / 60 四档，在项目选项面板里切换；`identityKey` 含 fps，所以全部 `costs` 和全部死素材（含轨道流）同时作废，流按新 fps 重新预渲染。分段的 `-video_track_timescale` 和 `-framerate` 都跟项目 fps。整条约束的全文见 `docs/archive/restructure_planning/r2-r7-task.md` 的「约束」第 1 条。
 - **编辑器进程（Node 侧）不再有无头 Chrome 热池；轨道流的池由预渲染进程自建**（`streamPool`，D5）。页面侧的热渲染是可见舞台 iframe，两者不是一回事。
 - **渲染永远在「看图的那一方」旁边。** 轨道流只在有本机进程的宿主上产（`user` / `full` 模式的预渲染进程）；在线浏览器模式没有 ffmpeg、没有流，按拍换快照（L4）。`agent` 模式的进程不产流。
 - **像素缓存不上云**：PNG / MOV / 轨道流都只在本机，云端只有 HTML 快照块（A3b）。
@@ -192,7 +192,7 @@
 - **组流平面**：`[data-pc-group-plane]` 带 `pointer-events: none`，`hitTest` 点它时命中的是背后组内被抑制的卡的包裹层框（不是穿透到别的图层）；`bounds` / `rects` 不把它算进去。
 - **开关**：`streams` 关着时 G 的层走 legacy 通道，其余功能与 R7 结束时逐项相同；关着时被判重的粒子卡仍被抑制、贴 C4 快照或透明。
 - **重启**：杀掉预渲染进程，`streamPool` 的租约全部作废、索引按键重建（F5），播放中贴流的重卡最多空白一个分段。
-- 收尾照 `restructure_planning/r2-r7-task.md` 的「每一步通用的收尾」：`npx tsc -b --force` 零错误；`npm test` 全过；`scripts/verify-unified-frames.mjs` 通过；不改导出像素基线。验证改动用 5197 端口（`.claude/launch.json` 的 `dev-test`），不要碰用户常驻的 5190，不要动 `%LOCALAPPDATA%\PromptCut\runtime\app`。
+- 收尾照 `docs/archive/restructure_planning/r2-r7-task.md` 的「每一步通用的收尾」：`npx tsc -b --force` 零错误；`npm test` 全过；`scripts/verify-unified-frames.mjs` 通过；不改导出像素基线。验证改动用 5197 端口（`.claude/launch.json` 的 `dev-test`），不要碰用户常驻的 5190，不要动 `%LOCALAPPDATA%\PromptCut\runtime\app`。
 
 ## 不做
 

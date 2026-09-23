@@ -3,6 +3,8 @@
  *
  *   node scripts/probes/stage-content-probe.mjs [--origin http://127.0.0.1:5241] [--same-origin]
  *
+ * 不带 `--origin` 就看 `PC_STAGE_TEST_URL`,再没有就打 `.claude/launch.json` 的 `dev-test`。
+ *
  * 和 `stage-rpc-probe.mjs` 同一套骨架:本进程临时起一个 http 服务发「测试页」,页面里挂两个
  * 舞台 iframe(默认打编辑器进程的两个舞台端口,`--same-origin` 打编辑器自己这个源),
  * 只经 postMessage RPC 驱动它们。**iframe 的地址带 `&preview=stage`** —— 舞台靠它决定渲
@@ -34,11 +36,11 @@ import crypto from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import puppeteer from 'puppeteer';
-import { serve, closeAll } from './probe-connect.mjs';
+import { serve, closeAll, devOrigin } from './probe-connect.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const args = process.argv.slice(2);
-const origin = (args.includes('--origin') ? args[args.indexOf('--origin') + 1] : null) || process.env.PC_STAGE_TEST_URL || 'http://127.0.0.1:5241';
+const origin = devOrigin(args);
 const sameOrigin = args.includes('--same-origin');
 const HOST_PATH = '/__stage-content-probe-host';
 

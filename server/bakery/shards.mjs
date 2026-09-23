@@ -11,7 +11,7 @@ import { openBakery } from './chrome.mjs';
 import { bakeFrames } from './bake.mjs';
 
 /*
- * 多进程分片(docs/render-rebuild-plan.md 阶段 5)。
+ * 多进程分片(docs/archive/topics/render-rebuild-plan.md 阶段 5)。
  *
  * 每个分片**都从第 0 帧推起**,只截自己那一段 —— 动画锚点、按 delta 积分的卡片、带种子的随机数流
  * 都依赖「前面推过哪些帧」,跳着推就对不上。所以分片的输出和单进程逐字节相同,代价是每个分片都要

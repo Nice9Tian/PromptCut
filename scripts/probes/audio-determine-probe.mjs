@@ -1,4 +1,4 @@
-// 探针:音频图卡判重(轻 / 重分类)方案的三组前提实测。计划见 restructure_planning/audio_determine_plan.md。
+// 探针:音频图卡判重(轻 / 重分类)方案的三组前提实测。计划见 docs/plan/audio_determine_plan.md。
 //
 //   node scripts/probes/audio-determine-probe.mjs                  -> puppeteer 自带的 Chrome
 //   node scripts/probes/audio-determine-probe.mjs --connect        -> 桌面壳 WebView2(9333)
@@ -12,7 +12,7 @@
 //   (B) codec —— WebCodecs AudioEncoder / AudioDecoder 支持哪些编码;AAC / Opus 编解码往返的速度和误差。
 //   (C) chunk —— 真的 src/audio/fxChain.ts 效果链:一次渲完 vs 分段(10 s 一段)+ 不同预滚时长,接缝误差多大。
 //
-// 结果(2026-09-23,Chrome 152)存在 restructure_planning/reports/audio-probe-2026-09-23.json。
+// 结果(2026-09-23,Chrome 152)存在 docs/plan/audio-probe-2026-09-23.json。
 //
 // 误差两个口径:maxRel = max|a−b| / peak(a)(「最大差 8%」按这个读),rmsDb = 20·log10(rms(a−b) / rms(a))。
 import fs from 'node:fs';

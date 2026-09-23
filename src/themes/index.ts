@@ -19,7 +19,7 @@
  *
  * 等宽字体栈里的 "Segoe UI Symbol":Consolas 没有 ✓ 这类符号,落进系统回退后,Chrome 和
  * chrome-headless-shell 会选不同的字体(实测 ✓ 一边 Noto Sans SC、一边 Segoe UI Symbol),
- * 字宽不同,整行平移。显式写上它,这类符号就不再交给系统去挑。见 docs/render-rebuild-plan.md 阶段 0。
+ * 字宽不同,整行平移。显式写上它,这类符号就不再交给系统去挑。见 docs/archive/topics/render-rebuild-plan.md 阶段 0。
  */
 export interface Theme {
   id: string;

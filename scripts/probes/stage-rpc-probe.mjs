@@ -4,6 +4,8 @@
  *
  *   node scripts/probes/stage-rpc-probe.mjs [--origin http://127.0.0.1:5211] [--legacy]
  *
+ * 不带 `--origin` 就看 `PC_STAGE_TEST_URL`,再没有就打 `.claude/launch.json` 的 `dev-test`。
+ *
  * 跨源模式下两个 iframe 的地址从编辑器进程的 `/api/stage/ports` 拿(起不来就报错退出);
  * `--legacy` 把两个 iframe 都指回编辑器自己这个源,验「legacy 下照旧过」。
  *
@@ -34,10 +36,10 @@
  * 输出 JSON 结论到 stdout;任何一条不过就以非零退出。
  */
 import puppeteer from 'puppeteer';
-import { serve, closeAll } from './probe-connect.mjs';
+import { serve, closeAll, devOrigin } from './probe-connect.mjs';
 
 const args = process.argv.slice(2);
-const origin = (args.includes('--origin') ? args[args.indexOf('--origin') + 1] : null) || process.env.PC_STAGE_TEST_URL || 'http://127.0.0.1:5197';
+const origin = devOrigin(args);
 const legacy = args.includes('--legacy');
 const HOST_PATH = '/__stage-rpc-probe-host';
 

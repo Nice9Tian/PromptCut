@@ -5,8 +5,6 @@
 | 症状 | 原因 | 怎么办 |
 |---|---|---|
 | 探针失败，页面里只有一个舞台 iframe | 舞台端口（+1、+2）被占，退回同源单舞台 | 换一段三个连号都空的端口重起 |
-| ⚠ 探针连不上或打到别的服务 | 探针缺省打旧端口 5197 | 传 `--origin http://127.0.0.1:5203` |
-| ⚠ 冒烟探针第二次跑就失败 | `editor-preview-smoke.mjs` 在同一台服务器上会累积片段 | 一次探针用一台新 dev server |
 | 探针结果 `reloaded` 为真，或耗时忽高忽低 | 热更新重载；多个会话同时在改文件 | 等仓库安静后复跑 |
 | 探针跑的还是旧代码 | 长时间热更新后，舞台 iframe 停在旧模块上 | 重启 dev server |
 | 改了 `server/harness/` 或 `server/runners/` 不生效 | runner 是动态引入的，Node 缓存着旧模块 | 重启 dev server |
@@ -23,5 +21,4 @@
 | 排查用户现场，仓库 `out/` 里的东西对不上 | 用户桌面版的现场在运行时副本里 | 去 `%LOCALAPPDATA%\PromptCut\runtime\app\` 看，只读 |
 | 用户会话后半段，浏览器侧工具集体超时 | 期间装了补丁 | 比对运行时副本里文件的修改时间和出事时间 |
 | 对话诊断报告太大，读不了 | 它是一整个 JSON，一两 MB | `py -3 scripts/diaglog.py <报告> overview`，再按文件头的用法往下钻 |
-| ⚠ 删完产物目录，主仓库 `node_modules` 空了 | 顺着 junction 删了，比如 `verify-playback-project.mjs` 留下的 | `npm ci` 恢复；以后按 `docs/semantics/agent/verification.md` 的做法先拆链接 |
 | `node -e` 里拼的 Windows 路径落到乱名目录 | 反斜杠被当成 JS 转义 | 先用 `cygpath -m` 转成正斜杠 |

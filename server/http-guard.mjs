@@ -57,7 +57,7 @@ export function originOk(req) {
   if (origin === "http://" + host || origin === "https://" + host) return true;
   /*
    * 预渲染进程(PROMPTCUT_ROLE=prerender)放行编辑器那一端的源:编辑器页面把挂得久的请求
-   * 直接发过来,就是为了不占它自己那个源的连接(docs/decoupling-plan.md 第 1.1 节)。
+   * 直接发过来,就是为了不占它自己那个源的连接(docs/archive/topics/decoupling-plan.md 第 1.1 节)。
    * 名单由拉起它的 vite-plugin-prerender 通过环境变量给,只含本机编辑器的几种写法;
    * 用户自己那份 dev server 没有这个变量,行为不变。
    */
