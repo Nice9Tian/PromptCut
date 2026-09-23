@@ -2,7 +2,7 @@
  * 差异样式内联的画面正确性验收（底稿 A2(8) 验收 (ii) 后半句）：
  * **差异样式内联前后的 `captureSnapshot` 位图逐像素比对**。
  *
- *   node scripts/probes/snapshot-diff-compare.mjs [--origin http://127.0.0.1:5197]
+ *   node scripts/probes/snapshot-diff-compare.mjs [--origin <dev server>]
  *        [--cards lottie-bodymovin,growth-curve,odometer,scene-3d] [--frames 12,45]
  *        [--out out/snapshot-diff] [--dump-html]
  *
@@ -29,7 +29,7 @@
  * 顺序也要紧：**旧算法先跑** —— 新的 `inlineDOMStyles` 量基线时会往场景根临时挂一个探针容器
  * （量完就摘），旧算法在那之前读完，两边看到的是同一棵干净的树。
  *
- * 需要一台 dev server（缺省 5197）：`FramePipeline` 的 bakery 打的是它的导出页。
+ * 需要一台 dev server（不带 `--origin` 就看 `PC_STAGE_TEST_URL`，再没有就打 `.claude/launch.json` 的 `dev-test`）：`FramePipeline` 的 bakery 打的是它的导出页。
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -37,11 +37,12 @@ import { PNG } from 'pngjs';
 import { FramePipeline } from '../../server/frame-pipeline.mjs';
 import { bakeFrames } from '../../server/bakery/bake.mjs';
 import { captureSnapshot } from '../../server/bakery/capture-snapshot.mjs';
+import { devOrigin } from './probe-connect.mjs';
 
 const argv = process.argv.slice(2);
 const flag = (name, fallback = null) => { const i = argv.indexOf(name); return i >= 0 && i + 1 < argv.length ? argv[i + 1] : fallback; };
 
-const origin = (flag('--origin') || process.env.PC_STAGE_TEST_URL || 'http://127.0.0.1:5197').replace(/\/+$/, '');
+const origin = devOrigin(argv);
 const cards = (flag('--cards') || 'lottie-bodymovin,growth-curve,odometer,scene-3d').split(',').map((s) => s.trim()).filter(Boolean);
 const frames = (flag('--frames') || '12,45').split(',').map(Number).filter(Number.isFinite);
 const outDir = path.resolve(flag('--out', 'out/snapshot-diff'));

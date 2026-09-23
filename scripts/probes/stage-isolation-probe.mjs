@@ -3,6 +3,8 @@
  *
  *   node scripts/probes/stage-isolation-probe.mjs [--origin http://127.0.0.1:5211] [--repeats 3]
  *
+ * 不带 `--origin` 就看 `PC_STAGE_TEST_URL`,再没有就打 `.claude/launch.json` 的 `dev-test`。
+ *
  * 判两条(照 `scripts/probes/oac-probe.mjs` 的做法):
  *   1. CDP `Target.getTargets` 里有**两个** `type: 'iframe'` 的 target —— 有 target 才说明
  *      它是 out-of-process iframe。`window.originAgentCluster` **恒回 true,不能当判据**;
@@ -18,9 +20,9 @@
  * 多个 Agent 同时在跑时耗时不可信,默认跑 3 遍报中位数。
  */
 import puppeteer from 'puppeteer';
-import { flagArg, listTargets } from './probe-connect.mjs';
+import { flagArg, listTargets, devOrigin } from './probe-connect.mjs';
 
-const origin = flagArg('origin') || process.env.PC_STAGE_TEST_URL || 'http://127.0.0.1:5211';
+const origin = devOrigin();
 const REPEATS = Number(flagArg('repeats', '3'));
 const BLOCK_MS = 2500;
 
