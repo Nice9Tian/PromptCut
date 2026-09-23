@@ -32,6 +32,7 @@ import { FramePipeline } from '../../server/frame-pipeline.mjs';
 import { splitFmp4, segmentInfo, topLevelBoxes, SEGMENT_FRAMES } from '../../server/frame-stream.mjs';
 import { bakeStream } from '../../server/bakery/bake.mjs';
 import { openStreamSegmentEncoder } from '../../server/bakery/ffmpeg.mjs';
+import { PROJECT } from './stream-probe-project.mjs';
 
 const execFileAsync = promisify(execFile);
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -45,30 +46,6 @@ if (GROUP) process.env.PROMPTCUT_STREAM_DECODERS = '1';
 
 const fails = [];
 const check = (cond, label, extra) => { if (!cond) fails.push(label + (extra === undefined ? '' : ' :: ' + JSON.stringify(extra))); return cond; };
-
-/**
- * 三张重卡(都是审阅表里 `independent` 的 stateful 卡,没有成本记录时按声明进预渲染集合):
- *   - 粒子背景铺满全屏(最底层),0～5 秒(10 个分段:「连续生产 10 个分段只付一次换页」那一条靠它);
- *   - 金句药丸,框 640×360 摆在画面中间,和粒子重叠(隔离那一条靠它:药丸是主题蓝的实心胶囊,绿色粒子流里不该有蓝色);
- *   - 第二张粒子(红色、框 800×450、带 motion),0.5～2 秒。
- * `--group` 时解码器预算压到 1:三条流在同一段时间里同时活跃,必然合并成组流。
- */
-export const PROJECT = {
-  id: 'r8-stream-probe', name: 'R8 轨道流探针', width: 1920, height: 1080, fps: 30, duration: 5,
-  themeId: 'dark', media: [], filters: [], pixelMaps: [], audioFx: [], cardNodes: [], style: {},
-  tracks: [
-    { id: 'tr-pill', name: 'pill', hidden: false, clips: [
-      { id: 'clip-pill', kind: 'card', cardId: 'punch-pill', start: 0, end: 2, params: { text: '轨道流' }, frame: { x: 960, y: 540, w: 640, h: 360, anchor: [0.5, 0.5] } },
-    ] },
-    { id: 'tr-red', name: 'red', hidden: false, clips: [
-      { id: 'clip-red', kind: 'card', cardId: 'particles', start: 0.5, end: 2, params: { color: '#ff3030', quantity: 40, speed: 2, size: 6, links: 'no', seed: 7 },
-        frame: { x: 300, y: 200, w: 800, h: 450 } },
-    ] },
-    { id: 'tr-bg', name: 'bg', hidden: false, clips: [
-      { id: 'clip-bg', kind: 'card', cardId: 'particles', start: 0, end: 5, params: { color: '#30ff60', quantity: 120, speed: 1.5, size: 4, links: 'yes', seed: 3 } },
-    ] },
-  ],
-};
 
 async function until(label, fn, timeoutMs, everyMs = 500) {
   const deadline = Date.now() + timeoutMs;

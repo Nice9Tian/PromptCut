@@ -161,7 +161,17 @@ export function hitTest(root: SceneRoot, x: number, y: number): StageHit | null 
   // elementsFromPoint 按绘制顺序从最上层往下给;透明容器一路穿过去
   const stack = document.elementsFromPoint(x + origin.left, y + origin.top);
   for (const el of stack) {
-    if (!root.contains(el) || !isSolid(el, root)) continue;
+    if (!root.contains(el)) continue;
+    /*
+     * 组流(R8 / G1):盖在上面的 `[data-pc-group-plane]` 是 `pointer-events: none`,不在这一摞里;
+     * 组内被抑制的卡子树藏着、自己没有流平面 —— 点到它的包裹层框就算点中它(退回包裹层框),
+     * 不能穿透到背后别的图层去。
+     */
+    if (el.hasAttribute("data-pc-stream-member") && el.classList.contains("pc-suppressed")) {
+      const clipId = el.getAttribute("data-pc-clip");
+      if (clipId) return { clipId, ...toStage(el.getBoundingClientRect(), origin) };
+    }
+    if (!isSolid(el, root)) continue;
     const wrap = el.closest("[data-pc-clip]");
     const clipId = wrap?.getAttribute("data-pc-clip");
     if (!clipId) continue;
@@ -194,6 +204,8 @@ export function bounds(root: SceneRoot, clipId: string, opts: { scanCanvas?: boo
     }
   };
   const walk = (el: Element) => {
+    // 组流平面(R8)落在舞台根下、不在任何包裹层里,不参与 `bounds` / `rects`;列在这里是兜底
+    if (el.hasAttribute("data-pc-group-plane")) return;
     if (el.hasAttribute("data-pc-proxy-plane") || el.hasAttribute("data-pc-snapshot-plane") || el.hasAttribute("data-pc-stream-plane")) {
       // 平面是贴上去的替身,它们的框就是内容框
       take(el.getBoundingClientRect());

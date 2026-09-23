@@ -34,9 +34,14 @@ const DirectCard = memo(function DirectCard({ def, params, ...props }: CardProps
  */
 export type ProxyRender = (clipId: string) => { color: string; box: { left: number; top: number; width: number; height: number } | null };
 
-/** G1 的一条流分组:长度 1 = 单卡流,> 1 = 组流(R8 之前恒空) */
+/**
+ * G1 的一条流分组:长度 1 = 单卡流,> 1 = 组流(按画家顺序,最后一个是组里最上面那张)。
+ * `key` / `ranges` 是 `streamPlayer` 要的(就绪索引里那一层的流键和就绪分段号),`Stage` 只看 `clipIds`。
+ */
 export interface StreamPlaneGroup {
   clipIds: string[];
+  key?: string;
+  ranges?: Array<[number, number]>;
 }
 
 /**
@@ -225,10 +230,13 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
           ].filter(Boolean).join(" ");
           // 这张卡该不该挂流平面(G1:单卡流挂在包裹层里;组流挂舞台根下的 [data-pc-group-plane])
           const ownStream = streamPlanes?.some((g) => g.clipIds.length === 1 && g.clipIds[0] === clip.id) ?? false;
+          // 组流的成员:没有自己的流平面,`hitTest` / `bounds` 对它们退回包裹层框(G1「组流平面的命中与实体框」)
+          const groupMember = streamPlanes?.some((g) => g.clipIds.length > 1 && g.clipIds.includes(clip.id)) ?? false;
           return (
             <div
               key={`${clip.id}:${gen}`}
               data-pc-clip={clip.id}
+              data-pc-stream-member={groupMember ? "" : undefined}
               data-pc-local-frame={Math.round((cardT - clip.start) * timeline.fps)}
               data-pc-frame-mode={clipFrameMode(clip, def)}
               className={cls || undefined}
@@ -311,13 +319,16 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
                   dangerouslySetInnerHTML={{ __html: renameSnapshotIds(snapshotHtml, clip.id) }} />
               ) : null}
               {/*
-                流平面(E7 第 5 条,R8 才有内容)。`streamPlayer` 只往这个**已经存在的** `<canvas>`
-                上画,不做外部 `insertBefore` —— 否则会和代理平面、快照平面抢兄弟位置。
-                层序、overflow、zIndex 自动跟着包裹层走。
+                流平面(E7 第 5 条,R8)。`streamPlayer` 只往这个**已经存在的** `<canvas>` 上画,
+                不做外部 `insertBefore` —— 否则会和代理平面、快照平面抢兄弟位置。
+                层序、overflow、zIndex、包裹层的框 / 轨迹 / 不透明度 / 强调自动跟着包裹层走:
+                单卡流画在包裹层自己的坐标系里(和快照平面一样),所以这块画布是包裹层的普通子元素。
+                位置和尺寸由 `streamPlayer` 按流的清单设(流的矩形上界,可能比框大一圈、也可能在框外一点),
+                这里先给 0×0 —— 清单到之前它不占地方,`bounds` 也不会把一块空画布算进实体框。
               */}
               {ownStream ? (
-                <canvas data-pc-stream-plane="" width={timeline.width} height={timeline.height}
-                  style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }} />
+                <canvas data-pc-stream-plane="" width={0} height={0}
+                  style={{ position: "absolute", left: 0, top: 0, width: 0, height: 0 }} />
               ) : null}
             </div>
           );
@@ -325,14 +336,19 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
       </AnimClock>
       {/*
         组流平面(G1:一条流盖住相邻的好几张重卡)。它跨片段,挂不进任何一个包裹层,
-        所以落在舞台根下。z 序取组里最上面那张卡的那一层 —— 和包裹层用的是同一套 zIndex
-        (`active` 已经是画家顺序)。R8 之前 `streamPlanes` 恒空,这里一个节点都不会出现。
+        所以落在舞台根下、和卡包裹层所在的那一层同级;组流里包裹层的外观已经画进流里,所以不受任何
+        包裹层的 `frameCss` / `opacity` / `filter` / `motion` / `isolation` 影响。
+        **只渲在组里最上面那张卡(`clipIds` 的最后一个)所在的那个 `Stage` 里**:live 路每个片段一个
+        单片段 `Stage`,每个都渲一块的话同一条组流会叠好几层;z 序取那张卡的那一层。
+        `pointer-events: none`:点击落到背后组内被抑制的卡的包裹层上(`solid.ts` 的 `hitTest`)。
       */}
       {streamPlanes?.filter((g) => g.clipIds.length > 1).map((g) => {
-        const top = active.reduce((acc, c, i) => (g.clipIds.includes(c.id) ? Math.max(acc, i + 1) : acc), 0);
+        const topId = g.clipIds[g.clipIds.length - 1];
+        const at = active.findIndex((c) => c.id === topId);
+        if (at < 0) return null;
         return <canvas key={g.clipIds.join(",")} data-pc-group-plane="" data-pc-stream-group={g.clipIds.join(",")}
-          width={timeline.width} height={timeline.height}
-          style={{ position: "absolute", inset: 0, width: "100%", height: "100%", zIndex: top }} />;
+          width={0} height={0}
+          style={{ position: "absolute", left: 0, top: 0, width: 0, height: 0, zIndex: at + 1, pointerEvents: "none" }} />;
       })}
     </div>
   );
