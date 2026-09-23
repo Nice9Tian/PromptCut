@@ -1,0 +1,245 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>PromptCut GL atlas probe</title>
+<body>
+<script>
+(() => {
+  const query = new URLSearchParams(location.search);
+  const route = query.get('route');
+  const beats = Number(query.get('beats') || 30);
+  const cardWidth = 320, cardHeight = 180, columns = 5, rows = 4;
+  const count = columns * rows;
+  const atlasWidth = columns * cardWidth, atlasHeight = rows * cardHeight;
+  const colors = Array.from({ length: count }, (_, i) => [
+    (37 + i * 71) % 256, (89 + i * 43) % 256, (151 + i * 97) % 256, 255,
+  ]);
+
+  // Stringified into a Blob so the same Worker code runs in either document's origin.
+  function workerMain() {
+    const width = 1600, height = 720, tileWidth = 320, tileHeight = 180;
+    const colors = Array.from({ length: 20 }, (_, i) => [
+      (37 + i * 71) % 256, (89 + i * 43) % 256, (151 + i * 97) % 256, 255,
+    ]);
+    const canvas = new OffscreenCanvas(width, height);
+    const gl = canvas.getContext('webgl2', {
+      alpha: true, antialias: false, premultipliedAlpha: true,
+    });
+    let setupError = null, samples = null, renderer = null, fbo = null;
+    try {
+      if (!gl) throw new Error('Worker OffscreenCanvas WebGL2 unavailable');
+      samples = Math.min(4, gl.getParameter(gl.MAX_SAMPLES));
+      if (samples < 1) throw new Error('MAX_SAMPLES < 1');
+      const debug = gl.getExtension('WEBGL_debug_renderer_info');
+      renderer = debug ? gl.getParameter(debug.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
+      const color = gl.createRenderbuffer();
+      gl.bindRenderbuffer(gl.RENDERBUFFER, color);
+      gl.renderbufferStorageMultisample(gl.RENDERBUFFER, samples, gl.RGBA8, width, height);
+      fbo = gl.createFramebuffer();
+      gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+      gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.RENDERBUFFER, color);
+      if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE)
+        throw new Error('multisample framebuffer incomplete');
+    } catch (error) { setupError = String(error.message || error); }
+
+    function drawAtlas() {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+      gl.enable(gl.SCISSOR_TEST);
+      for (let i = 0; i < 20; i++) {
+        const x = i % 5 * tileWidth;
+        const y = Math.floor(i / 5) * tileHeight;
+        const rgba = colors[i];
+        gl.scissor(x, height - y - tileHeight, tileWidth, tileHeight);
+        gl.clearColor(...rgba.map(v => v / 255));
+        gl.clear(gl.COLOR_BUFFER_BIT);
+      }
+      gl.disable(gl.SCISSOR_TEST);
+      gl.bindFramebuffer(gl.READ_FRAMEBUFFER, fbo);
+      gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
+      gl.blitFramebuffer(0, 0, width, height, 0, 0, width, height, gl.COLOR_BUFFER_BIT, gl.NEAREST);
+      if (gl.getError() !== gl.NO_ERROR) throw new Error('WebGL error after blitFramebuffer');
+      gl.flush();
+    }
+
+    function attach(port) {
+      port.onmessage = async ({ data }) => {
+        if (data.type !== 'beat') return;
+        try {
+          if (setupError) throw new Error(setupError);
+          const drawStart = performance.now();
+          drawAtlas();
+          const drawMs = performance.now() - drawStart;
+          const cropStart = performance.now();
+          if (data.method === 'fallback') {
+            const atlas = canvas.transferToImageBitmap();
+            const bitmapMs = performance.now() - cropStart;
+            port.postMessage({ type: 'done', seq: data.seq, method: data.method,
+              atlas, drawMs, bitmapMs, samples, renderer }, [atlas]);
+          } else {
+            const bitmaps = [];
+            for (let i = 0; i < 20; i++) {
+              bitmaps.push(await createImageBitmap(canvas,
+                i % 5 * tileWidth, Math.floor(i / 5) * tileHeight, tileWidth, tileHeight));
+            }
+            const bitmapMs = performance.now() - cropStart;
+            port.postMessage({ type: 'done', seq: data.seq, method: data.method,
+              bitmaps, drawMs, bitmapMs, samples, renderer }, bitmaps);
+          }
+        } catch (error) {
+          port.postMessage({ type: 'error', seq: data.seq, message: String(error.stack || error) });
+        }
+      };
+      port.start();
+    }
+    self.onmessage = ({ data, ports }) => {
+      if (data.type === 'attach') attach(ports[0]);
+    };
+  }
+
+  function newWorker() {
+    const url = URL.createObjectURL(new Blob([`(${workerMain.toString()})()`], { type: 'text/javascript' }));
+    const worker = new Worker(url);
+    URL.revokeObjectURL(url);
+    return worker;
+  }
+
+  const percentile = (values, p) => {
+    const sorted = [...values].sort((a, b) => a - b);
+    return sorted[Math.ceil(p * sorted.length) - 1];
+  };
+  const summary = values => ({ p50: percentile(values, 0.5), p90: percentile(values, 0.9), max: Math.max(...values) });
+  const round = value => Math.round(value * 1000) / 1000;
+
+  async function childRun(port, ownedWorker) {
+    const staging = document.createElement('canvas');
+    staging.width = cardWidth; staging.height = cardHeight;
+    const stagingContext = staging.getContext('2d', { willReadFrequently: true });
+    const next = data => new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error(`beat ${data.seq} timed out`)), 30000);
+      port.onmessage = event => {
+        clearTimeout(timeout);
+        if (event.data.type === 'error') reject(new Error(event.data.message));
+        else resolve(event.data);
+      };
+      port.postMessage(data);
+    });
+    const methods = {};
+    let seq = 0, samples = null, renderer = null;
+    try {
+      for (const method of ['crops', 'fallback']) {
+        const planes = Array.from({ length: count }, () => {
+          const canvas = document.createElement('canvas');
+          canvas.width = cardWidth; canvas.height = cardHeight;
+          document.body.append(canvas);
+          return canvas;
+        });
+        const contexts = planes.map(canvas => canvas.getContext(method === 'crops' ? 'bitmaprenderer' : '2d'));
+        const mainMs = [], roundTripMs = [], bitmapMs = [], drawMs = [];
+        let pixelChecks = 0;
+        for (let beat = 0; beat < beats + 3; beat++) {
+          const sentAt = performance.now();
+          const message = await next({ type: 'beat', method, seq: ++seq });
+          samples = message.samples; renderer = message.renderer;
+          const verify = beat === 0;
+          const mainStart = performance.now();
+          if (method === 'crops') {
+            if (message.bitmaps.length !== count) throw new Error('expected 20 cropped ImageBitmaps');
+            for (let i = 0; i < count; i++) {
+              const bitmap = message.bitmaps[i];
+              if (bitmap.width !== cardWidth || bitmap.height !== cardHeight)
+                throw new Error(`crop ${i} size ${bitmap.width}x${bitmap.height}`);
+              if (verify) {
+                stagingContext.clearRect(0, 0, cardWidth, cardHeight);
+                stagingContext.drawImage(bitmap, 0, 0);
+                const actual = stagingContext.getImageData(cardWidth / 2, cardHeight / 2, 1, 1).data;
+                if (actual.some((value, channel) => Math.abs(value - colors[i][channel]) > 2))
+                  throw new Error(`crop ${i} pixel ${Array.from(actual)} expected ${colors[i]}`);
+                pixelChecks++;
+              }
+              contexts[i].transferFromImageBitmap(bitmap);
+            }
+          } else {
+            if (message.atlas.width !== atlasWidth || message.atlas.height !== atlasHeight)
+              throw new Error('whole atlas bitmap has wrong dimensions');
+            for (let i = 0; i < count; i++) {
+              const ctx = contexts[i];
+              ctx.drawImage(message.atlas, i % columns * cardWidth,
+                Math.floor(i / columns) * cardHeight, cardWidth, cardHeight,
+                0, 0, cardWidth, cardHeight);
+            }
+            message.atlas.close();
+          }
+          const presentedAt = performance.now();
+          if (verify && method === 'fallback') {
+            for (let i = 0; i < count; i++) {
+              const actual = contexts[i].getImageData(cardWidth / 2, cardHeight / 2, 1, 1).data;
+              if (actual.some((value, channel) => Math.abs(value - colors[i][channel]) > 2))
+                throw new Error(`fallback ${i} pixel ${Array.from(actual)} expected ${colors[i]}`);
+              pixelChecks++;
+            }
+          }
+          if (beat >= 3) {
+            mainMs.push(round(presentedAt - mainStart));
+            roundTripMs.push(round(presentedAt - sentAt));
+            bitmapMs.push(round(message.bitmapMs));
+            drawMs.push(round(message.drawMs));
+          }
+        }
+        methods[method] = { pixelChecks, mainMs, main: summary(mainMs),
+          roundTripMs, roundTrip: summary(roundTripMs), bitmapMs, bitmap: summary(bitmapMs),
+          drawMs, draw: summary(drawMs) };
+      }
+      return { pass: true, origin: location.origin, route, samples, renderer,
+        contextAttributes: { alpha: true, antialias: false, premultipliedAlpha: true },
+        cardCount: count, cardSize: [cardWidth, cardHeight], atlasSize: [atlasWidth, atlasHeight],
+        beats, warmupBeats: 3, methods };
+    } finally {
+      port.close();
+      ownedWorker?.terminate();
+    }
+  }
+
+  if (query.get('role') === 'child') {
+    const run = async port => {
+      try { parent.postMessage({ type: 'probe-result', result: await childRun(port) }, '*'); }
+      catch (error) { parent.postMessage({ type: 'probe-result', result: {
+        pass: false, origin: location.origin, route, error: String(error.stack || error),
+      } }, '*'); }
+    };
+    if (route === 'perDocument') {
+      const worker = newWorker();
+      const channel = new MessageChannel();
+      worker.postMessage({ type: 'attach' }, [channel.port1]);
+      run(channel.port2);
+    } else {
+      addEventListener('message', event => {
+        if (event.data?.type === 'gl-port' && event.ports[0]) run(event.ports[0]);
+      }, { once: true });
+      parent.postMessage({ type: 'child-ready' }, '*');
+    }
+  } else {
+    const childOrigin = query.get('childOrigin');
+    window.__probeDone = new Promise((resolve, reject) => {
+      const worker = route === 'shared' ? newWorker() : null;
+      const iframe = document.createElement('iframe');
+      iframe.src = `${childOrigin}/gl-atlas-harness.html?role=child&route=${route}&beats=${beats}`;
+      document.body.append(iframe);
+      const timeout = setTimeout(() => reject(new Error('child result timed out')), 90000);
+      addEventListener('message', event => {
+        if (event.source !== iframe.contentWindow || event.origin !== childOrigin) return;
+        if (event.data?.type === 'child-ready' && worker) {
+          const channel = new MessageChannel();
+          worker.postMessage({ type: 'attach' }, [channel.port1]);
+          iframe.contentWindow.postMessage({ type: 'gl-port' }, childOrigin, [channel.port2]);
+        }
+        if (event.data?.type === 'probe-result') {
+          clearTimeout(timeout);
+          worker?.terminate();
+          resolve({ ...event.data.result, crossOrigin: location.origin !== event.origin,
+            parentOrigin: location.origin, childOrigin: event.origin,
+            workerOwner: route === 'shared' ? 'parent' : 'child' });
+        }
+      });
+    });
+  }
+})();
+</script>
