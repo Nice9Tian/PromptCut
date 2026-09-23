@@ -1,6 +1,6 @@
-# Agent 指南：为什么这样定
+# 开发者指南：为什么这样定
 
-对应 `docs/semantics/agent-guide.md` 和 `docs/semantics/agent/`。这里只写理由和取舍，不是规范。
+对应 `docs/semantics/developer_guide.md` 和 `docs/semantics/guide_files/`。这里只写理由和取舍，不是规范。
 
 ## 为什么是闭环
 
@@ -55,4 +55,4 @@ main 上任何时候都可能被拿去构建和发版，红着的基线会让后
 
 ## 为什么入口文件只写指针
 
-仓库里只要有 CLAUDE.md，Claude Code 就只读它、不读 AGENTS.md。所以 AGENTS.md 作为所有工具共用的唯一入口，CLAUDE.md 只引入它，规则本身都在 `agent-guide.md`，入口里不重复。
+仓库里只要有 CLAUDE.md，Claude Code 就只读它、不读 AGENTS.md。所以 AGENTS.md 作为所有工具共用的唯一入口，CLAUDE.md 只引入它，规则本身都在 `guide_files/`，入口里不重复。

@@ -80,7 +80,7 @@ PromptCut-patch-0.2.3.exe -WhatIf          # 只检查，不写入
 
 ### 版本号怎么排
 
-两个版本号的进位规则和 `minShellVersion` 的用法在 `docs/semantics/agent/git-and-release.md`。下面「一次教训」是这条规则的来历。
+两个版本号的进位规则和 `minShellVersion` 的用法在 `docs/semantics/guide_files/git_and_release.md`。下面「一次教训」是这条规则的来历。
 
 ### 一次教训：别拿「顺手编的外壳版本」当门槛
 

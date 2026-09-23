@@ -31,7 +31,7 @@
  * - 端口三个连号都要空着:每台 dev server 另占 +1、+2 当舞台端口。5190~5192 是用户常驻的那台。
  * - media junction:正常结束、失败、Ctrl+C、关窗口都会先拆链接(只拆链接,核对它没了、
  *   素材目录还在)再退出;被强杀没来得及拆的,下次运行时按标记清掉。脚本从不删导出目录。
- *   自己删导出目录之前,先确认里面没有 media junction,做法见 docs/semantics/agent/verification.md。
+ *   自己删导出目录之前,先确认里面没有 media junction,做法见 docs/semantics/guide_files/verification.md。
  *
  * 坑:
  *
