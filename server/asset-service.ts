@@ -61,7 +61,8 @@
  *   `Access-Control-Expose-Headers: Content-Range, Accept-Ranges, Content-Length, Content-Type`。
  * - 预检 `OPTIONS` 回 204:方法 `GET, HEAD, PUT, POST, OPTIONS`,
  *   头 `Content-Type, Range, X-Media-Size, X-Media-Ext, X-Media-Type`;
- *   请求带 `Access-Control-Request-Private-Network` 时回 `Access-Control-Allow-Private-Network: true`。
+ *   请求带 `Access-Control-Request-Private-Network` 时，**只有来源是回环或局域网地址**（`isPrivateOrigin`）
+ *   才回 `Access-Control-Allow-Private-Network: true`；公网网页的预检不给这一项，浏览器照样拦下它。
  * - 不带凭据(不用 cookie),所以用 `*`。`/api/**` 的同源守卫只对这一组路径豁免
  *   (`http-guard.mjs` 的 `isAssetServicePath`),其余 `/api/**` 照旧只认同源。
  *
@@ -311,6 +312,26 @@ export function isAssetCorsPath(url: string | undefined): boolean {
   return isAssetServicePath(url) || String(url || "").startsWith("/@media/");
 }
 
+/**
+ * 来源是不是回环或局域网地址:localhost / *.localhost / *.local、127.0.0.0/8、10/8、172.16/12、192.168/16、
+ * 169.254/16、IPv6 的 ::1、fc00::/7、fe80::/10。素材服务要让局域网里的设备直接访问
+ * (`docs/semantics/architecture/asset-storage.md`「职责」),没说要让公网网页访问本机 ——
+ * 私有网络访问只放给这些来源,取最保守的一边。认不出的来源一律当公网。
+ */
+export function isPrivateOrigin(origin: string | string[] | undefined): boolean {
+  let host: string;
+  try { host = new URL(String(origin || "")).hostname.toLowerCase(); } catch { return false; }
+  if (host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local")) return true;
+  if (host.startsWith("[")) {
+    const v6 = host.slice(1, -1);
+    return v6 === "::1" || /^f[cd][0-9a-f]{0,2}:/.test(v6) || /^fe[89ab][0-9a-f]?:/.test(v6);
+  }
+  const m = /^(d{1,3}).(d{1,3}).(d{1,3}).(d{1,3})$/.exec(host);
+  if (!m) return false;
+  const [a, b] = [Number(m[1]), Number(m[2])];
+  return a === 127 || a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254);
+}
+
 function applyCors(req: IncomingMessage, res: ServerResponse) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Expose-Headers", ASSET_EXPOSE_HEADERS);
@@ -318,7 +339,7 @@ function applyCors(req: IncomingMessage, res: ServerResponse) {
     res.setHeader("Access-Control-Allow-Methods", ASSET_ALLOW_METHODS);
     res.setHeader("Access-Control-Allow-Headers", ASSET_ALLOW_HEADERS);
     res.setHeader("Access-Control-Max-Age", "600");
-    if (req.headers["access-control-request-private-network"]) res.setHeader("Access-Control-Allow-Private-Network", "true");
+    if (req.headers["access-control-request-private-network"] && isPrivateOrigin(req.headers.origin)) res.setHeader("Access-Control-Allow-Private-Network", "true");
   }
 }
 

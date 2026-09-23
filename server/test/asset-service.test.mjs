@@ -272,6 +272,14 @@ test('跨源:另一个源(模拟局域网设备)的预检和实际请求都拿�
     assert.equal(pre.headers.get('access-control-allow-private-network'), 'true');
   }
 
+  // 公网网页的预检:照样回 CORS 头,但不给私有网络访问(只放给回环和局域网来源)
+  const pub = await fetch(`${base}/media/${hash}/chunks`, {
+    method: 'OPTIONS',
+    headers: { Origin: 'https://evil.example.com', 'Access-Control-Request-Method': 'GET', 'Access-Control-Request-Private-Network': 'true' },
+  });
+  assert.equal(pub.status, 204);
+  assert.equal(pub.headers.get('access-control-allow-private-network'), null);
+
   const up = await put(hash, 0, buf, { Origin: LAN, 'X-Media-Size': String(buf.length), 'X-Media-Ext': 'jpg' });
   assert.equal(up.status, 200);
   assert.equal(up.headers.get('access-control-allow-origin'), '*');
