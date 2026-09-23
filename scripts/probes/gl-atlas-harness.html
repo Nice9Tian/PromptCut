@@ -14,7 +14,7 @@
     (37 + i * 71) % 256, (89 + i * 43) % 256, (151 + i * 97) % 256, 255,
   ]);
 
-  // Stringified into a Blob so the same Worker code runs in either document's origin.
+  // 序列化成 Blob 再起 Worker，同一份代码在父页、子页哪个源里都能跑。
   function workerMain() {
     const width = 1600, height = 720, tileWidth = 320, tileHeight = 180;
     const colors = Array.from({ length: 20 }, (_, i) => [
