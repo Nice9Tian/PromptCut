@@ -42,6 +42,11 @@ export interface StreamPlaneGroup {
   clipIds: string[];
   key?: string;
   ranges?: Array<[number, number]>;
+  /**
+   * 组流平面挂在哪张卡的那一层(组里**此刻活跃的最上面那张**)。由 `StageView` 按当前时刻算好填进来 ——
+   * live 路每个片段一个单片段 `Stage`,单个 `Stage` 不知道别的片段此刻在不在场。不填就取组里最上面那张。
+   */
+  host?: string;
 }
 
 /**
@@ -338,13 +343,13 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
         组流平面(G1:一条流盖住相邻的好几张重卡)。它跨片段,挂不进任何一个包裹层,
         所以落在舞台根下、和卡包裹层所在的那一层同级;组流里包裹层的外观已经画进流里,所以不受任何
         包裹层的 `frameCss` / `opacity` / `filter` / `motion` / `isolation` 影响。
-        **只渲在组里最上面那张卡(`clipIds` 的最后一个)所在的那个 `Stage` 里**:live 路每个片段一个
+        **只渲在组里此刻活跃的最上面那张卡(`host`)所在的那个 `Stage` 里**:live 路每个片段一个
         单片段 `Stage`,每个都渲一块的话同一条组流会叠好几层;z 序取那张卡的那一层。
         `pointer-events: none`:点击落到背后组内被抑制的卡的包裹层上(`solid.ts` 的 `hitTest`)。
       */}
       {streamPlanes?.filter((g) => g.clipIds.length > 1).map((g) => {
-        const topId = g.clipIds[g.clipIds.length - 1];
-        const at = active.findIndex((c) => c.id === topId);
+        const hostId = g.host ?? g.clipIds[g.clipIds.length - 1];
+        const at = active.findIndex((c) => c.id === hostId);
         if (at < 0) return null;
         return <canvas key={g.clipIds.join(",")} data-pc-group-plane="" data-pc-stream-group={g.clipIds.join(",")}
           width={0} height={0}

@@ -1710,6 +1710,19 @@ export default function StageView() {
 
   if (!project) return null;
   const timeline = flattenOverlay(project, graph);
+  /*
+   * 组流平面挂在组里**此刻活跃的最上面那张卡**那一层(G1)。live 路每个片段一个单片段 `Stage`,
+   * 哪张卡此刻在场只有这里知道;`timeline.clips` 已经是画家顺序(最后一个在最上面)。
+   */
+  const streamPlanes = ref.current.streamPlanes.some((g) => g.clipIds.length > 1)
+    ? ref.current.streamPlanes.map((g) => {
+      if (g.clipIds.length < 2) return g;
+      const members = new Set(g.clipIds);
+      const live = timeline.clips.filter((c) => members.has(c.id) && cardMountedAt(c, t));
+      const host = live.length ? live[live.length - 1].id : g.clipIds[g.clipIds.length - 1];
+      return g.host === host ? g : { ...g, host };
+    })
+    : ref.current.streamPlanes;
 
   return (
     <div
@@ -1750,7 +1763,7 @@ export default function StageView() {
           scrubbing={ref.current.scrubbing}
           playing={ref.current.playing}
           suppressed={ref.current.suppressed}
-          streamPlanes={ref.current.streamPlanes}
+          streamPlanes={streamPlanes}
           snapshots={ref.current.snapshots}
           remountGen={ref.current.remountGen}
           settling={ref.current.settling}
