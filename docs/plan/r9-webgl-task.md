@@ -1,14 +1,14 @@
 # R9 任务书：canvas 卡的共享 WebGL 渲染器
 
-这份文件是 `restructure_planning/render_pipeline_restructure.md` 第 5 节 R9 一步的**协议全文**，自成一体：动工的人读 `user_pinned_goal.md`（渲染 10 是这一步的出处）、`restructure_planning/render_pipeline_restructure.md`（总览、3.6 的更正、步骤依赖）、`restructure_planning/r2-r7-task.md`（R9 依赖的 E、K 各节）和这一份就够，不需要再翻 `AGY-TASK-cloud-doc-and-write-race.md`。
+这份文件是 `docs/archive/restructure_planning/render_pipeline_restructure.md` 第 5 节 R9 一步的**协议全文**，自成一体：动工的人读 `docs/archive/user_pinned_goal.md`（渲染 10 是这一步的出处）、`docs/archive/restructure_planning/render_pipeline_restructure.md`（总览、3.6 的更正、步骤依赖）、`docs/archive/restructure_planning/r2-r7-task.md`（R9 依赖的 E、K 各节）和这一份就够，不需要再翻 `AGY-TASK-cloud-doc-and-write-race.md`。
 
-**怎么来的**（2026-09-22）：正文取自任务书第 111 版的目标 M，逐条折进了三样东西——第 75 轮第 6 份分步审查里已采纳的处理意见（8 条阻塞 + 1 条非阻塞 + manager 补的 3 条前置接口不符，原文在 `restructure_planning/r75/agy-r75-06.md`，逐条结论在 `restructure_planning/r75/fold-notes.md`）、`restructure_planning/render_pipeline_restructure.md` 第 3.6 / 3.8 / 3.9 节的更正、以及 2026-09-22 和用户定下的几条（判重只看活渲耗时 `stepMs`、生成快照改名拆文件、画布位图换 webp 搁置、粒子卡不迁进 Worker）。
+**怎么来的**（2026-09-22）：正文取自任务书第 111 版的目标 M，逐条折进了三样东西——第 75 轮第 6 份分步审查里已采纳的处理意见（8 条阻塞 + 1 条非阻塞 + manager 补的 3 条前置接口不符，原文在 `docs/archive/restructure_planning/r75/agy-r75-06.md`，逐条结论在 `docs/archive/restructure_planning/r75/fold-notes.md`）、`docs/archive/restructure_planning/render_pipeline_restructure.md` 第 3.6 / 3.8 / 3.9 节的更正、以及 2026-09-22 和用户定下的几条（判重只看活渲耗时 `stepMs`、生成快照改名拆文件、画布位图换 webp 搁置、粒子卡不迁进 Worker）。
 
 **还没做的事**：这份文件**没有经过独立审查**。第 75 轮审的是折叠之前的第 111 版；折叠本身只有我自己核过锚点和措辞。另外 `scripts/probes/gl-atlas-probe.mjs` 还没写，**它是本步的第一件事**（M3 末尾），探针不过就要换退路。
 
 ## 读法
 
-- **步骤名的对应**：「第 1 / 2 / 2b / 3 步」都已落地（提交 `b5c65dc`）；「3b 步」= R1（差异样式内联，已完成，`e67390e`）；R1b（像素映射分流与 WebGL2 后端）已完成（`dd58cb5`）；「第 4 步」= R2～R7（见 `restructure_planning/r2-r7-task.md`）加上 R8（轨道流，`restructure_planning/r8-streams-task.md`）和本文的 R9（第 111 版里叫「第 4b 步」）；「第 5～10 步」是云端 / 文档服务那一半，不在本文范围。**R9 依赖 R3（舞台内容、E7 的兄弟平面）和 R5（K3～K5 的跳转、节拍、追帧）**。
+- **步骤名的对应**：「第 1 / 2 / 2b / 3 步」都已落地（提交 `b5c65dc`）；「3b 步」= R1（差异样式内联，已完成，`e67390e`）；R1b（像素映射分流与 WebGL2 后端）已完成（`dd58cb5`）；「第 4 步」= R2～R7（见 `docs/archive/restructure_planning/r2-r7-task.md`）加上 R8（轨道流，`docs/plan/r8-streams-task.md`）和本文的 R9（第 111 版里叫「第 4b 步」）；「第 5～10 步」是云端 / 文档服务那一半，不在本文范围。**R9 依赖 R3（舞台内容、E7 的兄弟平面）和 R5（K3～K5 的跳转、节拍、追帧）**。
 - **R9 之前是什么样**：canvas 卡在舞台主线程各自拿上下文自己画。`[data-pc-gl-plane]`、GL Worker 的 `beat` / `done` / `measure` 这些都是本步才有；R2～R8 的正文里遇到它们就跳过。
 - **行号**：正文里的 `文件:行号` 分两类。**未标注的是 2026-09-22 当前 main（`048074c`）上逐条打开核对过的**；标了「`b5c65dc` 的行号，仅作提示」的没有核对，以符号名和引用的代码原句为准。引用的符号在当前代码里都 grep 得到，标「新」的是本任务要创建的文件。
 - **用词**：一律说「预渲染」「生成快照」。`createSnapshot`（`src/render/createSnapshot.ts:137`）按顺序调五步：`cloneScene → inlineDOMStyles → rasterizeCanvas → stripMedia → serializeScene`；页面协议是 `window.__pcCreateSnapshot`（`StageView.tsx:585`）。「冻住」只用来说被抑制的卡的 `t` 停在某一刻。代码标识符里残留的 `bake*` 不受这条约束。
@@ -24,7 +24,7 @@
 | **为什么要做** | 今天 5 张 canvas 卡各自拿上下文：`particles`（2D canvas，`particles.tsx:235` 把 `transferControlToOffscreen` 短路成真画布）、`scene-3d`（`scene-3d.tsx:152` 自建 `THREE.WebGLRenderer`、开了 `preserveDrawingBuffer`）和三张 runtime 用户卡 `logo-3d-9tian` / `route-globe-wa-3d` / `rpk-3d-showcase`（都是 three.js）。每张一个 WebGL 上下文，发指令的 JS 全在舞台主线程；Chrome 一页最多约 16 个活的上下文，多了丢最早的（`webglcontextlost`）。 |
 | **先做什么** | `gl-atlas-probe.mjs`。第一件事先验「MSAA FBO → `blitFramebuffer` → `createImageBitmap`」两条路线都成立，再量 20 张卡每拍 `createImageBitmap` + transfer 的主线程耗时。不达标就走 M3 末尾的退路。 |
 | **依赖哪几步** | R3（E7 的兄弟平面与四条类选择器）、R5（K3 的跳转、K4 的节拍、K5 的追帧与角色互换）。 |
-| **读哪几节** | 本文 M1～M7；`restructure_planning/r2-r7-task.md` 的 E7 第 5 条（兄弟平面）、K1（探针）、K2（贪心分派）、K3(a)（同步 `advanceTo`）、K4（一拍的顺序）、K5（两路追帧与互换）、K6（降级）、约束第 1 条（fps 与 `glRoute` 下拉）、J4（宿主能力表）。 |
+| **读哪几节** | 本文 M1～M7；`docs/archive/restructure_planning/r2-r7-task.md` 的 E7 第 5 条（兄弟平面）、K1（探针）、K2（贪心分派）、K3(a)（同步 `advanceTo`）、K4（一拍的顺序）、K5（两路追帧与互换）、K6（降级）、约束第 1 条（fps 与 `glRoute` 下拉）、J4（宿主能力表）。 |
 | **单步验收** | 见本文「验收」一节。 |
 
 ---
@@ -143,7 +143,7 @@ canvas 卡都按 `t` 求值、都是 `vtOk: true`；K5 第一路对它就是追�
 
 - **`scene-3d` 和三张 three.js 用户卡**改成 `canvas.kind: 'three'` 契约（删自建 `WebGLRenderer`，`scene-3d.tsx:152`）。**三张用户卡不在仓库里**，在用户机的运行时副本 `C:\Users\admin\AppData\Local\PromptCut\runtime\app\src\cards\user\`（`logo-3d-9tian` / `route-globe-wa-3d` / `rpk-3d-showcase`）。执行者把它们拷进仓库 `src/cards/user/` 做迁移和验收；迁移后的源码放进交付说明，**是否入库、是否放回 runtime 由用户定**。
 - **没迁移的旧 canvas 卡（自己建上下文的）照旧能跑**：当 `canvasHeavy` 兜底、不进共享渲染器，不因 M 而坏。
-- **`particles` 不迁进 Worker**：`particles.tsx:128` 的 `tsParticles.load({ element: box.current })` 要 DOM 元素、配置是异步 `fetch`，53 张粒子卡共用这份；它走 M1 的第四种契约 `kind: 'dom2d'`——仍在主线程用真画布画（`:232-236` 的 `transferControlToOffscreen` 短路保留），只登记进 `beat` 的 `cards` 以便和别的卡同拍落定。M 验收的「主线程 0 个 WebGL 上下文」仍成立（它是 2D 上下文）。长的粒子片段判重时走轨道流，见 `restructure_planning/r8-streams-task.md` 的 G1。
+- **`particles` 不迁进 Worker**：`particles.tsx:128` 的 `tsParticles.load({ element: box.current })` 要 DOM 元素、配置是异步 `fetch`，53 张粒子卡共用这份；它走 M1 的第四种契约 `kind: 'dom2d'`——仍在主线程用真画布画（`:232-236` 的 `transferControlToOffscreen` 短路保留），只登记进 `beat` 的 `cards` 以便和别的卡同拍落定。M 验收的「主线程 0 个 WebGL 上下文」仍成立（它是 2D 上下文）。长的粒子片段判重时走轨道流，见 `docs/plan/r8-streams-task.md` 的 G1。
 - **导出页（`ExportView`）同样经 M2 的 Worker 画。** 像素口径用 `scripts/verify-unified-frames.mjs` 核：迁移前后同一帧**允许抗锯齿边缘差异，非边缘像素差 ≤ 1/255**（three.js 同一版本；上下文属性从 `{ alpha: true, antialias: true }` 换成 `{ alpha: true, antialias: false, premultipliedAlpha: true }` + MSAA FBO，边缘必然有差）。
 
 ### M6 uber-shader 是可选优化，不做
@@ -160,7 +160,7 @@ R9 落地时把这个上下文并进共享渲染器：`pixelMapGl` 不再自己 
 
 ## 约束
 
-- **帧率制与 `glRoute` 下拉。** 项目 `fps` 提供 24 / 25 / 30 / 60 四档，在项目选项面板 `src/editor/ProjectSettingsDialog.tsx` 里切换；**同一面板再加 `glRoute` 下拉**——`project.ts:260` 的 `Project` 接口加字段 `glRoute?: 'perDocument' | 'shared'`，缺省按宿主能力（`lowMemory` 时 `shared`、否则 `perDocument`）；**切换后两个舞台重建 `glHost`，并和切 fps 一样重走 K1 的 `ProbeGate` 遮罩**（`device` 变了，新 `device` 下已有记录的跳过）。整条约束的全文见 `restructure_planning/r2-r7-task.md` 的「约束」第 1 条。
+- **帧率制与 `glRoute` 下拉。** 项目 `fps` 提供 24 / 25 / 30 / 60 四档，在项目选项面板 `src/editor/ProjectSettingsDialog.tsx` 里切换；**同一面板再加 `glRoute` 下拉**——`project.ts:260` 的 `Project` 接口加字段 `glRoute?: 'perDocument' | 'shared'`，缺省按宿主能力（`lowMemory` 时 `shared`、否则 `perDocument`）；**切换后两个舞台重建 `glHost`，并和切 fps 一样重走 K1 的 `ProbeGate` 遮罩**（`device` 变了，新 `device` 下已有记录的跳过）。整条约束的全文见 `docs/archive/restructure_planning/r2-r7-task.md` 的「约束」第 1 条。
 - **不改导出像素基线的其余部分**：`FrameScene` 的 `placeholder` 分支不动、不加包裹层；`Stage` 的六个新 prop 在导出页不传。M5 明写的抗锯齿边缘差异是这一条的**唯一例外**，验收按 M5 的口径。
 - **页面代码只按宿主能力表分支，不按平台名分支**（J4）。`offscreenGl` / `lowMemory` 的判据已经落地在 `stageRpc.ts:322` / `:329`。
 - **在线浏览器模式下同样成立**：canvas 卡走同一套 Worker，不请求任何本机进程；那个模式加载不了用户卡 / 图卡，所以只有内置 canvas 卡参与。
@@ -181,7 +181,7 @@ R9 落地时把这个上下文并进共享渲染器：`pixelMapGl` 不再自己 
 - **迁移**：5 张卡迁移后 `scripts/verify-unified-frames.mjs` 按 M5 的口径通过（非边缘像素差 ≤ 1/255）；没迁移的旧 canvas 卡照旧能跑。
 - **像素映射**：`pixelMapGl` 并进共享上下文之后，`scripts/probes/pixelmap-gl-probe.mjs` 的八个用例结果与 `dd58cb5` 上一致。
 - **在线浏览器模式（L）下同样成立、不请求任何本机进程。**
-- 收尾照 `restructure_planning/r2-r7-task.md` 的「每一步通用的收尾」：`npx tsc -b --force` 零错误；`npm test` 全过；不改导出像素基线（M5 的例外除外）。验证改动用 5197 端口（`.claude/launch.json` 的 `dev-test`），不要碰用户常驻的 5190，不要动 `%LOCALAPPDATA%\PromptCut\runtime\app`。
+- 收尾照 `docs/archive/restructure_planning/r2-r7-task.md` 的「每一步通用的收尾」：`npx tsc -b --force` 零错误；`npm test` 全过；不改导出像素基线（M5 的例外除外）。验证改动用 5197 端口（`.claude/launch.json` 的 `dev-test`），不要碰用户常驻的 5190，不要动 `%LOCALAPPDATA%\PromptCut\runtime\app`。
 
 ## 不做
 

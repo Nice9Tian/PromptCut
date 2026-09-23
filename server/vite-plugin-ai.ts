@@ -197,7 +197,7 @@ export default function vitePluginAi(): Plugin {
        * PROMPTCUT_AGENT 带上来,API 直连那条路由 startRun 的 callTool 闭包带;编辑台拿它记「谁改了哪儿」。
        */
       /*
-       * 数据管理的只读镜像(docs/decoupling-plan.md 第 3.2 节,阶段 4;A7)。
+       * 数据管理的只读镜像(docs/archive/topics/decoupling-plan.md 第 3.2 节,阶段 4;A7)。
        *
        * 编辑页把项目(带版本号)推给**镜像插件**(server/vite-plugin-mirror.ts,两个进程都挂),
        * 播放头走它的 /api/data/playhead。这里只读:Agent 的读和渲染 —— get_project /

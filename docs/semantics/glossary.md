@@ -10,24 +10,24 @@
 
 | 术语 | 含义 | 定义在 |
 |---|---|---|
-| 传统式 | 打开编辑界面工作，用户和 AI 栏里的 Agent 一起改 | 03 |
-| SKILL | 桌面 APP 里的 Agent 经 MCP 接入；默认关闭编辑界面，转入后台运行 | 03 |
-| 后台运行 | 桌面应用关闭编辑界面后转为托盘图标和悬浮窗继续运行 | 03 |
-| AI 栏 | 编辑界面右侧和 Agent 对话、看进度的区域 | 03 |
-| 接入方式 | Agent 的三种接入：CLI、API（在 AI 栏里对话）、桌面 APP（经 SKILL） | 03 |
-| 创造力等级 | 低、中、高三档，决定 Agent 能改到多深；项目有默认值，每个对话可单独改 | 03 |
-| 主 Agent、角色 | 主 Agent 可拉起其它 Agent 并分派任务，拉起时可附加预设的角色 | 03 |
-| 进度汇报 | Agent 交给用户的结构化条目：做了、待办、问题 | 03 |
+| 传统式 | 打开编辑界面工作，用户和 AI 栏里的 Agent 一起改 | `user-workflow.md` |
+| SKILL | 桌面 APP 里的 Agent 经 MCP 接入；默认关闭编辑界面，转入后台运行 | `user-workflow.md` |
+| 后台运行 | 桌面应用关闭编辑界面后转为托盘图标和悬浮窗继续运行 | `user-workflow.md` |
+| AI 栏 | 编辑界面右侧和 Agent 对话、看进度的区域 | `user-workflow.md` |
+| 接入方式 | Agent 的三种接入：CLI、API（在 AI 栏里对话）、桌面 APP（经 SKILL） | `user-workflow.md` |
+| 创造力等级 | 低、中、高三档，决定 Agent 能改到多深；项目有默认值，每个对话可单独改 | `user-workflow.md` |
+| 主 Agent、角色 | 主 Agent 可拉起其它 Agent 并分派任务，拉起时可附加预设的角色 | `user-workflow.md` |
+| 进度汇报 | Agent 交给用户的结构化条目：做了、待办、问题 | `user-workflow.md` |
 
 ## 系统角色
 
 | 术语 | 含义 | 定义在 |
 |---|---|---|
-| 编辑界面 | 用户看和操作的地方 | 02 |
-| 文档服务 | 项目文档的唯一修改入口 | 02、architecture/document-service.md |
-| 素材存储 | 按内容哈希存字节的仓库 | 02、architecture/asset-storage.md |
-| 成片渲染 | 把项目渲染成给人看的画面 | 02、architecture/rendering.md |
-| 查询渲染 | 按 Agent 指定的时刻渲染画面，供 Agent 观察 | 02、architecture/rendering.md |
+| 编辑界面 | 用户看和操作的地方 | `architecture.md` |
+| 文档服务 | 项目文档的唯一修改入口 | `architecture.md`、architecture/document-service.md |
+| 素材存储 | 按内容哈希存字节的仓库 | `architecture.md`、architecture/asset-storage.md |
+| 成片渲染 | 把项目渲染成给人看的画面 | `architecture.md`、architecture/rendering.md |
+| 查询渲染 | 按 Agent 指定的时刻渲染画面，供 Agent 观察 | `architecture.md`、architecture/rendering.md |
 | 本地模式、云端模式 | 文档服务在本机或在云端；本地模式不经过素材存储 | architecture/document-service.md |
 | 在线浏览器模式 | 只有页面、没有本机进程的运行形态 | architecture/platforms.md |
 | 低内存档 | 平板、手机等内存受限设备的运行档位 | architecture/platforms.md |
@@ -86,5 +86,5 @@
 | 术语 | 含义 | 定义在 |
 |---|---|---|
 | 基线 | 每次改动都必须通过的验证集合 | agent/verification.md |
-| 专用 worktree | 会影响基线的改动所在的独立工作目录和分支 | 04 |
-| 本机说明 | 只和本机有关的环境信息，不入库 | 04 |
+| 专用 worktree | 会影响基线的改动所在的独立工作目录和分支 | `agent-guide.md` |
+| 本机说明 | 只和本机有关的环境信息，不入库 | `agent-guide.md` |

@@ -2,9 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { verifyBakeProtocol, scanUsage, readDocLists } from '../../scripts/verify-bake-protocol.mjs';
 
-// J2: 预渲染页的驱动协议只经 window.__*,清单写在 docs/bake-page-protocol.md。
+// J2: 预渲染页的驱动协议只经 window.__*,清单写在 docs/guides/bake-page-protocol.md。
 // 加一个 Node 侧的 window.__ 调用而不更新清单,必须在这里失败。
-test('every window.__* the bake page protocol uses is listed in docs/bake-page-protocol.md', () => {
+test('every window.__* the bake page protocol uses is listed in docs/guides/bake-page-protocol.md', () => {
   const { problems } = verifyBakeProtocol();
   assert.deepEqual(problems, []);
 });

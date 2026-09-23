@@ -1,6 +1,6 @@
 # 素材存储
 
-展开 `../02-architecture.md` 的「素材存储」角色。从属于 02，与它冲突时以 02 为准。
+展开 `../architecture.md` 的「素材存储」角色。从属于 `architecture.md`，与它冲突时以它为准。
 
 ## 职责
 

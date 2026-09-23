@@ -1,6 +1,6 @@
 # 项目数据模型
 
-展开 `../02-architecture.md`。从属于 02，与它冲突时以 02 为准。项目文档的真身在文档服务，见 `document-service.md`。
+展开 `../architecture.md`。从属于 `architecture.md`，与它冲突时以它为准。项目文档的真身在文档服务，见 `document-service.md`。
 
 ## 项目
 

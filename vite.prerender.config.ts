@@ -11,7 +11,7 @@ import vitePluginCards from "./server/vite-plugin-cards";
 import { visionPlugin } from "./server/vite-plugin-vision";
 
 /**
- * 预渲染进程的 Vite(docs/decoupling-plan.md 第 3 节「预渲染」)。
+ * 预渲染进程的 Vite(docs/archive/topics/decoupling-plan.md 第 3 节「预渲染」)。
  *
  * 由编辑器那一端的 dev server(server/vite-plugin-prerender.ts)用 PROMPTCUT_ROLE=prerender 拉起,
  * 独立进程、独立端口、低于正常的进程优先级。它做三件事:

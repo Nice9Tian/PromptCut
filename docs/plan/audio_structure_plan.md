@@ -75,7 +75,7 @@
 ## 4. 步骤
 
 每步照项目惯例派 Opus 进子 worktree，回来由主会话审查、重跑 `tsc` / `npm test` 后合并。
-出处："可解耦的子任务派 Opus 进子 worktree……回来由我审查、重跑 `tsc` / `npm test` 后 `--no-ff` 合并"——`restructure_planning/hand_off.md` 第 6 节。
+出处："可解耦的子任务派 Opus 进子 worktree……回来由我审查、重跑 `tsc` / `npm test` 后 `--no-ff` 合并"——`docs/archive/restructure_planning/hand_off.md` 第 6 节。
 端口按 10 个一段分，A 系列从 5231 起。
 
 依赖关系：`A0 → A1 → {A2, A3, A4, A5} → A6 → A7`。A2～A5 可以并行，但 A3 和 A4 都会碰 `fxChain.ts` 的调用方式，合并时要注意。
@@ -136,7 +136,7 @@
   - 停顿超过 40 ms 就 `ctx.suspend()`，恢复时从当前 t 重新排块。
   - 漂移小于 40 ms 不动；达到 40 ms，就在下一个块边界重排，用 5 ms 淡入淡出防咔哒。
 
-  出处："音频跟着 t（停顿超过约 40 毫秒就暂停音频、恢复时对齐）。阈值固定 40 毫秒"——`user_pinned_goal.md` 架构 10。
+  出处："音频跟着 t（停顿超过约 40 毫秒就暂停音频、恢复时对齐）。阈值固定 40 毫秒"——`docs/archive/user_pinned_goal.md` 架构 10。
   **看门狗（交接文档的待定 5b）在新引擎里就是「定时器到点就 `suspend()`」，实现成本很低，但加不加仍然要你定。**
 - **拖动**：照现在的行为，拖动时不出声，松手后按新 t 排块。
   出处："拖动时鼠标每动一下就是一次"——`src/render/mediaSync.ts` 的 `SCRUB_SEEK_MIN_MS` 注释。现在拖动时 `playing = false`，只 seek、不出声。
@@ -195,7 +195,7 @@
   - 素材 / 片段：用 A1 按区间解码；
   - 整条时间轴：用 A4 的分段渲染器边渲边量，不写盘。
 
-  出处："ffmpeg ebur128 的 `LRA low / LRA high` 就是它,实测和自己算的分位数逐位一致(-15.5 / -8.2)"——`docs/audio-fx.md`「先说几件和直觉相反的事」。说明这套算法已经对照 ffmpeg 核过一次。
+  出处："ffmpeg ebur128 的 `LRA low / LRA high` 就是它,实测和自己算的分位数逐位一致(-15.5 / -8.2)"——`docs/archive/topics/audio-fx.md`「先说几件和直觉相反的事」。说明这套算法已经对照 ffmpeg 核过一次。
 - **波形**：Worker 按区间解码算峰值，每素材一个峰值文件，按内容哈希缓存（本地放内容库旁边，在线模式放 IndexedDB）。
 - **删除**：`server/vite-plugin-audio.ts` 的 `/api/audio/measure`；`measure_audio` 改成在页面里算。
 - **验收**：
@@ -213,14 +213,14 @@
   - s16 + deflate-raw 存进 OPFS / 内容库；
   - 就绪索引里加一类 `'audio'`。
 - **PC 客户端上传、浏览器拉取**：接口形状照 `cloud-task.md` 的快照上云，第一版可以只把接口留好，和「在线重型控件服务」一样先留口子。
-  出处："请为这些内容留接口"——`user_pinned_goal.md` 架构 3。
+  出处："请为这些内容留接口"——`docs/archive/user_pinned_goal.md` 架构 3。
 - **验收**：以那份计划 T1～T8 的判据为准；另加一条，重卡拉不到时静音、界面显示「预渲染中」、播放头不停。
 
 ### A7 清理和文档（1 天）
 
 - 删掉服务端的 `/@media/<hash>/pcm`（`server/vite-plugin-media.ts`）和 `server/test/media-pcm.test.mjs`。
 - 改 `cloud-task.md`：删掉「Agent 云端环境要预装 `ffmpeg`……`/@media/<hash>/pcm`」这条，Agent 端音频也走 JS；导出装 mp4 还用不用 ffmpeg，看待定 2。
-- 改 `docs/audio-fx.md` 的结构图；在音频图卡的作者约定里写明「必须是按区间的纯函数」，并在 `cardAuthoring` 的校验里加上分块无关性检查。
+- 改 `docs/archive/topics/audio-fx.md` 的结构图；在音频图卡的作者约定里写明「必须是按区间的纯函数」，并在 `cardAuthoring` 的校验里加上分块无关性检查。
 - 更新 `hand_off.md`、`render_pipeline_restructure_check.md`。
 - **完成的标志**：
   - `grep -rn "pcm\|ebur128\|aac" server/` 只剩导出装 mp4 那一处；
@@ -230,7 +230,7 @@
 ## 5. 优点 / 缺点 / 限制
 
 - **优点：满足「服务端不处理音频」，在线浏览器模式第一次有完整的声音**，包括读素材的音频图卡。
-  出处："**素材输入的音频图卡报错「该模式暂不支持素材输入的音频图卡」**"——`restructure_planning/cloud-task.md` L 节验收。重构后这条限制取消。
+  出处："**素材输入的音频图卡报错「该模式暂不支持素材输入的音频图卡」**"——`docs/plan/cloud-task.md` L 节验收。重构后这条限制取消。
 - **优点：导出内存和时间轴长度无关**，从约 460 MB 降到每段约 7 MB（第 2 节的算式）。
 - **优点：预览和导出连解码都是同一份代码，响度量的也是真正导出的那条声音**（第 0 节第 5 条）。
 - **缺点：改动面大。** 现有音频相关测试文件里至少 5 个要重写或删除（下面出处列的那几个）；`<audio>` 元素加 `planSync` 这一路已经调好了一轮（R7b 刚修过 24 / 25 fps 的误判），这次要整体换掉。

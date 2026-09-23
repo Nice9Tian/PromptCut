@@ -13,7 +13,7 @@ import type { RenderWorker, RenderJob2, Runner } from "./worker-pool";
  * ===================== 编辑器这一端:常驻热备渲染器(A / B) =====================
  *
  * 用户的前台渲染(3D 视图当前时刻的贴图、拖动播放头时要的那一帧)**不进预渲染池**,由编辑器
- * 自己守着的两台 Chrome 专门处理(docs/decoupling-plan.md 第 3.2 节「交互界面」)。原话:
+ * 自己守着的两台 Chrome 专门处理(docs/archive/topics/decoupling-plan.md 第 3.2 节「交互界面」)。原话:
  * 「交互端需要留两个 chrome 渲染,永远保持一个是热状态……A 正在渲染,这时候接到了新的任务,
  * 立刻交给热状态的 B,同时清空 A,之后 B 在渲染,A 热状态待机」。
  *

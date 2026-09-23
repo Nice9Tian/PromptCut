@@ -13,7 +13,7 @@ import { STAGE_PORTS, stagePortsOf } from "./stage-ports.mjs";
  * 两个舞台 iframe 必须落在**自己的渲染进程**里,否则一张重卡推帧就把编辑器主文档一起卡住
  * (pinned 渲染 1:用户交互不允许有任何卡顿)。Chromium 把「进不进独立进程」按 **site** 算,
  * 而 site 不含端口 —— 同一个 host 换个端口照样是同一个 site,实测(`scripts/probes/oac-probe.mjs`,
- * Chrome 152 / WebView2 153,报告 `restructure_planning/g0-a-webview2-probe.md`)不加头时两个 iframe 和父页
+ * Chrome 152 / WebView2 153,报告 `docs/archive/restructure_planning/g0-a-webview2-probe.md`)不加头时两个 iframe 和父页
  * 挤在一个进程里,A 死循环 2.5 秒父页最坏 rAF 间隔两千多毫秒。加上 `Origin-Agent-Cluster: ?1`
  * 之后这个源按 **origin** 分簇,iframe 成了独立进程,父页最坏间隔 7～17 ms。
  *

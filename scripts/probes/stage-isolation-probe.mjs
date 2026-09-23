@@ -7,7 +7,7 @@
  *   1. CDP `Target.getTargets` 里有**两个** `type: 'iframe'` 的 target —— 有 target 才说明
  *      它是 out-of-process iframe。`window.originAgentCluster` **恒回 true,不能当判据**;
  *   2. 让 A 舞台的主线程死循环 2.5 秒,量编辑器主文档最坏的 rAF 间隔:**< 20 ms**。
- *      同一个进程的话这个数会是两千多毫秒(实测,见 `restructure_planning/g0-a-webview2-probe.md`)。
+ *      同一个进程的话这个数会是两千多毫秒(实测,见 `docs/archive/restructure_planning/g0-a-webview2-probe.md`)。
  *
  * 这张页就是真的编辑台(`?editor&preview=stage`),量的也是真的主文档 —— pinned 渲染 1
  * 说的「用户交互不允许有任何卡顿」讲的就是它。

@@ -78,7 +78,7 @@ export function snapshotTier(capabilities) {
  * 并记一条诊断(卡 id、字节数)。
  *
  * 两档:DOM 卡 300 KB;canvas 卡 1 MB —— 它的字节 84%～95% 是 `toDataURL` 出来的
- * 位图(`docs/snapshot-size-audit.md`),差异样式内联对它无效,按位图的那一档算。
+ * 位图(`docs/archive/topics/snapshot-size-audit.md`),差异样式内联对它无效,按位图的那一档算。
  * 判据是审阅表的 `canvasHeavy`(`src/kernel/frameMode.mjs` 的 `cardCapabilities`)。
  */
 export const DOM_SNAPSHOT_LIMIT = 300 * 1024;

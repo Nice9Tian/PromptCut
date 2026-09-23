@@ -1,6 +1,6 @@
 # 卡片
 
-展开 `../02-architecture.md`。从属于 02，与它冲突时以 02 为准。
+展开 `../architecture.md`。从属于 `architecture.md`，与它冲突时以它为准。
 
 ## 卡片是什么
 
@@ -9,7 +9,7 @@
   - **页面结构与前端框架**（HTML、JavaScript、React、Motion 等）：负责排版、界面动画、文字动效。
   - **图形加速**（WebGL、WebGPU 及着色器）：负责逐像素的图像处理、调色、三维材质。
 - 同一时刻必须渲染出同一帧：卡片的画面只由时间和参数决定，不依赖真实时间。建卡时的具体写法限制见 `server/card-authoring-guide.md`。
-- Agent 对卡片能改到多深，由对话的创造力等级决定，见 `../03-user-workflow.md`。
+- Agent 对卡片能改到多深，由对话的创造力等级决定，见 `../user-workflow.md`。
 
 ## 卡片的形态
 

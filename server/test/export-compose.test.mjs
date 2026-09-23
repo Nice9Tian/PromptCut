@@ -1,5 +1,5 @@
 // node --test server/test/export-compose.test.mjs
-// 完整导出的素材合成:filter graph 拼得对不对。只验纯函数,真跑 ffmpeg 的对账见 docs/decoupling-plan.md 阶段 6。
+// 完整导出的素材合成:filter graph 拼得对不对。只验纯函数,真跑 ffmpeg 的对账见 docs/archive/topics/decoupling-plan.md 阶段 6。
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { buildComposeArgs, clipFrameRange, composeLayers, emphasisOps, parseCssColor, placement } from "../export-compose.mjs";

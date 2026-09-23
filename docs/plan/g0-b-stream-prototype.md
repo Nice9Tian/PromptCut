@@ -1,10 +1,10 @@
 # G0-b 轨道流编码原型报告（七项全部完成，(7) 的 nvenc 子项留白）
 
-R8 轨道流（`restructure_planning/r8-streams-task.md`，原任务书目标 G）的 **G0-b** 编码原型，2026-09-22。原始数据（12 个 JSON / log）留在当时会话的临时目录，没有进仓库；各项都能用「复现」一节的命令重跑。
+R8 轨道流（`docs/plan/r8-streams-task.md`，原任务书目标 G）的 **G0-b** 编码原型，2026-09-22。原始数据（12 个 JSON / log）留在当时会话的临时目录，没有进仓库；各项都能用「复现」一节的命令重跑。
 只产出探针脚本、实测数据和结论，**不改任何产品代码**。
 
 分支 `worktree-agent-a17aa99022b191c1c`，worktree `C:\Users\admin\Documents\PromptCut\.claude\worktrees\agent-a17aa99022b191c1c`，起点 `43644d9`（已 ff 到 main）。
-口径按 `restructure_planning/r75/fold-notes.md` 的 r75-05 采纳后版本。
+口径按 `docs/archive/restructure_planning/r75/fold-notes.md` 的 r75-05 采纳后版本。
 
 ## 进度清单
 
@@ -439,7 +439,7 @@ h264_mf      -c:v h264_mf -hw_encoding 1 -rate_control quality -quality 90 -g 15
 **一秒钟的流：墙钟约 1.0 s（空闲、编码重叠）到 2.1 s（有编码器竞争），字节 138 KB。**
 `scene-3d` 最贵：2 × 168 = 336 KB；`growth-curve` 最便宜：2 × 37 = 74 KB。四张卡都远在 G 验收「分段 <= 1 MB」之内。
 
-**对照同一秒的 HTML 快照**（`docs/snapshot-size-audit.md`，单帧**原始内联** HTML，投递前的 deflate + base64 另算）：
+**对照同一秒的 HTML 快照**（`docs/archive/topics/snapshot-size-audit.md`，单帧**原始内联** HTML，投递前的 deflate + base64 另算）：
 
 | 卡 | 流 / 秒（最终字节） | HTML 快照 / 秒（30 帧原始） | 倍数 |
 |---|---|---|---|
