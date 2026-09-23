@@ -286,3 +286,37 @@ test("空档里:什么都不显示,但空档后面那段照样提前装好;优�
   assert.equal(p.preload, 1, "1 号装着 b.mp4,不用重新加载文件,只 seek");
   assert.equal(p.load[1].id, "x");
 });
+
+/* ─────────────── 换档(T1a 审查 #5:同一片段换了地址 = 新的一段) ─────────────── */
+
+const c1small = sc("c1", "/@media/small", 0, 5, 20);
+const c1orig = sc("c1", "/@media/orig", 0, 5, 20);
+
+test("换档(播放中):新档装进另一个槽位,出画之前一直让上一档顶着,不闪黑", () => {
+  // 片段已经放到第 3 秒(早过了 NOT_READY_GRACE_SEC),小版在 0 号显示,原片刚到齐
+  const p = planSlots({ slots: [slot(c1small), empty], shown: 0, cur: c1orig, next: null, t: 3, playing: true });
+  assert.equal(p.active, 1);
+  assert.equal(p.load[1].url, "/@media/orig");
+  assert.equal(p.load[0].url, "/@media/small", "上一档原样放着");
+  assert.equal(p.shown, 0, "新档没出画:上一档顶着");
+  // 新档出画了:换显示
+  const q = planSlots({ slots: [slot(c1small), slot(c1orig)], shown: 0, cur: c1orig, next: null, t: 3.1, playing: true });
+  assert.equal(q.active, 1);
+  assert.equal(q.shown, 1);
+});
+
+test("换档(暂停):新档装进另一个槽位,显示着的上一档不被拆掉", () => {
+  const p = planSlots({ slots: [slot(c1small), empty], shown: 0, cur: c1orig, next: null, t: 3, playing: false });
+  assert.equal(p.active, 1);
+  assert.equal(p.load[0].url, "/@media/small");
+  assert.equal(p.shown, 0);
+  const q = planSlots({ slots: [slot(c1small), slot(c1orig)], shown: 0, cur: c1orig, next: null, t: 3, playing: false });
+  assert.equal(q.shown, 1);
+});
+
+test("地址不变时换档规则不介入:同一段照旧认原来的槽位", () => {
+  const p = planSlots({ slots: [slot(c1orig), empty], shown: 0, cur: c1orig, next: null, t: 3, playing: true });
+  assert.equal(p.active, 0);
+  assert.equal(p.shown, 0);
+  assert.equal(p.load[1], null);
+});

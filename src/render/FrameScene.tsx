@@ -11,6 +11,9 @@ import { graphVisualNode } from "./cards/GraphCard";
 import { cardMountedAt } from "./frameWindow.mjs";
 import { VideoTrack } from "./VideoTrack";
 import { driveMedia, releaseMedia, targetTimeOf } from "./mediaDrive";
+import { playbackUrl } from "./mediaTier";
+
+const NO_HASHES: readonly string[] = [];
 
 /**
  * 素材层上的像素映射。画面由 WebGL2 片元着色器算(render/pixelMapGl.ts):表达式在
@@ -19,7 +22,7 @@ import { driveMedia, releaseMedia, targetTimeOf } from "./mediaDrive";
  * 原先的逐像素 CPU 循环(getImageData → mapRgba → putImageData)已整体删除、不留退路:
  * 实测 1080p 每帧 416～483 ms,超 30 fps 的每拍预算约二十倍。
  */
-function PixelMappedMedia({ media, clip, t, project, style, def, live = false, playing = false, scrubbing = false }: { media: any; clip: any; t: number; project: Project; style: React.CSSProperties; def: PixelMapDef; live?: boolean; playing?: boolean; scrubbing?: boolean }) {
+function PixelMappedMedia({ media, clip, t, project, style, def, live = false, playing = false, scrubbing = false, localHashes = NO_HASHES }: { media: any; clip: any; t: number; project: Project; style: React.CSSProperties; def: PixelMapDef; live?: boolean; playing?: boolean; scrubbing?: boolean; localHashes?: readonly string[] }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const source = useRef<HTMLVideoElement | HTMLImageElement>(null);
   const targetSource = useRef<HTMLVideoElement | HTMLImageElement>(null);
@@ -97,14 +100,15 @@ function PixelMappedMedia({ media, clip, t, project, style, def, live = false, p
    * 截图那一步才由 `__pcPrepareFrameMedia` 按 `data-pc-media-*` 把这一帧装回来。
    * live(舞台)路正相反 —— 素材是真的在放的,所以这时候才挂 `src` 并 `preload="auto"`。
    */
-  const srcOf = (url?: string) => (live ? url : undefined);
+  // live 的 src 经换档判据(`mediaTier.ts` 的 playbackUrl,T1a 审查 #5);`data-pc-media-src` 仍是 `media.url`(身份、原片)
+  const srcOf = (m?: MediaAsset | null) => (live && m ? playbackUrl(m, localHashes) : undefined);
   const load = live ? "auto" : "none";
   return <>
-    {isImageMedia(media) ? <img ref={source as any} src={srcOf(media.url)} onLoad={live ? () => draw() : undefined} data-pc-media-src={media.url} data-pc-media-hidden="true" alt="" style={hidden} /> :
-      <video ref={source as any} muted playsInline preload={load} src={srcOf(media.url)} data-pc-media-src={media.url} data-pc-media-hidden="true"
+    {isImageMedia(media) ? <img ref={source as any} src={srcOf(media)} onLoad={live ? () => draw() : undefined} data-pc-media-src={media.url} data-pc-media-hidden="true" alt="" style={hidden} /> :
+      <video ref={source as any} muted playsInline preload={load} src={srcOf(media)} data-pc-media-src={media.url} data-pc-media-hidden="true"
         data-pc-media-time={Math.max(0, (clip.mediaOffset ?? 0) + t - clip.start)} style={hidden} />}
-    {targetMedia ? (isImageMedia(targetMedia) ? <img ref={targetSource as any} src={srcOf(targetMedia.url)} onLoad={live ? () => draw() : undefined} data-pc-media-src={targetMedia.url} data-pc-media-hidden="true" alt="" style={targetHidden} /> :
-      <video ref={targetSource as any} muted playsInline preload={load} src={srcOf(targetMedia.url)} data-pc-media-src={targetMedia.url} data-pc-media-hidden="true"
+    {targetMedia ? (isImageMedia(targetMedia) ? <img ref={targetSource as any} src={srcOf(targetMedia)} onLoad={live ? () => draw() : undefined} data-pc-media-src={targetMedia.url} data-pc-media-hidden="true" alt="" style={targetHidden} /> :
+      <video ref={targetSource as any} muted playsInline preload={load} src={srcOf(targetMedia)} data-pc-media-src={targetMedia.url} data-pc-media-hidden="true"
         data-pc-media-time={Math.max(0, t)} style={targetHidden} />) : null}
     <canvas ref={canvas} width={Math.max(1, Math.round(project.width))} height={Math.max(1, Math.round(project.height))}
       data-pc-pixel-map={JSON.stringify(def)} data-pc-pixel-time={t} style={style} />
@@ -161,8 +165,9 @@ export function FrameScene({
   playing?: boolean;
   proxy?: ProxyRender;
   /**
-   * A1 的本地素材哈希表。R3 只是把口子留在签名上(E7 列了它),换档那条路在 A1 / L,
-   * 这里不消费 —— 传了也不会改变任何一个像素。
+   * A1 的 `localHashes`:当前连接的素材服务报 `complete` 的哈希。**只有 live 路消费**(`VideoTrack` 与
+   * 像素映射素材的 src 经 `mediaTier.ts` 的 playbackUrl 换档,T1a 审查 #5);placeholder 路(导出页 / legacy)
+   * 一律 `media.url`,传了也不改一个像素。集合为空 = 一律原片,和没接换档之前一样。
    */
   localHashes?: readonly string[];
   /** live:后台舞台的素材层画出一帧了(K5 第 (4) 步的 `mediaReady`) */
@@ -182,7 +187,7 @@ export function FrameScene({
   onCardCost?: (clipId: string, ms: number) => void;
 } & StagePlaneProps) {
   const live = mediaMode === "live";
-  void localHashes;
+  const hashes = live ? localHashes ?? NO_HASHES : NO_HASHES;
   const layers = videoLayersAt(project, live ? mediaT : t);
   const frame = Math.round(directT * (project.fps || 30));
   const runtime = (sourceProject as any)._cardRender as { frames?: Record<string, Record<number, string>>; missing?: Record<number, string[]> } | undefined;
@@ -244,6 +249,7 @@ export function FrameScene({
           stage={stageSize}
           filters={project.filters}
           onMediaFrame={onMediaFrame}
+          localHashes={hashes}
         />
       ) : null}
       {live ? layers.filter((l) => l.trackId === tr.id && !graphVisualNode(graph, l.clip.nodeId) && !replaced(l.clip.id)
@@ -253,7 +259,7 @@ export function FrameScene({
         const filter = [ops ? cssFilter(ops) : "", emphasisFilter(clip.emphasis) || ""].filter(Boolean).join(" ");
         const style = { display: "block", width: "100%", height: "100%", objectFit: "cover" as const, opacity, filter: filter || undefined };
         return <div key={clip.id} data-pc-clip={clip.id} data-pc-media="" data-pc-local-frame={Math.round((mediaT - clip.start) * project.fps)} style={{ position: "absolute", overflow: "hidden", ...frameCss(clip.frame, project) }}>
-          <PixelMappedMedia media={media as MediaAsset} clip={clip} t={mediaT} project={project} style={style} def={def} live playing={playing} scrubbing={scrubbing} />
+          <PixelMappedMedia media={media as MediaAsset} clip={clip} t={mediaT} project={project} style={style} def={def} live playing={playing} scrubbing={scrubbing} localHashes={hashes} />
         </div>;
       }) : null}
       {!live && layers.filter(l => l.trackId === tr.id && !graphVisualNode(graph, l.clip.nodeId) && !replaced(l.clip.id)).map(({ clip, media, opacity }) => {
