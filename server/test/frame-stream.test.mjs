@@ -299,6 +299,9 @@ test('StreamProducer.rescan stages stream keys on the ready index (F5); republis
     const key = 'b'.repeat(64);
     const pipeline = { root, readyIndex: createReadyIndex(), prerenderPicked: () => true, captureCode: () => 'C' };
     const producer = new StreamProducer(pipeline, { env: {} });
+    // 读口没接上时什么都不挂、不发(和 R7 一样)
+    assert.equal(await producer.rescan(), 0);
+    producer.attachRoute();
     await producer.store.save({ streamKey: key, kind: 'group', plane: 'stage', clipIds: ['x', 'y'], fps: 30, bound: { x: 0, y: 0, w: 2, h: 2 }, tight: null, inits: {}, segments: { 2: { file: '2-0123456789abcdef.m4s', init: 'i', stride: 1, samples: 15 } } });
     producer.store.manifests.clear();
     assert.equal(await producer.rescan(), 1);
@@ -326,6 +329,7 @@ test('switches: streams default on, decoder budget 6, pool 1 (max 2) unless pinn
   assert.deepEqual(streamPoolLimit({ PROMPTCUT_STREAM_POOL: '5' }), { fixed: null });
   const producer = new StreamProducer({ root: os.tmpdir(), readyIndex: createReadyIndex() }, { env: {} });
   assert.equal(producer.pool, 1);
+  assert.equal(producer.routeAttached, false, '分段读口没接上之前不产流');
   assert.equal(new StreamProducer({ root: os.tmpdir(), readyIndex: createReadyIndex() }, { env: { PROMPTCUT_STREAMS: '0' } }).enabled, false);
 });
 

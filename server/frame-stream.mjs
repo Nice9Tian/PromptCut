@@ -627,12 +627,35 @@ export class StreamProducer {
     this.measure = { idle: [], busy: [] };
     this.stats = { segments: 0, resets: 0, replacedDeleted: 0, failures: 0, maxAliveEncoders: 0, setFrameWindowCalls: 0 };
     this.log = [];
+    /**
+     * 分段字节的读口接上了没有(`attachRoute()`,由挂 `/api/frames/*` 的那一处在建 `FramePipeline` 时调)。
+     *
+     * **没接上就什么都不产、一条 `stream` 层都不发。** 理由:页面拿到 `stream` 层却取不到字节时,
+     * 现在的父页(`src/editor/snapshotFeed.ts`)会把 `stream` 层当成快照去取 ——
+     * `/api/frames/snapshot/stream/…` 在预渲染进程上落到 SPA 兜底、回一整页 `index.html`(200,实测),
+     * 于是重卡在暂停 / 拖动时贴上一整张应用页面。读口和父页那一侧要一起接(见报告里的补丁),
+     * 这道闸保证只接了一半时行为和 R7 一样。
+     */
+    this.routeAttached = false;
+  }
+
+  /** 读口接上了:从现在起生产、发层(见 `routeAttached`) */
+  attachRoute() {
+    if (this.routeAttached) return;
+    this.routeAttached = true;
+    this.note('分段读口已接上');
+    if (this.pendingEntry) { const entry = this.pendingEntry; this.pendingEntry = null; void this.update(entry).catch(() => {}); }
+  }
+
+  /** 读口:`handleStreamRequest` 按本生产者的流库答 */
+  handle(req, res, pathname) {
+    return handleStreamRequest(this.store, req, res, pathname);
   }
 
   /** 诊断口(`/api/frames/diagnostics`):每条流的分段表(G4 的 `status()`) */
   status() {
     return {
-      enabled: this.enabled, pool: this.pool, budget: this.budget, encoder: this.encoderName ?? null,
+      enabled: this.enabled, routeAttached: this.routeAttached, pool: this.pool, budget: this.budget, encoder: this.encoderName ?? null,
       stats: { ...this.stats, aliveEncoders: this.aliveEncoders },
       streams: [...this.streams.values()].map(state => ({
         streamKey: state.spec.streamKey, kind: state.spec.kind, clipIds: state.spec.clipIds,
@@ -666,6 +689,7 @@ export class StreamProducer {
    */
   async update(entry) {
     if (!this.enabled || this.closed || !entry) return [];
+    if (!this.routeAttached) { this.pendingEntry = entry; return []; }
     const specs = planStreams(entry, {
       picked: clipId => this.pipeline.prerenderPicked(entry, clipId),
       budget: this.budget,
@@ -705,6 +729,7 @@ export class StreamProducer {
    * 没挂在那里的层会被它冲掉。
    */
   republish() {
+    if (!this.routeAttached) return;
     for (const state of this.streams.values()) this.publish(state);
   }
 
@@ -785,7 +810,7 @@ export class StreamProducer {
 
   /** 把 worker 叫起来(已经在跑的不重复起);最多 `pool` 个 */
   kick() {
-    if (!this.enabled || this.closed) return;
+    if (!this.enabled || this.closed || !this.routeAttached) return;
     while (this.workers.size < this.pool) {
       const worker = this.runWorker().catch(error => this.note(`worker 异常:${error?.message || error}`)).finally(() => this.workers.delete(worker));
       this.workers.add(worker);
@@ -1026,6 +1051,7 @@ export class StreamProducer {
 
   /** F5:扫盘挂到「键 → 区间」上,等 card plan 到位再认领 */
   async rescan() {
+    if (!this.routeAttached) return 0;
     const found = await this.store.scan();
     for (const item of found) {
       try { this.pipeline.readyIndex.stageByKey({ kind: 'stream', key: item.key, ranges: item.ranges }); } catch {}

@@ -77,6 +77,8 @@ async function decodeSegment(init, seg, dir, name) {
 const out = { origin, library: OUT, group: GROUP };
 await fs.mkdir(OUT, { recursive: true });
 const pipeline = new FramePipeline({ root: OUT, origin: () => origin, interactive: true, playhead: () => null });
+// 读口:这支探针不经 http 取字节(直接读盘核对),但生产者要读口接上才开工(见 `routeAttached`)
+pipeline.streamProducer().attachRoute();
 const layers = [];
 const off = pipeline.readyIndex.subscribe(message => { if (message.type === 'layer' && message.kind === 'stream') layers.push(message); });
 const started = Date.now();
@@ -276,6 +278,7 @@ try {
     const keys = [...producer.streams.keys()];
     await pipeline.close();
     const restarted = new FramePipeline({ root: OUT, origin: () => origin, interactive: true, playhead: () => null });
+    restarted.streamProducer().attachRoute();
     const seen = [];
     restarted.readyIndex.subscribe(m => seen.push(m));
     try {

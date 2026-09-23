@@ -51,6 +51,8 @@ export async function until(fails, label, fn, timeoutMs, everyMs = 500) {
  */
 export async function produceStreams({ origin, root, project = PROJECT, fails }) {
   const pipeline = new FramePipeline({ root, origin: () => origin, interactive: true, playhead: () => null });
+  // 分段字节由探针自己的 http 服务发(`handleStreamRequest`),等于读口已经接上
+  pipeline.streamProducer().attachRoute();
   const layers = [];
   pipeline.readyIndex.subscribe(message => { if (message.type === 'layer' && message.kind === 'stream') layers.push(message); });
   const started = Date.now();
