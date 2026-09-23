@@ -28,6 +28,7 @@ import {
 import { PROBE_BOOL_FRAMES, PROBE_BOOL_MS, PROBE_MAX_FRAMES, PROBE_MAX_MS } from "./render/pipelineTuning.mjs";
 import { compareSnapshotHtml } from "./render/snapshotCompare.mjs";
 import { budgetOf, CATCHUP_STEPS_PER_BEAT, clipWeight, pipelineAt } from "./render/pipelinePlan.mjs";
+import { beatAt, createK6State, noteK6Beat, scheduleNextBeat } from "./render/beatLoop.mjs";
 import { reviveStagePlan, type StagePlan, type WirePlan } from "./render/wirePlan";
 import { ensureProxyStyle, proxyAllowed, proxyOf, resetInk, sampleAll } from "./render/solidMode";
 import { themeStyle } from "./themes";
@@ -84,9 +85,6 @@ const BEAT_SLACK_MS = 1;
  * 但要是循环因为别的原因卡住了,RPC 不能永不回包 —— 超时按「循环此刻停在哪儿」回。
  */
 const ARM_TIMEOUT_MS = 5000;
-
-/** K6 的窗口长度(ms) */
-const K6_WINDOW_MS = 1000;
 
 /** 按片段追帧每推这么多步就让出一个宏任务(E4 的调用约定) */
 const CATCHUP_YIELD_STEPS = 8;
@@ -233,7 +231,7 @@ export default function StageView() {
     /** 等循环停下来的那些 `pause()` 调用 */
     beatWaiters: [] as ((r: PlayReply) => void)[],
     /** K6 的一秒窗口:每拍的总耗时和每张卡的耗时(都用 `__pcRealNow`) */
-    k6: { beats: [] as { at: number; over: number; byClip: Map<string, number> }[], pending: new Set<string>() as ReadonlySet<string> },
+    k6: createK6State(),
     /** 这一拍每张卡的 React 渲染耗时(`<Profiler>` 报的,每拍清空) */
     cardCost: new Map<string, number>(),
     pending: null as PendingRender | null,
@@ -959,70 +957,23 @@ export default function StageView() {
     /* ------------------------------------------------------------------ K4 节拍器 */
 
     /**
-     * K6 自动再平衡(**只降不升**)。任一 1 秒窗口内累计超时(每拍耗时超出 1/fps 的部分之和)
-     * > 1/fps,就把本窗口**实测**累计耗时最大的那张轻卡降级:post `{ type: 'demote', clipId }`,
-     * 父页查旧记录整条 PUT `{ ...旧记录, capped: true, demoted: true }`。
+     * 这一拍的账(K6 的一秒窗口),顺带判要不要降级(**只降不升**)。每张卡的耗时来自
+     * `<Profiler>`(`FrameScene` 的 live 路每个片段一个,E7),每拍清空一次。
      *
-     * 「最贵」按实测算、不按探针的 `stepMs`(pinned 渲染 6)。
-     *
-     * **`pendingDemote` 的卡不计入窗口、也不当候选**:死素材就绪之前它照常活渲(用户看到的
-     * 画面不变),它这一拍的耗时照记诊断 —— 但再让它参与判定的话,它会继续把窗口顶爆,
-     * 每秒再降一张,直到轻管线为空。就绪后父页把它切进 `suppressed`,那时才从集合里移出。
-     */
-    const checkDemote = (fps: number, sec: number): void => {
-      const beats = ref.current.k6.beats;
-      if (beats.length < 2) return;
-      let over = 0;
-      for (const b of beats) over += b.over;
-      if (over <= 1000 / fps) return;
-      const pending = ref.current.k6.pending;
-      const plan = ref.current.plan?.plan ?? null;
-      const total = new Map<string, number>();
-      for (const b of beats) {
-        for (const [id, ms] of b.byClip) {
-          if (pending.has(id)) continue;
-          // 只降轻卡:重卡本来就在贴死素材,降它没有意义
-          if (pipelineAt(plan, id, sec) !== "light") continue;
-          total.set(id, (total.get(id) ?? 0) + ms);
-        }
-      }
-      let worst: string | null = null;
-      let worstMs = 0;
-      // 同分时按 clipId 定序,免得两次跑降到不同的卡上
-      for (const id of [...total.keys()].sort()) {
-        const ms = total.get(id)!;
-        if (ms > worstMs) { worst = id; worstMs = ms; }
-      }
-      if (!worst) return;
-      ref.current.k6.pending = new Set([...pending, worst]);
-      // 窗口清零:下一张要重新攒够超时才降,不然一秒之内会连降好几张
-      ref.current.k6.beats = [];
-      postStageEvent({ type: "demote", clipId: worst });
-    };
-
-    /**
-     * 这一拍的账(K6 的一秒窗口)。**超时**只算每拍耗时超出 1/fps 的那一部分;
-     * 每张卡的耗时来自 `<Profiler>`(`FrameScene` 的 live 路每个片段一个,E7),
-     * 每拍清空一次。窗口只留最近 `K6_WINDOW_MS` 毫秒。
-     *
-     * 降级的判定在 `checkDemote`(K6),这里只记账 —— 记账本身是节拍的一部分。
+     * 超时怎么算、`pendingDemote` 的卡为什么不计入、降哪一张,都在 `beatLoop.mjs` 的
+     * `noteK6Beat`。降了一张就 post `{ type: 'demote', clipId }`,父页查旧记录整条 PUT
+     * `{ ...旧记录, capped: true, demoted: true }`。「最贵」按实测算、不按探针的 `stepMs`。
      */
     const noteBeat = (beatCost: number, fps: number, sec: number): void => {
-      const at = realNow();
-      const byClip = new Map(ref.current.cardCost);
-      /*
-       * **`pendingDemote` 的卡这一拍的耗时不计入窗口**(K6)。只把它从「谁最贵」的候选里
-       * 摘掉是不够的 —— 它照常活渲、照常把这一拍拖到 60 ms,窗口还是每秒都爆,
-       * 于是每秒再降一张,直到轻管线为空(实测:两张卡的项目里第二张也被降了)。
-       * 所以连**它那一份耗时**一起从这一拍的超时里扣掉。
-       */
-      let excused = 0;
-      for (const id of ref.current.k6.pending) excused += byClip.get(id) ?? 0;
-      const over = Math.max(0, beatCost - excused - 1000 / fps);
-      const beats = ref.current.k6.beats;
-      beats.push({ at, over, byClip });
-      while (beats.length && at - beats[0].at > K6_WINDOW_MS) beats.shift();
-      checkDemote(fps, sec);
+      const worst = noteK6Beat(ref.current.k6, {
+        at: realNow(),
+        beatCost,
+        byClip: ref.current.cardCost,
+        fps,
+        sec,
+        plan: ref.current.plan?.plan ?? null,
+      });
+      if (worst) postStageEvent({ type: "demote", clipId: worst });
     };
 
     /**
@@ -1086,9 +1037,7 @@ export default function StageView() {
         for (let n = 1; ; n++) {
           // 每拍开头查 `paused` / 角色(E0)
           if (ref.current.beatPaused || ref.current.role !== "front") break;
-          const rawSec = (fromFrame + n) / fps;
-          const ended = rawSec >= duration - 1e-9;
-          const sec = ended ? duration : rawSec;
+          const { sec, frame, ended } = beatAt(fromFrame, n, fps, duration);
           const beatStarted = realNow();
 
           /* ---- 一拍的活 ---- */
@@ -1118,7 +1067,7 @@ export default function StageView() {
           // post `frame` 之前再查一次角色(E0):互换那一拍新 `back` 不能还在报
           if (ref.current.role !== "front") break;
           ref.current.beatLastSec = sec;
-          ref.current.beatLastFrame = fromFrame + n;
+          ref.current.beatLastFrame = frame;
           if (ended) {
             postStageEvent({ type: "ended", sec: duration });
             break;
@@ -1131,11 +1080,10 @@ export default function StageView() {
           if (armed && ref.current.beatLastFrame >= armed.frame) break;
 
           /* ---- 等到下一拍的绝对时刻 ---- */
-          const nextDue = playStart + n * period;
-          const workEnd = realNow();
-          if (workEnd > nextDue) {
-            playStart += workEnd - nextDue;
-          } else {
+          const next = scheduleNextBeat(playStart, n, period, realNow());
+          playStart = next.playStart;
+          const { nextDue } = next;
+          if (!next.late) {
             while (realNow() < nextDue - BEAT_SLACK_MS) {
               await realRafOrAfter(Math.max(BEAT_SLACK_MS, nextDue - realNow()));
               if (ref.current.beatPaused || ref.current.role !== "front") break;
