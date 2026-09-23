@@ -265,10 +265,14 @@ export default function vitePluginAi(): Plugin {
         }
 
         if (tool === 'get_gif') {
-          const data = await prerenderPost('/api/ai/visual', { tool: 'get_gif', clipId: args.clipId, after: project, render: true }, { timeoutMs });
+          // 两步(cloud-task.md 决议 12):Agent 这一侧只写规格(`'agent'`),像素渲染交给 `user` 那一侧的 `/render`
+          const spec = await prerenderPost('/api/ai/visual', { tool: 'get_gif', clipId: args.clipId, after: project }, { timeoutMs });
+          if (!spec?.ok) throw new Error(spec?.error || '做动图失败');
+          if (!spec.gifKey) throw new Error(`时间轴上没有 id 为 ${args.clipId} 的片段。`);
+          const data = await prerenderPost('/api/ai/visual/render', { key: spec.gifKey }, { timeoutMs });
           if (!data?.ok) throw new Error(data?.error || '做动图失败');
           return {
-            visualId: data.visualId, ok: true, clipId: args.clipId, times: data.times, gif: data.gifUrl,
+            visualId: spec.visualId, ok: true, clipId: args.clipId, times: data.times, gif: data.gifUrl,
             note: '拼图 4×2,第 k 格对应 times 的第 k 个时刻(按行从左到右)。用户在聊天栏点开这一步能看到动图。',
             ...(data.grid ? { __image: { mime: 'image/png', base64: data.grid } } : {}),
           };

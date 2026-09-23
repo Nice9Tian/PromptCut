@@ -21,8 +21,9 @@ async function loadPng() {
 /**
  * 存储目录由几个进程共用(T1a 审查 #13):编辑器进程、预渲染进程(拆分时的 `user` / `agent` 两个也一样)
  * 都从同一个 `PROMPTCUT_EXPORT_DIR`(缺省 `<root>/out`)下的 `ai-visual/` 读写 —— 模型的 `get_gif` 在
- * 一个进程里写的渲染规格和记录,用户在聊天气泡里点开时由另一个进程 GET 也读得到
- * (cloud-task.md I4(c) 的例外:用户点开的动图走 `'user'` 角色,模型的 `get_gif` 走 `'agent'`)。
+ * 一个进程里写的渲染规格和记录,由另一个进程读得到、在那里渲
+ * (cloud-task.md 决议 12:模型的 `get_gif` 在 `'agent'` 进程里只写 Spec,用户点开的 GET 和模型要的 `/render`
+ * 都由 `user` 进程渲像素)。
  *
  * 所以这里的每一次写都**先写临时文件再改名**:另一个进程可能正在读同一个文件,直接 `writeFile`
  * 会让它读到半截 JSON(`readJson` 回 null,GET 就成了 404)或半张 GIF。
