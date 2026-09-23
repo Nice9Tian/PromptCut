@@ -49,6 +49,22 @@ export function apiPath(url) {
   return String(url || "/").split("?")[0].toLowerCase().replace(/\/{2,}/g, "/");
 }
 
+/**
+ * 素材服务的路由(`server/asset-service.ts` 文件头的契约):`/api/asset/media/<hash>`,
+ * 后面可带 `/chunks`、`/complete` 或分片号。
+ *
+ * 素材服务按语义必须允许跨源(`docs/semantics/architecture/asset-storage.md`「职责」),
+ * 所以 `/api/**` 的同源守卫对它豁免 —— **只豁免严格匹配这一条正则的路径**,判的是 apiPath
+ * 归一化之后的形式,素材服务自己的中间件也用同一个函数认路由。两边认的是同一批路径,
+ * 守卫放过去的请求一定落到素材服务手里,不会漏到别的 `/api` 处理函数上。
+ * 其余 `/api/**`(包括 `/api/media/upload/` 这些编辑器内部的整件上传)照旧受守卫。
+ */
+const ASSET_ROUTE = /^\/api\/asset\/media\/[0-9a-f]{64}(?:\/(?:chunks|complete|\d{1,10}))?$/;
+
+export function isAssetServicePath(url) {
+  return ASSET_ROUTE.test(apiPath(url));
+}
+
 /** 同源?没有 Origin 头当自己人(curl、sidecar、同源 GET 都不带) */
 export function originOk(req) {
   const origin = req.headers?.origin;

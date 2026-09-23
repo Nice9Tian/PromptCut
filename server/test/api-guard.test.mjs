@@ -95,3 +95,35 @@ test('不是 /api/ 的路径直接放行', async () => {
   const fn = handlerOf();
   assert.equal(await pass(fn, { url: '/@media/x.mp4', headers: { 'content-type': 'text/plain' } }), 'next');
 });
+
+// 素材服务(第 5 步)按语义允许跨源:只有 /api/asset/media/<hash>[/chunks|/complete|/<n>] 豁免,
+// 其余 /api/** 照旧只认同源。见 http-guard.mjs 的 isAssetServicePath。
+const LAN = { origin: 'http://192.168.1.50:8080', host: '127.0.0.1:5190' };
+const H = 'ab'.repeat(32);
+
+test('素材服务的路由对跨源豁免:分片、对账、收尾、取回、预检', async () => {
+  const fn = handlerOf();
+  assert.equal(await pass(fn, { method: 'PUT', url: `/api/asset/media/${H}/0`, headers: { ...LAN, 'content-type': 'application/octet-stream' } }), 'next');
+  assert.equal(await pass(fn, { method: 'GET', url: `/api/asset/media/${H}/chunks`, headers: LAN }), 'next');
+  assert.equal(await pass(fn, { method: 'POST', url: `/api/asset/media/${H}/complete`, headers: { ...LAN, 'content-type': 'text/plain' } }), 'next');
+  assert.equal(await pass(fn, { method: 'GET', url: `/api/asset/media/${H.toUpperCase()}`, headers: LAN }), 'next');
+  assert.equal(await pass(fn, { method: 'OPTIONS', url: `/api/asset/media/${H}/3`, headers: LAN }), 'next');
+});
+
+test('豁免之外的 /api/** 跨源照旧 403(包括编辑器内部的整件上传和长得像的路径)', async () => {
+  const fn = handlerOf();
+  const denied = [
+    { url: '/api/media/upload/x.mp4', headers: { ...LAN, 'content-type': 'video/mp4' } },
+    { url: '/api/ai/config', headers: { ...LAN, 'content-type': 'application/json' } },
+    { method: 'GET', url: '/api/media/local?hashes=' + H, headers: LAN },
+    { url: `/api/asset/media/${H}/../../ai/config`, headers: { ...LAN, 'content-type': 'text/plain' } },
+    { url: `/api/asset/media/${H}/chunks/x`, headers: LAN },
+    { url: '/api/asset/media/not-a-hash/0', headers: LAN },
+    { url: '/api/asset/other', headers: LAN },
+  ];
+  for (const req of denied) {
+    const r = await pass(fn, req);
+    assert.notEqual(r, 'next', req.url);
+    assert.equal(r.status, 403, req.url);
+  }
+});

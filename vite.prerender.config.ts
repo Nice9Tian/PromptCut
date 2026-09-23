@@ -7,6 +7,7 @@ import tailwindcss from "@tailwindcss/vite";
 import { apiGuardPlugin } from "./server/vite-plugin-api-guard";
 import { exportPlugin } from "./server/vite-plugin-export";
 import { mediaPlugin } from "./server/vite-plugin-media";
+import { assetProxyPlugin } from "./server/asset-client";
 import vitePluginCards from "./server/vite-plugin-cards";
 import { visionPlugin } from "./server/vite-plugin-vision";
 
@@ -53,6 +54,17 @@ function corsForEditor(): Plugin {
   };
 }
 
+/**
+ * 素材路由(`/@media/*`、`/api/asset/*`、`/api/media/*`):预渲染进程只经素材服务的 HTTP API 读素材
+ * (`docs/semantics/architecture/asset-storage.md`「职责」),所以由编辑器那一端拉起时(给了
+ * `PROMPTCUT_EDITOR_URL`,本地素材服务就在那个进程里)整条转发过去,自己不再读本地内容库。
+ * 没给这个变量(脚本直接用这份配置起一台)时没有别处可转,仍挂本地的媒体插件。
+ */
+function mediaRoutes(): Plugin {
+  const editor = String(process.env.PROMPTCUT_EDITOR_URL || "").trim();
+  return editor ? assetProxyPlugin(editor) : mediaPlugin();
+}
+
 const fsDeny = [".env", ".env.*", "*.{crt,pem}", "**/.git/**", "**/out/cookies/**"];
 
 export default defineConfig({
@@ -60,7 +72,7 @@ export default defineConfig({
   cacheDir: process.env.PROMPTCUT_HEADLESS === "1" ? "node_modules/.vite-prerender-headless" : "node_modules/.vite-prerender",
   clearScreen: false,
   // 跨源守卫要排在所有接口前面(中间件按 configureServer 的调用顺序注册)
-  plugins: [corsForEditor(), apiGuardPlugin(), react(), tailwindcss(), exportPlugin(), mirrorPlugin(), costsPlugin(), framesPlugin(), mediaPlugin(), vitePluginCards(), visionPlugin()],
+  plugins: [corsForEditor(), apiGuardPlugin(), react(), tailwindcss(), exportPlugin(), mirrorPlugin(), costsPlugin(), framesPlugin(), mediaRoutes(), vitePluginCards(), visionPlugin()],
   server: {
     // 渲染页每一趟都是全新的页面,用不着热更新;源码改了照样重新变换(watcher 还开着)
     hmr: false,
