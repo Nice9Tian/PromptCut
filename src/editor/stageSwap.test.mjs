@@ -60,6 +60,8 @@ mock.module(srcUrl("editor/snapshotFeed.ts"), {
     markBaselineReset: (role) => log.push(["markBaselineReset", role]),
     setExtraSuppressed: (ids) => log.push(["setExtraSuppressed", [...ids]]),
     suppressedAt: () => ["h"],
+    // R8:播放态互换时也发流平面(和抑制集合同一组)
+    streamPlanesAt: () => [],
   },
 });
 mock.module(srcUrl("editor/demote.ts"), { exports: { onStageDemote: async (id) => { log.push(["demote", id]); return { ok: true, clipId: id }; } } });

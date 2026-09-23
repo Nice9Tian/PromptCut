@@ -49,7 +49,7 @@ export function snapshotPath(kind: ReadyKind, key: string, localFrame: number): 
 }
 
 /** 就绪索引的页面侧形状(C3):同一张重卡的 `stream` 表和 `html` 表并存、互不覆盖 */
-export type ReadyIndex = Map<string, Map<ReadyKind, { key: string; ranges: ReadyRange[] }>>;
+export type ReadyIndex = Map<string, Map<ReadyKind, { key: string; ranges: ReadyRange[]; groupClipIds?: string[] }>>;
 
 /**
  * 把一条消息应用到页面的 `readyIndex`。`reset` 清表,`layer` 整层替换
@@ -60,7 +60,8 @@ export function applyReadyMessage(index: ReadyIndex, message: ReadyMessage): Rea
   if (message.type !== "layer") return index;
   let byKind = index.get(message.clipId);
   if (!byKind) { byKind = new Map(); index.set(message.clipId, byKind); }
-  byKind.set(message.kind, { key: message.key, ranges: message.ranges });
+  // 组流(R8 / G1)的层带 `groupClipIds`:父页按它合成一条 `{ clipIds: groupClipIds }` 的流平面
+  byKind.set(message.kind, { key: message.key, ranges: message.ranges, ...(message.groupClipIds?.length ? { groupClipIds: [...message.groupClipIds] } : {}) });
   return index;
 }
 
