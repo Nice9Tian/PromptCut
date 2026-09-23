@@ -83,7 +83,7 @@ node scripts/export-frames.mjs --url "http://127.0.0.1:5197/?export=1" --frames 
 
 ## 测法
 
-各种手动测法先记在这里。哪一种做成了一条命令能跑的脚本，就把对应的这段换成那条命令。验证的规则在 `docs/semantics/agent/verification.md`，按症状排障在 `docs/guides/troubleshooting.md`。
+各种手动测法先记在这里。哪一种做成了一条命令能跑的脚本，就把对应的这段换成那条命令。验证的规则在 `docs/semantics/guide_files/verification.md`，按症状排障在 `docs/guides/troubleshooting.md`。
 
 ### 编辑器的地址参数
 

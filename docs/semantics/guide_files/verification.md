@@ -1,6 +1,6 @@
 # 验证
 
-展开 `../agent-guide.md` 的「验证」一节。从属于 `agent-guide.md`，与它冲突时以它为准。
+展开 `suggested_agent_behavior.md` 的「验证」一节。索引见 `../developer_guide.md`。
 
 ## 基线
 

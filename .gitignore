@@ -46,5 +46,5 @@ tools/report-inbox-gui/inbox.local.json
 /work/
 reply_to_users_goal.md
 
-# 本机说明:只和这台机器有关的环境信息(docs/semantics/04-agent-guide.md 的「本机信息不进仓库」)
+# 本机说明:只和这台机器有关的环境信息(docs/semantics/guide_files/constraints.md 的「本机信息不进仓库」)
 docs/local.md

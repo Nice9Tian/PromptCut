@@ -35,7 +35,7 @@ export function flagArg(name, fallback = null, argv = process.argv.slice(2)) {
 /**
  * The dev server a probe attaches to: `--origin`, else `PC_STAGE_TEST_URL`, else the port of
  * the `dev-test` entry in `.claude/launch.json` (the verification server, see
- * docs/semantics/agent/verification.md). There is deliberately no hard-coded port to fall
+ * docs/semantics/guide_files/verification.md). There is deliberately no hard-coded port to fall
  * back to: the old 5197 went stale and probes quietly hit whatever else was listening there.
  * Throws when none of the three gives an origin.
  */

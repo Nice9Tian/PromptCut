@@ -85,6 +85,6 @@
 
 | 术语 | 含义 | 定义在 |
 |---|---|---|
-| 基线 | 每次改动都必须通过的验证集合 | agent/verification.md |
-| 专用 worktree | 会影响基线的改动所在的独立工作目录和分支 | `agent-guide.md` |
-| 本机说明 | 只和本机有关的环境信息，不入库 | `agent-guide.md` |
+| 基线 | 每次改动都必须通过的验证集合 | guide_files/verification.md |
+| 专用 worktree | 会影响基线的改动所在的独立工作目录和分支 | guide_files/suggested_agent_behavior.md |
+| 本机说明 | 只和本机有关的环境信息，不入库 | guide_files/constraints.md |

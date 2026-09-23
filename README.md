@@ -17,6 +17,6 @@ PromptCut 是一个 AI 视频剪辑工作台：用户用自然语言指挥 Agent
 
 ## 开发
 
-- 给 coding agent 的规则在 [docs/semantics/agent-guide.md](docs/semantics/agent-guide.md)，入口是 [AGENTS.md](AGENTS.md)。
+- 给开发者（人或 coding agent）的规则从 [docs/semantics/developer_guide.md](docs/semantics/developer_guide.md) 进入，coding agent 的入口是 [AGENTS.md](AGENTS.md)。
 - 本地起编辑器：`npm run dev`；测试：`npm test`；构建：`npm run build`。
 - 桌面版的构建和发版见 [desktop/README.md](desktop/README.md)。
