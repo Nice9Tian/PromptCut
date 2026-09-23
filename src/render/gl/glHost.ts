@@ -107,6 +107,8 @@ const STRICT_TIMEOUT_MS = 15000;
 const INIT_TIMEOUT_MS = 8000;
 /** 路线 2 等父页端口最多这么久;过了自己开 Worker(父页也许根本没开共享 Worker) */
 const PORT_WAIT_MS = 2000;
+/** 活渲的拍里有卡还没准备好时,隔这么久补一拍 */
+const PREPARE_RETRY_MS = 40;
 
 const realNow = (): number => (typeof window !== "undefined" && window.__pcRealNow ? window.__pcRealNow() : performance.now());
 const realSetTimeout = (cb: () => void, ms: number): number =>
@@ -387,6 +389,13 @@ export function createGlHost(opts: {
       }
       stats.lastSkipped = done.skipped ?? null;
       stats.lastGpuMs = done.gpuMs ?? null;
+      /*
+       * 活渲的拍里有卡还在编译 / 解码纹理(这一拍留空、那一层透明):暂停着的舞台不会再来下一拍,
+       * 所以这里自己隔一会儿补一拍,直到都画出来。播放中下一拍本来就会来,补的这一拍被合并掉。
+       */
+      if (!o.strict && Object.values(done.skipped ?? {}).includes("preparing")) {
+        realSetTimeout(() => { if (!inflight && !disposed) void beat({ t: o.t }); }, PREPARE_RETRY_MS);
+      }
       if (done.error === "context-lost") dropTransport();
       const hardErrors = Object.entries(done.skipped ?? {}).filter(([, why]) => why !== "preparing");
       if (o.strict && (done.error || hardErrors.length)) {

@@ -24,6 +24,8 @@ import { deliverSnapshots, markBaselineReset, noteSettled, pendingDemotes, pickF
 import { playingCatchUpTargets, runPlayingSwap, runSettleSwap, setSwapHost, swapInFlight } from "./stageSwap";
 import { demotedClips, onStageDemote } from "./demote";
 import { flushSync } from "react-dom";
+import { createSharedGl, type SharedGl } from "../render/gl/glParent";
+import { resolveGlRoute } from "../render/costDevice.mjs";
 
 /**
  * 中央预览:视频层 + 动效渲染面,按容器缩放。播放循环也在这里(rAF 推进 store.t)。
@@ -124,6 +126,17 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
    * 不能写死 `rpcRef.current.A`。legacy 的单舞台照样成立(它只登记了一个 `front`)。
    */
   const stage = useCallback((): StageRpcClient | null => frontStage(), []);
+  /*
+   * R9 路线 2(`shared`):编辑器文档开**一个** GL Worker,两个舞台经各自的 `MessageChannel` 共用它。
+   * 懒建:生效路线真是 `shared` 时才建。端口在握手之后、任何 RPC 之前交(见下面 `pc-stage-ready` 那段)。
+   */
+  const sharedGlRef = useRef<SharedGl | null>(null);
+  const glPortTo = useCallback((id: StageId, win: Window, caps: HostCapabilities | null) => {
+    if (resolveGlRoute(getState().project.glRoute, !!caps?.lowMemory) !== "shared") return;
+    sharedGlRef.current ??= createSharedGl({ lowMemory: !!caps?.lowMemory });
+    sharedGlRef.current.connect(win, stageTargetOrigin(id), id);
+    if (typeof window !== "undefined") (window as unknown as Record<string, unknown>).__pcSharedGlDiag = () => sharedGlRef.current?.diag() ?? Promise.resolve(null);
+  }, []);
   const selectionRef = useRef(selection);
   selectionRef.current = selection;
 
@@ -321,6 +334,8 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
         rpcRef.current[id] = client;
         const caps = (e.data as { hostCapabilities?: HostCapabilities }).hostCapabilities ?? null;
         hostCapsRef.current[id] = caps;
+        // R9 端口转交协议:路线 2 下,握手之后、发任何 RPC(含下面的 setRole)之前先把 GL 端口交过去
+        glPortTo(id, win, caps);
         // 能力表一起登记:K1 的 device 串要 lowMemory / offscreenGl,而它必须是**舞台**探到的那一份
         setStageClient(role, client, caps);
         void client.setRole(role).catch(() => { /* iframe 又换了,下一次握手会重发 */ });
@@ -337,8 +352,27 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
         rpcRef.current[id] = null;
         setStageClient(INITIAL_ROLE_OF[id], null);
       }
+      sharedGlRef.current?.dispose();
+      sharedGlRef.current = null;
     };
-  }, []);
+  }, [glPortTo]);
+
+  /*
+   * 项目选项切了 `glRoute`(R9 约束第 1 条):切到 `shared` 时给已经握过手的舞台补交端口;
+   * 切回 `perDocument` 什么都不用发 —— 舞台收到新项目自己按生效路线重建 `glHost` 那一侧的连接。
+   * 重走 `ProbeGate` 遮罩(`device` 变了)不在这里,见 R9 报告。
+   */
+  const glRoute = project.glRoute;
+  const glRouteSeen = useRef(glRoute);
+  useEffect(() => {
+    if (glRouteSeen.current === glRoute) return;
+    glRouteSeen.current = glRoute;
+    const frames: Record<StageId, React.RefObject<HTMLIFrameElement | null>> = { A: frameARef, B: frameBRef };
+    for (const id of STAGE_IDS) {
+      const win = frames[id].current?.contentWindow;
+      if (win && rpcRef.current[id]) glPortTo(id, win, hostCapsRef.current[id]);
+    }
+  }, [glRoute, glPortTo]);
 
   /**
    * 素材和音频按墙钟播:**一拍的名义时长之外再慢这么多**就暂停它们
