@@ -1,7 +1,7 @@
 /**
  * A3c 的体积实测:高频清单里每一张卡,在后台舞台上冻出控件快照,量**原始内联 HTML** 的字节数。
  *
- *   node scripts/probes/snapshot-size-probe.mjs [--origin http://127.0.0.1:5197]
+ *   node scripts/probes/snapshot-size-probe.mjs [--origin <dev server>]
  *        [--fps 30] [--clip-sec 4] [--cards a,b] [--limit N] [--no-projects]
  *        [--out docs/snapshot-size-audit.md] [--json out/snapshot-size-audit.json]
  *
@@ -32,6 +32,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import puppeteer from 'puppeteer';
+import { devOrigin } from './probe-connect.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
@@ -41,7 +42,7 @@ const argv = process.argv.slice(2);
 const flag = (name, fallback = null) => { const i = argv.indexOf(name); return i >= 0 && i + 1 < argv.length ? argv[i + 1] : fallback; };
 const has = (name) => argv.includes(name);
 
-const origin = (flag('--origin') || process.env.PC_STAGE_TEST_URL || 'http://127.0.0.1:5197').replace(/\/+$/, '');
+const origin = devOrigin(argv);
 const fps = Number(flag('--fps', '30')) || 30;
 const clipSec = Number(flag('--clip-sec', '4')) || 4;
 const cardsArg = flag('--cards');

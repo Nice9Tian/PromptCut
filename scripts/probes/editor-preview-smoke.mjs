@@ -4,6 +4,8 @@
  *
  *   node scripts/probes/editor-preview-smoke.mjs [--origin http://127.0.0.1:5211] [--stage | --legacy]
  *
+ * 不带 `--origin` 就看 `PC_STAGE_TEST_URL`,再没有就打 `.claude/launch.json` 的 `dev-test`。
+ *
  * `--stage` 打开 `?preview=stage`(两个跨源舞台 iframe,E1),`--legacy` 打开
  * `?preview=legacy`(一个同源舞台 iframe)。**两个都不带就是「缺省是什么就验什么」**。
  *
@@ -19,9 +21,10 @@
  * 不用 `iframe.contentDocument` —— 跨源模式下父页碰不到它。
  */
 import puppeteer from 'puppeteer';
+import { devOrigin } from './probe-connect.mjs';
 
 const args = process.argv.slice(2);
-const origin = (args.includes('--origin') ? args[args.indexOf('--origin') + 1] : null) || process.env.PC_STAGE_TEST_URL || 'http://127.0.0.1:5197';
+const origin = devOrigin(args);
 const forceStage = args.includes('--stage');
 const forceLegacy = args.includes('--legacy');
 /** 缺省不带参数:开 `/?editor`,页面自己按 `previewMode()` 的缺省决定走哪条路 */
