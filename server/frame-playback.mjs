@@ -164,3 +164,64 @@ export class FramePlayback {
         workers: this.workers, inFlight: this.jobs.size, rendered: this.rendered, cacheHits: this.cacheHits }, error: this.error };
   }
 }
+
+/* ======================================================================== *
+ * 轨道流(R8 / G4)的排程 —— 纯函数,和上面的 `planPlaybackBatch` 同一个口径:
+ * `frameMs` / `resetMs` / `jitterMs` / `deliveryMs` 是**生产侧**的墙钟毫秒,`rate` 是时间轴秒 / 墙钟秒。
+ * ======================================================================== */
+
+/** 一个分段恰好 15 帧(G2) */
+export const STREAM_SEGMENT = 15;
+
+/**
+ * G4 的 `firstMs`(**不是常数**):只在租约断掉时付 ——
+ * `firstMs = resetMs + fixedMs + (runStartFrame − 该流各卡的最早挂载帧) × frameMs`。
+ * `fixedMs` 是 G0-b 结论 7 补上的每趟挂载 / 热身固定开销(实测约 80 ms)。
+ * 租约接得上(同一条流、紧接上一趟末尾)时只剩 0。
+ */
+export function streamFirstMs({ leaseContinues = false, runStartFrame, mountFrame = 0, resetMs = 400, fixedMs = 80, frameMs = 30 }) {
+  if (leaseContinues) return 0;
+  return resetMs + fixedMs + Math.max(0, runStartFrame - mountFrame) * frameMs;
+}
+
+/**
+ * G4 的可行性条件:`firstMs + n × 15 × frameMs / stride ≤ n × (15000 / fps) × workers`。
+ * **`frameMs` 必须用有编码器在跑时的数**(G0-b 结论 7:是空闲时的 2.26 倍)。
+ * 不满足时先加 `stride`、再合并流 —— 这里只回判定和建议的 `stride`(15 的因数:1 / 3 / 5 / 15)。
+ */
+export function streamFeasibility({ n = 1, firstMs = 0, frameMs, fps, workers = 1, stride = 1 }) {
+  const need = (s) => firstMs + n * STREAM_SEGMENT * frameMs / s;
+  const budget = n * (STREAM_SEGMENT * 1000 / fps) * Math.max(1, workers);
+  const feasible = need(stride) <= budget;
+  let suggest = stride;
+  if (!feasible) for (const s of [3, 5, 15]) if (s > stride && need(s) <= budget) { suggest = s; break; }
+  if (!feasible && need(suggest) > budget) suggest = null;
+  return { feasible, needMs: need(stride), budgetMs: budget, stride: suggest };
+}
+
+/**
+ * G4 的 `planStreamSegments`(按流各一份):播放头前面要留几个分段的提前量,
+ * 以及这条流接下来该生产哪个分段。
+ *
+ *   `leadSegments = ceil((firstMs + segMs + jitterMs + deliveryMs) × rate × fps / (15 × 1000))`
+ *   `segMs = 15 × frameMs / stride`
+ *
+ * 选段规则(worker 在流之间按「离播放头最近的未就绪分段」轮转,**但优先延续自己的租约**):
+ *   1. 租约接得上(`leaseLastSegment + 1` 未就绪、没被别人占着)就接着做它 —— 不为新露出的远端段断租约;
+ *   2. 否则从播放头所在分段 + `leadSegments` 起往后找第一个未就绪的;
+ *   3. 后面都齐了再从流的第一段往后找(补播放头之前的洞)。
+ *
+ * `ready(n)` / `reserved` 由调用方给(`ready` 已经把「稀疏还是满密度」算进去了)。
+ */
+export function planStreamSegments({ playheadFrame = 0, fps, rate = 1, firstSegment = 0, lastSegment, stride = 1,
+  frameMs = 30, firstMs = 0, jitterMs = 100, deliveryMs = 250, ready = () => false, reserved = new Set(), leaseLastSegment = null }) {
+  const segMs = STREAM_SEGMENT * frameMs / Math.max(1, stride);
+  const leadSegments = Math.max(0, Math.ceil((firstMs + segMs + jitterMs + deliveryMs) * rate * fps / (STREAM_SEGMENT * 1000)));
+  const free = (n) => n >= firstSegment && n <= lastSegment && !ready(n) && !reserved.has(n);
+  if (leaseLastSegment !== null && free(leaseLastSegment + 1)) return { segment: leaseLastSegment + 1, leadSegments, continues: true };
+  const head = Math.floor(Math.max(0, playheadFrame) / STREAM_SEGMENT);
+  const from = Math.max(firstSegment, Math.min(lastSegment, head + leadSegments));
+  for (let n = from; n <= lastSegment; n++) if (free(n)) return { segment: n, leadSegments, continues: false };
+  for (let n = firstSegment; n < from; n++) if (free(n)) return { segment: n, leadSegments, continues: false };
+  return { segment: null, leadSegments, continues: false };
+}

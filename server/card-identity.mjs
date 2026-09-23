@@ -120,3 +120,36 @@ export function cardSnapshotIdentity(node, {
     },
   });
 }
+
+/**
+ * 轨道流的流键(R8;任务书说 `streamKey` 的命名在本任务定、A3b 回头对齐 —— 这里先用 `streamKey`)。
+ *
+ * 两种流,键的口径不同:
+ *
+ *   - **单卡流**(`kind: 'card'`):画面在**包裹层自己的坐标系**里(和快照一样,A2(5) 之后
+ *     x / y / 缩放 / 旋转 / 不透明度 / 淡入淡出 / motion / 强调都不在里面,由包裹层照常加上),
+ *     所以内容身份用共享快照键 `snapshotKey`(同参数同框宽高就共享);再加上**时间上的摆放**
+ *     (`sampling`:第一帧、相位、fps)—— 流按**全局帧号**分段(G4:时间不平移),入点挪了一帧
+ *     分段里的内容就整体错一帧,不能复用;
+ *   - **组流**(`kind: 'group'`):画面在舞台坐标里,包裹层的 `frameCss` / `opacity` / `filter` /
+ *     `motion` 全部已经画进流里(G1),所以每张卡用带外观的缓存键 `control.key`,按画家顺序排。
+ *
+ * 两种都带上画幅、fps 和 `codeVersion`(生产这条流的代码指纹:截图 / 编码那几份文件一改,
+ * 旧流全部作废)。**矩形和编码器不进流键**:它们只决定分段的「变体」(`init` 不同),
+ * 页面按分段各自找自己的 `init`,见 `server/frame-stream.mjs`。
+ */
+export function cardStreamIdentity({ kind = 'card', members = [], fps, stage = {}, codeVersion = '' } = {}) {
+  if (kind !== 'card' && kind !== 'group') throw new Error(`未知的流种类 ${kind}`);
+  if (!members.length) throw new Error('流里至少要有一张卡');
+  return digest({
+    stream: 1, kind, fps: ratio(fps), codeVersion,
+    stage: { width: stage.width, height: stage.height, camera3dFov: stage.camera3dFov },
+    members: members.map(m => ({
+      key: m.key,
+      firstFrame: m.sampling?.firstFrame,
+      phase: m.sampling?.phase ? ratio(m.sampling.phase) : undefined,
+      count: m.count,
+      frame: m.frame,
+    })),
+  });
+}
