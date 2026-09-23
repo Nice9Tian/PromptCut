@@ -934,35 +934,29 @@ export class FramePipeline {
       const entryKey = target.tier === 'local' ? entry.key : undefined;
       const batches = (entry.snapshotPending ||= new Map());
       const id = `${target.tier}\u0000${entryKey ?? ''}\u0000${target.key}`;
-      if (!batches.has(id)) batches.set(id, { tier: target.tier, entryKey, key: target.key, frames: [], oversize: [], clipId: control.id });
+      // #9:写帧、判体积、并 index 由快照库的 `batch` 一起做(攒满 4 帧交一次)。A3c 的通用兜底
+      // 照旧:超限的那一帧**照常落盘**,但不进就绪索引、不投递 —— 那一层按缺料处理(贴更早的
+      // 合格快照,没有就透明),并记一条诊断;R6-14:帧号记进 index.json 的 `oversize`,下一趟跳过。
+      if (!batches.has(id)) batches.set(id, this.snapshots().batch({ tier: target.tier, entryKey, key: target.key, clipId: control.id, capabilities: target.capabilities }));
+      const batch = batches.get(id);
       const html = control.html;
-      // A3c 的通用兜底:超限的那一帧**照常落盘**,但不进就绪索引、不投递 —— 那一层按
-      // 缺料处理(贴更早的合格快照,没有就透明),并记一条诊断。R6-14:帧号同时记进
-      // index.json 的 `oversize`,下一趟直接跳过,不再白渲一遍再丢一次。
-      if (this.snapshots().noteSnapshotSize({ clipId: control.id, key: target.key, localFrame: control.frame, html, capabilities: target.capabilities })) {
-        batches.get(id).frames.push(control.frame);
-      } else {
-        batches.get(id).oversize.push(control.frame);
-      }
       entry.snapshotChain = (entry.snapshotChain || Promise.resolve()).then(async () => {
         // 快照库是旁路:写失败不能把整条预渲染管线带下去(老 manifest 仍然写成了)。
-        try { await this.snapshots().writeSnapshot({ tier: target.tier, entryKey, key: target.key, localFrame: control.frame, html }); } catch {}
+        try { await batch.add(control.frame, html); } catch {}
       });
     }
   }
-  /** 等这一批帧文件落盘,再把它们并进各自的 index.json —— 每批一次,不是每帧。
-   * 并完就按 C3 把这一层此刻的全部就绪区间发出去(全量语义)。 */
+  /** 等这一批帧交完(写文件 + 并 index,由快照库的 `batch` 一起做),再按 C3 把这一层此刻的
+   * 全部就绪区间发出去(全量语义)。全是超限帧的批也照样写了 index(R6-14),只是不发 `layer`。 */
   async flushSnapshots(entry) {
     try { await entry.snapshotChain; } catch {}
     const batches = entry.snapshotPending;
     if (!batches?.size) return;
     entry.snapshotPending = new Map();
     for (const batch of batches.values()) {
-      // 这一批全是超限帧时也要写 index —— `oversize` 那份名单就是下一趟跳过的依据(R6-14)
-      if (!batch.frames.length && !batch.oversize?.length) continue;
       try {
-        const index = await this.snapshots().updateIndex(batch);
-        if (batch.frames.length) this.publishLayer({ clipId: batch.clipId, snapshotKey: batch.key }, batch.tier, index.frames, batch.entryKey);
+        const index = await batch.close();
+        if (index && batch.written) this.publishLayer({ clipId: batch.clipId, snapshotKey: batch.key }, batch.tier, index.frames, batch.entryKey);
       } catch {}
     }
   }
@@ -1231,7 +1225,8 @@ export class FramePipeline {
     const list = [...new Set(frames ?? [])].filter(n => Number.isInteger(n) && n >= 0).sort((a, b) => a - b);
     if (!locals.size || !list.length) return;
     const capabilities = new Map((entry.cardPlan ?? []).map(control => [control.clipId, control.capabilities]));
-    const written = new Map();
+    /** clipId → 快照库的攒批写(#9:写帧 + 判体积 + 并 index 一步做,A3c / R6-14 的超限帧记进 `oversize`) */
+    const batches = new Map();
     await bakeFrames(bakery, {
       out: entry.dir, targetFrames: list, snapshotOnly: false, fullFrame: true, writeFrames: false, signal,
       snapshotFrames: new Set(list),
@@ -1242,22 +1237,17 @@ export class FramePipeline {
         for (const item of produced ?? []) {
           const target = locals.get(item.id);
           if (!target || !Number.isInteger(item.frame)) continue;
-          try { await this.snapshots().writeSnapshot({ tier: 'local', entryKey: entry.key, key: target.key, localFrame: item.frame, html: item.html }); }
+          if (!batches.has(item.id)) batches.set(item.id, this.snapshots().batch({ tier: 'local', entryKey: entry.key, key: target.key, clipId: item.id, capabilities: capabilities.get(item.id) }));
+          try { await batches.get(item.id).add(item.frame, item.html); }
           catch { continue; }
-          if (!written.has(item.id)) written.set(item.id, { key: target.key, frames: [], oversize: [] });
-          // A3c / R6-14:超限的帧不进 `frames`,但记进 `oversize`,下一趟不再重渲
-          if (this.snapshots().noteSnapshotSize({ clipId: item.id, key: target.key, localFrame: item.frame, html: item.html, capabilities: capabilities.get(item.id) })) {
-            written.get(item.id).frames.push(item.frame);
-          } else {
-            written.get(item.id).oversize.push(item.frame);
-          }
         }
       },
     });
+    // 中途取消:已经交掉的批都在 index 里(盘面和 index 一致),没交的几帧丢掉,下一趟补
     if (signal?.aborted) return;
-    for (const [clipId, batch] of written) {
-      const index = await this.snapshots().updateIndex({ tier: 'local', entryKey: entry.key, key: batch.key, frames: batch.frames, oversize: batch.oversize });
-      if (batch.frames.length) this.publishLayer({ clipId, snapshotKey: batch.key }, 'local', index.frames, entry.key);
+    for (const [clipId, batch] of batches) {
+      const index = await batch.close();
+      if (index && batch.written) this.publishLayer({ clipId, snapshotKey: batch.key }, 'local', index.frames, entry.key);
     }
   }
   /**
@@ -1366,7 +1356,7 @@ export class FramePipeline {
         const missing = target ? localFrames.filter(n => !rangeHas(index.frames, n) && !rangeHas(index.oversize, n)) : [];
         await bakery.reset(isolated, this.emptyUrl(isolated), { deferCards: true });
         await bakery.page.setViewport({ width: isolated.width, height: isolated.height, deviceScaleFactor: this.scaleForLane('background') });
-        const written = [], oversized = [];
+        const produced = [];
         await bakeFrames(bakery, { out: path.join(this.root, 'controls', control.key), targetFrames: localFrames,
           snapshotOnly: false, fullFrame: true, writeFrames: false, signal,
           snapshotFrames: new Set(missing),
@@ -1375,25 +1365,19 @@ export class FramePipeline {
           // `control.clipId` 那一条就是这张卡的子树。`data-pc-local-frame` 是卡片
           // 自己的本地帧,和隔离工程的帧号一致(片段被平移到了 -phase),但仍以
           // 冻结结果里带的那个为准 —— 目录是按本地帧寻址的。
-          onSnapshot: async (frame, html, produced) => {
+          onSnapshot: async (frame, html, items) => {
             if (!target || signal?.aborted) return;
-            const own = (produced || []).find(item => item.id === control.clipId);
+            const own = (items || []).find(item => item.id === control.clipId);
             if (!own || !Number.isInteger(own.frame)) return;
-            await this.snapshots().writeSnapshot({ ...target, localFrame: own.frame, html: own.html });
-            // A3c:超限的帧照常落盘,但不进就绪索引、不投递(诊断记在快照库里);
-            // R6-14:帧号记进 `oversize`,下一趟跳过
-            if (!this.snapshots().noteSnapshotSize({ clipId: control.clipId, key: target.key, localFrame: own.frame, html: own.html, capabilities: control.capabilities })) {
-              oversized.push(own.frame);
-              return;
-            }
-            written.push(own.frame);
+            produced.push({ localFrame: own.frame, html: own.html });
           } });
-        // 每批写完更新一次 index.json(不是每帧):一个键几千帧时,读-改-写
-        // 一个小 JSON 也比不上批量摊薄。
-        if ((written.length || oversized.length) && !signal?.aborted) {
-          index = await this.snapshots().updateIndex({ ...target, frames: written, oversize: oversized });
+        // 每批(4 帧)交一次(不是每帧):写帧文件、判体积、并 index.json 由快照库一步做(#9)。
+        // A3c:超限的帧照常落盘,但不进就绪索引、不投递(诊断记在快照库里);R6-14:帧号记进
+        // `oversize`,下一趟跳过。一个键几千帧时,读-改-写一个小 JSON 也比不上批量摊薄。
+        if (produced.length && !signal?.aborted) {
+          index = await this.snapshots().commitSnapshots({ ...target, clipId: control.clipId, capabilities: control.capabilities, items: produced });
           // C3:这一层的区间长了就发一条全量 `layer`
-          if (written.length) this.publishLayer(control, tier, index.frames, entryKey);
+          if (index.written.length) this.publishLayer(control, tier, index.frames, entryKey);
         }
       }
       if (!signal?.aborted) await entry.cardCache.finish(control);

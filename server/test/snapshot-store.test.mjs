@@ -11,6 +11,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { SnapshotStore, snapshotTier, snapshotDir, mergeRanges, rangeCount, rangeHas, SHARED_DIR, LOCAL_DIR,
   snapshotLimit, snapshotBytes, overSnapshotLimit, DOM_SNAPSHOT_LIMIT, CANVAS_SNAPSHOT_LIMIT } from '../snapshot-store.mjs';
 
@@ -240,3 +241,61 @@ test('record routes control HTML into the snapshot store, shared and local side 
   await pipeline.flushSnapshots(bare);
   assert.deepEqual((await fs.readdir(path.join(root, LOCAL_DIR))).sort(), ['ENTRY']);
 }));
+
+// ── T1a 审查 #9:写快照的唯一入口 ─────────────────────────────────────────
+
+test('commitSnapshots: 写帧、判体积、并 index 一步做完,超限帧落盘但进 oversize', () => withRoot(async root => {
+  const store = new SnapshotStore(root);
+  const target = { tier: 'shared', key: 'COMMIT' };
+  const huge = 'x'.repeat(DOM_SNAPSHOT_LIMIT + 1);
+  const out = await store.commitSnapshots({ ...target, clipId: 'c', capabilities: {}, items: [
+    { localFrame: 0, html: 'a' }, { localFrame: 1, html: huge }, { localFrame: 2, html: 'c' },
+  ] });
+  assert.deepEqual(out.written, [0, 2]);
+  assert.deepEqual(out.oversized, [1]);
+  assert.deepEqual(out.frames, [[0, 0], [2, 2]]);
+  assert.deepEqual(out.oversize, [[1, 1]]);
+  // 盘上三帧都在(超限帧照常落盘),index 与返回值一致
+  assert.equal(await store.readSnapshot({ ...target, localFrame: 1 }), huge);
+  assert.deepEqual(await store.snapshotIndex(target), { count: 2, frames: [[0, 0], [2, 2]], oversize: [[1, 1]] });
+  // 空批不动 index,回当前 index
+  const empty = await store.commitSnapshots({ ...target, items: [] });
+  assert.deepEqual({ count: empty.count, written: empty.written }, { count: 2, written: [] });
+}));
+
+test('batch: 攒满 size 帧交一次;帧要么还在内存里,要么已经落盘且进了 index', () => withRoot(async root => {
+  const store = new SnapshotStore(root);
+  const target = { tier: 'local', entryKey: 'E', key: 'B' };
+  const batch = store.batch({ ...target, clipId: 'c', capabilities: {} }, { size: 2 });
+  await batch.add(0, 'f0');
+  // 没攒满:盘上没有、index 里也没有(不存在「盘上有、index 里没有」)
+  assert.equal(await store.readSnapshot({ ...target, localFrame: 0 }), null);
+  assert.deepEqual(await store.snapshotIndex(target), { count: 0, frames: [], oversize: [] });
+  await batch.add(1, 'f1');
+  assert.deepEqual(await store.snapshotIndex(target), { count: 2, frames: [[0, 1]], oversize: [] });
+  await batch.add(2, 'f2');
+  const index = await batch.close();
+  assert.deepEqual(index.frames, [[0, 2]]);
+  assert.equal(batch.written, 3);
+  // 盘上每一帧都在 index 里
+  const names = (await fs.readdir(snapshotDir(root, target))).filter(n => n.endsWith('.html')).map(n => Number(n.slice(0, -5))).sort();
+  assert.deepEqual(names, [0, 1, 2]);
+  // 什么都没交过的 batch close 回 null
+  assert.equal(await store.batch({ ...target, key: 'NONE' }).close(), null);
+}));
+
+test('生产代码不直接调 writeSnapshot / updateIndex(只走 commitSnapshots / batch)', async () => {
+  const serverDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const offenders = [];
+  const walk = async dir => {
+    for (const item of await fs.readdir(dir, { withFileTypes: true })) {
+      const file = path.join(dir, item.name);
+      if (item.isDirectory()) { if (item.name !== 'test' && item.name !== 'node_modules') await walk(file); continue; }
+      if (!/\.(mjs|ts)$/.test(item.name) || item.name === 'snapshot-store.mjs') continue;
+      const text = await fs.readFile(file, 'utf8');
+      if (/\.(writeSnapshot|updateIndex)\(/.test(text)) offenders.push(path.relative(serverDir, file));
+    }
+  };
+  await walk(serverDir);
+  assert.deepEqual(offenders, []);
+});

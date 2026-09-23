@@ -295,12 +295,10 @@ export function framesPlugin(): Plugin {
             const compositing = control.capabilities?.compositing;
             const tier = snapshotTier(control.capabilities);
             if (compositing !== "independent" || tier !== "shared") return json(200, { ok: true, stored: false, reason: "NOT_INDEPENDENT" });
-            await service.snapshots().writeSnapshot({ tier: "shared", key: control.snapshotKey, localFrame, html });
-            // A3c:超限的探针帧同样不进索引
-            if (!service.snapshots().noteSnapshotSize({ clipId, key: control.snapshotKey, localFrame, html, capabilities: control.capabilities })) {
-              return json(200, { ok: true, stored: true, indexed: false, reason: "OVER_LIMIT" });
-            }
-            const index = await service.snapshots().updateIndex({ tier: "shared", key: control.snapshotKey, frames: [localFrame] });
+            // #9:写帧、判体积、并 index 一步做。A3c:超限的探针帧同样不进就绪索引(记进 `oversize`,R6-14)
+            const index = await service.snapshots().commitSnapshots({ tier: "shared", key: control.snapshotKey, clipId,
+              capabilities: control.capabilities, items: [{ localFrame, html }] });
+            if (!index.written.length) return json(200, { ok: true, stored: true, indexed: false, reason: "OVER_LIMIT" });
             service.readyIndex.setLayer({ clipId, kind: kindOfTier(tier)!, key: wireSnapshotKey(tier, entry.key, control.snapshotKey)!, ranges: index.frames });
             return json(200, { ok: true, stored: true, indexed: true, count: index.count });
           } catch (error: any) {
