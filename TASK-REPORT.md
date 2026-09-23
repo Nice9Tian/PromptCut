@@ -115,7 +115,7 @@
 
 ## 验证结果
 
-以下全部在本 worktree 的 dev server 上跑：`npx vite --port 5240 --strictPort --host 127.0.0.1`，最后一轮用的是重启后的 PID 44004。对照用的 main 树是 `.claude/worktrees/r9-base`（`787f7d9`，detached），server 在 5243，PID 42808。
+以下全部在本 worktree 的 dev server 上跑：`npx vite --port 5240 --strictPort --host 127.0.0.1`，最后一轮用的是重启后的 PID 44004,收尾时已停。对照用的 main 树是 `.claude/worktrees/r9-base`（`787f7d9`，detached），server 在 5243，PID 42808。
 
 | 项 | 命令 | 结果 |
 |---|---|---|
