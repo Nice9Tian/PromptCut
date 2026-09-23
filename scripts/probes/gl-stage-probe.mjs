@@ -69,7 +69,7 @@ const projectOf = (clips, extra = {}) => ({ version: 1, id: 'gl-stage', name: 'g
 const SHAPES = ['knot', 'cube', 'sphere', 'torus', 'cone', 'cylinder', 'crystal'];
 const grid = (n, cols, over = () => ({})) => Array.from({ length: n }, (_, i) => {
   const w = 960 / cols, rows = Math.ceil(n / cols), h = 540 / rows;
-  return card(`c${i}`, { shape: SHAPES[i % SHAPES.length], color: `hsl(${(i * 37) % 360} 70% 60%)`, spinY: 0.1 + i * 0.03, ...over(i) },
+  return card(`c${i}`, { shape: SHAPES[i % SHAPES.length], color: `#${(((i * 2654435761) >>> 8) & 0xffffff | 0x404040).toString(16).padStart(6, "0")}`, spinY: 0.1 + i * 0.03, ...over(i) },
     { x: (i % cols) * w, y: Math.floor(i / cols) * h, w, h });
 });
 
@@ -82,14 +82,17 @@ const browser = await puppeteer.launch({
 
 /** 等这个舞台把 gl 平面都贴上位图(每个平面都有 data-pc-gl-frame 且等于包裹层的本地帧号) */
 const WAIT_PAINTED = async (n) => {
-  const t0 = performance.now();
+  // 舞台页的 setTimeout / performance.now 是虚拟时钟(暂停时不走),轮询一律用真的那份
+  const now = window.__pcRealNow ?? (() => performance.now());
+  const later = (ms) => new Promise((r) => (window.__pcRealSetTimeout ?? setTimeout)(r, ms));
+  const t0 = now();
   for (;;) {
     const planes = [...document.querySelectorAll('[data-pc-gl-plane]')];
     const ok = planes.length >= n && planes.every((p) => p.getAttribute('data-pc-gl-frame') !== null
       && p.getAttribute('data-pc-gl-frame') === p.closest('[data-pc-local-frame]')?.getAttribute('data-pc-local-frame'));
-    if (ok) return { planes: planes.length, ms: performance.now() - t0 };
-    if (performance.now() - t0 > 60000) return { planes: planes.length, timeout: true, frames: planes.map((p) => p.getAttribute('data-pc-gl-frame')) };
-    await new Promise((r) => setTimeout(r, 30));
+    if (ok) return { planes: planes.length, ms: now() - t0 };
+    if (now() - t0 > 60000) return { planes: planes.length, timeout: true, frames: planes.map((p) => p.getAttribute('data-pc-gl-frame')) };
+    await later(30);
   }
 };
 
@@ -358,8 +361,9 @@ try {
       });
       obs.observe(document.body, { subtree: true, attributes: true, attributeFilter: ['class'] });
       await window.__pcStage.setTime(3.0, { settle: true });
-      const t0 = performance.now();
-      while (!unset.length && performance.now() - t0 < 10000) await new Promise((r) => setTimeout(r, 20));
+      const now = window.__pcRealNow, later = (ms) => new Promise((r) => window.__pcRealSetTimeout(r, ms));
+      const t0 = now();
+      while (!unset.length && now() - t0 < 10000) await later(20);
       obs.disconnect();
       return { clipId, sawSettling, unset: unset[0] ?? null, beats0, beatsEnd: window.__pcStageDiag().gl.beats };
     });

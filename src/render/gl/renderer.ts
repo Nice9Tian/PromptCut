@@ -96,7 +96,14 @@ export interface GlRenderer {
   diag(): GlWorkerDiag;
 }
 
-const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+/*
+ * 主线程退路跑在舞台页里时,`setTimeout` 被舞台时钟换成了虚拟定时器(暂停时不响)—— 等编译、Worker 睡觉
+ * 都要用真的那份。Worker 里没有这回事,`setTimeout` 就是真的。
+ */
+const onMainThread = typeof window !== "undefined";
+const realTimeout: (cb: () => void, ms: number) => unknown =
+  (onMainThread && (window as unknown as { __pcRealSetTimeout?: (cb: () => void, ms: number) => number }).__pcRealSetTimeout) || setTimeout;
+const sleep = (ms: number) => new Promise<void>((r) => realTimeout(r, ms));
 
 /** 位图解码的两种朝向:GL 纹理要自下而上(`flipY`),2D `drawImage` 要原样 */
 type Orientation = "flipY" | "none";
@@ -344,7 +351,9 @@ export function createGlRenderer(opts: {
       const built = program.build(THREE, c.params, { width: c.w, height: c.h, stage: c.stage, textures });
       c.built = built;
       built.update(0, { reset: true });
-      await r.compileAsync(built.scene, built.camera);
+      // three 的 compileAsync 靠全局 setTimeout 轮询:主线程上那是舞台的虚拟定时器,暂停时永远等不到,所以同步编
+      if (onMainThread) r.compile(built.scene, built.camera);
+      else await r.compileAsync(built.scene, built.camera);
       if (c.buildKey !== key) return;
       c.ready = true;
     })();
