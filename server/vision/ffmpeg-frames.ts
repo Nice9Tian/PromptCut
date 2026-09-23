@@ -12,6 +12,7 @@ import os from "node:os";
 import path from "node:path";
 import { extractArgs, mediaLayersAt } from "../vision-compose.mjs";
 import { assetServiceOrigin, mediaHttpUrl } from "../asset-client";
+import { mediaHashOf } from "../media-stamp.mjs";
 
 /** ffmpeg 抽一帧的上限:本地文件按关键帧定位,正常两三秒 */
 export const EXTRACT_TIMEOUT_MS = 30000;
@@ -53,20 +54,11 @@ export function mediaSourceOf(m: any, origin: string | null = assetServiceOrigin
   return mediaHttpUrl(m, origin);
 }
 
-const HASH_NAME = /^([0-9a-f]{64})(?:\.[a-z0-9]+)?$/;
-
 /**
- * 素材的内容哈希:`m.hash`,或 `url` 是 `/@media/<hash>[.ext]`。按哈希寻址的内容写入后不可变,
- * 所以它可以直接当缓存键;没有哈希的(迁移期按文件名存的、老 .proc 的绝对路径)返回 null。
+ * 素材的内容哈希:`m.hash`,或 `url` 是 `/@media/<hash>[.ext]`。实现搬到了 `server/media-stamp.mjs`
+ * (帧管线的素材戳也用它,.mjs 那一侧 import 不了这个 .ts),这里原样转出,调用方不用改。
  */
-export function mediaHashOf(m: any): string | null {
-  const hash = String(m?.hash || "").toLowerCase();
-  if (/^[0-9a-f]{64}$/.test(hash)) return hash;
-  const url = String(m?.url || "").split("?")[0];
-  if (!url.startsWith("/@media/")) return null;
-  const hit = HASH_NAME.exec(url.slice("/@media/".length).toLowerCase());
-  return hit ? hit[1] : null;
-}
+export { mediaHashOf };
 
 /** 用 ffmpeg 把素材的第 seconds 秒抽成 w×h 的 RGBA PNG(object-fit: cover),写到 opts.out */
 function extractFrame(ffmpeg: string, opts: { file: string; kind: string; seconds: number; width: number; height: number; opacity: number; filter?: string; out: string }): Promise<void> {

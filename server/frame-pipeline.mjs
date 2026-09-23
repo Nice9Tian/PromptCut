@@ -11,7 +11,7 @@ import { CardFrameCache } from './card-cache.mjs';
 import { SnapshotStore, snapshotTier, rangeHas, rangeCount } from './snapshot-store.mjs';
 import { createReadyIndex, kindOfTier, wireSnapshotKey } from './ready-index.mjs';
 import { prerenderSetOfPlan } from './prerender-set.mjs';
-import { cardMediaPath } from './card-media-path.mjs';
+import { createMediaStamper } from './media-stamp.mjs';
 import { createHash } from 'node:crypto';
 import { isFullyTransparentPng } from './frame-validity.mjs';
 import { resolveFrameSize } from '../src/kernel/frameSize.mjs';
@@ -144,14 +144,23 @@ export class FramePipeline {
    *
    * `playhead`:C4 的 `wanted` 从哪儿读(镜像插件的 `latestPlayhead()`)。
    * frame-pipeline 是 .mjs、镜像插件是 .ts,所以由 `frameService()` 注进来。
+   *
+   * `mediaUrl(m)`:素材服务上这条素材的绝对 HTTP 地址(取不到回 null),给没有内容哈希的素材打戳时
+   * 发 `HEAD` 用(`media-stamp.mjs`)。同样由 `frameService()` 注进来(`ffmpeg-frames.ts` 的
+   * `mediaSourceOf`,基址按 `asset-client.ts` 定);不注就是「素材服务不可达」,那种素材的戳是 `'missing'`。
    */
-  constructor({ root, origin, code = () => '', captureCode = () => undefined, interactive = true, playhead = NO_PLAYHEAD }) {
+  constructor({ root, origin, code = () => '', captureCode = () => undefined, interactive = true, playhead = NO_PLAYHEAD, mediaUrl = () => null }) {
     this.root = root;
     this.origin = origin;
     this.code = code;
     this.captureCode = captureCode;
     this.interactive = interactive !== false;
     this.playhead = playhead;
+    /**
+     * 素材戳(`_frameSourceStamp`,进 `frameIdentity`):有哈希就是哈希,没有就问素材服务的 `HEAD`,
+     * 不读素材服务的存储目录(`media-stamp.mjs` 文件头)。`/@export/<id>/media/` 是导出自己的产物目录,照旧本地 stat。
+     */
+    this.mediaStamper = createMediaStamper({ mediaUrl, exportRoot: () => process.env.PROMPTCUT_EXPORT_DIR || path.dirname(this.root) });
     /** C3 的就绪索引。SSE 端点(`GET /api/frames/ready`)直接订阅它 */
     this.readyIndex = createReadyIndex();
     this.entries = new Map();
@@ -353,10 +362,8 @@ export class FramePipeline {
   }
   async entry(project) {
     project = { ...project, media: await Promise.all((project.media || []).map(async media => {
-      const file = cardMediaPath(media, this.root);
-      if (!file) return media;
-      try { const stat = await fs.stat(file); return { ...media, _frameSourceStamp: `${stat.size}:${stat.mtimeMs}` }; }
-      catch { return { ...media, _frameSourceStamp: 'missing' }; }
+      const stamp = await this.mediaStamper.stamp(media);
+      return stamp === undefined ? media : { ...media, _frameSourceStamp: stamp };
     })) };
     const code = this.code(project);
     const key = frameIdentity(project, code);

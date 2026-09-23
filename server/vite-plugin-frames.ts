@@ -13,6 +13,7 @@ import { ensureMirror } from "./vite-plugin-mirror";
 import { latestPlayhead, ensureMirror as ensureMirrorVersion } from "./vite-plugin-mirror";
 import { snapshotTier } from "./snapshot-store.mjs";
 import { kindOfTier, wireSnapshotKey } from "./ready-index.mjs";
+import { mediaSourceOf } from "./vision/ffmpeg-frames";
 
 const services = new Map<string, FramePipeline>();
 function requestSignal(req: any, res: any) {
@@ -43,6 +44,8 @@ export function frameService(root: string, origin: string) {
       interactive: isPrerender,
       /** C4:`wanted` 从镜像插件读(frame-pipeline 是 .mjs,镜像插件是 .ts) */
       playhead: () => latestPlayhead(),
+      /** 没有内容哈希的素材打戳时向素材服务发 HEAD 的地址(基址按 asset-client.ts 定,不读素材目录) */
+      mediaUrl: (m: any) => mediaSourceOf(m),
     });
     services.set(root, service);
     /*
