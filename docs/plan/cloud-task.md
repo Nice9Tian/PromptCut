@@ -165,6 +165,8 @@ playbackUrl(
   oversize: Array<[from: number, to: number]> }  // [DRAFT] 超体积上限，推了但不投递
 ```
 
+同一共享键的清单被几端并发写时，**后写的赢，被覆盖的一方收到通知**，不加锁、不做按帧合并（文末决议 11）。
+
 `pending`（`[DRAFT]`）取代原来的 `skipped`（原义「已产但故意不上云」随新规则作废）。下载端见到 `pending`：**有预渲染者的端**（桌面运行环境、在线浏览器模式的 L1）直接本地预渲染、**不等**；**没有渲染能力的端**那一层透明，等推送到了再补。
 
 PNG / MOV / 轨道流的清单走（`[DRAFT]`）`content.put { kind: 'render-manifest', key: <该产物在预渲染缓存里的键>, body: { key, items: Array<[ref: string, hash: string]> } }`。**轨道流那一份的键和 `ref` 拼法随 R8 定**（与 `streamKey` 命名同一挂起，见文末决议 4）；本任务先把字节推上去、清单留这个外形。
@@ -351,7 +353,7 @@ lane 名（`user` / `agent` / `background`，`frame-pipeline.mjs:90`）和模式
 
 - **Agent 的路一律 `'agent'`**：`MIRRORED_TOOLS`（`vite-plugin-ai.ts:207`：`get_project` / `see_frames` / `get_gif` / `bake_card` / `inspect_card_dom`）经 `prerenderPost` 的那些调用、`:253` 的 `/api/ai/visual`、`vite-plugin-cards.ts:1303` 的 `proxyToPrerender`，**以及 `/api/cards/layout`**（它只服务 Agent 的 `get_layout`，和 D4、(b2) 末句一致）。
 - **用户的路一律 `'user'`**：帧、锚帧、轨道流。
-- **一条例外**（`docs/semantics/architecture/rendering.md`「AI 栏的操作预览可以插队」）：**用户点开的 `GET /api/ai/visual/gif/<key>.gif` 走 `'user'` 角色**（`lane: 'background'` 插队，(b2)）；**模型的 `get_gif` 工具调用走 `'agent'`**。拆分模式下如果把这条路由整个划进 `'agent'`，用户点开的动图就会被塞进 Agent 专用 Chrome，和上面那条语义冲突。
+- **一条例外**（`docs/semantics/architecture/rendering.md`「AI 栏的操作预览可以插队」）：**用户点开的 `GET /api/ai/visual/gif/<key>.gif` 走 `'user'` 角色**（`lane: 'background'` 插队，(b2)）；**模型的 `get_gif` 工具调用在 `'agent'` 进程中仅写入 Spec，实际的动图渲染由 `user` 进程负责**。拆分模式下如果把这条路由整个划进 `'agent'`，用户点开的动图就会被塞进 Agent 专用 Chrome，和上面那条语义冲突。动图的像素渲染一律在用户本机的 `user` 进程，不累加给 Agent 进程（文末决议 12）。
 
 `prerender.ts` 的单份缓存（`base` / `checkedAt` / `asking` / `firstAsk`、`invalidatePrerenderBase`、`usePrerenderBase`）按角色各一份，`ask()` 从 `url` 和 `agent.url` 各取各的。这样**拆不拆分对调用方透明**。第 6 步把 `MIRRORED_TOOLS` 搬去 Agent 服务端之后：Agent 服务端在本机时 base URL 就是 `/api/prerender/info` 里的 `agent.url`，在云端时是 Agent 云端环境自己的 `agent` 进程；两条路的工具语义完全一样。
 
@@ -501,3 +503,5 @@ lane 名（`user` / `agent` / `background`，`frame-pipeline.mjs:90`）和模式
 8. **A3b 的新协议标 `[DRAFT]`。** `px/<hash>`、`render-manifest`、清单字段 `pending` / `oversize`、本地档键 `<entry.key>/<共享键>` 是合理推演，写代码时做最终 Review。
 9. **严禁绕过素材服务读目录。** Agent 进程和预渲染进程像外部客户端一样经素材服务的 HTTP API 读写素材和产物，绝不直接读素材服务的存储目录（I3、I4(d)）。
 10. **部署不设限，旧词取代。** 文档服务和素材服务可以任意组合部署（如文档服务在公网云端、素材服务在局域网 NAS 或本机）；「本地模式」「云端模式」改称本地 / 远程文档服务、本地 / 远程素材服务；分片状态、是否传完一律问当前连接的素材服务；切换所连接的服务是用户的显式操作，切换前后版本号连续、不归零（F4）。
+11. **共享键下的快照清单与 B 节同一条规则：后写的赢，被覆盖的一方收到通知。** 同一共享键的清单（A3b）被并发写入不是缺陷：不引入分布式锁、不做按版本的条件写、不做按帧合并，后写的一份整体取代前一份；被覆盖的一方收到与 B3 覆盖通知同样内容的通知（覆盖方、被取代的那一版），覆盖方的 ack 带 `overwrote`（独立审查 T1a 第 8 条，用户 2026-09-24 裁定）。
+12. **Agent 进程只写 GIF 的 Spec，像素渲染一律由用户本机的 `user` 进程执行。** 模型的 `get_gif` 工具调用和 Agent 侧的 `saveCardSpec` 在 `'agent'` 进程里只生成并保存 GIF 的配置描述（Spec）与记录，并且 `user` 进程必须读得到它们；所有消耗 CPU 的实质性像素渲染，以及 `GET /api/ai/visual/gif/<key>.gif`，都由 `user` 进程负责，绝不累加给 Agent 进程。拆分模式（I4）下不能用「把 GET 转给 Agent 进程」来解决 404（独立审查 T1a 第 13 条，用户 2026-09-24 裁定）。
