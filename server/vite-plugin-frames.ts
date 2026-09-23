@@ -6,7 +6,7 @@ import { captureCode, frameCode, invalidateFrameCode } from "./frame-code.mjs";
 import { FramePipeline } from "./frame-pipeline.mjs";
 import { unpackFrameArchive } from "./frame-archive.mjs";
 import { overLimit } from "./http-guard.mjs";
-import { prerenderState } from "./prerender-client.mjs";
+import { prerenderState, proxyToPrerender } from "./prerender-client.mjs";
 import { isPrerender } from "./render-role.mjs";
 import { ensureMirror } from "./vite-plugin-mirror";
 
@@ -115,10 +115,16 @@ export function framesPlugin(): Plugin {
      * (pinned 架构 4:Agent 的 query 跑预渲染进程;用户交互的 query 走自己的离屏舞台,不走这里)。
      * body `{ session, localRev, t, clipIds? }`,项目来路和 `/preload` / `/playback` / `/see`
      * 同一套(A7 的镜像前奏,迁移期仍收 `project`)。
-     * 和 `/playback` 一样**两边都能答**:编辑器进程手里也有 FramePipeline,不另开一层转发。
+     *
+     * **只在预渲染进程里答**(T1a 审查 #14;cloud-task.md I4(c):`/api/cards/layout` 只服务 Agent 的
+     * `get_layout`,走 `'agent'` 角色)。编辑器进程收到就原样转给预渲染进程,转不过去回
+     * `503 NO_AGENT_LANE` —— 以前这里直接调本进程的 `FramePipeline.layout`,会在编辑器这一侧开查询 Chrome。
+     * 预渲染进程里经 `runAgentTask` 借 agent lane 的 bakery,和 `see_frames` 的 agent 批排同一条队。
      */
     server.middlewares.use("/api/cards/layout", (req, res, next) => {
       if (req.method !== "POST") return next();
+      if (!isPrerender) return proxyToPrerender(req, res, { unavailable: { status: 503, code: "NO_AGENT_LANE",
+        error: "编辑器进程没有 Agent lane,/api/cards/layout 只在预渲染进程里答,而预渲染进程现在够不着" } });
       const origin = `http://127.0.0.1:${(server.httpServer?.address() as any)?.port}`;
       const json = (status: number, data: unknown) => { res.statusCode = status; res.setHeader("Content-Type", "application/json"); res.end(JSON.stringify(data)); };
       let body = "", over = false;
