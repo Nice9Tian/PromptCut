@@ -1,5 +1,5 @@
 import type { Plugin, ViteDevServer } from "vite";
-import { originOk, jsonContentType, apiPath } from "./http-guard.mjs";
+import { originOk, jsonContentType, apiPath, isAssetServicePath } from "./http-guard.mjs";
 
 /**
  * `/api/**` 的同源守卫。**一个卡口,不是十二个。**
@@ -57,6 +57,9 @@ export function apiGuardPlugin(): Plugin {
         // 实测真的改掉了 ai.json 里的 baseUrl。详见 http-guard.mjs 里 apiPath 的说明。
         const url = apiPath(req.url);
         if (!url.startsWith("/api/")) return next();
+        // 素材服务的路由允许跨源(局域网里的其它设备要能直接访问),由它自己回 CORS 头和预检。
+        // 只豁免严格匹配的那几种路径,判据见 http-guard.mjs 的 isAssetServicePath。
+        if (isAssetServicePath(req.url)) return next();
 
         const deny = (error: string) => {
           res.statusCode = 403;

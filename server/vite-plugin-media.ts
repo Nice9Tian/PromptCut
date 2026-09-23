@@ -149,7 +149,7 @@ export async function readMediaIndex(root: string): Promise<MediaIndex> {
   return parsed;
 }
 
-async function writeMediaIndex(root: string, hash: string, entry: MediaIndexEntry): Promise<void> {
+export async function writeMediaIndex(root: string, hash: string, entry: MediaIndexEntry): Promise<void> {
   const index = await readMediaIndex(root);
   index[hash] = entry;
   try {
@@ -402,25 +402,48 @@ async function handleMediaPcm(req: Connect.IncomingMessage, res: ServerResponse,
   }
 }
 
+/**
+ * 解析 Range 头。只认单段 `bytes=a-b` / `bytes=a-` / `bytes=-n`(后缀);
+ * 认不出的返回 null(当没带 Range,回整件 200),落在文件外的返回 "unsatisfiable"(回 416)。
+ * 结尾超出文件的按 RFC 9110 截到最后一个字节。合法的 `bytes=a-b` 和原来的行为一字不差。
+ */
+export function parseRange(header: string, size: number): { start: number; end: number } | null | "unsatisfiable" {
+  const m = /^bytes=(\d*)-(\d*)$/.exec(String(header || "").trim());
+  if (!m || (m[1] === "" && m[2] === "")) return null;
+  let start: number, end: number;
+  if (m[1] === "") {
+    const n = parseInt(m[2], 10);
+    if (n === 0) return "unsatisfiable";
+    start = Math.max(0, size - n);
+    end = size - 1;
+  } else {
+    start = parseInt(m[1], 10);
+    end = m[2] === "" ? size - 1 : Math.min(parseInt(m[2], 10), size - 1);
+  }
+  if (start >= size || end < start) return "unsatisfiable";
+  return { start, end };
+}
+
 async function serveFile(filePath: string, req: Connect.IncomingMessage, res: ServerResponse) {
   try {
     const stat = await fs.stat(filePath);
-    const range = req.headers.range;
+    const range = req.headers.range ? parseRange(req.headers.range, stat.size) : null;
     const contentType = contentTypeForFile(filePath);
+    const head = req.method === "HEAD";
 
+    if (range === "unsatisfiable") {
+      res.writeHead(416, { "Content-Range": `bytes */${stat.size}`, "Accept-Ranges": "bytes" });
+      return res.end();
+    }
     if (range) {
-      const parts = range.replace(/bytes=/, "").split("-");
-      const start = parseInt(parts[0], 10);
-      const end = parts[1] ? parseInt(parts[1], 10) : stat.size - 1;
-      const chunksize = (end - start) + 1;
-
+      const { start, end } = range;
       res.writeHead(206, {
         "Content-Range": `bytes ${start}-${end}/${stat.size}`,
         "Accept-Ranges": "bytes",
-        "Content-Length": chunksize,
+        "Content-Length": (end - start) + 1,
         "Content-Type": contentType,
       });
-
+      if (head) return res.end();
       const stream = createReadStream(filePath, { start, end });
       stream.pipe(res);
     } else {
@@ -429,6 +452,7 @@ async function serveFile(filePath: string, req: Connect.IncomingMessage, res: Se
         "Content-Type": contentType,
         "Accept-Ranges": "bytes",
       });
+      if (head) return res.end();
       const stream = createReadStream(filePath);
       stream.pipe(res);
     }
@@ -505,7 +529,7 @@ export function mediaMiddleware(root: string) {
     }
 
     // GET /@media/<hash> | /@media/<hash>.<ext> | /@media/<文件名>(迁移期)
-    if (req.method === "GET" && req.url.startsWith("/@media/")) {
+    if ((req.method === "GET" || req.method === "HEAD") && req.url.startsWith("/@media/")) {
       const rawName = req.url.split("?")[0].split("/").pop();
       if (rawName) {
         let decoded = rawName;
@@ -529,9 +553,19 @@ export function mediaMiddleware(root: string) {
 export function mediaPlugin(): Plugin {
   return {
     name: "vite-plugin-media",
-    configureServer(server) {
-      const handler = mediaMiddleware(server.config.root);
-      server.middlewares.use((req, res, next) => { void handler(req, res, next); });
+    async configureServer(server) {
+      const root = server.config.root;
+      // 素材服务(第 5 步:分片上传、对账、按哈希取回、跨源)排在老路由前面:它先给 /@media/*
+      // 补上 CORS 头、答预检,不归它管的请求再交给下面的 mediaMiddleware。
+      // **惰性 import**:好几个单测把本文件单独转译到临时目录再 import,静态 import 兄弟模块会解析失败。
+      const { assetServiceMiddleware, assetPreflightMiddleware } = await import("./asset-service");
+      // 预检要抢在 vite 自带的 cors 中间件前面答(它不认局域网的源),理由见 assetPreflightMiddleware
+      server.middlewares.stack.unshift({ route: "", handle: assetPreflightMiddleware() as Connect.NextHandleFunction });
+      const { rememberLocalAssetOrigin } = await import("./asset-client");
+      rememberLocalAssetOrigin(server.httpServer);
+      const asset = assetServiceMiddleware(root);
+      const handler = mediaMiddleware(root);
+      server.middlewares.use((req, res, next) => { void asset(req, res, () => { void handler(req, res, next); }); });
     }
   };
 }

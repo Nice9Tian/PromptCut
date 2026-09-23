@@ -56,15 +56,21 @@ export function ProjectSettingsDialog({ open, onClose }: ProjectSettingsDialogPr
   const curH = useStore((s) => s.project.height);
   const curName = useStore((s) => s.project.name);
   const curFps = useStore((s) => s.project.fps);
+  const curDuration = useStore((s) => s.project.duration);
 
   const [name, setName] = useState("");
   const [ratio, setRatio] = useState<AspectRatio>("16:9");
   const [orientation, setOrientation] = useState<Orientation>("horizontal");
   const [fps, setFps] = useState<Fps>(FALLBACK_FPS);
+  const [duration, setDuration] = useState("");
+  const durationInputRef = useRef<HTMLInputElement>(null);
 
   const currentRes = RESOLUTION_MAP[ratio][orientation];
 
   const handleConfirm = () => {
+    if (!durationInputRef.current?.reportValidity()) return;
+    const requestedDuration = Number(duration);
+    if (!Number.isFinite(requestedDuration) || requestedDuration < 1) return;
     // 名字允许留空,但不允许真的变成空标题——空了就退回「未命名」
     actions.setProjectMeta({
       name: name.trim() || "未命名",
@@ -74,6 +80,7 @@ export function ProjectSettingsDialog({ open, onClose }: ProjectSettingsDialogPr
       // 全部卡的记录都失配 —— `probeRunner` 据此重挡一次遮罩、重测一轮。
       fps,
     });
+    if (requestedDuration !== curDuration) actions.setDurationManual(requestedDuration);
     onClose();
   };
 
@@ -97,8 +104,9 @@ export function ProjectSettingsDialog({ open, onClose }: ProjectSettingsDialogPr
       setOrientation(initial.orientation);
       setName(curName);
       setFps(asFps(curFps));
+      setDuration(String(curDuration));
     }
-  }, [open, curW, curH, curName, curFps]);
+  }, [open, curW, curH, curName, curFps, curDuration]);
 
   useEffect(() => {
     if (!open) return;
@@ -195,6 +203,20 @@ export function ProjectSettingsDialog({ open, onClose }: ProjectSettingsDialogPr
                 <option key={n} value={n}>{n} fps</option>
               ))}
             </select>
+          </div>
+          <div className="pc-dialog-row">
+            <label className="pc-dialog-label" htmlFor="pc-proj-duration">总时长（秒）</label>
+            <input
+              ref={durationInputRef}
+              id="pc-proj-duration"
+              className="pc-dialog-input"
+              type="number"
+              min="1"
+              step="any"
+              required
+              value={duration}
+              onChange={(e) => setDuration(e.target.value)}
+            />
           </div>
           <div className="pc-dialog-row">
             <span className="pc-dialog-label">应用分辨率</span>
