@@ -91,20 +91,17 @@ node scripts/export-frames.mjs --url "http://127.0.0.1:5197/?export=1" --frames 
 - `?open=<.proc 的绝对路径>`：先复制一份再打开，和双击文件同一条路。
 - `?nosetup=1`：不弹首次 AI 设置对话框。
 
+### 驱动编辑器页面
+
+- 用页面同一个源动态引入（如 `await import('/src/store/project.ts')`），拿到的就是页面正在用的那份模块。`window.__pcPreviewAudio()` 返回接进 Web Audio 的元素数。
+
 ### 导出端到端
 
-- 在命令行里起一台 dev server，把 `PROMPTCUT_EXPORT_DIR` 设成 scratch 下的一个目录，测试产物不会落进用户的导出目录。
-- 测试项目放在 `<导出目录>/export-<id>/project.json`，页面里的地址是 `/@export/<id>/project.json`。
-- 跑 `node scripts/export-frames.mjs --url "http://127.0.0.1:<端口>/?export=1&timeline=/@export/<id>/project.json" --frames a-b --no-video`，可以和 `verify-determinism.mjs` 并行。测音频时 `--out` 必须就是 `export-<id>` 目录，Chrome 混音页从 `/@export/<id>/audio/` 取裁好的音频。
-- 要用真实素材，可以在导出目录里建一个 `media` junction 指向用户的素材目录（默认 `%USERPROFILE%\Videos\PromptCut\media`）。删目录前先拆掉它，做法见 `docs/semantics/agent/verification.md`。
-- 驱动编辑器页面时，用同一个 URL 动态引入（如 `await import('/src/store/project.ts')`），拿到的就是页面正在用的那份模块。`window.__pcPreviewAudio()` 返回接进 Web Audio 的元素数。
+`node scripts/export-e2e.mjs --project <project.json> [--frames a-b] [--determinism] [--media-lib]`，用法和坑见文件头。
 
 ### 长时间真跑审查环路
 
-- 一趟要 20～35 分钟，编辑器页面要一直连着 `/api/mcp/events`。不要用 Claude 桌面版的内置浏览器面板承载编辑器，面板隐藏时页面被重载过。
-- 起一台 dev server，用 puppeteer 无头打开 `/?editor`，轮询 `/api/mcp/status` 直到 `editorConnected` 为真，再发 `/api/ai/chat`（`provider: 'api'`、`reviewLoop: true`）。测试素材放 `.pc-work/<id>/`，页面里的地址是 `/@pcwork/<id>/<文件>`。
-- 现在的无头实例（`scripts/headless.mjs`）在 SKILL 关着时拒绝一切工具，不能拿它测普通对话。
-- 一趟完整运行约消耗 600 万输入 token。
+`node scripts/review-loop-run.mjs --prompt "<消息>"`，一趟约 600 万输入 token，真跑前先和用户确认；用法和坑见文件头。
 
 ### 不用真模型测 AI 栏卡顿
 
