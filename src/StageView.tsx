@@ -32,6 +32,9 @@ import { beatAt, createK6State, noteK6Beat, scheduleNextBeat } from "./render/be
 import { reviveStagePlan, type StagePlan, type WirePlan } from "./render/wirePlan";
 import { ensureProxyStyle, proxyAllowed, proxyOf, resetInk, sampleAll } from "./render/solidMode";
 import { StreamPlayer } from "./render/streamPlayer";
+import { createGlHost } from "./render/gl/glHost";
+import { glPlanes } from "./render/gl/planes";
+import { resolveGlRoute } from "./render/costDevice.mjs";
 import { themeStyle } from "./themes";
 import "./cards";
 
@@ -327,6 +330,24 @@ export default function StageView() {
      * 它往 `Stage` 已经渲好的 `[data-pc-stream-plane]` / `[data-pc-group-plane]` 上画。
      */
     const player = new StreamPlayer({ root: () => rootRef.current });
+
+    /*
+     * canvas 卡的共享 WebGL 渲染器(R9 M2)。`stageId` 是实例名(`A` / `B`),**和角色无关**:
+     * 互换角色时它不变,Worker 里这个舞台那份图集区域跟着实例走,不跟着角色走。
+     * 路线先按宿主能力的缺省建,收到项目后按 `project.glRoute` 的生效值改(`setProject`)。
+     * 路线 2 的端口由父页在握手之后、任何 RPC 之前经 `{ type: 'gl-port' }` 交来(下面那个监听)。
+     */
+    const caps = detectHostCapabilities();
+    const gl = createGlHost({ stageId: caps.stageId, lowMemory: caps.lowMemory, route: resolveGlRoute(null, caps.lowMemory) });
+    const onGlPort = (e: MessageEvent) => {
+      if (e.source !== window.parent) return;
+      const d = e.data as { type?: string; port?: MessagePort | null } | null;
+      if (d?.type !== "gl-port") return;
+      gl.acceptPort(d.port ?? e.ports[0] ?? null);
+    };
+    window.addEventListener("message", onGlPort);
+    /** 严格的一拍:探针、生成快照、补跑落定都等它(没有 gl 平面时回 `undefined`,不多让一次微任务) */
+    const glStrict = (sec: number) => gl.beat({ strict: true, t: sec }) ?? undefined;
     const presentStreams = (sec: number) => {
       if (ref.current.role !== "front" || !ref.current.streamPlanes.length) return;
       player.present(sec);
@@ -577,10 +598,13 @@ export default function StageView() {
       /** 追上之后 post `{ type: 'settled', clipIds: [clipId] }`(K5 第一路 / 重卡才要) */
       announce: boolean;
       gen: number;
+      /** canvas 卡追到了、正在等这一拍的 `done`(R9 M3):等到之前不摘 `.pc-settling` */
+      finishing?: boolean;
     }
 
     /** 追帧被中止 / 追完:摘 `.pc-settling`,**把该片段留在 `snapshots` 里**(平面还挂着,不闪) */
     const endCatchUp = (task: CatchUpTask, caughtUp: boolean): void => {
+      task.finishing = false;
       ref.current.catchUps.delete(task.clipId);
       setSettlingAt(task.clipId, null);
       if (caughtUp && task.announce) {
@@ -605,6 +629,7 @@ export default function StageView() {
         endCatchUp(task, false);
         return true;
       }
+      if (task.finishing) return true;
       const wrap = wrapOf(task.clipId);
       for (let i = 0; i < steps && task.stageMs < task.targetMs; i++) {
         task.stageMs = Math.min(task.targetMs, task.stageMs + task.stepMs);
@@ -616,7 +641,22 @@ export default function StageView() {
       /*
        * 追到目标那一步:锚点本来就在全局基上,交回全局 `pinner.sync` 天然连续,
        * 不需要额外动作 —— 摘了 `.pc-settling` 它就是精确的活组件。
+       *
+       * **canvas 卡要先等这一拍的 `done`**(R9 M3):追帧中间步不发 `beat`(被 `.pc-settling` 藏着),
+       * 追上那一步发一拍、等位图贴上,再摘 `.pc-settling` 和快照 —— 否则曝光的是上一拍的旧位图。
        */
+      if (glPlanes.has(task.clipId)) {
+        const pending = gl.beat({ strict: true, t: task.targetMs / 1000 });
+        if (pending) {
+          task.finishing = true;
+          void pending.then(() => {
+            if (!task.finishing || ref.current.catchUps.get(task.clipId) !== task) return;
+            if (task.gen !== catchUpGen.current) { endCatchUp(task, false); return; }
+            endCatchUp(task, true);
+          });
+          return true;
+        }
+      }
       endCatchUp(task, true);
       return true;
     };
@@ -913,6 +953,8 @@ export default function StageView() {
         },
       });
       if (stale()) return { aborted: true };
+      // canvas 卡:比对前这一帧的位图要贴上(R9 M3:K1 探针生成快照的每一帧都发 beat)
+      await glStrict(clock.now() / 1000);
       // 第 8 帧之前就被截断的卡没有基线,两个布尔一律记 false、不比对(K1)
       const baseline = pushed >= frames ? probeControlHtml() : null;
 
@@ -934,7 +976,10 @@ export default function StageView() {
           flushSync(() => setT(ms / 1000));
           done++;
         }
-        if (done >= frames) vtHtml = probeControlHtml();
+        if (done >= frames) {
+          await glStrict(ref.current.t);
+          vtHtml = probeControlHtml();
+        }
       }
       const vtOk = baseline !== null && vtHtml !== null && compareSnapshotHtml(baseline, vtHtml).same;
 
@@ -948,6 +993,7 @@ export default function StageView() {
         const ms = mountMs + frames * step;
         if (wrap) pinner.syncIn(wrap, ms);
         flushSync(() => setT(ms / 1000));
+        await glStrict(ms / 1000);
         if (realNow() - seekStarted <= PROBE_BOOL_MS) seekHtml = probeControlHtml();
       }
       const seekOk = baseline !== null && seekHtml !== null && compareSnapshotHtml(baseline, seekHtml).same;
@@ -1063,6 +1109,14 @@ export default function StageView() {
           enterCatchUps(sec, fps);
           stepCatchUps(fps);
           /*
+           * canvas 卡(R9 M3,一拍的顺序写死):DOM 提交完 → `beat` → **`await done`(慢帧就等在这里)**
+           * → 位图贴到各平面(`glHost` 里做)→ 等真帧 → post `frame`。`done` 偶有几十毫秒的尖峰,
+           * 等它就是 K4 的「慢帧就等」:这一拍变长,下面的排拍把时间轴整体后移,不跳帧。
+           * Worker 真卡死时 `glHost` 1 秒后放行,平面留上一张,循环不会挂住。
+           */
+          const glBeat = gl.beat({ t: sec });
+          if (glBeat) await glBeat;
+          /*
            * 等真实一帧,**带超时**(见 `realRafOrAfter`)。连着几拍都等不到就认定这个 iframe
            * 被浏览器节流了 —— 那时画面本来就不在刷,再为它等只会把拍长拖成节流周期;
            * 改成只让一个宏任务(Motion 解析关键帧要的是任务边界,不是真帧)。
@@ -1138,6 +1192,8 @@ export default function StageView() {
         const nextKey = layoutKeyOf(full);
         ref.current.project = full;
         ref.current.layoutKey = nextKey;
+        // R9:项目选项的路线(生效值;切了就重建 glHost 那一侧的连接,M2 / 约束第 1 条)
+        gl.setRoute(resolveGlRoute(full.glRoute, caps.lowMemory));
         flushSync(() => setProject(full));
         window.clearTimeout(ref.current.settle);
         // 项目变了,在飞的补跑作废:探针会按新项目重发
@@ -1207,6 +1263,8 @@ export default function StageView() {
           scheduleSample();
           if (opts.settle) routeSettle(target, fps);
           presentStreams(target);
+          // 同步的 advanceTo 不逐步发 beat,只在它结束后发一次带终点 t 的(K3(a) / M3)
+          void gl.beat({ t: target });
           return { path: "continuous" } satisfies SetTimeReply;
         }
 
@@ -1220,6 +1278,8 @@ export default function StageView() {
           routeJump(target, fps);
           if (opts.settle) routeSettle(target, fps);
           presentStreams(target);
+          // `setTime` 落定那一帧发一拍(M3;点时间轴一次只发这一拍)
+          void gl.beat({ t: target });
         }
         if (opts.probe) {
           /*
@@ -1227,6 +1287,8 @@ export default function StageView() {
            * 垂直同步(60 Hz 屏约 17 ms),计进去的话随机访问卡的成绩全是这个常数,
            * 而它不属于活渲、也不属于生成快照的任何一段(3.8 末条点名要修的量法问题)。
            */
+          // canvas 卡的 `stepMs` 含 `beat → done` 往返(M4):两条路线量级不同,所以路线进 `device`
+          await glStrict(target);
           const stepMs = realNow() - started;
           await realRaf();
           const root = rootRef.current;
@@ -1349,24 +1411,34 @@ export default function StageView() {
                 pinner.sync(ms, skipWrappers());
                 if (!probe) return;
                 frames++;
-                // 计时趟:只留下这一帧的耗时,不生成快照、不 post probe-frame
-                if (timing) {
-                  steps.push(realNow() - frameStarted);
-                  return;
-                }
-                const root = rootRef.current;
-                if (!root) return;
-                // 探针推过的帧直接存成死素材(K1):本地帧号按探针自己的步序算,不取 data-pc-local-frame
-                const snap = createSnapshot(root);
-                snapshot.inlineMs += snap.timing.inlineMs;
-                snapshot.rasterMs += snap.timing.rasterMs;
-                snapshot.serializeMs += snap.timing.serializeMs;
-                snapshotSteps.push({ inlineMs: snap.timing.inlineMs, rasterMs: snap.timing.rasterMs, serializeMs: snap.timing.serializeMs });
-                for (const c of snap.controls) {
-                  postStageEvent({ type: "probe-frame", clipId: c.id, localFrame: Math.round((ms / 1000 - clipStart(c.id)) * fps), html: c.html });
-                }
+                /*
+                 * canvas 卡(R9 M3 / M4):K1 探针的每一帧都发 beat、等 done —— 计时趟的每帧耗时含这段往返
+                 * (`stepMs` 的口径),快照趟要位图贴上了才生成快照(不然 `rasterizeCanvas` 判 `lossy`)。
+                 * 没有 gl 平面时 `glStrict` 回 `undefined`,这一帧和以前一模一样同步走完。
+                 */
+                const glDone = glStrict(ms / 1000);
+                if (glDone) return glDone.then(() => afterProbeFrame(ms));
+                afterProbeFrame(ms);
               },
             });
+            function afterProbeFrame(ms: number): void {
+              // 计时趟:只留下这一帧的耗时,不生成快照、不 post probe-frame
+              if (timing) {
+                steps.push(realNow() - frameStarted);
+                return;
+              }
+              const root = rootRef.current;
+              if (!root) return;
+              // 探针推过的帧直接存成死素材(K1):本地帧号按探针自己的步序算,不取 data-pc-local-frame
+              const snap = createSnapshot(root);
+              snapshot.inlineMs += snap.timing.inlineMs;
+              snapshot.rasterMs += snap.timing.rasterMs;
+              snapshot.serializeMs += snap.timing.serializeMs;
+              snapshotSteps.push({ inlineMs: snap.timing.inlineMs, rasterMs: snap.timing.rasterMs, serializeMs: snap.timing.serializeMs });
+              for (const c of snap.controls) {
+                postStageEvent({ type: "probe-frame", clipId: c.id, localFrame: Math.round((ms / 1000 - clipStart(c.id)) * fps), html: c.html });
+              }
+            }
             if (gen !== renderGen.current) return; // 已被 abortPending 按 reason 回包
             ref.current.pending = null;
             const elapsedMs = realNow() - started;
@@ -1381,6 +1453,11 @@ export default function StageView() {
             settle(target);
             scheduleSample();
             ref.current.t = target;
+            // K5 第二路补跑到目标的那一帧(中间帧不发,同步 advanceTo 的豁免同理):位图贴上再回包
+            if (!probe) {
+              await glStrict(target);
+              if (gen !== renderGen.current) return;
+            }
             resolve({ remounted, caughtUpAtSec: clock.now() / 1000, elapsedMs, stepMs: stepOf(elapsedMs),
               ...(probe ? { frames, truncated: false, snapshot } : {}),
               ...(timing ? { steps } : probe ? { snapshotSteps } : {}) });
@@ -1449,9 +1526,12 @@ export default function StageView() {
         const wasBack = ref.current.role === "back";
         ref.current.role = role;
         ref.current.job = role === "back" ? opts.job ?? "probe" : undefined;
+        gl.setRole(role);
         if (role === "back") {
           // 1. 停 K4 的节拍循环(挂着的 pause() 回包一并落定)
           stopBeat();
+          // R9:放掉这个 stageId 在 Worker 里的那份图集(互换时 stageId 不变,只清这一份)
+          gl.release();
           ref.current.snapshots = new Map();
           ref.current.suppressed = new Set();
           ref.current.streamPlanes = [];
@@ -1692,12 +1772,19 @@ export default function StageView() {
       /** R8:流平面与解码器的状态(持有的帧数 / 字节、每条流画了几帧、当前变体……) */
       streamPlanes: ref.current.streamPlanes.map((g) => ({ clipIds: g.clipIds, key: g.key ?? null, ranges: g.ranges ?? null })),
       streams: player.diag(),
+      /** R9:共享 WebGL 渲染器这一侧的状态(路线、连接方式、往返耗时、超时次数……) */
+      gl: gl.diag(),
     });
+    // 探针用:问 Worker 要它那一侧的诊断(上下文数、纹理上传次数、图集尺寸)
+    (window as unknown as Record<string, unknown>).__pcGlWorkerDiag = () => gl.workerDiag();
     window.__pcStagePipelineAt = (clipId: string, tSec: number) => pipelineAt(ref.current.plan?.plan ?? null, clipId, tSec);
-    postStageReady(detectHostCapabilities());
+    postStageReady(caps);
     return () => {
       stopRpc();
       player.stop();
+      window.removeEventListener("message", onGlPort);
+      gl.dispose();
+      delete (window as unknown as Record<string, unknown>).__pcGlWorkerDiag;
       window.clearTimeout(ref.current.settle);
       window.clearTimeout(ref.current.awaitTimer);
       window.clearTimeout(sampleTimer);

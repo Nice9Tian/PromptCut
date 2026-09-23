@@ -264,5 +264,12 @@ export const particlesCard: CardDef<Params> = {
   ],
   parts: [{ id: "particles", label: "粒子", role: "media", params: ["config", "color", "quantity", "speed", "size", "links", "seed"] }],
   lifecycle: { after: "evolve", exit: ["fade"] },
+  /*
+   * R9 M1 的第四种契约 `dom2d`:**不进共享渲染器的 Worker**。`tsParticles.load({ element })` 要 DOM 元素、
+   * 配置是异步 fetch,53 张粒子卡共用这一份 —— 所以仍在主线程用真画布画(上面 `withRealCanvas` 的
+   * `transferControlToOffscreen` 短路保留),`Stage` 不为它渲 gl 平面;它是 2D 上下文,不算 WebGL 上下文。
+   * 长的粒子片段判重时走轨道流(R8 G1)。
+   */
+  canvas: { kind: "dom2d" },
   Component: ParticlesCard,
 };

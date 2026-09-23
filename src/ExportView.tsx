@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { FrameScene } from "./render/FrameScene";
 import { Stage } from "./render/Stage";
@@ -19,6 +19,7 @@ import { clipFrameMode } from "./kernel/frameMode.mjs";
 import { fontFingerprintOf } from "./render/fontFingerprint";
 import { frameWorkStatus, waitForFrameWork } from "./kernel/frameReady";
 import { demoTimeline } from "./demo";
+import { createGlHost, type GlHost } from "./render/gl/glHost";
 import "./cards";
 
 // 只要进了导出视图就把页面时钟量化到导出帧(见 exportClock.ts),必须早于任何卡片挂载
@@ -58,6 +59,26 @@ export default function ExportView() {
   const renderTimeline = useMemo(() => !timeline || !frameClipIds ? timeline : ({ ...timeline,
     clips: timeline.clips.filter(c => frameClipIds.has(c.id)),
   }), [timeline, frameClipIds]);
+  /*
+   * canvas 卡的共享 WebGL 渲染器(R9 M2)。**导出页永远走路线 1**:预渲染进程里没有父页,
+   * 自己开一个 Worker(懒建:这一帧真有 canvas 卡要画才建,纯 DOM 的项目一个都不开,DOM 一个字不变)。
+   */
+  const glHost = useRef<GlHost | null>(null);
+  useEffect(() => {
+    const host = createGlHost({ stageId: "export", lowMemory: false, route: "perDocument" });
+    glHost.current = host;
+    return () => { host.dispose(); if (glHost.current === host) glHost.current = null; };
+  }, []);
+  /*
+   * 导出页 / 预渲染页**每一帧**发一拍(M3)。帧推进由 `__pcSetT` 的 `flushSync` 驱动,`beat` 就发在
+   * **那次提交的 layout effect** 里 —— gl 平面的登记(子组件的 layout effect)这时已经做完。
+   * 严格的拍:编译、纹理没好就等,不留空帧。`glHost` 自己领 `beginFrameWork('gl')` 的票、收到 `done` 再还,
+   * 所以 `__pcFrameReady`(下面挂的 `waitForFrameWork`)天然把 `done` 等进来,Node 端照旧等它。
+   * 不写依赖:任何一次提交(换帧、换分片窗口、重挂载)都可能换了 gl 平面上该画的那一帧。
+   */
+  useLayoutEffect(() => {
+    void glHost.current?.beat({ strict: true, t });
+  });
   useEffect(() => {
     document.documentElement.style.background = "transparent";
     document.body.style.background = "transparent";

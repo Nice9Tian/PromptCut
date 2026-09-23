@@ -1,236 +1,52 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import type { CardDef, CardProps } from "../../kernel/types";
-import { beginFrameWork } from "../../kernel/frameReady";
-import { cameraFor, DEFAULT_FOV_DEG } from "../../kernel/space3d";
-import {
-  addLights, applyTexture, geometryOf, materialOf, poseMesh, radiusFor, shapeOf,
-  type Scene3DParams, type ThreeMod,
-} from "./scene3dObject";
+import type { CardDef } from "../../kernel/types";
+import type { Scene3DParams } from "./scene3dObject";
 
 /**
- * 三维场景(B 层):three.js 画在自己的 canvas 上的一个立体物件,透明底,能和别的卡叠。
+ * 三维场景(B 层):three.js 画的一个立体物件,透明底,能和别的卡叠。
+ *
+ * # R9 之后画面不在这个文件里画
+ *
+ * 这张卡带 `canvas: { kind: 'three' }` 契约:`Stage` 在包裹层里渲一个 `[data-pc-gl-plane]`,
+ * 画面由共享 WebGL 渲染器(`render/gl/`)在 GL Worker 里画、按帧交回位图。函数那一半在同目录的
+ * `scene-3d.gl.ts`(scene 和相机怎么造、每拍怎么摆),几何 / 材质 / 灯光 / 姿势仍只有 `scene3dObject.ts`
+ * 那一份。以前这里自建 `THREE.WebGLRenderer`、开 `preserveDrawingBuffer`,每张卡一个上下文,
+ * Chrome 一页约 16 个活的上下文,多了就丢最早的;现在整个舞台只有 Worker 里那一个。
  *
  * # 确定性是这张卡唯一的难点
  *
  * 这个项目逐帧导出,同一个时间轴导两遍必须逐字节相同(见 server/bakery/)。
  * three.js 的常规用法是 `renderer.setAnimationLoop(...)` —— 自己跑 rAF、按 delta 累积。
- * **那条路在这里是错的**,而且错得不报警:
- *   - delta 累积意味着"第 30 帧长什么样"取决于前面每一帧各推了多久,机器一忙就漂;
- *   - 往回拖播放头没有"倒带",累积出来的状态回不去。
- *
- * 所以这张卡一次 rAF 都不注册。**画面是 t 的纯函数**:
+ * **那条路在这里是错的**:delta 累积意味着"第 30 帧长什么样"取决于前面每一帧各推了多久,
+ * 往回拖播放头也没有"倒带"。所以这张卡一次 rAF 都不注册。**画面是 t 的纯函数**:
  *
  *     rotation.y = t · spinY · 2π
  *
  * 给同一个 t 就得到同一帧,顺着播、往回拖、跳着截,结果都一样。
- * 这比"把 three 的 rAF 接进虚拟时钟"更省事也更硬 —— 根本没有第二个时钟要对齐。
  * (粒子卡 particles.tsx 走的是另一条路:它有物理累积,只能一步步推。三维没有物理,不用受那个罪。)
  *
  * # 相机和 A 层是同一台
  *
- * 相机参数从 kernel/space3d.ts 取,和舞台 CSS 的 `perspective` 同一个公式、同一个单位。
- * 所以卡片(A 层,DOM)和这张卡(B 层,canvas)里的"一个像素"一样大、透视一样强,
- * 叠起来不用做任何标定 —— 这正是那份设计文档里"A 和 B 白拿同一个相机"的意思。
- *
- * fov **默认跟着项目走**(`params.fov = 0`,从 CardProps.stage.camera3dFov 取)。
- * 一开始的写法是让这张卡自带一个 fov、靠人记得填成和 `set_camera3d` 一样的数 ——
- * 那是必然会对不上的设计:项目一改 fov,这张卡就悄悄不在同一个空间里了,
- * 而画面只是"看着有点怪",不报错也没处查。想让它单独用一个视角才填正数。
+ * 相机参数从 kernel/space3d.ts 取,和舞台 CSS 的 `perspective` 同一个公式、同一个单位,
+ * 所以卡片(A 层,DOM)和这张卡(B 层)里的"一个像素"一样大、透视一样强,叠起来不用做任何标定。
+ * fov **默认跟着项目走**(`params.fov = 0`,从 `CardProps.stage.camera3dFov` 取,由 `Stage` 经 gl 平面带进 Worker):
+ * 让这张卡自带一个 fov、靠人记得填成和 `set_camera3d` 一样的数是必然会对不上的设计。想让它单独用一个视角才填正数。
  *
  * # WebGL 在导出里要一个开关
  *
  * 导出那套 Chrome 参数为了确定性关掉了 GPU,连带把 WebGL 关死(getContext 返回 null、不报错)。
- * server/bakery/chrome.mjs 里加了 `--enable-unsafe-swiftshader` 把软件 WebGL 打开。
- * 那个标志要是被谁删了,这张卡在导出里会变成一张空画布,而且**预览里还是好的** —— 只会在成片里发现。
+ * server/bakery/chrome.mjs 里加了 `--enable-unsafe-swiftshader` 把软件 WebGL 打开 —— Worker 里的
+ * `OffscreenCanvas` 上下文同样靠它。那个标志要是被谁删了,这张卡在导出里会变成一张空画布。
  */
 
 type Params = Scene3DParams;
 
 /**
- * three 只在真的用到这张卡时才下载(核心 ~150KB gzip)。
- * 主包已经 2MB,不能为了一张不常用的卡让所有人都付这笔钱。
- *
- * 导出时这个动态 import 不会造成时序问题:导出用的虚拟时间策略是
- * `pauseIfNetworkFetchesPending`,有请求挂着虚拟时间就不走,chunk 一定先加载完。
+ * 卡的 `Component` 仍然要有(`Stage` 的 `<C>` 分支、`isCardDef` 都认它),但画面在 gl 平面上,
+ * 这里什么都不渲。
  */
-let threeMod: Promise<ThreeMod> | null = null;
-const loadThree = (): Promise<ThreeMod> => (threeMod ??= import("three"));
-
-function Scene3DCard({ params, t = 0, stage }: CardProps<Params>) {
-  const host = useRef<HTMLDivElement>(null);
-  /*
-   * fov:0(默认)= 跟着项目的相机走,填了正数 = 这张卡自己单独用一个视角。
-   *
-   * 默认跟随是有意的。让这张卡自带一个 fov、再靠人记得填成和 set_camera3d 一样的数,
-   * 是**必然会对不上**的设计 —— 项目一改 fov,这张卡就悄悄不在同一个空间里了,
-   * 而画面只是"看着有点怪",不会报错。
-   * 项目没开三维时退回默认 40°,这时卡片自成一个空间,反正也没有 A 层的透视要对齐。
-   */
-  const fov = params.fov > 0 ? params.fov : (stage?.camera3dFov ?? DEFAULT_FOV_DEG);
-  // 依赖只用基本类型:stage 是每帧新建的对象,拿它当依赖会让场景每帧重建
-  const stageW = stage?.width;
-  const stageH = stage?.height;
-  const [THREE, setTHREE] = useState<ThreeMod | null>(null);
-  // 建场景时要知道当前的 t 才能把首帧画对(layout effect 不该把 t 放进依赖,
-  // 否则每一帧都重建整个场景)。用 ref 读最新值。
-  const tRef = useRef(t);
-  tRef.current = t;
-  /** 场景那一套。重建时整个换掉,旧的显式 dispose —— WebGL 资源不归 GC 管 */
-  const gl = useRef<{ renderer: any; scene: any; camera: any; mesh: any; dispose: () => void } | null>(null);
-
-  useEffect(() => {
-    let dead = false;
-    const ready = beginFrameWork('scene-3d engine');
-    loadThree().then((m) => { if (!dead) setTHREE(m); ready.ready(); }).catch((e) => { ready.fail(e); console.warn("[scene-3d] three 加载失败:", e); });
-    return () => { dead = true; ready.dispose(); };
-  }, []);
-
-  /*
-   * 建场景用 useLayoutEffect 而不是 useEffect:要在浏览器绘制之前读到容器尺寸并画完第一帧,
-   * 否则导出时有概率截到"还没画"的那一格 —— 而那一帧不会报错,只是黑的。
-   * 读尺寸用 clientWidth/clientHeight 而不是 getBoundingClientRect():
-   * 这张卡可能正被 A 层的三维变换斜着摆,后者返回的是**投影后**的外接框,不是画布该有的大小。
-   */
-  useLayoutEffect(() => {
-    const el = host.current;
-    if (!THREE || !el) return;
-    const w = Math.max(1, el.clientWidth);
-    const h = Math.max(1, el.clientHeight);
-
-    const cam = cameraFor({ width: w, height: h }, fov);
-    const camera = new THREE.PerspectiveCamera(cam.fovDeg, cam.aspect, cam.near, cam.far);
-    camera.position.set(...cam.position);
-    camera.lookAt(0, 0, 0);
-
-    const scene = new THREE.Scene();
-    addLights(THREE, scene, params.light, cam.distance);
-
-    const geometry = geometryOf(THREE, shapeOf(params.shape), radiusFor(params, h));
-    const material = materialOf(THREE, params);
-    const mesh = new THREE.Mesh(geometry, material);
-    scene.add(mesh);
-
-    /*
-     * 纹理:一张普通图片的 URL。通常是 bake_card 把一张卡预渲染出来的
-     * `/@media/xxx.png`(透明底),也可以是素材库里任何一张图。
-     *
-     * # 为什么这条路不会让预览和导出分叉
-     *
-     * 因为**两边都只是在加载同一张图片**。预渲染发生在更早的一次性步骤里(服务端跑
-     * see_frames 那条管线,和成片同一个渲染器画的),预览和导出谁都不做栅格化,
-     * 各自 `<img>` 那张 PNG 而已。分叉的前提是两边各算各的,这里没有人在算。
-     *
-     * # 代价是它是一张快照
-     *
-     * 卡片的动画会定格在预渲染的那一帧;卡片参数改了,纹理不会自己跟着变,要重新渲。
-     * 这个限制是**看得见**的(画面明显停住),不像静默分叉那样只能靠对比成片才发现。
-     *
-     * # 异步加载和导出的时序
-     *
-     * `load` 是异步的,而导出是逐帧截图 —— 首帧有没有可能截到还没贴图的样子?
-     * 不会:导出用的虚拟时间策略是 `pauseIfNetworkFetchesPending`,图片请求挂着的时候
-     * 虚拟时间根本不走,和动态 `import("three")` 是同一个道理(实测见提交说明)。
-     * 拿到图之后要手动再画一帧 —— 那时 t 不一定变,不能指望下面那个 effect 帮忙。
-     */
-    let texture: any = null;
-    const textureReady = params.texture ? beginFrameWork('scene-3d texture') : null;
-    if (params.texture) {
-      texture = applyTexture(THREE, material, params.texture, () => {
-        if (!gl.current) return;
-        poseMesh(mesh, params, tRef.current);
-        gl.current.renderer.render(gl.current.scene, gl.current.camera);
-        textureReady?.ready();
-      }, error => textureReady?.fail(error));
-    }
-
-    /*
-     * `preserveDrawingBuffer: true` 不是可有可无的:没有它,画完之后画布的像素随时可能被清掉,
-     * `drawImage(canvas)` 读回来是空的。而编辑器有两处要读这张画布的像素 ——
-     * `render/contentBox.ts` 量「这张卡真正画了东西的那一块」(不读就退回整块画布,
-     * Agent 会以为它盖住全屏),以及实体模式取墨色。代价是每帧多留一份缓冲。
-     */
-    const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true, preserveDrawingBuffer: true });
-    // 透明底:这张卡要能叠在别的卡上面,不能自带黑背景
-    renderer.setClearColor(0x000000, 0);
-    // 固定 1:导出用 --force-device-scale-factor=1,预览也按舞台像素算,跟着 devicePixelRatio 走
-    // 会让同一个项目在不同屏幕上导出成不同分辨率
-    renderer.setPixelRatio(1);
-    renderer.setSize(w, h, false);
-    renderer.domElement.style.display = "block";
-    el.replaceChildren(renderer.domElement);
-
-    gl.current = {
-      renderer, scene, camera, mesh,
-      dispose: () => {
-        geometry.dispose();
-        material.dispose();
-        texture?.dispose();
-        renderer.dispose();
-        /*
-         * `dispose()` **不释放 WebGL 上下文**,只清 three 自己的缓存。而浏览器对同时存在的
-         * 上下文有硬上限(约 16),超了就静默丢弃最老的那个 —— 画面变空白,不报错。
-         * 这张卡每次重播都重新挂载(key 带 playToken),一条时间轴上跑几十次是常事。
-         *
-         * 实测:连续建 40 个渲染器,只调 dispose() 有 24 个被浏览器**强行**收走;
-         * 加上 forceContextLoss() 则是 40 个都由我们主动释放,一个都不靠浏览器回收。
-         */
-        renderer.forceContextLoss();
-        renderer.domElement.remove();
-      },
-    };
-
-    /*
-     * 第一帧就在这里画掉,不留给下面那个被动 effect。
-     * useEffect 是**绘制之后**才跑的,只靠它的话挂载后的第一次绘制是一张空 canvas ——
-     * 预览里会闪一格白。既然已经在 layout effect 里(绘制之前),顺手画完再走。
-     */
-    poseMesh(mesh, params, tRef.current);
-    renderer.render(scene, camera);
-
-    /*
-     * 卡片的框改了(set_rect / nudge / set_position)不会重挂载 —— playToken 只在
-     * loadProject / switchCut / seek / play 时递增。而 `setSize(w,h,false)` 不写 canvas 的
-     * CSS 宽高,所以画布会一直是旧的像素尺寸、相机 aspect 也是旧的,要等下一次拖播放头才自愈。
-     * 导出和 see_frames 都是重新起页面渲染,不受影响;错的只有人眼看的实时预览。
-     */
-    const ro = new ResizeObserver(() => {
-      const nw = Math.max(1, el.clientWidth);
-      const nh = Math.max(1, el.clientHeight);
-      if (nw === renderer.domElement.width && nh === renderer.domElement.height) return;
-      const c = cameraFor({ width: nw, height: nh }, fov);
-      camera.fov = c.fovDeg;
-      camera.aspect = c.aspect;
-      camera.near = c.near;
-      camera.far = c.far;
-      camera.position.set(...c.position);
-      camera.updateProjectionMatrix();
-      renderer.setSize(nw, nh, false);
-      renderer.render(scene, camera);
-    });
-    ro.observe(el);
-
-    return () => {
-      textureReady?.dispose();
-      ro.disconnect();
-      gl.current?.dispose();
-      gl.current = null;
-    };
-  }, [THREE, params.shape, params.color, params.metal, params.rough, params.size, params.light, params.wire, params.texture, fov, stageW, stageH]);
-
-  /*
-   * 每次 t 变了就摆好姿势、画一帧。**没有 rAF、没有 delta** —— 姿势只由 t 决定。
-   * (首帧不靠它,见上面 layout effect 的结尾。)
-   */
-  useEffect(() => {
-    const g = gl.current;
-    if (!g) return;
-    poseMesh(g.mesh, params, t);
-    g.renderer.render(g.scene, g.camera);
-  });
-
-  return <div ref={host} className="absolute inset-0" />;
+function Scene3DCard() {
+  return null;
 }
-
 
 export const scene3dCard: CardDef<Params> = {
   id: "scene-3d",
@@ -273,5 +89,10 @@ export const scene3dCard: CardDef<Params> = {
   parts: [{ id: "object", label: "物件", role: "media", params: ["shape", "color", "metal", "rough", "size", "spinY", "spinX", "tilt", "light", "fov", "wire", "texture"] }],
   // 没有进场动画:它一挂载就是最终形态,之后一直转
   lifecycle: { after: "evolve", exit: ["fade"] },
+  /*
+   * R9:共享 WebGL 渲染器的 `three` 契约。贴图地址在 `texture` 参数里(通常是 bake_card 预渲染出来的
+   * `/@media/xxx.png`):Worker 按地址缓存解码后的位图和同一个 `THREE.Texture`,几张卡贴同一张图只上传一次。
+   */
+  canvas: { kind: "three", programId: "scene-3d", textures: [{ name: "map", param: "texture" }] },
   Component: Scene3DCard,
 };

@@ -15,6 +15,7 @@ import { clipFrameMode } from "../kernel/frameMode.mjs";
 import { guardCompositing, shouldGuard } from "./capabilityGuard";
 import { ensurePlaneStyle } from "./planeStyle";
 import { renameSnapshotIds } from "./snapshotRename";
+import { GlPlane } from "./gl/GlPlane";
 
 // Keep direct-evaluation cards at the requested time while other cards replay.
 // Their CSS/DOM stays in the same stacking tree (including paper/glass styles),
@@ -235,6 +236,21 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
           ].filter(Boolean).join(" ");
           // 这张卡该不该挂流平面(G1:单卡流挂在包裹层里;组流挂舞台根下的 [data-pc-group-plane])
           const ownStream = streamPlanes?.some((g) => g.clipIds.length === 1 && g.clipIds[0] === clip.id) ?? false;
+          /*
+           * 包裹层的本地帧号。平时按 `cardT` 算;**正在追帧(`settling`)的片段按它自己的虚拟时间算**(R9 M4 的配套):
+           * 子树虚拟时间下包裹层的帧号不跟着走的话,gl 平面的 `data-pc-gl-frame` 和它永远对不上,
+           * 每张 canvas 卡在 K1 两趟布尔探针 / K5 第一路里都被 `rasterizeCanvas` 误判 `lossy`。
+           * `settling` 只在舞台上传,导出页和 legacy 一个字不变。
+           */
+          const settlingMs = settling?.get(clip.id);
+          const localFrame = Math.round(((settlingMs !== undefined ? settlingMs / 1000 : cardT) - clip.start) * timeline.fps);
+          /*
+           * canvas 卡(R9 M1):带 `canvas` 契约(`dom2d` 除外)的片段在包裹层里多渲一个 gl 平面,画面由共享渲染器画。
+           * 这一拍画不画(M3):「在 `suppressed` 里」和「在 `snapshots` 里且不在 `settling` 里」的不画 ——
+           * 前者在贴流,后者在贴快照且没在追。尺寸 = 片段实体框。
+           */
+          const glContract = def.canvas && def.canvas.kind !== "dom2d" ? def.canvas : null;
+          const glBox = glContract ? frameBox(clip.frame, timeline) : null;
           // 组流的成员:没有自己的流平面,`hitTest` / `bounds` 对它们退回包裹层框(G1「组流平面的命中与实体框」)
           const groupMember = streamPlanes?.some((g) => g.clipIds.length > 1 && g.clipIds.includes(clip.id)) ?? false;
           return (
@@ -242,7 +258,7 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
               key={`${clip.id}:${gen}`}
               data-pc-clip={clip.id}
               data-pc-stream-member={groupMember ? "" : undefined}
-              data-pc-local-frame={Math.round((cardT - clip.start) * timeline.fps)}
+              data-pc-local-frame={localFrame}
               data-pc-frame-mode={clipFrameMode(clip, def)}
               className={cls || undefined}
               style={{
@@ -286,6 +302,17 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
               ) : (
                 <C params={{ ...def.defaults, ...clip.params }} playToken={gen} t={localTOf(clip, cardT)} duration={clip.end - clip.start} stage={stageInfo} />
               )}
+              {/*
+                gl 平面(R9,E7 的第五种兄弟平面)。它是**活渲的一部分**,不进四条平面选择器的放过名单 ——
+                藏子树时它和子树一起被藏。**不加 `data-pc-clip`**(`isSolid` 会把它当包裹层跳过)。
+                位图由 `glHost` 在 `done` 时贴上,这里只登记这一拍要画什么。
+              */}
+              {glContract && glBox ? (
+                <GlPlane clipId={clip.id} cardId={clip.cardId} contract={glContract}
+                  w={glBox.width} h={glBox.height} t={localTOf(clip, cardT)} frame={localFrame}
+                  params={{ ...def.defaults, ...clip.params }} gen={gen}
+                  skip={supNow.has(clip.id) || (snapshotHtml !== undefined && !isSettling)} stage={stageInfo} />
+              ) : null}
               {/*
                 代理色块是卡片的**兄弟**,不是把卡片包起来 —— 真卡由 .pc-proxy 那条
                 CSS 规则藏掉(见 render/solidMode.ts)。包一层 div 的话,切换实体模式那一刻

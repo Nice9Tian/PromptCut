@@ -83,8 +83,11 @@ export interface StageClock {
     maxCatchUp?: number;
     /** **跑这一帧之前**调:提交 React。和导出的 step 同序 —— 那边也是先 __pcSetT 再推虚拟时间 */
     onFrame?: (ms: number) => void;
-    /** 跑完这一帧的 rAF 回调之后调:钉动画(这一帧里新建的动画要在这时候才拿得到) */
-    afterFrame?: (ms: number) => void;
+    /**
+     * 跑完这一帧的 rAF 回调之后调:钉动画(这一帧里新建的动画要在这时候才拿得到)。
+     * **回 Promise 就等它**(R9 M3:探针生成快照的每一帧要等 GL Worker 的 `done`);回 `void` 不多让一次微任务。
+     */
+    afterFrame?: (ms: number) => void | Promise<void>;
     abort?: () => boolean;
     /**
      * 每推这么多帧就让出一个**宏任务**(真 setTimeout 0),不只是微任务。
@@ -212,7 +215,8 @@ export function installStageClock(): StageClock {
         jumpTo(target);
         opts.onFrame?.(target);
         tick(target);
-        opts.afterFrame?.(target);
+        const back = opts.afterFrame?.(target);
+        if (back) await back;
         return;
       }
       if (target - now > maxCatchUp) jumpTo(target - maxCatchUp);
@@ -240,11 +244,16 @@ export function installStageClock(): StageClock {
         now = ms;                 // 先拨时钟:React 渲染时读到的就是这一帧
         opts.onFrame?.(ms);       // 提交
         tick(ms);                 // 跑这一帧的 rAF 回调
-        opts.afterFrame?.(ms);    // 钉动画
+        const after = opts.afterFrame?.(ms);    // 钉动画
+        if (after) await after;   // (canvas 卡:等这一帧的 done)
       }
       await Promise.resolve();
       if (opts.abort?.()) return;
-      if (now !== target) { now = target; opts.onFrame?.(target); tick(target); opts.afterFrame?.(target); }
+      if (now !== target) {
+        now = target; opts.onFrame?.(target); tick(target);
+        const last = opts.afterFrame?.(target);
+        if (last) await last;
+      }
     },
   };
 

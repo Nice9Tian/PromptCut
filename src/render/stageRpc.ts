@@ -433,11 +433,17 @@ export function detectHostCapabilities(): HostCapabilities {
   const mem = (navigator as Navigator & { deviceMemory?: number }).deviceMemory;
   let offscreenGl = false;
   try {
-    // 主线程上的近似:Worker 里的 OffscreenCanvas webgl2 与主线程同源同能力(Safari 17 之前 Worker 里没有 WebGL)
-    offscreenGl = typeof OffscreenCanvas !== "undefined" && typeof Worker !== "undefined" && !!new OffscreenCanvas(1, 1).getContext("webgl2") && !(safari && !/Version\/(1[7-9]|[2-9]\d)/.test(ua));
+    // 主线程上的近似:Worker 里的 OffscreenCanvas webgl2 与主线程同源同能力(Safari 17 之前 Worker 里没有 WebGL)。
+    // 真正决定走不走 Worker 的是 glHost 在 Worker 里的实测(R9 M2);这里只给 `device` 串和父页选路线用。
+    const probe = typeof OffscreenCanvas !== "undefined" && typeof Worker !== "undefined" ? new OffscreenCanvas(1, 1).getContext("webgl2") : null;
+    offscreenGl = !!probe && !(safari && !/Version\/(1[7-9]|[2-9]\d)/.test(ua));
+    // 探完立刻放掉:验收要「舞台主线程 0 个活的 WebGL 上下文」(R9),这一个不能留着等 GC
+    probe?.getExtension("WEBGL_lose_context")?.loseContext();
   } catch {
     offscreenGl = false;
   }
+  // `?glOffscreen=0`:把探测强制为 false(R9 验收「能力退路」;glHost 读同一个开关走主线程)
+  if (q.get("glOffscreen") === "0") offscreenGl = false;
   return {
     prerender: q.get("prerender") === "1",
     offscreenGl,
