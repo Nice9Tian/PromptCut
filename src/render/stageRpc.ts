@@ -166,6 +166,11 @@ export interface SetTimeResult {
   stepMs?: number;
   /** 只在 probe 时有:生成快照的三段耗时 */
   snapshot?: SnapshotCost;
+  /**
+   * 只在 probe 且有 canvas 卡时有(R9 M4):GL Worker 报的每卡 GPU 时间(毫秒,`gl.finish()` 前后的墙钟)。
+   * 诊断用,不进判重 —— 判重的 `stepMs` 已经含 `beat → done` 往返。
+   */
+  glGpuMs?: Record<string, number>;
   /** 这次 setTime 走的路径,给验收和调试看 */
   path: "continuous" | "set";
 }

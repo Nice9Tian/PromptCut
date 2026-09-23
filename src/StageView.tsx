@@ -1288,13 +1288,14 @@ export default function StageView() {
            * 而它不属于活渲、也不属于生成快照的任何一段(3.8 末条点名要修的量法问题)。
            */
           // canvas 卡的 `stepMs` 含 `beat → done` 往返(M4):两条路线量级不同,所以路线进 `device`
-          await glStrict(target);
+          const glDone = await (gl.beat({ strict: true, measure: true, t: target }) ?? undefined);
           const stepMs = realNow() - started;
           await realRaf();
           const root = rootRef.current;
           const snap = root ? createSnapshot(root).timing : { inlineMs: 0, rasterMs: 0, serializeMs: 0 };
           return { path: "set", elapsedMs: realNow() - started, stepMs,
-            snapshot: { inlineMs: snap.inlineMs, rasterMs: snap.rasterMs, serializeMs: snap.serializeMs } } satisfies SetTimeReply;
+            snapshot: { inlineMs: snap.inlineMs, rasterMs: snap.rasterMs, serializeMs: snap.serializeMs },
+            ...(glDone?.gpuMs ? { glGpuMs: glDone.gpuMs } : {}) } satisfies SetTimeReply;
         }
         return { path: "set" } satisfies SetTimeReply;
       },
