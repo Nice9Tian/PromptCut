@@ -323,6 +323,24 @@ function applyCors(req: IncomingMessage, res: ServerResponse) {
 }
 
 /**
+ * 素材服务路由的预检,**必须排在 vite 自带的 cors 中间件前面**。
+ *
+ * vite 的 `server.cors` 默认只放行 localhost / 127.0.0.1 / [::1] 的源,而且它排在所有插件中间件之前:
+ * 局域网设备(比如 `http://192.168.1.50:8080`)的预检被它当场答成 204、却不带
+ * `Access-Control-Allow-Origin`,浏览器判预检失败,请求根本到不了 assetServiceMiddleware(实测过)。
+ * 所以媒体插件把这一个中间件插到 connect 栈的最前面(`middlewares.stack.unshift`),只答素材服务路由的 OPTIONS,
+ * 别的请求原样放过。vite.config.ts 的 `server.cors` 不动,其余路由的跨源行为一点不变。
+ */
+export function assetPreflightMiddleware() {
+  return function assetPreflight(req: IncomingMessage, res: ServerResponse, next: () => void) {
+    if (req.method !== "OPTIONS" || !isAssetCorsPath(req.url)) return next();
+    applyCors(req, res);
+    res.statusCode = 204;
+    res.end();
+  };
+}
+
+/**
  * 素材服务的中间件。`/api/asset/media/...` 全部在这里答完;`/@media/*` 只补 CORS 头、答预检,
  * 取字节仍交给 `vite-plugin-media.ts` 的 mediaMiddleware(next)。别的请求原样 next。
  */

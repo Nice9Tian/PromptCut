@@ -558,7 +558,9 @@ export function mediaPlugin(): Plugin {
       // 素材服务(第 5 步:分片上传、对账、按哈希取回、跨源)排在老路由前面:它先给 /@media/*
       // 补上 CORS 头、答预检,不归它管的请求再交给下面的 mediaMiddleware。
       // **惰性 import**:好几个单测把本文件单独转译到临时目录再 import,静态 import 兄弟模块会解析失败。
-      const { assetServiceMiddleware } = await import("./asset-service");
+      const { assetServiceMiddleware, assetPreflightMiddleware } = await import("./asset-service");
+      // 预检要抢在 vite 自带的 cors 中间件前面答(它不认局域网的源),理由见 assetPreflightMiddleware
+      server.middlewares.stack.unshift({ route: "", handle: assetPreflightMiddleware() as Connect.NextHandleFunction });
       const { rememberLocalAssetOrigin } = await import("./asset-client");
       rememberLocalAssetOrigin(server.httpServer);
       const asset = assetServiceMiddleware(root);

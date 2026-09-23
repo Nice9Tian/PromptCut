@@ -377,3 +377,18 @@ test('ffmpeg 经素材服务的 HTTP 地址抽帧(素材层的读法),和直接�
   assert.equal(b.code, 0, b.err);
   assert.equal(sha256(fs.readFileSync(outHttp)), sha256(fs.readFileSync(outFile)), '经 HTTP 抽出的帧和直接读文件的逐字节相同');
 });
+
+test('预检中间件:只答素材服务路由的 OPTIONS(媒体插件把它插到 vite 自带 cors 前面),别的放过', async () => {
+  const fn = asset.assetPreflightMiddleware();
+  const run = (method, url) => new Promise((resolve) => {
+    const res = { statusCode: 200, headers: {}, setHeader(k, v) { this.headers[k.toLowerCase()] = v; }, end() { resolve({ status: this.statusCode, headers: this.headers }); } };
+    fn({ method, url, headers: { origin: 'http://192.168.1.50:8080' } }, res, () => resolve('next'));
+  });
+  const h = 'cd'.repeat(32);
+  const pre = await run('OPTIONS', `/api/asset/media/${h}/0`);
+  assert.equal(pre.status, 204);
+  assert.equal(pre.headers['access-control-allow-origin'], '*');
+  assert.equal((await run('OPTIONS', `/@media/${h}`)).status, 204);
+  assert.equal(await run('OPTIONS', '/api/ai/config'), 'next');
+  assert.equal(await run('GET', `/api/asset/media/${h}`), 'next');
+});
