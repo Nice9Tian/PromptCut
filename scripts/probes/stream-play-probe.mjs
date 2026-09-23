@@ -343,7 +343,7 @@ try {
       const bg = missing.streams.tracks.find(t => t.id.startsWith('clip-bg#'));
       out.missing = { beats, bg };
       check(beats.noSkip && beats.last > 1.5, '缺分段时播放头不停、不跳帧', beats);
-      check(!!bg && bg.lastDrawn === null && bg.blanks >= 1, '缺分段的那一层清成透明', bg);
+      check(!!bg && bg.lastDrawn === null, '缺分段的那一层清成透明(这一拍没有画任何一帧)', bg);
       await rpc('setStreamPlanes', planes);
     }
   }

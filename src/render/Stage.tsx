@@ -328,12 +328,12 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
                 不做外部 `insertBefore` —— 否则会和代理平面、快照平面抢兄弟位置。
                 层序、overflow、zIndex、包裹层的框 / 轨迹 / 不透明度 / 强调自动跟着包裹层走:
                 单卡流画在包裹层自己的坐标系里(和快照平面一样),所以这块画布是包裹层的普通子元素。
-                位置和尺寸由 `streamPlayer` 按流的清单设(流的矩形上界,可能比框大一圈、也可能在框外一点),
-                这里先给 0×0 —— 清单到之前它不占地方,`bounds` 也不会把一块空画布算进实体框。
+                位置和尺寸由 `streamPlayer` 按流的清单设(流的矩形上界,可能比框大一圈、也可能在框外一点);
+                清单到之前先铺满包裹层(背板 0×0、透明)—— 被抑制的卡子树藏着,这一小段时间里点它也要点得中。
               */}
               {ownStream ? (
                 <canvas data-pc-stream-plane="" width={0} height={0}
-                  style={{ position: "absolute", left: 0, top: 0, width: 0, height: 0 }} />
+                  style={{ position: "absolute", left: 0, top: 0, width: "100%", height: "100%" }} />
               ) : null}
             </div>
           );

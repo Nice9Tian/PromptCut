@@ -404,6 +404,20 @@ class StreamTrack {
     return this.compositor;
   }
 
+  /**
+   * 异步的料(清单 / init / 分段)到了:按这一拍要的帧再走一遍 `present`。暂停 / 拖动时没有下一拍来叫它,
+   * 不这样的话随机访问会停在「清单刚到、还没开始解」那一步。同一个微任务里只走一次。
+   */
+  private wakeQueued = false;
+  private wake(): void {
+    if (this.wakeQueued || this.disposed) return;
+    this.wakeQueued = true;
+    queueMicrotask(() => {
+      this.wakeQueued = false;
+      if (!this.disposed && this.wantFrame !== null) this.present(this.wantFrame);
+    });
+  }
+
   /** 清单:没有就拉;这一段不在清单里、而父页说它就绪了,隔 2 秒以上再拉一次(分段会被替换) */
   private loadManifest(force = false): void {
     if (!this.key || this.manifestLoading) return;
@@ -416,6 +430,9 @@ class StreamTrack {
         if (this.disposed) return;
         this.manifest = m;
         this.manifestAt = Date.now();
+        // 清单一到就把画布摆到流的矩形上界:还没画出第一帧时,被抑制的卡也要有一块能点中的框
+        this.ensureCompositor()?.place(m.bound);
+        this.wake();
       })
       .catch(() => { /* 还没就绪:这一层透明,下一拍再说 */ })
       .finally(() => { this.manifestLoading = null; });
@@ -432,6 +449,7 @@ class StreamTrack {
             hardwareAcceleration: "prefer-hardware", optimizeForLatency: true },
           bytesPerFrame: info.width * info.height * 1.5,
         });
+        this.wake();
       })
       .catch((e) => { this.stats.lastError = String(e?.message || e); })
       .finally(() => { this.initLoading.delete(id); });
@@ -449,7 +467,7 @@ class StreamTrack {
         this.segments.set(n, { buf, samples: parseSegment(buf), init: meta.init, file: meta.file });
         // 留当前段和它前后各一段,别的扔掉
         for (const k of [...this.segments.keys()]) if (Math.abs(k - n) > 2) this.segments.delete(k);
-        this.pump();
+        this.wake();
       })
       .catch(() => {
         // 被替换删掉了(G6)或者还没就绪:下一次按新清单拉
