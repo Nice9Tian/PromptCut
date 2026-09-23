@@ -1,16 +1,13 @@
 /**
- * Measure PromptCut dev server startup from process spawn to GET / = HTTP 200,
- * and to the editor's front stage handshake (the editor-preview-smoke criterion).
- * Run from the worktree root:
+ * 量 dev server 的冷启动：从起进程到 `GET /` 回 200、到编辑台前台舞台握手完成（沿用 editor-preview-smoke 的判据）各多久。
+ * 在 worktree 根目录跑：
  *
  *   node scripts/probes/cold-start-probe.mjs [--port 5270]
  *
- * Runs three cold/hot pairs on the chosen port (also uses port+1 and port+2).
- * A cold run removes only this worktree's node_modules/.vite* caches. If Vite's
- * resolved cacheDir is outside this worktree, it preserves that cache and uses
- * --force for cold runs instead. No packages are installed by this script.
- * Prints JSON with all six samples and both medians. Run it outside the local
- * sandbox: Vite's native modules and Chrome need subprocess access.
+ * 在给定端口上连跑三组「冷 → 热」（还占用端口 +1、+2 当舞台端口）。
+ * 冷轮只删本 worktree 的 node_modules/.vite* 缓存；Vite 解析出的 cacheDir 不在本 worktree 里时，不删那份缓存，冷轮改加 --force。
+ * 不装任何包。输出 JSON：六轮原始数和冷热两组的中位数。
+ * 要在本机沙箱外跑：Vite 的原生模块和 Chrome 都要起子进程。
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';
