@@ -5,17 +5,13 @@
  *
  * 素材从哪儿读:**只经素材服务的 HTTP API**(`mediaSourceOf` → `asset-client.ts` 的 mediaHttpUrl),
  * ffmpeg 直接拿 http 地址当输入、自己按 Range 定位;这个进程不读本地内容库的目录
- * (`docs/semantics/architecture/asset-storage.md`「职责」)。
- * `mediaFileOf` 是还没迁完的老路,只剩 `routes.ts` 的 `/api/vision/sheet` 在用,见它的说明。
+ * (`docs/semantics/architecture/asset-storage.md`「职责」)。`routes.ts` 的 `/api/vision/sheet` 也走这一条。
  */
 import { spawn, spawnSync } from "node:child_process";
-import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { extractArgs, mediaLayersAt } from "../vision-compose.mjs";
-import { mediaDir } from "../vite-plugin-media";
-import { mediaHttpUrl } from "../asset-client";
-import { isInside } from "../http-guard.mjs";
+import { assetServiceOrigin, mediaHttpUrl } from "../asset-client";
 
 /** ffmpeg 抽一帧的上限:本地文件按关键帧定位,正常两三秒 */
 export const EXTRACT_TIMEOUT_MS = 30000;
@@ -45,40 +41,31 @@ export function ffmpegCommand(): string | null {
  * 素材在素材服务上的 HTTP 地址(ffmpeg 的 `-i`)。素材服务不可达(基址取不到)时返回 null,
  * 调用方在 notes 里如实说那一层是空的。地址只由哈希或最后一段文件名拼成,
  * 请求体里递进来的 `path` 指不到本地内容库以外的文件 —— 边界由素材服务那一侧守。
+ *
+ * 老 .proc 里只剩绝对路径的素材,页面拿的是 `/api/media/file?path=…`(`src/editor/io/mediaUrls.ts`):
+ * 没有哈希时照原样交给素材服务的这条路由,它自己按白名单判路径;不然按「最后一段文件名」会拼成 `/@media/file`。
  */
-export function mediaSourceOf(m: any): string | null {
-  return mediaHttpUrl(m);
+export function mediaSourceOf(m: any, origin: string | null = assetServiceOrigin()): string | null {
+  if (!mediaHashOf(m) && origin) {
+    const url = String(m?.url || "");
+    if (url.startsWith("/api/media/file?")) return `${origin}${url}`;
+  }
+  return mediaHttpUrl(m, origin);
 }
 
+const HASH_NAME = /^([0-9a-f]{64})(?:\.[a-z0-9]+)?$/;
+
 /**
- * **老路,待迁**:直接读本地内容库的目录。
- *
- * 只剩 `routes.ts` 的 `POST /api/vision/sheet`(see_frames 素材模式的镜头拼图)在用:那里拿返回值
- * 做 `fs.statSync(file).mtimeMs` 当缓存键,换成 HTTP 地址就得同时把缓存键改成按素材哈希,
- * 而 `routes.ts` 不在第 5 步的改动范围里。迁法见第 5 步的任务报告;迁完删掉这个函数。
- *
- * 素材文件在磁盘上的位置:导入时记的 path 优先,没有就按文件名去媒体目录找。
- *
- * `m` 来自**请求体**(`/api/vision/sheet` 的 media、snapshot 的 project.media),所以 `m.path`
- * 是外面递进来的字符串,不是我们自己算出来的。曾经只判 `fs.existsSync` 就直接用:
- * 递一个 `{"path":"C:\\Users\\...\\任意文件"}` 进来,服务端就会对那个文件跑 ffmpeg 抽帧,
- * 再把画面 base64 塞进响应 —— 等于给 MCP 那边的 agent(本该只操作封装)开了一条读盘的路。
- * 跨源有 vite-plugin-api-guard 挡着,所以不是远程漏洞,但本机这道边界当时是空的。
- *
- * 现在按白名单收口:只认落在**素材目录**里的绝对路径,别的一律退回「按文件名去素材目录找」。
- * 这不影响正常素材 —— 导入和素材收集都只往 mediaDir 写(见 vite-plugin-media.ts 的
- * handleMediaUpload、vite-plugin-collect.ts:181),path 字段本来就只可能指到那里。
+ * 素材的内容哈希:`m.hash`,或 `url` 是 `/@media/<hash>[.ext]`。按哈希寻址的内容写入后不可变,
+ * 所以它可以直接当缓存键;没有哈希的(迁移期按文件名存的、老 .proc 的绝对路径)返回 null。
  */
-export function mediaFileOf(root: string, m: any): string | null {
-  const dir = mediaDir(root);
-  const direct = m?.path ? String(m.path) : "";
-  if (direct && isInside(direct, dir) && fs.existsSync(direct)) return direct;
-  const base = String(m?.url || m?.path || "").split(/[/\\]/).pop() || "";
-  if (!base) return null;
-  // decodeURIComponent 之后还要再判一次:`a%2F..%2F..%2Fx` 按 / 和 \ 切是切不开的
-  // (斜杠是编码过的),解码完却成了 `a/../../x`,path.join 会顺着它走出素材目录。
-  const local = path.join(dir, decodeURIComponent(base));
-  return isInside(local, dir) && fs.existsSync(local) ? local : null;
+export function mediaHashOf(m: any): string | null {
+  const hash = String(m?.hash || "").toLowerCase();
+  if (/^[0-9a-f]{64}$/.test(hash)) return hash;
+  const url = String(m?.url || "").split("?")[0];
+  if (!url.startsWith("/@media/")) return null;
+  const hit = HASH_NAME.exec(url.slice("/@media/".length).toLowerCase());
+  return hit ? hit[1] : null;
 }
 
 /** 用 ffmpeg 把素材的第 seconds 秒抽成 w×h 的 RGBA PNG(object-fit: cover),写到 opts.out */
