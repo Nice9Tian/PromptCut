@@ -83,7 +83,7 @@ test('自定义属性按继承处理', () => {
 });
 
 /*
- * 下面几条对的是「重放逐字节等于活渲」那两处(restructure_planning/reports/replay-mismatch-report.md 第二轮):
+ * 下面几条对的是「重放逐字节等于活渲」那两处(docs/archive/restructure_planning/reports/replay-mismatch-report.md 第二轮):
  * 几何按 1/64 px 对齐、current 动画补 will-change。
  */
 
