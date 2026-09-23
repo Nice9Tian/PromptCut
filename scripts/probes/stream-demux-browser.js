@@ -130,7 +130,7 @@
   }
 
   // ── WebGL：上下拼合 -> 带透明 ─────────────────────────────────────────────
-  // docs/async-track-playback.md §4.2：alphaTop = (H + 8) / (2H + 16)，half = H / (2H + 16)
+  // docs/archive/topics/async-track-playback.md §4.2：alphaTop = (H + 8) / (2H + 16)，half = H / (2H + 16)
   // 色半区存的是**预乘**色（r75-05 第 2 条），所以直接输出、不做 rgb × a。
   const VS = `attribute vec2 p; varying vec2 uv;
     void main(){ uv = vec2((p.x+1.0)*0.5, (1.0-p.y)*0.5); gl_Position = vec4(p,0.0,1.0); }`;

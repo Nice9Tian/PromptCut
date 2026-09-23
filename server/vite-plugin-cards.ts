@@ -20,7 +20,7 @@ import {
  * 为什么是「改源码、不改 HTML」:舞台上的 DOM 是 React 按源码和参数渲染出来的派生物,
  * 下一次渲染就会把直接改过的 DOM 盖掉,导出时每一帧也都从源码重渲 —— 改 DOM 等于制造
  * 第二个真相。所以 DOM 只给看(inspect_card_dom,每个节点标出是源码哪一行渲染的),
- * 改动一律落回源码(edit_card)。见 docs/render-rebuild-plan.md「目标架构」。
+ * 改动一律落回源码(edit_card)。见 docs/archive/topics/render-rebuild-plan.md「目标架构」。
  *
  * 能改的范围只开到卡片目录和卡片共用的部件库;内核、编辑器、服务端一律不开。
  * 内置文件改之前先备份到 out/card-edits/,改坏了能找回来。

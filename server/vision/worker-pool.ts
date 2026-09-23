@@ -71,7 +71,7 @@ export interface RenderWorker {
   pending: Map<number, { ok: (result?: any) => void; fail: (e: Error) => void; timer: NodeJS.Timeout | null; started: boolean }>;
   /**
    * 手上有一张备好的空页(worker 回过 hot):下一趟来活只需把项目灌进去,约 3~4 ms 就能开渲。
-   * 界面那对热备渲染器按它挑「谁是热的」(docs/decoupling-plan.md 第 3.2 节)。
+   * 界面那对热备渲染器按它挑「谁是热的」(docs/archive/topics/decoupling-plan.md 第 3.2 节)。
    */
   hot: boolean;
   /** 忙着的时候收到的 hot:收尾放掉 busy 时再算热(hot 常和 done 同一轮到达,见 spawnWorker) */

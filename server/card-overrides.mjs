@@ -1,5 +1,5 @@
 /**
- * 卡片源码归「数据管理」(docs/decoupling-plan.md 第 3.2 节「数据管理 → 卡片」,阶段 5)。
+ * 卡片源码归「数据管理」(docs/archive/topics/decoupling-plan.md 第 3.2 节「数据管理 → 卡片」,阶段 5)。
  *
  * # 改动层
  *

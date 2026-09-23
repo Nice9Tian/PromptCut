@@ -1,5 +1,5 @@
 /**
- * 这个进程在三端分离里扮演哪一端(docs/decoupling-plan.md 第 3 节)。
+ * 这个进程在三端分离里扮演哪一端(docs/archive/topics/decoupling-plan.md 第 3 节)。
  *
  *   ui         —— 用户自己的 dev server:供编辑器页面、MCP 桥、数据镜像、界面的热备渲染器。
  *   prerender  —— 预渲染进程:由 ui 那一端拉起的第二个 Vite(vite.prerender.config.ts),

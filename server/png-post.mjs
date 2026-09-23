@@ -6,7 +6,7 @@
  * 这些全是 pngjs 的同步解码 / 编码加逐像素循环。原来写在 vite-plugin-vision.ts 里,跑在
  * **给编辑器供模块的那个 Vite 进程**的事件循环上 —— 实测一张有内容的 1080p 帧解码 54 ms、
  * 编码 94 ms,see_frames 每帧解两次编两次,事件循环每帧被卡约 300 ms,期间编辑器要的模块、
- * 素材、接口一个都发不出去(docs/decoupling-plan.md 第 1.1 节)。
+ * 素材、接口一个都发不出去(docs/archive/topics/decoupling-plan.md 第 1.1 节)。
  *
  * 现在由渲染 worker(scripts/render-worker.mjs)在自己的进程里做完,父进程只读结果文件的字节,
  * 不解码。纯函数放在 .mjs 里,node --test 不经 vite 就能测。

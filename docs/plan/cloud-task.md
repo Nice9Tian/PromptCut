@@ -1,14 +1,14 @@
 # 云端与文档服务任务书：素材上云、文档服务、改动竞态、Agent 查询进程、在线浏览器模式
 
-这份文件是原第 5～10 步（云端存储层、本机 / 云端文档服务、改动上传的竞态、Agent 的只查询预渲染进程、迁移回滚离线、在线浏览器模式）的**协议全文**，自成一体：动工的人读 `user_pinned_goal.md`、`restructure_planning/render_pipeline_restructure.md`（总览、实测数据、步骤依赖）和这一份就够，不需要再翻 `AGY-TASK-cloud-doc-and-write-race.md`。渲染管线那一半（C、D3～D5、E、G、K、M、F2、F5、J3、J4）在 `restructure_planning/r2-r7-task.md`，以及将要写的 `restructure_planning/r8-streams-task.md`（轨道流 G）和 `restructure_planning/r9-webgl-task.md`（共享 WebGL 渲染器 M）；本文只指路，不重复。
+这份文件是原第 5～10 步（云端存储层、本机 / 云端文档服务、改动上传的竞态、Agent 的只查询预渲染进程、迁移回滚离线、在线浏览器模式）的**协议全文**，自成一体：动工的人读 `docs/archive/user_pinned_goal.md`、`docs/archive/restructure_planning/render_pipeline_restructure.md`（总览、实测数据、步骤依赖）和这一份就够，不需要再翻 `AGY-TASK-cloud-doc-and-write-race.md`。渲染管线那一半（C、D3～D5、E、G、K、M、F2、F5、J3、J4）在 `docs/archive/restructure_planning/r2-r7-task.md`，以及将要写的 `docs/plan/r8-streams-task.md`（轨道流 G）和 `docs/plan/r9-webgl-task.md`（共享 WebGL 渲染器 M）；本文只指路，不重复。
 
-**怎么来的**（2026-09-22）：正文各节取自任务书第 111 版的对应节，逐条折进了四样东西——第 75 轮分步审查里已采纳的处理意见（`restructure_planning/r75/fold-notes.md` 的 r75-07 / 08 / 09 / 10 四节，原文在同一目录的 `agy-r75-07.md`～`agy-r75-10.md`）、`restructure_planning/render_pipeline_restructure.md` 第 3 节与第 6 节的更正、2026-09-22 用户改过的 `user_pinned_goal.md` 架构 1（素材两档的上传 / 拉取顺序）、以及解耦重构之后的文件路径与符号名（`createSnapshot` 一族、`stepMs`、`mode=dev|build`）。
+**怎么来的**（2026-09-22）：正文各节取自任务书第 111 版的对应节，逐条折进了四样东西——第 75 轮分步审查里已采纳的处理意见（`docs/archive/restructure_planning/r75/fold-notes.md` 的 r75-07 / 08 / 09 / 10 四节，原文在同一目录的 `agy-r75-07.md`～`agy-r75-10.md`）、`docs/archive/restructure_planning/render_pipeline_restructure.md` 第 3 节与第 6 节的更正、2026-09-22 用户改过的 `docs/archive/user_pinned_goal.md` 架构 1（素材两档的上传 / 拉取顺序）、以及解耦重构之后的文件路径与符号名（`createSnapshot` 一族、`stepMs`、`mode=dev|build`）。
 
 **还没做的事**：这份折叠稿**没有经过独立审查**。第 75 轮审的是折叠之前的第 111 版；折叠本身只有我自己核过锚点和措辞。第 5 步动工前应当让一位没参与折叠的审查者对着代码过一遍 A1 / A3b / I1 / I4 四节。文末「需要定的问题」里的几条没有结论，动工前要先问。
 
 ## 读法
 
-- **步骤名的对应**：正文里的「第 1 / 2 / 2b / 3 步」都已落地（提交 `b5c65dc`）；「3b 步」「A2(8)」= R1（差异样式内联），已完成（`e67390e`）；「第 4 步」= `restructure_planning/r2-r7-task.md` 的 R2～R7，加 R8（轨道流）、R9（共享 WebGL 渲染器），**都还没做**。本文是「第 5～10 步」。正文提到 C、E、G、K、M 各节的地方，只需要知道它们是别的步骤的内容：**`streams` 开关在 R8 之前恒为关**，**canvas 卡在 R9 之前照旧在主线程自己画**。
+- **步骤名的对应**：正文里的「第 1 / 2 / 2b / 3 步」都已落地（提交 `b5c65dc`）；「3b 步」「A2(8)」= R1（差异样式内联），已完成（`e67390e`）；「第 4 步」= `docs/archive/restructure_planning/r2-r7-task.md` 的 R2～R7，加 R8（轨道流）、R9（共享 WebGL 渲染器），**都还没做**。本文是「第 5～10 步」。正文提到 C、E、G、K、M 各节的地方，只需要知道它们是别的步骤的内容：**`streams` 开关在 R8 之前恒为关**，**canvas 卡在 R9 之前照旧在主线程自己画**。
 - **本文的步骤依赖**：第 5 步依赖 R1（快照格式与 `snapshotCode` 已定）和 R6（A3a 的目录形状、C3 的就绪索引）；第 6 步依赖第 5 步的内容寻址设施；第 7 步（B）依赖第 6 步的本机文档服务；第 7b 步（I）依赖 R7 的 `interactive` 参数、A7 的镜像插件和第 6 步的本机文档服务；第 9 步（F1 / F3 / F4）排在第 5 步之后；第 10 步（L）依赖 J 全部、A3b、K 全部，是最后一步。
 - **行号**：正文里的 `文件:行号` 是 **2026-09-22 在 `048074c` 上逐条打开核对过的**（少数几处明确标注「`b5c65dc` 的行号，仅作提示」）。这些文件之后还会被 R1～R9 动，**行号只作定位提示，以符号名和引用的代码原句为准**。引用的符号在当前代码里都 grep 得到；标「新」的是本任务要创建的。
 - **用词**：一律说「生成快照」（`createSnapshot`：`cloneScene → inlineDOMStyles → rasterizeCanvas → stripMedia → serializeScene`）、「预渲染」。「冻住」只用来说被抑制的卡的 `t` 停在某一刻。代码标识符里残留的 `bake*` / `freeze*` 不受这条约束。
@@ -25,7 +25,7 @@
 | **第 6 步 文档服务** | D1、D2、D4 的服务端侧，含本机文档服务 `vite-plugin-docservice.ts`（WebSocket、操作日志落 `out/docservice/<projectId>.ndjson`、`projectRev` / `cardRev`、内容库）；**A6 卡片源码同步和 A3b 的快照清单读写也在这一步**（它们要内容库） | D1、D2、A6、A3b 的清单那半、组件表的「文档服务」「内容库」两行 | D 的验收条目；`.proc` 仍由页面在 ack 之后写 |
 | **第 7 步 改动竞态** | B0～B6，在本机文档服务上先验收，云端模式只是换端点 | B 全节 | B 的验收条目 |
 | **第 7b 步 Agent 查询进程** | I0～I4：同一份预渲染代码带 `PROMPTCUT_PRERENDER_MODE=agent`；用户机缺省不单独起（本机有 Agent 时那一个进程以 `full` 跑、Agent 查询优先），`PROMPTCUT_PRERENDER_SPLIT=1` 才拆；Agent 云端环境里单独起 | I 全节 | I 节的两段验收（云端、本机） |
-| **第 8 步 D3 的预渲染部分** | `see_frames` 回包附实体矩形。**协议在 `restructure_planning/r2-r7-task.md` 的 D3 节**，落点是 `capture-snapshot.mjs` 的 `afterFonts` 钩子（和 `/api/cards/layout` 同一个） | 只需读 r2-r7 的 D3 | 见 r2-r7 |
+| **第 8 步 D3 的预渲染部分** | `see_frames` 回包附实体矩形。**协议在 `docs/archive/restructure_planning/r2-r7-task.md` 的 D3 节**，落点是 `capture-snapshot.mjs` 的 `afterFonts` 钩子（和 `/api/cards/layout` 同一个） | 只需读 r2-r7 的 D3 | 见 r2-r7 |
 | **第 9 步 迁移回滚离线** | F1（素材哈希迁移与两种缓存 GC）、F3（离线攒日志与重放）、F4（模式切换）。F2 回滚开关随 R7、F5 重启恢复随 R6，都在 r2-r7 | F 全节 | F 的验收条目 |
 | **第 10 步 在线浏览器模式** | L1～L5：后台 iframe 当预渲染者、IndexedDB 快照库、云端快照直接进热舞台、没有流按拍换快照、两个「将来」只留接口 | L 全节、A3b、J（指 r2-r7） | L 节验收，纯浏览器环境 |
 
@@ -90,7 +90,7 @@ uploaded?: { small?: boolean; original?: boolean };   // 只在云端模式有
 1. **小分辨率版** = 等比缩到 800×600 以内的 H.264（`-preset veryfast -crf 26`，帧率跟原片、上限 60，AAC 64k，`-movflags +faststart`）；
 2. **原片**保持原编码，没有 faststart 的先 `-c copy -movflags +faststart` 重封装（moov 在前，Range 拖动不用整段下完）。**不转码原片**——转码会破坏「导出只用原片」和导出像素基线。
 
-两档都在**导入方本机**用 `findFfmpeg`（`server/bakery/ffmpeg.mjs`）生成，**云端不转码**。桌面版自带 ffmpeg；在线浏览器模式没有本机 ffmpeg，**浏览器里导入的素材只有原片一档**（别人拉它时按 pinned「还没有小版就直接拉原片」走；「桌面版发现云端缺小版就补转一份传上去」记在 `restructure_planning/future_planning.md` 第 1 条，以后再做，本任务不做，也不在页面里用 WebCodecs 转）。
+两档都在**导入方本机**用 `findFfmpeg`（`server/bakery/ffmpeg.mjs`）生成，**云端不转码**。桌面版自带 ffmpeg；在线浏览器模式没有本机 ffmpeg，**浏览器里导入的素材只有原片一档**（别人拉它时按 pinned「还没有小版就直接拉原片」走；「桌面版发现云端缺小版就补转一份传上去」记在 `docs/plan/future_planning.md` 第 1 条，以后再做，本任务不做，也不在页面里用 WebCodecs 转）。
 
 **上传队列的顺序**：**逐个素材，同一个素材先传小分辨率版、再传原素材，两份都 `uploaded` 才轮到下一个素材**。（第 111 版写的是「所有素材的小版先传、原片后传」，按 2026-09-22 的 pinned 改成这一条。）
 
@@ -126,7 +126,7 @@ playbackUrl(
 
 **本地专用快照（不上云）**：其余预渲染集合里的 `stateful` 卡，含 `belowDependent` 毛玻璃卡和 **`unknown` 卡**（`unknown` 一律按 `belowDependent` 处理——只有本地档，不上云、不进流；代码要跟一处：`snapshot-store.mjs:61` 的 `snapshotTier` 今天对 `unknown` 回 `'none'`，改成 stateful 的 `unknown` 回 `'local'`，这一改属于 R4 / R6 的范围）。存 `<root>/controls-local/<entry.key>/<共享键>/<本地帧>.html`。
 
-**图卡只做本地档**（A5）。目录形状、`index.json`、两档判据的完整口径在 `restructure_planning/r2-r7-task.md` 的 A3a。
+**图卡只做本地档**（A5）。目录形状、`index.json`、两档判据的完整口径在 `docs/archive/restructure_planning/r2-r7-task.md` 的 A3a。
 
 ### A3b 快照上云与下载（只在云端模式；本地模式共享档也只留在本机 `controls-html/`）
 
@@ -193,7 +193,7 @@ playbackUrl(
 
 ## 目标 D（节选）：D1 Agent 直接写文档服务、D2 页面按操作收增量（第 6 步）
 
-D3（命中测试与实体矩形）、D4（`get_layout`）、D5（舞台露出来）的协议在 `restructure_planning/r2-r7-task.md` 的「目标 D」；其中 **D4 的服务端侧落在本文的第 6 步**——把 `MIRRORED_TOOLS`（`vite-plugin-ai.ts:207`，那张「服务端直接执行、经 `prerenderPost` 打预渲染进程、不经页面」的工具表）搬去 Agent 服务端，`get_layout` 进这张表；**D3 的预渲染部分是第 8 步**，协议同样在 r2-r7。
+D3（命中测试与实体矩形）、D4（`get_layout`）、D5（舞台露出来）的协议在 `docs/archive/restructure_planning/r2-r7-task.md` 的「目标 D」；其中 **D4 的服务端侧落在本文的第 6 步**——把 `MIRRORED_TOOLS`（`vite-plugin-ai.ts:207`，那张「服务端直接执行、经 `prerenderPost` 打预渲染进程、不经页面」的工具表）搬去 Agent 服务端，`get_layout` 进这张表；**D3 的预渲染部分是第 8 步**，协议同样在 r2-r7。
 
 - **D1 Agent 直接写文档服务。** 写工具不再经页面执行（今天是经 SSE 送进页面、由 `mcpExecutor.ts` 改 store，`agentBus.ts`）；Agent 作为文档服务的客户端提交操作（带 B1 身份、B4 期望版本），页面和其他客户端一样收操作。**本地模式也一样**：本机 Agent 服务端向本机文档服务提交，页面不再是「唯一写 store 的人」。
 
@@ -211,7 +211,7 @@ D3（命中测试与实体矩形）、D4（`get_layout`）、D5（舞台露出�
 
 ## 目标 F（节选）：素材哈希迁移与 GC、离线、模式切换（第 9 步）
 
-F2（`?preview=legacy` 回滚）随 R7、F5（预渲染进程重启后的就绪索引恢复）随 R6，协议都在 `restructure_planning/r2-r7-task.md` 的「目标 F（节选）」。下面三项依赖第 5 步的内容寻址设施（A1 两档、A3b、A5），排在第 5 步之后。
+F2（`?preview=legacy` 回滚）随 R7、F5（预渲染进程重启后的就绪索引恢复）随 R6，协议都在 `docs/archive/restructure_planning/r2-r7-task.md` 的「目标 F（节选）」。下面三项依赖第 5 步的内容寻址设施（A1 两档、A3b、A5），排在第 5 步之后。
 
 - **F1 素材哈希迁移与两种缓存 GC。** 旧 `.proc` 打开时后台算 sha256，算完前按文件名解析。
 
@@ -347,7 +347,7 @@ lane 名（`user` / `agent` / `background`，`frame-pipeline.mjs:90`）和模式
 
 - **L2 页面内快照库（J3 的第二个实现 `IdbSnapshotSource`）。** IndexedDB 一库三表：
 
-  - `costs` —— key = `identityKey`，K1 的成本记录。浏览器模式没有 `/api/data/costs`，第二次打开靠它跳过探针。**在线浏览器模式跑的是构建产物，所以只认 `mode=build` 的记录**（桌面版跑的是 vite dev server，看 `mode=dev` 的；`mode` 拼在 `device` 串里，见 `restructure_planning/render_pipeline_restructure.md` 3.1 第 1 条）。
+  - `costs` —— key = `identityKey`，K1 的成本记录。浏览器模式没有 `/api/data/costs`，第二次打开靠它跳过探针。**在线浏览器模式跑的是构建产物，所以只认 `mode=build` 的记录**（桌面版跑的是 vite dev server，看 `mode=dev` 的；`mode` 拼在 `device` 串里，见 `docs/archive/restructure_planning/render_pipeline_restructure.md` 3.1 第 1 条）。
   - `snapshots` —— **复合键 `[kind, key, localFrame]`**（不拼斜杠——`kind: 'local'` 的 `key` 自带一个斜杠，拼起来会歧义），值 = deflate 后的 HTML。
   - `ranges` —— 每层就绪区间，和 C3 的 `readyIndex` 同形状。
 
@@ -357,7 +357,7 @@ lane 名（`user` / `agent` / `background`，`frame-pipeline.mjs:90`）和模式
 
 - **L4 没有流。** 浏览器里没有 ffmpeg，重卡播放时贴不了流。**DOM 重卡和 canvas 重卡同一规则：按拍换 HTML 快照**（`.pc-snapshot` 平面的 `innerHTML` 每拍替换一次——这是「逐帧换快照播放」在本任务里唯一允许的地方，不受 C4 的 33 ms 节流；canvas 卡的快照里画布已经是 `<img>`）；**实测换帧成本装不下预算的重卡透明**；暂停态照 K5 追到活渲。
 
-  （第 111 版写的是「canvas 卡在浏览器模式下不按拍换快照、它是活渲的」，那和 pinned 渲染 7「重卡播放和拖动只贴死素材、缺就透明」、pinned 平台一节、不做清单都冲突，按 `restructure_planning/render_pipeline_restructure.md` 3.7 改成这一条。R9 之后 canvas 卡的主线程成本很小、多数位置判轻，这条实际只落在 `dom2d` 粒子卡和没有 Worker 退路的设备上。）
+  （第 111 版写的是「canvas 卡在浏览器模式下不按拍换快照、它是活渲的」，那和 pinned 渲染 7「重卡播放和拖动只贴死素材、缺就透明」、pinned 平台一节、不做清单都冲突，按 `docs/archive/restructure_planning/render_pipeline_restructure.md` 3.7 改成这一条。R9 之后 canvas 卡的主线程成本很小、多数位置判轻，这条实际只落在 `dom2d` 粒子卡和没有 Worker 退路的设备上。）
 
   **换帧成本进预算**：`planPipelines` 的 `opts.deadMs` 从标量放宽成 `number | ((identityKey: string) => number)`；浏览器模式传函数，背后是一张**只在本次会话生效的 `swapMs` 表**（不进 `costs`，因为它量的是这台机器这一次的 DOM 替换速度）。第一次播放前用常量 `SWAP_MS = 3` 估，播放中按 K6 的每拍每卡计时实测后替换。
 
@@ -388,7 +388,7 @@ lane 名（`user` / `agent` / `background`，`frame-pipeline.mjs:90`）和模式
 
 - 项目文档真身在文档服务（本地模式在本机编辑器进程里，云端模式在文档云端）；页面的 store 永远是副本，所有改动经文档服务。本地模式跳过素材云端、直接读文件，但不跳过文档服务（pinned 架构 2）。操作的生成：订阅 `project` 引用变化；每次变更一条操作；diff 两层（用 `changedClips`）；打开项目视为整份替换；`applyingRemote` 抑制回环。**撤销在客户端。**
 - 渲染永远在「看图的那一方」旁边、按「谁在看」分进程（I）。**云端不渲染**；素材字节只在素材云端和各方的本地内容库，文档云端不存字节。
-- **素材的小分辨率档跟原片帧率、上限 60**（`>60` 的按 60 抽帧）。项目 `fps` 四档（24 / 25 / 30 / 60）可切、切换后全部 `costs` 和死素材作废并重走探针遮罩——这条完整口径在 `restructure_planning/r2-r7-task.md` 的「约束」，本文只用到「小分辨率档跟原片帧率」这一句。新项目默认 fps 沿用 `src/kernel/project.ts:334` 的 30。fps 下拉要加进 `ProjectSettingsDialog.tsx`（今天那里没有 fps 项）。
+- **素材的小分辨率档跟原片帧率、上限 60**（`>60` 的按 60 抽帧）。项目 `fps` 四档（24 / 25 / 30 / 60）可切、切换后全部 `costs` 和死素材作废并重走探针遮罩——这条完整口径在 `docs/archive/restructure_planning/r2-r7-task.md` 的「约束」，本文只用到「小分辨率档跟原片帧率」这一句。新项目默认 fps 沿用 `src/kernel/project.ts:334` 的 30。fps 下拉要加进 `ProjectSettingsDialog.tsx`（今天那里没有 fps 项）。
 - **不改导出像素基线**：导出和像素级检查**只用原片档**，原片没到就是「等待上传方」、不拿小分辨率档代理导出；预渲染、导出、`see_frames` 一律用 `media.url`，只有 live 路的 `VideoTrack` 走 `playbackUrl`。
 - **Python 在本仓库只剩感知用途**：`python/promptcut_stt` / `promptcut_shots` / `promptcut_subject` / `promptcut_track` / `promptcut_collect` 五个离线工具包照旧，不动。Agent 在自己的环境里对 `see_frames` 拿到的图跑自定义分析代码属于 Agent 自己的工具箱，不在本仓库、不在本任务内。
 - **交互设计（pinned 交互 1～3）不在本任务范围**，另开任务书；本任务只保证不堵路：桌面端 Agent 用自己的识别码走同一条 B3 通知 / 收件箱路，两侧菜单里按识别码展示；悬浮窗展开后的「Agent 修改预览窗口」就是 AI 菜单的操作预览（I4(b2) 的 `OpDetailPreview.tsx` 和插队的 GIF）；本任务不改任何样式文件、不新增与圆角 / Fluent 深色 / 青蓝酱紫主题冲突的固定配色。
@@ -410,7 +410,7 @@ lane 名（`user` / `agent` / `background`，`frame-pipeline.mjs:90`）和模式
 
 - **F**：旧 `.proc` 后台补哈希期间预览可用；GC 后五个共享目录里被引用的条目一个不少，本地内容库在本地模式下不被自动回收；断网 10 步（含撤销）恢复后恰好 10 条操作按序提交、全部 ack、`projectRev` 连续加 10，不回环；离线期间别人写过时第一条被拒、其余不提交、弹出 B3 通知；本地 → 云端 → 本地往返一圈后 `projectRev` 不回退。
 
-- **零卡顿**和 **D5 + E + K** 的总验收在 `restructure_planning/r2-r7-task.md` 的「验收（合验）」，本文的改动不得让它们回退。
+- **零卡顿**和 **D5 + E + K** 的总验收在 `docs/archive/restructure_planning/r2-r7-task.md` 的「验收（合验）」，本文的改动不得让它们回退。
 
 - `npm test`、`npm run build` 通过。
 
@@ -420,7 +420,7 @@ lane 名（`user` / `agent` / `background`，`frame-pipeline.mjs:90`）和模式
 - iPad APP、手机 APP 的原生壳（iOS / Android）；手机竖屏布局。
 - 字体随包分发；像素缓存（PNG / MOV / 轨道流）上云。
 - Agent 的云端渲染池。
-- 云端转码（小分辨率版一律由上传方本机转）；桌面版给「只有原片」的云端素材补转小版（记在 `restructure_planning/future_planning.md` 第 1 条，以后再做）；在页面里用 WebCodecs 转码。
+- 云端转码（小分辨率版一律由上传方本机转）；桌面版给「只有原片」的云端素材补转小版（记在 `docs/plan/future_planning.md` 第 1 条，以后再做）；在页面里用 WebCodecs 转码。
 - 单流时间分层做素材的渐进补全（H.264 没有；VP9 / AV1 的 temporal layer 只能经 WebCodecs 用、`<video>` 不认）。本任务的渐进就是两档换档。
 - 整件 `PUT media/<hash>`（上传一律分片）。
 - 素材字节或快照块走文档云端的 WebSocket（大件一律素材云端，B0）。
@@ -445,12 +445,12 @@ lane 名（`user` / `agent` / `background`，`frame-pipeline.mjs:90`）和模式
 
 ## 本文没带走的内容
 
-- **版本考古**：第 111 版文首那段「第 N 版折进去 / 第 N 轮审查」的沿革（约 16 KB）整段丢掉。只留现在成立的规定和它的理由；某一条为什么是现在这个样子，要查就去 `restructure_planning/r75/`（第 75 轮十份报告与逐条结论）和 `restructure_planning/render_pipeline_restructure.md` 第 3、6 节。
-- **已落地节的细节**：A0（卡片能力审计）、A1 的素材键与路由部分、A2（含 R1 的差异样式内联）、A3a 的键与目录形状、A3c 的体积实测、A7（镜像插件）、C1、H（JS 图卡接替 Python 卡）、J1 / J2（生成快照进页面 bundle、页面协议清单）——本文各留一两句现状和代码位置，不抄细节。要看细节就去代码，或 `docs/bake-page-protocol.md`、`docs/snapshot-size-audit.md`。
-- **渲染管线整半**：C（锚帧预加载与按层回溯）、D3 / D4 / D5、E（双舞台与舞台内容）、K（分派与播放）、F2 / F5、J3 / J4 在 `restructure_planning/r2-r7-task.md`；G（轨道流）将在 `restructure_planning/r8-streams-task.md`、M（共享 WebGL 渲染器）将在 `restructure_planning/r9-webgl-task.md`。本文只在用得到的地方指路。
+- **版本考古**：第 111 版文首那段「第 N 版折进去 / 第 N 轮审查」的沿革（约 16 KB）整段丢掉。只留现在成立的规定和它的理由；某一条为什么是现在这个样子，要查就去 `docs/archive/restructure_planning/r75/`（第 75 轮十份报告与逐条结论）和 `docs/archive/restructure_planning/render_pipeline_restructure.md` 第 3、6 节。
+- **已落地节的细节**：A0（卡片能力审计）、A1 的素材键与路由部分、A2（含 R1 的差异样式内联）、A3a 的键与目录形状、A3c 的体积实测、A7（镜像插件）、C1、H（JS 图卡接替 Python 卡）、J1 / J2（生成快照进页面 bundle、页面协议清单）——本文各留一两句现状和代码位置，不抄细节。要看细节就去代码，或 `docs/guides/bake-page-protocol.md`、`docs/archive/topics/snapshot-size-audit.md`。
+- **渲染管线整半**：C（锚帧预加载与按层回溯）、D3 / D4 / D5、E（双舞台与舞台内容）、K（分派与播放）、F2 / F5、J3 / J4 在 `docs/archive/restructure_planning/r2-r7-task.md`；G（轨道流）将在 `docs/plan/r8-streams-task.md`、M（共享 WebGL 渲染器）将在 `docs/plan/r9-webgl-task.md`。本文只在用得到的地方指路。
 - **A3a 的完整键定义**（`sourceDependent` / `belowDependent` 两种键怎么拼、隔离工程怎么平移、`localSceneKey` 怎么算）：在 r2-r7 的 A3a。本文只保留「哪些卡上云、哪些只留本地」这一层，因为那是 A3b 的输入。
 - **A4 整场景一帧靠拼**：纯舞台侧的事，在 r2-r7。
-- **`frameMs`**：这个字段已经删掉，判重只看活渲单帧耗时 `stepMs`；原文里所有用 `frameMs` 表述的门槛一律换成 `stepMs`，成本记录的四个数（`stepMs` / `inlineMs` / `rasterMs` / `serializeMs`）的定义在 `restructure_planning/render_pipeline_restructure.md` 3.8 和 r2-r7 的 K1。
+- **`frameMs`**：这个字段已经删掉，判重只看活渲单帧耗时 `stepMs`；原文里所有用 `frameMs` 表述的门槛一律换成 `stepMs`，成本记录的四个数（`stepMs` / `inlineMs` / `rasterMs` / `serializeMs`）的定义在 `docs/archive/restructure_planning/render_pipeline_restructure.md` 3.8 和 r2-r7 的 K1。
 - **`__bfFreeze` / `freezeScene` / `snapshotFreeze.ts` / `freezeCode` 这组旧名字**：一律换成 `window.__pcCreateSnapshot` / `createSnapshot` / `createSnapshot.ts` / `snapshotCode`。
 - **G0-b（轨道流准入实测）在各平台各跑一次**：I0 只留了「结果写进准入报告」这一句，实测本身属于 R8。
 - **总验收里的渲染条目**（A2、A7、C1、C、第 3 步、D5 + E + K、G、零卡顿）：只留指针，正文在 r2-r7。

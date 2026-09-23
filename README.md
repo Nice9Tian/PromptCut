@@ -12,7 +12,7 @@ PromptCut 是一个 AI 视频剪辑工作台：用户用自然语言指挥 Agent
 | 术语 | [docs/semantics/00-glossary.md](docs/semantics/00-glossary.md) |
 | 为什么这样设计 | [docs/rationale/](docs/rationale/) |
 | 排障、对账等操作知识 | [docs/guides/](docs/guides/) |
-| 还没做完的事 | [docs/TODO.md](docs/TODO.md) |
+| 还没做完的事 | [docs/plan/TODO.md](docs/plan/TODO.md) |
 | 旧文档（历史资料） | [docs/archive/](docs/archive/) |
 
 ## 开发

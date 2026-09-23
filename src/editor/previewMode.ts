@@ -9,7 +9,7 @@
  * R2～R6 期间缺省是 legacy,新东西全藏在 `?preview=stage` 后面 —— 那几步的验收条件是
  * 「可见行为逐项不变」,而新行为要多起两个端口、要 iframe 换源,用户手里那份编辑台
  * 随便刷新一下就会踩上去。R7 是第一步**故意**改用户可见行为的,所以这一步才翻。
- * **为什么必须和 D5 的其余几条一起原子地翻**见 `restructure_planning/r2-r7-task.md` 的 D5 末尾。
+ * **为什么必须和 D5 的其余几条一起原子地翻**见 `docs/archive/restructure_planning/r2-r7-task.md` 的 D5 末尾。
  *
  * `StageView` 自己那个 `LEGACY`(`?preview=legacy` 时 `setProject` 立刻按跳转重算这一帧)
  * 是回滚的**另一半**:R7-6 之前 `Preview` 从来不把 `preview` 参数传进 iframe,它永远
@@ -52,7 +52,7 @@ export function stagePorts(): number[] {
 /**
  * 每个舞台实例该从哪个源加载。**按当前页面的 hostname 拼**(不是写死 127.0.0.1):
  * 用户从 `localhost` 打开时两个 iframe 也得是 `localhost` —— 同 host 不同端口 + OAC 头
- * 才是实测过的那条路(`restructure_planning/g0-a-webview2-probe.md`),换成别的 host 就成了另一件事。
+ * 才是实测过的那条路(`docs/archive/restructure_planning/g0-a-webview2-probe.md`),换成别的 host 就成了另一件事。
  */
 export function stageOrigins(): Record<StageId, string> | null {
   const ports = stagePorts();

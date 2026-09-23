@@ -3,7 +3,7 @@
  *
  *   node scripts/probes/snapshot-size-probe.mjs [--origin http://127.0.0.1:5197]
  *        [--fps 30] [--clip-sec 4] [--cards a,b] [--limit N] [--no-projects]
- *        [--out docs/snapshot-size-audit.md] [--json out/snapshot-size-audit.json]
+ *        [--out out/snapshot-size-audit.md] [--json out/snapshot-size-audit.json]
  *
  * 任务书 A3c 的三条上限:
  *   - DOM 卡:单 clip 单帧**原始**快照 ≤ 300 KB;
@@ -46,7 +46,7 @@ const fps = Number(flag('--fps', '30')) || 30;
 const clipSec = Number(flag('--clip-sec', '4')) || 4;
 const cardsArg = flag('--cards');
 const limit = Number(flag('--limit', '0')) || 0;
-const outMd = flag('--out', 'docs/snapshot-size-audit.md');
+const outMd = flag('--out', 'out/snapshot-size-audit.md');
 const outJson = flag('--json', '');
 const useProjects = !has('--no-projects');
 

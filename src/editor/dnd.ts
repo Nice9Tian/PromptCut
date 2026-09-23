@@ -6,7 +6,7 @@ import { useSyncExternalStore } from "react";
  * HTML5 拖放在 dragover 阶段读不到 dataTransfer 的内容(只能读 types),
  * 但落点预览必须知道拖的是什么、多长。所以拖开始时在这里存一份载荷,
  * 时间轴 dragover 时直接读;dragend / drop 之后清掉。
- * dataTransfer 仍然照常写(见 EDITOR-DESIGN.md 的拖放契约),跨窗口拖进来时还能靠 types 判断种类。
+ * dataTransfer 仍然照常写(见 docs/archive/EDITOR-DESIGN.md 的拖放契约),跨窗口拖进来时还能靠 types 判断种类。
  */
 
 export const MIME_CARD = "application/x-promptcut-card";

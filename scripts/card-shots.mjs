@@ -62,7 +62,7 @@ async function startVite() {
   /*
    * TEMP / TMP 指到一个单独的目录再起:dev server 一起来就把自己的端口写进 %TEMP%\promptcut\port.json,
    * 没指定端口的 MCP 客户端照它去连 —— 不隔开的话,跑一次截图就把用户正在用的编辑台的 AI 连接指歪了
-   * (见 docs/compare-pitfalls.md 第 8 条)。
+   * (见 docs/guides/compare-pitfalls.md 第 8 条)。
    */
   const tmp = path.join(os.tmpdir(), "promptcut-card-shots");
   await fs.mkdir(tmp, { recursive: true });

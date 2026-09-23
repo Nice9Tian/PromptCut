@@ -1,16 +1,16 @@
 # TODO
 
-还没做完的工作。协议全文在下面列出的旧文件里，它们已归档在 `docs/archive/`。旧文件与 `docs/semantics/` 冲突时，以 semantics 为准。
+还没做完的工作。未开始的计划和它们的协议全文都在本目录 `docs/plan/` 里；已做完步骤的记录归档在 `docs/archive/`。计划与 `docs/semantics/` 冲突时，以 semantics 为准。
 
 ## 未开始的计划
 
-| 事项 | 旧文件 | 状态 |
+| 事项 | 计划文件 | 状态 |
 |---|---|---|
-| 轨道流：重卡在播放时贴的 alpha 视频流 | `docs/archive/restructure_planning/r8-streams-task.md`；编码原型报告 `docs/archive/restructure_planning/g0-b-stream-prototype.md` | 未开始，编码原型已做完 |
-| 共享 WebGL 渲染器：canvas 卡共用一个 WebGL 上下文 | `docs/archive/restructure_planning/r9-webgl-task.md` | 未开始 |
-| 云端：素材上云、文档服务、改动竞态、Agent 的查询进程、在线浏览器模式 | `docs/archive/restructure_planning/cloud-task.md`，文末有 6 个动工前要定的问题 | 未开始 |
-| 音频整体改成浏览器端 JS | `docs/archive/restructure_planning/audio_structure_plan.md`（A0～A7）；判重测试计划 `docs/archive/restructure_planning/audio_determine_plan.md` | 计划已写，未动工 |
-| 以后再做：桌面版给只有原片的云端素材补转小版；导出页装虚拟定时器 | `docs/archive/restructure_planning/future_planning.md` | 暂缓 |
+| 轨道流：重卡在播放时贴的 alpha 视频流 | `docs/plan/r8-streams-task.md`；编码原型报告 `docs/plan/g0-b-stream-prototype.md` | 未开始，编码原型已做完 |
+| 共享 WebGL 渲染器：canvas 卡共用一个 WebGL 上下文 | `docs/plan/r9-webgl-task.md` | 未开始 |
+| 云端：素材上云、文档服务、改动竞态、Agent 的查询进程、在线浏览器模式 | `docs/plan/cloud-task.md`，文末有 6 个动工前要定的问题 | 未开始 |
+| 音频整体改成浏览器端 JS | `docs/plan/audio_structure_plan.md`（A0～A7）；判重测试计划 `docs/plan/audio_determine_plan.md` | 计划已写，未动工 |
+| 以后再做：桌面版给只有原片的云端素材补转小版；导出页装虚拟定时器 | `docs/plan/future_planning.md` | 暂缓 |
 
 ## 已做步骤的遗留
 
@@ -34,7 +34,5 @@
 
 ## 文档
 
-- `docs/bake-page-protocol.md` 和 `docs/snapshot-size-audit.md` 还留在 `docs/` 根下，没有归档：前者被 `scripts/verify-bake-protocol.mjs` 和 `server/test/bake-protocol.test.mjs` 逐字比对，后者是 `scripts/probes/snapshot-size-probe.mjs` 的默认输出。挪它们要连同代码一起改。
-- 约二十处代码注释引用了已归档文档的旧路径（`docs/decoupling-plan.md`、`docs/render-rebuild-plan.md`、`restructure_planning/…`、`EDITOR-DESIGN.md`、`user_pinned_goal.md` 等），要改成 `docs/archive/` 下的新路径。
 - `desktop/README.md` 的 SKILL 悬浮窗几节描述的是现在的代码，和 03 的托盘方案不同。代码改完后跟着改。
-- 被忽略的 `AGY-TASK-*.md` 和 `reply_to_users_goal.md` 不入库，留在原处不处理。
+- 被忽略、不入库的 `AGY-TASK-*.md` 留在原处不处理。

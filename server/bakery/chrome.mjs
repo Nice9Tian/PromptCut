@@ -13,7 +13,7 @@ import { launchHealthyChrome } from './chrome-health.mjs';
  * 截多大几乎一样慢,钱花在「为了截图让 Chrome 出一帧」上,外加截图时临时放开虚拟时间那一整套往返。
  *
  * 这里改用 chrome-headless-shell 的 `HeadlessExperimental.beginFrame`:**帧时间由我们给**,
- * 一拍里跑完 rAF + 画 + 截图,不再需要虚拟时间。实测(docs/render-rebuild-plan.md 阶段 1):
+ * 一拍里跑完 rAF + 画 + 截图,不再需要虚拟时间。实测(docs/archive/topics/render-rebuild-plan.md 阶段 1):
  *   - demo 全长 1800 帧:旧 107.7 ms/帧 → 这里 26.9 ms/帧,约 4 倍;
  *   - 和旧管线逐帧对账:两边各自两趟都是 1800/1800,彼此不一致的帧全部来自系统字体回退(已在主题里修掉),
  *     不是出帧方式的差异;

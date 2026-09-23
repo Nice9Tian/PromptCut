@@ -4,7 +4,7 @@ import { changedClips, projectHash, type ProjectPatch } from "./changedClips.mjs
 
 /**
  * 数据管理的只读镜像:编辑页把项目(带版本号)推给服务端一份
- * (docs/decoupling-plan.md 第 3.2 节「数据管理 → 项目」,阶段 4;A7)。
+ * (docs/archive/topics/decoupling-plan.md 第 3.2 节「数据管理 → 项目」,阶段 4;A7)。
  *
  * # 为什么
  *

@@ -1,5 +1,5 @@
 /**
- * K 节验收里 `planPipelines` 的算例，逐条照抄（`restructure_planning/r2-r7-task.md` 的 K2 与 K 节验收）。
+ * K 节验收里 `planPipelines` 的算例，逐条照抄（`docs/archive/restructure_planning/r2-r7-task.md` 的 K2 与 K 节验收）。
  * 数都按 `fps = 30`、`B = 1000 / 30 × 70% = 23.333 ms`、`DEAD_MS = 0.3` 算。
  */
 import test from 'node:test';

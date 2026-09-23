@@ -2,7 +2,7 @@
  * 像素映射的 WebGL2 后端。
  *
  * 为什么有这个文件:像素映射原先是 `getImageData` → 逐像素解释表达式 → `putImageData`,
- * 实测 1080p 每帧 416～483 ms(restructure_planning/render_pipeline_restructure.md 2.1(b)),超 30 fps 的每拍
+ * 实测 1080p 每帧 416～483 ms(docs/archive/restructure_planning/render_pipeline_restructure.md 2.1(b)),超 30 fps 的每拍
  * 预算约二十倍,任何机器都重。表达式翻译成片元着色器之后这一步整个挪到 GPU 上,主线程
  * 只剩上传纹理和提交。**逐像素的 CPU 循环已整体删除、不留运行时退路**;`mapRgba` 保留,
  * 只给单测和 GPU / CPU 对照用。

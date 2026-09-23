@@ -1,6 +1,6 @@
 /**
  * J2 的守门脚本:预渲染页的驱动协议只能经 `window.__*`,而且必须和
- * `docs/bake-page-protocol.md` 的两栏清单字字对上。
+ * `docs/guides/bake-page-protocol.md` 的两栏清单字字对上。
  *
  * 做三件事:
  *   1. 扫 Node 侧的抓帧代码,收集全部 `window.__…` 的读写;
@@ -30,7 +30,7 @@ export const SCANNED_FILES = [
   'server/bakery/frame-media.mjs',
 ];
 
-export const DOC = 'docs/bake-page-protocol.md';
+export const DOC = 'docs/guides/bake-page-protocol.md';
 
 const SECTIONS = [
   { heading: 'HTML 路必需', key: 'html' },
