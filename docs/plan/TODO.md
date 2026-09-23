@@ -17,7 +17,7 @@
 ## 已做步骤的遗留
 
 - **R0**：仓库根 dev server 的冷启动量测没做。（`scripts/verify-unified-frames.mjs` 已整条通过；快照重放和整帧导出的残差查到只剩三处快照这一侧修不了的，见 `docs/archive/restructure_planning/reports/replay-mismatch-report.md` §12、§13。）
-- **R7b 没做成的**：`stageSwap`、`snapshotFeed`、`demote` 和节拍循环没有单测；只预渲染重卡集合那一条只停了快照、没停 PNG；R7b 报告第 4 节的 8 条更正没折回 `docs/archive/restructure_planning/r2-r7-task.md`。
+- **R7b 没做成的**：只预渲染重卡集合那一条只停了快照、没停 PNG；R7b 报告第 4 节的 8 条更正没折回 `docs/archive/restructure_planning/r2-r7-task.md`。
 - **see_frames 回包附实体矩形**：原云端计划第 8 步，协议在 `docs/archive/restructure_planning/r2-r7-task.md` 的 D3，归 R 系列，可与云端计划并行推进。
 - **待用户定**：播放停顿期间要不要加音频看门狗，让音频立刻停。试验的实测结论见 `docs/branch_review_report.md` 的 probe/audio-watchdog 一节。
 
@@ -33,7 +33,7 @@
 - **素材服务**：还不存在；桌面运行环境现在直读本机素材目录，没有经服务接口；两档素材的字段只是占位；预渲染产物还没有入库，只留在本机。
 - **查询渲染**：Agent 专用渲染实例的优先通道、AI 栏操作预览的插队只有雏形。
 - **在线浏览器模式**：还不存在。
-- **Agent 系统提示词**：`server/ai-system-prompt.md` 说总时长不跟着内容走，和代码、语义都不符，要改。
+- **手动截短总时长的入口**：语义允许用户手动缩短总时长（`project-model.md`「总时长」），但编辑界面没有入口，现在只有 Agent 能经 `set_project_meta` 截断。UI 层要补手动截短总时长的操作入口，规则用 `src/kernel/duration.ts` 现成的那套。
 
 ## 文档
 
