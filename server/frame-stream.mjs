@@ -385,7 +385,7 @@ export function localPlacement(clip, stage) {
   const ox = Math.max(0, Math.floor((stage.width - w) / 2));
   const oy = Math.max(0, Math.floor((stage.height - h) / 2));
   // 平面坐标系下,截图能覆盖到的范围是 [-ox, W - ox] × [-oy, H - oy]
-  const view = { x: -ox, y: -oy, w: stage.width, h: stage.height };
+  const view = { x: -ox || 0, y: -oy || 0, w: stage.width, h: stage.height };
   const bound = evenRect(intersectRect(view, padRect({ x: 0, y: 0, w, h }, LOCAL_OVERFLOW_PX)), view);
   return { box: { w, h }, offset: { x: ox, y: oy }, bound };
 }
