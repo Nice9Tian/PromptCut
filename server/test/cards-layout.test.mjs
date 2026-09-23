@@ -35,7 +35,7 @@ mock.module(new URL('../bakery/capture-snapshot.mjs', import.meta.url).href, {
   },
 });
 
-const { FramePipeline, layoutClips, frameContentBox } = await import('../frame-pipeline.mjs');
+const { FramePipeline, layoutClips, frameContentBox, measureEntityRects } = await import('../frame-pipeline.mjs');
 
 const stage = { width: 1920, height: 1080 };
 
@@ -155,6 +155,91 @@ test('t 夹在项目时长内,帧号按 round(t × fps)', async () => {
   assert.equal((await service.layout(project, { t: -5, clipIds: ['card-a'] })).frame, 0);
   assert.equal((await service.layout(project, { t: 999, clipIds: ['card-a'] })).frame, 119, 'floor(4 × 30) - 1');
   assert.equal((await service.layout(project, { t: 1.49, clipIds: ['card-a'] })).frame, 45);
+});
+
+/* ---------------- D3:see_frames 每帧附的实体矩形 ---------------- */
+
+test('D3 entityRects:缺的帧一次 bakeFrames 补齐,每帧注一次快照、不截图,钩子就是 measureEntityRects', async () => {
+  bakeCalls.length = 0; captureCalls.length = 0;
+  measured = [{ clipId: 'card-a', box: [0, 0, 1920, 1080], solid: [10, 20, 30, 40] }];
+  const { service, entry } = stubbed(project, new Map([[15, '<div data-pc-scene=""></div>']]));
+  const out = await service.entityRects(project, [0.5, 1, 1, 999]);
+  assert.deepEqual([...out.keys()], [15, 30, 119], '去重、夹进时长、按帧号排');
+  assert.equal(bakeCalls.length, 1, '缺的两帧合成一趟');
+  assert.deepEqual(bakeCalls[0].targetFrames, [30, 119]);
+  assert.equal(bakeCalls[0].snapshotOnly, true);
+  assert.equal(captureCalls.length, 3, '每帧一次');
+  for (const call of captureCalls) {
+    assert.equal(call.options.screenshot, false);
+    assert.equal(call.options.afterFonts, measureEntityRects);
+  }
+  assert.deepEqual(out.get(30), measured);
+  assert.equal(entry.html.has(119), true, '补出来的快照 record 进去,下次命中');
+});
+
+test('D3 entityRects:页面没挂 __pcSolid(钩子回 null)时那一帧是 null,不是空数组', async () => {
+  measured = null;
+  const { service } = stubbed(project, new Map([[0, '<div></div>']]));
+  const out = await service.entityRects(project, [0]);
+  assert.equal(out.get(0), null);
+});
+
+/*
+ * measureEntityRects 的页面函数:拿一棵假 DOM 直接跑(page.evaluate = 就地调用),
+ * 只验「solid 什么时候是 null」—— bounds 的数值是 solid.ts 自己的事。
+ */
+class FakeRect {
+  constructor(left, top, width, height) { Object.assign(this, { left, top, width, height, right: left + width, bottom: top + height }); }
+}
+function el(tag, attrs = {}, rect = [0, 0, 0, 0], children = []) {
+  const node = {
+    tagName: tag, children, attrs, rect: new FakeRect(...rect),
+    hasAttribute: n => n in attrs, getAttribute: n => (n in attrs ? String(attrs[n]) : null),
+    getBoundingClientRect: () => node.rect,
+    querySelector: sel => {
+      const id = /\[data-pc-clip="(.+)"\]/.exec(sel)?.[1];
+      const find = n => (n.attrs['data-pc-clip'] === id ? n : n.children.map(find).find(Boolean));
+      return node.children.map(find).find(Boolean) || null;
+    },
+  };
+  return node;
+}
+async function runMeasure(root, list) {
+  const saved = { document: globalThis.document, window: globalThis.window, DOMRect: globalThis.DOMRect, CSS: globalThis.CSS };
+  globalThis.document = { querySelector: () => root };
+  globalThis.window = { __pcSolid: { rectsWithBounds: () => list, isSolid: n => !!n.attrs.solid } };
+  globalThis.DOMRect = FakeRect;
+  globalThis.CSS = { escape: s => s };
+  try { return await measureEntityRects({ evaluate: fn => fn() }); }
+  finally { Object.assign(globalThis, saved); }
+}
+
+test('D3 measureEntityRects:有实体给 bounds,整张卡没画 / 实体全在舞台外 / 只有组流平面 都给 null', async () => {
+  const full = new FakeRect(0, 0, 1920, 1080);
+  const root = el('DIV', { 'data-pc-scene': '' }, [0, 0, 1920, 1080], [
+    el('DIV', { 'data-pc-clip': 'painted' }, [0, 0, 1920, 1080], [el('DIV', {}, [0, 0, 1920, 1080], [el('SPAN', { solid: 1 }, [100, 200, 300.4, 50.6])])]),
+    el('DIV', { 'data-pc-clip': 'empty' }, [0, 0, 1920, 1080], [el('DIV', {}, [0, 0, 500, 500])]),
+    el('DIV', { 'data-pc-clip': 'offstage' }, [0, 0, 1920, 1080], [el('SPAN', { solid: 1 }, [2000, 0, 100, 100])]),
+    el('DIV', { 'data-pc-clip': 'group' }, [0, 0, 1920, 1080], [el('CANVAS', { 'data-pc-group-plane': '' }, [0, 0, 1920, 1080])]),
+    el('DIV', { 'data-pc-clip': 'plane' }, [0, 0, 1920, 1080], [el('IMG', { 'data-pc-snapshot-plane': '' }, [10, 10, 20, 20])]),
+    // 快照里 canvas 换成的 <img>:外框在舞台上,但实体那一块(画布像素 3900.. → 舞台 1950..)在舞台外
+    el('DIV', { 'data-pc-clip': 'painted-off' }, [0, 0, 1920, 1080], [el('IMG', { solid: 1, 'data-pc-painted-box': '3900,0,10,10', width: 3840, height: 1080 }, [0, 0, 1920, 1080])]),
+  ]);
+  const list = ['painted', 'empty', 'offstage', 'group', 'plane', 'painted-off'].map(clipId => ({ clipId, rect: full, bounds: clipId === 'painted' ? new FakeRect(100, 200, 300.4, 50.6) : full }));
+  const out = await runMeasure(root, list);
+  const by = Object.fromEntries(out.map(r => [r.clipId, r]));
+  assert.deepEqual(by.painted, { clipId: 'painted', box: [0, 0, 1920, 1080], solid: [100, 200, 300, 51] }, '取整');
+  assert.equal(by.empty.solid, null, '没有实体元素');
+  assert.equal(by.offstage.solid, null, '实体全在舞台外');
+  assert.equal(by.group.solid, null, '组流平面不算这张卡的实体');
+  assert.deepEqual(by.plane.solid, [0, 0, 1920, 1080], '快照 / 流 / 代理平面算实体');
+  assert.equal(by['painted-off'].solid, null, '按 data-pc-painted-box 那一块判');
+  // 页面上没挂 __pcSolid
+  globalThis.window = {};
+  const saved = globalThis.document;
+  globalThis.document = { querySelector: () => root };
+  try { assert.equal(await measureEntityRects({ evaluate: fn => fn() }), null); }
+  finally { globalThis.document = saved; delete globalThis.window; }
 });
 
 /* 真打一台 dev server(PC_STAGE_TEST_URL=http://127.0.0.1:5214);不设就跳过。 */

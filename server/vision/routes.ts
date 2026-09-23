@@ -395,7 +395,8 @@ export function registerPrerenderSide(server: ViteDevServer, root: string) {
               clamped.forEach((x, i) => {
                 const r = shots.get(Math.min(maxFrame, Math.max(0, Math.round(x * fpsOf))));
                 if (!r) return;
-                frames.push({ t: x, clipId: clipId || null, width: r.width, height: r.height });
+                // D3:实体矩形(舞台像素坐标),文字那份已经由 renderFrames 写进 notes
+                frames.push({ t: x, clipId: clipId || null, width: r.width, height: r.height, rects: r.rects ?? null });
                 images.push({ mime: "image/png", base64: r.buf.toString("base64"), label: `t=${list[i]}s` });
               });
               return sendJson(res, 200, {
@@ -431,6 +432,8 @@ export function registerPrerenderSide(server: ViteDevServer, root: string) {
               clipId: clipId || null,
               width,
               height,
+              // D3:实体矩形(舞台像素坐标),文字那份已经由 renderOneFrame 写进 notes
+              rects: shot.rects ?? null,
               note: notes.join(" "),
               // 这个形状是和 harness/agent.mjs(以及走 CLI 那条路的 mcp-server.mjs)
               // 约好的:看到 __image 就把它当图片块送进上下文,而不是让 base64
