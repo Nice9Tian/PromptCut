@@ -326,7 +326,7 @@ export function isPrivateOrigin(origin: string | string[] | undefined): boolean 
     const v6 = host.slice(1, -1);
     return v6 === "::1" || /^f[cd][0-9a-f]{0,2}:/.test(v6) || /^fe[89ab][0-9a-f]?:/.test(v6);
   }
-  const m = /^(d{1,3}).(d{1,3}).(d{1,3}).(d{1,3})$/.exec(host);
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
   if (!m) return false;
   const [a, b] = [Number(m[1]), Number(m[2])];
   return a === 127 || a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254);
