@@ -223,7 +223,23 @@ try {
   check(b.streams.tracks.length === 0 && b.streamPlanes.length === 0, 'back 舞台不建 decoder、不收流平面', b.streams);
   // 暂停在这一帧:舞台截图 vs 导出页同一帧
   const iframeBox = await (await page.$('#a')).boundingBox();
-  const shot = await page.screenshot({ clip: { x: iframeBox.x, y: iframeBox.y, width: 1920, height: 1080 } });
+  /*
+   * 截图之前等舞台真画两帧,再截两张取后一张:实测 headless Chrome 截跨源 iframe 偶尔拿到一张没合成完的画面
+   * (一次复跑里只剩最底下那层流画布,活渲的里程表都不在;DOM 和流的状态同时是对的,再截一次就好)。
+   */
+  const settleShot = async () => {
+    await frameA().evaluate(() => new Promise((r) => (window.__pcRealRaf ?? requestAnimationFrame)(() => (window.__pcRealRaf ?? requestAnimationFrame)(() => r()))));
+    await page.screenshot({ clip: { x: iframeBox.x, y: iframeBox.y, width: 1920, height: 1080 } });
+    return page.screenshot({ clip: { x: iframeBox.x, y: iframeBox.y, width: 1920, height: 1080 } });
+  };
+  const shot = await settleShot();
+  // 截图那一刻舞台上都挂着什么(排查用)
+  out.domAtShot = await frameA().evaluate(() => [...document.querySelectorAll('[data-pc-clip]')].map((w) => ({
+    clipId: w.getAttribute('data-pc-clip'), cls: w.className, localFrame: w.getAttribute('data-pc-local-frame'),
+    planes: [...w.querySelectorAll(':scope > canvas[data-pc-stream-plane], :scope > [data-pc-snapshot-plane]')].map((c) => ({ tag: c.tagName, w: c.width, style: c.getAttribute('style') })),
+  })));
+  out.diagAtShot = (await diagA()).streams.tracks.map((t) => ({ id: t.id.slice(0, 12), lastDrawn: t.lastDrawn, held: t.held, decoder: t.decoder }));
+  out.tAtShot = (await diagA()).t;
   const shotFile = path.join(OUT, `stage-paused-${stop.stoppedAt?.toFixed(3)}.png`);
   await fs.writeFile(shotFile, shot);
   out.stageShot = shotFile;
@@ -253,6 +269,31 @@ try {
       out.compareGlass = compare(stageRgb, exportRgb, { x: glass.x, y: glass.y, w: glass.w, h: Math.min(glass.h, 1080 - glass.y) });
       check(out.compareGlass.meanAbs < 3, '毛玻璃卡叠在流画布上:那一块和导出同一帧的平均误差 < 3/255', out.compareGlass);
     }
+  }
+  /*
+   * 同一个浏览器里的对照:摘掉抑制和流平面,这几张卡在舞台上活渲同一帧,再截一张。
+   * 贴流 vs 活渲(同一台舞台、同一个 Chrome)——毛玻璃那一块尤其要对得上:它采样的是下面那块流画布。
+   * (舞台 vs 导出页那一组里,毛玻璃本身在两种 Chrome 配置下的模糊就有差别,和流无关。)
+   */
+  if (!GROUP) {
+    await rpc('setSuppressed', []);
+    await rpc('setStreamPlanes', []);
+    await rpc('setTime', stop.stoppedAt);
+    await new Promise(r => setTimeout(r, 800));
+    const live = await settleShot();
+    const liveFile = path.join(OUT, `stage-live-${stop.stoppedAt?.toFixed(3)}.png`);
+    await fs.writeFile(liveFile, live);
+    out.liveShot = liveFile;
+    const a = rgbOver(shot), b2 = rgbOver(live);
+    out.compareLive = compare(a, b2);
+    const glass = PROJECT.tracks.flatMap(t => t.clips).find(c => c.id === 'clip-glass')?.frame;
+    if (glass) out.compareLiveGlass = compare(a, b2, { x: glass.x, y: glass.y, w: glass.w, h: Math.min(glass.h, 1080 - glass.y) });
+    check(out.compareLive.meanAbs < 3, '贴流 vs 同一舞台活渲同一帧:平均误差 < 3/255', out.compareLive);
+    if (out.compareLiveGlass) check(out.compareLiveGlass.meanAbs < 3, '毛玻璃叠在流画布上 vs 叠在活渲的卡上:平均误差 < 3/255', out.compareLiveGlass);
+    // 还原成贴流的状态,后面的命中测试照旧
+    await rpc('setSuppressed', heavy);
+    await rpc('setStreamPlanes', planes);
+    await rpc('setTime', stop.stoppedAt);
   }
   // 命中测试:药丸的中心 → 药丸;没有药丸的地方 → 粒子背景(它的流平面铺满画面)
   out.hit = { pill: await rpc('hitTest', 960, 540), corner: await rpc('hitTest', 60, 1000) };

@@ -242,15 +242,16 @@ try {
     const raw = await decodeSegment(init, await fs.readFile(path.join(producer.store.dir(state.spec.streamKey), seg.file)), OUT, 'decoded-group');
     const meta = state.manifest.inits[seg.init];
     const W = meta.width, H = meta.height / 2 - 8;
-    let blue = 0, green = 0;
+    // 药丸的蓝(画面中间);粒子:画面右边那一条(x ≥ 1300)只有粒子背景,那里有不透明的像素就是它
+    let blue = 0, particles = 0;
     for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
       const i = (y * W + x) * 4;
       const a = raw[((y + H + 8) * W + x) * 4];
       if (a > 200 && raw[i + 2] > 180 && raw[i] < 140 && raw[i + 2] - raw[i + 1] > 50) blue++;
-      if (a > 100 && raw[i + 1] > 150 && raw[i] < 120 && raw[i + 2] < 150) green++;
+      if (x >= 1300 && a > 100) particles++;
     }
-    out.groupContent = { clipIds: state.spec.clipIds, blue, green };
-    check(blue > 1000 && green > 20, '组流里恰好是组内那几张卡(药丸的蓝、粒子的绿都在)', out.groupContent);
+    out.groupContent = { clipIds: state.spec.clipIds, blue, particles };
+    check(blue > 1000 && particles > 100, '组流里恰好是组内那几张卡(药丸的蓝、右边一条里的粒子都在)', out.groupContent);
   }
   // G6:单独重新生产第 5 段 —— 把它的签名弄旧,只有这一段重做,索引区间不变,旧文件 5 秒内删
   if (!GROUP) {
