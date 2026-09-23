@@ -14,7 +14,7 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { apiPath, originOk, jsonContentType } from "../http-guard.mjs";
+import { apiPath, originOk, jsonContentType, isLoopbackAddress, clientAddressOf, fromLocalClient, STAGE_CLIENT_HEADER } from "../http-guard.mjs";
 
 /** connect 的判据,照抄 node_modules/vite/dist/node/chunks/node.js:7059 */
 const connectMatches = (url, route) =>
@@ -101,4 +101,24 @@ test("isAssetServicePath:只认素材服务那几种路径,判的是归一化之
     `/api/asset/media/${h.slice(1)}`, `/api/media/upload/${h}`, `/@media/${h}`, `/api/asset/media/${h}/12345678901`]) {
     assert.equal(isAssetServicePath(no), false, no);
   }
+});
+
+test("回环地址:127.0.0.0/8、::1、::ffff:127.x;局域网地址不算", () => {
+  for (const a of ["127.0.0.1", "127.5.6.7", "::1", "::ffff:127.0.0.1"]) assert.equal(isLoopbackAddress(a), true, a);
+  for (const a of ["192.168.1.50", "10.0.0.2", "::ffff:192.168.1.50", "fe80::1", "", undefined]) assert.equal(isLoopbackAddress(a), false, String(a));
+});
+
+test("本机判据:没有 socket 算本机;对端是局域网就不是本机,伪造舞台代理头也没用", () => {
+  assert.equal(fromLocalClient({ headers: {} }), true);
+  assert.equal(fromLocalClient({ socket: { remoteAddress: "127.0.0.1" }, headers: {} }), true);
+  assert.equal(fromLocalClient({ socket: { remoteAddress: "192.168.1.50" }, headers: {} }), false);
+  // 局域网设备直连 vite、自己填舞台代理头冒充本机:对端不是回环,头不被采信
+  assert.equal(fromLocalClient({ socket: { remoteAddress: "192.168.1.50" }, headers: { [STAGE_CLIENT_HEADER]: "127.0.0.1" } }), false);
+});
+
+test("经舞台端口代理进来的请求:对端是回环,按代理写的真实对端判", () => {
+  const viaProxy = (client) => ({ socket: { remoteAddress: "127.0.0.1" }, headers: { [STAGE_CLIENT_HEADER]: client } });
+  assert.equal(clientAddressOf(viaProxy("192.168.1.50")), "192.168.1.50");
+  assert.equal(fromLocalClient(viaProxy("192.168.1.50")), false);
+  assert.equal(fromLocalClient(viaProxy("::ffff:127.0.0.1")), true);
 });

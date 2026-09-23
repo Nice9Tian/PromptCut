@@ -127,3 +127,61 @@ test('豁免之外的 /api/** 跨源照旧 403(包括编辑器内部的整件上
     assert.equal(r.status, 403, req.url);
   }
 });
+
+// 局域网监听(npm run dev 绑 0.0.0.0)之后:除素材服务外的 /api/** 默认只答本机
+const LAN_CLIENT = { socket: { remoteAddress: '192.168.1.50' } };
+const LOCAL_CLIENT = { socket: { remoteAddress: '127.0.0.1' } };
+
+function passFrom(fn, from, { method = 'GET', url, headers = {} }) {
+  return new Promise((resolve) => {
+    const res = {
+      statusCode: 200, headers: {},
+      setHeader(k, v) { this.headers[k] = v; },
+      end(body) { resolve({ status: this.statusCode, body: JSON.parse(String(body)) }); },
+    };
+    fn({ method, url, headers, ...from }, res, () => resolve('next'));
+  });
+}
+
+test('局域网设备不带 Origin 打普通接口:默认 403(不然能直接驱动 Agent、读配置)', async () => {
+  const fn = handlerOf();
+  const prev = process.env.PROMPTCUT_LAN_API;
+  delete process.env.PROMPTCUT_LAN_API;
+  try {
+    for (const req of [
+      { url: '/api/ai/config' },
+      { method: 'POST', url: '/api/ai/chat', headers: { 'content-type': 'application/json' } },
+      { url: '/api/media/local' },
+    ]) {
+      const r = await passFrom(fn, LAN_CLIENT, req);
+      assert.notEqual(r, 'next', req.url);
+      assert.equal(r.status, 403, req.url);
+      assert.match(r.body.error, /PROMPTCUT_LAN_API/);
+    }
+    // 本机照旧放行
+    assert.equal(await passFrom(fn, LOCAL_CLIENT, { url: '/api/ai/config' }), 'next');
+  } finally {
+    if (prev === undefined) delete process.env.PROMPTCUT_LAN_API; else process.env.PROMPTCUT_LAN_API = prev;
+  }
+});
+
+test('局域网设备打素材服务:放行(素材服务本来就对局域网开放)', async () => {
+  const fn = handlerOf();
+  const hash = 'a'.repeat(64);
+  for (const url of [`/api/asset/media/${hash}`, `/api/asset/media/${hash}/chunks`, `/api/asset/media/${hash}/0`]) {
+    assert.equal(await passFrom(fn, LAN_CLIENT, { url }), 'next', url);
+  }
+});
+
+test('PROMPTCUT_LAN_API=1 时局域网设备可以打普通接口(其余两道判据照旧)', async () => {
+  const fn = handlerOf();
+  const prev = process.env.PROMPTCUT_LAN_API;
+  process.env.PROMPTCUT_LAN_API = '1';
+  try {
+    assert.equal(await passFrom(fn, LAN_CLIENT, { url: '/api/ai/config' }), 'next');
+    const r = await passFrom(fn, LAN_CLIENT, { method: 'POST', url: '/api/ai/config', headers: { 'content-type': 'text/plain' } });
+    assert.equal(r.status, 403, '非 JSON 的 body 照样拒');
+  } finally {
+    if (prev === undefined) delete process.env.PROMPTCUT_LAN_API; else process.env.PROMPTCUT_LAN_API = prev;
+  }
+});
