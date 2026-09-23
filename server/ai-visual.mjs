@@ -18,6 +18,9 @@ async function loadPng() {
   return pngLib;
 }
 
+/** Windows 上对方开着目标文件时改名会 EPERM,最多重试这么多次(见 atomicWrite) */
+const RENAME_ATTEMPTS = 40;
+
 /**
  * 存储目录由几个进程共用(T1a 审查 #13):编辑器进程、预渲染进程(拆分时的 `user` / `agent` 两个也一样)
  * 都从同一个 `PROMPTCUT_EXPORT_DIR`(缺省 `<root>/out`)下的 `ai-visual/` 读写 —— 模型的 `get_gif` 在
@@ -27,7 +30,7 @@ async function loadPng() {
  *
  * 所以这里的每一次写都**先写临时文件再改名**:另一个进程可能正在读同一个文件,直接 `writeFile`
  * 会让它读到半截 JSON(`readJson` 回 null,GET 就成了 404)或半张 GIF。
- * Windows 上对方刚好开着文件时改名会短暂 EPERM / EBUSY / EACCES,重试几次(同 `frame-mov.mjs` 的 `atomic`)。
+ * Windows 上对方刚好开着文件时改名会短暂 EPERM / EBUSY / EACCES,重试(最多 `RENAME_ATTEMPTS` 次,见函数体)。
  */
 export async function atomicWrite(file, data) {
   await fsPromises.mkdir(path.dirname(file), { recursive: true });
@@ -42,14 +45,16 @@ export async function atomicWrite(file, data) {
     await fsPromises.rm(temp, { force: true }).catch(() => {});
     throw error;
   }
+  // 对方一直在读(每次开着文件几毫秒)时,改名只能落在它两次读之间的空档里:多试几次、每次随机等 5～25 ms,
+  // 不和读者的节奏同步;最多约 1 秒。固定退避 5 次(约 0.3 秒)在连续读的另一个进程面前实测会耗尽。
   for (let attempt = 0; ; attempt++) {
     try { await fsPromises.rename(temp, file); return; }
     catch (error) {
-      if (attempt >= 5 || !['EPERM', 'EBUSY', 'EACCES'].includes(error?.code)) {
+      if (attempt >= RENAME_ATTEMPTS || !['EPERM', 'EBUSY', 'EACCES'].includes(error?.code)) {
         await fsPromises.rm(temp, { force: true }).catch(() => {});
         throw error;
       }
-      await new Promise(resolve => setTimeout(resolve, 20 * (attempt + 1)));
+      await new Promise(resolve => setTimeout(resolve, 5 + Math.random() * 20));
     }
   }
 }
