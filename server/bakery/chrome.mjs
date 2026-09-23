@@ -195,6 +195,11 @@ async function newSession(browser, url) {
      * __pcFrameReady 逐层等 seek 到位,这里再等一遍既不需要也等不到。
      */
     if (e.type === 'Media') return;
+    /*
+     * `blob:` 脚本也不算(R9):GL Worker 由一个 blob 引导脚本起,Worker 主脚本请求的收尾事件报在 Worker 自己的
+     * target 上,页面的 Network 域里永远等不到 loadingFinished。blob 是本地内存,本来就没有「在路上」这回事。
+     */
+    if (String(e.request?.url || '').startsWith('blob:')) return;
     inflight.set(e.requestId, `${e.type || '?'} ${String(e.request?.url || '').slice(0, 120)}`);
   });
   for (const ev of ['Network.loadingFinished', 'Network.loadingFailed', 'Network.requestServedFromCache']) {

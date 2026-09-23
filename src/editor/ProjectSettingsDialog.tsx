@@ -57,12 +57,15 @@ export function ProjectSettingsDialog({ open, onClose }: ProjectSettingsDialogPr
   const curName = useStore((s) => s.project.name);
   const curFps = useStore((s) => s.project.fps);
   const curDuration = useStore((s) => s.project.duration);
+  const curGlRoute = useStore((s) => s.project.glRoute);
 
   const [name, setName] = useState("");
   const [ratio, setRatio] = useState<AspectRatio>("16:9");
   const [orientation, setOrientation] = useState<Orientation>("horizontal");
   const [fps, setFps] = useState<Fps>(FALLBACK_FPS);
   const [duration, setDuration] = useState("");
+  /** R9:canvas 卡的共享 WebGL 渲染器走哪条路线;空串 = 按宿主能力(低内存档 shared,否则 perDocument) */
+  const [glRoute, setGlRoute] = useState<"" | "perDocument" | "shared">("");
   const durationInputRef = useRef<HTMLInputElement>(null);
 
   const currentRes = RESOLUTION_MAP[ratio][orientation];
@@ -79,6 +82,8 @@ export function ProjectSettingsDialog({ open, onClose }: ProjectSettingsDialogPr
       // pinned 架构 7：所有步长按 1/fps。成本键含 fps（`cardCostKey`），换了帧率
       // 全部卡的记录都失配 —— `probeRunner` 据此重挡一次遮罩、重测一轮。
       fps,
+      // 切了路线:两个舞台按新的生效路线重建连接;`device` 串跟着变,probeRunner 重挡遮罩、重测(同切 fps)
+      glRoute: glRoute || undefined,
     });
     if (requestedDuration !== curDuration) actions.setDurationManual(requestedDuration);
     onClose();
@@ -105,8 +110,9 @@ export function ProjectSettingsDialog({ open, onClose }: ProjectSettingsDialogPr
       setName(curName);
       setFps(asFps(curFps));
       setDuration(String(curDuration));
+      setGlRoute(curGlRoute ?? "");
     }
-  }, [open, curW, curH, curName, curFps, curDuration]);
+  }, [open, curW, curH, curName, curFps, curDuration, curGlRoute]);
 
   useEffect(() => {
     if (!open) return;
@@ -202,6 +208,20 @@ export function ProjectSettingsDialog({ open, onClose }: ProjectSettingsDialogPr
               {FPS_OPTIONS.map((n) => (
                 <option key={n} value={n}>{n} fps</option>
               ))}
+            </select>
+          </div>
+          <div className="pc-dialog-row">
+            <label className="pc-dialog-label" htmlFor="pc-proj-gl-route">三维渲染</label>
+            <select
+              id="pc-proj-gl-route"
+              data-pc="gl-route-select"
+              className="pc-dialog-select"
+              value={glRoute}
+              onChange={(e) => setGlRoute(e.target.value as "" | "perDocument" | "shared")}
+            >
+              <option value="">自动(按本机内存)</option>
+              <option value="perDocument">每个舞台各一个</option>
+              <option value="shared">两个舞台共用一个(省内存)</option>
             </select>
           </div>
           <div className="pc-dialog-row">

@@ -130,7 +130,8 @@ function deviceStringOf(tuning: PipelineTuning): string {
     renderer: readGpuRenderer(document),
     lowMemory,
     offscreenGl: !!caps?.offscreenGl,
-    glRoute: resolveGlRoute(null, lowMemory),
+    // 生效路线(M2):项目选项优先,否则按低内存档。切了路线等于换机器,旧记录不命中、重探针
+    glRoute: resolveGlRoute(currentProject?.glRoute ?? null, lowMemory),
     mode: RUN_MODE,
     tuning,
   });
