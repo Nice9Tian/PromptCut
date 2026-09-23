@@ -714,6 +714,11 @@ export class StreamPlayer {
     this.planes = planes.filter((p) => Array.isArray(p?.clipIds) && p.clipIds.length && typeof p.key === "string" && p.key);
     this.fps = Math.max(1, fps || 30);
     this.stopped = false;
+    // 不再要的流当场关掉(解码器、持有的 VideoFrame):暂停时父页发一张空表,下一拍不一定还会来
+    const keep = new Set(this.planes.map(planeId));
+    for (const [id, track] of this.tracks) {
+      if (!keep.has(id)) { track.dispose(); this.tracks.delete(id); }
+    }
   }
 
   /** 实体模式开着时 `.pc-proxy` 连流平面一起藏,这里停解码、不占解码帧预算(E7 第 4 条) */

@@ -103,3 +103,16 @@ test('a stopped player ignores present(); planes without a key are placeholders 
   assert.equal(player.diag().stopped, true);
   assert.equal(player.diag().tracks.length, 0);
 });
+
+test('setPlanes drops the streams that are no longer wanted right away (pause sends an empty list)', () => {
+  const player = new StreamPlayer({ root: () => null });
+  const disposed = [];
+  const fake = (id) => ({ dispose: () => disposed.push(id) });
+  player.tracks = new Map([['a#K', fake('a')], ['b#L', fake('b')]]);
+  player.setPlanes([{ clipIds: ['b'], key: 'L' }], 30);
+  assert.deepEqual(disposed, ['a']);
+  assert.deepEqual([...player.tracks.keys()], ['b#L']);
+  player.setPlanes([], 30);
+  assert.deepEqual(disposed, ['a', 'b']);
+  assert.equal(player.tracks.size, 0);
+});
