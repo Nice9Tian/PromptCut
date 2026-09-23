@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { FrameScene } from "./render/FrameScene";
 import { Stage } from "./render/Stage";
@@ -19,6 +19,7 @@ import { clipFrameMode } from "./kernel/frameMode.mjs";
 import { fontFingerprintOf } from "./render/fontFingerprint";
 import { frameWorkStatus, waitForFrameWork } from "./kernel/frameReady";
 import { demoTimeline } from "./demo";
+import { createGlHost, type GlHost } from "./render/gl/glHost";
 import "./cards";
 
 // 只要进了导出视图就把页面时钟量化到导出帧(见 exportClock.ts),必须早于任何卡片挂载
@@ -58,6 +59,33 @@ export default function ExportView() {
   const renderTimeline = useMemo(() => !timeline || !frameClipIds ? timeline : ({ ...timeline,
     clips: timeline.clips.filter(c => frameClipIds.has(c.id)),
   }), [timeline, frameClipIds]);
+  /*
+   * canvas 卡的共享 WebGL 渲染器(R9 M2)。**导出页永远走路线 1**:预渲染进程里没有父页,自己持一个上下文
+   * (懒建:这一帧真有 canvas 卡要画才建,纯 DOM 的项目一个都不开,DOM 一个字不变)。
+   *
+   * **现在在导出页的主线程上画**(同一份渲染器代码、同一张 `programs.ts`、同一套 MSAA FBO → blit → 裁位图),
+   * 不开 Worker:受帧控制的导出页里,Worker 主脚本那个请求的收尾事件报在 Worker 自己的 target 上,
+   * `server/bakery/chrome.mjs` 的 `waitNet` 在页面的 Network 域里看它一直「在路上」,每帧白等 30 秒后报错(实测)。
+   * 导出页的主线程不是用户的交互线程,在这里画不卡任何人。`chrome.mjs` 放过 `blob:` 脚本之后
+   * (补丁见 R9 报告),带 `?glWorker=1` 就改走 Worker —— 像素相同,那是同一份代码。
+   */
+  const glHost = useRef<GlHost | null>(null);
+  useEffect(() => {
+    const worker = new URLSearchParams(location.search).get("glWorker") === "1";
+    const host = createGlHost({ stageId: "export", lowMemory: false, route: "perDocument", mainThread: !worker });
+    glHost.current = host;
+    return () => { host.dispose(); if (glHost.current === host) glHost.current = null; };
+  }, []);
+  /*
+   * 导出页 / 预渲染页**每一帧**发一拍(M3)。帧推进由 `__pcSetT` 的 `flushSync` 驱动,`beat` 就发在
+   * **那次提交的 layout effect** 里 —— gl 平面的登记(子组件的 layout effect)这时已经做完。
+   * 严格的拍:编译、纹理没好就等,不留空帧。`glHost` 自己领 `beginFrameWork('gl')` 的票、收到 `done` 再还,
+   * 所以 `__pcFrameReady`(下面挂的 `waitForFrameWork`)天然把 `done` 等进来,Node 端照旧等它。
+   * 不写依赖:任何一次提交(换帧、换分片窗口、重挂载)都可能换了 gl 平面上该画的那一帧。
+   */
+  useLayoutEffect(() => {
+    void glHost.current?.beat({ strict: true, t });
+  });
   useEffect(() => {
     document.documentElement.style.background = "transparent";
     document.body.style.background = "transparent";

@@ -287,6 +287,14 @@ export interface Project {
    * 透视强度就变了),而 fov 跨画幅稳定。换算见 src/kernel/space3d.ts。
    */
   camera3dFov?: number;
+  /**
+   * canvas 卡的共享 WebGL 渲染器走哪条路线(R9 M2,项目选项)。
+   *   - `perDocument`:每个舞台各一个 Worker 和上下文(桌面默认);
+   *   - `shared`:编辑界面只开一个 Worker 和上下文,两个舞台共用(低内存档默认)。
+   * 不填 = 按宿主能力:`lowMemory` 时 `shared`、否则 `perDocument`(生效值见 `render/costDevice.mjs` 的 `resolveGlRoute`)。
+   * 导出页在预渲染进程里没有父页,永远走 `perDocument`,不看这一项。
+   */
+  glRoute?: "perDocument" | "shared";
   media: MediaAsset[];
   tracks: Track[];
   /** 全部剪辑,按选项栏顺序。老文件没有这个字段,加载时 normalizeCuts 补成三条 */
