@@ -1,6 +1,6 @@
-// R9 M3: two Worker routes, 20 cropped ImageBitmaps per beat, and the whole-atlas fallback.
-// Usage: node scripts/probes/gl-atlas-probe.mjs [--beats 30] [--parent-port 5240] [--child-port 5241]
-// Uses two real HTTP origins; the parent owns the Worker only in the shared route.
+// R9 M3 探针：两条 Worker 路线下每拍裁 20 张 ImageBitmap，以及整张图集一次传回的退路。
+// 用法：node scripts/probes/gl-atlas-probe.mjs [--beats 30] [--parent-port 5240] [--child-port 5241]
+// 起两个真实的 HTTP 源（父页、跨源子页）；只有 shared 路线由父页持有 Worker。
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -71,7 +71,7 @@ try {
   if (results.some(row => !row.pass)) process.exitCode = 1;
 } finally {
   await browserHandle?.close().catch(() => {});
-  // Only the Chrome process launched by this probe may be reaped on Windows.
+  // Windows 上只结束本探针自己起的那个 Chrome。
   if (process.platform === 'win32' && chromeProcess?.pid && chromeProcess.exitCode === null)
     spawnSync('taskkill', ['/F', '/T', '/PID', String(chromeProcess.pid)], { stdio: 'ignore' });
   await closeAll(servers);
