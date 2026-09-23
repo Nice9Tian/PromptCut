@@ -1,6 +1,6 @@
 # 提交与发版
 
-展开 `../04-agent-guide.md`。从属于 04，与它冲突时以 04 为准。写 main 的操作须按 04 原则 4 先得到用户授权。
+展开 `../agent-guide.md`。从属于 `agent-guide.md`，与它冲突时以它为准。写 main 的操作须按 `agent-guide.md` 原则 4 先得到用户授权。
 
 ## 提交
 

@@ -1,6 +1,6 @@
 # 前期准备：素材
 
-展开 `../03-user-workflow.md` 主线的第 1 步。从属于 03，与它冲突时以 03 为准。
+展开 `../user-workflow.md` 主线的第 1 步。从属于 `user-workflow.md`，与它冲突时以它为准。
 
 用户把素材放进项目，或让 Agent 去找。
 

@@ -1,6 +1,6 @@
 # 架构：为什么是这个形状
 
-对应 `docs/semantics/02-architecture.md`。这里只写理由和取舍，不是规范。
+对应 `docs/semantics/architecture.md`。这里只写理由和取舍，不是规范。
 
 ## 从产品目的推出的三条硬要求
 

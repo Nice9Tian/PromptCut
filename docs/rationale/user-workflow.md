@@ -1,6 +1,6 @@
 # 用户工作流程：为什么这样定
 
-对应 `docs/semantics/03-user-workflow.md` 和 `docs/semantics/workflow/`。这里只写理由和取舍，不是规范。
+对应 `docs/semantics/user-workflow.md` 和 `docs/semantics/workflow/`。这里只写理由和取舍，不是规范。
 
 ## 为什么只有两种工作方式
 
