@@ -7,6 +7,7 @@ import { useStore, actions, getState } from "../../store/project";
 import { TimelineProvider, useTimelineContext } from "./TimelineContext";
 import { TrackHeader } from "./TrackHeader";
 import { xOfTime, HEADER_W_MIN, HEADER_W_MAX, TAIL_SLACK_PX, contentEndOf } from "./utils";
+import { effectiveDuration } from "../../kernel/duration";
 import { TrackRow } from "./TrackRow";
 import { Ruler, RULER_H } from "./Ruler";
 import { InsertZones } from "./InsertZones";
@@ -37,13 +38,7 @@ function TimelineInner() {
   // 有个「最短时长」的限制。现在改成:内容末尾就是范围的上界,手动拖短算截断
   // (允许),拖长会被夹回内容末尾。
   useEffect(() => {
-    const contentEnd = contentEndOf(tracks);
-    // 空项目没有内容可依,保留文档里那个值,不然时间轴会塌成 0 宽没法往里拖东西。
-    const target = contentEnd <= 0
-      ? duration
-      : durationManual === null
-        ? contentEnd
-        : Math.min(durationManual, contentEnd);
+    const target = effectiveDuration(contentEndOf(tracks), duration, durationManual);
     if (Math.abs(target - duration) > 1e-6) {
       actions.syncDuration(target);
     }

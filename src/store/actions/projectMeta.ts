@@ -1,4 +1,5 @@
 import { type Project } from "../../kernel/project";
+import { contentEndOf, effectiveDuration, manualDurationFor } from "../../kernel/duration";
 
 import { state, set, setProject } from "../core";
 
@@ -13,10 +14,16 @@ export const projectMeta = {
   rememberCamera3dFov(fov: number | null) {
     set({ lastCamera3dFov: fov });
   },
+  /**
+   * 手动设总时长。比内容末尾短就是截断,记下手动值;等于或更长就回到跟内容走。
+   * 规则见 kernel/duration.ts。
+   */
   setDurationManual(sec: number) {
     const val = Math.max(1, sec);
-    setProject({ ...state.project, duration: val });
-    set({ durationManual: val });
+    const end = contentEndOf(state.project.tracks);
+    const manual = manualDurationFor(val, end);
+    setProject({ ...state.project, duration: effectiveDuration(end, val, manual) });
+    set({ durationManual: manual });
   },
   syncDuration(sec: number) {
     const val = Math.max(1, sec);

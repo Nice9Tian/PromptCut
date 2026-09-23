@@ -53,7 +53,16 @@ export const projectHandlers = {
     if (!hit) return null;
     return { id: clipId, trackId: hit.track.id, clip: hit.clip };
   },
-  setProjectMeta: (args) => { actions.setProjectMeta(args); return { ok: true }; },
+  /**
+   * 总时长不走 setProjectMeta:直接写进项目会被时间轴立刻按内容末尾改回去。
+   * 走手动截断那条路,和用户手动缩短是同一个规则(kernel/duration.ts)。
+   */
+  setProjectMeta: (args) => {
+    const { duration, ...rest } = args ?? {};
+    if (Object.keys(rest).length) actions.setProjectMeta(rest);
+    if (typeof duration === "number" && Number.isFinite(duration)) actions.setDurationManual(duration);
+    return { ok: true, duration: getState().project.duration };
+  },
   /**
    * 三维总开关。**只认 fov,不收相机距离** —— 距离是 fov 和画布高度推出来的,
    * 让人填距离的话换个画幅透视强度就变了(见 kernel/space3d.ts 里的那张表)。

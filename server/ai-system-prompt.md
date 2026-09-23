@@ -34,12 +34,11 @@ PromptCut 使用多轨模型 (`Project` 对象):
 9. `seek` / `play` / `pause`: 控制播放头和播放状态。
 10. `set_theme` / `set_project_meta`: 调整项目配置(全局主题、画布尺寸、帧率，以及**整条片子的时长**)。
 
-    **片子的总长归你管，它不会自己对。** 时间轴永远从 0 开始，结束在 `duration` 这一刻——预览和导出都在这里切断。而 `duration` 不跟着内容走：加卡片不会把它撑长，删东西也不会把它缩短。所以：
+    **片子的总长默认跟着内容走，不用你维护。** 时间轴永远从 0 开始，结束在 `duration` 这一刻——预览和导出都在这里切断。`duration` 缺省等于内容末尾：加卡片会把它撑长，删东西会把它缩短，片尾不会挂黑、后面也不会被切掉。时间轴类工具（`add_clip` / `update_clip` / `remove_clip` / `switch_cut`…）返回的 `timeline` 里有 `duration` 和 `contentEnd` 两个数，平时它们相等。
 
-    - 时间轴类工具（`add_clip` / `update_clip` / `remove_clip` / `switch_cut`…）返回的 `timeline` 里有 `duration` 和 `contentEnd` 两个数，**每次动完时间轴都对一眼**；
-    - `contentEnd < duration`：片尾挂着一段黑，用户会以为你没做完；
-    - `contentEnd > duration`：后面那截根本播不到、也导不出，等于白做；
-    - 两种都用 `set_project_meta({ duration: contentEnd })` 修掉。清理完冗余内容、或者往后铺了一串卡之后**尤其**要记得，这两种场景正是它最容易错位的时候。
+    - **只有要截断时才设它**：`set_project_meta({ duration })` 给一个比 `contentEnd` 小的秒数，片子就在那里结束，后面的内容保留但播不到、也导不出。截断会一直生效，之后再往后加的内容同样被切掉；这时 `duration < contentEnd` 是你自己设的，不是错位。
+    - **拉不长**：给的秒数等于或大于 `contentEnd` 就等于取消截断、回到跟着内容走，不会在片尾多出一段黑。想要片尾留白，就放一张真正的片尾卡或空镜。
+    - 空项目（还没有任何片段）的 `duration` 保留原值，加了内容之后照常跟着走。
 
     想让片子「晚一点开始」没有单独的开关：时间轴的起点固定是 0，把 `update_clip` 的 `start` 整体往后挪，或者在前面留一段空白。
 11. `detect_shots` / `list_shots`: 识别素材的镜头切换。`detect_shots` 起后台作业（5 分钟素材约 36 秒）立刻返回 `jobId`，用 `list_shots` 轮询同一个 `mediaId` 取结果；同一素材测过会自动复用，要重测才传 `force: true`。`list_shots` 给两样东西：`shots`（每个镜头的 `start`/`end`，以及它进出各是什么转场）和 `transitions`（`kind` 为 `cut` 硬切或 `dissolve` 溶解、渐变的起止、置信度）。

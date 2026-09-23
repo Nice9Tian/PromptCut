@@ -22,19 +22,10 @@ export const HEADER_W_MAX = 420;
 export const TAIL_SLACK_PX = 200;
 
 /**
- * 可见内容的末尾:最后一个片段的结束时间。没有任何片段就是 0。
- *
- * 播放范围的上界就是它 —— 空无一物的地方不该能播,拖到那里也只会看到黑屏。
+ * 可见内容的末尾。播放范围的上界就是它 —— 空无一物的地方不该能播,拖到那里也只会
+ * 看到黑屏。规则本身在 kernel/duration.ts。
  */
-export function contentEndOf(tracks: Track[]): number {
-  let end = 0;
-  for (const track of tracks) {
-    for (const clip of track.clips) {
-      if (clip.end > end) end = clip.end;
-    }
-  }
-  return end;
-}
+export { contentEndOf } from "../../kernel/duration.ts";
 
 /**
  * 可见内容的开头:最早一个片段的开始时间。没有任何片段就是 0。

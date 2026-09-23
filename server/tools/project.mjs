@@ -19,7 +19,7 @@ export const projectTools = [
   },
   {
     name: "set_project_meta",
-    description: "设置项目元数据:名称、画布宽高、帧率、**整条片子的时长**、主题。改时间轴的总长度就用这里的 `duration` —— 它是唯一的入口,没有别的工具能改。",
+    description: "设置项目元数据:名称、画布宽高、帧率、主题,以及截断整条片子。总时长默认跟着内容走,只有要截断时才传 `duration`。",
     inputSchema: {
       type: "object",
       properties: {
@@ -30,10 +30,9 @@ export const projectTools = [
         duration: {
           type: "number",
           description:
-            "整条片子多长,单位秒。时间轴从 0 开始、到这里结束,**预览和导出都在这一刻切断**。" +
-            "它不会自己跟着内容走:加卡片不会把它撑长,删东西也不会把它缩短(只有拖素材上轨道时会往长了顶一次)。" +
-            "所以排完版要自己对一遍 —— 工具返回的 timeline 里 contentEnd 是内容实际结束的位置," +
-            "比 duration 小就是片尾挂了一段黑,比 duration 大就是后面那截被切掉了,两种都要把 duration 设成 contentEnd。"
+            "把片子截断到这一秒,单位秒。时长缺省等于内容末尾(工具返回的 timeline 里的 contentEnd)," +
+            "加内容会撑长、删内容会缩短,不用你维护。给一个比 contentEnd 小的数就是截断:预览和导出都在这一刻切断," +
+            "之后再加的内容也被切掉,直到取消。给等于或大于 contentEnd 的数就是取消截断、回到跟着内容走 —— 拉不长。"
         },
         themeId: { type: "string", description: "全局主题 id" }
       }

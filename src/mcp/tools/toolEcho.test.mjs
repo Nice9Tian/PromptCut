@@ -81,24 +81,22 @@ test("timelineDigest 只带 id/卡或素材/起止，不带 params，秒数保�
 });
 
 /*
- * 项目时长和内容实际结束的位置**必须一起回显**。
+ * 项目时长和内容实际结束的位置**一起回显**。
  *
- * 这两个数错位是看不见的:store 里只有「拖素材上轨道」会把 duration 往长了顶一次,
- * removeClip 根本不动它,卡片类的 clip 连顶都不顶。于是「清理完冗余内容」之后
- * 时长还停在老的最大值,片尾挂着一段黑;往后铺卡铺过了头,超出的那截直接被切掉。
- * 模型每一步都收到这份回显,却看不到这个数,自然想不到要去 set_project_meta 修。
+ * 时长缺省跟着内容走,两者平时相等;duration 比 contentEnd 小是被截断了
+ * (kernel/duration.ts)。回显只照实报两个数,不互相推。
  */
 test("timelineDigest 带上项目时长和内容实际的结束位置", () => {
   const p = (duration, tracks) => timelineDigest({
     version: 1, name: "p", width: 1, height: 1, fps: 30, duration, media: [], tracks,
   });
 
-  // 删剩一张短卡:时长没跟着缩,片尾挂着一段黑
+  // 两个数各报各的,不拿一个去推另一个
   const shrunk = p(30, [{ id: "t1", name: "s", clips: [{ id: "c1", cardId: "x", start: 0, end: 12, params: {} }] }]);
   assert.equal(shrunk.duration, 30);
   assert.equal(shrunk.contentEnd, 12);
 
-  // 卡铺过了头:超出 duration 的那截播不到也导不出
+  // 截断:duration 比内容末尾短
   const overflow = p(30, [{ id: "t1", name: "s", clips: [{ id: "c1", cardId: "x", start: 0, end: 42.5, params: {} }] }]);
   assert.equal(overflow.contentEnd, 42.5);
 
