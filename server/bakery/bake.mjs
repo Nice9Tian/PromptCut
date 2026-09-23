@@ -107,9 +107,17 @@ export async function bakeFrames(bakery, opts = {}) {
    *
    * 所以生成快照之前先画一拍、把图丢掉。只加在快照这一侧:整帧导出不生成快照,
    * 一步也不多走,逐字节基线不受影响。图要最便宜的(jpeg quality 0),反正立刻扔掉。
+   *
+   * `prime`:上一个时间点没画过(没截图、也没推过这一拍)时要**画两拍**。只画一拍,
+   * Motion 的值还停在上一次画帧时的相位 —— 实测 punch-pill 只取第 8 帧(前面 0～7 帧只推时间、
+   * 不截图),推一拍后快照里药丸仍是第 1 帧的 `scale(0.933311)`,活渲已经是 `none`。
+   * 和 `captureFrame` 的 `prime` 是同一件事、同一个判据:紧挨着的上一帧画过才能省。
    */
   const FLUSH_SHOT = { format: 'jpeg', quality: 0 };
-  const flushFrameLoop = () => beginFrame({ screenshot: FLUSH_SHOT });
+  const flushFrameLoop = async (prime) => {
+    if (prime) await beginFrame({ screenshot: FLUSH_SHOT });
+    await beginFrame({ screenshot: FLUSH_SHOT });
+  };
 
   /** 截一张:发一拍并要这一拍的截图。此刻动画已钉住、页面时钟已量化,这一拍里画面不会再变
    *  prime:上一个时间点没截过图时先截一张丢掉,见 captureFrame。primeCapture:false 只给回归对照用 */
@@ -132,7 +140,8 @@ export async function bakeFrames(bakery, opts = {}) {
         await beginFrame();
         await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
       }
-      await flushFrameLoop();
+      // prime 只按「上一帧截没截过图」判,不知道 renderPass 这一帧是不是已经推过 —— 宁可多画一拍(幂等)
+      await flushFrameLoop(prime);
       const snapshot = await page.evaluate(() => window.__pcCreateSnapshot());
       if (snapshot.lossy) throw new Error(`Cannot snapshot ${snapshot.lossy} canvas elements`);
       return captureSnapshot(bakery, snapshot.html, shotParams);
@@ -259,6 +268,7 @@ export async function bakeFrames(bakery, opts = {}) {
   const renderPass = async (allowSkip) => {
     let lastBuf = null;  // 上一张**真截**出来的图
     let lastShotFrame = null; // 上一张真截对应的帧号:紧挨着的上一帧截过图才能省掉预热
+    let lastDrawnFrame = null; // 上一次带截图的一拍落在哪一帧(真截和生成快照前推的那一拍都算),见 flushFrameLoop
     let lastDom = null;  // 上一份冻结下来的舞台(gzip 过的)
     let runLen = 0;      // 已经连续复用了几帧
     // 上一张真截对应的遮罩:undefined = 还没截过(null = 截了,没有玻璃)。静止帧复用卡片图时遮罩也一起复用
@@ -286,7 +296,8 @@ export async function bakeFrames(bakery, opts = {}) {
       const isStatic = await step(i, wantShot);
       const snapshotWanted = domDir || (opts.onSnapshot && (!opts.snapshotFrames || opts.snapshotFrames.has(i)));
       if (snapshotWanted) {
-        await flushFrameLoop();
+        await flushFrameLoop(lastDrawnFrame !== i - 1);
+        lastDrawnFrame = i;
         const { html, lossy, controls } = await page.evaluate(() => window.__pcCreateSnapshot());
         if (lossy) throw new Error('HTML snapshot contains unreadable canvases');
         if (opts.onSnapshot && snapshotWanted) await opts.onSnapshot(i, html, controls);
@@ -309,7 +320,7 @@ export async function bakeFrames(bakery, opts = {}) {
         if (runLen % verifyEvery === 0) {
           // 便宜的保险:连续复用到第 verifyEvery 帧就强制真截一张比一次。对不上就整趟作废重跑
           const real = await shoot(lastShotFrame !== i - 1);
-          lastShotFrame = i;
+          lastShotFrame = lastDrawnFrame = i;
           if (!real.equals(lastBuf)) { await Promise.all(writes.splice(0)); return i; }
           lastBuf = real;
           buf = real;
@@ -321,7 +332,7 @@ export async function bakeFrames(bakery, opts = {}) {
       } else {
         runLen = 0;
         buf = await shoot(lastShotFrame !== i - 1);
-        lastShotFrame = i;
+        lastShotFrame = lastDrawnFrame = i;
         lastBuf = buf;
       }
       const name = String(i).padStart(6, '0');

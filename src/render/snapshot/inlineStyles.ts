@@ -37,9 +37,20 @@
  *      省掉,重放就是 0。
  * 两条都靠「强制内联」解决:前者读 `el.style`,后者读一次 `root.getAnimations({ subtree: true })`
  * 的关键帧属性名。
+ *
+ * # 两处不照抄计算值(重放要和活渲逐字节相同,见 replay-mismatch-report.md 第二轮)
+ *
+ *   1. **合成层**:活渲时,有 current 动画改写 opacity / transform / filter 的元素会被 Chrome
+ *      单独提一层;快照写死了 `animation:none`,这层就没了,`filter: blur()` 换一条栅格化路径,
+ *      能差出上百级。所以给这些元素补一条 `will-change`(`COMPOSITED_ANIMATION_PROPS`)。
+ *   2. **1/64 px**:`getComputedStyle` 只给 6 位有效数字,排版值回灌时掉一格;
+ *      `LAYOUT_UNIT_PROPS` 里的 px 数写之前对齐回 1/64 格(`snapLayoutUnits`)。
+ * 两条都只改快照里写什么,不碰活渲 —— 整帧导出不生成快照,逐字节基线不受影响。
  */
 
-import { INHERITED_PROPS, LAYOUT_USED_VALUE_PROPS } from "./snapshotStyleProps.mjs";
+import {
+  INHERITED_PROPS, LAYOUT_USED_VALUE_PROPS, LAYOUT_UNIT_PROPS, COMPOSITED_ANIMATION_PROPS, snapLayoutUnits, isCurrentAnimation,
+} from "./snapshotStyleProps.mjs";
 
 export const HTML_NS = "http://www.w3.org/1999/xhtml";
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -129,12 +140,22 @@ const DASH = /[A-Z]/g;
 const dashed = (name: string) => (name.startsWith("--") ? name : name.replace(DASH, (c) => "-" + c.toLowerCase()));
 const KEYFRAME_META = new Set(["offset", "computedOffset", "easing", "composite"]);
 
+interface AnimatedProps {
+  /** 被动画 / 过渡改写的属性:一律强制内联(文件头「两条必须有的兜底」第 2 条) */
+  written: Map<Element, Set<string>>;
+  /**
+   * 因为有 current 动画而被 Chrome 单独提层的属性(`COMPOSITED_ANIMATION_PROPS` 里的那些)。
+   * 快照写死了 `animation:none`,这层在重放页里就没了,所以要补成 `will-change`,见 `buildStyle`。
+   */
+  promoted: Map<Element, Set<string>>;
+}
+
 /**
  * 哪些元素的哪些属性正被动画 / 过渡改写。整棵树一次 `getAnimations`,不逐元素问
  * (lottie 那种几千节点的卡逐元素问会把样式内联的时间吃掉)。
  */
-function animatedProps(root: Element): Map<Element, Set<string>> {
-  const out = new Map<Element, Set<string>>();
+function animatedProps(root: Element): AnimatedProps {
+  const out: AnimatedProps = { written: new Map(), promoted: new Map() };
   let list: Animation[];
   try {
     list = root.getAnimations({ subtree: true });
@@ -145,21 +166,31 @@ function animatedProps(root: Element): Map<Element, Set<string>> {
     const effect = anim.effect as KeyframeEffect | null;
     const target = effect && (effect as unknown as { target?: Element }).target;
     if (!target || typeof (effect as unknown as { getKeyframes?: unknown }).getKeyframes !== "function") continue;
-    let set = out.get(target);
-    if (!set) out.set(target, (set = new Set()));
+    let set = out.written.get(target);
+    if (!set) out.written.set(target, (set = new Set()));
     let frames: Keyframe[] = [];
     try {
       frames = effect!.getKeyframes();
     } catch { /* 有些实现对没有关键帧的效果会抛 */ }
-    for (const frame of frames) for (const name in frame) if (!KEYFRAME_META.has(name)) set.add(dashed(name));
+    const names = new Set<string>();
+    for (const frame of frames) for (const name in frame) if (!KEYFRAME_META.has(name)) names.add(dashed(name));
+    for (const name of names) set.add(name);
+    // 伪元素上的动画提的是伪元素的层,内联样式够不着,不补
+    if (effect!.pseudoElement || !isCurrentAnimation(effect!.getComputedTiming(), anim.playbackRate, anim.playState)) continue;
+    for (const name of names) {
+      if (!COMPOSITED_ANIMATION_PROPS.has(name)) continue;
+      let promoted = out.promoted.get(target);
+      if (!promoted) out.promoted.set(target, (promoted = new Set()));
+      promoted.add(name);
+    }
   }
   return out;
 }
 
 /** 元素自带的内联样式属性 + 动画改写的属性 —— 这两类一律强制内联,见文件头 */
-function forcedProps(el: Element, animated: Map<Element, Set<string>>): Set<string> | null {
+function forcedProps(el: Element, animated: AnimatedProps): Set<string> | null {
   const inline = (el as HTMLElement).style;
-  const fromAnim = animated.get(el);
+  const fromAnim = animated.written.get(el);
   const count = inline ? inline.length : 0;
   if (!count && !fromAnim) return null;
   const out = fromAnim ? new Set(fromAnim) : new Set<string>();
@@ -170,10 +201,28 @@ function forcedProps(el: Element, animated: Map<Element, Set<string>>): Set<stri
 type BuiltStyle = { text: string; inherited: Record<string, string> | null };
 
 /**
+ * 这个元素的几何值能不能按 1/64 px 对齐(`snapLayoutUnits`,口径见 `LAYOUT_UNIT_PROPS`)。
+ * 只有走 CSS 排版的盒子才在 LayoutUnit 网格上:
+ *   - SVG 内部元素(父元素也是 SVG)的 `width` / `height` 是浮点几何,对齐会挪动图形,不对齐;
+ *     最外层 `<svg>` 自己是 CSS 盒子,照常对齐;
+ *   - `zoom` 不为 1 的子树里,计算样式给的是缩放前的值,网格不再是 1/64,保持原样。
+ */
+function onLayoutGrid(el: Element, cs: CSSStyleDeclaration, parentZoomed: boolean): { snap: boolean; zoomed: boolean } {
+  const zoomed = parentZoomed || (cs.zoom !== "" && cs.zoom !== "1");
+  const svgInner = el.namespaceURI === SVG_NS && el.parentElement?.namespaceURI === SVG_NS;
+  return { snap: !zoomed && !svgInner, zoomed };
+}
+
+/**
  * 按三类判据拼一个元素的样式串,同时把它自己的继承属性值留给子元素做比对。
  *
  * 返回的 `inherited` 在「一个都没变」时**直接复用父元素那个对象**,不新建 —— lottie 一张卡
  * 几千个元素,每个都存一份上百项的记录会把内存吃光。
+ *
+ * 另有两处不是「照抄计算值」(都是为了让重放逐字节等于活渲,见 `snapshotStyleProps.mjs`):
+ *   - `snap`:`LAYOUT_UNIT_PROPS` 里的 px 数对齐回 1/64 格,补回 6 位有效数字丢掉的那一点;
+ *   - `promote`:有 current 动画的元素补一条 `will-change`,要回活渲时的合成层。
+ *     元素自己本来就写了 `will-change` 的,合并成一条,不另起一条去盖它。
  */
 function buildStyle(
   cs: CSSStyleDeclaration,
@@ -181,6 +230,8 @@ function buildStyle(
   parentInherited: Record<string, string> | null,
   forced: Set<string> | null,
   baseline: Baseline | undefined,
+  snap: boolean,
+  promote: Set<string> | undefined,
 ): BuiltStyle {
   const compareParent = !isTop && parentInherited;
   let inherited: Record<string, string> | null = compareParent ? parentInherited : null;
@@ -195,7 +246,8 @@ function buildStyle(
   let text = "";
   for (let k = 0; k < cs.length; k++) {
     const prop = cs.item(k);
-    const value = cs.getPropertyValue(prop);
+    if (promote && prop === "will-change") continue;   // 循环后合并着写
+    const value = snap && LAYOUT_UNIT_PROPS.has(prop) ? snapLayoutUnits(cs.getPropertyValue(prop)) : cs.getPropertyValue(prop);
     if (isInherited(prop)) {
       // ① 继承属性:和父元素的计算值比。顶层元素没有可信的父元素,一律内联。
       if (compareParent && parentInherited![prop] === value && !(forced && forced.has(prop))) continue;
@@ -207,6 +259,12 @@ function buildStyle(
     if (LAYOUT_USED_VALUE_PROPS.has(prop) || (forced && forced.has(prop))) { text += prop + ":" + value + ";"; continue; }
     // ③ 其余非继承属性和同标签基线比
     if (!baseline || baseline.get(prop) !== value) text += prop + ":" + value + ";";
+  }
+  if (promote) {
+    const own = cs.getPropertyValue("will-change");
+    const list = own && own !== "auto" ? own.split(",").map((s) => s.trim()) : [];
+    for (const prop of promote) if (!list.includes(prop)) list.push(prop);
+    text += "will-change:" + list.join(", ") + ";";
   }
   return { text, inherited };
 }
@@ -247,6 +305,8 @@ export function inlineDOMStyles(
 
   const inheritedOf = new Map<Element, Record<string, string> | null>();
   const topOf = new Map<Element, boolean>();
+  const zoomedOf = new Map<Element, boolean>();
+  const snapOf = new Map<Element, boolean>();
   for (let i = 0; i < orig.length; i++) {
     const from = orig[i];
     const cs = getComputedStyle(from);
@@ -254,9 +314,13 @@ export function inlineDOMStyles(
     // 顶层 = 整场景 html 的场景根,或 control 快照里包裹层的直接子节点
     const isTop = from === root || isClipWrapper(parent);
     const parentInherited = isTop || !parent ? null : inheritedOf.get(parent) ?? null;
-    const built = buildStyle(cs, isTop, parentInherited, forcedProps(from, animated), baselines.get(keyOf(from)));
+    const grid = onLayoutGrid(from, cs, !!parent && (zoomedOf.get(parent) ?? false));
+    const built = buildStyle(cs, isTop, parentInherited, forcedProps(from, animated), baselines.get(keyOf(from)),
+      grid.snap, animated.promoted.get(from));
     inheritedOf.set(from, built.inherited);
     topOf.set(from, isTop);
+    zoomedOf.set(from, grid.zoomed);
+    snapOf.set(from, grid.snap);
     copy[i].setAttribute("style", built.text + STOP_CLOCKS);
   }
 
@@ -265,7 +329,10 @@ export function inlineDOMStyles(
       const parent = el.parentElement;
       const isTop = topOf.get(el) ?? (el === root || isClipWrapper(parent));
       const parentInherited = isTop || !parent ? null : inheritedOf.get(parent) ?? null;
-      const built = buildStyle(getComputedStyle(el), isTop, parentInherited, forcedProps(el, animated), baselines.get(tagKey(ns, tag)));
+      const cs = getComputedStyle(el);
+      const snap = snapOf.get(el) ?? onLayoutGrid(el, cs, !!parent && (zoomedOf.get(parent) ?? false)).snap;
+      const built = buildStyle(cs, isTop, parentInherited, forcedProps(el, animated), baselines.get(tagKey(ns, tag)),
+        snap, animated.promoted.get(el));
       return built.text + STOP_CLOCKS;
     },
   };
