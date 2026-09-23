@@ -7,8 +7,11 @@ import { FramePipeline } from '../server/frame-pipeline.mjs';
 import { bakeFrames, findFfmpeg } from '../server/bakery/index.mjs';
 import { exportUnified } from '../server/bakery/export-unified.mjs';
 import { captureSnapshot } from '../server/bakery/capture-snapshot.mjs';
+import { devOrigin } from './probes/probe-connect.mjs';
 
-const origin = process.env.PC_FRAME_TEST_URL || 'http://127.0.0.1:5192';
+// 不给 PC_FRAME_TEST_URL 就打 .claude/launch.json 里的 dev-test(验证环境),和 scripts/probes/ 同一个来源。
+// 原来写死的 5192 是用户常驻编辑台(5190)的舞台端口,别碰
+const origin = process.env.PC_FRAME_TEST_URL || devOrigin();
 const root = path.resolve('out', `frame-verification-${Date.now()}`);
 await fs.mkdir('out/media', { recursive: true });
 const name = `frame-verification-${Date.now()}.webm`;
