@@ -450,7 +450,8 @@ export async function bakeStream(bakery, opts) {
   const stride = Math.max(1, Math.round(Number(opts.stride) || 1));
   const cancelled = () => Object.assign(new Error('已取消'), { cancelled: true });
   let lease = bakery.streamLease;
-  const continues = !!lease && !lease.dirty && lease.streamSignature === streamSignature && fromFrame === lease.lastFrame + 1;
+  // 页面换过(`bakery.reset` 换了一个新 page)也算断:租约里的 stepper 绑的是旧页面
+  const continues = !!lease && !lease.dirty && lease.page === page && lease.streamSignature === streamSignature && fromFrame === lease.lastFrame + 1;
   let reset = false;
   if (!continues) {
     const timeline = await page.evaluate(() => window.__pcTimeline);
@@ -471,7 +472,7 @@ export async function bakeStream(bakery, opts) {
     // 截图矩形在预热之前就定下来:改设备度量会让合成面换尺寸,预热那几拍正好把它推稳
     if (opts.clip !== undefined) await applyCaptureClip(bakery, opts.clip);
     await warmUpAt(bakery, stepper, { startFrame, warmFrames: opts.warm ?? 3, frameWindow: null, signal });
-    lease = bakery.streamLease = { streamSignature, lastFrame: startFrame - 1, lastShot: null, stepper, dirty: false, fps };
+    lease = bakery.streamLease = { streamSignature, lastFrame: startFrame - 1, lastShot: null, stepper, dirty: false, fps, page };
     reset = true;
   }
   const stats = { reset, replayed: 0, captured: 0, captureMs: 0, stepMs: 0 };

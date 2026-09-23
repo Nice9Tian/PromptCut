@@ -19,6 +19,9 @@
  *   - 点画布能点中它(`hitTest`);组流(`--group`)时点组流平面命中的是背后组内被抑制的卡;
  *   - 冷 seek 到解出目标帧的耗时(≤ 60 ms);
  *   - 暂停在某一帧:舞台截图和导出页同一帧的整帧 PNG 逐像素比(有损编码的误差,记平均值);截图存盘;
+ *   - 毛玻璃卡(里程表,活渲)叠在流画布上:那一块和导出同一帧逐像素比(模糊采样到了下面的流);
+ *   - 缺分段:平面的就绪区间少给几段,那几段里流平面清成透明、播放头照走(`frame` 不停、不跳);
+ *   - 对照:同一台舞台不挂流平面时的节拍(流的解码合成不拖慢节拍);
  *   - `setRole('back')` 之后 `streamPlayer` 停下、全部 `VideoFrame` 关掉。
  */
 import fs from 'node:fs/promises';
@@ -89,16 +92,27 @@ function rgbOver(pngBuf, bg = [0x20, 0x20, 0x20]) {
   return { width: png.width, height: png.height, rgb: out };
 }
 
-function compare(a, b) {
+function compare(a, b, region = null) {
   if (a.width !== b.width || a.height !== b.height) return { sizeMismatch: [a.width, a.height, b.width, b.height] };
-  let sum = 0, max = 0, over8 = 0;
-  for (let i = 0; i < a.rgb.length; i++) {
+  const r = region ?? { x: 0, y: 0, w: a.width, h: a.height };
+  let sum = 0, max = 0, over8 = 0, n = 0;
+  for (let y = r.y; y < r.y + r.h; y++) for (let x = r.x; x < r.x + r.w; x++) for (let k = 0; k < 3; k++) {
+    const i = (y * a.width + x) * 3 + k;
     const d = Math.abs(a.rgb[i] - b.rgb[i]);
-    sum += d;
+    sum += d; n++;
     if (d > max) max = d;
     if (d > 8) over8++;
   }
-  return { meanAbs: +(sum / a.rgb.length).toFixed(4), max, over8Ratio: +(over8 / a.rgb.length).toFixed(6) };
+  return { meanAbs: +(sum / n).toFixed(4), max, over8Ratio: +(over8 / n).toFixed(6) };
+}
+
+/** 一段时间里 `frame` 事件的节拍(测试页记的) */
+function beatsOf(frames, fps) {
+  const steps = frames.slice(1).map((f, i) => +(f.sec - frames[i].sec).toFixed(6));
+  const gaps = frames.slice(1).map((f, i) => f.at - frames[i].at).sort((a, b) => a - b);
+  return { count: frames.length, first: frames[0]?.sec, last: frames.at(-1)?.sec, secStepsUnique: [...new Set(steps)],
+    noSkip: steps.every(s => Math.abs(s - 1 / fps) < 1e-6),
+    gapMedianMs: gaps.length ? +gaps[gaps.length >> 1].toFixed(2) : null, gapP90Ms: gaps.length ? +gaps[Math.floor(gaps.length * 0.9)].toFixed(2) : null };
 }
 
 const out = { origin, group: GROUP, out: OUT };
@@ -112,7 +126,8 @@ try {
   if (!producer) throw new Error('轨道流没生产完');
   const layers = latestLayers(produced.layers);
   out.layers = layers.map(l => ({ clipId: l.clipId, key: l.key.slice(0, 12), ranges: l.ranges, groupClipIds: l.groupClipIds ?? null }));
-  const heavy = PROJECT.tracks.flatMap(t => t.clips.map(c => c.id));
+  // 播放中被抑制的:有流的那几张(毛玻璃的里程表不进流,照常活渲 —— 它要模糊的正是下面的流画布)
+  const heavy = [...new Set(layers.flatMap(l => l.groupClipIds?.length ? l.groupClipIds : [l.clipId]))];
   // 父页那一侧的合成:就绪索引里 `stream` 层 → 平面(有 groupClipIds 的一条组流)
   const planes = layers.map(l => ({ clipIds: l.groupClipIds?.length ? l.groupClipIds : [l.clipId], key: l.key, ranges: l.ranges }));
   out.planes = planes.map(p => ({ clipIds: p.clipIds, ranges: p.ranges }));
@@ -151,6 +166,13 @@ try {
   await rpcB('setProject', PROJECT, { reset: true });
   await rpc('setRole', 'front');
   await rpcB('setRole', 'back', { job: 'probe' });
+  // 对照:不挂流平面、也不抑制,同一段播放的节拍
+  await rpc('setTime', 0);
+  await page.evaluate(() => { window.__frames = []; });
+  await rpc('play', 0);
+  await new Promise(r => setTimeout(r, 1500));
+  await rpc('pause');
+  out.beatsNoStreams = beatsOf(await page.evaluate(() => window.__frames), PROJECT.fps);
   // B 是 back:就算发了平面也不能建 decoder
   await rpcB('setStreamPlanes', planes);
   // 父页的 C5:播放中发 setSuppressed(H(t)) + setStreamPlanes(...)
@@ -181,12 +203,10 @@ try {
   check(!!hash1 && hash1.h === hash2?.h, '被抑制的粒子卡:自己那块画布的像素哈希在抑制期间不变', out.bgCanvas);
   check(!!hash1 && hash1.localFrame !== hash2?.localFrame, '被抑制的粒子卡:包裹层的 data-pc-local-frame 仍随 t 变', out.bgCanvas);
   // 节拍
-  const frames = await page.evaluate(() => window.__frames);
-  const steps = frames.slice(1).map((f, i) => +(f.sec - frames[i].sec).toFixed(6));
-  const gaps = frames.slice(1).map((f, i) => f.at - frames[i].at).sort((a, b) => a - b);
-  out.beats = { count: frames.length, first: frames[0]?.sec, last: frames.at(-1)?.sec,
-    secStepsUnique: [...new Set(steps)], gapMedianMs: gaps.length ? +gaps[gaps.length >> 1].toFixed(2) : null, gapP90Ms: gaps.length ? +gaps[Math.floor(gaps.length * 0.9)].toFixed(2) : null };
-  check(steps.every(s => Math.abs(s - 1 / PROJECT.fps) < 1e-6), '播放中 frame 的 sec 差恒为 1/fps(不跳帧)', out.beats.secStepsUnique);
+  out.beats = beatsOf(await page.evaluate(() => window.__frames), PROJECT.fps);
+  check(out.beats.noSkip, '播放中 frame 的 sec 差恒为 1/fps(不跳帧)', out.beats.secStepsUnique);
+  check(out.beats.gapMedianMs !== null && out.beatsNoStreams.gapMedianMs !== null && out.beats.gapMedianMs <= out.beatsNoStreams.gapMedianMs + 3,
+    '贴流不拖慢节拍(frame 间隔中位数和不挂流平面时相差 ≤ 3 ms)', { streams: out.beats, none: out.beatsNoStreams });
   // 解码器状态
   const d = await diagA();
   out.diagMid = mid.streams;
@@ -224,8 +244,15 @@ try {
     const exportFile = path.join(OUT, `export-${stop.stoppedAt?.toFixed(3)}.png`);
     await fs.writeFile(exportFile, exportBuf);
     out.exportShot = exportFile;
-    out.compare = compare(rgbOver(shot), rgbOver(exportBuf));
+    const stageRgb = rgbOver(shot), exportRgb = rgbOver(exportBuf);
+    out.compare = compare(stageRgb, exportRgb);
     check(!out.compare.sizeMismatch && out.compare.meanAbs < 3, '暂停帧:舞台(贴流)与导出同一帧的平均误差 < 3/255', out.compare);
+    // 毛玻璃(里程表)那一块:它活渲,背后是流画布 —— 模糊采样对了,这一块和导出就对得上
+    const glass = PROJECT.tracks.flatMap(t => t.clips).find(c => c.id === 'clip-glass')?.frame;
+    if (glass) {
+      out.compareGlass = compare(stageRgb, exportRgb, { x: glass.x, y: glass.y, w: glass.w, h: Math.min(glass.h, 1080 - glass.y) });
+      check(out.compareGlass.meanAbs < 3, '毛玻璃卡叠在流画布上:那一块和导出同一帧的平均误差 < 3/255', out.compareGlass);
+    }
   }
   // 命中测试:药丸的中心 → 药丸;没有药丸的地方 → 粒子背景(它的流平面铺满画面)
   out.hit = { pill: await rpc('hitTest', 960, 540), corner: await rpc('hitTest', 60, 1000) };
@@ -260,6 +287,25 @@ try {
     }
   }, 3.9, PROJECT.fps);
   check(out.seek.ms !== null && out.seek.ms <= 60, '冷 seek 到解出目标帧 ≤ 60 ms', out.seek);
+  // 缺分段:粒子背景只给前两段(0～29 帧)就绪,从第 1 秒起播 —— 第 30 帧起那一层透明、播放头照走
+  if (!GROUP) {
+    const bgPlane = planes.find(p => p.clipIds.length === 1 && p.clipIds[0] === 'clip-bg');
+    if (bgPlane) {
+      await rpc('setTime', 1);
+      await rpc('setStreamPlanes', planes.map(p => p === bgPlane ? { ...p, ranges: [[0, 1]] } : p));
+      await page.evaluate(() => { window.__frames = []; });
+      await rpc('play', 1);
+      await new Promise(r => setTimeout(r, 900));
+      const missing = await diagA();
+      await rpc('pause');
+      const beats = beatsOf(await page.evaluate(() => window.__frames), PROJECT.fps);
+      const bg = missing.streams.tracks.find(t => t.id.startsWith('clip-bg#'));
+      out.missing = { beats, bg };
+      check(beats.noSkip && beats.last > 1.5, '缺分段时播放头不停、不跳帧', beats);
+      check(!!bg && bg.lastDrawn === null && bg.blanks >= 1, '缺分段的那一层清成透明', bg);
+      await rpc('setStreamPlanes', planes);
+    }
+  }
   // 退回后台:streamPlayer 停下、帧全部关掉
   await rpc('setRole', 'back', { job: 'probe' });
   const after = await diagA();

@@ -71,6 +71,9 @@ test('a skipped segment, another stream or a dirty lease breaks the lease; a rem
   assert.equal(dirty.reset, true, '租约被别的调用弄脏');
   assert.equal(dirty.replayed, 60 - 50, '从挂载帧起回放(不截图)到这一段之前');
   assert.equal(bakery.log.setFrameWindow.length, 4);
+  // 页面被换掉(`bakery.reset` 开了一个新 page):租约里的 stepper 绑的是旧页面,也算断
+  bakery.page = { ...bakery.page };
+  assert.equal((await bakeStream(bakery, { ...seg(5), streamSignature: 'OTHER', onFrame: async () => {} })).reset, true, '换了页面');
 });
 
 test('stride 3 captures five screenshots for a 15-frame segment; the lease still steps every frame', async () => {

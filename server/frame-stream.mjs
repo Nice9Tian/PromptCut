@@ -862,7 +862,7 @@ export class StreamProducer {
     const rect = stride > 1 ? manifest.bound : (manifest.tight ?? manifest.bound);
     const captureRect = { x: rect.x + spec.offset.x, y: rect.y + spec.offset.y, w: rect.w, h: rect.h };
     const lease = bakery.streamLease;
-    const continues = !!lease && !lease.dirty && lease.streamSignature === spec.streamKey && lease.lastFrame + 1 === fromFrame;
+    const continues = !!lease && !lease.dirty && lease.page === bakery.page && lease.streamSignature === spec.streamKey && lease.lastFrame + 1 === fromFrame;
     if (!continues) {
       await bakery.reset(state.isolated, this.pipeline.emptyUrl(state.isolated), { deferCards: true });
       bakery.streamLease = null;

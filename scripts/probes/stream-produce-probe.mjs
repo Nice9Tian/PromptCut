@@ -16,7 +16,12 @@
  *      同时存活的分段编码器 ≤ 2 × streamPool;
  *   6. 就绪索引里每条流一层 `kind: 'stream'`、单位是分段号;组流(`--group` 把解码器预算压到 1)带 `groupClipIds`;
  *   7. **隔离**:和粒子卡重叠的另一张卡的颜色不出现在粒子流的分段里(ffmpeg 解出来逐像素查);
- *   8. 收紧矩形:框比画面小的卡,稀疏一趟量完之后补密分段用的是收紧后的矩形(新变体)。
+ *   8. 收紧矩形:框比画面小的卡,稀疏一趟量完之后补密分段用的是收紧后的矩形(新变体);
+ *   9. alpha 平均误差 ≤ 0.5 / 255(同一批 15 张 PNG 编一段、ffmpeg 解回来比 alpha 半区);
+ *  10. 单独重新生产第 5 段(把它的签名弄旧):只重做这一段,索引区间不变,旧文件 5 秒内删掉(G6);
+ *  11. F5:关掉这个 FramePipeline,同一个库根上新起一个 —— 扫盘挂键、项目到位后按键认领、每条流的层原样发出,
+ *      一个分段都不重新生产;
+ *  12. 组流(`--group`):组流的分段里恰好是组内那几张卡(粒子的绿、药丸的蓝都在)。
  *
  * 输出 JSON 结论;任何一条不过就以非零退出。`--keep` 不删库根(给 `stream-play-probe.mjs` 接着用)。
  */
@@ -27,12 +32,14 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
+import { PNG } from 'pngjs';
 import { devOrigin, flagArg } from './probe-connect.mjs';
 import { FramePipeline } from '../../server/frame-pipeline.mjs';
 import { splitFmp4, segmentInfo, topLevelBoxes, SEGMENT_FRAMES } from '../../server/frame-stream.mjs';
 import { bakeStream } from '../../server/bakery/bake.mjs';
 import { openStreamSegmentEncoder } from '../../server/bakery/ffmpeg.mjs';
-import { PROJECT } from './stream-probe-project.mjs';
+import { PROJECT, until as untilIn } from './stream-probe-project.mjs';
+import { segmentSignature } from '../../server/frame-stream.mjs';
 
 const execFileAsync = promisify(execFile);
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -199,13 +206,94 @@ try {
         runs.push({ ms: Date.now() - e0, bytes: result.bytes.length });
       }
       runs.sort((a, b) => a.ms - b.ms);
-      out.bench.push({ clipId, rect, captureMsFor15: captureMs, encodeMs: runs.map(r => r.ms), p50: runs[1].ms, bytes: runs[1].bytes });
+      // alpha 误差:这 15 张编成一段,ffmpeg 解回来,下半区的灰度 vs 原 PNG 的 alpha
+      const enc = openStreamSegmentEncoder('ffmpeg', { encoder: status.encoder, fps: 30 });
+      for (const png of pngs) await enc.write(png);
+      const encoded = await enc.finish();
+      const { init: initBuf, segments: segs } = splitFmp4(encoded.bytes);
+      const raw = await decodeSegment(initBuf, segs[0], OUT, `alpha-${clipId}`);
+      const W = rect.w, H = rect.h, Hc = 2 * (H + 8);
+      let sum = 0, n = 0, max = 0;
+      for (let k = 0; k < pngs.length; k++) {
+        const ref = PNG.sync.read(pngs[k]);
+        const frame = raw.subarray(k * W * Hc * 4, (k + 1) * W * Hc * 4);
+        for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+          const d = Math.abs(frame[((y + H + 8) * W + x) * 4] - ref.data[(y * W + x) * 4 + 3]);
+          sum += d; n++; if (d > max) max = d;
+        }
+      }
+      const alpha = { mean: +(sum / n).toFixed(4), max };
+      out.bench.push({ clipId, rect, captureMsFor15: captureMs, encodeMs: runs.map(r => r.ms), p50: runs[1].ms, bytes: runs[1].bytes, alpha });
+      check(alpha.mean <= 0.5, `${clipId}: alpha 平均误差 ≤ 0.5 / 255`, alpha);
     } finally { pipeline.returnStreamBakery(bakery); }
   }
   const bgBench = out.bench.find(b => b.clipId === 'clip-bg');
   if (bgBench) check(bgBench.p50 <= 300, '1080p 全幅流 15 帧分段编码 ≤ 300 ms(无别的编码器争 CPU)', bgBench);
   for (const item of status.stats.sparseVsDense ?? []) {
     if (item.sameRect) check(item.sparse <= item.dense, 'stride 3 稀疏分段 ≤ 满密度 1.0 倍(同一矩形)', item);
+  }
+  // 组流:分段里恰好是组内那几张卡 —— 药丸的蓝、粒子的绿都在
+  if (GROUP) {
+    const state = [...producer.streams.values()][0];
+    const seg = state.manifest.segments[1];
+    const init = await fs.readFile(producer.store.initFile(state.spec.streamKey, seg.init));
+    const raw = await decodeSegment(init, await fs.readFile(path.join(producer.store.dir(state.spec.streamKey), seg.file)), OUT, 'decoded-group');
+    const meta = state.manifest.inits[seg.init];
+    const W = meta.width, H = meta.height / 2 - 8;
+    let blue = 0, green = 0;
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      const i = (y * W + x) * 4;
+      const a = raw[((y + H + 8) * W + x) * 4];
+      if (a > 200 && raw[i + 2] > 180 && raw[i] < 140 && raw[i + 2] - raw[i + 1] > 50) blue++;
+      if (a > 100 && raw[i + 1] > 150 && raw[i] < 120 && raw[i + 2] < 150) green++;
+    }
+    out.groupContent = { clipIds: state.spec.clipIds, blue, green };
+    check(blue > 1000 && green > 20, '组流里恰好是组内那几张卡(药丸的蓝、粒子的绿都在)', out.groupContent);
+  }
+  // G6:单独重新生产第 5 段 —— 把它的签名弄旧,只有这一段重做,索引区间不变,旧文件 5 秒内删
+  if (!GROUP) {
+    const bg = [...producer.streams.values()].find(s => s.spec.clipIds[0] === 'clip-bg');
+    const before = { ...bg.manifest.segments[5] };
+    const segmentsBefore = producer.stats.segments;
+    bg.manifest.segments[5] = { ...before, sig: 'stale' };
+    producer.kick();
+    const redone = await untilIn(fails, '第 5 段重新生产', () => {
+      const seg = bg.manifest.segments[5];
+      return seg.sig !== 'stale' && !producer.workers.size && !producer.encoding.size ? seg : null;
+    }, 120000);
+    await new Promise(r => setTimeout(r, 6000));
+    const oldGone = !(await fs.stat(path.join(producer.store.dir(bg.spec.streamKey), before.file)).then(() => true, () => false))
+      || before.file === redone?.file;
+    const lastLayer = [...layers].reverse().find(m => m.clipId === 'clip-bg');
+    out.resegment = { before: before.file, after: redone?.file, produced: producer.stats.segments - segmentsBefore, oldGone, ranges: lastLayer?.ranges,
+      sigOk: redone?.sig === segmentSignature({ streamKey: bg.spec.streamKey, segment: 5, stride: 1, encoder: status.encoder, rect: bg.manifest.tight ?? bg.manifest.bound }) };
+    check(out.resegment.produced === 1 && out.resegment.sigOk, '只重新生产了第 5 段', out.resegment);
+    check(JSON.stringify(out.resegment.ranges) === JSON.stringify([[bg.spec.firstSegment, bg.spec.lastSegment]]), '重新生产第 5 段后索引区间不变', out.resegment);
+    check(oldGone, '替换后旧文件 5 秒内删掉', out.resegment);
+  }
+  // F5:同一个库根上重起一个 FramePipeline(模拟预渲染进程被杀后拉起)
+  {
+    const keys = [...producer.streams.keys()];
+    await pipeline.close();
+    const restarted = new FramePipeline({ root: OUT, origin: () => origin, interactive: true, playhead: () => null });
+    const seen = [];
+    restarted.readyIndex.subscribe(m => seen.push(m));
+    try {
+      await restarted.rescanSnapshots();
+      const staged = restarted.readyIndex.stagedKeys().filter(k => k.kind === 'stream').map(k => k.key);
+      const beforeProject = seen.filter(m => m.type === 'layer' && m.kind === 'stream').length;
+      await restarted.preload(PROJECT);
+      const back = await untilIn(fails, 'F5:重启后每条流的层重新发出', () => {
+        const got = new Set(seen.filter(m => m.type === 'layer' && m.kind === 'stream').map(m => m.key));
+        return keys.every(k => got.has(k)) ? got : null;
+      }, 120000);
+      await new Promise(r => setTimeout(r, 3000));
+      out.restart = { staged: staged.length, streams: keys.length, layersBeforeProject: beforeProject, republished: back ? back.size : 0,
+        producedAfterRestart: restarted._streams?.stats.segments ?? null };
+      check(staged.length === keys.length && keys.every(k => staged.includes(k)), 'F5:扫盘把每条流挂在键上', out.restart);
+      check(beforeProject === 0, 'F5:项目到位之前不发 layer', out.restart);
+      check(out.restart.producedAfterRestart === 0, 'F5:重启后一个分段都不重新生产', out.restart);
+    } finally { await restarted.close().catch(() => {}); }
   }
 } catch (error) {
   fails.push(`异常:${error?.stack || error}`);

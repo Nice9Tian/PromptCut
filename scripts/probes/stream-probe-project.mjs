@@ -5,7 +5,9 @@
  *   - 粒子背景铺满全屏(最底层),0～5 秒 —— 10 个分段,「连续生产 10 个分段只付一次换页」那一条靠它;
  *   - 金句药丸,框 640×360 摆在画面中间,和粒子重叠 —— 隔离那一条靠它(药丸是主题蓝的实心胶囊,
  *     绿色粒子流里不该有蓝色);它的框比画面小,收紧矩形那一条也靠它;
- *   - Lottie 动画(框 800×450),0.5～2 秒 —— 入点不在分段边界上。
+ *   - Lottie 动画(框 800×450),0.5～2 秒 —— 入点不在分段边界上;
+ *   - 里程表(毛玻璃 HUD,`belowDependent`,不进流)压在粒子背景左下角,0～5 秒 —— 「毛玻璃卡叠在流
+ *     `<canvas>` 上时模糊正确」那一条靠它:播放时它照常活渲,模糊的是下面那块流画布。
  *
  * **没有用两张粒子卡**:同一时刻挂两张粒子卡时,后挂的那张 `tsParticles.load` 会把先挂的那张的容器
  * 当成同一个 id 销毁掉(容器 id 取自引擎的共享随机数;实测后挂那张一挂上,前一张的 `<canvas>` 就被
@@ -17,6 +19,9 @@ export const PROJECT = {
   id: 'r8-stream-probe', name: 'R8 轨道流探针', width: 1920, height: 1080, fps: 30, duration: 5,
   themeId: 'dark', media: [], filters: [], pixelMaps: [], audioFx: [], cardNodes: [], style: {},
   tracks: [
+    { id: 'tr-glass', name: 'glass', hidden: false, clips: [
+      { id: 'clip-glass', kind: 'card', cardId: 'odometer', start: 0, end: 5, params: {}, frame: { x: 80, y: 600, w: 760, h: 420 } },
+    ] },
     { id: 'tr-pill', name: 'pill', hidden: false, clips: [
       { id: 'clip-pill', kind: 'card', cardId: 'punch-pill', start: 0, end: 2, params: { text: '轨道流' }, frame: { x: 960, y: 540, w: 640, h: 360, anchor: [0.5, 0.5] } },
     ] },
