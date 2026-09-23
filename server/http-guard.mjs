@@ -65,6 +65,45 @@ export function isAssetServicePath(url) {
   return ASSET_ROUTE.test(apiPath(url));
 }
 
+/**
+ * 局域网监听(`npm run dev` 绑 0.0.0.0,手机等设备要能直接访问素材服务)之后,**「没有 Origin 头当自己人」
+ * 只对本机成立**:局域网里任何一台设备都能不带 Origin 直接 curl `/api/**`(驱动 Agent、读配置、删目录)。
+ * 所以除素材服务外的 `/api/**` 默认只答本机回环地址来的请求;设 `PROMPTCUT_LAN_API=1` 才对局域网开放。
+ *
+ * 舞台端口的反向代理(`vite-plugin-stage-ports.ts`)从 127.0.0.1 转回 vite,vite 看到的对端永远是回环 ——
+ * 代理因此把真实对端写进 `STAGE_CLIENT_HEADER`(**覆盖**请求里自带的同名头)。这个头只在对端是回环时才信:
+ * 局域网设备直连 vite 端口伪造它没用,对端地址本身就不是回环。
+ */
+export const STAGE_CLIENT_HEADER = "x-pc-stage-client";
+
+/** 回环地址:127.0.0.0/8、::1、IPv4 映射的 ::ffff:127.x */
+export function isLoopbackAddress(address) {
+  const a = String(address || "").toLowerCase();
+  return a === "::1" || /^127\./.test(a) || /^::ffff:127\./.test(a);
+}
+
+/** 这条请求真正的对端地址。没有 socket(进程内直调、单测)返回 null */
+export function clientAddressOf(req) {
+  const remote = req.socket?.remoteAddress;
+  if (!remote) return null;
+  if (isLoopbackAddress(remote)) {
+    const forwarded = req.headers?.[STAGE_CLIENT_HEADER];
+    if (typeof forwarded === "string" && forwarded) return forwarded;
+  }
+  return remote;
+}
+
+/** 请求来自本机?(没有 socket 的进程内请求算本机) */
+export function fromLocalClient(req) {
+  const address = clientAddressOf(req);
+  return address === null || isLoopbackAddress(address);
+}
+
+/** 除素材服务外的 `/api/**` 要不要对局域网开放 */
+export function lanApiAllowed() {
+  return process.env.PROMPTCUT_LAN_API === "1";
+}
+
 /** 同源?没有 Origin 头当自己人(curl、sidecar、同源 GET 都不带) */
 export function originOk(req) {
   const origin = req.headers?.origin;
