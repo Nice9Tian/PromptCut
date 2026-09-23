@@ -23,7 +23,7 @@ import puppeteer from 'puppeteer';
 const PORT = 5208;
 const ROOT = path.resolve(import.meta.dirname, '..', '..');
 
-// docs/compare-pitfalls.md #8:dev server 会把端口写进全局的 %TEMP%\promptcut\port.json,
+// docs/guides/compare-pitfalls.md #8:dev server 会把端口写进全局的 %TEMP%\promptcut\port.json,
 // MCP 客户端会照它去连。实验服务器把 TEMP 指到临时目录,别覆盖用户真实软件的那份。
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-svg-probe-'));
 

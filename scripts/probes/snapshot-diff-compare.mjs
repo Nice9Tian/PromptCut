@@ -24,7 +24,7 @@
  *
  * 实测不可比 —— 同一页第二趟里 `growth-curve` 的 `opacity` 停在 0、`stroke-dasharray` 停在
  * `0px,1px`（动画根本没推），第一趟是 0.4 / `0.033px,1px`。那是
- * `docs/compare-pitfalls.md` 第一条「预热错帧」，不是差异内联造成的。套一层就绕开了整件事。
+ * `docs/guides/compare-pitfalls.md` 第一条「预热错帧」，不是差异内联造成的。套一层就绕开了整件事。
  *
  * 顺序也要紧：**旧算法先跑** —— 新的 `inlineDOMStyles` 量基线时会往场景根临时挂一个探针容器
  * （量完就摘），旧算法在那之前读完，两边看到的是同一棵干净的树。
