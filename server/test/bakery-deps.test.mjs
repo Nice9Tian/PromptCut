@@ -21,11 +21,15 @@ const SERVER = path.join(ROOT, 'server');
 const BAKERY = path.join(SERVER, 'bakery');
 
 /**
- * 唯一的例外:这支测试测的就是 `scripts/verify-bake-protocol.mjs` 这个命令行校验脚本本身
- * (它在仓库里的落点就是 scripts/),不是生产代码对 scripts/ 的依赖。名单只有这一条,
+ * 例外只有测 scripts/ 自己的测试,不是生产代码对 scripts/ 的依赖:
+ *
+ *   - `bake-protocol.test.mjs` 测 `scripts/verify-bake-protocol.mjs` 这个命令行校验脚本;
+ *   - `dev-server-junction.test.mjs` 测 `scripts/lib/dev-server.mjs` 的 media junction 只拆链接
+ *     (拆错了删的是用户素材,所以要常驻基线)。
+ *
  * 多一条都要在这里显式写出来,加不进来就说明依赖方向真的破了。
  */
-const ALLOWED_SCRIPT_IMPORTERS = new Set(['server/test/bake-protocol.test.mjs']);
+const ALLOWED_SCRIPT_IMPORTERS = new Set(['server/test/bake-protocol.test.mjs', 'server/test/dev-server-junction.test.mjs']);
 
 const CODE = /\.(mjs|mts|ts|tsx)$/;
 
@@ -64,7 +68,7 @@ test('server/** 不 import scripts/ 下的模块', () => {
   assert.deepEqual(offenders, [], '依赖方向只能是 scripts/ → server/,不能反过来');
 });
 
-test('唯一允许 import scripts/ 的 server 文件确实还在', () => {
+test('名单里允许 import scripts/ 的 server 文件确实还在', () => {
   for (const name of ALLOWED_SCRIPT_IMPORTERS) {
     assert.ok(fs.existsSync(path.join(ROOT, name)), `${name} 不在了,请把它从名单里删掉`);
   }
