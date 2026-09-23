@@ -14,7 +14,7 @@ import { findFfmpeg, ffprobeOf, runFfmpegProgress, streamPngVideo } from './ffmp
 import { DEFAULT_URL, openBakery } from './chrome.mjs';
 import { bakeFrames } from './bake.mjs';
 import { bakeSharded, resolveWorkers } from './shards.mjs';
-import { fillGlassGaps, loadProject, mediaRootDir, mediaSourceOf, planMedia } from './media.mjs';
+import { fillGlassGaps, loadProject, mediaSourceOf, planMedia } from './media.mjs';
 import { mixAudioInChrome } from './audio-mix.mjs';
 // 统一管线。以前是 exportFrames 里的动态 import,只为绕开 export-frames ↔ export-unified
 // 的运行时环;环已经解开(export-unified 只依赖 chrome / bake / shards / ffmpeg),这里静态引。
@@ -111,8 +111,8 @@ export async function exportFrames(opts) {
         const proj = await loadProject(opts.url || DEFAULT_URL, outDir);
         if (proj) {
           const ffprobeCmd = ffprobeOf(ffmpegCmd);
-          // 和画面层同一套找素材的规则:素材库里的 /@media/<文件> 也要找得到,不然配乐 / 配音全被跳过
-          const sourceOf = (m) => mediaSourceOf(m, { outDir, pageUrl: opts.url || DEFAULT_URL, mediaRoot: mediaRootDir() });
+          // 和画面层同一套找素材的规则:/@media/<文件> 也要经素材服务的 HTTP 找得到,不然配乐 / 配音全被跳过
+          const sourceOf = (m) => mediaSourceOf(m, { outDir, pageUrl: opts.url || DEFAULT_URL });
           const plan = buildAudioPlan(proj, outDir, undefined, sourceOf).filter((c) => c.cardAudio || hasAudioStream(c.file, ffprobeCmd));
           if (plan.length > 0) {
             const preview = path.join(outDir, 'preview.mp4');

@@ -78,6 +78,49 @@ export function layoutClips(project, clipIds, measured = null, t = 0) {
   return { stage, clips, cardIds };
 }
 
+/**
+ * D3:`see_frames` 每帧附的实体矩形,在 `captureSnapshot` 的 `afterFonts` 钩子里量(和 `layoutNow` 同一个钩子位置)。
+ * 根传 `#pc-frame-snapshot [data-pc-scene]`,调 `window.__pcSolid.rectsWithBounds(root, { pixels: 'all' })`。
+ *
+ * 回 `Array<{ clipId, box: [x, y, w, h], solid: [x, y, w, h] | null }>`,舞台像素坐标、取整:
+ * `box` = 包裹层外框,`solid` = 实体范围,**`null` = 这张卡此刻没有实体像素**。
+ * `bounds()` 量不到实体时会退回包裹层外框(给选中描边兜底),和「实体正好铺满包裹层」分不开,
+ * 所以这里按 `bounds()` 同一条走法(平面算实体、`isSolid` 的元素不再往下、组流平面跳过、
+ * 快照里的 `<img>` 按 `data-pc-painted-box` 那块算)先问一句「舞台内有没有实体」,没有就给 `null`。
+ * 页面上没挂 `__pcSolid` 时回 null(不是空数组),调用方据此说「没量出来」。
+ */
+export const measureEntityRects = page => page.evaluate(() => {
+  const root = document.querySelector('#pc-frame-snapshot [data-pc-scene]');
+  const api = window.__pcSolid;
+  if (!root || typeof api?.rectsWithBounds !== 'function' || typeof api.isSolid !== 'function') return null;
+  const origin = root.getBoundingClientRect();
+  const r4 = b => [Math.round(b.left), Math.round(b.top), Math.round(b.width), Math.round(b.height)];
+  const onStage = rc => rc.width > 0 && rc.height > 0 && rc.right > origin.left && rc.left < origin.right && rc.bottom > origin.top && rc.top < origin.bottom;
+  // 同 solid.ts 的 paintedBoxAttr + paintedBoxRect:画布像素坐标按 <img> 当前外框换算
+  const paintedRect = el => {
+    const n = (el.getAttribute('data-pc-painted-box') || '').split(',').map(Number);
+    if (n.length !== 4 || n.some(v => !Number.isFinite(v))) return null;
+    const rect = el.getBoundingClientRect();
+    const w = Number(el.getAttribute('width')) || el.naturalWidth || rect.width;
+    const h = Number(el.getAttribute('height')) || el.naturalHeight || rect.height;
+    if (!(w > 0) || !(h > 0) || !(rect.width > 0) || !(rect.height > 0)) return null;
+    const sx = rect.width / w, sy = rect.height / h;
+    return new DOMRect(rect.left + n[0] * sx, rect.top + n[1] * sy, n[2] * sx, n[3] * sy);
+  };
+  const painted = el => {
+    if (el.hasAttribute('data-pc-group-plane')) return false;
+    if (el.hasAttribute('data-pc-proxy-plane') || el.hasAttribute('data-pc-snapshot-plane') || el.hasAttribute('data-pc-stream-plane')) return onStage(el.getBoundingClientRect());
+    if (api.isSolid(el, root)) return onStage((el.tagName === 'IMG' && paintedRect(el)) || el.getBoundingClientRect());
+    for (const c of el.children) if (painted(c)) return true;
+    return false;
+  };
+  return api.rectsWithBounds(root, { pixels: 'all' }).map(({ clipId, rect, bounds }) => {
+    const wrap = root.querySelector(`[data-pc-clip="${CSS.escape(clipId)}"]`);
+    const solid = bounds && wrap && [...wrap.children].some(painted) ? r4(bounds) : null;
+    return { clipId, box: r4(rect), solid };
+  });
+});
+
 /** A foreground batch queue, B complete HTML sampling, C cumulative-track rasterization.
  * Each lane owns its Chrome; foreground never waits for a background bake to finish.
  */
@@ -1428,6 +1471,49 @@ export class FramePipeline {
     } finally { this.release(lane); }
     const { stage, clips } = layoutClips(entry.project, clipIds, measured, at);
     return { stage, t: at, frame, clips, baked };
+  }
+  /**
+   * D3:`see_frames` 渲出来的那几帧各附一份实体矩形(`measureEntityRects`)。回 `Map<帧号, 矩形数组 | null>`。
+   *
+   * 和 `layoutNow` 同一个道理:像素命中(MOV / PNG)答不了实体框,只看 `entry.html`。`see_frames`
+   * 刚渲过的帧多半已经 `record` 进去了(MOV 那一趟边推边记快照),直接注回去量;没有的一次
+   * `bakeFrames` 补齐(只生成快照、不产 PNG)。每帧只注一次快照、`screenshot: false`,不装素材。
+   * 走 agent 车道的同一条链。
+   */
+  async entityRects(project, times, options = {}) {
+    const chain = (this.laneChains.get('agent') || Promise.resolve()).catch(() => {}).then(() => this.entityRectsNow(project, times, options));
+    this.laneChains.set('agent', chain.catch(() => {}));
+    return chain;
+  }
+  async entityRectsNow(project, times, { signal } = {}) {
+    const lane = 'agent';
+    const entry = await this.entry(project);
+    const fps = Number(entry.project.fps) > 0 ? entry.project.fps : 30;
+    const max = Math.max(0, Math.floor((Number(entry.project.duration) || 0) * fps) - 1);
+    const frames = [...new Set(times.map(t => Math.max(0, Math.min(max, Math.round((Number(t) || 0) * fps)))))].sort((a, b) => a - b);
+    const out = new Map();
+    if (!frames.length) return out;
+    const bakery = await this.acquire(lane, entry.project);
+    try {
+      const missing = frames.filter(frame => !entry.html?.has?.(frame));
+      if (missing.length) {
+        const wanted = new Set(missing);
+        await bakeFrames(bakery, {
+          out: entry.dir, targetFrames: missing, snapshotOnly: true, writeFrames: false,
+          snapshotFrames: wanted, signal,
+          onSnapshot: (n, html, controls) => { if (wanted.has(n) && !entry.html.has(n)) this.record(entry, n, html, controls); },
+        });
+        await this.save(entry);
+      }
+      for (const frame of frames) {
+        if (signal?.aborted) throw Object.assign(new Error('Frame request cancelled'), { cancelled: true });
+        const html = entry.html?.get?.(frame);
+        out.set(frame, typeof html === 'string' && html
+          ? (await captureSnapshot(bakery, html, undefined, { screenshot: false, afterFonts: measureEntityRects })) ?? null
+          : null);
+      }
+    } finally { this.release(lane); }
+    return out;
   }
   async prerender(entry, bakery, signal) {
     const prefixes = this.prefixes(entry);

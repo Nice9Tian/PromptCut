@@ -17,7 +17,7 @@ import { isolateClip } from "../vision-project.mjs";
 import { overLimit } from "../http-guard.mjs";
 import { exportsRunning } from "../render-pool-state.mjs";
 import { proxyToPrerender } from "../prerender-client.mjs";
-import { EXTRACT_TIMEOUT_MS, ffmpegCommand, mediaFileOf } from "./ffmpeg-frames";
+import { EXTRACT_TIMEOUT_MS, ffmpegCommand, mediaHashOf, mediaSourceOf } from "./ffmpeg-frames";
 import { abortOnClose, originOf, outRoot, resolveMediaUrls, sendJson } from "./http";
 import { enqueue, maxConcurrentRenders, renderRunning } from "./render-queue";
 import { renderFrames, renderOneFrame } from "./render";
@@ -108,9 +108,11 @@ export function registerPrerenderSide(server: ViteDevServer, root: string) {
       /*
        * POST /api/vision/sheet { media, start, end, grid } —— see_frames 素材模式(source: "media")用的镜头拼图。
        * 一个镜头一张 JPEG:从 start 到 end 等间隔抽 grid 帧(4 = 2×2,9 = 3×3),每格 480 宽,
-       * ffmpeg 一趟做完(fps 滤镜取帧 + tile 拼格),不落中间帧。按文件、修改时间、区间、格数缓存在
-       * out/sheets 下,翻页回看不重抽。media 是项目里那条素材记录(和 snapshot 收 project 一样,
-       * 文件按 path / 媒体目录解析,不接受任意路径)。
+       * ffmpeg 一趟做完(fps 滤镜取帧 + tile 拼格),不落中间帧。media 是项目里那条素材记录;
+       * 字节只经素材服务的 HTTP 取(ffmpeg-frames.ts 的 mediaSourceOf),本进程不读本地内容库的目录
+       * (docs/semantics/architecture/asset-storage.md「职责」)。
+       * 按素材内容哈希、区间、格数缓存在 out/sheets 下,翻页回看不重抽:按哈希寻址的内容不可变,哈希一样画面就一样。
+       * 没有哈希的素材(迁移期按文件名存的、老 .proc 的绝对路径)同一个地址可能换过内容,不进缓存、每次现抽。
        */
       server.middlewares.use("/api/vision/sheet", (req, res) => {
         if (req.method !== "POST") return sendJson(res, 405, { ok: false, error: "POST only" });
@@ -121,8 +123,8 @@ export function registerPrerenderSide(server: ViteDevServer, root: string) {
           if (over) return;
           try {
             const { media, start, end, grid } = JSON.parse(body || "{}");
-            const file = mediaFileOf(root, media);
-            if (!file) return sendJson(res, 404, { ok: false, error: "素材文件服务端取不到,重新导入一次再试" });
+            const file = mediaSourceOf(media);
+            if (!file) return sendJson(res, 404, { ok: false, error: "素材服务不可达,或这条素材记录没有地址" });
             const s0 = Number(start), s1 = Number(end);
             if (!Number.isFinite(s0) || !Number.isFinite(s1) || s1 <= s0) return sendJson(res, 400, { ok: false, error: "start / end 要是秒数且 end > start" });
             const g = grid === 9 ? 9 : 4;
@@ -131,12 +133,21 @@ export function registerPrerenderSide(server: ViteDevServer, root: string) {
             if (!ffmpeg) return sendJson(res, 500, { ok: false, error: "这台机器上找不到 ffmpeg" });
             const eps = 0.05;
             const dur = Math.max(0.1, s1 - s0 - eps);
-            const stamp = fs.statSync(file).mtimeMs;
-            const key = createHash("sha1").update(`${file}|${stamp}|${s0.toFixed(2)}|${s1.toFixed(2)}|${g}`).digest("hex").slice(0, 20);
+            const hash = mediaHashOf(media);
             const dir = path.join(outRoot(root), "sheets");
             await fsp.mkdir(dir, { recursive: true });
+            const key = hash
+              ? createHash("sha1").update(`media:${hash}|${s0.toFixed(2)}|${s1.toFixed(2)}|${g}`).digest("hex").slice(0, 20)
+              : `once-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
             const out = path.join(dir, `${key}.jpg`);
-            let cached = fs.existsSync(out);
+            let cached = !!hash && fs.existsSync(out);
+            if (!cached) {
+              // 先问素材服务有没有这份字节:没有就如实回 404,别让 ffmpeg 对着一个 404 地址报一串看不懂的错。
+              // 用 GET + Range 只取 1 字节 —— /api/media/file 这条老路由不答 HEAD
+              const probe = await fetch(file, { headers: { Range: "bytes=0-0" } }).catch(() => null);
+              probe?.body?.cancel().catch(() => {});
+              if (!probe || !probe.ok) return sendJson(res, 404, { ok: false, error: `素材服务上取不到这份素材(${probe ? `HTTP ${probe.status}` : "连不上"}),重新导入一次再试` });
+            }
             if (!cached) {
               await new Promise<void>((resolve, reject) => {
                 const args = [
@@ -153,12 +164,22 @@ export function registerPrerenderSide(server: ViteDevServer, root: string) {
                 child.on("error", (e) => { clearTimeout(timer); reject(e); });
                 child.on("close", (code) => {
                   clearTimeout(timer);
-                  if (code !== 0 || !fs.existsSync(out)) return reject(new Error(`ffmpeg 退出码 ${code}${err ? `:${err.trim().slice(-300)}` : ""}`));
+                  // 失败时写了一半的图别留下:有哈希的那张下次会被当成缓存命中
+                  if (code !== 0 || !fs.existsSync(out)) {
+                    fs.rmSync(out, { force: true });
+                    return reject(new Error(`ffmpeg 退出码 ${code}${err ? `:${err.trim().slice(-300)}` : ""}`));
+                  }
                   resolve();
                 });
               });
             }
-            const base64 = (await fsp.readFile(out)).toString("base64");
+            let base64: string;
+            try {
+              base64 = (await fsp.readFile(out)).toString("base64");
+            } finally {
+              // 不进缓存的那一张用完就删
+              if (!hash) await fsp.rm(out, { force: true }).catch(() => {});
+            }
             const frames = Array.from({ length: g }, (_, k) => Math.round((s0 + eps + (dur * k) / g) * 100) / 100);
             sendJson(res, 200, { ok: true, grid: g, cols, frames, cached, __image: { mime: "image/jpeg", base64 } });
           } catch (e: any) {
@@ -374,7 +395,8 @@ export function registerPrerenderSide(server: ViteDevServer, root: string) {
               clamped.forEach((x, i) => {
                 const r = shots.get(Math.min(maxFrame, Math.max(0, Math.round(x * fpsOf))));
                 if (!r) return;
-                frames.push({ t: x, clipId: clipId || null, width: r.width, height: r.height });
+                // D3:实体矩形(舞台像素坐标),文字那份已经由 renderFrames 写进 notes
+                frames.push({ t: x, clipId: clipId || null, width: r.width, height: r.height, rects: r.rects ?? null });
                 images.push({ mime: "image/png", base64: r.buf.toString("base64"), label: `t=${list[i]}s` });
               });
               return sendJson(res, 200, {
@@ -410,6 +432,8 @@ export function registerPrerenderSide(server: ViteDevServer, root: string) {
               clipId: clipId || null,
               width,
               height,
+              // D3:实体矩形(舞台像素坐标),文字那份已经由 renderOneFrame 写进 notes
+              rects: shot.rects ?? null,
               note: notes.join(" "),
               // 这个形状是和 harness/agent.mjs(以及走 CLI 那条路的 mcp-server.mjs)
               // 约好的:看到 __image 就把它当图片块送进上下文,而不是让 base64
