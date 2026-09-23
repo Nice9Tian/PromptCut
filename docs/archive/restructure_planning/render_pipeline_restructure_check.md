@@ -1,10 +1,10 @@
 # 渲染管线重整计划——执行核对（render_pipeline_restructure_check）
 
-这份文件**只记做了什么、没做什么、验到了什么**，章节编号和 `render_pipeline_restructure.md` 一一对应；计划本身（范围、依赖、更正、决策）只在那边，这边不重复。每次合并一步就更新这里。最后更新：2026-09-22，R7b 合并之后。
+这份文件**只记做了什么、没做什么、验到了什么**，章节编号和 `render_pipeline_restructure.md` 一一对应；计划本身（范围、依赖、更正、决策）只在那边，这边不重复。每次合并一步就更新这里。最后更新：2026-09-23，R0-2（`verify-unified-frames.mjs`）修完之后。
 
 **先看独立复核**：`hunman_read.md` / `task_recheck.md`（2026-09-22 17:30，5 个 Opus 分段对照代码复核）判定本文件**偏乐观**——R5、R6、R7 标「已完成」但各有子项没落实，另有 5 处不符合 pinned 目标（渲染 9、架构 7、架构 9、架构 10、渲染 4）和 1 条回归——**这 6 条已由 R7b 修掉**（见下文 R7b）。两份冲突时以复核为准；交接看 `hand_off.md`。
 
-**总状态**：R0～R7 完成（R0 剩两条），**舞台已露出、缺省已翻成跨源双舞台**；R8、R9 未开始；云端那一半未开始。main 上 `tsc -b --force` 零错误，`npm test` 1633 / 1632 通过 / 0 失败 / 1 跳过。
+**总状态**：R0～R7 完成（R0 剩一条：冷启动量测），**舞台已露出、缺省已翻成跨源双舞台**；R8、R9 未开始；云端那一半未开始。main 上 `tsc -b --force` 零错误，`npm test` 1633 / 1632 通过 / 0 失败 / 1 跳过。
 
 **做法**：我在 main 上统筹，可解耦的子任务派 Opus 在子 worktree 里做，每个回来由我审查、重跑类型检查和全量测试后 `--no-ff` 合并。**分册的独立审查没有另派**（用户「一口气做完」之后，我改成让实现者逐句对照代码读任务书，报上来的更正折回分册；这是我替用户做的决定，记在这里）。下文凡是标「Agent 自报」的数字是实现者的报告，我没有重跑；标「我验」的是我在 main 上自己跑的。
 
@@ -33,7 +33,7 @@
 | 条 | 状态 |
 |---|---|
 | 1 探针改动与 `g0-a-webview2-probe.md` 提交 | 已做（`5157f91`） |
-| 2 `scripts/verify-unified-frames.mjs` | **做了一半**。脚本两处过期已改（`eec7a08`：缓存命中的来源叫 `mov`；导出页要经 `?timeline=` 带项目）。剩下的真问题两个根因：**根因一已修**——begin-frame 控制下 Motion 的 JS 帧循环（spring、MotionValue）只在真截图时才推进，HTML 快照在截图前生成，纯采样那一趟一张图都不截，快照里这类动画整段冻在第 1 帧（30 fps 下 `punch-pill` 整段小 33%）；修法是生成快照前先画一拍把图丢掉（`server/bakery/bake.mjs` +22 行），导出 60 / 60 帧逐字节不变（Agent 自报），代价快照趟每帧多约 20～30 ms，旧共享快照全部失效（本来就是错的）；差异从 65607 个通道缩到 27080 个、超过 2 级的只剩 15 个。**根因二未修**——快照重放时重新排版丢 1/64 px（`getComputedStyle().width` 只给三位小数），`blur(32px)` 对此极敏感、能差出 255 级，无滤镜的卡最大差 3；修它要改 `inlineStyles.ts` 的几何内联口径、作废全部共享快照，三个修法和代价在排查报告里（本会话 scratchpad `replay-mismatch-report.md`，没进仓库）。**这条脚本的最后一条断言仍以红为已知状态。** |
+| 2 `scripts/verify-unified-frames.mjs` | **已做（2026-09-23，整条通过）**。脚本两处过期已改（`eec7a08`）。**根因一**（Motion 的 JS 帧循环只在真截图时推进，快照里弹簧类动画停在第 1 帧的值）：`7d623f4` 在生成快照前推一拍，但**不连续取帧时推一拍不够**（MOV 通道只取第 8 帧，快照里药丸仍是第 1 帧的 `scale(0.933311)`），这次补上：上一帧没画过就推两拍，判据同 `captureFrame` 的 `prime`。**根因二**原先记成「重放丢 1/64 px」，重查后**主因是合成层**：活渲时光晕挂着暂停但仍 current 的透明度动画，被 Chrome 单独提层（CDP 合成原因 `ActiveOpacityAnimation`），快照写死 `animation:none` 后这层没了、`blur(32px)` 换了栅格化路径，差出上百级；1/64 px 是真的，但只在合成层对上之后才显出来。修法：生成快照时给有 current 动画的元素补 `will-change`、几何值对齐回 1/64 格（`inlineStyles.ts` / `snapshotStyleProps.mjs`）。验收：脚本连跑 3 次都过；28 张卡「活渲 vs 快照重放」没有一张变差、多数降到 0；导出新旧代码 240 / 240 逐字节相同（云端 Linux 容器上导出本身有偶发单帧抖动，改动前就有）；`tsc` 零错误；`npm test` 在云端容器上有 14 条环境性失败（Windows 路径、Python、拓展安装器），改动前后同一组，**要在 Windows 开发机上复跑确认**。全部共享快照和 MOV 帧缓存作废一次。剩余残差（透明底低 alpha 像素、弹簧停下那一帧导出截到上一帧）和数字见 `reports/replay-mismatch-report.md` §12。 |
 | 3 仓库根 dev server 冷启动量测 | **没做**（一直有 Agent 在跑，没有安静的机器可量） |
 | 4 旧任务书文首说明 | 已做，随后旧任务书整体删除（见第 7 节） |
 
@@ -103,7 +103,7 @@
 - **我验**：`tsc` 零错误；`npm test` 1633 / 1632 / 0 失败 / 1 跳过；在 5203 上开编辑器看过——主文档挂两个跨源舞台 iframe（5204 前台 `opacity: 1`、5205 后台 `opacity: 0; pointer-events: none`），主文档里没有整帧图、没有素材元素，点播放 3 秒内 `store.t` 推进 3.000 秒、主文档长任务 0，截图里舞台在画当前片段的卡。
 - **Agent 自报**：12 趟无头探针全绿（每趟一台新 dev server）；导出逐字节 60 / 60 相同；**有头**（不关 vsync）24 / 30 / 60 fps `frame` 间隔均值 41.755 / 33.339 / 16.674 ms，`sec` 差恒为 1 / fps，主文档长任务 0，拖动 30 次往返均值 7.9 ms、最大 11 ms；`verify-bake-protocol`、`verify-export-frame-content` 过；桌面壳 `cargo check` 通过（为此补了两样 gitignore 的本地资源）。
 - **做成什么样**：`probe_port` → `probe_port_at(port, timeout)`，新增 `occupied_stage_ports` 查 5211 / 5212 并在弹窗里点名，**被占只警告不拦启动**；`smoke-boot.mjs` 新增 Step 2b 等两个舞台端口各回 200 + OAC 头；`remote.json` / `on_navigation` 没改；`editor-preview-smoke` 原来是 order-dependent 的（只 `addCardClip` 从不 `newProject`），总验收改成一探针一台新 server，并给它加 `--legacy`。
-- **没验到 / 没做**：拖动 `frame` / `contentBox` 与 legacy 的跨模式逐位比对；K6 那三条；回滚路的截图逐字节比对（只验了结构等价）；「零卡顿」只到「预渲染在跑 + 后台舞台空闲」（探针几百毫秒就收工，压不住「同时」）；桌面壳没真构建、没真跑；`verify-unified-frames.mjs` 挂在「导出页 60 秒没就绪」——退回 main 复跑挂在同一行，可能是环境问题，没查根因。
+- **没验到 / 没做**：拖动 `frame` / `contentBox` 与 legacy 的跨模式逐位比对；K6 那三条；回滚路的截图逐字节比对（只验了结构等价）；「零卡顿」只到「预渲染在跑 + 后台舞台空闲」（探针几百毫秒就收工，压不住「同时」）；桌面壳没真构建、没真跑；`verify-unified-frames.mjs` 挂在「导出页 60 秒没就绪」——退回 main 复跑挂在同一行，可能是环境问题，没查根因。**（2026-09-23 复核：原因是目标端口上没有 dev server，不是代码。脚本不带 `PC_FRAME_TEST_URL` 时打 5192，R7 跑的时候 5188～5200 都没有监听者；CDP 的 `Page.navigate` 连不上时不抛错、只回 `errorText`，`chrome.mjs` 没看它，页面停在错误页，`waitReady` 满 60 秒报这一句。把 `PC_FRAME_TEST_URL` 指到空端口能原样复现；指向在跑的 5203 时二十多趟一次都没出现。见 `reports/replay-mismatch-report.md` §12.7。）**
 - **已知代价**：legacy 模式下点素材段会选不中（主文档的 `mediaRects` 删了，任务书明写的）。
 
 ### R7b 对齐 pinned 的 5 处 + 回归 + R5～R7 零碎——已完成，合并见 git log「合并 R7b」
