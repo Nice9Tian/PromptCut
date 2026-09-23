@@ -1,8 +1,12 @@
 /**
  * ffmpeg 抽帧与素材层渲染。从 server/vite-plugin-vision.ts 逐字搬来,函数体和注释一字未改。
  *
- * 这一层只认磁盘上的素材文件,不碰浏览器、不碰队列 —— 传进来项目状态和时刻,
- * 交回抽出来的 PNG 路径。`mediaFileOf` 那道白名单边界是它唯一的安全职责。
+ * 这一层不碰浏览器、不碰队列 —— 传进来项目状态和时刻,交回抽出来的 PNG 路径。
+ *
+ * 素材从哪儿读:**只经素材服务的 HTTP API**(`mediaSourceOf` → `asset-client.ts` 的 mediaHttpUrl),
+ * ffmpeg 直接拿 http 地址当输入、自己按 Range 定位;这个进程不读本地内容库的目录
+ * (`docs/semantics/architecture/asset-storage.md`「职责」)。
+ * `mediaFileOf` 是还没迁完的老路,只剩 `routes.ts` 的 `/api/vision/sheet` 在用,见它的说明。
  */
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -10,6 +14,7 @@ import os from "node:os";
 import path from "node:path";
 import { extractArgs, mediaLayersAt } from "../vision-compose.mjs";
 import { mediaDir } from "../vite-plugin-media";
+import { mediaHttpUrl } from "../asset-client";
 import { isInside } from "../http-guard.mjs";
 
 /** ffmpeg 抽一帧的上限:本地文件按关键帧定位,正常两三秒 */
@@ -37,6 +42,21 @@ export function ffmpegCommand(): string | null {
 }
 
 /**
+ * 素材在素材服务上的 HTTP 地址(ffmpeg 的 `-i`)。素材服务不可达(基址取不到)时返回 null,
+ * 调用方在 notes 里如实说那一层是空的。地址只由哈希或最后一段文件名拼成,
+ * 请求体里递进来的 `path` 指不到本地内容库以外的文件 —— 边界由素材服务那一侧守。
+ */
+export function mediaSourceOf(m: any): string | null {
+  return mediaHttpUrl(m);
+}
+
+/**
+ * **老路,待迁**:直接读本地内容库的目录。
+ *
+ * 只剩 `routes.ts` 的 `POST /api/vision/sheet`(see_frames 素材模式的镜头拼图)在用:那里拿返回值
+ * 做 `fs.statSync(file).mtimeMs` 当缓存键,换成 HTTP 地址就得同时把缓存键改成按素材哈希,
+ * 而 `routes.ts` 不在第 5 步的改动范围里。迁法见第 5 步的任务报告;迁完删掉这个函数。
+ *
  * 素材文件在磁盘上的位置:导入时记的 path 优先,没有就按文件名去媒体目录找。
  *
  * `m` 来自**请求体**(`/api/vision/sheet` 的 media、snapshot 的 project.media),所以 `m.path`
@@ -97,9 +117,9 @@ async function renderMediaLayers(root: string, project: any, t: number, dir: str
   const out: string[] = [];
   let i = 0;
   for (const layer of layers) {
-    const file = mediaFileOf(root, layer.media);
+    const file = mediaSourceOf(layer.media);
     if (!file) {
-      notes.push(`素材「${layer.media.name || layer.media.id}」的文件服务端取不到,画面里它那一层是空的。`);
+      notes.push(`素材「${layer.media.name || layer.media.id}」取不到(素材服务不可达),画面里它那一层是空的。`);
       continue;
     }
     try {
