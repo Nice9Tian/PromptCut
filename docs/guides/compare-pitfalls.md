@@ -146,3 +146,18 @@ url 引用  /url\((&quot;|["'])?([^)"']*?)(&quot;|["'])?\)/   取最后一个 `#
 `<style>` 文本里的 `#id` **选择器**不改名(和预渲染侧 `__r` 一样)——`__pcCreateSnapshot` 已经把计算样式
 整份内联,样式表规则已被内联值盖掉;全仓两处 `<defs>` 也都写在卡片自己的 `<svg>` 里,不靠样式表选中。
 `<style>` 里的 `url(#id)` 则会跟着元素一起改,方向是安全的。
+
+## 10. 快照重放对不上整帧导出:先查这三类
+
+2026-09-23 逐卡逐帧对账(「整帧导出 vs 同一拍生成的快照重放」)撞过的墙,细节和数据见
+`docs/archive/restructure_planning/reports/replay-mismatch-report.md` §13。
+
+- **读得到的数只有 6 位有效数字。** `getComputedStyle`、元素自己 `style` 属性的序列化、Typed OM 里没被转成数值的
+  (`stroke-dasharray`、`border-radius` 这类列表值)都是 6 位。四位数的位移只剩两位小数,落在像素取整边界上就错一整格。
+  排查时拿 Typed OM(`computedStyleMap()`)或 SVG 属性原文换进快照再重放,像素归零就是它。
+  JS 直接写进内联样式的全精度数(React 的 `strokeDasharray`、Motion 共享布局改写的 `borderRadius`)在 DOM 里读不回来。
+- **合成层判据是 relevant,不只是 current。** 暂停在结尾、靠 `fill` 停在终态的动画,Chrome 照样提层。
+  比层用 CDP `LayerTree.compositingReasons`,两边的层数和原因对不上,先看这个。
+- **整帧导出的画面也有历史。** 一个合成层只要按非 1 的缩放画过,缩放回到 1 之后文字的栅格结果就和新建的层不同,
+  直到这一层重建;这时 DOM 和合成器里的变换都已经是新值。重放一份快照永远是新建的层,这类差别对不上是正常的。
+  判断方法:在重放页里先按上一帧的变换画一拍、再原地改成这一帧的值,对上了就是历史。
