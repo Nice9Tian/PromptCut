@@ -14,14 +14,15 @@
 |---|---|---|---|
 | Task 0 冒烟测试 | ✅ 全绿，已清理 | 已删除 | tsc 0 错误；test 1718 项 / 1717 通过 / 0 失败 / 1 跳过；build 通过；editor-preview-smoke 通过；确定性 1800/1800 |
 | 提权机制验证 | ✅ 通过，已清理 | 已删除 | 首次调用就带 `sandbox_permissions:"require_escalated"`，rollout 日志有原文 |
-| T1a 第 5 步独立审查 | 待派 | 不用 worktree（只读） | 第二阶段 |
-| T1b 第 5 步素材服务空壳 | 等 T1a 与用户裁定 | `claude/asset-service-step5` | 第三阶段 |
-| T2 R8 轨道流 | 待派 | `claude/r8-streams` | 第二阶段 |
-| T3a R9 探针 | 待派 | `claude/r9-gl-probe` | 第二阶段 |
-| T3b R9 实现 | 等 T3a 通过且 T2 合并 | `claude/r9-webgl` | 第三阶段 |
-| T4 手动截短总时长入口 | 待派 | `claude/duration-trim-ui` | 第二阶段 |
-| T5a D3 实体矩形 | 等 T2 合并 | `claude/d3-entity-rects` | 第三阶段 |
-| T5b R0 冷启动量测 | 待派 | `claude/r0-cold-start` | 第二阶段 |
+| T1a 第 5 步独立审查 | ✅ 完成，主 Agent 已自行裁定（第 12 节） | 无 | codex 14 条 + 6 条不一致；采纳 1、2（部分）、6（部分）进 T1b；3～14 属第 6/7b 步，未采纳，留给用户决定是否折回 cloud-task.md。评估存 scratchpad `T1a-review-verdict.md` |
+| T1b 第 5 步素材服务空壳 | ✅ 已合并 `8b8ad2c` | 已删除 | 主 Agent 补一处：私有网络访问只放给回环/局域网来源（`isPrivateOrigin`）。tsc 0；test 1735/1734/0/1；确定性 1800/1800；verify-unified-frames 通过；合并后 main tsc 0、test 1735/1734/0/1。报告存 scratchpad `T1b-TASK-REPORT.md` |
+| T1b-2 素材读取收尾（R8 之后） | ✅ 已合并 `2944743` | 已删除 | 导出与镜头拼图只经素材服务 HTTP；tsc 0；test 1776/1775/0/1；确定性 1800/1800；verify-unified-frames 通过；合并后 main 同。剩余：`frame-pipeline.mjs:272-276` 仍 stat 素材文件（只取大小/mtime，归后续） |
+| T2 R8 轨道流 | ✅ 已合并 `787f7d9` | 已删除 | 主 Agent 应用了清单外接线补丁 r8-glue.patch（6 个文件，与其它任务不撞），并先把 main 合进分支再验。tsc 0；test 1769/1768/0/1；确定性 1800/1800；verify-unified-frames 通过；**与 main 导出逐像素 1800/1800 相同**（H264 豁免未用上）；主 Agent 复跑 stream-editor-e2e、stream-play-probe 均 PASS 并看图。合并后 main tsc 0、test 1769/1768/0/1。报告与证据存 scratchpad |
+| T3a R9 探针 | ✅ 已合并 `553746d` | 已删除 | 达 M3：两路线 20/20 像素通过，主线程 p90≤0.1ms、max≤0.2ms（主 Agent 复跑一致）；不走退路。往返有 30～84ms 尖峰在 Worker/GPU 侧，交 T3b 留意。tsc 0；test 1718/1717 通过/0 失败/1 跳过；确定性 1800/1800 |
+| T3b R9 实现 | ✅ 已合并 `eff2011` | 已删除 | M1～M5 落地；M7 未做（任务书自相矛盾）、三张用户卡不在仓库、导出页暂走主线程（同一渲染器）。清单外补丁 r9-glue.patch **未应用**（留用户定）。主 Agent 先合 main 进分支再验：tsc 0；test 1789/1788/0/1；确定性 1800/1800；**与 main 导出逐像素 1800/1800 相同**；verify-unified-frames 通过；gl-stage-probe 30/30；gl-migrate-compare 10/10（非边缘 ≤1/255，边缘抗锯齿差若干像素，属 M5 容差）。合并后 main tsc 0、test 1789/1788/0/1 |
+| T4 手动截短总时长入口 | ✅ 已合并 `12dd7d6` | 已删除 | tsc 0；test 1721/1720/0/1；确定性 1800/1800；界面实测：20→12 截短生效、输 90 钳回 20 并恢复跟随，截图 scratchpad `t4-dialog.png` |
+| T5a D3 实体矩形 | ✅ 已合并 `cc9d53e` | 已删除 | 主 Agent 先合 main 进分支，再应用清单外补丁 d3-routes-rects.patch（routes.ts 3 行，T1b-2 已合并、不撞）。tsc 0；test 1785/1784/0/1；确定性 1800/1800；verify-unified-frames 通过；真打 see_frames：frames[].rects 结构化字段齐，对图核对 odo/pill 框相符。合并后 main tsc 0、test 1785/1784/0/1 |
+| T5b R0 冷启动量测 | ✅ 已合并 `88ed1fe` | 已删除 | 冷：首页 200 中位 938.8ms、舞台就绪 4750.4ms；热：923.4ms / 4626.8ms。tsc 0；test 1718/1717/0/1；确定性 1800/1800。合并后 main tsc 0、test 1721/1720/0/1 |
 
 ---
 
@@ -390,3 +391,38 @@ codex 只跑 `tsc` 和跟改动相关的单测，外加任务本身要求的探�
   - 不改像素基线。
   - 不碰 5190～5192 和用户的运行时副本。
   - 破坏性操作由主 Agent 自己做，并走确认流程。
+
+---
+
+## 12. /goal 全自动模式（用户 2026-09-24 定，覆盖前文冲突处）
+
+用户用 `/goal` 下达了无人值守全自动模式。与前文冲突时以本节为准：
+
+1. **启动即并行派发**第二阶段：T1a、T2、T3a、T4、T5b。每完成一个节点，把状态和合并记录写进第 0 节。
+2. **自动合并**：第 10 节三条件照旧。特例：**T2 引入 H264 编码，有损压缩造成的像素差异属于预期变更，放行**（仍要求确认差异来源确是 H264 编码路径，而非别处）。
+3. **T1a 不再挂起等用户裁定**：主 Agent 自己逐条评估，无架构风险的合理建议自动采纳，并推进 T1b；未采纳的写进报告。（改 `cloud-task.md` 本身仍属改计划文档，不做；采纳的意见只写进 T1b 的派发提示。）
+4. **T3a 不达标不挂起**：自动走 M3 末尾退路（Worker `transferToImageBitmap()` 整张图集一次传回、主线程按区域 `drawImage`），记下决策，推进 T3b。
+5. **排雷**：代码报错、单测失败、架构冲突，优先用 `subagent-agy` 调 `gemini-3.1-pro-high` 协同分析（第 11 节）。
+6. **额度回退**：GPT（策略 B）或 Gemini 撞额度 / 限流 → 放弃外部模型，改由 Opus（`opus-dev`）接管该子任务或排错。**不再因额度挂起**（替代第 7 节「额度用尽」那一条）。
+7. **硬性挂起只剩两种**（替代第 7 节五种）：
+   - (a) 像素基线出现非格式压缩导致的异常改变；
+   - (b) 回退和排雷之后仍修不好的严重系统级故障。
+   - 原第 7 节第 4 条（样式、命名等业务决策）不再挂起：子 Agent 取最保守、不改语义文档的做法，记进报告的「待用户定」清单，收尾时汇总给用户。
+8. 不变的边界：不推送、不改写历史、不新增依赖、不改像素基线（H264 特例除外）、不碰 5190～5192 和用户运行时副本。
+
+---
+
+## 13. 本轮收尾（2026-09-24，/goal 全自动模式）
+
+- 全部 T1～T5 已合并进本地 main（未推送）。合并顺序：T4 `12dd7d6` → T3a `553746d` → T5b `88ed1fe` → T1b `8b8ad2c` → T2 `787f7d9` → T1b-2 `2944743` → T5a `cc9d53e` → T3b `eff2011`。每次合并后 main 都重跑 tsc 与 npm test，全绿；最终 main：tsc 0、1789 项 / 1788 过 / 0 失败 / 1 跳过。
+- 所有分支的 verify-determinism 都是 1800/1800；T2、T3b 另与 main 导出逐像素比对 1800/1800 相同。**没有触发硬性挂起条件**；未动用 Gemini 排雷与额度回退（没遇到修不了的报错，也没撞额度）。
+- 各任务报告、证据、未应用的补丁都在 scratchpad：`T*-TASK-REPORT.md`、`T1a-review-verdict.md`、`r8-evidence/`、`r9-glue.patch`。
+
+### 待用户定（汇总）
+1. **cloud-task.md**：T1a 的第 3～14 条与 6 条「文档和现状不一致」要不要折回（改计划文档须逐句确认）。
+2. **素材服务**：局域网监听地址（现仍 127.0.0.1）；CORS 用 `*` 还是白名单；64 GiB 上限；`PROMPTCUT_ASSET_URL`；`/api/media/*` 第 6 步去留；`frame-pipeline.mjs:272-276` 仍 stat 素材文件。
+3. **R8**：`streamKey` 命名与流库目录；`streams` 开关是否进设置；dual 模式怎么触发后台 `preload`（现在编辑台默认不会产流）；硬件编码器默认；「预渲染中」样式；旧流回收；两张粒子卡同挂的已有 bug（修它会改导出像素）；保底 3 帧与 80 MB 冲突取舍。
+4. **R9**：M7（像素映射）怎么办；导出页走 Worker（依赖 `chrome.mjs` 跳过 blob 的补丁）；`r9-glue.patch`（含 `glRoute` 下拉）要不要合；三张用户卡迁移；53 张素材粒子卡标 `dom2d`；live 拍超时 1 s。
+5. **D3**：`see_frames` 工具说明（`server/tools/vision.mjs`）要不要加一句 rects；要不要给 Agent 关掉 rects 的参数；多卡多时刻时文字是否截断。
+6. **文档更正建议**（各报告里）：`tsc -b` 不覆盖 `server/`（建议写进 verification.md）；预渲染子进程随机端口不受端口段约束；R8 / R9 / D3 任务书各自的更正条目。
+7. 主工作区 `.claude/execution-plan.md` 的状态更新未提交（该文件已被用户提交过一版）。
