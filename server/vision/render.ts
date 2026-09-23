@@ -25,6 +25,18 @@ export interface FrameResult {
   width?: number | null;
   height?: number | null;
   transparentRatio?: number;
+  /**
+   * D3:这一帧的实体矩形(舞台像素坐标,不是缩图坐标)。只在要了 rects 时有;null = 这一帧没量出来。
+   * 某项的 `solid` 为 null 表示那张卡此刻没有实体像素。
+   */
+  rects?: EntityRect[] | null;
+}
+
+/** D3:一张卡在这一帧的包裹层外框和实体范围,都是 `[x, y, w, h]` 舞台像素 */
+export interface EntityRect {
+  clipId: string;
+  box: [number, number, number, number];
+  solid: [number, number, number, number] | null;
 }
 
 /** 渲染的附加选项 */
@@ -35,6 +47,47 @@ export interface RenderOpts {
   post?: { shrink?: boolean; bg?: string | null; stats?: boolean };
   /** 谁来跑:不给就是渲染池 */
   runner?: Runner;
+  /**
+   * D3:每帧附实体矩形(`FrameResult.rects`),并按 clipId 一行写进 `notes`(工具结果的文字部分)。
+   * 不给就看 `post.shrink`:缩图 = 给模型看的那张(`see_frames`),给模型看的图一律附矩形;
+   * 预渲染贴图、动图这些不缩图的调用方不付这一趟。只在 FramePipeline 那条路上有,`runner` 旁路不量。
+   */
+  rects?: boolean;
+}
+
+const fmtBox = (b: readonly number[] | null) => (b ? `[${b.join(", ")}]` : "null");
+
+/**
+ * D3 的文字部分:每帧一段,段里按 clipId 一行。坐标是舞台像素(项目的 width × height);
+ * 给模型看的图多半缩过,所以两个尺寸都写出来。
+ */
+export function entityRectsNote(stage: { width: number; height: number }, fps: number, frames: [number, EntityRect[] | null][], image?: { width?: number | null; height?: number | null }): string {
+  const scaled = image?.width && image?.height && (image.width !== stage.width || image.height !== stage.height)
+    ? `图片缩到了 ${image.width}×${image.height},按比例换算` : "和图片像素一致";
+  const head = `实体矩形(舞台 ${stage.width}×${stage.height} 像素坐标 [x, y, w, h],${scaled};box = 片段包裹层外框,solid = 实体像素的范围,solid 为 null = 这张卡此刻没有实体像素):`;
+  const blocks = frames.map(([frame, rects]) => {
+    const t = `t=${+(frame / fps).toFixed(3)}s`;
+    if (!rects) return `${t}:没量出来。`;
+    if (!rects.length) return `${t}:画面上没有片段。`;
+    return [`${t}:`, ...rects.map((r) => `${r.clipId} box=${fmtBox(r.box)} solid=${fmtBox(r.solid)}`)].join("\n");
+  });
+  return [head, ...blocks].join("\n");
+}
+
+/** 给已经渲好的几帧附实体矩形。量不出来不连累图片:记一句话照样交图;只有调用方撤了才往上抛 */
+async function attachEntityRects(service: ReturnType<typeof frameService>, project: any, times: number[], result: Map<number, FrameResult>, notes: string[], signal?: AbortSignal): Promise<void> {
+  try {
+    const measured: Map<number, EntityRect[] | null> = await service.entityRects(project, times, { signal });
+    for (const [frame, value] of result) value.rects = measured.get(frame) ?? null;
+    const fps = Number(project.fps) > 0 ? project.fps : 30;
+    const frames = [...result.keys()].sort((a, b) => a - b);
+    notes.push(entityRectsNote({ width: project.width, height: project.height }, fps,
+      frames.map((frame): [number, EntityRect[] | null] => [frame, result.get(frame)?.rects ?? null]), result.get(frames[0])));
+  } catch (e: any) {
+    if (signal?.aborted) throw e;
+    for (const value of result.values()) value.rects = null;
+    notes.push(`实体矩形没量出来(${e?.message || e}),图片不受影响。`);
+  }
 }
 
 /**
@@ -87,6 +140,7 @@ export async function renderFrames(root: string, origin: string, project: any, t
         } finally { await Promise.all([fsp.rm(out, { force: true }), fsp.rm(file, { force: true })]); }
       } else result.set(frame, { buf: value.buf, width: project.width, height: project.height });
     }
+    if (o.rects ?? !!o.post?.shrink) await attachEntityRects(service, normalized, times, result, notes, o.signal);
     return result;
   }
 
