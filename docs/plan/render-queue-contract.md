@@ -1125,7 +1125,7 @@ export function cardLockDecision({ lock, ownFingerprint, complete, now, idleMs =
 
 ## G. M5a：网络层、集群令牌与服务地址登记（文档服务通用化）
 
-主 Agent 起草，2026-09-25，**待用户过目后定稿**。依据：`docs/plan/Master-Execution-Plan.md` 第 5.4 节（文档服务通用化）、第 7 节 M5a、第 3 节 S1 / S3 / S4；语义 `document-service.md`「职责」「连接发现」（M5a 开工前按 S1 与定位改写）。
+主 Agent 定稿，2026-09-25（用户授权自动推进，未逐节审阅；有疑点按回退梯次处理）。依据：`docs/plan/Master-Execution-Plan.md` 第 5.4 节（文档服务通用化）、第 7 节 M5a、第 3 节 S1 / S3 / S4；语义 `document-service.md`「职责」「连接发现」（M5a 开工前按 S1 与定位改写）。
 
 **范围**：
 - 文档服务拆成「通用核心 + 模块」，渲染任务队列与服务地址登记各是一个模块；
