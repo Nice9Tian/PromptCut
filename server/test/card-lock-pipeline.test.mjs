@@ -122,7 +122,8 @@ function graphOf({ twin = false } = {}) {
 
 const withTmp = async (prefix, fn) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
-  try { return await fn(root); } finally { await fs.rm(root, { recursive: true, force: true }); }
+  // 锁库的写盘是排在后面异步做的（F.3），用例结束时可能还在落；删目录时重试几次
+  try { return await fn(root); } finally { await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); }
 };
 
 /**
@@ -412,6 +413,7 @@ test('L3 applyCardLocks：锁换回本机指纹后恢复自己的键（foreign: 
   assert.equal(s.ctl('clip-a').envFingerprint, PAGE2);
 
   // 锁没了（换一个空的锁库）：恢复自己的键
+  await s.lockStore().flush();
   const { createCardLockStore } = await loadCardLock();
   s.pipeline.cardLockStore = createCardLockStore({ dir: path.join(root, 'empty-locks') });
   await s.pipeline.cardLockStore.load();
@@ -649,8 +651,19 @@ test('L7 接手时同一内容键的所有片段一起换回自己的键、各�
   stubPng(s.entry, { complete: false });
   bakeLog.length = 0;
   s.layers.length = 0;
-  await s.pipeline.fillCardControls(s.entry, fakeBakery(s), null, s.entry.cardPlan);
+  // 换键发层要在产出任何 HTML 帧之前，两个片段都发：记下第一次渲 HTML 那一刻已经发出的 layer
+  const aDir = path.join(root, 'controls', s.pngKey['clip-a']);
+  let atFirstHtml = null;
+  onBake = async rec => { if (atFirstHtml === null && rec.out === aDir && rec.snapshotFrames.length) atFirstHtml = s.layers.slice(); };
+  try {
+    await s.pipeline.fillCardControls(s.entry, fakeBakery(s), null, s.entry.cardPlan);
+  } finally { onBake = null; }
   const own = s.own('clip-a');
+  assert.ok(atFirstHtml, '接手后渲了 HTML');
+  for (const id of ['clip-a', 'clip-a2']) {
+    assert.ok(atFirstHtml.some(l => l.clipId === id && l.snapshotKey === own && l.ranges.length === 0),
+      `${id}：接手时（渲 HTML 之前）就发了自己键的换键 layer；实际 ${JSON.stringify(atFirstHtml)}`);
+  }
   for (const id of ['clip-a', 'clip-a2']) {
     assert.equal(s.ctl(id).snapshotKey, own, `${id} 换回自己的键`);
     const ownLayers = s.layersOf(id).filter(l => l.snapshotKey === own);
