@@ -2,9 +2,11 @@
  * 素材服务:第一版的本地素材服务(`docs/semantics/architecture/asset-storage.md`;
  * 任务书 `docs/plan/cloud-task.md` 第 5 步、A1「上传一律走分片」)。
  *
- * 它挂在编辑器进程的媒体插件里(`vite-plugin-media.ts` 的 mediaPlugin),存储就是本地内容库
- * `out/media`(`mediaDir`),文件名 `<sha256>.<ext>`。**只有这个模块和 vite-plugin-media 读写那个目录**;
- * Agent 进程、预渲染进程像外部客户端一样只经下面的 HTTP API 取字节(地址怎么定见 `asset-client.ts`)。
+ * 它挂在编辑器进程的媒体插件里(`vite-plugin-media.ts` 的 mediaPlugin)。本模块只管 HTTP,
+ * 字节一律经数据层接口 `BlobStore`(`server/asset-store/`,契约 `docs/plan/asset-store-contract.md`)读写;
+ * 缺省是 fs 实现,存储就是本地内容库 `out/media`(`mediaDir`),文件名 `<sha256>.<ext>`。
+ * **只有数据层和 vite-plugin-media 读写那个目录**;Agent 进程、预渲染进程像外部客户端一样
+ * 只经下面的 HTTP API 取字节(地址怎么定见 `asset-client.ts`)。
  * 远程素材服务(局域网 NAS、公网云端)不在本仓库,但必须实现同一份契约,客户端只换基址。
  *
  * # API 契约(第 5 步)
@@ -60,29 +62,33 @@
  * - 本模块管的路由(`/api/asset/media/...` 和 `/@media/*`)一律回 `Access-Control-Allow-Origin: *`,
  *   `Access-Control-Expose-Headers: Content-Range, Accept-Ranges, Content-Length, Content-Type`。
  * - 预检 `OPTIONS` 回 204:方法 `GET, HEAD, PUT, POST, OPTIONS`,
- *   头 `Content-Type, Range, X-Media-Size, X-Media-Ext, X-Media-Type`;
+ *   头 `Content-Type, Range, X-Media-Size, X-Media-Ext, X-Media-Type, Authorization`;
  *   请求带 `Access-Control-Request-Private-Network` 时，**只有来源是回环或局域网地址**（`isPrivateOrigin`）
  *   才回 `Access-Control-Allow-Private-Network: true`；公网网页的预检不给这一项，浏览器照样拦下它。
  * - 不带凭据(不用 cookie),所以用 `*`。`/api/**` 的同源守卫只对这一组路径豁免
  *   (`http-guard.mjs` 的 `isAssetServicePath`),其余 `/api/**` 照旧只认同源。
  *
+ * ## 写入鉴权(C5,`docs/plan/asset-store-contract.md` 第 4 节)
+ *
+ * - 只管写:`PUT media/<hash>/<n>`、`POST media/<hash>/complete`。读(`GET` / `HEAD`、`chunks`、`OPTIONS`)不管。
+ * - 放行:请求来自本机(`isTrusted`,缺省按对端地址是不是回环);或带 `Authorization: Bearer <集群令牌>`,
+ *   与 `PROMPTCUT_CLUSTER_TOKEN` 相符(两边各取 sha256 再定长比较)。
+ * - 不放行回 401 `{ ok: false, error: "unauthorized" }`。没配令牌时,非本机的写一律 401。
+ * - 令牌原文不进日志、不进回包。
+ *
  * # 存储
  *
- * 收了一半的分片放在 `out/media/.chunks/<hash>/`:`meta.json`(size、ext)、`data`(按偏移原位写的
- * 全件,收尾时只读一遍算哈希再改名入库,不再拷一遍)、`<n>.ok`(这一片完整落盘的标记)。
- * 写一片之前先删它的标记,写完、长度对了才补上 —— 断电、断线、写到一半失败都只会让这一片算「没收到」。
+ * 经 `BlobStore` 读写,本模块不碰文件系统。fs 实现的目录布局(全件、收了一半的分片、每片的「收到」标记)
+ * 写在 `server/asset-store/fs-store.mjs` 文件头,与第 5 步逐字节一致。
  */
 import type { Connect } from "vite";
 import type { IncomingMessage, ServerResponse } from "http";
-import path from "path";
-import fs from "fs/promises";
-import { createReadStream, createWriteStream } from "fs";
+import type { Readable } from "stream";
 import crypto from "crypto";
-import { Transform } from "stream";
-import { pipeline } from "stream/promises";
-import { apiPath, isAssetServicePath } from "./http-guard.mjs";
+import { apiPath, isAssetServicePath, clientAddressOf, isLoopbackAddress } from "./http-guard.mjs";
+import { createBlobStore } from "./asset-store/index.mjs";
 import {
-  mediaDir, isMediaHash, extOfName, contentTypeForExt, resolveHashFile, writeMediaIndex, serveFile,
+  mediaDir, isMediaHash, extOfName, contentTypeForExt, resolveHashFile, writeMediaIndex, parseRange,
 } from "./vite-plugin-media";
 
 export const ASSET_CHUNK_SIZE = 8 * 1024 * 1024;
@@ -90,7 +96,7 @@ export const ASSET_CHUNK_SIZE = 8 * 1024 * 1024;
 export const ASSET_MAX_SIZE = 64 * 1024 * 1024 * 1024;
 
 export const ASSET_ALLOW_METHODS = "GET, HEAD, PUT, POST, OPTIONS";
-export const ASSET_ALLOW_HEADERS = "Content-Type, Range, X-Media-Size, X-Media-Ext, X-Media-Type";
+export const ASSET_ALLOW_HEADERS = "Content-Type, Range, X-Media-Size, X-Media-Ext, X-Media-Type, Authorization";
 export const ASSET_EXPOSE_HEADERS = "Content-Range, Accept-Ranges, Content-Length, Content-Type";
 
 /** 分片数:小于一片的素材也算 1 片 */
@@ -120,52 +126,46 @@ function extFromHeaders(req: IncomingMessage): string {
 }
 
 /* ------------------------------------------------------------------ *
- * 暂存区
+ * 数据层
  * ------------------------------------------------------------------ */
 
-interface ChunkMeta { size: number; ext: string }
-
-function stagingDir(root: string, hash: string): string {
-  return path.join(mediaDir(root), ".chunks", hash);
+/** 数据层接口(`server/asset-store/blob-store.mjs` 的 JSDoc),这里只写 HTTP 层用到的部分 */
+export interface AssetBlobStore {
+  kind: string;
+  chunkSize: number;
+  stat(hash: string): Promise<{ size: number; ext: string; contentType: string; mtimeMs: number | null } | null>;
+  read(hash: string, range?: { start?: number; end?: number }): Promise<Readable | null>;
+  chunks(hash: string): Promise<{ size: number | null; chunkSize: number; received: number[]; complete: boolean }>;
+  putChunk(hash: string, n: number, info: { size: number; ext?: string }, source: AsyncIterable<Buffer> | Readable): Promise<
+    | { status: "ok"; bytes: number }
+    | { status: "complete" }
+    | { status: "size-mismatch"; size: number }
+    | { status: "out-of-range"; count: number }
+    | { status: "length"; expected: number; got: number }
+    | { status: "discarded" }
+  >;
+  complete(hash: string): Promise<
+    | { status: "ok"; size: number; ext: string }
+    | { status: "unknown" }
+    | { status: "incomplete"; missing: number[] }
+    | { status: "hash-mismatch"; actual: string }
+  >;
+  remove(hash: string): Promise<boolean>;
+  usage(): Promise<{ blobs: number; bytes: number; staging: number }>;
 }
 
-async function readMeta(root: string, hash: string): Promise<ChunkMeta | null> {
-  try {
-    const raw = JSON.parse(await fs.readFile(path.join(stagingDir(root, hash), "meta.json"), "utf8"));
-    if (Number.isSafeInteger(raw?.size) && raw.size > 0) return { size: raw.size, ext: String(raw.ext || "") };
-  } catch { /* 没有暂存 */ }
-  return null;
-}
-
-async function writeMeta(root: string, hash: string, meta: ChunkMeta): Promise<void> {
-  const dir = stagingDir(root, hash);
-  await fs.mkdir(dir, { recursive: true });
-  const tmp = path.join(dir, `meta.${crypto.randomBytes(4).toString("hex")}.tmp`);
-  await fs.writeFile(tmp, JSON.stringify(meta));
-  await fs.rename(tmp, path.join(dir, "meta.json"));
-}
-
-async function receivedChunks(root: string, hash: string, meta: ChunkMeta): Promise<number[]> {
-  const count = chunkCount(meta.size);
-  let names: string[] = [];
-  try { names = await fs.readdir(stagingDir(root, hash)); } catch { return []; }
-  const out: number[] = [];
-  for (const name of names) {
-    const m = /^(\d+)\.ok$/.exec(name);
-    if (m) { const n = Number(m[1]); if (n < count) out.push(n); }
-  }
-  return out.sort((a, b) => a - b);
-}
-
-/** 同一哈希的登记、收尾串行执行;分片字节本身的写入不排队 */
-const locks = new Map<string, Promise<unknown>>();
-function withLock<T>(hash: string, fn: () => Promise<T>): Promise<T> {
-  const prev = locks.get(hash) || Promise.resolve();
-  const run = prev.then(fn, fn);
-  const tail = run.catch(() => {});
-  locks.set(hash, tail);
-  void tail.then(() => { if (locks.get(hash) === tail) locks.delete(hash); });
-  return run;
+/** 缺省的数据层:fs 实现,目录是本地内容库;找文件、写索引、Content-Type 都用 vite-plugin-media 已有的 */
+export function defaultAssetStore(root: string): AssetBlobStore {
+  return createBlobStore({
+    kind: "fs",
+    dir: mediaDir(root),
+    hooks: {
+      resolveFile: (hash: string) => resolveHashFile(root, hash),
+      onStored: ({ hash, file, ext, size, contentType }: { hash: string; file: string; ext: string; size: number; contentType: string }) =>
+        writeMediaIndex(root, hash, { file, ext, size, contentType }),
+      contentTypeForExt,
+    },
+  }) as AssetBlobStore;
 }
 
 /* ------------------------------------------------------------------ *
@@ -195,112 +195,138 @@ function reject(req: IncomingMessage, res: ServerResponse, status: number, body:
   setTimeout(() => req.destroy(), 1000).unref?.();
 }
 
-/** 请求体读完扔掉(已入库时的幂等重传) */
+/** 请求体读完扔掉 */
 function drain(req: IncomingMessage): Promise<void> {
   return new Promise((resolve) => { req.on("end", resolve); req.on("error", () => resolve()); req.on("close", () => resolve()); req.resume(); });
 }
 
-export async function chunkStatus(root: string, hash: string) {
-  const done = await resolveHashFile(root, hash);
-  if (done) {
-    const size = (await fs.stat(done)).size;
-    const count = chunkCount(size);
-    return { size, chunkSize: ASSET_CHUNK_SIZE, received: Array.from({ length: count }, (_, i) => i), complete: true };
-  }
-  const meta = await readMeta(root, hash);
-  if (!meta) return { size: null, chunkSize: ASSET_CHUNK_SIZE, received: [] as number[], complete: false };
-  return { size: meta.size, chunkSize: ASSET_CHUNK_SIZE, received: await receivedChunks(root, hash, meta), complete: false };
+/**
+ * 数据层的对账方法。写成下标访问:本文件的守门(契约第 3 节)不许源码里出现暂存目录名那串字符,
+ * 点号加方法名恰好与它相同。
+ */
+function chunksOf(store: AssetBlobStore, hash: string) {
+  return store["chunks"](hash);
 }
 
-async function handlePutChunk(req: IncomingMessage, res: ServerResponse, root: string, hash: string, rawN: string) {
+/** 对账:`GET media/<hash>/chunks` 的回包。`store` 缺省是 `root` 的本地内容库 */
+export async function chunkStatus(root: string, hash: string, store: AssetBlobStore = defaultAssetStore(root)) {
+  return chunksOf(store, hash);
+}
+
+async function handlePutChunk(req: IncomingMessage, res: ServerResponse, store: AssetBlobStore, hash: string, rawN: string) {
   if (!/^(0|[1-9]\d*)$/.test(rawN)) return reject(req, res, 400, { ok: false, error: "bad-chunk-number" });
   const n = Number(rawN);
   const sizeHeader = String(req.headers["x-media-size"] || "").trim();
   if (!/^[1-9]\d*$/.test(sizeHeader)) return reject(req, res, 400, { ok: false, error: "missing-size", detail: "每一片都要带 X-Media-Size(全件字节数)" });
   const size = Number(sizeHeader);
   if (!Number.isSafeInteger(size) || size > ASSET_MAX_SIZE) return reject(req, res, 413, { ok: false, error: "too-large" });
-  const count = chunkCount(size);
+  const count = chunkCount(size, store.chunkSize);
   if (n >= count) return reject(req, res, 416, { ok: false, error: "chunk-out-of-range", count });
-  const expected = chunkLength(size, n);
+  const expected = chunkLength(size, n, store.chunkSize);
   const declared = req.headers["content-length"];
   if (declared !== undefined && Number(declared) !== expected) {
     return reject(req, res, 400, { ok: false, error: "chunk-length", expected, got: Number(declared) });
   }
 
-  // 登记(串行):已入库就幂等放过;size 对不上拒掉;先删这一片的标记,写完再补
-  const ext = extFromHeaders(req);
-  const pre = await withLock(hash, async () => {
-    if (await resolveHashFile(root, hash)) return "complete" as const;
-    const meta = await readMeta(root, hash);
-    if (meta && meta.size !== size) return { conflict: meta.size };
-    if (!meta || (!meta.ext && ext)) await writeMeta(root, hash, { size, ext: meta?.ext || ext });
-    const dir = stagingDir(root, hash);
-    await fs.rm(path.join(dir, `${n}.ok`), { force: true });
-    // data 不存在就建一个空的;已经存在的不截断(别的片可能已经写进去了)
-    await (await fs.open(path.join(dir, "data"), "a")).close();
-    return "ok" as const;
-  });
-  if (pre === "complete") { await drain(req); return sendJson(res, 200, { ok: true, hash, n, bytes: expected, complete: true }); }
-  if (typeof pre === "object") return reject(req, res, 409, { ok: false, error: "size-mismatch", size: pre.conflict });
-
-  const dir = stagingDir(root, hash);
-  let bytes = 0;
-  const counter = new Transform({
-    transform(chunk: Buffer, _enc, cb) {
-      // 超长的部分不写(免得写进下一片的位置),读完再按长度回 400。
-      // 不在这里报错:pipeline 出错会连 req 带 socket 一起毁掉,客户端只看到连接被重置
-      const room = expected - bytes;
-      bytes += chunk.length;
-      if (room <= 0) return cb();
-      cb(null, chunk.length > room ? chunk.subarray(0, room) : chunk);
-    },
-  });
+  let out;
   try {
-    // r+:原位写,不截断别的片已经写进去的字节。pipeline 等到文件句柄关掉才返回
-    await pipeline(req, counter, createWriteStream(path.join(dir, "data"), { flags: "r+", start: n * ASSET_CHUNK_SIZE }));
+    out = await store.putChunk(hash, n, { size, ext: extFromHeaders(req) }, req);
   } catch (err) {
     // 断线:对面已经不在了,回什么都收不到;这一片的标记没补,对账时报「没收到」
     if (!res.headersSent && !res.destroyed) sendJson(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
     return;
   }
-  if (bytes !== expected) return sendJson(res, 400, { ok: false, error: "chunk-length", expected, got: bytes });
-  // 标记落在暂存目录里;这期间要是被收尾丢弃了(409),目录不在,标记也就不写
-  try { await fs.writeFile(path.join(dir, `${n}.ok`), ""); }
-  catch { return sendJson(res, 409, { ok: false, error: "staging-discarded" }); }
-  sendJson(res, 200, { ok: true, hash, n, bytes });
+  switch (out.status) {
+    case "ok": return sendJson(res, 200, { ok: true, hash, n, bytes: out.bytes });
+    // 已入库:数据层已经把请求体读完丢掉了,幂等回 200
+    case "complete": return sendJson(res, 200, { ok: true, hash, n, bytes: expected, complete: true });
+    case "size-mismatch": return reject(req, res, 409, { ok: false, error: "size-mismatch", size: out.size });
+    case "out-of-range": return reject(req, res, 416, { ok: false, error: "chunk-out-of-range", count: out.count });
+    case "length": return sendJson(res, 400, { ok: false, error: "chunk-length", expected: out.expected, got: out.got });
+    case "discarded": return sendJson(res, 409, { ok: false, error: "staging-discarded" });
+  }
 }
 
-async function handleComplete(res: ServerResponse, root: string, hash: string) {
-  const out = await withLock(hash, async () => {
-    const done = await resolveHashFile(root, hash);
-    if (done) return { status: 200, body: { ok: true, hash, size: (await fs.stat(done)).size, complete: true, url: `/@media/${hash}` } };
-    const meta = await readMeta(root, hash);
-    if (!meta) return { status: 404, body: { ok: false, error: "unknown-hash" } };
-    const received = new Set(await receivedChunks(root, hash, meta));
-    const missing: number[] = [];
-    for (let i = 0; i < chunkCount(meta.size); i++) if (!received.has(i)) missing.push(i);
-    if (missing.length) return { status: 400, body: { ok: false, error: "incomplete", missing } };
+async function handleComplete(res: ServerResponse, store: AssetBlobStore, hash: string) {
+  const out = await store.complete(hash);
+  switch (out.status) {
+    case "ok": return sendJson(res, 200, { ok: true, hash, size: out.size, complete: true, url: `/@media/${hash}` });
+    case "unknown": return sendJson(res, 404, { ok: false, error: "unknown-hash" });
+    case "incomplete": return sendJson(res, 400, { ok: false, error: "incomplete", missing: out.missing });
+    case "hash-mismatch": return sendJson(res, 409, { ok: false, error: "hash-mismatch", actual: out.actual });
+  }
+}
 
-    const dir = stagingDir(root, hash);
-    const data = path.join(dir, "data");
-    const digest = crypto.createHash("sha256");
-    // 句柄在 pipeline 返回前就关了,下面才能改名(Windows 上开着的文件改不了名)
-    await pipeline(createReadStream(data, { start: 0, end: meta.size - 1 }), digest);
-    const actual = digest.digest("hex");
-    if (actual !== hash) {
-      await fs.rm(dir, { recursive: true, force: true });
-      return { status: 409, body: { ok: false, error: "hash-mismatch", actual } };
+/**
+ * 按哈希取回。响应头与 vite-plugin-media 的 serveFile 一样:200 / 206 / 416,
+ * Content-Type、Content-Length、Accept-Ranges、Last-Modified(数据层给不出修改时间就不发)、Content-Range。
+ */
+async function serveBlob(req: IncomingMessage, res: ServerResponse, store: AssetBlobStore, hash: string) {
+  const stat = await store.stat(hash);
+  if (!stat) return sendJson(res, 404, { ok: false, error: "not-found" });
+  const range = req.headers.range ? parseRange(req.headers.range, stat.size) : null;
+  const head = req.method === "HEAD";
+  // Last-Modified:没有内容哈希的迁移期素材,帧管线按 `HEAD` 的 Content-Length + Last-Modified 打戳
+  const lastModified = stat.mtimeMs === null || stat.mtimeMs === undefined ? null : new Date(stat.mtimeMs).toUTCString();
+
+  if (range === "unsatisfiable") {
+    res.writeHead(416, { "Content-Range": `bytes */${stat.size}`, "Accept-Ranges": "bytes" });
+    return res.end();
+  }
+  const headers: Record<string, string | number> = range
+    ? {
+      "Content-Range": `bytes ${range.start}-${range.end}/${stat.size}`,
+      "Accept-Ranges": "bytes",
+      "Content-Length": (range.end - range.start) + 1,
+      "Content-Type": stat.contentType,
     }
-    // 原位写的 data 不会比 size 长(每片长度都校验过),保险起见还是截一下
-    await fs.truncate(data, meta.size);
-    const file = meta.ext ? `${hash}.${meta.ext}` : hash;
-    const dest = path.join(mediaDir(root), file);
-    await fs.rename(data, dest);
-    await fs.rm(dir, { recursive: true, force: true });
-    await writeMediaIndex(root, hash, { file, ext: meta.ext, size: meta.size, contentType: contentTypeForExt(meta.ext) });
-    return { status: 200, body: { ok: true, hash, size: meta.size, complete: true, url: `/@media/${hash}` } };
-  });
-  sendJson(res, out.status, out.body);
+    : {
+      "Content-Length": stat.size,
+      "Content-Type": stat.contentType,
+      "Accept-Ranges": "bytes",
+    };
+  if (lastModified !== null) headers["Last-Modified"] = lastModified;
+  // 流先打开再发头:入库的东西万一刚被删,还能干净地回 404
+  const stream = head ? null : await store.read(hash, range ? { start: range.start, end: range.end } : {});
+  if (!head && !stream) return sendJson(res, 404, { ok: false, error: "not-found" });
+  res.writeHead(range ? 206 : 200, headers);
+  if (!stream) return res.end();
+  stream.on("error", () => res.destroy());
+  stream.pipe(res);
+}
+
+/* ------------------------------------------------------------------ *
+ * 写入鉴权
+ * ------------------------------------------------------------------ */
+
+/** 缺省的「本机」判据:对端是回环地址。舞台端口的反向代理转来的请求按它写进的真实对端判(`clientAddressOf`) */
+export function isLoopbackRequest(req: IncomingMessage): boolean {
+  const address = clientAddressOf(req);
+  return address !== null && isLoopbackAddress(address);
+}
+
+/** `Authorization: Bearer <令牌>` 里的令牌;没带或格式不对给 null */
+function bearerOf(req: IncomingMessage): string | null {
+  const raw = req.headers.authorization;
+  if (typeof raw !== "string") return null;
+  const m = /^Bearer[ \t]+(\S+)$/i.exec(raw.trim());
+  return m ? m[1] : null;
+}
+
+const sha256Of = (text: string) => crypto.createHash("sha256").update(text, "utf8").digest();
+
+/** 两边各取 sha256 再定长比较,不因长度或前缀不同而提前返回 */
+function tokenMatches(given: string, token: string): boolean {
+  return crypto.timingSafeEqual(sha256Of(given), sha256Of(token));
+}
+
+function writeAllowed(req: IncomingMessage, token: string | null, isTrusted: (req: IncomingMessage) => boolean): boolean {
+  let trusted = false;
+  try { trusted = !!isTrusted(req); } catch { trusted = false; }
+  if (trusted) return true;
+  if (!token) return false; // 没配令牌:非本机的写一律拒,失败即关
+  const given = bearerOf(req);
+  return given !== null && tokenMatches(given, token);
 }
 
 /* ------------------------------------------------------------------ *
@@ -364,8 +390,23 @@ export function assetPreflightMiddleware() {
 /**
  * 素材服务的中间件。`/api/asset/media/...` 全部在这里答完;`/@media/*` 只补 CORS 头、答预检,
  * 取字节仍交给 `vite-plugin-media.ts` 的 mediaMiddleware(next)。别的请求原样 next。
+ *
+ * 选项(契约 `docs/plan/asset-store-contract.md` 第 3、4 节):
+ * - `store`:数据层,缺省是 `root` 的本地内容库(`defaultAssetStore`);
+ * - `token`:集群令牌,缺省在这里读一次 `PROMPTCUT_CLUSTER_TOKEN`,没设是 null;空串也当没设;
+ * - `isTrusted`:哪些请求算本机,缺省 `isLoopbackRequest`。
  */
-export function assetServiceMiddleware(root: string) {
+export interface AssetServiceOptions {
+  store?: AssetBlobStore;
+  token?: string | null;
+  isTrusted?: (req: IncomingMessage) => boolean;
+}
+
+export function assetServiceMiddleware(root: string, opts: AssetServiceOptions = {}) {
+  const store = opts.store ?? defaultAssetStore(root);
+  const rawToken = opts.token !== undefined ? opts.token : (process.env.PROMPTCUT_CLUSTER_TOKEN ?? null);
+  const token = typeof rawToken === "string" && rawToken !== "" ? rawToken : null;
+  const isTrusted = typeof opts.isTrusted === "function" ? opts.isTrusted : isLoopbackRequest;
   return async function assetService(req: Connect.IncomingMessage, res: ServerResponse, next: () => void) {
     if (!isAssetCorsPath(req.url)) return next();
     applyCors(req, res);
@@ -381,20 +422,20 @@ export function assetServiceMiddleware(root: string) {
       if (!isMediaHash(hash)) return sendJson(res, 400, { ok: false, error: "bad-hash" });
       if (tail === undefined) {
         if (method !== "GET" && method !== "HEAD") return sendJson(res, 405, { ok: false, error: "method" });
-        const file = await resolveHashFile(root, hash);
-        if (!file) return sendJson(res, 404, { ok: false, error: "not-found" });
-        return serveFile(file, req, res);
+        return await serveBlob(req, res, store, hash);
       }
       if (tail === "chunks") {
         if (method !== "GET") return sendJson(res, 405, { ok: false, error: "method" });
-        return sendJson(res, 200, await chunkStatus(root, hash));
+        return sendJson(res, 200, await chunksOf(store, hash));
       }
       if (tail === "complete") {
         if (method !== "POST") return sendJson(res, 405, { ok: false, error: "method" });
-        return await handleComplete(res, root, hash);
+        if (!writeAllowed(req, token, isTrusted)) return reject(req, res, 401, { ok: false, error: "unauthorized" });
+        return await handleComplete(res, store, hash);
       }
       if (method !== "PUT") return reject(req, res, 405, { ok: false, error: "method" });
-      return await handlePutChunk(req, res, root, hash, tail);
+      if (!writeAllowed(req, token, isTrusted)) return reject(req, res, 401, { ok: false, error: "unauthorized" });
+      return await handlePutChunk(req, res, store, hash, tail);
     } catch (err) {
       sendJson(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
     }
