@@ -156,3 +156,24 @@ test("backRole / backStage:没有 back 时退回 front(legacy 的单舞台)", ()
   assert.equal(backStage(), b);
   assert.equal(frontStage(), f);
 });
+
+test("releaseStageClient:卸掉的 iframe 的客户端不管落在哪个位置都摘下,frontStage 不再交出它", () => {
+  const a = fakeClient("A");
+  const b = fakeClient("B");
+  setStageClient("front", a);
+  setStageClient("back", b);
+  // K5 互换之后 A 可能在 back 位置上:按客户端找位置,不按实例名猜角色
+  bridge.releaseStageClient(b);
+  assert.equal(frontStage(), a);
+  assert.equal(backRole(), "front", "back 空了,退回 front");
+  bridge.releaseStageClient(a);
+  assert.equal(frontStage(), null, "可见舞台卸掉之后 frontStage() 必须回 null,而不是一个指向已关窗口的客户端");
+});
+
+test("releaseStageClient:不在任何位置上的客户端是空操作(不误摘新登记的那个)", () => {
+  const old = fakeClient("old");
+  const cur = fakeClient("cur");
+  setStageClient("front", cur);
+  bridge.releaseStageClient(old);
+  assert.equal(frontStage(), cur);
+});
