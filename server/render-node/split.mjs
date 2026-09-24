@@ -1,0 +1,129 @@
+import { QUEUE_DEFAULTS, taskIdOf } from '../render-queue/index.mjs';
+import { snapshotTier } from '../snapshot-store.mjs';
+import { resultKeyOf } from './fingerprint.mjs';
+
+/**
+ * `plan` 任务 → 细任务(设计第 2 节、Q1,契约 B.4)。
+ *
+ * 页面只发粗任务「给这一版项目做计划」;第一个认领它的节点在 Chrome 里算出 card plan、
+ * 用 `card-cache.mjs` 算出结果键和预渲染集合,再用这里的 `splitPlan` 切成细任务发布回队列
+ * (`source.derivedFrom` 指向那个 `plan` 任务)。
+ *
+ *   快照:每个 control 的本地帧 0 .. count-1 按 SNAPSHOT_SPAN 切段(缺省 60 帧)
+ *   轨道流:firstSegment .. lastSegment 按 STREAM_SEGMENTS 切(缺省 8 段,每段 15 帧)
+ *
+ * 结果键 = 内容键 × 切分节点**自己的**环境指纹(设计 2.1):认领 `plan` 的节点定下这一版
+ * 项目的指纹,写进每个细任务的 `requires.envFingerprint`,只有同指纹的节点能认领。
+ * 含锚帧的快照段优先级 50,其余 10。
+ *
+ * 纯函数:不读环境变量、不做 I/O。
+ */
+
+/** 轨道流每段的帧数(G2 的分段规则,和 `frame-stream.mjs` 的 SEGMENT_FRAMES 同值)。 */
+const SEGMENT_FRAMES = 15;
+const ANCHOR_PRIORITY = 50;
+const NORMAL_PRIORITY = 10;
+
+/** 这一版项目的粗任务(页面发布的那一个)。 */
+export function planTaskOf({ projectId, projectRev, priority = 0 }) {
+  const resultKey = `${projectId}@${projectRev}`;
+  return {
+    id: taskIdOf({ kind: 'plan', resultKey, range: null }), kind: 'plan', resultKey, range: null,
+    source: { projectId, projectRev }, input: {}, weight: { class: 'medium', estMs: null, frames: null },
+    requires: {}, priority,
+  };
+}
+
+/** `[from, to]` 闭区间序列:first .. last 每 span 一段,最后一段到 last。 */
+function spans(first, last, span) {
+  const out = [];
+  if (!Number.isSafeInteger(first) || !Number.isSafeInteger(last)) return out;
+  for (let from = first; from <= last; from += span) out.push([from, Math.min(last, from + span - 1)]);
+  return out;
+}
+
+const stepOf = value => Math.max(1, Math.floor(Number(value) || 0));
+
+/** → TaskInput[]:先快照(按 cardPlan 顺序、段升序),后轨道流(按 streams 顺序、段升序);同一 id 只留第一个。 */
+export function splitPlan({
+  planTask,
+  entryKey,
+  cardPlan,
+  prerenderSet,
+  streams = [],
+  envFingerprint,
+  codeVersion,
+  cardSourceVersions = {},
+  anchorFrames = [],
+  weightOf = () => ({ class: 'heavy', estMs: null }),
+  isUserCard = () => false,
+  isGraphCard = () => false,
+  constants = {},
+}) {
+  const snapshotSpan = stepOf(constants.SNAPSHOT_SPAN ?? QUEUE_DEFAULTS.SNAPSHOT_SPAN);
+  const streamSegments = stepOf(constants.STREAM_SEGMENTS ?? QUEUE_DEFAULTS.STREAM_SEGMENTS);
+  const { projectId, projectRev } = planTask?.source ?? {};
+  const derivedFrom = planTask?.id ?? null;
+  const anchors = [...(anchorFrames ?? [])];
+  const out = [];
+  const seen = new Set();
+  const emit = task => {
+    if (seen.has(task.id)) return;
+    seen.add(task.id);
+    out.push(task);
+  };
+
+  for (const control of cardPlan ?? []) {
+    const { snapshotKey, clipId } = control ?? {};
+    if (!snapshotKey || !clipId) continue;
+    if (prerenderSet && !prerenderSet.has(clipId)) continue;
+    const tier = control.tier ?? snapshotTier(control.capabilities);
+    if (tier !== 'shared' && tier !== 'local') continue;
+    const contentKey = tier === 'shared' ? snapshotKey : `${entryKey}/${snapshotKey}`;
+    const resultKey = resultKeyOf(contentKey, envFingerprint);
+    const cardId = control.cardId ?? null;
+    const cardVersion = control.cardId ? cardSourceVersions?.[control.cardId] : undefined;
+    // 锚帧是全局帧号,换成这张卡的本地帧再比;没有 firstFrame 就判不了,一律按普通段
+    const firstFrame = Number(control.sampling?.firstFrame);
+    const requires = {
+      envFingerprint, codeVersion,
+      cardSources: cardVersion ? { [control.cardId]: cardVersion } : {},
+      transcode: false,
+      userCards: !!isUserCard(control),
+      graphCards: !!isGraphCard(control),
+      belowDependent: (control.compositing ?? control.capabilities?.compositing) === 'belowDependent',
+    };
+    const weight = weightOf(control);
+    for (const [from, to] of spans(0, Number(control.count) - 1, snapshotSpan)) {
+      const range = { unit: 'localFrame', from, to };
+      const anchored = anchors.some(a => from <= a - firstFrame && a - firstFrame <= to);
+      emit({
+        id: taskIdOf({ kind: 'snapshot', resultKey, range }), kind: 'snapshot', tier, resultKey, range,
+        source: { projectId, projectRev, derivedFrom },
+        input: { clipId, cardId, entryKey: tier === 'local' ? entryKey : null, contentKey },
+        weight: { ...weight, frames: to - from + 1 },
+        requires: { ...requires, cardSources: { ...requires.cardSources } },
+        priority: anchored ? ANCHOR_PRIORITY : NORMAL_PRIORITY,
+      });
+    }
+  }
+
+  for (const stream of streams ?? []) {
+    const { streamKey, topClipId, firstSegment, lastSegment } = stream ?? {};
+    if (!streamKey) continue;
+    const resultKey = resultKeyOf(streamKey, envFingerprint);
+    const weight = weightOf({ clipId: topClipId });
+    for (const [from, to] of spans(firstSegment, lastSegment, streamSegments)) {
+      const range = { unit: 'segment', from, to };
+      emit({
+        id: taskIdOf({ kind: 'stream', resultKey, range }), kind: 'stream', resultKey, range,
+        source: { projectId, projectRev, derivedFrom },
+        input: { clipId: topClipId, cardId: null, entryKey: null, contentKey: streamKey },
+        weight: { ...weight, frames: (to - from + 1) * SEGMENT_FRAMES },
+        requires: { envFingerprint, codeVersion, cardSources: {}, transcode: true, userCards: false, graphCards: false, belowDependent: false },
+        priority: NORMAL_PRIORITY,
+      });
+    }
+  }
+  return out;
+}
