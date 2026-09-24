@@ -4,7 +4,7 @@
  *   fingerprint.mjs  环境指纹与结果键
  *   filter.mjs       按能力过滤可认领的任务
  *   pick.mjs         候选排序与挑选
- *   split.mjs        `plan` 任务切分成细任务
+ *   split.mjs        `plan` 任务切分成细任务(含卡片级指纹锁 cardLocks / takeover,契约 F.2)
  *   session.mjs      节点会话状态机(认领、续约、让路、放回)
  *
  * 只引 Node 内置模块、`../render-queue/index.mjs` 和 `../snapshot-store.mjs`;

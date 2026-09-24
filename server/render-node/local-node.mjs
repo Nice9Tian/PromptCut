@@ -45,7 +45,7 @@ import { splitPlan } from './split.mjs';
  * 对注入接口的每次等待都和中止信号赛跑:执行器或产物库不理会中止、一直不返回,这次执行也会
  * 在中止时落定(`settled()` 不会被卡死的执行器拖住),之后它再返回什么都被丢弃。
  *
- * @typedef {object} PlanContext  executor.plan 的结果,原样喂给 splitPlan(契约 B.4)
+ * @typedef {object} PlanContext  executor.plan 的结果,原样喂给 splitPlan(契约 B.4、F.2)
  * @property {string} entryKey
  * @property {object[]} cardPlan
  * @property {Set<string>} [prerenderSet]
@@ -55,6 +55,11 @@ import { splitPlan } from './split.mjs';
  * @property {(control: object) => object} [weightOf]
  * @property {(control: object) => boolean} [isUserCard]
  * @property {(control: object) => boolean} [isGraphCard]
+ * @property {Map<string, string> | Record<string, string>} [cardLocks]
+ *   卡片级指纹锁(契约 F.2):锁键 `<kind>:<input.contentKey>` → 锁指纹。被别的指纹锁定的卡
+ *   按锁指纹出键,剩余帧只给同指纹的节点
+ * @property {boolean | Set<string> | ((lockKey: string) => boolean)} [takeover]
+ *   要接手哪些被别的指纹锁定的卡:按本节点指纹出键,任务带 `takeover: true`
  *
  * @typedef {object} Executor  执行器(契约 D.1)
  * @property {(planTask: object, opts: { signal: AbortSignal }) => Promise<PlanContext>} plan
@@ -212,7 +217,8 @@ export function createLocalNode({
       if (task.kind === 'plan') {
         const ctx = await untilAborted(() => executor.plan(task, { signal }), signal);
         if (!holding(run)) return discard();
-        // ctx 放在前面:切分节点自己的指纹、plan 与代码版本一定生效(设计 2.1)
+        // ctx 放在前面:切分节点自己的指纹、plan 与代码版本一定生效(设计 2.1);
+        // ctx 带的 cardLocks / takeover 随展开原样传给切分(契约 F.2)
         const tasks = splitPlan({ ...ctx, planTask: task, envFingerprint: node?.envFingerprint, codeVersion, constants });
         const derived = tasks.map(t => t.id);
         if (tasks.length > 0) endpoint.send({ type: 'task.publish', tasks });
