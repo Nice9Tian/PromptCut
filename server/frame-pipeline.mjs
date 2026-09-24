@@ -20,6 +20,11 @@ import { resolveFrameSize } from '../src/kernel/frameSize.mjs';
 import { anchorFrames } from '../src/render/snapshotPick.mjs';
 import { StreamProducer, STREAM_POOL_DEFAULT, STREAM_POOL_MAX } from './frame-stream.mjs';
 import { dirtyStreamLease } from './bakery/bake.mjs';
+import { createCardLockStore, cardLockDecision, CARD_LOCK_IDLE_MS } from './card-lock.mjs';
+
+/** 同一版里延后的卡最多重判几次(契约 F.8 第 2 条),之后等下一版 */
+export const CARD_LOCK_RETRY_MAX = 20;
+import { resultKeyOf } from './render-node/fingerprint.mjs';
 
 const pad = n => String(n).padStart(6, '0');
 const exists = file => fs.access(file).then(() => true, () => false);
@@ -161,7 +166,7 @@ export class FramePipeline {
    * `fingerprint`)。给了就不探测、直接用(测试,以及以后环境已知的独立渲染主机);不给就等第一个
    * 预渲染间开起来时探测一次(`ensureEnvironment`)。
    */
-  constructor({ root, origin, code = () => '', captureCode = () => undefined, interactive = true, playhead = NO_PLAYHEAD, mediaUrl = () => null, dataRoot = process.cwd(), environment = null }) {
+  constructor({ root, origin, code = () => '', captureCode = () => undefined, interactive = true, playhead = NO_PLAYHEAD, mediaUrl = () => null, dataRoot = process.cwd(), environment = null, cardLockIdleMs = CARD_LOCK_IDLE_MS }) {
     this.root = root;
     /**
      * 环境指纹(M4):card plan、轨道流的全部结果键都乘上它。定下来之前是 null —— 那时
@@ -169,6 +174,21 @@ export class FramePipeline {
      */
     this.environment = environment && typeof environment === 'object' ? environment : null;
     this.environmentProbe = null;
+    /**
+     * 卡片级指纹锁(契约 F.3):共享档快照这一种结果,一张卡只出自一种环境。锁库在 `<库根>/controls-lock/`,
+     * 构造时就开始读盘;用到锁的地方先 `await this.ensureCardLocks()`。
+     */
+    this.cardLockStore = typeof root === 'string' && root ? createCardLockStore({ dir: path.join(root, 'controls-lock') }) : null;
+    this.cardLocksLoading = this.cardLockStore ? this.cardLockStore.load().catch(() => {}) : Promise.resolve();
+    /** 锁让某张卡换了键(或换了 `foreign`)就加一:`snapshotTargets` 的缓存据此失效 */
+    this.cardLockEpoch = 0;
+    /**
+     * 锁定方多久没再产出就算闲置(契约 F.8 第 2 条):`cardLockDecision` 的 `idleMs` 和延后重判的计时器都用它。
+     * 测试给小值。
+     */
+    this.cardLockIdleMs = Number.isFinite(cardLockIdleMs) && cardLockIdleMs >= 0 ? cardLockIdleMs : CARD_LOCK_IDLE_MS;
+    /** 还没触发的延后重判计时器(`close()` 统一清掉) */
+    this.cardLockTimers = new Set();
     this.dataRoot = dataRoot;
     this.origin = origin;
     this.code = code;
@@ -236,6 +256,55 @@ export class FramePipeline {
       return this.environment;
     });
     return this.environmentProbe;
+  }
+  /** 等构造时开始的那次锁库 `load()` 落定(契约 F.3)。读盘失败也算落定 —— 当成没有锁 */
+  async ensureCardLocks() {
+    await this.cardLocksLoading;
+  }
+  /**
+   * 按锁库把 plan 里共享档 control 的键换成锁定方的(契约 F.3 `applyCardLocks`)。**原地改**,
+   * 对同一份 plan 重复调结果相同。每个 `tier === 'shared'` 且有 `contentKey` 的 control:
+   *
+   *   - 第一次见到时记下自己的键和指纹(`ownSnapshotKey` / `ownEnvFingerprint`);
+   *   - 锁在别的指纹上:`snapshotKey = resultKeyOf(contentKey, 锁指纹)`、`envFingerprint = 锁指纹`、
+   *     `cardLock = { envFingerprint, source, foreign: true }`;
+   *   - 否则换回自己的键和指纹,`cardLock` 是锁(`foreign: false`)或 null。
+   *
+   * 投递、认领、就绪索引、扫盘重建因此都自动用锁定方的键。`key`(PNG 缓存)和 `contentKey` 不动。
+   * 回这一趟有没有 control 换了键。
+   */
+  applyCardLocks(plan) {
+    if (!Array.isArray(plan)) return false;
+    const store = this.cardLockStore;
+    let changed = false;
+    for (const control of plan) {
+      if (!control?.contentKey) continue;
+      if ((control.tier || snapshotTier(control.capabilities)) !== 'shared') continue;
+      if (!Object.hasOwn(control, 'ownSnapshotKey')) {
+        control.ownSnapshotKey = control.snapshotKey;
+        control.ownEnvFingerprint = control.envFingerprint;
+      }
+      const before = `${control.snapshotKey}\u0000${control.envFingerprint}\u0000${control.cardLock?.foreign === true}`;
+      const lock = store?.get(control.contentKey) ?? null;
+      if (lock && lock.envFingerprint !== control.ownEnvFingerprint) {
+        control.snapshotKey = resultKeyOf(control.contentKey, lock.envFingerprint);
+        control.envFingerprint = lock.envFingerprint;
+        control.cardLock = { envFingerprint: lock.envFingerprint, source: lock.source, foreign: true };
+      } else {
+        control.snapshotKey = control.ownSnapshotKey;
+        control.envFingerprint = control.ownEnvFingerprint;
+        control.cardLock = lock ? { envFingerprint: lock.envFingerprint, source: lock.source, foreign: false } : null;
+      }
+      if (before !== `${control.snapshotKey}\u0000${control.envFingerprint}\u0000${control.cardLock?.foreign === true}`) changed = true;
+    }
+    if (changed) this.cardLockEpoch = (this.cardLockEpoch || 0) + 1;
+    return changed;
+  }
+  /** 锁变了之后把 entry 的 card plan(以及调用方手里另一份 control 列表)一起按锁库重排一遍 */
+  reapplyCardLocks(entry, controls = null) {
+    let changed = this.applyCardLocks(entry?.cardPlan);
+    if (Array.isArray(controls) && controls !== entry?.cardPlan) changed = this.applyCardLocks(controls) || changed;
+    return changed;
   }
   /** 不带 session 的调用方(脚本、探针)那个会话的索引。页面走 `this.ready.subscribe(session, …)` */
   get readyIndex() { return this.ready.session(DEFAULT_READY_SESSION).index; }
@@ -382,7 +451,9 @@ export class FramePipeline {
   /** 端到端探针的读口:超限帧(A3c)、`wanted` 的插队(C4)、预渲染集合(pinned 渲染 9) */
   diagnostics() {
     return { oversize: this._snapshots?.oversize ?? [], promotions: this.promotions ?? [], plans: this.planDiagnostics(),
-      streams: this._streams?.status() ?? null, ready: this.ready.describe(), environment: this.environment };
+      streams: this._streams?.status() ?? null, ready: this.ready.describe(), environment: this.environment,
+      // 契约 F.3:本机锁库此刻的全部锁
+      cardLocks: this.cardLockStore?.list() ?? [] };
   }
   /**
    * 每个 entry 此刻的预渲染集合和它的 card plan 摘要 —— `ready-index-probe` 靠它
@@ -400,6 +471,8 @@ export class FramePipeline {
           clipId: control.clipId, costKey: control.costKey, snapshotKey: control.snapshotKey,
           // M4:探针据此核对 `snapshotKey === resultKeyOf(contentKey, envFingerprint)`
           contentKey: control.contentKey, envFingerprint: control.envFingerprint,
+          // 契约 F.3:锁在谁身上(`foreign: true` = 锁定方是别的环境,键已换成锁定方的)
+          cardLock: control.cardLock ?? null,
           frameMode: control.frameMode ?? control.capabilities?.frameMode ?? null,
           tier: control.snapshotKey ? (control.tier || snapshotTier(control.capabilities)) : 'none',
           picked: this.prerenderPicked(entry, control.clipId),
@@ -852,6 +925,8 @@ export class FramePipeline {
   async cardRender(entry, bakery, frames, lane) {
     const browserPlan = await this.browserCardPlan(bakery);
     if (!browserPlan) return null;
+    // 契约 F.3:算 card plan 之前锁库要读完(`recordCardPlan` 按锁换键)
+    await this.ensureCardLocks();
     let plan;
     try { plan = entry.cardCache.plan(browserPlan); } catch { return null; }
     // Item 4:这里的 entry 可能是 Agent 查询、导出或别的会话的那一版 —— 只把计划记在它自己身上,
@@ -963,15 +1038,34 @@ export class FramePipeline {
   snapshotTargets(entry) {
     const plan = entry.cardPlan;
     if (!plan?.length) return null;
-    if (entry.snapshotPlan !== plan || entry.snapshotTargetSet !== entry.prerenderSet) {
+    if (entry.snapshotPlan !== plan || entry.snapshotTargetSet !== entry.prerenderSet || entry.snapshotLockEpoch !== this.cardLockEpoch) {
       entry.snapshotPlan = plan;
       entry.snapshotTargetSet = entry.prerenderSet;
+      entry.snapshotLockEpoch = this.cardLockEpoch;
       entry.snapshotTargetMap = new Map(plan
-        .filter(control => control.clipId && control.snapshotKey && this.prerenderPicked(entry, control.clipId))
-        .map(control => [control.clipId, { tier: control.tier || snapshotTier(control.capabilities), key: control.snapshotKey, capabilities: control.capabilities }])
+        // 契约 F.3「不替锁定方产帧」:被别的环境锁定的卡不给 target,整场景路(含锚帧那一趟)不写它
+        .filter(control => control.clipId && control.snapshotKey && control.cardLock?.foreign !== true && this.prerenderPicked(entry, control.clipId))
+        .map(control => [control.clipId, { tier: control.tier || snapshotTier(control.capabilities), key: control.snapshotKey, capabilities: control.capabilities,
+          // 写帧前得锁用:共享档的锁键和本机自己的指纹
+          contentKey: control.contentKey, envFingerprint: control.ownEnvFingerprint ?? control.envFingerprint }])
         .filter(([, target]) => target.tier === 'shared' || target.tier === 'local'));
     }
     return entry.snapshotTargetMap;
+  }
+  /**
+   * 本机为一个共享档 target 写帧前得锁(契约 F.3「渲之前得锁」)。没有锁库、不是共享档、没有内容键或
+   * 指纹的一律当得到(不参与锁)。得不到(页面刚抢先锁了这张卡)就把 entry 的 card plan 按锁库重排,
+   * 回 false —— 调用方这张卡本趟不再写 HTML 快照。
+   */
+  acquireCardLock(entry, target, controls = null) {
+    const store = this.cardLockStore;
+    if (!store || target?.tier !== 'shared' || !target.contentKey || !target.envFingerprint) return true;
+    let granted = true;
+    try { granted = store.acquire(target.contentKey, target.envFingerprint, 'prerender').granted; } catch { return true; }
+    // 得不到:按锁库重排。刚建了锁:把 `cardLock` 记到 control 上(诊断看得见),键不变
+    const unmarked = list => Array.isArray(list) && list.some(control => control?.contentKey === target.contentKey && !control.cardLock);
+    if (!granted || unmarked(entry?.cardPlan) || unmarked(controls)) this.reapplyCardLocks(entry, controls);
+    return granted;
   }
   /**
    * 整场景路(C2)冻出来的 control HTML 同时写进 A3a 的快照库
@@ -987,11 +1081,17 @@ export class FramePipeline {
    * 和「下层活跃控件的共享键 + 位置」是后面的事。
    */
   recordSnapshots(entry, controls) {
-    const targets = this.snapshotTargets(entry);
+    let targets = this.snapshotTargets(entry);
     if (!targets?.size || !controls?.length) return;
     for (const control of controls) {
       const target = targets.get(control.id);
       if (!target || !Number.isInteger(control.frame)) continue;
+      // 契约 F.3「渲之前得锁」:共享档每帧入批之前得锁;得不到(页面刚锁了这张卡)这帧不写,
+      // card plan 已按锁库重排,重取 target 之后这张卡不再有 target
+      if (this.acquireCardLock && !this.acquireCardLock(entry, target)) {
+        targets = this.snapshotTargets(entry) ?? new Map();
+        continue;
+      }
       const entryKey = target.tier === 'local' ? entry.key : undefined;
       const batches = (entry.snapshotPending ||= new Map());
       const id = `${target.tier}\u0000${entryKey ?? ''}\u0000${target.key}`;
@@ -1022,7 +1122,10 @@ export class FramePipeline {
          * 批照常落盘(快照库是内容寻址的,别的版本还用得上);发不发布由 `publishLayer` 的闸门定 ——
          * 只进当前版本正是这个 entry 的会话。
          */
-        if (index && batch.written) this.publishLayer(entry, { clipId: batch.clipId, snapshotKey: batch.key }, batch.tier, index.frames);
+        // 契约 F.3:这张卡此刻锁在别的环境上(层已经换成锁定方的键),本机这一批不再发层,免得把层换回来
+        const lockedAway = batch.tier === 'shared' && (entry.cardPlan ?? []).some(control =>
+          control?.clipId === batch.clipId && control.cardLock?.foreign === true && control.snapshotKey !== batch.key);
+        if (index && batch.written && !lockedAway) this.publishLayer(entry, { clipId: batch.clipId, snapshotKey: batch.key }, batch.tier, index.frames);
       } catch {}
     }
   }
@@ -1103,11 +1206,14 @@ export class FramePipeline {
     this.background = this.background.catch(() => {}).then(async () => {
       if (controller.signal.aborted) return;
       let bakery;
+      // 契约 F.8 第 2 条:这一趟里被延后、末尾再判仍新鲜的卡,一趟结束时定时重判
+      const deferredCards = [];
       try {
         entry.status = 'html';
         const count = Math.max(1, Math.floor(project.duration * (project.fps || 30)));
         bakery = await this.acquire('background', entry.project);
         const browserPlan = await this.browserCardPlan(bakery);
+        await this.ensureCardLocks();
         let cardPlan = [];
         try { cardPlan = browserPlan ? entry.cardCache.plan(browserPlan) : []; } catch {}
         if (browserPlan) this.adoptCardPlan(entry, cardPlan);
@@ -1117,13 +1223,13 @@ export class FramePipeline {
         // R8 / G4:锚帧就绪之后轨道流开始生产。它有自己的会话(`streamPool`),不占这条 lane,
         // 也不等它 —— 这里只是把这一版的流交给生产者
         if (!controller.signal.aborted) void this.streamProducer()?.update(entry).catch(() => {});
-        await this.fillCardControls(entry, bakery, controller.signal, cardPlan.filter(c => c.cacheable && c.needPrerendering));
+        deferredCards.push(...(await this.fillCardControls(entry, bakery, controller.signal, cardPlan.filter(c => c.cacheable && c.needPrerendering))) ?? []);
         // C2 本地档那一趟:一趟整场景服务该帧上全部本地档卡(毛玻璃 / unknown)
         await this.renderLocalSnapshots(entry, await this.missingSnapshotFrames(entry, { tiers: ['local'] }), bakery, controller.signal);
         await this.fillRequiredScene(entry, bakery, controller.signal, cardPlan);
         if (this.playback?.playing) { entry.status = 'partial'; return; }
         entry.stage = 'direct';
-        await this.fillCardControls(entry, bakery, controller.signal, cardPlan.filter(c => c.cacheable && !c.needPrerendering));
+        deferredCards.push(...(await this.fillCardControls(entry, bakery, controller.signal, cardPlan.filter(c => c.cacheable && !c.needPrerendering))) ?? []);
         // `size === count` is not enough for a sparse archive: a foreground
         // request can contain exactly `count` entries while still missing one
         // frame and containing an out-of-range index.  C must only start after
@@ -1156,7 +1262,11 @@ export class FramePipeline {
         // later would publish that prefix as the whole movie. Drop the stream;
         // the next pass replays the PNGs.
         if (controller.signal.aborted) await entry.mov?.suspend().catch(() => {});
-      } finally { if (entry.stage !== 'ready') entry.stage = undefined; if (bakery && this.lanes.get('background')?.bakery === bakery) this.release('background'); }
+      } finally {
+        if (entry.stage !== 'ready') entry.stage = undefined;
+        if (bakery && this.lanes.get('background')?.bakery === bakery) this.release('background');
+        if (deferredCards.length && !controller.signal.aborted) this.scheduleCardLockRetry(entry, deferredCards, controller.signal);
+      }
     });
     return entry;
   }
@@ -1193,6 +1303,8 @@ export class FramePipeline {
    * 轨道流(R8)的清单 `<库根>/streams/<streamKey>/stream.json` 同样扫一遍、挂在键上(`kind: 'stream'`)。
    */
   async rescanSnapshots() {
+    // 契约 F.3:锁库先读完 —— 被别的环境锁定的卡,认领时认的是锁定方的键(`applyCardLocks`)
+    await this.ensureCardLocks();
     const store = this.snapshots();
     const read = async target => {
       try { return await store.snapshotIndex(target); } catch { return { count: 0, frames: [] }; }
@@ -1249,6 +1361,8 @@ export class FramePipeline {
    * 只动这个 entry 自己,不碰任何会话的就绪索引 —— `cardRender`(Agent 查询、导出、交互帧)只做这一步。
    */
   recordCardPlan(entry, plan) {
+    // 契约 F.3:被别的环境锁定的共享档卡换成锁定方的键 —— 之后的投递、认领、扫盘重建都认这个键
+    this.applyCardLocks(plan);
     entry.cardPlan = plan;
     // K2 / K6:真的按 planPipelines 的表算(costs / tuning 由编辑器进程转发过来、落在本机那一份)
     entry.prerenderSet = prerenderSetOfPlan(plan, { fps: Number(entry.project?.fps) || 30, root: this.dataRoot });
@@ -1302,6 +1416,20 @@ export class FramePipeline {
     const key = wireSnapshotKey(tier, entry?.key, control?.snapshotKey);
     if (!entry?.key || !kind || !key || !control?.clipId) return 0;
     return this.ready.publish(entry.key, { clipId: control.clipId, kind, key, ranges });
+  }
+  /**
+   * 锁换了主人之后的整层换键(契约 F.3):同一内容键的每个共享档片段都发一条 `layer`,键是它此刻的
+   * `snapshotKey`(新锁定方的),区间是新键下现有的(可能为空)。`setLayer` 按 (clipId, kind) 整条覆盖,
+   * 页面据此丢掉旧环境的帧。`control` 本身排第一个发。
+   */
+  publishRelocked(entry, controls, control, ranges) {
+    const seen = new Set();
+    for (const item of [control, ...(entry?.cardPlan ?? []), ...(Array.isArray(controls) ? controls : [])]) {
+      if (!item?.clipId || seen.has(item.clipId) || item.contentKey !== control.contentKey) continue;
+      if ((item.tier || snapshotTier(item.capabilities)) !== 'shared' || !item.snapshotKey || !this.prerenderPicked(entry, item.clipId)) continue;
+      seen.add(item.clipId);
+      this.publishLayer(entry, item, 'shared', ranges);
+    }
   }
   /**
    * C4 的调度点:这一批该从哪个本地帧开始。
@@ -1395,6 +1523,9 @@ export class FramePipeline {
       const entryKey = tier === 'local' ? entry.key : undefined;
       const index = await this.snapshots().snapshotIndex({ tier, entryKey, key: control.snapshotKey });
       if (index.count) this.publishLayer(entry, control, tier, index.frames);
+      // 契约 F.3「不替锁定方产帧」:被别的环境锁定的卡照常发它现有的区间(上面那条,键是锁定方的),
+      // 但它的帧不算「缺」—— 整场景路不为它渲
+      if (control.cardLock?.foreign === true) continue;
       // R6-14:超限被丢掉的帧不算「缺」—— 它们已经渲过一次、也已经判过一次超限
       if (index.count + rangeCount(index.oversize) >= control.count) continue;
       for (let local = 0; local < control.count; local++) {
@@ -1432,10 +1563,21 @@ export class FramePipeline {
   async fillCardControls(entry, bakery, signal, controls = null) {
     if (!controls) {
       const browserPlan = await this.browserCardPlan(bakery);
-      if (!browserPlan) return;
-      try { controls = entry.cardCache.plan(browserPlan); } catch { return; }
+      if (!browserPlan) return [];
+      try { controls = entry.cardCache.plan(browserPlan); } catch { return []; }
     }
-    for (const control of controls.filter(control => control.cacheable)) {
+    // 契约 F.3:锁可能在 card plan 记下之后变过(页面刚存了测量帧),开工前按锁库重排一遍
+    this.reapplyCardLocks(entry, controls);
+    const store = this.cardLockStore;
+    /*
+     * 延后列表(契约 F.3 的 `'defer'`):锁定方可能还在产的卡先放到末尾,其余卡做完后再判一次
+     * (`lastChance`);仍是 `'defer'` 就这一趟跳过,放进 `skipped` 回给调用方 —— 后台那一趟结束时
+     * 据此定一个 `cardLockIdleMs` 之后的重判(契约 F.8 第 2 条,`scheduleCardLockRetry`)。
+     */
+    const skipped = [];
+    const work = controls.filter(control => control.cacheable).map(control => ({ control, lastChance: false }));
+    for (let at = 0; at < work.length; at++) {
+      const { control, lastChance } = work[at];
       if (signal?.aborted) throw Object.assign(new Error('Cancelled'), { cancelled: true });
       // 走哪一档由审阅表的 capabilities 决定,不由 `cacheable` 决定:
       // 共享档 = independent / sourceDependent 且 stateful;其余 stateful
@@ -1449,15 +1591,59 @@ export class FramePipeline {
       const tier = control.snapshotKey && this.prerenderPicked(entry, control.clipId)
         ? (control.tier || snapshotTier(control.capabilities)) : 'none';
       const entryKey = tier === 'local' ? entry.key : undefined;
-      const target = tier === 'none' ? null : { tier, entryKey, key: control.snapshotKey };
+      let target = tier === 'none' ? null : { tier, entryKey, key: control.snapshotKey };
       // C2:HTML 侧另有一条完整性判据 —— `index.json` 的 `count` 是**已有帧数**
       // (`snapshot-store.mjs` 的 `rangeCount`),完整 = `index.count === control.count`。
       // PNG 侧的 `hasComplete` 管不到它:同一趟里 PNG 可能齐了而快照缺一段。
       let index = target ? await this.snapshots().snapshotIndex(target) : { count: 0, frames: [], oversize: [] };
-      if (target && index.count) this.publishLayer(entry, control, tier, index.frames);
+      let published = false;
+      /*
+       * 契约 F.3「不替锁定方产帧」:这张卡锁在别的环境上(键已是锁定方的,`index` 看的也是锁定方的键)。
+       *   'reuse'    锁定方已齐:发它的层,HTML 这一支不产(`target` 当 null),PNG 那一支照旧;
+       *   'defer'    锁定方还新鲜:放到末尾再判一次,仍新鲜就这一趟跳过;
+       *   'takeover' 锁定方闲置且不齐:锁转给本机,同一内容键的 control 都换回自己的键,先用自己键
+       *              现有的区间(可能为空)发层 —— 线上是整层换键,页面丢掉旧环境的帧 —— 再照常产。
+       */
+      if (target && tier === 'shared' && control.cardLock?.foreign === true && store && control.contentKey) {
+        const ownFingerprint = control.ownEnvFingerprint ?? null;
+        const complete = index.count + rangeCount(index.oversize) >= control.count;
+        const decision = cardLockDecision({ lock: store.get(control.contentKey), ownFingerprint, complete, now: Date.now(), idleMs: this.cardLockIdleMs ?? CARD_LOCK_IDLE_MS });
+        if (decision === 'defer') {
+          if (!lastChance) {
+            if (index.count) this.publishLayer(entry, control, tier, index.frames);
+            work.push({ control, lastChance: true });
+          } else skipped.push(control);
+          continue;
+        }
+        if (decision === 'reuse') {
+          if (index.count) this.publishLayer(entry, control, tier, index.frames);
+          published = true;
+          target = null;
+        } else {
+          if (decision === 'takeover' && ownFingerprint) store.takeover(control.contentKey, ownFingerprint, 'prerender');
+          this.reapplyCardLocks(entry, controls);
+          target = { tier, entryKey, key: control.snapshotKey };
+          index = await this.snapshots().snapshotIndex(target);
+          if (decision === 'takeover') {
+            this.publishRelocked(entry, controls, control, index.frames);
+            published = true;
+          }
+        }
+      }
       // R6-14:超限被丢掉的帧算「已经处理过」—— 不然 `htmlComplete` 永远为 false,
       // 每一趟都把整张卡重渲一遍、再判一遍超限、再丢一遍。
-      const htmlComplete = !target || index.count + rangeCount(index.oversize) >= control.count;
+      let htmlComplete = !target || index.count + rangeCount(index.oversize) >= control.count;
+      /*
+       * 契约 F.3「渲之前得锁」+ F.8 第 1 条「本机已有结果也得锁」:走到一个共享档卡就用本机指纹得锁,
+       * 不管本机是不是已经齐了 —— 免得本机早已产齐、只是还没有锁文件的卡(锁库之前的缓存)被页面的
+       * 测量帧抢走。得不到(页面刚抢先锁了)这张卡本趟不再写 HTML 快照,card plan 已按锁库重排。
+       */
+      if (target && tier === 'shared'
+        && !this.acquireCardLock(entry, { tier, contentKey: control.contentKey, envFingerprint: control.ownEnvFingerprint ?? control.envFingerprint }, controls)) {
+        target = null;
+        htmlComplete = true;
+      }
+      if (target && index.count && !published) this.publishLayer(entry, control, tier, index.frames);
       if (htmlComplete && await entry.cardCache.hasComplete(control)) continue;
       const isolated = this.isolatedCardProject(entry.project, control);
       // A small batch retains Chrome state inside a stateful card, while every
@@ -1510,6 +1696,106 @@ export class FramePipeline {
     // complete-scene pass. Restore its normal project before snapshot/MOV.
     await bakery.reset(entry.project, this.emptyUrl(entry.project), { deferCards: true });
     await bakery.page.setViewport({ width: entry.project.width, height: entry.project.height, deviceScaleFactor: this.scaleForLane('background') });
+    return skipped;
+  }
+  /**
+   * 延后的卡再判一次(契约 F.8 第 2 条;`rendering.md`:锁定方停下一段时间后本机接手)。
+   *
+   * 后台那一趟结束时仍有 `'defer'` 的卡(`controls`,按 `clipId` 记),就定一个一次性、`unref` 的计时器,
+   * `cardLockIdleMs` 之后触发。触发时要同时满足:这一版的 `signal` 没 abort、还有会话的当前版本是这个
+   * entry、这些卡仍在预渲染集合里 —— 才把一小趟排进 `this.background` 串行链:借 `'background'` 的
+   * 预渲染间,只对这些卡跑 `fillCardControls`(同一个 `signal`)。重判时锁定方已齐就投递、已闲置就接手、
+   * 仍新鲜就再排一次;同一版(同一个 entry)最多排 `CARD_LOCK_RETRY_MAX` 次,之后等下一版。
+   *
+   * 计时器在 `signal` abort(这一版被换掉)或 `close()` 时清掉,不会挂住进程。
+   */
+  scheduleCardLockRetry(entry, controls, signal) {
+    const clipIds = [...new Set((controls ?? []).map(control => control?.clipId).filter(Boolean))];
+    if (!clipIds.length || this.closed || signal?.aborted || !entry) return false;
+    const state = (entry.cardLockRetry ||= { count: 0, timer: null });
+    if (state.count >= CARD_LOCK_RETRY_MAX) return false;
+    state.count++;
+    if (state.timer) { clearTimeout(state.timer); this.cardLockTimers?.delete(state.timer); }
+    const onAbort = () => {
+      if (!state.timer) return;
+      clearTimeout(state.timer);
+      this.cardLockTimers?.delete(state.timer);
+      state.timer = null;
+    };
+    const timer = setTimeout(() => {
+      this.cardLockTimers?.delete(timer);
+      if (state.timer === timer) state.timer = null;
+      signal?.removeEventListener?.('abort', onAbort);
+      this.retryDeferredCards(entry, clipIds, signal);
+    }, this.cardLockIdleMs ?? CARD_LOCK_IDLE_MS);
+    timer.unref?.();
+    state.timer = timer;
+    this.cardLockTimers?.add(timer);
+    signal?.addEventListener?.('abort', onAbort, { once: true });
+    return true;
+  }
+  /** 计时器触发:三条都满足才排那一小趟(见 `scheduleCardLockRetry`)。回排进去的那一趟的 Promise,没排回 null */
+  retryDeferredCards(entry, clipIds, signal) {
+    if (this.closed || signal?.aborted) return null;
+    if (!this.ready.sessionsOn(entry.key).length) return null;
+    const wanted = new Set(clipIds);
+    const pick = () => (entry.cardPlan ?? []).filter(control => wanted.has(control?.clipId) && control.cacheable && this.prerenderPicked(entry, control.clipId));
+    if (!pick().length) return null;
+    const pass = this.background.catch(() => {}).then(async () => {
+      if (this.closed || signal?.aborted) return;
+      // 排队期间 card plan 可能重算过(新对象):按 clipId 从当前的 plan 里重取
+      const controls = pick();
+      if (!controls.length) return;
+      let bakery, skipped = controls;
+      try {
+        bakery = await this.acquire('background', entry.project);
+        skipped = await this.fillCardControls(entry, bakery, signal, controls);
+      } catch {
+        // 让路给播放、借不到预渲染间:这些卡仍待判,照样再排(计数照算)
+        if (signal?.aborted) return;
+      } finally {
+        if (bakery && this.lanes.get('background')?.bakery === bakery) this.release('background');
+      }
+      if (skipped?.length) this.scheduleCardLockRetry(entry, skipped, signal);
+    });
+    this.background = pass;
+    return pass;
+  }
+  /**
+   * 页面测量时推过的帧存成共享快照(契约 F.3;语义 `rendering.md`「预渲染结果的复用」)。
+   * 路由 `PUT /api/frames/snapshot` 的全部判断在这里。`control` 是 entry 的 card plan 里那一项,
+   * 路由已经确认它是审阅表 `independent` 的共享档卡。按顺序:
+   *
+   *   1. 等锁库读完;
+   *   2. 页面指纹不是 16 位小写十六进制 → `ENV_MISSING`,不写;
+   *   3. 按页面指纹得锁,得不到(锁在别的环境上)→ `CARD_LOCKED`,带 `lockedBy`;
+   *   4. 写在页面自己的键 `resultKeyOf(contentKey, 页面指纹)` 下;一帧都没进索引(超限)→ `OVER_LIMIT`;
+   *   5. card plan 按锁库重排(这张卡换成页面的键),发层;
+   *   6. 回 `{ ok, stored, indexed, count, envFingerprint, key }`。
+   *
+   * 页面指纹恰好和本机预渲染的相同时,第 3 步同指纹得锁,第 4 步的键就是本机自己的键,两边的结果合在一起。
+   */
+  async acceptMeasuredSnapshot(entry, control, { envFingerprint, localFrame, html } = {}) {
+    await this.ensureCardLocks();
+    if (typeof envFingerprint !== 'string' || !/^[0-9a-f]{16}$/.test(envFingerprint)) return { ok: true, stored: false, reason: 'ENV_MISSING' };
+    const contentKey = control?.contentKey;
+    // 没有内容键就没有锁键,也算不出页面的键(card plan 的旧形状);不存,由预渲染进程自己产
+    if (typeof contentKey !== 'string' || !/^[0-9a-f]{64}$/.test(contentKey) || !this.cardLockStore) return { ok: true, stored: false, reason: 'NO_CONTENT_KEY' };
+    const { granted, lock } = this.cardLockStore.acquire(contentKey, envFingerprint, 'page');
+    if (!granted) return { ok: true, stored: false, reason: 'CARD_LOCKED', lockedBy: lock?.envFingerprint ?? null };
+    const key = resultKeyOf(contentKey, envFingerprint);
+    const index = await this.snapshots().commitSnapshots({ tier: 'shared', key, clipId: control.clipId, capabilities: control.capabilities,
+      items: [{ localFrame, html }] });
+    if (!index.written.length) return { ok: true, stored: true, indexed: false, reason: 'OVER_LIMIT', envFingerprint, key };
+    this.reapplyCardLocks(entry);
+    this.publishLayer(entry, { clipId: control.clipId, snapshotKey: key }, 'shared', index.frames);
+    // 同一内容键的别的片段(同一张卡摆了几次)也锁到了页面上,它们的层一起换成页面的键
+    for (const item of entry?.cardPlan ?? []) {
+      if (item?.clipId && item.clipId !== control.clipId && item.contentKey === contentKey && item.snapshotKey === key && this.prerenderPicked(entry, item.clipId)) {
+        this.publishLayer(entry, item, 'shared', index.frames);
+      }
+    }
+    return { ok: true, stored: true, indexed: true, count: index.count, envFingerprint, key };
   }
   isolatedCardProject(project, control) {
     const targetId = control.clipId;
@@ -1843,6 +2129,8 @@ export class FramePipeline {
     await this.stopPlayback();
     clearTimeout(this.backgroundLeaseTimer);
     clearTimeout(this.timer);
+    for (const timer of this.cardLockTimers ?? []) clearTimeout(timer);
+    this.cardLockTimers?.clear();
     this.userGenerationController?.abort();
     this.userGenerationController = null;
     await this.userPrewarm;
