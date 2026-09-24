@@ -232,13 +232,19 @@ test('N4 对真文档服务（端口 0，挂服务地址登记模块）：登记
 
   const urls = ['http://10.0.0.9:5173/api/asset', 'http://192.168.1.20:5173/api/asset'];
   const logs = [];
-  handle = startAssetAnnounce({ url, token, announcerId: 'asset@n4', urls, log: (...a) => logs.push(a) });
-  const push = await watcher.next(byType('service.endpoints'), 5000);
+  // announcerId 不传：走缺省值，和 mediaPlugin 接线时一样（契约第 5 节）
+  handle = startAssetAnnounce({ url, token, urls, log: (...a) => logs.push(a) });
+  let push;
+  try {
+    push = await watcher.next(byType('service.endpoints'), 5000);
+  } catch {
+    assert.fail(`订阅方没收到登记。登记方日志：${JSON.stringify(logs).slice(0, 600)}`
+      + `（缺省 announcerId 是 asset@${os.hostname()}；服务地址登记模块的 announcerId 只认 [A-Za-z0-9._:-]{1,128}）`);
+  }
   assert.equal(push.endpoints.length, 1);
-  assert.deepEqual(
-    { announcerId: push.endpoints[0].announcerId, kind: push.endpoints[0].kind, urls: push.endpoints[0].urls },
-    { announcerId: 'asset@n4', kind: 'asset', urls },
-  );
+  const id = push.endpoints[0].announcerId;
+  assert.equal(typeof id, 'string');
+  assert.deepEqual({ kind: push.endpoints[0].kind, urls: push.endpoints[0].urls }, { kind: 'asset', urls });
 
   // 新来的订阅者在 watch 的回包里就能看到
   const late = wsClient(url, ['promptcut.v1', `promptcut.token.${token}`]);
@@ -246,7 +252,7 @@ test('N4 对真文档服务（端口 0，挂服务地址登记模块）：登记
   await late.opened;
   late.send({ type: 'service.watch', kinds: ['asset'] });
   const seen = (await late.next(byType('service.endpoints'))).endpoints;
-  assert.deepEqual(seen.map((e) => [e.announcerId, e.urls]), [['asset@n4', urls]]);
+  assert.deepEqual(seen.map((e) => [e.announcerId, e.urls]), [[id, urls]]);
 
   // stop()：撤回，订阅者收到空表
   handle.stop();

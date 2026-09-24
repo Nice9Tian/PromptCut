@@ -285,8 +285,11 @@ test('H1 注入 memory 实现后：断点续传、409 校验、Range 206 / 416�
 
 test('H2 守门：asset-service.ts 源码里没有文件系统引用、没有 .chunks 目录名', () => {
   const src = fs.readFileSync(ASSET_SRC, 'utf8');
-  const banned = ['from "fs"', 'from "fs/promises"', 'from "node:fs"', 'createReadStream', 'createWriteStream', '.chunks'];
+  const banned = ['from "fs"', 'from "fs/promises"', 'from "node:fs"', 'createReadStream', 'createWriteStream'];
   for (const s of banned) assert.ok(!src.includes(s), `不许出现 ${s}`);
+  // 目录名 .chunks：BlobStore 的方法调用 store.chunks(...) 不算（契约第 2 节的方法名本身就叫 chunks）
+  const dirName = src.split(/\r?\n/).filter((line) => /\.chunks(?!\s*\()/.test(line));
+  assert.deepEqual(dirName, [], '不许出现 .chunks 目录名');
   // 换个引号、换个写法也不行
   assert.doesNotMatch(src, /\bfrom\s*["'](node:)?fs(\/promises)?["']/, '静态 import fs');
   assert.doesNotMatch(src, /\bimport\s*\(\s*["'](node:)?fs(\/promises)?["']\s*\)/, '动态 import fs');
