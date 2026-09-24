@@ -42,8 +42,11 @@ const headless = process.env.PROMPTCUT_HEADLESS === "1";
  * 前四条是 vite 的默认值:`deny` 是**整体替换**不是追加,不带上就等于把默认防护删了。
  * (正式包里 PROMPTCUT_DATA_DIR 指向 %LOCALAPPDATA%,不在根下,本来就取不到;
  *  这一条保的是开发期和「壳连仓库 dev server」那种跑法。)
+ *
+ * 本地文档服务的日志(`<root>/out/docservice`,项目版本日志与内容库,含卡片源码)同理:
+ * 只经文档服务的 WebSocket 读写,不经静态服务暴露。
  */
-const fsDeny = [".env", ".env.*", "*.{crt,pem}", "**/.git/**", "**/out/cookies/**"];
+const fsDeny = [".env", ".env.*", "*.{crt,pem}", "**/.git/**", "**/out/cookies/**", "**/out/docservice/**"];
 
 export default defineConfig({
   ...(headless ? { cacheDir: "node_modules/.vite-headless" } : {}),
@@ -53,7 +56,8 @@ export default defineConfig({
   //   viewGatePlugin  —— Skill 无头实例的只读钥匙,只在 headless.mjs 起的那份上生效
   //                      (它靠 PROMPTCUT_VIEW_TOKEN 判断,用户自己那份没有这个变量,整个空转)。
   // stagePortsPlugin 排在 apiGuard 后面:它自己那条 /api/stage/ports 也该受同一道卡口管。
-  plugins: [apiGuardPlugin(), viewGatePlugin(), stagePortsPlugin(), react(), tailwindcss(), exportPlugin(), mirrorPlugin(), costsPlugin(), framesPlugin(), vitePluginAi(), sttPlugin(), shotsPlugin(), trackPlugin(), subjectPlugin(), mediaPlugin(), chatsPlugin(), vitePluginCards(), projectsPlugin(), visionPlugin(), skillPlugin(), skillStatePlugin(), collectPlugin(), webPlugin(), prerenderPlugin(), voicePlugin(), audioPlugin(), docservicePlugin()],
+  // docservicePlugin(本地文档服务)无头实例不挂:它是 Skill 的临时副本,不能自己发 projectRev。
+  plugins: [apiGuardPlugin(), viewGatePlugin(), stagePortsPlugin(), react(), tailwindcss(), exportPlugin(), mirrorPlugin(), costsPlugin(), framesPlugin(), vitePluginAi(), sttPlugin(), shotsPlugin(), trackPlugin(), subjectPlugin(), mediaPlugin(), chatsPlugin(), vitePluginCards(), projectsPlugin(), visionPlugin(), skillPlugin(), skillStatePlugin(), collectPlugin(), webPlugin(), prerenderPlugin(), voicePlugin(), audioPlugin(), ...(headless ? [] : [docservicePlugin()])],
   server: headless
     ? {
         // 无头实例不要热更新:它是给 agent 跑的,源码一改就重载页面,重载期间工具全失败,
