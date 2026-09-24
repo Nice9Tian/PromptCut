@@ -57,11 +57,14 @@ export function wireSnapshotKey(tier, entryKey, snapshotKey) {
 
 const layerId = (clipId, kind) => `${kind}:${clipId}`;
 
-export function createReadyIndex() {
+/**
+ * `staged`:还没认领的「键 → 区间」。缺省每个索引自带一份;按会话分片时(`createReadyHub`)
+ * 所有会话共用 hub 的那一份 —— 扫盘和轨道流挂上去的区间是内容寻址的,和哪个会话无关。
+ */
+export function createReadyIndex({ staged: shared = null } = {}) {
+  const staged = shared ?? new Map();
   /** layerId -> { clipId, kind, key, ranges, groupClipIds? } */
   const layers = new Map();
-  /** 还没认领的「键 → 区间」(F5 扫盘的产物):`${kind}\0${key}` -> { kind, key, ranges } */
-  const staged = new Map();
   const subscribers = new Set();
   let localRev = 0;
   let done = false;
@@ -147,6 +150,30 @@ export function createReadyIndex() {
     return claimed.length;
   }
 
+  /**
+   * 按会话分片之后的认领(`createReadyHub().claim`):**不 reset**,把挂着的区间并进已有的层
+   * (同一层同一个键时取并集,键不同就以挂着的为准),只对真的变了的层发全量 `layer`。
+   * 会话换版本时的清表由 `reset` 单独做(hub 的 `adopt`),认领只负责「补」。返回变了几层。
+   */
+  function absorb(layers_) {
+    let changed = 0;
+    for (const item of layers_ ?? []) {
+      if (!READY_KINDS.includes(item?.kind) || !item.clipId || !item.key) continue;
+      const hit = staged.get(`${item.kind}:${item.key}`);
+      if (!hit?.ranges?.length) continue;
+      const id = layerId(item.clipId, item.kind);
+      const before = layers.get(id);
+      const ranges = mergeRanges([...(before?.key === item.key ? before.ranges : []), ...hit.ranges]);
+      if (before?.key === item.key && JSON.stringify(before.ranges) === JSON.stringify(ranges)) continue;
+      const layer = { clipId: item.clipId, kind: item.kind, key: item.key, ranges,
+        ...(before?.key === item.key && before.groupClipIds ? { groupClipIds: before.groupClipIds } : {}) };
+      layers.set(id, layer);
+      emit({ type: 'layer', ...layer });
+      changed++;
+    }
+    return changed;
+  }
+
   /** 连上 SSE 时先灌的那一份:`reset` + 每层一条全量 `layer`(+ 已经 done 的话再一条) */
   function backlog() {
     const out = [{ type: 'reset', localRev }];
@@ -162,7 +189,7 @@ export function createReadyIndex() {
   }
 
   return {
-    reset, addFrames, setLayer, markDone, stageByKey, claim, backlog, subscribe,
+    reset, addFrames, setLayer, markDone, stageByKey, claim, absorb, backlog, subscribe,
     get localRev() { return localRev; },
     set localRev(value) { localRev = Number(value) || 0; },
     get done() { return done; },
@@ -170,6 +197,163 @@ export function createReadyIndex() {
     list: () => [...layers.values()].map(layer => ({ ...layer })),
     stagedKeys: () => [...staged.values()].map(item => ({ ...item })),
     subscriberCount: () => subscribers.size,
-    clear: () => { layers.clear(); staged.clear(); done = false; },
+    // 共用的 `staged` 属于 hub,一个会话清不掉别的会话要认领的东西
+    clear: () => { layers.clear(); if (!shared) staged.clear(); done = false; },
+  };
+}
+
+/** 不带 session 的调用方(脚本、探针、迁移期带整份 `project` 的页面)共用的那个会话 */
+export const DEFAULT_READY_SESSION = '';
+/** 没有订阅者、也这么久没发过 preload 的会话被回收 */
+export const READY_SESSION_IDLE_MS = 10 * 60 * 1000;
+/** 同时记着的会话上限;超了先回收最久没动静、又没有订阅者的 */
+export const READY_SESSION_MAX = 64;
+
+/**
+ * 按会话分片的就绪索引(Item 4,`docs/reports/REPORT-item4-session-isolation.md`)。
+ *
+ * 每个页面会话(镜像的 `session`)一份 `createReadyIndex`,`/api/frames/ready?session=` 只订阅自己那份。
+ * 会话的「当前版本」(`entryKey`)**只由页面发起的 `preload` 设定**(`adopt`),别的渲染
+ * (Agent 查询、导出、交互帧)不认领、不 reset 任何会话的索引。
+ *
+ * 发布一律带上它属于的 entry(`publish(entryKey, layer)`):只写进当前版本正是这个 entry 的会话,
+ * 其余丢弃 —— 旧版本晚到的批次、别的会话 / 后台任务渲的版本都进不来。
+ *
+ * 扫盘(F5)和轨道流挂上去的「键 → 区间」是内容寻址的,所有会话共用一份 `staged`。
+ */
+export function createReadyHub({ now = () => Date.now(), idleMs = READY_SESSION_IDLE_MS, maxSessions = READY_SESSION_MAX } = {}) {
+  const staged = new Map();
+  /** id -> { id, index, entryKey, localRev, seenAt, ticket } */
+  const sessions = new Map();
+  let tickets = 0;
+
+  const norm = id => (typeof id === 'string' ? id : id == null ? DEFAULT_READY_SESSION : String(id));
+
+  function session(id) {
+    id = norm(id);
+    let record = sessions.get(id);
+    if (!record) {
+      record = { id, index: createReadyIndex({ staged }), entryKey: undefined, localRev: undefined, seenAt: now(), ticket: 0 };
+      sessions.set(id, record);
+      prune(id);
+    }
+    return record;
+  }
+
+  /**
+   * 回收:没有订阅者、`idleMs` 内没动静的会话删掉;还超上限就按最久没动静的顺序删(同样只删没有订阅者的)。
+   * `keep` 是正在用的那个会话,不删。
+   */
+  function prune(keep) {
+    const t = now();
+    for (const [id, record] of sessions) {
+      if (id === keep || record.index.subscriberCount() > 0) continue;
+      if (t - record.seenAt > idleMs) sessions.delete(id);
+    }
+    if (sessions.size <= maxSessions) return;
+    const idle = [...sessions.values()].filter(r => r.id !== keep && r.index.subscriberCount() === 0).sort((a, b) => a.seenAt - b.seenAt);
+    for (const record of idle) {
+      if (sessions.size <= maxSessions) break;
+      sessions.delete(record.id);
+    }
+  }
+
+  /**
+   * 页面的 preload 刚到:先领一张号。`adopt` 只认最新一张号 —— 两个 preload 在 `await entry()`
+   * 那一段交错完成时,晚发出的那个版本赢,不是晚算完的那个。
+   */
+  function request(id) {
+    const record = session(id);
+    record.seenAt = now();
+    record.ticket = ++tickets;
+    return record.ticket;
+  }
+
+  /**
+   * 设定会话的当前版本(**只有页面的 preload 调**)。版本换了就 reset 这个会话的索引(页面清表);
+   * 版本没换只记新的 `localRev`,不清表。回 `true` = 换了版本。
+   *
+   * 过期的号(`ticket` 不是这个会话最新的那张)或更旧的 `localRev` 一律不认。
+   */
+  /** 这张号 / 这个 localRev 已经被更新的 preload 取代了吗(取代了就既不认领、也不该再排后台活) */
+  function stale(id, ticket, localRev) {
+    const record = sessions.get(norm(id));
+    if (!record) return false;
+    if (ticket !== undefined && ticket !== record.ticket) return true;
+    const rev = Number(localRev);
+    return localRev != null && Number.isFinite(rev) && Number.isFinite(record.localRev) && rev < record.localRev;
+  }
+
+  function adopt(id, entryKey, localRev, ticket) {
+    const record = session(id);
+    record.seenAt = now();
+    if (stale(id, ticket, localRev)) return false;
+    const rev = localRev == null ? NaN : Number(localRev);
+    if (Number.isFinite(rev)) record.localRev = rev;
+    if (record.entryKey === entryKey) {
+      if (Number.isFinite(rev)) record.index.localRev = rev;
+      return false;
+    }
+    record.entryKey = entryKey;
+    record.index.reset(Number.isFinite(rev) ? rev : record.index.localRev);
+    return true;
+  }
+
+  function sessionsOn(entryKey) {
+    if (!entryKey) return [];
+    return [...sessions.values()].filter(record => record.entryKey === entryKey);
+  }
+
+  /** 发一层:只写进当前版本是 `entryKey` 的会话。回写进了几个会话(0 = 丢弃) */
+  function publish(entryKey, layer) {
+    let n = 0;
+    for (const record of sessionsOn(entryKey)) if (record.index.setLayer(layer)) n++;
+    return n;
+  }
+
+  function markDone(entryKey) {
+    for (const record of sessionsOn(entryKey)) record.index.markDone();
+  }
+
+  /** card plan 到位:把挂着的区间认领进当前版本是 `entryKey` 的会话(不 reset,见 `absorb`) */
+  function claim(entryKey, layers) {
+    let n = 0;
+    for (const record of sessionsOn(entryKey)) n += record.index.absorb(layers);
+    return n;
+  }
+
+  function stageByKey({ kind, key, ranges }) {
+    if (!READY_KINDS.includes(kind) || !key) return;
+    const id = `${kind}:${key}`;
+    const before = staged.get(id);
+    staged.set(id, { kind, key, ranges: mergeRanges([...(before?.ranges ?? []), ...(ranges ?? [])]) });
+  }
+
+  /** `/api/frames/ready?session=` 的订阅。退订后这个会话按 `idleMs` 回收 */
+  function subscribe(id, send) {
+    const record = session(id);
+    record.seenAt = now();
+    const off = record.index.subscribe(send);
+    let done = false;
+    return () => {
+      if (done) return;
+      done = true;
+      off();
+      record.seenAt = now();
+      prune();
+    };
+  }
+
+  return {
+    session: id => session(id),
+    peek: id => sessions.get(norm(id)),
+    current: id => sessions.get(norm(id))?.entryKey,
+    request, stale, adopt, publish, markDone, claim, stageByKey, subscribe, prune, sessionsOn,
+    drop: id => sessions.delete(norm(id)),
+    sessionCount: () => sessions.size,
+    stagedKeys: () => [...staged.values()].map(item => ({ ...item })),
+    /** 诊断读口 */
+    describe: () => [...sessions.values()].map(r => ({ session: r.id, entryKey: r.entryKey ?? null, localRev: r.localRev ?? null,
+      subscribers: r.index.subscriberCount(), layers: r.index.list().length, done: r.index.done, seenAt: r.seenAt })),
   };
 }

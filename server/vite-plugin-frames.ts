@@ -12,7 +12,7 @@ import { ensureMirror } from "./vite-plugin-mirror";
 
 import { latestPlayhead, ensureMirror as ensureMirrorVersion } from "./vite-plugin-mirror";
 import { snapshotTier } from "./snapshot-store.mjs";
-import { kindOfTier, wireSnapshotKey } from "./ready-index.mjs";
+import { DEFAULT_READY_SESSION } from "./ready-index.mjs";
 import { mediaSourceOf } from "./vision/ffmpeg-frames";
 
 const services = new Map<string, FramePipeline>();
@@ -181,7 +181,8 @@ export function framesPlugin(): Plugin {
         res.setHeader("X-Accel-Buffering", "no");
         res.flushHeaders?.();
         const send = (message: unknown) => { if (!res.writableEnded) res.write(`data: ${JSON.stringify(message)}\n\n`); };
-        const off = service.readyIndex.subscribe(send);
+        // Item 4:按 `session` 分片订阅,只收自己这个页面会话的层(不带 session 的是缺省会话)
+        const off = service.ready.subscribe(url.searchParams.get("session") ?? DEFAULT_READY_SESSION, send);
         // 空闲连接被中间的代理掐掉之前先说句话(注释行不是事件,页面收不到)
         const beat = setInterval(() => { if (!res.writableEnded) res.write(": beat\n\n"); }, 15000);
         beat.unref?.();
@@ -302,7 +303,8 @@ export function framesPlugin(): Plugin {
             const index = await service.snapshots().commitSnapshots({ tier: "shared", key: control.snapshotKey, clipId,
               capabilities: control.capabilities, items: [{ localFrame, html }] });
             if (!index.written.length) return json(200, { ok: true, stored: true, indexed: false, reason: "OVER_LIMIT" });
-            service.readyIndex.setLayer({ clipId, kind: kindOfTier(tier)!, key: wireSnapshotKey(tier, entry.key, control.snapshotKey)!, ranges: index.frames });
+            // 同样过 Item 4 的闸:只进当前版本正是这个 entry 的会话
+            service.publishLayer(entry, control, tier, index.frames);
             return json(200, { ok: true, stored: true, indexed: true, count: index.count });
           } catch (error: any) {
             json(400, { ok: false, code: "PROBE_SNAPSHOT_ERROR", error: error?.message || "探针帧没存下" });
@@ -352,7 +354,10 @@ export function framesPlugin(): Plugin {
               frames: [...frames].map(([frame, value]: any) => ({ frame, source: value.source, incomplete: !!value.incomplete, missing: value.missing || [],
                 url: `/api/frames/${entry.key}/${value.incomplete ? 'preview-frames' : value.source === "mov" ? "mov/frames" : "frames"}/${String(frame).padStart(6, "0")}.png` })), mov: movReady ? `/api/frames/${entry.key}/mov/full.mov` : null });
           }
-          if (url.pathname === "/preload") await service.preload(project);
+          // 会话「当前版本」的唯一来源(Item 4):页面的 preload 带着它的 `{ session, localRev }`
+          if (url.pathname === "/preload") await service.preload(project, {
+            session: typeof input.session === "string" && input.session.length <= 200 ? input.session : DEFAULT_READY_SESSION,
+            localRev: input.localRev });
           else if (url.pathname === "/import" && typeof input.snapshots === "string") {
             try {
               // Restore the control index together with the HTML.  It is built from

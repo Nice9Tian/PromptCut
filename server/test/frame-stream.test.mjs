@@ -18,7 +18,7 @@ import {
 import { planStreamSegments, streamFeasibility, streamFirstMs } from '../frame-playback.mjs';
 import { cardStreamIdentity } from '../card-identity.mjs';
 import { streamSegmentArgs, streamFilter, STREAM_ENCODERS, STREAM_ENCODER_ORDER, streamEncoderPreference } from '../bakery/ffmpeg.mjs';
-import { createReadyIndex } from '../ready-index.mjs';
+import { createReadyHub } from '../ready-index.mjs';
 
 /* ------------------------------------------------------------ fMP4 合成件 */
 
@@ -297,7 +297,7 @@ test('StreamProducer.rescan stages stream keys on the ready index (F5); republis
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'pc-stream-test-'));
   try {
     const key = 'b'.repeat(64);
-    const pipeline = { root, readyIndex: createReadyIndex(), prerenderPicked: () => true, captureCode: () => 'C' };
+    const pipeline = { root, ready: createReadyHub(), prerenderPicked: () => true, captureCode: () => 'C' };
     const producer = new StreamProducer(pipeline, { env: {} });
     // 读口没接上时什么都不挂、不发(和 R7 一样)
     assert.equal(await producer.rescan(), 0);
@@ -305,17 +305,25 @@ test('StreamProducer.rescan stages stream keys on the ready index (F5); republis
     await producer.store.save({ streamKey: key, kind: 'group', plane: 'stage', clipIds: ['x', 'y'], fps: 30, bound: { x: 0, y: 0, w: 2, h: 2 }, tight: null, inits: {}, segments: { 2: { file: '2-0123456789abcdef.m4s', init: 'i', stride: 1, samples: 15 } } });
     producer.store.manifests.clear();
     assert.equal(await producer.rescan(), 1);
-    assert.deepEqual(pipeline.readyIndex.stagedKeys(), [{ kind: 'stream', key, ranges: [[2, 2]] }]);
-    // 认领(项目到位之后):clipId 反查出来,发全量 layer
+    assert.deepEqual(pipeline.ready.stagedKeys(), [{ kind: 'stream', key, ranges: [[2, 2]] }]);
+    // 认领(页面的 preload 把会话设到 E 之后):clipId 反查出来,发全量 layer
     const seen = [];
-    pipeline.readyIndex.subscribe(m => seen.push(m));
-    pipeline.readyIndex.claim([{ clipId: 'y', kind: 'stream', key }], 1);
+    pipeline.ready.subscribe('s', m => seen.push(m));
+    pipeline.ready.adopt('s', 'E', 1);
+    pipeline.ready.claim('E', [{ clipId: 'y', kind: 'stream', key }]);
     assert.deepEqual(seen.filter(m => m.type === 'layer').at(-1), { type: 'layer', clipId: 'y', kind: 'stream', key, ranges: [[2, 2]] });
-    // 生产者手里的流:republish 带 groupClipIds
-    producer.streams.set(key, { spec: { streamKey: key, topClipId: 'y', clipIds: ['x', 'y'], kind: 'group' }, manifest: await producer.store.load(key), aliases: new Set() });
+    // 生产者手里的流:republish 带 groupClipIds,只发给当前版本是这条流所属 entry 的会话
+    producer.streams.set(key, { spec: { streamKey: key, topClipId: 'y', clipIds: ['x', 'y'], kind: 'group' }, manifest: await producer.store.load(key), aliases: new Set(), entryKey: 'E' });
     producer.republish();
     assert.deepEqual(seen.at(-1), { type: 'layer', clipId: 'y', kind: 'stream', key, ranges: [[2, 2]], groupClipIds: ['x', 'y'] });
     assert.deepEqual(producer.claimLayers(), [{ clipId: 'y', kind: 'stream', key }]);
+    assert.deepEqual(producer.claimLayers('E'), [{ clipId: 'y', kind: 'stream', key }]);
+    assert.deepEqual(producer.claimLayers('OTHER'), [], '别的版本不认领这条流');
+    // 别的版本的流不进这个会话
+    const before = seen.length;
+    producer.streams.get(key).entryKey = 'OTHER';
+    producer.republish();
+    assert.equal(seen.length, before, '流属于别的版本:不发');
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 });
 
@@ -327,10 +335,10 @@ test('switches: streams default on, decoder budget 6, pool 1 (max 2) unless pinn
   assert.deepEqual(streamPoolLimit({}), { fixed: null });
   assert.deepEqual(streamPoolLimit({ PROMPTCUT_STREAM_POOL: '2' }), { fixed: 2 });
   assert.deepEqual(streamPoolLimit({ PROMPTCUT_STREAM_POOL: '5' }), { fixed: null });
-  const producer = new StreamProducer({ root: os.tmpdir(), readyIndex: createReadyIndex() }, { env: {} });
+  const producer = new StreamProducer({ root: os.tmpdir(), ready: createReadyHub() }, { env: {} });
   assert.equal(producer.pool, 1);
   assert.equal(producer.routeAttached, false, '分段读口没接上之前不产流');
-  assert.equal(new StreamProducer({ root: os.tmpdir(), readyIndex: createReadyIndex() }, { env: { PROMPTCUT_STREAMS: '0' } }).enabled, false);
+  assert.equal(new StreamProducer({ root: os.tmpdir(), ready: createReadyHub() }, { env: { PROMPTCUT_STREAMS: '0' } }).enabled, false);
 });
 
 /* ------------------------------------------------------------ 编码命令行 */

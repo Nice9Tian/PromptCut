@@ -7,7 +7,7 @@ import "../../testing/registerTs.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-const { createPreloadScheduler, PRELOAD_DEBOUNCE_MS, PRELOAD_POLL_MS, PRELOAD_RETRY_MS } = await import("./prerenderPreload.ts");
+const { createPreloadScheduler, PRELOAD_DEBOUNCE_MS, PRELOAD_POLL_MS, PRELOAD_RETRY_MS, PRELOAD_KEEPALIVE_MS } = await import("./prerenderPreload.ts");
 
 /** 假计时器:手动推进虚拟时间 */
 function fakeClock() {
@@ -132,4 +132,21 @@ test("dispose 之后什么都不发", async () => {
   await clock.advance(20000);
   assert.equal(calls.length, 0);
   assert.equal(clock.pending(), 0);
+});
+
+test("就绪之后按保活间隔再报一次(Item 4:预渲染重启后靠它重新知道会话的版本);不空闲时不报", async () => {
+  const { clock, calls, scheduler } = setup([{ status: "ready" }, { status: "ready" }, { status: "ready" }]);
+  scheduler.setIdle(true);
+  await clock.advance(PRELOAD_DEBOUNCE_MS);
+  assert.equal(calls.length, 1);
+  await clock.advance(PRELOAD_KEEPALIVE_MS - 1);
+  assert.equal(calls.length, 1, "保活间隔之内不报");
+  await clock.advance(1);
+  assert.equal(calls.length, 2, "到点报一次");
+  scheduler.setIdle(false);
+  await clock.advance(PRELOAD_KEEPALIVE_MS * 3);
+  assert.equal(calls.length, 2, "播放 / 拖动中不报");
+  scheduler.setIdle(true);
+  await clock.advance(PRELOAD_KEEPALIVE_MS);
+  assert.equal(calls.length, 3, "回到空闲接着保活");
 });
