@@ -128,6 +128,8 @@ test('pngAlphaBox finds the box of alpha > 0 (faint glow included), null for a f
 /* ------------------------------------------------------------ 划分 */
 
 const CAPS = { compositing: 'independent', frameMode: 'stateful' };
+// 契约 E.4:planStreams 没有环境指纹就不产流(M4)。下面各处只补这一项输入,断言不变。
+const ENV_FP = '0123456789abcdef';
 const control = (clipId, start, end, fps = 30, extra = {}) => ({
   clipId, key: `K-${clipId}`, snapshotKey: `S-${clipId}`, capabilities: CAPS, compositing: 'independent',
   start, end, count: Math.ceil((end - start) * fps), sampling: { firstFrame: Math.ceil(start * fps), fps: { numerator: String(fps), denominator: '1' }, phase: { numerator: '0', denominator: '1' } },
@@ -172,7 +174,7 @@ test('planStreams: one stream per eligible card, global segment numbers, local p
     { id: 't2', clips: [{ id: 'b', cardId: 'y', start: 0, end: 4 }] },
   ]);
   const entry = { key: 'E', project: p, cardPlan: [control('a', 0.5, 2), control('b', 0, 4)] };
-  const specs = planStreams(entry, {});
+  const specs = planStreams(entry, { envFingerprint: ENV_FP });
   assert.equal(specs.length, 2);
   const a = specs.find(s => s.clipIds[0] === 'a');
   assert.equal(a.kind, 'card');
@@ -183,9 +185,9 @@ test('planStreams: one stream per eligible card, global segment numbers, local p
   assert.deepEqual(a.offset, { x: 640, y: 360 });
   assert.equal(a.mountFrame, 14, '挂载帧含 LEAD');
   // 预渲染集合之外的卡不产流(pinned 渲染 9)
-  assert.equal(planStreams(entry, { picked: id => id === 'b' }).length, 1);
+  assert.equal(planStreams(entry, { picked: id => id === 'b', envFingerprint: ENV_FP }).length, 1);
   // 超预算:合成一条组流,舞台坐标,最上面那张在最后
-  const grouped = planStreams(entry, { budget: 1 });
+  const grouped = planStreams(entry, { budget: 1, envFingerprint: ENV_FP });
   assert.equal(grouped.length, 1);
   assert.equal(grouped[0].kind, 'group');
   assert.equal(grouped[0].plane, 'stage');
@@ -196,7 +198,7 @@ test('planStreams: one stream per eligible card, global segment numbers, local p
 
 test('stream keys: placement-free for single-card streams, with time placement; group keys use the appearance key', () => {
   const p = project([{ id: 't1', clips: [{ id: 'a', cardId: 'x', start: 0, end: 2 }] }]);
-  const key = (ctl, budget = 6) => planStreams({ key: 'E', project: p, cardPlan: [ctl] }, { budget })[0]?.streamKey;
+  const key = (ctl, budget = 6) => planStreams({ key: 'E', project: p, cardPlan: [ctl] }, { budget, envFingerprint: ENV_FP })[0]?.streamKey;
   const base = control('a', 0, 2);
   assert.equal(key(base), key({ ...base, key: 'K-moved-elsewhere' }), '单卡流不看带外观的缓存键(挪位置不作废流)');
   assert.notEqual(key(base), key({ ...base, snapshotKey: 'S-other-params' }), '内容变了就换流键');
@@ -214,7 +216,7 @@ test('isolatedStreamProject: only the stream cards paint, other clips stay as hi
     ] },
     { id: 't2', clips: [{ id: 'b', cardId: 'y', start: 0, end: 4 }] },
   ]);
-  const spec = planStreams({ key: 'E', project: p, cardPlan: [control('a', 0.5, 2)] }, {})[0];
+  const spec = planStreams({ key: 'E', project: p, cardPlan: [control('a', 0.5, 2)] }, { envFingerprint: ENV_FP })[0];
   const iso = isolatedStreamProject(p, spec);
   const visible = iso.tracks.filter(t => !t.hidden);
   assert.equal(visible.length, 1);
@@ -227,7 +229,7 @@ test('isolatedStreamProject: only the stream cards paint, other clips stay as hi
   assert.ok(iso.tracks.some(t => t.hidden && t.sourceOnly && t.id === 't2'));
   assert.deepEqual(iso._cardRender, { mode: 'final', frames: {}, missing: {} });
   // 组流保留外观
-  const group = planStreams({ key: 'E', project: p, cardPlan: [control('a', 0.5, 2), control('b', 0, 4)] }, { budget: 1 })[0];
+  const group = planStreams({ key: 'E', project: p, cardPlan: [control('a', 0.5, 2), control('b', 0, 4)] }, { budget: 1, envFingerprint: ENV_FP })[0];
   const gIso = isolatedStreamProject(p, group);
   assert.equal(gIso.tracks.filter(t => !t.hidden).flatMap(t => t.clips).find(c => c.id === 'a').opacity, 0.5);
 });

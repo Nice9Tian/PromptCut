@@ -14,6 +14,8 @@
  *   8. `wanted` 发出后对应片段的批被提前(C4 服务端消费侧);
  *   9. **在所有位置都判轻的卡不产快照、不进就绪索引**(pinned 渲染 9)——
  *      给一张 stateful 卡写一条便宜的成本记录,它就该从预渲染集合里掉出去。
+ *  10. **环境指纹进结果键**(M4,契约 E.7):诊断里的指纹是 16 位十六进制,
+ *      每个带 `snapshotKey` 的 control 满足 `snapshotKey === resultKeyOf(contentKey, envFingerprint)`。
  *
  * 成本记录也隔离在临时目录(`PROMPTCUT_DATA_DIR`),不碰仓库的 `out/card-costs.json`。
  *
@@ -34,6 +36,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { pickSnapshotFrame, segmentStartOf, anchorFrames } from '../../src/render/snapshotPick.mjs';
+import { resultKeyOf } from '../../server/render-node/fingerprint.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const args = process.argv.slice(2);
@@ -270,6 +273,19 @@ try {
     const indexed = hugeLayer ? hugeLayer.ranges.some(([from, to]) => oversize[0].localFrame >= from && oversize[0].localFrame <= to) : false;
     out.hugeLayer = hugeLayer ?? null;
     check(!indexed, '⑤ 超限帧不进就绪索引', { hugeLayer, frame: oversize[0].localFrame });
+  }
+
+  /* ---- ⑩ M4:环境指纹进结果键(契约 E.7「探针」) ---- */
+  {
+    const d = diagnostics.body || {};
+    const fingerprint = d.environment?.fingerprint;
+    out.environment = d.environment ?? null;
+    check(typeof fingerprint === 'string' && /^[0-9a-f]{16}$/.test(fingerprint), '⑩ diagnostics.environment.fingerprint 是 16 位十六进制', out.environment);
+    const keyed = (d.plans || []).flatMap(p => (p.controls || []).filter(c => c.snapshotKey));
+    const bad = keyed.filter(c => !(typeof c.contentKey === 'string' && c.envFingerprint === fingerprint && c.snapshotKey === resultKeyOf(c.contentKey, c.envFingerprint)))
+      .map(c => ({ clipId: c.clipId, snapshotKey: c.snapshotKey, contentKey: c.contentKey, envFingerprint: c.envFingerprint }));
+    check(keyed.length > 0, '⑩ 诊断里有带 snapshotKey 的 control', d.plans);
+    check(bad.length === 0, '⑩ plans[].controls[] 的 snapshotKey === resultKeyOf(contentKey, envFingerprint),且 envFingerprint 就是本进程的指纹', bad);
   }
 
   /* ---- ⑦ F5:杀掉预渲染进程再起来 ---- */

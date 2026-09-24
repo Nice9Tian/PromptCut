@@ -680,3 +680,140 @@ Endpoint = { connId, send(message), onMessage(handler), close(), closed }
 - 端点处理器没有抛出异常（`errors()` 为空）；
 - 环回里投递过的每条消息都能 JSON 往返；
 - 测试名以编号开头。
+
+## E. M4：环境指纹进结果键（本机预渲染进程）
+
+主 Agent 定稿，2026-09-24。依据：设计 `distributed-prerender-queue.md` 2.1、`rendering.md`「不同环境的结果不混用」、`TODO.md`「语义与代码的差距」的「渲染任务队列与渲染节点」一条。
+
+**范围**：本机预渲染进程写盘、投递的全部预渲染键都乘上环境指纹，现有缓存整体换键一次。
+
+- 快照共享键 `snapshotKey`（共享档目录名；本地档目录的第二层也是它）；
+- 本地档键 `<entry.key>/<snapshotKey>`（随 `snapshotKey` 一起换，`entry.key` 本身不变）；
+- 独立卡 PNG 缓存键 `control.key`（`controls/<key>/`，产自同一个 Chrome，同样按环境隔离）；
+- 轨道流键 `streamKey`（`streams/<streamKey>/`）。
+
+**不变**：
+
+- `card-identity.mjs` 的四个函数（内容身份仍然只认内容）；
+- `entry.key`（`frameIdentity`，就绪索引的会话版本）；
+- `costKey`（K1 成本键，设备口径另有 `device` 字段）；
+- 就绪索引的线格式（`wireSnapshotKey`）、快照与流的路由正则（结果键仍是 64 位十六进制）；
+- 导出路径与导出像素（指纹只改键，不改画面）。
+
+旧键目录不删除（用户数据只读不写），换键后成为不再被引用的孤儿目录。
+
+### E.1 指纹从哪里来：`server/bakery/environment.mjs`（新建）
+
+```js
+export async function probeBrowserEnvironment({ browser, page }, { platform = process.platform, timeoutMs = 5000 } = {})
+// → { os, gpuClass, chromeMajor, fingerprint, renderer, vendor, chromeVersion, detected }
+```
+
+- `chromeVersion = await browser.version()`（例如 `HeadlessChrome/138.0.7204.49`）；
+- `renderer` / `vendor`：在 `page` 里 `evaluate` 一段自包含的函数：新建一个不挂进文档的 `<canvas>`，依次试 `webgl2`、`webgl`；有 `WEBGL_debug_renderer_info` 就读 `UNMASKED_RENDERER_WEBGL` / `UNMASKED_VENDOR_WEBGL`，否则读 `gl.RENDERER` / `gl.VENDOR`；读完用 `WEBGL_lose_context` 释放上下文；拿不到上下文返回两个空串；
+- 结果交给 `render-node/fingerprint.mjs` 的 `describeEnvironment({ platform, renderer, vendor, chromeVersion })`；
+- **从不抛出**：任何一步失败或超过 `timeoutMs`，缺的那项按空值计，`detected: false`；两步都成功才是 `detected: true`（拿不到 WebGL 上下文、返回两个空串，也算成功）；
+- 预渲染用的 Chrome 带 `--disable-gpu` 加 `--enable-unsafe-swiftshader`，WebGL 走 SwiftShader，所以本机预渲染进程的 `gpuClass` 预期是 `software`。这就是它真实的栅格化环境，不做特判。
+
+### E.2 `FramePipeline`（`server/frame-pipeline.mjs`）
+
+- 构造参数新增 `environment`（`describeEnvironment` 的形状，至少有 `fingerprint`）。给了就不探测，直接用（测试和以后的独立渲染主机用）。
+- `this.environment`：没定下来之前是 `null`。getter `envFingerprint` 返回 `this.environment?.fingerprint ?? null`。
+- `async ensureEnvironment(bakery)`：
+  - 已有 `this.environment` 就直接返回；
+  - 并发调用只探测一次（single-flight）；
+  - 结果**整个进程只定一次**，`detected: false` 的结果也照样定下来，免得同一进程中途换键；
+  - 探测只在真的 bakery 上做：`bakery?.browser` 和 `bakery?.page` 缺一个就不探测，返回 `this.environment`。
+- 调用点：`bakery()` 里 `openBakery` 之后、`loadProject` 之前；`leaseStreamBakery()` 里 `openBakery` 之后。都用 `await`。这两处是本进程仅有的两个 `openBakery` 调用点。
+- `entry.cardCache = new CardFrameCache({ ..., envFingerprint: () => this.envFingerprint })`。
+- `diagnostics()` 新增 `environment: this.environment`。
+- `planDiagnostics()` 的每个 control 新增 `contentKey`、`envFingerprint`。
+
+### E.3 `CardFrameCache.plan()`（`server/card-cache.mjs`）
+
+- 构造参数新增 `envFingerprint`：字符串，或返回字符串的函数。`plan()` 开头解析一次；解析结果不是非空字符串就抛 `Error`（消息里带「环境指纹」四个字），不产任何键。现有调用点都已包在 `try` 里。
+- 每个 control：
+  - `cacheContentKey = cardCacheIdentity(...)`（与今天的 `key` 相同的算法和输入）；
+  - `key = resultKeyOf(cacheContentKey, fp)`；
+  - `contentKey = cardSnapshotIdentity(...)`（与今天的 `snapshotKey` 相同的算法和输入）；
+  - `snapshotKey = resultKeyOf(contentKey, fp)`；
+  - 输出新增字段 `contentKey`、`cacheContentKey`、`envFingerprint: fp`，其余字段不变（`costKey` 不乘指纹）。
+- `resultKeyOf` 从 `server/render-node/fingerprint.mjs` 引入，不另写一份。
+- `renderState` / `put` / `hasComplete` / `finish` 照旧只认 `control.key`。
+
+### E.4 轨道流（`server/frame-stream.mjs`）
+
+- `planStreams(entry, { ..., envFingerprint })`：`envFingerprint` 不是非空字符串就返回 `[]`，不产流。
+- 每个 spec：
+  - 单卡流：`contentKey = cardStreamIdentity({ kind: 'card', ..., members: [{ key: control.contentKey ?? control.snapshotKey ?? control.key, ... }] })`；
+  - 组流：`contentKey = cardStreamIdentity({ kind: 'group', ..., members: [{ key: control.cacheContentKey ?? control.key, ... }] })`；
+  - `streamKey = resultKeyOf(contentKey, envFingerprint)`；spec 新增 `contentKey`、`envFingerprint`。
+  - 成员键优先取内容键，因此同一个项目在两种环境下的 `contentKey` 相同，`streamKey` 不同。`??` 后面的回退只为没有内容键字段的旧形状输入。
+- `StreamProducer.update` 传 `envFingerprint: this.pipeline.envFingerprint`。
+- `status().streams[]` 每项新增 `contentKey`。
+- `STREAM_CODE_VERSION` 不变。
+
+### E.5 细任务切分（`server/render-node/split.mjs`，改 B.4）
+
+- 快照内容键改为：
+  - `shared` → `control.contentKey ?? control.snapshotKey`；
+  - `local` → `${entryKey}/${control.contentKey ?? control.snapshotKey}`；
+- 流内容键改为 `stream.contentKey ?? stream.streamKey`；
+- 其余照 B.4。
+- 由此成立的不变式（`splitPlan` 的 `envFingerprint` 与 plan 的指纹相同时）：
+  - 共享档快照任务的 `resultKey === control.snapshotKey`；
+  - 流任务的 `resultKey === spec.streamKey`；
+  - 本地档任务的 `resultKey = resultKeyOf(<entryKey>/<contentKey>, fp)`，`input.contentKey` 就是这个拼接串，和 B.4 一样。
+- 没有 `contentKey` 字段的输入（M2 夹具的形状）照旧把 `snapshotKey` / `streamKey` 当内容键。
+
+### E.6 页面测量帧入库（`server/vite-plugin-frames.ts` 的 `PUT /api/frames/snapshot`）
+
+页面把测量时推过的帧交给预渲染进程存成共享快照（K1 末句）。这些帧产自用户的浏览器，和预渲染进程不是同一种环境。按「不同环境的结果不混用」：
+
+- 在 `NOT_INDEPENDENT` 判断之后、写盘之前加一道闸：请求体的 `envFingerprint` 必须是字符串，且等于 `control.envFingerprint`；
+- 不等（含没带）就回 `200 { ok: true, stored: false, reason: 'ENV_MISMATCH' }`，不写盘、不发层。
+- 页面（`src/editor/probeRunner.ts`）本阶段不改，它现在不带这个字段，所以测量帧不再入库，这些帧由预渲染进程自己补渲。页面只在意 404，回 200 不影响它。
+
+### E.7 测试（Verification，`server/test/`）
+
+新建 `server/test/env-fingerprint-keys.test.mjs`，测试名以编号开头：
+
+| 编号 | 内容 |
+|---|---|
+| F1 | 真实串的指纹提取：SwiftShader 的 ANGLE 串 → `software`；NVIDIA、AMD、Intel 的 ANGLE / D3D11 串 → 对应类别；`Apple M2` → `apple`；`HeadlessChrome/138.0.7204.49` 与完整 UA → 138；三项任一不同，指纹不同；同输入指纹稳定、16 位十六进制 |
+| F2 | **同一张卡、两种环境**：同一份 browserPlan 喂给两个只差 `envFingerprint` 的 `CardFrameCache`：`contentKey` / `cacheContentKey` 相同；`snapshotKey`、`key` 必然不同；且 `snapshotKey === resultKeyOf(contentKey, fp)`、`key === resultKeyOf(cacheContentKey, fp)`；同一指纹算两次完全相同；64 位十六进制（路由正则仍匹配） |
+| F3 | 没有指纹（`undefined`、`''`、函数返回 `null`）时 `plan()` 抛出，错误消息含「环境指纹」 |
+| F4 | 流：同一个 entry 在两种指纹下，`planStreams` 的 `contentKey` 相同、`streamKey` 不同且等于 `resultKeyOf(contentKey, fp)`；单卡流和组流都覆盖；没有指纹返回 `[]` |
+| F5 | 落盘隔离：两种环境的共享档、本地档、PNG 缓存、流目录路径两两不同（`snapshotDir` 与 `path.join(root, 'controls', key)`、`streams/<streamKey>`），一种环境写入的快照另一种环境读不到 |
+| F6 | `splitPlan` 喂真实 `plan()` 输出：共享档任务 `resultKey === control.snapshotKey`，流任务 `resultKey === spec.streamKey`，本地档按 E.5；两种指纹切出的任务 id 集合不相交 |
+| F7 | `probeBrowserEnvironment` 用假 browser / page：正常路径；没有 WebGL（空串 → `software`，`detected` 仍为 true）；`version()` 抛出或 `evaluate` 抛出或超时 → 不抛、`detected: false`；`evaluate` 收到的是一个函数 |
+| F8 | `FramePipeline`：构造时注入 `environment` 就不探测、`cardCache.plan` 用它；`ensureEnvironment` 并发调用只探测一次、结果终身不变（包括 `detected: false`）；bakery 缺 `browser` 或 `page` 时不探测；`diagnostics().environment` 可见 |
+
+另外：
+
+- 因本契约失效的既有测试（不带指纹构造 `CardFrameCache` 后调 `plan()`、不带指纹调 `planStreams` 的），按本契约补上指纹。只补输入，不放宽断言。
+- 探针：`scripts/probes/ready-index-probe.mjs` 与 `scripts/probes/stream-produce-probe.mjs` 各加一项检查：
+  - `diagnostics.environment.fingerprint` 是 16 位十六进制；
+  - `plans[].controls[]` 有 `snapshotKey` 的，`snapshotKey === resultKeyOf(contentKey, envFingerprint)`；
+  - 流探针另查 `streams.streams[]` 的 `streamKey === resultKeyOf(contentKey, environment.fingerprint)`。
+  - 探针本身照旧从空库起跑，所以「旧缓存失效后重新生成新键产物」由探针原有的「产出、就绪、取得到」断言覆盖。
+
+### E.8 文件归属
+
+| 角色 | 文件 |
+|---|---|
+| Pipeline/Node | 新建 `server/bakery/environment.mjs`；改 `server/card-cache.mjs`、`server/frame-stream.mjs`、`server/frame-pipeline.mjs`、`server/render-node/split.mjs`、`server/vite-plugin-frames.ts`。不改 `server/card-identity.mjs` |
+| Verification/Test | 新建 `server/test/env-fingerprint-keys.test.mjs`；改受影响的既有 `server/test/*.test.mjs`、`scripts/probes/ready-index-probe.mjs`、`scripts/probes/stream-produce-probe.mjs` |
+| 主 Agent | 本节；设计 2.1「对现有代码的影响」、`TODO.md`、任务书、报告 `docs/reports/REPORT-render-queue-m4.md` |
+
+### E.9 定稿后的补充细则（2026-09-24，主 Agent 按实现方与测试方的疑点裁定）
+
+- **E.1 超时**：`timeoutMs` 按步算。两步（`browser.version()` 与页面探测）并行，各自限时，所以整次探测最多约 `timeoutMs`。
+- **E.1 空值**：缺项一律按空串计。`version()` 返回空串算这一步失败（`detected: false`）。
+- **E.3 解析顺序**：指纹在 `plan()` 开头、读 browserPlan 之前解析。没有指纹时，空的或非法的 browserPlan 也抛出，不先回 `[]`。
+- **E.4 回退**：单卡流成员键的回退写成 `contentKey ?? (snapshotKey || key)`，与旧代码的 `snapshotKey || key` 一致。
+- **E.5 流任务**：流任务的 `input.contentKey` 是流的内容键（`spec.contentKey`），不是结果键 `streamKey`。
+- **E.5 本地档**：本地档任务的 `resultKey` 是队列里的任务身份，不等于落盘目录键 `<entryKey>/<snapshotKey>`，这是有意的。
+  - 共享档和流的任务身份与落盘键重合，因为它们没有 `entryKey` 这一层。
+  - M5 的产物库接口按 `input.entryKey` 与去掉 `<entryKey>/` 前缀的内容键，用同一个指纹重算落盘键。
+- **E.6 实际效果**：页面用 GPU 栅格化，本机预渲染用 SwiftShader，两边指纹几乎不可能相同，所以这道闸实际上停掉了测量帧入库。这条路径以后怎么处理记在 `TODO.md`，本阶段不改页面。

@@ -21,7 +21,9 @@
  *  10. 单独重新生产第 5 段(把它的签名弄旧):只重做这一段,索引区间不变,旧文件 5 秒内删掉(G6);
  *  11. F5:关掉这个 FramePipeline,同一个库根上新起一个 —— 扫盘挂键、项目到位后按键认领、每条流的层原样发出,
  *      一个分段都不重新生产;
- *  12. 组流(`--group`):组流的分段里恰好是组内那几张卡(粒子的绿、药丸的蓝都在)。
+ *  12. 组流(`--group`):组流的分段里恰好是组内那几张卡(粒子的绿、药丸的蓝都在);
+ *  13. 环境指纹进结果键(M4,契约 E.7):诊断里的指纹是 16 位十六进制,快照键与流键都等于
+ *      `resultKeyOf(内容键, 指纹)`。
  *
  * 输出 JSON 结论;任何一条不过就以非零退出。`--keep` 不删库根(给 `stream-play-probe.mjs` 接着用)。
  */
@@ -40,6 +42,7 @@ import { bakeStream } from '../../server/bakery/bake.mjs';
 import { openStreamSegmentEncoder } from '../../server/bakery/ffmpeg.mjs';
 import { PROJECT, until as untilIn } from './stream-probe-project.mjs';
 import { segmentSignature } from '../../server/frame-stream.mjs';
+import { resultKeyOf } from '../../server/render-node/fingerprint.mjs';
 
 const execFileAsync = promisify(execFile);
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -102,6 +105,22 @@ try {
   // G6:旧文件延迟 5 秒删除 —— 等 6 秒再看盘
   await new Promise(r => setTimeout(r, 6000));
   const status = producer.status();
+  // M4(契约 E.7「探针」):环境指纹定下来了,快照键与流键都 = resultKeyOf(内容键, 指纹)
+  {
+    const diagnostics = pipeline.diagnostics();
+    const fingerprint = diagnostics.environment?.fingerprint;
+    out.environment = diagnostics.environment ?? null;
+    check(typeof fingerprint === 'string' && /^[0-9a-f]{16}$/.test(fingerprint), 'M4:diagnostics.environment.fingerprint 是 16 位十六进制', out.environment);
+    const badControls = (diagnostics.plans || []).flatMap(p => (p.controls || [])
+      .filter(c => c.snapshotKey && !(typeof c.contentKey === 'string' && c.envFingerprint === fingerprint && c.snapshotKey === resultKeyOf(c.contentKey, c.envFingerprint)))
+      .map(c => ({ clipId: c.clipId, snapshotKey: c.snapshotKey, contentKey: c.contentKey, envFingerprint: c.envFingerprint })));
+    check((diagnostics.plans || []).some(p => (p.controls || []).some(c => c.snapshotKey)), 'M4:诊断里有带 snapshotKey 的 control', diagnostics.plans);
+    check(badControls.length === 0, 'M4:plans[].controls[] 的 snapshotKey === resultKeyOf(contentKey, envFingerprint),且 envFingerprint 就是本进程的指纹', badControls);
+    const listed = diagnostics.streams?.streams ?? [];
+    const badStreams = listed.filter(s => !(typeof s.contentKey === 'string' && s.streamKey === resultKeyOf(s.contentKey, fingerprint)))
+      .map(s => ({ clipIds: s.clipIds, streamKey: s.streamKey, contentKey: s.contentKey }));
+    check(listed.length > 0 && badStreams.length === 0, 'M4:streams.streams[] 的 streamKey === resultKeyOf(contentKey, environment.fingerprint)', { listed: listed.length, badStreams });
+  }
   out.stats = status.stats;
   out.encoder = status.encoder;
   out.pool = status.pool;
