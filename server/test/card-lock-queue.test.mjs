@@ -62,6 +62,8 @@ const lockOf = (h, lockKey) => locks(h).find(l => l.lockKey === lockKey) ?? null
 const claimOk = (h, conn, id, expectVersion) => h.claim(conn, id, expectVersion).one(conn, 'task.claimed');
 const published = (out, conn) => out.one(conn, 'task.published').results;
 const cardLock = (h, conn, fields) => h.handle(conn, { type: 'card.lock', ...fields });
+/** F.1：takeover 是 TaskInput 上的可选字段（逐个任务带），splitPlan 也是给每个任务加 takeover: true（F.2） */
+const tk = (tasks, v = true) => tasks.map(t => ({ ...t, takeover: v }));
 
 /* ================================================================== lockKeyOf */
 
@@ -323,7 +325,7 @@ test('Q4 带 takeover 发布：锁转给新指纹；旧指纹 open 的进 failed
   // 顺带让 ck2 有一把锁（别的锁键不受影响）
   claimOk(h, 'a', scene.o.id, 1);
   h.bus.clear();
-  const out = h.publish('q', [y1, y2], { takeover: true });
+  const out = h.publish('q', tk([y1, y2], true));
   const results = published(out, 'q');
   assert.deepEqual(results.map(r => [r.id, r.state, r.created]), [[y1.id, 'open', true], [y2.id, 'open', true]]);
   for (const r of results) assert.equal('lockedBy' in r, false, '接手之后锁就是自己的，不带 lockedBy');
@@ -352,7 +354,7 @@ test('Q4 带 takeover 发布（全量核对）：状态、消息、锁', () => {
   const scene = takeoverScene();
   const { h } = scene;
   const now = h.now();
-  const out = h.publish('q', [snap('ck1', FP_B, 0)], { takeover: true });
+  const out = h.publish('q', tk([snap('ck1', FP_B, 0)], true));
   assertSuperseded(h, out, scene, now, FP_B);
   // 已经 failed 的旧任务再认领：第 3 步 taken 先于 3a
   const r = h.claim('a', scene.t3.id, 2).one('a', 'task.claim-rejected');
@@ -374,7 +376,7 @@ test('Q4 补充：接手时与新锁同指纹的任务不作废；再被第三�
   const a0 = snap('ck1', FP_A, 0), b0 = snap('ck1', FP_B, 0), b1 = snap('ck1', FP_B, 60);
   h.publish('p', [a0, b0]);
   claimOk(h, 'a', a0.id, 1);                          // 锁 A
-  h.publish('q', [b1], { takeover: true });            // B 接手：a0 作废，b0（B 指纹、open）不动
+  h.publish('q', tk([b1], true));            // B 接手：a0 作废，b0（B 指纹、open）不动
   assert.deepEqual([h.task(a0.id).state, h.task(a0.id).lastError], ['failed', 'superseded']);
   assert.deepEqual([h.task(b0.id).state, h.task(b0.id).version], ['open', 1]);
   assert.deepEqual([h.task(b1.id).state, h.task(b1.id).version], ['open', 1]);
@@ -391,7 +393,7 @@ test('Q4 补充：同指纹带 takeover（锁已经是自己的）只刷新 touc
   h.publish('p', [a0]);
   claimOk(h, 'a', a0.id, 1);
   h.clock.advance(500);
-  const out = h.publish('q', [a1], { takeover: true });
+  const out = h.publish('q', tk([a1], true));
   assert.equal(out.ofType('task.failed').length, 0);
   assert.equal(h.task(a0.id).state, 'claimed');
   assert.deepEqual(lockOf(h, 'snapshot:ck1'), { lockKey: 'snapshot:ck1', envFingerprint: FP_A, source: 'claim', since: T0, touchedAt: T0 + 500 });
@@ -420,7 +422,7 @@ test('Q5 不带 takeover、锁在别的指纹上时发布已存在的任务：�
   assert.equal(lockOf(h, 'snapshot:ck2'), null, '没锁 + 不带 takeover：不建锁');
 
   // takeover: false 同不带
-  results = published(h.publish('p', [y1], { takeover: false }), 'p');
+  results = published(h.publish('p', tk([y1], false)), 'p');
   assert.deepEqual(results[0], { id: y1.id, state: 'open', version: 1, created: false, lockedBy: FP_A });
   assert.equal(lockOf(h, 'snapshot:ck1').envFingerprint, FP_A);
   // 合并进来的异指纹任务仍然认领不了
@@ -463,12 +465,12 @@ test('Q10 补充：因 limit 没建成的那一项不做任何锁处理（F.7 �
   const first = snap('k0', FP_A, 0);
   h.publish('p', [first]);
   // 项目已满：带 takeover 的新任务因 limit 没建 → 不建锁
-  const r = published(h.publish('q', [snap('k1', FP_B, 0)], { takeover: true }), 'q');
+  const r = published(h.publish('q', tk([snap('k1', FP_B, 0)], true)), 'q');
   assert.equal(r[0].error, 'limit');
   assert.equal(lockOf(h, 'snapshot:k1'), null, 'limit 的项不建锁');
   // 已锁在别的指纹上时：limit 的项不接手、锁不变
   cardLock(h, 'p', { kind: 'snapshot', contentKey: 'k2', envFingerprint: FP_A });
-  const r2 = published(h.publish('q', [snap('k2', FP_B, 0)], { takeover: true }), 'q');
+  const r2 = published(h.publish('q', tk([snap('k2', FP_B, 0)], true)), 'q');
   assert.equal(r2[0].error, 'limit');
   assert.deepEqual([lockOf(h, 'snapshot:k2').envFingerprint, lockOf(h, 'snapshot:k2').source], [FP_A, 'lock']);
 });
@@ -487,7 +489,7 @@ test('Q11 没锁时带 takeover 发布：建锁（source: takeover），同时�
 
   const y = snap('ck1', FP_B, 0);
   const now = h.now();
-  const out = h.publish('q', [y], { takeover: true });
+  const out = h.publish('q', tk([y], true));
   assert.deepEqual(published(out, 'q')[0], { id: y.id, state: 'open', version: 1, created: true });
   assert.deepEqual(lockOf(h, 'snapshot:ck1'), { lockKey: 'snapshot:ck1', envFingerprint: FP_B, source: 'takeover', since: now, touchedAt: now });
 
@@ -512,14 +514,15 @@ test('Q11 没锁时带 takeover 发布：建锁（source: takeover），同时�
 
 /* ================================================================== Q6 */
 
-test('Q6 takeover 不是布尔 → 整条 bad-message，状态不变；是布尔时不存进任务，TaskView 不变', () => {
+test('Q6 任务的 takeover 不是布尔 → 整条 bad-message，状态不变；是布尔时不存进任务，TaskView 不变', () => {
   const h = setup();
   const x = snap('ck1', FP_A, 0);
   h.publish('p', [x]);
   claimOk(h, 'a', x.id, 1);
   const before = h.describe();
-  for (const takeover of ['yes', 1, 0, {}, [], null]) {
-    const out = h.publish('q', [snap('ck1', FP_B, 0), snap('ck3', FP_B, 0)], { takeover, reqId: 'bt' });
+  for (const takeover of ['yes', 1, 0, {}, [], 'false']) {
+    // 只有第二个任务的 takeover 不合法：整条不生效（第一个带合法 takeover 的也不接手）
+    const out = h.publish('q', [{ ...snap('ck1', FP_B, 0), takeover: true }, { ...snap('ck3', FP_B, 0), takeover }], { reqId: 'bt' });
     const e = out.one('q', 'error');
     assert.deepEqual([e.reason, e.reqId], ['bad-message', 'bt'], `takeover = ${JSON.stringify(takeover)}`);
     assert.equal(out.of('q', 'task.published').length, 0);
@@ -527,7 +530,7 @@ test('Q6 takeover 不是布尔 → 整条 bad-message，状态不变；是布尔
   }
   // 合法的布尔：任务里不存 takeover
   const y = snap('ck1', FP_B, 60);
-  const out = h.publish('q', [y], { takeover: true });
+  const out = h.publish('q', tk([y], true));
   const opened = out.ofType('task.opened').map(e => e.message.task).filter(t => t.id === y.id);
   assert.ok(opened.length > 0, 'watch 者收到 task.opened');
   for (const t of opened) assert.equal('takeover' in t, false, 'TaskView 不含 takeover');
@@ -655,7 +658,7 @@ test('Q9 没有 input.contentKey 或没有 requires.envFingerprint 的任务不�
   const emptyCk = snap('ck1', FP_B, 180, { input: { clipId: 'c', contentKey: '' } });   // 锁键空串
   const plan = makeTaskInput({ kind: 'plan', projectId: 'p1', projectRev: 3, requires: { envFingerprint: FP_B }, input: { contentKey: 'ck1' } });
   const tasks = [noFp, emptyFp, noCk, emptyCk];
-  const results = published(h.publish('q', [...tasks, plan], { takeover: true }), 'q');
+  const results = published(h.publish('q', tk([...tasks, plan], true)), 'q');
   for (const r of results) assert.equal('lockedBy' in r, false, `${r.id} 不带 lockedBy`);
   assert.deepEqual(h.describe().locks.map(l => [l.lockKey, l.envFingerprint, l.source]), [['snapshot:ck1', FP_A, 'lock']],
     '带 takeover 也不接手、不建锁');
