@@ -12,7 +12,7 @@ import { resultKeyOf } from './fingerprint.mjs';
  *   快照:每个 control 的本地帧 0 .. count-1 按 SNAPSHOT_SPAN 切段(缺省 60 帧);本地档缺 entryKey 的跳过
  *   轨道流:firstSegment .. lastSegment 按 STREAM_SEGMENTS 切(缺省 8 段,每段 15 帧);没有 streamKey 的跳过
  *
- * 结果键 = 内容键 × 切分节点**自己的**环境指纹(设计 2.1):认领 `plan` 的节点定下这一版
+ * 结果键 = 内容键 × 切分节点**自己的**环境指纹(设计 2.1;卡被别的环境锁定时见下文「卡片级指纹锁」):认领 `plan` 的节点定下这一版
  * 项目的指纹,写进每个细任务的 `requires.envFingerprint`,只有同指纹的节点能认领。
  * 含锚帧的快照段优先级 50,其余 10。
  *
@@ -21,6 +21,18 @@ import { resultKeyOf } from './fingerprint.mjs';
  * 指纹与 plan 相同时,共享档任务的 `resultKey` 正好等于 `control.snapshotKey`,流任务的正好等于
  * `spec.streamKey`,细任务的产物和本机预渲染进程写的是同一个目录。没有内容键字段的输入
  * (M2 夹具的旧形状)照旧把 `snapshotKey` / `streamKey` 当内容键。
+ *
+ * # 卡片级指纹锁(契约 F.2,设计 2.1「谁定指纹」)
+ *
+ * 锁的单位是「一张卡的一种结果」,锁键 `<kind>:<contentKey>`,`contentKey` 就是细任务的
+ * `input.contentKey`(本地档带 `<entryKey>/` 前缀)。调用方可以传 `cardLocks`(锁键 → 锁指纹)
+ * 和 `takeover`(要接手哪些锁),每张卡、每条流按下面三种之一出键:
+ *
+ *   没锁,或锁在本节点的指纹上   按本节点指纹出键,不加 takeover 字段(即上面的规则)
+ *   锁在别的指纹 X 上,且接手     按本节点指纹出键,每个任务加 `takeover: true`,
+ *                                 发布时锁转给本节点,X 的未完成任务作废(superseded)
+ *   锁在别的指纹 X 上,不接手     `resultKey` 与 `requires.envFingerprint` 都用 X:
+ *                                 剩余帧只给与锁定方同指纹的节点,这一层不混环境
  *
  * 纯函数:不读环境变量、不做 I/O。
  */
@@ -50,6 +62,27 @@ function spans(first, last, span) {
 
 const stepOf = value => Math.max(1, Math.floor(Number(value) || 0));
 
+/** 锁指纹只认非空字符串;别的值(`null`、空串、非字符串)一律当没锁。 */
+const fingerprintOr = value => (typeof value === 'string' && value !== '' ? value : null);
+
+/** `cardLocks`(Map 或普通对象)→ `(lockKey) => 锁指纹 | null`。普通对象只看自有属性。 */
+function lockLookup(cardLocks) {
+  if (cardLocks == null) return () => null;
+  if (typeof cardLocks.get === 'function') return key => fingerprintOr(cardLocks.get(key));
+  if (typeof cardLocks === 'object') {
+    return key => (Object.prototype.hasOwnProperty.call(cardLocks, key) ? fingerprintOr(cardLocks[key]) : null);
+  }
+  return () => null;
+}
+
+/** `takeover`(布尔 / Set / 函数)→ `(lockKey) => boolean`。其余值当不接手。 */
+function takeoverTest(takeover) {
+  if (takeover === true) return () => true;
+  if (typeof takeover === 'function') return key => takeover(key) === true;
+  if (takeover != null && typeof takeover.has === 'function') return key => takeover.has(key) === true;
+  return () => false;
+}
+
 /** → TaskInput[]:先快照(按 cardPlan 顺序、段升序),后轨道流(按 streams 顺序、段升序);同一 id 只留第一个。 */
 export function splitPlan({
   planTask,
@@ -65,12 +98,26 @@ export function splitPlan({
   isUserCard = () => false,
   isGraphCard = () => false,
   constants = {},
+  cardLocks = {},           // Map | Record<lockKey, envFingerprint>(契约 F.2)
+  takeover = false,         // boolean | Set<lockKey> | (lockKey) => boolean
 }) {
   const snapshotSpan = stepOf(constants.SNAPSHOT_SPAN ?? QUEUE_DEFAULTS.SNAPSHOT_SPAN);
   const streamSegments = stepOf(constants.STREAM_SEGMENTS ?? QUEUE_DEFAULTS.STREAM_SEGMENTS);
   const { projectId, projectRev } = planTask?.source ?? {};
   const derivedFrom = planTask?.id ?? null;
   const anchors = [...(anchorFrames ?? [])];
+  const lockOf = lockLookup(cardLocks);
+  const takesOver = takeoverTest(takeover);
+  /**
+   * 这一层按哪个指纹出键:`{ fingerprint, takeover }`。`takeover` 只在真的接手别的指纹时为真;
+   * 没锁或同指纹时任务不加这个字段(契约 F.2)。
+   */
+  const keyingOf = lockKey => {
+    const locked = lockOf(lockKey);
+    if (locked == null || locked === envFingerprint) return { fingerprint: envFingerprint, takeover: false };
+    if (takesOver(lockKey)) return { fingerprint: envFingerprint, takeover: true };
+    return { fingerprint: locked, takeover: false };
+  };
   const out = [];
   const seen = new Set();
   const emit = task => {
@@ -89,13 +136,14 @@ export function splitPlan({
     if (tier === 'local' && (entryKey == null || entryKey === '')) continue;
     const baseKey = control.contentKey ?? snapshotKey;
     const contentKey = tier === 'shared' ? baseKey : `${entryKey}/${baseKey}`;
-    const resultKey = resultKeyOf(contentKey, envFingerprint);
+    const keying = keyingOf(`snapshot:${contentKey}`);
+    const resultKey = resultKeyOf(contentKey, keying.fingerprint);
     const cardId = control.cardId ?? null;
     const cardVersion = control.cardId ? cardSourceVersions?.[control.cardId] : undefined;
     // 锚帧是全局帧号,换成这张卡的本地帧再比;没有 firstFrame 就判不了,一律按普通段
     const firstFrame = Number(control.sampling?.firstFrame);
     const requires = {
-      envFingerprint, codeVersion,
+      envFingerprint: keying.fingerprint, codeVersion,
       cardSources: cardVersion ? { [control.cardId]: cardVersion } : {},
       transcode: false,
       userCards: !!isUserCard(control),
@@ -106,14 +154,16 @@ export function splitPlan({
     for (const [from, to] of spans(0, Number(control.count) - 1, snapshotSpan)) {
       const range = { unit: 'localFrame', from, to };
       const anchored = anchors.some(a => from <= a - firstFrame && a - firstFrame <= to);
-      emit({
+      const task = {
         id: taskIdOf({ kind: 'snapshot', resultKey, range }), kind: 'snapshot', tier, resultKey, range,
         source: { projectId, projectRev, derivedFrom },
         input: { clipId, cardId, entryKey: tier === 'local' ? entryKey : null, contentKey },
         weight: { ...weight, frames: to - from + 1 },
         requires: { ...requires, cardSources: { ...requires.cardSources } },
         priority: anchored ? ANCHOR_PRIORITY : NORMAL_PRIORITY,
-      });
+      };
+      if (keying.takeover) task.takeover = true;
+      emit(task);
     }
   }
 
@@ -121,18 +171,24 @@ export function splitPlan({
     const { streamKey, topClipId, firstSegment, lastSegment } = stream ?? {};
     if (!streamKey) continue;
     const contentKey = stream.contentKey ?? streamKey;
-    const resultKey = resultKeyOf(contentKey, envFingerprint);
+    const keying = keyingOf(`stream:${contentKey}`);
+    const resultKey = resultKeyOf(contentKey, keying.fingerprint);
     const weight = weightOf({ clipId: topClipId });
     for (const [from, to] of spans(firstSegment, lastSegment, streamSegments)) {
       const range = { unit: 'segment', from, to };
-      emit({
+      const task = {
         id: taskIdOf({ kind: 'stream', resultKey, range }), kind: 'stream', resultKey, range,
         source: { projectId, projectRev, derivedFrom },
         input: { clipId: topClipId, cardId: null, entryKey: null, contentKey },
         weight: { ...weight, frames: (to - from + 1) * SEGMENT_FRAMES },
-        requires: { envFingerprint, codeVersion, cardSources: {}, transcode: true, userCards: false, graphCards: false, belowDependent: false },
+        requires: {
+          envFingerprint: keying.fingerprint, codeVersion, cardSources: {},
+          transcode: true, userCards: false, graphCards: false, belowDependent: false,
+        },
         priority: NORMAL_PRIORITY,
-      });
+      };
+      if (keying.takeover) task.takeover = true;
+      emit(task);
     }
   }
   return out;
