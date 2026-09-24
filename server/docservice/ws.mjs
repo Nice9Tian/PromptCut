@@ -75,6 +75,12 @@ export class WsConnection extends EventEmitter {
     socket.on('data', (chunk) => this.#onData(chunk));
     // 错误之后一定跟着 close，这里只防止未处理的 error 事件把进程带崩
     socket.on('error', () => {});
+    // http 服务的 socket 允许半关闭，升级之后没人替我们收尾：对端不发关闭帧就结束 TCP（进程退出等）时，
+    // 这边也结束，好让 close 立刻发生，而不是等心跳超时
+    socket.on('end', () => {
+      this.#dead = true;
+      if (!socket.destroyed) socket.end();
+    });
     socket.on('close', () => {
       clearTimeout(this.#closeTimer);
       this.emit('close', this.#peerClose);
