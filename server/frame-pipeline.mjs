@@ -20,7 +20,10 @@ import { resolveFrameSize } from '../src/kernel/frameSize.mjs';
 import { anchorFrames } from '../src/render/snapshotPick.mjs';
 import { StreamProducer, STREAM_POOL_DEFAULT, STREAM_POOL_MAX } from './frame-stream.mjs';
 import { dirtyStreamLease } from './bakery/bake.mjs';
-import { createCardLockStore, cardLockDecision } from './card-lock.mjs';
+import { createCardLockStore, cardLockDecision, CARD_LOCK_IDLE_MS } from './card-lock.mjs';
+
+/** 同一版里延后的卡最多重判几次(契约 F.8 第 2 条),之后等下一版 */
+export const CARD_LOCK_RETRY_MAX = 20;
 import { resultKeyOf } from './render-node/fingerprint.mjs';
 
 const pad = n => String(n).padStart(6, '0');
@@ -163,7 +166,7 @@ export class FramePipeline {
    * `fingerprint`)。给了就不探测、直接用(测试,以及以后环境已知的独立渲染主机);不给就等第一个
    * 预渲染间开起来时探测一次(`ensureEnvironment`)。
    */
-  constructor({ root, origin, code = () => '', captureCode = () => undefined, interactive = true, playhead = NO_PLAYHEAD, mediaUrl = () => null, dataRoot = process.cwd(), environment = null }) {
+  constructor({ root, origin, code = () => '', captureCode = () => undefined, interactive = true, playhead = NO_PLAYHEAD, mediaUrl = () => null, dataRoot = process.cwd(), environment = null, cardLockIdleMs = CARD_LOCK_IDLE_MS }) {
     this.root = root;
     /**
      * 环境指纹(M4):card plan、轨道流的全部结果键都乘上它。定下来之前是 null —— 那时
@@ -179,6 +182,13 @@ export class FramePipeline {
     this.cardLocksLoading = this.cardLockStore ? this.cardLockStore.load().catch(() => {}) : Promise.resolve();
     /** 锁让某张卡换了键(或换了 `foreign`)就加一:`snapshotTargets` 的缓存据此失效 */
     this.cardLockEpoch = 0;
+    /**
+     * 锁定方多久没再产出就算闲置(契约 F.8 第 2 条):`cardLockDecision` 的 `idleMs` 和延后重判的计时器都用它。
+     * 测试给小值。
+     */
+    this.cardLockIdleMs = Number.isFinite(cardLockIdleMs) && cardLockIdleMs >= 0 ? cardLockIdleMs : CARD_LOCK_IDLE_MS;
+    /** 还没触发的延后重判计时器(`close()` 统一清掉) */
+    this.cardLockTimers = new Set();
     this.dataRoot = dataRoot;
     this.origin = origin;
     this.code = code;
@@ -1196,6 +1206,8 @@ export class FramePipeline {
     this.background = this.background.catch(() => {}).then(async () => {
       if (controller.signal.aborted) return;
       let bakery;
+      // 契约 F.8 第 2 条:这一趟里被延后、末尾再判仍新鲜的卡,一趟结束时定时重判
+      const deferredCards = [];
       try {
         entry.status = 'html';
         const count = Math.max(1, Math.floor(project.duration * (project.fps || 30)));
@@ -1211,13 +1223,13 @@ export class FramePipeline {
         // R8 / G4:锚帧就绪之后轨道流开始生产。它有自己的会话(`streamPool`),不占这条 lane,
         // 也不等它 —— 这里只是把这一版的流交给生产者
         if (!controller.signal.aborted) void this.streamProducer()?.update(entry).catch(() => {});
-        await this.fillCardControls(entry, bakery, controller.signal, cardPlan.filter(c => c.cacheable && c.needPrerendering));
+        deferredCards.push(...(await this.fillCardControls(entry, bakery, controller.signal, cardPlan.filter(c => c.cacheable && c.needPrerendering))) ?? []);
         // C2 本地档那一趟:一趟整场景服务该帧上全部本地档卡(毛玻璃 / unknown)
         await this.renderLocalSnapshots(entry, await this.missingSnapshotFrames(entry, { tiers: ['local'] }), bakery, controller.signal);
         await this.fillRequiredScene(entry, bakery, controller.signal, cardPlan);
         if (this.playback?.playing) { entry.status = 'partial'; return; }
         entry.stage = 'direct';
-        await this.fillCardControls(entry, bakery, controller.signal, cardPlan.filter(c => c.cacheable && !c.needPrerendering));
+        deferredCards.push(...(await this.fillCardControls(entry, bakery, controller.signal, cardPlan.filter(c => c.cacheable && !c.needPrerendering))) ?? []);
         // `size === count` is not enough for a sparse archive: a foreground
         // request can contain exactly `count` entries while still missing one
         // frame and containing an out-of-range index.  C must only start after
@@ -1250,7 +1262,11 @@ export class FramePipeline {
         // later would publish that prefix as the whole movie. Drop the stream;
         // the next pass replays the PNGs.
         if (controller.signal.aborted) await entry.mov?.suspend().catch(() => {});
-      } finally { if (entry.stage !== 'ready') entry.stage = undefined; if (bakery && this.lanes.get('background')?.bakery === bakery) this.release('background'); }
+      } finally {
+        if (entry.stage !== 'ready') entry.stage = undefined;
+        if (bakery && this.lanes.get('background')?.bakery === bakery) this.release('background');
+        if (deferredCards.length && !controller.signal.aborted) this.scheduleCardLockRetry(entry, deferredCards, controller.signal);
+      }
     });
     return entry;
   }
@@ -1547,16 +1563,18 @@ export class FramePipeline {
   async fillCardControls(entry, bakery, signal, controls = null) {
     if (!controls) {
       const browserPlan = await this.browserCardPlan(bakery);
-      if (!browserPlan) return;
-      try { controls = entry.cardCache.plan(browserPlan); } catch { return; }
+      if (!browserPlan) return [];
+      try { controls = entry.cardCache.plan(browserPlan); } catch { return []; }
     }
     // 契约 F.3:锁可能在 card plan 记下之后变过(页面刚存了测量帧),开工前按锁库重排一遍
     this.reapplyCardLocks(entry, controls);
     const store = this.cardLockStore;
     /*
      * 延后列表(契约 F.3 的 `'defer'`):锁定方可能还在产的卡先放到末尾,其余卡做完后再判一次
-     * (`lastChance`);仍是 `'defer'` 就这一趟跳过,下一次 `preload` 再判。
+     * (`lastChance`);仍是 `'defer'` 就这一趟跳过,放进 `skipped` 回给调用方 —— 后台那一趟结束时
+     * 据此定一个 `cardLockIdleMs` 之后的重判(契约 F.8 第 2 条,`scheduleCardLockRetry`)。
      */
+    const skipped = [];
     const work = controls.filter(control => control.cacheable).map(control => ({ control, lastChance: false }));
     for (let at = 0; at < work.length; at++) {
       const { control, lastChance } = work[at];
@@ -1589,12 +1607,12 @@ export class FramePipeline {
       if (target && tier === 'shared' && control.cardLock?.foreign === true && store && control.contentKey) {
         const ownFingerprint = control.ownEnvFingerprint ?? null;
         const complete = index.count + rangeCount(index.oversize) >= control.count;
-        const decision = cardLockDecision({ lock: store.get(control.contentKey), ownFingerprint, complete, now: Date.now() });
+        const decision = cardLockDecision({ lock: store.get(control.contentKey), ownFingerprint, complete, now: Date.now(), idleMs: this.cardLockIdleMs ?? CARD_LOCK_IDLE_MS });
         if (decision === 'defer') {
           if (!lastChance) {
             if (index.count) this.publishLayer(entry, control, tier, index.frames);
             work.push({ control, lastChance: true });
-          }
+          } else skipped.push(control);
           continue;
         }
         if (decision === 'reuse') {
@@ -1616,11 +1634,11 @@ export class FramePipeline {
       // 每一趟都把整张卡重渲一遍、再判一遍超限、再丢一遍。
       let htmlComplete = !target || index.count + rangeCount(index.oversize) >= control.count;
       /*
-       * 契约 F.3「渲之前得锁」:共享档卡开渲之前得锁。本机已有这张卡的结果(`index.count`)时也得锁 ——
-       * 最先产出的环境锁定它,免得本机早已产齐、只是还没有锁文件的卡(锁库之前的缓存)被页面的
+       * 契约 F.3「渲之前得锁」+ F.8 第 1 条「本机已有结果也得锁」:走到一个共享档卡就用本机指纹得锁,
+       * 不管本机是不是已经齐了 —— 免得本机早已产齐、只是还没有锁文件的卡(锁库之前的缓存)被页面的
        * 测量帧抢走。得不到(页面刚抢先锁了)这张卡本趟不再写 HTML 快照,card plan 已按锁库重排。
        */
-      if (target && tier === 'shared' && (index.count || !htmlComplete)
+      if (target && tier === 'shared'
         && !this.acquireCardLock(entry, { tier, contentKey: control.contentKey, envFingerprint: control.ownEnvFingerprint ?? control.envFingerprint }, controls)) {
         target = null;
         htmlComplete = true;
@@ -1678,6 +1696,70 @@ export class FramePipeline {
     // complete-scene pass. Restore its normal project before snapshot/MOV.
     await bakery.reset(entry.project, this.emptyUrl(entry.project), { deferCards: true });
     await bakery.page.setViewport({ width: entry.project.width, height: entry.project.height, deviceScaleFactor: this.scaleForLane('background') });
+    return skipped;
+  }
+  /**
+   * 延后的卡再判一次(契约 F.8 第 2 条;`rendering.md`:锁定方停下一段时间后本机接手)。
+   *
+   * 后台那一趟结束时仍有 `'defer'` 的卡(`controls`,按 `clipId` 记),就定一个一次性、`unref` 的计时器,
+   * `cardLockIdleMs` 之后触发。触发时要同时满足:这一版的 `signal` 没 abort、还有会话的当前版本是这个
+   * entry、这些卡仍在预渲染集合里 —— 才把一小趟排进 `this.background` 串行链:借 `'background'` 的
+   * 预渲染间,只对这些卡跑 `fillCardControls`(同一个 `signal`)。重判时锁定方已齐就投递、已闲置就接手、
+   * 仍新鲜就再排一次;同一版(同一个 entry)最多排 `CARD_LOCK_RETRY_MAX` 次,之后等下一版。
+   *
+   * 计时器在 `signal` abort(这一版被换掉)或 `close()` 时清掉,不会挂住进程。
+   */
+  scheduleCardLockRetry(entry, controls, signal) {
+    const clipIds = [...new Set((controls ?? []).map(control => control?.clipId).filter(Boolean))];
+    if (!clipIds.length || this.closed || signal?.aborted || !entry) return false;
+    const state = (entry.cardLockRetry ||= { count: 0, timer: null });
+    if (state.count >= CARD_LOCK_RETRY_MAX) return false;
+    state.count++;
+    if (state.timer) { clearTimeout(state.timer); this.cardLockTimers?.delete(state.timer); }
+    const onAbort = () => {
+      if (!state.timer) return;
+      clearTimeout(state.timer);
+      this.cardLockTimers?.delete(state.timer);
+      state.timer = null;
+    };
+    const timer = setTimeout(() => {
+      this.cardLockTimers?.delete(timer);
+      if (state.timer === timer) state.timer = null;
+      signal?.removeEventListener?.('abort', onAbort);
+      this.retryDeferredCards(entry, clipIds, signal);
+    }, this.cardLockIdleMs ?? CARD_LOCK_IDLE_MS);
+    timer.unref?.();
+    state.timer = timer;
+    this.cardLockTimers?.add(timer);
+    signal?.addEventListener?.('abort', onAbort, { once: true });
+    return true;
+  }
+  /** 计时器触发:三条都满足才排那一小趟(见 `scheduleCardLockRetry`)。回排进去的那一趟的 Promise,没排回 null */
+  retryDeferredCards(entry, clipIds, signal) {
+    if (this.closed || signal?.aborted) return null;
+    if (!this.ready.sessionsOn(entry.key).length) return null;
+    const wanted = new Set(clipIds);
+    const pick = () => (entry.cardPlan ?? []).filter(control => wanted.has(control?.clipId) && control.cacheable && this.prerenderPicked(entry, control.clipId));
+    if (!pick().length) return null;
+    const pass = this.background.catch(() => {}).then(async () => {
+      if (this.closed || signal?.aborted) return;
+      // 排队期间 card plan 可能重算过(新对象):按 clipId 从当前的 plan 里重取
+      const controls = pick();
+      if (!controls.length) return;
+      let bakery, skipped = controls;
+      try {
+        bakery = await this.acquire('background', entry.project);
+        skipped = await this.fillCardControls(entry, bakery, signal, controls);
+      } catch {
+        // 让路给播放、借不到预渲染间:这些卡仍待判,照样再排(计数照算)
+        if (signal?.aborted) return;
+      } finally {
+        if (bakery && this.lanes.get('background')?.bakery === bakery) this.release('background');
+      }
+      if (skipped?.length) this.scheduleCardLockRetry(entry, skipped, signal);
+    });
+    this.background = pass;
+    return pass;
   }
   /**
    * 页面测量时推过的帧存成共享快照(契约 F.3;语义 `rendering.md`「预渲染结果的复用」)。
@@ -2047,6 +2129,8 @@ export class FramePipeline {
     await this.stopPlayback();
     clearTimeout(this.backgroundLeaseTimer);
     clearTimeout(this.timer);
+    for (const timer of this.cardLockTimers ?? []) clearTimeout(timer);
+    this.cardLockTimers?.clear();
     this.userGenerationController?.abort();
     this.userGenerationController = null;
     await this.userPrewarm;
