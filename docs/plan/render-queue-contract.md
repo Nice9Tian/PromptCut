@@ -489,6 +489,16 @@ export function createNodeSession(options)   // → NodeSession
 - **丢认领**：`task.lease-lost` → 移除持有，调 `onLost(id, reason)`；
 - **重连**：`node.welcome` 的 `lost` 里的 id → 同样移除持有、调 `onLost`。
 - **不空闲时**：`tick` 不认领新任务，但照常续约。让路由调用方调 `yieldAll`。
+- **补充细则**（2026-09-24 主 Agent 按双方疑点裁定）：
+  - `node.welcome` 里 `resumed` 的任务：把它的 `lastSentAt` 置为 `now - RENEW_INTERVAL_MS`，下一次 `tick` 立即续约（断线宽限加续约间隔，最坏会顶到租约边界）。其它回包（`task.renewed`、`task.completed`、`task.released`、`task.fail-ack`）不改持有。
+  - `welcome.lost` 与随后同 id 的 `task.lease-lost` 是同一件事，`onLost` 只调一次；`welcome.lost` 传的 reason 是 `'lost'`。
+  - `task.lease-lost` 的 `token` 与本地持有的不符（旧认领的迟到消息）时忽略。
+  - `start(resume)`：清掉在飞的认领和本地视图；`resume` 里的项放进持有；本地持有但不在 `resume` 里的，调 `onLost(id, 'not-resumed')`。
+  - `yieldAll` 时有认领在飞：回包若是 `task.claimed`，立即 `task.release`，不调 `onTask`。
+  - 收到 `error` 时清掉在飞的认领（`task.claim` 不带 `reqId`，对不上是哪一条，按兜底处理）。
+  - `task.claimed` 后，这个任务从本地视图（`known()`）移除。
+  - 流任务的分段从 `firstSegment` 起切，不对齐到 `STREAM_SEGMENTS` 的倍数。
+  - `gpuClassOf` 用一个空格把 `renderer`、`vendor` 拼起来匹配；规则 1 的「存在」指值不为 `null` / `undefined`。
 
 ---
 
