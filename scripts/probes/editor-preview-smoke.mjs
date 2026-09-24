@@ -189,17 +189,45 @@ try {
   out.blankSelection = await page.evaluate(async () => (await import('/src/store/project.ts')).getState().selection);
   check(out.blankSelection.length === 0, 'clicking blank deselects', out.blankSelection);
 
-  // 播放 1 秒:store 的 t 前进,舞台跟着(过渡期父页每帧发 setTime)
-  const playT = await page.evaluate(async () => {
+  // 播放 1 秒。stage 模式下 pause() 只同步改 store.playing，舞台要经异步 RPC 才停。
+  // 只观察播放器自行停拍；不能由探针再发 pause()，否则会掩盖播放器漏发 RPC 的故障。
+  const atPause = await page.evaluate(async () => {
     const { actions, getState } = await import('/src/store/project.ts');
     actions.seek(0.5); actions.play();
     await new Promise((r) => setTimeout(r, 1000));
     actions.pause();
     return getState().t;
   });
-  const playFrames = await stageFrame(await frontId()).evaluate(() =>
-    [...document.querySelectorAll('[data-pc-clip]')].map((el) => Number(el.getAttribute('data-pc-local-frame'))));
-  const play = { t: playT, frames: playFrames };
+  const readHead = () => page.evaluate(async () => {
+    const { getState } = await import('/src/store/project.ts');
+    const preview = typeof window.__pcPreviewDiag === 'function' ? window.__pcPreviewDiag() : null;
+    return { t: getState().t, playing: getState().playing, frontId: preview?.frontId || 'A' };
+  });
+  let play;
+  if (stageMode) {
+    const deadline = Date.now() + 10000;
+    while (Date.now() < deadline) {
+      const before = await readHead();
+      const stage = await stageFrame(before.frontId).evaluate(() => ({
+        diag: typeof window.__pcStageDiag === 'function' ? window.__pcStageDiag() : null,
+        frames: [...document.querySelectorAll('[data-pc-clip]')].map((el) => Number(el.getAttribute('data-pc-local-frame'))),
+      }));
+      const after = await readHead();
+      // 前后两次父页读数夹住舞台读数；停拍后时刻不再变，得到一致的跨进程样本。
+      if (!before.playing && !after.playing && before.frontId === after.frontId && before.t === after.t
+        && stage.diag?.role === 'front' && !stage.diag.beatRunning && stage.diag.beatPaused
+        && Math.abs(stage.diag.beatLastSec - before.t) < 1e-6) {
+        play = { t: before.t, atPause, stoppedAt: stage.diag.beatLastSec, frames: stage.frames };
+        break;
+      }
+      await sleep(20);
+    }
+    if (!play) throw new Error('player did not settle to the same store and stage frame within 10s');
+  } else {
+    const frames = await stageFrame(await frontId()).evaluate(() =>
+      [...document.querySelectorAll('[data-pc-clip]')].map((el) => Number(el.getAttribute('data-pc-local-frame'))));
+    play = { t: atPause, stoppedAt: null, frames };
+  }
   // 播放没跟上时要看得见是谁停的(K4 的节拍在舞台里,父页只收 frame)
   play.preview = await page.evaluate(() => (typeof window.__pcPreviewDiag === 'function' ? window.__pcPreviewDiag() : null));
   play.stages = {};
@@ -209,7 +237,8 @@ try {
     play.stages[id] = await f.evaluate(() => (typeof window.__pcStageDiag === 'function' ? window.__pcStageDiag() : null)).catch(() => null);
   }
   out.play = play;
-  check(play.t > 1.0 && play.frames.every((n) => Math.abs(n - Math.round(play.t * 30)) <= 1), 'after 1s of playback the stage local frame follows store.t', play);
+  check(play.t > 1.0 && play.frames.every((n) => Math.abs(n - Math.round(play.t * 30)) <= 1),
+    'after 1s of playback the stage local frame follows store.t', play);
 
   // get_layout 的页面侧(D4):经后台舞台的单飞队列量实体框。legacy 下队列退回可见舞台,
   // 跨源双舞台下它先 setRole('back', { job: 'catchup' })、量完交还 —— 两边回的数该一样
