@@ -15,3 +15,4 @@ export { DEFAULT_WEIGHT_POLICY, checkClaimable, filterClaimable } from './filter
 export { rankCandidates, pickCandidate } from './pick.mjs';
 export { planTaskOf, splitPlan } from './split.mjs';
 export { createNodeSession } from './session.mjs';
+export { createLocalNode } from './local-node.mjs';
