@@ -91,3 +91,44 @@ media index.json: true   （只有 media 那一件进了媒体索引；snap/px �
 
 - 没改 `frame-pipeline.mjs`、`frame-stream.mjs`、`server/test/` 下任何文件。
 - 没跑 G0-R（理由见上）。没推送、没合并。
+
+## 第二轮：按契约第 10 节补两处（提交 0622191）
+
+主会话裁定了上面的疑点（写进 `claude/c6-2` 上契约第 10 节，3b6877d），要求补两处。本分支没有 rebase 到 3b6877d，只照裁定改代码。
+
+### 做了什么
+
+1. **客户端超时**：`createAssetClient` 加 `timeoutMs`，缺省 30000，每个请求（含读完回包）各自计时，到点用 AbortController 中止。
+   - 超时算网络错误，按重试规则重试；重试用完抛出的错误带 `code: 'timeout'`，信息里没有令牌。
+   - 另用一个 promise 和中止信号赛跑，调用方传的 `fetch` 不认 `signal` 也能按时脱身。
+   - `timeoutMs` 必须是正数，不合法抛 TypeError。超过 2^31-1（包括 `Infinity`）当作不限时，否则 Node 的 setTimeout 会把它当 1 ms 立刻触发。
+2. **`snap` / `px` 查文件不扫目录**：`defaultArtifactStore` 的钩子改成 `resolveFile: candidateFileResolver(dir, ARTIFACT_EXTS)`。
+   - `ARTIFACT_EXTS` 依次是 `html`、`mp4`、`m4s`，再是这两个命名空间的 MIME 表里其余的扩展名（webm、mov、mkv、mp3、m4a、aac、wav、ogg、flac、png、jpg、gif、webp、avif、bmp、svg），再是 Content-Type 表认得的别名 `htm`、`m4v`、`jpeg`；最后查没有扩展名的 `<hash>`。
+   - 一个文件在不在要碰 fs，而 `asset-service.ts` 受 H2 守门不许碰。所以按候选名 `stat` 的函数 `candidateFileResolver` 放在 `server/asset-store/index.mjs`（在本分支的文件清单里）。候选清单和钩子仍在 `asset-service.ts` 组装，`fs-store.mjs` 没改。
+
+### 与指示不完全一致的地方（请主 Agent 确认）
+
+- **候选之外的扩展名按无扩展名存。** 只查候选名以后，如果 `snap` / `px` 按 `X-Media-Ext: bin` 这类不在候选里的扩展名落成 `<hash>.bin`，`resolveFile` 就再也找不到它。后果是 `chunks` 永远不报 `complete`，GET 回 404。
+- 所以 `extFromHeaders` 对 `snap` / `px` 只保留 `ARTIFACT_EXTS` 里的扩展名，别的一律当无扩展名，落成 `<hash>`。
+- 这些扩展名取回时的 Content-Type 本来就是 `application/octet-stream`，HTTP 上看不出区别。`media` 不受影响。
+
+### 验证
+
+| 项 | 结果 |
+|---|---|
+| `npx tsc -b --force` | 退出码 0 |
+| `npm test` | 退出码 0；tests 2294，pass 2293，fail 0，skipped 1（同上，需要 5190）；H2 守门、`isAssetServicePath` 用例都过 |
+| 自测 `c62-asset-selftest.mjs` | 退出码 0，13 项全过（原 10 项 + 下面 3 项） |
+| 附加 `c62-mime.mjs` | 退出码 0，输出与第一轮相同 |
+
+新增的 3 项自测输出：
+
+```
+PASS 超时：真 HTTP 挂住，timeoutMs=150、retries=1 共 2 次，512 ms 后抛 code=timeout
+PASS 超时一次（假 fetch 不认 signal）后重试成功
+  落盘文件名： <hash>.html, <hash>.mp4, <hash>.m4s, <hash>.webm, <hash>, <hash>
+PASS resolveFile：html/mp4/m4s/webm 与无扩展名都能找到，不认的扩展名按无扩展名存；<hash>.xyz 找不到、改成 <hash> 就找到
+```
+
+- 第一项：服务端是一个永远不回的 `http.Server`，数到 2 次请求，耗时不少于 150×2+200 ms。
+- 第三项：先依次用 `html`、`mp4`、`m4s`、`webm`、`bin`、不带扩展名各 put / has / get / 再 put 一遍。然后往目录里手工放一个 `<hash>.xyz`，`has` 为假、`get` 回 null，说明没有扫目录；把它改名成 `<hash>` 后，`has` 为真。
