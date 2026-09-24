@@ -275,6 +275,20 @@ export function createRenderQueue(options = {}) {
     emit(conn, 'queue.snapshot', { tasks: visible }, reqId);
   }
 
+  /**
+   * 派生任务的继承（A.4 末段，设计第 3 节）：细任务的 userId 是产生它的那个 plan 任务的，不是切分节点的，
+   * 否则纯浏览器用户的边界（Q2）会被切分节点的身份顶掉；订阅者并上 plan 的订阅者，页面订阅了 plan
+   * 就能收到细任务的 task.done，切分节点断开也不会让细任务因没人订阅被删。
+   * 只在「plan 此刻正由发布连接这个节点认领着」时继承：别人拿不到这份身份。条件不满足就不继承，不报错。
+   */
+  function planParentOf(conn, derivedFrom) {
+    if (derivedFrom === null) return null;
+    const plan = tasks.get(derivedFrom);
+    const node = nodeOf(conn);
+    if (!plan || plan.kind !== 'plan' || plan.state !== 'claimed' || !node) return null;
+    return plan.claim.nodeId === node.nodeId ? plan : null;
+  }
+
   const ttlPassed = (task) => (task.state === 'done' || task.state === 'failed') && at - task.finishedAt > C.DONE_TTL;
 
   function onPublish(conn, body, reqId) {
@@ -290,19 +304,22 @@ export function createRenderQueue(options = {}) {
           results.push({ id: input.id, error: 'limit' });
           continue;
         }
+        // 用户与租户只认连接凭证，发布方自报的在校验时已经丢掉（A.4、P7）；
+        // 派生任务例外：继承它的 plan 任务的身份与订阅者
+        const parent = planParentOf(conn, input.source.derivedFrom);
         task = {
           id: input.id, kind: input.kind, tier: input.tier, resultKey: input.resultKey, range: input.range,
           source: {
             projectId: input.source.projectId, projectRev: input.source.projectRev,
             derivedFrom: input.source.derivedFrom,
-            // 用户与租户只认连接凭证，发布方自报的在校验时已经丢掉（A.4、P7）
-            userId: conn.principal.userId, tenantId: conn.principal.tenantId,
+            userId: parent ? parent.source.userId : conn.principal.userId,
+            tenantId: parent ? parent.source.tenantId : conn.principal.tenantId,
             publisher: { id: publisherId }, publishedAt: at,
           },
           input: input.input, weight: input.weight, requires: input.requires, priority: input.priority,
           state: 'open', version: 1, attempts: 0, lastError: null,
           claim: null, finishedAt: null, result: null,
-          subscribers: new Set([publisherId]),
+          subscribers: new Set([publisherId, ...(parent ? parent.subscribers : [])]),
         };
         tasks.set(task.id, task);
         countActive(task.source.projectId, 1);
@@ -416,8 +433,12 @@ export function createRenderQueue(options = {}) {
     // 主动放回是让路，不是做不了：attempts 不加（C2）
     transition(task, 'open');
     task.claim = null;
+    // 没人要的任务放回时同样直接删掉（A.7.6 末条），否则它会一直挂在 open 里没人清
+    const orphan = task.subscribers.size === 0;
+    if (orphan) removeTask(task);
     emit(conn, 'task.released', { id: task.id }, reqId);
-    broadcast(task, 'task.opened', { task: viewOf(task) });
+    if (orphan) broadcast(task, 'task.closed', { id: task.id, state: 'removed' });
+    else broadcast(task, 'task.opened', { task: viewOf(task) });
   }
 
   function onFail(conn, body, reqId) {
