@@ -2,7 +2,8 @@
  * 舞台 ↔ 父页的 postMessage RPC(E0)。
  *
  * - 一个 iframe 实例一个客户端(`createStageRpc`),请求带自增 id,回包按 id 对上;
- *   iframe 换了(切 2D/3D、改画幅、热重载)就换一个客户端,旧客户端挂着的请求全部按 `detached` 回绝。
+ *   iframe 换了(热重载、卸载)就换一个客户端,旧客户端挂着的请求全部按 `detached` 回绝;
+ *   目标窗口关了(iframe 被拿出 DOM)也一样 —— 发请求时、以及有请求挂着时每 `CLOSED_POLL_MS` 查一次。
  * - **时间一律秒**(`setTime(tSec)`、`render(tSec)`、`play(fromSec)`、`setMediaT(tSec)`、
  *   回包里的 `caughtUpAtSec`、事件里的 `sec`);舞台内部自己换算成毫秒(stageClock 的 `now` 是毫秒)。
  * - 舞台 → 父页除 `pc-stage-ready` 握手和 RPC 回包外只有七种事件(`StageEvent`),父页按
@@ -320,6 +321,17 @@ const METHODS: (keyof StageRpcApi)[] = ["setProject", "setTime", "render", "hitT
   "play", "pause", "setSuppressed", "setStreamPlanes", "setScrubbing", "setPlaying", "setMediaT", "setLocalHashes", "setSnapshots"];
 
 /**
+ * 有请求挂着时,每隔这么久看一眼目标窗口还在不在。
+ *
+ * **为什么要有它**:iframe 从 DOM 里拿掉之后,发给它的 `postMessage` 被浏览器**静默丢弃**,
+ * 不抛错、也永远没有回包;而 `call()` 本身不设超时(`render` / 武装停的 `pause` 本来就可能等很久,
+ * 一刀切的超时会误杀它们)。以前唯一的出路是等下一次 `pc-stage-ready` 来 `dispose()` ——
+ * 3D 页卸掉舞台 iframe 那一次,`play()` 就这样挂了一分钟,播放头纹丝不动。
+ * 窗口关了就不可能再回包,所以按「关了」判比按时长判准:活着的慢请求一个都不误杀。
+ */
+export const CLOSED_POLL_MS = 1000;
+
+/**
  * 父页侧:给一个舞台 iframe 建一个 RPC 客户端。
  * `targetOrigin` 现在是 `location.origin`(同源);第 4 步 E1 跨源时传舞台端口的 origin。
  */
@@ -342,8 +354,22 @@ export function createStageRpc(target: Window, targetOrigin: string = location.o
     if (isStageEvent(d)) for (const l of listeners) l(d);
   };
   window.addEventListener("message", onMessage);
+  /** 窗口关了没有。`closed` 读不到(极老的宿主 / 测试替身)时当作还开着,退回旧行为 */
+  const targetClosed = () => { try { return target.closed === true; } catch { return false; } };
+  /** 挂着请求时才转的巡检(见 CLOSED_POLL_MS);窗口一关就整个客户端按 detached 收摊 */
+  let poll: ReturnType<typeof setInterval> | null = null;
+  const stopPoll = () => { if (poll !== null) { clearInterval(poll); poll = null; } };
+  const startPoll = () => {
+    if (poll !== null) return;
+    poll = setInterval(() => {
+      if (!pending.size) stopPoll();
+      else if (targetClosed()) client.dispose();
+    }, CLOSED_POLL_MS);
+  };
   const call = (method: keyof StageRpcApi, args: unknown[]) =>
     new Promise<unknown>((resolve, reject) => {
+      // 窗口已经关了:和 dispose 之后同一套回法,别把请求发进一个不会回包的窗口
+      if (!disposed && targetClosed()) client.dispose();
       if (disposed) {
         if (method === "render") resolve({ aborted: true, reason: "detached" });
         else reject(new Error("stage rpc: detached"));
@@ -357,7 +383,9 @@ export function createStageRpc(target: Window, targetOrigin: string = location.o
       } catch (err) {
         pending.delete(id);
         reject(err instanceof Error ? err : new Error(String(err)));
+        return;
       }
+      startPoll();
     });
   const client = {
     target,
@@ -369,6 +397,7 @@ export function createStageRpc(target: Window, targetOrigin: string = location.o
     dispose() {
       if (disposed) return;
       disposed = true;
+      stopPoll();
       window.removeEventListener("message", onMessage);
       for (const [id, p] of pending) {
         pending.delete(id);

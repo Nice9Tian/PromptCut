@@ -65,3 +65,81 @@ test("stageId 是实例名不是角色:缺省给 A,不给 front", async () => {
     }
   }
 });
+
+/*
+ * ② 的防线:目标窗口关了(iframe 被拿出 DOM)的请求不能永远挂着。
+ * 以前 3D 页卸掉舞台之后 `play()` 挂了一分钟、播放头纹丝不动,就是因为发进关掉的窗口的消息
+ * 被静默丢弃,而 `call()` 只有 dispose 才会回绝。
+ */
+function fakeWindow() {
+  const listeners = new Set();
+  return {
+    listeners,
+    addEventListener(type, l) { if (type === "message") listeners.add(l); },
+    removeEventListener(type, l) { if (type === "message") listeners.delete(l); },
+    deliver(source, data) { for (const l of [...listeners]) l({ source, data, origin: "http://stage" }); },
+  };
+}
+function fakeTarget() {
+  return { closed: false, sent: [], postMessage(msg) { this.sent.push(msg); } };
+}
+async function withFakeWindow(fn) {
+  const g = globalThis;
+  const saved = Object.getOwnPropertyDescriptor(g, "window");
+  const win = fakeWindow();
+  Object.defineProperty(g, "window", { value: win, configurable: true, writable: true });
+  try { await fn(win); } finally {
+    if (saved) Object.defineProperty(g, "window", saved); else delete g.window;
+  }
+}
+
+test("目标窗口已经关了:请求当场按 detached 回绝,不发进窗口;render 照旧回 aborted", async () => {
+  const { createStageRpc } = await import("./stageRpc.ts");
+  await withFakeWindow(async (win) => {
+    const target = fakeTarget();
+    target.closed = true;
+    const c = createStageRpc(target, "http://stage");
+    await assert.rejects(c.play(0), /detached/);
+    assert.deepEqual(await c.render(1), { aborted: true, reason: "detached" });
+    assert.equal(target.sent.length, 0, "关掉的窗口一条都不该发");
+    assert.equal(c.disposed, true);
+    assert.equal(win.listeners.size, 0, "收摊时把 message 监听一起摘掉");
+  });
+});
+
+test("请求挂着时窗口关了:下一次巡检就按 detached 回绝,不再挂到下一次握手", async (t) => {
+  const { createStageRpc, CLOSED_POLL_MS } = await import("./stageRpc.ts");
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  await withFakeWindow(async () => {
+    const target = fakeTarget();
+    const c = createStageRpc(target, "http://stage");
+    let settled = null;
+    c.play(0).then(() => { settled = "resolved"; }, (e) => { settled = String(e.message); });
+    assert.equal(target.sent.length, 1);
+    target.closed = true;
+    t.mock.timers.tick(CLOSED_POLL_MS);
+    await new Promise((r) => setImmediate(r));
+    assert.match(String(settled), /detached/);
+    assert.equal(c.disposed, true);
+  });
+});
+
+test("窗口还开着的慢请求不被巡检误杀;回包到了照常 resolve", async (t) => {
+  const { createStageRpc, CLOSED_POLL_MS } = await import("./stageRpc.ts");
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  await withFakeWindow(async (win) => {
+    const target = fakeTarget();
+    const c = createStageRpc(target, "http://stage");
+    let settled = null;
+    c.pause({ atSec: 3 }).then((v) => { settled = v; }, (e) => { settled = e; });
+    // 武装停本来就可能等好几秒:巡检转十圈,它还该挂着
+    for (let i = 0; i < 10; i++) t.mock.timers.tick(CLOSED_POLL_MS);
+    await new Promise((r) => setImmediate(r));
+    assert.equal(settled, null);
+    assert.equal(c.disposed, false);
+    const id = target.sent[0].id;
+    win.deliver(target, { type: "pc-rpc-reply", id, ok: true, result: { ok: true, stoppedAt: 3 } });
+    await new Promise((r) => setImmediate(r));
+    assert.deepEqual(settled, { ok: true, stoppedAt: 3 });
+  });
+});
