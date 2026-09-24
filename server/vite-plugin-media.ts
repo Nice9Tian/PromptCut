@@ -571,6 +571,42 @@ export function mediaPlugin(): Plugin {
       const asset = assetServiceMiddleware(root);
       const handler = mediaMiddleware(root);
       server.middlewares.use((req, res, next) => { void asset(req, res, () => { void handler(req, res, next); }); });
+
+      // 素材服务地址登记(C5 / D7,`docs/plan/asset-store-contract.md` 第 5 节):监听的不是回环、
+      // 又设了 PROMPTCUT_DOCSERVICE_URL,才把本机素材服务的局域网地址报给文档服务。
+      // 任何一步出错只打日志,不影响编辑器启动。令牌只交给 WebSocket 端点,不进日志。
+      const docservice = process.env.PROMPTCUT_DOCSERVICE_URL;
+      const httpServer = server.httpServer;
+      if (docservice && httpServer) {
+        const announce = async () => {
+          try {
+            const bound = httpServer.address();
+            if (!bound || typeof bound === "string") return;
+            const host = String(bound.address || "").toLowerCase();
+            if (host === "::1" || /^127\./.test(host) || /^::ffff:127\./.test(host)) return; // 只在本机回环上听,局域网连不进来
+            const { lanAssetUrls, startAssetAnnounce } = await import("./asset-announce.mjs");
+            let urls: string[] = lanAssetUrls({ port: bound.port });
+            // 绑在某一个具体地址上时,别的网卡连不进来,只报这一个
+            if (host !== "0.0.0.0" && host !== "::" && host !== "") urls = urls.filter((u) => new URL(u).hostname === host);
+            const handle = startAssetAnnounce({
+              url: docservice,
+              token: process.env.PROMPTCUT_CLUSTER_TOKEN || null,
+              urls,
+              log: (event: string, fields: object) => {
+                // WebSocket 端点的重连日志太密,只留连上、断开和本模块自己的
+                if (event.startsWith("asset-announce.") || event === "ws.open" || event === "ws.close") console.info("[asset-announce]", event, JSON.stringify(fields));
+              },
+            });
+            httpServer.once("close", () => {
+              try { handle.stop(); } catch (err) { console.warn("[asset-announce] 撤回失败", err instanceof Error ? err.message : String(err)); }
+            });
+          } catch (err) {
+            console.warn("[asset-announce] 地址登记没有启动", err instanceof Error ? err.message : String(err));
+          }
+        };
+        if (httpServer.listening) void announce();
+        else httpServer.once("listening", () => { void announce(); });
+      }
     }
   };
 }
