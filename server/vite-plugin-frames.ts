@@ -29,6 +29,8 @@ export function frameService(root: string, origin: string) {
   if (!service) {
     service = new FramePipeline({ root: path.join(process.env.PROMPTCUT_EXPORT_DIR || path.join(root, "out"), "frame-library"), origin: () => origin,
       code: () => frameCode(root), captureCode: () => captureCode(root),
+      // 成本记录和可调系数跟 vite-plugin-costs 同一个根(帧库目录不是它们的家)
+      dataRoot: root,
       /*
        * D5 的 `interactive`(R7 的原子切换把编辑器进程这一侧翻了过来)。
        *

@@ -148,9 +148,16 @@ export class FramePipeline {
    * `mediaUrl(m)`:素材服务上这条素材的绝对 HTTP 地址(取不到回 null),给没有内容哈希的素材打戳时
    * 发 `HEAD` 用(`media-stamp.mjs`)。同样由 `frameService()` 注进来(`ffmpeg-frames.ts` 的
    * `mediaSourceOf`,基址按 `asset-client.ts` 定);不注就是「素材服务不可达」,那种素材的戳是 `'missing'`。
+   *
+   * `dataRoot`:成本记录和可调系数(`card-costs.json` / `pipeline-tuning.json`)按它定位,口径和
+   * `vite-plugin-costs` 一样 —— `costs-store.mjs` 的 `costsDir(dataRoot)` = `PROMPTCUT_DATA_DIR || <dataRoot>/out`。
+   * `frameService()` 传 Vite 的根目录。**不能用 `root`**:`root` 是帧库目录,没设 `PROMPTCUT_DATA_DIR`
+   * 的开发期会读到没人写的 `<帧库>/out/card-costs.json`,实测成本永远进不了预渲染集合。
+   * 缺省是当前工作目录(从仓库根跑的脚本和探针正好对上)。
    */
-  constructor({ root, origin, code = () => '', captureCode = () => undefined, interactive = true, playhead = NO_PLAYHEAD, mediaUrl = () => null }) {
+  constructor({ root, origin, code = () => '', captureCode = () => undefined, interactive = true, playhead = NO_PLAYHEAD, mediaUrl = () => null, dataRoot = process.cwd() }) {
     this.root = root;
+    this.dataRoot = dataRoot;
     this.origin = origin;
     this.code = code;
     this.captureCode = captureCode;
@@ -1204,7 +1211,7 @@ export class FramePipeline {
   recordCardPlan(entry, plan) {
     entry.cardPlan = plan;
     // K2 / K6:真的按 planPipelines 的表算(costs / tuning 由编辑器进程转发过来、落在本机那一份)
-    entry.prerenderSet = prerenderSetOfPlan(plan, { fps: Number(entry.project?.fps) || 30, root: this.root });
+    entry.prerenderSet = prerenderSetOfPlan(plan, { fps: Number(entry.project?.fps) || 30, root: this.dataRoot });
     return plan;
   }
   /**
