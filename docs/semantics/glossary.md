@@ -30,7 +30,7 @@
 | 查询渲染 | 按 Agent 指定的时刻渲染画面，供 Agent 观察 | `architecture.md`、architecture/rendering.md |
 | 本地文档服务、远程文档服务 | 按所连文档服务的位置区分：跑在本机的，和部署在局域网其它机器或公网云端的 | architecture/document-service.md |
 | 本地素材服务、远程素材服务 | 按所连素材服务的位置区分，同上；与文档服务的位置可任意组合。这两组词取代旧词「本地模式」「云端模式」 | architecture/document-service.md、architecture/asset-storage.md |
-| 连接发现 | 预留接口：由文档服务交换设备之间的地址映射，帮它们直连；文档服务不承担素材传输流量 | architecture/document-service.md |
+| 连接发现 | 两部分：素材服务地址的动态下发（已引入）；设备之间直连的信令（预留）。文档服务都只交换地址，不承担素材传输流量 | architecture/document-service.md |
 | 渲染任务队列 | 文档服务在内存里托管的预渲染任务清单：只记状态和认领者，不测算、不分配 | architecture/document-service.md |
 | 渲染节点 | 从渲染任务队列认领并完成预渲染任务的地方：本机 PC、独立渲染主机、纯浏览器；按能力区分，不按平台名 | architecture/platforms.md |
 | 认领 | 渲染节点从队列里取一个任务：比对状态再加锁一步完成，同一任务同时只有一个认领者；断开或超时后任务回到未认领 | architecture/document-service.md |
