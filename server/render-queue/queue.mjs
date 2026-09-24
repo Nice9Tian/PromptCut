@@ -232,7 +232,20 @@ export function createRenderQueue(options = {}) {
   }
 
   /**
-   * 发布时看锁（F.1「发布」表）。返回锁在别的指纹上、又没接手时的那个指纹（回包的 lockedBy），否则 null。
+   * 发布时，这个任务若是新建的，会不会被锁拒建（F.7 第 1 条）：有锁键和锁指纹、锁在别的指纹上、又没带
+   * takeover，返回锁上的指纹，否则 null。建出来也谁都认领不了，只会一直 open，页面永远等不到 task.done；
+   * 拒掉并回 lockedBy，切分方才知道要照锁定方的指纹重发或者明确接手。
+   */
+  function lockRefusal(input) {
+    if (input.takeover) return null;
+    const id = lockIdOf(input);
+    const lock = id ? locks.get(id.key) : undefined;
+    return lock && lock.envFingerprint !== id.fp ? lock.envFingerprint : null;
+  }
+
+  /**
+   * 发布时看锁（F.1「发布」表，F.7 第 2 条）。返回锁在别的指纹上、又没接手时的那个指纹（回包的 lockedBy），否则 null；
+   * 这种情况只剩已有同 id 任务的合并，新建的在 lockRefusal 那一步就拒了。
    * 没锁又不接手时不建锁：谁先真正产出由第一次认领决定，只是发布了还不算。
    */
   function lockOnPublish(task, takeover, after) {
@@ -240,7 +253,9 @@ export function createRenderQueue(options = {}) {
     if (!id) return null;
     const lock = locks.get(id.key);
     if (!lock) {
-      if (takeover) setLock(id.key, id.fp, 'takeover');
+      // 没锁时接手也照样作废异指纹的未完成任务（F.7 第 2 条）：两个节点几乎同时切分时，
+      // 先发布、还没人认领的那一方的任务不会被留成谁都认领不了的死任务
+      if (takeover) after.push(takeoverLock(id.key, id.fp));
       return null;
     }
     if (lock.envFingerprint === id.fp) {
@@ -251,7 +266,7 @@ export function createRenderQueue(options = {}) {
       after.push(takeoverLock(id.key, id.fp));
       return null;
     }
-    // 任务照常建或合并，只是锁变之前认领会被拒（card-locked）
+    // 已有的任务照常合并，只是锁变之前认领会被拒（card-locked）
     return lock.envFingerprint;
   }
 
@@ -377,6 +392,12 @@ export function createRenderQueue(options = {}) {
         if ((activeByProject.get(input.source.projectId) ?? 0) >= C.MAX_TASKS_PER_PROJECT) {
           // 没建成任务，锁也不动：带 takeover 时若照样接手，旧指纹的任务作废了却没有新任务顶上
           results.push({ id: input.id, error: 'limit' });
+          continue;
+        }
+        // 被别的环境锁定的卡不建（F.7 第 1 条），和 limit 一样只影响这一项
+        const lockedBy = lockRefusal(input);
+        if (lockedBy !== null) {
+          results.push({ id: input.id, error: 'card-locked', lockedBy });
           continue;
         }
         // 用户与租户只认连接凭证，发布方自报的在校验时已经丢掉（A.4、P7）；
@@ -684,8 +705,8 @@ export function createRenderQueue(options = {}) {
     for (const task of [...tasks.values()]) {
       if (ttlPassed(task)) removeTask(task);   // C1：done / failed 留 DONE_TTL，删除不发消息
     }
-    // 第 5 项（F.1）：锁没有任务再引用、且闲置满 DONE_TTL 才删。排在 TTL 之后，刚过期删掉的任务不再算引用。
-    // 比较用 >=（F.1 原文），不同于前四项的严格大于
+    // 第 5 项（F.1）：锁没有任务再引用、且闲置超过 DONE_TTL 才删。排在 TTL 之后，刚过期删掉的任务不再算引用。
+    // 比较和前四项一样用严格大于（F.7 第 3 条）
     if (locks.size > 0) {
       const referenced = new Set();
       for (const task of tasks.values()) {
@@ -693,7 +714,7 @@ export function createRenderQueue(options = {}) {
         if (key !== null) referenced.add(key);
       }
       for (const [key, lock] of locks) {
-        if (!referenced.has(key) && at - lock.touchedAt >= C.DONE_TTL) locks.delete(key);
+        if (!referenced.has(key) && at - lock.touchedAt > C.DONE_TTL) locks.delete(key);
       }
     }
   }
