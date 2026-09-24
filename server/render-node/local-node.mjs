@@ -16,7 +16,9 @@ import { splitPlan } from './split.mjs';
  *
  * # 认领到任务之后
  *
- *   plan     executor.plan → splitPlan → 先 task.publish 细任务,再 complete 这个 plan
+ * 开工先同步报一次进度 0,让队列的停滞规则也管得到卡死、从不报进度的执行器。
+ *
+ *   plan    executor.plan → splitPlan → 先 task.publish 细任务,再 complete 这个 plan
  *   细任务   sink.has 为真就直接 complete(dedup);否则 executor.render → sink.put →
  *            收全才 complete,没收全 fail(可重试)
  *   出错     fail,`error.retryable === false` 才不可重试
@@ -37,6 +39,8 @@ import { splitPlan } from './split.mjs';
  * 同一 id 被本节点重新认领到新令牌时,旧的执行已经被 `onLost` 中止,而且它的令牌对不上。
  * 判不过就丢弃结果、报 `discarded`,不发任何消息。已经推到产物库的产物不回收:按内容寻址,
  * 下一个认领者查 `has` 会直接完成。
+ *
+ * `start(resume)` 只接续本实例在跑表里、令牌相同的项:接续只用于同一实例的重连。
  *
  * 对注入接口的每次等待都和中止信号赛跑:执行器或产物库不理会中止、一直不返回,这次执行也会
  * 在中止时落定(`settled()` 不会被卡死的执行器拖住),之后它再返回什么都被丢弃。
@@ -179,6 +183,13 @@ export function createLocalNode({
     if (previous) abortRun(previous, 'reclaimed');
     const run = { id, token, kind: task.kind, controller: new AbortController() };
     active.set(id, run);
+    // 开工先报一次进度 0:队列的停滞规则只在 done !== null 时生效,否则会话每拍用 null 续约,
+    // 执行器卡死又从不报进度时任务永远不会被回收(契约 D.2〔裁〕)
+    try {
+      session.progress(id, 0);
+    } catch {
+      // 连接已坏:后面的发送同样会失败,由执行里的异常处理收尾
+    }
     const done = execute(run, task).then(() => {
       if (active.get(id) === run) active.delete(id);
       pending.delete(done);
@@ -201,7 +212,8 @@ export function createLocalNode({
       if (task.kind === 'plan') {
         const ctx = await untilAborted(() => executor.plan(task, { signal }), signal);
         if (!holding(run)) return discard();
-        const tasks = splitPlan({ planTask: task, envFingerprint: node?.envFingerprint, codeVersion, constants, ...ctx });
+        // ctx 放在前面:切分节点自己的指纹、plan 与代码版本一定生效(设计 2.1)
+        const tasks = splitPlan({ ...ctx, planTask: task, envFingerprint: node?.envFingerprint, codeVersion, constants });
         const derived = tasks.map(t => t.id);
         if (tasks.length > 0) endpoint.send({ type: 'task.publish', tasks });
         // 同步传输下发布的回包可能已经转了一圈回来,再判一次
@@ -267,7 +279,10 @@ export function createLocalNode({
       attached = true;
     }
     endpoint.send({ type: 'publisher.hello', publisherId });
-    session.start(resume);
+    // 只接续本实例真在跑、令牌也对得上的认领:别的项没有执行去完成它,接续了只会一直续约、
+    // 占住 maxConcurrent。新进程的实例在跑表是空的,等于不接续(契约 D.2〔裁〕)
+    const resumable = (resume ?? []).filter(entry => entry && active.get(entry.id)?.token === entry.token);
+    session.start(resumable);
   }
 
   function tick() {
