@@ -39,6 +39,7 @@ import { findFfmpeg, openStreamSegmentEncoder, pickStreamEncoder, STREAM_ENCODER
 import { mountFrameOf } from '../src/render/frameWindow.mjs';
 import { resolveFrameSize } from '../src/kernel/frameSize.mjs';
 import { cardStreamIdentity } from './card-identity.mjs';
+import { resultKeyOf } from './render-node/fingerprint.mjs';
 import { planStreamSegments } from './frame-playback.mjs';
 import { mergeRanges } from './snapshot-store.mjs';
 import { atomic } from './frame-mov.mjs';
@@ -392,10 +393,15 @@ export function localPlacement(clip, stage) {
 
 /**
  * 按 entry(项目 + card plan + 预渲染集合)算出这一版的全部流。纯函数(除了 `prerenderPicked`
- * 由调用方给)。回 `[{ streamKey, kind, plane, clipIds, topClipId, offset, bound, mountFrame,
- * firstFrame, lastFrame, firstSegment, lastSegment, members }]`。
+ * 由调用方给)。回 `[{ streamKey, contentKey, envFingerprint, kind, plane, clipIds, topClipId, offset, bound,
+ * mountFrame, firstFrame, lastFrame, firstSegment, lastSegment, members }]`。
+ *
+ * M4(契约 E.4):`contentKey` 是流的内容键(成员取 card plan 的**内容键**,不含环境),
+ * `streamKey = resultKeyOf(contentKey, envFingerprint)` 是落盘和路由用的结果键。同一个项目在两种
+ * 环境下 `contentKey` 相同、`streamKey` 不同。没有指纹就不产流(回 `[]`),理由同 `CardFrameCache.plan()`。
  */
-export function planStreams(entry, { picked = () => true, budget = STREAM_DECODER_BUDGET, codeVersion = '' } = {}) {
+export function planStreams(entry, { picked = () => true, budget = STREAM_DECODER_BUDGET, codeVersion = '', envFingerprint } = {}) {
+  if (typeof envFingerprint !== 'string' || !envFingerprint) return [];
   const project = entry?.project;
   const plan = entry?.cardPlan;
   if (!project || !Array.isArray(plan) || !plan.length) return [];
@@ -435,14 +441,17 @@ export function planStreams(entry, { picked = () => true, budget = STREAM_DECODE
     if (members.length === 1) {
       const m = members[0];
       const placement = localPlacement(m.clip, stage);
-      const streamKey = cardStreamIdentity({ kind: 'card', fps, stage, codeVersion,
-        members: [{ key: m.control.snapshotKey || m.control.key, sampling: m.control.sampling, count: m.control.count }] });
-      specs.push({ ...base, streamKey, kind: 'card', plane: 'local', offset: placement.offset, bound: placement.bound, box: placement.box, members: [m.control] });
+      // 成员键优先取内容键;`??` 后面的回退只为没有内容键字段的旧形状输入(照旧 `snapshotKey || key`)
+      const contentKey = cardStreamIdentity({ kind: 'card', fps, stage, codeVersion,
+        members: [{ key: m.control.contentKey ?? (m.control.snapshotKey || m.control.key), sampling: m.control.sampling, count: m.control.count }] });
+      const streamKey = resultKeyOf(contentKey, envFingerprint);
+      specs.push({ ...base, streamKey, contentKey, envFingerprint, kind: 'card', plane: 'local', offset: placement.offset, bound: placement.bound, box: placement.box, members: [m.control] });
     } else {
       const view = { x: 0, y: 0, w: stage.width, h: stage.height };
-      const streamKey = cardStreamIdentity({ kind: 'group', fps, stage, codeVersion,
-        members: members.map(m => ({ key: m.control.key, sampling: m.control.sampling, count: m.control.count })) });
-      specs.push({ ...base, streamKey, kind: 'group', plane: 'stage', offset: { x: 0, y: 0 }, bound: evenRect(view, view), members: members.map(m => m.control) });
+      const contentKey = cardStreamIdentity({ kind: 'group', fps, stage, codeVersion,
+        members: members.map(m => ({ key: m.control.cacheContentKey ?? m.control.key, sampling: m.control.sampling, count: m.control.count })) });
+      const streamKey = resultKeyOf(contentKey, envFingerprint);
+      specs.push({ ...base, streamKey, contentKey, envFingerprint, kind: 'group', plane: 'stage', offset: { x: 0, y: 0 }, bound: evenRect(view, view), members: members.map(m => m.control) });
     }
   }
   return specs;
@@ -658,7 +667,7 @@ export class StreamProducer {
       enabled: this.enabled, routeAttached: this.routeAttached, pool: this.pool, budget: this.budget, encoder: this.encoderName ?? null,
       stats: { ...this.stats, aliveEncoders: this.aliveEncoders },
       streams: [...this.streams.values()].map(state => ({
-        streamKey: state.spec.streamKey, kind: state.spec.kind, clipIds: state.spec.clipIds,
+        streamKey: state.spec.streamKey, contentKey: state.spec.contentKey, kind: state.spec.kind, clipIds: state.spec.clipIds,
         firstSegment: state.spec.firstSegment, lastSegment: state.spec.lastSegment,
         bound: state.spec.bound, tight: state.manifest?.tight ?? null, resets: state.resets ?? null,
         segments: Object.fromEntries(Object.entries(state.manifest?.segments ?? {}).map(([n, s]) => [n, { stride: s.stride, init: s.init, bytes: s.bytes, encodeMs: s.encodeMs, tailMs: s.tailMs }])),
@@ -694,6 +703,8 @@ export class StreamProducer {
       picked: clipId => this.pipeline.prerenderPicked(entry, clipId),
       budget: this.budget,
       codeVersion: `${STREAM_CODE_VERSION}:${this.pipeline.captureCode?.() || ''}`,
+      // M4:流键乘本进程预渲染 Chrome 的环境指纹(还没定下来时为 null,planStreams 回 [])
+      envFingerprint: this.pipeline.envFingerprint,
     });
     const generation = ++this.generation;
     // 先把要读盘的清单都读回来(这一段会让出事件循环),再**同步**改状态:两次 update 交错时,

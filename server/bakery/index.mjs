@@ -8,6 +8,7 @@
  * 模块划分:
  *   `ffmpeg.mjs`         —— 找 ffmpeg / ffprobe、PNG 流式编码、读 ffmpeg 进度
  *   `chrome.mjs`         —— chrome-headless-shell 的启动参数、受帧控制的 page、预渲染间生命周期
+ *   `environment.mjs`    —— 探测预渲染 Chrome 的环境(OS、GPU 类别、Chrome 主版本),算环境指纹
  *   `bake.mjs`           —— 在一个预渲染间上逐帧推进并截图
  *   `shards.mjs`         —— 分片切法与并发度
  *   `media.mjs`          —— 素材来源解析、素材层规划、毛玻璃遮罩补齐
@@ -20,6 +21,7 @@
  */
 export { findFfmpeg, streamPngVideo } from './ffmpeg.mjs';
 export { openBakery } from './chrome.mjs';
+export { probeBrowserEnvironment } from './environment.mjs';
 export { bakeFrames } from './bake.mjs';
 export { balancedShards, resolveWorkers } from './shards.mjs';
 export { mediaSourceOf } from './media.mjs';
