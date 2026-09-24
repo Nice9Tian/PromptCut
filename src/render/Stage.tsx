@@ -16,6 +16,13 @@ import { guardCompositing, shouldGuard } from "./capabilityGuard";
 import { ensurePlaneStyle } from "./planeStyle";
 import { renameSnapshotIds } from "./snapshotRename";
 import { GlPlane } from "./gl/GlPlane";
+/*
+ * 占位组件(rendering.md「兜底顺序」尽头)。**B 交付 `src/render/placeholder/` 之后只换这一行**:
+ * `import { PlaceholderPlane, PLACEHOLDER_CSS } from "./placeholder";`
+ */
+import { PlaceholderPlane, PLACEHOLDER_CSS } from "./placeholderStub";
+import { ensurePlaceholderStyle, geometryFor, isCatchingUpClip, PLACEHOLDER_SLOT_ATTR, placeholdersEnabled } from "./placeholderHost";
+import type { PlaceholderReason } from "./placeholder/contract";
 
 // Keep direct-evaluation cards at the requested time while other cards replay.
 // Their CSS/DOM stays in the same stacking tree (including paper/glass styles),
@@ -88,6 +95,14 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
   useEffect(() => {
     if (usesPlanes) ensurePlaneStyle();
   }, [usesPlanes]);
+  /*
+   * 占位平面(兜底顺序尽头):只有人看的预览(舞台页、`front` 角色)挂 —— `placeholderHost` 的开关
+   * 只由 `StageView` 打开;导出页、预渲染、Agent 的查询渲染、后台舞台一个节点都不渲、样式表不注入。
+   */
+  const placeholders = usesPlanes && placeholdersEnabled();
+  useEffect(() => {
+    if (placeholders) ensurePlaceholderStyle(PLACEHOLDER_CSS);
+  }, [placeholders]);
 
   /*
    * 被抑制的卡传给组件的那个 `t` 要**冻在抑制开始那一刻**(E7 第 5 条)。
@@ -124,6 +139,9 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
     if (frozen !== undefined) return frozen;
     return Math.max(0, base - clip.start);
   };
+  /** 占位符为什么显示(诊断用;显隐本身不看它,由 `StageView` 切) */
+  const placeholderReasonOf = (id: string): PlaceholderReason =>
+    awaiting?.has(id) ? "awaiting" : settling?.has(id) || isCatchingUpClip(id) ? "catching-up" : "no-data";
   // 自带三维场景的卡(scene-3d)要用和 A 层同一台相机,所以把画幅和 fov 一起递下去。
   // 对象整体透传,别的卡收到了也不看。
   const stageInfo = useMemo(() => ({ width: timeline.width, height: timeline.height, camera3dFov: timeline.camera3dFov }), [timeline.width, timeline.height, timeline.camera3dFov]);
@@ -361,6 +379,18 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
               {ownStream ? (
                 <canvas data-pc-stream-plane="" width={0} height={0}
                   style={{ position: "absolute", left: 0, top: 0, width: "100%", height: "100%" }} />
+              ) : null}
+              {/*
+                占位平面(rendering.md「兜底顺序」;和快照 / 流平面同级,坐标、旋转、缩放、层级从包裹层继承)。
+                槽位默认 `hidden`,`StageView` 每拍只切它的 `hidden`(contract 的 `setPlaceholderShown`),
+                不经 React 提交 —— `hidden` 这个 prop 恒为 true,React 不会把手动切过的值冲掉。
+                放在最后:同一包裹层里它盖在快照 / 流平面上面(显示它的时候那两样本来就没画面)。
+              */}
+              {placeholders ? (
+                <div {...{ [PLACEHOLDER_SLOT_ATTR]: "" }} hidden style={{ position: "absolute", inset: 0 }}>
+                  <PlaceholderPlane clipId={clip.id} geometry={geometryFor(clip.id, frameBox(clip.frame, timeline))}
+                    reason={placeholderReasonOf(clip.id)} />
+                </div>
               ) : null}
             </div>
           );

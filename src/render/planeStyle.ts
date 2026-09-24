@@ -24,8 +24,14 @@
  * 导出页不传这几个 prop,这张表一个字都不会注入 —— 逐像素基线不受影响。
  */
 
-/** 三种平面都要放过:代理色块、快照平面、流平面 */
-const PLANES = ":not([data-pc-snapshot-plane]):not([data-pc-proxy-plane]):not([data-pc-stream-plane])";
+import { PLACEHOLDER_ATTR } from "./placeholder/contract.ts";
+import { PLACEHOLDER_SLOT_ATTR } from "./placeholderHost.ts";
+
+/**
+ * 平面都要放过:代理色块、快照平面、流平面,以及占位平面(槽位和组件根元素;rendering.md「兜底顺序」)——
+ * 占位符正是在子树被藏起来(抑制 / 等快照 / 追帧)的时候才显示的,被这几条规则一起藏掉就白挂了。
+ */
+const PLANES = `:not([data-pc-snapshot-plane]):not([data-pc-proxy-plane]):not([data-pc-stream-plane]):not([${PLACEHOLDER_SLOT_ATTR}]):not([${PLACEHOLDER_ATTR}])`;
 
 export const PLANE_CSS = [
   `.pc-snapshot > *${PLANES} { display: none !important; }`,

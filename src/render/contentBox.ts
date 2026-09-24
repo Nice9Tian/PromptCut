@@ -10,6 +10,8 @@
  * 文字用 Range 量:一个 block 元素的矩形是整行宽,Range 给的是字本身的框。
  * canvas 扫像素量:DOM 只知道画布多大,不知道里面画了什么。
  */
+import { isPlaceholderNode } from "./placeholderHost.ts";
+
 export interface Box {
   l: number;
   t: number;
@@ -202,6 +204,8 @@ export function measureContentBox(stage: HTMLElement, canvasCache?: Map<HTMLCanv
   };
   for (const el of stage.querySelectorAll<HTMLElement>("*")) {
     if (el.tagName === "SCRIPT" || el.tagName === "STYLE") continue;
+    // 占位平面不是卡片画的东西(rendering.md「兜底顺序」):量它就把占位框当成了墨迹框
+    if (isPlaceholderNode(el)) continue;
     // svg 内部的子元素不用逐个量,整棵 svg 一个框就够
     if (el.namespaceURI === "http://www.w3.org/2000/svg" && el.tagName !== "svg") continue;
     const cs = getComputedStyle(el);
@@ -319,6 +323,7 @@ export function measureInk(stage: HTMLElement, box: Box | null): Ink | null {
 
   for (const el of stage.querySelectorAll<HTMLElement>("*")) {
     if (el.tagName === "SCRIPT" || el.tagName === "STYLE") continue;
+    if (isPlaceholderNode(el)) continue;
     if (el.namespaceURI === "http://www.w3.org/2000/svg" && el.tagName !== "svg") continue;
     const cs = getComputedStyle(el);
     const op = parseFloat(cs.opacity);

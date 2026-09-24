@@ -606,6 +606,13 @@ class StreamTrack {
   /** 这一拍流画面在不在(画了、或留着最近 3 帧内的那张)。占位符 T1 按它判 */
   get showing(): boolean { return this.lastDrawn !== null; }
 
+  /** 这一拍画的是满帧段还是稀疏段(兜底顺序第 1 / 2 步;探针按它分级)。没画面时 null */
+  get level(): "dense" | "sparse" | null {
+    if (this.lastDrawn === null) return null;
+    const meta = this.manifest?.segments[String(Math.floor(this.lastDrawn / SEGMENT_FRAMES))];
+    return (meta?.stride ?? 1) > 1 ? "sparse" : "dense";
+  }
+
   /** 实体框(清单的收紧矩形,没有就用上界;平面坐标)。占位符的几何按它摆 */
   get box(): StreamRect | null { return this.manifest ? this.manifest.tight ?? this.manifest.bound : null; }
 
@@ -885,6 +892,17 @@ export class StreamPlayer {
     for (const track of this.tracks.values()) {
       if (!track.showing) continue;
       for (const id of track.plane.clipIds) out.add(id);
+    }
+    return out;
+  }
+
+  /** 这一拍每张卡的流画面是满帧段还是稀疏段(只列有画面的;探针用) */
+  levels(): Map<string, "dense" | "sparse"> {
+    const out = new Map<string, "dense" | "sparse">();
+    if (this.stopped || this.proxy) return out;
+    for (const track of this.tracks.values()) {
+      const level = track.level;
+      if (level) for (const id of track.plane.clipIds) out.set(id, level);
     }
     return out;
   }
