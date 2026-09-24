@@ -126,8 +126,27 @@ function finish(code) {
   result.doneLatencyMs = { p50: percentile(sorted, 0.5), p95: percentile(sorted, 0.95) };
   if (code === undefined) code = result.fails.length === 0 ? 0 : 1;
   result.ok = code === 0;
-  for (const ep of endpoints) { try { ep.close(); } catch { /* 已关 */ } }
-  process.stdout.write(`${JSON.stringify(result)}\n`, () => process.exit(code));
+  process.exitCode = code;
+  // 先等连着的连接关干净（最多 CLOSE_WAIT_MS）再退出：关闭握手没完成就 process.exit，
+  // Windows 上 libuv 会断言 UV_HANDLE_CLOSING 崩掉（对远端必现）
+  closeEndpoints().then(() => {
+    process.stdout.write(`${JSON.stringify(result)}\n`, () => process.exit(code));
+  });
+}
+
+const CLOSE_WAIT_MS = 3_000;
+/** 关掉全部连接；连着的等到 onClose，最多 CLOSE_WAIT_MS */
+function closeEndpoints() {
+  const waits = [];
+  for (const ep of endpoints) {
+    if (ep.connected) waits.push(new Promise((resolve) => ep.onClose(resolve)));
+    try { ep.close(); } catch { /* 已关 */ }
+  }
+  if (waits.length === 0) return Promise.resolve();
+  return new Promise((resolve) => {
+    const t = setTimeout(resolve, CLOSE_WAIT_MS);
+    Promise.all(waits).then(() => { clearTimeout(t); resolve(); });
+  });
 }
 
 function openEndpoint(label) {
