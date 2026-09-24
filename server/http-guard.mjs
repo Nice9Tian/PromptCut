@@ -50,8 +50,9 @@ export function apiPath(url) {
 }
 
 /**
- * 素材服务的路由(`server/asset-service.ts` 文件头的契约):`/api/asset/media/<hash>`,
- * 后面可带 `/chunks`、`/complete` 或分片号。
+ * 素材服务的路由(`server/asset-service.ts` 文件头的契约):`/api/asset/<ns>/<hash>`,
+ * 后面可带 `/chunks`、`/complete` 或分片号。`<ns>` 只认 `media`、`snap`、`px` 三个命名空间
+ * (`docs/plan/artifact-transfer-contract.md` 第 1 节),别的都不算。
  *
  * 素材服务按语义必须允许跨源(`docs/semantics/architecture/asset-storage.md`「职责」),
  * 所以 `/api/**` 的同源守卫对它豁免 —— **只豁免严格匹配这一条正则的路径**,判的是 apiPath
@@ -59,7 +60,7 @@ export function apiPath(url) {
  * 守卫放过去的请求一定落到素材服务手里,不会漏到别的 `/api` 处理函数上。
  * 其余 `/api/**`(包括 `/api/media/upload/` 这些编辑器内部的整件上传)照旧受守卫。
  */
-const ASSET_ROUTE = /^\/api\/asset\/media\/[0-9a-f]{64}(?:\/(?:chunks|complete|\d{1,10}))?$/;
+const ASSET_ROUTE = /^\/api\/asset\/(?:media|snap|px)\/[0-9a-f]{64}(?:\/(?:chunks|complete|\d{1,10}))?$/;
 
 export function isAssetServicePath(url) {
   return ASSET_ROUTE.test(apiPath(url));

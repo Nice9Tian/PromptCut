@@ -1291,6 +1291,31 @@ export class FramePipeline {
    * legacy 通道一起删,在那之前照常写,不然导出和旧播放路会缺料。 */
   snapshots() { return this._snapshots ||= new SnapshotStore(this.root); }
   /**
+   * C6.2(契约第 6 节):别的节点产的一段结果已经落进本机帧库,把它发布进就绪索引。
+   *
+   *   - 快照:按落盘后的 `index.json` 把线上的键(`wireSnapshotKey(tier, entryKey, dirKey)`)挂进 `stageByKey`,
+   *     再对每个 entry 认领一次(`claimSessions`):凡是 card plan 用到这个键、当前有会话在这一版上的,
+   *     都收到 `layer`。不需要知道 `clipId` —— 键是内容寻址的,认领按 card plan 把键对回片段。
+   *   - 轨道流:由 `streamProducer().adoptSegments` 负责发布,这里什么都不做。
+   *
+   * 回 `{ kind, key, ranges, claimed }`(`ranges` 是这个键此刻在盘上的区间,`claimed` 是并进了几层)。
+   */
+  async adoptResult(result) {
+    if (!result || typeof result !== 'object' || result.v !== 1) throw new Error('Unknown artifact result');
+    if (result.kind === 'stream') return { kind: 'stream', key: result.resultKey ?? null, ranges: null, claimed: 0 };
+    if (result.kind !== 'snapshot') throw new Error(`Unknown artifact result kind ${result.kind}`);
+    const { tier, dirKey } = result;
+    const entryKey = tier === 'local' ? result.entryKey : null;
+    const kind = kindOfTier(tier);
+    const key = wireSnapshotKey(tier, entryKey, dirKey);
+    if (!kind || !key) throw new Error('Snapshot result has no usable key');
+    const index = await this.snapshots().snapshotIndex({ tier, entryKey, key: dirKey });
+    if (index.frames.length) this.ready.stageByKey({ kind, key, ranges: index.frames });
+    let claimed = 0;
+    for (const entry of this.entries.values()) claimed += this.claimSessions(entry);
+    return { kind, key, ranges: index.frames, claimed };
+  }
+  /**
    * F5 预渲染进程重启后的恢复:起来先扫
    * `controls-html/<共享键>/index.json` 和 `controls-local/<entry.key>/<共享键>/index.json`,
    * 重建 C3 的就绪索引。
