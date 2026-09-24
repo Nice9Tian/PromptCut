@@ -8,7 +8,15 @@
  *   这里把连接的写、积压字节数、关闭和 `drain` 事件接给它；
  * - 业务都是挂上来的模块（`modules/`）：渲染任务队列、服务地址登记，以后还可以挂与渲染无关的文本处理模块。
  *
- * 这一版还没有项目文档、操作日志、`projectRev` / `cardRev`、锁和内容库（`docs/plan/cloud-task.md` 第 6 步）。
+ * 两种挂法（`docs/plan/docservice-contract.md` 第 4 节），其余行为（鉴权、心跳、模块、频道、背压）完全相同：
+ * - **独立模式**（不传 `server`）：自建 http 服务器，答 `/healthz`，`listen()` 开始监听（远程文档服务、`main.mjs`）；
+ * - **挂载模式**（传 `server`）：挂到宿主现成的 http 服务器上（本地文档服务挂进 vite）。不建服务器、不答任何 HTTP 请求，
+ *   只在宿主上加一个 `upgrade` 监听，而且只接 `path` 这一条路径的升级，别的路径（vite 的 HMR 等）一概不碰；
+ *   `listen()` 抛错（宿主负责监听），`close()` 只关自己的连接和计时器、摘掉自己的监听，不关宿主；
+ *   `/healthz` 的内容由 `health()` 给出，宿主自己挂路由。
+ *
+ * 项目版本号与内容库是挂上来的模块（`modules/project.mjs`、`modules/content.mjs`）；操作日志、锁还没有
+ * （`docs/plan/cloud-task.md` 第 6 步）。
  * `principal` 由 `authenticate` 钩子在建连时给出（集群令牌见 `auth.mjs`），缺省是匿名；消息里自报的一律不认。
  *
  * 渲染任务队列的旧接口保留：创建时挂一个占位模块（队列消息一律回 `queue-unavailable`），
@@ -41,6 +49,7 @@ function jsonLog(event, fields) {
  * @param {object} [options]
  * @param {(req: import('node:http').IncomingMessage) => ({ userId: string, tenantId?: string | null } | null)} [options.authenticate]
  *   建连时定 principal；返回 null 拒绝（401）。缺省所有人都是匿名用户。集群令牌鉴权用 `auth.mjs` 的 `createClusterAuth`。
+ * @param {import('node:http').Server} [options.server] 挂载模式：挂到这个现成的 http 服务器上，不自建、不监听
  * @param {string} [options.path] 接受 WebSocket 的路径，缺省 `/`
  * @param {number} [options.maxPayload]
  * @param {number} [options.maxConnections]
@@ -57,6 +66,7 @@ function jsonLog(event, fields) {
 export function createDocService(options = {}) {
   const {
     authenticate = () => ANONYMOUS,
+    server: hostServer,
     path = '/',
     maxPayload = DOCSERVICE_DEFAULTS.MAX_PAYLOAD,
     maxConnections = DOCSERVICE_DEFAULTS.MAX_CONNECTIONS,
@@ -144,7 +154,13 @@ export function createDocService(options = {}) {
     if (mod.name === RENDER_QUEUE_MODULE) queueSlot.unmount = unmount;
   }
 
-  const server = createServer((req, res) => {
+  const attached = hostServer !== undefined && hostServer !== null;
+  if (attached && (typeof hostServer.on !== 'function' || typeof hostServer.off !== 'function')) {
+    throw new TypeError('createDocService: server 必须是 http.Server');
+  }
+
+  /** 独立模式自建的 http 服务器；挂载模式为 null，不答任何 HTTP 请求 */
+  const ownServer = attached ? null : createServer((req, res) => {
     const url = new URL(req.url ?? '/', 'http://localhost');
     if (req.method === 'GET' && url.pathname === '/healthz') {
       res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
@@ -155,11 +171,24 @@ export function createDocService(options = {}) {
     res.end('not found');
   });
 
-  server.on('upgrade', (req, socket, head) => {
+  const pathnameOf = (req) => {
+    try {
+      return new URL(req.url ?? '/', 'http://localhost').pathname;
+    } catch {
+      return null;
+    }
+  };
+
+  /**
+   * 独立模式：服务器是自己的，关停中一律 503，别的路径 404。
+   * 挂载模式：别的路径一概不碰——不回包、不关 socket、不挂错误监听，留给宿主的其它 `upgrade` 监听（vite 的 HMR）。
+   */
+  function onUpgrade(req, socket, head) {
+    const mine = pathnameOf(req) === path;
+    if (attached && !mine) return;
     socket.on('error', () => {});
-    const url = new URL(req.url ?? '/', 'http://localhost');
     if (closing) return rejectUpgrade(socket, 503, 'Service Unavailable');
-    if (url.pathname !== path) return rejectUpgrade(socket, 404, 'Not Found');
+    if (!mine) return rejectUpgrade(socket, 404, 'Not Found');
     if (sockets.size >= maxConnections) return rejectUpgrade(socket, 503, 'Service Unavailable');
     let principal;
     try {
@@ -173,7 +202,9 @@ export function createDocService(options = {}) {
     const ws = acceptUpgrade(req, socket, head, { maxPayload, protocol: echo });
     if (!ws) return;
     open(ws, { userId: principal.userId, tenantId: typeof principal.tenantId === 'string' ? principal.tenantId : null });
-  });
+  }
+
+  (attached ? hostServer : ownServer).on('upgrade', onUpgrade);
 
   function open(ws, principal) {
     const connId = `conn-${++seq}`;
@@ -225,18 +256,29 @@ export function createDocService(options = {}) {
   heartbeat.unref?.();
 
   return {
-    server,
+    /** 独立模式是自建的服务器；挂载模式是宿主的服务器（本服务不监听它，也不关它） */
+    server: attached ? hostServer : ownServer,
 
-    /** 开始监听，返回实际地址（port 传 0 时由系统分配） */
+    /** 是否挂载模式 */
+    attached,
+
+    /**
+     * 开始监听，返回实际地址（port 传 0 时由系统分配）。
+     * 挂载模式下同步抛错：宿主负责监听。
+     */
     listen(port, host) {
+      if (attached) throw new Error('挂载模式下由宿主服务器监听，文档服务不能 listen()');
       return new Promise((resolve, reject) => {
-        server.once('error', reject);
-        server.listen(port, host, () => {
-          server.off('error', reject);
-          resolve(server.address());
+        ownServer.once('error', reject);
+        ownServer.listen(port, host, () => {
+          ownServer.off('error', reject);
+          resolve(ownServer.address());
         });
       });
     },
+
+    /** 与 `/healthz` 相同的对象；挂载模式下宿主拿它自己挂路由 */
+    health,
 
     /**
      * 模块之外往连接上发消息（如 createRenderQueue 的 `send`）。连接已断就丢弃。
@@ -297,14 +339,24 @@ export function createDocService(options = {}) {
       };
     },
 
-    /** 停止监听，给所有连接发 1001 后关掉 */
+    /**
+     * 给所有连接发 1001 后关掉，停掉心跳和模块计时器。
+     * 独立模式：停止监听，等服务器关上。
+     * 挂载模式：摘掉自己的 `upgrade` 监听，等自己的连接都断开（对端不回关闭帧的，`ws.mjs` 到时直接断）；宿主服务器不关。
+     */
     close() {
       closing = true;
       clearInterval(heartbeat);
       for (const record of mounted.values()) clearInterval(record.timer);
+      if (attached) {
+        hostServer.off('upgrade', onUpgrade);
+        const gone = [...sockets.values()].map(({ ws }) => new Promise((resolve) => ws.once('close', resolve)));
+        for (const conn of sockets.values()) conn.ws.close(CLOSE.GOING_AWAY, 'server shutting down');
+        return Promise.all(gone).then(() => {});
+      }
       for (const conn of sockets.values()) conn.ws.close(CLOSE.GOING_AWAY, 'server shutting down');
-      const done = new Promise((resolve) => server.close(() => resolve()));
-      server.closeIdleConnections();
+      const done = new Promise((resolve) => ownServer.close(() => resolve()));
+      ownServer.closeIdleConnections();
       return done;
     },
   };
