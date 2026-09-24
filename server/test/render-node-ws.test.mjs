@@ -237,11 +237,13 @@ test('T3 断线期间 send 回 false，stats().dropped 计数正确；连上时 
 
   // 重连后不重放断线期间的消息
   proxy.mode = 'pass';
+  const seen = rec.messages.length;
   timers.fire();
   await waitFor(() => rec.opens === 2, 3000, '重连');
-  await sleep(100);
-  assert.equal(env.service.describe().conns.length, 1);
-  assert.deepEqual(env.service.describe().conns[0].roles, [], '断线期间的消息一律丢弃，不缓存重放');
+  await sleep(150);
+  // 断线期间丢的是没报到就发的 queue.watch：若被重放，队列会回 error { reason: 'not-registered' }
+  assert.deepEqual(rec.messages.slice(seen), [], '断线期间的消息一律丢弃，不缓存重放');
+  assert.equal(ep.stats().sent, after.sent, '重连后没有补发');
 });
 
 test('T3 收到的非 JSON / 非对象的文本不交给处理器，计入 badFrames', async (t) => {
