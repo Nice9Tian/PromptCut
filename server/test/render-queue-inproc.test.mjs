@@ -1,6 +1,6 @@
 /**
  * M3 进程内集成：本机节点编排（`createLocalNode`）× 真队列（`createRenderQueue`），经环回传输、
- * 假执行器、内存产物库串成端到端链路（契约 `docs/plan/render-queue-contract.md` D 节，用例 I1～I10）。
+ * 假执行器、内存产物库串成端到端链路（契约 `docs/plan/render-queue-contract.md` D 节，用例 I1～I10，另加 I11：版本更迭时已存在的细任务并入订阅、补发）。
  * 跑：node --test server/test/render-queue-inproc.test.mjs
  *
  * 只照契约 D 节、A 节（队列消息与行为）、B.4 / B.5 和设计 `docs/plan/distributed-prerender-queue.md`
@@ -68,11 +68,11 @@ function seeded(seed) {
 }
 
 /** 页面发布的粗任务（契约 B.4 planTaskOf 的形状，测试自己写）。 */
-function planTaskInput(projectId, projectRev) {
+function planTaskInput(projectId, projectRev, priority = 0) {
   return {
     id: `plan:${projectId}@${projectRev}`, kind: 'plan', resultKey: `${projectId}@${projectRev}`, range: null,
     source: { projectId, projectRev }, input: {}, weight: { class: 'medium', estMs: null, frames: null },
-    requires: {}, priority: 0,
+    requires: {}, priority,
   };
 }
 const planIdOf = (projectId, projectRev) => `plan:${projectId}@${projectRev}`;
@@ -129,6 +129,18 @@ function planContextFor(salt = 'p1') {
     isUserCard: () => false,
     isGraphCard: () => false,
   };
+}
+
+/**
+ * 同一项目的下一版（I11）：只改了「下三分之一」这张卡（它的共享键变了），其余卡的共享键、轨道流键不变。
+ * entry.key 随版本变（真实情形），所以本地档的毛玻璃卡键也变、要重渲；共享档与流不受影响。
+ */
+function planContextV2(salt = 'p1') {
+  const ctx = planContextFor(salt);
+  ctx.entryKey = sha256(`entry:${salt}:v2`);
+  ctx.cardPlan = ctx.cardPlan.map(c => (c.clipId !== 'clip-lower' ? c
+    : control({ clipId: 'clip-lower', cardId: 'lowerThird', label: `${salt}:lower:v2`, capabilities: c.capabilities, start: c.start, count: c.count })));
+  return ctx;
 }
 
 /** 按契约 B.4 自己算出这份 PlanContext 应当切出的细任务（只取断言用得到的字段）。 */
@@ -200,7 +212,7 @@ function createRig({ epoch = 'epoch-1', clock, sink, exec, planContext } = {}) {
     ep.send({ type: 'publisher.hello', publisherId });
     const page = {
       name, ep, inbox, publisherId, connId: ep.connId,
-      publishPlan(projectId, projectRev) { ep.send({ type: 'task.publish', tasks: [planTaskInput(projectId, projectRev)] }); },
+      publishPlan(projectId, projectRev, priority = 0) { ep.send({ type: 'task.publish', tasks: [planTaskInput(projectId, projectRev, priority)] }); },
       of: type => inbox.filter(m => m.type === type),
       doneCount: id => inbox.filter(m => m.type === 'task.done' && m.id === id).length,
       done: id => inbox.find(m => m.type === 'task.done' && m.id === id),
@@ -977,4 +989,125 @@ test('I10 队列重启（新实例、新 epoch）：页面重新发布后全部�
     assert.ok(rig2.sink.holds(t.resultKey, t.range), t.id);
   }
   hygiene(rig2, { unhandledBefore: before });
+});
+
+// ================================================================ I11
+
+/**
+ * I11 的共用拼装：v1 / v2 两版 PlanContext，两个页面（同一用户的两个标签页）。
+ * 页面 A 发布 v1 与 v2，页面 B 只发布 v2。
+ *
+ * 契约 A.4「已存在的同 id 任务」：已是订阅者的不重复发。页面 A 经 v1 的继承早已订阅了 v1 的细任务，
+ * 所以 v2 里不变的那些它不会再收到第二条 task.done（它在 v1 时已经收到过一条）；「补发」落在只订阅了
+ * v2 plan 的页面 B 身上。两个页面合起来覆盖：不重复（A）与补发 / 并入（B）。
+ */
+function createVersionRig() {
+  const rig = createRig({ planContext: task => (task.source.projectRev === 2 ? planContextV2('p1') : planContextFor('p1')) });
+  const pageA = rig.addPage('page-a', { userId: 'u1', publisherId: 'page-a' });
+  const pageB = rig.addPage('page-b', { userId: 'u1', publisherId: 'page-b' });
+  const v1 = expectedDerived(planContextFor('p1'), FP_A);
+  const v2 = expectedDerived(planContextV2('p1'), FP_A);
+  const v1Ids = new Set(v1.map(t => t.id));
+  const unchanged = v2.filter(t => v1Ids.has(t.id));
+  const changed = v2.filter(t => !v1Ids.has(t.id));
+  // 夹具自检：标题（3 段）与轨道流（2 段）不变；下三分之一（共享键变了）与毛玻璃（本地档键含 entry.key）要重渲
+  assert.deepEqual(sorted(new Set(unchanged.map(t => t.clipId))), ['clip-title', 'clip-video']);
+  assert.deepEqual(sorted(new Set(changed.map(t => t.clipId))), ['clip-glass', 'clip-lower']);
+  const ids1 = [planIdOf('p1', 1), ...v1.map(t => t.id)];
+  const ids2 = [planIdOf('p1', 2), ...v2.map(t => t.id)];
+  return { rig, pageA, pageB, v1, v2, unchanged, changed, ids1, ids2 };
+}
+
+/** I11 共同的收尾断言。 */
+function assertVersions({ rig, pageA, pageB, v1, v2, unchanged, changed, ids1, ids2 }) {
+  // 页面 A：v1、v2 的每个任务恰好一条 task.done（不变的那些是 v1 时收到的，不重复）
+  for (const id of new Set([...ids1, ...ids2])) assert.equal(pageA.doneCount(id), 1, `页面 A 对 ${id} 应恰好一条 task.done`);
+  // 页面 B：v2 的每个任务恰好一条（不变的那些靠并入订阅 / 补发）
+  for (const id of ids2) assert.equal(pageB.doneCount(id), 1, `页面 B 对 ${id} 应恰好一条 task.done`);
+  for (const id of ids1.filter(id => !ids2.includes(id))) assert.equal(pageB.doneCount(id), 0, `页面 B 没订阅 v1 的 ${id}`);
+  assert.equal(pageA.of('task.failed').length + pageB.of('task.failed').length, 0);
+  // v2 plan 的结果列出全部 v2 细任务（含已存在的）
+  assert.deepEqual(sorted(pageB.done(planIdOf('p1', 2)).result.derived), sorted(v2.map(t => t.id)));
+  // 每个任务在队列里恰好完成一次、恰好认领一次；不变的不重新渲染、不重新认领
+  const completed = counts(rig.out('task.completed').map(e => e.message.id));
+  const claimed = counts(claimsOf(rig).map(c => c.id));
+  for (const t of [...v1, ...changed]) {
+    assert.equal(completed.get(t.id), 1, `${t.id} 应恰好完成一次`);
+    assert.equal(claimed.get(t.id), 1, `${t.id} 应恰好认领一次`);
+    assert.equal(rig.exec.renderCount(t.id), 1, `${t.id} 应恰好渲染一次`);
+    assert.ok(rig.sink.holds(t.resultKey, t.range), t.id);
+  }
+  for (const t of unchanged) {
+    const d = rig.task(t.id);
+    assert.deepEqual([d.state, d.version, d.attempts], ['done', 3, 0], `${t.id}：v2 不重新打开它`);
+    assert.deepEqual(pageB.done(t.id).result.ranges, [[t.range.from, t.range.to]]);
+    assert.equal(pageB.done(t.id).resultKey, t.resultKey);
+    assert.ok(d.subscribers.includes('page-a') && d.subscribers.includes('page-b'), `${t.id} 应并入两个页面的订阅`);
+  }
+  for (const t of changed) assert.equal(rig.task(t.id).state, 'done', t.id);
+}
+
+test('I11 同一页面先发布 v1 并全部完成，再发布 v2（只改了一张卡）：v2 的细任务页面都有 task.done，不变的补发、不重渲，改了的照常渲染', async () => {
+  const before = unhandled.length;
+  const env = createVersionRig();
+  const { rig, pageA, pageB, ids1, ids2 } = env;
+  const a = rig.addNode('node-a', { seed: 26 });
+  const b = rig.addNode('node-b', { seed: 27 });
+  a.local.start();
+  b.local.start();
+  await settle(rig);
+
+  pageA.publishPlan('p1', 1);
+  await drive(rig, allDone(rig, pageA, ids1));
+  const bBefore = pageB.inbox.length;
+
+  pageA.publishPlan('p1', 2);
+  pageB.publishPlan('p1', 2);
+  await drive(rig, () => allDone(rig, pageA, ids2)() && allDone(rig, pageB, ids2)());
+  await coast(rig);
+
+  assert.equal(pageB.inbox.slice(0, bBefore).filter(m => m.type === 'task.done').length, 0, 'v2 之前页面 B 什么都没订阅');
+  // 不变的在 v2 发布时都已 done：页面 B 收到的是补发（A.4「已存在的同 id 任务」）
+  for (const t of env.unchanged) assert.equal(pageB.doneCount(t.id), 1, `${t.id}：页面 B 应收到补发的 task.done`);
+  assertVersions(env);
+  hygiene(rig, { unhandledBefore: before });
+});
+
+test('I11 v1 的细任务还 open / claimed 时 v2 的 plan 就被切分：页面最终收到它们的 task.done，且只一次', async () => {
+  const before = unhandled.length;
+  const env = createVersionRig();
+  const { rig, pageA, pageB, ids1, ids2 } = env;
+  rig.exec.on(() => true, { durationMs: 3_000 });
+  const a = rig.addNode('node-a', { seed: 28 });
+  const b = rig.addNode('node-b', { seed: 29 });
+  a.local.start();
+  b.local.start();
+  await settle(rig);
+
+  pageA.publishPlan('p1', 1);
+  const plan1 = planIdOf('p1', 1);
+  const plan2 = planIdOf('p1', 2);
+  await drive(rig, () => pageA.doneCount(plan1) > 0);
+  // v1 刚切完；v2 的 plan 插队（优先级 100，设计第 3 节「AI 栏预览插队」），趁 v1 的细任务还在做就切分
+  pageA.publishPlan('p1', 2, 100);
+  pageB.publishPlan('p1', 2, 100);
+  let statesAtSplit = null;
+  await drive(rig, () => {
+    if (statesAtSplit === null && pageA.doneCount(plan2) > 0) {
+      statesAtSplit = new Map(env.unchanged.map(t => [t.id, rig.task(t.id)?.state]));
+    }
+    return statesAtSplit !== null;
+  });
+  const inFlight = [...statesAtSplit].filter(([, s]) => s === 'open' || s === 'claimed').map(([id]) => id);
+  assert.ok(inFlight.length > 0, `前提：v2 切分时应有不变的细任务还在 open / claimed，实际 ${JSON.stringify([...statesAtSplit])}`);
+
+  await drive(rig, () => allDone(rig, pageA, [...ids1, ...ids2])() && allDone(rig, pageB, ids2)());
+  await coast(rig);
+
+  for (const id of inFlight) {
+    assert.equal(pageA.doneCount(id), 1, `${id}：页面 A 只收到一条`);
+    assert.equal(pageB.doneCount(id), 1, `${id}：页面 B（并入订阅）收到且只收到一条`);
+  }
+  assertVersions(env);
+  hygiene(rig, { unhandledBefore: before });
 });
