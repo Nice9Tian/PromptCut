@@ -187,3 +187,10 @@ Store = {
 11. **半行补换行**：往文件第一次追加之前，末尾不是换行就先补一个，免得新记录接在截断的半行后面，下次重启时一起丢掉。
 12. **路径穿越**：存储层拒绝时抛错，目录外什么都不写。
 13. **不合法的内容键**：`key` 不合法回 `bad-message`。`maxBodyBytes` 按序列化后的 UTF-8 字节数算。`body: null` 合法。
+14. **升级 socket 的防崩**（覆盖第 6 条）：
+    - **插件总是注册**；`PROMPTCUT_HEADLESS === "1"` 时进入停用模式：
+      - 不建文档服务、不写日志；
+      - `/docservice` 的升级请求回 503 并关闭；
+      - `/api/docservice/healthz` 回 `503 { ok: false, disabled: true, reason: 'headless' }`。
+    - **所有升级请求的 socket 都挂一个空的 `error` 监听**，两种模式都挂，去重后只挂一次。
+    - **原因**：vite 的 HMR 监听遇到不是自己的路径会直接返回，socket 上没有错误监听。客户端一重置连接，就成了未处理的 `ECONNRESET`，整个 dev server 退出。这是 C6.3 之前就有的问题：局域网里任何一台设备都能这样打崩编辑器。
