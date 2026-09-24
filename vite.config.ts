@@ -25,6 +25,7 @@ import { prerenderPlugin } from "./server/vite-plugin-prerender";
 import { voicePlugin } from "./server/vite-plugin-voice";
 import { audioPlugin } from "./server/vite-plugin-audio";
 import { stagePortsPlugin } from "./server/vite-plugin-stage-ports";
+import { docservicePlugin } from "./server/vite-plugin-docservice";
 
 // 无头实例(scripts/headless.mjs)和用户手里那份 vite 跑在同一个项目根上,
 // 依赖预构建缓存分开放,免得两个进程同时写 node_modules/.vite 互相踩。
@@ -52,7 +53,7 @@ export default defineConfig({
   //   viewGatePlugin  —— Skill 无头实例的只读钥匙,只在 headless.mjs 起的那份上生效
   //                      (它靠 PROMPTCUT_VIEW_TOKEN 判断,用户自己那份没有这个变量,整个空转)。
   // stagePortsPlugin 排在 apiGuard 后面:它自己那条 /api/stage/ports 也该受同一道卡口管。
-  plugins: [apiGuardPlugin(), viewGatePlugin(), stagePortsPlugin(), react(), tailwindcss(), exportPlugin(), mirrorPlugin(), costsPlugin(), framesPlugin(), vitePluginAi(), sttPlugin(), shotsPlugin(), trackPlugin(), subjectPlugin(), mediaPlugin(), chatsPlugin(), vitePluginCards(), projectsPlugin(), visionPlugin(), skillPlugin(), skillStatePlugin(), collectPlugin(), webPlugin(), prerenderPlugin(), voicePlugin(), audioPlugin()],
+  plugins: [apiGuardPlugin(), viewGatePlugin(), stagePortsPlugin(), react(), tailwindcss(), exportPlugin(), mirrorPlugin(), costsPlugin(), framesPlugin(), vitePluginAi(), sttPlugin(), shotsPlugin(), trackPlugin(), subjectPlugin(), mediaPlugin(), chatsPlugin(), vitePluginCards(), projectsPlugin(), visionPlugin(), skillPlugin(), skillStatePlugin(), collectPlugin(), webPlugin(), prerenderPlugin(), voicePlugin(), audioPlugin(), docservicePlugin()],
   server: headless
     ? {
         // 无头实例不要热更新:它是给 agent 跑的,源码一改就重载页面,重载期间工具全失败,
