@@ -214,3 +214,13 @@ export async function applyResult(pipeline, client, result) → { written: numbe
   - `ready-index-probe`、`stream-produce-probe`（含 `--group`）、`preview-fallback-probe`（含 `--page-preload`）全部退出码 0。
 - 第 7 节全过。
 - 跨机不单独做：C6.2 的跨机验证并进 M5b 的 W4（笔记本真实渲染、主 PC 拉取）。
+
+## 10. 定稿后的补充细则（2026-09-25，主 Agent 按素材服务侧实现方疑点裁定）
+
+1. **MIME 表分开**：`text/html → html`、`video/iso.segment → m4s` 放进 `snap` / `px` 专用的 MIME 表，不改共享的 `MIME_TO_EXT`，`media` 落盘的文件名因此不变。
+2. **收尾回包的 `url`**：`snap` / `px` 收尾成功时，`url` 是 `/api/asset/<ns>/<hash>`；`media` 照旧是 `/@media/<hash>`。
+3. **不认识的命名空间**：中间件不处理，交给 `next()`。
+4. **分片大小**：以服务端 `chunks` 回包里的 `chunkSize` 为准，客户端的 `chunkSize` 选项只作兜底。
+5. **超时**：客户端新增 `timeoutMs`，缺省 30000，按单个请求计时，到点中止。超时算网络错误，照常重试，重试用完就抛，错误带 `code: 'timeout'`。重试不只用于分片上传，也用于 `chunks`、`complete`、`get`。
+6. **查找不扫目录**：`snap` / `px` 的 fs 钩子 `resolveFile` 按候选文件名直接查，依次是 `<hash>.html`、`.mp4`、`.m4s`，最后是没有扩展名的 `<hash>`。
+7. **目录位置**：`snap` / `px` 的 fs 目录固定在 `<root>/out/asset-store/…`，不看 `PROMPTCUT_EXPORT_DIR`。
