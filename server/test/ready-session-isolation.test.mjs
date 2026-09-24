@@ -91,7 +91,8 @@ test('旧批次晚到:轨道流的分段落盘时流已属于别的版本,不发
   // 生产者 `publish(state)` 的形状:按 state.entryKey 过闸
   assert.equal(p.ready.publish('E1', { clipId: 'h', kind: 'stream', key: 'S1', ranges: [[0, 3]] }), 0);
   assert.equal(p.ready.publish('E2', { clipId: 'h', kind: 'stream', key: 'S2', ranges: [[0, 1]] }), 1);
-  assert.deepEqual(page.seen.map(m => m.key), ['S2']);
+  assert.deepEqual(page.seen.filter(m => m.type === 'layer').map(m => m.key), ['S2']);
+  assert.deepEqual(page.seen.map(m => m.type), ['reset', 'layer'], 'E2 第一次写进来时才补上挂着的 reset,紧挨着新层');
 });
 
 /* ------------------------------------------------------------ 2. Agent / 导出混杂渲染 */
@@ -189,14 +190,14 @@ test('两个会话在同一版上:一次发布两边都收到;一边换走另一
   assert.equal(p.publishLayer(E, control('h', 'K'), 'shared', [[0, 3]]), 2);
   p.adoptSession('a', entryOf('F'), 2);
   assert.equal(p.publishLayer(E, control('h', 'K'), 'shared', [[0, 5]]), 1);
-  assert.deepEqual(a.layers(), []);
+  assert.deepEqual(a.layers()[0].ranges, [[0, 3]], 'a 换到 F(计划还没算出来):旧表先顶着,但 E 的新发布进不来');
   assert.deepEqual(b.layers()[0].ranges, [[0, 5]]);
 });
 
 test('同一会话的 preload 乱序完成:晚发出的那一版赢(领号),旧 localRev 也不认', async () => {
   const p = pipeline();
   const page = watch(p, 's');
-  const E1 = entryOf('E1'), E2 = entryOf('E2');
+  const E1 = entryOf('E1', [control('h', 'K1')]), E2 = entryOf('E2', [control('h', 'K2')]);
   // 第一个请求算 entry 慢(素材打戳),第二个快
   p.entry = async project => { await sleep(project.delay); return project.key === 'E1' ? E1 : E2; };
   const first = p.preload({ key: 'E1', delay: 40, duration: 1 }, { session: 's', localRev: 1 });
@@ -415,4 +416,22 @@ test('按新 costs 重算后集合缩了:会话里判轻那张卡的旧层撤掉
   page.seen.length = 0;
   p.adoptCardPlan(E, [planned('heavy', 'KH'), planned('light', 'KL')]);
   assert.deepEqual(page.seen, []);
+});
+
+test('换到计划还没算出来的新版本:旧表先顶着(闸门已经换过去),计划一到 reset 和补层紧挨着发', () => {
+  const p = pipeline();
+  p.ready.stageByKey({ kind: 'html', key: 'KB', ranges: [[0, 5]] });
+  const page = watch(p, 's');
+  const E1 = entryOf('E1', [control('h', 'KA')]);
+  p.adoptSession('s', E1, 1);
+  p.publishLayer(E1, control('h', 'KA'), 'shared', [[0, 9]]);
+  page.seen.length = 0;
+  const E2 = entryOf('E2');                                    // 刚编辑完,计划还没算
+  assert.equal(p.adoptSession('s', E2, 2), true);
+  assert.deepEqual(page.seen, [], '不清表');
+  assert.deepEqual(layerKeys(page.layers()), ['h:html:KA'], '旧层顶着');
+  assert.equal(p.publishLayer(E1, control('h', 'KA'), 'shared', [[0, 20]]), 0, '闸门已换:旧版本进不来');
+  assert.equal(p.ready.describe().find(r => r.session === 's').pendingReset, true);
+  p.adoptCardPlan(E2, [control('h', 'KB')]);                    // 后台那一趟算出了计划
+  assert.deepEqual(page.seen, [{ type: 'reset', localRev: 2 }, { type: 'layer', clipId: 'h', kind: 'html', key: 'KB', ranges: [[0, 5]] }]);
 });

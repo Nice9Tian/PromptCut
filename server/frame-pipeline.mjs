@@ -1235,7 +1235,8 @@ export class FramePipeline {
    */
   adoptSession(session, entry, localRev, ticket) {
     let changed = false;
-    try { changed = this.ready.adopt(session, entry.key, localRev, ticket); } catch { return false; }
+    // 这一版的计划还没算出来就先不清页面的表(`defer`):等后台那一趟算出计划、认领时再 reset + 补层
+    try { changed = this.ready.adopt(session, entry.key, localRev, ticket, { defer: !entry.cardPlan }); } catch { return false; }
     if (changed && entry.cardPlan) {
       this.claimSessions(entry);
       if (this._streams?.entryKey === entry.key) this._streams.republish();

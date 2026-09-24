@@ -31,7 +31,12 @@ import { mergeRanges } from './snapshot-store.mjs';
  * 扫盘只得到「键 → 区间」:目录名是剥掉 clipId 的共享键,而 `layer` 和页面的
  * `readyIndex` 都按 clipId 索引。所以重启后先把区间挂在键上(`stageByKey`),
  * 等 card plan 算出来(`control.clipId` ↔ `control.snapshotKey`)再反查、
- * 一次性 `reset` + 全量 `layer`。项目没到之前一条 `layer` 都不发。
+ * 全量 `layer`。项目没到之前一条 `layer` 都不发。
+ *
+ * # 按会话分片(Item 4)
+ *
+ * 预渲染进程里是 `createReadyHub`:每个页面会话一份索引,会话的当前版本只由页面的 preload 设定,
+ * 发层按 entry 过闸。见文件末尾 `createReadyHub` 的说明。
  */
 
 /** `snapshotTier()` → 线上的 `kind`;不产快照的档回 null */
@@ -244,7 +249,8 @@ export function createReadyHub({ now = () => Date.now(), idleMs = READY_SESSION_
     id = norm(id);
     let record = sessions.get(id);
     if (!record) {
-      record = { id, index: createReadyIndex({ staged }), entryKey: undefined, localRev: undefined, seenAt: now(), ticket: 0 };
+      record = { id, index: createReadyIndex({ staged }), entryKey: undefined, localRev: undefined, seenAt: now(), ticket: 0,
+        pendingReset: false, pendingRev: undefined };
       sessions.set(id, record);
       prune(id);
     }
@@ -298,19 +304,38 @@ export function createReadyHub({ now = () => Date.now(), idleMs = READY_SESSION_
    *
    * 过期的号(`ticket` 不是这个会话最新的那张)或更旧的 `localRev` 一律不认。
    */
-  function adopt(id, entryKey, localRev, ticket) {
+  function adopt(id, entryKey, localRev, ticket, { defer = false } = {}) {
     const record = session(id);
     record.seenAt = now();
     if (stale(id, ticket, localRev)) return false;
     const rev = localRev == null ? NaN : Number(localRev);
     if (Number.isFinite(rev)) record.localRev = rev;
     if (record.entryKey === entryKey) {
-      if (Number.isFinite(rev)) record.index.localRev = rev;
+      if (Number.isFinite(rev) && !record.pendingReset) record.index.localRev = rev;
+      if (Number.isFinite(rev) && record.pendingReset) record.pendingRev = rev;
       return false;
     }
+    // 闸门当场换到新版本:从这一刻起旧版本的发布一律进不来
     record.entryKey = entryKey;
-    record.index.reset(Number.isFinite(rev) ? rev : record.index.localRev);
+    const target = Number.isFinite(rev) ? rev : record.index.localRev;
+    if (defer) {
+      // 新版本的计划还没算出来,这时清表页面只会空等几秒(重卡一路退到占位符)。表先留着
+      // (「沿用旧的预渲染结果」),等这一版第一次往这个会话里写东西(认领 / 发层 / done)时再 reset,
+      // reset 和补回来的层是紧挨着的一串消息
+      record.pendingReset = true;
+      record.pendingRev = target;
+    } else {
+      record.pendingReset = false;
+      record.index.reset(target);
+    }
     return true;
+  }
+
+  /** 挂着的 reset 在这一版第一次写进会话之前补上 */
+  function flush(record) {
+    if (!record.pendingReset) return;
+    record.pendingReset = false;
+    record.index.reset(record.pendingRev ?? record.index.localRev);
   }
 
   function sessionsOn(entryKey) {
@@ -328,23 +353,29 @@ export function createReadyHub({ now = () => Date.now(), idleMs = READY_SESSION_
   function publish(entryKey, layer) {
     stageByKey(layer);
     let n = 0;
-    for (const record of sessionsOn(entryKey)) if (record.index.setLayer(layer)) n++;
+    for (const record of sessionsOn(entryKey)) { flush(record); if (record.index.setLayer(layer)) n++; }
     return n;
   }
 
   /** 当前版本是 `entryKey` 的会话都清一次表(版本没换、只是这一版要撤掉某些层时用),localRev 不变 */
   function resetOn(entryKey) {
-    for (const record of sessionsOn(entryKey)) record.index.reset(record.index.localRev);
+    for (const record of sessionsOn(entryKey)) {
+      if (record.pendingReset) { flush(record); continue; }
+      record.index.reset(record.index.localRev);
+    }
   }
 
   function markDone(entryKey) {
-    for (const record of sessionsOn(entryKey)) record.index.markDone();
+    for (const record of sessionsOn(entryKey)) { flush(record); record.index.markDone(); }
   }
 
-  /** card plan 到位:把挂着的区间认领进当前版本是 `entryKey` 的会话(不 reset,见 `absorb`) */
+  /**
+   * card plan 到位:把挂着的区间认领进当前版本是 `entryKey` 的会话。已经在这一版上的会话不 reset
+   * (见 `absorb`);刚换过来、reset 还挂着的会话先 reset 再补 —— 页面看到的是紧挨着的一串。
+   */
   function claim(entryKey, layers) {
     let n = 0;
-    for (const record of sessionsOn(entryKey)) n += record.index.absorb(layers);
+    for (const record of sessionsOn(entryKey)) { flush(record); n += record.index.absorb(layers); }
     return n;
   }
 
@@ -382,7 +413,7 @@ export function createReadyHub({ now = () => Date.now(), idleMs = READY_SESSION_
     sessionCount: () => sessions.size,
     stagedKeys: () => [...staged.values()].map(item => ({ ...item })),
     /** 诊断读口 */
-    describe: () => [...sessions.values()].map(r => ({ session: r.id, entryKey: r.entryKey ?? null, localRev: r.localRev ?? null,
+    describe: () => [...sessions.values()].map(r => ({ session: r.id, entryKey: r.entryKey ?? null, localRev: r.localRev ?? null, pendingReset: r.pendingReset,
       subscribers: r.index.subscriberCount(), layers: r.index.list().length, done: r.index.done, seenAt: r.seenAt })),
   };
 }

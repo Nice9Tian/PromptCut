@@ -170,8 +170,12 @@ test('R6-7:会话换一版项目时先让页面清表(reset),旧层不残留;同
 
   // 换一版项目(entry.key 是内容寻址的):再 reset 一次
   messages.length = 0;
-  pipeline.adoptSession('s', { key: 'E2', project: { fps: 30 } }, 5);
+  const entryB = { key: 'E2', project: { fps: 30 } };
+  pipeline.adoptSession('s', entryB, 5);
+  assert.deepEqual(messages.map(m => m.type), [], '计划还没算出来:先不清页面的表(沿用旧结果)');
+  pipeline.adoptCardPlan(entryB, []);
   assert.deepEqual(messages.map(m => m.type), ['reset']);
+  assert.equal(messages[0].localRev, 5);
   assert.deepEqual(pipeline.ready.peek('s').index.list(), [], '旧层不残留');
 });
 
