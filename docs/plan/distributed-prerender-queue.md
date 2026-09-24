@@ -194,7 +194,7 @@ t = tasks[id]
 否则：
   t.version += 1
   t.state = "claimed"
-  t.claim = { nodeId, token: t.version, claimedAt: now, leaseUntil: now + LEASE_MS, progress: null }
+  t.claim = { nodeId, token: t.version, claimedAt: now, leaseUntil: now + LEASE_MS, progress: { done: null, changedAt: now } }
   回 claimed { id, token, leaseUntil, input, requires, source }
   向其它 watch 者广播 task.taken { id, version }
 ```

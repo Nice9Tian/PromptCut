@@ -95,6 +95,13 @@ taskIdOf({ kind, resultKey, range })
 
 队列补的字段：`source.userId`、`source.tenantId`（来自发布连接的 `principal`，入站自报的丢弃）、`source.publisher = { id: publisherId }`、`source.publishedAt = now()`、`source.derivedFrom`（缺省 `null`）。
 
+**派生任务的继承**（设计第 3 节「细任务继承 `plan` 任务的 `userId`，不取切分节点的身份」）〔裁〕：新建任务时，若 `source.derivedFrom` 指向一个**现存的 `plan` 任务 P**，且 P 此刻是 `claimed`、认领者就是发布连接对应的节点（`P.claim.nodeId` 等于这条连接 `node.hello` 的 `nodeId`），则：
+
+- `source.userId`、`source.tenantId` 取 P 的，不取发布连接的 `principal`；
+- 订阅者 = {本发布方} ∪ P 此刻的订阅者（页面订阅了 `plan`，就能收到细任务的 `task.done`；切分节点断开也不会让细任务因为没人订阅而被删）。
+
+条件不满足（P 不存在、不是 `plan`、不在 `claimed`、认领者不是本节点）时不继承，按上一段取 `principal`，不报错。之后 P 的订阅者变化不再传给已建的细任务。已存在的同 `id` 任务按 A.7.1 处理，不重新继承。
+
 **任务视图 `TaskView`**（出站消息里的任务）：
 
 ```js
@@ -124,7 +131,7 @@ taskIdOf({ kind, resultKey, range })
 | `task.progress` | `id`、`token: int`、`done: number` | `task.renewed { id, token, leaseUntil }` |
 | `task.complete` | `id`、`token`、`result?: { ranges?: any }` | `task.completed { id }` |
 | `task.release` | `id`、`token`、`reason?: string` | `task.released { id }` |
-| `task.fail` | `id`、`token`、`error?: string`、`retryable?: boolean`（缺省 `true`） | `task.fail-ack { id, state }`（`state` 是处理后的状态：`open` 或 `failed`） |
+| `task.fail` | `id`、`token`、`error?: string`、`retryable?: boolean`（缺省 `true`） | `task.fail-ack { id, state }`（`state` 是处理后的状态：`open`、`failed`，或没有订阅者被删时的 `removed`） |
 
 - **格式错误**（缺必填字段、类型不对、`id` 与 `taskIdOf` 不符、`plan` 的 `resultKey` 与 `source` 不符、未知 `type`、消息不是对象）：回 `error { reqId, reason: 'bad-message', detail: string }`，**整条消息不生效**，状态不变（C6）。
 - **令牌不符**：`progress` / `complete` / `release` / `fail` 的 `id` 不存在，或任务不是 `claimed`，或 `token !== claim.token`，或发消息的节点不是当前认领者：回 `task.lease-lost { id, token, reason: 'token' }`，状态不变。
@@ -195,7 +202,7 @@ claim = null
 
 - `task.fail` 自己回 `task.fail-ack { id, state }`。
 - 回收时（A.8），若原认领者的连接还在，给它发 `task.lease-lost { id, token, reason: 'expired' }`；连接已断开就不发。
-- **没有订阅者**的任务经「放弃」回到 `open` 时，直接删除（发 `task.closed { id, state: 'removed' }` 代替 `task.opened`）〔裁〕：它不会再有人要，理由同 A.7.8。
+- **没有订阅者**的任务经「放弃」或「放回」（A.7.5）回到 `open` 时，直接删除（发 `task.closed { id, state: 'removed' }` 代替 `task.opened`）〔裁〕：它不会再有人要，理由同 A.8 第 3 项。这时 `task.fail-ack` 的 `state` 是 `'removed'`。
 
 ### A.8 `tick()` 的四项扫描（按此顺序）
 
@@ -240,6 +247,25 @@ claim = null
 ```
 
 `tasks` 按 `id` 升序；`subscribers` 升序。返回深拷贝，调用方改它不影响队列。
+
+### A.10a 定稿后的补充细则（2026-09-24，主 Agent 按实现方与测试方的疑点裁定）
+
+| 事项 | 定为 |
+|---|---|
+| `lastError` | 每次「放弃」（fail 与 A.8 各种回收）都写；`task.release` 不写。`task.fail` 没带 `error` 时记 `'failed'` |
+| `task.progress.done` | 接受数字或 `null`（缺省按 `null`） |
+| 被新连接取代的旧连接 | 此后再发节点 / 发布方消息，回 `error { reason: 'not-registered' }`；它的 watch 一并取消 |
+| 校验顺序 | 先格式（`bad-message`），后角色（`not-registered`） |
+| `reqId` 回显 | 只在主回包里带。附发的 `task.lease-lost`（hello 的 lost）、`task.done`（重复发布已完成的任务）不带。`reqId` 不是字符串也不是有限数时按 `bad-message` |
+| 缺省字段 | `input` → `{}`，`requires` → `{}`，`weight` → `null`，`priority` → `0`，`derivedFrom` → `null`。节点侧把 `weight === null` 当 `medium` |
+| `plan` 的 `range` | 必须为 `null` 或不给；给了非 null 算 `bad-message`。`nodeId`、`publisherId`、`resultKey`、`projectId` 必须是非空字符串 |
+| 发布时的 TTL | 已过 `DONE_TTL` 的 `done` / `failed` 任务，即使还没被 `tick` 删掉，发布时也当作不存在 |
+| `connect` 的 `principal` | `userId` 不是字符串就抛 `TypeError`；`tenantId` 不是字符串记 `null` |
+| `send` 抛异常 | 吞掉（状态已经改完） |
+| 没接续的认领 | 按 A.9 放弃，不给这个节点再发 `lease-lost`（节点自己已经不认它们） |
+| 令牌重号（已知限制） | 令牌取认领时的 `version`（设计 4.2）。任务过 TTL 被删、同 `id` 重建后 `version` 从 1 重来，令牌可能与旧的重号。别的节点靠 `nodeId` 核对挡住；同一节点的残留旧 worker 可能拿旧令牌完成新一轮认领，但结果按内容寻址，同 `id` 的产物一样。M1 不改，列入遗留 |
+| 本地档缺 `entryKey`（B.4） | 跳过这个 control，不生成任务 |
+| 没有 `streamKey` 的流（B.4） | 跳过 |
 
 ### A.11 出站消息汇总
 
