@@ -269,12 +269,24 @@ test('S2b snap / px 专用的 MIME 表认 text/html → html、video/iso.segment
     assert.equal(await one(ns, { 'X-Media-Ext': 'm4s' }), 'm4s', `${ns} 直接给扩展名`);
     assert.equal(await one(ns, {}), '', `${ns} 都没给`);
   }
-  // 契约第 10 节第 8 条：snap / px 只存候选扩展名（html、mp4、m4s），别的一律存成不带扩展名；media 不受影响
+  // 契约第 10 节第 8、10 条：snap / px 只存候选扩展名（html、mp4、m4s、专用 MIME 表里的全部扩展名、htm、m4v、jpeg），
+  // 不在表里的一律存成不带扩展名；media 不受影响
   for (const ns of ['snap', 'px']) {
     assert.equal(await one(ns, { 'X-Media-Ext': 'bin' }), '', `${ns} bin 不在候选表里`);
-    assert.equal(await one(ns, { 'X-Media-Ext': 'png' }), '', `${ns} png 不在候选表里`);
-    assert.equal(await one(ns, { 'X-Media-Type': 'image/png' }), '', `${ns} image/png 反查出 png，也不在候选表里`);
+    assert.equal(await one(ns, { 'X-Media-Ext': 'xyz' }), '', `${ns} xyz 不在候选表里`);
     assert.equal(await one(ns, { 'X-Media-Ext': 'html' }), 'html', `${ns} html 在候选表里`);
+    for (const ext of ['htm', 'm4v', 'jpeg']) assert.equal(await one(ns, { 'X-Media-Ext': ext }), ext, `${ns} ${ext} 在候选表里`);
+    // png 在专用 MIME 表里：存成 <hash>.png，按候选找得回来
+    const png = bytesOf(200, ++seed);
+    const ph = sha256(png);
+    assert.equal((await put(base, ns, ph, 0, png, { 'X-Media-Size': '200', 'X-Media-Ext': 'png' })).status, 200);
+    assert.equal((await complete(base, ns, ph)).status, 200);
+    assert.equal((await stores[ns].stat(ph))?.ext, 'png', `${ns} png 存成 <hash>.png`);
+    assert.equal((await chunks(base, ns, ph)).complete, true, `${ns} png 按候选算已入库`);
+    const back = await fetch(`${base}/${ns}/${ph}`);
+    assert.equal(back.status, 200, `${ns} png 取得回来`);
+    assert.ok(Buffer.from(await back.arrayBuffer()).equals(png), `${ns} png 字节一致`);
+    assert.equal(await one(ns, { 'X-Media-Type': 'image/png' }), 'png', `${ns} image/png 反查出 png，在候选表里`);
   }
   assert.equal(await one('media', { 'X-Media-Ext': 'png' }), 'png', 'media 照旧存 png');
   assert.equal(await one('media', { 'X-Media-Ext': 'bin' }), 'bin', 'media 照旧存 bin');
@@ -356,6 +368,17 @@ test('S2c 缺省的 snap、px 是 fs 实现，目录固定在 <root>/out/asset-s
     assert.equal(go.status, 200);
     assert.equal(go.headers.get('content-type'), 'application/octet-stream');
     assert.ok(Buffer.from(await go.arrayBuffer()).equals(odd));
+
+    // 第 10 条：png 在候选表里，存成 <hash>.png，按候选文件名找得回来
+    const pic = bytesOf(555, 45);
+    const hp = sha256(pic);
+    assert.equal((await put(base, 'snap', hp, 0, pic, { 'X-Media-Size': String(pic.length), 'X-Media-Ext': 'png' })).status, 200);
+    assert.equal((await complete(base, 'snap', hp)).status, 200);
+    assert.ok((await fsp.readFile(path.join(snapDir, `${hp}.png`))).equals(pic), 'png 存成 <root>/out/asset-store/snap/<hash>.png');
+    assert.equal((await chunks(base, 'snap', hp)).complete, true, '<hash>.png 按候选算已入库');
+    const gp = await fetch(`${base}/snap/${hp}`);
+    assert.equal(gp.status, 200);
+    assert.ok(Buffer.from(await gp.arrayBuffer()).equals(pic));
   } finally {
     if (before === undefined) delete process.env.PROMPTCUT_EXPORT_DIR; else process.env.PROMPTCUT_EXPORT_DIR = before;
     await fsp.rm(exportDir, { recursive: true, force: true });
