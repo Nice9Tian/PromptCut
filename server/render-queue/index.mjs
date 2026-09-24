@@ -4,4 +4,4 @@
  */
 export { createRenderQueue } from './queue.mjs';
 export { QUEUE_DEFAULTS, QUEUE_ENV } from './constants.mjs';
-export { taskIdOf } from './messages.mjs';
+export { taskIdOf, lockKeyOf } from './messages.mjs';

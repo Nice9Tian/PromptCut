@@ -8,11 +8,11 @@
  * handle / tick 都是同步的一步，执行中不让出事件循环，也不回调调用方（send 除外）：认领的「比对再加锁」
  * 靠的就是这一点（设计 4.2）。每一步先把状态改完，再往外发消息，发消息出错也不会留下改了一半的状态。
  *
- * 契约：`docs/plan/render-queue-contract.md` A 节。
+ * 契约：`docs/plan/render-queue-contract.md` A 节；卡片级指纹锁（锁表、card.lock、认领第 3a 步、接手）见 F.1。
  */
 import { randomUUID } from 'node:crypto';
 import { QUEUE_DEFAULTS } from './constants.mjs';
-import { makeMessage, parseInbound, NODE_TYPES, PUBLISHER_TYPES } from './messages.mjs';
+import { makeMessage, parseInbound, lockKeyOf, NODE_TYPES, PUBLISHER_TYPES } from './messages.mjs';
 
 function resolveConstants(overrides) {
   const out = { ...QUEUE_DEFAULTS };
@@ -49,6 +49,12 @@ export function createRenderQueue(options = {}) {
   const tasks = new Map();
   /** 每项目 open + claimed 的任务数，给 MAX_TASKS_PER_PROJECT 用；done / failed 不计（P10） */
   const activeByProject = new Map();
+  /**
+   * 卡片级指纹锁（F.1）：lockKey → { envFingerprint, source: 'claim' | 'lock' | 'takeover', since, touchedAt }。
+   * 同一把锁下只让一种环境的结果被产出、投递，页面贴的连续帧才不会混环境（设计 2.1「谁定指纹」）。
+   * 只在内存里，和任务表一样随 epoch 作废：新实例的锁从空开始。
+   */
+  const locks = new Map();
 
   /** 这一步的时刻：每个入口读一次时钟，同一步里的所有时间戳一致 */
   let at = 0;
@@ -182,6 +188,88 @@ export function createRenderQueue(options = {}) {
     out.notify();
   }
 
+  // ---------- 卡片级指纹锁（F.1） ----------
+
+  /** 任务的锁身份：锁键 + 锁指纹（`requires.envFingerprint`）。缺一样就不参与锁，也不受锁影响 */
+  function lockIdOf(task) {
+    const key = lockKeyOf(task);
+    const fp = task.requires ? task.requires.envFingerprint : undefined;
+    return key !== null && typeof fp === 'string' && fp !== '' ? { key, fp } : null;
+  }
+
+  function setLock(key, envFingerprint, source) {
+    locks.set(key, { envFingerprint, source, since: at, touchedAt: at });
+  }
+
+  /**
+   * 接手：锁转给 fp，原指纹还没做完（open / claimed）的任务一律作废，直接进 failed（lastError 'superseded'）。
+   * attempts 不加、不走重试：不是做不了，是这种环境的结果不再要了，重试只会再被锁挡回来。
+   * done 的不动：已经产出的结果按内容寻址，去留由 TTL 管。
+   * 先改完状态，返回的函数再往外发，调用方好把自己的回包排在前面。
+   */
+  function takeoverLock(key, fp) {
+    setLock(key, fp, 'takeover');
+    const superseded = [];
+    for (const task of tasks.values()) {
+      if (!isActive(task.state)) continue;
+      const id = lockIdOf(task);
+      if (!id || id.key !== key || id.fp === fp) continue;
+      const claim = task.claim;
+      transition(task, 'failed');
+      task.finishedAt = at;
+      task.lastError = 'superseded';
+      task.claim = null;
+      superseded.push({ task, claim });
+    }
+    return () => {
+      for (const { task, claim } of superseded) {
+        // 先告诉原认领者它的令牌作废了，再通知订阅者和 watch 者
+        if (claim && isLive(claim.conn)) emit(claim.conn, 'task.lease-lost', { id: task.id, token: claim.token, reason: 'superseded' });
+        notifySubscribers(task, 'task.failed', { id: task.id, error: 'superseded' });
+        broadcast(task, 'task.closed', { id: task.id, state: 'failed' });
+      }
+    };
+  }
+
+  /**
+   * 发布时，这个任务若是新建的，会不会被锁拒建（F.7 第 1 条）：有锁键和锁指纹、锁在别的指纹上、又没带
+   * takeover，返回锁上的指纹，否则 null。建出来也谁都认领不了，只会一直 open，页面永远等不到 task.done；
+   * 拒掉并回 lockedBy，切分方才知道要照锁定方的指纹重发或者明确接手。
+   */
+  function lockRefusal(input) {
+    if (input.takeover) return null;
+    const id = lockIdOf(input);
+    const lock = id ? locks.get(id.key) : undefined;
+    return lock && lock.envFingerprint !== id.fp ? lock.envFingerprint : null;
+  }
+
+  /**
+   * 发布时看锁（F.1「发布」表，F.7 第 2 条）。返回锁在别的指纹上、又没接手时的那个指纹（回包的 lockedBy），否则 null；
+   * 这种情况只剩已有同 id 任务的合并，新建的在 lockRefusal 那一步就拒了。
+   * 没锁又不接手时不建锁：谁先真正产出由第一次认领决定，只是发布了还不算。
+   */
+  function lockOnPublish(task, takeover, after) {
+    const id = lockIdOf(task);
+    if (!id) return null;
+    const lock = locks.get(id.key);
+    if (!lock) {
+      // 没锁时接手也照样作废异指纹的未完成任务（F.7 第 2 条）：两个节点几乎同时切分时，
+      // 先发布、还没人认领的那一方的任务不会被留成谁都认领不了的死任务
+      if (takeover) after.push(takeoverLock(id.key, id.fp));
+      return null;
+    }
+    if (lock.envFingerprint === id.fp) {
+      lock.touchedAt = at;
+      return null;
+    }
+    if (takeover) {
+      after.push(takeoverLock(id.key, id.fp));
+      return null;
+    }
+    // 已有的任务照常合并，只是锁变之前认领会被拒（card-locked）
+    return lock.envFingerprint;
+  }
+
   // ---------- 身份 ----------
 
   /** 这条连接不再代表它原来的节点：那个节点从此算断开，等宽限期 */
@@ -299,9 +387,17 @@ export function createRenderQueue(options = {}) {
       let task = tasks.get(input.id);
       // 过了 TTL 的 done / failed 就当已经不存在，不必等下一次 tick 才能重新发布（C1）
       if (task && ttlPassed(task)) { removeTask(task); task = undefined; }
+      let result;
       if (!task) {
         if ((activeByProject.get(input.source.projectId) ?? 0) >= C.MAX_TASKS_PER_PROJECT) {
+          // 没建成任务，锁也不动：带 takeover 时若照样接手，旧指纹的任务作废了却没有新任务顶上
           results.push({ id: input.id, error: 'limit' });
+          continue;
+        }
+        // 被别的环境锁定的卡不建（F.7 第 1 条），和 limit 一样只影响这一项
+        const lockedBy = lockRefusal(input);
+        if (lockedBy !== null) {
+          results.push({ id: input.id, error: 'card-locked', lockedBy });
           continue;
         }
         // 用户与租户只认连接凭证，发布方自报的在校验时已经丢掉（A.4、P7）；
@@ -323,44 +419,52 @@ export function createRenderQueue(options = {}) {
         };
         tasks.set(task.id, task);
         countActive(task.source.projectId, 1);
-        results.push({ id: task.id, state: 'open', version: 1, created: true });
+        result = { id: task.id, state: 'open', version: 1, created: true };
         const t = task;
         const view = viewOf(t);
         after.push(() => broadcast(t, 'task.opened', { task: view }));
-        continue;
+      } else {
+        result = mergeExisting(conn, task, input, after);
       }
-      if (isActive(task.state)) {
-        task.subscribers.add(publisherId);
-      } else if (task.state === 'done') {
-        const fields = doneFields(task);
-        after.push(() => emit(conn, 'task.done', fields));
-      }
-      // failed（未过 TTL）：不重新打开，只在回包里说明（C1）
-
-      // 已存在的任务同样并入 plan 的订阅者（A.4 末段，M3 裁定）：共享档的结果键与项目无关，
-      // 这一版切出的细任务常常是上一版或别的项目建的，不并进来页面就收不到它们的结果。
-      // 身份不改；已经做完 / 已经失败的，只给新并入的订阅者各补一条通知。
-      const parent = planParentOf(conn, input.source.derivedFrom);
-      if (parent) {
-        const joined = [...parent.subscribers].filter((id) => !task.subscribers.has(id));
-        for (const id of joined) task.subscribers.add(id);
-        if (task.state === 'done' || task.state === 'failed') {
-          const t = task;
-          const type = t.state === 'done' ? 'task.done' : 'task.failed';
-          const fields = t.state === 'done' ? doneFields(t) : { id: t.id, error: t.lastError };
-          after.push(() => {
-            for (const id of joined) {
-              const pub = publishers.get(id);
-              // 本连接已经按 A.7.1 收过一条 task.done，不重复发
-              if (pub && pub.conn && !(type === 'task.done' && pub.conn === conn)) emit(pub.conn, type, fields);
-            }
-          });
-        }
-      }
-      results.push({ id: task.id, state: task.state, version: task.version, created: false });
+      // 原有处理之后再看锁（F.1）；锁身份取表里的任务，和认领第 3a 步查的是同一份
+      const lockedBy = lockOnPublish(task, input.takeover, after);
+      if (lockedBy !== null) result.lockedBy = lockedBy;
+      results.push(result);
     }
     emit(conn, 'task.published', { results }, reqId);
     for (const fn of after) fn();
+  }
+
+  /** 发布时已有同 id 的任务（A.7.1 表的后三行，以及 A.4 末段的继承并入）；返回这一项的回包 */
+  function mergeExisting(conn, task, input, after) {
+    if (isActive(task.state)) {
+      task.subscribers.add(conn.publisherId);
+    } else if (task.state === 'done') {
+      const fields = doneFields(task);
+      after.push(() => emit(conn, 'task.done', fields));
+    }
+    // failed（未过 TTL）：不重新打开，只在回包里说明（C1）
+
+    // 已存在的任务同样并入 plan 的订阅者（A.4 末段，M3 裁定）：共享档的结果键与项目无关，
+    // 这一版切出的细任务常常是上一版或别的项目建的，不并进来页面就收不到它们的结果。
+    // 身份不改；已经做完 / 已经失败的，只给新并入的订阅者各补一条通知。
+    const parent = planParentOf(conn, input.source.derivedFrom);
+    if (parent) {
+      const joined = [...parent.subscribers].filter((id) => !task.subscribers.has(id));
+      for (const id of joined) task.subscribers.add(id);
+      if (task.state === 'done' || task.state === 'failed') {
+        const type = task.state === 'done' ? 'task.done' : 'task.failed';
+        const fields = task.state === 'done' ? doneFields(task) : { id: task.id, error: task.lastError };
+        after.push(() => {
+          for (const id of joined) {
+            const pub = publishers.get(id);
+            // 本连接已经按 A.7.1 收过一条 task.done，不重复发
+            if (pub && pub.conn && !(type === 'task.done' && pub.conn === conn)) emit(pub.conn, type, fields);
+          }
+        });
+      }
+    }
+    return { id: task.id, state: task.state, version: task.version, created: false };
   }
 
   function onUnsubscribe(conn, body, reqId) {
@@ -400,8 +504,22 @@ export function createRenderQueue(options = {}) {
     if (task.state !== 'open') {
       return emit(conn, 'task.claim-rejected', { id, reason: 'taken', state: task.state, version: task.version }, reqId);
     }
+    // 3a（F.1）：这张卡的这种结果已被别的环境锁定，本任务的指纹产出的帧不能混进去。
+    // 放在 stale 之前：锁不变，节点拿新版本号重试也没用，早点让它丢掉这个候选
+    const lockId = lockIdOf(task);
+    const lock = lockId ? locks.get(lockId.key) : undefined;
+    if (lock && lock.envFingerprint !== lockId.fp) {
+      return emit(conn, 'task.claim-rejected', {
+        id, reason: 'card-locked', state: 'open', version: task.version, lockedBy: lock.envFingerprint,
+      }, reqId);
+    }
     if (expectVersion !== task.version) {
       return emit(conn, 'task.claim-rejected', { id, reason: 'stale', state: 'open', version: task.version }, reqId);
+    }
+    // 第一次认领就是第一次真正开始产出：没锁就在这里用任务的指纹锁定（设计 2.1「谁定指纹」）
+    if (lockId) {
+      if (lock) lock.touchedAt = at;
+      else setLock(lockId.key, lockId.fp, 'claim');
     }
     transition(task, 'claimed');
     task.claim = {
@@ -442,6 +560,10 @@ export function createRenderQueue(options = {}) {
     task.claim = null;
     task.finishedAt = at;
     task.result = body.result;
+    // 锁还有人在产出：刷新 touchedAt，tick 的第 5 项扫描不回收它
+    const lockId = lockIdOf(task);
+    const lock = lockId ? locks.get(lockId.key) : undefined;
+    if (lock) lock.touchedAt = at;
     emit(conn, 'task.completed', { id: task.id }, reqId);
     // 没有订阅者时一条 task.done 也不发（F7.2）
     notifySubscribers(task, 'task.done', doneFields(task));
@@ -470,12 +592,30 @@ export function createRenderQueue(options = {}) {
     out.notify();
   }
 
+  /**
+   * `card.lock`（F.1）：发布方（页面测量帧入库的那一方）直接申请或接手一把锁，不经任务。
+   * 同一把锁下只有一种环境的结果被投递，所以没带 takeover 的异指纹申请只回「没得到」、锁不变。
+   */
+  function onCardLock(conn, body, reqId) {
+    const key = lockKeyOf({ kind: body.kind, input: { contentKey: body.contentKey } });
+    const fp = body.envFingerprint;
+    const lock = locks.get(key);
+    let notify = null;
+    if (!lock) setLock(key, fp, 'lock');
+    else if (lock.envFingerprint === fp) lock.touchedAt = at;
+    else if (body.takeover) notify = takeoverLock(key, fp);
+    const held = locks.get(key).envFingerprint;
+    emit(conn, 'card.locked', { lockKey: key, envFingerprint: held, granted: held === fp }, reqId);
+    if (notify) notify();
+  }
+
   const HANDLERS = new Map([
     ['node.hello', onNodeHello],
     ['publisher.hello', onPublisherHello],
     ['queue.watch', onWatch],
     ['task.publish', onPublish],
     ['task.unsubscribe', onUnsubscribe],
+    ['card.lock', onCardLock],
     ['task.claim', onClaim],
     ['task.progress', onProgress],
     ['task.complete', onComplete],
@@ -526,7 +666,10 @@ export function createRenderQueue(options = {}) {
     HANDLERS.get(type)(conn, body, reqId);
   }
 
-  /** 时钟推进后调用：租约、停滞、宽限、TTL 四项扫描，按此顺序，比较一律严格大于（A.8） */
+  /**
+   * 时钟推进后调用：租约、停滞、宽限、TTL 四项扫描，按此顺序，比较一律严格大于（A.8）；
+   * 之后是第 5 项，回收没人用的卡片级指纹锁（F.1）。
+   */
   function tick() {
     at = now();
     const alive = (task) => tasks.get(task.id) === task;
@@ -562,6 +705,18 @@ export function createRenderQueue(options = {}) {
     for (const task of [...tasks.values()]) {
       if (ttlPassed(task)) removeTask(task);   // C1：done / failed 留 DONE_TTL，删除不发消息
     }
+    // 第 5 项（F.1）：锁没有任务再引用、且闲置超过 DONE_TTL 才删。排在 TTL 之后，刚过期删掉的任务不再算引用。
+    // 比较和前四项一样用严格大于（F.7 第 3 条）
+    if (locks.size > 0) {
+      const referenced = new Set();
+      for (const task of tasks.values()) {
+        const key = lockKeyOf(task);
+        if (key !== null) referenced.add(key);
+      }
+      for (const [key, lock] of locks) {
+        if (!referenced.has(key) && at - lock.touchedAt > C.DONE_TTL) locks.delete(key);
+      }
+    }
   }
 
   function describe() {
@@ -583,6 +738,9 @@ export function createRenderQueue(options = {}) {
       })),
       publishers: [...publishers.values()].sort((a, b) => byId(a.publisherId, b.publisherId)).map((p) => ({
         publisherId: p.publisherId, connected: p.conn !== null, disconnectedAt: p.disconnectedAt,
+      })),
+      locks: [...locks.entries()].sort((a, b) => byId(a[0], b[0])).map(([lockKey, l]) => ({
+        lockKey, envFingerprint: l.envFingerprint, source: l.source, since: l.since, touchedAt: l.touchedAt,
       })),
     };
     return structuredClone(out);
