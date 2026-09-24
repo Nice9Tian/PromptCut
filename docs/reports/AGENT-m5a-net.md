@@ -108,10 +108,26 @@
 8. **`close()` 与 `onClose`**：`close()` 立即把 `connected` 置为 `false`，此后 `send` 一律丢弃。`onClose` 等 socket 真正关上时才调（`{ code: 1000, reason: 'closed' }`），这一次也计入 `closes`。
 9. **计划和契约不一致**：主执行计划第 7 节 M5a 的 net 行写着「`local-node.mjs` 里只加『传输可换』的注入点」和「`epoch` 变了就清本地认领、让发布方重发」，契约 G.7 与任务书则明确不改 `local-node.mjs`。我按契约办：注入点 D.2 的 `endpoint` 已经有了；换 epoch 后清本地认领由会话按 `welcome.lost` 完成（C 段已验证）；让发布方重发是发布方（探针、页面）自己的事。
 
+## 返工：T7 的 `onClose` reason（主会话 2026-09-25 转来）
+
+- **问题**：集成分支上 `server/test/render-node-ws.test.mjs` 的 T7「close() 之后不再重连……」失败，实际 `{ code: 1000, reason: '' }`，期望 `{ code: 1000, reason: 'closed' }`（契约 G.11 最后一条）。对真文档服务时，服务端回的关闭帧 reason 是空串，`ws-transport.mjs` 把底层 close 事件的 reason 原样透传了出去。我的假 `WebSocket` 自测按本端给的 reason 回显，所以没暴露这个问题。
+- **修法**：本端 `close()` 发起的关闭（`closed === true`），`onClose` 一律报 `{ code: 1000, reason: 'closed' }`；其余断开照旧透传底层的 code 和 reason。
+- **验证**：从 `claude/rq-m5a-tests` 取来 `server/test/render-node-ws.test.mjs` 和 `fake-ws-kit.mjs`（git blob 哈希与分支上的一致）。本分支的文档服务还是旧版，所以另从 `claude/rq-m5a` 临时拿来 `server/docservice/` 下 8 个文件，放在工作区里、不提交。
+  - 修复前单跑 `node --test --test-name-pattern="^T7 close" server/test/render-node-ws.test.mjs`：失败，`actual: { code: 1000, reason: '' }`，问题复现；
+  - 修复后跑整个文件 `node --test server/test/render-node-ws.test.mjs`：退出码 0，15/15 通过（T1～T9 全部）；
+  - scratch 单元自测 `net-unit.test.mjs` 仍是 9/9 通过；
+  - 跑完后借来的文档服务文件和两个测试文件都已还原或删除，没有提交。基线在还原后的分支状态上跑，结果见下表。
+
+| 项 | 命令 | 结果 |
+|---|---|---|
+| 类型检查 | `npx tsc -b --force` | 退出码 0，零错误 |
+| 全量测试 | `npm test` | 退出码 0；tests 2197，pass 2196，fail 0，skipped 1（需要 5190 的「集成:/api/cards/layout 对真实项目返回整数框」） |
+
 ## 提交
 
 | 提交 | 内容 |
 |---|---|
 | `2182836` | 文档：建报告 |
 | `ae7736f` | 节点：`ws-transport.mjs`、`endpoint.mjs`、`index.mjs` |
-| （本次） | 文档：报告写入自测与基线结果 |
+| `dc03046` | 文档：报告写入自测与基线结果 |
+| （本次） | 节点：本端 `close()` 的 `onClose` 固定报 `{ code: 1000, reason: 'closed' }`；报告记返工 |

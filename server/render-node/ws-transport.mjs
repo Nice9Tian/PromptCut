@@ -177,8 +177,10 @@ export function createWsEndpoint({
       if (ended) return;
       ended = true;
       if (ws === socket) ws = null;
-      const code = typeof event?.code === 'number' ? event.code : 1006;
-      const reason = typeof event?.reason === 'string' ? event.reason : '';
+      // 本端 close() 发起的关闭一律报 { code: 1000, reason: 'closed' }（契约 G.11）：
+      // 对端回的关闭帧里 reason 可能是空串，不透传；其余断开照旧透传底层的 code 和 reason
+      const code = closed ? 1000 : typeof event?.code === 'number' ? event.code : 1006;
+      const reason = closed ? 'closed' : typeof event?.reason === 'string' ? event.reason : '';
       if (opened) {
         connected = false;
         counters.closes++;
