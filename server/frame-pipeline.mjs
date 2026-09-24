@@ -1052,7 +1052,9 @@ export class FramePipeline {
     if (!store || target?.tier !== 'shared' || !target.contentKey || !target.envFingerprint) return true;
     let granted = true;
     try { granted = store.acquire(target.contentKey, target.envFingerprint, 'prerender').granted; } catch { return true; }
-    if (!granted) this.reapplyCardLocks(entry, controls);
+    // 得不到:按锁库重排。刚建了锁:把 `cardLock` 记到 control 上(诊断看得见),键不变
+    const unmarked = list => Array.isArray(list) && list.some(control => control?.contentKey === target.contentKey && !control.cardLock);
+    if (!granted || unmarked(entry?.cardPlan) || unmarked(controls)) this.reapplyCardLocks(entry, controls);
     return granted;
   }
   /**
