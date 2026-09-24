@@ -87,7 +87,15 @@ export async function startStandalone({ modules, path = '/', authenticate = auth
   const connect = async (user) => {
     const c = wsClient(url(user));
     clients.push(c);
-    await c.opened;
+    let why = '';
+    c.ws.addEventListener('error', (e) => { why += ` error=${e?.message ?? e?.error?.message ?? ''} cause=${e?.error?.cause?.code ?? e?.error?.cause?.message ?? ''}`; });
+    c.ws.addEventListener('close', (e) => { why += ` close=${e.code}/${e.reason}`; });
+    try {
+      await c.opened;
+    } catch (err) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      throw new Error(`${err.message}：${url(user)}${why}`);
+    }
     return c;
   };
   const health = async () => (await fetch(`http://127.0.0.1:${port}/healthz`)).json();

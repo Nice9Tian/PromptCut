@@ -48,6 +48,14 @@ test('P1 project.open 没见过的项目：projectRev 0、digest null、at null�
   );
   const h = await env.health();
   assert.ok(Array.isArray(h.modules) && h.modules.includes('project'), `/healthz.modules 要含 project：${JSON.stringify(h.modules)}`);
+
+  // 契约第 10 节第 5 条：不往 /healthz 加字段，只提供 describe()
+  const bare = await startStandalone({ modules: [] });
+  t.after(bare.cleanup);
+  assert.deepEqual(Object.keys(h).sort(), Object.keys(await bare.health()).sort(), '挂上项目模块后 /healthz 的字段集不变');
+  const d = env.service.describe();
+  assert.ok(Object.hasOwn(d.modules, 'project'), 'describe().modules 里有 project');
+  assert.notEqual(d.modules.project, null, '项目模块提供 describe()');
 });
 
 // ------------------------------------------------------------------ P2
@@ -74,6 +82,10 @@ test('P2 announce 新摘要：projectRev 加一；只有订阅了这个项目的
   const pick = (m) => ({ type: m.type, projectId: m.projectId, projectRev: m.projectRev, digest: m.digest, actor: m.actor, at: m.at });
   assert.deepEqual(pick(await b.next(byType('project.rev'))), expected, '同项目的另一个订阅者收到 project.rev');
   assert.deepEqual(pick(await a.next(byType('project.rev'))), expected, '发起方自己也在订阅者之列');
+  // 契约第 10 节第 2 条：同一条请求先回包、后广播
+  const iAck = a.all.findIndex((m) => m.type === 'project.announced');
+  const iRev = a.all.findIndex((m) => m.type === 'project.rev');
+  assert.ok(iAck >= 0 && iRev > iAck, `project.announced 先于 project.rev：announced@${iAck}、rev@${iRev}`);
   assert.deepEqual(await revs(other), [], '别的项目的订阅者 0 条');
   assert.deepEqual(await revs(idle), [], '没 open 的连接 0 条');
   assert.equal(idle.all.filter(byType('project.announced')).length, 0, '不向发起方以外的连接回 project.announced');
@@ -150,6 +162,10 @@ test('P4 文件存储：服务关掉后在同一目录新建，projectRev 与 di
   // 合法的 projectId 可以含 ':'（契约第 1 节的正则）；文件名怎么映射由实现决定，这里只要求能恢复
   assert.equal((await announce(a, { projectId: 'scene:p4', digest: dg('c1') })).projectRev, 1);
   assert.equal((await announce(a, { projectId: 'scene:p4', digest: dg('c2') })).projectRev, 2);
+  // 只差大小写的两个项目（契约第 10 节第 9 条：Windows 上可能落到同一个文件，回放按 projectId 过滤）
+  assert.equal((await announce(a, { projectId: 'CaseP4', digest: dg('U1') })).projectRev, 1);
+  assert.equal((await announce(a, { projectId: 'casep4', digest: dg('l1') })).projectRev, 1);
+  assert.equal((await announce(a, { projectId: 'casep4', digest: dg('l2') })).projectRev, 2);
   await env1.cleanup();
 
   clock.t = T0 + 100;
@@ -161,6 +177,9 @@ test('P4 文件存储：服务关掉后在同一目录新建，projectRev 与 di
   assert.equal((await open(b, 'p4-other')).projectRev, 1, '各项目各自恢复');
   const colon = await open(b, 'scene:p4');
   assert.deepEqual({ projectRev: colon.projectRev, digest: colon.digest }, { projectRev: 2, digest: dg('c2') }, '含冒号的 projectId 也能恢复');
+  const upper = await open(b, 'CaseP4');
+  const lower = await open(b, 'casep4');
+  assert.deepEqual([upper.projectRev, upper.digest, lower.projectRev, lower.digest], [1, dg('U1'), 2, dg('l2')], '只差大小写的项目各自恢复');
 
   const same = await announce(b, { projectId: 'p4', digest: dg(3) });
   assert.deepEqual({ projectRev: same.projectRev, changed: same.changed }, { projectRev: 3, changed: false }, '恢复出的摘要参与比较');
