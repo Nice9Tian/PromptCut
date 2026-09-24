@@ -277,6 +277,8 @@ test('C5 drained 按顺序排空，排到 buffered 又满为止；队列非空�
   h.setBuffered('c1', 0);
   router.drained('c1');
   assert.deepEqual(idx(), [0, 1, 2], `写到 buffered >= highWater（${hw}）为止：3 × ${L} 字节`);
+  router.drained('c1');   // 底层可能重复发 drain（H.7 第 4 条）：buffered 仍满，什么也不写
+  assert.deepEqual(idx(), [0, 1, 2], '重复的 drained 不多写、不乱序');
 
   // 底层又排空，但先来一条新消息：队列非空，它必须排在 3、4、5 后面
   h.setBuffered('c1', 0);
@@ -287,7 +289,9 @@ test('C5 drained 按顺序排空，排到 buffered 又满为止；队列非空�
   assert.deepEqual(idx(), [0, 1, 2, 3, 4, 5]);
   h.setBuffered('c1', 0);
   router.drained('c1');
-  assert.deepEqual(idx(), [0, 1, 2, 3, 4, 5, 6], '全部按发送顺序写出');
+  router.drained('c1');   // 连调两次：第二次队已空
+  assert.deepEqual(idx(), [0, 1, 2, 3, 4, 5, 6], '全部按发送顺序写出，重复的 drained 不改变顺序与内容');
+  assert.deepEqual(h.msgs('c1').map((m) => m.pad), Array(7).fill(seqMsg(0).pad));
 
   // 队空时 drained 什么也不做；之后恢复直接写
   h.setBuffered('c1', 0);

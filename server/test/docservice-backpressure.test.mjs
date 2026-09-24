@@ -383,7 +383,7 @@ test('I3 一条连接停止读取、其余 199 个正常：正常节点 p95 < 50
 
 // ------------------------------------------------------------------ I4
 
-/** 按契约 H.3 从队列的 describe() 与已知的发布内容算期望的摘要 projects */
+/** 按契约 H.3、H.7 从队列的 describe() 与已知的发布内容算期望的摘要 projects：只列 open 或 claimed 大于 0 的项目 */
 function expectedSummary(service, meta) {
   const d = service.describe().modules['render-queue'];
   const by = new Map();
