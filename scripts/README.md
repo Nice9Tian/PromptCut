@@ -53,6 +53,7 @@ node scripts/export-frames.mjs --url "http://127.0.0.1:5197/?export=1" --frames 
 | `replay-frames.mjs --cache <out>/dom --out <dir> [--frames a-b] [--shuffle]` | 从 HTML 采样缓存乱序重截,不需要从第 0 帧顺推 |
 | `font-audit.mjs` | 查每个文本节点实际用到的字体,落进系统回退(白名单以外)就报出来 |
 | `card-audit.mjs` | 逐张卡查位置无关、确定性、DOM 结构稳定、挂载时的网络请求、画面载体 |
+| `prune-prerender-cache.mjs [--apply] [--root <帧库>] [--before <时刻>]` | 清掉帧库里 M4 换键之后不再被引用的旧缓存目录(快照、PNG、流、轨道前缀、整场景缓存),按「目录里最新的文件早于分界」判旧;缺省只列出,加 `--apply` 才删 |
 | `archive/export-frames-virtual-time.mjs` | 旧后端,只留作对账 |
 | `diaglog.py <报告> overview\|anomalies\|pages\|page N\|show I\|find RE\|env\|split` | 读「对话诊断」报告(一两 MB 的单个 JSON):总表、异常归类、按页读、拆成小文件;也能 `from diaglog import load` 当对象用。`py -3` 跑,用法见文件头 |
 
