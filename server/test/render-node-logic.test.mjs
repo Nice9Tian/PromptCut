@@ -302,6 +302,15 @@ test('B.2 规则 4：缺 weight 按 medium 计', () => {
   rejected(checkClaimable(other, nodeOf({ profile: 'pc', editing: true, ownProjectIds: ['p1'] })), 4, 'pc 编辑中按 medium 不收');
 });
 
+test('B.2 规则 4：weight 为 null 按 medium 计（A.10a：队列对缺省 weight 存 null）', () => {
+  const nul = { ...taskView(), weight: null };
+  accepted(checkClaimable(nul, nodeOf({ profile: 'browser' })), 'browser 收 medium');
+  accepted(checkClaimable(nul, nodeOf({ profile: 'pc', editing: true, ownProjectIds: ['p1'] })), 'pc 编辑中自己项目');
+  const other = { ...taskView({ source: { projectId: 'p9' } }), weight: null };
+  rejected(checkClaimable(other, nodeOf({ profile: 'pc', editing: true, ownProjectIds: ['p1'] })), 4, 'pc 编辑中别的项目按 medium 不收');
+  assert.deepEqual(filterClaimable([nul], nodeOf({ profile: 'browser' })).length, 1);
+});
+
 test('B.2 规则 4：weightPolicy 可由节点覆盖（browser 只收 light）', () => {
   const policy = { ...DEFAULT_WEIGHT_POLICY, browser: ['light'] };
   const browser = nodeOf({ profile: 'browser', weightPolicy: policy });
@@ -564,6 +573,24 @@ test('B.4 splitPlan：无 snapshotKey、无 clipId、档位 none 的 control 跳
   const noneDerived = control({ clipId: 'none2', snapshotKey: 'sk-none2', capabilities: { frameMode: 'stateless', compositing: 'independent' }, count: 10, withTier: false });
   const out = splitPlan(baseArgs({ cardPlan: [noKey, noClip, none, ok, noneDerived] }));
   assert.deepEqual(out.map(t => t.input.clipId), ['ok']);
+});
+
+test('B.4 splitPlan：本地档缺 entryKey 时跳过该 control，共享档不受影响（A.10a）', () => {
+  const shared = control({ clipId: 'a', snapshotKey: 'ska', tier: 'shared', capabilities: SHARED_CAPS, compositing: 'independent', count: 10 });
+  const local = control({ clipId: 'b', snapshotKey: 'skb', tier: 'local', capabilities: LOCAL_CAPS, compositing: 'belowDependent', count: 10 });
+  for (const entryKey of [undefined, null]) {
+    const out = splitPlan(baseArgs({ cardPlan: [local, shared], entryKey }));
+    assert.deepEqual(out.map(t => [t.tier, t.input.clipId]), [['shared', 'a']], `entryKey=${entryKey}`);
+    assert.equal(out[0].input.entryKey, null);
+  }
+});
+
+test('B.4 splitPlan：没有 streamKey 的流跳过（A.10a）', () => {
+  const streams = [
+    { topClipId: 'no-key', firstSegment: 0, lastSegment: 7 },
+    { streamKey: 's', topClipId: 'top', firstSegment: 0, lastSegment: 7 },
+  ];
+  assert.deepEqual(splitPlan(baseArgs({ streams })).map(t => t.input.clipId), ['top']);
 });
 
 test('B.4 splitPlan：prerenderSet 给了就只切其中的片段；undefined 不过滤；空集合全跳过', () => {
