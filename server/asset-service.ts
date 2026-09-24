@@ -9,6 +9,18 @@
  * 只经下面的 HTTP API 取字节(地址怎么定见 `asset-client.ts`)。
  * 远程素材服务(局域网 NAS、公网云端)不在本仓库,但必须实现同一份契约,客户端只换基址。
  *
+ * # 命名空间(C6.2,`docs/plan/artifact-transfer-contract.md` 第 1 节)
+ *
+ * 路由是 `/api/asset/<ns>/<hash>…`,`<ns>` ∈ `media` | `snap` | `px`,三个命名空间各一个 `BlobStore`,互不可见:
+ * - `media`:素材,就是下面第 5 步写的这一套,行为不变;老路由 `/@media/*` 只对应它。
+ * - `snap`:HTML 快照块;`px`:像素产物(本阶段是轨道流的 init `.mp4` 与分段 `.m4s`)。
+ *   缺省是 fs 实现,目录 `<root>/out/asset-store/snap`、`<root>/out/asset-store/px`;
+ *   不写媒体索引,只按 `<hash>[.<ext>]` 找文件。
+ * 子路由、状态码、回包、分片规则、跨源头、写入鉴权三个命名空间相同,下文写 `media/` 的地方换成 `<ns>/` 即可。
+ * 两处按命名空间区分:收尾回包的 `url`,`media` 是 `/@media/<hash>`,另两个是 `/api/asset/<ns>/<hash>`;
+ * `X-Media-Type` 反查扩展名时,`text/html → html`、`video/iso.segment → m4s` 只对 `snap` / `px` 生效,
+ * `media` 的反查表不动。
+ *
  * # API 契约(第 5 步)
  *
  * 基址 `<origin>/api/asset`;下面的路径都相对基址。本地素材服务的老读路由 `/@media/<hash>`
@@ -85,6 +97,7 @@ import type { Connect } from "vite";
 import type { IncomingMessage, ServerResponse } from "http";
 import type { Readable } from "stream";
 import crypto from "crypto";
+import path from "path";
 import { apiPath, isAssetServicePath, clientAddressOf, isLoopbackAddress } from "./http-guard.mjs";
 import { createBlobStore } from "./asset-store/index.mjs";
 import {
@@ -117,12 +130,25 @@ const MIME_TO_EXT: Record<string, string> = {
   "image/svg+xml": "svg",
 };
 
+/**
+ * 产物命名空间(`snap`、`px`)多认的 MIME。只加给这两个命名空间:`media` 的反查结果一个字节都不许变
+ * (比如 `media` 收到 `X-Media-Type: text/html` 仍然是无扩展名)。
+ */
+const ARTIFACT_MIME_TO_EXT: Record<string, string> = {
+  ...MIME_TO_EXT,
+  "text/html": "html", "video/iso.segment": "m4s",
+};
+
+/** 素材服务的命名空间(契约 `artifact-transfer-contract.md` 第 1 节) */
+export const ASSET_NAMESPACES = ["media", "snap", "px"] as const;
+export type AssetNamespace = typeof ASSET_NAMESPACES[number];
+
 /** 请求头里的扩展名:X-Media-Ext 优先,其次按 X-Media-Type 反查。取不出给空串 */
-function extFromHeaders(req: IncomingMessage): string {
+function extFromHeaders(req: IncomingMessage, ns: AssetNamespace = "media"): string {
   const raw = String(req.headers["x-media-ext"] || "").trim().toLowerCase().replace(/^\./, "");
   if (/^[a-z0-9]{1,8}$/.test(raw)) return raw;
   const mime = String(req.headers["x-media-type"] || "").split(";")[0].trim().toLowerCase();
-  return MIME_TO_EXT[mime] || "";
+  return (ns === "media" ? MIME_TO_EXT : ARTIFACT_MIME_TO_EXT)[mime] || "";
 }
 
 /* ------------------------------------------------------------------ *
@@ -168,6 +194,31 @@ export function defaultAssetStore(root: string): AssetBlobStore {
   }) as AssetBlobStore;
 }
 
+/** 产物命名空间的 Content-Type:快照是 HTML,init 是 mp4,分段是 m4s;其余照素材的表 */
+function artifactContentType(ext: string): string {
+  const e = String(ext || "").toLowerCase().replace(/^\./, "");
+  if (e === "html" || e === "htm") return "text/html; charset=utf-8";
+  if (e === "m4s") return "video/iso.segment";
+  return contentTypeForExt(e);
+}
+
+/** 产物命名空间的 fs 目录:`<root>/out/asset-store/<ns>`(契约第 1 节) */
+export function artifactStoreDir(root: string, ns: "snap" | "px"): string {
+  return path.resolve(root, "out", "asset-store", ns);
+}
+
+/**
+ * 产物命名空间(`snap` / `px`)缺省的数据层:fs 实现。钩子不写媒体索引 ——
+ * 找文件用 fs 实现自带的「`<hash>` 或 `<hash>.<ext>`」,入库后什么都不做。
+ */
+export function defaultArtifactStore(root: string, ns: "snap" | "px"): AssetBlobStore {
+  return createBlobStore({
+    kind: "fs",
+    dir: artifactStoreDir(root, ns),
+    hooks: { onStored: () => {}, contentTypeForExt: artifactContentType },
+  }) as AssetBlobStore;
+}
+
 /* ------------------------------------------------------------------ *
  * 各条路由
  * ------------------------------------------------------------------ */
@@ -205,7 +256,7 @@ export async function chunkStatus(root: string, hash: string, store: AssetBlobSt
   return store.chunks(hash);
 }
 
-async function handlePutChunk(req: IncomingMessage, res: ServerResponse, store: AssetBlobStore, hash: string, rawN: string) {
+async function handlePutChunk(req: IncomingMessage, res: ServerResponse, store: AssetBlobStore, hash: string, rawN: string, ns: AssetNamespace = "media") {
   if (!/^(0|[1-9]\d*)$/.test(rawN)) return reject(req, res, 400, { ok: false, error: "bad-chunk-number" });
   const n = Number(rawN);
   const sizeHeader = String(req.headers["x-media-size"] || "").trim();
@@ -222,7 +273,7 @@ async function handlePutChunk(req: IncomingMessage, res: ServerResponse, store: 
 
   let out;
   try {
-    out = await store.putChunk(hash, n, { size, ext: extFromHeaders(req) }, req);
+    out = await store.putChunk(hash, n, { size, ext: extFromHeaders(req, ns) }, req);
   } catch (err) {
     // 断线:对面已经不在了,回什么都收不到;这一片的标记没补,对账时报「没收到」
     if (!res.headersSent && !res.destroyed) sendJson(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
@@ -239,10 +290,10 @@ async function handlePutChunk(req: IncomingMessage, res: ServerResponse, store: 
   }
 }
 
-async function handleComplete(res: ServerResponse, store: AssetBlobStore, hash: string) {
+async function handleComplete(res: ServerResponse, store: AssetBlobStore, hash: string, ns: AssetNamespace = "media") {
   const out = await store.complete(hash);
   switch (out.status) {
-    case "ok": return sendJson(res, 200, { ok: true, hash, size: out.size, complete: true, url: `/@media/${hash}` });
+    case "ok": return sendJson(res, 200, { ok: true, hash, size: out.size, complete: true, url: ns === "media" ? `/@media/${hash}` : `/api/asset/${ns}/${hash}` });
     case "unknown": return sendJson(res, 404, { ok: false, error: "unknown-hash" });
     case "incomplete": return sendJson(res, 400, { ok: false, error: "incomplete", missing: out.missing });
     case "hash-mismatch": return sendJson(res, 409, { ok: false, error: "hash-mismatch", actual: out.actual });
@@ -325,7 +376,7 @@ function writeAllowed(req: IncomingMessage, token: string | null, isTrusted: (re
  * 中间件
  * ------------------------------------------------------------------ */
 
-/** 这条请求归不归素材服务的跨源规则管:`/api/asset/media/...`(严格匹配)和 `/@media/*` */
+/** 这条请求归不归素材服务的跨源规则管:`/api/asset/<ns>/...`(三个命名空间,严格匹配)和 `/@media/*` */
 export function isAssetCorsPath(url: string | undefined): boolean {
   return isAssetServicePath(url) || String(url || "").startsWith("/@media/");
 }
@@ -380,22 +431,30 @@ export function assetPreflightMiddleware() {
 }
 
 /**
- * 素材服务的中间件。`/api/asset/media/...` 全部在这里答完;`/@media/*` 只补 CORS 头、答预检,
+ * 素材服务的中间件。`/api/asset/<ns>/...`(`media`、`snap`、`px`)全部在这里答完;`/@media/*` 只补 CORS 头、答预检,
  * 取字节仍交给 `vite-plugin-media.ts` 的 mediaMiddleware(next)。别的请求原样 next。
  *
- * 选项(契约 `docs/plan/asset-store-contract.md` 第 3、4 节):
- * - `store`:数据层,缺省是 `root` 的本地内容库(`defaultAssetStore`);
+ * 选项(契约 `docs/plan/asset-store-contract.md` 第 3、4 节;`artifact-transfer-contract.md` 第 1 节):
+ * - `stores`:三个命名空间各自的数据层 `{ media?, snap?, px? }`。缺的用缺省:`media` 是 `root` 的本地内容库
+ *   (`defaultAssetStore`),`snap` / `px` 是 `<root>/out/asset-store/<ns>` 的 fs 实现(`defaultArtifactStore`,用到时才建);
+ * - `store`:旧名,仍然认,当作 `stores.media`(两个都给时 `stores.media` 优先);
  * - `token`:集群令牌,缺省在这里读一次 `PROMPTCUT_CLUSTER_TOKEN`,没设是 null;空串也当没设;
  * - `isTrusted`:哪些请求算本机,缺省 `isLoopbackRequest`。
  */
 export interface AssetServiceOptions {
+  stores?: { media?: AssetBlobStore; snap?: AssetBlobStore; px?: AssetBlobStore };
   store?: AssetBlobStore;
   token?: string | null;
   isTrusted?: (req: IncomingMessage) => boolean;
 }
 
 export function assetServiceMiddleware(root: string, opts: AssetServiceOptions = {}) {
-  const store = opts.store ?? defaultAssetStore(root);
+  const media = opts.stores?.media ?? opts.store ?? defaultAssetStore(root);
+  const artifactStores: Partial<Record<"snap" | "px", AssetBlobStore>> = { snap: opts.stores?.snap, px: opts.stores?.px };
+  const storeOf = (ns: AssetNamespace): AssetBlobStore => {
+    if (ns === "media") return media;
+    return (artifactStores[ns] ??= defaultArtifactStore(root, ns));
+  };
   const rawToken = opts.token !== undefined ? opts.token : (process.env.PROMPTCUT_CLUSTER_TOKEN ?? null);
   const token = typeof rawToken === "string" && rawToken !== "" ? rawToken : null;
   const isTrusted = typeof opts.isTrusted === "function" ? opts.isTrusted : isLoopbackRequest;
@@ -406,11 +465,13 @@ export function assetServiceMiddleware(root: string, opts: AssetServiceOptions =
     if (!isAssetServicePath(req.url)) return next(); // /@media/* 的 GET / HEAD
 
     // 判据和同源守卫的豁免是同一条正则,守卫放过来的请求从这里起一定有回应,不会 next 给别的 /api 处理函数
-    const parts = apiPath(req.url).split("/"); // ["", "api", "asset", "media", <hash>, <tail>?]
+    const parts = apiPath(req.url).split("/"); // ["", "api", "asset", <ns>, <hash>, <tail>?]
+    const ns = parts[3] as AssetNamespace; // 正则只放过 media / snap / px
     const hash = parts[4];
     const tail = parts[5];
     const method = String(req.method || "GET").toUpperCase();
     try {
+      const store = storeOf(ns);
       if (!isMediaHash(hash)) return sendJson(res, 400, { ok: false, error: "bad-hash" });
       if (tail === undefined) {
         if (method !== "GET" && method !== "HEAD") return sendJson(res, 405, { ok: false, error: "method" });
@@ -423,11 +484,11 @@ export function assetServiceMiddleware(root: string, opts: AssetServiceOptions =
       if (tail === "complete") {
         if (method !== "POST") return sendJson(res, 405, { ok: false, error: "method" });
         if (!writeAllowed(req, token, isTrusted)) return reject(req, res, 401, { ok: false, error: "unauthorized" });
-        return await handleComplete(res, store, hash);
+        return await handleComplete(res, store, hash, ns);
       }
       if (method !== "PUT") return reject(req, res, 405, { ok: false, error: "method" });
       if (!writeAllowed(req, token, isTrusted)) return reject(req, res, 401, { ok: false, error: "unauthorized" });
-      return await handlePutChunk(req, res, store, hash, tail);
+      return await handlePutChunk(req, res, store, hash, tail, ns);
     } catch (err) {
       sendJson(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
     }
