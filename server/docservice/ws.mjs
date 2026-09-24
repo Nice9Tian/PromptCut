@@ -50,7 +50,11 @@ export function rejectUpgrade(socket, status, text) {
 }
 
 /**
- * 一条已握手的连接。事件：`message(text)`、`pong()`、`close({ code, reason })`（只发一次）。
+ * 一条已握手的连接。事件：`message(text)`、`pong()`、`drain()`、`close({ code, reason })`（只发一次）。
+ *
+ * `drain`：底层写缓冲排空时发出，组装层靠它继续写积压的消息（契约 H.2）。socket 自己的 `drain` 只在某次
+ * `write` 越过它的高水位（缺省 16 KiB）之后才来；调用方的高水位可能比它低，所以写出的数据全部交给系统后
+ * （写回调里 `writableLength` 归零）也发一次。可能重复，调用方按「现在可以再写」处理即可。
  */
 export class WsConnection extends EventEmitter {
   #socket;
@@ -81,11 +85,17 @@ export class WsConnection extends EventEmitter {
       this.#dead = true;
       if (!socket.destroyed) socket.end();
     });
+    socket.on('drain', () => this.emit('drain'));
     socket.on('close', () => {
       clearTimeout(this.#closeTimer);
       this.emit('close', this.#peerClose);
     });
     if (head?.length) this.#onData(head);
+  }
+
+  /** 底层尚未发出的字节数（契约 H.2 的 `buffered`） */
+  get bufferedAmount() {
+    return this.#socket.writableLength;
   }
 
   /** 发一条文本消息。连接已在关闭中就丢弃，返回 false */
@@ -136,8 +146,15 @@ export class WsConnection extends EventEmitter {
       head.writeBigUInt64BE(BigInt(len), 2);
     }
     head[0] = 0x80 | opcode;
-    this.#socket.write(Buffer.concat([head, payload]));
+    this.#socket.write(Buffer.concat([head, payload]), this.#onFlushed);
   }
+
+  /** 写回调：缓冲已排空、且 socket 自己不会再发 `drain` 时，补发一次 `drain` */
+  #onFlushed = (err) => {
+    const s = this.#socket;
+    if (err || s.destroyed || s.writableLength !== 0 || s.writableNeedDrain) return;
+    this.emit('drain');
+  };
 
   /** 协议错误：发关闭帧，丢掉后续字节，发完就结束 TCP */
   #fail(code, reason) {

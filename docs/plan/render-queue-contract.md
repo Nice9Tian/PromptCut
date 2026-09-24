@@ -1514,3 +1514,169 @@ node scripts/probes/render-queue-proxy.mjs --listen 127.0.0.1:8795 --target <hos
 9. **`main.mjs` 的输出与判定**：
    - `config.error` 同时写 stdout 和 stderr；
    - 令牌为空串算「已设」，按格式错误关闭。
+
+---
+
+## H. C6.1：频道与背压（文档服务核心）
+
+主 Agent 定稿，2026-09-25（用户授权自动推进）。依据：`docs/plan/Master-Execution-Plan.md` 第 5.1 节、第 5.4 节、C6 一节的 C6.1 行；G 节（通用核心与模块接口）。
+
+**范围**：
+- 核心层的频道分发与每条连接的出站背压；
+- 队列模块接上合并键，新增「摘要订阅」；
+- 可观测字段。
+
+**不在范围**：文档服务本体（C6.3）；队列本体 `server/render-queue/` 的状态机不改。
+
+### H.0 与计划第 5.1 节的对应，以及一处偏离
+
+- **第 1 条「频道是唯一的出站路由」**：核心提供频道 API（H.1），所有**广播型**消息都经它发。队列的任务增量现在是按收件人逐个发（`queue.mjs` 的 `canSee`：项目、纯浏览器按用户，M5b 还要加上指纹）。这套可见性比频道更细，所以队列照旧按连接点对点发、经 H.2 的出站队列，不改成按频道广播。隔离效果不变：没有 watch 某个项目的连接收不到它的任何增量（I1 验证）。C6.3 的项目操作通知是第一批真正走 `project:<id>` 频道的消息。
+- **第 3 条「`watch: 'all'` 只给独立主机，且只收摘要」**：〔裁〕本节**新增**摘要订阅（H.3），但**不禁止** `pc` / `host` 的全量 `'all'`。现在的本机节点和探针都用它，M5b 之前禁掉会让 M3～M5a 的链路断掉。M5b 接真业务时再定要不要收紧，写进 M5b 契约。这一偏离记入 C6 报告。
+- **第 4 条「出站上限与合并、1013 关闭」**：H.2。
+- **第 5 条「可观测」**：H.4。
+
+### H.1 频道 API（`router.mjs`，核心，通用）
+
+模块新增一个可选字段 `channels: string[]`，声明自己拥有的频道前缀（不带冒号，例如 `'project'`）。挂载时两个模块声明了同一个前缀就抛错。
+
+`ctx` 新增三个函数：
+
+```js
+ctx.subscribe(connId, channel) → boolean     // 已订阅或连接不存在回 false
+ctx.unsubscribe(connId, channel) → boolean
+ctx.publish(channel, message, { coalesceKey? } = {}) → number   // 实际投递给了几条连接
+ctx.send(connId, message, { coalesceKey? } = {})               // G.3 原有，新增可选参数
+```
+
+- **频道名**：`<前缀>:<其余>`，前缀是 `[a-z][a-z0-9-]{0,31}`，其余部分是非空字符串。模块只能订阅、发布自己前缀下的频道，越界就抛 `Error`。
+- **订阅由模块代客户端做**：客户端没有通用的 `channel.subscribe` 消息，要订阅什么由模块处理自己的消息时决定（例如队列的 `queue.watch`）。鉴权因此在模块里，核心不另设钩子。
+- **断开**：连接断开时，核心清掉它的全部订阅。
+- `publish` 序列化一次，然后按订阅者逐个进各自的出站队列（H.2）。
+
+### H.2 出站队列与背压（核心）
+
+组装层给核心的传输接口扩成：
+
+```js
+createRouter({ now, log, write, buffered, close, highWaterBytes?, maxPendingBytes? })
+// write(connId, text)            把文本写进这条连接（不管底层是否积压）
+// buffered(connId) → number      底层尚未发出的字节数（WsConnection.bufferedAmount）
+// close(connId, code, reason)    主动关闭这条连接
+router.drained(connId)            // 组装层在底层 'drain' 时调
+```
+
+`router.mjs` 导出 `CORE_DEFAULTS = { HIGH_WATER_BYTES: 64 * 1024, MAX_PENDING_BYTES: 1024 * 1024 }`；`createDocService` 新增同名的两个选项（`highWaterBytes`、`maxPendingBytes`），测试用小值。
+
+每条连接有一个核心自己的出站队列。
+
+**发送时**：
+- 如果出站队列是空的、且 `buffered(connId) < highWaterBytes`，直接 `write`；
+- 否则放进出站队列。
+
+**合并**：
+- 带 `coalesceKey` 的消息进队时，如果队里已经有同键、还没写出去的消息，先删掉旧的，再把新的追加到队尾；计入 `coalesced`。
+- 没有键的消息（回包等）从不合并。
+
+**排空**：`drained(connId)` 时，按队列顺序写，直到队空，或者 `buffered` 又到了 `highWaterBytes`。
+
+**上限**：进队之后，如果「队里的字节数 + `buffered(connId)`」大于 `maxPendingBytes`，就：
+1. 清空这条连接的出站队列；
+2. `close(connId, 1013, 'backpressure')`，记日志 `conn.backpressure { connId, pendingBytes }`；
+3. 计入 `backpressureCloses`。
+
+这条连接之后的发送一律丢弃，等组装层报断开。
+
+**顺序**：同一条连接上，没被合并掉的消息保持发送顺序。
+
+**`ws.mjs` 相应扩展**：`WsConnection` 加 `get bufferedAmount()`（取 `socket.writableLength`）和 `'drain'` 事件（转发 socket 的 `drain`）。`close(1013, …)` 用现有的关闭握手。
+
+### H.3 队列模块（`modules/render-queue.mjs`）
+
+**合并键**：队列经 `send` 发出的消息里，`task.opened`、`task.taken`、`task.closed` 带 `coalesceKey: 'task:' + <id>`，其余不带。同一任务在一条慢连接上积压的状态变化只留最新一条；节点重连后本来就会用 `queue.snapshot` 纠正。
+
+**摘要订阅**：
+- 入站 `queue.watch { projects: 'all', mode: 'summary' }` 由模块自己处理，**不交给队列**：
+  - 要求这条连接发过 `node.hello`，否则回 `error { reason: 'not-registered' }`；
+  - `profile` 是 `browser` 的回 `error { reason: 'forbidden' }`，因为纯浏览器只见本人任务，摘要会泄露别人的项目；
+  - 通过后订阅 `queue-summary:all`，立即回一条 `queue.summary`。
+- `mode` 缺省或是 `'full'` 时照旧交给队列。
+- **格式**：
+  ```js
+  { type: 'queue.summary', epoch, at, projects: [{ projectId, open, claimed, topPriority, openByFingerprint: { [fp]: n } }] }
+  ```
+  - 来源是 `q.describe()`；
+  - `topPriority` 是这个项目 `open` 任务的最高 `priority`，没有就是 `null`；
+  - `openByFingerprint` 按 `requires.envFingerprint` 分组，没有指纹的记在键 `''` 下；
+  - `projects` 按 `projectId` 升序。
+- **推送**：每次 `tick` 算一遍，和上一次推出去的内容不同才 `publish` 到 `queue-summary:all`，带 `coalesceKey: 'queue-summary'`。所以每个扫描周期至多一条，慢连接上只留最新一条。
+- 摘要订阅的连接**不收**任何单任务增量。
+- 同一连接先后发全量 `queue.watch` 和摘要 `queue.watch`，以最后一条为准：切到摘要时，要让队列停发单任务增量。做法是替它向队列发 `queue.watch { projects: [] }`，队列不收空数组时可以用一个不存在的项目 id。切回全量时退订摘要频道。
+- 模块声明 `channels: ['queue-summary']`。
+
+### H.4 可观测
+
+`/healthz` 新增：
+
+```js
+channels,             // 当前有订阅者的频道数
+subscriptions,        // 订阅总数
+pendingBytesMax,      // 各连接「出站队列 + buffered」的最大值
+coalesced,            // 累计合并次数
+backpressureCloses,   // 累计因背压关闭的连接数
+```
+
+`describe()` 新增：
+- `channels: { [channel]: 订阅数 }`；
+- 每个 `conns[i]` 加 `pendingBytes` 和 `subscriptions: string[]`。
+
+这些字段名加进核心保留字段名（G.3 的冲突检查）。
+
+### H.5 测试（Verification）
+
+`server/test/docservice-channels.test.mjs`（核心单元，用假 `write` / `buffered` / `close`，不起网络）：
+
+| 编号 | 内容 |
+|---|---|
+| C1 | `subscribe` / `unsubscribe` / `publish`：只有订阅者收到；返回值等于投递数；重复订阅回 `false` |
+| C2 | 前缀归属：模块发布、订阅别的前缀抛错；两个模块声明同一前缀，挂载抛错 |
+| C3 | 断开后订阅清空，`publish` 不再投给它 |
+| C4 | 积压时，同键消息只留最新一条且排在队尾；无键消息不合并；`coalesced` 计数正确 |
+| C5 | `drained` 按顺序排空，排到 `buffered` 又满为止；未合并的消息保持发送顺序 |
+| C6 | 超过 `maxPendingBytes`：调 `close(connId, 1013, 'backpressure')`、队列清空、之后的发送丢弃、`backpressureCloses` 加一 |
+| C7 | `/healthz` 与 `describe()` 的 H.4 字段；新字段名被模块占用时挂载抛错 |
+
+`server/test/docservice-backpressure.test.mjs`（真 WebSocket，端口 0，`autoTick: false`）：
+
+| 编号 | 内容 |
+|---|---|
+| I1 | 20 个项目，每个项目 10 个节点，只 watch 本项目。对项目 A 连续做 500 次发布、认领、完成：非 A 的节点收到 A 的消息 **0 条** |
+| I2 | 同一场景，每条任务增量的实际投递次数，等于能看见它的 watch 连接数，逐条核对 |
+| I3 | 用小的 `highWaterBytes`、`maxPendingBytes`（例如 8 KiB / 64 KiB）。一条连接握手后停止读取（原始 TCP 客户端，不读 socket），其余 199 个正常。持续发布：正常节点的投递延迟 p95 < 50 ms；慢连接最终被 1013 关闭（客户端恢复读取后能读到关闭帧，或者连接被断开）；服务进程的 `heapUsed` 增长 < 50 MB |
+| I4 | 独立主机 `mode: 'summary'`，20 个项目持续变化：每次 `tick` 至多收到 1 条 `queue.summary`，内容与 `describe()` 一致，不收任何单任务增量；`browser` 请求摘要回 `forbidden` |
+| I5 | 被 1013 关闭的节点重连并 `resume`：认领接续，`queue.snapshot` 与服务端 `describe()` 一致，没有丢失 |
+
+### H.6 文件归属
+
+| 子分支 | 文件 |
+|---|---|
+| `claude/c6-1-impl` | `server/docservice/router.mjs`、`service.mjs`、`ws.mjs`、`modules/render-queue.mjs` |
+| `claude/c6-1-tests` | `server/test/docservice-channels.test.mjs`、`server/test/docservice-backpressure.test.mjs`（新），需要的 `server/test/fake-*.mjs` |
+| 主 Agent | 本节；C6 报告 |
+
+不改：
+- `server/render-queue/`、`server/render-node/`；
+- 既有测试，G 节与 M5a 的那些都一个字不改、全过。
+
+**守门**：R2 照旧，`router.mjs` 里不出现业务词。频道前缀是模块给的字符串，核心不认识任何具体前缀。
+
+### H.7 定稿后的补充细则（2026-09-25，主 Agent 按实现方疑点裁定）
+
+1. **合并键的接法**：队列的 `send` 直接接在组装层的 `service.send` 上。真队列挂着的时候，`service.send` 先问队列模块的 `outbound(connId, message)` 要合并键：
+   - 返回一个字符串：这条消息按这个合并键发出；
+   - 返回 `null`：这条消息不发。摘要切换时，模块要拦下替客户端发的那条 `queue.watch` 的回包，用的就是这个。
+   合并键的取值只写在队列模块里，核心不认识。
+2. **摘要的数据来源**：`topPriority` 与 `openByFingerprint` 由队列模块在任务发布时记下，以队列回复里新建成功的任务为准。现在的 `q.describe()` 不带这两项。以后改队列本体时，可以让 `describe()` 直接给出。
+3. **摘要不列零计数项目**：`projects` 只列 open 或 claimed 大于 0 的项目。
+4. **`drain` 可能重复**：`ws.mjs` 在写完、缓冲归零时补发一次 `drain`，socket 自己的高水位是 16 KiB，比测试用的小值大。核心要能容忍重复的 `drained(connId)`。
+5. **摘要切换的实现**：切到摘要时，替客户端发的是 `queue.watch { projects: [] }`（队列收空数组）。它回的 `queue.snapshot` 由模块用专门的 `reqId` 拦下。
+6. **两处 `channels` 形状不同**：`/healthz.channels` 是数字，`describe().channels` 是对象，照 G.12 第 5 条的先例。
