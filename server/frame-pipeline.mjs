@@ -18,13 +18,27 @@ import { createHash } from 'node:crypto';
 import { isFullyTransparentPng } from './frame-validity.mjs';
 import { resolveFrameSize } from '../src/kernel/frameSize.mjs';
 import { anchorFrames } from '../src/render/snapshotPick.mjs';
-import { StreamProducer, STREAM_POOL_DEFAULT, STREAM_POOL_MAX } from './frame-stream.mjs';
+import { StreamProducer, STREAM_POOL_DEFAULT, STREAM_POOL_MAX, STREAM_CODE_VERSION, planStreams } from './frame-stream.mjs';
 import { dirtyStreamLease } from './bakery/bake.mjs';
 import { createCardLockStore, cardLockDecision, CARD_LOCK_IDLE_MS } from './card-lock.mjs';
+import { QUEUE_DEFAULTS } from './render-queue/index.mjs';
+import { applyResult, manifestKindOf, manifestKeyOf, manifestMatches, spansOf } from './artifact-transfer.mjs';
 
 /** 同一版里延后的卡最多重判几次(契约 F.8 第 2 条),之后等下一版 */
 export const CARD_LOCK_RETRY_MAX = 20;
 import { resultKeyOf } from './render-node/fingerprint.mjs';
+
+/**
+ * C6.4 推送与换机取用按什么段长切段:与渲染任务队列的切分(`render-node/split.mjs`)完全一致 ——
+ * 快照每 `SNAPSHOT_SPAN` 个本地帧一段(从 0 起),流每 `STREAM_SEGMENTS` 个分段一段(从这条流的 `firstSegment` 起)。
+ * 键因此和细任务的结果键、区间一模一样(`manifest-contract.md` 第 1 节)。
+ */
+export const PUSH_SNAPSHOT_SPAN = QUEUE_DEFAULTS.SNAPSHOT_SPAN;
+export const PUSH_STREAM_SEGMENTS = QUEUE_DEFAULTS.STREAM_SEGMENTS;
+/** 推送优先级(`artifact-push.mjs` 的 `PUSH_PRIORITY`):0 normal、1 low。这里不引那个模块,只用数 */
+const PUSH_NORMAL = 0, PUSH_LOW = 1;
+/** 换机取用时同时查几段清单 */
+const ADOPT_CONCURRENCY = 4;
 
 const pad = n => String(n).padStart(6, '0');
 const exists = file => fs.access(file).then(() => true, () => false);
@@ -166,8 +180,14 @@ export class FramePipeline {
    * `fingerprint`)。给了就不探测、直接用(测试,以及以后环境已知的独立渲染主机);不给就等第一个
    * 预渲染间开起来时探测一次(`ensureEnvironment`)。
    */
-  constructor({ root, origin, code = () => '', captureCode = () => undefined, interactive = true, playhead = NO_PLAYHEAD, mediaUrl = () => null, dataRoot = process.cwd(), environment = null, cardLockIdleMs = CARD_LOCK_IDLE_MS }) {
+  constructor({ root, origin, code = () => '', captureCode = () => undefined, interactive = true, playhead = NO_PLAYHEAD, mediaUrl = () => null, dataRoot = process.cwd(), environment = null, cardLockIdleMs = CARD_LOCK_IDLE_MS, pushQueue = null }) {
     this.root = root;
+    /**
+     * C6.4 的推送队列(`artifact-push.mjs` 的 `createPushQueue`,它建好后自己挂到这里)。**只有它不是 null 时**
+     * 快照 / 流的推送钩子和 `preload` 里的换机取用才生效;null(缺省,含所有现有测试和探针)时逐路径行为不变。
+     * 预渲染进程只在连得上素材服务和文档服务时才建它(`vite-plugin-frames.ts`)。
+     */
+    this.pushQueue = pushQueue;
     /**
      * 环境指纹(M4):card plan、轨道流的全部结果键都乘上它。定下来之前是 null —— 那时
      * `CardFrameCache.plan()` 抛出、`planStreams` 回 [],什么键都不产。
@@ -453,7 +473,9 @@ export class FramePipeline {
     return { oversize: this._snapshots?.oversize ?? [], promotions: this.promotions ?? [], plans: this.planDiagnostics(),
       streams: this._streams?.status() ?? null, ready: this.ready.describe(), environment: this.environment,
       // 契约 F.3:本机锁库此刻的全部锁
-      cardLocks: this.cardLockStore?.list() ?? [] };
+      cardLocks: this.cardLockStore?.list() ?? [],
+      // C6.4:只在配了推送队列时才有这两项(没配时诊断的形状不变)
+      ...(this.pushQueue ? { push: this.pushQueue.stats?.() ?? null, adoption: this.lastAdoption ?? null } : {}) };
   }
   /**
    * 每个 entry 此刻的预渲染集合和它的 card plan 摘要 —— `ready-index-probe` 靠它
@@ -1217,6 +1239,11 @@ export class FramePipeline {
         let cardPlan = [];
         try { cardPlan = browserPlan ? entry.cardCache.plan(browserPlan) : []; } catch {}
         if (browserPlan) this.adoptCardPlan(entry, cardPlan);
+        // C6.4 第 5 节:配了推送队列(连得上素材服务和文档服务)时,先按这一版的 card plan 查内容库里的清单、
+        // 拉别的机器已经产好的段,再开始后台那一趟 —— 拉到的段本机不再渲。没配时这里什么都不做
+        if (browserPlan && this.pushQueue && !controller.signal.aborted) {
+          try { await this.adoptFromManifests(entry, this.pushQueue.content, this.pushQueue.client, { signal: controller.signal }); } catch {}
+        }
         entry.stage = 'required';
         // C2:**锚帧全部就绪前不开始其余后台预渲染**。
         await this.fillAnchorSnapshots(entry, bakery, controller.signal);
@@ -1289,7 +1316,205 @@ export class FramePipeline {
   /** A3a 的 HTML 快照库(<root>/controls-html、<root>/controls-local)。
    * 和 `entry.cardCache`(PNG/MOV,legacy 整帧通道和导出用)并存 —— 后者随
    * legacy 通道一起删,在那之前照常写,不然导出和旧播放路会缺料。 */
-  snapshots() { return this._snapshots ||= new SnapshotStore(this.root); }
+  snapshots() {
+    if (this._snapshots) return this._snapshots;
+    const store = new SnapshotStore(this.root);
+    /*
+     * C6.4 第 4 节的快照钩子:`commitSnapshots`(`batch` 也经它)每写完一批,把这一批覆盖到的每一段进推送队列。
+     * 没配推送队列时原样返回 `commitSnapshots` 自己的 promise —— 不多一个 tick、不多写任何东西。
+     */
+    const commit = store.commitSnapshots.bind(store);
+    store.commitSnapshots = args => {
+      const done = commit(args);
+      if (!this.pushQueue) return done;
+      return done.then(index => {
+        try { this.enqueueSnapshotPush(args); } catch {}
+        return index;
+      });
+    };
+    return this._snapshots = store;
+  }
+  /**
+   * 共享键 / 本地档目录键 → card plan 里对应的 control(推送钩子要它的 `count`、`contentKey`、能力)。
+   * 本地档只在那个 entry 的计划里找;共享档在所有活着的 entry 里找(键是内容寻址的,哪个 entry 的都一样)。
+   */
+  controlForSnapshotKey(tier, entryKey, key) {
+    const match = control => control && (control.snapshotKey === key) && (control.tier || snapshotTier(control.capabilities)) === tier;
+    if (tier === 'local') return (this.entries.get(entryKey)?.cardPlan ?? []).find(match) ?? null;
+    for (const entry of this.entries.values()) {
+      const hit = (entry.cardPlan ?? []).find(match);
+      if (hit) return hit;
+    }
+    return null;
+  }
+  /**
+   * 卡级推送优先级(A5):`canvasHeavy`、图卡、`unknown`、`belowDependent`(以及同属下层依赖的 `context`),或本地档 → 1 `low`;
+   * 其余共享档 → 0 `normal`。块级(`data:image` 过半、超体积帧)由推送队列轮到这一段时自己算,取低的那个。
+   */
+  cardPushPriority(control, tier, capabilities) {
+    if (tier === 'local') return PUSH_LOW;
+    const caps = capabilities ?? control?.capabilities ?? {};
+    if (caps.canvasHeavy === true || control?.capabilities?.canvasHeavy === true) return PUSH_LOW;
+    const compositing = caps.compositing ?? control?.compositing ?? control?.capabilities?.compositing;
+    // 共享档按定义只有 independent / sourceDependent;这里只认明写的下层依赖值,没写不算(不猜)
+    if (compositing === 'unknown' || compositing === 'belowDependent' || compositing === 'context') return PUSH_LOW;
+    if (this.isGraphCardControl(control)) return PUSH_LOW;
+    return PUSH_NORMAL;
+  }
+  /**
+   * 这张卡是不是图卡(H)。服务端的 card plan 里目前没有能判它的字段(`split.mjs` 的 `isGraphCard` 也由调用方注入、
+   * 缺省 false),所以缺省回 false;只认 control 上明写的 `graphCard: true`。报告里记为疑点。
+   */
+  isGraphCardControl(control) {
+    return control?.graphCard === true || control?.capabilities?.graphCard === true;
+  }
+  /**
+   * 快照钩子的本体:`commitSnapshots` 的这一批帧落在哪几段,每段进推送队列一次(队列自己去重)。
+   * 段与 `split.mjs` 同一种切法:本地帧 0 起每 `PUSH_SNAPSHOT_SPAN` 帧一段,最后一段到 `count - 1`
+   * (card plan 里查不到这张卡时不知道 `count`,就按整段长算)。
+   *
+   *   共享档:`resultKey = 共享键`(目录键);
+   *   本地档:`resultKey = resultKeyOf("<entryKey>/<contentKey>", 指纹)`,`dirKey` 是落盘目录键(E.9)。
+   *           本地档要从 card plan 找到这张卡才算得出结果键,找不到就不进队。
+   *
+   * 从素材服务拉来的帧(`applyResult` 带 `adopted: true`)不进队:它们本来就在素材服务上。
+   */
+  enqueueSnapshotPush(args) {
+    const queue = this.pushQueue;
+    if (!queue || !args || args.adopted === true) return 0;
+    const { tier, key } = args;
+    if ((tier !== 'shared' && tier !== 'local') || !key) return 0;
+    const frames = (args.items ?? []).map(item => item?.localFrame).filter(frame => Number.isInteger(frame) && frame >= 0);
+    if (!frames.length) return 0;
+    const entryKey = tier === 'local' ? args.entryKey : null;
+    if (tier === 'local' && !entryKey) return 0;
+    const control = this.controlForSnapshotKey(tier, entryKey, key);
+    let resultKey = key;
+    if (tier === 'local') {
+      const fp = control?.envFingerprint ?? this.envFingerprint;
+      if (!control || !fp) return 0;
+      resultKey = resultKeyOf(`${entryKey}/${control.contentKey ?? control.snapshotKey}`, fp);
+    }
+    const span = PUSH_SNAPSHOT_SPAN;
+    const count = Number.isInteger(control?.count) && control.count > 0 ? control.count : null;
+    const priority = this.cardPushPriority(control, tier, args.capabilities);
+    const canvasHeavy = args.capabilities?.canvasHeavy === true || control?.capabilities?.canvasHeavy === true;
+    let queued = 0;
+    for (const from of new Set(frames.map(frame => frame - (frame % span)))) {
+      const to = count !== null && from < count ? Math.min(count - 1, from + span - 1) : from + span - 1;
+      if (queue.enqueue({ kind: 'snapshot', tier, resultKey, dirKey: key, entryKey, range: { from, to }, canvasHeavy }, priority)) queued++;
+    }
+    return queued;
+  }
+  /**
+   * 流钩子的本体(`StreamProducer.storeSegment` 每写完一个分段调):把它所在的段进推送队列,流一律按 1 `low`。
+   * 段从这条流的 `firstSegment` 起每 `PUSH_STREAM_SEGMENTS` 个分段一段,最后一段到 `lastSegment`(同 `split.mjs`)。
+   */
+  enqueueStreamPush(spec, segment) {
+    const queue = this.pushQueue;
+    if (!queue || !spec?.streamKey || !Number.isInteger(segment) || segment < 0) return false;
+    const first = Number.isInteger(spec.firstSegment) && spec.firstSegment <= segment ? spec.firstSegment : 0;
+    const span = PUSH_STREAM_SEGMENTS;
+    const from = first + Math.floor((segment - first) / span) * span;
+    const last = Number.isInteger(spec.lastSegment) && spec.lastSegment >= from ? spec.lastSegment : null;
+    const to = last !== null ? Math.min(last, from + span - 1) : from + span - 1;
+    return queue.enqueue({ kind: 'stream', resultKey: spec.streamKey, range: { from, to } }, PUSH_LOW);
+  }
+  /**
+   * C6.4 第 5 节:换机取用。给一个活的 entry(某个会话当前版本的 card plan),按它每个共享档与本地档的 control、
+   * 以及每条流,算出各段的键(与推送、与队列细任务同一种切法),逐段 `content.get` 清单;查到的交给 C6.2 的
+   * `applyResult` 拉取、落盘、发布。本机已经有的段跳过,查不到的段也跳过(由本机照常预渲染)。
+   *
+   * 回 `{ manifests, fetched, written }`:查到并交去拉取的清单数、下载的块数(init 也算)、实际落盘的帧数 / 分段数。
+   * 一段拉失败只记下来(`this.lastAdoption.failed`),不影响别的段;内容库断线就停下,剩下的段不再查。
+   */
+  async adoptFromManifests(entry, content, client, { signal } = {}) {
+    const out = { manifests: 0, fetched: 0, written: 0 };
+    const report = { ...out, skipped: 0, missing: 0, failed: 0, at: Date.now() };
+    if (!entry || !content || typeof content.get !== 'function' || !client) return out;
+    const jobs = new Map();
+    const add = job => {
+      const kind = manifestKindOf(job.kind);
+      const key = manifestKeyOf(job);
+      if (kind && key && !jobs.has(`${kind}\u0000${key}`)) jobs.set(`${kind}\u0000${key}`, { ...job, manifestKind: kind, manifestKey: key });
+    };
+    for (const control of entry.cardPlan ?? []) {
+      if (!control?.snapshotKey || !control.clipId) continue;
+      if (!this.prerenderPicked(entry, control.clipId)) continue;
+      const tier = control.tier || snapshotTier(control.capabilities);
+      if (tier !== 'shared' && tier !== 'local') continue;
+      const count = Number(control.count);
+      if (!Number.isInteger(count) || count < 1) continue;
+      let resultKey = control.snapshotKey;
+      const entryKey = tier === 'local' ? entry.key : null;
+      if (tier === 'local') {
+        const fp = control.envFingerprint ?? this.envFingerprint;
+        if (!entryKey || !fp) continue;
+        resultKey = resultKeyOf(`${entryKey}/${control.contentKey ?? control.snapshotKey}`, fp);
+      }
+      for (const [from, to] of spansOf(0, count - 1, PUSH_SNAPSHOT_SPAN)) add({ kind: 'snapshot', tier, resultKey, dirKey: control.snapshotKey, entryKey, range: { from, to } });
+    }
+    const producer = this.streamProducer();
+    if (producer?.enabled) {
+      let specs = [];
+      try {
+        specs = planStreams(entry, { picked: clipId => this.prerenderPicked(entry, clipId), budget: producer.budget,
+          codeVersion: `${STREAM_CODE_VERSION}:${this.captureCode?.() || ''}`, envFingerprint: this.envFingerprint });
+      } catch { specs = []; }
+      for (const spec of specs) {
+        if (!spec?.streamKey) continue;
+        for (const [from, to] of spansOf(spec.firstSegment, spec.lastSegment, PUSH_STREAM_SEGMENTS)) add({ kind: 'stream', resultKey: spec.streamKey, range: { from, to } });
+      }
+    }
+    const store = this.snapshots();
+    /** 本机是不是已经有整段 */
+    const haveLocally = async job => {
+      const { from, to } = job.range;
+      if (job.kind === 'snapshot') {
+        const index = await store.snapshotIndex({ tier: job.tier, entryKey: job.entryKey ?? undefined, key: job.dirKey });
+        for (let f = from; f <= to; f++) if (!rangeHas(index.frames, f) && !rangeHas(index.oversize, f)) return false;
+        return true;
+      }
+      const manifest = producer?.streams?.get(job.resultKey)?.manifest ?? await producer?.store?.load(job.resultKey);
+      if (!manifest) return false;
+      for (let n = from; n <= to; n++) if (!manifest.segments?.[n]) return false;
+      return true;
+    };
+    let offline = false;
+    const list = [...jobs.values()];
+    let next = 0;
+    const lane = async () => {
+      for (;;) {
+        const job = list[next++];
+        if (!job || offline || signal?.aborted || this.closed) return;
+        try {
+          if (await haveLocally(job)) { report.skipped++; continue; }
+        } catch { /* 当本机没有 */ }
+        let item;
+        try { item = await content.get(job.manifestKind, job.manifestKey); }
+        catch (error) {
+          if (error?.code === 'disconnected') offline = true;
+          report.failed++;
+          continue;
+        }
+        const body = item?.body;
+        if (!body) { report.missing++; continue; }
+        const sameTarget = job.kind !== 'snapshot' || (body.tier === job.tier && body.dirKey === job.dirKey && (job.tier !== 'local' || body.entryKey === job.entryKey));
+        if (!manifestMatches(body, job) || !sameTarget) { report.missing++; continue; }
+        out.manifests++;
+        try {
+          const applied = await applyResult(this, client, body);
+          out.fetched += applied.fetched;
+          out.written += applied.written;
+        } catch {
+          report.failed++;
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(ADOPT_CONCURRENCY, list.length) }, lane));
+    this.lastAdoption = { ...report, ...out, jobs: list.length, offline };
+    return out;
+  }
   /**
    * C6.2(契约第 6 节):别的节点产的一段结果已经落进本机帧库,把它发布进就绪索引。
    *
@@ -2163,6 +2388,8 @@ export class FramePipeline {
     for (const generation of this.generations.values()) generation.controller.abort();
     await Promise.allSettled([this.foreground, this.background, ...this.laneChains.values()]);
     await this._streams?.close();
+    // C6.4:推送队列停止派新活(没推完的段留在队列文件里,下次起来接着推)
+    if (this.pushQueue) { try { await this.pushQueue.stop?.(); } catch {} }
     await Promise.allSettled(this.streamSessions.splice(0).map(session => { clearTimeout(session.idleTimer); return session.bakery?.close(); }));
     await Promise.allSettled([...this.lanes.values()].map(session => { clearTimeout(session.timer); return session.bakery.close(); }));
     this.lanes.clear();
