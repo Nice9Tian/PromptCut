@@ -228,7 +228,12 @@ test('S2 snap、px 的分片、对账、收尾、Range、HEAD、CORS、401 规�
       const [name2, b] = got[i];
       assert.equal(name2, name);
       assert.equal(b.status, a.status, `${ns}「${name}」状态码`);
-      for (const k of Object.keys(a.headers)) assert.equal(b.headers[k], a.headers[k], `${ns}「${name}」响应头 ${k}`);
+      // 带 url 的回包长度随 url 变，content-length 不比
+      const hasUrl = a.body && typeof a.body === 'object' && 'url' in a.body;
+      for (const k of Object.keys(a.headers)) {
+        if (hasUrl && k === 'content-length') continue;
+        assert.equal(b.headers[k], a.headers[k], `${ns}「${name}」响应头 ${k}`);
+      }
       // 收尾回包里的 `url` 是取回地址，按命名空间不同，单独核（见下）；其余字段逐个比较
       const strip = (body) => (body && typeof body === 'object' && 'url' in body ? { ...body, url: typeof body.url } : body);
       assert.deepEqual(strip(b.body), strip(a.body), `${ns}「${name}」回包`);
@@ -264,6 +269,15 @@ test('S2b snap / px 专用的 MIME 表认 text/html → html、video/iso.segment
     assert.equal(await one(ns, { 'X-Media-Ext': 'm4s' }), 'm4s', `${ns} 直接给扩展名`);
     assert.equal(await one(ns, {}), '', `${ns} 都没给`);
   }
+  // 契约第 10 节第 8 条：snap / px 只存候选扩展名（html、mp4、m4s），别的一律存成不带扩展名；media 不受影响
+  for (const ns of ['snap', 'px']) {
+    assert.equal(await one(ns, { 'X-Media-Ext': 'bin' }), '', `${ns} bin 不在候选表里`);
+    assert.equal(await one(ns, { 'X-Media-Ext': 'png' }), '', `${ns} png 不在候选表里`);
+    assert.equal(await one(ns, { 'X-Media-Type': 'image/png' }), '', `${ns} image/png 反查出 png，也不在候选表里`);
+    assert.equal(await one(ns, { 'X-Media-Ext': 'html' }), 'html', `${ns} html 在候选表里`);
+  }
+  assert.equal(await one('media', { 'X-Media-Ext': 'png' }), 'png', 'media 照旧存 png');
+  assert.equal(await one('media', { 'X-Media-Ext': 'bin' }), 'bin', 'media 照旧存 bin');
   // 契约第 10 节第 1 条：不改共享的 MIME_TO_EXT，media 落盘的文件名不变
   assert.equal(await one('media', { 'X-Media-Type': 'text/html' }), '', 'media 不认 text/html');
   assert.equal(await one('media', { 'X-Media-Type': 'video/iso.segment' }), '', 'media 不认 video/iso.segment');
@@ -329,6 +343,19 @@ test('S2c 缺省的 snap、px 是 fs 实现，目录固定在 <root>/out/asset-s
     assert.ok(Buffer.from(await gi.arrayBuffer()).equals(init));
     assert.equal((await chunks(base, 'snap', hb)).complete, true, '无扩展名的 <hash> 也算已入库');
     assert.equal((await fetch(`${base}/snap/${hb}`)).status, 200);
+
+    // 第 8 条：不在候选表里的扩展名存成不带扩展名的 <hash>，之后照样找得到
+    const odd = bytesOf(444, 44);
+    const ho = sha256(odd);
+    assert.equal((await put(base, 'px', ho, 0, odd, { 'X-Media-Size': String(odd.length), 'X-Media-Ext': 'bin' })).status, 200);
+    assert.equal((await complete(base, 'px', ho)).status, 200);
+    assert.ok((await fsp.readFile(path.join(pxDir, ho))).equals(odd), 'bin 存成 <root>/out/asset-store/px/<hash>');
+    await assert.rejects(fsp.stat(path.join(pxDir, `${ho}.bin`)), '不存 <hash>.bin');
+    assert.equal((await chunks(base, 'px', ho)).complete, true);
+    const go = await fetch(`${base}/px/${ho}`);
+    assert.equal(go.status, 200);
+    assert.equal(go.headers.get('content-type'), 'application/octet-stream');
+    assert.ok(Buffer.from(await go.arrayBuffer()).equals(odd));
   } finally {
     if (before === undefined) delete process.env.PROMPTCUT_EXPORT_DIR; else process.env.PROMPTCUT_EXPORT_DIR = before;
     await fsp.rm(exportDir, { recursive: true, force: true });
