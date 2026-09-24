@@ -576,7 +576,7 @@ export function createLocalNode(options) → LocalNode
 
 | 方法 | 说明 |
 |---|---|
-| `start(resume = [])` | 先挂 `endpoint.onMessage`，再发 `publisher.hello { publisherId }`，再调 `session.start(resume)` |
+| `start(resume = [])` | 先挂 `endpoint.onMessage`，再发 `publisher.hello { publisherId }`，再调 `session.start(resume')`。`resume'` 只保留本实例在跑表里、且令牌相同的项（新进程的实例在跑表是空的，等于不接续；接续只用于同一实例的重连）〔裁〕 |
 | `tick()` | 调 `session.tick()` |
 | `yieldAll(reason = 'busy')` | 中止所有在跑的任务（`AbortController`），调 `session.yieldAll(reason)` |
 | `stop()` | 中止所有在跑的任务；不再处理收到的消息 |
@@ -586,11 +586,11 @@ export function createLocalNode(options) → LocalNode
 
 **收到的消息**：全部交给 `session.receive`。`publisher.welcome`、`task.published`、`task.done`、`task.failed` 等会话不认的类型，会话本就忽略。另外按 `onEvent({ type: 'publish-result', results })` 报出 `task.published` 的结果。
 
-**认领到任务**（会话的 `onTask(task, { token })`）：新建 `AbortController`，异步执行下面的流程，记进在跑表。「仍持有」的判定是 `session.held()` 里有 `{ id, token }` 且 token 相同，每一步落定后都要重新判一次。不再持有或已中止时，丢弃结果，`onEvent({ type: 'discarded', id })`，不发任何消息。
+**认领到任务**（会话的 `onTask(task, { token })`）：新建 `AbortController`，异步执行下面的流程，记进在跑表。**开工时先同步调一次 `session.progress(id, 0)`**〔裁〕：让队列的停滞规则（A.8 第 2 项，`done !== null` 才生效）覆盖到「执行器卡死、从不报进度、但节点还在 tick 续约」的情形——否则会话每拍用 `done: null` 续约，卡死的任务永远不会被回收。「仍持有」的判定是 `session.held()` 里有 `{ id, token }` 且 token 相同，每一步落定后都要重新判一次。不再持有或已中止时，丢弃结果，`onEvent({ type: 'discarded', id })`，不发任何消息。
 
 - **`plan` 任务**：
   1. `ctx = await executor.plan(task, { signal })`；
-  2. `tasks = splitPlan({ planTask: task, envFingerprint: node.envFingerprint, codeVersion, constants, ...ctx })`；
+  2. `tasks = splitPlan({ ...ctx, planTask: task, envFingerprint: node.envFingerprint, codeVersion, constants })`（`ctx` 放在前面：切分节点自己的指纹、plan 与代码版本一定生效，设计 2.1）；
   3. 仍持有时，若 `tasks.length > 0`，先 `endpoint.send({ type: 'task.publish', tasks })`；
   4. 再 `session.complete(task.id, { ranges: null, derived: tasks.map(t => t.id) })`；
   5. `onEvent({ type: 'plan-split', id, derived: [...] })`。
@@ -667,7 +667,7 @@ Endpoint = { connId, send(message), onMessage(handler), close(), closed }
 | I5 | 纯浏览器节点 + `pc` 节点，另有别的用户的项目 | 浏览器节点不认领 `plan`、不认领流任务、不认领别的用户的任务；它完成的都是本人的 `light` / `medium` 快照任务 |
 | I6 | 两种环境指纹的 `pc` 节点 | 细任务只被与 `plan` 认领者同指纹的节点认领 |
 | I7 | 执行中节点转为不空闲并 `yieldAll` | 任务放回（`attempts` 不加）、被另一节点完成；让路节点的执行被中止、结果丢弃 |
-| I8 | 执行器卡死（不报进度） | 租约到期后被回收，另一节点完成；卡死节点收到 `lease-lost`，之后即使返回也被丢弃 |
+| I8 | 执行器卡死（不报进度），卡死节点照常 tick | 开工时的 `progress(0)` 之后进度不再变化，`STALL_MS` 后被停滞规则回收（`lastError` 为 `stalled`），另一节点完成；卡死节点收到 `lease-lost`，之后即使返回也被丢弃 |
 | I9 | 产物库推送没收全（`failNextPut`） | 任务报失败后被重试完成；最终每段恰好完成一次 |
 | I10 | 队列重启（新实例、新 epoch） | 页面重新发布后全部完成；已在产物库里的段走 `dedup`，不重复渲染 |
 
