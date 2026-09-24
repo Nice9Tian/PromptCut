@@ -87,7 +87,9 @@ export function stageSrc(id: StageId): string {
   const dual = dualStage();
   const origins = dual ? stageOrigins() : null;
   const mode = dual ? "&preview=stage" : previewMode() === "legacy" ? "&preview=legacy" : "";
-  return `${origins ? origins[id] : ""}${location.pathname}?stage=1&id=${id}${mode}`;
+  // 在线浏览器模式还没有运行期判据,先由编辑页地址上的 `platform=browser` 显式打开、转给舞台(`unsupported` 占位)
+  const platform = new URLSearchParams(location.search).get("platform") === "browser" ? "&platform=browser" : "";
+  return `${origins ? origins[id] : ""}${location.pathname}?stage=1&id=${id}${mode}${platform}`;
 }
 
 /** 给 `createStageRpc` 的 `targetOrigin`:跨源时必须点名,不能用 `location.origin` */

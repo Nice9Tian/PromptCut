@@ -38,9 +38,28 @@ export const PLACEHOLDER_ANIMATION_PREFIX = "pc-ph-";
  *   - `no-data`      T1:兜底链尽头,这一层还没有任何预渲染结果;
  *   - `over-budget`  T1:流超出解码器预算、换帧预算也装不下快照;
  *   - `awaiting`     T2:这一帧的快照还没到;
- *   - `catching-up`  T3 / T4:不可见地追帧,或等后台舞台补跑后互换。
+ *   - `catching-up`  T3 / T4:不可见地追帧,或等后台舞台补跑后互换;
+ *   - `unsupported`  这台设备渲染不了这张卡(在线浏览器模式下的用户卡、图卡):不是「正在加载」,
+ *                    所以**不显示沙漏**,显示「电脑 + 离线」图标和 `UNSUPPORTED_TEXT`;常驻,不走兜底顺序。
  */
-export type PlaceholderReason = "no-data" | "over-budget" | "awaiting" | "catching-up";
+export type PlaceholderReason = "no-data" | "over-budget" | "awaiting" | "catching-up" | "unsupported";
+
+/** `unsupported` 占位符上的文字(已定,不可改) */
+export const UNSUPPORTED_TEXT = "需要本地 PC 渲染辅助";
+
+/**
+ * 槽位(P3 补进接口):舞台在每张卡的包裹层里挂一个 `position:absolute; inset:0` 的槽位,占位组件渲在里面。
+ * 显隐切的是**槽位**的 `hidden`(组件无状态,React 每次提交都不会冲掉手动切过的值);
+ * 组件根元素自己不带 `hidden`。带 `PLACEHOLDER_FIXED_ATTR` 的槽位是常驻的(`unsupported`),显隐调度跳过它。
+ */
+export const PLACEHOLDER_SLOT_ATTR = "data-pc-placeholder-slot";
+export const PLACEHOLDER_FIXED_ATTR = "data-pc-placeholder-fixed";
+
+/**
+ * 同屏显示着的占位符超过 `maxAnimated` 个时,多出来的由舞台给**槽位**加这个属性,
+ * 组件样式表据此让沙漏静止(仍然显示)。
+ */
+export const PLACEHOLDER_STATIC_ATTR = "data-pc-placeholder-static";
 
 /** 矩形,相对包裹层,舞台像素 */
 export interface PlaceholderBox { left: number; top: number; width: number; height: number }
@@ -65,7 +84,8 @@ export interface PlaceholderPlaneProps {
  * 占位组件一侧交付的模块必须满足的形状(`src/render/placeholder/index.ts` 导出这些名字)。
  *
  * - `PlaceholderPlane`:纯渲染 —— 无 state、无 effect、无计时器、无 rAF、不读布局;props 不变不重渲染
- *   (React.memo)。根元素必须带 `PLACEHOLDER_ATTR`,并用 `position:absolute` 只按 `geometry` 定位。
+ *   (React.memo)。根元素必须带 `PLACEHOLDER_ATTR`,并用 `position:absolute` 只按 `geometry` 定位;
+ *   **不得设 `pointer-events:none`**(命中测试靠 `elementsFromPoint`,点中占位符要算点中所在的卡)。
  *   返回值是 React 元素,这里写成 `unknown` 以免本文件依赖 React。
  * - `PLACEHOLDER_CSS`:整张样式表(噪点贴图内联),舞台启动时注入一次;不得覆盖 `[hidden]` 的 `display:none`。
  * - `maxAnimated`:同屏超过这么多个占位符时,多出来的沙漏改为静止(仍然显示,不透明化)。

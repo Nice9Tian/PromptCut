@@ -34,8 +34,14 @@ import { ensureProxyStyle, proxyAllowed, proxyOf, resetInk, sampleAll } from "./
 import { StreamPlayer } from "./render/streamPlayer";
 import {
   applyPlaceholders, hideAllPlaceholders, noteInkBox, removePlaceholderStyle, PLACEHOLDER_SLOT_ATTR, placeholdersEnabled, placeholderWanted,
-  resetPlaceholderGeometry, setCatchingUpClips, setPlaceholdersEnabled, setStreamBoxSource, shownPlaceholders, shownSince,
+  resetPlaceholderGeometry, setCatchingUpClips, setOnlineBrowserMode, setPlaceholdersEnabled, setStreamBoxSource, shownPlaceholders, shownSince,
 } from "./render/placeholderHost";
+
+/*
+ * 在线浏览器模式(platforms.md)还没有运行期判据:先由舞台地址上的 `platform=browser` 显式打开,
+ * 只影响 `unsupported` 占位(用户卡 / 图卡在这台设备上渲染不了)。编辑页的同名参数经 `stageSrc` 转发过来。
+ */
+try { setOnlineBrowserMode(new URLSearchParams(location.search).get("platform") === "browser"); } catch { /* 没有 location:导出 / 单测 */ }
 import { PLACEHOLDER_SHOW_DELAY_MS } from "./render/placeholder/contract";
 import { measureLocalContentBox, type CanvasPixels } from "./render/contentBox";
 import { createGlHost } from "./render/gl/glHost";

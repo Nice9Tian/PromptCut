@@ -17,6 +17,16 @@ import { PLANE_CSS } from "./planeStyle.ts";
 import { PLACEHOLDER_ATTR } from "./placeholder/contract.ts";
 
 const set = (...ids) => new Set(ids);
+/** 槽位的假件:`hidden` + 属性表(`applyPlaceholders` 只用这几样) */
+function fakeSlot(attrs = {}) {
+  return {
+    hidden: true, attrs: { ...attrs },
+    getAttribute(k) { return this.attrs[k] ?? null; },
+    setAttribute(k, v) { this.attrs[k] = String(v); },
+    hasAttribute(k) { return k in this.attrs; },
+    toggleAttribute(k, on) { if (on) this.attrs[k] = ""; else delete this.attrs[k]; return !!on; },
+  };
+}
 const base = { suppressed: set(), snapshots: new Map(), awaiting: set(), settling: new Map(), streamShowing: set() };
 
 test("缺省关着:只有舞台页的 front 会打开(导出页、预渲染、后台舞台一个节点都不挂)", () => {
@@ -49,8 +59,7 @@ test("T2 等快照、T3 不可见追帧(没有快照垫着时)、T4 等后台补
 });
 
 test("显隐只切槽位的 hidden;上一拍显示着、这一拍不要的关掉", () => {
-  const slots = { a: { hidden: true, attrs: {}, getAttribute(k) { return this.attrs[k] ?? null; }, setAttribute(k, v) { this.attrs[k] = v; } } };
-  slots.b = { ...slots.a, attrs: {} };
+  const slots = { a: fakeSlot(), b: fakeSlot() };
   const slotOf = (id) => slots[id] ?? null;
   assert.equal(applyPlaceholders(new Map([["a", "no-data"], ["gone", "no-data"]]), slotOf), 1, "没挂着槽位的跳过");
   assert.equal(slots.a.hidden, false);
@@ -88,4 +97,52 @@ test("平面样式表放过占位平面:藏子树的四条规则都不碰槽位�
     assert.ok(line.includes(`:not([${PLACEHOLDER_SLOT_ATTR}])`), line);
     assert.ok(line.includes(`:not([${PLACEHOLDER_ATTR}])`), line);
   }
+});
+
+/* ---------------------------------------------------------------- P3:同屏上限、常驻槽位、unsupported */
+
+import { setMaxAnimated, setOnlineBrowserMode, unsupportedHere } from "./placeholderHost.ts";
+import { PLACEHOLDER_FIXED_ATTR, PLACEHOLDER_STATIC_ATTR, UNSUPPORTED_TEXT } from "./placeholder/contract.ts";
+
+test("同屏超过 maxAnimated 个:多出来的槽位加静止标记,撤下时摘掉", () => {
+  setMaxAnimated(1);
+  const slots = { a: fakeSlot(), b: fakeSlot(), c: fakeSlot() };
+  const slotOf = (id) => slots[id] ?? null;
+  applyPlaceholders(new Map([["a", "no-data"], ["b", "no-data"], ["c", "awaiting"]]), slotOf);
+  const still = Object.entries(slots).filter(([, s]) => s.hasAttribute(PLACEHOLDER_STATIC_ATTR)).map(([id]) => id);
+  assert.equal(still.length, 2, "只有一个在转");
+  hideAllPlaceholders(slotOf);
+  for (const s of Object.values(slots)) {
+    assert.equal(s.hidden, true);
+    assert.equal(s.hasAttribute(PLACEHOLDER_STATIC_ATTR), false);
+  }
+  setMaxAnimated(Infinity);
+});
+
+test("常驻槽位(unsupported)不归显隐调度管", () => {
+  const fixed = fakeSlot({ [PLACEHOLDER_FIXED_ATTR]: "" });
+  fixed.hidden = false;
+  const slotOf = () => fixed;
+  applyPlaceholders(new Map([["u", "no-data"]]), slotOf);
+  applyPlaceholders(new Map(), slotOf);
+  assert.equal(fixed.hidden, false, "不会被这一拍的「不要了」关掉");
+});
+
+test("unsupported:只在在线浏览器模式下,且只认用户卡和图卡", () => {
+  const isUser = (id) => id === "my-card";
+  const dom = { Component: () => null };
+  const graph = { card: () => ({}) };
+  const audio = { audio: () => ({}) };
+  assert.equal(unsupportedHere("my-card", dom, isUser), false, "模式没开:一律不算");
+  setOnlineBrowserMode(true);
+  try {
+    assert.equal(unsupportedHere("my-card", dom, isUser), true, "用户卡");
+    assert.equal(unsupportedHere("builtin-dom", dom, isUser), false, "内置 DOM 卡照常渲");
+    assert.equal(unsupportedHere("builtin-graph", graph, isUser), true, "图卡");
+    assert.equal(unsupportedHere("builtin-audio", audio, isUser), true, "音频图卡");
+    assert.equal(unsupportedHere(undefined, dom, isUser), false, "素材段没有 cardId");
+  } finally {
+    setOnlineBrowserMode(false);
+  }
+  assert.equal(UNSUPPORTED_TEXT, "需要本地 PC 渲染辅助");
 });

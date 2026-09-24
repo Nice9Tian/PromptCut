@@ -38,3 +38,16 @@ test("solid and badge geometry render the required root and badge has no noise",
   assert.match(PLACEHOLDER_CSS, /\[data-pc-placeholder-kind="solid"\]\s*\{[^}]*background-image/s);
   assert.doesNotMatch(PLACEHOLDER_CSS, /\[data-pc-placeholder-kind="badge"\]\s*\{[^}]*background-image/s);
 });
+
+test("P3 集成修正:根元素不设 pointer-events:none(命中测试靠 elementsFromPoint),静止标记认槽位", () => {
+  assert.doesNotMatch(PLACEHOLDER_CSS, /pointer-events\s*:\s*none/);
+  assert.match(PLACEHOLDER_CSS, /\[data-pc-placeholder-static\] \.pc-ph-hourglass/);
+});
+
+test("unsupported:电脑 + 离线图标加固定文字,不用沙漏、不铺噪点、没有转动", () => {
+  assert.match(component, /reason === "unsupported"/);
+  assert.match(component, /UNSUPPORTED_TEXT/);
+  assert.match(component, /pc-ph-offline/);
+  assert.equal(contract.UNSUPPORTED_TEXT, "需要本地 PC 渲染辅助");
+  assert.doesNotMatch(PLACEHOLDER_CSS, /kind="unsupported[^"]*"\]\s*\{[^}]*(background-image|animation)/s);
+});

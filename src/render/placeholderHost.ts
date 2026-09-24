@@ -22,10 +22,13 @@
  * (prop 一直是 `true`,React 不会重写它)。截图、墨迹采样、像素扫描、命中测试对槽位和组件根元素
  * 一视同仁(`isPlaceholderNode`)。
  */
-import { PLACEHOLDER_ATTR, setPlaceholderShown, type PlaceholderBox, type PlaceholderGeometry, type PlaceholderReason } from "./placeholder/contract.ts";
+import {
+  PLACEHOLDER_ATTR, PLACEHOLDER_FIXED_ATTR, PLACEHOLDER_SLOT_ATTR, PLACEHOLDER_STATIC_ATTR, setPlaceholderShown,
+  type PlaceholderBox, type PlaceholderGeometry, type PlaceholderReason,
+} from "./placeholder/contract.ts";
 
-/** 包裹层里托着占位组件的槽位 */
-export const PLACEHOLDER_SLOT_ATTR = "data-pc-placeholder-slot";
+/** 包裹层里托着占位组件的槽位(常量在 contract 里,这里转出去给已有的引用方) */
+export { PLACEHOLDER_SLOT_ATTR };
 /** 槽位或组件根元素 —— 排除 / 命中都按它 */
 export const PLACEHOLDER_SELECTOR = `[${PLACEHOLDER_SLOT_ATTR}],[${PLACEHOLDER_ATTR}]`;
 
@@ -109,7 +112,44 @@ export function placeholderWanted(s: PlaceholderState): Map<string, PlaceholderR
   return out;
 }
 
+/* ------------------------------------------------------------------ 2b. 本机渲染不了的卡(unsupported) */
+
+/**
+ * 在线浏览器模式(platforms.md):一期只支持内置卡片,用户卡和图卡在这台设备上渲染不了,
+ * 显示常驻的 `unsupported` 占位(电脑 + 离线图标、「需要本地 PC 渲染辅助」),不走兜底顺序、不显示沙漏。
+ *
+ * **在线浏览器模式本身还没有实现**(没有运行期的判据);现在只由舞台地址上的 `platform=browser` 显式打开
+ * (`StageView` 读它,编辑页的同名参数经 `stageSrc` 转发过来),给截图和探针用。模式落地时把判据换成真的。
+ */
+let onlineBrowser = false;
+export function setOnlineBrowserMode(on: boolean): void {
+  onlineBrowser = !!on;
+}
+export function onlineBrowserMode(): boolean {
+  return onlineBrowser;
+}
+
+/**
+ * 这张卡在此刻的平台上是不是渲染不了。`isUserCard` 查定制卡登记(`registry.userCardSources().fileOf`),
+ * 图卡的判法和 `kernel/cardAuthoring.mjs` 一致(`card` / `audio` 是函数)。
+ */
+export function unsupportedHere(
+  cardId: string | undefined,
+  def: { card?: unknown; audio?: unknown } | undefined,
+  isUserCard: (cardId: string) => boolean,
+): boolean {
+  if (!onlineBrowser || !cardId) return false;
+  if (isUserCard(cardId)) return true;
+  return !!def && (typeof def.card === "function" || typeof def.audio === "function");
+}
+
 /* ------------------------------------------------------------------ 3. 显隐 */
+
+/** 同屏最多几个沙漏在转(占位组件的 `maxAnimated`,由 `Stage` 登记) */
+let animatedLimit = Infinity;
+export function setMaxAnimated(n: number): void {
+  animatedLimit = Number.isFinite(n) && n >= 0 ? n : Infinity;
+}
 
 /** 上一次显示着的那几张(下一次要能把它们关掉) */
 let shown = new Set<string>();
@@ -131,6 +171,8 @@ export function applyPlaceholders(wanted: ReadonlyMap<string, PlaceholderReason>
   for (const id of new Set([...wanted.keys(), ...shown])) {
     const slot = slotOf(id);
     if (!slot) continue;
+    // 常驻的(`unsupported`)不归这里管:它由 `Stage` 按项目和平台直接渲成显示
+    if (slot.hasAttribute(PLACEHOLDER_FIXED_ATTR)) continue;
     const on = wanted.has(id);
     setPlaceholderShown(slot, on);
     if (on) {
@@ -138,6 +180,9 @@ export function applyPlaceholders(wanted: ReadonlyMap<string, PlaceholderReason>
       const reason = wanted.get(id)!;
       if (slot.getAttribute("data-pc-placeholder-reason") !== reason) slot.setAttribute("data-pc-placeholder-reason", reason);
     }
+    // 同屏超过 `maxAnimated` 个时,多出来的沙漏静止(contract 的 `PLACEHOLDER_STATIC_ATTR`,只动槽位属性)
+    const still = on && n > animatedLimit;
+    if (slot.hasAttribute(PLACEHOLDER_STATIC_ATTR) !== still) slot.toggleAttribute(PLACEHOLDER_STATIC_ATTR, still);
   }
   const now = realNow();
   for (const id of wanted.keys()) if (!shown.has(id) || !since.has(id)) since.set(id, now);
