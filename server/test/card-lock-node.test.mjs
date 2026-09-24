@@ -98,6 +98,7 @@ test('N1 用真实页面串算指纹：navigator.platform + WebGL 串 + 完整 U
 
 const FP = fpOf('windows', 'software', 138);    // 本节点（切分节点）
 const X = fpOf('macos', 'apple', 139);           // 锁定方
+const Y = fpOf('linux', 'amd', 140);            // 另一个锁定方（诱饵键用它，写错锁键就会出别的键）
 const CV = 'c0de5a';
 const PROJECT = 'proj-7', REV = 3, ENTRY = 'entry-xyz';
 const PLAN_ID = `plan:${PROJECT}@${REV}`;
@@ -182,9 +183,9 @@ for (const [shape, wrap] of [['普通对象', o => o], ['Map', o => new Map(Obje
       [LK.stream]: X,                  // 流
       [LK.old]: X,                     // 旧形状：snapshotKey 当内容键
       // 不该命中的：本地档不带 entryKey/ 的键、kind 不对的键、按结果键而不是内容键写的键
-      [`snapshot:${D.contentKey}`]: X,
-      ['snapshot:sk-1']: X,
-      [`snapshot:${C.snapshotKey}`]: X,
+      [`snapshot:${D.contentKey}`]: Y,
+      ['snapshot:sk-1']: Y,
+      [`snapshot:${C.snapshotKey}`]: Y,
     };
     const out = splitPlan(baseArgs({ cardLocks: wrap(locks) }));
     assert.equal(out.length, plain.length, '任务个数不变');

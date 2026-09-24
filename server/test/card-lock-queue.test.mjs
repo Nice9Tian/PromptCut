@@ -314,7 +314,7 @@ function assertSuperseded(h, out, { t1, t2, t3, o, c2 }, now, newFp) {
   assert.deepEqual([vo.state, vo.version], ['open', 1], '别的锁键的任务不动');
   // 锁转给新指纹
   assert.deepEqual(lockOf(h, 'snapshot:ck1'), { lockKey: 'snapshot:ck1', envFingerprint: newFp, source: 'takeover', since: now, touchedAt: now });
-  assert.equal(lockOf(h, 'snapshot:ck2').envFingerprint, FP_A);
+  assert.equal(lockOf(h, 'snapshot:ck2'), null, '别的卡没有被牵连出锁');
 }
 
 test('Q4 带 takeover 发布：锁转给新指纹；旧指纹 open 的进 failed(superseded)，claimed 的认领者收 lease-lost，订阅者收 task.failed；done 不动', () => {
