@@ -362,7 +362,9 @@ test('T6 resolveDocservice：环境变量地址可用 → remote；不可用、�
   const dead = await closedPort();
   const dead2 = await closedPort();
   const ws = (p, path = '') => `ws://127.0.0.1:${p}${path}`;
-  const run = (env, extra = {}) => resolveDocservice({ env, timeoutMs: 1000, ...extra });
+  // 能回响应的服务器放宽到 5000 ms：全量 npm test 时 CPU 被并行的测试文件占满，本机 /healthz 偶尔超过 1 s 才回。
+  // 只有专门测超时的 hang 一项（第 8 项）单独传较短的超时。
+  const run = (env, extra = {}) => resolveDocservice({ env, timeoutMs: 5000, ...extra });
 
   // 1. 环境变量地址可用
   const r1 = await run({ PROMPTCUT_DOCSERVICE_URL: ws(good.port), PROMPTCUT_DOCSERVICE_PORT: String(good2.port) });
@@ -409,7 +411,7 @@ test('T6 resolveDocservice：环境变量地址可用 → remote；不可用、�
 
   // 8. 探活超时 → 不可用，继续下一项
   const t0 = Date.now();
-  const r8 = await run({ PROMPTCUT_DOCSERVICE_URL: ws(hang.port), PROMPTCUT_DOCSERVICE_PORT: String(good2.port) }, { timeoutMs: 200 });
+  const r8 = await run({ PROMPTCUT_DOCSERVICE_URL: ws(hang.port), PROMPTCUT_DOCSERVICE_PORT: String(good2.port) }, { timeoutMs: 1000 });
   assert.equal(r8.mode, 'local');
   assert.ok(Date.now() - t0 < 3000, `超时要按 timeoutMs：用了 ${Date.now() - t0} ms`);
 

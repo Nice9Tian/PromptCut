@@ -281,7 +281,7 @@ claim = null
 
 ## B. M2：`server/render-node/`
 
-纯函数和一个会话状态机。只可以引 Node 内置模块、`server/render-queue/index.mjs`（常量与 `taskIdOf`）和 `server/snapshot-store.mjs` 的 `snapshotTier`；不读环境变量，不开计时器，不做 I/O，不连网络。
+纯函数和一个会话状态机。只可以引 Node 内置模块、`server/render-queue/index.mjs`（常量、`taskIdOf`、`lockKeyOf`）和 `server/snapshot-tier.mjs` 的 `snapshotTier`（2026-09-25 从 `snapshot-store.mjs` 搬出，守门测试 `render-node-deps` 的 D1 / D2 保证只依赖 Node 内置模块）；不读环境变量，不开计时器，不做 I/O，不连网络。
 
 ### B.1 `fingerprint.mjs`（设计 2.1）
 
