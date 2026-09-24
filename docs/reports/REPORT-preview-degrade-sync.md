@@ -141,8 +141,27 @@ p50 与修复前接近。p90 的增量来自：每 15 帧换一次海报快照�
 - `unsupported` 抽样（`platform=browser`，内置金句药丸 + 用户卡 `mu-animated-shiny-text`）：用户卡不跑卡片代码、常驻显示「需要本地 PC 渲染辅助」、槽位带常驻标记；内置卡照常渲；点中徽标命中用户卡。
 - 截图（本机 `%TEMP%\pc-p4\`）：`after\after-占位符-旋转与缩放.png`（P3，带噪点）、`final\after-占位符-旋转与缩放.png`（降级）、`after\after-起播.png` / `after-跳转.png` / `after-超过6路流.png` / `after-编辑后.png`、`unsupported\unsupported-用户卡.png`。
 
-### 5. 未决
+### 5. 用户决定之后的收尾（2026-09-24）
 
-- 起播 p90 +2.5 ms（修复前 7.7 → 10.2）超过 1 ms 门槛；降级后的最终测量没有满帧流和快照，场景不完整，需要在预渲染预热充分后重测。
+- 用户接受起播 +2.5 ms，不复测；`PERF_DEGRADED` 关回 `false`，恢复噪点与转动（语义同步）。
+- Item 4（就绪索引的版本 / 会话隔离）剥离为独立任务，移交文档 `REPORT-item4-session-isolation.md`，本分支不改。
+- Item 5：新增 `src/editor/preview/prerenderPreload.ts`（纯调度，7 条单测）与 `usePrerenderPreload.ts`（公共 hook）；
+  双舞台模式在编辑推送成功（`frameRequest` 先 `alignMirror`）且空闲（不在播放、不在拖动）时防抖 800 ms 发 `preload`，没就绪隔 2 秒再问，失败隔 4 秒重试；legacy 的 `UnifiedPreview` 用同一个 hook、行为不变。
+- Item 3：`stream-editor-e2e.mjs` 改为「流画出帧时垫着的海报快照被藏住」；`preview-fallback-probe.mjs` 加 `--page-preload`，药丸那条改为「显示占位符或已有预渲染结果垫着」。
+- Item 7：`measureLocalContentBox` 在同一任务里暂时把包裹层自身 transform 压成 `none !important` 再量（压不住退回反解）；后台补跑到目标拍时当场量一次墨迹框。
+
+验证（最终代码）：
+
+- `npx tsc -b --force` 0 错误；`npm test` 1880 项，1879 通过、0 失败、1 跳过。
+- `verify-determinism` 1800/1800 一致；`verify-unified-frames` PASS；`editor-preview-smoke --stage` fails []。
+- `stream-editor-e2e --seconds 10` PASS（海报已投、流画出帧时 `visibility:hidden`）。
+- `preview-fallback-probe --page-preload`（探针不调 preload，全靠页面）PASS：透明 0；满帧流 381 / 稀疏流 193 / 快照 576 / 占位符 20 / 120 ms 空档 6；两张药丸都有预渲染结果垫着。
+- Item 5 专项：页面自发 6 次 preload（全部 200），预渲染进程为新项目认领了计划；播放中 0 次，暂停后复查 1 次。
+- Item 7 专项：同一张药丸转 45° 与不转的局部墨迹框相差 0 px，量完 transform 原样还原。
+- `placeholder-probe`（完整版）12 项全过：新增合成层 1 / 10 / 30 / 60 个实例都是 1，节拍 p90 增量 0.1 ms，动画豁免生效。
+
+### 6. 未决
+
 - 在线浏览器模式没有运行期判据，`unsupported` 靠 `platform=browser` 显式打开。
-- A 的更正建议 3～5、7 未处理（见上文）。
+- Item 4 见 `REPORT-item4-session-isolation.md`，另立专项。
+- 起播 +2.5 ms 已由用户接受，未复测。

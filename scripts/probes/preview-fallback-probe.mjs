@@ -268,7 +268,20 @@ try {
       check(snap && snap.html === false && snap.controls === false, '生成快照不带占位节点', snap);
     }
     if (LABEL !== 'before') {
-      for (const id of pills) check(ph.some((p) => p.clip === id), `药丸 ${id} 在兜底尽头显示占位符`, ph);
+      /*
+       * 药丸要么走到兜底尽头显示占位符,要么已经有预渲染结果垫着(快照 / 流)——
+       * 页面自己触发预渲染(Item 5,`usePrerenderPreload`)之后,药丸也会被预渲染,不一定再走到尽头。
+       * 不许的只有「两样都没有」(那就是透明,另由逐拍分级的 transparent 统计兜住)。
+       */
+      const covered = front ? await front.evaluate(() => {
+        const d = window.__pcStageDiag();
+        return { snapshots: d.snapshots, planes: d.streamPlanes.flatMap((p) => p.clipIds) };
+      }).catch(() => ({ snapshots: [], planes: [] })) : { snapshots: [], planes: [] };
+      out.pillsCovered = covered;
+      for (const id of pills) {
+        check(ph.some((p) => p.clip === id) || covered.snapshots.includes(id) || covered.planes.includes(id),
+          `药丸 ${id} 显示占位符,或已有预渲染结果垫着`, { ph, covered });
+      }
     }
     await sleep(1400);
     await pause();
