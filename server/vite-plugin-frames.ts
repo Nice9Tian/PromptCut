@@ -13,6 +13,7 @@ import { ensureMirror } from "./vite-plugin-mirror";
 import { latestPlayhead, ensureMirror as ensureMirrorVersion, reportReadySession } from "./vite-plugin-mirror";
 import { snapshotTier } from "./snapshot-store.mjs";
 import { readySessionOf } from "./ready-index.mjs";
+import { describeEnvironment } from "./render-node/fingerprint.mjs";
 import { mediaSourceOf } from "./vision/ffmpeg-frames";
 
 const services = new Map<string, FramePipeline>();
@@ -263,7 +264,7 @@ export function framesPlugin(): Plugin {
       }
       /*
        * K1:**探针推过的帧直接存成死素材**。后台舞台第一趟(全局时钟逐帧推)每生成
-       * 一帧快照就把 `{ session, localRev, clipId, localFrame, html }` 报上来,经编辑器
+       * 一帧快照就把 `{ session, localRev, clipId, localFrame, html, environment }` 报上来,经编辑器
        * 进程转到这里。`kind` / `key` 由**预渲染进程**按镜像里的项目用 A3a 的规则算
        * (共享键要 `card-identity.mjs` 的 `digest`,本地模式里页面不算它)。
        *
@@ -272,7 +273,8 @@ export function framesPlugin(): Plugin {
        * 在缩水项目里都拿不到输入,存下去等于把错画面当死素材发出去;它们的本地档
        * 仍由 C2 的整场景路产。
        *
-       * 写进同一棵目录、进 C3 的索引,预渲染不再重新预渲染这些帧。
+       * 写进同一棵目录、进 C3 的索引,预渲染不再重新预渲染这些帧。键乘的是页面的环境指纹,
+       * 这张卡随之锁定到页面的环境(卡片级指纹锁,契约 F.3),见下面 `acceptMeasuredSnapshot` 那一段。
        */
       if (req.method === "PUT" && url.pathname === "/snapshot") {
         let probeBody = "", probeOver = false;
@@ -303,20 +305,20 @@ export function framesPlugin(): Plugin {
             const compositing = control.capabilities?.compositing;
             const tier = snapshotTier(control.capabilities);
             if (compositing !== "independent" || tier !== "shared") return json(200, { ok: true, stored: false, reason: "NOT_INDEPENDENT" });
-            // M4(契约 E.6):测量帧产自用户的浏览器,和预渲染进程的 Chrome 不是同一种环境。共享键
-            // 已乘上预渲染 Chrome 的环境指纹,把别的环境的帧写进这个键,等于在同一层里混环境拼帧
-            // (「不同环境的结果不混用」)。所以请求体必须带着与这张卡的指纹相同的 `envFingerprint`
-            // 才存;不带或不等回 200 `ENV_MISMATCH`,不写盘、不发层 —— 这些帧由预渲染进程自己补渲。
-            // 页面(`probeRunner.ts`)只在意 404,回 200 不影响它。
-            if (typeof input.envFingerprint !== "string" || input.envFingerprint !== control.envFingerprint)
-              return json(200, { ok: true, stored: false, reason: "ENV_MISMATCH" });
-            // #9:写帧、判体积、并 index 一步做。A3c:超限的探针帧同样不进就绪索引(记进 `oversize`,R6-14)
-            const index = await service.snapshots().commitSnapshots({ tier: "shared", key: control.snapshotKey, clipId,
-              capabilities: control.capabilities, items: [{ localFrame, html }] });
-            if (!index.written.length) return json(200, { ok: true, stored: true, indexed: false, reason: "OVER_LIMIT" });
-            // 同样过 Item 4 的闸:只进当前版本正是这个 entry 的会话
-            service.publishLayer(entry, control, tier, index.frames);
-            return json(200, { ok: true, stored: true, indexed: true, count: index.count });
+            /*
+             * 卡片级指纹锁(契约 F.3,取代 E.6 的指纹闸):测量帧产自用户的浏览器,写在**页面自己的
+             * 环境指纹**乘出来的键下,这张卡的共享快照随之锁定到页面的环境(「预渲染结果的复用」)。
+             * 页面指纹按页面上报的 `environment`(`src/editor/pageEnvironment.mjs`)用同一份
+             * `describeEnvironment` 算;没有 `environment` 就认字符串 `envFingerprint`;都没有传 null。
+             * 得锁、写盘、发层都在 `acceptMeasuredSnapshot` 里。页面(`probeRunner.ts`)只在意 404,回 200 不影响它。
+             */
+            let pageFingerprint: string | null = null;
+            const environment = input.environment;
+            if (environment && typeof environment === "object" && !Array.isArray(environment)) {
+              pageFingerprint = describeEnvironment({ platform: environment.platform, renderer: environment.renderer, vendor: environment.vendor,
+                chromeVersion: environment.userAgent ?? environment.chromeVersion }).fingerprint;
+            } else if (typeof input.envFingerprint === "string") pageFingerprint = input.envFingerprint;
+            return json(200, await service.acceptMeasuredSnapshot(entry, control, { envFingerprint: pageFingerprint, localFrame, html }));
           } catch (error: any) {
             json(400, { ok: false, code: "PROBE_SNAPSHOT_ERROR", error: error?.message || "探针帧没存下" });
           }

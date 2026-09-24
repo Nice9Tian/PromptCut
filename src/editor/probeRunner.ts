@@ -54,6 +54,7 @@ import { costDeviceString, readGpuRenderer, resolveGlRoute } from "../render/cos
 import { budgetOf } from "../render/pipelinePlan.mjs";
 import { resolveTuning, PROBE_MAX_FRAMES, type PipelineTuning } from "../render/pipelineTuning.mjs";
 import { summarizeProbe } from "../render/probeSummary.mjs";
+import { pageEnvironment } from "./pageEnvironment.mjs";
 import type { CardCostRecord } from "../render/cardCostKey.mjs";
 import type { RenderAborted, RenderReply, SetTimeAborted, SetTimeReply, SnapshotCost, StageEvent, StageRpcClient } from "../render/stageRpc";
 import { mirrorKey } from "../render/dataMirror";
@@ -248,7 +249,9 @@ let snapshotEndpointMissing = false;
  * 它们的本地档仍由 C2 的整场景路产。
  *
  * `kind` / `key` 由预渲染进程按镜像里的项目用 A3a 的规则算，父页只带
- * `{ session, localRev, clipId, localFrame, html }`。
+ * `{ session, localRev, clipId, localFrame, html, environment }`。`environment` 是这台浏览器的渲染环境
+ * （`pageEnvironment.mjs`），预渲染进程按它算页面的环境指纹：测量帧写在页面自己的键下，这张卡的
+ * 快照随之锁定到页面的环境（卡片级指纹锁，契约 F.4）。
  */
 async function forwardProbeFrame(e: Extract<StageEvent, { type: "probe-frame" }>): Promise<void> {
   if (snapshotEndpointMissing) return;
@@ -258,7 +261,7 @@ async function forwardProbeFrame(e: Extract<StageEvent, { type: "probe-frame" }>
     const res = await fetch("/api/frames/snapshot", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ session: key.session, localRev: key.localRev, clipId: e.clipId, localFrame: e.localFrame, html: e.html }),
+      body: JSON.stringify({ session: key.session, localRev: key.localRev, clipId: e.clipId, localFrame: e.localFrame, html: e.html, environment: pageEnvironment() }),
     });
     if (res.status === 404) snapshotEndpointMissing = true;
   } catch {
