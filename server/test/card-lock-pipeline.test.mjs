@@ -1,20 +1,24 @@
 /**
- * 卡片级指纹锁：本机预渲染进程这一侧（契约 `docs/plan/render-queue-contract.md` F.3，测试表 F.5 的 L1～L8）。
+ * 卡片级指纹锁：本机预渲染进程这一侧（契约 `docs/plan/render-queue-contract.md` F.3 与 F.8，
+ * 测试表 F.5 的 L1～L8、F.8 第 5 条的 L9、L10）。
  * 跑：node --experimental-test-module-mocks --test server/test/card-lock-pipeline.test.mjs
  *
- * 只照契约 F.3 以及它引用的 E.2、E.3 写，不看实现。
+ * 只照契约 F.3、F.8 以及它引用的 E.2、E.3 写，不看实现。
  *
  * 约定：
  *   - `server/card-lock.mjs` 是 F.3 新建的模块，按需动态引入：它不存在时只有用到它的用例失败。
  *   - 不起 Chrome：`server/bakery/index.mjs` 整个换成假的（和 `agent-lane.test.mjs` 一样用 `mock.module`）。
  *     假的 `bakeFrames` 记下每次调用的 `out` / `targetFrames` / `snapshotFrames`，对 `targetFrames` 调
- *     `onFrame`、对 `snapshotFrames` 调 `onSnapshot`（产物里每张卡一项 `{ id: clipId, frame, html }`），
- *     这就是 L6～L8 的「假 bakery 计数」。
+ *     `onFrame`、对 `snapshotFrames` 调 `onSnapshot`，这就是 L6～L10 的「假 bakery 计数」。`onSnapshot` 的产物
+ *     由假 bakery 的 `itemsFor` 给：隔离单卡那一路（`out` 在 `<root>/controls/` 下）每张卡一项、帧号原样；
+ *     整场景那一路按片段起点换成本地帧、只给这一帧上有的卡。
  *   - `FramePipeline` 构造时注入 `environment`（E.2），不探测；`dataRoot` 指向临时目录（成本记录读不到，
- *     预渲染集合按声明兜底，stateful 的卡都在集合里）。
+ *     预渲染集合按声明兜底，stateful 的卡都在集合里）；`interactive: false`（不产轨道流）。
  *   - card plan 用真的 `CardFrameCache.plan()`（entry 自带的那个）算，contentKey / snapshotKey 与生产一致；
  *     `fillCardControls` 那几条把 entry 上 `cardCache` 的 `hasComplete` / `put` / `finish` 换成桩（PNG 那一支不落盘）。
  *   - `publishLayer` 在实例上包一层记录（`this.publishLayer` 的每次调用），记下调用那一刻的 `snapshotKey`。
+ *   - L9 走真的 `preload`：只把借预渲染间（`acquire`）、整片 MOV（`fillMov`）、视频（`prerender`）、存档（`save`）
+ *     换成桩，其余（锚帧、fillCardControls、本地档、延后重判的计时器）跑真的；用例结束 `close()`。
  *   - 每条用例一个 `fs.mkdtemp` 临时目录，结束删掉。
  */
 import { test, mock } from 'node:test';
@@ -41,7 +45,7 @@ mock.module(new URL('../bakery/index.mjs', import.meta.url).href, {
       if (onBake) await onBake(rec);
       for (const frame of rec.targetFrames) await opts.onFrame?.(frame, Buffer.from(`png-${frame}`));
       for (const frame of rec.snapshotFrames) {
-        const items = (bakery?.clipIds ?? []).map(id => ({ id, frame, html: `<div data-clip="${id}" data-f="${frame}">own</div>` }));
+        const items = bakery?.itemsFor ? bakery.itemsFor(frame, rec) : [];
         await opts.onSnapshot?.(frame, '<div data-pc-scene=""></div>', items);
       }
     },
@@ -59,6 +63,7 @@ const loadCardLock = () => import('../card-lock.mjs');
 const sha256 = text => crypto.createHash('sha256').update(text, 'utf8').digest('hex');
 const rk = (contentKey, fp) => sha256(`${contentKey}\n${fp}`);
 const HEX64 = /^[0-9a-f]{64}$/;
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 const OWN_ENV = describeEnvironment({
   platform: 'win32',
@@ -80,51 +85,63 @@ assert.notEqual(PAGE, PAGE2);
 const IDLE_MS = 30_000;
 
 /**
- * 三张卡：a、c 共享档（各 6 帧；c 从 0.5 秒开始，全局帧 15～20，和 a 的 0～5 不重叠），b 本地档。
- * graph 的写法同 env-fingerprint-keys.test.mjs。
+ * 卡：a、c 共享档，b 本地档，每张 0.5 秒 = 15 帧。a 从 0 秒（全局帧 0～14），c 从 2 秒（全局帧 60～74），
+ * b 从 0 秒。`twin` 时另有 a2：与 a 同一个节点、同样的时长与相位，摆在 1 秒（全局帧 30～44）——
+ * 同一张卡摆了两次，内容键（和共享快照键）与 a 相同（F.8 第 3 条）。graph 的写法同 env-fingerprint-keys.test.mjs。
  */
+const N = 15;
+const ALL = Array.from({ length: N }, (_, i) => i);
+const FULL = [[0, N - 1]];
+const START = { 'clip-a': 0, 'clip-a2': 1, 'clip-c': 2, 'clip-b': 0 };
 const SHARED = { compositing: 'independent', frameMode: 'stateful' };
 const LOCAL = { compositing: 'belowDependent', frameMode: 'stateful' };
-const PROJECT = {
-  id: 'card-lock', fps: 30, width: 320, height: 180, duration: 1, style: {}, media: [],
-  tracks: [
-    { id: 't1', clips: [{ id: 'clip-a', cardId: 'demo-a', start: 0, end: 0.2 }] },
-    { id: 't2', clips: [{ id: 'clip-c', cardId: 'demo-c', start: 0.5, end: 0.7 }] },
-    { id: 't3', clips: [{ id: 'clip-b', cardId: 'glass', start: 0, end: 0.2 }] },
-  ],
-};
-const GRAPH = {
-  definitions: [],
-  nodes: [
-    { id: 'n-a', adapter: 'chrome', cardId: 'demo-a', capabilities: { ...SHARED }, inputs: {} },
-    { id: 'n-c', adapter: 'chrome', cardId: 'demo-c', capabilities: { ...SHARED }, inputs: {} },
-    { id: 'n-b', adapter: 'chrome', cardId: 'glass', capabilities: { ...LOCAL }, inputs: {} },
-  ],
-  outputs: [
-    { nodeId: 'n-a', clipId: 'clip-a', start: 0, end: 0.2, opacity: 1 },
-    { nodeId: 'n-c', clipId: 'clip-c', start: 0.5, end: 0.7, opacity: 1 },
-    { nodeId: 'n-b', clipId: 'clip-b', start: 0, end: 0.2, opacity: 1 },
-  ],
-};
+
+function projectOf({ twin = false } = {}) {
+  const clip = (id, cardId) => ({ id, cardId, start: START[id], end: START[id] + 0.5 });
+  return {
+    id: twin ? 'card-lock-twin' : 'card-lock', fps: 30, width: 320, height: 180, duration: 3, style: {}, media: [],
+    tracks: [
+      { id: 't1', clips: [clip('clip-a', 'demo-a'), ...(twin ? [clip('clip-a2', 'demo-a')] : [])] },
+      { id: 't2', clips: [clip('clip-c', 'demo-c')] },
+      { id: 't3', clips: [clip('clip-b', 'glass')] },
+    ],
+  };
+}
+function graphOf({ twin = false } = {}) {
+  const out = (nodeId, clipId) => ({ nodeId, clipId, start: START[clipId], end: START[clipId] + 0.5, opacity: 1 });
+  return {
+    definitions: [],
+    nodes: [
+      { id: 'n-a', adapter: 'chrome', cardId: 'demo-a', capabilities: { ...SHARED }, inputs: {} },
+      { id: 'n-c', adapter: 'chrome', cardId: 'demo-c', capabilities: { ...SHARED }, inputs: {} },
+      { id: 'n-b', adapter: 'chrome', cardId: 'glass', capabilities: { ...LOCAL }, inputs: {} },
+    ],
+    outputs: [out('n-a', 'clip-a'), ...(twin ? [out('n-a', 'clip-a2')] : []), out('n-c', 'clip-c'), out('n-b', 'clip-b')],
+  };
+}
 
 const withTmp = async (prefix, fn) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
   try { return await fn(root); } finally { await fs.rm(root, { recursive: true, force: true }); }
 };
 
-/** 不带任何锁时的 plan（本机指纹），拿来算内容键 */
-const basePlan = root => new CardFrameCache({ root, project: PROJECT, envFingerprint: OWN }).plan(GRAPH);
-
 /**
  * 一套本机预渲染进程的场景：
- *   `locks`   开始前盘上已有的锁：[{ clipId, fp, source = 'page', touchedAt = Date.now() }]
- *   `frames`  开始前盘上已有的共享档快照：[{ clipId, fp, frames: [本地帧…] }]（写在 resultKeyOf(contentKey, fp) 下）
+ *   `locks`    开始前盘上已有的锁：[{ clipId, fp, source = 'page', touchedAt = Date.now() }]
+ *   `frames`   开始前盘上已有的共享档快照：[{ clipId, fp, frames: [本地帧…] }]（写在 resultKeyOf(contentKey, fp) 下）
+ *   `twin`     见上
+ *   `options`  另给 FramePipeline 构造的参数（L9 的 cardLockIdleMs）
+ *   `record`   是否先建 entry、记下 card plan（L9 走 preload，自己算）
  */
-async function scene(root, { locks = [], frames = [] } = {}) {
-  const plan0 = basePlan(root);
+async function scene(root, { locks = [], frames = [], twin = false, options = {}, record = true } = {}) {
+  const project = projectOf({ twin }), graph = graphOf({ twin });
+  const plan0 = new CardFrameCache({ root, project, envFingerprint: OWN }).plan(graph);
   const ck = Object.fromEntries(plan0.map(c => [c.clipId, c.contentKey]));
   const caps = Object.fromEntries(plan0.map(c => [c.clipId, c.capabilities]));
+  const pngKey = Object.fromEntries(plan0.map(c => [c.clipId, c.key]));
   assert.ok(ck['clip-a'] && ck['clip-c'], '夹具：plan 里有 a、c 两张共享档卡');
+  assert.ok(plan0.every(c => c.count === N), `夹具：每张卡 ${N} 帧`);
+  if (twin) assert.equal(ck['clip-a2'], ck['clip-a'], '夹具：a2 与 a 内容键相同');
   if (locks.length) {
     const { createCardLockStore } = await loadCardLock();
     for (const { clipId, fp, source = 'page', touchedAt = Date.now() } of locks) {
@@ -140,7 +157,7 @@ async function scene(root, { locks = [], frames = [] } = {}) {
       items: list.map(localFrame => ({ localFrame, html: `<p>${clipId} ${fp} ${localFrame}</p>` })) });
   }
 
-  const pipeline = new FramePipeline({ root, origin: () => 'http://127.0.0.1:1', environment: OWN_ENV, dataRoot: root });
+  const pipeline = new FramePipeline({ root, origin: () => 'http://127.0.0.1:1', environment: OWN_ENV, dataRoot: root, interactive: false, ...options });
   await pipeline.ensureCardLocks();
   const layers = [];
   const publish = pipeline.publishLayer.bind(pipeline);
@@ -148,17 +165,26 @@ async function scene(root, { locks = [], frames = [] } = {}) {
     layers.push({ clipId: control?.clipId, snapshotKey: control?.snapshotKey, tier, ranges: structuredClone(ranges) });
     return publish(entry, control, tier, ranges);
   };
-  const entry = await pipeline.entry(PROJECT);
-  const plan = entry.cardCache.plan(GRAPH);
-  pipeline.recordCardPlan(entry, plan);
-  const ctl = clipId => entry.cardPlan.find(c => c.clipId === clipId);
-  const own = clipId => rk(ck[clipId], OWN);
-  const keyOf = (clipId, fp) => rk(ck[clipId], fp);
-  const index = (clipId, fp) => store.snapshotIndex({ tier: 'shared', key: keyOf(clipId, fp) });
-  return { pipeline, entry, plan, ctl, ck, caps, own, keyOf, index, layers, store, lockStore: () => pipeline.cardLockStore };
+  let entry = null;
+  if (record) {
+    entry = await pipeline.entry(project);
+    pipeline.recordCardPlan(entry, entry.cardCache.plan(graph));
+  }
+  const s = {
+    root, project, graph, pipeline, ck, caps, pngKey, layers, store,
+    get entry() { return entry; },
+    set entry(value) { entry = value; },
+    ctl: clipId => entry.cardPlan.find(c => c.clipId === clipId),
+    own: clipId => rk(ck[clipId], OWN),
+    keyOf: (clipId, fp) => rk(ck[clipId], fp),
+    index: (clipId, fp) => store.snapshotIndex({ tier: 'shared', key: rk(ck[clipId], fp) }),
+    lockStore: () => pipeline.cardLockStore,
+    layersOf: clipId => layers.filter(l => l.clipId === clipId),
+  };
+  return s;
 }
 
-/** fillCardControls 用：PNG 那一支换成桩，记 put；bakery 是假的，记 reset */
+/** fillCardControls 用：PNG 那一支换成桩，记 put */
 function stubPng(entry, { complete = false } = {}) {
   const puts = [];
   entry.cardCache.hasComplete = async () => complete;
@@ -166,14 +192,36 @@ function stubPng(entry, { complete = false } = {}) {
   entry.cardCache.finish = async () => {};
   return puts;
 }
-function fakeBakery() {
-  const bakery = { clipIds: ['clip-a', 'clip-c', 'clip-b'], resets: 0, page: { setViewport: async () => {}, evaluate: async () => null } };
+/** 假的预渲染间：记 reset；`itemsFor` 给 onSnapshot 的产物；`evaluate` 回 browser plan（preload 用） */
+function fakeBakery(s) {
+  const controlsDir = path.join(s.root, 'controls') + path.sep;
+  const clips = Object.keys(s.ck);
+  const bakery = {
+    resets: 0,
+    page: { setViewport: async () => {}, evaluate: async () => s.graph },
+    itemsFor(frame, rec) {
+      const isolated = typeof rec.out === 'string' && rec.out.startsWith(controlsDir);
+      if (isolated) return clips.map(id => ({ id, frame, html: `<div data-clip="${id}" data-f="${frame}">own</div>` }));
+      return clips.map(id => ({ id, frame: frame - START[id] * 30, html: `<div data-clip="${id}" data-f="${frame}">scene</div>` }))
+        .filter(item => item.frame >= 0 && item.frame < N);
+    },
+  };
   bakery.reset = async () => { bakery.resets += 1; };
   return bakery;
 }
-/** 这一趟里给某张卡（按 PNG 缓存目录认）要过的 HTML 快照帧、PNG 帧 */
-const bakesOf = (root, control) => bakeLog.filter(r => r.out === path.join(root, 'controls', control.key));
-const snapshotFramesOf = (root, control) => bakesOf(root, control).flatMap(r => r.snapshotFrames).sort((x, y) => x - y);
+/** 这一趟里给某张卡（按 PNG 缓存目录认）要过的 HTML 快照帧 */
+const bakesOf = (s, clipId) => bakeLog.filter(r => r.out === path.join(s.root, 'controls', s.pngKey[clipId]));
+const snapshotFramesOf = (s, clipId) => bakesOf(s, clipId).flatMap(r => r.snapshotFrames).sort((x, y) => x - y);
+const uniq = list => [...new Set(list)].sort((x, y) => x - y);
+
+async function waitFor(what, predicate, { timeoutMs = 10_000, stepMs = 20 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await predicate()) return;
+    await sleep(stepMs);
+  }
+  assert.fail(`等了 ${timeoutMs} ms 仍未满足：${what}`);
+}
 
 /* ================================================================== L1 */
 
@@ -245,7 +293,7 @@ test('L1 锁库：flush 后落盘（一把锁一个 <contentKey>.json），新�
   assert.deepEqual(again.get(K1), { envFingerprint: OWN, source: 'prerender', since: 5_002, touchedAt: 5_003 });
 }));
 
-test('L1 锁库：坏文件跳过；非法 contentKey 在 acquire / takeover 抛', async () => withTmp('pc-cl-l1-bad-', async root => {
+test('L1 锁库：坏文件跳过；非法 contentKey、空的环境指纹在 acquire / takeover 抛（F.8 第 4 条）', async () => withTmp('pc-cl-l1-bad-', async root => {
   const { createCardLockStore } = await loadCardLock();
   const dir = path.join(root, 'controls-lock');
   await fs.mkdir(dir, { recursive: true });
@@ -263,6 +311,13 @@ test('L1 锁库：坏文件跳过；非法 contentKey 在 acquire / takeover 抛
     assert.throws(() => store.acquire(bad, PAGE, 'page'), `acquire(${JSON.stringify(bad)}) 应抛`);
     assert.throws(() => store.takeover(bad, PAGE, 'page'), `takeover(${JSON.stringify(bad)}) 应抛`);
   }
+  const fresh = sha256('fresh');
+  for (const fp of ['', null, undefined]) {
+    assert.throws(() => store.acquire(fresh, fp, 'page'), `acquire 的环境指纹 ${JSON.stringify(fp)} 应抛`);
+    assert.throws(() => store.takeover(good, fp, 'page'), `takeover 的环境指纹 ${JSON.stringify(fp)} 应抛`);
+  }
+  assert.equal(store.get(fresh), null, '抛出的调用不建锁');
+  assert.equal(store.get(good).envFingerprint, PAGE, '抛出的调用不改现有的锁');
   assert.equal(store.list().length, 1, '抛出的调用不改内存');
   await store.flush();
   assert.deepEqual((await fs.readdir(dir)).filter(n => n.endsWith('.json')).sort(), [`${good}.json`, `${broken}.json`, `${empty}.json`].sort(),
@@ -301,7 +356,7 @@ test('L2 cardLockDecision：own / reuse / defer / takeover 四个分支，按顺
 
 test('L3 applyCardLocks：异指纹锁 → snapshotKey = resultKeyOf(contentKey, 锁指纹)、envFingerprint 是锁指纹、cardLock.foreign；key / contentKey 不变；诊断可见', async () => withTmp('pc-cl-l3-', async root => {
   const s = await scene(root, { locks: [{ clipId: 'clip-a', fp: PAGE }] });
-  const before = basePlan(root);
+  const before = new CardFrameCache({ root, project: s.project, envFingerprint: OWN }).plan(s.graph);
   const a = s.ctl('clip-a'), c = s.ctl('clip-c'), b = s.ctl('clip-b');
   const a0 = before.find(x => x.clipId === 'clip-a'), c0 = before.find(x => x.clipId === 'clip-c'), b0 = before.find(x => x.clipId === 'clip-b');
 
@@ -336,17 +391,19 @@ test('L3 applyCardLocks：异指纹锁 → snapshotKey = resultKeyOf(contentKey,
   assert.equal(pd.controls.find(x => x.clipId === 'clip-c').cardLock, null);
 }));
 
-test('L3 applyCardLocks：锁换回本机指纹后恢复自己的键（foreign: false）；锁没了恢复自己的键、cardLock null', async () => withTmp('pc-cl-l3-back-', async root => {
-  const s = await scene(root, { locks: [{ clipId: 'clip-a', fp: PAGE }] });
+test('L3 applyCardLocks：锁换回本机指纹后恢复自己的键（foreign: false）；锁没了恢复自己的键、cardLock null；同内容键的片段一起换', async () => withTmp('pc-cl-l3-back-', async root => {
+  const s = await scene(root, { locks: [{ clipId: 'clip-a', fp: PAGE }], twin: true });
   const own = s.own('clip-a');
-  assert.notEqual(s.ctl('clip-a').snapshotKey, own);
+  for (const id of ['clip-a', 'clip-a2']) assert.equal(s.ctl(id).snapshotKey, s.keyOf('clip-a', PAGE), `${id} 用锁定方的键`);
 
   s.lockStore().takeover(s.ck['clip-a'], OWN, 'prerender');
   s.pipeline.applyCardLocks(s.entry.cardPlan);
-  const a = s.ctl('clip-a');
-  assert.equal(a.snapshotKey, own, '换回自己的键');
-  assert.equal(a.envFingerprint, OWN);
-  assert.deepEqual(a.cardLock, { envFingerprint: OWN, source: 'prerender', foreign: false });
+  for (const id of ['clip-a', 'clip-a2']) {
+    const x = s.ctl(id);
+    assert.equal(x.snapshotKey, own, `${id} 换回自己的键`);
+    assert.equal(x.envFingerprint, OWN);
+    assert.deepEqual(x.cardLock, { envFingerprint: OWN, source: 'prerender', foreign: false });
+  }
 
   // 再被页面接手、又换回
   s.lockStore().takeover(s.ck['clip-a'], PAGE2, 'page');
@@ -362,7 +419,7 @@ test('L3 applyCardLocks：锁换回本机指纹后恢复自己的键（foreign: 
   assert.equal(s.ctl('clip-a').snapshotKey, own);
   assert.equal(s.ctl('clip-a').envFingerprint, OWN);
   assert.equal(s.ctl('clip-a').cardLock, null);
-  assert.equal(s.ctl('clip-a').key, basePlan(root).find(x => x.clipId === 'clip-a').key);
+  assert.equal(s.ctl('clip-a').key, s.pngKey['clip-a']);
 }));
 
 /* ================================================================== L4 */
@@ -408,7 +465,23 @@ test('L4 acceptMeasuredSnapshot：没指纹 ENV_MISSING；第一帧得锁、写�
   assert.equal(reread.get(a.contentKey)?.envFingerprint, PAGE);
 }));
 
-test('L4 acceptMeasuredSnapshot：预渲染进程先得锁时页面被拒；页面指纹与本机相同时写在本机键下、合在一起；超限 OVER_LIMIT', async () => withTmp('pc-cl-l4-own-', async root => {
+test('L4 acceptMeasuredSnapshot：同一张卡摆在多个片段上时，入库后内容键相同的每个片段都换成页面键、各发一条 layer（F.8 第 3 条）', async () => withTmp('pc-cl-l4-twin-', async root => {
+  const s = await scene(root, { twin: true });
+  const pageKey = s.keyOf('clip-a', PAGE);
+  s.layers.length = 0;
+  const r = await s.pipeline.acceptMeasuredSnapshot(s.entry, s.ctl('clip-a'), { envFingerprint: PAGE, localFrame: 4, html: '<p>page 4</p>' });
+  assert.equal(r.stored, true);
+  for (const id of ['clip-a', 'clip-a2']) {
+    assert.equal(s.ctl(id).snapshotKey, pageKey, `${id} 换成页面键`);
+    assert.equal(s.ctl(id).cardLock?.foreign, true);
+    const ls = s.layersOf(id);
+    assert.equal(ls.length, 1, `${id} 恰好一条 layer：${JSON.stringify(s.layers)}`);
+    assert.deepEqual(ls[0], { clipId: id, snapshotKey: pageKey, tier: 'shared', ranges: [[4, 4]] });
+  }
+  assert.equal(s.layersOf('clip-c').length, 0, '别的卡不发');
+}));
+
+test('L4 acceptMeasuredSnapshot：预渲染进程先得锁时页面被拒；页面指纹与本机相同时写在本机键下；超限 OVER_LIMIT；没有内容键 NO_CONTENT_KEY', async () => withTmp('pc-cl-l4-own-', async root => {
   const s = await scene(root);
   const c = s.ctl('clip-c'), a = s.ctl('clip-a');
   s.lockStore().acquire(c.contentKey, OWN, 'prerender');
@@ -428,6 +501,18 @@ test('L4 acceptMeasuredSnapshot：预渲染进程先得锁时页面被拒；页�
   const r3 = await s.pipeline.acceptMeasuredSnapshot(s.entry, a, { envFingerprint: PAGE, localFrame: 0, html: huge });
   assert.deepEqual(r3, { ok: true, stored: true, indexed: false, reason: 'OVER_LIMIT', envFingerprint: PAGE, key: s.keyOf('clip-a', PAGE) });
   assert.equal((await s.index('clip-a', PAGE)).count, 0);
+
+  // 没有内容键的 control（F.8 第 4 条）：不写、不建锁
+  const bare = { ...s.ctl('clip-b') };
+  delete bare.contentKey;
+  const locksBefore = s.lockStore().list();
+  const r4 = await s.pipeline.acceptMeasuredSnapshot(s.entry, bare, { envFingerprint: PAGE, localFrame: 0, html: '<p>bare</p>' });
+  assert.deepEqual(r4, { ok: true, stored: false, reason: 'NO_CONTENT_KEY' });
+  assert.deepEqual(s.lockStore().list(), locksBefore, '不建锁');
+  const bareShared = { ...s.ctl('clip-c'), contentKey: undefined };
+  const r5 = await s.pipeline.acceptMeasuredSnapshot(s.entry, bareShared, { envFingerprint: PAGE, localFrame: 5, html: '<p>bare</p>' });
+  assert.deepEqual(r5, { ok: true, stored: false, reason: 'NO_CONTENT_KEY' });
+  assert.equal(await s.store.readSnapshot({ tier: 'shared', key: s.keyOf('clip-c', PAGE), localFrame: 5 }), null);
 }));
 
 /* ================================================================== L5 */
@@ -442,13 +527,12 @@ test('L5 页面锁定后：snapshotTargets 不含这张卡；missingSnapshotFram
 
   s.layers.length = 0;
   const missing = await s.pipeline.missingSnapshotFrames(s.entry, { tiers: ['shared'] });
-  assert.deepEqual(missing, [15, 16, 17, 18, 19, 20], '只有 c 缺的全局帧；a 的 2～5 不算缺');
-  const aLayers = s.layers.filter(l => l.clipId === 'clip-a');
-  assert.deepEqual(aLayers, [{ clipId: 'clip-a', snapshotKey: s.keyOf('clip-a', PAGE), tier: 'shared', ranges: [[0, 1]] }], '发出 a 现有的区间，键为页面键');
-  // 锚帧那一趟（两档一起、限定锚帧）同样不为它要帧
-  const anchors = await s.pipeline.missingSnapshotFrames(s.entry, { tiers: ['shared'], restrictTo: [0, 3, 15] });
-  assert.ok(!anchors.includes(3), '锚帧那一趟不为被锁的卡要帧');
-  assert.ok(anchors.includes(15));
+  assert.deepEqual(missing, ALL.map(n => n + 60), '只有 c 缺的全局帧；a 的 2～14 不算缺');
+  assert.deepEqual(s.layersOf('clip-a'), [{ clipId: 'clip-a', snapshotKey: s.keyOf('clip-a', PAGE), tier: 'shared', ranges: [[0, 1]] }],
+    '发出 a 现有的区间，键为页面键');
+  // 锚帧那一趟（限定锚帧）同样不为它要帧
+  const anchors = await s.pipeline.missingSnapshotFrames(s.entry, { tiers: ['shared'], restrictTo: [0, 3, 60] });
+  assert.deepEqual(anchors, [60], '锚帧那一趟不为被锁的卡要帧');
 }));
 
 test('L5 整场景路：锁定中途发生时 snapshotTargets 跟着变；recordSnapshots 不写被锁的卡，给自己的卡写帧前得锁', async () => withTmp('pc-cl-l5-rec-', async root => {
@@ -475,30 +559,29 @@ test('L5 整场景路：锁定中途发生时 snapshotTargets 跟着变；record
 test('L6 页面结果已齐：fillCardControls 不渲 HTML（假 bakery 计数），发的 layer 是页面键；PNG 那一支照旧；自己的卡照常并得锁', async () => withTmp('pc-cl-l6-', async root => {
   const s = await scene(root, {
     locks: [{ clipId: 'clip-a', fp: PAGE, touchedAt: Date.now() - 10 * IDLE_MS }],   // 闲置也一样：齐了就 reuse
-    frames: [{ clipId: 'clip-a', fp: PAGE, frames: [0, 1, 2, 3, 4, 5] }],
+    frames: [{ clipId: 'clip-a', fp: PAGE, frames: ALL }],
   });
   const puts = stubPng(s.entry, { complete: false });
-  const bakery = fakeBakery();
   bakeLog.length = 0;
   s.layers.length = 0;
-  await s.pipeline.fillCardControls(s.entry, bakery, null, s.entry.cardPlan);
+  await s.pipeline.fillCardControls(s.entry, fakeBakery(s), null, s.entry.cardPlan);
 
   const a = s.ctl('clip-a'), c = s.ctl('clip-c');
-  assert.deepEqual(snapshotFramesOf(root, a), [], 'a：一帧 HTML 快照都不渲');
-  assert.deepEqual(bakesOf(root, a).flatMap(r => r.targetFrames).sort((x, y) => x - y), [0, 1, 2, 3, 4, 5], 'a：PNG 那一支照旧');
-  assert.deepEqual(puts.filter(p => p.key === a.key).map(p => p.frame).sort((x, y) => x - y), [0, 1, 2, 3, 4, 5]);
+  assert.deepEqual(snapshotFramesOf(s, 'clip-a'), [], 'a：一帧 HTML 快照都不渲');
+  assert.deepEqual(uniq(bakesOf(s, 'clip-a').flatMap(r => r.targetFrames)), ALL, 'a：PNG 那一支照旧');
+  assert.deepEqual(uniq(puts.filter(p => p.key === a.key).map(p => p.frame)), ALL);
   assert.equal((await s.index('clip-a', OWN)).count, 0, '本机键下没写');
-  assert.deepEqual((await s.index('clip-a', PAGE)).frames, [[0, 5]], '页面的结果不动');
-  const aLayers = s.layers.filter(l => l.clipId === 'clip-a');
+  assert.deepEqual((await s.index('clip-a', PAGE)).frames, FULL, '页面的结果不动');
+  const aLayers = s.layersOf('clip-a');
   assert.ok(aLayers.length >= 1, '发了 a 的 layer');
   for (const l of aLayers) assert.equal(l.snapshotKey, s.keyOf('clip-a', PAGE), 'a 的 layer 都是页面键');
-  assert.deepEqual(aLayers.at(-1).ranges, [[0, 5]]);
+  assert.deepEqual(aLayers.at(-1).ranges, FULL);
   assert.equal(s.lockStore().get(a.contentKey).envFingerprint, PAGE, '锁不变');
   assert.equal(a.snapshotKey, s.keyOf('clip-a', PAGE));
 
   // 自己的卡 c：照常渲、得锁、发自己的键
-  assert.deepEqual(snapshotFramesOf(root, c), [0, 1, 2, 3, 4, 5]);
-  assert.deepEqual((await s.index('clip-c', OWN)).frames, [[0, 5]]);
+  assert.deepEqual(snapshotFramesOf(s, 'clip-c'), ALL);
+  assert.deepEqual((await s.index('clip-c', OWN)).frames, FULL);
   const lc = s.lockStore().get(c.contentKey);
   assert.deepEqual([lc?.envFingerprint, lc?.source], [OWN, 'prerender'], '渲之前得锁');
   assert.ok(s.layers.some(l => l.clipId === 'clip-c' && l.snapshotKey === s.own('clip-c')));
@@ -507,13 +590,13 @@ test('L6 页面结果已齐：fillCardControls 不渲 HTML（假 bakery 计数�
 test('L6 补充：页面结果已齐、PNG 也齐：这张卡一次都不进 bakeFrames', async () => withTmp('pc-cl-l6-png-', async root => {
   const s = await scene(root, {
     locks: [{ clipId: 'clip-a', fp: PAGE }],
-    frames: [{ clipId: 'clip-a', fp: PAGE, frames: [0, 1, 2, 3, 4, 5] }],
+    frames: [{ clipId: 'clip-a', fp: PAGE, frames: ALL }],
   });
   stubPng(s.entry, { complete: true });
   bakeLog.length = 0;
   s.layers.length = 0;
-  await s.pipeline.fillCardControls(s.entry, fakeBakery(), null, s.entry.cardPlan);
-  assert.equal(bakesOf(root, s.ctl('clip-a')).length, 0);
+  await s.pipeline.fillCardControls(s.entry, fakeBakery(s), null, s.entry.cardPlan);
+  assert.equal(bakesOf(s, 'clip-a').length, 0);
   assert.ok(s.layers.some(l => l.clipId === 'clip-a' && l.snapshotKey === s.keyOf('clip-a', PAGE)), '照样投递页面的结果');
 }));
 
@@ -529,7 +612,7 @@ test('L7 页面锁闲置且不齐：接手，锁转为本机指纹，control 换
   bakeLog.length = 0;
   s.layers.length = 0;
   const t0 = Date.now();
-  await s.pipeline.fillCardControls(s.entry, fakeBakery(), null, s.entry.cardPlan);
+  await s.pipeline.fillCardControls(s.entry, fakeBakery(s), null, s.entry.cardPlan);
 
   const a = s.ctl('clip-a');
   const own = s.own('clip-a');
@@ -544,17 +627,39 @@ test('L7 页面锁闲置且不齐：接手，锁转为本机指纹，control 换
   const ownLayers = s.layers.map((l, i) => ({ ...l, i })).filter(l => l.clipId === 'clip-a' && l.snapshotKey === own);
   assert.ok(ownLayers.length >= 2, `至少一条换键 layer 加产出后的 layer，实际 ${JSON.stringify(ownLayers)}`);
   assert.deepEqual(ownLayers[0].ranges, [], '先发一条自己键现有的区间（空）');
-  assert.deepEqual(ownLayers.at(-1).ranges, [[0, 5]], '之后照常产，整张卡从头渲');
+  assert.deepEqual(ownLayers.at(-1).ranges, FULL, '之后照常产，整张卡从头渲');
   const lastPageLayer = s.layers.map((l, i) => ({ ...l, i })).filter(l => l.clipId === 'clip-a' && l.snapshotKey === s.keyOf('clip-a', PAGE)).at(-1);
   if (lastPageLayer) assert.ok(lastPageLayer.i < ownLayers[0].i, '换键之后不再发页面键');
 
-  assert.deepEqual(snapshotFramesOf(root, a), [0, 1, 2, 3, 4, 5], '从头产这张卡');
-  assert.deepEqual((await s.index('clip-a', OWN)).frames, [[0, 5]]);
+  assert.deepEqual(snapshotFramesOf(s, 'clip-a'), ALL, '从头产这张卡');
+  assert.deepEqual((await s.index('clip-a', OWN)).frames, FULL);
   assert.deepEqual((await s.index('clip-a', PAGE)).frames, [[0, 1]], '页面的旧帧不动');
 
   await s.lockStore().flush();
   const saved = JSON.parse(await fs.readFile(path.join(root, 'controls-lock', `${a.contentKey}.json`), 'utf8'));
   assert.deepEqual([saved.envFingerprint, saved.source], [OWN, 'prerender'], '接手落盘');
+}));
+
+test('L7 接手时同一内容键的所有片段一起换回自己的键、各发一条自己键的 layer（F.8 第 3 条）', async () => withTmp('pc-cl-l7-twin-', async root => {
+  const s = await scene(root, {
+    twin: true,
+    locks: [{ clipId: 'clip-a', fp: PAGE, touchedAt: Date.now() - IDLE_MS - 5_000 }],
+    frames: [{ clipId: 'clip-a', fp: PAGE, frames: [0, 1] }],
+  });
+  stubPng(s.entry, { complete: false });
+  bakeLog.length = 0;
+  s.layers.length = 0;
+  await s.pipeline.fillCardControls(s.entry, fakeBakery(s), null, s.entry.cardPlan);
+  const own = s.own('clip-a');
+  for (const id of ['clip-a', 'clip-a2']) {
+    assert.equal(s.ctl(id).snapshotKey, own, `${id} 换回自己的键`);
+    const ownLayers = s.layersOf(id).filter(l => l.snapshotKey === own);
+    assert.ok(ownLayers.length >= 1, `${id} 发了自己键的 layer：${JSON.stringify(s.layers.filter(l => l.clipId.startsWith('clip-a')))}`);
+    assert.deepEqual(ownLayers.at(-1).ranges, FULL, `${id} 最后一条是整张卡`);
+  }
+  // 两个片段共用一份快照：HTML 只产一遍
+  assert.deepEqual(uniq(snapshotFramesOf(s, 'clip-a')), ALL);
+  assert.equal(snapshotFramesOf(s, 'clip-a').length, N, '同一内容键不重复产 HTML');
 }));
 
 /* ================================================================== L8 */
@@ -567,18 +672,19 @@ test('L8 页面锁还新鲜且不齐：本趟延后，末尾再判；仍新鲜�
   const puts = stubPng(s.entry, { complete: false });
   bakeLog.length = 0;
   s.layers.length = 0;
-  await s.pipeline.fillCardControls(s.entry, fakeBakery(), null, s.entry.cardPlan);
+  await s.pipeline.fillCardControls(s.entry, fakeBakery(s), null, s.entry.cardPlan);
 
-  const a = s.ctl('clip-a'), c = s.ctl('clip-c');
-  assert.equal(bakesOf(root, a).length, 0, 'a 这一趟跳过：不进 bakeFrames');
+  const a = s.ctl('clip-a');
+  assert.equal(bakesOf(s, 'clip-a').length, 0, 'a 这一趟跳过：不进 bakeFrames');
   assert.equal(puts.filter(p => p.key === a.key).length, 0, 'a 一帧 PNG 也不写');
   assert.equal((await s.index('clip-a', OWN)).count, 0);
   assert.deepEqual((await s.index('clip-a', PAGE)).frames, [[0, 1]], '不替锁定方产帧');
   assert.equal(s.lockStore().get(a.contentKey).envFingerprint, PAGE, '锁不变');
   assert.equal(a.snapshotKey, s.keyOf('clip-a', PAGE), '键仍是页面键');
-  for (const l of s.layers.filter(l => l.clipId === 'clip-a')) assert.equal(l.snapshotKey, s.keyOf('clip-a', PAGE), 'a 的 layer 只可能是页面键');
+  for (const l of s.layersOf('clip-a')) assert.equal(l.snapshotKey, s.keyOf('clip-a', PAGE), 'a 的 layer 只可能是页面键');
   // 其余卡照做
-  assert.deepEqual(snapshotFramesOf(root, c), [0, 1, 2, 3, 4, 5]);
+  assert.deepEqual(snapshotFramesOf(s, 'clip-c'), ALL);
+  await s.pipeline.close();
 }));
 
 test('L8 末尾再判：延后的卡在别的卡渲染期间被页面补齐 → 末尾判成 reuse，发页面键的全量 layer，不渲 HTML', async () => withTmp('pc-cl-l8-rejudge-', async root => {
@@ -587,28 +693,144 @@ test('L8 末尾再判：延后的卡在别的卡渲染期间被页面补齐 → 
     frames: [{ clipId: 'clip-a', fp: PAGE, frames: [0, 1] }],
   });
   stubPng(s.entry, { complete: false });
-  const c = s.ctl('clip-c');
+  const cDir = path.join(root, 'controls', s.pngKey['clip-c']);
   const pageKey = s.keyOf('clip-a', PAGE);
   let cStartedAt = -1;
   onBake = async rec => {
-    if (rec.out !== path.join(root, 'controls', c.key) || cStartedAt >= 0) return;
+    if (rec.out !== cDir || cStartedAt >= 0) return;
     cStartedAt = s.layers.length;
     // 页面在这期间把剩下的帧推完了
     await s.store.commitSnapshots({ tier: 'shared', key: pageKey, clipId: 'clip-a', capabilities: s.caps['clip-a'],
-      items: [2, 3, 4, 5].map(localFrame => ({ localFrame, html: `<p>late ${localFrame}</p>` })) });
+      items: ALL.slice(2).map(localFrame => ({ localFrame, html: `<p>late ${localFrame}</p>` })) });
   };
   try {
     bakeLog.length = 0;
     s.layers.length = 0;
-    await s.pipeline.fillCardControls(s.entry, fakeBakery(), null, s.entry.cardPlan);
+    await s.pipeline.fillCardControls(s.entry, fakeBakery(s), null, s.entry.cardPlan);
   } finally { onBake = null; }
 
   const a = s.ctl('clip-a');
   assert.ok(cStartedAt >= 0, 'c 渲过');
-  assert.deepEqual(snapshotFramesOf(root, a), [], 'a 不渲 HTML');
-  const full = s.layers.map((l, i) => ({ ...l, i })).filter(l => l.clipId === 'clip-a' && l.snapshotKey === pageKey && JSON.stringify(l.ranges) === '[[0,5]]');
-  assert.ok(full.length >= 1, `末尾再判后发页面键的全量 layer；实际 a 的 layer：${JSON.stringify(s.layers.filter(l => l.clipId === 'clip-a'))}`);
+  assert.deepEqual(snapshotFramesOf(s, 'clip-a'), [], 'a 不渲 HTML');
+  const full = s.layers.map((l, i) => ({ ...l, i })).filter(l => l.clipId === 'clip-a' && l.snapshotKey === pageKey && JSON.stringify(l.ranges) === JSON.stringify(FULL));
+  assert.ok(full.length >= 1, `末尾再判后发页面键的全量 layer；实际 a 的 layer：${JSON.stringify(s.layersOf('clip-a'))}`);
   assert.ok(full[0].i >= cStartedAt, '这条 layer 在 c 开始渲之后发出（末尾再判）');
   assert.equal((await s.index('clip-a', OWN)).count, 0);
   assert.equal(s.lockStore().get(a.contentKey).envFingerprint, PAGE);
+  await s.pipeline.close();
+}));
+
+/* ================================================================== L9（F.8 第 2 条） */
+
+/** 走真的 preload（会话 's'）；借预渲染间、MOV、视频、存档换成桩 */
+function stubPreload(s) {
+  const bakery = fakeBakery(s);
+  let acquires = 0;
+  s.pipeline.acquire = async lane => { acquires += 1; assert.equal(lane, 'background'); return bakery; };
+  s.pipeline.fillMov = async () => {};
+  s.pipeline.prerender = async () => {};
+  s.pipeline.save = async () => {};
+  return { bakery, acquires: () => acquires };
+}
+async function preloadOnce(s) {
+  // 先把 entry 建出来、PNG 那一支换成桩（当作已齐，只看 HTML 快照）；preload 拿到的是同一个 entry（同一个 entry.key）
+  const entry = await s.pipeline.entry(s.project);
+  stubPng(entry, { complete: true });
+  s.entry = entry;
+  assert.equal(await s.pipeline.preload(s.project, { session: 's', localRev: 1 }), entry);
+  await s.pipeline.background;
+  return entry;
+}
+
+test('L9 cardLockIdleMs 给小值：延后的卡在锁闲置后被计时器重判并接手（仍新鲜时再延后），不等下一次 preload', { timeout: 30_000 }, async () => withTmp('pc-cl-l9-', async root => {
+  const idle = 300;
+  // 锁的 touchedAt 放在 1.2 秒之后：第一趟一定判成 defer，之后几次重判仍新鲜（再延后），约 1.5 秒后闲置、接手
+  const s = await scene(root, {
+    record: false, options: { cardLockIdleMs: idle },
+    locks: [{ clipId: 'clip-a', fp: PAGE, touchedAt: Date.now() + 1_200 }],
+    frames: [{ clipId: 'clip-a', fp: PAGE, frames: [0, 1] }],
+  });
+  const stub = stubPreload(s);
+  bakeLog.length = 0;
+  try {
+    await preloadOnce(s);
+    const ck = s.ck['clip-a'];
+    assert.equal(s.lockStore().get(ck).envFingerprint, PAGE, '第一趟：仍是页面的锁');
+    assert.deepEqual(snapshotFramesOf(s, 'clip-a'), [], '第一趟：a 延后，不渲');
+    assert.equal((await s.index('clip-c', OWN)).count, N, '第一趟：c 照常产齐');
+    const firstPass = stub.acquires();
+
+    await waitFor('计时器重判后接手 a', () => s.lockStore().get(ck)?.envFingerprint === OWN);
+    await s.pipeline.background;
+    await waitFor('接手后 a 产齐', async () => (await s.index('clip-a', OWN)).count === N);
+    await s.pipeline.background;
+    assert.equal(s.lockStore().get(ck).source, 'prerender');
+    assert.equal(s.entry.cardPlan.find(c => c.clipId === 'clip-a').snapshotKey, s.own('clip-a'), '换回自己的键');
+    assert.deepEqual((await s.index('clip-a', OWN)).frames, FULL);
+    assert.ok(stub.acquires() > firstPass, '重判那一小趟借了 background 的预渲染间');
+    assert.ok(s.layers.some(l => l.clipId === 'clip-a' && l.snapshotKey === s.own('clip-a') && JSON.stringify(l.ranges) === JSON.stringify(FULL)));
+  } finally {
+    await s.pipeline.close();
+  }
+}));
+
+test('L9 重判前页面结果已齐：改为投递（页面键的全量 layer），不接手、不渲 HTML', { timeout: 30_000 }, async () => withTmp('pc-cl-l9-reuse-', async root => {
+  const s = await scene(root, {
+    record: false, options: { cardLockIdleMs: 200 },
+    locks: [{ clipId: 'clip-a', fp: PAGE, touchedAt: Date.now() + 60_000 }],   // 一直新鲜
+    frames: [{ clipId: 'clip-a', fp: PAGE, frames: [0, 1] }],
+  });
+  stubPreload(s);
+  bakeLog.length = 0;
+  try {
+    await preloadOnce(s);
+    const ck = s.ck['clip-a'];
+    const pageKey = s.keyOf('clip-a', PAGE);
+    assert.deepEqual(snapshotFramesOf(s, 'clip-a'), [], '第一趟：a 延后');
+    // 页面把剩下的帧推完了（经测量帧入库之外的路也一样：看的是锁定方键下的 index）
+    await s.store.commitSnapshots({ tier: 'shared', key: pageKey, clipId: 'clip-a', capabilities: s.caps['clip-a'],
+      items: ALL.slice(2).map(localFrame => ({ localFrame, html: `<p>late ${localFrame}</p>` })) });
+    await waitFor('重判后投递页面的全量结果', () => s.layers.some(l => l.clipId === 'clip-a' && l.snapshotKey === pageKey && JSON.stringify(l.ranges) === JSON.stringify(FULL)));
+    await s.pipeline.background;
+    assert.equal(s.lockStore().get(ck).envFingerprint, PAGE, '不接手');
+    assert.deepEqual(snapshotFramesOf(s, 'clip-a'), [], '不渲 HTML');
+    assert.equal((await s.index('clip-a', OWN)).count, 0);
+    assert.equal(s.entry.cardPlan.find(c => c.clipId === 'clip-a').snapshotKey, pageKey);
+  } finally {
+    await s.pipeline.close();
+  }
+}));
+
+/* ================================================================== L10（F.8 第 1 条） */
+
+test('L10 本机已齐、没有锁文件的卡：后台那一趟走到它时锁归本机（不渲），此后页面测量帧回 CARD_LOCKED', async () => withTmp('pc-cl-l10-', async root => {
+  const s = await scene(root, { frames: [{ clipId: 'clip-a', fp: OWN, frames: ALL }] });
+  assert.equal(s.lockStore().get(s.ck['clip-a']), null, '开始时没有锁文件');
+  stubPng(s.entry, { complete: true });
+  bakeLog.length = 0;
+  await s.pipeline.fillCardControls(s.entry, fakeBakery(s), null, s.entry.cardPlan);
+  assert.equal(bakesOf(s, 'clip-a').length, 0, '本机已齐：不渲');
+  const lock = s.lockStore().get(s.ck['clip-a']);
+  assert.deepEqual([lock?.envFingerprint, lock?.source], [OWN, 'prerender'], '锁归本机');
+
+  const r = await s.pipeline.acceptMeasuredSnapshot(s.entry, s.ctl('clip-a'), { envFingerprint: PAGE, localFrame: 0, html: '<p>page</p>' });
+  assert.deepEqual(r, { ok: true, stored: false, reason: 'CARD_LOCKED', lockedBy: OWN });
+  assert.equal((await s.index('clip-a', PAGE)).count, 0);
+  assert.equal(s.ctl('clip-a').snapshotKey, s.own('clip-a'));
+  await s.lockStore().flush();
+  const saved = JSON.parse(await fs.readFile(path.join(root, 'controls-lock', `${s.ck['clip-a']}.json`), 'utf8'));
+  assert.equal(saved.envFingerprint, OWN, '落盘');
+}));
+
+test('L10 补充：页面在后台那一趟走到这张卡之前推来测量帧的，仍是页面先得锁', async () => withTmp('pc-cl-l10-page-', async root => {
+  const s = await scene(root, { frames: [{ clipId: 'clip-a', fp: OWN, frames: ALL }] });
+  const r = await s.pipeline.acceptMeasuredSnapshot(s.entry, s.ctl('clip-a'), { envFingerprint: PAGE, localFrame: 0, html: '<p>page</p>' });
+  assert.equal(r.stored, true);
+  stubPng(s.entry, { complete: true });
+  bakeLog.length = 0;
+  await s.pipeline.fillCardControls(s.entry, fakeBakery(s), null, s.entry.cardPlan);
+  assert.equal(s.lockStore().get(s.ck['clip-a']).envFingerprint, PAGE, '锁仍是页面的');
+  assert.equal(s.ctl('clip-a').snapshotKey, s.keyOf('clip-a', PAGE));
+  assert.deepEqual(snapshotFramesOf(s, 'clip-a'), []);
+  await s.pipeline.close();
 }));
