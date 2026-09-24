@@ -7,12 +7,15 @@
  * - 其它             → TypeError
  *
  * 接口写在 `blob-store.mjs` 的 JSDoc 里。本目录只引 Node 内置模块。
+ *
+ * 另外转出素材服务的 HTTP 客户端 `createAssetClient`（`client.mjs`，契约 `docs/plan/artifact-transfer-contract.md` 第 2 节）。
  */
 import { createFsStore } from './fs-store.mjs';
 import { createMemoryStore } from './memory-store.mjs';
 import { BLOB_CHUNK_SIZE } from './blob-store.mjs';
+import { createAssetClient } from './client.mjs';
 
-export { BLOB_CHUNK_SIZE, createFsStore, createMemoryStore };
+export { BLOB_CHUNK_SIZE, createFsStore, createMemoryStore, createAssetClient };
 
 /**
  * @param {{ kind: 'fs' | 'memory' | 'oss' } & Record<string, any>} options
