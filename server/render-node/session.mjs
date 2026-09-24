@@ -13,7 +13,8 @@ import { pickCandidate } from './pick.mjs';
  *
  * 同一时刻至多一条认领在飞,一次 `tick` 至多发一条认领;持有数 + 在飞数到 `maxConcurrent`
  * 就不再认领。在飞的认领在收到 `task.claimed` / `task.claim-rejected`(或 `error`、重新
- * `start`)时清掉。
+ * `start`)时清掉。队列回 `claim-rejected { reason: 'throttled' }`(契约 I.6)后,
+ * 一个 `SWEEP_INTERVAL_MS` 内不发起新认领,续约照常。
  *
  * # 重入
  *
@@ -54,6 +55,8 @@ export function createNodeSession({
   let yielding = null;
   let lastProjectId = null;
   let epoch = null;
+  /** 被队列限流(`claim-rejected { reason: 'throttled' }`,契约 I.6)后,这个时刻之前不发起新认领;续约照常 */
+  let throttledUntil = -Infinity;
 
   const dropHold = (id, reason) => {
     if (!holds.delete(id)) return;
@@ -107,6 +110,12 @@ export function createNodeSession({
     const { id, reason } = message;
     if (inflight?.id === id) inflight = null;
     if (yielding?.id === id) yielding = null;
+    if (reason === 'throttled') {
+      // 契约 I.6:本连接这个扫描周期撞锁太多,队列在下一次扫描前一律回 throttled。退避一个扫描周期;
+      // 候选不从本地视图删,任务本身没变,过后照常可以认领
+      throttledUntil = now() + settings.SWEEP_INTERVAL_MS;
+      return;
+    }
     if (reason === 'stale') {
       const task = open.get(id);
       if (task && Number.isInteger(message.version)) open.set(id, { ...task, version: message.version });
@@ -140,6 +149,7 @@ export function createNodeSession({
         break;
       case 'task.taken':
       case 'task.closed':
+        // 包括 `state: 'hidden'`(契约 I.6):队列的指纹前置过滤不再让本节点看见它,和别的 closed 一样移除
         open.delete(message.id);
         break;
       case 'task.claimed':
@@ -171,7 +181,7 @@ export function createNodeSession({
       hold.lastSentAt = at;
       send({ type: 'task.progress', id: hold.id, token: hold.token, done: hold.done ?? null });
     }
-    if (inflight || !isIdle() || holds.size >= maxConcurrent) return;
+    if (inflight || !isIdle() || holds.size >= maxConcurrent || at < throttledUntil) return;
     const candidates = filterClaimable(known0().filter(task => !holds.has(task.id)), node);
     const task = pickCandidate(candidates, { k: settings.PICK_K, random, lastProjectId });
     if (!task) return;
