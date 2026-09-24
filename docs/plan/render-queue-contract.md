@@ -515,3 +515,164 @@ export function createNodeSession(options)   // → NodeSession
 | `server/test/render-node-session.test.mjs` | B.5，以及一条「会话 × 真队列」的联调：两个会话对同一个 `createRenderQueue` 抢 20 个任务，每个任务恰好完成一次 |
 
 测试名以用例编号开头（如 `F2.2 处理超时：…`、`P4 …`），便于对账。测试只经 A.3 / B 节列出的接口调用，不碰内部字段（`describe()` 是公开接口，可以用）。
+
+---
+
+## D. M3：进程内集成（本机节点编排 × 队列，环回传输与假产物库）
+
+主 Agent 定稿，2026-09-24。
+
+**范围**：在单个 Node 进程里，把 M1 的队列和 M2 的节点逻辑串成端到端链路：
+
+- 页面发布 `plan` 任务；
+- 节点认领、算计划、切分并发布细任务；
+- 各节点认领细任务、执行、把产物推到产物库、报完成；
+- 页面收到全部 `task.done`。
+
+**隔离**：
+
+- 环回传输和假产物库、假执行器**只放在 `server/test/`**，文件头写明「仅供测试与进程内集成，生产代码不得引用」；
+- 生产目录里只新增一个编排模块 `server/render-node/local-node.mjs`：它只认注入进来的接口，不引 WebSocket、不碰文件系统、不认识任何真实存储。
+
+**与任务书 M3 行的差异**：任务书原写「`frame-pipeline.mjs` 里节点接入的那一段（新方法，开关后面）」。本阶段不改 `frame-pipeline.mjs`，接真的预渲染执行器移到 M5（与素材服务一起）。理由：接真管线要么在单测里起 Chrome，要么让假件留在生产路径的开关后面，两者都违反隔离要求。所以本阶段不动任何既有业务代码，现有探针的行为不变。
+
+### D.1 注入接口（在 `local-node.mjs` 里用 JSDoc 写明，不提供实现）
+
+**执行器 `executor`**：
+
+```js
+executor.plan(planTask, { signal }) → Promise<PlanContext>
+// PlanContext = { entryKey, cardPlan, prerenderSet?, streams?, anchorFrames?, cardSourceVersions?,
+//                 weightOf?, isUserCard?, isGraphCard? }   —— 原样喂给 splitPlan（B.4）
+executor.render(task, { signal, progress }) → Promise<artifacts>
+// task 是 TaskView；progress(done: number) 报进度；artifacts 不透明，原样交给 sink.put
+// 抛出的错误若带 retryable === false，按不可重试处理；否则可重试
+```
+
+**产物库 `sink`**（M5 起由素材服务实现，设计 4.4、语义 `asset-storage.md`「先推送、确认收全，再报完成」）：
+
+```js
+sink.has({ resultKey, kind, tier, range }) → Promise<boolean>          // 这一段是否已经收全
+sink.put({ resultKey, kind, tier, range, artifacts, meta }) → Promise<{ complete: boolean }>
+// meta = { taskId, nodeId, token }，供记账（设计第 7 节「节点信任」）
+```
+
+### D.2 `server/render-node/local-node.mjs`
+
+```js
+export function createLocalNode(options) → LocalNode
+```
+
+| 参数 | 说明 |
+|---|---|
+| `nodeId` | 节点身份 |
+| `publisherId` | 缺省等于 `nodeId`。切分出的细任务以它发布（契约 A.5：同一连接先 `publisher.hello`） |
+| `node` | B.2 的节点描述（`profile`、`envFingerprint`、`codeVersions`、`capabilities`…） |
+| `endpoint` | `{ send(message), onMessage(handler) }`：到队列的一条连接（进程内是环回端点，M5 起是 WebSocket 适配层） |
+| `now`、`random`、`isIdle`、`maxConcurrent`、`constants`、`projects` | 原样传给 `createNodeSession`（B.5） |
+| `codeVersion` | 切分细任务时写进 `requires.codeVersion` |
+| `executor`、`sink` | D.1 |
+| `onEvent` | `(event) => void`，诊断用，缺省空函数 |
+
+| 方法 | 说明 |
+|---|---|
+| `start(resume = [])` | 先挂 `endpoint.onMessage`，再发 `publisher.hello { publisherId }`，再调 `session.start(resume)` |
+| `tick()` | 调 `session.tick()` |
+| `yieldAll(reason = 'busy')` | 中止所有在跑的任务（`AbortController`），调 `session.yieldAll(reason)` |
+| `stop()` | 中止所有在跑的任务；不再处理收到的消息 |
+| `running()` | 在跑的任务 id 数组（升序） |
+| `settled()` | `Promise<void>`：等到此刻所有在跑的任务都落定 |
+| `session` | 底层 `createNodeSession` 的实例（只读，测试可以看 `held()` / `known()`） |
+
+**收到的消息**：全部交给 `session.receive`。`publisher.welcome`、`task.published`、`task.done`、`task.failed` 等会话不认的类型，会话本就忽略。另外按 `onEvent({ type: 'publish-result', results })` 报出 `task.published` 的结果。
+
+**认领到任务**（会话的 `onTask(task, { token })`）：新建 `AbortController`，异步执行下面的流程，记进在跑表。「仍持有」的判定是 `session.held()` 里有 `{ id, token }` 且 token 相同，每一步落定后都要重新判一次。不再持有或已中止时，丢弃结果，`onEvent({ type: 'discarded', id })`，不发任何消息。
+
+- **`plan` 任务**：
+  1. `ctx = await executor.plan(task, { signal })`；
+  2. `tasks = splitPlan({ planTask: task, envFingerprint: node.envFingerprint, codeVersion, constants, ...ctx })`；
+  3. 仍持有时，若 `tasks.length > 0`，先 `endpoint.send({ type: 'task.publish', tasks })`；
+  4. 再 `session.complete(task.id, { ranges: null, derived: tasks.map(t => t.id) })`；
+  5. `onEvent({ type: 'plan-split', id, derived: [...] })`。
+
+  **发布必须在完成之前发出**：派生任务的继承（A.4 末段）要求发布时 `plan` 仍由本节点认领。同一连接上的消息按序处理，所以先发的 `publish` 一定先于 `complete` 生效。
+- **细任务**（`snapshot` / `stream`）：
+  1. `await sink.has(...)` 为真：仍持有时直接 `session.complete(id, { ranges: [[from, to]], dedup: true })`，`onEvent({ type: 'dedup', id })`；
+  2. 否则 `artifacts = await executor.render(task, { signal, progress })`。`progress(done)` 仅在仍持有时调 `session.progress(id, done)`；
+  3. `r = await sink.put({ ..., artifacts, meta: { taskId: id, nodeId, token } })`；
+  4. `r.complete !== true`：仍持有时 `session.fail(id, 'sink-incomplete', true)`；
+  5. 否则仍持有时 `session.complete(id, { ranges: [[from, to]] })`，`onEvent({ type: 'completed', id })`。
+- **执行或推送出错**：仍持有时 `session.fail(id, String(error?.message ?? error), error?.retryable !== false)`，`onEvent({ type: 'failed', id })`。
+- **丢认领**（会话的 `onLost(id, reason)`）：中止对应任务，`onEvent({ type: 'lost', id, reason })`。已经推到产物库的产物不回收（按内容寻址，下一个认领者查 `has` 会直接完成）。
+
+模块只引 `./session.mjs`、`./split.mjs`（或 `./index.mjs`），不引网络、文件系统和环境变量。
+
+### D.3 测试用的假件（Verification 独占，都在 `server/test/`）
+
+每个文件头第一段写明：**仅供测试与进程内集成，生产代码不得引用**。
+
+**`fake-loopback-transport.mjs`**：
+
+```js
+export function createLoopback({ serialize = true } = {}) → {
+  queueSend(connId, message),          // 作为 createRenderQueue 的 send 传入
+  attach(queue),
+  connect(connId, principal) → Endpoint,   // 调 queue.connect，返回端点
+  flush(max = 100000) → number,        // 按入队顺序投递所有待投消息（含投递中新产生的），超过 max 条抛错（防活锁）
+  pending() → number,
+  partition(connId), heal(connId),     // 分区期间这条连接双向的消息都丢弃
+  log() → [{ dir: 'in' | 'out', connId, message }],   // 已投递的记录
+  errors() → Error[],                  // 端点处理器抛出的异常（测试断言为空）
+}
+Endpoint = { connId, send(message), onMessage(handler), close(), closed }
+// close()：调 queue.disconnect(connId)，并丢弃还没投给它的消息
+```
+
+- 两个方向的消息进同一个先进先出队列：`in` 投给 `queue.handle`，`out` 投给端点的处理器；
+- `serialize` 时入队前做一次 JSON 往返；
+- 从不直接同步回调，全部经 `flush` 投递，保证顺序确定、不重入。
+
+**`fake-artifact-sink.mjs`**：内存产物库，实现 D.1 的 `sink`。另提供：
+
+- `entries()`；
+- `seed({ resultKey, range })`（预置已收全）；
+- `failNextPut(n)`（接下来 n 次 `put` 回 `{ complete: false }`）；
+- `putCount(resultKey)`。
+
+**`fake-render-executor.mjs`**：可编排的执行器。按任务 id 或规则设定：
+
+- 耗时（按注入时钟推进）；
+- 进度步长；
+- 失败（可重试 / 不可重试）；
+- 卡死（永不返回也不报进度）。
+
+`plan()` 返回测试给定的 `PlanContext`。所有等待都按注入时钟推进，不用真实计时器。
+
+### D.4 集成测试 `server/test/render-queue-inproc.test.mjs`
+
+一个队列、一条环回、若干 `createLocalNode`、一个页面发布方（直接用环回端点发 `publisher.hello` 和 `task.publish`），假时钟驱动。驱动循环：
+
+1. `flush`；
+2. 让出微任务，让假执行器和假产物库的 Promise 落定；
+3. 各节点 `tick`；
+4. `queue.tick`；
+5. 没有待投消息、条件还不满足时，推进时钟。
+
+| 编号 | 场景 | 断言要点 |
+|---|---|---|
+| I1 | 全链路：页面发布 `plan`，两个 `pc` 节点；plan 切出若干快照与流任务 | 恰有一个节点认领并切分 `plan`；每个细任务恰好完成一次；产物库里每个结果键的每一段都在；页面收到 `plan` 与全部细任务的 `task.done`（继承订阅）；细任务的 `source.userId` 是页面的用户；`describe()` 全部 `done` |
+| I2 | 产物库已有部分结果 | 这些任务不调 `executor.render`，直接完成（`dedup`）；其余照常 |
+| I3 | 执行中节点断开（`partition` 后 `close`） | 宽限期后另一节点接手并完成；每个任务恰好完成一次；断开节点的迟到结果被丢弃（不会让任务完成第二次） |
+| I4 | 执行失败：可重试一次后成功；不可重试 | 前者最终 `done`、`attempts` 1；后者 `failed`，页面收到 `task.failed` |
+| I5 | 纯浏览器节点 + `pc` 节点，另有别的用户的项目 | 浏览器节点不认领 `plan`、不认领流任务、不认领别的用户的任务；它完成的都是本人的 `light` / `medium` 快照任务 |
+| I6 | 两种环境指纹的 `pc` 节点 | 细任务只被与 `plan` 认领者同指纹的节点认领 |
+| I7 | 执行中节点转为不空闲并 `yieldAll` | 任务放回（`attempts` 不加）、被另一节点完成；让路节点的执行被中止、结果丢弃 |
+| I8 | 执行器卡死（不报进度） | 租约到期后被回收，另一节点完成；卡死节点收到 `lease-lost`，之后即使返回也被丢弃 |
+| I9 | 产物库推送没收全（`failNextPut`） | 任务报失败后被重试完成；最终每段恰好完成一次 |
+| I10 | 队列重启（新实例、新 epoch） | 页面重新发布后全部完成；已在产物库里的段走 `dedup`，不重复渲染 |
+
+所有用例：
+
+- 端点处理器没有抛出异常（`errors()` 为空）；
+- 环回里投递过的每条消息都能 JSON 往返；
+- 测试名以编号开头。
