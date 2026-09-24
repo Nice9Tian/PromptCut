@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { findStale, removeStale, looksLikeFrameLibrary, M4_KEYS_SINCE } from '../../scripts/prune-prerender-cache.mjs';
+import { findStale, removeStale, looksLikeFrameLibrary, M4_KEYS_SINCE } from '../prerender-cache-prune.mjs';
 
 const key = n => n.toString(16).padStart(64, '0');
 const BEFORE = Date.parse('2026-09-24T12:00:00Z');
