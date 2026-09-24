@@ -1079,3 +1079,44 @@ export function cardLockDecision({ lock, ownFingerprint, complete, now, idleMs =
 | Pipeline | 新建 `server/card-lock.mjs`、`src/editor/pageEnvironment.mjs`（及类型声明）；改 `server/frame-pipeline.mjs`、`server/vite-plugin-frames.ts`、`src/editor/probeRunner.ts` |
 | Verification/Test | 新建上面四个测试文件；改受影响的既有测试 |
 | 主 Agent | 本节；`rendering.md`、`glossary.md`、设计 2.1、`TODO.md`、报告 |
+
+### F.7 定稿后的补充细则（2026-09-24，主 Agent 按实现方疑点裁定）
+
+**问题**：不知道锁的切分节点按自己的指纹发布了被别的环境锁定的卡，这些任务谁也认领不了，一直 `open`，页面永远等不到 `task.done`。M3 的 I6 第二轮就是这种情形。按「不得抢单」，这类任务不该建出来；切分方要照锁定方的指纹重发，或者明确接手。
+
+1. **发布时拒建**（改 F.1「发布」表的最后一行）：
+   - 条件：任务有锁键 L 和锁指纹 F，锁在别的指纹 X 上，没带 `takeover`，且表里**没有**同 `id` 的任务；
+   - 处理：**不建**，`results[i] = { id, error: 'card-locked', lockedBy: X }`，和 `limit` 一样不影响同一条消息里的其它任务；
+   - 已有同 `id` 任务的，照 A.7.1 合并，另加 `lockedBy: X`。
+2. **没锁时带 `takeover`**：建锁（`source: 'takeover'`），同时照「接手」作废锁键为 L、指纹不是 F 的 `open` / `claimed` 任务。两个节点几乎同时切分时，不留异指纹的死任务。
+3. **锁回收**的比较与 A.8 一致，用严格大于：`now - touchedAt > DONE_TTL`。常量名以 `constants.mjs` 为准（`DONE_TTL`），F.1 里写的 `DONE_TTL_MS` 指的就是它。
+4. 因 `limit` 没建成的那一项不做任何锁处理。
+5. **`local-node.mjs` 切分后等发布回包**：
+   - 派生任务的 `task.publish` 带 `reqId`；等到同一 `reqId` 的 `task.published` 回来，才 `complete` 这个 `plan`（用注入的等待方式，跟随 `signal` 中止）。理由：细任务要在 `plan` 仍被本节点认领时发布，才能继承页面的订阅（A.4 继承条件）。
+   - 回包里有 `error: 'card-locked'` 的：
+     - 把这些结果的锁键和 `lockedBy` 并进 `cardLocks`；
+     - 按 `createLocalNode` 的新选项 `takeoverLocked`（布尔或 `(lockKey, lockedBy) => boolean`，缺省 `false`，即照锁定方的指纹重发）重跑 `splitPlan`；
+     - 只发布锁键在这些结果里的任务，再等一次回包；
+     - 最多重来 2 轮，还被拒的放弃，发事件 `{ type: 'plan-relocked', id, lockKeys, gaveUp: [...] }`。
+   - `complete` 的 `derived` 是最终发布成功的全部 id。
+6. **测试**：
+   - I6 的第二轮按本节改期望：被第一轮锁住的卡，第二轮的细任务照锁定方的指纹出键，由锁定方指纹的节点做完。只改这一处期望，其余断言不放宽；
+   - 新增：
+     - Q10：拒建，任务不存在，`results` 带 `error` 与 `lockedBy`；
+     - Q11：没锁时带 `takeover` 也作废异指纹任务；
+     - N6：`local-node` 在拒建后照锁指纹重发、`plan` 等回包后才完成、细任务继承页面订阅；`takeoverLocked` 为真时带 `takeover` 重发。
+
+### F.8 本机侧的补充细则（2026-09-24，主 Agent 按 Pipeline 实现方疑点裁定）
+
+1. **本机已有结果也得锁**：`fillCardControls` 走到一个共享档 control 时，锁库里没有它的锁，就用本机指纹得锁（`source: 'prerender'`），不管这张卡本机是不是已经齐了。否则换键前就已产齐、但没有锁文件的卡，会被页面的第一帧测量帧锁走，反而少了覆盖。页面在后台那一趟走到这张卡之前推来测量帧的，仍是页面先得锁。
+2. **延后的卡要再判**：`rendering.md` 说锁定方停下一段时间后要接手，所以延后不能停在「等下一次 preload」。
+   - 一趟后台结束时仍有 `'defer'` 的卡，就定一个一次性计时器（`unref`），在 `cardLockIdleMs` 之后重判这些卡；
+   - 计时器触发时，满足以下三条才把一小趟排进后台串行链：这一版的后台那一趟没被取消（它的 `signal` 没 abort）；还有会话的当前版本是这个 entry；这些卡仍在预渲染集合里。
+   - 那一小趟只对这些卡跑 `fillCardControls`，同一个 `signal`、`'background'` lane 的预渲染间；
+   - 重判结果：已齐 → 投递；已闲置 → 接手；仍新鲜 → 再延后。同一版最多重排 20 次，之后等下一版。
+   - `FramePipeline` 构造参数新增 `cardLockIdleMs`（缺省 `CARD_LOCK_IDLE_MS`），决策和计时器都用它，测试可以给小值。
+3. **同一内容键的所有片段一起发层**：接手，或测量帧入库时，`entry.cardPlan` 里内容键相同的每个 control 都发一条 `layer`，同一张卡摆了几次时各片段一起换键。
+4. control 没有 `contentKey` 时，`acceptMeasuredSnapshot` 回 `{ ok: true, stored: false, reason: 'NO_CONTENT_KEY' }`、不写；锁库对空的环境指纹同样抛出。
+5. **测试**：L4、L7 按第 3 条补「多个片段一起换键」的断言；新增：
+   - L9：`cardLockIdleMs` 给小值，延后的卡在锁闲置后被重判并接手；在重判前页面结果已齐的，改为投递；
+   - L10：本机已齐、没有锁文件的卡，后台那一趟之后锁归本机，此后页面测量帧回 `CARD_LOCKED`。
