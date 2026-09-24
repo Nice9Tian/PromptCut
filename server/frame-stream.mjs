@@ -557,6 +557,38 @@ export class StreamStore {
   segFile(key, file) { return path.join(this.dir(key), file); }
 }
 
+/**
+ * C6.2:校验一份任务清单 `StreamResult`(`artifact-transfer-contract.md` 第 3 节),整理成 `adoptSegments`
+ * 要的形状 `{ key, range, header, inits, segments: [[n, seg]…] }`。不认识的字段忽略;格式不对就抛。
+ */
+export function streamAdoption(result) {
+  const bad = why => { throw Object.assign(new Error(`轨道流清单不对:${why}`), { retryable: false }); };
+  if (!result || typeof result !== 'object') bad('不是对象');
+  if (result.v !== 1) bad(`v = ${result.v}`);
+  if (result.kind !== 'stream') bad(`kind = ${result.kind}`);
+  const key = result.resultKey;
+  if (!KEY_RE.test(String(key))) bad('resultKey');
+  const from = result.range?.from, to = result.range?.to;
+  if (!Number.isInteger(from) || !Number.isInteger(to) || from < 0 || to < from) bad('range');
+  const header = result.header;
+  if (!header || typeof header !== 'object' || !Array.isArray(header.clipIds)) bad('header');
+  const inits = {};
+  for (const [id, meta] of Object.entries(result.inits ?? {})) {
+    if (!INIT_RE.test(id) || !KEY_RE.test(String(meta?.hash)) || meta.hash.slice(0, 16) !== id) bad(`init ${id}`);
+    inits[id] = meta;
+  }
+  const segments = [];
+  for (const [name, seg] of Object.entries(result.segments ?? {})) {
+    const n = Number(name);
+    if (!Number.isInteger(n) || String(n) !== name || n < from || n > to) bad(`分段 ${name}`);
+    if (!KEY_RE.test(String(seg?.hash)) || !INIT_RE.test(String(seg?.init))) bad(`分段 ${name}`);
+    if (!Number.isInteger(seg.stride) || seg.stride < 1 || !Number.isInteger(seg.samples) || seg.samples < 1) bad(`分段 ${name}`);
+    segments.push([n, seg]);
+  }
+  segments.sort((a, b) => a[0] - b[0]);
+  return { key, range: { from, to }, header, inits, segments };
+}
+
 /** 页面要的清单形状(不带签名等内部字段) */
 export function publicManifest(manifest) {
   if (!manifest) return null;
@@ -724,6 +756,8 @@ export class StreamProducer {
       const old = this.streams.get(spec.streamKey);
       const manifest = old?.manifest ?? loaded.get(spec.streamKey) ?? this.freshManifest(spec);
       const state = old ?? { reserved: new Set(), failures: new Map(), measured: null, measuredSegments: new Set() };
+      // C6.2:拉取时新建的流(`adoptSegments`)进了这一版的计划,从此是正常的流(照常补产、发层、认领)
+      delete state.adoptedOnly;
       state.spec = spec;
       state.aliases = new Set();
       state.manifest = manifest;
@@ -752,7 +786,8 @@ export class StreamProducer {
    */
   republish() {
     if (!this.routeAttached) return;
-    for (const state of this.streams.values()) this.publish(state);
+    // C6.2:只是拉来、还不属于任何一版的流(`adoptedOnly`)不知道该发给哪个会话,只挂在键上(`adoptSegments`)
+    for (const state of this.streams.values()) if (!state.adoptedOnly) this.publish(state);
   }
 
   publish(state) {
@@ -773,6 +808,9 @@ export class StreamProducer {
   segmentState(state, n) {
     const seg = state.manifest?.segments?.[n];
     if (!seg) return 'none';
+    // C6.2(契约第 6 节):别的节点产、拉进来的分段不按本机的编码器名重算签名 —— 指纹相同、编码器名不同的
+    // 机器会把它判旧重渲。清单就在这条流的目录里(流键 = 内容键 × 指纹),流键没变就是内容没变,算新鲜
+    if (seg.adopted === true && state.manifest.streamKey === state.spec?.streamKey) return seg.stride > 1 ? 'sparse' : 'dense';
     const expectStride = seg.stride > 1 ? seg.stride : 1;
     const rect = expectStride > 1 ? state.manifest.bound : (state.manifest.tight ?? state.manifest.bound);
     const sig = this.encoderName ? segmentSignature({ streamKey: state.spec.streamKey, segment: n, stride: expectStride, encoder: this.encoderName, rect }) : seg.sig;
@@ -803,6 +841,8 @@ export class StreamProducer {
       const need = stride > 1 ? (s, n) => this.needsSparse(s, n) : (s, n) => this.needsDense(s, n);
       let best = null;
       for (const state of this.streams.values()) {
+        // C6.2:只是拉来的流没有隔离工程,本机不替它补产(进了某一版的计划之后才产)
+        if (state.adoptedOnly) continue;
         const { spec } = state;
         const failures = state.failures;
         const ready = n => !need(state, n) || (failures.get(n) ?? 0) >= 3;
@@ -824,6 +864,7 @@ export class StreamProducer {
 
   needsSparseAnywhere() {
     for (const state of this.streams.values()) {
+      if (state.adoptedOnly) continue;
       for (let n = state.spec.firstSegment; n <= state.spec.lastSegment; n++) {
         if (this.needsSparse(state, n) && (state.failures.get(n) ?? 0) < 3) return true;
       }
@@ -1047,6 +1088,147 @@ export class StreamProducer {
   }
 
   /**
+   * C6.2 拉取端(契约第 6 节):把别的节点产的一段轨道流(任务清单 `StreamResult` + 字节)收进本机流库。
+   * `blobs`:哈希 → Buffer(`Map` 或普通对象),要含清单里本机还没有的每个 init 和分段。
+   *
+   *   - **写文件**只在这里:照现有命名 `init-<sha16>.mp4`、`<n>-<sha16>.m4s`,经 `atomic`;
+   *   - **合并清单**合进这条流在内存里的 `state.manifest`(没有 state 就新建一个,标 `adoptedOnly`:不在任何
+   *     一版的计划里,本机不替它补产、不认领、不发层,只挂在键上),再 `StreamStore.save` —— 不从外面改
+   *     `stream.json`,否则会被生产者用内存里的清单覆盖;
+   *   - 拉来的分段记 `adopted: true`,带对方的 `encoder` 与 `sig`(`segmentState` 据此不判旧);
+   *   - 本机已经有、而且不是 `stale` 的分段跳过,不覆盖;
+   *   - 发布:属于某一版计划的流照 `publish(state)`;`adoptedOnly` 的只 `stageByKey`。
+   *
+   * 同一个生产者上的拉取串行进行。回 `{ written, skipped, inits }`(写了几个分段、跳过几个、新写了几个 init)。
+   */
+  adoptSegments(result, blobs) {
+    const run = (this.adoptChain ?? Promise.resolve()).catch(() => {}).then(() => this.adoptSegmentsNow(result, blobs));
+    this.adoptChain = run;
+    return run;
+  }
+
+  /** `adoptSegments` 的本体(已串行化) */
+  async adoptSegmentsNow(result, blobs) {
+    const plan = streamAdoption(result);
+    if (this.closed) throw Object.assign(new Error('Stream producer closed'), { cancelled: true });
+    const { key } = plan;
+    const blobOf = hash => {
+      const buf = typeof blobs?.get === 'function' ? blobs.get(hash) : blobs?.[hash];
+      if (!Buffer.isBuffer(buf) && !(buf instanceof Uint8Array)) throw new Error(`缺少块 ${hash}`);
+      const bytes = Buffer.isBuffer(buf) ? buf : Buffer.from(buf);
+      if (sha(bytes) !== hash) throw new Error(`块 ${hash} 的内容和哈希对不上`);
+      return bytes;
+    };
+    let state = await this.adoptionState(key, plan);
+    // 先挑出要写的分段(本机没有,或者已判旧),核对字节;一个块不对就整个不写
+    const pending = [];
+    for (const [n, seg] of plan.segments) {
+      if (state.manifest.segments?.[n] && this.segmentState(state, n) !== 'stale') continue;
+      const initMeta = plan.inits[seg.init] ?? state.manifest.inits?.[seg.init];
+      if (!initMeta) throw new Error(`分段 ${n} 用的 init ${seg.init} 不在清单里`);
+      pending.push({ n, seg, bytes: blobOf(seg.hash) });
+    }
+    const initIds = [...new Set(pending.map(p => p.seg.init))].filter(id => !state.manifest.inits?.[id]);
+    const initBytes = new Map(initIds.map(id => {
+      if (!plan.inits[id]) throw new Error(`init ${id} 不在清单里`);
+      return [id, blobOf(plan.inits[id].hash)];
+    }));
+    // 写文件(内容寻址,重复写同一份无害)
+    await fs.mkdir(this.store.dir(key), { recursive: true });
+    for (const [id, bytes] of initBytes) await atomic(this.store.initFile(key, id), bytes);
+    for (const p of pending) {
+      p.file = `${p.n}-${p.seg.hash.slice(0, 16)}.m4s`;
+      await atomic(this.store.segFile(key, p.file), p.bytes);
+    }
+    // 写盘期间 `update()` 可能换了一版:以此刻 `this.streams` 里的为准,**同步**合并
+    const live = this.streams.get(key);
+    if (live) state = live;
+    else if (!this.closed) this.streams.set(key, state);
+    const manifest = state.manifest;
+    manifest.inits ||= {};
+    manifest.segments ||= {};
+    let written = 0, skipped = plan.segments.length - pending.length, inits = 0;
+    const replaced = [];
+    for (const p of pending) {
+      const old = manifest.segments[p.n];
+      // 写盘期间本机刚产好了这一段:不覆盖,刚写的文件没人引用就删掉
+      if (old && old.file !== p.file && this.segmentState(state, p.n) !== 'stale') {
+        skipped++;
+        if (!Object.values(manifest.segments).some(s => s.file === p.file)) void fs.rm(this.store.segFile(key, p.file), { force: true }).catch(() => {});
+        continue;
+      }
+      // 换到的那份清单没有这个 init、而刚才也没写它的文件(极少见:写盘期间换了一版):这一段不收,下次再拉
+      if (!manifest.inits[p.seg.init] && !initBytes.has(p.seg.init)) { skipped++; continue; }
+      if (!manifest.inits[p.seg.init]) {
+        const meta = plan.inits[p.seg.init];
+        manifest.inits[p.seg.init] = { codec: meta.codec ?? null, width: meta.width ?? null, height: meta.height ?? null, timescale: meta.timescale ?? null,
+          rect: meta.rect ?? null, encoder: meta.encoder ?? null, bytes: meta.bytes ?? initBytes.get(p.seg.init)?.length ?? null, adopted: true };
+        inits++;
+      }
+      manifest.segments[p.n] = { file: p.file, init: p.seg.init, stride: p.seg.stride, samples: p.seg.samples, bytes: p.bytes.length,
+        sig: p.seg.sig ?? null, encoder: p.seg.encoder ?? manifest.inits[p.seg.init]?.encoder ?? null, adopted: true, at: Date.now() };
+      if (old && old.file !== p.file) replaced.push(old.file);
+      written++;
+    }
+    // 对方已经收紧过、本机还没有:用对方的收紧矩形(本机没有按上界产的满密度分段时才换,免得把它们判旧)
+    if (!manifest.tight && plan.header.tight && !Object.values(manifest.segments).some(s => !s.adopted && s.stride === 1)) manifest.tight = plan.header.tight;
+    if (state.adoptedOnly) {
+      state.spec.firstSegment = Math.min(state.spec.firstSegment, plan.range.from);
+      state.spec.lastSegment = Math.max(state.spec.lastSegment, plan.range.to);
+    }
+    await this.store.save(manifest);
+    if (state.adoptedOnly) {
+      const ranges = readySegmentRanges(manifest);
+      if (ranges.length) { try { this.pipeline.ready.stageByKey({ kind: 'stream', key, ranges }); } catch {} }
+    } else this.publish(state);
+    for (const file of replaced) {
+      const timer = setTimeout(() => {
+        if (Object.values(state.manifest?.segments ?? {}).some(s => s.file === file)) return;
+        void fs.rm(this.store.segFile(key, file), { force: true }).then(() => { this.stats.replacedDeleted++; }, () => {});
+      }, REPLACED_DELETE_MS);
+      timer.unref?.();
+    }
+    if (written) this.note(`流 ${key.slice(0, 8)} 拉进 ${written} 个分段(跳过 ${skipped})`);
+    return { written, skipped, inits };
+  }
+
+  /**
+   * 拉取前先问:这一段清单里,本机还缺哪些分段、要下哪些块(`applyResult` 据此只下载缺的)。
+   * 回 `{ segments: [n…], hashes: [hash…] }`。只读,不改状态。
+   */
+  async adoptionNeeds(result) {
+    const plan = streamAdoption(result);
+    const state = this.streams.get(plan.key) ?? { spec: { streamKey: plan.key }, manifest: await this.store.load(plan.key) };
+    const segments = [], hashes = new Set();
+    for (const [n, seg] of plan.segments) {
+      if (state.manifest?.segments?.[n] && this.segmentState(state, n) !== 'stale') continue;
+      segments.push(n);
+      hashes.add(seg.hash);
+      if (!state.manifest?.inits?.[seg.init] && plan.inits[seg.init]) hashes.add(plan.inits[seg.init].hash);
+    }
+    return { segments, hashes: [...hashes] };
+  }
+
+  /** 拉取要合进的 state:生产者手里有就用它;没有就按盘上的清单(或新清单)新建一个 `adoptedOnly` 的 */
+  async adoptionState(key, plan) {
+    const live = this.streams.get(key);
+    if (live) return live;
+    const { header, range } = plan;
+    const manifest = (await this.store.load(key)) ?? { version: STREAM_CODE_VERSION, streamKey: key, kind: header.kind, plane: header.plane,
+      clipIds: header.clipIds, fps: header.fps, bound: header.bound, offset: header.offset ?? null, tight: header.tight ?? null, inits: {}, segments: {} };
+    const again = this.streams.get(key);
+    if (again) return again;
+    const clipIds = Array.isArray(manifest.clipIds) ? manifest.clipIds : header.clipIds;
+    return {
+      adoptedOnly: true,
+      spec: { streamKey: key, contentKey: null, kind: manifest.kind ?? header.kind, plane: manifest.plane ?? header.plane, clipIds, topClipId: clipIds[clipIds.length - 1] ?? null,
+        fps: manifest.fps ?? header.fps, bound: manifest.bound ?? header.bound, offset: manifest.offset ?? header.offset ?? { x: 0, y: 0 },
+        firstSegment: range.from, lastSegment: range.to },
+      manifest, aliases: new Set(), reserved: new Set(), failures: new Map(), measured: null, measuredSegments: new Set(),
+    };
+  }
+
+  /**
    * 按实测自适应 `streamPool`(G0-b 结论 1):带编码器时每帧出图耗时不超过空闲时的 2 倍、
    * 而且不止一条流有活,才加到 2;超过 2 倍就退回 1。设了 `PROMPTCUT_STREAM_POOL` 就不动。
    */
@@ -1087,7 +1269,8 @@ export class StreamProducer {
    * 传了 `entryKey` 就只给属于那一版的流 —— 生产者手里的可能是另一个会话的版本。
    */
   claimLayers(entryKey) {
-    return [...this.streams.values()].filter(state => entryKey === undefined || (state.entryKey ?? this.entryKey) === entryKey)
+    // C6.2:只是拉来的流(`adoptedOnly`)不属于任何一版,不认领
+    return [...this.streams.values()].filter(state => !state.adoptedOnly && (entryKey === undefined || (state.entryKey ?? this.entryKey) === entryKey))
       .flatMap(state => [state.spec.topClipId, ...(state.aliases ?? [])]
       .map(clipId => ({ clipId, kind: 'stream', key: state.spec.streamKey })));
   }
