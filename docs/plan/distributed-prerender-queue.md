@@ -194,7 +194,7 @@ t = tasks[id]
 否则：
   t.version += 1
   t.state = "claimed"
-  t.claim = { nodeId, token: t.version, claimedAt: now, leaseUntil: now + LEASE_MS, progress: null }
+  t.claim = { nodeId, token: t.version, claimedAt: now, leaseUntil: now + LEASE_MS, progress: { done: null, changedAt: now } }
   回 claimed { id, token, leaseUntil, input, requires, source }
   向其它 watch 者广播 task.taken { id, version }
 ```
@@ -266,6 +266,17 @@ t = tasks[id]
 | **两个节点在宽限期里都以为自己持有同一个任务** | 不会发生：宽限期内任务仍是 `claimed`，别人认领不到；宽限期过后原令牌失效 |
 
 所有时刻只看文档服务自己的时钟，节点之间不需要对时。
+
+### 5.1 补充规则（2026-09-24 用户确认，原任务书第 7 节 C1～C6）
+
+| 编号 | 规则 |
+|---|---|
+| C1 | `failed` 的任务和 `done` 一样保留 `DONE_TTL`：TTL 内重复发布回「已失败」，不重新打开；TTL 后删除，再发布就是新任务 |
+| C2 | 主动放回（`task.release`）不算失败，`attempts` 不加 |
+| C3 | 超时回收、断开回收、停滞回收和 `task.fail` 共用一个 `attempts`，到 `MAX_ATTEMPTS` 一律进 `failed` |
+| C4 | 重连接续认领（`hello.resume`）只认认领它的那个 `nodeId`；别的节点拿着令牌也接续不了 |
+| C5 | 发布方断开的宽限期与节点相同，用 `RECONNECT_GRACE_MS`（基线 10 s） |
+| C6 | 入站消息格式不对回 `error`（`bad-message`），每项目未完成任务超上限回 `limit`，都不改状态；所有出站消息都带 `epoch` |
 
 ## 6. 和现有代码怎么接
 
