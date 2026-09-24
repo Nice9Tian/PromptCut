@@ -816,4 +816,307 @@ export async function probeBrowserEnvironment({ browser, page }, { platform = pr
 - **E.5 本地档**：本地档任务的 `resultKey` 是队列里的任务身份，不等于落盘目录键 `<entryKey>/<snapshotKey>`，这是有意的。
   - 共享档和流的任务身份与落盘键重合，因为它们没有 `entryKey` 这一层。
   - M5 的产物库接口按 `input.entryKey` 与去掉 `<entryKey>/` 前缀的内容键，用同一个指纹重算落盘键。
-- **E.6 实际效果**：页面用 GPU 栅格化，本机预渲染用 SwiftShader，两边指纹几乎不可能相同，所以这道闸实际上停掉了测量帧入库。这条路径以后怎么处理记在 `TODO.md`，本阶段不改页面。
+- **E.6 实际效果**：页面用 GPU 栅格化，本机预渲染用 SwiftShader，两边指纹几乎不可能相同，所以这道闸实际上停掉了测量帧入库。（已被 F 节取代：页面上报自己的环境，测量帧按卡片级指纹锁入库。）
+
+## F. 卡片级指纹锁（M4 补充：前端测量帧入库与队列认领）
+
+主 Agent 定稿，2026-09-24，按用户的「卡片级一致性锁定」决策。依据：`rendering.md`「不同环境的结果不混用」与「预渲染结果的复用」、设计 2.1「谁定指纹」。本节取代 E.6 的测量帧闸，其余 E 节不变。
+
+**概念**：
+
+- **锁键** `lockKey = <kind>:<contentKey>`。`kind` 是 `snapshot` 或 `stream`。`contentKey` 就是细任务的 `input.contentKey`：
+  - 共享档快照是卡的内容键；
+  - 本地档是 `<entryKey>/<内容键>`；
+  - 流是流的内容键。
+- **锁** `{ envFingerprint, source, since, touchedAt }`。同一把锁下只有一个环境的结果被产出、投递。
+- **得锁**：没锁时，第一个产出者得锁；同指纹再来只刷新 `touchedAt`；不同指纹被拒，除非**接手**（takeover）。
+- **接手**：用自己的指纹另起一套键、锁转给自己，原指纹的未完成工作作废。
+
+### F.1 队列（`server/render-queue/`，Protocol/State）
+
+**入站任务**：`TaskInput` 新增可选字段 `takeover?: boolean`。
+
+- 不是布尔就整条 `bad-message`；
+- 不存进任务，`TaskView` 不变。
+
+**锁键**：`lockKeyOf(task)`，从 `index.mjs` 转出。
+
+- `kind` 是 `snapshot` / `stream`，且 `input.contentKey` 是非空字符串时，返回 `` `${kind}:${input.contentKey}` ``；
+- 其余返回 `null`。
+- 任务的**锁指纹**是 `requires.envFingerprint`（非空字符串）。没有锁键或锁指纹的任务不参与锁。
+
+**状态**：新增 `locks: Map<lockKey, { envFingerprint, source: 'claim' | 'lock' | 'takeover', since, touchedAt }>`。只在内存里，队列重启（新 `epoch`）后清空，和任务表一样。
+
+**新入站消息 `card.lock`**：只有发布连接能发，加进 `PUBLISHER_TYPES`。文档服务按这个集合路由，不用改文档服务。
+
+- 字段：`kind: 'snapshot' | 'stream'`、`contentKey: 非空字符串`、`envFingerprint: 非空字符串`、`takeover?: boolean`；格式错误整条 `bad-message`。
+- 处理：
+  - 没锁：建锁（`source: 'lock'`）；
+  - 同指纹：刷新 `touchedAt`；
+  - 不同指纹且 `takeover === true`：按下面的「接手」处理；
+  - 不同指纹且没带 `takeover`：不变。
+- 回包 `card.locked { lockKey, envFingerprint: <处理后锁上的指纹>, granted: boolean }`。
+
+**认领（改 A.7.2）**：在第 3 步（`taken`）与第 4 步（`stale`）之间插入：
+
+- 3a. 任务有锁键 L 和锁指纹 F，且 `locks` 里 L 的指纹 X 存在、`X !== F` → `claim-rejected { reason: 'card-locked', state: 'open', version, lockedBy: X }`。
+- 认领成功时：L 没锁就建锁（`{ envFingerprint: F, source: 'claim' }`）；同指纹就刷新 `touchedAt`。
+
+**发布（改 A.7.1）**：逐个任务在原有处理之后看锁。任务有锁键 L 和锁指纹 F 时：
+
+| 锁的状态 | `takeover` | 处理 | `results[i]` 另加 |
+|---|---|---|---|
+| 没锁 | `true` | 建锁（`source: 'takeover'`） | — |
+| 没锁 | 其余 | 不建锁（等第一次认领） | — |
+| 同指纹 | 任意 | 刷新 `touchedAt` | — |
+| 不同指纹 X | `true` | 接手（见下） | — |
+| 不同指纹 X | 其余 | 任务照常建或合并，但在锁变之前认领会被拒 | `lockedBy: X` |
+
+**接手**（`card.lock` 与发布共用）：锁改为 `{ envFingerprint: F, source: 'takeover', since: now, touchedAt: now }`。然后对表里**每个**锁键为 L、锁指纹不是 F、状态是 `open` 或 `claimed` 的任务 T，都走「放弃」的收尾，只是直接进 `failed`：
+
+1. `version += 1`；`state = 'failed'`；`finishedAt = now`；`lastError = 'superseded'`；`attempts` 不变；
+2. T 若是 `claimed`：原认领者的连接还在，就先给它发 `task.lease-lost { id, token, reason: 'superseded' }`，再 `claim = null`；
+3. 给 T 的每个当前订阅者发 `task.failed { id, error: 'superseded' }`；给可见的 watch 者发 `task.closed { id, state: 'failed' }`。
+
+`done` 的任务不动。
+
+**完成**：锁键为 L 的任务完成时，刷新 L 的 `touchedAt`（锁存在时）。
+
+**`tick()` 第 5 项扫描**（在原有四项之后）：锁 L 满足以下两条就删掉：
+
+- 表里已没有任何任务的锁键是 L；
+- `now - touchedAt >= DONE_TTL_MS`。
+
+**`describe()`**：新增 `locks: [{ lockKey, envFingerprint, source, since, touchedAt }]`，按 `lockKey` 排序。
+
+### F.2 节点（`server/render-node/`，Pipeline/Node 的 Node 部分）
+
+**`fingerprint.mjs` 的 `normalizeOs`**：在现有精确匹配之后，按前缀补三条（小写后比）：
+
+- `win` 开头 → `windows`；
+- `mac` 开头 → `macos`；
+- `linux` 开头 → `linux`。
+
+这是为了认得页面上报的 `navigator.platform`（`Win32`、`MacIntel`、`Linux x86_64`）和 `userAgentData.platform`（`Windows`、`macOS`、`Linux`）。其余输入照旧返回 `other`。
+
+**`split.mjs` 的 `splitPlan`**：新增两个可选参数。
+
+- `cardLocks`：`Map` 或普通对象，`lockKey → envFingerprint`，缺省 `{}`；
+- `takeover`：布尔（全部接手），或 `Set<lockKey>`，或 `(lockKey) => boolean`，缺省 `false`。
+
+对每个快照 control、每条流：
+
+- 按 E.5 算出内容键 `contentKey`，也就是任务的 `input.contentKey`，锁键 `L = <kind>:<contentKey>`；
+- 取 `X = cardLocks[L]`：
+  - 没有 X，或 `X === envFingerprint`：照 E.5，不加 `takeover` 字段；
+  - 有 X、`X !== envFingerprint`，且 `takeover` 命中 L：用本节点的 `envFingerprint` 出键，每个任务加 `takeover: true`；
+  - 有 X、`X !== envFingerprint`，且不接手：`resultKey = resultKeyOf(contentKey, X)`，`requires.envFingerprint = X`，其余字段不变。剩余帧只给同指纹的节点。
+
+**`session.mjs`**：`claim-rejected` 的 `reason: 'card-locked'` 按 `taken` 处理，丢掉这个候选。现有的「非 `stale` 一律丢」若已覆盖就不用改，报告里写明。
+
+**`local-node.mjs`**：`executor.plan()` 返回的 `PlanContext` 可以带 `cardLocks`、`takeover`，原样传给 `splitPlan`。JSDoc 的 typedef 补这两项。
+
+### F.3 本机预渲染进程（Pipeline/Node 的 Pipeline 部分）
+
+本机只锁**共享档快照**这一种结果，锁键就用卡的内容键 `control.contentKey`：
+
+- 本地档、轨道流、独立卡 PNG 缓存本机只有预渲染进程一个产出者，不加锁；
+- PNG 缓存是旧整帧通道和导出用的料，不是页面按层贴的结果。
+
+**新建 `server/card-lock.mjs`**：
+
+```js
+export const CARD_LOCK_IDLE_MS = 30_000;
+export function createCardLockStore({ dir, now = Date.now })
+// → { load(): Promise<void>, get(contentKey), acquire(contentKey, envFingerprint, source), takeover(contentKey, envFingerprint, source), list(), flush(): Promise<void> }
+export function cardLockDecision({ lock, ownFingerprint, complete, now, idleMs = CARD_LOCK_IDLE_MS })
+// → 'own' | 'reuse' | 'defer' | 'takeover'
+```
+
+**锁库**：
+
+- 目录 `<root>/controls-lock/`，一把锁一个文件 `<contentKey>.json`，内容 `{ envFingerprint, source: 'page' | 'prerender', since, touchedAt }`；
+- `contentKey` 必须是 64 位小写十六进制，否则 `acquire` / `takeover` 抛出；
+- `load()`：读目录里全部 `*.json`，坏文件跳过，目录不存在不算错；
+- 各方法语义：
+  - `get()`：同步，没有返回 `null`；
+  - `acquire()`：同步改内存，回 `{ granted, lock }`；没锁建锁、同指纹刷新 `touchedAt`、不同指纹 `granted: false`；
+  - `takeover()`：同步覆盖，`since = touchedAt = now()`；
+- 持久化：写盘排在后面异步做（原子写，照 `frame-mov.mjs` 的 `atomic`），`flush()` 等排队的写盘全部落定；
+- `list()` 回 `[{ contentKey, ...lock }]`，按 `contentKey` 排序。
+
+**`cardLockDecision`** 是纯函数，按顺序判：
+
+1. 没锁，或 `lock.envFingerprint === ownFingerprint` → `'own'`：照常渲，渲之前得锁；
+2. `complete` → `'reuse'`：锁定方的结果已齐，直接投递，不渲；
+3. `now - lock.touchedAt < idleMs` → `'defer'`：锁定方可能还在产，先做别的卡；
+4. 其余 → `'takeover'`。
+
+**`FramePipeline`**：
+
+- 构造时 `this.cardLockStore = createCardLockStore({ dir: path.join(root, 'controls-lock') })`，并立刻开始 `load()`，记下这个 Promise；
+- `async ensureCardLocks()` 等那次 `load()` 落定；
+- `rescanSnapshots()` 开头、`preload` 后台那一趟算 card plan 之前、`cardRender` 算 card plan 之前，都 `await this.ensureCardLocks()`。
+
+**`applyCardLocks(plan)`**：在 `recordCardPlan` 里调，对同一份 plan 重复调结果相同。对每个 `tier === 'shared'` 且有 `contentKey` 的 control：
+
+- 第一次见到这个 control 时，记下 `ownSnapshotKey = snapshotKey`、`ownEnvFingerprint = envFingerprint`；
+- 锁 `lock = store.get(contentKey)`：
+  - 有锁且 `lock.envFingerprint !== ownEnvFingerprint`：`snapshotKey = resultKeyOf(contentKey, lock.envFingerprint)`，`envFingerprint = lock.envFingerprint`，`cardLock = { envFingerprint, source, foreign: true }`；
+  - 否则：`snapshotKey = ownSnapshotKey`，`envFingerprint = ownEnvFingerprint`，`cardLock = lock ? { envFingerprint, source, foreign: false } : null`。
+
+这样投递、认领、就绪索引、扫盘重建都自动用锁定方的键，不用各处改。`key`（PNG）和 `contentKey` 不动。
+
+**不替锁定方产帧**：凡是 `cardLock.foreign === true` 的 control：
+
+- `snapshotTargets` 不给它 target，整场景路（含锚帧那一趟）不写它；
+- `missingSnapshotFrames` 照常把它现有的区间发成 `layer`，但不把它的帧算进「缺」；
+- `fillCardControls` 按 `cardLockDecision` 分支：
+  - `complete` = `index.count + rangeCount(index.oversize) >= control.count`，看的是锁定方的键；
+  - `'reuse'`：发 `layer`，HTML 这一支不产（`target` 当 `null`），PNG 那一支照旧；
+  - `'defer'`：放进本趟的延后列表，其余卡做完后再判一次；仍是 `'defer'` 就这一趟跳过，下一次 `preload` 再判；
+  - `'takeover'`：`store.takeover(contentKey, ownEnvFingerprint, 'prerender')`，然后对 `entry.cardPlan` 重跑 `applyCardLocks`，同一内容键的所有 control 都换回自己的键；再用自己键现有的区间（可能为空）发一条 `layer`，线上是整层换键，页面丢掉旧环境的帧；最后照常渲。
+
+**渲之前得锁**：本机为一个共享档 control 写帧前，`store.acquire(contentKey, ownEnvFingerprint, 'prerender')`：
+
+- 位置：`fillCardControls` 开始渲这张卡之前；`recordSnapshots` 每帧入批之前；
+- 得不到（页面刚抢先锁了）：这张卡本趟不再写 HTML 快照，对 `entry.cardPlan` 重跑 `applyCardLocks`。
+
+**新方法 `acceptMeasuredSnapshot(entry, control, { envFingerprint, localFrame, html })`**：路由的全部判断放在这里，便于单测。按顺序：
+
+1. `await this.ensureCardLocks()`；
+2. `envFingerprint` 不是 16 位小写十六进制 → `{ ok: true, stored: false, reason: 'ENV_MISSING' }`；
+3. `store.acquire(control.contentKey, envFingerprint, 'page')` 没得到 → `{ ok: true, stored: false, reason: 'CARD_LOCKED', lockedBy }`；
+4. `key = resultKeyOf(control.contentKey, envFingerprint)`；`commitSnapshots({ tier: 'shared', key, clipId, capabilities, items: [{ localFrame, html }] })`；什么都没写进去 → `{ ok: true, stored: true, indexed: false, reason: 'OVER_LIMIT', envFingerprint, key }`；
+5. 对 `entry.cardPlan` 重跑 `applyCardLocks`，再 `publishLayer(entry, { clipId, snapshotKey: key }, 'shared', index.frames)`；
+6. 回 `{ ok: true, stored: true, indexed: true, count, envFingerprint, key }`。
+
+注意：页面指纹与预渲染进程相同时，第 3 步同指纹得锁，第 4 步的键就是本机自己的键，和预渲染的结果合在一起，这是对的。
+
+**诊断**：`diagnostics()` 新增 `cardLocks: store.list()`；`planDiagnostics()` 的 control 新增 `cardLock`。
+
+**路由 `PUT /api/frames/snapshot`**（`vite-plugin-frames.ts`，替换 E.6 的闸）：
+
+- 在 `NOT_INDEPENDENT` 之后算页面指纹：
+  - 请求体有对象 `environment` 时，取 `describeEnvironment({ platform: environment.platform, renderer: environment.renderer, vendor: environment.vendor, chromeVersion: environment.userAgent ?? environment.chromeVersion }).fingerprint`；
+  - 否则用字符串 `envFingerprint`；
+  - 都没有就传 `null`。
+- 其余交给 `service.acceptMeasuredSnapshot(entry, control, …)`，回它的结果（HTTP 200）。
+
+### F.4 页面（`src/editor/`，Pipeline/Node 的页面部分）
+
+- **新建 `src/editor/pageEnvironment.mjs`**，类型声明照仓库里 `.mjs` 被 TS 引用的既有做法补：
+
+  ```js
+  export function readPageEnvironment({ navigator, document } = globalThis)
+  // → { platform, userAgent, renderer, vendor }
+  export function pageEnvironment()   // 缓存一次的 readPageEnvironment()
+  ```
+
+  - `platform = navigator.userAgentData?.platform || navigator.platform || ''`；
+  - `userAgent = navigator.userAgent || ''`；
+  - `renderer` / `vendor`：不挂进文档的 canvas，依次试 `webgl2`、`webgl`，有 `WEBGL_debug_renderer_info` 读 `UNMASKED_*`，否则读 `RENDERER` / `VENDOR`，读完 `WEBGL_lose_context`；
+  - 任何一步失败按空串计，不抛。
+- **`probeRunner.ts` 的 `forwardProbeFrame`**：请求体加 `environment: pageEnvironment()`，其余不变。
+
+### F.5 测试（Verification）
+
+测试名以编号开头。
+
+**`server/test/card-lock-queue.test.mjs`**（Q1～Q9）：
+
+| 编号 | 内容 |
+|---|---|
+| Q1 | 首次认领建锁（`source: 'claim'`），同指纹的其余段照常认领 |
+| Q2 | 锁上指纹 X 后，同一 `contentKey` 的 Y 指纹任务认领被拒 `card-locked`，带 `lockedBy: X`；版本不变 |
+| Q3 | `card.lock`：没锁得锁；同指纹 `granted: true`；不同指纹不带 `takeover` → `granted: false`、锁不变；格式错误 `bad-message`；`card.lock` 在 `PUBLISHER_TYPES` 里，没发过 `publisher.hello` 的连接发它回 `not-registered`（A.5） |
+| Q4 | 带 `takeover` 发布：锁转给新指纹；旧指纹 `open` 的任务进 `failed`（`superseded`），`claimed` 的认领者收到 `lease-lost { reason: 'superseded' }`，订阅者收到 `task.failed`；`done` 的不动 |
+| Q5 | 不带 `takeover`、锁在别的指纹上时发布：任务照建，`results[i].lockedBy` 是锁指纹 |
+| Q6 | `takeover` 不是布尔 → 整条 `bad-message`，状态不变 |
+| Q7 | 锁回收：没有任务再引用、且过了 `DONE_TTL_MS` 才删；还有任务引用时不删 |
+| Q8 | `describe().locks` 的形状与排序；新 epoch 的队列没有锁 |
+| Q9 | 没有 `input.contentKey` 或没有 `requires.envFingerprint` 的任务不建锁、不受锁影响 |
+
+**`server/test/card-lock-node.test.mjs`**（N1～N5）：
+
+| 编号 | 内容 |
+|---|---|
+| N1 | `normalizeOs` 的新映射（`Win32`、`MacIntel`、`Linux x86_64`、`Windows`、`macOS`、`Linux`），旧映射不变；用真实页面 UA 算指纹 |
+| N2 | `splitPlan` 带 `cardLocks`：被别的指纹锁定的卡按锁指纹出键与 `requires`；同指纹、没锁的照旧；本地档的锁键带 `entryKey/` |
+| N3 | `splitPlan` 带 `takeover`（布尔、Set、函数三种）：按本节点指纹出键，任务带 `takeover: true`；没命中的照 N2 |
+| N4 | 节点会话收到 `card-locked` 丢掉候选，不重试 |
+| N5 | `createLocalNode` 把 `PlanContext.cardLocks` / `takeover` 传给切分：用 M3 的环回和假件跑一条链路，被锁的卡只被同指纹节点做完 |
+
+**`server/test/card-lock-pipeline.test.mjs`**（L1～L8）：
+
+| 编号 | 内容 |
+|---|---|
+| L1 | 锁库：`acquire` 得锁、同指纹刷新、异指纹拒绝；`takeover` 覆盖；`flush` 后新建的库 `load` 读得回；坏文件跳过；非法 `contentKey` 抛 |
+| L2 | `cardLockDecision` 四个分支和边界（`touchedAt` 恰好 `idleMs` 前） |
+| L3 | `applyCardLocks`：异指纹锁 → control 的 `snapshotKey === resultKeyOf(contentKey, 锁指纹)`、`envFingerprint` 是锁指纹、`cardLock.foreign`；解锁或换回后恢复自己的键；重复调结果相同；`key` / `contentKey` 不变 |
+| L4 | `acceptMeasuredSnapshot`：没指纹 `ENV_MISSING`；第一帧得锁、写在页面键下、发 `layer`（键为页面键）；同页面指纹后续帧照写；别的页面指纹 `CARD_LOCKED`；预渲染进程先得锁时页面被拒 |
+| L5 | 页面锁定后：`snapshotTargets` 不含这张卡；`missingSnapshotFrames` 不把它的帧算缺，但发出它现有的区间 |
+| L6 | 页面结果已齐时 `fillCardControls` 不渲 HTML（假 bakery 计数），发的 `layer` 是页面键 |
+| L7 | 页面锁闲置且不齐时接手：锁转为本机指纹，control 换回自己的键，先发一条自己键的 `layer`（换键），之后照常产 |
+| L8 | 页面锁还新鲜且不齐：本趟延后，末尾再判；仍新鲜就跳过，不写任何帧 |
+
+**`src/editor/pageEnvironment.test.mjs`**（W1～W2）：
+
+- W1：假 `navigator` / `document` 读出四项；`userAgentData` 优先；
+- W2：没有 WebGL、`getContext` 抛出时回空串、不抛。
+
+另外：
+
+- 既有测试因本节失效的（E.6 相关、`normalizeOs` 的 `other` 断言恰好落在新前缀上的），只按本节改输入或期望，不放宽别的断言，逐条写进报告；
+- 探针不改。主 Agent 另用现场脚本核对路由。
+
+### F.6 文件归属
+
+| 角色 | 文件 |
+|---|---|
+| Protocol/State | `server/render-queue/queue.mjs`、`messages.mjs`、`index.mjs`（`constants.mjs` 按需） |
+| Node | `server/render-node/fingerprint.mjs`、`split.mjs`、`session.mjs`、`local-node.mjs`、`index.mjs` |
+| Pipeline | 新建 `server/card-lock.mjs`、`src/editor/pageEnvironment.mjs`（及类型声明）；改 `server/frame-pipeline.mjs`、`server/vite-plugin-frames.ts`、`src/editor/probeRunner.ts` |
+| Verification/Test | 新建上面四个测试文件；改受影响的既有测试 |
+| 主 Agent | 本节；`rendering.md`、`glossary.md`、设计 2.1、`TODO.md`、报告 |
+
+### F.7 定稿后的补充细则（2026-09-24，主 Agent 按实现方疑点裁定）
+
+**问题**：不知道锁的切分节点按自己的指纹发布了被别的环境锁定的卡，这些任务谁也认领不了，一直 `open`，页面永远等不到 `task.done`。M3 的 I6 第二轮就是这种情形。按「不得抢单」，这类任务不该建出来；切分方要照锁定方的指纹重发，或者明确接手。
+
+1. **发布时拒建**（改 F.1「发布」表的最后一行）：
+   - 条件：任务有锁键 L 和锁指纹 F，锁在别的指纹 X 上，没带 `takeover`，且表里**没有**同 `id` 的任务；
+   - 处理：**不建**，`results[i] = { id, error: 'card-locked', lockedBy: X }`，和 `limit` 一样不影响同一条消息里的其它任务；
+   - 已有同 `id` 任务的，照 A.7.1 合并，另加 `lockedBy: X`。
+2. **没锁时带 `takeover`**：建锁（`source: 'takeover'`），同时照「接手」作废锁键为 L、指纹不是 F 的 `open` / `claimed` 任务。两个节点几乎同时切分时，不留异指纹的死任务。
+3. **锁回收**的比较与 A.8 一致，用严格大于：`now - touchedAt > DONE_TTL`。常量名以 `constants.mjs` 为准（`DONE_TTL`），F.1 里写的 `DONE_TTL_MS` 指的就是它。
+4. 因 `limit` 没建成的那一项不做任何锁处理。
+5. **`local-node.mjs` 切分后等发布回包**：
+   - 派生任务的 `task.publish` 带 `reqId`；等到同一 `reqId` 的 `task.published` 回来，才 `complete` 这个 `plan`（用注入的等待方式，跟随 `signal` 中止）。理由：细任务要在 `plan` 仍被本节点认领时发布，才能继承页面的订阅（A.4 继承条件）。
+   - 回包里有 `error: 'card-locked'` 的：
+     - 把这些结果的锁键和 `lockedBy` 并进 `cardLocks`；
+     - 按 `createLocalNode` 的新选项 `takeoverLocked`（布尔或 `(lockKey, lockedBy) => boolean`，缺省 `false`，即照锁定方的指纹重发）重跑 `splitPlan`；
+     - 只发布锁键在这些结果里的任务，再等一次回包；
+     - 最多重来 2 轮，还被拒的放弃，发事件 `{ type: 'plan-relocked', id, lockKeys, gaveUp: [...] }`。
+   - `complete` 的 `derived` 是最终发布成功的全部 id。
+6. **测试**：
+   - I6 的第二轮按本节改期望：被第一轮锁住的卡，第二轮的细任务照锁定方的指纹出键，由锁定方指纹的节点做完。只改这一处期望，其余断言不放宽；
+   - 新增：
+     - Q10：拒建，任务不存在，`results` 带 `error` 与 `lockedBy`；
+     - Q11：没锁时带 `takeover` 也作废异指纹任务；
+     - N6：`local-node` 在拒建后照锁指纹重发、`plan` 等回包后才完成、细任务继承页面订阅；`takeoverLocked` 为真时带 `takeover` 重发。
+
+### F.8 本机侧的补充细则（2026-09-24，主 Agent 按 Pipeline 实现方疑点裁定）
+
+1. **本机已有结果也得锁**：`fillCardControls` 走到一个共享档 control 时，锁库里没有它的锁，就用本机指纹得锁（`source: 'prerender'`），不管这张卡本机是不是已经齐了。否则换键前就已产齐、但没有锁文件的卡，会被页面的第一帧测量帧锁走，反而少了覆盖。页面在后台那一趟走到这张卡之前推来测量帧的，仍是页面先得锁。
+2. **延后的卡要再判**：`rendering.md` 说锁定方停下一段时间后要接手，所以延后不能停在「等下一次 preload」。
+   - 一趟后台结束时仍有 `'defer'` 的卡，就定一个一次性计时器（`unref`），在 `cardLockIdleMs` 之后重判这些卡；
+   - 计时器触发时，满足以下三条才把一小趟排进后台串行链：这一版的后台那一趟没被取消（它的 `signal` 没 abort）；还有会话的当前版本是这个 entry；这些卡仍在预渲染集合里。
+   - 那一小趟只对这些卡跑 `fillCardControls`，同一个 `signal`、`'background'` lane 的预渲染间；
+   - 重判结果：已齐 → 投递；已闲置 → 接手；仍新鲜 → 再延后。同一版最多重排 20 次，之后等下一版。
+   - `FramePipeline` 构造参数新增 `cardLockIdleMs`（缺省 `CARD_LOCK_IDLE_MS`），决策和计时器都用它，测试可以给小值。
+3. **同一内容键的所有片段一起发层**：接手，或测量帧入库时，`entry.cardPlan` 里内容键相同的每个 control 都发一条 `layer`，同一张卡摆了几次时各片段一起换键。
+4. control 没有 `contentKey` 时，`acceptMeasuredSnapshot` 回 `{ ok: true, stored: false, reason: 'NO_CONTENT_KEY' }`、不写；锁库对空的环境指纹同样抛出。
+5. **测试**：L4、L7 按第 3 条补「多个片段一起换键」的断言；新增：
+   - L9：`cardLockIdleMs` 给小值，延后的卡在锁闲置后被重判并接手；在重判前页面结果已齐的，改为投递；
+   - L10：本机已齐、没有锁文件的卡，后台那一趟之后锁归本机，此后页面测量帧回 `CARD_LOCKED`。

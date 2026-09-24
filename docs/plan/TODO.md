@@ -9,7 +9,7 @@
 | 轨道流：重卡在播放时贴的 alpha 视频流 | `docs/plan/r8-streams-task.md`；编码原型报告 `docs/plan/g0-b-stream-prototype.md` | 未开始，编码原型已做完 |
 | 共享 WebGL 渲染器：canvas 卡共用一个 WebGL 上下文 | `docs/plan/r9-webgl-task.md` | 未开始 |
 | 素材服务与文档服务（本地或远程，可任意组合部署）、产物入库、改动竞态、Agent 的查询进程、在线浏览器模式 | `docs/plan/cloud-task.md`；动工前的问题已定，见文末「已定的决议」。2026-09-24 按路线 B 改写，尚未独立审查 | 未开始 |
-| 分布式预渲染：文档服务托管的拉取式渲染任务队列，本机 PC、独立渲染主机、纯浏览器认领任务 | `docs/plan/distributed-prerender-queue.md`；前置：上一行的文档服务与产物入库（A3b）；背景评估 `docs/reports/REPORT-architecture-agent-prerender.md` | 设计已审核（2026-09-24）；落地任务书 `docs/plan/TASK-distributed-prerender-queue.md`（M0～M8，M1 纯内存队列本体可先于前置动工）；M1、M2 已合入 main（报告 `docs/reports/REPORT-render-queue-m1.md`）；M3 进程内集成已合入 main（报告 `docs/reports/REPORT-render-queue-m3.md`），接真实预渲染执行器挪到 M5；M4 环境指纹进结果键已在分支 `claude/rq-m4` 完成（报告 `docs/reports/REPORT-render-queue-m4.md`），待合并；M5 起另行下发指令 |
+| 分布式预渲染：文档服务托管的拉取式渲染任务队列，本机 PC、独立渲染主机、纯浏览器认领任务 | `docs/plan/distributed-prerender-queue.md`；前置：上一行的文档服务与产物入库（A3b）；背景评估 `docs/reports/REPORT-architecture-agent-prerender.md` | 设计已审核（2026-09-24）；落地任务书 `docs/plan/TASK-distributed-prerender-queue.md`（M0～M8，M1 纯内存队列本体可先于前置动工）；M1、M2 已合入 main（报告 `docs/reports/REPORT-render-queue-m1.md`）；M3 进程内集成已合入 main（报告 `docs/reports/REPORT-render-queue-m3.md`），接真实预渲染执行器挪到 M5；M4 环境指纹进结果键已合入 main（报告 `docs/reports/REPORT-render-queue-m4.md`），补充的卡片级指纹锁同样已合入（报告 `docs/reports/REPORT-render-queue-card-lock.md`）；M5 起另行下发指令 |
 | 音频整体改成浏览器端 JS | `docs/plan/audio_structure_plan.md`（A0～A7）；判重测试计划 `docs/plan/audio_determine_plan.md` | 计划已写，未动工 |
 | 以后再做：桌面版给只有原片的云端素材补转小版；导出页装虚拟定时器 | `docs/plan/future_planning.md` | 暂缓 |
 
@@ -34,7 +34,7 @@
 - **素材服务**：还不存在；桌面运行环境现在直读本机素材目录，没有经服务接口；两档素材的字段只是占位；预渲染产物还没有入库，只留在本机。
 - **查询渲染**：Agent 专用渲染实例的优先通道、AI 栏操作预览的插队只有雏形。
 - **在线浏览器模式**：还不存在。
-- **渲染任务队列与渲染节点**：还不存在；预渲染现在只由本机预渲染进程按页面的 preload 做（本机的结果键已在 M4 乘上环境指纹）。页面测量时推过的帧（`rendering.md`「预渲染结果的复用」的末句）因为和预渲染进程不是同一种环境，M4 起不再入库（`render-queue-contract.md` E.6、E.9），这条路径是删掉还是改成页面上报自己的指纹，待定。设计见 `docs/plan/distributed-prerender-queue.md`。
+- **渲染任务队列与渲染节点**：还不存在；预渲染现在只由本机预渲染进程按页面的 preload 做（本机的结果键已在 M4 乘上环境指纹）。页面测量时推过的帧按卡片级指纹锁入库：页面上报自己的环境，帧存在页面指纹的键下，这张卡随之锁给页面的环境（`render-queue-contract.md` F 节，报告 `docs/reports/REPORT-render-queue-card-lock.md`）。设计见 `docs/plan/distributed-prerender-queue.md`。
 - **手动截短总时长的入口**：语义允许用户手动缩短总时长（`project-model.md`「总时长」），但编辑界面没有入口，现在只有 Agent 能经 `set_project_meta` 截断。UI 层要补手动截短总时长的操作入口，规则用 `src/kernel/duration.ts` 现成的那套。
 
 ## 文档

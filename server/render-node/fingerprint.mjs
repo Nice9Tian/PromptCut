@@ -17,12 +17,23 @@ import { createHash } from 'node:crypto';
 
 const sha256 = text => createHash('sha256').update(text, 'utf8').digest('hex');
 
-/** `process.platform` 或已归一的名字 → `windows` | `macos` | `linux` | `other`(大小写不敏感)。 */
+/**
+ * `process.platform`、已归一的名字或页面上报的平台串 → `windows` | `macos` | `linux` | `other`
+ * (大小写不敏感)。
+ *
+ * 先精确匹配(`win32` / `windows`、`darwin` / `macos`、`linux`),再按前缀补三条(契约 F.2):
+ * `win…` → windows、`mac…` → macos、`linux…` → linux。前缀是为了认得页面的
+ * `navigator.platform`(`Win32`、`MacIntel`、`Linux x86_64`)和 `userAgentData.platform`
+ * (`Windows`、`macOS`、`Linux`),这样页面和本机预渲染进程在同一台机器上算出同一个 `os`。
+ */
 export function normalizeOs(platform) {
   const name = String(platform ?? '').trim().toLowerCase();
   if (name === 'win32' || name === 'windows') return 'windows';
   if (name === 'darwin' || name === 'macos') return 'macos';
   if (name === 'linux') return 'linux';
+  if (name.startsWith('win')) return 'windows';
+  if (name.startsWith('mac')) return 'macos';
+  if (name.startsWith('linux')) return 'linux';
   return 'other';
 }
 

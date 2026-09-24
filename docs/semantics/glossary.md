@@ -36,6 +36,7 @@
 | 认领 | 渲染节点从队列里取一个任务：比对状态再加锁一步完成，同一任务同时只有一个认领者；断开或超时后任务回到未认领 | architecture/document-service.md |
 | 独立渲染主机 | 局域网或远程主机上、不带编辑界面的预渲染进程，作为渲染节点为多个项目取活 | architecture/platforms.md |
 | 环境指纹 | 渲染环境的标识（操作系统、GPU 基础类别、Chrome 主版本），并入预渲染结果的键；不同环境的结果不混用 | architecture/rendering.md |
+| 卡片级指纹锁 | 一张卡的同一种预渲染结果（快照或轨道流）只出自一种环境：最先产出的环境锁定这张卡，别的环境只能用自己的指纹另起一套键、从头接手 | architecture/rendering.md |
 | 桌面运行环境 | 带预渲染进程的桌面应用（或本机 dev server）所在的运行环境，和「在线浏览器模式」对举；可以连本地或远程的服务 | architecture/platforms.md |
 | 在线浏览器模式 | 只有页面、没有本机进程的运行形态 | architecture/platforms.md |
 | 低内存档 | 平板、手机等内存受限设备的运行档位 | architecture/platforms.md |
