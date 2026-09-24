@@ -4,13 +4,20 @@
  * 跑：node scripts/probes/ws-client-test.mjs [ws://host:port]      缺省 ws://127.0.0.1:8787
  * 只用 Node 内置的 WebSocket 与 fetch（Node >= 22），不装依赖。全过退出码 0，有失败 1，连不上 2。
  *
+ * 集群令牌（契约 G.5）：设了环境变量 PROMPTCUT_CLUSTER_TOKEN 时，按 G.5 在 Sec-WebSocket-Protocol 里带
+ * `promptcut.v1` 和 `promptcut.token.<令牌>`，并断言服务端只回显 `promptcut.v1`；没设时不带子协议（旧客户端，
+ * 只能连匿名模式的服务）。令牌不接受命令行参数，也不打印。
+ *
  * 断言依据：`docs/plan/render-queue-contract.md` A.6（node.hello → node.welcome、publisher.hello → publisher.welcome、
- * queue.watch → queue.snapshot、格式错误 → error bad-message），以及 server/docservice/service.mjs 的 /healthz。
+ * queue.watch → queue.snapshot、格式错误 → error bad-message），以及 server/docservice/service.mjs 的 /healthz
+ * （G.4：有 protocol === 'promptcut.v1' 和模块名数组 modules）。
  */
 const url = process.argv[2] ?? 'ws://127.0.0.1:8787';
 const TIMEOUT_MS = 10_000;
 const nodeId = `probe-node-${process.pid}`;
 const publisherId = `probe-page-${process.pid}`;
+const token = process.env.PROMPTCUT_CLUSTER_TOKEN || undefined;
+const protocols = token ? ['promptcut.v1', `promptcut.token.${token}`] : undefined;
 
 const results = [];
 function check(name, ok, detail) {
@@ -20,7 +27,7 @@ function check(name, ok, detail) {
 
 function connect() {
   return new Promise((resolve, reject) => {
-    const ws = new WebSocket(url);
+    const ws = protocols ? new WebSocket(url, protocols) : new WebSocket(url);
     const t = setTimeout(() => { ws.close(); reject(new Error(`${TIMEOUT_MS} ms 内没连上`)); }, TIMEOUT_MS);
     ws.addEventListener('open', () => { clearTimeout(t); resolve(ws); }, { once: true });
     ws.addEventListener('error', (e) => { clearTimeout(t); reject(new Error(e.message ?? '连接出错')); }, { once: true });
@@ -45,7 +52,7 @@ function request(ws, message) {
   });
 }
 
-console.log(`target ${url}`);
+console.log(`target ${url}  token ${token ? 'set' : 'none'}`);
 let ws;
 const t0 = performance.now();
 try {
@@ -55,6 +62,7 @@ try {
   process.exit(2);
 }
 check('WebSocket 握手', true, `${Math.round(performance.now() - t0)} ms`);
+if (protocols) check('子协议只回显 promptcut.v1', ws.protocol === 'promptcut.v1', `protocol=${JSON.stringify(ws.protocol)}`);
 
 try {
   // 1. 渲染节点报到
@@ -86,6 +94,10 @@ try {
   const health = await fetch(url.replace(/^ws/, 'http').replace(/\/?$/, '/healthz')).then((r) => r.json());
   console.log(`healthz ${JSON.stringify(health)}`);
   check('healthz 里记到节点与发布方', health.ok === true && health.nodes >= 1 && health.publishers >= 1);
+  check('healthz.protocol 是 promptcut.v1', health.protocol === 'promptcut.v1', `protocol=${JSON.stringify(health.protocol)}`);
+  check('healthz.modules 是模块名数组', Array.isArray(health.modules) && health.modules.every((m) => typeof m === 'string'), JSON.stringify(health.modules));
+  check('healthz 带队列 epoch', health.epoch === welcome.epoch);
+  if (token) check('healthz 里没有令牌', !JSON.stringify(health).includes(token));
 } catch (err) {
   check('请求过程', false, err.message);
 }
