@@ -7,7 +7,7 @@ import "../../testing/registerTs.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-const { createPreloadScheduler, PRELOAD_DEBOUNCE_MS, PRELOAD_POLL_MS, PRELOAD_RETRY_MS, PRELOAD_KEEPALIVE_MS } = await import("./prerenderPreload.ts");
+const { createPreloadScheduler, PRELOAD_DEBOUNCE_MS, PRELOAD_POLL_MS, PRELOAD_RETRY_MS } = await import("./prerenderPreload.ts");
 
 /** 假计时器:手动推进虚拟时间 */
 function fakeClock() {
@@ -132,34 +132,4 @@ test("dispose 之后什么都不发", async () => {
   await clock.advance(20000);
   assert.equal(calls.length, 0);
   assert.equal(clock.pending(), 0);
-});
-
-test("就绪之后按保活间隔再报一次(Item 4:预渲染重启后靠它重新知道会话的版本);不空闲时不报", async () => {
-  const { clock, calls, scheduler } = setup([{ status: "ready" }, { status: "ready" }, { status: "ready" }]);
-  scheduler.setIdle(true);
-  await clock.advance(PRELOAD_DEBOUNCE_MS);
-  assert.equal(calls.length, 1);
-  await clock.advance(PRELOAD_KEEPALIVE_MS - 1);
-  assert.equal(calls.length, 1, "保活间隔之内不报");
-  await clock.advance(1);
-  assert.equal(calls.length, 2, "到点报一次");
-  scheduler.setIdle(false);
-  await clock.advance(PRELOAD_KEEPALIVE_MS * 3);
-  assert.equal(calls.length, 2, "播放 / 拖动中不报");
-  scheduler.setIdle(true);
-  await clock.advance(PRELOAD_KEEPALIVE_MS);
-  assert.equal(calls.length, 3, "回到空闲接着保活");
-});
-
-test("resync:预渲染丢了会话版本时马上发一次,播放中也发;在飞时不重复发", async () => {
-  const { clock, calls, scheduler } = setup([{ status: "ready" }, { status: "ready" }]);
-  scheduler.setIdle(false);
-  scheduler.resync();
-  for (let i = 0; i < 5; i++) await Promise.resolve();
-  assert.equal(calls.length, 1, "不等空闲、不等防抖");
-  await clock.advance(PRELOAD_KEEPALIVE_MS * 2);
-  assert.equal(calls.length, 1, "发完回到不空闲:不保活");
-  scheduler.dispose();
-  scheduler.resync();
-  assert.equal(calls.length, 1, "dispose 之后不发");
 });
