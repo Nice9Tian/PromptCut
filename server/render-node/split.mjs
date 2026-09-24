@@ -1,4 +1,4 @@
-import { QUEUE_DEFAULTS, taskIdOf } from '../render-queue/index.mjs';
+import { QUEUE_DEFAULTS, taskIdOf, lockKeyOf } from '../render-queue/index.mjs';
 import { snapshotTier } from '../snapshot-store.mjs';
 import { resultKeyOf } from './fingerprint.mjs';
 
@@ -62,17 +62,8 @@ function spans(first, last, span) {
 
 const stepOf = value => Math.max(1, Math.floor(Number(value) || 0));
 
-/**
- * 任务的锁键(契约 F.1 的 `lockKeyOf`,同口径的节点侧实现):`kind` 是 `snapshot` / `stream`
- * 且 `input.contentKey` 是非空字符串时为 `` `${kind}:${contentKey}` ``,其余 `null`。
- * 队列侧的 `server/render-queue/index.mjs` 转出同名函数后,两边必须保持一致。
- */
-export function lockKeyOf(task) {
-  const kind = task?.kind;
-  const contentKey = task?.input?.contentKey;
-  if (kind !== 'snapshot' && kind !== 'stream') return null;
-  return typeof contentKey === 'string' && contentKey !== '' ? `${kind}:${contentKey}` : null;
-}
+/** 任务的锁键(契约 F.1):只有一份实现,在队列那边;这里转出,节点侧照旧从切分模块取 */
+export { lockKeyOf };
 
 /** 锁指纹只认非空字符串;别的值(`null`、空串、非字符串)一律当没锁。 */
 const fingerprintOr = value => (typeof value === 'string' && value !== '' ? value : null);
