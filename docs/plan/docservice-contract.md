@@ -171,3 +171,15 @@ Store = {
 - 插件实测（第 7 节末段）通过。
 - **G0-R 跑一遍**：改了 `vite.config.ts`，确认没有副作用。只要求 `verify-determinism` 1800/1800 与 `verify-unified-frames` PASS。
 - 远端重新部署后，`ws-client-test` 对远端 14/14，`/healthz` 里 `modules` 含 `project`、`content`。
+
+## 10. 定稿后的补充细则（2026-09-25，主 Agent 按实现方疑点裁定）
+
+1. **挂载模式的 `listen()`**：同步抛错。
+2. **回包与广播的先后**：同一条请求先回包、后广播，即 `announced` / `stored` 先于 `rev` / `changed`。
+3. **`content.watch`**：以最后一条为准，是替换，不是累加。
+4. **内容库的 `actor`**：与项目模块相同，是 `{ userId, session }`，`content.put` 接受可选的 `session`；`session: null` 视为没给。
+5. **两个新模块不加 `/healthz` 字段**，只提供 `describe()`。
+6. **无头实例不挂文档服务**：`PROMPTCUT_HEADLESS === "1"` 时，`vite.config.ts` 不注册 `docservicePlugin()`。无头实例和用户的编辑器共用同一个项目根，两边同时发号会冲突。
+7. **日志不经 HTTP 暴露**：`vite.config.ts` 的 `fsDeny` 加 `**/out/docservice/**`，局域网设备读不到日志与卡片源码。
+8. **`.gitignore` 加 `/data/`**：`main.mjs` 在仓库里直接跑时的缺省数据目录。
+9. **文件名只差大小写的项目**：在 Windows 上会落到同一个日志文件。回放时按记录里的 `projectId` 过滤，结果仍然正确。
