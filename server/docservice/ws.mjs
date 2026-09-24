@@ -18,11 +18,16 @@ export const CLOSE = Object.freeze({
   NO_STATUS: 1005, ABNORMAL: 1006, INVALID_DATA: 1007, TOO_BIG: 1009,
 });
 
+/** HTTP token 字符（RFC 7230）：子协议名只能由这些字符组成，防止拼出多余的响应头 */
+const TOKEN_CHARS = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
+
 /**
  * 处理 http 服务 `upgrade` 事件里的握手。成功返回 `WsConnection`；请求不合规就回 400、返回 null。
  * 鉴权、路径、连接数这些由调用方在调它之前判断。
+ * `protocol`（可选）：要回显的子协议，写进 `Sec-WebSocket-Protocol`。客户端请求了子协议而服务端不回时，
+ * 浏览器会让握手失败，所以调用方在客户端给了约定的子协议时要传它；不是合法 token 的值不回。
  */
-export function acceptUpgrade(req, socket, head, { maxPayload }) {
+export function acceptUpgrade(req, socket, head, { maxPayload, protocol } = {}) {
   const key = req.headers['sec-websocket-key'];
   const ok = req.method === 'GET'
     && String(req.headers.upgrade ?? '').toLowerCase() === 'websocket'
@@ -33,8 +38,9 @@ export function acceptUpgrade(req, socket, head, { maxPayload }) {
     return null;
   }
   const accept = createHash('sha1').update(key + GUID).digest('base64');
+  const proto = typeof protocol === 'string' && TOKEN_CHARS.test(protocol) ? `Sec-WebSocket-Protocol: ${protocol}\r\n` : '';
   socket.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n'
-    + `Sec-WebSocket-Accept: ${accept}\r\n\r\n`);
+    + `Sec-WebSocket-Accept: ${accept}\r\n${proto}\r\n`);
   return new WsConnection(socket, head, maxPayload);
 }
 

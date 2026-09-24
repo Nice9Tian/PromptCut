@@ -1,25 +1,24 @@
 /**
- * 文档服务骨架：WebSocket 长连接、消息解析、连接身份记录，以及渲染任务队列的挂载点 `mountRenderQueue`。
+ * 文档服务的组装层：HTTP 与 WebSocket 升级、建连鉴权、心跳、`/healthz`、诊断，以及旧接口 `mountRenderQueue` 的外观。
  *
- * 语义见 `docs/semantics/architecture/document-service.md`。这一版只有骨架：还没有项目文档、操作日志、
- * `projectRev` / `cardRev`、锁和内容库（`docs/plan/cloud-task.md` 第 6 步），也还没有真正的鉴权——
- * `principal` 由 `authenticate` 钩子给出，缺省是匿名。
+ * 语义见 `docs/semantics/architecture/document-service.md`，契约见 `docs/plan/render-queue-contract.md` G.4。
+ * 文档服务是通用的文本 / JSON 分发中心：
+ * - 传输在 `ws.mjs`；
+ * - 通用核心在 `router.mjs`（连接登记、信封解析、按类型路由、模块挂载），不认识任何业务；
+ * - 业务都是挂上来的模块（`modules/`）：渲染任务队列、服务地址登记，以后还可以挂与渲染无关的文本处理模块。
  *
- * 连接身份分两层：
- * - **principal**（哪个用户、哪个租户）在建连时由服务端定，消息里自报的一律不认；
- * - **角色**在连接发 hello 之后才有：`publisher.hello` 之后是发布方（页面、Agent），`node.hello` 之后是
- *   渲染节点，一条连接可以两者都是（`docs/plan/render-queue-contract.md` A.5）。
+ * 这一版还没有项目文档、操作日志、`projectRev` / `cardRev`、锁和内容库（`docs/plan/cloud-task.md` 第 6 步）。
+ * `principal` 由 `authenticate` 钩子在建连时给出（集群令牌见 `auth.mjs`），缺省是匿名；消息里自报的一律不认。
  *
- * 渲染任务队列按契约 A.3 的接口挂进来：队列只经 `send(connId, message)` 往外发，服务把 WebSocket 上
- * 属于队列的消息交给 `handle`，连接建立、断开时调 `connect` / `disconnect`，并按 `SWEEP_INTERVAL_MS` 驱动 `tick`。
+ * 渲染任务队列的旧接口保留：创建时挂一个占位模块（队列消息一律回 `queue-unavailable`），
+ * `mountRenderQueue(q)` 把占位换成真队列，它返回的卸载函数再换回占位。
  */
 import { createServer } from 'node:http';
 import { acceptUpgrade, rejectUpgrade, CLOSE } from './ws.mjs';
+import { createRouter } from './router.mjs';
+import { PROTOCOL, offeredProtocols } from './auth.mjs';
 import { QUEUE_DEFAULTS } from '../render-queue/constants.mjs';
-import { parseInbound, NODE_TYPES, PUBLISHER_TYPES } from '../render-queue/messages.mjs';
-
-/** 交给渲染任务队列处理的消息类型 */
-const QUEUE_TYPES = new Set(['node.hello', 'publisher.hello', ...NODE_TYPES, ...PUBLISHER_TYPES]);
+import { renderQueueModule, renderQueuePlaceholder, RENDER_QUEUE_MODULE } from './modules/render-queue.mjs';
 
 export const DOCSERVICE_DEFAULTS = Object.freeze({
   /** 单条消息上限。这条连接只传小消息（document-service.md「职责」） */
@@ -31,9 +30,6 @@ export const DOCSERVICE_DEFAULTS = Object.freeze({
 
 const ANONYMOUS = Object.freeze({ userId: 'anonymous', tenantId: null });
 
-const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
-const isReqId = (v) => typeof v === 'string' || (typeof v === 'number' && Number.isFinite(v));
-
 /** 缺省日志：一行一条 JSON，写 stdout（PM2 会收走） */
 function jsonLog(event, fields) {
   process.stdout.write(`${JSON.stringify({ t: new Date().toISOString(), event, ...fields })}\n`);
@@ -42,12 +38,15 @@ function jsonLog(event, fields) {
 /**
  * @param {object} [options]
  * @param {(req: import('node:http').IncomingMessage) => ({ userId: string, tenantId?: string | null } | null)} [options.authenticate]
- *   建连时定 principal；返回 null 拒绝（401）。缺省所有人都是匿名用户。
+ *   建连时定 principal；返回 null 拒绝（401）。缺省所有人都是匿名用户。集群令牌鉴权用 `auth.mjs` 的 `createClusterAuth`。
  * @param {string} [options.path] 接受 WebSocket 的路径，缺省 `/`
  * @param {number} [options.maxPayload]
  * @param {number} [options.maxConnections]
  * @param {number} [options.heartbeatMs]
- * @param {number} [options.sweepMs] 挂上队列后调 `tick` 的间隔，缺省 `QUEUE_DEFAULTS.SWEEP_INTERVAL_MS`
+ * @param {number} [options.sweepMs] `mountRenderQueue` 挂上的队列调 `tick` 的间隔，缺省 `QUEUE_DEFAULTS.SWEEP_INTERVAL_MS`
+ * @param {object[]} [options.modules] 创建时挂上的模块（契约 G.3）
+ * @param {boolean} [options.autoTick] 缺省 true；false 时不起模块计时器，由调用方手动 `tick()`
+ * @param {string} [options.protocol] 客户端给了这个子协议时握手回显它，缺省 `promptcut.v1`
  * @param {() => number} [options.now]
  * @param {(event: string, fields: object) => void} [options.log]
  */
@@ -59,17 +58,63 @@ export function createDocService(options = {}) {
     maxConnections = DOCSERVICE_DEFAULTS.MAX_CONNECTIONS,
     heartbeatMs = DOCSERVICE_DEFAULTS.HEARTBEAT_MS,
     sweepMs = QUEUE_DEFAULTS.SWEEP_INTERVAL_MS,
+    modules = [],
+    autoTick = true,
+    protocol = PROTOCOL,
     now = Date.now,
     log = jsonLog,
   } = options;
 
   const startedAt = now();
-  /** connId → 连接记录 */
-  const conns = new Map();
+  /** connId → { ws, alive }：传输与心跳的状态；连接身份在核心里 */
+  const sockets = new Map();
+  /** 模块名 → { mod, timer }，按挂载顺序 */
+  const mounted = new Map();
   let seq = 0;
-  let queue = null;
-  let sweepTimer = null;
   let closing = false;
+
+  const router = createRouter({
+    now,
+    log,
+    write(connId, text) {
+      sockets.get(connId)?.ws.send(text);
+    },
+  });
+
+  /** 挂一个模块：核心做冲突检查与 connect，这里按 `tickMs` 起计时器 */
+  function mount(mod) {
+    const unmountCore = router.mount(mod);
+    let timer = null;
+    if (autoTick && typeof mod.tick === 'function' && Number.isFinite(mod.tickMs) && mod.tickMs > 0) {
+      timer = setInterval(() => router.tick(mod.name), mod.tickMs);
+      timer.unref?.();
+    }
+    const record = { mod, timer };
+    mounted.set(mod.name, record);
+    let done = false;
+    return function unmount() {
+      if (done) return;
+      done = true;
+      clearInterval(record.timer);
+      if (mounted.get(mod.name) === record) mounted.delete(mod.name);
+      unmountCore();
+    };
+  }
+
+  /**
+   * 队列槽位：`placeholder` 时挂的是占位模块，`real` 时是真队列。
+   * `modules` 选项里自带同名模块时不挂占位，槽位算作已挂真队列。
+   */
+  let queueSlot = null;
+  if (modules.some((m) => m?.name === RENDER_QUEUE_MODULE)) {
+    queueSlot = { kind: 'real', unmount: null };
+  } else {
+    queueSlot = { kind: 'placeholder', unmount: mount(renderQueuePlaceholder()) };
+  }
+  for (const mod of modules) {
+    const unmount = mount(mod);
+    if (mod.name === RENDER_QUEUE_MODULE) queueSlot.unmount = unmount;
+  }
 
   const server = createServer((req, res) => {
     const url = new URL(req.url ?? '/', 'http://localhost');
@@ -87,7 +132,7 @@ export function createDocService(options = {}) {
     const url = new URL(req.url ?? '/', 'http://localhost');
     if (closing) return rejectUpgrade(socket, 503, 'Service Unavailable');
     if (url.pathname !== path) return rejectUpgrade(socket, 404, 'Not Found');
-    if (conns.size >= maxConnections) return rejectUpgrade(socket, 503, 'Service Unavailable');
+    if (sockets.size >= maxConnections) return rejectUpgrade(socket, 503, 'Service Unavailable');
     let principal;
     try {
       principal = authenticate(req);
@@ -95,110 +140,51 @@ export function createDocService(options = {}) {
       principal = null;
     }
     if (!principal || typeof principal.userId !== 'string') return rejectUpgrade(socket, 401, 'Unauthorized');
-    const ws = acceptUpgrade(req, socket, head, { maxPayload });
+    // 只回显约定的子协议，客户端给的其它项（包括令牌那一项）一律不回
+    const echo = offeredProtocols(req).includes(protocol) ? protocol : undefined;
+    const ws = acceptUpgrade(req, socket, head, { maxPayload, protocol: echo });
     if (!ws) return;
     open(ws, { userId: principal.userId, tenantId: typeof principal.tenantId === 'string' ? principal.tenantId : null });
   });
 
   function open(ws, principal) {
     const connId = `conn-${++seq}`;
-    const conn = {
-      connId, ws, principal,
-      remote: ws.remoteAddress,
-      connectedAt: now(),
-      alive: true,
-      publisherId: null,
-      node: null,
-    };
-    conns.set(connId, conn);
-    log('conn.open', { connId, remote: conn.remote, userId: principal.userId });
+    const conn = { ws, alive: true };
+    sockets.set(connId, conn);
+    log('conn.open', { connId, remote: ws.remoteAddress, userId: principal.userId });
     ws.on('pong', () => { conn.alive = true; });
     ws.on('message', (text) => {
       conn.alive = true;
-      onMessage(conn, text);
+      router.dispatch(connId, text);
     });
     ws.on('close', ({ code, reason }) => {
-      conns.delete(connId);
-      queue?.disconnect(connId);
-      log('conn.close', { connId, code, reason, publisherId: conn.publisherId, nodeId: conn.node?.nodeId ?? null });
+      sockets.delete(connId);
+      router.disconnect(connId);
+      log('conn.close', { connId, code, reason });
     });
-    queue?.connect(connId, principal);
-  }
-
-  function reply(conn, message) {
-    conn.ws.send(JSON.stringify(message));
-  }
-
-  function error(conn, reason, detail, reqId) {
-    const msg = { type: 'error', reason, detail };
-    if (reqId !== undefined) msg.reqId = reqId;
-    reply(conn, msg);
-  }
-
-  function onMessage(conn, text) {
-    let msg;
-    try {
-      msg = JSON.parse(text);
-    } catch {
-      return error(conn, 'bad-message', '不是合法的 JSON');
-    }
-    const reqId = isObj(msg) && isReqId(msg.reqId) ? msg.reqId : undefined;
-    if (!isObj(msg) || typeof msg.type !== 'string') return error(conn, 'bad-message', '消息必须是带 type 字段的对象', reqId);
-    if (QUEUE_TYPES.has(msg.type)) return toQueue(conn, msg, reqId);
-    return error(conn, 'unsupported', `文档服务骨架还不支持 ${msg.type}`, reqId);
-  }
-
-  function toQueue(conn, msg, reqId) {
-    if (!queue) return error(conn, 'queue-unavailable', '渲染任务队列还没有挂上', reqId);
-    // hello 由队列回 welcome；这里只在消息合法时记下这条连接的角色（队列会用同一套校验）
-    if (msg.type === 'node.hello' || msg.type === 'publisher.hello') {
-      const parsed = parseInbound(msg);
-      if (parsed.ok) recordRole(conn, parsed.type, parsed.body);
-    }
-    queue.handle(conn.connId, msg);
-  }
-
-  function recordRole(conn, type, body) {
-    if (type === 'publisher.hello') {
-      conn.publisherId = body.publisherId;
-      log('role.publisher', { connId: conn.connId, publisherId: body.publisherId, userId: conn.principal.userId });
-      return;
-    }
-    conn.node = {
-      nodeId: body.nodeId,
-      profile: body.profile,
-      envFingerprint: body.envFingerprint,
-      capabilities: body.capabilities,
-      codeVersions: body.codeVersions,
-      maxConcurrent: body.maxConcurrent,
-    };
-    log('role.node', { connId: conn.connId, nodeId: body.nodeId, profile: body.profile, userId: conn.principal.userId });
-  }
-
-  function rolesOf(conn) {
-    const roles = [];
-    if (conn.publisherId !== null) roles.push('publisher');
-    if (conn.node) roles.push('node');
-    return roles;
+    router.connect(connId, principal, { remote: ws.remoteAddress, connectedAt: now() });
   }
 
   function health() {
-    const list = [...conns.values()];
-    return {
+    const core = router.health();
+    const out = {
       ok: true,
       service: 'promptcut-docservice',
       uptimeMs: now() - startedAt,
-      queue: queue !== null,
-      connections: list.length,
-      publishers: list.filter((c) => c.publisherId !== null).length,
-      nodes: list.filter((c) => c.node).length,
+      connections: core.connections,
+      protocol,
+      modules: core.modules,
     };
+    for (const [k, v] of Object.entries(core)) {
+      if (!Object.hasOwn(out, k)) out[k] = v;
+    }
+    return out;
   }
 
   const heartbeat = setInterval(() => {
-    for (const conn of conns.values()) {
+    for (const [connId, conn] of sockets) {
       if (!conn.alive) {
-        log('conn.timeout', { connId: conn.connId });
+        log('conn.timeout', { connId });
         conn.ws.terminate();
         continue;
       }
@@ -222,54 +208,54 @@ export function createDocService(options = {}) {
       });
     },
 
-    /** 渲染任务队列往外发消息走这里（createRenderQueue 的 `send`）。连接已断就丢弃 */
+    /** 模块之外往连接上发消息（如 createRenderQueue 的 `send`）。连接已断就丢弃 */
     send(connId, message) {
-      const conn = conns.get(connId);
-      if (conn) reply(conn, message);
+      router.send(connId, message);
+    },
+
+    /** 挂一个模块（契约 G.3），返回卸载函数。类型或字段与已挂模块冲突时抛错、不挂 */
+    mount,
+
+    /** 同步调一个（按名）或全部模块的 tick；`autoTick: false` 时测试用它驱动时钟 */
+    tick(name) {
+      router.tick(name);
     },
 
     /**
      * 挂上渲染任务队列。`queueInterface` 要有契约 A.3 的 `connect` / `disconnect` / `handle` / `tick`，
      * 且构造时的 `send` 已接到本服务的 `send`。已有的连接会立刻按各自的 principal `connect` 进去。
-     * 返回卸下函数：卸下时对所有连接调 `disconnect`，已记的角色清空。
+     * 返回卸下函数：卸下时对所有连接调 `disconnect`，已记的角色清空，队列消息重新回 `queue-unavailable`。
      */
     mountRenderQueue(queueInterface) {
-      if (queue) throw new Error('渲染任务队列已经挂上了');
-      for (const m of ['connect', 'disconnect', 'handle', 'tick']) {
-        if (typeof queueInterface?.[m] !== 'function') throw new TypeError(`queueInterface.${m} 必须是函数`);
+      if (queueSlot.kind === 'real') throw new Error('渲染任务队列已经挂上了');
+      const mod = renderQueueModule(queueInterface, { sweepMs });
+      queueSlot.unmount();
+      let unmountReal;
+      try {
+        unmountReal = mount(mod);
+      } catch (err) {
+        queueSlot = { kind: 'placeholder', unmount: mount(renderQueuePlaceholder()) };
+        throw err;
       }
-      queue = queueInterface;
-      for (const conn of conns.values()) queue.connect(conn.connId, conn.principal);
-      sweepTimer = setInterval(() => queue?.tick(), sweepMs);
-      sweepTimer.unref?.();
+      const slot = { kind: 'real', unmount: unmountReal };
+      queueSlot = slot;
       log('queue.mount', { epoch: queueInterface.epoch ?? null });
-      const mounted = queueInterface;
       return () => {
-        if (queue !== mounted) return;
-        clearInterval(sweepTimer);
-        sweepTimer = null;
-        for (const conn of conns.values()) {
-          queue.disconnect(conn.connId);
-          conn.publisherId = null;
-          conn.node = null;
-        }
-        queue = null;
+        if (queueSlot !== slot) return;
+        unmountReal();
+        queueSlot = { kind: 'placeholder', unmount: mount(renderQueuePlaceholder()) };
         log('queue.unmount', {});
       };
     },
 
-    /** 诊断：每条连接的身份与角色 */
+    /** 诊断：每条连接的身份与各模块给的字段，以及各模块的 describe */
     describe() {
       return {
         ...health(),
-        conns: [...conns.values()].map((c) => ({
-          connId: c.connId,
-          remote: c.remote,
-          principal: { ...c.principal },
-          connectedAt: c.connectedAt,
-          roles: rolesOf(c),
-          publisherId: c.publisherId,
-          node: c.node ? structuredClone(c.node) : null,
+        conns: [...sockets.keys()].map((id) => router.describeConn(id)).filter(Boolean),
+        modules: Object.fromEntries(router.modules().map((name) => {
+          const mod = mounted.get(name)?.mod;
+          return [name, mod?.describe?.() ?? null];
         })),
       };
     },
@@ -278,8 +264,8 @@ export function createDocService(options = {}) {
     close() {
       closing = true;
       clearInterval(heartbeat);
-      clearInterval(sweepTimer);
-      for (const conn of conns.values()) conn.ws.close(CLOSE.GOING_AWAY, 'server shutting down');
+      for (const record of mounted.values()) clearInterval(record.timer);
+      for (const conn of sockets.values()) conn.ws.close(CLOSE.GOING_AWAY, 'server shutting down');
       const done = new Promise((resolve) => server.close(() => resolve()));
       server.closeIdleConnections();
       return done;
