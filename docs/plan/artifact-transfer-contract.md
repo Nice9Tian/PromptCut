@@ -224,3 +224,5 @@ export async function applyResult(pipeline, client, result) → { written: numbe
 5. **超时**：客户端新增 `timeoutMs`，缺省 30000，按单个请求计时，到点中止。超时算网络错误，照常重试，重试用完就抛，错误带 `code: 'timeout'`。重试不只用于分片上传，也用于 `chunks`、`complete`、`get`。
 6. **查找不扫目录**：`snap` / `px` 的 fs 钩子 `resolveFile` 按候选文件名直接查，依次是 `<hash>.html`、`.mp4`、`.m4s`，最后是没有扩展名的 `<hash>`。
 7. **目录位置**：`snap` / `px` 的 fs 目录固定在 `<root>/out/asset-store/…`，不看 `PROMPTCUT_EXPORT_DIR`。
+8. **`snap` / `px` 只存候选扩展名**：扩展名不在第 6 条候选表里的对象（例如 `X-Media-Ext: bin`），一律存成不带扩展名的 `<hash>`。否则按候选名查找就再也找不到它。这些对象的 HTTP `Content-Type` 本来就是 `application/octet-stream`，对外没有变化。`media` 不受影响。
+9. **查候选文件的函数放在 `server/asset-store/index.mjs`**：`asset-service.ts` 不许碰文件系统（C5 守门），所以这个函数不能放在那里。
