@@ -1105,3 +1105,18 @@ export function cardLockDecision({ lock, ownFingerprint, complete, now, idleMs =
      - Q10：拒建，任务不存在，`results` 带 `error` 与 `lockedBy`；
      - Q11：没锁时带 `takeover` 也作废异指纹任务；
      - N6：`local-node` 在拒建后照锁指纹重发、`plan` 等回包后才完成、细任务继承页面订阅；`takeoverLocked` 为真时带 `takeover` 重发。
+
+### F.8 本机侧的补充细则（2026-09-24，主 Agent 按 Pipeline 实现方疑点裁定）
+
+1. **本机已有结果也得锁**：`fillCardControls` 走到一个共享档 control 时，锁库里没有它的锁，就用本机指纹得锁（`source: 'prerender'`），不管这张卡本机是不是已经齐了。否则换键前就已产齐、但没有锁文件的卡，会被页面的第一帧测量帧锁走，反而少了覆盖。页面在后台那一趟走到这张卡之前推来测量帧的，仍是页面先得锁。
+2. **延后的卡要再判**：`rendering.md` 说锁定方停下一段时间后要接手，所以延后不能停在「等下一次 preload」。
+   - 一趟后台结束时仍有 `'defer'` 的卡，就定一个一次性计时器（`unref`），在 `cardLockIdleMs` 之后重判这些卡；
+   - 计时器触发时，满足以下三条才把一小趟排进后台串行链：这一版的后台那一趟没被取消（它的 `signal` 没 abort）；还有会话的当前版本是这个 entry；这些卡仍在预渲染集合里。
+   - 那一小趟只对这些卡跑 `fillCardControls`，同一个 `signal`、`'background'` lane 的预渲染间；
+   - 重判结果：已齐 → 投递；已闲置 → 接手；仍新鲜 → 再延后。同一版最多重排 20 次，之后等下一版。
+   - `FramePipeline` 构造参数新增 `cardLockIdleMs`（缺省 `CARD_LOCK_IDLE_MS`），决策和计时器都用它，测试可以给小值。
+3. **同一内容键的所有片段一起发层**：接手，或测量帧入库时，`entry.cardPlan` 里内容键相同的每个 control 都发一条 `layer`，同一张卡摆了几次时各片段一起换键。
+4. control 没有 `contentKey` 时，`acceptMeasuredSnapshot` 回 `{ ok: true, stored: false, reason: 'NO_CONTENT_KEY' }`、不写；锁库对空的环境指纹同样抛出。
+5. **测试**：L4、L7 按第 3 条补「多个片段一起换键」的断言；新增：
+   - L9：`cardLockIdleMs` 给小值，延后的卡在锁闲置后被重判并接手；在重判前页面结果已齐的，改为投递；
+   - L10：本机已齐、没有锁文件的卡，后台那一趟之后锁归本机，此后页面测量帧回 `CARD_LOCKED`。
