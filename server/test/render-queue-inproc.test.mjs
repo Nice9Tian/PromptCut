@@ -665,7 +665,7 @@ test('I5 纯浏览器节点 + pc 节点，另有别的用户的项目：浏览�
 
 // ================================================================ I6
 
-test('I6 两种环境指纹的 pc 节点：细任务只被与 plan 认领者同指纹的节点认领；PlanContext 盖不掉切分节点的指纹', async () => {
+test('I6 两种环境指纹的 pc 节点：第一轮细任务只被与 plan 认领者同指纹的节点认领；第二轮被第一轮锁住的卡照锁定方指纹出键、由锁定方指纹的节点做完（契约 F.7）；PlanContext 盖不掉切分节点与锁的指纹', async () => {
   const before = unhandled.length;
   // 执行器返回的 PlanContext 里夹带别的指纹和代码版本：D.2 规定切分节点自己的指纹、代码版本一定生效
   const rig = createRig({
@@ -689,13 +689,15 @@ test('I6 两种环境指纹的 pc 节点：细任务只被与 plan 认领者同�
   const ids1 = [plan1, ...exp1.map(t => t.id)];
   await drive(rig, allDone(rig, page, ids1));
 
-  // 第二轮：b1 不空闲，新版本的 plan 由 a1 / a2 认领 → 指纹是 FP_A；认领之后 b1 恢复空闲
+  // 第二轮：b1 不空闲，新版本的 plan 由 a1 / a2 认领（切分节点指纹 FP_A）；认领之后 b1 恢复空闲。
+  // 第一轮已经把每张卡、每条流锁给了 FP_B（卡片级指纹锁，契约 F.1 / F.7）：切分节点按 FP_A 发布被拒建，
+  // 照锁定方的指纹 FP_B 重发 —— 内容没变，所以就是第一轮那批任务（已 done），页面照样收到全部 task.done。
   b1.idle = false;
   page.publishPlan('p1', 2);
   const plan2 = planIdOf('p1', 2);
   await drive(rig, () => claimsOf(rig).some(c => c.id === plan2));
   b1.idle = true;
-  const exp2 = expectedDerived(planContextFor('p1'), FP_A);
+  const exp2 = expectedDerived(planContextFor('p1'), FP_B);
   const ids2 = [plan2, ...exp2.map(t => t.id)];
   await drive(rig, allDone(rig, page, ids2));
   await coast(rig);
@@ -705,7 +707,7 @@ test('I6 两种环境指纹的 pc 节点：细任务只被与 plan 认领者同�
   assert.equal(claims.find(c => c.id === plan1).connId, b1.connId);
   assert.notEqual(claims.find(c => c.id === plan2).connId, b1.connId);
 
-  for (const [round, exp, fp] of [[1, exp1, FP_B], [2, exp2, FP_A]]) {
+  for (const [round, exp, fp] of [[1, exp1, FP_B], [2, exp2, FP_B]]) {
     const expIds = new Set(exp.map(t => t.id));
     const roundClaims = claims.filter(c => expIds.has(c.id));
     assert.deepEqual(sorted(roundClaims.map(c => c.id)), sorted(expIds), `第 ${round} 轮：每个细任务恰好认领一次`);
@@ -719,12 +721,16 @@ test('I6 两种环境指纹的 pc 节点：细任务只被与 plan 认领者同�
       assert.equal(fpOf.get(e.connId), fp, `第 ${round} 轮：指纹不同的节点尝试认领 ${e.message.id}`);
     }
   }
-  // 两种环境的结果键互不相同：第二轮全是真渲染，不会拿第一轮的产物去重
-  const keys1 = new Set(exp1.map(t => t.resultKey));
-  assert.ok(exp2.every(t => !keys1.has(t.resultKey)));
+  // 第二轮照锁定方指纹出键：与第一轮是同一批任务，不重渲（F.7 之前这里断言两轮的结果键互不相同、第二轮全是真渲染）
+  assert.deepEqual(sorted(exp2.map(t => t.id)), sorted(exp1.map(t => t.id)));
+  assert.deepEqual(sorted(page.done(plan2).result.derived), sorted(exp2.map(t => t.id)), '第二轮 plan 的 derived 是照锁指纹出键的那批');
   for (const t of [...exp1, ...exp2]) assert.ok(rig.sink.holds(t.resultKey, t.range), t.id);
   for (const t of exp2) assert.equal(rig.exec.renderCount(t.id), 1, t.id);
   assert.equal(rig.nodes.flatMap(n => n.eventsOf('dedup')).length, 0);
+  // 按切分节点自己的指纹（FP_A）出键的任务被拒建，队列里不留谁也认领不了的死任务
+  const deadIds = new Set(expectedDerived(planContextFor('p1'), FP_A).map(t => t.id));
+  assert.deepEqual(rig.queue.describe().tasks.filter(t => deadIds.has(t.id)).map(t => t.id), []);
+  assert.equal(claims.filter(c => deadIds.has(c.id)).length, 0);
   hygiene(rig, { unhandledBefore: before });
 });
 
