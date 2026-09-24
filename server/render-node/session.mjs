@@ -112,7 +112,9 @@ export function createNodeSession({
       if (task && Number.isInteger(message.version)) open.set(id, { ...task, version: message.version });
       return;
     }
-    // taken / gone / forbidden(以及认不出的原因):这一轮不再考虑它
+    // taken / gone / forbidden / card-locked(以及认不出的原因):这一轮不再考虑它。
+    // card-locked(契约 F.2):这张卡的锁在别的指纹上,本节点的指纹做不了,按 taken 丢掉候选、
+    // 不重试;任务在队列里仍是 open,只有队列再发 task.opened / queue.snapshot 时才会回到视图
     open.delete(id);
   }
 
