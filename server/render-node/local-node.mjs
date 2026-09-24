@@ -1,5 +1,5 @@
 import { createNodeSession } from './session.mjs';
-import { splitPlan } from './split.mjs';
+import { lockKeyOf, splitPlan } from './split.mjs';
 
 /**
  * 本机渲染节点的编排(分布式预渲染 M3,契约 `docs/plan/render-queue-contract.md` D 节)。
@@ -18,13 +18,27 @@ import { splitPlan } from './split.mjs';
  *
  * 开工先同步报一次进度 0,让队列的停滞规则也管得到卡死、从不报进度的执行器。
  *
- *   plan    executor.plan → splitPlan → 先 task.publish 细任务,再 complete 这个 plan
+ *   plan    executor.plan → splitPlan → task.publish 细任务(带 reqId)→ 等同一 reqId 的
+ *           task.published → (有 card-locked 就照锁重切重发)→ complete 这个 plan
  *   细任务   sink.has 为真就直接 complete(dedup);否则 executor.render → sink.put →
  *            收全才 complete,没收全 fail(可重试)
  *   出错     fail,`error.retryable === false` 才不可重试
  *
  * 发布必须先于完成:派生任务继承 plan 的用户与订阅者(契约 A.4 末段),条件是发布那一刻
- * plan 仍由本节点认领。同一连接上的消息按序处理,先发的 publish 一定先生效。
+ * plan 仍由本节点认领。所以等发布回包回来、确认发布已生效,才 complete(契约 F.7 第 5 条)。
+ *
+ * # 发布被锁拒绝(契约 F.7)
+ *
+ * 队列拒建被别的指纹锁定的卡,回包对应项是 `{ id, error: 'card-locked', lockedBy: X }`。
+ * 这些项的锁键和 X 并进 `cardLocks` 重跑 `splitPlan`,只重发这些锁键的任务:
+ * `takeoverLocked` 命中的带 `takeover` 按本节点指纹重发,其余照 X 出键。最多重来
+ * `RELOCK_ROUNDS` 轮,还被拒的放弃;有过重发就报 `plan-relocked { id, lockKeys, gaveUp }`。
+ * `complete` 的 `derived` 只列最终发布成功(回包项没有 `error`)的 id。
+ *
+ * 等回包不开计时器,只由收到的消息推进:回包、带同一 reqId 的 `error`(按可重试失败处理)、
+ * 中止信号(丢认领、让路、stop)。`start()` 重连时,仍持有的 plan 把在等的发布按原 reqId
+ * 重发一次(发布是幂等的,合并进已有任务);回包丢了又不重连时,续约的进度停在 0,
+ * 由队列的停滞规则回收。
  *
  * # 「仍持有」与迟到的结果
  *
@@ -95,6 +109,29 @@ import { splitPlan } from './split.mjs';
 
 const noop = () => {};
 
+/** 发布被 card-locked 拒绝后最多重来几轮(契约 F.7 第 5 条)。 */
+const RELOCK_ROUNDS = 2;
+
+/** `takeoverLocked`(布尔或 `(lockKey, lockedBy) => boolean`)→ 判定函数;只认 `=== true`。 */
+function takeoverLockedTest(takeoverLocked) {
+  if (takeoverLocked === true) return () => true;
+  if (typeof takeoverLocked === 'function') return (lockKey, lockedBy) => takeoverLocked(lockKey, lockedBy) === true;
+  return () => false;
+}
+
+/** `cardLocks`(Map、普通对象或缺省)复制成 Map,再并进新的锁。 */
+function mergedLocks(cardLocks, extra) {
+  const out = new Map();
+  if (cardLocks != null) {
+    const entries = typeof cardLocks.entries === 'function' && typeof cardLocks.get === 'function'
+      ? cardLocks.entries()
+      : Object.entries(cardLocks);
+    for (const [key, value] of entries) out.set(key, value);
+  }
+  for (const [key, value] of extra) out.set(key, value);
+  return out;
+}
+
 /** 中止时抛出的标记:赛跑输给中止信号,不是执行器自己的错误。 */
 const ABORTED = Symbol('aborted');
 
@@ -126,6 +163,8 @@ function untilAborted(work, signal) {
  * @param {string} [options.codeVersion]  切分细任务时写进 requires.codeVersion
  * @param {Executor} options.executor
  * @param {Sink} options.sink
+ * @param {boolean | ((lockKey: string, lockedBy: string) => boolean)} [options.takeoverLocked]
+ *   发布被 card-locked 拒绝时要不要接手(契约 F.7):缺省 false,照锁定方的指纹重发
  * @param {(event: object) => void} [options.onEvent]  诊断用
  * @returns {LocalNode}
  */
@@ -143,14 +182,19 @@ export function createLocalNode({
   codeVersion,
   executor,
   sink,
+  takeoverLocked = false,
   onEvent = noop,
 }) {
   /** 在跑表:id → 当前这一次执行 { id, token, kind, controller }。中止即移出 */
   const active = new Map();
   /** 还没落定的执行(含已中止、还在收尾的),供 `settled()` 等 */
   const pending = new Set();
+  /** 在等回包的发布:reqId → { run, message, resolve, reject } */
+  const publishes = new Map();
+  let publishSeq = 0;
   let attached = false;
   let stopped = false;
+  const takesOverLocked = takeoverLockedTest(takeoverLocked);
 
   // 诊断回调出错不能打断协议流程(它可能在消息处理器里被调到)
   const emit = event => {
@@ -208,6 +252,68 @@ export function createLocalNode({
     emit({ type: 'lost', id, reason });
   }
 
+  /**
+   * 发一条 `task.publish`(带本实例唯一的 reqId),等同一 reqId 的 `task.published` 回来,
+   * 回它的 `results`。同一 reqId 回的是 `error`(如 bad-message)就按可重试的错误拒绝。
+   * 不开计时器;和中止信号赛跑,中止或落定后都撤掉等待。
+   */
+  function publishAndWait(run, tasks) {
+    publishSeq += 1;
+    const reqId = `${publisherId}#publish-${publishSeq}`;
+    const message = { type: 'task.publish', tasks, reqId };
+    const waiting = () => new Promise((resolve, reject) => {
+      // 先登记再发:同步传输下回包可能在 send 返回之前就到了
+      publishes.set(reqId, { run, message, resolve, reject });
+      endpoint.send(message);
+    });
+    return untilAborted(waiting, run.controller.signal).finally(() => publishes.delete(reqId));
+  }
+
+  /**
+   * 切分并发布派生任务,处理 card-locked 拒建(契约 F.7 第 5 条)。
+   * → `{ derived: 发布成功的 id, relocked: 重发过的锁键(升序), gaveUp: 最后仍被拒的锁键(升序) }`。
+   * 每次等回包之后仍持有才继续;不再持有时提前返回,由调用方丢弃。
+   */
+  async function publishDerived(run, base, ctxLocks) {
+    const derived = [];
+    const seen = new Set();
+    const relocked = new Set();
+    const learned = new Map();   // 回包告诉我们的锁:lockKey → lockedBy,逐轮累加
+    let gaveUp = [];
+    let tasks = splitPlan(base);
+    for (let round = 0; tasks.length > 0; round += 1) {
+      const results = await publishAndWait(run, tasks);
+      if (!holding(run)) break;
+      const byId = new Map(tasks.map(t => [t.id, t]));
+      /** 这一轮被拒的:lockKey → lockedBy */
+      const rejected = new Map();
+      for (const r of Array.isArray(results) ? results : []) {
+        if (r?.id == null) continue;
+        if (r.error == null) {
+          if (!seen.has(r.id)) { seen.add(r.id); derived.push(r.id); }
+          continue;
+        }
+        // limit 等其它错误:没建成,不进 derived,也不做锁处理(F.7 第 4 条)
+        if (r.error !== 'card-locked') continue;
+        const lockKey = lockKeyOf(byId.get(r.id));
+        if (lockKey == null || typeof r.lockedBy !== 'string' || r.lockedBy === '') continue;
+        rejected.set(lockKey, r.lockedBy);
+      }
+      if (rejected.size === 0) break;
+      for (const lockKey of rejected.keys()) relocked.add(lockKey);
+      if (round >= RELOCK_ROUNDS) {
+        gaveUp = [...rejected.keys()].sort();
+        break;
+      }
+      for (const [lockKey, lockedBy] of rejected) learned.set(lockKey, lockedBy);
+      const cardLocks = mergedLocks(ctxLocks, learned);
+      const takeover = lockKey => rejected.has(lockKey) && takesOverLocked(lockKey, rejected.get(lockKey));
+      // 只重发这一轮被拒的锁键;其余任务已经发布过,不重复发
+      tasks = splitPlan({ ...base, cardLocks, takeover }).filter(t => rejected.has(lockKeyOf(t)));
+    }
+    return { derived, relocked: [...relocked].sort(), gaveUp };
+  }
+
   /** 一次执行。从不拒绝:所有异常都在这里收掉。 */
   async function execute(run, task) {
     const { id } = run;
@@ -219,11 +325,11 @@ export function createLocalNode({
         if (!holding(run)) return discard();
         // ctx 放在前面:切分节点自己的指纹、plan 与代码版本一定生效(设计 2.1);
         // ctx 带的 cardLocks / takeover 随展开原样传给切分(契约 F.2)
-        const tasks = splitPlan({ ...ctx, planTask: task, envFingerprint: node?.envFingerprint, codeVersion, constants });
-        const derived = tasks.map(t => t.id);
-        if (tasks.length > 0) endpoint.send({ type: 'task.publish', tasks });
-        // 同步传输下发布的回包可能已经转了一圈回来,再判一次
+        const base = { ...ctx, planTask: task, envFingerprint: node?.envFingerprint, codeVersion, constants };
+        const outcome = await publishDerived(run, base, ctx?.cardLocks);
         if (!holding(run)) return discard();
+        const { derived, relocked, gaveUp } = outcome;
+        if (relocked.length > 0) emit({ type: 'plan-relocked', id, lockKeys: relocked, gaveUp });
         session.complete(id, { ranges: null, derived });
         emit({ type: 'plan-split', id, derived });
         return;
@@ -275,6 +381,14 @@ export function createLocalNode({
   function handle(message) {
     if (stopped) return;
     session.receive(message);
+    const waiter = message?.reqId != null ? publishes.get(message.reqId) : undefined;
+    if (waiter && message.type === 'task.published') {
+      waiter.resolve(message.results);
+    } else if (waiter && message.type === 'error') {
+      const error = new Error(`publish-${message.reason ?? 'error'}`);
+      error.retryable = true;
+      waiter.reject(error);
+    }
     if (message?.type === 'task.published') emit({ type: 'publish-result', results: message.results });
   }
 
@@ -289,6 +403,11 @@ export function createLocalNode({
     // 占住 maxConcurrent。新进程的实例在跑表是空的,等于不接续(契约 D.2〔裁〕)
     const resumable = (resume ?? []).filter(entry => entry && active.get(entry.id)?.token === entry.token);
     session.start(resumable);
+    // 接续下来的 plan 若还在等发布回包:旧连接上的回包不会再来,按原 reqId 重发一次。
+    // 发布是幂等的(已有的任务只合并订阅者),而且此刻 plan 仍由本节点认领,继承条件照样成立
+    for (const waiter of [...publishes.values()]) {
+      if (holding(waiter.run)) endpoint.send(waiter.message);
+    }
   }
 
   function tick() {
