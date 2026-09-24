@@ -14,7 +14,7 @@
 - [x] `mediaPlugin()` 接线
 - [x] 契约第 8 节补改
 - [x] 基线：tsc、npm test
-- [ ] G0-R（见下文「验证」，跑完补）
+- [x] G0-R
 
 ## 做了什么
 
@@ -64,7 +64,50 @@
 
 ## 验证
 
-（G0-R 跑完后补全本节。）
+以下都在 `.worktrees/c5-impl` 里、以最终代码（含契约第 8 节补改）跑。
+
+### 基线
+
+| 项 | 命令 | 结果 |
+|---|---|---|
+| 类型检查 | `npx tsc -b --force` | 退出码 0，零错误 |
+| 全量测试 | `npm test` | 退出码 0；tests 2247，pass 2246，fail 0，skipped 1（`集成:/api/cards/layout 对真实项目返回整数框`，要 5190 的那一条） |
+| 原有素材服务测试 | `node --test server/test/asset-service.test.mjs` | 11/11 通过（断言未改，只加了替换表一行） |
+
+### G0-R
+
+dev server：`npx vite --port 5460 --strictPort --host 127.0.0.1`（舞台 5461/5462）；main 基线 worktree 用 5463（舞台 5464/5465）。改完契约第 8 节后重启过 5460 再跑下面各项。
+
+| 项 | 命令 | 结果 |
+|---|---|---|
+| 导出确定性（实现） | `node scripts/verify-determinism.mjs --url "http://127.0.0.1:5460/?export=1"` | 退出码 0，Total 1800，Identical 1800，Different 0 |
+| 导出确定性（main 基线） | 同上，打 5463，在 `c5-baseline` 里跑 | 退出码 0，1800/1800 相同 |
+| 与 main 逐像素对比 | 自测脚本 `pixel-compare.mjs` 比两边 `out/verify-a/frames/*.png`（解码后比 RGBA） | `{"frames":1800,"pixelIdentical":1800,"different":0,"fileBytesIdentical":1800}`，PNG 文件逐字节也相同 |
+| 导出与快照重放一致 | `PC_FRAME_TEST_URL=http://127.0.0.1:5460 node scripts/verify-unified-frames.mjs` | 退出码 0，`PASS: no video during B; all HTML frames; exact video seek; random replay; cache hits; cumulative C equals A; streamed video contains all 10 frames.`（这一项的视频素材走 `/@media/<name>`） |
+| 兜底顺序探针 | `node scripts/probes/preview-fallback-probe.mjs --origin http://127.0.0.1:5460` | 退出码 0，`PASS`；276 拍，transparentBeats 0，fails []，pageErrors [] |
+| 就绪索引探针（契约第 7 节列了） | `node scripts/probes/ready-index-probe.mjs --port 5466` | 退出码 0，fails []（它自己起 5466 与临时端口的预渲染进程，跑完自己关） |
+
+跑完关掉了自己起的 5460、5463 两台 dev server（先核对了进程命令行是自己起的那两条），5460～5469 全部空出。`c5-baseline` 删之前查过没有 junction（`Get-ChildItem -Attributes ReparsePoint` 为空；里面的 `node_modules` 是 vite 自己建的依赖缓存目录，不是链接），用 `git worktree remove --force` 删掉；删后主仓库 `node_modules` 仍在（182 项，`vite`、`typescript` 都在）。
+
+### 自测（scratch，不提交）
+
+脚本都在 scratchpad 的 `c5-impl/` 下，参数是 worktree 的绝对路径。
+
+1. `store-selftest.mjs`：fs（临时目录，`chunkSize` 1024）与 memory 各跑一遍 K1～K16 的要点（未知哈希、幂等、size 冲突、长度不符、越界、缺片、篡改、入库、入库后重传、并发、remove、usage、ext 先到为准、大小写、oss / 未知 kind、fs 布局），另测 memory 超 256 MiB 回 `size-mismatch`、fs 的 `usage` 不数 `index.json` 与普通文件。输出 `PASS fs`、`PASS memory`、`memory >256MiB: {"status":"size-mismatch","size":268435456}`、`fs usage: {"blobs":1,"bytes":3,"staging":0}`，退出码 0。
+2. `http-selftest.mjs`：把 **main 上的** `asset-service.ts` / `vite-plugin-media.ts` 和本分支的各转译一份，各起一个服务，打同一串 46 个请求（断点续传、各种 4xx、405、Range 各形态、HEAD、`/@media`、X-Media-Type 反查、无扩展名、哈希不符、预检含 / 不含私有网络等），逐个比较状态码、响应头（按顺序，只把 Date / Last-Modified 的值换掉）和回包字节：`compared 46, same 46, diffs []`（唯一允许的差别是预检头多了 `, Authorization`）。两边 `out/media` 的目录树与每个文件的 sha256 相同（含 `index.json`、收了一半的 `.chunks/<hash>/{meta.json,data,1.ok}`，`meta.json` 逐字节相同）。
+   鉴权：`isTrusted` 注入为假时，不带令牌 / 令牌错 / `Basic` 方案 / 收尾不带令牌 / 分块传输不带令牌都是 401，`GET`、`chunks` 不要令牌，令牌对（`bearer` 小写也行）照常；`token: null` 非本机一律 401，本机照常；缺省读 `PROMPTCUT_CLUSTER_TOKEN`；缺省 `isTrusted` 下带 `x-pc-stage-client: 192.168.1.9` 的请求 401、普通回环请求 200；回包、日志里都找不到令牌原文（日志 0 行）。
+   memory 注入（8 MiB）与 fs 打同一串 13 个请求，回包逐字节相同（含 Last-Modified 以外的头）。输出 `ALL PASS`，退出码 0。
+3. `announce-selftest.mjs`：N1（注入网卡表，排除 internal、IPv6、公网、172.32；结果 `["http://10.0.0.20:5190/api/asset","http://10.0.0.2:5190/api/asset","http://172.16.5.4:5190/api/asset","http://192.168.50.20:5190/api/asset"]`；没 port 回 `[]`）；N2/N3（假端点：两次 onOpen 发两次 announce、stop 先 withdraw 再 close、url 为空或 urls 为空都不建端点、日志没有令牌）；N4（带令牌的真文档服务：缺省登记者 `asset:DESKTOP-GS40TCK` 登记成功，另一条连接 `service.watch` 收到这份地址，stop 后收到空列表）。另外把字面的 `asset@<主机名>` 发给真文档服务，回 `{"type":"error","reason":"bad-message","detail":"announcerId 不合法"}`，证实第 8 节第 1 条。退出码 0。
+4. 接线端到端（`docservice-watch.mjs` 起一台带令牌的文档服务在 127.0.0.1:5469 并订阅 `asset`；另起 `PROMPTCUT_DOCSERVICE_URL=ws://127.0.0.1:5469 npx vite --port 5466 --strictPort --host 0.0.0.0`，测完即关）：
+   - vite 日志 `asset-announce.announce {"announcerId":"asset:DESKTOP-GS40TCK","urls":["http://192.168.50.96:5466/api/asset"],"sent":true}`，订阅方收到同一条登记；
+   - 从本机经局域网地址 `http://192.168.50.96:5466/api/asset/...` 打（对端不是回环）：不带令牌、令牌错都回 `{"ok":false,"error":"unauthorized"}`；带令牌 PUT 200、`BEARER` 大写收尾 200；不带令牌读 Range、`chunks` 正常；
+   - 强杀 vite 后约 1 秒宽限到期，订阅方收到空列表；用 vite 的 `createServer` 起同样配置再 `server.close()`，`asset-announce.stopped` 之后 26 ms 订阅方就收到空列表（走的是 `stop()` 的撤回，不是宽限）；
+   - `PROMPTCUT_DOCSERVICE_URL=http://not-ws`：只打一行 `asset-announce.error {"stage":"connect",...}`，vite 照常起、照常关；指向没人听的端口：照常起，关时 `stopped`。
+
+### 没做的
+
+- W2（笔记本上跑 `asset-lan-probe.mjs`）是测试方与主会话的事，不在本任务。
+- 用 vite 的 `createServer` 起服、并设了 `PROMPTCUT_DOCSERVICE_URL` 时，Node 报一条 `MaxListenersExceededWarning: 11 listening listeners added to [Server]`：别的插件已经挂了 10 个 `listening` 监听，接线又挂了 1 个。只在设了这个环境变量时出现，不影响功能；没去改全局上限。
 
 ## 契约疑点
 
