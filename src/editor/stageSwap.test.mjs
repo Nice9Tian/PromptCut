@@ -38,6 +38,8 @@ mock.module(srcUrl("editor/stageBridge.ts"), {
     backStage: () => back,
     onStageEvent: (l) => { listeners.add(l); return () => listeners.delete(l); },
     pushProject: async (role, project, opts) => { log.push(["pushProject", role, project === state.project, opts]); },
+    // 根因 A:互换之后对新 front 补推一次增量
+    syncProject: async (role, project) => { log.push(["syncProject", role, project === state.project]); },
   },
 });
 mock.module(srcUrl("editor/stageJobs.ts"), {
@@ -58,6 +60,7 @@ mock.module(srcUrl("editor/snapshotFeed.ts"), {
   exports: {
     deliverSnapshots: async (_stage, role, head) => { log.push(["deliverSnapshots", role, head.t, head.playing]); return 0; },
     markBaselineReset: (role) => log.push(["markBaselineReset", role]),
+    markAllSettled: (role) => log.push(["markAllSettled", role]),
     setExtraSuppressed: (ids) => log.push(["setExtraSuppressed", [...ids]]),
     suppressedAt: () => ["h"],
     // R8:播放态互换时也发流平面(和抑制集合同一组)
@@ -199,9 +202,11 @@ test("暂停态互换:(1)～(5) 的顺序一步不少", async () => {
     "swapRoles",
     "A.setRole",
     "B.setRole",
+    "syncProject.front",
     "sendPlanTo.front",
     "B.setLocalHashes",
     "markBaselineReset.front",
+    "markAllSettled.front",
     "B.setSnapshots",
     "B.setPlaying",
     "B.setScrubbing",
@@ -212,6 +217,7 @@ test("暂停态互换:(1)～(5) 的顺序一步不少", async () => {
   assert.deepEqual(at("B.render").slice(2), [1, { jump: true, maxCatchUp: Infinity }], "不传 maxCatchUp 会被 6000 ms 削掉起点");
   assert.deepEqual(at("A.setRole").slice(2), ["back"], "旧 front 先退成 back");
   assert.deepEqual(at("B.setRole").slice(2), ["front"]);
+  assert.deepEqual(at("syncProject.front").slice(2), [true], "根因 A:互换后对新 front 补推当前项目(增量由 stageBridge 按客户端基线算)");
   assert.deepEqual(at("sendPlanTo.front").slice(2), [{ force: true }], "它作为 back 时没有表,必须补发");
   assert.deepEqual(at("B.setLocalHashes").slice(2), [["h1"]]);
   assert.deepEqual(at("B.setSnapshots").slice(2), [{}, { reset: true }]);

@@ -8,7 +8,7 @@ import { actions, getState, useStore } from "../store/project";
 import { findClip } from "../kernel/project";
 import { nudgeFrame } from "../kernel/layout";
 import { createStageRpc, type HostCapabilities, type StageRpcClient } from "../render/stageRpc";
-import { frontStage, markPushed, onStageEvent, releaseStageClient, setStageClient, syncProject } from "./stageBridge";
+import { frontStage, onStageEvent, releaseStageClient, setStageClient, swapStageClients, syncProject } from "./stageBridge";
 import { INITIAL_ROLE_OF, STAGE_IDS, dualStage, stageSrc, stageTargetOrigin, type StageId } from "./previewMode";
 import { ControlBar } from "./preview/ControlBar";
 import { ToolBar, ToolType } from "./preview/ToolBar";
@@ -505,16 +505,12 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
     const nextBack = rpcRef.current[cur];
     frontIdRef.current = nextId;
     flushSync(() => setFrontId(nextId));
-    setStageClient("front", nextFront, hostCapsRef.current[nextId]);
-    setStageClient("back", nextBack, hostCapsRef.current[cur]);
     /*
-     * 两个 iframe 手里本来就都是这份整份项目(第二路的 (1) 给 `back` 灌的就是它),
-     * 只是 `setStageClient` 换客户端时把基线清成了 null。补回去,免得互换之后
-     * 第一次 `syncProject` 又整份重灌一遍、顺手掐掉刚起的节拍。
+     * 基线跟着客户端走(根因 A):新 front 手里是补跑开始时灌的那一份,**不是**此刻的最新项目。
+     * 以前这里 `markPushed(role, getState().project)`,补跑期间的编辑(删片段)就永远补不上;
+     * 现在 `swapAndDress` 在互换之后补推一次 `syncProject`,按它真正持有的那份算增量。
      */
-    const project = getState().project;
-    markPushed("front", project);
-    markPushed("back", project);
+    swapStageClients({ client: nextFront, caps: hostCapsRef.current[nextId] }, { client: nextBack, caps: hostCapsRef.current[cur] });
     // 新 front 的抑制集合从零开始记
     suppressedRef.current = "";
     return { front: nextFront, back: nextBack };

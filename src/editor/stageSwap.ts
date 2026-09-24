@@ -35,11 +35,11 @@ import { catchUpEstimateMs } from "../render/catchUpEstimate.mjs";
 import { clipWeight, pipelineAt } from "../render/pipelinePlan.mjs";
 import type { CardCostRecord } from "../render/cardCostKey.mjs";
 import type { StageEvent, StageRpcClient } from "../render/stageRpc";
-import { backStage, frontStage, onStageEvent, pushProject } from "./stageBridge";
+import { backStage, frontStage, onStageEvent, pushProject, syncProject } from "./stageBridge";
 import { runBackJob } from "./stageJobs";
 import { currentCosts, currentPlan, currentTuning, sendPlanTo } from "./planDispatch";
 import { clipIdentityOf } from "./costIdentity";
-import { deliverSnapshots, markBaselineReset, setExtraSuppressed, streamPlanesAt, suppressedAt } from "./snapshotFeed";
+import { deliverSnapshots, markAllSettled, markBaselineReset, setExtraSuppressed, streamPlanesAt, suppressedAt } from "./snapshotFeed";
 import { onStageDemote } from "./demote";
 
 /** K5 (3)：等后台舞台的素材层画出一帧，最多等这么久（真墙钟），超时照样换 */
@@ -263,6 +263,12 @@ async function swapAndDress(sec: number, playing: boolean): Promise<StageRpcClie
   /* (5) 它作为 back 时没有表、没有哈希、实体模式是默认值 —— 一条都不能省 */
   const project = getState().project;
   try {
+    /*
+     * 根因 A:新 `front` 手里是补跑开始时 (1) 灌进去的那一份,补跑期间用户的编辑只推给了当时的 `front`。
+     * 基线跟着客户端走(`stageBridge` 的 `swapStageClients`),所以这里补推一次就是**增量**,
+     * 被删的片段当场摘掉;没有编辑时基线相同、一条都不发。暂停态和播放态两条互换路都经过这里。
+     */
+    await syncProject("front", project);
     // 补发分派表:它作为 `back` 时没有(E0 的「角色转正时必须补发」)
     await sendPlanTo("front", { force: true });
     await next.setLocalHashes(host?.localHashes() ?? []);
@@ -279,6 +285,8 @@ async function swapAndDress(sec: number, playing: boolean): Promise<StageRpcClie
     } else {
       // settled 态不挂任何平面，快照基线 reset
       markBaselineReset("front");
+      // 整台都是补跑出来的精确活渲:暂停中不再往任何卡上投快照,直到下一次 setTime / 播放(根因 B)
+      markAllSettled("front");
       await next.setSnapshots({}, { reset: true });
       await next.setPlaying(false);
       await next.setScrubbing(false);

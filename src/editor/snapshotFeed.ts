@@ -75,9 +75,13 @@ interface Baseline {
   /** 下一次投递要带 `reset`（`setProject` 整份替换 / 角色互换） */
   needsReset: boolean;
   lastSentAt: number;
+  /** 暂停态已经 settled(精确活渲、舞台自己摘了快照)的卡:暂停中不再投(根因 B) */
+  settled: Set<string>;
+  /** 暂停态第二路互换之后:整台都精确 */
+  settledAll: boolean;
 }
 
-const newBaseline = (): Baseline => ({ mounted: new Map(), needsReset: false, lastSentAt: 0 });
+const newBaseline = (): Baseline => ({ mounted: new Map(), needsReset: false, lastSentAt: 0, settled: new Set(), settledAll: false });
 
 const baselines: Record<StageRole, Baseline> = { front: newBaseline(), back: newBaseline() };
 
@@ -146,8 +150,34 @@ export function markBaselineReset(role: StageRole): void {
  * 否则下次 C4 选到同一帧会按基线判「已经挂着」而不投，露出过期的活组件。
  */
 export function noteSettled(role: StageRole, clipIds: readonly string[]): void {
-  const mounted = baselines[role].mounted;
-  for (const id of clipIds) mounted.delete(id);
+  const base = baselines[role];
+  for (const id of clipIds) {
+    base.mounted.delete(id);
+    base.settled.add(id);
+  }
+}
+
+/**
+ * K5 第二路暂停态互换之后:新 `front` 是后台整场景补跑出来的,**整台**都是精确活渲(根因 B)。
+ * 暂停中不再给任何卡投快照,直到下一次 `setTime` / 播放。
+ */
+export function markAllSettled(role: StageRole): void {
+  baselines[role].settledAll = true;
+}
+
+/**
+ * 「停下就撤兜底」(rendering.md「兜底顺序」末条):暂停态已经追到精确活渲的卡,暂停中不再盖回快照。
+ * 下一次 `setTime`(`pickForSetTime`)或播放时清空。
+ */
+function clearSettled(role: StageRole): void {
+  const base = baselines[role];
+  if (base.settled.size) base.settled = new Set();
+  base.settledAll = false;
+}
+
+function isSettled(role: StageRole, clipId: string): boolean {
+  const base = baselines[role];
+  return base.settledAll || base.settled.has(clipId);
 }
 
 /* --------------------------------------------------------------- 选帧 */
@@ -257,6 +287,8 @@ export function planFeed({ project, t, playing }: Playhead): FeedPlan {
       pendingDemote.delete(clip.id);
     }
     heavy.push(clip.id);
+    // 根因 B:暂停态已经追到精确活渲的卡不再选快照(停下就撤兜底,直到下一次 setTime / 播放)
+    if (!playing && isSettled("front", clip.id)) continue;
     // A3c：播放中**有流分段**的抑制卡不投快照（贴流）；缺分段 / 暂停 / 拖动时照投
     if (playing && streamCovers(clip.id, globalFrame)) continue;
     let picked: Pick | null = null;
@@ -352,6 +384,8 @@ function splitPatch(patch: Record<string, string | null>): Record<string, string
  * 知道，所以由父页点名。判轻位置上的卡、被抑制的卡、轻卡从不带它（任务书「不做」）。
  */
 export function pickForSetTime(head: Playhead): { snapshots: Record<string, string | null>; awaiting: string[] } {
+  // 新的一次 setTime:上一次暂停态的 settled 作废(这一刻重新按兜底顺序选)
+  clearSettled("front");
   const feed = planFeed(head);
   fetchMissing(feed.picks);
   if (feed.wanted.length) pushWanted(feed.wanted);
@@ -382,6 +416,8 @@ export function pickForSetTime(head: Playhead): { snapshots: Record<string, stri
  * 互换后的首次投递）。回的是这次真的发了几条 —— 没什么可发的时候一条 RPC 都不发。
  */
 export async function deliverSnapshots(stage: StageRpcClient, role: StageRole, head: Playhead): Promise<number> {
+  // 播放中没有「停下就精确」这回事:settled 作废
+  if (head.playing) clearSettled(role);
   const feed = planFeed(head);
   fetchMissing(feed.picks);
   if (feed.wanted.length) pushWanted(feed.wanted);
