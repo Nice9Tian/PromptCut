@@ -3,6 +3,8 @@
  *
  * 跑：node scripts/probes/ws-client-test.mjs [ws://host:port]      缺省 ws://127.0.0.1:8787
  * 只用 Node 内置的 WebSocket 与 fetch（Node >= 22），不装依赖。全过退出码 0，有失败 1，连不上 2。
+ * 退出前先等连接的 close 事件（最多 CLOSE_WAIT_MS）：关闭握手没完成就 process.exit，Windows 上 libuv 会断言
+ * `!(handle->flags & UV_HANDLE_CLOSING)` 崩掉（远端多一个往返时必现）。
  *
  * 集群令牌（契约 G.5）：设了环境变量 PROMPTCUT_CLUSTER_TOKEN 时，按 G.5 在 Sec-WebSocket-Protocol 里带
  * `promptcut.v1` 和 `promptcut.token.<令牌>`，并断言服务端只回显 `promptcut.v1`；没设时不带子协议（旧客户端，
@@ -14,6 +16,7 @@
  */
 const url = process.argv[2] ?? 'ws://127.0.0.1:8787';
 const TIMEOUT_MS = 10_000;
+const CLOSE_WAIT_MS = 3_000;
 const nodeId = `probe-node-${process.pid}`;
 const publisherId = `probe-page-${process.pid}`;
 const token = process.env.PROMPTCUT_CLUSTER_TOKEN || undefined;
@@ -25,9 +28,12 @@ function check(name, ok, detail) {
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? `  ${detail}` : ''}`);
 }
 
+/** 连接失败时也要拿到这条 socket，好等它关干净 */
+let socket;
 function connect() {
   return new Promise((resolve, reject) => {
     const ws = protocols ? new WebSocket(url, protocols) : new WebSocket(url);
+    socket = ws;
     const t = setTimeout(() => { ws.close(); reject(new Error(`${TIMEOUT_MS} ms 内没连上`)); }, TIMEOUT_MS);
     ws.addEventListener('open', () => { clearTimeout(t); resolve(ws); }, { once: true });
     ws.addEventListener('error', (e) => { clearTimeout(t); reject(new Error(e.message ?? '连接出错')); }, { once: true });
@@ -52,57 +58,80 @@ function request(ws, message) {
   });
 }
 
-console.log(`target ${url}  token ${token ? 'set' : 'none'}`);
-let ws;
-const t0 = performance.now();
-try {
-  ws = await connect();
-} catch (err) {
-  check('WebSocket 握手', false, err.message);
-  process.exit(2);
-}
-check('WebSocket 握手', true, `${Math.round(performance.now() - t0)} ms`);
-if (protocols) check('子协议只回显 promptcut.v1', ws.protocol === 'promptcut.v1', `protocol=${JSON.stringify(ws.protocol)}`);
-
-try {
-  // 1. 渲染节点报到
-  const hello = {
-    type: 'node.hello', reqId: 'hello-1', nodeId, profile: 'host',
-    capabilities: { transcode: false }, codeVersions: [], maxConcurrent: 1,
-  };
-  console.log(`>>> ${JSON.stringify(hello)}`);
-  const { msg: welcome, rttMs } = await request(ws, hello);
-  console.log(`<<< ${JSON.stringify(welcome)}`);
-  check('node.hello → node.welcome', welcome.type === 'node.welcome', `${rttMs} ms`);
-  check('welcome.nodeId 回显', welcome.nodeId === nodeId);
-  check('welcome 带 resumed / lost 数组', Array.isArray(welcome.resumed) && Array.isArray(welcome.lost));
-  check('welcome 带队列 epoch', typeof welcome.epoch === 'string' && welcome.epoch.length > 0);
-
-  // 2. 同一连接再以发布方报到（契约 A.5：一条连接可以两者都是）
-  const { msg: pub } = await request(ws, { type: 'publisher.hello', reqId: 'hello-2', publisherId });
-  check('publisher.hello → publisher.welcome', pub.type === 'publisher.welcome' && pub.publisherId === publisherId);
-
-  // 3. 节点订阅队列
-  const { msg: snap } = await request(ws, { type: 'queue.watch', reqId: 'watch-1', projects: 'all' });
-  check('queue.watch → queue.snapshot', snap.type === 'queue.snapshot' && Array.isArray(snap.tasks), `tasks=${snap.tasks?.length}`);
-
-  // 4. 格式错误的消息
-  const { msg: bad } = await request(ws, { type: 'node.hello', reqId: 'bad-1', nodeId, profile: 'toaster' });
-  check('格式错误 → error bad-message', bad.type === 'error' && bad.reason === 'bad-message', bad.detail);
-
-  // 5. 服务端记下了这条连接的身份（HTTP 同端口）
-  const health = await fetch(url.replace(/^ws/, 'http').replace(/\/?$/, '/healthz')).then((r) => r.json());
-  console.log(`healthz ${JSON.stringify(health)}`);
-  check('healthz 里记到节点与发布方', health.ok === true && health.nodes >= 1 && health.publishers >= 1);
-  check('healthz.protocol 是 promptcut.v1', health.protocol === 'promptcut.v1', `protocol=${JSON.stringify(health.protocol)}`);
-  check('healthz.modules 是模块名数组', Array.isArray(health.modules) && health.modules.every((m) => typeof m === 'string'), JSON.stringify(health.modules));
-  check('healthz 带队列 epoch', health.epoch === welcome.epoch);
-  if (token) check('healthz 里没有令牌', !JSON.stringify(health).includes(token));
-} catch (err) {
-  check('请求过程', false, err.message);
+/** 关连接并等 close 事件，最多 CLOSE_WAIT_MS；已经关上的直接返回 */
+function closeAndWait(ws, code, reason) {
+  if (!ws || ws.readyState === WebSocket.CLOSED) return Promise.resolve();
+  return new Promise((resolve) => {
+    const t = setTimeout(resolve, CLOSE_WAIT_MS);
+    t.unref();
+    ws.addEventListener('close', () => { clearTimeout(t); resolve(); }, { once: true });
+    if (ws.readyState !== WebSocket.CLOSING) {
+      try { if (code === undefined) ws.close(); else ws.close(code, reason); } catch { /* 已在关 */ }
+    }
+  });
 }
 
-ws.close(1000, 'probe done');
-const failed = results.filter((r) => !r.ok).length;
-console.log(`\n${results.length - failed}/${results.length} passed`);
-process.exit(failed ? 1 : 0);
+/** 跑一遍，返回退出码；每条出口都先等连接关干净 */
+async function run() {
+  console.log(`target ${url}  token ${token ? 'set' : 'none'}`);
+  let ws;
+  const t0 = performance.now();
+  try {
+    ws = await connect();
+  } catch (err) {
+    check('WebSocket 握手', false, err.message);
+    await closeAndWait(socket);
+    return 2;
+  }
+  check('WebSocket 握手', true, `${Math.round(performance.now() - t0)} ms`);
+  if (protocols) check('子协议只回显 promptcut.v1', ws.protocol === 'promptcut.v1', `protocol=${JSON.stringify(ws.protocol)}`);
+
+  try {
+    // 1. 渲染节点报到
+    const hello = {
+      type: 'node.hello', reqId: 'hello-1', nodeId, profile: 'host',
+      capabilities: { transcode: false }, codeVersions: [], maxConcurrent: 1,
+    };
+    console.log(`>>> ${JSON.stringify(hello)}`);
+    const { msg: welcome, rttMs } = await request(ws, hello);
+    console.log(`<<< ${JSON.stringify(welcome)}`);
+    check('node.hello → node.welcome', welcome.type === 'node.welcome', `${rttMs} ms`);
+    check('welcome.nodeId 回显', welcome.nodeId === nodeId);
+    check('welcome 带 resumed / lost 数组', Array.isArray(welcome.resumed) && Array.isArray(welcome.lost));
+    check('welcome 带队列 epoch', typeof welcome.epoch === 'string' && welcome.epoch.length > 0);
+
+    // 2. 同一连接再以发布方报到（契约 A.5：一条连接可以两者都是）
+    const { msg: pub } = await request(ws, { type: 'publisher.hello', reqId: 'hello-2', publisherId });
+    check('publisher.hello → publisher.welcome', pub.type === 'publisher.welcome' && pub.publisherId === publisherId);
+
+    // 3. 节点订阅队列
+    const { msg: snap } = await request(ws, { type: 'queue.watch', reqId: 'watch-1', projects: 'all' });
+    check('queue.watch → queue.snapshot', snap.type === 'queue.snapshot' && Array.isArray(snap.tasks), `tasks=${snap.tasks?.length}`);
+
+    // 4. 格式错误的消息
+    const { msg: bad } = await request(ws, { type: 'node.hello', reqId: 'bad-1', nodeId, profile: 'toaster' });
+    check('格式错误 → error bad-message', bad.type === 'error' && bad.reason === 'bad-message', bad.detail);
+
+    // 5. 服务端记下了这条连接的身份（HTTP 同端口）
+    const health = await fetch(url.replace(/^ws/, 'http').replace(/\/?$/, '/healthz')).then((r) => r.json());
+    console.log(`healthz ${JSON.stringify(health)}`);
+    check('healthz 里记到节点与发布方', health.ok === true && health.nodes >= 1 && health.publishers >= 1);
+    check('healthz.protocol 是 promptcut.v1', health.protocol === 'promptcut.v1', `protocol=${JSON.stringify(health.protocol)}`);
+    check('healthz.modules 是模块名数组', Array.isArray(health.modules) && health.modules.every((m) => typeof m === 'string'), JSON.stringify(health.modules));
+    check('healthz 带队列 epoch', health.epoch === welcome.epoch);
+    if (token) check('healthz 里没有令牌', !JSON.stringify(health).includes(token));
+  } catch (err) {
+    check('请求过程', false, err.message);
+  }
+
+  await closeAndWait(ws, 1000, 'probe done');
+  const failed = results.filter((r) => !r.ok).length;
+  console.log(`\n${results.length - failed}/${results.length} passed`);
+  return failed ? 1 : 0;
+}
+
+// 不用 process.exit 抢在句柄关完之前退出：设退出码，让事件循环自然结束；
+// 万一还有别的句柄挡着，再用 unref 的计时器兜底（没东西挡时它不会触发）
+const code = await run();
+process.exitCode = code;
+setTimeout(() => process.exit(code), 0).unref();

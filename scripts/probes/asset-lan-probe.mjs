@@ -152,8 +152,24 @@ async function discover(docservice) {
     }
     throw new Unreachable(`控制面登记的素材服务地址都不通:${registrations.flatMap((r) => r.urls).join(', ')}`);
   } finally {
-    try { ws.close(); } catch { /* 已关 */ }
+    await closeAndWait(ws);
   }
+}
+
+const CLOSE_WAIT_MS = 3000;
+/**
+ * 关连接并等 close 事件,最多 CLOSE_WAIT_MS。关闭握手没完成就 process.exit,
+ * Windows 上 libuv 会断言 UV_HANDLE_CLOSING 崩掉(连不上素材服务时 discover 之后紧接着就退出)
+ */
+function closeAndWait(ws) {
+  if (ws.readyState === WebSocket.CLOSED) return Promise.resolve();
+  return new Promise((resolve) => {
+    const t = setTimeout(resolve, CLOSE_WAIT_MS);
+    ws.addEventListener('close', () => { clearTimeout(t); resolve(); }, { once: true });
+    if (ws.readyState !== WebSocket.CLOSING) {
+      try { ws.close(); } catch { /* 已关 */ }
+    }
+  });
 }
 
 async function main() {
