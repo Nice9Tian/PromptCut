@@ -110,6 +110,28 @@ passed 19          （退出码 0）
 
 它对 M5b 有直接影响：页面接入后，在无头实例里打开的页面会去连 `/docservice`，没人接、握手挂住；页面一刷新或关闭，无头实例就退出。建议另立一项：在插件（或一个独立的小插件）里给**所有**升级的 socket 先挂一个空的 `error` 监听；另外无头实例里 `/docservice` 明确回 404 或 503，别让握手挂着。这要改插件行为和无头实例的路由，需要主会话定。
 
+## 第三轮：崩溃修复（契约第 10 节第 14 条，第 6 条改写）
+
+提交 `922b56a`：
+- `vite.config.ts` 改回「总是注册」`docservicePlugin()`，停用逻辑放进插件。
+- **停用模式**（`PROMPTCUT_HEADLESS === "1"`）：不建文档服务、不写日志；`/docservice` 的升级用 `ws.mjs` 的 `rejectUpgrade` 回 `503 Service Unavailable` 并关 socket；`GET /api/docservice/healthz` 回 `503 { ok: false, disabled: true, reason: 'headless' }`。
+- **所有升级 socket 挂错误监听**：两种模式都在 `httpServer` 上 `prependListener('upgrade', …)`，对每个升级 socket 挂一次空的 `error` 监听（WeakSet 去重），不回包、不关 socket。注释写明为什么前后都安全：`error` 只会在 `upgrade` 同步分发完之后发生。
+
+复现脚本（scratch `upgrade-rst-driver.mjs`：每种情形起一台 5490 dev server，发升级请求，1 秒后客户端 RST，再看进程和 HTTP）：
+
+| 情形 | 修复前（`aded4d5`，把修复暂存掉后跑） | 修复后（`922b56a`） |
+|---|---|---|
+| 无头 `/docservice` | 无回复；RST 后进程退出，`read ECONNRESET` | healthz `503 {"ok":false,"disabled":true,"reason":"headless"}`；升级 **1 ms 内**收到 `503 Service Unavailable`，服务端关掉 socket；进程在，`/package.json` 200 |
+| 正常 `/foo` | 无回复；RST 后进程退出，`read ECONNRESET`，HMR 也连不上 | 无回复（照旧不碰）；RST 后进程在，`/package.json` 200；HMR `vite-hmr` → `{"type":"connected"}` |
+| 正常 `/docservice` | 101，进程在 | 101，进程在；HMR `{"type":"connected"}` |
+
+脚本最后一行：修复前 `SOME DIED`，修复后 `ALL ALIVE`。
+
+另在正常模式重跑 `c63-plugin-live.mjs`：healthz 的 `modules` 四个齐全，`promptcut.v1`，`project.rev` 的 `actor.userId` 是 `local`，HMR `connected`，页面 200，`LIVE OK`；日志文件经 HTTP 仍是 403。
+
+- `npx tsc -b --force` → 退出码 0。
+- `npm test` → 退出码 0，`tests 2309 / pass 2308 / fail 0 / skipped 1`（同上，5190 那条）。
+
 ## 契约疑点与按最保守读法做的决定
 
 1. **`listen()` 抛错的方式**：做成同步 `throw`（契约写「抛错」）。测试若用 `assert.rejects` 会不过，只能二选一。
