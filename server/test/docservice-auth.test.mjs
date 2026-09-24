@@ -4,9 +4,9 @@
  *
  * 只照契约写，不看实现。令牌在测试里现生成（32 字节 base64url），不写死。
  *
- * 契约没写死「组装层怎么拿到 createClusterAuth 的结果」：G.4 的新增选项里没有 `auth`，旧选项
- * `authenticate(req)` 还在。测试两样都传（`authenticate: auth.authenticate` 和 `auth`），
- * 子协议回显按 G.5 由组装层负责。见报告「契约疑点」。
+ * 接法照契约 G.12：`createDocService({ authenticate: auth.authenticate, log })`，
+ * `auth = createClusterAuth({ token, allowAnonymous, log })`，同一个 `log` 两边都传（A5 收 `auth.reject`）；
+ * 子协议回显由组装层自己做（`protocol` 选项缺省 `promptcut.v1`），不另外配置。
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -30,7 +30,7 @@ async function startService({ token, allowAnonymous = token === undefined, mount
   const logs = [];
   const log = (event, fields) => logs.push({ event, ...fields });
   const auth = createClusterAuth({ token, allowAnonymous, log });
-  const service = createDocService({ log, authenticate: (req) => auth.authenticate(req), auth, autoTick: false });
+  const service = createDocService({ log, authenticate: auth.authenticate, autoTick: false });
   let queue = null;
   if (mount) {
     queue = createRenderQueue({ now: Date.now, send: service.send });

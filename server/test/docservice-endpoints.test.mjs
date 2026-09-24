@@ -4,9 +4,9 @@
  *
  * 只照契约写，不看实现。时钟用 `now` 注入加 `autoTick: false`、手动 `service.tick()`（G.4）。
  *
- * 契约只写了 `modules/endpoints.mjs` 导出 `ENDPOINT_DEFAULTS` 和模块的形状，没写工厂的名字。
- * 测试按下面的顺序找：`createEndpointsModule`、`endpointsModule`、`createEndpoints`、`default`，
- * 再不行取第一个导出的函数；导出的若直接是模块对象（带 `types` / `handle`）就直接用。见报告「契约疑点」。
+ * 工厂照契约 G.12：`endpointsModule(options?)`，选项平铺（`graceMs`、`maxAnnouncers`、`maxUrls`、
+ * `maxMetaBytes`、`tickMs`），缺省取 `ENDPOINT_DEFAULTS`。没带 `meta` 的登记，`meta` 为 `null`；
+ * 宽限期内从新连接再登记，`urls` 与 `meta` 都没变才不推送（G.12 第 6 条）。
  * 回包是否带 `reqId` 契约没写，测试不依赖它，按消息类型等。
  */
 import test from 'node:test';
@@ -16,31 +16,26 @@ import { wsClient, byType, waitFor } from './fake-ws-kit.mjs';
 
 const T0 = 1_000_000;
 
-async function loadEndpoints() {
+async function loadEndpoints(options) {
   const mod = await import('../docservice/modules/endpoints.mjs');
   const isModule = (v) => v && typeof v === 'object' && Array.isArray(v.types) && typeof v.handle === 'function';
-  const candidates = [mod.createEndpointsModule, mod.endpointsModule, mod.createEndpoints, mod.default,
-    ...Object.values(mod).filter((v) => typeof v === 'function')];
-  let make = null;
-  for (const c of candidates) {
-    if (typeof c === 'function') { make = c; break; }
-    if (isModule(c)) { make = () => c; break; }
-  }
-  assert.ok(make, `modules/endpoints.mjs 没有可用的模块工厂；导出：${Object.keys(mod).join(', ')}`);
+  assert.equal(typeof mod.endpointsModule, 'function', `modules/endpoints.mjs 要导出 endpointsModule；导出：${Object.keys(mod).join(', ')}`);
+  const make = (o) => (o === undefined ? mod.endpointsModule() : mod.endpointsModule(o));
   const defaults = mod.ENDPOINT_DEFAULTS;
   assert.ok(defaults, 'modules/endpoints.mjs 要导出 ENDPOINT_DEFAULTS');
   assert.deepEqual(
     { GRACE_MS: defaults.GRACE_MS, MAX_ANNOUNCERS: defaults.MAX_ANNOUNCERS, MAX_URLS: defaults.MAX_URLS, MAX_META_BYTES: defaults.MAX_META_BYTES, TICK_MS: defaults.TICK_MS },
     { GRACE_MS: 10_000, MAX_ANNOUNCERS: 64, MAX_URLS: 8, MAX_META_BYTES: 4096, TICK_MS: 1000 },
   );
-  const module = make();
+  const module = make(options);
   assert.ok(isModule(module), '工厂要返回模块对象');
+  assert.equal(module.tickMs, options?.tickMs ?? defaults.TICK_MS, 'tickMs 取选项或 TICK_MS');
   assert.deepEqual(module.types, ['service.']);
   return { module, defaults };
 }
 
-async function startService() {
-  const { module, defaults } = await loadEndpoints();
+async function startService(options) {
+  const { module, defaults } = await loadEndpoints(options);
   const clock = { t: T0 };
   const service = createDocService({ log: () => {}, now: () => clock.t, autoTick: false, modules: [module] });
   const { port } = await service.listen(0, '127.0.0.1');
@@ -134,7 +129,10 @@ test('E2 service.watch 的回包是当前可见的全量；kinds 过滤正确，
   const w4 = await env.connect();
   assert.deepEqual(await watch(w4, ['nothing-here']), []);
   const w5 = await env.connect();
-  assert.deepEqual(pick(await watch(w5, ['render'])), [{ announcerId: 'pc-1', kind: 'render', urls: ['https://pc-1.lan/'] }]);
+  const renderOnly = await watch(w5, ['render']);
+  assert.deepEqual(pick(renderOnly), [{ announcerId: 'pc-1', kind: 'render', urls: ['https://pc-1.lan/'] }]);
+  assert.equal(renderOnly[0].meta, null, '没带 meta 的登记，meta 为 null（G.12）');
+  assert.equal(renderOnly[0].since, T0);
 
   // 此后的推送也按各自的 kinds 过滤、并且是全量
   await announce(a, { announcerId: 'host-1', kind: 'render', urls: ['http://host-1.lan:9001/'] });
@@ -291,6 +289,42 @@ test('E6 宽限期内从新连接以不同 urls 再登记：推送一次（新�
   assert.deepEqual(await pushes(w), [], '改绑后不再按旧连接的宽限删除');
 });
 
+test('E6 宽限期内从新连接以相同 urls、不同 meta 再登记：推送一次（G.12：urls 与 meta 都没变才不推送）', async (t) => {
+  const env = await startService();
+  t.after(env.cleanup);
+  const w = await env.connect();
+  await watch(w, 'all');
+  const a = await env.connect();
+  await announce(a, { announcerId: 'pc-1', kind: 'asset', urls: ['http://10.0.0.2:8790/'], meta: { gen: 1 } });
+  await w.next(byType('service.endpoints'));
+  env.clock.t = T0 + 100;
+  await drop(env, a);
+  env.clock.t = T0 + 200;
+  const a2 = await env.connect();
+  await announce(a2, { announcerId: 'pc-1', kind: 'asset', urls: ['http://10.0.0.2:8790/'], meta: { gen: 2 } });
+  const push = await w.next(byType('service.endpoints'));
+  assert.deepEqual(push.endpoints.map((e) => e.meta), [{ gen: 2 }]);
+  assert.deepEqual(await pushes(w), [], '只推一次');
+});
+
+test('E5 选项平铺：endpointsModule({ graceMs }) 改宽限（G.12）', async (t) => {
+  const env = await startService({ graceMs: 100 });
+  t.after(env.cleanup);
+  const a = await env.connect();
+  const w = await env.connect();
+  await watch(w, 'all');
+  await announce(a, { announcerId: 'pc-1', kind: 'asset', urls: ['http://10.0.0.2:8790/'] });
+  await w.next(byType('service.endpoints'));
+  env.clock.t = T0 + 1000;
+  await drop(env, a);
+  env.clock.t = T0 + 1100;
+  env.service.tick();
+  assert.deepEqual(await pushes(w), [], '正好等于 graceMs 不删');
+  env.clock.t = T0 + 1101;
+  env.service.tick();
+  assert.deepEqual((await w.next(byType('service.endpoints'))).endpoints, []);
+});
+
 // ------------------------------------------------------------------ E7
 
 test('E7 校验：ftp:、带用户名密码、超过 8 个地址、kind 不合法、meta 过大等 → bad-message，状态不变', async (t) => {
@@ -367,4 +401,17 @@ test('E8 第 65 个登记回 limit；到上限后替换已有的照常', async (
   const replace = await announce(a, { announcerId: 'n-0', kind: 'asset', urls: ['http://10.0.3.1:8790/'] });
   assert.equal(replace.type, 'service.announced', '替换不增加总数');
   assert.equal((await env.health()).endpoints, MAX);
+});
+
+test('E8 选项平铺：maxAnnouncers、maxUrls、maxMetaBytes 可改（G.12）', async (t) => {
+  const env = await startService({ maxAnnouncers: 3, maxUrls: 2, maxMetaBytes: 64 });
+  t.after(env.cleanup);
+  const a = await env.connect();
+  for (let i = 0; i < 3; i++) assert.equal((await announce(a, { announcerId: `n-${i}`, kind: 'asset', urls: ['http://10.0.0.1/'] })).type, 'service.announced');
+  const over = await announce(a, { announcerId: 'n-3', kind: 'asset', urls: ['http://10.0.0.1/'] });
+  assert.deepEqual([over.type, over.reason], ['error', 'limit']);
+  const tooMany = await announce(a, { announcerId: 'n-0', kind: 'asset', urls: ['http://10.0.0.1/', 'http://10.0.0.2/', 'http://10.0.0.3/'] });
+  assert.deepEqual([tooMany.type, tooMany.reason], ['error', 'bad-message']);
+  const bigMeta = await announce(a, { announcerId: 'n-0', kind: 'asset', urls: ['http://10.0.0.1/'], meta: { blob: 'x'.repeat(80) } });
+  assert.deepEqual([bigMeta.type, bigMeta.reason], ['error', 'bad-message']);
 });
