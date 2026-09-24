@@ -558,16 +558,69 @@ test('B.5 node.welcome 的 lost：同样移除持有、调 onLost；resumed 的�
   assert.deepEqual(h.drain('task.progress').map(m => [m.id, m.token]), [[a.id, 2]]);
 });
 
-test('B.5 其它回包（task.renewed、task.completed、task.released、task.fail-ack、node.welcome 无 lost）不改持有', () => {
+test('B.5 其它回包（task.renewed、task.completed、task.released、task.fail-ack）不改持有', () => {
   const h = harness();
   const a = view('a');
   h.session.receive(msg.snapshot([a]));
   h.claim(a, 2);
+  h.advance(3_000);
   const before = h.session.held();
   h.session.receive(msg.renewed(a.id, 2, h.now));
-  h.session.receive({ type: 'node.welcome', epoch: EPOCH, nodeId: 'node-1', resumed: [a.id], lost: [] });
+  h.session.receive({ type: 'task.completed', epoch: EPOCH, id: a.id });
+  h.session.receive({ type: 'task.released', epoch: EPOCH, id: a.id });
+  h.session.receive({ type: 'task.fail-ack', epoch: EPOCH, id: a.id, state: 'open' });
   assert.deepEqual(h.session.held(), before);
   assert.deepEqual(h.lost, []);
+  assert.deepEqual(h.drain(), [], '这些回包不引出任何消息');
+});
+
+test('B.5 node.welcome 的 resumed：lastSentAt 置为 now - RENEW_INTERVAL_MS，下一次 tick 立即续约；lost 为空时不调 onLost（B.5 补充细则）', () => {
+  const h = harness();
+  const a = view('a');
+  h.session.receive(msg.snapshot([a]));
+  h.claim(a, 2);
+  const t0 = h.now;
+  h.session.progress(a.id, 7);
+  // 断线后 2 秒重连，远不到一个续约间隔
+  h.set(t0 + 2_000);
+  h.session.start([{ id: a.id, token: 2 }]);
+  h.drain();
+  h.session.receive(msg.welcome('node-1', [a.id], []));
+  assert.deepEqual(h.lost, []);
+  assert.deepEqual(h.session.held(), [{ id: a.id, token: 2, lastSentAt: t0 + 2_000 - RENEW }]);
+  h.session.tick();
+  const progress = h.drain('task.progress');
+  assert.equal(progress.length, 1, '不等满间隔，立即续约');
+  assert.deepEqual(fields(progress[0], ['id', 'token']), { id: a.id, token: 2 });
+  assert.equal(h.session.held()[0].lastSentAt, t0 + 2_000);
+});
+
+test('B.5 welcome.lost 之后同 id 的 task.lease-lost 不再重复调 onLost；welcome.lost 的 reason 是 lost（B.5 补充细则）', () => {
+  const h = harness({ maxConcurrent: 2 });
+  const a = view('a', { projectId: 'p1', publishedAt: 1 }), b = view('b', { projectId: 'p2', publishedAt: 2 });
+  h.session.receive(msg.snapshot([a, b]));
+  h.claim(a, 2);
+  h.claim(b, 5);
+  h.session.start([{ id: a.id, token: 2 }, { id: b.id, token: 5 }]);
+  h.session.receive(msg.welcome('node-1', [a.id], [b.id]));
+  h.session.receive(msg.leaseLost(b.id, 5, 'token'));
+  assert.deepEqual(h.lost, [{ id: b.id, reason: 'lost' }]);
+  assert.deepEqual(h.session.held().map(x => x.id), [a.id]);
+});
+
+test('B.5 task.lease-lost 的 token 与持有的不符时忽略（旧认领的迟到消息，B.5 补充细则）', () => {
+  const h = harness();
+  const a = view('a');
+  h.session.receive(msg.snapshot([a]));
+  h.claim(a, 5);
+  const before = h.session.held();
+  h.session.receive(msg.leaseLost(a.id, 2, 'expired'));
+  assert.deepEqual(h.lost, []);
+  assert.deepEqual(h.session.held(), before);
+  // 令牌相符的照常处理
+  h.session.receive(msg.leaseLost(a.id, 5, 'expired'));
+  assert.deepEqual(h.lost, [{ id: a.id, reason: 'expired' }]);
+  assert.deepEqual(h.session.held(), []);
 });
 
 // ---------------------------------------------------------------- 联调：会话 × 真队列
