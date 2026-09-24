@@ -100,7 +100,9 @@ taskIdOf({ kind, resultKey, range })
 - `source.userId`、`source.tenantId` 取 P 的，不取发布连接的 `principal`；
 - 订阅者 = {本发布方} ∪ P 此刻的订阅者（页面订阅了 `plan`，就能收到细任务的 `task.done`；切分节点断开也不会让细任务因为没人订阅而被删）。
 
-条件不满足（P 不存在、不是 `plan`、不在 `claimed`、认领者不是本节点）时不继承，按上一段取 `principal`，不报错。之后 P 的订阅者变化不再传给已建的细任务。已存在的同 `id` 任务按 A.7.1 处理，不重新继承。
+条件不满足（P 不存在、不是 `plan`、不在 `claimed`、认领者不是本节点）时不继承，按上一段取 `principal`，不报错。之后 P 的订阅者变化不再传给已建的细任务。
+
+**已存在的同 `id` 任务**（2026-09-24 M3 裁定）：共享档的结果键与项目无关，一版项目切出的细任务常常已经存在（上一版、别的项目建的）。满足上面的继承条件时，对已存在的任务同样把 P 此刻的订阅者并进它的订阅者（`userId` / `tenantId` 不改），并且：已是 `done`（未过 TTL）的，给**新并入的**每个订阅者各发一条 `task.done`；已是 `failed`（未过 TTL）的，给新并入的每个订阅者各发一条 `task.failed`。已经是订阅者的不重复发。不满足继承条件时照 A.7.1 只加本发布方。
 
 **任务视图 `TaskView`**（出站消息里的任务）：
 
@@ -552,6 +554,7 @@ executor.render(task, { signal, progress }) → Promise<artifacts>
 **产物库 `sink`**（M5 起由素材服务实现，设计 4.4、语义 `asset-storage.md`「先推送、确认收全，再报完成」）：
 
 ```js
+// 一「段」的身份是 (resultKey, range.from, range.to)；kind、tier 只作记账，不参与身份
 sink.has({ resultKey, kind, tier, range }) → Promise<boolean>          // 这一段是否已经收全
 sink.put({ resultKey, kind, tier, range, artifacts, meta }) → Promise<{ complete: boolean }>
 // meta = { taskId, nodeId, token }，供记账（设计第 7 节「节点信任」）
