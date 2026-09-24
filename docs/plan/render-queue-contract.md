@@ -1120,3 +1120,397 @@ export function cardLockDecision({ lock, ownFingerprint, complete, now, idleMs =
 5. **测试**：L4、L7 按第 3 条补「多个片段一起换键」的断言；新增：
    - L9：`cardLockIdleMs` 给小值，延后的卡在锁闲置后被重判并接手；在重判前页面结果已齐的，改为投递；
    - L10：本机已齐、没有锁文件的卡，后台那一趟之后锁归本机，此后页面测量帧回 `CARD_LOCKED`。
+
+---
+
+## G. M5a：网络层、集群令牌与服务地址登记（文档服务通用化）
+
+主 Agent 定稿，2026-09-25（用户授权自动推进，未逐节审阅；有疑点按回退梯次处理）。依据：`docs/plan/Master-Execution-Plan.md` 第 5.4 节（文档服务通用化）、第 7 节 M5a、第 3 节 S1 / S3 / S4；语义 `document-service.md`「职责」「连接发现」（M5a 开工前按 S1 与定位改写）。
+
+**范围**：
+- 文档服务拆成「通用核心 + 模块」，渲染任务队列与服务地址登记各是一个模块；
+- 建连用集群令牌鉴权；
+- 节点经真 WebSocket 接队列，断线自动重连；
+- 端点解析与离线回落。
+
+**不在范围**：
+- 不接真实预渲染执行器，产物库仍用 D.3 的假件；
+- 不改 `frame-pipeline.mjs`、页面、导出路径；
+- 频道与背压在 C6（本节只要求核心留出位置）；
+- 指纹前置过滤在 M5b。
+
+### G.1 分层与文件
+
+| 层 | 文件 | 可以引用 | 不可以 |
+|---|---|---|---|
+| 传输 | `server/docservice/ws.mjs` | Node 内置 | 任何业务词 |
+| 核心 | `server/docservice/router.mjs`（新） | Node 内置 | 引用 `server/render-queue/`、`./modules/`；出现 `task.`、`node.hello`、`publisher`、`queue` 这类业务词（守门测试 R2 按源码文本检查） |
+| 组装 | `server/docservice/service.mjs` | 传输、核心、`./auth.mjs`、`./modules/*` | —— |
+| 鉴权 | `server/docservice/auth.mjs`（新） | Node 内置 | 业务词 |
+| 模块 | `server/docservice/modules/render-queue.mjs`（新）、`server/docservice/modules/endpoints.mjs`（新） | 各自需要的东西（队列模块引 `server/render-queue/`） | 引用别的模块 |
+| 入口 | `server/docservice/main.mjs` | 组装层、队列、两个模块 | —— |
+
+〔裁〕计划第 5.4 节把 `service.mjs` 与 `router.mjs` 一起叫「核心」。定稿细化为：`router.mjs` 是纯核心，`service.mjs` 是组装层（HTTP、升级、鉴权、心跳、旧接口的外观）。守门只针对 `router.mjs` 与 `ws.mjs`。
+
+### G.2 核心：`createRouter`
+
+```js
+export function createRouter({ now, log, write }) → Router
+// write(connId, text): 把一条已序列化的消息写到连接上（组装层接到 WsConnection.send）
+
+Router = {
+  connect(connId, principal, info),      // info = { remote, connectedAt }；对已挂的模块逐个调 connect
+  disconnect(connId),                    // 对已挂的模块逐个调 disconnect，然后删连接记录
+  dispatch(connId, text),                // 解析信封、路由到模块
+  mount(module) → unmount,               // 见 G.3
+  tick(name?),                           // 同步调一个或全部模块的 tick
+  send(connId, message),                 // 模块之外的发送入口（旧接口 service.send 用它）
+  describeConn(connId) → object,         // 合并各模块 describeConn 的字段
+  health() → object,                     // 合并各模块 health 的字段
+  modules() → string[],                  // 已挂模块名，按挂载顺序
+}
+```
+
+**信封**：
+- 入站必须是 JSON 对象、带字符串 `type`；
+- `reqId`（字符串，或有限的数字）可选，核心不解释它，只在核心自己回错误时带上；
+- 其余字段属于模块。
+
+**核心的错误回包**（`{ type: 'error', reason, detail, reqId? }`）：
+
+| `reason` | 何时 |
+|---|---|
+| `bad-message` | 不是合法 JSON、不是对象、没有字符串 `type` |
+| `unsupported` | 没有模块认领这个 `type` |
+| `internal` | 模块的 `handle` 同步抛出，或它返回的 Promise 被拒绝。记日志 `module.error { module, type, message }`，连接和别的模块照常工作 |
+
+`detail` 是给人看的中文短句，不含消息原文。
+
+### G.3 模块接口
+
+```js
+module = {
+  name: string,                          // 唯一；重复挂载抛错
+  types: string[],                       // 精确名（'node.hello'）或以 '.' 结尾的前缀（'service.'）
+  connect?(ctx, connId, principal),
+  disconnect?(ctx, connId),
+  handle(ctx, connId, message),          // 同步；需要异步的模块自己排队，返回值被忽略（Promise 只挂错误处理）
+  tick?(ctx),
+  tickMs?: number,                       // 组装层按它起计时器；没有 tick 就不起
+  describeConn?(connId) → object,        // 合进 describe().conns[i]
+  health?() → object,                    // 合进 /healthz
+  describe?() → any,                     // 进 describe().modules[name]
+}
+
+ctx = { send(connId, message), now(), log(event, fields) }
+```
+
+- **类型冲突**：挂载时，新模块与已挂模块之间出现下面任一情况就抛错、不挂：
+  - 精确名相同；
+  - 一方的精确名以另一方的前缀开头；
+  - 两个前缀里有一个以另一个开头。
+
+  所以任何一条消息至多属于一个模块，匹配顺序无关紧要。
+- **字段冲突**：`describeConn`、`health` 返回的字段名与核心字段或已挂模块的字段重名时，挂载抛错。实现方在挂载时各调一次这两个函数，拿到字段名来检查。
+- **挂载时机**：挂载时对已有连接逐个调 `connect`，卸载时逐个调 `disconnect`；卸载后这些类型回 `unsupported`。
+- `ctx.send` 发给已断开的连接时静默丢弃。
+- 核心不给出站消息补任何字段（队列自己补 `epoch`）。
+- C6 会在 `ctx` 上加 `publish(channel, message)` 和订阅钩子，本节不实现，也不预先占用这两个名字以外的 `ctx` 字段。
+
+### G.4 组装层：`createDocService`（旧接口不变）
+
+- 签名、返回值、现有行为不变。`server/test/docservice.test.mjs` 一个字不改，要全过。
+- 新增选项：
+  - `modules?: module[]`：创建时挂上；
+  - `autoTick = true`：为 `false` 时不起模块计时器，测试手动调 `service.tick()`；
+  - `protocol = 'promptcut.v1'`。
+- 新增方法：`mount(module) → unmount`、`tick(name?)`。
+- **旧接口的外观**：
+  - `mountRenderQueue(q)` 等于 `mount(renderQueueModule(q, { sweepMs }))`；
+  - 创建时挂一个占位模块 `renderQueuePlaceholder()`，它认领队列的全部类型，一律回 `queue-unavailable`，`describeConn` 回 `{ roles: [], publisherId: null, node: null }`，`health` 回 `{ queue: false, publishers: 0, nodes: 0 }`；
+  - `mountRenderQueue` 先卸占位模块再挂真的；它返回的卸载函数卸真的、重新挂占位模块。
+- 两个工厂都放在 `modules/render-queue.mjs`，组装层只从那里拿。
+- **队列模块**：
+  - `types` 是 `node.hello`、`publisher.hello`、`NODE_TYPES`、`PUBLISHER_TYPES` 的精确名，照 `messages.mjs` 出口取，不写死；
+  - `publisherId`、`node` 这两种角色记在模块自己的连接表里；
+  - 现有 `service.mjs` 里 `recordRole`、`rolesOf` 的行为原样搬过去；
+  - `health()` 回 `{ queue: true, publishers, nodes, epoch }`。
+- **`/healthz`**：
+  - 核心字段：`ok`、`service`、`uptimeMs`、`connections`、`protocol`、`modules`；
+  - 各模块的 `health()` 字段平铺合入；
+  - 旧字段（`queue`、`publishers`、`nodes`）因此不变，另多出 `epoch`。
+- **`describe()`**：
+  - `conns[i]` = 核心字段（`connId`、`remote`、`principal`、`connectedAt`）加上各模块 `describeConn` 的字段；
+  - 另加 `modules: { [name]: module.describe?.() ?? null }`。
+
+### G.5 集群令牌鉴权（`auth.mjs`）
+
+```js
+export const PROTOCOL = 'promptcut.v1';
+export function createClusterAuth({ token, allowAnonymous }) → {
+  authenticate(req) → principal | null,     // null = 401
+  protocolFor(req) → 'promptcut.v1' | null,  // 握手要回显的子协议；null = 不回 Sec-WebSocket-Protocol
+}
+export function isLoopbackHost(host) → boolean   // '127.0.0.1'、'::1'、'localhost'
+export function checkTokenFormat(token) → boolean // /^[A-Za-z0-9_-]{32,256}$/
+```
+
+- **携带方式**：客户端在 `Sec-WebSocket-Protocol` 里给两项：
+  - `promptcut.v1`
+  - `promptcut.token.<令牌>`
+
+  浏览器和 Node 内置的 `WebSocket` 都用 `new WebSocket(url, [两项])`。不放 URL 查询串。
+- **回显**：只要客户端给了 `promptcut.v1`，握手成功时服务端就回 `Sec-WebSocket-Protocol: promptcut.v1`，**从不回显令牌那一项**。`ws.mjs` 的 `acceptUpgrade` 为此新增可选参数 `protocol`。Chrome 在请求了子协议、服务端却没回的时候会让握手失败，所以必须回。
+- **令牌模式**（`token` 已设）：
+  - 缺 `promptcut.v1`、缺令牌项、令牌不符 → 401；
+  - 令牌比对：两边各取 sha256，再用 `crypto.timingSafeEqual` 比较；
+  - 通过 → `principal = { userId: 'cluster', tenantId: 'cluster' }`（计划第 3 节 S3）。
+- **匿名模式**（`token` 未设且 `allowAnonymous`）：
+  - 不看令牌项，`principal = { userId: 'anonymous', tenantId: null }`（与现在相同）；
+  - 带了 `promptcut.v1` 的照样回显；
+  - 旧客户端（包括 `scripts/probes/ws-client-test.mjs` 不带参数时）不带子协议，也能连上。
+- **日志**：握手被拒记 `auth.reject { remote, reason }`，`reason` ∈ `no-protocol` / `no-token` / `bad-token`。任何日志、错误信息、`describe()` 里都不出现令牌原文。
+- **失败即关**（`main.mjs`）：
+  - 读 `PROMPTCUT_CLUSTER_TOKEN`；
+  - 已设但 `checkTokenFormat` 不过 → 打一行 `config.error { reason: 'bad-token-format' }`，退出码 1；
+  - 未设且 `PROMPTCUT_DOCSERVICE_HOST` 不是回环地址 → 打 `config.error { reason: 'token-required' }`，退出码 1；
+  - 未设且绑回环 → 匿名模式；
+  - 已设 → 令牌模式（绑哪里都一样）。
+- **生成令牌**（写进 `main.mjs` 文件头，给人看）：
+  ```
+  node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'))"
+  ```
+- **部署**：
+  - `scripts/remote/docservice.mjs deploy` 从本机环境变量读 `PROMPTCUT_CLUSTER_TOKEN`，没设就拒绝部署（远端绑 `0.0.0.0`）；
+  - 令牌只经 ssh 的标准输入进远端脚本，由它 `export` 后 `pm2 startOrReload --update-env`；
+  - 不上命令行，不回显，不写进仓库；
+  - `ecosystem.config.cjs` 透传这个变量。
+
+### G.6 服务地址登记模块（`modules/endpoints.mjs`，D7 与 S1）
+
+`types: ['service.']`。常量从本模块导出：
+
+```js
+ENDPOINT_DEFAULTS = { GRACE_MS: 10_000, MAX_ANNOUNCERS: 64, MAX_URLS: 8, MAX_META_BYTES: 4096, TICK_MS: 1000 }
+```
+
+| 入站 `type` | 字段 | 回包 | 其它效果 |
+|---|---|---|---|
+| `service.announce` | `announcerId`、`kind`、`urls: string[]`、`meta?: object` | `service.announced { announcerId, kind, urls }` | 以 `(announcerId, kind)` 为键新建或替换；登记绑定到这条连接；向订阅了该 `kind` 的连接推送 |
+| `service.withdraw` | `announcerId`、`kind` | `service.withdrawn { announcerId, kind, removed: boolean }` | 只有登记所在的连接能撤回；删掉后推送 |
+| `service.watch` | `kinds: string[] \| 'all'` | `service.endpoints { endpoints }`（该连接可见的全量） | 此后每次变化都给它推一条全量 |
+
+- `endpoints` 的每项：`{ announcerId, kind, urls, meta, since }`，`since` 是 `ctx.now()`。
+- **推送一律是全量**：按订阅者的 `kinds` 过滤后的完整列表。列表很小，不做增量。
+- **校验**（不过 → `error { reason: 'bad-message' }`，状态不变）：
+  - `announcerId` 匹配 `/^[A-Za-z0-9._:-]{1,128}$/`；
+  - `kind` 匹配 `/^[a-z][a-z0-9-]{0,31}$/`；
+  - `urls` 1～`MAX_URLS` 个，每个能被 `new URL` 解析，协议是 `http:` 或 `https:`，不带用户名密码，长度 ≤ 2048；
+  - `meta` 序列化后 ≤ `MAX_META_BYTES`。
+- **上限**：登记总数超过 `MAX_ANNOUNCERS` → `error { reason: 'limit' }`。
+- **断开与宽限**：
+  - 登记所在的连接断开时，登记标为离线、记下时刻，但**仍然可见**；
+  - `tick` 发现离线超过 `GRACE_MS`（严格大于）就删掉并推送；
+  - 宽限期内同一 `(announcerId, kind)` 从新连接再登记：只改绑连接，不推送撤回；`urls` 变了才推送。
+- **只交换地址**：模块不访问登记的 URL，不转发任何字节（语义 `document-service.md`「连接发现」）。
+- **权限**：M5a 里任何通过鉴权的连接都能登记和订阅（S3：细粒度权限在 M6）。
+- `health()` 回 `{ endpoints: <登记数> }`；`describeConn` 不加字段。
+
+### G.7 节点侧：WebSocket 端点与端点解析（`server/render-node/`）
+
+**`ws-transport.mjs`**：
+
+```js
+export const BACKOFF_DEFAULTS = { baseMs: 500, factor: 2, maxMs: 15_000, jitter: 0.2 };
+export function createWsEndpoint({
+  url, token?, WebSocket = globalThis.WebSocket,
+  setTimeout = globalThis.setTimeout, clearTimeout = globalThis.clearTimeout,
+  random = Math.random, backoff?, log?,
+}) → WsEndpoint
+
+WsEndpoint = {
+  send(message) → boolean,        // 未连上时丢弃、回 false、计入 stats.dropped
+  onMessage(handler),             // 多个处理器按注册顺序都调；收到的非 JSON 文本丢弃并计数
+  onOpen(handler), onClose(handler),   // 每次（重）连上、每次断开都调；onClose 带 { code, reason }
+  close(),                        // 关连接、停止重连，closed 变 true
+  readonly connected: boolean,
+  readonly closed: boolean,
+  stats() → { opens, closes, sent, received, dropped, badFrames },
+}
+```
+
+- 满足 D.2 的 `endpoint` 形状（`send`、`onMessage`）。
+- **子协议**：有 `token` 时是 `['promptcut.v1', 'promptcut.token.' + token]`，否则是 `['promptcut.v1']`。
+- **重连**：
+  - 断开或连不上之后，第 n 次（从 0 起）等 `min(maxMs, baseMs × factor^n)`，再乘 `1 + jitter × (2·random() − 1)`；
+  - 连上后 n 清零；
+  - `close()` 之后不再重连。
+  - 401 在浏览器 API 里表现为连不上，同样按退避重连，退避封顶，不会高频打服务端。
+- **断线期间的消息一律丢弃**，不缓存重放。正确性靠两条保证：重连后的 `hello.resume` 与 `queue.snapshot`；以及 D.2 细任务开工前先查 `sink.has`。完成报告丢了，最坏是租约到期后被重做一次，走去重直接完成。
+- **接 `local-node`**：由调用方负责，本模块不认识它。约定写法（e2e 探针就这么用）：
+  ```js
+  ep.onOpen(() => node.start(node.session.held().map(({ id, token }) => ({ id, token }))));
+  ```
+  `local-node.start()` 已经做到重复调用时只挂一次处理器、按原 `reqId` 重发还在等回包的发布（D.2），本阶段**不改 `local-node.mjs`**。
+
+**`endpoint.mjs`**：
+
+```js
+export async function resolveDocservice({ env = process.env, fetch = globalThis.fetch, timeoutMs = 3000 })
+  → { mode: 'remote' | 'local' | 'offline', url?: string, health?: object, tried: [{ url, ok, reason? }] }
+export function watchServiceEndpoints(wsEndpoint, kinds, onChange) → stop()
+```
+
+- **`resolveDocservice` 的顺序**：
+  1. `PROMPTCUT_DOCSERVICE_URL`（`ws://` 或 `wss://`）；
+  2. `ws://127.0.0.1:${PROMPTCUT_DOCSERVICE_PORT ?? 8787}`；
+  3. 都不行 → `offline`，调用方回落本机 preload 路径。
+- 每个候选的探活方法：把协议换成 `http:` / `https:`，`GET /healthz`，超时 `timeoutMs`；`ok === true` 且 `protocol === 'promptcut.v1'` 才算可用。协议不符的 `reason` 是 `protocol-mismatch`。
+- 第 1 项可用 → `remote`；第 2 项可用 → `local`。
+- `watchServiceEndpoints`：每次 `onOpen` 发一次 `service.watch { kinds }`；收到 `service.endpoints` 就调 `onChange(endpoints)`。
+
+**出口**：`server/render-node/index.mjs` 加出这些名字。`ws-transport.mjs` 只引 Node 内置；`endpoint.mjs` 不读文件系统。
+
+### G.8 探针
+
+**`scripts/probes/render-queue-e2e.mjs`**：
+
+```
+node scripts/probes/render-queue-e2e.mjs --url <ws://…> --role publisher|node|both
+  [--tasks 50] [--project <id>] [--node-id <id>] [--task-ms 200] [--max-concurrent 2]
+  [--exit-after-claim] [--announce <http-url>] [--watch-endpoints] [--timeout-ms 120000]
+```
+
+- 令牌从 `PROMPTCUT_CLUSTER_TOKEN` 读，不接受命令行参数。
+- **`node` 角色**：
+  - 用 `createLocalNode` + `createWsEndpoint`；执行器按 `--task-ms` 睡眠，产物库用内存版；
+  - 可以复用 `server/test/fake-*.mjs`：探针不是生产代码，D.3 的禁令不适用；
+  - `--exit-after-claim`：第一次认领成功后立刻 `process.exit(3)`，用来测「干净断开」（X5）。
+- **`publisher` 角色**：
+  - 发 `publisher.hello`，发布 `--tasks` 个假细任务（`kind: 'snapshot'`、`tier: 'shared'`，结果键随机、带运行 id，免得撞上旧任务）；
+  - 数 `task.done`：每个 id 第一次记完成，再来的记重复；
+  - 看到 `epoch` 变了，就把没完成的重新发布。
+- **`both`**：同一进程两者都跑。
+- **测接手**：`node` 角色同时 `queue.watch`。记下别人认领某任务时看到 `task.taken` 的时刻 t1，和自己认领到同一任务的时刻 t2，`takeovers[]` 记 `t2 − t1`。两个时刻都用本机时钟，不受两台机器时钟偏差影响。
+- **输出**：最后一行 JSON：
+  ```
+  { ok, role, url, epochs: [], published, completed, duplicateDone, claims, claimsById,
+    doneLatencyMs: { p50, p95 }, takeovers: [{ id, ms }], endpoints?: [], fails: [] }
+  ```
+- **退出码**：0 全过；1 有断言失败；2 连不上；3 `--exit-after-claim` 的预期退出。
+
+**`scripts/probes/render-queue-proxy.mjs`**（TCP 层代理，不解析 WebSocket）：
+
+```
+node scripts/probes/render-queue-proxy.mjs --listen 127.0.0.1:8795 --target <host:port>
+  [--delay-ms 200] [--loss 0.05] [--loss-hold-ms 200..1000] [--stall-after-ms N] [--cut-after-ms N]
+```
+
+- `--loss p`：每个数据块以概率 p 被「扣住」一段随机时长再发，其后的块也排在它后面，模拟 TCP 重传带来的队头阻塞。不能真丢字节：丢了会破坏 WebSocket 帧。
+- `--stall-after-ms`：到点后两个方向都停止转发、但不关连接，模拟半开。
+- `--cut-after-ms`：到点后直接断开。
+- 每条连接的统计打到标准输出。
+
+`scripts/probes/ws-client-test.mjs` 加上：从 `PROMPTCUT_CLUSTER_TOKEN` 读令牌，按 G.5 携带；断言 `/healthz` 有 `protocol`、`modules`。
+
+### G.9 测试（Verification，`server/test/`）
+
+测试名以编号开头。一律用端口 0；需要时钟的用 `now` 注入加 `autoTick: false` 手动 `tick`。
+
+**`docservice-router.test.mjs`**：
+
+| 编号 | 内容 |
+|---|---|
+| R1 | 挂一个与渲染无关的示例模块 `text.`（`text.count { text }` → `text.counted { lines, chars }`），与队列同时在线；两边的消息互不串门；同一条连接交替发两种消息，各自正确 |
+| R2 | 守门：`router.mjs`、`ws.mjs` 的源码文本里没有 `render-queue`、`modules/`、`task.`、`node.hello`、`publisher`、`queue` |
+| R3 | 类型冲突的三种情形都在挂载时抛错；字段冲突同样抛错；抛错后已挂的模块不受影响 |
+| R4 | `docservice.test.mjs` 不改一个字全过（由 `npm test` 覆盖，这里不重复写） |
+| R5 | 模块 `handle` 同步抛出、返回被拒绝的 Promise：回 `internal`（带原 `reqId`），连接不断，别的模块照常 |
+| R6 | 卸载后这些类型回 `unsupported`；`mountRenderQueue` 的卸载函数卸下之后回 `queue-unavailable` |
+| R7 | `/healthz` 有 `protocol`、`modules`，旧字段不变，挂上队列后有 `epoch`；`describe()` 的 `conns[i]` 含队列模块的 `roles` / `publisherId` / `node`，`modules` 含各模块 `describe` |
+
+**`docservice-auth.test.mjs`**：
+
+| 编号 | 内容 |
+|---|---|
+| A1 | 令牌模式：不带子协议 → 401；只带 `promptcut.v1` → 401；令牌错 → 401 |
+| A2 | 令牌对 → 101，响应头 `Sec-WebSocket-Protocol` **恰好**是 `promptcut.v1`；Node 内置 `WebSocket` 能连上，`ws.protocol === 'promptcut.v1'` |
+| A3 | 通过后 `principal` 为 `{ userId: 'cluster', tenantId: 'cluster' }`；消息里自报的 `userId` 不改变它 |
+| A4 | 匿名模式：不带子协议的旧客户端能连上；带 `promptcut.v1` 的得到回显 |
+| A5 | 被拒、通过各试几次，收集到的全部日志里都找不到令牌原文 |
+| A6 | 起 `main.mjs` 子进程：非回环地址且未设令牌 → 退出码 1、输出含 `token-required`；令牌格式不对 → 退出码 1、`bad-token-format`；回环且未设 → 起得来、`/healthz` 正常 |
+
+**`docservice-endpoints.test.mjs`**：
+
+| 编号 | 内容 |
+|---|---|
+| E1 | 登记后，订阅了该 `kind` 的连接收到一条全量 `service.endpoints`，没订阅的收不到 |
+| E2 | `service.watch` 的回包是当前可见的全量；`kinds` 过滤正确，`'all'` 看到全部 |
+| E3 | 同一 `(announcerId, kind)` 再登记：替换，不新增 |
+| E4 | `service.withdraw`：登记所在的连接能撤回，别的连接撤回回 `removed: false` |
+| E5 | 登记所在的连接断开：宽限期内仍可见；`GRACE_MS` 之后的 `tick` 删除并推送；正好等于 `GRACE_MS` 时不删 |
+| E6 | 宽限期内从新连接以相同 `urls` 再登记：不推送撤回；`urls` 变了推送一次 |
+| E7 | 校验：`ftp:` 地址、带用户名密码的地址、超过 8 个地址、`kind` 不合法、`meta` 过大 → `bad-message`，状态不变 |
+| E8 | 第 65 个登记回 `limit` |
+
+**`render-node-ws.test.mjs`**：
+
+| 编号 | 内容 |
+|---|---|
+| T1 | 对真文档服务（端口 0，匿名模式与令牌模式各一遍）建 `createWsEndpoint`：`onOpen` 触发；`local-node` 收到 `node.welcome` |
+| T2 | 服务端主动断开：重连等待按 G.7 公式（注入 `setTimeout` 记录与固定 `random`），连上后清零 |
+| T3 | 断线期间 `send` 回 `false`，`stats().dropped` 计数正确 |
+| T4 | 节点认领一个任务后，服务端强行断开这条连接（宽限期内）：重连后节点以 `resume` 接续，令牌不变，任务照常完成 |
+| T5 | 换一个新的文档服务实例（新 epoch）：原持有的任务收到 `lease-lost { reason: 'epoch' }`，`onLost` 被调 |
+| T6 | `resolveDocservice`：环境变量地址可用 → `remote`；它不可用、回环可用 → `local`；都不可用 → `offline`；`protocol` 不符 → 跳过并记 `protocol-mismatch` |
+| T7 | `close()` 之后不再重连 |
+| T8 | 令牌错误：连续连不上时退避增长到 `maxMs` 封顶，`opens === 0` |
+| T9 | 两个节点经真 WebSocket（回环）抢 50 个假任务：每个任务恰好完成一次，两个节点各至少一个 |
+
+### G.10 文件归属
+
+| 子分支 | 文件 |
+|---|---|
+| `claude/rq-m5a-svc` | `server/docservice/router.mjs`、`auth.mjs`、`modules/render-queue.mjs`、`modules/endpoints.mjs`（新）；`server/docservice/service.mjs`、`ws.mjs`、`main.mjs`、`ecosystem.config.cjs`；`scripts/remote/docservice.mjs` |
+| `claude/rq-m5a-net` | `server/render-node/ws-transport.mjs`、`endpoint.mjs`（新）；`server/render-node/index.mjs` |
+| `claude/rq-m5a-tests` | `server/test/docservice-router.test.mjs`、`docservice-auth.test.mjs`、`docservice-endpoints.test.mjs`、`render-node-ws.test.mjs`（新）；`scripts/probes/render-queue-e2e.mjs`、`render-queue-proxy.mjs`（新）；`scripts/probes/ws-client-test.mjs` |
+| 主 Agent | 本节；`docs/reports/REPORT-render-queue-m5a.md` |
+
+不改：
+- `server/render-queue/`；
+- `server/render-node/local-node.mjs`、`session.mjs`；
+- `server/test/docservice.test.mjs`；
+- 任何渲染与页面代码。
+
+### G.11 定稿后的补充细则（2026-09-25，主 Agent 按实现方疑点裁定）
+
+- **握手失败不算断开**：包括 401 在内的握手失败，不调 `onClose`、不计 `closes`；只有连上过的连接断开才算。
+- **计数口径**：`badFrames` 包括能解析、但不是对象的 JSON 和二进制帧；`received` 只数交给处理器的消息。
+- **抖动乘在封顶之后**：单次等待的上限是 `maxMs × (1 + jitter)`。
+- **T5 只断言两件事**：线上收到 `task.lease-lost { reason: 'epoch' }`；`onLost` 被调过。不断言 `onLost` 的 reason：会话先按 `node.welcome.lost` 报 `'lost'`，是 B.5 补充细则的既有行为。
+- **`watchServiceEndpoints` 立即补发订阅**：调用时端点已经连上的，立刻补发一次 `service.watch`。
+- **`resolveDocservice` 的边界**：
+  - URL 为空串视为没设；
+  - 不是 `ws:` / `wss:` 的记 `bad-url`，继续试下一项；
+  - `/healthz` 取在源站根上。
+- **端点的创建与关闭**：`createWsEndpoint` 创建时立即连接，参数不合法时同步抛 `TypeError`。`close()` 之后 `connected` 立即变为 `false`；`onClose` 在底层真正关上时才调，带 `{ code: 1000, reason: 'closed' }`。
+
+### G.12 接线方式与命名（2026-09-25，主 Agent 按 svc 实现方疑点补定）
+
+1. **令牌模式的接法**：
+   - `createDocService({ authenticate: auth.authenticate, log })`；
+   - 其中 `auth = createClusterAuth({ token, allowAnonymous, log? })`；
+   - `createClusterAuth` 的可选参数 `log` 用来记握手被拒的 `auth.reject`。
+2. **子协议回显由组装层做**：客户端给了 `promptcut.v1` 就回显，`protocol` 选项缺省是 `promptcut.v1`。
+3. **服务地址登记模块**：`modules/endpoints.mjs` 导出 `endpointsModule(options?)`，另有别名 `createEndpointsModule` 和默认导出。
+   - 选项平铺：`graceMs`、`maxAnnouncers`、`maxUrls`、`maxMetaBytes`、`tickMs`，缺省取 `ENDPOINT_DEFAULTS`；
+   - 没带 `meta` 的登记存为 `meta: null`；
+   - 宽限期内从新连接再登记：`urls` 和 `meta` 都没变才不推送。
+4. **队列模块**：`modules/render-queue.mjs` 导出 `renderQueueModule(q, { sweepMs })`、`renderQueuePlaceholder()`。
+5. **两处 `modules` 形状不同**：`/healthz` 里是模块名数组，`describe().modules` 是对象。
+6. **保留字段名**：`conns` 是核心保留的 `health` 字段名，模块不能用。
+7. **字段冲突检查的调用方式**：挂载时用一个不存在的连接 id 调一次 `describeConn`，模块对未知连接也要返回完整的字段集。
+8. **`ws.mjs` 的半开修正**：对端结束 TCP 却没发关闭帧时，服务端立即结束本端并触发 `disconnect`，不再等心跳。
+9. **`main.mjs` 的输出与判定**：
+   - `config.error` 同时写 stdout 和 stderr；
+   - 令牌为空串算「已设」，按格式错误关闭。
