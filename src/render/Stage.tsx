@@ -80,6 +80,25 @@ export interface StagePlaneProps {
 const EMPTY_SET: ReadonlySet<string> = new Set();
 
 /**
+ * 快照平面的 `dangerouslySetInnerHTML` 实参,每个片段缓存一份:**同一张快照回同一个 `{ __html }` 对象**。
+ *
+ * React 19 更新属性时按 `nextProp !== lastProp` 比 —— 每拍新建一个 `{ __html }` 对象,它就每拍重写一遍
+ * `innerHTML`:画布卡的快照是一张整屏图的 data URL(实测粒子卡 276 KB),每拍重新解析、重建 `<img>`、重新解码。
+ * 兜底顺序让「流下面垫一张海报快照」成了播放中的常态之后,CDP 采样里 `setProp` 一项 3 秒吃掉 257 ms,
+ * 可见舞台每拍主线程耗时的 p50 从约 3.5 ms 抬到约 7 ms。按引用缓存之后,只有换了快照的那一拍才写 DOM。
+ * 顺带省掉 `renameSnapshotIds` 每拍把整份 html 哈希一遍的开销。
+ */
+const snapshotPropByClip = new Map<string, { html: string; prop: { __html: string } }>();
+function snapshotProp(clipId: string, html: string): { __html: string } {
+  const hit = snapshotPropByClip.get(clipId);
+  if (hit && hit.html === html) return hit.prop;
+  const prop = { __html: renameSnapshotIds(html, clipId) };
+  if (snapshotPropByClip.size > 256) snapshotPropByClip.clear();
+  snapshotPropByClip.set(clipId, { html, prop });
+  return prop;
+}
+
+/**
  * 舞台:按当前时刻挑出活跃 clip 并挂载。卡片以 clip.id + playToken 作 key,
  * 进入区间即重新挂载、从头播放(和导出时的行为一致)。
  */
@@ -366,7 +385,7 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
               */}
               {snapshotHtml !== undefined ? (
                 <div data-pc-snapshot-plane="" style={{ position: "absolute", inset: 0 }}
-                  dangerouslySetInnerHTML={{ __html: renameSnapshotIds(snapshotHtml, clip.id) }} />
+                  dangerouslySetInnerHTML={snapshotProp(clip.id, snapshotHtml)} />
               ) : null}
               {/*
                 流平面(E7 第 5 条,R8)。`streamPlayer` 只往这个**已经存在的** `<canvas>` 上画,

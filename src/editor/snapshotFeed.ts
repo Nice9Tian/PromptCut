@@ -375,10 +375,21 @@ export function planFeed({ project, t, playing }: Playhead): FeedPlan {
   return { heavy: heavy.sort(), picks, wanted, streamPlanes };
 }
 
-/** 缺的那几帧发起取字节；到货后叫一次 `onArrive` 让宿主重投 */
-function fetchMissing(picks: Map<string, Pick>): void {
+/**
+ * 挂着的海报还在节流窗口里(同一层同一个键、帧号差不到 `POSTER_REFRESH_FRAMES`):这一拍不换,也就不用取字节。
+ * 流覆盖着的层每拍选中的帧号都在变,不挡这一下的话每拍都去预渲染进程拉一整张快照(画布卡上 MB)却一张都不用。
+ */
+function heldPoster(role: StageRole, pick: Pick): boolean {
+  if (pick.tier !== "poster") return false;
+  const cur = baselines[role].mounted.get(pick.clipId);
+  return !!cur && cur.kind === pick.kind && cur.key === pick.key && Math.abs(cur.localFrame - pick.localFrame) < POSTER_REFRESH_FRAMES;
+}
+
+/** 缺的那几帧发起取字节；到货后叫一次 `onArrive` 让宿主重投。挂着的海报还没到换的时候就不取 */
+function fetchMissing(picks: Map<string, Pick>, role: StageRole = "front"): void {
   for (const pick of picks.values()) {
     if (have.has(pick.id) || flying.has(pick.id)) continue;
+    if (heldPoster(role, pick)) continue;
     flying.add(pick.id);
     void source.fetchSnapshot(pick.kind, pick.key, pick.localFrame)
       .then((html) => {
@@ -407,8 +418,7 @@ function diffAgainst(role: StageRole, picks: Map<string, Pick>, reset = false): 
   for (const [clipId, pick] of picks) {
     const cur = mounted.get(clipId);
     if (cur?.id === pick.id) continue;
-    if (cur && pick.tier === "poster" && cur.kind === pick.kind && cur.key === pick.key
-      && Math.abs(cur.localFrame - pick.localFrame) < POSTER_REFRESH_FRAMES) continue;
+    if (!reset && heldPoster(role, pick)) continue;
     const html = have.get(pick.id);
     if (html === undefined) continue;   // 还没到货：这一层保持上一张，不闪
     changes.push({ clipId, html, pick });
@@ -502,7 +512,7 @@ export async function deliverSnapshots(stage: StageRpcClient, role: StageRole, h
   // 播放中没有「停下就精确」这回事:settled 作废
   if (head.playing) clearSettled(role);
   const feed = planFeed(head);
-  fetchMissing(feed.picks);
+  fetchMissing(feed.picks, role);
   if (feed.wanted.length) pushWanted(feed.wanted);
   const base = baselines[role];
   const now = performance.now();
