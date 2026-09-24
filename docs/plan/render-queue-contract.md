@@ -1680,3 +1680,102 @@ backpressureCloses,   // 累计因背压关闭的连接数
 4. **`drain` 可能重复**：`ws.mjs` 在写完、缓冲归零时补发一次 `drain`，socket 自己的高水位是 16 KiB，比测试用的小值大。核心要能容忍重复的 `drained(connId)`。
 5. **摘要切换的实现**：切到摘要时，替客户端发的是 `queue.watch { projects: [] }`（队列收空数组）。它回的 `queue.snapshot` 由模块用专门的 `reqId` 拦下。
 6. **两处 `channels` 形状不同**：`/healthz.channels` 是数字，`describe().channels` 是对象，照 G.12 第 5 条的先例。
+
+---
+
+## I. M5b 队列部分：按节点指纹前置过滤（防锁风暴）
+
+主 Agent 定稿，2026-09-25（用户授权自动推进）。依据：`docs/plan/Master-Execution-Plan.md` 第 5.3 节；语义 `document-service.md`「渲染任务队列」的「指纹前置过滤（特例）」一条（`95f9aa7` 写入）；F 节（卡片级指纹锁）；H 节（合并键）。
+
+**范围**：
+- 队列本体的可见性前置过滤；
+- 锁变更时只向受影响的节点定向补发或撤回；
+- 拒绝限流；
+- 开关；
+- 节点会话对限流的退避。
+
+**不在范围**：
+- 真实执行器、页面接入、跨机取项目内容：M5b 的其余部分，另立契约；
+- 全量 `watch: 'all'` 的收紧：本节仍然允许，理由同 H.0。
+
+### I.1 常量
+
+`QUEUE_DEFAULTS` 新增：
+
+```js
+PREFILTER: true,              // 前置过滤开关；false 时行为与本节之前完全相同（对照组）
+THROTTLE_REJECTS: 20,         // 一个扫描周期内 card-locked 拒绝超过这个数，之后的认领回 throttled
+```
+
+对应的环境变量名：`PROMPTCUT_QUEUE_PREFILTER`、`PROMPTCUT_QUEUE_THROTTLE_REJECTS`（照第 8 节 Q4 的惯例，本节只导出名字，不读取）。
+
+### I.2 可见性（改 `canSee`，A.9 的扩展）
+
+节点连接看得见任务 T 的条件：原有的可见性条件（watch 的项目、纯浏览器按用户）**全部成立**，并且在 `PREFILTER` 为真时，下面两条也成立：
+
+1. **指纹相符**：节点 `hello` 带了 `envFingerprint`，任务的 `requires.envFingerprint` 也有，两者必须相等。任一方缺了这一项，这一条不生效，与现在的行为兼容。
+2. **没被别的环境锁住**：T 有锁键（`lockKeyOf`），锁表里这个键有锁，锁的指纹必须等于节点的 `envFingerprint`。没有锁，或节点没带指纹时，这一条不生效。
+
+可见性同时决定两件事：`queue.snapshot` 的内容和各类增量（`task.opened` / `task.taken` / `task.closed`）的收件人。
+
+### I.3 锁变更的定向增量
+
+锁表里某个键的指纹变化时（新建、接手转移、回收删除），对这个锁键下每个 `open` 的任务：
+- 变化前看得见、变化后看不见的节点：发 `task.closed { id, state: 'hidden', reason: 'card-locked' }`；
+- 变化前看不见、变化后看得见的节点：发 `task.opened { task }`；
+- 前后可见性不变的节点：什么都不发。
+
+这些消息和其它任务增量一样，经 `send` 发出，H.3 的合并键照旧（`task:<id>`）。
+
+### I.4 认领时的检查保留
+
+F.1 第 3a 步的 `card-locked` 拒绝原样保留，只兜住前置过滤与锁变更之间的竞态。
+
+### I.5 限流
+
+- 每个节点连接记「本扫描周期内收到的 `card-locked` 拒绝次数」，`tick()` 时清零。
+- 次数超过 `THROTTLE_REJECTS` 之后，这条连接的认领一律回 `task.claim-rejected { id, reason: 'throttled' }`，不看任务状态，也不改任何任务状态，直到下一个 `tick()`。
+- `PREFILTER` 为 `false` 时限流也关掉（对照组要和现在完全一样）。
+
+### I.6 节点会话（`server/render-node/session.mjs`）
+
+收到 `task.claim-rejected { reason: 'throttled' }`：
+- 清掉在飞的认领；
+- 记 `throttledUntil = now() + SWEEP_INTERVAL_MS`，在这之前 `tick()` 不发起新认领，续约照常；
+- 这个候选不从本地视图里删。
+
+收到 `task.closed { state: 'hidden' }`：和别的 `task.closed` 一样，从本地视图里移除。
+
+### I.7 诊断
+
+`describe()` 的每条节点连接加两个字段：`cardLockedRejects`（本周期计数）、`throttled: boolean`。
+`describe()` 顶层加 `prefilter: boolean`。
+
+### I.8 测试（Verification，`server/test/render-queue-prefilter.test.mjs`）
+
+每条有「过滤开 / 关」对比要求的用例，都用同一场景跑两遍：`constants: { PREFILTER: true }` 与 `{ PREFILTER: false }`。两遍的原始数字都写进测试输出，用 `t.diagnostic`。
+
+| 编号 | 内容 |
+|---|---|
+| V1 | 指纹不同的任务，节点在 `queue.snapshot` 和 `task.opened` 里都看不见；节点不带指纹时照旧都看得见 |
+| V2 | 锁在别的指纹上时，节点看不见这个锁键下的任务；锁在自己的指纹上时看得见 |
+| V3 | 锁从 X 转到 Y（接手）：X 节点收到这些任务的 `task.closed { state: 'hidden', reason: 'card-locked' }`，Y 节点收到 `task.opened`，其它节点 0 条 |
+| K1 | 两种指纹各 4 个节点，200 个任务，其中一半的卡被另一种指纹锁住，各节点按 B.5 的会话逻辑认领到全部完成。过滤开：稳态下 `card-locked` 拒绝 **0 次**，竞态窗口内的不超过认领总数的 1%。过滤关：拒绝数作为对照 |
+| K2 | 同 K1 场景。过滤开：不匹配的节点收到已锁卡任务的 `task.opened` **0 条** |
+| K3 | 运行中把 20 张卡的锁从 X 转到 Y：X 节点只收到这 20 张卡的撤回，Y 节点只收到补发，其它节点 0 条；每个任务恰好一次 `task.done` |
+| K4 | 一个节点无视过滤，一个周期内反复认领已锁卡：超过 20 次拒绝后回 `throttled`，其它节点的认领不受影响；下一次 `tick()` 后恢复 |
+| K5 | 过滤关：既有测试（`render-queue-*`、`card-lock-queue`）的行为不变。由既有测试覆盖；本文件另断言 `describe().prefilter === false` 时没有 `hidden` 消息 |
+| K6 | 会话层：`throttled` 之后，在 `SWEEP_INTERVAL_MS` 内 `tick()` 不发认领，续约照发；过后恢复 |
+
+测试用假时钟和环回，照 D.3 的假件。
+
+### I.9 文件归属
+
+| 子分支 | 文件 |
+|---|---|
+| `claude/rq-m5b-queue` | `server/render-queue/queue.mjs`、`constants.mjs`、`messages.mjs`（如需扩展 `reason` 或 `state` 的枚举）；`server/render-node/session.mjs`（只加 I.6） |
+| `claude/rq-m5b-queue-tests` | `server/test/render-queue-prefilter.test.mjs`（新），需要的 `server/test/fake-*.mjs` |
+
+**不改**：既有测试。过滤默认开，这是行为改变，但既有测试里的节点要么不带指纹，要么指纹都相同，要么是锁相关的测试。锁相关的测试（`card-lock-queue`、`render-queue-inproc` 的 I6）如果因为「看不见」而断言失败：
+- 实现方不得改测试；
+- 先把失败写进报告，由主 Agent 裁决是在测试里显式加 `PREFILTER: false`，还是改期望。
