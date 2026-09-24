@@ -9,7 +9,7 @@
 | 轨道流：重卡在播放时贴的 alpha 视频流 | `docs/plan/r8-streams-task.md`；编码原型报告 `docs/plan/g0-b-stream-prototype.md` | 未开始，编码原型已做完 |
 | 共享 WebGL 渲染器：canvas 卡共用一个 WebGL 上下文 | `docs/plan/r9-webgl-task.md` | 未开始 |
 | 素材服务与文档服务（本地或远程，可任意组合部署）、产物入库、改动竞态、Agent 的查询进程、在线浏览器模式 | `docs/plan/cloud-task.md`；动工前的问题已定，见文末「已定的决议」。2026-09-24 按路线 B 改写，尚未独立审查 | 未开始 |
-| 分布式预渲染：文档服务托管的拉取式渲染任务队列，本机 PC、独立渲染主机、纯浏览器认领任务 | `docs/plan/distributed-prerender-queue.md`；前置：上一行的文档服务与产物入库（A3b）；背景评估 `docs/reports/REPORT-architecture-agent-prerender.md` | 设计稿待审核 |
+| 分布式预渲染：文档服务托管的拉取式渲染任务队列，本机 PC、独立渲染主机、纯浏览器认领任务 | `docs/plan/distributed-prerender-queue.md`；前置：上一行的文档服务与产物入库（A3b）；背景评估 `docs/reports/REPORT-architecture-agent-prerender.md` | 设计已审核（2026-09-24），未开始；等前置完成、另行下发指令 |
 | 音频整体改成浏览器端 JS | `docs/plan/audio_structure_plan.md`（A0～A7）；判重测试计划 `docs/plan/audio_determine_plan.md` | 计划已写，未动工 |
 | 以后再做：桌面版给只有原片的云端素材补转小版；导出页装虚拟定时器 | `docs/plan/future_planning.md` | 暂缓 |
 
@@ -34,6 +34,7 @@
 - **素材服务**：还不存在；桌面运行环境现在直读本机素材目录，没有经服务接口；两档素材的字段只是占位；预渲染产物还没有入库，只留在本机。
 - **查询渲染**：Agent 专用渲染实例的优先通道、AI 栏操作预览的插队只有雏形。
 - **在线浏览器模式**：还不存在。
+- **渲染任务队列与渲染节点**：还不存在；预渲染现在只由本机预渲染进程按页面的 preload 做。本机现有的预渲染结果键（共享键、本地档键、流键）还没有并入环境指纹，接队列时要整体换键一次。设计见 `docs/plan/distributed-prerender-queue.md`。
 - **手动截短总时长的入口**：语义允许用户手动缩短总时长（`project-model.md`「总时长」），但编辑界面没有入口，现在只有 Agent 能经 `set_project_meta` 截断。UI 层要补手动截短总时长的操作入口，规则用 `src/kernel/duration.ts` 现成的那套。
 
 ## 文档

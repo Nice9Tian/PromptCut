@@ -35,6 +35,7 @@
 | 渲染节点 | 从渲染任务队列认领并完成预渲染任务的地方：本机 PC、独立渲染主机、纯浏览器；按能力区分，不按平台名 | architecture/platforms.md |
 | 认领 | 渲染节点从队列里取一个任务：比对状态再加锁一步完成，同一任务同时只有一个认领者；断开或超时后任务回到未认领 | architecture/document-service.md |
 | 独立渲染主机 | 局域网或远程主机上、不带编辑界面的预渲染进程，作为渲染节点为多个项目取活 | architecture/platforms.md |
+| 环境指纹 | 渲染环境的标识（操作系统、GPU 基础类别、Chrome 主版本），并入预渲染结果的键；不同环境的结果不混用 | architecture/rendering.md |
 | 桌面运行环境 | 带预渲染进程的桌面应用（或本机 dev server）所在的运行环境，和「在线浏览器模式」对举；可以连本地或远程的服务 | architecture/platforms.md |
 | 在线浏览器模式 | 只有页面、没有本机进程的运行形态 | architecture/platforms.md |
 | 低内存档 | 平板、手机等内存受限设备的运行档位 | architecture/platforms.md |
