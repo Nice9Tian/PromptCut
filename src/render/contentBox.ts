@@ -365,6 +365,51 @@ export function measureInk(stage: HTMLElement, box: Box | null): Ink | null {
   };
 }
 
+/**
+ * 和 `measureContentBox` 同一套量法,但结果换算到**包裹层自己的局部坐标**(未经旋转 / 缩放的布局像素),
+ * 给占位平面摆框用(rendering.md「兜底顺序」:占位符在实体框上,继承包裹层的旋转和缩放)。
+ *
+ * `measureContentBox` 按「屏幕矩形 ÷ 缩放」换算,包裹层带旋转时那是外接矩形,摆回局部坐标就歪了。
+ * 这里先还原成屏幕上的外接矩形,再按包裹层的旋转角和等比缩放反解:中心点逆旋转、宽高解一个 2×2 方程
+ * (局部轴对齐的矩形转过 θ 之后,外接矩形宽 = w|cos| + h|sin|、高 = w|sin| + h|cos|)。
+ * 接近 45° 时方程病态,退回外接矩形的尺寸(偏大、不偏小)。结果夹回包裹层内;量不到回 null。
+ */
+export function measureLocalContentBox(wrap: HTMLElement, canvasCache?: Map<HTMLCanvasElement, CanvasPixels | null>): { left: number; top: number; width: number; height: number } | null {
+  const b = measureContentBox(wrap, canvasCache);
+  if (!b) return null;
+  const sr = wrap.getBoundingClientRect();
+  const w = wrap.offsetWidth, h = wrap.offsetHeight;
+  if (!(w > 0) || !(h > 0) || !(sr.width > 0)) return null;
+  const k = sr.width / w;
+  // 还原成屏幕上的外接矩形(measureContentBox 的逆换算)
+  const u = { l: sr.left + b.l * k, t: sr.top + b.t * k, r: sr.left + b.r * k, b: sr.top + b.b * k };
+  const raw = getComputedStyle(wrap).transform;
+  let theta = 0;
+  try { if (raw && raw !== "none") { const m = new DOMMatrixReadOnly(raw); theta = Math.atan2(m.b, m.a); } } catch { theta = 0; }
+  const c = Math.abs(Math.cos(theta)), s = Math.abs(Math.sin(theta));
+  // 包裹层的等效缩放(含祖先):外接矩形宽 = S × (w|cos| + h|sin|)
+  const S = sr.width / (w * c + h * s);
+  if (!(S > 0)) return null;
+  const uw = (u.r - u.l) / S, uh = (u.b - u.t) / S;
+  const det = c * c - s * s;
+  let cw = uw, ch = uh;
+  if (Math.abs(det) > 0.2) {
+    cw = (c * uw - s * uh) / det;
+    ch = (c * uh - s * uw) / det;
+    if (!(cw > 0) || !(ch > 0)) { cw = uw; ch = uh; }
+  }
+  // 中心点:相对包裹层外接矩形中心的屏幕偏移,逆旋转、除以缩放,再挪回局部坐标
+  const dx = (u.l + u.r) / 2 - (sr.left + sr.right) / 2;
+  const dy = (u.t + u.b) / 2 - (sr.top + sr.bottom) / 2;
+  const cos = Math.cos(theta), sin = Math.sin(theta);
+  const cx = (cos * dx + sin * dy) / S + w / 2;
+  const cy = (-sin * dx + cos * dy) / S + h / 2;
+  const left = Math.max(0, cx - cw / 2), top = Math.max(0, cy - ch / 2);
+  const right = Math.min(w, cx + cw / 2), bottom = Math.min(h, cy + ch / 2);
+  if (right <= left || bottom <= top) return null;
+  return { left, top, width: right - left, height: bottom - top };
+}
+
 export function unionBox(a: Box | null, b: Box | null): Box | null {
   if (!a) return b;
   if (!b) return a;

@@ -47,15 +47,23 @@ export function placeholdersEnabled(): boolean {
   return enabled;
 }
 
-let styleInjected = false;
+let styleEl: HTMLStyleElement | null = null;
 /** 占位组件的整张样式表,打开时注入一次(导出页永远走不到这里) */
 export function ensurePlaceholderStyle(css: string): void {
-  if (styleInjected || typeof document === "undefined" || !css) return;
-  styleInjected = true;
-  const s = document.createElement("style");
-  s.dataset.pcPlaceholder = "1";
-  s.textContent = css;
-  document.head.appendChild(s);
+  if (styleEl || typeof document === "undefined" || !css) return;
+  styleEl = document.createElement("style");
+  styleEl.dataset.pcPlaceholder = "1";
+  styleEl.textContent = css;
+  document.head.appendChild(styleEl);
+}
+
+/**
+ * 摘掉样式表(`setRole('back')`):K5 互换之后这一台成了后台舞台,
+ * 「后台舞台不注入占位样式」要对它也成立。再转正时 `Stage` 会重新注入。
+ */
+export function removePlaceholderStyle(): void {
+  styleEl?.remove();
+  styleEl = null;
 }
 
 /* ------------------------------------------------------------------ 2. 显示谁 */

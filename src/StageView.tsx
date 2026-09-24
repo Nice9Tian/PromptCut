@@ -33,11 +33,11 @@ import { reviveStagePlan, type StagePlan, type WirePlan } from "./render/wirePla
 import { ensureProxyStyle, proxyAllowed, proxyOf, resetInk, sampleAll } from "./render/solidMode";
 import { StreamPlayer } from "./render/streamPlayer";
 import {
-  applyPlaceholders, hideAllPlaceholders, noteInkBox, PLACEHOLDER_SLOT_ATTR, placeholdersEnabled, placeholderWanted,
+  applyPlaceholders, hideAllPlaceholders, noteInkBox, removePlaceholderStyle, PLACEHOLDER_SLOT_ATTR, placeholdersEnabled, placeholderWanted,
   resetPlaceholderGeometry, setCatchingUpClips, setPlaceholdersEnabled, setStreamBoxSource, shownPlaceholders, shownSince,
 } from "./render/placeholderHost";
 import { PLACEHOLDER_SHOW_DELAY_MS } from "./render/placeholder/contract";
-import { measureContentBox, type CanvasPixels } from "./render/contentBox";
+import { measureLocalContentBox, type CanvasPixels } from "./render/contentBox";
 import { createGlHost } from "./render/gl/glHost";
 import { glPlanes } from "./render/gl/planes";
 import { resolveGlRoute } from "./render/costDevice.mjs";
@@ -409,8 +409,7 @@ export default function StageView() {
         for (const el of root.querySelectorAll<HTMLElement>("[data-pc-clip]:not([data-pc-media])")) {
           const id = el.getAttribute("data-pc-clip");
           if (!id || el.classList.contains("pc-suppressed") || el.classList.contains("pc-awaiting") || el.classList.contains("pc-settling")) continue;
-          const b = measureContentBox(el, cache);
-          if (b) noteInkBox(id, { left: b.l, top: b.t, width: b.r - b.l, height: b.b - b.t });
+          noteInkBox(id, measureLocalContentBox(el, cache));
         }
       }, 300);
     };
@@ -1623,6 +1622,7 @@ export default function StageView() {
           // 后台舞台永远没有占位符(rendering.md「兜底顺序」):先撤下,再关掉 —— 这一次提交里槽位一起摘掉
           hideAllPlaceholders(slotOf);
           setPlaceholdersEnabled(false);
+          removePlaceholderStyle();
           setCatchingUpClips([]);
           // 同一次提交里把全部平面和类去掉 —— 互换那一拍新 `back` 不能还盖着旧画面
           commitPlanes();
@@ -1632,6 +1632,8 @@ export default function StageView() {
             setPlaceholdersEnabled(true);
             commitPlanes();
           }
+          // 墨迹框是每个舞台自己量的:刚转正的这一台(K5 互换)手里没有,趁它此刻是精确活渲量一次
+          scheduleInkBoxes();
           // K5 (6):新 `front` post 一次 `{ type: 'settled', sec, clipIds: [] }`
           if (wasBack) postStageEvent({ type: "settled", sec: ref.current.t, clipIds: [] });
         }
