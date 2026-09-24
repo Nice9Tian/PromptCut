@@ -237,3 +237,4 @@ export async function applyResult(pipeline, client, result) → { written: numbe
 6. **分段的 `encoder`**：取这个分段所用 init 的 `encoder`。
 7. **`result` 超限**：超过 256 KiB 时 `collect*` 抛错（`code: 'result-too-large'`），`sink.put` 捕获后回 `{ complete: false }`。
 8. **`applyResult` 的计数**：`written` 是实际落盘的帧数 / 分段数，`skipped` 是本机已有而跳过的，`fetched` 是下载的块数，init 也算。
+10. **候选扩展名的完整口径**（更正第 10 节第 6 条）：`snap` / `px` 的候选扩展名依次是 `html`、`mp4`、`m4s`、`snap` / `px` 专用 MIME 表（`ARTIFACT_MIME_TO_EXT`）里的全部扩展名（含 `png` 等），最后是 `htm`、`m4v`、`jpeg`。不在这张表里的才按第 8 条存成不带扩展名的 `<hash>`。以实现里的 `ARTIFACT_EXTS` 为准。
