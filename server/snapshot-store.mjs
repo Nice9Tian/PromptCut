@@ -50,27 +50,10 @@ export const rangeCount = ranges => ranges.reduce((total, [from, to]) => total +
 export const rangeHas = (ranges, frame) => ranges.some(([from, to]) => frame >= from && frame <= to);
 
 /**
- * 每个控件走哪一档(A3a)。输入是审阅表给的 capabilities
- * (`src/kernel/frameMode.mjs` 的 `cardCapabilities`,或 `cardGraph` 给合成节点
- * 写的那一份)。
- *
- *   共享档:审阅表 independent / sourceDependent **且** stateful —— canvas 卡同样
- *           按这个判据(它的快照里 [data-pc-gl-plane] 已转成 <img>,M4);
- *   本地档:其余 stateful,含 belowDependent 毛玻璃卡、需要整场景上下文的 context,
- *           **以及 unknown**(计划 3.1(2):真实项目里的定制卡和带部件的组合卡片段
- *           都是 unknown,底稿的「一律判重、没有死素材、只能透明」会让它们在播放和
- *           拖动时整片消失;改成一律按下层依赖卡 belowDependent 处理 —— 照测、照实测
- *           分派,判轻就活渲,判重用本地档快照,不上云、不进流);
- *   不预渲染:非 stateful 的轻卡(渲染 9:在所有位置都判轻的不产快照)。
+ * 每个控件走哪一档(A3a)。实现搬到 `snapshot-tier.mjs`(不引任何模块),这样
+ * `server/render-node/` 只靠 Node 内置模块就能用它;这里转出,调用方不用改。
  */
-export function snapshotTier(capabilities) {
-  const caps = capabilities ?? {};
-  const stateful = caps.frameMode === 'stateful' || caps.need_prerendering === true || caps.needPrerendering === true;
-  if (!stateful) return 'none';
-  const compositing = caps.compositing || 'unknown';
-  if (compositing === 'independent' || compositing === 'sourceDependent') return 'shared';
-  return 'local';
-}
+export { snapshotTier } from './snapshot-tier.mjs';
 
 /**
  * A3c 的单帧快照体积上限。超过它的那一帧**照常落盘**(下一次不用重渲),但
