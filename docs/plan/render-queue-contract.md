@@ -805,3 +805,15 @@ export async function probeBrowserEnvironment({ browser, page }, { platform = pr
 | Pipeline/Node | 新建 `server/bakery/environment.mjs`；改 `server/card-cache.mjs`、`server/frame-stream.mjs`、`server/frame-pipeline.mjs`、`server/render-node/split.mjs`、`server/vite-plugin-frames.ts`。不改 `server/card-identity.mjs` |
 | Verification/Test | 新建 `server/test/env-fingerprint-keys.test.mjs`；改受影响的既有 `server/test/*.test.mjs`、`scripts/probes/ready-index-probe.mjs`、`scripts/probes/stream-produce-probe.mjs` |
 | 主 Agent | 本节；设计 2.1「对现有代码的影响」、`TODO.md`、任务书、报告 `docs/reports/REPORT-render-queue-m4.md` |
+
+### E.9 定稿后的补充细则（2026-09-24，主 Agent 按实现方与测试方的疑点裁定）
+
+- **E.1 超时**：`timeoutMs` 按步算。两步（`browser.version()` 与页面探测）并行，各自限时，所以整次探测最多约 `timeoutMs`。
+- **E.1 空值**：缺项一律按空串计。`version()` 返回空串算这一步失败（`detected: false`）。
+- **E.3 解析顺序**：指纹在 `plan()` 开头、读 browserPlan 之前解析。没有指纹时，空的或非法的 browserPlan 也抛出，不先回 `[]`。
+- **E.4 回退**：单卡流成员键的回退写成 `contentKey ?? (snapshotKey || key)`，与旧代码的 `snapshotKey || key` 一致。
+- **E.5 流任务**：流任务的 `input.contentKey` 是流的内容键（`spec.contentKey`），不是结果键 `streamKey`。
+- **E.5 本地档**：本地档任务的 `resultKey` 是队列里的任务身份，不等于落盘目录键 `<entryKey>/<snapshotKey>`，这是有意的。
+  - 共享档和流的任务身份与落盘键重合，因为它们没有 `entryKey` 这一层。
+  - M5 的产物库接口按 `input.entryKey` 与去掉 `<entryKey>/` 前缀的内容键，用同一个指纹重算落盘键。
+- **E.6 实际效果**：页面用 GPU 栅格化，本机预渲染用 SwiftShader，两边指纹几乎不可能相同，所以这道闸实际上停掉了测量帧入库。这条路径以后怎么处理记在 `TODO.md`，本阶段不改页面。
