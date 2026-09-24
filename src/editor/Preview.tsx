@@ -471,12 +471,22 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
   const pumpRef = useRef(pumpFeed);
   pumpRef.current = pumpFeed;
 
-  /* C3 的就绪索引:页面直连预渲染进程的那条 SSE(`snapshotSource.ts`) */
+  /*
+   * C3 的就绪索引:页面直连预渲染进程的那条 SSE(`snapshotSource.ts`)。
+   *
+   * **编辑不重连、不清表**(根因 E):项目每变一次这里只核一下 session(镜像可能刚起来、或换了项目),
+   * 同一个 session 什么都不做。以前清理函数挂在带 `project` 的 effect 上 —— 每次编辑先
+   * `stopSnapshotFeed()` 把就绪索引、字节缓存、投递基线全清掉再重连,重连空档里播放中的重卡全透明。
+   * 拆成两个:核 session 的跟着 `project` 跑,收摊的只在 `dual` 变了 / 卸载时跑。
+   */
   useEffect(() => {
     if (!dual) return;
     syncSnapshotSubscription(() => { void pumpRef.current(); });
-    return () => stopSnapshotFeed();
   }, [dual, project]);
+  useEffect(() => {
+    if (!dual) return;
+    return () => stopSnapshotFeed();
+  }, [dual]);
 
   /* 换了 iframe:那一份投递基线跟着作废,下一次带 `reset`(A3c) */
   useEffect(() => {

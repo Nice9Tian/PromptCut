@@ -108,13 +108,16 @@ export function currentReadyIndex(): ReadyIndex {
 }
 
 /**
- * 订阅就绪索引（C3 的 SSE，页面直连预渲染进程）。`localRev` 变了就换一条 ——
- * 键是内容寻址的，所以旧的那条上的 `layer` 对新版本不一定还成立。
+ * 订阅就绪索引（C3 的 SSE，页面直连预渲染进程）。**只按 session 做键**（根因 E）：
+ * 编辑一次 `localRev` + 1，以前这里就清表、重连，而服务端 `/api/frames/ready` 根本不看
+ * session / localRev —— 重连空档里播放中的重卡一律透明。现在客户端不抢先清表：旧的层按
+ * 「沿用旧的预渲染结果」顶着，等预渲染进程换了 entry 发 `reset` 再清（`adoptCardPlan`）。
+ * 换项目（session 变了）才重连。
  */
 export function syncSnapshotSubscription(notify: () => void): void {
   onArrive = notify;
   const key = mirrorKey();
-  const want = key ? `${key.session}#${key.localRev}` : "";
+  const want = key ? key.session : "";
   if (want === subscribedTo) return;
   unsubscribe?.();
   unsubscribe = null;
