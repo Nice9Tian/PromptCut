@@ -224,9 +224,18 @@ export const staged = (pipeline, kind, key) => pipeline.ready.stagedKeys().find(
  */
 export async function startServices(harness, newClient) {
   const srv = await harness.serve();
-  const client = newClient(srv.base);
-  const docs = await startContentService();
-  const { content } = await connectContent(docs);
+  let docs = null;
+  let client, content;
+  try {
+    client = newClient(srv.base);
+    docs = await startContentService();
+    ({ content } = await connectContent(docs));
+  } catch (err) {
+    // 载不进被测模块时也要把起了的服务关掉，否则进程不退出
+    await docs?.cleanup();
+    await srv.close();
+    throw err;
+  }
   return {
     srv, client, docs, content,
     /** 再连一条内容库客户端（另一台机器） */
