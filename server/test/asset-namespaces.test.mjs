@@ -233,13 +233,16 @@ test('S2 snap、px 的分片、对账、收尾、Range、HEAD、CORS、401 规�
       const strip = (body) => (body && typeof body === 'object' && 'url' in body ? { ...body, url: typeof body.url } : body);
       assert.deepEqual(strip(b.body), strip(a.body), `${ns}「${name}」回包`);
     }
+    // 契约第 10 节第 2 条：snap / px 的 url 是 `/api/asset/<ns>/<hash>`；media 照旧 `/@media/<hash>`
     const fin = got.find(([n]) => n === '收尾：到齐')[1].body;
-    assert.equal(typeof fin.url, 'string', `${ns} 收尾回包带 url`);
-    assert.ok(!fin.url.startsWith('/@media/'), `${ns} 的取回地址不该指向老路由 /@media/（它只对应 media）：${fin.url}`);
+    assert.equal(fin.url, `/api/asset/${ns}/${runs[ns].hash}`, `${ns} 收尾回包的 url`);
+    const again = got.find(([n]) => n === '入库后再收尾')[1].body;
+    assert.equal(again.url, `/api/asset/${ns}/${runs[ns].hash}`, `${ns} 入库后再收尾的 url`);
   }
+  assert.equal(get('收尾：到齐').body.url, `/@media/${runs.media.hash}`, 'media 的 url 照旧');
 });
 
-test('S2b MIME 表补了 text/html → html、video/iso.segment → m4s；X-Media-Ext 优先；三个命名空间一样', async () => {
+test('S2b snap / px 专用的 MIME 表认 text/html → html、video/iso.segment → m4s，media 的表不变；X-Media-Ext 优先', async () => {
   const srv = await harness.serve({ chunkSize: CHUNK, isTrusted: () => true, token: null });
   const { base, stores } = srv;
   let seed = 100;
@@ -250,13 +253,85 @@ test('S2b MIME 表补了 text/html → html、video/iso.segment → m4s；X-Medi
     assert.equal((await complete(base, ns, hash)).status, 200);
     return (await stores[ns].stat(hash))?.ext;
   };
-  for (const ns of NS) {
+  for (const ns of ['snap', 'px']) {
     assert.equal(await one(ns, { 'X-Media-Type': 'text/html' }), 'html', `${ns} text/html`);
     assert.equal(await one(ns, { 'X-Media-Type': 'text/html; charset=utf-8' }), 'html', `${ns} text/html; charset`);
     assert.equal(await one(ns, { 'X-Media-Type': 'video/iso.segment' }), 'm4s', `${ns} video/iso.segment`);
+    assert.equal(await one(ns, { 'X-Media-Type': 'video/mp4' }), 'mp4', `${ns} video/mp4`);
+  }
+  for (const ns of NS) {
     assert.equal(await one(ns, { 'X-Media-Ext': 'mp4', 'X-Media-Type': 'video/iso.segment' }), 'mp4', `${ns} 扩展名优先`);
     assert.equal(await one(ns, { 'X-Media-Ext': 'm4s' }), 'm4s', `${ns} 直接给扩展名`);
     assert.equal(await one(ns, {}), '', `${ns} 都没给`);
+  }
+  // 契约第 10 节第 1 条：不改共享的 MIME_TO_EXT，media 落盘的文件名不变
+  assert.equal(await one('media', { 'X-Media-Type': 'text/html' }), '', 'media 不认 text/html');
+  assert.equal(await one('media', { 'X-Media-Type': 'video/iso.segment' }), '', 'media 不认 video/iso.segment');
+  assert.equal(await one('media', { 'X-Media-Type': 'video/mp4' }), 'mp4', 'media 原有的表照旧');
+});
+
+test('S2c 缺省的 snap、px 是 fs 实现，目录固定在 <root>/out/asset-store/<ns>、不看 PROMPTCUT_EXPORT_DIR，不写媒体索引；按候选文件名找已有文件', async () => {
+  const fsp = await import('node:fs/promises');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const exportDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'pc-c62-export-'));
+  const before = process.env.PROMPTCUT_EXPORT_DIR;
+  process.env.PROMPTCUT_EXPORT_DIR = exportDir;
+  try {
+    const srv = await harness.serve({ stores: 'default', isTrusted: () => true, token: null });
+    const { base, root } = srv;
+    const html = Buffer.from('<div data-pc-scene="">snapshot</div>', 'utf8');
+    const seg = bytesOf(900, 41);
+    const hh = sha256(html), hs = sha256(seg);
+    assert.equal((await put(base, 'snap', hh, 0, html, { 'X-Media-Size': String(html.length), 'X-Media-Type': 'text/html' })).status, 200);
+    assert.equal((await complete(base, 'snap', hh)).status, 200);
+    assert.equal((await put(base, 'px', hs, 0, seg, { 'X-Media-Size': String(seg.length), 'X-Media-Ext': 'm4s' })).status, 200);
+    assert.equal((await complete(base, 'px', hs)).status, 200);
+
+    const snapDir = path.join(root, 'out', 'asset-store', 'snap');
+    const pxDir = path.join(root, 'out', 'asset-store', 'px');
+    assert.ok((await fsp.readFile(path.join(snapDir, `${hh}.html`))).equals(html), 'snap 落在 <root>/out/asset-store/snap/<hash>.html');
+    assert.ok((await fsp.readFile(path.join(pxDir, `${hs}.m4s`))).equals(seg), 'px 落在 <root>/out/asset-store/px/<hash>.m4s');
+    const walk = async (dir) => {
+      const out = [];
+      let items = [];
+      try { items = await fsp.readdir(dir, { withFileTypes: true }); } catch { return out; }
+      for (const item of items) {
+        const p = path.join(dir, item.name);
+        if (item.isDirectory()) out.push(...await walk(p)); else out.push(p);
+      }
+      return out;
+    };
+    for (const file of await walk(exportDir)) {
+      assert.ok(!file.includes(hh) && !file.includes(hs), `PROMPTCUT_EXPORT_DIR 下不该有 snap / px 的文件：${file}`);
+      if (file.endsWith('.json')) {
+        const text = await fsp.readFile(file, 'utf8');
+        assert.ok(!text.includes(hh) && !text.includes(hs), `媒体索引不该记 snap / px 的块：${file}`);
+      }
+    }
+    assert.equal((await fetch(`${base}/media/${hh}`)).status, 404, 'media 里没有 snap 的块');
+
+    // 取回（Content-Type 契约没定，不比）
+    const g = await fetch(`${base}/snap/${hh}`);
+    assert.equal(g.status, 200);
+    assert.ok(Buffer.from(await g.arrayBuffer()).equals(html));
+
+    // 候选文件名：直接放进目录的 <hash>.mp4、无扩展名的 <hash> 都找得到，算已入库
+    const init = bytesOf(333, 42);
+    const hi = sha256(init);
+    await fsp.writeFile(path.join(pxDir, `${hi}.mp4`), init);
+    const bare = bytesOf(222, 43);
+    const hb = sha256(bare);
+    await fsp.writeFile(path.join(snapDir, hb), bare);
+    assert.equal((await chunks(base, 'px', hi)).complete, true, 'px/<hash>.mp4 算已入库');
+    const gi = await fetch(`${base}/px/${hi}`);
+    assert.equal(gi.status, 200);
+    assert.ok(Buffer.from(await gi.arrayBuffer()).equals(init));
+    assert.equal((await chunks(base, 'snap', hb)).complete, true, '无扩展名的 <hash> 也算已入库');
+    assert.equal((await fetch(`${base}/snap/${hb}`)).status, 200);
+  } finally {
+    if (before === undefined) delete process.env.PROMPTCUT_EXPORT_DIR; else process.env.PROMPTCUT_EXPORT_DIR = before;
+    await fsp.rm(exportDir, { recursive: true, force: true });
   }
 });
 
@@ -285,22 +360,25 @@ test('S3 旧写法 opts.store 仍然认、当作 stores.media；只给 stores.me
 
 /* ------------------------------------------------------------------ S4 */
 
-test('S4 不认识的命名空间回 400 或 404、不落任何状态；isAssetServicePath 只认三个命名空间', async () => {
+test('S4 不认识的命名空间：素材服务不处理（交给 next，本测试的兜底回 404）、回 4xx、不落任何状态；isAssetServicePath 只认三个命名空间', async () => {
   const srv = await harness.serve({ chunkSize: CHUNK, isTrusted: () => true, token: null });
   const { base, stores } = srv;
   const buf = bytesOf(100, 31);
   const hash = sha256(buf);
+  const is4xx = (s) => s >= 400 && s < 500;
   for (const ns of ['foo', 'snaps', 'pix', 'mediax', 'asset', 'png', 'x']) {
     const p = await put(base, ns, hash, 0, buf, { 'X-Media-Size': '100' });
-    assert.ok([400, 404].includes(p.status), `${ns} PUT 回 ${p.status}`);
-    await p.arrayBuffer();
+    assert.ok(is4xx(p.status), `${ns} PUT 回 ${p.status}`);
+    // 契约第 10 节第 3 条：中间件交给 next()，回包来自本测试的兜底（纯文本 no route），不是素材服务的 JSON，也不带跨源头
+    assert.equal(await p.text(), 'no route', `${ns} PUT 应当落到兜底`);
+    assert.equal(p.headers.get('access-control-allow-origin'), null, `${ns} 素材服务没接手，不补跨源头`);
     const c = await complete(base, ns, hash);
-    assert.ok([400, 404].includes(c.status), `${ns} complete 回 ${c.status}`);
-    await c.arrayBuffer();
+    assert.ok(is4xx(c.status), `${ns} complete 回 ${c.status}`);
+    assert.equal(await c.text(), 'no route');
     for (const tail of ['/chunks', '']) {
       const g = await fetch(`${base}/${ns}/${hash}${tail}`);
-      assert.ok([400, 404].includes(g.status), `${ns} GET${tail} 回 ${g.status}`);
-      await g.arrayBuffer();
+      assert.ok(is4xx(g.status), `${ns} GET${tail} 回 ${g.status}`);
+      assert.equal(await g.text(), 'no route');
     }
   }
   for (const ns of NS) {

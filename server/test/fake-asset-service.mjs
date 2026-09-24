@@ -15,7 +15,7 @@
  *
  * `serve` 的选项：
  *   - `chunkSize`：三个 memory 实现的分片大小，缺省 8 MiB；
- *   - `stores`：自己给的三个数据层（给了就不新建）；
+ *   - `stores`：自己给的三个数据层（给了就不新建）；`'default'` = 一个都不传，走中间件的缺省（fs 实现）；
  *   - `token` / `isTrusted`：原样传给 `assetServiceMiddleware`（不给就不传，走中间件的缺省）；
  *   - `legacyStore: true`：只按旧写法传 `opts.store`（= media），不传 `opts.stores`（S3 用）。
  */
@@ -83,8 +83,9 @@ export function createAssetHarness() {
     const a = await asset();
     const root = path.join(OUT, `project-${++rootSeq}`);
     fs.mkdirSync(mediaMod.mediaDir(root), { recursive: true });
-    const own = stores ?? { media: await memoryStore(chunkSize), snap: await memoryStore(chunkSize), px: await memoryStore(chunkSize) };
-    const opts = legacyStore ? { store: own.media } : { stores: own };
+    const useDefault = stores === 'default';
+    const own = useDefault ? null : (stores ?? { media: await memoryStore(chunkSize), snap: await memoryStore(chunkSize), px: await memoryStore(chunkSize) });
+    const opts = useDefault ? {} : legacyStore ? { store: own.media } : { stores: own };
     if (token !== undefined) opts.token = token;
     if (isTrusted !== undefined) opts.isTrusted = isTrusted;
     const service = a.assetServiceMiddleware(root, opts);
