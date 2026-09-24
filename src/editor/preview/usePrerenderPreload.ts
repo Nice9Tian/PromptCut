@@ -2,7 +2,6 @@ import { useEffect, useRef } from "react";
 import type { Project } from "../../kernel/project";
 import { frameRequest } from "../../render/frameClient";
 import { createPreloadScheduler, type PreloadScheduler, type PreloadStatus } from "./prerenderPreload";
-import { onReadyLost } from "../snapshotFeed";
 
 /**
  * 页面触发预渲染的公共 hook(调度见 `prerenderPreload.ts`):编辑推送成功、空闲时防抖发 `preload`,没就绪就接着问。
@@ -26,10 +25,7 @@ export function usePrerenderPreload(project: Project, opts: { enabled: boolean; 
       clearTimer: (t) => clearTimeout(t as ReturnType<typeof setTimeout>),
     });
     schedulerRef.current = scheduler;
-    // 预渲染进程丢了这个会话的版本(重启 / 回收):马上补发一次,播放中也发(Item 4)
-    const offLost = onReadyLost(() => scheduler.resync());
     return () => {
-      offLost();
       scheduler.dispose();
       if (schedulerRef.current === scheduler) schedulerRef.current = null;
     };

@@ -8,7 +8,7 @@ import path from "node:path";
 import { createRequire } from "node:module";
 import { isPrerender } from "./render-role.mjs";
 import { prerenderState, setPrerender } from "./prerender-client.mjs";
-import { repushMirror } from "./vite-plugin-mirror";
+import { repushMirror, replayReadySessions } from "./vite-plugin-mirror";
 import { stageOriginsOf } from "./stage-ports.mjs";
 
 /**
@@ -149,7 +149,15 @@ export function prerenderPlugin(): Plugin {
                * 补推过去,不然下一个帧请求只能靠回拉兜 —— 回拉是一趟额外的往返,
                * 而且崩溃重启往往正赶上用户在拖时间轴。
                */
-              void repushMirror(url).catch(() => {});
+              /*
+               * 补推完镜像,再照会话版本登记把 preload 串行重放一遍(Item 4 方案 A):
+               * 预渲染进程只认 preload 带来的会话版本,崩溃重启后靠这一步重新知道每个会话是哪一版,
+               * 页面不用做任何事。重放途中它又重启了(`child !== me`)就停,交给下一轮。
+               */
+              void repushMirror(url)
+                .then(() => replayReadySessions(url, () => child === me))
+                .then((results) => { if (results.length) console.log(`[prerender] 重启后重放 preload:${JSON.stringify(results)}`); })
+                .catch(() => {});
               return;
             }
           } catch { /* 还没起来 */ }

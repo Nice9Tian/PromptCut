@@ -18,12 +18,6 @@ export const PRELOAD_DEBOUNCE_MS = 800;
 export const PRELOAD_POLL_MS = 2000;
 /** 请求失败(预渲染进程重启等)之后隔多久重试 */
 export const PRELOAD_RETRY_MS = 4000;
-/**
- * 就绪之后也隔这么久再报一次(Item 4):预渲染进程只认 preload 带来的会话版本,
- * 它重启之后要靠这一下重新知道「这个会话现在是哪一版」,就绪索引才会再长出来。
- * 同一版的 preload 在服务端是空操作(只刷新会话的活跃时间)。
- */
-export const PRELOAD_KEEPALIVE_MS = 30000;
 
 export interface PreloadStatus {
   status?: string;
@@ -44,8 +38,6 @@ export interface PreloadScheduler {
   edited(): void;
   /** 空闲与否(不在播放、不在拖动) */
   setIdle(idle: boolean): void;
-  /** 预渲染进程丢了这个会话的版本(Item 4):马上发一次,不等空闲、不等防抖 */
-  resync(): void;
   dispose(): void;
 }
 
@@ -67,8 +59,8 @@ export function createPreloadScheduler(deps: PreloadDeps): PreloadScheduler {
     timer = deps.setTimer(() => { timer = null; void run(); }, ms);
   };
 
-  const run = async (force = false): Promise<void> => {
-    if (disposed || (!idle && !force) || inFlight) return;
+  const run = async (): Promise<void> => {
+    if (disposed || !idle || inFlight) return;
     inFlight = true;
     dirty = false;
     let status: PreloadStatus | null = null;
@@ -86,7 +78,7 @@ export function createPreloadScheduler(deps: PreloadDeps): PreloadScheduler {
     if (!idle) return;
     // 请求在飞的时候又编辑了:按防抖再发一次;否则没就绪就接着问
     if (dirty) arm(PRELOAD_DEBOUNCE_MS);
-    else arm(done ? PRELOAD_KEEPALIVE_MS : PRELOAD_POLL_MS);
+    else if (!done) arm(PRELOAD_POLL_MS);
   };
 
   return {
@@ -102,18 +94,7 @@ export function createPreloadScheduler(deps: PreloadDeps): PreloadScheduler {
       if (!idle) { clear(); return; }
       // 空闲了:播放中后台那一版可能停在 `partial`,复查一次(同样按防抖,拖动刚松手不马上抢)
       if (!done) dirty = true;
-      if (inFlight) return;
-      if (dirty) arm(PRELOAD_DEBOUNCE_MS);
-      else arm(PRELOAD_KEEPALIVE_MS);
-    },
-    resync() {
-      if (disposed) return;
-      dirty = true;
-      done = false;
-      // 在飞的那一个本身就会把版本报上去
-      if (inFlight) return;
-      clear();
-      void run(true);
+      if (dirty && !inFlight) arm(PRELOAD_DEBOUNCE_MS);
     },
     dispose() {
       disposed = true;

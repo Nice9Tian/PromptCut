@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { createMirrorStore } from "./mirror-store.mjs";
 import { isPrerender } from "./render-role.mjs";
 import { prerenderState } from "./prerender-client.mjs";
+import { createReadySessionRegistry, replayReadySessions as replaySessions } from "./ready-session-registry.mjs";
 
 /**
  * 数据管理的只读镜像(A7)。**两个进程都挂这一份插件。**
@@ -31,6 +32,9 @@ import { prerenderState } from "./prerender-client.mjs";
  * 3. **补推**:预渲染进程重启、健康检查刚过时,编辑器把每个 session 的最新一版整份推过去。
  *
  * 转发按目标串成一条链发(一次只飞一个),否则到达顺序没保证,补丁会踩空基线。
+ *
+ * 补推之后还有一步(Item 4 方案 A):照「会话版本登记」把每个会话最后一次被接受的 preload
+ * 串行重放一遍,预渲染进程据此重新知道每个会话当前是哪一版、把就绪索引长回来(`replayReadySessions`)。
  */
 
 const store = createMirrorStore();
@@ -128,6 +132,45 @@ export async function repushMirror(url: string): Promise<void> {
   }
 }
 
+/* ------------------------------------------------ 会话版本登记(Item 4 方案 A) */
+
+/**
+ * 每个页面会话最后一次被预渲染进程接受的 preload(`server/ready-session-registry.mjs`)。
+ * 只在编辑器进程里有内容;预渲染进程重启后由 `replayReadySessions` 照着重放。
+ */
+const readySessions = createReadySessionRegistry();
+
+/**
+ * 预渲染进程接受了一次 preload:报给编辑器进程登记。编辑器进程自己收到的就地登记。
+ * 发出去就不管 —— 登记只为重启恢复,丢一次无妨(下一次 preload 会再报)。
+ */
+export function reportReadySession(session: string, localRev: unknown): void {
+  if (!session) return;
+  if (!isPrerender) { readySessions.record(session, localRev); return; }
+  const base = editorUrl();
+  if (!base) return;
+  void postJson(base + "/api/data/ready-session", { session, localRev }, 3000).catch(() => {});
+}
+
+/** 测试 / 诊断用 */
+export function readySessionList() { return readySessions.list(); }
+
+/**
+ * 预渲染进程重启、镜像补推完之后:按登记表把 preload 串行重放一遍(一次一个,最近活跃的先)。
+ * `isCurrent`:重放途中预渲染进程又换了(再次重启)就停,交给下一轮。
+ */
+export async function replayReadySessions(url: string, isCurrent: () => boolean = () => true) {
+  return replaySessions({
+    sessions: readySessions.list(),
+    resolve: (session: string, localRev: number) => (getMirror(session, localRev) ?? getMirror(session))?.localRev ?? null,
+    preload: async ({ session, localRev }: { session: string; localRev: number }) => {
+      const { status, data } = await postJson(url + "/api/frames/preload", { session, localRev, lane: "background" }, 10000);
+      return { ok: status >= 200 && status < 300, status: data?.status ?? status };
+    },
+    isCurrent,
+  });
+}
+
 /* ---------------------------------------------------------------- HTTP */
 
 function sendJson(res: ServerResponse, code: number, data: unknown) {
@@ -215,6 +258,20 @@ export function mirrorPlugin(): Plugin {
           } catch (e: any) {
             sendJson(res, 400, { ok: false, error: e?.message || String(e) });
           }
+        });
+      });
+
+      /*
+       * 会话版本登记(Item 4 方案 A):预渲染进程每接受一次 preload 就报到这里。
+       * 只在编辑器进程里登记 —— 它是预渲染进程的父进程,预渲染崩溃重启后由它照表重放 preload。
+       */
+      server.middlewares.use("/api/data/ready-session", (req, res) => {
+        if (req.method !== "POST") return sendJson(res, 405, { ok: false, error: "POST only" });
+        if (isPrerender) return sendJson(res, 404, { ok: false, error: "会话版本只登记在编辑器进程" });
+        readBody(req, res, 4 * 1024, (d) => {
+          const session = typeof d.session === "string" ? d.session : "";
+          if (!session || session.length > 200) return sendJson(res, 400, { ok: false, error: "session 参数不合法" });
+          sendJson(res, 200, { ok: true, changed: readySessions.record(session, d.localRev) });
         });
       });
 

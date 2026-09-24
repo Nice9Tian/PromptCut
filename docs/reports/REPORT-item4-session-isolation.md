@@ -96,13 +96,17 @@ Agent 的查询渲染（`see_frames`，lane `agent`）、导出（final）、交
   - 让路恢复只重排仍有会话停着的版本;已跑完的代次不当过期掐掉。
 - `server/frame-stream.mjs`:流层按 `state.entryKey` 过闸;`update` 先读盘再同步改状态(两次 update 交错时旧的整个作废)。
 - `server/vite-plugin-frames.ts`:`/ready?session=` 分片订阅;`/preload` 带 `{ session, localRev }`、进门领号;session 参数统一校验。
-- 页面侧(`src/editor/preview/prerenderPreload.ts`、`usePrerenderPreload.ts`、`src/editor/snapshotFeed.ts`):就绪之后每 30 秒保活一次 preload;收到 `localRev 0` 的 `reset`(预渲染重启 / 会话被回收)立即补发一次,播放中也发。
+- 预渲染进程重启后的会话恢复(方案 A,**只改服务端**):
+  - `server/ready-session-registry.mjs`:会话版本登记表住在编辑器进程(预渲染进程的父进程),每个会话只留最大的 `localRev`,封顶 64、LRU。它是易失的视图状态(按页面、按机器),不进文档服务。
+  - 预渲染进程每接受一次 preload,就报给编辑器进程登记(`POST /api/data/ready-session`,只报这个会话真正认下的版本)。
+  - 编辑器拉起预渲染进程、补推镜像之后,按登记表**串行**重放 preload(一次一个、最近活跃的先、至多 8 个;中途预渲染又重启就停)。镜像里已经没有的会话跳过,记下的那一版滑出窗口就退到最新一版。
+  - 页面侧不参与恢复:一度加过的 30 秒保活和重启补发已撤掉(用户评审:职责倒置、重启时的请求风暴、空转流量)。
 
 ### 验证
 
-- 新增 `server/test/ready-session-isolation.test.mjs`(22 条):旧批次晚到(含撤销回旧版、流分段晚到、真实调用点 `missingSnapshotFrames` / `fillAnchorSnapshots`)、Agent / 导出 / 交互帧混杂渲染(五条 lane 的 `cardRender`、`adopt: false`)、多会话交替、preload 乱序、会话回收与封顶、staged 封顶、集合缩小撤层、reset 延后。改写 `ready-stale-flush`、`prerender-schedule` R6-7、`frame-stream` 的认领测试;页面侧补保活、resync、`onReadyLost` 测试。
-- 基线:`npx tsc -b --force` 零错误;`npm test` 1905 项 1904 过、0 失败、1 跳过(需要 5190 的既有集成测试)。
-- 探针(worktree 起的 5230):`ready-index-probe` 全过(含 ⑦ 重启恢复、⑨ 重算集合 —— ⑨ 的重跑触发方式从「换 `project.id`」改为「换会话」,因为 owner 现在按会话分);`preview-fallback-probe`(`--page-preload` 与缺省两种)PASS、无提示透明 0 拍;`stream-produce-probe` PASS;`verify-unified-frames` PASS。
+- 新增 `server/test/ready-session-isolation.test.mjs`(22 条):旧批次晚到(含撤销回旧版、流分段晚到、真实调用点 `missingSnapshotFrames` / `fillAnchorSnapshots`)、Agent / 导出 / 交互帧混杂渲染(五条 lane 的 `cardRender`、`adopt: false`)、多会话交替、preload 乱序、会话回收与封顶、staged 封顶、集合缩小撤层、reset 延后。改写 `ready-stale-flush`、`prerender-schedule` R6-7、`frame-stream` 的认领测试。新增 `server/test/ready-session-registry.test.mjs`(5 条):登记只进不退、LRU 封顶、重放串行(同时在飞至多 1 个)、镜像缺失跳过 / 滑出窗口退到最新、单个失败不影响后面、再次重启即停、重放封顶。
+- 基线:`npx tsc -b --force` 零错误;`npm test` 1907 项 1906 过、0 失败、1 跳过(需要 5190 的既有集成测试)。
+- 探针(worktree 起的 5230):`ready-index-probe` 全过(⑦ 改为**杀掉预渲染进程后谁都不发 preload**:编辑器重放 preload,SSE 依次收到 `reset(localRev 0)` → `reset(localRev 1)` → 崩之前的 6 层全部重建;⑨ 重算集合 —— ⑨ 的重跑触发方式从「换 `project.id`」改为「换会话」,因为 owner 现在按会话分);`preview-fallback-probe`(`--page-preload` 与缺省两种)PASS、无提示透明 0 拍;`stream-produce-probe` PASS(第一次紧接着两轮 fallback 探针跑时,1080p 分段编码 p50 313 ms 超了 300 ms 的「无别的编码器争 CPU」门槛;重启 dev server、空闲时单独重跑通过);`verify-unified-frames` PASS。
 - 没跑:`verify-determinism`(导出路径没改)。
 
 ### 已知遗留

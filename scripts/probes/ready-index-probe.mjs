@@ -9,7 +9,8 @@
  *   4. C4 选帧在冷缓存下回到区间起点;
  *   5. 超限帧不出现在索引里(A3c),但盘上有;
  *   6. `unknown` 卡出现在 `'local'` 表里(计划 3.1(2));
- *   7. 杀掉预渲染进程再起来:索引按键重建、**项目到位之后才发 `layer`**(F5);
+ *   7. 杀掉预渲染进程再起来:**没人发 preload**,编辑器进程照会话版本登记重放 preload,
+ *      索引按键重建、**会话版本回来之后才发 `layer`**(F5 + Item 4 方案 A);
  *   8. `wanted` 发出后对应片段的批被提前(C4 服务端消费侧);
  *   9. **在所有位置都判轻的卡不产快照、不进就绪索引**(pinned 渲染 9)——
  *      给一张 stateful 卡写一条便宜的成本记录,它就该从预渲染集合里掉出去。
@@ -302,22 +303,23 @@ try {
       await until('重启后的 SSE 收到第一条', () => after.messages.length > 0 || null, 30000);
       out.afterRestartFirst = after.messages[0];
       check(after.messages[0]?.type === 'reset', '⑦ 重连先收到 reset', after.messages[0]);
-      // **项目到位之前不发 layer**:扫盘只得到「键 → 区间」,clipId 要等 card plan
-      await delay(2000);
-      out.layersRightAfterRestart = after.messages.filter(m => m.type === 'layer').length;
-      check(out.layersRightAfterRestart === 0, '⑦ card plan 还没重算出来之前一条 layer 都不发', out.layersRightAfterRestart);
-      // 项目到位(repushMirror 已经补推)+ 重新预渲染 → 重算 card plan → reset + 全量 layer
-      await postJson(`${fresh}/api/frames/preload`, { session: SESSION, localRev: 1 });
-      const rebuilt = await until('索引按键重建、重新发出 layer', () => {
+      /*
+       * **服务端自己恢复**(Item 4 方案 A):探针这里不发 preload,页面也不会发(它早就就绪了)。
+       * 编辑器进程拉起预渲染进程、补推镜像之后,照「会话版本登记」把这个会话的 preload 重放一遍 ——
+       * 会话的版本回来(reset 带 localRev 1)、card plan 重算出来,层才按键重建。
+       */
+      const rebuilt = await until('索引按键重建、重新发出 layer(没有人发 preload)', () => {
         const t = indexOf(after.messages);
         return t.size >= beforeKill.size ? t : null;
       }, 300000, 500);
       out.layersAfterRebuild = rebuilt ? [...rebuilt.keys()].sort() : null;
-      check(!!rebuilt, '⑦ 项目到位之后索引按键重建、层数不少于崩之前', { before: [...beforeKill.keys()].sort(), after: out.layersAfterRebuild });
+      check(!!rebuilt, '⑦ 没人发 preload,服务端重放之后索引按键重建、层数不少于崩之前', { before: [...beforeKill.keys()].sort(), after: out.layersAfterRebuild });
       if (rebuilt) {
-        const resetIndex = after.messages.findIndex(m => m.type === 'reset' && after.messages.indexOf(m) > 0);
+        // 项目到位之前不发 layer:第一条 layer 一定在「会话版本回来」的那条 reset(localRev 1)之后
+        const resetIndex = after.messages.findIndex(m => m.type === 'reset' && m.localRev === 1);
         const firstLayer = after.messages.findIndex(m => m.type === 'layer');
-        check(resetIndex < 0 || resetIndex < firstLayer, '⑦ 重建时先 reset 再发全量 layer', { resetIndex, firstLayer });
+        out.recoveryReset = resetIndex;
+        check(resetIndex >= 0 && resetIndex < firstLayer, '⑦ 会话版本先回来(reset 带 localRev 1),再发全量 layer', { resetIndex, firstLayer });
         // 区间和崩之前一致(扫盘是按 index.json 重建的,不是从头再产)
         const same = [...beforeKill].every(([id, layer]) => JSON.stringify(rebuilt.get(id)?.ranges ?? null) !== 'null');
         check(same, '⑦ 崩之前有的层,重建之后都在', { before: [...beforeKill.keys()].sort(), after: out.layersAfterRebuild });
