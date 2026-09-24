@@ -1,5 +1,5 @@
 import { UnifiedPreview } from "./preview/UnifiedPreview";
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { isScrubbing, subscribeScrub } from "./timeline/useScrub";
 import { MediaLayers } from "./preview/MediaLayers";
 import { Scene3DView } from "./preview/Scene3DView";
@@ -8,7 +8,7 @@ import { actions, getState, useStore } from "../store/project";
 import { findClip } from "../kernel/project";
 import { nudgeFrame } from "../kernel/layout";
 import { createStageRpc, type HostCapabilities, type StageRpcClient } from "../render/stageRpc";
-import { frontStage, markPushed, onStageEvent, setStageClient, syncProject } from "./stageBridge";
+import { frontStage, markPushed, onStageEvent, releaseStageClient, setStageClient, syncProject } from "./stageBridge";
 import { INITIAL_ROLE_OF, STAGE_IDS, dualStage, stageSrc, stageTargetOrigin, type StageId } from "./previewMode";
 import { ControlBar } from "./preview/ControlBar";
 import { ToolBar, ToolType } from "./preview/ToolBar";
@@ -89,15 +89,13 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
   /**
    * 渲染面就绪的**代数**,不是一个布尔。0 = 还没就绪,之后每换一个新的渲染面就 +1。
    *
-   * 为什么不能是布尔:2D 那一页整棵子树(连同 iframe)挂在 `view === "3d" ? … : …` 的
-   * 另一支上,切到 3D 再切回来是**卸载再挂载**,iframe 是新的、里面的渲染面是空的。
-   * 而 `setStageReady(true)` 在已经是 true 时不改变 state,下面那两个 effect(下发
-   * project、下发时间)就不会重跑 —— 于是切回 2D 是一片空白,得去碰一下时间轴,
-   * 让 `t` 变一下把 render 那个 effect 逼出来,画面才回来。
+   * 为什么不能是布尔:iframe 里的渲染面换了一个(开发时热更新整页重载、iframe 重新挂载),
+   * 它是空的,得重新收一遍 project 和时间。而 `setStageReady(true)` 在已经是 true 时
+   * 不改变 state,下面那两个 effect(下发 project、下发时间)就不会重跑 —— 画面一片空白,
+   * 得去碰一下时间轴让 `t` 变一下才回来。(最早撞上它的是切 3D 再切回;现在 3D 页不卸 2D 了,
+   * 但热重载照样是「新的渲染面 + 旧的 true」。)
    *
    * 换成代数之后,每来一次 `pc-stage-ready` 都是一个新值,两个 effect 必定重跑。
-   * 顺带也管住了别的换渲染面的路子(改画幅换 key、开发时热更新整页重载),
-   * 那些同样是「新的 iframe + 旧的 true」。
    *
    * `!stageReady` 对 0 照样成立,所以下面那几处判断一个字都不用改。
    */
@@ -134,6 +132,29 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
    * 不能写死 `rpcRef.current.A`。legacy 的单舞台照样成立(它只登记了一个 `front`)。
    */
   const stage = useCallback((): StageRpcClient | null => frontStage(), []);
+  /**
+   * 舞台 iframe 的 ref。**卸掉的那一刻就把它的客户端 dispose 并从 stageBridge 摘下。**
+   *
+   * 以前只在下一次 `pc-stage-ready` 才换掉旧客户端,中间这段 `frontStage()` 一直交出一个
+   * 指向已关窗口的客户端:发给它的请求被浏览器静默丢弃、永不回包(3D 页播放失效就是这么挂住的)。
+   * 摘掉之后 `stage()` 回 null,各处本来就有的「没有舞台就先不发」分支接手。
+   *
+   * 回调要**稳定**(useMemo 只建一次):每次渲染换一个新函数的话,React 会先拿 null 调旧的 ——
+   * 那就成了每渲染一次 dispose 一次。
+   */
+  const frameRefOf = useMemo(() => {
+    const bind = (id: StageId, holder: React.RefObject<HTMLIFrameElement | null>) => (el: HTMLIFrameElement | null) => {
+      holder.current = el;
+      if (el) return;
+      const client = rpcRef.current[id];
+      if (!client) return;
+      rpcRef.current[id] = null;
+      hostCapsRef.current[id] = null;
+      releaseStageClient(client);
+      client.dispose();
+    };
+    return { A: bind("A", frameARef), B: bind("B", frameBRef) };
+  }, []);
   /*
    * R9 路线 2(`shared`):编辑器文档开**一个** GL Worker,两个舞台经各自的 `MessageChannel` 共用它。
    * 懒建:生效路线真是 `shared` 时才建。端口在握手之后、任何 RPC 之前交(见下面 `pc-stage-ready` 那段)。
@@ -806,10 +827,28 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
       swapTriedRef.current = new Set();
       void (async () => {
         try {
+          /*
+           * **先等项目送到这个舞台,再起节拍。**
+           *
+           * 新 iframe 握手之后 `stageReady` +1,上面那个 effect 发 `syncProject`、这里发 `play` ——
+           * 但 `syncProject` 走 stageBridge 的串行链(`chain.then`),真正 postMessage 要晚一个微任务,
+           * 而 `play` 是同步发的。于是「带着 `playing` 换 iframe」(切回 2D、舞台热重载)时
+           * 舞台先收到 `play`,手里还没有项目,回 `no-project`;这里又不重试 —— 按钮是「暂停」、画面不动。
+           * 串在同一条链上等它落定,顺序就钉死了。基线没变时 `syncProject` 什么都不发,不多一次往返。
+           */
+          await syncProject("front", getState().project);
+          if (!alive) return;
           const reply = await s.play(playStartOf());
+          if (!alive) return;
           // 首拍的到达间隔以 `play()` 回包时刻为起点(K4)
-          if (alive && reply.ok) lastFrameAtRef.current = performance.now();
-        } catch { /* iframe 正在换 */ }
+          if (reply.ok) lastFrameAtRef.current = performance.now();
+          /*
+           * 舞台说起不了(没项目、角色不对):**把 store 也翻回暂停**,别让界面停在「在播」。
+           * 翻回去之后下面那一支照常收尾(`pause()` 拿 `stoppedAt` → `setTime(settle)`),
+           * 画面和播放头对齐到舞台真实停着的那一帧;用户再按一次播放就是一次干净的起播。
+           */
+          else if (getState().playing) actions.pause();
+        } catch { /* iframe 正在换:新的握手会让这个 effect 带着 playing 重跑一遍 */ }
       })();
     } else {
       void (async () => {
@@ -1026,15 +1065,35 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
         ))}
       </div>
 
-      {view === "3d" ? (
+      {view === "2d" && <ToolBar tool={tool} onToolChange={setTool} zoom={cam.scale} fitted={cam.auto} onFit={fitToWindow} />}
+
+      {/*
+        * **2D 这一页在 3D 页下面常驻,只是藏起来,不卸载。**
+        *
+        * 以前是 `view === "3d" ? <3D/> : <2D/>`,切到 3D 就把舞台 iframe 连同主文档的音频层一起卸掉。
+        * 可播放头**跟随舞台**(docs/semantics/architecture/rendering.md「播放头跟随舞台」,K4:
+        * 非 legacy 下只有可见舞台的 `frame` 事件在推 `t`)—— 舞台没了,3D 页按播放就什么都不会动,
+        * 声音也没了。现在舞台一直在跑,3D 页读的还是同一个 `t`,播放轴和声音和 2D 页一模一样。
+        *
+        * 藏法只能是 `opacity: 0` + 不收指针(和后台舞台同一个理由,见 iframe B 的注释):
+        * `display: none` 会让 iframe 里的 rAF 和 `<video>` 停掉,`visibility: hidden` 会让 `isSolid`
+        * 判错实体框。`inert` 顺带挡掉键盘焦点落进看不见的那一页。
+        * 藏起来的那一页 `inset: 0` 铺在同一块地方,窗口尺寸不变,切回 2D 不用重新适应缩放。
+        */}
+      <div style={{ position: "relative", flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+      {view === "3d" && (
         <div className="pc-pv-stage" style={{ position: "relative" }}>
           <Scene3DView project={project} t={t} />
         </div>
-      ) : (
-      <>
-      <ToolBar tool={tool} onToolChange={setTool} zoom={cam.scale} fitted={cam.auto} onFit={fitToWindow} />
-
-      <div ref={boxRef} className="pc-pv-stage">
+      )}
+      <div
+        ref={boxRef}
+        className="pc-pv-stage"
+        data-pc="preview-2d"
+        aria-hidden={view === "3d" || undefined}
+        inert={view === "3d"}
+        style={view === "3d" ? { position: "absolute", inset: 0, opacity: 0, pointerEvents: "none" } : undefined}
+      >
         <div
           className="pc-pv-frame pc-checker"
           style={{
@@ -1065,7 +1124,7 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
               {/* K4 的 `mediaStalled`:舞台连着两拍来得比 40 ms 还慢时,音频跟着停一下 */}
               <MediaLayers project={project} t={t} playing={playing && !mediaStalled} masterVolume={muted ? 0 : volume} audioOnly localHashes={LOCAL_HASHES} />
               <iframe
-                ref={frameARef}
+                ref={frameRefOf.A}
                 data-pc="stage-frame"
                 title="预览舞台"
                 /*
@@ -1099,7 +1158,7 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
               />
               {dual && (
                 <iframe
-                  ref={frameBRef}
+                  ref={frameRefOf.B}
                   data-pc="stage-frame-back"
                   title="后台舞台"
                   src={stageSrc("B")}
@@ -1171,9 +1230,8 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
           </div>
         </div>
       </div>
-      </>
-      )}
-      
+      </div>
+
       <ControlBar />
       {showMiniScrubber && <MiniScrubber />}
       

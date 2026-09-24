@@ -90,6 +90,16 @@ export function setStageClient(role: StageRole, client: StageRpcClient | null, c
 }
 
 /**
+ * iframe 卸掉了:它的客户端**不管此刻落在哪个位置上**都摘下来(K5 的互换之后,A 不一定还是 `front`)。
+ *
+ * 不摘的后果实测过:`frontStage()` 只看 `disposed`,而卸掉的 iframe 的客户端没人 dispose,
+ * 于是它一直被当成可见舞台交出去 —— 3D 页按播放,`play()` 发进一个已经关掉的窗口,永远不回包。
+ */
+export function releaseStageClient(client: StageRpcClient): void {
+  for (const role of ["front", "back"] as const) if (slots[role].client === client) setStageClient(role, null);
+}
+
+/**
  * 订阅舞台事件(七种,已按 `event.source` 的角色规矩过滤)。返回退订函数。
  *
  * R2 只搭骨架:`play` / `pause` 还回 `unsupported`(K4 是 R5 的活),所以 `frame` / `ended` /
