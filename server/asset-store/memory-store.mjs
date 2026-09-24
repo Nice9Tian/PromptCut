@@ -2,7 +2,7 @@
  * `BlobStore` 的 memory 实现（契约 `docs/plan/asset-store-contract.md` 第 2 节）。
  *
  * 全部放在内存里，给测试用：`chunkSize` 可以调小。行为规则与 fs 实现相同（见 `blob-store.mjs` 文件头）；
- * `mtimeMs` 取入库时刻，`contentType` 按一张最小的扩展名表给。只引 Node 内置模块。
+ * `mtimeMs` 取入库时刻，`contentType` 按一张最小的扩展名表给；`size` 超过 256 MiB 回 `size-mismatch`。只引 Node 内置模块。
  */
 import crypto from 'node:crypto';
 import { Readable } from 'node:stream';
@@ -10,6 +10,9 @@ import {
   BLOB_CHUNK_SIZE, normalizeHash, normalizeExt, checkChunkArgs, chunkCountOf, chunkLengthOf,
   createKeyedLock, drainSource, toBuffer, minimalContentType,
 } from './blob-store.mjs';
+
+/** 单件上限：memory 实现只供测试，size 超过它回 `size-mismatch`（契约第 8 节第 7 条） */
+export const MEMORY_MAX_SIZE = 256 * 1024 * 1024;
 
 /** 一段字节 → 非对象模式的可读流 */
 function streamOf(buf) {
@@ -78,6 +81,8 @@ export function createMemoryStore({ chunkSize = BLOB_CHUNK_SIZE, now = Date.now 
         if (blobs.has(key)) return 'complete';
         let st = staging.get(key);
         if (st && st.size !== size) return { conflict: st.size };
+        // 只供测试：报一个天文数字的 size 不许把进程拖垮（契约第 8 节第 7 条）
+        if (size > MEMORY_MAX_SIZE) return { conflict: st ? st.size : MEMORY_MAX_SIZE };
         if (!st) {
           st = { size, ext: wantExt, parts: new Map(), received: new Set() };
           staging.set(key, st);

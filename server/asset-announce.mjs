@@ -24,7 +24,7 @@ function isPrivateIPv4(address) {
 
 /**
  * 本机素材服务在局域网里的地址：所有非 internal 的 IPv4 里属于私有网段的，
- * 每个拼成 `http://<ip>:<port><basePath>`，按地址字典序去重排序。`port` 缺省时返回 `[]`。
+ * 每个拼成 `http://<ip>:<port><basePath>`，去重后按 URL 字符串的字典序排序。`port` 缺省时返回 `[]`。
  *
  * @param {{ interfaces?: Record<string, Array<{ address: string, family: string | number, internal: boolean }> | undefined>, port?: number, basePath?: string }} [options]
  * @returns {string[]}
@@ -42,10 +42,11 @@ export function lanAssetUrls({ interfaces = os.networkInterfaces(), port, basePa
       if (isPrivateIPv4(nic.address)) addresses.add(nic.address);
     }
   }
-  return [...addresses].sort().map((ip) => `http://${ip}:${p}${basePath}`);
+  // 按 URL 字符串的字典序（契约第 8 节第 5 条）
+  return [...new Set([...addresses].map((ip) => `http://${ip}:${p}${basePath}`))].sort();
 }
 
-/** 缺省登记者身份。G.6 的 announcerId 只收 `[A-Za-z0-9._:-]`，主机名里别的字符换成 `-`（见报告「契约疑点」） */
+/** 缺省登记者身份 `asset:<主机名>`（契约第 8 节第 1 条）。G.6 的 announcerId 只收 `[A-Za-z0-9._:-]`、最长 128，主机名里别的字符换成 `-` */
 function defaultAnnouncerId() {
   const host = String(os.hostname() || 'host').replace(/[^A-Za-z0-9._:-]/g, '-') || 'host';
   return `asset:${host}`.slice(0, 128);

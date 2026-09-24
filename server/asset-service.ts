@@ -200,17 +200,9 @@ function drain(req: IncomingMessage): Promise<void> {
   return new Promise((resolve) => { req.on("end", resolve); req.on("error", () => resolve()); req.on("close", () => resolve()); req.resume(); });
 }
 
-/**
- * 数据层的对账方法。写成下标访问:本文件的守门(契约第 3 节)不许源码里出现暂存目录名那串字符,
- * 点号加方法名恰好与它相同。
- */
-function chunksOf(store: AssetBlobStore, hash: string) {
-  return store["chunks"](hash);
-}
-
 /** 对账:`GET media/<hash>/chunks` 的回包。`store` 缺省是 `root` 的本地内容库 */
 export async function chunkStatus(root: string, hash: string, store: AssetBlobStore = defaultAssetStore(root)) {
-  return chunksOf(store, hash);
+  return store.chunks(hash);
 }
 
 async function handlePutChunk(req: IncomingMessage, res: ServerResponse, store: AssetBlobStore, hash: string, rawN: string) {
@@ -426,7 +418,7 @@ export function assetServiceMiddleware(root: string, opts: AssetServiceOptions =
       }
       if (tail === "chunks") {
         if (method !== "GET") return sendJson(res, 405, { ok: false, error: "method" });
-        return sendJson(res, 200, await chunksOf(store, hash));
+        return sendJson(res, 200, await store.chunks(hash));
       }
       if (tail === "complete") {
         if (method !== "POST") return sendJson(res, 405, { ok: false, error: "method" });
