@@ -98,13 +98,13 @@
 
 **上传队列的顺序**：**逐个素材，同一个素材先传小分辨率版、再传原素材，两档在素材服务上都 `complete` 才轮到下一个素材**。（第 111 版写的是「所有素材的小版先传、原片后传」，按 2026-09-22 用户定的口径改成这一条，现行语义见 `docs/semantics/architecture/asset-storage.md`「上传」。）
 
-**原片可不可播。** 原片保持原编码，可能是浏览器放不了的格式（ProRes、DNxHD、10 bit HEVC 之类）。导入时探一次可播性，写 `media[i].playable`（2026-09-24 定）：
+**原片可不可播。** 原片保持原编码，可能是浏览器放不了的格式（ProRes、DNxHD、10 bit HEVC 之类）。每台设备在本机探一次可播性，结论按内容哈希存进**设备本地缓存**（`src/render/playability.ts`），不写进项目文档、不进 `.proc`（文末决议 2）：
 
 1. 先用 `HTMLMediaElement.canPlayType(<按容器和编码拼的 MIME>)` 探；回 `''` 就判 `false`。
 2. 回 `'maybe'` / `'probably'` 时再**试放首帧**：离屏 `<video muted>` 挂原片，等到 `loadeddata`（或 `requestVideoFrameCallback` 的第一帧）才判 `true`；报 `error` 或超时就判 `false`。
 3. **探不出或放不了**（任一步判 `false`，或探测本身没法跑）时：有小版就预览用小版、不换档；**没有小版时强制回退到原片**（哪怕可能放不了——这是唯一能给的东西，那一层按缺料处理）。
 
-`playable === false` 的素材**预览永远停在小分辨率版、不换档**（前提是有小版），导出照旧只用原片。
+本机缓存判为放不了（`false`）的素材，在这台设备上**预览永远停在小分辨率版、不换档**（前提是有小版），导出照旧只用原片；别的设备按它自己的本机缓存判，互不影响。
 
 **按需拉取。** 本地素材服务的读路由 `/@media/<hash>` 在本地内容库找不到时（只在连远程素材服务、本地内容库作缓存时发生；连本地素材服务时它就是真身），`vite-plugin-media.ts:508` 那条路由先向远程素材服务 `GET media/<hash>`（流式落盘到本地内容库、边落边按 Range 服务），远程也 404 才回 404。页面照常挂 `src`，同一次请求就拿到字节，没有「重挂」这一步；首字节到达前 `<video>` 只是在缓冲、那一层什么都不画，这就是它的「透明」。
 
@@ -118,13 +118,13 @@
 
 ```ts
 playbackUrl(
-  media: Pick<MediaAsset, "url" | "hash" | "tiers" | "playable">,
-  localHashes: Set<string> | string[] = [],
-  opts?: { cloudBase?: string },
-): string
+  media: Pick<MediaAsset, "url" | "hash" | "tiers"> & Partial<Pick<MediaAsset, "ext" | "kind">>,
+  localHashes: ReadonlySet<string> | readonly string[] = [],
+  opts: { cloudBase?: string; playable?: (hash: string) => boolean | undefined; probe?: boolean } = {},
+): string  // 可播性不从 media 读:opts.playable 缺省读设备本地缓存(playability.ts)
 ```
 
-规则：`localHashes`（标识符沿用，含义改为「当前连接的素材服务报 `complete` 的哈希集合」）里有的最高档，返回 `/@media/<那一档的哈希>`；集合为空时 `tiers.small` 存在就返回小分辨率档、否则才返回原片档（`docs/semantics/architecture/asset-storage.md`「拉取」的先小后大，打开项目第一帧不能直接拉原片）；`playable === false` 且有小版时永远返回小分辨率档，没有小版时回退到原片档。给了 `cloudBase` 就返回绝对地址（在线浏览器模式直接打远程素材服务，`localHashes` 同样来自对它的 `GET media/<hash>/chunks` 轮询，不看项目文档）。
+规则：`localHashes`（标识符沿用，含义改为「当前连接的素材服务报 `complete` 的哈希集合」）里有的最高档，返回 `/@media/<那一档的哈希>`；集合为空时 `tiers.small` 存在就返回小分辨率档、否则才返回原片档（`docs/semantics/architecture/asset-storage.md`「拉取」的先小后大，打开项目第一帧不能直接拉原片）；设备本地缓存判原片放不了（`false`）且有小版时永远返回小分辨率档，没有小版时回退到原片档；本机还没探过时先给小版、后台探一次，探出能放再换回原片。给了 `cloudBase` 就返回绝对地址（在线浏览器模式直接打远程素材服务，`localHashes` 同样来自对它的 `GET media/<hash>/chunks` 轮询，不看项目文档）。
 
 **只有 live 路的 `VideoTrack`（R3 抽出来的那份，即今天 `MediaLayers.tsx` 的 `<video src>` / `<img src>`）从 `playbackUrl` 取 `src`**；`FrameScene` 的 `placeholder` 路、预渲染、导出、`see_frames` 一律用 `media.url`（原片）。`localHashes` 由主文档每 2 秒轮询当前连接的素材服务的 `GET media/<hash>/chunks` 得到，经 E0 新增的 `setLocalHashes(hashes: string[])` 下发给可见舞台，`FrameScene` 加 prop `localHashes` 透传给 `VideoTrack`；legacy 分支不下发。
 
@@ -434,7 +434,7 @@ lane 名（`user` / `agent` / `background`，`frame-pipeline.mjs:90`）和模式
 
 - **混合部署**：文档服务连远程、素材服务连本地（或反过来）时，上面的编辑、入库、推送、B3 通知同样可用；文档服务那条连接上只有小消息，素材字节和预渲染产物一概不经文档服务。
 
-- **A1（第 2 步部分已落地；「第 5 步后」「第 6 步后」的条目未做）**：mtime 不同 `entry.key` 相同；导入 4 GB 视频主服务响应 ≤ 100 ms；`.procp` 去重且**只含原片**；`/@media/<64 位 hex>` 正确 contentType 并支持 Range；导入后 `project.media[].url` 无 `blob:`。第 5 步后：上传中断网再恢复，`GET media/<hash>/chunks` 报出已收分片、**只补缺的分片**、`POST media/<hash>/complete` 校验通过后 `complete` 才为真，校验不符回 409；局域网里另一台设备跨源访问本机素材服务成功；Agent 进程和预渲染进程读素材只经 HTTP API。第 6 步后：导入的素材在后台上传期间时间轴可继续编辑、主线程无长任务；另一台机器打开同一项目，素材层先透明、拉完自动出现；断网导入再联网，补传完成后素材服务对小版、原片两个哈希的 `GET media/<hash>/chunks` **分别**报 `complete: true`，项目文档和 `.proc` 里都没有任何同步状态字段；导入两小时 4 GB 素材，**小分辨率版先于原片到达另一台机器**（且上传队列是逐个素材、同一素材先小后大），它到达后素材层出现、再换到原片时 `currentTime` 不跳，原片到达前导出提示「等待上传方」；页面每 2 秒向当前连接的素材服务轮询 `GET media/<hash>/chunks`，`complete` 翻真后下一次轮询内换档；原片是浏览器放不了的编码（`canPlayType` 回空或首帧试放失败，`playable === false`）时有小版就预览一直停在小分辨率版、没有小版就回退到原片，导出仍用原片；连本地素材服务时同样生成小版、同样经本地素材服务入库；连远程素材服务时本机缓存已落盘但远程还没 `complete` 的哈希不换档。
+- **A1（第 2 步部分已落地；「第 5 步后」「第 6 步后」的条目未做）**：mtime 不同 `entry.key` 相同；导入 4 GB 视频主服务响应 ≤ 100 ms；`.procp` 去重且**只含原片**；`/@media/<64 位 hex>` 正确 contentType 并支持 Range；导入后 `project.media[].url` 无 `blob:`。第 5 步后：上传中断网再恢复，`GET media/<hash>/chunks` 报出已收分片、**只补缺的分片**、`POST media/<hash>/complete` 校验通过后 `complete` 才为真，校验不符回 409；局域网里另一台设备跨源访问本机素材服务成功；Agent 进程和预渲染进程读素材只经 HTTP API。第 6 步后：导入的素材在后台上传期间时间轴可继续编辑、主线程无长任务；另一台机器打开同一项目，素材层先透明、拉完自动出现；断网导入再联网，补传完成后素材服务对小版、原片两个哈希的 `GET media/<hash>/chunks` **分别**报 `complete: true`，项目文档和 `.proc` 里都没有任何同步状态字段；导入两小时 4 GB 素材，**小分辨率版先于原片到达另一台机器**（且上传队列是逐个素材、同一素材先小后大），它到达后素材层出现、再换到原片时 `currentTime` 不跳，原片到达前导出提示「等待上传方」；页面每 2 秒向当前连接的素材服务轮询 `GET media/<hash>/chunks`，`complete` 翻真后下一次轮询内换档；原片是浏览器放不了的编码（`canPlayType` 回空或首帧试放失败，设备本地缓存记为放不了）时有小版就预览一直停在小分辨率版、没有小版就回退到原片，导出仍用原片，项目文档和 `.proc` 里没有任何可播性字段；连本地素材服务时同样生成小版、同样经本地素材服务入库；连远程素材服务时本机缓存已落盘但远程还没 `complete` 的哈希不换档。
 
 - **A3（键与目录形状已落地）**：共享键对 x / y、不透明度、motion、`clipId` 不敏感，对参数、源码版本、时长、相位、框宽高、画幅、parts、`snapshotCode`、审阅表内容敏感；毛玻璃卡和 `unknown` 卡有本地档快照，且照样推送到素材服务（低优先级）、清单键带 `entry.key`；超上限的那一帧不进就绪索引、不投递，但照样推送、清单标 `oversize`；PNG / MOV / 轨道流生成后都出现在素材服务里（`px/<hash>`）、`render-manifest` 可查；B 机（或同一局域网里的另一端）首次打开 A 机预渲染过的项目不起历史推进即显示 `independent` 卡（清单命中 → 块下载 → 落盘走 `snapshot-store` 的写入函数 → `index.json` 与磁盘一致 → C3 判就绪）；连本地素材服务时同样入库（推到本地素材服务）。
 
