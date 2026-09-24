@@ -173,3 +173,84 @@ plan clip-a 之后: {"snapshotKey":"70b34fe947088f9dffc2007e713c27def3430ae49287
 6. **锁库对空的环境指纹也抛。** 契约只写了非法 `contentKey` 抛。空指纹得锁会产生一把谁都匹配不上的锁，所以一并拒绝。
 7. **整场景路每帧 `acquire` 都会刷新 `touchedAt`。** 写盘已合并，不会每帧落一次盘。本机自己的锁的 `touchedAt` 本机不据此做判断，只在诊断里看得到。
 8. **`cardRender`（Agent 查询、导出、交互帧）也按锁换键。** 这些路径的整场景快照因此同样不写被别的环境锁定的卡。导出和 `renderState` 只认 `control.key`（PNG），`key` 不随锁变，所以导出像素不受影响。
+
+## 第二轮：契约 F.8（2026-09-24）
+
+合并 `claude/rq-card-lock` 取得 F.7、F.8（合并提交 6759294，只动文档）。主 Agent 的裁定：
+
+- 疑点 1、3、4 同意，写进 F.8 第 1、3、4 条，照原做法保留；
+- 疑点 2 不接受停在「下一次 preload」，改按 F.8 第 2 条补定时重判；
+- 疑点 5 知悉，合并后由主 Agent 重测。
+
+### 改动（只动 `server/frame-pipeline.mjs`）
+
+- **F.8 第 1 条**：`fillCardControls` 走到一个共享档卡（不是被别的环境锁定的那种），就用本机指纹得锁，不再看本机是否已有结果、是否已齐。原来的条件是 `index.count || 不齐`，现在去掉了。
+- **F.8 第 2 条**：
+  - 构造参数新增 `cardLockIdleMs`（缺省 `CARD_LOCK_IDLE_MS`）。`cardLockDecision` 的 `idleMs` 和重判计时器都用它。
+  - 新增常量 `CARD_LOCK_RETRY_MAX = 20`，从 `frame-pipeline.mjs` 导出。
+  - `fillCardControls` 现在回末尾再判仍为 `'defer'` 的 control 列表。提前返回的两处回 `[]`，原来回 `undefined`。
+  - `preload` 后台那一趟把两次 `fillCardControls` 的延后列表收齐。一趟结束时（`finally`），只要这一版没被 abort，就调 `scheduleCardLockRetry`。
+  - `scheduleCardLockRetry(entry, controls, signal)`：
+    - 按 `clipId` 记下要重判的卡；
+    - 定一个一次性、`unref` 的计时器，时长 `cardLockIdleMs`；
+    - 计数记在 `entry.cardLockRetry.count` 上，同一版最多 20 次；
+    - 计时器记在 `this.cardLockTimers` 里；`signal` abort 时清掉计时器，`close()` 时全部清掉。
+  - `retryDeferredCards(entry, clipIds, signal)`：计时器触发时，三条都满足才排：
+    - `signal` 没 abort，进程没关；
+    - `this.ready.sessionsOn(entry.key)` 非空；
+    - 按 `clipId` 从当前 `entry.cardPlan` 取回的卡里，还有 `cacheable` 且在预渲染集合里的。
+  - 满足后，把一小趟接到 `this.background` 串行链上：借 `'background'` 的预渲染间，只对这些卡跑 `fillCardControls`，用同一个 `signal`。
+  - 这一小趟里重判时，锁定方已齐就投递，已闲置就接手，仍新鲜就再排一次。
+  - 借不到预渲染间（让路给播放）时，这些卡照样再排，计数照算。
+  - 这一小趟不改 `entry.status`。
+
+### 验证（第二轮）
+
+| 项 | 结果 |
+|---|---|
+| `npx tsc -b --force` | 退出码 0 |
+| `npm test` 第一次 | 退出码 1：2121 条，pass 2114，fail 6 |
+| 失败的 6 条单独重跑 | `docservice.test.mjs` + `media-stamp.test.mjs`，23/23 通过 |
+| `npm test` 重跑 | 退出码 0：2121 条，pass 2120，fail 0，skipped 1 |
+| 自查脚本（不入库） | 9/9 通过 |
+| 现场 5240 | 页面锁闲置后本机定时接手，原样输出见下 |
+
+**第一次 `npm test` 的 6 条失败与本改动无关**：
+
+- 5 条在 `docservice.test.mjs`，报「连接失败」，是 WebSocket 连本机端口；
+- 1 条在 `media-stamp.test.mjs` 的「真 HTTP」一条；
+- 两个文件都是真网络测试，都不引用 `frame-pipeline.mjs`。
+
+**自查新增 4 条**：
+
+- L9：`cardLockIdleMs: 80`，延后后定时接手，渲 8 帧，计时器清空；
+- L9b：重判前页面已齐，改为投递，`bakeFrames` 0 次；
+- L9c：abort 清计时器；连排 25 次，计数停在 20；`close()` 清计时器；
+- L10：本机已齐、没有锁文件，走过之后锁归本机，页面回 `CARD_LOCKED`。
+
+**现场**（5240，空帧库重起；前半段输出与第一轮一致，这里只贴 F.8 第 2 条那一段）：
+
+```
+PUT 环境 A: {"status":200,"body":{"ok":true,"stored":true,"indexed":true,"count":1,"envFingerprint":"ec313bc687208b5c","key":"70b34fe947088f9dffc2007e713c27def3430ae492871097b7c6677ac4ebcd1c"}}
+PUT 环境 B: {"status":200,"body":{"ok":true,"stored":false,"reason":"CARD_LOCKED","lockedBy":"ec313bc687208b5c"}}
+15 秒后 GET 本机键第 0 帧(应 404): 404
+15 秒后 GET 页面键第 0 帧(应 200): 200
+接手等了(秒): 35
+接手后 cardLocks: {"contentKey":"b5769ac58ab230f0c46383aa34162e6ed8a554cf1c2fdad1c812dcd511a0c5df","envFingerprint":"258acaaa7c5fe509","source":"prerender","since":1790253752109,"touchedAt":1790253752110}
+接手后 plan clip-a: {"snapshotKey":"dd4c62f7a9badda97b3a2106ff1675b311778fdfbc4f7651b79a0780b20e679c","ownKey":"dd4c62f7a9badda97b3a2106ff1675b311778fdfbc4f7651b79a0780b20e679c","cardLock":{"envFingerprint":"258acaaa7c5fe509","source":"prerender","foreign":false}}
+接手后 GET 本机键第 0 帧(应 200): 200
+接手后 PUT 环境 A: {"status":200,"body":{"ok":true,"stored":false,"reason":"CARD_LOCKED","lockedBy":"258acaaa7c5fe509"}}
+```
+
+读法：
+
+- 页面最后一次推帧在 `…702726`，接手发生在 `…752109`，相隔约 49 秒。这是后台那一趟结束后再过 `cardLockIdleMs`（30 秒）；
+- 接手后 control 换回本机的键，本机键下产出了帧；
+- 页面同一环境再推帧回 `CARD_LOCKED`。
+
+收尾：dev server 进程树（cmd 26804 起）已结束，5240～5242 与预渲染子进程端口不再监听。两条既有探针第二轮没重跑。第一轮已跑过，本轮只加了本机得锁的范围和一趟结束后的计时器，没锁时的逐路径行为靠全量测试覆盖。
+
+### 仍需主 Agent 知道的
+
+- `fillCardControls` 的返回值从 `undefined` 改成数组。现有调用方都不看返回值，测试 Agent 可以直接用它断言延后的卡。
+- 重判计数按「排了几次计时器」算，同一个 entry 跨代次累计；换了一版就是新 entry，从 0 开始。
