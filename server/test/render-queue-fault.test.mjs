@@ -178,7 +178,7 @@ test('F1.3 认领者 WebSocket 断开：宽限到期（10.1 s）T 回 open，ver
   h.disconnect('a');
 
   const out = h.at(T0 + 10_100);
-  assertTask(h, id, { state: 'open', version: 3, attempts: 1, claim: null, subscribers: ['pub-1'] });
+  assertTask(h, id, { state: 'open', version: 3, attempts: 1, claim: null, subscribers: ['pub-1'], lastError: 'disconnected' });
   assertOpened(out, ['b', 'c', 'w'], id, { version: 3, attempts: 1 });
   assert.deepEqual(out.conns(), ['b', 'c', 'w'], 'A 已断开不收（lease-lost 也不发）；发布方不收');
   for (const c of ['b', 'c', 'w']) assert.deepEqual(out.types(c), ['task.opened']);
@@ -226,7 +226,7 @@ test('F1.5 认领者 WebSocket 断开：A 持有 T1、T2，宽限到期两者都
 
   const out = h.at(T0 + GRACE + 1);
   for (const id of [id1, id2]) {
-    assertTask(h, id, { state: 'open', version: 3, attempts: 1, claim: null });
+    assertTask(h, id, { state: 'open', version: 3, attempts: 1, claim: null, lastError: 'disconnected' });
     assertOpened(out, ['b', 'c', 'w'], id, { version: 3, attempts: 1 });
   }
   assert.deepEqual(out.conns(), ['b', 'c', 'w']);
@@ -271,7 +271,7 @@ test('F2.2 处理超时：推进 30.1 s，T 回 open，attempts = 1，version +1
   claimOk(h, 'a', id, 1);
 
   const out = h.advance(30_100);
-  assertTask(h, id, { state: 'open', version: 3, attempts: 1, claim: null });
+  assertTask(h, id, { state: 'open', version: 3, attempts: 1, claim: null, lastError: 'lease-expired' });
   assertLeaseLost(out, 'a', { id, token: 2, reason: 'expired' });
   // A 自己也是 watch 者，同样收到 task.opened
   assertOpened(out, WATCHERS, id, { version: 3, attempts: 1 });
@@ -312,7 +312,7 @@ test('F2.4 处理超时：推进 20 s 后续约一次，再推进 25 s，T 仍 c
 
   h.at(T0 + 50_000).assertSilent('新租约恰好到点');
   const out = h.at(T0 + 50_001);
-  assertTask(h, id, { state: 'open', version: 3, attempts: 1, claim: null });
+  assertTask(h, id, { state: 'open', version: 3, attempts: 1, claim: null, lastError: 'lease-expired' });
   assertLeaseLost(out, 'a', { id, token: 2, reason: 'expired' });
 });
 
@@ -330,7 +330,7 @@ test('F3.1 进度停滞：从 t=10 s 起每 10 s 报 done=24，停滞从 t=10 s 
   }
 
   const out = h.at(T0 + 130_001);
-  assertTask(h, id, { state: 'open', version: 3, attempts: 1, claim: null });
+  assertTask(h, id, { state: 'open', version: 3, attempts: 1, claim: null, lastError: 'stalled' });
   assertLeaseLost(out, 'a', { id, token: 2, reason: 'expired' });
   assertOpened(out, WATCHERS, id, { version: 3, attempts: 1 });
   assert.deepEqual(out.conns(), WATCHERS);
@@ -350,7 +350,7 @@ test('F3.2 进度停滞：done 在 t=100 s 变成 25 之后不变，停滞从 t=
   }
 
   const out = h.at(T0 + 220_001);
-  assertTask(h, id, { state: 'open', version: 3, attempts: 1, claim: null });
+  assertTask(h, id, { state: 'open', version: 3, attempts: 1, claim: null, lastError: 'stalled' });
   assertLeaseLost(out, 'a', { id, token: 2, reason: 'expired' });
   assertOpened(out, WATCHERS, id, { version: 3, attempts: 1 });
 });
@@ -361,7 +361,7 @@ test('F3.3 进度停滞：从未报过进度的任务只受租约管，30.1 s �
     claimOk(h, 'a', id, 1);
     assertTask(h, id, { claim: { progress: { done: null, changedAt: T0 } } });
     const out = h.advance(30_100);
-    assertTask(h, id, { state: 'open', version: 3, attempts: 1, claim: null });
+    assertTask(h, id, { state: 'open', version: 3, attempts: 1, claim: null, lastError: 'lease-expired' });
     assertLeaseLost(out, 'a', { id, token: 2, reason: 'expired' });
     assertOpened(out, WATCHERS, id, { version: 3, attempts: 1 });
   }
@@ -373,7 +373,7 @@ test('F3.3 进度停滞：从未报过进度的任务只受租约管，30.1 s �
     h.at(T0 + LEASE).assertSilent('租约恰好到点');
     assertTask(h, id, { state: 'claimed', version: 2, attempts: 0 });
     const out = h.at(T0 + LEASE + 1);
-    assertTask(h, id, { state: 'open', version: 3, attempts: 1 });
+    assertTask(h, id, { state: 'open', version: 3, attempts: 1, lastError: 'lease-expired' });
     assertLeaseLost(out, 'a', { id, token: 2, reason: 'expired' });
   }
 });
@@ -395,7 +395,7 @@ test('F4.1 反复失败的任务：A、B、C 依次认领后 fail，前两次回
     const ack = out.one(s.conn, 'task.fail-ack');
     assert.deepEqual([ack.id, ack.state], [id, s.state]);
     if (s.state === 'open') {
-      assertTask(h, id, { state: 'open', version: s.version, attempts: s.attempts, claim: null });
+      assertTask(h, id, { state: 'open', version: s.version, attempts: s.attempts, claim: null, lastError: s.error });
       assertOpened(out, WATCHERS, id, { version: s.version, attempts: s.attempts });
       assert.equal(out.of('p').length, 0, '回 open 时不通知订阅者');
     } else {
@@ -440,12 +440,12 @@ test('F4.2 反复失败的任务：超时、断开、停滞和 fail 共用一个
     const { h, id } = setup();
     const { msg: m1 } = claimOk(h, 'a', id, 1);
     assert.equal(h.fail('a', id, m1.token, { error: 'e1' }).one('a', 'task.fail-ack').state, 'open');
-    assertTask(h, id, { state: 'open', version: 3, attempts: 1 });
+    assertTask(h, id, { state: 'open', version: 3, attempts: 1, lastError: 'e1' });
 
     claimOk(h, 'b', id, 3);
     h.disconnect('b');
     h.advance(GRACE + 1);
-    assertTask(h, id, { state: 'open', version: 5, attempts: 2 });
+    assertTask(h, id, { state: 'open', version: 5, attempts: 2, lastError: 'disconnected' });
 
     const { msg: m3 } = claimOk(h, 'c', id, 5);
     const x = h.now();
@@ -486,7 +486,7 @@ test('F4.3 反复失败的任务：failed 在 DONE_TTL 内再发布仍是 failed
   const fresh = h.publish('p', [T_IN]);
   assert.deepEqual(fresh.one('p', 'task.published').results[0], { id, state: 'open', version: 1, created: true });
   assertOpened(fresh, WATCHERS, id, { version: 1, attempts: 0 });
-  assertTask(h, id, { state: 'open', version: 1, attempts: 0, claim: null, subscribers: ['pub-1'], finishedAt: null });
+  assertTask(h, id, { state: 'open', version: 1, attempts: 0, claim: null, subscribers: ['pub-1'], finishedAt: null, lastError: null });
 });
 
 test('F4.4 反复失败的任务：换了结果键的新 id 正常 open，与 failed 的 T 无关', () => {
@@ -506,7 +506,8 @@ test('F4.5 反复失败的任务：A 主动 release，T 回 open，attempts 不�
   claimOk(h, 'a', id, 1);
   const out = h.release('a', id, 2, 'busy');
   assert.equal(out.one('a', 'task.released').id, id);
-  assertTask(h, id, { state: 'open', version: 3, attempts: 0, claim: null });
+  // release 不写 lastError（契约 A.10a）：新任务的 null 保持不变
+  assertTask(h, id, { state: 'open', version: 3, attempts: 0, claim: null, lastError: null });
   assertOpened(out, WATCHERS, id, { version: 3, attempts: 0 });
   assert.deepEqual(out.sortedTypes('a'), ['task.opened', 'task.released']);
   assert.equal(out.of('p').length, 0);
@@ -584,7 +585,7 @@ test('F6.1 节点推产物推到一半就崩了：报过进度后既不完成也
   assertTask(h, id, { state: 'claimed', version: 2 });
 
   const out = h.at(T0 + 5_000 + LEASE + 1);
-  assertTask(h, id, { state: 'open', version: 3, attempts: 1, claim: null });
+  assertTask(h, id, { state: 'open', version: 3, attempts: 1, claim: null, lastError: 'lease-expired' });
   assertLeaseLost(out, 'a', { id, token: 2, reason: 'expired' });
   assertOpened(out, WATCHERS, id, { version: 3, attempts: 1 });
   assert.equal(h.bus.ofType('task.done').length, 0, '没有 complete 就不算完成');
@@ -603,7 +604,7 @@ test('F6.2 节点推产物推到一半就崩了：A 断开不回来，宽限到�
     assertTask(h, id, { state: 'claimed', version: 2, attempts: 0, claim: { nodeId: 'node-A', token: 2 } });
   }
   const out = h.at(T0 + GRACE + 1);
-  assertTask(h, id, { state: 'open', version: 3, attempts: 1, claim: null });
+  assertTask(h, id, { state: 'open', version: 3, attempts: 1, claim: null, lastError: 'disconnected' });
   assertOpened(out, ['b', 'c', 'w'], id, { version: 3, attempts: 1 });
   assert.deepEqual(out.conns(), ['b', 'c', 'w']);
   assert.equal(h.nodeInfo('node-A'), null);
