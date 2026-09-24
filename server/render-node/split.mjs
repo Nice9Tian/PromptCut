@@ -1,5 +1,5 @@
 import { QUEUE_DEFAULTS, taskIdOf, lockKeyOf } from '../render-queue/index.mjs';
-import { snapshotTier } from '../snapshot-store.mjs';
+import { snapshotTier } from '../snapshot-tier.mjs';
 import { resultKeyOf } from './fingerprint.mjs';
 
 /**
