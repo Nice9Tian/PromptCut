@@ -1,6 +1,8 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { openBakery, bakeFrames, findFfmpeg, probeBrowserEnvironment } from './bakery/index.mjs';
+import { openBakery, bakeFrames, findFfmpeg } from './bakery/index.mjs';
+// 直接按文件名引,不走 index:既有测试用 mock.module 替换整个 index,替身里没有这个出口
+import { probeBrowserEnvironment } from './bakery/environment.mjs';
 import { captureSnapshot } from './bakery/capture-snapshot.mjs';
 import { frameVideo } from './bakery/frame-video.mjs';
 import { frameIdentity, trackPrefixes } from './frame-identity.mjs';
