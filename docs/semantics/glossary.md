@@ -31,6 +31,11 @@
 | 本地文档服务、远程文档服务 | 按所连文档服务的位置区分：跑在本机的，和部署在局域网其它机器或公网云端的 | architecture/document-service.md |
 | 本地素材服务、远程素材服务 | 按所连素材服务的位置区分，同上；与文档服务的位置可任意组合。这两组词取代旧词「本地模式」「云端模式」 | architecture/document-service.md、architecture/asset-storage.md |
 | 连接发现 | 预留接口：由文档服务交换设备之间的地址映射，帮它们直连；文档服务不承担素材传输流量 | architecture/document-service.md |
+| 渲染任务队列 | 文档服务在内存里托管的预渲染任务清单：只记状态和认领者，不测算、不分配 | architecture/document-service.md |
+| 渲染节点 | 从渲染任务队列认领并完成预渲染任务的地方：本机 PC、独立渲染主机、纯浏览器；按能力区分，不按平台名 | architecture/platforms.md |
+| 认领 | 渲染节点从队列里取一个任务：比对状态再加锁一步完成，同一任务同时只有一个认领者；断开或超时后任务回到未认领 | architecture/document-service.md |
+| 独立渲染主机 | 局域网或远程主机上、不带编辑界面的预渲染进程，作为渲染节点为多个项目取活 | architecture/platforms.md |
+| 环境指纹 | 渲染环境的标识（操作系统、GPU 基础类别、Chrome 主版本），并入预渲染结果的键；不同环境的结果不混用 | architecture/rendering.md |
 | 桌面运行环境 | 带预渲染进程的桌面应用（或本机 dev server）所在的运行环境，和「在线浏览器模式」对举；可以连本地或远程的服务 | architecture/platforms.md |
 | 在线浏览器模式 | 只有页面、没有本机进程的运行形态 | architecture/platforms.md |
 | 低内存档 | 平板、手机等内存受限设备的运行档位 | architecture/platforms.md |
@@ -84,7 +89,7 @@
 | 实体框 | 卡片实际画出内容的最小矩形 | architecture/rendering.md |
 | 兜底顺序 | 画面来不及时按满帧流 → 稀疏流 → 旧快照 → 占位符逐级退化，受算力预算约束 | architecture/rendering.md |
 | 占位符 | 兜底顺序尽头在卡片位置显示的沙漏加噪点，只出现在预览里；渲染不了的卡另显示「需要本地 PC 渲染辅助」 | architecture/rendering.md |
-| 预渲染进程 | 本机做预渲染和查询渲染的进程，有 Agent、User、Full 三种模式 | architecture/rendering.md |
+| 预渲染进程 | 做预渲染和查询渲染的进程，有 Agent、User、Full 三种模式；通常在本机，跑在独立渲染主机上时就是那台主机的渲染节点 | architecture/rendering.md |
 
 ## 开发
 
