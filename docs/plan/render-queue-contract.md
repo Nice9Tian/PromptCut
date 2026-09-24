@@ -1481,3 +1481,16 @@ node scripts/probes/render-queue-proxy.mjs --listen 127.0.0.1:8795 --target <hos
 - `server/render-node/local-node.mjs`、`session.mjs`；
 - `server/test/docservice.test.mjs`；
 - 任何渲染与页面代码。
+
+### G.11 定稿后的补充细则（2026-09-25，主 Agent 按实现方疑点裁定）
+
+- **握手失败不算断开**：包括 401 在内的握手失败，不调 `onClose`、不计 `closes`；只有连上过的连接断开才算。
+- **计数口径**：`badFrames` 包括能解析、但不是对象的 JSON 和二进制帧；`received` 只数交给处理器的消息。
+- **抖动乘在封顶之后**：单次等待的上限是 `maxMs × (1 + jitter)`。
+- **T5 只断言两件事**：线上收到 `task.lease-lost { reason: 'epoch' }`；`onLost` 被调过。不断言 `onLost` 的 reason：会话先按 `node.welcome.lost` 报 `'lost'`，是 B.5 补充细则的既有行为。
+- **`watchServiceEndpoints` 立即补发订阅**：调用时端点已经连上的，立刻补发一次 `service.watch`。
+- **`resolveDocservice` 的边界**：
+  - URL 为空串视为没设；
+  - 不是 `ws:` / `wss:` 的记 `bad-url`，继续试下一项；
+  - `/healthz` 取在源站根上。
+- **端点的创建与关闭**：`createWsEndpoint` 创建时立即连接，参数不合法时同步抛 `TypeError`。`close()` 之后 `connected` 立即变为 `false`；`onClose` 在底层真正关上时才调，带 `{ code: 1000, reason: 'closed' }`。
