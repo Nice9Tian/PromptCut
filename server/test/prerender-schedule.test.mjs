@@ -10,6 +10,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { FramePipeline } from '../frame-pipeline.mjs';
 import { declaredHeavy, prerenderSetOf, prerenderSetOfPlan } from '../prerender-set.mjs';
+import { createReadyHub } from '../ready-index.mjs';
 
 const control = (clipId, count, firstFrame = 0) => ({ clipId, count, sampling: { firstFrame } });
 const scheduler = wanted => ({
@@ -147,33 +148,35 @@ test('渲染 9:判轻的卡不算「缺帧」,整场景那一趟不会为它多�
   assert.deepEqual(await picker(entry).missingSnapshotFrames(entry, { tiers: ['shared'] }), []);
 });
 
-test('R6-7:换一版项目时先让页面清表(reset),旧层不残留', () => {
+test('R6-7:会话换一版项目时先让页面清表(reset),旧层不残留;同一版不重复 reset', () => {
+  const pipeline = Object.create(FramePipeline.prototype);
+  pipeline.ready = createReadyHub();
   const messages = [];
-  const readyIndex = {
-    localRev: 3,
-    reset(rev) { messages.push({ type: 'reset', rev }); },
-    claim(layers) { messages.push({ type: 'claim', n: layers.length }); return layers.length; },
-  };
-  const pipeline = {
-    readyIndex,
-    prerenderPicked: FramePipeline.prototype.prerenderPicked,
-    adoptCardPlan: FramePipeline.prototype.adoptCardPlan,
-  };
+  pipeline.ready.subscribe('s', m => messages.push(m));
+  messages.length = 0;
   const plan = [{ clipId: 'a', snapshotKey: 'KA', tier: 'shared', capabilities: { frameMode: 'stateful', compositing: 'independent' } }];
   const entryA = { key: 'E1', project: { fps: 30 } };
+  pipeline.adoptSession('s', entryA, 3);
   pipeline.adoptCardPlan(entryA, plan);
-  assert.deepEqual(messages.map(m => m.type), ['reset', 'claim'], '第一次认领前先 reset');
-  assert.equal(messages[0].rev, 3, 'reset 带当前的 localRev');
+  pipeline.publishLayer(entryA, plan[0], 'shared', [[0, 1]]);
+  assert.deepEqual(messages.map(m => m.type), ['reset', 'layer'], '换版本先 reset');
+  assert.equal(messages[0].localRev, 3, 'reset 带 preload 的 localRev');
 
   // 同一版项目再来一次(比如重新 preload):不重复 reset
   messages.length = 0;
+  pipeline.adoptSession('s', entryA, 4);
   pipeline.adoptCardPlan(entryA, plan);
-  assert.deepEqual(messages.map(m => m.type), ['claim']);
+  assert.deepEqual(messages.map(m => m.type), []);
 
   // 换一版项目(entry.key 是内容寻址的):再 reset 一次
   messages.length = 0;
-  pipeline.adoptCardPlan({ key: 'E2', project: { fps: 30 } }, plan);
-  assert.deepEqual(messages.map(m => m.type), ['reset', 'claim']);
+  const entryB = { key: 'E2', project: { fps: 30 } };
+  pipeline.adoptSession('s', entryB, 5);
+  assert.deepEqual(messages.map(m => m.type), [], '计划还没算出来:先不清页面的表(沿用旧结果)');
+  pipeline.adoptCardPlan(entryB, []);
+  assert.deepEqual(messages.map(m => m.type), ['reset']);
+  assert.equal(messages[0].localRev, 5);
+  assert.deepEqual(pipeline.ready.peek('s').index.list(), [], '旧层不残留');
 });
 
 test('R6-14:超限被丢掉的帧不再算「缺」,下一趟不重渲', async () => {

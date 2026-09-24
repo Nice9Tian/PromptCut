@@ -116,6 +116,13 @@ let subscribedTo = "";
 /** 到货之后要重投一次：由宿主（`Preview`）挂上 */
 let onArrive: (() => void) | null = null;
 
+const readyLostListeners = new Set<() => void>();
+/** 预渲染进程丢了这个会话的版本时通知(`usePrerenderPreload` 据此补发 preload)。回退订函数 */
+export function onReadyLost(listener: () => void): () => void {
+  readyLostListeners.add(listener);
+  return () => { readyLostListeners.delete(listener); };
+}
+
 /** 测试 / 探针:换一个快照来源 */
 export function setSnapshotSource(next: SnapshotSource): void {
   source = next;
@@ -130,7 +137,7 @@ export function currentReadyIndex(): ReadyIndex {
  * 订阅就绪索引（C3 的 SSE，页面直连预渲染进程）。**只按 session 做键**（根因 E）：
  * 编辑一次 `localRev` + 1，以前这里就清表、重连，而服务端 `/api/frames/ready` 根本不看
  * session / localRev —— 重连空档里播放中的重卡一律透明。现在客户端不抢先清表：旧的层按
- * 「沿用旧的预渲染结果」顶着，等预渲染进程换了 entry 发 `reset` 再清（`adoptCardPlan`）。
+ * 「沿用旧的预渲染结果」顶着，等预渲染进程发 `reset` 再清（这个会话的 preload 换了版本时，Item 4）。
  * 换项目（session 变了）才重连。
  */
 export function syncSnapshotSubscription(notify: () => void): void {
@@ -145,6 +152,11 @@ export function syncSnapshotSubscription(notify: () => void): void {
   if (!key) return;
   unsubscribe = source.subscribeReady(key.session, key.localRev, (message: ReadyMessage) => {
     applyReadyMessage(readyIndex, message);
+    // 服务端不认识这个会话了(预渲染进程重启、会话被回收):`reset` 带回 localRev 0,而页面早就不是 0 版。
+    // 会话的版本只由 preload 设定(Item 4),所以通知预渲染调度马上补发一次,不等空闲和保活
+    if (message.type === "reset" && message.localRev === 0 && (mirrorKey()?.localRev ?? 0) > 0) {
+      for (const listener of readyLostListeners) { try { listener(); } catch { /* 一个监听者出错不影响别人 */ } }
+    }
     // 新的一层到了：这一刻也许就能贴上，让宿主重算一次
     if (message.type !== "done") onArrive?.();
   });

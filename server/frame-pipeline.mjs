@@ -9,7 +9,7 @@ import { MovFrameStore, PlaybackMovStore, atomic } from './frame-mov.mjs';
 import { FramePlayback } from './frame-playback.mjs';
 import { CardFrameCache } from './card-cache.mjs';
 import { SnapshotStore, snapshotTier, rangeHas, rangeCount } from './snapshot-store.mjs';
-import { createReadyIndex, kindOfTier, wireSnapshotKey } from './ready-index.mjs';
+import { createReadyHub, DEFAULT_READY_SESSION, READY_SESSION_IDLE_MS, kindOfTier, wireSnapshotKey } from './ready-index.mjs';
 import { prerenderSetOfPlan } from './prerender-set.mjs';
 import { createMediaStamper } from './media-stamp.mjs';
 import { createHash } from 'node:crypto';
@@ -161,8 +161,11 @@ export class FramePipeline {
      * 不读素材服务的存储目录(`media-stamp.mjs` 文件头)。`/@export/<id>/media/` 是导出自己的产物目录,照旧本地 stat。
      */
     this.mediaStamper = createMediaStamper({ mediaUrl, exportRoot: () => process.env.PROMPTCUT_EXPORT_DIR || path.dirname(this.root) });
-    /** C3 的就绪索引。SSE 端点(`GET /api/frames/ready`)直接订阅它 */
-    this.readyIndex = createReadyIndex();
+    /**
+     * C3 的就绪索引,**按页面会话分片**(Item 4)。SSE 端点(`GET /api/frames/ready?session=`)
+     * 只订阅自己那个会话;会话的当前版本只由 `preload` 设定,发布一律经 `publishLayer(entry, …)` 过闸。
+     */
+    this.ready = createReadyHub();
     this.entries = new Map();
     this.queue = [];
     // The human preview, Agent and background bake each own an independent
@@ -195,6 +198,8 @@ export class FramePipeline {
    * 当租约断掉、付一次完整回放)—— 那两个方法是 R8 的,这里只留位。
    */
   get streamPool() { return this.streamSessions; }
+  /** 不带 session 的调用方(脚本、探针)那个会话的索引。页面走 `this.ready.subscribe(session, …)` */
+  get readyIndex() { return this.ready.session(DEFAULT_READY_SESSION).index; }
   get streamPoolSize() { return this._streams?.pool ?? STREAM_POOL_DEFAULT; }
   set streamPoolSize(value) { if (this._streams) this._streams.pool = Math.max(1, Math.min(STREAM_POOL_MAX, Math.round(value) || 1)); }
   /**
@@ -336,7 +341,7 @@ export class FramePipeline {
   /** 端到端探针的读口:超限帧(A3c)、`wanted` 的插队(C4)、预渲染集合(pinned 渲染 9) */
   diagnostics() {
     return { oversize: this._snapshots?.oversize ?? [], promotions: this.promotions ?? [], plans: this.planDiagnostics(),
-      streams: this._streams?.status() ?? null };
+      streams: this._streams?.status() ?? null, ready: this.ready.describe() };
   }
   /**
    * 每个 entry 此刻的预渲染集合和它的 card plan 摘要 —— `ready-index-probe` 靠它
@@ -802,7 +807,9 @@ export class FramePipeline {
     if (!browserPlan) return null;
     let plan;
     try { plan = entry.cardCache.plan(browserPlan); } catch { return null; }
-    this.adoptCardPlan(entry, plan);
+    // Item 4:这里的 entry 可能是 Agent 查询、导出或别的会话的那一版 —— 只把计划记在它自己身上,
+    // 不认领、不 reset 任何会话的就绪索引(那只由页面的 preload 做)
+    this.recordCardPlan(entry, plan);
     if (!plan.length) return null;
     const state = await entry.cardCache.renderState(plan, frames);
     // The final/agent path deliberately does not inject `missing`: an absent
@@ -964,12 +971,11 @@ export class FramePipeline {
       try {
         const index = await batch.close();
         /*
-         * 疑点 F(已坐实,`server/test/ready-stale-flush.test.mjs`):`adoptCardPlan` 换了一版项目、
-         * 页面已经清了表之后,旧 entry 这一批才交完 —— 照发的话同一个 clipId 的新层被旧键的层整层替换。
-         * 批照常落盘(快照库是内容寻址的,别的版本还用得上),只是不再发布到就绪索引。
+         * 疑点 F(`server/test/ready-stale-flush.test.mjs`):页面已经换到下一版之后,旧 entry 这一批才交完。
+         * 批照常落盘(快照库是内容寻址的,别的版本还用得上);发不发布由 `publishLayer` 的闸门定 ——
+         * 只进当前版本正是这个 entry 的会话。
          */
-        if (this.adoptedEntryKey !== undefined && this.adoptedEntryKey !== entry.key) continue;
-        if (index && batch.written) this.publishLayer({ clipId: batch.clipId, snapshotKey: batch.key }, batch.tier, index.frames, batch.entryKey);
+        if (index && batch.written) this.publishLayer(entry, { clipId: batch.clipId, snapshotKey: batch.key }, batch.tier, index.frames);
       } catch {}
     }
   }
@@ -1007,13 +1013,35 @@ export class FramePipeline {
   retireStalePreloads(owner, now = Date.now()) {
     for (const [other, generation] of this.generations) {
       if (other === owner || now - generation.seenAt <= PRELOAD_STALE_MS) continue;
+      // 已经跑完的代次没有活可掐:留着,不然它的 owner 下一次保活 preload 会把整趟后台重跑一遍
+      // (两个标签页互相掐、各自 30 秒重跑一次,Item 4 审查 #1)。新会话第一次来仍会重跑一趟(大多命中缓存),
+      // 之后就走「同一个 entry 直接返回」。很久没人问的才删,免得常驻
+      if (this.entries.get(generation.key)?.status === 'ready' && now - generation.seenAt <= READY_SESSION_IDLE_MS) continue;
       generation.controller.abort();
       this.generations.delete(other);
     }
   }
-  async preload(project) {
+  /**
+   * 页面这一版的后台预渲染。**会话「当前版本」的唯一来源**(Item 4 业务决断 2):
+   * `session` 是页面镜像的会话(HTTP 的 `/preload` 从 body 里带来;脚本不带就是缺省会话),
+   * `localRev` 是页面的版本号。`adopt: false`(让路之后重新排上的那些)只排活、不动任何会话的版本。
+   *
+   * @param {any} project
+   * @param {{ session?: string, localRev?: unknown, adopt?: boolean, owner?: string, ticket?: number }} [options]
+   */
+  async preload(project, { session = DEFAULT_READY_SESSION, localRev, adopt = true, owner: as = undefined, ticket: issued = undefined } = {}) {
+    session = typeof session === 'string' ? session : DEFAULT_READY_SESSION;
+    // `ticket`:HTTP 入口在等镜像之前就替它领了号(按到达顺序,不按算完的顺序,审查 #6)
+    const ticket = adopt ? (issued ?? this.ready.request(session)) : undefined;
     const entry = await this.entry(project);
-    const owner = project.id || 'active';
+    if (adopt) {
+      // 算 entry 的那一段里同一会话又来了更新的 preload:这个请求作废 —— 不认领,也不排后台活
+      // (排了会把更新那一版刚开的后台代次掐掉)
+      if (this.ready.stale(session, ticket, localRev)) return entry;
+      this.adoptSession(session, entry, localRev, ticket);
+    }
+    // 后台代次按会话分(两个标签页各自一代,不互相掐);缺省会话照旧按项目 id
+    const owner = as ?? (session !== DEFAULT_READY_SESSION ? `session:${session}` : (project.id || 'active'));
     const now = Date.now();
     this.retireStalePreloads(owner, now);
     const previous = this.generations.get(owner);
@@ -1111,9 +1139,9 @@ export class FramePipeline {
    * 重建 C3 的就绪索引。
    *
    * **扫盘只得到「键 → 区间」** —— 目录名是剥掉 clipId 的共享键,所以这里只把它们
-   * 挂在键上(`stageByKey`),不发 `layer`;等 `ensureMirror` 回拉 / `repushMirror`
-   * 补推把项目送回来、`adoptCardPlan` 重算出 card plan,再按
-   * `control.clipId` ↔ `control.snapshotKey` 反查、一次 `reset` + 全量 `layer`。
+   * 挂在键上(`stageByKey`,所有会话共用),不发 `layer`;等页面的 `preload` 把会话的版本
+   * 设回来、card plan 重算出来,再按 `control.clipId` ↔ `control.snapshotKey` 反查、
+   * 并进那个会话的索引(`claimSessions`)。
    *
    * 轨道流(R8)的清单 `<库根>/streams/<streamKey>/stream.json` 同样扫一遍、挂在键上(`kind: 'stream'`)。
    */
@@ -1128,7 +1156,7 @@ export class FramePipeline {
       if (!item.isDirectory()) continue;
       const index = await read({ tier: 'shared', key: item.name });
       if (!index.count) continue;
-      this.readyIndex.stageByKey({ kind: 'html', key: item.name, ranges: index.frames });
+      this.ready.stageByKey({ kind: 'html', key: item.name, ranges: index.frames });
       found++;
     }
     for (const outer of await list(path.join(this.root, 'controls-local'))) {
@@ -1138,7 +1166,7 @@ export class FramePipeline {
         const index = await read({ tier: 'local', entryKey: outer.name, key: item.name });
         if (!index.count) continue;
         // 本地档的线上 `key` 自带一个斜杠:`<entry.key>/<共享键>`(C3 / J3)
-        this.readyIndex.stageByKey({ kind: 'local', key: `${outer.name}/${item.name}`, ranges: index.frames });
+        this.ready.stageByKey({ kind: 'local', key: `${outer.name}/${item.name}`, ranges: index.frames });
         found++;
       }
     }
@@ -1146,31 +1174,47 @@ export class FramePipeline {
     return found;
   }
   /**
-   * card plan 到位(F5)。扫盘只得到「键 → 区间」,`layer` 和页面的 `readyIndex`
-   * 却都按 clipId 索引 —— 所以重启之后要等项目回来、重算 card plan,才能用
-   * `control.clipId` ↔ `control.snapshotKey` 反查。认领成功时索引自己会先发
-   * `reset` 再发全量 `layer`(C3 本来就是全量语义,不加新端点)。
+   * 页面这一版的 card plan 到位(**只有 `preload` 的后台那一趟调**,Item 4):记计划 + 认领。
+   * 扫盘只得到「键 → 区间」,`layer` 和页面的 `readyIndex` 却都按 clipId 索引 —— 所以要等
+   * card plan 才能用 `control.clipId` ↔ `control.snapshotKey` 反查。清表不在这里:会话换版本时
+   * `adoptSession` 已经 reset 过。别的 lane 只调 `recordCardPlan`。
    *
    * 顺带把「产哪些卡」记在 entry 上(`prerenderSetOf` 的窄接口)。这个集合是
    * **消费方**:`prerenderPicked` 把它接进 `snapshotTargets` / `missingSnapshotFrames` /
    * `fillCardControls` / 就绪索引认领,在所有位置都判轻的卡因此什么都不产(pinned 渲染 9)。
    */
   adoptCardPlan(entry, plan) {
-    entry.cardPlan = plan;
-    /*
-     * C3 的 `reset`(R6-7:以前 `ready-index.mjs` 的 `reset()` 压根没有调用方)。
-     * `entry.key` 是内容寻址的 —— 换项目、改编排都会换一个 key,那一刻页面手里的表
-     * 还挂着上一版的层(已删片段的旧层会一直留着,第二个项目的 `done` 也不会再发)。
-     * 认领路(`claim`)只有扫盘挂着东西时才 reset,常规路径上走不到,所以在这里补一次。
-     */
-    if (this.adoptedEntryKey !== entry.key) {
-      this.adoptedEntryKey = entry.key;
-      try { this.readyIndex.reset(this.readyIndex.localRev); } catch {}
+    this.recordCardPlan(entry, plan);
+    // 按新的 costs 重算之后集合缩了(有卡判轻了):会话里它们的旧层要撤掉。线上没有「删一层」,
+    // 只能 reset 再全量补回来 —— `staged` 里有这一版发过的全部区间,补得回来(Item 4)
+    const claimed = entry.claimedSet;
+    if (claimed instanceof Set && [...claimed].some(clipId => !this.prerenderPicked(entry, clipId))) {
+      this.ready.resetOn(entry.key);
+      if (entry.anchorsReady) this.ready.markDone(entry.key);
     }
+    this.claimSessions(entry);
+    // 认领只补扫盘挂着的区间,组流的 `groupClipIds` 不在认领表里 —— 由生产者按清单补发一次(同样过闸)
+    this._streams?.republish();
+    return plan;
+  }
+  /**
+   * 「把计划记在 entry 上」(Item 4 拆开的前一半):`entry.cardPlan` 和预渲染集合。**任何 lane 都可以调**,
+   * 只动这个 entry 自己,不碰任何会话的就绪索引 —— `cardRender`(Agent 查询、导出、交互帧)只做这一步。
+   */
+  recordCardPlan(entry, plan) {
+    entry.cardPlan = plan;
     // K2 / K6:真的按 planPipelines 的表算(costs / tuning 由编辑器进程转发过来、落在本机那一份)
     entry.prerenderSet = prerenderSetOfPlan(plan, { fps: Number(entry.project?.fps) || 30, root: this.root });
+    return plan;
+  }
+  /**
+   * 「认领」(拆开的后一半):把扫盘 / 轨道流挂着的区间并进**当前版本正是这个 entry** 的会话。
+   * 不 reset(清表只在会话换版本时由 `adoptSession` 做),别的会话一概不动。回并进了几层。
+   */
+  claimSessions(entry) {
+    if (!entry?.cardPlan || !this.ready.sessionsOn(entry.key).length) return 0;
     const layers = [];
-    for (const control of plan ?? []) {
+    for (const control of entry.cardPlan ?? []) {
       // pinned 渲染 9:在所有位置都判轻的卡不进就绪索引
       if (!this.prerenderPicked(entry, control.clipId)) continue;
       const tier = control.snapshotKey ? (control.tier || snapshotTier(control.capabilities)) : 'none';
@@ -1178,19 +1222,39 @@ export class FramePipeline {
       const key = wireSnapshotKey(tier, entry.key, control.snapshotKey);
       if (kind && key && control.clipId) layers.push({ clipId: control.clipId, kind, key });
     }
-    // R8:已经在生产者手里的流一并认领(F5 扫盘挂着的流键也在这里认)
-    for (const layer of this._streams?.claimLayers() ?? []) layers.push(layer);
-    try { this.readyIndex.claim(layers, this.readyIndex.localRev); } catch {}
-    // 认领是「清表后全量重发」,组流的 `groupClipIds` 不在认领表里 —— 由生产者按清单补发一次
-    this._streams?.republish();
-    return plan;
+    // R8:生产者手里属于这一版的流一并认领(F5 扫盘挂着的流键也在这里认);判轻的卡同样不认
+    for (const layer of this._streams?.claimLayers(entry.key) ?? []) if (this.prerenderPicked(entry, layer.clipId)) layers.push(layer);
+    // 记下这次是按哪一份集合认领的:集合之后缩了,`adoptCardPlan` 据此撤层
+    entry.claimedSet = entry.prerenderSet instanceof Set ? new Set(entry.prerenderSet) : undefined;
+    try { return this.ready.claim(entry.key, layers); } catch { return 0; }
   }
-  /** C3:把某一层此刻的全部就绪区间发出去(全量语义,`ready-index.mjs`)。 */
-  publishLayer(control, tier, ranges, entryKey) {
+  /**
+   * 设定页面会话的当前版本(**只有 `preload` 调**,Item 4 业务决断 2)。版本换了,hub 先 reset 这个会话
+   * (页面清表);这一版的计划已经算过的话(Agent 查询 / 别的会话先渲过它),马上认领一次 ——
+   * 不必等后台那一趟排到。`ticket` 是 preload 进门时领的号,过期的不认。
+   */
+  adoptSession(session, entry, localRev, ticket) {
+    let changed = false;
+    // 这一版的计划还没算出来就先不清页面的表(`defer`):等后台那一趟算出计划、认领时再 reset + 补层
+    try { changed = this.ready.adopt(session, entry.key, localRev, ticket, { defer: !entry.cardPlan }); } catch { return false; }
+    if (changed && entry.cardPlan) {
+      this.claimSessions(entry);
+      if (this._streams?.entryKey === entry.key) this._streams.republish();
+    }
+    // 这一版的锚帧早就齐了(别的会话先跑过):换到它的会话同样该收到 `done`
+    if (changed && entry.anchorsReady) this.ready.markDone(entry.key);
+    return changed;
+  }
+  /**
+   * C3:把某一层此刻的全部就绪区间发出去(全量语义,`ready-index.mjs`)。**所有发层都走这一个口子**
+   * (Item 4):带上它属于的 `entry`,只进当前版本正是这个 entry 的会话;旧版本晚到的批次、
+   * Agent / 导出渲的别的版本一律丢弃。回写进了几个会话。
+   */
+  publishLayer(entry, control, tier, ranges) {
     const kind = kindOfTier(tier);
-    const key = wireSnapshotKey(tier, entryKey, control?.snapshotKey);
-    if (!kind || !key || !control?.clipId) return;
-    this.readyIndex.setLayer({ clipId: control.clipId, kind, key, ranges });
+    const key = wireSnapshotKey(tier, entry?.key, control?.snapshotKey);
+    if (!entry?.key || !kind || !key || !control?.clipId) return 0;
+    return this.ready.publish(entry.key, { clipId: control.clipId, kind, key, ranges });
   }
   /**
    * C4 的调度点:这一批该从哪个本地帧开始。
@@ -1260,7 +1324,7 @@ export class FramePipeline {
     if (signal?.aborted) return;
     for (const [clipId, batch] of batches) {
       const index = await batch.close();
-      if (index && batch.written) this.publishLayer({ clipId, snapshotKey: batch.key }, 'local', index.frames, entry.key);
+      if (index && batch.written) this.publishLayer(entry, { clipId, snapshotKey: batch.key }, 'local', index.frames);
     }
   }
   /**
@@ -1283,7 +1347,7 @@ export class FramePipeline {
       if (!tiers.includes(tier)) continue;
       const entryKey = tier === 'local' ? entry.key : undefined;
       const index = await this.snapshots().snapshotIndex({ tier, entryKey, key: control.snapshotKey });
-      if (index.count) this.publishLayer(control, tier, index.frames, entryKey);
+      if (index.count) this.publishLayer(entry, control, tier, index.frames);
       // R6-14:超限被丢掉的帧不算「缺」—— 它们已经渲过一次、也已经判过一次超限
       if (index.count + rangeCount(index.oversize) >= control.count) continue;
       for (let local = 0; local < control.count; local++) {
@@ -1309,14 +1373,14 @@ export class FramePipeline {
     const clips = (entry.project.tracks || []).flatMap(track => track.clips || []);
     const anchors = anchorFrames(clips, fps).filter(frame => frame >= 0 && frame < count);
     const frames = await this.missingSnapshotFrames(entry, { tiers: ['shared', 'local'], restrictTo: anchors });
-    if (!frames.length) return this.readyIndex.markDone();
+    if (!frames.length) { entry.anchorsReady = true; return this.ready.markDone(entry.key); }
     await bakeFrames(bakery, {
       out: entry.dir, targetFrames: frames, snapshotOnly: false, fullFrame: true, writeFrames: false, signal,
       snapshotFrames: new Set(frames),
       onSnapshot: (n, html, controls) => this.record(entry, n, html, controls),
     });
     await this.flushSnapshots(entry);
-    if (!signal?.aborted) this.readyIndex.markDone();
+    if (!signal?.aborted) { entry.anchorsReady = true; this.ready.markDone(entry.key); }
   }
   async fillCardControls(entry, bakery, signal, controls = null) {
     if (!controls) {
@@ -1343,7 +1407,7 @@ export class FramePipeline {
       // (`snapshot-store.mjs` 的 `rangeCount`),完整 = `index.count === control.count`。
       // PNG 侧的 `hasComplete` 管不到它:同一趟里 PNG 可能齐了而快照缺一段。
       let index = target ? await this.snapshots().snapshotIndex(target) : { count: 0, frames: [], oversize: [] };
-      if (target && index.count) this.publishLayer(control, tier, index.frames, entryKey);
+      if (target && index.count) this.publishLayer(entry, control, tier, index.frames);
       // R6-14:超限被丢掉的帧算「已经处理过」—— 不然 `htmlComplete` 永远为 false,
       // 每一趟都把整张卡重渲一遍、再判一遍超限、再丢一遍。
       const htmlComplete = !target || index.count + rangeCount(index.oversize) >= control.count;
@@ -1390,7 +1454,7 @@ export class FramePipeline {
         if (produced.length && !signal?.aborted) {
           index = await this.snapshots().commitSnapshots({ ...target, clipId: control.clipId, capabilities: control.capabilities, items: produced });
           // C3:这一层的区间长了就发一条全量 `layer`
-          if (index.written.length) this.publishLayer(control, tier, index.frames, entryKey);
+          if (index.written.length) this.publishLayer(entry, control, tier, index.frames);
         }
       }
       if (!signal?.aborted) await entry.cardCache.finish(control);
@@ -1611,7 +1675,7 @@ export class FramePipeline {
       const requiredActive = [...this.generations.values()].some(generation => this.entries.get(generation.key)?.stage === 'required');
       for (const [id, generation] of this.generations) {
         const entry = this.entries.get(generation.key);
-        if (entry && entry.status !== 'ready') this.pausedPreloads.set(id, entry.project);
+        if (entry && entry.status !== 'ready') this.pausedPreloads.set(id, entry);
         // Required work is allowed to finish while playback starts. Direct
         // control/HTML/MOV work observes this abort at its four-frame boundary.
         if (entry?.stage !== 'required') generation.controller.abort();
@@ -1631,8 +1695,13 @@ export class FramePipeline {
     await this.yielding?.catch(() => {});
     if (owner !== this.backgroundLeaseOwner || version !== this.backgroundLeaseVersion) return;
     clearTimeout(this.backgroundLeaseTimer); this.backgroundLeaseUntil = 0;
-    const projects = [...(this.pausedPreloads?.values() || [])]; this.pausedPreloads?.clear();
-    if (!this.closed) for (const project of projects) await this.preload(project);
+    const paused = [...(this.pausedPreloads?.entries() || [])]; this.pausedPreloads?.clear();
+    // 只把活重新排上、接回原来的 owner:会话的版本不能由这里认领(Item 4)。
+    // 让路期间已经没有会话停在这一版的(页面换到了别的版本),不再重排 —— 页面的下一次 preload 会排新的(审查 #4)
+    if (!this.closed) for (const [owner, entry] of paused) {
+      if (!this.ready.sessionsOn(entry.key).length) continue;
+      await this.preload(entry.project, { adopt: false, owner });
+    }
   }
   async updatePlayback(project, input, { borrow = async () => false, release = async () => {} } = {}) {
     const work = (this.playbackChain || Promise.resolve()).catch(() => {}).then(() => this.updatePlaybackNow(project, input, { borrow, release }));

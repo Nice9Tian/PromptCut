@@ -77,3 +77,35 @@ Agent 的查询渲染（`see_frames`，lane `agent`）、导出（final）、交
 
 - 是否要支持同一预渲染进程同时服务多个编辑页（决定要不要做第 4 点）。
 - 「当前版本」以 `preload` 为准还是以镜像推送为准（两者到达顺序不保证）。
+
+## 结果(2026-09-24,分支 `claude/item4-session-isolation`)
+
+「需要专项任务先定的事」由用户定了:**支持多会话**(就绪索引按会话分片、`/ready` 按 `session` 订阅);**「当前版本」以页面的 `preload` 为准**,其它途径不再隐式重置、认领。
+
+### 做了什么
+
+- `server/ready-index.mjs`:新增 `createReadyHub()`。每个页面会话一份 `createReadyIndex`,扫盘与轨道流的「键 → 区间」(`staged`)全会话共用、LRU 封顶;会话没有订阅者且 10 分钟没动静就回收,总数封顶 64(有订阅者的不回收)。
+  - `request` / `adopt`:preload 进门领号,乱序完成时按到达顺序定谁赢;更旧的 `localRev` 不认。
+  - 版本换了闸门当场换过去;新版本的计划还没算出来时 reset 先挂着(旧表按「沿用旧的预渲染结果」顶着),这一版第一次写进会话时 reset 与补层紧挨着发。
+  - `publish(entryKey, layer)`:只写进当前版本正是这个 entry 的会话,同时挂进 `staged`(内容寻址,不会串版本)。
+- `server/frame-pipeline.mjs`:修复要点 1~4 全部落地。
+  - `preload(project, { session, localRev })` 是会话版本的唯一来源;后台代次按会话分 owner。
+  - `adoptCardPlan` 拆成 `recordCardPlan`(只记在 entry 上,`cardRender` 只做这一步)+ `claimSessions`(只并进当前版本是这个 entry 的会话)。
+  - 五处发层与 `PUT /snapshot` 统一走 `publishLayer(entry, …)`;`done` 按 entry 发。
+  - 按新 costs 重算后集合缩了:reset 并从 `staged` 补回,判轻的卡撤层。
+  - 让路恢复只重排仍有会话停着的版本;已跑完的代次不当过期掐掉。
+- `server/frame-stream.mjs`:流层按 `state.entryKey` 过闸;`update` 先读盘再同步改状态(两次 update 交错时旧的整个作废)。
+- `server/vite-plugin-frames.ts`:`/ready?session=` 分片订阅;`/preload` 带 `{ session, localRev }`、进门领号;session 参数统一校验。
+- 页面侧(`src/editor/preview/prerenderPreload.ts`、`usePrerenderPreload.ts`、`src/editor/snapshotFeed.ts`):就绪之后每 30 秒保活一次 preload;收到 `localRev 0` 的 `reset`(预渲染重启 / 会话被回收)立即补发一次,播放中也发。
+
+### 验证
+
+- 新增 `server/test/ready-session-isolation.test.mjs`(22 条):旧批次晚到(含撤销回旧版、流分段晚到、真实调用点 `missingSnapshotFrames` / `fillAnchorSnapshots`)、Agent / 导出 / 交互帧混杂渲染(五条 lane 的 `cardRender`、`adopt: false`)、多会话交替、preload 乱序、会话回收与封顶、staged 封顶、集合缩小撤层、reset 延后。改写 `ready-stale-flush`、`prerender-schedule` R6-7、`frame-stream` 的认领测试;页面侧补保活、resync、`onReadyLost` 测试。
+- 基线:`npx tsc -b --force` 零错误;`npm test` 1905 项 1904 过、0 失败、1 跳过(需要 5190 的既有集成测试)。
+- 探针(worktree 起的 5230):`ready-index-probe` 全过(含 ⑦ 重启恢复、⑨ 重算集合 —— ⑨ 的重跑触发方式从「换 `project.id`」改为「换会话」,因为 owner 现在按会话分);`preview-fallback-probe`(`--page-preload` 与缺省两种)PASS、无提示透明 0 拍;`stream-produce-probe` PASS;`verify-unified-frames` PASS。
+- 没跑:`verify-determinism`(导出路径没改)。
+
+### 已知遗留
+
+- 生产者手里判轻的卡的旧流层:`_streams.republish()` 不按预渲染集合过滤,集合缩小后要等生产者下一次 `update` 才不再发;已发出去的那一层没有「删一层」消息可撤(线上协议只有 reset + 全量)。与改动前一致。
+- 同一会话换到新版本、新版本的后台那一趟迟迟没算出计划时,页面一直顶着旧表(按语义属于「沿用旧的预渲染结果」),直到计划算出、reset 补层。

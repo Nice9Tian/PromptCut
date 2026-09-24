@@ -89,11 +89,11 @@ async function until(label, fn, timeoutMs = 120000, everyMs = 300) {
  * SSE 读客户端。不用 `EventSource`(Node 上要实验开关),直接读 body 流 ——
  * 探针要的是「第一条是不是 `reset`」这种顺序,自己解析最清楚。
  */
-function openReady(base, onMessage) {
+function openReady(base, onMessage, session = SESSION) {
   const controller = new AbortController();
   const messages = [];
   const done = (async () => {
-    const res = await fetch(`${base}/api/frames/ready?session=${encodeURIComponent(SESSION)}&localRev=1`, { signal: controller.signal });
+    const res = await fetch(`${base}/api/frames/ready?session=${encodeURIComponent(session)}&localRev=1`, { signal: controller.signal });
     if (!res.ok || !res.body) throw new Error(`SSE 连不上:${res.status}`);
     let buffer = '';
     for await (const chunk of res.body) {
@@ -361,17 +361,19 @@ try {
 
   /*
    * 再推一版项目、再开一趟预渲染。`frameIdentity` **不看 `id` / `name`**,所以
-   * `entry.key` 和第一版是同一个(卡和片段一字没动),换的只是 `owner`(= `project.id`)
-   * —— 于是 `preload` 不会走「同一个 entry 直接返回」那条早退,而是对同一个 entry
-   * 重跑一趟:`adoptCardPlan` 按**新的 costs** 重算 `prerenderSet`,这正是要验的东西。
+   * `entry.key` 和第一版是同一个(卡和片段一字没动)。后台代次按页面会话分(Item 4:owner =
+   * `session:<id>`),所以换一个会话来发 preload —— 不会走「同一个 entry 直接返回」那条早退,
+   * 而是对同一个 entry 重跑一趟:`adoptCardPlan` 按**新的 costs** 重算 `prerenderSet`,这正是要验的东西。
+   * 就绪索引也按会话分:SSE 订阅的是这个新会话。
    */
+  const SESSION_B = `${SESSION}-b`, SESSION_C = `${SESSION}-c`;
   const PROJECT_B = { ...PROJECT, id: `${PROJECT.id}-b`, name: 'R6 数据面探针(第二版)' };
-  const readyB = openReady(base9);
+  const readyB = openReady(base9, undefined, SESSION_B);
   await until('第二版的 SSE 连上', () => readyB.messages.length > 0 || null, 30000);
-  const pushedB = await postJson(EDITOR + '/api/data/project', { session: SESSION, localRev: 2, project: PROJECT_B });
+  const pushedB = await postJson(EDITOR + '/api/data/project', { session: SESSION_B, localRev: 1, project: PROJECT_B });
   check(pushedB.ok, '⑨ 第二版项目推进镜像', pushedB.body);
-  await until('预渲染进程手里有第二版', async () => (await json(`${base9}/api/data/project?session=${SESSION}&localRev=2`)).ok || null, 30000);
-  const preloadB = await postJson(`${base9}/api/frames/preload`, { session: SESSION, localRev: 2 });
+  await until('预渲染进程手里有第二版', async () => (await json(`${base9}/api/data/project?session=${SESSION_B}&localRev=1`)).ok || null, 30000);
+  const preloadB = await postJson(`${base9}/api/frames/preload`, { session: SESSION_B, localRev: 1 });
   check(preloadB.ok, '⑨ 第二版开跑', preloadB.body);
 
   // 按「clip-stateful 这张卡没被挑中」找,不按 entry.key 找(它和第一版是同一个)
@@ -397,13 +399,14 @@ try {
    * 「不产快照」:**重算之后**才删那棵目录 —— 第一版那一趟后台预渲染可能还在飞,
    * 早删会被它写回来(那一趟拿的还是旧的 `prerenderSet`)。删完再等 `clip-canvas`
    * 的区间继续长(证明这一趟确实还在产东西),那时判轻的那张仍然没有目录才算数。
+   * 第三版同样换一个会话触发重跑;它和第二版是同一个 entry,所以这一趟发的层照样进第二版会话的 SSE。
    */
   if (statefulDir) await fs.rm(statefulDir, { recursive: true, force: true });
   const msgsBefore = readyB.messages.length;
   const PROJECT_C = { ...PROJECT, id: `${PROJECT.id}-c`, name: 'R6 数据面探针(第三版)' };
-  await postJson(EDITOR + '/api/data/project', { session: SESSION, localRev: 3, project: PROJECT_C });
-  await until('预渲染进程手里有第三版', async () => (await json(`${base9}/api/data/project?session=${SESSION}&localRev=3`)).ok || null, 30000);
-  await postJson(`${base9}/api/frames/preload`, { session: SESSION, localRev: 3 });
+  await postJson(EDITOR + '/api/data/project', { session: SESSION_C, localRev: 1, project: PROJECT_C });
+  await until('预渲染进程手里有第三版', async () => (await json(`${base9}/api/data/project?session=${SESSION_C}&localRev=1`)).ok || null, 30000);
+  await postJson(`${base9}/api/frames/preload`, { session: SESSION_C, localRev: 1 });
   const rescanned = await until('删掉之后又跑了一趟(索引重新发了层)',
     () => readyB.messages.length > msgsBefore || null, 120000, 300);
   await delay(3000);

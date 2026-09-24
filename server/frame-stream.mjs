@@ -696,19 +696,30 @@ export class StreamProducer {
       codeVersion: `${STREAM_CODE_VERSION}:${this.pipeline.captureCode?.() || ''}`,
     });
     const generation = ++this.generation;
+    // 先把要读盘的清单都读回来(这一段会让出事件循环),再**同步**改状态:两次 update 交错时,
+    // 旧的那次读完发现自己已经不是最新一代就整个作废,不去改新一代共用的 state(Item 4 审查 #5)
+    const loaded = new Map();
+    for (const spec of specs) {
+      if (loaded.has(spec.streamKey) || this.streams.get(spec.streamKey)?.manifest) continue;
+      loaded.set(spec.streamKey, await this.store.load(spec.streamKey));
+      if (generation !== this.generation) return specs;
+    }
+    if (generation !== this.generation || this.closed) return specs;
     this.entryKey = entry.key;
     const next = new Map();
     for (const spec of specs) {
       // 同一张卡、同参数同入点的两个片段(比如复制出来叠在两条序列上)内容逐像素相同,共用一条流
       if (next.has(spec.streamKey)) { next.get(spec.streamKey).aliases.add(spec.topClipId); continue; }
       const old = this.streams.get(spec.streamKey);
-      const manifest = old?.manifest ?? await this.store.load(spec.streamKey) ?? this.freshManifest(spec);
+      const manifest = old?.manifest ?? loaded.get(spec.streamKey) ?? this.freshManifest(spec);
       const state = old ?? { reserved: new Set(), failures: new Map(), measured: null, measuredSegments: new Set() };
       state.spec = spec;
       state.aliases = new Set();
       state.manifest = manifest;
       state.isolated = isolatedStreamProject(entry.project, spec);
       state.generation = generation;
+      // Item 4:这条流的层只发给当前版本正是这个 entry 的会话
+      state.entryKey = entry.key;
       next.set(spec.streamKey, state);
     }
     this.streams = next;
@@ -725,8 +736,8 @@ export class StreamProducer {
 
   /**
    * 把每条流此刻的就绪分段发成 C3 的 `layer`(`kind: 'stream'`,单位是分段号;组流带 `groupClipIds`,
-   * 挂在组里最上面那张卡上)。同时挂到 `stageByKey` 上 —— `adoptCardPlan` 的认领是「清表后全量重发」,
-   * 没挂在那里的层会被它冲掉。
+   * 挂在组里最上面那张卡上)。同时挂到 `stageByKey` 上 —— 会话换版本时先清表,之后靠认领把它补回来。
+   * 发层过 Item 4 的闸:只进当前版本是这条流所属 entry(`state.entryKey`)的会话。
    */
   republish() {
     if (!this.routeAttached) return;
@@ -737,11 +748,12 @@ export class StreamProducer {
     const ranges = readySegmentRanges(state.manifest);
     if (!ranges.length) return;
     const { spec } = state;
-    const index = this.pipeline.readyIndex;
+    const ready = this.pipeline.ready;
     try {
-      index.stageByKey({ kind: 'stream', key: spec.streamKey, ranges });
+      ready.stageByKey({ kind: 'stream', key: spec.streamKey, ranges });
+      const entryKey = state.entryKey ?? this.entryKey;
       for (const clipId of [spec.topClipId, ...(state.aliases ?? [])]) {
-        index.setLayer({ clipId, kind: 'stream', key: spec.streamKey, ranges, ...(spec.kind === 'group' ? { groupClipIds: spec.clipIds } : {}) });
+        ready.publish(entryKey, { clipId, kind: 'stream', key: spec.streamKey, ranges, ...(spec.kind === 'group' ? { groupClipIds: spec.clipIds } : {}) });
       }
     } catch {}
   }
@@ -1054,14 +1066,18 @@ export class StreamProducer {
     if (!this.routeAttached) return 0;
     const found = await this.store.scan();
     for (const item of found) {
-      try { this.pipeline.readyIndex.stageByKey({ kind: 'stream', key: item.key, ranges: item.ranges }); } catch {}
+      try { this.pipeline.ready.stageByKey({ kind: 'stream', key: item.key, ranges: item.ranges }); } catch {}
     }
     return found.length;
   }
 
-  /** 已经在库里的流在认领表里的样子(`adoptCardPlan` 用):`{ clipId, kind: 'stream', key }` */
-  claimLayers() {
-    return [...this.streams.values()].flatMap(state => [state.spec.topClipId, ...(state.aliases ?? [])]
+  /**
+   * 已经在库里的流在认领表里的样子(`claimSessions` 用):`{ clipId, kind: 'stream', key }`。
+   * 传了 `entryKey` 就只给属于那一版的流 —— 生产者手里的可能是另一个会话的版本。
+   */
+  claimLayers(entryKey) {
+    return [...this.streams.values()].filter(state => entryKey === undefined || (state.entryKey ?? this.entryKey) === entryKey)
+      .flatMap(state => [state.spec.topClipId, ...(state.aliases ?? [])]
       .map(clipId => ({ clipId, kind: 'stream', key: state.spec.streamKey })));
   }
 
