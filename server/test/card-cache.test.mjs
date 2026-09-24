@@ -6,6 +6,9 @@ import path from 'node:path';
 import { PNG } from 'pngjs';
 import { CardFrameCache } from '../card-cache.mjs';
 
+// 契约 E.3:plan() 要求环境指纹(M4)。这里只补输入,断言不变。
+const ENV_FP = '0123456789abcdef';
+
 // Cached samples are PNGs carrying their render record; a lookup validates the bytes it reads.
 const paintedPng = () => {
   const png = new PNG({ width: 16, height: 8 });
@@ -19,7 +22,7 @@ const graph = compositing => ({ definitions: [], nodes: [{ id: 'card', adapter: 
 test('independent controls use local MOV coordinates and never admit unknown Chrome cards', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'pc-card-cache-'));
   try {
-    const cache = new CardFrameCache({ root, project: { fps: 30, width: 16, height: 8, style: {} } });
+    const cache = new CardFrameCache({ root, project: { fps: 30, width: 16, height: 8, style: {} }, envFingerprint: ENV_FP });
     assert.equal(cache.plan(graph('unknown'))[0].cacheable, false);
     const [control] = cache.plan(graph('independent'));
     assert.equal(control.sampling.firstFrame, 31);
@@ -37,7 +40,7 @@ test('independent controls use local MOV coordinates and never admit unknown Chr
 test('required context controls remain explicit misses and phase never covers the end frame', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'pc-card-cache-required-'));
   try {
-    const cache = new CardFrameCache({ root, project: { fps: 30, width: 16, height: 8, style: {} } });
+    const cache = new CardFrameCache({ root, project: { fps: 30, width: 16, height: 8, style: {} }, envFingerprint: ENV_FP });
     const required = graph('context');
     required.nodes[0].capabilities.needPrerendering = true;
     const [control] = cache.plan(required);
