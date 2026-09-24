@@ -303,6 +303,13 @@ export function framesPlugin(): Plugin {
             const compositing = control.capabilities?.compositing;
             const tier = snapshotTier(control.capabilities);
             if (compositing !== "independent" || tier !== "shared") return json(200, { ok: true, stored: false, reason: "NOT_INDEPENDENT" });
+            // M4(契约 E.6):测量帧产自用户的浏览器,和预渲染进程的 Chrome 不是同一种环境。共享键
+            // 已乘上预渲染 Chrome 的环境指纹,把别的环境的帧写进这个键,等于在同一层里混环境拼帧
+            // (「不同环境的结果不混用」)。所以请求体必须带着与这张卡的指纹相同的 `envFingerprint`
+            // 才存;不带或不等回 200 `ENV_MISMATCH`,不写盘、不发层 —— 这些帧由预渲染进程自己补渲。
+            // 页面(`probeRunner.ts`)只在意 404,回 200 不影响它。
+            if (typeof input.envFingerprint !== "string" || input.envFingerprint !== control.envFingerprint)
+              return json(200, { ok: true, stored: false, reason: "ENV_MISMATCH" });
             // #9:写帧、判体积、并 index 一步做。A3c:超限的探针帧同样不进就绪索引(记进 `oversize`,R6-14)
             const index = await service.snapshots().commitSnapshots({ tier: "shared", key: control.snapshotKey, clipId,
               capabilities: control.capabilities, items: [{ localFrame, html }] });

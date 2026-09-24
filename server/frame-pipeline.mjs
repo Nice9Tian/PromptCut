@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { openBakery, bakeFrames, findFfmpeg } from './bakery/index.mjs';
+import { openBakery, bakeFrames, findFfmpeg, probeBrowserEnvironment } from './bakery/index.mjs';
 import { captureSnapshot } from './bakery/capture-snapshot.mjs';
 import { frameVideo } from './bakery/frame-video.mjs';
 import { frameIdentity, trackPrefixes } from './frame-identity.mjs';
@@ -154,9 +154,19 @@ export class FramePipeline {
    * `frameService()` 传 Vite 的根目录。**不能用 `root`**:`root` 是帧库目录,没设 `PROMPTCUT_DATA_DIR`
    * 的开发期会读到没人写的 `<帧库>/out/card-costs.json`,实测成本永远进不了预渲染集合。
    * 缺省是当前工作目录(从仓库根跑的脚本和探针正好对上)。
+   *
+   * `environment`(M4,契约 E.2):这个进程预渲染用的环境,`describeEnvironment` 的形状(至少有
+   * `fingerprint`)。给了就不探测、直接用(测试,以及以后环境已知的独立渲染主机);不给就等第一个
+   * 预渲染间开起来时探测一次(`ensureEnvironment`)。
    */
-  constructor({ root, origin, code = () => '', captureCode = () => undefined, interactive = true, playhead = NO_PLAYHEAD, mediaUrl = () => null, dataRoot = process.cwd() }) {
+  constructor({ root, origin, code = () => '', captureCode = () => undefined, interactive = true, playhead = NO_PLAYHEAD, mediaUrl = () => null, dataRoot = process.cwd(), environment = null }) {
     this.root = root;
+    /**
+     * 环境指纹(M4):card plan、轨道流的全部结果键都乘上它。定下来之前是 null —— 那时
+     * `CardFrameCache.plan()` 抛出、`planStreams` 回 [],什么键都不产。
+     */
+    this.environment = environment && typeof environment === 'object' ? environment : null;
+    this.environmentProbe = null;
     this.dataRoot = dataRoot;
     this.origin = origin;
     this.code = code;
@@ -205,6 +215,26 @@ export class FramePipeline {
    * 当租约断掉、付一次完整回放)—— 那两个方法是 R8 的,这里只留位。
    */
   get streamPool() { return this.streamSessions; }
+  /** 本进程预渲染 Chrome 的环境指纹(16 位十六进制);还没定下来是 null */
+  get envFingerprint() { return this.environment?.fingerprint ?? null; }
+  /**
+   * 定下本进程的环境(契约 E.2)。只在真的预渲染间上探测:`bakery.browser` / `bakery.page`
+   * 缺一个就不探测(测试的假 bakery),原样返回 `this.environment`。
+   *
+   * **整个进程只定一次**,探测失败(`detected: false`)的结果也照样定下来。理由:指纹是结果键
+   * 的因子,中途换一次指纹,这个进程此前写的快照、PNG 缓存、流就全部成了另一个键下的孤儿,
+   * 页面上已经贴好的层也要整层重来;而同一个进程里所有预渲染间是同一套启动参数、同一个
+   * Chrome 二进制,环境本来就不会变,再探一次得不到新信息。并发的调用共用同一趟探测。
+   */
+  async ensureEnvironment(bakery) {
+    if (this.environment) return this.environment;
+    if (!bakery?.browser || !bakery?.page) return this.environment;
+    this.environmentProbe ||= probeBrowserEnvironment({ browser: bakery.browser, page: bakery.page }).then(environment => {
+      this.environment ||= environment;
+      return this.environment;
+    });
+    return this.environmentProbe;
+  }
   /** 不带 session 的调用方(脚本、探针)那个会话的索引。页面走 `this.ready.subscribe(session, …)` */
   get readyIndex() { return this.ready.session(DEFAULT_READY_SESSION).index; }
   get streamPoolSize() { return this._streams?.pool ?? STREAM_POOL_DEFAULT; }
@@ -237,6 +267,8 @@ export class FramePipeline {
         try {
           session.bakery = await openBakery({ url: this.emptyUrl() });
           session.bakery.streamLease = null;
+          // M4:和 `bakery()` 一样,开起来就定指纹(这两处是本进程仅有的 openBakery 调用点)
+          await this.ensureEnvironment(session.bakery);
           return session.bakery;
         } catch (error) {
           session.dead = true;
@@ -348,7 +380,7 @@ export class FramePipeline {
   /** 端到端探针的读口:超限帧(A3c)、`wanted` 的插队(C4)、预渲染集合(pinned 渲染 9) */
   diagnostics() {
     return { oversize: this._snapshots?.oversize ?? [], promotions: this.promotions ?? [], plans: this.planDiagnostics(),
-      streams: this._streams?.status() ?? null, ready: this.ready.describe() };
+      streams: this._streams?.status() ?? null, ready: this.ready.describe(), environment: this.environment };
   }
   /**
    * 每个 entry 此刻的预渲染集合和它的 card plan 摘要 —— `ready-index-probe` 靠它
@@ -364,6 +396,8 @@ export class FramePipeline {
         prerenderSet: entry.prerenderSet instanceof Set ? [...entry.prerenderSet].sort() : null,
         controls: entry.cardPlan.map(control => ({
           clipId: control.clipId, costKey: control.costKey, snapshotKey: control.snapshotKey,
+          // M4:探针据此核对 `snapshotKey === resultKeyOf(contentKey, envFingerprint)`
+          contentKey: control.contentKey, envFingerprint: control.envFingerprint,
           frameMode: control.frameMode ?? control.capabilities?.frameMode ?? null,
           tier: control.snapshotKey ? (control.tier || snapshotTier(control.capabilities)) : 'none',
           picked: this.prerenderPicked(entry, control.clipId),
@@ -385,7 +419,9 @@ export class FramePipeline {
       // a project edit that invalidates the scene can still reuse an unchanged
       // card MOV from <pipeline-root>/controls/<control-key>.
       entry.cardCache = new CardFrameCache({ root: this.root, project: entry.project,
-        capture: () => this.captureCode(), scale: () => this.scaleForLane('background') });
+        capture: () => this.captureCode(), scale: () => this.scaleForLane('background'),
+        // 传函数不传值:entry 可能在第一个预渲染间开起来、指纹定下之前就建好了
+        envFingerprint: () => this.envFingerprint });
       const cold = createFrameArchive({ spillDir: path.join(entry.dir, 'html-cache') });
       entry.html = cold.frames; entry.controls = cold.controls;
       entry.createControl = cold.createControl; entry.disposeArchive = cold.dispose;
@@ -428,6 +464,8 @@ export class FramePipeline {
     const url = this.origin() + '/?export=1&timeline=' + encodeURIComponent('data:application/json,' + encodeURIComponent(JSON.stringify(empty)));
     const bakery = await openBakery({ url });
     try {
+      // M4:第一个预渲染间开起来就定下本进程的环境指纹,之后算 card plan 才有键可产
+      await this.ensureEnvironment(bakery);
       await bakery.loadProject(project, { deferCards: true });
       await bakery.page.setViewport({ width: project.width, height: project.height, deviceScaleFactor: this.scaleForLane(lane) });
       await bakery.client.send('Emulation.setDefaultBackgroundColorOverride', { color: { r: 0, g: 0, b: 0, a: 0 } });

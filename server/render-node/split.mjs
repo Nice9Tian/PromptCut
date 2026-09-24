@@ -16,6 +16,12 @@ import { resultKeyOf } from './fingerprint.mjs';
  * 项目的指纹,写进每个细任务的 `requires.envFingerprint`,只有同指纹的节点能认领。
  * 含锚帧的快照段优先级 50,其余 10。
  *
+ * 内容键(契约 E.5):M4 起 card plan 的 `snapshotKey` 和流的 `streamKey` 本身已经乘过指纹,
+ * 所以这里取它们带的**内容键**(`control.contentKey` / `stream.contentKey`)再乘一次指纹 ——
+ * 指纹与 plan 相同时,共享档任务的 `resultKey` 正好等于 `control.snapshotKey`,流任务的正好等于
+ * `spec.streamKey`,细任务的产物和本机预渲染进程写的是同一个目录。没有内容键字段的输入
+ * (M2 夹具的旧形状)照旧把 `snapshotKey` / `streamKey` 当内容键。
+ *
  * 纯函数:不读环境变量、不做 I/O。
  */
 
@@ -81,7 +87,8 @@ export function splitPlan({
     if (tier !== 'shared' && tier !== 'local') continue;
     // 本地档的内容键要 entry.key;没给就跳过,不生成 `undefined/<共享键>` 这种键(契约 A.10a)
     if (tier === 'local' && (entryKey == null || entryKey === '')) continue;
-    const contentKey = tier === 'shared' ? snapshotKey : `${entryKey}/${snapshotKey}`;
+    const baseKey = control.contentKey ?? snapshotKey;
+    const contentKey = tier === 'shared' ? baseKey : `${entryKey}/${baseKey}`;
     const resultKey = resultKeyOf(contentKey, envFingerprint);
     const cardId = control.cardId ?? null;
     const cardVersion = control.cardId ? cardSourceVersions?.[control.cardId] : undefined;
@@ -113,14 +120,15 @@ export function splitPlan({
   for (const stream of streams ?? []) {
     const { streamKey, topClipId, firstSegment, lastSegment } = stream ?? {};
     if (!streamKey) continue;
-    const resultKey = resultKeyOf(streamKey, envFingerprint);
+    const contentKey = stream.contentKey ?? streamKey;
+    const resultKey = resultKeyOf(contentKey, envFingerprint);
     const weight = weightOf({ clipId: topClipId });
     for (const [from, to] of spans(firstSegment, lastSegment, streamSegments)) {
       const range = { unit: 'segment', from, to };
       emit({
         id: taskIdOf({ kind: 'stream', resultKey, range }), kind: 'stream', resultKey, range,
         source: { projectId, projectRev, derivedFrom },
-        input: { clipId: topClipId, cardId: null, entryKey: null, contentKey: streamKey },
+        input: { clipId: topClipId, cardId: null, entryKey: null, contentKey },
         weight: { ...weight, frames: (to - from + 1) * SEGMENT_FRAMES },
         requires: { envFingerprint, codeVersion, cardSources: {}, transcode: true, userCards: false, graphCards: false, belowDependent: false },
         priority: NORMAL_PRIORITY,
