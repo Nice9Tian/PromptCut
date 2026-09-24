@@ -99,7 +99,7 @@ import type { Readable } from "stream";
 import crypto from "crypto";
 import path from "path";
 import { apiPath, isAssetServicePath, clientAddressOf, isLoopbackAddress } from "./http-guard.mjs";
-import { createBlobStore } from "./asset-store/index.mjs";
+import { createBlobStore, candidateFileResolver } from "./asset-store/index.mjs";
 import {
   mediaDir, isMediaHash, extOfName, contentTypeForExt, resolveHashFile, writeMediaIndex, parseRange,
 } from "./vite-plugin-media";
@@ -143,12 +143,26 @@ const ARTIFACT_MIME_TO_EXT: Record<string, string> = {
 export const ASSET_NAMESPACES = ["media", "snap", "px"] as const;
 export type AssetNamespace = typeof ASSET_NAMESPACES[number];
 
-/** 请求头里的扩展名:X-Media-Ext 优先,其次按 X-Media-Type 反查。取不出给空串 */
+/**
+ * `snap` / `px` 落盘允许的扩展名,也是 fs 钩子 `resolveFile` 依次直接查的候选文件名(契约第 10 节第 6 条):
+ * `html`、`mp4`、`m4s` 在前,再是这两个命名空间的 MIME 表里其余的扩展名和 Content-Type 表认得的别名,
+ * 最后是没有扩展名的 `<hash>`(`resolveFile` 里补)。不扫目录,所以不在这里的扩展名一律按无扩展名存
+ * (`extFromHeaders`);它们的 Content-Type 本来就是 `application/octet-stream`,取回时对外看不出区别。
+ */
+export const ARTIFACT_EXTS: readonly string[] = [
+  ...new Set(["html", "mp4", "m4s", ...Object.values(ARTIFACT_MIME_TO_EXT), "htm", "m4v", "jpeg"]),
+];
+
+/** 请求头里的扩展名:X-Media-Ext 优先,其次按 X-Media-Type 反查。取不出给空串;`snap` / `px` 只留 `ARTIFACT_EXTS` 里的 */
 function extFromHeaders(req: IncomingMessage, ns: AssetNamespace = "media"): string {
   const raw = String(req.headers["x-media-ext"] || "").trim().toLowerCase().replace(/^\./, "");
-  if (/^[a-z0-9]{1,8}$/.test(raw)) return raw;
   const mime = String(req.headers["x-media-type"] || "").split(";")[0].trim().toLowerCase();
-  return (ns === "media" ? MIME_TO_EXT : ARTIFACT_MIME_TO_EXT)[mime] || "";
+  if (ns === "media") {
+    if (/^[a-z0-9]{1,8}$/.test(raw)) return raw;
+    return MIME_TO_EXT[mime] || "";
+  }
+  const ext = /^[a-z0-9]{1,8}$/.test(raw) ? raw : (ARTIFACT_MIME_TO_EXT[mime] || "");
+  return ARTIFACT_EXTS.includes(ext) ? ext : "";
 }
 
 /* ------------------------------------------------------------------ *
@@ -208,14 +222,20 @@ export function artifactStoreDir(root: string, ns: "snap" | "px"): string {
 }
 
 /**
- * 产物命名空间(`snap` / `px`)缺省的数据层:fs 实现。钩子不写媒体索引 ——
- * 找文件用 fs 实现自带的「`<hash>` 或 `<hash>.<ext>`」,入库后什么都不做。
+ * 产物命名空间(`snap` / `px`)缺省的数据层:fs 实现。钩子不写媒体索引,入库后什么都不做;
+ * 找文件不扫目录,按 `ARTIFACT_EXTS` 依次直接查 `<hash>.<ext>`,最后查 `<hash>`(契约第 10 节第 6 条)。
+ * 本模块不碰文件系统,「这个文件在不在」交给数据层的 `candidateFileResolver`。
  */
 export function defaultArtifactStore(root: string, ns: "snap" | "px"): AssetBlobStore {
+  const dir = artifactStoreDir(root, ns);
   return createBlobStore({
     kind: "fs",
-    dir: artifactStoreDir(root, ns),
-    hooks: { onStored: () => {}, contentTypeForExt: artifactContentType },
+    dir,
+    hooks: {
+      resolveFile: candidateFileResolver(dir, ARTIFACT_EXTS),
+      onStored: () => {},
+      contentTypeForExt: artifactContentType,
+    },
   }) as AssetBlobStore;
 }
 

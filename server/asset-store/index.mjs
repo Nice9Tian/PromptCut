@@ -8,8 +8,11 @@
  *
  * 接口写在 `blob-store.mjs` 的 JSDoc 里。本目录只引 Node 内置模块。
  *
- * 另外转出素材服务的 HTTP 客户端 `createAssetClient`（`client.mjs`，契约 `docs/plan/artifact-transfer-contract.md` 第 2 节）。
+ * 另外转出素材服务的 HTTP 客户端 `createAssetClient`（`client.mjs`，契约 `docs/plan/artifact-transfer-contract.md` 第 2 节），
+ * 以及 fs 实现按候选文件名找文件的钩子 `candidateFileResolver`（同一契约第 10 节第 6 条）。
  */
+import path from 'node:path';
+import fs from 'node:fs/promises';
 import { createFsStore } from './fs-store.mjs';
 import { createMemoryStore } from './memory-store.mjs';
 import { BLOB_CHUNK_SIZE } from './blob-store.mjs';
@@ -31,4 +34,28 @@ export function createBlobStore(options) {
     throw err;
   }
   throw new TypeError(`createBlobStore：不认识的 kind ${JSON.stringify(kind)}`);
+}
+
+/**
+ * fs 实现的 `hooks.resolveFile`：不扫目录，依次直接查 `<dir>/<hash>.<ext>`（按 `exts` 的顺序），最后查没有扩展名的 `<dir>/<hash>`。
+ * 给素材服务的 `snap` / `px` 命名空间用（契约 `docs/plan/artifact-transfer-contract.md` 第 10 节第 6 条）；
+ * `asset-service.ts` 不碰文件系统，所以「文件在不在」放在数据层这里判。
+ *
+ * @param {string} dir
+ * @param {readonly string[]} exts  候选扩展名，不带点
+ * @returns {(hash: string) => Promise<string | null>}
+ */
+export function candidateFileResolver(dir, exts) {
+  if (typeof dir !== 'string' || dir === '') throw new TypeError('candidateFileResolver：dir 必须是非空字符串');
+  const base = path.resolve(dir);
+  const suffixes = [...exts.map((e) => '.' + String(e).toLowerCase().replace(/^\./, '')), ''];
+  return async function resolveFile(hash) {
+    const key = String(hash ?? '').toLowerCase();
+    if (!/^[0-9a-f]{64}$/.test(key)) return null;
+    for (const suffix of suffixes) {
+      const file = path.join(base, key + suffix);
+      try { if ((await fs.stat(file)).isFile()) return file; } catch { /* 没有这个候选 */ }
+    }
+    return null;
+  };
 }

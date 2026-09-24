@@ -10,7 +10,9 @@
  *   分片大小以服务端 `chunks` 回的 `chunkSize` 为准（`received` 是按它编号的），服务端没给才用选项里的 `chunkSize`。
  * - `get`：404 回 null；下载后校验 sha256，不符就抛（`code: 'hash-mismatch'`）。
  * - `has`：`chunks` 的 `complete`。
- * - 重试：网络错误和 5xx 重试，最多 `retries` 次，间隔 200 ms、400 ms、800 ms（再往后继续翻倍）。
+ * - 超时：每个请求（含读完回包）各自计时，缺省 30 s（`timeoutMs`），到点用 AbortController 中止；
+ *   超时算网络错误，照常重试，重试用完抛出的错误带 `code: 'timeout'`（契约第 10 节第 5 条）。
+ * - 重试：网络错误、超时和 5xx 重试，最多 `retries` 次，间隔 200 ms、400 ms、800 ms（再往后继续翻倍）。
  *   每个请求各自计数，所以分片上传就是「按片重试」。4xx 不重试，直接抛，错误对象带 `status` 和回包 `body`。
  * - 令牌只进 `Authorization` 头；异常信息里出现令牌原文的地方一律换成 `***`，不挂原始错误对象。
  */
@@ -20,6 +22,8 @@ export const ASSET_CLIENT_NAMESPACES = Object.freeze(['media', 'snap', 'px']);
 
 const HASH = /^[0-9a-f]{64}$/;
 const EXT = /^[a-z0-9]{1,8}$/;
+/** setTimeout 能表示的最长时限；超过它（含 Infinity）就当不限时，否则 Node 会把它当 1 ms 立刻触发 */
+const MAX_TIMER_MS = 2 ** 31 - 1;
 
 const sha256Hex = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -50,15 +54,17 @@ function parseBody(buf, contentType) {
  * @param {string | null} [options.token]  集群令牌；给了就在每个请求上带 `Authorization: Bearer <令牌>`
  * @param {typeof globalThis.fetch} [options.fetch]
  * @param {number} [options.chunkSize]  服务端没回 `chunkSize` 时用，缺省 8 MiB
- * @param {number} [options.retries]  网络错误与 5xx 的重试次数，缺省 3
+ * @param {number} [options.retries]  网络错误、超时与 5xx 的重试次数，缺省 3
+ * @param {number} [options.timeoutMs]  单个请求（含读完回包）的时限，缺省 30000；`Infinity` 或超过 2^31-1 表示不限
  */
 export function createAssetClient({
-  base, token = null, fetch = globalThis.fetch, chunkSize = 8 * 1024 * 1024, retries = 3,
+  base, token = null, fetch = globalThis.fetch, chunkSize = 8 * 1024 * 1024, retries = 3, timeoutMs = 30000,
 } = /** @type {any} */ ({})) {
   if (typeof base !== 'string' || !/^https?:\/\//i.test(base)) throw new TypeError('createAssetClient：base 必须是 http(s) 地址');
   if (typeof fetch !== 'function') throw new TypeError('createAssetClient：没有可用的 fetch');
   if (!Number.isSafeInteger(chunkSize) || chunkSize <= 0) throw new TypeError('createAssetClient：chunkSize 必须是正整数');
   if (!Number.isSafeInteger(retries) || retries < 0) throw new TypeError('createAssetClient：retries 必须是非负整数');
+  if (typeof timeoutMs !== 'number' || !(timeoutMs > 0)) throw new TypeError('createAssetClient：timeoutMs 必须是正数');
   const root = base.replace(/\/+$/, '');
   const secret = typeof token === 'string' && token !== '' ? token : null;
 
@@ -87,6 +93,12 @@ export function createAssetClient({
     return err;
   }
 
+  function timeoutError(what) {
+    const err = new Error(scrub(`素材服务 ${what} 超时（${timeoutMs} ms 没有完成）`));
+    /** @type {any} */ (err).code = 'timeout';
+    return err;
+  }
+
   /**
    * 发一个请求并把回包读完；网络错误与 5xx 重试。回 `{ status, body, raw }`（4xx 原样回，由调用方决定抛不抛）。
    * @param {string} method
@@ -102,12 +114,22 @@ export function createAssetClient({
       if (attempt > 0) await sleep(200 * 2 ** (attempt - 1));
       let res;
       let raw;
+      let timedOut = false;
+      const ac = new AbortController();
+      // 到点中止；假 fetch 不认 signal 时也靠这个 promise 按时脱身
+      const expired = new Promise((_, reject) => {
+        ac.signal.addEventListener('abort', () => reject(new Error('timeout')), { once: true });
+      });
+      expired.catch(() => {});
+      const timer = timeoutMs <= MAX_TIMER_MS ? setTimeout(() => { timedOut = true; ac.abort(); }, timeoutMs) : null;
       try {
-        res = await fetch(`${root}/${rel}`, { method, headers: h, body });
-        raw = Buffer.from(await res.arrayBuffer());
+        res = await Promise.race([fetch(`${root}/${rel}`, { method, headers: h, body, signal: ac.signal }), expired]);
+        raw = Buffer.from(await Promise.race([res.arrayBuffer(), expired]));
       } catch (err) {
-        lastError = networkError(what, err);
+        lastError = timedOut ? timeoutError(what) : networkError(what, err);
         continue;
+      } finally {
+        if (timer) clearTimeout(timer);
       }
       const parsed = parseBody(raw, res.headers.get('content-type'));
       if (res.status >= 500) { lastError = httpError(what, res.status, parsed); continue; }
