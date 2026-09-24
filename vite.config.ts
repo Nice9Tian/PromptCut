@@ -56,8 +56,9 @@ export default defineConfig({
   //   viewGatePlugin  —— Skill 无头实例的只读钥匙,只在 headless.mjs 起的那份上生效
   //                      (它靠 PROMPTCUT_VIEW_TOKEN 判断,用户自己那份没有这个变量,整个空转)。
   // stagePortsPlugin 排在 apiGuard 后面:它自己那条 /api/stage/ports 也该受同一道卡口管。
-  // docservicePlugin(本地文档服务)无头实例不挂:它是 Skill 的临时副本,不能自己发 projectRev。
-  plugins: [apiGuardPlugin(), viewGatePlugin(), stagePortsPlugin(), react(), tailwindcss(), exportPlugin(), mirrorPlugin(), costsPlugin(), framesPlugin(), vitePluginAi(), sttPlugin(), shotsPlugin(), trackPlugin(), subjectPlugin(), mediaPlugin(), chatsPlugin(), vitePluginCards(), projectsPlugin(), visionPlugin(), skillPlugin(), skillStatePlugin(), collectPlugin(), webPlugin(), prerenderPlugin(), voicePlugin(), audioPlugin(), ...(headless ? [] : [docservicePlugin()])],
+  // docservicePlugin(本地文档服务)总是注册;无头实例里它进入停用模式(不建文档服务、/docservice 回 503),
+  // 因为无头实例是 Skill 的临时副本,不能自己发 projectRev。停用逻辑在插件里。
+  plugins: [apiGuardPlugin(), viewGatePlugin(), stagePortsPlugin(), react(), tailwindcss(), exportPlugin(), mirrorPlugin(), costsPlugin(), framesPlugin(), vitePluginAi(), sttPlugin(), shotsPlugin(), trackPlugin(), subjectPlugin(), mediaPlugin(), chatsPlugin(), vitePluginCards(), projectsPlugin(), visionPlugin(), skillPlugin(), skillStatePlugin(), collectPlugin(), webPlugin(), prerenderPlugin(), voicePlugin(), audioPlugin(), docservicePlugin()],
   server: headless
     ? {
         // 无头实例不要热更新:它是给 agent 跑的,源码一改就重载页面,重载期间工具全失败,
