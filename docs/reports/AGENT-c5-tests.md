@@ -139,3 +139,26 @@
 - `85e2489` 探针:局域网素材服务端到端 asset-lan-probe(W2;地址由控制面下发,只用 Node 内置)
 - `a50e8df` 测试:H2 不把 store.chunks() 当目录名;N4 走缺省 announcerId,没收到登记时报出登记方日志
 - 本报告的最终版另提交一次。
+
+## 第二轮：按契约第 8 节改测试（2026-09-25）
+
+先 `git merge claude/c5` 拉进第 8 节（合并提交 `8854b7a`），再照改：
+
+| 改动 | 用例 |
+|---|---|
+| 缺省 announcerId 改为 `asset:${os.hostname()}`；假端点用例里写死的 id 也换成 `asset:…` | N2（二）期望值；N4 断言推送里的 announcerId 等于缺省值 |
+| 守门只拦字符串里的目录名：`'.chunks'`、`".chunks"`、`` `.chunks` ``、路径片段 `/.chunks`、`\.chunks`；`store.chunks(` 不算。正则另用 8 个样例核过（方法调用 3 例不拦，目录名 5 例全拦） | H2 |
+| `onStored` 的 `file` 断言收紧为等于 `<hash>.mp4` | K16（布局） |
+| 先鉴权：未授权写一律 401，新增长度不对、越界、分片号前导零、缺 size 四种未授权写都要 401；比一片大的未授权写只接受 401 或断连 | H3 |
+| scheme `bearer`、`BEARER` 放行；令牌改一个字母大小写 → 401 | H3 |
+| 排序按 URL 字符串字典序，维持原样 | N1 |
+| 新增：memory 遇 size = 256 MiB + 1、64 GiB → `size-mismatch`，不登记、usage 为零；正常大小照常 | K17（只测 memory） |
+| 新增：fs 目录里放 `index.json`（媒体索引形状）、`notes.txt`、63 位哈希的文件、64 位哈希名的目录，usage 不变 | K18（只测 fs） |
+
+用例总数 42 → 44（K 33 条、H 6 条、N 5 条）。
+
+当前结果（本分支，实现未合入）：
+- `blob-store-conformance`：33 条全败，退出码 1，原因都是载不进 `server/asset-store/index.mjs`。
+- `asset-store-http`：6 条全败，退出码 1。H2 败在源码里有 `from "fs"`，H5 败在 `ASSET_ALLOW_HEADERS` 没有 Authorization，其余 4 条载不进数据层。
+- `asset-announce`：5 条全败，退出码 1，原因都是载不进 `server/asset-announce.mjs`。
+- 三个文件 `node --check` 都通过。参考实现上一轮已删，这一轮没有重跑自检。

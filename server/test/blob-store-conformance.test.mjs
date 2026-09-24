@@ -512,11 +512,11 @@ test('K16 fs：目录布局与今天一致（暂存 .chunks/<hash>/ 里有 meta.
   assert.equal(sha256(fs.readFileSync(whole)), h);
   assert.ok(!fs.existsSync(staging), '.chunks/<hash> 不存在');
 
-  // onStored 收到入库信息（file 取文件名比较，契约没写是全路径还是文件名）
+  // onStored 收到入库信息（file 是文件名，契约第 8 节第 3 条）
   assert.equal(stored.length, 1);
   const e = stored[0];
   assert.equal(e.hash, h);
-  assert.equal(path.basename(String(e.file)), `${h}.mp4`);
+  assert.equal(e.file, `${h}.mp4`);
   assert.equal(e.ext, 'mp4');
   assert.equal(e.size, buf.length);
   assert.equal(e.contentType, 'video/mp4', 'contentType 用 hooks.contentTypeForExt');
@@ -549,4 +549,42 @@ test('K16 fs：老的整件导入（直接放在 <dir>/<hash>.<ext>、经 hooks.
   assert.deepEqual(await store.complete(h), { status: 'ok', size: 5000, ext: 'wav' });
   assert.deepEqual(await readAll(await store.read(h, { start: 10, end: 19 })), buf.subarray(10, 20));
   assert.ok(!fs.existsSync(path.join(dir, '.chunks', h)), '入库后的 putChunk 不落盘');
+});
+
+/* ------------------------------------------------------------------ *
+ * K17、K18：契约第 8 节第 7、8 条
+ * ------------------------------------------------------------------ */
+
+test('K17 memory：size 超过 256 MiB 回 size-mismatch，不登记', async () => {
+  const { store } = KINDS.memory();
+  const LIMIT = 256 * 1024 * 1024;
+  for (const size of [LIMIT + 1, 64 * 1024 * 1024 * 1024]) {
+    const h = sha256(Buffer.from(`k17-${size}`));
+    async function* body() { yield Buffer.alloc(MEM_CHUNK, 1) }
+    const r = await store.putChunk(h, 0, { size, ext: 'mp4' }, body());
+    assert.equal(r?.status, 'size-mismatch', `size ${size}：${JSON.stringify(r)}`);
+    assert.deepEqual(await store.chunks(h), unknownChunks(store.chunkSize), '不登记');
+    assert.deepEqual(await store.usage(), { blobs: 0, bytes: 0, staging: 0 });
+  }
+  // 正常大小照常
+  const buf = bytesOf(100, 17);
+  const h = sha256(buf);
+  assert.equal((await store.putChunk(h, 0, { size: 100, ext: '' }, streamOf(buf))).status, 'ok');
+});
+
+test('K18 fs：usage 只数 <hash> 与 <hash>.<ext> 形状的文件，索引文件和其它文件不算', async () => {
+  const { store, dir } = KINDS.fs();
+  const buf = bytesOf(321, 18);
+  const h = sha256(buf);
+  assert.equal((await store.putChunk(h, 0, { size: 321, ext: 'mp4' }, streamOf(buf))).status, 'ok');
+  assert.equal((await store.complete(h)).status, 'ok');
+  const before = await store.usage();
+  assert.deepEqual(before, { blobs: 1, bytes: 321, staging: 0 });
+
+  // 媒体索引（vite-plugin-media 写在 <mediaDir>/index.json）和其它杂项文件
+  fs.writeFileSync(path.join(dir, 'index.json'), JSON.stringify({ version: 1, items: { [h]: { file: `${h}.mp4`, ext: 'mp4', size: 321, contentType: 'video/mp4' } } }, null, 2));
+  fs.writeFileSync(path.join(dir, 'notes.txt'), 'x'.repeat(1000));
+  fs.writeFileSync(path.join(dir, `${'a'.repeat(63)}.mp4`), 'short-hash');
+  fs.mkdirSync(path.join(dir, 'b'.repeat(64)), { recursive: true });
+  assert.deepEqual(await store.usage(), before, '计数不变');
 });

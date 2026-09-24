@@ -287,8 +287,9 @@ test('H2 守门：asset-service.ts 源码里没有文件系统引用、没有 .c
   const src = fs.readFileSync(ASSET_SRC, 'utf8');
   const banned = ['from "fs"', 'from "fs/promises"', 'from "node:fs"', 'createReadStream', 'createWriteStream'];
   for (const s of banned) assert.ok(!src.includes(s), `不许出现 ${s}`);
-  // 目录名 .chunks：BlobStore 的方法调用 store.chunks(...) 不算（契约第 2 节的方法名本身就叫 chunks）
-  const dirName = src.split(/\r?\n/).filter((line) => /\.chunks(?!\s*\()/.test(line));
+  // 目录名 .chunks：只拦字符串里的目录名（契约第 8 节第 2 条）：'.chunks'、".chunks"、`.chunks`、路径片段 /.chunks、\\.chunks；
+  // 方法调用 store.chunks(...) 不算
+  const dirName = src.split(/\r?\n/).filter((line) => /['"`]\.chunks['"`]|[/\\]\.chunks\b/.test(line));
   assert.deepEqual(dirName, [], '不许出现 .chunks 目录名');
   // 换个引号、换个写法也不行
   assert.doesNotMatch(src, /\bfrom\s*["'](node:)?fs(\/promises)?["']/, '静态 import fs');
@@ -336,6 +337,17 @@ test('H3 isTrusted 为 false：不带令牌、令牌错 → 401；令牌对 → 
   await expect401(complete(base, hash), 'POST complete 不带令牌');
   for (const [what, hdr] of wrongs) await expect401(complete(base, hash, hdr), `POST complete ${what}`);
 
+  // 令牌区分大小写（契约第 8 节第 4 条）
+  const flipped = token.replace(/[a-zA-Z]/, (c) => (c === c.toUpperCase() ? c.toLowerCase() : c.toUpperCase()));
+  await expect401(put(base, hash, 0, buf, { ...h, ...bearer(flipped) }), '令牌大小写不同');
+
+  // scheme 不区分大小写
+  for (const scheme of ['bearer', 'BEARER']) {
+    const r2 = await put(base, hash, 0, buf, { ...h, Authorization: `${scheme} ${token}` });
+    assert.equal(r2.status, 200, `scheme 写成 ${scheme}`);
+    await r2.arrayBuffer();
+  }
+
   // 令牌对：照常
   const ok = await put(base, hash, 0, buf, { ...h, ...bearer(token) });
   assert.equal(ok.status, 200);
@@ -364,11 +376,17 @@ test('H3 isTrusted 为 false：不带令牌、令牌错 → 401；令牌对 → 
   await expect401(complete(base, hash), '入库后 complete 不带令牌');
   assert.equal((await put(base, hash, 0, buf, { ...h, ...bearer(token) })).status, 200);
 
-  // 请求体比一片还大的未授权写：连接被掐断或回 4xx（契约没定鉴权与长度检查谁先），都不能落进存储
+  // 先鉴权（契约第 8 节第 4 条）：长度、分片号、size 都不对的未授权写也回 401，不看其它校验
+  await expect401(put(base, hash, 0, buf.subarray(1), h), '长度不对的未授权写');
+  await expect401(put(base, hash, 9, buf, h), '越界的未授权写');
+  await expect401(put(base, hash, '01', buf, h), '分片号格式不对的未授权写');
+  await expect401(put(base, hash, 0, buf, { 'X-Media-Ext': 'png' }), '缺 size 的未授权写');
+
+  // 请求体比一片还大的未授权写：连接被掐断或回 401，都不能落进存储
   const big = bytesOf(CHUNK + 5, 302);
   const bh = sha256(big);
   const r = await put(base, bh, 0, big, { 'X-Media-Size': String(big.length) }).catch((e) => e);
-  if (!(r instanceof Error)) { assert.ok([400, 401].includes(r.status), `status ${r.status}`); await r.arrayBuffer().catch(() => {}); }
+  if (!(r instanceof Error)) { assert.equal(r.status, 401); await r.arrayBuffer().catch(() => {}); }
   assert.deepEqual((await chunks(base, bh)).received, []);
 });
 

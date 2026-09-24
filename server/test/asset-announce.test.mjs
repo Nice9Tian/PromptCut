@@ -119,7 +119,7 @@ test('N2 startAssetAnnounce 用假端点：每次 onOpen 发一次 service.annou
   const f = fakeFactory();
   const logs = [];
   const token = randomToken();
-  const handle = startAssetAnnounce({ url: 'ws://10.0.0.1:8787', token, announcerId: 'asset@pc-1', urls: URLS, createEndpoint: f.createEndpoint, log: (...a) => logs.push(a) });
+  const handle = startAssetAnnounce({ url: 'ws://10.0.0.1:8787', token, announcerId: 'asset:pc-1', urls: URLS, createEndpoint: f.createEndpoint, log: (...a) => logs.push(a) });
   assert.equal(typeof handle?.stop, 'function');
   assert.equal(f.made.length, 1, '建一个端点');
   const ep = f.made[0];
@@ -129,7 +129,7 @@ test('N2 startAssetAnnounce 用假端点：每次 onOpen 发一次 service.annou
 
   ep.fireOpen();
   await new Promise((r) => setImmediate(r));
-  assert.deepEqual(announces(ep).map(pickAnnounce), [{ type: 'service.announce', announcerId: 'asset@pc-1', kind: 'asset', urls: URLS }]);
+  assert.deepEqual(announces(ep).map(pickAnnounce), [{ type: 'service.announce', announcerId: 'asset:pc-1', kind: 'asset', urls: URLS }]);
 
   // 断线、重连：再登记一次
   ep.fireClose();
@@ -147,19 +147,19 @@ test('N2 startAssetAnnounce 用假端点：每次 onOpen 发一次 service.annou
   assert.equal(ep.delivered.length, before, '收到 error 不重发');
   assert.ok(logs.length > logsBefore, '收到 error 打日志');
   // 别的消息（回执、推送）不引起重发
-  ep.fireMessage({ type: 'service.announced', announcerId: 'asset@pc-1', kind: 'asset', urls: URLS });
+  ep.fireMessage({ type: 'service.announced', announcerId: 'asset:pc-1', kind: 'asset', urls: URLS });
   await new Promise((r) => setTimeout(r, 10));
   assert.equal(ep.delivered.length, before);
   handle.stop();
 });
 
-test('N2 announcerId 缺省是 asset@<hostname>；url 为空时什么都不做', async () => {
+test('N2 announcerId 缺省是 asset:<hostname>（契约第 8 节第 1 条）；url 为空时什么都不做', async () => {
   const { startAssetAnnounce } = need();
   const f = fakeFactory();
   const h = startAssetAnnounce({ url: 'wss://docs.example.lan/', token: randomToken(), urls: URLS, createEndpoint: f.createEndpoint, log: () => {} });
   f.made[0].fireOpen();
   await new Promise((r) => setImmediate(r));
-  assert.equal(announces(f.made[0])[0]?.announcerId, `asset@${os.hostname()}`);
+  assert.equal(announces(f.made[0])[0]?.announcerId, `asset:${os.hostname()}`);
   h.stop();
 
   for (const url of ['', undefined, null]) {
@@ -191,14 +191,14 @@ test('N3 urls 为空不登记（打一行 log）；stop() 先发 service.withdra
 
   // stop()：连着时先 withdraw 再 close
   const g = fakeFactory();
-  const s = startAssetAnnounce({ url: 'ws://10.0.0.1:8787', token: randomToken(), announcerId: 'asset@n3', urls: URLS, createEndpoint: g.createEndpoint, log: () => {} });
+  const s = startAssetAnnounce({ url: 'ws://10.0.0.1:8787', token: randomToken(), announcerId: 'asset:n3', urls: URLS, createEndpoint: g.createEndpoint, log: () => {} });
   const ep = g.made[0];
   ep.fireOpen();
   await new Promise((r) => setImmediate(r));
   s.stop();
   assert.deepEqual(g.events, ['send:service.announce', 'send:service.withdraw', 'close'], '先 withdraw 后 close');
   const w = withdraws(ep)[0];
-  assert.deepEqual({ type: w.type, announcerId: w.announcerId, kind: w.kind }, { type: 'service.withdraw', announcerId: 'asset@n3', kind: 'asset' });
+  assert.deepEqual({ type: w.type, announcerId: w.announcerId, kind: w.kind }, { type: 'service.withdraw', announcerId: 'asset:n3', kind: 'asset' });
   assert.equal(ep.closed, true);
 
   // 断着时 stop()：不发 withdraw，照样关
@@ -239,11 +239,11 @@ test('N4 对真文档服务（端口 0，挂服务地址登记模块）：登记
     push = await watcher.next(byType('service.endpoints'), 5000);
   } catch {
     assert.fail(`订阅方没收到登记。登记方日志：${JSON.stringify(logs).slice(0, 600)}`
-      + `（缺省 announcerId 是 asset@${os.hostname()}；服务地址登记模块的 announcerId 只认 [A-Za-z0-9._:-]{1,128}）`);
+      + `（缺省 announcerId 应为 asset:${os.hostname()}；服务地址登记模块的 announcerId 只认 [A-Za-z0-9._:-]{1,128}）`);
   }
   assert.equal(push.endpoints.length, 1);
   const id = push.endpoints[0].announcerId;
-  assert.equal(typeof id, 'string');
+  assert.equal(id, `asset:${os.hostname()}`, '缺省 announcerId（契约第 8 节第 1 条）');
   assert.deepEqual({ kind: push.endpoints[0].kind, urls: push.endpoints[0].urls }, { kind: 'asset', urls });
 
   // 新来的订阅者在 watch 的回包里就能看到
