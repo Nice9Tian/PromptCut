@@ -3,9 +3,10 @@
  *
  * stream 是 `projects/<projectId>`、`content/<kind>` 这样的相对名：`<命名空间>/<名字>`。
  * 文件存储把它映射成 `<dir>/<命名空间>/<名字>.ndjson`：
- * - 名字里 `[A-Za-z0-9._-]` 以外的字符（例如 Windows 文件名不许有的 `:`）写成 `%XX`；
- * - 名字恰好是 Windows 保留设备名（`CON`、`NUL`、`COM1`……）时，首字母也写成 `%XX`；
+ * - 名字里 `[A-Za-z0-9._-]` 原样保留，其余每个 UTF-8 字节写成 `%XX`（大写十六进制），`%` 本身也编码
+ *   （契约第 10 节）。例：`a:b` → `a%3Ab.ndjson`；
  * - 名字后面总接 `.ndjson`，所以 `.`、`..` 也只是普通文件名，映射后的路径还要再核一次落在 `<dir>` 里。
+ * 读和写用同一个映射。
  *
  * Windows 的文件名不分大小写：只差大小写的两个名字会落进同一个文件。所以每条记录都带自己的键
  * （`projectId`、`kind`），模块回放时按键过滤，不依赖「一个 stream 一个文件」。
@@ -21,8 +22,7 @@ import path from 'node:path';
 
 const NAMESPACE_RE = /^[a-z][a-z0-9-]{0,31}$/;
 const MAX_NAME_LENGTH = 512;
-const SAFE_CHAR = /[A-Za-z0-9._-]/;
-const RESERVED = /^(con|prn|aux|nul|com[0-9]|lpt[0-9])$/i;
+const SAFE_CHAR = /^[A-Za-z0-9._-]$/;
 
 /** 缺省日志：一行一条 JSON，写 stdout */
 function jsonLog(event, fields) {
@@ -31,12 +31,13 @@ function jsonLog(event, fields) {
 
 const hex = (ch) => [...Buffer.from(ch, 'utf8')].map((b) => `%${b.toString(16).toUpperCase().padStart(2, '0')}`).join('');
 
-/** 名字 → 文件名（不含扩展名） */
-function fileNameOf(name) {
+/**
+ * 名字 → 文件名（不含扩展名）：`[A-Za-z0-9._-]` 原样，其余每个 UTF-8 字节写成 `%XX`（大写十六进制），`%` 本身也编码。
+ * 例：`a:b` → `a%3Ab`。直接拼 `a:b.ndjson` 的话，Windows 会把它写进文件 `a` 的备用数据流（文件夹里看不见，拷贝时丢）。
+ */
+export function fileNameOf(name) {
   let out = '';
   for (const ch of name) out += SAFE_CHAR.test(ch) ? ch : hex(ch);
-  const base = out.split('.')[0];
-  if (RESERVED.test(base)) out = hex(out[0]) + out.slice(1);
   return out;
 }
 
