@@ -1,21 +1,23 @@
 /**
  * 文档服务的组装层：HTTP 与 WebSocket 升级、建连鉴权、心跳、`/healthz`、诊断，以及旧接口 `mountRenderQueue` 的外观。
  *
- * 语义见 `docs/semantics/architecture/document-service.md`，契约见 `docs/plan/render-queue-contract.md` G.4。
+ * 语义见 `docs/semantics/architecture/document-service.md`，契约见 `docs/plan/render-queue-contract.md` G.4、H.2、H.4。
  * 文档服务是通用的文本 / JSON 分发中心：
  * - 传输在 `ws.mjs`；
- * - 通用核心在 `router.mjs`（连接登记、信封解析、按类型路由、模块挂载），不认识任何业务；
+ * - 通用核心在 `router.mjs`（连接登记、信封解析、按类型路由、模块挂载、频道、出站背压），不认识任何业务；
+ *   这里把连接的写、积压字节数、关闭和 `drain` 事件接给它；
  * - 业务都是挂上来的模块（`modules/`）：渲染任务队列、服务地址登记，以后还可以挂与渲染无关的文本处理模块。
  *
  * 这一版还没有项目文档、操作日志、`projectRev` / `cardRev`、锁和内容库（`docs/plan/cloud-task.md` 第 6 步）。
  * `principal` 由 `authenticate` 钩子在建连时给出（集群令牌见 `auth.mjs`），缺省是匿名；消息里自报的一律不认。
  *
  * 渲染任务队列的旧接口保留：创建时挂一个占位模块（队列消息一律回 `queue-unavailable`），
- * `mountRenderQueue(q)` 把占位换成真队列，它返回的卸载函数再换回占位。
+ * `mountRenderQueue(q)` 把占位换成真队列，它返回的卸载函数再换回占位。队列的 `send` 由调用方接到本服务的 `send`，
+ * 真队列挂着时 `send` 先问队列模块的 `outbound` 要发送选项（合并键，H.3），再交给核心。
  */
 import { createServer } from 'node:http';
 import { acceptUpgrade, rejectUpgrade, CLOSE } from './ws.mjs';
-import { createRouter } from './router.mjs';
+import { createRouter, CORE_DEFAULTS } from './router.mjs';
 import { PROTOCOL, offeredProtocols } from './auth.mjs';
 import { QUEUE_DEFAULTS } from '../render-queue/constants.mjs';
 import { renderQueueModule, renderQueuePlaceholder, RENDER_QUEUE_MODULE } from './modules/render-queue.mjs';
@@ -47,6 +49,8 @@ function jsonLog(event, fields) {
  * @param {object[]} [options.modules] 创建时挂上的模块（契约 G.3）
  * @param {boolean} [options.autoTick] 缺省 true；false 时不起模块计时器，由调用方手动 `tick()`
  * @param {string} [options.protocol] 客户端给了这个子协议时握手回显它，缺省 `promptcut.v1`
+ * @param {number} [options.highWaterBytes] 底层积压到这么多字节就改进核心的出站队列（H.2），缺省 64 KiB
+ * @param {number} [options.maxPendingBytes] 出站队列加底层积压超过它就以 1013 关闭连接（H.2），缺省 1 MiB
  * @param {() => number} [options.now]
  * @param {(event: string, fields: object) => void} [options.log]
  */
@@ -61,6 +65,8 @@ export function createDocService(options = {}) {
     modules = [],
     autoTick = true,
     protocol = PROTOCOL,
+    highWaterBytes = CORE_DEFAULTS.HIGH_WATER_BYTES,
+    maxPendingBytes = CORE_DEFAULTS.MAX_PENDING_BYTES,
     now = Date.now,
     log = jsonLog,
   } = options;
@@ -79,7 +85,29 @@ export function createDocService(options = {}) {
     write(connId, text) {
       sockets.get(connId)?.ws.send(text);
     },
+    buffered(connId) {
+      return sockets.get(connId)?.ws.bufferedAmount ?? 0;
+    },
+    close(connId, code, reason) {
+      sockets.get(connId)?.ws.close(code, reason);
+    },
+    highWaterBytes,
+    maxPendingBytes,
   });
+
+  /**
+   * 旧接口 `send`（队列的 `send` 接在这里）：真队列挂着时先问队列模块要发送选项（合并键），
+   * 它返回 null 的不发。别的模块走 `ctx.send`，不经这里。
+   */
+  function sendFromOutside(connId, message) {
+    const mod = mounted.get(RENDER_QUEUE_MODULE)?.mod;
+    let opts;
+    if (typeof mod?.outbound === 'function') {
+      opts = mod.outbound(connId, message);
+      if (opts === null) return;
+    }
+    router.send(connId, message, opts);
+  }
 
   /** 挂一个模块：核心做冲突检查与 connect，这里按 `tickMs` 起计时器 */
   function mount(mod) {
@@ -153,6 +181,8 @@ export function createDocService(options = {}) {
     sockets.set(connId, conn);
     log('conn.open', { connId, remote: ws.remoteAddress, userId: principal.userId });
     ws.on('pong', () => { conn.alive = true; });
+    // 底层排空：核心接着写积压的消息（H.2）
+    ws.on('drain', () => router.drained(connId));
     ws.on('message', (text) => {
       conn.alive = true;
       router.dispatch(connId, text);
@@ -208,9 +238,12 @@ export function createDocService(options = {}) {
       });
     },
 
-    /** 模块之外往连接上发消息（如 createRenderQueue 的 `send`）。连接已断就丢弃 */
+    /**
+     * 模块之外往连接上发消息（如 createRenderQueue 的 `send`）。连接已断就丢弃。
+     * 同样经核心的出站队列与背压；真队列挂着时带上队列模块给的合并键（H.3）。
+     */
     send(connId, message) {
-      router.send(connId, message);
+      sendFromOutside(connId, message);
     },
 
     /** 挂一个模块（契约 G.3），返回卸载函数。类型或字段与已挂模块冲突时抛错、不挂 */
@@ -248,10 +281,14 @@ export function createDocService(options = {}) {
       };
     },
 
-    /** 诊断：每条连接的身份与各模块给的字段，以及各模块的 describe */
+    /**
+     * 诊断：每条连接的身份、出站积压、订阅与各模块给的字段，频道订阅数，以及各模块的 describe。
+     * `channels` 在 `/healthz` 里是有订阅者的频道数，这里是「频道 → 订阅数」（和 `modules` 一样两处形状不同）。
+     */
     describe() {
       return {
         ...health(),
+        channels: router.channels(),
         conns: [...sockets.keys()].map((id) => router.describeConn(id)).filter(Boolean),
         modules: Object.fromEntries(router.modules().map((name) => {
           const mod = mounted.get(name)?.mod;
