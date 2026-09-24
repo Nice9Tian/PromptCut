@@ -64,14 +64,14 @@ export function docservicePlugin(): Plugin {
           ]);
 
         // 非本机连接的鉴权:只认集群令牌。没配令牌、或令牌格式不对,就一律拒绝(失败即关)
-        const token = process.env.PROMPTCUT_CLUSTER_TOKEN;
-        let remoteAuth: (req: IncomingMessage) => Principal | null = () => null;
-        if (token) {
-          try {
-            remoteAuth = createClusterAuth({ token, allowAnonymous: false, log }).authenticate;
-          } catch (err) {
-            log("config.error", { reason: "bad-token-format", message: errText(err) });
-          }
+        // (没配令牌时 createClusterAuth 在拒绝时记 `auth.reject { reason: 'no-token' }`,令牌原文不进日志)
+        const token = process.env.PROMPTCUT_CLUSTER_TOKEN || undefined;
+        let remoteAuth: (req: IncomingMessage) => Principal | null;
+        try {
+          remoteAuth = createClusterAuth({ token, allowAnonymous: false, log }).authenticate;
+        } catch (err) {
+          log("config.error", { reason: "bad-token-format", message: errText(err) });
+          remoteAuth = createClusterAuth({ allowAnonymous: false, log }).authenticate;
         }
         const authenticate = (req: IncomingMessage): Principal | null => {
           const address = clientAddressOf(req);
