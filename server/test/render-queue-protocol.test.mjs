@@ -1,5 +1,6 @@
 /**
- * 渲染任务队列（M1）协议用例 P1～P14，另加 P15（契约 A.4 末段「派生任务的继承」，定稿后补充）。
+ * 渲染任务队列（M1）协议用例 P1～P14，另加 P15（契约 A.4 末段「派生任务的继承」，定稿后补充）、
+ * P16（A.4「已存在的同 id 任务」，M3 裁定后补充）。
  * 跑：node --test server/test/render-queue-protocol.test.mjs
  *
  * 依据：`docs/plan/render-queue-contract.md` A 节（契约）、`docs/plan/distributed-prerender-queue.md` 第 3、4 节与 5.1 节
@@ -845,4 +846,130 @@ test('P15 派生任务的继承：derivedFrom 指向本节点认领中的 plan �
   out = h.publish('n2', [E]);
   assert.equal(out.one('m', 'task.opened').task.source.userId, 'svc3');
   assert.deepEqual(h.task(E.id).subscribers, ['pub-n2']);
+});
+
+test('P16 继承条件满足时已存在的细任务：并入 plan 的订阅者（userId 不改）；done / failed 给新并入的订阅者各补发一条；已是订阅者的不重复发；条件不满足只加本发布方', () => {
+  const h = createQueueHarness(createRenderQueue);
+  // 早先建任务的发布方（另一个用户）、两个页面、切分节点 n、另一个节点 m
+  h.publisher('old', 'pub-old', { userId: 'u-old', tenantId: 't1' });
+  h.publisher('pg', 'pub-page', { userId: 'u1', tenantId: 't1' });
+  h.publisher('pg2', 'pub-page2', { userId: 'u1', tenantId: 't1' });
+  h.node('n', 'node-N', { profile: 'host', userId: 'svc', tenantId: 't2' });
+  h.handle('n', { type: 'publisher.hello', publisherId: 'pub-node' });
+  h.node('m', 'node-M', { profile: 'host', userId: 'svc2', tenantId: 't2' });
+  h.handle('m', { type: 'publisher.hello', publisherId: 'pub-m' });
+
+  // 已存在的四种任务（pub-old 建），外加两条 pub-page 早已订阅的 done / failed
+  const O = makeTaskInput({ resultKey: 'rk-open' });
+  const C = makeTaskInput({ resultKey: 'rk-claimed' });
+  const D = makeTaskInput({ resultKey: 'rk-done' });
+  const F = makeTaskInput({ resultKey: 'rk-failed' });
+  const D2 = makeTaskInput({ resultKey: 'rk-done-sub' });
+  const F2 = makeTaskInput({ resultKey: 'rk-failed-sub' });
+  const ALL = [O, C, D, F, D2, F2];
+  h.publish('old', [O, C, D, F]);
+  h.publish('pg', [D2, F2]);
+  claimOk(h, 'm', C.id, 1);
+  claimOk(h, 'm', D.id, 1);
+  h.complete('m', D.id, 2, { ranges: [[0, 59]] });
+  claimOk(h, 'm', F.id, 1);
+  h.fail('m', F.id, 2, { error: 'boom', retryable: false });
+  claimOk(h, 'm', D2.id, 1);
+  h.complete('m', D2.id, 2, { ranges: [[0, 59]] });
+  claimOk(h, 'm', F2.id, 1);
+  h.fail('m', F2.id, 2, { error: 'boom2', retryable: false });
+  assert.deepEqual(ALL.map(t => h.task(t.id).state), ['open', 'claimed', 'done', 'failed', 'done', 'failed']);
+
+  // plan：两个页面都订阅，n 认领
+  const PL = makeTaskInput({ kind: 'plan', projectRev: 1 });
+  h.publish('pg', [PL]);
+  h.publish('pg2', [PL]);
+  claimOk(h, 'n', PL.id, 1);
+  assert.deepEqual(h.task(PL.id).subscribers, ['pub-page', 'pub-page2']);
+  const before = new Map(ALL.map(t => [t.id, h.task(t.id)]));
+
+  // n 切分出的细任务与已存在的同 id（id 只由 kind / resultKey / range 决定）
+  const derivedOf = (t, from = PL.id) => ({ ...t, source: { ...t.source, derivedFrom: from } });
+  const derived = ALL.map(t => derivedOf(t));
+  const out = h.publish('n', derived);
+  assert.deepEqual(out.one('n', 'task.published').results.map(r => [r.id, r.state, r.version, r.created]), [
+    [O.id, 'open', 1, false], [C.id, 'claimed', 2, false], [D.id, 'done', 3, false],
+    [F.id, 'failed', 3, false], [D2.id, 'done', 3, false], [F2.id, 'failed', 3, false],
+  ]);
+
+  // 订阅者：open / claimed = 原有 ∪ 本发布方 ∪ plan 的订阅者；
+  // done / failed 至少并入 plan 的订阅者、原有的保留（本发布方加不加，A.7.1 的 done 行说「不变」，这里不断言）
+  assert.deepEqual(h.task(O.id).subscribers, ['pub-node', 'pub-old', 'pub-page', 'pub-page2']);
+  assert.deepEqual(h.task(C.id).subscribers, ['pub-node', 'pub-old', 'pub-page', 'pub-page2']);
+  for (const t of [D, F, D2, F2]) {
+    const subs = h.task(t.id).subscribers;
+    for (const s of [...before.get(t.id).subscribers, 'pub-page', 'pub-page2']) assert.ok(subs.includes(s), `${t.id} 应含 ${s}，实际 ${subs}`);
+  }
+  // 状态、version、attempts 不变
+  for (const t of ALL) {
+    const [a, b] = [before.get(t.id), h.task(t.id)];
+    assert.deepEqual([b.state, b.version, b.attempts], [a.state, a.version, a.attempts], t.id);
+  }
+
+  // 补发：新并入的订阅者各恰好一条；已是订阅者的（pub-page 之于 D2 / F2）不重复发
+  const doneTo = conn => out.of(conn, 'task.done').map(m => m.id).sort();
+  const failedTo = conn => out.of(conn, 'task.failed').map(m => m.id).sort();
+  assert.deepEqual(doneTo('pg'), [D.id]);
+  assert.deepEqual(failedTo('pg'), [F.id]);
+  assert.deepEqual(doneTo('pg2'), [D.id, D2.id].sort());
+  assert.deepEqual(failedTo('pg2'), [F.id, F2.id].sort());
+  const d = out.of('pg', 'task.done')[0];
+  assert.deepEqual({ id: d.id, resultKey: d.resultKey, projectId: d.projectId, projectRev: d.projectRev, result: d.result },
+    { id: D.id, resultKey: 'rk-done', projectId: 'proj-1', projectRev: 1, result: { ranges: [[0, 59]] } });
+  assert.equal(out.of('pg', 'task.failed')[0].error, 'boom');
+  assert.equal(out.of('pg2', 'task.failed').find(m => m.id === F2.id).error, 'boom2');
+  // 原有订阅者、无关的节点收不到补发；open / claimed 不补发任何东西
+  assert.equal(out.of('old', ['task.done', 'task.failed']).length, 0);
+  assert.equal(out.of('m', ['task.done', 'task.failed']).length, 0);
+  assert.equal(out.ofType(['task.done', 'task.failed']).filter(e => e.message.id === O.id || e.message.id === C.id).length, 0);
+  // 本连接（切分节点）：照 A.7.1 对每个 done 回一条 task.done，failed 不回，也不因并入再多发
+  assert.deepEqual(doneTo('n'), [D.id, D2.id].sort());
+  assert.equal(out.of('n', 'task.failed').length, 0);
+
+  // userId / tenantId 不改：新 watch 的快照里 O 仍是 pub-old 的用户
+  const ov = h.watch('n').one('n', 'queue.snapshot').tasks.find(t => t.id === O.id);
+  assert.deepEqual([ov.source.userId, ov.source.tenantId], ['u-old', 't1']);
+
+  // 再发一次同样的细任务：订阅者都已在，页面不再收到补发
+  const again = h.publish('n', derived);
+  assert.equal(again.of('pg', ['task.done', 'task.failed']).length, 0);
+  assert.equal(again.of('pg2', ['task.done', 'task.failed']).length, 0);
+
+  // 并入之后，claimed 的 C 完成时两个页面各收到一条 task.done
+  const fin = h.complete('m', C.id, 2, { ranges: [[0, 59]] });
+  assert.equal(fin.of('pg', 'task.done').length, 1);
+  assert.equal(fin.of('pg2', 'task.done').length, 1);
+
+  // 条件不满足 1：发布连接不是 plan 的认领者 → 只加本发布方，不补发
+  const O3 = makeTaskInput({ resultKey: 'rk-open-3' });
+  const D3 = makeTaskInput({ resultKey: 'rk-done-3' });
+  h.publish('old', [O3, D3]);
+  claimOk(h, 'm', D3.id, 1);
+  h.complete('m', D3.id, 2, { ranges: [[0, 59]] });
+  const viaM = h.publish('m', [derivedOf(O3), derivedOf(D3)]);
+  assert.deepEqual(h.task(O3.id).subscribers, ['pub-m', 'pub-old']);
+  assert.deepEqual(h.task(D3.id).subscribers, ['pub-old'], 'done 行：不变（A.7.1）');
+  assert.equal(viaM.of('pg', ['task.done', 'task.failed']).length, 0);
+  assert.equal(viaM.of('pg2', ['task.done', 'task.failed']).length, 0);
+  assert.deepEqual(viaM.of('m', 'task.done').map(m => m.id), [D3.id], 'A.7.1：done 回本连接');
+
+  // 条件不满足 2：derivedFrom 指向不存在的 plan
+  const O4 = makeTaskInput({ resultKey: 'rk-open-4' });
+  h.publish('old', [O4]);
+  const viaGhost = h.publish('n', [derivedOf(O4, 'plan:proj-9@1')]);
+  assert.deepEqual(h.task(O4.id).subscribers, ['pub-node', 'pub-old']);
+  assert.equal(viaGhost.of('pg').length + viaGhost.of('pg2').length, 0);
+
+  // 条件不满足 3：plan 已不在 claimed（完成之后）
+  h.complete('n', PL.id, 2);
+  const O5 = makeTaskInput({ resultKey: 'rk-open-5' });
+  h.publish('old', [O5]);
+  const afterPlan = h.publish('n', [derivedOf(O5)]);
+  assert.deepEqual(h.task(O5.id).subscribers, ['pub-node', 'pub-old']);
+  assert.equal(afterPlan.of('pg', ['task.done', 'task.failed']).length, 0);
 });

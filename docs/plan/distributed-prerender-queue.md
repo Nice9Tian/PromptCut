@@ -257,7 +257,7 @@ t = tasks[id]
 |---|---|
 | **认领者 WebSocket 断开** | 文档服务给这个节点 `RECONNECT_GRACE_MS`（缺省 10 s）。宽限期内同一个 `nodeId` 重连、`hello.resume` 里带着 `{id, token}` 且令牌仍有效，就接续认领。宽限期过了，它名下所有 `claimed` 任务回 `open`：`version += 1`、`claim = null`、`attempts += 1`，广播 `task.opened` |
 | **处理超时** | `LEASE_MS` 缺省 30 s。节点至少每 10 s 发一次 `task.progress` 续约（`leaseUntil = now + LEASE_MS`）。文档服务每 5 s 扫一遍，`claimed` 且 `now > leaseUntil` 的回 `open`，处理同上，并给原认领者发 `task.lease-lost` |
-| **进度停滞** | 连续续约但 `progress.done` 在 `STALL_MS`（缺省 120 s）内不变，按超时处理。防的是「心跳还活着、渲染已经卡死」的节点 |
+| **进度停滞** | 连续续约但 `progress.done` 在 `STALL_MS`（缺省 120 s）内不变，按超时处理。防的是「心跳还活着、渲染已经卡死」的节点。节点认领到任务、开工时先报一次 `progress(0)`，所以「一次进度都没报就卡死」的执行器同样落在这条规则里（节点照常续约时租约不会到期） |
 | **反复失败的任务** | `attempts` 到 `MAX_ATTEMPTS`（缺省 3）进 `failed`，通知订阅者；页面按兜底顺序处理这一层（最终占位符）。代码或卡片源码换了版本，发布方会发布新 id 的任务，不受旧 `failed` 影响 |
 | **晚到的完成报告** | 令牌不对，回 `lease-lost`、不改状态。产物已经推到素材服务的话并不浪费：下一个认领者开工前查素材服务，会发现已经有了，直接 `complete` |
 | **节点推产物推到一半就崩了** | 语义规定先推素材服务、收全之后才报完成；素材服务按内容哈希校验，半截的产物不算有。任务按超时回 `open` |
