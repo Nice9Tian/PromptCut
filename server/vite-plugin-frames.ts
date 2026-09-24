@@ -10,7 +10,7 @@ import { prerenderState, proxyToPrerender } from "./prerender-client.mjs";
 import { isPrerender } from "./render-role.mjs";
 import { ensureMirror } from "./vite-plugin-mirror";
 
-import { latestPlayhead, ensureMirror as ensureMirrorVersion } from "./vite-plugin-mirror";
+import { latestPlayhead, ensureMirror as ensureMirrorVersion, reportReadySession } from "./vite-plugin-mirror";
 import { snapshotTier } from "./snapshot-store.mjs";
 import { readySessionOf } from "./ready-index.mjs";
 import { mediaSourceOf } from "./vision/ffmpeg-frames";
@@ -364,7 +364,12 @@ export function framesPlugin(): Plugin {
                 url: `/api/frames/${entry.key}/${value.incomplete ? 'preview-frames' : value.source === "mov" ? "mov/frames" : "frames"}/${String(frame).padStart(6, "0")}.png` })), mov: movReady ? `/api/frames/${entry.key}/mov/full.mov` : null });
           }
           // 会话「当前版本」的唯一来源(Item 4):页面的 preload 带着它的 `{ session, localRev }`
-          if (url.pathname === "/preload") await service.preload(project, { session: preloadSession!, localRev: input.localRev, ticket: preloadTicket });
+          if (url.pathname === "/preload") {
+            await service.preload(project, { session: preloadSession!, localRev: input.localRev, ticket: preloadTicket });
+            // 报给编辑器进程登记(方案 A):这个进程崩溃重启后,由编辑器照表重放 preload。
+            // 只报这个会话此刻真正认下的版本 —— 被更新的 preload 取代了的请求不报
+            if (preloadSession && service.ready.current(preloadSession) === entry.key) reportReadySession(preloadSession, input.localRev);
+          }
           else if (url.pathname === "/import" && typeof input.snapshots === "string") {
             try {
               // Restore the control index together with the HTML.  It is built from
