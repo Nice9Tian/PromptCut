@@ -12,7 +12,7 @@ import { ensureMirror } from "./vite-plugin-mirror";
 
 import { latestPlayhead, ensureMirror as ensureMirrorVersion } from "./vite-plugin-mirror";
 import { snapshotTier } from "./snapshot-store.mjs";
-import { DEFAULT_READY_SESSION } from "./ready-index.mjs";
+import { readySessionOf } from "./ready-index.mjs";
 import { mediaSourceOf } from "./vision/ffmpeg-frames";
 
 const services = new Map<string, FramePipeline>();
@@ -173,6 +173,9 @@ export function framesPlugin(): Plugin {
        * 重连就是再走一次这里 —— 和 F5 共用一条恢复路径,没有轮询端点。
        */
       if (req.method === "GET" && url.pathname === "/ready") {
+        // Item 4:按 `session` 分片订阅,只收自己这个页面会话的层(不带 session 的是缺省会话)
+        const session = readySessionOf(url.searchParams.get("session") ?? undefined);
+        if (session === null) return json(400, { error: "session 参数不合法" });
         res.statusCode = 200;
         res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
         res.setHeader("Cache-Control", "no-store");
@@ -181,8 +184,7 @@ export function framesPlugin(): Plugin {
         res.setHeader("X-Accel-Buffering", "no");
         res.flushHeaders?.();
         const send = (message: unknown) => { if (!res.writableEnded) res.write(`data: ${JSON.stringify(message)}\n\n`); };
-        // Item 4:按 `session` 分片订阅,只收自己这个页面会话的层(不带 session 的是缺省会话)
-        const off = service.ready.subscribe(url.searchParams.get("session") ?? DEFAULT_READY_SESSION, send);
+        const off = service.ready.subscribe(session, send);
         // 空闲连接被中间的代理掐掉之前先说句话(注释行不是事件,页面收不到)
         const beat = setInterval(() => { if (!res.writableEnded) res.write(": beat\n\n"); }, 15000);
         beat.unref?.();
@@ -319,6 +321,13 @@ export function framesPlugin(): Plugin {
         if (over) return;
         try {
           const input = JSON.parse(body);
+          // Item 4:preload 一进门就替它的会话领号(在等镜像之前),乱序完成时按到达顺序定谁赢
+          let preloadSession: string | null = null, preloadTicket: number | undefined;
+          if (url.pathname === "/preload") {
+            preloadSession = readySessionOf(input.session);
+            if (preloadSession === null) throw new Error("session 参数不合法");
+            preloadTicket = service.ready.request(preloadSession);
+          }
           if (url.pathname === "/yield") {
             if (typeof input.owner !== "string" || input.owner.length > 100) throw new Error("Invalid playback owner");
             if (input.ttl === 0) await service.resumeBackground(input.owner);
@@ -355,9 +364,7 @@ export function framesPlugin(): Plugin {
                 url: `/api/frames/${entry.key}/${value.incomplete ? 'preview-frames' : value.source === "mov" ? "mov/frames" : "frames"}/${String(frame).padStart(6, "0")}.png` })), mov: movReady ? `/api/frames/${entry.key}/mov/full.mov` : null });
           }
           // 会话「当前版本」的唯一来源(Item 4):页面的 preload 带着它的 `{ session, localRev }`
-          if (url.pathname === "/preload") await service.preload(project, {
-            session: typeof input.session === "string" && input.session.length <= 200 ? input.session : DEFAULT_READY_SESSION,
-            localRev: input.localRev });
+          if (url.pathname === "/preload") await service.preload(project, { session: preloadSession!, localRev: input.localRev, ticket: preloadTicket });
           else if (url.pathname === "/import" && typeof input.snapshots === "string") {
             try {
               // Restore the control index together with the HTML.  It is built from

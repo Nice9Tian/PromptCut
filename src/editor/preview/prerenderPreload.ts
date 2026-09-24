@@ -44,6 +44,8 @@ export interface PreloadScheduler {
   edited(): void;
   /** 空闲与否(不在播放、不在拖动) */
   setIdle(idle: boolean): void;
+  /** 预渲染进程丢了这个会话的版本(Item 4):马上发一次,不等空闲、不等防抖 */
+  resync(): void;
   dispose(): void;
 }
 
@@ -65,8 +67,8 @@ export function createPreloadScheduler(deps: PreloadDeps): PreloadScheduler {
     timer = deps.setTimer(() => { timer = null; void run(); }, ms);
   };
 
-  const run = async (): Promise<void> => {
-    if (disposed || !idle || inFlight) return;
+  const run = async (force = false): Promise<void> => {
+    if (disposed || (!idle && !force) || inFlight) return;
     inFlight = true;
     dirty = false;
     let status: PreloadStatus | null = null;
@@ -103,6 +105,15 @@ export function createPreloadScheduler(deps: PreloadDeps): PreloadScheduler {
       if (inFlight) return;
       if (dirty) arm(PRELOAD_DEBOUNCE_MS);
       else arm(PRELOAD_KEEPALIVE_MS);
+    },
+    resync() {
+      if (disposed) return;
+      dirty = true;
+      done = false;
+      // 在飞的那一个本身就会把版本报上去
+      if (inFlight) return;
+      clear();
+      void run(true);
     },
     dispose() {
       disposed = true;

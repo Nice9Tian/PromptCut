@@ -9,7 +9,7 @@ import { MovFrameStore, PlaybackMovStore, atomic } from './frame-mov.mjs';
 import { FramePlayback } from './frame-playback.mjs';
 import { CardFrameCache } from './card-cache.mjs';
 import { SnapshotStore, snapshotTier, rangeHas, rangeCount } from './snapshot-store.mjs';
-import { createReadyHub, DEFAULT_READY_SESSION, kindOfTier, wireSnapshotKey } from './ready-index.mjs';
+import { createReadyHub, DEFAULT_READY_SESSION, READY_SESSION_IDLE_MS, kindOfTier, wireSnapshotKey } from './ready-index.mjs';
 import { prerenderSetOfPlan } from './prerender-set.mjs';
 import { createMediaStamper } from './media-stamp.mjs';
 import { createHash } from 'node:crypto';
@@ -1013,6 +1013,10 @@ export class FramePipeline {
   retireStalePreloads(owner, now = Date.now()) {
     for (const [other, generation] of this.generations) {
       if (other === owner || now - generation.seenAt <= PRELOAD_STALE_MS) continue;
+      // 已经跑完的代次没有活可掐:留着,不然它的 owner 下一次保活 preload 会把整趟后台重跑一遍
+      // (两个标签页互相掐、各自 30 秒重跑一次,Item 4 审查 #1)。新会话第一次来仍会重跑一趟(大多命中缓存),
+      // 之后就走「同一个 entry 直接返回」。很久没人问的才删,免得常驻
+      if (this.entries.get(generation.key)?.status === 'ready' && now - generation.seenAt <= READY_SESSION_IDLE_MS) continue;
       generation.controller.abort();
       this.generations.delete(other);
     }
@@ -1021,10 +1025,14 @@ export class FramePipeline {
    * 页面这一版的后台预渲染。**会话「当前版本」的唯一来源**(Item 4 业务决断 2):
    * `session` 是页面镜像的会话(HTTP 的 `/preload` 从 body 里带来;脚本不带就是缺省会话),
    * `localRev` 是页面的版本号。`adopt: false`(让路之后重新排上的那些)只排活、不动任何会话的版本。
+   *
+   * @param {any} project
+   * @param {{ session?: string, localRev?: unknown, adopt?: boolean, owner?: string, ticket?: number }} [options]
    */
-  async preload(project, { session = DEFAULT_READY_SESSION, localRev, adopt = true, owner: as = undefined } = {}) {
+  async preload(project, { session = DEFAULT_READY_SESSION, localRev, adopt = true, owner: as = undefined, ticket: issued = undefined } = {}) {
     session = typeof session === 'string' ? session : DEFAULT_READY_SESSION;
-    const ticket = adopt ? this.ready.request(session) : undefined;
+    // `ticket`:HTTP 入口在等镜像之前就替它领了号(按到达顺序,不按算完的顺序,审查 #6)
+    const ticket = adopt ? (issued ?? this.ready.request(session)) : undefined;
     const entry = await this.entry(project);
     if (adopt) {
       // 算 entry 的那一段里同一会话又来了更新的 preload:这个请求作废 —— 不认领,也不排后台活
@@ -1177,6 +1185,13 @@ export class FramePipeline {
    */
   adoptCardPlan(entry, plan) {
     this.recordCardPlan(entry, plan);
+    // 按新的 costs 重算之后集合缩了(有卡判轻了):会话里它们的旧层要撤掉。线上没有「删一层」,
+    // 只能 reset 再全量补回来 —— `staged` 里有这一版发过的全部区间,补得回来(Item 4)
+    const claimed = entry.claimedSet;
+    if (claimed instanceof Set && [...claimed].some(clipId => !this.prerenderPicked(entry, clipId))) {
+      this.ready.resetOn(entry.key);
+      if (entry.anchorsReady) this.ready.markDone(entry.key);
+    }
     this.claimSessions(entry);
     // 认领只补扫盘挂着的区间,组流的 `groupClipIds` 不在认领表里 —— 由生产者按清单补发一次(同样过闸)
     this._streams?.republish();
@@ -1207,8 +1222,10 @@ export class FramePipeline {
       const key = wireSnapshotKey(tier, entry.key, control.snapshotKey);
       if (kind && key && control.clipId) layers.push({ clipId: control.clipId, kind, key });
     }
-    // R8:生产者手里属于这一版的流一并认领(F5 扫盘挂着的流键也在这里认)
-    for (const layer of this._streams?.claimLayers(entry.key) ?? []) layers.push(layer);
+    // R8:生产者手里属于这一版的流一并认领(F5 扫盘挂着的流键也在这里认);判轻的卡同样不认
+    for (const layer of this._streams?.claimLayers(entry.key) ?? []) if (this.prerenderPicked(entry, layer.clipId)) layers.push(layer);
+    // 记下这次是按哪一份集合认领的:集合之后缩了,`adoptCardPlan` 据此撤层
+    entry.claimedSet = entry.prerenderSet instanceof Set ? new Set(entry.prerenderSet) : undefined;
     try { return this.ready.claim(entry.key, layers); } catch { return 0; }
   }
   /**
@@ -1223,6 +1240,8 @@ export class FramePipeline {
       this.claimSessions(entry);
       if (this._streams?.entryKey === entry.key) this._streams.republish();
     }
+    // 这一版的锚帧早就齐了(别的会话先跑过):换到它的会话同样该收到 `done`
+    if (changed && entry.anchorsReady) this.ready.markDone(entry.key);
     return changed;
   }
   /**
@@ -1353,14 +1372,14 @@ export class FramePipeline {
     const clips = (entry.project.tracks || []).flatMap(track => track.clips || []);
     const anchors = anchorFrames(clips, fps).filter(frame => frame >= 0 && frame < count);
     const frames = await this.missingSnapshotFrames(entry, { tiers: ['shared', 'local'], restrictTo: anchors });
-    if (!frames.length) return this.ready.markDone(entry.key);
+    if (!frames.length) { entry.anchorsReady = true; return this.ready.markDone(entry.key); }
     await bakeFrames(bakery, {
       out: entry.dir, targetFrames: frames, snapshotOnly: false, fullFrame: true, writeFrames: false, signal,
       snapshotFrames: new Set(frames),
       onSnapshot: (n, html, controls) => this.record(entry, n, html, controls),
     });
     await this.flushSnapshots(entry);
-    if (!signal?.aborted) this.ready.markDone(entry.key);
+    if (!signal?.aborted) { entry.anchorsReady = true; this.ready.markDone(entry.key); }
   }
   async fillCardControls(entry, bakery, signal, controls = null) {
     if (!controls) {
@@ -1655,7 +1674,7 @@ export class FramePipeline {
       const requiredActive = [...this.generations.values()].some(generation => this.entries.get(generation.key)?.stage === 'required');
       for (const [id, generation] of this.generations) {
         const entry = this.entries.get(generation.key);
-        if (entry && entry.status !== 'ready') this.pausedPreloads.set(id, entry.project);
+        if (entry && entry.status !== 'ready') this.pausedPreloads.set(id, entry);
         // Required work is allowed to finish while playback starts. Direct
         // control/HTML/MOV work observes this abort at its four-frame boundary.
         if (entry?.stage !== 'required') generation.controller.abort();
@@ -1676,8 +1695,12 @@ export class FramePipeline {
     if (owner !== this.backgroundLeaseOwner || version !== this.backgroundLeaseVersion) return;
     clearTimeout(this.backgroundLeaseTimer); this.backgroundLeaseUntil = 0;
     const paused = [...(this.pausedPreloads?.entries() || [])]; this.pausedPreloads?.clear();
-    // 只把活重新排上、接回原来的 owner:会话的版本不能由这里认领(Item 4)
-    if (!this.closed) for (const [owner, project] of paused) await this.preload(project, { adopt: false, owner });
+    // 只把活重新排上、接回原来的 owner:会话的版本不能由这里认领(Item 4)。
+    // 让路期间已经没有会话停在这一版的(页面换到了别的版本),不再重排 —— 页面的下一次 preload 会排新的(审查 #4)
+    if (!this.closed) for (const [owner, entry] of paused) {
+      if (!this.ready.sessionsOn(entry.key).length) continue;
+      await this.preload(entry.project, { adopt: false, owner });
+    }
   }
   async updatePlayback(project, input, { borrow = async () => false, release = async () => {} } = {}) {
     const work = (this.playbackChain || Promise.resolve()).catch(() => {}).then(() => this.updatePlaybackNow(project, input, { borrow, release }));

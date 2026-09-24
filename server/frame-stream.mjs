@@ -696,13 +696,22 @@ export class StreamProducer {
       codeVersion: `${STREAM_CODE_VERSION}:${this.pipeline.captureCode?.() || ''}`,
     });
     const generation = ++this.generation;
+    // 先把要读盘的清单都读回来(这一段会让出事件循环),再**同步**改状态:两次 update 交错时,
+    // 旧的那次读完发现自己已经不是最新一代就整个作废,不去改新一代共用的 state(Item 4 审查 #5)
+    const loaded = new Map();
+    for (const spec of specs) {
+      if (loaded.has(spec.streamKey) || this.streams.get(spec.streamKey)?.manifest) continue;
+      loaded.set(spec.streamKey, await this.store.load(spec.streamKey));
+      if (generation !== this.generation) return specs;
+    }
+    if (generation !== this.generation || this.closed) return specs;
     this.entryKey = entry.key;
     const next = new Map();
     for (const spec of specs) {
       // 同一张卡、同参数同入点的两个片段(比如复制出来叠在两条序列上)内容逐像素相同,共用一条流
       if (next.has(spec.streamKey)) { next.get(spec.streamKey).aliases.add(spec.topClipId); continue; }
       const old = this.streams.get(spec.streamKey);
-      const manifest = old?.manifest ?? await this.store.load(spec.streamKey) ?? this.freshManifest(spec);
+      const manifest = old?.manifest ?? loaded.get(spec.streamKey) ?? this.freshManifest(spec);
       const state = old ?? { reserved: new Set(), failures: new Map(), measured: null, measuredSegments: new Set() };
       state.spec = spec;
       state.aliases = new Set();

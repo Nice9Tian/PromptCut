@@ -150,3 +150,16 @@ test("就绪之后按保活间隔再报一次(Item 4:预渲染重启后靠它重
   await clock.advance(PRELOAD_KEEPALIVE_MS);
   assert.equal(calls.length, 3, "回到空闲接着保活");
 });
+
+test("resync:预渲染丢了会话版本时马上发一次,播放中也发;在飞时不重复发", async () => {
+  const { clock, calls, scheduler } = setup([{ status: "ready" }, { status: "ready" }]);
+  scheduler.setIdle(false);
+  scheduler.resync();
+  for (let i = 0; i < 5; i++) await Promise.resolve();
+  assert.equal(calls.length, 1, "不等空闲、不等防抖");
+  await clock.advance(PRELOAD_KEEPALIVE_MS * 2);
+  assert.equal(calls.length, 1, "发完回到不空闲:不保活");
+  scheduler.dispose();
+  scheduler.resync();
+  assert.equal(calls.length, 1, "dispose 之后不发");
+});

@@ -208,6 +208,17 @@ export const DEFAULT_READY_SESSION = '';
 export const READY_SESSION_IDLE_MS = 10 * 60 * 1000;
 /** 同时记着的会话上限;超了先回收最久没动静、又没有订阅者的 */
 export const READY_SESSION_MAX = 64;
+/** 共用 `staged` 里最多挂这么多个键(一个键一小段区间表) */
+export const READY_STAGED_MAX = 20000;
+/** 会话 id 的长度上限(`/ready` 和 `/preload` 共用一个校验) */
+export const READY_SESSION_ID_MAX = 200;
+
+/** 页面带来的 session 参数:缺省 / 空 = 缺省会话;超长或不是字符串 = null(调用方回 400) */
+export function readySessionOf(value) {
+  if (value === undefined || value === null) return DEFAULT_READY_SESSION;
+  if (typeof value !== 'string' || value.length > READY_SESSION_ID_MAX) return null;
+  return value;
+}
 
 /**
  * 按会话分片的就绪索引(Item 4,`docs/reports/REPORT-item4-session-isolation.md`)。
@@ -221,7 +232,7 @@ export const READY_SESSION_MAX = 64;
  *
  * 扫盘(F5)和轨道流挂上去的「键 → 区间」是内容寻址的,所有会话共用一份 `staged`。
  */
-export function createReadyHub({ now = () => Date.now(), idleMs = READY_SESSION_IDLE_MS, maxSessions = READY_SESSION_MAX } = {}) {
+export function createReadyHub({ now = () => Date.now(), idleMs = READY_SESSION_IDLE_MS, maxSessions = READY_SESSION_MAX, maxStaged = READY_STAGED_MAX } = {}) {
   const staged = new Map();
   /** id -> { id, index, entryKey, localRev, seenAt, ticket } */
   const sessions = new Map();
@@ -270,20 +281,23 @@ export function createReadyHub({ now = () => Date.now(), idleMs = READY_SESSION_
   }
 
   /**
+   * 这张号 / 这个 localRev 已经被更新的 preload 取代了吗(取代了就既不认领、也不该再排后台活)。
+   * 会话在领号之后被回收、又重建了(`ticket === 0`)时不算取代 —— 没有更新的请求。
+   */
+  function stale(id, ticket, localRev) {
+    const record = sessions.get(norm(id));
+    if (!record) return false;
+    if (ticket !== undefined && record.ticket !== 0 && ticket !== record.ticket) return true;
+    const rev = Number(localRev);
+    return localRev != null && Number.isFinite(rev) && Number.isFinite(record.localRev) && rev < record.localRev;
+  }
+
+  /**
    * 设定会话的当前版本(**只有页面的 preload 调**)。版本换了就 reset 这个会话的索引(页面清表);
    * 版本没换只记新的 `localRev`,不清表。回 `true` = 换了版本。
    *
    * 过期的号(`ticket` 不是这个会话最新的那张)或更旧的 `localRev` 一律不认。
    */
-  /** 这张号 / 这个 localRev 已经被更新的 preload 取代了吗(取代了就既不认领、也不该再排后台活) */
-  function stale(id, ticket, localRev) {
-    const record = sessions.get(norm(id));
-    if (!record) return false;
-    if (ticket !== undefined && ticket !== record.ticket) return true;
-    const rev = Number(localRev);
-    return localRev != null && Number.isFinite(rev) && Number.isFinite(record.localRev) && rev < record.localRev;
-  }
-
   function adopt(id, entryKey, localRev, ticket) {
     const record = session(id);
     record.seenAt = now();
@@ -304,11 +318,23 @@ export function createReadyHub({ now = () => Date.now(), idleMs = READY_SESSION_
     return [...sessions.values()].filter(record => record.entryKey === entryKey);
   }
 
-  /** 发一层:只写进当前版本是 `entryKey` 的会话。回写进了几个会话(0 = 丢弃) */
+  /**
+   * 发一层:只写进当前版本是 `entryKey` 的会话。回写进了几个会话(0 = 丢弃)。
+   *
+   * 不论有没有会话收下,区间都挂进 `staged`:键是内容寻址的(本地档的键自带 entry.key),
+   * 挂着不会串到别的版本 —— 只有 card plan 里同一个键的片段才认领得到。这样会话换回某一版
+   * (撤销、页面刷新成新会话)时 `adopt` + 认领当场就能把这一版已有的层全补回来,不必等后台重跑。
+   */
   function publish(entryKey, layer) {
+    stageByKey(layer);
     let n = 0;
     for (const record of sessionsOn(entryKey)) if (record.index.setLayer(layer)) n++;
     return n;
+  }
+
+  /** 当前版本是 `entryKey` 的会话都清一次表(版本没换、只是这一版要撤掉某些层时用),localRev 不变 */
+  function resetOn(entryKey) {
+    for (const record of sessionsOn(entryKey)) record.index.reset(record.index.localRev);
   }
 
   function markDone(entryKey) {
@@ -322,11 +348,14 @@ export function createReadyHub({ now = () => Date.now(), idleMs = READY_SESSION_
     return n;
   }
 
+  /** 挂着的键按最近使用排序,超过 `maxStaged` 丢最久没动的(Map 的插入顺序就是 LRU 顺序) */
   function stageByKey({ kind, key, ranges }) {
     if (!READY_KINDS.includes(kind) || !key) return;
     const id = `${kind}:${key}`;
     const before = staged.get(id);
+    staged.delete(id);
     staged.set(id, { kind, key, ranges: mergeRanges([...(before?.ranges ?? []), ...(ranges ?? [])]) });
+    while (staged.size > maxStaged) staged.delete(staged.keys().next().value);
   }
 
   /** `/api/frames/ready?session=` 的订阅。退订后这个会话按 `idleMs` 回收 */
@@ -348,7 +377,7 @@ export function createReadyHub({ now = () => Date.now(), idleMs = READY_SESSION_
     session: id => session(id),
     peek: id => sessions.get(norm(id)),
     current: id => sessions.get(norm(id))?.entryKey,
-    request, stale, adopt, publish, markDone, claim, stageByKey, subscribe, prune, sessionsOn,
+    request, stale, adopt, publish, resetOn, markDone, claim, stageByKey, subscribe, prune, sessionsOn,
     drop: id => sessions.delete(norm(id)),
     sessionCount: () => sessions.size,
     stagedKeys: () => [...staged.values()].map(item => ({ ...item })),

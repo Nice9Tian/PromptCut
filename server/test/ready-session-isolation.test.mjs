@@ -32,6 +32,7 @@ function pipeline(hub = createReadyHub()) {
   p.generations = new Map();
   p.background = Promise.resolve();
   p.lanes = new Map();
+  p.entries = new Map();
   // 后台那一趟不开 Chrome:一借就当被取消,preload 只剩「设版本 + 排活」这一半
   p.acquire = async () => { throw Object.assign(new Error('no chrome in unit test'), { cancelled: true }); };
   return p;
@@ -283,4 +284,135 @@ test('共用的 staged:一个会话 clear 不会清掉别的会话要认领的�
   assert.deepEqual(hub.peek('b').index.list()[0].ranges, [[0, 9]]);
   // 再认领一次不重复发(区间没变)
   assert.equal(hub.claim('E', [{ clipId: 'h', kind: 'html', key: 'K' }]), 0);
+});
+
+/* ------------------------------------------------------------ 审查补的:真的调用点、保活、让路恢复 */
+
+const fullIndex = { count: 3, frames: [[0, 2]], oversize: [] };
+const planned = (clipId, key, tier = 'shared') => ({ ...control(clipId, key, tier), count: 3, sampling: { firstFrame: 0 }, end: 1 });
+
+test('真的调用点:missingSnapshotFrames / fillAnchorSnapshots 渲旧版本时,发层和 done 都进不了新版本的会话', async () => {
+  const p = pipeline();
+  p.snapshots = () => ({ snapshotIndex: async () => fullIndex });
+  const page = watch(p, 's');
+  const E1 = entryOf('E1', [planned('h', 'KA'), planned('blur', 'BA', 'local')]);
+  const E2 = entryOf('E2', [planned('h', 'KB')]);
+  p.adoptSession('s', E1, 1);
+  p.adoptSession('s', E2, 2);
+  page.seen.length = 0;
+  // 旧版本的整场景那一趟在跑:它顺带把已有区间发成层、锚帧齐了发 done
+  assert.deepEqual(await p.missingSnapshotFrames(E1, { tiers: ['shared', 'local'] }), []);
+  await p.fillAnchorSnapshots(E1, null, null);
+  assert.deepEqual(page.seen, [], `旧版本的层 / done 不进来:${JSON.stringify(page.seen)}`);
+  // 正向对照:新版本自己的这两步照常到
+  await p.missingSnapshotFrames(E2, { tiers: ['shared'] });
+  await p.fillAnchorSnapshots(E2, null, null);
+  assert.deepEqual(page.seen.map(m => m.type), ['layer', 'layer', 'done']);
+  assert.ok(page.seen.filter(m => m.type === 'layer').every(m => m.key === 'KB'));
+});
+
+test('两个标签页保活同一个已就绪的版本:后来的会话当场拿到全部层和 done;各自至多重跑一趟,之后保活不互相掐、不再重跑', async () => {
+  const p = pipeline();
+  p.snapshots = () => ({ snapshotIndex: async () => fullIndex });
+  const E = entryOf('E', [planned('h', 'K')]);
+  p.entries.set('E', E);
+  p.entry = async () => E;
+  let acquired = 0;
+  p.acquire = async () => { acquired++; throw Object.assign(new Error('no chrome'), { cancelled: true }); };
+  const a = watch(p, 'a');
+  // a 的那一趟在本进程里跑完了:层已经发过(也就挂进了 staged)、锚帧齐了
+  await p.preload({ id: 'p', duration: 1 }, { session: 'a', localRev: 1 });
+  await p.background;
+  acquired = 0;
+  await p.missingSnapshotFrames(E, { tiers: ['shared'] });
+  await p.fillAnchorSnapshots(E, null, null);
+  E.status = 'ready';
+  assert.deepEqual(layerKeys(a.layers()), ['h:html:K']);
+
+  const b = watch(p, 'b');
+  await p.preload({ id: 'p', duration: 1 }, { session: 'b', localRev: 1 });
+  assert.deepEqual(layerKeys(b.layers()), ['h:html:K'], '从 staged 当场认领回来,不等后台那一趟');
+  assert.equal(p.ready.peek('b').index.done, true, '锚帧早就齐了:done 也补上');
+  await p.background;
+  assert.equal(acquired, 1, '新会话第一次来重跑一趟(大多命中缓存)');
+  E.status = 'ready';                    // 那一趟跑完了(单测里没有 Chrome,手动置回)
+  acquired = 0;
+  // 30 秒保活一轮一轮地来(远超 PRELOAD_STALE_MS):谁都不重跑
+  for (const at of [40000, 80000, 120000]) {
+    p.generations.forEach(g => { g.seenAt -= at; });
+    await p.preload({ id: 'p', duration: 1 }, { session: 'a', localRev: 1 });
+    await p.preload({ id: 'p', duration: 1 }, { session: 'b', localRev: 1 });
+  }
+  await p.background;
+  assert.equal(acquired, 0, '已就绪的版本不再开后台 Chrome');
+  assert.equal(E.status, 'ready');
+  assert.ok(p.generations.has('session:a') && p.generations.has('session:b'), '跑完的代次不被当成过期掐掉');
+});
+
+test('让路恢复:让路期间已经没有会话停在那一版的不重排;还有会话在的照常接回原 owner', async () => {
+  const p = pipeline();
+  const E1 = entryOf('E1'), E2 = entryOf('E2'), E3 = entryOf('E3');
+  p.adoptSession('s', E1, 1);
+  p.adoptSession('s', E2, 2);            // 让路期间会话 s 换到了 E2,没人停在 E1 了
+  p.adoptSession('t', E3, 1);
+  p.adoptSession(DEFAULT_READY_SESSION, E2, undefined);   // 脚本(缺省会话)也在 E2
+  p.pausedPreloads = new Map([['session:s', E1], ['session:t', E3], ['proj', E2]]);
+  p.backgroundLeaseOwner = 'o';
+  p.backgroundLeaseVersion = 1;
+  const resumed = [];
+  p.preload = async (project, options) => { resumed.push(options); };
+  await p.resumeBackground('o');
+  assert.deepEqual(resumed, [{ adopt: false, owner: 'session:t' }, { adopt: false, owner: 'proj' }]);
+  assert.equal(p.ready.current('s'), 'E2');
+});
+
+test('会话在领号之后被回收又重建:不算被取代,preload 照常认领', () => {
+  let now = 0;
+  const hub = createReadyHub({ now: () => now, idleMs: 10 });
+  const ticket = hub.request('s');
+  now = 100;
+  hub.request('other');                  // 顺带把 s 回收掉
+  assert.equal(hub.peek('s'), undefined);
+  assert.equal(hub.stale('s', ticket, 1), false);
+  assert.equal(hub.adopt('s', 'E', 1, ticket), true);
+  assert.equal(hub.current('s'), 'E');
+});
+
+test('staged 封顶:超过上限丢最久没动的键', () => {
+  const hub = createReadyHub({ maxStaged: 2 });
+  hub.stageByKey({ kind: 'html', key: 'A', ranges: [[0, 0]] });
+  hub.stageByKey({ kind: 'html', key: 'B', ranges: [[0, 0]] });
+  hub.stageByKey({ kind: 'html', key: 'A', ranges: [[1, 1]] });   // A 刚用过
+  hub.stageByKey({ kind: 'html', key: 'C', ranges: [[0, 0]] });
+  assert.deepEqual(hub.stagedKeys().map(s => s.key), ['A', 'C']);
+});
+
+test('session 参数校验:缺省 = 缺省会话,超长 / 非字符串 = 拒绝', async () => {
+  const { readySessionOf, READY_SESSION_ID_MAX } = await import('../ready-index.mjs');
+  assert.equal(readySessionOf(undefined), DEFAULT_READY_SESSION);
+  assert.equal(readySessionOf('abc'), 'abc');
+  assert.equal(readySessionOf('x'.repeat(READY_SESSION_ID_MAX + 1)), null);
+  assert.equal(readySessionOf(42), null);
+});
+
+test('按新 costs 重算后集合缩了:会话里判轻那张卡的旧层撤掉(reset + 从 staged 全量补回其余层)', () => {
+  const p = pipeline();
+  const E = entryOf('E');
+  const page = watch(p, 's');
+  // 第一次:两张都判重(没有成本记录,按声明兜底)
+  p.adoptSession('s', E, 1);
+  p.adoptCardPlan(E, [planned('heavy', 'KH'), planned('light', 'KL')]);
+  p.publishLayer(E, planned('heavy', 'KH'), 'shared', [[0, 2]]);
+  p.publishLayer(E, planned('light', 'KL'), 'shared', [[0, 2]]);
+  assert.deepEqual(layerKeys(page.layers()), ['heavy:html:KH', 'light:html:KL']);
+  // 新的成本记录让 light 判轻:下一趟的计划只挑 heavy
+  p.recordCardPlan = function (entry, plan) { entry.cardPlan = plan; entry.prerenderSet = new Set(['heavy']); return plan; };
+  page.seen.length = 0;
+  p.adoptCardPlan(E, [planned('heavy', 'KH'), planned('light', 'KL')]);
+  assert.deepEqual(layerKeys(page.layers()), ['heavy:html:KH'], '判轻的那张撤掉,判重的补回来');
+  assert.deepEqual(page.seen.map(m => m.type), ['reset', 'layer']);
+  // 集合没再缩:不再 reset
+  page.seen.length = 0;
+  p.adoptCardPlan(E, [planned('heavy', 'KH'), planned('light', 'KL')]);
+  assert.deepEqual(page.seen, []);
 });

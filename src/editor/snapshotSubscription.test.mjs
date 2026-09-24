@@ -50,3 +50,23 @@ test("编辑不重连、不清表;服务端 reset 才清;换 session 才重连",
   assert.equal(subs[1].session, "s2");
   assert.equal(feed.currentReadyIndex().size, 0);
 });
+
+test("Item 4:服务端不认识这个会话了(reset 带回 localRev 0,页面早已不是 0 版)时通知补发 preload;正常换版本不通知", () => {
+  const subs = [];
+  feed.stopSnapshotFeed();
+  feed.setSnapshotSource({
+    subscribeReady: (session, rev, cb) => { const sub = { session, rev, cb }; subs.push(sub); return () => {}; },
+    fetchSnapshot: async () => "<div/>",
+  });
+  key = { session: "s3", localRev: 5 };
+  let lost = 0;
+  const off = feed.onReadyLost(() => { lost++; });
+  feed.syncSnapshotSubscription(() => {});
+  subs[0].cb({ type: "reset", localRev: 5 });
+  assert.equal(lost, 0, "服务端知道这一版:不补发");
+  subs[0].cb({ type: "reset", localRev: 0 });
+  assert.equal(lost, 1, "预渲染重启后重连的 backlog:补发一次");
+  off();
+  subs[0].cb({ type: "reset", localRev: 0 });
+  assert.equal(lost, 1, "退订之后不再通知");
+});
