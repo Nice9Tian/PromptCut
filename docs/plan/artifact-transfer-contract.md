@@ -226,3 +226,14 @@ export async function applyResult(pipeline, client, result) → { written: numbe
 7. **目录位置**：`snap` / `px` 的 fs 目录固定在 `<root>/out/asset-store/…`，不看 `PROMPTCUT_EXPORT_DIR`。
 8. **`snap` / `px` 只存候选扩展名**：扩展名不在第 6 条候选表里的对象（例如 `X-Media-Ext: bin`），一律存成不带扩展名的 `<hash>`。否则按候选名查找就再也找不到它。这些对象的 HTTP `Content-Type` 本来就是 `application/octet-stream`，对外没有变化。`media` 不受影响。
 9. **查候选文件的函数放在 `server/asset-store/index.mjs`**：`asset-service.ts` 不许碰文件系统（C5 守门），所以这个函数不能放在那里。
+
+## 11. 定稿后的补充细则（2026-09-25，主 Agent 按测试方疑点裁定）
+
+1. **`collect*` 的返回值**：`collectSnapshotResult` / `collectStreamResult` 统一返回 `{ result, readBlob }`，签名是 `(pipeline, task, opts?)`。
+2. **`canvasHeavy` 的来源**：依次取 `opts.canvasHeavy`、`task.input.canvasHeavy`（是布尔值时），都没有就是 `false`。M5b 由切分节点把它写进 `input`。
+3. **sink 的 `ref` 扩展**：`has` / `put` 收到的 `ref` 带上任务的 `input` 与 `requires`。本地档按 E.9，用 `input.entryKey`、`input.contentKey`、`requires.envFingerprint` 算落盘键；缺了这几项时，`has` 回 `false`，`put` 回 `{ complete: false }`。
+4. **流的访问器**：沿用 `pipeline.streamProducer()`，它只在 `interactive: true` 的管线上存在。没有 producer 却收到流清单时，`applyResult` 抛错，错误带 `code: 'no-stream-producer'`。
+5. **拉取方还没有这条流时**：`adoptSegments` 按 `header` 建出最小的 state，保证之后能发布成功，不许静默失败。
+6. **分段的 `encoder`**：取这个分段所用 init 的 `encoder`。
+7. **`result` 超限**：超过 256 KiB 时 `collect*` 抛错（`code: 'result-too-large'`），`sink.put` 捕获后回 `{ complete: false }`。
+8. **`applyResult` 的计数**：`written` 是实际落盘的帧数 / 分段数，`skipped` 是本机已有而跳过的，`fetched` 是下载的块数，init 也算。
