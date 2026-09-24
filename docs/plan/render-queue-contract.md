@@ -1494,3 +1494,23 @@ node scripts/probes/render-queue-proxy.mjs --listen 127.0.0.1:8795 --target <hos
   - 不是 `ws:` / `wss:` 的记 `bad-url`，继续试下一项；
   - `/healthz` 取在源站根上。
 - **端点的创建与关闭**：`createWsEndpoint` 创建时立即连接，参数不合法时同步抛 `TypeError`。`close()` 之后 `connected` 立即变为 `false`；`onClose` 在底层真正关上时才调，带 `{ code: 1000, reason: 'closed' }`。
+
+### G.12 接线方式与命名（2026-09-25，主 Agent 按 svc 实现方疑点补定）
+
+1. **令牌模式的接法**：
+   - `createDocService({ authenticate: auth.authenticate, log })`；
+   - 其中 `auth = createClusterAuth({ token, allowAnonymous, log? })`；
+   - `createClusterAuth` 的可选参数 `log` 用来记握手被拒的 `auth.reject`。
+2. **子协议回显由组装层做**：客户端给了 `promptcut.v1` 就回显，`protocol` 选项缺省是 `promptcut.v1`。
+3. **服务地址登记模块**：`modules/endpoints.mjs` 导出 `endpointsModule(options?)`，另有别名 `createEndpointsModule` 和默认导出。
+   - 选项平铺：`graceMs`、`maxAnnouncers`、`maxUrls`、`maxMetaBytes`、`tickMs`，缺省取 `ENDPOINT_DEFAULTS`；
+   - 没带 `meta` 的登记存为 `meta: null`；
+   - 宽限期内从新连接再登记：`urls` 和 `meta` 都没变才不推送。
+4. **队列模块**：`modules/render-queue.mjs` 导出 `renderQueueModule(q, { sweepMs })`、`renderQueuePlaceholder()`。
+5. **两处 `modules` 形状不同**：`/healthz` 里是模块名数组，`describe().modules` 是对象。
+6. **保留字段名**：`conns` 是核心保留的 `health` 字段名，模块不能用。
+7. **字段冲突检查的调用方式**：挂载时用一个不存在的连接 id 调一次 `describeConn`，模块对未知连接也要返回完整的字段集。
+8. **`ws.mjs` 的半开修正**：对端结束 TCP 却没发关闭帧时，服务端立即结束本端并触发 `disconnect`，不再等心跳。
+9. **`main.mjs` 的输出与判定**：
+   - `config.error` 同时写 stdout 和 stderr；
+   - 令牌为空串算「已设」，按格式错误关闭。
