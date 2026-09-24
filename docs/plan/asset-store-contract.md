@@ -251,3 +251,15 @@ node scripts/probes/asset-lan-probe.mjs --docservice <ws://…> [--asset <http:/
   - 与 main 的导出逐像素 0 差异；
   - `ready-index-probe`、`preview-fallback-probe` 退出码 0。
 - **W2**：笔记本跑 `asset-lan-probe.mjs`，地址由控制面下发，全部断言通过。
+
+## 8. 定稿后的补充细则（2026-09-25，主 Agent 按测试方疑点裁定）
+
+1. **缺省 `announcerId` 改为 `asset:${os.hostname()}`**：M5a 登记模块的 `announcerId` 规则不收 `@`，照原文写会被控制面拒收。第 5 节原文作废。
+2. **守门的准确范围**：第 3 节「不许出现 `.chunks`」只拦**字符串里的目录名**，即源码里的 `'.chunks'`、`".chunks"`、`` `.chunks` `` 以及路径片段 `/.chunks` / `\\.chunks`。方法调用 `store.chunks(` 不算。
+3. **`onStored` 的 `file`**：是文件名，例如 `<hash>.<ext>`，不是全路径，与 `writeMediaIndex` 的 `file` 字段一致。
+4. **先鉴权**：写入先判鉴权，不通过直接 401，不看长度等其它校验。`Authorization` 的 scheme `Bearer` 不区分大小写，令牌本身区分大小写。
+5. **`lanAssetUrls` 排序**：按 URL 字符串的字典序。
+6. **测试方按现有行为测得更严的几处，全部照准**：K4、K7、K9、H3。其中 H3 包括：入库后的重传与收尾同样要令牌。
+7. **memory 实现只供测试**：`size` 超过 256 MiB 回 `size-mismatch`，避免报一个天文数字就把进程拖垮。
+8. **`usage` 的计数口径**：fs 实现只数 `<hash>` 与 `<hash>.<ext>` 形状的文件，索引文件和其它文件不算。
+9. **探针要跑在另一台机器上**：`asset-lan-probe.mjs` 必须在非本机跑。本机的请求来自回环，写入不要令牌，第 2 步必然失败。W2 就是在笔记本上跑。
