@@ -4,7 +4,10 @@
  * `transparent`(无提示透明,不许出现)。满 120 ms 才显示的那段空档记成 `placeholder-delay`,单列统计。
  *
  *   node scripts/probes/preview-fallback-probe.mjs --origin http://127.0.0.1:5230 [--seconds 10] [--out <dir>] [--json <file>]
- *        [--label after|before] [--baseline <before.json>]
+ *        [--label after|before] [--baseline <before.json>] [--no-pills]
+ *
+ * `--no-pills`:不加那两张药丸(没有占位符),只量流 + 海报快照那一部分的主线程开销;「编辑后」改成给粒子卡
+ * 重设一遍同样的参数(localRev + 1、身份不变)。
  *
  * 端口按分配的端口段:dev server 用 `npx vite --port 5230 --strictPort --host 127.0.0.1`(舞台端口 5231 / 5232)。
  *
@@ -43,6 +46,7 @@ const LABEL = flagArg('label', 'after', args);
 const BASELINE = flagArg('baseline', null, args);
 const OUT = path.resolve(flagArg('out', null, args) || path.join(os.tmpdir(), `pc-fallback-${LABEL}-${Date.now().toString(36)}`));
 const JSON_OUT = flagArg('json', null, args);
+const NO_PILLS = args.includes('--no-pills');
 const RUN = Date.now().toString(36);
 const fails = [];
 const notes = [];
@@ -67,7 +71,7 @@ const browser = await puppeteer.launch({ headless: true, protocolTimeout: 300000
   args: ['--window-position=-32000,-32000', '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1', '--autoplay-policy=no-user-gesture-required'] });
 try {
   const page = await browser.newPage();
-  await page.setViewport({ width: 1600, height: 1000 });
+  await page.setViewport({ width: 2560, height: 1600 });
   const errors = [];
   page.on('pageerror', (e) => errors.push(String(e)));
   await page.goto(origin + '/?editor&nosetup=1&preview=stage', { waitUntil: 'domcontentloaded', timeout: 120000 });
@@ -143,17 +147,18 @@ try {
   out.readyLayers = ready ? Object.fromEntries(Object.entries(ready).map(([k, v]) => [k, v.length])) : null;
 
   // 两张药丸:一张旋转、一张缩放。等 K1 量完再在父页的分派表里钉成重卡(不给它们预渲染 → 兜底尽头)
-  const pills = await store(`const a = actions.addClipOnNewTrack({ cardId: 'punch-pill', start: 0, duration: args[0] });
-    const b = actions.addClipOnNewTrack({ cardId: 'punch-pill', start: 0, duration: args[0] });
+  // 放在最上面两条序列(index 0):占位符不被下面的粒子流盖住,点得中
+  const pills = NO_PILLS ? [] : await store(`const a = actions.addClipOnNewTrack({ index: 0, cardId: 'punch-pill', start: 0, duration: args[0] });
+    const b = actions.addClipOnNewTrack({ index: 0, cardId: 'punch-pill', start: 0, duration: args[0] });
     actions.setClipParams(a.id, { text: '旋转 ${RUN}' });
     actions.setClipParams(b.id, { text: '缩放 ${RUN}' });
     actions.setClipFrame(a.id, { x: 560, y: 300, w: 640, h: 360, anchor: [0.5, 0.5], rotate: 25 });
     actions.setClipFrame(b.id, { x: 1360, y: 760, w: 640, h: 360, anchor: [0.5, 0.5], scale: 0.6 });
     return [a.id, b.id];`, SECONDS);
   out.pills = pills;
-  await until('药丸的 K1 记录', () => hasRecords(pills), 60000, 500, true);
+  if (pills.length) await until('药丸的 K1 记录', () => hasRecords(pills), 60000, 500, true);
   // 药丸只在父页钉(不 PUT):预渲染进程不产它们,播放时它们走到兜底顺序尽头
-  const pinAll = async (extraIds = []) => { await pinHeavy([clipId, ...extraIds]); await pinHeavy(pills); await sleep(300); };
+  const pinAll = async (extraIds = []) => { await pinHeavy([clipId, ...extraIds]); if (pills.length) await pinHeavy(pills); await sleep(300); };
   await pinAll();
   // 暂停在 1 秒让药丸活渲一次(占位符的墨迹框在暂停后防抖量)
   await store(`actions.seek(1);`);
@@ -173,6 +178,8 @@ try {
   const taskDuration = async (s) => (await s.send('Performance.getMetrics')).metrics.find((m) => m.name === 'TaskDuration')?.value ?? 0;
 
   async function scenario(name, run) {
+    // 可见舞台是哪一个进程(按起播前的 front 定;TaskDuration 只取它那一路)
+    const frontId = await page.evaluate(() => window.__pcPreviewDiag?.().frontId ?? 'A');
     for (const f of stageFrames()) await f.evaluate(() => { window.__pcFallbackTrace = []; }).catch(() => {});
     const samples = cdp.map(() => []);
     let sampling = true;
@@ -193,9 +200,10 @@ try {
       if (t) traces.push(...t);
       await f.evaluate(() => { delete window.__pcFallbackTrace; }).catch(() => {});
     }
-    // 播放中的那个进程干活最多:取总量最大的那一路当「可见舞台」的主线程
-    const busiest = samples.map((xs) => xs.reduce((a, b) => a + b, 0)).reduce((best, v, i, all) => (v > all[best] ? i : best), 0);
-    const task = samples[busiest] ?? [];
+    // 可见舞台那一路的主线程(另一路是后台舞台,单列出来备查)
+    const frontIdx = cdp.findIndex((c) => c.url.includes(`id=${frontId}`));
+    const task = samples[frontIdx] ?? [];
+    const backTask = samples.find((_, i) => i !== frontIdx) ?? [];
     const counts = {};
     const transparent = [];
     for (const beat of traces) {
@@ -206,7 +214,8 @@ try {
     }
     const work = traces.map((b) => b.workMs);
     const res = { beats: traces.length, counts, transparent: transparent.slice(0, 20), transparentBeats: transparent.length,
-      workMs: { p50: pct(work, 0.5), p90: pct(work, 0.9) }, taskMs: { n: task.length, p50: pct(task, 0.5), p90: pct(task, 0.9) }, shots };
+      workMs: { p50: pct(work, 0.5), p90: pct(work, 0.9) }, taskMs: { n: task.length, p50: pct(task, 0.5), p90: pct(task, 0.9) },
+      backTaskMs: { p50: pct(backTask, 0.5), p90: pct(backTask, 0.9) }, frontId, shots };
     out.scenarios[name] = res;
     if (LABEL !== 'before') {
       check(traces.length > 0, `${name}:舞台记下了逐拍分级`);
@@ -216,9 +225,15 @@ try {
   }
   const play = () => store(`actions.play();`);
   const pause = () => store(`actions.pause();`);
+  /** 只截预览里那块可见舞台(整页太小看不清占位符) */
   const shot = async (name) => {
     const file = path.join(OUT, `${LABEL}-${name}.png`);
-    await page.screenshot({ path: file });
+    const box = await page.evaluate(() => {
+      const f = [...document.querySelectorAll('iframe')].filter((el) => /stage=1/.test(el.src) && getComputedStyle(el).opacity !== '0')
+        .map((el) => el.getBoundingClientRect()).find((r) => r.width > 100);
+      return f ? { x: f.left, y: f.top, width: f.width, height: f.height } : null;
+    });
+    await page.screenshot({ path: file, ...(box ? { clip: box } : {}) });
     return file;
   };
 
@@ -308,7 +323,8 @@ try {
   await pinAll();
   await sleep(1500);
   await scenario('编辑后', async () => {
-    await store(`actions.setClipParams(args[0], { text: '改过 ${RUN}' }); actions.play();`, pills[0]);
+    if (pills.length) await store(`actions.setClipParams(args[0], { text: '改过 ${RUN}' }); actions.play();`, pills[0]);
+    else await store(`actions.setClipParams(args[0], { seed: 5 }); actions.play();`, clipId);
     await sleep(400);
     const a = await shot('编辑后');
     await sleep(1600);
