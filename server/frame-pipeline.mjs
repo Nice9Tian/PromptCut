@@ -1291,21 +1291,12 @@ export class FramePipeline {
    * legacy 通道一起删,在那之前照常写,不然导出和旧播放路会缺料。 */
   snapshots() { return this._snapshots ||= new SnapshotStore(this.root); }
   /**
-   * C6.2:轨道流生产者的访问器,拉取端(`artifact-transfer.mjs` 的 `applyResult`)经它的 `adoptSegments` 落盘。
-   * 和 `streamProducer()` 只差一处:不接交互的实例(`interactive: false`)也给 —— 它不产流(`update` 只经
-   * `streamProducer()` 调),但拉来的分段照样只许经生产者的写入函数落盘。关闭之后回 null。
-   */
-  streams() {
-    if (this.closed) return null;
-    return this._streams ||= new StreamProducer(this);
-  }
-  /**
    * C6.2(契约第 6 节):别的节点产的一段结果已经落进本机帧库,把它发布进就绪索引。
    *
    *   - 快照:按落盘后的 `index.json` 把线上的键(`wireSnapshotKey(tier, entryKey, dirKey)`)挂进 `stageByKey`,
    *     再对每个 entry 认领一次(`claimSessions`):凡是 card plan 用到这个键、当前有会话在这一版上的,
    *     都收到 `layer`。不需要知道 `clipId` —— 键是内容寻址的,认领按 card plan 把键对回片段。
-   *   - 轨道流:由 `adoptSegments` 负责发布,这里什么都不做。
+   *   - 轨道流:由 `streamProducer().adoptSegments` 负责发布,这里什么都不做。
    *
    * 回 `{ kind, key, ranges, claimed }`(`ranges` 是这个键此刻在盘上的区间,`claimed` 是并进了几层)。
    */

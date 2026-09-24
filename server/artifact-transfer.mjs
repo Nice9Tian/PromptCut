@@ -1,5 +1,5 @@
 /**
- * 预渲染产物的推送与拉取(C6.2,`docs/plan/artifact-transfer-contract.md` 第 3～6 节)。
+ * 预渲染产物的推送与拉取(C6.2,`docs/plan/artifact-transfer-contract.md` 第 3～6 节、第 11 节)。
  *
  * 队列任务的两类产物 —— HTML 快照(共享档、本地档)和轨道流(init + 分段)—— 按内容哈希推到素材服务
  * (快照进 `snap`、流进 `px`),「这一段由哪些块组成」的任务清单放进 `task.complete` 的 `result`,
@@ -8,18 +8,18 @@
  *   推送端:`collectSnapshotResult` / `collectStreamResult` 从本机帧库读出清单,`pushResult` 把块逐个 `put`;
  *           `createAssetSink` 把这两步包成 `render-queue-contract.md` D.1 的产物库(`sink`)。
  *   拉取端:`applyResult` —— 快照经 `SnapshotStore.commitSnapshots` 落盘再 `pipeline.adoptResult` 发布,
- *           流经 `pipeline.streams().adoptSegments` 落盘并发布。**只有这两个写入函数写文件**,
+ *           流经 `pipeline.streamProducer().adoptSegments` 落盘并发布。**只有这两个写入函数写文件**,
  *           否则 `index.json` / `stream.json` 会和磁盘对不上(`cloud-task.md` A3b)。
  *
  * 素材服务的客户端(`server/asset-store/client.mjs` 的 `createAssetClient`)由调用方传进来,这里不引它:
- * 只用它的 `put(ns, bytes, { ext })` / `get(ns, hash)` / `has(ns, hash)` 三个方法(契约第 2 节)。
+ * 只用它的 `put(ns, bytes, { ext })` / `get(ns, hash)` 两个方法(契约第 2 节)。
  *
  * 这个模块引 `snapshot-store.mjs`(带依赖),所以放在 `server/` 下,不放 `server/render-node/`(D1 守门)。
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { rangeHas, DOM_SNAPSHOT_LIMIT, CANVAS_SNAPSHOT_LIMIT, snapshotTier } from './snapshot-store.mjs';
+import { rangeHas } from './snapshot-store.mjs';
 import { resultKeyOf } from './render-node/fingerprint.mjs';
 
 /** 清单的版本(契约第 3 节的 `v`) */
@@ -35,6 +35,9 @@ const TRANSFER_CONCURRENCY = 4;
 const APPLY_BATCH = 8;
 
 const KEY_RE = /^[a-f0-9]{64}$/;
+/** 目录名用得的键(共享档的结果键就是目录名):不许带路径分隔符、不许是 `.` / `..` */
+const SAFE_KEY_RE = /^[A-Za-z0-9_-][A-Za-z0-9._-]*$/;
+const safeKey = value => typeof value === 'string' && SAFE_KEY_RE.test(value) && value !== '.' && value !== '..';
 const sha256 = data => createHash('sha256').update(data).digest('hex');
 
 const fail = (message, extra = {}) => Object.assign(new Error(message), extra);
@@ -55,22 +58,11 @@ async function settleLimited(items, limit, work) {
   return out;
 }
 
-/** 清单 JSON 的字节数;超上限就抛(不截断) */
+/** 清单 JSON 的字节数;超上限就抛 `code: 'result-too-large'`(不截断,契约第 11 节第 7 条) */
 export function assertResultSize(result) {
   const bytes = Buffer.byteLength(JSON.stringify(result), 'utf8');
-  if (bytes > RESULT_MAX_BYTES) throw fail(`任务清单 ${bytes} 字节,超过上限 ${RESULT_MAX_BYTES}`, { code: 'RESULT_TOO_LARGE', bytes, retryable: false });
+  if (bytes > RESULT_MAX_BYTES) throw fail(`任务清单 ${bytes} 字节,超过上限 ${RESULT_MAX_BYTES}`, { code: 'result-too-large', bytes, retryable: false });
   return bytes;
-}
-
-/**
- * 把 `readBlob` 挂在清单上,**不可枚举**:`JSON.stringify` 和 `deepStrictEqual` 都看不见它,清单本身仍是
- * 契约第 3 节的纯数据。调用方既可以 `pushResult(client, result)`(缺省就用它),也可以
- * `const { readBlob } = result` / `const { result, readBlob } = await collect…()` 拿出来。
- */
-function withReader(result, readBlob) {
-  Object.defineProperty(result, 'readBlob', { value: readBlob, enumerable: false, configurable: true, writable: true });
-  Object.defineProperty(result, 'result', { value: result, enumerable: false, configurable: true, writable: true });
-  return result;
 }
 
 const rangeOf = task => {
@@ -84,78 +76,53 @@ const rangeOf = task => {
  * ======================================================================== */
 
 /**
- * 快照任务落在本机帧库的哪里:`{ tier, entryKey, dirKey }`,认不出回 null。
+ * 快照任务落在本机帧库的哪里:`{ tier, entryKey, dirKey }`,认不出回 null(不猜,契约第 11 节第 3 条)。
  *
  *   - 共享档:`dirKey = resultKey`;
  *   - 本地档(E.9):`dirKey = resultKeyOf(去掉 "<entryKey>/" 前缀的内容键, 任务的锁指纹)`,
- *     内容键是 `input.contentKey`,锁指纹是 `requires.envFingerprint`;还要满足
- *     `resultKey = resultKeyOf(input.contentKey, 锁指纹)`,对不上就当认不出。
- *   - 本地档而任务里没有 `input`(D.1 的 `sink.has` / `put` 只给 `{ resultKey, kind, tier, range }`):
- *     在本机的 entry 里按 card plan 反查 —— 某个本地档 control 按上式算出的结果键等于 `resultKey`。
+ *     `entryKey = input.entryKey`,内容键是 `input.contentKey`,锁指纹是 `requires.envFingerprint`。
+ *     缺任何一项(或内容键不以 `<entryKey>/` 开头)就回 null。
  */
-export function snapshotLocation(pipeline, task) {
+export function snapshotLocation(task) {
   const tier = task?.tier;
-  const resultKey = task?.resultKey;
-  if (!KEY_RE.test(String(resultKey))) return null;
-  if (tier === 'shared') return { tier, entryKey: null, dirKey: resultKey };
+  if (tier === 'shared') return safeKey(task.resultKey) ? { tier, entryKey: null, dirKey: task.resultKey } : null;
   if (tier !== 'local') return null;
   const entryKey = task.input?.entryKey;
   const contentKey = task.input?.contentKey;
   const fp = task.requires?.envFingerprint;
-  if (typeof entryKey === 'string' && entryKey && typeof contentKey === 'string' && typeof fp === 'string' && fp) {
-    const prefix = `${entryKey}/`;
-    if (!contentKey.startsWith(prefix) || resultKeyOf(contentKey, fp) !== resultKey) return null;
-    return { tier, entryKey, dirKey: resultKeyOf(contentKey.slice(prefix.length), fp) };
-  }
-  for (const entry of pipeline?.entries?.values?.() ?? []) {
-    for (const control of entry?.cardPlan ?? []) {
-      if ((control?.tier || snapshotTier(control?.capabilities)) !== 'local') continue;
-      const own = control.contentKey ?? control.snapshotKey;
-      const envFp = control.envFingerprint ?? pipeline.envFingerprint;
-      if (!own || !envFp) continue;
-      if (resultKeyOf(`${entry.key}/${own}`, envFp) === resultKey) return { tier, entryKey: entry.key, dirKey: resultKeyOf(own, envFp) };
-    }
-  }
-  return null;
+  if (!safeKey(entryKey) || typeof contentKey !== 'string' || typeof fp !== 'string' || !fp) return null;
+  const prefix = `${entryKey}/`;
+  if (!contentKey.startsWith(prefix) || contentKey.length === prefix.length) return null;
+  return { tier, entryKey, dirKey: resultKeyOf(contentKey.slice(prefix.length), fp) };
 }
 
-/** 这张卡的 `canvasHeavy`(本机 card plan 里找得到这张卡时用它) */
-function controlCanvasHeavy(pipeline, task, loc) {
-  for (const entry of pipeline?.entries?.values?.() ?? []) {
-    if (loc.tier === 'local' && entry?.key !== loc.entryKey) continue;
-    for (const control of entry?.cardPlan ?? []) {
-      if (task?.input?.clipId && control?.clipId !== task.input.clipId) continue;
-      if (control?.snapshotKey !== loc.dirKey) continue;
-      return control?.capabilities?.canvasHeavy === true;
-    }
-  }
-  return null;
-}
-
-/**
- * 拉取方 `commitSnapshots` 按 `canvasHeavy` 重新判超限。为了让它对这一批帧的判决和本机一模一样,先按本机
- * `index.json` 反推:合格帧里有超过 DOM 上限的 → 本机用的是 canvas 那一档;超限帧里有不到 canvas 上限的
- * → 本机用的是 DOM 那一档。两样都推不出来时(这一批帧在两档下判决相同)才取 card plan 里的值。
- */
-function inferCanvasHeavy(frames, index, fallback) {
-  for (const [f, , bytes] of frames) if (rangeHas(index.frames, f) && bytes > DOM_SNAPSHOT_LIMIT) return true;
-  for (const [f, , bytes] of frames) if (rangeHas(index.oversize, f) && bytes <= CANVAS_SNAPSHOT_LIMIT) return false;
-  return fallback === true;
+/** `canvasHeavy`:依次取 `opts.canvasHeavy`、`task.input.canvasHeavy`(是布尔值时),都没有就是 false(第 11 节第 2 条) */
+function canvasHeavyOf(task, opts) {
+  if (typeof opts?.canvasHeavy === 'boolean') return opts.canvasHeavy;
+  if (typeof task?.input?.canvasHeavy === 'boolean') return task.input.canvasHeavy;
+  return false;
 }
 
 /* ======================================================================== *
  * 推送端
  * ======================================================================== */
 
+/** 按「哈希 → 文件」读块:给 `pushResult` 的 `readBlob` */
+const blobReader = files => async hash => {
+  const file = files.get(hash);
+  if (!file) throw fail(`清单里没有块 ${hash}`);
+  return fs.readFile(file);
+};
+
 /**
  * 快照任务的清单(契约第 3 节 `SnapshotResult`):读 `index.json` 的 `frames` 与 `oversize`,
  * 再读对应帧文件算哈希。只列这一任务范围里已经落盘的帧(超体积的也在内),按帧升序。
- * 清单上挂着不可枚举的 `readBlob(hash) → Promise<Buffer>`(见 `withReader`)。
+ * 回 `{ result, readBlob }`(第 11 节第 1 条)。
  */
-export async function collectSnapshotResult(pipeline, task) {
+export async function collectSnapshotResult(pipeline, task, opts = {}) {
   if (task?.kind !== undefined && task.kind !== 'snapshot') throw fail(`不是快照任务:${task.kind}`, { retryable: false });
-  const loc = snapshotLocation(pipeline, task);
-  if (!loc) throw fail(`认不出快照任务的落盘位置:${task?.resultKey}`, { retryable: false });
+  const loc = snapshotLocation(task);
+  if (!loc) throw fail(`认不出快照任务的落盘位置:${task?.resultKey}(本地档要 input.entryKey、input.contentKey、requires.envFingerprint)`, { code: 'unknown-location', retryable: false });
   const { from, to } = rangeOf(task);
   const store = pipeline.snapshots();
   const target = { tier: loc.tier, entryKey: loc.entryKey, key: loc.dirKey };
@@ -176,39 +143,37 @@ export async function collectSnapshotResult(pipeline, task) {
     v: RESULT_VERSION, kind: 'snapshot', tier: loc.tier,
     resultKey: task.resultKey, dirKey: loc.dirKey, entryKey: loc.tier === 'local' ? loc.entryKey : null,
     range: { from, to },
-    canvasHeavy: inferCanvasHeavy(frames, index, controlCanvasHeavy(pipeline, task, loc)),
+    canvasHeavy: canvasHeavyOf(task, opts),
     frames,
   };
   assertResultSize(result);
-  return withReader(result, async hash => {
-    const file = files.get(hash);
-    if (!file) throw fail(`清单里没有块 ${hash}`);
-    return fs.readFile(file);
-  });
+  return { result, readBlob: blobReader(files) };
 }
 
-/** 流库里某条流的清单:直接读盘上的 `stream.json`(生产者每写一个分段存一次) */
-async function readStreamManifest(pipeline, key) {
-  const dir = streamDir(pipeline, key);
-  try {
-    const manifest = JSON.parse(await fs.readFile(path.join(dir, 'stream.json'), 'utf8'));
-    return manifest?.streamKey === key ? manifest : null;
-  } catch { return null; }
-}
 /** 流库目录的形状同 `frame-stream.mjs` 的 `StreamStore`:`<库根>/streams/<streamKey>/` */
 const streamDir = (pipeline, key) => path.join(pipeline.root, 'streams', key);
 
+/** 流库里某条流的清单:直接读盘上的 `stream.json`(生产者每写一个分段存一次) */
+async function readStreamManifest(pipeline, key) {
+  try {
+    const manifest = JSON.parse(await fs.readFile(path.join(streamDir(pipeline, key), 'stream.json'), 'utf8'));
+    return manifest?.streamKey === key ? manifest : null;
+  } catch { return null; }
+}
+
 /**
  * 轨道流任务的清单(契约第 3 节 `StreamResult`):读 `stream.json`,列这一任务范围里已产出的分段,
- * 以及它们用到的 init;每个块读文件算哈希。清单上挂着不可枚举的 `readBlob`。
+ * 以及它们用到的 init;每个块读文件算哈希。分段的 `encoder` 取它所用 init 的 `encoder`(第 11 节第 6 条)。
+ * 回 `{ result, readBlob }`。`opts` 目前不用,留着和快照对称。
  */
-export async function collectStreamResult(pipeline, task) {
+export async function collectStreamResult(pipeline, task, opts = {}) {
+  void opts;
   if (task?.kind !== undefined && task.kind !== 'stream') throw fail(`不是轨道流任务:${task.kind}`, { retryable: false });
   const key = task?.resultKey;
   if (!KEY_RE.test(String(key))) throw fail(`轨道流任务的 resultKey 不对:${key}`, { retryable: false });
   const { from, to } = rangeOf(task);
   const manifest = await readStreamManifest(pipeline, key);
-  if (!manifest) throw fail(`本机没有这条流的清单:${key}`);
+  if (!manifest) throw fail(`本机没有这条流的清单:${key}`, { code: 'no-stream-manifest' });
   const dir = streamDir(pipeline, key);
   const files = new Map();
   const inits = {};
@@ -233,7 +198,7 @@ export async function collectStreamResult(pipeline, task) {
         timescale: initMeta.timescale ?? null, rect: initMeta.rect ?? null, encoder: initMeta.encoder ?? null };
     }
     segments[n] = { hash: segBlob.hash, bytes: segBlob.bytes, init: seg.init, stride: seg.stride, samples: seg.samples,
-      sig: seg.sig ?? null, encoder: seg.encoder ?? initMeta.encoder ?? null };
+      sig: seg.sig ?? null, encoder: initMeta.encoder ?? null };
   }
   const result = {
     v: RESULT_VERSION, kind: 'stream', resultKey: key, range: { from, to },
@@ -242,11 +207,7 @@ export async function collectStreamResult(pipeline, task) {
     inits, segments,
   };
   assertResultSize(result);
-  return withReader(result, async hash => {
-    const file = files.get(hash);
-    if (!file) throw fail(`清单里没有块 ${hash}`);
-    return fs.readFile(file);
-  });
+  return { result, readBlob: blobReader(files) };
 }
 
 /** 清单里要推的块:`[{ ns, hash, ext }]`,去重 */
@@ -265,9 +226,8 @@ function resultBlocks(result) {
 /**
  * 把清单里的每个块 `client.put` 一次(快照进 `snap`、流进 `px`;`put` 自己会跳过素材服务上已有的块)。
  * 全部成功才返回 `{ result, uploaded, skipped }`;任何一块失败就抛(第一处错误)。
- * `readBlob` 缺省用 `collect*` 挂在清单上的那个。
  */
-export async function pushResult(client, result, readBlob = result?.readBlob) {
+export async function pushResult(client, result, readBlob) {
   if (!result || result.v !== RESULT_VERSION) throw fail('不认识的任务清单', { retryable: false });
   if (typeof readBlob !== 'function') throw fail('pushResult 需要 readBlob', { retryable: false });
   assertResultSize(result);
@@ -285,11 +245,11 @@ export async function pushResult(client, result, readBlob = result?.readBlob) {
   return { result, uploaded, skipped };
 }
 
-/** 本机帧库是否覆盖了这一段(快照:`frames ∪ oversize` 盖住每一帧;流:每个分段都在清单里) */
+/** 本机帧库是否覆盖了这一段(快照:`frames ∪ oversize` 盖住每一帧;流:每个分段和它的 init 都在清单里) */
 async function coversRange(pipeline, ref) {
   const { from, to } = rangeOf(ref);
   if (ref.kind === 'snapshot') {
-    const loc = snapshotLocation(pipeline, ref);
+    const loc = snapshotLocation(ref);
     if (!loc) return false;
     const index = await pipeline.snapshots().snapshotIndex({ tier: loc.tier, entryKey: loc.entryKey, key: loc.dirKey });
     for (let f = from; f <= to; f++) if (!rangeHas(index.frames, f) && !rangeHas(index.oversize, f)) return false;
@@ -324,16 +284,15 @@ function resultComplete(result) {
 }
 
 /**
- * D.1 的产物库(`sink`),素材服务实现(契约第 4 节)。
+ * D.1 的产物库(`sink`),素材服务实现(契约第 4 节、第 11 节第 3、7 条)。
  *
  *   - `has(ref)`:本机帧库覆盖了整个 `range` 就回 true。只看本机,不查素材服务(跨节点去重在 C6.4)。
  *   - `put({ ...ref, artifacts, meta })`:`artifacts` 本阶段忽略,字节以本机帧库为准。`collect*` 再
- *     `pushResult`,全部推完回 `{ complete: true, result }`;清单缺帧、有块推失败回 `{ complete: false }`。
- *     清单超过 256 KiB 照样抛(不截断,`retryable: false`)。`result` 是对 D.1 的扩展,什么时候放进
- *     `session.complete` 由 M5b 定。
+ *     `pushResult`,全部推完回 `{ complete: true, result }`;清单缺帧、有块推失败、清单超过 256 KiB,
+ *     都回 `{ complete: false }`。`result` 是对 D.1 的扩展,什么时候放进 `session.complete` 由 M5b 定。
  *
- * `ref` 里带着任务的 `input` / `requires`(调用方把整个 TaskView 展开进来)时按它们定本地档的位置;
- * 只有 D.1 的四个字段时,本地档在本机 card plan 里反查(`snapshotLocation`)。
+ * `ref` 带着任务的 `input` 与 `requires`(M5b 的 local-node 原样传入)。本地档靠它们按 E.9 算落盘键;
+ * 缺了就 `has` 回 false、`put` 回 `{ complete: false }`,不猜。`canvasHeavy` 取 `ref.input.canvasHeavy`。
  */
 export function createAssetSink({ pipeline, client }) {
   if (!pipeline) throw new Error('createAssetSink needs a pipeline');
@@ -343,21 +302,17 @@ export function createAssetSink({ pipeline, client }) {
       try { return await coversRange(pipeline, ref); } catch { return false; }
     },
     async put(ref) {
-      let result;
       try {
-        if (ref?.kind === 'snapshot') result = await collectSnapshotResult(pipeline, ref);
-        else if (ref?.kind === 'stream') result = await collectStreamResult(pipeline, ref);
+        let collected;
+        if (ref?.kind === 'snapshot') collected = await collectSnapshotResult(pipeline, ref);
+        else if (ref?.kind === 'stream') collected = await collectStreamResult(pipeline, ref);
         else return { complete: false };
-      } catch (error) {
-        if (error?.code === 'RESULT_TOO_LARGE') throw error;
+        if (!resultComplete(collected.result)) return { complete: false };
+        await pushResult(client, collected.result, collected.readBlob);
+        return { complete: true, result: collected.result };
+      } catch {
         return { complete: false };
       }
-      if (!resultComplete(result)) return { complete: false };
-      try { await pushResult(client, result); } catch (error) {
-        if (error?.code === 'RESULT_TOO_LARGE') throw error;
-        return { complete: false };
-      }
-      return { complete: true, result };
     },
   };
 }
@@ -369,8 +324,8 @@ export function createAssetSink({ pipeline, client }) {
 function checkSnapshotResult(result) {
   const bad = why => { throw fail(`快照清单不对:${why}`, { retryable: false }); };
   if (result.tier !== 'shared' && result.tier !== 'local') bad(`tier = ${result.tier}`);
-  if (!KEY_RE.test(String(result.dirKey))) bad('dirKey');
-  if (result.tier === 'local' && !(typeof result.entryKey === 'string' && result.entryKey)) bad('本地档缺 entryKey');
+  if (!safeKey(result.dirKey)) bad('dirKey');
+  if (result.tier === 'local' && !safeKey(result.entryKey)) bad('本地档缺 entryKey');
   const { from, to } = result.range ?? {};
   if (!Number.isInteger(from) || !Number.isInteger(to) || from < 0 || to < from) bad('range');
   if (!Array.isArray(result.frames)) bad('frames');
@@ -380,14 +335,15 @@ function checkSnapshotResult(result) {
 }
 
 /**
- * 按任务清单把一段产物拉进本机帧库并发布(契约第 5 节)。回 `{ written, skipped, fetched }`:
- * 落盘了几帧 / 几个分段、跳过几个(本机已有)、从素材服务下载了几个块。
+ * 按任务清单把一段产物拉进本机帧库并发布(契约第 5 节)。回 `{ written, skipped, fetched }`(第 11 节第 8 条):
+ * 实际落盘的帧数 / 分段数、本机已有而跳过的、从素材服务下载的块数(init 也算)。
  *
  *   快照:本机 `index.json` 里已有的帧(`frames` 或 `oversize`)不下载;其余按哈希从 `snap` 拉,
  *         经 `commitSnapshots` 分批落盘(超体积由它自己判),最后 `pipeline.adoptResult` 发布。
  *         某块拉不到(404)或拉坏了:已经拉到的照常落盘、发布,然后整体抛错(不留半截文件)。
  *   流:   先问生产者缺哪些(`adoptionNeeds`),只从 `px` 拉这些块,交给 `adoptSegments` 落盘并发布;
- *         拉不到的块对应的分段不收,其余照收,然后整体抛错。
+ *         拉不到的块对应的分段不收,其余照收,然后整体抛错。管线上没有生产者(`streamProducer()` 回 null,
+ *         即 `interactive: false` 或已关闭)就抛 `code: 'no-stream-producer'`。
  */
 export async function applyResult(pipeline, client, result) {
   if (!result || typeof result !== 'object' || result.v !== RESULT_VERSION) throw fail('不认识的任务清单', { retryable: false });
@@ -398,9 +354,9 @@ export async function applyResult(pipeline, client, result) {
 
 async function fetchBlock(client, ns, hash) {
   const buf = await client.get(ns, hash);
-  if (buf === null || buf === undefined) throw fail(`块 ${ns}/${hash} 不在素材服务上`, { code: 'BLOB_MISSING', status: 404 });
+  if (buf === null || buf === undefined) throw fail(`块 ${ns}/${hash} 不在素材服务上`, { code: 'blob-missing', status: 404 });
   const bytes = Buffer.isBuffer(buf) ? buf : Buffer.from(buf);
-  if (sha256(bytes) !== hash) throw fail(`块 ${ns}/${hash} 的内容和哈希对不上`, { code: 'BLOB_CORRUPT' });
+  if (sha256(bytes) !== hash) throw fail(`块 ${ns}/${hash} 的内容和哈希对不上`, { code: 'blob-corrupt' });
   return bytes;
 }
 
@@ -430,7 +386,7 @@ async function applySnapshotResult(pipeline, client, result) {
       fetched++;
       const html = item.value.toString('utf8');
       // 快照按 UTF-8 文本落盘(`commitSnapshots` 的口径):解码再编码回不到原字节的块不收
-      if (!Buffer.from(html, 'utf8').equals(item.value)) { failure ||= fail(`快照块 ${batch[k][1]} 不是合法的 UTF-8`, { code: 'BLOB_CORRUPT' }); return; }
+      if (!Buffer.from(html, 'utf8').equals(item.value)) { failure ||= fail(`快照块 ${batch[k][1]} 不是合法的 UTF-8`, { code: 'blob-corrupt' }); return; }
       items.push({ localFrame: batch[k][0], html });
     });
     if (items.length) {
@@ -444,8 +400,8 @@ async function applySnapshotResult(pipeline, client, result) {
 }
 
 async function applyStreamResult(pipeline, client, result) {
-  const producer = pipeline.streams?.();
-  if (!producer) throw fail('这个预渲染实例没有轨道流生产者(已关闭)');
+  const producer = typeof pipeline?.streamProducer === 'function' ? pipeline.streamProducer() : null;
+  if (!producer) throw fail('这个预渲染实例没有轨道流生产者(interactive: false 或已关闭),收不了流清单', { code: 'no-stream-producer', retryable: false });
   const needs = await producer.adoptionNeeds(result);
   const wanted = new Set(needs.segments);
   const settled = await settleLimited(needs.hashes, TRANSFER_CONCURRENCY, hash => fetchBlock(client, PX_NS, hash));

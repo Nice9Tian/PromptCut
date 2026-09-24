@@ -786,8 +786,7 @@ export class StreamProducer {
    */
   republish() {
     if (!this.routeAttached) return;
-    // C6.2:只是拉来、还不属于任何一版的流(`adoptedOnly`)不知道该发给哪个会话,只挂在键上(`adoptSegments`)
-    for (const state of this.streams.values()) if (!state.adoptedOnly) this.publish(state);
+    for (const state of this.streams.values()) this.publish(state);
   }
 
   publish(state) {
@@ -797,6 +796,9 @@ export class StreamProducer {
     const ready = this.pipeline.ready;
     try {
       ready.stageByKey({ kind: 'stream', key: spec.streamKey, ranges });
+      // C6.2:只是拉来、还不属于任何一版的流(`adoptedOnly`)不知道该发给哪个会话 —— 只挂在键上,
+      // 等它进了某一版的计划(`update` 接手这个 state)再照常发层
+      if (state.adoptedOnly) return;
       const entryKey = state.entryKey ?? this.entryKey;
       for (const clipId of [spec.topClipId, ...(state.aliases ?? [])]) {
         ready.publish(entryKey, { clipId, kind: 'stream', key: spec.streamKey, ranges, ...(spec.kind === 'group' ? { groupClipIds: spec.clipIds } : {}) });
@@ -1092,12 +1094,13 @@ export class StreamProducer {
    * `blobs`:哈希 → Buffer(`Map` 或普通对象),要含清单里本机还没有的每个 init 和分段。
    *
    *   - **写文件**只在这里:照现有命名 `init-<sha16>.mp4`、`<n>-<sha16>.m4s`,经 `atomic`;
-   *   - **合并清单**合进这条流在内存里的 `state.manifest`(没有 state 就新建一个,标 `adoptedOnly`:不在任何
-   *     一版的计划里,本机不替它补产、不认领、不发层,只挂在键上),再 `StreamStore.save` —— 不从外面改
+   *   - **合并清单**合进这条流在内存里的 `state.manifest`(没有 state 就按清单的 `header` 新建一个最小的,
+   *     标 `adoptedOnly`:不在任何一版的计划里,本机不替它补产、不认领,`publish` 只挂键不发层;之后
+   *     `update` 把它排进某一版时去掉这个标记),再 `StreamStore.save` —— 不从外面改
    *     `stream.json`,否则会被生产者用内存里的清单覆盖;
    *   - 拉来的分段记 `adopted: true`,带对方的 `encoder` 与 `sig`(`segmentState` 据此不判旧);
    *   - 本机已经有、而且不是 `stale` 的分段跳过,不覆盖;
-   *   - 发布:属于某一版计划的流照 `publish(state)`;`adoptedOnly` 的只 `stageByKey`。
+   *   - 发布:照现有的 `publish(state)`(`adoptedOnly` 的只 `stageByKey`)。
    *
    * 同一个生产者上的拉取串行进行。回 `{ written, skipped, inits }`(写了几个分段、跳过几个、新写了几个 init)。
    */
@@ -1166,7 +1169,8 @@ export class StreamProducer {
         inits++;
       }
       manifest.segments[p.n] = { file: p.file, init: p.seg.init, stride: p.seg.stride, samples: p.seg.samples, bytes: p.bytes.length,
-        sig: p.seg.sig ?? null, encoder: p.seg.encoder ?? manifest.inits[p.seg.init]?.encoder ?? null, adopted: true, at: Date.now() };
+        // 分段的 `encoder` 取它所用 init 的(契约第 11 节第 6 条)
+        sig: p.seg.sig ?? null, encoder: manifest.inits[p.seg.init]?.encoder ?? p.seg.encoder ?? null, adopted: true, at: Date.now() };
       if (old && old.file !== p.file) replaced.push(old.file);
       written++;
     }
@@ -1177,10 +1181,9 @@ export class StreamProducer {
       state.spec.lastSegment = Math.max(state.spec.lastSegment, plan.range.to);
     }
     await this.store.save(manifest);
-    if (state.adoptedOnly) {
-      const ranges = readySegmentRanges(manifest);
-      if (ranges.length) { try { this.pipeline.ready.stageByKey({ kind: 'stream', key, ranges }); } catch {} }
-    } else this.publish(state);
+    // 照现有的 `publish(state)`:`adoptedOnly` 的 state 由 `adoptionState` 按清单的 header 建出了 publish 要的
+    // 全部 spec 字段(streamKey / topClipId / kind / clipIds),在它那里只挂键、不发层
+    this.publish(state);
     for (const file of replaced) {
       const timer = setTimeout(() => {
         if (Object.values(state.manifest?.segments ?? {}).some(s => s.file === file)) return;
