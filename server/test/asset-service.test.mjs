@@ -39,6 +39,7 @@ const media = await import(compile('server/vite-plugin-media.ts', 'media.mjs'));
 const asset = await import(compile('server/asset-service.ts', 'asset-service.mjs', [
   ['from "./http-guard.mjs"', `from "${guardUrl}"`],
   ['from "./vite-plugin-media"', 'from "./media.mjs"'],
+  ['from "./asset-store/index.mjs"', `from "${pathToFileURL(path.join(ROOT, 'server', 'asset-store', 'index.mjs')).href}"`],
 ]));
 const client = await import(compile('server/asset-client.ts', 'asset-client.mjs'));
 

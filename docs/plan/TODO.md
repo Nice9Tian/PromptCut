@@ -9,7 +9,7 @@
 | 轨道流：重卡在播放时贴的 alpha 视频流 | `docs/plan/r8-streams-task.md`；编码原型报告 `docs/plan/g0-b-stream-prototype.md` | 未开始，编码原型已做完 |
 | 共享 WebGL 渲染器：canvas 卡共用一个 WebGL 上下文 | `docs/plan/r9-webgl-task.md` | 未开始 |
 | 素材服务与文档服务（本地或远程，可任意组合部署）、产物入库、改动竞态、Agent 的查询进程、在线浏览器模式 | `docs/plan/cloud-task.md`；动工前的问题已定，见文末「已定的决议」。2026-09-24 按路线 B 改写，尚未独立审查 | 未开始 |
-| 分布式预渲染：文档服务托管的拉取式渲染任务队列，本机 PC、独立渲染主机、纯浏览器认领任务 | `docs/plan/distributed-prerender-queue.md`；前置：上一行的文档服务与产物入库（A3b）；背景评估 `docs/reports/REPORT-architecture-agent-prerender.md` | 设计已审核（2026-09-24）；落地任务书 `docs/plan/TASK-distributed-prerender-queue.md`（M0～M8，M1 纯内存队列本体可先于前置动工）；M1、M2 已合入 main（报告 `docs/reports/REPORT-render-queue-m1.md`）；M3 进程内集成已合入 main（报告 `docs/reports/REPORT-render-queue-m3.md`），接真实预渲染执行器挪到 M5；M4 环境指纹进结果键已合入 main（报告 `docs/reports/REPORT-render-queue-m4.md`），补充的卡片级指纹锁同样已合入（报告 `docs/reports/REPORT-render-queue-card-lock.md`）；M5～M8 的主执行计划 `docs/plan/Master-Execution-Plan.md`（2026-09-25 定稿；M5 拆成 M5a、C5、C6、M5b）；**M5a 已合入 main**（网络层、集群令牌、服务地址登记、文档服务通用化，报告 `docs/reports/REPORT-render-queue-m5a.md`） |
+| 分布式预渲染：文档服务托管的拉取式渲染任务队列，本机 PC、独立渲染主机、纯浏览器认领任务 | `docs/plan/distributed-prerender-queue.md`；前置：上一行的文档服务与产物入库（A3b）；背景评估 `docs/reports/REPORT-architecture-agent-prerender.md` | 设计已审核（2026-09-24）；落地任务书 `docs/plan/TASK-distributed-prerender-queue.md`（M0～M8，M1 纯内存队列本体可先于前置动工）；M1、M2 已合入 main（报告 `docs/reports/REPORT-render-queue-m1.md`）；M3 进程内集成已合入 main（报告 `docs/reports/REPORT-render-queue-m3.md`），接真实预渲染执行器挪到 M5；M4 环境指纹进结果键已合入 main（报告 `docs/reports/REPORT-render-queue-m4.md`），补充的卡片级指纹锁同样已合入（报告 `docs/reports/REPORT-render-queue-card-lock.md`）；M5～M8 的主执行计划 `docs/plan/Master-Execution-Plan.md`（2026-09-25 定稿；M5 拆成 M5a、C5、C6、M5b）；**M5a 已合入 main**（网络层、集群令牌、服务地址登记、文档服务通用化，报告 `docs/reports/REPORT-render-queue-m5a.md`）；**C5 已合入 main**（素材服务数据层、写入鉴权、局域网地址登记，报告 `docs/reports/REPORT-c5.md`）；C6 按独立审查拆成 C6.1～C6.6（见主执行计划） |
 | 音频整体改成浏览器端 JS | `docs/plan/audio_structure_plan.md`（A0～A7）；判重测试计划 `docs/plan/audio_determine_plan.md` | 计划已写，未动工 |
 | 以后再做：桌面版给只有原片的云端素材补转小版；导出页装虚拟定时器 | `docs/plan/future_planning.md` | 暂缓 |
 
@@ -31,7 +31,7 @@
 - **工作方式**：去掉对话式布局；SKILL 改为桌面 APP 经 MCP 直接接入同一个项目（现在是把项目快照进独立任务目录、由无头实例改副本、最后三方合并）；关闭编辑界面转为托盘和悬浮窗后台运行。
 - **Agent**：三档创造力等级（项目默认、对话可改）；主 Agent 拉起子 Agent 并附加角色，现有的分工模式归档；Agent 用 JS 自定义测量；看或改用户正在编辑的内容时返回「用户正在编辑」。
 - **文档服务**：还不存在，项目的真身现在在页面里；Agent 的写操作现在经页面执行，没有经文档服务；覆盖通知覆盖方和被覆盖方都要知道。
-- **素材服务**：还不存在；桌面运行环境现在直读本机素材目录，没有经服务接口；两档素材的字段只是占位；预渲染产物还没有入库，只留在本机。
+- **素材服务**：第 5 步空壳已落地（分片上传、对账、按哈希取回、跨源），C5 起经数据层 `BlobStore`（`server/asset-store/`），非本机写入要集群令牌，局域网地址登记到控制面；两档素材的字段只是占位；预渲染产物还没有入库，只留在本机。
 - **查询渲染**：Agent 专用渲染实例的优先通道、AI 栏操作预览的插队只有雏形。
 - **在线浏览器模式**：还不存在。
 - **渲染任务队列与渲染节点**：还不存在；预渲染现在只由本机预渲染进程按页面的 preload 做（本机的结果键已在 M4 乘上环境指纹）。页面测量时推过的帧按卡片级指纹锁入库：页面上报自己的环境，帧存在页面指纹的键下，这张卡随之锁给页面的环境（`render-queue-contract.md` F 节，报告 `docs/reports/REPORT-render-queue-card-lock.md`）。设计见 `docs/plan/distributed-prerender-queue.md`。
