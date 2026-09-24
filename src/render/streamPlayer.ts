@@ -12,7 +12,8 @@
  *     永不返回,这是帧数上限、与分辨率无关;
  *   - 在这之上解码帧预算**按字节算**:总量 ≤ 80 MB(上下拼合的编码画面,NV12 按 1.5 字节 / 像素),
  *     每流保底 3 帧;
- *   - 同时活跃的解码器 ≤ 6(超出的平面不建解码器,那一层透明 —— 父页照 K5 给它投最近快照);
+ *   - 同时活跃的解码器 ≤ 6(超出的平面不建解码器 —— `planesWithinBudget`,父页用同一个函数;
+ *     那一层从兜底顺序第 3 步起:最近快照,再没有就占位符);
  *   - 每流最多 2 个在途请求,分段整段拉;
  *   - `codec` 从 `avcC` 拼(真实 SPS 的 level 随内容变,不能写死);`isConfigSupported` 不校验 level
  *     与分辨率,不拿它当能力判据。
@@ -27,7 +28,7 @@
  *
  * 流按**全局帧号**分段:第 F 帧在第 `floor(F / 15)` 段的第 `F % 15` 个样本,
  * `EncodedVideoChunk.timestamp = F × 1e6 / fps`(微秒,取整)。这一拍要的帧没解出来时,
- * 最近 3 帧内画过的那一帧留着不动(「沿用旧的预渲染结果」是允许的退化),再远就清成透明 ——
+ * 最近 3 帧内画过的那一帧留着不动(「沿用旧的预渲染结果」是允许的退化),再远就清空流平面、这一拍落到兜底顺序的下一步(父页垫着的快照,没有就占位符) ——
  * **播放头从不为它停**。
  */
 
@@ -201,6 +202,24 @@ export function streamPlanesFor(
     if (!members.every((id) => suppressed.has(id))) continue;
     if (!rangesHave(layer.ranges, seg)) continue;
     out.push({ clipIds: [...members], key: layer.key, ranges: layer.ranges.map((r) => [r[0], r[1]] as [number, number]) });
+  }
+  return out;
+}
+
+/**
+ * 解码器预算(兜底顺序第 1、2 步的预算,rendering.md「兜底顺序」):这一拍**真的会建解码器**的那几条平面。
+ *
+ * 只收有流键的(没有键的只占位、不解码),按传进来的顺序取前 `DECODER_BUDGET` 条 ——
+ * 舞台的 `sync()` 和父页的 `streamPlanesAt` 用同一个函数,两边对「谁超预算」的判断一致:
+ * 超预算的卡父页当「无流」、每拍换最近的快照(兜底顺序直接从第 3 步开始)。
+ * 画布还没挂上的平面照样占着它的预算位(父页不知道画布到没到),那一拍按流 blank 处理。
+ */
+export function planesWithinBudget<P extends { clipIds?: readonly string[]; key?: string }>(planes: readonly P[]): P[] {
+  const out: P[] = [];
+  for (const p of planes) {
+    if (out.length >= DECODER_BUDGET) break;
+    if (!Array.isArray(p?.clipIds) || !p.clipIds.length || typeof p.key !== "string" || !p.key) continue;
+    out.push(p);
   }
   return out;
 }
@@ -418,12 +437,21 @@ class StreamTrack {
     });
   }
 
-  /** 清单:没有就拉;这一段不在清单里、而父页说它就绪了,隔 2 秒以上再拉一次(分段会被替换) */
-  private loadManifest(force = false): void {
-    if (!this.key || this.manifestLoading) return;
+  /**
+   * 同一个流键的就绪区间变了(生产者发布了新分段):下一次 `present` 允许再问一次清单(疑点 G)。
+   * 真的发出去了才清掉 —— 被节流挡回来的话留着,下一拍再试。
+   */
+  private manifestDirty = false;
+
+  /**
+   * 清单:没有就拉;`force` 时隔 2 秒以上再拉一次(分段会被替换:稀疏 → 满帧)。
+   * 回这一次有没有真的发起。
+   */
+  private loadManifest(force = false): boolean {
+    if (!this.key || this.manifestLoading) return false;
     const now = Date.now();
-    if (this.manifest && !force) return;
-    if (this.manifest && now - this.manifestAt < MANIFEST_REFRESH_MS) return;
+    if (this.manifest && !force) return false;
+    if (this.manifest && now - this.manifestAt < MANIFEST_REFRESH_MS) return false;
     this.manifestAt = now;
     this.manifestLoading = this.player.source.manifest(this.key)
       .then((m) => {
@@ -434,8 +462,9 @@ class StreamTrack {
         this.ensureCompositor()?.place(m.bound);
         this.wake();
       })
-      .catch(() => { /* 还没就绪:这一层透明,下一拍再说 */ })
+      .catch(() => { /* 还没就绪:这一层这一拍落到兜底顺序的下一步(快照 / 占位符),下一拍再说 */ })
       .finally(() => { this.manifestLoading = null; });
+    return true;
   }
 
   /** 一个 init(变体)的解码器配置 */
@@ -553,24 +582,46 @@ class StreamTrack {
   }
 
   /**
-   * 有流画面时把同一包裹层里的快照平面藏起来(A3c:有流分段时父页本来就不该投快照;
-   * 父页那一侧还没接上时两层会叠出重影 —— 流在上面,快照从流的透明处漏出来)。
+   * 有流画面时把快照平面藏起来,流清空时露出来(兜底顺序:流画不出来的那一拍当场落到快照,
+   * 不等下一次分派)。父页在流覆盖时照样投一张「海报」快照垫在下面(根因 C),
+   * 两层同时显示会叠出重影 —— 流在上面,快照从流的透明处漏出来。
+   *
+   * 单卡流:同一包裹层里的快照平面。组流(画布在舞台根下):每个成员包裹层里的快照平面。
    * 只动快照平面自己的 `visibility`,React 不管这个属性,不会冲掉它。
    */
   private coverSnapshot(on: boolean): void {
-    if (this.plane.clipIds.length !== 1) return;
-    const snap = this.canvas.parentElement?.querySelector<HTMLElement>(":scope > [data-pc-snapshot-plane]");
-    if (!snap) return;
     const want = on ? "hidden" : "";
-    if (snap.style.visibility !== want) snap.style.visibility = want;
+    const set = (snap: HTMLElement | null | undefined) => { if (snap && snap.style.visibility !== want) snap.style.visibility = want; };
+    if (this.plane.clipIds.length === 1) {
+      set(this.canvas.parentElement?.querySelector<HTMLElement>(":scope > [data-pc-snapshot-plane]"));
+      return;
+    }
+    const root = this.player.rootElement();
+    if (!root) return;
+    for (const id of this.plane.clipIds) {
+      set(root.querySelector<HTMLElement>(`[data-pc-clip="${CSS.escape(id)}"] > [data-pc-snapshot-plane]`));
+    }
   }
+
+  /** 这一拍流画面在不在(画了、或留着最近 3 帧内的那张)。占位符 T1 按它判 */
+  get showing(): boolean { return this.lastDrawn !== null; }
+
+  /** 这一拍画的是满帧段还是稀疏段(兜底顺序第 1 / 2 步;探针按它分级)。没画面时 null */
+  get level(): "dense" | "sparse" | null {
+    if (this.lastDrawn === null) return null;
+    const meta = this.manifest?.segments[String(Math.floor(this.lastDrawn / SEGMENT_FRAMES))];
+    return (meta?.stride ?? 1) > 1 ? "sparse" : "dense";
+  }
+
+  /** 实体框(清单的收紧矩形,没有就用上界;平面坐标)。占位符的几何按它摆 */
+  get box(): StreamRect | null { return this.manifest ? this.manifest.tight ?? this.manifest.bound : null; }
 
   /** 这一拍:画第 F 帧(或留着最近一张 / 清成透明),再往后多解几帧 */
   present(f: number): void {
     this.wantFrame = f;
     const seg = Math.floor(f / SEGMENT_FRAMES);
     if (!rangesHave(this.plane.ranges, seg)) {
-      // 这一段还没就绪:该层透明(父页照 K5 给它投最近快照),播放头不停
+      // 这一段还没就绪:流清空,这一层当拍落到兜底顺序的下一步(父页垫的快照 / 占位符),播放头不停
       this.blank();
       this.dropFrames();
       this.nextFeed = null;
@@ -578,12 +629,22 @@ class StreamTrack {
     }
     this.loadManifest();
     if (!this.manifest) { this.blank(); return; }
-    if (!this.manifest.segments[String(seg)]) { this.loadManifest(true); this.blank(); return; }
+    const meta = this.manifest.segments[String(seg)];
+    if (!meta) { this.loadManifest(true); this.blank(); return; }
+    /*
+     * 疑点 G:以前只在分段缺失或拉取失败时才再问清单 —— 稀疏段被满帧段替换之后,生产者发的就绪区间
+     * 一个字不变,页面就一直用着稀疏段(旧文件还在 HTTP 缓存里,拉取也不失败)。现在当前段是稀疏段、
+     * 或者同一个流键的就绪区间变了,就按 `MANIFEST_REFRESH_MS` 的节流再问一次;换上的满帧段在
+     * 分段边界接上(`pump` 里比对文件名),不在段中间换,免得接到别的编码的差分帧上。
+     */
+    if (this.manifestDirty || (meta.stride ?? 1) > 1) {
+      if (this.loadManifest(true)) this.manifestDirty = false;
+    }
     // 往回跳(比已经放掉的帧还早)或者往前跳太远(超出已喂进去的一段):从目标所在分段的 IDR 重新解
     const far = this.nextFeed === null || f < this.discardBefore || f > this.nextFeed + SEGMENT_FRAMES;
     if (far) this.seek(f);
     if (!this.drawAt(f)) {
-      // 没解出来:最近 3 帧内画过的留着(允许的退化),再远就透明
+      // 没解出来:最近 3 帧内画过的留着(允许的退化),再远就清空、落到下面垫着的快照 / 占位符
       if (this.lastDrawn === null || f < this.lastDrawn || f - this.lastDrawn > HOLD_FRAMES) this.blank();
       else this.stats.holds++;
     }
@@ -621,7 +682,9 @@ class StreamTrack {
       const meta = this.manifest.segments[String(seg)];
       if (!meta) { this.loadManifest(true); break; }
       const data = this.segments.get(seg);
-      if (!data || data.file !== meta.file) {
+      // 清单里这一段换了文件(稀疏 → 满帧,疑点 G):只在分段起点换,段中间接着用手里这份(差分帧不能跨编码)
+      const replaced = !!data && data.file !== meta.file && this.nextFeed === seg * SEGMENT_FRAMES;
+      if (!data || replaced) {
         if (data) this.segments.delete(seg);
         this.loadSegment(seg);
         break;
@@ -676,6 +739,9 @@ class StreamTrack {
       this.segments.clear();
       this.seek(0);
       this.nextFeed = null;
+    } else if (JSON.stringify(plane.ranges ?? []) !== JSON.stringify(this.plane.ranges ?? [])) {
+      // 同键、就绪区间变了:生产者发布了新分段,清单可能也换了(疑点 G)
+      this.manifestDirty = true;
     }
     this.plane = plane;
     if (canvas !== this.canvas) {
@@ -745,22 +811,39 @@ export class StreamPlayer {
     if (this.proxy) this.disposeAll();
   }
 
+  /** 平面画布的引用缓存(P4 性能修正):`sync()` 每拍对每条流都从场景根 querySelector 一遍太贵 */
+  private canvasCache = new Map<string, HTMLCanvasElement>();
+
   private canvasOf(plane: StreamPlaneRequest): HTMLCanvasElement | null {
     const root = this.root();
     if (!root) return null;
-    if (plane.clipIds.length === 1) {
-      const id = CSS.escape(plane.clipIds[0]);
-      return root.querySelector<HTMLCanvasElement>(`[data-pc-clip="${id}"] > canvas[data-pc-stream-plane]`);
-    }
-    const group = CSS.escape(plane.clipIds.join(","));
-    return root.querySelector<HTMLCanvasElement>(`canvas[data-pc-group-plane][data-pc-stream-group="${group}"]`);
+    const single = plane.clipIds.length === 1;
+    const key = plane.clipIds.join(",");
+    const hit = this.canvasCache.get(key);
+    // 还在场景里、仍挂在同一个包裹层(单卡流)/ 同一个组(组流)下就直接用
+    if (hit && hit.isConnected && root.contains(hit)
+      && (single ? hit.parentElement?.getAttribute("data-pc-clip") === key : hit.getAttribute("data-pc-stream-group") === key)) return hit;
+    const found = single
+      ? root.querySelector<HTMLCanvasElement>(`[data-pc-clip="${CSS.escape(key)}"] > canvas[data-pc-stream-plane]`)
+      : root.querySelector<HTMLCanvasElement>(`canvas[data-pc-group-plane][data-pc-stream-group="${CSS.escape(key)}"]`);
+    if (found) this.canvasCache.set(key, found);
+    else this.canvasCache.delete(key);
+    if (this.canvasCache.size > 256) this.canvasCache.clear();
+    return found;
   }
 
-  /** 把平面和画布对上:新来的建流,没了的关掉。最多 `DECODER_BUDGET` 条 */
+  /** 场景根(组流藏 / 露成员快照平面时用) */
+  rootElement(): Element | null {
+    return this.root();
+  }
+
+  /**
+   * 把平面和画布对上:新来的建流,没了的关掉。只收 `planesWithinBudget` 放行的那几条 ——
+   * 和父页同一个函数,父页当「无流」的层这里也不建解码器。
+   */
   private sync(): void {
     const want = new Map<string, { plane: StreamPlaneRequest; canvas: HTMLCanvasElement }>();
-    for (const plane of this.planes) {
-      if (want.size >= DECODER_BUDGET) break;
+    for (const plane of planesWithinBudget(this.planes)) {
       const canvas = this.canvasOf(plane);
       if (!canvas) continue;
       want.set(planeId(plane), { plane, canvas });
@@ -807,6 +890,39 @@ export class StreamPlayer {
     this.stopped = true;
     this.planes = [];
     this.disposeAll();
+  }
+
+  /**
+   * 这一拍流画面在的那些卡(组流算到每个成员头上)。占位符 T1:被抑制、这一拍流 blank、
+   * 又没挂快照的层才显示占位符 —— 在 `present` 之后当拍读(`StageView` 的 `refreshPlaceholders`)。
+   */
+  showingClips(): Set<string> {
+    const out = new Set<string>();
+    if (this.stopped || this.proxy) return out;
+    for (const track of this.tracks.values()) {
+      if (!track.showing) continue;
+      for (const id of track.plane.clipIds) out.add(id);
+    }
+    return out;
+  }
+
+  /** 这一拍每张卡的流画面是满帧段还是稀疏段(只列有画面的;探针用) */
+  levels(): Map<string, "dense" | "sparse"> {
+    const out = new Map<string, "dense" | "sparse">();
+    if (this.stopped || this.proxy) return out;
+    for (const track of this.tracks.values()) {
+      const level = track.level;
+      if (level) for (const id of track.plane.clipIds) out.set(id, level);
+    }
+    return out;
+  }
+
+  /** 单卡流的实体框(包裹层坐标 = 平面坐标)。组流的框在舞台坐标里,不回 */
+  boxOf(clipId: string): StreamRect | null {
+    for (const track of this.tracks.values()) {
+      if (track.plane.clipIds.length === 1 && track.plane.clipIds[0] === clipId) return track.box;
+    }
+    return null;
   }
 
   /** 此刻持有的解码帧字节(验收「解码帧总内存 ≤ 80 MB」看它) */

@@ -11,6 +11,8 @@
  * 同一份共享快照挂到不同位置和框的片段上时各自按 `<img>` 的实际框换算)。
  */
 import { canvasBox, canvasPixels, type CanvasPixels } from "./contentBox";
+import { isPlaceholderNode } from "./placeholderHost.ts";
+import { PLACEHOLDER_ATTR } from "./placeholder/contract.ts";
 
 export { canvasBox };
 
@@ -102,6 +104,8 @@ export function canvasPaintedBox(el: HTMLCanvasElement, px: CanvasPixels | null 
 export function isSolid(el: Element, root: SceneRoot): boolean {
   if (el === document.documentElement || el === document.body || el === root) return false;
   if (el.hasAttribute("data-pc-scene") || el.hasAttribute("data-pc-clip")) return false;
+  // 占位平面不是卡片画的东西:实体范围 / 像素扫描不算它(命中测试在 `hitTest` 里单独认它)
+  if (isPlaceholderNode(el)) return false;
   const cs = getComputedStyle(el);
   /*
    * 只看画没画,不看 pointer-events:粒子卡的 canvas(tsParticles 设了 pointer-events:none)照样是画了东西的实体,
@@ -171,6 +175,17 @@ export function hitTest(root: SceneRoot, x: number, y: number): StageHit | null 
       const clipId = el.getAttribute("data-pc-clip");
       if (clipId) return { clipId, ...toStage(el.getBoundingClientRect(), origin) };
     }
+    /*
+     * 占位符(rendering.md「兜底顺序」):点中它就算点中它所在的那张卡 —— 那张卡此刻正在加载,
+     * 用户点的就是它;框取占位组件根元素的框。托着它的透明槽位(铺满包裹层)不算,照常穿过去。
+     */
+    const ph = el.closest(`[${PLACEHOLDER_ATTR}]`);
+    if (ph) {
+      const clipId = ph.closest("[data-pc-clip]")?.getAttribute("data-pc-clip");
+      if (clipId) return { clipId, ...toStage(ph.getBoundingClientRect(), origin) };
+      continue;
+    }
+    if (isPlaceholderNode(el)) continue;
     if (!isSolid(el, root)) continue;
     const wrap = el.closest("[data-pc-clip]");
     const clipId = wrap?.getAttribute("data-pc-clip");
@@ -206,6 +221,8 @@ export function bounds(root: SceneRoot, clipId: string, opts: { scanCanvas?: boo
   const walk = (el: Element) => {
     // 组流平面(R8)落在舞台根下、不在任何包裹层里,不参与 `bounds` / `rects`;列在这里是兜底
     if (el.hasAttribute("data-pc-group-plane")) return;
+    // 占位平面不参与实体范围(它的框本来就是按这张卡的实体框摆的,算进来只会自我循环)
+    if (isPlaceholderNode(el)) return;
     if (el.hasAttribute("data-pc-proxy-plane") || el.hasAttribute("data-pc-snapshot-plane") || el.hasAttribute("data-pc-stream-plane")) {
       // 平面是贴上去的替身,它们的框就是内容框
       take(el.getBoundingClientRect());

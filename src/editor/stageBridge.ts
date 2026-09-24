@@ -16,7 +16,8 @@ import { stageEventRole, type HostCapabilities, type StageEvent, type StageRole,
  *   - `back`:后台舞台(探针 / 补跑 / 页面侧测量)。legacy 的单舞台没有它,`back` 为空时用
  *     `front` 代替(D4:「先对它测;E1 之后改走 back 与单飞队列」)。
  *
- * 推项目只有两个口子,**都按 iframe 记一份「上次推过的项目」基线**:
+ * 推项目只有两个口子,**都按 iframe 记一份「上次推过的项目」基线**(按客户端记,不按位置记;
+ * K5 互换时同一个 iframe 换到另一个位置,基线跟着它走):
  *   - `syncProject(role, project)`:能做增量就发 changedClips 的两层 diff(舞台合并时保持
  *     未变片段的引用),没有基线就整份 + reset;和基线是同一个对象引用就什么都不发。
  *   - `pushProject(role, project, { reset })`:`reset` 时一律整份重灌。探针的缩水项目、
@@ -29,10 +30,6 @@ interface Slot {
   client: StageRpcClient | null;
   /** 握手时舞台报的宿主能力表(J4)。K1 的 `device` 串要 `lowMemory` / `offscreenGl` */
   caps: HostCapabilities | null;
-  /** 上次成功推给这个客户端的项目(增量 diff 的基线) */
-  pushed: Project | null;
-  /** 推送串行化:两次推送交错时,后一次等前一次落定再比 */
-  chain: Promise<void>;
   /** 这个位置上「有客户端了」的 Promise(whenStageReady);客户端换了就换一个新的 */
   ready: { promise: Promise<StageRpcClient>; resolve: (c: StageRpcClient) => void; settled: boolean };
   /** 这个位置上的客户端发来的事件的退订函数 */
@@ -45,9 +42,29 @@ function pendingReady(): Slot["ready"] {
   return { promise, resolve, settled: false };
 }
 
-const newSlot = (): Slot => ({ client: null, caps: null, pushed: null, chain: Promise.resolve(), ready: pendingReady(), off: null });
+const newSlot = (): Slot => ({ client: null, caps: null, ready: pendingReady(), off: null });
 
 const slots: Record<StageRole, Slot> = { front: newSlot(), back: newSlot() };
+
+/**
+ * 每个客户端(= 每个 iframe 的一次握手)各一份:上次成功推给它的项目(增量 diff 的基线),
+ * 和推送的串行链(两次推送交错时,后一次等前一次落定再比)。
+ *
+ * **按客户端记,不按位置记**(根因 A):K5 第二路补跑时 `back` 收的是补跑开始那一刻的项目,
+ * 补跑期间用户改了时间轴只推给了当时的 `front`。互换之后新 `front` 手里仍是旧项目 ——
+ * 以前按位置记、互换时再用 `markPushed` 记成「此刻的最新项目」,之后 `syncProject` 因为基线相同不发,
+ * 被删的片段永远留在舞台上。iframe 重载会换一个新客户端,这份自然作废。
+ */
+interface Pushed {
+  project: Project | null;
+  chain: Promise<void>;
+}
+let pushedBy = new WeakMap<StageRpcClient, Pushed>();
+function pushedOf(client: StageRpcClient): Pushed {
+  let p = pushedBy.get(client);
+  if (!p) { p = { project: null, chain: Promise.resolve() }; pushedBy.set(client, p); }
+  return p;
+}
 
 /** 事件订阅者(按角色过滤之后才喂给他们) */
 const eventListeners = new Set<(e: StageEvent, role: StageRole) => void>();
@@ -65,8 +82,6 @@ export function setStageClient(role: StageRole, client: StageRpcClient | null, c
   slot.off = null;
   slot.client = client;
   slot.caps = caps;
-  slot.pushed = null;
-  slot.chain = Promise.resolve();
   if (!client) {
     // 这个位置空了:下一次 whenStageReady 要等新的那个
     if (slot.ready.settled) slot.ready = pendingReady();
@@ -153,25 +168,44 @@ export function stageCapabilities(role: StageRole): HostCapabilities | null {
   return slots[role].caps ?? slots.front.caps;
 }
 
-/** 两个推送口子共用的一段:串行化 + 基线维护 */
+/**
+ * K5 的角色互换:两个位置上的客户端对调,**基线跟着客户端走**(见上面 `pushedBy`)。
+ * 互换之后调用方要对新 `front` 补推一次 `syncProject` —— 它手里是补跑开始时那一份,
+ * 补跑期间的编辑按增量补上(`stageSwap.ts` 的 `swapAndDress`)。
+ */
+export function swapStageClients(
+  front: { client: StageRpcClient | null; caps?: HostCapabilities | null },
+  back: { client: StageRpcClient | null; caps?: HostCapabilities | null },
+): void {
+  // 先都摘下再登记:同一个客户端不会同一刻挂在两个位置上(事件过滤按「位置上的客户端」判)
+  setStageClient("front", null);
+  setStageClient("back", null);
+  setStageClient("front", front.client, front.caps ?? null);
+  setStageClient("back", back.client, back.caps ?? null);
+}
+
+/**
+ * 两个推送口子共用的一段:串行化 + 基线维护,都挂在**发起这一刻**这个位置上的客户端身上。
+ * 送到了就记在它身上,不管它之后被换到了哪个位置。
+ */
 function send(role: StageRole, project: Project, force: boolean): Promise<void> {
-  const slot = slots[role];
+  const client = slots[role].client;
+  if (!client || client.disposed) return Promise.resolve();
+  const mine = pushedOf(client);
   const run = async () => {
-    const client = slot.client;
-    if (!client || client.disposed) return;
-    if (!force && slot.pushed === project) return;
-    const patch = force ? null : changedClips(slot.pushed, project);
-    if (patch && slot.pushed && isEmptyPatch(patch)) {
-      slot.pushed = project;
+    if (client.disposed) return;
+    if (!force && mine.project === project) return;
+    const patch = force ? null : changedClips(mine.project, project);
+    if (patch && mine.project && isEmptyPatch(patch)) {
+      mine.project = project;
       return;
     }
     if (!patch || patch.kind === "full") await client.setProject(project, { reset: true });
     else await client.setProject(patch);
-    // 客户端中途换了(iframe 重载),这次推的基线不算数
-    if (slot.client === client) slot.pushed = project;
+    mine.project = project;
   };
-  const next = slot.chain.then(run, run);
-  slot.chain = next.catch(() => {});
+  const next = mine.chain.then(run, run);
+  mine.chain = next.catch(() => {});
   return next;
 }
 
@@ -193,19 +227,18 @@ export function pushProject(role: StageRole, project: Project, opts: { reset?: b
 
 /** 测试 / 调试用:哪个舞台推到了哪份项目 */
 export function pushedProject(role: StageRole): Project | null {
-  return slots[role].pushed;
+  const client = slots[role].client;
+  return client ? pushedBy.get(client)?.project ?? null : null;
 }
 
 /**
- * 直接把某个位置的基线记成这一份项目(K5 的角色互换用)。
- *
- * 互换的时候两个 iframe 都**已经**拿着这份整份项目了(第二路的 (1) 就是
- * `pushProject('back', 当前项目, { reset: true })`),只是 `setStageClient` 换客户端时
- * 把基线清成了 `null`。不补这一下的话,互换之后第一次 `syncProject` 会把整份项目
- * 再灌一遍 —— 白花一次 `setProject(full, { reset: true })`,而且那一下会掐掉刚起的活。
+ * 直接把某个位置上那个客户端的基线记成这一份项目。**只在确知舞台手里就是这一份时用。**
+ * K5 的互换**不再**用它(根因 A:互换时新 `front` 手里是补跑开始那一份,不是此刻的最新项目),
+ * 改走 `swapStageClients` —— 基线本来就跟着客户端走。
  */
 export function markPushed(role: StageRole, project: Project | null): void {
-  slots[role].pushed = project;
+  const client = slots[role].client;
+  if (client) pushedOf(client).project = project;
 }
 
 /** 测试用:把登记处恢复成刚加载的样子 */
@@ -214,5 +247,6 @@ export function resetStageBridge(): void {
     slots[role].off?.();
     slots[role] = newSlot();
   }
+  pushedBy = new WeakMap();
   eventListeners.clear();
 }

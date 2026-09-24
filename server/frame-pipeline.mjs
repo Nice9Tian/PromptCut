@@ -963,6 +963,12 @@ export class FramePipeline {
     for (const batch of batches.values()) {
       try {
         const index = await batch.close();
+        /*
+         * 疑点 F(已坐实,`server/test/ready-stale-flush.test.mjs`):`adoptCardPlan` 换了一版项目、
+         * 页面已经清了表之后,旧 entry 这一批才交完 —— 照发的话同一个 clipId 的新层被旧键的层整层替换。
+         * 批照常落盘(快照库是内容寻址的,别的版本还用得上),只是不再发布到就绪索引。
+         */
+        if (this.adoptedEntryKey !== undefined && this.adoptedEntryKey !== entry.key) continue;
         if (index && batch.written) this.publishLayer({ clipId: batch.clipId, snapshotKey: batch.key }, batch.tier, index.frames, batch.entryKey);
       } catch {}
     }

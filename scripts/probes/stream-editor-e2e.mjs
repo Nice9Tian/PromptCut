@@ -8,13 +8,13 @@
  * 让父页发 `setStreamPlanes` / 不把 `stream` 层当快照,见 `TASK-REPORT.md`)。没打补丁的 server 上,
  * 生产者等不到读口、一条流都不产,探针会在「等流生产完」那一步超时。
  *
- * 另外:dual 模式的编辑台今天**没有人调 `/api/frames/preload`**(只有 legacy 的 `UnifiedPreview` 调),
- * 预渲染进程的后台预渲染(锚帧、快照,以及轨道流的生产入口)不会被触发 —— 这支探针自己按
- * `{ session, localRev }` 调它,等于补上那个触发点(见报告「待用户定」)。
+ * 另外:dual 模式的编辑台由页面在编辑推送成功、空闲时防抖调 `/api/frames/preload`
+ * (`src/editor/preview/usePrerenderPreload.ts`);这支探针仍自己按 `{ session, localRev }` 调它,
+ * 只是为了不等页面的防抖、缩短等待。
  *
  * 流程:开编辑台(`?preview=stage`)→ 换空项目、加一张长粒子卡(缺省 30 秒,按追帧上界判重)→
  * 反复调 preload 直到这张卡的流满密度 → 父页的就绪索引里有 `stream` 层 → 播放 2 秒:
- *   - 父页把它抑制了、发了带流键的 `setStreamPlanes`,而且**没有给它投快照**(A3c);
+ *   - 父页把它抑制了、发了带流键的 `setStreamPlanes`;流画出帧时垫着的海报快照被流平面藏住(rendering.md「兜底顺序」,取代 A3c 的「有流不投快照」);
  *   - 可见舞台上这条流画出了帧、解码器没报错;
  * → 暂停:流平面清空,改贴快照 / 追到活渲。截图存盘。
  */
@@ -102,8 +102,17 @@ try {
   out.playing = { suppressed: diag.suppressed, snapshots: diag.snapshots, streamPlanes: diag.streamPlanes, streams: diag.streams, previewSuppressed: preview.suppressed };
   check(diag.suppressed.includes(clipId), '播放中这张卡被抑制', diag.suppressed);
   check(diag.streamPlanes.some((p) => p.clipIds.includes(clipId) && p.key === layer?.key), '父页发了带流键的 setStreamPlanes', diag.streamPlanes);
-  check(!diag.snapshots.includes(clipId), '有流分段时父页不给它投快照(A3c)', diag.snapshots);
+  /*
+   * rendering.md「兜底顺序」:流覆盖时父页照样垫一张海报快照(流画不出来那一拍当场露出来);
+   * 流画出帧时海报被流平面藏住(`coverSnapshot`),两层不能同时露 —— 取代以前「有流就不投快照(A3c)」那条。
+   */
   const track = diag.streams.tracks.find((t) => t.id.startsWith(clipId));
+  const cover = await stage.evaluate((id) => {
+    const plane = document.querySelector(`[data-pc-clip="${CSS.escape(id)}"] > [data-pc-snapshot-plane]`);
+    return plane ? { mounted: true, visibility: plane.style.visibility || '' } : { mounted: false };
+  }, clipId);
+  out.poster = { delivered: diag.snapshots.includes(clipId), ...cover, lastDrawn: track?.lastDrawn ?? null };
+  check(!cover.mounted || track?.lastDrawn == null || cover.visibility === 'hidden', '流画出帧时海报快照被流平面藏住(兜底顺序)', out.poster);
   check(!!track && track.drawn > 10 && track.errors === 0, '可见舞台上这条流画出了帧、解码器没报错', track);
   const frameBox = await (await page.$('iframe[data-pc="stage-frame"]'))?.boundingBox?.();
   const shot = path.join(OUT, 'editor-playing.png');

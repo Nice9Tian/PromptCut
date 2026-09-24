@@ -10,6 +10,8 @@
  * 文字用 Range 量:一个 block 元素的矩形是整行宽,Range 给的是字本身的框。
  * canvas 扫像素量:DOM 只知道画布多大,不知道里面画了什么。
  */
+import { isPlaceholderNode } from "./placeholderHost.ts";
+
 export interface Box {
   l: number;
   t: number;
@@ -202,6 +204,8 @@ export function measureContentBox(stage: HTMLElement, canvasCache?: Map<HTMLCanv
   };
   for (const el of stage.querySelectorAll<HTMLElement>("*")) {
     if (el.tagName === "SCRIPT" || el.tagName === "STYLE") continue;
+    // 占位平面不是卡片画的东西(rendering.md「兜底顺序」):量它就把占位框当成了墨迹框
+    if (isPlaceholderNode(el)) continue;
     // svg 内部的子元素不用逐个量,整棵 svg 一个框就够
     if (el.namespaceURI === "http://www.w3.org/2000/svg" && el.tagName !== "svg") continue;
     const cs = getComputedStyle(el);
@@ -319,6 +323,7 @@ export function measureInk(stage: HTMLElement, box: Box | null): Ink | null {
 
   for (const el of stage.querySelectorAll<HTMLElement>("*")) {
     if (el.tagName === "SCRIPT" || el.tagName === "STYLE") continue;
+    if (isPlaceholderNode(el)) continue;
     if (el.namespaceURI === "http://www.w3.org/2000/svg" && el.tagName !== "svg") continue;
     const cs = getComputedStyle(el);
     const op = parseFloat(cs.opacity);
@@ -358,6 +363,90 @@ export function measureInk(stage: HTMLElement, box: Box | null): Ink | null {
     rgb: [Math.round(sum[0] / weight), Math.round(sum[1] / weight), Math.round(sum[2] / weight)],
     cover: Math.min(1, weight / refArea),
   };
+}
+
+/**
+ * 和 `measureContentBox` 同一套量法,但结果换算到**包裹层自己的局部坐标**(未经旋转 / 缩放的布局像素),
+ * 给占位平面摆框用(rendering.md「兜底顺序」:占位符在实体框上,继承包裹层的旋转和缩放)。
+ *
+ * `measureContentBox` 按「屏幕矩形 ÷ 缩放」换算,包裹层带旋转时那是外接矩形,摆回局部坐标就歪了。
+ * 这里先还原成屏幕上的外接矩形,再按包裹层的旋转角和等比缩放反解:中心点逆旋转、宽高解一个 2×2 方程
+ * (局部轴对齐的矩形转过 θ 之后,外接矩形宽 = w|cos| + h|sin|、高 = w|sin| + h|cos|)。
+ * 接近 45° 时方程病态,退回外接矩形的尺寸(偏大、不偏小)。结果夹回包裹层内;量不到回 null。
+ */
+export function measureLocalContentBox(wrap: HTMLElement, canvasCache?: Map<HTMLCanvasElement, CanvasPixels | null>): { left: number; top: number; width: number; height: number } | null {
+  /*
+   * 精确路(Item 7):同一个任务里把包裹层**自己的** transform 暂时压成 `none !important`,量完立刻还原 ——
+   * 量的时候包裹层没有旋转 / 斜切 / 非等比缩放,`measureContentBox` 的「屏幕矩形 ÷ 等效缩放」正好就是局部坐标;
+   * 同步读写之间浏览器不绘制,用户看不到。`!important` 压得住包裹层上的动画;还压不住(计算值仍不是 none)就走下面的反解。
+   */
+  const exact = measureWithoutOwnTransform(wrap, canvasCache);
+  if (exact !== undefined) return exact;
+  return measureLocalByInversion(wrap, canvasCache);
+}
+
+/** 暂时去掉包裹层自己的 transform 再量;去不掉回 `undefined`(调用方退回反解) */
+function measureWithoutOwnTransform(wrap: HTMLElement, canvasCache?: Map<HTMLCanvasElement, CanvasPixels | null>): { left: number; top: number; width: number; height: number } | null | undefined {
+  const before = getComputedStyle(wrap).transform;
+  if (!before || before === "none") return clampLocal(wrap, measureContentBox(wrap, canvasCache));
+  const value = wrap.style.getPropertyValue("transform");
+  const priority = wrap.style.getPropertyPriority("transform");
+  wrap.style.setProperty("transform", "none", "important");
+  try {
+    if (getComputedStyle(wrap).transform !== "none") return undefined;
+    return clampLocal(wrap, measureContentBox(wrap, canvasCache));
+  } finally {
+    if (value) wrap.style.setProperty("transform", value, priority);
+    else wrap.style.removeProperty("transform");
+  }
+}
+
+/** `measureContentBox` 的结果(包裹层没有自身变换时就是局部坐标)夹回包裹层内 */
+function clampLocal(wrap: HTMLElement, b: Box | null): { left: number; top: number; width: number; height: number } | null {
+  if (!b) return null;
+  const w = wrap.offsetWidth, h = wrap.offsetHeight;
+  if (!(w > 0) || !(h > 0)) return null;
+  const left = Math.max(0, b.l), top = Math.max(0, b.t);
+  const right = Math.min(w, b.r), bottom = Math.min(h, b.b);
+  if (right <= left || bottom <= top) return null;
+  return { left, top, width: right - left, height: bottom - top };
+}
+
+/** 退路:按包裹层的旋转角和等比缩放反解(原来的算法;接近 45° 退回外接矩形) */
+function measureLocalByInversion(wrap: HTMLElement, canvasCache?: Map<HTMLCanvasElement, CanvasPixels | null>): { left: number; top: number; width: number; height: number } | null {
+  const b = measureContentBox(wrap, canvasCache);
+  if (!b) return null;
+  const sr = wrap.getBoundingClientRect();
+  const w = wrap.offsetWidth, h = wrap.offsetHeight;
+  if (!(w > 0) || !(h > 0) || !(sr.width > 0)) return null;
+  const k = sr.width / w;
+  // 还原成屏幕上的外接矩形(measureContentBox 的逆换算)
+  const u = { l: sr.left + b.l * k, t: sr.top + b.t * k, r: sr.left + b.r * k, b: sr.top + b.b * k };
+  const raw = getComputedStyle(wrap).transform;
+  let theta = 0;
+  try { if (raw && raw !== "none") { const m = new DOMMatrixReadOnly(raw); theta = Math.atan2(m.b, m.a); } } catch { theta = 0; }
+  const c = Math.abs(Math.cos(theta)), s = Math.abs(Math.sin(theta));
+  // 包裹层的等效缩放(含祖先):外接矩形宽 = S × (w|cos| + h|sin|)
+  const S = sr.width / (w * c + h * s);
+  if (!(S > 0)) return null;
+  const uw = (u.r - u.l) / S, uh = (u.b - u.t) / S;
+  const det = c * c - s * s;
+  let cw = uw, ch = uh;
+  if (Math.abs(det) > 0.2) {
+    cw = (c * uw - s * uh) / det;
+    ch = (c * uh - s * uw) / det;
+    if (!(cw > 0) || !(ch > 0)) { cw = uw; ch = uh; }
+  }
+  // 中心点:相对包裹层外接矩形中心的屏幕偏移,逆旋转、除以缩放,再挪回局部坐标
+  const dx = (u.l + u.r) / 2 - (sr.left + sr.right) / 2;
+  const dy = (u.t + u.b) / 2 - (sr.top + sr.bottom) / 2;
+  const cos = Math.cos(theta), sin = Math.sin(theta);
+  const cx = (cos * dx + sin * dy) / S + w / 2;
+  const cy = (-sin * dx + cos * dy) / S + h / 2;
+  const left = Math.max(0, cx - cw / 2), top = Math.max(0, cy - ch / 2);
+  const right = Math.min(w, cx + cw / 2), bottom = Math.min(h, cy + ch / 2);
+  if (right <= left || bottom <= top) return null;
+  return { left, top, width: right - left, height: bottom - top };
 }
 
 export function unionBox(a: Box | null, b: Box | null): Box | null {

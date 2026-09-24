@@ -135,7 +135,7 @@ test("K6:降级卡死素材就绪之前照常活渲,不进 heavy", () => {
   assert.equal(pendingDemotes().has("h"), false, "就绪之后移出 pending");
 });
 
-test("K6:片段剩下不到一秒时,覆盖到片尾就算就绪;有流分段也算", () => {
+test("K6:片段剩下不到一秒时,覆盖到片尾就算就绪;流要按分段盖住当前位置起的一秒才算(根因 D)", () => {
   const p = project([card("h", 0, 10)]);   // 300 帧,本地 0..299
   plan = heavyEverywhere("h");
   markPendingDemote("h");
@@ -147,6 +147,9 @@ test("K6:片段剩下不到一秒时,覆盖到片尾就算就绪;有流分段也
   syncSnapshotSubscription(() => {});
   markPendingDemote("h");
   src.push(layer("h", [[0, 0]], "stream"));
+  assert.deepEqual(planFeed({ project: p, t: 1, playing: true }).heavy, [], "流表有别的段不算:当前位置没料");
+  // 第 1 秒 = 第 30 帧,一秒到第 59 帧 = 第 2、3 段
+  src.push(layer("h", [[2, 3]], "stream"));
   assert.deepEqual(planFeed({ project: p, t: 1, playing: true }).heavy, ["h"]);
 });
 
@@ -207,7 +210,7 @@ test("deliverSnapshots:reset 不受节流,带 reset 并把该挂的整份重投"
   assert.deepEqual(stage.calls.at(-1), { patch: { h: "html:html/k-h/30" }, opts: { reset: true } });
 });
 
-test("deliverSnapshots:一次超过 2 MB 就拆,只有第一包带 reset", async () => {
+test("deliverSnapshots:一次只投一包、≤ 2 MB,装不下的下一拍再投;只有第一包带 reset", async () => {
   const ids = ["a", "b", "c"];
   plan = heavyEverywhere(...ids);
   const big = "x".repeat(Math.ceil(SNAPSHOT_DELIVERY_MAX_BYTES * 0.6));
@@ -220,7 +223,13 @@ test("deliverSnapshots:一次超过 2 MB 就拆,只有第一包带 reset", async
   await deliverSnapshots(stage, "back", head);
   await settle();
   markBaselineReset("back");
-  assert.equal(await deliverSnapshots(stage, "back", head), 3);
+  assert.equal(await deliverSnapshots(stage, "back", head), 1);
+  now += SNAPSHOT_THROTTLE_MS;
+  assert.equal(await deliverSnapshots(stage, "back", head), 1);
+  now += SNAPSHOT_THROTTLE_MS;
+  assert.equal(await deliverSnapshots(stage, "back", head), 1);
+  now += SNAPSHOT_THROTTLE_MS;
+  assert.equal(await deliverSnapshots(stage, "back", head), 0, "都投完了");
   assert.deepEqual(stage.calls.map((c) => Object.keys(c.patch)), [["a"], ["b"], ["c"]]);
   assert.deepEqual(stage.calls.map((c) => c.opts), [{ reset: true }, {}, {}]);
 });

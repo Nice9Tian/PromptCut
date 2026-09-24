@@ -35,6 +35,15 @@ export interface AnimationPinner {
   resetIn(el: AnimationHost | null | undefined): void;
 }
 
+/*
+ * # 占位符的豁免
+ *
+ * 占位组件自己的 CSS 动画(`pc-ph-` 前缀,contract 的 `isPlaceholderAnimation`)管「来不及满 120 ms
+ * 才显示」和沙漏转动,**按真实时间走**。钉住它的话暂停态虚拟时钟不动,占位符永远停在不可见的第 0 毫秒。
+ * 所以整页 `sync` 和子树 `syncIn` 都跳过它;只认前缀,别的卡片动画一律照钉。
+ */
+import { isPlaceholderAnimation } from "./placeholder/contract.ts";
+
 /** 能交出自己子树里那些动画的东西。真实场景里就是 `Element`;单测里给一个假的 */
 export interface AnimationHost {
   getAnimations(options?: { subtree?: boolean }): Animation[];
@@ -52,6 +61,7 @@ export function createAnimationPinner(doc: Document = document): AnimationPinner
   /** 把一条动画钉到 nowMs。返回 false 表示这条不用管(已经结束 / 还没开始) */
   const pin = (a: Animation, nowMs: number): void => {
     if (a.playState === "finished" || a.playState === "idle") return;
+    if (isPlaceholderAnimation(a as Animation & { animationName?: string })) return;
     let anchor = anchors.get(a);
     if (anchor === undefined) {
       anchor = nowMs;
@@ -78,6 +88,9 @@ export function createAnimationPinner(doc: Document = document): AnimationPinner
     },
     sync(nowMs: number, skip?: ReadonlySet<Element>) {
       for (const a of doc.getAnimations()) {
+        // 占位符自己的动画、已结束 / 未开始的先剔掉,别为它们往上找包裹层(P4 性能修正)
+        if (a.playState === "finished" || a.playState === "idle") continue;
+        if (isPlaceholderAnimation(a as Animation & { animationName?: string })) continue;
         /*
          * 正在自己追帧 / 被抑制的片段这一帧不钉。判据是「这条动画的目标元素往上最近的
          * [data-pc-clip] 在不在 skip 里」—— 不能按 target 本身查,卡片内部随便哪一层都能起动画。

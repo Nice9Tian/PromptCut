@@ -32,6 +32,18 @@ import { beatAt, createK6State, noteK6Beat, scheduleNextBeat } from "./render/be
 import { reviveStagePlan, type StagePlan, type WirePlan } from "./render/wirePlan";
 import { ensureProxyStyle, proxyAllowed, proxyOf, resetInk, sampleAll } from "./render/solidMode";
 import { StreamPlayer } from "./render/streamPlayer";
+import {
+  applyPlaceholders, hideAllPlaceholders, noteInkBox, removePlaceholderStyle, PLACEHOLDER_SLOT_ATTR, placeholdersEnabled, placeholderWanted,
+  resetPlaceholderGeometry, setCatchingUpClips, setOnlineBrowserMode, setPlaceholdersEnabled, setStreamBoxSource, shownPlaceholders, shownSince,
+} from "./render/placeholderHost";
+
+/*
+ * 在线浏览器模式(platforms.md)还没有运行期判据:先由舞台地址上的 `platform=browser` 显式打开,
+ * 只影响 `unsupported` 占位(用户卡 / 图卡在这台设备上渲染不了)。编辑页的同名参数经 `stageSrc` 转发过来。
+ */
+try { setOnlineBrowserMode(new URLSearchParams(location.search).get("platform") === "browser"); } catch { /* 没有 location:导出 / 单测 */ }
+import { PLACEHOLDER_SHOW_DELAY_MS } from "./render/placeholder/contract";
+import { measureLocalContentBox, type CanvasPixels } from "./render/contentBox";
 import { createGlHost } from "./render/gl/glHost";
 import { glPlanes } from "./render/gl/planes";
 import { resolveGlRoute } from "./render/costDevice.mjs";
@@ -330,6 +342,8 @@ export default function StageView() {
      * 它往 `Stage` 已经渲好的 `[data-pc-stream-plane]` / `[data-pc-group-plane]` 上画。
      */
     const player = new StreamPlayer({ root: () => rootRef.current });
+    // 占位符的几何首选流清单的实体框(rendering.md「兜底顺序」;`placeholderHost` 的 `geometryFor`)
+    setStreamBoxSource((clipId) => player.boxOf(clipId));
 
     /*
      * canvas 卡的共享 WebGL 渲染器(R9 M2)。`stageId` 是实例名(`A` / `B`),**和角色无关**:
@@ -385,7 +399,33 @@ export default function StageView() {
      * 防抖是因为连续拖播放头会一帧一个 setTime,而采样要遍历每张卡的所有元素读 computed style。
      */
     let sampleTimer = 0;
+    let inkTimer = 0;
+    /**
+     * 占位符的第二个几何来源:这张卡上次活渲时的墨迹框(`measureContentBox`,相对包裹层)。
+     * 只在停下来之后防抖量一次(播放 / 拖动中不量 —— 那时正是占位符要顶上的时候,量到的是兜底画面),
+     * 被抑制 / 等快照 / 追帧的卡子树藏着,跳过。量不到的不记(`noteInkBox` 丢掉 null),几何退回徽标。
+     */
+    /** 当场把此刻活渲着的每张卡的墨迹框量一遍(被抑制 / 等快照 / 追帧的子树藏着,跳过) */
+    const measureInkBoxesNow = () => {
+      const root = rootRef.current;
+      if (!root) return;
+      const cache = new Map<HTMLCanvasElement, CanvasPixels | null>();
+      for (const el of root.querySelectorAll<HTMLElement>("[data-pc-clip]:not([data-pc-media])")) {
+        const id = el.getAttribute("data-pc-clip");
+        if (!id || el.classList.contains("pc-suppressed") || el.classList.contains("pc-awaiting") || el.classList.contains("pc-settling")) continue;
+        noteInkBox(id, measureLocalContentBox(el, cache));
+      }
+    };
+    const scheduleInkBoxes = () => {
+      if (!placeholdersEnabled()) return;
+      window.clearTimeout(inkTimer);
+      inkTimer = realSetTimeout(() => {
+        if (ref.current.beatRunning || ref.current.scrubbing || !placeholdersEnabled()) return;
+        measureInkBoxesNow();
+      }, 300);
+    };
     const scheduleSample = () => {
+      scheduleInkBoxes();
       if (!proxyAllowed() || ref.current.proxy) return;
       window.clearTimeout(sampleTimer);
       sampleTimer = realSetTimeout(() => {
@@ -394,8 +434,59 @@ export default function StageView() {
       }, 120);
     };
 
-    /** 平面状态改了:同步一次 React 提交,让这一帧就带上新的类和平面 */
-    const commitPlanes = () => flushSync(() => bumpPlanes());
+    /** 这张卡包裹层里的占位槽位(`Stage` 挂的;没挂着回 null) */
+    /** 槽位引用缓存(P4 性能修正):每拍都 querySelector 一遍太贵;还挂在原包裹层下就直接用 */
+    const slotCache = new Map<string, HTMLElement>();
+    const slotOf = (clipId: string): HTMLElement | null => {
+      const hit = slotCache.get(clipId);
+      if (hit && hit.isConnected && hit.parentElement?.getAttribute("data-pc-clip") === clipId) return hit;
+      const el = rootRef.current?.querySelector<HTMLElement>(`[data-pc-clip="${CSS.escape(clipId)}"] > [${PLACEHOLDER_SLOT_ATTR}]`) ?? null;
+      if (el) slotCache.set(clipId, el);
+      else slotCache.delete(clipId);
+      if (slotCache.size > 512) slotCache.clear();
+      return el;
+    };
+    const NO_CLIPS: ReadonlySet<string> = new Set();
+    /**
+     * 按这一拍的状态切占位符(rendering.md「兜底顺序」;T1~T4 的判据在 `placeholderHost.placeholderWanted`)。
+     * **只切槽位的 `hidden`,不经 React 提交**;满 120 ms 才可见由占位组件的 CSS 负责。
+     * T1 的「流这一拍 blank」按 `player.showingClips()` 当拍读 —— 所以每拍在 `presentStreams` 之后叫它。
+     * 没有任何来不及的层、也没有显示着的占位符时一个 DOM 查询都不做。
+     */
+    const refreshPlaceholders = (): void => {
+      if (!placeholdersEnabled()) return;
+      const { suppressed, snapshots, awaiting, settling } = ref.current;
+      if (!suppressed.size && !awaiting.size && !settling.size && !shownPlaceholders().size) return;
+      const streamShowing = ref.current.streamPlanes.length ? player.showingClips() : NO_CLIPS;
+      applyPlaceholders(placeholderWanted({ suppressed, snapshots, awaiting, settling, streamShowing }), slotOf);
+    };
+
+    /**
+     * 验收探针的逐拍记录(`scripts/probes/preview-fallback-probe.mjs`):`window.__pcFallbackTrace` 是数组时,
+     * 每拍记下被抑制的每张卡落在兜底顺序的哪一级,以及这一拍主线程干活的毫秒数。不是数组时什么都不做。
+     */
+    const traceFallback = (sec: number, workMs: number): void => {
+      const log = (window as unknown as { __pcFallbackTrace?: unknown[] }).__pcFallbackTrace;
+      if (!Array.isArray(log)) return;
+      const streams = player.levels();
+      const now = realNow();
+      const levels: Record<string, string> = {};
+      for (const id of ref.current.suppressed) {
+        const stream = streams.get(id);
+        if (stream) levels[id] = stream;
+        else if (ref.current.snapshots.has(id)) levels[id] = "snapshot";
+        else if (shownPlaceholders().has(id)) levels[id] = now - (shownSince(id) ?? now) < PLACEHOLDER_SHOW_DELAY_MS ? "placeholder-delay" : "placeholder";
+        else levels[id] = "transparent";
+      }
+      log.push({ sec, workMs, levels, snapshots: ref.current.snapshots.size, planes: ref.current.streamPlanes.length });
+      if (log.length > 20000) log.splice(0, log.length - 20000);
+    };
+
+    /** 平面状态改了:同步一次 React 提交,让这一帧就带上新的类和平面;占位符跟着这一次的状态切 */
+    const commitPlanes = () => {
+      flushSync(() => bumpPlanes());
+      refreshPlaceholders();
+    };
 
     /**
      * 应用一次快照增量(A3c):`null` = 摘掉,`reset` = 先清空全部再应用。
@@ -1108,6 +1199,9 @@ export default function StageView() {
           // K3(b) 的播放态追帧:这一拍除了本拍那一帧,再多推几步它自己的本地时间
           enterCatchUps(sec, fps);
           stepCatchUps(fps);
+          // 兜底顺序的尽头(T1~T4):流这一拍 blank、又没挂快照的层显示占位符;当拍判,不等下一次分派
+          refreshPlaceholders();
+          traceFallback(sec, realNow() - beatStarted);
           /*
            * canvas 卡(R9 M3,一拍的顺序写死):DOM 提交完 → `beat` → **`await done`(慢帧就等在这里)**
            * → 位图贴到各平面(`glHost` 里做)→ 等真帧 → post `frame`。`done` 偶有几十毫秒的尖峰,
@@ -1186,7 +1280,7 @@ export default function StageView() {
         }
         if (opts.reset || full !== prev) {
           // clipId 会在不同项目里复用,不清掉就会张冠李戴
-          if (full !== prev) resetInk();
+          if (full !== prev) { resetInk(); resetPlaceholderGeometry(); }
         }
         const prevKey = ref.current.layoutKey;
         const nextKey = layoutKeyOf(full);
@@ -1263,6 +1357,7 @@ export default function StageView() {
           scheduleSample();
           if (opts.settle) routeSettle(target, fps);
           presentStreams(target);
+          refreshPlaceholders();
           // 同步的 advanceTo 不逐步发 beat,只在它结束后发一次带终点 t 的(K3(a) / M3)
           void gl.beat({ t: target });
           return { path: "continuous" } satisfies SetTimeReply;
@@ -1278,6 +1373,7 @@ export default function StageView() {
           routeJump(target, fps);
           if (opts.settle) routeSettle(target, fps);
           presentStreams(target);
+          refreshPlaceholders();
           // `setTime` 落定那一帧发一拍(M3;点时间轴一次只发这一拍)
           void gl.beat({ t: target });
         }
@@ -1458,6 +1554,11 @@ export default function StageView() {
             if (!probe) {
               await glStrict(target);
               if (gen !== renderGen.current) return;
+              /*
+               * 补跑到目标拍时整台戏正是精确活渲:趁这时把墨迹框量好(Item 7)。互换之后这一台转正,
+               * 占位符的实体框已经在手,不必等转正后的补量 —— 那一刻被抑制 / 不可见的卡也不会退成徽标。
+               */
+              measureInkBoxesNow();
             }
             resolve({ remounted, caughtUpAtSec: clock.now() / 1000, elapsedMs, stepMs: stepOf(elapsedMs),
               ...(probe ? { frames, truncated: false, snapshot } : {}),
@@ -1543,11 +1644,23 @@ export default function StageView() {
           ref.current.lastActive = new Set();
           setAwaiting([]);
           catchUpGen.current++;
+          // 后台舞台永远没有占位符(rendering.md「兜底顺序」):先撤下,再关掉 —— 这一次提交里槽位一起摘掉
+          hideAllPlaceholders(slotOf);
+          setPlaceholdersEnabled(false);
+          removePlaceholderStyle();
+          setCatchingUpClips([]);
           // 同一次提交里把全部平面和类去掉 —— 互换那一拍新 `back` 不能还盖着旧画面
           commitPlanes();
-        } else if (wasBack) {
+        } else {
+          // 人看的预览(live 舞台页、`front`)才挂占位平面;导出页 / 预渲染页不经这里,永远没有
+          if (LIVE && !placeholdersEnabled()) {
+            setPlaceholdersEnabled(true);
+            commitPlanes();
+          }
+          // 墨迹框是每个舞台自己量的:刚转正的这一台(K5 互换)手里没有,趁它此刻是精确活渲量一次
+          scheduleInkBoxes();
           // K5 (6):新 `front` post 一次 `{ type: 'settled', sec, clipIds: [] }`
-          postStageEvent({ type: "settled", sec: ref.current.t, clipIds: [] });
+          if (wasBack) postStageEvent({ type: "settled", sec: ref.current.t, clipIds: [] });
         }
         return { ok: true };
       },
@@ -1645,6 +1758,11 @@ export default function StageView() {
       async setSuppressed(clipIds) {
         const next = new Set(clipIds);
         ref.current.suppressed = next;
+        // T4:被抑制、这一刻判轻的卡在等后台补跑互换(占位符的 reason 用;显隐判据不看它)
+        {
+          const plan = ref.current.plan?.plan ?? null;
+          setCatchingUpClips([...next].filter((id) => pipelineAt(plan, id, ref.current.t) === "light"));
+        }
         /*
          * K6:被切进 `suppressed` 就说明死素材就绪了,从 `pendingDemote` 里移出 ——
          * 它此后是重卡,本来就不参加 K6 的判定。
@@ -1690,6 +1808,7 @@ export default function StageView() {
         player.setPlanes(ref.current.streamPlanes, fps);
         // 画布刚随这次提交挂上:当场画一次,不等下一拍
         presentStreams(ref.current.t);
+        refreshPlaceholders();
         return { ok: true as const };
       },
       /** 手按着播放头拖:素材层 seek 放疏一点(`mediaSync` 的 SCRUB_SEEK_MIN_MS) */
@@ -1725,7 +1844,11 @@ export default function StageView() {
        */
       async setSnapshots(patch, opts = {}) {
         const bytes = applySnapshots(patch, !!opts.reset);
-        commitPlanes();
+        /*
+         * 播放中不单独提交(P4 性能修正):节拍循环下一拍的 `flushSync(setT)` 读的就是 `ref.current.snapshots`,
+         * 海报快照跟着那一次提交一起上屏,晚到最多一拍。单独再 `flushSync` 一次等于每次投递多一整次 React 提交。
+         */
+        if (!ref.current.beatRunning) commitPlanes();
         return { ok: true as const, bytes };
       },
     };
@@ -1775,6 +1898,8 @@ export default function StageView() {
       streams: player.diag(),
       /** R9:共享 WebGL 渲染器这一侧的状态(路线、连接方式、往返耗时、超时次数……) */
       gl: gl.diag(),
+      /** 兜底顺序尽头:此刻显示着占位符的卡 */
+      placeholders: [...shownPlaceholders()],
     });
     // 探针用:问 Worker 要它那一侧的诊断(上下文数、纹理上传次数、图集尺寸)
     (window as unknown as Record<string, unknown>).__pcGlWorkerDiag = () => gl.workerDiag();
@@ -1789,6 +1914,8 @@ export default function StageView() {
       window.clearTimeout(ref.current.settle);
       window.clearTimeout(ref.current.awaitTimer);
       window.clearTimeout(sampleTimer);
+      window.clearTimeout(inkTimer);
+      setPlaceholdersEnabled(false);
       if (window.__pcStage === api) delete window.__pcStage;
       delete window.__pcStagePlan;
       delete window.__pcStageDiag;

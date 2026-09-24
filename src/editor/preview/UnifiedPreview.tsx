@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { Project } from "../../kernel/project";
 import { collectSnapshots, frameRequest, see_frames } from "../../render/frameClient";
+import { usePrerenderPreload } from "./usePrerenderPreload";
 import { MovPlayer } from "../../render/movPlayer";
 import { frameCss } from "../../kernel/layout";
 
@@ -15,20 +16,17 @@ export function UnifiedPreview({ project, t, playing }: { project: Project; t: n
   const requestFrame = useRef<() => void>(() => {});
   const wakePlayback = useRef<() => void>(() => {});
 
-  useEffect(() => {
-    let active = true, archived = 0;
-    let timer: ReturnType<typeof setTimeout>;
-    const poll = async () => {
-      try {
-        const status = await frameRequest("preload", project, {}, undefined, { target: "prerender", lane: "background" });
-        if (!active) return;
-        if (status.sampled > archived) { await collectSnapshots(project); archived = status.sampled; }
-        if (status.status !== "ready" && active) timer = setTimeout(poll, 2000);
-      } catch { if (active) timer = setTimeout(poll, 4000); }
-    };
-    timer = setTimeout(poll, 600);
-    return () => { active = false; clearTimeout(timer); };
-  }, [project]);
+  // 预渲染触发走公共 hook(双舞台预览用同一份);legacy 这里沿用以前的行为:不看播放状态,采样帧到了就归档
+  const archived = useRef({ project, count: 0 });
+  usePrerenderPreload(project, {
+    enabled: true,
+    idle: true,
+    onStatus: (status, current) => {
+      if (archived.current.project !== current) archived.current = { project: current, count: 0 };
+      const sampled = Number(status.sampled) || 0;
+      if (sampled > archived.current.count) { archived.current.count = sampled; void collectSnapshots(current); }
+    },
+  });
 
   useEffect(() => {
     let active = true, inFlight = false, pending = false;

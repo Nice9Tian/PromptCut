@@ -35,11 +35,11 @@ import { catchUpEstimateMs } from "../render/catchUpEstimate.mjs";
 import { clipWeight, pipelineAt } from "../render/pipelinePlan.mjs";
 import type { CardCostRecord } from "../render/cardCostKey.mjs";
 import type { StageEvent, StageRpcClient } from "../render/stageRpc";
-import { backStage, frontStage, onStageEvent, pushProject } from "./stageBridge";
+import { backStage, frontStage, onStageEvent, pushProject, syncProject } from "./stageBridge";
 import { runBackJob } from "./stageJobs";
 import { currentCosts, currentPlan, currentTuning, sendPlanTo } from "./planDispatch";
 import { clipIdentityOf } from "./costIdentity";
-import { deliverSnapshots, markBaselineReset, setExtraSuppressed, streamPlanesAt, suppressedAt } from "./snapshotFeed";
+import { deliverSnapshots, markAllSettled, markBaselineReset, setExtraSuppressed, streamPlanesAt, suppressedAt } from "./snapshotFeed";
 import { onStageDemote } from "./demote";
 
 /** K5 (3)：等后台舞台的素材层画出一帧，最多等这么久（真墙钟），超时照样换 */
@@ -132,7 +132,7 @@ export function needsBackCatchUp(project: Project, t: number): string[] {
  * 播放中要等后台补跑的**轻卡**（K3(b) 的 `vtOk = false` 那一支）。
  *
  * 它在 K2 里判轻（各位置都活渲），但整段 `catchUpMs` 超了一拍预算、又推不动子树虚拟时间，
- * 所以播放头进入它时只能整场景在后台补跑后互换。等待期间它进 `front` 的 `suppressed`（透明）。
+ * 所以播放头进入它时只能整场景在后台补跑后互换。等待期间它进 `front` 的 `suppressed`，舞台在它的位置上显示占位符（T4）。
  */
 export function playingCatchUpTargets(project: Project, t: number): string[] {
   const plan = currentPlan();
@@ -180,7 +180,7 @@ export function staleOnBackCatchUp(project: Project, t: number): string[] {
  * `t_oc` 是单帧最差耗时，取成本记录的 `stepMaxMs`（K1 量的就是「推帧过程中最慢一帧」），
  * 没有就退回 p90 的 `stepMs`。整段 `catchUpMs` 是从第 0 帧冲到**最后一帧**的总代价 ——
  * 播放头刚进入片段时按它估，目标拍 `T` 会被推出去好几秒：可见舞台白等，那张卡在
- * `suppressed` 里多透明一大截，而 `back` 其实几十毫秒就补完了。
+ * `suppressed` 里多顶着占位符一大截，而 `back` 其实几十毫秒就补完了。
  *
  * 位置估算**封顶在整段代价上**（两者取小）：`t_oc` 是单帧最差，乘满整段会比实测的整段
  * 总代价还悲观。算不出位置（没有 `t_oc`、或拿不到片段）就退回整段代价，都没有就 1 秒。
@@ -263,6 +263,12 @@ async function swapAndDress(sec: number, playing: boolean): Promise<StageRpcClie
   /* (5) 它作为 back 时没有表、没有哈希、实体模式是默认值 —— 一条都不能省 */
   const project = getState().project;
   try {
+    /*
+     * 根因 A:新 `front` 手里是补跑开始时 (1) 灌进去的那一份,补跑期间用户的编辑只推给了当时的 `front`。
+     * 基线跟着客户端走(`stageBridge` 的 `swapStageClients`),所以这里补推一次就是**增量**,
+     * 被删的片段当场摘掉;没有编辑时基线相同、一条都不发。暂停态和播放态两条互换路都经过这里。
+     */
+    await syncProject("front", project);
     // 补发分派表:它作为 `back` 时没有(E0 的「角色转正时必须补发」)
     await sendPlanTo("front", { force: true });
     await next.setLocalHashes(host?.localHashes() ?? []);
@@ -279,6 +285,8 @@ async function swapAndDress(sec: number, playing: boolean): Promise<StageRpcClie
     } else {
       // settled 态不挂任何平面，快照基线 reset
       markBaselineReset("front");
+      // 整台都是补跑出来的精确活渲:暂停中不再往任何卡上投快照,直到下一次 setTime / 播放(根因 B)
+      markAllSettled("front");
       await next.setSnapshots({}, { reset: true });
       await next.setPlaying(false);
       await next.setScrubbing(false);
@@ -338,14 +346,14 @@ export async function runPlayingSwap(pendingIds: readonly string[]): Promise<boo
   const project = getState().project;
   if (!pendingIds.length) return false;
   running = true;
-  // 等待期间这几张卡进 front 的 suppressed（藏子树、t 冻住 —— 没有平面就是透明）
+  // 等待期间这几张卡进 front 的 suppressed（藏子树、t 冻住 —— 没有平面时舞台显示占位符 T4）
   setExtraSuppressed(pendingIds);
   /**
    * 两次都追不上：**改判为重（K6），而且不回到活渲**（R5-11）。
    *
    * 计划明写这张卡是例外：它活渲出来的状态本来就是错的（`vtOk = false`，子树虚拟
    * 时间推不动它），追不上才等在 `suppressed` 里，所以死素材就绪之前它留在
-   * `suppressed`（透明），不像别的降级卡那样「就绪前照常活渲」。
+   * `suppressed`（显示占位符），不像别的降级卡那样「就绪前照常活渲」。
    * 以前这里直接 `return false`，`finally` 的 `setExtraSuppressed([])` 又把它放回活渲，
    * `swapTried` 还让这一轮播放不再重试 —— 状态是错的、也没人去修。
    */

@@ -55,6 +55,7 @@
 
 import { inlineDOMStyles, HTML_NS } from "./snapshot/inlineStyles";
 import { rasterizeCanvas } from "./snapshot/rasterizeCanvas";
+import { PLACEHOLDER_SELECTOR } from "./placeholderHost.ts";
 
 export interface ControlSnapshot {
   /** data-pc-clip */
@@ -85,12 +86,26 @@ export interface SceneSnapshot {
 
 const nowMs = (): number => (window.__pcRealNow ?? Date.now)();
 
-/** 第一步:复制 DOM。返回 live 与克隆体一一对应的两个数组。 */
+/**
+ * 第一步:复制 DOM。返回 live 与克隆体一一对应的两个数组。
+ *
+ * **占位平面不进快照**(rendering.md「兜底顺序」:导出、预渲染、Agent 看到的画面永远没有它)。
+ * 它只挂在预览舞台上,但舞台页的 `__pcCreateSnapshot` 同样走这里 —— 克隆体里整棵摘掉,
+ * 两个数组里对应的项一起剔除(保持一一对应),样式内联、栅格化、序列化都看不到它。
+ */
 function cloneScene(root: Element): { clone: Element; orig: Element[]; copy: Element[] } {
   const orig = [root, ...root.querySelectorAll("*")];
   const clone = root.cloneNode(true) as Element;
   const copy = [clone, ...clone.querySelectorAll("*")];
-  return { clone, orig, copy };
+  if (!root.querySelector(PLACEHOLDER_SELECTOR)) return { clone, orig, copy };
+  const keepOrig: Element[] = [];
+  const keepCopy: Element[] = [];
+  for (let i = 0; i < orig.length; i++) {
+    const placeholder = orig[i].closest(PLACEHOLDER_SELECTOR);
+    if (!placeholder) { keepOrig.push(orig[i]); keepCopy.push(copy[i]); continue; }
+    if (placeholder === orig[i]) copy[i].remove();
+  }
+  return { clone, orig: keepOrig, copy: keepCopy };
 }
 
 /**

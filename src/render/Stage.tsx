@@ -16,6 +16,14 @@ import { guardCompositing, shouldGuard } from "./capabilityGuard";
 import { ensurePlaneStyle } from "./planeStyle";
 import { renameSnapshotIds } from "./snapshotRename";
 import { GlPlane } from "./gl/GlPlane";
+/* 占位组件(rendering.md「兜底顺序」尽头;接口见 `placeholder/contract.ts`) */
+import { PlaceholderPlane, PLACEHOLDER_CSS, maxAnimated } from "./placeholder";
+import { ensurePlaceholderStyle, geometryFor, isCatchingUpClip, PLACEHOLDER_SLOT_ATTR, placeholdersEnabled, setMaxAnimated, unsupportedHere } from "./placeholderHost";
+import { PLACEHOLDER_FIXED_ATTR, type PlaceholderReason } from "./placeholder/contract";
+import { userCardSources } from "../kernel/registry";
+
+setMaxAnimated(maxAnimated);
+const isUserCard = (cardId: string): boolean => Object.prototype.hasOwnProperty.call(userCardSources().fileOf, cardId);
 
 // Keep direct-evaluation cards at the requested time while other cards replay.
 // Their CSS/DOM stays in the same stacking tree (including paper/glass styles),
@@ -73,6 +81,25 @@ export interface StagePlaneProps {
 const EMPTY_SET: ReadonlySet<string> = new Set();
 
 /**
+ * 快照平面的 `dangerouslySetInnerHTML` 实参,每个片段缓存一份:**同一张快照回同一个 `{ __html }` 对象**。
+ *
+ * React 19 更新属性时按 `nextProp !== lastProp` 比 —— 每拍新建一个 `{ __html }` 对象,它就每拍重写一遍
+ * `innerHTML`:画布卡的快照是一张整屏图的 data URL(实测粒子卡 276 KB),每拍重新解析、重建 `<img>`、重新解码。
+ * 兜底顺序让「流下面垫一张海报快照」成了播放中的常态之后,CDP 采样里 `setProp` 一项 3 秒吃掉 257 ms,
+ * 可见舞台每拍主线程耗时的 p50 从约 3.5 ms 抬到约 7 ms。按引用缓存之后,只有换了快照的那一拍才写 DOM。
+ * 顺带省掉 `renameSnapshotIds` 每拍把整份 html 哈希一遍的开销。
+ */
+const snapshotPropByClip = new Map<string, { html: string; prop: { __html: string } }>();
+function snapshotProp(clipId: string, html: string): { __html: string } {
+  const hit = snapshotPropByClip.get(clipId);
+  if (hit && hit.html === html) return hit.prop;
+  const prop = { __html: renameSnapshotIds(html, clipId) };
+  if (snapshotPropByClip.size > 256) snapshotPropByClip.clear();
+  snapshotPropByClip.set(clipId, { html, prop });
+  return prop;
+}
+
+/**
  * 舞台:按当前时刻挑出活跃 clip 并挂载。卡片以 clip.id + playToken 作 key,
  * 进入区间即重新挂载、从头播放(和导出时的行为一致)。
  */
@@ -88,6 +115,14 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
   useEffect(() => {
     if (usesPlanes) ensurePlaneStyle();
   }, [usesPlanes]);
+  /*
+   * 占位平面(兜底顺序尽头):只有人看的预览(舞台页、`front` 角色)挂 —— `placeholderHost` 的开关
+   * 只由 `StageView` 打开;导出页、预渲染、Agent 的查询渲染、后台舞台一个节点都不渲、样式表不注入。
+   */
+  const placeholders = usesPlanes && placeholdersEnabled();
+  useEffect(() => {
+    if (placeholders) ensurePlaceholderStyle(PLACEHOLDER_CSS);
+  }, [placeholders]);
 
   /*
    * 被抑制的卡传给组件的那个 `t` 要**冻在抑制开始那一刻**(E7 第 5 条)。
@@ -124,6 +159,9 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
     if (frozen !== undefined) return frozen;
     return Math.max(0, base - clip.start);
   };
+  /** 占位符为什么显示(诊断用;显隐本身不看它,由 `StageView` 切) */
+  const placeholderReasonOf = (id: string): PlaceholderReason =>
+    awaiting?.has(id) ? "awaiting" : settling?.has(id) || isCatchingUpClip(id) ? "catching-up" : "no-data";
   // 自带三维场景的卡(scene-3d)要用和 A 层同一台相机,所以把画幅和 fov 一起递下去。
   // 对象整体透传,别的卡收到了也不看。
   const stageInfo = useMemo(() => ({ width: timeline.width, height: timeline.height, camera3dFov: timeline.camera3dFov }), [timeline.width, timeline.height, timeline.camera3dFov]);
@@ -201,6 +239,8 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
           if (!def || (!def.card && !def.Component) || (def.card && !timeline.graph)) return null;
           const C = def.Component!;
           const cardT = timeOf(clip);
+          // 这台设备渲染不了这张卡(在线浏览器模式下的用户卡 / 图卡):只挂 `unsupported` 占位,其余平面都不挂
+          const unsupported = placeholders && unsupportedHere(clip.cardId, def, isUserCard);
 
           // 绑了轨迹的 clip 整层跟着目标平移。平移放在**外层**而不是交给卡片：
           // 卡片不知道自己被绑了，也不该知道——换一张卡，跟随照样生效。
@@ -290,7 +330,15 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
                 里没有那个键,没有这层就会把 undefined 传进组件。
                 正常情况下它一项都不会补 —— 补上了就说明 clip 缺参数。
               */}
-              {clip.cardId === "composite" && clip.parts?.length ? (
+              {unsupported ? (
+                /*
+                  本机渲染不了的卡(在线浏览器模式下的用户卡 / 图卡,platforms.md):卡片代码不跑,
+                  只挂常驻的 `unsupported` 占位(槽位带 `PLACEHOLDER_FIXED_ATTR`,显隐调度跳过它)。
+                */
+                <div {...{ [PLACEHOLDER_SLOT_ATTR]: "", [PLACEHOLDER_FIXED_ATTR]: "" }} style={{ position: "absolute", inset: 0 }}>
+                  <PlaceholderPlane clipId={clip.id} geometry={geometryFor(clip.id, frameBox(clip.frame, timeline))} reason="unsupported" />
+                </div>
+              ) : clip.cardId === "composite" && clip.parts?.length ? (
                 // 组合卡:部件实例树逐级渲染,画布尺寸就是这张卡的框(没有框 = 整个舞台)
                 <PartTree parts={clip.parts} size={frameBox(clip.frame, timeline)} t={localTOf(clip, t)} playToken={gen} />
               ) : def.card ? (
@@ -307,7 +355,7 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
                 藏子树时它和子树一起被藏。**不加 `data-pc-clip`**(`isSolid` 会把它当包裹层跳过)。
                 位图由 `glHost` 在 `done` 时贴上,这里只登记这一拍要画什么。
               */}
-              {glContract && glBox ? (
+              {!unsupported && glContract && glBox ? (
                 <GlPlane clipId={clip.id} cardId={clip.cardId} contract={glContract}
                   w={glBox.width} h={glBox.height} t={localTOf(clip, cardT)} frame={localFrame}
                   params={{ ...def.defaults, ...clip.params }} gen={gen}
@@ -346,9 +394,9 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
                 不改名的话 SVG 的 `url(#id)` 会解析到第一个,后挂的那片渐变整片错掉。
                 C4 换成同一片段的另一帧就是这个平面 innerHTML 的原子替换,前后两张不共存。
               */}
-              {snapshotHtml !== undefined ? (
+              {!unsupported && snapshotHtml !== undefined ? (
                 <div data-pc-snapshot-plane="" style={{ position: "absolute", inset: 0 }}
-                  dangerouslySetInnerHTML={{ __html: renameSnapshotIds(snapshotHtml, clip.id) }} />
+                  dangerouslySetInnerHTML={snapshotProp(clip.id, snapshotHtml)} />
               ) : null}
               {/*
                 流平面(E7 第 5 条,R8)。`streamPlayer` 只往这个**已经存在的** `<canvas>` 上画,
@@ -358,9 +406,21 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
                 位置和尺寸由 `streamPlayer` 按流的清单设(流的矩形上界,可能比框大一圈、也可能在框外一点);
                 清单到之前先铺满包裹层(背板 0×0、透明)—— 被抑制的卡子树藏着,这一小段时间里点它也要点得中。
               */}
-              {ownStream ? (
+              {!unsupported && ownStream ? (
                 <canvas data-pc-stream-plane="" width={0} height={0}
                   style={{ position: "absolute", left: 0, top: 0, width: "100%", height: "100%" }} />
+              ) : null}
+              {/*
+                占位平面(rendering.md「兜底顺序」;和快照 / 流平面同级,坐标、旋转、缩放、层级从包裹层继承)。
+                槽位默认 `hidden`,`StageView` 每拍只切它的 `hidden`(contract 的 `setPlaceholderShown`),
+                不经 React 提交 —— `hidden` 这个 prop 恒为 true,React 不会把手动切过的值冲掉。
+                放在最后:同一包裹层里它盖在快照 / 流平面上面(显示它的时候那两样本来就没画面)。
+              */}
+              {placeholders && !unsupported ? (
+                <div {...{ [PLACEHOLDER_SLOT_ATTR]: "" }} hidden style={{ position: "absolute", inset: 0 }}>
+                  <PlaceholderPlane clipId={clip.id} geometry={geometryFor(clip.id, frameBox(clip.frame, timeline))}
+                    reason={placeholderReasonOf(clip.id)} />
+                </div>
               ) : null}
             </div>
           );

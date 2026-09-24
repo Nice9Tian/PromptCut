@@ -1,4 +1,5 @@
 import { UnifiedPreview } from "./preview/UnifiedPreview";
+import { usePrerenderPreload } from "./preview/usePrerenderPreload";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { isScrubbing, subscribeScrub } from "./timeline/useScrub";
 import { MediaLayers } from "./preview/MediaLayers";
@@ -8,7 +9,7 @@ import { actions, getState, useStore } from "../store/project";
 import { findClip } from "../kernel/project";
 import { nudgeFrame } from "../kernel/layout";
 import { createStageRpc, type HostCapabilities, type StageRpcClient } from "../render/stageRpc";
-import { frontStage, markPushed, onStageEvent, releaseStageClient, setStageClient, syncProject } from "./stageBridge";
+import { frontStage, onStageEvent, releaseStageClient, setStageClient, swapStageClients, syncProject } from "./stageBridge";
 import { INITIAL_ROLE_OF, STAGE_IDS, dualStage, stageSrc, stageTargetOrigin, type StageId } from "./previewMode";
 import { ControlBar } from "./preview/ControlBar";
 import { ToolBar, ToolType } from "./preview/ToolBar";
@@ -471,12 +472,22 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
   const pumpRef = useRef(pumpFeed);
   pumpRef.current = pumpFeed;
 
-  /* C3 的就绪索引:页面直连预渲染进程的那条 SSE(`snapshotSource.ts`) */
+  /*
+   * C3 的就绪索引:页面直连预渲染进程的那条 SSE(`snapshotSource.ts`)。
+   *
+   * **编辑不重连、不清表**(根因 E):项目每变一次这里只核一下 session(镜像可能刚起来、或换了项目),
+   * 同一个 session 什么都不做。以前清理函数挂在带 `project` 的 effect 上 —— 每次编辑先
+   * `stopSnapshotFeed()` 把就绪索引、字节缓存、投递基线全清掉再重连,重连空档里播放中的重卡全透明。
+   * 拆成两个:核 session 的跟着 `project` 跑,收摊的只在 `dual` 变了 / 卸载时跑。
+   */
   useEffect(() => {
     if (!dual) return;
     syncSnapshotSubscription(() => { void pumpRef.current(); });
-    return () => stopSnapshotFeed();
   }, [dual, project]);
+  useEffect(() => {
+    if (!dual) return;
+    return () => stopSnapshotFeed();
+  }, [dual]);
 
   /* 换了 iframe:那一份投递基线跟着作废,下一次带 `reset`(A3c) */
   useEffect(() => {
@@ -505,16 +516,12 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
     const nextBack = rpcRef.current[cur];
     frontIdRef.current = nextId;
     flushSync(() => setFrontId(nextId));
-    setStageClient("front", nextFront, hostCapsRef.current[nextId]);
-    setStageClient("back", nextBack, hostCapsRef.current[cur]);
     /*
-     * 两个 iframe 手里本来就都是这份整份项目(第二路的 (1) 给 `back` 灌的就是它),
-     * 只是 `setStageClient` 换客户端时把基线清成了 null。补回去,免得互换之后
-     * 第一次 `syncProject` 又整份重灌一遍、顺手掐掉刚起的节拍。
+     * 基线跟着客户端走(根因 A):新 front 手里是补跑开始时灌的那一份,**不是**此刻的最新项目。
+     * 以前这里 `markPushed(role, getState().project)`,补跑期间的编辑(删片段)就永远补不上;
+     * 现在 `swapAndDress` 在互换之后补推一次 `syncProject`,按它真正持有的那份算增量。
      */
-    const project = getState().project;
-    markPushed("front", project);
-    markPushed("back", project);
+    swapStageClients({ client: nextFront, caps: hostCapsRef.current[nextId] }, { client: nextBack, caps: hostCapsRef.current[cur] });
     // 新 front 的抑制集合从零开始记
     suppressedRef.current = "";
     return { front: nextFront, back: nextBack };
@@ -709,6 +716,11 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
    * 先同步项目再拨时间,两条 RPC 顺序不能反(setTime 要在新项目上算活跃卡)。
    */
   const scrubbing = useSyncExternalStore(subscribeScrub, isScrubbing, isScrubbing);
+  /*
+   * 双舞台模式下由页面触发预渲染(公共 hook,legacy 那一路在 `UnifiedPreview` 里用同一份):
+   * 编辑推送成功(`frameRequest` 先 `alignMirror`)且空闲(不在播放、不在拖动)时防抖发 `preload`,没就绪就接着问。
+   */
+  usePrerenderPreload(project, { enabled: dual, idle: !playing && !scrubbing });
   const scrubbingRef = useRef(scrubbing);
   scrubbingRef.current = scrubbing;
   const lastRenderKey = useRef("");
