@@ -83,7 +83,7 @@
 | 轨道流、组流 | 重卡播放时贴的 alpha 视频流；多张相邻重卡合成的一条流 | architecture/rendering.md |
 | 实体框 | 卡片实际画出内容的最小矩形 | architecture/rendering.md |
 | 兜底顺序 | 画面来不及时按满帧流 → 稀疏流 → 旧快照 → 占位符逐级退化，受算力预算约束 | architecture/rendering.md |
-| 占位符 | 兜底顺序尽头在卡片位置显示的纯色底加静止沙漏，只出现在预览里；渲染不了的卡另显示「需要本地 PC 渲染辅助」 | architecture/rendering.md |
+| 占位符 | 兜底顺序尽头在卡片位置显示的沙漏加噪点，只出现在预览里；渲染不了的卡另显示「需要本地 PC 渲染辅助」 | architecture/rendering.md |
 | 预渲染进程 | 本机做预渲染和查询渲染的进程，有 Agent、User、Full 三种模式 | architecture/rendering.md |
 
 ## 开发

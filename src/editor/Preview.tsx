@@ -1,4 +1,5 @@
 import { UnifiedPreview } from "./preview/UnifiedPreview";
+import { usePrerenderPreload } from "./preview/usePrerenderPreload";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { isScrubbing, subscribeScrub } from "./timeline/useScrub";
 import { MediaLayers } from "./preview/MediaLayers";
@@ -715,6 +716,11 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
    * 先同步项目再拨时间,两条 RPC 顺序不能反(setTime 要在新项目上算活跃卡)。
    */
   const scrubbing = useSyncExternalStore(subscribeScrub, isScrubbing, isScrubbing);
+  /*
+   * 双舞台模式下由页面触发预渲染(公共 hook,legacy 那一路在 `UnifiedPreview` 里用同一份):
+   * 编辑推送成功(`frameRequest` 先 `alignMirror`)且空闲(不在播放、不在拖动)时防抖发 `preload`,没就绪就接着问。
+   */
+  usePrerenderPreload(project, { enabled: dual, idle: !playing && !scrubbing });
   const scrubbingRef = useRef(scrubbing);
   scrubbingRef.current = scrubbing;
   const lastRenderKey = useRef("");

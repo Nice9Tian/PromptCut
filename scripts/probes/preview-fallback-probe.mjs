@@ -4,15 +4,18 @@
  * `transparent`(无提示透明,不许出现)。满 120 ms 才显示的那段空档记成 `placeholder-delay`,单列统计。
  *
  *   node scripts/probes/preview-fallback-probe.mjs --origin http://127.0.0.1:5230 [--seconds 10] [--out <dir>] [--json <file>]
- *        [--label after|before] [--baseline <before.json>] [--no-pills]
+ *        [--label after|before] [--baseline <before.json>] [--no-pills] [--page-preload]
  *
  * `--no-pills`:不加那两张药丸(没有占位符),只量流 + 海报快照那一部分的主线程开销;「编辑后」改成给粒子卡
  * 重设一遍同样的参数(localRev + 1、身份不变)。
  *
+ * `--page-preload`:探针自己不调 preload,只等页面的 `usePrerenderPreload`(编辑推送成功、空闲时防抖触发)——
+ * 验证双舞台模式下页面真的会触发预渲染。
+ *
  * 端口按分配的端口段:dev server 用 `npx vite --port 5230 --strictPort --host 127.0.0.1`(舞台端口 5231 / 5232)。
  *
  * 流程(和 `stream-editor-e2e.mjs` 同一套打法:编辑台 `?preview=stage`,探针自己按 `{ session, localRev }`
- * 调预渲染进程的 preload —— dual 模式今天没有别人调它):
+ * 调预渲染进程的 preload,不等页面的防抖;`--page-preload` 时改由页面自己触发):
  *   0. 换空项目,加一张长粒子卡(重卡:按追帧上界判重),等它的轨道流满密度、快照铺上一截;
  *      再加两张金句药丸(一张旋转 25°、一张缩放 0.6),在父页的分派表里钉成重卡、**不给它们预渲染** ——
  *      播放时它们走到兜底顺序尽头,显示占位符(旋转 / 缩放那两张截图);
@@ -47,6 +50,7 @@ const BASELINE = flagArg('baseline', null, args);
 const OUT = path.resolve(flagArg('out', null, args) || path.join(os.tmpdir(), `pc-fallback-${LABEL}-${Date.now().toString(36)}`));
 const JSON_OUT = flagArg('json', null, args);
 const NO_PILLS = args.includes('--no-pills');
+const PAGE_PRELOAD = args.includes('--page-preload');
 const RUN = Date.now().toString(36);
 const fails = [];
 const notes = [];
@@ -133,7 +137,7 @@ try {
   const ready = await until('粒子卡的轨道流满密度、快照铺上一截', async () => {
     const k = await page.evaluate(async () => (await import('/src/render/dataMirror.ts')).mirrorKey());
     if (!k) return null;
-    await fetch(prerender.url + '/api/frames/preload', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ session: k.session, localRev: k.localRev, lane: 'background' }) }).catch(() => {});
+    if (!PAGE_PRELOAD) await fetch(prerender.url + '/api/frames/preload', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ session: k.session, localRev: k.localRev, lane: 'background' }) }).catch(() => {});
     const layers = await page.evaluate(async (id) => {
       const m = await import('/src/editor/snapshotFeed.ts');
       const byKind = m.currentReadyIndex().get(id);

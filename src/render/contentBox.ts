@@ -375,6 +375,45 @@ export function measureInk(stage: HTMLElement, box: Box | null): Ink | null {
  * 接近 45° 时方程病态,退回外接矩形的尺寸(偏大、不偏小)。结果夹回包裹层内;量不到回 null。
  */
 export function measureLocalContentBox(wrap: HTMLElement, canvasCache?: Map<HTMLCanvasElement, CanvasPixels | null>): { left: number; top: number; width: number; height: number } | null {
+  /*
+   * 精确路(Item 7):同一个任务里把包裹层**自己的** transform 暂时压成 `none !important`,量完立刻还原 ——
+   * 量的时候包裹层没有旋转 / 斜切 / 非等比缩放,`measureContentBox` 的「屏幕矩形 ÷ 等效缩放」正好就是局部坐标;
+   * 同步读写之间浏览器不绘制,用户看不到。`!important` 压得住包裹层上的动画;还压不住(计算值仍不是 none)就走下面的反解。
+   */
+  const exact = measureWithoutOwnTransform(wrap, canvasCache);
+  if (exact !== undefined) return exact;
+  return measureLocalByInversion(wrap, canvasCache);
+}
+
+/** 暂时去掉包裹层自己的 transform 再量;去不掉回 `undefined`(调用方退回反解) */
+function measureWithoutOwnTransform(wrap: HTMLElement, canvasCache?: Map<HTMLCanvasElement, CanvasPixels | null>): { left: number; top: number; width: number; height: number } | null | undefined {
+  const before = getComputedStyle(wrap).transform;
+  if (!before || before === "none") return clampLocal(wrap, measureContentBox(wrap, canvasCache));
+  const value = wrap.style.getPropertyValue("transform");
+  const priority = wrap.style.getPropertyPriority("transform");
+  wrap.style.setProperty("transform", "none", "important");
+  try {
+    if (getComputedStyle(wrap).transform !== "none") return undefined;
+    return clampLocal(wrap, measureContentBox(wrap, canvasCache));
+  } finally {
+    if (value) wrap.style.setProperty("transform", value, priority);
+    else wrap.style.removeProperty("transform");
+  }
+}
+
+/** `measureContentBox` 的结果(包裹层没有自身变换时就是局部坐标)夹回包裹层内 */
+function clampLocal(wrap: HTMLElement, b: Box | null): { left: number; top: number; width: number; height: number } | null {
+  if (!b) return null;
+  const w = wrap.offsetWidth, h = wrap.offsetHeight;
+  if (!(w > 0) || !(h > 0)) return null;
+  const left = Math.max(0, b.l), top = Math.max(0, b.t);
+  const right = Math.min(w, b.r), bottom = Math.min(h, b.b);
+  if (right <= left || bottom <= top) return null;
+  return { left, top, width: right - left, height: bottom - top };
+}
+
+/** 退路:按包裹层的旋转角和等比缩放反解(原来的算法;接近 45° 退回外接矩形) */
+function measureLocalByInversion(wrap: HTMLElement, canvasCache?: Map<HTMLCanvasElement, CanvasPixels | null>): { left: number; top: number; width: number; height: number } | null {
   const b = measureContentBox(wrap, canvasCache);
   if (!b) return null;
   const sr = wrap.getBoundingClientRect();

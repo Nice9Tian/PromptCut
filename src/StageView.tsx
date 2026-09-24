@@ -405,18 +405,23 @@ export default function StageView() {
      * 只在停下来之后防抖量一次(播放 / 拖动中不量 —— 那时正是占位符要顶上的时候,量到的是兜底画面),
      * 被抑制 / 等快照 / 追帧的卡子树藏着,跳过。量不到的不记(`noteInkBox` 丢掉 null),几何退回徽标。
      */
+    /** 当场把此刻活渲着的每张卡的墨迹框量一遍(被抑制 / 等快照 / 追帧的子树藏着,跳过) */
+    const measureInkBoxesNow = () => {
+      const root = rootRef.current;
+      if (!root) return;
+      const cache = new Map<HTMLCanvasElement, CanvasPixels | null>();
+      for (const el of root.querySelectorAll<HTMLElement>("[data-pc-clip]:not([data-pc-media])")) {
+        const id = el.getAttribute("data-pc-clip");
+        if (!id || el.classList.contains("pc-suppressed") || el.classList.contains("pc-awaiting") || el.classList.contains("pc-settling")) continue;
+        noteInkBox(id, measureLocalContentBox(el, cache));
+      }
+    };
     const scheduleInkBoxes = () => {
       if (!placeholdersEnabled()) return;
       window.clearTimeout(inkTimer);
       inkTimer = realSetTimeout(() => {
-        const root = rootRef.current;
-        if (!root || ref.current.beatRunning || ref.current.scrubbing || !placeholdersEnabled()) return;
-        const cache = new Map<HTMLCanvasElement, CanvasPixels | null>();
-        for (const el of root.querySelectorAll<HTMLElement>("[data-pc-clip]:not([data-pc-media])")) {
-          const id = el.getAttribute("data-pc-clip");
-          if (!id || el.classList.contains("pc-suppressed") || el.classList.contains("pc-awaiting") || el.classList.contains("pc-settling")) continue;
-          noteInkBox(id, measureLocalContentBox(el, cache));
-        }
+        if (ref.current.beatRunning || ref.current.scrubbing || !placeholdersEnabled()) return;
+        measureInkBoxesNow();
       }, 300);
     };
     const scheduleSample = () => {
@@ -1549,6 +1554,11 @@ export default function StageView() {
             if (!probe) {
               await glStrict(target);
               if (gen !== renderGen.current) return;
+              /*
+               * 补跑到目标拍时整台戏正是精确活渲:趁这时把墨迹框量好(Item 7)。互换之后这一台转正,
+               * 占位符的实体框已经在手,不必等转正后的补量 —— 那一刻被抑制 / 不可见的卡也不会退成徽标。
+               */
+              measureInkBoxesNow();
             }
             resolve({ remounted, caughtUpAtSec: clock.now() / 1000, elapsedMs, stepMs: stepOf(elapsedMs),
               ...(probe ? { frames, truncated: false, snapshot } : {}),

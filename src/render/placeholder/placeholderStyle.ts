@@ -1,11 +1,11 @@
 import { NOISE_TILE } from "./noise";
 
 /**
- * 性能降级开关(P4 熔断协议):集成进舞台后每拍主线程 p90 超标,一次修复重试后仍超,按协议降级为
+ * 性能降级开关:P4 曾按熔断协议打开(每拍主线程 p90 超标),用户接受起播 +2.5 ms 后关回,恢复噪点与转动。打开时降级为
  * **极简静态占位符** —— 纯色底 + 静止沙漏,不铺噪点、不转。120 ms 出现延迟仍保留(只跑一次的 opacity 动画)。
- * 恢复噪点和转动:改成 `false`,并把 `index.ts` 的 `maxAnimated` / `layersFor` 改回。
+ * `index.ts` 的 `maxAnimated` / `layersFor` 跟着它走。
  */
-export const PERF_DEGRADED = true;
+export const PERF_DEGRADED = false;
 
 const NOISE_RULES = PERF_DEGRADED ? "" : `
 [data-pc-placeholder-plane][data-pc-placeholder-kind="solid"] {
