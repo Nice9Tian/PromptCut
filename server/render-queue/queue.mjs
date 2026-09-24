@@ -336,6 +336,27 @@ export function createRenderQueue(options = {}) {
         after.push(() => emit(conn, 'task.done', fields));
       }
       // failed（未过 TTL）：不重新打开，只在回包里说明（C1）
+
+      // 已存在的任务同样并入 plan 的订阅者（A.4 末段，M3 裁定）：共享档的结果键与项目无关，
+      // 这一版切出的细任务常常是上一版或别的项目建的，不并进来页面就收不到它们的结果。
+      // 身份不改；已经做完 / 已经失败的，只给新并入的订阅者各补一条通知。
+      const parent = planParentOf(conn, input.source.derivedFrom);
+      if (parent) {
+        const joined = [...parent.subscribers].filter((id) => !task.subscribers.has(id));
+        for (const id of joined) task.subscribers.add(id);
+        if (task.state === 'done' || task.state === 'failed') {
+          const t = task;
+          const type = t.state === 'done' ? 'task.done' : 'task.failed';
+          const fields = t.state === 'done' ? doneFields(t) : { id: t.id, error: t.lastError };
+          after.push(() => {
+            for (const id of joined) {
+              const pub = publishers.get(id);
+              // 本连接已经按 A.7.1 收过一条 task.done，不重复发
+              if (pub && pub.conn && !(type === 'task.done' && pub.conn === conn)) emit(pub.conn, type, fields);
+            }
+          });
+        }
+      }
       results.push({ id: task.id, state: task.state, version: task.version, created: false });
     }
     emit(conn, 'task.published', { results }, reqId);
