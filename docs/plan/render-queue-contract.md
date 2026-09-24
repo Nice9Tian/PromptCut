@@ -816,7 +816,7 @@ export async function probeBrowserEnvironment({ browser, page }, { platform = pr
 - **E.5 本地档**：本地档任务的 `resultKey` 是队列里的任务身份，不等于落盘目录键 `<entryKey>/<snapshotKey>`，这是有意的。
   - 共享档和流的任务身份与落盘键重合，因为它们没有 `entryKey` 这一层。
   - M5 的产物库接口按 `input.entryKey` 与去掉 `<entryKey>/` 前缀的内容键，用同一个指纹重算落盘键。
-- **E.6 实际效果**：页面用 GPU 栅格化，本机预渲染用 SwiftShader，两边指纹几乎不可能相同，所以这道闸实际上停掉了测量帧入库。这条路径以后怎么处理记在 `TODO.md`，本阶段不改页面。
+- **E.6 实际效果**：页面用 GPU 栅格化，本机预渲染用 SwiftShader，两边指纹几乎不可能相同，所以这道闸实际上停掉了测量帧入库。（已被 F 节取代：页面上报自己的环境，测量帧按卡片级指纹锁入库。）
 
 ## F. 卡片级指纹锁（M4 补充：前端测量帧入库与队列认领）
 
