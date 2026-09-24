@@ -1,5 +1,5 @@
 /**
- * 卡片级指纹锁：队列这一侧（契约 `docs/plan/render-queue-contract.md` F.1，测试表 F.5 的 Q1～Q9）。
+ * 卡片级指纹锁：队列这一侧（契约 `docs/plan/render-queue-contract.md` F.1 与 F.7，测试表 F.5 的 Q1～Q9、F.7 第 6 条的 Q10、Q11）。
  * 跑：node --experimental-test-module-mocks --test server/test/card-lock-queue.test.mjs
  *
  * 只照契约 F.1 以及它改动 / 引用的 A.4～A.8、A.10 写，不看实现。只经 A.3 的公开接口驱动
@@ -8,7 +8,7 @@
  * 约定：
  *   - `lockKeyOf` 是 F.1 新增的出口，用命名空间引入（`queueIndex.lockKeyOf`），它还不存在时只有用到它的
  *     那条用例失败，不连累整个文件；`card.lock` 在不在 `PUBLISHER_TYPES` 里同理，从 `messages.mjs` 读。
- *   - 契约写「`DONE_TTL_MS`」，A.2 的常量名是 `DONE_TTL`，按 A.2 取缺省值 600 000。
+ *   - F.1 写的「`DONE_TTL_MS`」就是 A.2 的 `DONE_TTL`（F.7 第 3 条），取缺省值 600 000；锁回收用严格大于。
  *   - 结果键按 B.1 的公式自己算（`resultKeyOf`），任务 id 按 A.4 自己算，不借实现。
  */
 import test from 'node:test';
@@ -322,7 +322,6 @@ test('Q4 带 takeover 发布：锁转给新指纹；旧指纹 open 的进 failed
   const now = h.now();
   // 顺带让 ck2 有一把锁（别的锁键不受影响）
   claimOk(h, 'a', scene.o.id, 1);
-  scene.o = { ...scene.o };
   h.bus.clear();
   const out = h.publish('q', [y1, y2], { takeover: true });
   const results = published(out, 'q');
@@ -400,42 +399,115 @@ test('Q4 补充：同指纹带 takeover（锁已经是自己的）只刷新 touc
 
 /* ================================================================== Q5 */
 
-test('Q5 不带 takeover、锁在别的指纹上时发布：任务照建或合并，results[i].lockedBy 是锁指纹；锁不变', () => {
+test('Q5 不带 takeover、锁在别的指纹上时发布已存在的任务：照常合并，results[i].lockedBy 是锁指纹；锁不变（不存在的见 Q10）', () => {
   const h = setup();
   const x = snap('ck1', FP_A, 0);
-  h.publish('p', [x]);
+  const y1 = snap('ck1', FP_B, 0), y2 = snap('ck1', FP_B, 60);
+  // y1 / y2 在锁建起来之前就发布了（两个节点几乎同时切分的情形）
+  h.publish('p', [x, y1, y2]);
   claimOk(h, 'a', x.id, 1);
   const before = lockOf(h, 'snapshot:ck1');
   h.clock.advance(100);
 
-  const y1 = snap('ck1', FP_B, 0), y2 = snap('ck1', FP_B, 60), same = snap('ck1', FP_A, 60), free = snap('ck2', FP_B, 0);
+  const same = snap('ck1', FP_A, 60), free = snap('ck2', FP_B, 0);
   let results = published(h.publish('q', [y1, y2, same, free]), 'q');
-  assert.deepEqual(results[0], { id: y1.id, state: 'open', version: 1, created: true, lockedBy: FP_A });
-  assert.deepEqual(results[1], { id: y2.id, state: 'open', version: 1, created: true, lockedBy: FP_A });
+  assert.deepEqual(results[0], { id: y1.id, state: 'open', version: 1, created: false, lockedBy: FP_A });
+  assert.deepEqual(results[1], { id: y2.id, state: 'open', version: 1, created: false, lockedBy: FP_A });
   assert.deepEqual(results[2], { id: same.id, state: 'open', version: 1, created: true }, '同指纹不带 lockedBy');
   assert.deepEqual(results[3], { id: free.id, state: 'open', version: 1, created: true }, '没锁的不带 lockedBy');
-  assert.equal(h.task(y1.id).state, 'open', '任务照建');
+  assert.ok(h.task(y1.id).subscribers.includes('pub-q'), '照 A.7.1 合并：订阅者加入本发布方');
   assert.deepEqual(lockOf(h, 'snapshot:ck1'), { ...before, touchedAt: T0 + 100 }, '同指纹的那个任务刷新了 touchedAt，指纹不变');
   assert.equal(lockOf(h, 'snapshot:ck2'), null, '没锁 + 不带 takeover：不建锁');
 
-  // 合并已存在的任务（created: false）同样带 lockedBy；takeover: false 同不带
+  // takeover: false 同不带
   results = published(h.publish('p', [y1], { takeover: false }), 'p');
   assert.deepEqual(results[0], { id: y1.id, state: 'open', version: 1, created: false, lockedBy: FP_A });
   assert.equal(lockOf(h, 'snapshot:ck1').envFingerprint, FP_A);
+  // 合并进来的异指纹任务仍然认领不了
+  assert.equal(h.claim('b', y1.id, 1).one('b', 'task.claim-rejected').reason, 'card-locked');
 });
 
-test('Q5 补充：没锁时带 takeover 发布 → 建锁（source: takeover）；之后别的指纹认领被拒', () => {
+/* ================================================================== Q10（F.7 第 1、4 条） */
+
+test('Q10 拒建：锁在别的指纹上、没带 takeover、表里没有同 id 任务 → 不建，results[i] = { id, error: card-locked, lockedBy }；同条消息的其它项照常', () => {
   const h = setup();
-  const y = snap('ck1', FP_B, 0), x = snap('ck1', FP_A, 0);
+  const x = snap('ck1', FP_A, 0);
   h.publish('p', [x]);
+  claimOk(h, 'a', x.id, 1);
+  const lockBefore = lockOf(h, 'snapshot:ck1');
+  h.bus.clear();
+
+  const y1 = snap('ck1', FP_B, 0), other = snap('ck2', FP_B, 0), same = snap('ck1', FP_A, 60), y2 = stream('ck1', FP_B, 0);
+  const out = h.publish('q', [y1, other, same, y2], { reqId: 'r10' });
+  const m = out.one('q', 'task.published');
+  assert.equal(m.reqId, 'r10');
+  assert.deepEqual(m.results[0], { id: y1.id, error: 'card-locked', lockedBy: FP_A });
+  assert.deepEqual(m.results[1], { id: other.id, state: 'open', version: 1, created: true }, '别的卡照常建');
+  assert.deepEqual(m.results[2], { id: same.id, state: 'open', version: 1, created: true }, '同指纹照常建');
+  assert.deepEqual(m.results[3], { id: y2.id, state: 'open', version: 1, created: true }, '流是另一把锁（stream:ck1，没锁）');
+  assert.equal(h.task(y1.id), null, '拒建的任务不在表里');
+  const opened = out.ofType('task.opened').map(e => e.message.task.id);
+  assert.ok(!opened.includes(y1.id), '拒建的不广播 task.opened');
+  assert.ok(opened.includes(other.id));
+  assert.equal(lockOf(h, 'snapshot:ck1').envFingerprint, lockBefore.envFingerprint, '锁不变');
+  assert.equal(lockOf(h, 'snapshot:ck1').source, 'claim');
+
+  // 锁上的指纹换了（被接手），lockedBy 跟着换
+  cardLock(h, 'p', { kind: 'snapshot', contentKey: 'ck1', envFingerprint: FP_C, takeover: true });
+  const again = published(h.publish('q', [y1]), 'q');
+  assert.deepEqual(again[0], { id: y1.id, error: 'card-locked', lockedBy: FP_C });
+});
+
+test('Q10 补充：因 limit 没建成的那一项不做任何锁处理（F.7 第 4 条）', () => {
+  const h = setup({ constants: { MAX_TASKS_PER_PROJECT: 1 } });
+  const first = snap('k0', FP_A, 0);
+  h.publish('p', [first]);
+  // 项目已满：带 takeover 的新任务因 limit 没建 → 不建锁
+  const r = published(h.publish('q', [snap('k1', FP_B, 0)], { takeover: true }), 'q');
+  assert.equal(r[0].error, 'limit');
+  assert.equal(lockOf(h, 'snapshot:k1'), null, 'limit 的项不建锁');
+  // 已锁在别的指纹上时：limit 的项不接手、锁不变
+  cardLock(h, 'p', { kind: 'snapshot', contentKey: 'k2', envFingerprint: FP_A });
+  const r2 = published(h.publish('q', [snap('k2', FP_B, 0)], { takeover: true }), 'q');
+  assert.equal(r2[0].error, 'limit');
+  assert.deepEqual([lockOf(h, 'snapshot:k2').envFingerprint, lockOf(h, 'snapshot:k2').source], [FP_A, 'lock']);
+});
+
+/* ================================================================== Q11（F.7 第 2 条） */
+
+test('Q11 没锁时带 takeover 发布：建锁（source: takeover），同时作废锁键相同、指纹不同的 open 任务；同指纹、别的卡不动', () => {
+  const h = setup();
+  // 两个节点几乎同时切分：A 的任务先发布（没人认领，没锁），B 带 takeover 发布
+  const x1 = snap('ck1', FP_A, 0), x2 = snap('ck1', FP_A, 60), otherCard = snap('ck2', FP_A, 0), sameFp = snap('ck1', FP_B, 120);
+  h.publish('p', [x1, x2, otherCard]);
+  h.publish('q', [sameFp]);
+  assert.deepEqual(locks(h), []);
   h.clock.advance(10);
-  const results = published(h.publish('q', [y], { takeover: true }), 'q');
-  assert.deepEqual(results[0], { id: y.id, state: 'open', version: 1, created: true });
-  assert.deepEqual(lockOf(h, 'snapshot:ck1'), { lockKey: 'snapshot:ck1', envFingerprint: FP_B, source: 'takeover', since: T0 + 10, touchedAt: T0 + 10 });
-  // 建锁时 x（A 指纹、open）也属于「锁键 L、指纹不是 F、open」—— 契约的接手清单只在「不同指纹 X」那一行；
-  // 「没锁 + takeover」那一行只建锁。这里只断言 x 认领被拒。
-  const r = h.claim('a', x.id, h.task(x.id)?.version ?? 1).one('a', 'task.claim-rejected');
-  assert.ok(['card-locked', 'taken'].includes(r.reason), `x 不能再被 A 认领，实际 ${r.reason}`);
+  h.bus.clear();
+
+  const y = snap('ck1', FP_B, 0);
+  const now = h.now();
+  const out = h.publish('q', [y], { takeover: true });
+  assert.deepEqual(published(out, 'q')[0], { id: y.id, state: 'open', version: 1, created: true });
+  assert.deepEqual(lockOf(h, 'snapshot:ck1'), { lockKey: 'snapshot:ck1', envFingerprint: FP_B, source: 'takeover', since: now, touchedAt: now });
+
+  for (const t of [x1, x2]) {
+    const v = h.task(t.id);
+    assert.deepEqual([v.state, v.version, v.attempts, v.lastError, v.finishedAt], ['failed', 2, 0, 'superseded', now], `${t.id} 作废`);
+  }
+  assert.deepEqual(out.of('p', 'task.failed').map(m => [m.id, m.error]).sort(), [[x1.id, 'superseded'], [x2.id, 'superseded']].sort(),
+    '订阅者收到 task.failed');
+  for (const conn of ['a', 'a2', 'b', 'w']) {
+    assert.deepEqual(out.of(conn, 'task.closed').filter(m => m.id === x1.id || m.id === x2.id).map(m => [m.id, m.state]).sort(),
+      [[x1.id, 'failed'], [x2.id, 'failed']].sort(), `${conn} 收到 task.closed`);
+  }
+  assert.deepEqual([h.task(sameFp.id).state, h.task(sameFp.id).version], ['open', 1], '同指纹的不动');
+  assert.deepEqual([h.task(otherCard.id).state, h.task(otherCard.id).version], ['open', 1], '别的卡不动');
+  assert.equal(lockOf(h, 'snapshot:ck2'), null);
+  // 此后 A 指纹的新任务发布被拒建
+  assert.equal(published(h.publish('p', [snap('ck1', FP_A, 180)]), 'p')[0].error, 'card-locked');
+  // B 指纹的照常认领
+  claimOk(h, 'b', y.id, 1);
 });
 
 /* ================================================================== Q6 */
@@ -468,7 +540,7 @@ test('Q6 takeover 不是布尔 → 整条 bad-message，状态不变；是布尔
 
 /* ================================================================== Q7 */
 
-test('Q7 锁回收：没有任务再引用、且 now - touchedAt >= DONE_TTL 才删（第 5 项扫描在 TTL 删任务之后）', () => {
+test('Q7 锁回收：没有任务再引用、且 now - touchedAt > DONE_TTL 才删（F.7 第 3 条严格大于；第 5 项扫描在 TTL 删任务之后）', () => {
   const h = setup();
   const x = snap('ck1', FP_A, 0);
   h.publish('p', [x]);
@@ -487,13 +559,15 @@ test('Q7 锁回收：没有任务再引用、且 now - touchedAt >= DONE_TTL 才
   assert.equal(lockOf(h, 'snapshot:ck1'), null, '同一次 tick 里：任务删了、touchedAt 也够老 → 锁删');
 });
 
-test('Q7 锁回收：没有任务引用的锁（card.lock 建的）按 >= 判，恰好 DONE_TTL 就删', () => {
+test('Q7 锁回收：没有任务引用的锁（card.lock 建的）按严格大于判：恰好 DONE_TTL 还留着，多 1 毫秒才删', () => {
   const h = setup();
   cardLock(h, 'p', { kind: 'snapshot', contentKey: 'ck1', envFingerprint: FP_A });
   h.at(T0 + TTL - 1);
   assert.ok(lockOf(h, 'snapshot:ck1'), 'TTL - 1：留着');
   h.at(T0 + TTL);
-  assert.equal(lockOf(h, 'snapshot:ck1'), null, '恰好 TTL：删（>=）');
+  assert.ok(lockOf(h, 'snapshot:ck1'), '恰好 TTL：还留着（严格大于才删，与 A.8 一致）');
+  h.at(T0 + TTL + 1);
+  assert.equal(lockOf(h, 'snapshot:ck1'), null, 'TTL + 1：删');
 });
 
 test('Q7 锁回收：还有任务引用时不删，不论过了多久；刷新 touchedAt 会推迟回收', () => {
@@ -513,6 +587,8 @@ test('Q7 锁回收：还有任务引用时不删，不论过了多久；刷新 t
   h.at(t0 + TTL + 10);
   assert.ok(lockOf(h, 'stream:sk'), '刷新过：从刷新那一刻起算');
   h.at(t0 + TTL - 10 + TTL);
+  assert.ok(lockOf(h, 'stream:sk'), '距刷新恰好 TTL：还留着');
+  h.at(t0 + TTL - 10 + TTL + 1);
   assert.equal(lockOf(h, 'stream:sk'), null);
 });
 
