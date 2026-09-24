@@ -7,7 +7,10 @@
  * 命令：
  *   probe    探测远端：Node 是不是 LTS（偶数大版本且 >= 20）、有没有 PM2、UFW 状态。就绪退出码 0，没就绪 1，连不上 2
  *   install  缺什么装什么：Node 取 nodejs.org 当前最新 LTS 的官方二进制（校验 SHA256 后装到 /usr/local），PM2 用 npm 全局装
- *   deploy   拷 server/docservice 与 server/render-queue 到远端，PM2 启动或重载，放行 SSH 与服务端口后启用 UFW，最后查 /healthz
+ *   deploy   拷 server/docservice（含 modules/）与 server/render-queue 到远端，PM2 启动或重载，放行 SSH 与服务端口后启用 UFW，
+ *            最后查 /healthz。远端绑 0.0.0.0，必须带集群令牌：从本机环境变量 PROMPTCUT_CLUSTER_TOKEN 读，没设或格式不对就拒绝部署。
+ *            令牌只经 ssh 的标准输入进远端脚本，由它 export 后 pm2 startOrReload --update-env；不上命令行、不回显、不写进仓库
+ *            （契约 docs/plan/render-queue-contract.md G.5）。令牌的生成方法见 server/docservice/main.mjs 文件头
  *   status   PM2 里的进程状态、/healthz、UFW 规则
  *
  * 其它环境变量：PROMPTCUT_REMOTE_DIR（远端部署目录，缺省 /opt/promptcut-docservice）、
@@ -17,6 +20,7 @@
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { checkTokenFormat } from '../../server/docservice/auth.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const target = process.env.PROMPTCUT_REMOTE;
@@ -83,9 +87,11 @@ fi
 echo "pm2 $(pm2 -v | tail -n1)"
 `;
 
-function deployScript() {
+/** 经 ssh 标准输入交给远端 bash 的部署脚本。令牌只出现在这段文本里（已校验只含 base64url 字符，放进单引号是安全的） */
+function deployScript(token) {
   return String.raw`
 set -euo pipefail
+set +x
 cd '${dir}'
 # 新代码先落在 .incoming，整目录换上去，避免 PM2 重载时读到拷了一半的文件
 rm -rf server.prev
@@ -95,6 +101,7 @@ rmdir .incoming
 rm -rf server.prev
 
 export PROMPTCUT_DOCSERVICE_PORT=${port}
+export PROMPTCUT_CLUSTER_TOKEN='${token}'
 pm2 startOrReload server/docservice/ecosystem.config.cjs --update-env
 pm2 save
 # 开机自启：systemd 里还没有 pm2 的单元就装一个
@@ -124,6 +131,15 @@ exit 1
 }
 
 function deploy() {
+  const token = process.env.PROMPTCUT_CLUSTER_TOKEN;
+  if (token === undefined || token === '') {
+    console.error('缺 PROMPTCUT_CLUSTER_TOKEN：远端绑 0.0.0.0，没有集群令牌不部署（生成方法见 server/docservice/main.mjs 文件头）');
+    return 1;
+  }
+  if (!checkTokenFormat(token)) {
+    console.error('PROMPTCUT_CLUSTER_TOKEN 格式不对：要 32～256 个 base64url 字符');
+    return 1;
+  }
   const p = probe();
   if (!p.ready) {
     console.log(JSON.stringify(p, null, 2));
@@ -140,7 +156,7 @@ function deploy() {
   console.log(`== scp ${sources.join(' ')} -> ${target}:${dir}/`);
   const scp = spawnSync('scp', [...baseOpts, '-r', '-q', ...sources, `${target}:${dir}/.incoming/server/`], { cwd: ROOT, stdio: 'inherit', timeout: 120_000 });
   if (scp.status !== 0) return scp.status ?? 1;
-  return sshScript(deployScript());
+  return sshScript(deployScript(token));
 }
 
 const STATUS = String.raw`
