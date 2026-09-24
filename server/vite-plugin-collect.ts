@@ -202,6 +202,7 @@ async function runDownload(root: string, job: CollectJob, body: Record<string, u
   const child = spawnPython(boot.python, args, boot.env);
   procs.set(job.id, child);
   let lastError: Record<string, unknown> | undefined;
+  let sawDone = false;
 
   const code = await runLines(child, (ev) => {
     const type = ev.event;
@@ -234,9 +235,8 @@ async function runDownload(root: string, job: CollectJob, body: Record<string, u
         url: `/@media/${encodeURIComponent(filename)}`,
       });
     } else if (type === "done") {
-      job.status = "done";
-      job.stage = "done";
-      job.percent = 100;
+      // 先记下,等进程退出后和 finishedAt 一起改:轮询方看到 done 时 finishedAt 必须已经有了,进程也已经退出
+      sawDone = true;
     } else if (type === "error") {
       lastError = ev;
     }
@@ -244,7 +244,11 @@ async function runDownload(root: string, job: CollectJob, body: Record<string, u
 
   procs.delete(job.id);
   job.finishedAt = Date.now();
-  if (job.status === "running") {
+  if (job.status === "running" && sawDone) {
+    job.status = "done";
+    job.stage = "done";
+    job.percent = 100;
+  } else if (job.status === "running") {
     job.status = "error";
     job.message = job.message ?? pickError(lastError, job.stderrTail, code);
     if (lastError?.notInstalled) job.message += "(用 collect_install 装上再试)";

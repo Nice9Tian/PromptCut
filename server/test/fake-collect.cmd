@@ -56,6 +56,9 @@ echo {"event":"progress","stage":"merge","percent":0.0}
 echo {"event":"progress","stage":"merge","percent":100.0}
 echo {"event":"item","id":"BV1FAKE00000","title":"Fake Video \u6d4b\u8bd5","path":"C:\\fake\\media\\Fake Video [BV1FAKE00000].mp4","filename":"Fake Video [BV1FAKE00000].mp4","bytes":12345,"vcodec":"h264","width":1920,"height":1080,"fps":30.0,"duration":12.5,"transcoded":false,"audio_only":false}
 echo {"event":"done","items":[],"site":"bilibili","url":"https://www.bilibili.com/video/BV1FAKE00000","warnings":[]}
+REM PROMPTCUT_FAKE_LINGER: stay alive ~2s after "done", like a busy machine
+REM where the exit lags behind the last stdout line.
+if defined PROMPTCUT_FAKE_LINGER ping -n 3 127.0.0.1 >nul
 exit /b 0
 
 :download_fail

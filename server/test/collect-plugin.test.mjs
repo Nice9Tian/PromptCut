@@ -171,6 +171,20 @@ test('download:立刻回 jobId;轮到 done 时 items 带 /@media/ 地址、perce
   assert.ok(job.finishedAt >= job.startedAt);
 });
 
+test('download:done 事件之后进程还没退,轮询看到的仍是 running;报 done 时一定带 finishedAt', async () => {
+  const fn = handlerOf();
+  process.env.PROMPTCUT_FAKE_LINGER = '1';
+  try {
+    const r = await call(fn, 'POST', '/api/collect/download', { url: 'BV1FAKE00002' });
+    const job = await waitJob(fn, r.json.jobId);
+    assert.equal(job.status, 'done', JSON.stringify(job));
+    assert.equal(typeof job.finishedAt, 'number', JSON.stringify(job));
+    assert.ok(job.finishedAt >= job.startedAt);
+  } finally {
+    delete process.env.PROMPTCUT_FAKE_LINGER;
+  }
+});
+
 test('download:清晰度不在白名单里就退回 1080;site 不认识退回 auto', async () => {
   const fn = handlerOf();
   const r = await call(fn, 'POST', '/api/collect/download', { url: 'BV1FAKE00001', quality: 999, site: 'evil' });
