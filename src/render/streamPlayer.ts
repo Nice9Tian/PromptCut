@@ -811,15 +811,25 @@ export class StreamPlayer {
     if (this.proxy) this.disposeAll();
   }
 
+  /** 平面画布的引用缓存(P4 性能修正):`sync()` 每拍对每条流都从场景根 querySelector 一遍太贵 */
+  private canvasCache = new Map<string, HTMLCanvasElement>();
+
   private canvasOf(plane: StreamPlaneRequest): HTMLCanvasElement | null {
     const root = this.root();
     if (!root) return null;
-    if (plane.clipIds.length === 1) {
-      const id = CSS.escape(plane.clipIds[0]);
-      return root.querySelector<HTMLCanvasElement>(`[data-pc-clip="${id}"] > canvas[data-pc-stream-plane]`);
-    }
-    const group = CSS.escape(plane.clipIds.join(","));
-    return root.querySelector<HTMLCanvasElement>(`canvas[data-pc-group-plane][data-pc-stream-group="${group}"]`);
+    const single = plane.clipIds.length === 1;
+    const key = plane.clipIds.join(",");
+    const hit = this.canvasCache.get(key);
+    // 还在场景里、仍挂在同一个包裹层(单卡流)/ 同一个组(组流)下就直接用
+    if (hit && hit.isConnected && root.contains(hit)
+      && (single ? hit.parentElement?.getAttribute("data-pc-clip") === key : hit.getAttribute("data-pc-stream-group") === key)) return hit;
+    const found = single
+      ? root.querySelector<HTMLCanvasElement>(`[data-pc-clip="${CSS.escape(key)}"] > canvas[data-pc-stream-plane]`)
+      : root.querySelector<HTMLCanvasElement>(`canvas[data-pc-group-plane][data-pc-stream-group="${CSS.escape(key)}"]`);
+    if (found) this.canvasCache.set(key, found);
+    else this.canvasCache.delete(key);
+    if (this.canvasCache.size > 256) this.canvasCache.clear();
+    return found;
   }
 
   /** 场景根(组流藏 / 露成员快照平面时用) */

@@ -88,6 +88,9 @@ export function createAnimationPinner(doc: Document = document): AnimationPinner
     },
     sync(nowMs: number, skip?: ReadonlySet<Element>) {
       for (const a of doc.getAnimations()) {
+        // 占位符自己的动画、已结束 / 未开始的先剔掉,别为它们往上找包裹层(P4 性能修正)
+        if (a.playState === "finished" || a.playState === "idle") continue;
+        if (isPlaceholderAnimation(a as Animation & { animationName?: string })) continue;
         /*
          * 正在自己追帧 / 被抑制的片段这一帧不钉。判据是「这条动画的目标元素往上最近的
          * [data-pc-clip] 在不在 skip 里」—— 不能按 target 本身查,卡片内部随便哪一层都能起动画。

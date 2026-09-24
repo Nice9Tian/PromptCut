@@ -430,8 +430,17 @@ export default function StageView() {
     };
 
     /** 这张卡包裹层里的占位槽位(`Stage` 挂的;没挂着回 null) */
-    const slotOf = (clipId: string): HTMLElement | null =>
-      rootRef.current?.querySelector<HTMLElement>(`[data-pc-clip="${CSS.escape(clipId)}"] > [${PLACEHOLDER_SLOT_ATTR}]`) ?? null;
+    /** 槽位引用缓存(P4 性能修正):每拍都 querySelector 一遍太贵;还挂在原包裹层下就直接用 */
+    const slotCache = new Map<string, HTMLElement>();
+    const slotOf = (clipId: string): HTMLElement | null => {
+      const hit = slotCache.get(clipId);
+      if (hit && hit.isConnected && hit.parentElement?.getAttribute("data-pc-clip") === clipId) return hit;
+      const el = rootRef.current?.querySelector<HTMLElement>(`[data-pc-clip="${CSS.escape(clipId)}"] > [${PLACEHOLDER_SLOT_ATTR}]`) ?? null;
+      if (el) slotCache.set(clipId, el);
+      else slotCache.delete(clipId);
+      if (slotCache.size > 512) slotCache.clear();
+      return el;
+    };
     const NO_CLIPS: ReadonlySet<string> = new Set();
     /**
      * 按这一拍的状态切占位符(rendering.md「兜底顺序」;T1~T4 的判据在 `placeholderHost.placeholderWanted`)。
@@ -1825,7 +1834,11 @@ export default function StageView() {
        */
       async setSnapshots(patch, opts = {}) {
         const bytes = applySnapshots(patch, !!opts.reset);
-        commitPlanes();
+        /*
+         * 播放中不单独提交(P4 性能修正):节拍循环下一拍的 `flushSync(setT)` 读的就是 `ref.current.snapshots`,
+         * 海报快照跟着那一次提交一起上屏,晚到最多一拍。单独再 `flushSync` 一次等于每次投递多一整次 React 提交。
+         */
+        if (!ref.current.beatRunning) commitPlanes();
         return { ok: true as const, bytes };
       },
     };
