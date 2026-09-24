@@ -66,6 +66,50 @@ passed 19          （退出码 0）
 - `node scripts/verify-determinism.mjs --url "http://127.0.0.1:5490/?export=1"` → 退出码 0，`Total Frames: 1800 / Identical: 1800 / Different: 0`。
 - `PC_FRAME_TEST_URL=http://127.0.0.1:5490 node scripts/verify-unified-frames.mjs` → 退出码 0，`PASS: no video during B; all HTML frames; exact video seek; random replay; cache hits; cumulative C equals A; streamed video contains all 10 frames.`
 
+## 第二轮：契约第 10 节的补修（主会话裁定）
+
+| 条 | 改动 | 提交 |
+|---|---|---|
+| 无头实例不挂文档服务 | `vite.config.ts`：`...(headless ? [] : [docservicePlugin()])` | `7f724cd` |
+| 日志不经 HTTP 暴露 | `vite.config.ts` 的 `fsDeny` 加 `"**/out/docservice/**"` | `7f724cd` |
+| 仓库根不出现 `data/` | `.gitignore` 只加一行 `/data/`（`main.mjs` 缺省仍是 `../../data`） | `7f724cd` |
+| 第 10 条：文件名统一编码 | `store/index.mjs`：`[A-Za-z0-9._-]` 原样，其余每个 UTF-8 字节写成 `%XX`（大写），`%` 也编码；去掉原来「保留设备名首字母编码」的特例（本机 Windows 11 实测 `CON.ndjson`、`nul.ndjson`、`COM1.ndjson` 都是普通文件）；读写同一映射；路径穿越照旧拒绝 | `f514d30` |
+
+补换行一条确认已有：本进程第一次往某文件追加前，文件末尾不是换行就先补一个（`store.repair`）。
+
+### 第二轮验证
+
+- `npx tsc -b --force` → 退出码 0。
+- `npm test` → 退出码 0，`tests 2309 / pass 2308 / fail 0 / skipped 1`（同上，5190 那条）。
+- `git check-ignore -v data/x.ndjson` → `.gitignore:4:/data/`。
+- 存储映射自测（scratch `store-map-test.mjs`，退出码 0）：`a:b`→`a%3Ab.ndjson`、`x%y`→`x%25y`、`卡`→`%E5%8D%A1`、`a b`→`a%20b`、`..`→`...ndjson`，读写往返一致；没有生成文件 `a`（没写进备用数据流）；`projects/a/b`、`projects/..\x`、`../x`、`projects/`、`/x`、`Projects/x`、含 NUL 的名字，读写都抛 `TypeError`；半行无换行时，新实例追加前补换行，读回 `[1, 2]`。模块自测 `c63-selftest.mjs` 仍 19/19。
+- **fsDeny 实测**（正常模式，5490）：磁盘上 `out/docservice/content/card-source.ndjson` 434 字节，下面几种取法都是 **403**、响应里没有日志内容：
+  - `/out/docservice/content/card-source.ndjson`
+  - `/@fs/C:/Users/admin/Documents/PromptCut/.worktrees/c6-3-impl/out/docservice/content/card-source.ndjson`（以及加 `?raw`）
+  - `/out/docservice/content/card-source.ndjson?import`
+  - 改大小写的 `/OUT/DocService/...`、`/@fs/.../OUT/docservice/...`
+  - `/out/docservice/projects/live-1790272145851.ndjson`
+  - 经舞台端口 `http://127.0.0.1:5491/out/docservice/...`
+
+  `/out/docservice/projects/`（目录）回 200，但内容和随便一个不存在路径一样是 SPA 的 `index.html`，不含文件名。对照：`/package.json` 200；`/api/docservice/healthz` 仍是 JSON。
+- **无头实例实测**（`PROMPTCUT_HEADLESS=1`，5490）：启动日志里 `[docservice]` 0 行；`/api/docservice/healthz` 不再是 JSON，落到 SPA 回退的 HTML；`ws://127.0.0.1:5490/docservice` 3 秒内连不上。
+
+### 新发现：没人接的 WebSocket 升级被客户端重置时，dev server 会整个退出（已有问题，不是本次引入）
+
+无头实例实测时 dev server 崩了：`Error: read ECONNRESET … Unhandled 'error' event`，退出码 1。复现脚本（scratch `upgrade-rst.mjs` + `upgrade-rst-driver.mjs`）向 5490 发一个升级请求，1 秒后 RST，再看服务器还在不在：
+
+| 情形 | RST 前的回复 | RST 之后 |
+|---|---|---|
+| 无头 `/docservice` | 无 | 服务器没了（`ECONNREFUSED`） |
+| 正常模式 `/foo` | 无 | 服务器没了（`ECONNREFUSED`） |
+| 正常模式 `/docservice` | `101 Switching Protocols` | 服务器仍在（HTTP 200） |
+
+（驱动脚本里「vite process alive: true」一栏不准：它用 `execFileSync` 阻塞了事件循环，读不到子进程退出；以 `ECONNREFUSED` 为准。）
+
+原因：vite 的 HMR 在 `httpServer` 上挂着 `upgrade` 监听，对不是自己的路径直接 return，既不回包也不给 socket 挂 `error` 监听；Node 把升级交给监听者后不再兜底，对端一 RST 就是未处理的 `error`，进程退出。正常模式下任何非 HMR、非 `/docservice` 的路径都能这样打崩编辑器；C6.3 之前 `/docservice` 本身也是这样。按契约第 4 节，挂载模式「别的路径一概不碰」，所以文档服务不该替别的路径兜底，我没改。
+
+它对 M5b 有直接影响：页面接入后，在无头实例里打开的页面会去连 `/docservice`，没人接、握手挂住；页面一刷新或关闭，无头实例就退出。建议另立一项：在插件（或一个独立的小插件）里给**所有**升级的 socket 先挂一个空的 `error` 监听；另外无头实例里 `/docservice` 明确回 404 或 503，别让握手挂着。这要改插件行为和无头实例的路由，需要主会话定。
+
 ## 契约疑点与按最保守读法做的决定
 
 1. **`listen()` 抛错的方式**：做成同步 `throw`（契约写「抛错」）。测试若用 `assert.rejects` 会不过，只能二选一。
@@ -75,10 +119,12 @@ passed 19          （退出码 0）
 5. **内容库的 `actor`**：契约没写形状，照项目版本模块取 `{ userId, session }`；`content.put` 接受可选 `session`（规则同项目：1～128 个字符，不合法回 `bad-message`）。不带时 `session: null`。
 6. **`session: null`**：项目与内容都当作没给，不回 `bad-message`（契约的 `session ?? null`）。
 7. **两个新模块不加 `health()` 字段**：契约没要求，也避免与现有字段名冲突；诊断走 `describe()`（项目：各项目的 rev/digest/at；内容：各 kind 的键数、watch 连接数）。
-8. **Windows 文件名不分大小写**：`projectId` 允许大小写，只差大小写的两个项目会落进同一个文件。保留契约写的 `<projectId>.ndjson` 直观文件名（测试方可能按这个路径找日志），改由模块回放时按记录里的 `projectId` / `kind` 过滤，结果仍正确。`:` 等 Windows 不许的字符写成 `%XX`，保留设备名（`CON`、`NUL`……）首字母写成 `%XX`。
+8. **Windows 文件名不分大小写**：`projectId` 允许大小写，只差大小写的两个项目会落进同一个文件。文件名照契约第 10 节的统一编码（大小写原样保留），由模块回放时按记录里的 `projectId` / `kind` 过滤，结果仍正确（主会话已认可）。
 9. **半行的处理**：读时丢弃并记日志，不截断文件；下一次追加前补换行。坏行会一直留在文件里、每次回放都记一条 `store.bad-line`。
 
 ## 需要主 Agent 决定或越界未做的
+
+第 1～3 条已按契约第 10 节在第二轮修掉，保留原文备查；第 4、5 条和上面「新发现」仍待定。
 
 1. **无头实例共用日志目录**：`scripts/headless.mjs` 起的无头实例也用 `vite.config.ts`，项目根相同，会和用户那份编辑器同时挂一份本地文档服务、往同一个 `out/docservice` 追加，两边各自在内存里发号，`projectRev` 会冲突。契约只说「预渲染进程不挂」。建议：无头实例（`PROMPTCUT_HEADLESS=1`）不挂，或用单独目录。需要改插件的行为，我没自行决定。
 2. **日志文件能被 vite 静态服务取到**：`vite.config.ts` 的 `fsDeny` 不含 `out/docservice`，`GET /out/docservice/content/card-source.ndjson` 会原样返回（同一文件头注释说过 `out/cookies` 的先例）。`npm run dev` 绑 `0.0.0.0` 时局域网设备能读到卡片源码和项目摘要。建议在 `fsDeny` 里加 `**/out/docservice/**`；本任务 `vite.config.ts` 只许注册插件，没改。
