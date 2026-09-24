@@ -1668,3 +1668,15 @@ backpressureCloses,   // 累计因背压关闭的连接数
 - 既有测试，G 节与 M5a 的那些都一个字不改、全过。
 
 **守门**：R2 照旧，`router.mjs` 里不出现业务词。频道前缀是模块给的字符串，核心不认识任何具体前缀。
+
+### H.7 定稿后的补充细则（2026-09-25，主 Agent 按实现方疑点裁定）
+
+1. **合并键的接法**：队列的 `send` 直接接在组装层的 `service.send` 上。真队列挂着的时候，`service.send` 先问队列模块的 `outbound(connId, message)` 要合并键：
+   - 返回一个字符串：这条消息按这个合并键发出；
+   - 返回 `null`：这条消息不发。摘要切换时，模块要拦下替客户端发的那条 `queue.watch` 的回包，用的就是这个。
+   合并键的取值只写在队列模块里，核心不认识。
+2. **摘要的数据来源**：`topPriority` 与 `openByFingerprint` 由队列模块在任务发布时记下，以队列回复里新建成功的任务为准。现在的 `q.describe()` 不带这两项。以后改队列本体时，可以让 `describe()` 直接给出。
+3. **摘要不列零计数项目**：`projects` 只列 open 或 claimed 大于 0 的项目。
+4. **`drain` 可能重复**：`ws.mjs` 在写完、缓冲归零时补发一次 `drain`，socket 自己的高水位是 16 KiB，比测试用的小值大。核心要能容忍重复的 `drained(connId)`。
+5. **摘要切换的实现**：切到摘要时，替客户端发的是 `queue.watch { projects: [] }`（队列收空数组）。它回的 `queue.snapshot` 由模块用专门的 `reqId` 拦下。
+6. **两处 `channels` 形状不同**：`/healthz.channels` 是数字，`describe().channels` 是对象，照 G.12 第 5 条的先例。
