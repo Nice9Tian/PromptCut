@@ -6,13 +6,14 @@ import { captureCode, frameCode, invalidateFrameCode } from "./frame-code.mjs";
 import { FramePipeline } from "./frame-pipeline.mjs";
 import { unpackFrameArchive } from "./frame-archive.mjs";
 import { overLimit } from "./http-guard.mjs";
-import { prerenderState } from "./prerender-client.mjs";
+import { prerenderState, proxyToPrerender } from "./prerender-client.mjs";
 import { isPrerender } from "./render-role.mjs";
 import { ensureMirror } from "./vite-plugin-mirror";
 
 import { latestPlayhead, ensureMirror as ensureMirrorVersion } from "./vite-plugin-mirror";
 import { snapshotTier } from "./snapshot-store.mjs";
 import { kindOfTier, wireSnapshotKey } from "./ready-index.mjs";
+import { mediaSourceOf } from "./vision/ffmpeg-frames";
 
 const services = new Map<string, FramePipeline>();
 function requestSignal(req: any, res: any) {
@@ -43,6 +44,8 @@ export function frameService(root: string, origin: string) {
       interactive: isPrerender,
       /** C4:`wanted` 从镜像插件读(frame-pipeline 是 .mjs,镜像插件是 .ts) */
       playhead: () => latestPlayhead(),
+      /** 没有内容哈希的素材打戳时向素材服务发 HEAD 的地址(基址按 asset-client.ts 定,不读素材目录) */
+      mediaUrl: (m: any) => mediaSourceOf(m),
     });
     services.set(root, service);
     /*
@@ -115,10 +118,16 @@ export function framesPlugin(): Plugin {
      * (pinned 架构 4:Agent 的 query 跑预渲染进程;用户交互的 query 走自己的离屏舞台,不走这里)。
      * body `{ session, localRev, t, clipIds? }`,项目来路和 `/preload` / `/playback` / `/see`
      * 同一套(A7 的镜像前奏,迁移期仍收 `project`)。
-     * 和 `/playback` 一样**两边都能答**:编辑器进程手里也有 FramePipeline,不另开一层转发。
+     *
+     * **只在预渲染进程里答**(T1a 审查 #14;cloud-task.md I4(c):`/api/cards/layout` 只服务 Agent 的
+     * `get_layout`,走 `'agent'` 角色)。编辑器进程收到就原样转给预渲染进程,转不过去回
+     * `503 NO_AGENT_LANE` —— 以前这里直接调本进程的 `FramePipeline.layout`,会在编辑器这一侧开查询 Chrome。
+     * 预渲染进程里经 `runAgentTask` 借 agent lane 的 bakery,和 `see_frames` 的 agent 批排同一条队。
      */
     server.middlewares.use("/api/cards/layout", (req, res, next) => {
       if (req.method !== "POST") return next();
+      if (!isPrerender) return proxyToPrerender(req, res, { unavailable: { status: 503, code: "NO_AGENT_LANE",
+        error: "编辑器进程没有 Agent lane,/api/cards/layout 只在预渲染进程里答,而预渲染进程现在够不着" } });
       const origin = `http://127.0.0.1:${(server.httpServer?.address() as any)?.port}`;
       const json = (status: number, data: unknown) => { res.statusCode = status; res.setHeader("Content-Type", "application/json"); res.end(JSON.stringify(data)); };
       let body = "", over = false;
@@ -289,12 +298,10 @@ export function framesPlugin(): Plugin {
             const compositing = control.capabilities?.compositing;
             const tier = snapshotTier(control.capabilities);
             if (compositing !== "independent" || tier !== "shared") return json(200, { ok: true, stored: false, reason: "NOT_INDEPENDENT" });
-            await service.snapshots().writeSnapshot({ tier: "shared", key: control.snapshotKey, localFrame, html });
-            // A3c:超限的探针帧同样不进索引
-            if (!service.snapshots().noteSnapshotSize({ clipId, key: control.snapshotKey, localFrame, html, capabilities: control.capabilities })) {
-              return json(200, { ok: true, stored: true, indexed: false, reason: "OVER_LIMIT" });
-            }
-            const index = await service.snapshots().updateIndex({ tier: "shared", key: control.snapshotKey, frames: [localFrame] });
+            // #9:写帧、判体积、并 index 一步做。A3c:超限的探针帧同样不进就绪索引(记进 `oversize`,R6-14)
+            const index = await service.snapshots().commitSnapshots({ tier: "shared", key: control.snapshotKey, clipId,
+              capabilities: control.capabilities, items: [{ localFrame, html }] });
+            if (!index.written.length) return json(200, { ok: true, stored: true, indexed: false, reason: "OVER_LIMIT" });
             service.readyIndex.setLayer({ clipId, kind: kindOfTier(tier)!, key: wireSnapshotKey(tier, entry.key, control.snapshotKey)!, ranges: index.frames });
             return json(200, { ok: true, stored: true, indexed: true, count: index.count });
           } catch (error: any) {

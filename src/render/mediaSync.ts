@@ -205,7 +205,9 @@ export interface SlotsPlan {
 export function planSlots(input: SlotsInput): SlotsPlan {
   const { slots, shown, cur, next, t, playing } = input;
   const load = slots.map((s) => s.clip);
-  const holding = (id: string) => load.findIndex((c) => c?.id === id);
+  // 认槽位要 id **和** url 都相同:同一片段换档(`mediaTier.ts` 的 playbackUrl 换了地址)就是新的一段,
+  // 得重新装、重新等出画(A1「换档 = 槽位级的换段」);只比 id 的话新地址永远装不进去
+  const holding = (c: SlotClip) => load.findIndex((x) => x?.id === c.id && x?.url === c.url);
   const sameUrl = (url: string) => {
     const i = load.findIndex((c) => c?.url === url);
     return i < 0 ? null : i;
@@ -214,12 +216,13 @@ export function planSlots(input: SlotsInput): SlotsPlan {
   // ① 当前段放哪个槽位
   let active: number | null = null;
   if (cur) {
-    active = holding(cur.id);
+    active = holding(cur);
     if (active < 0) {
       if (!playing) {
         // 暂停时随手拖到哪算哪:只用正在显示的那个,和原来一个元素的行为一样。
-        // 没显示着的就挑装着同一个文件的(不用重新加载),都没有就 0 号
-        active = shown ?? sameUrl(cur.url) ?? 0;
+        // 没显示着的就挑装着同一个文件的(不用重新加载),都没有就 0 号。
+        // 例外:显示着的正是这一段的上一档(换档)—— 新档装进另一个,显示着的先顶着,出画了再换
+        active = shown !== null && load[shown]?.id === cur.id ? 1 - shown : (shown ?? sameUrl(cur.url) ?? 0);
       } else {
         // 播放中却没提前装好:装进另一个,正在显示的那个先拿末帧顶着(见 ③)
         active = shown !== null ? 1 - shown : (sameUrl(cur.url) ?? 0);
@@ -231,9 +234,13 @@ export function planSlots(input: SlotsInput): SlotsPlan {
   // ② 这一帧显示哪个
   let show: number | null = null;
   if (cur && active !== null) {
-    const ready = slots[active].clip?.id === cur.id && slots[active].ready;
+    const ready = slots[active].clip?.id === cur.id && slots[active].clip?.url === cur.url && slots[active].ready;
     const held = shown !== null && shown !== active ? slots[shown].clip : null;
-    if (ready || !playing || t - cur.start >= NOT_READY_GRACE_SEC) show = active;
+    if (ready) show = active;
+    // 同一片段换档(同一个 id、换了地址):新档出画之前一直让上一档顶着,暂停、播放都一样 ——
+    // A1「换档时画面不跳」。url 从不变的时候不会走到这里(同 id 同 url 的槽位 holding 已经认出来了)
+    else if (held && held.id === cur.id) show = shown;
+    else if (!playing || t - cur.start >= NOT_READY_GRACE_SEC) show = active;
     // 新的一段还没出画:首尾相接的话,让上一段停在最后一帧顶一下,比闪黑或闪一帧别处的旧画面好
     else if (held && Math.abs(cur.start - held.end) < TOUCH_SEC) show = shown;
     // 接不上(中间有空档、或者是跳过来的):和原来新建播放器一样先空着,等它出画
@@ -244,7 +251,7 @@ export function planSlots(input: SlotsInput): SlotsPlan {
   //    两个解码器一起推翻重来。正在顶班的那个不能拿去装,等新的一段出画再说
   let preload: number | null = null;
   if (playing && next && next.start > t && next.start - t <= PREROLL_SEC) {
-    let p = holding(next.id);
+    let p = holding(next);
     if (p < 0) p = active !== null ? 1 - active : (sameUrl(next.url) ?? 0);
     if (p !== active && p !== show) {
       load[p] = next;

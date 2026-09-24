@@ -5,6 +5,7 @@ import type { FilterDef } from "../kernel/filters.mjs";
 import { shouldMuteNativeAudio } from "../audio/cardAudio";
 import { driveMedia, filterOf, lastSeekAt, releaseMedia, targetTimeOf } from "./mediaDrive";
 import { planSlots, type SlotClip } from "./mediaSync";
+import { playbackUrl } from "./mediaTier";
 
 /**
  * 一条序列的画面层(视频 / 图片)。E7 第 1 条:素材层搬进舞台,由 `FrameScene` 的 `live` 变体渲。
@@ -23,6 +24,8 @@ import { planSlots, type SlotClip } from "./mediaSync";
  *  2. **不 import `src/editor/timeline/useScrub`**:`scrubbing` 从 prop 来(父页经 `setScrubbing`
  *     下发)。两条都是为了舞台 bundle 不带编辑器模块。
  */
+
+const NO_HASHES: readonly string[] = [];
 
 export interface VideoLayer {
   clip: TrackClip;
@@ -43,10 +46,14 @@ export interface Slot {
 }
 const emptySlot = (): Slot => ({ clip: null, full: null, ready: false, token: 0, opacity: 1 });
 
-/** 进槽位的只有视频段;图片段、没地址的段不进 */
-function slotClipOf(clip: TrackClip, media: MediaAsset): SlotClip | null {
+/**
+ * 进槽位的只有视频段;图片段、没地址的段不进。
+ * `url` 经换档判据(`mediaTier.ts` 的 `playbackUrl`,T1a 审查 #5):同一片段换档 = url 变了 = 新的一段,
+ * `planSlots` 按「id 和 url 都相同」认槽位。集合为空时就是 `media.url`,和以前一样。
+ */
+function slotClipOf(clip: TrackClip, media: MediaAsset, localHashes: readonly string[]): SlotClip | null {
   if (isImageMedia(media) || !media.url) return null;
-  return { id: clip.id, url: media.url, start: clip.start, end: clip.end, offset: clip.mediaOffset ?? 0 };
+  return { id: clip.id, url: playbackUrl(media, localHashes), start: clip.start, end: clip.end, offset: clip.mediaOffset ?? 0 };
 }
 
 /** 这个素材时刻属于这一段(前后放 0.1s:出画的帧时刻比目标早最多一帧) */
@@ -66,6 +73,7 @@ export function VideoTrack({
   stage,
   filters,
   onMediaFrame,
+  localHashes = NO_HASHES,
 }: {
   project: Project;
   /** 项目的滤镜库(片段的 clip.filter 引用其中一条) */
@@ -87,6 +95,11 @@ export function VideoTrack({
    * 才敢互换)。舞台把它接到 `postStageEvent({ type: 'mediaReady' })` 上;编辑器不传。
    */
   onMediaFrame?: (mediaTime: number) => void;
+  /**
+   * 当前连接的素材服务报 `complete` 的哈希(A1 的 `localHashes`),换档判据只看它。
+   * 缺省空集合 = 一律原片(`media.url`)。来源(主文档每 2 秒轮询 `GET media/<hash>/chunks`)在第 6 步。
+   */
+  localHashes?: readonly string[];
 }) {
   const el0 = useRef<HTMLVideoElement>(null);
   const el1 = useRef<HTMLVideoElement>(null);
@@ -96,8 +109,8 @@ export function VideoTrack({
   // 出画回调在渲染之外到达:暂停时没有播放循环推着重渲,得自己敲一下,显示才换得过去
   const [, bump] = useReducer((n: number) => n + 1, 0);
 
-  const curV = cur ? slotClipOf(cur.clip, cur.media) : null;
-  const nextV = next ? slotClipOf(next.clip, next.media) : null;
+  const curV = cur ? slotClipOf(cur.clip, cur.media, localHashes) : null;
+  const nextV = next ? slotClipOf(next.clip, next.media, localHashes) : null;
   const plan = planSlots({ slots: slots.current, shown: shownRef.current, cur: curV, next: nextV, t, playing });
   const fullOf = (i: number): TrackClip | null => {
     const id = plan.load[i]?.id;
@@ -126,7 +139,8 @@ export function VideoTrack({
     plan.load.forEach((c, i) => {
       const s = slots.current[i];
       const el = els[i].current;
-      if (!el || !c || s.clip?.id === c.id) return;
+      // 同一片段换档(url 变了)也是换了一段:冷却清掉、重新等出画;播放位置由下面的 driveMedia 对齐回去
+      if (!el || !c || (s.clip?.id === c.id && s.clip?.url === c.url)) return;
       // 换了一段:之前的出画不算数了。src 由 React 在这之前换好(同一个文件就不换,解码器和缓冲接着用)
       s.clip = c;
       s.full = fullOf(i);
@@ -223,7 +237,7 @@ export function VideoTrack({
       })}
       {image && (
         <div key={image.clip.id} data-pc-clip={image.clip.id} data-pc-media="" style={boxOf(image.clip)}>
-          <img src={image.media.url} alt="" style={{ display: "block", width: "100%", height: "100%", objectFit: "cover", opacity: image.opacity, filter: filterOf(image.clip, filters, t) }} />
+          <img src={playbackUrl(image.media, localHashes)} alt="" style={{ display: "block", width: "100%", height: "100%", objectFit: "cover", opacity: image.opacity, filter: filterOf(image.clip, filters, t) }} />
         </div>
       )}
       {uploading && (

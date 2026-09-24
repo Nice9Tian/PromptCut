@@ -82,9 +82,21 @@ export async function prerenderPost(pathname, body, { timeoutMs = 180000, signal
 /**
  * 把这个请求原样转给预渲染(方法、路径、头、body、回应都照搬)。
  * 用 originalUrl:connect 按前缀挂中间件时会把 req.url 的前缀剥掉。
+ *
+ * `unavailable`:够不着预渲染进程(没就绪、连不上)时回什么。缺省是通用的 503 / 502
+ * `PRERENDER_UNAVAILABLE`;只服务 Agent 的路由(`/api/cards/layout`)传
+ * `{ status: 503, code: "NO_AGENT_LANE" }` —— 编辑器进程没有 Agent lane,转不过去就如实说,
+ * 不在编辑器这一侧自己渲(T1a 审查 #14)。
  */
-export function proxyToPrerender(req, res) {
-  whenPrerenderReady(30000).then((base) => {
+export function proxyToPrerender(req, res, { unavailable = null, waitMs = 30000 } = {}) {
+  const fail = (status, error) => {
+    if (res.headersSent) return res.destroy();
+    res.statusCode = unavailable?.status ?? status;
+    res.setHeader("Content-Type", "application/json; charset=utf-8");
+    res.end(JSON.stringify({ ok: false, code: unavailable?.code ?? "PRERENDER_UNAVAILABLE", retryable: true,
+      error: unavailable?.error ? `${unavailable.error}（${error}）` : error }));
+  };
+  whenPrerenderReady(waitMs).then((base) => {
     const target = new URL(req.originalUrl || req.url, base);
     const headers = { ...req.headers, host: target.host };
     // 同源请求本来就不带 Origin;带了也是编辑器那一端的,预渲染按放行名单认它
@@ -92,20 +104,9 @@ export function proxyToPrerender(req, res) {
       res.writeHead(r.statusCode || 502, r.headers);
       r.pipe(res);
     });
-    up.on("error", (e) => {
-      if (res.headersSent) return res.destroy();
-      res.statusCode = 502;
-      res.setHeader("Content-Type", "application/json; charset=utf-8");
-      res.end(JSON.stringify({ ok: false, code: "PRERENDER_UNAVAILABLE", retryable: true,
-        error: `连接预渲染服务失败：转发 ${target.pathname} 时连接被关闭（${e.code || e.message}）。请稍后重试。` }));
-    });
+    up.on("error", (e) => fail(502, `连接预渲染服务失败：转发 ${target.pathname} 时连接被关闭（${e.code || e.message}）。请稍后重试。`));
     // 用户那边断了就别让预渲染接着干:断开会传过去,预渲染按断开摘掉排队的活
     res.on("close", () => { if (!res.writableEnded) up.destroy(); });
     req.pipe(up);
-  }, (e) => {
-    res.statusCode = 503;
-    res.setHeader("Content-Type", "application/json; charset=utf-8");
-    res.end(JSON.stringify({ ok: false, code: "PRERENDER_UNAVAILABLE", retryable: true,
-      error: `连接预渲染服务失败：${e.message || e}` }));
-  });
+  }, (e) => fail(503, `连接预渲染服务失败：${e.message || e}`));
 }

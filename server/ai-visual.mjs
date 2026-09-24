@@ -18,6 +18,47 @@ async function loadPng() {
   return pngLib;
 }
 
+/** Windows 上对方开着目标文件时改名会 EPERM,最多重试这么多次(见 atomicWrite) */
+const RENAME_ATTEMPTS = 40;
+
+/**
+ * 存储目录由几个进程共用(T1a 审查 #13):编辑器进程、预渲染进程(拆分时的 `user` / `agent` 两个也一样)
+ * 都从同一个 `PROMPTCUT_EXPORT_DIR`(缺省 `<root>/out`)下的 `ai-visual/` 读写 —— 模型的 `get_gif` 在
+ * 一个进程里写的渲染规格和记录,由另一个进程读得到、在那里渲
+ * (cloud-task.md 决议 12:模型的 `get_gif` 在 `'agent'` 进程里只写 Spec,用户点开的 GET 和模型要的 `/render`
+ * 都由 `user` 进程渲像素)。
+ *
+ * 所以这里的每一次写都**先写临时文件再改名**:另一个进程可能正在读同一个文件,直接 `writeFile`
+ * 会让它读到半截 JSON(`readJson` 回 null,GET 就成了 404)或半张 GIF。
+ * Windows 上对方刚好开着文件时改名会短暂 EPERM / EBUSY / EACCES,重试(最多 `RENAME_ATTEMPTS` 次,见函数体)。
+ */
+export async function atomicWrite(file, data) {
+  await fsPromises.mkdir(path.dirname(file), { recursive: true });
+  const ext = path.extname(file);
+  // 临时名保留原扩展名:ffmpeg 按扩展名选输出格式(encodeGif 也走这里起临时名)
+  const temp = `${file.slice(0, file.length - ext.length)}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp${ext}`;
+  try {
+    // `data` 是函数时由它把内容写到临时名上(ffmpeg 直接输出到那里)
+    if (typeof data === 'function') await data(temp);
+    else await fsPromises.writeFile(temp, data);
+  } catch (error) {
+    await fsPromises.rm(temp, { force: true }).catch(() => {});
+    throw error;
+  }
+  // 对方一直在读(每次开着文件几毫秒)时,改名只能落在它两次读之间的空档里:多试几次、每次随机等 5～25 ms,
+  // 不和读者的节奏同步;最多约 1 秒。固定退避 5 次(约 0.3 秒)在连续读的另一个进程面前实测会耗尽。
+  for (let attempt = 0; ; attempt++) {
+    try { await fsPromises.rename(temp, file); return; }
+    catch (error) {
+      if (attempt >= RENAME_ATTEMPTS || !['EPERM', 'EBUSY', 'EACCES'].includes(error?.code)) {
+        await fsPromises.rm(temp, { force: true }).catch(() => {});
+        throw error;
+      }
+      await new Promise(resolve => setTimeout(resolve, 5 + Math.random() * 20));
+    }
+  }
+}
+
 /** 和拼图的 tile=4x2 对上，一张图正好 8 格；帧数少可以保证渲染快。 */
 export const GIF_FRAMES = 8;
 
@@ -160,17 +201,17 @@ export async function saveImage(dir, { mime, base64 }) {
   try {
     await fsPromises.stat(file);
   } catch {
-    await fsPromises.writeFile(file, buffer);
+    await atomicWrite(file, buffer);
   }
   return { name, url: '/api/ai/visual/file/' + name };
 }
 
-/** 
- * 确保存储目录存在后写入 JSON，封装通用操作。
+/**
+ * 确保存储目录存在后写入 JSON，封装通用操作。先写临时文件再改名(见 `atomicWrite`):
+ * 另一个进程同时读这份规格 / 记录时,要么读到旧的完整一份,要么读到新的完整一份。
  */
 export async function writeJson(dir, name, data) {
-  await fsPromises.mkdir(dir, { recursive: true });
-  await fsPromises.writeFile(path.join(dir, name), JSON.stringify(data));
+  await atomicWrite(path.join(dir, name), JSON.stringify(data));
 }
 
 /** 
@@ -285,16 +326,17 @@ export async function encodeGif({ ffmpeg, frames, outGif, outGrid, width = 480, 
     const argsGif = [
       '-y', '-framerate', String(fps), '-i', 'f%02d.png',
       '-vf', `${crop ? `crop=${crop.w}:${crop.h}:${crop.x}:${crop.y},` : ''}scale=${width}:-2:flags=lanczos,split[a][b];[a]palettegen[p];[b][p]paletteuse`,
-      '-loop', '0', outGif
     ];
-    await runFfmpeg(argsGif);
-
     const argsGrid = [
       '-y', '-framerate', String(fps), '-i', 'f%02d.png',
       '-vf', `scale=${width}:-2,tile=4x2:padding=4:margin=4:color=0x111318`,
-      '-frames:v', '1', outGrid
+      '-frames:v', '1'
     ];
-    await runFfmpeg(argsGrid);
+    // 先拼图、后动图,两个都经临时名改名到位(#13):别的进程按「gif 和 grid 都在」判缓存命中,
+    // gif 最后一个出现,见到它就说明两份都已经完整落盘,不会读到 ffmpeg 写了一半的文件。
+    // ffmpeg 的工作目录是临时目录,输出一律给绝对路径
+    await atomicWrite(path.resolve(outGrid), temp => runFfmpeg([...argsGrid, temp]));
+    await atomicWrite(path.resolve(outGif), temp => runFfmpeg([...argsGif, '-loop', '0', temp]));
 
     return { gif: outGif, grid: outGrid };
   } finally {

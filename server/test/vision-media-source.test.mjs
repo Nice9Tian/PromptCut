@@ -33,6 +33,7 @@ compile('server/asset-client.ts', 'asset-client.mjs');
 const frames = await import(compile('server/vision/ffmpeg-frames.ts', 'ffmpeg-frames.mjs', [
   ['from "../vision-compose.mjs"', `from "${pathToFileURL(path.join(ROOT, 'server', 'vision-compose.mjs')).href}"`],
   ['from "../asset-client"', 'from "./asset-client.mjs"'],
+  ['from "../media-stamp.mjs"', `from "${pathToFileURL(path.join(ROOT, 'server', 'media-stamp.mjs')).href}"`],
 ]));
 
 const h = 'ab'.repeat(32);

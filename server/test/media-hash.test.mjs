@@ -250,3 +250,25 @@ test('/api/media/local 只报本地真有的哈希', async () => {
   const data = await res.json();
   assert.deepEqual(data.hashes, [BODY_HASH]);
 });
+
+test('HEAD 带 Content-Length 和 Last-Modified(帧管线给没有哈希的素材打戳用,server/media-stamp.mjs)', async () => {
+  // 迁移期按文件名存的素材
+  const name = 'legacy-clip.mp4';
+  const file = path.join(mediaDir, name);
+  fs.writeFileSync(file, BODY);
+  const when = new Date('2026-09-20T08:00:00Z');
+  fs.utimesSync(file, when, when);
+  const head = await fetch(`${origin}/@media/${name}`, { method: 'HEAD' });
+  assert.equal(head.status, 200);
+  assert.equal(head.headers.get('content-length'), String(BODY.length));
+  assert.equal(head.headers.get('last-modified'), when.toUTCString());
+  assert.equal((await head.arrayBuffer()).byteLength, 0, 'HEAD 不带 body');
+  // 老 .proc 的绝对路径:/api/media/file?path= 也答 HEAD(路径在素材目录里才放行)
+  const byPath = await fetch(`${origin}/api/media/file?path=${encodeURIComponent(file)}`, { method: 'HEAD' });
+  assert.equal(byPath.status, 200);
+  assert.equal(byPath.headers.get('last-modified'), when.toUTCString());
+  // GET 同样带 Last-Modified
+  const get = await fetch(`${origin}/@media/${name}`);
+  assert.equal(get.headers.get('last-modified'), when.toUTCString());
+  await get.arrayBuffer();
+});

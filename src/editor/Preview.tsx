@@ -28,6 +28,14 @@ import { createSharedGl, type SharedGl } from "../render/gl/glParent";
 import { resolveGlRoute } from "../render/costDevice.mjs";
 
 /**
+ * A1 的 `localHashes`:**当前连接的素材服务**报 `complete` 的哈希集合,换档判据只看它
+ * (`src/render/mediaTier.ts` 的 playbackUrl;`docs/semantics/architecture/asset-storage.md`「同步状态只问素材服务」)。
+ * 来源 —— 主文档每 2 秒轮询 `GET media/<hash>/chunks` —— 在第 6 步(`docs/plan/cloud-task.md` A1「换档判据」),
+ * 这里先留空集合:空集合 = 一律原片,舞台和主文档的声音都和接换档之前一样。
+ */
+const LOCAL_HASHES: readonly string[] = [];
+
+/**
  * 中央预览:视频层 + 动效渲染面,按容器缩放。播放循环也在这里(rAF 推进 store.t)。
  *
  * 动效不在这个文档里播:它跑在下面那个 ?stage=1 的 iframe(渲染面)里,时间被接管,
@@ -496,8 +504,8 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
       swapRoles,
       // 2D 预览**不加 proxy=1**(见下面 iframe 那段注释),所以互换后重发的也是 false
       proxy: () => false,
-      // A1 的换档那条路还没有消费方(R3 只把口子留在签名上)
-      localHashes: () => [],
+      // A1 的换档:舞台的 VideoTrack / 像素映射素材按它选档(T1a 审查 #5);来源见 LOCAL_HASHES
+      localHashes: () => [...LOCAL_HASHES],
     });
     return () => setSwapHost(null);
   }, [dual, swapRoles]);
@@ -1055,7 +1063,7 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
           <div style={{ transform: `scale(${scale})`, transformOrigin: "0 0", position: "absolute", left: 0, top: 0, ...themeStyle(project.themeId) }}>
             <div style={{ position: "relative", width: project.width, height: project.height }}>
               {/* K4 的 `mediaStalled`:舞台连着两拍来得比 40 ms 还慢时,音频跟着停一下 */}
-              <MediaLayers project={project} t={t} playing={playing && !mediaStalled} masterVolume={muted ? 0 : volume} audioOnly />
+              <MediaLayers project={project} t={t} playing={playing && !mediaStalled} masterVolume={muted ? 0 : volume} audioOnly localHashes={LOCAL_HASHES} />
               <iframe
                 ref={frameARef}
                 data-pc="stage-frame"

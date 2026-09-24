@@ -224,15 +224,21 @@ async function withVisual(tool: string, args: any, result: unknown, before: unkn
 /** get_gif:把一张卡整段均匀抽 8 帧,用户看动图、模型看 4×2 拼图 */
 async function getGif(args: { clipId: string }) {
   // 兜底路径(有数据镜像时服务端直接做,见 vite-plugin-ai 的服务端工具)。发到预渲染的源上,180 秒就放手
-  const res = await fetch(await prerenderUrl("/api/ai/visual"), {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ tool: "get_gif", clipId: args.clipId, after: getState().project, render: true }),
-    signal: AbortSignal.timeout(180000),
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok || !data.ok) throw new Error(data.error || `做动图失败(HTTP ${res.status})`);
+  // 两步(cloud-task.md 决议 12):先只写规格,再由 `/render` 渲像素(`user` 角色)
+  const post = async (path: string, body: unknown) => {
+    const res = await fetch(await prerenderUrl(path), {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body), signal: AbortSignal.timeout(180000),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.ok) throw new Error(data.error || `做动图失败(HTTP ${res.status})`);
+    return data;
+  };
+  const spec = await post("/api/ai/visual", { tool: "get_gif", clipId: args.clipId, after: getState().project });
+  if (!spec.gifKey) throw new Error(`时间轴上没有 id 为 ${args.clipId} 的片段。`);
+  const data = await post("/api/ai/visual/render", { key: spec.gifKey });
   return {
-    visualId: data.visualId, ok: true, clipId: args.clipId, times: data.times, gif: data.gifUrl,
+    visualId: spec.visualId, ok: true, clipId: args.clipId, times: data.times, gif: data.gifUrl,
     note: `拼图 4×2,第 k 格对应 times 的第 k 个时刻(按行从左到右)。用户在聊天栏点开这一步能看到动图。`,
     ...(data.grid ? { __image: { mime: "image/png", base64: data.grid } } : {}),
   };

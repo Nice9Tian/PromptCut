@@ -141,7 +141,73 @@ export class SnapshotStore {
     return false;
   }
 
-  /** 只写帧文件,不碰 index —— index 由 `updateIndex` 每批更新一次。 */
+  /**
+   * **写快照的唯一入口**(T1a 审查 #9):一批帧「写文件 → 判体积(A3c)→ 并进 index.json」一步做完。
+   * 返回合并后的 index,外加这一批里合格的 `written` 和超限的 `oversized`。
+   *
+   * 为什么要合成一步:`writeSnapshot` 只写文件、`updateIndex` 另一步,调用方漏了第二步,盘上有帧
+   * 而 index 里没有 —— C3 认为它缺,就绪索引永远不发这一段,A3b 的下载端落盘也是同一个坑
+   * (cloud-task.md A3b「落盘走 snapshot-store.mjs 里的同一个写入函数」)。
+   * 生产代码只调这里和下面的 `batch`;`writeSnapshot` / `updateIndex` 留给它俩和单测。
+   *
+   * `items`:`[{ localFrame, html }]`。空批不写 index,直接回当前 index。
+   */
+  async commitSnapshots({ tier, entryKey, key, clipId, capabilities, items }) {
+    const target = { tier, entryKey, key };
+    const written = [], oversized = [];
+    for (const { localFrame, html } of items ?? []) {
+      await this.writeSnapshot({ ...target, localFrame, html });
+      // A3c:超限的那一帧照常落盘(下一次不用重渲),但不进 `frames`、记进 `oversize`(R6-14)
+      if (this.noteSnapshotSize({ clipId, key, localFrame, html, capabilities })) written.push(localFrame);
+      else oversized.push(localFrame);
+    }
+    const index = written.length || oversized.length
+      ? await this.updateIndex({ ...target, frames: written, oversize: oversized })
+      : await this.snapshotIndex(target);
+    return { ...index, written, oversized };
+  }
+
+  /**
+   * 攒批写:`add(localFrame, html)` 先攒着,攒满 `size` 帧就 `commitSnapshots` 一次;`close()` 把剩下的
+   * 交掉,返回最后一次的 index(一帧都没交过是 null)。帧要么还在内存里(没落盘),要么已经落盘
+   * **且**进了 index —— 不存在「盘上有、index 里没有」的中间态。忘了 `close()` 只会丢掉最后
+   * 不满一批的那几帧(下一趟预渲染会补),不会让 index 和盘面对不上。
+   *
+   * 攒批是为了照旧「每批写一次 index.json,不是每帧」(批大小 4,同 `fillCardControls`),
+   * 同时不把一整趟的 HTML 都攒在内存里(一帧可达 300 KB)。
+   */
+  batch({ tier, entryKey, key, clipId, capabilities }, { size = 4 } = {}) {
+    const store = this;
+    let pending = [];
+    let last = null;
+    let written = 0;
+    let chain = Promise.resolve();
+    const flush = () => {
+      if (!pending.length) return chain;
+      const items = pending; pending = [];
+      // 前一次交失败不连累这一次(那一批的错已经交给了等它的调用方)
+      chain = chain.catch(() => {}).then(async () => {
+        last = await store.commitSnapshots({ tier, entryKey, key, clipId, capabilities, items });
+        written += last.written.length;
+        return last;
+      });
+      return chain;
+    };
+    return {
+      tier, entryKey, key, clipId,
+      /** 还没交掉的帧数(诊断用) */
+      get pending() { return pending.length; },
+      /** 已经交掉的合格帧数(不含超限帧);调用方据此决定要不要发 C3 的 `layer` */
+      get written() { return written; },
+      add(localFrame, html) {
+        pending.push({ localFrame, html });
+        return pending.length >= size ? flush() : chain;
+      },
+      async close() { await flush(); await chain; return last; },
+    };
+  }
+
+  /** 低层:只写帧文件,不碰 index。生产代码走 `commitSnapshots` / `batch`,不直接调它。 */
   async writeSnapshot({ tier, entryKey, key, localFrame, html }) {
     const dir = this.dir({ tier, entryKey, key });
     const file = frameFile(dir, localFrame);

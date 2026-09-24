@@ -202,6 +202,15 @@ export function registerPrerenderSide(server: ViteDevServer, root: string) {
        */
       // 搬进 server/vision/ 之后这条相对路径要多退一级(原文件在 server/ 下,写的是 "./ai-visual.mjs")
       const visualLib = () => import(new URL("../ai-visual.mjs", import.meta.url).href);
+      /*
+       * 渲染规格(spec-<key>.json)、可视化记录(v-*.json)、位图和动图都落在这一个**几个进程共用的目录**里
+       * (T1a 审查 #13):`outRoot` = `PROMPTCUT_EXPORT_DIR`(缺省 `<root>/out`),编辑器进程拉起的预渲染进程
+       * 继承同一个值,拆分(cloud-task.md I4(d))时 `user` / `agent` 两个进程也一样。所以模型的 `get_gif` 在
+       * `agent` 进程里写下的规格,用户点开动图的 GET、模型要的 `/render` 路由到 `user` 进程照样读得到;
+       * 像素只在 `user` 进程渲(cloud-task.md 决议 12)。
+       * 写一律先写临时文件再改名(`ai-visual.mjs` 的 `atomicWrite`),另一个进程读不到半截。
+       * `gifInflight` 只在本进程里去重:两个进程同时点开同一张没渲过的动图会各渲一遍,结果一样,后改名的覆盖先到的。
+       */
       const visualDir = () => path.join(outRoot(root), "ai-visual");
       const gifInflight = new Map<string, Promise<{ gif: string; grid: string; times: number[] }>>();
 
@@ -278,6 +287,32 @@ export function registerPrerenderSide(server: ViteDevServer, root: string) {
         }
         if (req.method !== "POST") return sendJson(res, 405, { ok: false, error: "GET / POST only" });
 
+        /*
+         * `POST /api/ai/visual/render { key }`:按已写好的规格渲一张动图,回拼图(给模型看)和动图地址。
+         * **这是动图像素渲染唯一的入口之一(另一个是上面用户点开的 GET),都属 `user` 角色**
+         * (cloud-task.md 决议 12:Agent 进程只写 Spec,渲染一律由用户本机的 `user` 进程负责)。
+         * 模型的 `get_gif` 分两步:先 `POST /api/ai/visual` 只写规格(`'agent'`),再打这里渲(`'user'`);
+         * 拆分(I4)之后这条路由到 `user` 进程,Agent 进程不做任何动图渲染。
+         */
+        if (url === "/render") {
+          let raw = "";
+          let tooBig = false;
+          req.on("data", (c) => { if (tooBig) return; raw += c; tooBig = overLimit(req, res, raw.length, 64 * 1024, "请求体超过 64KB"); });
+          req.on("end", async () => {
+            if (tooBig) return;
+            try {
+              const { key } = JSON.parse(raw || "{}");
+              if (typeof key !== "string" || !/^[0-9a-f]{16}$/.test(key)) return sendJson(res, 400, { ok: false, error: "缺少合法的 key" });
+              const g = await ensureGif(key, 1);
+              const grid = (await fsp.readFile(g.grid)).toString("base64");
+              sendJson(res, 200, { ok: true, times: g.times, gifUrl: `/api/ai/visual/gif/${key}.gif`, grid });
+            } catch (e: any) {
+              fail(e);
+            }
+          });
+          return;
+        }
+
         let body = "";
         let over = false;
         req.on("data", (c) => { if (over) return; body += c; over = overLimit(req, res, body.length, 64 * 1024 * 1024, "请求体超过 64MB"); });
@@ -286,7 +321,8 @@ export function registerPrerenderSide(server: ViteDevServer, root: string) {
           try {
             const visual = await visualLib();
             const dir = visualDir();
-            const { tool, images, clipId, before, after, render } = JSON.parse(body || "{}");
+            // 这条只写规格和记录,不渲动图(决议 12);老调用方带的 `render` 字段不再触发渲染,渲染走 `/render`
+            const { tool, images, clipId, before, after } = JSON.parse(body || "{}");
             const record: any = { tool: String(tool || ""), createdAt: new Date().toISOString() };
             if (Array.isArray(images) && images.length) {
               record.images = [];
@@ -308,13 +344,8 @@ export function registerPrerenderSide(server: ViteDevServer, root: string) {
             const visualId = visual.newVisualId();
             await visual.writeJson(dir, `${visualId}.json`, record);
 
-            if (render) {
-              if (!afterSpec) return sendJson(res, 404, { ok: false, error: `时间轴上没有 id 为 ${clipId} 的片段。` });
-              const g = await ensureGif(afterSpec.key, 1);
-              const grid = (await fsp.readFile(g.grid)).toString("base64");
-              return sendJson(res, 200, { ok: true, visualId, gifUrl: afterSpec.gif, times: g.times, grid });
-            }
-            sendJson(res, 200, { ok: true, visualId });
+            // 有规格就把键带回去,`get_gif` 拿它去 `/render`;没有(片段不在)由调用方如实报错
+            sendJson(res, 200, { ok: true, visualId, ...(afterSpec ? { gifKey: afterSpec.key, gifUrl: afterSpec.gif } : {}) });
           } catch (e: any) {
             fail(e);
           }

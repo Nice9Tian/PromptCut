@@ -6,6 +6,7 @@ import { audioClipsAt, isImageMedia, nextVideoLayerAfter, videoLayersAt, type Me
 import { isScrubbing, subscribeScrub } from "../timeline/useScrub";
 import { driveMedia, releaseMedia, targetTimeOf } from "../../render/mediaDrive";
 import { VideoTrack } from "../../render/VideoTrack";
+import { playbackUrl } from "../../render/mediaTier";
 
 /**
  * 预览里的素材层:画面(视频/图片)和声音(配乐、旁白)。
@@ -22,7 +23,8 @@ import { VideoTrack } from "../../render/VideoTrack";
 
 
 type CardState = "pending" | "ready" | "error";
-function AudioLayer({ project, clip, media, volume, t, playing, scrubbing, audioFx, onCardState }: { project: Project; clip: TrackClip; media?: MediaAsset; volume: number; t: number; playing: boolean; scrubbing: boolean; audioFx?: AudioFxDef[]; onCardState?: (clipId: string, state: CardState, message?: string) => void }) {
+const NO_HASHES: readonly string[] = [];
+function AudioLayer({ project, clip, media, volume, t, playing, scrubbing, audioFx, onCardState, localHashes }: { project: Project; clip: TrackClip; media?: MediaAsset; volume: number; t: number; playing: boolean; scrubbing: boolean; audioFx?: AudioFxDef[]; onCardState?: (clipId: string, state: CardState, message?: string) => void; localHashes: readonly string[] }) {
   const ref = useRef<HTMLAudioElement>(null);
   const nodeId = cardAudioNodeOf(project, clip);
   // Card runtime blocks use clip-local samples; mediaOffset applies only to the old source media path.
@@ -65,7 +67,8 @@ function AudioLayer({ project, clip, media, volume, t, playing, scrubbing, audio
       releasePreviewAudio(el);
     };
   }, []);
-  return <audio ref={ref} src={nodeId ? (cardUrl ?? undefined) : media?.url} preload="auto" hidden data-card-audio-state={nodeId ? cardState : undefined} data-card-audio-node={nodeId ?? undefined} />;
+  // 主文档的声音也经换档判据(T1a 审查 #5);集合为空就是 media.url,和以前一样
+  return <audio ref={ref} src={nodeId ? (cardUrl ?? undefined) : media ? playbackUrl(media, localHashes) : undefined} preload="auto" hidden data-card-audio-state={nodeId ? cardState : undefined} data-card-audio-node={nodeId ?? undefined} />;
 }
 
 
@@ -88,6 +91,7 @@ export function MediaLayers({
   muted = false,
   masterVolume = 1,
   audioOnly = false,
+  localHashes = NO_HASHES,
 }: {
   project: Project;
   t: number;
@@ -97,6 +101,11 @@ export function MediaLayers({
   /** 预览总音量 0–1,叠在每段自己的淡入淡出音量之上;静音就传 0 */
   masterVolume?: number;
   audioOnly?: boolean;
+  /**
+   * 当前连接的素材服务报 `complete` 的哈希(A1 的 `localHashes`),声音层和画面层按它换档。
+   * 缺省空集合 = 一律原片。来源(每 2 秒轮询 `GET media/<hash>/chunks`)在第 6 步。
+   */
+  localHashes?: readonly string[];
 }) {
   // 手按着播放头时 seek 放疏一点;松手那一刻它变回 false,各层按 0.03s 精确对齐一次(见 mediaSync 的 SCRUB_SEEK_MIN_MS)
   const scrubbing = useSyncExternalStore(subscribeScrub, isScrubbing, isScrubbing);
@@ -123,15 +132,16 @@ export function MediaLayers({
           gain={project.tracks.find((track) => track.id === id)?.muted ? 0 : master}
           stage={stage}
           filters={project.filters}
+          localHashes={localHashes}
         />
       ))}
       {audioOnly && !muted && layers.filter(l => !cardAudioNodeOf(project, l.clip) && !isImageMedia(l.media) && l.media.kind === "video" && !l.clip.audioMuted && !project.tracks.find(tr => tr.id === l.trackId)?.muted).map(l => (
-        <AudioLayer key={l.clip.id} project={project} clip={l.clip} media={l.media} volume={l.opacity * master * (l.clip.audioVolume ?? 1)} t={t} playing={playing} scrubbing={scrubbing} audioFx={project.audioFx} />
+        <AudioLayer key={l.clip.id} project={project} clip={l.clip} media={l.media} volume={l.opacity * master * (l.clip.audioVolume ?? 1)} t={t} playing={playing} scrubbing={scrubbing} audioFx={project.audioFx} localHashes={localHashes} />
       ))}
       {audios.filter(a => !cardAudioNodeOf(project, a.clip)).map((a) => (
-        <AudioLayer key={a.clip.id} project={project} clip={a.clip} media={a.media} volume={a.volume * master} t={t} playing={playing} scrubbing={scrubbing} audioFx={project.audioFx} />
+        <AudioLayer key={a.clip.id} project={project} clip={a.clip} media={a.media} volume={a.volume * master} t={t} playing={playing} scrubbing={scrubbing} audioFx={project.audioFx} localHashes={localHashes} />
       ))}
-      {generated.map((a) => <AudioLayer key={`card-audio:${a.clip.id}`} project={project} clip={a.clip} media={a.media} volume={a.volume * master} t={t} playing={playing} scrubbing={scrubbing} audioFx={project.audioFx} onCardState={setGeneratedStatus} />)}
+      {generated.map((a) => <AudioLayer key={`card-audio:${a.clip.id}`} project={project} clip={a.clip} media={a.media} volume={a.volume * master} t={t} playing={playing} scrubbing={scrubbing} audioFx={project.audioFx} onCardState={setGeneratedStatus} localHashes={localHashes} />)}
       {generated.map(({ clip }) => {
         const status = cardStatus[clip.id]; if (!status || status.state === "ready") return null;
         return <div key={`card-audio-status:${clip.id}`} role="status" aria-live="polite" style={{ position: "absolute", left: 12, bottom: 12, zIndex: 100, padding: "6px 9px", borderRadius: 4, color: "#fff", background: status.state === "error" ? "#a11" : "#333", fontSize: 12 }}>{status.state === "pending" ? `正在生成音频：${clip.label ?? clip.id}` : `音频生成失败：${status.message ?? clip.label ?? clip.id}`}</div>;

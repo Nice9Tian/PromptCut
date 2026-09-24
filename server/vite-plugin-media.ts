@@ -430,6 +430,9 @@ async function serveFile(filePath: string, req: Connect.IncomingMessage, res: Se
     const range = req.headers.range ? parseRange(req.headers.range, stat.size) : null;
     const contentType = contentTypeForFile(filePath);
     const head = req.method === "HEAD";
+    // Last-Modified:没有内容哈希的迁移期素材,帧管线按 `HEAD` 的 Content-Length + Last-Modified 打戳
+    // (server/media-stamp.mjs),不再自己去 stat 这个目录
+    const lastModified = stat.mtime.toUTCString();
 
     if (range === "unsatisfiable") {
       res.writeHead(416, { "Content-Range": `bytes */${stat.size}`, "Accept-Ranges": "bytes" });
@@ -442,6 +445,7 @@ async function serveFile(filePath: string, req: Connect.IncomingMessage, res: Se
         "Accept-Ranges": "bytes",
         "Content-Length": (end - start) + 1,
         "Content-Type": contentType,
+        "Last-Modified": lastModified,
       });
       if (head) return res.end();
       const stream = createReadStream(filePath, { start, end });
@@ -451,6 +455,7 @@ async function serveFile(filePath: string, req: Connect.IncomingMessage, res: Se
         "Content-Length": stat.size,
         "Content-Type": contentType,
         "Accept-Ranges": "bytes",
+        "Last-Modified": lastModified,
       });
       if (head) return res.end();
       const stream = createReadStream(filePath);
@@ -515,8 +520,8 @@ export function mediaMiddleware(root: string) {
       return res.end(JSON.stringify({ ok: true, hashes: have }));
     }
 
-    // GET /api/media/file?path=<legacy absolute path>
-    if (req.method === "GET" && req.url.startsWith("/api/media/file")) {
+    // GET / HEAD /api/media/file?path=<legacy absolute path>(HEAD 给帧管线打戳用,见 server/media-stamp.mjs)
+    if ((req.method === "GET" || req.method === "HEAD") && req.url.startsWith("/api/media/file")) {
       return handleMediaFile(req, res, root);
     }
 
