@@ -10,7 +10,7 @@
  *   `setProject` 整份替换、K5 的角色互换要带 `reset`；`settled` 消息把 clipId 从基线里删掉，
  *   否则下次 C4 选到同一帧会按基线判「已挂着」不投、露出过期的活组件；
  * - **换 DOM 有节流**：每 ≥ 33 ms 一次（C4）。带 `reset` 的那次（互换后的首投）不受节流；
- * - **一次投递 ≤ 2 MB**（A3c）：超了就拆成多次。
+ * - **一次投递 ≤ 2 MB**（A3c）：一次一包，按兜底级别装（无流 > 超预算 > 海报），装不下的下一拍再投、不摘。
  *
  * # 为什么取字节不能挡住 `setTime`
  *
@@ -19,10 +19,12 @@
  * 独立的 `setSnapshots` 投递。拖过一张 stateful 卡的入点时，缓存命中的那一份和 `t`
  * 在同一次 React 提交里生效（不闪初始态）；没命中的那一层由 `.pc-awaiting` 藏 500 ms。
  *
- * # 现在恒无流
+ * # 兜底顺序（rendering.md「兜底顺序」）
  *
- * `streams` 开关在 R8 之前恒为关，所以 `kind: 'stream'` 的表永远是空的：**播放中的抑制卡
- * 照常投快照**（A3c：「`streams` 关着或这一拍缺分段时，C4 照常给抑制卡选最近快照投进去」）。
+ * 播放中被抑制的重卡按「满帧流 → 稀疏流 → 同区间最近快照 → 占位符」逐级退化。父页这一侧管两件事：
+ * 流平面只发解码器预算放行的那几条（`planesWithinBudget`，和舞台同一个函数）；**每张重卡都照样
+ * 选一张快照垫着**（流覆盖着的是海报，15 帧换一张；超预算 / 无流的每拍换）。流这一拍画不出来时
+ * 舞台当拍露出垫着的快照（`streamPlayer` 的 `coverSnapshot`），连快照也没有才显示占位符（舞台侧）。
  */
 import { cardMountedAt } from "../render/frameWindow.mjs";
 import { anchorFrames, pickLayerSnapshot } from "../render/snapshotPick.mjs";
@@ -33,7 +35,7 @@ import { mirrorKey, pushWanted } from "../render/dataMirror";
 import type { Project, TrackClip } from "../kernel/project";
 import type { StageRole, StageRpcClient } from "../render/stageRpc";
 import { currentPlan } from "./planDispatch";
-import { rangesHave, SEGMENT_FRAMES, streamPlanesFor, type StreamPlaneRequest } from "../render/streamPlayer";
+import { planesWithinBudget, rangesHave, SEGMENT_FRAMES, streamPlanesFor, type StreamPlaneRequest } from "../render/streamPlayer";
 
 /** C4：换 DOM 每 rAF 至多一次、间隔 ≥ 33 ms */
 export const SNAPSHOT_THROTTLE_MS = 33;
@@ -47,17 +49,33 @@ export const MAX_WANTED = 8;
  */
 const KIND_ORDER: ReadyKind[] = ["html", "local"];
 
-/** 这张卡此刻所在的分段有没有流（单卡流挂在它自己身上；组流挂在组里最上面那张上、带 `groupClipIds`） */
-function streamCovers(clipId: string, globalFrame: number): boolean {
-  const seg = Math.floor(Math.max(0, globalFrame) / SEGMENT_FRAMES);
-  for (const [owner, byKind] of readyIndex) {
+/**
+ * 海报刷新间隔(帧):流覆盖着的层垫的那张快照,离当前帧不到这么多帧就不换(一个分段)。
+ * 换帧预算不因海报多花:仍是 33 ms 节流、一次 ≤ 2 MB(已定,不新增预算常量)。
+ */
+export const POSTER_REFRESH_FRAMES = SEGMENT_FRAMES;
+
+/** 就绪索引里全部 `stream` 层(单卡流的成员就是它自己;组流挂在组里最上面那张上、带 `groupClipIds`) */
+function streamLayers(): { clipId: string; key: string; ranges: Array<[number, number]>; groupClipIds?: string[]; members: string[] }[] {
+  const out: { clipId: string; key: string; ranges: Array<[number, number]>; groupClipIds?: string[]; members: string[] }[] = [];
+  for (const [clipId, byKind] of readyIndex) {
     const layer = byKind.get("stream");
     if (!layer) continue;
-    const members = layer.groupClipIds?.length ? layer.groupClipIds : [owner];
-    if (members.includes(clipId) && rangesHave(layer.ranges, seg)) return true;
+    out.push({ clipId, key: layer.key, ranges: layer.ranges as Array<[number, number]>, groupClipIds: layer.groupClipIds,
+      members: layer.groupClipIds?.length ? layer.groupClipIds : [clipId] });
   }
-  return false;
+  return out;
 }
+
+/**
+ * 这一张快照在兜底顺序里垫在哪一级,也是一次投递装包的优先级(小的先装):
+ *   - `none`   这一层这一拍没有流(或暂停 / 拖动):快照就是它的画面,每拍换;
+ *   - `over`   有流,但超出解码器预算(`planesWithinBudget` 没放行):当「无流」,每拍换;
+ *   - `poster` 流覆盖着:快照只是垫在流下面的海报(流画不出来的那一拍露出来),
+ *              挂着的那张离当前帧不到 `POSTER_REFRESH_FRAMES` 帧就不换。
+ */
+export type PickTier = "none" | "over" | "poster";
+const TIER_ORDER: Record<PickTier, number> = { none: 0, over: 1, poster: 2 };
 
 /** 这一刻某张卡选中的那一帧 */
 export interface Pick {
@@ -67,11 +85,12 @@ export interface Pick {
   localFrame: number;
   /** 投递基线的比较键：换了它才换 DOM */
   id: string;
+  tier: PickTier;
 }
 
 interface Baseline {
-  /** 这个 iframe 上此刻挂着的快照（clipId → `Pick.id`） */
-  mounted: Map<string, string>;
+  /** 这个 iframe 上此刻挂着的快照（clipId → 当时的 `Pick`） */
+  mounted: Map<string, Pick>;
   /** 下一次投递要带 `reset`（`setProject` 整份替换 / 角色互换） */
   needsReset: boolean;
   lastSentAt: number;
@@ -230,10 +249,21 @@ function rangesCover(ranges: readonly (readonly number[])[] | undefined, from: n
   return false;
 }
 
-function demoteReady(clipId: string, localFrame: number, count: number, fps: number): boolean {
-  const stream = layerOf(readyIndex, clipId, "stream");
-  if (stream && stream.ranges.length) return true;
+/**
+ * 「就绪」按当前播放位置判(rendering.md「降级」;根因 D):从当前位置起 `min(fps, 片段剩余帧数)` 帧
+ * 都有预渲染结果覆盖 —— 流按分段(这几帧落在的每一段都在同一条流的就绪区间里,组流算成员),
+ * 快照按帧。以前流表只要有**任意**一段就算就绪,当前段没料也切进抑制 → 透明。
+ */
+function demoteReady(clipId: string, globalFrame: number, localFrame: number, count: number, fps: number): boolean {
   const need = Math.max(0, Math.min(fps, count - localFrame) - 1);
+  const firstSeg = Math.floor(Math.max(0, globalFrame) / SEGMENT_FRAMES);
+  const lastSeg = Math.floor(Math.max(0, globalFrame + need) / SEGMENT_FRAMES);
+  for (const layer of streamLayers()) {
+    if (!layer.members.includes(clipId)) continue;
+    let all = true;
+    for (let seg = firstSeg; seg <= lastSeg && all; seg++) all = rangesHave(layer.ranges, seg);
+    if (all) return true;
+  }
   for (const kind of ["html", "local"] as const) {
     const layer = layerOf(readyIndex, clipId, kind);
     if (layer && rangesCover(layer.ranges, localFrame, localFrame + need)) return true;
@@ -262,16 +292,22 @@ export interface Playhead {
 }
 
 export interface FeedPlan {
-  /** 这一刻判重的卡（播放中就是 `setSuppressed` 的实参） */
+  /** 这一刻判重的卡（播放中就是 `setSuppressed` 的实参，再并上 K3(b) 的额外抑制） */
   heavy: string[];
-  /** 每张重卡选中的那一帧；选不出来的不在表里（那一层这一拍透明） */
+  /** 每张重卡选中的那一帧（带兜底级别 `tier`）；选不出来的不在表里（那一层这一拍落到占位符） */
   picks: Map<string, Pick>;
   /** 这一刻该报给预渲染进程的缺口（全局帧号） */
   wanted: { clipId: string; frame: number }[];
+  /** 这一刻发给舞台的流平面（只在播放中；已按解码器预算截过，`planesWithinBudget`） */
+  streamPlanes: StreamPlaneRequest[];
 }
 
 /**
  * 这一刻的投递计划。**纯算，不 fetch、不发 RPC**，所以验收探针可以单独看它。
+ *
+ * 兜底顺序（rendering.md「兜底顺序」）在父页这一侧：流平面只发解码器预算放行的那几条；
+ * **每张重卡都照样选一帧快照**（根因 C：以前「有流就不选快照」，舞台那边流一 blank 整层就透明）——
+ * 流覆盖着的标成海报（`poster`）垫在流下面，超预算的当「无流」（`over`），其余 `none`。
  */
 export function planFeed({ project, t, playing }: Playhead): FeedPlan {
   const plan = currentPlan();
@@ -281,19 +317,40 @@ export function planFeed({ project, t, playing }: Playhead): FeedPlan {
   const heavy: string[] = [];
   const picks = new Map<string, Pick>();
   const wanted: { clipId: string; frame: number }[] = [];
+  const clips: { clip: TrackClip; firstFrame: number; count: number }[] = [];
   for (const clip of activeCardClips(project, t)) {
     if (pipelineAt(plan, clip.id, t) !== "heavy") continue;
     const { firstFrame, count } = samplingOf(clip, fps);
     if (pendingDemote.has(clip.id)) {
       // K6：死素材就绪之前照常活渲，**不进 heavy**（也就不会被抑制、不会贴快照）
-      if (!demoteReady(clip.id, globalFrame - firstFrame, count, fps)) continue;
+      if (!demoteReady(clip.id, globalFrame, globalFrame - firstFrame, count, fps)) continue;
       pendingDemote.delete(clip.id);
     }
     heavy.push(clip.id);
+    clips.push({ clip, firstFrame, count });
+  }
+  /*
+   * 流平面（兜底顺序第 1、2 步）：只在播放中、只给被抑制的卡。按解码器预算截 —— 和舞台 `sync()`
+   * 同一个函数，截掉的那几张（`over`）父页当「无流」，直接从第 3 步（最近快照）开始。
+   */
+  let streamPlanes: StreamPlaneRequest[] = [];
+  const covered = new Set<string>();
+  const wantedStream = new Set<string>();
+  if (playing) {
+    const layers = streamLayers();
+    if (layers.length) {
+      const suppressed = new Set(heavy);
+      for (const id of extraSuppressed) suppressed.add(id);
+      const all = streamPlanesFor(layers, suppressed, globalFrame);
+      streamPlanes = planesWithinBudget(all);
+      for (const p of all) for (const id of p.clipIds) wantedStream.add(id);
+      for (const p of streamPlanes) for (const id of p.clipIds) covered.add(id);
+    }
+  }
+  for (const { clip, firstFrame, count } of clips) {
     // 根因 B:暂停态已经追到精确活渲的卡不再选快照(停下就撤兜底,直到下一次 setTime / 播放)
     if (!playing && isSettled("front", clip.id)) continue;
-    // A3c：播放中**有流分段**的抑制卡不投快照（贴流）；缺分段 / 暂停 / 拖动时照投
-    if (playing && streamCovers(clip.id, globalFrame)) continue;
+    const tier: PickTier = covered.has(clip.id) ? "poster" : wantedStream.has(clip.id) ? "over" : "none";
     let picked: Pick | null = null;
     for (const kind of KIND_ORDER) {
       const layer = layerOf(readyIndex, clip.id, kind);
@@ -301,20 +358,21 @@ export function planFeed({ project, t, playing }: Playhead): FeedPlan {
       const hit = pickLayerSnapshot({ layer, globalFrame, firstFrame, count, anchors }) as
         { kind: ReadyKind; key: string; localFrame: number } | null;
       if (!hit) continue;
-      picked = { clipId: clip.id, kind: hit.kind, key: hit.key, localFrame: hit.localFrame, id: `${hit.kind}/${hit.key}/${hit.localFrame}` };
+      picked = { clipId: clip.id, kind: hit.kind, key: hit.key, localFrame: hit.localFrame, id: `${hit.kind}/${hit.key}/${hit.localFrame}`, tier };
       break;
     }
     if (picked) picks.set(clip.id, picked);
     /*
      * 缺口报给预渲染进程（C4）：本次回溯了（选中的不是当前这一帧）或者干脆缺料的层，
-     * 各报它**当前想要的**那一帧。全局帧号。
+     * 各报它**当前想要的**那一帧。全局帧号。流覆盖着的层（海报）不报 —— 画面由流给，
+     * 不值得为一张垫底的海报去打乱预渲染的排程。
      */
     const wantLocal = globalFrame - firstFrame;
-    if (wantLocal >= 0 && wantLocal < count && (!picked || picked.localFrame !== wantLocal) && wanted.length < MAX_WANTED) {
+    if (tier !== "poster" && wantLocal >= 0 && wantLocal < count && (!picked || picked.localFrame !== wantLocal) && wanted.length < MAX_WANTED) {
       wanted.push({ clipId: clip.id, frame: globalFrame });
     }
   }
-  return { heavy: heavy.sort(), picks, wanted };
+  return { heavy: heavy.sort(), picks, wanted, streamPlanes };
 }
 
 /** 缺的那几帧发起取字节；到货后叫一次 `onArrive` 让宿主重投 */
@@ -327,55 +385,68 @@ function fetchMissing(picks: Map<string, Pick>): void {
         have.set(pick.id, html);
         onArrive?.();
       })
-      .catch(() => { /* 还没就绪：那一层这一拍透明，下一次 C4 会再选一次 */ })
+      .catch(() => { /* 还没就绪：那一层保持上一张（没有就落到占位符），下一次 C4 会再选一次 */ })
       .finally(() => { flying.delete(pick.id); });
   }
 }
 
+/** 一条改动:换上新的一张(`html`),或摘掉(`null`) */
+interface Change { clipId: string; html: string | null; pick: Pick | null }
+
 /**
- * 手里已经有的那些拼成一份增量（相对该 iframe 的基线）。**不改基线** ——
- * 真的发出去之后才改（`commit`）。
+ * 手里已经有的那些和该 iframe 的基线比,列出要换的和要摘的。**不改基线** —— 真的发出去之后才改。
+ *
+ * 海报(`poster`)的节流在这里:挂着的那张和这一次选中的是同一层同一个键、帧号差不到
+ * `POSTER_REFRESH_FRAMES`,就当没变(流在上面画着,垫底的海报不必每拍换)。
  */
-function diffAgainst(role: StageRole, picks: Map<string, Pick>, reset = false): { patch: Record<string, string | null>; next: Map<string, string> } {
+function diffAgainst(role: StageRole, picks: Map<string, Pick>, reset = false): Change[] {
   const base = baselines[role];
   // 带 `reset` 的那一次:舞台上的快照会被先清空,所以基线也要从零算起、把该挂的重新投一遍
-  const mounted = reset ? new Map<string, string>() : base.mounted;
-  const patch: Record<string, string | null> = {};
-  const next = new Map(mounted);
+  const mounted = reset ? new Map<string, Pick>() : base.mounted;
+  const changes: Change[] = [];
   for (const [clipId, pick] of picks) {
-    if (mounted.get(clipId) === pick.id) continue;
+    const cur = mounted.get(clipId);
+    if (cur?.id === pick.id) continue;
+    if (cur && pick.tier === "poster" && cur.kind === pick.kind && cur.key === pick.key
+      && Math.abs(cur.localFrame - pick.localFrame) < POSTER_REFRESH_FRAMES) continue;
     const html = have.get(pick.id);
     if (html === undefined) continue;   // 还没到货：这一层保持上一张，不闪
-    patch[clipId] = html;
-    next.set(clipId, pick.id);
+    changes.push({ clipId, html, pick });
   }
   // 不再判重 / 不再活跃 / 选不出帧的：摘掉
   for (const clipId of mounted.keys()) {
     if (picks.has(clipId)) continue;
-    patch[clipId] = null;
-    next.delete(clipId);
+    changes.push({ clipId, html: null, pick: null });
   }
-  return { patch, next };
+  return changes;
 }
 
-/** A3c：一次投递 ≤ 2 MB，超了就拆 */
-function splitPatch(patch: Record<string, string | null>): Record<string, string | null>[] {
-  const entries = Object.entries(patch);
-  const chunks: Record<string, string | null>[] = [];
-  let cur: Record<string, string | null> = {};
+/**
+ * 一次投递在 2 MB 内按优先级装(换帧预算,rendering.md「兜底顺序」):摘掉的不占字节、全装;
+ * 换上的按 `none` > `over` > `poster` 的顺序装,装不下的这一拍**保留上一张、不摘**,下一拍再来。
+ * 单张就超 2 MB 的,包里第一张照装(不然永远投不出去;体积上限由预渲染进程先挡过一道)。
+ */
+function packChanges(role: StageRole, changes: Change[], reset: boolean): { patch: Record<string, string | null>; next: Map<string, Pick>; deferred: number } {
+  const base = baselines[role];
+  const next = new Map(reset ? [] : base.mounted);
+  const patch: Record<string, string | null> = {};
   let bytes = 0;
-  for (const [clipId, html] of entries) {
-    const size = html === null ? 0 : html.length;
-    if (bytes && bytes + size > SNAPSHOT_DELIVERY_MAX_BYTES) {
-      chunks.push(cur);
-      cur = {};
-      bytes = 0;
-    }
-    cur[clipId] = html;
+  let deferred = 0;
+  for (const c of changes) {
+    if (c.html !== null) continue;
+    patch[c.clipId] = null;
+    next.delete(c.clipId);
+  }
+  const adds = changes.filter((c) => c.html !== null)
+    .sort((a, b) => TIER_ORDER[a.pick!.tier] - TIER_ORDER[b.pick!.tier]);
+  for (const c of adds) {
+    const size = c.html!.length;
+    if (bytes && bytes + size > SNAPSHOT_DELIVERY_MAX_BYTES) { deferred++; continue; }
+    patch[c.clipId] = c.html;
+    next.set(c.clipId, c.pick!);
     bytes += size;
   }
-  if (Object.keys(cur).length || !chunks.length) chunks.push(cur);
-  return chunks;
+  return { patch, next, deferred };
 }
 
 /**
@@ -393,7 +464,15 @@ export function pickForSetTime(head: Playhead): { snapshots: Record<string, stri
   fetchMissing(feed.picks);
   if (feed.wanted.length) pushWanted(feed.wanted);
   const base = baselines.front;
-  const { patch, next } = diffAgainst("front", feed.picks);
+  // setTime 这一份和 `t` 同一次提交生效,不按 2 MB 拆(拆出去的就不同帧了);暂停 / 拖动时没有海报
+  const changes = diffAgainst("front", feed.picks);
+  const patch: Record<string, string | null> = {};
+  const next = new Map(base.mounted);
+  for (const c of changes) {
+    patch[c.clipId] = c.html;
+    if (c.pick) next.set(c.clipId, c.pick);
+    else next.delete(c.clipId);
+  }
   const awaiting: string[] = [];
   for (const clipId of feed.heavy) {
     // 这一层有表（预渲染进程认这张卡）才等；没有表的层等也等不来，只会白藏 500 ms
@@ -416,7 +495,8 @@ export function pickForSetTime(head: Playhead): { snapshots: Record<string, stri
 
 /**
  * 投一次（播放中、或者字节到货之后的补投）。`reset` 时不受 33 ms 节流（A3c：
- * 互换后的首次投递）。回的是这次真的发了几条 —— 没什么可发的时候一条 RPC 都不发。
+ * 互换后的首次投递）。**一次一包、≤ 2 MB**，按兜底级别装（`packChanges`），装不下的下一拍再投。
+ * 回的是这次真的发了几条 —— 没什么可发的时候一条 RPC 都不发。
  */
 export async function deliverSnapshots(stage: StageRpcClient, role: StageRole, head: Playhead): Promise<number> {
   // 播放中没有「停下就精确」这回事:settled 作废
@@ -428,30 +508,27 @@ export async function deliverSnapshots(stage: StageRpcClient, role: StageRole, h
   const now = performance.now();
   if (!base.needsReset && now - base.lastSentAt < SNAPSHOT_THROTTLE_MS) return 0;
   const reset = base.needsReset;
-  const { patch, next } = diffAgainst(role, feed.picks, reset);
+  const changes = diffAgainst(role, feed.picks, reset);
+  if (!reset && !changes.length) return 0;
+  const { patch, next } = packChanges(role, changes, reset);
   if (!reset && !Object.keys(patch).length) return 0;
-  const chunks = splitPatch(patch);
   base.mounted = next;
   base.needsReset = false;
   base.lastSentAt = now;
-  let sent = 0;
-  for (let i = 0; i < chunks.length; i++) {
-    try {
-      await stage.setSnapshots(chunks[i], i === 0 && reset ? { reset: true } : {});
-      sent++;
-    } catch {
-      // iframe 正在换：基线跟着客户端作废，下一次带 reset
-      base.needsReset = true;
-      break;
-    }
+  try {
+    await stage.setSnapshots(patch, reset ? { reset: true } : {});
+    return 1;
+  } catch {
+    // iframe 正在换：基线跟着客户端作废，下一次带 reset
+    base.needsReset = true;
+    return 0;
   }
-  return sent;
 }
 
 /**
  * K3(b)：播放中正在等后台补跑的 `vtOk = false` **轻卡**也要抑制（藏子树、`t` 冻住）。
- * 它没有流平面也没有快照，抑制 = 透明 —— 这就是 pinned 渲染 6 的「不可见」，
- * 等待期间用户看不到它用错状态跳变。互换之后这份就清空（新 `front` 的 `H(T)` 里没有它）。
+ * 它没有流平面也没有快照 —— 等待期间舞台在它的位置上显示占位符（T4，rendering.md「兜底顺序」：
+ * 「等后台舞台补跑后互换」也不透明），用户看不到它用错状态跳变。互换之后这份就清空。
  */
 let extraSuppressed: readonly string[] = [];
 export function setExtraSuppressed(clipIds: readonly string[]): void {
@@ -459,19 +536,13 @@ export function setExtraSuppressed(clipIds: readonly string[]): void {
 }
 
 /**
- * R8：这一刻的流平面（C3 末段：由就绪索引里 `kind: 'stream'` 的层合成）。只在播放中、只给被抑制的卡。
+ * R8：这一刻的流平面（C3 末段：由就绪索引里 `kind: 'stream'` 的层合成）。只在播放中、只给被抑制的卡，
+ * **已按解码器预算截过**（`planesWithinBudget`，和舞台同一个函数）。
  * 父页在发 `setSuppressed(H(t))` 的同一处发 `setStreamPlanes(...)`。
  */
 export function streamPlanesAt(head: Playhead): StreamPlaneRequest[] {
   if (!head.playing) return [];
-  const layers: { clipId: string; key: string; ranges: Array<[number, number]>; groupClipIds?: string[] }[] = [];
-  for (const [clipId, byKind] of readyIndex) {
-    const layer = byKind.get("stream");
-    if (layer) layers.push({ clipId, key: layer.key, ranges: layer.ranges as Array<[number, number]>, groupClipIds: layer.groupClipIds });
-  }
-  if (!layers.length) return [];
-  const fps = Math.max(1, head.project.fps || 30);
-  return streamPlanesFor(layers, new Set(suppressedAt(head)), Math.floor(head.t * fps + 1e-6));
+  return planFeed(head).streamPlanes;
 }
 
 /** 这一刻该抑制哪几张（播放中才有，C5 / K5） */
