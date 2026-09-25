@@ -191,3 +191,21 @@ PushQueue = { enqueue(unit, priority), start(), stop(), stats() }
   - 这些段在笔记本上不触发渲染（看预渲染诊断里的渲染计数）；
   - 就绪层来自同一组键。
   - 两台机器指纹相同，所以键完全一致（W0 实测）。
+
+## 9. 定稿后的补充细则（2026-09-25，主 Agent 裁定）
+
+1. **`enqueue` 落盘后才兑现**：`PushQueue.enqueue(unit, priority)` 返回 `Promise<void>`，队列文件写回完成后才兑现。进队本身同步生效，重复的段不重复进队。钩子里调用它不 `await`，不挡预渲染；测试和需要确认落盘的调用方 `await` 它。
+2. **`priority` 是最终级别**：数字 0 / 1 / 2，由调用方（钩子）按第 4 节的表算好，队列不再二次判定。
+3. **`resultFor` 是异步的**，返回 `Promise<result | null>`。
+4. **挂推送队列的三种方式**：构造参数、赋值 `pipeline.pushQueue`、`createPushQueue` 自动挂上，三种都认。注入时钟时，`clock: { now, setTimeout, clearTimeout }` 与分开的三个参数都认。
+5. **数据图卡只认明确标记的**：card plan 里没有图卡字段的卡，不当作图卡；只有 plan 条目带 `graphCard: true` 才算。
+6. **最后一段的帧数**：钩子按 card plan 里 control 的帧数决定最后一段到哪里结束；卡不在 card plan 里时，整段按 60 帧算。
+7. **`data:image` 过半**：指严格大于一半。
+8. **清单写失败**：sink 里只记日志（第 3 节），推送队列里算失败、照退避重试。清单超过 256 KiB、或这一段磁盘上一帧都没有时，这一段丢弃，不重试。
+9. **推送中途有新帧写入的段**：推完之后再进队推一次。
+10. **本地文档服务的发现**：`resolveDocservice` 在环境变量地址之后、回环 8787 之前，加一项编辑器进程里挂的文档服务：
+    - 地址由 `PROMPTCUT_EDITOR_URL` 推出，是 `ws://<编辑器源>/docservice`；
+    - 探活用 `GET <编辑器源>/api/docservice/healthz`，要求回 `ok === true` 且 `protocol` 相符；
+    - 返回 `mode: 'editor'`。
+    预渲染进程据此在只开了编辑器的时候也能推送。另设环境变量 `PROMPTCUT_PUSH=0`，可以关掉推送。
+    这一项改 `server/render-node/endpoint.mjs`，并入 M5b 的节点分支，本阶段不做；在它落地之前，只开编辑器的环境不推送，与本阶段的实现一致。
