@@ -274,6 +274,7 @@ test('RH2 多项目开多条连接:两个共享项目各一条 render 连接、�
     }
     const until = Date.now() + 20_000;
     while (Date.now() < until && !(sinks.get(a.projectId).puts.length && sinks.get(b.projectId).puts.length)) {
+      svc.service.tick();   // M6c X3：host 凭扫描周期的项目摘要发现有活的项目；这个服务 autoTick 关着，这里手动 tick
       host.tick();
       await new Promise((r) => setTimeout(r, 30));
     }
@@ -447,7 +448,8 @@ test('RH6 代码版本过滤照旧:codeVersion 不同的 host 看得见任务、
   stale.start();
   const task = fineTask('proj-a', 'rh6');
   space.publish([task]);
-  for (let i = 0; i < 20; i++) { await env.settle(); stale.tick(); env.clock.advance(STEP_MS); }
+  // M6c X3：host 凭队列 tick 发的摘要才知道哪个项目有活，这里每拍也 tick 队列（原来只推时钟）
+  for (let i = 0; i < 20; i++) { await env.settle(); stale.tick(); for (const s of env.all) s.queue.tick(); env.clock.advance(STEP_MS); }
   await env.settle();
   assert.equal(stale.nodes()[0].seen, 1, '看得见');
   assert.equal(stale.nodes()[0].claimed, 0, '认领 0 次');

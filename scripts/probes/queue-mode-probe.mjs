@@ -53,7 +53,10 @@
  *
  * 输出另带:
  *   - `nodes`:本机诊断里的节点信息(诊断 `queue.local`):`nodeId`,本机节点认领 / 完成 / 去重完成 / 失败的任务 id 列表,和 `stats`;
- *   - `announcedAsset`:本机登记的素材服务地址(列表)。
+ *   - `announcedAsset`:本机登记的素材服务地址(列表);
+ *   - `x5`(M6c X5 的证据,队列模式那一趟另打一行 `[x5] {…}`):preload 到 ready 用了多久、第一次认领 plan /
+ *     细任务在 preload 开跑后多久、那一刻 preload 各代际的状态、等 ready 期间读到的认领数,
+ *     `fineClaimedBeforeReady` 为真就是「preload 未 ready 时本机节点已开始认领细任务」。只记录,不判失败。
  *
  * 端口:每台编辑器另占「端口 +1」「端口 +2」当舞台端口,三个连号都要空着;文档服务一个端口。
  * `--keep` 不删两边的临时帧库(调试用)。输出最后一行是一行 JSON:
@@ -211,14 +214,19 @@ async function preloadOn(run, inst, mode) {
   const preload = await postJson(`${inst.base}/api/frames/preload`, { session: SESSION, localRev: 1 });
   check(preload.ok, `[${inst.label}] preload 开跑`, preload.body);
   const key = preload.body?.key;
+  // M6c X5 的证据:preload 还没到 ready 时,本机节点已经认领了几次(每次轮询时读诊断里的认领数)
+  let claimedWhileNotReady = 0;
   const ready = await until(`[${inst.label}] 后台那一趟跑完`, async () => {
     // 页面每 2 秒重发一次 preload 保活,这里照做(同一版直接返回)
     const status = await postJson(`${inst.base}/api/frames/preload`, { session: SESSION, localRev: 1 });
+    if (mode === 'queue' && status.body?.status !== 'ready') {
+      const claimed = (await inst.diagnostics()).queue?.stats?.claimed;
+      if (Number.isFinite(claimed)) claimedWhileNotReady = Math.max(claimedWhileNotReady, claimed);
+    }
     return status.body?.status === 'ready' ? status.body : status.body?.status === 'error' ? status.body : null;
   }, TIMEOUT_MS, 2000);
   check(ready?.status === 'ready', `[${inst.label}] 后台那一趟以 ready 结束`, ready);
-  void mode;
-  return { session: SESSION, key, ready };
+  return { session: SESSION, key, ready, claimedWhileNotReady };
 }
 
 /** 队列模式:plan 切分完、所有细任务落定(按这一个节点的诊断看)。回 `{ plan, derived, states, q }` 或 null */
@@ -313,7 +321,20 @@ async function runOnce(mode, { hold = false } = {}) {
     run.entryKey = loads[0]?.key;
     if (peer) run.peer.entryKey = loads[1]?.key;
     if (peer) check(loads[0]?.key && loads[0].key === loads[1]?.key, '[peer] 两台算出同一个 entry.key', { main: loads[0]?.key, peer: loads[1]?.key });
+    const claimedWhileNotReady = loads[0]?.claimedWhileNotReady ?? 0;
     run.preloadMs = Date.now() - started;
+    if (mode === 'queue') {
+      // 诊断 queue.firstClaims(vite-plugin-frames.ts):第一次认领 plan / 细任务的时刻与那一刻 preload 各代际的状态
+      const q = (await diagnostics()).queue ?? {};
+      const brief = c => c ? { id: c.id, afterPreloadMs: c.at - started, preload: (c.preload ?? []).map(p => p.status) } : null;
+      run.x5 = {
+        readyAfterMs: run.preloadMs,
+        firstPlanClaim: brief(q.firstClaims?.plan), firstFineClaim: brief(q.firstClaims?.fine),
+        claimedWhileNotReady,
+        fineClaimedBeforeReady: !!q.firstClaims?.fine && (q.firstClaims.fine.preload ?? []).some(p => !p.aborted && p.status !== 'ready'),
+      };
+      console.log(`[x5] ${JSON.stringify(run.x5)}`);
+    }
 
     if (mode === 'queue') {
       const settled = await settledOn(main);
@@ -540,6 +561,7 @@ try {
   out.runs = Object.fromEntries(Object.entries(runs).map(([k, r]) => [k, { ...r, log: undefined, peerLog: undefined, library: undefined, release: undefined, diagnostics: undefined }]));
   out.nodes = runs.queue?.nodes ?? null;
   out.announcedAsset = runs.queue?.announcedAsset ?? null;
+  out.x5 = runs.queue?.x5 ?? null;
   if (!KEEP) for (const run of Object.values(runs)) for (const dir of [run?.exportDir, run?.peer?.exportDir]) if (dir) await fs.rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }).catch(() => {});
 }
 
@@ -548,5 +570,5 @@ const result = { ok: fails.length === 0, tasks: out.tasks ?? 0, done: out.done ?
 console.log(JSON.stringify(result, null, 2));
 console.log(JSON.stringify({ ok: result.ok, tasks: result.tasks, done: result.done, identical: result.identical,
   differentFrames: result.differentFrames.length, identicalIgnoringStyleOrder: out.identicalIgnoringStyleOrder ?? null, differenceSummary: out.differenceSummary ?? null,
-  streamTasks: out.streamTasks, streamDone: out.streamDone, streamCompare: out.streamCompare, fails }));
+  streamTasks: out.streamTasks, streamDone: out.streamDone, streamCompare: out.streamCompare, x5: out.x5 ?? null, fails }));
 process.exit(result.ok ? 0 : 1);
