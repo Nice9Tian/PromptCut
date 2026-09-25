@@ -762,7 +762,9 @@ export class StreamProducer {
     if (state?.queueOnly === true) return true;
     const key = state?.entryKey ?? this.entryKey;
     const entry = key ? this.pipeline.entries?.get?.(key) : null;
-    return entry?.queueSnapshots === true;
+    // 集成裁定(m6c-contract「集成时的裁定」X1 空档):切这一版 plan 的节点没切出流任务(它关着流),
+    // `FramePipeline.releaseQueueStreams` 把这一版的流交还本机自动生产,快照照旧走队列
+    return entry?.queueSnapshots === true && entry.queueStreamsLocal !== true;
   }
 
   /**

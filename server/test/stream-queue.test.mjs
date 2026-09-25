@@ -487,6 +487,25 @@ test('X1-owned 队列模式的 entry(queueSnapshots)的流不自动产;退回本
   assert.ok(producer.nextTask(null), '退回本机后自动生产有活');
 });
 
+test('X1-local-fallback 切分方没切出流任务:releaseQueueStreams 把这一版的流交还本机自动生产,快照仍归队列;不是队列模式 / 重复调用回 0', { timeout: 30_000 }, async (t) => {
+  t.after(cleanup);
+  const A = await streamPipeline();
+  const executor = executorFor(A);
+  await executor.plan(planView(), { signal: signalNone() });
+  const entry = await A.entry(projectJson());
+  const producer = A.streamProducer();
+  assert.equal(A.releaseQueueStreams(entry.key), 0, '不是队列模式的 entry:不动');
+  entry.queueSnapshots = true;
+  await producer.update(entry);
+  assert.equal(producer.nextTask(null), null, '归队列的流:自动生产没有活');
+  assert.equal(A.releaseQueueStreams('no-such-entry'), 0, '没有这个 entry:不动');
+  assert.equal(A.releaseQueueStreams(entry.key), 1, '交还一个 entry');
+  assert.equal(entry.queueSnapshots, true, '快照照旧归队列');
+  assert.equal(entry.queueStreamsLocal, true);
+  assert.ok(producer.nextTask(null), '交还之后自动生产有活');
+  assert.equal(A.releaseQueueStreams(entry.key), 0, '重复调用:不动');
+});
+
 test('X1-hold 队列正在产的流:换一版(新计划里没有它)时 state 不丢,在产的分段照常落盘', { timeout: 60_000 }, async (t) => {
   t.after(cleanup);
   const A = await streamPipeline();

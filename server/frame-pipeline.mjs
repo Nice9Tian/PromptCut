@@ -2305,6 +2305,21 @@ export class FramePipeline {
    * 它跳过了快照那几步。重排的这一趟 B 趟因为整帧 HTML 已齐会跳过,快照由 `fillCardControls` /
    * `renderLocalSnapshots` 补。没有会话停在这一版上的不重排。回重排了几个。
    */
+  /**
+   * M6c X1 的空档(集成裁定):队列模式下本机的流归队列产(`StreamProducer.queueOwned`),流任务由切分 plan 的
+   * 节点按它自己的能力切出。切分方关着流(或探不到编码器)时这一版一个流任务都没有,本机的流就没人产了。
+   * 发布方看到自己那个 plan 的 `task.done` 里没有流任务时调这里:把这一版(`entryKey`)的流交还本机自动生产
+   * (不经队列),快照照旧走队列。本机自己不能产流时什么都不做。回交还了几个 entry(0 或 1)。
+   */
+  releaseQueueStreams(entryKey) {
+    const entry = this.entries.get(entryKey);
+    if (!entry || entry.queueSnapshots !== true || entry.queueStreamsLocal === true) return 0;
+    const producer = this.streamProducer();
+    if (!producer?.enabled) return 0;
+    entry.queueStreamsLocal = true;
+    producer.kick();
+    return 1;
+  }
   leaveQueueMode() {
     const rerun = [];
     for (const [owner, generation] of this.generations) {

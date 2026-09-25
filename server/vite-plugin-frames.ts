@@ -220,8 +220,11 @@ const queueLog = (event: string, fields: object = {}) => {
 type QueueNode = {
   /** 连着文档服务、本机节点已经报到:`/preload` 走队列模式 */
   active(): boolean;
-  /** `/preload` 的队列那一半:报摘要、传快照、发布 `plan`。回 true = 这一版交给队列了;false = 本机自己产 */
-  publish(session: string, project: any): Promise<boolean>;
+  /**
+   * `/preload` 的队列那一半:报摘要、传快照、发布 `plan`。回 true = 这一版交给队列了;false = 本机自己产。
+   * `entryKey`:这一版的 entry(M6c X1 空档:切分方没切出流任务时,把这一版的流交还本机自动生产)
+   */
+  publish(session: string, project: any, entryKey?: string): Promise<boolean>;
   describe(): object;
   /** `GET /api/frames/queue`(契约 render-host-contract 第 3 节「诊断」):`{ nodes, codeVersion, envFingerprint, maxConcurrent }` */
   summary(): object;
@@ -378,7 +381,20 @@ async function startQueueNode(root: string, service: FramePipeline) {
     while (set.size > MINE_MAX) set.delete(set.values().next().value as string);
   };
   /** `<projectId>\0<digest>` → 已发布的那一版 */
-  const published = new Map<string, { projectId: string, projectRev: number, planId: string, digest: string, at: number }>();
+  const published = new Map<string, { projectId: string, projectRev: number, planId: string, digest: string, at: number, entryKey?: string }>();
+  /**
+   * M6c X1 的空档(集成裁定,m6c-contract「集成时的裁定」):自己发布的 plan 完成了,切分方却一个流任务都没切
+   * (它关着流或探不到编码器),而本机能产流 —— 这一版的流交还本机自动生产(不经队列),快照照旧走队列。
+   */
+  const streamsFallback = (planId: string, derived: unknown) => {
+    if (capabilities.streams !== true || !Array.isArray(derived)) return;
+    if (derived.some(id => typeof id === "string" && id.startsWith("stream:"))) return;
+    for (const record of published.values()) {
+      if (record.planId !== planId || !record.entryKey) continue;
+      const released = (service as any).releaseQueueStreams?.(record.entryKey) ?? 0;
+      if (released) log("queue.streams-local", { planId, entryKey: record.entryKey.slice(0, 12), derived: derived.length });
+    }
+  };
 
   let codeVersion: string = frameCode(root);
   let localNode: any = null;
@@ -420,7 +436,10 @@ async function startQueueNode(root: string, service: FramePipeline) {
       doneCounts.set(message.id, (doneCounts.get(message.id) ?? 0) + 1);
       taskState.set(message.id, { state: "done", at: Date.now() });
       const result = message.result;
-      if (message.id.startsWith("plan:") && Array.isArray(result?.derived)) planDerived.set(message.id, [...result.derived]);
+      if (message.id.startsWith("plan:") && Array.isArray(result?.derived)) {
+        planDerived.set(message.id, [...result.derived]);
+        streamsFallback(message.id, result.derived);
+      }
       // 细任务的清单(C6.2 形状,`v: 1`)才拉;M5b 之前的 local-node 完成时不带清单,本机产的由执行器自己发层
       if (result && typeof result === "object" && result.v === 1 && (result.kind === "snapshot" || result.kind === "stream")) {
         applyChain = applyChain.catch(() => {}).then(async () => {
@@ -507,7 +526,7 @@ async function startQueueNode(root: string, service: FramePipeline) {
 
   const handle: QueueNode = {
     active: () => started && !closed && endpoint.connected === true,
-    async publish(session, project) {
+    async publish(session, project, entryKey) {
       if (!handle.active()) return false;
       const projectId = typeof project?.id === "string" && PROJECT_ID_RE.test(project.id) ? project.id
         : typeof session === "string" && PROJECT_ID_RE.test(session) ? session : null;
@@ -526,7 +545,9 @@ async function startQueueNode(root: string, service: FramePipeline) {
         const results = await publishPlan(task);
         const result = Array.isArray(results) ? results.find((r: any) => r?.id === task.id) : null;
         if (!result || result.error) throw Object.assign(new Error(`plan 没发布成:${result?.error ?? "no-result"}`), { code: result?.error ?? "no-result" });
-        published.set(key, { projectId, projectRev, planId: task.id, digest, at: Date.now() });
+        published.set(key, { projectId, projectRev, planId: task.id, digest, at: Date.now(), ...(entryKey ? { entryKey } : {}) });
+        // plan 在发布回包之前就已经完成过(同一版别人发布过):按已知的切分结果补判一次流的空档
+        if (planDerived.has(task.id)) streamsFallback(task.id, planDerived.get(task.id));
         if (!taskState.has(task.id)) taskState.set(task.id, { state: result.state ?? "open", at: Date.now() });
         log("queue.published", { planId: task.id, bytes: text.length, state: result.state ?? null, created: result.created ?? null });
         return true;
@@ -1166,7 +1187,7 @@ export function framesPlugin(): Plugin {
              * 开关关着时 `queueNodes` 是空的,这里的调用和原来一字不差。
              */
             const queueNode = queueNodes.get(root);
-            const viaQueue = queueNode?.active() ? await queueNode.publish(preloadSession!, project) : undefined;
+            const viaQueue = queueNode?.active() ? await queueNode.publish(preloadSession!, project, entry.key) : undefined;
             await service.preload(project, { session: preloadSession!, localRev: input.localRev, ticket: preloadTicket, ...(viaQueue === undefined ? {} : { queue: viaQueue }) });
             // 报给编辑器进程登记(方案 A):这个进程崩溃重启后,由编辑器照表重放 preload。
             // 只报这个会话此刻真正认下的版本 —— 被更新的 preload 取代了的请求不报
