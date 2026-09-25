@@ -45,17 +45,30 @@ export interface OpenMsg {
   projectId: string;
 }
 
+/** 线上的一条操作:多了一种「引用分片上传的整份项目」的根替换(`project.upload`,c65-design.md 第 13 节) */
+export type WireOp = PathOp | { op: "set"; path: ""; upload: string };
+
 export interface OpMsg {
   type: "project.op";
   projectId: string;
   opId: string;
   session: string;
-  ops: PathOp[];
+  ops: WireOp[];
   expectRev?: number;
   undoOf?: string;
 }
 
-export type ClientMsg = OpenMsg | OpMsg;
+/** 大的根替换分片上传(文档服务 `project.upload`):收齐后由 `project.op` 的 `{ op: 'set', path: '', upload }` 引用 */
+export interface UploadMsg {
+  type: "project.upload";
+  projectId: string;
+  uploadId: string;
+  index: number;
+  count: number;
+  data: string;
+}
+
+export type ClientMsg = OpenMsg | OpMsg | UploadMsg;
 
 export interface StateMsg {
   type: "project.state";
@@ -157,7 +170,11 @@ export type SyncNotice =
   | { kind: "overwrote"; opId: string; entities: { entity: string; by: Writer }[] }
   | { kind: "overwritten"; entity: string; by: Writer; rev: number }
   | { kind: "undo"; redo: boolean; result: UndoResult }
-  | { kind: "resync"; reason: string };
+  | { kind: "resync"; reason: string }
+  /** 别人的一次改动落到了本地副本上(时间轴描边 1.5 s 用) */
+  | { kind: "remote"; rev: number; opId: string; entities: string[]; by: Writer; undoOf?: string }
+  /** AI 栏「撤销这一步」:撤的是别人(Agent)那次提交 */
+  | { kind: "revert-remote"; of: string; result: UndoResult };
 
 /** 本地备份:被覆盖的实体、或被丢弃的离线批次。由接线的一方落盘(草稿目录下 backups/) */
 export type LocalBackup =
@@ -219,8 +236,26 @@ interface Step {
 
 interface RemoteWrite {
   rev: number;
+  opId: string;
   by: Writer;
   entities: string[];
+}
+
+/** 本页面已确认的提交(AI 栏撤 Agent 那一步时,自己后来改过的也要挡) */
+interface LocalWrite {
+  rev: number;
+  entities: string[];
+}
+
+/** 撤别人的一次提交要的材料(AI 栏「撤销这一步」):那次提交的 opId 与逆操作,知道的话再给它落地的版本号 */
+export interface RemoteStep {
+  opId: string;
+  /** 不给就用本页面收到那次提交时自己算的逆操作;两边都没有就撤不了 */
+  inverse?: PathOp[];
+  /** 那次提交落地的版本号;不给就按本页面收到的 project.ops 查 */
+  rev?: number;
+  /** 那次提交的写入身份;不给就按本页面收到的 project.ops 查(都查不到时,之后的任何远端写入都算别人) */
+  by?: Writer;
 }
 
 type Events = {
@@ -231,7 +266,21 @@ type Events = {
 
 export const UNDO_LIMIT = 100;
 export const MERGE_WINDOW_MS = 300;
+/** 文档服务单次提交 ops 序列化后的上限(`PROJECT_LIMITS.MAX_OPS_BYTES`):超过就改成根替换、走分片上传 */
+export const MAX_OPS_BYTES = 256 * 1024;
+/** 分片上传每片的字符数:UTF-8 最坏 4 字节 / 字符,128 Ki 字符不超过文档服务每片 512 KiB 的上限 */
+export const UPLOAD_PART_CHARS = 128 * 1024;
+/** 文档服务 `UPLOAD_MAX_PARTS` */
+export const UPLOAD_MAX_PARTS = 64;
+
+/** 文本按 UTF-8 的字节数;短到不可能超限时直接回字符数,省一次编码 */
+const utf8Bytes = (text: string): number => {
+  if (text.length * 3 <= MAX_OPS_BYTES) return text.length;
+  return new TextEncoder().encode(text).length;
+};
 const BEFORE_REMOTE_KEEP = 32;
+/** 记多少次 Agent 提交的逆操作 */
+const REMOTE_INVERSE_KEEP = 200;
 
 let opSeq = 0;
 function defaultOpId(session: string): string {
@@ -265,6 +314,9 @@ export class DocSync {
   private redoStack: Step[] = [];
   private stepOf = new Map<string, Step>();
   private remoteWrites: RemoteWrite[] = [];
+  private localWrites: LocalWrite[] = [];
+  /** Agent 提交的 opId → 它落地的版本号与逆操作(按收到的 project.ops 在已确认副本上算) */
+  private remoteInverses = new Map<string, { rev: number; inverse: PathOp[] }>();
   /** rev → 应用这次远端改动之前的本地副本,给覆盖备份用 */
   private beforeRemote = new Map<number, Project>();
 
@@ -496,10 +548,16 @@ export class DocSync {
       this.resync(`远端操作在已确认副本上落不下去:${r.detail}`);
       return;
     }
+    // 顺手记下这次别人提交的逆操作(AI 栏「撤销这一步」用;事件里带了 inverse 时以事件为准)。
+    // 不按 actor.role 挑:本机 local 空间里 Agent 的连接眼下还是 page 身份(c65-integ 报告第 7 节),分不出来
+    this.remoteInverses.set(msg.opId, { rev: msg.rev, inverse: diffProject(r.value, this.confirmed).ops });
+    if (this.remoteInverses.size > REMOTE_INVERSE_KEEP) this.remoteInverses.delete(this.remoteInverses.keys().next().value!);
     this.confirmed = r.value;
     this.confirmedRev = msg.rev;
     const by: Writer = { actor: msg.actor, session: msg.session ?? (msg.actor as { session?: string } | undefined)?.session };
-    this.remoteWrites.push({ rev: msg.rev, by, entities: entitiesOf(msg.ops) });
+    const remoteEntities = entitiesOf(msg.ops);
+    this.remoteWrites.push({ rev: msg.rev, opId: msg.opId, by, entities: remoteEntities });
+    this.emit("notice", { kind: "remote", rev: msg.rev, opId: msg.opId, entities: remoteEntities, by, ...(msg.undoOf ? { undoOf: msg.undoOf } : {}) });
     this.pruneRemoteWrites();
     this.beforeRemote.set(msg.rev, this.local);
     if (this.beforeRemote.size > BEFORE_REMOTE_KEEP) this.beforeRemote.delete(this.beforeRemote.keys().next().value!);
@@ -558,6 +616,8 @@ export class DocSync {
     }
     this.confirmedRev = msg.rev;
     this.pending.shift();
+    this.localWrites.push({ rev: msg.rev, entities: entitiesOf(entry.ops) });
+    this.pruneRemoteWrites();
     if (this.gateOpId === entry.opId) {
       this.openGate();
       return;
@@ -671,7 +731,10 @@ export class DocSync {
     if (d.ops.length === 0) return prev;
     const r = applyOps(prev, d.ops);
     if (!r.ok) throw new Error(`diffProject 产出的操作落不下去:${r.detail}`);
-    const entry: Pending = { opId: this.newOpId(), ops: d.ops, inverse: d.inverse, undoOf, sent: false };
+    // 差异本身超过文档服务的单次上限:改成一条根替换(值就是落地后的本地副本),发送时走分片上传。
+    // 在已确认副本上重放它得到的仍是这一份,与文档服务「最后写的赢」一致;逆操作照旧用差异算的那份
+    const ops: PathOp[] = utf8Bytes(JSON.stringify(d.ops)) > MAX_OPS_BYTES ? [{ op: "set", path: "", value: r.value }] : d.ops;
+    const entry: Pending = { opId: this.newOpId(), ops, inverse: d.inverse, undoOf, sent: false };
     this.pending.push(entry);
     const now = this.now();
     if (target) {
@@ -703,10 +766,28 @@ export class DocSync {
   }
 
   private sendOp(p: Pending, expectRev?: number) {
-    const msg: OpMsg = { type: "project.op", projectId: this.projectId, opId: p.opId, session: this.session, ops: p.ops };
+    const msg: OpMsg = { type: "project.op", projectId: this.projectId, opId: p.opId, session: this.session, ops: this.wireOps(p) };
     if (expectRev !== undefined) msg.expectRev = expectRev;
     if (p.undoOf) msg.undoOf = p.undoOf;
     this.sendMsg(msg);
+  }
+
+  /**
+   * 超过单次上限的根替换改走 `project.upload`:先按顺序发完分片,再发引用它的 `project.op`。
+   * 同一条连接上消息按序处理,所以不用等 `project.uploaded` 的回音。片数超过上限时照原样发,由文档服务回 too-large。
+   */
+  private wireOps(p: Pending): WireOp[] {
+    const only = p.ops.length === 1 ? p.ops[0] : null;
+    if (!only || only.op !== "set" || only.path !== "") return p.ops;
+    if (utf8Bytes(JSON.stringify(p.ops)) <= MAX_OPS_BYTES) return p.ops;
+    const text = JSON.stringify(only.value);
+    const count = Math.ceil(text.length / UPLOAD_PART_CHARS);
+    if (count > UPLOAD_MAX_PARTS) return p.ops;
+    const uploadId = `up.${p.opId}`.slice(0, 128);
+    for (let index = 0; index < count; index++) {
+      this.sendMsg({ type: "project.upload", projectId: this.projectId, uploadId, index, count, data: text.slice(index * UPLOAD_PART_CHARS, (index + 1) * UPLOAD_PART_CHARS) });
+    }
+    return [{ op: "set", path: "", upload: uploadId }];
   }
 
   /** 能发就按顺序把没发的都发出去 */
@@ -777,8 +858,57 @@ export class DocSync {
     return out;
   }
 
+  /**
+   * AI 栏「撤销这一步」:以本页面的身份提交别人(Agent)那次提交的逆操作,带 `undoOf` 指向那次提交,
+   * 进本页面自己的撤销栈(c65-design.md 第 8 节裁定)。冲突检查同 `undo`:那次提交之后,
+   * 被**别的写入身份**(含本页面自己后来的改动)改过的实体不撤;那次提交的写入者自己后来又改的不算。
+   * 那次提交的版本号查不到(页面连上之前落地、记录已修剪,事件里也没带)时只按本页面没确认的修改挡。
+   */
+  /** 撤得了这次别人的提交吗:事件带了逆操作,或本页面收到它时记下了 */
+  canRevertRemote(opId: string, inverse?: PathOp[]): boolean {
+    return (inverse?.length ?? 0) > 0 || this.remoteInverses.has(opId);
+  }
+
+  revertRemote(remote: RemoteStep): UndoResult {
+    const own = this.remoteWrites.find((w) => w.opId === remote.opId);
+    const kept = this.remoteInverses.get(remote.opId);
+    const rev = remote.rev ?? own?.rev ?? kept?.rev;
+    const inverse = remote.inverse?.length ? remote.inverse : kept?.inverse ?? [];
+    const entities = entitiesOf(inverse);
+    const blocked = new Map<string, Writer>();
+    const mine: Writer = { session: this.session };
+    if (rev !== undefined) {
+      const origin = remote.by ?? own?.by;
+      const sameWriter = (by: Writer) =>
+        origin !== undefined && by.session === origin.session && JSON.stringify(by.actor ?? null) === JSON.stringify(origin.actor ?? null);
+      for (const w of this.remoteWrites) {
+        if (w.rev <= rev || sameWriter(w.by)) continue;
+        for (const e of entities) if (w.entities.some((x) => entitiesOverlap(x, e))) blocked.set(e, w.by);
+      }
+      for (const w of this.localWrites) {
+        if (w.rev <= rev) continue;
+        for (const e of entities) if (w.entities.some((x) => entitiesOverlap(x, e))) blocked.set(e, mine);
+      }
+    }
+    // 还没确认的本地修改也算「后来改过」
+    for (const p of this.pending) {
+      for (const x of entitiesOf(p.ops)) for (const e of entities) if (entitiesOverlap(x, e)) blocked.set(e, mine);
+    }
+    const step: Step = { opIds: [remote.opId], inverse, entities, lastAt: this.now() };
+    const result = this.applyRevert(step, blocked, undefined);
+    this.emit("notice", { kind: "revert-remote", of: remote.opId, result });
+    return result;
+  }
+
   private revert(step: Step, kind: "undo" | "redo"): UndoResult {
-    const blocked = this.conflictsFor(step);
+    for (const id of step.opIds) this.stepOf.delete(id);
+    const result = this.applyRevert(step, this.conflictsFor(step), kind);
+    this.emit("notice", { kind: "undo", redo: kind === "redo", result });
+    return result;
+  }
+
+  /** 按冲突表撤一步:落得下的照撤;kind 为空时(撤别人那一步)结果当一次普通修改进撤销栈 */
+  private applyRevert(step: Step, blocked: Map<string, Writer>, kind: "undo" | "redo" | undefined): UndoResult {
     const skipped: SkippedEntity[] = [...blocked].map(([entity, by]) => ({ entity, by }));
     const allowed = step.inverse.filter((op) => !blocked.has(entityOfOp(op)));
     const failed: string[] = [];
@@ -801,27 +931,23 @@ export class DocSync {
         }
       }
     }
-    for (const id of step.opIds) this.stepOf.delete(id);
-    let result: UndoResult;
     if (candidate === this.local) {
       // 一处都没撤成:出栈,也不进对面的栈(c65-design.md 第 8 节裁定)
-      result = { done: false, skipped, failed };
-    } else {
-      const undoOf = step.opIds[step.opIds.length - 1];
-      const before = this.pending.length;
-      this.commitInternal(candidate, { undoable: false }, undoOf, kind);
-      const opId = this.pending.length > before ? this.pending[this.pending.length - 1].opId : undefined;
-      result = { done: opId !== undefined, skipped, failed, opId };
+      return { done: false, skipped, failed };
     }
-    this.emit("notice", { kind: "undo", redo: kind === "redo", result });
-    return result;
+    const undoOf = step.opIds[step.opIds.length - 1];
+    const before = this.pending.length;
+    this.commitInternal(candidate, kind ? { undoable: false } : {}, undoOf, kind);
+    const opId = this.pending.length > before ? this.pending[this.pending.length - 1].opId : undefined;
+    return { done: opId !== undefined, skipped, failed, opId };
   }
 
   private pruneRemoteWrites() {
-    if (this.remoteWrites.length < 256) return;
+    if (this.remoteWrites.length < 256 && this.localWrites.length < 256) return;
     let min = this.confirmedRev;
     for (const s of [...this.undoStack, ...this.redoStack]) if (s.rev !== undefined && s.rev < min) min = s.rev;
     this.remoteWrites = this.remoteWrites.filter((w) => w.rev > min);
+    this.localWrites = this.localWrites.filter((w) => w.rev > min);
   }
 
   /* ---------- 保存 ---------- */
@@ -868,14 +994,15 @@ export class DocSync {
  * 换项目(另一个 projectId)时先解绑、再为新项目建一个 DocSync;`loadProject` 在接着的时候
  * 是对**当前这个项目**的一次根替换。
  */
-export function bindStore(ds: DocSync): () => void {
+export function bindStore(ds: DocSync, opts: { load?: (project: Project) => Project } = {}): () => void {
   if (ds.project !== state.project) {
     // DocSync 应以 store 里的那一份建;不是的话以 DocSync 为准
     set({ project: ds.project });
   }
   attachProjectSync({
     commit: (_prev, next, opts) => ds.commit(next, opts),
-    load: (project) => ds.load(project),
+    // 接线的一方可以接管「载入」:载入的是另一个项目时,换一个 DocSync 而不是对当前项目做根替换
+    load: (project) => (opts.load ? opts.load(project) : ds.load(project)),
     undo: () => void ds.undo(),
     redo: () => void ds.redo(),
     canUndo: () => ds.canUndo(),
