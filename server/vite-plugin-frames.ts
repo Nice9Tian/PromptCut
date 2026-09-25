@@ -35,7 +35,7 @@ const pushLog = (event: string, fields: object = {}) => {
  * 预渲染进程只在**同时**满足下面两条时才建推送队列,否则什么都不建,行为与现在相同 —— 这就是离线。
  *
  *   1. 能解析到素材服务的基址:`asset-client.ts` 的 `assetServiceOrigin()`(预渲染进程里就是 `PROMPTCUT_EDITOR_URL`),
- *      API 基址 `<源>/api/asset`;
+ *      API 基址 `<源>/api/asset`;真正推到哪一台按 D7 选(`selectAssetClient`,契约 J.13);
  *   2. 能连上文档服务:`render-node` 的 `resolveDocservice()` 回 `remote`、`local` 或 `editor`(M5b J.3:编辑器里挂的
  *      那一份,地址从 `PROMPTCUT_EDITOR_URL` 推出)。**`editor` 只在显式要推送时才算**(契约 J.12):
  *      进程设了 `PROMPTCUT_QUEUE_NODE=1` 或 `PROMPTCUT_PUSH=1`。都没设时编辑器里挂的那一份不算,不建推送队列、
@@ -47,6 +47,65 @@ const pushLog = (event: string, fields: object = {}) => {
  * 内容库客户端 `createContentClient` 在 `render-node/index.mjs` 里(C6.4 节点侧);取不到这个函数也不建。
  * 任何一步出错都只打日志,不影响预渲染进程。
  */
+/**
+ * 服务地址登记里**别的机器**的素材服务(J.6 素材回退与 J.13 推送基址共用这一个判据):本机登记的排除 ——
+ * `announcerId` 是 `asset:<本机主机名>`(`asset-announce.mjs` 的缺省身份),或者地址与本机素材服务同 host。
+ * 按 `announcerId` 的字典序排,每项只留不是本机的地址,留不下地址的整项去掉。
+ */
+function foreignAssetEndpoints(list: any[], origin: string | null): { announcerId: string; urls: string[] }[] {
+  const self = `asset:${String(os.hostname() || "host").replace(/[^A-Za-z0-9._:-]/g, "-") || "host"}`.slice(0, 128);
+  let selfHost = "";
+  try { selfHost = origin ? new URL(origin).host : ""; } catch { /* 没有就不按地址排 */ }
+  const out: { announcerId: string; urls: string[] }[] = [];
+  for (const item of list ?? []) {
+    if (item?.kind !== "asset" || typeof item.announcerId !== "string" || item.announcerId === self) continue;
+    const urls: string[] = [];
+    for (const url of item.urls ?? []) {
+      try { if (new URL(url).host === selfHost) continue; } catch { continue; }
+      urls.push(String(url));
+    }
+    if (urls.length) out.push({ announcerId: item.announcerId, urls });
+  }
+  return out.sort((a, b) => (a.announcerId < b.announcerId ? -1 : a.announcerId > b.announcerId ? 1 : 0));
+}
+
+/**
+ * 推送、拉取用的素材服务客户端(契约 J.13,按 D7 选基址),顺序:
+ *   1. `PROMPTCUT_ASSET_URL`(形如 `http://192.168.50.96:5460/api/asset`);
+ *   2. 服务地址登记里别的机器的 `asset`(`foreignAssetEndpoints`),取第一个的第一个地址;登记变了就新建一个
+ *      client 换上,在飞的请求照旧用旧的(回的是一个代理,每次调用时才取当前的 client);
+ *   3. 本机的 `assetServiceOrigin()` 加 `/api/asset`(原来的行为)。
+ * 写入带集群令牌(client 放进 `Authorization`)。每换一次基址记一行 `push.asset-base { source, base }`,基址不含令牌。
+ */
+function selectAssetClient({ node, endpoint, origin, token, createAssetClient, owner }:
+  { node: any; endpoint: any; origin: string; token: string | undefined; createAssetClient: any; owner: string }) {
+  const localBase = `${origin}/api/asset`;
+  let current: any = null;
+  let currentBase: string | null = null;
+  const use = (base: string, source: "env" | "announced" | "local") => {
+    if (base === currentBase && current) return;
+    let next: any;
+    try { next = createAssetClient({ base, token: token ?? null }); }
+    catch (error: any) { pushLog("push.asset-base-error", { source, base, for: owner, message: String(error?.message ?? error) }); return; }
+    current = next;
+    currentBase = base;
+    pushLog("push.asset-base", { source, base, for: owner });
+  };
+  const envBase = String(process.env.PROMPTCUT_ASSET_URL || "").trim().replace(/\/+$/, "");
+  let stop = () => {};
+  if (envBase) use(envBase, "env");
+  if (!current) {
+    use(localBase, "local");
+    stop = node.watchServiceEndpoints(endpoint, ["asset"], (list: any[]) => {
+      const url = foreignAssetEndpoints(list, origin)[0]?.urls[0];
+      if (url) use(url.replace(/\/+$/, ""), "announced");
+      else use(localBase, "local");
+    });
+  }
+  const client = new Proxy({}, { get: (_target, key) => { const value = current?.[key]; return typeof value === "function" ? value.bind(current) : value; } });
+  return { client, stop: () => { try { stop(); } catch { /* 已经停了 */ } }, base: () => currentBase };
+}
+
 /** `resolveDocservice` 这几种结果算「连得上文档服务」;`editor` 是 J.3 新加的(编辑器里挂的文档服务) */
 const DOCSERVICE_MODES = new Set(["remote", "local", "editor"]);
 /**
@@ -75,16 +134,19 @@ async function startArtifactPush(root: string, service: FramePipeline) {
   } });
   const content = node.createContentClient(endpoint);
   const { createAssetClient }: any = await import("./asset-store/client.mjs");
-  const client = createAssetClient({ base: `${origin}/api/asset`, token: token ?? null });
+  // J.13:按 D7 选推送的素材服务(环境变量 → 别的机器登记的 → 本机)
+  const assets = selectAssetClient({ node, endpoint, origin, token, createAssetClient, owner: "push" });
+  const client = assets.client;
   const { createPushQueue }: any = await import("./artifact-push.mjs");
   // settleMs:同一段最后一次进队后静置 1.5 s 再推,边渲边推时一段不被推十几遍
   const queue = createPushQueue({ pipeline: service, client, content, dir: service.root, log: pushLog, settleMs: 1500 });
   queue.start();
   pushTeardowns.set(root, async () => {
     try { await queue.stop(); } catch {}
+    assets.stop();
     try { endpoint.close(); } catch {}
   });
-  pushLog("push.started", { docservice: resolved.mode, url: resolved.url, asset: `${origin}/api/asset`, restored: queue.stats().restored });
+  pushLog("push.started", { docservice: resolved.mode, url: resolved.url, asset: assets.base(), restored: queue.stats().restored });
 }
 
 /* ======================================================================== *
@@ -166,7 +228,9 @@ async function startQueueNode(root: string, service: FramePipeline) {
   } });
   const projects = node.createProjectClient(endpoint);
   const content = node.createContentClient(endpoint);
-  const client = createAssetClient({ base: `${origin}/api/asset`, token: token ?? null });
+  // J.13:sink 推、task.done 拉,都用按 D7 选的素材服务
+  const assets = selectAssetClient({ node, endpoint, origin, token, createAssetClient, owner: "queue" });
+  const client = assets.client;
   const events: object[] = [];
   const note = (event: string, fields: object = {}) => {
     events.push({ at: Date.now(), event, ...fields });
@@ -257,19 +321,9 @@ async function startQueueNode(root: string, service: FramePipeline) {
     const rerun = (service as any).leaveQueueMode?.() ?? 0;
     log("queue.offline", { rerun });
   });
-  // J.6:别的机器的素材服务地址,本机的排除
-  const selfAnnouncer = `asset:${host}`.slice(0, 128);
-  let selfHost = "";
-  try { selfHost = new URL(origin).host; } catch { /* 没有就不按地址排 */ }
+  // J.6:别的机器的素材服务地址,本机的排除(与 J.13 选推送基址同一个判据)
   const stopWatch = node.watchServiceEndpoints(endpoint, ["asset"], (list: any[]) => {
-    const urls: string[] = [];
-    for (const item of list ?? []) {
-      if (item?.kind !== "asset" || item.announcerId === selfAnnouncer) continue;
-      for (const url of item.urls ?? []) {
-        try { if (new URL(url).host === selfHost) continue; } catch { continue; }
-        urls.push(url);
-      }
-    }
+    const urls = foreignAssetEndpoints(list, origin).flatMap(item => item.urls);
     const bases = setMediaFallbackBases(urls);
     note("queue.media-fallback", { bases: bases.length });
   });
@@ -347,7 +401,7 @@ async function startQueueNode(root: string, service: FramePipeline) {
     },
     describe() {
       return {
-        mode: resolved.mode, url: resolved.url, connected: endpoint.connected === true, active: handle.active(), nodeId, envFingerprint,
+        mode: resolved.mode, url: resolved.url, connected: endpoint.connected === true, active: handle.active(), nodeId, envFingerprint, assetBase: assets.base(),
         codeVersion, running: localNode?.running?.() ?? [], held: localNode?.session?.held?.().map(({ id }: any) => id) ?? [],
         stats: { ...stats },
         published: [...published.values()],
@@ -360,6 +414,7 @@ async function startQueueNode(root: string, service: FramePipeline) {
       closed = true;
       clearInterval(timer);
       try { stopWatch?.(); } catch {}
+      assets.stop();
       try { localNode?.stop(); } catch {}
       try { await localNode?.settled(); } catch {}
       try { endpoint.close(); } catch {}
