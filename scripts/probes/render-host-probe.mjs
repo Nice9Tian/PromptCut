@@ -747,9 +747,11 @@ async function runAuthCheck() {
       out.ticket = typeof ticket === 'string' && ticket.startsWith('v1.');
       check(out.ticket, 'auth.ticket 取到素材票据');
       const u = new URL(entry.url);
-      // 素材服务地址:取 service.endpoints 下发的(托管端的素材服务在另一个端口);5 s 内没下发才按文档服务地址推
-      for (let i = 0; i < 50 && !announcedAsset; i++) await delay(100);
-      const assetBase = (announcedAsset ?? `${u.protocol === 'wss:' ? 'https:' : 'http:'}//${u.host}/api/asset`).replace(/\/+$/, '');
+      // 素材服务地址:编辑器里挂的文档服务(路径 /docservice)与素材服务同源,照旧按文档服务地址推;
+      // 独立的文档服务(托管组合,素材服务在另一个端口)取 service.endpoints 下发的,5 s 内没下发才按文档服务地址推
+      const mounted = /\/docservice\/?$/.test(u.pathname);
+      for (let i = 0; i < 50 && !mounted && !announcedAsset; i++) await delay(100);
+      const assetBase = ((mounted ? null : announcedAsset) ?? `${u.protocol === 'wss:' ? 'https:' : 'http:'}//${u.host}/api/asset`).replace(/\/+$/, '');
       out.assetBase = assetBase;
       const auth = { Authorization: `Bearer ${ticket}` };
 
