@@ -7,13 +7,13 @@
  *   1. **A(远端)**:编辑器 + 预渲染进程,连 D、开推送(`PROMPTCUT_PUSH=1`)。页面以 `?preview=legacy` 打开、载入探针项目,
  *      探针按页面的镜像键调 A 的 preload,等后台那一趟 `ready`、推送队列清空 —— A 产的快照与 PNG 缓存帧(X7 的 `pngs`)
  *      都推到了 A 的素材服务,清单写进了 D 的内容库;
- *   2. **B(本机)**:另一套编辑器 + 预渲染进程,连同一个 D,素材服务指向 A 的(`PROMPTCUT_ASSET_URL`)。页面同样以
- *      `?preview=legacy` 打开、载入同一份项目,停在 1 秒:
- *        - **取之前**:调 B 的 `/api/frames/see`(legacy 整帧通道就是它),这一帧 `incomplete`、`missing` 里有这张卡 —— 占位;
- *          截图 `legacy-before.png`;
- *        - 调 B 的 preload:B 先按清单换机取用(C6.4 `adoptFromManifests` → C6.2 `applyResult`,X7 在这里把 PNG 一并取回),
- *          等诊断里的 `adoption` 报出来;
- *        - **取之后**:再调 `see`,这一帧不再 `incomplete`;B 盘上这张卡的 PNG 缓存与 A 逐字节相同;截图 `legacy-after.png`。
+ *   2. **B(本机)**:另一套编辑器 + 预渲染进程,连同一个 D,素材服务指向 A 的(`PROMPTCUT_ASSET_URL`):
+ *        - **取之前(对照)**:探针用自己的会话把同一份项目推进 B 的镜像,调 legacy 整帧通道 `/api/frames/see`(1 秒那一帧,
+ *          不触发 preload):B 没有这张卡的 PNG,这一帧 `incomplete`、`missing` 里有这张卡 —— 占位;帧图存 `legacy-before-frame.png`;
+ *        - **取之后**:B 的编辑器页面以 `?preview=legacy` 打开同一份项目,停在 1 秒。legacy 页面自己触发 preload,B 先按清单换机取用
+ *          (C6.4 `adoptFromManifests` → C6.2 `applyResult`,X7 在这里把 PNG 一并取回);等页面换上整帧,截图 `legacy-after.png`;
+ *          再调一次 `see`,这一帧不再 `incomplete`(帧图存 `legacy-after-frame.png`);
+ *        - B 盘上这张卡的 PNG 缓存与 A 逐字节相同;B 没有这张卡的 `full.mov`(没跑过 PNG 那一支),A 有。
  *
  *   node scripts/probes/png-adopt-probe.mjs [--port-a 5420] [--port-b 5423] [--docservice-port 5429] [--card r6-stateful]
  *        [--out <截图目录>] [--timeout-min 15] [--keep]
@@ -138,8 +138,17 @@ async function openLegacy(browser, editor) {
     const k = (await import('/src/render/dataMirror.ts')).mirrorKey();
     return k && k.localRev >= 1 ? { session: k.session, localRev: k.localRev } : null;
   }), 60000, 500);
-  return { page, key };
+  // 页面 store 里载入后的样子(`loadProject` 会补剪辑等字段);探针另起的会话要推这一份,键才与页面的相同
+  const project = await page.evaluate(async () => JSON.parse(JSON.stringify((await import('/src/store/project.ts')).getState().project)));
+  return { page, key, project };
 }
+
+/** legacy 页面此刻的样子:整帧 `<img>` 的地址、有没有报错条。不发帧请求(那会顶掉页面自己的请求) */
+const legacyView = page => page.evaluate(() => {
+  const img = [...document.querySelectorAll('img')].find(el => /\/api\/frames\//.test(el.getAttribute('src') || ''));
+  const text = document.body.innerText || '';
+  return { img: img ? img.getAttribute('src') : null, error: /Error:/.test(text) ? (text.match(/Error:[^\n]*/) || [''])[0].slice(0, 160) : null };
+});
 
 const preloadUntilReady = (editor, key, label) => until(label, async () => {
   const status = await postJson(`${editor.base}/api/frames/preload`, { ...key });
@@ -200,40 +209,68 @@ try {
   // 2. B:本机,取
   const B = await startEditor('b', PORT_B, { PROMPTCUT_DOCSERVICE_URL: DOC_URL, PROMPTCUT_PUSH: '1', PROMPTCUT_ASSET_URL: assetA });
   if (!B.base) throw new Error('B 起不来');
-  const pageB = await openLegacy(browser, B);
-  if (!pageB.key) throw new Error('B 的页面没有镜像键');
-  const before = await seeAt(B, pageB.key);
+  out.shots = {};
+  /*
+   * 取之前(对照):B 刚起来、还没有任何 preload。探针用另一个会话把**同一份**项目(A 页面 store 里的那份)推进 B 的镜像,
+   * 调 legacy 整帧通道 `see`(只渲这一帧,不触发 preload、不取清单):B 没有这张卡的 PNG,这一帧是占位。
+   * 不用页面的会话:页面自己也在按同一条 lane 取帧,探针的请求会把它顶掉。
+   */
+  const probeKey = { session: `png-adopt-before-${STAMP}`, localRev: 1 };
+  const pushedB = await postJson(`${B.origin}/api/data/project`, { ...probeKey, project: pageA.project });
+  check(pushedB.ok, '[b] 对照会话推进镜像', pushedB.body);
+  await until('[b] 预渲染进程手里有对照会话的项目', async () => (await json(`${B.base}/api/data/project?session=${probeKey.session}&localRev=1`)).ok || null, 30000);
+  const before = await seeAt(B, probeKey);
   const beforeFrame = before?.frames?.[0] ?? null;
   out.before = beforeFrame ? { source: beforeFrame.source, incomplete: beforeFrame.incomplete, missing: beforeFrame.missing } : before;
   check(beforeFrame?.incomplete === true && beforeFrame.missing.includes('clip-remote'), '取之前:legacy 这一帧是占位(incomplete,缺这张卡)', out.before);
-  await delay(2500);
-  out.shots = { before: path.join(OUT, 'legacy-before.png') };
-  await pageB.page.screenshot({ path: out.shots.before });
+  if (beforeFrame?.url) {
+    out.shots.beforeFrame = path.join(OUT, 'legacy-before-frame.png');
+    await fs.writeFile(out.shots.beforeFrame, Buffer.from(await (await fetch(B.base + beforeFrame.url)).arrayBuffer()));
+  }
 
-  // preload 开跑后第一件事是按清单换机取用(C6.4);它一报出来就马上看 legacy 这一帧,赶在后台那一趟往下走之前
-  const kick = await postJson(`${B.base}/api/frames/preload`, { ...pageB.key });
-  check(kick.ok, '[b] preload 开跑', kick.body);
-  const adoption = await until('[b] 换机取用报出来', async () => (await diagnostics(B)).adoption ?? null, 180000, 200);
-  const after = await seeAt(B, pageB.key);
+  /*
+   * 取之后:B 的编辑器页面以 `?preview=legacy` 打开同一份项目。legacy 页面自己会触发 preload(`usePrerenderPreload`),
+   * B 的 preload 第一件事是按清单换机取用(C6.4 `adoptFromManifests` → `applyResult`,X7 在这里把 PNG 一并取回)。
+   * 等诊断报出 `adoption`、页面的整帧 `<img>` 换上、没有报错条,截图。
+   */
+  const pageB = await openLegacy(browser, B);
+  if (!pageB.key) throw new Error('B 的页面没有镜像键');
+  const adoption = await until('[b] 换机取用报出来', async () => (await diagnostics(B)).adoption ?? null, 180000, 500);
   out.b = { adoption };
   check((adoption?.manifests ?? 0) >= 1, '[b] 按清单换机取用了至少一段', adoption);
   // 一段 60 帧快照 + 同一段的 PNG 缓存帧都是从 A 的素材服务下的
   check((adoption?.fetched ?? 0) >= 60 + pngA.size, '[b] 下载的块数 = 快照 + PNG', { fetched: adoption?.fetched, png: pngA.size });
+  const readyB = await preloadUntilReady(B, pageB.key, '[b] 后台那一趟跑完');
+  check(readyB?.status === 'ready', '[b] 后台那一趟以 ready 结束', readyB);
+  out.b.preload = readyB?.status ?? null;
+  // 页面缺料时每 700 ms 重取同一帧;等它换上一张不缺料的整帧(img 地址不在 preview-frames 下),再多等一拍
+  const view = await until('[b] legacy 页面换上整帧', async () => {
+    const v = await legacyView(pageB.page);
+    return v.img && !/preview-frames/.test(v.img) && !v.error ? v : null;
+  }, 60000, 500);
+  out.b.view = view;
+  await delay(1500);
+  out.shots.after = path.join(OUT, 'legacy-after.png');
+  await pageB.page.screenshot({ path: out.shots.after });
+  // 截完图再用探针自己的会话看这一帧(它会顶掉页面的请求,所以放在最后)
+  const after = await seeAt(B, probeKey);
   const afterFrame = after?.frames?.[0] ?? null;
   out.after = afterFrame ? { source: afterFrame.source, incomplete: afterFrame.incomplete, missing: afterFrame.missing } : after;
   check(afterFrame && afterFrame.incomplete === false && afterFrame.missing.length === 0, '取之后:legacy 这一帧不再占位', out.after);
   if (afterFrame?.url) {
-    const img = Buffer.from(await (await fetch(B.base + afterFrame.url)).arrayBuffer());
-    out.shots.frame = path.join(OUT, 'legacy-after-frame.png');
-    await fs.writeFile(out.shots.frame, img);
+    out.shots.afterFrame = path.join(OUT, 'legacy-after-frame.png');
+    await fs.writeFile(out.shots.afterFrame, Buffer.from(await (await fetch(B.base + afterFrame.url)).arrayBuffer()));
   }
-  // 页面在缺料时每 700 ms 重取同一帧;给它几拍换上
-  await delay(4000);
-  out.shots.after = path.join(OUT, 'legacy-after.png');
-  await pageB.page.screenshot({ path: out.shots.after });
-  const readyB = await preloadUntilReady(B, pageB.key, '[b] 后台那一趟跑完');
-  check(readyB?.status === 'ready', '[b] 后台那一趟以 ready 结束', readyB);
-  out.b.preload = readyB?.status ?? null;
+  // B 没有为这张卡跑过 PNG 那一支:`fillCardControls` 见 HTML 与 PNG 都齐就跳过,不会走到 `cardCache.finish` 建 full.mov
+  const movs = async library => {
+    const outMovs = [];
+    for (const key of await fs.readdir(path.join(library, 'controls')).catch(() => [])) {
+      if (await fs.access(path.join(library, 'controls', key, 'mov', 'full.mov')).then(() => true, () => false)) outMovs.push(key);
+    }
+    return outMovs;
+  };
+  out.cardMov = { a: await movs(A.library), b: await movs(B.library) };
+  check(out.cardMov.a.length >= 1 && out.cardMov.b.length === 0, 'A 为这张卡跑过 PNG 那一支(有 full.mov),B 没有(取回的 PNG 已齐)', out.cardMov);
 
   const pngB = await pngFiles(B.library);
   let same = 0;
