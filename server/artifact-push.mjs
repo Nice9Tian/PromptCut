@@ -383,12 +383,15 @@ export function createPushQueue({
       stopped = false;
       schedule();
     },
-    /** 停止派新活;等在推的段收尾、队列文件写完。队里没推完的段留在文件里,下次重建时接着推 */
+    /**
+     * 停止派新活,等队列文件写完就返回。**不等在推的段**:它们可能卡在网络上(W4 就是在推的段卡住时停),
+     * 它们之后自己收尾 —— 成功就出队、失败就留在文件里,都照常写回;不再派下一段。
+     * 队里没推完的段留在文件里,下次重建时接着推。
+     */
     async stop() {
       running = false;
       stopped = true;
       if (timer !== null) { clearTimer(timer); timer = null; timerAt = Infinity; }
-      await Promise.allSettled([...inflight]);
       await persist();
       for (const resolve of waiters.splice(0)) resolve();
     },
