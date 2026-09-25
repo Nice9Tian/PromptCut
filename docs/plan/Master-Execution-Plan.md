@@ -658,3 +658,7 @@ ctx = { send(connId, msg), publish(channel, msg), now(), log(event, fields), con
 | 没有哈希的素材在远端节点上的能力闸（`requires.localMedia`） | M5b 靠 `plan-mismatch` 拦住本地档 | **M6** |
 | 全量 `watch: 'all'` 的收紧（第 5.1 节第 3 条） | 摘要订阅已经提供；现有本机节点依赖全量订阅 | **M6** |
 | 同一用户不同会话写内容库时的区分 | 现在只有一种写入方 | **随 C6.5** |
+| `plan` 任务的指纹不过滤认领（由谁来做计划） | M5b 两台机器指纹相同，不影响连通 | **M6**：独立渲染主机上线时定「发布方就近认领计划」 |
+| 本机队列节点的闲时门槛放宽（现在要等 preload 到 `ready`） | 只影响本机节点起步的早晚 | **M6** |
+| 快照 style 声明顺序跨进程确定化 | 同样内容的块哈希不同，会重复上传；不影响正确性 | **M6**（`src/render/snapshot/inlineStyles.ts` 一侧） |
+| 远端节点渲的卡在本机没有 PNG 缓存（`?preview=legacy` 下是占位） | 只影响回滚预览 | **M6** |
