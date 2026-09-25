@@ -303,7 +303,7 @@ export async function startHost({ attached = false, clusterToken, clock = testCl
 
   const clients = [];
   const env = {
-    attached, host, dataDir, logs, clock, port, wsPath,
+    attached, host, dataDir, logs, clock, port, wsPath, clusterToken,
     get service() { return host.service; },
     httpBase: `http://127.0.0.1:${port}${httpPrefix}`,
 
