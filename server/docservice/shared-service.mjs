@@ -50,6 +50,8 @@ import { isProjectId } from '../auth/protocol.mjs';
  * @param {(event: string, fields: object) => void} [options.log]
  * @param {object} [options.limits] `{ createPerHour, maxProjects, challengeTtlMs, rateWindowMs, maxFailures, cooldownMs }`
  * @param {object} [options.service] 透传给 `createDocService` 的其余选项（`autoTick`、`heartbeatMs`、`sweepMs`……）
+ * @param {(projectId: string) => void} [options.onCreate] 共享项目建成之后调（局域网主机据此开始广播，SP 契约第 4 节）
+ * @param {(projectId: string) => void} [options.onDelete] 共享项目删掉之后调（局域网主机据此停止通告这个项目）
  */
 export function createSharedDocService({
   mode,
@@ -65,6 +67,8 @@ export function createSharedDocService({
   log,
   limits = {},
   service: serviceOptions = {},
+  onCreate,
+  onDelete,
 } = {}) {
   if (mode !== 'hosted' && mode !== 'lan') throw new TypeError("createSharedDocService: mode 只能是 'hosted' 或 'lan'");
   const say = typeof log === 'function' ? log : undefined;
@@ -97,6 +101,7 @@ export function createSharedDocService({
     log: say,
     createPerHour: limits.createPerHour,
     maxProjects: limits.maxProjects,
+    ...(typeof onCreate === 'function' ? { onCreate } : {}),
   });
   const prefix = mode === 'hosted' ? '' : wsPath.replace(/\/+$/, '');
 
@@ -155,6 +160,10 @@ export function createSharedDocService({
     },
     now,
     dropSpace(space) {
+      // 先通知（记录已经删掉了）：清数据目录失败也不影响停止通告
+      if (typeof onDelete === 'function') {
+        try { onDelete(space); } catch (err) { say?.('module.error', { module: 'shared', hook: 'onDelete', message: String(err?.message ?? err) }); }
+      }
       service.dropSpace(space);
       spaceStores.delete(space);
       bundles.delete(space);
