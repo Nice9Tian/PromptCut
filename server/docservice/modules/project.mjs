@@ -19,8 +19,8 @@
  *   摘要不符时已收的分片全部丢弃。未收齐的上传放在内存里，闲置太久或太多时丢掉最旧的（见 `SNAPSHOT_LIMITS`）。
  * - 取回时先核对文件内容的 sha256 等于这一版登记的摘要：Windows 文件名不分大小写，只差大小写的两个项目
  *   同一版会落进同一个文件，对不上就当没有（回 `missing`），不会把别的项目的内容发出去。
- * - 发回的分片按节奏发：核心的出站队列加底层积压超过 1 MiB 就以 1013 断开（H.2），整份一次发完会被断开。
- *   核心若提供 `ctx.pendingBytes(connId)` 就等积压降下来再发；否则按「窗口 + 速率」估算（`SNAPSHOT_PACE`）。
+ * - 发回的分片按积压节流：核心的出站队列加底层积压超过上限（缺省 1 MiB）就以 1013 断开（H.2），整份一次发完会被断开。
+ *   每发一片之前等这条连接的积压（`ctx.pendingBytes`）降到上限（`ctx.maxPendingBytes`）的一半以下（J.11）。
  *   同一条连接上的多次取回排队依次发，连接断开就停。
  */
 import { createHash } from 'node:crypto';
@@ -41,11 +41,11 @@ export const SNAPSHOT_LIMITS = Object.freeze({
   PENDING_IDLE_MS: 10 * 60_000,
 });
 
-/**
- * 核心不给积压字节数时的发送节奏：开头可以一口气发 `windowBytes`，之后按 `bytesPerSec` 估算。
- * 实际吞吐不低于这个速率时，积压不超过「窗口 + 一片」= 768 KiB，低于核心的 1 MiB 上限。
- */
-export const SNAPSHOT_PACE = Object.freeze({ windowBytes: 512 * 1024, bytesPerSec: 1024 * 1024 });
+/** 发回快照的节流（J.11）：积压没降到上限的一半以下时，隔 `pollMs` 再查 */
+export const SNAPSHOT_PACE = Object.freeze({ pollMs: 20 });
+
+/** 核心没给 `ctx.maxPendingBytes` 时按这个上限算（与核心的缺省值相同，H.2） */
+const DEFAULT_MAX_PENDING_BYTES = 1024 * 1024;
 
 const isReqId = (v) => typeof v === 'string' || (typeof v === 'number' && Number.isFinite(v));
 
@@ -130,9 +130,9 @@ export function splitSnapshotText(text, limit) {
  *   日志与快照存储（`../store/index.mjs`）；缺省用内存存储，不跨重启。没有 `writeBlob` / `readBlob` 的存储
  *   不支持快照，快照消息回 `unsupported`
  * @param {() => number} [options.now] 缺省用 `ctx.now()`
- * @param {{ windowBytes?: number, bytesPerSec?: number }} [options.pace] 发回快照的节奏，缺省 `SNAPSHOT_PACE`
+ * @param {number} [options.pollMs] 积压没降下来时隔多久再查，缺省 `SNAPSHOT_PACE.pollMs`（20 ms）
  */
-export function projectModule({ store = createMemoryStore(), now, pace } = {}) {
+export function projectModule({ store = createMemoryStore(), now, pollMs = SNAPSHOT_PACE.pollMs } = {}) {
   /** projectId → { projectRev, digest, at }；第一次用到时从日志回放 */
   const projects = new Map();
   /** projectId → Map<rev, digest>：每一版登记的摘要，快照按它校验 */
@@ -143,10 +143,6 @@ export function projectModule({ store = createMemoryStore(), now, pace } = {}) {
   const uploads = new Map();
   /** connId → { chain: Promise, alive: boolean }：取回快照的发送队列 */
   const senders = new Map();
-  const paceOpts = {
-    windowBytes: pace?.windowBytes > 0 ? pace.windowBytes : SNAPSHOT_PACE.windowBytes,
-    bytesPerSec: pace?.bytesPerSec > 0 ? pace.bytesPerSec : SNAPSHOT_PACE.bytesPerSec,
-  };
   const stats = { snapshotsStored: 0, snapshotsServed: 0, digestMismatches: 0, uploadsEvicted: 0 };
 
   const clock = (ctx) => (typeof now === 'function' ? now() : ctx.now());
@@ -303,28 +299,23 @@ export function projectModule({ store = createMemoryStore(), now, pace } = {}) {
     t.unref?.();
   });
   const nextTurn = () => new Promise((resolve) => setImmediate(resolve));
+  const maxPendingOf = (ctx) => (Number.isFinite(ctx.maxPendingBytes) && ctx.maxPendingBytes > 0 ? ctx.maxPendingBytes : DEFAULT_MAX_PENDING_BYTES);
 
-  /** 按节奏把一串消息发给一条连接；连接断开或被核心关掉就停 */
+  /**
+   * 按积压节流，把一串消息发给一条连接（J.11）：每发一条之前，这条连接的积压（核心出站队列 + 底层缓冲，
+   * `ctx.pendingBytes`）必须低于上限（`ctx.maxPendingBytes`）的一半，否则隔 `pollMs` 再查。
+   * 每片 ≤ min(256 KiB, 上限的四分之一)，所以发出后积压不超过上限的四分之三，到不了 1013。连接断开或被核心关掉就停。
+   * 核心没有这两个接口时（测试替身）按上限 1 MiB 算、积压当 0，每条之间只让一次事件循环。
+   */
   async function stream(ctx, connId, sender, messages) {
-    const started = Date.now();
-    let sent = 0;
+    const limit = maxPendingOf(ctx);
+    const pendingOf = typeof ctx.pendingBytes === 'function' ? (id) => ctx.pendingBytes(id) : () => 0;
     for (let i = 0; i < messages.length; i += 1) {
       if (!sender.alive) return;
-      const text = JSON.stringify(messages[i]);
-      const bytes = Buffer.byteLength(text, 'utf8');
-      if (i > 0) {
-        if (typeof ctx.pendingBytes === 'function') {
-          // 核心给了积压字节数：等它降到一片以下再发
-          while (sender.alive && ctx.pendingBytes(connId) > SNAPSHOT_LIMITS.OUT_PART_BYTES) await wait(5);
-        } else {
-          const allowed = paceOpts.windowBytes + ((Date.now() - started) / 1000) * paceOpts.bytesPerSec;
-          if (sent + bytes > allowed) await wait(Math.ceil(((sent + bytes - allowed) / paceOpts.bytesPerSec) * 1000));
-          else await nextTurn();
-        }
-        if (!sender.alive) return;
-      }
+      if (i > 0) await nextTurn();
+      while (sender.alive && pendingOf(connId) >= limit / 2) await wait(pollMs);
+      if (!sender.alive) return;
       if (ctx.send(connId, messages[i]) === false) return;
-      sent += bytes;
     }
   }
 
@@ -344,7 +335,9 @@ export function projectModule({ store = createMemoryStore(), now, pace } = {}) {
       return missing();
     }
 
-    const parts = splitSnapshotText(text, SNAPSHOT_LIMITS.OUT_PART_BYTES);
+    // 每片不超过 256 KiB，也不超过积压上限的四分之一：节流线是上限的一半，发出一片后仍留余量
+    const partBytes = Math.max(1024, Math.min(SNAPSHOT_LIMITS.OUT_PART_BYTES, Math.floor(maxPendingOf(ctx) / 4)));
+    const parts = splitSnapshotText(text, partBytes);
     const count = parts.length;
     const messages = parts.map((data, index) => withReq({ type: 'project.snapshot.part', projectId, projectRev, index, count, data }));
     messages.push(withReq({ type: 'project.snapshot.end', projectId, projectRev, digest }));

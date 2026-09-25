@@ -128,6 +128,9 @@ export function createRouter({
     return Number.isFinite(n) && n > 0 ? n : 0;
   }
 
+  /** 这条连接的积压：出站队列里的字节数 + 底层尚未发出的字节数 */
+  const pendingOf = (conn) => conn.bytes + bufferedOf(conn.connId);
+
   // ---------- 出站：直接写、进队、合并、排空、背压（H.2） ----------
 
   /** 清空出站队列 */
@@ -368,6 +371,13 @@ export function createRouter({
       subscribe: ops.subscribe,
       unsubscribe: ops.unsubscribe,
       publish: ops.publish,
+      // 这条连接的积压：核心出站队列里的字节数 + 底层尚未发出的字节数；连接不存在回 0。
+      // 模块发一长串消息时据此节流，别让积压超过 maxPendingBytes 被 1013 断开（H.2）
+      pendingBytes: (connId) => {
+        const conn = conns.get(connId);
+        return conn ? pendingOf(conn) : 0;
+      },
+      maxPendingBytes: maxPending,
     });
     mounted.push(entry);
     for (const c of conns.values()) callHook(entry, 'connect', c.connId, c.principal);
@@ -413,7 +423,6 @@ export function createRouter({
     }
   }
 
-  const pendingOf = (conn) => conn.bytes + bufferedOf(conn.connId);
 
   return {
     connect(connId, principal, info = {}) {
