@@ -1,0 +1,335 @@
+/**
+ * 仅供测试，生产代码不得引用。
+ *
+ * SP 共享项目接入测试（契约 `docs/plan/shared-project-contract.md` 第 7 节 SP1～SP7）共用的工具。
+ * 只照契约写，不看实现（实现在 `claude/sp-hosting`、`claude/sp-routing`）。
+ * M6a 已有的接口（`auth-kit.mjs` 里集成对账过的那些）直接复用。
+ *
+ * # 假设的接口（契约没写死的函数名、参数与模块路径全部集中在这里；集成对账时只改本文件）
+ *
+ * ## 托管组合 `server/hosted/main.mjs`（契约第 1 节写死了路径与环境变量）
+ *   环境变量：PROMPTCUT_DOCSERVICE_PORT、PROMPTCUT_ASSET_PORT、PROMPTCUT_DATA_DIR、PROMPTCUT_CLUSTER_TOKEN、
+ *            PROMPTCUT_ASSET_PUBLIC_URL、PROMPTCUT_DOCSERVICE_PUBLIC_URL（契约写死）。
+ *   〔假设 H1〕文档服务是独立模式：WebSocket 在 `/`，HTTP 端点在 `/shared/…`（与 `server/docservice/main.mjs` 相同）。
+ *   〔假设 H2〕素材服务的路径是 `/api/asset/<ns>/<hash>[/<n>|/complete|/chunks]`（与现有中间件相同；契约给的公网地址形如
+ *             `http://…:8788/api/asset`）。
+ *   〔假设 H3〕就绪判据：文档服务 `GET /shared/lookup?name=…` 回 404 JSON，素材服务 `GET /api/asset/media/<64 个 0>` 有 HTTP 回应。
+ *             不依赖日志格式，所以用固定端口（本分支的端口段 5490～5499）。
+ *   〔假设 H4〕`.layout` 对不上时「拒绝启动」＝ 进程以非 0 退出码结束（契约只说拒绝启动，没写退出码与日志原因）。
+ *   〔假设 H5〕`secrets/cluster-token` 文件内容是令牌本身，允许末尾换行。
+ *   〔假设 H6〕素材服务登记用的 `kind` 是 `'asset'`（M5 的 `server/asset-announce.mjs` 就是这样登记的）。
+ *
+ * ## 数据目录布局（契约第 1 节写死）
+ *   `$DATA/docservice/`（auth/、tenants/<projectId>/）、`$DATA/assets/{media,snap,px}/<哈希前两位>/<哈希>[.ext]`、`$DATA/secrets/`。
+ *
+ * ## `fs-store` 的 `shard: true`（契约第 1 节）
+ *   `createFsStore({ dir, shard: true })`；〔假设 S1〕全件放在 `<dir>/<哈希前两位>/<哈希>[.<ext>]`（契约说「按哈希前两位分子目录」，
+ *   没写全件在子目录里的文件名，这里按原布局的文件名）。
+ *
+ * ## 迁移核对 `scripts/probes/shared-project-probe.mjs --role migrate-check --from <url> --to <url>`（契约第 6 节）
+ *   〔假设 M1〕`--from` / `--to` 是托管组合**文档服务**的 http 地址（形如 `http://127.0.0.1:5490`），素材服务地址由探针自己经
+ *             `service.endpoints` 取；集群令牌从环境变量 `PROMPTCUT_CLUSTER_TOKEN` 读（项目数要经管理接口才数得全）。
+ *   〔假设 M2〕结果是 stdout 最后一行 JSON，带 `ok` 布尔字段。
+ *
+ * ## 缺省托管地址 `server/auth/hosted-default.mjs`（契约第 3 节写死了文件与常量名）
+ *   〔假设 D1〕另导出 `resolveHostedUrl({ ui, env })`：`ui` 是界面上改过的值（没改过是 undefined），`env` 缺省 `process.env`。
+ *
+ * ## 路由 `server/auth/route.mjs`（契约第 3 节写死了文件与两个函数名）
+ *   `findSharedProject({ name, hostedUrl, lan: { discover, manual } })` → `{ candidates, errors }`（契约写死）。
+ *   〔假设 R1〕`lan.discover` 是 `(opts) => Promise<announce[]>`，announce 为第 4 节应答包的字段
+ *             （projectId、name、mode、hostDeviceName、docservice、asset）；测试的假 discover 不看参数，只回本项目名的包。
+ *   〔假设 R2〕`hostedUrl` 形如 `http://host:port`（不带尾斜杠）；托管端查询打到 `<hostedUrl>/shared/lookup?name=`。
+ *   〔假设 R3〕`createSharedProject({ where: 'hosted', hostedUrl, name, mode, creator: { username, password }, password, list })`，
+ *             口令在客户端派生（服务端从不派生，M6a 第 2 节）；回 `{ projectId, name, mode }`（可以再多字段）。
+ *
+ * ## 局域网发现（契约第 4 节只定参数，没定模块）
+ *   〔假设 L0〕模块 `server/auth/lan-discovery.mjs`（Node 专用，浏览器侧不做发现）。导出：
+ *     LAN_DISCOVERY  参数常量 { group, port, ttl, queryIntervalMs, queryRepeats, announceIntervalMs, announceJitterMs,
+ *                     expireMs, maxPacketBytes, discoverTimeoutMs, interfaceCheckMs }
+ *     encodeQuery({ nonce, name? }) → Buffer
+ *     encodeAnnounce(fields) → Buffer | null          超过 1 KiB 回 null（「超出不发」）
+ *     decodePacket(buf) → object | null               magic / v / type 不对、不是 JSON、超过 1 KiB 都回 null
+ *     selectInterfaces(os.networkInterfaces() 的形状) → [{ name, address, netmask, broadcast }]
+ *     createLanTable({ now }) → { see(announce), list() }   按包里的 ttlMs（缺省 45 s）过期
+ *     createLanHost({ port, interfaces, projects, deviceName, docservicePort, assetPort }) → { start(), stop() }
+ *        projects: () => [{ projectId, name, mode }]；收到查询后单播回应答，地址取收到查询的那块网卡（interfaces 里的 address）
+ *     discoverLan({ name, port, interfaces, targets, timeoutMs }) → Promise<announce[]>
+ *        targets 给了就只向这些地址单播查询（本机单测用，代替组播与定向广播）
+ *
+ * 只引 Node 内置模块与同目录的测试工具。
+ */
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { spawn } from 'node:child_process';
+import { createHash, randomBytes } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
+import { wsClient, rawHandshake, sleep, waitFor } from './fake-ws-kit.mjs';
+import { ask, PROTOCOL } from './auth-kit.mjs';
+
+export const ROOT = path.resolve(fileURLToPath(import.meta.url), '..', '..', '..');
+export const HOSTED_MAIN = path.join(ROOT, 'server', 'hosted', 'main.mjs');
+export const PROBE = path.join(ROOT, 'scripts', 'probes', 'shared-project-probe.mjs');
+export const HOSTED_IP = '8.219.80.16';
+
+/** 本分支的端口段 5490～5499（契约第 8 节）。托管组合的子进程测试都在 sp-hosted.test.mjs 里串行用这几个 */
+export const PORTS = Object.freeze({
+  A_DOC: 5490, A_ASSET: 5491,
+  B_DOC: 5492, B_ASSET: 5493,
+  C_DOC: 5494, C_ASSET: 5495,
+  LAN_HOST: 5496, LAN_CLIENT: 5497,
+});
+
+export const sha256hex = (buf) => createHash('sha256').update(buf).digest('hex');
+export const ZERO_HASH = '0'.repeat(64);
+
+export function tmpDir(t, prefix = 'pc-sp-') {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  t?.after?.(() => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* 子进程可能还占着 */ } });
+  return dir;
+}
+
+// ------------------------------------------------------------------ 本机的非回环 IPv4
+
+/** 本机一块已启用、非回环、非链路本地的 IPv4 地址；没有就回 null（用它连 0.0.0.0 上的服务，对端地址就不是回环） */
+export function lanIPv4() {
+  for (const list of Object.values(os.networkInterfaces())) {
+    for (const a of list ?? []) {
+      if ((a.family === 'IPv4' || a.family === 4) && !a.internal && !a.address.startsWith('169.254.')) return a.address;
+    }
+  }
+  return null;
+}
+
+// ------------------------------------------------------------------ 托管组合子进程
+
+const SCRUB = [
+  'PROMPTCUT_CLUSTER_TOKEN', 'PROMPTCUT_DOCSERVICE_HOST', 'PROMPTCUT_DOCSERVICE_PORT', 'PROMPTCUT_DOCSERVICE_URL',
+  'PROMPTCUT_DOCSERVICE_DATA', 'PROMPTCUT_SHARED_CONFIG', 'PROMPTCUT_ASSET_PORT', 'PROMPTCUT_DATA_DIR',
+  'PROMPTCUT_ASSET_PUBLIC_URL', 'PROMPTCUT_DOCSERVICE_PUBLIC_URL', 'PROMPTCUT_HOSTED_URL', 'PROMPTCUT_LAN_HOST',
+];
+
+export function cleanEnv(extra = {}) {
+  const base = { ...process.env };
+  for (const k of SCRUB) delete base[k];
+  return { ...base, ...extra };
+}
+
+/**
+ * 起一份托管组合。不等就绪（`ready()` 另等）。
+ * @param {object} o
+ * @param {number} o.docPort
+ * @param {number} o.assetPort
+ * @param {string} o.dataDir
+ * @param {string} [o.token]         环境变量里的集群令牌
+ * @param {string} [o.assetPublicUrl]
+ * @param {string} [o.cwd]           子进程的工作目录（缺省一个空的临时目录，用来查「没往别处写」）
+ * @param {Record<string,string>} [o.env]
+ */
+export function runHosted({ docPort, assetPort, dataDir, token, assetPublicUrl, cwd, env = {} }) {
+  const e = cleanEnv({
+    PROMPTCUT_DOCSERVICE_PORT: String(docPort),
+    PROMPTCUT_ASSET_PORT: String(assetPort),
+    PROMPTCUT_DATA_DIR: dataDir,
+    PROMPTCUT_ASSET_PUBLIC_URL: assetPublicUrl ?? `http://127.0.0.1:${assetPort}/api/asset`,
+    PROMPTCUT_DOCSERVICE_PUBLIC_URL: `ws://127.0.0.1:${docPort}`,
+    ...(token ? { PROMPTCUT_CLUSTER_TOKEN: token } : {}),
+    ...env,
+  });
+  const child = spawn(process.execPath, [HOSTED_MAIN], { cwd: cwd ?? os.tmpdir(), env: e, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+  let out = '';
+  child.stdout.on('data', (d) => { out += d; });
+  child.stderr.on('data', (d) => { out += d; });
+  const exited = new Promise((resolve) => {
+    child.once('exit', (code, signal) => resolve({ code, signal }));
+    child.once('error', (err) => resolve({ code: null, signal: null, error: err }));
+  });
+  const run = {
+    child, docPort, assetPort, dataDir, exited,
+    output: () => out,
+    lines: () => out.split('\n').map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean),
+    docBase: `http://127.0.0.1:${docPort}`,
+    assetBase: `http://127.0.0.1:${assetPort}/api/asset`,
+    /** 两个端口都能答 HTTP（假设 H3） */
+    async ready(ms = 15_000) {
+      await waitFor(async () => {
+        if (child.exitCode !== null) throw new Error(`托管组合提前退出（${child.exitCode}）：${out.slice(0, 1500)}`);
+        try {
+          const a = await fetch(`http://127.0.0.1:${docPort}/shared/lookup?name=__sp_ready__`);
+          await a.arrayBuffer();
+          if (a.status !== 404) return false;
+          const b = await fetch(`http://127.0.0.1:${assetPort}/api/asset/media/${ZERO_HASH}`);
+          await b.arrayBuffer();
+          return true;
+        } catch { return false; }
+      }, ms, `托管组合 ${docPort}/${assetPort} 就绪（已有输出：${out.slice(0, 600)}）`);
+      return run;
+    },
+    async stop() {
+      if (child.exitCode === null && child.signalCode === null) child.kill();
+      await exited;
+    },
+  };
+  return run;
+}
+
+/** 起一份并等就绪；用例结束时关掉 */
+export async function hostedFor(t, o) {
+  const run = runHosted(o);
+  t.after(() => run.stop());
+  await run.ready();
+  return run;
+}
+
+/** 等进程在 ms 内退出；没退就杀掉并回 { timedOut: true } */
+export async function exitWithin(run, ms = 10_000) {
+  let timer;
+  const timeout = new Promise((resolve) => { timer = setTimeout(() => resolve({ timedOut: true }), ms); });
+  const r = await Promise.race([run.exited, timeout]);
+  clearTimeout(timer);
+  if (r.timedOut) await run.stop();
+  return r;
+}
+
+/**
+ * 给 auth-kit 的 createProject / proofFor / join 用的「env」：对着一个 host（127.0.0.1 或本机局域网地址）上的
+ * 独立模式文档服务。`remote` 参数忽略（子进程里改不了对端地址，要非回环就用 lanIPv4() 做 host）。
+ */
+export function docEnv(port, host = '127.0.0.1') {
+  const clients = [];
+  return {
+    port, host,
+    async http(rel, { method = 'GET', body, headers = {} } = {}) {
+      const init = { method, headers: { ...headers } };
+      if (body !== undefined) { init.body = JSON.stringify(body); init.headers['content-type'] = 'application/json'; }
+      const r = await fetch(`http://${host}:${port}/${rel}`, init);
+      const text = await r.text();
+      let json = null;
+      try { json = JSON.parse(text); } catch { /* 不是 JSON */ }
+      return { status: r.status, headers: r.headers, json, text };
+    },
+    async handshake(protocols) {
+      const r = await rawHandshake(port, { protocols, host });
+      r.sock.destroy();
+      return { status: r.status, protocol: r.headers['sec-websocket-protocol'] };
+    },
+    async open(protocols) {
+      const c = wsClient(`ws://${host}:${port}/`, protocols);
+      clients.push(c);
+      await c.opened;
+      return c;
+    },
+    closeAll() { for (const c of clients.splice(0)) c.close(); },
+  };
+}
+
+/** 素材服务请求（`base` 形如 `http://host:port/api/asset`） */
+export async function assetReq(base, rel, { method = 'GET', headers = {}, body } = {}) {
+  const r = await fetch(`${base}/${rel}`, { method, headers, body });
+  const buf = Buffer.from(await r.arrayBuffer());
+  let json = null;
+  try { json = JSON.parse(buf.toString('utf8')); } catch { /* 字节 */ }
+  return { status: r.status, headers: r.headers, json, buf };
+}
+
+/** 整件（单片）上传：PUT 0 再 complete。回 { hash, bytes, put, done } */
+export async function uploadWhole(base, { ns = 'media', bytes = randomBytes(1500), ext, headers = {} } = {}) {
+  const hash = sha256hex(bytes);
+  const h = { 'Content-Type': 'application/octet-stream', 'X-Media-Size': String(bytes.length), ...(ext ? { 'X-Media-Ext': ext } : {}), ...headers };
+  const put = await assetReq(base, `${ns}/${hash}/0`, { method: 'PUT', headers: h, body: bytes });
+  const done = put.status === 200 ? await assetReq(base, `${ns}/${hash}/complete`, { method: 'POST', headers }) : null;
+  return { hash, bytes, put, done };
+}
+
+// ------------------------------------------------------------------ 消息小工具（在 auth-kit 的 ask 之上）
+
+/** 订阅服务地址，回 service.endpoints 的 endpoints */
+export async function endpointsOf(c) {
+  const r = await ask(c, { type: 'service.watch', kinds: 'all' }, 'service.endpoints');
+  assert.equal(r.type, 'service.endpoints', JSON.stringify(r));
+  return r.endpoints;
+}
+
+/** endpoints 里全部 asset 地址 */
+export const assetUrls = (endpoints) => endpoints.filter((e) => e.kind === 'asset').flatMap((e) => e.urls ?? []);
+
+/** 登记一版项目并上传快照（单片） */
+export async function putSnapshot(c, projectId, text) {
+  const digest = sha256hex(Buffer.from(text, 'utf8'));
+  const a = await ask(c, { type: 'project.announce', projectId, digest }, 'project.announced');
+  assert.equal(a.type, 'project.announced', JSON.stringify(a));
+  const s = await ask(c, { type: 'project.snapshot.put', projectId, projectRev: a.projectRev, digest, index: 0, count: 1, data: text }, 'project.snapshot.stored');
+  assert.equal(s.type, 'project.snapshot.stored', JSON.stringify(s));
+  assert.equal(s.complete, true);
+  return { projectRev: a.projectRev, digest };
+}
+
+/** 取回快照全文；没有回 null */
+export async function getSnapshot(c, projectId, projectRev) {
+  const reqId = `sp-snap-${randomBytes(4).toString('hex')}`;
+  c.send({ type: 'project.snapshot.get', projectId, projectRev, reqId });
+  let text = '';
+  for (;;) {
+    const m = await c.next((x) => x?.reqId === reqId, 5000);
+    if (m.type === 'project.snapshot.part') {
+      if (m.missing) return null;
+      text += m.data;
+    } else if (m.type === 'project.snapshot.end') {
+      return text;
+    } else {
+      throw new Error(`取快照：${JSON.stringify(m)}`);
+    }
+  }
+}
+
+// ------------------------------------------------------------------ 迁移核对探针
+
+export function runProbe(args, env = {}, ms = 60_000) {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [PROBE, ...args], { cwd: ROOT, env: cleanEnv(env), stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+    let out = '';
+    let err = '';
+    child.stdout.on('data', (d) => { out += d; });
+    child.stderr.on('data', (d) => { err += d; });
+    const timer = setTimeout(() => child.kill(), ms);
+    child.once('exit', (code) => {
+      clearTimeout(timer);
+      const last = out.trim().split('\n').filter(Boolean).at(-1) ?? '';
+      let json = null;
+      try { json = JSON.parse(last); } catch { /* 不是 JSON */ }
+      resolve({ code, out, err, json });
+    });
+  });
+}
+
+// ------------------------------------------------------------------ 客户端模块（假设 D1、R1～R3、L0）
+
+async function importOrExplain(rel, names) {
+  let mod;
+  try {
+    mod = await import(rel);
+  } catch (err) {
+    throw new Error(`加载 ${rel} 失败（SP 实现还没合入？）：${err?.message ?? err}`);
+  }
+  for (const n of names) {
+    assert.ok(n in mod, `${rel} 要导出 ${n}；实际导出：${Object.keys(mod).join(', ')}`);
+  }
+  return mod;
+}
+
+export const loadHostedDefault = () => importOrExplain('../auth/hosted-default.mjs', ['DEFAULT_HOSTED_URL', 'resolveHostedUrl']);
+export const loadRoute = () => importOrExplain('../auth/route.mjs', ['findSharedProject', 'createSharedProject']);
+export const loadLan = () => importOrExplain('../auth/lan-discovery.mjs', [
+  'LAN_DISCOVERY', 'encodeQuery', 'encodeAnnounce', 'decodePacket', 'selectInterfaces', 'createLanTable', 'createLanHost', 'discoverLan',
+]);
+
+export async function loadFsStore() {
+  const { createFsStore } = await import('../asset-store/fs-store.mjs');
+  return createFsStore;
+}
+
+/** 本机单测里代替真实网卡的「回环网卡」（只给 createLanHost / discoverLan 的注入参数用） */
+export const LOOP_IFACE = Object.freeze({ name: 'sp-test-lo', address: '127.0.0.1', netmask: '255.0.0.0', broadcast: '127.255.255.255' });
+
+export { sleep, waitFor, PROTOCOL };
