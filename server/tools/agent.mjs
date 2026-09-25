@@ -11,13 +11,13 @@ export const agentTools = [
       },
       required: ["scope"]
     },
-    side: "browser"
+    side: "page"
   },
   {
     name: "list_agents",
     description: "看现在有哪些 Agent 在同一个项目上并行(每个的对话 ID、页签名、声明的范围、忙不忙)。you 是你自己的对话 ID。要给谁发消息先用它拿 ID。",
     inputSchema: { type: "object", properties: {} },
-    side: "browser"
+    side: "page"
   },
   {
     name: "send_message",
@@ -30,12 +30,12 @@ export const agentTools = [
       },
       required: ["to", "text"]
     },
-    side: "browser"
+    side: "page"
   },
   {
     name: "check_messages",
     description: "看看有没有别的 Agent 给你的消息、以及自上次以来别人改了哪些「剪辑->序列」(不取走)。一般不用主动调:这些内容会在你每一轮开始时自动附在提示词前面;只在长任务中途想确认一下时用。",
     inputSchema: { type: "object", properties: {} },
-    side: "browser"
+    side: "page"
   }
 ];

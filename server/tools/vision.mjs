@@ -37,7 +37,7 @@ export const visionTools = [
       },
       required: ["source"]
     },
-    side: "browser",
+    side: "agent",
     // 当场起一个 Chrome 渲一帧(timeline),或先跑一遍镜头识别再拼十几张图(media),60 秒的默认上限不够
     timeoutMs: 180000
   },
@@ -54,7 +54,7 @@ export const visionTools = [
       },
       required: ["clipId"],
     },
-    side: "browser",
+    side: "agent",
     // 8 帧一趟渲完(renderFrames 顺推一遍沿途截),再用 ffmpeg 编 GIF;冷启动 Chrome 可能过分钟
     timeoutMs: 180000
   }

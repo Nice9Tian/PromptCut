@@ -9,13 +9,13 @@ export const cardsTools = [
         detail: { type: "string", enum: ["summary", "full"], description: "full 表示所有卡都要完整 schema，通常不需要" }
       }
     },
-    side: "browser"
+    side: "page"
   },
   {
     name: "card_authoring_guide",
     description: "取建卡规则全文（CardDef 契约、控件类型、硬性约束、可用依赖、完整示例）。要用 create_card 新建卡片前**必须先调它**，不要凭印象写。",
     inputSchema: { type: "object", properties: {} },
-    side: "browser"
+    side: "agent"
   },
   {
     name: "get_card_source",
@@ -28,7 +28,7 @@ export const cardsTools = [
       },
       required: ["cardId"]
     },
-    side: "browser"
+    side: "agent"
   },
   {
     name: "edit_card",
@@ -44,7 +44,7 @@ export const cardsTools = [
       },
       required: ["cardId", "find", "replace"]
     },
-    side: "browser"
+    side: "agent"
   },
   {
     name: "inspect_card_dom",
@@ -61,7 +61,7 @@ export const cardsTools = [
     },
     // 不放宽超时:片段会被挪到 0.5 秒的起跑线上再渲(见 vite-plugin-cards 的 /api/cards/dom),
     // 不管它排在时间轴哪里都只推几十帧,远在桥的默认 60 秒以内
-    side: "browser"
+    side: "agent"
   },
   {
     name: "create_card",
@@ -75,7 +75,7 @@ export const cardsTools = [
       },
       required: ["id", "source"]
     },
-    side: "browser"
+    side: "agent"
   },
   {
     name: "apply_card",
@@ -86,7 +86,7 @@ export const cardsTools = [
       inputs: { type: "object", additionalProperties: { type: "object", properties: {
         clipId: { type: "string" }, nodeId: { type: "string" }, offset: { type: "number" }, rate: { type: "number" }
       } } }
-    }, required: ["cardId"] }, side: "browser"
+    }, required: ["cardId"] }, side: "agent"
   },
   {
     name: "bake_card",
@@ -115,7 +115,7 @@ export const cardsTools = [
       },
       required: ["clipId"],
     },
-    side: "browser",
+    side: "agent",
     // 和 see_frames 一样要当场起一个 Chrome 渲一帧
     timeoutMs: 150000
   }

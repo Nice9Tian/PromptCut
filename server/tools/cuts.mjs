@@ -3,7 +3,7 @@ export const cutsTools = [
     name: "list_transitions",
     description: "列出当前剪辑里的全部转场(交叉溶解 / 淡入 / 淡出)。**转场会把它引用的片段绑成一组**:那几段的相对时间关系被锁住 —— 单独改时长、换序列、split_clip 都会被拒(update_clip 只给 start 的整组平移仍然可以,同组的会跟着一起走)。要单独调先 remove_transition。返回每条的 id、kind、aId/bId、dur。",
     inputSchema: { type: "object", properties: {} },
-    side: "browser"
+    side: "agent"
   },
   {
     name: "add_transition",
@@ -18,7 +18,7 @@ export const cutsTools = [
       },
       required: ["kind", "clipId"]
     },
-    side: "browser"
+    side: "agent"
   },
   {
     name: "remove_transition",
@@ -28,13 +28,13 @@ export const cutsTools = [
       properties: { transitionId: { type: "string" } },
       required: ["transitionId"]
     },
-    side: "browser"
+    side: "agent"
   },
   {
     name: "list_cuts",
     description: "列出项目里的全部剪辑(时间轴)。一个项目可以有多条剪辑,时间轴顶部的选项栏切换,默认三条:剪辑1 / 剪辑2 / 剪辑3。**所有 clip / 序列 / 定位 / 导出 / see_frames 工具都只作用于当前激活的那条剪辑**(active:true 的),get_project 的 tracks 也是它的内容;要动别的剪辑先 switch_cut。返回每条的 id、name、active、trackCount、clipCount、duration。",
     inputSchema: { type: "object", properties: {} },
-    side: "browser"
+    side: "agent"
   },
   {
     name: "switch_cut",
@@ -46,7 +46,7 @@ export const cutsTools = [
         name: { type: "string", description: "剪辑名,和 cutId 二选一" }
       }
     },
-    side: "browser"
+    side: "page"
   },
   {
     name: "add_cut",
@@ -58,7 +58,7 @@ export const cutsTools = [
         switch: { type: "boolean", description: "默认 true" }
       }
     },
-    side: "browser"
+    side: "page"
   },
   {
     name: "rename_cut",
@@ -71,7 +71,7 @@ export const cutsTools = [
       },
       required: ["cutId", "name"]
     },
-    side: "browser"
+    side: "agent"
   },
   {
     name: "remove_cut",
@@ -85,6 +85,6 @@ export const cutsTools = [
       },
       required: ["cutId"]
     },
-    side: "browser"
+    side: "page"
   }
 ];

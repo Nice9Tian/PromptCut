@@ -15,7 +15,8 @@ import { tools as mcpTools } from '../mcp-tools.mjs';
 import { TOOL_ROUTES, SPECIAL_TOOLS } from '../../src/mcp/routes.mjs';
 
 const EXECUTOR = readFileSync(new URL('../../src/ai/mcpExecutor.ts', import.meta.url), 'utf8');
-const browserTools = mcpTools.filter((t) => t.side === 'browser').map((t) => t.name);
+// 页面执行器接得住的工具:side 为 page(只在页面)与 agent(有项目副本时在 Agent 服务端执行,没有时照旧经页面;C6.5 D1)
+const browserTools = mcpTools.filter((t) => t.side === 'page' || t.side === 'agent').map((t) => t.name);
 const routed = Object.keys(TOOL_ROUTES);
 
 test('每个 browser 工具要么在路由表里,要么在表外特殊分支的名单里', () => {

@@ -19,6 +19,7 @@ import { invalidateScopes, loadScopes, type ScopeEntry } from "../editor/cardSco
 
 import type { ClipFrame } from "../kernel/types";
 import { type CollectJob } from "../ai/collect";
+import { apiUrl } from "./apiUrl";
 
 /** 舞台尺寸:卡片级 frame 的父坐标系 */
 export function stageSize(): Size {
@@ -213,7 +214,7 @@ export async function measureAudio(args: { clipId?: string; mediaId?: string; sc
       entries: plan.map((e) => ({ clipId: e.clipId, media: mediaOf(e.mediaId), start: e.start, dur: e.dur, offset: e.offset, volume: e.volume, fadeIn: e.fadeIn, fadeOut: e.fadeOut })),
     };
   }
-  const res = await fetch("/api/audio/measure", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.timeout(55000) });
+  const res = await fetch(apiUrl("/api/audio/measure"), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.timeout(55000) });
   const data = await res.json().catch(() => null);
   if (!res.ok || !data || data.ok === false) throw new Error(data?.error || `测响度失败(HTTP ${res.status})`);
   const notes: string[] = Array.isArray(data.notes) ? [...data.notes] : [];

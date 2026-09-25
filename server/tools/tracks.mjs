@@ -9,13 +9,13 @@ export const tracksTools = [
         index: { type: "integer", description: "插在第几条(从 0 起,0 = 最上面、画在最上层)" }
       }
     },
-    side: "browser"
+    side: "agent"
   },
   {
     name: "list_tracks",
     description: "列出当前剪辑的全部序列(轨道),很轻:每条给 trackId、index(0 = 最上面、画在最上层)、name、clipCount、卡片 / 素材各几段、占用的时间范围,空序列标 empty:true,隐藏 / 静音 / 锁定的标出来。整理序列、找空序列、决定放哪一层时用它,不要为此去拉整个 get_project。",
     inputSchema: { type: "object", properties: {} },
-    side: "browser"
+    side: "agent"
   },
   {
     name: "remove_track",
@@ -29,7 +29,7 @@ export const tracksTools = [
         reason: { type: "string", description: "force 时必填" }
       }
     },
-    side: "browser"
+    side: "agent"
   },
   {
     name: "update_track",
@@ -45,7 +45,7 @@ export const tracksTools = [
       },
       required: ["trackId"]
     },
-    side: "browser"
+    side: "agent"
   },
   {
     name: "move_track",
@@ -58,6 +58,6 @@ export const tracksTools = [
       },
       required: ["trackId", "index"]
     },
-    side: "browser"
+    side: "agent"
   }
 ];

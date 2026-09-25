@@ -3,13 +3,13 @@ export const audioTools = [
     name: "set_clip_volume",
     description: "设置音频或视频卡片的独立声音音量。volume 范围 0~1，0=无声，0.5=50%，1=原声（默认）。不改变画面不透明度，保留淡入淡出；不会解除序列静音、隐藏或音画分离后的原视频静音。支持撤销，锁定序列须先解锁。",
     inputSchema: { type: "object", properties: { clipId: { type: "string" }, volume: { type: "number", minimum: 0, maximum: 1 } }, required: ["clipId", "volume"] },
-    side: "browser",
+    side: "agent",
   },
   {
     name: "separate_audio",
     description: "音画分离：保留并静音目标视频片段，在其序列正下方新建序列放置音频卡片，保留起止时间、素材偏移、音量及淡入淡出。返回 audioClipId、trackId、mediaId。锁定序列或已分离的视频不可重复操作。",
     inputSchema: { type: "object", properties: { clipId: { type: "string" } }, required: ["clipId"] },
-    side: "browser",
+    side: "agent",
   },
   {
     name: "measure_audio",
@@ -23,7 +23,7 @@ export const audioTools = [
         series: { type: "boolean", description: "clip / media 档也要逐秒曲线时传 true(timeline 档总是给)" }
       }
     },
-    side: "browser"
+    side: "agent"
   },
   {
     name: "create_audio",
@@ -35,13 +35,13 @@ export const audioTools = [
         clipId: { type: "string", description: "时间轴上的一段视频:就地转成声音" }
       }
     },
-    side: "browser"
+    side: "agent"
   },
   {
     name: "list_audio_fx",
     description: "列出音频效果库(素材库「音频效果」页里的那些),以及能用的效果种类、每种的参数(范围 / 默认 / 单位)、几条预设和表达式写法。每条效果给 fxId、name、description、params(挂到片段上可逐段调的参数)、ops、summary、animated、usedBy(挂在哪几段上)。挂效果前先看有没有现成能复用的;不确定该用哪种时看 kinds 里每种的 hint。",
     inputSchema: { type: "object", properties: {} },
-    side: "browser"
+    side: "agent"
   },
   {
     name: "create_audio_fx",
@@ -82,7 +82,7 @@ export const audioTools = [
       },
       required: ["name", "ops"]
     },
-    side: "browser"
+    side: "agent"
   },
   {
     name: "update_audio_fx",
@@ -98,7 +98,7 @@ export const audioTools = [
       },
       required: ["fxId"]
     },
-    side: "browser"
+    side: "agent"
   },
   {
     name: "remove_audio_fx",
@@ -112,7 +112,7 @@ export const audioTools = [
       },
       required: ["fxId"]
     },
-    side: "browser"
+    side: "agent"
   },
   {
     name: "apply_audio_fx",
@@ -126,13 +126,13 @@ export const audioTools = [
       },
       required: ["clipId", "fxId"]
     },
-    side: "browser"
+    side: "agent"
   },
   {
     name: "voice_list",
     description: "查配音(voice_generate)的设置:默认服务(minimax / kling / vidu)、各服务的默认音色和参数、能用的音色(systemVoices 系统音色 + customVoices 用户在「配音设置」里建的或登记的「我的音色」,如复刻出来的人声)、API Key 设没设(apiKeySet)。第一次配音前先调一次,voiceId 从这里挑,不要自己编。",
     inputSchema: { type: "object", properties: {} },
-    side: "browser"
+    side: "page"
   },
   {
     name: "voice_generate",
@@ -151,6 +151,6 @@ export const audioTools = [
       },
       required: ["text"]
     },
-    side: "browser"
+    side: "page"
   }
 ];

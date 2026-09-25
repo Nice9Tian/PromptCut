@@ -97,7 +97,7 @@ test("序列工具:列、删、改、挪,门槛和撤销", async () => {
 
 test("序列工具的声明:必填项和 schema 对得上", () => {
   const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
-  for (const n of ["list_tracks", "remove_track", "update_track", "move_track"]) assert.equal(byName[n]?.side, "browser", n);
+  for (const n of ["list_tracks", "remove_track", "update_track", "move_track"]) assert.equal(byName[n]?.side, "agent", n);
   assert.deepEqual(byName.update_track.inputSchema.required, ["trackId"]);
   assert.deepEqual(byName.move_track.inputSchema.required, ["trackId", "index"]);
 });

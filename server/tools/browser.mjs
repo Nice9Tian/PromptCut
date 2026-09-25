@@ -7,13 +7,13 @@ export const browserTools = [
       properties: { url: { type: "string", description: "完整链接；不带协议时按 https 补" } },
       required: ["url"]
     },
-    side: "browser"
+    side: "page"
   },
   {
     name: "web_view",
     description: "重新截屏 + 重出清单，不做任何动作。等页面自己加载完、或者你在别处改了什么想再看一眼时用。**clickable 里的编号只对最近一次截图有效**：滚动、跳转、点击之后编号全部作废，必须重新拿。web_click / web_type / web_scroll 本来就会带回新的一份，所以正常流程里不需要额外调它。",
     inputSchema: { type: "object", properties: {} },
-    side: "browser"
+    side: "page"
   },
   {
     name: "web_click",
@@ -27,7 +27,7 @@ export const browserTools = [
         expect: { type: "string", description: "你要点的元素上的文字。用 x,y 时几乎总该带上" }
       }
     },
-    side: "browser"
+    side: "page"
   },
   {
     name: "web_type",
@@ -42,7 +42,7 @@ export const browserTools = [
       },
       required: ["u", "text"]
     },
-    side: "browser"
+    side: "page"
   },
   {
     name: "web_scroll",
@@ -54,7 +54,7 @@ export const browserTools = [
         to: { type: "string", enum: ["top", "bottom"], description: "直接到顶 / 到底" }
       }
     },
-    side: "browser"
+    side: "page"
   },
   {
     name: "web_read",
@@ -63,7 +63,7 @@ export const browserTools = [
       type: "object",
       properties: { limit: { type: "number", description: "最多取多少字，默认 8000" } }
     },
-    side: "browser"
+    side: "page"
   },
   {
     name: "web_handoff",
@@ -75,12 +75,12 @@ export const browserTools = [
         hide: { type: "boolean", description: "true 表示把窗口藏回屏幕外" }
       }
     },
-    side: "browser"
+    side: "page"
   },
   {
     name: "web_close",
     description: "关掉给 agent 用的浏览器，释放内存。上网这件事彻底做完了再调；中途关掉的话登录态还在（profile 是存盘的），但打开的页面和编号全没了。不确定还要不要用就别关，它闲着不占 CPU。",
     inputSchema: { type: "object", properties: {} },
-    side: "browser"
+    side: "page"
   }
 ];

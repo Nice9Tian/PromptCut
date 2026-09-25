@@ -3,13 +3,13 @@ export const collectTools = [
     name: "collect_status",
     description: "查素材收集拓展的状态:yt-dlp 装没装(及版本)、ffmpeg 在不在、有哪些站点预设(bilibili / generic),以及各站登录态 cookies(键是站点 id,值有 loggedIn / expired / userId / expiresAt)。ready 为 true 才能 collect_probe / collect_download;为 false 时看 ytdlp.installed —— 没装就 collect_install,其余原因(没有 ffmpeg、没有内置 Python)不是工具能修的,如实告诉用户。抓链接之前先调它。",
     inputSchema: { type: "object", properties: {} },
-    side: "browser"
+    side: "page"
   },
   {
     name: "collect_install",
     description: "安装素材收集拓展(pip 装 yt-dlp,纯 Python 轮子约 3 MB,几十秒)。立刻返回 jobId;用 background_job_status 查这个 jobId,或再调 collect_status 看 ready 有没有变 true。不要重复启动。",
     inputSchema: { type: "object", properties: {} },
-    side: "browser"
+    side: "page"
   },
   {
     name: "collect_search",
@@ -23,7 +23,7 @@ export const collectTools = [
       },
       required: ["query"]
     },
-    side: "browser"
+    side: "page"
   },
   {
     name: "collect_probe",
@@ -37,7 +37,7 @@ export const collectTools = [
       },
       required: ["url"]
     },
-    side: "browser"
+    side: "page"
   },
   {
     name: "collect_download",
@@ -57,7 +57,7 @@ export const collectTools = [
       },
       required: ["url"]
     },
-    side: "browser"
+    side: "page"
   },
   {
     name: "collect_job",
@@ -67,7 +67,7 @@ export const collectTools = [
       properties: { jobId: { type: "string" } },
       required: ["jobId"]
     },
-    side: "browser"
+    side: "page"
   },
   {
     name: "collect_login",
@@ -80,7 +80,7 @@ export const collectTools = [
         force: { type: "boolean", description: "已登录也强制重新登录(换账号时用)" }
       }
     },
-    side: "browser"
+    side: "page"
   },
   {
     name: "collect_login_check",
@@ -92,7 +92,7 @@ export const collectTools = [
         hide: { type: "boolean", description: "登录成功后是否把窗口藏回屏幕外,默认 true" }
       }
     },
-    side: "browser"
+    side: "page"
   },
   {
     name: "collect_logout",
@@ -101,6 +101,6 @@ export const collectTools = [
       type: "object",
       properties: { site: { type: "string", enum: ["bilibili"], description: "默认 bilibili" } }
     },
-    side: "browser"
+    side: "page"
   }
 ];

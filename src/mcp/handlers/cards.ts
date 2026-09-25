@@ -7,6 +7,7 @@ import { findCard } from "../../kernel/cardParams";
 import { isCardVisible, readVisibility, usedCardIds } from "../../editor/cardScope";
 
 import { cardScopes, refreshScopes } from "../common";
+import { apiUrl } from "../apiUrl";
 
 export const cardsHandlers = {
   /**
@@ -49,7 +50,7 @@ export const cardsHandlers = {
    * 自动注册,list_cards 立刻能看到 —— 不用重启,也不用改任何注册表文件。
    */
   createCard: async (args) => {
-    const res = await fetch("/api/cards/create", {
+    const res = await fetch(apiUrl("/api/cards/create"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -73,14 +74,14 @@ export const cardsHandlers = {
    */
   getCardSource: async (args) => {
     const q = new URLSearchParams({ id: args.cardId, ...(args.file ? { file: args.file } : {}) });
-    const res = await fetch(`/api/cards/source?${q}`);
+    const res = await fetch(apiUrl(`/api/cards/source?${q}`));
     const data = await res.json().catch(() => ({}));
     if (!res.ok || !data.ok) throw new Error(data.error || `读不到卡片源码(HTTP ${res.status})`);
     return data;
   },
   /** 局部替换式改卡(带 file 改部件文件)。整篇重写交给 createCard,那条路只该走一次(建卡)。 */
   editCard: async (args) => {
-    const res = await fetch("/api/cards/edit", {
+    const res = await fetch(apiUrl("/api/cards/edit"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ id: args.cardId, file: args.file, find: args.find, replace: args.replace, replaceAll: args.replaceAll === true }),

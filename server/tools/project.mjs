@@ -3,19 +3,19 @@ export const projectTools = [
     name: "get_project",
     description: "获取整个多轨 Project 对象,了解项目配置、素材和时间轴上的所有轨道与 clip。返回里 media 的 transcript 只是段数摘要，完整文字稿请用 get_transcript。",
     inputSchema: { type: "object", properties: {} },
-    side: "browser"
+    side: "agent"
   },
   {
     name: "list_media",
     description: "列出素材库里所有素材，返回每条素材的 id、name、kind（video / image / audio）、duration、width、height、cardUrl、path、hasTranscript、transcriptSegments（文字稿段数）；想拿完整文字稿要用 get_transcript。需要素材的 mediaId 时优先用本工具，不要为了找 mediaId 去调 get_project。**卡片参数里要引用某张素材图片 / 视频，填它的 cardUrl**（形如 /@media/<文件名>，预览、渲染、导出都取得到）；path 是服务端磁盘路径，只给服务端内部用，你没有能读它的工具——想看素材长什么样用 see_frames({ source: \"media\", mediaId })。",
     inputSchema: { type: "object", properties: {} },
-    side: "browser"
+    side: "agent"
   },
   {
     name: "get_selection",
     description: "获取当前选中的 clip id 及其详情和所在轨道。",
     inputSchema: { type: "object", properties: {} },
-    side: "browser"
+    side: "page"
   },
   {
     name: "set_project_meta",
@@ -37,7 +37,7 @@ export const projectTools = [
         themeId: { type: "string", description: "全局主题 id" }
       }
     },
-    side: "browser"
+    side: "page"
   },
   {
     name: "set_theme",
@@ -47,7 +47,7 @@ export const projectTools = [
       properties: { themeId: { type: "string" } },
       required: ["themeId"]
     },
-    side: "browser"
+    side: "agent"
   },
   {
     name: "import_media",
@@ -60,12 +60,12 @@ export const projectTools = [
       },
       required: ["url"]
     },
-    side: "browser"
+    side: "page"
   },
   {
     name: "list_media_effects",
     description: "查看某个媒体连接在当前时间轴上的全部效果和顺序：普通滤镜、像素映射、音频效果，以及项目效果库定义。mediaId 可省略以列出全部片段。创建映射前先调用它，确认 source/to 的 stage 是 origin 还是 after_filters。",
     inputSchema: { type: "object", properties: { mediaId: { type: "string" } } },
-    side: "browser"
+    side: "agent"
   }
 ];
