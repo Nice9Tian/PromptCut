@@ -86,3 +86,18 @@ AssertionError: 限定进入却没有 list：{"ok":true,"projectId":"sp_…","na
 
 - 没有触发回退规则：没有同一处胶水连续改两次都不通的情况，也没有偶发、时序或端口相关的失败（AU 连跑两次、全量一次，失败都只有同一条）。
 - 没起 dev server，没用端口段。
+
+## 7. 主会话裁定之后（2026-09-26）
+
+裁定：限定进入缺 `list` 按空名单处理，回 201，实现正确，是测试的期望写错了。`service.watch` 的 `kinds` 胶水保留。
+
+- `server/test/auth-create.test.mjs`：「AU1 字段缺失或不合法回 400 bad-request」用例名后加注「（主会话裁定：缺 list = 空名单）」。「restricted 缺 list → 400」这一个断言改为三条：→ 201；随后名单外用户名 `bob` 握手 401；创建者以 `as: 'creator'` 进入 101。其它断言没动。import 里多引了 `joinStatus`。
+- `docs/plan/auth-contract.md` 末尾新增「## 14. 集成时的裁定（2026-09-26）」，每条一行「裁定：理由」，内容是主会话列的各条，外加实现方偏差里的 5 条（票据核对顺序、连接票据的 `dn` / `cr`、`promptcut.role.agent.<n>`、只绑回环时凭证存储加载失败仍能启动、本机 deviceId 现算不落盘）。另外多写了一条「HMAC 密钥用 `K` 的 32 字节原始值」：这是测试方报告里的歧义第 2 条，两边实现一致，主会话没列，请核对是否保留。
+
+重跑结果：
+
+| 命令 | 退出码 | 结果 |
+|---|---|---|
+| `node --experimental-test-module-mocks --test server/test/auth-*.test.mjs` | 0 | tests 105 / pass 105 / fail 0 / skipped 0（AU 64/64） |
+| `npx tsc -b --force` | 0 | 零错误 |
+| `npm test` | 0 | tests 2552 / pass 2551 / fail 0 / cancelled 0 / skipped 1（原来就跳过的那条） |

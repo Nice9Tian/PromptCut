@@ -8,7 +8,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { hostFor, createProject, credential, challenge, uniqueName, KDF, newDevice } from './auth-kit.mjs';
+import { hostFor, createProject, credential, challenge, uniqueName, KDF, newDevice, joinStatus } from './auth-kit.mjs';
 
 const PUBLIC = '203.0.113.7';
 const LAN = '192.168.1.50';
@@ -65,7 +65,7 @@ test('AU1 同名第二次回 409 name-taken：大小写不同、NFC 不同形都
   assert.equal(l.json.projectId, first.json.projectId);
 });
 
-test('AU1 字段缺失或不合法回 400 bad-request', async (t) => {
+test('AU1 字段缺失或不合法回 400 bad-request（主会话裁定：缺 list = 空名单）', async (t) => {
   const env = await hostFor(t);
   const good = createBody();
   const cases = {
@@ -97,7 +97,11 @@ test('AU1 字段缺失或不合法回 400 bad-request', async (t) => {
   const noList = createBody({ mode: 'restricted' });
   delete noList.list;
   const r = await env.http('shared/create', { method: 'POST', body: noList });
-  assert.equal(r.status, 400, `限定进入却没有 list：${r.text}`);
+  // 主会话裁定（2026-09-26，契约第 14 节）：限定进入缺 list 等同空名单，只有创建者一人，合法
+  assert.equal(r.status, 201, `限定进入缺 list = 空名单：${r.text}`);
+  const emptyList = { projectId: r.json.projectId, mode: 'restricted', creator: { username: 'alice', password: 'creator-pw' }, list: [] };
+  assert.equal(await joinStatus(env, emptyList, { username: 'bob', password: 'bob-pw', remote: '203.0.113.90' }), 401, '空名单：名单外用户名握手 401');
+  assert.equal(await joinStatus(env, emptyList, { username: 'alice', as: 'creator', remote: '203.0.113.91' }), 101, '空名单：创建者能进');
   const notJson = await env.http('shared/create', { method: 'POST', raw: '{not json', headers: { 'content-type': 'application/json' } });
   assert.equal(notJson.status, 400, '请求体不是 JSON');
 });
