@@ -1996,3 +1996,19 @@ createPrerenderExecutor({ pipeline, projects, prepareProject, log }) → { plan,
 - 核心 `ctx` 新增 `pendingBytes(connId)`：值为出站队列里的字节数加上底层的 `buffered`，连接不存在时为 0。另加只读的 `ctx.maxPendingBytes`。两者都是通用能力，R2 守门照旧。
 - 项目模块发快照的下一片之前，要求 `pendingBytes` 低于上限的一半，否则 20 ms 后再查。不用固定限速。这样慢链路上取大快照不会触发 1013，节点那条同时承载队列会话的连接也不会被断开、丢掉租约。
 - `resolveDocservice` 新增 `mode: 'editor'`。凡是判断「连得上文档服务」的调用方（C6.4 的推送接线、J.5）都要认它。
+
+### J.12 定稿后的补充细则（2026-09-25，主 Agent 按管线侧疑点裁定）
+
+1. **队列拥有的卡**：队列模式下，preload 的 B 趟与 MOV 趟不写这些卡的快照（不然所有任务都会走去重）。锚帧那一趟照写；`sourceDependent` 卡仍归 preload。
+2. **推送只在显式开启时生效**：
+   - `resolveDocservice` 回 `mode: 'editor'`、进程又没设 `PROMPTCUT_QUEUE_NODE=1` 或 `PROMPTCUT_PUSH=1` 时，不建推送队列，也不在 preload 之前拉取别的节点的结果，行为与 C6.4 之前相同；
+   - `remote` / `local` 两种模式照旧建；
+   - `PROMPTCUT_PUSH=0` 一律关。
+   这样开关关着时，默认的开发环境与探针的行为不变。
+3. **推迟到 M6，登记进计划第 11.2 节**：
+   - 闲时门槛放宽：现在要等 preload 到 `ready`，本机节点起步偏晚；
+   - 快照里 style 声明的顺序跨进程不确定，同样内容的块哈希不同，会重复上传；
+   - `plan` 任务的指纹不过滤认领；
+   - 远端节点渲的卡在本机没有 PNG 缓存，`?preview=legacy` 下是占位。
+4. **锁的接手在计划阶段完成**：`cardLockDecision` 为 `takeover` 时，`planForQueue` 当场取锁，免得渲染时被本机锁库拒掉。
+5. **`queue-mode-probe` 用自己起的独立文档服务**（空数据目录），不用编辑器里挂的那一份，免得受编辑器已有状态的影响。
