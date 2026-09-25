@@ -1,8 +1,8 @@
 # M6c 快照分支报告（X6、X7）
 
-分支 `claude/m6c-snapshot`（基于 `f98569a`，即派出时的 `claude/m6`），worktree `.worktrees/m6c-snapshot`，端口段 5420～5429。契约：`docs/plan/m6c-contract.md` 的 X6、X7。
+分支 `claude/m6c-snapshot`（派出时基于 `f98569a`；按主会话裁定已合进最新的 `claude/m6` `f888982`，合并提交 `6c0a22d`，无冲突），worktree `.worktrees/m6c-snapshot`，端口段 5420～5429。契约：`docs/plan/m6c-contract.md` 的 X6、X7。
 
-状态：X6、X7 做完，验收项全部有证据；需要主会话处理的两件事见「遗留」第 1、2 条。
+状态：X6、X7 做完，验收项全部有证据。主会话裁定的四条（legacy 页面修复并补测试、去掉探针垫片重截图、已知差距入第 6 节、合 `claude/m6` 后重跑基线）已做完，见第 1、4、5、6 节。
 
 ## 1. 做了什么
 
@@ -43,6 +43,21 @@
 - `server/frame-mov.mjs`：`MovFrameStore.put` 加了可选的第 4 个参数 `{ renders }`，缺省为 1，原有调用不变。对方已二次确认的全透明帧，落到本机后不再算「待确认」。
 - 两条接入路径都经 `applyResult`：M5b 队列的 `task.done`，以及 C6.4 的 `adoptFromManifests`（换机取用）。
 
+### X7 的前提：legacy 页面的整帧请求打预渲染进程（主会话裁定）
+
+- 核实：
+  - 编辑器进程的 `FramePipeline` 是 `interactive: false`（`vite-plugin-frames.ts` 的 `interactive: isPrerender`）。它的 `laneRefused` 对 `user` / `playback` lane 一律回 503 `USE_PRERENDER`「交互帧请求请直接打预渲染进程。」。
+  - 预渲染进程是 `interactive: true`，对这两条 lane 不拒。
+  - 改之前实测，legacy 页面每次取帧都是 `503 http://127.0.0.1:5420/api/frames/see`（编辑器的源），预览区只有这条报错。
+  - `frameRequest` 会把回包里的 `url` 按请求的源补成绝对地址，所以改打预渲染进程后，`<img>` 取图也走预渲染进程。
+  - 结论与主会话给的做法一致：改成 `target: "prerender"`，也就是 `see_frames` 的缺省，与 `frameClient.ts` 里 D5 的注释相符。
+- 改动：`src/editor/preview/UnifiedPreview.tsx` 第 49 行（原第 46 行），整帧请求改为 `{ target: "prerender", lane: "user" }`，并写了注释。
+  - `src/` 里另外两处 `target: "user"` 是 `frameClient.ts` 的 `import` / `archive`，走的是 `archive` lane，编辑器进程不拒，没动。
+- 回归测试 `server/test/legacy-preview-target.test.mjs`（两条，用例名都是 `X7-legacy-target …`）：
+  1. 前提：`interactive: false` 对 user / playback 回 503 `USE_PRERENDER`，`interactive: true` 回 null；
+  2. 用 TypeScript 语法树扫 `src/` 里所有 `see_frames` / `frameRequest` 调用：UnifiedPreview 取整帧的那一处 target 是 `"prerender"`，而且凡是 lane 为 user / playback 的调用，没有一处 target 是 `"user"`。
+  - 把这一行临时改回 `"user"` 跑一遍，第 2 条失败、第 1 条通过（改回后恢复），说明它拦得住回归。
+
 ## 2. 文件
 
 | 文件 | 改动 |
@@ -53,7 +68,9 @@
 | `server/test/snapshot-style-order.test.mjs`（新） | X6-1～X6-5 |
 | `server/test/artifact-png.test.mjs`（新） | X7-1～X7-7 |
 | `scripts/probes/snapshot-hash-probe.mjs`（新） | X6 跨进程探针 |
-| `scripts/probes/png-adopt-probe.mjs`（新） | X7 可视验收探针 |
+| `scripts/probes/png-adopt-probe.mjs`（新） | X7 可视验收探针（不对页面打补丁） |
+| `src/editor/preview/UnifiedPreview.tsx` | X7 前提：legacy 整帧请求 `target: "prerender"` |
+| `server/test/legacy-preview-target.test.mjs`（新） | X7-legacy-target（两条） |
 | `docs/reports/AGENT-m6c-snapshot.md` | 本报告 |
 
 ## 3. 单测
@@ -74,6 +91,7 @@
 | X7-5 | 本机没有 entry 用这个键：照样写进 `controls/<key>/`，之后开的 `CardFrameCache` 查得到 |
 | X7-6 | 3 块 PNG 在素材服务上不见了：快照照常落地、不抛，`png.failed: 3` |
 | X7-7 | 同一张卡摆 70 次，PNG 条目超过 256 KiB：清单不带 `pngs`，快照清单照常交付 |
+| X7-legacy-target（2 条） | 编辑器进程拒 user / playback、预渲染进程不拒；`src/` 里 user / playback lane 的整帧请求没有一处打编辑器进程 |
 
 ## 4. 探针
 
@@ -119,30 +137,31 @@
 
 ### X7：本机两套预渲染进程模拟「远端产、本机取」
 
-`node scripts/probes/png-adopt-probe.mjs`
+`node scripts/probes/png-adopt-probe.mjs`（最后一次在合了 `claude/m6`、修好 legacy 页面之后跑，**页面不打任何补丁**）
 
 结果：退出码 0，`fails: []`，`notes: []`。流程：
 
 1. 独立文档服务 D 占 5429。
-2. **A（远端）**：5420，连 D，`PROMPTCUT_PUSH=1`。legacy 页面载入项目（`r6-stateful`，2 秒 = 60 帧），preload 到 ready、推送队列清空。A 产出 60 帧 PNG，推送计数 `pushed 2, manifests 2, failures 0`。`uploaded 0` 是因为同一检出里前几次运行已经推过这些块。
+2. **A（远端）**：5420，连 D，`PROMPTCUT_PUSH=1`。legacy 页面载入项目（`r6-stateful`，2 秒 = 60 帧），preload 到 ready、推送队列清空。A 产出 60 帧 PNG，推送计数 `pushed 1, manifests 1, failures 0`。`uploaded 0` 是因为同一检出里前几次运行已经推过这些块。
 3. **B（本机）**：5423，连 D，素材服务指向 A（`PROMPTCUT_ASSET_URL`）。
-   - **取之前**：探针用自己的会话把同一份项目推进 B 的镜像，调 legacy 整帧通道 `/api/frames/see`，结果是 `{"source":"preview","incomplete":true,"missing":["clip-remote"]}`，即占位。
-   - **取之后**：B 的页面 `?preview=legacy` 打开同一份项目，页面自己触发 preload。换机取用的计数是 `{"manifests":1,"fetched":120,"written":60,…,"failed":0}`，其中 120 = 60 块快照 + 60 块 PNG。再调 `see`，结果是 `{"source":"mov","incomplete":false,"missing":[]}`。页面上的整帧 `<img>` 换成 `…/mov/frames/000030.png`，没有报错条。
+   - **取之前**：探针用自己的会话把同一份项目推进 B 的镜像，调 legacy 整帧通道 `/api/frames/see`，结果是 `{"source":"preview","incomplete":true,"missing":["clip-remote"]}`，即占位。B 的页面在第一次取到占位帧时也截了图。
+   - **取之后**：B 的页面 `?preview=legacy` 打开同一份项目，页面自己触发 preload。换机取用的计数是 `{"manifests":1,"fetched":120,"written":60,"skipped":0,"missing":0,"failed":0}`，其中 120 = 60 块快照 + 60 块 PNG。页面换上整帧 `http://127.0.0.1:4943/api/frames/<entry>/mov/frames/000030.png`，没有报错条。再调 `see`，结果是 `{"source":"mov","incomplete":false,"missing":[]}`。
+   - 页面自己的整帧请求：`{"requests":5,"origins":["http://127.0.0.1:4943"],"statuses":[200]}`，全部打到 B 的预渲染进程、全部 200，没有 503。
    - B 的 PNG 缓存与 A 逐字节相同：`{"a":60,"b":60,"identical":60}`。
    - 这张卡的 `controls/<key>/mov/full.mov`：A 有，B 没有。B 的 `fillCardControls` 见 HTML 与 PNG 都齐就跳过了，没有为这张卡跑过 PNG 那一支。B 整帧 MOV 里的这一层，贴的是取回的 PNG（经 `_cardRender`）。
 
-**截图**（在本 worktree 的 `out/` 下，不入库）：
+**截图**（在本 worktree 的 `out/` 下，不入库；都是未打补丁的真实页面，或 legacy 通道回的原图）：
 
 | 文件 | 内容 |
 |---|---|
-| `C:\Users\admin\Documents\PromptCut\.worktrees\m6c-snapshot\out\png-adopt-probe\legacy-before.png` | B 的 `?preview=legacy` 页面在取回之前：卡的位置是沙漏占位 |
-| `C:\Users\admin\Documents\PromptCut\.worktrees\m6c-snapshot\out\png-adopt-probe\legacy-after.png` | 取回之后：同一页面显示真实的「R6 推帧卡」 |
-| `C:\Users\admin\Documents\PromptCut\.worktrees\m6c-snapshot\out\png-adopt-probe\legacy-before-frame.png` | 取之前 legacy 通道回的整帧：灰底、沙漏、虚线框 |
-| `C:\Users\admin\Documents\PromptCut\.worktrees\m6c-snapshot\out\png-adopt-probe\legacy-after-frame.png` | 取之后 legacy 通道回的整帧：真实卡面 |
+| `C:UsersadminDocumentsPromptCut.worktreesm6c-snapshotoutpng-adopt-probelegacy-before.png` | B 的 `?preview=legacy` 页面在取回之前：卡的位置是沙漏占位 |
+| `C:UsersadminDocumentsPromptCut.worktreesm6c-snapshotoutpng-adopt-probelegacy-after.png` | 取回之后：同一页面显示真实的「R6 推帧卡」 |
+| `C:UsersadminDocumentsPromptCut.worktreesm6c-snapshotoutpng-adopt-probelegacy-before-frame.png` | 取之前 legacy 通道回的整帧：灰底、沙漏、虚线框 |
+| `C:UsersadminDocumentsPromptCut.worktreesm6c-snapshotoutpng-adopt-probelegacy-after-frame.png` | 取之后 legacy 通道回的整帧：真实卡面 |
 
 四张我都看过，内容与上表一致。
 
-**探针带了一个垫片，原因见「遗留」第 1 条。** 基线上 `?preview=legacy` 页面发整帧请求的去向是错的，页面只有一条 503 报错、没有画面。探针在浏览器里把 `UnifiedPreview.tsx` 这一个模块的 `target: "user"` 换成 `target: "prerender"`，产品代码没改。诊断里 `legacyShim: 4`，表示页面加载了 4 次这个模块，都换上了。
+早先几轮探针在浏览器里给 `UnifiedPreview.tsx` 打过垫片（把 `target: "user"` 换成 `"prerender"`）。按主会话裁定，产品代码修好之后已把垫片删掉，上面的结果和截图都是删掉之后重跑的。
 
 ## 5. 基线与 G0-R
 
@@ -151,8 +170,9 @@
 | 项 | 命令 | 结果 |
 |---|---|---|
 | 类型检查 | `npx tsc -b --force` | 退出码 0，零错误 |
-| 全量测试（本分支） | `npm test` | `tests 2564 / pass 2503 / fail 60 / cancelled 0 / skipped 1`，退出码 1。60 条失败全是 AU（M6a 鉴权契约测试），原因都是 `Cannot find module …\server\auth\index.mjs`：派出时的基线 `f98569a` 没有这个文件（`git show f98569a:server/auth/index.mjs` 不存在），它在 `claude/m6` 之后的 `f888982` 里。非 AU 的失败 0 条；X6-*、X7-* 12 条全过 |
-| 全量测试（合进 `claude/m6` 之后） | 临时 worktree 以 `claude/m6`（`f888982`）为底，`merge --no-ff` 本分支，再跑 `npm test` 与 `npx tsc -b --force` | `tests 2564 / pass 2563 / fail 0 / cancelled 0 / skipped 1`，退出码 0。唯一的跳过是 `集成:/api/cards/layout 对真实项目返回整数框 # SKIP`（要 5190 的那一条）。tsc 退出码 0 |
+| 全量测试（合进 `claude/m6` 并修好 legacy 页面之后，本分支） | `npm test` | `tests 2566 / pass 2565 / fail 0 / cancelled 0 / skipped 1`，退出码 0。唯一的跳过是 `集成:/api/cards/layout 对真实项目返回整数框 # SKIP`（要 5190 的那一条）。X6-*、X7-*、X7-legacy-target 共 14 条全过 |
+| 类型检查（同上） | `npx tsc -b --force` | 退出码 0 |
+| 全量测试（合并前，历史） | `npm test` | 合并前 60 条 AU 失败，原因是派出时的基线 `f98569a` 缺 `server/auth/index.mjs`；合进 `claude/m6` 后消失 |
 | 导出确定性 | `node scripts/verify-determinism.mjs --url "http://127.0.0.1:5426/?export=1"` | `Total Frames: 1800 / Identical: 1800 / Different: 0`，退出码 0 |
 | 快照重放一致 | `node scripts/verify-unified-frames.mjs --origin http://127.0.0.1:5426` | `PASS: no video during B; all HTML frames; exact video seek; random replay; cache hits; cumulative C equals A; streamed video contains all 10 frames.`，退出码 0 |
 | 导出像素与 main | 临时 `git worktree add --detach .worktrees/m6c-main-baseline main`（`4130a5f`），在 5426 起它的 dev server 跑同一条 `verify-determinism`（main 自己也是 1800/1800），再用 pngjs 逐帧逐像素比两边的 `out/verify-a/frames` | `{"frames":1800,"sameBytes":1800,"diffFrames":0,"diffPixels":0,"missing":0,"extra":0}`：0 不同、0 缺失，而且逐字节相同 |
@@ -161,7 +181,9 @@
 | stream-produce-probe `--group` | 同上加 `--group` | `PASS`，退出码 0；组流 `groupClipIds` 三张 |
 | preview-fallback-probe | `… --origin http://127.0.0.1:5426` | `PASS`，退出码 0；`transparentBeats: 0` |
 | preview-fallback-probe `--page-preload` | 同上加 `--page-preload` | `PASS`，退出码 0；`transparentBeats: 0` |
+| 改了预览页面之后重跑（合并与 legacy 修复之后，5426） | `verify-unified-frames --origin http://127.0.0.1:5426`；`preview-fallback-probe --origin …`；同上加 `--page-preload` | 三条退出码都是 0：`PASS: no video during B; …`；两次 fallback 都是 `PASS`、`transparentBeats: 0` |
 
+- 表中 `verify-determinism`、导出像素、`ready-index-probe`、`stream-produce-probe` 是合并前跑的。合并只带进 M6a 的测试与报告（`auth-create.test.mjs`、`auth-kit.mjs`、`AGENT-m6-integ.md` 等），legacy 修复只动编辑器预览页面，都不碰导出与预渲染的路径，所以这几项没有重跑。
 - 5426 的 dev server 以 `PROMPTCUT_PUSH=0` 起，即不配推送队列的缺省状态（同 C6.4 第 8 节的口径），轨道流开着。
 - 导出不生成快照（`inlineStyles.ts` 文件头第 4 条），所以 X6 对导出像素本来就不该有影响，上表确认了。
 
@@ -178,18 +200,13 @@
 4. **PNG 让清单超限就不带**：快照清单超限是报错（C6.2 第 3 节），PNG 超限只是整段不带 PNG。
 5. **只收产出记录对得上的 PNG**：capture（抓帧代码）不同的不收。这符合语义「前提还有节点渲染用的代码与发布方一致」；而且即使收下，本机的 `lookup` 也会把它逐出。
 6. **`frame-mov.mjs` 在任务点名的文件之外**：任务说的是「PNG 缓存相关」，这里只加了一个缺省不变的参数。
+7. **已知差距（主会话接受）**：X7 之前已经取回快照的段不补取 PNG。`adoptFromManifests` 判断「本机已有这一段」只看快照，所以这类段的 legacy 通道仍是占位，直到本机或别处重产这一段。
+8. **legacy 页面修复不在最初的任务范围里**：按主会话裁定算作 X7 的前提，在本分支一起修了（第 1 节）。
 
-## 7. 遗留（需要主会话决定）
+## 7. 遗留
 
-1. **`?preview=legacy` 页面在基线上看不到画面（与 X7 无关的既有问题）。**
-   - 现象：`src/editor/preview/UnifiedPreview.tsx` 第 46 行 `see_frames(project, [requested], controller.signal, { target: "user", lane: "user" })` 把整帧请求发给编辑器进程。编辑器进程是 `interactive: false`，对 user lane 回 503「交互帧请求请直接打预渲染进程。」。
-   - 实测：页面每次取帧都是 `503 http://127.0.0.1:5420/api/frames/see`，预览区只有一条红色报错。
-   - 建议：把 `target: "user"` 改成 `target: "prerender"`，即 `see_frames` 的缺省值，与 `frameClient.ts` 里 D5 的注释一致。
-   - 这个文件不在我的范围里，我没改。X7 的可视验收靠探针里的垫片完成（第 4 节）。
-   - 契约 X7 的截图验收要在这一行修好之后，才能在真实页面上不借垫片复现。
-2. **本分支的 `npm test` 有 60 条 AU 失败**：来自派出时的基线缺 `server/auth/index.mjs`，与本分支的改动无关。合进 `claude/m6`（`f888982`）后全绿（第 5 节）。合并时以 `claude/m6` 的最新头为底即可，两边没有重叠的文件。
-3. **换机取用不补旧段的 PNG**：`adoptFromManifests` 判断「本机是不是已经有这一段」时只看快照。X7 之前已经取回快照、缺 PNG 的段，不会再去取 PNG。只影响升级前留下的缓存；新取的段不受影响。
-4. **不在 X7 范围内、但可能被问到的一点**：普通模式下，本机后台那一趟最后会把整帧 MOV 渲出来（后台 lane 不画占位），所以即使没有 X7，legacy 通道在 MOV 就绪后也会显示画面。X7 真正起作用的是两处：一是 MOV 就绪之前的 user lane；二是队列模式下本机不跑 `fillCardControls` 的卡，这一点在 X7-2 用 `renderState` 验证。探针里 B 的整帧 MOV 贴的就是取回的 PNG，因为 B 没有为这张卡跑过 PNG 那一支。
+1. 已知差距「X7 之前已取回的段不补取 PNG」按主会话裁定接受，见第 6 节第 7 条。
+2. **不在 X7 范围内、但可能被问到的一点**：普通模式下，本机后台那一趟最后会把整帧 MOV 渲出来（后台 lane 不画占位），所以即使没有 X7，legacy 通道在 MOV 就绪后也会显示画面。X7 真正起作用的是两处：一是 MOV 就绪之前的 user lane；二是队列模式下本机不跑 `fillCardControls` 的卡，这一点在 X7-2 用 `renderState` 验证。探针里 B 的整帧 MOV 贴的就是取回的 PNG，因为 B 没有为这张卡跑过 PNG 那一支。
 
 ## 8. 提交
 
@@ -198,5 +215,7 @@
 - `015ffa6` 报告开工
 - `971c52e` X6
 - `5b31390` X7
-- `a16807d` 及之后几次：两个探针的迭代（选卡、垫片、对照会话）
-- 本报告
+- `a16807d` 及之后几次：两个探针的迭代（选卡、对照会话）
+- `6c0a22d` 合进 `claude/m6`
+- `e88d3d0` legacy 整帧请求打预渲染进程 + X7-legacy-target
+- 之后：探针去掉垫片、本报告更新
