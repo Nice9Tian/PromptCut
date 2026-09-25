@@ -242,11 +242,12 @@ test('B.2 规则 1：cardSources 里任一 [cardId, version] 本机没有就不�
 });
 
 test('B.2 规则 1：plan 任务只查 codeVersion（指纹、卡片源码不查）', () => {
-  const host = nodeOf({ profile: 'host' });
-  accepted(checkClaimable(planView({ requires: { envFingerprint: fpOf('linux', 'intel', 1) } }), host), 'plan 带着别的指纹');
-  accepted(checkClaimable(planView({ requires: { cardSources: { particles: 'builtin:99' } } }), host), 'plan 带着本机没有的卡片源码');
-  accepted(checkClaimable(planView({ requires: { codeVersion: CV } }), host), 'plan 代码版本相符');
-  rejected(checkClaimable(planView({ requires: { codeVersion: 'other' } }), host), 1, 'plan 代码版本不符');
+  // M6b 起 host 不认 plan（规则 6，render-host-contract 第 3、4 节），规则 1 对 plan 的判定改在 pc 节点上测
+  const pc = nodeOf({ profile: 'pc' });
+  accepted(checkClaimable(planView({ requires: { envFingerprint: fpOf('linux', 'intel', 1) } }), pc), 'plan 带着别的指纹');
+  accepted(checkClaimable(planView({ requires: { cardSources: { particles: 'builtin:99' } } }), pc), 'plan 带着本机没有的卡片源码');
+  accepted(checkClaimable(planView({ requires: { codeVersion: CV } }), pc), 'plan 代码版本相符');
+  rejected(checkClaimable(planView({ requires: { codeVersion: 'other' } }), pc), 1, 'plan 代码版本不符');
 });
 
 test('B.2 规则 2：stream 任务或 requires.transcode 要转码能力', () => {
@@ -325,10 +326,10 @@ test('B.2 规则 5：requires.memoryMB 超过 capabilities.memoryMB 不过；相
   accepted(checkClaimable(taskView({ requires: { memoryMB: undefined } }), nodeOf({ capabilities: { memoryMB: 100 } })), '任务不要求内存');
 });
 
-test('B.2 规则 6：plan 任务 browser 不认，pc / host 认', () => {
+test('B.2 规则 6：plan 任务 browser 不认、host 不认（M6b render-host-contract 第 3、4 节），pc 认', () => {
   rejected(checkClaimable(planView(), nodeOf({ profile: 'browser' })), 6, 'browser');
   accepted(checkClaimable(planView(), nodeOf({ profile: 'pc' })), 'pc');
-  accepted(checkClaimable(planView(), nodeOf({ profile: 'host' })), 'host');
+  rejected(checkClaimable(planView(), nodeOf({ profile: 'host' })), 6, 'host');
 });
 
 test('B.2 按规则号顺序检查，返回第一条不过的', () => {
