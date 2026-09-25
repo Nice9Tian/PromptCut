@@ -220,8 +220,11 @@ const queueLog = (event: string, fields: object = {}) => {
 type QueueNode = {
   /** 连着文档服务、本机节点已经报到:`/preload` 走队列模式 */
   active(): boolean;
-  /** `/preload` 的队列那一半:报摘要、传快照、发布 `plan`。回 true = 这一版交给队列了;false = 本机自己产 */
-  publish(session: string, project: any): Promise<boolean>;
+  /**
+   * `/preload` 的队列那一半:报摘要、传快照、发布 `plan`。回 true = 这一版交给队列了;false = 本机自己产。
+   * `entryKey`:这一版的 entry(M6c X1 空档:切分方没切出流任务时,把这一版的流交还本机自动生产)
+   */
+  publish(session: string, project: any, entryKey?: string): Promise<boolean>;
   describe(): object;
   /** `GET /api/frames/queue`(契约 render-host-contract 第 3 节「诊断」):`{ nodes, codeVersion, envFingerprint, maxConcurrent }` */
   summary(): object;
@@ -230,11 +233,31 @@ type QueueNode = {
   close(): Promise<void>;
 };
 const queueNodes = new Map<string, QueueNode>();
+/**
+ * M6c X5:每个帧库根最近一次交互帧请求的时刻(`/see` 的 `user` lane、`/playback`)。本机队列节点的闲时门槛
+ * (`queue-idle.mjs`)读它:最近 500 ms 有过就不认领新任务。开关关着时只是记一个数,别的什么都不做。
+ */
+const lastInteraction = new Map<string, number>();
+const noteInteraction = (root: string) => { lastInteraction.set(root, Date.now()); };
+
+/**
+ * 本机节点(PC 与独立渲染主机)`node.hello` 报的能力(M6c X1,`docs/plan/m6c-contract.md`):
+ *   - `userCards: true, graphCards: false`:同 M5b / M6b;
+ *   - `streams`:按实报 —— 预渲染管线有轨道流生产者、开关开着(`PROMPTCUT_STREAMS` 不是 0)、探到了能用的 H.264
+ *     编码器(`FramePipeline.streamCapable`,一次进程只探一次)才是 true;
+ *   - `transcode`:与 `streams` 同一个判据(本机有 ffmpeg 且编码器能用)。节点侧过滤的规则 2 对流任务同时查
+ *     `requires.capabilities.streams` 与转码能力(B.2),只报 `streams` 的节点认领不了流任务。
+ */
+async function nodeCapabilities(service: FramePipeline) {
+  let streams = false;
+  try { streams = (await (service as any).streamCapable?.()) === true; } catch { streams = false; }
+  return { userCards: true, graphCards: false, transcode: streams, streams };
+}
 
 /**
  * J.5:开关打开、又连得上文档服务时,在预渲染进程里起一个本机渲染节点,并替页面发布 `plan`。
  *
- *   - 节点:`createLocalNode`(`profile: 'pc'`、`maxConcurrent: 1`、`capabilities: { userCards: true, graphCards: false }`,
+ *   - 节点:`createLocalNode`(`profile: 'pc'`、`maxConcurrent: 1`、`capabilities` 见 `nodeCapabilities`(M6c X1 起带 `streams`),
  *     `codeVersions: [frameCode(root)]`;环境指纹在报到前借一次流预渲染间来探),执行器是 J.4 的
  *     `createPrerenderExecutor`,产物库是 C6.2 / C6.4 的 `createAssetSink({ pipeline, client, content })`;
  *   - 发布:`/preload` 在 `service.preload(…, { queue: true })` 之前调 `publish`:`project.announce` 拿 `projectRev`、
@@ -242,6 +265,13 @@ const queueNodes = new Map<string, QueueNode>();
  *   - 收到 `task.done`:细任务的清单经 C6.2 的 `applyResult` 拉取并发布(本机产的已经在盘上,按「已有跳过」处理);
  *   - 连不上文档服务(断线):`service.leaveQueueMode()` 退回本机自己产,在跑的任务让掉;重连后新的 preload 再走队列;
  *   - 远端素材回退(J.6):订阅服务地址登记里的 `asset`,排除自己,填进 `setMediaFallbackBases`。
+ *
+ * M6c(`docs/plan/m6c-contract.md`):
+ *   - X2:`executor.plan` 之后按这一版项目加本地档能力闸(`queue-local-media.mjs`),用到没有内容哈希的素材的细任务
+ *     只给发布方的节点;
+ *   - X4:发布 `plan` 时 `requires.preferNode` = 本机节点(队列给它 `PLAN_PREFER_MS` 的独占窗口);
+ *   - X5:闲时门槛换成 `queue-idle.mjs`(最近 500 ms 没有交互帧请求即可认领,不等 preload 到 ready),
+ *     忙时不认领新的、手里在做的做完。
  *
  * `createProjectClient`(J.2)在 `render-node/index.mjs` 里;取不到它(svc 分支还没合进来)就不起,打日志,
  * 预渲染进程照原来的路径跑。任何一步出错都只打日志。
@@ -273,6 +303,8 @@ async function startQueueNode(root: string, service: FramePipeline) {
   const envFingerprint: string | null = (service as any).envFingerprint;
   if (!envFingerprint) return queueLog("queue.skip", { reason: "no-environment" });
   if (services.get(root) !== service || (service as any).closed) return;
+  const capabilities = await nodeCapabilities(service);
+  if (services.get(root) !== service || (service as any).closed) return;
 
   const { createPrerenderExecutor }: any = await import("./prerender-executor.mjs");
   const { createAssetSink, applyResult }: any = await import("./artifact-transfer.mjs");
@@ -296,12 +328,40 @@ async function startQueueNode(root: string, service: FramePipeline) {
   };
   const log = (event: string, fields: object = {}) => { note(event, fields); if (!/^executor\.render$/.test(event)) queueLog(event, fields); };
   const sink = createAssetSink({ pipeline: service, client, content, log });
-  const executor = createPrerenderExecutor({ pipeline: service, projects, prepareProject: renderProject, log });
+  const baseExecutor = createPrerenderExecutor({ pipeline: service, projects, prepareProject: renderProject, log });
   const host = String(os.hostname() || "host").replace(/[^A-Za-z0-9._:-]/g, "-");
   let editorPort = "";
   try { editorPort = new URL(origin).port; } catch { /* 没有端口就不带 */ }
   // 同一台机器上可能有几个编辑器各带一个预渲染进程:按编辑器端口区分节点身份
   const nodeId = `prerender:${host}${editorPort ? `:${editorPort}` : ""}`.slice(0, 128);
+  const { withLocalMedia }: any = await import("./queue-local-media.mjs");
+  const { createQueueIdleGate }: any = await import("./queue-idle.mjs");
+  /**
+   * M6c X2:算完计划,按这一版 entry 里的项目给 PlanContext 加本地档能力闸 —— 有没有内容哈希的素材时,用到它们的
+   * 细任务写 `requires.localMedia = <plan 的发布方>`(素材在发布方本机;PC 节点的发布方 id 就是它的 nodeId)。
+   * 执行器本身不变(`prerender-executor.mjs` 的 `plan-mismatch` 照旧兜底)。
+   */
+  const executor = {
+    ...baseExecutor,
+    plan: async (planTask: any, opts: any) => {
+      const ctx = await baseExecutor.plan(planTask, opts);
+      const project = (service as any).entries?.get(ctx?.entryKey)?.project;
+      const owner = typeof planTask?.source?.publisher?.id === "string" ? planTask.source.publisher.id : nodeId;
+      const gated = withLocalMedia(ctx, { project, owner });
+      if (gated !== ctx) log("queue.local-media", { planId: planTask?.id ?? null, owner });
+      return gated;
+    },
+  };
+  /**
+   * M6c X5 的闲时门槛:执行器有空位(会话自己守 maxConcurrent)且最近 500 ms 没有交互帧请求就认领细任务,
+   * 不再等 preload 到 ready。播放、拖动时不认领新的,手里在做的做完(不再 yieldAll)。
+   */
+  const idleGate = createQueueIdleGate({ pipeline: service, lastInteractionAt: () => lastInteraction.get(root) ?? -Infinity });
+  /** X5 的证据(诊断 `queue.firstClaims`):第一次认领 plan / 细任务时 preload 各代际的状态 */
+  const firstClaims: { plan: object | null, fine: object | null } = { plan: null, fine: null };
+  const preloadStatuses = () => [...((service as any).generations?.values?.() ?? [])].map((g: any) => ({
+    key: String(g?.key ?? "").slice(0, 12), status: (service as any).entries?.get(g?.key)?.status ?? null, aborted: g?.controller?.signal?.aborted === true,
+  }));
 
   /** 诊断与 queue-mode-probe 的读口 */
   const stats = { claimed: 0, completed: 0, dedup: 0, failed: 0, discarded: 0, lost: 0, planSplit: 0, done: 0, failedTasks: 0, applied: 0, applyErrors: 0,
@@ -321,7 +381,20 @@ async function startQueueNode(root: string, service: FramePipeline) {
     while (set.size > MINE_MAX) set.delete(set.values().next().value as string);
   };
   /** `<projectId>\0<digest>` → 已发布的那一版 */
-  const published = new Map<string, { projectId: string, projectRev: number, planId: string, digest: string, at: number }>();
+  const published = new Map<string, { projectId: string, projectRev: number, planId: string, digest: string, at: number, entryKey?: string }>();
+  /**
+   * M6c X1 的空档(集成裁定,m6c-contract「集成时的裁定」):自己发布的 plan 完成了,切分方却一个流任务都没切
+   * (它关着流或探不到编码器),而本机能产流 —— 这一版的流交还本机自动生产(不经队列),快照照旧走队列。
+   */
+  const streamsFallback = (planId: string, derived: unknown) => {
+    if (capabilities.streams !== true || !Array.isArray(derived)) return;
+    if (derived.some(id => typeof id === "string" && id.startsWith("stream:"))) return;
+    for (const record of published.values()) {
+      if (record.planId !== planId || !record.entryKey) continue;
+      const released = (service as any).releaseQueueStreams?.(record.entryKey) ?? 0;
+      if (released) log("queue.streams-local", { planId, entryKey: record.entryKey.slice(0, 12), derived: derived.length });
+    }
+  };
 
   let codeVersion: string = frameCode(root);
   let localNode: any = null;
@@ -331,8 +404,8 @@ async function startQueueNode(root: string, service: FramePipeline) {
     localNode?.stop();
     localNode = node.createLocalNode({
       nodeId,
-      node: { profile: "pc", envFingerprint, codeVersions: [codeVersion], capabilities: { userCards: true, graphCards: false }, maxConcurrent: 1 },
-      endpoint, now: Date.now, isIdle: () => executor.isIdle(), maxConcurrent: 1, codeVersion, executor, sink,
+      node: { profile: "pc", envFingerprint, codeVersions: [codeVersion], capabilities, maxConcurrent: 1 },
+      endpoint, now: Date.now, isIdle: () => idleGate.idle(), maxConcurrent: 1, codeVersion, executor, sink,
       onEvent: (event: any) => {
         const id = event?.id;
         if (event?.type === "completed") { stats.completed++; remember(mine.completed, id); }
@@ -350,13 +423,23 @@ async function startQueueNode(root: string, service: FramePipeline) {
   /** 队列那边回来的消息:`task.done` 拉取并发布,`task.failed` 记下 */
   let applyChain: Promise<unknown> = Promise.resolve();
   endpoint.onMessage((message: any) => {
-    if (message?.type === "task.claimed") { stats.claimed++; remember(mine.claimed, message.id); }
+    if (message?.type === "task.claimed") {
+      stats.claimed++; remember(mine.claimed, message.id);
+      const which = typeof message.id === "string" && message.id.startsWith("plan:") ? "plan" : "fine";
+      if (!firstClaims[which]) {
+        firstClaims[which] = { id: message.id, at: Date.now(), preload: preloadStatuses() };
+        log("queue.first-claim", { kind: which, id: message.id, preload: (firstClaims[which] as any).preload.map((p: any) => p.status) });
+      }
+    }
     if (message?.type === "task.done" && typeof message.id === "string") {
       stats.done++;
       doneCounts.set(message.id, (doneCounts.get(message.id) ?? 0) + 1);
       taskState.set(message.id, { state: "done", at: Date.now() });
       const result = message.result;
-      if (message.id.startsWith("plan:") && Array.isArray(result?.derived)) planDerived.set(message.id, [...result.derived]);
+      if (message.id.startsWith("plan:") && Array.isArray(result?.derived)) {
+        planDerived.set(message.id, [...result.derived]);
+        streamsFallback(message.id, result.derived);
+      }
       // 细任务的清单(C6.2 形状,`v: 1`)才拉;M5b 之前的 local-node 完成时不带清单,本机产的由执行器自己发层
       if (result && typeof result === "object" && result.v === 1 && (result.kind === "snapshot" || result.kind === "stream")) {
         applyChain = applyChain.catch(() => {}).then(async () => {
@@ -380,7 +463,7 @@ async function startQueueNode(root: string, service: FramePipeline) {
     // G.7 约定写法:(重)连上就报到,接续本实例仍持有的认领
     localNode.start(localNode.session.held().map(({ id, token }: any) => ({ id, token })));
     started = true;
-    log("queue.started", { docservice: resolved.mode, url: resolved.url, nodeId, envFingerprint, codeVersion: codeVersion.slice(0, 12) });
+    log("queue.started", { docservice: resolved.mode, url: resolved.url, nodeId, envFingerprint, codeVersion: codeVersion.slice(0, 12), capabilities });
   };
   endpoint.onOpen(onOpen);
   endpoint.onClose(() => {
@@ -410,8 +493,8 @@ async function startQueueNode(root: string, service: FramePipeline) {
         localNode.start([]);
         log("queue.code-changed", { codeVersion: codeVersion.slice(0, 12) });
       }
-      // 让路:播放 / 拖动时在跑的任务放回去,空闲了再认领(J.4 的 isIdle 管认领)
-      if (localNode.running().length && (service as any).streamBusy?.()) localNode.yieldAll("busy");
+      // M6c X5:播放 / 拖动时不认领新的(闲时门槛管认领),手里在做的做完 —— 语义 platforms.md「手里在做的那一批做完为止」,
+      // 不再像 M5b 那样把在跑的任务 yieldAll 放回去
       localNode.tick();
     } catch (error: any) {
       note("queue.tick-error", { message: String(error?.message ?? error) });
@@ -443,7 +526,7 @@ async function startQueueNode(root: string, service: FramePipeline) {
 
   const handle: QueueNode = {
     active: () => started && !closed && endpoint.connected === true,
-    async publish(session, project) {
+    async publish(session, project, entryKey) {
       if (!handle.active()) return false;
       const projectId = typeof project?.id === "string" && PROJECT_ID_RE.test(project.id) ? project.id
         : typeof session === "string" && PROJECT_ID_RE.test(session) ? session : null;
@@ -455,13 +538,16 @@ async function startQueueNode(root: string, service: FramePipeline) {
       try {
         const { projectRev } = await projects.announce(projectId, digest, session && session.length <= 128 ? session : undefined);
         await projects.putSnapshot(projectId, projectRev, digest, text);
-        const task = node.planTaskOf({ projectId, projectRev, codeVersion: frameCode(root), envFingerprint });
-        // J.3 的 `planTaskOf` 会自己写进 `requires`;合并之前的版本不认这两个参数,这里补上(两种都对)
-        task.requires = { ...(task.requires ?? {}), codeVersion: frameCode(root), envFingerprint };
+        // M6c X4:`preferNode` = 本机节点,发布后 PLAN_PREFER_MS 之内只有它能认领;之后任何指纹符合的 pc 都能
+        const task = node.planTaskOf({ projectId, projectRev, codeVersion: frameCode(root), envFingerprint, preferNode: nodeId });
+        // J.3 的 `planTaskOf` 会自己写进 `requires`;合并之前的版本不认这几个参数,这里补上(两种都对)
+        task.requires = { ...(task.requires ?? {}), codeVersion: frameCode(root), envFingerprint, preferNode: nodeId };
         const results = await publishPlan(task);
         const result = Array.isArray(results) ? results.find((r: any) => r?.id === task.id) : null;
         if (!result || result.error) throw Object.assign(new Error(`plan 没发布成:${result?.error ?? "no-result"}`), { code: result?.error ?? "no-result" });
-        published.set(key, { projectId, projectRev, planId: task.id, digest, at: Date.now() });
+        published.set(key, { projectId, projectRev, planId: task.id, digest, at: Date.now(), ...(entryKey ? { entryKey } : {}) });
+        // plan 在发布回包之前就已经完成过(同一版别人发布过):按已知的切分结果补判一次流的空档
+        if (planDerived.has(task.id)) streamsFallback(task.id, planDerived.get(task.id));
         if (!taskState.has(task.id)) taskState.set(task.id, { state: result.state ?? "open", at: Date.now() });
         log("queue.published", { planId: task.id, bytes: text.length, state: result.state ?? null, created: result.created ?? null });
         return true;
@@ -475,6 +561,9 @@ async function startQueueNode(root: string, service: FramePipeline) {
         mode: resolved.mode, url: resolved.url, connected: endpoint.connected === true, active: handle.active(), nodeId, envFingerprint, assetBase: assets.base(),
         codeVersion, running: localNode?.running?.() ?? [], held: localNode?.session?.held?.().map(({ id }: any) => id) ?? [],
         stats: { ...stats },
+        // M6c X5:闲时门槛此刻的判定(null = 能认领)与第一次认领时 preload 的状态
+        idle: { reason: idleGate.reason(), lastInteractionAt: Number.isFinite(idleGate.lastInteractionAt) ? idleGate.lastInteractionAt : null },
+        firstClaims: { ...firstClaims },
         local: { nodeId, claimed: [...mine.claimed], completed: [...mine.completed], dedup: [...mine.dedup], failed: [...mine.failed] },
         published: [...published.values()],
         plans: Object.fromEntries(planDerived),
@@ -592,6 +681,9 @@ async function startHostNode(root: string, service: FramePipeline, node: any, or
   const envFingerprint: string | null = (service as any).envFingerprint;
   if (!envFingerprint) return queueLog("queue.skip", { reason: "no-environment", profile: "host" });
   if (services.get(root) !== service || (service as any).closed) return;
+  // M6c X1:能力与 PC 节点同一个判据(`streams` 按实报)
+  const capabilities = await nodeCapabilities(service);
+  if (services.get(root) !== service || (service as any).closed) return;
 
   const { sharedProtocols }: any = await import("./auth/shared-config.mjs");
   const { createTicketSource }: any = await import("./auth/ticket-source.mjs");
@@ -620,6 +712,7 @@ async function startHostNode(root: string, service: FramePipeline, node: any, or
     maxConcurrent: config.maxConcurrent,
     envFingerprint,
     codeVersion,
+    capabilities,
     now: Date.now,
     nodeIdOf: (_entry: any, index: number) => `${nodeIdBase}/p${index}`.slice(0, 128),
     connect: (entry: any, index: number) => {
@@ -663,7 +756,7 @@ async function startHostNode(root: string, service: FramePipeline, node: any, or
   let released = false;
   host.start();
   log("queue.started", { profile: "host", projects: config.entries.map((e: any) => e.projectId), maxConcurrent: host.maxConcurrent,
-    envFingerprint, codeVersion: codeVersion.slice(0, 12), codeVersionOverride: override !== null });
+    envFingerprint, codeVersion: codeVersion.slice(0, 12), codeVersionOverride: override !== null, capabilities });
 
   const timer = setInterval(() => {
     if (closed) return;
@@ -1074,10 +1167,12 @@ export function framesPlugin(): Plugin {
             if (typeof input.owner !== "string" || input.owner.length > 100 || !Number.isSafeInteger(input.sequence)
               || !Number.isFinite(input.t) || typeof input.playing !== "boolean" || (input.rate !== undefined && (!Number.isFinite(input.rate) || input.rate <= 0 || input.rate > 8))
               || (input.deliveryMs !== undefined && (!Number.isFinite(input.deliveryMs) || input.deliveryMs < 0 || input.deliveryMs > 5000))) throw new Error("Invalid playback clock");
+            noteInteraction(root);   // M6c X5:播放时钟是交互帧请求,本机队列节点 500 ms 内不认领新任务
             return json(200, await service.updatePlayback(project, input, { borrow, release }));
           }
           if (url.pathname === "/see") {
             const lane = input.lane === "agent" ? "agent" : input.lane === "background" ? "background" : "user";
+            if (lane === "user") noteInteraction(root);   // M6c X5:拖动取帧是交互帧请求
             const frames = await service.see_frames(project, input.times || [0], { lane, signal: requestSignal(req, res) });
             const movReady = await fsp.access(path.join(entry.dir, "mov", "full.mov")).then(() => true, () => false);
             return json(200, { key: entry.key, incomplete: [...frames.values()].some((value: any) => value.incomplete),
@@ -1092,7 +1187,7 @@ export function framesPlugin(): Plugin {
              * 开关关着时 `queueNodes` 是空的,这里的调用和原来一字不差。
              */
             const queueNode = queueNodes.get(root);
-            const viaQueue = queueNode?.active() ? await queueNode.publish(preloadSession!, project) : undefined;
+            const viaQueue = queueNode?.active() ? await queueNode.publish(preloadSession!, project, entry.key) : undefined;
             await service.preload(project, { session: preloadSession!, localRev: input.localRev, ticket: preloadTicket, ...(viaQueue === undefined ? {} : { queue: viaQueue }) });
             // 报给编辑器进程登记(方案 A):这个进程崩溃重启后,由编辑器照表重放 preload。
             // 只报这个会话此刻真正认下的版本 —— 被更新的 preload 取代了的请求不报

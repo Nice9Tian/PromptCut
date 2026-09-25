@@ -18,13 +18,13 @@ const TTL = 600_000;
 
 const T_IN = makeTaskInput({ resultKey: 'rk1' });
 
-/** 发布方 P（u1）、节点 A、B（pc）、W（host），都 watch all；P 发布 `tasks`。 */
+/** 发布方 P（u1）、节点 A、B（pc）、W（pc；M6c X3 之前是 host），都 watch all；P 发布 `tasks`。 */
 function setup({ tasks = [T_IN], ...options } = {}) {
   const h = createQueueHarness(createRenderQueue, options);
   h.publisher('p', 'pub-1');
   h.node('a', 'node-A');
   h.node('b', 'node-B');
-  h.node('w', 'node-W', { profile: 'host' });
+  h.node('w', 'node-W', { profile: 'pc' });   // M6c X3：host 的 watch 'all' 只收摘要，只看不做的 W 改用 pc（原为 host）
   if (tasks.length) h.publish('p', tasks);
   h.bus.clear();
   return { h, id: tasks[0]?.id };
@@ -158,7 +158,7 @@ test('P5 纯浏览器节点 watch：queue.snapshot 与增量只含本人任务�
   h.publish('p1', [U1a]);
   h.publish('p2', [U2a]);
 
-  const br2 = h.node('br2', 'node-BR2', { profile: 'browser', userId: 'u2' });
+  const br2 = h.node('br2', 'node-BR2', { profile: 'browser', userId: 'u2', watch: ['proj-1', 'proj-2'] });   // M6c X3：纯浏览器不能 watch 'all'，改列出本用例用到的两个项目（原为 'all'）
   assert.deepEqual(br2.one('br2', 'queue.snapshot').tasks.map(t => t.id), [U2a.id]);
   assert.equal(br2.one('br2', 'queue.snapshot').tasks[0].source.userId, 'u2');
   const a = h.node('a', 'node-A', { profile: 'pc', userId: 'u9' });
@@ -255,7 +255,7 @@ test('P7 消息自报的 userId / tenantId 与 principal 不同：以 principal 
   assert.throws(() => h.q.connect('bad2', { userId: 7, tenantId: 't1' }), TypeError);
 
   // 纯浏览器节点在 hello 里自报 userId 也不作数
-  h.node('br', 'node-BR', { profile: 'browser', userId: 'u2', tenantId: 't1', hello: { userId: 'u1', tenantId: 't1' } });
+  h.node('br', 'node-BR', { profile: 'browser', userId: 'u2', tenantId: 't1', watch: ['proj-1'], hello: { userId: 'u1', tenantId: 't1' } });   // M6c X3：纯浏览器不能 watch 'all'
   const snap = h.bus.last('br', 'queue.snapshot');
   assert.deepEqual(snap.tasks, []);
   assert.equal(rejected(h.claim('br', T.id, 1), 'br', T.id).reason, 'forbidden');
@@ -683,6 +683,7 @@ test('P14 options.constants 覆盖：覆盖值生效，其余保持基线', () =
     DONE_TTL: 600_000, MAX_TASKS_PER_PROJECT: 5000,
     SNAPSHOT_SPAN: 60, STREAM_SEGMENTS: 8, PICK_K: 4,
     PREFILTER: true, THROTTLE_REJECTS: 20,
+    PLAN_PREFER_MS: 5_000,   // M6c X4 新增的常量
   });
   assert.deepEqual({ ...QUEUE_ENV }, {
     LEASE_MS: 'PROMPTCUT_QUEUE_LEASE_MS', RENEW_INTERVAL_MS: 'PROMPTCUT_QUEUE_RENEW_MS',
@@ -692,6 +693,7 @@ test('P14 options.constants 覆盖：覆盖值生效，其余保持基线', () =
     SNAPSHOT_SPAN: 'PROMPTCUT_QUEUE_SNAPSHOT_SPAN', STREAM_SEGMENTS: 'PROMPTCUT_QUEUE_STREAM_SEGMENTS',
     PICK_K: 'PROMPTCUT_QUEUE_PICK_K',
     PREFILTER: 'PROMPTCUT_QUEUE_PREFILTER', THROTTLE_REJECTS: 'PROMPTCUT_QUEUE_THROTTLE_REJECTS',
+    PLAN_PREFER_MS: 'PROMPTCUT_QUEUE_PLAN_PREFER_MS',
   });
   assert.ok(Object.isFrozen(QUEUE_DEFAULTS));
   assert.ok(Object.isFrozen(QUEUE_ENV));
@@ -773,12 +775,12 @@ test('P15 派生任务的继承：derivedFrom 指向本节点认领中的 plan �
   const h = createQueueHarness(createRenderQueue);
   h.publisher('pg', 'pub-page', { userId: 'u1', tenantId: 't1' });
   // 切分节点：同一条连接既是节点又是发布方，凭证是部署身份
-  h.node('n', 'node-N', { profile: 'host', userId: 'svc', tenantId: 't2' });
+  h.node('n', 'node-N', { profile: 'pc', userId: 'svc', tenantId: 't2' });   // M6c X3 / X4：host 不认领 plan、watch 'all' 只收摘要，切分节点改用 pc（原为 host）
   assert.equal(h.handle('n', { type: 'publisher.hello', publisherId: 'pub-node' }).one('n', 'publisher.welcome').publisherId, 'pub-node');
-  h.node('m', 'node-M', { profile: 'host', userId: 'svc2', tenantId: 't2' });
+  h.node('m', 'node-M', { profile: 'pc', userId: 'svc2', tenantId: 't2' });
   h.handle('m', { type: 'publisher.hello', publisherId: 'pub-m' });
-  h.node('br1', 'node-BR1', { profile: 'browser', userId: 'u1', tenantId: 't1' });
-  h.node('brS', 'node-BRS', { profile: 'browser', userId: 'svc', tenantId: 't2' });
+  h.node('br1', 'node-BR1', { profile: 'browser', userId: 'u1', tenantId: 't1', watch: ['proj-1'] });   // M6c X3：纯浏览器不能 watch 'all'
+  h.node('brS', 'node-BRS', { profile: 'browser', userId: 'svc', tenantId: 't2', watch: ['proj-1'] });
 
   const PL = makeTaskInput({ kind: 'plan', projectRev: 1 });
   h.publish('pg', [PL]);
@@ -840,7 +842,7 @@ test('P15 派生任务的继承：derivedFrom 指向本节点认领中的 plan �
   assert.equal(out.ofType('task.done').length, 1);
 
   // 不继承 4：plan 已不在 claimed（已完成）
-  h.node('n2', 'node-N2', { profile: 'host', userId: 'svc3', tenantId: 't2' });
+  h.node('n2', 'node-N2', { profile: 'pc', userId: 'svc3', tenantId: 't2' });   // M6c X3 / X4：host 不认领 plan、watch 'all' 只收摘要，切分节点改用 pc（原为 host）
   h.handle('n2', { type: 'publisher.hello', publisherId: 'pub-n2' });
   claimOk(h, 'n2', PL.id, 3);
   h.complete('n2', PL.id, 4);
@@ -856,9 +858,9 @@ test('P16 继承条件满足时已存在的细任务：并入 plan 的订阅者�
   h.publisher('old', 'pub-old', { userId: 'u-old', tenantId: 't1' });
   h.publisher('pg', 'pub-page', { userId: 'u1', tenantId: 't1' });
   h.publisher('pg2', 'pub-page2', { userId: 'u1', tenantId: 't1' });
-  h.node('n', 'node-N', { profile: 'host', userId: 'svc', tenantId: 't2' });
+  h.node('n', 'node-N', { profile: 'pc', userId: 'svc', tenantId: 't2' });   // M6c X3 / X4：host 不认领 plan、watch 'all' 只收摘要，切分节点改用 pc（原为 host）
   h.handle('n', { type: 'publisher.hello', publisherId: 'pub-node' });
-  h.node('m', 'node-M', { profile: 'host', userId: 'svc2', tenantId: 't2' });
+  h.node('m', 'node-M', { profile: 'pc', userId: 'svc2', tenantId: 't2' });
   h.handle('m', { type: 'publisher.hello', publisherId: 'pub-m' });
 
   // 已存在的四种任务（pub-old 建），外加两条 pub-page 早已订阅的 done / failed

@@ -185,7 +185,8 @@ test('A3 成员身份：消息里自报的 userId / tenantId 不改变它，任�
 
   node.send({ type: 'node.hello', reqId: 'n', nodeId: 'nd', profile: 'host', userId: 'mallory', tenantId: 'evil' });
   await node.next(byReq('n'));
-  node.send({ type: 'queue.watch', reqId: 'w', projects: 'all' });
+  // M6c X3：host 的 watch 'all' 只收摘要、不收单任务增量，这里要看 task.opened，改 watch 任务所在的项目（原为 'all'）
+  node.send({ type: 'queue.watch', reqId: 'w', projects: ['proj'] });
   await node.next(byReq('w'));
 
   page.send({ type: 'publisher.hello', reqId: 'p', publisherId: 'pg', userId: 'mallory', tenantId: 'evil' });

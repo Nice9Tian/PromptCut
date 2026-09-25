@@ -693,7 +693,8 @@ test('B.4 splitPlan：流任务按 STREAM_SEGMENTS（缺省 8）切段，字段�
     assert.deepEqual(t.source, { projectId: PROJECT, projectRev: REV, derivedFrom: PLAN_ID });
     assert.deepEqual(t.input, { clipId: top, cardId: null, entryKey: null, contentKey: t.input.contentKey });
     assert.deepEqual(t.weight, { class: 'medium', estMs: 7, frames: (t.range.to - t.range.from + 1) * 15 });
-    assert.deepEqual(t.requires, { envFingerprint: FP, codeVersion: CV, cardSources: {}, transcode: true, userCards: false, graphCards: false, belowDependent: false });
+    // M6c X1：流任务另带 requires.capabilities.streams = true
+    assert.deepEqual(t.requires, { envFingerprint: FP, codeVersion: CV, cardSources: {}, transcode: true, userCards: false, graphCards: false, belowDependent: false, capabilities: { streams: true } });
     assert.equal(t.priority, 10);
   }
   assert.ok(weightCalls.some(arg => arg && arg.clipId === 'top-1'), 'weightOf 以 { clipId: topClipId } 调用');
