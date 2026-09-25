@@ -13,7 +13,8 @@ import { pickCandidate } from './pick.mjs';
  *
  * 同一时刻至多一条认领在飞,一次 `tick` 至多发一条认领;持有数 + 在飞数到 `maxConcurrent`
  * 就不再认领。在飞的认领在收到 `task.claimed` / `task.claim-rejected`(或 `error`、重新
- * `start`)时清掉。
+ * `start`)时清掉。队列回 `claim-rejected { reason: 'throttled' }`(契约 I.6)后,
+ * 一个 `SWEEP_INTERVAL_MS` 内不发起新认领,续约照常。
  *
  * # 重入
  *
@@ -54,6 +55,8 @@ export function createNodeSession({
   let yielding = null;
   let lastProjectId = null;
   let epoch = null;
+  /** 被队列限流(`claim-rejected { reason: 'throttled' }`,契约 I.6)后,这个时刻之前不发起新认领;续约照常 */
+  let throttledUntil = -Infinity;
 
   const dropHold = (id, reason) => {
     if (!holds.delete(id)) return;
@@ -77,6 +80,8 @@ export function createNodeSession({
     open = new Map();
     inflight = null;
     yielding = null;
+    // 限流挂在队列的连接上,新连接不带着旧连接的退避(契约 I.10 第 6 条)
+    throttledUntil = -Infinity;
     send({
       type: 'node.hello', nodeId, profile: node?.profile, envFingerprint: node?.envFingerprint,
       capabilities: node?.capabilities, codeVersions: node?.codeVersions, maxConcurrent, resume: entries,
@@ -107,12 +112,19 @@ export function createNodeSession({
     const { id, reason } = message;
     if (inflight?.id === id) inflight = null;
     if (yielding?.id === id) yielding = null;
+    if (reason === 'throttled') {
+      // 契约 I.6:本连接这个扫描周期撞锁太多,队列在下一次扫描前一律回 throttled。退避一个扫描周期;
+      // 候选不从本地视图删,任务本身没变,过后照常可以认领
+      throttledUntil = now() + settings.SWEEP_INTERVAL_MS;
+      return;
+    }
     if (reason === 'stale') {
       const task = open.get(id);
       if (task && Number.isInteger(message.version)) open.set(id, { ...task, version: message.version });
       return;
     }
-    // taken / gone / forbidden / card-locked(以及认不出的原因):这一轮不再考虑它。
+    // taken / gone / forbidden / card-locked / fingerprint-mismatch(契约 I.10 第 4 条)
+    // (以及认不出的原因):这一轮不再考虑它。
     // card-locked(契约 F.2):这张卡的锁在别的指纹上,本节点的指纹做不了,按 taken 丢掉候选、
     // 不重试;任务在队列里仍是 open,只有队列再发 task.opened / queue.snapshot 时才会回到视图
     open.delete(id);
@@ -140,6 +152,7 @@ export function createNodeSession({
         break;
       case 'task.taken':
       case 'task.closed':
+        // 包括 `state: 'hidden'`(契约 I.6):队列的指纹前置过滤不再让本节点看见它,和别的 closed 一样移除
         open.delete(message.id);
         break;
       case 'task.claimed':
@@ -156,8 +169,9 @@ export function createNodeSession({
         break;
       }
       case 'error':
-        // 回包对不上是哪条请求;在飞的认领若就是它,不清的话节点从此再也不认领
-        inflight = null;
+        // 认领不带 reqId,回包对不上是哪条请求;在飞的认领若就是它,不清的话节点从此再也不认领。
+        // 带 reqId 的是同一条连接上别的请求(内容库、发布等)的回包,不是认领的,不清(契约 I.10 第 5 条)
+        if (message.reqId === undefined) inflight = null;
         break;
       default:
         break;
@@ -171,7 +185,7 @@ export function createNodeSession({
       hold.lastSentAt = at;
       send({ type: 'task.progress', id: hold.id, token: hold.token, done: hold.done ?? null });
     }
-    if (inflight || !isIdle() || holds.size >= maxConcurrent) return;
+    if (inflight || !isIdle() || holds.size >= maxConcurrent || at < throttledUntil) return;
     const candidates = filterClaimable(known0().filter(task => !holds.has(task.id)), node);
     const task = pickCandidate(candidates, { k: settings.PICK_K, random, lastProjectId });
     if (!task) return;

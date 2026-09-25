@@ -8,7 +8,8 @@
  * handle / tick 都是同步的一步，执行中不让出事件循环，也不回调调用方（send 除外）：认领的「比对再加锁」
  * 靠的就是这一点（设计 4.2）。每一步先把状态改完，再往外发消息，发消息出错也不会留下改了一半的状态。
  *
- * 契约：`docs/plan/render-queue-contract.md` A 节；卡片级指纹锁（锁表、card.lock、认领第 3a 步、接手）见 F.1。
+ * 契约：`docs/plan/render-queue-contract.md` A 节；卡片级指纹锁（锁表、card.lock、认领第 3a 步、接手）见 F.1；
+ * 按节点指纹前置过滤、锁变更的定向增量、拒绝限流见 I 节（开关 PREFILTER）。
  */
 import { randomUUID } from 'node:crypto';
 import { QUEUE_DEFAULTS } from './constants.mjs';
@@ -21,7 +22,10 @@ function resolveConstants(overrides) {
   for (const key of Object.keys(QUEUE_DEFAULTS)) {
     const v = overrides[key];
     if (v === undefined) continue;
-    if (typeof v !== 'number' || !Number.isFinite(v)) throw new TypeError(`createRenderQueue: constants.${key} 必须是有限的数`);
+    if (typeof QUEUE_DEFAULTS[key] === 'boolean') {
+      // 开关（PREFILTER，契约 I.1）只收布尔
+      if (typeof v !== 'boolean') throw new TypeError(`createRenderQueue: constants.${key} 必须是布尔值`);
+    } else if (typeof v !== 'number' || !Number.isFinite(v)) throw new TypeError(`createRenderQueue: constants.${key} 必须是有限的数`);
     out[key] = v;
   }
   return Object.freeze(out);
@@ -37,7 +41,7 @@ export function createRenderQueue(options = {}) {
   const epoch = options.epoch ?? randomUUID();
 
   /**
-   * 连接：connId → { connId, principal, nodeId, publisherId, watch }。
+   * 连接：connId → { connId, principal, nodeId, publisherId, watch, cardLockedRejects }。
    * 用对象本身而不是 connId 认「同一条连接」：connId 可能被新连接复用，认领记的是当时那条连接。
    */
   const conns = new Map();
@@ -84,6 +88,7 @@ export function createRenderQueue(options = {}) {
   /**
    * 可见性（A.9）：只发给 watch 了该项目的节点连接；纯浏览器只见本人任务（Q2），
    * 这条边界由这里守，不靠节点自己过滤。
+   * PREFILTER 开着时再加指纹前置过滤（I.2，见 envAllows）。
    */
   function canSee(conn, task) {
     if (conn.watch === null) return false;
@@ -91,7 +96,69 @@ export function createRenderQueue(options = {}) {
     if (!node) return false;
     if (conn.watch !== 'all' && !conn.watch.has(task.source.projectId)) return false;
     if (node.profile === 'browser' && task.source.userId !== conn.principal.userId) return false;
+    if (C.PREFILTER && !envAllows(node, task)) return false;
     return true;
+  }
+
+  /** 非空字符串才算带了指纹；空串、null、缺省都当没带 */
+  const fingerprintOf = (v) => (typeof v === 'string' && v !== '' ? v : null);
+
+  /**
+   * 指纹前置过滤（I.2，语义 document-service.md「指纹前置过滤（特例）」）：环境不符、或这张卡已被别的环境锁定的任务，
+   * 不发给这个节点。不然锁一变，指纹不符的节点会一拥而上认领、全部被 card-locked 拒掉（锁风暴）。
+   * 节点没带指纹时两条都不生效，与加过滤之前一样；能力过滤仍由节点自己做。
+   */
+  function envAllows(node, task) {
+    const nodeFp = fingerprintOf(node.envFingerprint);
+    if (nodeFp === null) return true;
+    // 1. 指纹相符：任务没带指纹时不生效。plan 不看，和节点侧 filter.mjs 规则 1 一致：
+    //    plan 不产结果，谁认领谁的指纹就是这一版的指纹
+    if (task.kind !== 'plan') {
+      const taskFp = fingerprintOf(task.requires ? task.requires.envFingerprint : undefined);
+      if (taskFp !== null && taskFp !== nodeFp) return false;
+    }
+    // 2. 没被别的环境锁住：只看参与锁的任务（有锁键也有锁指纹，F.1），和认领第 3a 步的判定对得上
+    const id = lockIdOf(task);
+    const lock = id ? locks.get(id.key) : undefined;
+    return !lock || lock.envFingerprint === nodeFp;
+  }
+
+  /**
+   * 本次 task.publish 新建的任务（I.3）：它们的 task.opened 在这一步末尾按最终的可见性发，
+   * 锁变更的定向增量不再管它们，免得同一个节点收到两条 task.opened。只在 onPublish 执行期间不为 null。
+   */
+  let freshTasks = null;
+
+  /**
+   * 锁变更的定向增量（I.3）：mutate 改锁表里 key 这把锁的指纹（新建、接手转移）。对这个锁键下每个 open 的任务，
+   * 比较改前改后每条连接看不看得见：看得见 → 看不见的发 task.closed { state: 'hidden', reason: 'card-locked' }，
+   * 看不见 → 看得见的发 task.opened；前后不变的什么都不发。
+   * 状态在这里就改完；返回的函数再往外发（没有要发的返回 null），调用方好把自己的回包排在前面。
+   * PREFILTER 关着时可见性与锁无关，只做 mutate。
+   */
+  function changeLock(key, mutate, except = null) {
+    if (!C.PREFILTER) { mutate(); return null; }
+    const affected = [];
+    for (const task of tasks.values()) {
+      if (task.state !== 'open' || task === except || (freshTasks && freshTasks.has(task))) continue;
+      const id = lockIdOf(task);
+      if (id && id.key === key) affected.push(task);
+    }
+    if (affected.length === 0) { mutate(); return null; }
+    const watchers = [...conns.values()].filter((conn) => conn.watch !== null && nodeOf(conn));
+    const before = affected.map((task) => new Set(watchers.filter((conn) => canSee(conn, task))));
+    mutate();
+    const out = [];
+    affected.forEach((task, i) => {
+      let view = null;
+      for (const conn of watchers) {
+        const was = before[i].has(conn);
+        const will = canSee(conn, task);
+        if (was && !will) out.push([conn, 'task.closed', { id: task.id, state: 'hidden', reason: 'card-locked' }]);
+        else if (!was && will) out.push([conn, 'task.opened', { task: view ??= viewOf(task) }]);
+      }
+    });
+    return out.length === 0 ? null : () => { for (const [conn, type, fields] of out) emit(conn, type, fields); };
   }
 
   function broadcast(task, type, fields, exceptConn = null) {
@@ -208,7 +275,9 @@ export function createRenderQueue(options = {}) {
    * 先改完状态，返回的函数再往外发，调用方好把自己的回包排在前面。
    */
   function takeoverLock(key, fp) {
-    setLock(key, fp, 'takeover');
+    // 先按锁转移发定向增量（I.3）：这时原指纹的 open 任务还在，看得见它们的节点收 hidden；随后它们作废，
+    // task.closed { state: 'failed' } 按改后的可见性发，这些节点就不会再收第二条
+    const lockNotify = changeLock(key, () => setLock(key, fp, 'takeover'));
     const superseded = [];
     for (const task of tasks.values()) {
       if (!isActive(task.state)) continue;
@@ -222,6 +291,7 @@ export function createRenderQueue(options = {}) {
       superseded.push({ task, claim });
     }
     return () => {
+      if (lockNotify) lockNotify();
       for (const { task, claim } of superseded) {
         // 先告诉原认领者它的令牌作废了，再通知订阅者和 watch 者
         if (claim && isLive(claim.conn)) emit(claim.conn, 'task.lease-lost', { id: task.id, token: claim.token, reason: 'superseded' });
@@ -380,6 +450,11 @@ export function createRenderQueue(options = {}) {
   const ttlPassed = (task) => (task.state === 'done' || task.state === 'failed') && at - task.finishedAt > C.DONE_TTL;
 
   function onPublish(conn, body, reqId) {
+    freshTasks = new Set();
+    try { publishAll(conn, body, reqId); } finally { freshTasks = null; }
+  }
+
+  function publishAll(conn, body, reqId) {
     const publisherId = conn.publisherId;
     const results = [];
     const after = [];
@@ -418,6 +493,7 @@ export function createRenderQueue(options = {}) {
           subscribers: new Set([publisherId, ...(parent ? parent.subscribers : [])]),
         };
         tasks.set(task.id, task);
+        freshTasks.add(task);
         countActive(task.source.projectId, 1);
         result = { id: task.id, state: 'open', version: 1, created: true };
         const t = task;
@@ -494,6 +570,11 @@ export function createRenderQueue(options = {}) {
   function onClaim(conn, body, reqId) {
     const node = nodeOf(conn);
     const { id, expectVersion } = body;
+    // 限流（I.5）：本周期 card-locked 拒绝已超过 THROTTLE_REJECTS 的连接，不看任务、不改任何状态，
+    // 直到下一次 tick。前置过滤之下还在反复撞锁的节点多半没按可见性认领，别让它把队列拖进锁风暴
+    if (C.PREFILTER && conn.cardLockedRejects > C.THROTTLE_REJECTS) {
+      return emit(conn, 'task.claim-rejected', { id, reason: 'throttled' }, reqId);
+    }
     const task = tasks.get(id);
     // 设计 4.2 的顺序，一步同步做完
     if (!task) return emit(conn, 'task.claim-rejected', { id, reason: 'gone' }, reqId);
@@ -504,11 +585,23 @@ export function createRenderQueue(options = {}) {
     if (task.state !== 'open') {
       return emit(conn, 'task.claim-rejected', { id, reason: 'taken', state: task.state, version: task.version }, reqId);
     }
+    // 指纹不符（I.10 第 4 条，语义「也不让它认领」）：过滤开着、节点与任务都带指纹且不同就拒，和 card-locked 一样
+    // 计入限流次数。放在 taken 之后、3a 之前：环境本来就不对的节点不必知道这张卡锁在谁那里。plan 不查（同 envAllows）
+    if (C.PREFILTER && task.kind !== 'plan') {
+      const nodeFp = fingerprintOf(node.envFingerprint);
+      const taskFp = fingerprintOf(task.requires ? task.requires.envFingerprint : undefined);
+      if (nodeFp !== null && taskFp !== null && nodeFp !== taskFp) {
+        conn.cardLockedRejects += 1;
+        return emit(conn, 'task.claim-rejected', { id, reason: 'fingerprint-mismatch', state: 'open', version: task.version }, reqId);
+      }
+    }
     // 3a（F.1）：这张卡的这种结果已被别的环境锁定，本任务的指纹产出的帧不能混进去。
     // 放在 stale 之前：锁不变，节点拿新版本号重试也没用，早点让它丢掉这个候选
     const lockId = lockIdOf(task);
     const lock = lockId ? locks.get(lockId.key) : undefined;
     if (lock && lock.envFingerprint !== lockId.fp) {
+      // 计数两种模式都记（describe 的诊断，对照组要看拒绝数）；只有 PREFILTER 开着时才据此限流（I.5）
+      conn.cardLockedRejects += 1;
       return emit(conn, 'task.claim-rejected', {
         id, reason: 'card-locked', state: 'open', version: task.version, lockedBy: lock.envFingerprint,
       }, reqId);
@@ -516,10 +609,12 @@ export function createRenderQueue(options = {}) {
     if (expectVersion !== task.version) {
       return emit(conn, 'task.claim-rejected', { id, reason: 'stale', state: 'open', version: task.version }, reqId);
     }
-    // 第一次认领就是第一次真正开始产出：没锁就在这里用任务的指纹锁定（设计 2.1「谁定指纹」）
+    // 第一次认领就是第一次真正开始产出：没锁就在这里用任务的指纹锁定（设计 2.1「谁定指纹」）。
+    // 新建的锁让同一张卡别的指纹的 open 任务对相应节点变得不可见，定向撤回（I.3）；认领的这个任务自己不算
+    let lockNotify = null;
     if (lockId) {
       if (lock) lock.touchedAt = at;
-      else setLock(lockId.key, lockId.fp, 'claim');
+      else lockNotify = changeLock(lockId.key, () => setLock(lockId.key, lockId.fp, 'claim'), task);
     }
     transition(task, 'claimed');
     task.claim = {
@@ -530,6 +625,7 @@ export function createRenderQueue(options = {}) {
       id, token: task.claim.token, version: task.version, leaseUntil: task.claim.leaseUntil, task: viewOf(task),
     }, reqId);
     broadcast(task, 'task.taken', { id, version: task.version }, conn);
+    if (lockNotify) lockNotify();
   }
 
   /**
@@ -601,7 +697,7 @@ export function createRenderQueue(options = {}) {
     const fp = body.envFingerprint;
     const lock = locks.get(key);
     let notify = null;
-    if (!lock) setLock(key, fp, 'lock');
+    if (!lock) notify = changeLock(key, () => setLock(key, fp, 'lock'));
     else if (lock.envFingerprint === fp) lock.touchedAt = at;
     else if (body.takeover) notify = takeoverLock(key, fp);
     const held = locks.get(key).envFingerprint;
@@ -636,6 +732,7 @@ export function createRenderQueue(options = {}) {
       connId,
       principal: { userId: principal.userId, tenantId: typeof principal.tenantId === 'string' ? principal.tenantId : null },
       nodeId: null, publisherId: null, watch: null,
+      cardLockedRejects: 0,   // 本扫描周期内收到的 card-locked 与 fingerprint-mismatch 拒绝数，tick 清零（I.5、I.10 第 4 条）
     });
   }
 
@@ -713,16 +810,20 @@ export function createRenderQueue(options = {}) {
         const key = lockKeyOf(task);
         if (key !== null) referenced.add(key);
       }
+      // 删的锁已没有任何任务引用，也就没有 open 任务的可见性会变，不用发定向增量（I.3）
       for (const [key, lock] of locks) {
         if (!referenced.has(key) && at - lock.touchedAt > C.DONE_TTL) locks.delete(key);
       }
     }
+    // 新的扫描周期：每条连接的 card-locked 拒绝计数清零，限流随之解除（I.5）
+    for (const conn of conns.values()) conn.cardLockedRejects = 0;
   }
 
   function describe() {
     const byId = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
     const out = {
       epoch,
+      prefilter: C.PREFILTER,   // I.7
       tasks: [...tasks.values()].sort((a, b) => byId(a.id, b.id)).map((t) => ({
         id: t.id, projectId: t.source.projectId, state: t.state, version: t.version,
         attempts: t.attempts, lastError: t.lastError,
@@ -733,9 +834,14 @@ export function createRenderQueue(options = {}) {
         subscribers: [...t.subscribers].sort(byId),
         finishedAt: t.finishedAt,
       })),
-      nodes: [...nodes.values()].sort((a, b) => byId(a.nodeId, b.nodeId)).map((n) => ({
-        nodeId: n.nodeId, profile: n.profile, connected: n.conn !== null, disconnectedAt: n.disconnectedAt,
-      })),
+      nodes: [...nodes.values()].sort((a, b) => byId(a.nodeId, b.nodeId)).map((n) => {
+        // I.7：这个节点当前那条连接本周期的 card-locked 拒绝数，和它此刻是否被限流；断开的节点记 0 / false
+        const rejects = n.conn !== null ? n.conn.cardLockedRejects : 0;
+        return {
+          nodeId: n.nodeId, profile: n.profile, connected: n.conn !== null, disconnectedAt: n.disconnectedAt,
+          cardLockedRejects: rejects, throttled: C.PREFILTER && rejects > C.THROTTLE_REJECTS,
+        };
+      }),
       publishers: [...publishers.values()].sort((a, b) => byId(a.publisherId, b.publisherId)).map((p) => ({
         publisherId: p.publisherId, connected: p.conn !== null, disconnectedAt: p.disconnectedAt,
       })),
