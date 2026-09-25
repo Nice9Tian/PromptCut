@@ -130,6 +130,14 @@ export function createSharedDocService({
     challenges: adminChallenges,
     limiter,
     claimsOf: (connId) => service.claimsOf(connId),
+    // 创建者操作的限速按连接的来源地址判回环，与握手用同一个判据（连接只记了地址，拼一个只有对端地址的请求）
+    isLoopbackRemote: (remote) => {
+      try {
+        return !!isLoopback({ socket: { remoteAddress: remote }, headers: {} });
+      } catch {
+        return false;
+      }
+    },
     now,
     dropSpace(space) {
       service.dropSpace(space);
