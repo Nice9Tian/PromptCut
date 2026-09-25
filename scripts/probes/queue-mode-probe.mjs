@@ -32,9 +32,11 @@
  *   - 编辑器的素材服务按 C5 自动登记局域网地址(`server/vite-plugin-media.ts`:要求 `PROMPTCUT_DOCSERVICE_URL`
  *     已设、绑的不是回环地址)。探针从编辑器输出里的 `[asset-announce] asset-announce.announced` 取登记的地址,
  *     放进输出的 `announcedAsset`(没登记上是 `null`,例如本机没有私有网段的 IPv4)。
- *   - **令牌**:只有探针自己起文档服务(没给 `--docservice-url`)时才从编辑器的环境里删掉 `PROMPTCUT_CLUSTER_TOKEN`
- *     —— 自起的那一份绑回环、匿名。给了 `--docservice-url` 连远端控制面时令牌原样保留,编辑器、预渲染进程、
- *     素材登记都带着它。`--lan` 不改这一条。
+ *   - **凭证**(M6a,`docs/plan/auth-contract.md` 第 11 节):集群令牌已退出数据面,只剩素材地址登记这一个管理用途。
+ *     探针自己起文档服务(没给 `--docservice-url`)时从编辑器的环境里删掉 `PROMPTCUT_CLUSTER_TOKEN`
+ *     —— 自起的那一份绑回环,编辑器与预渲染进程连它是本机身份。给了 `--docservice-url` 连远端控制面时,
+ *     预渲染进程要凭共享项目进入:在跑探针的环境里设好 `PROMPTCUT_SHARED_CONFIG`(原样传给编辑器与预渲染进程);
+ *     令牌原样保留,只给素材登记用。`--lan` 不改这一条。
  *   - 不给 `--docservice-url` 时自起的文档服务仍只绑回环,别的机器连不上;跨机要配合 `--docservice-url`。
  *     给了 `--docservice-url` 时,不再要求「细任务都由本机节点完成」(别的机器也在取活)。
  *
@@ -167,7 +169,7 @@ async function runOnce(mode, { hold = false } = {}) {
     let docUrl = DOC_URL;
     if (!docUrl) {
       const docData = path.join(exportDir, 'docservice');
-      // 只绑回环、不带令牌:匿名模式(main.mjs 文件头)。编辑器、预渲染进程也就不必带令牌
+      // 只绑回环:编辑器、预渲染进程连它是本机身份,不带任何凭证(main.mjs 文件头)
       const docEnv = { ...process.env, PROMPTCUT_DOCSERVICE_PORT: String(DOC_PORT), PROMPTCUT_DOCSERVICE_HOST: '127.0.0.1', PROMPTCUT_DOCSERVICE_DATA: docData };
       delete docEnv.PROMPTCUT_CLUSTER_TOKEN;
       const doc = spawn(process.execPath, [path.join(ROOT, 'server', 'docservice', 'main.mjs')], {

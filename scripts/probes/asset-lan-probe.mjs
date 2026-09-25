@@ -1,34 +1,37 @@
 // 探针:局域网素材服务端到端(W2)。契约见 docs/plan/asset-store-contract.md 第 6 节末段。
 //
-//   node scripts/probes/asset-lan-probe.mjs --docservice <ws://…> [--asset <http://…/api/asset>] [--mb 20] [--timeout-ms 60000]
+//   PROMPTCUT_SHARED_CONFIG=<配置文件> node scripts/probes/asset-lan-probe.mjs [--docservice <ws://…>] [--asset <http://…/api/asset>] [--mb 20] [--timeout-ms 60000]
 //
 // 在另一台机器(笔记本)上跑,只用 Node 内置模块(要 Node 22 起的全局 WebSocket、fetch),不需要 node_modules。
-// 集群令牌从环境变量 PROMPTCUT_CLUSTER_TOKEN 读,只放进 Authorization 头和 WebSocket 子协议,不打印。
+//
+// 凭证(M6a,docs/plan/auth-contract.md 第 8、11 节;集群令牌已退出素材服务,本探针不再读它):
+//   环境变量 PROMPTCUT_SHARED_CONFIG 指向共享项目配置(第一项)。探针凭项目证明连文档服务(没给 --docservice 时用配置里的 url),
+//   经这条连接的 auth.ticket 取一张 rw 素材票据和一张只读票据,读写都带票据。配置里的口令、K、证明、票据都不打印。
 //
 // 素材服务地址:
-//   - 没给 --asset:连 --docservice,发 service.watch { kinds: ['asset'] },按登记顺序取第一个
-//     GET <url>/media/<一个不存在的哈希>/chunks 能通的地址(source: 'docservice')。地址来自控制面下发,不手填;
-//   - 给了 --asset:直接用它(source: 'arg'),不连控制面。
+//   - 没给 --asset:在这条连接上发 service.watch { kinds: ['asset'] },按登记顺序取第一个
+//     带票据 GET <url>/media/<一个不存在的哈希>/chunks 能通的地址(source: 'docservice')。地址来自控制面下发,不手填;
+//   - 给了 --asset:直接用它(source: 'arg')。
 //
 // 断言(按顺序):
 //   1. 随机生成 --mb MB 数据,算出 sha256;
-//   2. 不带令牌 PUT 第 0 片 → 401;
-//   3. 带令牌只传第 0、1 片,chunks 报 received: [0, 1];
+//   2. 不带票据 PUT 第 0 片 → 401;不带票据读 chunks → 401;只读票据 PUT → 403;
+//   3. 带票据只传第 0、1 片,chunks 报 received: [0, 1];
 //   4. 补传其余分片,complete → 200;
 //   5. 带 Origin: http://192.168.50.247:9999 的 GET 回 Access-Control-Allow-Origin: *;
-//   6. Range: bytes=100-199 → 206,字节正确;
+//   6. Range: bytes=100-199 → 206,字节正确;查询串只读票据 ?t= 的 Range 也 206,带 no-store / no-referrer;
 //   7. 全件下载后 sha256 相符。
 //
 // 输出一行 JSON:{ ok, assetUrl, source, bytes, steps: [{ name, ok, ms }], fails: [{ step, detail }] }
-// 退出码:0 全过;1 有断言失败(含超时);2 用法不对、没有令牌、连不上控制面或素材服务。
+// 退出码:0 全过;1 有断言失败(含超时);2 用法不对、没有共享项目配置、连不上控制面或素材服务。
 import crypto from 'node:crypto';
 
-const USAGE = `用法:node scripts/probes/asset-lan-probe.mjs --docservice <ws://…> [--asset <http://…/api/asset>] [--mb 20] [--timeout-ms 60000]
-  --docservice  控制面(文档服务)地址,ws:// 或 wss://;没给 --asset 时从这里订阅素材服务地址
+const USAGE = `用法:PROMPTCUT_SHARED_CONFIG=<配置> node scripts/probes/asset-lan-probe.mjs [--docservice <ws://…>] [--asset <http://…/api/asset>] [--mb 20] [--timeout-ms 60000]
+  --docservice  控制面(文档服务)地址,ws:// 或 wss://;缺省用共享项目配置里的 url;没给 --asset 时从这里订阅素材服务地址
   --asset       直接指定素材服务基址(…/api/asset),跳过控制面
   --mb          测试数据大小,单位 MB(缺省 20)
   --timeout-ms  整趟的超时(缺省 60000)
-  令牌从环境变量 PROMPTCUT_CLUSTER_TOKEN 读。
+  凭证从环境变量 PROMPTCUT_SHARED_CONFIG 指向的共享项目配置读(素材票据经文档服务取)。
   退出码:0 全过,1 有断言失败,2 连不上(或用法不对)。`;
 
 const CHUNK_DEFAULT = 8 * 1024 * 1024;
@@ -49,7 +52,7 @@ function parseArgs(argv) {
 }
 
 const args = parseArgs(process.argv.slice(2));
-if (process.argv.length <= 2 || args.error || (!args.docservice && !args.asset) || args.help) {
+if (args.error || args.help || (!process.env.PROMPTCUT_SHARED_CONFIG && process.argv.length <= 2)) {
   if (args.error) console.error(args.error);
   console.error(USAGE);
   process.exit(2);
@@ -60,7 +63,10 @@ if (!(MB > 0) || !(TIMEOUT_MS > 0)) {
   console.error(USAGE);
   process.exit(2);
 }
-const TOKEN = process.env.PROMPTCUT_CLUSTER_TOKEN || '';
+/** 用过的票据:输出前一律擦掉 */
+const SECRETS = new Set();
+let TICKET = '';
+let READ_TICKET = '';
 
 const result = { ok: false, assetUrl: null, source: args.asset ? 'arg' : 'docservice', bytes: 0, steps: [], fails: [] };
 let finished = false;
@@ -70,7 +76,7 @@ function finish(code) {
   finished = true;
   result.ok = code === 0 && result.fails.length === 0;
   let line = JSON.stringify(result);
-  if (TOKEN) line = line.split(TOKEN).join('<token>');
+  for (const secret of SECRETS) line = line.split(secret).join('<ticket>');
   process.exitCode = code;
   // 写完再退出:管道上的 stdout 可能是异步的
   process.stdout.write(`${line}\n`, () => process.exit(code));
@@ -87,7 +93,7 @@ const watchdog = setTimeout(() => {
 watchdog.unref?.();
 
 const sha256 = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
-const safe = (text) => (TOKEN ? String(text).split(TOKEN).join('<token>') : String(text));
+const safe = (text) => { let out = String(text); for (const secret of SECRETS) out = out.split(secret).join('<ticket>'); return out; };
 
 async function request(url, init = {}, ms = left()) {
   try {
@@ -115,18 +121,47 @@ function check(cond, detail) {
   if (!cond) throw new Error(detail);
 }
 
-/** 连控制面,订阅 asset 登记,按顺序找第一个能通的地址 */
-async function discover(docservice) {
+/** 凭共享项目连控制面,取素材票据;没给 --asset 时再订阅 asset 登记,按顺序找第一个能通的地址 */
+async function connectAndDiscover(docservice, wantDiscovery) {
   let parsed;
   try { parsed = new URL(docservice); } catch { throw new Unreachable(`--docservice 不是合法地址:${docservice}`); }
   if (parsed.protocol !== 'ws:' && parsed.protocol !== 'wss:') throw new Unreachable('--docservice 要 ws:// 或 wss://');
   if (typeof WebSocket !== 'function') throw new Unreachable('这个 Node 没有全局 WebSocket(要 Node 22 起)');
-  const protocols = TOKEN ? ['promptcut.v1', `promptcut.token.${TOKEN}`] : ['promptcut.v1'];
+  let protocols;
+  try {
+    const { sharedProtocols } = await import(new URL('../../server/auth/shared-config.mjs', import.meta.url));
+    protocols = await sharedProtocols({ ...SHARED, url: docservice }, { role: 'page' })();
+  } catch (err) {
+    throw new Unreachable(`取进入挑战失败:${safe(err?.message || err)}`);
+  }
   const ws = new WebSocket(docservice, protocols);
   try {
+    const ask = (message) => new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Unreachable(`等 ${message.type} 的回包超时`)), Math.min(left(), 15000));
+      const onMessage = (e) => {
+        let m;
+        try { m = JSON.parse(String(e.data)); } catch { return; }
+        if (m?.reqId !== message.reqId) return;
+        clearTimeout(timer);
+        ws.removeEventListener('message', onMessage);
+        if (m.type === 'error') reject(new Unreachable(`控制面回 error:${m.reason ?? ''}`));
+        else resolve(m);
+      };
+      ws.addEventListener('message', onMessage);
+      ws.send(JSON.stringify(message));
+    });
+    await new Promise((resolve, reject) => {
+      ws.addEventListener('open', resolve, { once: true });
+      ws.addEventListener('error', () => reject(new Unreachable(`连不上控制面(凭证不对也是这样) ${parsed.protocol}//${parsed.host}${parsed.pathname}`)), { once: true });
+    });
+    TICKET = (await ask({ type: 'auth.ticket', reqId: 'rw', kind: 'asset', access: 'rw' })).ticket;
+    READ_TICKET = (await ask({ type: 'auth.ticket', reqId: 'r', kind: 'asset', access: 'r' })).ticket;
+    SECRETS.add(TICKET);
+    SECRETS.add(READ_TICKET);
+    if (!wantDiscovery) return null;
     const registrations = await new Promise((resolve, reject) => {
       const timer = setTimeout(() => reject(new Unreachable('等控制面的 service.endpoints 超时')), Math.min(left(), 15000));
-      ws.addEventListener('open', () => ws.send(JSON.stringify({ type: 'service.watch', kinds: ['asset'] })));
+      ws.send(JSON.stringify({ type: 'service.watch', kinds: ['asset'] }));
       ws.addEventListener('error', () => { clearTimeout(timer); reject(new Unreachable(`连不上控制面 ${parsed.protocol}//${parsed.host}${parsed.pathname}`)); });
       ws.addEventListener('close', (e) => { clearTimeout(timer); reject(new Unreachable(`控制面关了连接(${e.code}${e.reason ? ` ${e.reason}` : ''})`)); });
       ws.addEventListener('message', (e) => {
@@ -144,7 +179,7 @@ async function discover(docservice) {
       for (const u of reg.urls) {
         const base = String(u).replace(/\/+$/, '');
         try {
-          const r = await request(`${base}/media/${missing}/chunks`, {}, 3000);
+          const r = await request(`${base}/media/${missing}/chunks`, { headers: { Authorization: `Bearer ${TICKET}` } }, 3000);
           await r.arrayBuffer().catch(() => {});
           if (r.status === 200) return base;
         } catch { /* 下一个 */ }
@@ -172,10 +207,20 @@ function closeAndWait(ws) {
   });
 }
 
+let SHARED = null;
+
 async function main() {
-  const base = args.asset ? String(args.asset).replace(/\/+$/, '') : await discover(args.docservice);
+  try {
+    const { loadSharedConfig } = await import(new URL('../../server/auth/shared-config.mjs', import.meta.url));
+    SHARED = loadSharedConfig()?.[0] ?? null;
+  } catch (err) {
+    throw new Unreachable(safe(err?.message || err));
+  }
+  if (!SHARED) throw new Unreachable('没有共享项目配置:设环境变量 PROMPTCUT_SHARED_CONFIG');
+  const found = await connectAndDiscover(args.docservice ?? SHARED.url, !args.asset);
+  const base = args.asset ? String(args.asset).replace(/\/+$/, '') : found;
   result.assetUrl = base;
-  if (!TOKEN) throw new Unreachable('没有令牌:设环境变量 PROMPTCUT_CLUSTER_TOKEN');
+  const auth = { Authorization: `Bearer ${TICKET}` };
 
   let buf;
   let hash;
@@ -184,7 +229,7 @@ async function main() {
     buf = crypto.randomBytes(Math.round(MB * 1024 * 1024));
     hash = sha256(buf);
     result.bytes = buf.length;
-    const r = await request(`${base}/media/${hash}/chunks`);
+    const r = await request(`${base}/media/${hash}/chunks`, { headers: auth });
     check(r.status === 200, `chunks 回 ${r.status}`);
     const st = await r.json();
     check(st.complete === false && Array.isArray(st.received) && st.received.length === 0, `新哈希的对账不对:${JSON.stringify(st)}`);
@@ -194,16 +239,27 @@ async function main() {
   const count = Math.max(1, Math.ceil(buf.length / chunkSize));
   const slice = (n) => buf.subarray(n * chunkSize, Math.min(buf.length, (n + 1) * chunkSize));
   const headers = { 'Content-Type': 'application/octet-stream', 'X-Media-Size': String(buf.length), 'X-Media-Ext': 'bin' };
-  const auth = { Authorization: `Bearer ${TOKEN}` };
-  const putChunk = async (n, withToken) => {
-    const r = await request(`${base}/media/${hash}/${n}`, { method: 'PUT', body: slice(n), headers: withToken ? { ...headers, ...auth } : headers });
+  const putChunk = async (n, withToken, other) => {
+    const extra = other ? { Authorization: `Bearer ${other}` } : withToken ? auth : {};
+    const r = await request(`${base}/media/${hash}/${n}`, { method: 'PUT', body: slice(n), headers: { ...headers, ...extra } });
     const text = await r.text().catch(() => '');
     return { status: r.status, text };
   };
 
-  await step('put-without-token-401', async () => {
+  await step('put-without-ticket-401', async () => {
     const r = await putChunk(0, false);
-    check(r.status === 401, `不带令牌 PUT 第 0 片回 ${r.status}:${r.text.slice(0, 200)}`);
+    check(r.status === 401, `不带票据 PUT 第 0 片回 ${r.status}:${r.text.slice(0, 200)}`);
+  });
+
+  await step('read-without-ticket-401', async () => {
+    const r = await request(`${base}/media/${hash}/chunks`);
+    await r.arrayBuffer().catch(() => {});
+    check(r.status === 401, `不带票据读 chunks 回 ${r.status}`);
+  });
+
+  await step('put-read-only-403', async () => {
+    const r = await putChunk(0, false, READ_TICKET);
+    check(r.status === 403, `只读票据 PUT 回 ${r.status}:${r.text.slice(0, 200)}`);
   });
 
   const first = Math.min(2, count);
@@ -212,7 +268,7 @@ async function main() {
       const r = await putChunk(n, true);
       check(r.status === 200, `PUT 第 ${n} 片回 ${r.status}:${r.text.slice(0, 200)}`);
     }
-    const st = await (await request(`${base}/media/${hash}/chunks`)).json();
+    const st = await (await request(`${base}/media/${hash}/chunks`, { headers: auth })).json();
     const want = Array.from({ length: first }, (_, i) => i);
     check(JSON.stringify(st.received) === JSON.stringify(want), `chunks 报 received ${JSON.stringify(st.received)},应为 ${JSON.stringify(want)}`);
   });
@@ -228,21 +284,30 @@ async function main() {
   });
 
   await step('cors-get', async () => {
-    const r = await request(`${base}/media/${hash}`, { headers: { Origin: LAN_ORIGIN, Range: 'bytes=0-0' } });
+    const r = await request(`${base}/media/${hash}`, { headers: { Origin: LAN_ORIGIN, Range: 'bytes=0-0', ...auth } });
     await r.arrayBuffer().catch(() => {});
     check(r.status === 200 || r.status === 206, `GET 回 ${r.status}`);
     check(r.headers.get('access-control-allow-origin') === '*', `Access-Control-Allow-Origin 是 ${r.headers.get('access-control-allow-origin')}`);
   });
 
   await step('range-206', async () => {
-    const r = await request(`${base}/media/${hash}`, { headers: { Range: 'bytes=100-199' } });
+    const r = await request(`${base}/media/${hash}`, { headers: { Range: 'bytes=100-199', ...auth } });
     const got = Buffer.from(await r.arrayBuffer());
     check(r.status === 206, `Range 回 ${r.status}`);
     check(got.equals(buf.subarray(100, 200)), `Range 字节不对(收到 ${got.length} 字节)`);
   });
 
+  await step('query-ticket-range-206', async () => {
+    const r = await request(`${base}/media/${hash}?t=${encodeURIComponent(READ_TICKET)}`, { headers: { Range: 'bytes=100-199' } });
+    const got = Buffer.from(await r.arrayBuffer());
+    check(r.status === 206, `查询串票据的 Range 回 ${r.status}`);
+    check(got.equals(buf.subarray(100, 200)), '查询串票据的 Range 字节不对');
+    check(r.headers.get('cache-control') === 'no-store', `Cache-Control 是 ${r.headers.get('cache-control')}`);
+    check(r.headers.get('referrer-policy') === 'no-referrer', `Referrer-Policy 是 ${r.headers.get('referrer-policy')}`);
+  });
+
   await step('download-sha256', async () => {
-    const r = await request(`${base}/media/${hash}`);
+    const r = await request(`${base}/media/${hash}`, { headers: auth });
     const got = Buffer.from(await r.arrayBuffer());
     check(r.status === 200, `GET 全件回 ${r.status}`);
     check(got.length === buf.length, `长度 ${got.length},应为 ${buf.length}`);

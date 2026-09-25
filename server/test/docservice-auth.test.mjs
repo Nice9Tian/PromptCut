@@ -1,5 +1,10 @@
 /**
  * 文档服务的集群令牌鉴权（契约 `docs/plan/render-queue-contract.md` G.5，用例 A1～A6）。
+ *
+ * M6a（`docs/plan/auth-contract.md` 第 5、10 节）改过：集群令牌从数据面退出，带对令牌的连接是管理身份
+ * `{ userId: 'admin', tenantId: null, scope: 'admin' }`，只能用管理接口（服务地址登记），发数据面消息回 `forbidden`；
+ * 独立模式的失败即关条件由「非回环没设令牌」改为「非回环而凭证存储不可用」。改动逐条列在
+ * `docs/reports/AGENT-m6-auth.md`「改过的旧测试」。
  * 跑：node --test server/test/docservice-auth.test.mjs
  *
  * 只照契约写，不看实现。令牌在测试里现生成（32 字节 base64url），不写死。
@@ -14,7 +19,13 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createDocService } from '../docservice/service.mjs';
 import { createRenderQueue } from '../render-queue/index.mjs';
+import { endpointsModule } from '../docservice/modules/endpoints.mjs';
+import fs from 'node:fs';
+import path from 'node:path';
 import { rawHandshake, randomToken, wsClient, byReq, byType, waitFor } from './fake-ws-kit.mjs';
+import { startSharedService, createProject, join, deviceId as newDeviceId, tempDir } from './fake-shared-env.mjs';
+
+const ADMIN = Object.freeze({ userId: 'admin', tenantId: null, scope: 'admin' });
 
 const MAIN = fileURLToPath(new URL('../docservice/main.mjs', import.meta.url));
 
@@ -35,6 +46,8 @@ async function startService({ token, allowAnonymous = token === undefined, mount
   if (mount) {
     queue = createRenderQueue({ now: Date.now, send: service.send });
     service.mountRenderQueue(queue);
+    // M6a：挂上服务地址登记（管理接口），测管理身份能用它（A2、A6）
+    service.mount(endpointsModule());
   }
   const { port } = await service.listen(0, '127.0.0.1');
   return { service, queue, port, logs, auth, url: `ws://127.0.0.1:${port}` };
@@ -79,7 +92,8 @@ test('A1 auth 模块本身：令牌模式下缺协议、缺令牌、令牌错都
   assert.equal(auth.authenticate(fakeReq(undefined)), null);
   assert.equal(auth.authenticate(fakeReq('promptcut.v1')), null);
   assert.equal(auth.authenticate(fakeReq(`promptcut.v1, promptcut.token.${randomToken()}`)), null);
-  assert.deepEqual(auth.authenticate(fakeReq(`promptcut.v1, promptcut.token.${token}`)), { userId: 'cluster', tenantId: 'cluster' });
+  // M6a：令牌对得到的是管理身份（原来是 { userId: 'cluster', tenantId: 'cluster' }）
+  assert.deepEqual(auth.authenticate(fakeReq(`promptcut.v1, promptcut.token.${token}`)), ADMIN);
   assert.equal(auth.protocolFor(fakeReq(`promptcut.v1, promptcut.token.${token}`)), 'promptcut.v1');
   assert.equal(auth.protocolFor(fakeReq(undefined)), null);
 
@@ -99,7 +113,7 @@ test('A1 auth 模块本身：令牌模式下缺协议、缺令牌、令牌错都
 
 // ------------------------------------------------------------------ A2
 
-test('A2 令牌对 → 101，响应头 Sec-WebSocket-Protocol 恰好是 promptcut.v1；内置 WebSocket 能连上', async (t) => {
+test('A2 令牌对 → 101，响应头 Sec-WebSocket-Protocol 恰好是 promptcut.v1；内置 WebSocket 能连上，只能用管理接口', async (t) => {
   const token = randomToken();
   const { service, port, url } = await startService({ token });
   t.after(() => service.close());
@@ -121,21 +135,53 @@ test('A2 令牌对 → 101，响应头 Sec-WebSocket-Protocol 恰好是 promptcu
   t.after(() => c.close());
   await c.opened;
   assert.equal(c.ws.protocol, 'promptcut.v1');
+  // M6a：原来这里发 publisher.hello 等 publisher.welcome；管理身份发数据面消息回 forbidden，管理接口照常
   c.send({ type: 'publisher.hello', reqId: 1, publisherId: 'pg' });
-  assert.equal((await c.next(byReq(1))).type, 'publisher.welcome');
+  const denied = await c.next(byReq(1));
+  assert.equal(denied.type, 'error');
+  assert.equal(denied.reason, 'forbidden');
+  c.send({ type: 'service.watch', reqId: 2, kinds: 'all' });
+  assert.equal((await c.next(byReq(2))).type, 'service.endpoints');
 });
 
 // ------------------------------------------------------------------ A3
 
-test('A3 通过后 principal 为 { userId: cluster, tenantId: cluster }；消息里自报的 userId 不改变它', async (t) => {
+test('A3 令牌连接的 principal 是管理身份，发任何数据面消息都回 forbidden', async (t) => {
   const token = randomToken();
   const { service, url } = await startService({ token });
   t.after(() => service.close());
+  const c = wsClient(url, tokenProtocols(token));
+  t.after(() => c.close());
+  await c.opened;
+  const dataPlane = [
+    { type: 'node.hello', nodeId: 'nd', profile: 'host' },
+    { type: 'publisher.hello', publisherId: 'pg' },
+    { type: 'queue.watch', projects: 'all' },
+    { type: 'task.publish', tasks: [] },
+  ];
+  for (const [i, m] of dataPlane.entries()) {
+    c.send({ ...m, reqId: `d${i}`, userId: 'mallory', tenantId: 'evil' });
+    const r = await c.next(byReq(`d${i}`));
+    assert.equal(r.type, 'error', m.type);
+    assert.equal(r.reason, 'forbidden', m.type);
+  }
+  for (const conn of service.describe().conns) assert.deepEqual(conn.principal, ADMIN);
+});
 
-  const page = wsClient(url, tokenProtocols(token));
-  const node = wsClient(url, tokenProtocols(token));
+// 原 A3 的另一半「消息里自报的 userId 不改变 principal、任务的 userId 取连接的 principal」改由共享项目的成员身份来测：
+// 集群令牌不再能进数据面（auth-contract 第 5 节）
+test('A3 成员身份：消息里自报的 userId / tenantId 不改变它，任务的 source 取连接的 principal', async (t) => {
+  const shared = await startSharedService({ mode: 'hosted' });
+  t.after(() => shared.close());
+  const { projectId } = await createProject(shared.base, { password: 'pw-a3' });
+  const devPage = newDeviceId('a3p');
+  const devNode = newDeviceId('a3n');
+  const page = await join(shared.base, { projectId, username: 'carol', deviceId: devPage, password: 'pw-a3', role: 'page' });
+  const node = await join(shared.base, { projectId, username: 'carol', deviceId: devNode, password: 'pw-a3', role: 'render' });
   t.after(() => { page.close(); node.close(); });
   await Promise.all([page.opened, node.opened]);
+  const service = shared.service;
+  const principalOf = (dev) => ({ userId: `carol@${dev}`, tenantId: projectId });
 
   node.send({ type: 'node.hello', reqId: 'n', nodeId: 'nd', profile: 'host', userId: 'mallory', tenantId: 'evil' });
   await node.next(byReq('n'));
@@ -154,11 +200,16 @@ test('A3 通过后 principal 为 { userId: cluster, tenantId: cluster }；消息
   });
   await page.next(byReq('pub'));
   const opened = await node.next(byType('task.opened'));
-  assert.equal(opened.task.source.userId, 'cluster', '任务的 userId 取连接的 principal');
-  assert.equal(opened.task.source.tenantId, 'cluster');
+  assert.equal(opened.task.source.userId, principalOf(devPage).userId, '任务的 userId 取连接的 principal');
+  assert.equal(opened.task.source.tenantId, projectId);
 
-  for (const conn of service.describe().conns) {
-    assert.deepEqual(conn.principal, { userId: 'cluster', tenantId: 'cluster' });
+  const conns = service.describe().conns;
+  assert.equal(conns.length, 2);
+  for (const conn of conns) {
+    const dev = conn.principal.deviceId;
+    assert.ok(dev === devPage || dev === devNode);
+    assert.equal(conn.principal.userId, principalOf(dev).userId);
+    assert.equal(conn.principal.tenantId, projectId);
   }
 });
 
@@ -250,7 +301,8 @@ test('A5 被拒、通过各试几次：全部日志、describe、healthz 里都�
   }
   const rejects = logs.filter((l) => l.event === 'auth.reject');
   const reasons = new Set(rejects.map((l) => l.reason));
-  assert.deepEqual([...reasons].sort(), ['bad-token', 'no-protocol', 'no-token'], `auth.reject：${JSON.stringify(rejects)}`);
+  // M6a：原因改用 auth-contract 第 5 节的词表（原来是 bad-token / no-protocol / no-token）
+  assert.deepEqual([...reasons].sort(), ['bad-format', 'bad-proof', 'no-credential'], `auth.reject：${JSON.stringify(rejects)}`);
   assert.ok(rejects.every((l) => 'remote' in l), 'auth.reject 带 remote');
   assert.equal(rejects.length, 9, '每次被拒记一条');
 });
@@ -279,13 +331,29 @@ async function exitWithin(run, ms) {
   return r;
 }
 
-test('A6 main.mjs：非回环地址且未设令牌 → 退出码 1、输出含 token-required', { timeout: 20_000 }, async () => {
-  const run = runMain({ PROMPTCUT_DOCSERVICE_HOST: '0.0.0.0', PROMPTCUT_DOCSERVICE_PORT: '0' });
+// M6a：失败即关的条件由「非回环没设令牌」（token-required）改为「非回环而凭证存储加载不了」（auth-store，auth-contract 第 10 节）。
+// 「非回环」用 127.0.0.2：main.mjs 按字面只把 127.0.0.1 / ::1 / localhost 当回环，而 127.0.0.2 实际仍在本机回环网卡上，
+// 测试不用真绑 0.0.0.0（Windows 上会弹防火墙）
+test('A6 main.mjs：非回环地址而凭证存储不可用 → 退出码 1、输出含 auth-store', { timeout: 20_000 }, async () => {
+  const dir = tempDir('pc-a6-');
+  const notADir = path.join(dir, 'data-is-a-file');
+  fs.writeFileSync(notADir, 'x');
+  const run = runMain({ PROMPTCUT_DOCSERVICE_HOST: '127.0.0.2', PROMPTCUT_DOCSERVICE_PORT: '0', PROMPTCUT_DOCSERVICE_DATA: notADir });
   const r = await exitWithin(run, 8000);
   assert.ok(!r.timedOut, `没有退出（应当失败即关）；输出：${run.output()}`);
   assert.equal(r.code, 1, run.output());
-  assert.match(run.output(), /token-required/);
+  assert.match(run.output(), /auth-store/);
   assert.match(run.output(), /config\.error/);
+});
+
+test('A6 main.mjs：非回环地址、没设令牌、凭证存储可用 → 照常启动；带令牌的握手 401', { timeout: 20_000 }, async (t) => {
+  const run = runMain({ PROMPTCUT_DOCSERVICE_HOST: '127.0.0.2', PROMPTCUT_DOCSERVICE_PORT: '0', PROMPTCUT_DOCSERVICE_DATA: tempDir('pc-a6-') });
+  t.after(async () => { if (run.child.exitCode === null) { run.child.kill(); await run.exited; } });
+  const port = await listenPort(run);
+  const h = await (await fetch(`http://127.0.0.2:${port}/healthz`)).json();
+  assert.equal(h.ok, true);
+  const admin = wsClient(`ws://127.0.0.2:${port}`, tokenProtocols(randomToken()));
+  await assert.rejects(admin.opened, '没设令牌：管理接口全部 401');
 });
 
 test('A6 main.mjs：令牌格式不对 → 退出码 1、输出含 bad-token-format，且不回显令牌', { timeout: 20_000 }, async () => {
@@ -325,18 +393,26 @@ test('A6 main.mjs：回环且未设令牌 → 起得来，/healthz 正常，匿�
   assert.equal(r.status, 101, '匿名模式');
 });
 
-test('A6 main.mjs：设了合法令牌 → 令牌模式（缺令牌 401、带令牌 101），输出里没有令牌', { timeout: 20_000 }, async (t) => {
+test('A6 main.mjs：设了合法令牌 → 令牌错 401、令牌对 101 且只能用管理接口，输出里没有令牌', { timeout: 20_000 }, async (t) => {
   const token = randomToken();
-  const run = runMain({ PROMPTCUT_DOCSERVICE_HOST: '127.0.0.1', PROMPTCUT_DOCSERVICE_PORT: '0', PROMPTCUT_CLUSTER_TOKEN: token });
+  const run = runMain({ PROMPTCUT_DOCSERVICE_HOST: '127.0.0.1', PROMPTCUT_DOCSERVICE_PORT: '0', PROMPTCUT_CLUSTER_TOKEN: token, PROMPTCUT_DOCSERVICE_DATA: tempDir('pc-a6-') });
   t.after(async () => { if (run.child.exitCode === null) { run.child.kill(); await run.exited; } });
   const port = await listenPort(run);
-  const r0 = await rawHandshake(port, { protocols: ['promptcut.v1'] });
+  // M6a：回环来源不带令牌是本机身份（原来这里断言只带 promptcut.v1 → 401）；改成令牌错 → 401
+  const r0 = await rawHandshake(port, { protocols: tokenProtocols(randomToken()) });
   r0.sock.destroy();
   assert.equal(r0.status, 401);
   const r1 = await rawHandshake(port, { protocols: tokenProtocols(token) });
   r1.sock.destroy();
   assert.equal(r1.status, 101);
   assert.equal(r1.headers['sec-websocket-protocol'], 'promptcut.v1');
+  const admin = wsClient(`ws://127.0.0.1:${port}`, tokenProtocols(token));
+  t.after(() => admin.close());
+  await admin.opened;
+  admin.send({ type: 'publisher.hello', reqId: 'p', publisherId: 'pg' });
+  assert.equal((await admin.next(byReq('p'))).reason, 'forbidden');
+  admin.send({ type: 'service.announce', reqId: 'a', announcerId: 'asset:t', kind: 'asset', urls: ['http://10.0.0.1:1/api/asset'] });
+  assert.equal((await admin.next(byReq('a'))).type, 'service.announced');
   await new Promise((resolve) => setTimeout(resolve, 100));
   assert.ok(!run.output().includes(token), '输出里出现了令牌原文');
 });

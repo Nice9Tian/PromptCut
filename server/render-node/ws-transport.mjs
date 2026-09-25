@@ -3,7 +3,12 @@
  *
  * 满足 D.2 的 `endpoint` 形状（`send`、`onMessage`），可以直接交给 `createLocalNode`。
  * 另外负责：
- *   - 子协议携带集群令牌（G.5）：有令牌时 `['promptcut.v1', 'promptcut.token.<令牌>']`，否则 `['promptcut.v1']`；
+ *   - 子协议（M6a，`docs/plan/auth-contract.md` 第 5、11 节）：
+ *     - `protocols`：一个函数（可以是 async），**每次（重）连之前调一次**，回这一次握手要带的子协议数组。
+ *       共享项目的证明里的 nonce 只能用一次，所以不能缓存；取不到（抛错、reject）按连不上处理，照常退避重连；
+ *     - `token`：集群令牌，只给管理接口用（`asset-announce` 登记地址）：`['promptcut.v1', 'promptcut.token.<令牌>']`。
+ *       集群令牌不给数据面任何权限，数据面的连接不要带它；
+ *     - 都不给：`['promptcut.v1']`（连本机回环时是本机身份）。`protocols` 与 `token` 不能同时给；
  *   - 断线或连不上之后按指数退避自动重连，第 n 次（从 0 起）等
  *     `min(maxMs, baseMs × factor^n) × (1 + jitter × (2·random() − 1))`，连上后 n 清零，`close()` 之后不再重连；
  *   - 断线期间 `send` 的消息一律丢弃（不缓存重放），计入 `stats().dropped`。正确性靠重连后的
@@ -53,7 +58,8 @@ export function backoffDelay(n, backoff, random) {
 /**
  * @param {object} options
  * @param {string} options.url  `ws://` 或 `wss://`
- * @param {string} [options.token]  集群令牌（G.5）；不设就只带 `promptcut.v1`
+ * @param {() => (string[] | Promise<string[]>)} [options.protocols]  每次连之前取子协议（共享项目的证明、连接票据）
+ * @param {string} [options.token]  集群令牌，只给管理接口用；不设就只带 `promptcut.v1`
  * @param {any} [options.WebSocket]  缺省全局 `WebSocket`
  * @param {(fn: () => void, ms: number) => any} [options.setTimeout]
  * @param {(handle: any) => void} [options.clearTimeout]
@@ -65,6 +71,7 @@ export function backoffDelay(n, backoff, random) {
 export function createWsEndpoint({
   url,
   token,
+  protocols: protocolsOf,
   WebSocket: WebSocketImpl = globalThis.WebSocket,
   setTimeout: setTimer = globalThis.setTimeout,
   clearTimeout: clearTimer = globalThis.clearTimeout,
@@ -85,9 +92,13 @@ export function createWsEndpoint({
   if (token !== undefined && token !== null && (typeof token !== 'string' || token === '')) {
     throw new TypeError('createWsEndpoint：token 必须是非空字符串');
   }
+  if (protocolsOf !== undefined && protocolsOf !== null) {
+    if (typeof protocolsOf !== 'function') throw new TypeError('createWsEndpoint：protocols 必须是函数');
+    if (token) throw new TypeError('createWsEndpoint：protocols 与 token 不能同时给');
+  }
 
   const policy = { ...BACKOFF_DEFAULTS, ...(backoff ?? {}) };
-  const protocols = token ? [PROTOCOL, TOKEN_PREFIX + token] : [PROTOCOL];
+  const fixedProtocols = token ? [PROTOCOL, TOKEN_PREFIX + token] : [PROTOCOL];
   /** 日志里只写不含令牌的地址（令牌本来就不在 URL 里，这里只去掉可能的用户名密码与查询串） */
   const safeUrl = `${parsed.protocol}//${parsed.host}${parsed.pathname}`;
 
@@ -103,6 +114,8 @@ export function createWsEndpoint({
   /** 下一次重连用的 n（从 0 起），连上后清零 */
   let attempt = 0;
   let retryTimer = null;
+  /** 正在取子协议（`protocols()` 还没回） */
+  let pending = false;
 
   function emit(handlers, arg, what) {
     for (const handler of [...handlers]) {
@@ -119,8 +132,34 @@ export function createWsEndpoint({
     else socket[`on${type}`] = fn;
   }
 
+  /** 这一次握手的子协议：给了 `protocols` 就现取，否则用固定的一组 */
   function connect() {
     retryTimer = null;
+    if (closed) return;
+    if (typeof protocolsOf !== 'function') return open(fixedProtocols);
+    let got;
+    try {
+      got = protocolsOf();
+    } catch (error) {
+      log('ws.error', { url: safeUrl, stage: 'protocols', message: String(error?.message ?? error) });
+      scheduleRetry();
+      return;
+    }
+    pending = true;
+    Promise.resolve(got).then((list) => {
+      pending = false;
+      if (closed) return;
+      if (!Array.isArray(list) || list.some((p) => typeof p !== 'string')) throw new TypeError('protocols() 必须回字符串数组');
+      open(list);
+    }).catch((error) => {
+      pending = false;
+      // 日志只记原因，不记子协议（里面有证明或票据）
+      log('ws.error', { url: safeUrl, stage: 'protocols', message: String(error?.message ?? error) });
+      scheduleRetry();
+    });
+  }
+
+  function open(protocols) {
     if (closed) return;
     let socket;
     try {
@@ -194,7 +233,7 @@ export function createWsEndpoint({
   }
 
   function scheduleRetry() {
-    if (closed || retryTimer !== null) return;
+    if (closed || retryTimer !== null || pending) return;
     const n = attempt++;
     const delayMs = backoffDelay(n, policy, random);
     log('ws.retry', { url: safeUrl, attempt: n, delayMs });

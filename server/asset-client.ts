@@ -106,6 +106,17 @@ export function setMediaFallbackBases(list: unknown): string[] {
   return [...bases];
 }
 
+const FALLBACK_TICKET_KEY = Symbol.for("promptcut.asset-service.fallback-ticket");
+type TicketHolder = { [FALLBACK_TICKET_KEY]?: (() => Promise<string | null>) | null };
+
+/**
+ * 回退请求带的素材票据(M6a,`docs/plan/auth-contract.md` 第 8 节):回退基址是别的机器的素材服务,
+ * 非回环来源读要票据。凭共享项目进入的节点把经文档服务取票据的函数填进来;null = 不带(缺省)。
+ */
+export function setMediaFallbackTicket(fn: (() => Promise<string | null>) | null): void {
+  (globalThis as TicketHolder)[FALLBACK_TICKET_KEY] = typeof fn === "function" ? fn : null;
+}
+
 /** 现在的回退基址(拷贝) */
 export function mediaFallbackBases(): string[] {
   return [...((globalThis as FallbackHolder)[FALLBACK_KEY] ?? [])];
@@ -134,6 +145,7 @@ function serveFromFallbacks(req: http.IncomingMessage, res: http.ServerResponse,
   let settled = false;
   let current: http.ClientRequest | null = null;
   res.on("close", () => { if (!res.writableFinished) current?.destroy(); });
+  const ticketOf = (globalThis as TicketHolder)[FALLBACK_TICKET_KEY];
   const attempt = (i: number) => {
     if (settled || res.destroyed) return;
     if (i >= bases.length) {
@@ -166,7 +178,11 @@ function serveFromFallbacks(req: http.IncomingMessage, res: http.ServerResponse,
     });
     upstream.end();
   };
-  attempt(0);
+  if (typeof ticketOf !== "function") return attempt(0);
+  // 票据只进 Authorization 头,不进地址与日志;取不到就不带,由对端回 401 后改试下一个
+  Promise.resolve().then(() => ticketOf()).then((t) => {
+    if (typeof t === "string" && t !== "") headers.authorization = `Bearer ${t}`;
+  }, () => {}).then(() => attempt(0));
 }
 
 /* ------------------------------------------------------------------ *

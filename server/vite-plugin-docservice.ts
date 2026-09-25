@@ -14,12 +14,21 @@ import { rejectUpgrade } from "./docservice/ws.mjs";
  * - `GET /api/docservice/healthz`:与远程文档服务的 `/healthz` 相同的对象。受 `/api/**` 的同源守卫管
  *   (`vite-plugin-api-guard.ts`),只给本机和同源用。
  *
- * 挂四个模块:渲染任务队列、服务地址登记、项目版本、内容库。后两个的日志落在 `<root>/out/docservice`
- * (`vite.config.ts` 的 `fsDeny` 挡住了它,不经静态服务暴露)。
+ * 组装经 `docservice/shared-service.mjs`(`mode: 'lan'`,局域网主机;契约 `docs/plan/auth-contract.md`):
+ * 渲染任务队列、项目版本、内容库按空间各起一份,另挂服务地址登记与共享项目模块。
+ * 本机(`local`)空间的日志落在 `<root>/out/docservice`,共享项目的空间在 `<root>/out/docservice/tenants/<projectId>/`,
+ * 凭证存储在 `<root>/out/docservice/auth/`(`vite.config.ts` 的 `fsDeny` 挡住了整个目录,不经静态服务暴露)。
+ * 凭证存储按目录取进程内单例(`auth/store.mjs` 的 `credentialStoreFor`),素材服务(`vite-plugin-media.ts`)
+ * 用同一份核对票据的代数与签名密钥。
  *
- * 鉴权:本机回环来的连接(按 `http-guard.mjs` 的 `clientAddressOf` 判真实对端,舞台端口的反向代理转来的
- * 也按它写进的真实对端算)是 `{ userId: 'local', tenantId: 'local' }`;别的一律要集群令牌
- * (`PROMPTCUT_CLUSTER_TOKEN`),没配令牌就全部拒绝。
+ * 共享端点:`/docservice/shared/{create,lookup,challenge}`(HTTP,跨源 `*`),只有本机回环能建项目。
+ *
+ * 鉴权(按 `http-guard.mjs` 的 `clientAddressOf` 判真实对端,舞台端口的反向代理转来的也按它写进的真实对端算):
+ * - 本机回环来的连接什么都不带:本机身份 `{ userId: 'local', tenantId: 'local', scope: 'local', role: 'page' }`;
+ *   带 `promptcut.tenant.<projectId>` 的是本机声明(创建者自己的页面、预渲染进程加入本机托管的共享项目);
+ * - 局域网来的连接只能凭证明或连接票据进入;
+ * - 集群令牌在挂载模式下一律不认(局域网主机的管理接口只绑回环、不要令牌,契约第 10 节)。
+ * 凭证存储加载不了时只打 `config.error { reason: 'auth-store' }`:本机身份照常,局域网来的一律 401。
  *
  * **停用模式**(`PROMPTCUT_HEADLESS === "1"`,`scripts/headless.mjs` 起的无头实例):无头实例是 Skill 的临时副本,
  * 不能自己发 `projectRev`,所以不建文档服务、不写日志;但插件照样注册,把两条路由明确答掉,
@@ -32,9 +41,8 @@ import { rejectUpgrade } from "./docservice/ws.mjs";
 
 const WS_PATH = "/docservice";
 const HEALTH_PATH = "/api/docservice/healthz";
-const LOCAL = Object.freeze({ userId: "local", tenantId: "local" });
+const SHARED_PREFIX = `${WS_PATH}/shared/`;
 
-type Principal = { userId: string; tenantId: string | null };
 type Log = (event: string, fields: object) => void;
 
 /** 连接开合、握手被拒这些事件照常打;别的也打,都带 `[docservice]` 前缀,一行一条 */
@@ -122,47 +130,56 @@ export function docservicePlugin(): Plugin {
       }
 
       let service: { health(): object; close(): Promise<void> } | null = null;
+      let handleShared: ((req: IncomingMessage, res: ServerResponse) => boolean) | null = null;
       try {
-        const [{ createDocService }, { createClusterAuth }, { endpointsModule }, { projectModule }, { contentModule }, { createFileStore }, { createRenderQueue }] =
-          await Promise.all([
-            import("./docservice/service.mjs"),
-            import("./docservice/auth.mjs"),
-            import("./docservice/modules/endpoints.mjs"),
-            import("./docservice/modules/project.mjs"),
-            import("./docservice/modules/content.mjs"),
-            import("./docservice/store/index.mjs"),
-            import("./render-queue/index.mjs"),
-          ]);
-
-        // 非本机连接的鉴权:只认集群令牌。没配令牌、或令牌格式不对,就一律拒绝(失败即关)
-        // (没配令牌时 createClusterAuth 在拒绝时记 `auth.reject { reason: 'no-token' }`,令牌原文不进日志)
-        const token = process.env.PROMPTCUT_CLUSTER_TOKEN || undefined;
-        let remoteAuth: (req: IncomingMessage) => Principal | null;
+        const [{ createSharedDocService }, { credentialStoreFor }, { localDeviceInfo }] = await Promise.all([
+          import("./docservice/shared-service.mjs"),
+          import("./auth/store.mjs"),
+          import("./auth/device.mjs"),
+        ]);
+        const dataDir = path.join(server.config.root, "out", "docservice");
+        // 凭证存储:进程内单例,素材服务按同一个目录取到同一份
+        let store: object | null = null;
         try {
-          remoteAuth = createClusterAuth({ token, allowAnonymous: false, log }).authenticate;
+          store = credentialStoreFor(path.join(dataDir, "auth"), { log });
         } catch (err) {
-          log("config.error", { reason: "bad-token-format", message: errText(err) });
-          remoteAuth = createClusterAuth({ allowAnonymous: false, log }).authenticate;
+          log("config.error", { reason: "auth-store", message: errText(err) });
         }
-        const authenticate = (req: IncomingMessage): Principal | null => {
+        const isLoopback = (req: IncomingMessage) => {
           const address = clientAddressOf(req);
-          if (address !== null && isLoopbackAddress(address)) return { ...LOCAL };
-          return remoteAuth(req);
+          return address !== null && isLoopbackAddress(address);
         };
-
-        const svc = createDocService({ server: httpServer, path: WS_PATH, authenticate, log });
-        const queue = createRenderQueue({ now: Date.now, send: svc.send });
-        svc.mountRenderQueue(queue);
-        svc.mount(endpointsModule());
-        const store = createFileStore({ dir: path.join(server.config.root, "out", "docservice"), log });
-        svc.mount(projectModule({ store }));
-        svc.mount(contentModule({ store }));
-        service = svc;
-        log("docservice.attach", { path: WS_PATH, modules: svc.health().modules });
+        const built = createSharedDocService({
+          mode: "lan",
+          dataDir,
+          store,
+          server: httpServer,
+          path: WS_PATH,
+          isLoopback,
+          remoteOf: (req: IncomingMessage) => clientAddressOf(req),
+          localDevice: localDeviceInfo(),
+          log,
+        });
+        service = built.service;
+        handleShared = built.handleHttp;
+        log("docservice.attach", { path: WS_PATH, modules: built.service.health().modules, authStore: store ? "ok" : "unavailable" });
       } catch (err) {
         log("docservice.error", { stage: "attach", message: errText(err) });
         return;
       }
+
+      // 共享端点的预检要抢在 vite 自带的 cors 中间件前面答(它不认局域网的源,理由同 asset-service.ts 的 assetPreflightMiddleware)
+      server.middlewares.stack.unshift({
+        route: "",
+        handle: ((req: IncomingMessage, res: ServerResponse, next: () => void) => {
+          if (String(req.method || "").toUpperCase() !== "OPTIONS" || !pathnameOf(req)?.startsWith(SHARED_PREFIX)) return next();
+          if (!handleShared!(req, res)) next();
+        }) as any,
+      });
+      server.middlewares.use((req, res, next) => {
+        if (!pathnameOf(req)?.startsWith(SHARED_PREFIX)) return next();
+        if (!handleShared!(req, res)) next();
+      });
 
       server.middlewares.use((req, res, next) => {
         if (apiPath(req.url) !== HEALTH_PATH) return next();

@@ -6,21 +6,30 @@
  * 退出前先等连接的 close 事件（最多 CLOSE_WAIT_MS）：关闭握手没完成就 process.exit，Windows 上 libuv 会断言
  * `!(handle->flags & UV_HANDLE_CLOSING)` 崩掉（远端多一个往返时必现）。
  *
- * 集群令牌（契约 G.5）：设了环境变量 PROMPTCUT_CLUSTER_TOKEN 时，按 G.5 在 Sec-WebSocket-Protocol 里带
- * `promptcut.v1` 和 `promptcut.token.<令牌>`，并断言服务端只回显 `promptcut.v1`；没设时不带子协议（旧客户端，
- * 只能连匿名模式的服务）。令牌不接受命令行参数，也不打印。
+ * 凭证（M6a，`docs/plan/auth-contract.md` 第 5、11 节；集群令牌已退出数据面，本探针不再读它）：
+ * - 设了环境变量 PROMPTCUT_SHARED_CONFIG（指向共享项目配置 JSON）：取它的第一项，凭项目证明以 `render` 角色进入
+ *   （node.hello 只许 render 连接），并断言服务端只回显 `promptcut.v1`；没给地址参数时连配置里的 `url`；
+ * - 没设：不带子协议（旧客户端）。连本机回环时是本机身份；连别的机器会被 401。
+ * 配置文件里的口令、派生密钥与证明都不打印。
  *
  * 断言依据：`docs/plan/render-queue-contract.md` A.6（node.hello → node.welcome、publisher.hello → publisher.welcome、
  * queue.watch → queue.snapshot、格式错误 → error bad-message），以及 server/docservice/service.mjs 的 /healthz
  * （G.4：有 protocol === 'promptcut.v1' 和模块名数组 modules）。
  */
-const url = process.argv[2] ?? 'ws://127.0.0.1:8787';
+let sharedEntry = null;
+let sharedProtocolsOf = null;
+if (process.env.PROMPTCUT_SHARED_CONFIG) {
+  const { loadSharedConfig, sharedProtocols } = await import('../../server/auth/shared-config.mjs');
+  [sharedEntry] = loadSharedConfig();
+  sharedProtocolsOf = sharedProtocols(sharedEntry, { role: 'render' });
+}
+const url = process.argv[2] ?? sharedEntry?.url ?? 'ws://127.0.0.1:8787';
 const TIMEOUT_MS = 10_000;
 const CLOSE_WAIT_MS = 3_000;
 const nodeId = `probe-node-${process.pid}`;
 const publisherId = `probe-page-${process.pid}`;
-const token = process.env.PROMPTCUT_CLUSTER_TOKEN || undefined;
-const protocols = token ? ['promptcut.v1', `promptcut.token.${token}`] : undefined;
+/** 这一次握手的子协议：共享项目配置的每次现取（nonce 只能用一次） */
+let protocols;
 
 const results = [];
 function check(name, ok, detail) {
@@ -30,7 +39,8 @@ function check(name, ok, detail) {
 
 /** 连接失败时也要拿到这条 socket，好等它关干净 */
 let socket;
-function connect() {
+async function connect() {
+  if (sharedProtocolsOf) protocols = await sharedProtocolsOf();
   return new Promise((resolve, reject) => {
     const ws = protocols ? new WebSocket(url, protocols) : new WebSocket(url);
     socket = ws;
@@ -73,7 +83,7 @@ function closeAndWait(ws, code, reason) {
 
 /** 跑一遍，返回退出码；每条出口都先等连接关干净 */
 async function run() {
-  console.log(`target ${url}  token ${token ? 'set' : 'none'}`);
+  console.log(`target ${url}  credential ${sharedEntry ? 'shared-project' : 'none'}`);
   let ws;
   const t0 = performance.now();
   try {
@@ -118,8 +128,10 @@ async function run() {
     check('healthz 里记到节点与发布方', health.ok === true && health.nodes >= 1 && health.publishers >= 1);
     check('healthz.protocol 是 promptcut.v1', health.protocol === 'promptcut.v1', `protocol=${JSON.stringify(health.protocol)}`);
     check('healthz.modules 是模块名数组', Array.isArray(health.modules) && health.modules.every((m) => typeof m === 'string'), JSON.stringify(health.modules));
-    check('healthz 带队列 epoch', health.epoch === welcome.epoch);
-    if (token) check('healthz 里没有令牌', !JSON.stringify(health).includes(token));
+    // 按空间各起一份队列（auth-contract 第 6 节）：/healthz 的 epoch 是本机（local）空间那一份；凭共享项目进入时 welcome 是项目空间的
+    if (sharedEntry) check('healthz 带队列 epoch', typeof health.epoch === 'string' && typeof welcome.epoch === 'string');
+    else check('healthz 带队列 epoch', health.epoch === welcome.epoch);
+    if (protocols) check('healthz 里没有证明', !JSON.stringify(health).includes(protocols[1]));
   } catch (err) {
     check('请求过程', false, err.message);
   }
