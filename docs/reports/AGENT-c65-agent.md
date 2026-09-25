@@ -3,7 +3,7 @@
 分支 `claude/c65-agent`（基于 `claude/c65` 的 `806503d`），worktree `.worktrees/c65-agent`。
 依据 `docs/plan/c65-design.md` 第 5、7、8、13 节，`c65-ops-spec.md`，`cloud-task.md` 的 D1、D2、D4，`auth-contract.md` 第 5、6、8、14 节，`AGENT-c65-integ.md` 第 7 节遗留清单，以及主会话中途的裁定（第 6 节）。
 
-状态：六项都做了，基线、G0-R、两个探针的结果见第 4 节。没有推送，没有合并。
+状态：六项都做了；按主会话通知合入了 main（`2e75bec`，M6 含 M6c X1～X5、SP），合并后基线、G0-R、两个探针全绿（第 4 节）。没有推送，没有合并到别处。
 
 ## 1. 做了什么
 
@@ -84,27 +84,130 @@
 
 ## 4. 验证
 
-### 4.1 新增用例（AG-*）
+### 4.1 新增用例（AG-*，`server/test/agent-c65.test.mjs`）
 
-`node --test server/test/agent-c65.test.mjs`：
+| 用例 | 内容 |
+|---|---|
+| AG-1 | 握手：回环只带 `promptcut.role.agent.<n>` → `{ ...本机身份, role: 'agent', conversation: n }`；缺对话号、对话号 0、`role.page`、缺 `promptcut.v1`、两个角色项、非回环都拒 |
+| AG-2 | 副本：乱序排队、重复丢弃、缺口超时重开、落不下去重开、`waitRev` |
+| AG-3 | **V3 端到端**（真 handler 经 vite `ssrLoadModule` + 副本 + 真文档服务 WebSocket）：Agent `get_clip` 读到 rev 1 → 页面改 `c1.label`（rev 2）→ Agent `update_clip` 回 `StaleWriteError`，`since` 恰好一条：rev 2、页面那次的 `opId`、`actor.role 'page'`、`session 'page-1'`、`entities ['/tracks/@t1/clips/@c1']`；文档服务仍是 rev 2、没有 opacity；重读（rev 2）后再写成功（rev 3），页面的 label 保留，副本与真身 `JSON.stringify` 逐字节相同；页面收到的广播 `actor` 为 `{ role: 'agent', conversation: 1, session: 'agent:conv-A' }` |
+| AG-4 | 连写三次 rev 2、3、4（写成功视同读到新版本）；`update_clip` 先改参数再因 `trackId` 抛错 → 整次不提交 |
+| AG-5 | 事件：四次调用各有创建、完成；读与被拒的写不带 `opId`；成功的写带 `opId`、`rev`、`inverse`，逆操作应用到真身等于写之前；`event-detail` 补写了参数、摘要、`opId`、`inverse`；`events.text` |
+| AG-6 | 两个对话交替写 6 次：广播的 `actor` 依次 `[1,'agent:A'] [2,'agent:B'] …`；两路 ok / 广播交错后副本与真身逐字节相同 |
+| AG-7 | 页面侧写入归属：期间只有页面报回的提交 → 推进读到的版本、紧接着的写入成功；中间夹了另一个页面的写入 → 不推进、写入 stale |
+| AG-8 | 事件模块：完成事件透传 `opId / rev / inverse`、`detailKey`，`events.list` 里也有；带 `inverse` 不带 `opId` 回 `bad-message` |
+| AG-9 | stale 报错文字：谁、改了哪些实体；超过 8 次、6 个实体折叠 |
+| AG-10 | 工具表：`side` 只有 agent / page / server，`toolGroups` 覆盖全部 119 个，几个代表工具的取值 |
+| AG-11 | 预渲染发布方定版本（真项目模块 + 真 `project-client`）：无真身 announce 发号 + 上传；有真身不上传、以真身 rev 发布、`snapshot.get` 取回的是真身、询问不发号；与真身不同回 `body-mismatch` |
 
-（待填）
+全量里的原始行（合并后）：
 
-### 4.2 基线
+```
+✔ AG-1 握手:回环只带 promptcut.role.agent.<n> 是本机 local 空间的 agent 连接;别的组合照旧拒
+✔ AG-2 副本:乱序到达按 rev 排队、重复的丢掉、缺口超时重新打开、应用失败也重新打开
+✔ AG-3(V3 端到端)Agent 读后页面改了同一片段:Agent 的写回 stale,since 与实际改动一致,文档服务不变;重读后再写成功
+✔ AG-4 写成功后这个对话读到的版本跟着前进:连着写不会被自己挡住;handler 抛错时整次改动作废
+✔ AG-5 事件:每个工具调用都有创建 / 完成;只有成功的写带 opId、rev、inverse,完成时补写 event-detail;逆操作能把那一步撤回去
+✔ AG-6 两个对话各用各的连接:写入身份的对话号不同;两路广播与 ok 交错时副本仍与真身相同
+✔ AG-7 留在页面的工具写了项目:页面报回的 opIds 进了副本、且期间只有它们,就把对话读到的版本推过去;夹了别人的写入就不推
+✔ AG-8 事件模块:完成事件透传 opId / rev / inverse,补写 event-detail;带 inverse 不带 opId 回 bad-message
+✔ AG-9 stale 的报错文字:谁、改了哪些实体,多了折叠
+✔ AG-10 工具表:每个工具都标了 side(agent / page / server),事件的分组覆盖全部工具
+✔ AG-11 预渲染发布方定版本:没有真身照老流程发号、传快照;有真身不发号、不上传,以真身的 rev 发布,节点取回的是真身;与真身不同就不交给队列
+```
 
-（待填）
+### 4.2 基线（合并 main `2e75bec` 之后，`98dfc65`）
 
-### 4.3 本机 dev server 冒烟（5500）
+- `npx tsc -b --force`：退出码 0，没有输出。
+- `npm test`：退出码 0：
 
-（待填）
+```
+ℹ tests 2899
+ℹ pass 2898
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 1
+﹣ 集成:/api/cards/layout 对真实项目返回整数框 (0.1355ms) # SKIP
+```
 
-### 4.4 G0-R
+唯一跳过的是既有那条（要 5190）。合并前第一次全量败 1 条：`src/mcp/tools/trackTools.test.mjs` 还断言 `side === "browser"`，是我改 side 取值时漏掉的一处断言，改成 `agent` 后全过（不是实现问题）。
 
-（待填）
+### 4.3 本机 dev server 冒烟（5500，合并后）
 
-### 4.5 探针
+`PROMPTCUT_PUSH=0 npx vite --port 5500 --strictPort --host 127.0.0.1`（本 worktree），脚本 `agent-smoke.mjs` 在 scratchpad（不入库）：裸 WebSocket 当页面，把项目以根替换写进 `local` 空间 → `POST /api/agent/bind` → 经 `/api/mcp/call`（CLI 那条路）调工具。原始输出：
 
-（待填）
+```
+seed project.op.ok
+bind {"ok":true,"projectId":"smoke-agent-muhk02hn","mode":"local","url":"ws://127.0.0.1:5500/docservice"}
+get_project ok true rev 1 tracks 2
+add_clip ok true rev 2 clip c-muhk0571-1
+page got project.ops rev 2 actor {"userId":"local","deviceId":null,"role":"agent","conversation":1,"session":"agent:smoke"}
+page commit project.op.ok
+stale write ok false
+项目在你上次读取之后被改过:你读到的是 rev 2,现在是 rev 3。这次写入没有落地。
+期间的改动:
+  rev 3:页面改了 /tracks/@t-1/clips/@c-muhk0571-1
+请先重新读取(get_project、get_clip、get_layout 等)确认现状,再决定怎么改。
+reread rev 3
+write after reread ok true rev 4
+get_layout {"ok":true,"result":{"clipId":"c-muhk0571-1","local":{"x":100,"y":50},"world":{…},"contentBox":{"left":894,"top":532,"width":333,"height":115},"rev":4}}
+events create:get_project: | complete::ok | create:add_clip: | complete::ok:opId:inverse | create:set_position: | complete::error | create:get_clip: | complete::ok | create:set_position: | complete::ok:opId:inverse | create:get_layout:
+status {…"conversations":[{"key":"smoke","conversation":1,"session":"agent:smoke","lastRead":4}],"stats":{"executed":6,"committed":2,"stale":1,"rejected":0,"noop":1,"events":12,"eventErrors":0},…"replica":{"hasState":true,"hasBody":true,"rev":4,"buffered":0}}
+unbind {"ok":true}
+```
+
+真实 dev server（带全部插件）里 `ssrLoadModule` 载入卡片注册表与 handlers 没问题；`add_clip`（`punch-pill`）在服务端执行，页面收到的写入身份是 agent + 对话 1；`get_layout` 经预渲染进程量出了实体框。最后那条 `get_layout` 的完成事件在脚本收尾之后才到，没打出来。
+
+### 4.4 G0-R（合并后）
+
+端口：本分支 dev server 5500（舞台 5501、5502），main 基线 5503（舞台 5504、5505），都以 `PROMPTCUT_PUSH=0` 起。
+
+| 项 | 命令 | 结果 |
+|---|---|---|
+| 导出确定性 | `node scripts/verify-determinism.mjs --url "http://127.0.0.1:5500/?export=1"` | 退出码 0；`Total Frames: 1800` / `Identical: 1800` / `Different: 0` / `All frames are identical. Determinism verified!` |
+| 快照重放一致 | `PC_FRAME_TEST_URL=http://127.0.0.1:5500 node scripts/verify-unified-frames.mjs --origin http://127.0.0.1:5500` | 退出码 0；`PASS: no video during B; all HTML frames; exact video seek; random replay; cache hits; cumulative C equals A; streamed video contains all 10 frames.` |
+| 导出像素与 main | 临时 `git worktree add --detach .worktrees/c65a-main-baseline main`（`2e75bec`），5503 上跑同一条 `verify-determinism`（main 同样 1800/1800），pngjs 逐帧逐像素比两边的 `out/verify-a/frames` | `{"frames":1800,"sameBytes":1800,"diffFrames":0,"diffPixels":0,"missing":0,"extra":0}` |
+
+合并前（main 还是 `b84fee5` 时）完整跑过一遍，结果相同：1800/1800、PASS、与 `b84fee5` 0 差异。两次删基线 worktree 之前都用 PowerShell 查过 `reparse points: 0`，然后 `git worktree remove --force`。
+
+### 4.5 探针（合并后）
+
+**queue-mode-probe**：`node scripts/probes/queue-mode-probe.mjs --queue-port 5503 --normal-port 5506 --docservice-port 5509`，退出码 0：
+
+```
+{"ok":true,"tasks":5,"done":5,"identical":true,"differentFrames":0,"identicalIgnoringStyleOrder":true,"differenceSummary":{},"streamTasks":0,"streamDone":0,"streamCompare":null,"x5":{"readyAfterMs":108140,"firstPlanClaim":{"id":"plan:queue-mode-probe@1","afterPreloadMs":265,"preload":["html"]},"firstFineClaim":{"id":"snapshot:67d1fa79…:0-59","afterPreloadMs":2270,"preload":["html"]},"claimedWhileNotReady":5,"fineClaimedBeforeReady":true},"fails":[]}
+```
+
+探针自起的文档服务里没有真身，走的是发布方的老流程分支（announce 发号 + 上传），与改动前一致；有真身的分支由 AG-11 覆盖（第 8 节第 1 条）。
+
+**render-host-probe 本机 H1/H2/H3 序列**：编排照 `AGENT-m6-host.md` 第 3 节（creator 5400；r1 host-a 5403、host-b 5406；r2 host-c 5403 `--code-version test-code-version-mismatch --expect-claims none`、host-bad 5406 `--expect-claims none --expect-handshake 401`；check r1 / r2 用 5403；auth-check `--rate-limit`），脚本 `run-rhp.sh` 在 scratchpad。全部角色退出码 0，原始 JSON 行（省略号处是配置细节与 codeVersion 全文）：
+
+```
+== creator
+{"role":"creator","port":5400,…,"rounds":[{"round":"r1","hosts":["host-a","host-b"],"planId":"plan:render-host-probe@1","tasks":5,"done":5,"failed":0,"doneCounts":[1,1,1,1,1],"reused":0,"pcCompleted":3,"pcDedup":0,"pcPlanClaimed":true,"preloadMs":112896},{"round":"r2","hosts":["host-c","host-bad"],"planId":"plan:render-host-probe@2","tasks":5,"done":5,"failed":0,"doneCounts":[1,1,1,1,1],"reused":2,"pcCompleted":3,"pcDedup":0,"pcPlanClaimed":true,"preloadMs":107574}],"projectId":"sp_zfml7px4r3odejzxn5itsdncsa","pc":{"mode":"shared","nodeId":"prerender:DESKTOP-GS40TCK:5400","envFingerprint":"258acaaa7c5fe509",…},"ok":true,"fails":[]}
+== host-a
+{"ok":true,"name":"host-a","round":"r1","port":5403,…,"claimed":1,"completed":1,"dedup":0,"seen":4,"connected":true,"opens":1,"handshake":101,…,"exitCode":0,…,"fails":[]}
+== host-b
+{"ok":true,"name":"host-b","round":"r1","port":5406,…,"claimed":1,"completed":1,"dedup":0,"seen":4,"connected":true,"opens":1,"handshake":101,…,"exitCode":0,…,"fails":[]}
+== host-c
+{"ok":true,"name":"host-c","round":"r2","port":5403,…,"claimed":0,"completed":0,"dedup":0,"seen":2,"connected":true,"opens":1,"handshake":101,"codeVersion":"test-code-version-mismatch",…,"exitCode":0,…,"fails":[]}
+== host-bad
+{"ok":true,"name":"host-bad","round":"r2","port":5406,…,"claimed":0,"completed":0,"dedup":0,"seen":0,"connected":false,"opens":0,"handshake":401,…,"exitCode":0,…,"connectFailed":11,…,"fails":[]}
+== check-r1
+{"role":"check","round":"r1","ok":true,"tasks":5,"done":5,"duplicateDone":0,"missingDone":0,"planDoneCount":1,"hostOk:host-a":true,"claimed:host-a":1,"hostOk:host-b":true,"claimed:host-b":1,"completedByNode":{"pc":3,"host-a":1,"host-b":1},"sumCompleted":5,"pcPlanClaimed":true,"reused":0,"compared":{"dirs":3,"singleFiles":243,"creatorFiles":243,"htmlFiles":240},"styleOrderOnly":0,"styleOrderWithDuplicateProps":0,"differentFrames":0,"differences":[],"identicalBytes":true,"identical":true,"fails":[]}
+== check-r2
+{"role":"check","round":"r2","ok":true,"tasks":5,"done":5,"duplicateDone":0,"missingDone":0,"planDoneCount":1,"hostOk:host-c":true,"claimed:host-c":0,"hostOk:host-bad":true,"claimed:host-bad":0,"completedByNode":{"pc":3,"host-c":0,"host-bad":0},"sumCompleted":3,"pcPlanClaimed":true,"reused":2,…,"differentFrames":0,"differences":[],"identicalBytes":true,"identical":true,"fails":[]}
+== auth-check
+{"role":"auth-check","ok":true,"loopback":true,…,"wrongPassword":401,"rightPassword":101,"ticket":true,…,"afterFiveWrong":101,"challengeInCooldown":"ok","fails":[]}
+```
+
+- H1：check r1 `duplicateDone 0`、`missingDone 0`，完成数 PC 3 + host-a 1 + host-b 1 = 5，`identicalBytes: true`；
+- H2：host-c `seen 2`、`claimed 0`，check r2 `identicalBytes: true`；
+- H3：host-bad `handshake 401`、`opens 0`、`connectFailed 11`、`claimed 0`。
+
+合并前也完整跑过一遍这两个探针，同样全过。
+
+收尾：我起的 vite 进程树（5500、5503 各两次）都用 `taskkill /T` 结束，探针的进程随角色退出。结束后 5400～5409、5500～5509 没有监听，也没有命令行带本 worktree 的 node 进程。没碰 5190～5192；5510～5519 上有别人的监听，没动。
 
 ## 5. 与设计稿、任务书不一致之处，以及歧义的处理
 
@@ -177,4 +280,23 @@ GET  /api/agent/status             诊断:bound、mode、各对话 lastRead、�
 
 ## 8. 没做的、遗留
 
-（待填）
+1. **有真身时的发布流程没有探针级验证**：两个探针都没有页面接线，文档服务里没有真身，只走到老流程分支。有真身的分支只有 AG-11（真项目模块 + 真 `project-client`，不起预渲染进程）。页面接线（c65-editor）合入后，建议在 queue-mode-probe 里加一趟「先以根替换写进真身，再 preload」。
+2. **节点晚取旧版本**：有真身时发布方不再上传快照，节点在真身前进之后才来取那一版会拿到 `missing`（第 5 节第 9 条）。若要保证旧版本也取得到，可以在版本匹配时照旧上传一份（摘要与真身相同，文档服务能校验），代价是每次发布传一遍整份项目。
+3. **页面侧还没接**：`/api/agent/bind`、`agent.ticket`、回包里的 `opIds`、AI 栏按事件更新与「撤销这一步」、`revertRemote`，都在 c65-editor（第 7 节）。没绑时本分支不改变现有行为。
+4. **留在页面的 50 个工具**：第 3 节列了理由；作业类、`set_project_meta`、切剪辑要迁到服务端，得先定下页面作业表、`durationManual`、播放头这些状态的归属，属于后续任务。
+5. **Agent 侧的大提交**：超过 256 KiB 的改动直接回错，没接 `project.upload`（第 5 节第 8 条）。
+6. **对话号不跨重启**（第 5 节第 2 条）。
+7. `list_cards` 留在页面，服务端执行 `create_card` 之后页面的卡片归属表不会自己刷新（第 7 节）。
+
+## 9. 提交
+
+| 提交 | 内容 |
+|---|---|
+| `8f02adc` | 建报告文件 |
+| `9452506` | 工具表逐条标 side；本机 local 空间认 `promptcut.role.agent.<n>`；`doc-link.mjs` |
+| `ec27194` | 执行器与副本（D1 / D4）、事件（D2）、`vite-plugin-ai.ts` 接线、events 模块扩展、AG-1～AG-10 |
+| `edc00ca` | 预渲染发布方有真身时以真身 rev 发布；AG-11 |
+| `c2b4e83` | trackTools 测试的 side 断言 |
+| `da38654` | 对话登记时即建连接；报告初稿 |
+| `98dfc65` | 合并 main（`2e75bec`）：`vite-plugin-frames.ts` 四处冲突，`publish(session, project, entryKey, raw)` 同时保留 M6c 的 `entryKey`（X1 流的空档）、`preferNode`（X4 就近认领）与本分支的真身定版本；其余文件自动合并 |
+| 下一个 | 报告定稿 |
