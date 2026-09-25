@@ -73,6 +73,8 @@ function mergeFields(into, fields) {
 
 /** 发送选项里的合并键：只认字符串，别的一律当没有键 */
 const keyOf = (opts) => (isObj(opts) && typeof opts.coalesceKey === 'string' ? opts.coalesceKey : undefined);
+/** 广播时跳过的那条连接（`opts.except`，连接 id）：只认字符串，别的一律当没有 */
+const exceptOf = (opts) => (isObj(opts) && typeof opts.except === 'string' ? opts.except : undefined);
 
 const positive = (v, fallback) => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : fallback);
 
@@ -288,8 +290,10 @@ export function createRouter({
         if (!entry.live || !set || set.size === 0) return 0;
         const text = JSON.stringify(message);
         const key = keyOf(opts);
+        const skip = exceptOf(opts);
         let n = 0;
         for (const id of [...set]) {
+          if (id === skip) continue;
           const conn = conns.get(id);
           if (conn && deliver(conn, text, key)) n += 1;
         }

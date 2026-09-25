@@ -21,6 +21,9 @@
  * 例：项目快照是 `projects/<fileNameOf(projectId)>@<projectRev>.json`。
  * 写入先写同目录下的临时文件、刷盘，再改名盖过目标，读的一方不会看到写了一半的文件。
  *
+ * **整条重写**（C6.5 的项目操作日志截断）：`rewrite(stream, records)` 把一条 stream 整个换成给定的记录，
+ * 同样先写临时文件再改名，读的一方要么看到旧的整条、要么看到新的整条。
+ *
  * 只用 Node 内置模块（D2 守门覆盖 `server/docservice/`）。
  */
 import fs from 'node:fs';
@@ -208,6 +211,16 @@ export function createFileStore({ dir, log = jsonLog } = {}) {
       checked.add(file);
     },
 
+    /** 整条换成给定的记录（原子：临时文件 + 刷盘 + 改名）；记录为空时留一个空文件 */
+    rewrite(stream, records) {
+      const file = fileOf(stream);
+      if (!Array.isArray(records)) throw new TypeError('records 必须是数组');
+      const text = records.map((r) => `${serialize(r)}
+`).join('');
+      writeAtomic(file, text);
+      checked.add(file);
+    },
+
     read(stream) {
       const file = fileOf(stream);
       let text;
@@ -259,6 +272,11 @@ export function createMemoryStore() {
     read(stream) {
       parseStream(stream);
       return (streams.get(stream) ?? []).map((line) => JSON.parse(line));
+    },
+    rewrite(stream, records) {
+      parseStream(stream);
+      if (!Array.isArray(records)) throw new TypeError('records 必须是数组');
+      streams.set(stream, records.map(serialize));
     },
     writeBlob(name, text) {
       parseBlobName(name);
