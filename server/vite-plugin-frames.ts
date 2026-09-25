@@ -15,8 +15,58 @@ import { snapshotTier } from "./snapshot-store.mjs";
 import { readySessionOf } from "./ready-index.mjs";
 import { describeEnvironment } from "./render-node/fingerprint.mjs";
 import { mediaSourceOf } from "./vision/ffmpeg-frames";
+import { assetServiceOrigin } from "./asset-client";
 
 const services = new Map<string, FramePipeline>();
+/** C6.4:每个帧库根上的推送队列怎么收尾(停队列、关文档服务连接);没建推送队列的根不在这里 */
+const pushTeardowns = new Map<string, () => Promise<void>>();
+
+const pushLog = (event: string, fields: object = {}) => {
+  // 每段推完一条太吵(预渲染进程的 stdout 由编辑器进程收走),只打建队、跳过、重试和出错
+  if (event === "push.done" || event === "push.empty") return;
+  try { console.info("[artifact-push]", event, JSON.stringify(fields)); } catch { console.info("[artifact-push]", event); }
+};
+
+/**
+ * C6.4 第 4 节末段的接线(`docs/plan/manifest-contract.md`;方案写在 `docs/reports/AGENT-c6-4-pipeline.md`):
+ * 预渲染进程只在**同时**满足下面两条时才建推送队列,否则什么都不建,行为与现在相同 —— 这就是离线。
+ *
+ *   1. 能解析到素材服务的基址:`asset-client.ts` 的 `assetServiceOrigin()`(预渲染进程里就是 `PROMPTCUT_EDITOR_URL`),
+ *      API 基址 `<源>/api/asset`;
+ *   2. 能连上文档服务:`render-node` 的 `resolveDocservice()` 回 `remote` 或 `local`。
+ *
+ * 无头实例(`PROMPTCUT_HEADLESS === "1"`)不建:它是临时副本,不往共享服务写东西(同 C6.3 的口径)。
+ * 内容库客户端 `createContentClient` 在 `render-node/index.mjs` 里(C6.4 节点侧);取不到这个函数也不建。
+ * 任何一步出错都只打日志,不影响预渲染进程。
+ */
+async function startArtifactPush(root: string, service: FramePipeline) {
+  if (!isPrerender || process.env.PROMPTCUT_HEADLESS === "1") return;
+  const origin = assetServiceOrigin();
+  if (!origin) return pushLog("push.skip", { reason: "no-asset-service" });
+  const node: any = await import("./render-node/index.mjs");
+  if (typeof node.createContentClient !== "function") return pushLog("push.skip", { reason: "no-content-client" });
+  const resolved = await node.resolveDocservice();
+  if ((resolved?.mode !== "remote" && resolved?.mode !== "local") || !resolved.url) {
+    return pushLog("push.skip", { reason: "docservice-offline", tried: (resolved?.tried ?? []).map((t: any) => ({ url: t.url, ok: t.ok, reason: t.reason })) });
+  }
+  if (services.get(root) !== service || (service as any).closed) return;
+  const token = process.env.PROMPTCUT_CLUSTER_TOKEN || undefined;
+  const endpoint = node.createWsEndpoint({ url: resolved.url, token, log: (event: string, fields: object) => {
+    if (event === "ws.open" || event === "ws.close") pushLog(`docservice.${event}`, fields);
+  } });
+  const content = node.createContentClient(endpoint);
+  const { createAssetClient }: any = await import("./asset-store/client.mjs");
+  const client = createAssetClient({ base: `${origin}/api/asset`, token: token ?? null });
+  const { createPushQueue }: any = await import("./artifact-push.mjs");
+  // settleMs:同一段最后一次进队后静置 1.5 s 再推,边渲边推时一段不被推十几遍
+  const queue = createPushQueue({ pipeline: service, client, content, dir: service.root, log: pushLog, settleMs: 1500 });
+  queue.start();
+  pushTeardowns.set(root, async () => {
+    try { await queue.stop(); } catch {}
+    try { endpoint.close(); } catch {}
+  });
+  pushLog("push.started", { docservice: resolved.mode, url: resolved.url, asset: `${origin}/api/asset`, restored: queue.stats().restored });
+}
 function requestSignal(req: any, res: any) {
   const controller = new AbortController();
   const abort = () => controller.abort();
@@ -61,6 +111,8 @@ export function frameService(root: string, origin: string) {
      * `clipId` 要等项目到位、重算 card plan 之后才反查得出来(`adoptCardPlan`)。
      */
     void service.rescanSnapshots().catch(() => {});
+    /* C6.4:连得上素材服务和文档服务时建推送队列(只在预渲染进程里;连不上就什么都不建) */
+    void startArtifactPush(root, service).catch(error => pushLog("push.skip", { reason: "error", message: String(error?.message ?? error) }));
   }
   return service;
 }
@@ -115,7 +167,11 @@ export function framesPlugin(): Plugin {
         body: JSON.stringify({ owner, ttl: 0 }), signal: AbortSignal.timeout(1500) }).catch(() => {});
     };
     server.watcher.on("change", file => { if (/^(src|scripts)\//.test(path.relative(root, file).replaceAll("\\", "/"))) invalidateFrameCode(root); });
-    server.httpServer?.once("close", () => { const s = services.get(root); services.delete(root); void s?.close(); });
+    server.httpServer?.once("close", () => {
+      const s = services.get(root); services.delete(root);
+      const teardown = pushTeardowns.get(root); pushTeardowns.delete(root);
+      void (async () => { await teardown?.(); await s?.close(); })();
+    });
     /*
      * D4(b) `/api/cards/layout`:Agent 的 `get_layout` —— 按 t 在**整场景**上实测实体框
      * (pinned 架构 4:Agent 的 query 跑预渲染进程;用户交互的 query 走自己的离屏舞台,不走这里)。
