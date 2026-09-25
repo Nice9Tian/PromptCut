@@ -10,7 +10,9 @@
  * 然后逐个比较两边帧库里的快照文件(`controls-html/**`、`controls-local/**` 的 `<帧>.html`)与 `index.json`。
  * 普通模式下同一帧可能先后被写三遍(锚帧那一趟、`fillCardControls` / `renderLocalSnapshots`、B 趟),
  * 后写的赢;队列模式下非锚帧只由执行器写一遍。两边有差异时 **`ok` 仍为真**、`identical: false`,
- * 差异逐帧列出来,由主 Agent 判断是不是 preload 本身三写造成的(契约 J.7)。
+ * 差异逐帧列出来,由主 Agent 判断是不是 preload 本身三写造成的(契约 J.7)。每一帧另标 `styleOrderOnly`:
+ * 只差 `style` 属性里声明的先后(实测两趟普通模式之间也是这样,是进程之间的差异),`identicalIgnoringStyleOrder`
+ * 是「按声明排序之后是否全同」。
  *
  * **文档服务**:每一趟各起一个独立的文档服务(`server/docservice/main.mjs`,数据目录是新建的临时目录),
  * 经 `PROMPTCUT_DOCSERVICE_URL` 交给编辑器。不用编辑器里挂的那一份:它的内容库落在工作副本的
@@ -58,7 +60,7 @@ const FPS = 30;
 const STAMP = Date.now().toString(36);
 /**
  * 3 秒 = 90 帧:共享档的两张卡各切两段(0～59、60～89);`unknown` 卡(本地档)从 1 秒起,
- * 它的挂载帧(30)在另两张卡中间切出一个锚帧。项目 id 固定,两趟算出同一组键(帧库是空的)。
+ * 它的挂载帧(`mountFrameOf`,实测 29)在另两张卡中间切出一个锚帧。项目 id 固定,两趟算出同一组键(帧库是空的)。
  */
 const PROJECT = {
   id: 'queue-mode-probe', name: '队列模式探针', width: 1920, height: 1080, fps: FPS, duration: 3,
@@ -239,6 +241,9 @@ async function snapshotTree(library) {
   return files;
 }
 
+/** 每个 `style="…"` 里的声明排序:只用来判「是不是只差声明顺序」,比较本身仍按原字节 */
+const sortStyles = html => html.replace(/style="([^"]*)"/g, (_, s) => 'style="' + s.split(';').map(x => x.trim()).filter(Boolean).sort().join(';') + '"');
+
 /** 键 → 片段与档位(从 card plan 反查),差异列表里好认 */
 function keyIndex(run) {
   const map = new Map();
@@ -273,8 +278,11 @@ try {
     for (const rel of [...new Set([...a.keys(), ...b.keys()])].sort()) {
       const x = a.get(rel), y = b.get(rel);
       if (x && y && x.equals(y)) continue;
-      out.differentFrames.push({ ...describe(rel), reason: !x ? 'only-in-queue' : !y ? 'only-in-normal' : 'bytes', normalBytes: x?.length ?? null, queueBytes: y?.length ?? null });
+      // 只差 style 属性里声明的先后(实测两趟普通模式之间也这样,见报告)的,单独标出来
+      const styleOrderOnly = !!(x && y && rel.endsWith('.html') && sortStyles(x.toString('utf8')) === sortStyles(y.toString('utf8')));
+      out.differentFrames.push({ ...describe(rel), reason: !x ? 'only-in-queue' : !y ? 'only-in-normal' : 'bytes', styleOrderOnly, normalBytes: x?.length ?? null, queueBytes: y?.length ?? null });
     }
+    out.identicalIgnoringStyleOrder = out.differentFrames.every(d => d.styleOrderOnly);
     out.compared = { normalFiles: a.size, queueFiles: b.size, htmlFiles: [...a.keys()].filter(k => k.endsWith('.html')).length };
     out.identical = out.differentFrames.length === 0;
     check(out.compared.htmlFiles > 0, '普通模式的帧库里有快照', out.compared);
@@ -282,7 +290,7 @@ try {
     check(out.done === out.tasks, '队列模式的细任务全部 done', { tasks: out.tasks, done: out.done });
     const summary = {};
     for (const d of out.differentFrames) {
-      const k = `${d.clipId ?? '?'}/${d.tier}/${d.reason}/${d.anchor ? 'anchor' : 'non-anchor'}`;
+      const k = `${d.clipId ?? '?'}/${d.tier}/${d.reason}${d.styleOrderOnly ? '(style-order)' : ''}/${d.anchor ? 'anchor' : 'non-anchor'}`;
       summary[k] = (summary[k] ?? 0) + 1;
     }
     out.differenceSummary = summary;
@@ -297,5 +305,5 @@ const result = { ok: fails.length === 0, tasks: out.tasks ?? 0, done: out.done ?
   differentFrames: out.differentFrames ?? [], fails, ...out };
 console.log(JSON.stringify(result, null, 2));
 console.log(JSON.stringify({ ok: result.ok, tasks: result.tasks, done: result.done, identical: result.identical,
-  differentFrames: result.differentFrames.length, differenceSummary: out.differenceSummary ?? null, fails }));
+  differentFrames: result.differentFrames.length, identicalIgnoringStyleOrder: out.identicalIgnoringStyleOrder ?? null, differenceSummary: out.differenceSummary ?? null, fails }));
 process.exit(result.ok ? 0 : 1);
