@@ -141,12 +141,6 @@ export function flipSignature(ticket) {
 
 // ------------------------------------------------------------------ 组装（假设的接口集中在这里）
 
-async function loadAuthIndex() {
-  const mod = await import('../auth/index.mjs');
-  assert.equal(typeof mod.createSharedHost, 'function', `server/auth/index.mjs 要导出 createSharedHost（测试方假设的接口）；实际导出：${Object.keys(mod).join(', ')}`);
-  return mod;
-}
-
 export async function loadClient() {
   const mod = await import('../auth/client.mjs');
   for (const name of ['deriveKey', 'buildAuthProtocols', 'ticketExpiry']) {
@@ -155,10 +149,37 @@ export async function loadClient() {
   return mod;
 }
 
-/** 假设的组装入口：见文件头 */
-async function assemble(options) {
-  const { createSharedHost } = await loadAuthIndex();
-  return createSharedHost(options);
+/**
+ * 组装入口（集成对账后接到实际实现）：`server/docservice/shared-service.mjs` 的 `createSharedDocService`，
+ * 凭证存储 `server/auth/store.mjs` 的 `openCredentialStore({ dir: <dataDir>/auth })`，素材票据核对器
+ * `server/auth/asset-tickets.mjs` 的 `createAssetTicketVerifier`。回的 host 形状与文件头的假设一致。
+ */
+async function assemble({ dataDir, server, path: wsPath, now, log, device, clusterToken }) {
+  const [{ createSharedDocService }, { openCredentialStore }, { createAssetTicketVerifier }] = await Promise.all([
+    import('../docservice/shared-service.mjs'),
+    import('../auth/store.mjs'),
+    import('../auth/asset-tickets.mjs'),
+  ]);
+  const store = openCredentialStore({ dir: path.join(dataDir, 'auth'), now, log });
+  const attached = !!server;
+  const built = createSharedDocService({
+    mode: attached ? 'lan' : 'hosted',
+    dataDir,
+    store,
+    ...(attached ? { server, path: wsPath ?? '/docservice' } : {}),
+    ...(clusterToken ? { clusterToken } : {}),
+    localDevice: device,
+    now,
+    log,
+  });
+  return {
+    service: built.service,
+    auth: createAssetTicketVerifier({ store, now }),
+    store,
+    handleHttp: (req, res) => built.handleHttp(req, res),
+    listen: (port, hostname) => built.service.listen(port, hostname),
+    close: () => built.service.close(),
+  };
 }
 
 // ------------------------------------------------------------------ 素材服务（TS 转译，同 asset-store-http.test.mjs 的办法）
@@ -205,11 +226,11 @@ export function loadAsset() {
   return assetModPromise;
 }
 
-/** 假设的接法：素材服务凭 host.auth 核对票据 */
+/** 素材服务凭 host.auth（票据核对器）核对票据；实际选项名是 `tickets` */
 async function assetMiddleware(root, auth) {
   const { asset, store } = await loadAsset();
   const media = store.createBlobStore({ kind: 'memory', chunkSize: 8 * 1024 * 1024 });
-  return asset.assetServiceMiddleware(root, { stores: { media }, auth });
+  return asset.assetServiceMiddleware(root, { stores: { media }, tickets: auth });
 }
 
 // ------------------------------------------------------------------ 来源地址改写
