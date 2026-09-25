@@ -187,3 +187,54 @@ PASS https 编辑器 → wss://<源>/docservice，探活 https://<源>/api/docse
 | ab70846 | 取回节奏降到每秒 1 MiB |
 
 之后还有一个提交，只改本报告。
+
+## 6. 返工：按积压节流（主会话裁定，契约 J.11）
+
+主会话裁定第 4 节第 1 条要修，文件清单扩大到 `server/docservice/router.mjs` 和新测试 `server/test/docservice-pending.test.mjs`。第 2～7 条照原读法。
+
+### 6.1 改动
+
+| 文件 | 改动 |
+|---|---|
+| `server/docservice/router.mjs` | 模块的 `ctx` 加两项：`pendingBytes(connId)`，值是出站队列字节数加底层 `buffered(connId)`，连接不存在时回 0；`maxPendingBytes`，只读，值是配置的上限。没有出现业务词，R2 照旧通过 |
+| `server/docservice/modules/project.mjs` | 去掉固定的每秒 1 MiB 限速与 `pace` 选项。每发一片之前，`pendingBytes` 必须低于 `maxPendingBytes` 的一半，否则隔 20 ms 再查（选项 `pollMs`，常量 `SNAPSHOT_PACE.pollMs`） |
+| `server/test/docservice-pending.test.mjs`（新，本分支是作者） | 用例 C8、C9 |
+
+**分片大小**：每片取「256 KiB」与「上限的四分之一」中较小的一个，最小 1 KiB。这样即使测试把上限调小，发出一片后积压也不超过上限的四分之三。
+
+**测试替身**：核心没有这两个接口时（测试替身），按上限 1 MiB 算，积压当 0，每片之间只让一次事件循环。
+
+### 6.2 验证
+
+**C8、C9**：`node --test server/test/docservice-pending.test.mjs`，两条都通过，总耗时约 9.4 s。
+- **C8**：
+  - 停读的原始 TCP 客户端让模块一次发出 16 MiB，上限设为 64 MiB；
+  - 断言：空闲时积压为 0；发出后积压大于 0；300 ms 后仍大于 1 MiB；
+  - 恢复读取、收齐 64 条后，积压归零；
+  - 另外断言：连接不存在时回 0，`ctx.maxPendingBytes` 等于配置值。
+- **C9**：
+  - 上限取缺省的 1 MiB。上传方用 `createWsEndpoint` 加 `createProjectClient` 上传 5 MiB 快照；
+  - 慢消费者是原始 TCP 客户端，按约 0.8 MiB/s 读；
+  - 断言：收到 `end`，没有关闭帧，没有 `conn.backpressure` 日志，耗时超过 2 s；分片按序，拼接后与原文逐字相同，摘要一致。
+- **反向对照**：临时把节流条件改成永不等待，C9 失败，报错 `连接在收齐前被关：{"code":1013,"reason":"backpressure"}`。说明 C9 确实能测出这个问题。对照做完已恢复。
+
+**自测脚本**：重跑，PASS 35、FAIL 0。
+
+本机回环下，1.3 MiB 快照的取回时间从 922 ms 降到 27 ms。限速取回 5.4 MiB 的结果：
+
+| 限速 | 结果 | 耗时 |
+|---|---|---|
+| 16 MiB/s | 相同 | 1484 ms |
+| 2 MiB/s | 相同 | 2970 ms |
+| 1.2 MiB/s | 相同 | 4913 ms |
+| 0.5 MiB/s | 相同 | 11724 ms |
+
+四档都没有背压日志。原先 0.5 MiB/s 一档会被 1013 断开，现在能完整收到。
+
+**基线**：
+- `npx tsc -b --force`：退出码 0；
+- `npm test`：退出码 0，tests 2396，pass 2395，fail 0，skipped 1（需要 5190 的那条）。
+
+### 6.3 过程中的一处失误（已补回）
+
+做反向对照时，我用 `git checkout -- server/docservice/modules/project.mjs` 还原临时改动，把当时还没提交的节流改动一起丢掉了，随后按原样重写。提交 bc31488 的内容就是重写后的版本，上面的测试都在它之上跑的。
