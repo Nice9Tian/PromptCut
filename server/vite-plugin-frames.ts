@@ -116,34 +116,8 @@ export function frameService(root: string, origin: string) {
   }
   return service;
 }
-export function renderProject(project: any) {
-  return { ...project, media: (project.media || []).map((m: any) => {
-    // .proc files from older versions may contain a bare filename (and some
-    // callers still send blob URLs).  The renderer cannot resolve either
-    // form; the durable server path is the source of truth for both.
-    // A legacy .proc may say /@media/<name> while the actual file lives in
-    // the shared Videos/PromptCut/media folder.  Resolve through the guarded
-    // media endpoint so the export/Agent page sees the same file as the editor.
-    //
-    // A1: a hash IS the asset's identity.  Media that carries one is served by
-    // /@media/<hash> (vite-plugin-media resolves it in the local content store,
-    // with the right Content-Type and Range support), so leave that address
-    // alone — rewriting it by path would pin the renderer to one machine's
-    // file layout and, from step 5 on, defeat tier switching.  Only migration
-    // era media (no hash) is still rewritten by its durable path.  A hashed
-    // asset that somehow still carries a page-private address (blob: / data:,
-    // or nothing at all) gets the hash address instead — same rule as
-    // vite-plugin-vision.ts's resolveMediaUrls, so both paths agree.
-    if (m.hash) {
-      const u = String(m.url || "");
-      return !u || u.startsWith("blob:") || u.startsWith("data:") ? { ...m, url: `/@media/${m.hash}` } : m;
-    }
-    if (m.path && (!m.url || m.url.startsWith("blob:") || !m.url.startsWith("/@export/"))) {
-      return { ...m, url: "/api/media/file?path=" + encodeURIComponent(String(m.path)) };
-    }
-    return m;
-  }) };
-}
+/** 原样搬到 `render-project.mjs`(契约 J.5),这里转出,调用方(`vision/render.ts`、脚本)不用改 */
+export { renderProject };
 export function framesPlugin(): Plugin {
   return { name: "promptcut-frames", configureServer(server) {
     const root = path.resolve(server.config.root);
