@@ -46,6 +46,7 @@ const STAMP = Date.now().toString(36);
 const T_SEC = 1;
 
 const fails = [];
+const notes = [];
 const check = (cond, label, extra) => { if (!cond) fails.push(label + (extra === undefined ? '' : ' :: ' + JSON.stringify(extra).slice(0, 600))); return cond; };
 const sha = buf => createHash('sha256').update(buf).digest('hex');
 const json = async (url, init) => {
@@ -124,7 +125,7 @@ async function startEditor(label, port, extraEnv) {
 }
 
 /** 编辑器页面 `?preview=legacy`,载入探针项目,停在 T_SEC;回页面与镜像键 */
-async function openLegacy(browser, editor) {
+async function openLegacy(browser, editor, { placeholderShot = null } = {}) {
   const page = await browser.newPage();
   await page.setViewport({ width: 1600, height: 1000 });
   /*
@@ -154,6 +155,25 @@ async function openLegacy(browser, editor) {
     actions.loadProject(project);
     actions.seek(t);
   }, PROJECT, T_SEC);
+  /*
+   * 取之前的页面截图(尽力而为):页面第一次取到的整帧若是占位帧(`preview-frames/` 下),马上截一张。
+   * 页面自己很快就触发 preload、取回 PNG,这个窗口可能只有一两秒,没抓到只记一条 note,不算失败。
+   */
+  if (placeholderShot) void (async () => {
+    const deadline = Date.now() + 30000;
+    while (Date.now() < deadline) {
+      let v = null;
+      try { v = await legacyView(page); } catch { return; }
+      if (v?.img && /preview-frames/.test(v.img)) {
+        await delay(300);
+        try { await page.screenshot({ path: placeholderShot }); out.shots.before = placeholderShot; } catch { /* 页面已关 */ }
+        return;
+      }
+      if (v?.img) break;   // 第一张就已经是整帧:窗口错过了
+      await delay(100);
+    }
+    notes.push('没抓到 B 页面上的占位帧(页面取第一帧之前 PNG 已经取回),取之前以 legacy-before-frame.png 为准');
+  })();
   const key = await until(`[${editor.label}] 页面的镜像键`, async () => page.evaluate(async () => {
     const k = (await import('/src/render/dataMirror.ts')).mirrorKey();
     return k && k.localRev >= 1 ? { session: k.session, localRev: k.localRev } : null;
@@ -253,7 +273,7 @@ try {
    * B 的 preload 第一件事是按清单换机取用(C6.4 `adoptFromManifests` → `applyResult`,X7 在这里把 PNG 一并取回)。
    * 等诊断报出 `adoption`、页面的整帧 `<img>` 换上、没有报错条,截图。
    */
-  const pageB = await openLegacy(browser, B);
+  const pageB = await openLegacy(browser, B, { placeholderShot: path.join(OUT, 'legacy-before.png') });
   if (!pageB.key) throw new Error('B 的页面没有镜像键');
   check((out.legacyShim ?? 0) >= 1, 'legacy 垫片生效(UnifiedPreview 的整帧请求改打预渲染进程)', out.legacyShim ?? 0);
   const adoption = await until('[b] 换机取用报出来', async () => (await diagnostics(B)).adoption ?? null, 180000, 500);
@@ -307,7 +327,7 @@ try {
   await Promise.all(children.map(exited));
   if (!KEEP) for (const dir of tmpDirs) await fs.rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }).catch(() => {});
 }
-const result = { ok: fails.length === 0, ...out, fails };
+const result = { ok: fails.length === 0, ...out, notes, fails };
 console.log(JSON.stringify(result, null, 2));
 console.log(JSON.stringify({ ok: result.ok, before: out.before ?? null, after: out.after ?? null, pngFrames: out.pngFrames ?? null, identicalPng: out.identicalPng ?? null, shots: out.shots ?? null, fails }));
 process.exit(result.ok ? 0 : 1);
