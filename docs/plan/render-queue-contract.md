@@ -1990,3 +1990,9 @@ createPrerenderExecutor({ pipeline, projects, prepareProject, log }) → { plan,
 2. **`resultFor` 抛错视为没有清单**：`local-node` 捕获后照旧以去重方式完成，只带 `{ ranges, dedup: true }`，任务不失败。
 3. **`planTaskOf` 的 `requires`**：两项都没给时 `requires` 为 `{}`，给了哪一项就写哪一项。
 4. **清单的字段展开在最后**：展开进 `session.complete` 的结果时放在最后。现在的清单格式里没有 `ranges`、`dedup`，不会冲突；以后清单格式不许用这两个字段名。
+
+### J.11 取回快照的节流（2026-09-25，主 Agent 裁定）
+
+- 核心 `ctx` 新增 `pendingBytes(connId)`：值为出站队列里的字节数加上底层的 `buffered`，连接不存在时为 0。另加只读的 `ctx.maxPendingBytes`。两者都是通用能力，R2 守门照旧。
+- 项目模块发快照的下一片之前，要求 `pendingBytes` 低于上限的一半，否则 20 ms 后再查。不用固定限速。这样慢链路上取大快照不会触发 1013，节点那条同时承载队列会话的连接也不会被断开、丢掉租约。
+- `resolveDocservice` 新增 `mode: 'editor'`。凡是判断「连得上文档服务」的调用方（C6.4 的推送接线、J.5）都要认它。
