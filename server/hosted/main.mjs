@@ -13,8 +13,8 @@
  *   PROMPTCUT_DOCSERVICE_PORT        文档服务端口，缺省 8787
  *   PROMPTCUT_ASSET_PORT             素材服务端口，缺省 8788
  *   PROMPTCUT_DOCSERVICE_HOST        两个端口都绑它，缺省 0.0.0.0
- *   PROMPTCUT_DOCSERVICE_PUBLIC_URL  形如 ws://8.219.80.16:8787，只作记录与诊断
- *   PROMPTCUT_ASSET_PUBLIC_URL       形如 http://8.219.80.16:8788/api/asset，登记给成员（经 service.endpoints 下发）。
+ *   PROMPTCUT_DOCSERVICE_PUBLIC_URL  形如 ws://<公网地址>:8787，只作记录与诊断
+ *   PROMPTCUT_ASSET_PUBLIC_URL       形如 http://<公网地址>:8788/api/asset，登记给成员（经 service.endpoints 下发）。
  *                                    绑非回环地址时必须设；只绑回环时缺省 http://127.0.0.1:<端口>/api/asset
  *   PROMPTCUT_CLUSTER_TOKEN          集群令牌的回落来源：优先读 $PROMPTCUT_DATA_DIR/secrets/cluster-token。
  *                                    令牌只守管理接口（地址登记、迁移盘点），不给数据面任何权限
