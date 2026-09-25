@@ -15,6 +15,12 @@
  *   订阅频道 `queue-summary:all`，每次 `tick` 算一遍各项目的计数，变了才发布，带 `coalesceKey: 'queue-summary'`。
  *   摘要订阅的连接不收单任务增量：本模块替它向队列发 `queue.watch { projects: [] }`（队列收空数组），
  *   队列就不再给它发任何增量；那一次的 `queue.snapshot` 回包由 `outbound` 吞掉。
+ *
+ * M6a（`docs/plan/auth-contract.md` 第 6 节「队列里的角色限制」）：
+ * - `node.hello` 只允许 `role: 'render'` 的连接与 `local` 身份，别的回 `forbidden`。
+ *   不带 `scope` 的旧式 principal（测试注入的 `authenticate`、M5 的匿名身份）不受限，行为与 M5 相同；
+ * - 按空间起实例时由 `../spaces.mjs` 的外壳包一层，这里不认识空间；
+ * - `claimsOf(connId)`：这条连接的节点此刻持有的认领数，成员列表的「渲染中」标签用。
  */
 import { QUEUE_DEFAULTS } from '../../render-queue/constants.mjs';
 import { parseInbound, makeMessage, NODE_TYPES, PUBLISHER_TYPES } from '../../render-queue/messages.mjs';
@@ -37,6 +43,15 @@ const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const isReqId = (v) => typeof v === 'string' || (typeof v === 'number' && Number.isFinite(v));
 
 const NO_ROLES = () => ({ roles: [], publisherId: null, node: null });
+
+/** 这个 principal 能不能报到为渲染节点：`render` 角色、`local` 身份，以及不带 `scope` 的旧式身份 */
+export function mayRegisterNode(principal) {
+  if (!principal || principal.scope === undefined) return true;
+  return principal.scope === 'local' || principal.role === 'render';
+}
+
+/** 队列模块认领的消息类型（按空间起实例的外壳也用它） */
+export const RENDER_QUEUE_TYPES = Object.freeze(queueTypes());
 
 /** 按合并键的消息：取任务 id（H.3）；其余消息返回 null，不带键 */
 function coalesceIdOf(message) {
@@ -253,6 +268,10 @@ export function renderQueueModule(q, { sweepMs = QUEUE_DEFAULTS.SWEEP_INTERVAL_M
         if (conn?.summary && parseInbound(msg).ok) leaveSummary(ctx, connId, conn);
         return q.handle(connId, msg);
       }
+      if (msg.type === 'node.hello' && !mayRegisterNode(conn?.principal)) {
+        const reqId = isReqId(msg.reqId) ? msg.reqId : undefined;
+        return reply(ctx, connId, 'error', { reason: 'forbidden', detail: '只有 render 角色的连接能报到为渲染节点' }, reqId);
+      }
       // hello 由队列回 welcome；这里只在消息合法时记下这条连接的角色（队列会用同一套校验）
       if (conn && (msg.type === 'node.hello' || msg.type === 'publisher.hello')) {
         const parsed = parseInbound(msg);
@@ -286,6 +305,14 @@ export function renderQueueModule(q, { sweepMs = QUEUE_DEFAULTS.SWEEP_INTERVAL_M
       }
       const id = coalesceIdOf(message);
       return id === null ? {} : { coalesceKey: `task:${id}` };
+    },
+
+    /** 这条连接的节点此刻持有的认领数（不是 G.3 的模块接口，给成员列表用） */
+    claimsOf(connId) {
+      const nodeId = conns.get(connId)?.node?.nodeId;
+      if (!nodeId || typeof q.describe !== 'function') return 0;
+      const d = q.describe();
+      return (Array.isArray(d?.tasks) ? d.tasks : []).filter((t) => t.state === 'claimed' && t.claim?.nodeId === nodeId).length;
     },
 
     describeConn(connId) {

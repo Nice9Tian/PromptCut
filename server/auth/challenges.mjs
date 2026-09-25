@@ -4,6 +4,10 @@
  * `nonce` 是 32 字节随机数（base64url），只能用一次，60 s 过期，绑定一组字段（进入：`projectId`、`username`、
  * `deviceId`、`as`；创建者操作：连接与项目）。核对时不论成败，`nonce` 立即作废。
  * 只在内存里：文档服务重启后，没用掉的全部失效，客户端重新取即可。
+ *
+ * 用过的 nonce 在原定的过期时刻之前还记着（`spent`），核对时能分出「重放了一个用过的」（`used`）。
+ * 握手据此不把重放计入口令错误限速：Node 内置的 WebSocket（undici）在握手回 401 时会用同一组子协议原样再请求一次，
+ * 一次输错口令会被数成两次；而重放用过的 nonce 永远进不来，不计数也不帮猜口令的人任何忙。
  */
 import { randomBytes } from 'node:crypto';
 
@@ -21,6 +25,8 @@ const bindingKey = (binding) => JSON.stringify(binding);
 export function createChallenges({ now = Date.now, ttlMs = CHALLENGE_DEFAULTS.TTL_MS, max = CHALLENGE_DEFAULTS.MAX } = {}) {
   /** nonce → { key, expires }；Map 按插入顺序，最早发的在前 */
   const live = new Map();
+  /** 用过的 nonce → 原定的过期时刻 */
+  const spent = new Map();
 
   function prune(at) {
     for (const [nonce, entry] of live) {
@@ -28,6 +34,10 @@ export function createChallenges({ now = Date.now, ttlMs = CHALLENGE_DEFAULTS.TT
       live.delete(nonce);
     }
     while (live.size >= max) live.delete(live.keys().next().value);
+    for (const [nonce, expires] of spent) {
+      if (expires > at && spent.size < max) break;
+      spent.delete(nonce);
+    }
   }
 
   return {
@@ -40,18 +50,33 @@ export function createChallenges({ now = Date.now, ttlMs = CHALLENGE_DEFAULTS.TT
       return nonce;
     },
 
-    /** 核对并作废：存在、没过期、绑定一致才回 true；不论成败都删掉 */
-    consume(nonce, binding) {
-      if (typeof nonce !== 'string') return false;
+    /**
+     * 核对并作废，回 `'ok'`，或失败原因：`'used'`（用过的，重放）、`'expired'`、`'mismatch'`（绑定不符）、`'unknown'`。
+     * 不论成败，这个 nonce 都作废。
+     */
+    check(nonce, binding) {
+      if (typeof nonce !== 'string') return 'unknown';
       const entry = live.get(nonce);
-      if (!entry) return false;
+      if (!entry) return spent.has(nonce) ? 'used' : 'unknown';
       live.delete(nonce);
-      return entry.expires > now() && entry.key === bindingKey(binding);
+      spent.set(nonce, entry.expires);
+      if (entry.expires <= now()) return 'expired';
+      return entry.key === bindingKey(binding) ? 'ok' : 'mismatch';
     },
 
-    /** 作废某个绑定前缀的全部 nonce（连接断开时清它的创建者挑战） */
+    /** `check` 的布尔版 */
+    consume(nonce, binding) {
+      return this.check(nonce, binding) === 'ok';
+    },
+
+    /** 作废满足条件的 nonce（连接断开时清它的创建者挑战） */
     dropWhere(predicate) {
-      for (const [nonce, entry] of live) if (predicate(JSON.parse(entry.key))) live.delete(nonce);
+      for (const [nonce, entry] of live) {
+        if (predicate(JSON.parse(entry.key))) {
+          live.delete(nonce);
+          spent.set(nonce, entry.expires);
+        }
+      }
     },
 
     size: () => live.size,

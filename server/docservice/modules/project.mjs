@@ -25,6 +25,7 @@
  */
 import { createHash } from 'node:crypto';
 import { createMemoryStore, fileNameOf } from '../store/index.mjs';
+import { actorOf } from './actor.mjs';
 
 export const PROJECT_MODULE = 'project';
 
@@ -192,7 +193,7 @@ export function projectModule({ store = createMemoryStore(), now, pollMs = SNAPS
       return reply(ctx, connId, { type: 'project.announced', projectId, projectRev: st.projectRev, changed: false }, reqId);
     }
     const principal = principals.get(connId);
-    const actor = { userId: principal?.userId ?? null, session };
+    const actor = actorOf(principal, session);
     const at = clock(ctx);
     const rev = st.projectRev + 1;
     // 先落日志再改内存：落盘失败时状态不变，核心回 internal

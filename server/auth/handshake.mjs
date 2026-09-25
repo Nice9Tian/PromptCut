@@ -215,8 +215,10 @@ export function createHandshakeAuth({
     const { p: projectId, u: username, d: deviceId, dn: deviceName, as, nonce, m, r: role, c, o } = j;
     if (!isProjectId(projectId) || !isUsername(username) || !isDeviceId(deviceId) || !isDeviceName(deviceName)) return reject('bad-format');
     if ((as !== 'member' && as !== 'creator') || typeof nonce !== 'string' || typeof m !== 'string') return reject('bad-format');
-    // nonce 先核对：不论后面成败都已作废
-    if (!challenges.consume(nonce, ['join', projectId, username, deviceId, as])) return fail('nonce');
+    // nonce 先核对：不论后面成败都已作废。重放用过的（Node 的 WebSocket 在 401 后会原样重试一次）不计入限速
+    const nonceState = challenges.check(nonce, ['join', projectId, username, deviceId, as]);
+    if (nonceState === 'used') return reject('nonce');
+    if (nonceState !== 'ok') return fail('nonce');
     if (!isRole(role)) return reject('bad-format');
     if (role === 'agent' ? !isConversation(c) : (c !== undefined && c !== null)) return reject('bad-format');
     let owner = null;
