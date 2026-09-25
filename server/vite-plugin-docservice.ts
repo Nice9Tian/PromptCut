@@ -136,8 +136,15 @@ type LanHost = { start(): Promise<void>; stop(): Promise<void>; refresh(): Promi
  * - 编辑器只绑回环时不广播:通告出去的地址别人连不上;
  * - 编辑器退出(http 服务器关闭)时停。
  * UDP 端口打不开等错误只打日志(`[docservice] lan.error`),不影响编辑器。
+ *
+ * `createHost` 只给测试注入(缺省 `lan/discovery.mjs` 的 `createLanHost`)。
  */
-function createLanHosting(httpServer: NonNullable<import("vite").ViteDevServer["httpServer"]>) {
+type HttpServerLike = Pick<import("node:http").Server, "address" | "once" | "listening">;
+type LanHostOptions = { projects: () => Array<{ projectId: string; name: string; mode: string }>; hostDeviceName: string; servicePort: number; log: Log };
+export function createLanHosting(
+  httpServer: HttpServerLike,
+  { createHost, log: say = log }: { createHost?: (options: LanHostOptions) => LanHost | Promise<LanHost>; log?: Log } = {},
+) {
   let store: LanStore | null = null;
   let hostDeviceName = "";
   let servicePort: number | null = null;
@@ -157,12 +164,12 @@ function createLanHosting(httpServer: NonNullable<import("vite").ViteDevServer["
     if (closed || !store || servicePort === null) return;
     const want = listProjects().length > 0;
     if (want && !host) {
-      const { createLanHost } = await import("./lan/discovery.mjs");
-      host = createLanHost({ projects: listProjects, hostDeviceName, servicePort, log }) as LanHost;
+      const make = createHost ?? (async (o: LanHostOptions) => (await import("./lan/discovery.mjs")).createLanHost(o) as LanHost);
       try {
+        host = await make({ projects: listProjects, hostDeviceName, servicePort, log: say });
         await host.start();
       } catch (err) {
-        log("lan.error", { stage: "start", message: errText(err) });
+        say("lan.error", { stage: "start", message: errText(err) });
         host = null;
       }
     } else if (!want && host) {
@@ -175,7 +182,7 @@ function createLanHosting(httpServer: NonNullable<import("vite").ViteDevServer["
   };
 
   const sync = () => {
-    chain = chain.then(step).catch((err) => log("lan.error", { stage: "sync", message: errText(err) }));
+    chain = chain.then(step).catch((err) => say("lan.error", { stage: "sync", message: errText(err) }));
     return chain;
   };
 
@@ -183,7 +190,7 @@ function createLanHosting(httpServer: NonNullable<import("vite").ViteDevServer["
     const addr = httpServer.address();
     if (!addr || typeof addr === "string") return;
     if (isLoopbackListen(addr.address)) {
-      log("lan.skip", { reason: "loopback-only", address: addr.address });
+      say("lan.skip", { reason: "loopback-only", address: addr.address });
       return;
     }
     servicePort = addr.port;
