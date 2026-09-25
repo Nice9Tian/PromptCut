@@ -236,8 +236,8 @@ async function runCreator() {
       const r = { round: round.name, hosts: round.hosts };
       out.rounds.push(r);
       await writeJson(path.join(STATE, 'state.json'), { ...(await readJson(path.join(STATE, 'state.json'))), phase: `waiting-hosts:${round.name}` });
-      const readyHosts = await until(`[creator] ${round.name} 的主机都起来了`, async () => round.hosts.every((h) => exists(path.join(STATE, `${h}.ready`))) || null, TIMEOUT_MS, 1000);
-      if (!readyHosts) break;
+      const readyHosts = await until(`[creator] ${round.name} 的主机都起来了`, async () => round.hosts.every((h) => exists(path.join(STATE, `${h}.ready`))) || (exists(path.join(STATE, 'stop')) ? 'stop' : null), TIMEOUT_MS, 1000);
+      if (!readyHosts || readyHosts === 'stop') { check(readyHosts !== 'stop', `[creator] ${round.name} 等主机时收到 stop`); break; }
       const before = await diagnostics();
       const publishedBefore = new Set((before.queue?.published ?? []).map((p) => p.planId));
       const appliedBefore = (before.queue?.stats?.applied ?? 0) + (before.queue?.stats?.applyErrors ?? 0);
