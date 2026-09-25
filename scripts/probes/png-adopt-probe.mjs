@@ -129,24 +129,15 @@ async function openLegacy(browser, editor, { placeholderShot = null } = {}) {
   const page = await browser.newPage();
   await page.setViewport({ width: 1600, height: 1000 });
   /*
-   * 探针自带的垫片(不改产品代码):本分支的基线上,legacy 的 `UnifiedPreview` 按 `target: "user"` 把整帧请求发给
-   * **编辑器**进程,而编辑器进程(`interactive: false`)对 user lane 一律回 503「交互帧请求请直接打预渲染进程」,
-   * 所以 `?preview=legacy` 页面永远只有一条报错、没有画面 —— 与 X7 无关的既有问题(报告「遗留」一节)。
-   * 这里在浏览器里把那一个模块的 `target: "user"` 换成 `target: "prerender"`(`see_frames` 的缺省),
-   * 整帧请求照 D5 打预渲染进程,legacy 页面才看得到画面。只动这一处请求去哪,不动画面怎么来。
+   * 页面自己发的整帧请求(`/api/frames/see`)记下来:打到哪个源、回什么状态。页面不打任何补丁 ——
+   * X7 起 `UnifiedPreview` 的整帧请求打预渲染进程(`X7-legacy-target`),这里核它在真实页面上确实如此。
    */
-  await page.setRequestInterception(true);
-  page.on('request', async req => {
-    let url;
-    try { url = new URL(req.url()); } catch { return req.continue(); }
-    if (url.pathname !== '/src/editor/preview/UnifiedPreview.tsx') return req.continue();
+  const seeLog = [];
+  page.on('response', res => {
     try {
-      const res = await fetch(req.url());
-      const text = await res.text();
-      const patched = text.split('target: "user"').join('target: "prerender"');
-      out.legacyShim = (out.legacyShim ?? 0) + (patched !== text ? 1 : 0);
-      await req.respond({ status: res.status, contentType: res.headers.get('content-type') || 'text/javascript', body: patched });
-    } catch { await req.continue().catch(() => {}); }
+      const url = new URL(res.url());
+      if (url.pathname === '/api/frames/see' && res.request().method() === 'POST') seeLog.push({ origin: url.origin, status: res.status() });
+    } catch { /* 不是合法地址 */ }
   });
   await page.goto(editor.origin + '/?editor&nosetup=1&preview=legacy', { waitUntil: 'domcontentloaded', timeout: 180000 });
   await page.waitForFunction(async () => { try { await import('/src/store/project.ts'); return true; } catch { return false; } }, { timeout: 180000, polling: 500 });
@@ -180,7 +171,7 @@ async function openLegacy(browser, editor, { placeholderShot = null } = {}) {
   }), 60000, 500);
   // 页面 store 里载入后的样子(`loadProject` 会补剪辑等字段);探针另起的会话要推这一份,键才与页面的相同
   const project = await page.evaluate(async () => JSON.parse(JSON.stringify((await import('/src/store/project.ts')).getState().project)));
-  return { page, key, project };
+  return { page, key, project, seeLog };
 }
 
 /** legacy 页面此刻的样子:整帧 `<img>` 的地址、有没有报错条。不发帧请求(那会顶掉页面自己的请求) */
@@ -275,7 +266,6 @@ try {
    */
   const pageB = await openLegacy(browser, B, { placeholderShot: path.join(OUT, 'legacy-before.png') });
   if (!pageB.key) throw new Error('B 的页面没有镜像键');
-  check((out.legacyShim ?? 0) >= 1, 'legacy 垫片生效(UnifiedPreview 的整帧请求改打预渲染进程)', out.legacyShim ?? 0);
   const adoption = await until('[b] 换机取用报出来', async () => (await diagnostics(B)).adoption ?? null, 180000, 500);
   out.b = { adoption };
   check((adoption?.manifests ?? 0) >= 1, '[b] 按清单换机取用了至少一段', adoption);
@@ -293,6 +283,11 @@ try {
   await delay(1500);
   out.shots.after = path.join(OUT, 'legacy-after.png');
   await pageB.page.screenshot({ path: out.shots.after });
+  // 页面(未打补丁)的整帧请求都打到了 B 的预渲染进程、没有一次 503
+  const seeOrigins = [...new Set(pageB.seeLog.map(r => r.origin))];
+  out.b.pageSee = { requests: pageB.seeLog.length, origins: seeOrigins, statuses: [...new Set(pageB.seeLog.map(r => r.status))] };
+  check(pageB.seeLog.length > 0 && seeOrigins.length === 1 && seeOrigins[0] === new URL(B.base).origin, 'legacy 页面的整帧请求打 B 的预渲染进程', out.b.pageSee);
+  check(pageB.seeLog.every(r => r.status === 200), 'legacy 页面的整帧请求没有 503', out.b.pageSee);
   // 截完图再用探针自己的会话看这一帧(它会顶掉页面的请求,所以放在最后)
   const after = await seeAt(B, probeKey);
   const afterFrame = after?.frames?.[0] ?? null;
