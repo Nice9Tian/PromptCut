@@ -4,7 +4,7 @@
 
 ## 状态
 
-进行中。
+三件都做完，验证全过（见文末「验证」）。
 
 ## 1. 预渲染进程的端口避开坏端口
 
@@ -49,3 +49,22 @@
   - `announcedAsset`：`["http://192.168.50.96:5520/api/asset"]`。
   - `nodes`：`nodeId` `prerender:DESKTOP-GS40TCK:5520`，`claimed` 6 个（1 个 `plan:queue-mode-probe@1` + 5 个 `snapshot:…`），`completed` 5 个，`dedup` / `failed` 空；`stats.applyErrors` 0。
 
+## 验证
+
+- `npx tsc -b --force`：退出码 0，零错误。注意 `tsconfig.json` 只含 `src`，改到的 `server/*.ts` 不在它的检查范围；另外用 `npx tsc --noEmit --skipLibCheck --module esnext --moduleResolution bundler --target es2022 --types node --allowImportingTsExtensions server/vite-plugin-prerender.ts server/vite-plugin-frames.ts` 单查了一遍，这两个文件没有报错。
+- `npm test` 连跑 3 遍：每遍退出码 0，`tests 2445 / pass 2444 / fail 0 / cancelled 0 / skipped 1`。唯一的跳过是 `cards-layout.test.mjs` 的「集成:/api/cards/layout 对真实项目返回整数框」（没设 `PC_STAGE_TEST_URL`，也就是要 5190 的那一条）。
+- `queue-mode-probe --only queue --lan --hold-min 1`（端口 5520/5526）：退出码 0，数据见第 3 节。
+- G0-R，dev server 用 `node …/vite/bin/vite.js --port 5520 --strictPort --host 127.0.0.1`，工作目录是本 worktree；预渲染进程拿到 `http://127.0.0.1:3854`（经 `listenSafe`）：
+  - `node scripts/verify-determinism.mjs --url "http://127.0.0.1:5520/?export=1"`：退出码 0，1800 帧全部相同。
+  - `node scripts/verify-unified-frames.mjs --origin http://127.0.0.1:5520`：退出码 0，整条 PASS。
+  - 跑完关掉了自己起的 dev server，5520～5529 与 3854 上没有残留监听。全量测试与导出类验证是分开跑的。
+
+## 没做成的
+
+无。
+
+## 对任务书的更正建议
+
+- 任务书写「`git grep -n "listen(0"` 与 `listen({ port: 0`」：生产代码里只有预渲染进程一处；`scripts/headless.mjs` 早已用 20000 以上随机端口绕开。
+- `readSpill` 是同步函数，退避只能同步阻塞（最坏约 0.5 s）；若日后要避免阻塞事件循环，需要把 `LazyFrameStore.get` 改成异步，影响面较大，另立任务。
+- `--docservice-url` 模式下我去掉了「细任务都由本机节点完成」这条检查（跨机时会误报），请主会话确认这个取舍。
