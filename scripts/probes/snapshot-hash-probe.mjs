@@ -35,8 +35,9 @@ const PORT_B = Number(arg('--port-b', 5423));
 const SECONDS = Number(arg('--seconds', 1)) || 1;
 const TIMEOUT_MS = Number(arg('--timeout-min', 20)) * 60_000;
 const KEEP = args.includes('--keep');
-/** 审阅表里 `independent` 的 DOM 卡(共享档),含 SVG(lottie)、自定义属性多的 hud 卡与 MagicUI 卡 */
-const DEFAULT_CARDS = ['caption-track', 'entity-chips', 'focus-card', 'lottie-adrock', 'mu-animated-shiny-text',
+/** 审阅表里 `independent`、`stateful` 的 DOM 卡(共享档、进预渲染集合),含 SVG(lottie)、自定义属性多的 hud 卡与 MagicUI 卡。
+ *  `direct` 的卡(如 caption-track)不产快照,不能放进来 */
+const DEFAULT_CARDS = ['ui-callout', 'entity-chips', 'focus-card', 'lottie-adrock', 'mu-animated-shiny-text',
   'mu-number-ticker', 'pin-board', 'punch-pill', 'quote-lockup', 'type-shift'];
 const CARDS = (arg('--cards', '') || '').split(',').map(s => s.trim()).filter(Boolean);
 const cards = CARDS.length ? CARDS : DEFAULT_CARDS;
