@@ -241,7 +241,7 @@ test('AU3 限定进入：名单外用户名的挑战与名单内形状相同、�
   assert.equal(await joinStatus(env, proj, { username: 'bob', as: 'creator', password: 'bob-pw', remote: other(46) }), 401);
 });
 
-test('AU3 伪盐跨重启稳定（HMAC 用 auth/server.json 里的服务端密钥）', async (t) => {
+test('AU3 伪盐随时间不变（同一台服务上隔 10 分钟再取）', async (t) => {
   // 同一数据目录起两次：伪盐一样。数据目录由 startHost 自建，这里只比同一台服务上两次（重启另见报告）
   const env = await hostFor(t);
   const proj = await createProject(env, { mode: 'restricted' });
