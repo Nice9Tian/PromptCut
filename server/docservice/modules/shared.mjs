@@ -26,7 +26,18 @@ import { admissionOf, isLoopbackAddress } from '../../auth/handshake.mjs';
 import { parseList, isCred } from '../../auth/http.mjs';
 
 export const SHARED_MODULE = 'shared';
-export const ADMIN_OPS = Object.freeze(['set-password', 'set-list', 'kick', 'unban', 'delete']);
+export const ADMIN_OPS = Object.freeze(['set-password', 'set-list', 'kick', 'unban', 'delete', 'set-creator-password', 'list-bans']);
+
+/**
+ * C6.5 补的两种创建者操作(`docs/plan/c65-design.md` 第 9 节裁定、2026-09-26 主会话裁定):
+ * - `set-creator-password { creator: { salt, key } }`:改创建者自己的口令(特权第 1 项「改项目密码」的一部分)。
+ *   用户名不变;改完旧口令不能再以创建者身份进入,新口令可以,之后的创建者操作按新口令算证明。
+ *   **不加代数**、不作废已发的票据、在线连接不断(只有改项目口令或名单才加代数)。两种进入方式都能用。
+ * - `list-bans`:回 `shared.admin.ok { op, bans: [{ username, deviceId }] }`,只读。界面「已禁入的设备」列表要它;
+ *   界面每次创建者操作前的「验证创建者身份」也用它当一次无副作用的证明核对。
+ * 另外,`set-password` 成功后给本空间其余在线连接各发一条 `shared.notice { event: 'password-changed' }`,
+ * 界面据此出「项目密码已被修改」的气泡(交互稿第 5 节);在线连接照旧不断。
+ */
 
 /** 关闭码（第 7 节） */
 export const CLOSE_REMOVED = 4003;
@@ -237,7 +248,23 @@ export function sharedModule({
           d.project = { salt: msg.project.salt, key: msg.project.key };
           d.generation += 1;
         });
+        for (const [other] of connsIn(space)) {
+          if (other !== connId) ctx.send(other, { type: 'shared.notice', event: 'password-changed' });
+        }
         break;
+      }
+      case 'set-creator-password': {
+        if (!isCred(msg.creator)) throw new Refused('bad-message', 'creator 要 { salt, key }');
+        st.update(space, (d) => {
+          d.creator = { ...d.creator, salt: msg.creator.salt, key: msg.creator.key };
+        });
+        break;
+      }
+      case 'list-bans': {
+        const bans = (rec.bans ?? []).map((b) => ({ username: b.username, deviceId: b.deviceId }));
+        ctx.log('shared.admin', { connId, projectId: space, op });
+        reply(ctx, connId, { type: 'shared.admin.ok', op, bans }, reqId);
+        return;
       }
       case 'set-list': {
         if (rec.mode !== 'restricted') throw new Refused('bad-message', '自由进入没有名单，改口令用 set-password');

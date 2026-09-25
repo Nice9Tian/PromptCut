@@ -47,6 +47,8 @@ import { rejectUpgrade } from "./docservice/ws.mjs";
 const WS_PATH = "/docservice";
 const HEALTH_PATH = "/api/docservice/healthz";
 const SHARED_PREFIX = `${WS_PATH}/shared/`;
+const DEVICE_PATH = "/api/docservice/device";
+const DISCOVER_PATH = "/api/docservice/lan-discover";
 
 type Log = (event: string, fields: object) => void;
 
@@ -299,6 +301,38 @@ export function docservicePlugin(): Plugin {
       server.middlewares.use((req, res, next) => {
         if (!pathnameOf(req)?.startsWith(SHARED_PREFIX)) return next();
         if (!handleShared!(req, res)) next();
+      });
+
+      // 页面的「新建 / 打开共享项目」要的两条(C6.5 D11,`src/editor/sync/`):
+      // - `GET /api/docservice/device`:本机设备信息,以及编辑器是否绑在局域网上(局域网模式要以 PROMPTCUT_LAN_HOST=1 重启编辑器);
+      // - `GET /api/docservice/lan-discover?name=`:浏览器发不了 UDP,由编辑器进程替它在本网段查找(`lan/discovery.mjs`,限时 3 s)。
+      // 两条都在 `/api/**` 的同源守卫后面,只给本机和同源用。
+      server.middlewares.use(async (req, res, next) => {
+        const p = apiPath(req.url);
+        if (p !== DEVICE_PATH && p !== DISCOVER_PATH) return next();
+        const method = String(req.method || "GET").toUpperCase();
+        if (method !== "GET") {
+          res.statusCode = 405;
+          res.setHeader("Allow", "GET");
+          res.end();
+          return;
+        }
+        try {
+          if (p === DEVICE_PATH) {
+            const { localDeviceInfo } = await import("./auth/device.mjs");
+            const addr = httpServer.address();
+            const bound = addr && typeof addr !== "string" ? addr.address : null;
+            return sendJson(res, 200, { ok: true, ...localDeviceInfo(), lanHost: !!bound && !isLoopbackListen(bound), lanHostRequested: lanHostRequested() }, false);
+          }
+          const name = new URL(req.url ?? "/", "http://localhost").searchParams.get("name") ?? "";
+          if (!name.trim()) return sendJson(res, 400, { ok: false, error: "bad-request" }, false);
+          const { discoverLan } = await import("./lan/discovery.mjs");
+          const r = await discoverLan({ name, timeoutMs: 3000 });
+          return sendJson(res, 200, { ok: true, hosts: r.hosts, errors: r.errors, elapsedMs: r.elapsedMs }, false);
+        } catch (err) {
+          log("docservice.error", { stage: p, message: errText(err) });
+          return sendJson(res, 500, { ok: false, error: "internal" }, false);
+        }
       });
 
       server.middlewares.use((req, res, next) => {

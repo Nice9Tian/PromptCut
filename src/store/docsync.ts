@@ -254,6 +254,8 @@ export interface RemoteStep {
   inverse?: PathOp[];
   /** 那次提交落地的版本号;不给就按本页面收到的 project.ops 查 */
   rev?: number;
+  /** 那次提交的写入身份;不给就按本页面收到的 project.ops 查(都查不到时,之后的任何远端写入都算别人) */
+  by?: Writer;
 }
 
 type Events = {
@@ -876,8 +878,9 @@ export class DocSync {
     const blocked = new Map<string, Writer>();
     const mine: Writer = { session: this.session };
     if (rev !== undefined) {
+      const origin = remote.by ?? own?.by;
       const sameWriter = (by: Writer) =>
-        own !== undefined && by.session === own.by.session && JSON.stringify(by.actor ?? null) === JSON.stringify(own.by.actor ?? null);
+        origin !== undefined && by.session === origin.session && JSON.stringify(by.actor ?? null) === JSON.stringify(origin.actor ?? null);
       for (const w of this.remoteWrites) {
         if (w.rev <= rev || sameWriter(w.by)) continue;
         for (const e of entities) if (w.entities.some((x) => entitiesOverlap(x, e))) blocked.set(e, w.by);
