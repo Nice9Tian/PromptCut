@@ -43,7 +43,10 @@ export function UnifiedPreview({ project, t, playing }: { project: Project; t: n
         const requested = latest.current.t;
         controller = new AbortController();
         try {
-          const result = await see_frames(project, [requested], controller.signal, { target: "user", lane: "user" });
+          // 整帧打预渲染进程(D5):编辑器进程是 `interactive: false`,user lane 一律回 503 `USE_PRERENDER`
+          // (`FramePipeline.laneRefused`)。回包里的 `url` 由 `frameRequest` 按预渲染的源补成绝对地址。
+          // X7 起由 `server/test/legacy-preview-target.test.mjs` 守着,别改回 `"user"`。
+          const result = await see_frames(project, [requested], controller.signal, { target: "prerender", lane: "user" });
           // A stale result can populate the common cache, but never the view.
           if (active && !latest.current.playing && Math.round(requested * fps) === Math.round(latest.current.t * fps)) {
             if (result.frames[0]) setImage({ project, url: result.frames[0].url });

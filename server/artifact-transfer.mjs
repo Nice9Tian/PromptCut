@@ -11,6 +11,10 @@
  *           流经 `pipeline.streamProducer().adoptSegments` 落盘并发布。**只有这两个写入函数写文件**,
  *           否则 `index.json` / `stream.json` 会和磁盘对不上(`cloud-task.md` A3b)。
  *
+ * X7(`docs/plan/m6c-contract.md`):快照清单可以另带这一段的 **PNG 缓存**帧(`pngs`,见 `collectSnapshotResult`),
+ * 块推进 `px`;拉取方把它们原样写进本机 PNG 缓存(`CardFrameCache` 的 `controls/<key>/mov/frames/`),
+ * `?preview=legacy` 的整帧通道因此不再给远端节点产的卡画占位符。清单里没有 `pngs` 的照旧,不在本机补渲。
+ *
  * C6.4(`docs/plan/manifest-contract.md` 第 1、3 节):每一段的清单另写进文档服务的内容库
  * (`snapshot-manifest` / `render-manifest`,键 `<resultKey>:<from>-<to>`);sink 开工前先查它去重。
  * 内容库客户端(`ContentClient`,`put` / `get` / `list`)同样由调用方传进来。
@@ -24,6 +28,9 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { rangeHas } from './snapshot-store.mjs';
+import { snapshotTier } from './snapshot-tier.mjs';
+import { MovFrameStore, signatureMatches } from './frame-mov.mjs';
+import { readRenderRecord } from './png-record.mjs';
 import { resultKeyOf } from './render-node/fingerprint.mjs';
 
 /** 清单的版本(契约第 3 节的 `v`) */
@@ -201,7 +208,7 @@ export async function collectSnapshotResult(pipeline, task, opts = {}) {
     frames.push([f, hash, buf.length]);
     files.set(hash, file);
   }
-  const result = {
+  let result = {
     v: RESULT_VERSION, kind: 'snapshot', tier: loc.tier,
     resultKey: task.resultKey, dirKey: loc.dirKey, entryKey: loc.tier === 'local' ? loc.entryKey : null,
     range: { from, to },
@@ -209,7 +216,76 @@ export async function collectSnapshotResult(pipeline, task, opts = {}) {
     frames,
   };
   assertResultSize(result);
+  // X7:这一段的 PNG 缓存帧。它只是给 legacy 整帧通道的附带件 —— 带上它会让清单超限时就不带,快照照常交付
+  const pngs = await collectPngFrames(pipeline, loc, from, to, files);
+  if (pngs.length) {
+    const withPngs = { ...result, pngs };
+    try { assertResultSize(withPngs); result = withPngs; } catch { /* 超限:不带 PNG */ }
+  }
   return { result, readBlob: blobReader(files) };
+}
+
+/* ======================================================================== *
+ * X7:快照段附带的 PNG 缓存帧
+ * ======================================================================== */
+
+const pad6 = n => String(n).padStart(6, '0');
+/** 卡的 PNG 缓存键(`CardFrameCache.plan` 的 `key`,结果键,64 位十六进制) */
+const PNG_KEY_RE = KEY_RE;
+
+/**
+ * 本机哪些卡的 PNG 缓存属于这个快照落盘位置:活着的 entry 里,`cacheable`(只有它们有 PNG 缓存)、档位相同、
+ * 共享键是这个目录键(锁换过键的也认它自己的 `ownSnapshotKey`)的 control。回 `[{ key, cache, fps }]`,按键去重。
+ * 同一张卡在工程里摆了几次时共用一份快照,但每个摆放各有一份 PNG(键里带位置画幅和 clipId),都列上。
+ */
+function pngSourcesFor(pipeline, loc) {
+  const out = new Map();
+  const entries = pipeline?.entries instanceof Map ? pipeline.entries.values() : [];
+  for (const entry of entries) {
+    if (!entry?.cardCache || !Array.isArray(entry.cardPlan)) continue;
+    if (loc.tier === 'local' && entry.key !== loc.entryKey) continue;
+    for (const control of entry.cardPlan) {
+      if (!control?.cacheable || !PNG_KEY_RE.test(String(control.key))) continue;
+      if ((control.tier || snapshotTier(control.capabilities)) !== loc.tier) continue;
+      if (control.snapshotKey !== loc.dirKey && control.ownSnapshotKey !== loc.dirKey) continue;
+      if (!out.has(control.key)) out.set(control.key, { key: control.key, cache: entry.cardCache, fps: Number(entry.project?.fps) || 30 });
+    }
+  }
+  return [...out.values()];
+}
+
+/**
+ * 清单的 `pngs`:`[{ key, fps, frames: [[localFrame, hash, bytes], …] }]`。只列本机 PNG 缓存里**有效**的帧
+ * (`MovFrameStore.valid`:产出方的 capture 与卡键对得上、全透明帧已二次确认),按帧升序;字节是盘上的原样
+ * (含 PNG 里的产出记录),哈希按原样算,文件记进 `files` 给 `readBlob`。读完再按字节里的记录核一遍 ——
+ * 编辑器与预渲染进程共用这个目录,文件可能在 `valid` 之后被换过。
+ */
+async function collectPngFrames(pipeline, loc, from, to, files) {
+  const out = [];
+  for (const { key, cache, fps } of pngSourcesFor(pipeline, loc)) {
+    let store, expected;
+    try {
+      store = await cache.store(key);
+      expected = cache.expected(key);
+      const wanted = [];
+      for (let f = from; f <= to; f++) wanted.push(f);
+      await store.hydrate(wanted);
+    } catch { continue; }
+    const frames = [];
+    for (let f = from; f <= to; f++) {
+      if (!store.valid(f, expected)) continue;
+      const file = path.join(store.frameDir, `${pad6(f)}.png`);
+      let buf;
+      try { buf = await fs.readFile(file); } catch { continue; }
+      const record = readRenderRecord(buf);
+      if (!record?.signature || !signatureMatches(record.signature, expected)) continue;
+      const hash = sha256(buf);
+      frames.push([f, hash, buf.length]);
+      files.set(hash, file);
+    }
+    if (frames.length) out.push({ key, fps, frames });
+  }
+  return out;
 }
 
 /** 流库目录的形状同 `frame-stream.mjs` 的 `StreamStore`:`<库根>/streams/<streamKey>/` */
@@ -277,6 +353,8 @@ function resultBlocks(result) {
   const out = new Map();
   if (result?.kind === 'snapshot') {
     for (const [, hash] of result.frames ?? []) out.set(hash, { ns: SNAP_NS, hash, ext: 'html' });
+    // X7:附带的 PNG 缓存帧是像素产物,进 `px`
+    for (const item of validPngs(result)) for (const [, hash] of item.frames) if (!out.has(hash)) out.set(hash, { ns: PX_NS, hash, ext: 'png' });
   } else if (result?.kind === 'stream') {
     for (const meta of Object.values(result.inits ?? {})) out.set(meta.hash, { ns: PX_NS, hash: meta.hash, ext: 'mp4' });
     for (const seg of Object.values(result.segments ?? {})) out.set(seg.hash, { ns: PX_NS, hash: seg.hash, ext: 'm4s' });
@@ -531,8 +609,93 @@ async function applySnapshotResult(pipeline, client, result) {
     }
   }
   await pipeline.adoptResult(result);
+  // X7:清单带着 PNG 缓存帧就一并取回。拉不到、对不上只记数,不让这一段快照的落地失败(PNG 只是 legacy 通道的料)
+  const png = await applyPngFrames(pipeline, client, result);
+  fetched += png.fetched;
   if (failure) throw failure;
-  return { written, skipped, fetched };
+  return png.listed ? { written, skipped, fetched, png } : { written, skipped, fetched };
+}
+
+/**
+ * 清单 `pngs` 里形状对的那些(不对的项、不对的帧跳过,不让整段失败 —— 不认识 / 不合法的附带件照「忽略」处理):
+ * 键是 64 位十六进制;帧号在 `range` 里、哈希是 64 位十六进制;同一个键的同一帧只留第一条。
+ */
+function validPngs(result) {
+  if (!Array.isArray(result?.pngs)) return [];
+  const { from, to } = result.range ?? {};
+  const out = [];
+  const keys = new Set();
+  for (const item of result.pngs) {
+    if (!item || typeof item !== 'object' || !PNG_KEY_RE.test(String(item.key)) || keys.has(item.key) || !Array.isArray(item.frames)) continue;
+    keys.add(item.key);
+    const seen = new Set();
+    const frames = [];
+    for (const frame of item.frames) {
+      if (!Array.isArray(frame) || !Number.isInteger(frame[0]) || frame[0] < from || frame[0] > to || !KEY_RE.test(String(frame[1])) || seen.has(frame[0])) continue;
+      seen.add(frame[0]);
+      frames.push(frame);
+    }
+    const fps = Number(item.fps);
+    if (frames.length) out.push({ key: item.key, fps: Number.isFinite(fps) && fps > 0 ? fps : 30, frames });
+  }
+  return out;
+}
+
+/**
+ * 本机写这个键的 PNG 缓存用哪个 `MovFrameStore`:有 entry 的 card plan 用到这个键,就用那个 entry 的
+ * `CardFrameCache.store(key)`(和 legacy 通道、`renderState` 同一个实例);没有就在同一个目录上另开一个
+ * (`controls/<key>/`,同 `CardFrameCache.store`)—— 这个目录本来就由几个进程共用,`MovFrameStore` 每次查都读盘。
+ * `expected` 是本机查这个键时认的产出记录:本机的 capture 加卡键。
+ */
+async function pngTargetFor(pipeline, key, fps) {
+  const entries = pipeline?.entries instanceof Map ? pipeline.entries.values() : [];
+  for (const entry of entries) {
+    if (!entry?.cardCache || !Array.isArray(entry.cardPlan)) continue;
+    if (!entry.cardPlan.some(control => control?.key === key)) continue;
+    return { store: await entry.cardCache.store(key), expected: entry.cardCache.expected(key) };
+  }
+  const store = new MovFrameStore({ dir: path.join(pipeline.root, 'controls', key), fps });
+  await store.ready;
+  const capture = typeof pipeline?.captureCode === 'function' ? pipeline.captureCode() || undefined : undefined;
+  return { store, expected: { capture, cards: key } };
+}
+
+/**
+ * X7 的拉取:清单里每个 PNG 键、每一帧 ——
+ *   1. 本机这一帧已经有效(`valid`,按本机的 capture 与卡键)就跳过,不下载;
+ *   2. 否则从 `px` 拉,校验 sha256;
+ *   3. 字节里的产出记录要是 PNG 自带的、而且对得上本机认的记录(同一份抓帧代码、同一个卡键),对不上的不收
+ *      (本机查的时候也会当它不存在,收了只会被逐出);
+ *   4. 经 `MovFrameStore.put` 原样落盘,带上对方记下的渲染遍数(全透明帧已由对方二次确认的,本机不再算待确认)。
+ * 回 `{ listed, written, skipped, fetched, mismatched, failed }`(帧数;`fetched` 是下载的块数)。
+ */
+async function applyPngFrames(pipeline, client, result) {
+  const stats = { listed: 0, written: 0, skipped: 0, fetched: 0, mismatched: 0, failed: 0 };
+  for (const { key, fps, frames } of validPngs(result)) {
+    stats.listed += frames.length;
+    let target;
+    try { target = await pngTargetFor(pipeline, key, fps); } catch { stats.failed += frames.length; continue; }
+    const { store, expected } = target;
+    try { await store.hydrate(frames.map(([f]) => f)); } catch { /* 当本机没有 */ }
+    const want = frames.filter(([f]) => {
+      if (store.valid(f, expected)) { stats.skipped++; return false; }
+      return true;
+    });
+    const settled = await settleLimited(want, TRANSFER_CONCURRENCY, ([, hash]) => fetchBlock(client, PX_NS, hash));
+    for (let i = 0; i < want.length; i++) {
+      const item = settled[i];
+      if (item.status === 'rejected') { stats.failed++; continue; }
+      stats.fetched++;
+      const bytes = item.value;
+      const record = readRenderRecord(bytes);
+      if (!record?.signature || record.signature.cards !== key || !signatureMatches(record.signature, expected)) { stats.mismatched++; continue; }
+      try {
+        await store.put(want[i][0], bytes, record.signature, { renders: Number(record.renders) || 1 });
+        stats.written++;
+      } catch { stats.failed++; }
+    }
+  }
+  return stats;
 }
 
 async function applyStreamResult(pipeline, client, result) {

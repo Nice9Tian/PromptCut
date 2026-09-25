@@ -299,7 +299,8 @@ function buildStyle(
     }
     return own!;
   };
-  let text = "";
+  // X6:先收成「属性名 → 值」,末尾按属性名排序再拼(`serializeDeclarations`),不照浏览器的枚举顺序写
+  const decls: Array<[string, string]> = [];
   for (let k = 0; k < cs.length; k++) {
     const prop = cs.item(k);
     if (promote && prop === "will-change") continue;   // 循环后合并着写
@@ -313,22 +314,46 @@ function buildStyle(
     if (isInherited(prop)) {
       // ① 继承属性:和父元素的计算值比。顶层元素没有可信的父元素,一律内联。
       if (compareParent && parentInherited![prop] === value && !(forced && forced.has(prop))) continue;
-      text += prop + ":" + value + ";";
+      decls.push([prop, value]);
       ensureOwn()[prop] = value;
       continue;
     }
     // ② 布局解析值照旧全内联;强制内联的两类兜底同此
-    if (LAYOUT_USED_VALUE_PROPS.has(prop) || (forced && forced.has(prop))) { text += prop + ":" + value + ";"; continue; }
+    if (LAYOUT_USED_VALUE_PROPS.has(prop) || (forced && forced.has(prop))) { decls.push([prop, value]); continue; }
     // ③ 其余非继承属性和同标签基线比
-    if (!baseline || baseline.get(prop) !== value) text += prop + ":" + value + ";";
+    if (!baseline || baseline.get(prop) !== value) decls.push([prop, value]);
   }
   if (promote) {
     const own = cs.getPropertyValue("will-change");
     const list = own && own !== "auto" ? own.split(",").map((s) => s.trim()) : [];
     for (const prop of promote) if (!list.includes(prop)) list.push(prop);
-    text += "will-change:" + list.join(", ") + ";";
+    decls.push(["will-change", list.join(", ")]);
   }
-  return { text, inherited };
+  return { text: serializeDeclarations(decls), inherited };
+}
+
+/**
+ * X6(`docs/plan/m6c-contract.md`):声明按**属性名**的确定顺序拼成样式串。
+ *
+ * `getComputedStyle` 的枚举顺序由浏览器定,与内容无关的因素(自定义属性 `--*` 那一段的顺序等)
+ * 可能让两个进程对同样的内容拼出字节不同的快照,块哈希对不上,跨节点去重与复用就落空。
+ *
+ * 顺序是「先分三组、组内按名字」:无前缀的标准属性、`-webkit-` 这类带厂商前缀的、自定义属性 `--*`。
+ * 分组是为了不改层叠:Chrome 152 实测(本分支报告 X6 一节)它自己的枚举就是「标准属性按字母、
+ * 前缀属性按字母、自定义属性」三段,而同一块声明里有几对是「后写的赢」—— `mask-position` 这个
+ * 简写展开成 `-webkit-mask-position-x/y`,`writing-mode` 与 `-webkit-writing-mode` 这类是同一个值的
+ * 两个名字。整串按名字排会把前缀属性挪到标准属性前面,让这几对的先后反过来;分组排则与 Chrome
+ * 原来的先后一致,只把自定义属性那一段(以及 `will-change` 合并后那一条)排定。
+ *
+ * 比较用 UTF-16 码元序(`<`),不用 `localeCompare`:后者随区域设置变,正是要消掉的那种不确定。
+ * 排的是调用方的数组(原地)。
+ */
+const declGroup = (name: string) => (name.charCodeAt(0) !== 45 ? 0 : name.charCodeAt(1) === 45 ? 2 : 1);
+export function serializeDeclarations(decls: Array<[string, string]>): string {
+  decls.sort((a, b) => declGroup(a[0]) - declGroup(b[0]) || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+  let text = "";
+  for (const [prop, value] of decls) text += prop + ":" + value + ";";
+  return text;
 }
 
 export interface InlineStylesResult {
