@@ -37,7 +37,11 @@ const pushLog = (event: string, fields: object = {}) => {
  *   1. 能解析到素材服务的基址:`asset-client.ts` 的 `assetServiceOrigin()`(预渲染进程里就是 `PROMPTCUT_EDITOR_URL`),
  *      API 基址 `<源>/api/asset`;
  *   2. 能连上文档服务:`render-node` 的 `resolveDocservice()` 回 `remote`、`local` 或 `editor`(M5b J.3:编辑器里挂的
- *      那一份,地址从 `PROMPTCUT_EDITOR_URL` 推出;主会话 2026-09-25 要求这里也认它)。
+ *      那一份,地址从 `PROMPTCUT_EDITOR_URL` 推出)。**`editor` 只在显式要推送时才算**(契约 J.12):
+ *      进程设了 `PROMPTCUT_QUEUE_NODE=1` 或 `PROMPTCUT_PUSH=1`。都没设时编辑器里挂的那一份不算,不建推送队列、
+ *      preload 前也不拉别人的结果,行为与 C6.4 之前逐字节相同 —— 默认的开发环境(含用户常驻的编辑器)不变,
+ *      探针能在同一个工作副本里反复跑。`remote`、`local`(显式设了地址、或起了独立文档服务)照旧建。
+ *   3. `PROMPTCUT_PUSH=0`:一律不建,不管哪种模式。
  *
  * 无头实例(`PROMPTCUT_HEADLESS === "1"`)不建:它是临时副本,不往共享服务写东西(同 C6.3 的口径)。
  * 内容库客户端 `createContentClient` 在 `render-node/index.mjs` 里(C6.4 节点侧);取不到这个函数也不建。
@@ -45,8 +49,15 @@ const pushLog = (event: string, fields: object = {}) => {
  */
 /** `resolveDocservice` 这几种结果算「连得上文档服务」;`editor` 是 J.3 新加的(编辑器里挂的文档服务) */
 const DOCSERVICE_MODES = new Set(["remote", "local", "editor"]);
+/**
+ * 推送队列认哪几种文档服务(契约 J.12):`remote`、`local` 总认;`editor` 只在显式要推送时认 ——
+ * `PROMPTCUT_QUEUE_NODE=1` 或 `PROMPTCUT_PUSH=1`。
+ */
+const pushModeAllowed = (mode: unknown) => mode === "remote" || mode === "local"
+  || (mode === "editor" && (process.env.PROMPTCUT_QUEUE_NODE === "1" || process.env.PROMPTCUT_PUSH === "1"));
 async function startArtifactPush(root: string, service: FramePipeline) {
   if (!isPrerender || process.env.PROMPTCUT_HEADLESS === "1") return;
+  if (process.env.PROMPTCUT_PUSH === "0") return pushLog("push.skip", { reason: "disabled" });
   const origin = assetServiceOrigin();
   if (!origin) return pushLog("push.skip", { reason: "no-asset-service" });
   const node: any = await import("./render-node/index.mjs");
@@ -55,6 +66,8 @@ async function startArtifactPush(root: string, service: FramePipeline) {
   if (!DOCSERVICE_MODES.has(resolved?.mode) || !resolved.url) {
     return pushLog("push.skip", { reason: "docservice-offline", tried: (resolved?.tried ?? []).map((t: any) => ({ url: t.url, ok: t.ok, reason: t.reason })) });
   }
+  // J.12:编辑器里挂的文档服务,没显式要推送就不建(开关关着时与 C6.4 之前相同)
+  if (!pushModeAllowed(resolved.mode)) return pushLog("push.skip", { reason: "editor-docservice-not-enabled", mode: resolved.mode });
   if (services.get(root) !== service || (service as any).closed) return;
   const token = process.env.PROMPTCUT_CLUSTER_TOKEN || undefined;
   const endpoint = node.createWsEndpoint({ url: resolved.url, token, log: (event: string, fields: object) => {
