@@ -170,15 +170,22 @@ async function closeAll(eps) {
     if (ep.connected) waits.push(new Promise((resolve) => ep.onClose(resolve)));
     try { ep.close(); } catch { /* 已关 */ }
   }
-  await Promise.race([Promise.all(waits), sleep(3000)]);
+  await Promise.race([Promise.all(waits), new Promise((resolve) => setTimeout(resolve, 3000).unref())]);
 }
 
+/**
+ * 打结果行、定退出码，然后让进程自然退出（不调 process.exit）：连接、协调口都已关，剩下的只有 fetch 的空闲长连接，
+ * 到点自己关。Windows 上有句柄还在关闭中就 process.exit，libuv 会断言崩掉（退出码 0xC0000409 = 3221226505，
+ * 同 render-queue-e2e.mjs 的注释）。万一 10 s 后还有东西挂着，才强制退出。
+ */
 function finish(result, code) {
   result.fails = fails;
   result.ms = Date.now() - started;
   if (code === undefined) code = fails.length === 0 ? 0 : 1;
   result.ok = code === 0;
-  process.stdout.write(`${JSON.stringify(result)}\n`, () => process.exit(code));
+  process.exitCode = code;
+  process.stdout.write(`${JSON.stringify(result)}\n`);
+  setTimeout(() => process.exit(code), 10_000).unref();
 }
 
 /* ------------------------------------------------------------------ 协调口 */
@@ -326,6 +333,7 @@ async function runCreator() {
   let coordServer = null;
   const done = async (code) => {
     await closeAll(eps);
+    coordServer?.closeAllConnections?.();
     coordServer?.close();
     finish(result, code);
   };
