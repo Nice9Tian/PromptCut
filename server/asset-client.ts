@@ -81,6 +81,95 @@ export function mediaHttpUrl(m: any, origin: string | null = assetServiceOrigin(
 }
 
 /* ------------------------------------------------------------------ *
+ * 远端节点的素材回退(契约 `docs/plan/render-queue-contract.md` J.6,设计附件第 4 节)
+ * ------------------------------------------------------------------ */
+
+const FALLBACK_KEY = Symbol.for("promptcut.asset-service.fallback-bases");
+type FallbackHolder = { [FALLBACK_KEY]?: string[] };
+
+/**
+ * 按哈希寻址的素材在主源(`PROMPTCUT_EDITOR_URL`)上 404 时,依次改试的素材服务 API 基址
+ * (形如 `http://<ip>:<port>/api/asset`,即服务地址登记里 `kind: 'asset'` 的 `urls`)。
+ * 由队列模式的节点从 `service.endpoints` 里取、排除自己之后填进来(`vite-plugin-frames.ts`)。
+ * 放在 `globalThis` 上:配置被打包过一次、模块可能有两份实例。空列表 = 不回退(缺省)。
+ */
+export function setMediaFallbackBases(list: unknown): string[] {
+  const bases: string[] = [];
+  for (const item of Array.isArray(list) ? list : []) {
+    const base = String(item ?? "").trim().replace(/\/+$/, "");
+    try {
+      const url = new URL(base);
+      if ((url.protocol === "http:" || url.protocol === "https:") && !bases.includes(base)) bases.push(base);
+    } catch { /* 不是地址:跳过 */ }
+  }
+  (globalThis as FallbackHolder)[FALLBACK_KEY] = bases;
+  return [...bases];
+}
+
+/** 现在的回退基址(拷贝) */
+export function mediaFallbackBases(): string[] {
+  return [...((globalThis as FallbackHolder)[FALLBACK_KEY] ?? [])];
+}
+
+/** `/@media/<64 位十六进制>`(可带扩展名、查询串)→ 小写哈希;别的路径回 null。只有这种素材走回退 */
+function hashedMediaPath(url: string | undefined): string | null {
+  const m = /^\/@media\/([0-9a-fA-F]{64})(?:\.[A-Za-z0-9]{1,8})?(?:\?.*)?$/.exec(String(url || ""));
+  return m ? m[1].toLowerCase() : null;
+}
+
+/** 回退请求只带这几个头(Range 透传);回退地址是另一台机器,不转发本机的 Cookie 之类 */
+const FALLBACK_HEADERS = ["range", "if-range", "accept", "accept-encoding", "user-agent"];
+
+/**
+ * J.6:主源答不了(404,或连不上)时依次试回退基址上的 `<base>/media/<hash>`。第一个不是 404 的答复原样转给页面
+ * (状态码、响应头、字节都不改);全都不行就回主源那个答复(`primary`)。每个基址只试一次,超时 10 秒。
+ */
+function serveFromFallbacks(req: http.IncomingMessage, res: http.ServerResponse, hash: string, bases: string[],
+  primary: { status: number; headers: http.IncomingHttpHeaders; body?: string }) {
+  const headers: Record<string, string> = {};
+  for (const name of FALLBACK_HEADERS) {
+    const value = req.headers[name];
+    if (typeof value === "string") headers[name] = value;
+  }
+  let settled = false;
+  let current: http.ClientRequest | null = null;
+  res.on("close", () => { if (!res.writableFinished) current?.destroy(); });
+  const attempt = (i: number) => {
+    if (settled || res.destroyed) return;
+    if (i >= bases.length) {
+      settled = true;
+      if (res.headersSent) return void res.destroy();
+      // 主源答复的正文已经丢掉了:长度、分块、压缩这几个头不能照搬
+      const out = { ...primary.headers };
+      delete out["content-length"]; delete out["transfer-encoding"]; delete out["content-encoding"];
+      res.writeHead(primary.status, out);
+      res.end(primary.body);
+      return;
+    }
+    let url: URL;
+    try { url = new URL(`${bases[i]}/media/${hash}`); } catch { return attempt(i + 1); }
+    let moved = false;
+    const next = () => { if (!moved) { moved = true; attempt(i + 1); } };
+    const lib = url.protocol === "https:" ? https : http;
+    const upstream = lib.request(url, { method: req.method, headers }, (up) => {
+      if (up.statusCode === 404 || settled) { up.resume(); return next(); }
+      moved = true;
+      settled = true;
+      res.writeHead(up.statusCode || 502, up.headers);
+      up.pipe(res);
+    });
+    current = upstream;
+    upstream.setTimeout(10_000, () => upstream.destroy(new Error("timeout")));
+    upstream.on("error", () => {
+      if (moved && settled) { if (!res.writableFinished) res.destroy(); return; }
+      next();
+    });
+    upstream.end();
+  };
+  attempt(0);
+}
+
+/* ------------------------------------------------------------------ *
  * 预渲染进程:素材路由转发到素材服务
  * ------------------------------------------------------------------ */
 
@@ -96,6 +185,9 @@ function isMediaRoute(url: string | undefined): boolean {
  * 渲染用的 Chrome 从预渲染进程的源加载导出页,页面里的 `/@media/<hash>` 是相对地址,
  * 所以这个源上还得答这些路由 —— 答法换成转发:方法、请求头(含 Range)、请求体、状态码、
  * 响应头(含 Content-Range / Accept-Ranges)全部透传,字节一个不改。
+ *
+ * J.6:设了回退基址(`setMediaFallbackBases`)时,GET / HEAD 按哈希寻址的素材(`/@media/<64 位十六进制>`)
+ * 在主源 404 或连不上的情况下改走回退(`serveFromFallbacks`)。没有回退基址、或别的请求,和原来逐字节一样。
  */
 export function assetProxyPlugin(origin: string): Plugin {
   const target = new URL(origin);
@@ -106,6 +198,34 @@ export function assetProxyPlugin(origin: string): Plugin {
       server.middlewares.use((req, res, next) => {
         if (!isMediaRoute(req.url)) return next();
         const headers = { ...req.headers, host: target.host };
+        const method = String(req.method || "GET").toUpperCase();
+        const hash = method === "GET" || method === "HEAD" ? hashedMediaPath(req.url) : null;
+        const bases = hash ? mediaFallbackBases() : [];
+        if (hash && bases.length) {
+          // 有回退基址:主源的 404 先不转给页面,改试回退;其余答复照旧原样转
+          let handed = false;
+          const fallback = (primary: { status: number; headers: http.IncomingHttpHeaders; body?: string }) => {
+            if (handed) return;
+            handed = true;
+            serveFromFallbacks(req, res, hash, bases, primary);
+          };
+          const upstream = client.request({
+            protocol: target.protocol, hostname: target.hostname, port: target.port,
+            method: req.method, path: req.url, headers,
+          }, (up) => {
+            if (up.statusCode === 404) { up.resume(); return fallback({ status: 404, headers: up.headers }); }
+            handed = true;
+            res.writeHead(up.statusCode || 502, up.headers);
+            up.pipe(res);
+          });
+          upstream.on("error", (err) => {
+            if (res.headersSent) return void res.destroy();
+            fallback({ status: 502, headers: { "content-type": "text/plain; charset=utf-8" }, body: `素材服务不可达(${origin}):${err.message}` });
+          });
+          res.on("close", () => { if (!res.writableFinished) upstream.destroy(); });
+          req.pipe(upstream);
+          return;
+        }
         const upstream = client.request({
           protocol: target.protocol, hostname: target.hostname, port: target.port,
           method: req.method, path: req.url, headers,
