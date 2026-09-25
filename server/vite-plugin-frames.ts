@@ -163,6 +163,8 @@ const PUBLISH_TIMEOUT_MS = 10_000;
 const QUEUE_TICK_MS = 500;
 /** 诊断里留最近这么多条事件 */
 const QUEUE_LOG = 80;
+/** 诊断里本机节点认领 / 完成的任务 id,每类最多留几个 */
+const MINE_MAX = 5000;
 
 const queueLog = (event: string, fields: object = {}) => {
   try { console.info("[queue-node]", event, JSON.stringify(fields)); } catch { console.info("[queue-node]", event); }
@@ -250,6 +252,16 @@ async function startQueueNode(root: string, service: FramePipeline) {
     written: 0, fetched: 0, skipped: 0 };
   const taskState = new Map<string, { state: string, at: number, error?: string }>();
   const planDerived = new Map<string, string[]>();
+  /**
+   * 本机节点自己认领、完成的任务 id(诊断 `queue.local`):W4 跨机时区分哪些活是本机做的。
+   * `claimed` 取自发给本连接的 `task.claimed`,其余取自 local-node 的 `onEvent`。每类最多留 MINE_MAX 个。
+   */
+  const mine = { claimed: new Set<string>(), completed: new Set<string>(), dedup: new Set<string>(), failed: new Set<string>() };
+  const remember = (set: Set<string>, id: unknown) => {
+    if (typeof id !== "string") return;
+    set.delete(id); set.add(id);
+    while (set.size > MINE_MAX) set.delete(set.values().next().value as string);
+  };
   /** `<projectId>\0<digest>` → 已发布的那一版 */
   const published = new Map<string, { projectId: string, projectRev: number, planId: string, digest: string, at: number }>();
 
@@ -265,9 +277,9 @@ async function startQueueNode(root: string, service: FramePipeline) {
       endpoint, now: Date.now, isIdle: () => executor.isIdle(), maxConcurrent: 1, codeVersion, executor, sink,
       onEvent: (event: any) => {
         const id = event?.id;
-        if (event?.type === "completed") stats.completed++;
-        else if (event?.type === "dedup") stats.dedup++;
-        else if (event?.type === "failed") stats.failed++;
+        if (event?.type === "completed") { stats.completed++; remember(mine.completed, id); }
+        else if (event?.type === "dedup") { stats.dedup++; remember(mine.dedup, id); }
+        else if (event?.type === "failed") { stats.failed++; remember(mine.failed, id); }
         else if (event?.type === "discarded") stats.discarded++;
         else if (event?.type === "lost") stats.lost++;
         else if (event?.type === "plan-split") { stats.planSplit++; planDerived.set(id, [...(event.derived ?? [])]); }
@@ -280,7 +292,7 @@ async function startQueueNode(root: string, service: FramePipeline) {
   /** 队列那边回来的消息:`task.done` 拉取并发布,`task.failed` 记下 */
   let applyChain: Promise<unknown> = Promise.resolve();
   endpoint.onMessage((message: any) => {
-    if (message?.type === "task.claimed") stats.claimed++;
+    if (message?.type === "task.claimed") { stats.claimed++; remember(mine.claimed, message.id); }
     if (message?.type === "task.done" && typeof message.id === "string") {
       stats.done++;
       taskState.set(message.id, { state: "done", at: Date.now() });
@@ -404,6 +416,7 @@ async function startQueueNode(root: string, service: FramePipeline) {
         mode: resolved.mode, url: resolved.url, connected: endpoint.connected === true, active: handle.active(), nodeId, envFingerprint, assetBase: assets.base(),
         codeVersion, running: localNode?.running?.() ?? [], held: localNode?.session?.held?.().map(({ id }: any) => id) ?? [],
         stats: { ...stats },
+        local: { nodeId, claimed: [...mine.claimed], completed: [...mine.completed], dedup: [...mine.dedup], failed: [...mine.failed] },
         published: [...published.values()],
         plans: Object.fromEntries(planDerived),
         tasks: Object.fromEntries(taskState),
