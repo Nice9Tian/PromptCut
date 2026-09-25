@@ -60,19 +60,78 @@ export const PROTOCOL = 'promptcut.v1';
 
 // ------------------------------------------------------------------ 假设的实现接口
 
+/*
+ * 集成对账（2026-09-26，claude/m6-integ2）：实际接口在 `server/render-node/host.mjs`，与上面的假设对不上的地方由下面的
+ * 胶水 `adaptHostModule` 接上，用例与断言不动：
+ *   - parseHostConfig(raw, { device? })  实际同名同形，直接用；
+ *   - loadHostConfig(file)               实际是 loadHostConfig(env)，读 env.PROMPTCUT_SHARED_CONFIG；胶水把文件路径放进
+ *                                         环境变量对象，并清掉 PROMPTCUT_HOST_MAX_CONCURRENT（只测文件里的值）；
+ *   - createRenderHost(options)          实际不自己开连接、不开计时器：`connect(entry, index)` 回 { endpoint, executor, sink }，
+ *                                         调用方按节拍调 `tick()`，退出是 `shutdown()` + `settled()` + 调用方关连接，诊断是 `nodes()`。
+ *                                         胶水照预渲染进程里的接线（`vite-plugin-frames.ts` 的 `startHostNode`）拼：
+ *                                         每项一个 `createWsEndpoint`（凭 `sharedProtocols(entry, { role: 'render' })`），
+ *                                         执行器共用测试给的那一个，产物库 `sinkFor({ projectId, entry, endpoint })`；
+ *                                         start = host.start() + 每 tickMs 调 host.tick()；
+ *                                         stop = host.shutdown() → 等 settled（最多 5 s）→ 关全部连接；
+ *                                         describe = { nodes: host.nodes(), codeVersion, envFingerprint, maxConcurrent }
+ *                                         （nodes 每项原样带实现多给的字段，与 HTTP 诊断口同源）。
+ */
+async function adaptHostModule() {
+  const real = await import('../render-node/host.mjs');
+  const { createWsEndpoint } = await import('../render-node/ws-transport.mjs');
+  const { sharedProtocols } = await import('../auth/shared-config.mjs');
+  return {
+    parseHostConfig: real.parseHostConfig,
+    loadHostConfig: (file) => real.loadHostConfig({ ...process.env, PROMPTCUT_SHARED_CONFIG: file, PROMPTCUT_HOST_MAX_CONCURRENT: '' }),
+    createRenderHost({ entries, maxConcurrent, codeVersion, envFingerprint, executor, sinkFor, tickMs = 250, log = () => {} }) {
+      const endpoints = [];
+      const host = real.createRenderHost({
+        entries,
+        maxConcurrent,
+        codeVersion,
+        envFingerprint,
+        now: Date.now,
+        nodeIdOf: (_entry, index) => `host:rhc/p${index}`,
+        connect: (entry) => {
+          const endpoint = createWsEndpoint({ url: entry.url, protocols: sharedProtocols(entry, { role: 'render' }) });
+          endpoints.push(endpoint);
+          return { endpoint, executor, sink: sinkFor({ projectId: entry.projectId, entry, endpoint }) };
+        },
+        onEvent: (event) => log(`node.${event?.type}`, event),
+      });
+      let timer = null;
+      return {
+        start() {
+          host.start();
+          timer = setInterval(() => host.tick(), tickMs);
+        },
+        async stop() {
+          clearInterval(timer);
+          host.shutdown('shutdown');
+          await Promise.race([host.settled(), sleep(5000)]);
+          for (const endpoint of endpoints) endpoint.close();
+        },
+        describe() {
+          return { nodes: host.nodes(), codeVersion: host.codeVersion, envFingerprint, maxConcurrent: host.maxConcurrent };
+        },
+      };
+    },
+  };
+}
+
 let hostModPromise = null;
-/** 载入假设的 `server/render-host/index.mjs`；缺模块、缺导出时断言失败（只让用到它的用例失败） */
+/** 载入主机模块（经上面的胶水）；缺模块、缺导出时断言失败（只让用到它的用例失败） */
 export async function loadHostModule() {
-  hostModPromise ??= import('../render-host/index.mjs');
+  hostModPromise ??= adaptHostModule();
   let mod;
   try {
     mod = await hostModPromise;
   } catch (error) {
     hostModPromise = null;
-    assert.fail(`载入 server/render-host/index.mjs 失败（测试方假设的模块，见 render-host-kit.mjs 文件头）：${error?.message ?? error}`);
+    assert.fail(`载入 server/render-node/host.mjs 失败（见 render-host-kit.mjs 文件头的对账说明）：${error?.message ?? error}`);
   }
   for (const name of ['parseHostConfig', 'loadHostConfig', 'createRenderHost']) {
-    assert.equal(typeof mod[name], 'function', `server/render-host/index.mjs 要导出 ${name}（测试方假设的接口）；实际导出：${Object.keys(mod).join(', ')}`);
+    assert.equal(typeof mod[name], 'function', `主机模块要有 ${name}；实际：${Object.keys(mod).join(', ')}`);
   }
   return mod;
 }
