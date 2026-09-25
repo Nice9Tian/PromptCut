@@ -12,7 +12,8 @@ import "./sync.css";
 export function SyncChips() {
   const status = useSync((v) => v.status);
   const active = useSync((v) => v.active);
-  if (!active) return null;
+  const blocked = useSync((v) => v.blocked);
+  if (!active || blocked) return null;
   return (
     <>
       {status === "paused" ? (

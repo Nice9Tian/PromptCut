@@ -69,8 +69,16 @@ async function shot(page, name) {
 
 /** 开一个编辑器页面,等同步接上;顺手关掉首次打开的「选择 AI 助手」对话框 */
 async function openEditor(query = '') {
+  if (process.env.PROBE_TRACE) console.error('[step] open', query);
   const page = await browser.newPage();
   page.on('pageerror', (e) => console.log(JSON.stringify({ pageerror: String(e?.message ?? e).slice(0, 300) })));
+  // 原生弹框会卡住页面里的 evaluate:记下来并关掉
+  page.on('dialog', (d) => { console.log(JSON.stringify({ dialog: d.type(), message: d.message().slice(0, 300) })); void d.dismiss(); });
+  // 后台页面里 page.click / page.type 要等滚动与可见性,会一直挂着:点、打字之前先把它放到前面
+  for (const m of ['click', 'type']) {
+    const orig = page[m].bind(page);
+    page[m] = async (...a) => { await page.bringToFront(); return orig(...a); };
+  }
   await page.goto(`${origin}/?editor${query}`, { waitUntil: 'domcontentloaded' });
   await waitFor(() => page.evaluate(() => !!window.__pcSyncTest && window.__pcSyncTest.view().status === 'online'), 30_000, '页面同步接上');
   await sleep(800);
@@ -85,7 +93,10 @@ async function closeAiSetup(page) {
   await sleep(200);
 }
 
-const P = (page, fn, ...args) => page.evaluate(fn, ...args);
+const P = (page, fn, ...args) => {
+  if (process.env.PROBE_TRACE) console.error('[eval]', page.url().slice(-40), String(fn).slice(0, 80).replace(/s+/g, ' '));
+  return page.evaluate(fn, ...args);
+};
 
 /** 页面里当前项目的摘要 */
 const pageDigest = (page) => P(page, async () => {
@@ -152,6 +163,7 @@ const settle = async (...pages) => {
 };
 /** 按文字点按钮(在 selector 范围里) */
 async function clickText(page, text, scope = 'body') {
+  if (process.env.PROBE_TRACE) console.error('[step] click', text);
   const ok = await P(page, (text, scope) => {
     const root = document.querySelector(scope) ?? document.body;
     const el = [...root.querySelectorAll('button, [role=menuitem]')].find((b) => b.textContent?.replace(/\s+/g, ' ').trim().includes(text) && !b.disabled);
@@ -163,13 +175,22 @@ async function clickText(page, text, scope = 'body') {
   await sleep(250);
 }
 async function typeInto(page, selector, text) {
-  await page.click(selector, { clickCount: 3 });
+  if (process.env.PROBE_TRACE) console.error('[step] type', selector);
+  await page.click(selector);
+  await page.keyboard.down('Control');
+  await page.keyboard.press('KeyA');
+  await page.keyboard.up('Control');
   await page.keyboard.press('Backspace');
   await page.type(selector, text);
 }
 async function openProjectMenu(page) {
-  await page.click('.pc-proj-btn');
-  await sleep(250);
+  for (let i = 0; i < 3; i++) {
+    await closeAiSetup(page);
+    await page.click('.pc-proj-btn');
+    await sleep(300);
+    if (await P(page, () => !!document.querySelector('.pc-proj-menu'))) return;
+  }
+  throw new Error('项目菜单没打开');
 }
 
 /* ======================================================================== local */
@@ -439,7 +460,9 @@ async function phaseShared() {
   check('open-shared-wrong-password', wrong === '用户名或密码不对。忘了的话找创建者问一下。', { wrong });
   await typeInto(B, '#pc-os-pw', 'team-pw');
   await clickText(B, '进入', '[data-pc=open-shared-dialog] .pc-dialog-foot');
-  await waitFor(() => P(B, () => window.__pcSyncTest.view().kind === 'shared'), 15_000, 'B 进入共享项目');
+  await waitFor(() => P(B, () => window.__pcSyncTest.view().kind === 'shared'), 15_000, 'B 进入共享项目').catch(async (e) => {
+    throw new Error(`${e.message}:${JSON.stringify(await P(B, () => ({ line: document.querySelector('[data-pc=open-shared-dialog] .pc-sync-status-line')?.innerText, pw: document.querySelector('#pc-os-pw')?.value, user: document.querySelector('#pc-os-user')?.value })))}`);
+  });
   await settle(A, B);
   check('open-shared-enter', (await pageDigest(A)).sha256 === (await pageDigest(B)).sha256, { a: await pageDigest(A), b: await pageDigest(B) });
 
@@ -609,7 +632,9 @@ try {
   if (phases.includes('shared')) await phaseShared();
   if (phases.includes('lan')) await phaseLan();
 } catch (e) {
-  check('probe-error', false, { message: String(e?.stack ?? e).slice(0, 800) });
+  const stack = String(e?.stack ?? e);
+  const lines = stack.split(/\r?\n/);
+  check('probe-error', false, { message: lines[0].slice(0, 300), at: lines.filter((l) => l.includes('c65-editor-probe')).map((l) => l.trim()).slice(0, 4) });
 } finally {
   await browser.close();
 }
