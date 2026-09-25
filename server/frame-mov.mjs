@@ -243,7 +243,12 @@ export class MovFrameStore {
     this.nextFrame = 0; this.pending = new Set(this.frames);
   }
 
-  async put(frame, buffer, signature = null) {
+  /**
+   * `renders`(X7,缺省 1):这一帧已经被同一个产出方渲过几遍。只有从别的节点**原样取回**的帧会传它
+   * (`artifact-transfer.mjs` 的 PNG 落地):对方已经二次确认过的全透明帧,落到本机不该又算「待确认」。
+   */
+  async put(frame, buffer, signature = null, { renders = 1 } = {}) {
+    const first = Number.isSafeInteger(renders) && renders >= 1 ? renders : 1;
     await this.ready;
     frame = Number(frame);
     if (!Number.isSafeInteger(frame) || frame < 0) throw new Error('Invalid MOV frame');
@@ -257,7 +262,7 @@ export class MovFrameStore {
       const stamped = next => (signature ? withRenderRecord(buffer, next) : buffer);
       let replaced = false, wrote = false;
       if (!this.frames.has(frame)) {
-        const next = { signature, clear, renders: 1 };
+        const next = { signature, clear, renders: first };
         await atomic(file, stamped(next));
         wrote = true;
         this.frames.add(frame);
@@ -268,7 +273,7 @@ export class MovFrameStore {
       } else if (record ? !signatureMatches(record.signature, signature) || (record.clear && !clear) : !!signature) {
         // Produced by something else, an unconfirmed empty image now painted,
         // or an unverifiable legacy image: the fresh render wins.
-        const next = { signature, clear, renders: 1 };
+        const next = { signature, clear, renders: first };
         await atomic(file, stamped(next));
         this.records.set(frame, next);
         this.unrecorded.delete(frame);
