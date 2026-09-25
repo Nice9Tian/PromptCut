@@ -11,6 +11,12 @@ import { prerenderUrl } from "../render/prerender";
 import { flushDataMirror, startDataMirror } from "../render/dataMirror";
 import { issueAgentTicket, pageOpIdsSince, pageOpMark } from "../editor/sync/syncManager";
 import { trackJobs, trackResults } from "../mcp/common";
+
+/**
+ * Agent 服务端向页面要只读页面状态用的内部工具名(server/agent/agent-side.mjs 的 PAGE_STATE_TOOL)。
+ * 不在工具表里、Agent 看不到,所以不写成字面的分发分支(tool-schema.test.mjs 的对账只认声明过的工具)。
+ */
+const PAGE_STATE_TOOL = "__page_state";
 const TOOL_SPECS = RAW_TOOL_SPECS as { name: string; inputSchema?: { required?: string[] } }[];
 
 /**
@@ -397,7 +403,7 @@ export function connectMcpExecutor(getApi: () => EditorApi, onStatus?: (s: { con
       } else if (ev.type === "agent.ticket") {
         // Agent 服务端要一张 agent 角色的连接票据(共享项目;server/vite-plugin-ai.ts 的 requestTicket)
         void issueAgentTicket(ev);
-      } else if (ev.type === "call" && ev.tool === "__page_state") {
+      } else if (ev.type === "call" && ev.tool === PAGE_STATE_TOOL) {
         /*
          * Agent 服务端向页面要一次只读的页面状态(c65-integ2 裁定:既读页面状态又写项目的工具改在服务端执行,
          * 见 server/agent/agent-exec.mjs 的 PAGE_STATE_TOOLS):播放头、页面内存里 track_points 跑出来的轨迹。

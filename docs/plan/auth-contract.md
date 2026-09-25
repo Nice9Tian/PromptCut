@@ -283,3 +283,28 @@ M6a 实现（`claude/m6-auth`）与契约测试（`claude/m6-auth-tests`）集�
 - **本机声明的 agent 角色项**：另认 `promptcut.role.agent.<对话号>`。理由：`agent` 连接必须带对话号（第 6 节），原来的 `promptcut.role.<page|agent|render>` 装不下它。
 - **只绑回环的 `main.mjs` 凭证存储加载失败**：照常启动，只有本机身份可用，共享端点回 503 `auth-store`。理由：第 10 节的失败即关针对非回环；只绑回环时没有外部来源能进，不必拒绝启动。
 - **本机设备信息**：`deviceId` 按主机名、平台、架构、第一块网卡 MAC 现算（同一台机器每次一样），本阶段不落盘，`PROMPTCUT_DEVICE_ID` / `PROMPTCUT_DEVICE_NAME` 可覆盖。理由：M6a 不写用户数据目录；写入用户数据目录后不再变的做法留给桌面壳（C6.5）。
+
+## 15. C6.5 的增补
+
+C6.5 第二批集成（`claude/c65-integ2`，2026-09-26）时主会话接受的增补，裁定汇总在 `c65-design.md` 第 14 节。每条是「裁定：理由」。
+
+**创建者操作（第 7 节的表另加三种 `op`，一处字段）**
+
+| `op` | 字段 | 效果 |
+|---|---|---|
+| `set-creator-password` | `creator: { salt, key }` | 改创建者自己的口令，用户名不变；证明按**旧**口令的 K 算；改完旧口令不能再以创建者身份进入，新口令可以，之后的创建者操作按新口令算证明；**不加代数**，已发票据照旧有效，在线连接不断；两种进入方式都能用 |
+| `list-bans` | — | 只读：回 `shared.admin.ok { op, bans: [{ username, deviceId }], list?: [用户名] }`，限定进入另带名单里的用户名（不带盐与 K）；也可当一次无副作用的证明核对 |
+| `set-list` 的条目 | `{ username, keep: true }` | 沿用名单里这个人现有的口令；名单里没有这个人时整批 `bad-message` |
+
+- `set-creator-password` 算特权第 1 项「改项目密码」的一部分，不作废票据：创建者密码泄露后要能补救（`c65-design.md` 第 9 节）；创建者特权每次操作都要当场证明，改它不影响任何人已经拿到的数据面权限，作废票据只会把所有成员无故踢一遍。
+- `list-bans`：界面「已禁入的设备」「改名单」要列出现有内容，「验证创建者身份」要一次无副作用的证明核对；只给用户名与设备 id，不泄露口令材料。
+- `keep`：创建者拿不到别人的 K，也不该拿到；只增删、只改某几个人时，其余人的口令要原样保留。
+- 不带证明、证明错、非创建者，三种新 `op` 同样一律 `forbidden`，并计入第 9 节的限速（与第 7 节原有五种相同）。
+
+**通知**
+
+- `set-password` 成功后，给本空间其余在线连接各发一条 `shared.notice { event: 'password-changed' }`；在线连接照旧不断：界面据此出「项目密码已被修改。你当前的连接不受影响，但下次进入需要新密码。」（`c65-ux-draft.md` 第 5 节），此前没有消息能让成员知道。
+
+**Agent 的连接**
+
+- Agent 服务端每个对话一条 `agent` 连接：本机 `local` 空间里回环只带 `promptcut.role.agent.<对话号>`（不带本机声明）即为 `{ ...本机身份, role: 'agent', conversation }`；共享项目里每个对话各凭一张页面签发的连接票据 `{ k: 'conn', r: 'agent', c: 对话号 }` 进入（页面经 SSE 的 `agent.ticket` 收到请求，在自己的连接上发 `auth.ticket { kind: 'conn', role: 'agent', conversation }`）：写入身份只取连接的 principal，对话号在握手时定死（第 6 节）。
