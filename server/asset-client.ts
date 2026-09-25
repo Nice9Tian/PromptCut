@@ -96,7 +96,7 @@ type FallbackHolder = { [FALLBACK_KEY]?: string[] };
 export function setMediaFallbackBases(list: unknown): string[] {
   const bases: string[] = [];
   for (const item of Array.isArray(list) ? list : []) {
-    const base = String(item ?? "").trim().replace(//+$/, "");
+    const base = String(item ?? "").trim().replace(/\/+$/, "");
     try {
       const url = new URL(base);
       if ((url.protocol === "http:" || url.protocol === "https:") && !bases.includes(base)) bases.push(base);
@@ -113,7 +113,7 @@ export function mediaFallbackBases(): string[] {
 
 /** `/@media/<64 位十六进制>`(可带扩展名、查询串)→ 小写哈希;别的路径回 null。只有这种素材走回退 */
 function hashedMediaPath(url: string | undefined): string | null {
-  const m = /^/@media/([0-9a-fA-F]{64})(?:.[A-Za-z0-9]{1,8})?(?:?.*)?$/.exec(String(url || ""));
+  const m = /^\/@media\/([0-9a-fA-F]{64})(?:\.[A-Za-z0-9]{1,8})?(?:\?.*)?$/.exec(String(url || ""));
   return m ? m[1].toLowerCase() : null;
 }
 
