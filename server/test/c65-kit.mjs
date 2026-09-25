@@ -212,6 +212,9 @@ function mutateObject(r, o, protect = []) {
   }
 }
 
+/** 元素全是带 id 的对象的数组（空数组也算）；随机改动可能把 clips 换成别的值，之后就不再当片段表用 */
+const isIdList = (a) => Array.isArray(a) && a.every((x) => x && typeof x === 'object' && !Array.isArray(x) && typeof x.id === 'string');
+
 /** 带 id 的数组上的随机插、删、挪、换 id */
 function mutateIdArray(r, arr, make) {
   const k = r.int(5);
@@ -233,23 +236,23 @@ export function mutateProject(r, prev) {
       case 2: case 3: case 4: {
         if (!p.tracks.length) { p.tracks.push(makeTrack(r)); break; }
         const t = r.pick(p.tracks);
-        if (!Array.isArray(t.clips)) t.clips = [];
+        if (!isIdList(t.clips)) t.clips = [];
         mutateIdArray(r, t.clips, () => makeClip(r));
         break;
       }
       case 5: {
         // 片段跨序列挪
-        const from = p.tracks.find((t) => Array.isArray(t.clips) && t.clips.length);
+        const from = p.tracks.find((t) => isIdList(t.clips) && t.clips.length);
         const to = p.tracks.length ? r.pick(p.tracks) : null;
-        if (from && to && Array.isArray(to.clips)) {
+        if (from && to && isIdList(to.clips)) {
           const [c] = from.clips.splice(r.int(from.clips.length), 1);
           to.clips.splice(r.int(to.clips.length + 1), 0, c);
         }
         break;
       }
-      case 6: if (Array.isArray(p.media)) mutateIdArray(r, p.media, () => ({ id: freshId('m', r), name: 'n.mp4', kind: 'video' })); break;
+      case 6: if (isIdList(p.media)) mutateIdArray(r, p.media, () => ({ id: freshId('m', r), name: 'n.mp4', kind: 'video' })); break;
       case 7: {
-        const c = p.tracks.flatMap((t) => (Array.isArray(t.clips) ? t.clips : [])).find(() => r.chance(0.5));
+        const c = p.tracks.flatMap((t) => (isIdList(t.clips) ? t.clips : [])).find(() => r.chance(0.5));
         if (c) c.keyframes = Array.from({ length: r.int(4) }, (_, j) => ({ t: j, v: r.int(9) }));
         break;
       }
