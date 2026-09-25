@@ -25,6 +25,26 @@
  *
  *   node scripts/probes/queue-mode-probe.mjs [--queue-port 5516] [--normal-port 5513] [--docservice-port 5519]
  *        [--docservice-url ws://…] [--streams] [--only queue|normal] [--timeout-min 20] [--keep]
+ *        [--lan] [--hold-min N]
+ *
+ * **局域网模式(`--lan`,W4 跨机用)**:
+ *   - 队列模式那一趟的编辑器改绑 `0.0.0.0`;探针自己的检查仍然走 `127.0.0.1`。预渲染进程照旧只绑回环(它由编辑器拉起)。
+ *   - 编辑器的素材服务按 C5 自动登记局域网地址(`server/vite-plugin-media.ts`:要求 `PROMPTCUT_DOCSERVICE_URL`
+ *     已设、绑的不是回环地址)。探针从编辑器输出里的 `[asset-announce] asset-announce.announced` 取登记的地址,
+ *     放进输出的 `announcedAsset`(没登记上是 `null`,例如本机没有私有网段的 IPv4)。
+ *   - **令牌**:只有探针自己起文档服务(没给 `--docservice-url`)时才从编辑器的环境里删掉 `PROMPTCUT_CLUSTER_TOKEN`
+ *     —— 自起的那一份绑回环、匿名。给了 `--docservice-url` 连远端控制面时令牌原样保留,编辑器、预渲染进程、
+ *     素材登记都带着它。`--lan` 不改这一条。
+ *   - 不给 `--docservice-url` 时自起的文档服务仍只绑回环,别的机器连不上;跨机要配合 `--docservice-url`。
+ *     给了 `--docservice-url` 时,不再要求「细任务都由本机节点完成」(别的机器也在取活)。
+ *
+ * **`--hold-min N`**:队列模式那一趟跑完、比较也做完之后,不马上关进程,再保持 N 分钟,让别的机器上的节点
+ * 继续取活、拉取。期间每 30 秒打一行 `[hold] {…}`(`tasks`、`done`、就绪层数 `readyLayers`)。
+ * 输出的 `nodes` 取自保持结束时的诊断。
+ *
+ * 输出另带:
+ *   - `nodes`:本机诊断里的节点信息(诊断 `queue.local`):`nodeId`,本机节点认领 / 完成 / 去重完成 / 失败的任务 id 列表,和 `stats`;
+ *   - `announcedAsset`:本机登记的素材服务地址(列表)。
  *
  * 端口:每台编辑器另占「端口 +1」「端口 +2」当舞台端口,三个连号都要空着;文档服务一个端口。
  * `--keep` 不删两边的临时帧库(调试用)。输出最后一行是一行 JSON:
@@ -51,9 +71,13 @@ const STREAMS = args.includes('--streams');
 const KEEP = args.includes('--keep');
 const ONLY = arg('--only', null);
 const TIMEOUT_MS = Number(arg('--timeout-min', 20)) * 60_000;
+const LAN = args.includes('--lan');
+const HOLD_MS = Math.max(0, Number(arg('--hold-min', 0)) || 0) * 60_000;
+const EDITOR_HOST = LAN ? '0.0.0.0' : '127.0.0.1';
 
 const fails = [];
-const out = { root: ROOT, queuePort: QUEUE_PORT, normalPort: NORMAL_PORT, docservice: DOC_URL ?? `standalone:${DOC_PORT}`, streams: STREAMS };
+const out = { root: ROOT, queuePort: QUEUE_PORT, normalPort: NORMAL_PORT, docservice: DOC_URL ?? `standalone:${DOC_PORT}`, streams: STREAMS,
+  lan: LAN, editorHost: EDITOR_HOST, holdMin: HOLD_MS / 60_000 };
 const check = (cond, label, extra) => { if (!cond) fails.push(label + (extra === undefined ? '' : ' :: ' + JSON.stringify(extra).slice(0, 600))); return cond; };
 
 const FPS = 30;
@@ -116,14 +140,25 @@ const portFree = async port => {
   });
 };
 
-/** 一趟:起文档服务(独立模式)和编辑器,preload 探针项目,等它产完,收帧库 */
-async function runOnce(mode) {
+/** 队列诊断里本机节点那一份(`queue.local`) */
+const nodesOf = q => q ? {
+  nodeId: q.local?.nodeId ?? q.nodeId ?? null,
+  claimed: q.local?.claimed ?? null, completed: q.local?.completed ?? null, dedup: q.local?.dedup ?? null, failed: q.local?.failed ?? null,
+  stats: q.stats ?? null,
+} : null;
+
+/**
+ * 一趟:起文档服务(独立模式)和编辑器,preload 探针项目,等它产完,收帧库。
+ * `hold` 为真时不关进程,返回的 run 带 `release()`(关进程)和 `diagnostics()`,由调用方保持完再关。
+ */
+async function runOnce(mode, { hold = false } = {}) {
   const port = mode === 'queue' ? QUEUE_PORT : NORMAL_PORT;
   const exportDir = path.join(os.tmpdir(), `pc-queue-probe-${mode}-${STAMP}`);
   const library = path.join(exportDir, 'frame-library');
   await fs.mkdir(path.join(exportDir, 'data'), { recursive: true });
   const run = { mode, port, exportDir, log: [] };
   const children = [];
+  let kept = false;
   try {
     for (const p of [port, port + 1, port + 2, ...(DOC_URL ? [] : [DOC_PORT])]) check(await portFree(p), `[${mode}] 端口 ${p} 空着`);
     if (fails.length) return run;
@@ -146,10 +181,25 @@ async function runOnce(mode) {
     if (!DOC_URL) delete env.PROMPTCUT_CLUSTER_TOKEN;
     if (mode === 'queue') env.PROMPTCUT_QUEUE_NODE = '1';
     if (!STREAMS) env.PROMPTCUT_STREAMS = '0';
-    const editor = spawn(process.execPath, [viteBin(), '--port', String(port), '--strictPort', '--host', '127.0.0.1'],
+    const editor = spawn(process.execPath, [viteBin(), '--port', String(port), '--strictPort', '--host', mode === 'queue' ? EDITOR_HOST : '127.0.0.1'],
       { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, env });
     children.push(editor);
-    const keep = c => { run.log.push(c.toString()); if (run.log.length > 400) run.log.shift(); };
+    // 素材服务登记(C5):编辑器输出里 `[asset-announce] asset-announce.announced {json}` 那一行
+    run.announcedAsset = null;
+    let lineTail = '';
+    const scanAnnounce = text => {
+      const lines = (lineTail + text).split('\n');
+      lineTail = lines.pop() ?? '';
+      for (const line of lines) {
+        const m = /\[asset-announce\] asset-announce\.(announced|skip|error) (\{.*\})\s*$/.exec(line);
+        if (!m) continue;
+        let fields = null;
+        try { fields = JSON.parse(m[2]); } catch { /* 不是整行 JSON 就不认 */ }
+        if (m[1] === 'announced' && Array.isArray(fields?.urls)) run.announcedAsset = fields.urls;
+        else (run.announceIssues ??= []).push({ event: m[1], ...(fields ?? {}) });
+      }
+    };
+    const keep = c => { const text = c.toString(); scanAnnounce(text); run.log.push(text); if (run.log.length > 400) run.log.shift(); };
     editor.stdout.on('data', keep);
     editor.stderr.on('data', keep);
     const EDITOR = `http://127.0.0.1:${port}`;
@@ -211,7 +261,8 @@ async function runOnce(mode) {
         run.queueStats = q.stats;
         run.queueEvents = q.events.filter(e => /failed|lost|discarded|mismatch|skip|offline|error/.test(e.event)).slice(-20);
         check(run.failedTasks.length === 0, '[queue] 没有细任务失败', run.failedTasks);
-        check(q.stats.completed + q.stats.dedup >= run.done, '[queue] 细任务都由节点完成(completed + dedup)', q.stats);
+        // 单机时本机节点应当包办;连远端控制面(别的机器也在取活)时不一定
+        if (!DOC_URL) check(q.stats.completed + q.stats.dedup >= run.done, '[queue] 细任务都由节点完成(completed + dedup)', q.stats);
       }
       run.queueMs = Date.now() - started;
       await delay(3000);   // task.done 的 applyResult 在后台串行跑,留一点时间
@@ -219,10 +270,44 @@ async function runOnce(mode) {
     const d = await diagnostics();
     run.plans = (d.plans ?? []).map(p => ({ key: p.key, controls: p.controls.map(c => ({ clipId: c.clipId, tier: c.tier, snapshotKey: c.snapshotKey, picked: c.picked })) }));
     run.library = library;
+    if (mode === 'queue') run.nodes = nodesOf(d.queue);
+    if (hold) {
+      kept = true;
+      run.session = SESSION;
+      run.diagnostics = diagnostics;
+      run.release = async () => {
+        for (const child of children.reverse()) killTree(child);
+        await Promise.all(children.map(exited));
+      };
+    }
     return run;
   } finally {
-    for (const child of children.reverse()) killTree(child);
-    await Promise.all(children.map(exited));
+    if (!kept) {
+      for (const child of children.reverse()) killTree(child);
+      await Promise.all(children.map(exited));
+    }
+  }
+}
+
+/** 保持 `HOLD_MS`:每 30 秒打一行进度,每次刷新 `run.nodes` */
+async function holdOpen(run) {
+  const deadline = Date.now() + HOLD_MS;
+  const progress = async () => {
+    let d = {};
+    try { d = await run.diagnostics(); } catch { /* 进程没了就打空的 */ }
+    const q = d.queue;
+    const derived = run.plan ? q?.plans?.[run.plan] : null;
+    const states = Array.isArray(derived) ? derived.map(id => q.tasks?.[id]?.state ?? 'pending') : [];
+    const layers = (Array.isArray(d.ready) ? d.ready : []).filter(r => r.session === run.session).reduce((n, r) => n + (r.layers ?? 0), 0);
+    const line = { tasks: states.length, done: states.filter(s => s === 'done').length, readyLayers: layers,
+      localCompleted: q?.local?.completed?.length ?? null, connected: q?.connected ?? null, leftSec: Math.max(0, Math.round((deadline - Date.now()) / 1000)) };
+    console.log(`[hold] ${JSON.stringify(line)}`);
+    if (q) run.nodes = nodesOf(q);
+  };
+  await progress();
+  while (Date.now() < deadline) {
+    await delay(Math.min(30_000, Math.max(0, deadline - Date.now())));
+    await progress();
   }
 }
 
@@ -254,8 +339,7 @@ function keyIndex(run) {
 const runs = {};
 try {
   if (ONLY !== 'queue') runs.normal = await runOnce('normal');
-  if (ONLY !== 'normal' && !fails.some(f => f.includes('端口'))) runs.queue = await runOnce('queue');
-  out.runs = Object.fromEntries(Object.entries(runs).map(([k, r]) => [k, { ...r, log: undefined, library: undefined }]));
+  if (ONLY !== 'normal' && !fails.some(f => f.includes('端口'))) runs.queue = await runOnce('queue', { hold: HOLD_MS > 0 });
   out.tasks = runs.queue?.tasks ?? 0;
   out.done = runs.queue?.done ?? 0;
   out.identical = null;
@@ -295,9 +379,14 @@ try {
     }
     out.differenceSummary = summary;
   } else if (!ONLY) check(false, '两趟都要有帧库才能比较', Object.keys(runs));
+  if (runs.queue?.release) await holdOpen(runs.queue);
 } catch (error) {
   fails.push(`探针自己出错:${error?.stack || error}`);
 } finally {
+  if (runs.queue?.release) await runs.queue.release().catch(() => {});
+  out.runs = Object.fromEntries(Object.entries(runs).map(([k, r]) => [k, { ...r, log: undefined, library: undefined, release: undefined, diagnostics: undefined }]));
+  out.nodes = runs.queue?.nodes ?? null;
+  out.announcedAsset = runs.queue?.announcedAsset ?? null;
   if (!KEEP) for (const run of Object.values(runs)) if (run?.exportDir) await fs.rm(run.exportDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }).catch(() => {});
 }
 
