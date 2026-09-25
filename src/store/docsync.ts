@@ -60,8 +60,26 @@ export interface StateMsg {
   type: "project.state";
   projectId?: string;
   rev: number;
-  project: Project | null;
+  /** 大项目不带 project、带 parts(分片数),随后是 project.state.part / project.state.end */
+  project?: Project | null;
+  parts?: number;
   writers?: unknown;
+}
+
+export interface StatePartMsg {
+  type: "project.state.part";
+  projectId?: string;
+  rev: number;
+  index: number;
+  count: number;
+  data: string;
+}
+
+export interface StateEndMsg {
+  type: "project.state.end";
+  projectId?: string;
+  rev: number;
+  digest?: string;
 }
 
 export interface OkMsg {
@@ -90,7 +108,9 @@ export interface OpsMsg {
   type: "project.ops";
   rev: number;
   opId: string;
-  ops: PathOp[];
+  /** 上传引用的大根替换广播时不带 ops、带 resync: true,页面重新 open */
+  ops?: PathOp[];
+  resync?: boolean;
   actor?: unknown;
   session?: string;
   undoOf?: string;
@@ -103,7 +123,7 @@ export interface OverwrittenMsg {
   rev: number;
 }
 
-export type ServerMsg = StateMsg | OkMsg | RejectedMsg | OpsMsg | OverwrittenMsg;
+export type ServerMsg = StateMsg | StatePartMsg | StateEndMsg | OkMsg | RejectedMsg | OpsMsg | OverwrittenMsg;
 
 /* ---------------- 对外的状态与通知 ---------------- */
 
@@ -324,6 +344,7 @@ export class DocSync {
     const before = this.status;
     this.connected = true;
     this.awaitingState = true;
+    this.partial = null;
     this.sendMsg({ type: "project.open", projectId: this.projectId });
     this.statusChanged(before);
   }
@@ -334,6 +355,7 @@ export class DocSync {
     const before = this.status;
     this.connected = false;
     this.awaitingState = false;
+    this.partial = null;
     if (this.confirmed && this.offlineRev === null) this.offlineRev = this.confirmedRev;
     this.gateOpId = null;
     for (const p of this.pending) if (p.ackRev === undefined) p.sent = false;
@@ -345,7 +367,14 @@ export class DocSync {
     const before = this.status;
     switch (msg.type) {
       case "project.state":
-        this.onState(msg);
+        if (msg.project === undefined && typeof msg.parts === "number") this.onStateStart(msg);
+        else this.onState(msg);
+        break;
+      case "project.state.part":
+        this.onStatePart(msg);
+        break;
+      case "project.state.end":
+        this.onStateEnd(msg);
         break;
       case "project.ops":
         this.onOps(msg);
@@ -368,6 +397,7 @@ export class DocSync {
     this.emit("notice", { kind: "resync", reason });
     if (!this.connected) return;
     this.awaitingState = true;
+    this.partial = null;
     this.sendMsg({ type: "project.open", projectId: this.projectId });
   }
 
@@ -411,14 +441,51 @@ export class DocSync {
     this.flush();
   }
 
+  /** 分片接收中的快照:拼完之前到的 project.ops(rev 大于快照的)先攒着 */
+  private partial: { rev: number; count: number; chunks: string[]; buffered: OpsMsg[] } | null = null;
+
+  private onStateStart(msg: StateMsg) {
+    if (!this.awaitingState) return;
+    this.partial = { rev: msg.rev, count: msg.parts!, chunks: [], buffered: [] };
+  }
+
+  private onStatePart(msg: StatePartMsg) {
+    if (!this.partial || msg.rev !== this.partial.rev) return;
+    this.partial.chunks[msg.index] = msg.data;
+  }
+
+  private onStateEnd(msg: StateEndMsg) {
+    const part = this.partial;
+    if (!part || msg.rev !== part.rev) return;
+    this.partial = null;
+    let project: Project;
+    try {
+      if (part.chunks.length !== part.count || part.chunks.some((c) => typeof c !== "string")) throw new Error("分片不全");
+      project = JSON.parse(part.chunks.join(""));
+    } catch (e) {
+      this.resync(`项目分片拼不起来:${(e as Error).message}`);
+      return;
+    }
+    this.onState({ type: "project.state", rev: part.rev, project });
+    for (const m of part.buffered) this.onOps(m);
+  }
+
   private onOps(msg: OpsMsg) {
     // 文档服务不回发给提交者;万一回发了,当 ok 处理
     if (this.pending.some((p) => p.opId === msg.opId)) {
       this.onOk({ type: "project.op.ok", opId: msg.opId, rev: msg.rev });
       return;
     }
+    if (this.partial) {
+      if (msg.rev > this.partial.rev) this.partial.buffered.push(msg);
+      return;
+    }
     if (this.awaitingState || !this.confirmed) return;
     if (msg.rev <= this.confirmedRev) return;
+    if (msg.resync || !Array.isArray(msg.ops)) {
+      this.resync("远端的大根替换没带操作,重新打开");
+      return;
+    }
     if (msg.rev !== this.confirmedRev + 1) {
       this.resync(`版本跳号:本地 ${this.confirmedRev},收到 ${msg.rev}`);
       return;

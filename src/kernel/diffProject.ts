@@ -34,7 +34,7 @@ function isPlainObject(v: unknown): v is Obj {
   return proto === Object.prototype || proto === null;
 }
 
-/** 带 id 的数组:每个元素都是普通对象、有字符串 id、id 互不相同。空数组也算 */
+/** 带 id 的数组:每个元素都是普通对象、有非空字符串 id、id 互不相同。空数组也算 */
 export function isIdArray(a: unknown): a is Obj[] {
   if (!Array.isArray(a)) return false;
   if (a.length === 0) return true;
@@ -42,7 +42,7 @@ export function isIdArray(a: unknown): a is Obj[] {
   for (const e of a) {
     if (!isPlainObject(e)) return false;
     const id = e.id;
-    if (typeof id !== "string" || seen.has(id)) return false;
+    if (typeof id !== "string" || id === "" || seen.has(id)) return false;
     seen.add(id);
   }
   return true;
@@ -67,11 +67,15 @@ export function idPath(base: string, id: string): string {
   return `${base}/@${escapeSegment(id)}`;
 }
 
-/** 路径拆成还原过的段;"" 是根,返回 [] */
+/** 路径拆成还原过的段;"" 是根,返回 []。格式不对(不以 / 开头、~ 后面不是 0 或 1)返回 null */
 export function parsePath(path: string): string[] | null {
   if (path === "") return [];
   if (typeof path !== "string" || path[0] !== "/") return null;
-  return path.slice(1).split("/").map(unescapeSegment);
+  if (/~[^01]|~$/.test(path)) return null;
+  const segs = path.slice(1).split("/").map(unescapeSegment);
+  // 只有一个 @ 的段不合法(落在对象上也不认),与文档服务的引擎一致
+  if (segs.some((seg) => seg === "@")) return null;
+  return segs;
 }
 
 /* ---------------- 深相等 ---------------- */
@@ -288,7 +292,7 @@ function findById(arr: unknown[], id: string): number {
 }
 
 function arrayIdOf(seg: string): string {
-  if (seg[0] !== "@") fail(`数组段必须是 @<id>:${seg}`);
+  if (seg[0] !== "@" || seg.length < 2) fail(`数组段必须是 @<id>:${seg}`);
   return seg.slice(1);
 }
 
@@ -332,7 +336,51 @@ function walkToParent(root: unknown, segs: string[], cow: Cow, createMissing: bo
 }
 
 function validIndex(i: unknown): i is number {
-  return typeof i === "number" && Number.isInteger(i) && i >= 0;
+  return typeof i === "number" && Number.isSafeInteger(i) && i >= 0;
+}
+
+/**
+ * 只读地走到父级(不复制),规则与 walkToParent(createMissing = false)相同:走不通就 bad-path。
+ * remove / move 先用它判断目标在不在 —— 不在就是空操作,原对象原样返回,不白复制一路。
+ */
+function peekParent(root: unknown, segs: string[]): unknown {
+  if (root === null || typeof root !== "object") fail("根不是对象");
+  let node: unknown = root;
+  for (let i = 0; i < segs.length - 1; i++) {
+    const seg = segs[i];
+    if (Array.isArray(node)) {
+      const idx = findById(node, arrayIdOf(seg));
+      if (idx < 0) fail(`找不到元素:${seg}`);
+      node = node[idx];
+    } else if (isPlainObject(node)) {
+      if (!has(node, seg)) fail(`路径不存在:${seg}`);
+      node = node[seg];
+    } else fail(`途经的值不是对象:${seg}`);
+    if (node === null || typeof node !== "object") fail(`途经的值不是对象:${seg}`);
+  }
+  return node;
+}
+
+/** 操作本身的格式(不看文档);不对返回原因 */
+function formatError(op: PathOp): string | null {
+  if (!isPlainObject(op)) return "每条操作必须是对象";
+  if (op.op !== "set" && op.op !== "remove" && op.op !== "insert" && op.op !== "move") return `不认识的操作:${String((op as { op?: unknown }).op)}`;
+  const segs = typeof op.path === "string" ? parsePath(op.path) : null;
+  if (!segs) return `路径格式不对:${String(op.path)}`;
+  switch (op.op) {
+    case "set":
+      if (!Object.prototype.hasOwnProperty.call(op, "value") || op.value === undefined) return "set 缺 value";
+      if (segs.length === 0 && !isPlainObject(op.value)) return "根替换的值必须是对象";
+      return null;
+    case "remove":
+      return segs.length === 0 ? "不能删根" : null;
+    case "insert":
+      if (!isPlainObject(op.value) || typeof op.value.id !== "string" || op.value.id === "") return "insert 的 value 必须是带非空字符串 id 的对象";
+      return validIndex(op.index) ? null : "index 必须是非负整数";
+    case "move":
+      if (segs.length === 0 || segs[segs.length - 1][0] !== "@") return "move 的 path 必须以 @<id> 结尾";
+      return validIndex(op.index) ? null : "index 必须是非负整数";
+  }
 }
 
 function applyOne(root: unknown, op: PathOp, cow: Cow): unknown {
@@ -346,7 +394,8 @@ function applyOne(root: unknown, op: PathOp, cow: Cow): unknown {
         if (!isPlainObject(op.value)) fail("根替换的值必须是对象");
         return op.value;
       }
-      const { root: r, parent, last } = walkToParent(root, segs, cow, true);
+      // 还没有真身(根缺失)时从 {} 建起
+      const { root: r, parent, last } = walkToParent(root ?? {}, segs, cow, true);
       if (Array.isArray(parent)) {
         const id = arrayIdOf(last);
         const idx = findById(parent, id);
@@ -360,21 +409,23 @@ function applyOne(root: unknown, op: PathOp, cow: Cow): unknown {
     }
     case "remove": {
       if (segs.length === 0) fail("不能删根");
-      const { root: r, parent, last } = walkToParent(root, segs, cow, false);
-      if (Array.isArray(parent)) {
-        const idx = findById(parent, arrayIdOf(last));
-        if (idx < 0) fail(`找不到元素:${last}`);
-        parent.splice(idx, 1);
-      } else if (isPlainObject(parent)) {
-        if (!has(parent, last)) fail(`路径不存在:${last}`);
-        delete parent[last];
+      // 父级必须在;目标不在是空操作(两人同时删同一个片段,后到的那批照常落地)
+      const last = segs[segs.length - 1];
+      const peek = peekParent(root, segs);
+      if (Array.isArray(peek)) {
+        if (findById(peek, arrayIdOf(last)) < 0) return root;
+      } else if (isPlainObject(peek)) {
+        if (!has(peek, last)) return root;
       } else fail("父级不是对象");
+      const { root: r, parent } = walkToParent(root, segs, cow, false);
+      if (Array.isArray(parent)) parent.splice(findById(parent, arrayIdOf(last)), 1);
+      else delete (parent as Obj)[last];
       return r;
     }
     case "insert": {
       if (!validIndex(op.index)) fail("index 必须是非负整数");
       const v = op.value;
-      if (!isPlainObject(v) || typeof v.id !== "string") fail("insert 的 value 必须是带字符串 id 的对象");
+      if (!isPlainObject(v) || typeof v.id !== "string" || v.id === "") fail("insert 的 value 必须是带非空字符串 id 的对象");
       // 目标是数组本身(数组总是挂在对象的某个键上):走到它的父级,再把数组也复制出来
       if (segs.length === 0) fail("根不是数组");
       const { root: r, parent, last } = walkToParent(root, segs, cow, false);
@@ -390,12 +441,16 @@ function applyOne(root: unknown, op: PathOp, cow: Cow): unknown {
     case "move": {
       if (!validIndex(op.index)) fail("index 必须是非负整数");
       if (segs.length === 0) fail("不能挪根");
-      const { root: r, parent, last } = walkToParent(root, segs, cow, false);
-      if (!Array.isArray(parent)) fail("move 的目标不在数组里");
-      const idx = findById(parent, arrayIdOf(last));
-      if (idx < 0) fail(`找不到元素:${last}`);
-      const [el] = parent.splice(idx, 1);
-      parent.splice(Math.min(op.index, parent.length), 0, el);
+      const last = segs[segs.length - 1];
+      const id = arrayIdOf(last);
+      // 所在的数组必须在;元素不在是空操作
+      const peek = peekParent(root, segs);
+      if (!Array.isArray(peek)) fail("move 的目标不在数组里");
+      if (findById(peek, id) < 0) return root;
+      const { root: r, parent } = walkToParent(root, segs, cow, false);
+      const arr = parent as unknown[];
+      const [el] = arr.splice(findById(arr, id), 1);
+      arr.splice(Math.min(op.index, arr.length), 0, el);
       return r;
     }
     default:
@@ -408,6 +463,12 @@ function applyOne(root: unknown, op: PathOp, cow: Cow): unknown {
  * 没碰过的子树与输入共享(不深拷贝),所以输入必须当不可变对象用。
  */
 export function applyOps<T>(doc: T, ops: readonly PathOp[]): ApplyResult<T> {
+  if (!Array.isArray(ops)) return { ok: false, code: "bad-path", index: -1, detail: "ops 必须是数组" };
+  // 先整批查格式(与文档无关),再逐条应用 —— 与文档服务的引擎一样,失败下标先报格式错的那条
+  for (let i = 0; i < ops.length; i++) {
+    const err = formatError(ops[i]);
+    if (err) return { ok: false, code: "bad-path", index: i, detail: err };
+  }
   const cow = new Cow();
   let cur: unknown = doc;
   for (let i = 0; i < ops.length; i++) {

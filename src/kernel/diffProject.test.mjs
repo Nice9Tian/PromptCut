@@ -140,13 +140,22 @@ test("规范-set:数组元素原位替换,id 必须一致;下标路径与找不�
   bad(base(), [{ op: "set", path: "", value: [1] }]);
 });
 
-test("规范-remove:落点必须存在,不能删根", () => {
+test("规范-remove:父级必须在;目标不在是空操作(两人同时删同一片段),不能删根", () => {
   const out = apply(base(), [{ op: "remove", path: "/meta" }, { op: "remove", path: "/tracks/@t1/clips/@c1" }]);
   assert.deepEqual(Object.keys(out), ["name", "tracks", "tags"]);
   assert.deepEqual(out.tracks[0].clips, [{ id: "c2" }]);
-  bad(base(), [{ op: "remove", path: "/nope" }]);
+  // 目标不在:照常落地,原对象原样返回
+  const doc = base();
+  assert.equal(apply(doc, [{ op: "remove", path: "/nope" }]), doc);
+  assert.equal(apply(doc, [{ op: "remove", path: "/tracks/@t1/clips/@c9" }]), doc);
+  const twice = apply(doc, [{ op: "remove", path: "/tracks/@t1/clips/@c1" }, { op: "remove", path: "/tracks/@t1/clips/@c1" }]);
+  assert.deepEqual(twice.tracks[0].clips, [{ id: "c2" }]);
+  // 父级不在、父级是标量、数组上用非 @ 段、删根:bad-path
+  bad(base(), [{ op: "remove", path: "/tracks/@t9/clips/@c1" }]);
+  bad(base(), [{ op: "remove", path: "/nope/x" }]);
+  bad(base(), [{ op: "remove", path: "/name/x" }]);
+  bad(base(), [{ op: "remove", path: "/tracks/@t1/clips/0" }]);
   bad(base(), [{ op: "remove", path: "" }]);
-  bad(base(), [{ op: "remove", path: "/tracks/@t1/clips/@c9" }]);
 });
 
 test("规范-insert:越界夹到末尾;目标须是带 id 的数组、id 不能重复", () => {
@@ -160,17 +169,37 @@ test("规范-insert:越界夹到末尾;目标须是带 id 的数组、id 不能�
   bad(base(), [{ op: "insert", path: "/tracks/@t1", index: 0, value: { id: "x" } }]);
 });
 
-test("规范-move:先拿出再插,越界夹到末尾", () => {
+test("规范-move:先拿出再插,越界夹到末尾;元素不在是空操作,所在数组不在是 bad-path", () => {
   const out = apply(base(), [{ op: "move", path: "/tracks/@t1/clips/@c1", index: 5 }]);
   assert.deepEqual(out.tracks[0].clips.map((c) => c.id), ["c2", "c1"]);
-  bad(base(), [{ op: "move", path: "/tracks/@t1/clips/@c9", index: 0 }]);
+  const doc = base();
+  assert.equal(apply(doc, [{ op: "move", path: "/tracks/@t1/clips/@c9", index: 0 }]), doc);
+  bad(base(), [{ op: "move", path: "/tracks/@t9/clips/@c1", index: 0 }]);
+  bad(base(), [{ op: "move", path: "/meta/@a", index: 0 }]);
   bad(base(), [{ op: "move", path: "/meta/a", index: 0 }]);
+  bad(base(), [{ op: "move", path: "/tracks/@t1/clips/@c1", index: 2 ** 60 }]);
+});
+
+test("规范-根缺失(还没有真身)时 set 从 {} 建起;其余操作 bad-path", () => {
+  assert.deepEqual(apply(null, [{ op: "set", path: "/a/b", value: 1 }]), { a: { b: 1 } });
+  assert.deepEqual(apply(undefined, [{ op: "set", path: "", value: { x: 1 } }]), { x: 1 });
+  bad(null, [{ op: "remove", path: "/a" }]);
+  bad(null, [{ op: "insert", path: "/a", index: 0, value: { id: "x" } }]);
+});
+
+test("规范-路径语法:~ 后只能是 0 或 1,单独一个 @ 的段不合法", () => {
+  bad(base(), [{ op: "set", path: "/~2x", value: 1 }]);
+  bad(base(), [{ op: "set", path: "/a~", value: 1 }]);
+  bad(base(), [{ op: "set", path: "/@", value: 1 }]);
+  bad(base(), [{ op: "remove", path: "/tracks/@" }]);
 });
 
 test("规范-整批原子:中间一条失败,原对象不变、返回失败的下标", () => {
   const doc = base();
-  const r = bad(doc, [{ op: "set", path: "/name", value: "x" }, { op: "remove", path: "/nope" }]);
+  const r = bad(doc, [{ op: "set", path: "/name", value: "x" }, { op: "remove", path: "/nope/x" }]);
   assert.equal(r.index, 1);
+  // 格式错先于内容错报:整批先查格式
+  assert.equal(bad(doc, [{ op: "remove", path: "/nope/x" }, { op: "move", path: "/a", index: 0 }]).index, 1);
   assert.equal(doc.name, "p");
   // 不认识的操作
   bad(doc, [{ op: "patch", path: "/name" }]);

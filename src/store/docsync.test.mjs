@@ -532,3 +532,46 @@ test("V5-项目设置(name、fps 等顶层字段)同归 /meta 一个实体:别�
   assert.deepEqual(res.skipped.map((s) => [s.entity, s.by.session]), [["/meta", "B"]]);
   assertSame(svc, A, B);
 });
+
+/* ---------------- 与文档服务实现对齐的协议细节 ---------------- */
+
+test("协议-大项目分片的 project.state:拼完之前到的 project.ops 先攒着,拼完按序应用", () => {
+  const p0 = clipsProject();
+  const sent = [];
+  const ds = new DocSync(p0, { projectId: "P", session: "A", send: (m) => sent.push(m) });
+  ds.connect();
+  const text = JSON.stringify(p0);
+  const chunks = [text.slice(0, 50), text.slice(50, 120), text.slice(120)];
+  ds.receive({ type: "project.state", rev: 10, parts: 3 });
+  ds.receive({ type: "project.state.part", rev: 10, index: 0, count: 3, data: chunks[0] });
+  ds.receive({ type: "project.ops", rev: 10, opId: "old", ops: [{ op: "set", path: "/name", value: "旧的,快照里已有" }], actor: { session: "B" } });
+  ds.receive({ type: "project.ops", rev: 11, opId: "x", ops: [{ op: "set", path: "/name", value: "B 改的" }], actor: { session: "B" } });
+  ds.receive({ type: "project.state.part", rev: 10, index: 2, count: 3, data: chunks[2] });
+  ds.receive({ type: "project.state.part", rev: 10, index: 1, count: 3, data: chunks[1] });
+  assert.equal(ds.status, "connecting");
+  ds.receive({ type: "project.state.end", rev: 10 });
+  assert.equal(ds.status, "online");
+  assert.equal(ds.rev, 11);
+  assert.equal(ds.project.name, "B 改的");
+});
+
+test("协议-project.ops 带 resync(大根替换不带操作):重新 project.open", () => {
+  const { svc, A } = setupClips();
+  const opens = A.sent.filter((m) => m.type === "project.open").length;
+  A.ds.receive({ type: "project.ops", rev: svc.rev + 1, opId: "big", resync: true, actor: { session: "B" } });
+  assert.equal(A.sent.filter((m) => m.type === "project.open").length, opens + 1);
+  assert.ok(A.notices.some((n) => n.kind === "resync"));
+});
+
+test("协议-两人同时删同一片段:后到的照常落地(空操作),三份一致", () => {
+  const { svc, A, B } = setupClips();
+  const del = (p) => ({ ...p, tracks: p.tracks.map((t) => ({ ...t, clips: t.clips.filter((c) => c.id !== "c1") })) });
+  A.ds.commit({ ...del(A.ds.project), name: "A 同批的其它修改" });
+  B.ds.commit(del(B.ds.project));
+  svc.handle(B.conn, B.conn.up.shift());
+  svc.handle(A.conn, A.conn.up.shift());
+  svc.drain();
+  assert.equal(A.notices.filter((n) => n.kind === "rejected").length, 0);
+  assert.equal(svc.project.name, "A 同批的其它修改");
+  assertSame(svc, A, B);
+});
