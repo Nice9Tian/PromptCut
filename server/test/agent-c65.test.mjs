@@ -379,3 +379,38 @@ test('AG-10 工具表:每个工具都标了 side(agent / page / server),事件�
   for (const n of ['get_selection', 'seek', 'play', 'pause', 'web_handoff', 'list_cards']) assert.equal(toolDef(n).side, 'page', n);
   for (const n of ['add_clip', 'update_clip', 'set_position', 'get_layout', 'get_project', 'see_frames', 'apply_card', 'fill_captions']) assert.equal(toolDef(n).side, 'agent', n);
 });
+
+test('AG-11 预渲染发布方定版本:没有真身照老流程发号、传快照;有真身不发号、不上传,以真身的 rev 发布,节点取回的是真身;与真身不同就不交给队列', async (t) => {
+  const { resolvePublishVersion } = await import('../queue-publish.mjs');
+  const { createWsEndpoint, createProjectClient } = await import('../render-node/index.mjs');
+  const env = await startEnv(t);
+  const endpoint = createWsEndpoint({ url: env.url, log: () => {} });
+  t.after(() => endpoint.close());
+  await waitFor(() => endpoint.connected === true, 3000, '端点连上');
+  const projects = createProjectClient(endpoint);
+  const puts = [];
+  const spy = { announce: (...a) => projects.announce(...a), putSnapshot: (...a) => { puts.push(a[1]); return projects.putSnapshot(...a); } };
+
+  // 没有真身:老流程
+  const raw0 = env.project('proj-pub');
+  const rendered0 = JSON.stringify({ ...raw0, rendered: true });
+  const v0 = await resolvePublishVersion({ projects: spy, projectId: 'proj-pub', text: rendered0, rawText: JSON.stringify(raw0) });
+  assert.deepEqual([v0.via, v0.projectRev, puts], ['announce', 1, [1]]);
+  assert.deepEqual(await projects.get('proj-pub', 1), JSON.parse(rendered0));
+
+  // 有真身:页面把项目写进文档服务(根替换),之后又改了一次
+  const pg = await env.page('proj-pub');
+  await pg.open();
+  await pg.commit([{ op: 'set', path: '', value: raw0 }]);
+  const { reply } = await pg.commit([{ op: 'set', path: '/name', value: '改过' }]);
+  const body = (await bodyOf(env, 'proj-pub')).project;
+  const v1 = await resolvePublishVersion({ projects: spy, projectId: 'proj-pub', text: JSON.stringify({ ...body, rendered: true }), rawText: JSON.stringify(body) });
+  assert.deepEqual([v1.via, v1.projectRev], ['body', reply.rev]);
+  assert.deepEqual(puts, [1], '有真身时不上传快照');
+  assert.deepEqual(await projects.get('proj-pub', v1.projectRev), body, '节点取回的是真身');
+  assert.equal((await bodyOf(env, 'proj-pub')).rev, reply.rev, '询问不发号');
+
+  // 页面推来的与真身不同(还有没确认的修改):不交给队列
+  const v2 = await resolvePublishVersion({ projects: spy, projectId: 'proj-pub', text: '{}', rawText: JSON.stringify({ ...body, name: '本地没确认' }) });
+  assert.deepEqual(v2, { skip: 'body-mismatch', projectRev: reply.rev });
+});

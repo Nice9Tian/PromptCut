@@ -206,7 +206,10 @@ export function createProjectClient(endpoint, {
       if (session !== undefined && session !== null) fields.session = session;
       return request('project.announce', fields, (m, resolve) => {
         if (m.type !== 'project.announced') throw unexpected('project.announce', m);
-        resolve({ projectRev: m.projectRev, changed: m.changed === true });
+        // 项目有真身时（C6.5）文档服务不再发号：`authoritative: true`，`digest` 是真身的摘要，`matches` 是报上去的摘要与它相同
+        const out = { projectRev: m.projectRev, changed: m.changed === true };
+        if (m.authoritative === true) Object.assign(out, { authoritative: true, digest: m.digest, matches: m.matches === true });
+        resolve(out);
       });
     },
 

@@ -19,6 +19,7 @@ import { describeEnvironment } from "./render-node/fingerprint.mjs";
 import { mediaSourceOf } from "./vision/ffmpeg-frames";
 import { assetServiceOrigin, setMediaFallbackBases, setMediaFallbackTicket } from "./asset-client";
 import { renderProject } from "./render-project.mjs";
+import { resolvePublishVersion } from "./queue-publish.mjs";
 
 const services = new Map<string, FramePipeline>();
 /** C6.4:每个帧库根上的推送队列怎么收尾(停队列、关文档服务连接);没建推送队列的根不在这里 */
@@ -220,8 +221,11 @@ const queueLog = (event: string, fields: object = {}) => {
 type QueueNode = {
   /** 连着文档服务、本机节点已经报到:`/preload` 走队列模式 */
   active(): boolean;
-  /** `/preload` 的队列那一半:报摘要、传快照、发布 `plan`。回 true = 这一版交给队列了;false = 本机自己产 */
-  publish(session: string, project: any): Promise<boolean>;
+  /**
+   * `/preload` 的队列那一半:定版本、发布 `plan`。回 true = 这一版交给队列了;false = 本机自己产。
+   * `raw` 是页面推来的原样项目(`project` 是 `renderProject` 之后的):项目在文档服务里有真身时拿它与真身比对。
+   */
+  publish(session: string, project: any, raw?: any): Promise<boolean>;
   describe(): object;
   /** `GET /api/frames/queue`(契约 render-host-contract 第 3 节「诊断」):`{ nodes, codeVersion, envFingerprint, maxConcurrent }` */
   summary(): object;
@@ -239,6 +243,7 @@ const queueNodes = new Map<string, QueueNode>();
  *     `createPrerenderExecutor`,产物库是 C6.2 / C6.4 的 `createAssetSink({ pipeline, client, content })`;
  *   - 发布:`/preload` 在 `service.preload(…, { queue: true })` 之前调 `publish`:`project.announce` 拿 `projectRev`、
  *     `putSnapshot` 传快照、以本节点的发布方身份发布 `plan:<projectId>@<projectRev>`(`requires` 带版本与指纹);
+ *     项目在文档服务里有真身时(C6.5)不发号、不上传,以真身的 rev 发布(`server/queue-publish.mjs`);
  *   - 收到 `task.done`:细任务的清单经 C6.2 的 `applyResult` 拉取并发布(本机产的已经在盘上,按「已有跳过」处理);
  *   - 连不上文档服务(断线):`service.leaveQueueMode()` 退回本机自己产,在跑的任务让掉;重连后新的 preload 再走队列;
  *   - 远端素材回退(J.6):订阅服务地址登记里的 `asset`,排除自己,填进 `setMediaFallbackBases`。
@@ -443,7 +448,7 @@ async function startQueueNode(root: string, service: FramePipeline) {
 
   const handle: QueueNode = {
     active: () => started && !closed && endpoint.connected === true,
-    async publish(session, project) {
+    async publish(session, project, raw) {
       if (!handle.active()) return false;
       const projectId = typeof project?.id === "string" && PROJECT_ID_RE.test(project.id) ? project.id
         : typeof session === "string" && PROJECT_ID_RE.test(session) ? session : null;
@@ -453,8 +458,20 @@ async function startQueueNode(root: string, service: FramePipeline) {
       const key = `${projectId}\u0000${digest}`;
       if (published.has(key)) return true;
       try {
-        const { projectRev } = await projects.announce(projectId, digest, session && session.length <= 128 ? session : undefined);
-        await projects.putSnapshot(projectId, projectRev, digest, text);
+        /*
+         * 定版本(server/queue-publish.mjs):项目没有真身时照老流程 announce 发号、上传快照;
+         * 有真身(C6.5)时不再发号、不再上传,以真身的 rev 发布,节点取项目时由文档服务从真身发回。
+         * 页面推来的这一份与真身不同(还有没确认的修改)就不交给队列,本机自己产。
+         */
+        const version = await resolvePublishVersion({
+          projects, projectId, session: session && session.length <= 128 ? session : undefined,
+          text, rawText: raw === undefined ? text : JSON.stringify(raw),
+        });
+        if ("skip" in version) {
+          log("queue.publish-skip", { projectId, reason: version.skip, bodyRev: version.projectRev });
+          return false;
+        }
+        const { projectRev } = version;
         const task = node.planTaskOf({ projectId, projectRev, codeVersion: frameCode(root), envFingerprint });
         // J.3 的 `planTaskOf` 会自己写进 `requires`;合并之前的版本不认这两个参数,这里补上(两种都对)
         task.requires = { ...(task.requires ?? {}), codeVersion: frameCode(root), envFingerprint };
@@ -463,7 +480,7 @@ async function startQueueNode(root: string, service: FramePipeline) {
         if (!result || result.error) throw Object.assign(new Error(`plan 没发布成:${result?.error ?? "no-result"}`), { code: result?.error ?? "no-result" });
         published.set(key, { projectId, projectRev, planId: task.id, digest, at: Date.now() });
         if (!taskState.has(task.id)) taskState.set(task.id, { state: result.state ?? "open", at: Date.now() });
-        log("queue.published", { planId: task.id, bytes: text.length, state: result.state ?? null, created: result.created ?? null });
+        log("queue.published", { planId: task.id, bytes: text.length, via: version.via, state: result.state ?? null, created: result.created ?? null });
         return true;
       } catch (error: any) {
         log("queue.publish-failed", { projectId, code: error?.code ?? error?.reason ?? null, message: String(error?.message ?? error) });
@@ -1092,7 +1109,7 @@ export function framesPlugin(): Plugin {
              * 开关关着时 `queueNodes` 是空的,这里的调用和原来一字不差。
              */
             const queueNode = queueNodes.get(root);
-            const viaQueue = queueNode?.active() ? await queueNode.publish(preloadSession!, project) : undefined;
+            const viaQueue = queueNode?.active() ? await queueNode.publish(preloadSession!, project, source) : undefined;
             await service.preload(project, { session: preloadSession!, localRev: input.localRev, ticket: preloadTicket, ...(viaQueue === undefined ? {} : { queue: viaQueue }) });
             // 报给编辑器进程登记(方案 A):这个进程崩溃重启后,由编辑器照表重放 preload。
             // 只报这个会话此刻真正认下的版本 —— 被更新的 preload 取代了的请求不报
