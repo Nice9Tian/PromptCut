@@ -2012,3 +2012,12 @@ createPrerenderExecutor({ pipeline, projects, prepareProject, log }) → { plan,
    - 远端节点渲的卡在本机没有 PNG 缓存，`?preview=legacy` 下是占位。
 4. **锁的接手在计划阶段完成**：`cardLockDecision` 为 `takeover` 时，`planForQueue` 当场取锁，免得渲染时被本机锁库拒掉。
 5. **`queue-mode-probe` 用自己起的独立文档服务**（空数据目录），不用编辑器里挂的那一份，免得受编辑器已有状态的影响。
+
+### J.13 推送与拉取用哪一个素材服务（2026-09-25，主 Agent 裁定，依据 D7）
+
+预渲染进程里的推送队列与队列节点，素材服务的基址按下面的顺序定：
+1. `PROMPTCUT_ASSET_URL`；
+2. 服务地址登记里别的机器登记的 `kind: 'asset'`，按 `announcerId` 字典序取第一个；登记变化时换用新的 client；
+3. 本机的 `assetServiceOrigin()`。
+
+素材服务部署在主 PC，地址由控制面下发给工作节点（D7）。所以笔记本节点推送、拉取都走主 PC 的素材服务，主 PC 能拉到笔记本的产物。
