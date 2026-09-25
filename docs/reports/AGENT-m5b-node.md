@@ -1,4 +1,4 @@
-﻿# M5b 节点侧（m5b-node）报告
+# M5b 节点侧（m5b-node）报告
 
 分支 `claude/rq-m5b-node`（基于 `claude/rq-m5b` 的 `5c4635f`），worktree `.worktrees/rq-m5b-node`。
 
