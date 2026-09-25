@@ -28,3 +28,4 @@ export { BACKOFF_DEFAULTS, createWsEndpoint } from './ws-transport.mjs';
 export { resolveDocservice, watchServiceEndpoints } from './endpoint.mjs';
 export { CONTENT_CLIENT_DEFAULTS, createContentClient } from './content-client.mjs';
 export { PROJECT_CLIENT_DEFAULTS, createProjectClient } from './project-client.mjs';
+export { HOST_MAX_CONCURRENT, HOST_CAPABILITIES, hostMaxConcurrent, loadHostConfig, createRenderHost } from './host.mjs';
