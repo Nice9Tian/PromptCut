@@ -161,7 +161,7 @@ class Replica {
 
 /**
  * @param {object} options
- * @param {string} options.url 文档服务的 WebSocket 地址
+ * @param {string | ((conversation: number) => string)} options.url 文档服务的 WebSocket 地址(或按对话号给)
  * @param {string} options.projectId
  * @param {(conversation: number) => Promise<string[]> | string[]} options.protocolsFor 这个对话的连接用的子协议（含 `promptcut.v1`）
  * @param {typeof WebSocket} [options.WebSocketImpl]
@@ -178,7 +178,9 @@ export function createAgentLink({
   reconnectMs = AGENT_LINK_DEFAULTS.reconnectMs,
   historyKeep = AGENT_LINK_DEFAULTS.historyKeep,
 } = {}) {
-  if (typeof url !== 'string' || !url) throw new TypeError('createAgentLink: url 必须是字符串');
+  // url 也可以按对话号给(测试里按查询串给写入身份;生产上各对话连同一个地址)
+  if (typeof url !== 'function' && (typeof url !== 'string' || !url)) throw new TypeError('createAgentLink: url 必须是字符串或函数');
+  const urlFor = (n) => (typeof url === 'function' ? url(n) : url);
   if (typeof projectId !== 'string' || !projectId) throw new TypeError('createAgentLink: projectId 必须是字符串');
   if (typeof protocolsFor !== 'function') throw new TypeError('createAgentLink: protocolsFor 必须是函数');
   if (typeof WebSocketImpl !== 'function') throw new TypeError('createAgentLink: 没有可用的 WebSocket 实现');
@@ -299,7 +301,7 @@ export function createAgentLink({
         await new Promise((resolve, reject) => {
           let ws;
           try {
-            ws = new WebSocketImpl(url, protocols);
+            ws = new WebSocketImpl(urlFor(n), protocols);
           } catch (err) {
             reject(linkError('connect-failed', `连不上文档服务：${err?.message ?? err}`));
             return;

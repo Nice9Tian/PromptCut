@@ -47,6 +47,27 @@ export async function loadSsrHost(load, { apiBase } = {}) {
       if (typeof fn !== 'function') throw new Error(`服务端没有 ${tool} 的实现(${route.method})`);
       return route.passArgs ? fn(args) : fn();
     },
+    /**
+     * 把向页面要来的只读页面状态放进服务端 store(c65-integ2 裁定:既读页面状态又写项目的 5 个工具,
+     * 写入在这里执行,页面状态向页面要一次):`t` 是页面播放头(切剪辑时存回被停放的那条);
+     * `track` 是页面内存里 `track_points` 跑出来的轨迹(`attach_clip_motion` 读)。
+     * 回一个收拾函数:跑完 handler 就把放进去的轨迹拿掉,不让它留在服务端(服务端没有作业表)。
+     */
+    setPageState(ps = {}) {
+      core.set({ t: typeof ps.t === 'number' && Number.isFinite(ps.t) ? ps.t : 0, playing: false, selection: [], durationManual: null });
+      const mediaId = ps.track && typeof ps.track.mediaId === 'string' ? ps.track.mediaId : null;
+      if (mediaId) {
+        if (ps.track.result) common.trackResults.set(mediaId, ps.track.result);
+        else common.trackResults.delete(mediaId);
+        if (ps.track.running) common.trackJobs.set(mediaId, { jobId: 'page', percent: 0 });
+        else common.trackJobs.delete(mediaId);
+      }
+      return () => {
+        if (!mediaId) return;
+        common.trackResults.delete(mediaId);
+        common.trackJobs.delete(mediaId);
+      };
+    },
     diffProject: diff.diffProject,
     frameLayoutOf: common.frameLayoutOf,
     stageSize: common.stageSize,

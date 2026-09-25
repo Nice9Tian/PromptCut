@@ -312,7 +312,7 @@ export default function vitePluginAi(): Plugin {
        *   - mode "ticket":共享项目(托管端、局域网成员),经 SSE 向页面要一张连接票据(k:'conn', r:'agent', c:<n>),
        *     页面用 POST /api/agent/ticket 交回。
        */
-      type AgentBinding = { projectId: string; mode: string; url: string; link: any; executor: any };
+      type AgentBinding = { projectId: string; mode: string; url: string; side: any };
       let agentBinding: AgentBinding | null = null;
       let ticketSeq = 0;
       const ticketWaiters = new Map<string, { resolve: (ticket: string) => void; reject: (err: Error) => void; timer: ReturnType<typeof setTimeout> }>();
@@ -349,9 +349,8 @@ export default function vitePluginAi(): Plugin {
         }
         if (agentBinding && agentBinding.projectId === projectId && agentBinding.mode === mode && agentBinding.url === url) return agentBinding;
         unbindAgent("rebind");
-        const [{ createAgentLink }, { createAgentExecutor }, { loadSsrHost }, { toolGroups }] = await Promise.all([
-          import(new URL("./agent/doc-link.mjs", import.meta.url).href),
-          import(new URL("./agent/agent-exec.mjs", import.meta.url).href),
+        const [{ createAgentSide }, { loadSsrHost }, { tools, toolGroups }] = await Promise.all([
+          import(new URL("./agent/agent-side.mjs", import.meta.url).href),
           import(new URL("./agent/ssr-host.mjs", import.meta.url).href),
           import(new URL("./mcp-tools.mjs", import.meta.url).href),
         ]);
@@ -360,16 +359,27 @@ export default function vitePluginAi(): Plugin {
           if (mode === "lan-host") return ["promptcut.v1", `promptcut.tenant.${projectId}`, `promptcut.role.agent.${n}`];
           return ["promptcut.v1", `promptcut.ticket.${await requestTicket(projectId, n)}`];
         };
-        const link = createAgentLink({ url, projectId, protocolsFor, log: agentLog });
-        const executor = createAgentExecutor({
-          link,
+        // 分派(side: agent / page / server)与事件都在 server/agent/agent-side.mjs 里,测试用同一份
+        const side = createAgentSide({
+          projectId,
+          url,
+          protocolsFor,
+          tools,
+          toolGroups,
           loadHost: () => loadSsrHost((id: string) => server.ssrLoadModule(id), { apiBase: `http://127.0.0.1:${editorPortOf()}` }),
           prerenderPost,
           playhead: () => latestPlayhead()?.t ?? 0,
-          toolGroups,
           log: agentLog,
+          pageResult: "wrapped",
+          callPage: async (tool: string, args: any, ctx: any) => {
+            const def = tools.find((t: any) => t.name === tool);
+            const out = await callEditorPage(tool, args, ctx?.agent || undefined, def?.timeoutMs || (tool === "__page_state" ? 10_000 : 60_000));
+            if (!out.ok) throw new Error(out.error);
+            return { result: out.result || out, opIds: out.opIds };
+          },
+          callServer: (tool: string, args: any) => runServerTool(tool, args),
         });
-        agentBinding = { projectId, mode, url, link, executor };
+        agentBinding = { projectId, mode, url, side };
         agentLog("agent.bind", { projectId, mode, url });
         return agentBinding;
       }
@@ -378,7 +388,7 @@ export default function vitePluginAi(): Plugin {
         const b = agentBinding;
         if (!b) return;
         agentBinding = null;
-        try { b.link.close(); } catch { /* 已经关了 */ }
+        try { b.side.close(); } catch { /* 已经关了 */ }
         agentLog("agent.unbind", { projectId: b.projectId, reason });
       }
       server.httpServer?.once("close", () => unbindAgent("server-close"));
@@ -386,7 +396,7 @@ export default function vitePluginAi(): Plugin {
       /** 审查环路走 CLI 时的只读锁:null = 不锁;Set = 只放行这些工具(空 Set = 全拦)。见下面 callToolInternal */
       let loopToolLock: Set<string> | null = null;
 
-      async function callToolInternal(tool: string, args: any, agent?: string): Promise<any> {
+      async function callToolInternal(tool: string, args: any, agent?: string, callId?: string): Promise<any> {
         const { tools } = await import(new URL('./mcp-tools.mjs', import.meta.url).href);
         const toolDef = tools.find((t: any) => t.name === tool);
 
@@ -424,30 +434,30 @@ export default function vitePluginAi(): Plugin {
         if (!verdict.ok) return { ok: false, skillClosed: true, message: verdict.message };
 
         /*
-         * 绑了项目副本(C6.5):每个工具调用前后各发一条事件(D2),执行交给 dispatchTool。
+         * 绑了项目副本(C6.5):交给 server/agent/agent-side.mjs —— 每个工具调用前后各发一条事件(D2,带 callId),
+         * side: "agent" 在副本上执行(D1 / D4),"page" 经页面,"server" 就地(runServerTool)。
          * 没绑:和以前一样,不发事件。
          */
         const binding = agentBinding;
-        if (binding) return binding.executor.track(tool, args, agent || '', (ctx: any) => dispatchTool(tool, args, agent, toolDef, binding, ctx));
-        return dispatchTool(tool, args, agent, toolDef, null, null);
+        if (binding) return binding.side.callTool(tool, args, { agent: agent || '', callId });
+        return dispatchTool(tool, args, agent, toolDef);
       }
 
-      async function dispatchTool(tool: string, args: any, agent: string | undefined, toolDef: any, binding: AgentBinding | null, ctx: any): Promise<any> {
-        if (binding && toolDef.side === 'agent') {
-          /*
-           * D1 / D4:在项目副本上执行,写入以 Agent 对话的身份、带期望版本提交给文档服务。
-           * 回 undefined 的(素材镜头拼图)照旧走桥。
-           */
-          const done = await binding.executor.execute(tool, args, agent || '', toolDef, ctx);
-          if (done !== undefined) return done;
-        } else if (!binding) {
-          /*
-           * 读 / 渲染类工具有镜像时就地执行,直接问预渲染进程,不经过编辑器页面(见上面 runMirroredTool)。
-           * 返回 undefined 的(没有镜像、素材拼图这类)照旧走桥。
-           */
-          const mirrored = await runMirroredTool(tool, args, toolDef);
-          if (mirrored !== undefined) return mirrored;
-        }
+      async function dispatchTool(tool: string, args: any, agent: string | undefined, toolDef: any): Promise<any> {
+        /*
+         * 读 / 渲染类工具有镜像时就地执行,直接问预渲染进程,不经过编辑器页面(见上面 runMirroredTool)。
+         * 返回 undefined 的(没有镜像、素材拼图这类)照旧走桥。
+         */
+        const mirrored = await runMirroredTool(tool, args, toolDef);
+        if (mirrored !== undefined) return mirrored;
+        if (toolDef.side === 'server') return runServerTool(tool, args);
+        const out = await callEditorPage(tool, args, agent, toolDef.timeoutMs || 60000);
+        if (out.ok) return out.result || out;
+        throw new Error(out.error);
+      }
+
+      /** side: "server" 的工具(不碰项目、不过浏览器桥) */
+      async function runServerTool(tool: string, args: any): Promise<any> {
 
         /*
          * side: "server" 的工具就地执行,不过浏览器桥。
@@ -456,7 +466,7 @@ export default function vitePluginAi(): Plugin {
          * 而且这样一来,即使桥这一刻忙着,轮询之间的等待也不会失败。
          * 上面那道 SKILL 闸门仍然管得着它(用户收回控制权时连等待都不该继续)。
          */
-        if (toolDef.side === 'server') {
+        {
           if (tool === 'wait') {
             // 只认真正的数字:Number(null) 是 0、Number('') 也是 0,靠 isFinite 判会把
             // 「没填」当成「填了 0」再夹到 1 秒 —— 那不是用户的意思,默认该是 3 秒
@@ -478,7 +488,14 @@ export default function vitePluginAi(): Plugin {
           }
           return { ok: false, error: `服务端工具 ${tool} 没有实现` };
         }
+      }
 
+      /**
+       * 经编辑器页面执行一个工具(SSE 发 call,页面 POST /api/mcp/result 回来)。回页面的原始回包
+       * { ok, result, error, opIds? };超时回 ok:false。`__page_state`(server/agent/agent-side.mjs 的
+       * PAGE_STATE_TOOL)也走这条:向页面要一次只读的页面状态。
+       */
+      async function callEditorPage(tool: string, args: any, agent: string | undefined, limit: number): Promise<any> {
         if (!editorRes) {
           throw new Error('编辑台没有打开:没有页面连着 /api/mcp/events');
         }
@@ -486,8 +503,7 @@ export default function vitePluginAi(): Plugin {
         const id = nextCallId++;
         // 大多数工具是即时的,慢活儿都返回 jobId 让调用方轮询,所以 60 秒够用。
         // 例外是 see_frames:它当场起一个 Chrome 渲一帧,冷启动加素材预热可能过分钟。
-        // 让工具自己声明上限,而不是把所有工具一起放宽 —— 真卡住的时候还是该早点报错。
-        const limit = toolDef.timeoutMs || 60000;
+        // 让工具自己声明上限,而不是把所有工具一起放宽 —— 真卡住的时候还是该早点报错。(limit 由调用方按工具给)
         // 定时器句柄要留着:工具正常返回之后不清掉的话,每一次调用都在事件循环里留一个
         // 最长几十秒的游离定时器。工具调用是高频的,积起来就是白占的内存和唤醒。
         let timer: ReturnType<typeof setTimeout> | undefined;
@@ -503,16 +519,8 @@ export default function vitePluginAi(): Plugin {
 
         editorRes.write(`data: ${JSON.stringify({ type: 'call', id, tool, args, agent: agent || undefined })}\n\n`);
         
-        const out = await p;
-        /*
-         * 留在页面的工具写了项目时,页面回包带它这次提交的 opIds(页面接上文档服务之后,c65-editor):
-         * 等这些提交进副本,并把这个对话读到的版本推过去,免得它紧接着的写入被自己让页面做的改动挡住。
-         */
-        if (binding && Array.isArray(out.opIds) && out.opIds.length) {
-          await binding.executor.notePageWrites(agent || '', out.opIds.filter((x: unknown) => typeof x === 'string')).catch(() => {});
-        }
-        if (out.ok) return out.result || out;
-        throw new Error(out.error);
+        // 留在页面的工具写了项目时,页面回包带它这次提交的 opIds(c65-integ2 接线);agent-side 据此推进对话读到的版本
+        return await p;
       }
 
       server.middlewares.use('/api/ai/providers', async (req, res) => {
@@ -1029,7 +1037,7 @@ export default function vitePluginAi(): Plugin {
             let pendingText = '';
             const flushText = () => {
               const b = agentBinding;
-              if (b && pendingText.trim()) b.executor.text(agentId, pendingText);
+              if (b && pendingText.trim()) b.side.executor.text(agentId, pendingText);
               pendingText = '';
             };
 
@@ -1070,7 +1078,8 @@ export default function vitePluginAi(): Plugin {
               setToolAccess: (list: string[] | null) => { loopToolLock = list ? new Set(list) : null; },
               toolProtocol: cfg.toolProtocol,
               mcp,
-              callTool: async (name: string, args: any) => await callToolInternal(name, args, agentId || undefined),
+              // meta.callId:API 直连那条路的 tool_use id(server/harness/tools/index.mjs 传进来),事件带上它,AI 栏按它对上
+              callTool: async (name: string, args: any, meta?: { callId?: string }) => await callToolInternal(name, args, agentId || undefined, typeof meta?.callId === 'string' ? meta.callId : undefined),
               onEvent: (ev: any) => {
                 if (ev.type === 'done') hasDone = true;
                 if (ev.type === 'text' && typeof ev.delta === 'string') pendingText += ev.delta;
@@ -1254,8 +1263,9 @@ export default function vitePluginAi(): Plugin {
         req.on('end', async () => {
           if (over) return;
           try {
-            const { tool, args, agent } = JSON.parse(body);
-            const result = await callToolInternal(tool, args, typeof agent === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(agent) ? agent : undefined);
+            const { tool, args, agent, callId } = JSON.parse(body);
+            // callId:Claude Code 经 MCP 的 _meta["claudecode/toolUseId"] 带来(server/mcp-server.mjs 转过来),事件带上它
+            const result = await callToolInternal(tool, args, typeof agent === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(agent) ? agent : undefined, typeof callId === 'string' && callId.length <= 128 ? callId : undefined);
             sendJson(res, 200, { ok: true, result });
           } catch (e: any) {
             if (e.code === 'UNKNOWN_TOOL') {
@@ -1314,7 +1324,7 @@ export default function vitePluginAi(): Plugin {
         if (req.method !== 'GET') return sendJson(res, 405, { ok: false, error: 'GET only' });
         res.setHeader('Cache-Control', 'no-store');
         const b = agentBinding;
-        sendJson(res, 200, b ? { ok: true, bound: true, mode: b.mode, url: b.url, ...b.executor.describe() } : { ok: true, bound: false });
+        sendJson(res, 200, b ? { ok: true, bound: true, mode: b.mode, url: b.url, ...b.side.describe() } : { ok: true, bound: false });
       });
 
       server.middlewares.use('/api/mcp/status', (req, res) => {

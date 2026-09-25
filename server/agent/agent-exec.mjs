@@ -37,8 +37,14 @@ export const AGENT_EXEC_DEFAULTS = Object.freeze({
   detailMaxBytes: 200 * 1024,
   /** 逆操作超过这么多字节就不放进「完成」事件(事件模块 `EVENTS_LIMITS.INVERSE`) */
   inverseMaxBytes: 256 * 1024,
-  /** 一次提交的上限(文档服务 `PROJECT_LIMITS.MAX_OPS_BYTES`) */
+  /** 一次提交的上限(文档服务 `PROJECT_LIMITS.MAX_OPS_BYTES`);超过就把这次改动换成根替换、走 `project.upload` */
   maxOpsBytes: 256 * 1024,
+  /** `project.upload` 每片的字符数(UTF-8 最坏 4 字节,≤ 文档服务每片 512 KiB 的上限;与页面 DocSync 相同) */
+  uploadPartChars: 128 * 1024,
+  /** `project.upload` 最多几片(文档服务 `PROJECT_LIMITS.UPLOAD_MAX_PARTS`) */
+  uploadMaxParts: 64,
+  /** 向页面要页面状态最多等多久 */
+  pageStateTimeoutMs: 10_000,
   /** stale 摘要里最多列几次提交、每次最多列几个实体 */
   staleShowCommits: 8,
   staleShowEntities: 6,
@@ -50,6 +56,22 @@ const CLIP_EDIT_TOOLS = new Set([
   'add_part', 'set_part', 'remove_part', 'move_part',
 ]);
 const CLIP_CREATE_TOOLS = new Set(['add_clip', 'duplicate_clip', 'add_composite']);
+
+/**
+ * 既读页面独有状态、又写项目的工具(c65-integ2 裁定:违反 D1 判据,改为写入在 Agent 服务端以 agent 身份执行,
+ * 所需的页面状态向页面要一次,经现有 SSE 页面通道取只读值)。值是要向页面要的键:
+ *   - `t`:页面播放头。切剪辑(`switch_cut`、缺省会切过去的 `add_cut`、删当前剪辑的 `remove_cut`)要把它存回被停放的那条剪辑;
+ *   - `track`:页面内存里 `track_points` 跑出来的轨迹(`attach_clip_motion` 读它算逐帧坐标)。
+ * `set_project_meta` 不读页面状态(`duration` 的手动截断值由页面收到远端改动时按项目自己推出来,见
+ * `src/store/remotePageState.ts`),所以不在这张表里,直接在服务端执行。
+ * 页面状态的「写」(切剪辑后页面的播放头、选区、停播)同样由页面收到远端改动时自己做,不经这条通道。
+ */
+export const PAGE_STATE_TOOLS = Object.freeze({
+  switch_cut: Object.freeze(['t']),
+  add_cut: Object.freeze(['t']),
+  remove_cut: Object.freeze(['t']),
+  attach_clip_motion: Object.freeze(['track']),
+});
 
 /** 在服务端另有实现、不走路由表的读工具 */
 export const SERVER_READ_TOOLS = Object.freeze(['get_project', 'get_layout', 'see_frames', 'get_gif', 'bake_card', 'inspect_card_dom']);
@@ -128,12 +150,15 @@ function targetOf(args) {
  * @param {() => number} [options.playhead] 页面播放头(秒);get_layout / see_frames 没给时刻时用
  * @param {Record<string, string>} [options.toolGroups] 工具名 → 分组名(事件的 icon)
  * @param {(event: string, fields?: object) => void} [options.log]
+ * @param {(tool: string, args: object, keys: readonly string[]) => Promise<object | null>} [options.pageState]
+ *   向页面要一次只读的页面状态(`PAGE_STATE_TOOLS`);没有页面时回 null 或抛错,执行器退回用 `playhead()`
  */
 export function createAgentExecutor({
   link,
   loadHost,
   prerenderPost = null,
   playhead = () => 0,
+  pageState = null,
   toolGroups = {},
   log = () => {},
   limits: limitsIn = {},
@@ -150,7 +175,7 @@ export function createAgentExecutor({
   const convs = new Map();
   let nextNumber = 1;
   let lock = Promise.resolve();
-  const stats = { executed: 0, committed: 0, stale: 0, rejected: 0, noop: 0, events: 0, eventErrors: 0 };
+  const stats = { executed: 0, committed: 0, stale: 0, rejected: 0, noop: 0, events: 0, eventErrors: 0, pageStates: 0, uploads: 0 };
 
   function conversationOf(agentKey = '') {
     const key = typeof agentKey === 'string' ? agentKey : '';
@@ -210,15 +235,76 @@ export function createAgentExecutor({
 
   /* ---------------- 写工具:在副本上跑 handler ---------------- */
 
+  /**
+   * 向页面要这次工具要的页面状态(`PAGE_STATE_TOOLS`),只要一次。要不到(编辑台没打开、超时)时:
+   * 播放头退回服务端记着的页面播放头(`playhead()`,页面推给数据镜像的那个);轨迹没有替代,直接回错。
+   */
+  async function pageStateFor(tool, args) {
+    const keys = PAGE_STATE_TOOLS[tool];
+    if (!keys) return null;
+    let got = null;
+    if (typeof pageState === 'function') {
+      let timer;
+      try {
+        got = await Promise.race([
+          Promise.resolve(pageState(tool, args ?? {}, keys)),
+          new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`页面 ${limits.pageStateTimeoutMs} ms 内没有回页面状态`)), limits.pageStateTimeoutMs); timer.unref?.(); }),
+        ]);
+      } catch (err) {
+        say('agent.page-state-failed', { tool, message: String(err?.message ?? err) });
+        got = null;
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+    stats.pageStates += 1;
+    const out = {};
+    if (keys.includes('t')) out.t = typeof got?.t === 'number' && Number.isFinite(got.t) ? got.t : (Number(playhead()) || 0);
+    if (keys.includes('track')) {
+      const mediaId = typeof args?.mediaId === 'string' ? args.mediaId : null;
+      if (mediaId && (!got || typeof got !== 'object')) {
+        throw Object.assign(new Error('编辑台没有打开(或没有回应),读不到页面里的追踪结果;打开编辑台后再试。'), { code: 'no-page' });
+      }
+      const tr = got?.track && typeof got.track === 'object' ? got.track : {};
+      out.track = mediaId ? { mediaId, result: tr.result ?? null, running: tr.running === true } : null;
+    }
+    return out;
+  }
+
+  /** 超过单次上限的改动:把跑完的整份项目分片传上去(`project.upload`),回引用它的那一条根替换 */
+  async function uploadRoot(conn, opId, after) {
+    const text = JSON.stringify(after);
+    const count = Math.ceil(text.length / limits.uploadPartChars);
+    if (count > limits.uploadMaxParts) {
+      stats.rejected += 1;
+      throw Object.assign(new Error(`这次改动太大(整份项目序列化后约 ${text.length} 个字符,超过分片上传的上限),文档服务不收。请拆成几次小的修改。`), { code: 'too-large' });
+    }
+    const uploadId = `up.${opId}`.slice(0, 128);
+    for (let index = 0; index < count; index += 1) {
+      const reply = await conn.request(
+        { type: 'project.upload', projectId, uploadId, index, count, data: text.slice(index * limits.uploadPartChars, (index + 1) * limits.uploadPartChars) },
+        (m) => m.type === 'project.uploaded' || m.type === 'error',
+      );
+      if (reply.type === 'error') {
+        stats.rejected += 1;
+        throw Object.assign(new Error(`分片上传被文档服务拒绝(${reply.reason ?? 'error'})${reply.detail ? `:${reply.detail}` : ''}`), { code: reply.reason ?? 'error' });
+      }
+    }
+    stats.uploads += 1;
+    return { wire: [{ op: 'set', path: '', upload: uploadId }], local: [{ op: 'set', path: '', value: JSON.parse(text) }] };
+  }
+
   async function runRoute(tool, args, conv, ctx) {
     await replicaReady();
     const host = await loadHost();
     if (!host.routeOf(tool)) throw new Error(`未知工具: ${tool}`);
+    const ps = await pageStateFor(tool, args);
     const prepared = await serial(async () => {
       const replica = link.replica;
       const base = replica.project;
       const baseRev = replica.rev;
       host.setProject(base);
+      const cleanup = ps && typeof host.setPageState === 'function' ? host.setPageState(ps) : null;
       let result;
       let after;
       try {
@@ -227,6 +313,7 @@ export function createAgentExecutor({
         // 先把跑完的项目取出来,再把 store 放回副本;handler 抛错时这次的改动整个作废(不提交)
         after = host.getProject();
         host.setProject(base);
+        cleanup?.();
       }
       if (after === base) return { result, base, baseRev, ops: [], inverse: [] };
       const { ops, inverse } = host.diffProject(base, after);
@@ -239,20 +326,24 @@ export function createAgentExecutor({
       return withRev(result, baseRev);
     }
     const expectRev = conv.lastRead ?? baseRev;
-    // 文档服务一次提交的上限是 256 KiB;更大的发出去会超过连接的单条上限、把连接断掉,在这里就拦下
-    if (bytesOf(ops) > limits.maxOpsBytes) {
-      stats.rejected += 1;
-      throw Object.assign(new Error(`这次改动太大(序列化后超过 ${limits.maxOpsBytes} 字节),文档服务不收。请拆成几次小的修改。`), { code: 'too-large' });
-    }
     const opId = newOpId(conv.session);
     const conn = link.conversation(conv.n);
+    // 文档服务一次提交的上限是 256 KiB(c65-integ2 裁定):更大的改动换成「根替换 = 跑完的整份项目」,
+    // 整份项目经 `project.upload` 分片传上去,提交里只引用它;逆操作仍用差异算的那份(撤得回来)
+    let wireOps = ops;
+    let landedOps = ops;
+    if (bytesOf(ops) > limits.maxOpsBytes) {
+      const up = await uploadRoot(conn, opId, prepared.after);
+      wireOps = up.wire;
+      landedOps = up.local;
+    }
     const reply = await conn.request(
-      { type: 'project.op', projectId, opId, session: conv.session, expectRev, ops },
+      { type: 'project.op', projectId, opId, session: conv.session, expectRev, ops: wireOps },
       (m) => m.type === 'project.op.ok' || m.type === 'project.op.rejected' || m.type === 'error',
     );
     if (reply.type === 'project.op.ok') {
       stats.committed += 1;
-      link.replica.offer(reply.rev, ops, { opId, actor: { role: 'agent', conversation: conv.n, session: conv.session }, session: conv.session });
+      link.replica.offer(reply.rev, landedOps, { opId, actor: { role: 'agent', conversation: conv.n, session: conv.session }, session: conv.session });
       await link.replica.waitRev(reply.rev, limits.landWaitMs);
       markRead(conv, reply.rev);
       ctx.write = { opId, rev: reply.rev, inverse, overwrote: reply.overwrote ?? [] };
@@ -447,13 +538,17 @@ export function createAgentExecutor({
 
     /**
      * 一次工具调用前后各发一条事件(不论这个工具在哪一侧执行)。`run(ctx)` 执行工具;事件发不出去不影响工具。
+     * `meta.callId` 是模型那一侧这次工具调用的 id(Claude Code 的 `_meta["claudecode/toolUseId"]`、API 直连的
+     * tool_use id):两条事件都带上,页面 AI 栏按它把事件对上聊天记录里的那次工具调用。
      */
-    async track(tool, args, agentKey, run) {
+    async track(tool, args, agentKey, run, meta = {}) {
       const conv = conversationOf(agentKey);
       const eventId = `${conv.session}.${bootId}.${++conv.eventSeq}`.replace(/[^A-Za-z0-9._:-]/g, '-').slice(0, 128);
       const detailFits = bytesOf(args ?? {}) <= limits.detailMaxBytes;
+      const callId = typeof meta?.callId === 'string' && meta.callId && meta.callId.length <= 128 ? meta.callId : null;
+      const callField = callId ? { callId } : {};
       sendEvent(conv, {
-        type: 'events.create', eventId, tool,
+        type: 'events.create', eventId, tool, ...callField,
         icon: toolGroups[tool] ?? null, target: targetOf(args), args: argsSummary(args),
         ...(detailFits ? { detail: { tool, args: args ?? {} } } : {}),
       });
@@ -472,7 +567,7 @@ export function createAgentExecutor({
         const fields = error ? {} : writeFields(ctx.write);
         const summary = resultSummary(result, error);
         sendEvent(conv, {
-          type: 'events.complete', eventId,
+          type: 'events.complete', eventId, ...callField,
           status: error ? 'error' : 'ok',
           summary,
           durationMs: Date.now() - t0,

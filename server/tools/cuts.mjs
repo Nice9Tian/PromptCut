@@ -46,7 +46,7 @@ export const cutsTools = [
         name: { type: "string", description: "剪辑名,和 cutId 二选一" }
       }
     },
-    side: "page"
+    side: "agent"
   },
   {
     name: "add_cut",
@@ -58,7 +58,7 @@ export const cutsTools = [
         switch: { type: "boolean", description: "默认 true" }
       }
     },
-    side: "page"
+    side: "agent"
   },
   {
     name: "rename_cut",
@@ -85,6 +85,6 @@ export const cutsTools = [
       },
       required: ["cutId"]
     },
-    side: "page"
+    side: "agent"
   }
 ];

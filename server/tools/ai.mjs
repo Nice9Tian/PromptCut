@@ -123,7 +123,7 @@ export const aiTools = [
       },
       required: ["clipId", "mediaId"]
     },
-    side: "page"
+    side: "agent"
   },
   {
     name: "detach_clip_motion",

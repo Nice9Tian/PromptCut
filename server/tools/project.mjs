@@ -37,7 +37,7 @@ export const projectTools = [
         themeId: { type: "string", description: "全局主题 id" }
       }
     },
-    side: "page"
+    side: "agent"
   },
   {
     name: "set_theme",

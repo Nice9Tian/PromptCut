@@ -11,6 +11,7 @@
  * 写入身份照项目模块取 principal 加消息里的 `session`（`actor.mjs`）；渲染节点的连接不能发事件。
  * 最近的事件按项目在内存里留一份（`events.list` 取），不落盘：重启后从新的事件开始。
  *
+ * 两条事件都可带 `callId`（模型那一侧这次工具调用的 id，页面 AI 栏按它对上聊天记录；c65-integ2）。
  * 完成事件可带这次调用写入项目的 `opId`、`rev`、`inverse`（逆操作），原样广播、记进 `events.list`；
  * 也可带 `detail`，把 `event-detail` 按同一个键补写一次（c65-agent，主会话裁定：结果摘要与写入信息一并存）。
  */
@@ -22,6 +23,8 @@ export const EVENTS_LIMITS = Object.freeze({
   /** 每个项目在内存里留多少条事件 */
   KEEP: 500,
   TOOL: 128,
+  /** 模型那一侧这次工具调用的 id（AI 栏按它对上聊天记录，c65-integ2） */
+  CALL_ID: 128,
   ICON: 64,
   TARGET: 512,
   ARGS: 2048,
@@ -125,6 +128,7 @@ export function eventsModule({ project, content = null, now } = {}) {
     const icon = optText(msg.icon, 'icon', EVENTS_LIMITS.ICON);
     const target = optText(msg.target, 'target', EVENTS_LIMITS.TARGET);
     const args = optText(msg.args, 'args', EVENTS_LIMITS.ARGS);
+    const callId = optText(msg.callId, 'callId', EVENTS_LIMITS.CALL_ID);
     const at = clock(ctx);
     let detailKey = null;
     if (msg.detail !== undefined) {
@@ -138,8 +142,9 @@ export function eventsModule({ project, content = null, now } = {}) {
       }
       stats.details += 1;
     }
-    const event = { projectId, eventId, phase: 'create', tool: msg.tool, icon, target, args, detailKey, actor, at };
-    remember(projectId, eventId, { tool: msg.tool, icon, target, args, detailKey, actor, createdAt: at, status: null });
+    const call = callId ? { callId } : {};
+    const event = { projectId, eventId, phase: 'create', tool: msg.tool, icon, target, args, detailKey, actor, at, ...call };
+    remember(projectId, eventId, { tool: msg.tool, icon, target, args, detailKey, actor, createdAt: at, status: null, ...call });
     stats.created += 1;
     reply(ctx, connId, { type: 'events.ack', projectId, eventId, phase: 'create', detailKey }, reqId);
     broadcast(connId, projectId, event);
@@ -149,6 +154,8 @@ export function eventsModule({ project, content = null, now } = {}) {
     const { projectId, eventId, actor } = common(connId, msg);
     if (!EVENT_STATUSES.includes(msg.status)) bad(`status 只能是 ${EVENT_STATUSES.join(' / ')}`);
     const summary = optText(msg.summary, 'summary', EVENTS_LIMITS.SUMMARY);
+    const callId = optText(msg.callId, 'callId', EVENTS_LIMITS.CALL_ID);
+    const call = callId ? { callId } : {};
     let durationMs = null;
     if (msg.durationMs !== undefined && msg.durationMs !== null) {
       if (typeof msg.durationMs !== 'number' || !Number.isFinite(msg.durationMs) || msg.durationMs < 0) bad('durationMs 必须是非负数');
@@ -185,10 +192,10 @@ export function eventsModule({ project, content = null, now } = {}) {
       stats.details += 1;
     }
     const at = clock(ctx);
-    remember(projectId, eventId, { status: msg.status, summary, durationMs, completedAt: at, completedBy: actor, ...write, ...(detailKey ? { detailKey } : {}) });
+    remember(projectId, eventId, { status: msg.status, summary, durationMs, completedAt: at, completedBy: actor, ...call, ...write, ...(detailKey ? { detailKey } : {}) });
     stats.completed += 1;
     reply(ctx, connId, { type: 'events.ack', projectId, eventId, phase: 'complete', ...(detailKey ? { detailKey } : {}) }, reqId);
-    broadcast(connId, projectId, { projectId, eventId, phase: 'complete', status: msg.status, summary, durationMs, actor, at, ...write, ...(detailKey ? { detailKey } : {}) });
+    broadcast(connId, projectId, { projectId, eventId, phase: 'complete', status: msg.status, summary, durationMs, actor, at, ...call, ...write, ...(detailKey ? { detailKey } : {}) });
   }
 
   function text(ctx, connId, msg, reqId) {
