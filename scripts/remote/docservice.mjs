@@ -43,7 +43,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import { checkTokenFormat } from '../../server/docservice/auth.mjs';
 import { stageHostedFiles } from '../../server/hosted/files.mjs';
-import { hostedInstance, hostedPm2Config, hostedDeployScript, shq } from './hosted-deploy.mjs';
+import { hostedInstance, hostedPm2Config, hostedDeployScript, shq } from '../../server/hosted/deploy.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const target = process.env.PROMPTCUT_REMOTE;
@@ -186,7 +186,7 @@ function deploy() {
 }
 
 /* ------------------------------------------------------------------ *
- * 托管组合（SP）：参数与远端脚本在 hosted-deploy.mjs
+ * 托管组合（SP）：参数与远端脚本在 server/hosted/deploy.mjs
  * ------------------------------------------------------------------ */
 
 function deployHosted() {

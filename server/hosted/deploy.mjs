@@ -1,6 +1,6 @@
 /**
  * 托管组合的部署参数与远端脚本（SP，契约 `docs/plan/shared-project-contract.md` 第 2 节）。
- * `scripts/remote/docservice.mjs deploy-hosted` / `status-hosted` 用它；本模块没有副作用，单测直接 import。
+ * `scripts/remote/docservice.mjs deploy-hosted` / `status-hosted` 用它；本模块没有副作用，单测直接 import（`server/**` 不许引 `scripts/`，所以放在这里；它随部署清单一起拷到远端，但入口不引它）。
  * 只引 Node 内置模块。
  */
 

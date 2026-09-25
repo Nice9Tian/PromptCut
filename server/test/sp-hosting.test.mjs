@@ -25,7 +25,7 @@ import { createSharedProject, buildAuthProtocols } from '../auth/client.mjs';
 import { forgetCredentialStore } from '../auth/store.mjs';
 import { createWsEndpoint } from '../render-node/ws-transport.mjs';
 import { createTicketSource } from '../auth/ticket-source.mjs';
-import { hostedInstance, hostedPm2Config, hostedDeployScript } from '../../scripts/remote/hosted-deploy.mjs';
+import { hostedInstance, hostedPm2Config, hostedDeployScript } from '../hosted/deploy.mjs';
 
 const ROOT = path.resolve(fileURLToPath(import.meta.url), '..', '..', '..');
 const MAIN = path.join(ROOT, 'server', 'hosted', 'main.mjs');
