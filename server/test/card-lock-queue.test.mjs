@@ -270,8 +270,8 @@ test('Q3 card.lock 在 PUBLISHER_TYPES 里；没发过 publisher.hello 的连接
 /**
  * 锁在 A 上：T1 done、T2 被 a2 认领、T3 open（p 和 p2 都订阅）；另有别的卡的 A 任务 O、同卡的 B 任务 Yb（open）。
  */
-function takeoverScene() {
-  const h = setup();
+function takeoverScene(options) {
+  const h = setup(options);
   h.publisher('p2', 'pub-p2');
   const t1 = snap('ck1', FP_A, 0), t2 = snap('ck1', FP_A, 60), t3 = snap('ck1', FP_A, 120);
   const o = snap('ck2', FP_A, 0);
@@ -351,7 +351,7 @@ test('Q4 带 takeover 发布：锁转给新指纹；旧指纹 open 的进 failed
 });
 
 test('Q4 带 takeover 发布（全量核对）：状态、消息、锁', () => {
-  const scene = takeoverScene();
+  const scene = takeoverScene({ constants: { PREFILTER: false } });
   const { h } = scene;
   const now = h.now();
   const out = h.publish('q', tk([snap('ck1', FP_B, 0)], true));
@@ -362,7 +362,7 @@ test('Q4 带 takeover 发布（全量核对）：状态、消息、锁', () => {
 });
 
 test('Q4 card.lock 带 takeover 同样接手（与发布共用）：granted: true，旧指纹未完成的任务作废', () => {
-  const scene = takeoverScene();
+  const scene = takeoverScene({ constants: { PREFILTER: false } });
   const { h } = scene;
   const now = h.now();
   const out = cardLock(h, 'q', { kind: 'snapshot', contentKey: 'ck1', envFingerprint: FP_B, takeover: true, reqId: 'tk' });
@@ -478,7 +478,7 @@ test('Q10 补充：因 limit 没建成的那一项不做任何锁处理（F.7 �
 /* ================================================================== Q11（F.7 第 2 条） */
 
 test('Q11 没锁时带 takeover 发布：建锁（source: takeover），同时作废锁键相同、指纹不同的 open 任务；同指纹、别的卡不动', () => {
-  const h = setup();
+  const h = setup({ constants: { PREFILTER: false } });
   // 两个节点几乎同时切分：A 的任务先发布（没人认领，没锁），B 带 takeover 发布
   const x1 = snap('ck1', FP_A, 0), x2 = snap('ck1', FP_A, 60), otherCard = snap('ck2', FP_A, 0), sameFp = snap('ck1', FP_B, 120);
   h.publish('p', [x1, x2, otherCard]);
@@ -636,7 +636,7 @@ test('Q8 describe().locks 的形状与排序（按 lockKey），返回深拷贝�
   assert.ok(Array.isArray(h.describe().tasks) && Array.isArray(h.describe().nodes) && Array.isArray(h.describe().publishers));
 
   // 队列重启：新实例、新 epoch，锁只在内存里
-  const h2 = createQueueHarness(createRenderQueue, { epoch: 'epoch-2' });
+  const h2 = createQueueHarness(createRenderQueue, { epoch: 'epoch-2', constants: { PREFILTER: false } });
   assert.deepEqual(h2.describe().locks, []);
   assert.equal(h2.describe().epoch, 'epoch-2');
   h2.publisher('p', 'pub-p');
