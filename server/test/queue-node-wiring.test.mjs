@@ -404,23 +404,28 @@ test('J6 split：planTaskOf 接受 { codeVersion, envFingerprint } 写进 requir
   assert.deepEqual(wire(withReq), withReq);
 });
 
-test('J6 split：带 requires 的 plan 任务能经真队列发布，只有同指纹、同代码版本的节点认领得到', async () => {
+test('J6 split：带 requires 的 plan 任务能经真队列发布；代码版本不同的节点认领不到，相同的认领并完成', async () => {
+  // 注意：plan 的 requires.envFingerprint 不参与认领过滤（B 节 filter.mjs 规则 1、I.2 都把 plan 排除在外，
+  // 「谁认领谁的指纹就是这一版的指纹」）。所以这里只断言代码版本这一条，不断言别的指纹认领不到。
   const { planTaskOf } = await loadSplit();
   const plan = planTaskOf({ projectId: 'proj-j6q', projectRev: 1, codeVersion: CV, envFingerprint: FP });
   const plans = [];
   const executor = {
-    async plan(task) { plans.push(task.id); return { entryKey: sha256('e'), cardPlan: [], streams: [] }; },
+    async plan(task) { plans.push(task); return { entryKey: sha256('e'), cardPlan: [], streams: [] }; },
     async render() { return null; },
   };
   const sink = recordingSink({ putAnswer: () => ({ complete: true }) });
-  const other = createRig({ executor, sink, fp: 'aaaaaaaaaaaaaaaa', cv: CV });
+  const other = createRig({ executor, sink, fp: FP, cv: 'another-code' });
   other.publish([plan]);
   await drive(other, () => false, { maxSteps: 12 }).catch(() => {});
-  assert.deepEqual(plans, [], '别的指纹的节点认领不到');
+  assert.deepEqual(plans, [], '代码版本不同的节点认领不到');
+  assert.deepEqual(other.lb.log().filter((e) => e.dir === 'out' && e.message.type === 'error').map((e) => e.message), [], '队列接受带 requires 的 plan');
   const same = createRig({ executor, sink, fp: FP, cv: CV });
   same.publish([plan]);
   await drive(same, () => same.doneCount(plan.id) >= 1);
-  assert.deepEqual(plans, [plan.id], '同指纹的节点认领并完成');
+  assert.equal(plans.length, 1, '同代码版本的节点认领并完成');
+  assert.equal(plans[0].requires.codeVersion, CV, '认领到的 plan 带着 requires.codeVersion');
+  assert.equal(plans[0].requires.envFingerprint, FP, '认领到的 plan 带着 requires.envFingerprint');
   hygiene(same);
 });
 
