@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite --port 5190 --strictPort --host 0.0.0.0",
-    "test": "node --experimental-test-module-mocks --test \"server/test/*.test.mjs\" \"src/**/*.test.mjs\" \"tools/report-worker/*.test.mjs\"",
+    "test": "node --experimental-test-module-mocks --test-global-setup=server/test/global-setup.mjs --test \"server/test/*.test.mjs\" \"src/**/*.test.mjs\" \"tools/report-worker/*.test.mjs\"",
     "build": "tsc -b && vite build",
     "preview": "vite preview --port 5195",
     "export": "node scripts/export-frames.mjs",

@@ -10,6 +10,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { proxyToPrerender, setPrerender } from '../prerender-client.mjs';
+import { refusingPort } from './fake-ws-kit.mjs';
 
 const listen = server => new Promise(resolve => server.listen(0, '127.0.0.1', () => resolve(`http://127.0.0.1:${server.address().port}`)));
 const close = server => new Promise(resolve => server.close(() => resolve()));
@@ -60,9 +61,9 @@ test('预渲染没就绪:等满 waitMs 回 503 NO_AGENT_LANE', async () => {
 });
 
 test('预渲染报就绪但连不上:同样回 503 NO_AGENT_LANE;不传 unavailable 的老路由照旧 502 PRERENDER_UNAVAILABLE', async () => {
-  const dead = http.createServer();
-  const deadUrl = await listen(dead);
-  await close(dead); // 端口空出来,连过去就是 ECONNREFUSED
+  // 连不上的地址由测试自己占着(连上就 RST);不用「关掉的端口」,并行时它可能被别的进程拿去
+  const dead = await refusingPort();
+  const deadUrl = `http://127.0.0.1:${dead.port}`;
   const editor = http.createServer((req, res) => req.url.startsWith('/api/cards/layout') ? proxyToPrerender(req, res, LAYOUT) : proxyToPrerender(req, res));
   const editorUrl = await listen(editor);
   setPrerender({ url: deadUrl, ready: true, error: null });
@@ -76,5 +77,6 @@ test('预渲染报就绪但连不上:同样回 503 NO_AGENT_LANE;不传 unavaila
   } finally {
     setPrerender({ url: null, ready: false, error: null });
     await close(editor);
+    await dead.close();
   }
 });

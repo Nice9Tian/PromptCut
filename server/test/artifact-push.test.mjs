@@ -95,8 +95,19 @@ function queueOf(t, { pipeline, client, content, dir, concurrency = 1, clock = c
   assert.ok(queue && typeof queue.enqueue === 'function' && typeof queue.start === 'function' && typeof queue.stop === 'function' && typeof queue.stats === 'function',
     'PushQueue = { enqueue, start, stop, stats }');
   t.after(async () => { try { await queue.stop(); } catch { /* 已停 */ } });
+  const live = { queue, logs };
+  liveQueues.add(live);
+  t.after(() => { liveQueues.delete(live); });
   return { queue, clock, logs };
 }
+
+/** 本条用例建过的队列：等待超时时把各队列的 lastError 和最近的重试日志带进报错，偶发失败时才看得出原因 */
+const liveQueues = new Set();
+const queueDiag = () => JSON.stringify([...liveQueues].map(({ queue, logs }) => ({
+  stats: (({ running, pending, inflight, backingOff, pushed, failures, uploaded, skipped, manifests }) => ({ running, pending, inflight, backingOff, pushed, failures, uploaded, skipped, manifests }))(queue.stats()),
+  lastError: queue.stats().lastError,
+  retries: logs.filter(([event]) => event === 'push.retry').slice(-3),
+}))).slice(0, 1500);
 
 function attachQueue(pipeline, queue) {
   if (typeof pipeline.setPushQueue === 'function') pipeline.setPushQueue(queue);
@@ -118,10 +129,17 @@ const unitOf = (task, canvasHeavy = false) => ({
 });
 /** 清单写入顺序里，每个键第一次出现的位置 */
 const putOrder = (content) => [...new Set(content.puts().map((c) => c.key))];
-const waitPuts = (content, n, ms = 15_000) => until(() => content.puts().length >= n, { timeoutMs: ms, what: () => `内容库只写了 ${content.puts().length} 份清单：${JSON.stringify(putOrder(content))}` });
+const waitPuts = (content, n, ms = 15_000) => until(() => content.puts().length >= n, { timeoutMs: ms, what: () => `内容库只写了 ${content.puts().length} 份清单：${JSON.stringify(putOrder(content))}；队列：${queueDiag()}` });
 
+/** 读队列文件；没有回 null。撞上队列正在改名替换它（Windows 上报 EPERM / EBUSY / EACCES）就稍等重读，不当成「没有」 */
 async function readQueueFile(dir) {
-  try { return await fs.readFile(path.join(dir, 'push-queue.json'), 'utf8'); } catch { return null; }
+  for (let attempt = 0; ; attempt++) {
+    try { return await fs.readFile(path.join(dir, 'push-queue.json'), 'utf8'); }
+    catch (err) {
+      if (err?.code === 'ENOENT' || attempt >= 10 || !['EPERM', 'EBUSY', 'EACCES'].includes(err?.code)) return null;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+  }
 }
 
 /* ------------------------------------------------------------------ W1 */
@@ -209,10 +227,16 @@ test('W1 推送在后台跑：素材服务卡住时 commitSnapshots 照常很快
   await A.snapshots().commitSnapshots({ tier: 'shared', key: control.snapshotKey, clipId: 'clip-w1b', capabilities: SHARED_CAPS,
     items: range(0, 59).map((n) => ({ localFrame: n, html: htmlOf(n, 'W1b') })) });
   await until(() => asset.puts.length > 0, { timeoutMs: 5000, what: () => '队列没有开始推第一段' });
+  // 推送卡在 gate 上、测试放行之前永远不会完成：commitSnapshots 只要在放行之前返回，就说明它不等推送。
+  // 不用「< 2000 ms」这种墙钟阈值 —— 全量并行时 CPU 满载，写 60 帧本身偶尔就要两三秒。
   const t0 = Date.now();
-  const idx = await A.snapshots().commitSnapshots({ tier: 'shared', key: control.snapshotKey, clipId: 'clip-w1b', capabilities: SHARED_CAPS,
-    items: range(60, 119).map((n) => ({ localFrame: n, html: htmlOf(n, 'W1b') })) });
-  assert.ok(Date.now() - t0 < 2000, `推送卡住时 commitSnapshots 仍然很快返回：${Date.now() - t0} ms`);
+  let limit;
+  const idx = await Promise.race([
+    A.snapshots().commitSnapshots({ tier: 'shared', key: control.snapshotKey, clipId: 'clip-w1b', capabilities: SHARED_CAPS,
+      items: range(60, 119).map((n) => ({ localFrame: n, html: htmlOf(n, 'W1b') })) }),
+    new Promise((resolve, reject) => { limit = setTimeout(() => reject(new Error(`推送卡住时 commitSnapshots ${Date.now() - t0} ms 还没返回：它在等推送`)), 20_000); }),
+  ]).finally(() => clearTimeout(limit));
+  assert.equal(asset.puts.filter((p) => p.ok).length, 0, 'commitSnapshots 返回时推送仍卡着（一个块都没推成）');
   assert.deepEqual(idx.frames, [[0, 119]], '写盘照常');
   release();
   await waitPuts(content, 2);
@@ -322,10 +346,14 @@ test('W4 推到一半 stop()，从同一个 dir 重建队列：未完成的段�
   const before = await readQueueFile(root);
   assert.ok(before && tasks.every((task) => before.includes(task.resultKey)), '四段都落进了 push-queue.json');
   q1.queue.start();
-  await until(() => second !== null, { timeoutMs: 10_000, what: () => `第二段没开始推：first=${first}` });
+  await until(() => second !== null, { timeoutMs: 10_000, what: () => `第二段没开始推：first=${first}；队列：${queueDiag()}` });
   assert.equal(content1.puts().length, 1, '第一段推完、写了清单');
   await q1.queue.stop();
   releaseSecond();
+  // stop() 不等在推的段（契约）：第二段放行后失败、再写一次队列文件。等它收尾、写完再读文件，
+  // 否则读到的可能是正在替换的文件（Windows 上改名替换的瞬间读会失败），也可能和下面 q2 的 restore 撞上。
+  await until(() => q1.queue.stats().inflight === 0, { timeoutMs: 10_000, what: () => `第二段一直没收尾；队列：${queueDiag()}` });
+  await q1.queue.stop(); // 已停的队列再 stop 一次只做一件事：等排着的写回全部完成
   await new Promise((resolve) => setTimeout(resolve, 100));
   const doneKey = manifestKey(tasks[first]);
   assert.deepEqual(content1.puts().map((c) => c.key), [doneKey], '停下之后不再推别的段');
@@ -365,11 +393,17 @@ test('W5 素材服务对某段返回 500：这一段按 5 s、30 s 退避重试�
     const frames = unpack(await T().collectSnapshotResult(A, task)).result.frames;
     if (i === 1) { for (const [, h] of frames) bad.add(h); sentinel = frames[0][1]; }
   }
+  // 每个块按它自己被 put 的次数决定成败（前两次 500、第三次成功）。不能按哨兵块的次数判：一段里的块是
+  // 4 路并发 put 的，谁先到 beforePut 由读盘快慢决定，第三轮里别的块可能抢在哨兵前面、仍被判失败，
+  // 于是这一段又进 120 s 退避，假时钟不再拨，测试就等到超时（全量并行时偶发）。
   let attempts = 0;
+  const tries = new Map();
   const asset = countingAsset(svc.client, {
     beforePut: ({ hash }) => {
       if (hash === sentinel) attempts++;
-      if (bad.has(hash) && attempts <= 2) throw Object.assign(new Error('HTTP 500'), { status: 500 });
+      const n = (tries.get(hash) ?? 0) + 1;
+      tries.set(hash, n);
+      if (bad.has(hash) && n <= 2) throw Object.assign(new Error('HTTP 500'), { status: 500 });
     },
   });
   const content = countingContent(svc.content);

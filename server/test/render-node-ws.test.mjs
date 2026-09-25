@@ -20,7 +20,7 @@ import { createLocalNode } from '../render-node/local-node.mjs';
 import { createArtifactSink } from './fake-artifact-sink.mjs';
 import {
   wsClient, byReq, byType, waitFor, sleep, randomToken, createTcpProxy, createSleepExecutor,
-  snapshotTaskInput, healthServer, closedPort,
+  snapshotTaskInput, healthServer, refusingPort,
 } from './fake-ws-kit.mjs';
 
 const BACKOFF = { baseMs: 500, factor: 2, maxMs: 15_000, jitter: 0.2 };
@@ -358,9 +358,11 @@ test('T6 resolveDocservice：环境变量地址可用 → remote；不可用、�
   const mismatch = await healthServer({ ok: true, protocol: 'promptcut.v0' });
   const notOk = await healthServer({ ok: false, protocol: 'promptcut.v1' });
   const hang = await healthServer(null);
-  t.after(() => Promise.all([good, good2, mismatch, notOk, hang].map((s) => s.close())));
-  const dead = await closedPort();
-  const dead2 = await closedPort();
+  const deadServer = await refusingPort();
+  const deadServer2 = await refusingPort();
+  t.after(() => Promise.all([good, good2, mismatch, notOk, hang, deadServer, deadServer2].map((s) => s.close())));
+  const dead = deadServer.port;
+  const dead2 = deadServer2.port;
   const ws = (p, path = '') => `ws://127.0.0.1:${p}${path}`;
   // 能回响应的服务器放宽到 5000 ms：全量 npm test 时 CPU 被并行的测试文件占满，本机 /healthz 偶尔超过 1 s 才回。
   // 只有专门测超时的 hang 一项（第 8 项）单独传较短的超时。
