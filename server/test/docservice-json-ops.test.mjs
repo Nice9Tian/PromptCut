@@ -102,6 +102,8 @@ test('DS-J5 insert：按下标插，下标超长插到末尾；id 已存在或�
   assert.equal(codeOf(() => applyOps(prev, [{ op: 'insert', path: '/tracks/@t1/clips', index: 0, value: { id: 'c1' } }])), 'bad-path');
   assert.equal(codeOf(() => applyOps(prev, [{ op: 'insert', path: '/width', index: 0, value: { id: 'x' } }])), 'bad-path');
   assert.equal(codeOf(() => applyOps(prev, [{ op: 'insert', path: '/missing', index: 0, value: { id: 'x' } }])), 'bad-path');
+  assert.equal(codeOf(() => applyOps(prev, [{ op: 'insert', path: '/offsets', index: 0, value: { id: 'x' } }])), 'bad-path', '不带 id 的数组不能 insert');
+  assert.equal(codeOf(() => applyOps({ a: [{ id: 5 }] }, [{ op: 'set', path: '/a/@5/x', value: 1 }])), 'bad-path', 'id 只按字符串全等配');
 });
 
 test('DS-J6 move：index 是挪完之后的下标，超长按末尾；元素不存在是 noop；数组不存在是 bad-path', () => {
@@ -131,7 +133,8 @@ test('DS-J8 根替换；没有内容时 set 建根，别的操作 bad-path', () 
   assert.deepEqual(root, { a: 1 });
   assert.deepEqual(applyOps(null, [{ op: 'set', path: '/a/b', value: 2 }]).root, { a: { b: 2 } });
   assert.equal(codeOf(() => applyOps(null, [{ op: 'remove', path: '/a' }])), 'bad-path');
-  assert.equal(codeOf(() => applyOps(undefined, [{ op: 'insert', path: '', index: 0, value: { id: 1 } }])), 'bad-path');
+  assert.equal(codeOf(() => applyOps(undefined, [{ op: 'insert', path: '', index: 0, value: { id: 'x' } }])), 'bad-path');
+  assert.equal(codeOf(() => applyOps(base(), [{ op: 'set', path: '', value: [1] }])), 'bad-op', '根替换的值必须是普通对象');
 });
 
 test('DS-J9 格式不对是 bad-op（与文档无关）：未知操作、坏路径、set 缺 value、remove 根、insert 无 id、move 非 @ 末段、负下标', () => {
@@ -143,6 +146,8 @@ test('DS-J9 格式不对是 bad-op（与文档无关）：未知操作、坏路�
     [{ op: 'insert', path: '/tracks', index: 0, value: { name: 'x' } }],
     [{ op: 'move', path: '/tracks/x', index: 0 }],
     [{ op: 'insert', path: '/tracks', index: -1, value: { id: 'x' } }],
+    [{ op: 'insert', path: '/tracks', index: 0, value: { id: 5 } }],
+    [{ op: 'set', path: '', value: null }],
     'nope',
   ];
   for (const ops of bads) assert.equal(codeOf(() => checkOps(ops)), 'bad-op', JSON.stringify(ops));
@@ -155,13 +160,18 @@ test('DS-J10 __proto__ 键按普通键写，不改原型', () => {
   assert.deepEqual(JSON.parse(JSON.stringify(root)), JSON.parse('{"__proto__":{"polluted":1}}'));
 });
 
-test('DS-J11 实体：最多两层 @id；没有 @id 归 /meta', () => {
-  assert.equal(entityOf('/tracks/@t1/clips/@c3/frame/x'), '/tracks/@t1/clips/@c3');
-  assert.equal(entityOf('/tracks/@t1/clips/@c3/parts/@p1/params/a'), '/tracks/@t1/clips/@c3');
-  assert.equal(entityOf('/tracks/@t1/name'), '/tracks/@t1');
-  assert.equal(entityOf('/filters/@f1/params/a'), '/filters/@f1');
-  assert.equal(entityOf('/width'), '/meta');
-  assert.equal(entityOf('/tracks'), '/meta');
+test('DS-J11 实体：从根成对的 /<名>/@<id> 最长前缀，之后的名字可限定；一对都没有归 /meta；根是 *', () => {
+  const o = { names: ['tracks', 'clips', 'transitions'] };
+  assert.equal(entityOf('/tracks/@t1/clips/@c3/frame/x', o), '/tracks/@t1/clips/@c3');
+  assert.equal(entityOf('/tracks/@t1/clips/@c3/parts/@p1/params/a', o), '/tracks/@t1/clips/@c3');
+  assert.equal(entityOf('/tracks/@t1/clips/@c3/parts/@p1/params/a'), '/tracks/@t1/clips/@c3/parts/@p1', 'names 不给时不限');
+  assert.equal(entityOf('/cuts/@k2/tracks/@t1/clips/@c3/start', o), '/cuts/@k2/tracks/@t1/clips/@c3');
+  assert.equal(entityOf('/tracks/@t1/name', o), '/tracks/@t1');
+  assert.equal(entityOf('/filters/@f1/params/a', o), '/filters/@f1');
+  assert.equal(entityOf('/width', o), '/meta');
+  assert.equal(entityOf('/tracks', o), '/meta');
+  assert.equal(entityOf('/style/x/@y', o), '/meta', '成对要从根开始');
+  assert.equal(entityOf('', o), '*');
   assert.equal(entityOf('bad'), null);
 });
 
