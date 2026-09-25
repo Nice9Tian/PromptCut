@@ -408,16 +408,34 @@ const topDirs = async (library) => {
   }
   return out;
 };
+/**
+ * 一个 style 属性值拆成声明:先把 `&quot;` 还原成引号(实体里的分号不是分隔符),再只在引号、括号之外按 `;` 切。
+ */
+function declarationsOf(style) {
+  const text = style.replace(/&quot;/g, '"').replace(/&#39;/g, "'");
+  const out = [];
+  let cur = '', quote = null, depth = 0;
+  for (const ch of text) {
+    if (quote) { if (ch === quote) quote = null; cur += ch; continue; }
+    if (ch === '"' || ch === "'") { quote = ch; cur += ch; continue; }
+    if (ch === '(') depth++;
+    else if (ch === ')') depth = Math.max(0, depth - 1);
+    if (ch === ';' && depth === 0) { if (cur.trim()) out.push(cur.trim()); cur = ''; continue; }
+    cur += ch;
+  }
+  if (cur.trim()) out.push(cur.trim());
+  return out;
+}
 /** style 属性里同名声明出现不止一次的个数:没有同名声明时,声明的先后不影响层叠结果,也就不影响像素 */
 const duplicateStyleProps = (html) => {
   let n = 0;
   for (const m of html.matchAll(/style="([^"]*)"/g)) {
-    const names = m[1].split(';').map((x) => x.split(':')[0].trim().toLowerCase()).filter(Boolean);
+    const names = declarationsOf(m[1]).map((d) => d.slice(0, d.indexOf(':') < 0 ? d.length : d.indexOf(':')).trim().toLowerCase());
     if (new Set(names).size !== names.length) n++;
   }
   return n;
 };
-const sortStyles = (html) => html.replace(/style="([^"]*)"/g, (_, s) => 'style="' + s.split(';').map((x) => x.trim()).filter(Boolean).sort().join(';') + '"');
+const sortStyles = (html) => html.replace(/style="([^"]*)"/g, (_, style) => 'style="' + declarationsOf(style).sort().join(';') + '"');
 
 async function runCheck() {
   const port = Number(arg('--port', 5403));
