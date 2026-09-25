@@ -13,7 +13,8 @@
  *     免得失败的段挂一个真的 5 s 计时器。
  *   - 「配了推送队列的管线」：契约没写怎么配。这里 `attachQueue(pipeline, queue)`：管线有 `setPushQueue` 就调它，
  *     否则设 `pipeline.pushQueue = queue`（`createPushQueue` 自己已经挂上的，两种写法都不冲突）。
- *   - `enqueue(unit, priority)`：`priority` 传数字 0 / 1 / 2（契约表的 `normal` / `low` / `lowest`，「数字越小越先推」）；
+ *   - `enqueue(unit, priority)`：`priority` 传数字 0 / 1 / 2（契约表的 `normal` / `low` / `lowest`，第 9 节第 2 条定为最终级别）；
+ *     返回 `Promise<void>`，队列文件写回后兑现（第 9 节第 1 条），测试里要读 `push-queue.json` 之前都先 await 它；
  *     `unit` = `{ kind, tier, resultKey, dirKey, entryKey, range, canvasHeavy }`。
  *   - 推送顺序看内容库清单的写入顺序（`content.put`，并发 1 时就是推送顺序）。
  *   - 钩子要算这一段的 `to`（与 `split.mjs` 一致：最后一段到 `count - 1`），所以用到钩子的用例都在管线上挂一个
@@ -134,7 +135,8 @@ test('W1 配了推送队列的管线 commitSnapshots 写 130 帧（跨 3 段）�
   const { queue } = queueOf(t, { pipeline: A, client: asset, content, dir: root });
   const enqueued = [];
   const rawEnqueue = queue.enqueue.bind(queue);
-  queue.enqueue = (unit, priority) => { enqueued.push({ unit: wire(unit), priority }); return rawEnqueue(unit, priority); };
+  const pending = [];
+  queue.enqueue = (unit, priority) => { enqueued.push({ unit: wire(unit), priority }); const r = rawEnqueue(unit, priority); pending.push(r); return r; };
   attachQueue(A, queue);
 
   const contentKey = sha256('card-W1');
@@ -158,6 +160,9 @@ test('W1 配了推送队列的管线 commitSnapshots 写 130 帧（跨 3 段）�
     }
   }
   assert.equal(content.puts().length, 0, 'start() 之前不推');
+  // 钩子不 await enqueue（第 9 节第 1 条）：等它回的 Promise 兑现（看得到的话），再读队列文件
+  await Promise.all(pending);
+  await until(async () => (await readQueueFile(root)) !== null, { timeoutMs: 3000, what: () => '进队之后没写 push-queue.json' });
   const persisted = await readQueueFile(root);
   assert.ok(persisted, '进队就写 <dir>/push-queue.json');
   assert.doesNotThrow(() => JSON.parse(persisted), 'push-queue.json 是合法 JSON');
@@ -232,9 +237,9 @@ test('W2 优先级：同时进队一段共享档、一段本地档、一段含�
   const content = countingContent(svc.content);
   const { queue } = queueOf(t, { pipeline: A, client: svc.client, content, dir: root, concurrency: 1 });
   // 故意按 lowest → low → normal 进队
-  queue.enqueue(unitOf(over), LOWEST);
-  queue.enqueue(unitOf(local), LOW);
-  queue.enqueue(unitOf(shared), NORMAL);
+  await queue.enqueue(unitOf(over), LOWEST);
+  await queue.enqueue(unitOf(local), LOW);
+  await queue.enqueue(unitOf(shared), NORMAL);
   queue.start();
   await waitPuts(content, 3);
   assert.deepEqual(putOrder(content), [manifestKey(shared), manifestKey(local), manifestKey(over)], 'normal → low → lowest');
@@ -313,7 +318,7 @@ test('W4 推到一半 stop()，从同一个 dir 重建队列：未完成的段�
   });
   const content1 = countingContent(svc.content);
   const q1 = queueOf(t, { pipeline: A, client: asset1, content: content1, dir: root, concurrency: 1 });
-  for (const task of tasks) q1.queue.enqueue(unitOf(task), NORMAL);
+  for (const task of tasks) await q1.queue.enqueue(unitOf(task), NORMAL); // 第 9 节第 1 条：写回队列文件后才兑现
   const before = await readQueueFile(root);
   assert.ok(before && tasks.every((task) => before.includes(task.resultKey)), '四段都落进了 push-queue.json');
   q1.queue.start();
@@ -370,7 +375,7 @@ test('W5 素材服务对某段返回 500：这一段按 5 s、30 s 退避重试�
   const content = countingContent(svc.content);
   const clock = createManualClock();
   const { queue } = queueOf(t, { pipeline: A, client: asset, content, dir: root, concurrency: 1, clock });
-  for (const task of tasks) queue.enqueue(unitOf(task), NORMAL);
+  for (const task of tasks) await queue.enqueue(unitOf(task), NORMAL);
   queue.start();
   await waitPuts(content, 2);
   await new Promise((resolve) => setTimeout(resolve, 200));
