@@ -23,6 +23,13 @@ import { browserTools } from "./tools/browser.mjs";
 import { agentTools } from "./tools/agent.mjs";
 import { coreTools } from "./tools/core.mjs";
 
+/** 工具名 → 所在分组(server/tools/ 的文件名)。工具调用事件的 icon 用它(C6.5 D2) */
+export const toolGroups = Object.fromEntries([
+  ["project", projectTools], ["clips", clipsTools], ["layout", layoutTools], ["tracks", tracksTools], ["parts", partsTools],
+  ["effects", effectsTools], ["cuts", cutsTools], ["audio", audioTools], ["ai", aiTools], ["cards", cardsTools],
+  ["vision", visionTools], ["collect", collectTools], ["browser", browserTools], ["agent", agentTools], ["core", coreTools],
+].flatMap(([group, list]) => list.map((t) => [t.name, group])));
+
 export const tools = [
   ...projectTools,
   ...clipsTools,

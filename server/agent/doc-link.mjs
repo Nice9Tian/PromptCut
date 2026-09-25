@@ -462,3 +462,6 @@ export function createAgentLink({
     },
   };
 }
+
+/** 只给测试:单独验副本的排队与重开 */
+export { Replica as AgentReplica };

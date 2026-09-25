@@ -7,6 +7,7 @@ import { subjectForRange } from "../../kernel/project";
 import { mediaCardUrl, isImageMedia } from "../../ai/mediaRef";
 
 import { shotJobs, subjectDigest } from "../common";
+import { apiUrl } from "../apiUrl";
 
 export const visionHandlers = {
   seePreview: async (args) => {
@@ -220,7 +221,7 @@ export const visionHandlers = {
     return data;
   },
   cardAuthoringGuide: async () => {
-    const res = await fetch("/api/cards/guide");
+    const res = await fetch(apiUrl("/api/cards/guide"));
     if (!res.ok) throw new Error(`拿不到建卡指南(HTTP ${res.status})`);
     return { guide: await res.text() };
   },

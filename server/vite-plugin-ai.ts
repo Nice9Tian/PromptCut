@@ -211,7 +211,11 @@ export default function vitePluginAi(): Plugin {
        * 编辑器那一端挂,而预渲染进程也要按键取项目。
        */
 
-      /** 这几个工具在服务端就地执行(有镜像时);其余照旧经编辑器页面 */
+      /**
+       * 这几个工具在服务端就地执行(有镜像时);其余照旧经编辑器页面。
+       * C6.5 D4:绑了项目副本(见下面 bindAgent)时不再用镜像 —— 这几个加上 get_layout 由 server/agent/agent-exec.mjs
+       * 读**副本**执行,回包带 rev;这张表只管没绑副本时的老路。
+       */
       const MIRRORED_TOOLS = new Set(['get_project', 'see_frames', 'get_gif', 'bake_card', 'inspect_card_dom']);
 
       /**
@@ -293,6 +297,92 @@ export default function vitePluginAi(): Plugin {
         return undefined;
       }
 
+      /*
+       * ---------------- C6.5:Agent 服务端的项目副本(D1、D2、D4;docs/plan/c65-design.md 第 5、7 节) ----------------
+       *
+       * 页面接上文档服务后调 POST /api/agent/bind 告诉这里「我在编辑哪个项目、连的是哪个文档服务」。绑上之后:
+       *   - side: "agent" 的工具在这里、在项目副本上执行(server/agent/agent-exec.mjs),写入以 Agent 对话的身份、
+       *     带期望版本提交给文档服务,不再经页面;get_project / get_layout / see_frames 等读副本;
+       *   - 每个工具调用(不论在哪一侧执行)向文档服务的 events 模块发创建 / 完成两条事件,文字回复整条完成时发一条。
+       * 没绑(页面没接文档服务、无头实例停用了文档服务)时一切照旧:写工具经 SSE 送页面执行,读工具读数据镜像。
+       *
+       * 凭证按对话号给(server/agent/doc-link.mjs 一个对话一条连接):
+       *   - mode "local":本机 local 空间,回环 + promptcut.role.agent.<n>;
+       *   - mode "lan-host":局域网主机上创建者自己的共享项目,本机声明 promptcut.tenant.<projectId> + promptcut.role.agent.<n>;
+       *   - mode "ticket":共享项目(托管端、局域网成员),经 SSE 向页面要一张连接票据(k:'conn', r:'agent', c:<n>),
+       *     页面用 POST /api/agent/ticket 交回。
+       */
+      type AgentBinding = { projectId: string; mode: string; url: string; link: any; executor: any };
+      let agentBinding: AgentBinding | null = null;
+      let ticketSeq = 0;
+      const ticketWaiters = new Map<string, { resolve: (ticket: string) => void; reject: (err: Error) => void; timer: ReturnType<typeof setTimeout> }>();
+      const AGENT_MODES = new Set(["local", "lan-host", "ticket"]);
+      const PROJECT_ID_RE = /^[A-Za-z0-9._:-]{1,128}$/;
+      const editorPortOf = () => (server.httpServer?.address() as any)?.port || 5195;
+      const agentLog = (event: string, fields: object = {}) => {
+        try { console.info("[agent]", event, JSON.stringify(fields)); } catch { console.info("[agent]", event); }
+      };
+
+      /** 向页面要一张 agent 角色的连接票据(页面凭它在文档服务上的身份签) */
+      function requestTicket(projectId: string, conversation: number): Promise<string> {
+        return new Promise((resolve, reject) => {
+          if (!editorRes) return reject(new Error("编辑台没有打开,要不到连接票据"));
+          const reqId = `t${++ticketSeq}`;
+          const timer = setTimeout(() => {
+            ticketWaiters.delete(reqId);
+            reject(new Error("页面 10 秒内没有交回连接票据"));
+          }, 10_000);
+          ticketWaiters.set(reqId, { resolve, reject, timer });
+          editorRes.write(`data: ${JSON.stringify({ type: "agent.ticket", reqId, projectId, role: "agent", conversation })}\n\n`);
+        });
+      }
+
+      async function bindAgent(input: any): Promise<AgentBinding> {
+        const projectId = typeof input?.projectId === "string" && PROJECT_ID_RE.test(input.projectId) ? input.projectId : null;
+        if (!projectId) throw new Error("projectId 不合法");
+        const mode = typeof input?.mode === "string" ? input.mode : "local";
+        if (!AGENT_MODES.has(mode)) throw new Error(`mode 只能是 ${[...AGENT_MODES].join(" / ")}`);
+        let url = `ws://127.0.0.1:${editorPortOf()}/docservice`;
+        if (mode === "ticket") {
+          if (typeof input?.url !== "string" || !/^wss?:\/\//.test(input.url)) throw new Error("mode 为 ticket 时要给文档服务的 ws(s):// 地址");
+          url = input.url;
+        }
+        if (agentBinding && agentBinding.projectId === projectId && agentBinding.mode === mode && agentBinding.url === url) return agentBinding;
+        unbindAgent("rebind");
+        const [{ createAgentLink }, { createAgentExecutor }, { loadSsrHost }, { toolGroups }] = await Promise.all([
+          import(new URL("./agent/doc-link.mjs", import.meta.url).href),
+          import(new URL("./agent/agent-exec.mjs", import.meta.url).href),
+          import(new URL("./agent/ssr-host.mjs", import.meta.url).href),
+          import(new URL("./mcp-tools.mjs", import.meta.url).href),
+        ]);
+        const protocolsFor = async (n: number) => {
+          if (mode === "local") return ["promptcut.v1", `promptcut.role.agent.${n}`];
+          if (mode === "lan-host") return ["promptcut.v1", `promptcut.tenant.${projectId}`, `promptcut.role.agent.${n}`];
+          return ["promptcut.v1", `promptcut.ticket.${await requestTicket(projectId, n)}`];
+        };
+        const link = createAgentLink({ url, projectId, protocolsFor, log: agentLog });
+        const executor = createAgentExecutor({
+          link,
+          loadHost: () => loadSsrHost((id: string) => server.ssrLoadModule(id), { apiBase: `http://127.0.0.1:${editorPortOf()}` }),
+          prerenderPost,
+          playhead: () => latestPlayhead()?.t ?? 0,
+          toolGroups,
+          log: agentLog,
+        });
+        agentBinding = { projectId, mode, url, link, executor };
+        agentLog("agent.bind", { projectId, mode, url });
+        return agentBinding;
+      }
+
+      function unbindAgent(reason: string) {
+        const b = agentBinding;
+        if (!b) return;
+        agentBinding = null;
+        try { b.link.close(); } catch { /* 已经关了 */ }
+        agentLog("agent.unbind", { projectId: b.projectId, reason });
+      }
+      server.httpServer?.once("close", () => unbindAgent("server-close"));
+
       /** 审查环路走 CLI 时的只读锁:null = 不锁;Set = 只放行这些工具(空 Set = 全拦)。见下面 callToolInternal */
       let loopToolLock: Set<string> | null = null;
 
@@ -334,11 +424,30 @@ export default function vitePluginAi(): Plugin {
         if (!verdict.ok) return { ok: false, skillClosed: true, message: verdict.message };
 
         /*
-         * 读 / 渲染类工具有镜像时就地执行,直接问预渲染进程,不经过编辑器页面(见上面 runMirroredTool)。
-         * 返回 undefined 的(没有镜像、素材拼图这类)照旧走桥。
+         * 绑了项目副本(C6.5):每个工具调用前后各发一条事件(D2),执行交给 dispatchTool。
+         * 没绑:和以前一样,不发事件。
          */
-        const mirrored = await runMirroredTool(tool, args, toolDef);
-        if (mirrored !== undefined) return mirrored;
+        const binding = agentBinding;
+        if (binding) return binding.executor.track(tool, args, agent || '', (ctx: any) => dispatchTool(tool, args, agent, toolDef, binding, ctx));
+        return dispatchTool(tool, args, agent, toolDef, null, null);
+      }
+
+      async function dispatchTool(tool: string, args: any, agent: string | undefined, toolDef: any, binding: AgentBinding | null, ctx: any): Promise<any> {
+        if (binding && toolDef.side === 'agent') {
+          /*
+           * D1 / D4:在项目副本上执行,写入以 Agent 对话的身份、带期望版本提交给文档服务。
+           * 回 undefined 的(素材镜头拼图)照旧走桥。
+           */
+          const done = await binding.executor.execute(tool, args, agent || '', toolDef, ctx);
+          if (done !== undefined) return done;
+        } else if (!binding) {
+          /*
+           * 读 / 渲染类工具有镜像时就地执行,直接问预渲染进程,不经过编辑器页面(见上面 runMirroredTool)。
+           * 返回 undefined 的(没有镜像、素材拼图这类)照旧走桥。
+           */
+          const mirrored = await runMirroredTool(tool, args, toolDef);
+          if (mirrored !== undefined) return mirrored;
+        }
 
         /*
          * side: "server" 的工具就地执行,不过浏览器桥。
@@ -395,6 +504,13 @@ export default function vitePluginAi(): Plugin {
         editorRes.write(`data: ${JSON.stringify({ type: 'call', id, tool, args, agent: agent || undefined })}\n\n`);
         
         const out = await p;
+        /*
+         * 留在页面的工具写了项目时,页面回包带它这次提交的 opIds(页面接上文档服务之后,c65-editor):
+         * 等这些提交进副本,并把这个对话读到的版本推过去,免得它紧接着的写入被自己让页面做的改动挡住。
+         */
+        if (binding && Array.isArray(out.opIds) && out.opIds.length) {
+          await binding.executor.notePageWrites(agent || '', out.opIds.filter((x: unknown) => typeof x === 'string')).catch(() => {});
+        }
         if (out.ok) return out.result || out;
         throw new Error(out.error);
       }
@@ -906,6 +1022,16 @@ export default function vitePluginAi(): Plugin {
               throw e;
             }
             let replyBytes = 0;
+            /*
+             * D2:文字回复整条完成时推一条事件(绑了项目副本时)。回复在工具调用之间成段,
+             * 遇到下一次工具调用或这一轮结束就把攒着的那一段发出去。
+             */
+            let pendingText = '';
+            const flushText = () => {
+              const b = agentBinding;
+              if (b && pendingText.trim()) b.executor.text(agentId, pendingText);
+              pendingText = '';
+            };
 
             const run = runners.startRun({
               provider,
@@ -947,6 +1073,8 @@ export default function vitePluginAi(): Plugin {
               callTool: async (name: string, args: any) => await callToolInternal(name, args, agentId || undefined),
               onEvent: (ev: any) => {
                 if (ev.type === 'done') hasDone = true;
+                if (ev.type === 'text' && typeof ev.delta === 'string') pendingText += ev.delta;
+                if (ev.type === 'tool_call' || ev.type === 'done') flushText();
                 if (ev.type === 'text' && typeof ev.delta === 'string') replyBytes += Buffer.byteLength(ev.delta, 'utf8');
                 // The chat never reads a tool result's full output (get_project is the whole
                 // project); sending it made the editor parse and trace megabytes per result.
@@ -979,6 +1107,7 @@ export default function vitePluginAi(): Plugin {
             runState.finished = true;
             activeRuns.delete(runId);
             clearInterval(keepAlive);
+            flushText();
             // 记账:这一轮新增的上下文 = 发出去的提示词 + 收回来的回复。到线就后台重查,超线掐同一路的其他对话
             const noted = quotaGuard.note(provider, Buffer.byteLength(finalPrompt, 'utf8') + replyBytes, cfg.quota, model);
             if (noted) noted.then((v: any) => { if (v?.blocked) failProviderRuns(provider, v.message); }).catch(() => {});
@@ -1136,6 +1265,56 @@ export default function vitePluginAi(): Plugin {
             }
           }
         });
+      });
+
+      /*
+       * C6.5 Agent 服务端的项目副本(见上面 bindAgent)。页面(c65-editor)接上文档服务后:
+       *   POST /api/agent/bind   { projectId, mode?: "local" | "lan-host" | "ticket", url? } → { ok, projectId, mode, url }
+       *   POST /api/agent/unbind {} → { ok }(换项目、断开文档服务时)
+       *   POST /api/agent/ticket { reqId, ticket? , error? } → 交回 SSE 里 { type: "agent.ticket" } 要的连接票据
+       *   GET  /api/agent/status → 绑没绑、各对话读到的版本、副本版本(诊断)
+       */
+      const readJsonBody = (req: any, res: ServerResponse, max: number, onBody: (data: any) => void) => {
+        let body = '';
+        let over = false;
+        req.on('data', (c: Buffer) => { if (over) return; body += c; over = overLimit(req, res, body.length, max, `请求体超过 ${max} 字节`); });
+        req.on('end', () => {
+          if (over) return;
+          let data: any;
+          try { data = JSON.parse(body || '{}'); } catch { return sendJson(res, 400, { ok: false, error: '请求体不是 JSON' }); }
+          onBody(data);
+        });
+      };
+      server.middlewares.use('/api/agent/bind', (req, res) => {
+        if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: 'POST only' });
+        readJsonBody(req, res, 8192, async (data) => {
+          try {
+            const b = await bindAgent(data);
+            sendJson(res, 200, { ok: true, projectId: b.projectId, mode: b.mode, url: b.url });
+          } catch (e: any) { sendJson(res, 400, { ok: false, error: e?.message || String(e) }); }
+        });
+      });
+      server.middlewares.use('/api/agent/unbind', (req, res) => {
+        if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: 'POST only' });
+        readJsonBody(req, res, 8192, () => { unbindAgent('page'); sendJson(res, 200, { ok: true }); });
+      });
+      server.middlewares.use('/api/agent/ticket', (req, res) => {
+        if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: 'POST only' });
+        readJsonBody(req, res, 8192, (data) => {
+          const w = typeof data?.reqId === 'string' ? ticketWaiters.get(data.reqId) : undefined;
+          if (!w) return sendJson(res, 404, { ok: false, error: '没有在等这张票据' });
+          ticketWaiters.delete(data.reqId);
+          clearTimeout(w.timer);
+          if (typeof data.ticket === 'string' && data.ticket.length > 0 && data.ticket.length <= 2048) w.resolve(data.ticket);
+          else w.reject(new Error(typeof data.error === 'string' ? `页面没签出票据:${data.error}` : '页面交回的票据不合法'));
+          sendJson(res, 200, { ok: true });
+        });
+      });
+      server.middlewares.use('/api/agent/status', (req, res) => {
+        if (req.method !== 'GET') return sendJson(res, 405, { ok: false, error: 'GET only' });
+        res.setHeader('Cache-Control', 'no-store');
+        const b = agentBinding;
+        sendJson(res, 200, b ? { ok: true, bound: true, mode: b.mode, url: b.url, ...b.executor.describe() } : { ok: true, bound: false });
       });
 
       server.middlewares.use('/api/mcp/status', (req, res) => {
