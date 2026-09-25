@@ -269,7 +269,7 @@ test('SPR-4c 包：查询与通告的形状、≤ 1 KiB、不认识的一律丢'
   assert.equal(encodePacket({ pad: 'x'.repeat(1100) }), null);
   assert.equal(parsePacket(Buffer.alloc(1025, 0x20)), null);
   for (const bad of [
-    'not json', '[]', JSON.stringify({ ...q, magic: 'other' }), JSON.stringify({ ...q, v: 2 }), JSON.stringify({ ...q, nonce: 'short' }),
+    'not json', '[]', JSON.stringify({ ...q, magic: 'other' }), JSON.stringify({ ...q, v: 2 }), JSON.stringify({ ...q, nonce: 'has space' }), JSON.stringify({ ...q, nonce: 'n'.repeat(65) }),
     JSON.stringify({ ...q, name: 'a/b' }), JSON.stringify({ ...ann, projectId: 'p1' }), JSON.stringify({ ...ann, mode: 'open' }),
     JSON.stringify({ ...ann, docservice: 'http://x/docservice' }), JSON.stringify({ ...ann, asset: 'ftp://x' }), JSON.stringify({ ...ann, type: 'hello' }),
   ]) assert.equal(parsePacket(Buffer.from(bad)), null, bad.slice(0, 60));
