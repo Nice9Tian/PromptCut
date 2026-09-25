@@ -481,7 +481,7 @@ function expectSnapshot({ ctl, tier, from, to, priority, cardSources = {}, userC
     id: `snapshot:${resultKey}:${from}-${to}`, kind: 'snapshot', tier, resultKey,
     range: { unit: 'localFrame', from, to },
     source: { projectId: PROJECT, projectRev: REV, derivedFrom: PLAN_ID },
-    input: { clipId: ctl.clipId, cardId: ctl.cardId ?? null, entryKey: tier === 'local' ? ENTRY : null, contentKey },
+    input: { clipId: ctl.clipId, cardId: ctl.cardId ?? null, entryKey: tier === 'local' ? ENTRY : null, contentKey, canvasHeavy: false },
     weight: { ...weight, frames: to - from + 1 },
     requires: {
       envFingerprint: fp, codeVersion: cv, cardSources, transcode: false, userCards, graphCards,

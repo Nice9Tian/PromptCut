@@ -459,6 +459,28 @@ export class FramePipeline {
     this.laneChains.set('agent', task.catch(() => {}));
     return task;
   }
+  /**
+   * 队列执行器(`prerender-executor.mjs`,契约 J.4)的唯一入队口,照 `runAgentTask` 写:`'queue'` lane 自己一个
+   * 预渲染间,任务串行(等前一个 → 借 → 干活 → 还),链进 `laneChains`,`closeNow` 会等它。
+   *
+   * `work(lease)`:`lease(project)` 借 `'queue'` lane 的预渲染间并按 `project` 重置;借过才还,还由这里做
+   * (空闲 30 秒关,同 `'background'`)。排队时 `signal` 已经中止、或管线已关,就不借、直接以 `cancelled` 拒绝。
+   * 没有调用它时什么都不发生(`'queue'` 不在构造时的 `laneChains` 里,第一次用才加)。
+   */
+  runQueueTask(work, signal) {
+    const task = (this.laneChains.get('queue') || Promise.resolve()).catch(() => {}).then(async () => {
+      if (this.closed || signal?.aborted) throw Object.assign(new Error('Queue task cancelled'), { cancelled: true });
+      let leased = false;
+      const lease = async project => {
+        leased = true;
+        return this.acquire('queue', project);
+      };
+      try { return await work(lease); }
+      finally { if (leased) this.release('queue'); }
+    });
+    this.laneChains.set('queue', task.catch(() => {}));
+    return task;
+  }
   /** C4:镜像插件里这一刻的 `wanted`(页面报的「播放头附近现在缺哪些层」) */
   playheadWanted() {
     try { return this.playhead()?.wanted ?? []; } catch { return []; }
@@ -571,7 +593,8 @@ export class FramePipeline {
     catch (e) { await bakery.close(); throw e; }
   }
   scaleForLane(lane) {
-    if (lane !== 'background') return 1;
+    // J.4:`'queue'` lane 产的是后台那一趟同一种结果,用同一个缩放
+    if (lane !== 'background' && lane !== 'queue') return 1;
     const value = Number(process.env.PROMPTCUT_PRERENDER_SCALE || 1);
     return Number.isFinite(value) && value > 0 ? Math.min(3, Math.max(0.5, value)) : 1;
   }
@@ -596,7 +619,8 @@ export class FramePipeline {
     return { capture: this.captureCode() || undefined, cards };
   }
   async acquire(lane, project) {
-    if (lane === 'background' && (this.backgroundYielding || this.backgroundLeaseUntil > Date.now())) throw Object.assign(new Error('Background yielded to playback'), { cancelled: true });
+    // J.4:队列执行器的 `'queue'` lane 和后台那一趟一样给播放让路
+    if ((lane === 'background' || lane === 'queue') && (this.backgroundYielding || this.backgroundLeaseUntil > Date.now())) throw Object.assign(new Error('Background yielded to playback'), { cancelled: true });
     const previous = this.lanes.get(lane);
     clearTimeout(previous?.timer);
     if (previous) {
@@ -610,7 +634,7 @@ export class FramePipeline {
       } catch { await previous.bakery.close().catch(() => {}); this.lanes.delete(lane); }
     }
     const bakery = await this.bakery(project, lane);
-    if (lane === 'background' && (this.backgroundYielding || this.backgroundLeaseUntil > Date.now())) {
+    if ((lane === 'background' || lane === 'queue') && (this.backgroundYielding || this.backgroundLeaseUntil > Date.now())) {
       await bakery.close();
       throw Object.assign(new Error('Background yielded to playback'), { cancelled: true });
     }
@@ -1027,7 +1051,8 @@ export class FramePipeline {
       entry.mov.writerError ||= error;
     }
   }
-  record(entry, n, html, controls = []) {
+  /** `options.anchors`:锚帧那一趟(`fillAnchorSnapshots`)记的帧。只在队列模式下有区别,见 `recordSnapshots` */
+  record(entry, n, html, controls = [], options = undefined) {
     entry.recordVersion = (entry.recordVersion || 0) + 1;
     entry.html.set(n, html);
     for (const control of controls) {
@@ -1037,7 +1062,27 @@ export class FramePipeline {
       // knowing the clip's global start time.
       entry.controls.get(control.id).set(control.frame, control.html);
     }
-    this.recordSnapshots(entry, controls);
+    this.recordSnapshots(entry, controls, options);
+  }
+  /**
+   * 队列模式(契约 J.5)下由队列细任务产快照的那些卡:共享档里可缓存的(隔离单卡渲)与本地档(整场景渲)。
+   * 共享档里不可缓存的(`sourceDependent`)不进队列,照旧只由整场景路或 B 趟产(附件第 2 节)。
+   * `planForQueue` 与 `recordSnapshots` 的队列闸用同一个判据。
+   */
+  queueHandles(control) {
+    if (!control?.snapshotKey || !control.clipId) return false;
+    const tier = control.tier || snapshotTier(control.capabilities);
+    return tier === 'local' || (tier === 'shared' && control.cacheable === true);
+  }
+  /** 这个 entry 的 card plan 里 `queueHandles` 为真的 clipId(按 plan 对象缓存) */
+  queueHandledClips(entry) {
+    const plan = entry?.cardPlan;
+    if (!Array.isArray(plan)) return new Set();
+    if (entry.queueHandledPlan !== plan) {
+      entry.queueHandledPlan = plan;
+      entry.queueHandledSet = new Set(plan.filter(control => this.queueHandles(control)).map(control => control.clipId));
+    }
+    return entry.queueHandledSet;
   }
   /**
    * pinned 渲染 9:**只预渲染预渲染集合 `plan.prerenderSet`(任一位置判重的卡的并集)
@@ -1102,10 +1147,18 @@ export class FramePipeline {
    * (更粗:项目里任何改动都会换 `entry.key`、整棵本地档作废),`localSceneKey`
    * 和「下层活跃控件的共享键 + 位置」是后面的事。
    */
-  recordSnapshots(entry, controls) {
+  recordSnapshots(entry, controls, options = undefined) {
     let targets = this.snapshotTargets(entry);
     if (!targets?.size || !controls?.length) return;
+    /*
+     * 队列模式(契约 J.5:「不再跑原来后台那一趟的快照部分;锚帧、流、整场景照旧由 preload 产」):
+     * 由队列细任务产的卡(`queueHandles`),整场景路(B 趟、MOV 那一趟、Agent 查询顺带记的帧)只记整帧 HTML,
+     * 不再顺手写它们的快照;锚帧那一趟照写。`entry.queueSnapshots` 只有队列模式的 preload 会设,
+     * 没设(开关关着、以及所有现有调用方)时这里什么都不跳。
+     */
+    const handled = entry.queueSnapshots === true && options?.anchors !== true ? this.queueHandledClips(entry) : null;
     for (const control of controls) {
+      if (handled?.has(control.id)) continue;
       const target = targets.get(control.id);
       if (!target || !Number.isInteger(control.frame)) continue;
       // 契约 F.3「渲之前得锁」:共享档每帧入批之前得锁;得不到(页面刚锁了这张卡)这帧不写,
@@ -1198,14 +1251,20 @@ export class FramePipeline {
    * `session` 是页面镜像的会话(HTTP 的 `/preload` 从 body 里带来;脚本不带就是缺省会话),
    * `localRev` 是页面的版本号。`adopt: false`(让路之后重新排上的那些)只排活、不动任何会话的版本。
    *
+   * `queue`(契约 J.5):`true` = 这一版的快照交给渲染任务队列产(队列模式的 `/preload` 路由传),
+   * `false` = 退回本机自己产(连不上文档服务时);不传(缺省,所有现有调用方)就不动 entry 上记着的模式。
+   * 队列模式下后台那一趟跳过 `fillCardControls` 与 `renderLocalSnapshots`,整场景路也不再顺手写
+   * 队列负责的那些卡的快照(`recordSnapshots`);锚帧、流、整场景照旧。
+   *
    * @param {any} project
-   * @param {{ session?: string, localRev?: unknown, adopt?: boolean, owner?: string, ticket?: number }} [options]
+   * @param {{ session?: string, localRev?: unknown, adopt?: boolean, owner?: string, ticket?: number, queue?: boolean }} [options]
    */
-  async preload(project, { session = DEFAULT_READY_SESSION, localRev, adopt = true, owner: as = undefined, ticket: issued = undefined } = {}) {
+  async preload(project, { session = DEFAULT_READY_SESSION, localRev, adopt = true, owner: as = undefined, ticket: issued = undefined, queue = undefined } = {}) {
     session = typeof session === 'string' ? session : DEFAULT_READY_SESSION;
     // `ticket`:HTTP 入口在等镜像之前就替它领了号(按到达顺序,不按算完的顺序,审查 #6)
     const ticket = adopt ? (issued ?? this.ready.request(session)) : undefined;
     const entry = await this.entry(project);
+    if (queue !== undefined) entry.queueSnapshots = queue === true;
     if (adopt) {
       // 算 entry 的那一段里同一会话又来了更新的 preload:这个请求作废 —— 不认领,也不排后台活
       // (排了会把更新那一版刚开的后台代次掐掉)
@@ -1250,13 +1309,16 @@ export class FramePipeline {
         // R8 / G4:锚帧就绪之后轨道流开始生产。它有自己的会话(`streamPool`),不占这条 lane,
         // 也不等它 —— 这里只是把这一版的流交给生产者
         if (!controller.signal.aborted) void this.streamProducer()?.update(entry).catch(() => {});
-        deferredCards.push(...(await this.fillCardControls(entry, bakery, controller.signal, cardPlan.filter(c => c.cacheable && c.needPrerendering))) ?? []);
+        // J.5:队列模式下这两步的快照交给队列细任务(执行器 `renderCardSnapshotRange` / `renderSceneSnapshotRange`)。
+        // 每一步开始前现读 `entry.queueSnapshots`:中途连不上文档服务、退回本机时(`leaveQueueMode`),余下的步骤照常跑
+        const viaQueue = () => entry.queueSnapshots === true;
+        if (!viaQueue()) deferredCards.push(...(await this.fillCardControls(entry, bakery, controller.signal, cardPlan.filter(c => c.cacheable && c.needPrerendering))) ?? []);
         // C2 本地档那一趟:一趟整场景服务该帧上全部本地档卡(毛玻璃 / unknown)
-        await this.renderLocalSnapshots(entry, await this.missingSnapshotFrames(entry, { tiers: ['local'] }), bakery, controller.signal);
+        if (!viaQueue()) await this.renderLocalSnapshots(entry, await this.missingSnapshotFrames(entry, { tiers: ['local'] }), bakery, controller.signal);
         await this.fillRequiredScene(entry, bakery, controller.signal, cardPlan);
         if (this.playback?.playing) { entry.status = 'partial'; return; }
         entry.stage = 'direct';
-        deferredCards.push(...(await this.fillCardControls(entry, bakery, controller.signal, cardPlan.filter(c => c.cacheable && !c.needPrerendering))) ?? []);
+        if (!viaQueue()) deferredCards.push(...(await this.fillCardControls(entry, bakery, controller.signal, cardPlan.filter(c => c.cacheable && !c.needPrerendering))) ?? []);
         // `size === count` is not enough for a sparse archive: a foreground
         // request can contain exactly `count` entries while still missing one
         // frame and containing an out-of-range index.  C must only start after
@@ -1809,12 +1871,20 @@ export class FramePipeline {
     await bakeFrames(bakery, {
       out: entry.dir, targetFrames: frames, snapshotOnly: false, fullFrame: true, writeFrames: false, signal,
       snapshotFrames: new Set(frames),
-      onSnapshot: (n, html, controls) => this.record(entry, n, html, controls),
+      // `anchors`:队列模式下锚帧仍由这一趟产(J.5),见 `recordSnapshots`
+      onSnapshot: (n, html, controls) => this.record(entry, n, html, controls, { anchors: true }),
     });
     await this.flushSnapshots(entry);
     if (!signal?.aborted) { entry.anchorsReady = true; this.ready.markDone(entry.key); }
   }
-  async fillCardControls(entry, bakery, signal, controls = null) {
+  /**
+   * 第 5 个参数(契约 J.4,只有队列执行器的 `renderCardSnapshotRange` 传;preload 从来不传):
+   *   `range`   `{ from, to }` 本地帧闭区间:批次只从覆盖这个区间的那几批起(起点按 4 帧对齐),
+   *             生成快照的帧只取区间内缺的;PNG 那一支、锁的判断、批内的帧照旧;
+   *   `onBatch` 每批交完调一次 `({ control, first, frames, snapshotFrames })`(进度用)。
+   * 不传时逐字节是原来的行为。
+   */
+  async fillCardControls(entry, bakery, signal, controls = null, { range = null, onBatch = null } = {}) {
     if (!controls) {
       const browserPlan = await this.browserCardPlan(bakery);
       if (!browserPlan) return [];
@@ -1908,7 +1978,12 @@ export class FramePipeline {
       // C4:批次边界是可调度点 —— 每批开始前读镜像插件的 `latestPlayhead().wanted`,
       // 含它的那一批先跑,再回到顺序批(`nextBatchStart`)。
       const pending = new Set();
-      for (let first = 0; first < control.count; first += 4) pending.add(first);
+      if (range) {
+        // J.4:只跑覆盖 [from, to] 的那几批;批的起点仍按 4 帧对齐,和整张卡一趟渲时的批一模一样
+        const last = Math.min(range.to, control.count - 1);
+        for (let first = Math.max(0, range.from - (range.from % 4)); first <= last; first += 4) pending.add(first);
+      } else for (let first = 0; first < control.count; first += 4) pending.add(first);
+      const inRange = range ? n => n >= range.from && n <= range.to : () => true;
       while (pending.size) {
         if (signal?.aborted) throw Object.assign(new Error('Cancelled'), { cancelled: true });
         const first = this.nextBatchStart(pending, control);
@@ -1917,7 +1992,7 @@ export class FramePipeline {
         // C2:帧集合收窄成**本卡缺的那些帧**(按该键 `index.json` 已有区间扣除)。
         // PNG 那一支照旧要全部帧(`targetFrames` 不动),只有生成快照这一支收窄。
         // R6-14:已经判过超限的那些帧也扣掉,不再白渲一遍
-        const missing = target ? localFrames.filter(n => !rangeHas(index.frames, n) && !rangeHas(index.oversize, n)) : [];
+        const missing = target ? localFrames.filter(n => inRange(n) && !rangeHas(index.frames, n) && !rangeHas(index.oversize, n)) : [];
         await bakery.reset(isolated, this.emptyUrl(isolated), { deferCards: true });
         await bakery.page.setViewport({ width: isolated.width, height: isolated.height, deviceScaleFactor: this.scaleForLane('background') });
         const produced = [];
@@ -1943,6 +2018,7 @@ export class FramePipeline {
           // C3:这一层的区间长了就发一条全量 `layer`
           if (index.written.length) this.publishLayer(entry, control, tier, index.frames);
         }
+        if (onBatch && !signal?.aborted) onBatch({ control, first, frames: localFrames, snapshotFrames: missing });
       }
       if (!signal?.aborted) await entry.cardCache.finish(control);
     }
@@ -2050,6 +2126,163 @@ export class FramePipeline {
       }
     }
     return { ok: true, stored: true, indexed: true, count: index.count, envFingerprint, key };
+  }
+  /**
+   * 队列执行器的 `plan`(契约 J.4,设计附件第 2 节)。`project` 已经过 `renderProject`,和 `/preload` 路由对
+   * 镜像做的是同一件事,所以同一份 JSON 算出同一个 `entry.key`。
+   *
+   *   1. `entry = this.entry(project)`;
+   *   2. 在 `'queue'` lane 上开预渲染间、取浏览器的卡片计划(`browserCardPlan`,不需要页面会话);
+   *   3. `entry.cardPlan` 还不是数组时 `recordCardPlan`(不调 `adoptCardPlan`:它会去认领会话);
+   *   4. 按本机锁库给共享档卡定 `cardLocks` / `takeover`(`cardLockDecision`):`reuse` / `defer` 照锁定方的指纹
+   *      出键;`takeover` 先在本机锁库里接手(同 `fillCardControls` 的做法,同一内容键的片段一起换键发层),
+   *      再让切分按本机指纹出键、任务带 `takeover`;
+   *   5. 只留 `queueHandles` 的卡,补上 `cardId`(`split.mjs` 要,卡片计划里的 control 只有 `nodeId`)。
+   *
+   * 回 `{ entry, context }`,`context` 就是交给 `splitPlan` 的 PlanContext(`streams` 为空:流不走队列,J.0)。
+   */
+  async planForQueue(project, { signal } = {}) {
+    const entry = await this.entry(project);
+    const browserPlan = await this.runQueueTask(async lease => {
+      const bakery = await lease(entry.project);
+      if (signal?.aborted) throw Object.assign(new Error('Queue task cancelled'), { cancelled: true });
+      return this.browserCardPlan(bakery);
+    }, signal);
+    if (!browserPlan) throw Object.assign(new Error('预渲染间没有给出卡片计划(window.__pcCardPlan)'), { code: 'no-card-plan', retryable: true });
+    await this.ensureCardLocks();
+    if (!Array.isArray(entry.cardPlan)) {
+      let plan;
+      try { plan = entry.cardCache.plan(browserPlan); }
+      catch (error) { throw Object.assign(new Error(`算不出卡片计划:${error?.message || error}`), { code: 'no-card-plan', retryable: true }); }
+      this.recordCardPlan(entry, plan);
+    }
+    // 锁可能在 card plan 记下之后变过(页面刚存了测量帧):按锁库重排一遍
+    this.reapplyCardLocks(entry);
+    const fps = Number(entry.project.fps) || 30;
+    const count = Math.max(1, Math.floor(Number(entry.project.duration) * fps));
+    const graph = browserPlan?.graph || browserPlan;
+    const cardIdOf = new Map((graph?.nodes ?? []).map(node => [node?.id, node?.cardId ?? null]));
+    const sourceVersions = browserPlan?.sourceVersions ?? {};
+    const store = this.cardLockStore;
+    const own = this.envFingerprint;
+    const cardLocks = new Map();
+    const takeover = new Set();
+    for (const control of entry.cardPlan) {
+      if (!this.queueHandles(control) || !this.prerenderPicked(entry, control.clipId)) continue;
+      if ((control.tier || snapshotTier(control.capabilities)) !== 'shared' || !control.contentKey || !store) continue;
+      const lock = store.get(control.contentKey);
+      const ownFingerprint = control.ownEnvFingerprint ?? own;
+      if (!lock || lock.envFingerprint === ownFingerprint) continue;
+      const lockKey = `snapshot:${control.contentKey}`;
+      const foreign = await this.snapshots().snapshotIndex({ tier: 'shared', key: resultKeyOf(control.contentKey, lock.envFingerprint) });
+      const complete = foreign.count + rangeCount(foreign.oversize) >= control.count;
+      const decision = cardLockDecision({ lock, ownFingerprint, complete, now: Date.now(), idleMs: this.cardLockIdleMs ?? CARD_LOCK_IDLE_MS });
+      // 队列那边的锁多半也在锁定方身上:照它的指纹出键,或带 `takeover` 按本机指纹出键(契约 F.2)
+      cardLocks.set(lockKey, lock.envFingerprint);
+      if (decision !== 'takeover' || !ownFingerprint) continue;
+      store.takeover(control.contentKey, ownFingerprint, 'prerender');
+      this.reapplyCardLocks(entry);
+      const index = await this.snapshots().snapshotIndex({ tier: 'shared', key: control.snapshotKey });
+      this.publishRelocked(entry, null, control, index.frames);
+      takeover.add(lockKey);
+    }
+    const cardPlan = entry.cardPlan.filter(control => this.queueHandles(control))
+      .map(control => ({ ...control, cardId: control.cardId ?? cardIdOf.get(control.nodeId) ?? null }));
+    const clips = (entry.project.tracks || []).flatMap(track => track.clips || []);
+    const context = {
+      entryKey: entry.key,
+      prerenderSet: entry.prerenderSet instanceof Set ? new Set(entry.prerenderSet) : undefined,
+      cardPlan,
+      streams: [],
+      anchorFrames: anchorFrames(clips, fps).filter(frame => frame >= 0 && frame < count),
+      // 附件第 5 节:`codeVersion = frameCode(root)` 已经覆盖了全部卡片源码,这里留空
+      cardSourceVersions: {},
+      weightOf: control => ({ class: this.queueWeightClass(control), estMs: null }),
+      isUserCard: control => String(sourceVersions[control?.cardId] ?? '').startsWith('user:'),
+      isGraphCard: control => this.isGraphCardControl(control),
+      cardLocks,
+      takeover,
+    };
+    return { entry, context };
+  }
+  /** 细任务的重度(附件第 2 节):`canvasHeavy`、`belowDependent`、`unknown`、本地档记 `heavy`,其余 `medium` */
+  queueWeightClass(control) {
+    const caps = control?.capabilities ?? {};
+    const compositing = control?.compositing ?? caps.compositing;
+    if ((control?.tier || snapshotTier(caps)) === 'local') return 'heavy';
+    if (caps.canvasHeavy === true || compositing === 'belowDependent' || compositing === 'unknown') return 'heavy';
+    return 'medium';
+  }
+  /**
+   * 共享档快照任务的一段(契约 J.4,附件第 3 节):在 `'queue'` lane 上对这一张卡跑 `fillCardControls`,
+   * 只跑覆盖 `range` 的批。`control` 是 `entry.cardPlan` 里的那一项(锁的状态记在它身上)。
+   * 这张卡被别的环境锁住(开工前或渲的途中被页面抢了锁)抛 `card-locked-local`(不可重试)。
+   * `progress(done)` 报这一段里已经交过的本地帧数。回 `null`:产物在帧库里,sink 自己读。
+   */
+  async renderCardSnapshotRange(entry, control, range, { signal, progress } = {}) {
+    const locked = () => Object.assign(new Error(`片段 ${control.clipId} 这张卡锁在别的环境上`), { code: 'card-locked-local', retryable: false });
+    if (control.cardLock?.foreign === true) throw locked();
+    let done = 0;
+    await this.runQueueTask(async lease => {
+      const bakery = await lease(entry.project);
+      await this.fillCardControls(entry, bakery, signal, [control], {
+        range,
+        onBatch: ({ frames }) => {
+          done += frames.filter(n => n >= range.from && n <= range.to).length;
+          try { progress?.(done); } catch { /* 进度回调出错不影响渲染 */ }
+        },
+      });
+    }, signal);
+    if (signal?.aborted) throw Object.assign(new Error('Queue task cancelled'), { cancelled: true });
+    if (control.cardLock?.foreign === true) throw locked();
+    return null;
+  }
+  /**
+   * 本地档快照任务的一段(契约 J.4,附件第 3 节):本地帧换成全局帧,照 `missingSnapshotFrames` 的条件挑出
+   * 这张卡在这一段里缺的帧,交给 `renderLocalSnapshots`(一趟整场景服务该帧上的全部本地档卡)。回 `null`。
+   */
+  async renderSceneSnapshotRange(entry, control, range, { signal, progress } = {}) {
+    const fps = Number(entry.project.fps) || 30;
+    const index = await this.snapshots().snapshotIndex({ tier: 'local', entryKey: entry.key, key: control.snapshotKey });
+    const frames = [];
+    for (let local = range.from; local <= range.to && local < control.count; local++) {
+      if (rangeHas(index.frames, local) || rangeHas(index.oversize, local)) continue;
+      const global = local + control.sampling.firstFrame;
+      if (global / fps >= control.end - 1e-9) break;
+      frames.push(global);
+    }
+    if (frames.length) {
+      await this.runQueueTask(async lease => {
+        const bakery = await lease(entry.project);
+        await this.renderLocalSnapshots(entry, frames, bakery, signal);
+      }, signal);
+    }
+    if (signal?.aborted) throw Object.assign(new Error('Queue task cancelled'), { cancelled: true });
+    try { progress?.(range.to - range.from + 1); } catch { /* 同上 */ }
+    return null;
+  }
+  /**
+   * 连不上文档服务(契约 J.5「中途连不上文档服务」):队列模式的 entry 一律退回本机自己产。
+   * 这些 entry 的后台代次掐掉重排(`adopt: false`,不动会话版本);已经跑完的那一趟也要重排 ——
+   * 它跳过了快照那几步。重排的这一趟 B 趟因为整帧 HTML 已齐会跳过,快照由 `fillCardControls` /
+   * `renderLocalSnapshots` 补。没有会话停在这一版上的不重排。回重排了几个。
+   */
+  leaveQueueMode() {
+    const rerun = [];
+    for (const [owner, generation] of this.generations) {
+      const entry = this.entries.get(generation.key);
+      if (entry?.queueSnapshots !== true) continue;
+      generation.controller.abort();
+      rerun.push([owner, entry]);
+    }
+    for (const entry of this.entries.values()) if (entry.queueSnapshots === true) entry.queueSnapshots = false;
+    let count = 0;
+    if (!this.closed) for (const [owner, entry] of rerun) {
+      if (!this.ready.sessionsOn(entry.key).length) continue;
+      void this.preload(entry.project, { adopt: false, owner }).catch(() => {});
+      count++;
+    }
+    return count;
   }
   isolatedCardProject(project, control) {
     const targetId = control.clipId;

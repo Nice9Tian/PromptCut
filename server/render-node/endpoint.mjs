@@ -1,7 +1,8 @@
 /**
- * 文档服务端点解析与服务地址订阅（分布式预渲染 M5a，契约 `docs/plan/render-queue-contract.md` G.7）。
+ * 文档服务端点解析与服务地址订阅（分布式预渲染 M5a，契约 `docs/plan/render-queue-contract.md` G.7；
+ * M5b 按 J.3 加了编辑器里挂的文档服务）。
  *
- * resolveDocservice      按顺序探活，定下节点接哪个文档服务，或者回落本机（offline）
+ * resolveDocservice      按顺序探活（远端 → 编辑器 → 本机回环），定下节点接哪个文档服务，或者回落本机（offline）
  * watchServiceEndpoints  经一条 `createWsEndpoint` 端点订阅服务地址登记（G.6 的 `service.watch`）
  *
  * 不读文件系统、不引任何模块；环境变量和 `fetch` 都由调用方注入（缺省取 `process.env`、全局 `fetch`）。
@@ -10,21 +11,43 @@ import { PROTOCOL } from './ws-transport.mjs';
 
 const DEFAULT_PORT = 8787;
 
-/**
- * 单个候选的探活：协议换成 http: / https:，GET /healthz，超时 `timeoutMs`；
- * `ok === true` 且 `protocol === 'promptcut.v1'` 才算可用。
- * @returns {Promise<{ ok: true, health: object } | { ok: false, reason: string }>}
- */
-async function probe(wsUrl, fetchImpl, timeoutMs) {
-  let target;
+/** 编辑器里挂的文档服务的路径与健康检查路由（`docservice-contract.md` 第 5 节） */
+const EDITOR_WS_PATH = '/docservice';
+const EDITOR_HEALTH_PATH = '/api/docservice/healthz';
+
+/** 独立文档服务的候选：协议换成 http: / https:，`/healthz` 取在源站根上（G.11）；不是 ws: / wss: 回 null */
+function healthUrlOfWs(wsUrl) {
   try {
     const parsed = new URL(wsUrl);
-    if (parsed.protocol !== 'ws:' && parsed.protocol !== 'wss:') return { ok: false, reason: 'bad-url' };
+    if (parsed.protocol !== 'ws:' && parsed.protocol !== 'wss:') return null;
     const http = parsed.protocol === 'wss:' ? 'https:' : 'http:';
-    target = `${http}//${parsed.host}/healthz`;
+    return `${http}//${parsed.host}/healthz`;
   } catch {
-    return { ok: false, reason: 'bad-url' };
+    return null;
   }
+}
+
+/**
+ * 编辑器里挂的文档服务（J.3、C6.4 第 9 节第 10 条）：从编辑器地址（`http:` / `https:`）推出
+ * `ws(s)://<编辑器源>/docservice`，探活用 `GET <编辑器源>/api/docservice/healthz`。
+ * 编辑器地址只取源站，带的路径忽略。不是 http: / https: 回 null。
+ */
+function editorCandidateOf(editorUrl) {
+  try {
+    const parsed = new URL(editorUrl);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
+    const ws = parsed.protocol === 'https:' ? 'wss:' : 'ws:';
+    return { url: `${ws}//${parsed.host}${EDITOR_WS_PATH}`, healthUrl: `${parsed.protocol}//${parsed.host}${EDITOR_HEALTH_PATH}` };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 单个候选的探活：GET 健康检查地址，超时 `timeoutMs`；`ok === true` 且 `protocol === 'promptcut.v1'` 才算可用。
+ * @returns {Promise<{ ok: true, health: object } | { ok: false, reason: string }>}
+ */
+async function probe(target, fetchImpl, timeoutMs) {
   if (typeof fetchImpl !== 'function') return { ok: false, reason: 'no-fetch' };
 
   const controller = new AbortController();
@@ -53,32 +76,42 @@ async function probe(wsUrl, fetchImpl, timeoutMs) {
 }
 
 /**
- * 定下节点接哪个文档服务。顺序（G.7）：
+ * 定下节点接哪个文档服务。顺序（G.7，M5b 按 J.3 加了第 2 项）：
  *   1. `PROMPTCUT_DOCSERVICE_URL`（`ws://` 或 `wss://`），可用 → `remote`；
- *   2. `ws://127.0.0.1:${PROMPTCUT_DOCSERVICE_PORT ?? 8787}`，可用 → `local`；
- *   3. 都不行 → `offline`，调用方回落本机 preload 路径。
- * 没设第 1 项就不试它，`tried` 里也没有它。
+ *   2. 编辑器里挂的文档服务：由 `PROMPTCUT_EDITOR_URL`（`http://` 或 `https://`）推出
+ *      `ws(s)://<编辑器源>/docservice`，探活 `GET <编辑器源>/api/docservice/healthz`，可用 → `editor`；
+ *   3. `ws://127.0.0.1:${PROMPTCUT_DOCSERVICE_PORT ?? 8787}`，可用 → `local`；
+ *   4. 都不行 → `offline`，调用方回落本机 preload 路径。
+ * 第 1、2 项没设（或是空串）就不试，`tried` 里也没有它；设了但地址不合法的记 `bad-url`，继续试下一项。
  *
  * @param {object} [options]
  * @param {Record<string, string | undefined>} [options.env]  缺省 `process.env`
  * @param {typeof fetch} [options.fetch]  缺省全局 `fetch`
  * @param {number} [options.timeoutMs]  每个候选的探活超时，缺省 3000
- * @returns {Promise<{ mode: 'remote' | 'local' | 'offline', url?: string, health?: object, tried: { url: string, ok: boolean, reason?: string }[] }>}
+ * @returns {Promise<{ mode: 'remote' | 'editor' | 'local' | 'offline', url?: string, health?: object, tried: { url: string, ok: boolean, reason?: string }[] }>}
  */
 export async function resolveDocservice({
   env = globalThis.process?.env ?? {},
   fetch: fetchImpl = globalThis.fetch,
   timeoutMs = 3000,
 } = {}) {
-  /** @type {{ url: string, mode: 'remote' | 'local' }[]} */
+  /** @type {{ url: string, healthUrl: string | null, mode: 'remote' | 'editor' | 'local' }[]} */
   const candidates = [];
   const configured = env.PROMPTCUT_DOCSERVICE_URL;
-  if (typeof configured === 'string' && configured !== '') candidates.push({ url: configured, mode: 'remote' });
-  candidates.push({ url: `ws://127.0.0.1:${env.PROMPTCUT_DOCSERVICE_PORT ?? DEFAULT_PORT}`, mode: 'local' });
+  if (typeof configured === 'string' && configured !== '') {
+    candidates.push({ url: configured, healthUrl: healthUrlOfWs(configured), mode: 'remote' });
+  }
+  const editor = env.PROMPTCUT_EDITOR_URL;
+  if (typeof editor === 'string' && editor !== '') {
+    const c = editorCandidateOf(editor);
+    candidates.push(c ? { ...c, mode: 'editor' } : { url: editor, healthUrl: null, mode: 'editor' });
+  }
+  const loopback = `ws://127.0.0.1:${env.PROMPTCUT_DOCSERVICE_PORT ?? DEFAULT_PORT}`;
+  candidates.push({ url: loopback, healthUrl: healthUrlOfWs(loopback), mode: 'local' });
 
   const tried = [];
-  for (const { url, mode } of candidates) {
-    const result = await probe(url, fetchImpl, timeoutMs);
+  for (const { url, healthUrl, mode } of candidates) {
+    const result = healthUrl === null ? { ok: false, reason: 'bad-url' } : await probe(healthUrl, fetchImpl, timeoutMs);
     if (result.ok) {
       tried.push({ url, ok: true });
       return { mode, url, health: result.health, tried };

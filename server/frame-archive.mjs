@@ -153,6 +153,17 @@ function prepareSpillDirectory(spillDir) {
   } catch { return null; }
 }
 
+/** Read errors that mean "try again shortly", not "the spill file is bad". */
+const TRANSIENT_READ_ERRORS = new Set(['EBUSY', 'EPERM', 'EACCES', 'EMFILE']);
+/** Retries after the first failed read, so at most 1 + 5 reads. */
+export const SPILL_READ_RETRIES = 5;
+/** 20, 40, 80, 160, 200 ms. */
+export const spillBackoffMs = attempt => Math.min(200, 20 * 2 ** attempt);
+const sleepCell = new Int32Array(new SharedArrayBuffer(4));
+// readSpill is synchronous (LazyFrameStore.get is), so the backoff blocks.
+// Worst case is about half a second, only while a file is actually held.
+function sleepSync(ms) { Atomics.wait(sleepCell, 0, 0, ms); }
+
 export class LazyFrameStore {
   constructor(blocks = [], { spillDir = null } = {}) {
     this.blocks = blocks;
@@ -193,11 +204,33 @@ export class LazyFrameStore {
       return false;
     }
   }
+  /**
+   * Read one spilled frame. Only a file that is gone (ENOENT) or whose content
+   * fails to decode counts as lost: it is removed and `undefined` returned.
+   * Transient errors (another process or an antivirus scanner holding the
+   * file: EBUSY/EPERM/EACCES, or running out of handles: EMFILE) are retried
+   * with a short backoff and never delete the file — it is still the only
+   * copy of a pending sample. Any other read error also keeps the file.
+   */
   readSpill(frame) {
     const file = this.spillPath(frame);
     if (!file) return undefined;
+    let bytes;
+    for (let attempt = 0; ; attempt++) {
+      try {
+        bytes = fs.readFileSync(file);
+        break;
+      } catch (err) {
+        if (err?.code === 'ENOENT') return undefined;
+        if (TRANSIENT_READ_ERRORS.has(err?.code) && attempt < SPILL_READ_RETRIES) {
+          sleepSync(spillBackoffMs(attempt));
+          continue;
+        }
+        return undefined;
+      }
+    }
     try {
-      return gunzipSync(fs.readFileSync(file), { maxOutputLength: 256 * 1024 * 1024 }).toString('utf8');
+      return gunzipSync(bytes, { maxOutputLength: 256 * 1024 * 1024 }).toString('utf8');
     } catch {
       try { fs.rmSync(file, { force: true }); } catch { /* Disposable cache. */ }
       return undefined;

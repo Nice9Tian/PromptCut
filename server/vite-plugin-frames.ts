@@ -2,6 +2,8 @@ import type { Plugin } from "vite";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
+import os from "node:os";
+import { createHash } from "node:crypto";
 import { captureCode, frameCode, invalidateFrameCode } from "./frame-code.mjs";
 import { FramePipeline } from "./frame-pipeline.mjs";
 import { unpackFrameArchive } from "./frame-archive.mjs";
@@ -15,7 +17,8 @@ import { snapshotTier } from "./snapshot-store.mjs";
 import { readySessionOf } from "./ready-index.mjs";
 import { describeEnvironment } from "./render-node/fingerprint.mjs";
 import { mediaSourceOf } from "./vision/ffmpeg-frames";
-import { assetServiceOrigin } from "./asset-client";
+import { assetServiceOrigin, setMediaFallbackBases } from "./asset-client";
+import { renderProject } from "./render-project.mjs";
 
 const services = new Map<string, FramePipeline>();
 /** C6.4:每个帧库根上的推送队列怎么收尾(停队列、关文档服务连接);没建推送队列的根不在这里 */
@@ -32,23 +35,98 @@ const pushLog = (event: string, fields: object = {}) => {
  * 预渲染进程只在**同时**满足下面两条时才建推送队列,否则什么都不建,行为与现在相同 —— 这就是离线。
  *
  *   1. 能解析到素材服务的基址:`asset-client.ts` 的 `assetServiceOrigin()`(预渲染进程里就是 `PROMPTCUT_EDITOR_URL`),
- *      API 基址 `<源>/api/asset`;
- *   2. 能连上文档服务:`render-node` 的 `resolveDocservice()` 回 `remote` 或 `local`。
+ *      API 基址 `<源>/api/asset`;真正推到哪一台按 D7 选(`selectAssetClient`,契约 J.13);
+ *   2. 能连上文档服务:`render-node` 的 `resolveDocservice()` 回 `remote`、`local` 或 `editor`(M5b J.3:编辑器里挂的
+ *      那一份,地址从 `PROMPTCUT_EDITOR_URL` 推出)。**`editor` 只在显式要推送时才算**(契约 J.12):
+ *      进程设了 `PROMPTCUT_QUEUE_NODE=1` 或 `PROMPTCUT_PUSH=1`。都没设时编辑器里挂的那一份不算,不建推送队列、
+ *      preload 前也不拉别人的结果,行为与 C6.4 之前逐字节相同 —— 默认的开发环境(含用户常驻的编辑器)不变,
+ *      探针能在同一个工作副本里反复跑。`remote`、`local`(显式设了地址、或起了独立文档服务)照旧建。
+ *   3. `PROMPTCUT_PUSH=0`:一律不建,不管哪种模式。
  *
  * 无头实例(`PROMPTCUT_HEADLESS === "1"`)不建:它是临时副本,不往共享服务写东西(同 C6.3 的口径)。
  * 内容库客户端 `createContentClient` 在 `render-node/index.mjs` 里(C6.4 节点侧);取不到这个函数也不建。
  * 任何一步出错都只打日志,不影响预渲染进程。
  */
+/**
+ * 服务地址登记里**别的机器**的素材服务(J.6 素材回退与 J.13 推送基址共用这一个判据):本机登记的排除 ——
+ * `announcerId` 是 `asset:<本机主机名>`(`asset-announce.mjs` 的缺省身份),或者地址与本机素材服务同 host。
+ * 按 `announcerId` 的字典序排,每项只留不是本机的地址,留不下地址的整项去掉。
+ */
+function foreignAssetEndpoints(list: any[], origin: string | null): { announcerId: string; urls: string[] }[] {
+  const self = `asset:${String(os.hostname() || "host").replace(/[^A-Za-z0-9._:-]/g, "-") || "host"}`.slice(0, 128);
+  let selfHost = "";
+  try { selfHost = origin ? new URL(origin).host : ""; } catch { /* 没有就不按地址排 */ }
+  const out: { announcerId: string; urls: string[] }[] = [];
+  for (const item of list ?? []) {
+    if (item?.kind !== "asset" || typeof item.announcerId !== "string" || item.announcerId === self) continue;
+    const urls: string[] = [];
+    for (const url of item.urls ?? []) {
+      try { if (new URL(url).host === selfHost) continue; } catch { continue; }
+      urls.push(String(url));
+    }
+    if (urls.length) out.push({ announcerId: item.announcerId, urls });
+  }
+  return out.sort((a, b) => (a.announcerId < b.announcerId ? -1 : a.announcerId > b.announcerId ? 1 : 0));
+}
+
+/**
+ * 推送、拉取用的素材服务客户端(契约 J.13,按 D7 选基址),顺序:
+ *   1. `PROMPTCUT_ASSET_URL`(形如 `http://192.168.50.96:5460/api/asset`);
+ *   2. 服务地址登记里别的机器的 `asset`(`foreignAssetEndpoints`),取第一个的第一个地址;登记变了就新建一个
+ *      client 换上,在飞的请求照旧用旧的(回的是一个代理,每次调用时才取当前的 client);
+ *   3. 本机的 `assetServiceOrigin()` 加 `/api/asset`(原来的行为)。
+ * 写入带集群令牌(client 放进 `Authorization`)。每换一次基址记一行 `push.asset-base { source, base }`,基址不含令牌。
+ */
+function selectAssetClient({ node, endpoint, origin, token, createAssetClient, owner }:
+  { node: any; endpoint: any; origin: string; token: string | undefined; createAssetClient: any; owner: string }) {
+  const localBase = `${origin}/api/asset`;
+  let current: any = null;
+  let currentBase: string | null = null;
+  const use = (base: string, source: "env" | "announced" | "local") => {
+    if (base === currentBase && current) return;
+    let next: any;
+    try { next = createAssetClient({ base, token: token ?? null }); }
+    catch (error: any) { pushLog("push.asset-base-error", { source, base, for: owner, message: String(error?.message ?? error) }); return; }
+    current = next;
+    currentBase = base;
+    pushLog("push.asset-base", { source, base, for: owner });
+  };
+  const envBase = String(process.env.PROMPTCUT_ASSET_URL || "").trim().replace(/\/+$/, "");
+  let stop = () => {};
+  if (envBase) use(envBase, "env");
+  if (!current) {
+    use(localBase, "local");
+    stop = node.watchServiceEndpoints(endpoint, ["asset"], (list: any[]) => {
+      const url = foreignAssetEndpoints(list, origin)[0]?.urls[0];
+      if (url) use(url.replace(/\/+$/, ""), "announced");
+      else use(localBase, "local");
+    });
+  }
+  const client = new Proxy({}, { get: (_target, key) => { const value = current?.[key]; return typeof value === "function" ? value.bind(current) : value; } });
+  return { client, stop: () => { try { stop(); } catch { /* 已经停了 */ } }, base: () => currentBase };
+}
+
+/** `resolveDocservice` 这几种结果算「连得上文档服务」;`editor` 是 J.3 新加的(编辑器里挂的文档服务) */
+const DOCSERVICE_MODES = new Set(["remote", "local", "editor"]);
+/**
+ * 推送队列认哪几种文档服务(契约 J.12):`remote`、`local` 总认;`editor` 只在显式要推送时认 ——
+ * `PROMPTCUT_QUEUE_NODE=1` 或 `PROMPTCUT_PUSH=1`。
+ */
+const pushModeAllowed = (mode: unknown) => mode === "remote" || mode === "local"
+  || (mode === "editor" && (process.env.PROMPTCUT_QUEUE_NODE === "1" || process.env.PROMPTCUT_PUSH === "1"));
 async function startArtifactPush(root: string, service: FramePipeline) {
   if (!isPrerender || process.env.PROMPTCUT_HEADLESS === "1") return;
+  if (process.env.PROMPTCUT_PUSH === "0") return pushLog("push.skip", { reason: "disabled" });
   const origin = assetServiceOrigin();
   if (!origin) return pushLog("push.skip", { reason: "no-asset-service" });
   const node: any = await import("./render-node/index.mjs");
   if (typeof node.createContentClient !== "function") return pushLog("push.skip", { reason: "no-content-client" });
   const resolved = await node.resolveDocservice();
-  if ((resolved?.mode !== "remote" && resolved?.mode !== "local") || !resolved.url) {
+  if (!DOCSERVICE_MODES.has(resolved?.mode) || !resolved.url) {
     return pushLog("push.skip", { reason: "docservice-offline", tried: (resolved?.tried ?? []).map((t: any) => ({ url: t.url, ok: t.ok, reason: t.reason })) });
   }
+  // J.12:编辑器里挂的文档服务,没显式要推送就不建(开关关着时与 C6.4 之前相同)
+  if (!pushModeAllowed(resolved.mode)) return pushLog("push.skip", { reason: "editor-docservice-not-enabled", mode: resolved.mode });
   if (services.get(root) !== service || (service as any).closed) return;
   const token = process.env.PROMPTCUT_CLUSTER_TOKEN || undefined;
   const endpoint = node.createWsEndpoint({ url: resolved.url, token, log: (event: string, fields: object) => {
@@ -56,16 +134,308 @@ async function startArtifactPush(root: string, service: FramePipeline) {
   } });
   const content = node.createContentClient(endpoint);
   const { createAssetClient }: any = await import("./asset-store/client.mjs");
-  const client = createAssetClient({ base: `${origin}/api/asset`, token: token ?? null });
+  // J.13:按 D7 选推送的素材服务(环境变量 → 别的机器登记的 → 本机)
+  const assets = selectAssetClient({ node, endpoint, origin, token, createAssetClient, owner: "push" });
+  const client = assets.client;
   const { createPushQueue }: any = await import("./artifact-push.mjs");
   // settleMs:同一段最后一次进队后静置 1.5 s 再推,边渲边推时一段不被推十几遍
   const queue = createPushQueue({ pipeline: service, client, content, dir: service.root, log: pushLog, settleMs: 1500 });
   queue.start();
   pushTeardowns.set(root, async () => {
     try { await queue.stop(); } catch {}
+    assets.stop();
     try { endpoint.close(); } catch {}
   });
-  pushLog("push.started", { docservice: resolved.mode, url: resolved.url, asset: `${origin}/api/asset`, restored: queue.stats().restored });
+  pushLog("push.started", { docservice: resolved.mode, url: resolved.url, asset: assets.base(), restored: queue.stats().restored });
+}
+
+/* ======================================================================== *
+ * 队列模式的预渲染进程(契约 `docs/plan/render-queue-contract.md` J.5)
+ * ======================================================================== */
+
+/** 开关:`PROMPTCUT_QUEUE_NODE=1`,缺省关。关着时下面的东西一样都不建,行为与现在完全一样 */
+const queueNodeSwitch = () => process.env.PROMPTCUT_QUEUE_NODE === "1";
+/** 文档服务项目模块认的 projectId(`docservice/modules/project.mjs` 的 `PROJECT_ID_RE`) */
+const PROJECT_ID_RE = /^[A-Za-z0-9._:-]{1,128}$/;
+/** 发布 `plan` 之后等 `task.published` 的上限 */
+const PUBLISH_TIMEOUT_MS = 10_000;
+/** 节点节拍:续约、认领、让路都在这一拍里判 */
+const QUEUE_TICK_MS = 500;
+/** 诊断里留最近这么多条事件 */
+const QUEUE_LOG = 80;
+/** 诊断里本机节点认领 / 完成的任务 id,每类最多留几个 */
+const MINE_MAX = 5000;
+
+const queueLog = (event: string, fields: object = {}) => {
+  try { console.info("[queue-node]", event, JSON.stringify(fields)); } catch { console.info("[queue-node]", event); }
+};
+
+type QueueNode = {
+  /** 连着文档服务、本机节点已经报到:`/preload` 走队列模式 */
+  active(): boolean;
+  /** `/preload` 的队列那一半:报摘要、传快照、发布 `plan`。回 true = 这一版交给队列了;false = 本机自己产 */
+  publish(session: string, project: any): Promise<boolean>;
+  describe(): object;
+  close(): Promise<void>;
+};
+const queueNodes = new Map<string, QueueNode>();
+
+/**
+ * J.5:开关打开、又连得上文档服务时,在预渲染进程里起一个本机渲染节点,并替页面发布 `plan`。
+ *
+ *   - 节点:`createLocalNode`(`profile: 'pc'`、`maxConcurrent: 1`、`capabilities: { userCards: true, graphCards: false }`,
+ *     `codeVersions: [frameCode(root)]`;环境指纹在报到前借一次流预渲染间来探),执行器是 J.4 的
+ *     `createPrerenderExecutor`,产物库是 C6.2 / C6.4 的 `createAssetSink({ pipeline, client, content })`;
+ *   - 发布:`/preload` 在 `service.preload(…, { queue: true })` 之前调 `publish`:`project.announce` 拿 `projectRev`、
+ *     `putSnapshot` 传快照、以本节点的发布方身份发布 `plan:<projectId>@<projectRev>`(`requires` 带版本与指纹);
+ *   - 收到 `task.done`:细任务的清单经 C6.2 的 `applyResult` 拉取并发布(本机产的已经在盘上,按「已有跳过」处理);
+ *   - 连不上文档服务(断线):`service.leaveQueueMode()` 退回本机自己产,在跑的任务让掉;重连后新的 preload 再走队列;
+ *   - 远端素材回退(J.6):订阅服务地址登记里的 `asset`,排除自己,填进 `setMediaFallbackBases`。
+ *
+ * `createProjectClient`(J.2)在 `render-node/index.mjs` 里;取不到它(svc 分支还没合进来)就不起,打日志,
+ * 预渲染进程照原来的路径跑。任何一步出错都只打日志。
+ */
+async function startQueueNode(root: string, service: FramePipeline) {
+  if (!isPrerender || !queueNodeSwitch() || process.env.PROMPTCUT_HEADLESS === "1") return;
+  const origin = assetServiceOrigin();
+  if (!origin) return queueLog("queue.skip", { reason: "no-asset-service" });
+  const node: any = await import("./render-node/index.mjs");
+  const missing = ["createProjectClient", "createContentClient", "createLocalNode", "createWsEndpoint", "planTaskOf", "watchServiceEndpoints"]
+    .filter(name => typeof node[name] !== "function");
+  if (missing.length) return queueLog("queue.skip", { reason: "render-node-exports-missing", missing });
+  const resolved = await node.resolveDocservice();
+  if (!DOCSERVICE_MODES.has(resolved?.mode) || !resolved.url) {
+    return queueLog("queue.skip", { reason: "docservice-offline", tried: (resolved?.tried ?? []).map((t: any) => ({ url: t.url, ok: t.ok, reason: t.reason })) });
+  }
+  if (services.get(root) !== service || (service as any).closed) return;
+
+  // 指纹:报到前借一次流预渲染间探(`leaseStreamBakery` 开起来就定下本进程的环境),什么都不做就还
+  try {
+    const bakery = await (service as any).leaseStreamBakery();
+    (service as any).returnStreamBakery(bakery);
+  } catch (error: any) {
+    return queueLog("queue.skip", { reason: "no-environment", message: String(error?.message ?? error) });
+  }
+  const envFingerprint: string | null = (service as any).envFingerprint;
+  if (!envFingerprint) return queueLog("queue.skip", { reason: "no-environment" });
+  if (services.get(root) !== service || (service as any).closed) return;
+
+  const { createPrerenderExecutor }: any = await import("./prerender-executor.mjs");
+  const { createAssetSink, applyResult }: any = await import("./artifact-transfer.mjs");
+  const { createAssetClient }: any = await import("./asset-store/client.mjs");
+
+  const token = process.env.PROMPTCUT_CLUSTER_TOKEN || undefined;
+  const endpoint = node.createWsEndpoint({ url: resolved.url, token, log: (event: string, fields: object) => {
+    if (event === "ws.open" || event === "ws.close") queueLog(`docservice.${event}`, fields);
+  } });
+  const projects = node.createProjectClient(endpoint);
+  const content = node.createContentClient(endpoint);
+  // J.13:sink 推、task.done 拉,都用按 D7 选的素材服务
+  const assets = selectAssetClient({ node, endpoint, origin, token, createAssetClient, owner: "queue" });
+  const client = assets.client;
+  const events: object[] = [];
+  const note = (event: string, fields: object = {}) => {
+    events.push({ at: Date.now(), event, ...fields });
+    while (events.length > QUEUE_LOG) events.shift();
+  };
+  const log = (event: string, fields: object = {}) => { note(event, fields); if (!/^executor\.render$/.test(event)) queueLog(event, fields); };
+  const sink = createAssetSink({ pipeline: service, client, content, log });
+  const executor = createPrerenderExecutor({ pipeline: service, projects, prepareProject: renderProject, log });
+  const host = String(os.hostname() || "host").replace(/[^A-Za-z0-9._:-]/g, "-");
+  let editorPort = "";
+  try { editorPort = new URL(origin).port; } catch { /* 没有端口就不带 */ }
+  // 同一台机器上可能有几个编辑器各带一个预渲染进程:按编辑器端口区分节点身份
+  const nodeId = `prerender:${host}${editorPort ? `:${editorPort}` : ""}`.slice(0, 128);
+
+  /** 诊断与 queue-mode-probe 的读口 */
+  const stats = { claimed: 0, completed: 0, dedup: 0, failed: 0, discarded: 0, lost: 0, planSplit: 0, done: 0, failedTasks: 0, applied: 0, applyErrors: 0,
+    written: 0, fetched: 0, skipped: 0 };
+  const taskState = new Map<string, { state: string, at: number, error?: string }>();
+  const planDerived = new Map<string, string[]>();
+  /**
+   * 本机节点自己认领、完成的任务 id(诊断 `queue.local`):W4 跨机时区分哪些活是本机做的。
+   * `claimed` 取自发给本连接的 `task.claimed`,其余取自 local-node 的 `onEvent`。每类最多留 MINE_MAX 个。
+   */
+  const mine = { claimed: new Set<string>(), completed: new Set<string>(), dedup: new Set<string>(), failed: new Set<string>() };
+  const remember = (set: Set<string>, id: unknown) => {
+    if (typeof id !== "string") return;
+    set.delete(id); set.add(id);
+    while (set.size > MINE_MAX) set.delete(set.values().next().value as string);
+  };
+  /** `<projectId>\0<digest>` → 已发布的那一版 */
+  const published = new Map<string, { projectId: string, projectRev: number, planId: string, digest: string, at: number }>();
+
+  let codeVersion: string = frameCode(root);
+  let localNode: any = null;
+  let started = false;
+  let closed = false;
+  const buildNode = () => {
+    localNode?.stop();
+    localNode = node.createLocalNode({
+      nodeId,
+      node: { profile: "pc", envFingerprint, codeVersions: [codeVersion], capabilities: { userCards: true, graphCards: false }, maxConcurrent: 1 },
+      endpoint, now: Date.now, isIdle: () => executor.isIdle(), maxConcurrent: 1, codeVersion, executor, sink,
+      onEvent: (event: any) => {
+        const id = event?.id;
+        if (event?.type === "completed") { stats.completed++; remember(mine.completed, id); }
+        else if (event?.type === "dedup") { stats.dedup++; remember(mine.dedup, id); }
+        else if (event?.type === "failed") { stats.failed++; remember(mine.failed, id); }
+        else if (event?.type === "discarded") stats.discarded++;
+        else if (event?.type === "lost") stats.lost++;
+        else if (event?.type === "plan-split") { stats.planSplit++; planDerived.set(id, [...(event.derived ?? [])]); }
+        if (event?.type && event.type !== "publish-result") note(`node.${event.type}`, { id, ...(event.error ? { error: event.error } : {}), ...(event.derived ? { derived: event.derived.length } : {}) });
+      },
+    });
+  };
+  buildNode();
+
+  /** 队列那边回来的消息:`task.done` 拉取并发布,`task.failed` 记下 */
+  let applyChain: Promise<unknown> = Promise.resolve();
+  endpoint.onMessage((message: any) => {
+    if (message?.type === "task.claimed") { stats.claimed++; remember(mine.claimed, message.id); }
+    if (message?.type === "task.done" && typeof message.id === "string") {
+      stats.done++;
+      taskState.set(message.id, { state: "done", at: Date.now() });
+      const result = message.result;
+      if (message.id.startsWith("plan:") && Array.isArray(result?.derived)) planDerived.set(message.id, [...result.derived]);
+      // 细任务的清单(C6.2 形状,`v: 1`)才拉;M5b 之前的 local-node 完成时不带清单,本机产的由执行器自己发层
+      if (result && typeof result === "object" && result.v === 1 && (result.kind === "snapshot" || result.kind === "stream")) {
+        applyChain = applyChain.catch(() => {}).then(async () => {
+          try {
+            const applied = await applyResult(service, client, result);
+            stats.applied++; stats.written += applied?.written ?? 0; stats.fetched += applied?.fetched ?? 0; stats.skipped += applied?.skipped ?? 0;
+          } catch (error: any) {
+            stats.applyErrors++;
+            log("queue.apply-failed", { id: message.id, code: error?.code ?? null, message: String(error?.message ?? error) });
+          }
+        });
+      }
+    } else if (message?.type === "task.failed" && typeof message.id === "string") {
+      stats.failedTasks++;
+      taskState.set(message.id, { state: "failed", at: Date.now(), error: String(message.error ?? "") });
+      log("queue.task-failed", { id: message.id, error: message.error ?? null });
+    }
+  });
+  const onOpen = () => {
+    if (closed) return;
+    // G.7 约定写法:(重)连上就报到,接续本实例仍持有的认领
+    localNode.start(localNode.session.held().map(({ id, token }: any) => ({ id, token })));
+    started = true;
+    log("queue.started", { docservice: resolved.mode, url: resolved.url, nodeId, envFingerprint, codeVersion: codeVersion.slice(0, 12) });
+  };
+  endpoint.onOpen(onOpen);
+  endpoint.onClose(() => {
+    if (!started || closed) return;
+    started = false;
+    // J.5「中途连不上文档服务」:退回本机自己产,已经排进去的任务作废(在跑的让掉;重连后新的 preload 重新发布)
+    published.clear();
+    try { localNode.yieldAll("offline"); } catch { /* 连接已断,放回的消息反正发不出去 */ }
+    const rerun = (service as any).leaveQueueMode?.() ?? 0;
+    log("queue.offline", { rerun });
+  });
+  // J.6:别的机器的素材服务地址,本机的排除(与 J.13 选推送基址同一个判据)
+  const stopWatch = node.watchServiceEndpoints(endpoint, ["asset"], (list: any[]) => {
+    const urls = foreignAssetEndpoints(list, origin).flatMap(item => item.urls);
+    const bases = setMediaFallbackBases(urls);
+    note("queue.media-fallback", { bases: bases.length });
+  });
+
+  const timer = setInterval(() => {
+    if (closed || !started) return;
+    try {
+      // 代码变了(改了 src 或管线):节点的代码版本跟着换,重新报到,不然新发布的任务谁都认领不了
+      const now = frameCode(root);
+      if (now !== codeVersion) {
+        codeVersion = now;
+        buildNode();
+        localNode.start([]);
+        log("queue.code-changed", { codeVersion: codeVersion.slice(0, 12) });
+      }
+      // 让路:播放 / 拖动时在跑的任务放回去,空闲了再认领(J.4 的 isIdle 管认领)
+      if (localNode.running().length && (service as any).streamBusy?.()) localNode.yieldAll("busy");
+      localNode.tick();
+    } catch (error: any) {
+      note("queue.tick-error", { message: String(error?.message ?? error) });
+    }
+  }, QUEUE_TICK_MS);
+  timer.unref?.();
+
+  /** 发布 `plan` 等同一 reqId 的回包(`task.published` 或 `error`);reqId 带自己的前缀,不和 local-node 的撞 */
+  let publishSeq = 0;
+  const waiting = new Map<string, (message: any) => void>();
+  endpoint.onMessage((message: any) => {
+    const waiter = message?.reqId != null ? waiting.get(String(message.reqId)) : undefined;
+    if (waiter && (message.type === "task.published" || message.type === "error")) waiter(message);
+  });
+  endpoint.onClose(() => { for (const waiter of [...waiting.values()]) waiter({ type: "error", reason: "disconnected" }); });
+  const publishPlan = (task: any) => new Promise<any>((resolve, reject) => {
+    const reqId = `${nodeId}#plan-${++publishSeq}`;
+    const timeout = setTimeout(() => settle({ type: "error", reason: "timeout" }), PUBLISH_TIMEOUT_MS);
+    const settle = (message: any) => {
+      if (!waiting.has(reqId)) return;
+      waiting.delete(reqId);
+      clearTimeout(timeout);
+      if (message.type === "task.published") resolve(message.results);
+      else reject(Object.assign(new Error(`发布 plan 没成:${message.reason}`), { code: message.reason }));
+    };
+    waiting.set(reqId, settle);
+    if (!endpoint.send({ type: "task.publish", tasks: [task], reqId })) settle({ type: "error", reason: "disconnected" });
+  });
+
+  const handle: QueueNode = {
+    active: () => started && !closed && endpoint.connected === true,
+    async publish(session, project) {
+      if (!handle.active()) return false;
+      const projectId = typeof project?.id === "string" && PROJECT_ID_RE.test(project.id) ? project.id
+        : typeof session === "string" && PROJECT_ID_RE.test(session) ? session : null;
+      if (!projectId) { log("queue.publish-skip", { reason: "no-project-id" }); return false; }
+      const text = JSON.stringify(project);
+      const digest = createHash("sha256").update(text, "utf8").digest("hex");
+      const key = `${projectId}\u0000${digest}`;
+      if (published.has(key)) return true;
+      try {
+        const { projectRev } = await projects.announce(projectId, digest, session && session.length <= 128 ? session : undefined);
+        await projects.putSnapshot(projectId, projectRev, digest, text);
+        const task = node.planTaskOf({ projectId, projectRev, codeVersion: frameCode(root), envFingerprint });
+        // J.3 的 `planTaskOf` 会自己写进 `requires`;合并之前的版本不认这两个参数,这里补上(两种都对)
+        task.requires = { ...(task.requires ?? {}), codeVersion: frameCode(root), envFingerprint };
+        const results = await publishPlan(task);
+        const result = Array.isArray(results) ? results.find((r: any) => r?.id === task.id) : null;
+        if (!result || result.error) throw Object.assign(new Error(`plan 没发布成:${result?.error ?? "no-result"}`), { code: result?.error ?? "no-result" });
+        published.set(key, { projectId, projectRev, planId: task.id, digest, at: Date.now() });
+        if (!taskState.has(task.id)) taskState.set(task.id, { state: result.state ?? "open", at: Date.now() });
+        log("queue.published", { planId: task.id, bytes: text.length, state: result.state ?? null, created: result.created ?? null });
+        return true;
+      } catch (error: any) {
+        log("queue.publish-failed", { projectId, code: error?.code ?? error?.reason ?? null, message: String(error?.message ?? error) });
+        return false;
+      }
+    },
+    describe() {
+      return {
+        mode: resolved.mode, url: resolved.url, connected: endpoint.connected === true, active: handle.active(), nodeId, envFingerprint, assetBase: assets.base(),
+        codeVersion, running: localNode?.running?.() ?? [], held: localNode?.session?.held?.().map(({ id }: any) => id) ?? [],
+        stats: { ...stats },
+        local: { nodeId, claimed: [...mine.claimed], completed: [...mine.completed], dedup: [...mine.dedup], failed: [...mine.failed] },
+        published: [...published.values()],
+        plans: Object.fromEntries(planDerived),
+        tasks: Object.fromEntries(taskState),
+        events: events.slice(-QUEUE_LOG),
+      };
+    },
+    async close() {
+      closed = true;
+      clearInterval(timer);
+      try { stopWatch?.(); } catch {}
+      assets.stop();
+      try { localNode?.stop(); } catch {}
+      try { await localNode?.settled(); } catch {}
+      try { endpoint.close(); } catch {}
+    },
+  };
+  queueNodes.set(root, handle);
+  // 端点在挂上 onOpen 之前就连上了(一般不会):补一次报到
+  if (endpoint.connected === true && !started) onOpen();
 }
 function requestSignal(req: any, res: any) {
   const controller = new AbortController();
@@ -113,37 +483,13 @@ export function frameService(root: string, origin: string) {
     void service.rescanSnapshots().catch(() => {});
     /* C6.4:连得上素材服务和文档服务时建推送队列(只在预渲染进程里;连不上就什么都不建) */
     void startArtifactPush(root, service).catch(error => pushLog("push.skip", { reason: "error", message: String(error?.message ?? error) }));
+    /* J.5:`PROMPTCUT_QUEUE_NODE=1` 又连得上文档服务时起本机渲染节点(开关关着时这里立即返回,什么都不建) */
+    if (queueNodeSwitch()) void startQueueNode(root, service).catch(error => queueLog("queue.skip", { reason: "error", message: String(error?.message ?? error) }));
   }
   return service;
 }
-export function renderProject(project: any) {
-  return { ...project, media: (project.media || []).map((m: any) => {
-    // .proc files from older versions may contain a bare filename (and some
-    // callers still send blob URLs).  The renderer cannot resolve either
-    // form; the durable server path is the source of truth for both.
-    // A legacy .proc may say /@media/<name> while the actual file lives in
-    // the shared Videos/PromptCut/media folder.  Resolve through the guarded
-    // media endpoint so the export/Agent page sees the same file as the editor.
-    //
-    // A1: a hash IS the asset's identity.  Media that carries one is served by
-    // /@media/<hash> (vite-plugin-media resolves it in the local content store,
-    // with the right Content-Type and Range support), so leave that address
-    // alone — rewriting it by path would pin the renderer to one machine's
-    // file layout and, from step 5 on, defeat tier switching.  Only migration
-    // era media (no hash) is still rewritten by its durable path.  A hashed
-    // asset that somehow still carries a page-private address (blob: / data:,
-    // or nothing at all) gets the hash address instead — same rule as
-    // vite-plugin-vision.ts's resolveMediaUrls, so both paths agree.
-    if (m.hash) {
-      const u = String(m.url || "");
-      return !u || u.startsWith("blob:") || u.startsWith("data:") ? { ...m, url: `/@media/${m.hash}` } : m;
-    }
-    if (m.path && (!m.url || m.url.startsWith("blob:") || !m.url.startsWith("/@export/"))) {
-      return { ...m, url: "/api/media/file?path=" + encodeURIComponent(String(m.path)) };
-    }
-    return m;
-  }) };
-}
+/** 原样搬到 `render-project.mjs`(契约 J.5),这里转出,调用方(`vision/render.ts`、脚本)不用改 */
+export { renderProject };
 export function framesPlugin(): Plugin {
   return { name: "promptcut-frames", configureServer(server) {
     const root = path.resolve(server.config.root);
@@ -170,7 +516,8 @@ export function framesPlugin(): Plugin {
     server.httpServer?.once("close", () => {
       const s = services.get(root); services.delete(root);
       const teardown = pushTeardowns.get(root); pushTeardowns.delete(root);
-      void (async () => { await teardown?.(); await s?.close(); })();
+      const queueNode = queueNodes.get(root); queueNodes.delete(root);
+      void (async () => { await queueNode?.close(); await teardown?.(); await s?.close(); })();
     });
     /*
      * D4(b) `/api/cards/layout`:Agent 的 `get_layout` —— 按 t 在**整场景**上实测实体框
@@ -257,7 +604,9 @@ export function framesPlugin(): Plugin {
        * stdout 被编辑器进程收走了,端到端探针只能从这里看这两件事。
        */
       if (req.method === "GET" && url.pathname === "/diagnostics") {
-        return json(200, { ok: true, ...service.diagnostics() });
+        // J.5:队列模式才多一个 `queue` 键(queue-mode-probe 读它);开关关着时形状不变
+        const queueNode = queueNodes.get(root);
+        return json(200, { ok: true, ...service.diagnostics(), ...(queueNode ? { queue: queueNode.describe() } : {}) });
       }
       if (req.method === "GET") {
         /*
@@ -432,7 +781,14 @@ export function framesPlugin(): Plugin {
           }
           // 会话「当前版本」的唯一来源(Item 4):页面的 preload 带着它的 `{ session, localRev }`
           if (url.pathname === "/preload") {
-            await service.preload(project, { session: preloadSession!, localRev: input.localRev, ticket: preloadTicket });
+            /*
+             * J.5 队列模式:节点连着文档服务时,先替页面报摘要、传快照、发布 `plan`,成了就让这一版的快照交给队列产
+             * (`queue: true`),没成(发布失败、没有能用的 projectId)就本机自己产(`queue: false`)。
+             * 开关关着时 `queueNodes` 是空的,这里的调用和原来一字不差。
+             */
+            const queueNode = queueNodes.get(root);
+            const viaQueue = queueNode?.active() ? await queueNode.publish(preloadSession!, project) : undefined;
+            await service.preload(project, { session: preloadSession!, localRev: input.localRev, ticket: preloadTicket, ...(viaQueue === undefined ? {} : { queue: viaQueue }) });
             // 报给编辑器进程登记(方案 A):这个进程崩溃重启后,由编辑器照表重放 preload。
             // 只报这个会话此刻真正认下的版本 —— 被更新的 preload 取代了的请求不报
             if (preloadSession && service.ready.current(preloadSession) === entry.key) reportReadySession(preloadSession, input.localRev);
