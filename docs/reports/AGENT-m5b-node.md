@@ -1,4 +1,4 @@
-# M5b 节点侧（m5b-node）报告
+﻿# M5b 节点侧（m5b-node）报告
 
 分支 `claude/rq-m5b-node`（基于 `claude/rq-m5b` 的 `5c4635f`），worktree `.worktrees/rq-m5b-node`。
 
@@ -65,3 +65,16 @@
 3. **`resultFor` 抛错**：照字面 `await`，抛错就走执行出错的分支，任务按可重试失败。`createAssetSink.resultFor` 自己吞错回 `null`，现在不会发生；若别的 sink 实现会抛，也许该当成「没有清单」照常去重完成，请裁定是否要写进 D.1。
 4. **`planTaskOf` 缺省**：契约没说没给 `codeVersion` / `envFingerprint` 时怎样。我选了「不写这一项」，保住 B.4 的 `requires: {}` 和既有测试；若要求总写（值为 `undefined` 会在 JSON 里丢掉，效果一样），无需改动。
 5. **`canvasHeavy` 只看 `control.capabilities`**：照 J.3 字面，没看 `control.canvasHeavy` 之类的顶层字段。`frame-pipeline.mjs` 第 1357、1401 行判卡级优先级时还看了另一处 `caps.canvasHeavy`（审阅表），如果 card plan 的 `capabilities` 不含审阅表的 `canvasHeavy`，两边会不一致；需要 pipeline 方确认 `CardFrameCache.plan()` 输出的 `capabilities` 是合并过审阅表的。
+
+## 5. 按主会话裁定返工（契约 J.10）
+
+- **选 A**：server/test/render-node-logic.test.mjs 的期望形状加 canvasHeavy: false。两条用例（第 521、552 行）的期望都由同一个辅助函数 expectSnapshot（第 484 行）生成，这个函数只有这两条用例在用，所以只改了这一行，别的没动。
+- **esultFor 抛错算「没有清单」**：local-node.mjs 去重分支捕获 esultFor 的异常，照旧 session.complete(id, { ranges, dedup: true })；被中止时照旧丢弃。JSDoc 同步。
+- 第 4 节第 2、4、5 条照原读法，不改。
+
+验证（返工后）：
+- 
+px tsc -b --force：退出码 0。
+- 
+pm test：退出码 0；tests 2394，pass 2393，fail 0，skipped 1（需要 5190 的那条）。
+- 自测加了一条：esultFor 抛错时 	ask.done.result 恰为 {"ranges":[[0,59]],"dedup":true}，调用序列 has → resultFor；原有四组照旧通过，ALL OK，退出码 0。

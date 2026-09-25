@@ -97,7 +97,8 @@ import { lockKeyOf, splitPlan } from './split.mjs';
  *   推送一段;`complete !== true` 表示没收全。meta 供记账(设计第 7 节「节点信任」)。
  *   回包带 `result`(任务清单)时,展开进 `task.complete` 的结果(契约 J.3)
  * @property {(ref: SinkRef) => Promise<object | null>} [resultFor]
- *   `has` 回 true 之后取这一段的清单(C6.4 第 3 节);去重完成时展开进结果。没有这个方法时照旧
+ *   `has` 回 true 之后取这一段的清单(C6.4 第 3 节);去重完成时展开进结果。没有这个方法、
+ *   回 null 或抛错时,只带 `{ ranges, dedup: true }` 完成(契约 J.10)
  *
  * @typedef {object} Endpoint  到队列的一条连接
  * @property {(message: object) => void} send
@@ -356,9 +357,15 @@ export function createLocalNode({
       if (!holding(run)) return discard();
       if (have === true) {
         // 去重完成也带清单,订阅方才拉得到(C6.4 第 3 节);sink 没有 resultFor 时照旧(D.2)
+        // resultFor 抛错算「没有清单」:照旧以去重方式完成,不让任务失败(契约 J.10)
         let manifest = null;
         if (typeof sink.resultFor === 'function') {
-          manifest = await untilAborted(() => sink.resultFor({ ...ref }), signal);
+          try {
+            manifest = await untilAborted(() => sink.resultFor({ ...ref }), signal);
+          } catch (error) {
+            if (error === ABORTED) throw error;
+            manifest = null;
+          }
           if (!holding(run)) return discard();
         }
         session.complete(id, { ranges, dedup: true, ...resultFields(manifest) });
