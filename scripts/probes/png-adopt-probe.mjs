@@ -143,7 +143,7 @@ async function openLegacy(browser, editor, { placeholderShot = null } = {}) {
     try {
       const res = await fetch(req.url());
       const text = await res.text();
-      const patched = text.split('target: "user", lane: "user"').join('target: "prerender", lane: "user"');
+      const patched = text.split('target: "user"').join('target: "prerender"');
       out.legacyShim = (out.legacyShim ?? 0) + (patched !== text ? 1 : 0);
       await req.respond({ status: res.status, contentType: res.headers.get('content-type') || 'text/javascript', body: patched });
     } catch { await req.continue().catch(() => {}); }
