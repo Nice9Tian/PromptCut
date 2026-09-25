@@ -10,7 +10,8 @@ import { resultKeyOf } from './fingerprint.mjs';
  * (`source.derivedFrom` 指向那个 `plan` 任务)。
  *
  *   快照:每个 control 的本地帧 0 .. count-1 按 SNAPSHOT_SPAN 切段(缺省 60 帧);本地档缺 entryKey 的跳过
- *   轨道流:firstSegment .. lastSegment 按 STREAM_SEGMENTS 切(缺省 8 段,每段 15 帧);没有 streamKey 的跳过
+ *   轨道流:firstSegment .. lastSegment 按 STREAM_SEGMENTS 切(缺省 8 段,每段 15 帧);没有 streamKey 的跳过。
+ *          流任务的 `requires.capabilities = { streams: true }`(M6c X1):只给报了能产流的节点
  *
  * 结果键 = 内容键 × 切分节点**自己的**环境指纹(设计 2.1;卡被别的环境锁定时见下文「卡片级指纹锁」):认领 `plan` 的节点定下这一版
  * 项目的指纹,写进每个细任务的 `requires.envFingerprint`,只有同指纹的节点能认领。
@@ -197,6 +198,8 @@ export function splitPlan({
         requires: {
           envFingerprint: keying.fingerprint, codeVersion, cardSources: {},
           transcode: true, userCards: false, graphCards: false, belowDependent: false,
+          // M6c X1:只有报了 `capabilities.streams: true`(探到编码器)的节点能认领(filter.mjs 规则 2)
+          capabilities: { streams: true },
         },
         priority: NORMAL_PRIORITY,
       };

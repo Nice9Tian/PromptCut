@@ -232,9 +232,23 @@ type QueueNode = {
 const queueNodes = new Map<string, QueueNode>();
 
 /**
+ * 本机节点(PC 与独立渲染主机)`node.hello` 报的能力(M6c X1,`docs/plan/m6c-contract.md`):
+ *   - `userCards: true, graphCards: false`:同 M5b / M6b;
+ *   - `streams`:按实报 —— 预渲染管线有轨道流生产者、开关开着(`PROMPTCUT_STREAMS` 不是 0)、探到了能用的 H.264
+ *     编码器(`FramePipeline.streamCapable`,一次进程只探一次)才是 true;
+ *   - `transcode`:与 `streams` 同一个判据(本机有 ffmpeg 且编码器能用)。节点侧过滤的规则 2 对流任务同时查
+ *     `requires.capabilities.streams` 与转码能力(B.2),只报 `streams` 的节点认领不了流任务。
+ */
+async function nodeCapabilities(service: FramePipeline) {
+  let streams = false;
+  try { streams = (await (service as any).streamCapable?.()) === true; } catch { streams = false; }
+  return { userCards: true, graphCards: false, transcode: streams, streams };
+}
+
+/**
  * J.5:开关打开、又连得上文档服务时,在预渲染进程里起一个本机渲染节点,并替页面发布 `plan`。
  *
- *   - 节点:`createLocalNode`(`profile: 'pc'`、`maxConcurrent: 1`、`capabilities: { userCards: true, graphCards: false }`,
+ *   - 节点:`createLocalNode`(`profile: 'pc'`、`maxConcurrent: 1`、`capabilities` 见 `nodeCapabilities`(M6c X1 起带 `streams`),
  *     `codeVersions: [frameCode(root)]`;环境指纹在报到前借一次流预渲染间来探),执行器是 J.4 的
  *     `createPrerenderExecutor`,产物库是 C6.2 / C6.4 的 `createAssetSink({ pipeline, client, content })`;
  *   - 发布:`/preload` 在 `service.preload(…, { queue: true })` 之前调 `publish`:`project.announce` 拿 `projectRev`、
@@ -272,6 +286,8 @@ async function startQueueNode(root: string, service: FramePipeline) {
   }
   const envFingerprint: string | null = (service as any).envFingerprint;
   if (!envFingerprint) return queueLog("queue.skip", { reason: "no-environment" });
+  if (services.get(root) !== service || (service as any).closed) return;
+  const capabilities = await nodeCapabilities(service);
   if (services.get(root) !== service || (service as any).closed) return;
 
   const { createPrerenderExecutor }: any = await import("./prerender-executor.mjs");
@@ -331,7 +347,7 @@ async function startQueueNode(root: string, service: FramePipeline) {
     localNode?.stop();
     localNode = node.createLocalNode({
       nodeId,
-      node: { profile: "pc", envFingerprint, codeVersions: [codeVersion], capabilities: { userCards: true, graphCards: false }, maxConcurrent: 1 },
+      node: { profile: "pc", envFingerprint, codeVersions: [codeVersion], capabilities, maxConcurrent: 1 },
       endpoint, now: Date.now, isIdle: () => executor.isIdle(), maxConcurrent: 1, codeVersion, executor, sink,
       onEvent: (event: any) => {
         const id = event?.id;
@@ -380,7 +396,7 @@ async function startQueueNode(root: string, service: FramePipeline) {
     // G.7 约定写法:(重)连上就报到,接续本实例仍持有的认领
     localNode.start(localNode.session.held().map(({ id, token }: any) => ({ id, token })));
     started = true;
-    log("queue.started", { docservice: resolved.mode, url: resolved.url, nodeId, envFingerprint, codeVersion: codeVersion.slice(0, 12) });
+    log("queue.started", { docservice: resolved.mode, url: resolved.url, nodeId, envFingerprint, codeVersion: codeVersion.slice(0, 12), capabilities });
   };
   endpoint.onOpen(onOpen);
   endpoint.onClose(() => {
@@ -592,6 +608,9 @@ async function startHostNode(root: string, service: FramePipeline, node: any, or
   const envFingerprint: string | null = (service as any).envFingerprint;
   if (!envFingerprint) return queueLog("queue.skip", { reason: "no-environment", profile: "host" });
   if (services.get(root) !== service || (service as any).closed) return;
+  // M6c X1:能力与 PC 节点同一个判据(`streams` 按实报)
+  const capabilities = await nodeCapabilities(service);
+  if (services.get(root) !== service || (service as any).closed) return;
 
   const { sharedProtocols }: any = await import("./auth/shared-config.mjs");
   const { createTicketSource }: any = await import("./auth/ticket-source.mjs");
@@ -620,6 +639,7 @@ async function startHostNode(root: string, service: FramePipeline, node: any, or
     maxConcurrent: config.maxConcurrent,
     envFingerprint,
     codeVersion,
+    capabilities,
     now: Date.now,
     nodeIdOf: (_entry: any, index: number) => `${nodeIdBase}/p${index}`.slice(0, 128),
     connect: (entry: any, index: number) => {
@@ -663,7 +683,7 @@ async function startHostNode(root: string, service: FramePipeline, node: any, or
   let released = false;
   host.start();
   log("queue.started", { profile: "host", projects: config.entries.map((e: any) => e.projectId), maxConcurrent: host.maxConcurrent,
-    envFingerprint, codeVersion: codeVersion.slice(0, 12), codeVersionOverride: override !== null });
+    envFingerprint, codeVersion: codeVersion.slice(0, 12), codeVersionOverride: override !== null, capabilities });
 
   const timer = setInterval(() => {
     if (closed) return;

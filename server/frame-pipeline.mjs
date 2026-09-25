@@ -2137,9 +2137,12 @@ export class FramePipeline {
    *   4. 按本机锁库给共享档卡定 `cardLocks` / `takeover`(`cardLockDecision`):`reuse` / `defer` 照锁定方的指纹
    *      出键;`takeover` 先在本机锁库里接手(同 `fillCardControls` 的做法,同一内容键的片段一起换键发层),
    *      再让切分按本机指纹出键、任务带 `takeover`;
-   *   5. 只留 `queueHandles` 的卡,补上 `cardId`(`split.mjs` 要,卡片计划里的 control 只有 `nodeId`)。
+   *   5. 只留 `queueHandles` 的卡,补上 `cardId`(`split.mjs` 要,卡片计划里的 control 只有 `nodeId`);
+   *   6. 轨道流(M6c X1):本机能产流(`queueStreamSpecs`:开关开着、探到编码器)时按这一版算出全部流,
+   *      放进 `context.streams`(`splitPlan` 按它切流任务);否则为空,与 M5b 相同。
    *
-   * 回 `{ entry, context }`,`context` 就是交给 `splitPlan` 的 PlanContext(`streams` 为空:流不走队列,J.0)。
+   * 回 `{ entry, context, streamSpecs }`,`context` 就是交给 `splitPlan` 的 PlanContext;`streamSpecs` 是
+   * `planStreams` 的完整结果(执行器按它把流任务对回这一版的流)。
    */
   async planForQueue(project, { signal } = {}) {
     const entry = await this.entry(project);
@@ -2189,11 +2192,13 @@ export class FramePipeline {
     const cardPlan = entry.cardPlan.filter(control => this.queueHandles(control))
       .map(control => ({ ...control, cardId: control.cardId ?? cardIdOf.get(control.nodeId) ?? null }));
     const clips = (entry.project.tracks || []).flatMap(track => track.clips || []);
+    const streamSpecs = await this.queueStreamSpecs(entry);
     const context = {
       entryKey: entry.key,
       prerenderSet: entry.prerenderSet instanceof Set ? new Set(entry.prerenderSet) : undefined,
       cardPlan,
-      streams: [],
+      streams: streamSpecs.map(spec => ({ streamKey: spec.streamKey, contentKey: spec.contentKey, topClipId: spec.topClipId,
+        firstSegment: spec.firstSegment, lastSegment: spec.lastSegment })),
       anchorFrames: anchorFrames(clips, fps).filter(frame => frame >= 0 && frame < count),
       // 附件第 5 节:`codeVersion = frameCode(root)` 已经覆盖了全部卡片源码,这里留空
       cardSourceVersions: {},
@@ -2203,7 +2208,40 @@ export class FramePipeline {
       cardLocks,
       takeover,
     };
-    return { entry, context };
+    return { entry, context, streamSpecs };
+  }
+  /**
+   * M6c X1:这一版里要经队列产的轨道流(`planStreams` 的完整结果,与 `StreamProducer.update` 同一种算法、
+   * 同一组参数,所以流键相同)。本机没有生产者(`interactive: false`)、开关关着(`PROMPTCUT_STREAMS=0`)、
+   * 或探不到编码器(`capable()`)时回 `[]` —— 这时不发布流任务,行为与 M5b 相同。
+   */
+  async queueStreamSpecs(entry) {
+    const producer = this.streamProducer();
+    if (!producer?.enabled || !(await producer.capable())) return [];
+    try {
+      return planStreams(entry, { picked: clipId => this.prerenderPicked(entry, clipId), budget: producer.budget,
+        codeVersion: `${STREAM_CODE_VERSION}:${this.captureCode?.() || ''}`, envFingerprint: this.envFingerprint });
+    } catch {
+      return [];
+    }
+  }
+  /**
+   * M6c X1:本机节点 `node.hello` 的 `capabilities.streams`:有生产者、开关开着、探到了编码器才是 true
+   * (一次进程只探一次)。编辑器进程(`interactive: false`)没有生产者,回 false。
+   */
+  async streamCapable() {
+    const producer = this.streamProducer();
+    return !!producer && producer.enabled === true && (await producer.capable()) === true;
+  }
+  /**
+   * M6c X1:流任务的一段(`[from, to]` 是分段号):交给轨道流生产者按段产出(`StreamProducer.produceRange`),
+   * 每个分段落盘、发层之后才回。回 `null`:产物在流库里,sink 自己读(`collectStreamResult`)。
+   */
+  async renderStreamRange(entry, spec, range, { signal, progress } = {}) {
+    const producer = this.streamProducer();
+    if (!producer) throw Object.assign(new Error('这个预渲染实例没有轨道流生产者'), { code: 'no-stream-producer', retryable: false });
+    await producer.produceRange(entry, spec, range, { signal, progress });
+    return null;
   }
   /** 细任务的重度(附件第 2 节):`canvasHeavy`、`belowDependent`、`unknown`、本地档记 `heavy`,其余 `medium` */
   queueWeightClass(control) {
