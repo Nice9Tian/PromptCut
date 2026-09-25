@@ -20,8 +20,9 @@ import { lockKeyOf, splitPlan } from './split.mjs';
  *
  *   plan    executor.plan → splitPlan → task.publish 细任务(带 reqId)→ 等同一 reqId 的
  *           task.published → (有 card-locked 就照锁重切重发)→ complete 这个 plan
- *   细任务   sink.has 为真就直接 complete(dedup);否则 executor.render → sink.put →
- *            收全才 complete,没收全 fail(可重试)
+ *   细任务   sink.has 为真就直接 complete(dedup,带 sink.resultFor 的清单);否则 executor.render →
+ *            sink.put → 收全才 complete(带 put 回的清单),没收全 fail(可重试)。
+ *            sink 收到的 ref 带任务的 input 与 requires(契约 J.3)
  *   出错     fail,`error.retryable === false` 才不可重试
  *
  * 发布必须先于完成:派生任务继承 plan 的用户与订阅者(契约 A.4 末段),条件是发布那一刻
@@ -87,11 +88,17 @@ import { lockKeyOf, splitPlan } from './split.mjs';
  * @property {'snapshot' | 'stream'} kind
  * @property {'shared' | 'local' | null} tier   流任务是 null
  * @property {{ unit: string, from: number, to: number }} range
+ * @property {object} [input]      任务的 input,原样(契约 J.3;C6.2 第 11 节第 3 条)
+ * @property {object} [requires]   任务的 requires,原样
  *
  * @typedef {object} Sink  产物库(契约 D.1;M5 起由素材服务实现)
  * @property {(ref: SinkRef) => Promise<boolean>} has   这一段是否已经收全
- * @property {(entry: SinkRef & { artifacts: unknown, meta: { taskId: string, nodeId: string, token: number } }) => Promise<{ complete: boolean }>} put
- *   推送一段;`complete !== true` 表示没收全。meta 供记账(设计第 7 节「节点信任」)
+ * @property {(entry: SinkRef & { artifacts: unknown, meta: { taskId: string, nodeId: string, token: number } }) => Promise<{ complete: boolean, result?: object }>} put
+ *   推送一段;`complete !== true` 表示没收全。meta 供记账(设计第 7 节「节点信任」)。
+ *   回包带 `result`(任务清单)时,展开进 `task.complete` 的结果(契约 J.3)
+ * @property {(ref: SinkRef) => Promise<object | null>} [resultFor]
+ *   `has` 回 true 之后取这一段的清单(C6.4 第 3 节);去重完成时展开进结果。没有这个方法、
+ *   回 null 或抛错时,只带 `{ ranges, dedup: true }` 完成(契约 J.10)
  *
  * @typedef {object} Endpoint  到队列的一条连接
  * @property {(message: object) => void} send
@@ -130,6 +137,11 @@ function mergedLocks(cardLocks, extra) {
   }
   for (const [key, value] of extra) out.set(key, value);
   return out;
+}
+
+/** sink 回的清单 → 可展开进 `complete` 结果的对象;不是普通对象(null、缺省、数组)就什么都不加。 */
+function resultFields(result) {
+  return result != null && typeof result === 'object' && !Array.isArray(result) ? result : {};
 }
 
 /** 中止时抛出的标记:赛跑输给中止信号,不是执行器自己的错误。 */
@@ -336,13 +348,27 @@ export function createLocalNode({
       }
 
       const { resultKey, kind, range } = task;
-      const ref = { resultKey, kind, tier: task.tier ?? null, range };
+      // input / requires 原样带上:本地档的落盘键要用 input.entryKey、input.contentKey、
+      // requires.envFingerprint,canvasHeavy 取 input.canvasHeavy(C6.2 第 11 节第 2、3 条,J.3)
+      const ref = { resultKey, kind, tier: task.tier ?? null, range, input: task.input, requires: task.requires };
       const ranges = [[range?.from, range?.to]];
 
       const have = await untilAborted(() => sink.has({ ...ref }), signal);
       if (!holding(run)) return discard();
       if (have === true) {
-        session.complete(id, { ranges, dedup: true });
+        // 去重完成也带清单,订阅方才拉得到(C6.4 第 3 节);sink 没有 resultFor 时照旧(D.2)
+        // resultFor 抛错算「没有清单」:照旧以去重方式完成,不让任务失败(契约 J.10)
+        let manifest = null;
+        if (typeof sink.resultFor === 'function') {
+          try {
+            manifest = await untilAborted(() => sink.resultFor({ ...ref }), signal);
+          } catch (error) {
+            if (error === ABORTED) throw error;
+            manifest = null;
+          }
+          if (!holding(run)) return discard();
+        }
+        session.complete(id, { ranges, dedup: true, ...resultFields(manifest) });
         emit({ type: 'dedup', id });
         return;
       }
@@ -363,7 +389,8 @@ export function createLocalNode({
         emit({ type: 'failed', id, error: 'sink-incomplete', retryable: true });
         return;
       }
-      session.complete(id, { ranges });
+      // put 回的清单(C6.2 第 3 节)展开进 task.done 的 result(J.3)
+      session.complete(id, { ranges, ...resultFields(r.result) });
       emit({ type: 'completed', id });
     } catch (error) {
       if (error === ABORTED || !holding(run)) return discard();
