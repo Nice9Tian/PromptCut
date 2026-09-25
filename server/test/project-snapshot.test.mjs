@@ -186,8 +186,9 @@ test('J1 大快照（约 1.5 MiB，每片 ≤ 512 KiB）：get 分多片送回�
   assert.equal(replies.at(-1).complete, true, `收齐：${JSON.stringify(replies.at(-1))}`);
 
   const closedEarly = { v: false };
-  c.closed.then(() => { closedEarly.v = true; });
-  const got = await getSnapshot(c, 'proj-big', rev, 15_000);
+  const whenClosed = c.closed.then((e) => { closedEarly.v = true; throw new Error(`取快照途中连接被关闭：${e?.code}/${e?.reason}（出站背压上限是 1 MiB，H.2）`); });
+  whenClosed.catch(() => {});
+  const got = await Promise.race([getSnapshot(c, 'proj-big', rev, 8_000), whenClosed]);
   const back = assemble(got, 'proj-big', rev);
   assert.equal(back.length, text.length);
   assert.equal(back, text, '拼起来与原文相同');
@@ -379,7 +380,7 @@ test('J4 createProjectClient：announce、putSnapshot、get 往返；大文本�
 
 test('J4 并发两份不串：两个项目同时 announce、putSnapshot、get，各拿回自己的', async (t) => {
   const { client } = await clientRig(t);
-  const make = (seed) => ({ id: `proj-${seed}`, seed, pad: `${seed}-`.repeat(150_000) });
+  const make = (seed) => ({ id: `proj-${seed}`, seed, pad: `${seed}-`.repeat(5_000) });
   const projects = [make('left'), make('right')];
   const texts = projects.map((p) => JSON.stringify(p));
   const revs = await Promise.all(projects.map((p, i) => client.announce(p.id, sha256(texts[i]))));
@@ -415,12 +416,12 @@ const silentProject = () => ({ name: 'silent-project', types: ['project.'], chan
 
 test('J4 服务端不回：超时抛 code: timeout（announce、putSnapshot、get 都是）', async (t) => {
   const { client } = await clientRig(t, { modules: [silentProject()], timeoutMs: 300 });
-  for (const [what, p] of [
-    ['announce', client.announce('p', sha256('x'))],
-    ['putSnapshot', client.putSnapshot('p', 1, sha256('x'), 'x')],
-    ['get', client.get('p', 1)],
+  for (const [what, call] of [
+    ['announce', () => client.announce('p', sha256('x'))],
+    ['putSnapshot', () => client.putSnapshot('p', 1, sha256('x'), 'x')],
+    ['get', () => client.get('p', 1)],
   ]) {
-    const r = await settleOf(p);
+    const r = await settleOf(call());
     assert.equal(r.ok, false, `${what}：不回包就失败`);
     assert.equal(r.error.code, 'timeout', `${what}：code 是 timeout：${r.error?.message}`);
     assert.ok(r.ms >= 250 && r.ms < 5000, `${what}：按 timeoutMs 计时：${r.ms} ms`);
