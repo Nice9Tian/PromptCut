@@ -71,6 +71,8 @@ const STREAMS = args.includes('--streams');
 const KEEP = args.includes('--keep');
 const ONLY = arg('--only', null);
 const TIMEOUT_MS = Number(arg('--timeout-min', 20)) * 60_000;
+/** `--salt <s>`:写进每张卡的 params(卡片内容键含 params),让结果键全新、不会被别处已有的清单去重掉(W4 用) */
+const SALT = arg('--salt', null);
 const LAN = args.includes('--lan');
 const HOLD_MS = Math.max(0, Number(arg('--hold-min', 0)) || 0) * 60_000;
 const EDITOR_HOST = LAN ? '0.0.0.0' : '127.0.0.1';
@@ -91,8 +93,8 @@ const PROJECT = {
   themeId: 'dark', camera3dFov: 50, media: [], filters: [], pixelMaps: [], audioFx: [], cardNodes: [], style: {},
   tracks: [
     { id: 'tr-1', name: 'tr-1', hidden: false, clips: [{ id: 'clip-stateful', kind: 'card', cardId: 'r6-stateful', start: 0, end: 3, params: {} }] },
-    { id: 'tr-2', name: 'tr-2', hidden: false, clips: [{ id: 'clip-canvas', kind: 'card', cardId: 'r6-canvas', start: 0, end: 3, params: {} }] },
-    { id: 'tr-3', name: 'tr-3', hidden: false, clips: [{ id: 'clip-unknown', kind: 'card', cardId: 'r6-unknown', start: 1, end: 3, params: {} }] },
+    { id: 'tr-2', name: 'tr-2', hidden: false, clips: [{ id: 'clip-canvas', kind: 'card', cardId: 'r6-canvas', start: 0, end: 3, params: SALT ? { probeSalt: SALT } : {} }] },
+    { id: 'tr-3', name: 'tr-3', hidden: false, clips: [{ id: 'clip-unknown', kind: 'card', cardId: 'r6-unknown', start: 1, end: 3, params: SALT ? { probeSalt: SALT } : {} }] },
   ],
 };
 const ANCHORS = anchorFrames(PROJECT.tracks.flatMap(t => t.clips), FPS).filter(n => n >= 0 && n < PROJECT.duration * FPS);
