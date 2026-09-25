@@ -137,3 +137,36 @@
 | ext4 哈希存储 | 按前两位分目录；临时文件加改名或链接发布；持久化前 `fsync`；ENOSPC 处理；迁移用 `rsync -aS` 或 `tar --sparse` | **采纳**：分目录、临时文件、ENOSPC 回 507。`fsync` 只对 `complete` 做（分片丢了可以续传）〔裁〕 |
 | 同机第二份实例 | 独立 app 名、数据目录、端口 8777 / 8778；两个进程的内存状态不互通 | **采纳**（第 2 节） |
 | 公网改走 HTTPS/WSS | 建议 | **不采纳**：用户已接受明文（S4）〔裁〕 |
+
+## 10. 实现补充（`claude/sp-hosting`，2026-09-26）
+
+实现方按第 1、2 节做完后补的细节；与正文有出入的地方逐条写明，由主会话在集成时裁定。
+
+**部署文件清单**（第 2 节「实现方列清单」；唯一出处是 `server/hosted/files.mjs`，单测 SPH-deploy-1 在只含这些文件的暂存目录里真起一次入口）：
+
+| 类别 | 路径 |
+|---|---|
+| 整个目录（跳过 `test/` 与 `*.test.*`） | `server/hosted/`、`server/docservice/`、`server/auth/`、`server/asset-store/`、`server/render-queue/` |
+| 单个文件 | `server/asset-service.ts`、`server/vite-plugin-media.ts`、`server/http-guard.mjs`、`server/asset-announce.mjs`、`server/render-node/ws-transport.mjs` |
+| 生成 | 部署目录根上的 `package.json`（`{ "type": "module" }`） |
+
+- 素材服务中间件是 `.ts`：靠 Node 的类型剥离直接载入（Node ≥ 22.18 / 24，远端 v24.21.0），不转译；
+  它的兄弟引用不带扩展名，由 `server/hosted/ts-resolve.mjs` 的同步解析钩子（`module.registerHooks`）补 `.ts`。
+- 远端布局：代码在 `<部署目录>/app/`，PM2 配置在 `<部署目录>/pm2.config.cjs`（部署脚本生成，不含秘密）。
+  正式实例 `/opt/promptcut-hosted`、数据 `/var/lib/promptcut/hosted`；演练实例 `/opt/promptcut-drill`、数据 `/var/lib/promptcut/drill`。
+
+**托管组合的补充**：
+
+1. 素材服务端口另有两条管理接口（第 1 节「迁移导出」）：`GET /admin/inventory`（盘点）与 `GET /admin/blob/<ns>/<hash>`（按哈希取字节）；
+   只认 `Authorization: Bearer <集群令牌>` 或本机回环。素材服务的数据面仍然不认集群令牌。
+2. 素材服务端口的 `/healthz` 回 `{ ok, role: 'asset', layout: 'shard2' }`。
+3. 失败即关另加两个原因词：`layout`（`assets/.layout` 对不上，或 `assets/` 有东西却没有标记）、
+   `asset-public-url`（绑非回环而没设 `PROMPTCUT_ASSET_PUBLIC_URL`）；端口被占打 `config.error { reason: 'listen' }`。
+4. 数据目录本身必须已存在（不存在即 `data-dir`，服务不替人建）；`docservice/`、`assets/`、`secrets/`（0700）由服务建。
+5. 地址登记：有集群令牌时带令牌（管理身份），没有时以回环的本机身份登记（本机身份同样允许 `service.announce`）。
+6. `assets/.layout` 的内容是 `{"v":1,"layout":"shard2"}`；本机编辑器的原布局记作 `flat`（本机不写标记）。
+7. 磁盘满：`ENOSPC` / `EDQUOT` 回 507 的映射做在 `server/asset-service.ts`（分片与收尾两处），本机编辑器同样生效。
+8. 测试开关 `PROMPTCUT_TEST_NO_LOOPBACK_TRUST=1`：素材服务与管理接口不把本机回环当自己人，本机也能验票据读写。
+
+**部署脚本的补充**：`deploy-hosted` 另有 `--replace-docservice`（旧的 `promptcut-docservice` 还在 PM2 里时，缺省拒绝部署正式实例，退出码 3）、
+`--write-token`（把本机 `PROMPTCUT_CLUSTER_TOKEN` 经 ssh 标准输入写成 `secrets/cluster-token`，0600）；另加 `status-hosted`、`stage-hosted`。
