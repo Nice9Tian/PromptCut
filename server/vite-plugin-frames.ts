@@ -287,7 +287,7 @@ async function startQueueNode(root: string, service: FramePipeline) {
   const assetTicket = await ticketFor(link, endpoint);
   const assets = selectAssetClient({ node, endpoint, origin, ticket: assetTicket, createAssetClient, owner: "queue" });
   // J.6 的回退读别的机器的素材服务:凭共享项目进入时带票据
-  setMediaFallbackTicket(assetTicket);
+  setMediaFallbackTicket(assetTicket ? () => assetTicket() : null);
   const client = assets.client;
   const events: object[] = [];
   const note = (event: string, fields: object = {}) => {
@@ -646,8 +646,8 @@ async function startHostNode(root: string, service: FramePipeline, node: any, or
     },
   });
 
-  // J.6 的素材回退(读别的机器上的素材):各项目的素材服务都当回退基址;票据用第一个项目的
-  // (素材服务按哈希寻址,同一台服务上任一项目的有效票据都能读;多台服务各要各的票据,见报告遗留)
+  // J.6 的素材回退(读别的机器上的素材):各项目的素材服务都当回退基址;票据按基址挑,用那台素材服务所属项目的
+  // (票据只在签发它的素材服务上有效;同一台服务上有几个项目时用配置里靠前的那个,按哈希寻址,任一项目的有效票据都能读)
   let fallbackKey = "";
   const refreshFallback = () => {
     const bases = wired.map(rec => rec.assets.base()).filter((b: string | null): b is string => !!b);
@@ -657,7 +657,7 @@ async function startHostNode(root: string, service: FramePipeline, node: any, or
     note("queue.media-fallback", { bases: setMediaFallbackBases(bases).length });
   };
   refreshFallback();
-  setMediaFallbackTicket(wired[0]?.ticket ?? null);
+  setMediaFallbackTicket(hostMod.fallbackTicketFor(wired.map(rec => ({ base: () => rec.assets.base(), ticket: () => rec.ticket() }))));
 
   let closed = false;
   let released = false;

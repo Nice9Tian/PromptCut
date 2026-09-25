@@ -349,3 +349,22 @@ export function renderHostEnv(base, { config, data, streams, maxConcurrent }) {
   else delete env.PROMPTCUT_HOST_MAX_CONCURRENT;
   return env;
 }
+
+/**
+ * 素材回退(J.6)按基址挑票据:素材票据只在签发它的素材服务上有效,主机加入的项目分属不同素材服务时,
+ * 读哪台的回退就要用那台所属项目的票据(M6b 集成修的遗留:原来只用第一个项目的票据,读第二台会 401)。
+ * 交给 `asset-client.ts` 的 `setMediaFallbackTicket`,它每试一个回退基址调一次。
+ * @param {Array<{ base: () => string | null, ticket: () => Promise<string | null> }>} records  每个项目一项,顺序同配置
+ * @returns {(base: string) => Promise<string | null> | null}  基址不属于任何项目时回 null(不带票据)
+ */
+export function fallbackTicketFor(records) {
+  const norm = (b) => String(b ?? '').trim().replace(/\/+$/, '');
+  return (base) => {
+    const want = norm(base);
+    const rec = records.find((r) => {
+      const b = r.base();
+      return !!b && norm(b) === want;
+    });
+    return rec ? rec.ticket() : null;
+  };
+}

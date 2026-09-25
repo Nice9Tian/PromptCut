@@ -9,6 +9,7 @@
  *   RH4  并发上限:两个项目共 6 个任务,maxConcurrent 为 1、2 时全部节点的持有 + 在飞任何一拍都不超过上限,且到达上限
  *   RH5  退出时让掉认领:shutdown 对每个持有发 task.release,队列立即放回 open(不等断线宽限),别的节点马上能认领;执行被中止
  *   RH6  代码版本过滤照旧:codeVersion 不同的 host 看得见任务、认领 0 次
+ *   RH-fallback-ticket  素材回退按基址挑票据(集成时修的遗留):两台素材服务各认各的票据,读哪台用那台所属项目的票据
  */
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -21,11 +22,14 @@ import { createLocalNode } from '../render-node/local-node.mjs';
 import { planTaskOf } from '../render-node/split.mjs';
 import { checkClaimable } from '../render-node/filter.mjs';
 import { createWsEndpoint } from '../render-node/ws-transport.mjs';
-import { createRenderHost, loadHostConfig, parseHostConfig, hostMaxConcurrent, HOST_MAX_CONCURRENT, HOST_CAPABILITIES, renderHostArgs as parseArgs, renderHostEnv as hostEnv } from '../render-node/host.mjs';
+import { createRenderHost, loadHostConfig, parseHostConfig, fallbackTicketFor, hostMaxConcurrent, HOST_MAX_CONCURRENT, HOST_CAPABILITIES, renderHostArgs as parseArgs, renderHostEnv as hostEnv } from '../render-node/host.mjs';
 import { normalizeEntry, sharedProtocols } from '../auth/shared-config.mjs';
 import { createLoopback } from './fake-loopback-transport.mjs';
 import { createTimerClock } from './fake-render-executor.mjs';
-import { startSharedService, createProject, join, tempDir, deviceId } from './fake-shared-env.mjs';
+import { startSharedService, createProject, join, tempDir, deviceId, assetTicketKit } from './fake-shared-env.mjs';
+import { createAssetHarness, ROOT } from './fake-asset-service.mjs';
+import http from 'node:http';
+import crypto from 'node:crypto';
 import { byType } from './fake-ws-kit.mjs';
 
 const sha256 = (text) => createHash('sha256').update(text, 'utf8').digest('hex');
@@ -451,4 +455,56 @@ test('RH6 代码版本过滤照旧:codeVersion 不同的 host 看得见任务、
   assert.equal(space.task(task.id).state, 'open');
   env.hygiene();
   stale.shutdown();
+});
+
+/* ================================================================== RH-fallback-ticket */
+
+test('RH-fallback-ticket 素材回退按基址挑票据:两台素材服务各认各的票据,读第二台用第二个项目的票据(不再 401)', async (t) => {
+  const harness = createAssetHarness();
+  t.after(() => harness.cleanup());
+  const client = await import(harness.compileTs(path.join(ROOT, 'server', 'asset-client.ts')));
+  // 两台素材服务,各自的票据签发方(不同项目、不同密钥),都把来源当远端(要票据)
+  const kitA = await assetTicketKit();
+  const kitB = await assetTicketKit();
+  const svcA = await harness.serve({ chunkSize: 1024, isTrusted: () => false, tickets: kitA.tickets });
+  const svcB = await harness.serve({ chunkSize: 1024, isTrusted: () => false, tickets: kitB.tickets });
+  // 素材只在 B 上
+  const buf = crypto.randomBytes(3000);
+  const hash = crypto.createHash('sha256').update(buf).digest('hex');
+  const rwB = kitB.issue('rw');
+  for (let n = 0; n < 3; n++) {
+    const r = await fetch(`${svcB.base}/media/${hash}/${n}`, { method: 'PUT', body: buf.subarray(n * 1024, (n + 1) * 1024), headers: { 'X-Media-Size': String(buf.length), Authorization: `Bearer ${rwB}` } });
+    assert.equal(r.status, 200);
+  }
+  assert.equal((await fetch(`${svcB.base}/media/${hash}/complete`, { method: 'POST', headers: { Authorization: `Bearer ${rwB}` } })).status, 200);
+  // 主源一律 404,走回退
+  const primary = http.createServer((req, res) => { res.statusCode = 404; res.end('nope'); });
+  await new Promise((resolve) => primary.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise((resolve) => primary.close(() => resolve())));
+  let fn;
+  client.assetProxyPlugin(`http://127.0.0.1:${primary.address().port}`).configureServer({ middlewares: { use(f) { fn = f; } } });
+  const proxy = http.createServer((req, res) => fn(req, res, () => { res.statusCode = 418; res.end(); }));
+  await new Promise((resolve) => proxy.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise((resolve) => { proxy.closeAllConnections?.(); proxy.close(() => resolve()); }));
+  const via = `http://127.0.0.1:${proxy.address().port}/@media/${hash}`;
+  client.setMediaFallbackBases([svcA.base, `${svcB.base}/`]);
+  t.after(() => { client.setMediaFallbackBases([]); client.setMediaFallbackTicket(null); });
+
+  // 修之前的做法:一律用第一个项目的票据 → A 回 404 后 B 拒 401
+  const asked = [];
+  client.setMediaFallbackTicket(async () => kitA.issue('r'));
+  assert.equal((await fetch(via)).status, 401, '对照:只用第一个项目的票据,第二台素材服务回 401');
+
+  // 按基址挑:A 用 A 的票据(合法、没有这份素材 → 404,改试下一个),B 用 B 的票据
+  const records = [
+    { base: () => svcA.base, ticket: async () => { asked.push('A'); return kitA.issue('r'); } },
+    { base: () => `${svcB.base}/`, ticket: async () => { asked.push('B'); return kitB.issue('r'); } },
+  ];
+  const pick = fallbackTicketFor(records);
+  assert.equal(pick('http://127.0.0.1:1/api/asset'), null, '不属于任何项目的基址不带票据');
+  client.setMediaFallbackTicket(pick);
+  const got = await fetch(via, { headers: { Range: 'bytes=0-9' } });
+  assert.equal(got.status, 206);
+  assert.deepEqual(Buffer.from(await got.arrayBuffer()), buf.subarray(0, 10));
+  assert.deepEqual(asked, ['A', 'B'], '每个回退基址各取一次、取的是它所属项目的票据');
 });
