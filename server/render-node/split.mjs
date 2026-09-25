@@ -14,7 +14,8 @@ import { resultKeyOf } from './fingerprint.mjs';
  *
  * 结果键 = 内容键 × 切分节点**自己的**环境指纹(设计 2.1;卡被别的环境锁定时见下文「卡片级指纹锁」):认领 `plan` 的节点定下这一版
  * 项目的指纹,写进每个细任务的 `requires.envFingerprint`,只有同指纹的节点能认领。
- * 含锚帧的快照段优先级 50,其余 10。
+ * 含锚帧的快照段优先级 50,其余 10。快照任务的 `input.canvasHeavy` 取 `control.capabilities?.canvasHeavy === true`
+ * (契约 J.3)。
  *
  * 内容键(契约 E.5):M4 起 card plan 的 `snapshotKey` 和流的 `streamKey` 本身已经乘过指纹,
  * 所以这里取它们带的**内容键**(`control.contentKey` / `stream.contentKey`)再乘一次指纹 ——
@@ -42,13 +43,20 @@ const SEGMENT_FRAMES = 15;
 const ANCHOR_PRIORITY = 50;
 const NORMAL_PRIORITY = 10;
 
-/** 这一版项目的粗任务(页面发布的那一个)。 */
-export function planTaskOf({ projectId, projectRev, priority = 0 }) {
+/**
+ * 这一版项目的粗任务(发布方发布的那一个)。
+ * `codeVersion` / `envFingerprint` 给了就写进 `requires`(契约 J.3),只有代码版本、指纹对得上的
+ * 节点能认领这个 plan;没给的项不写,`requires` 与 B.4 相同。id 与 resultKey 不随它们变。
+ */
+export function planTaskOf({ projectId, projectRev, priority = 0, codeVersion, envFingerprint }) {
   const resultKey = `${projectId}@${projectRev}`;
+  const requires = {};
+  if (codeVersion !== undefined) requires.codeVersion = codeVersion;
+  if (envFingerprint !== undefined) requires.envFingerprint = envFingerprint;
   return {
     id: taskIdOf({ kind: 'plan', resultKey, range: null }), kind: 'plan', resultKey, range: null,
     source: { projectId, projectRev }, input: {}, weight: { class: 'medium', estMs: null, frames: null },
-    requires: {}, priority,
+    requires, priority,
   };
 }
 
@@ -142,6 +150,8 @@ export function splitPlan({
     const keying = keyingOf(`snapshot:${contentKey}`);
     const resultKey = resultKeyOf(contentKey, keying.fingerprint);
     const cardId = control.cardId ?? null;
+    // 决定清单的体积上限,推送与拉取两边要一致(C6.2 第 11 节第 2 条,J.3)
+    const canvasHeavy = control.capabilities?.canvasHeavy === true;
     const cardVersion = control.cardId ? cardSourceVersions?.[control.cardId] : undefined;
     // 锚帧是全局帧号,换成这张卡的本地帧再比;没有 firstFrame 就判不了,一律按普通段
     const firstFrame = Number(control.sampling?.firstFrame);
@@ -160,7 +170,7 @@ export function splitPlan({
       const task = {
         id: taskIdOf({ kind: 'snapshot', resultKey, range }), kind: 'snapshot', tier, resultKey, range,
         source: { projectId, projectRev, derivedFrom },
-        input: { clipId, cardId, entryKey: tier === 'local' ? entryKey : null, contentKey },
+        input: { clipId, cardId, entryKey: tier === 'local' ? entryKey : null, contentKey, canvasHeavy },
         weight: { ...weight, frames: to - from + 1 },
         requires: { ...requires, cardSources: { ...requires.cardSources } },
         priority: anchored ? ANCHOR_PRIORITY : NORMAL_PRIORITY,
