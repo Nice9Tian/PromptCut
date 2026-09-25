@@ -15,6 +15,12 @@
  * 读的时候丢掉解析不了的行并记日志；本进程第一次往这个文件追加前，先看文件是不是以换行结尾，不是就先补一个换行，
  * 免得新记录接在半行后面一起坏掉。
  *
+ * **整份文本**（M5b 的项目快照，`render-queue-contract.md` J.1）：`writeBlob(name, text)` / `readBlob(name)`。
+ * `name` 是 `<命名空间>/<文件名>`，文件名由调用方先按上面的规则编码好（`fileNameOf`），存储层不再编码，
+ * 只核对它只含 `[A-Za-z0-9._@%-]`、不全是点、映射后的路径落在 `<dir>` 里；不合格抛 TypeError。
+ * 例：项目快照是 `projects/<fileNameOf(projectId)>@<projectRev>.json`。
+ * 写入先写同目录下的临时文件、刷盘，再改名盖过目标，读的一方不会看到写了一半的文件。
+ *
  * 只用 Node 内置模块（D2 守门覆盖 `server/docservice/`）。
  */
 import fs from 'node:fs';
@@ -23,6 +29,8 @@ import path from 'node:path';
 const NAMESPACE_RE = /^[a-z][a-z0-9-]{0,31}$/;
 const MAX_NAME_LENGTH = 512;
 const SAFE_CHAR = /^[A-Za-z0-9._-]$/;
+/** 整份文本的文件名：调用方已编码，只许这些字符 */
+const BLOB_FILE_RE = /^[A-Za-z0-9._@%-]{1,512}$/;
 
 /** 缺省日志：一行一条 JSON，写 stdout */
 function jsonLog(event, fields) {
@@ -52,6 +60,56 @@ function parseStream(stream) {
     throw new TypeError(`stream 不合法：${JSON.stringify(stream)}`);
   }
   return { ns, name };
+}
+
+/** 拆整份文本的名字：`<命名空间>/<已编码的文件名>`；不合法就抛 TypeError */
+function parseBlobName(name) {
+  if (typeof name !== 'string') throw new TypeError('blob 名必须是字符串');
+  const i = name.indexOf('/');
+  const ns = i > 0 ? name.slice(0, i) : '';
+  const file = i > 0 ? name.slice(i + 1) : '';
+  if (!NAMESPACE_RE.test(ns) || !BLOB_FILE_RE.test(file) || /^\.+$/.test(file)) {
+    throw new TypeError(`blob 名不合法：${JSON.stringify(name)}`);
+  }
+  return { ns, file };
+}
+
+function checkBlobText(text) {
+  if (typeof text !== 'string') throw new TypeError('blob 内容必须是字符串');
+}
+
+let tmpSeq = 0;
+
+/** 同步短等（存储接口是同步的，只在改名重试时用，最多一百来毫秒） */
+function pause(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/** 先写临时文件、刷盘，再改名盖过目标。Windows 上目标正被别人读时改名可能 EPERM / EBUSY，短暂重试几次 */
+function writeAtomic(file, text) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const tmp = `${file}.tmp-${process.pid}-${Date.now().toString(36)}-${(tmpSeq += 1)}`;
+  try {
+    const fd = fs.openSync(tmp, 'w');
+    try {
+      fs.writeFileSync(fd, text, 'utf8');
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        fs.renameSync(tmp, file);
+        return;
+      } catch (err) {
+        if (attempt >= 5 || !['EPERM', 'EBUSY', 'EACCES'].includes(err?.code)) throw err;
+        pause(20 * (attempt + 1));
+      }
+    }
+  } catch (err) {
+    try { fs.unlinkSync(tmp); } catch { /* 临时文件可能没建成 */ }
+    throw err;
+  }
 }
 
 function inside(child, parent) {
@@ -127,6 +185,13 @@ export function createFileStore({ dir, log = jsonLog } = {}) {
     }
   }
 
+  function blobFileOf(name) {
+    const { ns, file: base } = parseBlobName(name);
+    const file = path.join(root, ns, base);
+    if (!inside(file, root)) throw new TypeError(`blob 名不合法：${JSON.stringify(name)}`);
+    return file;
+  }
+
   return {
     append(stream, record) {
       const file = fileOf(stream);
@@ -156,6 +221,24 @@ export function createFileStore({ dir, log = jsonLog } = {}) {
         log('store.bad-line', { stream, line: line + 1, last: isLast, length });
       });
     },
+
+    /** 整份写入（原子：临时文件 + 刷盘 + 改名） */
+    writeBlob(name, text) {
+      const file = blobFileOf(name);
+      checkBlobText(text);
+      writeAtomic(file, text);
+    },
+
+    /** 整份读回；没有就回 null */
+    readBlob(name) {
+      const file = blobFileOf(name);
+      try {
+        return fs.readFileSync(file, 'utf8');
+      } catch (err) {
+        if (err?.code === 'ENOENT') return null;
+        throw err;
+      }
+    },
   };
 }
 
@@ -163,6 +246,8 @@ export function createFileStore({ dir, log = jsonLog } = {}) {
 export function createMemoryStore() {
   /** stream → string[] */
   const streams = new Map();
+  /** blob 名 → 文本 */
+  const blobs = new Map();
   return {
     append(stream, record) {
       parseStream(stream);
@@ -174,6 +259,15 @@ export function createMemoryStore() {
     read(stream) {
       parseStream(stream);
       return (streams.get(stream) ?? []).map((line) => JSON.parse(line));
+    },
+    writeBlob(name, text) {
+      parseBlobName(name);
+      checkBlobText(text);
+      blobs.set(name, text);
+    },
+    readBlob(name) {
+      parseBlobName(name);
+      return blobs.has(name) ? blobs.get(name) : null;
     },
   };
 }
