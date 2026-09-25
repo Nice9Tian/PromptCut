@@ -18,6 +18,7 @@ import { readySessionOf } from "./ready-index.mjs";
 import { describeEnvironment } from "./render-node/fingerprint.mjs";
 import { mediaSourceOf } from "./vision/ffmpeg-frames";
 import { assetServiceOrigin, setMediaFallbackBases } from "./asset-client";
+import { renderProject } from "./render-project.mjs";
 
 const services = new Map<string, FramePipeline>();
 /** C6.4:每个帧库根上的推送队列怎么收尾(停队列、关文档服务连接);没建推送队列的根不在这里 */
