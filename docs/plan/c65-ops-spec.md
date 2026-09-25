@@ -1,6 +1,6 @@
 # C6.5 路径操作规范
 
-页面（`src/kernel/diffProject.ts` 的 `applyOps`）和文档服务（`server/docservice/json-ops.mjs`）各有一份应用路径操作的实现，两边必须逐条按本页的语义做，才能保证同一串操作在两边得到**逐字节相同**的结果（`JSON.stringify` 相同，含键的顺序）。否则页面会拒收文档服务已经接受的操作，副本分叉。依据 `c65-design.md` 第 2、3 节与主会话 2026-09-26 的裁定（第 2 节末），以文档服务分支报告 `AGENT-c65-docservice.md` 第 3 节为准核对过（本页第 6 节）。
+页面（`src/kernel/diffProject.ts` 的 `applyOps`）和文档服务（`server/docservice/json-ops.mjs`）各有一份应用路径操作的实现，两边必须逐条按本页的语义做，才能保证同一串操作在两边得到**逐字节相同**的结果（`JSON.stringify` 相同，含键的顺序）。否则页面会拒收文档服务已经接受的操作，副本分叉。依据 `c65-design.md` 第 2、3 节与主会话 2026-09-26 的裁定（第 2 节末；集成时的裁定汇总在 `c65-design.md` 第 13 节，本页与之一致），以文档服务分支报告 `AGENT-c65-docservice.md` 第 3 节为准核对过（本页第 6 节）。
 
 ## 1. 路径
 
@@ -45,7 +45,9 @@
   - `/tracks/@t1/clips/@c3/parts/@p2/x` → `/tracks/@t1/clips/@c3`（部件归片段）
   - `/cuts/@k2/tracks/@t1/clips/@c3/start` → `/cuts/@k2/tracks/@t1/clips/@c3`
   - `/filters/@f1/strength`、`/media/@m1/transcript` → `/filters/@f1`、`/media/@m1`
-- 取不到任何一对：根替换（`""`）是 `*`，表示所有实体；其余（`/name`、`/fps`、`/style/...`、整个 `/tracks` 被 `set` 替换）都归 `/meta`。
+- 取不到任何一对：根替换（`""`）是 `*`，表示所有实体；其余按**顶层键各算一个实体** `/meta/<顶层键>`（键照样转义）：`/name` → `/meta/name`、`/fps` → `/meta/fps`、`/style/color` → `/meta/style`、整个 `/tracks` 被 `set` 替换 → `/meta/tracks`。（2026-09-26 集成裁定，原为所有顶层字段合成一个 `/meta`；理由：别人改了 fps 不该让我撤不回自己改的 name。）
+- 名字段不能以 `@` 开头：`/@x/@y` 取不到成对前缀，归 `/meta/@x`。
+- `/meta/<键>` 只是实体名，不是那个值的路径：取值（覆盖备份）时换回 `/<键>`（页面 `entityValuePath`）；`project.follow` 收到实体名原样认（服务端 `normalizeEntity`），收到路径才按本节归一。
 - 两个实体相同、或其中一个是 `*`，就算写到了同一处。
 - **两边的用法不同**：文档服务算「一次提交写到了哪些实体」（覆盖通知、`since.entities`）时按新旧值的实际差别逐实体算，根替换与在实体之上 `set` 一个容器都只记真变了的实体、空操作不记；页面只按路径归类（上面的规则，根替换记 `*`），用在撤销前查冲突上 —— 别人的一次根替换会挡住自己之前每一步的撤销，是偏保守的做法。这一处不影响内容一致。
 
@@ -55,6 +57,11 @@
 - **同一连接上按 rev 有序**：文档服务串行处理提交；给提交者的 `ok` 与给其它订阅者的 `project.ops` 都在该次提交落地后、处理下一次提交之前发出。页面据此认定：`ok` 之前收到的 `project.ops` 都排在自己这次提交之前。
 - `project.ops` 带 `session`（或在 `actor.session` 里），页面据此区分「别的写入身份」。
 - `project.state` 在项目不存在时回 `project: null`，页面随后用根替换把本地项目写进去。
+- `project.state` 同时带新字段 `rev` 与旧字段 `projectRev`（同一个数，C6.3 的旧客户端照旧读 `projectRev`）。
+- 覆盖通知里的 `by` 两边都指**对方**：覆盖方 `ok.overwrote[].by` 是被覆盖的人，被覆盖方 `project.overwritten.by` 是覆盖它的人；`project.overwritten` 另带 `writer`（被覆盖的那次写入的身份），且排在同一版的 `project.ops` 之前。
+- 渲染节点的连接（`role: 'render'`）提交或发事件回 `forbidden`。
+- 超过 256 KiB 的根替换走 `project.upload` 分片上传、`{ op: "set", path: "", upload: <uploadId> }` 引用；它的广播改为不带 `ops` 的 `resync: true`。
+- 页面一侧：离线期间每次编辑各算一条提交（不合并）；撤销时一处都没撤成就不产生提交。
 - 大项目的 `project.state` 不带 `project`、带 `parts`，随后是 `project.state.part` 与 `project.state.end`；这期间到的 `project.ops`，`rev` 大于快照的先攒着、拼完按序应用。`project.ops` 带 `resync: true`（不带 `ops`）时页面重新 `project.open`。
 
 ## 6. 与文档服务引擎的逐条对照
@@ -68,3 +75,14 @@
 | 3 | 50003 | 41485 | 8518 | 0 |
 
 对照时发现并已改掉的页面一侧差异：`remove` / `move` 目标不在（原为 `bad-path`，改为空操作）；根缺失时的 `set`（原不支持）；空 `id`、单独 `@` 的段、`~` 后非 `0/1`（原放行）；`index` 用安全整数；先整批查格式再应用（失败下标与文档服务一致）。
+
+**集成时（`claude/c65-integ`，实体改为顶层键各一个之后）重做的对照**，脚本同样不入库，每个种子 50000 个随机项目：
+
+| 种子 | 应用：用例 | 都成且逐字节相同 | 都败且下标相同 | 不一致 | 路径→实体：用例 | 相同 | 不同 | diff 出的操作的实体：用例 | 相同 | 页面按容器记（见下） | 其它不同 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | 100000 | 54832 | 45168 | 0 | 105631 | 105631 | 0 | 100000 | 98892 | 1108 | 0 |
+| 2 | 100000 | 54990 | 45010 | 0 | 105527 | 105527 | 0 | 100000 | 98810 | 1190 | 0 |
+| 3 | 100000 | 54888 | 45112 | 0 | 105659 | 105659 | 0 | 100000 | 98900 | 1100 | 0 |
+
+- 「路径→实体」：同一条路径，页面 `entityOfPath` 与服务端 `entityOf(path, {names: tracks/clips/transitions})` 逐个比。对照发现页面把 `/@x/@y` 当成一对（服务端不认 `@` 开头的名字段），已改成与服务端一致。
+- 「diff 出的操作的实体」：`diffProject` 出的正、逆操作（不含根替换），页面按路径算的 `entitiesOf(ops)` 与服务端按实际差别算的 `entitiesOf(effects)` 比集合。差别只有一类：`set` 一个在实体之上的容器（例：`/tracks/@t1/clips` 由不带 id 的数组换成带 id 的），页面记容器所属的实体（`/tracks/@t1`），服务端另外逐个记真变了的下级实体（`/tracks/@t1/clips/@c2`）。这是第 4 节「两边用法不同」的已知差别，只影响页面撤销冲突的判定粒度（页面偏保守），不影响内容一致。
