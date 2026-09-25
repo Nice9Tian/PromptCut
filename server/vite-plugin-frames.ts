@@ -17,7 +17,7 @@ import { snapshotTier } from "./snapshot-store.mjs";
 import { readySessionOf } from "./ready-index.mjs";
 import { describeEnvironment } from "./render-node/fingerprint.mjs";
 import { mediaSourceOf } from "./vision/ffmpeg-frames";
-import { assetServiceOrigin, setMediaFallbackBases } from "./asset-client";
+import { assetServiceOrigin, setMediaFallbackBases, setMediaFallbackTicket } from "./asset-client";
 import { renderProject } from "./render-project.mjs";
 
 const services = new Map<string, FramePipeline>();
@@ -75,17 +75,19 @@ function foreignAssetEndpoints(list: any[], origin: string | null): { announcerI
  *   2. 服务地址登记里别的机器的 `asset`(`foreignAssetEndpoints`),取第一个的第一个地址;登记变了就新建一个
  *      client 换上,在飞的请求照旧用旧的(回的是一个代理,每次调用时才取当前的 client);
  *   3. 本机的 `assetServiceOrigin()` 加 `/api/asset`(原来的行为)。
- * 写入带集群令牌(client 放进 `Authorization`)。每换一次基址记一行 `push.asset-base { source, base }`,基址不含令牌。
+ * 读写带素材票据(M6a,`docs/plan/auth-contract.md` 第 8、11 节):凭共享项目进入的,经文档服务连接的 `auth.ticket` 取
+ * (`ticket`);本机身份不带票据(本机回环的素材服务不要票据)。集群令牌不再用于素材服务。
+ * 每换一次基址记一行 `push.asset-base { source, base }`,基址不含票据。
  */
-function selectAssetClient({ node, endpoint, origin, token, createAssetClient, owner }:
-  { node: any; endpoint: any; origin: string; token: string | undefined; createAssetClient: any; owner: string }) {
+function selectAssetClient({ node, endpoint, origin, ticket, createAssetClient, owner }:
+  { node: any; endpoint: any; origin: string; ticket: ((opts?: { refresh?: boolean }) => Promise<string | null>) | null; createAssetClient: any; owner: string }) {
   const localBase = `${origin}/api/asset`;
   let current: any = null;
   let currentBase: string | null = null;
   const use = (base: string, source: "env" | "announced" | "local") => {
     if (base === currentBase && current) return;
     let next: any;
-    try { next = createAssetClient({ base, token: token ?? null }); }
+    try { next = createAssetClient({ base, ticket }); }
     catch (error: any) { pushLog("push.asset-base-error", { source, base, for: owner, message: String(error?.message ?? error) }); return; }
     current = next;
     currentBase = base;
@@ -106,13 +108,44 @@ function selectAssetClient({ node, endpoint, origin, token, createAssetClient, o
   return { client, stop: () => { try { stop(); } catch { /* 已经停了 */ } }, base: () => currentBase };
 }
 
-/** `resolveDocservice` 这几种结果算「连得上文档服务」;`editor` 是 J.3 新加的(编辑器里挂的文档服务) */
-const DOCSERVICE_MODES = new Set(["remote", "local", "editor"]);
+/** `resolveDocservice` 这几种结果算「连得上文档服务」;`editor` 是 J.3 新加的(编辑器里挂的文档服务);`shared` 是 M6a 的共享项目配置 */
+const DOCSERVICE_MODES = new Set(["remote", "local", "editor", "shared"]);
+
+type DocLink = { mode: string; url: string; tried?: any[]; protocols?: () => Promise<string[]>; shared: boolean };
+
+/**
+ * 连哪个文档服务、凭什么进入(M6a,`docs/plan/auth-contract.md` 第 11 节):
+ *   - 设了 `PROMPTCUT_SHARED_CONFIG`:用配置的第一项(是数组时只取第一项,多项目留给独立主机),
+ *     凭共享项目的证明进入,角色 `render`;素材票据经这条连接的 `auth.ticket` 取。配置读不了回 `bad-config`;
+ *   - 没设:照原来按 `resolveDocservice` 探活(远端 → 编辑器 → 本机回环),不带任何凭证 —— 连回环时是本机身份,
+ *     连不上就回落本机。集群令牌不再用于数据面。
+ */
+async function resolveDocLink(node: any): Promise<DocLink | { mode: string; tried?: any[]; url?: undefined; shared: false; detail?: string }> {
+  if (process.env.PROMPTCUT_SHARED_CONFIG) {
+    try {
+      const { loadSharedConfig, sharedProtocols }: any = await import("./auth/shared-config.mjs");
+      const entries = loadSharedConfig();
+      const entry = entries[0];
+      return { mode: "shared", url: entry.url, protocols: sharedProtocols(entry, { role: "render" }), shared: true };
+    } catch (error: any) {
+      return { mode: "bad-config", shared: false, detail: String(error?.message ?? error) };
+    }
+  }
+  const resolved = await node.resolveDocservice();
+  return { mode: resolved?.mode, url: resolved?.url, tried: resolved?.tried, shared: false };
+}
+
+/** 凭共享项目进入的连接取素材票据;本机身份不要票据 */
+async function ticketFor(link: DocLink, endpoint: any) {
+  if (!link.shared) return null;
+  const { createTicketSource }: any = await import("./auth/ticket-source.mjs");
+  return createTicketSource(endpoint, { access: "rw" });
+}
 /**
  * 推送队列认哪几种文档服务(契约 J.12):`remote`、`local` 总认;`editor` 只在显式要推送时认 ——
  * `PROMPTCUT_QUEUE_NODE=1` 或 `PROMPTCUT_PUSH=1`。
  */
-const pushModeAllowed = (mode: unknown) => mode === "remote" || mode === "local"
+const pushModeAllowed = (mode: unknown) => mode === "remote" || mode === "local" || mode === "shared"
   || (mode === "editor" && (process.env.PROMPTCUT_QUEUE_NODE === "1" || process.env.PROMPTCUT_PUSH === "1"));
 async function startArtifactPush(root: string, service: FramePipeline) {
   if (!isPrerender || process.env.PROMPTCUT_HEADLESS === "1") return;
@@ -121,21 +154,22 @@ async function startArtifactPush(root: string, service: FramePipeline) {
   if (!origin) return pushLog("push.skip", { reason: "no-asset-service" });
   const node: any = await import("./render-node/index.mjs");
   if (typeof node.createContentClient !== "function") return pushLog("push.skip", { reason: "no-content-client" });
-  const resolved = await node.resolveDocservice();
+  const resolved = await resolveDocLink(node);
+  if (resolved.mode === "bad-config") return pushLog("push.skip", { reason: "bad-shared-config", detail: (resolved as any).detail });
   if (!DOCSERVICE_MODES.has(resolved?.mode) || !resolved.url) {
     return pushLog("push.skip", { reason: "docservice-offline", tried: (resolved?.tried ?? []).map((t: any) => ({ url: t.url, ok: t.ok, reason: t.reason })) });
   }
   // J.12:编辑器里挂的文档服务,没显式要推送就不建(开关关着时与 C6.4 之前相同)
   if (!pushModeAllowed(resolved.mode)) return pushLog("push.skip", { reason: "editor-docservice-not-enabled", mode: resolved.mode });
   if (services.get(root) !== service || (service as any).closed) return;
-  const token = process.env.PROMPTCUT_CLUSTER_TOKEN || undefined;
-  const endpoint = node.createWsEndpoint({ url: resolved.url, token, log: (event: string, fields: object) => {
+  const link = resolved as DocLink;
+  const endpoint = node.createWsEndpoint({ url: link.url, ...(link.protocols ? { protocols: link.protocols } : {}), log: (event: string, fields: object) => {
     if (event === "ws.open" || event === "ws.close") pushLog(`docservice.${event}`, fields);
   } });
   const content = node.createContentClient(endpoint);
   const { createAssetClient }: any = await import("./asset-store/client.mjs");
   // J.13:按 D7 选推送的素材服务(环境变量 → 别的机器登记的 → 本机)
-  const assets = selectAssetClient({ node, endpoint, origin, token, createAssetClient, owner: "push" });
+  const assets = selectAssetClient({ node, endpoint, origin, ticket: await ticketFor(link, endpoint), createAssetClient, owner: "push" });
   const client = assets.client;
   const { createPushQueue }: any = await import("./artifact-push.mjs");
   // settleMs:同一段最后一次进队后静置 1.5 s 再推,边渲边推时一段不被推十几遍
@@ -203,11 +237,13 @@ async function startQueueNode(root: string, service: FramePipeline) {
   const missing = ["createProjectClient", "createContentClient", "createLocalNode", "createWsEndpoint", "planTaskOf", "watchServiceEndpoints"]
     .filter(name => typeof node[name] !== "function");
   if (missing.length) return queueLog("queue.skip", { reason: "render-node-exports-missing", missing });
-  const resolved = await node.resolveDocservice();
+  const resolved = await resolveDocLink(node);
+  if (resolved.mode === "bad-config") return queueLog("queue.skip", { reason: "bad-shared-config", detail: (resolved as any).detail });
   if (!DOCSERVICE_MODES.has(resolved?.mode) || !resolved.url) {
     return queueLog("queue.skip", { reason: "docservice-offline", tried: (resolved?.tried ?? []).map((t: any) => ({ url: t.url, ok: t.ok, reason: t.reason })) });
   }
   if (services.get(root) !== service || (service as any).closed) return;
+  const link = resolved as DocLink;
 
   // 指纹:报到前借一次流预渲染间探(`leaseStreamBakery` 开起来就定下本进程的环境),什么都不做就还
   try {
@@ -224,14 +260,16 @@ async function startQueueNode(root: string, service: FramePipeline) {
   const { createAssetSink, applyResult }: any = await import("./artifact-transfer.mjs");
   const { createAssetClient }: any = await import("./asset-store/client.mjs");
 
-  const token = process.env.PROMPTCUT_CLUSTER_TOKEN || undefined;
-  const endpoint = node.createWsEndpoint({ url: resolved.url, token, log: (event: string, fields: object) => {
+  const endpoint = node.createWsEndpoint({ url: link.url, ...(link.protocols ? { protocols: link.protocols } : {}), log: (event: string, fields: object) => {
     if (event === "ws.open" || event === "ws.close") queueLog(`docservice.${event}`, fields);
   } });
   const projects = node.createProjectClient(endpoint);
   const content = node.createContentClient(endpoint);
   // J.13:sink 推、task.done 拉,都用按 D7 选的素材服务
-  const assets = selectAssetClient({ node, endpoint, origin, token, createAssetClient, owner: "queue" });
+  const assetTicket = await ticketFor(link, endpoint);
+  const assets = selectAssetClient({ node, endpoint, origin, ticket: assetTicket, createAssetClient, owner: "queue" });
+  // J.6 的回退读别的机器的素材服务:凭共享项目进入时带票据
+  setMediaFallbackTicket(assetTicket);
   const client = assets.client;
   const events: object[] = [];
   const note = (event: string, fields: object = {}) => {

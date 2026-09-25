@@ -74,19 +74,26 @@
  * - 本模块管的路由(`/api/asset/media/...` 和 `/@media/*`)一律回 `Access-Control-Allow-Origin: *`,
  *   `Access-Control-Expose-Headers: Content-Range, Accept-Ranges, Content-Length, Content-Type`。
  * - 预检 `OPTIONS` 回 204:方法 `GET, HEAD, PUT, POST, OPTIONS`,
- *   头 `Content-Type, Range, X-Media-Size, X-Media-Ext, X-Media-Type, Authorization`;
+ *   头 `Content-Type, Range, X-Media-Size, X-Media-Ext, X-Media-Type, Authorization`(`Authorization` 带票据);
  *   请求带 `Access-Control-Request-Private-Network` 时，**只有来源是回环或局域网地址**（`isPrivateOrigin`）
  *   才回 `Access-Control-Allow-Private-Network: true`；公网网页的预检不给这一项，浏览器照样拦下它。
  * - 不带凭据(不用 cookie),所以用 `*`。`/api/**` 的同源守卫只对这一组路径豁免
  *   (`http-guard.mjs` 的 `isAssetServicePath`),其余 `/api/**` 照旧只认同源。
  *
- * ## 写入鉴权(C5,`docs/plan/asset-store-contract.md` 第 4 节)
+ * ## 凭票据读写(M6a,`docs/plan/auth-contract.md` 第 8 节;语义 `asset-storage.md`「凭票据读写」)
  *
- * - 只管写:`PUT media/<hash>/<n>`、`POST media/<hash>/complete`。读(`GET` / `HEAD`、`chunks`、`OPTIONS`)不管。
- * - 放行:请求来自本机(`isTrusted`,缺省按对端地址是不是回环);或带 `Authorization: Bearer <集群令牌>`,
- *   与 `PROMPTCUT_CLUSTER_TOKEN` 相符(两边各取 sha256 再定长比较)。
- * - 不放行回 401 `{ ok: false, error: "unauthorized" }`。没配令牌时,非本机的写一律 401。
- * - 令牌原文不进日志、不进回包。
+ * - **本机回环来源**(`isTrusted`,缺省按真实对端地址是不是回环):不需要票据,与原来相同。
+ * - **其它来源**:
+ *   - 写(`PUT <ns>/<hash>/<n>`、`POST <ns>/<hash>/complete`)要 `Authorization: Bearer <素材票据,r: 'rw'>`;
+ *   - 读(`GET` / `HEAD` 取回,含 Range;`GET chunks`;老路由 `/@media/*`)要 `Authorization: Bearer <素材票据>`,
+ *     或者查询串 `?t=<票据>`。查询串只认 `r: 'r'` 的票据,写入一律不认查询串;
+ *   - 没票据、签名不对、过期、代数不符回 401 `{ ok: false, error: "unauthorized" }`;写入用了只读票据回 403
+ *     `{ ok: false, error: "forbidden" }`。每个请求都重新核对,包括同一段播放里的每个 Range 请求。
+ * - 票据不限定哈希:持某个项目的有效票据,就能读这台服务上任何已知哈希的内容(契约〔裁〕)。
+ * - 票据由文档服务签发;核对用同一进程里的凭证存储(`server/auth/asset-tickets.mjs`),缺省按
+ *   `<root>/out/docservice/auth` 取进程内单例。**集群令牌不再用于素材服务**(C5 的「非本机写入凭集群令牌」退役)。
+ * - 带查询串票据的响应加 `Cache-Control: no-store` 与 `Referrer-Policy: no-referrer`。
+ * - 票据原文不进日志、不进回包;本模块不记访问日志。
  *
  * # 存储
  *
@@ -96,7 +103,6 @@
 import type { Connect } from "vite";
 import type { IncomingMessage, ServerResponse } from "http";
 import type { Readable } from "stream";
-import crypto from "crypto";
 import path from "path";
 import { apiPath, isAssetServicePath, clientAddressOf, isLoopbackAddress } from "./http-guard.mjs";
 import { createBlobStore, candidateFileResolver } from "./asset-store/index.mjs";
@@ -359,7 +365,7 @@ async function serveBlob(req: IncomingMessage, res: ServerResponse, store: Asset
 }
 
 /* ------------------------------------------------------------------ *
- * 写入鉴权
+ * 凭票据读写
  * ------------------------------------------------------------------ */
 
 /** 缺省的「本机」判据:对端是回环地址。舞台端口的反向代理转来的请求按它写进的真实对端判(`clientAddressOf`) */
@@ -368,7 +374,12 @@ export function isLoopbackRequest(req: IncomingMessage): boolean {
   return address !== null && isLoopbackAddress(address);
 }
 
-/** `Authorization: Bearer <令牌>` 里的令牌;没带或格式不对给 null */
+/** 核对素材票据(`server/auth/asset-tickets.mjs`) */
+export interface AssetTicketVerifier {
+  verify(ticket: string): { ok: true; access: "r" | "rw"; projectId: string; userId: string } | { ok: false; reason: string };
+}
+
+/** `Authorization: Bearer <票据>` 里的票据;没带或格式不对给 null */
 function bearerOf(req: IncomingMessage): string | null {
   const raw = req.headers.authorization;
   if (typeof raw !== "string") return null;
@@ -376,20 +387,43 @@ function bearerOf(req: IncomingMessage): string | null {
   return m ? m[1] : null;
 }
 
-const sha256Of = (text: string) => crypto.createHash("sha256").update(text, "utf8").digest();
-
-/** 两边各取 sha256 再定长比较,不因长度或前缀不同而提前返回 */
-function tokenMatches(given: string, token: string): boolean {
-  return crypto.timingSafeEqual(sha256Of(given), sha256Of(token));
+/** 查询串里的票据 `?t=`;没带给 null */
+function queryTicketOf(req: IncomingMessage): string | null {
+  const url = String(req.url || "");
+  const i = url.indexOf("?");
+  if (i < 0) return null;
+  const t = new URLSearchParams(url.slice(i + 1)).get("t");
+  return t ? t : null;
 }
 
-function writeAllowed(req: IncomingMessage, token: string | null, isTrusted: (req: IncomingMessage) => boolean): boolean {
+type Access = { ok: true } | { ok: false; status: 401 | 403; error: "unauthorized" | "forbidden" };
+const DENY_401: Access = { ok: false, status: 401, error: "unauthorized" };
+const DENY_403: Access = { ok: false, status: 403, error: "forbidden" };
+
+/**
+ * 这个请求放不放行。`write`:分片上传与收尾;否则是读。
+ * 回环来源不看票据;别的来源按契约第 8 节:写只认 Bearer 的 `rw` 票据,读认 Bearer 的任何素材票据或查询串的 `r` 票据。
+ */
+function accessOf(req: IncomingMessage, write: boolean, tickets: AssetTicketVerifier | null, isTrusted: (req: IncomingMessage) => boolean): Access {
   let trusted = false;
   try { trusted = !!isTrusted(req); } catch { trusted = false; }
-  if (trusted) return true;
-  if (!token) return false; // 没配令牌:非本机的写一律拒,失败即关
-  const given = bearerOf(req);
-  return given !== null && tokenMatches(given, token);
+  if (trusted) return { ok: true };
+  if (!tickets) return DENY_401; // 没有凭证存储:非本机一律拒,失败即关
+  const verify = (t: string) => {
+    try { return tickets.verify(t); } catch { return { ok: false as const, reason: "error" }; }
+  };
+  const bearer = bearerOf(req);
+  if (bearer !== null) {
+    const v = verify(bearer);
+    if (!v.ok) return DENY_401;
+    if (write && v.access !== "rw") return DENY_403;
+    return { ok: true };
+  }
+  if (write) return DENY_401; // 写入一律不认查询串
+  const q = queryTicketOf(req);
+  if (q === null) return DENY_401;
+  const v = verify(q);
+  return v.ok && v.access === "r" ? { ok: true } : DENY_401;
 }
 
 /* ------------------------------------------------------------------ *
@@ -458,13 +492,15 @@ export function assetPreflightMiddleware() {
  * - `stores`:三个命名空间各自的数据层 `{ media?, snap?, px? }`。缺的用缺省:`media` 是 `root` 的本地内容库
  *   (`defaultAssetStore`),`snap` / `px` 是 `<root>/out/asset-store/<ns>` 的 fs 实现(`defaultArtifactStore`,用到时才建);
  * - `store`:旧名,仍然认,当作 `stores.media`(两个都给时 `stores.media` 优先);
- * - `token`:集群令牌,缺省在这里读一次 `PROMPTCUT_CLUSTER_TOKEN`,没设是 null;空串也当没设;
+ * - `tickets`:核对素材票据的对象(`server/auth/asset-tickets.mjs`);缺省按 `<root>/out/docservice/auth`
+ *   取进程内的凭证存储(与本进程的文档服务共用);给 null 表示不认任何票据(非本机一律 401);
  * - `isTrusted`:哪些请求算本机,缺省 `isLoopbackRequest`。
+ * 集群令牌(C5 的 `token` 选项)已退役:给了也不认。
  */
 export interface AssetServiceOptions {
   stores?: { media?: AssetBlobStore; snap?: AssetBlobStore; px?: AssetBlobStore };
   store?: AssetBlobStore;
-  token?: string | null;
+  tickets?: AssetTicketVerifier | null;
   isTrusted?: (req: IncomingMessage) => boolean;
 }
 
@@ -475,14 +511,48 @@ export function assetServiceMiddleware(root: string, opts: AssetServiceOptions =
     if (ns === "media") return media;
     return (artifactStores[ns] ??= defaultArtifactStore(root, ns));
   };
-  const rawToken = opts.token !== undefined ? opts.token : (process.env.PROMPTCUT_CLUSTER_TOKEN ?? null);
-  const token = typeof rawToken === "string" && rawToken !== "" ? rawToken : null;
+  // 缺省的核对器惰性加载:第一次有非本机请求带票据时才打开凭证存储
+  let defaultTickets: AssetTicketVerifier | null | undefined;
+  const ticketsOf = async (): Promise<AssetTicketVerifier | null> => {
+    if (opts.tickets !== undefined) return opts.tickets;
+    if (defaultTickets === undefined) {
+      try {
+        const { assetTicketVerifierFor } = await import("./auth/asset-tickets.mjs");
+        defaultTickets = assetTicketVerifierFor(path.join(root, "out", "docservice", "auth")) as AssetTicketVerifier;
+      } catch {
+        defaultTickets = null;
+      }
+    }
+    return defaultTickets;
+  };
   const isTrusted = typeof opts.isTrusted === "function" ? opts.isTrusted : isLoopbackRequest;
+  /** 放不放行;不放行时已经回了 401 / 403 */
+  const admit = async (req: IncomingMessage, res: ServerResponse, write: boolean): Promise<boolean> => {
+    // 带查询串票据的响应:不缓存、不带 Referer 出去(契约第 8 节)
+    if (queryTicketOf(req) !== null) {
+      res.setHeader("Cache-Control", "no-store");
+      res.setHeader("Referrer-Policy", "no-referrer");
+    }
+    let trusted = false;
+    try { trusted = !!isTrusted(req); } catch { trusted = false; }
+    const access = accessOf(req, write, trusted ? null : await ticketsOf(), () => trusted);
+    if (access.ok) return true;
+    reject(req, res, access.status, { ok: false, error: access.error });
+    return false;
+  };
   return async function assetService(req: Connect.IncomingMessage, res: ServerResponse, next: () => void) {
     if (!isAssetCorsPath(req.url)) return next();
     applyCors(req, res);
     if (req.method === "OPTIONS") { res.statusCode = 204; return res.end(); }
-    if (!isAssetServicePath(req.url)) return next(); // /@media/* 的 GET / HEAD
+    if (!isAssetServicePath(req.url)) {
+      // /@media/* 的 GET / HEAD:非本机要读票据,放行后交给 vite-plugin-media 的 mediaMiddleware
+      try {
+        if (!(await admit(req, res, false))) return;
+      } catch (err) {
+        return sendJson(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
+      }
+      return next();
+    }
 
     // 判据和同源守卫的豁免是同一条正则,守卫放过来的请求从这里起一定有回应,不会 next 给别的 /api 处理函数
     const parts = apiPath(req.url).split("/"); // ["", "api", "asset", <ns>, <hash>, <tail>?]
@@ -495,19 +565,21 @@ export function assetServiceMiddleware(root: string, opts: AssetServiceOptions =
       if (!isMediaHash(hash)) return sendJson(res, 400, { ok: false, error: "bad-hash" });
       if (tail === undefined) {
         if (method !== "GET" && method !== "HEAD") return sendJson(res, 405, { ok: false, error: "method" });
+        if (!(await admit(req, res, false))) return;
         return await serveBlob(req, res, store, hash);
       }
       if (tail === "chunks") {
         if (method !== "GET") return sendJson(res, 405, { ok: false, error: "method" });
+        if (!(await admit(req, res, false))) return;
         return sendJson(res, 200, await store.chunks(hash));
       }
       if (tail === "complete") {
         if (method !== "POST") return sendJson(res, 405, { ok: false, error: "method" });
-        if (!writeAllowed(req, token, isTrusted)) return reject(req, res, 401, { ok: false, error: "unauthorized" });
+        if (!(await admit(req, res, true))) return;
         return await handleComplete(res, store, hash, ns);
       }
       if (method !== "PUT") return reject(req, res, 405, { ok: false, error: "method" });
-      if (!writeAllowed(req, token, isTrusted)) return reject(req, res, 401, { ok: false, error: "unauthorized" });
+      if (!(await admit(req, res, true))) return;
       return await handlePutChunk(req, res, store, hash, tail, ns);
     } catch (err) {
       sendJson(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
