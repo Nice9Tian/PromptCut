@@ -45,7 +45,7 @@ export const SNAPSHOT_LIMITS = Object.freeze({
  * 核心不给积压字节数时的发送节奏：开头可以一口气发 `windowBytes`，之后按 `bytesPerSec` 估算。
  * 实际吞吐不低于这个速率时，积压不超过「窗口 + 一片」= 768 KiB，低于核心的 1 MiB 上限。
  */
-export const SNAPSHOT_PACE = Object.freeze({ windowBytes: 512 * 1024, bytesPerSec: 4 * 1024 * 1024 });
+export const SNAPSHOT_PACE = Object.freeze({ windowBytes: 512 * 1024, bytesPerSec: 1024 * 1024 });
 
 const isReqId = (v) => typeof v === 'string' || (typeof v === 'number' && Number.isFinite(v));
 
