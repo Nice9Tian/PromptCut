@@ -450,13 +450,14 @@ test('DS-P11（V2 服务端一侧）两个页面各 200 次随机编辑交错提
 
   const watcher = await env.connect('user=watch&role=page');
   const w0 = await open(watcher);
-  const watch = { view: w0.project, rev: w0.rev };
+  const watch = { view: w0.project, rev: w0.rev, order: [] };
   watcher.ws.addEventListener('message', (e) => {
     const m = JSON.parse(e.data);
     if (m.type !== 'project.ops') return;
     assert.equal(m.rev, watch.rev + 1, '旁观者按 rev 连续收到');
     watch.view = applyOps(watch.view, m.ops).root;
     watch.rev = m.rev;
+    watch.order.push(m.actor.session);
   });
 
   async function editor(name, seed) {
@@ -505,7 +506,9 @@ test('DS-P11（V2 服务端一侧）两个页面各 200 次随机编辑交错提
   assert.equal(JSON.stringify(x.view), s, 'ann 的副本与文档服务逐字节相同');
   assert.equal(JSON.stringify(y.view), s, 'ben 的副本与文档服务逐字节相同');
   assert.equal(JSON.stringify(watch.view), s, '旁观者的副本与文档服务逐字节相同');
-  t.diagnostic(`rev ${finalRev}；ann 落地 ${x.accepted} 拒 ${x.rejected}；ben 落地 ${y.accepted} 拒 ${y.rejected}`);
+  const switches = watch.order.slice(1).filter((who, i) => who !== watch.order[i]).length;
+  assert.ok(switches >= 50, `两边的提交确实交错落地（相邻两次换人 ${switches} 次）`);
+  t.diagnostic(`交错 ${switches} 次；rev ${finalRev}；ann 落地 ${x.accepted} 拒 ${x.rejected}；ben 落地 ${y.accepted} 拒 ${y.rejected}`);
 });
 
 // ------------------------------------------------------------------ DS-P12
