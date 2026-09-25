@@ -28,7 +28,12 @@ import { rejectUpgrade } from "./docservice/ws.mjs";
  *   带 `promptcut.tenant.<projectId>` 的是本机声明(创建者自己的页面、预渲染进程加入本机托管的共享项目);
  * - 局域网来的连接只能凭证明或连接票据进入;
  * - 集群令牌在挂载模式下一律不认(局域网主机的管理接口只绑回环、不要令牌,契约第 10 节)。
- * 凭证存储加载不了时只打 `config.error { reason: 'auth-store' }`:本机身份照常,局域网来的一律 401。
+ * 凭证存储加载不了时只打 `config.error { reason: 'auth-store' }`:本机身份照常,局域网来的一律 401;
+ * 以局域网主机身份运行(`PROMPTCUT_LAN_HOST=1`)时则拒绝启动(SP 契约第 5 节)。
+ *
+ * **局域网主机**(契约 `docs/plan/shared-project-contract.md` 第 4、5 节):`PROMPTCUT_LAN_HOST=1` 时 `vite.config.ts` 让编辑器绑
+ * `0.0.0.0`,文档服务与素材服务挂在同一个 http 服务器上,随之对局域网可达。编辑器绑了非回环地址、且有共享项目时,
+ * 按 `lan/discovery.mjs` 在本网段广播与应答(`createLanHosting`);项目删光或编辑器退出时停。管理接口只认回环(上面第三条)。
  *
  * **停用模式**(`PROMPTCUT_HEADLESS === "1"`,`scripts/headless.mjs` 起的无头实例):无头实例是 Skill 的临时副本,
  * 不能自己发 `projectRev`,所以不建文档服务、不写日志;但插件照样注册,把两条路由明确答掉,
@@ -111,6 +116,101 @@ function attachDisabled(server: import("vite").ViteDevServer, httpServer: NonNul
   log("docservice.disabled", { reason: "headless", path: WS_PATH });
 }
 
+/** 编辑器以局域网主机身份运行(`PROMPTCUT_LAN_HOST=1`,`vite.config.ts` 据此绑 `0.0.0.0`) */
+export const lanHostRequested = () => process.env.PROMPTCUT_LAN_HOST === "1";
+
+/** 监听地址是不是只在回环上(`127.x`、`::1`、`localhost`);`0.0.0.0`、`::`、局域网地址都不是 */
+export function isLoopbackListen(address: string | null | undefined): boolean {
+  const a = String(address ?? "").toLowerCase();
+  return a === "localhost" || isLoopbackAddress(a);
+}
+
+type LanStore = { list(): Array<{ projectId: string; name: string; mode: string }> };
+type LanHost = { start(): Promise<void>; stop(): Promise<void>; refresh(): Promise<void>; running(): boolean };
+
+/**
+ * 局域网发现的主机端(契约 `docs/plan/shared-project-contract.md` 第 4 节,`lan/discovery.mjs`):
+ * - 编辑器绑了非回环地址(`PROMPTCUT_LAN_HOST=1`,或 `npm run dev` 的 `--host 0.0.0.0`)、且凭证存储里有共享项目时,
+ *   开始广播与应答;挂载模式的凭证存储里只有局域网模式的项目(托管模式的项目在托管端);
+ * - 项目建成(`shared/create`)、删掉(创建者操作 `delete`)时重新核对:还有项目就立即通告一次,一个都不剩就停;
+ * - 编辑器只绑回环时不广播:通告出去的地址别人连不上;
+ * - 编辑器退出(http 服务器关闭)时停。
+ * UDP 端口打不开等错误只打日志(`[docservice] lan.error`),不影响编辑器。
+ */
+function createLanHosting(httpServer: NonNullable<import("vite").ViteDevServer["httpServer"]>) {
+  let store: LanStore | null = null;
+  let hostDeviceName = "";
+  let servicePort: number | null = null;
+  let host: LanHost | null = null;
+  let closed = false;
+  let chain: Promise<void> = Promise.resolve();
+
+  const listProjects = () => {
+    try {
+      return store?.list() ?? [];
+    } catch {
+      return [];
+    }
+  };
+
+  const step = async () => {
+    if (closed || !store || servicePort === null) return;
+    const want = listProjects().length > 0;
+    if (want && !host) {
+      const { createLanHost } = await import("./lan/discovery.mjs");
+      host = createLanHost({ projects: listProjects, hostDeviceName, servicePort, log }) as LanHost;
+      try {
+        await host.start();
+      } catch (err) {
+        log("lan.error", { stage: "start", message: errText(err) });
+        host = null;
+      }
+    } else if (!want && host) {
+      const h = host;
+      host = null;
+      await h.stop();
+    } else if (host) {
+      await host.refresh();
+    }
+  };
+
+  const sync = () => {
+    chain = chain.then(step).catch((err) => log("lan.error", { stage: "sync", message: errText(err) }));
+    return chain;
+  };
+
+  const onListening = () => {
+    const addr = httpServer.address();
+    if (!addr || typeof addr === "string") return;
+    if (isLoopbackListen(addr.address)) {
+      log("lan.skip", { reason: "loopback-only", address: addr.address });
+      return;
+    }
+    servicePort = addr.port;
+    sync();
+  };
+  if (httpServer.listening) queueMicrotask(onListening);
+  else httpServer.once("listening", onListening);
+  httpServer.once("close", () => {
+    closed = true;
+    chain = chain.then(async () => {
+      const h = host;
+      host = null;
+      await h?.stop();
+    }).catch(() => {});
+  });
+
+  return {
+    /** 凭证存储与本机设备名就绪;若 http 服务器已经在听,立即核对一次 */
+    attach(options: { store: LanStore | null; hostDeviceName: string }) {
+      store = options.store;
+      hostDeviceName = options.hostDeviceName;
+      sync();
+    },
+    sync,
+  };
+}
+
 export function docservicePlugin(): Plugin {
   return {
     name: "promptcut-docservice",
@@ -131,6 +231,9 @@ export function docservicePlugin(): Plugin {
 
       let service: { health(): object; close(): Promise<void> } | null = null;
       let handleShared: ((req: IncomingMessage, res: ServerResponse) => boolean) | null = null;
+      let storeMissing = false;
+      // 局域网发现的主机端(契约 `docs/plan/shared-project-contract.md` 第 4 节):项目建成、删掉时由共享端点回调
+      const lan = createLanHosting(httpServer);
       try {
         const [{ createSharedDocService }, { credentialStoreFor }, { localDeviceInfo }] = await Promise.all([
           import("./docservice/shared-service.mjs"),
@@ -143,6 +246,7 @@ export function docservicePlugin(): Plugin {
         try {
           store = credentialStoreFor(path.join(dataDir, "auth"), { log });
         } catch (err) {
+          storeMissing = true;
           log("config.error", { reason: "auth-store", message: errText(err) });
         }
         const isLoopback = (req: IncomingMessage) => {
@@ -159,13 +263,22 @@ export function docservicePlugin(): Plugin {
           remoteOf: (req: IncomingMessage) => clientAddressOf(req),
           localDevice: localDeviceInfo(),
           log,
+          onCreate: () => lan.sync(),
+          onDelete: () => lan.sync(),
         });
+        lan.attach({ store: store as LanStore | null, hostDeviceName: localDeviceInfo().deviceName });
         service = built.service;
         handleShared = built.handleHttp;
         log("docservice.attach", { path: WS_PATH, modules: built.service.health().modules, authStore: store ? "ok" : "unavailable" });
       } catch (err) {
         log("docservice.error", { stage: "attach", message: errText(err) });
         return;
+      }
+
+      // 局域网主机(PROMPTCUT_LAN_HOST=1)绑非回环而凭证存储没加载:拒绝启动(SP 契约第 5 节、M6a 失败即关)
+      if (lanHostRequested() && storeMissing) {
+        log("config.error", { reason: "auth-store", lanHost: true });
+        throw new Error("局域网主机(PROMPTCUT_LAN_HOST=1)要求凭证存储可用:<root>/out/docservice/auth 读不了,拒绝启动");
       }
 
       // 共享端点的预检要抢在 vite 自带的 cors 中间件前面答(它不认局域网的源,理由同 asset-service.ts 的 assetPreflightMiddleware)
