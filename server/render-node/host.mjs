@@ -34,6 +34,7 @@
  * 端点、执行器、产物库都由调用方注入(预渲染进程里是 `vite-plugin-frames.ts` 的 `startHostNode`)。
  */
 import fs from 'node:fs';
+import path from 'node:path';
 import { createLocalNode } from './local-node.mjs';
 import { loadSharedConfig, SHARED_CONFIG_ENV } from '../auth/shared-config.mjs';
 
@@ -267,4 +268,44 @@ export function createRenderHost({
       }));
     },
   };
+}
+
+/** `scripts/render-host.mjs` 的命令行参数(契约第 2 节);放在这里是因为 `server/**` 不许引 `scripts/`(单测要用) */
+export function renderHostArgs(argv) {
+  const opts = { port: 5400, config: null, data: null, maxConcurrent: null, streams: false, verbose: false };
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    const next = () => { const v = argv[++i]; if (v === undefined) throw new Error(`${a} 要跟一个值`); return v; };
+    if (a === '--port') opts.port = Number(next());
+    else if (a === '--config') opts.config = next();
+    else if (a === '--data') opts.data = next();
+    else if (a === '--max-concurrent') opts.maxConcurrent = Number(next());
+    else if (a === '--streams') opts.streams = true;
+    else if (a === '--verbose') opts.verbose = true;
+    else throw new Error(`不认识的参数 ${a}`);
+  }
+  if (!Number.isInteger(opts.port) || opts.port <= 0 || opts.port > 65533) throw new Error('--port 不对');
+  if (opts.maxConcurrent !== null && !(Number.isInteger(opts.maxConcurrent) && opts.maxConcurrent >= 1 && opts.maxConcurrent <= 4)) {
+    throw new Error('--max-concurrent 要是 1～4 的整数');
+  }
+  return opts;
+}
+
+/** `scripts/render-host.mjs` 给编辑器子进程设的环境变量(契约第 2 节) */
+export function renderHostEnv(base, { config, data, streams, maxConcurrent }) {
+  const env = { ...base };
+  for (const key of ['PROMPTCUT_DOCSERVICE_URL', 'PROMPTCUT_CLUSTER_TOKEN', 'PROMPTCUT_HEADLESS', 'PROMPTCUT_PUSH', 'PROMPTCUT_ROLE']) delete env[key];
+  const tmp = path.join(data, 'tmp');
+  Object.assign(env, {
+    PROMPTCUT_QUEUE_NODE: '1',
+    PROMPTCUT_NODE_PROFILE: 'host',
+    PROMPTCUT_SHARED_CONFIG: path.resolve(config),
+    PROMPTCUT_STREAMS: streams ? '1' : '0',
+    PROMPTCUT_EXPORT_DIR: data,
+    PROMPTCUT_DATA_DIR: path.join(data, 'data'),
+    TEMP: tmp, TMP: tmp, TMPDIR: tmp,
+  });
+  if (maxConcurrent !== null && maxConcurrent !== undefined) env.PROMPTCUT_HOST_MAX_CONCURRENT = String(maxConcurrent);
+  else delete env.PROMPTCUT_HOST_MAX_CONCURRENT;
+  return env;
 }

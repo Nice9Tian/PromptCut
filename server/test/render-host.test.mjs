@@ -21,13 +21,12 @@ import { createLocalNode } from '../render-node/local-node.mjs';
 import { planTaskOf } from '../render-node/split.mjs';
 import { checkClaimable } from '../render-node/filter.mjs';
 import { createWsEndpoint } from '../render-node/ws-transport.mjs';
-import { createRenderHost, loadHostConfig, hostMaxConcurrent, HOST_MAX_CONCURRENT, HOST_CAPABILITIES } from '../render-node/host.mjs';
+import { createRenderHost, loadHostConfig, hostMaxConcurrent, HOST_MAX_CONCURRENT, HOST_CAPABILITIES, renderHostArgs as parseArgs, renderHostEnv as hostEnv } from '../render-node/host.mjs';
 import { normalizeEntry, sharedProtocols } from '../auth/shared-config.mjs';
 import { createLoopback } from './fake-loopback-transport.mjs';
 import { createTimerClock } from './fake-render-executor.mjs';
 import { startSharedService, createProject, join, tempDir, deviceId } from './fake-shared-env.mjs';
 import { byType } from './fake-ws-kit.mjs';
-import { parseArgs, hostEnv } from '../../scripts/render-host.mjs';
 
 const sha256 = (text) => createHash('sha256').update(text, 'utf8').digest('hex');
 const FP = 'fedcba9876543210';
