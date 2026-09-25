@@ -80,6 +80,8 @@ export function createNodeSession({
     open = new Map();
     inflight = null;
     yielding = null;
+    // 限流挂在队列的连接上,新连接不带着旧连接的退避(契约 I.10 第 6 条)
+    throttledUntil = -Infinity;
     send({
       type: 'node.hello', nodeId, profile: node?.profile, envFingerprint: node?.envFingerprint,
       capabilities: node?.capabilities, codeVersions: node?.codeVersions, maxConcurrent, resume: entries,
@@ -121,7 +123,8 @@ export function createNodeSession({
       if (task && Number.isInteger(message.version)) open.set(id, { ...task, version: message.version });
       return;
     }
-    // taken / gone / forbidden / card-locked(以及认不出的原因):这一轮不再考虑它。
+    // taken / gone / forbidden / card-locked / fingerprint-mismatch(契约 I.10 第 4 条)
+    // (以及认不出的原因):这一轮不再考虑它。
     // card-locked(契约 F.2):这张卡的锁在别的指纹上,本节点的指纹做不了,按 taken 丢掉候选、
     // 不重试;任务在队列里仍是 open,只有队列再发 task.opened / queue.snapshot 时才会回到视图
     open.delete(id);
@@ -166,8 +169,9 @@ export function createNodeSession({
         break;
       }
       case 'error':
-        // 回包对不上是哪条请求;在飞的认领若就是它,不清的话节点从此再也不认领
-        inflight = null;
+        // 认领不带 reqId,回包对不上是哪条请求;在飞的认领若就是它,不清的话节点从此再也不认领。
+        // 带 reqId 的是同一条连接上别的请求(内容库、发布等)的回包,不是认领的,不清(契约 I.10 第 5 条)
+        if (message.reqId === undefined) inflight = null;
         break;
       default:
         break;

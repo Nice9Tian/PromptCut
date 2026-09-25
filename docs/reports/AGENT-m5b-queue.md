@@ -110,3 +110,32 @@
 
 - I.3 可以写明接手时「被作废的原指纹 open 任务」算在锁变更之内（原指纹节点收 hidden），以及 F.1 第 3 步「给可见的 watch 者发 `task.closed failed`」的可见性按改锁后算。这样 Q4 / Q11 与 V3 就不再矛盾。
 - I.2 第 2 条可以改成「T 参与锁（有锁键和锁指纹，F.1）」，与 3a 和 Q9 对齐。
+
+## 第二轮：按契约 I.10 补充（已合并 `claude/rq-m5b` 的 `8de7bc0`）
+
+### 改动
+
+- **第 4 条**：`queue.mjs` 的认领，在 `taken` 之后、第 3a 步之前新增一项判断。条件是 `PREFILTER` 为真、任务不是 plan、节点和任务都带非空指纹、且两个指纹不同。满足时回 `task.claim-rejected { id, reason: 'fingerprint-mismatch', state: 'open', version }`，带 reqId，任务状态不变，拒绝次数计入 `cardLockedRejects`（字段名没改，限流和诊断共用这一个计数）。
+  - 放在这个位置有两个原因：契约要求回包带 `state`、`version`，taken 之后这里的 state 一定是 open；环境本来就不对的节点，也不必知道这张卡锁在谁那里。
+  - 会话侧不用改代码：非 `stale`、非 `throttled` 的拒绝原本就按 `taken` 处理、丢掉候选，这里只补了注释。
+- **第 5 条**：`session.mjs` 收到 `error` 时，只有消息不带 `reqId` 才清掉在飞的认领。
+- **第 6 条**：`session.mjs` 的 `start()` 把 `throttledUntil` 重置为 `-Infinity`。
+- **第 7、8 条**：第一轮已经是这样实现的，没再改。第 8 条的临界点有自测证据：第 21 次仍回原因，第 22 次起回 `throttled`。
+
+### 验证
+
+- `npx tsc -b --force`：退出码 0。
+- `npm test`：退出码 1。tests 2352、pass 2346、fail 5、skipped 1。失败的 5 条：
+  - P14、Q4（两条）、Q11：I.10 第 3 条已裁定由测试方改；
+  - **新增 Q8**（`card-lock-queue.test.mjs`「describe().locks 的形状与排序……新 epoch 的队列没有锁」）：后半段让指纹 B 的节点 `b` 认领指纹 A 的任务 `snap('bb', FP_A)`，期望成功并且由认领建锁。按 I.10 第 4 条，这次认领现在回 `fingerprint-mismatch`。**需要主会话裁决**。建议后半段的 `h2` 显式传 `constants: { PREFILTER: false }`，这条测的是 F.1 的「新 epoch 没有锁」，与过滤无关；或者把节点换成指纹 A 的。
+- 自测：
+  - `m5b-selftest.mjs`：9 项全过。K1 过滤开时 card-locked 为 0、认领 100 次；过滤关时 card-locked 为 400、认领 500 次。
+  - `m5b-diff.mjs`：`PREFILTER: false` 与改动前逐字节相同，20 个种子共 116830 条出站消息；过滤开时，30 个种子的增量视图都等于重新拿到的 snapshot。
+  - 新增 `m5b-i10.mjs`，全过，覆盖：
+    - 异指纹认领回 `fingerprint-mismatch`（带 state、version、reqId）；
+    - 连续 25 次认领的回包是 21 次原因加 4 次 `throttled`，诊断为 `cardLockedRejects: 21, throttled: true`；
+    - 任务不带指纹、plan 任务、节点指纹为空串，这三种都不拒；
+    - 过滤关时照旧认领成功；
+    - 会话把 `fingerprint-mismatch` 当 `taken`，丢掉候选；
+    - 带 `reqId` 的 `error` 不清在飞的认领，不带的清；
+    - `start()` 之后限流解除。

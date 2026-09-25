@@ -585,6 +585,16 @@ export function createRenderQueue(options = {}) {
     if (task.state !== 'open') {
       return emit(conn, 'task.claim-rejected', { id, reason: 'taken', state: task.state, version: task.version }, reqId);
     }
+    // 指纹不符（I.10 第 4 条，语义「也不让它认领」）：过滤开着、节点与任务都带指纹且不同就拒，和 card-locked 一样
+    // 计入限流次数。放在 taken 之后、3a 之前：环境本来就不对的节点不必知道这张卡锁在谁那里。plan 不查（同 envAllows）
+    if (C.PREFILTER && task.kind !== 'plan') {
+      const nodeFp = fingerprintOf(node.envFingerprint);
+      const taskFp = fingerprintOf(task.requires ? task.requires.envFingerprint : undefined);
+      if (nodeFp !== null && taskFp !== null && nodeFp !== taskFp) {
+        conn.cardLockedRejects += 1;
+        return emit(conn, 'task.claim-rejected', { id, reason: 'fingerprint-mismatch', state: 'open', version: task.version }, reqId);
+      }
+    }
     // 3a（F.1）：这张卡的这种结果已被别的环境锁定，本任务的指纹产出的帧不能混进去。
     // 放在 stale 之前：锁不变，节点拿新版本号重试也没用，早点让它丢掉这个候选
     const lockId = lockIdOf(task);
@@ -722,7 +732,7 @@ export function createRenderQueue(options = {}) {
       connId,
       principal: { userId: principal.userId, tenantId: typeof principal.tenantId === 'string' ? principal.tenantId : null },
       nodeId: null, publisherId: null, watch: null,
-      cardLockedRejects: 0,   // 本扫描周期内收到的 card-locked 拒绝数，tick 清零（I.5）
+      cardLockedRejects: 0,   // 本扫描周期内收到的 card-locked 与 fingerprint-mismatch 拒绝数，tick 清零（I.5、I.10 第 4 条）
     });
   }
 
