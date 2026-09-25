@@ -8,7 +8,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { diffProject, applyOps, deepEqual, entityOfPath, entityOfOp, entitiesOf, getAt, MAX_DIFF_OPS } from "./diffProject.ts";
+import { diffProject, applyOps, deepEqual, entityOfPath, entityOfOp, entitiesOf, entityValuePath, getAt, MAX_DIFF_OPS } from "./diffProject.ts";
 import { rng, randProject, mutate, deepFreeze, bigProject } from "../testing/randomProject.mjs";
 
 const apply = (doc, ops) => {
@@ -220,23 +220,28 @@ test("规范-__proto__ 键当普通键", () => {
   assert.equal({}.polluted, undefined);
 });
 
-test("规范-实体:片段、序列、部件归片段、剪辑里的片段、效果库、元数据、根", () => {
+test("规范-实体:片段、序列、部件归片段、剪辑里的片段、效果库、顶层键各一个、根", () => {
   assert.equal(entityOfPath("/tracks/@t1/clips/@c3/frame/x"), "/tracks/@t1/clips/@c3");
   assert.equal(entityOfPath("/tracks/@t1/name"), "/tracks/@t1");
   assert.equal(entityOfPath("/tracks/@t1/clips/@c3/parts/@p2/x"), "/tracks/@t1/clips/@c3");
   assert.equal(entityOfPath("/cuts/@k2/tracks/@t1/clips/@c3/start"), "/cuts/@k2/tracks/@t1/clips/@c3");
   assert.equal(entityOfPath("/filters/@f1/strength"), "/filters/@f1");
   assert.equal(entityOfPath("/media/@m1/transcript/segments"), "/media/@m1");
-  assert.equal(entityOfPath("/fps"), "/meta");
-  assert.equal(entityOfPath("/style/color"), "/meta");
-  assert.equal(entityOfPath("/tracks"), "/meta");
+  assert.equal(entityOfPath("/fps"), "/meta/fps", "顶层标量各算一个实体(集成裁定)");
+  assert.equal(entityOfPath("/style/color"), "/meta/style");
+  assert.equal(entityOfPath("/a~1b"), "/meta/a~1b");
+  assert.equal(entityOfPath("/@x/@y"), "/meta/@x", "名字段不能以 @ 开头,与文档服务一致");
+  assert.equal(entityValuePath("/meta/fps"), "/fps");
+  assert.equal(entityValuePath("/tracks/@t1"), "/tracks/@t1");
+  assert.equal(entityValuePath("*"), "");
+  assert.equal(entityOfPath("/tracks"), "/meta/tracks");
   assert.equal(entityOfPath(""), "*");
   assert.equal(entityOfOp({ op: "insert", path: "/tracks/@t1/clips", index: 0, value: { id: "c9" } }), "/tracks/@t1/clips/@c9");
   assert.deepEqual(entitiesOf([
     { op: "set", path: "/tracks/@t1/clips/@c1/x", value: 1 },
     { op: "set", path: "/tracks/@t1/clips/@c1/y", value: 1 },
     { op: "remove", path: "/name" },
-  ]), ["/tracks/@t1/clips/@c1", "/meta"]);
+  ]), ["/tracks/@t1/clips/@c1", "/meta/name"]);
 });
 
 /* ---------------- V8 性能 ---------------- */

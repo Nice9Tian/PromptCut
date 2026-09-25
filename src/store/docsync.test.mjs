@@ -521,15 +521,28 @@ test("V8-1000 个片段的项目:页面提交一侧(差异 + 本地落地)≤ 5 
   assertSame(svc, A, B);
 });
 
-test("V5-项目设置(name、fps 等顶层字段)同归 /meta 一个实体:别人改了 fps,我撤不回 name", () => {
+test("V5-项目设置的顶层字段各算一个实体(集成裁定):别人改了 fps,我照样撤得回 name;别人改了 name 才挡", () => {
   const { svc, A, B } = setupClips();
+  const name0 = A.ds.project.name;
   A.ds.commit({ ...A.ds.project, name: "A 的名字" });
   svc.drain();
   B.ds.commit({ ...B.ds.project, fps: 60 });
   svc.drain();
   const res = A.ds.undo();
-  assert.equal(res.done, false);
-  assert.deepEqual(res.skipped.map((s) => [s.entity, s.by.session]), [["/meta", "B"]]);
+  assert.equal(res.done, true);
+  assert.deepEqual(res.skipped, []);
+  svc.drain();
+  assert.equal(A.ds.project.name, name0);
+  assert.equal(A.ds.project.fps, 60, "B 的 fps 保留");
+  assertSame(svc, A, B);
+
+  A.ds.commit({ ...A.ds.project, name: "A 又改名" });
+  svc.drain();
+  B.ds.commit({ ...B.ds.project, name: "B 改名" });
+  svc.drain();
+  const res2 = A.ds.undo();
+  assert.equal(res2.done, false);
+  assert.deepEqual(res2.skipped.map((s) => [s.entity, s.by.session]), [["/meta/name", "B"]]);
   assertSame(svc, A, B);
 });
 

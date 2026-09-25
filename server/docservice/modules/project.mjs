@@ -39,7 +39,7 @@
 import { createHash } from 'node:crypto';
 import { createMemoryStore, fileNameOf } from '../store/index.mjs';
 import { actorOf } from './actor.mjs';
-import { applyOps, entitiesOf, entityOf, parsePath, formatPath, idSegment, OpError } from '../json-ops.mjs';
+import { applyOps, entitiesOf, normalizeEntity, parsePath, formatPath, idSegment, OpError } from '../json-ops.mjs';
 
 export const PROJECT_MODULE = 'project';
 
@@ -644,7 +644,7 @@ export function projectModule({
     const projectId = checkProjectId(msg.projectId);
     const session = checkSession(msg.session);
     if (typeof msg.entity !== 'string') bad('entity 必须是路径字符串');
-    const entity = msg.entity === '*' ? '*' : entityOf(msg.entity, entityOpts);
+    const entity = normalizeEntity(msg.entity, entityOpts);
     if (entity === null) bad('entity 必须是空串或以 / 开头的 JSON 指针');
     if (typeof msg.on !== 'boolean') bad('on 必须是布尔值');
     const identity = identityOf(actorOf(principals.get(connId), session));

@@ -6,7 +6,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  applyOps, checkOps, parsePath, formatPath, idSegment, entityOf, entitiesOf, jsonEqual, OpError,
+  applyOps, checkOps, parsePath, formatPath, idSegment, entityOf, entitiesOf, normalizeEntity, jsonEqual, OpError,
 } from '../docservice/json-ops.mjs';
 
 const base = () => ({
@@ -160,7 +160,7 @@ test('DS-J10 __proto__ 键按普通键写，不改原型', () => {
   assert.deepEqual(JSON.parse(JSON.stringify(root)), JSON.parse('{"__proto__":{"polluted":1}}'));
 });
 
-test('DS-J11 实体：从根成对的 /<名>/@<id> 最长前缀，之后的名字可限定；一对都没有归 /meta；根是 *', () => {
+test('DS-J11 实体：从根成对的 /<名>/@<id> 最长前缀，之后的名字可限定；一对都没有按顶层键归 /meta/<键>；根是 *', () => {
   const o = { names: ['tracks', 'clips', 'transitions'] };
   assert.equal(entityOf('/tracks/@t1/clips/@c3/frame/x', o), '/tracks/@t1/clips/@c3');
   assert.equal(entityOf('/tracks/@t1/clips/@c3/parts/@p1/params/a', o), '/tracks/@t1/clips/@c3');
@@ -168,9 +168,14 @@ test('DS-J11 实体：从根成对的 /<名>/@<id> 最长前缀，之后的名�
   assert.equal(entityOf('/cuts/@k2/tracks/@t1/clips/@c3/start', o), '/cuts/@k2/tracks/@t1/clips/@c3');
   assert.equal(entityOf('/tracks/@t1/name', o), '/tracks/@t1');
   assert.equal(entityOf('/filters/@f1/params/a', o), '/filters/@f1');
-  assert.equal(entityOf('/width', o), '/meta');
-  assert.equal(entityOf('/tracks', o), '/meta');
-  assert.equal(entityOf('/style/x/@y', o), '/meta', '成对要从根开始');
+  assert.equal(entityOf('/width', o), '/meta/width', '顶层标量各算一个实体（集成裁定）');
+  assert.equal(entityOf('/tracks', o), '/meta/tracks');
+  assert.equal(entityOf('/style/x/@y', o), '/meta/style', '成对要从根开始');
+  assert.equal(entityOf('/a~1b', o), '/meta/a~1b', '顶层键照样转义');
+  assert.equal(normalizeEntity('/meta/fps', o), '/meta/fps', '已是实体名的原样返回');
+  assert.equal(normalizeEntity('/fps', o), '/meta/fps');
+  assert.equal(normalizeEntity('*', o), '*');
+  assert.equal(normalizeEntity('/tracks/@t1/clips/@c3/x', o), '/tracks/@t1/clips/@c3');
   assert.equal(entityOf('', o), '*');
   assert.equal(entityOf('bad'), null);
 });
@@ -184,7 +189,7 @@ test('DS-J12 entitiesOf：set 按实际差别算；insert 算新元素；noop �
     { op: 'remove', path: '/tracks/@t1/clips/@zz' },
     { op: 'set', path: '/fps', value: 60 },
   ]);
-  assert.deepEqual(entitiesOf(r1.effects), ['/tracks/@t1/clips/@c2', '/tracks/@t2/clips/@c7', '/meta']);
+  assert.deepEqual(entitiesOf(r1.effects), ['/tracks/@t1/clips/@c2', '/tracks/@t2/clips/@c7', '/meta/fps']);
 
   const next = structuredClone(prev);
   next.tracks[0].clips[2].start = 5; // c3

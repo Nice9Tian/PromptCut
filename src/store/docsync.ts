@@ -25,6 +25,7 @@ import {
   entitiesOf,
   entitiesOverlap,
   entityOfOp,
+  entityValuePath,
   getAt,
   type PathOp,
 } from "../kernel/diffProject";
@@ -590,7 +591,7 @@ export class DocSync {
   private onOverwritten(msg: OverwrittenMsg) {
     // 先把自己那一版的该实体存成本地备份,再(或已经)换成新版本
     const mine = this.beforeRemote.get(msg.rev) ?? this.local;
-    this.saveBackup?.({ kind: "overwritten", projectId: this.projectId, entity: msg.entity, by: msg.by, rev: msg.rev, value: getAt(mine, msg.entity), at: this.now() });
+    this.saveBackup?.({ kind: "overwritten", projectId: this.projectId, entity: msg.entity, by: msg.by, rev: msg.rev, value: getAt(mine, entityValuePath(msg.entity)), at: this.now() });
     this.emit("notice", { kind: "overwritten", entity: msg.entity, by: msg.by, rev: msg.rev });
   }
 

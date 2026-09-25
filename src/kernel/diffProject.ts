@@ -508,18 +508,38 @@ const NESTED_ENTITY = new Set(["tracks", "clips", "transitions"]);
 
 /** 所有实体 */
 export const ALL_ENTITIES = "*";
-/** 顶层标量字段等归到这里 */
+/**
+ * 取不到任何一对 `/<名>/@<id>` 的路径按顶层键各算一个实体 `/meta/<顶层键>`(`/fps` → `/meta/fps`,
+ * `/style/x` → `/meta/style`)。2026-09-26 集成裁定:别人改了 fps 不该让我撤不回自己改的 name。
+ */
 export const META_ENTITY = "/meta";
 
 /** 一条路径归哪个实体(规范第 4 节) */
 export function entityOfPath(path: string): string {
   if (path === "") return ALL_ENTITIES;
   const segs = parsePath(path);
-  if (!segs) return META_ENTITY;
+  if (!segs || segs.length === 0) return ALL_ENTITIES;
   let end = 0;
-  while (end + 1 < segs.length && segs[end + 1][0] === "@" && (end === 0 || NESTED_ENTITY.has(segs[end]))) end += 2;
-  if (end === 0) return META_ENTITY;
+  // 名字段不能以 @ 开头(文档服务的引擎把 @ 开头的段当 id 段),第一对之后的名字只认 NESTED_ENTITY
+  while (
+    end + 1 < segs.length &&
+    segs[end][0] !== "@" &&
+    segs[end + 1][0] === "@" &&
+    (end === 0 || NESTED_ENTITY.has(segs[end]))
+  ) end += 2;
+  if (end === 0) return `${META_ENTITY}/${escapeSegment(segs[0])}`;
   return "/" + segs.slice(0, end).map(escapeSegment).join("/");
+}
+
+/**
+ * 实体 → 它的值在项目里的路径(覆盖备份取值用):`*` 是根 `""`;`/meta/<键>` 是 `/<键>`;
+ * 其余实体本身就是路径。
+ */
+export function entityValuePath(entity: string): string {
+  if (entity === ALL_ENTITIES) return "";
+  const prefix = `${META_ENTITY}/`;
+  if (entity.startsWith(prefix) && entity.indexOf("/", prefix.length) < 0) return "/" + entity.slice(prefix.length);
+  return entity;
 }
 
 /** 一条操作写到的实体(insert 按插进去的那个元素算) */

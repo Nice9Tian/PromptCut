@@ -9,15 +9,16 @@
  * - 四种操作：`set`、`remove`、`insert`、`move`（见 `applyOps`）。
  * - 一批操作原子生效：`applyOps` 按写时复制做，旧的根一个字节都不改；任何一条失败就整批作废、抛错。
  * - 实体：`entityOf` 把路径归到从根开始、成对的 `/<名>/@<id>` 的最长前缀上（第一对之后的名字可以限定在
- *   `names` 里），一对都没有的归到 `metaEntity`；`entitiesOf` 按 `applyOps` 给的效果算出一批操作写到的实体
+ *   `names` 里），一对都没有的按顶层键各归一个 `<metaEntity>/<顶层键>`（如 `/meta/fps`）；`entitiesOf` 按 `applyOps` 给的效果算出一批操作写到的实体
  *   （`set` 按新旧值的实际差别算）。哪些名字能往下延伸由调用方给，本文件不认识任何具体名字。
  */
 
 export const OP_NAMES = Object.freeze(['set', 'remove', 'insert', 'move']);
 
 /**
- * 实体的缺省口径：`names` 为 null 时第一对之后的名字不限；取不到任何一对的归到 `/meta`；根替换的路径 `""`
- * 由 `entityOf` 记为 `*`（所有实体）。
+ * 实体的缺省口径：`names` 为 null 时第一对之后的名字不限；取不到任何一对的按顶层键各算一个实体
+ * `/meta/<顶层键>`（`/fps` → `/meta/fps`，`/style/x` → `/meta/style`；2026-09-26 集成裁定：别人改了 fps
+ * 不该让我撤不回自己改的 name）；根替换的路径 `""` 由 `entityOf` 记为 `*`（所有实体）。
  */
 export const ENTITY_DEFAULTS = Object.freeze({ names: null, metaEntity: '/meta', rootEntity: '*' });
 
@@ -327,10 +328,11 @@ function pairPrefix(segs, names) {
   return cut;
 }
 
-/** 段列表 → 它所属的实体；一对都取不到时是 `metaEntity` */
-function entityOfSegs(segs, names, metaEntity) {
-  const cut = pairPrefix(segs, names);
-  return cut === 0 ? metaEntity : formatPath(segs.slice(0, cut));
+/** 段列表 → 它所属的实体；一对都取不到时是 `<metaEntity>/<顶层键>`；空（根）是 `rootEntity` */
+function entityOfSegs(segs, o) {
+  if (segs.length === 0) return o.rootEntity;
+  const cut = pairPrefix(segs, o.names);
+  return cut === 0 ? `${o.metaEntity}/${escapeToken(segs[0].text)}` : formatPath(segs.slice(0, cut));
 }
 
 /** 再往下走一段，实体还可能变长吗：`segs` 本身是完整的成对前缀，或是成对前缀加一个合格的名字段 */
@@ -353,7 +355,7 @@ function entityOptions(o = {}) {
 
 /**
  * 路径所属的实体：从根开始取成对的 `/<名>/@<id>` 的最长前缀；第一对的名字不限，之后每一对的名字要在 `names` 里
- * （`names` 为 null 时不限）。一对都取不到的归 `metaEntity`（缺省 `/meta`）；根（`""`）是 `rootEntity`（缺省 `*`）。
+ * （`names` 为 null 时不限）。一对都取不到的按顶层键归 `<metaEntity>/<顶层键>`（缺省 `/meta/<键>`）；根（`""`）是 `rootEntity`（缺省 `*`）。
  * 本函数不看文档：名字位置上以 `@` 开头的段不算名字。路径语法不对回 null。
  * @param {string} path
  * @param {{ names?: string[] | Set<string> | null, metaEntity?: string, rootEntity?: string }} [options]
@@ -363,7 +365,24 @@ export function entityOf(path, options) {
   if (segs === null) return null;
   const o = entityOptions(options);
   if (segs.length === 0) return o.rootEntity;
-  return entityOfSegs(segs, o.names, o.metaEntity);
+  return entityOfSegs(segs, o);
+}
+
+/**
+ * 把「实体名或路径」归一成实体（`project.follow` 用）：已经是实体名的原样返回——根 `*`、
+ * 顶层键的 `<metaEntity>/<键>`（它不是那个值的路径，再按路径归一会变成 `/meta/meta`）；其余按路径算 `entityOf`。
+ * 不合法回 null。
+ * @param {string} entityOrPath
+ * @param {{ names?: string[] | Set<string> | null, metaEntity?: string, rootEntity?: string }} [options]
+ */
+export function normalizeEntity(entityOrPath, options) {
+  const o = entityOptions(options);
+  if (entityOrPath === o.rootEntity) return o.rootEntity;
+  const segs = parsePath(entityOrPath);
+  if (segs === null) return null;
+  const meta = parsePath(o.metaEntity);
+  if (meta && meta.length === 1 && segs.length === 2 && segs[0].text === meta[0].text) return formatPath(segs);
+  return entityOfSegs(segs, o);
 }
 
 /**
@@ -376,7 +395,7 @@ export function entityOf(path, options) {
  */
 function diffEntities(a, b, segs, o, out) {
   if (a === b) return;
-  const mark = (s) => out.add(entityOfSegs(s, o.names, o.metaEntity));
+  const mark = (s) => out.add(entityOfSegs(s, o));
   if (!canExtend(segs, o.names)) {
     if (!jsonEqual(a, b)) mark(segs);
     return;
@@ -435,7 +454,7 @@ export function entitiesOf(effects, options) {
     if (e.noop) continue;
     const segs = parsePath(e.target);
     if (e.op === 'set') diffEntities(e.before, e.after, segs, o, out);
-    else out.add(entityOfSegs(segs, o.names, o.metaEntity));
+    else out.add(entityOfSegs(segs, o));
   }
   return [...out];
 }

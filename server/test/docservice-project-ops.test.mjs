@@ -196,7 +196,7 @@ test('DS-P5（V3）期望版本：Agent 读后页面改了同一实体，Agent �
   const pageActor = { userId: 'alice@pc', deviceId: 'pc', role: 'page', conversation: null, session: 'tab-1' };
   assert.deepEqual(w.since, [
     { rev: 2, opId: p1.opId, actor: pageActor, at: T0 + 5000, paths: ['/tracks/@t1/clips/@c1/start'], entities: ['/tracks/@t1/clips/@c1'] },
-    { rev: 3, opId: p2.opId, actor: pageActor, at: T0 + 6000, paths: ['/tracks/@t2/clips/@c7', '/fps'], entities: ['/tracks/@t2/clips/@c7', '/meta'] },
+    { rev: 3, opId: p2.opId, actor: pageActor, at: T0 + 6000, paths: ['/tracks/@t2/clips/@c7', '/fps'], entities: ['/tracks/@t2/clips/@c7', '/meta/fps'] },
   ]);
   assert.deepEqual(await opsOf(page), [], '被拒的不广播');
 

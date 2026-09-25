@@ -250,7 +250,9 @@ test('C65-V4-03 写入身份：同一身份不通知；同一用户同一设备�
   assert.ok(byIs(n.by, { user: 'alice', session: 's-a2' }));
 });
 
-test('C65-V4-04 顶层实体：不同片段互不相干；width / fps 同归 /meta', async (t) => {
+// 集成对账（B 类，2026-09-26 裁定改了实体粒度）：原断言「width / fps 同归 /meta」改为「顶层字段各算一个实体
+// /meta/<键>」——别人改了 fps 不该让我撤不回自己改的 name。见 c65-design.md 第 13 节。
+test('C65-V4-04 顶层实体：不同片段互不相干；width / fps 各算一个实体（/meta/width、/meta/fps）', async (t) => {
   const { a, b } = await twoWriters(t);
   assert.ok(isOk(await submit(a, { projectId: PID, ops: setX('c1', 1), session: 's-a' })));
   const r = await submit(b, { projectId: PID, ops: setX('c2', 1), session: 's-b' });
@@ -259,9 +261,12 @@ test('C65-V4-04 顶层实体：不同片段互不相干；width / fps 同归 /me
 
   assert.ok(isOk(await submit(a, { projectId: PID, ops: [{ op: 'set', path: '/fps', value: 25 }], session: 's-a' })));
   const r2 = await submit(b, { projectId: PID, ops: [{ op: 'set', path: '/width', value: 1280 }], session: 's-b' });
-  assert.deepEqual(r2.overwrote?.map((o) => o.entity), ['/meta'], `width 与 fps 同属 /meta：${JSON.stringify(r2.overwrote)}`);
+  assert.ok(!r2.overwrote || r2.overwrote.length === 0, `width 与 fps 是两个实体，不算覆盖：${JSON.stringify(r2.overwrote)}`);
+  assert.deepEqual(await quietOverwritten(a), []);
+  const r3 = await submit(b, { projectId: PID, ops: [{ op: 'set', path: '/fps', value: 60 }], session: 's-b' });
+  assert.deepEqual(r3.overwrote?.map((o) => o.entity), ['/meta/fps'], `同一个 fps 才算覆盖：${JSON.stringify(r3.overwrote)}`);
   const n = await a.next(byType('project.overwritten'));
-  assert.equal(n.entity, '/meta');
+  assert.equal(n.entity, '/meta/fps');
 });
 
 test('C65-V4-05 根替换也是一次普通写入：照样记版本、照样通知覆盖', async (t) => {
