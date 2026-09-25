@@ -10,13 +10,14 @@
  *
  *   const harness = createAssetHarness();          // 各测试文件自己 after(() => harness.cleanup())
  *   const asset = await harness.asset();            // 转译后的 asset-service 模块
- *   const srv = await harness.serve({ chunkSize, token, isTrusted, stores, legacyStore });
+ *   const srv = await harness.serve({ chunkSize, tickets, isTrusted, stores, legacyStore });
  *   // srv = { origin, base, root, stores: { media, snap, px }, close() }
  *
  * `serve` 的选项：
  *   - `chunkSize`：三个 memory 实现的分片大小，缺省 8 MiB；
  *   - `stores`：自己给的三个数据层（给了就不新建）；`'default'` = 一个都不传，走中间件的缺省（fs 实现）；
- *   - `token` / `isTrusted`：原样传给 `assetServiceMiddleware`（不给就不传，走中间件的缺省）；
+ *   - `tickets` / `isTrusted`：原样传给 `assetServiceMiddleware`（不给就不传，走中间件的缺省）。M6a 起素材服务凭票据读写，
+ *     集群令牌退役：`token` 仍原样传过去（中间件不认它），只为测「给了也没用」；
  *   - `legacyStore: true`：只按旧写法传 `opts.store`（= media），不传 `opts.stores`（S3 用）。
  */
 import fs from 'node:fs';
@@ -79,7 +80,7 @@ export function createAssetHarness() {
     return (await blobStores()).createBlobStore({ kind: 'memory', chunkSize });
   }
 
-  async function serve({ chunkSize = 8 * 1024 * 1024, stores = null, token, isTrusted, legacyStore = false } = {}) {
+  async function serve({ chunkSize = 8 * 1024 * 1024, stores = null, token, tickets, isTrusted, legacyStore = false } = {}) {
     const a = await asset();
     const root = path.join(OUT, `project-${++rootSeq}`);
     fs.mkdirSync(mediaMod.mediaDir(root), { recursive: true });
@@ -87,6 +88,7 @@ export function createAssetHarness() {
     const own = useDefault ? null : (stores ?? { media: await memoryStore(chunkSize), snap: await memoryStore(chunkSize), px: await memoryStore(chunkSize) });
     const opts = useDefault ? {} : legacyStore ? { store: own.media } : { stores: own };
     if (token !== undefined) opts.token = token;
+    if (tickets !== undefined) opts.tickets = tickets;
     if (isTrusted !== undefined) opts.isTrusted = isTrusted;
     const service = a.assetServiceMiddleware(root, opts);
     const legacy = mediaMod.mediaMiddleware(root);

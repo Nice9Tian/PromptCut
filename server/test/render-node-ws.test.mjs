@@ -22,6 +22,8 @@ import {
   wsClient, byReq, byType, waitFor, sleep, randomToken, createTcpProxy, createSleepExecutor,
   snapshotTaskInput, healthServer, refusingPort,
 } from './fake-ws-kit.mjs';
+import { startSharedService, createProject, deviceId as newDeviceId } from './fake-shared-env.mjs';
+import { buildAuthProtocols } from '../auth/client.mjs';
 
 const BACKOFF = { baseMs: 500, factor: 2, maxMs: 15_000, jitter: 0.2 };
 const NODE = Object.freeze({ profile: 'host', envFingerprint: 'fp-ws-test', codeVersions: [], capabilities: {} });
@@ -128,12 +130,26 @@ async function publisher(url, publisherId = 'page-1') {
 
 // ------------------------------------------------------------------ T1
 
-for (const mode of ['anonymous', 'token']) {
-  test(`T1 对真文档服务建 createWsEndpoint（${mode === 'token' ? '令牌模式' : '匿名模式'}）：onOpen 触发，local-node 收到 node.welcome`, async (t) => {
-    const token = mode === 'token' ? randomToken() : undefined;
-    const env = await startQueueService({ token });
-    t.after(() => env.service.close());
-    const { ep, rec } = await endpoint({ url: env.url, token });
+// M6a：原来的「令牌模式」测的是「带凭证握手的端点也能连上、报到」。集群令牌退出数据面之后，改成凭共享项目的证明
+// 进入（`protocols()` 每次连之前现取挑战，auth-contract 第 11 节），角色 render；principal 是这个成员身份。
+for (const mode of ['anonymous', 'shared']) {
+  test(`T1 对真文档服务建 createWsEndpoint（${mode === 'shared' ? '共享项目凭证' : '匿名模式'}）：onOpen 触发，local-node 收到 node.welcome`, async (t) => {
+    let env;
+    let options;
+    if (mode === 'shared') {
+      const shared = await startSharedService({ mode: 'hosted' });
+      t.after(() => shared.close());
+      const { projectId } = await createProject(shared.base, { password: 'pw-t1' });
+      const dev = newDeviceId('t1');
+      const queueOf = () => shared.service.describe().modules['render-queue'].spaces?.[projectId];
+      env = { service: shared.service, url: shared.url, get queue() { return { epoch: queueOf()?.epoch }; }, projectId, dev };
+      options = { url: shared.url, protocols: () => buildAuthProtocols({ base: shared.base, projectId, username: 'bob', deviceId: dev, deviceName: 'Bob', password: 'pw-t1', role: 'render' }) };
+    } else {
+      env = await startQueueService({});
+      t.after(() => env.service.close());
+      options = { url: env.url };
+    }
+    const { ep, rec } = await endpoint(options);
     t.after(() => ep.close());
     const n = attachNode(ep, { nodeId: `n-${mode}` });
     t.after(() => n.stop());
@@ -148,7 +164,12 @@ for (const mode of ['anonymous', 'token']) {
     const d = env.service.describe();
     assert.equal(d.conns.length, 1);
     assert.deepEqual(d.conns[0].roles.sort(), ['node', 'publisher'], 'local-node.start 先 publisher.hello 再 node.hello');
-    if (mode === 'token') assert.deepEqual(d.conns[0].principal, { userId: 'cluster', tenantId: 'cluster' });
+    if (mode === 'shared') {
+      assert.deepEqual(d.conns[0].principal, {
+        userId: `bob@${env.dev}`, tenantId: env.projectId, scope: 'member', username: 'bob', deviceId: env.dev, deviceName: 'Bob',
+        creator: false, role: 'render', conversation: null, owner: null,
+      });
+    }
     const s = ep.stats();
     assert.equal(s.opens, 1);
     assert.equal(s.closes, 0);

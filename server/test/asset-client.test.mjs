@@ -31,6 +31,7 @@ function bytesOf(size, seed) {
   return out;
 }
 const randomToken = () => crypto.randomBytes(24).toString('base64url');
+const { assetTicketKit } = await import('./fake-shared-env.mjs');
 
 /**
  * 记录每个请求的 fetch。`hook(info)` 可以返回一个 Response（或抛错）来代替真的请求；返回 undefined 就照常发。
@@ -207,8 +208,10 @@ test('L3 某片回 500 两次再成功：重试后成功；网络错同样重试
   await assert.rejects(c3.put('px', b3), '5xx 一直不好：重试用完就抛');
   assert.equal(rec3.log.filter(isChunkPut).length, 3, 'retries: 2 → 首发 + 2 次重试');
 
-  // 4xx：不重试，直接抛，错误带 status 和回包（真服务：配了令牌、非本机、客户端不带令牌 → 401）
-  const locked = await harness.serve({ chunkSize: CHUNK, isTrusted: () => false, token: randomToken() });
+  // 4xx：不重试，直接抛，错误带 status 和回包（真服务：配了票据核对器、非本机、客户端不带票据 → 401）
+  // M6a：读也要票据，所以 401 出在第一个请求（对账 GET chunks）上，原来出在第一片 PUT 上；「只发一次、不重试」的断言不变
+  const lockKit = await assetTicketKit();
+  const locked = await harness.serve({ chunkSize: CHUNK, isTrusted: () => false, tickets: lockKit.tickets });
   const rec4 = recordingFetch();
   const c4 = createAssetClient({ base: locked.base, fetch: rec4.fetch, chunkSize: CHUNK, retries: 3 });
   const t1 = Date.now();
@@ -217,8 +220,15 @@ test('L3 某片回 500 两次再成功：重试后成功；网络错同样重试
   assert.equal(err.status, 401, '错误带 status');
   const own = Object.fromEntries(Object.getOwnPropertyNames(err).filter((k) => k !== 'stack' && k !== 'message' && k !== 'status').map((k) => [k, err[k]]));
   assert.match(JSON.stringify(own), /unauthorized/, `错误带回包：${JSON.stringify(own)}`);
-  assert.equal(rec4.log.filter(isChunkPut).length, 1, '4xx 不重试');
+  assert.equal(rec4.log.length, 1, '4xx 不重试');
   assert.ok(Date.now() - t1 < 150, '4xx 不等重试间隔');
+  // 只读票据写入：403 同样不重试（第一片 PUT 上）
+  const rec4b = recordingFetch();
+  const readOnly = lockKit.issue('r');
+  const c4b = createAssetClient({ base: locked.base, fetch: rec4b.fetch, chunkSize: CHUNK, retries: 3, ticket: () => readOnly });
+  const err4b = await c4b.put('snap', bytesOf(300, 12)).then(() => null, (e) => e);
+  assert.equal(err4b?.status, 403);
+  assert.equal(rec4b.log.filter(isChunkPut).length, 1, '403 不重试');
 
   // 服务端回的 4xx 不是 401 也一样（假回包 409）
   const rec5 = recordingFetch((info) => (isChunkPut(info)
@@ -270,11 +280,15 @@ test('L4 get 到的字节被篡改：抛错；404 回 null', async () => {
 
 /* ------------------------------------------------------------------ L5 */
 
-test('L5 带令牌时每个写请求都有 Authorization: Bearer …；异常信息里没有令牌原文', async () => {
-  const token = randomToken();
-  const srv = await harness.serve({ chunkSize: 1024, isTrusted: () => false, token });
+// M6a（auth-contract 第 8、11 节）：集群令牌换成 `ticket()`。原来测「带令牌时每个写请求都有 Bearer、异常里没有令牌原文」；
+// 现在读写都要票据，所以测每个请求都带 Bearer <票据>；另测 401 时换票重试一次、给 token 选项就抛。异常里不带票据原文的断言不变。
+test('L5 带票据时每个请求都有 Authorization: Bearer <票据>；401 换一张重试一次；异常信息里没有票据原文', async () => {
+  const kit = await assetTicketKit();
+  const ticket = kit.issue('rw');
+  const srv = await harness.serve({ chunkSize: 1024, isTrusted: () => false, tickets: kit.tickets });
   const rec = recordingFetch();
-  const client = createAssetClient({ base: srv.base, token, fetch: rec.fetch, chunkSize: 1024 });
+  let asked = 0;
+  const client = createAssetClient({ base: srv.base, ticket: () => { asked += 1; return ticket; }, fetch: rec.fetch, chunkSize: 1024 });
   const buf = bytesOf(3000, 16);
   const hash = sha256(buf);
   assert.deepEqual(await client.put('px', buf, { ext: 'm4s' }), { hash, size: 3000, uploaded: true });
@@ -282,27 +296,45 @@ test('L5 带令牌时每个写请求都有 Authorization: Bearer …；异常信
   assert.equal(await client.has('px', hash), true);
   const writes = rec.log.filter(isWrite);
   assert.ok(writes.length >= 4, `3 片 + 收尾，实际 ${writes.length}`);
-  for (const info of writes) assert.equal(info.headers.authorization, `Bearer ${token}`, `${info.method} ${info.path}`);
+  for (const info of rec.log) assert.equal(info.headers.authorization, `Bearer ${ticket}`, `${info.method} ${info.path}`);
+  assert.equal(asked, rec.log.length, '每个请求取一次票据');
 
-  // 没带令牌的客户端：不发 Authorization（服务端回 401）
+  // 没给 ticket 的客户端：不发 Authorization（服务端回 401）
   const rec0 = recordingFetch();
   const bare = createAssetClient({ base: srv.base, fetch: rec0.fetch, chunkSize: 1024 });
   const e0 = await bare.put('snap', bytesOf(10, 17)).then(() => null, (e) => e);
   assert.equal(e0?.status, 401);
   for (const info of rec0.log) assert.equal(info.headers.authorization, undefined);
+  // ticket() 回 null：同样不带
+  const recNull = recordingFetch();
+  const eNull = await createAssetClient({ base: srv.base, fetch: recNull.fetch, chunkSize: 1024, ticket: () => null }).put('snap', bytesOf(10, 17)).then(() => null, (e) => e);
+  assert.equal(eNull?.status, 401);
+  for (const info of recNull.log) assert.equal(info.headers.authorization, undefined);
 
-  // 令牌错：401，异常里（message、stack、各个自有属性、String(err)）没有令牌原文
-  const wrong = randomToken();
-  const bad = createAssetClient({ base: srv.base, token: wrong, fetch: recordingFetch().fetch, chunkSize: 1024 });
+  // 401 → ticket({ refresh: true }) 换一张再试一次：旧票据作废（改口令，代数加一）之后换来的新票据能用
+  const stale = kit.issue('rw');
+  kit.bump((d) => { d.generation += 1; });
+  const calls = [];
+  const renew = createAssetClient({ base: srv.base, fetch: recordingFetch().fetch, chunkSize: 1024, ticket: (opts) => { calls.push(opts?.refresh === true); return opts?.refresh ? kit.issue('rw') : stale; } });
+  const b2 = bytesOf(500, 21);
+  assert.equal((await renew.put('snap', b2)).uploaded, true, '换票之后成功');
+  assert.ok(calls.includes(true), `401 之后要换票：${JSON.stringify(calls)}`);
+  // 换了还是 401：只重试这一次就抛
+  const recBad = recordingFetch();
+  const wrong = `${kit.issue('rw')}x`;
+  const bad = createAssetClient({ base: srv.base, ticket: () => wrong, fetch: recBad.fetch, chunkSize: 1024 });
   const e1 = await bad.put('snap', bytesOf(20, 18)).then(() => null, (e) => e);
   assert.equal(e1?.status, 401);
-  // 5xx 重试用完：同样不带令牌原文
+  assert.equal(recBad.log.length, 2, '401 只换票重试一次');
+
+  // 5xx 重试用完：同样不带票据原文
+  const good = kit.issue('rw');
   const down = recordingFetch((info) => (isWrite(info) ? new Response('{"ok":false}', { status: 500, headers: { 'Content-Type': 'application/json' } }) : undefined));
-  const e2 = await createAssetClient({ base: srv.base, token, fetch: down.fetch, chunkSize: 1024, retries: 1 }).put('snap', bytesOf(30, 19)).then(() => null, (e) => e);
+  const e2 = await createAssetClient({ base: srv.base, ticket: () => good, fetch: down.fetch, chunkSize: 1024, retries: 1 }).put('snap', bytesOf(30, 19)).then(() => null, (e) => e);
   assert.ok(e2 instanceof Error, '5xx 用完重试要抛');
   // 网络错：同样
   const net = async () => { throw new TypeError(`fetch failed`); };
-  const e3 = await createAssetClient({ base: srv.base, token, fetch: net, chunkSize: 1024, retries: 1 }).put('snap', bytesOf(40, 20)).then(() => null, (e) => e);
+  const e3 = await createAssetClient({ base: srv.base, ticket: () => good, fetch: net, chunkSize: 1024, retries: 1 }).put('snap', bytesOf(40, 20)).then(() => null, (e) => e);
   assert.ok(e3 instanceof Error, '网络错用完重试要抛');
 
   const dump = (err) => {
@@ -311,9 +343,12 @@ test('L5 带令牌时每个写请求都有 Authorization: Bearer …；异常信
     if (err?.cause) parts.push(dump(err.cause));
     return parts.join('\n');
   };
-  assert.ok(!dump(e1).includes(wrong), '401 的异常里有令牌原文');
-  assert.ok(!dump(e2).includes(token), '5xx 的异常里有令牌原文');
-  assert.ok(!dump(e3).includes(token), '网络错的异常里有令牌原文');
+  assert.ok(!dump(e1).includes(wrong), '401 的异常里有票据原文');
+  assert.ok(!dump(e2).includes(good), '5xx 的异常里有票据原文');
+  assert.ok(!dump(e3).includes(good), '网络错的异常里有票据原文');
+
+  // 集群令牌不再用于素材服务：给 token 选项直接抛
+  assert.throws(() => createAssetClient({ base: srv.base, token: randomToken() }), TypeError);
 });
 
 /* ------------------------------------------------------------------ L6（契约第 10 节第 5 条） */
