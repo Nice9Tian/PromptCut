@@ -222,7 +222,7 @@ function createRig({ epoch = 'epoch-1', clock, sink, exec, planContext } = {}) {
     return page;
   }
 
-  function addNode(nodeId, { fp = FP_A, profile = 'pc', userId = 'u9', tenantId = 't1', maxConcurrent = 1, seed = 1, node } = {}) {
+  function addNode(nodeId, { fp = FP_A, profile = 'pc', userId = 'u9', tenantId = 't1', maxConcurrent = 1, seed = 1, node, projects } = {}) {
     const ep = lb.connect(`conn-${nodeId}`, { userId, tenantId });
     const rec = { nodeId, ep, connId: ep.connId, fp, idle: true, ticking: true, stopped: false, events: [] };
     rec.node = node ?? (profile === 'browser' ? browserNode(fp, userId) : pcNode(fp, userId));
@@ -230,6 +230,7 @@ function createRig({ epoch = 'epoch-1', clock, sink, exec, planContext } = {}) {
       nodeId, node: rec.node, endpoint: ep,
       now: clock.now, random: seeded(seed), isIdle: () => rec.idle, maxConcurrent,
       codeVersion: CV, executor: exec.forNode(nodeId), sink,
+      ...(projects ? { projects } : {}),   // M6c X3：纯浏览器不能 watch 'all'，要列出项目
       onEvent: event => { rec.events.push(event); },
     });
     rec.eventsOf = type => rec.events.filter(e => e.type === type);
@@ -607,7 +608,8 @@ test('I5 纯浏览器节点 + pc 节点，另有别的用户的项目：浏览�
   const page1 = rig.addPage('page-u1', { userId: 'u1', tenantId: 't1', publisherId: 'page-u1' });
   const page2 = rig.addPage('page-u2', { userId: 'u2', tenantId: 't1', publisherId: 'page-u2' });
   // 浏览器排在前面 tick：同一拍里它的认领先到队列，保证它真的抢得到活
-  const br = rig.addNode('node-br', { profile: 'browser', userId: 'u1', fp: FP_A, seed: 9 });
+  // M6c X3：纯浏览器不能 watch 'all'（回 forbidden），列出两个项目（原为缺省的 'all'）
+  const br = rig.addNode('node-br', { profile: 'browser', userId: 'u1', fp: FP_A, seed: 9, projects: ['p1', 'p2'] });
   const pc = rig.addNode('node-pc', { profile: 'pc', userId: 'u1', fp: FP_A, seed: 10 });
   br.local.start();
   pc.local.start();

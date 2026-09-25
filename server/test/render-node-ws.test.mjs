@@ -26,7 +26,8 @@ import { startSharedService, createProject, deviceId as newDeviceId } from './fa
 import { buildAuthProtocols } from '../auth/client.mjs';
 
 const BACKOFF = { baseMs: 500, factor: 2, maxMs: 15_000, jitter: 0.2 };
-const NODE = Object.freeze({ profile: 'host', envFingerprint: 'fp-ws-test', codeVersions: [], capabilities: {} });
+// M6c X3：host 的 watch 'all' 只收摘要（按扫描周期发现项目），T 系列测的是传输，节点改用 pc 照旧收全量（原为 host）
+const NODE = Object.freeze({ profile: 'pc', envFingerprint: 'fp-ws-test', codeVersions: [], capabilities: {} });
 
 const loadTransport = () => import('../render-node/ws-transport.mjs');
 const loadResolver = () => import('../render-node/endpoint.mjs');

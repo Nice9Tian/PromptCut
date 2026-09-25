@@ -1610,6 +1610,7 @@ router.drained(connId)            // 组装层在底层 'drain' 时调
   - `projects` 按 `projectId` 升序。
 - **推送**：每次 `tick` 算一遍，和上一次推出去的内容不同才 `publish` 到 `queue-summary:all`，带 `coalesceKey: 'queue-summary'`。所以每个扫描周期至多一条，慢连接上只留最新一条。
 - 摘要订阅的连接**不收**任何单任务增量。
+- 〔M6c 补，`m6c-contract.md` X3 与「集成时的裁定」〕队列本体对 `host` 的 `queue.watch { projects: 'all' }` 同样只回摘要（经队列的 `send` 发，不带合并键）。`host` 按摘要再单独 watch 具体项目时，**项目列表非空就不停摘要**（摘要与这些项目的增量同时收，下面「以最后一条为准」对这种组合不适用）；**空列表才连摘要一起停**（本模块切到频道摘要时替连接发的正是空列表，所以不会重复收摘要）。
 - 同一连接先后发全量 `queue.watch` 和摘要 `queue.watch`，以最后一条为准：切到摘要时，要让队列停发单任务增量。做法是替它向队列发 `queue.watch { projects: [] }`，队列不收空数组时可以用一个不存在的项目 id。切回全量时退订摘要频道。
 - 模块声明 `channels: ['queue-summary']`。
 
@@ -1883,7 +1884,7 @@ createPrerenderExecutor({ pipeline, projects, prepareProject, log }) → { plan,
 
 - `plan(planTask)`：`projects.get` 取项目；取不到时抛 `{ code: 'no-snapshot', retryable: true }`。然后 `pipeline.planForQueue(prepareProject(json))`，组出 PlanContext（附件第 2 节），`streams: []`。
 - `render(task)`：只接快照任务，共享档调 `renderCardSnapshotRange`，本地档调 `renderSceneSnapshotRange`；对不上时抛 `plan-mismatch`，不可重试。流任务一律抛 `{ code: 'stream-not-supported', retryable: false }`：M5b 的切分不产流任务，这里只是兜底。
-- `isIdle()`：附件第 5 节的判据。流在忙、后台让路中、有活的 preload 代际没到 `ready` / `error` / `cancelled`，任一成立就不闲。
+- `isIdle()`：附件第 5 节的判据。流在忙、后台让路中、有活的 preload 代际没到 `ready` / `error` / `cancelled`，任一成立就不闲。〔M6c 起删去：本机队列节点的闲时门槛改为 `queue-idle.mjs`（`m6c-contract.md` X5 与「集成时的裁定」），执行器只剩 `{ plan, render, forget }`。〕
 
 **`FramePipeline` 新增的方法**：
 - `planForQueue`；

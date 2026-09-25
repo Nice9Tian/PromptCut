@@ -193,7 +193,8 @@ async function executorFor(pipeline, { json = projectJson() } = {}) {
   const executor = createPrerenderExecutor({ pipeline, projects, prepareProject, log: (...a) => logs.push(a) });
   assert.equal(typeof executor?.plan, 'function', '执行器有 plan');
   assert.equal(typeof executor?.render, 'function', '执行器有 render');
-  assert.equal(typeof executor?.isIdle, 'function', '执行器有 isIdle');
+  // M6c 集成裁定:执行器不再有 isIdle(PC 节点的闲时门槛改为 queue-idle.mjs,m6c-contract「集成时的裁定」)
+  assert.equal(executor?.isIdle, undefined, '执行器不再有 isIdle');
   return { executor, projects, prepared, prepareProject, logs };
 }
 
@@ -316,34 +317,8 @@ test('J8 plan：取不到快照时抛 { code: no-snapshot, retryable: true }，�
   assert.equal(opened.length, openedBefore, '没开预渲染间');
 });
 
-test('J8 isIdle：新管线上闲；后台让路中不闲；有活的 preload 代际没到 ready / error / cancelled 就不闲', async (t) => {
-  t.after(cleanupRoots);
-  const B = newPipeline(await tmpRoot());
-  t.after(() => B.close());
-  const { executor } = await executorFor(B);
-  assert.equal(executor.isIdle(), true, '新管线：闲');
-
-  B.backgroundLeaseUntil = Date.now() + 60_000;
-  assert.equal(executor.isIdle(), false, '后台让路中：不闲');
-  B.backgroundLeaseUntil = 0;
-  assert.equal(executor.isIdle(), true);
-
-  const entry = await B.entry(projectJson());
-  const controller = new AbortController();
-  B.generations.set('session:page', { key: entry.key, controller, seenAt: Date.now() });
-  for (const status of ['queued', 'html', 'mov', 'video']) {
-    entry.status = status;
-    assert.equal(executor.isIdle(), false, `preload 代际在 ${status}：不闲`);
-  }
-  for (const status of ['ready', 'error', 'cancelled']) {
-    entry.status = status;
-    assert.equal(executor.isIdle(), true, `preload 代际已 ${status}：闲`);
-  }
-  entry.status = 'html';
-  controller.abort();
-  assert.equal(executor.isIdle(), true, '已经中止的代际不算活的');
-  B.generations.clear();
-});
+// J8(执行器的 isIdle)在 M6c 作废:执行器不再有 isIdle,本机队列节点的闲时门槛改为 `queue-idle.mjs`
+// (契约 m6c-contract X5 与「集成时的裁定」),判据由 `m6c-queue-impl.test.mjs` 的 X5-1～X5-3 覆盖。
 
 /* ================================================================== J9 */
 
@@ -482,7 +457,7 @@ test('J10 render（本地档）：这一段里已有的帧不渲，只渲缺的'
   assert.equal(seeded, '<p>seed 10</p>', '已有的帧不被覆盖');
 });
 
-test('J10 render：任务对不上计划时抛 plan-mismatch（不可重试），不渲染；流任务抛 stream-not-supported', { timeout: 30_000 }, async (t) => {
+test('J10 render：任务对不上计划时抛 plan-mismatch（不可重试），不渲染；没有轨道流生产者时流任务抛 no-streams（M6c X1 起不再抛 stream-not-supported）', { timeout: 30_000 }, async (t) => {
   t.after(cleanupRoots);
   const B = newPipeline(await tmpRoot());
   t.after(() => B.close());
@@ -516,7 +491,8 @@ test('J10 render：任务对不上计划时抛 plan-mismatch（不可重试）�
   });
   const serr = await rejectionOf(executor.render(stream, { signal: signalNone(), progress: () => {} }));
   assert.ok(serr, '流任务要失败');
-  assert.equal(serr.code, 'stream-not-supported');
+  // M6c X1：执行器接流任务；这条管线 interactive: false、没有轨道流生产者，所以回 no-streams（不可重试）
+  assert.equal(serr.code, 'no-streams');
   assert.equal(serr.retryable, false);
   assert.equal(bakeLog.length, mark, '对不上的任务一帧都不渲');
 });
