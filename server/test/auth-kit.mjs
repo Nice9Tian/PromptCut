@@ -446,40 +446,46 @@ export async function joinStatus(env, proj, opts) {
 // ------------------------------------------------------------------ 消息
 
 let reqSeq = 0;
-/** 发一条带 reqId 的消息，等同 reqId 的回包（或 types 里任一类型） */
-export async function ask(c, message, ms = 3000) {
+/**
+ * 发一条带 reqId 的消息，等同 reqId 的回包。
+ * 契约没写 `shared.*`、`auth.ticket` 的回包带不带 reqId（已有模块都带）：给了 `types` 时，
+ * 不带 reqId 且类型在 `types` 里（或是 `error`）的消息也算回包。
+ */
+export async function ask(c, message, types = null, ms = 3000) {
   const reqId = `au-${++reqSeq}`;
   c.send({ ...message, reqId });
-  return c.next((m) => m?.reqId === reqId, ms);
+  const list = types ? [].concat(types, 'error') : null;
+  return c.next((m) => m?.reqId === reqId || (list !== null && m?.reqId === undefined && list.includes(m?.type)), ms);
 }
 
-/** 发出后在 ms 内等回包，没有就回 null */
+/** 发出后在 ms 内等同 reqId 的回包，没有就回 null */
 export async function askOrNull(c, message, ms = 400) {
-  try { return await ask(c, message, ms); } catch { return null; }
+  try { return await ask(c, message, null, ms); } catch { return null; }
 }
 
 /** 成员列表 */
 export async function members(c) {
-  const r = await ask(c, { type: 'shared.members' });
+  const r = await ask(c, { type: 'shared.members' }, 'shared.members.list');
   assert.equal(r.type, 'shared.members.list', `shared.members 回包：${JSON.stringify(r)}`);
   return r.devices;
 }
 
 /** 创建者操作：同一连接取挑战、按创建者口令算证明、发 shared.admin */
 export async function adminOp(c, proj, op, fields = {}, { password = proj.creator.password, username = proj.creator.username, badProof = false, noProof = false } = {}) {
-  const ch = await ask(c, { type: 'shared.challenge' });
-  assert.equal(ch.type, 'shared.challenge.ok', `shared.challenge 回包：${JSON.stringify(ch)}`);
+  const ch = await ask(c, { type: 'shared.challenge' }, 'shared.challenge.ok');
+  // 取挑战被拒（冷却中、不是成员等）时把拒绝原样交回，由用例断言
+  if (ch.type !== 'shared.challenge.ok') return ch;
   const key = derive(password, ch.salt, ch.kdf ?? KDF);
   let m = adminMac(key, { projectId: proj.projectId, username, op, nonce: ch.nonce });
   if (badProof) m = b64u(randomBytes(32));
   const msg = { type: 'shared.admin', op, ...fields };
   if (!noProof) msg.proof = { nonce: ch.nonce, m };
-  return ask(c, msg);
+  return ask(c, msg, 'shared.admin.ok');
 }
 
 /** 要一张票据 */
 export async function ticketOf(c, body) {
-  const r = await ask(c, { type: 'auth.ticket', ...body });
+  const r = await ask(c, { type: 'auth.ticket', ...body }, 'auth.ticket.ok');
   assert.equal(r.type, 'auth.ticket.ok', `auth.ticket 回包：${JSON.stringify(r)}`);
   assert.equal(typeof r.ticket, 'string');
   return r;
