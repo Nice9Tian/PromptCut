@@ -1072,6 +1072,8 @@ export class StreamProducer {
     await this.store.save(manifest);
     this.stats.segments++;
     this.publish(state);
+    // C6.4 第 4 节的流钩子:这个分段所在的段进推送队列。只在管线配了推送队列时生效,没配时这一行什么都不做
+    if (this.pipeline.pushQueue) { try { this.pipeline.enqueueStreamPush?.(spec, segment); } catch {} }
     if (old && old.stride > 1 && stride === 1) {
       // 验收「稀疏分段 ≤ 满密度 1.0 倍」要的对照:同一段、稀疏与满密度各自的字节和矩形
       (this.stats.sparseVsDense ||= []).push({ stream: spec.streamKey.slice(0, 8), segment, sparse: old.bytes, dense: segments[0].length,
