@@ -81,11 +81,91 @@ export async function loadProjectModule() {
   return { projectModule: mod.projectModule, createMemoryStore: store.createMemoryStore, createFileStore: store.createFileStore };
 }
 
-/** A7 */
+/**
+ * A7。集成对账：实际的 `docsync.ts` 导出 `DocSync` 类，传输靠注入（`send` 出、`receive` 进、
+ * `connect` / `disconnect` 告诉它连接状态），不自己连网。这里用 Node 的全局 `WebSocket` 包一层，
+ * 做出假设 A7 的 `createDocSync(options)` 形状；只翻译接口，不改行为：
+ *   - `submit(d, { coalesce })` → `ds.commit(页面当前的项目, { mergeKey: coalesce })`（DocSync 自己再算一遍差异）；
+ *   - `undo()` / `redo()` 的 `skipped[].by` 是 `{ actor, session }`，摊平成 `{ ...actor, session }`（A5）；
+ *   - `saveWhenConfirmed(write)` → `ds.whenSettled()` 之后 `write(project, rev)`；
+ *   - `resolveOffline('replay' | 'discard')` → `ds.replayOffline()` / `ds.discardOffline()`；
+ *   - 状态变成 `paused` 时调 `onOfflineConflict(ds.pausedInfo)`；断线后每 50 ms 重连一次。
+ * `.ts` 里没写扩展名的相对 import 靠 `src/testing/registerTs.mjs` 的解析钩子（与 src 下的单测相同）。
+ */
 export async function loadDocSync() {
+  await import('../../src/testing/registerTs.mjs');
   const mod = await import('../../src/store/docsync.ts');
-  assert.equal(typeof mod.createDocSync, 'function', `docsync.ts 要导出 createDocSync；导出：${Object.keys(mod).join(', ')}`);
-  return mod.createDocSync;
+  if (typeof mod.createDocSync === 'function') return mod.createDocSync;
+  assert.equal(typeof mod.DocSync, 'function', `docsync.ts 要导出 createDocSync 或 DocSync；导出：${Object.keys(mod).join(', ')}`);
+  return (options) => docSyncOverWebSocket(mod.DocSync, options);
+}
+
+function docSyncOverWebSocket(DocSync, o) {
+  let ws = null;
+  let isOpen = false;
+  let closed = false;
+  let retry = null;
+  const ds = new DocSync(o.getProject?.() ?? {}, {
+    projectId: o.projectId,
+    session: o.session,
+    send: (msg) => { if (ws && isOpen) ws.send(JSON.stringify(msg)); },
+    now: o.now,
+    saveBackup: (b) => o.backup?.(b),
+  });
+  ds.on('project', (p) => o.setProject(p));
+  ds.on('status', (s) => { if (s === 'paused') o.onOfflineConflict?.(ds.pausedInfo); });
+
+  const dial = () => {
+    retry = null;
+    if (closed) return;
+    const sock = new WebSocket(o.url);
+    ws = sock;
+    let dropped = false;
+    const drop = () => {
+      if (dropped) return;
+      dropped = true;
+      if (ws === sock && isOpen) { isOpen = false; ds.disconnect(); }
+      if (ws === sock && !closed && !retry) retry = setTimeout(dial, 50);
+    };
+    sock.addEventListener('open', () => { if (ws !== sock || closed) return; isOpen = true; ds.connect(); });
+    sock.addEventListener('message', (e) => {
+      if (ws !== sock) return;
+      let msg;
+      try { msg = JSON.parse(e.data); } catch { return; }
+      ds.receive(msg);
+    });
+    sock.addEventListener('close', drop);
+    sock.addEventListener('error', drop);
+  };
+
+  const flatBy = (by) => (by && typeof by === 'object' ? { ...(by.actor && typeof by.actor === 'object' ? by.actor : {}), session: by.session ?? by.actor?.session } : by);
+  const undoResult = (r) => (r ? { ...r, skipped: r.skipped.map((s) => ({ ...s, by: flatBy(s.by) })) } : { done: false, skipped: [], failed: [] });
+
+  return {
+    ds,
+    open() { dial(); return Promise.resolve(); },
+    submit(_d, opts) { ds.commit(o.getProject(), { mergeKey: opts?.coalesce }); },
+    pendingCount: () => ds.unconfirmed,
+    get connected() { return isOpen; },
+    get rev() { return ds.rev; },
+    resolveOffline(choice) {
+      if (choice === 'replay') ds.replayOffline();
+      else if (choice === 'discard') ds.discardOffline();
+      else throw new Error(`不认识的选择：${choice}`);
+      return Promise.resolve();
+    },
+    undo: () => Promise.resolve(undoResult(ds.undo())),
+    redo: () => Promise.resolve(undoResult(ds.redo())),
+    canUndo: () => ds.canUndo(),
+    canRedo: () => ds.canRedo(),
+    saveWhenConfirmed: (write) => ds.whenSettled().then(({ project, rev }) => write(project, rev)),
+    close() {
+      closed = true;
+      if (retry) clearTimeout(retry);
+      if (ws) ws.close();
+      isOpen = false;
+    },
+  };
 }
 
 // ================================================================== 杂项
