@@ -520,3 +520,15 @@ test("V8-1000 个片段的项目:页面提交一侧(差异 + 本地落地)≤ 5 
   assert.ok(med <= 5, `提交一侧 ${med} ms`);
   assertSame(svc, A, B);
 });
+
+test("V5-项目设置(name、fps 等顶层字段)同归 /meta 一个实体:别人改了 fps,我撤不回 name", () => {
+  const { svc, A, B } = setupClips();
+  A.ds.commit({ ...A.ds.project, name: "A 的名字" });
+  svc.drain();
+  B.ds.commit({ ...B.ds.project, fps: 60 });
+  svc.drain();
+  const res = A.ds.undo();
+  assert.equal(res.done, false);
+  assert.deepEqual(res.skipped.map((s) => [s.entity, s.by.session]), [["/meta", "B"]]);
+  assertSame(svc, A, B);
+});
