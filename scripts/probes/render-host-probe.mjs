@@ -241,6 +241,9 @@ async function runCreator() {
       const before = await diagnostics();
       const publishedBefore = new Set((before.queue?.published ?? []).map((p) => p.planId));
       const appliedBefore = (before.queue?.stats?.applied ?? 0) + (before.queue?.stats?.applyErrors ?? 0);
+      // 诊断里的计数与本机节点的 id 列表跨轮累计:本轮只算差值(前几轮已完成的同键任务,重复发布时会再收到一次 task.done)
+      const doneBefore = { ...(before.queue?.doneCounts ?? {}) };
+      const localBefore = Object.fromEntries(['claimed', 'completed', 'dedup', 'failed'].map((k) => [k, new Set(before.queue?.local?.[k] ?? [])]));
       const projectJson = probeProject(`${round.name}-${stamp}`);
       const session = `rhp-${round.name}-${stamp}`;
       const pre = await preloadProject(started, session, projectJson, `creator:${round.name}`);
@@ -260,18 +263,22 @@ async function runCreator() {
         return (s.applied ?? 0) + (s.applyErrors ?? 0) - appliedBefore >= settled.derived.length || null;
       }, 120_000, 1000);
       const q = (await diagnostics()).queue;
-      const inRound = (ids) => (ids ?? []).filter((id) => settled.derived.includes(id));
+      const inRound = (ids, kind) => (ids ?? []).filter((id) => settled.derived.includes(id) && !localBefore[kind].has(id));
       Object.assign(r, {
         planId: settled.planId, derived: settled.derived, tasks: settled.derived.length,
         done: settled.states.filter((s) => s === 'done').length,
         failed: settled.derived.filter((id, i) => settled.states[i] === 'failed').map((id) => ({ id, error: q.tasks?.[id]?.error ?? null })),
-        doneCounts: Object.fromEntries(settled.derived.map((id) => [id, q.doneCounts?.[id] ?? 0])),
-        planDoneCount: q.doneCounts?.[settled.planId] ?? 0,
-        pc: { nodeId: q.local?.nodeId, claimed: inRound(q.local?.claimed), completed: inRound(q.local?.completed), dedup: inRound(q.local?.dedup), failed: inRound(q.local?.failed), planClaimed: (q.local?.claimed ?? []).includes(settled.planId) },
+        doneCounts: Object.fromEntries(settled.derived.map((id) => [id, (q.doneCounts?.[id] ?? 0) - (doneBefore[id] ?? 0)])),
+        reused: settled.derived.filter((id) => (doneBefore[id] ?? 0) > 0),
+        planDoneCount: (q.doneCounts?.[settled.planId] ?? 0) - (doneBefore[settled.planId] ?? 0),
+        pc: { nodeId: q.local?.nodeId, claimed: inRound(q.local?.claimed, 'claimed'), completed: inRound(q.local?.completed, 'completed'), dedup: inRound(q.local?.dedup, 'dedup'),
+          failed: inRound(q.local?.failed, 'failed'), planClaimed: (q.local?.claimed ?? []).includes(settled.planId) && !localBefore.claimed.has(settled.planId) },
         stats: q.stats, project: projectJson, library: path.join(dir, 'frame-library'),
       });
       check(r.failed.length === 0, `[creator] ${round.name} 没有细任务失败`, r.failed);
       await writeJson(path.join(STATE, `round-${round.name}.json`), r);
+      out.rounds[out.rounds.length - 1] = { round: r.round, hosts: r.hosts, planId: r.planId, tasks: r.tasks, done: r.done, failed: r.failed.length,
+        doneCounts: Object.values(r.doneCounts), reused: r.reused.length, pcCompleted: r.pc.completed.length, pcDedup: r.pc.dedup.length, pcPlanClaimed: r.pc.planClaimed, preloadMs: r.preloadMs };
     }
     await writeJson(path.join(STATE, 'state.json'), { ...(await readJson(path.join(STATE, 'state.json'))), phase: 'holding' });
     const deadline = Date.now() + holdMs;
@@ -401,6 +408,15 @@ const topDirs = async (library) => {
   }
   return out;
 };
+/** style 属性里同名声明出现不止一次的个数:没有同名声明时,声明的先后不影响层叠结果,也就不影响像素 */
+const duplicateStyleProps = (html) => {
+  let n = 0;
+  for (const m of html.matchAll(/style="([^"]*)"/g)) {
+    const names = m[1].split(';').map((x) => x.split(':')[0].trim().toLowerCase()).filter(Boolean);
+    if (new Set(names).size !== names.length) n++;
+  }
+  return n;
+};
 const sortStyles = (html) => html.replace(/style="([^"]*)"/g, (_, s) => 'style="' + s.split(';').map((x) => x.trim()).filter(Boolean).sort().join(';') + '"');
 
 async function runCheck() {
@@ -432,7 +448,9 @@ async function runCheck() {
     check(out.done === out.tasks, '细任务全部 done', { tasks: out.tasks, done: out.done });
     check(out.duplicateDone === 0, 'duplicateDone = 0', r.doneCounts);
     check(out.missingDone === 0, '每个细任务都收到了 task.done', r.doneCounts);
-    check(out.sumCompleted === out.tasks, '各节点完成数之和 = 任务数', { byNode, tasks: out.tasks });
+    // 前几轮已经完成的同键任务(重复发布直接回 task.done,本轮没有节点做它)不计入
+    out.reused = (r.reused ?? []).length;
+    check(out.sumCompleted === out.tasks - out.reused, '各节点完成数之和 = 任务数(减去前几轮已完成的同键任务)', { byNode, tasks: out.tasks, reused: out.reused });
     check(r.pc.planClaimed === true, 'plan 由发布方自己的 PC 节点认领');
 
     // 单机重渲:普通模式、空帧库,同一份项目
@@ -448,19 +466,26 @@ async function runCheck() {
     const b = await snapshotTree(r.library, dirs);
     const differences = [];
     let styleOrderOnly = 0;
+    let styleWithDuplicates = 0;
     for (const rel of [...new Set([...a.keys(), ...b.keys()])].sort()) {
       const x = a.get(rel), y = b.get(rel);
       if (x && y && x.equals(y)) continue;
       const orderOnly = !!(x && y && rel.endsWith('.html') && sortStyles(x.toString('utf8')) === sortStyles(y.toString('utf8')));
-      if (orderOnly) { styleOrderOnly++; continue; }
+      if (orderOnly) {
+        styleOrderOnly++;
+        if (duplicateStyleProps(x.toString('utf8')) || duplicateStyleProps(y.toString('utf8'))) styleWithDuplicates++;
+        continue;
+      }
       differences.push({ file: rel, reason: !x ? 'only-in-creator' : !y ? 'only-in-single' : 'bytes' });
     }
     out.compared = { dirs: dirs.length, singleFiles: a.size, creatorFiles: b.size, htmlFiles: [...a.keys()].filter((k) => k.endsWith('.html')).length };
     out.styleOrderOnly = styleOrderOnly;
+    out.styleOrderWithDuplicateProps = styleWithDuplicates;
     out.differentFrames = differences.length;
     out.differences = differences.slice(0, 20);
     out.identicalBytes = differences.length === 0 && styleOrderOnly === 0;
-    out.identical = differences.length === 0;
+    // 只差声明先后、且没有同名声明的帧,层叠结果相同 → 像素相同
+    out.identical = differences.length === 0 && styleWithDuplicates === 0;
     check(out.compared.htmlFiles > 0, '单机重渲的帧库里有快照', out.compared);
     check(out.identical, '与单机重渲逐帧相同(忽略 style 声明先后)', out.differences);
   } catch (error) {
