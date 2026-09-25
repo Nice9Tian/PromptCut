@@ -8,13 +8,17 @@
  *
  *   plan(planTask)   按 `source.projectId@projectRev` 从文档服务取项目快照(`projects.get`,取不到抛
  *                    `no-snapshot`,可重试),`prepareProject` 之后交给 `pipeline.planForQueue`,回 PlanContext
- *                    (`streams` 为空:M5b 的流不走队列,J.0)。结果按版本缓存(LRU 约 4 条),`render` 复用。
- *   render(task)     只接快照任务:共享档 `renderCardSnapshotRange`,本地档 `renderSceneSnapshotRange`。
+ *                    (`streams`:本机能产轨道流时是这一版的全部流,否则为空 —— M6c X1)。结果按版本缓存
+ *                    (LRU 约 4 条),`render` 复用。
+ *   render(task)     快照任务:共享档 `renderCardSnapshotRange`,本地档 `renderSceneSnapshotRange`。
  *                    先把任务对回这一版的 control(附件第 3 节「把任务对回 control」),任何一项对不上抛
- *                    `plan-mismatch`(不可重试)。流任务一律抛 `stream-not-supported`(不可重试)。回 `null`:
- *                    产物在帧库里,sink 自己读。
- *   isIdle()         流在忙、后台让路中(播放 / 拖动)、有活的 preload 代际没到 ready / error / cancelled,
- *                    任一成立就不闲(J.4)。
+ *                    `plan-mismatch`(不可重试)。
+ *                    流任务(M6c X1):对回这一版的流(内容键、结果键、分段范围),交给 `renderStreamRange` 按段产出;
+ *                    对不上同样抛 `plan-mismatch`;本机不能产流(开关关着、没有编码器)抛 `no-streams`(不可重试)。
+ *                    回 `null`:产物在帧库 / 流库里,sink 自己读(`collectSnapshotResult` / `collectStreamResult`)。
+ *
+ * M6c 起执行器不再有 `isIdle()`(J.4 原有):PC 节点的闲时门槛改为 `queue-idle.mjs`(X5),独立渲染主机本来就
+ * 只看全局并发闸,这个判据已经没人用(集成裁定,`docs/plan/m6c-contract.md`「集成时的裁定」)。
  */
 import { resultKeyOf } from './render-node/fingerprint.mjs';
 import { snapshotTier } from './snapshot-tier.mjs';
@@ -23,9 +27,6 @@ import { snapshotTier } from './snapshot-tier.mjs';
 export const PLAN_CACHE_SIZE = 4;
 
 const fail = (code, message, retryable) => Object.assign(new Error(message), { code, retryable });
-
-/** preload 代际的这几种状态算「落定」,其余(queued / html / mov / video / partial)都算还在跑 */
-const SETTLED = new Set(['ready', 'error', 'cancelled']);
 
 /**
  * @param {object} options
@@ -110,8 +111,43 @@ export function createPrerenderExecutor({ pipeline, projects, prepareProject = p
     return control;
   }
 
+  /**
+   * M6c X1:把流任务对回这一版的流。流按内容键认(`input.contentKey`,即 `planStreams` 的 `contentKey`);
+   * 结果键必须是本机指纹乘出来的(节点侧过滤已经按指纹挡过,这里再核一次);分段范围在这条流之内。
+   */
+  function matchStream(task, specs) {
+    const input = task.input ?? {};
+    const spec = (specs ?? []).find(item => item?.contentKey === input.contentKey) ?? null;
+    const why = [];
+    if (!spec) why.push(`这一版没有内容键为 ${String(input.contentKey).slice(0, 16)}… 的流`);
+    else {
+      const own = pipeline.envFingerprint;
+      const from = task.range?.from, to = task.range?.to;
+      if (!own) why.push('本机还没有环境指纹');
+      else if (task.resultKey !== resultKeyOf(spec.contentKey, own)) why.push('结果键不是本机指纹的键');
+      if (!Number.isInteger(from) || !Number.isInteger(to) || from < spec.firstSegment || to < from || to > spec.lastSegment) {
+        why.push(`分段范围 ${JSON.stringify(task.range)} 超出 ${spec.firstSegment}..${spec.lastSegment}`);
+      }
+    }
+    if (why.length) throw fail('plan-mismatch', `任务 ${task.id} 对不上这一版的流:${why.join(';')}`, false);
+    return spec;
+  }
+
+  async function renderStream(task, { signal, progress }) {
+    if (typeof pipeline.streamCapable === 'function' && !(await pipeline.streamCapable())) {
+      throw fail('no-streams', '本机不能产轨道流(PROMPTCUT_STREAMS=0 或没有能用的 H.264 编码器)', false);
+    }
+    const { entry, streamSpecs } = await contextFor(task, signal);
+    const spec = matchStream(task, streamSpecs);
+    const range = { from: task.range.from, to: task.range.to };
+    const started = Date.now();
+    await pipeline.renderStreamRange(entry, spec, range, { signal, progress });
+    say('executor.render', { id: task.id, kind: 'stream', streamKey: spec.streamKey.slice(0, 12), ms: Date.now() - started });
+    return null;
+  }
+
   async function render(task, { signal, progress } = {}) {
-    if (task?.kind === 'stream') throw fail('stream-not-supported', 'M5b 的流不走队列', false);
+    if (task?.kind === 'stream') return renderStream(task, { signal, progress });
     if (task?.kind !== 'snapshot') throw fail('bad-task', `不认识的任务 kind:${task?.kind}`, false);
     const { entry } = await contextFor(task, signal);
     const control = matchControl(task, entry);
@@ -123,20 +159,5 @@ export function createPrerenderExecutor({ pipeline, projects, prepareProject = p
     return null;
   }
 
-  function isIdle(now = Date.now()) {
-    if (pipeline.closed) return false;
-    const streams = pipeline._streams;
-    if (streams && ((streams.workers?.size ?? 0) > 0 || (streams.encoding?.size ?? 0) > 0)) return false;
-    // 让路:后台让路租约在期 / 正在让路 / 在播,以及页面报的播放头在播或刚拖过(`streamBusy`,轨道流用的同一个判据)
-    if (pipeline.backgroundYielding || pipeline.backgroundLeaseUntil > now || pipeline.playback?.playing) return false;
-    if (typeof pipeline.streamBusy === 'function' && pipeline.streamBusy(now)) return false;
-    for (const generation of pipeline.generations?.values?.() ?? []) {
-      if (generation?.controller?.signal?.aborted) continue;
-      const status = pipeline.entries.get(generation.key)?.status;
-      if (!SETTLED.has(status)) return false;
-    }
-    return true;
-  }
-
-  return { plan, render, isIdle, forget: () => cache.clear() };
+  return { plan, render, forget: () => cache.clear() };
 }

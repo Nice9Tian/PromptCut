@@ -30,7 +30,7 @@
 2. **建 entry**：`entry = await this.entry(project)`。键是 `frameIdentity(项目 + 素材戳, frameCode(root))`，JSON 相同时与 preload 得到的键相同。
 3. **在新的 `'queue'` lane 上算卡片计划**：
    - `runQueueTask(work, signal)`，照 `runAgentTask` 写，链进 `laneChains`，`closeNow` 会等它；
-   - `acquire('queue', project)`；`scaleForLane` 让 `'queue'` 用后台的缩放；播放让路的判断也覆盖 `'queue'`；
+   - `acquire('queue', project)`；`scaleForLane` 让 `'queue'` 用后台的缩放；播放让路的判断也覆盖 `'queue'`〔M6c 集成时改：`'queue'` 不再在 `acquire` 里让路，认领在手的任务做完为止，见 `m6c-contract.md`「集成时的裁定」〕；
    - 然后 `browserPlan = await this.browserCardPlan(bakery)`。
 4. **记卡片计划**：`ensureCardLocks()`；`entry.cardPlan` 还不是数组时，调 `recordCardPlan(entry, entry.cardCache.plan(browserPlan))`。不调 `adoptCardPlan`，它会去认领会话。
 5. **补 `cardId`**：`split.mjs` 要 `control.cardId`，卡片计划里的 control 只有 `nodeId`，所以从 `browserPlan.graph.nodes[].cardId` 补上。

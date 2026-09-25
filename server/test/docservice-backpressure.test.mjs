@@ -505,7 +505,8 @@ test('I4 独立主机 mode: summary：20 个项目持续变化，每次 tick 至
   const got2 = [];
   const host2 = mk((m) => got2.push(m));
   await host2.opened;
-  await nodeHello(host2, 'host-2', 'host');
+  // M6c X3：host 的全量 'all' 只收摘要，「切回全量收增量」这一段改用 pc 节点验证模块的切换（原为 host）
+  await nodeHello(host2, 'host-2', 'pc');
   assert.equal((await host2.request({ type: 'queue.watch', projects: 'all', mode: 'summary' })).type, 'queue.summary');
   const snap = await host2.request({ type: 'queue.watch', projects: 'all', mode: 'full' });
   assert.equal(snap.type, 'queue.snapshot', "mode: 'full' 照旧交给队列");
