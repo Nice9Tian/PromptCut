@@ -10,7 +10,7 @@ export const aiTools = [
       },
       required: ["mediaId"]
     },
-    side: "browser"
+    side: "page"
   },
   {
     name: "list_shots",
@@ -22,7 +22,7 @@ export const aiTools = [
       },
       required: ["mediaId"]
     },
-    side: "browser"
+    side: "page"
   },
   {
     name: "track_points",
@@ -40,7 +40,7 @@ export const aiTools = [
       },
       required: ["mediaId", "points"]
     },
-    side: "browser"
+    side: "page"
   },
   {
     name: "get_track",
@@ -53,19 +53,19 @@ export const aiTools = [
       },
       required: ["mediaId"]
     },
-    side: "browser"
+    side: "page"
   },
   {
     name: "track_status",
     description: "查运动追踪能跑到哪一档，追之前先看一眼。engine 为 bootstapir 表示已装拓展（准、慢、能扛遮挡和形变）；template 表示没装拓展、走 numpy 的模板匹配兜底（快，刚体清晰纹理能追得很准，但目标转向、缩放或长时间被挡就会跟丢）；null 表示两档都用不了（通常是找不到 Python）。用户想要更稳的结果时用 track_install 装拓展。",
     inputSchema: { type: "object", properties: {} },
-    side: "browser"
+    side: "page"
   },
   {
     name: "track_install",
     description: "安装运动追踪拓展（BootsTAPIR，torch + 权重约 400 MB，要几分钟）。装完追踪会自动从模板匹配兜底切到神经网络档。由于耗时远超调用超时，立即返回 jobId；用 background_job_status 查该 jobId，或用 track_status 看 engine 有没有变成 bootstapir。**不要重复启动**。只在用户明确要更好的追踪效果时才装——兜底档对刚体目标已经够用，别为了追一个纹理清晰的静物就让用户下 400 MB。",
     inputSchema: { type: "object", properties: {} },
-    side: "browser"
+    side: "page"
   },
   {
     name: "detect_subjects",
@@ -84,7 +84,7 @@ export const aiTools = [
       },
       required: ["mediaId"]
     },
-    side: "browser"
+    side: "page"
   },
   {
     name: "list_subjects",
@@ -96,19 +96,19 @@ export const aiTools = [
       },
       required: ["mediaId"]
     },
-    side: "browser"
+    side: "page"
   },
   {
     name: "subject_status",
     description: "查主体检测能跑到哪一档，检测之前先看一眼。engine 为 full 表示装了完整拓展（YuNet 人脸 + RT-DETR 人体 + Grounding DINO 开放词汇，prompt 生效，能找任意名词）；light 表示只装了轻档（YuNet + RT-DETR，只认 person 和 face，prompt 不生效）；null 表示**两档都用不了，没有兜底档**——此时不要假装检测过，位置和遮挡的判断退回 see_frames 看真实画面。用户想要就用 subject_install 装 light 档（约 30 MB）。",
     inputSchema: { type: "object", properties: {} },
-    side: "browser"
+    side: "page"
   },
   {
     name: "subject_install",
     description: "安装主体检测的 light 档（onnxruntime，约 30 MB，一分钟上下）。装完 subject_status 的 engine 会变成 light，就能认 person 和 face 了。耗时可能超过调用超时，所以立即返回 jobId；用 background_job_status 查该 jobId，或用 subject_status 看 engine 有没有变。**不要重复启动**。注意两点：依赖装完还可能缺权重文件（yunet.onnx / rtdetr_r18vd.onnx），那要用户跑拓展库包的 .exe 才有，返回里会说；full 档（Grounding DINO，690 MB）不走在线装，只随拓展库包发，本工具装不了。",
     inputSchema: { type: "object", properties: {} },
-    side: "browser"
+    side: "page"
   },
   {
     name: "attach_clip_motion",
@@ -123,7 +123,7 @@ export const aiTools = [
       },
       required: ["clipId", "mediaId"]
     },
-    side: "browser"
+    side: "page"
   },
   {
     name: "detach_clip_motion",
@@ -133,13 +133,13 @@ export const aiTools = [
       properties: { clipId: { type: "string" } },
       required: ["clipId"]
     },
-    side: "browser"
+    side: "agent"
   },
   {
     name: "stt_status",
     description: "查询语音识别环境状态:Python 版本、各引擎(faster-whisper / whisper)是否已安装、CUDA 是否可用、已下载的模型列表。转写前或安装引擎前先调用此工具了解当前环境。",
     inputSchema: { type: "object", properties: {} },
-    side: "browser"
+    side: "page"
   },
   {
     name: "stt_install",
@@ -151,7 +151,7 @@ export const aiTools = [
       },
       required: ["engine"]
     },
-    side: "browser"
+    side: "page"
   },
   {
     name: "transcribe_media",
@@ -166,7 +166,7 @@ export const aiTools = [
       },
       required: ["mediaId"]
     },
-    side: "browser"
+    side: "page"
   },
   {
     name: "get_transcript",
@@ -178,7 +178,7 @@ export const aiTools = [
       },
       required: ["mediaId"]
     },
-    side: "browser"
+    side: "agent"
   },
   {
     name: "fill_captions",
@@ -191,7 +191,7 @@ export const aiTools = [
         showEn: { type: "boolean", description: "是否显示英文行，默认 false" }
       }
     },
-    side: "browser"
+    side: "agent"
   },
   {
     name: "list_captions",
@@ -202,7 +202,7 @@ export const aiTools = [
         clipId: { type: "string", description: "字幕卡的 clipId；时间轴上有多张时必须指明" }
       }
     },
-    side: "browser"
+    side: "agent"
   },
   {
     name: "edit_caption",
@@ -219,6 +219,6 @@ export const aiTools = [
         end: { type: "number", description: "止点秒（相对字幕卡起点）" }
       }
     },
-    side: "browser"
+    side: "agent"
   }
 ];

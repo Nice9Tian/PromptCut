@@ -1,4 +1,12 @@
 // Facade for backward compatibility
+//
+// 每个工具的 `side`(C6.5 D1,`docs/plan/c65-design.md` 第 5 节;逐条的理由见 docs/reports/AGENT-c65-agent.md):
+//   - "agent":在 Agent 服务端(编辑器 vite 进程)执行。有项目副本(页面接上了文档服务,见 server/agent/)时,
+//              在副本上跑 src/mcp/handlers,算出操作以 Agent 对话的身份、带期望版本提交给文档服务;
+//              没有副本(页面还没接文档服务、无头实例停用了文档服务)时照旧经页面执行。
+//   - "page": 只在页面执行:只读页面独有状态(选区、播放头、面板界面、页面里的作业表),或要用浏览器能力、
+//              在后台作业完成时才写项目,搬到服务端会丢状态或写不进同一次提交。
+//   - "server":在服务端就地执行,不碰项目(wait、report_progress)。
 import { projectTools } from "./tools/project.mjs";
 import { clipsTools } from "./tools/clips.mjs";
 import { layoutTools } from "./tools/layout.mjs";

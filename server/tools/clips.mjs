@@ -13,7 +13,7 @@ export const clipsTools = [
       },
       required: ["cardId", "start"]
     },
-    side: "browser"
+    side: "agent"
   },
   {
     name: "update_clip",
@@ -34,7 +34,7 @@ export const clipsTools = [
       },
       required: ["clipId"]
     },
-    side: "browser"
+    side: "agent"
   },
   {
     name: "remove_clip",
@@ -48,7 +48,7 @@ export const clipsTools = [
       },
       required: ["clipId"]
     },
-    side: "browser"
+    side: "agent"
   },
   {
     name: "duplicate_clip",
@@ -58,7 +58,7 @@ export const clipsTools = [
       properties: { clipId: { type: "string" } },
       required: ["clipId"]
     },
-    side: "browser"
+    side: "agent"
   },
   {
     name: "split_clip",
@@ -71,7 +71,7 @@ export const clipsTools = [
       },
       required: ["clipId", "t"]
     },
-    side: "browser"
+    side: "agent"
   },
   {
     name: "get_clip",
@@ -81,7 +81,7 @@ export const clipsTools = [
       properties: { clipId: { type: "string" } },
       required: ["clipId"]
     },
-    side: "browser"
+    side: "agent"
   },
   {
     name: "set_clip",
@@ -94,7 +94,7 @@ export const clipsTools = [
       },
       required: ["clipId", "envelope"]
     },
-    side: "browser"
+    side: "agent"
   },
   {
     name: "set_emphasis",
@@ -112,6 +112,6 @@ export const clipsTools = [
       },
       required: ["clipId", "kind"]
     },
-    side: "browser"
+    side: "agent"
   }
 ];

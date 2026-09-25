@@ -98,7 +98,7 @@ test("音频效果库:建、挂、改、删,门槛、撤销、跨剪辑清理、
 
 test("音频效果工具的声明:必填项", () => {
   const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
-  for (const n of ["list_audio_fx", "create_audio_fx", "update_audio_fx", "remove_audio_fx", "apply_audio_fx", "measure_audio"]) assert.equal(byName[n]?.side, "browser", n);
+  for (const n of ["list_audio_fx", "create_audio_fx", "update_audio_fx", "remove_audio_fx", "apply_audio_fx", "measure_audio"]) assert.equal(byName[n]?.side, "agent", n);
   assert.deepEqual(byName.create_audio_fx.inputSchema.required, ["name", "ops"]);
   assert.deepEqual(byName.apply_audio_fx.inputSchema.required, ["clipId", "fxId"]);
   assert.equal(byName.create_audio_fx.inputSchema.properties.ops.items.properties.kind.enum.length, 11);

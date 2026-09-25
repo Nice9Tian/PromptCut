@@ -15,6 +15,8 @@
  *
  * 本机声明的角色项可以写 `promptcut.role.agent.<对话号>`，把对话号一起带上（契约只写了 `promptcut.role.<角色>`，
  * 而 `agent` 连接必须有对话号，这是本实现的补充）。
+ * 回环来源只带 `promptcut.role.agent.<对话号>`（不带本机声明）：本机 `local` 空间里的 Agent 连接，
+ * 得到 `{ ...本机身份, role: 'agent', conversation: 对话号 }`（C6.5 第 5 节；`c65-agent` 补）。
  */
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import {
@@ -135,7 +137,16 @@ export function createHandshakeAuth({
 
     if (kinds.length > 1) return reject('multiple');
     if (kinds.length === 0) {
-      if (roleItems.length > 0) return reject('bad-format');
+      if (roleItems.length > 0) {
+        // 本机 `local` 空间的 Agent 连接（C6.5 第 5 节）：回环来源只带 `promptcut.role.agent.<对话号>`，
+        // 得到本机身份加 agent 角色与对话号，写入身份据此记成「哪个 Agent 的哪个对话」。别的角色项不单独认
+        if (!loopback) return reject('bad-format');
+        if (roleItems.length > 1) return reject('multiple');
+        if (!offered.includes(PROTOCOL)) return reject('bad-format');
+        const m = /^agent\.([1-9][0-9]{0,14})$/.exec(roleItems[0].slice(ROLE_PREFIX.length));
+        if (!m) return reject('bad-format');
+        return { ...LOCAL_PRINCIPAL, role: 'agent', conversation: Number(m[1]) };
+      }
       return loopback ? { ...LOCAL_PRINCIPAL } : reject('no-credential');
     }
     if (!offered.includes(PROTOCOL)) return reject('bad-format');

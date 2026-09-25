@@ -86,7 +86,7 @@ test("滤镜库:建、挂、改、删,门槛、撤销、跨剪辑清理", async 
 
 test("滤镜工具的声明:必填项", () => {
   const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
-  for (const n of ["list_filters", "create_filter", "update_filter", "remove_filter", "apply_filter"]) assert.equal(byName[n]?.side, "browser", n);
+  for (const n of ["list_filters", "create_filter", "update_filter", "remove_filter", "apply_filter"]) assert.equal(byName[n]?.side, "agent", n);
   assert.deepEqual(byName.create_filter.inputSchema.required, ["name", "ops"]);
   assert.deepEqual(byName.apply_filter.inputSchema.required, ["clipId", "filterId"]);
   // 八种带数值的 + curves / matrix 两种查表类;后两种不写 value,所以 ops 每项只必填 kind
