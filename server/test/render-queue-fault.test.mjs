@@ -10,7 +10,7 @@
  * `describe()` 与前两者一致。只经契约 A.3 的公开接口驱动；常量用基线值，时钟用假时钟，`tick()` 手动调。
  *
  * 公共布置（`setup`）：发布方 P（连接 p，身份 pub-1，用户 u1）发布任务 T；
- * 节点 A、B、C（连接 a、b、c，profile pc）和只看不做的 W（连接 w，profile host）都 `queue.watch('all')`。
+ * 节点 A、B、C（连接 a、b、c，profile pc）和只看不做的 W（连接 w，profile pc；M6c X3 之前是 host）都 `queue.watch('all')`。
  * T 新建时 version = 1；A 以 expectVersion 1 认领后 version = token = 2（契约 A.7.2 第 5 步）。
  */
 import test from 'node:test';
@@ -35,7 +35,7 @@ function setup({ tasks = [T_IN], ...options } = {}) {
   h.node('a', 'node-A');
   h.node('b', 'node-B');
   h.node('c', 'node-C');
-  h.node('w', 'node-W', { profile: 'host' });
+  h.node('w', 'node-W', { profile: 'pc' });   // M6c X3：host 的 watch 'all' 只收摘要，只看不做的 W 改用 pc（原为 host）
   const out = h.publish('p', tasks);
   for (const r of out.one('p', 'task.published').results) assert.equal(r.created, true, '布置：任务应新建');
   h.bus.clear();

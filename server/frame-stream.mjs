@@ -62,6 +62,8 @@ export const LOCAL_OVERFLOW_PX = 32;
 export const MEASURE_PAD_PX = 8;
 /** 收紧后的面积超过上界的这个比例就不收紧(白换一个变体没有收益) */
 export const TIGHTEN_MIN_SAVING = 0.15;
+/** X1:队列的流任务里,一个分段最多连着产几次(失败或被中途作废)才放弃这个任务(可重试) */
+export const QUEUE_SEGMENT_ATTEMPTS = 3;
 
 /** `streams` 开关(任务书:默认开;`PROMPTCUT_STREAMS=0` 关) */
 export function streamsEnabled(env = process.env) {
@@ -724,6 +726,134 @@ export class StreamProducer {
     return encoder;
   }
 
+  /* ---------------------------------------------------------------------- *
+   * X1:轨道流走队列(`docs/plan/m6c-contract.md` X1)
+   *
+   * 队列模式下,流的分段由渲染任务队列的细任务产(`kind: 'stream'`,每任务 `STREAM_SEGMENTS` 个分段):
+   * 认领到任务的节点经执行器调 `produceRange`,在这里按段产出满密度分段、落盘、发层。本机的自动生产
+   * (`runWorker`)跳过归队列的流(`queueOwned`),否则所有任务都会走去重。
+   *
+   * 编码器只进分段签名与清单(`segmentSignature`、`inits[].encoder`),不进流键:流键 = 内容键 × 环境指纹
+   * (`planStreams`),所以不同编码器的节点产的是同一个键下的分段,取用方照清单收(`adoptSegments`)。
+   * ---------------------------------------------------------------------- */
+
+  /**
+   * 本机能不能产轨道流(`node.hello` 的 `capabilities.streams`):开关关着(`PROMPTCUT_STREAMS=0`)回 false;
+   * 开着就探一次编码器(与 `runWorker` 同一个 `encoder()`,一次进程只探一次),探不到回 false,
+   * 并照 `runWorker` 的做法把生产者关掉。
+   */
+  async capable() {
+    if (!this.enabled || this.closed) return false;
+    try {
+      await this.encoder();
+      return true;
+    } catch (error) {
+      this.enabled = false;
+      this.note(`没有能用的 H.264 编码器,轨道流关闭:${error?.message || error}`);
+      return false;
+    }
+  }
+
+  /**
+   * 这条流归不归队列产:只为队列任务建的(`queueOnly`),或它所属的 entry 在队列模式(`queueSnapshots`,
+   * 队列模式的 `/preload` 设,连不上文档服务时 `leaveQueueMode` 清掉 —— 这里现读,清掉后自动生产立即接手)。
+   */
+  queueOwned(state) {
+    if (state?.queueOnly === true) return true;
+    const key = state?.entryKey ?? this.entryKey;
+    const entry = key ? this.pipeline.entries?.get?.(key) : null;
+    // 集成裁定(m6c-contract「集成时的裁定」X1 空档):切这一版 plan 的节点没切出流任务(它关着流),
+    // `FramePipeline.releaseQueueStreams` 把这一版的流交还本机自动生产,快照照旧走队列
+    return entry?.queueSnapshots === true && entry.queueStreamsLocal !== true;
+  }
+
+  /**
+   * 队列任务要产的这条流在生产者里的 state:手里有(自动生产那边的,或别的任务建的)就用它 —— 一个流键只能有
+   * 一个 state,否则两份内存里的清单会互相覆盖 `stream.json`;没有(独立渲染主机、还没 preload 到这一版、
+   * 或只是拉来的 `adoptedOnly`)就按 `spec` 建一个 `queueOnly` 的:有隔离工程、能发层,但自动生产不碰它。
+   */
+  async queueState(entry, spec) {
+    const usable = state => state && !state.adoptedOnly;
+    let state = this.streams.get(spec.streamKey);
+    if (!usable(state)) {
+      const manifest = state?.manifest ?? (await this.store.load(spec.streamKey)) ?? this.freshManifest(spec);
+      state = this.streams.get(spec.streamKey);
+      if (!usable(state)) {
+        const base = state ?? { reserved: new Set(), failures: new Map(), measured: null, measuredSegments: new Set() };
+        delete base.adoptedOnly;
+        base.queueOnly = true;
+        base.spec = spec;
+        base.manifest = base.manifest ?? manifest;
+        base.aliases ||= new Set();
+        base.generation = this.generation;
+        base.entryKey = entry.key;
+        state = base;
+        this.streams.set(spec.streamKey, state);
+      }
+    }
+    state.isolated ||= isolatedStreamProject(entry.project, spec);
+    return state;
+  }
+
+  /**
+   * 队列的流任务:按段产出 `[from, to]` 这几个分段(满密度,`stride = 1`),每段等编码收尾、落盘、发层
+   * (`storeSegment`,C6.4 的推送钩子照常)之后才算完。已经是满密度而且不旧的分段跳过;自动生产那边正在做的
+   * (`reserved`)等它做完。一个分段连续 `QUEUE_SEGMENT_ATTEMPTS` 次没产成抛可重试的错误。
+   * 预渲染间与自动生产共用 `leaseStreamBakery` 的池,整段只借一次:相邻分段接着租约推,不重灌工程。
+   * `progress(done)`:这一段里已经就绪的帧数(分段数 × 15,末段按实际帧数)。回 `{ produced, skipped }`。
+   */
+  async produceRange(entry, spec, range, { signal, progress } = {}) {
+    const cancelled = () => Object.assign(new Error('Queue task cancelled'), { cancelled: true });
+    if (!this.enabled || this.closed) throw Object.assign(new Error('本机的轨道流关着'), { code: 'streams-disabled', retryable: false });
+    if (!this.routeAttached) throw Object.assign(new Error('轨道流的分段读口还没接上'), { code: 'streams-not-ready', retryable: true });
+    if (!(await this.capable())) throw Object.assign(new Error('本机没有能用的 H.264 编码器'), { code: 'no-stream-encoder', retryable: false });
+    const from = Math.max(range.from, spec.firstSegment), to = Math.min(range.to, spec.lastSegment);
+    const state = await this.queueState(entry, spec);
+    state.queueHolds = (state.queueHolds ?? 0) + 1;
+    let bakery = null, produced = 0, skipped = 0, frames = 0;
+    const report = () => { try { progress?.(frames); } catch { /* 进度回调出错不影响生产 */ } };
+    try {
+      for (let n = from; n <= to; n++) {
+        let attempts = 0, made = false;
+        while (this.segmentState(state, n) !== 'dense') {
+          if (signal?.aborted || this.closed) throw cancelled();
+          if (state.reserved.has(n)) { await sleep(50); continue; }
+          if (attempts++ >= QUEUE_SEGMENT_ATTEMPTS) {
+            throw Object.assign(new Error(`流 ${spec.streamKey.slice(0, 8)} 分段 ${n} 连续 ${QUEUE_SEGMENT_ATTEMPTS} 次没产成`), { code: 'stream-segment-failed', retryable: true });
+          }
+          const task = { state, segment: n, stride: 1, queue: { signal } };
+          state.reserved.add(n);
+          let handedOff = false;
+          try {
+            bakery ||= await this.pipeline.leaseStreamBakery();
+            handedOff = await this.runSegment(bakery, task);
+          } catch (error) {
+            if (signal?.aborted || this.closed) throw cancelled();
+            if (!error?.cancelled) {
+              this.stats.failures++;
+              state.failures.set(n, (state.failures.get(n) ?? 0) + 1);
+              this.note(`队列分段 ${spec.streamKey.slice(0, 8)}#${n} 失败:${error?.message || error}`);
+              // 会话可能已经坏了:换一个新的(同 `runWorker`)
+              if (bakery) { this.pipeline.returnStreamBakery(bakery, { dead: true }); bakery = null; }
+            }
+          } finally {
+            if (!handedOff) state.reserved.delete(n);
+          }
+          // 编码在后台收尾(`storeSegment`),等它落盘;它自己吞掉异常,失败就在这一轮 while 里重来
+          if (handedOff) { await task.job; made = true; }
+        }
+        if (made) produced++; else skipped++;
+        frames += Math.min(SEGMENT_FRAMES, Math.max(0, (spec.total ?? Infinity) - n * SEGMENT_FRAMES));
+        report();
+      }
+    } finally {
+      state.queueHolds = Math.max(0, (state.queueHolds ?? 1) - 1);
+      if (bakery) this.pipeline.returnStreamBakery(bakery);
+    }
+    if (signal?.aborted) throw cancelled();
+    return { produced, skipped };
+  }
+
   /**
    * 新的一版项目 / card plan(`preload` 在锚帧就绪之后调)。重算期望的流(G6:`localRev` 变了
    * 重算受影响流的期望签名),读回盘上已有的分段、发 `layer`,再把 worker 叫起来。
@@ -758,6 +888,8 @@ export class StreamProducer {
       const state = old ?? { reserved: new Set(), failures: new Map(), measured: null, measuredSegments: new Set() };
       // C6.2:拉取时新建的流(`adoptSegments`)进了这一版的计划,从此是正常的流(照常补产、发层、认领)
       delete state.adoptedOnly;
+      // X1:只为队列任务建的流进了这一版的计划:归不归队列改由这一版 entry 的模式定(`queueOwned`)
+      delete state.queueOnly;
       state.spec = spec;
       state.aliases = new Set();
       state.manifest = manifest;
@@ -767,6 +899,9 @@ export class StreamProducer {
       state.entryKey = entry.key;
       next.set(spec.streamKey, state);
     }
+    // X1:队列任务正在产的流(`queueHolds > 0`)不在这一版的计划里也留着 —— 流键是内容寻址的,
+    // 产完照样有效;换掉它会让在跑的队列任务的分段作废
+    for (const [key, state] of this.streams) if (!next.has(key) && (state.queueHolds ?? 0) > 0) next.set(key, state);
     this.streams = next;
     if (generation !== this.generation) return specs;
     this.republish();
@@ -844,7 +979,8 @@ export class StreamProducer {
       let best = null;
       for (const state of this.streams.values()) {
         // C6.2:只是拉来的流没有隔离工程,本机不替它补产(进了某一版的计划之后才产)
-        if (state.adoptedOnly) continue;
+        // X1:归队列产的流(`queueOwned`)也不自己产,由执行器按任务产(`produceRange`)
+        if (state.adoptedOnly || this.queueOwned(state)) continue;
         const { spec } = state;
         const failures = state.failures;
         const ready = n => !need(state, n) || (failures.get(n) ?? 0) >= 3;
@@ -866,7 +1002,7 @@ export class StreamProducer {
 
   needsSparseAnywhere() {
     for (const state of this.streams.values()) {
-      if (state.adoptedOnly) continue;
+      if (state.adoptedOnly || this.queueOwned(state)) continue;
       for (let n = state.spec.firstSegment; n <= state.spec.lastSegment; n++) {
         if (this.needsSparse(state, n) && (state.failures.get(n) ?? 0) < 3) return true;
       }
@@ -941,9 +1077,13 @@ export class StreamProducer {
    * 生产一个分段(G4:单个分段的生产是它自己的一个 run)。租约接得上就接着推,接不上就把这条流的
    * 隔离工程灌进会话、从挂载帧重放。出帧逐张喂给这个分段的编码器;编码在后台收尾(双缓冲)。
    */
-  async runSegment(bakery, { state, segment, stride }) {
+  async runSegment(bakery, task) {
+    const { state, segment, stride } = task;
     const { spec } = state;
-    const generation = state.generation;
+    // X1:队列任务产的分段(`task.queue`)不随版本作废 —— 流键是内容寻址的,换了一版而键没变,分段照样有效;
+    // 只有任务被中止、生产者关了、这条流被换掉才作废。`generation: null` 让 `storeSegment` 不按版本判旧
+    const queue = task.queue ?? null;
+    const generation = queue ? null : state.generation;
     const fps = spec.fps;
     const fromFrame = segment * SEGMENT_FRAMES;
     const toFrame = Math.min(fromFrame + SEGMENT_FRAMES - 1, spec.total - 1);
@@ -963,7 +1103,8 @@ export class StreamProducer {
       state.resets[stride > 1 ? 'sparse' : 'dense']++;
     }
     const abort = new AbortController();
-    const stale = () => this.closed || state.generation !== generation || this.streams.get(spec.streamKey) !== state;
+    const stale = () => this.closed || this.streams.get(spec.streamKey) !== state
+      || (queue ? queue.signal?.aborted === true : state.generation !== generation);
     const guard = setInterval(() => { if (stale()) abort.abort(); }, 100);
     guard.unref?.();
     let enc = null;
@@ -1009,6 +1150,8 @@ export class StreamProducer {
       })
       .finally(() => { state.reserved.delete(segment); this.releaseEncoderSlot(); this.encoding.delete(job); this.kick(); });
     this.encoding.add(job);
+    // X1:队列任务要等这个分段真落盘才算产完(`produceRange`);自动生产不等(双缓冲)
+    task.job = job;
     return true;
   }
 
@@ -1052,7 +1195,8 @@ export class StreamProducer {
     if (info.sampleCount !== samples) throw new Error(`分段样本数 ${info.sampleCount},应当是 ${samples}`);
     if (info.firstSampleIsSync !== true) throw new Error('分段首帧不是 IDR');
     if (!init.length) throw new Error('编码输出里没有 ftyp + moov');
-    if (state.generation !== generation || this.streams.get(spec.streamKey) !== state) return;
+    // `generation === null`:队列任务产的分段,不按版本判旧(见 `runSegment`)
+    if ((generation !== null && state.generation !== generation) || this.streams.get(spec.streamKey) !== state) return;
     const manifest = state.manifest;
     const initId = sha(init, 16);
     const dir = this.store.dir(spec.streamKey);

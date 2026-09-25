@@ -26,7 +26,7 @@ function setup({ tasks = [T_IN], ...options } = {}) {
   h.publisher('p', 'pub-1');
   h.node('a', 'node-A');
   h.node('b', 'node-B');
-  h.node('w', 'node-W', { profile: 'host' });
+  h.node('w', 'node-W', { profile: 'pc' });   // M6c X3：host 的 watch 'all' 只收摘要，只看不做的 W 改用 pc（原为 host）
   if (tasks.length) h.publish('p', tasks);
   h.bus.clear();
   return { h, id: tasks[0]?.id };
@@ -317,7 +317,7 @@ test('S-4 随机操作序列（固定种子、3000 步）下的不变量：至�
   const PUBS = [{ id: 'pub-1', userId: 'u1' }, { id: 'pub-2', userId: 'u2' }, { id: 'pub-3', userId: 'u1' }]
     .map(p => ({ ...p, conn: null, exists: false, disconnectedAt: null, n: 0 }));
   const NODES = [
-    { id: 'node-A', profile: 'pc', userId: 'u9' }, { id: 'node-B', profile: 'host', userId: 'u8' },
+    { id: 'node-A', profile: 'pc', userId: 'u9' }, { id: 'node-B', profile: 'pc', userId: 'u8' },   // M6c X3：node-B 原为 host（host 的 watch 'all' 只收摘要）
     { id: 'node-BR1', profile: 'browser', userId: 'u1' }, { id: 'node-BR2', profile: 'browser', userId: 'u2' },
   ].map(n => ({ ...n, conn: null, exists: false, disconnectedAt: null, held: new Map(), n: 0 }));
   const conns = new Map();   // 在线连接：connId → { kind: 'node' | 'pub' | null, actor, watch }
@@ -614,7 +614,9 @@ test('S-4 随机操作序列（固定种子、3000 步）下的不变量：至�
     if (old) {
       doStep({ kind: 'disconnect', conn: old }, () => { h.q.disconnect(old); conns.delete(old); });
     }
-    const projects = pick(['all', 'all', ['proj-1'], ['proj-2'], ['proj-1', 'proj-2']]);
+    let projects = pick(['all', 'all', ['proj-1'], ['proj-2'], ['proj-1', 'proj-2']]);
+    // M6c X3：纯浏览器不能 watch 'all'，改列出全部两个项目（可见性相同，随机序列不变）
+    if (projects === 'all' && n.profile === 'browser') projects = ['proj-1', 'proj-2'];
     doStep({ kind: 'watch', conn }, () => {
       h.q.handle(conn, { type: 'queue.watch', projects });
       conns.get(conn).watch = projects;

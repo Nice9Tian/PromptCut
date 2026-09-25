@@ -106,7 +106,8 @@ test('AU9 渲染任务队列按空间隔离：另一个项目的节点看不到�
 
   const nodeQ = await join(env, Q, { username: 'quinn', role: 'render', remote: R(5) });
   await ask(nodeQ, { type: 'node.hello', nodeId: 'n-q', profile: 'host' }, 'node.welcome');
-  const snap = await ask(nodeQ, { type: 'queue.watch', projects: 'all' }, 'queue.snapshot');
+  // M6c X3：host 的 watch 'all' 只回摘要；这里要比对快照内容，改 watch 任务所在的项目（原为 'all'）
+  const snap = await ask(nodeQ, { type: 'queue.watch', projects: [task.source.projectId] }, 'queue.snapshot');
   assert.equal(snap.type, 'queue.snapshot', JSON.stringify(snap));
   assert.ok(!JSON.stringify(snap).includes(task.id), `另一个空间的快照里不该有这个任务：${JSON.stringify(snap).slice(0, 400)}`);
   const claim = await ask(nodeQ, { type: 'task.claim', id: task.id, expectVersion: 1 }, ['task.claimed', 'task.claim-rejected']);

@@ -10,7 +10,8 @@ import { resultKeyOf } from './fingerprint.mjs';
  * (`source.derivedFrom` 指向那个 `plan` 任务)。
  *
  *   快照:每个 control 的本地帧 0 .. count-1 按 SNAPSHOT_SPAN 切段(缺省 60 帧);本地档缺 entryKey 的跳过
- *   轨道流:firstSegment .. lastSegment 按 STREAM_SEGMENTS 切(缺省 8 段,每段 15 帧);没有 streamKey 的跳过
+ *   轨道流:firstSegment .. lastSegment 按 STREAM_SEGMENTS 切(缺省 8 段,每段 15 帧);没有 streamKey 的跳过。
+ *          流任务的 `requires.capabilities = { streams: true }`(M6c X1):只给报了能产流的节点
  *
  * 结果键 = 内容键 × 切分节点**自己的**环境指纹(设计 2.1;卡被别的环境锁定时见下文「卡片级指纹锁」):认领 `plan` 的节点定下这一版
  * 项目的指纹,写进每个细任务的 `requires.envFingerprint`,只有同指纹的节点能认领。
@@ -35,6 +36,12 @@ import { resultKeyOf } from './fingerprint.mjs';
  *   锁在别的指纹 X 上,不接手     `resultKey` 与 `requires.envFingerprint` 都用 X:
  *                                 剩余帧只给与锁定方同指纹的节点,这一层不混环境
  *
+ * # 本地档能力闸(M6c X2,`docs/plan/m6c-contract.md`)
+ *
+ * 没有内容哈希的素材只在发布方本机(别的机器拿不到它的字节,素材回退只认哈希)。调用方给 `localMedia`
+ * (发布方的 nodeId)和 `usesLocalMedia(control)`,判真的每个任务在 `requires` 里写 `localMedia`,
+ * 只有那个节点能认领(节点侧过滤规则 1 与队列的前置过滤、认领检查一起守)。不给 `localMedia` 时任务形状不变。
+ *
  * 纯函数:不读环境变量、不做 I/O。
  */
 
@@ -48,11 +55,13 @@ const NORMAL_PRIORITY = 10;
  * `codeVersion` / `envFingerprint` 给了就写进 `requires`(契约 J.3),只有代码版本、指纹对得上的
  * 节点能认领这个 plan;没给的项不写,`requires` 与 B.4 相同。id 与 resultKey 不随它们变。
  */
-export function planTaskOf({ projectId, projectRev, priority = 0, codeVersion, envFingerprint }) {
+export function planTaskOf({ projectId, projectRev, priority = 0, codeVersion, envFingerprint, preferNode }) {
   const resultKey = `${projectId}@${projectRev}`;
   const requires = {};
   if (codeVersion !== undefined) requires.codeVersion = codeVersion;
   if (envFingerprint !== undefined) requires.envFingerprint = envFingerprint;
+  // M6c X4:发布方自己的节点优先认领(独占窗口 PLAN_PREFER_MS),窗口过后给任何指纹符合的 pc
+  if (preferNode !== undefined) requires.preferNode = preferNode;
   return {
     id: taskIdOf({ kind: 'plan', resultKey, range: null }), kind: 'plan', resultKey, range: null,
     source: { projectId, projectRev }, input: {}, weight: { class: 'medium', estMs: null, frames: null },
@@ -111,6 +120,8 @@ export function splitPlan({
   constants = {},
   cardLocks = {},           // Map | Record<lockKey, envFingerprint>(契约 F.2)
   takeover = false,         // boolean | Set<lockKey> | (lockKey) => boolean
+  localMedia = null,        // 发布方的 nodeId(M6c X2):给了,且 usesLocalMedia 判真的任务写进 requires.localMedia
+  usesLocalMedia = () => true,   // (control) => boolean;流任务传 { clipId: topClipId, kind: 'stream' }
 }) {
   const snapshotSpan = stepOf(constants.SNAPSHOT_SPAN ?? QUEUE_DEFAULTS.SNAPSHOT_SPAN);
   const streamSegments = stepOf(constants.STREAM_SEGMENTS ?? QUEUE_DEFAULTS.STREAM_SEGMENTS);
@@ -119,6 +130,12 @@ export function splitPlan({
   const anchors = [...(anchorFrames ?? [])];
   const lockOf = lockLookup(cardLocks);
   const takesOver = takeoverTest(takeover);
+  const mediaOwner = typeof localMedia === 'string' && localMedia !== '' ? localMedia : null;
+  /** 本地档能力闸(M6c X2):这一项的输入用到只在发布方本机的素材时,requires 加 `localMedia` */
+  const gateLocalMedia = (requires, control) => {
+    if (mediaOwner !== null && usesLocalMedia(control) === true) requires.localMedia = mediaOwner;
+    return requires;
+  };
   /**
    * 这一层按哪个指纹出键:`{ fingerprint, takeover }`。`takeover` 只在真的接手别的指纹时为真;
    * 没锁或同指纹时任务不加这个字段(契约 F.2)。
@@ -163,6 +180,7 @@ export function splitPlan({
       graphCards: !!isGraphCard(control),
       belowDependent: (control.compositing ?? control.capabilities?.compositing) === 'belowDependent',
     };
+    gateLocalMedia(requires, control);
     const weight = weightOf(control);
     for (const [from, to] of spans(0, Number(control.count) - 1, snapshotSpan)) {
       const range = { unit: 'localFrame', from, to };
@@ -194,10 +212,12 @@ export function splitPlan({
         source: { projectId, projectRev, derivedFrom },
         input: { clipId: topClipId, cardId: null, entryKey: null, contentKey },
         weight: { ...weight, frames: (to - from + 1) * SEGMENT_FRAMES },
-        requires: {
+        requires: gateLocalMedia({
           envFingerprint: keying.fingerprint, codeVersion, cardSources: {},
           transcode: true, userCards: false, graphCards: false, belowDependent: false,
-        },
+          // M6c X1:只有报了 `capabilities.streams: true`(探到编码器)的节点能认领(filter.mjs 规则 2)
+          capabilities: { streams: true },
+        }, { clipId: topClipId, kind: 'stream' }),
         priority: NORMAL_PRIORITY,
       };
       if (keying.takeover) task.takeover = true;

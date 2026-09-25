@@ -14,6 +14,8 @@ export const QUEUE_DEFAULTS = Object.freeze({
   PREFILTER: true,
   // 一个扫描周期内 card-locked 拒绝超过这个数，这条连接之后的认领回 throttled，直到下一次 tick（I.5）
   THROTTLE_REJECTS: 20,
+  // plan 就近认领的独占窗口（M6c X4）：带 requires.preferNode 的 plan 发布后这么久之内，只有那个节点能认领
+  PLAN_PREFER_MS: 5_000,
 });
 
 /** 以后抽成环境变量时用的名字（设计第 8 节的表），键与 QUEUE_DEFAULTS 一一对应 */
@@ -25,4 +27,5 @@ export const QUEUE_ENV = Object.freeze({
   SNAPSHOT_SPAN: 'PROMPTCUT_QUEUE_SNAPSHOT_SPAN', STREAM_SEGMENTS: 'PROMPTCUT_QUEUE_STREAM_SEGMENTS',
   PICK_K: 'PROMPTCUT_QUEUE_PICK_K',
   PREFILTER: 'PROMPTCUT_QUEUE_PREFILTER', THROTTLE_REJECTS: 'PROMPTCUT_QUEUE_THROTTLE_REJECTS',
+  PLAN_PREFER_MS: 'PROMPTCUT_QUEUE_PLAN_PREFER_MS',
 });

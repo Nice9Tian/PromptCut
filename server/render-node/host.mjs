@@ -22,6 +22,12 @@
  * 节点侧过滤 `filter.mjs` 规则 6:`profile: 'host'` 的节点见到 `plan` 直接跳过,不发认领(契约第 3、4 节)。
  * `plan` 留给发布方自己的节点。主机也不发布任何 `plan`。
  *
+ * # 看得见哪些任务(M6c X3)
+ *
+ * 队列对 host 的 `watch: 'all'` 只回项目摘要 `queue.summary`,不发单任务增量。节点会话(`session.mjs` 的
+ * `followSummary`)接到摘要就改 watch 摘要里有活的项目,随即收到它们的快照与增量、照常认领;新项目有活
+ * 最迟一个扫描周期后出现在摘要里。诊断 `nodes()` 的 `watching` 是会话此刻 watch 着的项目。
+ *
  * # 闲时门槛
  *
  * 主机没有页面、没有播放:只要全局闸有空位就认领(契约第 3 节「闲时门槛」),不看执行器的 `isIdle`。
@@ -302,6 +308,7 @@ export function createRenderHost({
         discarded: m.stats.discarded,
         released: m.stats.released,
         seen: m.seen.size,
+        watching: m.local?.session.watching?.() ?? [],
         held: m.local ? m.local.session.held().map(({ id }) => id) : [],
         running: m.local ? m.local.running() : [],
         ...(typeof m.endpoint.stats === 'function' ? { transport: m.endpoint.stats() } : {}),
