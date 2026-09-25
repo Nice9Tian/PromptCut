@@ -26,7 +26,7 @@ import {
   LAN_DISCOVERY, selectInterfaces, broadcastOf, interfaceFor, interfaceSignature, queryTargets, encodePacket, parsePacket,
   buildQuery, buildAnnounce, nextAnnounceDelay, createLanHost, createLanClient, discoverLan, ipv4ToInt,
 } from '../lan/discovery.mjs';
-import { findSharedProject, pickRoute, createSharedProject, wsBaseOf, manualBaseOf } from '../auth/route.mjs';
+import { findSharedProject, pickRoute, createSharedProject, wsBaseOf, manualBaseOf, candidateBaseOf } from '../auth/route.mjs';
 import { DEFAULT_HOSTED_URL, hostedUrlChoice, resolveHostedUrl } from '../auth/hosted-default.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -454,8 +454,8 @@ test('SPR-4i 发现之后凭项目凭证进入（文档服务挂载模式 + 真 
   assert.equal(route.candidate.where, 'lan');
   assert.equal(route.candidate.projectId, p.projectId);
   assert.equal(route.candidate.hostDeviceName, 'PC-host');
-  assert.equal(route.candidate.base, `ws://127.0.0.1:${lan.port}/docservice`);
-  const c = await join(route.candidate.base, { projectId: route.candidate.projectId, username: 'bob', deviceId: newDeviceId('l'), password: 'lan-pw', role: 'render' });
+  assert.equal(route.candidate.base, `http://127.0.0.1:${lan.port}/docservice/`);
+  const c = await join(wsBaseOf(route.candidate.base), { projectId: route.candidate.projectId, username: 'bob', deviceId: newDeviceId('l'), password: 'lan-pw', role: 'render' });
   await c.opened;
   c.close();
   assert.equal(hosted.service.describe().conns.length, connsBefore);
@@ -486,7 +486,7 @@ test('SPR-5a 四种组合：只有局域网 → 直接进；只有托管 → 直
   let route = pickRoute(r);
   assert.equal(route.action, 'enter');
   assert.deepEqual({ ...route.candidate, firstSeenMs: undefined, asset: undefined }, {
-    where: 'lan', base: lan.url, projectId: onlyLan.projectId, name: 'only-lan', mode: 'free', hostDeviceName: 'PC-1', via: 'discover', firstSeenMs: undefined, asset: undefined,
+    where: 'lan', base: candidateBaseOf(lan.url), projectId: onlyLan.projectId, name: 'only-lan', mode: 'free', hostDeviceName: 'PC-1', via: 'discover', firstSeenMs: undefined, asset: undefined,
   });
   assert.deepEqual(r.errors, [], '托管端 404 不算错误');
 
@@ -494,7 +494,7 @@ test('SPR-5a 四种组合：只有局域网 → 直接进；只有托管 → 直
   r = await findSharedProject({ name: 'only-hosted', hostedUrl: hosted.url, lan: { discover: fakeDiscover([]) } });
   route = pickRoute(r);
   assert.equal(route.action, 'enter');
-  assert.deepEqual(route.candidate, { where: 'hosted', base: hosted.url, projectId: onlyHosted.projectId, name: 'only-hosted', mode: 'free' });
+  assert.deepEqual(route.candidate, { where: 'hosted', base: candidateBaseOf(hosted.url), projectId: onlyHosted.projectId, name: 'only-hosted', mode: 'free' });
   assert.deepEqual(r.errors, [{ where: 'lan', reason: 'timeout' }]);
 
   // 3. 两边都有：都列出，局域网在前，谁也不挑
@@ -519,7 +519,7 @@ test('SPR-5b 局域网里同名的两台主机并列（带主机设备名），�
   });
   const route = pickRoute(r);
   assert.equal(route.action, 'choose');
-  assert.deepEqual(route.candidates.map((c) => [c.hostDeviceName, c.base]), [['PC-A', 'ws://192.168.1.2:5190/docservice'], ['PC-B', 'ws://192.168.1.3:5190/docservice']]);
+  assert.deepEqual(route.candidates.map((c) => [c.hostDeviceName, c.base]), [['PC-A', 'http://192.168.1.2:5190/docservice/'], ['PC-B', 'http://192.168.1.3:5190/docservice/']]);
 });
 
 test('SPR-5c 手填兜底（浏览器只能用这一路）：直接查 /docservice/shared/lookup；连不上、托管端连不上都进 errors 不抛', async (t) => {
@@ -534,7 +534,7 @@ test('SPR-5c 手填兜底（浏览器只能用这一路）：直接查 /docservi
     name: 'manual-demo', hostedUrl: `http://127.0.0.1:${dead.port}`,
     lan: { manual: [`http://127.0.0.1:${lan.port}`, `127.0.0.1:${dead.port}`, 'http://[::1'] },
   });
-  assert.deepEqual(r.candidates, [{ where: 'lan', base: `ws://127.0.0.1:${lan.port}/docservice`, projectId: p.projectId, name: 'manual-demo', mode: 'free', via: 'manual' }]);
+  assert.deepEqual(r.candidates, [{ where: 'lan', base: `http://127.0.0.1:${lan.port}/docservice/`, projectId: p.projectId, name: 'manual-demo', mode: 'free', via: 'manual' }]);
   const reasons = r.errors.map((e) => `${e.where}:${e.reason}`).sort();
   assert.deepEqual(reasons, ['hosted:unreachable', 'lan:bad-address', 'lan:unreachable']);
   assert.equal(pickRoute(r).action, 'enter');
@@ -566,10 +566,10 @@ test('SPR-5e 新建：托管端向托管地址 POST shared/create；局域网向
   const kdf = { alg: 'pbkdf2-sha256', iter: 100000 };
   const h = await createSharedProject({ where: 'hosted', hostedUrl: `http://127.0.0.1:${hosted.port}`, name: 'H1', mode: 'free', creator, password: 'p', kdf });
   assert.equal(h.where, 'hosted');
-  assert.equal(h.base, hosted.url);
+  assert.equal(h.base, candidateBaseOf(hosted.url));
   assert.ok(hosted.store.peek(h.projectId));
   const l = await createSharedProject({ where: 'lan', lanBase: lan.url, name: 'L1', mode: 'restricted', creator, list: [], kdf });
-  assert.equal(l.base, lan.url);
+  assert.equal(l.base, candidateBaseOf(lan.url));
   assert.ok(lan.store.peek(l.projectId));
   loop = false;
   await assert.rejects(createSharedProject({ where: 'lan', lanBase: lan.url, name: 'L2', mode: 'free', creator, password: 'p', kdf }), (err) => err.status === 403 && err.reason === 'forbidden');

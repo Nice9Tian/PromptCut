@@ -13,7 +13,10 @@
  *   - 托管端连不上、局域网发现超时（谁也没应答），都进 `errors`，不抛异常；托管端 404 不算错误，只是没有候选；
  *   - `hostedUrl`：不给（`undefined`）按覆盖顺序取（`resolveHostedUrl`：界面值 → `PROMPTCUT_HOSTED_URL` → 缺省）；
  *     给 `null` 或 `false` 表示这一次不问托管端（局域网模式的探针用它保证全程不连托管端）；
- *   - `base` 统一写成文档服务的 WebSocket 地址（`ws://…`），直接交给 `client.mjs` 的 `buildAuthProtocols({ base })`。
+ *   - `base` 统一写成文档服务的 http 地址、以 `/` 结尾（契约第 11 节裁定）：局域网 `http://<ip>:<端口>/docservice/`，
+ *     托管端 `http://<主机>:<端口>/`。`client.mjs` 的 `buildAuthProtocols({ base })` 直接收；要连 WebSocket 时用 `wsBaseOf(base)`；
+ *   - 手填与发现到的局域网候选按 `base` 去重（同一地址只列一次，发现的在前）；同一项目经几块网卡被发现时，
+ *     发现这一路自己只列一次（按 `projectId`，保留先见到的）。
  * - `pickRoute(result)`：只有一个候选 → `{ action: 'enter', candidate }`；多个 → `{ action: 'choose', candidates }`；
  *   没有 → `{ action: 'not-found', errors }`（「找不到」由调用方说）。
  * - `createSharedProject({ where: 'hosted' | 'lan', … })`：托管端向托管地址 `POST shared/create`；
@@ -52,6 +55,16 @@ export function manualBaseOf(address) {
   const base = wsBaseOf(text);
   const u = new URL(base);
   return u.pathname === '' || u.pathname === '/' ? `${u.protocol}//${u.host}${LAN_DOC_PATH}` : base;
+}
+
+/**
+ * 候选的 `base`（契约第 11 节裁定）：文档服务的 http(s) 地址，路径保留、以 `/` 结尾。
+ * `ws://192.168.1.5:5190/docservice` → `http://192.168.1.5:5190/docservice/`；`http://h:8787` → `http://h:8787/`。
+ */
+export function candidateBaseOf(url) {
+  const u = new URL(wsBaseOf(url));
+  const protocol = u.protocol === 'wss:' ? 'https:' : 'http:';
+  return `${protocol}//${u.host}${u.pathname.replace(/\/+$/, '')}/`;
 }
 
 const nameKey = (name) => String(name).normalize('NFC').toLowerCase();
@@ -123,8 +136,18 @@ export async function findSharedProject({
     }
     const matched = hosts.filter((h) => h && typeof h.name === 'string' && nameKey(h.name) === wanted && typeof h.docservice === 'string');
     if (hosts.length === 0 && !fatal) errors.push({ where: 'lan', reason: 'timeout' });
-    return matched.map((h) => ({
-      where: 'lan', base: h.docservice, projectId: h.projectId, name: h.name, mode: h.mode,
+    // 同一项目经几块网卡被发现：只列一次，保留先见到的（发现这一路自己的合并）
+    const byProject = new Set();
+    const once = [];
+    for (const h of matched) {
+      let base;
+      try { base = candidateBaseOf(h.docservice); } catch { continue; }
+      if (byProject.has(h.projectId)) continue;
+      byProject.add(h.projectId);
+      once.push({ h, base });
+    }
+    return once.map(({ h, base }) => ({
+      where: 'lan', base, projectId: h.projectId, name: h.name, mode: h.mode,
       hostDeviceName: h.hostDeviceName, ...(h.asset ? { asset: h.asset } : {}), via: 'discover',
       ...(Number.isFinite(h.firstSeenMs) ? { firstSeenMs: h.firstSeenMs } : {}),
     }));
@@ -140,7 +163,7 @@ export async function findSharedProject({
     }
     try {
       const p = await lookupProject({ base, name, fetch: f });
-      return { where: 'lan', base, projectId: p.projectId, name: p.name, mode: p.mode, via: 'manual' };
+      return { where: 'lan', base: candidateBaseOf(base), projectId: p.projectId, name: p.name, mode: p.mode, via: 'manual' };
     } catch (err) {
       const fail = lookupFailure(err);
       if (fail) errors.push({ where: 'lan', address: base, ...fail });
@@ -160,7 +183,7 @@ export async function findSharedProject({
     }
     try {
       const p = await lookupProject({ base: url, name, fetch: f });
-      return { where: 'hosted', base: url, projectId: p.projectId, name: p.name, mode: p.mode };
+      return { where: 'hosted', base: candidateBaseOf(url), projectId: p.projectId, name: p.name, mode: p.mode };
     } catch (err) {
       const fail = lookupFailure(err);
       if (fail) errors.push({ where: 'hosted', ...fail });
@@ -171,9 +194,10 @@ export async function findSharedProject({
   const [lanFound, manualFound, hostedFound] = await Promise.all([discovered, manual, hosted]);
   const candidates = [];
   const seen = new Set();
+  // 手填与发现按 base 去重（契约第 11 节裁定），发现的在前
   for (const c of [...lanFound, ...manualFound.filter(Boolean)]) {
-    if (seen.has(c.projectId)) continue;
-    seen.add(c.projectId);
+    if (seen.has(c.base)) continue;
+    seen.add(c.base);
     candidates.push(c);
   }
   if (hostedFound) candidates.push(hostedFound);
@@ -228,5 +252,5 @@ export async function createSharedProject({ where, hostedUrl, uiHostedUrl, lanBa
   }
   const ws = wsBaseOf(base);
   const r = await createOn({ ...rest, base: ws });
-  return { where, base: ws, projectId: r.projectId, name: r.name, mode: r.mode };
+  return { where, base: candidateBaseOf(ws), projectId: r.projectId, name: r.name, mode: r.mode };
 }

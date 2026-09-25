@@ -199,9 +199,9 @@ test('SPH-layout-1 ensureLayoutSync：空目录写标记；同布局通过；不
   const dir = path.join(newDir('layout'), 'assets');
   assert.equal(readLayoutSync(dir), null);
   assert.deepEqual(ensureLayoutSync(dir, LAYOUTS.shard), { ok: true, created: true });
-  assert.deepEqual(readLayoutSync(dir), { v: 1, layout: 'shard2' });
+  assert.deepEqual(readLayoutSync(dir), { v: 1, layout: 'shard' });
   assert.deepEqual(ensureLayoutSync(dir, LAYOUTS.shard), { ok: true, created: false });
-  assert.deepEqual(ensureLayoutSync(dir, LAYOUTS.flat), { ok: false, found: 'shard2' });
+  assert.deepEqual(ensureLayoutSync(dir, LAYOUTS.flat), { ok: false, found: 'shard' });
 
   const dir2 = newDir('layout-unmarked');
   fs.mkdirSync(path.join(dir2, 'media'));
@@ -295,7 +295,7 @@ test('SPH-failclosed-5 端口被占 → 退出码 1、config.error listen；正�
   const listen = JSON.parse(ok.out.split('\n').find((l) => l.includes('"event":"listen"')));
   assert.ok(listen.docservice.port > 0 && listen.asset.port > 0);
   assert.equal(listen.asset.announced, true, '素材服务向本进程的文档服务登记成功');
-  assert.equal(readLayoutSync(path.join(d, 'assets')).layout, 'shard2');
+  assert.equal(readLayoutSync(path.join(d, 'assets')).layout, 'shard');
   if (process.platform !== 'win32') assert.equal(fs.statSync(path.join(d, 'secrets')).mode & 0o777, 0o700);
 
   const d2 = newDir('listen2');
@@ -550,7 +550,7 @@ test('SPH-deploy-1 部署清单是闭合的：按 files.mjs 拼出的暂存目�
   assert.match(out, /"event":"listen"/, out);
   const listen = JSON.parse(out.split('\n').find((l) => l.includes('"event":"listen"')));
   assert.equal((await fetch(`http://127.0.0.1:${listen.docservice.port}/healthz`)).status, 200);
-  assert.deepEqual(await (await fetch(`http://127.0.0.1:${listen.asset.port}/healthz`)).json(), { ok: true, role: 'asset', layout: 'shard2' });
+  assert.deepEqual(await (await fetch(`http://127.0.0.1:${listen.asset.port}/healthz`)).json(), { ok: true, role: 'asset', layout: 'shard' });
 });
 
 test('SPH-deploy-2 PM2 配置与远端脚本：两个实例的 app 名、端口、内存上限；fork、1 个实例、kill_timeout 5000；配置里没有令牌；脚本不碰 UFW', () => {

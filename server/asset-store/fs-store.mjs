@@ -69,8 +69,8 @@ async function fsyncPath(file, { dir = false } = {}) {
 
 /** 布局标记的文件名：放在调用方选定的根目录下（托管组合是 `$PROMPTCUT_DATA_DIR/assets/.layout`） */
 export const LAYOUT_FILE = '.layout';
-/** 两种布局的名字：`flat` 是本机编辑器的原布局，`shard2` 是按哈希前两位分子目录 */
-export const LAYOUTS = Object.freeze({ flat: 'flat', shard: 'shard2' });
+/** 两种布局的名字（`.layout` 的内容 `{"v":1,"layout":"shard"|"flat"}`，契约第 11 节裁定）：`flat` 是本机编辑器的原布局，`shard` 是按哈希前两位分子目录 */
+export const LAYOUTS = Object.freeze({ flat: 'flat', shard: 'shard' });
 
 /** 读布局标记：没有回 null；读不了或格式不对回 `{ layout: 'unreadable' }` */
 export function readLayoutSync(dir) {
@@ -222,7 +222,7 @@ export function createFsStore({ dir, hooks = {}, chunkSize = BLOB_CHUNK_SIZE, sh
 
   return {
     kind: 'fs',
-    /** 布局：`flat`（原布局）或 `shard2`（分目录） */
+    /** 布局：`flat`（原布局）或 `shard`（分目录） */
     layout: sharded ? LAYOUTS.shard : LAYOUTS.flat,
     chunkSize,
 
