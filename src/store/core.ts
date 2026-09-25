@@ -78,12 +78,63 @@ export function set(patch: Partial<EditorState>) {
   emit();
 }
 
+export interface SetProjectOptions {
+  /** false:不进撤销栈 */
+  undoable?: boolean;
+  /**
+   * 数字框连续输入:同一个 key、300 ms 内的修改合并成撤销栈上的一步。
+   * 不传就和以前一样,每次一步。
+   */
+  mergeKey?: string;
+}
+
+/**
+ * 连上文档服务时接管项目写入与撤销的一方(docsync.ts 的 bindStore 装上)。
+ * 没装时(缺省)一切照旧:整份替换 + history / future 快照栈。
+ * 两种模式对 actions 与界面的接口一样:setProject / undo / redo / canUndo / canRedo。
+ */
+export interface ProjectSyncHooks {
+  /** 本地改成 next;返回真正落地的那一份(键的顺序可能与 next 不同,内容相同) */
+  commit(prev: Project, next: Project, opts: SetProjectOptions): Project;
+  /** 整份换成另一份内容(打开 .proc 等);返回落地的那一份 */
+  load(project: Project): Project;
+  undo(): void;
+  redo(): void;
+  canUndo(): boolean;
+  canRedo(): boolean;
+}
+
+let projectSync: ProjectSyncHooks | null = null;
+
+export function attachProjectSync(hooks: ProjectSyncHooks | null) {
+  projectSync = hooks;
+}
+
+export function getProjectSync(): ProjectSyncHooks | null {
+  return projectSync;
+}
+
+/** 快照栈模式下的合并判据:上一次带 mergeKey 的修改,以及它落地后的那一份项目 */
+let lastMerge: { key: string; at: number; project: Project } | null = null;
+export const MERGE_WINDOW_MS = 300;
+
 /** 改项目文档(会进撤销栈) */
-export function setProject(next: Project, opts: { undoable?: boolean } = {}) {
+export function setProject(next: Project, opts: SetProjectOptions = {}) {
+  if (projectSync) {
+    const landed = projectSync.commit(state.project, next, opts);
+    set({ project: landed, dirty: true });
+    return;
+  }
   if (opts.undoable !== false) {
-    history.push(state.project);
-    if (history.length > 100) history.shift();
+    const now = Date.now();
+    // 同一个数字框的连续输入:上一步就是它、中间没有别的修改、300 ms 内 → 不另起一步
+    const merge = !!opts.mergeKey && lastMerge !== null && lastMerge.key === opts.mergeKey && lastMerge.project === state.project && now - lastMerge.at <= MERGE_WINDOW_MS && history.length > 0;
+    if (!merge) {
+      history.push(state.project);
+      if (history.length > 100) history.shift();
+    }
     future.length = 0;
+    lastMerge = opts.mergeKey ? { key: opts.mergeKey, at: now, project: next } : null;
   }
   set({ project: next, dirty: true });
 }
