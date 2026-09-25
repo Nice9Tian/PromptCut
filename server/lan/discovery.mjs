@@ -26,7 +26,8 @@
  * - 纯函数：`selectInterfaces`、`broadcastOf`、`interfaceFor`、`interfaceSignature`、`queryTargets`、`encodePacket`、`parsePacket`、
  *   `buildQuery`、`buildAnnounce`、`nameKey`、`nextAnnounceDelay`；
  * - 主机端 `createLanHost`：广播与应答；
- * - 客户端 `createLanClient`（可常驻收周期通告、带过期）与一次性的 `discoverLan`（查询并收集，给 `route.mjs` 用）。
+ * - 客户端 `createLanClient`（可常驻收周期通告、带过期）与一次性的 `discoverLan`（查询并收集，给 `route.mjs` 用）；
+ *   过期表 `createLanTable`（不碰套接字，`createLanClient` 用它，单测直接验）。
  */
 import dgram from 'node:dgram';
 import os from 'node:os';
@@ -156,7 +157,8 @@ export function encodePacket(obj, max = LAN_DISCOVERY.MAX_PACKET_BYTES) {
   return buf.length > max ? null : buf;
 }
 
-const NONCE_RE = /^[A-Za-z0-9_-]{8,64}$/;
+/** 契约第 4 节只写了 `nonce`，没限长度：收 1～64 个 URL 安全字符（自己发的是 22 位随机串） */
+const NONCE_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 
 function urlOf(value, protocols) {
@@ -482,6 +484,64 @@ export function createLanHost({
 // ---------------------------------------------------------------- 客户端
 
 /**
+ * 见到的主机表（不碰套接字）：按「项目 + 文档服务地址」记，`expireMs`（45 s）与包里的 `ttlMs` 取小者，没再见到就过期。
+ * `createLanClient` 用它；本机单测直接用它验过期与续期。
+ *
+ * @param {object} [options]
+ * @param {() => number} [options.now]
+ * @param {number} [options.expireMs]
+ * @param {number} [options.startedAt] `firstSeenMs` 从这一刻算起，缺省建表的时刻
+ * @param {(hosts: object[]) => void} [options.onChange] 新见到一台、或 `sweep` 移除了几台时调
+ */
+export function createLanTable({ now = Date.now, expireMs = LAN_DISCOVERY.EXPIRE_MS, startedAt, onChange = noop } = {}) {
+  /** `${projectId}|${docservice}` → 条目 */
+  const hosts = new Map();
+  const t0 = Number.isFinite(startedAt) ? startedAt : now();
+  const expired = (h, at) => at - h.lastSeenAt > Math.min(expireMs, h.ttlMs ?? expireMs);
+
+  function list({ name } = {}) {
+    const wanted = name ? nameKey(name) : null;
+    const at = now();
+    return [...hosts.values()]
+      .filter((h) => !expired(h, at) && (wanted === null || nameKey(h.name) === wanted))
+      .map((h) => ({ ...h }))
+      .sort((a, b) => a.firstSeenMs - b.firstSeenMs);
+  }
+
+  /** 移除过期的；有移除回 true */
+  function sweep() {
+    const at = now();
+    let changed = false;
+    for (const [k, h] of hosts) {
+      if (expired(h, at)) { hosts.delete(k); changed = true; }
+    }
+    if (changed) onChange(list());
+    return changed;
+  }
+
+  /**
+   * 见到一条通告（`parsePacket` 过的，或字段相同的对象）；回是不是新见到的。
+   * @param {{ projectId: string, name: string, mode: string, hostDeviceName: string, docservice: string, asset: string, ttlMs?: number }} msg
+   * @param {string | null} [from] 发包方地址
+   */
+  function see(msg, from = null) {
+    const key = `${msg.projectId}|${msg.docservice}`;
+    const at = now();
+    const had = hosts.get(key);
+    const fresh = !had || expired(had, at);
+    hosts.set(key, {
+      projectId: msg.projectId, name: msg.name, mode: msg.mode, hostDeviceName: msg.hostDeviceName,
+      docservice: msg.docservice, asset: msg.asset, ttlMs: Number.isFinite(msg.ttlMs) ? msg.ttlMs : expireMs, from,
+      firstSeenMs: fresh ? at - t0 : had.firstSeenMs, lastSeenAt: at,
+    });
+    if (fresh) onChange(list());
+    return fresh;
+  }
+
+  return { see, list, sweep };
+}
+
+/**
  * 客户端：发查询、收应答；`listen: true` 时绑组播端口、加入组，常驻收周期通告。
  * 见到的主机按「项目 + 文档服务地址」记，`expireMs`（45 s）没再见到就移除。
  *
@@ -511,35 +571,15 @@ export async function createLanClient({
   onChange = noop,
   log = noop,
 } = {}) {
-  /** `${projectId}|${docservice}` → 条目 */
-  const hosts = new Map();
-  const startedAt = now();
+  const table = createLanTable({ now, expireMs, onChange });
+  const sweep = table.sweep;
   let ifaces = [];
   let closed = false;
-
-  const sweep = () => {
-    const at = now();
-    let changed = false;
-    for (const [k, h] of hosts) {
-      if (at - h.lastSeenAt > Math.min(expireMs, h.ttlMs ?? expireMs)) { hosts.delete(k); changed = true; }
-    }
-    if (changed) onChange(list());
-    return changed;
-  };
 
   function onMessage(buf, rinfo) {
     const msg = parsePacket(buf);
     if (!msg || msg.type !== 'announce') return;
-    const key = `${msg.projectId}|${msg.docservice}`;
-    const at = now();
-    const had = hosts.get(key);
-    const entry = {
-      projectId: msg.projectId, name: msg.name, mode: msg.mode, hostDeviceName: msg.hostDeviceName,
-      docservice: msg.docservice, asset: msg.asset, ttlMs: msg.ttlMs, from: rinfo.address,
-      firstSeenMs: had ? had.firstSeenMs : at - startedAt, lastSeenAt: at,
-    };
-    hosts.set(key, entry);
-    if (!had) onChange(list());
+    table.see(msg, rinfo.address);
   }
 
   const socket = await openSocket(dgramImpl, { port: listen ? port : 0, bindAddress, onMessage, log });
@@ -555,13 +595,7 @@ export async function createLanClient({
   }, rescanMs);
   rescanTimer.unref?.();
 
-  function list({ name } = {}) {
-    const wanted = name ? nameKey(name) : null;
-    return [...hosts.values()]
-      .filter((h) => wanted === null || nameKey(h.name) === wanted)
-      .map((h) => ({ ...h }))
-      .sort((a, b) => a.firstSeenMs - b.firstSeenMs);
-  }
+  const list = table.list;
 
   /** 发一轮查询（每块网卡组播一次、子网广播一次）；回发出的包数与错误 */
   async function queryOnce({ nonce, name } = {}) {

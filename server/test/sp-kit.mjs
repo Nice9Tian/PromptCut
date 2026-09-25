@@ -42,7 +42,7 @@
  *   〔假设 R3〕`createSharedProject({ where: 'hosted', hostedUrl, name, mode, creator: { username, password }, password, list })`，
  *             口令在客户端派生（服务端从不派生，M6a 第 2 节）；回 `{ projectId, name, mode }`（可以再多字段）。
  *
- * ## 局域网发现（契约第 4 节只定参数，没定模块）
+ * ## 局域网发现（契约第 4 节只定参数，没定模块；集成时实现在 `server/lan/discovery.mjs`，对法见下面 `loadLan` 的注释）
  *   〔假设 L0〕模块 `server/auth/lan-discovery.mjs`（Node 专用，浏览器侧不做发现）。导出：
  *     LAN_DISCOVERY  参数常量 { group, port, ttl, queryIntervalMs, queryRepeats, announceIntervalMs, announceJitterMs,
  *                     expireMs, maxPacketBytes, discoverTimeoutMs, interfaceCheckMs }
@@ -320,9 +320,57 @@ async function importOrExplain(rel, names) {
 
 export const loadHostedDefault = () => importOrExplain('../auth/hosted-default.mjs', ['DEFAULT_HOSTED_URL', 'resolveHostedUrl']);
 export const loadRoute = () => importOrExplain('../auth/route.mjs', ['findSharedProject', 'createSharedProject']);
-export const loadLan = () => importOrExplain('../auth/lan-discovery.mjs', [
-  'LAN_DISCOVERY', 'encodeQuery', 'encodeAnnounce', 'decodePacket', 'selectInterfaces', 'createLanTable', 'createLanHost', 'discoverLan',
-]);
+/**
+ * 〔集成胶水，L0〕实现的模块是 `server/lan/discovery.mjs`，名字与参数形状和假设不同，这里一一对上（断言用的参数值不动）：
+ *   LAN_DISCOVERY      实现是大写键（GROUP、PORT、TTL、QUERY_INTERVAL_MS、QUERY_COUNT、ANNOUNCE_PERIOD_MS、ANNOUNCE_JITTER_MS、
+ *                      EXPIRE_MS、MAX_PACKET_BYTES、DISCOVER_TIMEOUT_MS、RESCAN_MS）→ 换成假设的小写键；
+ *   encodeQuery        → encodePacket(buildQuery(...))；encodeAnnounce → encodePacket(fields)（超过 1 KiB 回 null）；
+ *   decodePacket       → parsePacket（实现回的对象不带 magic、v，这里补回去）；
+ *   selectInterfaces   → 同名；createLanTable → 同名（`{ now }`）；
+ *   createLanHost      → createLanHost({ projects, hostDeviceName: deviceName, servicePort: docservicePort, port, interfaces: () => [...] })；
+ *                        实现里文档服务与素材服务同在编辑器一个端口上（`servicePort`），两个端口不同时这里直接报错；
+ *   discoverLan        → discoverLan({ name, port, interfaces: () => [...], timeoutMs }).hosts；
+ *                        `targets`（只向这些地址单播查询）落在实现的注入点上：把每个目标当成一块网卡的「定向广播地址」，
+ *                        实现对它发的就是单播（组播那一份照发，发往回环，不影响结果）。
+ */
+export async function loadLan() {
+  const m = await importOrExplain('../lan/discovery.mjs', [
+    'LAN_DISCOVERY', 'encodePacket', 'parsePacket', 'buildQuery', 'selectInterfaces', 'createLanTable', 'createLanHost', 'discoverLan',
+  ]);
+  const P = m.LAN_DISCOVERY;
+  const withEnvelope = (msg) => (msg ? { magic: P.MAGIC, v: P.VERSION, ...msg } : null);
+  return {
+    LAN_DISCOVERY: Object.freeze({
+      group: P.GROUP, port: P.PORT, ttl: P.TTL, queryIntervalMs: P.QUERY_INTERVAL_MS, queryRepeats: P.QUERY_COUNT,
+      announceIntervalMs: P.ANNOUNCE_PERIOD_MS, announceJitterMs: P.ANNOUNCE_JITTER_MS, expireMs: P.EXPIRE_MS,
+      maxPacketBytes: P.MAX_PACKET_BYTES, discoverTimeoutMs: P.DISCOVER_TIMEOUT_MS, interfaceCheckMs: P.RESCAN_MS,
+    }),
+    encodeQuery: ({ nonce, name } = {}) => m.encodePacket(m.buildQuery({ nonce, name })),
+    encodeAnnounce: (fields) => m.encodePacket(fields),
+    decodePacket: (buf) => {
+      const msg = m.parsePacket(buf);
+      if (!msg) return null;
+      // 实现把没有 nonce 的通告记成 nonce: null；按包里原样还原（没有就不带）
+      const { nonce, ...rest } = msg;
+      return withEnvelope({ ...rest, ...(nonce === null || nonce === undefined ? {} : { nonce }) });
+    },
+    selectInterfaces: (nics) => m.selectInterfaces(nics),
+    createLanTable: ({ now } = {}) => m.createLanTable({ now }),
+    createLanHost: ({ port, interfaces, projects, deviceName, docservicePort, assetPort }) => {
+      if (assetPort !== undefined && assetPort !== docservicePort) throw new Error('实现里文档服务与素材服务同端口（servicePort）');
+      const list = [...interfaces];
+      return m.createLanHost({ projects, hostDeviceName: deviceName, servicePort: docservicePort, port, interfaces: () => list });
+    },
+    discoverLan: async ({ name, port, interfaces, targets, timeoutMs } = {}) => {
+      let list = [...(interfaces ?? m.selectInterfaces())];
+      if (Array.isArray(targets) && targets.length) {
+        list = targets.flatMap((target) => list.map((i) => ({ ...i, broadcast: target })));
+      }
+      const r = await m.discoverLan({ name, ...(port !== undefined ? { port } : {}), interfaces: () => list, ...(timeoutMs !== undefined ? { timeoutMs } : {}) });
+      return r.hosts;
+    },
+  };
+}
 
 export async function loadFsStore() {
   const { createFsStore } = await import('../asset-store/fs-store.mjs');

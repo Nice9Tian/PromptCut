@@ -544,6 +544,22 @@ test('SPR-5c 手填兜底（浏览器只能用这一路）：直接查 /docservi
   assert.equal(pickRoute(r2).action, 'not-found');
 });
 
+test('SPR-5f 手填与发现按 base 去重（契约第 11 节裁定）：同一地址只列一次、发现的在前；base 是 http://<ip>:<端口>/docservice/', async (t) => {
+  let loop = true;
+  const lan = await startSharedService({ mode: 'lan', isLoopback: () => loop });
+  t.after(() => lan.close());
+  const p = await createProject(lan.base, { name: 'dedupe-demo' });
+  loop = false;
+  const r = await findSharedProject({
+    name: 'dedupe-demo', hostedUrl: null,
+    lan: { discover: fakeDiscover([lanEntry(lan.url, p)]), manual: [`http://127.0.0.1:${lan.port}`] },
+  });
+  assert.deepEqual(r.candidates.map((c) => [c.where, c.via, c.base]), [['lan', 'discover', `http://127.0.0.1:${lan.port}/docservice/`]]);
+  assert.equal(candidateBaseOf('ws://h:1/docservice'), 'http://h:1/docservice/');
+  assert.equal(candidateBaseOf('http://h:8787'), 'http://h:8787/');
+  assert.equal(candidateBaseOf('wss://h/x/'), 'https://h/x/');
+});
+
 test('SPR-5d 地址写法：wsBaseOf、manualBaseOf', () => {
   assert.equal(wsBaseOf('http://8.8.8.8:8787'), 'ws://8.8.8.8:8787');
   assert.equal(wsBaseOf('https://h/x/'), 'wss://h/x');
