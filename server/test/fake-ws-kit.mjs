@@ -7,6 +7,7 @@
  *   rawHandshake(port, { protocols, path })   原始 TCP 握手，拿到状态码和响应头（测 401 / 子协议回显）
  *   createTcpProxy({ target })       可控的 TCP 代理：cutAll() 强行断开、mode = 'pass' | 'reject'、retarget()
  *   createSleepExecutor({ taskMs })  用真实计时器睡眠的执行器（契约 D.1 的 executor 形状）
+ *   refusingPort()                   测试自己占着、连上就 RST 的端口（「连不上」的地址），用完 close
  *   waitFor(pred, ms)                轮询等条件成立
  *   randomToken()                    32 字节随机 base64url（G.5 的令牌格式），测试里现生成，不写死
  *   snapshotTaskInput(...)           造一个合法的 snapshot 细任务（契约 A.4）
@@ -187,13 +188,22 @@ export async function healthServer(body) {
   };
 }
 
-/** 拿一个此刻空闲、随即关掉的端口（连它会被拒）。 */
-export async function closedPort() {
-  const server = netCreateServer();
+/**
+ * 一个「连不上」的端口：由测试自己占着，连上就立刻 RST（`{ port, close }`，用完 close）。
+ *
+ * 不用「先占一个空闲端口再关掉、假定它没人监听」：全量测试几十个进程并行，关掉的端口随时可能被别的进程
+ * 拿去（Windows 顺序发号，绕一圈就回来；别的系统随机发号），「应当连不上」就连上了别人的服务。
+ * 占着不放就不会；对调用方来说效果和被拒一样（fetch / http.request / WebSocket 都立刻报错）。
+ */
+export async function refusingPort() {
+  const server = netCreateServer((socket) => {
+    socket.on('error', () => {});
+    if (typeof socket.resetAndDestroy === 'function') socket.resetAndDestroy();
+    else socket.destroy();
+  });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const { port } = server.address();
-  await new Promise((resolve) => server.close(resolve));
-  return port;
+  return { port, close: () => new Promise((resolve) => server.close(() => resolve())) };
 }
 
 /**
