@@ -1,7 +1,7 @@
 /**
  * 素材服务的数据层出口（契约 `docs/plan/asset-store-contract.md` 第 2 节）。
  *
- * - `kind: 'fs'`     → 本地内容库（`fs-store.mjs`）
+ * - `kind: 'fs'`     → 本地内容库（`fs-store.mjs`）；`shard: true` 是托管组合用的分目录布局，布局标记见 `ensureLayoutSync`
  * - `kind: 'memory'` → 内存（`memory-store.mjs`，测试用）
  * - `kind: 'oss'`    → 插槽：抛 Error，`code === 'not-implemented'`，不装任何 SDK
  * - 其它             → TypeError
@@ -13,12 +13,12 @@
  */
 import path from 'node:path';
 import fs from 'node:fs/promises';
-import { createFsStore } from './fs-store.mjs';
+import { createFsStore, ensureLayoutSync, readLayoutSync, LAYOUT_FILE, LAYOUTS } from './fs-store.mjs';
 import { createMemoryStore } from './memory-store.mjs';
 import { BLOB_CHUNK_SIZE } from './blob-store.mjs';
 import { createAssetClient } from './client.mjs';
 
-export { BLOB_CHUNK_SIZE, createFsStore, createMemoryStore, createAssetClient };
+export { BLOB_CHUNK_SIZE, createFsStore, createMemoryStore, createAssetClient, ensureLayoutSync, readLayoutSync, LAYOUT_FILE, LAYOUTS };
 
 /**
  * @param {{ kind: 'fs' | 'memory' | 'oss' } & Record<string, any>} options

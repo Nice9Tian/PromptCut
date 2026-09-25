@@ -137,3 +137,54 @@
 | ext4 哈希存储 | 按前两位分目录；临时文件加改名或链接发布；持久化前 `fsync`；ENOSPC 处理；迁移用 `rsync -aS` 或 `tar --sparse` | **采纳**：分目录、临时文件、ENOSPC 回 507。`fsync` 只对 `complete` 做（分片丢了可以续传）〔裁〕 |
 | 同机第二份实例 | 独立 app 名、数据目录、端口 8777 / 8778；两个进程的内存状态不互通 | **采纳**（第 2 节） |
 | 公网改走 HTTPS/WSS | 建议 | **不采纳**：用户已接受明文（S4）〔裁〕 |
+
+## 10. 实现补充（`claude/sp-hosting`，2026-09-26）
+
+实现方按第 1、2 节做完后补的细节；与正文有出入的地方逐条写明，由主会话在集成时裁定。
+
+**部署文件清单**（第 2 节「实现方列清单」；唯一出处是 `server/hosted/files.mjs`，单测 SPH-deploy-1 在只含这些文件的暂存目录里真起一次入口）：
+
+| 类别 | 路径 |
+|---|---|
+| 整个目录（跳过 `test/` 与 `*.test.*`） | `server/hosted/`、`server/docservice/`、`server/auth/`、`server/asset-store/`、`server/render-queue/` |
+| 单个文件 | `server/asset-service.ts`、`server/vite-plugin-media.ts`、`server/http-guard.mjs`、`server/asset-announce.mjs`、`server/render-node/ws-transport.mjs` |
+| 生成 | 部署目录根上的 `package.json`（`{ "type": "module" }`） |
+
+- 素材服务中间件是 `.ts`：靠 Node 的类型剥离直接载入（Node ≥ 22.18 / 24，远端 v24.21.0），不转译；
+  它的兄弟引用不带扩展名，由 `server/hosted/ts-resolve.mjs` 的同步解析钩子（`module.registerHooks`）补 `.ts`。
+- 远端布局：代码在 `<部署目录>/app/`，PM2 配置在 `<部署目录>/pm2.config.cjs`（部署脚本生成，不含秘密）。
+  正式实例 `/opt/promptcut-hosted`、数据 `/var/lib/promptcut/hosted`；演练实例 `/opt/promptcut-drill`、数据 `/var/lib/promptcut/drill`。
+
+**托管组合的补充**：
+
+1. 素材服务端口另有两条管理接口（第 1 节「迁移导出」）：`GET /admin/inventory`（盘点）与 `GET /admin/blob/<ns>/<hash>`（按哈希取字节）；
+   只认 `Authorization: Bearer <集群令牌>` 或本机回环。素材服务的数据面仍然不认集群令牌。
+2. 素材服务端口的 `/healthz` 回 `{ ok, role: 'asset', layout: 'shard' }`（第 11 节裁定前写的是 `shard2`）。
+3. 失败即关另加两个原因词：`layout`（`assets/.layout` 对不上，或 `assets/` 有东西却没有标记）、
+   `asset-public-url`（绑非回环而没设 `PROMPTCUT_ASSET_PUBLIC_URL`）；端口被占打 `config.error { reason: 'listen' }`。
+4. 数据目录本身必须已存在（不存在即 `data-dir`，服务不替人建）；`docservice/`、`assets/`、`secrets/`（0700）由服务建。
+5. 地址登记：有集群令牌时带令牌（管理身份），没有时以回环的本机身份登记（本机身份同样允许 `service.announce`）。
+6. `assets/.layout` 的内容是 `{"v":1,"layout":"shard"}`（第 11 节裁定）；本机编辑器的原布局记作 `flat`（本机不写标记）。
+7. 磁盘满：`ENOSPC` / `EDQUOT` 回 507 的映射做在 `server/asset-service.ts`（分片与收尾两处），本机编辑器同样生效。
+8. 测试开关 `PROMPTCUT_TEST_NO_LOOPBACK_TRUST=1`：素材服务与管理接口不把本机回环当自己人，本机也能验票据读写。
+
+**部署脚本的补充**：`deploy-hosted` 另有 `--replace-docservice`（旧的 `promptcut-docservice` 还在 PM2 里时，缺省拒绝部署正式实例，退出码 3）、
+`--write-token`（把本机 `PROMPTCUT_CLUSTER_TOKEN` 经 ssh 标准输入写成 `secrets/cluster-token`，0600）；另加 `status-hosted`、`stage-hosted`。
+
+## 11. 集成时的裁定（2026-09-26）
+
+`claude/sp-hosting`、`claude/sp-routing`、`claude/sp-tests` 集成对账时，主会话对歧义与实现偏差的裁定。每条是「裁定：理由」。实现已按此核对或改过（`claude/sp-integ`，改动清单见 `docs/reports/AGENT-sp-integ.md`）。
+
+- **数据目录**：`PROMPTCUT_DATA_DIR` 不存在就启动失败（`config.error { reason: 'data-dir' }`，退出码 1），服务不替用户建；部署脚本先建。理由：服务自己建会把写错的路径悄悄变成一个空实例，看起来正常、数据却不在该在的地方；部署脚本知道目标路径，由它建（`deploy-hosted` 已这样做）。
+- **`.layout`**：对不上时退出码 1、原因词 `layout`；文件内容 `{"v":1,"layout":"shard"|"flat"}`。理由：与其余失败即关的原因词一致；布局名按含义起，不带实现细节（原实现写的 `shard2` 已改成 `shard`，`/healthz` 同）。
+- **`migrate-check` 的输入**：`--from` / `--to` 是两份托管组合的文档服务 http 地址；集群令牌从环境变量 `PROMPTCUT_CLUSTER_TOKEN` 读，没有就读数据目录的 `secrets/cluster-token`（`--data-dir` 或 `PROMPTCUT_DATA_DIR`）；项目数经管理接口（`/admin/inventory`）列出。理由：文档服务地址是成员配置里唯一的入口，素材服务地址从 `service.endpoints` 取，还能顺带核对新实例登记的是自己的地址；令牌只在管理用途上读（M6a 第 11 节），在服务器上跑时直接读数据目录里的令牌文件，不必出现在命令行或环境里；共享项目与各空间的 `projectRev` 只有管理接口能完整列出。
+- **`findSharedProject` 的细节**：
+  - 托管端回 404 表示没有候选，不进 `errors`；连不上（含超时）才进 `errors`。理由：404 是「这里没有这个名字」的正常答复，连不上才是要提示用户的故障。
+  - 局域网候选的 `base` 用 `http://<ip>:<端口>/docservice/`（托管候选同形：`http://<主机>:<端口>/`）；要连 WebSocket 时再换成 `ws://`（`route.mjs` 的 `wsBaseOf`）。理由：`client.mjs` 取挑战、查名字都走 http，候选直接交给它；一种写法便于去重与显示。
+  - 手填与发现到的候选按 `base` 去重，发现的在前。理由：同一台主机经发现与手填两路查到时只列一次。
+  - 局域网发现与托管端查询可以并行，结果与先后执行等价。理由：两边的候选都列出、谁也不挑，并行只省时间。
+- **磁盘满**：`ENOSPC` / `EDQUOT` 映射成 507 `insufficient-storage` 做在素材服务的 HTTP 层（接受 `claude/sp-hosting` 改 `server/asset-service.ts` 的出错分支）。理由：数据层只抛错误码，状态码是 HTTP 层的事；本机编辑器同样受益，正常路径不变。
+- **凭证存储读不了**：只在 `PROMPTCUT_LAN_HOST=1` 时拒绝启动；`npm run dev` 绑 `0.0.0.0` 时只打 `config.error { reason: 'auth-store' }`，局域网来的一律 401。理由：不改开发环境的现有行为；明确要当局域网主机时才失败即关，其余情况局域网来的一律 401 已经安全。
+- **局域网广播与绑定**：是否广播按编辑器实际绑定的地址判断（只绑回环不广播）；`PROMPTCUT_LAN_HOST=1` 在 vite 插件的 `config` 钩子里压过命令行的 `--host`；运行时不能换绑定。理由：只绑回环时通告出去的地址别人连不上；桌面壳按 `--host 127.0.0.1` 拉起编辑器，写在 `server.host` 里会被命令行盖掉；vite 的 http 服务器不能在运行时换绑定地址。
+  - **遗留（C6.5）**：第 5 节「由 C6.5 的『新建共享项目（局域网模式）』在运行时打开」做不到，C6.5 要靠桌面壳带着 `PROMPTCUT_LAN_HOST=1` 重启编辑器。
+- **探针退出崩溃**：SP7 探针在结果行之后以 `0xC0000409` 退出，属于已知的 Windows 退出崩溃（有句柄还在关闭中就 `process.exit`，同 `render-queue-e2e.mjs` 的注释），保留规避：探针设 `process.exitCode` 后自然退出，10 s 兜底强退用 unref 的计时器。理由：崩溃发生在结果已写出之后，与被测行为无关；局域网模式的探针（`shared-project-lan.mjs`）也改成同样的退出方式。

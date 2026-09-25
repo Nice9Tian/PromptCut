@@ -95,6 +95,11 @@
  * - 带查询串票据的响应加 `Cache-Control: no-store` 与 `Referrer-Policy: no-referrer`。
  * - 票据原文不进日志、不进回包;本模块不记访问日志。
  *
+ * ## 磁盘满(SP,`docs/plan/shared-project-contract.md` 第 1 节)
+ *
+ * - 数据层写入时报 `ENOSPC` / `EDQUOT`(分片上传、收尾):回 **507** `{ ok: false, error: "insufficient-storage" }`。
+ *   这一片不算收到、这一哈希不算入库,已收的分片保留,腾出空间后续传即可。
+ *
  * # 存储
  *
  * 经 `BlobStore` 读写,本模块不碰文件系统。fs 实现的目录布局(全件、收了一半的分片、每片的「收到」标记)
@@ -257,6 +262,12 @@ function sendJson(res: ServerResponse, status: number, body: unknown) {
   res.end(JSON.stringify(body));
 }
 
+/** 数据层写入时磁盘满(`ENOSPC`)或超配额(`EDQUOT`):回 507,别的错误照旧 500 */
+function isStorageFull(err: unknown): boolean {
+  const code = err && typeof err === "object" && "code" in err ? String((err as { code: unknown }).code) : "";
+  return code === "ENOSPC" || code === "EDQUOT";
+}
+
 /** 回完错误再掐断:请求体还在路上,别让它继续往服务端灌(和 http-guard.mjs 的 overLimit 同一个理由) */
 function reject(req: IncomingMessage, res: ServerResponse, status: number, body: unknown) {
   // 声明了长度、且不超过一片的请求体:读完扔掉再回,客户端能干净地收到这个 4xx(不然它还在发、
@@ -301,6 +312,8 @@ async function handlePutChunk(req: IncomingMessage, res: ServerResponse, store: 
   try {
     out = await store.putChunk(hash, n, { size, ext: extFromHeaders(req, ns) }, req);
   } catch (err) {
+    // 磁盘满:这一片的标记没补(不算收到),已收的分片不动;请求体可能还在路上,回完就掐断
+    if (isStorageFull(err)) return reject(req, res, 507, { ok: false, error: "insufficient-storage" });
     // 断线:对面已经不在了,回什么都收不到;这一片的标记没补,对账时报「没收到」
     if (!res.headersSent && !res.destroyed) sendJson(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
     return;
@@ -582,6 +595,8 @@ export function assetServiceMiddleware(root: string, opts: AssetServiceOptions =
       if (!(await admit(req, res, true))) return;
       return await handlePutChunk(req, res, store, hash, tail, ns);
     } catch (err) {
+      // 收尾时磁盘满:数据层没有入库、暂存保留(fs 实现的收尾只在成功改名后才删暂存)
+      if (isStorageFull(err)) return sendJson(res, 507, { ok: false, error: "insufficient-storage" });
       sendJson(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
     }
   };

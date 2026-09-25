@@ -70,6 +70,22 @@
  *   `--state` 目录下的 `<名>.config.json` 交给 render-host),ready 与结果经它交,不读写 creator 的 state 目录。
  *   check 必须在 creator 那台机器上跑(它读创建者的帧库、起单机重渲比较)。
  *
+ *   协调口的实现在 `probe-coord.mjs`:同一个口另答 `PUT /kv/<键>`、`GET /kv/<键>?wait=`(`shared-project-probe.mjs` 用的形状),
+ *   两个探针可以共用 creator 的这一个口。
+ *
+ * ## 托管模式(SP / W6 互联网模式)
+ *
+ *   creator 加 `--hosted <托管组合的文档服务 http 地址>` `[--coord-port 5409]`:
+ *   - 共享项目建在托管端(`route.mjs` 的 `createSharedProject({ where: 'hosted' })`),不建在本机编辑器里;
+ *     全部配置(`creator.json` 与 host-a / host-b / host-c / host-bad / auth)的 `url` 都是托管端的文档服务;
+ *   - 本机编辑器照旧队列模式、只绑回环,预渲染进程凭 `PROMPTCUT_SHARED_CONFIG`(`creator.json`)连托管端,发布真实 plan;
+ *     产物推到托管端经 `service.endpoints` 下发的素材服务,`task.done` 的清单也从那里拉回本机帧库;
+ *   - 协调口照样起(绑 0.0.0.0:`--coord-port`),主机与 auth-check、check、stop 用 `--coord` 取配置、交结果;
+ *   - `--rounds` 缺省 `r1:host-a,host-b`;要验 H2 / 口令错时显式给 `r1:host-a,host-b;r2:host-c;r3:host-bad`
+ *     (host-bad 连错会让它所在的来源进入 60 s 冷却,同一台笔记本上的 host-c 不能与它同一轮)。
+ *   主机不必与托管端同网段:只要连得上托管端的两个端口与 creator 的协调口。check 仍在 creator 那台机器上跑。
+ *   auth-check 的素材地址取 `service.endpoints` 下发的(托管端素材服务在另一个端口),取不到才按文档服务地址推。
+ *
  * ## --role stop
  *
  *   node scripts/probes/render-host-probe.mjs --role stop [--coord <地址>] [--state <目录>]
@@ -82,11 +98,11 @@ import fsSync from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import net from 'node:net';
-import http from 'node:http';
 import { randomBytes, createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
+import { startCoordServer as startKvCoord, readJsonBody } from './probe-coord.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const args = process.argv.slice(2);
@@ -179,48 +195,44 @@ const channel = {
 };
 
 /**
- * creator 的协调服务(跨机模式):背后就是 state 目录里的同一批文件,creator 自己的流程照旧读写文件。
- * 回 { server, close }。
+ * creator 的协调服务(跨机模式与托管模式):背后就是 state 目录里的同一批文件,creator 自己的流程照旧读写文件。
+ * 口是 `probe-coord.mjs` 起的(另答 `/kv/*`、`/healthz`),这里的路径经它的 `extra` 挂上。
+ * 回 { server, close },绑不上回 { error }。
  */
-function startCoordServer(port) {
-  const send = (res, status, body) => {
-    res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
-    res.end(JSON.stringify(body));
-  };
-  const readBody = (req) => new Promise((resolve, reject) => {
-    let size = 0; const chunks = [];
-    req.on('data', (c) => { size += c.length; if (size > 4 << 20) { reject(new Error('too-large')); req.destroy(); } else chunks.push(c); });
-    req.on('end', () => { try { resolve(chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {}); } catch (e) { reject(e); } });
-    req.on('error', reject);
-  });
-  const server = http.createServer(async (req, res) => {
-    try {
-      const url = new URL(req.url, 'http://coord');
-      const [, kind, name] = url.pathname.split('/');
-      if (name !== undefined && !NAME_RE.test(name)) return send(res, 400, { ok: false, error: 'bad-name' });
-      const file = (f) => path.join(STATE, f);
-      if (req.method === 'GET' && kind === 'configs' && name) {
-        if (name === 'creator' || !exists(configFileOf(name))) return send(res, 404, { ok: false });
-        return send(res, 200, await readJson(configFileOf(name)));
-      }
-      if (req.method === 'GET' && kind === 'round' && name) return exists(file(`round-${name}.json`)) ? send(res, 200, await readJson(file(`round-${name}.json`))) : send(res, 404, { ok: false });
-      if (req.method === 'GET' && kind === 'result' && name) return exists(file(`${name}.result.json`)) ? send(res, 200, await readJson(file(`${name}.result.json`))) : send(res, 404, { ok: false });
-      if (req.method === 'GET' && kind === 'state' && !name) {
-        const s = exists(file('state.json')) ? await readJson(file('state.json')) : {};
-        return send(res, 200, { phase: s.phase ?? 'starting', projectId: s.projectId ?? null, stop: exists(file('stop')) });
-      }
-      if (req.method === 'POST' && kind === 'ready' && name) { await writeJson(file(`${name}.ready`), { ...(await readBody(req)), from: req.socket.remoteAddress }); return send(res, 200, { ok: true }); }
-      if (req.method === 'POST' && kind === 'result' && name) { await writeJson(file(`${name}.result.json`), { ...(await readBody(req)), from: req.socket.remoteAddress }); return send(res, 200, { ok: true }); }
-      if (req.method === 'POST' && kind === 'stop' && !name) { await writeJson(file('stop'), { at: Date.now(), from: req.socket.remoteAddress }); return send(res, 200, { ok: true }); }
-      return send(res, 404, { ok: false, error: 'no-route' });
-    } catch (error) {
-      return send(res, 500, { ok: false, error: String(error?.message ?? error) });
+async function startCoordServer(port) {
+  const extra = async (req, res, url, send) => {
+    const [, kind, name] = url.pathname.split('/');
+    if (name !== undefined && !NAME_RE.test(name)) { send(res, 400, { ok: false, error: 'bad-name' }); return true; }
+    const file = (f) => path.join(STATE, f);
+    if (req.method === 'GET' && kind === 'configs' && name) {
+      if (name === 'creator' || !exists(configFileOf(name))) send(res, 404, { ok: false });
+      else send(res, 200, await readJson(configFileOf(name)));
+      return true;
     }
-  });
-  return new Promise((resolve) => {
-    server.once('error', (error) => resolve({ error }));
-    server.listen(port, '0.0.0.0', () => resolve({ server, close: () => new Promise((r) => { server.close(() => r()); server.closeAllConnections?.(); }) }));
-  });
+    if (req.method === 'GET' && kind === 'round' && name) {
+      if (exists(file(`round-${name}.json`))) send(res, 200, await readJson(file(`round-${name}.json`))); else send(res, 404, { ok: false });
+      return true;
+    }
+    if (req.method === 'GET' && kind === 'result' && name) {
+      if (exists(file(`${name}.result.json`))) send(res, 200, await readJson(file(`${name}.result.json`))); else send(res, 404, { ok: false });
+      return true;
+    }
+    if (req.method === 'GET' && kind === 'state' && !name) {
+      const st = exists(file('state.json')) ? await readJson(file('state.json')) : {};
+      send(res, 200, { phase: st.phase ?? 'starting', projectId: st.projectId ?? null, stop: exists(file('stop')) });
+      return true;
+    }
+    if (req.method === 'POST' && kind === 'ready' && name) { await writeJson(file(`${name}.ready`), { ...(await readJsonBody(req)), from: req.socket.remoteAddress }); send(res, 200, { ok: true }); return true; }
+    if (req.method === 'POST' && kind === 'result' && name) { await writeJson(file(`${name}.result.json`), { ...(await readJsonBody(req)), from: req.socket.remoteAddress }); send(res, 200, { ok: true }); return true; }
+    if (req.method === 'POST' && kind === 'stop' && !name) { await writeJson(file('stop'), { at: Date.now(), from: req.socket.remoteAddress }); send(res, 200, { ok: true }); return true; }
+    return false;
+  };
+  try {
+    const coord = await startKvCoord({ port, host: '0.0.0.0', extra });
+    return { server: coord.server, close: coord.close };
+  } catch (error) {
+    return { error };
+  }
 }
 
 function viteBin() {
@@ -316,6 +328,7 @@ async function runCreator() {
   const port = Number(arg('--port', 5400));
   const holdMs = Number(arg('--hold-min', 30)) * 60_000;
   const lan = arg('--lan', null);
+  const hosted = arg('--hosted', null);
   const coordPort = Number(arg('--coord-port', 5409));
   const rounds = String(arg('--rounds', lan ? 'r1:host-a,host-b;r2:host-c;r3:host-bad' : 'r1:host-a,host-b')).split(';').filter(Boolean).map((part) => {
     const [name, hosts = ''] = part.split(':');
@@ -327,25 +340,35 @@ async function runCreator() {
   const dir = path.join(STATE, 'creator');
   const creatorConfig = path.join(STATE, 'creator.json');
   const env = baseEnv(dir, { PROMPTCUT_QUEUE_NODE: '1', PROMPTCUT_SHARED_CONFIG: creatorConfig });
-  const out = { role: 'creator', port, state: STATE, rounds: [], ...(lan ? { lan, coordPort } : {}) };
+  const out = { role: 'creator', port, state: STATE, rounds: [], ...(lan ? { lan, coordPort } : {}), ...(hosted ? { hosted, coordPort } : {}) };
   let started = null;
   let coord = null;
   try {
-    if (lan) {
-      if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(lan)) { fails.push(`--lan 要是 IPv4 地址,收到 ${lan}`); return out; }
+    if (lan && hosted) { fails.push('--lan 与 --hosted 只能给一个'); return out; }
+    let hostedWs = null;
+    if (hosted) {
+      const { wsBaseOf } = await import('../../server/auth/route.mjs');
+      try { hostedWs = wsBaseOf(hosted); } catch { fails.push(`--hosted 要是 http(s):// 或 ws(s):// 地址,收到 ${hosted}`); return out; }
+      const health = await json(`${hostedWs.replace(/^ws/, 'http')}/healthz`, { timeoutMs: 10_000 }).catch((e) => ({ ok: false, body: String(e?.message ?? e) }));
+      if (!check(health.ok, `[creator] 托管端 ${hosted} /healthz`, health.body)) return out;
+    }
+    if (lan || hosted) {
+      if (lan && !/^\d{1,3}(\.\d{1,3}){3}$/.test(lan)) { fails.push(`--lan 要是 IPv4 地址,收到 ${lan}`); return out; }
       coord = await startCoordServer(coordPort);
       if (!check(!coord.error, `[creator] 协调服务绑 0.0.0.0:${coordPort}`, String(coord.error?.code ?? coord.error))) return out;
     }
     started = await startEditor(port, env, 'creator', lan ? '0.0.0.0' : '127.0.0.1');
     if (!started?.prerender) return out;
-    const docUrl = `ws://127.0.0.1:${port}/docservice`;
-    // 主机与 auth 的配置用局域网地址;本机 PC 节点(creator.json)与建项目仍走回环(挂载模式只有回环能建)
+    // 托管模式:项目建在托管端,本机 PC 节点与主机都连托管端的文档服务
+    const docUrl = hostedWs ?? `ws://127.0.0.1:${port}/docservice`;
+    // 局域网模式:主机与 auth 的配置用局域网地址;本机 PC 节点(creator.json)与建项目仍走回环(挂载模式只有回环能建)
     const hostDocUrl = lan ? `ws://${lan}:${port}/docservice` : docUrl;
-    const { createSharedProject } = await import('../../server/auth/client.mjs');
+    const { createSharedProject } = await import('../../server/auth/route.mjs');
     const secret = () => randomBytes(12).toString('base64url');
     const creatorPw = secret();
     const projectPw = secret();
-    const project = await createSharedProject({ base: docUrl, name: `rhp-${stamp}`, mode: 'free', creator: { username: 'creator', password: creatorPw }, password: projectPw });
+    const project = await createSharedProject({ where: hostedWs ? 'hosted' : 'lan', ...(hostedWs ? { hostedUrl: hostedWs } : { lanBase: docUrl }),
+      name: `rhp-${stamp}`, mode: 'free', creator: { username: 'creator', password: creatorPw }, password: projectPw });
     out.projectId = project.projectId;
     const devId = (tag) => `rhp-${tag}-${stamp}`.replace(/[^A-Za-z0-9_-]/g, '-').padEnd(16, '0').slice(0, 64);
     const entry = (username, extra) => ({ url: hostDocUrl, projectId: project.projectId, username, deviceId: devId(username), deviceName: `${username} (probe)`, as: 'member', role: 'render', password: projectPw, ...extra });
@@ -362,7 +385,13 @@ async function runCreator() {
     const diagnostics = async () => (await json(`${started.prerender}/api/frames/diagnostics`)).body ?? {};
     const active = await until('[creator] 本机节点报到', async () => (await diagnostics()).queue?.active === true || null, 240_000, 1000);
     const d0 = await diagnostics();
-    out.pc = { mode: d0.queue?.mode ?? null, nodeId: d0.queue?.nodeId ?? null, envFingerprint: d0.queue?.envFingerprint ?? null, codeVersion: d0.queue?.codeVersion ?? null };
+    out.pc = { mode: d0.queue?.mode ?? null, nodeId: d0.queue?.nodeId ?? null, envFingerprint: d0.queue?.envFingerprint ?? null, codeVersion: d0.queue?.codeVersion ?? null,
+      url: d0.queue?.url ?? null };
+    if (hosted) {
+      // 推送与拉取用的素材服务(预渲染进程日志里的 push.asset-base,最后一次为准):应是托管端下发的那个
+      const bases = started.log.join('').split('\n').filter((l) => l.includes('push.asset-base')).map((l) => { try { return JSON.parse(l.slice(l.indexOf('{'))); } catch { return null; } }).filter(Boolean);
+      out.pc.assetBases = bases.map((b) => ({ for: b.for, source: b.source, base: b.base })).slice(-4);
+    }
     if (!active) { out.queueLog = started.log.join('').split('\n').filter((l) => l.includes('[queue-node]')).slice(-10); return out; }
 
     for (const round of rounds) {
@@ -423,7 +452,7 @@ async function runCreator() {
     if (started?.child) { killTree(started.child); await exited(started.child); }
     try { await writeJson(path.join(STATE, 'state.json'), { ...(await readJson(path.join(STATE, 'state.json'))), phase: 'stopped' }); } catch { /* 没写出过 */ }
     // 协调服务晚一点关:让还在等轮次的主机看到 stopped
-    if (coord?.close) { await delay(lan ? 3000 : 0); await coord.close(); }
+    if (coord?.close) { await delay(lan || hosted ? 3000 : 0); await coord.close(); }
   }
   return out;
 }
@@ -707,13 +736,23 @@ async function runAuthCheck() {
     const { createWsEndpoint } = await import('../../server/render-node/ws-transport.mjs');
     const { createTicketSource } = await import('../../server/auth/ticket-source.mjs');
     const ep = createWsEndpoint({ url: entry.url, protocols: sharedProtocols(entry, { role: 'page' }) });
+    const { watchServiceEndpoints } = await import('../../server/render-node/endpoint.mjs');
+    let announcedAsset = null;
+    const stopWatch = watchServiceEndpoints(ep, ['asset'], (list) => {
+      announcedAsset = list.find((e) => e.kind === 'asset' && Array.isArray(e.urls) && e.urls.length)?.urls[0] ?? announcedAsset;
+    });
     try {
       await until('auth-check 连上', async () => ep.connected || null, 20_000, 100);
       const ticket = await createTicketSource(ep, { access: 'rw' })();
       out.ticket = typeof ticket === 'string' && ticket.startsWith('v1.');
       check(out.ticket, 'auth.ticket 取到素材票据');
       const u = new URL(entry.url);
-      const assetBase = `${u.protocol === 'wss:' ? 'https:' : 'http:'}//${u.host}/api/asset`;
+      // 素材服务地址:编辑器里挂的文档服务(路径 /docservice)与素材服务同源,照旧按文档服务地址推;
+      // 独立的文档服务(托管组合,素材服务在另一个端口)取 service.endpoints 下发的,5 s 内没下发才按文档服务地址推
+      const mounted = /\/docservice\/?$/.test(u.pathname);
+      for (let i = 0; i < 50 && !mounted && !announcedAsset; i++) await delay(100);
+      const assetBase = ((mounted ? null : announcedAsset) ?? `${u.protocol === 'wss:' ? 'https:' : 'http:'}//${u.host}/api/asset`).replace(/\/+$/, '');
+      out.assetBase = assetBase;
       const auth = { Authorization: `Bearer ${ticket}` };
 
       // 先传一块真的内容(1 片),读的判法才能落到 200 / 206 上,而不是不存在的 404
@@ -740,6 +779,7 @@ async function runAuthCheck() {
       out.assetBadTicket = await assetStatus(`${assetBase}/media/${hash}`, { method: 'GET', headers: { Authorization: `Bearer ${ticket.slice(0, -4)}AAAA` } });
       if (!out.loopback) check(out.assetBadTicket === 401, '非回环来源签名不对的票据读素材 401', out.assetBadTicket);
     } finally {
+      stopWatch();
       ep.close();
     }
 

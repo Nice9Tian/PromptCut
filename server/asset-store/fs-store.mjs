@@ -10,10 +10,19 @@
  *
  * 本模块不引 `vite-plugin-media.ts`：找已入库文件（兼容老的整件导入）、入库后写媒体索引、
  * 扩展名到 Content-Type 都经调用方注入的 `hooks`。只引 Node 内置模块。
+ *
+ * **分目录布局**（`shard: true`，托管组合用；契约 `docs/plan/shared-project-contract.md` 第 1 节）：
+ * - 全件放在按哈希前两位分的子目录里：`<dir>/<hash 前两位>/<hash>.<ext>`（没有扩展名就是 `<dir>/<hh>/<hash>`），
+ *   一个命名空间下至多 256 个子目录，用到时才建；
+ * - 暂存仍是 `<dir>/.chunks/<hash>/`，与全件同一个文件系统，收尾时改名过去（临时文件加改名）；
+ * - 收尾时先对 `data` 做 `fsync`，改名后再对所在子目录做 `fsync`（尽力而为：Windows 上目录打不开就跳过）。
+ *   分片不 `fsync`：丢了的分片对账时报「没收到」，续传即可；
+ * - 两种布局读取互不兼容，所以布局记在调用方选定的目录里的 `.layout` 文件（`ensureLayoutSync`），启动时核对。
+ * 本机编辑器不传 `shard`，布局与行为和原来逐字节一致（不做 `fsync`）。
  */
 import path from 'node:path';
 import fs from 'node:fs/promises';
-import { createReadStream, createWriteStream } from 'node:fs';
+import fsSync, { createReadStream, createWriteStream } from 'node:fs';
 import crypto from 'node:crypto';
 import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
@@ -34,30 +43,109 @@ async function exists(file) {
   try { await fs.stat(file); return true; } catch { return false; }
 }
 
+const SHARD_DIR = /^[0-9a-f]{2}$/;
+
+/** 对文件（或目录）做 fsync；`dir: true` 时是尽力而为（Windows 上目录打不开、不支持 fsync 就跳过） */
+async function fsyncPath(file, { dir = false } = {}) {
+  let fh;
+  try {
+    fh = await fs.open(file, dir ? 'r' : 'r+');
+  } catch (err) {
+    if (dir) return;
+    throw err;
+  }
+  try {
+    await fh.sync();
+  } catch (err) {
+    if (!dir) throw err;
+  } finally {
+    await fh.close();
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * 布局标记 `.layout`
+ * ------------------------------------------------------------------ */
+
+/** 布局标记的文件名：放在调用方选定的根目录下（托管组合是 `$PROMPTCUT_DATA_DIR/assets/.layout`） */
+export const LAYOUT_FILE = '.layout';
+/** 两种布局的名字（`.layout` 的内容 `{"v":1,"layout":"shard"|"flat"}`，契约第 11 节裁定）：`flat` 是本机编辑器的原布局，`shard` 是按哈希前两位分子目录 */
+export const LAYOUTS = Object.freeze({ flat: 'flat', shard: 'shard' });
+
+/** 读布局标记：没有回 null；读不了或格式不对回 `{ layout: 'unreadable' }` */
+export function readLayoutSync(dir) {
+  let text;
+  try {
+    text = fsSync.readFileSync(path.join(path.resolve(dir), LAYOUT_FILE), 'utf8');
+  } catch (err) {
+    if (err?.code === 'ENOENT') return null;
+    return { layout: 'unreadable' };
+  }
+  try {
+    const raw = JSON.parse(text);
+    if (raw && typeof raw.layout === 'string') return { v: raw.v ?? null, layout: raw.layout };
+  } catch { /* 下面按读不了算 */ }
+  return { layout: 'unreadable' };
+}
+
+/**
+ * 启动时核对布局（契约第 1 节「布局记在 `assets/.layout` 里，启动时核对，对不上就拒绝启动」）：
+ * - 有标记：与 `layout` 相同回 `{ ok: true, created: false }`，不同回 `{ ok: false, found }`；
+ * - 没有标记：目录不存在或是空的，就建目录、写标记（临时文件加改名、fsync），回 `{ ok: true, created: true }`；
+ *   目录里已经有别的东西（来历不明的数据），回 `{ ok: false, found: 'unmarked' }`，不写标记。
+ * 目录建不了、写不了照原样抛错（调用方按数据目录不可写处理）。
+ * @param {string} dir
+ * @param {string} layout  `LAYOUTS` 里的一个
+ */
+export function ensureLayoutSync(dir, layout) {
+  const root = path.resolve(dir);
+  const found = readLayoutSync(root);
+  if (found) return found.layout === layout ? { ok: true, created: false } : { ok: false, found: found.layout };
+  fsSync.mkdirSync(root, { recursive: true });
+  const others = fsSync.readdirSync(root).filter((n) => !n.startsWith(`${LAYOUT_FILE}.tmp-`));
+  if (others.length > 0) return { ok: false, found: 'unmarked' };
+  const file = path.join(root, LAYOUT_FILE);
+  const tmp = `${file}.tmp-${process.pid}-${crypto.randomBytes(4).toString('hex')}`;
+  const fd = fsSync.openSync(tmp, 'w');
+  try {
+    fsSync.writeFileSync(fd, `${JSON.stringify({ v: 1, layout })}\n`, 'utf8');
+    fsSync.fsyncSync(fd);
+  } finally {
+    fsSync.closeSync(fd);
+  }
+  fsSync.renameSync(tmp, file);
+  return { ok: true, created: true };
+}
+
 /**
  * @param {object} options
  * @param {string} options.dir  本地内容库目录（`mediaDir(root)`）
  * @param {object} [options.hooks]
- * @param {(hash: string) => Promise<string | null>} [options.hooks.resolveFile]  找已入库的文件；缺省在 `dir` 里按文件名找
+ * @param {(hash: string) => Promise<string | null>} [options.hooks.resolveFile]  找已入库的文件；缺省在 `dir`（分目录布局是 `dir/<hh>`）里按文件名找
  * @param {(entry: { hash: string, file: string, ext: string, size: number, contentType: string }) => (void | Promise<void>)} [options.hooks.onStored]  入库后写媒体索引
  * @param {(ext: string) => string} [options.hooks.contentTypeForExt]
  * @param {number} [options.chunkSize]  缺省 8 MiB
+ * @param {boolean} [options.shard]  分目录布局（见文件头），缺省 false
  * @returns {import('./blob-store.mjs').BlobStore}
  */
-export function createFsStore({ dir, hooks = {}, chunkSize = BLOB_CHUNK_SIZE } = /** @type {any} */ ({})) {
+export function createFsStore({ dir, hooks = {}, chunkSize = BLOB_CHUNK_SIZE, shard = false } = /** @type {any} */ ({})) {
   if (typeof dir !== 'string' || dir === '') throw new TypeError('createFsStore：dir 必须是非空字符串');
   if (!Number.isSafeInteger(chunkSize) || chunkSize <= 0) throw new TypeError('createFsStore：chunkSize 必须是正整数');
   const base = path.resolve(dir);
+  const sharded = shard === true;
   const contentTypeForExt = typeof hooks.contentTypeForExt === 'function' ? hooks.contentTypeForExt : minimalContentType;
   const onStored = typeof hooks.onStored === 'function' ? hooks.onStored : () => {};
   const resolveFile = typeof hooks.resolveFile === 'function' ? hooks.resolveFile : scanFile;
+  /** 全件所在的目录：原布局就是 `dir`，分目录布局是 `dir/<hash 前两位>` */
+  const homeOf = (hash) => (sharded ? path.join(base, hash.slice(0, 2)) : base);
 
   /** 缺省的 resolveFile：`<hash>` 或 `<hash>.<ext>` */
   async function scanFile(hash) {
+    const home = homeOf(hash);
     let names = [];
-    try { names = await fs.readdir(base); } catch { return null; }
+    try { names = await fs.readdir(home); } catch { return null; }
     const hit = names.find((n) => n.toLowerCase() === hash || n.toLowerCase().startsWith(hash + '.'));
-    return hit ? path.join(base, hit) : null;
+    return hit ? path.join(home, hit) : null;
   }
 
   const lockKey = (hash) => `${base}\0${hash}`;
@@ -103,8 +191,39 @@ export function createFsStore({ dir, hooks = {}, chunkSize = BLOB_CHUNK_SIZE } =
     }
   }
 
+  /** 已入库的全件：哈希 → 字节数 */
+  async function scanStored() {
+    const sizes = new Map();
+    async function countIn(home, prefix) {
+      let entries = [];
+      try { entries = await fs.readdir(home, { withFileTypes: true }); } catch { return; /* 目录还不存在 */ }
+      for (const ent of entries) {
+        if (!ent.isFile()) continue;
+        const m = HASH_FILE.exec(ent.name);
+        if (!m) continue;
+        const key = m[1].toLowerCase();
+        if (prefix !== null && !key.startsWith(prefix)) continue;
+        if (sizes.has(key)) continue;
+        try { sizes.set(key, (await fs.stat(path.join(home, ent.name))).size); } catch { /* 刚被删 */ }
+      }
+    }
+    if (sharded) {
+      let subdirs = [];
+      try { subdirs = await fs.readdir(base, { withFileTypes: true }); } catch { /* 目录还不存在 */ }
+      for (const ent of subdirs) {
+        const name = ent.name.toLowerCase();
+        if (ent.isDirectory() && SHARD_DIR.test(name)) await countIn(path.join(base, ent.name), name);
+      }
+    } else {
+      await countIn(base, null);
+    }
+    return sizes;
+  }
+
   return {
     kind: 'fs',
+    /** 布局：`flat`（原布局）或 `shard`（分目录） */
+    layout: sharded ? LAYOUTS.shard : LAYOUTS.flat,
     chunkSize,
 
     async stat(hash) {
@@ -205,7 +324,15 @@ export function createFsStore({ dir, hooks = {}, chunkSize = BLOB_CHUNK_SIZE } =
         // 原位写的 data 不会比 size 长（每片长度都校验过），保险起见还是截一下
         await fs.truncate(data, meta.size);
         const file = meta.ext ? `${key}.${meta.ext}` : key;
-        await fs.rename(data, path.join(base, file));
+        const home = homeOf(key);
+        if (sharded) {
+          // 分目录布局：先把全件字节刷盘再改名，改名后刷子目录（契约第 9 节〔裁〕：fsync 只对 complete 做）。
+          // 中途出错（含 ENOSPC、EDQUOT）照原样抛：暂存不动，已收的分片保留，不算入库
+          await fsyncPath(data);
+          await fs.mkdir(home, { recursive: true });
+        }
+        await fs.rename(data, path.join(home, file));
+        if (sharded) await fsyncPath(home, { dir: true });
         await fs.rm(d, { recursive: true, force: true });
         await onStored({ hash: key, file, ext: meta.ext, size: meta.size, contentType: contentTypeForExt(meta.ext) });
         return { status: 'ok', size: meta.size, ext: meta.ext };
@@ -229,18 +356,17 @@ export function createFsStore({ dir, hooks = {}, chunkSize = BLOB_CHUNK_SIZE } =
       });
     },
 
+    /**
+     * 已入库的全件，按哈希升序：`[{ hash, size }]`（fs 实现独有，不在 BlobStore 接口里；托管组合的迁移盘点用）。
+     * 只数 `<hash>` 与 `<hash>.<ext>` 形状的文件；分目录布局只认前两位对得上的。
+     */
+    async list() {
+      const sizes = await scanStored();
+      return [...sizes.keys()].sort().map((hash) => ({ hash, size: sizes.get(hash) }));
+    },
+
     async usage() {
-      const sizes = new Map();
-      let entries = [];
-      try { entries = await fs.readdir(base, { withFileTypes: true }); } catch { /* 目录还不存在 */ }
-      for (const ent of entries) {
-        if (!ent.isFile()) continue;
-        const m = HASH_FILE.exec(ent.name);
-        if (!m) continue;
-        const key = m[1].toLowerCase();
-        if (sizes.has(key)) continue;
-        try { sizes.set(key, (await fs.stat(path.join(base, ent.name))).size); } catch { /* 刚被删 */ }
-      }
+      const sizes = await scanStored();
       let staging = 0;
       let dirs = [];
       try { dirs = await fs.readdir(path.join(base, '.chunks'), { withFileTypes: true }); } catch { /* 没有暂存 */ }
