@@ -158,6 +158,8 @@ export function createAgentExecutor({
     if (!c) {
       c = { key, n: nextNumber++, session: `agent:${key || 'default'}`.slice(0, 128), lastRead: null, eventSeq: 0 };
       convs.set(key, c);
+      // 登记这个对话的连接(用到时才连);第一个登记的兼做副本的订阅
+      link.conversation(c.n);
     }
     return c;
   }
