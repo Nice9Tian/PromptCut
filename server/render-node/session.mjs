@@ -14,7 +14,8 @@ import { pickCandidate } from './pick.mjs';
  * 同一时刻至多一条认领在飞,一次 `tick` 至多发一条认领;持有数 + 在飞数到 `maxConcurrent`
  * 就不再认领。在飞的认领在收到 `task.claimed` / `task.claim-rejected`(或 `error`、重新
  * `start`)时清掉。队列回 `claim-rejected { reason: 'throttled' }`(契约 I.6)后,
- * 一个 `SWEEP_INTERVAL_MS` 内不发起新认领,续约照常。
+ * 一个 `SWEEP_INTERVAL_MS` 内不发起新认领,续约照常。回 `preferred`(M6c X4:`plan` 还在发布方的独占窗口里)
+ * 时这个候选留在视图里、搁到回包的 `retryInMs` 之后再考虑。
  *
  * # 重入
  *
@@ -57,6 +58,15 @@ export function createNodeSession({
   let epoch = null;
   /** 被队列限流(`claim-rejected { reason: 'throttled' }`,契约 I.6)后,这个时刻之前不发起新认领;续约照常 */
   let throttledUntil = -Infinity;
+  /**
+   * 搁置到某一刻的候选:id → 本地时刻(M6c X4)。`plan` 在发布方的独占窗口里被回 `preferred` 时,
+   * 候选留在视图里、搁到窗口过后再考虑(队列回的 `retryInMs` 按本地时钟换算,跨机器也不怕时钟差)。
+   */
+  const deferred = new Map();
+  /** 节点侧过滤用的节点描述:补上 `nodeId`(本地档能力闸 `requires.localMedia` 要比它,M6c X2) */
+  const filterNode = () => (node?.nodeId != null ? node : { ...node, nodeId });
+  /** 按摘要 watch 着的项目(M6c X3,只有 host 用 `'all'` 时才有);null = 还没 watch 过具体项目 */
+  let watching = null;
 
   const dropHold = (id, reason) => {
     if (!holds.delete(id)) return;
@@ -82,6 +92,8 @@ export function createNodeSession({
     yielding = null;
     // 限流挂在队列的连接上,新连接不带着旧连接的退避(契约 I.10 第 6 条)
     throttledUntil = -Infinity;
+    deferred.clear();
+    watching = null;
     send({
       type: 'node.hello', nodeId, profile: node?.profile, envFingerprint: node?.envFingerprint,
       capabilities: node?.capabilities, codeVersions: node?.codeVersions, maxConcurrent, resume: entries,
@@ -123,16 +135,50 @@ export function createNodeSession({
       if (task && Number.isInteger(message.version)) open.set(id, { ...task, version: message.version });
       return;
     }
-    // taken / gone / forbidden / card-locked / fingerprint-mismatch(契约 I.10 第 4 条)
-    // (以及认不出的原因):这一轮不再考虑它。
+    if (reason === 'preferred') {
+      // M6c X4:plan 还在发布方的独占窗口里。候选不删,搁到窗口过后;窗口过后任何指纹符合的 pc 都能认领
+      const wait = Number(message.retryInMs);
+      deferred.set(id, now() + (Number.isFinite(wait) && wait >= 0 ? wait : settings.SWEEP_INTERVAL_MS));
+      const task = open.get(id);
+      if (task && Number.isInteger(message.version)) open.set(id, { ...task, version: message.version });
+      return;
+    }
+    // taken / gone / forbidden / card-locked / fingerprint-mismatch(契约 I.10 第 4 条)/ local-media(M6c X2)/
+    // plan-profile(M6c X4)(以及认不出的原因):这一轮不再考虑它。
     // card-locked(契约 F.2):这张卡的锁在别的指纹上,本节点的指纹做不了,按 taken 丢掉候选、
     // 不重试;任务在队列里仍是 open,只有队列再发 task.opened / queue.snapshot 时才会回到视图
     open.delete(id);
   }
 
+  /**
+   * M6c X3:队列对 host 的 `watch: 'all'` 只回项目摘要 `queue.summary`,不发单任务增量。host 会话照旧报到后
+   * watch `'all'`,接到摘要就改 watch 摘要里有 open 任务的那些项目(并上已 watch、摘要里还列着的):
+   * 队列回这些项目的 `queue.snapshot`(整体替换本地视图),此后收它们的增量;非空项目列表不停摘要,
+   * 所以新项目有活时下一条摘要又会带出来。只在出现新项目时改 watch,项目做完不收窄,免得来回重发快照。
+   * 别的 profile、或调用方给了具体项目列表时,摘要一律不理(pc 的 `'all'` 本来就收全量)。
+   */
+  function followSummary(message) {
+    if (projects !== 'all' || node?.profile !== 'host') return;
+    const listed = new Set();
+    const want = new Set();
+    for (const p of Array.isArray(message.projects) ? message.projects : []) {
+      if (typeof p?.projectId !== 'string' || p.projectId === '') continue;
+      listed.add(p.projectId);
+      if (Number(p.open) > 0) want.add(p.projectId);
+    }
+    const current = watching ?? new Set();
+    if ([...want].every(id => current.has(id))) return;
+    const next = [...new Set([...want, ...[...current].filter(id => listed.has(id))])].sort();
+    watching = new Set(next);
+    send({ type: 'queue.watch', projects: next });
+  }
+
   function receive(message) {
     if (!message || typeof message !== 'object') return;
     switch (message.type) {
+      case 'queue.summary':
+        followSummary(message);
+        break;
       case 'node.welcome': {
         epoch = message.epoch ?? epoch;
         for (const id of message.lost ?? []) dropHold(id, 'lost');
@@ -186,7 +232,8 @@ export function createNodeSession({
       send({ type: 'task.progress', id: hold.id, token: hold.token, done: hold.done ?? null });
     }
     if (inflight || !isIdle() || holds.size >= maxConcurrent || at < throttledUntil) return;
-    const candidates = filterClaimable(known0().filter(task => !holds.has(task.id)), node);
+    for (const [id, until] of deferred) if (until <= at || !open.has(id)) deferred.delete(id);
+    const candidates = filterClaimable(known0().filter(task => !holds.has(task.id) && !deferred.has(task.id)), filterNode());
     const task = pickCandidate(candidates, { k: settings.PICK_K, random, lastProjectId });
     if (!task) return;
     inflight = { id: task.id, projectId: task.source?.projectId ?? null };
@@ -245,6 +292,8 @@ export function createNodeSession({
     yieldAll,
     held: () => [...holds.values()].sort(byId).map(({ id, token, lastSentAt }) => ({ id, token, lastSentAt })),
     known: () => known0().map(task => ({ ...task })),
+    /** host 按摘要 watch 着的项目(M6c X3),升序;没有就是空数组 */
+    watching: () => (watching ? [...watching] : []),
     get epoch() { return epoch; },
   };
 }

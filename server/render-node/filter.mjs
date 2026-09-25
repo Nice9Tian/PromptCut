@@ -5,7 +5,9 @@
  * 不测算算力、不分配。按规则号顺序检查,第一条不过就返回:
  *
  *   0  纯浏览器只接本人的任务(服务端已按凭证把关,这里再挡一次)
- *   1  环境指纹、代码版本、卡片源码版本对得上(`plan` 任务只查代码版本:谁认领谁的指纹就是这一版的指纹)
+ *   1  环境指纹、代码版本、卡片源码版本对得上(`plan` 任务只查代码版本:谁认领谁的指纹就是这一版的指纹;
+ *      带 `requires.preferNode` 的 `plan` 另查指纹,M6c X4);`requires.localMedia` 给了就要等于本节点的
+ *      `nodeId`(M6c X2 本地档能力闸,`node.nodeId` 由会话补上)
  *   2  轨道流 / 要转码的任务需要转码能力
  *   3  用户卡、图卡需要对应能力
  *   4  重度策略(见 `DEFAULT_WEIGHT_POLICY`)
@@ -60,9 +62,13 @@ export function checkClaimable(task, node) {
   if (browser && task?.source?.userId !== node.userId) return reject(0, 'other-user');
 
   // 1
-  if (!plan && requires.envFingerprint != null && requires.envFingerprint !== node?.envFingerprint) {
+  // 带 preferNode 的 plan(M6c X4)窗口过后给「指纹符合的 pc」,所以也查指纹;没带的旧形状照旧不查
+  const checksFingerprint = !plan || requires.preferNode != null;
+  if (checksFingerprint && requires.envFingerprint != null && requires.envFingerprint !== node?.envFingerprint) {
     return reject(1, 'env-fingerprint');
   }
+  // 本地档能力闸(M6c X2):输入里有只在发布方本机的素材(没有内容哈希),只有那个节点接
+  if (requires.localMedia != null && requires.localMedia !== node?.nodeId) return reject(1, 'local-media');
   if (requires.codeVersion != null && !(node?.codeVersions ?? []).includes(requires.codeVersion)) {
     return reject(1, 'code-version');
   }

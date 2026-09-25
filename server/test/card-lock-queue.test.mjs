@@ -44,7 +44,7 @@ function snap(ck, fp, from = 0, { to = from + 59, projectId = 'p1', kind = 'snap
 }
 const stream = (sk, fp, from = 0, extra = {}) => snap(sk, fp, from, { to: from + 7, kind: 'stream', ...extra });
 
-/** 发布方 p（u1）、q（u1）、节点 a / a2（指纹 A）、b（指纹 B）、watch 者 w（host，指纹 C） */
+/** 发布方 p（u1）、q（u1）、节点 a / a2（指纹 A）、b（指纹 B）、watch 者 w（pc，指纹 C；M6c X3 之前是 host） */
 function setup(options = {}) {
   const h = createQueueHarness(createRenderQueue, options);
   h.publisher('p', 'pub-p');
@@ -52,7 +52,7 @@ function setup(options = {}) {
   h.node('a', 'node-A', { hello: { envFingerprint: FP_A } });
   h.node('a2', 'node-A2', { hello: { envFingerprint: FP_A } });
   h.node('b', 'node-B', { hello: { envFingerprint: FP_B } });
-  h.node('w', 'node-W', { profile: 'host', hello: { envFingerprint: FP_C } });
+  h.node('w', 'node-W', { profile: 'pc', hello: { envFingerprint: FP_C } });   // M6c X3：host 的 watch 'all' 只收摘要，watch 者改用 pc（原为 host）
   h.bus.clear();
   return h;
 }

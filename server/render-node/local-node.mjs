@@ -75,6 +75,10 @@ import { lockKeyOf, splitPlan } from './split.mjs';
  *   按锁指纹出键,剩余帧只给同指纹的节点
  * @property {boolean | Set<string> | ((lockKey: string) => boolean)} [takeover]
  *   要接手哪些被别的指纹锁定的卡:按本节点指纹出键,任务带 `takeover: true`
+ * @property {string | null} [localMedia]
+ *   本地档能力闸(M6c X2):这一版项目里有没有内容哈希的素材时,发布方的 nodeId。`usesLocalMedia` 判真的
+ *   细任务写 `requires.localMedia`,只有那个节点能认领
+ * @property {(control: object) => boolean} [usesLocalMedia]  哪些 control 的输入用到这些素材(缺省全部)
  *
  * @typedef {object} Executor  执行器(契约 D.1)
  * @property {(planTask: object, opts: { signal: AbortSignal }) => Promise<PlanContext>} plan

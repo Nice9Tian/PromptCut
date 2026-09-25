@@ -61,7 +61,8 @@ function harness(prefilter, extra = {}) {
 }
 /** 报到并 watch 'all'；fp 为 null 时 hello 不带 envFingerprint。回这一步收到的 queue.snapshot 里的任务 id。 */
 function joinNode(h, conn, nodeId, fp) {
-  const out = h.node(conn, nodeId, { profile: 'host', hello: fp ? { envFingerprint: fp } : {} });
+  // M6c X3：host 的 watch 'all' 只收摘要；这里要的是全量可见性，节点改用 pc（原为 host）
+  const out = h.node(conn, nodeId, { profile: 'pc', hello: fp ? { envFingerprint: fp } : {} });
   return ids(out.one(conn, 'queue.snapshot').tasks);
 }
 const cardLock = (h, conn, fields) => h.handle(conn, { type: 'card.lock', kind: 'snapshot', ...fields });
@@ -244,7 +245,7 @@ test('V4 认领指纹不符的任务回 fingerprint-mismatch（I.10 第 4 条）
     const plan = makeTaskInput({ projectId: 'p1', projectRev: 7, kind: 'plan', requires: { envFingerprint: FP_B } });
     publishOk(h, 'p', [tB, tB2, tN, tE, plan]);
     joinNode(h, 'a', 'node-A', FP_A);
-    h.node('e', 'node-E', { profile: 'host', hello: { envFingerprint: '' } });   // 空串等同于没带（第 7 条）
+    h.node('e', 'node-E', { profile: 'pc', hello: { envFingerprint: '' } });   // 空串等同于没带（第 7 条）；M6c X3：原为 host
 
     const r = h.claim('a', tB.id, 1);
     const outcome = r.of('a', 'task.claimed').length ? 'claimed' : r.one('a', 'task.claim-rejected').reason;
@@ -324,7 +325,7 @@ function seeded(seed) {
 }
 
 const nodeDesc = fp => Object.freeze({
-  profile: 'host', userId: 'u1', envFingerprint: fp, codeVersions: ['cv1'], cardSourceVersions: {},
+  profile: 'pc', userId: 'u1', envFingerprint: fp, codeVersions: ['cv1'], cardSourceVersions: {},   // M6c X3：原为 host（host 的 watch 'all' 只收摘要）
   capabilities: { transcode: true, userCards: true, graphCards: true, memoryMB: 16_000 },
 });
 

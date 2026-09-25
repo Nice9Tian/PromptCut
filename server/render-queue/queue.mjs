@@ -10,6 +10,15 @@
  *
  * 契约：`docs/plan/render-queue-contract.md` A 节；卡片级指纹锁（锁表、card.lock、认领第 3a 步、接手）见 F.1；
  * 按节点指纹前置过滤、锁变更的定向增量、拒绝限流见 I 节（开关 PREFILTER）。
+ *
+ * M6c（`docs/plan/m6c-contract.md`）：
+ * - X2 本地档能力闸：`requires.localMedia = <nodeId>` 的任务只给那个节点——前置过滤里别的节点看不见（PREFILTER），
+ *   认领时别的节点回 `local-media`（不看开关，和 card-locked 一样是正确性闸）。
+ * - X3 `watch: 'all'` 收紧：`browser` 回 `error { reason: 'forbidden' }`；`host` 只收项目摘要 `queue.summary`
+ *   （形状同契约 H.3），不收单任务增量；`pc` 照旧。见 onWatch。
+ * - X4 plan 就近认领：带 `requires.preferNode` 的 plan 在发布后 `PLAN_PREFER_MS` 之内只给那个节点认领，
+ *   别的回 `preferred`（带 `retryInMs`）；窗口过后任何指纹符合的 pc 能认领。`host`、`browser` 认领 plan 一律回
+ *   `plan-profile`。
  */
 import { randomUUID } from 'node:crypto';
 import { QUEUE_DEFAULTS } from './constants.mjs';
@@ -96,12 +105,32 @@ export function createRenderQueue(options = {}) {
     if (!node) return false;
     if (conn.watch !== 'all' && !conn.watch.has(task.source.projectId)) return false;
     if (node.profile === 'browser' && task.source.userId !== conn.principal.userId) return false;
-    if (C.PREFILTER && !envAllows(node, task)) return false;
+    if (C.PREFILTER && (!envAllows(node, task) || !localMediaAllows(node, task))) return false;
     return true;
   }
 
   /** 非空字符串才算带了指纹；空串、null、缺省都当没带 */
   const fingerprintOf = (v) => (typeof v === 'string' && v !== '' ? v : null);
+  /** 非空字符串才算给了；requires 里的 localMedia（X2）、preferNode（X4）都这么读 */
+  const requiredOf = (task, name) => {
+    const v = task.requires ? task.requires[name] : undefined;
+    return typeof v === 'string' && v !== '' ? v : null;
+  };
+
+  /**
+   * 本地档能力闸（M6c X2）：任务的输入里有没有内容哈希的素材时，切分方写了 `requires.localMedia = <发布方 nodeId>`，
+   * 那些素材只在发布方本机，别的节点拿不到。只有这个节点能看见、能认领。没写这一项的任务不受影响。
+   */
+  function localMediaAllows(node, task) {
+    const owner = requiredOf(task, 'localMedia');
+    return owner === null || owner === node.nodeId;
+  }
+
+  /**
+   * plan 要不要查指纹（M6c X4）：带 `requires.preferNode` 的 plan（M6c 起发布方就这么发）窗口过后给「任何指纹符合的 pc」，
+   * 所以查；没带的旧形状照 I.10 第 7 条不查（谁认领谁的指纹就是这一版的指纹）。细任务一律查。
+   */
+  const checksFingerprint = (task) => task.kind !== 'plan' || requiredOf(task, 'preferNode') !== null;
 
   /**
    * 指纹前置过滤（I.2，语义 document-service.md「指纹前置过滤（特例）」）：环境不符、或这张卡已被别的环境锁定的任务，
@@ -111,9 +140,9 @@ export function createRenderQueue(options = {}) {
   function envAllows(node, task) {
     const nodeFp = fingerprintOf(node.envFingerprint);
     if (nodeFp === null) return true;
-    // 1. 指纹相符：任务没带指纹时不生效。plan 不看，和节点侧 filter.mjs 规则 1 一致：
-    //    plan 不产结果，谁认领谁的指纹就是这一版的指纹
-    if (task.kind !== 'plan') {
+    // 1. 指纹相符：任务没带指纹时不生效。没带 preferNode 的 plan 不看，和节点侧 filter.mjs 规则 1 一致：
+    //    plan 不产结果，谁认领谁的指纹就是这一版的指纹；带 preferNode 的 plan 要指纹符合（X4）
+    if (checksFingerprint(task)) {
       const taskFp = fingerprintOf(task.requires ? task.requires.envFingerprint : undefined);
       if (taskFp !== null && taskFp !== nodeFp) return false;
     }
@@ -201,6 +230,36 @@ export function createRenderQueue(options = {}) {
       state: task.state, version: task.version, attempts: task.attempts,
     });
     return v;
+  }
+
+  /**
+   * 项目摘要（M6c X3；形状照契约 H.3 的 `queue.summary`）：每个有 open 或 claimed 任务的项目一项，按 projectId 升序。
+   * `topPriority` 是 open 任务的最高 priority，没有 open 就是 null；`openByFingerprint` 按 `requires.envFingerprint`
+   * 分组数 open 任务，没带指纹的记在 `''` 下，键升序。
+   */
+  function summaryOf() {
+    const byProject = new Map();
+    for (const t of tasks.values()) {
+      if (!isActive(t.state)) continue;
+      const projectId = t.source.projectId;
+      let p = byProject.get(projectId);
+      if (!p) {
+        p = { projectId, open: 0, claimed: 0, topPriority: null, fps: new Map() };
+        byProject.set(projectId, p);
+      }
+      if (t.state === 'claimed') { p.claimed += 1; continue; }
+      p.open += 1;
+      if (p.topPriority === null || t.priority > p.topPriority) p.topPriority = t.priority;
+      const fp = t.requires && typeof t.requires.envFingerprint === 'string' ? t.requires.envFingerprint : '';
+      p.fps.set(fp, (p.fps.get(fp) ?? 0) + 1);
+    }
+    const byKey = (a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0);
+    return [...byProject.values()]
+      .sort((a, b) => (a.projectId < b.projectId ? -1 : a.projectId > b.projectId ? 1 : 0))
+      .map((p) => ({
+        projectId: p.projectId, open: p.open, claimed: p.claimed, topPriority: p.topPriority,
+        openByFingerprint: Object.fromEntries([...p.fps.entries()].sort(byKey)),
+      }));
   }
 
   function doneFields(task) {
@@ -347,7 +406,13 @@ export function createRenderQueue(options = {}) {
     const node = nodeOf(conn);
     if (node) { node.conn = null; node.disconnectedAt = at; }
     conn.nodeId = null;
+    unwatch(conn);
+  }
+  /** 这条连接不再 watch 任何东西：单任务增量与摘要（X3）一并停 */
+  function unwatch(conn) {
     conn.watch = null;
+    conn.summary = false;
+    conn.lastSummary = null;
   }
   function detachPublisher(conn) {
     const pub = publisherOf(conn);
@@ -363,7 +428,7 @@ export function createRenderQueue(options = {}) {
     let node = nodes.get(nodeId);
     if (node) {
       // 同一身份的新连接取代旧连接：旧连接此后不再代表这个节点，也不再收广播
-      if (node.conn && node.conn !== conn) { node.conn.nodeId = null; node.conn.watch = null; }
+      if (node.conn && node.conn !== conn) { node.conn.nodeId = null; unwatch(node.conn); }
     } else {
       node = { nodeId };
       nodes.set(nodeId, node);
@@ -374,6 +439,9 @@ export function createRenderQueue(options = {}) {
       conn, disconnectedAt: null,
     });
     conn.nodeId = nodeId;
+    // X3：同一条连接换了 profile 再报到，原来的全量 watch 只有 pc 还能留着；摘要只有 host 能留着
+    if (conn.watch === 'all' && body.profile !== 'pc') conn.watch = null;
+    if (conn.summary && body.profile !== 'host') { conn.summary = false; conn.lastSummary = null; }
 
     // resume：不论这个 nodeId 有没有记录都一样处理（A.9）
     const resumed = [];
@@ -424,7 +492,30 @@ export function createRenderQueue(options = {}) {
     emit(conn, 'publisher.welcome', { publisherId }, reqId);
   }
 
+  /**
+   * `queue.watch`（A.6；M6c X3 收紧 `'all'`）：
+   * - `browser` 用 `'all'`：回 `error { reason: 'forbidden' }`，原来的 watch 不变（纯浏览器只见本人任务，全量会泄露别人的项目）；
+   * - `host` 用 `'all'`：只收项目摘要——回一条 `queue.summary`，此后每次 tick 摘要变了才再发一条（每周期至多一条），
+   *   不收任何单任务增量；
+   * - `host` 用项目列表：照常收这些项目的增量与 `queue.snapshot`；非空列表不影响摘要（主机凭摘要知道哪些项目有活，
+   *   再 watch 那些项目，`render-node/host.mjs`），空列表连摘要一起停（文档服务模块切到频道摘要时替它发的就是空列表）；
+   * - `pc` 照旧：本机节点依赖全量。
+   */
   function onWatch(conn, body, reqId) {
+    const node = nodeOf(conn);
+    if (body.projects === 'all' && node.profile === 'browser') {
+      emit(conn, 'error', { reason: 'forbidden', detail: "纯浏览器节点不能 watch 'all'，请列出本人的项目" }, reqId);
+      return;
+    }
+    if (body.projects === 'all' && node.profile === 'host') {
+      conn.watch = new Set();
+      conn.summary = true;
+      const projects = summaryOf();
+      conn.lastSummary = JSON.stringify(projects);
+      emit(conn, 'queue.summary', { at, projects }, reqId);
+      return;
+    }
+    if (body.projects !== 'all' && body.projects.length === 0) { conn.summary = false; conn.lastSummary = null; }
     conn.watch = body.projects === 'all' ? 'all' : new Set(body.projects);
     const visible = [...tasks.values()]
       .filter((t) => t.state === 'open' && canSee(conn, t))
@@ -582,18 +673,42 @@ export function createRenderQueue(options = {}) {
       // 不带 state / version：别人的任务连状态也不给纯浏览器看
       return emit(conn, 'task.claim-rejected', { id, reason: 'forbidden' }, reqId);
     }
+    // X4：plan 只给 pc。独立主机不替任何页面做计划，纯浏览器没有 Chrome 和 card-cache（filter.mjs 规则 6 在节点侧也挡）
+    if (task.kind === 'plan' && (node.profile === 'host' || node.profile === 'browser')) {
+      return emit(conn, 'task.claim-rejected', { id, reason: 'plan-profile' }, reqId);
+    }
     if (task.state !== 'open') {
       return emit(conn, 'task.claim-rejected', { id, reason: 'taken', state: task.state, version: task.version }, reqId);
     }
+    // X4：plan 就近认领。发布方写了 preferNode（它自己的节点）的 plan，发布后 PLAN_PREFER_MS 之内只给那个节点；
+    // 窗口按 A.8 的口径用严格大于判过期。回 retryInMs，节点会话据此把这个候选搁到窗口过后，不必丢掉
+    if (task.kind === 'plan') {
+      const prefer = requiredOf(task, 'preferNode');
+      const until = task.source.publishedAt + C.PLAN_PREFER_MS;
+      if (prefer !== null && prefer !== node.nodeId && at <= until) {
+        return emit(conn, 'task.claim-rejected', {
+          id, reason: 'preferred', state: 'open', version: task.version, preferNode: prefer, retryInMs: until - at + 1,
+        }, reqId);
+      }
+    }
     // 指纹不符（I.10 第 4 条，语义「也不让它认领」）：过滤开着、节点与任务都带指纹且不同就拒，和 card-locked 一样
-    // 计入限流次数。放在 taken 之后、3a 之前：环境本来就不对的节点不必知道这张卡锁在谁那里。plan 不查（同 envAllows）
-    if (C.PREFILTER && task.kind !== 'plan') {
+    // 计入限流次数。放在 taken 之后、3a 之前：环境本来就不对的节点不必知道这张卡锁在谁那里。
+    // 没带 preferNode 的 plan 不查（同 envAllows）；带的查（X4「指纹符合的 pc」）
+    if (C.PREFILTER && checksFingerprint(task)) {
       const nodeFp = fingerprintOf(node.envFingerprint);
       const taskFp = fingerprintOf(task.requires ? task.requires.envFingerprint : undefined);
       if (nodeFp !== null && taskFp !== null && nodeFp !== taskFp) {
         conn.cardLockedRejects += 1;
         return emit(conn, 'task.claim-rejected', { id, reason: 'fingerprint-mismatch', state: 'open', version: task.version }, reqId);
       }
+    }
+    // X2：输入里有只在发布方本机的素材，只有那个节点能认领。不看 PREFILTER：这是正确性闸，和 3a 一样；
+    // 计入限流次数（前置过滤之下还来认领的节点多半没按可见性认领）
+    if (!localMediaAllows(node, task)) {
+      conn.cardLockedRejects += 1;
+      return emit(conn, 'task.claim-rejected', {
+        id, reason: 'local-media', state: 'open', version: task.version, localMedia: requiredOf(task, 'localMedia'),
+      }, reqId);
     }
     // 3a（F.1）：这张卡的这种结果已被别的环境锁定，本任务的指纹产出的帧不能混进去。
     // 放在 stale 之前：锁不变，节点拿新版本号重试也没用，早点让它丢掉这个候选
@@ -732,6 +847,7 @@ export function createRenderQueue(options = {}) {
       connId,
       principal: { userId: principal.userId, tenantId: typeof principal.tenantId === 'string' ? principal.tenantId : null },
       nodeId: null, publisherId: null, watch: null,
+      summary: false, lastSummary: null,   // X3：host 的 watch 'all' 只收摘要；上一次发出去的摘要（JSON），变了才再发
       cardLockedRejects: 0,   // 本扫描周期内收到的 card-locked 与 fingerprint-mismatch 拒绝数，tick 清零（I.5、I.10 第 4 条）
     });
   }
@@ -817,6 +933,16 @@ export function createRenderQueue(options = {}) {
     }
     // 新的扫描周期：每条连接的 card-locked 拒绝计数清零，限流随之解除（I.5）
     for (const conn of conns.values()) conn.cardLockedRejects = 0;
+    // 第 6 项（M6c X3）：只收摘要的 host 连接，摘要和上一次发给它的不同才发，所以每个扫描周期至多一条
+    let projects = null;
+    let json = null;
+    for (const conn of conns.values()) {
+      if (!conn.summary || !nodeOf(conn)) continue;
+      if (projects === null) { projects = summaryOf(); json = JSON.stringify(projects); }
+      if (json === conn.lastSummary) continue;
+      conn.lastSummary = json;
+      emit(conn, 'queue.summary', { at, projects });
+    }
   }
 
   function describe() {
