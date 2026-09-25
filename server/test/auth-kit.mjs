@@ -164,7 +164,7 @@ async function assemble(options) {
 // ------------------------------------------------------------------ 素材服务（TS 转译，同 asset-store-http.test.mjs 的办法）
 
 let assetModPromise = null;
-function loadAsset() {
+export function loadAsset() {
   assetModPromise ??= (async () => {
     const require_ = createRequire(import.meta.url);
     const ts = require_('typescript');
@@ -217,7 +217,7 @@ async function assetMiddleware(root, auth) {
 const REMOTE_PARAM = '__remote';
 
 /** 在服务器上抢先挂监听：按 `__remote` 改 socket 的对端地址并从 URL 删掉这一项 */
-function installRemoteOverride(server) {
+export function installRemoteOverride(server) {
   const fix = (req) => {
     const sock = req.socket;
     let remote = null;
