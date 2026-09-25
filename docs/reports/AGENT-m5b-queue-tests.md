@@ -61,3 +61,32 @@
 
 - 没改任何生产代码和既有测试，没有标记 skip。
 - 没推送、没合并、没建 junction、没跑 `npm ci`。
+
+## 按契约 I.10 返工（2026-09-25）
+
+先合并了 `claude/rq-m5b`（契约 I.10），再照主 Agent 的裁定改：
+
+- **V2、V3**（I.10 第 1 条）：不带指纹的任务不参与锁，也不被锁挡，期望照此改。V3 另加了一个被认领着的任务 `tXc`：断言认领者恰好收到一条 `lease-lost superseded`，并且谁都收不到关于 `tN` 的消息。
+- **V3、K3 收紧**（第 2 条）：原指纹节点对 `open` 的任务只收到 `task.closed { state: 'hidden', reason: 'card-locked' }`，不再接受 `failed`。被认领着的任务（不是 `open`），除了认领者的 `lease-lost` 之外，不对别的节点下断言，因为契约没有规定。
+- **既有测试**（第 3 条，以及主会话追加的 Q8）：
+  - `render-queue-protocol` 的 P14：常量表和环境变量名的期望各加两项；
+  - `card-lock-queue` 的 Q4「全量核对」、Q4「card.lock 带 takeover」、Q11：队列显式传 `constants: { PREFILTER: false }`。`takeoverScene` 加了一个透传的 `options` 参数，不传时行为不变；
+  - `card-lock-queue` 的 Q8 后半段 `h2`：显式传 `constants: { PREFILTER: false }`。
+  - 除此之外一个字都没改。
+- **新增**：
+  - V4：认领指纹不符回 `fingerprint-mismatch`（带 `state`、`version`，不改状态）；不带指纹的任务、空串指纹（任务侧和节点侧）、`plan` 任务都不查；过滤关时照旧认领。
+  - V4 补充：`fingerprint-mismatch` 和 `card-locked` 合计计入限流，11 次加 10 次之后，第 22 次认领回 `throttled`。
+  - V4 补充：会话把 `fingerprint-mismatch` 当 `taken` 处理。
+  - K6 补充：`start()` 清掉 `throttledUntil`（第 6 条）。
+  - K7：带 `reqId` 的 `error` 不清在飞的认领，不带的照清（第 5 条）。
+- 限流的临界点照原来的理解（第 8 条）。
+
+**验证**：
+
+- `node --check` 退出码 0。
+- 新文件共 18 条，在当前代码上通过 3 条、失败 15 条：
+  - 通过：V4 补充（会话丢候选）、K6 补充（hidden 移除）、K6 补充（start 清退避）。前两条现有会话本来就这样处理；第三条在现有代码上是空过，因为现有代码还没有退避。
+  - 失败的 15 条都在等实现。
+- `npm test`：共 2370 条，通过 2353、失败 16、跳过 1。失败的是新文件的 15 条，加上 P14：P14 的期望已经改成带新常量，在实现合进来之前会失败，这是预期的。Q4、Q8、Q11 在当前代码上照常通过。
+- `npx tsc -b --force` 退出码 0。
+- 参考实现按 I.10 重做后自检：新文件 18 条全过；既有的 `card-lock-queue`、`card-lock-node`、`render-queue-*`、`render-node-*` 全过。`card-lock-pipeline` 在 scratchpad 里缺依赖、没有跑，它与本次改动无关。参考实现已删除。

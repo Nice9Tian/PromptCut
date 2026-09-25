@@ -130,7 +130,7 @@ test('V1 指纹不同的任务，节点在 queue.snapshot 和 task.opened 里都
 
 /* ================================================================== V2 */
 
-test('V2 锁在别的指纹上时，节点看不见这个锁键下的任务；锁在自己的指纹上时看得见', t => {
+test('V2 锁在别的指纹上时，节点看不见这个锁键下带指纹的任务；锁在自己的指纹上时看得见；不带指纹的任务不受锁限制（I.10 第 1 条）', t => {
   for (const on of MODES) {
     const h = harness(on);
     h.publisher('p', 'pub-p');
@@ -156,9 +156,9 @@ test('V2 锁在别的指纹上时，节点看不见这个锁键下的任务；�
     assert.deepEqual(snapN, all, `${modeName(on)}：不带指纹的节点，第 2 条不生效，全看得见`);
     assert.deepEqual(openedIds(out, 'n'), ids([tN1b, tA2b]));
     if (on) {
-      assert.deepEqual(snapA, ids([tA2, tN2]), '过滤开：A 节点看不见锁在 B 上的 ck1 的任务（含不带指纹的），看得见锁在自己指纹上的 ck2');
-      assert.deepEqual(snapB, ids([tN1]), '过滤开：B 节点看得见锁在 B 上的 ck1 里不带指纹的任务；A 指纹的任务第 1 条挡住；锁在 A 上的 ck2 看不见');
-      assert.deepEqual(openedIds(out, 'a'), ids([tA2b]));
+      assert.deepEqual(snapA, ids([tN1, tA2, tN2]), '过滤开：A 节点看不见锁在 B 上的 ck1 里 A 指纹的任务；不带指纹的不受锁限制；锁在自己指纹上的 ck2 看得见');
+      assert.deepEqual(snapB, ids([tN1, tN2]), '过滤开：B 节点只看得见不带指纹的任务（A 指纹的被第 1 条挡住）');
+      assert.deepEqual(openedIds(out, 'a'), ids([tN1b, tA2b]));
       assert.deepEqual(openedIds(out, 'b'), ids([tN1b]));
     } else {
       assert.deepEqual(snapA, all, '过滤关：都看得见');
@@ -171,19 +171,22 @@ test('V2 锁在别的指纹上时，节点看不见这个锁键下的任务；�
 
 /* ================================================================== V3 */
 
-test('V3 锁从 X 转到 Y（接手）：X 节点收到撤回（hidden / card-locked），Y 节点收到 task.opened，其它节点 0 条', t => {
+test('V3 锁从 X 转到 Y（接手）：X 节点收到撤回（hidden / card-locked，按变更前的可见性），Y 节点收到 task.opened，其它节点 0 条；认领者收 lease-lost', t => {
   for (const on of MODES) {
     const h = harness(on);
     h.publisher('p', 'pub-p');
-    // 同一张卡：X 指纹的 tX、Y 指纹的 tY（锁之前发布）、不带指纹的 tN；另一张卡 other 锁在 X 上，不受影响
-    const tX = snap('v3', FP_A, 0), tY = snap('v3', FP_B, 0), tN = snap('v3', null, 0);
+    // 同一张卡：X 指纹的 tX（open）与 tXc（被 x2 认领着）、Y 指纹的 tY（锁之前发布）、不带指纹的 tN（不参与锁）；
+    // 另一张卡 other 锁在 X 上，不受影响
+    const tX = snap('v3', FP_A, 0), tXc = snap('v3', FP_A, 1), tY = snap('v3', FP_B, 0), tN = snap('v3', null, 0);
     const oX = snap('v3-other', FP_A, 0);
-    publishOk(h, 'p', [tX, tY, tN, oX]);
+    publishOk(h, 'p', [tX, tXc, tY, tN, oX]);
     cardLock(h, 'p', { contentKey: 'v3', envFingerprint: FP_A });
     cardLock(h, 'p', { contentKey: 'v3-other', envFingerprint: FP_A });
     joinNode(h, 'x', 'node-X', FP_A);
+    joinNode(h, 'x2', 'node-X2', FP_A);
     joinNode(h, 'y', 'node-Y', FP_B);
     joinNode(h, 'z', 'node-Z', FP_C);
+    const claimedXc = h.claim('x2', tXc.id, 1).one('x2', 'task.claimed');
 
     const out = cardLock(h, 'p', { contentKey: 'v3', envFingerprint: FP_B, takeover: true });
     const locked = out.one('p', 'card.locked');
@@ -198,31 +201,112 @@ test('V3 锁从 X 转到 Y（接手）：X 节点收到撤回（hidden / card-lo
     // tX 被接手作废（F.1：superseded → failed）
     assert.equal(h.task(tX.id).state, 'failed');
     assert.equal(h.task(tX.id).lastError, 'superseded');
+    // 认领者照 F.1 收 lease-lost superseded（两种开关一样）
+    const lost = out.of('x2', 'task.lease-lost');
+    assert.deepEqual(lost.map(m => [m.id, m.token, m.reason]), [[tXc.id, claimedXc.token, 'superseded']], 'x2 恰好一条 lease-lost superseded');
+    assert.equal(h.task(tXc.id).state, 'failed');
+    // 不带指纹的 tN 不参与锁：谁都收不到关于它的消息
+    assert.ok(!out.messages().some(m => (m.id ?? m.task?.id) === tN.id), '不带指纹的任务不受锁变更影响');
+    assert.ok(!out.messages().some(m => (m.id ?? m.task?.id) === oX.id), '别的卡不受影响');
+    const aboutTXc = m => (m.id ?? m.task?.id) === tXc.id;
     if (on) {
-      // tN：之前只有 X 看得见，之后只有 Y 看得见 → X 撤回、Y 补发
-      const xClosed = closedOf(out, 'x');
-      const xN = xClosed.filter(m => m.id === tN.id);
-      assert.equal(xN.length, 1, 'X 节点对 tN 恰好一条 task.closed');
-      assert.equal(xN[0].state, 'hidden');
-      assert.equal(xN[0].reason, 'card-locked');
-      // tX：F.1 的作废本身给可见的 watch 者发 task.closed { state: 'failed' }；I.3 的撤回是 hidden。
-      // 契约没写死两者的先后，只要求 X 节点恰好收到一条撤回，不管是哪一种。
-      const xX = xClosed.filter(m => m.id === tX.id);
-      assert.equal(xX.length, 1, 'X 节点对被作废的 tX 恰好一条 task.closed');
-      assert.ok(['failed', 'hidden'].includes(xX[0].state), `tX 的撤回 state：${xX[0].state}`);
-      assert.deepEqual(sorted(out.of('x').map(m => m.type)), ['task.closed', 'task.closed'], 'X 节点只收到这两条撤回');
-      assert.deepEqual(openedIds(out, 'y'), ids([tY, tN]), 'Y 节点收到 tY、tN 的 task.opened');
-      assert.deepEqual(out.of('y').map(m => m.type), ['task.opened', 'task.opened'], 'Y 节点只收到补发');
+      // tX 是 open：按变更前的可见性，X 指纹的节点（x、x2）收到 hidden / card-locked（I.10 第 2 条），不再另收 failed。
+      // 被认领着的 tXc 不是 open，契约只规定认领者的 lease-lost，这里不对别的节点关于它的 task.closed 下断言
+      for (const conn of ['x', 'x2']) {
+        const rest = out.of(conn).filter(m => !aboutTXc(m) && m.type !== 'task.lease-lost');
+        assert.deepEqual(rest.map(m => [m.type, m.id, m.state, m.reason]), [['task.closed', tX.id, 'hidden', 'card-locked']],
+          `${conn} 对 tX 恰好一条 hidden 撤回，别的什么都不收`);
+        assert.ok(!out.of(conn).some(m => m.type === 'task.opened'), `${conn} 不收补发`);
+      }
+      assert.deepEqual(out.of('y').map(m => [m.type, m.task?.id]), [['task.opened', tY.id]], 'Y 节点只收到 tY 的补发');
       assert.equal(out.of('z').length, 0, '其它节点 0 条');
-      assert.ok(!out.messages().some(m => (m.id ?? m.task?.id) === oX.id), '别的卡不受影响');
     } else {
       assert.equal(hidden.length, 0, '过滤关：没有 hidden');
       assert.equal(out.ofType('task.opened').length, 0, '过滤关：可见性没变，不补发');
       for (const conn of ['x', 'y', 'z']) {
-        assert.deepEqual(closedOf(out, conn).map(m => [m.id, m.state]), [[tX.id, 'failed']], `过滤关：${conn} 照 F.1 收到 tX 的 failed`);
+        assert.deepEqual(sorted(closedOf(out, conn).map(m => `${m.id}|${m.state}`)), sorted([`${tX.id}|failed`, `${tXc.id}|failed`]),
+          `过滤关：${conn} 照 F.1 收到 tX、tXc 的 failed`);
       }
     }
   }
+});
+
+/* ================================================================== V4 */
+
+test('V4 认领指纹不符的任务回 fingerprint-mismatch（I.10 第 4 条）；不带指纹、空指纹、plan 任务不查；过滤关照旧认领', t => {
+  for (const on of MODES) {
+    const h = harness(on);
+    h.publisher('p', 'pub-p');
+    const tB = snap('v4b', FP_B, 0, { contentKey: false });
+    const tB2 = snap('v4b', FP_B, 1, { contentKey: false });
+    const tN = snap('v4n', null, 0, { contentKey: false });
+    const tE = makeTaskInput({ projectId: 'p1', kind: 'snapshot', resultKey: rk('v4e', 'empty'), range: [0, 59], input: { clipId: 'c' }, requires: { envFingerprint: '' } });
+    const plan = makeTaskInput({ projectId: 'p1', projectRev: 7, kind: 'plan', requires: { envFingerprint: FP_B } });
+    publishOk(h, 'p', [tB, tB2, tN, tE, plan]);
+    joinNode(h, 'a', 'node-A', FP_A);
+    h.node('e', 'node-E', { profile: 'host', hello: { envFingerprint: '' } });   // 空串等同于没带（第 7 条）
+
+    const r = h.claim('a', tB.id, 1);
+    const outcome = r.of('a', 'task.claimed').length ? 'claimed' : r.one('a', 'task.claim-rejected').reason;
+    t.diagnostic(`${modeName(on)} A 节点认领 B 指纹的任务：${outcome}`);
+    if (on) {
+      const rej = r.one('a', 'task.claim-rejected');
+      assert.deepEqual([rej.id, rej.reason, rej.state, rej.version], [tB.id, 'fingerprint-mismatch', 'open', 1]);
+      assert.deepEqual([h.task(tB.id).state, h.task(tB.id).version], ['open', 1], '被拒不改状态');
+      assert.equal(r.of('e', 'task.taken').length, 0);
+    } else {
+      assert.equal(outcome, 'claimed', '过滤关：照旧认领');
+    }
+    // 两种开关都照常认领的
+    assert.equal(h.claim('a', tN.id, 1).one('a', 'task.claimed').id, tN.id, '任务不带指纹：不查');
+    assert.equal(h.claim('a', tE.id, 1).one('a', 'task.claimed').id, tE.id, '任务的指纹是空串：等同于没带');
+    assert.equal(h.claim('a', plan.id, 1).one('a', 'task.claimed').id, plan.id, 'plan 任务不查指纹');
+    assert.equal(h.claim('e', tB2.id, 1).one('e', 'task.claimed').id, tB2.id, '节点的指纹是空串：等同于没带');
+  }
+});
+
+test('V4 补充：fingerprint-mismatch 和 card-locked 一起计入限流', t => {
+  for (const on of MODES) {
+    const h = harness(on);
+    h.publisher('p', 'pub-p');
+    const dead = snap('v4-locked', FP_A, 0);
+    publishOk(h, 'p', [dead]);
+    cardLock(h, 'p', { contentKey: 'v4-locked', envFingerprint: FP_B });
+    const foreign = Array.from({ length: 12 }, (_, i) => snap('v4-foreign', FP_B, i, { contentKey: false }));
+    const mine = snap('v4-mine', FP_A, 0, { contentKey: false });
+    publishOk(h, 'p', [...foreign, mine]);
+    joinNode(h, 'a', 'node-A', FP_A);
+
+    const reasons = [];
+    const one = id => { const out = h.claim('a', id, 1); reasons.push(out.of('a', 'task.claimed').length ? 'claimed' : out.one('a', 'task.claim-rejected').reason); };
+    for (let i = 0; i < 11; i++) one(foreign[i].id);     // 11 次指纹不符
+    for (let i = 0; i < 10; i++) one(dead.id);           // 10 次 card-locked，共 21 次
+    one(foreign[11].id);                                  // 第 22 次
+    one(mine.id);
+    t.diagnostic(`${modeName(on)}：${JSON.stringify(Object.fromEntries(countBy(reasons)))}，最后两次 ${JSON.stringify(reasons.slice(-2))}`);
+    if (on) {
+      assert.deepEqual(reasons, [...Array(11).fill('fingerprint-mismatch'), ...Array(10).fill('card-locked'), 'throttled', 'throttled'],
+        '两种拒绝合计超过 20 次后回 throttled');
+      assert.equal(h.nodeInfo('node-A').throttled, true);
+      h.tick();
+      assert.equal(h.claim('a', mine.id, 1).one('a', 'task.claimed').id, mine.id, 'tick 之后恢复');
+    } else {
+      assert.deepEqual(reasons, [...Array(11).fill('claimed'), ...Array(10).fill('card-locked'), 'claimed', 'claimed'], '过滤关：不按指纹拒、不限流');
+    }
+  }
+});
+
+test('V4 补充：会话把 fingerprint-mismatch 当 taken，丢掉这个候选、不重试', () => {
+  const s = sessionHarness({ maxConcurrent: 1 });
+  const [v0, v1] = [sView('v4s-a'), sView('v4s-b')];
+  s.session.receive({ type: 'queue.snapshot', epoch: E, tasks: [v0, v1] });
+  const c = s.tick().filter(m => m.type === 'task.claim');
+  assert.equal(c.length, 1);
+  s.session.receive({ type: 'task.claim-rejected', epoch: E, id: c[0].id, reason: 'fingerprint-mismatch', state: 'open', version: 1 });
+  assert.ok(!s.session.known().some(v => v.id === c[0].id), '候选被丢掉');
+  const next = s.tick().filter(m => m.type === 'task.claim');
+  assert.equal(next.length, 1, '在飞已清，立即认领下一个');
+  assert.notEqual(next[0].id, c[0].id);
 });
 
 /* ================================================================== 环回 × 会话的场景台（K1～K3） */
@@ -514,7 +598,7 @@ test('K3 运行中把 20 张卡的锁从 X 转到 Y：X 节点只收到这 20 �
         const mine = X.filter(e => e.connId === n.connId).map(e => e.message);
         assert.ok(mine.every(x => x.type === 'task.closed'), `${n.nodeId} 只收到撤回：${JSON.stringify(mine.map(x => x.type))}`);
         assert.deepEqual(sorted(mine.map(x => x.id)), movingXIds, `${n.nodeId} 恰好收到这 20 张卡的撤回，每个任务一条`);
-        for (const x of mine) assert.ok(['failed', 'hidden'].includes(x.state), `撤回的 state：${x.state}`);
+        for (const x of mine) assert.deepEqual([x.state, x.reason], ['hidden', 'card-locked'], `${x.id} 的撤回应当是 hidden / card-locked（I.10 第 2 条）`);
       }
       for (const n of yNodes) {
         const mine = Y.filter(e => e.connId === n.connId).map(e => e.message);
@@ -771,4 +855,44 @@ test('K6 补充：task.closed { state: hidden } 和别的 task.closed 一样从�
   assert.deepEqual(s.session.known().map(v => v.id), [v1.id]);
   const claims = s.tick().filter(m => m.type === 'task.claim');
   assert.deepEqual(claims.map(m => m.id), [v1.id], '被撤回的任务不再认领');
+});
+
+test('K6 补充：start() 清掉 throttledUntil（I.10 第 6 条）', () => {
+  const s = sessionHarness();
+  const v0 = sView('k6s-a');
+  s.session.receive({ type: 'queue.snapshot', epoch: E, tasks: [v0] });
+  const c = s.tick().filter(m => m.type === 'task.claim');
+  assert.equal(c.length, 1);
+  s.session.receive({ type: 'task.claim-rejected', epoch: E, id: v0.id, reason: 'throttled' });
+  assert.equal(s.tick().filter(m => m.type === 'task.claim').length, 0, '退避中');
+  s.session.start();
+  s.session.receive({ type: 'queue.snapshot', epoch: E, tasks: [v0] });
+  assert.equal(s.tick().filter(m => m.type === 'task.claim').length, 1, 'start() 之后不再退避');
+});
+
+/* ================================================================== K7 */
+
+test('K7 会话收到带 reqId 的 error 不清在飞的认领；不带 reqId 的照清（I.10 第 5 条）', () => {
+  const started = [];
+  const s = sessionHarness({ onTask: task => started.push(task.id) });
+  const [v0, v1, v2] = [sView('k7-a'), sView('k7-b'), sView('k7-c')];
+  s.session.receive({ type: 'queue.snapshot', epoch: E, tasks: [v0, v1, v2] });
+  const c = s.tick().filter(m => m.type === 'task.claim');
+  assert.equal(c.length, 1);
+  const first = [v0, v1, v2].find(v => v.id === c[0].id);
+
+  // 别的请求（内容库、发布）的错误回包：带 reqId，不是认领的回包
+  s.session.receive({ type: 'error', epoch: E, reqId: 'lib-1', reason: 'bad-message', detail: 'x' });
+  s.session.receive({ type: 'error', epoch: E, reqId: 7, reason: 'not-registered' });
+  assert.equal(s.tick().filter(m => m.type === 'task.claim').length, 0, '带 reqId 的 error 之后认领仍在飞，不发第二条');
+  s.session.receive(claimedMsg(first, 2, s.now));
+  assert.deepEqual(started, [first.id], '认领回包照常处理');
+  assert.deepEqual(s.session.held().map(x => x.id), [first.id]);
+
+  // 不带 reqId 的 error：照清在飞
+  const c2 = s.tick().filter(m => m.type === 'task.claim');
+  assert.equal(c2.length, 1, '第二个认领发出（maxConcurrent 2）');
+  s.session.receive({ type: 'error', epoch: E, reason: 'bad-message', detail: 'y' });
+  const c3 = s.tick().filter(m => m.type === 'task.claim');
+  assert.equal(c3.length, 1, '不带 reqId 的 error 清掉在飞，下一次 tick 重新认领');
 });
