@@ -100,3 +100,25 @@ test('C65-SA5 set-password 之后,本空间其余在线连接各收到一条 sha
   assert.equal(outsider.all.some((m) => m.type === 'shared.notice'), false, '别的项目的成员不收');
   assert.equal(zoe.ws.readyState, 1, '在线连接不断');
 });
+
+test('C65-SA6 限定进入:list-bans 另带名单用户名;set-list 的 { username, keep: true } 沿用原口令,名单里没有的人 keep 回 bad-message', async (t) => {
+  const env = await hostFor(t);
+  const proj = await createProject(env, { mode: 'restricted', list: [{ username: 'bob', password: 'bob-pw' }, { username: 'cai', password: 'cai-pw' }] });
+  const creator = await join(env, proj, { username: proj.creator.username, as: 'creator', remote: R(40) });
+  const read = await adminOp(creator, proj, 'list-bans');
+  assert.deepEqual(read.list, ['bob', 'cai']);
+  assert.equal(JSON.stringify(read).includes('"salt"'), false, '不带盐与 K');
+  // 留 bob 原口令、删 cai、加 dan
+  const r = await adminOp(creator, proj, 'set-list', { list: [{ username: 'bob', keep: true }, credential('dan-pw', 'dan')] });
+  assert.equal(r.type, 'shared.admin.ok', JSON.stringify(r));
+  proj.list = [{ username: 'bob', password: 'bob-pw' }, { username: 'dan', password: 'dan-pw' }, { username: 'cai', password: 'cai-pw' }];
+  assert.equal(await joinStatus(env, proj, { username: 'bob', remote: R(41) }), 101, 'bob 沿用原口令');
+  assert.equal(await joinStatus(env, proj, { username: 'dan', remote: R(42) }), 101, '新加的 dan');
+  assert.equal(await joinStatus(env, proj, { username: 'cai', remote: R(43) }), 401, 'cai 被删');
+  assert.deepEqual((await adminOp(creator, proj, 'list-bans')).list, ['bob', 'dan']);
+  const bad = await adminOp(creator, proj, 'set-list', { list: [{ username: 'zed', keep: true }] });
+  assert.equal(bad.reason, 'bad-message', JSON.stringify(bad));
+  const free = await createProject(env, { mode: 'free' });
+  const fc = await join(env, free, { username: free.creator.username, as: 'creator', remote: R(44) });
+  assert.equal((await adminOp(fc, free, 'list-bans')).list, undefined, '自由进入不带名单');
+});

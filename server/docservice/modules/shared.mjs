@@ -33,8 +33,10 @@ export const ADMIN_OPS = Object.freeze(['set-password', 'set-list', 'kick', 'unb
  * - `set-creator-password { creator: { salt, key } }`:改创建者自己的口令(特权第 1 项「改项目密码」的一部分)。
  *   用户名不变;改完旧口令不能再以创建者身份进入,新口令可以,之后的创建者操作按新口令算证明。
  *   **不加代数**、不作废已发的票据、在线连接不断(只有改项目口令或名单才加代数)。两种进入方式都能用。
- * - `list-bans`:回 `shared.admin.ok { op, bans: [{ username, deviceId }] }`,只读。界面「已禁入的设备」列表要它;
- *   界面每次创建者操作前的「验证创建者身份」也用它当一次无副作用的证明核对。
+ * - `list-bans`:回 `shared.admin.ok { op, bans: [{ username, deviceId }], list?: [用户名] }`,只读(限定进入另带名单里的
+ *   用户名,不带盐与 K)。界面「已禁入的设备」「改名单」要它;每次创建者操作前的「验证创建者身份」也用它当一次无副作用的证明核对。
+ * - `set-list` 的条目可以写成 `{ username, keep: true }`:沿用这个人现有的口令(创建者拿不到别人的 K,
+ *   只增删、只改某几个人时其余的照旧)。名单里没有这个人时整批 bad-message。
  * 另外,`set-password` 成功后给本空间其余在线连接各发一条 `shared.notice { event: 'password-changed' }`,
  * 界面据此出「项目密码已被修改」的气泡(交互稿第 5 节);在线连接照旧不断。
  */
@@ -262,13 +264,24 @@ export function sharedModule({
       }
       case 'list-bans': {
         const bans = (rec.bans ?? []).map((b) => ({ username: b.username, deviceId: b.deviceId }));
+        const out = { type: 'shared.admin.ok', op, bans };
+        // 限定进入另带名单里的用户名(不带盐与 K):界面「改名单」要列出现有名单
+        if (rec.mode === 'restricted') out.list = (rec.list ?? []).map((e) => e.username);
         ctx.log('shared.admin', { connId, projectId: space, op });
-        reply(ctx, connId, { type: 'shared.admin.ok', op, bans }, reqId);
+        reply(ctx, connId, out, reqId);
         return;
       }
       case 'set-list': {
         if (rec.mode !== 'restricted') throw new Refused('bad-message', '自由进入没有名单，改口令用 set-password');
-        const list = parseList(msg.list, rec.creator.username);
+        // `{ username, keep: true }`:沿用名单里这个人现有的口令(界面「改名单」只增删、只改某几个人的密码时用;
+        // 创建者拿不到别人的 K,也不该拿到)。名单里没有这个人时整批 bad-message
+        const current = new Map((rec.list ?? []).map((e) => [e.username, e]));
+        const given = Array.isArray(msg.list)
+          ? msg.list.map((e) => (isObj(e) && e.keep === true && typeof e.username === 'string' && current.has(e.username)
+            ? { username: e.username, salt: current.get(e.username).salt, key: current.get(e.username).key }
+            : e))
+          : msg.list;
+        const list = parseList(given, rec.creator.username);
         if (!list) throw new Refused('bad-message', 'list 要 [{ username, salt, key }]，用户名不重复、不含创建者');
         const keep = new Set(list.map((e) => e.username));
         st.update(space, (d) => {
