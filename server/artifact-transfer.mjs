@@ -11,6 +11,10 @@
  *           流经 `pipeline.streamProducer().adoptSegments` 落盘并发布。**只有这两个写入函数写文件**,
  *           否则 `index.json` / `stream.json` 会和磁盘对不上(`cloud-task.md` A3b)。
  *
+ * C6.4(`docs/plan/manifest-contract.md` 第 1、3 节):每一段的清单另写进文档服务的内容库
+ * (`snapshot-manifest` / `render-manifest`,键 `<resultKey>:<from>-<to>`);sink 开工前先查它去重。
+ * 内容库客户端(`ContentClient`,`put` / `get` / `list`)同样由调用方传进来。
+ *
  * 素材服务的客户端(`server/asset-store/client.mjs` 的 `createAssetClient`)由调用方传进来,这里不引它:
  * 只用它的 `put(ns, bytes, { ext })` / `get(ns, hash)` 两个方法(契约第 2 节)。
  *
@@ -96,6 +100,63 @@ export function snapshotLocation(task) {
   return { tier, entryKey, dirKey: resultKeyOf(contentKey.slice(prefix.length), fp) };
 }
 
+/** 调用方直接给的落盘位置 `{ tier, entryKey, dirKey }`:形状对才认,不对回 null(退回按任务反算) */
+function checkLocation(location, tier) {
+  if (!location || typeof location !== 'object') return null;
+  const t = location.tier ?? tier;
+  if (t === 'shared') return safeKey(location.dirKey) ? { tier: t, entryKey: null, dirKey: location.dirKey } : null;
+  if (t === 'local') return safeKey(location.dirKey) && safeKey(location.entryKey) ? { tier: t, entryKey: location.entryKey, dirKey: location.dirKey } : null;
+  return null;
+}
+
+/* ======================================================================== *
+ * 内容库里的清单(C6.4,`manifest-contract.md` 第 1 节)
+ * ======================================================================== */
+
+/** 任务 kind → 内容库 kind:快照 `snapshot-manifest`,流 `render-manifest`;别的回 null */
+export function manifestKindOf(kind) {
+  if (kind === 'snapshot') return 'snapshot-manifest';
+  if (kind === 'stream') return 'render-manifest';
+  return null;
+}
+
+/** 清单在内容库里的键:`<resultKey>:<from>-<to>`,即任务 id 去掉 `kind:` 前缀;缺东西回 null */
+export function manifestKeyOf(ref) {
+  const key = ref?.resultKey;
+  const from = ref?.range?.from, to = ref?.range?.to;
+  if (typeof key !== 'string' || !key || !Number.isInteger(from) || !Number.isInteger(to) || from < 0 || to < from) return null;
+  return `${key}:${from}-${to}`;
+}
+
+/**
+ * 内容库取回的清单能不能当这一段用:`v`、`kind`、`resultKey`、`range` 都对得上;快照另查 `frames` 的形状、
+ * 流另查 `streamAdoption` 要的那几样(`header.clipIds`)。不认识的字段忽略(C6.2 第 3 节)。
+ */
+export function manifestMatches(body, ref) {
+  if (!body || typeof body !== 'object' || body.v !== RESULT_VERSION) return false;
+  if (body.kind !== ref?.kind || body.resultKey !== ref?.resultKey) return false;
+  if (body.range?.from !== ref?.range?.from || body.range?.to !== ref?.range?.to) return false;
+  if (body.kind === 'snapshot') {
+    if (!Array.isArray(body.frames)) return false;
+    return body.frames.every(item => Array.isArray(item) && Number.isInteger(item[0]) && KEY_RE.test(String(item[1])));
+  }
+  if (body.kind === 'stream') {
+    if (!body.header || !Array.isArray(body.header.clipIds)) return false;
+    if (!body.segments || typeof body.segments !== 'object' || !body.inits || typeof body.inits !== 'object') return false;
+    return true;
+  }
+  return false;
+}
+
+/** `[from, to]` 闭区间:first .. last 每 span 一段,最后一段到 last(与 `render-node/split.mjs` 的 `spans` 同一个式子) */
+export function spansOf(first, last, span) {
+  const out = [];
+  const step = Math.max(1, Math.floor(Number(span) || 0));
+  if (!Number.isSafeInteger(first) || !Number.isSafeInteger(last)) return out;
+  for (let from = first; from <= last; from += step) out.push([from, Math.min(last, from + step - 1)]);
+  return out;
+}
+
 /** `canvasHeavy`:依次取 `opts.canvasHeavy`、`task.input.canvasHeavy`(是布尔值时),都没有就是 false(第 11 节第 2 条) */
 function canvasHeavyOf(task, opts) {
   if (typeof opts?.canvasHeavy === 'boolean') return opts.canvasHeavy;
@@ -121,7 +182,8 @@ const blobReader = files => async hash => {
  */
 export async function collectSnapshotResult(pipeline, task, opts = {}) {
   if (task?.kind !== undefined && task.kind !== 'snapshot') throw fail(`不是快照任务:${task.kind}`, { retryable: false });
-  const loc = snapshotLocation(task);
+  // C6.4:推送队列的段自带落盘位置(`unit.dirKey` / `unit.entryKey`),经 `opts.location` 给进来,不再按 E.9 反算
+  const loc = checkLocation(opts?.location, task?.tier) ?? snapshotLocation(task);
   if (!loc) throw fail(`认不出快照任务的落盘位置:${task?.resultKey}(本地档要 input.entryKey、input.contentKey、requires.envFingerprint)`, { code: 'unknown-location', retryable: false });
   const { from, to } = rangeOf(task);
   const store = pipeline.snapshots();
@@ -283,32 +345,105 @@ function resultComplete(result) {
   return true;
 }
 
+/** 清单里每个块在素材服务上是不是都在(逐个 `client.has`;任何一个不在、或者问不到,都算不在) */
+export async function blocksPresent(client, result) {
+  if (typeof client?.has !== 'function') return false;
+  let blocks;
+  try { blocks = resultBlocks(result); } catch { return false; }
+  let present = 0;
+  let missing = false;
+  await settleLimited(blocks, TRANSFER_CONCURRENCY, async ({ ns, hash }) => {
+    if (missing) return;
+    let ok = false;
+    try { ok = (await client.has(ns, hash)) === true; } catch { ok = false; }
+    if (ok) present++; else missing = true;
+  });
+  return !missing && present === blocks.length;
+}
+
+/** 把一段的清单写进内容库。写失败、清单超限只记日志,回 false(C6.4 第 3 节:内容库清单只是给以后复用的) */
+export async function writeManifest(content, result, log = () => {}) {
+  const kind = manifestKindOf(result?.kind);
+  const key = manifestKeyOf(result);
+  if (!content || typeof content.put !== 'function' || !kind || !key) return false;
+  try {
+    assertResultSize(result);
+  } catch (error) {
+    safeLog(log, 'manifest.too-large', { kind, key, bytes: error?.bytes ?? null });
+    return false;
+  }
+  try {
+    await content.put(kind, key, result);
+    return true;
+  } catch (error) {
+    safeLog(log, 'manifest.put-failed', { kind, key, code: error?.code ?? null, reason: error?.reason ?? null, message: String(error?.message ?? error) });
+    return false;
+  }
+}
+
+function safeLog(log, event, fields) {
+  try { log?.(event, fields); } catch { /* 日志出错不影响推送 */ }
+}
+
 /**
- * D.1 的产物库(`sink`),素材服务实现(契约第 4 节、第 11 节第 3、7 条)。
+ * D.1 的产物库(`sink`),素材服务实现(C6.2 契约第 4 节、第 11 节第 3、7 条;C6.4 `manifest-contract.md` 第 3 节)。
  *
- *   - `has(ref)`:本机帧库覆盖了整个 `range` 就回 true。只看本机,不查素材服务(跨节点去重在 C6.4)。
+ *   - `has(ref)`:
+ *       1. 本机帧库覆盖了整个 `range` → true(同 C6.2);
+ *       2. 给了 `content`:按 `<resultKey>:<from>-<to>` 查内容库里的清单。清单在、清单覆盖整段、清单里每个块
+ *          在素材服务上都有(逐个 `client.has`),三条都满足 → true,并把清单记在 sink 里(`resultFor` 回它);
+ *       3. 其它 → false。
+ *   - `resultFor(ref)`:`has` 回 true 之后拿清单(M5b 的 local-node 以去重方式完成时放进 `result`)。本机覆盖的由
+ *     `collect*` 现算;查内容库得到的回记下的那份;都不是回 null。
  *   - `put({ ...ref, artifacts, meta })`:`artifacts` 本阶段忽略,字节以本机帧库为准。`collect*` 再
  *     `pushResult`,全部推完回 `{ complete: true, result }`;清单缺帧、有块推失败、清单超过 256 KiB,
- *     都回 `{ complete: false }`。`result` 是对 D.1 的扩展,什么时候放进 `session.complete` 由 M5b 定。
+ *     都回 `{ complete: false }`。推成功、给了 `content` 就再把清单写进内容库;写失败只记日志,不影响回包。
  *
  * `ref` 带着任务的 `input` 与 `requires`(M5b 的 local-node 原样传入)。本地档靠它们按 E.9 算落盘键;
  * 缺了就 `has` 回 false、`put` 回 `{ complete: false }`,不猜。`canvasHeavy` 取 `ref.input.canvasHeavy`。
  */
-export function createAssetSink({ pipeline, client }) {
+export function createAssetSink({ pipeline, client, content = null, log = () => {} }) {
   if (!pipeline) throw new Error('createAssetSink needs a pipeline');
   if (!client) throw new Error('createAssetSink needs an asset client');
+  /** 查内容库得到的清单:清单键 → 清单 */
+  const remembered = new Map();
+  const collect = ref => (ref?.kind === 'snapshot' ? collectSnapshotResult(pipeline, ref) : collectStreamResult(pipeline, ref));
   return {
     async has(ref) {
-      try { return await coversRange(pipeline, ref); } catch { return false; }
+      try { if (await coversRange(pipeline, ref)) return true; } catch { /* 当本机没有 */ }
+      if (!content || typeof content.get !== 'function') return false;
+      const kind = manifestKindOf(ref?.kind);
+      const key = manifestKeyOf(ref);
+      if (!kind || !key) return false;
+      try {
+        const item = await content.get(kind, key);
+        const body = item?.body;
+        if (!manifestMatches(body, ref) || !resultComplete(body)) return false;
+        if (!(await blocksPresent(client, body))) return false;
+        remembered.set(key, body);
+        return true;
+      } catch (error) {
+        safeLog(log, 'manifest.get-failed', { kind, key, code: error?.code ?? null, message: String(error?.message ?? error) });
+        return false;
+      }
+    },
+    async resultFor(ref) {
+      try {
+        if (await coversRange(pipeline, ref)) {
+          const { result } = await collect(ref);
+          return resultComplete(result) ? result : null;
+        }
+      } catch { /* 退到记下的清单 */ }
+      const key = manifestKeyOf(ref);
+      return key && remembered.has(key) ? remembered.get(key) : null;
     },
     async put(ref) {
       try {
-        let collected;
-        if (ref?.kind === 'snapshot') collected = await collectSnapshotResult(pipeline, ref);
-        else if (ref?.kind === 'stream') collected = await collectStreamResult(pipeline, ref);
-        else return { complete: false };
+        if (ref?.kind !== 'snapshot' && ref?.kind !== 'stream') return { complete: false };
+        const collected = await collect(ref);
         if (!resultComplete(collected.result)) return { complete: false };
         await pushResult(client, collected.result, collected.readBlob);
+        if (content) await writeManifest(content, collected.result, log);
         return { complete: true, result: collected.result };
       } catch {
         return { complete: false };
@@ -390,7 +525,8 @@ async function applySnapshotResult(pipeline, client, result) {
       items.push({ localFrame: batch[k][0], html });
     });
     if (items.length) {
-      await store.commitSnapshots({ ...target, clipId: null, capabilities, items });
+      // `adopted: true`:这批帧是从素材服务拉来的,C6.4 的推送钩子据此不再把它们进推送队列(快照库本身不看这个字段)
+      await store.commitSnapshots({ ...target, clipId: null, capabilities, items, adopted: true });
       written += items.length;
     }
   }

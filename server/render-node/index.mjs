@@ -9,11 +9,13 @@
  *   local-node.mjs   本机节点编排(契约 D.2,只认注入的 endpoint / executor / sink)
  *   ws-transport.mjs 到文档服务的 WebSocket 端点:令牌子协议、退避重连、断线丢弃(契约 G.7)
  *   endpoint.mjs     文档服务端点解析(远端 → 本机回环 → 回落)与服务地址订阅(契约 G.7)
+ *   content-client.mjs 内容库客户端:在同一条端点上发 content.put/get/list,按 reqId 配回包(C6.4)
  *
  * 纯逻辑模块只引 Node 内置模块、`../render-queue/index.mjs` 和 `../snapshot-store.mjs`,
  * 不读环境变量、不开计时器、不做 I/O。例外只有 M5a 的两个网络模块:`ws-transport.mjs` 用全局
  * `WebSocket` 与计时器(都可注入),`endpoint.mjs` 缺省读 `process.env`、用全局 `fetch`(都可注入),
- * 两者都不读文件系统。
+ * 两者都不读文件系统。C6.4 的 `content-client.mjs` 也例外:用计时器做请求超时(可注入),
+ * 只经注入的端点收发,不读文件系统。
  */
 export { normalizeOs, gpuClassOf, chromeMajorOf, envFingerprintOf, describeEnvironment, resultKeyOf } from './fingerprint.mjs';
 export { DEFAULT_WEIGHT_POLICY, checkClaimable, filterClaimable } from './filter.mjs';
@@ -23,3 +25,4 @@ export { createNodeSession } from './session.mjs';
 export { createLocalNode } from './local-node.mjs';
 export { BACKOFF_DEFAULTS, createWsEndpoint } from './ws-transport.mjs';
 export { resolveDocservice, watchServiceEndpoints } from './endpoint.mjs';
+export { CONTENT_CLIENT_DEFAULTS, createContentClient } from './content-client.mjs';
