@@ -5,12 +5,17 @@
  * 不测算算力、不分配。按规则号顺序检查,第一条不过就返回:
  *
  *   0  纯浏览器只接本人的任务(服务端已按凭证把关,这里再挡一次)
- *   1  环境指纹、代码版本、卡片源码版本对得上(`plan` 任务只查代码版本:谁认领谁的指纹就是这一版的指纹)
- *   2  轨道流 / 要转码的任务需要转码能力
+ *   1  环境指纹、代码版本、卡片源码版本对得上(`plan` 任务只查代码版本:谁认领谁的指纹就是这一版的指纹;
+ *      带 `requires.preferNode` 的 `plan` 另查指纹,M6c X4);`requires.localMedia` 给了就要等于本节点的
+ *      `nodeId`(M6c X2 本地档能力闸,`node.nodeId` 由会话补上)
+ *   2  要求 `capabilities.streams` 的任务(M6c X1 起的流任务)需要节点报 `streams: true`(没报这一项的旧形状
+ *      按 `transcode` 算);
+ *      轨道流 / 要转码的任务需要转码能力
  *   3  用户卡、图卡需要对应能力
  *   4  重度策略(见 `DEFAULT_WEIGHT_POLICY`)
  *   5  内存要求不超过本机可用内存
- *   6  `plan` 任务要 Chrome 和服务端的 card-cache,纯浏览器不接
+ *   6  `plan` 任务要 Chrome 和服务端的 card-cache,纯浏览器不接;独立渲染主机(`host`)也不接 ——
+ *      `plan` 留给发布方自己的节点(M6b,`docs/plan/render-host-contract.md` 第 3、4 节)
  *
  * 纯函数,不改入参。
  */
@@ -52,15 +57,20 @@ export function checkClaimable(task, node) {
   const requires = task?.requires ?? {};
   const capabilities = node?.capabilities ?? {};
   const browser = node?.profile === 'browser';
+  const host = node?.profile === 'host';
   const plan = task?.kind === 'plan';
 
   // 0
   if (browser && task?.source?.userId !== node.userId) return reject(0, 'other-user');
 
   // 1
-  if (!plan && requires.envFingerprint != null && requires.envFingerprint !== node?.envFingerprint) {
+  // 带 preferNode 的 plan(M6c X4)窗口过后给「指纹符合的 pc」,所以也查指纹;没带的旧形状照旧不查
+  const checksFingerprint = !plan || requires.preferNode != null;
+  if (checksFingerprint && requires.envFingerprint != null && requires.envFingerprint !== node?.envFingerprint) {
     return reject(1, 'env-fingerprint');
   }
+  // 本地档能力闸(M6c X2):输入里有只在发布方本机的素材(没有内容哈希),只有那个节点接
+  if (requires.localMedia != null && requires.localMedia !== node?.nodeId) return reject(1, 'local-media');
   if (requires.codeVersion != null && !(node?.codeVersions ?? []).includes(requires.codeVersion)) {
     return reject(1, 'code-version');
   }
@@ -70,7 +80,9 @@ export function checkClaimable(task, node) {
     }
   }
 
-  // 2
+  // 2(M6c X1:任务要求 `capabilities.streams` 时,节点要报 `streams: true`,即本机探到了编码器;
+  //   没报 `streams` 这一项的节点(M6c 之前的形状)按它的转码能力算,报了 `false` 的一律不收)
+  if (requires.capabilities?.streams === true && (capabilities.streams ?? capabilities.transcode) !== true) return reject(2, 'streams');
   if ((task?.kind === 'stream' || requires.transcode === true) && !capabilities.transcode) return reject(2, 'transcode');
 
   // 3
@@ -90,6 +102,7 @@ export function checkClaimable(task, node) {
 
   // 6
   if (plan && browser) return reject(6, 'plan-on-browser');
+  if (plan && host) return reject(6, 'plan-on-host');
 
   return pass;
 }

@@ -85,6 +85,9 @@ const positive = (v, fallback) => (typeof v === 'number' && Number.isFinite(v) &
  * @param {(connId: string, code: number, reason: string) => void} [options.close] 主动关闭连接
  * @param {number} [options.highWaterBytes] 缺省 `CORE_DEFAULTS.HIGH_WATER_BYTES`
  * @param {number} [options.maxPendingBytes] 缺省 `CORE_DEFAULTS.MAX_PENDING_BYTES`
+ * @param {(principal: object, type: string) => string | null} [options.gate]
+ *   派发前的放行判断：回一个原因字符串就不交给模块，直接回 `error { reason }`；回 null 照常派发。
+ *   核心不认识任何身份或业务，判据全在组装层（例：管理身份只能发管理接口的消息，`auth-contract.md` 第 5 节）
  */
 export function createRouter({
   now = Date.now,
@@ -94,6 +97,7 @@ export function createRouter({
   close = () => {},
   highWaterBytes,
   maxPendingBytes,
+  gate = null,
 }) {
   if (typeof write !== 'function') throw new TypeError('createRouter: write 必须是函数');
   if (typeof buffered !== 'function') throw new TypeError('createRouter: buffered 必须是函数');
@@ -378,6 +382,18 @@ export function createRouter({
         return conn ? pendingOf(conn) : 0;
       },
       maxPendingBytes: maxPending,
+      // 主动关闭一条连接（例：创建者踢人、删项目时以 4003 / 4004 关闭，`auth-contract.md` 第 7 节）；连接不存在回 false
+      close: (connId, code, reason) => {
+        if (!conns.has(connId)) return false;
+        try {
+          close(connId, code, reason);
+        } catch (err) {
+          log('conn.error', { connId, message: String(err?.message ?? err) });
+        }
+        return true;
+      },
+      // 这条连接的来源地址（组装层登记时给的）；连接不存在回 null
+      remote: (connId) => conns.get(connId)?.remote ?? null,
     });
     mounted.push(entry);
     for (const c of conns.values()) callHook(entry, 'connect', c.connId, c.principal);
@@ -407,6 +423,15 @@ export function createRouter({
     if (!isObj(msg) || typeof msg.type !== 'string') return replyError(connId, 'bad-message', '消息必须是带字符串 type 字段的对象', reqId);
     const entry = ownerOf(msg.type);
     if (!entry) return replyError(connId, 'unsupported', '没有模块处理这种消息', reqId);
+    if (gate) {
+      let reason;
+      try {
+        reason = gate(conns.get(connId).principal, msg.type);
+      } catch {
+        reason = 'forbidden';
+      }
+      if (typeof reason === 'string') return replyError(connId, reason, '这条连接不能发这种消息', reqId);
+    }
 
     const fail = (err) => {
       log('module.error', { module: entry.mod.name, type: msg.type, message: String(err?.message ?? err) });

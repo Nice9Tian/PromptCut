@@ -21,7 +21,11 @@ after(() => harness.cleanup());
 
 const NS = ['media', 'snap', 'px'];
 const CHUNK = 1024;
-const TOKEN = crypto.randomBytes(24).toString('base64url');
+// M6a：非本机来源读写都凭素材票据（auth-contract 第 8 节）。原来这里是集群令牌，只管写；
+// 现在 TOKEN 是一张 rw 素材票据，剧本里的读也带上它，另加一步「读不带票据 401」
+const { assetTicketKit } = await import('./fake-shared-env.mjs');
+const KIT = await assetTicketKit();
+const TOKEN = KIT.issue('rw');
 const AUTH = { Authorization: `Bearer ${TOKEN}` };
 const LAN = 'http://192.168.1.50:8080';
 
@@ -63,7 +67,7 @@ async function snap(resPromise) {
 
 /**
  * S2 的剧本：分片、对账、收尾、Range、HEAD、CORS、401。对一个命名空间跑一遍，
- * 返回 [步骤名, 快照] 列表。服务配了令牌、`isTrusted` 恒假：写入要带令牌。
+ * 返回 [步骤名, 快照] 列表。服务配了票据核对器、`isTrusted` 恒假：读写都要带票据（M6a；原来只有写要令牌）。
  */
 async function script(base, ns) {
   const out = [];
@@ -82,40 +86,43 @@ async function script(base, ns) {
     method: 'OPTIONS',
     headers: { Origin: 'https://evil.example.com', 'Access-Control-Request-Method': 'GET', 'Access-Control-Request-Private-Network': 'true' },
   }));
-  await step('对账：没见过', fetch(`${base}/${ns}/${hash}/chunks`, { headers: { Origin: LAN } }));
+  await step('对账不带票据 401', fetch(`${base}/${ns}/${hash}/chunks`, { headers: { Origin: LAN } }));
+  await step('对账：没见过', fetch(`${base}/${ns}/${hash}/chunks`, { headers: { Origin: LAN, ...AUTH } }));
   await step('PUT 不带令牌 401', put(base, ns, hash, 0, sliceOf(buf, 0), { 'X-Media-Size': String(size), Origin: LAN }));
   await step('PUT 令牌错 401', put(base, ns, hash, 0, sliceOf(buf, 0), { 'X-Media-Size': String(size), Authorization: `Bearer ${TOKEN}x` }));
-  await step('对账：被拒的不算', fetch(`${base}/${ns}/${hash}/chunks`));
+  await step('对账：被拒的不算', fetch(`${base}/${ns}/${hash}/chunks`, { headers: AUTH }));
   await step('PUT 第 0 片', put(base, ns, hash, 0, sliceOf(buf, 0), { ...h, Origin: LAN }));
   await step('PUT 第 2 片', put(base, ns, hash, 2, sliceOf(buf, 2), h));
-  await step('对账：收了 0、2', fetch(`${base}/${ns}/${hash}/chunks`));
+  await step('对账：收了 0、2', fetch(`${base}/${ns}/${hash}/chunks`, { headers: AUTH }));
   await step('收尾：缺片', complete(base, ns, hash, { ...AUTH, Origin: LAN }));
   await step('补传第 1 片', put(base, ns, hash, 1, sliceOf(buf, 1), h));
   await step('收尾不带令牌 401', complete(base, ns, hash));
   await step('收尾：到齐', complete(base, ns, hash, { ...AUTH, Origin: LAN }));
-  await step('对账：已入库', fetch(`${base}/${ns}/${hash}/chunks`));
+  await step('对账：已入库', fetch(`${base}/${ns}/${hash}/chunks`, { headers: AUTH }));
   await step('入库后重传', put(base, ns, hash, 0, sliceOf(buf, 0), h));
   await step('入库后再收尾', complete(base, ns, hash, AUTH));
 
-  await step('GET 全件', fetch(`${base}/${ns}/${hash}`, { headers: { Origin: LAN } }));
-  await step('GET 大写哈希', fetch(`${base}/${ns}/${hash.toUpperCase()}`));
-  await step('Range 100-199', fetch(`${base}/${ns}/${hash}`, { headers: { Range: 'bytes=100-199', Origin: LAN } }));
-  await step('Range 跨片', fetch(`${base}/${ns}/${hash}`, { headers: { Range: `bytes=${CHUNK - 10}-${CHUNK + 9}` } }));
-  await step('Range 尾 10', fetch(`${base}/${ns}/${hash}`, { headers: { Range: 'bytes=-10' } }));
-  await step('Range 开口', fetch(`${base}/${ns}/${hash}`, { headers: { Range: `bytes=${size - 5}-` } }));
-  await step('Range 越界 416', fetch(`${base}/${ns}/${hash}`, { headers: { Range: `bytes=${size + 10}-${size + 20}` } }));
-  await step('HEAD', fetch(`${base}/${ns}/${hash}`, { method: 'HEAD' }));
-  await step('HEAD 带 Range', fetch(`${base}/${ns}/${hash}`, { method: 'HEAD', headers: { Range: 'bytes=0-9' } }));
-  await step('GET 带令牌也照常', fetch(`${base}/${ns}/${hash}`, { headers: AUTH }));
+  await step('GET 不带票据 401', fetch(`${base}/${ns}/${hash}`, { headers: { Origin: LAN } }));
+  await step('GET 全件', fetch(`${base}/${ns}/${hash}`, { headers: { Origin: LAN, ...AUTH } }));
+  await step('GET 大写哈希', fetch(`${base}/${ns}/${hash.toUpperCase()}`, { headers: AUTH }));
+  await step('Range 100-199', fetch(`${base}/${ns}/${hash}`, { headers: { Range: 'bytes=100-199', Origin: LAN, ...AUTH } }));
+  await step('Range 跨片', fetch(`${base}/${ns}/${hash}`, { headers: { Range: `bytes=${CHUNK - 10}-${CHUNK + 9}`, ...AUTH } }));
+  await step('Range 尾 10', fetch(`${base}/${ns}/${hash}`, { headers: { Range: 'bytes=-10', ...AUTH } }));
+  await step('Range 开口', fetch(`${base}/${ns}/${hash}`, { headers: { Range: `bytes=${size - 5}-`, ...AUTH } }));
+  await step('Range 越界 416', fetch(`${base}/${ns}/${hash}`, { headers: { Range: `bytes=${size + 10}-${size + 20}`, ...AUTH } }));
+  await step('HEAD', fetch(`${base}/${ns}/${hash}`, { method: 'HEAD', headers: AUTH }));
+  await step('HEAD 带 Range', fetch(`${base}/${ns}/${hash}`, { method: 'HEAD', headers: { Range: 'bytes=0-9', ...AUTH } }));
+  await step('GET 查询串只读票据', fetch(`${base}/${ns}/${hash}?t=${encodeURIComponent(KIT.issue('r'))}`));
+  await step('PUT 只读票据 403', put(base, ns, hash, 0, sliceOf(buf, 0), { ...h, Authorization: `Bearer ${KIT.issue('r')}` }));
 
   // 409：全件哈希不符
   const small = bytesOf(300, 12);
   const claimed = sha256(Buffer.from('not the same bytes'));
   await step('PUT（哈希不符的内容）', put(base, ns, claimed, 0, small, { 'X-Media-Size': '300', ...AUTH }));
   await step('收尾：hash-mismatch', complete(base, ns, claimed, AUTH));
-  await step('对账：丢弃后', fetch(`${base}/${ns}/${claimed}/chunks`));
+  await step('对账：丢弃后', fetch(`${base}/${ns}/${claimed}/chunks`, { headers: AUTH }));
   await step('收尾：丢弃后是没见过的', complete(base, ns, claimed, AUTH));
-  await step('GET 没入库', fetch(`${base}/${ns}/${claimed}`));
+  await step('GET 没入库', fetch(`${base}/${ns}/${claimed}`, { headers: AUTH }));
 
   // 分片校验
   const s2 = CHUNK + 10;
@@ -128,7 +135,7 @@ async function script(base, ns) {
   await step('分片号前导零 400', put(base, ns, h2, '01', Buffer.alloc(10), hh));
   await step('PUT 第 1 片', put(base, ns, h2, 1, sliceOf(b2, 1), hh));
   await step('size 不一致 409', put(base, ns, h2, 0, sliceOf(b2, 0), { 'X-Media-Size': String(s2 + 1), ...AUTH }));
-  await step('对账：校验之后', fetch(`${base}/${ns}/${h2}/chunks`));
+  await step('对账：校验之后', fetch(`${base}/${ns}/${h2}/chunks`, { headers: AUTH }));
   await step('坏哈希 400', fetch(`${base}/${ns}/xyz/chunks`));
   await step('方法不对 405（chunks）', fetch(`${base}/${ns}/${h2}/chunks`, { method: 'POST' }));
   await step('方法不对 405（complete）', fetch(`${base}/${ns}/${h2}/complete`));
@@ -199,7 +206,7 @@ test('S2 snap、px 的分片、对账、收尾、Range、HEAD、CORS、401 规�
   const runs = {};
   for (const ns of NS) {
     // 每个命名空间一台新服务，剧本从同一个空状态起跑
-    const srv = await harness.serve({ chunkSize: CHUNK, token: TOKEN, isTrusted: () => false });
+    const srv = await harness.serve({ chunkSize: CHUNK, tickets: KIT.tickets, isTrusted: () => false });
     runs[ns] = await script(srv.base, ns);
     await srv.close();
   }
@@ -208,6 +215,11 @@ test('S2 snap、px 的分片、对账、收尾、Range、HEAD、CORS、401 规�
   const get = (name) => ref.find(([n]) => n === name)[1];
   assert.deepEqual(get('对账：没见过').body, { size: null, chunkSize: CHUNK, received: [], complete: false });
   assert.deepEqual([get('PUT 不带令牌 401').status, get('PUT 不带令牌 401').body], [401, { ok: false, error: 'unauthorized' }]);
+  assert.deepEqual([get('对账不带票据 401').status, get('对账不带票据 401').body], [401, { ok: false, error: 'unauthorized' }]);
+  assert.equal(get('GET 不带票据 401').status, 401);
+  assert.equal(get('GET 查询串只读票据').status, 200);
+  assert.equal(get('GET 查询串只读票据').headers['cache-control'], 'no-store');
+  assert.deepEqual([get('PUT 只读票据 403').status, get('PUT 只读票据 403').body], [403, { ok: false, error: 'forbidden' }]);
   assert.deepEqual(get('对账：收了 0、2').body.received, [0, 2]);
   assert.deepEqual([get('收尾：缺片').status, get('收尾：缺片').body.missing], [400, [1]]);
   assert.equal(get('收尾：到齐').status, 200);
@@ -403,8 +415,8 @@ test('S3 旧写法 opts.store 仍然认、当作 stores.media；只给 stores.me
   assert.equal(got.headers.get('content-type'), 'image/png');
 
   // 新写法：media 的回包与旧写法逐字段相同
-  const a =await script((await harness.serve({ chunkSize: CHUNK, token: TOKEN, isTrusted: () => false, legacyStore: true })).base, 'media');
-  const b = await script((await harness.serve({ chunkSize: CHUNK, token: TOKEN, isTrusted: () => false })).base, 'media');
+  const a =await script((await harness.serve({ chunkSize: CHUNK, tickets: KIT.tickets, isTrusted: () => false, legacyStore: true })).base, 'media');
+  const b = await script((await harness.serve({ chunkSize: CHUNK, tickets: KIT.tickets, isTrusted: () => false })).base, 'media');
   assert.deepEqual(b.out, a.out, 'stores.media 与 opts.store 的 media 行为相同');
 });
 

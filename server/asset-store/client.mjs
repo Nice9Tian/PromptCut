@@ -14,7 +14,11 @@
  *   超时算网络错误，照常重试，重试用完抛出的错误带 `code: 'timeout'`（契约第 10 节第 5 条）。
  * - 重试：网络错误、超时和 5xx 重试，最多 `retries` 次，间隔 200 ms、400 ms、800 ms（再往后继续翻倍）。
  *   每个请求各自计数，所以分片上传就是「按片重试」。4xx 不重试，直接抛，错误对象带 `status` 和回包 `body`。
- * - 令牌只进 `Authorization` 头；异常信息里出现令牌原文的地方一律换成 `***`，不挂原始错误对象。
+ * - 票据（M6a，`docs/plan/auth-contract.md` 第 8、11 节）：`ticket: () => string | Promise<string>`，每个请求取一次，
+ *   有就放进 `Authorization: Bearer <票据>`，回 null / 空串就不带（连本机回环时不需要票据）。
+ *   收到 401 时调一次 `ticket({ refresh: true })` 换一张再重试一次；仍 401 就照 4xx 抛。
+ *   集群令牌不再用于素材服务：旧选项 `token` 给了就抛 TypeError，免得调用方以为它还有用。
+ * - 票据只进 `Authorization` 头；异常信息里出现票据原文的地方一律换成 `***`，不挂原始错误对象。
  */
 import crypto from 'node:crypto';
 
@@ -51,28 +55,41 @@ function parseBody(buf, contentType) {
 /**
  * @param {object} options
  * @param {string} options.base  素材服务的 API 基址，形如 `http://192.168.50.96:5460/api/asset`
- * @param {string | null} [options.token]  集群令牌；给了就在每个请求上带 `Authorization: Bearer <令牌>`
+ * @param {(opts?: { refresh?: boolean }) => (string | null | Promise<string | null>)} [options.ticket]  取素材票据
  * @param {typeof globalThis.fetch} [options.fetch]
  * @param {number} [options.chunkSize]  服务端没回 `chunkSize` 时用，缺省 8 MiB
  * @param {number} [options.retries]  网络错误、超时与 5xx 的重试次数，缺省 3
  * @param {number} [options.timeoutMs]  单个请求（含读完回包）的时限，缺省 30000；`Infinity` 或超过 2^31-1 表示不限
  */
 export function createAssetClient({
-  base, token = null, fetch = globalThis.fetch, chunkSize = 8 * 1024 * 1024, retries = 3, timeoutMs = 30000,
+  base, ticket = null, token, fetch = globalThis.fetch, chunkSize = 8 * 1024 * 1024, retries = 3, timeoutMs = 30000,
 } = /** @type {any} */ ({})) {
+  if (token !== undefined && token !== null) throw new TypeError('createAssetClient：集群令牌不再用于素材服务，改给 ticket()');
+  if (ticket !== null && typeof ticket !== 'function') throw new TypeError('createAssetClient：ticket 必须是函数');
   if (typeof base !== 'string' || !/^https?:\/\//i.test(base)) throw new TypeError('createAssetClient：base 必须是 http(s) 地址');
   if (typeof fetch !== 'function') throw new TypeError('createAssetClient：没有可用的 fetch');
   if (!Number.isSafeInteger(chunkSize) || chunkSize <= 0) throw new TypeError('createAssetClient：chunkSize 必须是正整数');
   if (!Number.isSafeInteger(retries) || retries < 0) throw new TypeError('createAssetClient：retries 必须是非负整数');
   if (typeof timeoutMs !== 'number' || !(timeoutMs > 0)) throw new TypeError('createAssetClient：timeoutMs 必须是正数');
   const root = base.replace(/\/+$/, '');
-  const secret = typeof token === 'string' && token !== '' ? token : null;
+  /** 用过的票据：异常信息里出现就抹掉 */
+  const secrets = new Set();
 
-  /** 把令牌原文从文字里抹掉 */
+  /** 把票据原文从文字里抹掉 */
   const scrub = (text) => {
-    const s = String(text ?? '');
-    return secret ? s.split(secret).join('***') : s;
+    let s = String(text ?? '');
+    for (const secret of secrets) s = s.split(secret).join('***');
+    return s;
   };
+
+  /** 取一张票据；没有给 null */
+  async function currentTicket(refresh) {
+    if (!ticket) return null;
+    const t = await ticket(refresh ? { refresh: true } : undefined);
+    if (typeof t !== 'string' || t === '') return null;
+    secrets.add(t);
+    return t;
+  }
 
   function httpError(what, status, body) {
     const detail = body && typeof body === 'object' && 'error' in body ? String(body.error) : (typeof body === 'string' ? body.slice(0, 200) : '');
@@ -105,10 +122,18 @@ export function createAssetClient({
    * @param {string} rel  相对基址的路径
    * @param {{ headers?: Record<string, string>, body?: Buffer }} [init]
    */
-  async function request(method, rel, { headers = {}, body } = {}) {
+  async function request(method, rel, init = {}) {
+    const first = await attempt(method, rel, init, false);
+    if (first.status !== 401 || !ticket) return first;
+    // 票据可能过期或已作废：换一张再试一次
+    return attempt(method, rel, init, true);
+  }
+
+  async function attempt(method, rel, { headers = {}, body } = {}, refresh) {
     const what = `${method} ${rel}`;
     const h = { ...headers };
-    if (secret) h.Authorization = `Bearer ${secret}`;
+    const t = await currentTicket(refresh);
+    if (t) h.Authorization = `Bearer ${t}`;
     let lastError = null;
     for (let attempt = 0; attempt <= retries; attempt++) {
       if (attempt > 0) await sleep(200 * 2 ** (attempt - 1));

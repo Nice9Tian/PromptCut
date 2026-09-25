@@ -8,7 +8,12 @@
  *     [--tasks 50] [--project <id>] [--node-id <id>] [--task-ms 200] [--max-concurrent 2]
  *     [--exit-after-claim] [--announce <http-url>] [--watch-endpoints] [--timeout-ms 120000]
  *
- * 令牌只从环境变量 PROMPTCUT_CLUSTER_TOKEN 读（按 G.5 放进 Sec-WebSocket-Protocol），不接受命令行参数。
+ * 凭证（M6a，`docs/plan/auth-contract.md` 第 5、11 节；集群令牌已退出数据面，本探针不再读它）：
+ * - 设了环境变量 PROMPTCUT_SHARED_CONFIG（共享项目配置 JSON）：取第一项，凭项目证明进入，节点连接用 `render` 角色、
+ *   发布方连接用 `page` 角色；每次（重）连前现取挑战。任务都在这个共享项目的空间里；
+ * - 没设：不带凭证，连本机回环时是本机身份（`local` 空间），连别的机器会被 401。
+ * `--announce` 是管理接口（服务地址登记）：本机身份能登记，共享项目的成员会被拒（forbidden）。
+ * 配置里的口令、派生密钥与证明都不打印。
  *
  * - node 角色：createLocalNode + createWsEndpoint；执行器按 --task-ms 睡眠，产物库用内存版
  *   （复用 server/test/ 的假件：探针不是生产代码）。同时 queue.watch：看到别人认领某任务（task.taken）的
@@ -32,7 +37,7 @@ import { randomBytes } from 'node:crypto';
 const USAGE = `用法：node scripts/probes/render-queue-e2e.mjs --url <ws://…> --role publisher|node|both
   [--tasks 50] [--project <id>] [--node-id <id>] [--task-ms 200] [--max-concurrent 2]
   [--exit-after-claim] [--announce <http-url>] [--watch-endpoints] [--timeout-ms 120000]
-令牌从环境变量 PROMPTCUT_CLUSTER_TOKEN 读。`;
+凭证从环境变量 PROMPTCUT_SHARED_CONFIG 指向的共享项目配置读；不设就是本机身份（只能连本机回环）。`;
 
 function usage(msg) {
   if (msg) console.error(msg);
@@ -54,7 +59,7 @@ function parseArgs(argv) {
       out[a.slice(2)] = v;
       continue;
     }
-    if (a === '--token') usage('令牌只从环境变量 PROMPTCUT_CLUSTER_TOKEN 读，不接受命令行参数');
+    if (a === '--token') usage('集群令牌不再用于数据面；共享项目的凭证从环境变量 PROMPTCUT_SHARED_CONFIG 读');
     usage(`不认识的参数：${a}`);
   }
   return out;
@@ -79,7 +84,17 @@ const timeoutMs = intArg('timeout-ms', 120_000, 1);
 const runId = `${Date.now().toString(36)}-${randomBytes(3).toString('hex')}`;
 const projectId = args.project ?? `probe-${runId}`;
 const nodeId = args['node-id'] ?? `probe-node-${process.pid}`;
-const token = process.env.PROMPTCUT_CLUSTER_TOKEN || undefined;
+let sharedEntry = null;
+let sharedProtocols = null;
+if (process.env.PROMPTCUT_SHARED_CONFIG) {
+  try {
+    const mod = await import(new URL('../../server/auth/shared-config.mjs', import.meta.url));
+    [sharedEntry] = mod.loadSharedConfig();
+    sharedProtocols = mod.sharedProtocols;
+  } catch (error) {
+    usage(String(error?.message ?? error));
+  }
+}
 if (args.announce !== undefined) {
   try { new URL(args.announce); } catch { usage('--announce 要是 http(s):// 地址'); }
 }
@@ -150,7 +165,9 @@ function closeEndpoints() {
 }
 
 function openEndpoint(label) {
-  const ep = createWsEndpoint({ url, token, log: (event, fields) => log(`${label}.${event}`, fields) });
+  // 共享项目：节点连接是 render，发布方连接是 page（node.hello 只许 render 连接）
+  const protocols = sharedEntry ? sharedProtocols(sharedEntry, { role: label === 'node' ? 'render' : 'page' }) : undefined;
+  const ep = createWsEndpoint({ url, ...(protocols ? { protocols } : {}), log: (event, fields) => log(`${label}.${event}`, fields) });
   endpoints.push(ep);
   ep.onOpen(() => log(`${label}.open`, { opens: ep.stats().opens }));
   ep.onClose((info) => log(`${label}.close`, info));
@@ -265,7 +282,7 @@ function runNode() {
 
 // ---------------------------------------------------------------- 主流程
 
-log('start', { role, url, runId, projectId, nodeId, tasks: taskCount, token: token ? 'set' : 'none' });
+log('start', { role, url, runId, projectId, nodeId, tasks: taskCount, credential: sharedEntry ? 'shared-project' : 'none' });
 const eps = [];
 if (role === 'publisher' || role === 'both') eps.push(runPublisher());
 if (role === 'node' || role === 'both') eps.push(runNode());

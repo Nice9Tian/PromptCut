@@ -15,6 +15,7 @@
  */
 import { createHash } from 'node:crypto';
 import { createMemoryStore } from '../store/index.mjs';
+import { actorOf } from './actor.mjs';
 
 export const CONTENT_MODULE = 'content';
 export const CONTENT_KINDS = Object.freeze(['card-source', 'snapshot-manifest', 'render-manifest', 'event-detail']);
@@ -111,7 +112,7 @@ export function contentModule({ store = createMemoryStore(), now, maxBodyBytes =
     const hash = sha256(text);
     const rev = REV_KINDS.has(kind) ? (prev?.rev ?? 0) + 1 : null;
     const principal = principals.get(connId);
-    const actor = { userId: principal?.userId ?? null, session };
+    const actor = actorOf(principal, session);
     const at = clock(ctx);
     const body = JSON.parse(text);
     const record = withRev({ kind, key, hash }, kind, rev);

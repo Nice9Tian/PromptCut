@@ -6,7 +6,9 @@
  * 地址随之撤回（语义 `docs/semantics/architecture/document-service.md`「连接发现」）。
  *
  * 只交换地址：本模块不访问登记的 URL，不转发任何字节。推送一律是按订阅者 `kinds` 过滤后的全量，列表很小，不做增量。
- * 任何通过鉴权的连接都能登记和订阅（细粒度权限在后续阶段）。
+ * 权限（`docs/plan/auth-contract.md` 第 10 节）：`service.announce` / `service.withdraw` 只给管理身份与 `local` 身份，
+ * 成员（`scope: 'member'`）回 `forbidden`；`service.watch` 与下发的 `service.endpoints` 对所有身份开放（只读）。
+ * 不带 `scope` 的旧式身份（测试注入的 `authenticate`）不受限，与 M5 相同。
  */
 
 export const ENDPOINT_DEFAULTS = Object.freeze({
@@ -92,6 +94,8 @@ export function endpointsModule(options = {}) {
   const entries = new Map();
   /** connId → Set<kind> | 'all' */
   const watchers = new Map();
+  /** connId → principal.scope（`member` 不能登记与撤回；不带 scope 的旧式身份不受限） */
+  const scopes = new Map();
 
   const keyOf = (announcerId, kind) => `${kind}\u0000${announcerId}`;
 
@@ -171,7 +175,12 @@ export function endpointsModule(options = {}) {
     types: ['service.'],
     tickMs,
 
+    connect(ctx, connId, principal) {
+      scopes.set(connId, principal?.scope);
+    },
+
     disconnect(ctx, connId) {
+      scopes.delete(connId);
       watchers.delete(connId);
       const at = ctx.now();
       // 登记标为离线但仍然可见，过了宽限期由 tick 删掉
@@ -184,6 +193,10 @@ export function endpointsModule(options = {}) {
       const reqId = isReqId(msg.reqId) ? msg.reqId : undefined;
       const fn = HANDLERS[msg.type];
       if (!fn) return reply(ctx, connId, { type: 'error', reason: 'unsupported', detail: '服务地址登记不支持这种消息' }, reqId);
+      // 登记与撤回只给管理身份与本机身份；成员只能订阅（auth-contract 第 10 节）
+      if (fn !== watch && scopes.get(connId) === 'member') {
+        return reply(ctx, connId, { type: 'error', reason: 'forbidden', detail: '成员不能登记或撤回服务地址' }, reqId);
+      }
       try {
         fn(ctx, connId, msg, reqId);
       } catch (err) {

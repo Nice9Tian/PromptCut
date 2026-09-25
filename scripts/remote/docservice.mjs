@@ -7,7 +7,7 @@
  * 命令：
  *   probe    探测远端：Node 是不是 LTS（偶数大版本且 >= 20）、有没有 PM2、UFW 状态。就绪退出码 0，没就绪 1，连不上 2
  *   install  缺什么装什么：Node 取 nodejs.org 当前最新 LTS 的官方二进制（校验 SHA256 后装到 /usr/local），PM2 用 npm 全局装
- *   deploy   拷 server/docservice（含 modules/）与 server/render-queue 到远端，PM2 启动或重载，放行 SSH 与服务端口后启用 UFW，
+ *   deploy   拷 server/docservice（含 modules/）、server/auth 与 server/render-queue 到远端，PM2 启动或重载，放行 SSH 与服务端口后启用 UFW，
  *            最后查 /healthz。远端绑 0.0.0.0，必须带集群令牌：从本机环境变量 PROMPTCUT_CLUSTER_TOKEN 读，没设或格式不对就拒绝部署。
  *            令牌只经 ssh 的标准输入进远端脚本，由它 export 后 pm2 startOrReload --update-env；不上命令行、不回显、不写进仓库
  *            （契约 docs/plan/render-queue-contract.md G.5）。令牌的生成方法见 server/docservice/main.mjs 文件头
@@ -152,7 +152,7 @@ function deploy() {
     return 1;
   }
   // 相对路径 + cwd：Windows 的绝对路径带盘符冒号，scp 会把 `C:` 当成主机名
-  const sources = ['server/docservice', 'server/render-queue'];
+  const sources = ['server/docservice', 'server/auth', 'server/render-queue'];
   console.log(`== scp ${sources.join(' ')} -> ${target}:${dir}/`);
   const scp = spawnSync('scp', [...baseOpts, '-r', '-q', ...sources, `${target}:${dir}/.incoming/server/`], { cwd: ROOT, stdio: 'inherit', timeout: 120_000 });
   if (scp.status !== 0) return scp.status ?? 1;

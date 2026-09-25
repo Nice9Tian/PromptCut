@@ -106,6 +106,21 @@ export function setMediaFallbackBases(list: unknown): string[] {
   return [...bases];
 }
 
+const FALLBACK_TICKET_KEY = Symbol.for("promptcut.asset-service.fallback-ticket");
+/** 取回退请求的票据:参数是这次要试的回退基址(与 `setMediaFallbackBases` 规整后的写法相同) */
+export type FallbackTicketFn = (base: string) => Promise<string | null> | string | null;
+type TicketHolder = { [FALLBACK_TICKET_KEY]?: FallbackTicketFn | null };
+
+/**
+ * 回退请求带的素材票据(M6a,`docs/plan/auth-contract.md` 第 8 节):回退基址是别的机器的素材服务,
+ * 非回环来源读要票据。凭共享项目进入的节点把经文档服务取票据的函数填进来;null = 不带(缺省)。
+ * 每试一个回退基址调一次,参数是那个基址:票据只在签发它的素材服务上有效,独立渲染主机加入的项目分属
+ * 不同素材服务时要按基址挑(M6b 集成)。只加入一个项目的节点可以不看参数。
+ */
+export function setMediaFallbackTicket(fn: FallbackTicketFn | null): void {
+  (globalThis as TicketHolder)[FALLBACK_TICKET_KEY] = typeof fn === "function" ? fn : null;
+}
+
 /** 现在的回退基址(拷贝) */
 export function mediaFallbackBases(): string[] {
   return [...((globalThis as FallbackHolder)[FALLBACK_KEY] ?? [])];
@@ -134,6 +149,7 @@ function serveFromFallbacks(req: http.IncomingMessage, res: http.ServerResponse,
   let settled = false;
   let current: http.ClientRequest | null = null;
   res.on("close", () => { if (!res.writableFinished) current?.destroy(); });
+  const ticketOf = (globalThis as TicketHolder)[FALLBACK_TICKET_KEY];
   const attempt = (i: number) => {
     if (settled || res.destroyed) return;
     if (i >= bases.length) {
@@ -148,10 +164,21 @@ function serveFromFallbacks(req: http.IncomingMessage, res: http.ServerResponse,
     }
     let url: URL;
     try { url = new URL(`${bases[i]}/media/${hash}`); } catch { return attempt(i + 1); }
+    if (typeof ticketOf !== "function") return request(i, url, headers);
+    // 票据只进 Authorization 头,不进地址与日志;按这个基址取,取不到就不带
+    const base = bases[i];
+    Promise.resolve().then(() => ticketOf(base)).then((t) => {
+      const withTicket = { ...headers };
+      if (typeof t === "string" && t !== "") withTicket.authorization = `Bearer ${t}`;
+      return withTicket;
+    }, () => ({ ...headers })).then((h) => request(i, url, h));
+  };
+  const request = (i: number, url: URL, h: Record<string, string>) => {
+    if (settled || res.destroyed) return;
     let moved = false;
     const next = () => { if (!moved) { moved = true; attempt(i + 1); } };
     const lib = url.protocol === "https:" ? https : http;
-    const upstream = lib.request(url, { method: req.method, headers }, (up) => {
+    const upstream = lib.request(url, { method: req.method, headers: h }, (up) => {
       if (up.statusCode === 404 || settled) { up.resume(); return next(); }
       moved = true;
       settled = true;

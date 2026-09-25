@@ -29,6 +29,7 @@ import { createRouter, CORE_DEFAULTS } from './router.mjs';
 import { PROTOCOL, offeredProtocols } from './auth.mjs';
 import { QUEUE_DEFAULTS } from '../render-queue/constants.mjs';
 import { renderQueueModule, renderQueuePlaceholder, RENDER_QUEUE_MODULE } from './modules/render-queue.mjs';
+import { spacedModule } from './spaces.mjs';
 
 export const DOCSERVICE_DEFAULTS = Object.freeze({
   /** 单条消息上限。这条连接只传小消息（document-service.md「职责」） */
@@ -39,6 +40,21 @@ export const DOCSERVICE_DEFAULTS = Object.freeze({
 });
 
 const ANONYMOUS = Object.freeze({ userId: 'anonymous', tenantId: null });
+
+/** principal 里认的字段（`docs/plan/auth-contract.md` 第 6 节）；鉴权给的别的字段不进核心 */
+const PRINCIPAL_EXTRA = Object.freeze(['scope', 'username', 'deviceId', 'deviceName', 'creator', 'role', 'conversation', 'owner']);
+
+/**
+ * 规整鉴权给的 principal：`userId` 原样、`tenantId` 不是字符串就记 null，其余认得的字段有值才带上。
+ * 旧式的 `{ userId, tenantId }` 规整后不变（M5 的行为）。
+ */
+export function normalizePrincipal(principal) {
+  const out = { userId: principal.userId, tenantId: typeof principal.tenantId === 'string' ? principal.tenantId : null };
+  for (const k of PRINCIPAL_EXTRA) {
+    if (principal[k] !== undefined) out[k] = typeof principal[k] === 'object' && principal[k] !== null ? structuredClone(principal[k]) : principal[k];
+  }
+  return out;
+}
 
 /** 缺省日志：一行一条 JSON，写 stdout（PM2 会收走） */
 function jsonLog(event, fields) {
@@ -62,10 +78,19 @@ function jsonLog(event, fields) {
  * @param {number} [options.maxPendingBytes] 出站队列加底层积压超过它就以 1013 关闭连接（H.2），缺省 1 MiB
  * @param {() => number} [options.now]
  * @param {(event: string, fields: object) => void} [options.log]
+ * @param {(req: import('node:http').IncomingMessage) => string | null} [options.remoteOf]
+ *   连接的来源地址（诊断、限速用）；缺省取 socket 的对端地址。挂进 vite 时按舞台端口代理写进的真实对端算
+ * @param {string[]} [options.adminTypes] 管理身份（`scope: 'admin'`）能发的消息类型，写法同模块的 `types`；
+ *   缺省只有服务地址登记 `service.`。别的消息回 `forbidden`（`docs/plan/auth-contract.md` 第 5 节）
+ * @param {(req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse) => boolean} [options.http]
+ *   独立模式：`/healthz` 之外的 HTTP 请求先交给它（共享项目端点），回 true 表示它处理了；挂载模式不用它
  */
 export function createDocService(options = {}) {
   const {
     authenticate = () => ANONYMOUS,
+    remoteOf = (req) => req?.socket?.remoteAddress ?? null,
+    adminTypes = ['service.'],
+    http: httpHandler = null,
     server: hostServer,
     path = '/',
     maxPayload = DOCSERVICE_DEFAULTS.MAX_PAYLOAD,
@@ -103,6 +128,12 @@ export function createDocService(options = {}) {
     },
     highWaterBytes,
     maxPendingBytes,
+    // 管理身份只能发管理接口的消息（契约 auth-contract 第 5 节）；别的身份不在这里判
+    gate(principal, type) {
+      if (principal?.scope !== 'admin') return null;
+      const allowed = adminTypes.some((t) => (t.endsWith('.') ? type.startsWith(t) : type === t));
+      return allowed ? null : 'forbidden';
+    },
   });
 
   /**
@@ -167,6 +198,20 @@ export function createDocService(options = {}) {
       res.end(JSON.stringify(health()));
       return;
     }
+    if (typeof httpHandler === 'function') {
+      let handled = false;
+      try {
+        handled = httpHandler(req, res) === true;
+      } catch (err) {
+        log('http.error', { message: String(err?.message ?? err) });
+        if (!res.headersSent) {
+          res.writeHead(500, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+          res.end(JSON.stringify({ ok: false, error: 'internal' }));
+        }
+        return;
+      }
+      if (handled) return;
+    }
     res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
     res.end('not found');
   });
@@ -201,16 +246,22 @@ export function createDocService(options = {}) {
     const echo = offeredProtocols(req).includes(protocol) ? protocol : undefined;
     const ws = acceptUpgrade(req, socket, head, { maxPayload, protocol: echo });
     if (!ws) return;
-    open(ws, { userId: principal.userId, tenantId: typeof principal.tenantId === 'string' ? principal.tenantId : null });
+    let remote = null;
+    try {
+      remote = remoteOf(req) ?? ws.remoteAddress ?? null;
+    } catch {
+      remote = ws.remoteAddress ?? null;
+    }
+    open(ws, normalizePrincipal(principal), remote);
   }
 
   (attached ? hostServer : ownServer).on('upgrade', onUpgrade);
 
-  function open(ws, principal) {
+  function open(ws, principal, remote) {
     const connId = `conn-${++seq}`;
     const conn = { ws, alive: true };
     sockets.set(connId, conn);
-    log('conn.open', { connId, remote: ws.remoteAddress, userId: principal.userId });
+    log('conn.open', { connId, remote, userId: principal.userId, ...(principal.role ? { role: principal.role } : {}) });
     ws.on('pong', () => { conn.alive = true; });
     // 底层排空：核心接着写积压的消息（H.2）
     ws.on('drain', () => router.drained(connId));
@@ -223,7 +274,7 @@ export function createDocService(options = {}) {
       router.disconnect(connId);
       log('conn.close', { connId, code, reason });
     });
-    router.connect(connId, principal, { remote: ws.remoteAddress, connectedAt: now() });
+    router.connect(connId, principal, { remote, connectedAt: now() });
   }
 
   function health() {
@@ -303,7 +354,19 @@ export function createDocService(options = {}) {
      */
     mountRenderQueue(queueInterface) {
       if (queueSlot.kind === 'real') throw new Error('渲染任务队列已经挂上了');
-      const mod = renderQueueModule(queueInterface, { sweepMs });
+      // 传工厂函数（空间 → 队列）时按空间各起一份（auth-contract 第 6 节）；传队列对象时是单实例（旧入口）
+      const spaced = typeof queueInterface === 'function';
+      const mod = spaced
+        ? spacedModule({
+          create: (space) => renderQueueModule(queueInterface(space), { sweepMs }),
+          health: (list) => ({
+            queue: true,
+            publishers: list.reduce((n, [, h]) => n + (h.publishers ?? 0), 0),
+            nodes: list.reduce((n, [, h]) => n + (h.nodes ?? 0), 0),
+            epoch: list[0]?.[1]?.epoch ?? null,
+          }),
+        })
+        : renderQueueModule(queueInterface, { sweepMs });
       queueSlot.unmount();
       let unmountReal;
       try {
@@ -314,13 +377,42 @@ export function createDocService(options = {}) {
       }
       const slot = { kind: 'real', unmount: unmountReal };
       queueSlot = slot;
-      log('queue.mount', { epoch: queueInterface.epoch ?? null });
+      log('queue.mount', { epoch: spaced ? (mod.health().epoch ?? null) : (queueInterface.epoch ?? null), spaced });
       return () => {
         if (queueSlot !== slot) return;
         unmountReal();
         queueSlot = { kind: 'placeholder', unmount: mount(renderQueuePlaceholder()) };
         log('queue.unmount', {});
       };
+    },
+
+    /** 主动关闭一条连接（组装层与模块之外的调用方用）；连接不存在回 false */
+    closeConn(connId, code, reason) {
+      const conn = sockets.get(connId);
+      if (!conn) return false;
+      conn.ws.close(code, reason);
+      return true;
+    },
+
+    /**
+     * 丢掉一个空间在各模块里的实例（删共享项目时，`auth-contract.md` 第 7 节）。只调挂着的、有 `dropSpace` 的模块
+     * （`spaces.mjs` 的外壳）；空间的连接应当已经关掉。存储目录由调用方删。
+     */
+    dropSpace(space) {
+      for (const { mod } of mounted.values()) {
+        if (typeof mod.dropSpace !== 'function') continue;
+        try {
+          mod.dropSpace(space);
+        } catch (err) {
+          log('module.error', { module: mod.name, hook: 'dropSpace', message: String(err?.message ?? err) });
+        }
+      }
+    },
+
+    /** 这条连接此刻持有的认领数（成员列表的「渲染中」标签）；队列没挂或不支持回 0 */
+    claimsOf(connId) {
+      const mod = mounted.get(RENDER_QUEUE_MODULE)?.mod;
+      return typeof mod?.claimsOf === 'function' ? mod.claimsOf(connId) : 0;
     },
 
     /**
