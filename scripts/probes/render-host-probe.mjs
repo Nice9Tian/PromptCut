@@ -50,6 +50,27 @@
  *
  * 端口:编辑器另占「端口 +1」「端口 +2」当舞台端口。本机跑时 creator 5400、主机 5403 / 5406、check 5403(主机退出之后)。
  * 凭证只写在 state 目录的配置文件里,不打到输出里。
+ *
+ * ## 跨机模式(M6 W5)
+ *
+ *   creator 加 `--lan <本机局域网 IP> [--coord-port 5409]`:
+ *   - 编辑器绑 0.0.0.0(文档服务、素材服务随之对局域网可达;除素材服务外的 `/api/**` 仍只答回环,见 `http-guard.mjs`);
+ *   - 主机与 auth 的配置里 `url` 用这个 IP(`creator.json` 仍连 127.0.0.1:本机 PC 节点走回环);
+ *   - `--rounds` 缺省改为 `r1:host-a,host-b;r2:host-c;r3:host-bad`:host-bad 连错会让它所在的来源进入 60 s 冷却
+ *     (auth-contract 第 9 节),跨机时 host-c 与 host-bad 同一来源,不能同一轮;
+ *   - 另起探针自己的协调 HTTP 服务(绑 0.0.0.0:`--coord-port`),代替 state 目录里的文件:
+ *     `GET /configs/<名>`(host-a / host-b / host-c / host-bad / auth,未写出时 404)、`POST /ready/<名>`、
+ *     `GET /round/<轮>`(未完 404)、`POST /result/<名>`、`GET /result/<名>`、`GET /state`、`POST /stop`。
+ *     协调服务不设鉴权,配置里有口令:只在可信的局域网里跑,跑完即关(creator 退出时关)。
+ *   host / auth-check / check / stop 加 `--coord http://<creator IP>:<coord-port>`:配置从协调服务取(写到本机
+ *   `--state` 目录下的 `<名>.config.json` 交给 render-host),ready 与结果经它交,不读写 creator 的 state 目录。
+ *   check 必须在 creator 那台机器上跑(它读创建者的帧库、起单机重渲比较)。
+ *
+ * ## --role stop
+ *
+ *   node scripts/probes/render-host-probe.mjs --role stop [--coord <地址>] [--state <目录>]
+ *
+ *   让 creator 结束保持:有 `--coord` 时 `POST /stop`,否则写 `<state>/stop`。
  */
 import { spawn, fork } from 'node:child_process';
 import fs from 'node:fs/promises';
@@ -57,7 +78,8 @@ import fsSync from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import net from 'node:net';
-import { randomBytes } from 'node:crypto';
+import http from 'node:http';
+import { randomBytes, createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -69,6 +91,7 @@ const ROLE = arg('--role', null);
 const STATE = path.resolve(arg('--state', path.join(os.tmpdir(), 'pc-render-host-probe')));
 const TIMEOUT_MS = Number(arg('--timeout-min', 20)) * 60_000;
 const FPS = 30;
+const COORD = (arg('--coord', null) || '').replace(/\/+$/, '') || null;
 
 const fails = [];
 const check = (cond, label, extra) => { if (!cond) fails.push(label + (extra === undefined ? '' : ' :: ' + JSON.stringify(extra).slice(0, 600))); return cond; };
@@ -100,6 +123,102 @@ const writeJson = async (file, value) => {
 };
 const exists = (file) => fsSync.existsSync(file);
 
+/* ------------------------------------------------------------------ 协调:本机文件,或 creator 的协调服务 */
+
+const NAME_RE = /^[A-Za-z0-9_-]{1,40}$/;
+/** 本机模式下各名字对应的配置文件(`auth` 就是 member.json) */
+const configFileOf = (name) => path.join(STATE, `${name === 'auth' ? 'member' : name}.json`);
+
+async function coordGet(p) {
+  const res = await fetch(COORD + p, { signal: AbortSignal.timeout(15_000) });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`协调服务 GET ${p} 回 ${res.status}`);
+  return res.json();
+}
+async function coordPost(p, body = {}) {
+  const res = await fetch(COORD + p, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(15_000) });
+  if (!res.ok) throw new Error(`协调服务 POST ${p} 回 ${res.status}`);
+  return res.json().catch(() => null);
+}
+
+const channel = {
+  /** 这个名字的配置文件路径;协调模式下从协调服务取来写到本机 state 目录 */
+  async configFile(name) {
+    if (!COORD) return configFileOf(name);
+    const entries = await until(`从协调服务取 ${name} 的配置`, () => coordGet(`/configs/${name}`), TIMEOUT_MS, 2000);
+    if (!entries) return null;
+    const file = path.join(STATE, `${name}.config.json`);
+    await writeJson(file, entries);
+    return file;
+  },
+  async ready(name, body) {
+    if (COORD) await coordPost(`/ready/${name}`, body);
+    else await writeJson(path.join(STATE, `${name}.ready`), body);
+  },
+  async round(roundName) {
+    if (COORD) return coordGet(`/round/${roundName}`);
+    const file = path.join(STATE, `round-${roundName}.json`);
+    return exists(file) ? readJson(file) : null;
+  },
+  async stopped() {
+    if (COORD) { const s = await coordGet('/state'); return !!(s?.stop || s?.phase === 'stopped'); }
+    return exists(path.join(STATE, 'stop'));
+  },
+  async putResult(name, body) {
+    if (COORD) await coordPost(`/result/${name}`, body);
+    else await writeJson(path.join(STATE, `${name}.result.json`), body);
+  },
+  async result(name) {
+    if (COORD) return coordGet(`/result/${name}`);
+    return readJson(path.join(STATE, `${name}.result.json`)).catch(() => null);
+  },
+};
+
+/**
+ * creator 的协调服务(跨机模式):背后就是 state 目录里的同一批文件,creator 自己的流程照旧读写文件。
+ * 回 { server, close }。
+ */
+function startCoordServer(port) {
+  const send = (res, status, body) => {
+    res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+    res.end(JSON.stringify(body));
+  };
+  const readBody = (req) => new Promise((resolve, reject) => {
+    let size = 0; const chunks = [];
+    req.on('data', (c) => { size += c.length; if (size > 4 << 20) { reject(new Error('too-large')); req.destroy(); } else chunks.push(c); });
+    req.on('end', () => { try { resolve(chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {}); } catch (e) { reject(e); } });
+    req.on('error', reject);
+  });
+  const server = http.createServer(async (req, res) => {
+    try {
+      const url = new URL(req.url, 'http://coord');
+      const [, kind, name] = url.pathname.split('/');
+      if (name !== undefined && !NAME_RE.test(name)) return send(res, 400, { ok: false, error: 'bad-name' });
+      const file = (f) => path.join(STATE, f);
+      if (req.method === 'GET' && kind === 'configs' && name) {
+        if (name === 'creator' || !exists(configFileOf(name))) return send(res, 404, { ok: false });
+        return send(res, 200, await readJson(configFileOf(name)));
+      }
+      if (req.method === 'GET' && kind === 'round' && name) return exists(file(`round-${name}.json`)) ? send(res, 200, await readJson(file(`round-${name}.json`))) : send(res, 404, { ok: false });
+      if (req.method === 'GET' && kind === 'result' && name) return exists(file(`${name}.result.json`)) ? send(res, 200, await readJson(file(`${name}.result.json`))) : send(res, 404, { ok: false });
+      if (req.method === 'GET' && kind === 'state' && !name) {
+        const s = exists(file('state.json')) ? await readJson(file('state.json')) : {};
+        return send(res, 200, { phase: s.phase ?? 'starting', projectId: s.projectId ?? null, stop: exists(file('stop')) });
+      }
+      if (req.method === 'POST' && kind === 'ready' && name) { await writeJson(file(`${name}.ready`), { ...(await readBody(req)), from: req.socket.remoteAddress }); return send(res, 200, { ok: true }); }
+      if (req.method === 'POST' && kind === 'result' && name) { await writeJson(file(`${name}.result.json`), { ...(await readBody(req)), from: req.socket.remoteAddress }); return send(res, 200, { ok: true }); }
+      if (req.method === 'POST' && kind === 'stop' && !name) { await writeJson(file('stop'), { at: Date.now(), from: req.socket.remoteAddress }); return send(res, 200, { ok: true }); }
+      return send(res, 404, { ok: false, error: 'no-route' });
+    } catch (error) {
+      return send(res, 500, { ok: false, error: String(error?.message ?? error) });
+    }
+  });
+  return new Promise((resolve) => {
+    server.once('error', (error) => resolve({ error }));
+    server.listen(port, '0.0.0.0', () => resolve({ server, close: () => new Promise((r) => { server.close(() => r()); server.closeAllConnections?.(); }) }));
+  });
+}
+
 function viteBin() {
   const local = path.join(ROOT, 'node_modules', 'vite', 'bin', 'vite.js');
   if (fsSync.existsSync(local)) return local;
@@ -118,10 +237,10 @@ const exited = (child, ms = 20_000) => new Promise((resolve) => {
   t.unref?.();
   child.once('exit', (code) => { clearTimeout(t); resolve(code); });
 });
-const portFree = (port) => new Promise((resolve) => {
+const portFree = (port, host = '127.0.0.1') => new Promise((resolve) => {
   const s = net.createServer();
   s.once('error', () => resolve(false));
-  s.listen(port, '127.0.0.1', () => s.close(() => resolve(true)));
+  s.listen(port, host, () => s.close(() => resolve(true)));
 });
 
 /** 探针子进程的公共环境:不带集群令牌、不连外面的文档服务、临时目录放在这个实例自己的目录下(不写公共的 port.json) */
@@ -136,10 +255,10 @@ function baseEnv(dir, extra = {}) {
 }
 
 /** 起一个编辑器,等它和预渲染进程都起来;回 { child, editor, prerender, log } */
-async function startEditor(port, env, label) {
-  for (const p of [port, port + 1, port + 2]) check(await portFree(p), `[${label}] 端口 ${p} 空着`);
+async function startEditor(port, env, label, bindHost = '127.0.0.1') {
+  for (const p of [port, port + 1, port + 2]) check(await portFree(p) && await portFree(p, bindHost), `[${label}] 端口 ${p} 空着`);
   if (fails.length) return null;
-  const child = spawn(process.execPath, [viteBin(), '--port', String(port), '--strictPort', '--host', '127.0.0.1'],
+  const child = spawn(process.execPath, [viteBin(), '--port', String(port), '--strictPort', '--host', bindHost],
     { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, env });
   const log = [];
   const keep = (c) => { log.push(c.toString()); if (log.length > 600) log.shift(); };
@@ -192,7 +311,9 @@ async function preloadProject({ editor, prerender }, session, project, label) {
 async function runCreator() {
   const port = Number(arg('--port', 5400));
   const holdMs = Number(arg('--hold-min', 30)) * 60_000;
-  const rounds = String(arg('--rounds', 'r1:host-a,host-b')).split(';').filter(Boolean).map((part) => {
+  const lan = arg('--lan', null);
+  const coordPort = Number(arg('--coord-port', 5409));
+  const rounds = String(arg('--rounds', lan ? 'r1:host-a,host-b;r2:host-c;r3:host-bad' : 'r1:host-a,host-b')).split(';').filter(Boolean).map((part) => {
     const [name, hosts = ''] = part.split(':');
     return { name, hosts: hosts.split(',').filter(Boolean) };
   });
@@ -202,12 +323,20 @@ async function runCreator() {
   const dir = path.join(STATE, 'creator');
   const creatorConfig = path.join(STATE, 'creator.json');
   const env = baseEnv(dir, { PROMPTCUT_QUEUE_NODE: '1', PROMPTCUT_SHARED_CONFIG: creatorConfig });
-  const out = { role: 'creator', port, state: STATE, rounds: [] };
+  const out = { role: 'creator', port, state: STATE, rounds: [], ...(lan ? { lan, coordPort } : {}) };
   let started = null;
+  let coord = null;
   try {
-    started = await startEditor(port, env, 'creator');
+    if (lan) {
+      if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(lan)) { fails.push(`--lan 要是 IPv4 地址,收到 ${lan}`); return out; }
+      coord = await startCoordServer(coordPort);
+      if (!check(!coord.error, `[creator] 协调服务绑 0.0.0.0:${coordPort}`, String(coord.error?.code ?? coord.error))) return out;
+    }
+    started = await startEditor(port, env, 'creator', lan ? '0.0.0.0' : '127.0.0.1');
     if (!started?.prerender) return out;
     const docUrl = `ws://127.0.0.1:${port}/docservice`;
+    // 主机与 auth 的配置用局域网地址;本机 PC 节点(creator.json)与建项目仍走回环(挂载模式只有回环能建)
+    const hostDocUrl = lan ? `ws://${lan}:${port}/docservice` : docUrl;
     const { createSharedProject } = await import('../../server/auth/client.mjs');
     const secret = () => randomBytes(12).toString('base64url');
     const creatorPw = secret();
@@ -215,8 +344,8 @@ async function runCreator() {
     const project = await createSharedProject({ base: docUrl, name: `rhp-${stamp}`, mode: 'free', creator: { username: 'creator', password: creatorPw }, password: projectPw });
     out.projectId = project.projectId;
     const devId = (tag) => `rhp-${tag}-${stamp}`.replace(/[^A-Za-z0-9_-]/g, '-').padEnd(16, '0').slice(0, 64);
-    const entry = (username, extra) => ({ url: docUrl, projectId: project.projectId, username, deviceId: devId(username), deviceName: `${username} (probe)`, as: 'member', role: 'render', password: projectPw, ...extra });
-    await writeJson(creatorConfig, [entry('creator', { as: 'creator', password: creatorPw, deviceName: 'creator PC (probe)' })]);
+    const entry = (username, extra) => ({ url: hostDocUrl, projectId: project.projectId, username, deviceId: devId(username), deviceName: `${username} (probe)`, as: 'member', role: 'render', password: projectPw, ...extra });
+    await writeJson(creatorConfig, [entry('creator', { url: docUrl, as: 'creator', password: creatorPw, deviceName: 'creator PC (probe)' })]);
     const configs = {};
     for (const name of ['host-a', 'host-b', 'host-c']) { configs[name] = path.join(STATE, `${name}.json`); await writeJson(configs[name], [entry(name)]); }
     configs['host-bad'] = path.join(STATE, 'host-bad.json');
@@ -289,17 +418,36 @@ async function runCreator() {
   } finally {
     if (started?.child) { killTree(started.child); await exited(started.child); }
     try { await writeJson(path.join(STATE, 'state.json'), { ...(await readJson(path.join(STATE, 'state.json'))), phase: 'stopped' }); } catch { /* 没写出过 */ }
+    // 协调服务晚一点关:让还在等轮次的主机看到 stopped
+    if (coord?.close) { await delay(lan ? 3000 : 0); await coord.close(); }
   }
   return out;
 }
 
 /* ================================================================== host */
 
-/** 用配置的第一项做一次原始握手,回 HTTP 状态码(101 / 401 / …);101 的连接立即关掉 */
-async function handshakeStatus(entry) {
+/**
+ * 为一条配置取挑战、拼好握手要带的子协议(一次性:nonce 用一次就作废、60 s 过期)。
+ * 挑战失败(冷却中回 429 等)回 `{ error: 'challenge-<状态码>' }`。
+ */
+async function prepareProtocols(entry, role = 'render') {
   const { sharedProtocols } = await import('../../server/auth/shared-config.mjs');
-  const protocols = await sharedProtocols(entry, { role: 'render' })();
-  const u = new URL(entry.url);
+  try {
+    return { protocols: await sharedProtocols(entry, { role })() };
+  } catch (error) {
+    return { error: `challenge-${error?.status ?? 'error'}` };
+  }
+}
+
+/** 用配置的第一项做一次原始握手,回 HTTP 状态码(101 / 401 / …);101 的连接立即关掉;挑战就失败时回 'challenge-<状态码>' */
+async function handshakeStatus(entry) {
+  const prepared = await prepareProtocols(entry);
+  if (prepared.error) return prepared.error;
+  return rawHandshake(entry.url, prepared.protocols);
+}
+
+function rawHandshake(url, protocols) {
+  const u = new URL(url);
   return new Promise((resolve) => {
     const sock = net.connect(Number(u.port || 80), u.hostname);
     sock.on('error', () => resolve(null));
@@ -321,7 +469,6 @@ async function runHost() {
   const port = Number(arg('--port', 5403));
   const name = arg('--name', 'host');
   const round = arg('--round', 'r1');
-  const configFile = path.resolve(arg('--config', path.join(STATE, `${name}.json`)));
   const codeVersion = arg('--code-version', null);
   const expectClaims = arg('--expect-claims', null);
   const expectHandshake = arg('--expect-handshake', null);
@@ -329,6 +476,8 @@ async function runHost() {
     handshake: null, codeVersion: null, envFingerprint: null, codeVersionOverride: codeVersion !== null, exitCode: null, released: null };
   let child = null;
   try {
+    const configFile = arg('--config', null) ? path.resolve(arg('--config')) : await channel.configFile(name);
+    if (!configFile) return out;
     const { loadHostConfig } = await import('../../server/render-node/host.mjs');
     const config = loadHostConfig({ PROMPTCUT_SHARED_CONFIG: configFile });
     out.projectId = config.entries[0].projectId;
@@ -362,9 +511,9 @@ async function runHost() {
       child.once('exit', () => { clearTimeout(t); resolve(null); });
     });
     if (!check(ready, `[${name}] render-host 起来了`, lines.slice(-8))) return out;
-    await writeJson(path.join(STATE, `${name}.ready`), { name, port, at: Date.now(), queue: ready.queue });
+    await channel.ready(name, { name, port, at: Date.now(), queue: ready.queue });
     const editor = `http://127.0.0.1:${port}`;
-    await until(`[${name}] 等创建者做完 ${round}`, async () => exists(path.join(STATE, `round-${round}.json`)) || exists(path.join(STATE, 'stop')) || null, TIMEOUT_MS, 1000);
+    await until(`[${name}] 等创建者做完 ${round}`, async () => (await channel.round(round)) || (await channel.stopped()) || null, TIMEOUT_MS, COORD ? 2000 : 1000);
     const q = (await json(`${editor}/api/frames/queue`)).body;
     const n = q?.nodes?.[0] ?? {};
     Object.assign(out, { claimed: n.claimed ?? null, completed: n.completed ?? null, dedup: n.dedup ?? null, failed: n.failed ?? null, lost: n.lost ?? null,
@@ -383,7 +532,10 @@ async function runHost() {
     if (child && child.exitCode === null) { killTree(child); await exited(child); }
   }
   out.ok = fails.length === 0;
-  try { await writeJson(path.join(STATE, `${name}.result.json`), { ...out, fails }); } catch { /* state 目录没了 */ }
+  try { await channel.putResult(name, { ...out, fails }); } catch (error) {
+    // 结果交不回去,check 会判「结果在」失败;这里也记一笔
+    if (COORD) { fails.push(`[${name}] 结果交回协调服务失败:${error?.message ?? error}`); out.ok = false; }
+  }
   return out;
 }
 
@@ -444,7 +596,8 @@ async function runCheck() {
   const out = { role: 'check', round, ok: false };
   let started = null;
   try {
-    const r = await readJson(path.join(STATE, `round-${round}.json`));
+    const r = await channel.round(round);
+    if (!r) throw new Error(`没有 ${round} 的结果(${COORD ? '协调服务回 404' : `缺 round-${round}.json`})`);
     out.tasks = r.tasks;
     out.done = r.done;
     const counts = Object.values(r.doneCounts);
@@ -454,8 +607,9 @@ async function runCheck() {
     const byNode = { pc: r.pc.completed.length + r.pc.dedup.length };
     const hostNames = hosts.length ? hosts : (r.hosts ?? []);
     for (const h of hostNames) {
-      const res = await readJson(path.join(STATE, `${h}.result.json`)).catch(() => null);
-      check(res, `结果文件 ${h}.result.json 在`);
+      const res = await channel.result(h).catch(() => null);
+      check(res, `${h} 的结果在(${COORD ? '协调服务' : `${h}.result.json`})`);
+      if (res) out[`hostOk:${h}`] = res.ok ?? null;
       byNode[h] = res ? (res.completed ?? 0) + (res.dedup ?? 0) : null;
       out[`claimed:${h}`] = res?.claimed ?? null;
     }
@@ -517,15 +671,29 @@ async function runCheck() {
 
 /* ================================================================== auth-check */
 
+/** 素材服务的一次请求,回状态码(连不上回 null) */
+const assetStatus = (url, init = {}) => fetch(url, { ...init, signal: AbortSignal.timeout(20_000) }).then(async (r) => { await r.arrayBuffer().catch(() => null); return r.status; }, () => null);
+
 async function runAuthCheck() {
-  const configFile = path.resolve(arg('--config', path.join(STATE, 'member.json')));
   const out = { role: 'auth-check', ok: false };
   try {
+    const configFile = arg('--config', null) ? path.resolve(arg('--config')) : await channel.configFile('auth');
+    if (!configFile) return out;
     const { loadSharedConfig, sharedProtocols } = await import('../../server/auth/shared-config.mjs');
     const entry = loadSharedConfig({ PROMPTCUT_SHARED_CONFIG: configFile })[0];
     const host = new URL(entry.url).hostname;
     out.loopback = host === '127.0.0.1' || host === 'localhost' || host === '::1';
+    out.docHost = host;
     out.projectId = entry.projectId;
+
+    // 非回环来源:这台机器上先跑过的 host-bad 可能让本来源还在冷却里(auth-contract 第 9 节),先等对口令能进
+    if (!out.loopback) {
+      const t0 = Date.now();
+      const clear = await until('auth-check 开始前本来源不在冷却中(对口令握手 101)', async () => (await handshakeStatus(entry)) === 101 || null, 150_000, 5000);
+      out.initialCooldownWaitMs = clear ? Date.now() - t0 : null;
+      if (!clear) return out;
+    }
+
     out.wrongPassword = await handshakeStatus({ ...entry, password: `${entry.password}-wrong`, key: null });
     check(out.wrongPassword === 401, '错口令握手 401', out.wrongPassword);
     out.rightPassword = await handshakeStatus(entry);
@@ -542,26 +710,65 @@ async function runAuthCheck() {
       check(out.ticket, 'auth.ticket 取到素材票据');
       const u = new URL(entry.url);
       const assetBase = `${u.protocol === 'wss:' ? 'https:' : 'http:'}//${u.host}/api/asset`;
-      const probeHash = randomBytes(32).toString('hex');
-      const noTicket = await fetch(`${assetBase}/media/${probeHash}`, { method: 'HEAD' }).then((r) => r.status, () => null);
-      const withTicket = await fetch(`${assetBase}/media/${probeHash}`, { method: 'HEAD', headers: { Authorization: `Bearer ${ticket}` } }).then((r) => r.status, () => null);
-      out.assetNoTicket = noTicket;
-      out.assetWithTicket = withTicket;
-      check(withTicket !== 401 && withTicket !== 403 && withTicket !== null, '带票据读素材不被拒(不存在的哈希回 404)', withTicket);
-      if (!out.loopback) check(noTicket === 401, '非回环来源不带票据读素材 401', noTicket);
+      const auth = { Authorization: `Bearer ${ticket}` };
+
+      // 先传一块真的内容(1 片),读的判法才能落到 200 / 206 上,而不是不存在的 404
+      const blob = randomBytes(1024);
+      const hash = createHash('sha256').update(blob).digest('hex');
+      const put = (headers) => assetStatus(`${assetBase}/media/${hash}/0`, { method: 'PUT', body: blob, headers: { 'X-Media-Size': String(blob.length), 'Content-Type': 'application/octet-stream', ...headers } });
+      out.assetPutNoTicket = await put({});
+      if (!out.loopback) check(out.assetPutNoTicket === 401, '非回环来源不带票据写素材 401', out.assetPutNoTicket);
+      out.assetPutWithTicket = await put(auth);
+      check(out.assetPutWithTicket === 200, '带 rw 票据写素材分片 200', out.assetPutWithTicket);
+      out.assetComplete = await assetStatus(`${assetBase}/media/${hash}/complete`, { method: 'POST', headers: auth });
+      check(out.assetComplete === 200, '带 rw 票据收尾 200', out.assetComplete);
+
+      out.assetNoTicket = await assetStatus(`${assetBase}/media/${hash}`, { method: 'GET' });
+      out.assetWithTicket = await assetStatus(`${assetBase}/media/${hash}`, { method: 'GET', headers: auth });
+      out.assetRangeWithTicket = await assetStatus(`${assetBase}/media/${hash}`, { method: 'GET', headers: { ...auth, Range: 'bytes=0-15' } });
+      out.assetRangeNoTicket = await assetStatus(`${assetBase}/media/${hash}`, { method: 'GET', headers: { Range: 'bytes=0-15' } });
+      check(out.assetWithTicket === 200, '带票据读素材 200', out.assetWithTicket);
+      check(out.assetRangeWithTicket === 206, '带票据 Range 读素材 206', out.assetRangeWithTicket);
+      if (!out.loopback) {
+        check(out.assetNoTicket === 401, '非回环来源不带票据读素材 401', out.assetNoTicket);
+        check(out.assetRangeNoTicket === 401, '非回环来源不带票据 Range 读素材 401', out.assetRangeNoTicket);
+      }
+      out.assetBadTicket = await assetStatus(`${assetBase}/media/${hash}`, { method: 'GET', headers: { Authorization: `Bearer ${ticket.slice(0, -4)}AAAA` } });
+      if (!out.loopback) check(out.assetBadTicket === 401, '非回环来源签名不对的票据读素材 401', out.assetBadTicket);
     } finally {
       ep.close();
     }
+
     if (args.includes('--rate-limit')) {
-      for (let i = 0; i < 5; i++) await handshakeStatus({ ...entry, password: `wrong-${i}`, key: null });
-      out.afterFiveWrong = await handshakeStatus(entry);
-      if (!out.loopback) check(out.afterFiveWrong === 401, '连错 5 次后口令对也 401(冷却)', out.afterFiveWrong);
+      // 先为「对口令」取好挑战(冷却中挑战本身回 429,口令对的握手就发不出来);再连错,直到进冷却
+      const held = await prepareProtocols(entry);
+      check(!held.error, '冷却前为对口令取到挑战', held.error);
+      out.wrongStatuses = [];
+      for (let i = 0; i < 5; i++) out.wrongStatuses.push(await handshakeStatus({ ...entry, password: `wrong-${i}`, key: null }));
+      out.afterFiveWrong = held.protocols ? await rawHandshake(entry.url, held.protocols) : null;
+      out.challengeInCooldown = (await prepareProtocols(entry)).error ?? 'ok';
+      if (!out.loopback) {
+        check(out.afterFiveWrong === 401, '连错 5 次后口令对也 401(冷却)', out.afterFiveWrong);
+        check(out.challengeInCooldown === 'challenge-429', '冷却中取挑战 429', out.challengeInCooldown);
+        // 冷却 60 s:等 61 s 后另一个正确流程(新挑战 + 对口令)恢复
+        await delay(61_000);
+        out.afterCooldown = await handshakeStatus(entry);
+        check(out.afterCooldown === 101, '冷却过后(61 s)对口令握手恢复 101', out.afterCooldown);
+      }
     }
   } catch (error) {
     fails.push(`auth-check 出错:${error?.stack || error}`);
   }
   out.ok = fails.length === 0;
   return out;
+}
+
+/* ================================================================== stop */
+
+async function runStop() {
+  if (COORD) await coordPost('/stop');
+  else await writeJson(path.join(STATE, 'stop'), { at: Date.now() });
+  return { role: 'stop', coord: COORD };
 }
 
 /* ================================================================== 入口 */
@@ -571,7 +778,8 @@ if (ROLE === 'creator') result = await runCreator();
 else if (ROLE === 'host') result = await runHost();
 else if (ROLE === 'check') result = await runCheck();
 else if (ROLE === 'auth-check') result = await runAuthCheck();
-else { fails.push(`--role 要是 creator / host / check / auth-check,收到 ${ROLE}`); result = {}; }
+else if (ROLE === 'stop') result = await runStop().catch((error) => { fails.push(`stop 出错:${error?.message ?? error}`); return {}; });
+else { fails.push(`--role 要是 creator / host / check / auth-check / stop,收到 ${ROLE}`); result = {}; }
 const line = { ...result, ok: fails.length === 0, fails };
 console.log(JSON.stringify(line));
 process.exit(line.ok ? 0 : 1);
