@@ -51,6 +51,7 @@ export function isIdArray(a: unknown): a is Obj[] {
 /* ---------------- 路径编码 ---------------- */
 
 export function escapeSegment(s: string): string {
+  if (s.indexOf("~") < 0 && s.indexOf("/") < 0) return s;
   return s.replace(/~/g, "~0").replace(/\//g, "~1");
 }
 
@@ -149,9 +150,16 @@ function diffObject(prev: Obj, next: Obj, path: string, ctx: DiffCtx) {
   }
   for (const k in next) {
     if (!has(next, k)) continue;
-    const p = keyPath(path, k);
-    if (!has(prev, k)) push(ctx, { op: "set", path: p, value: next[k] }, { op: "remove", path: p });
-    else diffValue(prev[k], next[k], p, ctx);
+    const b = next[k];
+    if (!has(prev, k)) {
+      const p = keyPath(path, k);
+      push(ctx, { op: "set", path: p, value: b }, { op: "remove", path: p });
+      continue;
+    }
+    const a = prev[k];
+    // 相同(含同一个对象)的键不拼路径 —— 深拷贝过的大项目里这是大头
+    if (a === b) continue;
+    diffValue(a, b, keyPath(path, k), ctx);
   }
 }
 
