@@ -1779,3 +1779,16 @@ F.1 第 3a 步的 `card-locked` 拒绝原样保留，只兜住前置过滤与锁
 **不改**：既有测试。过滤默认开，这是行为改变，但既有测试里的节点要么不带指纹，要么指纹都相同，要么是锁相关的测试。锁相关的测试（`card-lock-queue`、`render-queue-inproc` 的 I6）如果因为「看不见」而断言失败：
 - 实现方不得改测试；
 - 先把失败写进报告，由主 Agent 裁决是在测试里显式加 `PREFILTER: false`，还是改期望。
+
+### I.10 定稿后的补充细则（2026-09-25，主 Agent 按实现方与测试方的疑点裁定）
+
+1. **锁只挡带锁指纹的任务**：I.2 第 2 条按 F.1 的规则读，只挡 `requires.envFingerprint` 与锁指纹不同的任务；不带指纹的任务不参与锁，也不受这一条限制。V2、V3 里不带指纹的任务，期望照此改。
+2. **接手时的撤回按变更之前的可见性发**：F.1 先改锁、后作废任务。按 I.3，改锁那一刻，原指纹节点对 `open` 的任务收到 `task.closed { state: 'hidden', reason: 'card-locked' }`；认领者照 F.1 另收 `lease-lost superseded`。订阅方照旧收到 `task.failed`。
+3. **既有测试的调整，由主 Agent 裁定、测试方执行**：
+   - `render-queue-protocol` 的 P14：常量表的期望加上 `PREFILTER`、`THROTTLE_REJECTS` 两项，以及对应的环境变量名；
+   - `card-lock-queue` 的 Q4（两条）与 Q11：测的是 F.1 本身，显式传 `constants: { PREFILTER: false }`，期望不变。
+4. **认领时也按指纹拒**（语义「也不让它认领」）：`PREFILTER` 为真、节点与任务都带指纹且两者不同时，认领回 `task.claim-rejected { id, reason: 'fingerprint-mismatch', state, version }`。它计入限流次数，和 `card-locked` 一样；会话按 `taken` 处理，丢掉这个候选。
+5. **会话只对不带 `reqId` 的 `error` 清在飞的认领**：同一条连接上还有内容库、发布等带 `reqId` 的请求，它们的错误回包不是认领的回包。原来的写法是收到任何 `error` 都清（B.5 补充细则），这里收窄。
+6. **会话 `start()` 时清掉 `throttledUntil`**。
+7. **空字符串的指纹等同于没带**。`plan` 任务不查指纹，与 `filter.mjs` 规则 1 一致。
+8. **限流的临界点**：「超过 20」指第 21 次拒绝仍回原因，第 22 次认领起回 `throttled`。
