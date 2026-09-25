@@ -25,6 +25,8 @@ interface Summary {
   rev: number | null;
   at: number;
   broken: boolean;
+  /** 存这份备份的页面会话 */
+  pageSession?: string | null;
 }
 
 interface Row {
@@ -116,9 +118,11 @@ export function BackupsDialog({ open, onClose }: { open: boolean; onClose: () =>
             {rows.map((row, i) => {
               const b = row.backup;
               const mine = b.projectId === current;
-              const who = b.kind === "overwritten" ? `被 ${writerLabel(b.by as never, me(), displayNames())} 覆盖` : "离线时丢弃";
+              // 「谁覆盖的」按备份的主人(被覆盖的那个页面)说:同一台机器上几个页面的备份都在这一个目录里
+              const owner = { ...me(), session: b.pageSession ?? me().session };
+              const who = b.kind === "overwritten" ? `被 ${writerLabel(b.by as never, owner, displayNames())} 覆盖` : "离线时丢弃";
               return (
-                <div className="pc-backup-row" key={`${b.id}-${i}`} data-pc="backup-row">
+                <div className="pc-backup-row" key={`${b.id}-${i}`} data-pc="backup-row" data-entity={row.entity}>
                   <span>{entityLabel(row.entity, mine ? project : null)}</span>
                   <small>
                     {fmtTime(b.at)} · {who} · {b.projectName ?? b.projectId}

@@ -115,7 +115,7 @@ function backupSummary(id: string, file: string) {
     const entities = b.kind === "offline-discard"
       ? [...new Set((Array.isArray(b.batch) ? b.batch : []).flatMap((x: { entities?: string[] }) => (Array.isArray(x?.entities) ? x.entities : [])))]
       : [b.entity].filter((e: unknown) => typeof e === "string");
-    return { id, kind: b.kind, projectId: b.projectId ?? null, projectName: b.projectName ?? null, entity: b.entity ?? null, entities, by: b.by ?? null, rev: b.rev ?? b.baseRev ?? null, at: Number(b.at) || 0, broken: false };
+    return { id, kind: b.kind, projectId: b.projectId ?? null, projectName: b.projectName ?? null, entity: b.entity ?? null, entities, by: b.by ?? null, rev: b.rev ?? b.baseRev ?? null, at: Number(b.at) || 0, pageSession: typeof b.pageSession === "string" ? b.pageSession : null, broken: false };
   } catch {
     return { id, kind: null, projectId: null, projectName: null, entity: null, entities: [], by: null, rev: null, at: 0, broken: true };
   }

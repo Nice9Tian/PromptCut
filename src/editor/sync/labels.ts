@@ -8,6 +8,7 @@
  */
 import { entityValuePath, getAt, parsePath } from "../../kernel/diffProject";
 import type { Project } from "../../kernel/project";
+import { getCard } from "../../kernel/registry";
 import type { Writer } from "../../store/docsync";
 
 /** 集合名 → 类别 */
@@ -42,17 +43,17 @@ const META: Record<string, string> = {
 
 const quoted = (s: string) => `「${s}」`;
 
-/** 片段怎么称呼:标签、文字参数、卡片 id,最后是 id */
+/**
+ * 片段怎么称呼:和时间轴上片段的标题一致(ClipView:卡片片段用卡片名,素材段用它的标签),
+ * 同一张卡出现好几次时,后面带上开始时间好区分;都没有就用 id。
+ */
 function clipName(c: Record<string, unknown> | undefined, id: string): string {
   if (!c) return id;
-  if (typeof c.label === "string" && c.label.trim()) return c.label.trim();
-  const params = c.params as Record<string, unknown> | undefined;
-  for (const k of ["text", "title", "name"]) {
-    const v = params?.[k];
-    if (typeof v === "string" && v.trim()) return v.trim().slice(0, 24);
-  }
-  if (typeof c.cardId === "string" && c.cardId) return c.cardId;
-  return id;
+  let name = "";
+  if (typeof c.cardId === "string" && c.cardId) name = getCard(c.cardId)?.name ?? c.cardId;
+  else if (typeof c.label === "string" && c.label.trim()) name = c.label.trim();
+  if (!name) return id;
+  return typeof c.start === "number" ? `${name} @${c.start.toFixed(1)}s` : name;
 }
 
 /** 实体 → 给人看的名字,例如 `片段「开头空镜」`、`序列「序列 1」`、`项目设置「帧率」` */
@@ -92,10 +93,12 @@ export type DisplayNames = Map<string, string>;
 
 /** 写入身份 → 给人看的说法:`张三`、`Agent「第 2 个对话」`、`张三 · Agent · 第 2 个对话`、`你在另一个页面` */
 export function writerLabel(by: Writer | undefined, me: Me, names: DisplayNames = new Map()): string {
-  const actor = ((by?.actor && typeof by.actor === "object" ? by.actor : {}) as Actor);
+  // 两种形状都认:`{ actor, session }`(DocSync 记的),和文档服务直接给的 actor 本身(`project.overwritten.by`)
+  const raw = by as (Writer & Actor) | undefined;
+  const actor = ((raw?.actor && typeof raw.actor === "object" ? raw.actor : raw && typeof raw.userId === "string" ? raw : {}) as Actor);
   const session = by?.session ?? actor.session;
   const sameUser = !!actor.userId && actor.userId === me.userId;
-  if (!by?.actor && session === me.session) return "你在这个页面";
+  if (!actor.userId && session === me.session) return "你在这个页面";
   if (actor.role === "agent") {
     const n = typeof actor.conversation === "number" ? `第 ${actor.conversation} 个对话` : "某个对话";
     if (sameUser || !actor.username) return `Agent${quoted(n)}`;

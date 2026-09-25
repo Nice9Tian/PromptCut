@@ -138,9 +138,20 @@ export class SyncLink {
     });
   }
 
+  /** 测试与演示用:断开当前连接,`ms` 之内不重连(模拟断网;离线对话框的验收用它) */
+  private holdUntil = 0;
+  dropFor(ms: number) {
+    this.holdUntil = Date.now() + ms;
+    try {
+      this.ws?.close(1000, "drop");
+    } catch {
+      /* 已经关了 */
+    }
+  }
+
   private scheduleRetry() {
     if (this.stopped || this.retryTimer) return;
-    const wait = this.delay;
+    const wait = Math.max(this.delay, this.holdUntil - Date.now());
     this.delay = Math.min(this.o.reconnect?.maxMs ?? 5000, this.delay * 2);
     this.retryTimer = setTimeout(() => {
       this.retryTimer = null;

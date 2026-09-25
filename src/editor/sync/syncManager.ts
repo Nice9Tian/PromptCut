@@ -216,8 +216,8 @@ async function saveBackup(b: LocalBackup) {
   const project = getState().project;
   const body =
     b.kind === "offline-discard"
-      ? { ...b, projectName: project.name, batch: b.batch.map((x) => ({ ...x, entities: entitiesOf(x.ops) })) }
-      : { ...b, projectName: project.name };
+      ? { ...b, projectName: project.name, pageSession: session, batch: b.batch.map((x) => ({ ...x, entities: entitiesOf(x.ops) })) }
+      : { ...b, projectName: project.name, pageSession: session };
   try {
     const r = await fetch("/api/project-backups", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     if (!r.ok) throw new Error(String(r.status));
@@ -242,8 +242,8 @@ function flashEntities(entities: string[]) {
     if (track) for (const c of project.tracks.find((t) => t.id === track[1])?.clips ?? []) ids.add(c.id);
   }
   if (!ids.size) return;
-  // 等这次改动渲染出来再找元素(新插进来的片段这时才有 DOM)
-  requestAnimationFrame(() => {
+  // 等这次改动渲染出来再找元素(新插进来的片段这时才有 DOM)。用计时器不用 rAF:页面在后台时 rAF 不跑
+  setTimeout(() => {
     for (const id of ids) {
       for (const el of document.querySelectorAll<HTMLElement>(`[data-clip-id="${CSS.escape(id)}"]`)) {
         el.setAttribute("data-remote-flash", "");
@@ -257,7 +257,7 @@ function flashEntities(entities: string[]) {
         );
       }
     }
-  });
+  }, 30);
 }
 
 /* ---------------- 绑定 ---------------- */
@@ -399,6 +399,21 @@ function onSideMessage(msg: AnyMsg) {
     default:
       return;
   }
+}
+
+/* ---------------- 验收用的钩子(只在开发模式) ---------------- */
+
+if (typeof window !== "undefined" && import.meta.env?.DEV) {
+  (window as unknown as { __pcSyncTest?: unknown }).__pcSyncTest = {
+    /** 断网 ms 毫秒(离线对话框的验收) */
+    drop: (ms: number) => cur?.link.dropFor(ms),
+    /** 交一条文档服务消息给页面(AI 栏「撤销这一步」:事件里的 opId 与 inverse 眼下由 c65-agent 那一路补) */
+    inject: (msg: AnyMsg) => onSideMessage(msg),
+    view: () => view,
+    docProjectId: () => currentDocProjectId(),
+    rev: () => cur?.link.ds.rev ?? null,
+    agentOp: (callId: string) => agentOpFor(callId),
+  };
 }
 
 /* ---------------- 启动 ---------------- */
