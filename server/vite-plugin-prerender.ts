@@ -10,6 +10,7 @@ import { isPrerender } from "./render-role.mjs";
 import { prerenderState, setPrerender } from "./prerender-client.mjs";
 import { repushMirror, replayReadySessions } from "./vite-plugin-mirror";
 import { stageOriginsOf } from "./stage-ports.mjs";
+import { listenSafe } from "./safe-port.mjs";
 
 /**
  * 拉起并看护预渲染进程(docs/archive/topics/decoupling-plan.md 第 3 节「预渲染」,阶段 2)。
@@ -25,16 +26,17 @@ import { stageOriginsOf } from "./stage-ports.mjs";
 /** 连续崩几次就不再重启,免得一个起不来的进程被无限拉起 */
 const MAX_RESTARTS = 5;
 
-function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const s = net.createServer();
-    s.unref();
-    s.on("error", reject);
-    s.listen(0, "127.0.0.1", () => {
-      const port = (s.address() as AddressInfo).port;
-      s.close(() => resolve(port));
-    });
-  });
+/**
+ * 给预渲染进程挑一个空端口。不能直接 `listen(0)`:动态端口段被改到低段的机器上会拿到
+ * 1719、6000、6665 这类「坏端口」,浏览器以 ERR_UNSAFE_PORT 拒绝、Node 的 fetch 报 bad port,
+ * 预渲染进程起来了也没人连得上。`listenSafe` 拿到坏端口就换(server/safe-port.mjs)。
+ */
+async function freePort(): Promise<number> {
+  const s = net.createServer();
+  s.unref();
+  const port = await listenSafe(s, "127.0.0.1");
+  await new Promise<void>((resolve) => s.close(() => resolve()));
+  return port;
 }
 
 /** 编辑器那一端可能被浏览器以哪几种写法打开 —— 预渲染的跨源放行名单 */
