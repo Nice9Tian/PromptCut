@@ -22,7 +22,7 @@
  *
  * ## --role host
  *
- *   node scripts/probes/render-host-probe.mjs --role host --config <文件> --name host-a --round r1 [--port 5403]
+ *   node scripts/probes/render-host-probe.mjs --role host [--config <文件> | --coord <地址>] --name host-a --round r1 [--port 5403]
  *        [--state <目录>] [--code-version <串>] [--expect-claims none] [--expect-handshake 401|101] [--timeout-min 20]
  *
  *   先用配置做一次原始握手记下状态码(`handshake`:101 或 401),再起 `scripts/render-host.mjs`(IPC 通道),
@@ -44,9 +44,13 @@
  *
  *   node scripts/probes/render-host-probe.mjs --role auth-check --config <文件> [--rate-limit]
  *
- *   用一份成员配置核对能跨机验的几项(H4、H7、H8 的一部分):错口令握手 401、对口令 101、`auth.ticket` 取素材票据、
- *   素材服务「不带票据」与「带票据」的读(非回环来源才要票据;本机跑时标 `loopback: true`,不带票据的那一项不判)。
- *   `--rate-limit`:同一来源连错 5 次后口令对也 401(本机回环不计数,只在别的机器上判)。
+ *   用一份成员配置核对能跨机验的几项(H4、H7、H8 的一部分):错口令握手 401、对口令 101、`auth.ticket` 取素材票据;
+ *   用 rw 票据往素材服务传一块真内容(1 片 + 收尾),再读:带票据 GET 200、Range 206;非回环来源不带票据的写与读、
+ *   签名不对的票据一律 401(本机回环跑时标 `loopback: true`,这几项不判)。
+ *   非回环来源开始前先等「对口令握手 101」(最多 150 s):同一台机器上先跑的 host-bad 可能让这个来源还在冷却里。
+ *   `--rate-limit`:先为对口令取好挑战,再连错到进冷却,用取好的挑战握手 → 401;冷却中新取挑战 → 429;
+ *   等 61 s 后另一个正确流程(新挑战 + 对口令)→ 101。回环来源不计数,这几项只在非回环来源上判。
+ *   没给 `--config` 时:本机模式读 `<state>/member.json`,`--coord` 时取协调服务的 `auth` 配置。
  *
  * 端口:编辑器另占「端口 +1」「端口 +2」当舞台端口。本机跑时 creator 5400、主机 5403 / 5406、check 5403(主机退出之后)。
  * 凭证只写在 state 目录的配置文件里,不打到输出里。
