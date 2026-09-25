@@ -67,3 +67,19 @@
   - **H2**：代码版本不同的实例 `claimed = 0`；
   - **H3**：没有凭证的实例连不上（握手 401），`claimed = 0`；
   - **H4～H10**：由 M6a 的单测覆盖，W5 上再用探针的 `--role auth-check` 跑一遍其中能跨机验的几项（错口令、限速、票据）。
+
+## 6. 集成时的裁定（2026-09-26）
+
+主会话在集成分支 `claude/m6-integ2` 上定的细节，以及集成对账时按这些裁定改的实现（报告 `docs/reports/AGENT-m6-integ2.md`）。
+
+- **`maxConcurrent` 写在哪**：裁定：可写在数组任意一项上，取各项最大值，缺省 1；`render-host --max-concurrent`（环境变量 `PROMPTCUT_HOST_MAX_CONCURRENT`）给了就优先。理由：数组没有放全局字段的地方，写在项上最不改 M6a 的配置形状。
+- **`maxConcurrent` 超过 4**：裁定：是配置错误，`code: 'bad-host-config'`，不截断；0、负数、小数、字符串同样报错。理由：静默压到 4 会让用户以为配了 9 路并发。〔集成时改：实现原来夹到 1～4、不合格的当没给，现改为 `hostMaxConcurrent` / `parseHostConfig` / `loadHostConfig` 一律报错，`createRenderHost` 收到超 4 的值也报错；RH1、RH4 按此改。〕
+- **诊断计数**：裁定：`claimed`、`completed`、`dedup`、`failed`、`lost` 都是累计值；`completed` 不含 `dedup`，两者分开计。理由：H2 的「`claimed = 0`」按累计读才有意义；去重完成没有渲染，与真渲染分开才能看出主机干了多少活。（实现本来如此，没改。）
+- **`plan` 跳过在哪一层**：裁定：在节点侧过滤器（`filter.mjs` 规则 6）与会话层做，即第 4 节的「节点侧跳过」；不接受只在主机外层过滤。队列侧不因 `profile: 'host'` 拒 `plan` 认领。（实现本来如此，没改。）
+- **并发上限算什么**：裁定：计入正在认领中的（in-flight）——全部节点的「持有 + 在飞的认领」不超过 `maxConcurrent`。理由：两个项目的会话各有一条在飞认领时，只数持有会超上限。（实现本来如此，没改。）
+- **执行器共用到哪一层**：裁定：接受「每个项目一个执行器对象，共用一个 `FramePipeline` 与一个全局并发闸」。理由：执行器按 `projectId@projectRev` 缓存、经那个项目的连接取快照，不同共享项目里的编辑器项目 id 可能相同，共用一个对象会串；并发、渲染间、帧库仍是同一份。第 3 节「所有节点共用同一个预渲染执行器」按此理解。
+- **产物推到哪个素材服务**：裁定：接受「用文档服务下发的 `asset`；没有就用文档服务同 host 的 `/api/asset`；从不回落本机」。理由：局域网模式文档服务与素材服务同进程；推到主机自己的素材服务，发布方拉不到。
+- **子进程临时目录**：裁定：接受 `render-host.mjs` 把子进程 `TEMP` / `TMP` 指到自己的数据目录。理由：编辑器往系统临时目录写 `promptcut/port.json`，主机写公共那份会把同机用户编辑器的 AI 面板指错。
+- **主机配置的 `role`**：裁定（集成对账时按第 2 节的配置形状定）：某项给了 `role` 且不是 `render`，是配置错误 `bad-host-config`；不给按 `render`。理由：第 2 节形状写的是 `role: 'render'`，主机只开 `render` 连接，给别的角色多半是把页面用的配置拿错了。〔集成时改：实现原来接受任何合法角色、连接时一律改成 `render`。〕
+- **素材回退的票据**：裁定（集成对账时修）：主机的 J.6 素材回退按回退基址挑票据，用那台素材服务所属项目的票据；同一台服务上有几个项目时用配置里靠前的那个；基址不属于任何项目时不带票据。理由：票据只在签发它的素材服务上有效，原来一律用第一个项目的票据，读第二个项目的素材服务会 401。〔集成时改：`asset-client.ts` 的 `setMediaFallbackTicket` 回调改为每试一个基址调一次、参数是基址；`render-node/host.mjs` 新增 `fallbackTicketFor`；补单测 RH-fallback-ticket。〕
+- **`parseHostConfig`**：集成时在 `render-node/host.mjs` 补出（原来只有读环境变量的 `loadHostConfig`，解析逻辑现在由它承担，`loadHostConfig` 读文件后调它）。契约测试 RHC1～RHC4 直接测它。
