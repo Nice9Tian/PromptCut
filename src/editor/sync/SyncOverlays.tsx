@@ -19,12 +19,13 @@ import {
   type UndoNoticeView,
 } from "./syncManager";
 import { clipOfEntity, entityLabel, writerLabel } from "./labels";
+import { foldLine, NOTICE_FOLD_AT, undoNoticeTitle } from "../undoNotice";
 import "./sync.css";
 
 /** 提示条停留多久(稿件:约 8 秒后消失,带关闭按钮) */
 const NOTICE_MS = 8000;
-/** 多于这么多处就折叠(稿件:最多列 3 处) */
-const FOLD_AT = 3;
+/** 多于这么多处就折叠(稿件:最多列 3 处;src/editor/undoNotice.ts) */
+const FOLD_AT = NOTICE_FOLD_AT;
 
 interface Item {
   entity: string;
@@ -59,13 +60,7 @@ function UndoNoticeBar({ n }: { n: UndoNoticeView }) {
 
   const items = itemsOf(n);
   const redo = n.kind === "redo";
-  const title = n.result.done
-    ? redo
-      ? "重做了，但这几处被后续的新修改覆盖，未做恢复："
-      : "撤销了，但这几处被后续的新修改覆盖，未做退回："
-    : redo
-      ? "没重做成。这几处后来都被改过了，保留了现在的样子："
-      : "没撤成。这几处后来都被改过了，保留了现在的样子：";
+  const title = undoNoticeTitle(n.result.done, redo);
   const fold = items.length > FOLD_AT && !expanded;
   const shown = fold ? items.slice(0, FOLD_AT - 1) : items;
   const firstJumpable = items.find((it) => clipOfEntity(it.entity) || it.entity.startsWith("/meta/"));
@@ -101,7 +96,7 @@ function UndoNoticeBar({ n }: { n: UndoNoticeView }) {
         {fold ? (
           <li>
             <button type="button" className="pc-undo-entity" onClick={() => setExpanded(true)}>
-              等 {items.length} 处 (点击展开)
+              {foldLine(items.length)}
             </button>
           </li>
         ) : null}

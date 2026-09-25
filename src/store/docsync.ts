@@ -31,6 +31,7 @@ import {
 } from "../kernel/diffProject";
 import type { Project } from "../kernel/project";
 import { attachProjectSync, set, state } from "./core";
+import { pageStateAfterRemote } from "./remotePageState";
 
 /* ---------------- 消息 ---------------- */
 
@@ -265,6 +266,8 @@ type Events = {
 };
 
 export const UNDO_LIMIT = 100;
+/** 本页面发出的提交记多少条 opId(`opIdsSince`) */
+const OWN_OPS_KEEP = 1000;
 export const MERGE_WINDOW_MS = 300;
 /** 文档服务单次提交 ops 序列化后的上限(`PROJECT_LIMITS.MAX_OPS_BYTES`):超过就改成根替换、走分片上传 */
 export const MAX_OPS_BYTES = 256 * 1024;
@@ -720,9 +723,34 @@ export class DocSync {
     this.stepOf.clear();
     const entry: Pending = { opId: this.newOpId(), ops: [{ op: "set", path: "", value: next }], inverse: [{ op: "set", path: "", value: this.local }], sent: false };
     this.pending.push(entry);
+    this.noteOwnOp(entry.opId);
     this.setLocal(next, "load");
     this.flush();
     return this.local;
+  }
+
+  /* ---------- 本页面发出的提交(留在页面的 Agent 工具回包里带 opIds 用) ---------- */
+
+  private ownOps: string[] = [];
+  private ownOpsBase = 0;
+
+  private noteOwnOp(opId: string) {
+    this.ownOps.push(opId);
+    if (this.ownOps.length > OWN_OPS_KEEP) {
+      const drop = this.ownOps.length - OWN_OPS_KEEP;
+      this.ownOps.splice(0, drop);
+      this.ownOpsBase += drop;
+    }
+  }
+
+  /** 记个位置;之后用 `opIdsSince` 取这之后本页面发出的提交的 opId */
+  opMark(): number {
+    return this.ownOpsBase + this.ownOps.length;
+  }
+
+  /** `opMark()` 之后本页面发出的提交(含撤销、载入);太久远、已修剪掉的那部分取不到 */
+  opIdsSince(mark: number): string[] {
+    return this.ownOps.slice(Math.max(0, mark - this.ownOpsBase));
   }
 
   private commitInternal(next: Project, opts: CommitOptions, undoOf: string | undefined, target: "undo" | "redo" | undefined): Project {
@@ -736,6 +764,7 @@ export class DocSync {
     const ops: PathOp[] = utf8Bytes(JSON.stringify(d.ops)) > MAX_OPS_BYTES ? [{ op: "set", path: "", value: r.value }] : d.ops;
     const entry: Pending = { opId: this.newOpId(), ops, inverse: d.inverse, undoOf, sent: false };
     this.pending.push(entry);
+    this.noteOwnOp(entry.opId);
     const now = this.now();
     if (target) {
       // 撤销 / 重做本身:它的逆操作进对面的栈
@@ -1007,11 +1036,17 @@ export function bindStore(ds: DocSync, opts: { load?: (project: Project) => Proj
     redo: () => void ds.redo(),
     canUndo: () => ds.canUndo(),
     canRedo: () => ds.canRedo(),
+    // .proc 只在所有本地修改都拿到确认之后写(c65-design.md 第 4 节、V7)
+    whenSettled: (opts) => ds.whenSettled(opts),
   });
   const off = ds.on("project", (project, cause) => {
     // commit / load 由 setProject / loadProject 自己写进 state
     if (cause === "commit" || cause === "load") return;
-    if (project !== state.project) set({ project, dirty: true });
+    if (project === state.project) return;
+    const prev = state.project;
+    // 别人的改动:本页面的页面状态跟着调(切剪辑换播放头、总时长手动值、选区里被删的片段;c65-integ2 裁定)
+    const pagePatch = cause === "remote" ? pageStateAfterRemote(prev, project, state) : null;
+    set({ project, dirty: true, ...(pagePatch ?? {}) });
   });
   return () => {
     off();

@@ -37,6 +37,14 @@
  *       `src/editor/undoFeedback.ts`、`src/store/undoNotice.ts`，候选导出 `undoNotice`、`describeUndo`、`undoFeedback`；
  *       入参 `(result, { redo, nameOf(entity), whoOf(by) })`，回 `null`（没有要提示的）或 `{ title, lines: string[] }`，
  *       `lines` 是折叠后显示的行。
+ *
+ * 集成对账（c65-integ2，只改胶水、不改断言）：
+ *   B1  实际是 `server/agent/agent-side.mjs` 的 `createAgentSide`（vite-plugin-ai 与测试共用的组装：连接 + 执行器 + 按 side 分派）。
+ *       形状不同，由 `agentSideReplica` 包成 B1 的样子：handler 用 vite 的 `ssrLoadModule` 载入（与 AG-3 相同；卡片注册表在裸 Node
+ *       下载不进来），测试给的 `loadModule` 不用；执行器按对话 id 在本进程内发对话号，胶水把「发出的号 → 测试的对话号」对上，
+ *       连接地址按测试的对话号给（B9 的查询串）。
+ *   B4  实际是 `DocSync.revertRemote({ opId, inverse?, rev?, by? })`，加进候选名。
+ *   B5  `src/editor/undoKeys.ts` 的 `undoRedoKey`；B7 `core.ts` 同步挂钩的 `whenSettled()`；B8 `src/editor/undoNotice.ts` 的 `undoNotice`：与假设一致。
  *   B9  写入身份在测试里的给法：查询串 `?user=&dev=&role=&conv=`，principal 为
  *       `{ userId: '<user>@<dev>', deviceId: dev, role, conversation: Number(conv) }`（与 `docservice-events.test.mjs` 相同）。
  *       页面连接不带 role 时按 `'page'`。
@@ -223,13 +231,14 @@ export async function startAgent(env, { projectId = PID, conversation = 7, user 
     ['createAgentReplica', 'createAgentProject', 'createAgentSide'],
     tried,
   );
-  assert.ok(hit, `B1：找不到 Agent 服务端的项目副本工厂。试过：\n  ${tried.join('\n  ')}`);
+  const side = hit ? null : await probe(['server/agent/agent-side.mjs'], ['createAgentSide'], tried);
+  assert.ok(hit || side, `B1：找不到 Agent 服务端的项目副本工厂。试过：\n  ${tried.join('\n  ')}`);
   const pageCalls = [];
   const loadModule = (spec) => {
     const file = path.isAbsolute(spec) && !spec.startsWith('/src') && !spec.startsWith('/server') ? spec : path.join(ROOT, spec.replace(/^\/+/, ''));
     return import(pathToFileURL(file).href);
   };
-  const replica = await hit.fn({
+  const replica = await (hit ? hit.fn : (o) => agentSideReplica(side.fn, o, conversation))({
     projectId,
     url: (conv) => env.url({ user, dev, role: 'agent', conv: conv ?? conversation }),
     loadModule,
@@ -248,6 +257,49 @@ export async function startAgent(env, { projectId = PID, conversation = 7, user 
     }
   };
   return { replica, call, pageCalls, close: () => replica.close?.() };
+}
+
+/**
+ * 胶水（c65-integ2）：把 `createAgentSide` 包成 B1 的形状。
+ * - handler 经 vite 的 ssrLoadModule 载入（同 `agent-c65.test.mjs` 的 AG-3）；
+ * - 执行器按对话 id（字符串）首次出现的顺序发对话号 1、2、3……；测试按自己的对话号（7、3、5……）给写入身份，
+ *   所以先登记「对话 id `conv-<测试的号>` → 发出的号」，连接地址按发出的号反查测试的号。
+ */
+async function agentSideReplica(createAgentSide, { projectId, url, callPage }, firstConversation) {
+  const [{ createServer }, { loadSsrHost }, { tools, toolGroups }] = await Promise.all([
+    import('vite'),
+    import(pathToFileURL(path.join(ROOT, 'server/agent/ssr-host.mjs')).href),
+    import(pathToFileURL(path.join(ROOT, 'server/mcp-tools.mjs')).href),
+  ]);
+  const vite = await createServer({ configFile: false, root: ROOT, logLevel: 'silent', server: { middlewareMode: true, hmr: false, watch: null }, appType: 'custom', optimizeDeps: { noDiscovery: true, include: [] } });
+  const testConvOf = new Map();
+  const side = createAgentSide({
+    projectId,
+    url: (n) => url(testConvOf.get(n) ?? n),
+    protocolsFor: () => ['promptcut.v1'],
+    tools,
+    toolGroups,
+    loadHost: () => loadSsrHost((id) => vite.ssrLoadModule(id)),
+    callPage: (tool, args) => callPage(tool, args),
+  });
+  const keyOf = (conv) => {
+    const key = `conv-${conv}`;
+    testConvOf.set(side.conversationNumber(key), conv);
+    return key;
+  };
+  return {
+    async open() {
+      keyOf(firstConversation);
+      await side.link.ready();
+    },
+    callTool(name, args, { conversation } = {}) {
+      return side.callTool(name, args, { agent: keyOf(conversation ?? firstConversation) });
+    },
+    async close() {
+      side.close();
+      await vite.close();
+    },
+  };
 }
 
 const safeJson = (v) => {
@@ -328,7 +380,7 @@ export function undoInfoOf({ create, complete, detail }) {
 /** B4 */
 export async function undoAgentStep(ds, info) {
   await registerTs();
-  const names = ['undoForeign', 'undoStep', 'undoAgentStep', 'undoOp', 'revertOp'];
+  const names = ['undoForeign', 'undoStep', 'undoAgentStep', 'undoOp', 'revertOp', 'revertRemote'];
   for (const n of names) if (typeof ds[n] === 'function') return ds[n](info);
   const mod = await import(srcHref('store/docsync.ts'));
   for (const n of names) if (typeof mod[n] === 'function') return mod[n](ds, info);

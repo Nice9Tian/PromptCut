@@ -22,6 +22,7 @@ import { CollapsePanelButton } from "./chat/CollapsePanelButton";
 import { MessageList } from "./chat/MessageList";
 import { ThinkingStrip } from "./chat/ThinkingStrip";
 import { QueueList } from "./chat/QueueList";
+import { AgentEventLog } from "../sync/AgentEventLog";
 import { Composer } from "./chat/Composer";
 import type { RewindHandlers } from "./chat/UserBubble";
 import type { ChatAttachment } from "../../ai/types";
@@ -552,6 +553,8 @@ export function AiPanel(props: { mcpConnected: boolean; hotkeysOff?: boolean; mo
         rewind={rewindHandlers}
       />
 
+      {/* 文档服务推来的工具调用记录(D2):命令行、别的页面、共享项目里别人的 Agent 的调用也在这里,写了项目的能撤这一步 */}
+      <AgentEventLog />
       <ThinkingStrip messages={messages} streaming={streaming} />
       <QueueList
         tabId={tabId}

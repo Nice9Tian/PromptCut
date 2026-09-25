@@ -22,6 +22,7 @@ import { motion } from "motion/react";
 import { MediaMigrationDialog } from "./editor/MediaMigrationDialog";
 import { SyncOverlays } from "./editor/sync/SyncOverlays";
 import { isJoinPage, startSync } from "./editor/sync/syncManager";
+import { undoRedoKey } from "./editor/undoKeys";
 
 /** 拖杆宽度(px),和 ResizeHandle 里的 w-2 对应 */
 const HANDLE_W = 8;
@@ -167,13 +168,10 @@ export default function Editor() {
       if (e.code === "Space") {
         e.preventDefault();
         actions.togglePlay();
-      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
-        // 按着 Shift 时 e.key 是大写的 "Z",所以按小写比
+      } else if (undoRedoKey(e)) {
+        // Ctrl/Cmd+Z 撤销;Ctrl/Cmd+Shift+Z、Ctrl/Cmd+Y 重做(src/editor/undoKeys.ts)
         e.preventDefault();
-        e.shiftKey ? actions.redo() : actions.undo();
-      } else if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "y") {
-        e.preventDefault();
-        actions.redo();
+        undoRedoKey(e) === "redo" ? actions.redo() : actions.undo();
       } else if (e.key === "Delete" || e.key === "Backspace") {
         for (const id of getState().selection) actions.removeClip(id);
       }

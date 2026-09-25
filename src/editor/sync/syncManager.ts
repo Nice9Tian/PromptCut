@@ -83,6 +83,30 @@ export interface AgentOp {
   state: "ready" | "done" | "none";
 }
 
+/**
+ * AI 栏的一条工具调用记录(D2,c65-design.md 第 7 节):Agent 服务端每个工具调用发「创建」「完成」两条事件,
+ * 按 `eventId` 合成这一条;文字回复是一条 `kind: "text"`。只存摘要,完整参数在内容库 `event-detail`,展开时再拉。
+ */
+export interface EventRecord {
+  eventId: string;
+  kind: "tool" | "text";
+  tool?: string;
+  icon?: string | null;
+  target?: string | null;
+  args?: string | null;
+  callId?: string;
+  actor?: Record<string, unknown>;
+  /** null = 还在跑(只收到了创建) */
+  status: "ok" | "error" | "cancelled" | null;
+  summary?: string | null;
+  durationMs?: number | null;
+  at?: number;
+  text?: string;
+  /** 这次调用写进项目的那次提交(成功的写才有) */
+  opId?: string;
+  detailKey?: string | null;
+}
+
 export interface SyncView {
   /** 页面接上了文档服务(不然 store 用快照栈) */
   active: boolean;
@@ -98,6 +122,8 @@ export interface SyncView {
   device: DeviceInfo | null;
   /** AI 栏记录的版本号:agentOps 变了就加一 */
   agentOpsVersion: number;
+  /** 工具调用记录(eventRecords)的版本号:变了就加一 */
+  eventsVersion: number;
 }
 
 let view: SyncView = {
@@ -113,6 +139,7 @@ let view: SyncView = {
   toasts: [],
   device: null,
   agentOpsVersion: 0,
+  eventsVersion: 0,
 };
 const viewListeners = new Set<() => void>();
 
@@ -157,6 +184,8 @@ interface Current {
   link: SyncLink;
   kind: "local" | "shared";
   docProjectId: string;
+  /** 这条连接连的文档服务地址(告诉 Agent 服务端,见 bindAgentSide) */
+  url: string;
   unbind: () => void;
   offs: (() => void)[];
 }
@@ -299,7 +328,64 @@ function refreshStatus() {
   patch({ status, paused, offlineOpen: status === "paused" ? view.offlineOpen || view.status !== "paused" : false });
 }
 
-function bind(link: SyncLink, kind: "local" | "shared", docProjectId: string) {
+/* ---------------- Agent 服务端的项目副本(server/vite-plugin-ai.ts 的 /api/agent/bind) ---------------- */
+
+let agentBoundKey: string | null = null;
+
+/**
+ * 页面挂上 DocSync 之后告诉 Agent 服务端「我在编辑哪个项目、连的是哪个文档服务」(c65-integ2 接线;
+ * 接口见 docs/reports/AGENT-c65-agent.md 第 7 节):绑上之后 side: "agent" 的工具在服务端的项目副本上执行,
+ * 写入以 Agent 对话的身份直接进文档服务(D1)。本机项目用 local(回环 + 本机信任);共享项目用 ticket:
+ * Agent 服务端每开一条对话连接,经 SSE 向本页面要一张连接票据(issueAgentTicket)。同样的绑定不重发。
+ */
+function bindAgentSide(kind: "local" | "shared", docProjectId: string, url: string) {
+  const body = kind === "local" ? { projectId: docProjectId, mode: "local" } : { projectId: docProjectId, mode: "ticket", url };
+  const key = JSON.stringify(body);
+  if (key === agentBoundKey) return;
+  agentBoundKey = key;
+  fetch("/api/agent/bind", { method: "POST", headers: { "Content-Type": "application/json" }, body: key })
+    .then((r) => r.json().catch(() => null))
+    .then((j) => {
+      if (!j?.ok) {
+        if (agentBoundKey === key) agentBoundKey = null;
+        console.warn("[sync] Agent 服务端没绑上项目副本:", j?.error ?? "无回包");
+      }
+    })
+    .catch(() => {
+      if (agentBoundKey === key) agentBoundKey = null;
+    });
+}
+
+/**
+ * SSE 里的 `agent.ticket`:Agent 服务端要一张 agent 角色的连接票据(k:'conn', r:'agent', c:对话号)。
+ * 在本页面这条共享项目的连接上签(身份与本页面相同),交回 POST /api/agent/ticket。
+ */
+export async function issueAgentTicket(req: { reqId?: unknown; projectId?: unknown; conversation?: unknown }): Promise<void> {
+  const reqId = typeof req.reqId === "string" ? req.reqId : null;
+  if (!reqId) return;
+  let reply: Record<string, unknown>;
+  try {
+    if (!cur || cur.kind !== "shared" || cur.docProjectId !== req.projectId) throw new Error("本页面没有连着这个共享项目");
+    const r = await cur.link.request({ type: "auth.ticket", kind: "conn", role: "agent", conversation: Number(req.conversation) });
+    if (r.type !== "auth.ticket.ok" || typeof r.ticket !== "string") throw new Error(String(r.reason ?? r.detail ?? r.type));
+    reply = { reqId, ticket: r.ticket };
+  } catch (e) {
+    reply = { reqId, error: (e as Error).message };
+  }
+  await fetch("/api/agent/ticket", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(reply) }).catch(() => undefined);
+}
+
+/** 留在页面的 Agent 工具执行前记个位置,执行后取这期间本页面发出的提交(回包里带 opIds,server/agent/agent-side.mjs 用) */
+export function pageOpMark(): number | null {
+  return cur ? cur.link.ds.opMark() : null;
+}
+
+export function pageOpIdsSince(mark: number | null): string[] {
+  if (!cur || mark === null) return [];
+  return cur.link.ds.opIdsSince(mark);
+}
+
+function bind(link: SyncLink, kind: "local" | "shared", docProjectId: string, url: string) {
   const prev = cur;
   if (prev) {
     for (const off of prev.offs) off();
@@ -310,9 +396,10 @@ function bind(link: SyncLink, kind: "local" | "shared", docProjectId: string) {
     link.ds.on("status", () => refreshStatus()),
     link.ds.on("notice", onNotice),
   ];
-  cur = { link, kind, docProjectId, unbind, offs };
+  cur = { link, kind, docProjectId, url, unbind, offs };
   patch({ active: true, kind, members: kind === "local" ? [] : view.members, notice: null });
   refreshStatus();
+  bindAgentSide(kind, docProjectId, url);
   if (prev && prev.link !== link) retire(prev.link);
 }
 
@@ -325,7 +412,7 @@ function retire(link: SyncLink) {
 }
 
 function newLocalLink(docProjectId: string, initial: Project): SyncLink {
-  return new SyncLink({
+  const link: SyncLink = new SyncLink({
     url: localWsUrl(),
     protocols: () => ["promptcut.v1"],
     projectId: docProjectId,
@@ -333,7 +420,10 @@ function newLocalLink(docProjectId: string, initial: Project): SyncLink {
     initial,
     saveBackup: (b) => void saveBackup(b),
     onMessage: onSideMessage,
+    // 连上后补一次最近的工具调用记录(AI 栏的操作记录;文档服务按项目在内存里留最近 500 条)
+    onOpen: () => void link.send({ type: "events.list", projectId: docProjectId }),
   });
+  return link;
 }
 
 /** 切到本机空间里的这个项目;`load` 为真时把这份内容以根替换写进去(文件内容为准) */
@@ -341,7 +431,7 @@ function switchToLocal(project: Project, { load }: { load: boolean }): Project {
   const id = project.id || "untitled";
   const link = newLocalLink(id, project);
   if (load) link.ds.load(project);
-  bind(link, "local", id);
+  bind(link, "local", id, localWsUrl());
   patch({ shared: null, members: [], blocked: null });
   link.start();
   return link.ds.project;
@@ -361,11 +451,57 @@ function asOps(v: unknown): PathOp[] | undefined {
   return Array.isArray(v) && v.length ? (v as PathOp[]) : undefined;
 }
 
+/** 工具调用记录:eventId → 记录(插入序,超过上限丢最早的) */
+const eventRecords = new Map<string, EventRecord>();
+const EVENT_RECORDS_KEEP = 1000;
+const str = (v: unknown): string | undefined => (typeof v === "string" ? v : undefined);
+
+/** 按 eventId 更新一条记录(创建、完成、文字、events.list 的条目都走这里);回合成后的记录 */
+function upsertRecord(e: Record<string, unknown>): EventRecord | null {
+  const eventId = str(e.eventId);
+  if (!eventId) return null;
+  const prev = eventRecords.get(eventId);
+  const isText = e.phase === "text" || (typeof e.text === "string" && e.tool == null);
+  const status = e.status === "ok" || e.status === "error" || e.status === "cancelled" ? e.status : e.phase === "create" ? null : prev?.status ?? null;
+  const rec: EventRecord = {
+    ...(prev ?? { eventId, kind: isText ? "text" : "tool", status: null }),
+    ...(str(e.tool) !== undefined ? { tool: str(e.tool) } : {}),
+    ...(e.icon !== undefined ? { icon: (e.icon as string | null) ?? null } : {}),
+    ...(e.target !== undefined ? { target: (e.target as string | null) ?? null } : {}),
+    ...(e.args !== undefined ? { args: (e.args as string | null) ?? null } : {}),
+    ...(str(e.callId) ? { callId: str(e.callId) } : {}),
+    ...(e.actor && typeof e.actor === "object" && !prev?.actor ? { actor: e.actor as Record<string, unknown> } : {}),
+    ...(e.summary !== undefined ? { summary: (e.summary as string | null) ?? null } : {}),
+    ...(typeof e.durationMs === "number" ? { durationMs: e.durationMs } : {}),
+    ...(typeof e.at === "number" && prev?.at === undefined ? { at: e.at } : typeof e.createdAt === "number" && prev?.at === undefined ? { at: e.createdAt } : {}),
+    ...(typeof e.text === "string" ? { text: e.text } : {}),
+    ...(str(e.opId) ? { opId: str(e.opId) } : {}),
+    ...(e.detailKey !== undefined ? { detailKey: (e.detailKey as string | null) ?? null } : {}),
+    status: isText ? "ok" : status,
+  };
+  eventRecords.delete(eventId);
+  eventRecords.set(eventId, rec);
+  while (eventRecords.size > EVENT_RECORDS_KEEP) eventRecords.delete(eventRecords.keys().next().value!);
+  return rec;
+}
+
+/** AI 栏的操作记录(最新的在前) */
+export function eventRecordList(): EventRecord[] {
+  return [...eventRecords.values()].reverse();
+}
+
+/** 按 eventId 取 AI 栏「撤销这步」要的那条写入记录 */
+export function agentOpOfEvent(eventId: string): AgentOp | null {
+  return agentOps.get(eventId) ?? null;
+}
+
 function rememberEvent(e: Record<string, unknown>) {
+  const record = upsertRecord(e);
+  if (record) patch({ eventsVersion: view.eventsVersion + 1 });
   const opId = typeof e.opId === "string" ? e.opId : null;
   const eventId = typeof e.eventId === "string" ? e.eventId : null;
   if (!opId || !eventId) return;
-  const callId = typeof e.callId === "string" ? e.callId : typeof e.toolCallId === "string" ? e.toolCallId : undefined;
+  const callId = typeof e.callId === "string" ? e.callId : typeof e.toolCallId === "string" ? e.toolCallId : record?.callId;
   const actor = e.actor as { session?: string } | undefined;
   const prev = agentOps.get(eventId);
   const rec: AgentOp = {
@@ -413,6 +549,7 @@ if (typeof window !== "undefined" && import.meta.env?.DEV) {
     docProjectId: () => currentDocProjectId(),
     rev: () => cur?.link.ds.rev ?? null,
     agentOp: (callId: string) => agentOpFor(callId),
+    events: () => eventRecordList(),
   };
 }
 
@@ -430,7 +567,7 @@ export async function startSync(): Promise<void> {
   const join = q.get("join");
   if (join) {
     const link = newLocalLink(join, getState().project);
-    bind(link, "local", join);
+    bind(link, "local", join, localWsUrl());
     link.start();
     return;
   }
@@ -645,7 +782,7 @@ export async function enterShared(candidate: Candidate, cred: EnterCredentials):
           return;
         }
         settled = true;
-        bind(link, "shared", candidate.projectId);
+        bind(link, "shared", candidate.projectId, route.wsBaseOf(candidate.base));
         patch({
           shared: { projectId: candidate.projectId, name: candidate.name, mode: candidate.mode, where: candidate.where, base: candidate.base, username: cred.username, creator: cred.as === "creator", hostDeviceName: candidate.hostDeviceName },
           members: [],

@@ -540,3 +540,72 @@
   box-shadow: 0 0 0 4px color-mix(in oklab, var(--ui-accent) 30%, transparent) !important;
   transition: outline-color 200ms ease;
 }
+
+/* AI 栏的 Agent 操作记录(AgentEventLog.tsx):行高固定、虚拟化,只渲染看得见的几行 */
+.pc-evlog {
+  margin: 0 10px 6px;
+  border: 1px solid var(--ui-border);
+  border-radius: 8px;
+  background: var(--ui-bg-2, transparent);
+  font-size: 12px;
+}
+.pc-evlog-head {
+  display: flex;
+  width: 100%;
+  justify-content: space-between;
+  align-items: center;
+  padding: 5px 8px;
+  background: none;
+  border: 0;
+  color: var(--ui-fg-muted);
+  cursor: pointer;
+  font-size: 12px;
+}
+.pc-evlog-count {
+  color: var(--ui-fg-muted);
+}
+.pc-evlog-box {
+  overflow-y: auto;
+  border-top: 1px solid var(--ui-border);
+}
+.pc-evlog-row {
+  position: absolute;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  box-sizing: border-box;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.pc-evlog-mark {
+  width: 12px;
+  text-align: center;
+  flex: none;
+}
+.pc-evlog-mark--ok { color: var(--ui-ok, #3fb950); }
+.pc-evlog-mark--error { color: var(--ui-danger); }
+.pc-evlog-mark--running { color: var(--ui-warn, #e0a030); }
+.pc-evlog-tool {
+  color: var(--ui-fg);
+  font-family: var(--ui-mono, ui-monospace, monospace);
+  flex: none;
+}
+.pc-evlog-target,
+.pc-evlog-who {
+  color: var(--ui-fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.pc-evlog-who {
+  flex: 1;
+}
+.pc-evlog-undo {
+  flex: none;
+  height: 22px;
+  padding: 0 8px;
+  font-size: 12px;
+}
