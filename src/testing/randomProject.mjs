@@ -202,3 +202,47 @@ export function bigProject(r, clipCount, trackCount = 10) {
   }
   return { version: 1, id: "p-big", name: "big", width: 1920, height: 1080, fps: 30, duration: 3000, themeId: "midnight", media: [], tracks };
 }
+
+/**
+ * 像编辑器 action 那样的一次修改(不可变更新,只换改到的路径):挪片段、改参数、加删片段、
+ * 调片段顺序、改序列名、加删序列、改项目设置。返回新项目;项目里没有可改的对象时原样返回。
+ */
+export function realisticEdit(r, p) {
+  const tracks = Array.isArray(p.tracks) ? p.tracks : [];
+  const withTrack = (ti, fn) => ({ ...p, tracks: tracks.map((t, i) => (i === ti ? fn(t) : t)) });
+  const ti = tracks.length ? r.int(tracks.length) : -1;
+  const t = tracks[ti];
+  const clips = t && Array.isArray(t.clips) ? t.clips : [];
+  const ci = clips.length ? r.int(clips.length) : -1;
+  switch (r.int(10)) {
+    case 0:
+    case 1: // 拖动片段
+      if (ci < 0) break;
+      return withTrack(ti, (tr) => ({ ...tr, clips: clips.map((c, i) => (i === ci ? { ...c, start: (c.start ?? 0) + 0.5, end: (c.end ?? 1) + 0.5 } : c)) }));
+    case 2:
+    case 3: // 改参数
+      if (ci < 0) break;
+      return withTrack(ti, (tr) => ({ ...tr, clips: clips.map((c, i) => (i === ci ? { ...c, params: { ...(c.params ?? {}), [r.pick(["text", "size", "color"])]: randScalar(r) } } : c)) }));
+    case 4: // 加片段
+      if (ti < 0) break;
+      return withTrack(ti, (tr) => {
+        const at = r.int(clips.length + 1);
+        return { ...tr, clips: [...clips.slice(0, at), randClip(r), ...clips.slice(at)] };
+      });
+    case 5: // 删片段
+      if (ci < 0) break;
+      return withTrack(ti, (tr) => ({ ...tr, clips: clips.filter((_, i) => i !== ci) }));
+    case 6: // 片段换顺序
+      if (clips.length < 2) break;
+      return withTrack(ti, (tr) => { const cs = [...clips]; const [el] = cs.splice(ci, 1); cs.splice(r.int(cs.length + 1), 0, el); return { ...tr, clips: cs }; });
+    case 7: // 改序列名 / 隐藏
+      if (ti < 0) break;
+      return withTrack(ti, (tr) => (r.chance(0.5) ? { ...tr, name: `序列 ${r.int(100)}` } : { ...tr, hidden: !tr.hidden }));
+    case 8: // 加删序列
+      if (r.chance(0.7) || tracks.length < 2) return { ...p, tracks: [...tracks, randTrack(r, 3)] };
+      return { ...p, tracks: tracks.filter((_, i) => i !== ti) };
+    default: // 项目设置
+      return { ...p, [r.pick(["name", "fps", "duration", "themeId"])]: randScalar(r) };
+  }
+  return p;
+}
