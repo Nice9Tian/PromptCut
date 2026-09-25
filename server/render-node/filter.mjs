@@ -6,7 +6,9 @@
  *
  *   0  纯浏览器只接本人的任务(服务端已按凭证把关,这里再挡一次)
  *   1  环境指纹、代码版本、卡片源码版本对得上(`plan` 任务只查代码版本:谁认领谁的指纹就是这一版的指纹)
- *   2  轨道流 / 要转码的任务需要转码能力
+ *   2  要求 `capabilities.streams` 的任务(M6c X1 起的流任务)需要节点报 `streams: true`(没报这一项的旧形状
+ *      按 `transcode` 算);
+ *      轨道流 / 要转码的任务需要转码能力
  *   3  用户卡、图卡需要对应能力
  *   4  重度策略(见 `DEFAULT_WEIGHT_POLICY`)
  *   5  内存要求不超过本机可用内存
@@ -72,7 +74,9 @@ export function checkClaimable(task, node) {
     }
   }
 
-  // 2
+  // 2(M6c X1:任务要求 `capabilities.streams` 时,节点要报 `streams: true`,即本机探到了编码器;
+  //   没报 `streams` 这一项的节点(M6c 之前的形状)按它的转码能力算,报了 `false` 的一律不收)
+  if (requires.capabilities?.streams === true && (capabilities.streams ?? capabilities.transcode) !== true) return reject(2, 'streams');
   if ((task?.kind === 'stream' || requires.transcode === true) && !capabilities.transcode) return reject(2, 'transcode');
 
   // 3

@@ -20,11 +20,18 @@
  * 队列的细任务也会按清单去重完成,两边就「一定相同」,比较没有意义。`--docservice-url <ws://…>` 可以改用
  * 外面现成的一个(两趟共用,自己负责它是空的)。
  *
- * 轨道流缺省关掉(`PROMPTCUT_STREAMS=0`):流不走队列(J.0),也不影响快照;开着的话本机节点要等流全产完才闲。
- * `--streams` 保留流。
+ * 轨道流缺省关掉(`PROMPTCUT_STREAMS=0`):这时不发布流任务(M6c X1 的开关,行为与 M5b 相同),探针断言流任务条数为 0。
+ * `--streams` 开流(`PROMPTCUT_STREAMS=1`,M6c X1):流任务经队列完成,断言
+ *   - 切出了流任务,全部 `done`,由节点的执行器产出(不是去重);
+ *   - 每个节点对每个流任务恰好收到一次 `task.done`(诊断 `queue.doneCounts`)。
+ *
+ * **`--peer`(M6c X1)**:队列模式那一趟另起第二台编辑器(`--peer-port`,缺省队列端口 +3;三个连号都要空着),
+ * 自己的空帧库、同一个文档服务、也是队列模式;两台同时 preload 同一个项目,两个节点抢同一批细任务。
+ * 开着 `--streams` 时,等两边的流库都齐,逐段比 sha256(分段文件与它用的 init):另一节点经 `task.done` 的
+ * `applyResult` → `adoptSegments` 取用的段必须与产出方逐字节相同(输出 `streamCompare`)。
  *
  *   node scripts/probes/queue-mode-probe.mjs [--queue-port 5516] [--normal-port 5513] [--docservice-port 5519]
- *        [--docservice-url ws://…] [--streams] [--only queue|normal] [--timeout-min 20] [--keep]
+ *        [--docservice-url ws://…] [--streams] [--peer] [--peer-port N] [--only queue|normal] [--timeout-min 20] [--keep]
  *        [--lan] [--hold-min N]
  *
  * **局域网模式(`--lan`,W4 跨机用)**:
@@ -59,6 +66,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { anchorFrames } from '../../src/render/snapshotPick.mjs';
 
@@ -70,6 +78,9 @@ const NORMAL_PORT = Number(arg('--normal-port', 5513));
 const DOC_PORT = Number(arg('--docservice-port', 5519));
 const DOC_URL = arg('--docservice-url', null);
 const STREAMS = args.includes('--streams');
+/** M6c X1:`--peer` 队列模式另起第二个队列节点(第二台编辑器,自己的空帧库,同一个文档服务) */
+const PEER = args.includes('--peer');
+const PEER_PORT = Number(arg('--peer-port', QUEUE_PORT + 3));
 const KEEP = args.includes('--keep');
 const ONLY = arg('--only', null);
 const TIMEOUT_MS = Number(arg('--timeout-min', 20)) * 60_000;
@@ -80,7 +91,7 @@ const HOLD_MS = Math.max(0, Number(arg('--hold-min', 0)) || 0) * 60_000;
 const EDITOR_HOST = LAN ? '0.0.0.0' : '127.0.0.1';
 
 const fails = [];
-const out = { root: ROOT, queuePort: QUEUE_PORT, normalPort: NORMAL_PORT, docservice: DOC_URL ?? `standalone:${DOC_PORT}`, streams: STREAMS,
+const out = { root: ROOT, queuePort: QUEUE_PORT, normalPort: NORMAL_PORT, docservice: DOC_URL ?? `standalone:${DOC_PORT}`, streams: STREAMS, peer: PEER ? PEER_PORT : null,
   lan: LAN, editorHost: EDITOR_HOST, holdMin: HOLD_MS / 60_000 };
 const check = (cond, label, extra) => { if (!cond) fails.push(label + (extra === undefined ? '' : ' :: ' + JSON.stringify(extra).slice(0, 600))); return cond; };
 
@@ -152,20 +163,94 @@ const nodesOf = q => q ? {
 } : null;
 
 /**
+ * 起一台编辑器(它会拉起自己的预渲染进程),等预渲染进程就绪。`sink` 收编辑器的输出(按行扫素材登记)。
+ * 回 `{ label, port, exportDir, library, EDITOR, base, diagnostics }`;预渲染进程没起来时 `base` 为 null。
+ */
+async function startEditor(run, children, { label, port, exportDir, docUrl, queue, host, sink }) {
+  await fs.mkdir(path.join(exportDir, 'data'), { recursive: true });
+  const env = { ...process.env, PROMPTCUT_EXPORT_DIR: exportDir, PROMPTCUT_DATA_DIR: path.join(exportDir, 'data'), PROMPTCUT_DOCSERVICE_URL: docUrl };
+  delete env.PROMPTCUT_QUEUE_NODE;
+  if (!DOC_URL) delete env.PROMPTCUT_CLUSTER_TOKEN;
+  if (queue) env.PROMPTCUT_QUEUE_NODE = '1';
+  // M6c X1:`--streams` 显式开流(PROMPTCUT_STREAMS=1);不给时关掉,与 M5b 相同
+  env.PROMPTCUT_STREAMS = STREAMS ? '1' : '0';
+  const editor = spawn(process.execPath, [viteBin(), '--port', String(port), '--strictPort', '--host', host],
+    { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, env });
+  children.push(editor);
+  editor.stdout.on('data', sink);
+  editor.stderr.on('data', sink);
+  const EDITOR = `http://127.0.0.1:${port}`;
+  const inst = { label, port, exportDir, library: path.join(exportDir, 'frame-library'), EDITOR, base: null, diagnostics: async () => ({}) };
+  await until(`[${label}] 编辑器进程起来`, async () => (await fetch(EDITOR + '/api/prerender/info').then(r => r.ok, () => false)) || null, 120000);
+  const base = await until(`[${label}] 预渲染进程就绪`, async () => {
+    const info = await json(EDITOR + '/api/prerender/info');
+    return info.body?.ready && info.body.url ? info.body.url : null;
+  }, 180000);
+  if (!base) return inst;
+  inst.base = base;
+  inst.diagnostics = async () => (await json(`${base}/api/frames/diagnostics`)).body ?? {};
+  return inst;
+}
+
+/** 队列模式:等本机节点报到(诊断里 `queue.active`)。回 true / false */
+async function waitActive(run, inst) {
+  const active = await until(`[${inst.label}] 本机节点报到(诊断里 queue.active)`, async () => (await inst.diagnostics()).queue?.active === true || null, 180000, 1000);
+  const d = await inst.diagnostics();
+  const start = d.queue ? { mode: d.queue.mode, url: d.queue.url, nodeId: d.queue.nodeId, envFingerprint: d.queue.envFingerprint } : null;
+  if (inst.label === 'queue') run.queueStart = start;
+  else (run.peer ??= {}).queueStart = start;
+  return !!active;
+}
+
+/** 推项目、preload、等后台那一趟跑完。回 `{ session, key, ready }` */
+async function preloadOn(run, inst, mode) {
+  const SESSION = `qmp-${inst.label}-${STAMP}`;
+  const pushed = await postJson(inst.EDITOR + '/api/data/project', { session: SESSION, localRev: 1, project: PROJECT });
+  check(pushed.ok, `[${inst.label}] 项目推进镜像`, pushed.body);
+  await until(`[${inst.label}] 预渲染进程手里有这一版项目`, async () => (await json(`${inst.base}/api/data/project?session=${SESSION}&localRev=1`)).ok || null, 30000);
+  const preload = await postJson(`${inst.base}/api/frames/preload`, { session: SESSION, localRev: 1 });
+  check(preload.ok, `[${inst.label}] preload 开跑`, preload.body);
+  const key = preload.body?.key;
+  const ready = await until(`[${inst.label}] 后台那一趟跑完`, async () => {
+    // 页面每 2 秒重发一次 preload 保活,这里照做(同一版直接返回)
+    const status = await postJson(`${inst.base}/api/frames/preload`, { session: SESSION, localRev: 1 });
+    return status.body?.status === 'ready' ? status.body : status.body?.status === 'error' ? status.body : null;
+  }, TIMEOUT_MS, 2000);
+  check(ready?.status === 'ready', `[${inst.label}] 后台那一趟以 ready 结束`, ready);
+  void mode;
+  return { session: SESSION, key, ready };
+}
+
+/** 队列模式:plan 切分完、所有细任务落定(按这一个节点的诊断看)。回 `{ plan, derived, states, q }` 或 null */
+async function settledOn(inst) {
+  return until(`[${inst.label}] plan 切分完、所有细任务落定`, async () => {
+    const q = (await inst.diagnostics()).queue;
+    const plan = q?.published?.[0]?.planId;
+    const derived = plan ? q.plans?.[plan] : null;
+    if (!Array.isArray(derived)) return null;
+    const states = derived.map(id => q.tasks?.[id]?.state ?? 'pending');
+    return states.every(s => s === 'done' || s === 'failed') ? { plan, derived, states, q } : null;
+  }, TIMEOUT_MS, 2000);
+}
+
+/**
  * 一趟:起文档服务(独立模式)和编辑器,preload 探针项目,等它产完,收帧库。
  * `hold` 为真时不关进程,返回的 run 带 `release()`(关进程)和 `diagnostics()`,由调用方保持完再关。
+ * 队列模式加 `--peer` 时另起一台编辑器(第二个队列节点,自己的空帧库,连同一个文档服务),两边同时 preload 同一个项目:
+ * 两个节点抢同一批细任务,各自订阅了 plan,细任务的 `task.done` 两边都收到,另一边产的段经 `applyResult` 拉进来。
  */
 async function runOnce(mode, { hold = false } = {}) {
   const port = mode === 'queue' ? QUEUE_PORT : NORMAL_PORT;
   const exportDir = path.join(os.tmpdir(), `pc-queue-probe-${mode}-${STAMP}`);
-  const library = path.join(exportDir, 'frame-library');
-  await fs.mkdir(path.join(exportDir, 'data'), { recursive: true });
+  const withPeer = mode === 'queue' && PEER;
   const run = { mode, port, exportDir, log: [] };
   const children = [];
   let kept = false;
   try {
-    for (const p of [port, port + 1, port + 2, ...(DOC_URL ? [] : [DOC_PORT])]) check(await portFree(p), `[${mode}] 端口 ${p} 空着`);
+    const ports = [port, port + 1, port + 2, ...(withPeer ? [PEER_PORT, PEER_PORT + 1, PEER_PORT + 2] : []), ...(DOC_URL ? [] : [DOC_PORT])];
+    for (const p of ports) check(await portFree(p), `[${mode}] 端口 ${p} 空着`);
     if (fails.length) return run;
+    await fs.mkdir(path.join(exportDir, 'data'), { recursive: true });
     let docUrl = DOC_URL;
     if (!docUrl) {
       const docData = path.join(exportDir, 'docservice');
@@ -180,14 +265,6 @@ async function runOnce(mode, { hold = false } = {}) {
       docUrl = `ws://127.0.0.1:${DOC_PORT}`;
       await until(`[${mode}] 文档服务起来`, async () => (await json(`http://127.0.0.1:${DOC_PORT}/healthz`)).body?.ok === true || null, 30000);
     }
-    const env = { ...process.env, PROMPTCUT_EXPORT_DIR: exportDir, PROMPTCUT_DATA_DIR: path.join(exportDir, 'data'), PROMPTCUT_DOCSERVICE_URL: docUrl };
-    delete env.PROMPTCUT_QUEUE_NODE;
-    if (!DOC_URL) delete env.PROMPTCUT_CLUSTER_TOKEN;
-    if (mode === 'queue') env.PROMPTCUT_QUEUE_NODE = '1';
-    if (!STREAMS) env.PROMPTCUT_STREAMS = '0';
-    const editor = spawn(process.execPath, [viteBin(), '--port', String(port), '--strictPort', '--host', mode === 'queue' ? EDITOR_HOST : '127.0.0.1'],
-      { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, env });
-    children.push(editor);
     // 素材服务登记(C5):编辑器输出里 `[asset-announce] asset-announce.announced {json}` 那一行
     run.announcedAsset = null;
     let lineTail = '';
@@ -204,24 +281,24 @@ async function runOnce(mode, { hold = false } = {}) {
       }
     };
     const keep = c => { const text = c.toString(); scanAnnounce(text); run.log.push(text); if (run.log.length > 400) run.log.shift(); };
-    editor.stdout.on('data', keep);
-    editor.stderr.on('data', keep);
-    const EDITOR = `http://127.0.0.1:${port}`;
-    await until(`[${mode}] 编辑器进程起来`, async () => (await fetch(EDITOR + '/api/prerender/info').then(r => r.ok, () => false)) || null, 120000);
-    const base = await until(`[${mode}] 预渲染进程就绪`, async () => {
-      const info = await json(EDITOR + '/api/prerender/info');
-      return info.body?.ready && info.body.url ? info.body.url : null;
-    }, 180000);
-    if (!base) return run;
-    run.prerender = base;
-    const diagnostics = async () => (await json(`${base}/api/frames/diagnostics`)).body ?? {};
+    const main = await startEditor(run, children, { label: mode, port, exportDir, docUrl, queue: mode === 'queue', host: mode === 'queue' ? EDITOR_HOST : '127.0.0.1', sink: keep });
+    if (!main.base) return run;
+    run.prerender = main.base;
+    const diagnostics = main.diagnostics;
+    let peer = null;
+    if (withPeer) {
+      const peerLog = [];
+      peer = await startEditor(run, children, { label: 'peer', port: PEER_PORT, exportDir: `${exportDir}-peer`, docUrl, queue: true, host: '127.0.0.1',
+        sink: c => { peerLog.push(c.toString()); if (peerLog.length > 400) peerLog.shift(); } });
+      run.peer = { port: PEER_PORT, exportDir: peer.exportDir, prerender: peer.base };
+      run.peerLog = peerLog;
+      if (!peer.base) return run;
+    }
 
     if (mode === 'queue') {
       // 第一次打 /api/frames/* 才建管线、起本机节点;等它连上文档服务、报到
-      const active = await until('[queue] 本机节点报到(诊断里 queue.active)', async () => (await diagnostics()).queue?.active === true || null, 180000, 1000);
-      const d = await diagnostics();
-      run.queueStart = d.queue ? { mode: d.queue.mode, url: d.queue.url, nodeId: d.queue.nodeId, envFingerprint: d.queue.envFingerprint } : null;
-      if (!active) {
+      const actives = await Promise.all([main, ...(peer ? [peer] : [])].map(inst => waitActive(run, inst)));
+      if (!actives.every(Boolean)) {
         run.queueLog = run.log.join('').split('\n').filter(line => line.includes('[queue-node]')).slice(-10);
         return run;
       }
@@ -230,32 +307,16 @@ async function runOnce(mode, { hold = false } = {}) {
       check(d.queue === undefined, '[normal] 开关关着时诊断里没有 queue 键', Object.keys(d));
     }
 
-    const SESSION = `qmp-${mode}-${STAMP}`;
-    const pushed = await postJson(EDITOR + '/api/data/project', { session: SESSION, localRev: 1, project: PROJECT });
-    check(pushed.ok, `[${mode}] 项目推进镜像`, pushed.body);
-    await until(`[${mode}] 预渲染进程手里有这一版项目`, async () => (await json(`${base}/api/data/project?session=${SESSION}&localRev=1`)).ok || null, 30000);
     const started = Date.now();
-    const preload = await postJson(`${base}/api/frames/preload`, { session: SESSION, localRev: 1 });
-    check(preload.ok, `[${mode}] preload 开跑`, preload.body);
-    const key = preload.body?.key;
-    run.entryKey = key;
-    const ready = await until(`[${mode}] 后台那一趟跑完`, async () => {
-      // 页面每 2 秒重发一次 preload 保活,这里照做(同一版直接返回)
-      const status = await postJson(`${base}/api/frames/preload`, { session: SESSION, localRev: 1 });
-      return status.body?.status === 'ready' ? status.body : status.body?.status === 'error' ? status.body : null;
-    }, TIMEOUT_MS, 2000);
-    check(ready?.status === 'ready', `[${mode}] 后台那一趟以 ready 结束`, ready);
+    // 两台同时 preload(发布方身份各自发布同一个 plan,两边都订阅上;谁先闲谁先认领)
+    const loads = await Promise.all([main, ...(peer ? [peer] : [])].map(inst => preloadOn(run, inst, mode)));
+    run.entryKey = loads[0]?.key;
+    if (peer) run.peer.entryKey = loads[1]?.key;
+    if (peer) check(loads[0]?.key && loads[0].key === loads[1]?.key, '[peer] 两台算出同一个 entry.key', { main: loads[0]?.key, peer: loads[1]?.key });
     run.preloadMs = Date.now() - started;
 
     if (mode === 'queue') {
-      const settled = await until('[queue] plan 切分完、所有细任务落定', async () => {
-        const q = (await diagnostics()).queue;
-        const plan = q?.published?.[0]?.planId;
-        const derived = plan ? q.plans?.[plan] : null;
-        if (!Array.isArray(derived)) return null;
-        const states = derived.map(id => q.tasks?.[id]?.state ?? 'pending');
-        return states.every(s => s === 'done' || s === 'failed') ? { plan, derived, states, q } : null;
-      }, TIMEOUT_MS, 2000);
+      const settled = await settledOn(main);
       if (settled) {
         const { q } = settled;
         run.plan = settled.plan;
@@ -265,19 +326,63 @@ async function runOnce(mode, { hold = false } = {}) {
         run.queueStats = q.stats;
         run.queueEvents = q.events.filter(e => /failed|lost|discarded|mismatch|skip|offline|error/.test(e.event)).slice(-20);
         check(run.failedTasks.length === 0, '[queue] 没有细任务失败', run.failedTasks);
-        // 单机时本机节点应当包办;连远端控制面(别的机器也在取活)时不一定
-        if (!DOC_URL) check(q.stats.completed + q.stats.dedup >= run.done, '[queue] 细任务都由节点完成(completed + dedup)', q.stats);
+        let peerQ = null;
+        if (peer) {
+          const peerSettled = await settledOn(peer);
+          peerQ = peerSettled?.q ?? null;
+          check(peerSettled?.plan === settled.plan, '[peer] 两台发布的是同一个 plan', { main: settled.plan, peer: peerSettled?.plan });
+          check(JSON.stringify([...(peerSettled?.derived ?? [])].sort()) === JSON.stringify([...settled.derived].sort()), '[peer] 两台看到的细任务相同',
+            { main: settled.derived.length, peer: peerSettled?.derived?.length ?? null });
+          run.peer.queueStats = peerQ?.stats ?? null;
+          run.peer.queueEvents = (peerQ?.events ?? []).filter(e => /failed|lost|discarded|mismatch|skip|offline|error/.test(e.event)).slice(-20);
+        }
+        // 单机时本机节点应当包办(有 --peer 时两台合起来);连远端控制面(别的机器也在取活)时不一定
+        const byNodes = q.stats.completed + q.stats.dedup + (peerQ ? peerQ.stats.completed + peerQ.stats.dedup : 0);
+        if (!DOC_URL) check(byNodes >= run.done, '[queue] 细任务都由节点完成(completed + dedup)', { main: q.stats, peer: peerQ?.stats ?? null });
+        // M6c X1:轨道流任务
+        const streamIds = settled.derived.filter(id => id.startsWith('stream:'));
+        run.streamTasks = streamIds.length;
+        run.streamDone = streamIds.filter(id => q.tasks?.[id]?.state === 'done').length;
+        const doneCounts = [['main', q], ...(peerQ ? [['peer', peerQ]] : [])].map(([who, qq]) => [who, Object.fromEntries(streamIds.map(id => [id, qq.doneCounts?.[id] ?? 0]))]);
+        run.streamDoneCounts = Object.fromEntries(doneCounts);
+        const local = qq => new Set([...(qq?.local?.completed ?? [])]);
+        const dedup = qq => new Set([...(qq?.local?.dedup ?? [])]);
+        run.streamBy = Object.fromEntries(streamIds.map(id => [id, local(q).has(id) ? 'main' : peerQ && local(peerQ).has(id) ? 'peer'
+          : dedup(q).has(id) ? 'main-dedup' : peerQ && dedup(peerQ).has(id) ? 'peer-dedup' : 'other']));
+        if (STREAMS) {
+          check(run.streamTasks > 0, '[streams] 切出了流任务', run.streamTasks);
+          check(run.streamDone === run.streamTasks, '[streams] 流任务全部经队列完成(done)', { tasks: run.streamTasks, done: run.streamDone });
+          for (const [who, counts] of doneCounts) {
+            const bad = Object.entries(counts).filter(([, n]) => n !== 1);
+            check(bad.length === 0, `[streams] ${who} 每个流任务恰好收到一次 task.done`, bad);
+          }
+          const rendered = Object.values(run.streamBy).filter(v => v === 'main' || v === 'peer').length;
+          check(rendered === run.streamTasks, '[streams] 流任务都由节点执行器产出(不是去重)', run.streamBy);
+        } else {
+          check(run.streamTasks === 0, '[streams] 关着(PROMPTCUT_STREAMS=0)时不发布流任务', run.streamTasks);
+        }
       }
       run.queueMs = Date.now() - started;
       await delay(3000);   // task.done 的 applyResult 在后台串行跑,留一点时间
+      if (peer && STREAMS && run.streamTasks > 0) {
+        // 另一节点取用的段与产出方逐段一致:等两边的流库都齐,再逐段比 sha256
+        const compare = await until('[streams] 两边的流库都齐', async () => {
+          const c = await compareStreams(main.library, peer.library);
+          return c.missing.length === 0 && c.segments > 0 ? c : null;
+        }, 120000, 2000);
+        run.streamCompare = compare ?? await compareStreams(main.library, peer.library);
+        check(!!compare, '[streams] 两边都有全部分段', { missing: run.streamCompare.missing.slice(0, 10) });
+        check(run.streamCompare.mismatched.length === 0, '[streams] 另一节点取用的段与产出方 sha256 逐段一致', run.streamCompare.mismatched.slice(0, 10));
+      }
     }
     const d = await diagnostics();
     run.plans = (d.plans ?? []).map(p => ({ key: p.key, controls: p.controls.map(c => ({ clipId: c.clipId, tier: c.tier, snapshotKey: c.snapshotKey, picked: c.picked })) }));
-    run.library = library;
+    run.library = main.library;
     if (mode === 'queue') run.nodes = nodesOf(d.queue);
+    if (peer) run.peer.nodes = nodesOf((await peer.diagnostics()).queue);
     if (hold) {
       kept = true;
-      run.session = SESSION;
+      run.session = `qmp-${mode}-${STAMP}`;
       run.diagnostics = diagnostics;
       run.release = async () => {
         for (const child of children.reverse()) killTree(child);
@@ -291,6 +396,46 @@ async function runOnce(mode, { hold = false } = {}) {
       await Promise.all(children.map(exited));
     }
   }
+}
+
+/**
+ * M6c X1:两个帧库的流库逐段对账。`streams/<流键>/stream.json` 里列的每个分段(两边的并集):两边都要有,
+ * 分段文件与它用的 init 的 sha256 都相同。回 `{ streams, segments, missing: [...], mismatched: [...], perStream }`。
+ */
+async function compareStreams(libA, libB) {
+  const sha = buf => createHash('sha256').update(buf).digest('hex');
+  const manifestIn = async (lib, key) => { try { return JSON.parse(await fs.readFile(path.join(lib, 'streams', key, 'stream.json'), 'utf8')); } catch { return null; } };
+  const blobOf = async (lib, key, manifest, n) => {
+    const seg = manifest?.segments?.[n];
+    if (!seg) return null;
+    try {
+      const segBytes = await fs.readFile(path.join(lib, 'streams', key, seg.file));
+      const initBytes = await fs.readFile(path.join(lib, 'streams', key, `init-${seg.init}.mp4`));
+      return { seg: sha(segBytes), init: sha(initBytes), stride: seg.stride, adopted: seg.adopted === true, encoder: seg.encoder ?? manifest.inits?.[seg.init]?.encoder ?? null };
+    } catch { return null; }
+  };
+  const keys = new Set();
+  for (const lib of [libA, libB]) for (const item of await fs.readdir(path.join(lib, 'streams'), { withFileTypes: true }).catch(() => [])) {
+    if (item.isDirectory() && /^[a-f0-9]{64}$/.test(item.name)) keys.add(item.name);
+  }
+  const out = { streams: 0, segments: 0, missing: [], mismatched: [], perStream: {} };
+  for (const key of [...keys].sort()) {
+    const a = await manifestIn(libA, key), b = await manifestIn(libB, key);
+    const numbers = [...new Set([...Object.keys(a?.segments ?? {}), ...Object.keys(b?.segments ?? {})])].map(Number).sort((x, y) => x - y);
+    if (!numbers.length) continue;
+    out.streams++;
+    const per = { segments: numbers.length, adoptedByMain: 0, adoptedByPeer: 0 };
+    for (const n of numbers) {
+      out.segments++;
+      const x = await blobOf(libA, key, a, n), y = await blobOf(libB, key, b, n);
+      if (!x || !y) { out.missing.push({ stream: key.slice(0, 12), segment: n, main: !!x, peer: !!y }); continue; }
+      if (x.adopted) per.adoptedByMain++;
+      if (y.adopted) per.adoptedByPeer++;
+      if (x.seg !== y.seg || x.init !== y.init) out.mismatched.push({ stream: key.slice(0, 12), segment: n, main: x, peer: y });
+    }
+    out.perStream[key.slice(0, 12)] = per;
+  }
+  return out;
 }
 
 /** 保持 `HOLD_MS`:每 30 秒打一行进度,每次刷新 `run.nodes` */
@@ -346,6 +491,10 @@ try {
   if (ONLY !== 'normal' && !fails.some(f => f.includes('端口'))) runs.queue = await runOnce('queue', { hold: HOLD_MS > 0 });
   out.tasks = runs.queue?.tasks ?? 0;
   out.done = runs.queue?.done ?? 0;
+  out.streamTasks = runs.queue?.streamTasks ?? null;
+  out.streamDone = runs.queue?.streamDone ?? null;
+  out.streamCompare = runs.queue?.streamCompare ? { streams: runs.queue.streamCompare.streams, segments: runs.queue.streamCompare.segments,
+    missing: runs.queue.streamCompare.missing.length, mismatched: runs.queue.streamCompare.mismatched.length, perStream: runs.queue.streamCompare.perStream } : null;
   out.identical = null;
   out.differentFrames = [];
   if (runs.normal?.library && runs.queue?.library) {
@@ -388,15 +537,16 @@ try {
   fails.push(`探针自己出错:${error?.stack || error}`);
 } finally {
   if (runs.queue?.release) await runs.queue.release().catch(() => {});
-  out.runs = Object.fromEntries(Object.entries(runs).map(([k, r]) => [k, { ...r, log: undefined, library: undefined, release: undefined, diagnostics: undefined }]));
+  out.runs = Object.fromEntries(Object.entries(runs).map(([k, r]) => [k, { ...r, log: undefined, peerLog: undefined, library: undefined, release: undefined, diagnostics: undefined }]));
   out.nodes = runs.queue?.nodes ?? null;
   out.announcedAsset = runs.queue?.announcedAsset ?? null;
-  if (!KEEP) for (const run of Object.values(runs)) if (run?.exportDir) await fs.rm(run.exportDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }).catch(() => {});
+  if (!KEEP) for (const run of Object.values(runs)) for (const dir of [run?.exportDir, run?.peer?.exportDir]) if (dir) await fs.rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }).catch(() => {});
 }
 
 const result = { ok: fails.length === 0, tasks: out.tasks ?? 0, done: out.done ?? 0, identical: out.identical ?? null,
   differentFrames: out.differentFrames ?? [], fails, ...out };
 console.log(JSON.stringify(result, null, 2));
 console.log(JSON.stringify({ ok: result.ok, tasks: result.tasks, done: result.done, identical: result.identical,
-  differentFrames: result.differentFrames.length, identicalIgnoringStyleOrder: out.identicalIgnoringStyleOrder ?? null, differenceSummary: out.differenceSummary ?? null, fails }));
+  differentFrames: result.differentFrames.length, identicalIgnoringStyleOrder: out.identicalIgnoringStyleOrder ?? null, differenceSummary: out.differenceSummary ?? null,
+  streamTasks: out.streamTasks, streamDone: out.streamDone, streamCompare: out.streamCompare, fails }));
 process.exit(result.ok ? 0 : 1);

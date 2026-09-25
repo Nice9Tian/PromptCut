@@ -482,7 +482,7 @@ test('J10 render（本地档）：这一段里已有的帧不渲，只渲缺的'
   assert.equal(seeded, '<p>seed 10</p>', '已有的帧不被覆盖');
 });
 
-test('J10 render：任务对不上计划时抛 plan-mismatch（不可重试），不渲染；流任务抛 stream-not-supported', { timeout: 30_000 }, async (t) => {
+test('J10 render：任务对不上计划时抛 plan-mismatch（不可重试），不渲染；没有轨道流生产者时流任务抛 no-streams（M6c X1 起不再抛 stream-not-supported）', { timeout: 30_000 }, async (t) => {
   t.after(cleanupRoots);
   const B = newPipeline(await tmpRoot());
   t.after(() => B.close());
@@ -516,7 +516,8 @@ test('J10 render：任务对不上计划时抛 plan-mismatch（不可重试）�
   });
   const serr = await rejectionOf(executor.render(stream, { signal: signalNone(), progress: () => {} }));
   assert.ok(serr, '流任务要失败');
-  assert.equal(serr.code, 'stream-not-supported');
+  // M6c X1：执行器接流任务；这条管线 interactive: false、没有轨道流生产者，所以回 no-streams（不可重试）
+  assert.equal(serr.code, 'no-streams');
   assert.equal(serr.retryable, false);
   assert.equal(bakeLog.length, mark, '对不上的任务一帧都不渲');
 });
