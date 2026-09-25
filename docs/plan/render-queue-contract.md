@@ -1792,3 +1792,194 @@ F.1 第 3a 步的 `card-locked` 拒绝原样保留，只兜住前置过滤与锁
 6. **会话 `start()` 时清掉 `throttledUntil`**。
 7. **空字符串的指纹等同于没带**。`plan` 任务不查指纹，与 `filter.mjs` 规则 1 一致。
 8. **限流的临界点**：「超过 20」指第 21 次拒绝仍回原因，第 22 次认领起回 `throttled`。
+
+---
+
+## J. M5b 主体：项目快照、真实执行器、队列模式的预渲染进程
+
+主 Agent 定稿，2026-09-25（用户授权自动推进；项目内容走文档服务快照，由用户 2026-09-25 裁决）。
+
+**依据**：
+- `docs/plan/Master-Execution-Plan.md` 第 7 节 M5b，第 11 节（推迟项）；
+- 设计附件 `docs/plan/queue-executor-design.md`（下称「附件」）；
+- 前提契约：C6.2 `artifact-transfer-contract.md`、C6.3 `docservice-contract.md`、C6.4 `manifest-contract.md`，以及本文 I 节；
+- 语义：`document-service.md`「渲染任务队列」：节点按项目版本从文档服务取项目，按哈希从素材服务取素材。
+
+### J.0 范围，与三处按授权做的降级
+
+**做**：
+1. **项目快照**：发布方把项目 JSON 分片存进文档服务，按 `projectRev` 存一份不可变快照；节点按版本取。
+2. **真实执行器**：`plan`，以及快照任务的 `render`（共享档、本地档）。
+3. **队列模式的预渲染进程**：开关打开、又连得上文档服务时，`/api/frames/preload` 不再自己渲，而是：
+   - 报摘要、上传快照；
+   - 发布 `plan` 任务；
+   - 进程里自带的本机节点认领、渲染、推送；
+   - 收到 `task.done` 就拉取、发布进就绪索引。
+   连不上文档服务时回落到现在的路径（离线）。
+4. **本机节点的接线**：sink 的 `ref`、完成时带清单、`split.mjs` 写 `canvasHeavy`、`plan` 带版本与指纹。
+5. **发现编辑器里挂的文档服务**（C6.4 第 9 节第 10 条）。
+6. **远端节点的素材回退**（附件第 4 节）。
+
+**按用户 2026-09-25 的补充授权降级**，都登记进计划第 11 节：
+- **页面本身不改**：发布 `plan` 的是预渲染进程，它替页面发，手里拿着的就是镜像里那份确切的 JSON。语义里「需要预渲染结果的一方（编辑界面、Agent）」直接发布，这一步推迟。好处是页面零改动，也不会出现「页面上传的 JSON 和预渲染用的不一致」。
+- **流不走队列**：`planForQueue` 回 `streams: []`，轨道流照旧由本机 preload 的路径产，经队列产流推迟。
+- **没有哈希的素材不单独设闸**：远端节点靠 `plan-mismatch` 拦住本地档；共享档卡在远端缺素材的情形登记为遗留。
+
+### J.1 项目快照（文档服务项目模块，`server/docservice/modules/project.mjs` 与 `store/index.mjs`）
+
+**上传**：`project.snapshot.put { projectId, projectRev, digest, index, count, data }`
+- `data` 是 UTF-8 文本分片，每片 ≤ 512 KiB；`index` 从 0 起，`count` ≤ 64，所以整份 ≤ 32 MiB。
+- 同一 `(projectId, projectRev)` 的分片可以乱序、可以重传，服务端按 `index` 拼。
+- 收齐后校验 `sha256(全文) === digest`，而且这个 `digest` 必须等于这一版 `project.announce` 时登记的摘要。
+- **回包**：
+  - 收到一片：`project.snapshot.stored { projectId, projectRev, received, count, complete }`；
+  - 校验不过：`error { reason: 'digest-mismatch' }`，已收的分片全部丢弃；
+  - 这一版不存在：`error { reason: 'unknown-rev' }`。
+- **落盘**：存储新增 `writeBlob(name, text)` 与 `readBlob(name) → string | null`，文件是 `projects/<编码后的 projectId>@<projectRev>.json`，编码规则同 C6.3 第 10 节第 10 条。写入经临时文件加改名，保证原子性。
+
+**取回**：`project.snapshot.get { projectId, projectRev }`
+- 回包是若干条 `project.snapshot.part { projectId, projectRev, index, count, data }`，按 `index` 升序，最后一条是 `project.snapshot.end { projectId, projectRev, digest }`；
+- 没有这份快照时，回 `project.snapshot.part { projectId, projectRev, missing: true }`；
+- 以上回包都带请求里的 `reqId`。
+
+**摘要**：`digest` 是项目 JSON 的 sha256 十六进制值。发布方用它同时做 `project.announce` 和快照上传，所以「版本号对应哪份内容」由文档服务保证。
+
+**模块边界**：快照属于项目模块，频道、日志等规则照 C6.3。
+
+### J.2 客户端（`server/render-node/project-client.mjs`，新；只依赖 Node 内置模块）
+
+```js
+createProjectClient(endpoint, { timeoutMs = 30_000 }) → {
+  announce(projectId, digest, session?) → Promise<{ projectRev, changed }>,
+  putSnapshot(projectId, projectRev, digest, text) → Promise<void>,   // 分片、逐片等回包、收齐算完成
+  get(projectId, projectRev) → Promise<object | null>,               // 拼接、校验摘要、JSON.parse；missing → null
+}
+```
+
+请求配对、超时、断线的语义同 C6.4 的 `content-client.mjs`，`reqId` 带自己的前缀。
+
+### J.3 节点侧的接线（`server/render-node/`）
+
+- **`local-node.mjs`**：
+  - 细任务的 sink `ref` 改为 `{ resultKey, kind, tier, range, input: task.input, requires: task.requires }`；
+  - 完成时：
+    - 走 `put` 的，`session.complete(id, { ranges, ...r.result })`；
+    - 走去重的，`session.complete(id, { ranges, dedup: true, ...(await sink.resultFor?.(ref)) })`；
+  - `sink.resultFor` 不存在时照旧，与 D.2 兼容。
+- **`split.mjs`**：
+  - 快照任务的 `input.canvasHeavy = control.capabilities?.canvasHeavy === true`（C6.2 第 11 节第 2 条）；
+  - `planTaskOf`（发布方造 `plan` 任务的函数）接受 `{ codeVersion, envFingerprint }`，写进 `requires`。
+- **`endpoint.mjs`**：`resolveDocservice` 加一项，顺序是：环境变量地址 → 编辑器里挂的文档服务 → 回环 8787 → 离线。
+  - 编辑器里挂的这一项：从 `PROMPTCUT_EDITOR_URL` 推出 `ws://<编辑器源>/docservice`；
+  - 探活用 `GET <编辑器源>/api/docservice/healthz`；
+  - 返回 `mode: 'editor'`。
+- **`index.mjs`**：加出 `createProjectClient`。
+
+### J.4 真实执行器（`server/prerender-executor.mjs`，新；以附件第 1～3 节为准）
+
+```js
+createPrerenderExecutor({ pipeline, projects, prepareProject, log }) → { plan, render, isIdle }
+```
+
+- `plan(planTask)`：`projects.get` 取项目；取不到时抛 `{ code: 'no-snapshot', retryable: true }`。然后 `pipeline.planForQueue(prepareProject(json))`，组出 PlanContext（附件第 2 节），`streams: []`。
+- `render(task)`：只接快照任务，共享档调 `renderCardSnapshotRange`，本地档调 `renderSceneSnapshotRange`；对不上时抛 `plan-mismatch`，不可重试。流任务一律抛 `{ code: 'stream-not-supported', retryable: false }`：M5b 的切分不产流任务，这里只是兜底。
+- `isIdle()`：附件第 5 节的判据。流在忙、后台让路中、有活的 preload 代际没到 `ready` / `error` / `cancelled`，任一成立就不闲。
+
+**`FramePipeline` 新增的方法**：
+- `planForQueue`；
+- `renderCardSnapshotRange`：给 `fillCardControls` 加一个可选的 `{ range, onBatch }` 参数；
+- `renderSceneSnapshotRange`；
+- `'queue'` lane 与 `runQueueTask`。
+
+没有调用这些方法时，现有路径逐字节不变。
+
+### J.5 队列模式的预渲染进程（`server/vite-plugin-frames.ts`、`server/render-project.mjs`）
+
+**开关**：`PROMPTCUT_QUEUE_NODE=1`，缺省关。关着时行为与现在完全一样。
+
+**开着、并且 `resolveDocservice` 不是 `offline` 时**：
+- **起本机节点**：`createLocalNode`：
+  - `profile: 'pc'`；
+  - `envFingerprint` 在报到前借一次流预渲染间来探；
+  - `codeVersions: [frameCode(root)]`；
+  - `capabilities: { userCards: true, graphCards: false }`；
+  - `maxConcurrent: 1`。
+  - 它接上 J.4 的执行器，以及 C6.4 的 `createAssetSink({ pipeline, client, content })`。
+- **接管 `/api/frames/preload`**：原来的会话登记、就绪索引的订阅照旧，额外做：
+  1. `prepareProject(镜像里的项目)`，算 `digest`；
+  2. `project.announce` 拿到 `projectRev`；
+  3. `putSnapshot`；
+  4. 以发布方身份发布 `plan:<projectId>@<projectRev>`，`requires: { codeVersion, envFingerprint }`；
+  5. **不再**跑原来后台那一趟的快照部分；锚帧、流、整场景照旧由 preload 产。
+- **收到 `task.done`**：`plan` 的，什么都不做；细任务的，经 C6.2 的 `applyResult` 拉取并发布。本机节点自己产的，本机已经有了，`applyResult` 按「已有跳过」处理。
+- **中途连不上文档服务**：退回原来的 preload 后台那一趟，已经排进去的任务作废。
+- **`projectId`**：取项目 JSON 里稳定的项目 id。没有的话，取镜像的会话键，并在报告里写明用了哪个字段。
+
+**`renderProject`** 从 `vite-plugin-frames.ts` 原样搬到 `server/render-project.mjs`，`.ts` 里转出。
+
+### J.6 远端节点的素材回退（`server/asset-client.ts`）
+
+照附件第 4 节：`setMediaFallbackBases`；`assetProxyPlugin` 对按哈希寻址的素材，主源 404 时改走回退地址。回退地址由节点从 `service.endpoints` 里取，排除自己。
+
+### J.7 测试（Verification）
+
+**`server/test/project-snapshot.test.mjs`**（真文档服务，端口 0，memory 或临时目录存储）：
+
+| 编号 | 内容 |
+|---|---|
+| J1 | 分片上传后，`get` 按序收到全部分片与 `end`，拼起来与原文逐字节相同；乱序上传、重传同一片，结果相同 |
+| J2 | 摘要不符回 `digest-mismatch`，已收分片丢弃；没 `announce` 过的版本回 `unknown-rev` |
+| J3 | 重启（文件存储）后仍能取回；取不存在的版本回 `missing` |
+| J4 | `createProjectClient`：`announce`、`putSnapshot`、`get` 往返，并发两份不串；超时与断线的语义与 `content-client` 相同 |
+
+**`server/test/queue-node-wiring.test.mjs`**：
+
+| 编号 | 内容 |
+|---|---|
+| J5 | `local-node` 用 C6.2 的 sink：`put` 路径完成时，`task.done` 带上清单（`frames` 等字段）；去重路径完成时带 `resultFor` 的清单；sink 收到的 `ref` 有 `input` 与 `requires` |
+| J6 | `split.mjs`：快照任务带 `input.canvasHeavy`；`planTaskOf` 写入 `requires.codeVersion` 与 `requires.envFingerprint` |
+| J7 | `resolveDocservice`：设了 `PROMPTCUT_EDITOR_URL`、编辑器的健康检查通时回 `mode: 'editor'`；顺序符合 J.3 |
+
+**`server/test/prerender-executor.test.mjs`**（假预渲染间，照附件第 7 节）：
+
+| 编号 | 内容 |
+|---|---|
+| J8 | `plan`：`entryKey` 等于 `pipeline.entry()` 对同一份 JSON 算出的键；补了 `cardId`；不可缓存的共享档卡被去掉；`streams` 为空 |
+| J9 | `render`（共享档）：执行器按 60 帧一段渲整张卡，与 `fillCardControls` 一次渲完整张卡相比，假 `bakeFrames` 的调用记录与落盘文件相同 |
+| J10 | `render`（本地档）同理；对不上时抛 `plan-mismatch`；中途中止；进度回调 |
+| J11 | 不传范围参数时，`fillCardControls` 的行为不变（既有 L 系列加一条对照） |
+
+**探针 `scripts/probes/queue-mode-probe.mjs`（新）**：用 Chrome 做端到端。
+- 在一个空帧库上，队列模式下 preload 探针项目；另一个空帧库用普通模式；
+- 比较两边的快照文件与 `index.json`（附件第 0 节第 1 条）。
+
+输出一行 JSON：`{ ok, tasks, done, identical, differentFrames: [...], fails }`。有差异时 `ok` 仍为真、`identical: false`，差异列出来，由主 Agent 判断是不是 preload 本身三写造成的，是就登记为遗留，不算失败。
+
+### J.8 文件归属
+
+| 子分支 | 文件 |
+|---|---|
+| `claude/rq-m5b-svc` | `server/docservice/modules/project.mjs`、`server/docservice/store/index.mjs`、`server/render-node/project-client.mjs`（新）、`server/render-node/endpoint.mjs`、`server/render-node/index.mjs` |
+| `claude/rq-m5b-node` | `server/render-node/local-node.mjs`、`server/render-node/split.mjs` |
+| `claude/rq-m5b-pipeline` | `server/prerender-executor.mjs`（新）、`server/render-project.mjs`（新）、`server/frame-pipeline.mjs`、`server/vite-plugin-frames.ts`、`server/asset-client.ts`、`scripts/probes/queue-mode-probe.mjs`（新） |
+| `claude/rq-m5b-tests` | J.7 的三个测试文件（新），需要的 `server/test/fake-*.mjs` |
+
+### J.9 验收（M5b 整体）
+
+- G0 通用门槛。
+- **G0-R**：队列开关**关、开**各跑一遍：
+  - `verify-determinism` 1800/1800；
+  - `verify-unified-frames` PASS；
+  - 与 main 的导出逐像素 0 差异；
+  - `ready-index-probe`、`stream-produce-probe`、`preview-fallback-probe` 全部退出码 0。
+- J.7 全过；I 节全过；`queue-mode-probe` 退出码 0。
+- **任务书第 6 节的 E 用例在 M5b 的口径**：
+  - E1：两个本机节点加笔记本抢同一批快照任务，每个恰好完成一次，产物在素材服务里；
+  - E2：认领中途断网，宽限期后被接手（M5a 已在网络层验过，本阶段用真实任务再测一次）；
+  - E3：文档服务重启后重新发布，已在素材服务里的直接去重完成；
+  - E4：连续改 50 次，版本号与文档服务一致，最后一版全部就绪；
+  - E6：两种指纹的细任务只被同指纹的节点认领。两台真机的指纹相同，W0 实测过，所以 E6 用注入的第二种指纹在本机模拟，I 节的 K 系列已经覆盖。
+- **W4**：笔记本以 `PROMPTCUT_QUEUE_NODE=1` 跑预渲染进程，只当节点。主 PC 的编辑器在队列模式下打开示例项目，断言：
+  - 笔记本认领到至少一个快照任务，并经 `project.snapshot.get` 拿到了项目；
+  - 它的产物推进了主 PC 的素材服务，主 PC 拉回后就绪；
+  - 没有任务被重复完成。
