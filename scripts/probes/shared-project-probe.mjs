@@ -2,9 +2,10 @@
  * 共享项目接入的探针（SP，契约 `docs/plan/shared-project-contract.md` 第 6 节、第 7 节 SP1 / SP7）。
  * 结果最后一行打一行 JSON；`ok` 为假时退出码 1，连不上或参数不对退出码 2。只用 Node 内置模块与仓库里的服务端模块。
  *
- * 本分支（`claude/sp-hosting`）负责 `--mode internet` 的 creator / member、`--role migrate-check` 与协调口；
- * `--mode lan` 由 `claude/sp-routing` 负责，集成时并进来。互联网模式的新建与查找这里直接调共享端点
- * （`server/auth/client.mjs` 的 `createSharedProject` / `lookupProject`）；`server/auth/route.mjs` 合入后改走它。
+ * `--mode internet` 的 creator / member、`--role migrate-check`、`--role coord` 在本文件；`--mode lan` 的全部逻辑在
+ * `shared-project-lan.mjs`（本文件只分派，用法见那个文件头）。互联网模式新建走 `server/auth/route.mjs` 的
+ * `createSharedProject({ where: 'hosted' })`。协调口是 `probe-coord.mjs`，与 `render-host-probe.mjs` 跨机模式同一个形状
+ * （同一个口可以同时给两个探针用）。
  *
  * ## --mode internet --role creator --hosted <url>
  *
@@ -35,8 +36,10 @@
  *
  * ## --role coord --port <n> [--host 127.0.0.1]
  *
- *   单独起协调口（creator 用 `--coord <url>` 指过来）。协调口是个小 KV：`PUT /kv/<键>`（JSON）、
- *   `GET /kv/<键>?wait=<毫秒>`（没有就等，等不到 404）。与 W5 探针的 `--coord` 同形：各角色只经它交换配置与完成信号。
+ *   单独起协调口（creator 用 `--coord <url>` 指过来）。形状见 `probe-coord.mjs`：`PUT /kv/<键>`（JSON）、
+ *   `GET /kv/<键>?wait=<毫秒>`（没有就等，等不到 404）。`render-host-probe.mjs` 跨机模式的协调口也答这两条，
+ *   所以也可以直接用它的口（`--coord http://<creator IP>:5409`）。键：`member-config`、`member-ready`、`creator-done`、
+ *   `member-result`（互联网模式），`lan-member`、`lan-member-result`（局域网模式）。
  *   成员配置里有项目口令（探针自建的一次性项目），协调口只该绑在可信的网段上。
  *
  * ## --role migrate-check --from <url> --to <url>
@@ -44,24 +47,29 @@
  *   node scripts/probes/shared-project-probe.mjs --role migrate-check --from http://127.0.0.1:8790 --to http://127.0.0.1:8794
  *        [--from-asset <url>] [--to-asset <url>] [--sample 100]
  *
- *   `--from` / `--to` 是两份托管组合的文档服务地址（http 或 ws）。素材服务地址不给时从各自的 `service.endpoints` 取
- *   （顺带核对新实例已向文档服务登记了自己的地址）。管理接口（`GET /admin/inventory`、`/admin/blob/<ns>/<hash>`）
- *   带环境变量 `PROMPTCUT_CLUSTER_TOKEN`（管理用途；没设时只能在服务器本机回环上跑）。逐项核对（`hosting-migration.md` 第 6、7 步）：
+ *   `--from` / `--to` 是两份托管组合的文档服务 http 地址（契约第 11 节裁定；ws 也收）。素材服务地址不给时从各自的
+ *   `service.endpoints` 取（顺带核对新实例已向文档服务登记了自己的地址）。项目数经管理接口（`GET /admin/inventory`、
+ *   `/admin/blob/<ns>/<hash>`）列出，带集群令牌（管理用途）：先取环境变量 `PROMPTCUT_CLUSTER_TOKEN`，没有再读
+ *   `<数据目录>/secrets/cluster-token`（数据目录取 `--data-dir`，否则环境变量 `PROMPTCUT_DATA_DIR`）；都没有时只能在
+ *   服务器本机回环上跑。输出的 `admin` 是 `token` 或 `loopback`，`tokenFrom` 是 `env` / `file` / null。逐项核对（`hosting-migration.md` 第 6、7 步）：
  *   两边 `/healthz`；共享项目数与各项目的名字、模式；每个空间里每个项目的 `projectRev`、项目快照数、内容库条目数；
  *   三个命名空间的哈希集合与字节数；再从新实例按哈希抽取至多 `--sample` 个（缺省 100，不足就全部），重算 sha256，
  *   相符比例必须 100%。全部通过才 `ok: true`。
  *
  * 凭证（口令、K、票据）不打到输出里。
  */
-import http from 'node:http';
+import fs from 'node:fs';
 import os from 'node:os';
+import path from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
+import { startCoordServer, coordClient } from './probe-coord.mjs';
 
 const USAGE = `用法：
   node scripts/probes/shared-project-probe.mjs --mode internet --role creator --hosted <url> (--coord-port <n> | --coord <url>) [--tasks 6]
   node scripts/probes/shared-project-probe.mjs --mode internet --role member --hosted <url> --coord <url> [--expect-tasks 1]
   node scripts/probes/shared-project-probe.mjs --role coord --port <n> [--host 127.0.0.1]
-  node scripts/probes/shared-project-probe.mjs --role migrate-check --from <url> --to <url> [--sample 100]`;
+  node scripts/probes/shared-project-probe.mjs --role migrate-check --from <url> --to <url> [--data-dir <目录>] [--sample 100]
+  node scripts/probes/shared-project-probe.mjs --mode lan --role creator|member ...（见 shared-project-lan.mjs）`;
 
 const argv = process.argv.slice(2);
 const arg = (name, fallback) => (argv.includes(name) ? argv[argv.indexOf(name) + 1] : fallback);
@@ -188,72 +196,6 @@ function finish(result, code) {
   setTimeout(() => process.exit(code), 10_000).unref();
 }
 
-/* ------------------------------------------------------------------ 协调口 */
-
-function startCoordServer(port, host) {
-  const kv = new Map();
-  const waiters = new Map();
-  const server = http.createServer(async (req, res) => {
-    const url = new URL(req.url ?? '/', 'http://coord.local');
-    const send = (status, body) => {
-      res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
-      res.end(JSON.stringify(body));
-    };
-    if (url.pathname === '/healthz') return send(200, { ok: true, keys: [...kv.keys()] });
-    const m = /^\/kv\/([A-Za-z0-9._-]{1,64})$/.exec(url.pathname);
-    if (!m) return send(404, { ok: false });
-    const key = m[1];
-    if (req.method === 'PUT') {
-      const chunks = [];
-      for await (const c of req) chunks.push(c);
-      let value;
-      try { value = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { return send(400, { ok: false, error: 'bad-json' }); }
-      kv.set(key, value);
-      for (const w of waiters.get(key) ?? []) w();
-      waiters.delete(key);
-      return send(200, { ok: true });
-    }
-    if (req.method === 'GET') {
-      const wait = Math.min(Number(url.searchParams.get('wait') ?? 0) || 0, 60_000);
-      if (!kv.has(key) && wait > 0) {
-        await new Promise((resolve) => {
-          const t = setTimeout(resolve, wait);
-          const list = waiters.get(key) ?? [];
-          list.push(() => { clearTimeout(t); resolve(); });
-          waiters.set(key, list);
-        });
-      }
-      return kv.has(key) ? send(200, { ok: true, value: kv.get(key) }) : send(404, { ok: false, error: 'missing' });
-    }
-    return send(405, { ok: false });
-  });
-  return new Promise((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(port, host, () => resolve(server));
-  });
-}
-
-function coordClient(base) {
-  const root = base.replace(/\/+$/, '');
-  return {
-    async put(key, value) {
-      const res = await fetch(`${root}/kv/${key}`, { method: 'PUT', body: JSON.stringify(value), signal: AbortSignal.timeout(15_000) });
-      if (!res.ok) throw new Error(`协调口 PUT ${key} 回 ${res.status}`);
-    },
-    /** 等到这个键出现，或者到 deadline */
-    async take(key, deadline) {
-      while (Date.now() < deadline) {
-        const wait = Math.max(1, Math.min(30_000, deadline - Date.now()));
-        try {
-          const res = await fetch(`${root}/kv/${key}?wait=${wait}`, { signal: AbortSignal.timeout(wait + 10_000) });
-          if (res.ok) return (await res.json()).value;
-        } catch { await sleep(500); }
-      }
-      return null;
-    },
-  };
-}
-
 /* ------------------------------------------------------------------ 渲染节点的小件 */
 
 /** 假细任务（与 `render-queue-e2e.mjs` 用的相同形状，契约 A.4） */
@@ -319,8 +261,8 @@ async function runCreator() {
   const urls = docUrls(hosted);
   const deadline = started + TIMEOUT_MS;
 
-  const [{ createSharedProject, buildAuthProtocols }, { createWsEndpoint }, { watchServiceEndpoints }, { createLocalNode }, { createTicketSource }, { createAssetClient }] = await Promise.all([
-    mod('server/auth/client.mjs'), mod('server/render-node/ws-transport.mjs'), mod('server/render-node/endpoint.mjs'),
+  const [{ createSharedProject }, { buildAuthProtocols }, { createWsEndpoint }, { watchServiceEndpoints }, { createLocalNode }, { createTicketSource }, { createAssetClient }] = await Promise.all([
+    mod('server/auth/route.mjs'), mod('server/auth/client.mjs'), mod('server/render-node/ws-transport.mjs'), mod('server/render-node/endpoint.mjs'),
     mod('server/render-node/local-node.mjs'), mod('server/auth/ticket-source.mjs'), mod('server/asset-store/client.mjs'),
   ]);
 
@@ -333,8 +275,7 @@ async function runCreator() {
   let coordServer = null;
   const done = async (code) => {
     await closeAll(eps);
-    coordServer?.closeAllConnections?.();
-    coordServer?.close();
+    await coordServer?.close();
     finish(result, code);
   };
 
@@ -343,12 +284,12 @@ async function runCreator() {
   if (coordPort) {
     const host = arg('--coord-host', '127.0.0.1');
     try {
-      coordServer = await startCoordServer(Number(coordPort), host);
+      coordServer = await startCoordServer({ port: Number(coordPort), host });
     } catch (err) {
       fails.push(`起协调口失败：${err?.code ?? err?.message}`);
       return done(2);
     }
-    coordUrl = `http://${host === '0.0.0.0' ? '127.0.0.1' : host}:${coordServer.address().port}`;
+    coordUrl = coordServer.url;
   }
   result.coord = coordUrl;
   const coord = coordClient(coordUrl);
@@ -358,7 +299,7 @@ async function runCreator() {
   const projectPassword = randomBytes(12).toString('base64url');
   let created;
   try {
-    created = await createSharedProject({ base: urls.http, name, mode: 'free', creator, password: projectPassword });
+    created = await createSharedProject({ where: 'hosted', hostedUrl: urls.http, name, mode: 'free', creator, password: projectPassword });
   } catch (err) {
     fails.push(`建项目失败：${err?.status ?? ''} ${err?.reason ?? err?.message}`);
     return done(err?.status ? 1 : 2);
@@ -634,18 +575,35 @@ async function runMember() {
 
 /* ================================================================== migrate-check */
 
+/**
+ * 管理用途的集群令牌（契约第 11 节裁定）：环境变量 `PROMPTCUT_CLUSTER_TOKEN` → `<数据目录>/secrets/cluster-token`
+ * （`--data-dir` 或环境变量 `PROMPTCUT_DATA_DIR`）。令牌本身不打到输出里。
+ */
+function adminToken() {
+  const env = (process.env.PROMPTCUT_CLUSTER_TOKEN || '').trim();
+  if (env) return { token: env, from: 'env' };
+  const dir = arg('--data-dir', null) || process.env.PROMPTCUT_DATA_DIR || null;
+  if (dir) {
+    try {
+      const t = fs.readFileSync(path.join(path.resolve(dir), 'secrets', 'cluster-token'), 'utf8').trim();
+      if (t) return { token: t, from: 'file' };
+    } catch { /* 没有这个文件 */ }
+  }
+  return { token: null, from: null };
+}
+
 async function runMigrateCheck() {
   const from = arg('--from', null);
   const to = arg('--to', null);
   if (!from || !to) usage('migrate-check 要 --from 与 --to');
   const sample = intArg('--sample', 100, 1);
-  const token = process.env.PROMPTCUT_CLUSTER_TOKEN || null;
+  const { token, from: tokenFrom } = adminToken();
   const headers = token ? { Authorization: `Bearer ${token}` } : {};
   const [{ createWsEndpoint }, { watchServiceEndpoints }] = await Promise.all([
     mod('server/render-node/ws-transport.mjs'), mod('server/render-node/endpoint.mjs'),
   ]);
   const result = {
-    ok: false, role: 'migrate-check', from: null, to: null, admin: token ? 'token' : 'loopback',
+    ok: false, role: 'migrate-check', from: null, to: null, admin: token ? 'token' : 'loopback', tokenFrom,
     healthz: {}, assetUrls: {}, sharedProjects: null, spaces: null, assets: {}, sample: null,
   };
   const eps = [];
@@ -743,9 +701,9 @@ async function runMigrateCheck() {
 async function runCoord() {
   const port = intArg('--port', 0, 0);
   const host = arg('--host', '127.0.0.1');
-  const server = await startCoordServer(port, host);
-  log('coord.listen', { url: `http://${host}:${server.address().port}`, host: os.hostname() });
-  for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => server.close(() => process.exit(0)));
+  const coord = await startCoordServer({ port, host });
+  log('coord.listen', { url: `http://${host}:${coord.port}`, host: os.hostname() });
+  for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => { void coord.close().then(() => { process.exitCode = 0; }); });
 }
 
 /* ------------------------------------------------------------------ 主流程 */
@@ -754,7 +712,5 @@ if (ROLE === 'migrate-check') await runMigrateCheck();
 else if (ROLE === 'coord') await runCoord();
 else if (MODE === 'internet' && ROLE === 'creator') await runCreator();
 else if (MODE === 'internet' && ROLE === 'member') await runMember();
-else if (MODE === 'lan') {
-  console.error('--mode lan 由 claude/sp-routing 实现，集成时并进本文件');
-  process.exit(2);
-} else usage(argv.length ? '参数不对' : undefined);
+else if (MODE === 'lan') await (await import('./shared-project-lan.mjs')).runLan(ROLE, argv);
+else usage(argv.length ? '参数不对' : undefined);

@@ -46,6 +46,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
+import { coordClient as kvClient } from './probe-coord.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const mod = (rel) => import(new URL(`../../${rel}`, import.meta.url));
@@ -77,23 +78,8 @@ const writeJson = async (file, value) => {
   await fs.rename(tmp, file);
 };
 
-/** 协调口客户端（`PUT /kv/<键>`、`GET /kv/<键>?wait=<毫秒>`，同互联网模式的 `--role coord`） */
-function coordClient(base) {
-  if (!base) return null;
-  const root = base.replace(/\/+$/, '');
-  return {
-    async put(key, value) {
-      const r = await fetch(`${root}/kv/${encodeURIComponent(key)}`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(value) });
-      if (!r.ok) throw new Error(`协调口 PUT ${key} 回 ${r.status}`);
-    },
-    async get(key, waitMs = 0) {
-      const r = await fetch(`${root}/kv/${encodeURIComponent(key)}?wait=${waitMs}`, { signal: AbortSignal.timeout(waitMs + 10_000) });
-      if (r.status === 404) return null;
-      if (!r.ok) throw new Error(`协调口 GET ${key} 回 ${r.status}`);
-      return r.json();
-    },
-  };
-}
+/** 协调口客户端（`probe-coord.mjs`：`PUT /kv/<键>`、`GET /kv/<键>?wait=<毫秒>`，同互联网模式与 render-host-probe 的协调口）；没给地址回 null */
+const coordClient = (base) => (base ? kvClient(base) : null);
 
 /** 等 state 文件或协调口里的键出现 */
 async function waitShared({ state, coord, file, key, ms }) {
@@ -204,10 +190,15 @@ const portFree = (port, host) => new Promise((resolve) => {
   s.listen(port, host, () => s.close(() => resolve(true)));
 });
 
+/**
+ * 打结果行、定退出码，让进程自然退出（同 `shared-project-probe.mjs` 的 `finish`）：Windows 上有句柄还在关闭中就
+ * `process.exit`，libuv 会断言崩掉（0xC0000409）。10 s 后还有东西挂着才强制退出。
+ */
 function finish(result, code) {
   result.ok = code === 0;
   process.exitCode = code;
-  process.stdout.write(`${JSON.stringify(result)}\n`, () => setTimeout(() => process.exit(code), 50).unref());
+  process.stdout.write(`${JSON.stringify(result)}\n`);
+  setTimeout(() => process.exit(code), 10_000).unref();
 }
 
 /* ------------------------------------------------------------------ creator */
@@ -388,7 +379,7 @@ async function runMember(argv) {
   expect = Math.max(1, expect ?? 1);
   result.name = name;
 
-  const [{ discoverLan }, { findSharedProject, pickRoute }, { buildAuthProtocols }, { createWsEndpoint }, { createLocalNode }, { createArtifactSink }, { createSleepExecutor }] = await Promise.all([
+  const [{ discoverLan }, { findSharedProject, pickRoute, wsBaseOf }, { buildAuthProtocols }, { createWsEndpoint }, { createLocalNode }, { createArtifactSink }, { createSleepExecutor }] = await Promise.all([
     mod('server/lan/discovery.mjs'), mod('server/auth/route.mjs'), mod('server/auth/client.mjs'), mod('server/render-node/ws-transport.mjs'),
     mod('server/render-node/local-node.mjs'), mod('server/test/fake-artifact-sink.mjs'), mod('server/test/fake-ws-kit.mjs'),
   ]);
@@ -408,7 +399,9 @@ async function runMember(argv) {
     if (!check(cand && cand.where === 'lan', '发现到局域网候选', found)) throw STOP;
     check(discoveryMs <= 5000, `发现耗时 ≤ 5 s（${discoveryMs} ms）`);
     result.candidate = { base: cand.base, projectId: cand.projectId, hostDeviceName: cand.hostDeviceName ?? null, asset: cand.asset ?? null };
-    const u = new URL(cand.base);
+    // 候选的 base 是 http 形（契约第 11 节裁定），连 WebSocket 用 ws 形
+    const wsUrl = wsBaseOf(cand.base);
+    const u = new URL(wsUrl);
     const assetBase = cand.asset ?? `http://${u.host}/api/asset`;
 
     // 3. 管理接口从局域网来源连不上
@@ -419,7 +412,7 @@ async function runMember(argv) {
 
     // 4. 进入、快照、素材
     const hs0 = Date.now();
-    ws = openWs(cand.base, await buildAuthProtocols({ base: cand.base, projectId: cand.projectId, username: 'lan-member', deviceId, deviceName, as: 'member', password, role: 'page' }));
+    ws = openWs(wsUrl, await buildAuthProtocols({ base: cand.base, projectId: cand.projectId, username: 'lan-member', deviceId, deviceName, as: 'member', password, role: 'page' }));
     await ws.opened;
     result.handshake = { ok: true, ms: Date.now() - hs0 };
     const st = await ws.request({ type: 'project.open', projectId: cand.projectId });
@@ -451,7 +444,7 @@ async function runMember(argv) {
     // 5. 认领并完成
     const counts = { claims: 0, completed: 0, dedup: 0, failed: 0 };
     const ep = createWsEndpoint({
-      url: cand.base,
+      url: wsUrl,
       protocols: () => buildAuthProtocols({ base: cand.base, projectId: cand.projectId, username: 'lan-member', deviceId, deviceName, as: 'member', password, role: 'render' }),
     });
     eps.push(ep);
