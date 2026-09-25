@@ -13,6 +13,25 @@
  *            （契约 docs/plan/render-queue-contract.md G.5）。令牌的生成方法见 server/docservice/main.mjs 文件头
  *   status   PM2 里的进程状态、/healthz、UFW 规则
  *
+ * 托管组合（SP，契约 docs/plan/shared-project-contract.md 第 1、2 节；文件清单见 server/hosted/files.mjs 与契约第 10 节）：
+ *   deploy-hosted [--instance drill] [--save] [--replace-docservice] [--write-token]
+ *            在本机按清单拼暂存目录，整个拷到远端 <部署目录>/.incoming 再换成 <部署目录>/app；
+ *            在部署目录里写 PM2 配置 <部署目录>/pm2.config.cjs（仓库外，不含任何秘密），pm2 startOrReload，
+ *            最后查两个端口的 /healthz。**不改防火墙**：UFW 放行由主会话在服务器上手工加。
+ *            - 缺省实例：app promptcut-hosted，端口 8787 / 8788，部署目录 /opt/promptcut-hosted，
+ *              数据目录 /var/lib/promptcut/hosted，max_memory_restart 700M；
+ *            - --instance drill（M8 迁移演练）：app promptcut-drill，端口 8777 / 8778，部署目录 /opt/promptcut-drill，
+ *              数据目录 /var/lib/promptcut/drill，max_memory_restart 400M；
+ *            - 数据目录与 secrets/ 不存在就建（0700）；已有的不动。集群令牌放在 <数据目录>/secrets/cluster-token（0600），
+ *              随数据目录迁移，不进 PM2 配置。--write-token：把本机环境变量 PROMPTCUT_CLUSTER_TOKEN 经 ssh 标准输入写进这个文件；
+ *            - 旧的独立文档服务（app promptcut-docservice）还在 PM2 里时拒绝部署缺省实例（退出码 3），
+ *              加 --replace-docservice 才先 pm2 delete 它（它的部署目录与数据不动）；
+ *            - --save：成功后 pm2 save。
+ *            环境变量：PROMPTCUT_HOSTED_DIR、PROMPTCUT_HOSTED_DATA 覆盖部署目录与数据目录；
+ *            PROMPTCUT_PUBLIC_HOST 是写进公网地址的主机名，缺省取 PROMPTCUT_REMOTE 里 @ 后面的部分。
+ *   status-hosted [--instance drill]   PM2 里这个 app 的状态、两个端口的 /healthz、数据目录占用、UFW 里这两个端口的规则
+ *   stage-hosted <本机目录>   只在本机按清单拼暂存目录（不连远端），用来核对清单
+ *
  * 其它环境变量：PROMPTCUT_REMOTE_DIR（远端部署目录，缺省 /opt/promptcut-docservice）、
  * PROMPTCUT_DOCSERVICE_PORT（缺省 8787）。远端需要 root，或能免密 sudo 的用户（install / deploy 里的命令按 root 写）。
  * 具体主机地址与私钥位置是本机信息，写在 docs/local.md，不进仓库。
@@ -20,10 +39,17 @@
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import fs from 'node:fs';
+import os from 'node:os';
 import { checkTokenFormat } from '../../server/docservice/auth.mjs';
+import { stageHostedFiles } from '../../server/hosted/files.mjs';
+import { hostedInstance, hostedPm2Config, hostedDeployScript, shq } from '../../server/hosted/deploy.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const target = process.env.PROMPTCUT_REMOTE;
+const argv = process.argv.slice(3);
+const flag = (name) => argv.includes(name);
+const option = (name, fallback) => (argv.includes(name) ? argv[argv.indexOf(name) + 1] : fallback);
 const key = process.env.PROMPTCUT_REMOTE_KEY;
 const dir = process.env.PROMPTCUT_REMOTE_DIR ?? '/opt/promptcut-docservice';
 const port = Number(process.env.PROMPTCUT_DOCSERVICE_PORT ?? 8787);
@@ -159,12 +185,78 @@ function deploy() {
   return sshScript(deployScript(token));
 }
 
+/* ------------------------------------------------------------------ *
+ * 托管组合（SP）：参数与远端脚本在 server/hosted/deploy.mjs
+ * ------------------------------------------------------------------ */
+
+function deployHosted() {
+  const inst = hostedInstance(option('--instance', 'main'));
+  const publicHost = process.env.PROMPTCUT_PUBLIC_HOST || String(target).split('@').pop();
+  let token = null;
+  if (flag('--write-token')) {
+    token = process.env.PROMPTCUT_CLUSTER_TOKEN ?? '';
+    if (!checkTokenFormat(token)) {
+      console.error('--write-token 要本机环境变量 PROMPTCUT_CLUSTER_TOKEN（32～256 个 base64url 字符）');
+      return 1;
+    }
+  }
+  const p = probe();
+  if (!p.ready) {
+    console.log(JSON.stringify(p, null, 2));
+    console.error('远端环境没就绪，先跑 install');
+    return 1;
+  }
+  const stage = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-hosted-stage-'));
+  try {
+    const files = stageHostedFiles(ROOT, path.join(stage, '.incoming'));
+    const prep = ssh(`mkdir -p ${shq(inst.dir)} && rm -rf ${shq(`${inst.dir}/.incoming`)}`);
+    if (prep.code !== 0) {
+      console.error(prep.err);
+      return 1;
+    }
+    console.log(`== scp ${files.length} 个文件 -> ${target}:${inst.dir}/.incoming（实例 ${inst.name}，app ${inst.app}）`);
+    // 相对路径 + cwd：Windows 的绝对路径带盘符冒号，scp 会把 C: 当成主机名
+    const scp = spawnSync('scp', [...baseOpts, '-r', '-q', '.incoming', `${target}:${inst.dir}/`], { cwd: stage, stdio: 'inherit', timeout: 180_000 });
+    if (scp.status !== 0) return scp.status ?? 1;
+  } finally {
+    fs.rmSync(stage, { recursive: true, force: true });
+  }
+  return sshScript(hostedDeployScript(inst, {
+    pm2Config: hostedPm2Config(inst, publicHost),
+    save: flag('--save'),
+    replaceDocservice: flag('--replace-docservice'),
+    token,
+  }));
+}
+
+function statusHosted() {
+  const inst = hostedInstance(option('--instance', 'main'));
+  const script = [
+    `pm2 describe ${shq(inst.app)} | grep -E "status|restarts|uptime|memory|script path|exec mode" || echo "${inst.app}: not in pm2"`,
+    `echo "== docservice healthz"; curl -fsS "http://127.0.0.1:${inst.docPort}/healthz"; echo`,
+    `echo "== asset healthz"; curl -fsS "http://127.0.0.1:${inst.assetPort}/healthz"; echo`,
+    `echo "== disk"; du -sh ${shq(inst.data)} 2>/dev/null || true; df -h ${shq(inst.data)} 2>/dev/null | tail -n1 || true`,
+    `echo "== ufw"; ufw status | grep -E "${inst.docPort}|${inst.assetPort}" || echo "(UFW 里没有这两个端口的规则)"`,
+  ].join('\n');
+  return sshScript(`${script}\n`, { timeout: 30_000 });
+}
+
 const STATUS = String.raw`
 pm2 jlist | node -e 'const l=JSON.parse(require("fs").readFileSync(0,"utf8")); for (const p of l) console.log(p.name, p.pm2_env.status, "pid="+p.pid, "restarts="+p.pm2_env.restart_time, "uptime="+Math.round((Date.now()-p.pm2_env.pm_uptime)/1000)+"s")'
 echo "== healthz"; curl -fsS "http://127.0.0.1:${port}/healthz"; echo
 echo "== ufw"; ufw status
 `;
 
+if (cmd === 'stage-hosted') {
+  const out = process.argv[3];
+  if (!out) {
+    console.error('用法：node scripts/remote/docservice.mjs stage-hosted <本机目录>');
+    process.exit(2);
+  }
+  const files = stageHostedFiles(ROOT, out);
+  console.log(JSON.stringify({ ok: true, dir: path.resolve(out), files: files.length }));
+  process.exit(0);
+}
 if (!target) {
   console.error('缺 PROMPTCUT_REMOTE（形如 root@1.2.3.4），用法见文件头');
   process.exit(2);
@@ -185,7 +277,13 @@ switch (cmd) {
   case 'status':
     process.exit(sshScript(STATUS, { timeout: 30_000 }));
     break;
+  case 'deploy-hosted':
+    process.exit(deployHosted());
+    break;
+  case 'status-hosted':
+    process.exit(statusHosted());
+    break;
   default:
-    console.error('命令：probe | install | deploy | status');
+    console.error('命令：probe | install | deploy | status | deploy-hosted [--instance drill] | status-hosted [--instance drill] | stage-hosted <目录>');
     process.exit(2);
 }

@@ -79,7 +79,17 @@ const KINDS = {
     const store = need().createBlobStore({ kind: 'memory', chunkSize: MEM_CHUNK });
     return { store };
   },
+  // SP（`docs/plan/shared-project-contract.md` 第 1 节）：托管组合用的分目录布局，不注入 resolveFile（按布局自己找）。
+  // 不回 `dir`：K11 里按原布局查文件路径的两条断言只对原布局成立，分目录布局的路径另在 sp-hosting 的 SPH 用例里查
+  'fs-shard'() {
+    const dir = path.join(TMP, `shard-${++seq}`);
+    fs.mkdirSync(dir, { recursive: true });
+    const store = need().createBlobStore({ kind: 'fs', dir, shard: true, hooks: { contentTypeForExt: makeHooks(dir).hooks.contentTypeForExt } });
+    return { store };
+  },
 };
+/** 用例标签 → 实现报的 `kind`（分目录布局仍是 fs 实现） */
+const kindOf = (label) => (label === 'fs-shard' ? 'fs' : label);
 
 /* ------------------------------------------------------------------ *
  * 小工具
@@ -139,7 +149,7 @@ test('K15 createBlobStore：oss 抛 not-implemented；未知 kind 抛 TypeError�
 for (const [kind, make] of Object.entries(KINDS)) {
   test(`K1 ${kind}：没见过的哈希 chunks 为 size:null、received:[]；stat、read 为 null；complete 为 unknown`, async () => {
     const { store } = make();
-    assert.equal(store.kind, kind);
+    assert.equal(store.kind, kindOf(kind));
     const h = sha256(Buffer.from(`k1-${kind}`));
     assert.deepEqual(await store.chunks(h), unknownChunks(store.chunkSize));
     assert.equal(await store.stat(h), null);
