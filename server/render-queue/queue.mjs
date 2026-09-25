@@ -18,7 +18,7 @@
  *   （形状同契约 H.3），不收单任务增量；`pc` 照旧。见 onWatch。
  * - X4 plan 就近认领：带 `requires.preferNode` 的 plan 在发布后 `PLAN_PREFER_MS` 之内只给那个节点认领，
  *   别的回 `preferred`（带 `retryInMs`）；窗口过后任何指纹符合的 pc 能认领。`host`、`browser` 认领 plan 一律回
- *   `plan-profile`。
+ *   `plan-profile`。preferNode 断开，窗口立即结束、重连不恢复（集成裁定，见 detachNode）。
  */
 import { randomUUID } from 'node:crypto';
 import { QUEUE_DEFAULTS } from './constants.mjs';
@@ -404,7 +404,13 @@ export function createRenderQueue(options = {}) {
   /** 这条连接不再代表它原来的节点：那个节点从此算断开，等宽限期 */
   function detachNode(conn) {
     const node = nodeOf(conn);
-    if (node) { node.conn = null; node.disconnectedAt = at; }
+    if (node) {
+      node.conn = null; node.disconnectedAt = at;
+      // M6c X4(集成裁定):preferNode 断开,它的独占窗口立即结束,重连也不恢复 —— 别的 pc 马上能认领这个 plan
+      for (const task of tasks.values()) {
+        if (task.kind === 'plan' && task.state === 'open' && requiredOf(task, 'preferNode') === node.nodeId) task.preferEnded = true;
+      }
+    }
     conn.nodeId = null;
     unwatch(conn);
   }
@@ -685,7 +691,8 @@ export function createRenderQueue(options = {}) {
     if (task.kind === 'plan') {
       const prefer = requiredOf(task, 'preferNode');
       const until = task.source.publishedAt + C.PLAN_PREFER_MS;
-      if (prefer !== null && prefer !== node.nodeId && at <= until) {
+      // preferNode 断开过(`preferEnded`,detachNode 里标)窗口就此结束(集成裁定)
+      if (prefer !== null && prefer !== node.nodeId && at <= until && task.preferEnded !== true) {
         return emit(conn, 'task.claim-rejected', {
           id, reason: 'preferred', state: 'open', version: task.version, preferNode: prefer, retryInMs: until - at + 1,
         }, reqId);

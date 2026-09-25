@@ -411,6 +411,17 @@ test('X4-2 窗口内别的 pc 认领 plan 回 preferred（带 retryInMs，状态
   assert.equal(h.claim('a', plan.id, 1).one('a', 'task.claimed').id, plan.id, 'preferNode 在窗口里能认领');
 });
 
+test('X4-6（集成裁定）preferNode 断开：独占窗口立即结束，别的 pc 马上能认领；重连也不恢复窗口', () => {
+  const { h, plan } = planScene();
+  h.clock.advance(1_000);
+  assert.equal(h.claim('b', plan.id, 1).one('b', 'task.claim-rejected').reason, 'preferred', '断开前：窗口在');
+  h.disconnect('a');
+  // 发布方与节点常在同一条连接；这里节点 a 单独断开，发布方 p 还在，plan 不会因为没人要被删
+  h.node('a2', 'node-A', { hello: { envFingerprint: FP } });   // 同一 nodeId 重连
+  h.clock.advance(1_000);   // 仍在原来的 5 s 窗口里
+  assert.equal(h.claim('b', plan.id, 1).one('b', 'task.claimed').id, plan.id, '断开之后窗口结束，别的 pc 能认领');
+});
+
 test('X4-3 窗口过后任何指纹符合的 pc 能认领；指纹不符的回 fingerprint-mismatch；PLAN_PREFER_MS 可覆盖', () => {
   const { h, plan } = planScene();
   h.clock.set(T0 + 5_001);
