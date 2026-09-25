@@ -619,8 +619,10 @@ export class FramePipeline {
     return { capture: this.captureCode() || undefined, cards };
   }
   async acquire(lane, project) {
-    // J.4:队列执行器的 `'queue'` lane 和后台那一趟一样给播放让路
-    if ((lane === 'background' || lane === 'queue') && (this.backgroundYielding || this.backgroundLeaseUntil > Date.now())) throw Object.assign(new Error('Background yielded to playback'), { cancelled: true });
+    // 只有后台那一趟在借预渲染间时给播放让路。`'queue'` lane 不在这里让路(M6c 集成裁定,语义 platforms.md
+    // 「手里在做的那一批做完为止」):到这里的队列任务已经认领在手,做完为止;不认领新的由本机节点的闲时门槛管
+    // (`queue-idle.mjs`)。M5b 时这里连 `'queue'` 一起抛,认领在手的任务会被当成可重试失败放回去。
+    if (lane === 'background' && (this.backgroundYielding || this.backgroundLeaseUntil > Date.now())) throw Object.assign(new Error('Background yielded to playback'), { cancelled: true });
     const previous = this.lanes.get(lane);
     clearTimeout(previous?.timer);
     if (previous) {
@@ -634,7 +636,7 @@ export class FramePipeline {
       } catch { await previous.bakery.close().catch(() => {}); this.lanes.delete(lane); }
     }
     const bakery = await this.bakery(project, lane);
-    if ((lane === 'background' || lane === 'queue') && (this.backgroundYielding || this.backgroundLeaseUntil > Date.now())) {
+    if (lane === 'background' && (this.backgroundYielding || this.backgroundLeaseUntil > Date.now())) {
       await bakery.close();
       throw Object.assign(new Error('Background yielded to playback'), { cancelled: true });
     }

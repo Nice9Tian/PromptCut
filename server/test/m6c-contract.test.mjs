@@ -126,8 +126,12 @@ test('MC-X1-filter：流任务要 capabilities.streams，streams:false 的节点
   assert.equal(task.requires.capabilities.streams, true, '夹具：流任务带 requires.capabilities.streams = true');
   const no = checkClaimable(task, nodeDescriptor({ nodeId: 'n-no', capabilities: { transcode: true, streams: false } }));
   assert.equal(no.ok, false, `streams:false（即使有 transcode）不该能认领流任务：${JSON.stringify(no)}`);
+  // 集成对账（B 类，按主会话裁定 X1 改）：「没有 streams 字段的节点回落 transcode」（m6c-contract「集成时的裁定」）。
+  // 契约 X1 原文只说「节点侧过滤照此执行」，没说没报 streams 的旧节点怎么算；原断言按「不收」写，与裁定不符。
   const missing = checkClaimable(task, nodeDescriptor({ nodeId: 'n-missing', capabilities: { transcode: true } }));
-  assert.equal(missing.ok, false, `没报 streams 的节点不该能认领流任务：${JSON.stringify(missing)}`);
+  assert.equal(missing.ok, true, `没报 streams、有 transcode 的节点按 transcode 算，能认领：${JSON.stringify(missing)}`);
+  const missingNoTranscode = checkClaimable(task, nodeDescriptor({ nodeId: 'n-missing-2', capabilities: { transcode: false } }));
+  assert.equal(missingNoTranscode.ok, false, `没报 streams、也没有 transcode 的节点不能认领：${JSON.stringify(missingNoTranscode)}`);
   const yes = checkClaimable(task, nodeDescriptor({ nodeId: 'n-yes', capabilities: { transcode: true, streams: true } }));
   assert.equal(yes.ok, true, `streams:true 的节点应能认领：${JSON.stringify(yes)}`);
 });

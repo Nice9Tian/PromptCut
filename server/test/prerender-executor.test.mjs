@@ -193,7 +193,8 @@ async function executorFor(pipeline, { json = projectJson() } = {}) {
   const executor = createPrerenderExecutor({ pipeline, projects, prepareProject, log: (...a) => logs.push(a) });
   assert.equal(typeof executor?.plan, 'function', '执行器有 plan');
   assert.equal(typeof executor?.render, 'function', '执行器有 render');
-  assert.equal(typeof executor?.isIdle, 'function', '执行器有 isIdle');
+  // M6c 集成裁定:执行器不再有 isIdle(PC 节点的闲时门槛改为 queue-idle.mjs,m6c-contract「集成时的裁定」)
+  assert.equal(executor?.isIdle, undefined, '执行器不再有 isIdle');
   return { executor, projects, prepared, prepareProject, logs };
 }
 
@@ -316,34 +317,8 @@ test('J8 plan：取不到快照时抛 { code: no-snapshot, retryable: true }，�
   assert.equal(opened.length, openedBefore, '没开预渲染间');
 });
 
-test('J8 isIdle：新管线上闲；后台让路中不闲；有活的 preload 代际没到 ready / error / cancelled 就不闲', async (t) => {
-  t.after(cleanupRoots);
-  const B = newPipeline(await tmpRoot());
-  t.after(() => B.close());
-  const { executor } = await executorFor(B);
-  assert.equal(executor.isIdle(), true, '新管线：闲');
-
-  B.backgroundLeaseUntil = Date.now() + 60_000;
-  assert.equal(executor.isIdle(), false, '后台让路中：不闲');
-  B.backgroundLeaseUntil = 0;
-  assert.equal(executor.isIdle(), true);
-
-  const entry = await B.entry(projectJson());
-  const controller = new AbortController();
-  B.generations.set('session:page', { key: entry.key, controller, seenAt: Date.now() });
-  for (const status of ['queued', 'html', 'mov', 'video']) {
-    entry.status = status;
-    assert.equal(executor.isIdle(), false, `preload 代际在 ${status}：不闲`);
-  }
-  for (const status of ['ready', 'error', 'cancelled']) {
-    entry.status = status;
-    assert.equal(executor.isIdle(), true, `preload 代际已 ${status}：闲`);
-  }
-  entry.status = 'html';
-  controller.abort();
-  assert.equal(executor.isIdle(), true, '已经中止的代际不算活的');
-  B.generations.clear();
-});
+// J8(执行器的 isIdle)在 M6c 作废:执行器不再有 isIdle,本机队列节点的闲时门槛改为 `queue-idle.mjs`
+// (契约 m6c-contract X5 与「集成时的裁定」),判据由 `m6c-queue-impl.test.mjs` 的 X5-1～X5-3 覆盖。
 
 /* ================================================================== J9 */
 

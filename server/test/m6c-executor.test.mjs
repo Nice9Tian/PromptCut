@@ -92,9 +92,9 @@ test('MC-X5-idle：preload 没到 ready、500 ms 内没有交互时，执行器�
   const pipeline = await makePipeline(playhead);
   const executor = createPrerenderExecutor({ pipeline, projects: noProjects });
   simulatePreloadRunning(pipeline);
-  assert.equal(queueIdle(executor, Date.now()), true, 'preload 在跑、没有交互：应算闲');
+  assert.equal(queueIdle(pipeline, Date.now()), true, 'preload 在跑、没有交互：应算闲');
   playhead.stop(Date.now() - 2000);
-  assert.equal(queueIdle(executor, Date.now()), true, '2 秒前停下的播放头：应算闲');
+  assert.equal(queueIdle(pipeline, Date.now()), true, '2 秒前停下的播放头：应算闲');
 });
 
 test('MC-X5-drag：100 ms 前拖过不闲；拖动停下 500 ms 之后又闲', async (t) => {
@@ -104,9 +104,9 @@ test('MC-X5-drag：100 ms 前拖过不闲；拖动停下 500 ms 之后又闲', a
   const executor = createPrerenderExecutor({ pipeline, projects: noProjects });
   playhead.drag(Date.now());
   t.mock.timers.tick(100);
-  assert.equal(queueIdle(executor, Date.now()), false, '100 ms 前拖过：不闲');
+  assert.equal(queueIdle(pipeline, Date.now()), false, '100 ms 前拖过：不闲');
   t.mock.timers.tick(500);
-  assert.equal(queueIdle(executor, Date.now()), true, '最后一次拖动在 600 ms 前：按契约 500 ms 应算闲');
+  assert.equal(queueIdle(pipeline, Date.now()), true, '最后一次拖动在 600 ms 前：按契约 500 ms 应算闲');
 });
 
 test('MC-X5-play：播放中不闲', async (t) => {
@@ -116,7 +116,7 @@ test('MC-X5-play：播放中不闲', async (t) => {
   const executor = createPrerenderExecutor({ pipeline, projects: noProjects });
   playhead.play(Date.now());
   t.mock.timers.tick(50);
-  assert.equal(queueIdle(executor, Date.now()), false);
+  assert.equal(queueIdle(pipeline, Date.now()), false);
 });
 
 /**
@@ -148,13 +148,13 @@ async function idleRig(t) {
   const executor = {
     plan: async () => { throw new Error('这里不切分'); },
     render: (task) => new Promise((resolve) => gates.set(task.id, resolve)),
-    isIdle: (now) => queueIdle(real, now),
+    isIdle: (now) => queueIdle(pipeline, now),
   };
   const sink = { has: async () => false, put: async () => ({ complete: true, result: {} }) };
   const node = nodeDescriptor({ nodeId: 'node-local', capabilities: { streams: false } });
   const local = createLocalNode({
     nodeId: 'node-local', node, endpoint, now: () => Date.now(), random: () => 0.5, maxConcurrent: 1,
-    isIdle: () => queueIdle(real, Date.now()), executor, sink,
+    isIdle: () => queueIdle(pipeline, Date.now()), executor, sink,
   });
   local.start();
   lb.flush();

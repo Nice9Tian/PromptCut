@@ -15,7 +15,6 @@ import { checkClaimable } from '../render-node/filter.mjs';
 import { planTaskOf, splitPlan } from '../render-node/split.mjs';
 import { hashlessMedia, localMediaGate, withLocalMedia } from '../queue-local-media.mjs';
 import { createQueueIdleGate, interactionReason, INTERACTION_QUIET_MS } from '../queue-idle.mjs';
-import { createPrerenderExecutor } from '../prerender-executor.mjs';
 import { createQueueHarness, makeTaskInput, T0 } from './fake-render-queue-env.mjs';
 import { createLoopback } from './fake-loopback-transport.mjs';
 import { createFakeExecutor, createTimerClock } from './fake-render-executor.mjs';
@@ -522,14 +521,11 @@ test('X5-1 闲时门槛：最近 500 ms 有交互帧请求不认领，满 500 ms
   assert.equal(interactionReason({ ...pipeline, closed: true }, at), 'closed');
 });
 
-test('X5-2 preload 未 ready 时门槛放行（M5b 的执行器 isIdle 在这时不放行）', () => {
+test('X5-2 preload 未 ready 时门槛放行（M5b 的执行器 isIdle 在这时不放行；集成时 isIdle 已删）', () => {
   const pipeline = fakePipeline();
-  const old = createPrerenderExecutor({ pipeline, projects: { get: async () => null } });
-  assert.equal(old.isIdle(), false, 'M5b 门槛：preload 代际还在 html，不闲');
   assert.equal(createQueueIdleGate({ pipeline }).idle(), true, 'X5：preload 没 ready 也能认领');
   // 流在忙同样不挡（执行器有空位由会话守）
   const busyStreams = fakePipeline({ _streams: { workers: new Set([1]), encoding: new Set() } });
-  assert.equal(createPrerenderExecutor({ pipeline: busyStreams, projects: { get: async () => null } }).isIdle(), false);
   assert.equal(createQueueIdleGate({ pipeline: busyStreams }).idle(), true);
 });
 

@@ -16,8 +16,9 @@
  *                    流任务(M6c X1):对回这一版的流(内容键、结果键、分段范围),交给 `renderStreamRange` 按段产出;
  *                    对不上同样抛 `plan-mismatch`;本机不能产流(开关关着、没有编码器)抛 `no-streams`(不可重试)。
  *                    回 `null`:产物在帧库 / 流库里,sink 自己读(`collectSnapshotResult` / `collectStreamResult`)。
- *   isIdle()         流在忙、后台让路中(播放 / 拖动)、有活的 preload 代际没到 ready / error / cancelled,
- *                    任一成立就不闲(J.4)。
+ *
+ * M6c 起执行器不再有 `isIdle()`(J.4 原有):PC 节点的闲时门槛改为 `queue-idle.mjs`(X5),独立渲染主机本来就
+ * 只看全局并发闸,这个判据已经没人用(集成裁定,`docs/plan/m6c-contract.md`「集成时的裁定」)。
  */
 import { resultKeyOf } from './render-node/fingerprint.mjs';
 import { snapshotTier } from './snapshot-tier.mjs';
@@ -26,9 +27,6 @@ import { snapshotTier } from './snapshot-tier.mjs';
 export const PLAN_CACHE_SIZE = 4;
 
 const fail = (code, message, retryable) => Object.assign(new Error(message), { code, retryable });
-
-/** preload 代际的这几种状态算「落定」,其余(queued / html / mov / video / partial)都算还在跑 */
-const SETTLED = new Set(['ready', 'error', 'cancelled']);
 
 /**
  * @param {object} options
@@ -161,20 +159,5 @@ export function createPrerenderExecutor({ pipeline, projects, prepareProject = p
     return null;
   }
 
-  function isIdle(now = Date.now()) {
-    if (pipeline.closed) return false;
-    const streams = pipeline._streams;
-    if (streams && ((streams.workers?.size ?? 0) > 0 || (streams.encoding?.size ?? 0) > 0)) return false;
-    // 让路:后台让路租约在期 / 正在让路 / 在播,以及页面报的播放头在播或刚拖过(`streamBusy`,轨道流用的同一个判据)
-    if (pipeline.backgroundYielding || pipeline.backgroundLeaseUntil > now || pipeline.playback?.playing) return false;
-    if (typeof pipeline.streamBusy === 'function' && pipeline.streamBusy(now)) return false;
-    for (const generation of pipeline.generations?.values?.() ?? []) {
-      if (generation?.controller?.signal?.aborted) continue;
-      const status = pipeline.entries.get(generation.key)?.status;
-      if (!SETTLED.has(status)) return false;
-    }
-    return true;
-  }
-
-  return { plan, render, isIdle, forget: () => cache.clear() };
+  return { plan, render, forget: () => cache.clear() };
 }

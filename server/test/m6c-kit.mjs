@@ -15,6 +15,7 @@ import { createRenderQueue, QUEUE_DEFAULTS } from '../render-queue/index.mjs';
 import { createRouter } from '../docservice/router.mjs';
 import { renderQueueModule } from '../docservice/modules/render-queue.mjs';
 import { makeTaskInput } from './fake-render-queue-env.mjs';
+import { createQueueIdleGate } from '../queue-idle.mjs';
 
 export const FP = 'aaaaaaaaaaaaaaaa';
 
@@ -37,7 +38,8 @@ export const ASSUMPTIONS = Object.freeze({
   'A-X5-1': '「preload 未 ready」用 FramePipeline 内部的 generations / entries 模拟：一个未中止的代际指向 status 为 "html" 的 entry',
   'A-X5-2': '「交互帧请求（拖动、播放）」用构造 FramePipeline 时注入的 playhead() 模拟：拖动 = { at: 最近一次, playing: false }，'
     + '播放 = { at, playing: true }；Date 由 mock.timers 接管，实现读 Date.now() 或用传入的 now 都一致',
-  'A-X5-3': '本机队列节点的闲时门槛仍是执行器的 isIdle(now)（vite-plugin-frames 里 isIdle: () => executor.isIdle()）',
+  'A-X5-3': '〔集成对账改〕本机队列节点的闲时门槛是 queue-idle.mjs 的 createQueueIdleGate({ pipeline, lastInteractionAt }).idle(now)'
+    + '（vite-plugin-frames 里 isIdle: () => idleGate.idle()）；执行器不再有 isIdle。用例传管线本身',
 });
 
 /* ================================================================== 任务 */
@@ -173,9 +175,12 @@ export function simulatePreloadRunning(pipeline, { owner = 'page-1', key = 'entr
   };
 }
 
-/** 〔假设 A-X5-3〕本机队列节点的闲时门槛 */
-export function queueIdle(executor, now = Date.now()) {
-  return executor.isIdle(now);
+/**
+ * 〔假设 A-X5-3〕本机队列节点的闲时门槛。集成对账:实现是 `queue-idle.mjs` 的门槛,读管线身上的交互
+ * (播放头、让路、热池在播);路由记的交互帧请求时刻在单测里没有,不给。参数是管线(原来是执行器)。
+ */
+export function queueIdle(pipeline, now = Date.now()) {
+  return createQueueIdleGate({ pipeline }).idle(now);
 }
 
 /* ================================================================== 杂项 */
