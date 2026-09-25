@@ -21,7 +21,7 @@ import { createLocalNode } from '../render-node/local-node.mjs';
 import { planTaskOf } from '../render-node/split.mjs';
 import { checkClaimable } from '../render-node/filter.mjs';
 import { createWsEndpoint } from '../render-node/ws-transport.mjs';
-import { createRenderHost, loadHostConfig, hostMaxConcurrent, HOST_MAX_CONCURRENT, HOST_CAPABILITIES, renderHostArgs as parseArgs, renderHostEnv as hostEnv } from '../render-node/host.mjs';
+import { createRenderHost, loadHostConfig, parseHostConfig, hostMaxConcurrent, HOST_MAX_CONCURRENT, HOST_CAPABILITIES, renderHostArgs as parseArgs, renderHostEnv as hostEnv } from '../render-node/host.mjs';
 import { normalizeEntry, sharedProtocols } from '../auth/shared-config.mjs';
 import { createLoopback } from './fake-loopback-transport.mjs';
 import { createTimerClock } from './fake-render-executor.mjs';
@@ -174,11 +174,15 @@ test('RH1 配置解析:单项、数组、缺字段报错;maxConcurrent 缺省 1�
   assert.deepEqual(array.entries.map((e) => e.projectId), [ENTRY.projectId, second.projectId], '数组按顺序');
   assert.equal(array.maxConcurrent, 3, '取各项里给的最大值');
 
-  assert.equal(loadHostConfig({ PROMPTCUT_SHARED_CONFIG: configFile([{ ...ENTRY, maxConcurrent: 9 }]) }).maxConcurrent, HOST_MAX_CONCURRENT, '上限 4');
+  // 集成裁定(契约第 6 节):maxConcurrent 超过 4 是配置错误,不截断;0、负数、小数、字符串也是
+  assert.equal(loadHostConfig({ PROMPTCUT_SHARED_CONFIG: configFile([{ ...ENTRY, maxConcurrent: HOST_MAX_CONCURRENT }]) }).maxConcurrent, HOST_MAX_CONCURRENT, '4 本身可以');
+  assert.throws(() => loadHostConfig({ PROMPTCUT_SHARED_CONFIG: configFile([{ ...ENTRY, maxConcurrent: 9 }]) }), { code: 'bad-host-config' }, '超过 4 报错');
+  assert.equal(parseHostConfig([ENTRY, { ...second, maxConcurrent: 2 }, { ...ENTRY, maxConcurrent: 4 }]).maxConcurrent, 4, '写在任意一项上,取最大值');
   assert.equal(loadHostConfig({ PROMPTCUT_SHARED_CONFIG: configFile([ENTRY, second]), PROMPTCUT_HOST_MAX_CONCURRENT: '2' }).maxConcurrent, 2, '环境变量覆盖');
-  assert.equal(hostMaxConcurrent(0), 1);
-  assert.equal(hostMaxConcurrent('x'), 1);
-  assert.equal(hostMaxConcurrent(2.7), 2);
+  assert.throws(() => loadHostConfig({ PROMPTCUT_SHARED_CONFIG: configFile([ENTRY]), PROMPTCUT_HOST_MAX_CONCURRENT: '5' }), { code: 'bad-host-config' }, '环境变量超过 4 报错');
+  assert.equal(hostMaxConcurrent(undefined), 1, '不给是 1');
+  for (const bad of [0, -1, 2.7, '2', 'x', 5]) assert.throws(() => hostMaxConcurrent(bad), { code: 'bad-host-config' }, JSON.stringify(bad));
+  assert.throws(() => parseHostConfig({ ...ENTRY, role: 'page' }), { code: 'bad-host-config' }, '主机只开 render 连接');
 
   for (const [label, bad] of [
     ['缺 username', { ...ENTRY, username: undefined }],
@@ -383,10 +387,10 @@ for (const cap of [1, 2]) {
   });
 }
 
-test('RH4 并发上限不超过 4:给 9 按 4 算', () => {
+test('RH4 并发上限不超过 4:给 9 是配置错误(集成裁定,不截断)', () => {
   const env = createSpaces(['proj-a']);
-  const host = hostOn(env, { projectIds: ['proj-a'], cap: 9 });
-  assert.equal(host.maxConcurrent, 4);
+  assert.throws(() => hostOn(env, { projectIds: ['proj-a'], cap: 9 }), { code: 'bad-host-config' });
+  assert.equal(hostOn(env, { projectIds: ['proj-a'], cap: 4 }).maxConcurrent, 4);
 });
 
 /* ================================================================== RH5 */

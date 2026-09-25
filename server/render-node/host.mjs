@@ -4,7 +4,8 @@
  * 独立渲染主机就是只开 `render` 连接的设备:配置里每个共享项目一条连接、一个节点(`profile: 'host'`),
  * 所有节点共用同一个预渲染执行器,并发总数不超过 `maxConcurrent`(缺省 1,上限 4)。
  *
- *   loadHostConfig(env)   读 `PROMPTCUT_SHARED_CONFIG`(M6a 的形状:一项或数组),另取 `maxConcurrent`
+ *   parseHostConfig(raw)  规整配置(M6a 的形状:一项或数组),另取 `maxConcurrent`(不合格抛 bad-host-config)
+ *   loadHostConfig(env)   读 `PROMPTCUT_SHARED_CONFIG` 指的文件,再经 parseHostConfig
  *   createRenderHost(…)   按配置每项调一次 `connect(entry)` 拿 { endpoint, executor, sink },
  *                         每条连接上起一个 `createLocalNode`(`profile: 'host'`),由调用方按节拍调 `tick()`
  *
@@ -36,7 +37,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createLocalNode } from './local-node.mjs';
-import { loadSharedConfig, SHARED_CONFIG_ENV } from '../auth/shared-config.mjs';
+import { normalizeEntry, SHARED_CONFIG_ENV } from '../auth/shared-config.mjs';
+import { localDeviceInfo } from '../auth/device.mjs';
 
 /** 主机并发总数的上限(契约第 2 节) */
 export const HOST_MAX_CONCURRENT = 4;
@@ -45,33 +47,71 @@ export const HOST_CONCURRENCY_ENV = 'PROMPTCUT_HOST_MAX_CONCURRENT';
 /** 与 PC 节点相同的能力(契约第 3 节 `node.hello`) */
 export const HOST_CAPABILITIES = Object.freeze({ userCards: true, graphCards: false });
 
-/** 规整并发数:取整,夹到 1～4;不是正数时回 `fallback` */
-export function hostMaxConcurrent(value, fallback = 1) {
-  const n = Math.floor(Number(value));
-  if (!Number.isFinite(n) || n < 1) return fallback;
-  return Math.min(HOST_MAX_CONCURRENT, n);
+function badHost(detail) {
+  const err = new Error(`独立渲染主机配置:${detail}`);
+  err.code = 'bad-host-config';
+  return err;
 }
 
 /**
- * 读主机配置:`PROMPTCUT_SHARED_CONFIG` 指的文件,一项或数组(M6a 契约第 11 节),每项规整见 `normalizeEntry`,
- * 缺字段、格式不对抛 `code: 'bad-shared-config'`(错误信息里没有口令与 K)。
- * `maxConcurrent`:`PROMPTCUT_HOST_MAX_CONCURRENT` 优先;否则取各项里给的 `maxConcurrent` 的最大值;都没有是 1。上限 4。
+ * 校验并发数(契约第 2 节;集成裁定 2026-09-26,契约第 6 节):不给(undefined / null)是 1;1～4 的整数照收;
+ * 其余一律是配置错误 `code: 'bad-host-config'` —— 超过 4 报错、不截断;0、负数、小数、字符串都报错。
+ */
+export function hostMaxConcurrent(value) {
+  if (value === undefined || value === null) return 1;
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1) throw badHost('maxConcurrent 要是 1～4 的整数');
+  if (value > HOST_MAX_CONCURRENT) throw badHost(`maxConcurrent 上限 ${HOST_MAX_CONCURRENT}(给了 ${value})`);
+  return value;
+}
+
+/**
+ * 解析主机配置(文件内容 JSON.parse 之后):一项或数组(M6a 契约第 11 节),每项规整见 `normalizeEntry`
+ * (缺字段、格式不对、空数组抛 `code: 'bad-shared-config'`,错误信息里没有口令与 K)。
+ * 主机只开 `render` 连接:某项给了 `role` 且不是 `render` 抛 `bad-host-config`。
+ * `maxConcurrent` 可写在任意一项上,取各项最大值,缺省 1;任一项的值不合格(含超过 4)抛 `bad-host-config`。
+ * @param {unknown} raw
+ * @param {{ device?: { deviceId: string, deviceName: string } }} [options] 缺省设备信息(同 `normalizeEntry` 第二个参数)
+ * @returns {{ entries: object[], maxConcurrent: number }}
+ */
+export function parseHostConfig(raw, { device } = {}) {
+  const list = Array.isArray(raw) ? raw : [raw];
+  if (list.length === 0) {
+    const err = new Error(`${SHARED_CONFIG_ENV}:配置是空数组`);
+    err.code = 'bad-shared-config';
+    throw err;
+  }
+  const entries = list.map((item) => (device ? normalizeEntry(item, device) : normalizeEntry(item)));
+  for (const [i, item] of list.entries()) {
+    if (item.role !== undefined && item.role !== 'render') throw badHost(`第 ${i} 项的 role 要是 'render'(主机只开 render 连接)`);
+  }
+  const given = list.filter((item) => item.maxConcurrent !== undefined && item.maxConcurrent !== null).map((item) => hostMaxConcurrent(item.maxConcurrent));
+  return { entries, maxConcurrent: given.length ? Math.max(...given) : 1 };
+}
+
+/**
+ * 读主机配置:`PROMPTCUT_SHARED_CONFIG` 指的文件,内容见 `parseHostConfig`;读不了、不是 JSON 抛 `bad-shared-config`。
+ * `PROMPTCUT_HOST_MAX_CONCURRENT`(`render-host --max-concurrent`)设了就优先,同样要 1～4 的整数,否则 `bad-host-config`。
  * 没设环境变量回 null。
  * @returns {null | { entries: object[], maxConcurrent: number }}
  */
 export function loadHostConfig(env = process.env) {
-  const entries = loadSharedConfig(env);
-  if (!entries) return null;
-  let raw = [];
+  const file = env[SHARED_CONFIG_ENV];
+  if (!file) return null;
+  let raw;
   try {
-    const parsed = JSON.parse(fs.readFileSync(env[SHARED_CONFIG_ENV], 'utf8'));
-    raw = Array.isArray(parsed) ? parsed : [parsed];
-  } catch { /* loadSharedConfig 已经读过一次,这里读不了就当没给 */ }
-  const given = raw.map((item) => hostMaxConcurrent(item?.maxConcurrent, 0)).filter((n) => n > 0);
-  const fromConfig = given.length ? Math.max(...given) : 1;
+    raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (err) {
+    const e = new Error(`${SHARED_CONFIG_ENV}:读不了配置文件(${err?.code ?? 'bad-json'})`);
+    e.code = 'bad-shared-config';
+    throw e;
+  }
+  const parsed = parseHostConfig(raw, { device: localDeviceInfo(env) });
   const override = env[HOST_CONCURRENCY_ENV];
-  const maxConcurrent = override !== undefined && override !== '' ? hostMaxConcurrent(override, fromConfig) : fromConfig;
-  return { entries, maxConcurrent };
+  if (override !== undefined && override !== '') {
+    if (!/^\d+$/.test(String(override))) throw badHost(`${HOST_CONCURRENCY_ENV} 要是 1～4 的整数`);
+    parsed.maxConcurrent = hostMaxConcurrent(Number(override));
+  }
+  return parsed;
 }
 
 const emptyStats = () => ({ claimed: 0, completed: 0, dedup: 0, failed: 0, lost: 0, discarded: 0, released: 0 });
