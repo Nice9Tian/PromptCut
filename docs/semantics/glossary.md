@@ -42,6 +42,11 @@
 | 低内存档 | 平板、手机等内存受限设备的运行档位 | architecture/platforms.md |
 | 本地内容库 | 素材服务在某台设备上按哈希存字节的存储或缓存，不是绕过素材服务的直读通道 | architecture/asset-storage.md |
 | 小版、原片 | 同一素材的两档：800×600 以内的 H.264，和保持原编码的原文件 | architecture/asset-storage.md |
+| 共享项目 | 多人共用的项目，也是权限的隔离单位；分互联网模式、局域网模式，进入方式分自由进入、限定进入 | architecture/document-service.md、workflow/project.md |
+| 自由进入、限定进入 | 共享项目的两种进入方式：凭项目名和项目密码进入并自报用户名；只允许创建者名单里的用户名加密码进入 | workflow/project.md |
+| 互联网模式、局域网模式 | 共享项目的两种部署：文档服务和素材服务托管在公网云端，成员连过去；创建者本机当主机，只在同一网段内能用 | architecture/document-service.md |
+| 局域网发现 | 局域网模式下，主机在本网段广播项目名和地址，成员据此找到它；不经文档服务 | architecture/document-service.md |
+| 设备名 | 软件按硬件信息给每台设备生成的名字；重名的成员显示时带上它 | workflow/project.md |
 
 ## 项目数据
 

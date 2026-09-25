@@ -17,7 +17,7 @@
 
 | 步 | 做什么 | 主体 | 分册 |
 |---|---|---|---|
-| 0. 开始 | 新建或打开项目 | 用户 | `workflow/project.md` |
+| 0. 开始 | 新建或打开项目，本机项目或多人共用的共享项目 | 用户 | `workflow/project.md` |
 | 1. 前期准备 | 把素材放进项目，并让系统理解素材 | 用户和 Agent | `workflow/materials.md` |
 | 2. 核心制作 | 用户发送指令，Agent 执行 | 用户、Agent | `workflow/production.md` |
 | 3. 用户实时查看 | 用户看画面，看 Agent 的进度 | 用户 | `workflow/editing.md` |
