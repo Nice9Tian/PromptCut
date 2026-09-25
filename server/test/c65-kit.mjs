@@ -47,8 +47,12 @@ export async function loadJsonOps() {
     try {
       out = mod.applyOps(doc, ops);
     } catch (err) {
-      return { ok: false, reason: err?.reason ?? err?.code ?? String(err?.message ?? err), error: err };
+      // 集成对账（A1）：引擎内部把格式错叫 `bad-op`，文档服务对外同样回 `bad-path`（c65-ops-spec.md 第 2 节）
+      const code = err?.reason ?? err?.code ?? String(err?.message ?? err);
+      return { ok: false, reason: code === 'bad-op' ? 'bad-path' : code, error: err };
     }
+    // 集成对账（A1）：实际的 `applyOps` 返回 `{ root, effects }`（写时复制，不改传入的文档）
+    if (out && typeof out === 'object' && 'root' in out && Array.isArray(out.effects)) return { ok: true, doc: out.root };
     if (out && typeof out === 'object' && out.ok === false) return { ok: false, reason: out.reason ?? out.code };
     if (out && typeof out === 'object' && out.ok === true && 'doc' in out) return { ok: true, doc: out.doc };
     return { ok: true, doc: out === undefined ? doc : out };
