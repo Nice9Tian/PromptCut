@@ -467,6 +467,15 @@ export async function joinStatus(env, proj, opts) {
 // ------------------------------------------------------------------ 消息
 
 let reqSeq = 0;
+
+/**
+ * 集成对账补的调用格式：服务地址登记模块（M5 起就有，`server/docservice/modules/endpoints.mjs`）的
+ * `service.watch` 要求带 `kinds`（字符串数组或 `'all'`），契约没写这个字段。用例没带时补 `'all'`。
+ */
+function adaptMessage(message) {
+  if (message?.type === 'service.watch' && message.kinds === undefined) return { ...message, kinds: 'all' };
+  return message;
+}
 /**
  * 发一条带 reqId 的消息，等同 reqId 的回包。
  * 契约没写 `shared.*`、`auth.ticket` 的回包带不带 reqId（已有模块都带）：给了 `types` 时，
@@ -474,7 +483,7 @@ let reqSeq = 0;
  */
 export async function ask(c, message, types = null, ms = 3000) {
   const reqId = `au-${++reqSeq}`;
-  c.send({ ...message, reqId });
+  c.send({ ...adaptMessage(message), reqId });
   const list = types ? [].concat(types, 'error') : null;
   return c.next((m) => m?.reqId === reqId || (list !== null && m?.reqId === undefined && list.includes(m?.type)), ms);
 }
