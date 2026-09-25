@@ -162,23 +162,29 @@ export function createPushQueue({
 
   /* ---------------- 落盘 ---------------- */
 
-  let writing = null;
-  let writeAgain = false;
+  /**
+   * 写回串成一条链(契约第 9 节第 1 条):`pending` 是排在链尾、还没开始的那次写入 —— 它开始时才取队列的快照,
+   * 所以在它开始之前的所有改动都由它一并写下,这期间调 `persist()` 的都拿到它。已经开始的写入不再收新改动,
+   * 之后的改动另排一次。于是每次 `persist()` 回的 promise 都在「包含了调用那一刻状态」的写入完成后才兑现。
+   */
+  let chain = Promise.resolve();
+  let pending = null;
   const snapshotFile = () => JSON.stringify({
     v: FILE_VERSION,
     items: [...items.values()].sort((a, b) => a.seq - b.seq).map(item => ({ unit: item.unit, priority: item.priority, attempts: item.attempts })),
   });
   const persist = () => {
     if (!file) return Promise.resolve();
-    if (writing) { writeAgain = true; return writing; }
-    writing = (async () => {
-      do {
-        writeAgain = false;
-        try { await atomic(file, snapshotFile()); }
-        catch (error) { say('push.persist-failed', { message: String(error?.message ?? error) }); }
-      } while (writeAgain);
-    })().finally(() => { writing = null; });
-    return writing;
+    if (pending) return pending;
+    const write = chain.then(async () => {
+      if (pending === write) pending = null;
+      // 快照在这里(写入开始时)同步取,之后的改动归下一次写入
+      try { await atomic(file, snapshotFile()); }
+      catch (error) { say('push.persist-failed', { message: String(error?.message ?? error) }); }
+    });
+    pending = write;
+    chain = write;
+    return write;
   };
 
   const restore = () => {
@@ -342,11 +348,14 @@ export function createPushQueue({
     get content() { return content; },
     get file() { return file; },
     /**
-     * 进队。回 true = 新进了一段;false = 已经在队里(只合并优先级),或者这一段不合格。
+     * 进队(契约第 9 节第 1 条)。进队本身同步生效(同一段已在队里就只合并优先级);回的 promise 在
+     * 包含这一次进队的队列文件写回完成后才兑现。钩子里不 `await` 它;测试和要确认落盘的调用方 `await`。
+     * 不合格的段不进队,回一个已兑现的 promise(记日志)。
+     * @returns {Promise<void>}
      */
     enqueue(unit, priority = PUSH_PRIORITY.normal) {
       const normalized = normalizeUnit(unit);
-      if (!normalized) { say('push.bad-unit', { unit: unit ?? null }); return false; }
+      if (!normalized) { say('push.bad-unit', { unit: unit ?? null }); return Promise.resolve(); }
       const id = unitId(normalized);
       const level = priorityOf(priority);
       const t = now();
@@ -358,15 +367,15 @@ export function createPushQueue({
         existing.block = null;
         if (existing.inflight) existing.again = true;
         counters.merged++;
-        void persist();
+        const saved = persist();
         schedule();
-        return false;
+        return saved;
       }
       items.set(id, { id, unit: normalized, priority: level, block: null, seq: seq++, attempts: 0, nextAt: 0, readyAt: settle ? t + settle : 0, inflight: false, again: false });
       counters.enqueued++;
-      void persist();
+      const saved = persist();
       schedule();
-      return true;
+      return saved;
     },
     start() {
       if (running) return;
@@ -381,7 +390,6 @@ export function createPushQueue({
       if (timer !== null) { clearTimer(timer); timer = null; timerAt = Infinity; }
       await Promise.allSettled([...inflight]);
       await persist();
-      await writing;
       for (const resolve of waiters.splice(0)) resolve();
     },
     /** 立即重排一次(测试或调用方拨快了时钟之后用) */

@@ -1402,7 +1402,9 @@ export class FramePipeline {
     let queued = 0;
     for (const from of new Set(frames.map(frame => frame - (frame % span)))) {
       const to = count !== null && from < count ? Math.min(count - 1, from + span - 1) : from + span - 1;
-      if (queue.enqueue({ kind: 'snapshot', tier, resultKey, dirKey: key, entryKey, range: { from, to }, canvasHeavy }, priority)) queued++;
+      // 契约第 9 节第 1 条:进队同步生效,回的 promise 是落盘;钩子不等它
+      void Promise.resolve(queue.enqueue({ kind: 'snapshot', tier, resultKey, dirKey: key, entryKey, range: { from, to }, canvasHeavy }, priority)).catch(() => {});
+      queued++;
     }
     return queued;
   }
@@ -1418,7 +1420,9 @@ export class FramePipeline {
     const from = first + Math.floor((segment - first) / span) * span;
     const last = Number.isInteger(spec.lastSegment) && spec.lastSegment >= from ? spec.lastSegment : null;
     const to = last !== null ? Math.min(last, from + span - 1) : from + span - 1;
-    return queue.enqueue({ kind: 'stream', resultKey: spec.streamKey, range: { from, to } }, PUSH_LOW);
+    // 契约第 9 节第 1 条:进队同步生效,回的 promise 是落盘;钩子不等它
+    void Promise.resolve(queue.enqueue({ kind: 'stream', resultKey: spec.streamKey, range: { from, to } }, PUSH_LOW)).catch(() => {});
+    return true;
   }
   /**
    * C6.4 第 5 节:换机取用。给一个活的 entry(某个会话当前版本的 card plan),按它每个共享档与本地档的 control、
