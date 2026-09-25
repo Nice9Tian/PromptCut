@@ -127,6 +127,26 @@ async function startEditor(label, port, extraEnv) {
 async function openLegacy(browser, editor) {
   const page = await browser.newPage();
   await page.setViewport({ width: 1600, height: 1000 });
+  /*
+   * 探针自带的垫片(不改产品代码):本分支的基线上,legacy 的 `UnifiedPreview` 按 `target: "user"` 把整帧请求发给
+   * **编辑器**进程,而编辑器进程(`interactive: false`)对 user lane 一律回 503「交互帧请求请直接打预渲染进程」,
+   * 所以 `?preview=legacy` 页面永远只有一条报错、没有画面 —— 与 X7 无关的既有问题(报告「遗留」一节)。
+   * 这里在浏览器里把那一个模块的 `target: "user"` 换成 `target: "prerender"`(`see_frames` 的缺省),
+   * 整帧请求照 D5 打预渲染进程,legacy 页面才看得到画面。只动这一处请求去哪,不动画面怎么来。
+   */
+  await page.setRequestInterception(true);
+  page.on('request', async req => {
+    let url;
+    try { url = new URL(req.url()); } catch { return req.continue(); }
+    if (url.pathname !== '/src/editor/preview/UnifiedPreview.tsx') return req.continue();
+    try {
+      const res = await fetch(req.url());
+      const text = await res.text();
+      const patched = text.split('target: "user", lane: "user"').join('target: "prerender", lane: "user"');
+      out.legacyShim = (out.legacyShim ?? 0) + (patched !== text ? 1 : 0);
+      await req.respond({ status: res.status, contentType: res.headers.get('content-type') || 'text/javascript', body: patched });
+    } catch { await req.continue().catch(() => {}); }
+  });
   await page.goto(editor.origin + '/?editor&nosetup=1&preview=legacy', { waitUntil: 'domcontentloaded', timeout: 180000 });
   await page.waitForFunction(async () => { try { await import('/src/store/project.ts'); return true; } catch { return false; } }, { timeout: 180000, polling: 500 });
   await page.evaluate(async (project, t) => {
@@ -235,6 +255,7 @@ try {
    */
   const pageB = await openLegacy(browser, B);
   if (!pageB.key) throw new Error('B 的页面没有镜像键');
+  check((out.legacyShim ?? 0) >= 1, 'legacy 垫片生效(UnifiedPreview 的整帧请求改打预渲染进程)', out.legacyShim ?? 0);
   const adoption = await until('[b] 换机取用报出来', async () => (await diagnostics(B)).adoption ?? null, 180000, 500);
   out.b = { adoption };
   check((adoption?.manifests ?? 0) >= 1, '[b] 按清单换机取用了至少一段', adoption);
