@@ -18,13 +18,14 @@ const REGISTRIES = ['/src/cards/index.ts', '/src/parts/index.ts'];
  */
 export async function loadSsrHost(load, { apiBase } = {}) {
   for (const id of REGISTRIES) await load(id);
-  const [core, api, routes, diff, common, apiUrl] = await Promise.all([
+  const [core, api, routes, diff, common, apiUrl, duration] = await Promise.all([
     load('/src/store/core.ts'),
     load('/src/mcp/api.ts'),
     load('/src/mcp/routes.mjs'),
     load('/src/kernel/diffProject.ts'),
     load('/src/mcp/common.ts'),
     load('/src/mcp/apiUrl.ts'),
+    load('/src/kernel/duration.ts'),
   ]);
   if (apiBase) apiUrl.setApiBase(apiBase);
   const editorApi = api.editorApi;
@@ -69,6 +70,12 @@ export async function loadSsrHost(load, { apiBase } = {}) {
       };
     },
     diffProject: diff.diffProject,
+    /** 项目总时长的规则(`src/kernel/duration.ts`):执行器按它在同一次写入里把总时长跟着内容更新(`settleDuration`) */
+    durationRules: {
+      contentEndOf: duration.contentEndOf,
+      effectiveDuration: duration.effectiveDuration,
+      manualDurationFor: duration.manualDurationFor,
+    },
     frameLayoutOf: common.frameLayoutOf,
     stageSize: common.stageSize,
   };

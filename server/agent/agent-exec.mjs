@@ -113,6 +113,38 @@ export function staleMessage({ expectRev, currentRev, since = [], sinceComplete 
   ].join('\n');
 }
 
+/**
+ * Agent 在服务端的一次写入之后,项目总时长该是多少(C6.5 收尾裁定:总时长的连带更新随这次写入的同一批 ops 提交,
+ * 页面收到后不再补写 —— 否则页面补写的那一次是页面身份的写入,这个对话紧接着的下一次写入会因版本不符被拒一次)。
+ *
+ * 规则是页面现成的那一条(`src/kernel/duration.ts`;页面侧由时间轴的 effect 按 `effectiveDuration` 算、
+ * `syncDuration` 写,至少 1 s),这里只是在服务端副本上把它跑一遍:
+ *   - 手动截断值服务端没有(页面状态),按项目自己推:这次写入改了总时长(`set_project_meta` 截断)就按改后的推,
+ *     否则按改前的推 —— 与页面收到远端改动时 `pageStateAfterRemote` 推手动值是同一条 `manualDurationFor`;
+ *   - 只在片段或总时长变了时才算(页面时间轴的 effect 也只跟着这两样跑),只改名之类的写入不碰总时长。
+ * 回应该提交的项目:不用改时原样回 `after`。
+ *
+ * @param {object} before 改前的副本
+ * @param {object} after  handler 跑完的项目
+ * @param {{ contentEndOf: Function, effectiveDuration: Function, manualDurationFor: Function }} rules `src/kernel/duration.ts`
+ */
+export function settleDuration(before, after, rules) {
+  if (!isPlainObject(after) || !isPlainObject(before) || !rules) return after;
+  if (after.tracks === before.tracks && after.duration === before.duration) return after;
+  const current = Number(after.duration);
+  if (!Number.isFinite(current)) return after;
+  const end = rules.contentEndOf(after.tracks ?? []);
+  const manual = after.duration !== before.duration
+    ? rules.manualDurationFor(current, end)
+    : rules.manualDurationFor(Number(before.duration), rules.contentEndOf(before.tracks ?? []));
+  const target = rules.effectiveDuration(end, current, manual);
+  // 与时间轴 effect + `syncDuration` 相同的门槛:差不到 1e-6 不写,写时至少 1 s
+  if (Math.abs(target - current) <= 1e-6) return after;
+  const val = Math.max(1, target);
+  if (Math.abs(val - current) < 1e-6) return after;
+  return { ...after, duration: val };
+}
+
 /** 工具回包带上版本号;数组、非对象原样返回(不改变它们的形状) */
 function withRev(result, rev) {
   if (!isPlainObject(result) || Object.hasOwn(result, 'rev')) return result;
@@ -316,6 +348,8 @@ export function createAgentExecutor({
         cleanup?.();
       }
       if (after === base) return { result, base, baseRev, ops: [], inverse: [] };
+      // 总时长跟着内容走的那一下在这里一并做,随同一批 ops 提交(页面收到后不再补写)
+      after = settleDuration(base, after, host.durationRules);
       const { ops, inverse } = host.diffProject(base, after);
       return { result, base, baseRev, ops, inverse, after };
     });
