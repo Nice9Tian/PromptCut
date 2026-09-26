@@ -30,7 +30,8 @@ export async function buildTools({ callTool, workspaceDir, onEvent = () => {}, p
     description: t.description + (['auto_workflow', 'stt_install', 'transcribe_media'].includes(t.name) ? ' API 模式会自动等待后台作业结束，不要自己密集轮询或重复启动。' : ''),
     // 深拷贝:下面要就地改写 params,而 mcpTools 是整个进程共享的模块级常量
     inputSchema: JSON.parse(JSON.stringify(t.inputSchema)),
-    async execute(input, context = {}) { return waitForJob(t.name, input, await callTool(t.name, input), context); },
+    // context.callId 是这次 tool_use 的 id:交给编辑器放进工具调用事件,页面 AI 栏按它对上聊天记录(c65-integ2)
+    async execute(input, context = {}) { return waitForJob(t.name, input, await callTool(t.name, input, { callId: context.callId }), context); },
   }));
   result.push(thinkTool, createTextEditorTool(workspaceDir));
 

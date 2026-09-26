@@ -9,7 +9,7 @@ export const partsTools = [
         detail: { type: "string", enum: ["summary", "full"] }
       }
     },
-    side: "browser"
+    side: "agent"
   },
   {
     name: "add_composite",
@@ -24,7 +24,7 @@ export const partsTools = [
       },
       required: ["start"]
     },
-    side: "browser"
+    side: "agent"
   },
   {
     name: "add_part",
@@ -43,7 +43,7 @@ export const partsTools = [
       },
       required: ["clipId", "partId"]
     },
-    side: "browser"
+    side: "agent"
   },
   {
     name: "set_part",
@@ -60,7 +60,7 @@ export const partsTools = [
       },
       required: ["clipId", "partInstanceId"]
     },
-    side: "browser"
+    side: "agent"
   },
   {
     name: "remove_part",
@@ -70,7 +70,7 @@ export const partsTools = [
       properties: { clipId: { type: "string" }, partInstanceId: { type: "string" } },
       required: ["clipId", "partInstanceId"]
     },
-    side: "browser"
+    side: "agent"
   },
   {
     name: "move_part",
@@ -80,6 +80,6 @@ export const partsTools = [
       properties: { clipId: { type: "string" }, partInstanceId: { type: "string" }, parentId: { type: "string", description: "目标父实例 id;省略或传空串 = 根" }, index: { type: "number" } },
       required: ["clipId", "partInstanceId"]
     },
-    side: "browser"
+    side: "agent"
   }
 ];

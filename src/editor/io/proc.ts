@@ -237,12 +237,16 @@ export type SaveOutcome =
  * 调它,别先 await 别的东西,不然手势过期会抛 SecurityError。
  */
 export async function writeProcToDisk(
-  text: string,
+  content: string | (() => Promise<string>),
   defaultName: string,
   { askAlways = false }: { askAlways?: boolean } = {},
 ): Promise<SaveOutcome> {
+  // 给函数时在挑好落点之后才取内容:连着文档服务时要先等所有本地修改拿到确认(c65-design.md 第 4 节),
+  // 而「另存为」必须是手势里的第一个 await
+  const produce = () => (typeof content === "function" ? content() : Promise.resolve(content));
   const picker = pickerFn();
   if (!picker) {
+    let text = await produce();
     text = await withFrameSnapshots(text);
     const blob = new Blob([text], { type: "application/json" });
     const a = document.createElement("a");
@@ -266,7 +270,7 @@ export async function writeProcToDisk(
     }
   }
 
-  text = await withFrameSnapshots(text);
+  const text = await withFrameSnapshots(await produce());
   const writable = await saveTarget.createWritable();
   await writable.write(text);
   await writable.close();

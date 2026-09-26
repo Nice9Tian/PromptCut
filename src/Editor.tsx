@@ -20,6 +20,9 @@ import { StatusBar } from "./editor/StatusBar";
 import { DependencyPrompt } from "./editor/DependencyPrompt";
 import { motion } from "motion/react";
 import { MediaMigrationDialog } from "./editor/MediaMigrationDialog";
+import { SyncOverlays } from "./editor/sync/SyncOverlays";
+import { isJoinPage, startSync } from "./editor/sync/syncManager";
+import { undoRedoKey } from "./editor/undoKeys";
 
 /** 拖杆宽度(px),和 ResizeHandle 里的 w-2 对应 */
 const HANDLE_W = 8;
@@ -146,11 +149,14 @@ export default function Editor() {
   }, []);
 
   useEffect(() => {
+    // C6.5:页面用 WebSocket 接本机文档服务并挂上 store(src/editor/sync/syncManager.ts);无头实例、只读查看、连不上时不接
+    void startSync();
     const p = getState().project;
     // 无头实例(?headless=1,scripts/headless.mjs 开的页面)不塞演示卡:
-    // 那会把一份空快照悄悄变成 10 张演示卡,合并回去时全算成 agent 新加的
+    // 那会把一份空快照悄悄变成 10 张演示卡,合并回去时全算成 agent 新加的。
+    // ?join= 加入已有本机项目的页面也不塞:内容以文档服务为准,塞了就成了往别人的项目里加 10 张卡
     const headless = new URLSearchParams(location.search).has("headless");
-    if (!headless && p.tracks.every((t) => t.clips.length === 0)) {
+    if (!headless && !isJoinPage() && p.tracks.every((t) => t.clips.length === 0)) {
       for (const c of [...magicuiDemoClips, ...nativeDemoClips]) {
         actions.addCardClip(c.cardId, c.start, { duration: c.end - c.start, params: c.params });
       }
@@ -162,9 +168,10 @@ export default function Editor() {
       if (e.code === "Space") {
         e.preventDefault();
         actions.togglePlay();
-      } else if ((e.ctrlKey || e.metaKey) && e.key === "z") {
+      } else if (undoRedoKey(e)) {
+        // Ctrl/Cmd+Z 撤销;Ctrl/Cmd+Shift+Z、Ctrl/Cmd+Y 重做(src/editor/undoKeys.ts)
         e.preventDefault();
-        e.shiftKey ? actions.redo() : actions.undo();
+        undoRedoKey(e) === "redo" ? actions.redo() : actions.undo();
       } else if (e.key === "Delete" || e.key === "Backspace") {
         for (const id of getState().selection) actions.removeClip(id);
       }
@@ -185,6 +192,7 @@ export default function Editor() {
   return (
     <div data-pc="editor" className="h-full min-h-0 flex flex-col" style={{ backgroundColor: "var(--ui-bg)", color: "var(--ui-fg)" }}>
       <MediaMigrationDialog />
+      <SyncOverlays />
       <TopBar />
       <DependencyPrompt />
       <div className="flex-1 min-h-0 flex flex-col" style={{ padding: "var(--ui-gap)" }}>

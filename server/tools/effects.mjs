@@ -3,7 +3,7 @@ export const effectsTools = [
     name: "list_filters",
     description: "列出滤镜库(素材库「转场/滤镜」页里的那些),以及能用的滤镜种类、取值范围和表达式写法。每条给 filterId、name、description、params(挂到片段上可逐段调的参数)、ops、summary、animated(有没有随时间变的步骤)、usedBy(挂在哪几段上)。挂滤镜前先看有没有现成能复用的。",
     inputSchema: { type: "object", properties: {} },
-    side: "browser"
+    side: "agent"
   },
   {
     name: "create_filter",
@@ -50,7 +50,7 @@ export const effectsTools = [
       },
       required: ["name", "ops"]
     },
-    side: "browser"
+    side: "agent"
   },
   {
     name: "update_filter",
@@ -66,7 +66,7 @@ export const effectsTools = [
       },
       required: ["filterId"]
     },
-    side: "browser"
+    side: "agent"
   },
   {
     name: "remove_filter",
@@ -80,7 +80,7 @@ export const effectsTools = [
       },
       required: ["filterId"]
     },
-    side: "browser"
+    side: "agent"
   },
   {
     name: "apply_filter",
@@ -94,13 +94,13 @@ export const effectsTools = [
       },
       required: ["clipId", "filterId"]
     },
-    side: "browser"
+    side: "agent"
   },
   {
     name: "list_pixel_maps",
     description: "列出项目里的通用像素映射。像素映射只做**要逐像素判断的选区**（抠色、按位置/时间的选区、换成另一段素材）；整帧调色请用 create_filter 的 curves / matrix。where 允许 r/g/b/a/luma/x/y/t，to 可以是 {kind:'media',mediaId,stage:'origin'|'after_filters'}、{kind:'color',value:'#ff0000'}、{kind:'transparent'} 或 {kind:'expr',r,g,b,a}。先调用 list_media 找素材 id，再用 list_media_effects 看已有滤镜和映射。",
     inputSchema: { type: "object", properties: {} },
-    side: "browser"
+    side: "agent"
   },
   {
     name: "create_pixel_map",
@@ -119,24 +119,24 @@ export const effectsTools = [
       },
       required: ["name", "where"]
     },
-    side: "browser"
+    side: "agent"
   },
   {
     name: "update_pixel_map",
     description: "更新项目里的像素映射。给出的字段会替换定义；挂载它的片段都会跟着变。改完用 see_frames 看真实效果。和 create_pixel_map 一样只收要逐像素选区的活：改完之后如果变成了整帧调色（where 成了常数、to 只是颜色到颜色的函数），会被拒绝并附上等价的 create_filter ops。",
   inputSchema: { type: "object", properties: { pixelMapId: { type: "string" }, name: { type: "string" }, description: { type: "string" }, source: { type: "object" }, where: { type: "string" }, to: { description: "字符串颜色/transparent/素材 id，或目标对象" }, mode: { type: "string", enum: ["continuous", "discrete"] }, colorSequence: { type: "object" } }, required: ["pixelMapId"] },
-    side: "browser"
+    side: "agent"
   },
   {
     name: "remove_pixel_map",
     description: "删除一个像素映射。仍挂在片段上时需要 force:true，并在 reason 写明用户可见的理由；只想摘掉一段请用 apply_pixel_map 的空 pixelMapId。",
     inputSchema: { type: "object", properties: { pixelMapId: { type: "string" }, force: { type: "boolean" }, reason: { type: "string" } }, required: ["pixelMapId"] },
-    side: "browser"
+    side: "agent"
   },
   {
     name: "apply_pixel_map",
     description: "把像素映射挂到视频/图片片段上；每段只挂一条，再挂就是替换。pixelMapId 传空字符串表示摘掉。to 为媒体时 stage 决定取素材原始像素还是该素材滤镜后的输出。挂完用 see_frames 复核。",
     inputSchema: { type: "object", properties: { clipId: { type: "string" }, pixelMapId: { type: "string", description: "空字符串=摘掉" } }, required: ["clipId", "pixelMapId"] },
-    side: "browser"
+    side: "agent"
   }
 ];

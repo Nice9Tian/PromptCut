@@ -122,7 +122,7 @@ test('mcp-tools 里每个 browser 工具，执行器里都有对应的分发分�
   // web_* 走的是前缀分发 + runWebTool 里的 switch，不是逐个 tool === 分支。守卫的意思没变：
   // 声明了就必须真有地方接住，所以这里也认 case "web_x": 这种形式。
   const missing = mcpTools
-    .filter((t) => t.side === 'browser')
+    .filter((t) => t.side === 'page' || t.side === 'agent')
     .map((t) => t.name)
     .filter((n) => !(n in TOOL_ROUTES) && !src.includes(`tool === "${n}"`) && !src.includes(`case "${n}":`));
   assert.deepEqual(missing, [], `执行器里没有分支的工具：${missing.join('、')}`);

@@ -102,6 +102,8 @@ export interface ProjectSyncHooks {
   redo(): void;
   canUndo(): boolean;
   canRedo(): boolean;
+  /** 等所有本地修改都拿到文档服务的确认(.proc 保存前等它);没接文档服务时没有这一项 */
+  whenSettled?(opts?: { timeoutMs?: number }): Promise<{ rev: number; project: Project }>;
 }
 
 let projectSync: ProjectSyncHooks | null = null;

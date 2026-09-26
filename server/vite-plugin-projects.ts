@@ -92,11 +92,85 @@ function summarize(id: string, file: string) {
   }
 }
 
+/**
+ * 本地备份(C6.5,`docs/plan/c65-design.md` 第 3、8 节):被别人覆盖之前自己那一版的实体、离线时被丢弃的那批修改,
+ * 由页面在「换成最新版本之前」存进草稿目录下的 `backups/`,一份一个 JSON 文件。「项目」菜单「本地备份…」按时间列出、
+ * 取回单份再以一次新写入恢复。页面按 `docsync.ts` 的 `LocalBackup` 形状交上来,这里只加 id、不解释内容。
+ */
+const BACKUP_DIR = "backups";
+const BACKUP_ID_RE = /^[0-9]{13}-[a-z0-9]{6}$/;
+/** 备份最多留这么多份,再多删最旧的 */
+const BACKUP_KEEP = 500;
+
+function backupsDir(root: string): string {
+  const dir = path.join(projectsDir(root), BACKUP_DIR);
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+/** 列表只要摘要:不带实体的值、不带整份项目 */
+function backupSummary(id: string, file: string) {
+  try {
+    const b = JSON.parse(fs.readFileSync(file, "utf8"));
+    const entities = b.kind === "offline-discard"
+      ? [...new Set((Array.isArray(b.batch) ? b.batch : []).flatMap((x: { entities?: string[] }) => (Array.isArray(x?.entities) ? x.entities : [])))]
+      : [b.entity].filter((e: unknown) => typeof e === "string");
+    return { id, kind: b.kind, projectId: b.projectId ?? null, projectName: b.projectName ?? null, entity: b.entity ?? null, entities, by: b.by ?? null, rev: b.rev ?? b.baseRev ?? null, at: Number(b.at) || 0, pageSession: typeof b.pageSession === "string" ? b.pageSession : null, broken: false };
+  } catch {
+    return { id, kind: null, projectId: null, projectName: null, entity: null, entities: [], by: null, rev: null, at: 0, broken: true };
+  }
+}
+
+function handleBackups(root: string, req: import("node:http").IncomingMessage, res: ServerResponse): Promise<void> | void {
+  const url = new URL(req.url || "/", "http://localhost");
+  const id = decodeURIComponent(url.pathname.replace(/^\/+/, ""));
+  const dir = backupsDir(root);
+  if (req.method === "GET" && !id) {
+    const items = fs.readdirSync(dir).filter((f) => f.endsWith(".json")).map((f) => backupSummary(f.slice(0, -5), path.join(dir, f)));
+    items.sort((a, b) => b.at - a.at || b.id.localeCompare(a.id));
+    return sendJson(res, 200, { ok: true, backups: items });
+  }
+  if (req.method === "POST" && !id) {
+    return readBody(req as never, 128 * 1024 * 1024).then((body) => {
+      const b = JSON.parse(body);
+      if (!b || typeof b !== "object" || (b.kind !== "overwritten" && b.kind !== "offline-discard")) {
+        return sendJson(res, 400, { ok: false, error: "不认识的备份" });
+      }
+      const newId = `${Date.now()}-${Math.random().toString(36).slice(2, 8).padEnd(6, "0")}`;
+      const file = path.join(dir, `${newId}.json`);
+      fs.writeFileSync(`${file}.tmp`, body, "utf8");
+      fs.renameSync(`${file}.tmp`, file);
+      const all = fs.readdirSync(dir).filter((f) => f.endsWith(".json")).sort();
+      for (const f of all.slice(0, Math.max(0, all.length - BACKUP_KEEP))) fs.rmSync(path.join(dir, f), { force: true });
+      return sendJson(res, 200, { ok: true, id: newId, file });
+    });
+  }
+  if (req.method === "GET") {
+    if (!BACKUP_ID_RE.test(id)) return sendJson(res, 400, { ok: false, error: "备份 id 不合法" });
+    const file = path.join(dir, `${id}.json`);
+    if (!fs.existsSync(file)) return sendJson(res, 404, { ok: false, error: "备份不存在" });
+    res.statusCode = 200;
+    res.setHeader("Content-Type", "application/json; charset=utf-8");
+    res.setHeader("Cache-Control", "no-store");
+    res.end(fs.readFileSync(file, "utf8"));
+    return;
+  }
+  return sendJson(res, 405, { ok: false, error: "只支持 GET / POST" });
+}
+
 export function projectsPlugin(): Plugin {
   return {
     name: "promptcut-projects",
     configureServer(server: ViteDevServer) {
       const root = server.config.root || process.cwd();
+
+      server.middlewares.use("/api/project-backups", async (req, res) => {
+        try {
+          await handleBackups(root, req, res);
+        } catch (e) {
+          sendJson(res, 400, { ok: false, error: (e as Error).message });
+        }
+      });
 
       server.middlewares.use("/api/projects", async (req, res) => {
         const url = new URL(req.url || "/", "http://localhost");
