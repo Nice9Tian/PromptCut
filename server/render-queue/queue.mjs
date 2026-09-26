@@ -133,7 +133,7 @@ export function createRenderQueue(options = {}) {
   const checksFingerprint = (task) => task.kind !== 'plan' || requiredOf(task, 'preferNode') !== null;
 
   /**
-   * 指纹前置过滤（I.2，语义 document-service.md「指纹前置过滤（特例）」）：环境不符、或这张卡已被别的环境锁定的任务，
+   * 指纹前置过滤（I.2，语义 mechanism/document-service.md「指纹前置过滤（特例）」）：环境不符、或这张卡已被别的环境锁定的任务，
    * 不发给这个节点。不然锁一变，指纹不符的节点会一拥而上认领、全部被 card-locked 拒掉（锁风暴）。
    * 节点没带指纹时两条都不生效，与加过滤之前一样；能力过滤仍由节点自己做。
    */

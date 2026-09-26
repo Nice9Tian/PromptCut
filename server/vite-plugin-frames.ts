@@ -496,7 +496,7 @@ async function startQueueNode(root: string, service: FramePipeline) {
         localNode.start([]);
         log("queue.code-changed", { codeVersion: codeVersion.slice(0, 12) });
       }
-      // M6c X5:播放 / 拖动时不认领新的(闲时门槛管认领),手里在做的做完 —— 语义 platforms.md「手里在做的那一批做完为止」,
+      // M6c X5:播放 / 拖动时不认领新的(闲时门槛管认领),手里在做的做完 —— 语义 product/platforms.md「手里在做的那一批做完为止」,
       // 不再像 M5b 那样把在跑的任务 yieldAll 放回去
       localNode.tick();
     } catch (error: any) {

@@ -33,13 +33,13 @@
 
 | 改动范围 | 先读 |
 |---|---|
-| 渲染、舞台、预渲染、导出（`src/render/`、`server/bakery/`、`server/frame-*`） | `architecture/rendering.md`、`architecture/cards.md` |
-| 卡片、部件（`src/cards/`、`src/parts/`） | `architecture/cards.md` |
-| 项目数据、时间轴、效果库（`src/kernel/`、`src/store/`） | `architecture/project-model.md` |
+| 渲染、舞台、预渲染、导出（`src/render/`、`server/bakery/`、`server/frame-*`） | `product/rendering.md`、`product/cards.md`；改实现再读 `mechanism/rendering.md`、`mechanism/cards.md` |
+| 卡片、部件（`src/cards/`、`src/parts/`） | `product/cards.md`；改实现再读 `mechanism/cards.md` |
+| 项目数据、时间轴、效果库（`src/kernel/`、`src/store/`） | `product/project-model.md` |
 | 编辑界面（`src/editor/`） | `user-workflow.md`、`workflow/editing.md` |
-| Agent 与工具（`src/ai/`、`src/mcp/`、`server/tools/`、`server/runners/`、`server/harness/`） | `architecture/agent.md`、`workflow/production.md` |
-| 素材导入、感知类工具（`server/vite-plugin-media.ts` 等、`python/`） | `workflow/materials.md`、`architecture/asset-storage.md` |
-| 文档服务、素材服务、云端、协作 | `architecture/document-service.md`、`architecture/asset-storage.md` |
-| 桌面壳、平台差异（`desktop/`） | `architecture/platforms.md` |
+| Agent 与工具（`src/ai/`、`src/mcp/`、`server/tools/`、`server/runners/`、`server/harness/`） | `product/agent.md`、`workflow/production.md`；改实现再读 `mechanism/agent.md` |
+| 素材导入、感知类工具（`server/vite-plugin-media.ts` 等、`python/`） | `workflow/materials.md`、`product/asset-service.md`；改实现再读 `mechanism/asset-service.md` |
+| 文档服务、素材服务、云端、协作 | `product/document-service.md`、`product/asset-service.md`、`product/hosting.md`；改实现再读同名的 `mechanism/` |
+| 桌面壳、平台差异（`desktop/`） | `product/platforms.md`；改实现再读 `mechanism/platforms.md` |
 | 产品方向或架构本身 | `product-purpose.md`、`architecture.md` |
 | 遇到不认识的术语 | `glossary.md`，只查那一条 |

@@ -7,7 +7,7 @@
  *     ← src/render(舞台渲染、帧管线)
  *       ← src/editor(编辑台界面)/ src/mcp / src/ai
  *
- * 为什么要钉死:在线浏览器模式和本地模式共用同一套渲染代码(docs/semantics/architecture/platforms.md)。kernel / render 一旦反向
+ * 为什么要钉死:在线浏览器模式和本地模式共用同一套渲染代码(docs/semantics/mechanism/platforms.md)。kernel / render 一旦反向
  * 摸到编辑台,浏览器那边就得连整个编辑台一起打包 —— 而这种依赖是悄悄长出来的,
  * 加一行 import 就成立,不报错也不掉帧,只有这里拦得住。
  *

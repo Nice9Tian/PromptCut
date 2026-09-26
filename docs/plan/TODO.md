@@ -41,7 +41,7 @@
 - **多用户协作**（2026-09-26 改定）：语义是项目设置里勾选「多用户协作」、开始页加入（项目名、项目密码、用户名，邀请码只预填）、搬到云端 / 搬回本机、取消后拉回本机并注销；代码现状是 C6.5 做的「新建共享项目 / 打开共享项目」两个入口，局域网模式与互联网模式二选一。
 - **在线浏览器模式**：还不存在。
 - **渲染任务队列与渲染节点**：还不存在；预渲染现在只由本机预渲染进程按页面的 preload 做（本机的结果键已在 M4 乘上环境指纹）。页面测量时推过的帧按卡片级指纹锁入库：页面上报自己的环境，帧存在页面指纹的键下，这张卡随之锁给页面的环境（`render-queue-contract.md` F 节，报告 `docs/reports/REPORT-render-queue-card-lock.md`）。设计见 `docs/plan/distributed-prerender-queue.md`。
-- **手动截短总时长的入口**：语义允许用户手动缩短总时长（`project-model.md`「总时长」），但编辑界面没有入口，现在只有 Agent 能经 `set_project_meta` 截断。UI 层要补手动截短总时长的操作入口，规则用 `src/kernel/duration.ts` 现成的那套。
+- **手动截短总时长的入口**：语义允许用户手动缩短总时长（`product/project-model.md`「总时长」），但编辑界面没有入口，现在只有 Agent 能经 `set_project_meta` 截断。UI 层要补手动截短总时长的操作入口，规则用 `src/kernel/duration.ts` 现成的那套。
 
 ## 文档
 

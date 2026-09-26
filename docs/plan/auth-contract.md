@@ -2,7 +2,7 @@
 
 状态：**定稿**（2026-09-26，主会话）。依据：
 - 主执行计划 `docs/plan/Master-Execution-Plan.md` 第 12 节（D9）、第 7 节 M6；
-- 语义 `docs/semantics/architecture/document-service.md`「共享项目与权限」「渲染任务队列」、`asset-storage.md`「凭票据读写」、`workflow/project.md`「共享项目」；
+- 语义 `docs/semantics/product/document-service.md`「共享项目与权限」「渲染任务队列」、`product/asset-service.md`「凭票据读写」、`workflow/project.md`「共享项目」；
 - 查资料的结论见第 13 节（codex `gpt-6-sol`）。
 
 实现方照本文写 `server/auth/`、改文档服务与素材服务；测试方只照本文写测试，不看实现。〔裁〕是主会话在 D9 授权范围内定的细节。

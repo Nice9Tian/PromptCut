@@ -4,7 +4,7 @@
 
 **依据**：
 - 主执行计划第 7 节 SP（D10 修订版）、第 12 节 D9；
-- 语义 `document-service.md`（「部署组合」「连接发现」「局域网发现（已引入）」「共享项目与权限」）、`asset-storage.md`（「凭票据读写」）；
+- 语义 `product/document-service.md`（「部署组合」「连接发现」「局域网发现（已引入）」「共享项目与权限」）、`product/asset-service.md`（「凭票据读写」）；
 - M6a 契约 `auth-contract.md`（含第 14 节集成裁定），M6b 契约 `render-host-contract.md`；
 - 局域网发现方案的唯一出处 `direct-connect-plan.md`「设计要点」第 4 条（本契约只定参数，不另写方案）；
 - 迁移流程 `hosting-migration.md`；

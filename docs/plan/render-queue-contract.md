@@ -552,7 +552,7 @@ executor.render(task, { signal, progress }) → Promise<artifacts>
 // 抛出的错误若带 retryable === false，按不可重试处理；否则可重试
 ```
 
-**产物库 `sink`**（M5 起由素材服务实现，设计 4.4、语义 `asset-storage.md`「先推送、确认收全，再报完成」）：
+**产物库 `sink`**（M5 起由素材服务实现，设计 4.4、语义 `mechanism/asset-service.md`「先推送、确认收全，再报完成」）：
 
 ```js
 // 一「段」的身份是 (resultKey, range.from, range.to)；kind、tier 只作记账，不参与身份
@@ -683,7 +683,7 @@ Endpoint = { connId, send(message), onMessage(handler), close(), closed }
 
 ## E. M4：环境指纹进结果键（本机预渲染进程）
 
-主 Agent 定稿，2026-09-24。依据：设计 `distributed-prerender-queue.md` 2.1、`rendering.md`「不同环境的结果不混用」、`TODO.md`「语义与代码的差距」的「渲染任务队列与渲染节点」一条。
+主 Agent 定稿，2026-09-24。依据：设计 `distributed-prerender-queue.md` 2.1、`mechanism/rendering.md`「不同环境的结果不混用」、`TODO.md`「语义与代码的差距」的「渲染任务队列与渲染节点」一条。
 
 **范围**：本机预渲染进程写盘、投递的全部预渲染键都乘上环境指纹，现有缓存整体换键一次。
 
@@ -820,7 +820,7 @@ export async function probeBrowserEnvironment({ browser, page }, { platform = pr
 
 ## F. 卡片级指纹锁（M4 补充：前端测量帧入库与队列认领）
 
-主 Agent 定稿，2026-09-24，按用户的「卡片级一致性锁定」决策。依据：`rendering.md`「不同环境的结果不混用」与「预渲染结果的复用」、设计 2.1「谁定指纹」。本节取代 E.6 的测量帧闸，其余 E 节不变。
+主 Agent 定稿，2026-09-24，按用户的「卡片级一致性锁定」决策。依据：`mechanism/rendering.md`「不同环境的结果不混用」与「预渲染结果的复用」、设计 2.1「谁定指纹」。本节取代 E.6 的测量帧闸，其余 E 节不变。
 
 **概念**：
 
@@ -1078,7 +1078,7 @@ export function cardLockDecision({ lock, ownFingerprint, complete, now, idleMs =
 | Node | `server/render-node/fingerprint.mjs`、`split.mjs`、`session.mjs`、`local-node.mjs`、`index.mjs` |
 | Pipeline | 新建 `server/card-lock.mjs`、`src/editor/pageEnvironment.mjs`（及类型声明）；改 `server/frame-pipeline.mjs`、`server/vite-plugin-frames.ts`、`src/editor/probeRunner.ts` |
 | Verification/Test | 新建上面四个测试文件；改受影响的既有测试 |
-| 主 Agent | 本节；`rendering.md`、`glossary.md`、设计 2.1、`TODO.md`、报告 |
+| 主 Agent | 本节；`product/rendering.md`、`glossary.md`、设计 2.1、`TODO.md`、报告 |
 
 ### F.7 定稿后的补充细则（2026-09-24，主 Agent 按实现方疑点裁定）
 
@@ -1109,7 +1109,7 @@ export function cardLockDecision({ lock, ownFingerprint, complete, now, idleMs =
 ### F.8 本机侧的补充细则（2026-09-24，主 Agent 按 Pipeline 实现方疑点裁定）
 
 1. **本机已有结果也得锁**：`fillCardControls` 走到一个共享档 control 时，锁库里没有它的锁，就用本机指纹得锁（`source: 'prerender'`），不管这张卡本机是不是已经齐了。否则换键前就已产齐、但没有锁文件的卡，会被页面的第一帧测量帧锁走，反而少了覆盖。页面在后台那一趟走到这张卡之前推来测量帧的，仍是页面先得锁。
-2. **延后的卡要再判**：`rendering.md` 说锁定方停下一段时间后要接手，所以延后不能停在「等下一次 preload」。
+2. **延后的卡要再判**：`mechanism/rendering.md` 说锁定方停下一段时间后要接手，所以延后不能停在「等下一次 preload」。
    - 一趟后台结束时仍有 `'defer'` 的卡，就定一个一次性计时器（`unref`），在 `cardLockIdleMs` 之后重判这些卡；
    - 计时器触发时，满足以下三条才把一小趟排进后台串行链：这一版的后台那一趟没被取消（它的 `signal` 没 abort）；还有会话的当前版本是这个 entry；这些卡仍在预渲染集合里。
    - 那一小趟只对这些卡跑 `fillCardControls`，同一个 `signal`、`'background'` lane 的预渲染间；
@@ -1125,7 +1125,7 @@ export function cardLockDecision({ lock, ownFingerprint, complete, now, idleMs =
 
 ## G. M5a：网络层、集群令牌与服务地址登记（文档服务通用化）
 
-主 Agent 定稿，2026-09-25（用户授权自动推进，未逐节审阅；有疑点按回退梯次处理）。依据：`docs/plan/Master-Execution-Plan.md` 第 5.4 节（文档服务通用化）、第 7 节 M5a、第 3 节 S1 / S3 / S4；语义 `document-service.md`「职责」「连接发现」（M5a 开工前按 S1 与定位改写）。
+主 Agent 定稿，2026-09-25（用户授权自动推进，未逐节审阅；有疑点按回退梯次处理）。依据：`docs/plan/Master-Execution-Plan.md` 第 5.4 节（文档服务通用化）、第 7 节 M5a、第 3 节 S1 / S3 / S4；语义 `product/document-service.md`「职责」「连接发现」（M5a 开工前按 S1 与定位改写）。
 
 **范围**：
 - 文档服务拆成「通用核心 + 模块」，渲染任务队列与服务地址登记各是一个模块；
@@ -1312,7 +1312,7 @@ ENDPOINT_DEFAULTS = { GRACE_MS: 10_000, MAX_ANNOUNCERS: 64, MAX_URLS: 8, MAX_MET
   - 登记所在的连接断开时，登记标为离线、记下时刻，但**仍然可见**；
   - `tick` 发现离线超过 `GRACE_MS`（严格大于）就删掉并推送；
   - 宽限期内同一 `(announcerId, kind)` 从新连接再登记：只改绑连接，不推送撤回；`urls` 变了才推送。
-- **只交换地址**：模块不访问登记的 URL，不转发任何字节（语义 `document-service.md`「连接发现」）。
+- **只交换地址**：模块不访问登记的 URL，不转发任何字节（语义 `mechanism/document-service.md`「连接发现」）。
 - **权限**：M5a 里任何通过鉴权的连接都能登记和订阅（S3：细粒度权限在 M6）。
 - `health()` 回 `{ endpoints: <登记数> }`；`describeConn` 不加字段。
 
@@ -1686,7 +1686,7 @@ backpressureCloses,   // 累计因背压关闭的连接数
 
 ## I. M5b 队列部分：按节点指纹前置过滤（防锁风暴）
 
-主 Agent 定稿，2026-09-25（用户授权自动推进）。依据：`docs/plan/Master-Execution-Plan.md` 第 5.3 节；语义 `document-service.md`「渲染任务队列」的「指纹前置过滤（特例）」一条（`95f9aa7` 写入）；F 节（卡片级指纹锁）；H 节（合并键）。
+主 Agent 定稿，2026-09-25（用户授权自动推进）。依据：`docs/plan/Master-Execution-Plan.md` 第 5.3 节；语义 `mechanism/document-service.md`「渲染任务队列」的「指纹前置过滤（特例）」一条（`95f9aa7` 写入）；F 节（卡片级指纹锁）；H 节（合并键）。
 
 **范围**：
 - 队列本体的可见性前置过滤；
@@ -1804,7 +1804,7 @@ F.1 第 3a 步的 `card-locked` 拒绝原样保留，只兜住前置过滤与锁
 - `docs/plan/Master-Execution-Plan.md` 第 7 节 M5b，第 11 节（推迟项）；
 - 设计附件 `docs/plan/queue-executor-design.md`（下称「附件」）；
 - 前提契约：C6.2 `artifact-transfer-contract.md`、C6.3 `docservice-contract.md`、C6.4 `manifest-contract.md`，以及本文 I 节；
-- 语义：`document-service.md`「渲染任务队列」：节点按项目版本从文档服务取项目，按哈希从素材服务取素材。
+- 语义：`product/document-service.md`「渲染任务队列」：节点按项目版本从文档服务取项目，按哈希从素材服务取素材。
 
 ### J.0 范围，与三处按授权做的降级
 

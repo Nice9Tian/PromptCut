@@ -38,7 +38,7 @@ import {
 } from "./render/placeholderHost";
 
 /*
- * 在线浏览器模式(platforms.md)还没有运行期判据:先由舞台地址上的 `platform=browser` 显式打开,
+ * 在线浏览器模式(product/platforms.md)还没有运行期判据:先由舞台地址上的 `platform=browser` 显式打开,
  * 只影响 `unsupported` 占位(用户卡 / 图卡在这台设备上渲染不了)。编辑页的同名参数经 `stageSrc` 转发过来。
  */
 try { setOnlineBrowserMode(new URLSearchParams(location.search).get("platform") === "browser"); } catch { /* 没有 location:导出 / 单测 */ }
@@ -342,7 +342,7 @@ export default function StageView() {
      * 它往 `Stage` 已经渲好的 `[data-pc-stream-plane]` / `[data-pc-group-plane]` 上画。
      */
     const player = new StreamPlayer({ root: () => rootRef.current });
-    // 占位符的几何首选流清单的实体框(rendering.md「兜底顺序」;`placeholderHost` 的 `geometryFor`)
+    // 占位符的几何首选流清单的实体框(product/rendering.md「兜底顺序」;`placeholderHost` 的 `geometryFor`)
     setStreamBoxSource((clipId) => player.boxOf(clipId));
 
     /*
@@ -448,7 +448,7 @@ export default function StageView() {
     };
     const NO_CLIPS: ReadonlySet<string> = new Set();
     /**
-     * 按这一拍的状态切占位符(rendering.md「兜底顺序」;T1~T4 的判据在 `placeholderHost.placeholderWanted`)。
+     * 按这一拍的状态切占位符(product/rendering.md「兜底顺序」;T1~T4 的判据在 `placeholderHost.placeholderWanted`)。
      * **只切槽位的 `hidden`,不经 React 提交**;满 120 ms 才可见由占位组件的 CSS 负责。
      * T1 的「流这一拍 blank」按 `player.showingClips()` 当拍读 —— 所以每拍在 `presentStreams` 之后叫它。
      * 没有任何来不及的层、也没有显示着的占位符时一个 DOM 查询都不做。
@@ -1644,7 +1644,7 @@ export default function StageView() {
           ref.current.lastActive = new Set();
           setAwaiting([]);
           catchUpGen.current++;
-          // 后台舞台永远没有占位符(rendering.md「兜底顺序」):先撤下,再关掉 —— 这一次提交里槽位一起摘掉
+          // 后台舞台永远没有占位符(product/rendering.md「兜底顺序」):先撤下,再关掉 —— 这一次提交里槽位一起摘掉
           hideAllPlaceholders(slotOf);
           setPlaceholdersEnabled(false);
           removePlaceholderStyle();

@@ -3,7 +3,7 @@ import path from 'node:path';
 import { atomic } from './frame-mov.mjs';
 
 /**
- * 本机的卡片级指纹锁(契约 F.3;语义 `rendering.md`「不同环境的结果不混用」「预渲染结果的复用」)。
+ * 本机的卡片级指纹锁(契约 F.3;语义 `mechanism/rendering.md`「不同环境的结果不混用」「预渲染结果的复用」)。
  *
  * 本机只锁**共享档快照**这一种结果,锁键就是卡的内容键 `control.contentKey`(64 位小写十六进制)。
  * 同一把锁下只有一个环境的结果被产出、投递:页面的测量帧(用户浏览器的指纹)和本机预渲染进程

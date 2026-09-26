@@ -2,7 +2,7 @@
  * 占位平面的交接接口(预览兜底任务的 P0 定稿)。
  *
  * 兜底顺序走到尽头时,预览在该卡的位置上显示「沙漏 + 噪点」占位符,代替透明
- * (语义见 `docs/semantics/architecture/rendering.md`「兜底顺序」)。两边各管一半:
+ * (语义见 `docs/semantics/product/rendering.md`「兜底顺序」)。两边各管一半:
  *
  *   - **舞台一侧**(Stage / StageView / streamPlayer 等):决定哪张卡、什么时候显示,算几何,
  *     负责截图 / 墨迹采样 / 像素扫描的排除、动画钉时的豁免、命中测试;

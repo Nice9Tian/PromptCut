@@ -8,7 +8,7 @@ import { lockKeyOf, splitPlan } from './split.mjs';
  *
  *   endpoint  到队列的一条连接(进程内是环回端点,M5 起是 WebSocket 适配层)
  *   executor  真正干活的:算计划、渲染一段
- *   sink      产物库:先推送、确认收全,再报完成(设计 4.4,语义 `asset-storage.md`)
+ *   sink      产物库:先推送、确认收全,再报完成(设计 4.4,语义 `mechanism/asset-service.md`)
  *
  * 只认这些注入接口,不引网络、不碰文件系统、不读环境变量、不开计时器,也不认识任何真实存储。
  * 环回传输、假执行器、假产物库只在 `server/test/`(仅供测试与进程内集成),生产代码不得引用。

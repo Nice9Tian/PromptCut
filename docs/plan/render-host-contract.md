@@ -1,6 +1,6 @@
 # 独立渲染主机：契约（M6b）
 
-状态：**定稿**（2026-09-26，主会话）。依据：主执行计划第 7 节 M6、第 12 节 D9 第 10 条；语义 `docs/semantics/architecture/platforms.md`「渲染节点」；M6a 契约 `docs/plan/auth-contract.md`（凭证、角色、空间）。〔裁〕是主会话定的细节。
+状态：**定稿**（2026-09-26，主会话）。依据：主执行计划第 7 节 M6、第 12 节 D9 第 10 条；语义 `docs/semantics/product/platforms.md`「渲染节点」；M6a 契约 `docs/plan/auth-contract.md`（凭证、角色、空间）。〔裁〕是主会话定的细节。
 
 ## 1. 是什么
 
