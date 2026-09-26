@@ -411,13 +411,15 @@ export const HttpWebSocket = httpWebSocketClass();
 
 /**
  * 与 `createWsEndpoint` 同一个形状的端点，底下是 HTTP 长轮询（契约第 8 节）。
- * 选项同名同义：`url`（http(s) 或 ws(s)）、`protocols`、`token`、`setTimeout`、`clearTimeout`、`random`、`backoff`、`log`；
+ * 选项同名同义：`url`（http(s) 或 ws(s)）、`protocols`、`token`、`setTimeout`、`clearTimeout`、`random`、`backoff`、`log`。
+ * `setTimeout` / `clearTimeout` 与 WebSocket 端点一样只管重连退避；单次请求的超时、临时错误的重试间隔另由
+ * `httpTimers: { setTimeout, clearTimeout }` 注入（缺省全局计时器），免得两种计时器混在一起。
  * 另有 `fetch`（缺省全局 `fetch`）、`waitMs`（缺省 25 000）、`requestTimeoutMs`、`now`。
  * @param {object} options
  * @returns {import('./ws-transport.mjs').WsEndpoint}
  */
 export function createHttpEndpoint(options = /** @type {any} */ ({})) {
-  const { url, fetch, waitMs, requestTimeoutMs, now, WebSocket: _ignored, ...rest } = options ?? {};
+  const { url, fetch, waitMs, requestTimeoutMs, now, httpTimers, WebSocket: _ignored, ...rest } = options ?? {};
   let wsUrl;
   try {
     wsUrl = wsUrlOf(url);
@@ -428,8 +430,8 @@ export function createHttpEndpoint(options = /** @type {any} */ ({})) {
     fetch,
     ...(waitMs !== undefined ? { waitMs } : {}),
     ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
-    ...(rest.setTimeout ? { setTimeout: rest.setTimeout } : {}),
-    ...(rest.clearTimeout ? { clearTimeout: rest.clearTimeout } : {}),
+    ...(httpTimers?.setTimeout ? { setTimeout: httpTimers.setTimeout } : {}),
+    ...(httpTimers?.clearTimeout ? { clearTimeout: httpTimers.clearTimeout } : {}),
     ...(now ? { now } : {}),
     ...(rest.log ? { log: rest.log } : {}),
   });
