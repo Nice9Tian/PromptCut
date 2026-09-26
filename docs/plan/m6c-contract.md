@@ -1,6 +1,6 @@
 # M6c：排在 M6 的推迟项：契约
 
-状态：**定稿**（2026-09-26，主会话）。依据：主执行计划第 11.2 节里排到 M6 的七项；语义 `rendering.md`（「不同环境的结果不混用」「兜底顺序」）、`document-service.md`「渲染任务队列」。〔裁〕是主会话定的细节。
+状态：**定稿**（2026-09-26，主会话）。依据：主执行计划第 11.2 节里排到 M6 的七项；语义 `mechanism/rendering.md`（「不同环境的结果不混用」「兜底顺序」）、`product/document-service.md`「渲染任务队列」。〔裁〕是主会话定的细节。
 
 每项一个编号 X1～X7，各自的验收在本节末。
 
@@ -86,7 +86,7 @@ M6c 期间 C10、M7 还没开工，借用它们的端口段不冲突。
 
 ## 集成时的裁定（2026-09-26）
 
-主会话在集成分支 `claude/m6c-integ` 上定的细节，以及集成对账时按这些裁定核对、修改的实现（报告 `docs/reports/AGENT-m6c-integ.md`）。
+主会话在集成分支 `claude/m6c-integ` 上定的细节，以及集成对账时按这些裁定核对、修改的实现（报告 `docs/archive/agent-reports/AGENT-m6c-integ.md`）。
 
 - **X1 能力的两个字段**：裁定：节点同时报 `capabilities.streams` 与 `capabilities.transcode`，两者出自同一次编码器探测（`vite-plugin-frames.ts` 的 `nodeCapabilities`）；节点侧过滤保留原规则 2 的 transcode 一条，streams 一条同时生效；没有 `streams` 字段的节点回落 `transcode`。理由：不改 M5b 的规则 2，旧形状的节点与夹具照旧能过；探到编码器既是能产流也是能转码。（实现本来如此，没改；契约测试 MC-X1-filter 原断言「没报 streams 的不收」与此不符，按裁定改了那一条。）
 - **X1 的空档：切分方关着流**：裁定：发布方自己发布的 `plan` 完成时，若它的 `derived` 里一个流任务（id 以 `stream:` 开头）都没有，而本机能产流，这一版的流交还本机自动生产（不经队列），快照照旧走队列。理由：流任务由切分方按它自己的能力切出，切分方关着流时这一版一条流任务都没有；本机在队列模式下又不自动产流，流就丢了。本机自己产最稳：不需要发布方另造、另发布流任务（要复用切分、卡片锁与本地档闸的全套逻辑），也不依赖别的节点；流键是内容寻址的，万一之后又有队列任务来产同一段，只会走「已有跳过」。〔集成时加：`FramePipeline.releaseQueueStreams(entryKey)` 给 entry 标 `queueStreamsLocal`，`StreamProducer.queueOwned` 见此标记不再认为流归队列；`vite-plugin-frames.ts` 的发布记下 entry，收到自己那个 `plan` 的 `task.done` 时判一次；单测 X1-local-fallback。〕
@@ -101,5 +101,5 @@ M6c 期间 C10、M7 还没开工，借用它们的端口段不冲突。
   - `host`、`browser` 认领 `plan` 一律回 `plan-profile`（推翻 `render-host-contract.md` 第 6 节「队列侧不因 host 拒 plan」，已在那一节补注）。
   理由：发布方忙时候选不丢才不会饿死；发布方掉线后没必要再让别人等满 5 秒。〔集成时加：断开结束窗口原来没有，现在 `queue.mjs` 的 `detachNode` 给该节点做 preferNode 的 open plan 标 `preferEnded`；单测 X4-6。已经收到 `preferred` 的别的会话仍按原 `retryInMs` 再试，最多晚 `PLAN_PREFER_MS`。〕
 - **X5 闲时门槛**：裁定：阈值 500 ms（`queue-idle.mjs` 的 `INTERACTION_QUIET_MS`，与轨道流让路的 800 ms 分开）；「执行器有空位」= 执行中（持有 + 在飞的认领）< `maxConcurrent`，由节点会话守。（实现本来如此，没改；契约测试 MC-X5-* 的胶水改接 `queue-idle.mjs`。）
-- **让路期间在跑的队列任务**：裁定：`frame-pipeline.mjs` 的 `'queue'` lane 在让路（播放 / 拖动）期间不再取消任务，认领在手的做完为止；不认领新的由闲时门槛管。理由：语义 `platforms.md`「手里在做的那一批做完为止」；M5b 时 `acquire` 对 `'queue'` 与后台那一趟一样抛 `Background yielded to playback`，认领在手的任务会被当成可重试失败放回。〔集成时改：`acquire` 只对 `'background'` 让路；单测 MI-yield-queue。`queue-executor-design.md` 第 3 步相应补注。〕
+- **让路期间在跑的队列任务**：裁定：`frame-pipeline.mjs` 的 `'queue'` lane 在让路（播放 / 拖动）期间不再取消任务，认领在手的做完为止；不认领新的由闲时门槛管。理由：语义 `product/platforms.md`「手里在做的那一批做完为止」；M5b 时 `acquire` 对 `'queue'` 与后台那一趟一样抛 `Background yielded to playback`，认领在手的任务会被当成可重试失败放回。〔集成时改：`acquire` 只对 `'background'` 让路；单测 MI-yield-queue。`queue-executor-design.md` 第 3 步相应补注。〕
 - **执行器的 `isIdle()`**：裁定：删去。理由：PC 节点改用 `queue-idle.mjs` 的门槛，独立渲染主机只看全局并发闸，生产代码里已没有引用。〔集成时改：`prerender-executor.mjs` 只剩 `{ plan, render, forget }`；J8 用例作废，`render-queue-contract.md` J.4 补注；单测 MI-no-isIdle。〕

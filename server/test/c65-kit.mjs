@@ -5,7 +5,7 @@
  * 第 2、3、4、6、7、8、10 节与第 11 节 V1～V8；测试方没看实现。
  *
  * 设计稿没写死的函数名、模块路径、消息字段名全部集中在本文件，集成时对账只改这里。
- * 每一处假设用「假设 A<n>」标出，报告 `docs/reports/AGENT-c65-tests.md` 按同样的编号列出。
+ * 每一处假设用「假设 A<n>」标出，报告 `docs/archive/agent-reports/AGENT-c65-tests.md` 按同样的编号列出。
  *
  *   A1  JSON 路径引擎：`server/docservice/json-ops.mjs` 导出 `applyOps(doc, ops)`（设计稿第 11 节点名了文件，没点名函数）。
  *       成功返回新文档（或原地改后返回 undefined / 同一对象，都认）；失败抛错，`err.reason ?? err.code` 为

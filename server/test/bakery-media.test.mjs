@@ -6,7 +6,7 @@ import path from 'node:path';
 import { mediaSourceOf } from '../bakery/media.mjs';
 
 // 导出时 ffmpeg 读素材的规则:只认这一趟导出自己的产物目录,其余一律经页面同源的 HTTP(素材服务),
-// 不读本地内容库的目录、不认 m.path(docs/semantics/architecture/asset-storage.md「职责」)
+// 不读本地内容库的目录、不认 m.path(docs/semantics/product/asset-service.md「职责」)
 const pageUrl = 'http://127.0.0.1:5220/?export=1';
 const hash = 'a'.repeat(64);
 

@@ -334,7 +334,7 @@ let agentBoundKey: string | null = null;
 
 /**
  * 页面挂上 DocSync 之后告诉 Agent 服务端「我在编辑哪个项目、连的是哪个文档服务」(c65-integ2 接线;
- * 接口见 docs/reports/AGENT-c65-agent.md 第 7 节):绑上之后 side: "agent" 的工具在服务端的项目副本上执行,
+ * 接口见 docs/archive/agent-reports/AGENT-c65-agent.md 第 7 节):绑上之后 side: "agent" 的工具在服务端的项目副本上执行,
  * 写入以 Agent 对话的身份直接进文档服务(D1)。本机项目用 local(回环 + 本机信任);共享项目用 ticket:
  * Agent 服务端每开一条对话连接,经 SSE 向本页面要一张连接票据(issueAgentTicket)。同样的绑定不重发。
  */

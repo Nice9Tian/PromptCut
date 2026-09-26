@@ -2,7 +2,7 @@
 
 状态：**定稿**（2026-09-26，主会话）。依据：
 - 主执行计划 `docs/plan/Master-Execution-Plan.md` 第 12 节（D9）、第 7 节 M6；
-- 语义 `docs/semantics/architecture/document-service.md`「共享项目与权限」「渲染任务队列」、`asset-storage.md`「凭票据读写」、`workflow/project.md`「共享项目」；
+- 语义 `docs/semantics/product/document-service.md`「共享项目与权限」「渲染任务队列」、`product/asset-service.md`「凭票据读写」、`workflow/project.md`「共享项目」；
 - 查资料的结论见第 13 节（codex `gpt-6-sol`）。
 
 实现方照本文写 `server/auth/`、改文档服务与素材服务；测试方只照本文写测试，不看实现。〔裁〕是主会话在 D9 授权范围内定的细节。
@@ -93,6 +93,7 @@
 | 集群令牌 | `promptcut.token.<令牌>`（M5 的格式） | 管理身份，只能用管理接口 |
 
 - **回环来源什么都不带**：得到本机身份 `{ userId: 'local', tenantId: 'local', scope: 'local', role: 'page' }`。本机未共享的项目都在 `local` 空间里，和 M5 的行为一样。
+  - 〔2026-09-26 修订〕`PROMPTCUT_TRUST_LOOPBACK=0` 时（部署在反向代理之后的托管端），回环来源不算本机：不带凭证回 401，本机声明不认。见 `docs/plan/http-transport-contract.md` 第 10 节。
 - **本机声明**：用于局域网主机上创建者自己的页面和预渲染进程加入本机托管的共享项目。
   - 身份为 `{ userId: 'local@<本机 deviceId>', tenantId: projectId, creator: true, role }`；
   - `deviceId` 与 `deviceName` 取服务启动时给的本机设备信息；
@@ -180,7 +181,7 @@
   - `kind: 'conn'` 用于同一设备再开别的角色的连接（例如页面替本机的预渲染进程要一张 `render` 票据）；
   - 本机 `local` 身份要不到票据（它不需要）。
 - **素材服务的读写**：
-  - **回环来源**：不需要票据，与现在相同。
+  - **回环来源**：不需要票据，与现在相同。`PROMPTCUT_TRUST_LOOPBACK=0` 时同样要票据（`docs/plan/http-transport-contract.md` 第 10 节）。
   - **其它来源**：
     - 写（分片上传、`complete`、`remove`）要 `Authorization: Bearer <k: 'asset', r: 'rw' 的票据>`；
     - 读（`GET` / `HEAD`，含 Range）要 `Authorization: Bearer <素材票据>`，或者查询串 `?t=<票据>`。查询串只认 `r: 'r'` 的票据，写入一律不认查询串。
@@ -308,3 +309,18 @@ C6.5 第二批集成（`claude/c65-integ2`，2026-09-26）时主会话接受的�
 **Agent 的连接**
 
 - Agent 服务端每个对话一条 `agent` 连接：本机 `local` 空间里回环只带 `promptcut.role.agent.<对话号>`（不带本机声明）即为 `{ ...本机身份, role: 'agent', conversation }`；共享项目里每个对话各凭一张页面签发的连接票据 `{ k: 'conn', r: 'agent', c: 对话号 }` 进入（页面经 SSE 的 `agent.ticket` 收到请求，在自己的连接上发 `auth.ticket { kind: 'conn', role: 'agent', conversation }`）：写入身份只取连接的 principal，对话号在握手时定死（第 6 节）。
+
+## 16. 云端托管服务的牵线核对（2026-09-26 用户定）
+
+语义见 `docs/semantics/product/hosting.md` 的「牵线」。牵线与中继的机制属于 `docs/plan/direct-connect-plan.md`，不在 M5～M8 之内；本节只定它与本契约的对应，消息格式在直连计划的契约里定。
+
+- **先验再牵线**：成员，以及从第二台设备进入自己项目的创建者，向云端托管服务要主机地址之前先交证明。证明不对、或 `(username, deviceId)` 在禁入表里，就直接拒绝：不给地址、不打洞、不中继。拒绝计入第 9 节的限速。
+- **牵线专用值**：云端托管服务不持有 `K`。它存的是由 `K` 再派生的专用值 `R = HMAC-SHA256(K, "promptcut.rendezvous.v1")`：`K` 按第 14 节取解码后的 32 字节原始值，`R` 也是 32 字节，存储用 base64url。成员对云端托管服务的证明用 `R` 算，对主机仍用 `K`（第 5 节）。由 `R` 算不出 `K`，所以拿到 `R` 通不过主机的核对。
+- **怎么核对**：挑战应答，做法同第 4、5 节。
+  - 云端托管服务发一次性随机数和盐。盐就是这份凭证的 `K` 的盐，成员先派生 `K` 再算 `R`。名单外的用户名、`as: 'creator'` 而用户名不是创建者的，都给伪盐（第 4 节，密钥用云端托管服务自己的）。
+  - 成员交 `m = base64url(HMAC-SHA256(R, 用途串))`，用途串为 UTF-8 的 `"promptcut.rendezvous.v1\n" + projectId + "\n" + username + "\n" + deviceId + "\n" + as + "\n" + nonce`。用途前缀与第 5 节的 `promptcut.auth.v1` 不同，交给云端托管服务的证明拿到主机上重放不会通过。
+  - `m` 解码后恰好 32 字节，按定长比较；随机数只用一次，核对后立即作废。
+- **存什么**：每个项目一条记录：`kdf`；自由进入的 `project: { salt, r }`；限定进入的 `list: [{ username, salt, r }]`；`creator: { username, salt, r }`；禁入表 `bans: [{ username, deviceId }]`。`r` 是 `R` 的 base64url。不存口令、`K`、`ticketKey`、代数。
+- **谁同步、什么时候**：主机在向云端托管服务登记时同步一次；以下操作成功后再同步：`set-password`、`set-list`、`kick`、`unban`（第 7 节），`set-creator-password`（第 15 节），以及邀请码的签发、作废与重发（邀请码的校验副本随凭证副本一起同步；邀请码本身在 C10a 契约里定）。主机离线时跳过，恢复后补；补上之前，云端托管服务以旧值为准。
+- **主机再验一次**：成员连上主机后（公网直连或经中继），仍按第 5 节用 `K` 向主机的文档服务交证明，主机核对通过才进入；禁入表也在主机上再核对一次。
+- **票据**：仍由主机的文档服务按第 8 节签发。云端托管服务不持有 `ticketKey`，不签票据。

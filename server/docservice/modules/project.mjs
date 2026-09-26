@@ -3,7 +3,7 @@
  * C6.3 项目版本（`docs/plan/docservice-contract.md` 第 1 节）与 M5b 项目快照（`docs/plan/render-queue-contract.md` J.1）。
  *
  * **项目真身**（C6.5）：文档服务持有每个项目的当前内容，各方手里的都是副本（语义
- * `docs/semantics/architecture/document-service.md`「职责」）。
+ * `docs/semantics/product/document-service.md`「职责」）。
  * - `project.open`：回 `project.state`（当前内容、版本号、最近写入者），并订阅 `project:<projectId>` 频道；
  *   内容大时先回不带内容的 `project.state`，再按积压节流分片发 `project.state.part`，最后 `project.state.end`。
  * - `project.op`：一批路径操作（`../json-ops.mjs`），整批原子生效、版本号加一，回 `project.op.ok`；

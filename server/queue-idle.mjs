@@ -1,5 +1,5 @@
 /**
- * 本机队列节点的闲时门槛(M6c X5,`docs/plan/m6c-contract.md`;语义 `platforms.md`「节点只在闲时认领」)。
+ * 本机队列节点的闲时门槛(M6c X5,`docs/plan/m6c-contract.md`;语义 `product/platforms.md`「节点只在闲时认领」)。
  *
  * M5b 的门槛是执行器的 `isIdle()`:要等 preload 到 `ready`(还要流不在忙),本机节点起步偏晚。现在改为:
  * 执行器有空位(持有 + 在飞 < maxConcurrent,由节点会话自己守),并且**最近 500 ms 没有交互帧请求**,

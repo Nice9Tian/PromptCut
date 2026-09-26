@@ -3,7 +3,7 @@
 状态：**计划，未动工**（2026-09-24）。本轮只提交本文，不写生产功能代码。
 
 - 依据：`docs/plan/distributed-prerender-queue.md`（下称「设计」，已审核）。
-- 语义：`docs/semantics/architecture/document-service.md`「渲染任务队列」、`platforms.md`「渲染节点」、`rendering.md`「重管线：预渲染」与「查询渲染与预渲染进程」、`asset-storage.md`「预渲染的产物」。
+- 语义：`docs/semantics/product/document-service.md`「渲染任务队列」、`product/platforms.md`「渲染节点」、`product/rendering.md`「重管线：预渲染」与「查询渲染与预渲染进程」、`product/asset-service.md`「预渲染的产物」。
 - 开发规则：`docs/semantics/developer_guide.md` 索引下的 `guide_files/`，尤其是 `multi_agent.md`（子 Agent 协议）和 `verification.md`（基线）。
 
 本文与设计冲突时以设计为准，设计与语义冲突时以语义为准。

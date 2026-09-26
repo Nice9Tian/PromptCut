@@ -1,5 +1,5 @@
 /**
- * 写入身份（`actor`）：项目版本日志、内容库都记它（语义 `docs/semantics/architecture/document-service.md`
+ * 写入身份（`actor`）：项目版本日志、内容库都记它（语义 `docs/semantics/product/document-service.md`
  * 「版本与身份」：哪个用户的哪个页面，或哪个 Agent 的哪个对话）。
  *
  * 契约 `docs/plan/auth-contract.md` 第 6 节：记 `{ userId, deviceId, role, conversation, session }`，全部取自连接的

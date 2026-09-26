@@ -1,6 +1,6 @@
 /**
  * 独立运行的文档服务。可以跑在本机、局域网里的另一台机器或公网云端，协议相同
- * （`docs/semantics/architecture/document-service.md`「部署组合」）。托管端（阿里云）就是它。
+ * （`docs/semantics/product/document-service.md`「部署组合」）。托管端（阿里云）就是它。
  *
  * 跑：node server/docservice/main.mjs
  * 环境变量：
