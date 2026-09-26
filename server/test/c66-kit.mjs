@@ -26,7 +26,7 @@
  *       分片上传沿用素材服务现有协议（`GET <ns>/<hash>/chunks`、`PUT <ns>/<hash>/<n>`、`POST <ns>/<hash>/complete`）。
  *   K3  导出拦截：新模块 `server/export-gate.mjs` 导出 `checkExportOriginals({ project, has })`：
  *       `has(hash) → Promise<boolean>` 是「当前素材服务上这个哈希 complete 没有」；
- *       回 `{ ok: true }` 或 `{ ok: false, code: 'waiting-uploader', message, missing: [{ mediaId, hash, name? }] }`，
+ *       回 `{ ok: true }` 或 `{ ok: false, message, missing: [{ mediaId, hash, name? }] }`（另带 `code` 也行，测试不看），
  *       `message` 里有「等待上传方」。只看被片段引用的素材的**原片**（`tiers.original`，没有 tiers 就是 `hash`）。
  *   K4  可播性：仍是 `src/render/playability.ts`，导出名不变（`probePlayable(hash, url, ext, kind)`、
  *       `playableOnThisHost`、`rememberPlayable`、`forgetPlayable`）；浏览器主版本取自 `navigator.userAgent`
