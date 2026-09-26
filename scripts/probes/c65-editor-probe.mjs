@@ -14,21 +14,59 @@
  *          被踢的阻断弹窗、密码被改气泡、局域网模式要重启的提示
  *   lan    局域网模式新建 + 同名托管项目 → 打开对话框里并列两个候选
  * 结果:每项一行 JSON(`{ check, ok, ... }`),最后一行 `{ summary }`;有失败退出码 1。截图写进 `--out`。
+ *
+ * ## 跨机模式(C6.5 验收 U2):`--role creator|member`
+ *
+ * U2:另一台机器用「打开共享项目」进入后,看到的项目与局域网主机(或托管端)的 projectRev 相同;在上面改一处,创建者 5 s 内收到。
+ * 两个角色各开一个真 Chrome 页面,只经协调口(`probe-coord.mjs`)交换进入信息与完成信号,不共享文件系统。
+ *
+ *   creator(局域网主机那台):
+ *     node scripts/probes/c65-editor-probe.mjs --role creator --mode lan|hosted (--coord-port <n> [--coord-host 0.0.0.0] | --coord <url>)
+ *          (--origin <编辑器> | --spawn-editor <端口>) [--hosted <托管地址>] [--hosted-public <给成员的托管地址>] [--out <目录>] [--keep]
+ *   member(另一台,只需出站):
+ *     node scripts/probes/c65-editor-probe.mjs --role member --coord <url> (--origin <编辑器> | --spawn-editor <端口>) [--hosted <托管地址>] [--out <目录>]
+ *
+ * - `--spawn-editor <端口>`:探针自己在仓库根起编辑器(`vite --port <端口> --strictPort`,`PROMPTCUT_PUSH=0`),跑完连进程树结束;
+ *   creator 的局域网模式另加 `PROMPTCUT_LAN_HOST=1`(编辑器绑 `0.0.0.0`),其余绑 `127.0.0.1`。
+ *   `--device-id` / `--device-name` 覆盖本机设备信息(`PROMPTCUT_DEVICE_ID` / `_NAME`,一台机器起两个实例时用)。
+ * - `--mode lan`:creator 的编辑器必须是局域网主机;member 的页面靠本机编辑器的组播发现找到它。托管地址(member 这边查找时
+ *   会同时查托管端)缺省设成一个连不上的回环地址 `http://127.0.0.1:9`,避免碰真正的托管端;给了 `--hosted` 就用它。
+ * - `--mode hosted`:`--hosted` 必给(本机或局域网里起的托管组合,不要指真正的阿里云);`--hosted-public` 是写进协调口给成员的
+ *   地址(缺省同 `--hosted`),member 的 `--hosted` 优先于协调口里的。
+ * - 协调口的键:`u2-join`(creator → member:项目名、项目密码、模式、托管地址、创建后的 rev / sha256)、`u2-entered`、
+ *   `u2-go`(creator 叫 member 改,带记号)、`u2-member-edit`(member 改完、文档服务确认后)、`u2-creator-edit`、`u2-member-result`。
+ *   协调口不清键:每轮用 creator 新起的口(`--coord-port`),或新起一个 `shared-project-probe.mjs --role coord`。
+ * - 计时都只用本机时钟,不跨机比时间戳:
+ *     creator 的 `memberEditSeenMs` = 本页面 store 里出现成员那一处的时刻 − 收到成员「已提交」报告的时刻(先看到就记 0);
+ *     另记 `memberEditSinceGoMs` = 看到的时刻 − 自己发出 `u2-go` 的时刻(含协调口往返与成员动手的时间,是上界)。
+ *     member 的 `creatorEditSeenMs` 同理。两者都要求 ≤ 5000 ms(上界只记录,不判)。
+ * - projectRev 核对:member 进入后,页面的 rev / 项目 sha256 与「探针另开一条凭证连接直接向主机(托管端)project.open」读到的相同,
+ *   且与 creator 报的相同;结束时两边再各核一次最终版本。
+ * - 截图:`<role>-1-*.png`(creator 创建后 / member 进入后)、`<role>-2-*.png`(看到对方改动后)。
+ * - 结束时 creator 以创建者身份删掉这个共享项目(免得局域网主机以后启动时还在广播);`--keep` 不删。
+ * 结果:过程每步一行 JSON,最后一行 `{ ok, role, mode, projectId, rev, memberEditSeenMs | creatorEditSeenMs, ..., fails }`;有失败退出码 1。
  */
 import puppeteer from 'puppeteer';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { buildAuthProtocols } from '../../server/auth/client.mjs';
-import { createSharedProject } from '../../server/auth/route.mjs';
+import { createSharedProject, wsBaseOf } from '../../server/auth/route.mjs';
+import { spawn } from 'node:child_process';
+import { createRequire } from 'node:module';
+import { randomBytes } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
+import { startCoordServer, coordClient } from './probe-coord.mjs';
 
 const argv = process.argv.slice(2);
 const arg = (name, dflt) => {
   const i = argv.indexOf(name);
   return i >= 0 ? argv[i + 1] : dflt;
 };
-const origin = arg('--origin', 'http://127.0.0.1:5510');
+let origin = arg('--origin', 'http://127.0.0.1:5510');
 const hosted = arg('--hosted', 'http://127.0.0.1:5518');
+/** 跨机模式(U2):creator | member;不给就是原来的三个阶段 */
+const ROLE = arg('--role', null);
 const outDir = path.resolve(arg('--out', 'out/c65-editor-shots'));
 const phases = arg('--phases', 'local,shared').split(',');
 fs.mkdirSync(outDir, { recursive: true });
@@ -627,17 +665,380 @@ async function phaseLan() {
   await D.close();
 }
 
-try {
-  if (phases.includes('local')) await phaseLocal();
-  if (phases.includes('shared')) await phaseShared();
-  if (phases.includes('lan')) await phaseLan();
-} catch (e) {
-  const stack = String(e?.stack ?? e);
-  const lines = stack.split(/\r?\n/);
-  check('probe-error', false, { message: lines[0].slice(0, 300), at: lines.filter((l) => l.includes('c65-editor-probe')).map((l) => l.trim()).slice(0, 4) });
-} finally {
-  await browser.close();
+/* ======================================================================== U2 跨机 */
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+const say = (step, fields = {}) => console.log(JSON.stringify({ step, t: Date.now(), ...fields }));
+
+/** worktree 没有自己的 node_modules(往上解析到主仓库那一份):按模块解析 vite,再回到包根找 bin */
+function viteBin() {
+  const local = path.join(ROOT, 'node_modules', 'vite', 'bin', 'vite.js');
+  if (fs.existsSync(local)) return local;
+  const main = createRequire(import.meta.url).resolve('vite');
+  const at = main.lastIndexOf(`${path.sep}vite${path.sep}`);
+  return path.join(main.slice(0, at + 6), 'bin', 'vite.js');
 }
-const failed = results.filter((r) => !r.ok);
-console.log(JSON.stringify({ summary: { total: results.length, passed: results.length - failed.length, failed: failed.map((f) => f.check) } }));
-process.exitCode = failed.length ? 1 : 0;
+
+let editorProc = null;
+const editorLog = [];
+/** 在仓库根起一个编辑器;`lan` 时以局域网主机身份(PROMPTCUT_LAN_HOST=1,编辑器自己改绑 0.0.0.0) */
+async function spawnEditor(port, { lan }) {
+  const env = { ...process.env, PROMPTCUT_PUSH: '0' };
+  if (lan) env.PROMPTCUT_LAN_HOST = '1';
+  else delete env.PROMPTCUT_LAN_HOST;
+  const id = arg('--device-id', null);
+  const nm = arg('--device-name', null);
+  if (id) env.PROMPTCUT_DEVICE_ID = id;
+  if (nm) env.PROMPTCUT_DEVICE_NAME = nm;
+  editorProc = spawn(process.execPath, [viteBin(), '--port', String(port), '--strictPort', '--host', '127.0.0.1'],
+    { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, env });
+  const keep = (c) => { editorLog.push(c.toString()); if (editorLog.length > 300) editorLog.shift(); };
+  editorProc.stdout.on('data', keep);
+  editorProc.stderr.on('data', keep);
+  origin = `http://127.0.0.1:${port}`;
+  say('editor.spawn', { pid: editorProc.pid, origin, lan: !!lan });
+  await waitFor(async () => {
+    if (editorProc.exitCode !== null) throw new Error(`编辑器进程退出了(${editorProc.exitCode}):${editorLog.join('').slice(-600)}`);
+    return fetch(`${origin}/`, { signal: AbortSignal.timeout(3000) }).then((r) => r.ok, () => false);
+  }, 180_000, '编辑器起来');
+}
+async function stopEditor() {
+  if (!editorProc || editorProc.exitCode !== null || !editorProc.pid) return;
+  const exited = new Promise((r) => editorProc.once('exit', r));
+  // 编辑器还拉着预渲染进程和 Chrome:连进程树一起结束(只结束自己起的这一棵)
+  if (process.platform === 'win32') spawn('taskkill', ['/PID', String(editorProc.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+  else editorProc.kill('SIGKILL');
+  await Promise.race([exited, sleep(10_000)]);
+  say('editor.stopped', { pid: editorProc.pid });
+}
+
+/** 探针另开一条凭证连接,直接向主机(托管端)读项目:{ rev, sha256 } */
+async function hostRead(base, projectId, cred, tag) {
+  const protocols = await buildAuthProtocols({
+    base, projectId, username: cred.username, as: cred.as, password: cred.password, role: 'page',
+    deviceId: `u2-reader-${tag}`.padEnd(16, '0').slice(0, 64), deviceName: 'u2-probe-reader',
+  });
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(wsBaseOf(base), protocols);
+    const parts = [];
+    const timer = setTimeout(() => { reject(new Error('主机 project.open 超时')); ws.close(); }, 10_000);
+    const done = (project, rev) => {
+      clearTimeout(timer);
+      resolve({ rev, sha256: createHash('sha256').update(JSON.stringify(project)).digest('hex') });
+      ws.close();
+    };
+    ws.addEventListener('open', () => ws.send(JSON.stringify({ type: 'project.open', projectId })));
+    ws.addEventListener('message', (e) => {
+      const m = JSON.parse(e.data);
+      if (m.type === 'project.state' && m.project) done(m.project, m.rev);
+      else if (m.type === 'project.state.part') parts[m.index] = m.data;
+      else if (m.type === 'project.state.end') done(JSON.parse(parts.join('')), m.rev);
+    });
+    ws.addEventListener('error', () => { clearTimeout(timer); reject(new Error(`连不上主机 ${wsBaseOf(base)}`)); });
+  });
+}
+
+/** 在同一次 evaluate 里改片段参数并等文档服务确认(DocSync.whenSettled);回从改到确认的毫秒(页面时钟) */
+const editAndSave = (page, id, params) => P(page, async (id, params) => {
+  const S = await import('/src/store/project.ts');
+  const M = await import('/src/editor/sync/syncManager.ts');
+  const t0 = performance.now();
+  S.actions.setClipParams(id, params);
+  await M.whenSaved(10_000);
+  return Math.round((performance.now() - t0) * 10) / 10;
+}, id, params);
+
+/**
+ * 盯着页面 store:哪个片段的 params.text 变成 value。回 { at(本机时刻), clipId, flash(时间轴上有「别人的改动」描边) }。
+ * 立即开始盯(不等报告),所以对方的改动先于协调口的报告到达也记得到。
+ */
+function watchFor(page, value, ms, shotName) {
+  return (async () => {
+    const hit = await waitFor(() => P(page, async (value) => {
+      const S = await import('/src/store/project.ts');
+      const c = S.getState().project.tracks.flatMap((t) => t.clips).find((x) => x.params?.text === value);
+      if (!c) return null;
+      return { clipId: c.id, flash: !!document.querySelector(`[data-clip-id="${c.id}"][data-remote-flash]`) };
+    }, value), ms, `页面出现 ${value}`);
+    const at = Date.now();
+    const file = await shot(page, shotName);
+    return { at, ...hit, shot: file };
+  })();
+}
+
+async function openSharedMenu(page, item) {
+  await openProjectMenu(page);
+  await clickText(page, item, '.pc-proj-menu');
+}
+
+async function runCreator(res, fails) {
+  const mode = arg('--mode', null);
+  if (mode !== 'lan' && mode !== 'hosted') throw new Error('--mode 要 lan 或 hosted');
+  if (mode === 'hosted' && !argv.includes('--hosted')) throw new Error('托管模式要 --hosted <托管组合地址>');
+  res.mode = mode;
+  const runId = res.runId;
+  const timeoutMs = Number(arg('--timeout', '900')) * 1000;
+
+  // 协调口:自己起(跨机时 --coord-host 0.0.0.0),或用现成的
+  let coordUrl = arg('--coord', null);
+  const coordPort = arg('--coord-port', null);
+  if (coordPort) {
+    const server = await startCoordServer({ port: Number(coordPort), host: arg('--coord-host', '127.0.0.1') });
+    res._coordServer = server;
+    coordUrl = server.url;
+    say('coord.listen', { port: server.port, host: arg('--coord-host', '127.0.0.1') });
+  }
+  if (!coordUrl) throw new Error('要 --coord-port <n>(本进程起协调口)或 --coord <url>');
+  res.coord = coordUrl;
+  const coord = coordClient(coordUrl);
+
+  if (arg('--spawn-editor', null)) await spawnEditor(Number(arg('--spawn-editor')), { lan: mode === 'lan' });
+  res.origin = origin;
+  const A = await openEditor();
+  const device = await P(A, () => window.__pcSyncTest.view().device);
+  res.device = device;
+  if (mode === 'lan' && !(device?.lanHost && device?.localEditor)) throw new Error(`局域网模式要编辑器以 PROMPTCUT_LAN_HOST=1 启动、页面从回环打开:${JSON.stringify(device)}`);
+  if (mode === 'hosted') await P(A, (u) => localStorage.setItem('pc.shared.hostedUrl', u), hosted);
+
+  // ---------- D11 界面「新建共享项目」(自由进入)
+  const name = `u2-${runId}`;
+  const creatorPw = `cpw-${randomBytes(6).toString('hex')}`;
+  const projectPw = `ppw-${randomBytes(6).toString('hex')}`;
+  res.name = name;
+  await openSharedMenu(A, '新建共享项目');
+  await typeInto(A, '#pc-ns-name', name);
+  await typeInto(A, '#pc-ns-creator', 'alice');
+  await typeInto(A, '#pc-ns-cpw', creatorPw);
+  await clickText(A, mode === 'lan' ? '局域网模式' : '互联网模式', '[data-pc=new-shared-dialog]');
+  await clickText(A, '自由进入', '[data-pc=new-shared-dialog]');
+  await typeInto(A, '#pc-ns-ppw', projectPw);
+  await clickText(A, '创建', '[data-pc=new-shared-dialog] .pc-dialog-foot');
+  const created = await waitFor(() => P(A, () => {
+    const t = document.querySelector('[data-pc=new-shared-dialog] .pc-sync-status-line')?.innerText;
+    return t && !t.includes('正在创建') ? t : null;
+  }), 30_000, '创建结果');
+  const shared = await P(A, () => window.__pcSyncTest.view().shared);
+  say('creator.created', { created, shared });
+  if (!created.includes('创建成功') || !shared) throw new Error(`没建成:${created}`);
+  res.projectId = shared.projectId;
+  res.where = shared.where;
+  await clickText(A, '返回', '[data-pc=new-shared-dialog]');
+  await settle(A);
+
+  const cred = { as: 'creator', username: 'alice', password: creatorPw };
+  const page0 = await pageDigest(A);
+  const host0 = await hostRead(shared.base, shared.projectId, cred, `creator-${runId}`);
+  say('creator.state', { page: page0, host: host0 });
+  if (page0.rev !== host0.rev || page0.sha256 !== host0.sha256) fails.push('creator-page-vs-host');
+  res.rev = host0.rev;
+  res.sha256 = host0.sha256;
+  res.shots.push(await shot(A, 'creator-1-created'));
+
+  const hostedPublic = mode === 'hosted' ? arg('--hosted-public', hosted) : null;
+  const memberToken = `u2-member-${runId}`;
+  const creatorToken = `u2-creator-${runId}`;
+  await coord.put('u2-join', { runId, name, mode, username: 'bob', projectPassword: projectPw, hosted: hostedPublic, rev: host0.rev, sha256: host0.sha256, hostDeviceName: device.deviceName });
+  say('creator.join-posted', { coord: coordUrl });
+
+  // ---------- 成员进入
+  const entered = await coord.take('u2-entered', Date.now() + timeoutMs);
+  if (!entered) throw new Error('等成员进入超时');
+  say('creator.member-entered', entered);
+  res.member = { entered };
+  if (!entered.ok) fails.push('member-enter');
+
+  // ---------- 成员改一处 → 本页面 5 s 内看到
+  const seenMember = watchFor(A, memberToken, 120_000, 'creator-2-saw-member-edit');
+  const tGo = Date.now();
+  await coord.put('u2-go', { memberToken, creatorToken });
+  const report = await coord.take('u2-member-edit', Date.now() + 120_000);
+  const tReport = Date.now();
+  if (!report) throw new Error('等成员「已提交」超时');
+  const seen = await seenMember;
+  res.memberEditSeenMs = Math.max(0, seen.at - tReport);
+  res.memberEditSinceGoMs = seen.at - tGo;
+  res.memberEdit = { clipId: report.clipId, value: report.value, memberCommitMs: report.commitMs, seenClipId: seen.clipId, flash: seen.flash };
+  res.shots.push(seen.shot);
+  say('creator.saw-member-edit', { memberEditSeenMs: res.memberEditSeenMs, memberEditSinceGoMs: res.memberEditSinceGoMs, ...res.memberEdit });
+  if (!(res.memberEditSeenMs <= 5000)) fails.push('memberEditSeenMs>5000');
+  if (seen.clipId !== report.clipId) fails.push('member-edit-wrong-clip');
+
+  // ---------- 本页面改一处,交成员核对
+  const ids = await clipIds(A);
+  const target = ids.find((id) => id !== report.clipId) ?? ids[0];
+  const commitMs = await editAndSave(A, target, { text: creatorToken });
+  await coord.put('u2-creator-edit', { clipId: target, key: 'text', value: creatorToken, commitMs });
+  res.creatorEdit = { clipId: target, value: creatorToken, commitMs };
+  say('creator.edit-committed', res.creatorEdit);
+
+  const memberResult = await coord.take('u2-member-result', Date.now() + 120_000);
+  if (!memberResult) throw new Error('等成员结果超时');
+  res.member.result = memberResult;
+  res.creatorEditSeenMs = memberResult.creatorEditSeenMs ?? null;
+  if (!memberResult.ok) fails.push(`member:${(memberResult.fails ?? []).join('|')}`);
+
+  // ---------- 最终三方一致:本页面、主机、成员页面
+  await settle(A);
+  const page1 = await pageDigest(A);
+  const host1 = await hostRead(shared.base, shared.projectId, cred, `creator-${runId}`);
+  res.final = { page: page1, host: host1, member: memberResult.final?.page ?? null };
+  say('creator.final', res.final);
+  if (page1.rev !== host1.rev || page1.sha256 !== host1.sha256) fails.push('final-creator-vs-host');
+  if (memberResult.final?.page?.rev !== host1.rev || memberResult.final?.page?.sha256 !== host1.sha256) fails.push('final-member-vs-host');
+
+  // ---------- 收尾:删掉这个共享项目
+  if (!argv.includes('--keep')) {
+    const del = await P(A, async (pw) => {
+      const S = await import('/src/editor/sync/syncManager.ts');
+      const r = await S.adminOp('delete', { password: pw });
+      return r.ok ? { ok: true } : r;
+    }, creatorPw);
+    res.deleted = del.ok === true;
+    say('creator.delete', del);
+    if (!del.ok) fails.push('delete');
+  }
+  await A.close();
+}
+
+async function runMember(res, fails) {
+  const coordUrl = arg('--coord', null);
+  if (!coordUrl) throw new Error('member 要 --coord <url>');
+  res.coord = coordUrl;
+  const coord = coordClient(coordUrl);
+  const timeoutMs = Number(arg('--timeout', '900')) * 1000;
+  let result = null;
+  try {
+    if (arg('--spawn-editor', null)) await spawnEditor(Number(arg('--spawn-editor')), { lan: false });
+    res.origin = origin;
+    const B = await openEditor();
+    res.device = await P(B, () => window.__pcSyncTest.view().device);
+    say('member.editor', { origin, device: res.device });
+
+    const join = await coord.take('u2-join', Date.now() + timeoutMs);
+    if (!join) throw new Error('等创建者的进入信息超时');
+    say('member.join', { ...join, projectPassword: '(有)' });
+    res.mode = join.mode;
+    res.name = join.name;
+    // 查找时页面会同时查托管端:局域网模式缺省给一个连不上的回环地址,不碰真正的托管端
+    const hostedUrl = argv.includes('--hosted') ? hosted : join.mode === 'hosted' ? join.hosted : 'http://127.0.0.1:9';
+    res.hosted = hostedUrl;
+    await P(B, (u) => localStorage.setItem('pc.shared.hostedUrl', u), hostedUrl);
+
+    // ---------- D11 界面「打开共享项目」:查找 →(并列时挑对应模式)→ 验证 → 进入
+    await openSharedMenu(B, '打开共享项目');
+    await B.type('#pc-os-name', join.name);
+    await clickText(B, '查找', '[data-pc=open-shared-dialog] .pc-dialog-foot');
+    const found = await waitFor(() => P(B, () => {
+      if (document.querySelector('#pc-os-user')) return 'verify';
+      if (document.querySelector('[data-pc=shared-candidates]')) return 'choose';
+      const line = document.querySelector('[data-pc=open-shared-dialog] .pc-sync-status-line')?.innerText;
+      return line && !line.includes('正在') ? `msg:${line}` : null;
+    }), 20_000, '查找结果');
+    say('member.found', { found });
+    if (found.startsWith('msg:')) throw new Error(`查找失败:${found.slice(4)}`);
+    if (found === 'choose') {
+      const want = join.mode === 'lan' ? '[局域网模式]' : '[互联网模式]';
+      await clickText(B, want, '[data-pc=shared-candidates]');
+      await waitFor(() => P(B, () => !!document.querySelector('#pc-os-user')), 5000, '验证步');
+    }
+    const label = await P(B, () => document.querySelector('[data-pc=open-shared-dialog] .pc-dialog-body')?.innerText.split('\n')[0] ?? null);
+    await typeInto(B, '#pc-os-pw', join.projectPassword);
+    await typeInto(B, '#pc-os-user', join.username);
+    const tEnter = Date.now();
+    await clickText(B, '进入', '[data-pc=open-shared-dialog] .pc-dialog-foot');
+    await waitFor(() => P(B, () => window.__pcSyncTest.view().kind === 'shared'), 20_000, '进入共享项目').catch(async (e) => {
+      throw new Error(`${e.message}:${await P(B, () => document.querySelector('[data-pc=open-shared-dialog] .pc-sync-status-line')?.innerText ?? '')}`);
+    });
+    res.enterMs = Date.now() - tEnter;
+    await settle(B);
+    const shared = await P(B, () => window.__pcSyncTest.view().shared);
+    res.projectId = shared.projectId;
+    res.where = shared.where;
+    res.base = shared.base;
+    res.candidate = label;
+    const cred = { as: 'member', username: join.username, password: join.projectPassword };
+    const page0 = await pageDigest(B);
+    const host0 = await hostRead(shared.base, shared.projectId, cred, `member-${join.runId}`);
+    res.rev = page0.rev;
+    res.entered = { page: page0, host: host0, creatorRev: join.rev, creatorSha256: join.sha256 };
+    say('member.entered', { shared, ...res.entered, enterMs: res.enterMs });
+    const revOk = page0.rev === host0.rev && page0.sha256 === host0.sha256 && host0.rev === join.rev && host0.sha256 === join.sha256;
+    if (!revOk) fails.push('projectRev-mismatch');
+    if (shared.where !== join.mode) fails.push(`entered-${shared.where}-not-${join.mode}`);
+    res.shots.push(await shot(B, 'member-1-entered'));
+    await coord.put('u2-entered', { ok: revOk && shared.where === join.mode, rev: page0.rev, sha256: page0.sha256, hostRev: host0.rev, where: shared.where, base: shared.base, candidate: label, enterMs: res.enterMs });
+
+    // ---------- 改一处:第一个片段的 text 参数;文档服务确认后报「已提交」
+    const go = await coord.take('u2-go', Date.now() + 120_000);
+    if (!go) throw new Error('等创建者的「改」信号超时');
+    const seenCreator = watchFor(B, go.creatorToken, 180_000, 'member-2-saw-creator-edit');
+    const [clipId] = await clipIds(B);
+    const commitMs = await editAndSave(B, clipId, { text: go.memberToken });
+    await coord.put('u2-member-edit', { clipId, key: 'text', value: go.memberToken, commitMs });
+    res.memberEdit = { clipId, value: go.memberToken, commitMs };
+    say('member.edit-committed', res.memberEdit);
+
+    // ---------- 等创建者那一处在本页出现
+    const report = await coord.take('u2-creator-edit', Date.now() + 120_000);
+    const tReport = Date.now();
+    if (!report) throw new Error('等创建者「已提交」超时');
+    const seen = await seenCreator;
+    res.creatorEditSeenMs = Math.max(0, seen.at - tReport);
+    res.creatorEdit = { clipId: report.clipId, value: report.value, creatorCommitMs: report.commitMs, seenClipId: seen.clipId, flash: seen.flash };
+    res.shots.push(seen.shot);
+    say('member.saw-creator-edit', { creatorEditSeenMs: res.creatorEditSeenMs, ...res.creatorEdit });
+    if (!(res.creatorEditSeenMs <= 5000)) fails.push('creatorEditSeenMs>5000');
+    if (seen.clipId !== report.clipId) fails.push('creator-edit-wrong-clip');
+
+    await settle(B);
+    const page1 = await pageDigest(B);
+    const host1 = await hostRead(shared.base, shared.projectId, cred, `member-${join.runId}`);
+    res.final = { page: page1, host: host1 };
+    if (page1.rev !== host1.rev || page1.sha256 !== host1.sha256) fails.push('final-page-vs-host');
+    result = { ok: fails.length === 0, fails: [...fails], rev: res.rev, creatorEditSeenMs: res.creatorEditSeenMs, memberEdit: res.memberEdit, final: res.final };
+    await B.close();
+  } finally {
+    // 失败也告诉创建者,免得它干等
+    try { await coord.put('u2-member-result', result ?? { ok: false, fails: [...fails, 'member-error'] }); } catch { /* 协调口已关 */ }
+  }
+}
+
+async function runCross() {
+  const res = { ok: false, role: ROLE, mode: null, runId: randomBytes(4).toString('hex'), origin: null, coord: null, name: null, projectId: null, rev: null, shots: [] };
+  const fails = [];
+  try {
+    if (ROLE === 'creator') await runCreator(res, fails);
+    else if (ROLE === 'member') await runMember(res, fails);
+    else throw new Error('--role 要 creator 或 member');
+  } catch (e) {
+    const lines = String(e?.stack ?? e).split(/\r?\n/);
+    fails.push(`error:${lines[0].slice(0, 300)}`);
+    say('error', { at: lines.filter((l) => l.includes('c65-editor-probe')).map((l) => l.trim()).slice(0, 4) });
+  } finally {
+    await browser.close().catch(() => {});
+    await stopEditor().catch(() => {});
+    if (res._coordServer) { await res._coordServer.close(); delete res._coordServer; }
+  }
+  res.fails = fails;
+  res.ok = fails.length === 0;
+  console.log(JSON.stringify(res));
+  process.exitCode = res.ok ? 0 : 1;
+}
+
+if (ROLE) await runCross();
+else {
+  try {
+    if (phases.includes('local')) await phaseLocal();
+    if (phases.includes('shared')) await phaseShared();
+    if (phases.includes('lan')) await phaseLan();
+  } catch (e) {
+    const stack = String(e?.stack ?? e);
+    const lines = stack.split(/\r?\n/);
+    check('probe-error', false, { message: lines[0].slice(0, 300), at: lines.filter((l) => l.includes('c65-editor-probe')).map((l) => l.trim()).slice(0, 4) });
+  } finally {
+    await browser.close();
+  }
+  const failed = results.filter((r) => !r.ok);
+  console.log(JSON.stringify({ summary: { total: results.length, passed: results.length - failed.length, failed: failed.map((f) => f.check) } }));
+  process.exitCode = failed.length ? 1 : 0;
+}
