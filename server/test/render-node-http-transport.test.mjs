@@ -357,3 +357,16 @@ test('HT4 HttpWebSocket 注入 doc-link：Agent 连接经 HTTP 长轮询读项�
   assert.ok(conn, 'Agent 连接登记在核心里');
   assert.ok(built.service.health().transports.http >= 1, '走的是 HTTP 传输');
 });
+
+test('HT4 选用：共享项目配置项的 transport 缺省 ws；http 时 url 也可以写 https://；别的值与 ws 配 https 都报错', async () => {
+  const { normalizeEntry } = await import('../auth/shared-config.mjs');
+  const device = { deviceId: 'pc-test-device-0001', deviceName: 'test' };
+  const base = { projectId: 'sp_abcdefghijklmnopqrstuvwxyz', username: 'bob', password: 'pw' };
+  const ok = (raw) => normalizeEntry({ ...base, ...raw }, device);
+  const bad = (raw) => assert.throws(() => ok(raw), (err) => err.code === 'bad-shared-config' && !String(err.message).includes('pw'));
+  assert.equal(ok({ url: 'wss://h.test/hosted' }).transport, 'ws');
+  assert.equal(ok({ url: 'wss://h.test/hosted', transport: 'http' }).transport, 'http');
+  assert.equal(ok({ url: 'https://h.test/hosted', transport: 'http' }).url, 'https://h.test/hosted');
+  bad({ url: 'https://h.test/hosted' });
+  bad({ url: 'https://h.test/hosted', transport: 'sse' });
+});
