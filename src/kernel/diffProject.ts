@@ -234,12 +234,83 @@ function diffIdArray(prev: Obj[], next: Obj[], path: string, ctx: DiffCtx) {
     }
   }
 
-  // 3. 两边都有的元素逐个递归
+  // 3. 两边都有的元素逐个递归。身份不同但内容一样的元素(整份深拷贝过的项目里几乎全是)
+  //    先用 noOpsBetween 廉价地排除掉,不拼路径、不建索引
   for (const e of next) {
     const id = e.id as string;
     const before = prevById.get(id);
-    if (before !== undefined && before !== e) diffValue(before, e, idPath(path, id), ctx);
+    if (before !== undefined && before !== e && !noOpsBetween(before, e)) diffValue(before, e, idPath(path, id), ctx);
   }
+}
+
+/*
+ * noOpsBetween(prev, next) 为 true 时,diffValue(prev, next) 保证一条操作也不出。
+ * 它逐分支照着 diffValue / diffObject / diffIdArray 的判断走,只是不拼路径、不记操作、
+ * 遇到第一处会出操作的地方就返回 false。拿不准的情形一律返回 false(交给 diffValue 照常算),
+ * 所以用它跳过只会少做无用功,不会改变输出。
+ */
+function noOpsBetween(prev: unknown, next: unknown): boolean {
+  if (prev === next) return true;
+  // 不都是对象:diffValue 落到 deepEqual,两者不 === 时 deepEqual 必为 false
+  if (typeof prev !== "object" || typeof next !== "object" || prev === null || next === null) return false;
+  // 一边数组一边不是:diffValue 落到 deepEqual,必为 false
+  if (Array.isArray(prev)) return Array.isArray(next) && noOpsArray(prev, next);
+  if (Array.isArray(next)) return false;
+  if (isPlainObject(prev) && isPlainObject(next)) return noOpsObject(prev, next);
+  // 其余(至少一边是非普通对象):diffValue 用 deepEqual 判
+  return deepEqual(prev, next);
+}
+
+/** 与 diffObject 的两个循环一一对应:第一个循环出 remove,第二个出 set 或递归 */
+function noOpsObject(prev: Obj, next: Obj): boolean {
+  const ka = Object.keys(prev);
+  const kb = Object.keys(next);
+  let sameKeys = ka.length === kb.length;
+  for (let i = 0; sameKeys && i < ka.length; i++) if (ka[i] !== kb[i]) sameKeys = false;
+  if (sameKeys) {
+    for (let i = 0; i < ka.length; i++) {
+      const k = ka[i];
+      const a = prev[k];
+      const b = next[k];
+      if (a === b) continue;
+      if (a === undefined || b === undefined) return false;
+      if (!noOpsBetween(a, b)) return false;
+    }
+    return true;
+  }
+  for (const k in prev) {
+    if (has(prev, k) && !has(next, k)) return false;
+  }
+  for (const k in next) {
+    if (!has(next, k)) continue;
+    if (!has(prev, k)) return false;
+    const a = prev[k];
+    const b = next[k];
+    if (a !== b && !noOpsBetween(a, b)) return false;
+  }
+  return true;
+}
+
+function noOpsArray(prev: unknown[], next: unknown[]): boolean {
+  // 长度不同:两边都是带 id 的数组时必有 insert / remove;否则 deepEqual 为 false
+  if (prev.length !== next.length) return false;
+  for (let i = 0; i < prev.length; i++) {
+    const a = prev[i];
+    // prev 的元素不全是带非空字符串 id 的普通对象:prev 不是带 id 的数组,diffValue 用 deepEqual 判
+    if (!isPlainObject(a) || typeof a.id !== "string" || a.id === "") return deepEqual(prev, next);
+    // 两边 id 逐位相同才可能没有操作;不同的情形(换序、换元素、next 不是带 id 的数组)交给 diffValue
+    const b = next[i];
+    if (!isPlainObject(b) || b.id !== a.id) return false;
+  }
+  // 若两边都是带 id 的数组:id 顺序完全相同,diffIdArray 不删不挪不插,只逐个递归。
+  // 先逐个比(有一个会出操作就返回 false —— 返回 false 总是安全的),都没有操作再确认 id 不重复
+  for (let i = 0; i < next.length; i++) {
+    const a = prev[i];
+    const b = next[i];
+    if (a !== b && !noOpsBetween(a, b)) return false;
+  }
+  // id 有重复:两边都不是带 id 的数组,diffValue 用 deepEqual 判
+  return isIdArray(prev) || deepEqual(prev, next);
 }
 
 /**
