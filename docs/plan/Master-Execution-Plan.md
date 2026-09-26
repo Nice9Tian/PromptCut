@@ -421,7 +421,8 @@ ctx = { send(connId, msg), publish(channel, msg), now(), log(event, fields), con
 - **信封**：`{ queue, seq, t, from, kind, ref, body }`。`kind` 取：
   - `instruction`：指令；
   - `receipt`：回执，`ref` 指向指令的 `seq`；
-  - `question`：要主会话或用户定的事。
+  - `question`：要主会话或用户定的事；
+  - `status`：报到与状态，如 6.4b 节握手时云端的报到（2026-09-27 随 6.4b 加入信箱，`c637fbf`）。
 
 ### 6.3 指令与回执
 
