@@ -263,6 +263,8 @@ function noOpsBetween(prev: unknown, next: unknown): boolean {
 
 /** 与 diffObject 的两个循环一一对应:第一个循环出 remove,第二个出 set 或递归 */
 function noOpsObject(prev: Obj, next: Obj): boolean {
+  // 快路:两边自有可枚举键逐位相同(深拷贝、{ ...o, k: v } 都保持键序)。这时 has(o, k) 就是 o[k] !== undefined,
+  // 两个循环合成一个,也省掉在另一个对象上逐键 hasOwnProperty(for-in 里对别的对象查键是这里的大头)
   const ka = Object.keys(prev);
   const kb = Object.keys(next);
   let sameKeys = ka.length === kb.length;
@@ -273,11 +275,12 @@ function noOpsObject(prev: Obj, next: Obj): boolean {
       const a = prev[k];
       const b = next[k];
       if (a === b) continue;
-      if (a === undefined || b === undefined) return false;
+      if (a === undefined || b === undefined) return false; // 一边有值一边没有:remove 或 set
       if (!noOpsBetween(a, b)) return false;
     }
     return true;
   }
+  // 键不同或键序不同:照 diffObject 原样走两遍
   for (const k in prev) {
     if (has(prev, k) && !has(next, k)) return false;
   }
