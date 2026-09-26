@@ -632,7 +632,7 @@ function hostAssetClient({ node, endpoint, docUrl, origin, ticket, createAssetCl
   let derived: string | null = null;
   try {
     const u = new URL(docUrl);
-    derived = `${u.protocol === "wss:" ? "https:" : "http:"}//${u.host}/api/asset`;
+    derived = `${u.protocol === "wss:" || u.protocol === "https:" ? "https:" : "http:"}//${u.host}/api/asset`;
   } catch { /* 地址不对:只能靠登记 */ }
   let selfHost = "";
   try { selfHost = origin ? new URL(origin).host : ""; } catch { /* 没有就不排 */ }
@@ -732,7 +732,9 @@ async function startHostNode(root: string, service: FramePipeline, node: any, or
     nodeIdOf: (_entry: any, index: number) => `${nodeIdBase}/p${index}`.slice(0, 128),
     connect: (entry: any, index: number) => {
       const rec: any = { projectId: entry.projectId ?? null, endpoint: null, assets: null, ticket: null, connectFailed: 0, opens: 0 };
-      rec.endpoint = node.createWsEndpoint({ url: entry.url, protocols: sharedProtocols(entry, { role: "render" }), log: (event: string, fields: object) => {
+      // 传输按配置项选(HTTP 长轮询给只放行 443 HTTPS 的节点,`docs/plan/http-transport-contract.md` 第 9 节);两者形状相同、日志事件同名
+      const createEndpoint = entry.transport === "http" ? node.createHttpEndpoint : node.createWsEndpoint;
+      rec.endpoint = createEndpoint({ url: entry.url, protocols: sharedProtocols(entry, { role: "render" }), log: (event: string, fields: object) => {
         if (event === "ws.connect-failed") rec.connectFailed++;
         if (event === "ws.open") rec.opens++;
         // 连不上时每次退避都会打一行,只在头几次打,免得刷屏
