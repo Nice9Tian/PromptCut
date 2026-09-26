@@ -28,7 +28,7 @@
 | 素材服务 | 字节的唯一读写入口，按内容哈希寻址，位置无关；取代旧名「素材存储」「素材云」 | `architecture.md`、architecture/asset-storage.md |
 | 成片渲染 | 把项目渲染成给人看的画面 | `architecture.md`、architecture/rendering.md |
 | 查询渲染 | 按 Agent 指定的时刻渲染画面，供 Agent 观察 | `architecture.md`、architecture/rendering.md |
-| 云端托管服务 | 常驻云端、所有多用户协作项目的公共入口，负责牵线（验证创建者机器的公网可达性、给成员发主机地址）与中继；与云端文档服务、云端素材服务独立部署，不属于文档服务，不签发票据 | product/hosting.md |
+| 云端托管服务 | 常驻云端、所有多用户协作项目的公共入口，负责牵线（验证创建者机器的公网可达性；先验成员的项目凭证，通过才给主机地址）与中继；与云端文档服务、云端素材服务独立部署，不属于文档服务，不签发票据 | product/hosting.md |
 | 本地文档服务、云端文档服务 | 文档服务的两种部署：跑在创建者本机的，和跑在云端的 | architecture/document-service.md |
 | 本地素材服务、云端素材服务 | 素材服务的两种部署，同上。这两组词取代旧词「本地模式」「云端模式」「远程文档服务」「远程素材服务」 | architecture/document-service.md、architecture/asset-storage.md |
 | 连接发现 | 文档服务把素材服务的地址下发给各方（已引入）；成员怎么找到主机见「连接路径」。文档服务只下发地址，不承担素材传输流量 | architecture/document-service.md |
