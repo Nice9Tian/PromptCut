@@ -321,6 +321,6 @@ C6.5 第二批集成（`claude/c65-integ2`，2026-09-26）时主会话接受的�
   - 成员交 `m = base64url(HMAC-SHA256(R, 用途串))`，用途串为 UTF-8 的 `"promptcut.rendezvous.v1\n" + projectId + "\n" + username + "\n" + deviceId + "\n" + as + "\n" + nonce`。用途前缀与第 5 节的 `promptcut.auth.v1` 不同，交给云端托管服务的证明拿到主机上重放不会通过。
   - `m` 解码后恰好 32 字节，按定长比较；随机数只用一次，核对后立即作废。
 - **存什么**：每个项目一条记录：`kdf`；自由进入的 `project: { salt, r }`；限定进入的 `list: [{ username, salt, r }]`；`creator: { username, salt, r }`；禁入表 `bans: [{ username, deviceId }]`。`r` 是 `R` 的 base64url。不存口令、`K`、`ticketKey`、代数。
-- **谁同步、什么时候**：主机在向云端托管服务登记时同步一次；以下操作成功后再同步：`set-password`、`set-list`、`kick`、`unban`（第 7 节），`set-creator-password`（第 15 节）。主机离线时跳过，恢复后补；补上之前，云端托管服务以旧值为准。
+- **谁同步、什么时候**：主机在向云端托管服务登记时同步一次；以下操作成功后再同步：`set-password`、`set-list`、`kick`、`unban`（第 7 节），`set-creator-password`（第 15 节），以及邀请码的签发、作废与重发（邀请码的校验副本随凭证副本一起同步；邀请码本身在 C10a 契约里定）。主机离线时跳过，恢复后补；补上之前，云端托管服务以旧值为准。
 - **主机再验一次**：成员连上主机后（公网直连或经中继），仍按第 5 节用 `K` 向主机的文档服务交证明，主机核对通过才进入；禁入表也在主机上再核对一次。
 - **票据**：仍由主机的文档服务按第 8 节签发。云端托管服务不持有 `ticketKey`，不签票据。
