@@ -20,6 +20,11 @@
  *   node scripts/probes/probe-coord.mjs wait --base <url> --queue to-local [--after <seq> | --state <文件>] [--timeout-min 0]
  *     `wait` 反复长轮询，收到至少一条就打印（一行一条 JSON）并退出 0；`--state` 记最后读到的 seq，下次从它之后读；
  *     `--timeout-min` 到时没收到退出 3（0 为不限）；网络错误按退避一直重试。
+ *   `--kind` 取 instruction（指令）/ receipt（回执，`--ref` 指向指令的 seq）/ question（要对方或用户定的事）/ status（报到与状态）。
+ *
+ * 在 Claude Code 里等消息：用一条后台运行的 `wait` 命令（Bash 的后台运行），由它在进程内反复长轮询（每次挂 25 s），
+ * 收到消息才退出、唤醒会话；不要让模型隔一会儿调一次去逐次轮询。`--state` 文件记最后读到的 seq，下一条 `wait` 从它之后读，
+ * 所以每次被唤醒、处理完消息后再起一条同样的后台 `wait` 即可，不漏读也不重读。
  */
 import fs from 'node:fs';
 import http from 'node:http';
@@ -53,7 +58,7 @@ export function readJsonBody(req) {
 
 export const MAIL_DEFAULTS = Object.freeze({
   QUEUES: Object.freeze(['to-cloud', 'to-local']),
-  KINDS: Object.freeze(['instruction', 'receipt', 'question']),
+  KINDS: Object.freeze(['instruction', 'receipt', 'question', 'status']),
   /** 长轮询最长挂多久（nginx 缺省 `proxy_read_timeout` 60 s 之内） */
   MAX_WAIT_MS: 25_000,
   /** 每个队列在内存里留多少条；更早的只在文件里 */
@@ -70,7 +75,7 @@ const FROM_RE = /^[A-Za-z0-9._@-]{1,64}$/;
  * 两个 Agent 之间的 HTTP 信箱（不是文档服务的传输）。每个队列单向、只追加，服务端补 `seq`（每队列从 1 起）与 `t`。
  *   POST /mail/<队列>                     `{ from, kind, ref?, body }` → `{ ok, seq, t }`
  *   GET  /mail/<队列>?after=<seq>&wait=<秒> → `{ ok, messages: [信封…], last }`；没有新消息就挂着等，最长 `MAX_WAIT_MS`
- * 信封：`{ queue, seq, t, from, kind, ref, body }`；`kind` 是 instruction / receipt / question，`ref` 是回执引用的对方 seq（没有为 null）。
+ * 信封：`{ queue, seq, t, from, kind, ref, body }`；`kind` 是 instruction / receipt / question / status，`ref` 是回执引用的对方 seq（没有为 null）。
  * 每个请求都要带请求头 `X-Mail-Token`，不对回 401。令牌不进日志、不进回包。
  * `file` 给了就逐条追加成 JSON 行，重启时读回来，seq 接着编。
  */
