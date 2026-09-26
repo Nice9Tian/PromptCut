@@ -107,7 +107,7 @@
 
 **开工第一件事**：经信箱让云端报到并复测（6.5 节 W-开工）；云端不在线就登记不等，直接按 PAUSE 第 3 节开始。
 
-**规矩都在**：改语义与停点见 `suggested_agent_behavior.md`「对齐」；授权范围、发给用户但不等、裁定权在终点之下见第 10 节；角色与对端不在线见第 6 节；release 见 `constraints.md` 与 `git_and_release.md`；顾问与回退梯次见 0.1、0.2 节；汇报与播报见 `suggested_agent_behavior.md`「汇报」和全局约定的 `task-announce`。
+**规矩都在**：改语义与停点见 `suggested_agent_behavior.md`「对齐」；授权范围、发给用户但不等、裁定权在终点之下见第 10 节；角色与对端不在线见第 6 节；release 见 `constraints.md` 与 `git_and_release.md`；顾问与回退梯次见 0.1、0.2 节；汇报见 `suggested_agent_behavior.md`「汇报」；播报只在装了 `task-announce` 的机器上做（PC 有，笔记本没有），没有的机器在对话里明确说明即可。
 
 ## 1. 现状（M4 与卡片级指纹锁之后）
 
