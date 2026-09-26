@@ -2,6 +2,8 @@
 
 状态：契约第 2 版，2026-09-26 按用户裁定重写（分支 `claude/ht-plan`），取代 `claude/http-transport` 上 `7477acd` 的第 1 版。第 1 版的实现按第 15 节返工。〔裁〕是写本版时定的细节，写明了理由；用户合入前审。
 
+**2026-09-27 拆分**（用户定）：本契约分两段实施。**HT-a** 做会话模型、序号确认、WebSocket 传输接会话层、本机信任开关；**HT-b** 做 HTTP 长轮询传输（第 6 节及 HT8），记入 `docs/plan/TODO.md`，出现被代理挡住 WebSocket 的成员时再做。第 11 节验收按此拆分：HT3 在 HT-a 只跑「只走 WebSocket」与「中途断开再接续」两种；HT5 只跑自动与强制 ws；HT8 归 HT-b；HT9 由 C6.6 T9 的云端渲染节点覆盖。2026-09-27 云端工作节点容器实测：Node 的 WebSocket 经代理可用，匿名握手到阿里云回 401，此时 Node 只触发 `onerror`、不触发 `onclose`，客户端不能只等 `onclose`；无头 Chromium 里的 WebSocket 过不了该代理（握手回 200 / 404）。
+
 依据：
 - 语义：`docs/semantics/product/document-service.md` 与 `docs/semantics/mechanism/document-service.md` 的「会话与传输」；`docs/semantics/product/platforms.md`「只能出网的节点」；`docs/semantics/product/asset-service.md`、`docs/semantics/mechanism/asset-service.md` 里「本机」按真正的发起方判断。
 - 核心与信封：`docs/plan/render-queue-contract.md` G.2（本版同时修订，加 `seq`、`ack`）、G.3、G.7、H.2。
