@@ -3,6 +3,7 @@ import { getState, useStore } from "../store/project";
 import { previewMode } from "./previewMode";
 import { setPlanProject } from "./planDispatch";
 import { onProbeProgress, probeProgress, requeueProbeRun, syncProbeRun, type ProbeProgress } from "./probeRunner";
+import { whenStageReady } from "./stageBridge";
 import "./ProbeGate.css";
 
 /**
@@ -49,9 +50,17 @@ export function ProbeGate() {
    */
   useEffect(() => {
     if (!enabled) return;
-    const on = () => requeueProbeRun(getState().project);
+    let active = true;
+    const on = () => {
+      // Preview 同一事件里先卸掉旧 RPC、重载两个 iframe。下一拍读取新的 ready Promise，
+      // 等后台舞台重新握手后才测，避免把工作发给已销毁的旧客户端。
+      setTimeout(() => {
+        if (!active) return;
+        void whenStageReady("back").then(() => { if (active) requeueProbeRun(getState().project); });
+      }, 0);
+    };
     window.addEventListener("pc-cards-synced", on);
-    return () => window.removeEventListener("pc-cards-synced", on);
+    return () => { active = false; window.removeEventListener("pc-cards-synced", on); };
   }, [enabled]);
 
   if (!enabled || !p.running || !p.blocking) return null;

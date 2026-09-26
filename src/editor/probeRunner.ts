@@ -60,7 +60,7 @@ import type { RenderAborted, RenderReply, SetTimeAborted, SetTimeReply, Snapshot
 import { mirrorKey } from "../render/dataMirror";
 import { clipIdentityOf, resetClipIdentityCache } from "./costIdentity";
 import { mergePlanCosts, setPlanCosts } from "./planDispatch";
-import { onStageEvent, pushProject, stageCapabilities, whenStageReady } from "./stageBridge";
+import { backStage, onStageEvent, pushProject, stageCapabilities, whenStageReady } from "./stageBridge";
 import { MAX_PROJECT_RESENDS, currentBackJob, renderAbortAction, runBackJob } from "./stageJobs";
 
 /* ------------------------------------------------------------------ 进度 */
@@ -315,6 +315,7 @@ async function probeCardOnce(
 ): Promise<Attempt> {
   /** 中止回包按 E0 的五条规矩翻译成「这张卡怎么办」 */
   const onAbort = (r: RenderAborted): Attempt | null => {
+    if (r.reason === "role" && (stage !== backStage() || signal.aborted)) return { kind: "retry" };
     switch (renderAbortAction(r.reason, currentBackJob())) {
       case "ignore": return null;            // 'timeout'：长片段的正常路径，不是失败
       case "resend": return { kind: "retry" };
@@ -355,7 +356,11 @@ async function probeCardOnce(
     for (const n of frames) {
       if (stale() || signal.aborted) return { kind: "retry" };
       const r = await stage.setTime(n / job.fps, { probe: true });
-      if (isSetTimeAborted(r)) return { kind: "fail" };   // 只会是 'role'：角色闸门，重发也还是同一个角色
+      if (isSetTimeAborted(r)) {
+        // K5 可能在 setTime 往返期间互换前后台舞台；旧客户端此时成了 front。
+        // 只在舞台已经换人或被高优先级工作抢占时，从新 back 重试。
+        return stage !== backStage() || signal.aborted ? { kind: "retry" } : { kind: "fail" };
+      }
       // stepMs 是舞台在等那一次真 rAF **之前**取的，所以已经不含垂直同步（3.8 末条）
       steps.push(Number(r.stepMs) || 0);
       inline.push(Number(r.snapshot?.inlineMs) || 0);

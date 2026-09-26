@@ -1131,6 +1131,8 @@ export default function vitePluginCards(): Plugin[] {
           server.watcher.emit('change', abs);
         }
         emitCardSourceChange(abs);
+        // 项目对象没有变；页面须在 HMR 落地后显式重排这张卡的测量。
+        server.ws.send({ type: 'custom', event: 'pc:card-sync', data: { type: 'changed', key: toRel(server.config.root, abs) } });
       };
 
       /*
@@ -1218,7 +1220,7 @@ export default function vitePluginCards(): Plugin[] {
           },
         },
         notify: (e: object) => {
-          try { server.ws.send({ type: 'custom', event: 'pc:card-sync', data: { type: 'notice', ...e } }); } catch { /* 没有页面就算了,诊断接口里还看得到 */ }
+          try { server.ws.send({ type: 'custom', event: 'pc:card-sync', data: { type: 'notice', notice: e } }); } catch { /* 没有页面就算了,诊断接口里还看得到 */ }
         },
         log: syncLog,
       }) : null;
@@ -1485,11 +1487,7 @@ export default function vitePluginCards(): Plugin[] {
              * 手动把那个模块作废,再按「原文件变了」走一遍同样的热更新(load 钩子会交出改动层的内容)。
              */
             const written = writeCardFile(root, abs, after);
-            if (written !== abs) {
-              for (const m of server.moduleGraph.getModulesByFile(abs.split(path.sep).join('/')) ?? []) server.moduleGraph.invalidateModule(m);
-              server.watcher.emit('change', abs);
-            }
-            emitCardSourceChange(abs);
+            afterWrite(abs, written);
             savedCardFile(target);
             const sharedBy = sharedByCounts(root).get(target) || 1;
             sendJson(res, 200, {
@@ -1682,11 +1680,7 @@ export default function vitePluginCards(): Plugin[] {
             for (const r of results) {
               if (!r.abs) continue;
               // 写进改动层时 Vite 盯着的底版没变,和 edit_card 一样手动作废、再按底版变了走热更新
-              if (r.written && r.written !== r.abs) {
-                for (const m of server.moduleGraph.getModulesByFile(r.abs.split(path.sep).join('/')) ?? []) server.moduleGraph.invalidateModule(m);
-                server.watcher.emit('change', r.abs);
-              }
-              emitCardSourceChange(r.abs);
+              afterWrite(r.abs, r.written);
               // 打开 .proc 装上 / 更新的卡也算一次保存:进当前空间的内容库
               if (r.status === 'written' || r.status === 'updated') savedCardFile(`src/cards/user/${r.id}.tsx`);
             }
@@ -1765,6 +1759,7 @@ export default function vitePluginCards(): Plugin[] {
             const suggestedControls = suggestControls(finalSource).filter((s) => !declared.has(s.key));
 
             fs.writeFileSync(target, finalSource, 'utf8');
+            afterWrite(target, target);
             savedCardFile(`src/cards/user/${id}.tsx`);
 
             /*

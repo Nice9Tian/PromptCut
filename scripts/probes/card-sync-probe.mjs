@@ -87,6 +87,7 @@ const procs = [];
 const fails = [];
 const navigations = [];
 const consoleLog = [];
+const bHmrMessages = [];
 const res = { runId: RUN, cardId: CARD_ID, docPort: DOC_PORT, ports: { a: A_PORT, b: B_PORT } };
 
 function viteBin() {
@@ -144,6 +145,22 @@ const P = (page, fn, ...args) => page.evaluate(fn, ...args);
 
 async function openEditor(browser, ed) {
   const page = await browser.newPage();
+  if (ed.tag === 'b') {
+    await page.evaluateOnNewDocument(() => {
+      window.__pcCardSyncEvents = [];
+      window.addEventListener('pc-cards-synced', () => window.__pcCardSyncEvents.push(Date.now()));
+    });
+    // CDP 观察 B 页面收到的原始 WebSocket 帧，不依赖业务模块或 import.meta.hot 的监听状态。
+    const cdp = await page.createCDPSession();
+    await cdp.send('Network.enable');
+    cdp.on('Network.webSocketFrameReceived', ({ response }) => {
+      try {
+        const msg = JSON.parse(response.payloadData);
+        if (msg.type !== 'custom' || msg.event !== 'pc:card-sync') return;
+        bHmrMessages.push({ at: Date.now(), type: msg.data?.type ?? null, key: msg.data?.key ?? null, rev: msg.data?.rev ?? null });
+      } catch { /* 其它 WebSocket 帧不是 JSON */ }
+    });
+  }
   page.on('pageerror', (e) => say('pageerror', { tag: ed.tag, message: String(e?.message ?? e).slice(0, 300) }));
   page.on('dialog', (d) => void d.dismiss());
   page.on('console', (m) => { consoleLog.push({ tag: ed.tag, at: Date.now(), type: m.type(), text: m.text().slice(0, 400) }); });
@@ -339,7 +356,7 @@ try {
   let keyAfter = null;
   let gateSeen = null;
   const tr = Date.now();
-  while (Date.now() - tr < 60_000) {
+  while (Date.now() - tr < Number(process.env.PROBE_DEBUG_TIMEOUT ?? 60_000)) {
     const s = await pageCardState(pageB, CARD_ID, clipId).catch(() => null);
     if (s) {
       keyAfter = s.key;
@@ -357,10 +374,23 @@ try {
   res.remeasureVia = remeasure?.via ?? null;
   res.gate = gateSeen ? { ms: gateSeen.at - t0, text: gateSeen.text } : null;
   res.newCostRecordMs = recordedAt ? recordedAt - t0 : null;
+  if (process.env.PROBE_DEBUG) {
+    res.debugProbe = await P(pageB, async () => {
+      const R = await import('/src/editor/probeRunner.ts');
+      const B = await import('/src/editor/stageBridge.ts');
+      const J = await import('/src/editor/stageJobs.ts');
+      return { progress: R.probeProgress(), backCaps: B.stageCapabilities('back'), backPushed: !!B.pushedProject('back'), currentBackJob: J.currentBackJob() };
+    }).catch((e) => ({ error: String(e?.message ?? e) }));
+    res.debugFrames = await P(pageB, () => [...document.querySelectorAll('iframe')].map((f) => ({ src: f.src, connected: f.isConnected, size: [f.clientWidth, f.clientHeight] })));
+    res.debugFrameUrls = pageB.frames().map((f) => f.url());
+    res.stageV1After = !!(await stageHas(pageB, MARK('v1')));
+  }
   const stageAt = await waitFor(async () => ((await stageHas(pageB, MARK('v2'))) ? Date.now() : null), 15_000, 'B 舞台画出 v2').catch(() => null);
   res.stageMs = stageAt ? stageAt - t0 : null;
   await pageB.screenshot({ path: path.join(OUT, `${RUN}-b-2-after.png`) });
   res.navigationsAfterEdit = navigations.filter((n) => n.at >= t0).map((n) => ({ tag: n.tag, ms: n.at - t0 }));
+  res.bHmrMessages = bHmrMessages.filter((m) => m.at >= t0).map((m) => ({ ...m, ms: m.at - t0, at: undefined }));
+  res.bPageSyncEvents = await P(pageB, () => window.__pcCardSyncEvents ?? []).then((xs) => xs.map((at) => at - t0));
   if (process.env.PROBE_DEBUG) {
     say('debug.console', { lines: consoleLog.filter((c) => c.at >= t0 - 2000 && c.tag === 'b' && !c.text.startsWith('[vite] hot updated')) });
     for (const ed of [A, B]) say('debug.server', { tag: ed.tag, lines: ed.proc.log.join('').split(/\r?\n/).filter((l) => /hmr|page reload|cards|error/i.test(l)).slice(-40) });

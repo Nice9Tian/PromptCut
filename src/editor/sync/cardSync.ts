@@ -162,7 +162,8 @@ async function onTicket(d: Record<string, unknown>) {
 if (typeof window !== "undefined" && import.meta.hot) {
   import.meta.hot.on("pc:card-sync", (d: Record<string, unknown>) => {
     if (d?.type === "ticket") void onTicket(d);
-    else if (d?.type === "notice") onNotice(d);
+    else if (d?.type === "notice" && d.notice && typeof d.notice === "object") onNotice(d.notice as Record<string, unknown>);
+    else if (d?.type === "changed") afterSyncedInstall();
   });
   // 热更新的模块刚换上,注册表里的源码随之更新;下一拍再发,免得探针读到半截
   import.meta.hot.on("vite:afterUpdate", () => {

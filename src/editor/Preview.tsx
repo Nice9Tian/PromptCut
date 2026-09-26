@@ -387,6 +387,29 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
     };
   }, [glPortTo]);
 
+  // 卡片源码热更新会重挂主页面组件，却可能保留两个 iframe：旧舞台仍画旧代码，
+  // 旧 RPC 客户端已被 effect 清理。重载舞台让新代码和 pc-stage-ready 握手一起落地。
+  useEffect(() => {
+    const onCardsSynced = () => {
+      setStageClient("front", null);
+      setStageClient("back", null);
+      for (const id of STAGE_IDS) {
+        const frame = (id === "A" ? frameARef : frameBRef).current;
+        if (!frame) continue;
+        const client = rpcRef.current[id];
+        if (client) {
+          releaseStageClient(client);
+          client.dispose();
+          rpcRef.current[id] = null;
+          hostCapsRef.current[id] = null;
+        }
+        frame.src = frame.src;
+      }
+    };
+    window.addEventListener("pc-cards-synced", onCardsSynced);
+    return () => window.removeEventListener("pc-cards-synced", onCardsSynced);
+  }, []);
+
   /*
    * 项目选项切了 `glRoute`(R9 约束第 1 条):切到 `shared` 时给已经握过手的舞台补交端口;
    * 切回 `perDocument` 什么都不用发 —— 舞台收到新项目自己按生效路线重建 `glHost` 那一侧的连接。
