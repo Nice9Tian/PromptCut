@@ -14,7 +14,7 @@
   - C6.6 的 T9 改写；C10 拆出 C10a「demo 最小可用」；
   - 第 10 节去掉用量闸与「装依赖要问」，加「新增费用先问」；改语义按 `docs/semantics/guide_files/suggested_agent_behavior.md`「对齐」的按阶段规则；0.2 节回退梯次加「穷尽后最小改语义」；
   - 旧词统一：「局域网模式 / 互联网模式」改为「放本机 / 放云端」与「连接路径」，「新建 / 打开共享项目」改为「多用户协作」，「原片 / 小版」改为「素材原尺寸 / 素材小尺寸」。
-- **2026-09-27 修订**（用户定，据云端容器实测）：HT 拆为 **HT-a**「会话模型 + 序号确认」（排在 C10a 之后、C10 其余之前）与 **HT-b**「HTTP 长轮询传输」（记入 `TODO.md`，出现被代理挡住 WebSocket 的成员时再做）；T9 的观察端改为 PC 桌面版或笔记本第二成员实例，云端在 T9 里当渲染节点；新增第 6.8 节「对端不在线时工程照常」。实测：云端容器里 Node 的 WebSocket 经代理可用（匿名握手到达阿里云回 401），无头 Chromium 里的 WebSocket 过不了该代理（握手回 200 / 404）。
+- **2026-09-27 修订**（用户定，据云端容器实测）：HT 拆为 **HT-a**「会话模型 + 序号确认」（排在 C10a 之后、C10 其余之前）与 **HT-b**「HTTP 长轮询传输」（记入 `TODO.md`，出现被代理挡住 WebSocket 的成员时再做）；T9 的观察端改为 PC 桌面版或笔记本第二成员实例，云端在 T9 里当渲染节点；新增第 6.8 节「对端不在线时工程照常」；新增费用与物理操作改为绕过不停、记待用户项（第 10 节）。实测：云端容器里 Node 的 WebSocket 经代理可用（匿名握手到达阿里云回 401），无头 Chromium 里的 WebSocket 过不了该代理（握手回 200 / 404）。
 
 - 依据：`docs/plan/TASK-distributed-prerender-queue.md`（下称「任务书」，M0～M8 的原始定义）、`docs/plan/distributed-prerender-queue.md`（下称「设计」）、`docs/plan/render-queue-contract.md`（下称「契约」）、`docs/plan/cloud-task.md`（第 5、6、10 步）。
 - 现状：`docs/reports/REPORT-render-queue-m4.md`、`docs/reports/REPORT-render-queue-card-lock.md`；代码 `server/docservice/`、`server/render-queue/`、`server/render-node/`。
