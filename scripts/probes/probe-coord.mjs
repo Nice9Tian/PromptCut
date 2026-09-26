@@ -380,5 +380,6 @@ async function cli(argv) {
 }
 
 if (path.resolve(process.argv[1] ?? '') === fileURLToPath(import.meta.url)) {
-  cli(process.argv.slice(2)).then((code) => { if (code !== undefined) process.exit(code); }, (e) => { console.error(String(e?.message ?? e)); process.exit(1); });
+  // 用 exitCode 自然退出，不调 process.exit：Windows 上 fetch 的连接还没收完时硬退会撞 libuv 断言（退出码 127）
+  cli(process.argv.slice(2)).then((code) => { if (code !== undefined) process.exitCode = code; }, (e) => { console.error(String(e?.message ?? e)); process.exitCode = 1; });
 }
