@@ -13,6 +13,8 @@ import {
   readEffective, writeCardFile, overridesRoot, overrideFileFor, repoFileForOverride,
   setCardHasher, emitCardSourceChange,
 } from './card-overrides.mjs';
+import { createCardSync, isSyncablePath } from './card-sync.mjs';
+import { createWsEndpoint } from './render-node/ws-transport.mjs';
 
 /* ────────────────────────────────────────────────────────────────────
  * 0.4 起:Agent 能读、能改**所有**卡片的原始源码(内置卡也算),但改不了 HTML。
@@ -171,8 +173,11 @@ export function checkSourceEdit(rel: string, before: string, after: string): { o
   return { ok: errors.length === 0, errors };
 }
 
-/** 改内置 / 共用文件之前留一份原样,返回备份的相对路径 */
-function backupBeforeEdit(root: string, rel: string, content: string): string {
+/**
+ * 改卡片文件之前留一份原样,返回备份的相对路径。内置 / 共用文件、用户卡都备(`cloud-task.md` B2:用户卡也备份);
+ * 同步覆盖本机那份之前也用它(C6.6 第 5 节,卡级复用 edit_card 的备份机制)。
+ */
+export function backupBeforeEdit(root: string, rel: string, content: string): string {
   const dir = path.join(root, 'out', 'card-edits');
   fs.mkdirSync(dir, { recursive: true });
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
@@ -931,6 +936,70 @@ export function installBundledCards(opts: {
   return out;
 }
 
+/** 内置卡的 id(user 以外的定义目录里 `id: "..."` 的那些):装用户卡时撞名检查用 */
+export function builtinCardIds(root: string): string[] {
+  const ids = new Set<string>();
+  for (const dir of CARD_DEF_DIRS) {
+    const abs = path.join(root, dir);
+    if (!fs.existsSync(abs)) continue;
+    for (const f of fs.readdirSync(abs)) {
+      if (!f.endsWith('.tsx')) continue;
+      let src = '';
+      try { src = readEffective(root, path.join(abs, f)); } catch { continue; }
+      if (!/\bCardDef\b/.test(src)) continue;
+      for (const m of src.matchAll(/\bid:\s*["'`]([a-z][a-z0-9-]*)["'`]/g)) ids.add(m[1]);
+    }
+  }
+  return [...ids];
+}
+
+export interface SyncedInstallResult {
+  ok: boolean;
+  status: 'written' | 'updated' | 'unchanged' | 'rejected';
+  error?: string;
+  /** 仓库里的那个文件 */
+  abs?: string;
+  /** 实际写到的文件;和 abs 不同说明写进了改动层 */
+  written?: string;
+  /** 用户卡的定义文件:卡片 id */
+  userCardId?: string;
+}
+
+/**
+ * 装一个从内容库同步来的卡片文件(C6.6 第 5 节;`server/card-sync.mjs` 调)。和打开 .proc 装卡走同一条路:
+ *   - 用户卡的定义文件(`src/cards/user/<id>.tsx`)交给 installBundledCards:同一道审查(翻译器 + checkCardSource),
+ *     本机没有就写底版,有就写改动层(没有改动层的开发期写仓库文件,和 edit_card 一样);
+ *   - 其余文件(改过的内置卡、部件、用户卡用到的文件)走 edit_card 的那道检查(checkSourceEdit:语法、不许新加不跟帧走的写法、
+ *     CardDef 导出和 id 不许动),再经 writeCardFile 写(改动层优先,不碰仓库里的原卡)。
+ * 备份不在这里做:要不要备份由同步规则定(本机那份是不是自己的),见 card-sync.mjs。
+ */
+export function installSyncedFile(opts: { root: string; historyDir: string; rel: string; source: string; existingIds?: string[] }): SyncedInstallResult {
+  const { root, rel } = opts;
+  if (!isEditablePath(rel)) return { ok: false, status: 'rejected', error: `"${rel}" 不是可同步的卡片文件` };
+  if (typeof opts.source !== 'string') return { ok: false, status: 'rejected', error: 'source 必须是字符串' };
+  const after = opts.source.replace(/\r\n/g, '\n');
+  const user = /^src\/cards\/user\/([^/]+)\.tsx$/.exec(rel);
+  if (user && ID_RE.test(user[1])) {
+    const [r] = installBundledCards({
+      root,
+      historyDir: opts.historyDir,
+      cards: [{ id: user[1], source: after }],
+      existingIds: opts.existingIds ?? builtinCardIds(root),
+    });
+    if (!r) return { ok: false, status: 'rejected', error: '没有装卡结果' };
+    return { ok: r.status !== 'rejected', status: r.status, error: r.error, abs: r.abs, written: r.written, userCardId: user[1] };
+  }
+  const abs = path.join(root, rel);
+  if (!path.resolve(abs).startsWith(path.resolve(root) + path.sep)) return { ok: false, status: 'rejected', error: '非法的文件路径' };
+  let before: string | null = null;
+  try { before = readEffective(root, abs); } catch { before = null; }
+  if (before !== null && before.replace(/\r\n/g, '\n') === after) return { ok: true, status: 'unchanged' };
+  const check = checkSourceEdit(rel, before ?? '', after);
+  if (!check.ok) return { ok: false, status: 'rejected', error: check.errors.join('\n') };
+  const written = writeCardFile(root, abs, after);
+  return { ok: true, status: before === null ? 'written' : 'updated', abs, written };
+}
+
 export default function vitePluginCards(): Plugin {
   let projectRoot = process.cwd();
   return {
@@ -1027,6 +1096,205 @@ export default function vitePluginCards(): Plugin {
       const writeScopes = (m: Record<string, CardScope>) => {
         try { fs.writeFileSync(scopeFile, JSON.stringify(m, null, 2), 'utf8'); } catch { /* 写不进去不该让建卡失败 */ }
       };
+
+      /** 写完一个卡片文件之后的热更新:写进改动层时 Vite 盯着的底版没变,手动作废、再按底版变了走一遍 */
+      const afterWrite = (abs: string, written: string | undefined) => {
+        if (written && written !== abs) {
+          for (const m of server.moduleGraph.getModulesByFile(abs.split(path.sep).join('/')) ?? []) server.moduleGraph.invalidateModule(m);
+          server.watcher.emit('change', abs);
+        }
+        emitCardSourceChange(abs);
+      };
+
+      /*
+       * ---------------- 卡片源码同步(C6.6 第 5 节,server/card-sync.mjs) ----------------
+       *
+       * 编辑器进程自己连文档服务,卡片文件每次保存(edit_card、create_card、安装)后 content.put 进当前项目空间的内容库;
+       * 共享项目里另外 content.list / content.watch,按规则把别人的版本装进来(installSyncedFile,和打开 .proc 装卡同一条路),
+       * 装完照 edit_card 的做法热更新、发变更通知(渲染 worker 扔掉备用页、预渲染的代码哈希跟着变),再经 HMR 告诉页面重测。
+       *
+       * 绑定由页面给(和 /api/agent/bind 同一时机,见 src/editor/sync/cardSync.ts):
+       *   POST /api/cards/sync/bind   { mode: 'local' | 'ticket', projectId?, url?, ticket?, cardIds? }
+       *     - local:本机项目,连本机 /docservice 的 local 空间,只上传(同步那一半是空操作,cardRev 照常自增);
+       *     - ticket:共享项目,凭页面签的 page 角色连接票据连过去;票据两分钟过期,重连时经 HMR 向页面再要一张
+       *       (`pc:card-sync` 的 { type: 'ticket', reqId, projectId },页面 POST /api/cards/sync/ticket 交回);
+       *     - cardIds:项目用到的卡,其中的用户卡与改过的内置卡(连同它们用到的文件)服务上还没有的会传上去。
+       *   POST /api/cards/sync/unbind  回到本机空间
+       *   GET  /api/cards/sync/status  诊断:绑定、记账、最近的通知
+       * 页面没绑之前挂在本机空间(编辑器一起来就连)。预渲染进程与无头实例不同步(无头实例停用了文档服务)。
+       */
+      const syncEnabled = !isPrerender && process.env.PROMPTCUT_HEADLESS !== '1' && process.env.PROMPTCUT_CARD_SYNC !== '0';
+      const syncDir = path.join(server.config.root, '.pc-work', 'card-sync');
+      const editedFile = path.join(syncDir, 'edited.json');
+      const readEdited = (): Set<string> => {
+        try { return new Set((JSON.parse(fs.readFileSync(editedFile, 'utf8')) as unknown[]).filter((x): x is string => typeof x === 'string')); } catch { return new Set(); }
+      };
+      /** 开发期没有改动层:改过的内置文件记在这里(装机版看改动层里有没有就够了) */
+      const noteEdited = (rel: string) => {
+        if (rel.startsWith('src/cards/user/') || overridesRoot()) return;
+        const s = readEdited();
+        if (s.has(rel)) return;
+        s.add(rel);
+        try { fs.mkdirSync(syncDir, { recursive: true }); fs.writeFileSync(editedFile, JSON.stringify([...s].sort(), null, 2), 'utf8'); } catch { /* 记不下来只影响「改过没有」的判断 */ }
+      };
+      /** 用户卡(存在就算)或改过的内置卡 / 部件(改动层里有,或开发期记过) */
+      const locallyChanged = (rel: string): boolean => {
+        const abs = path.join(server.config.root, rel);
+        if (rel.startsWith('src/cards/user/')) return fs.existsSync(abs) || !!(overrideFileFor(server.config.root, abs) && fs.existsSync(overrideFileFor(server.config.root, abs)!));
+        const o = overrideFileFor(server.config.root, abs);
+        if (o && fs.existsSync(o)) return true;
+        return readEdited().has(rel);
+      };
+      /** 项目用到的卡 → 要带上的文件:每张卡的源码闭包里,属于用户卡或改过的内置卡的那些 */
+      const keysForCards = (cardIds: unknown): string[] => {
+        if (!Array.isArray(cardIds)) return [];
+        const root = server.config.root;
+        const out = new Set<string>();
+        for (const id of cardIds.slice(0, 500)) {
+          if (typeof id !== 'string' || !ID_RE.test(id)) continue;
+          const def = findCardFile(root, id);
+          if (!def) continue;
+          for (const f of importClosure(root, def)) if (isSyncablePath(f) && locallyChanged(f)) out.add(f);
+        }
+        return [...out].sort();
+      };
+      const syncLog = (event: string, fields: object = {}) => {
+        try { console.info('[cards]', event, JSON.stringify(fields)); } catch { console.info('[cards]', event); }
+      };
+      /** 向页面要一张 page 角色的连接票据(页面在自己那条共享项目连接上签) */
+      let ticketSeq = 0;
+      const ticketWaiters = new Map<string, { resolve: (t: string) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>();
+      const requestPageTicket = (projectId: string) => new Promise<string>((resolve, reject) => {
+        const reqId = `ct${++ticketSeq}`;
+        const timer = setTimeout(() => {
+          ticketWaiters.delete(reqId);
+          reject(new Error('页面 10 秒内没有交回连接票据'));
+        }, 10_000);
+        ticketWaiters.set(reqId, { resolve, reject, timer });
+        server.ws.send({ type: 'custom', event: 'pc:card-sync', data: { type: 'ticket', reqId, projectId } });
+      });
+      let syncProjectId: string | null = null;
+      const cardSync = syncEnabled ? createCardSync({
+        stateDir: syncDir,
+        connect: ({ url, protocols }: { url: string; protocols: () => Promise<string[]> | string[] }) =>
+          createWsEndpoint({ url, protocols, log: (event: string, fields: object) => syncLog(`ws.${event}`, fields) }),
+        files: {
+          read: (rel: string) => {
+            try { return readEffective(server.config.root, path.join(server.config.root, rel)); } catch { return null; }
+          },
+          changed: (rel: string) => locallyChanged(rel),
+          backup: (rel: string, content: string) => backupBeforeEdit(server.config.root, rel, content),
+          install: (rel: string, source: string) => {
+            const root = server.config.root;
+            const r = installSyncedFile({ root, historyDir: path.join(root, '.pc-work', 'card-history'), rel, source });
+            if (r.ok && r.abs && r.status !== 'unchanged') {
+              afterWrite(r.abs, r.written);
+              if (!rel.startsWith('src/cards/user/')) noteEdited(rel);
+              // 本机原来没有的用户卡:记在这个共享项目名下(存 .proc 时一起带走)
+              if (r.status === 'written' && r.userCardId) {
+                const m = readScopes();
+                if (!m[r.userCardId]) {
+                  m[r.userCardId] = { scope: 'project', createdAt: new Date().toISOString(), ...(syncProjectId ? { projectId: syncProjectId } : {}) };
+                  writeScopes(m);
+                }
+              }
+            }
+            return { ok: r.ok, error: r.error };
+          },
+        },
+        notify: (e: object) => {
+          try { server.ws.send({ type: 'custom', event: 'pc:card-sync', data: { type: 'notice', ...e } }); } catch { /* 没有页面就算了,诊断接口里还看得到 */ }
+        },
+        log: syncLog,
+      }) : null;
+      const localDocUrl = () => {
+        const port = (server.httpServer?.address() as any)?.port;
+        return port ? `ws://127.0.0.1:${port}/docservice` : null;
+      };
+      const bindLocal = () => {
+        const url = localDocUrl();
+        if (!cardSync || !url) return;
+        syncProjectId = null;
+        cardSync.bind({ local: true, url, protocols: () => ['promptcut.v1'] });
+      };
+      if (cardSync) {
+        if (server.httpServer?.listening) bindLocal();
+        else server.httpServer?.once('listening', bindLocal);
+        server.httpServer?.once('close', () => cardSync.close());
+      }
+      /** 本机保存了一个卡片文件:记账、上传 */
+      const savedCardFile = (rel: string) => {
+        if (!rel.startsWith('src/cards/user/')) noteEdited(rel);
+        cardSync?.saved(rel);
+      };
+
+      server.middlewares.use('/api/cards/sync/bind', (req, res) => {
+        if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: 'POST only' });
+        if (!originOk(req as any)) return sendJson(res, 403, { ok: false, error: 'Origin rejected' });
+        let body = '';
+        req.on('data', (c) => { body += c; if (body.length > 256 * 1024) req.destroy(); });
+        req.on('end', () => {
+          try {
+            if (!cardSync) return sendJson(res, 200, { ok: true, enabled: false });
+            const input = JSON.parse(body || '{}');
+            const mode = input?.mode === 'ticket' ? 'ticket' : 'local';
+            if (mode === 'local') {
+              bindLocal();
+              return sendJson(res, 200, { ok: true, enabled: true, ...cardSync.status(), notices: undefined });
+            }
+            const projectId = typeof input.projectId === 'string' && /^[A-Za-z0-9._:-]{1,128}$/.test(input.projectId) ? input.projectId : null;
+            if (!projectId) return sendJson(res, 400, { ok: false, error: 'projectId 不合法' });
+            if (typeof input.url !== 'string' || !/^wss?:\/\//.test(input.url)) return sendJson(res, 400, { ok: false, error: 'mode 为 ticket 时要给文档服务的 ws(s):// 地址' });
+            let first: string | null = typeof input.ticket === 'string' && input.ticket.length > 0 && input.ticket.length <= 2048 ? input.ticket : null;
+            syncProjectId = projectId;
+            cardSync.bind({
+              projectId,
+              url: input.url,
+              local: false,
+              keys: keysForCards(input.cardIds),
+              protocols: async () => {
+                const t = first ?? (await requestPageTicket(projectId));
+                first = null;
+                return ['promptcut.v1', `promptcut.ticket.${t}`];
+              },
+            });
+            sendJson(res, 200, { ok: true, enabled: true, ...cardSync.status(), notices: undefined });
+          } catch (e: any) {
+            sendJson(res, 400, { ok: false, error: e?.message || String(e) });
+          }
+        });
+      });
+      server.middlewares.use('/api/cards/sync/unbind', (req, res) => {
+        if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: 'POST only' });
+        if (!originOk(req as any)) return sendJson(res, 403, { ok: false, error: 'Origin rejected' });
+        req.resume();
+        req.on('end', () => {
+          bindLocal();
+          sendJson(res, 200, { ok: true });
+        });
+      });
+      server.middlewares.use('/api/cards/sync/ticket', (req, res) => {
+        if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: 'POST only' });
+        if (!originOk(req as any)) return sendJson(res, 403, { ok: false, error: 'Origin rejected' });
+        let body = '';
+        req.on('data', (c) => { body += c; if (body.length > 8192) req.destroy(); });
+        req.on('end', () => {
+          let data: any = {};
+          try { data = JSON.parse(body || '{}'); } catch { return sendJson(res, 400, { ok: false, error: '请求体不是 JSON' }); }
+          const w = typeof data?.reqId === 'string' ? ticketWaiters.get(data.reqId) : undefined;
+          if (!w) return sendJson(res, 404, { ok: false, error: '没有在等这张票据' });
+          ticketWaiters.delete(data.reqId);
+          clearTimeout(w.timer);
+          if (typeof data.ticket === 'string' && data.ticket.length > 0 && data.ticket.length <= 2048) w.resolve(data.ticket);
+          else w.reject(new Error(typeof data.error === 'string' ? `页面没签出票据:${data.error}` : '页面交回的票据不合法'));
+          sendJson(res, 200, { ok: true });
+        });
+      });
+      server.middlewares.use('/api/cards/sync/status', (req, res) => {
+        if (req.method !== 'GET') return sendJson(res, 405, { ok: false, error: 'GET only' });
+        res.setHeader('Cache-Control', 'no-store');
+        sendJson(res, 200, cardSync ? { ok: true, enabled: true, ...cardSync.status() } : { ok: true, enabled: false });
+      });
 
       // GET 读全表 / POST { cardId, scope } 改一张卡的档位(聊天面板那两个勾选框用)
       server.middlewares.use('/api/cards/scopes', (req, res) => {
@@ -1194,7 +1462,8 @@ export default function vitePluginCards(): Plugin {
               return sendJson(res, 400, { ok: false, error: check.errors.join('\n'), errors: check.errors });
             }
 
-            const backup = isUserDef ? undefined : backupBeforeEdit(root, target, before);
+            // B2(cloud-task.md):用户卡也备份。被同步覆盖、被改坏时都从 out/card-edits/ 找回
+            const backup = backupBeforeEdit(root, target, before);
             /*
              * 写到哪儿由 card-overrides 决定:装机版写改动层(补丁覆盖 runtime/app 时改动不丢),
              * 开发期直接写仓库文件。写进改动层时 Vite 盯着的原文件没变,它自己不会热更新 ——
@@ -1206,6 +1475,7 @@ export default function vitePluginCards(): Plugin {
               server.watcher.emit('change', abs);
             }
             emitCardSourceChange(abs);
+            savedCardFile(target);
             const sharedBy = sharedByCounts(root).get(target) || 1;
             sendJson(res, 200, {
               ok: true,
@@ -1402,6 +1672,8 @@ export default function vitePluginCards(): Plugin {
                 server.watcher.emit('change', r.abs);
               }
               emitCardSourceChange(r.abs);
+              // 打开 .proc 装上 / 更新的卡也算一次保存:进当前空间的内容库
+              if (r.status === 'written' || r.status === 'updated') savedCardFile(`src/cards/user/${r.id}.tsx`);
             }
             // 本机原来没有的卡:记在这个项目名下。已有条目不动 —— 用户设过的共享不该被一次打开冲掉
             const m = readScopes();
@@ -1478,6 +1750,7 @@ export default function vitePluginCards(): Plugin {
             const suggestedControls = suggestControls(finalSource).filter((s) => !declared.has(s.key));
 
             fs.writeFileSync(target, finalSource, 'utf8');
+            savedCardFile(`src/cards/user/${id}.tsx`);
 
             /*
              * 盖归属戳。默认 project = 只在建它的这个项目里出现 —— 这是止血的那一下:

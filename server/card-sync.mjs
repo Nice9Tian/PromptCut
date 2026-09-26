@@ -417,12 +417,12 @@ export function createCardSync({
     bind({ projectId = null, url, protocols, local = false, keys = [] } = {}) {
       if (typeof url !== 'string' || !/^wss?:\/\//.test(url)) throw new TypeError('bind: url 要 ws(s):// 地址');
       if (!local && (typeof projectId !== 'string' || !projectId)) throw new TypeError('bind: 共享项目要 projectId');
-      if (b && b.url === url && b.projectId === (local ? b.projectId : projectId) && b.local === local) {
+      if (b && b.url === url && b.local === local && (local || b.projectId === projectId)) {
         this.setKeys(keys);
         return { spaceId: b.spaceId, rebound: false };
       }
       unbindCurrent('rebind');
-      b = makeBinding({ projectId: local ? projectId : projectId, url, protocols, local, keys });
+      b = makeBinding({ projectId, url, protocols, local, keys });
       say('cards.sync.bind', { spaceId: b.spaceId, projectId, local, keys: b.keys.size });
       return { spaceId: b.spaceId, rebound: true };
     },
