@@ -117,6 +117,13 @@ export function contentTypeForFile(filePath: string): string {
   return contentTypeForExt(extOfName(filePath));
 }
 
+/** Content-Type → 扩展名(按上表反查,同一类型取表里第一个);认不出给空串。按需拉取落盘时用 */
+export function extForContentType(contentType: string): string {
+  const type = String(contentType || "").split(";")[0].trim().toLowerCase();
+  for (const [ext, t] of Object.entries(CONTENT_TYPES)) if (t === type) return ext;
+  return "";
+}
+
 export interface MediaIndexEntry {
   /** 本地内容库里的文件名(<hash>.<ext>) */
   file: string;
@@ -166,7 +173,7 @@ async function exists(file: string): Promise<boolean> {
 
 /**
  * 哈希 → 本地内容库里的文件。三条路:URL 自带扩展名 → 索引 → 扫目录(索引丢了还能救)。
- * 找不到返回 null(A1 第 5 步会在这里先去素材云端拉,再边落边服务)。
+ * 找不到返回 null(读路由接着交给按需拉取,见 server/media-pull.mjs)。
  */
 export async function resolveHashFile(root: string, hash: string, ext?: string): Promise<string | null> {
   const key = String(hash || "").toLowerCase();
@@ -192,6 +199,106 @@ export async function resolveHashFile(root: string, hash: string, ext?: string):
     }
   } catch { /* 目录还不存在 */ }
   return null;
+}
+
+/* ------------------------------------------------------------------ *
+ * 按需拉取与预取(C6.6 第 4 节,实现在 server/media-pull.mjs)
+ * ------------------------------------------------------------------ */
+
+/** 本地内容库给拉取模块的几样操作:它不认目录布局,只经这里落盘、入库 */
+function pullStore(root: string) {
+  const dir = mediaDir(root);
+  return {
+    dir,
+    resolve: (hash: string) => resolveHashFile(root, hash),
+    extForType: extForContentType,
+    async finalize(hash: string, tmp: string, ext: string, contentType: string): Promise<string> {
+      const file = ext ? `${hash}.${ext}` : hash;
+      const dest = path.join(dir, file);
+      if (await exists(dest)) {
+        await fs.rm(tmp, { force: true }).catch(() => {});
+      } else {
+        try {
+          await fs.rename(tmp, dest);
+        } catch {
+          // 改名被占着(Windows 上有读句柄没带共享删除):复制一份,临时文件稍后再删
+          await fs.copyFile(tmp, dest);
+          setTimeout(() => { void fs.rm(tmp, { force: true }).catch(() => {}); }, 5000).unref?.();
+        }
+      }
+      const stat = await fs.stat(dest);
+      await writeMediaIndex(root, hash, { file, name: file, ext, size: stat.size, contentType: contentType || contentTypeForExt(ext) });
+      return dest;
+    },
+  };
+}
+
+type PullModule = typeof import("./media-pull.mjs");
+/**
+ * 惰性取拉取模块:好几个单测把本文件单独转译到临时目录再 import,静态 import 兄弟模块会解析失败;
+ * 取不到就当没有按需拉取(和原来一样回 404)。
+ */
+async function pullModule(): Promise<PullModule | null> {
+  try { return await import("./media-pull.mjs"); } catch { return null; }
+}
+
+async function readJsonBody(req: Connect.IncomingMessage, max = 256 * 1024): Promise<any> {
+  const parts: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of req as unknown as AsyncIterable<Buffer>) {
+    size += chunk.length;
+    if (size > max) throw new Error("body too large");
+    parts.push(chunk);
+  }
+  const text = Buffer.concat(parts).toString("utf8");
+  return text ? JSON.parse(text) : {};
+}
+
+function sendJson(res: ServerResponse, status: number, body: unknown) {
+  res.statusCode = status;
+  res.setHeader("Content-Type", "application/json");
+  res.setHeader("Cache-Control", "no-store");
+  res.end(JSON.stringify(body));
+}
+
+/**
+ * 页面管的几条(同源,`/api/**` 守卫照旧):
+ * - `POST /api/media/remote { base, ticket }`:设当前连接的远程素材服务(null / DELETE 清掉);`GET` 看状态;
+ * - `POST /api/media/prefetch { items: [{ hash }] }`:换一份预取清单(有序);
+ * - `POST /api/media/originals { hashes }`:这些原片在当前素材服务上哪些还没 `complete`(导出前的拦截)。
+ */
+async function handlePullApi(req: Connect.IncomingMessage, res: ServerResponse, root: string): Promise<boolean> {
+  const url = String(req.url || "").split("?")[0];
+  if (url !== "/api/media/remote" && url !== "/api/media/prefetch" && url !== "/api/media/originals") return false;
+  const mod = await pullModule();
+  if (!mod) { sendJson(res, 501, { ok: false, error: "pull-unavailable" }); return true; }
+  try {
+    if (url === "/api/media/remote") {
+      if (req.method === "GET") { sendJson(res, 200, { ok: true, ...mod.pullStatus() }); return true; }
+      if (req.method === "DELETE") { mod.setRemoteAssetService(null); sendJson(res, 200, { ok: true, base: null }); return true; }
+      if (req.method === "POST") {
+        const body = await readJsonBody(req);
+        const base = body?.base ? mod.setRemoteAssetService({ base: String(body.base), ticket: typeof body.ticket === "string" ? body.ticket : null })?.base : mod.setRemoteAssetService(null);
+        sendJson(res, 200, { ok: true, base: base ?? null });
+        return true;
+      }
+    }
+    if (url === "/api/media/prefetch" && req.method === "POST") {
+      const body = await readJsonBody(req);
+      sendJson(res, 200, { ok: true, queued: mod.prefetch(Array.isArray(body?.items) ? body.items : [], pullStore(root)) });
+      return true;
+    }
+    if (url === "/api/media/originals" && req.method === "POST") {
+      const body = await readJsonBody(req);
+      const missing = await mod.incompleteOnService(Array.isArray(body?.hashes) ? body.hashes : [], pullStore(root));
+      sendJson(res, 200, { ok: true, remote: mod.remoteAssetBase(), missing });
+      return true;
+    }
+    sendJson(res, 405, { ok: false, error: "method" });
+  } catch (err) {
+    sendJson(res, 400, { ok: false, error: err instanceof Error ? err.message : String(err) });
+  }
+  return true;
 }
 
 /** 这些哈希里哪些已经完整落在本地内容库(A1 第 5 步的预取队列问的也是这条) */
@@ -511,6 +618,11 @@ export function mediaMiddleware(root: string) {
       }
     }
 
+    // C6.6:当前连接的远程素材服务、预取清单、导出前的原片检查
+    if (req.url.startsWith("/api/media/remote") || req.url.startsWith("/api/media/prefetch") || req.url.startsWith("/api/media/originals")) {
+      if (await handlePullApi(req, res, root)) return;
+    }
+
     // GET /api/media/local?hashes=a,b —— 这些哈希里哪些已经在本地内容库
     if (req.method === "GET" && req.url.startsWith("/api/media/local")) {
       const query = new URL(req.url, "http://promptcut.local").searchParams;
@@ -544,6 +656,9 @@ export function mediaMiddleware(root: string) {
         if (hashed) {
           const file = await resolveHashFile(root, hashed[1].toLowerCase(), hashed[2]);
           if (file) return serveFile(file, req, res);
+          // C6.6 按需拉取:本地内容库没有,就向当前连接的远程素材服务流式拉、边落盘边服务;没连远程才直接 404
+          const mod = await pullModule();
+          if (mod && await mod.pullThrough({ hash: hashed[1].toLowerCase(), req, res, store: pullStore(root), serveFile: (f: string) => serveFile(f, req, res) })) return;
           res.statusCode = 404;
           return res.end("Not found");
         }
