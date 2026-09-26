@@ -148,7 +148,7 @@ export interface MediaAsset {
    * 只在编辑器会话内有意义,存盘再打开时由 restoreMediaUrls 清掉。
    */
   pending?: boolean;
-  /** A1:同一素材的两档(先小后大)。换档见 src/render/mediaTier.ts;小版眼下还不产 */
+  /** A1:同一素材的两档(先小后大)。只有视频有;小版由导入方本机生成(C6.6),换档见 src/render/mediaTier.ts */
   tiers?: MediaTiers;
   duration?: number; // 秒
   width?: number;
