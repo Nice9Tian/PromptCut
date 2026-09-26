@@ -451,7 +451,7 @@ export function fakeCardHost({ files = {}, scopes = {}, stateFile } = {}) {
     readLocal: async (key) => (local.has(key) ? local.get(key) : null),
     install: async ({ key, body, rev }) => { events.push({ type: 'install', key, body, rev }); local.set(key, body); },
     backup: async ({ key, body }) => { events.push({ type: 'backup', key, body }); },
-    notify: (msg) => { events.push({ type: 'notify', ...msg }); },
+    notify: (msg) => { events.push({ ...msg, type: 'notify', notifyType: msg?.type }); },
     scopeOf: (key) => scopes[key] ?? 'user',
   };
 }
