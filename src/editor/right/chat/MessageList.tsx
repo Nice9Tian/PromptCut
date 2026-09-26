@@ -1,4 +1,4 @@
-import React, { useRef, useLayoutEffect } from "react";
+import React, { useRef, useLayoutEffect, useReducer } from "react";
 import type { ChatMessage } from "../../../ai/types";
 import type { OrchestrationState } from "../../../ai/orchestrateGraph";
 import type { useInstallJobs } from "../../../ai/sttInstallStore";
@@ -10,6 +10,7 @@ import { playEnter } from "../../enterMotion";
 import type { ViewMode } from "./viewPrefs";
 import type { InboundAgentMessage } from "../../../ai/types";
 import { reportsOf } from "../../../ai/progressReport";
+import { HeightBook, isAtBottom, planSegments, prefixOffsets, touchRecent, windowRange, WINDOW_MIN_ENTRIES, type Segment } from "./listWindow";
 import "./chat.css";
 
 /**
@@ -168,7 +169,33 @@ export interface MessageListProps {
   rewind?: RewindHandlers;
 }
 
-/** 消息滚动区:贴底跟随、编排折叠块的插入位置、两轮之间的时间分隔都在这里 */
+/** 列表里的一条:消息气泡、时间分隔行、「收到其他 Agent 的消息」小字、编排折叠块。每条渲染出来恰好是滚动区的一个直接子元素 */
+type EntryKind = "row" | "time" | "note" | "orch";
+interface Entry {
+  key: string;
+  kind: EntryKind;
+  render: () => React.ReactElement;
+}
+
+/** 没量过的条先按这些高度估(行和 chat.css 里 contain-intrinsic-size 的 120px 一致);量过同类的之后按同类平均 */
+const DEFAULT_HEIGHTS: Record<EntryKind, number> = { row: 120, time: 20, note: 20, orch: 44 };
+/** 最近点过、按过键的几条保持渲染,气泡自己的状态(翻到哪一页、确认层开着)不因滚远被卸载而丢 */
+const PIN_CAP = 8;
+/** 还没量到滚动区高度时(第一次渲染)按这么高算窗口 */
+const FALLBACK_VIEW_H = 800;
+/** 上下余量:可视高度的一半,至少 300px */
+const overscanFor = (h: number) => Math.max(300, h / 2);
+
+/**
+ * 消息滚动区:贴底跟随、编排折叠块的插入位置、两轮之间的时间分隔、窗口化都在这里。
+ *
+ * 窗口化(C6.5 遗留):条数超过 WINDOW_MIN_ENTRIES 时只渲染可视区附近的几条(listWindow.ts),
+ * 上下没渲染的用占位 div 顶住滚动条。消息高度不固定:渲染出来的每条都挂 ResizeObserver,实测高度按 key 记在 HeightBook 里,
+ * 没量过的按同类平均估。流式中的那条、最后一条、有焦点的、最近动过的几条不论在哪都渲染。
+ *
+ * 滚动位置不靠浏览器的滚动锚定(overflow-anchor: none,见 chat.css),自己锚:不贴底时记住视口顶上第一条的位置,
+ * 上面的条换了高度、占位换了估计、窗口挪了,在绘制之前把它挪回原处;贴底时照旧滚到底。
+ */
 export function MessageList(props: MessageListProps) {
   const { messages, view, showThinking, installJobs, expanded, openRuns, rowHandlers, orchestration, onPickExample, rewind } = props;
   const messagesScrollRef = useRef<HTMLDivElement>(null);
@@ -181,30 +208,118 @@ export function MessageList(props: MessageListProps) {
    * 所以要在**内容变化之前**就把「当时在不在底部」记下来:onScroll 里维护 stickRef,
    * 那是用户最后一次表态。
    *
-   * 不贴底时什么都不做 —— 内容追加在下方,scrollTop 不动,看的那一段就不动,
-   * 相对位置自然保住,不会弹跳。
+   * 不贴底时不往底部拽 —— 内容追加在下方,看的那一段不动;上方有高度变化时由锚点挪回。
    */
   const stickRef = useRef(true);
-  const BOTTOM_SLACK = 40;
+
+  const bookRef = useRef<HeightBook | null>(null);
+  if (!bookRef.current) bookRef.current = new HeightBook(DEFAULT_HEIGHTS);
+  const [, bump] = useReducer((x: number) => x + 1, 0);
+  /** 最近一次量到的滚动位置与可视高度 */
+  const viewRef = useRef({ scrollTop: 0, clientHeight: 0 });
+  /** 这一次渲染的布局:偏移表、是否窗口化、窗口范围;onScroll 里拿它判断要不要重渲 */
+  const layoutRef = useRef<{ off: number[]; windowed: boolean; first: number; last: number }>({ off: [0], windowed: false, first: 0, last: 0 });
+  /** 渲染出来的条,按 DOM 顺序(不含占位) */
+  const shownRef = useRef<string[]>([]);
+  const kindRef = useRef(new Map<string, EntryKind>());
+  const elKeyRef = useRef(new WeakMap<Element, string>());
+  const keyElRef = useRef(new Map<string, HTMLElement>());
+  const observedRef = useRef(new Set<Element>());
+  const roRef = useRef<ResizeObserver | null>(null);
+  /** 不贴底时的锚:视口顶上第一条,和它顶边离滚动区顶边的距离 */
+  const anchorRef = useRef<{ key: string; offset: number } | null>(null);
+  const pinnedRef = useRef<string[]>([]);
+  const focusKeyRef = useRef<string | null>(null);
+
+  const computeRange = (off: number[]) => {
+    const h = viewRef.current.clientHeight || FALLBACK_VIEW_H;
+    return windowRange(off, { scrollTop: viewRef.current.scrollTop, clientHeight: h, stick: stickRef.current }, { overscan: overscanFor(h) });
+  };
+
+  const captureAnchor = () => {
+    const box = messagesScrollRef.current;
+    if (!box || box.getClientRects().length === 0) return;
+    anchorRef.current = null;
+    const top = box.getBoundingClientRect().top;
+    for (const key of shownRef.current) {
+      const el = keyElRef.current.get(key);
+      if (!el) continue;
+      const r = el.getBoundingClientRect();
+      if (r.bottom > top) {
+        anchorRef.current = { key, offset: r.top - top };
+        return;
+      }
+    }
+  };
+
+  /** 布局变了之后、绘制之前:贴底的滚到底,不贴底的把锚挪回原处 */
+  const settle = () => {
+    const box = messagesScrollRef.current;
+    // 分页不在前台(display:none)时量什么都是 0:不动,等它显示出来 ResizeObserver 再叫一次
+    if (!box || box.getClientRects().length === 0) return;
+    if (stickRef.current) {
+      box.scrollTop = box.scrollHeight;
+    } else {
+      const a = anchorRef.current;
+      const el = a ? keyElRef.current.get(a.key) : undefined;
+      if (a && el) {
+        const d = el.getBoundingClientRect().top - box.getBoundingClientRect().top - a.offset;
+        if (Math.abs(d) > 0.5) box.scrollTop += d;
+      }
+    }
+    viewRef.current = { scrollTop: box.scrollTop, clientHeight: box.clientHeight };
+    captureAnchor();
+  };
+  const settleRef = useRef(settle);
+  settleRef.current = settle;
 
   const onMessagesScroll = () => {
     const el = messagesScrollRef.current;
     if (!el) return;
-    stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight <= BOTTOM_SLACK;
+    stickRef.current = isAtBottom(el.scrollHeight, el.scrollTop, el.clientHeight);
+    viewRef.current = { scrollTop: el.scrollTop, clientHeight: el.clientHeight };
+    captureAnchor();
+    const lay = layoutRef.current;
+    if (!lay.windowed) return;
+    const r = computeRange(lay.off);
+    if (r.first !== lay.first || r.last !== lay.last) bump();
   };
 
-  // 用 layout 效果:在浏览器绘制这一帧之前就挪好,不会看到先跳后回的闪动。
-  // 不给依赖数组 —— 流式输出每来一段都是一次提交,每次提交都要重新贴住。
+  // 实测高度:渲染出来的每一条和滚动区本身都挂着。隐藏的分页(display:none)量出来全是 0,不记
   useLayoutEffect(() => {
-    if (!stickRef.current) return;
-    const el = messagesScrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  });
+    const ro = new ResizeObserver((list) => {
+      const box = messagesScrollRef.current;
+      if (!box || box.getClientRects().length === 0) return;
+      let changed = false;
+      for (const e of list) {
+        if (e.target === box) {
+          changed = true;
+          continue;
+        }
+        const key = elKeyRef.current.get(e.target);
+        const kind = key ? kindRef.current.get(key) : undefined;
+        if (!key || !kind) continue;
+        const h = e.borderBoxSize?.[0]?.blockSize ?? e.target.getBoundingClientRect().height;
+        if (bookRef.current!.set(key, kind, h)) changed = true;
+      }
+      if (!changed) return;
+      settleRef.current();
+      bump();
+    });
+    roRef.current = ro;
+    if (messagesScrollRef.current) ro.observe(messagesScrollRef.current);
+    const observed = observedRef.current;
+    return () => {
+      ro.disconnect();
+      observed.clear();
+      roRef.current = null;
+    };
+  }, []);
 
   /*
    * 新消息淡入、上浮一点(enterMotion)。只给「刚追加进来」的一两条放:第一次渲染时已有的历史、
    * 打开历史会话一口气换进来的整段都不演 —— 几十条一起动既看不清也白花力气。
-   * 见过的 id 记下来,之后流式更新、分页切回来都不再放。
+   * 见过的 id 记下来,之后流式更新、分页切回来都不再放。窗口外没渲染的那条自然不演。
    */
   const seenIds = useRef<Set<string> | null>(null);
   useLayoutEffect(() => {
@@ -271,6 +386,7 @@ export function MessageList(props: MessageListProps) {
    */
   const followersOf = new Map<string, ChatMessage[]>();
   const followerIds = new Set<string>();
+  const leaderOf = new Map<string, string>();
   if (view !== "verbose") {
     let leader: ChatMessage | null = null;
     let groupRounds = 0;
@@ -282,6 +398,7 @@ export function MessageList(props: MessageListProps) {
         list.push(m);
         followersOf.set(leader.id, list);
         followerIds.add(m.id);
+        leaderOf.set(m.id, leader.id);
         groupRounds += 1;
         groupTools += toolCount(m);
       } else {
@@ -293,8 +410,167 @@ export function MessageList(props: MessageListProps) {
     }
   }
 
+  /*
+   * 摊平成一条条(Entry):每条渲染出来是滚动区的一个直接子元素,key 各自独立 ——
+   * 窗口挪动、前后插时间行 / 编排块,MessageRow 都不会换位置重挂(memo 和展开状态都保得住)。
+   * 这里只记怎么画,真正建元素只对窗口里的那几条做。
+   */
+  const entries: Entry[] = [];
+  /** 流式中的消息画在哪一条里(并进前面气泡的,画在组头那一条) */
+  const liveKeys = new Set<string>();
+  messages.forEach((m, i) => {
+    const hidden = inboundOnly.has(m.id) || followerIds.has(m.id);
+    const at = timeOf(m);
+    if (!hidden && m.role === "user" && at !== null && lastAt !== null && at - lastAt >= TIME_GAP_MS) {
+      const stampAt = at;
+      entries.push({ key: `${m.id}:time`, kind: "time", render: () => <div key={`${m.id}:time`} className="ai-time-sep">{formatStamp(stampAt)}</div> });
+    }
+    // 不画出来的(收到的 Agent 消息、并进前面气泡的回复)也照样推进时间点,不然后面会多出时间分隔行
+    const end = typeof m.finishedAt === "number" ? m.finishedAt : at;
+    if (end !== null) lastAt = lastAt === null ? end : Math.max(lastAt, end);
+    if (inboundOnly.has(m.id)) {
+      const orphan = orphanNote.get(m.id);
+      if (orphan) {
+        entries.push({
+          key: `${m.id}:inbound`,
+          kind: "note",
+          render: () => (
+            <div key={`${m.id}:inbound`} className="ai-inbound-note">
+              收到 {orphan} 条其他 Agent 的消息,等 Agent 开始处理
+            </div>
+          ),
+        });
+      }
+    } else if (followerIds.has(m.id)) {
+      // 并进前面某个气泡的那几轮:自己不画
+      if (m.pending) liveKeys.add(leaderOf.get(m.id) ?? m.id);
+    } else {
+      if (m.pending) liveKeys.add(m.id);
+      const followers = followersOf.get(m.id);
+      entries.push({
+        key: m.id,
+        kind: "row",
+        render: () => (
+          <MessageRow
+            key={m.id}
+            m={m}
+            view={view}
+            showThinking={showThinking}
+            installJobs={installJobs}
+            expanded={expanded}
+            openRuns={openRuns}
+            openKeys={keysFor(expanded, m.id)}
+            runKeys={keysFor(openRuns, m.id)}
+            on={rowHandlers}
+            rewind={rewind}
+            inbound={inboundFor.get(m.id)?.list}
+            inboundKey={[inboundFor.get(m.id)?.key ?? "", ...(followers ?? []).map((f) => inboundFor.get(f.id)?.key ?? "")].join("|")}
+            followers={followers}
+            followerInbound={followers?.map((f) => inboundFor.get(f.id)?.list)}
+          />
+        ),
+      });
+    }
+    // 编排块挂在「最后一条用户消息」后面;那条是收到的 Agent 消息、自己不画时也照样挂,编排进度和错误才看得到
+    if (i === lastUserIdx && orchestration) {
+      const state = orchestration;
+      entries.push({ key: `${m.id}:orch`, kind: "orch", render: () => <OrchestrationBlock key={`${m.id}:orch`} state={state} /> });
+    }
+  });
+
+  const n = entries.length;
+  const book = bookRef.current;
+  const off = prefixOffsets(entries.map((e) => book.get(e.key, e.kind)));
+  const windowed = n > WINDOW_MIN_ENTRIES;
+  let segments: Segment[];
+  let range = { first: 0, last: n };
+  if (windowed) {
+    range = computeRange(off);
+    const keep = new Set<string>(pinnedRef.current);
+    if (focusKeyRef.current) keep.add(focusKeyRef.current);
+    for (const k of liveKeys) keep.add(k);
+    const forced: number[] = [n - 1];
+    entries.forEach((e, i) => {
+      if (keep.has(e.key)) forced.push(i);
+    });
+    segments = planSegments(off, range.first, range.last, forced);
+  } else {
+    segments = entries.map((_, index) => ({ kind: "item" as const, index }));
+  }
+  layoutRef.current = { off, windowed, first: range.first, last: range.last };
+  const shown: string[] = [];
+  const kinds = kindRef.current;
+  kinds.clear();
+  for (const e of entries) kinds.set(e.key, e.kind);
+  for (const s of segments) if (s.kind === "item") shown.push(entries[s.index].key);
+  shownRef.current = shown;
+
+  // 每次提交之后、绘制之前:把渲染出来的条和 DOM 对上号、挂上测量,再贴底或挪回锚点。
+  // 不给依赖数组 —— 流式输出每来一段都是一次提交,每次提交都要重新贴住。
+  useLayoutEffect(() => {
+    const box = messagesScrollRef.current;
+    const ro = roRef.current;
+    if (!box) return;
+    const keys = shownRef.current;
+    const map = new Map<string, HTMLElement>();
+    const observed = observedRef.current;
+    const alive = new Set<Element>();
+    let i = 0;
+    for (const child of Array.from(box.children)) {
+      const el = child as HTMLElement;
+      if (el.dataset.pcVspacer !== undefined) continue;
+      const key = keys[i++];
+      if (key === undefined) break;
+      map.set(key, el);
+      elKeyRef.current.set(el, key);
+      alive.add(el);
+      if (ro && !observed.has(el)) {
+        ro.observe(el);
+        observed.add(el);
+      }
+      // 滚出视口被 content-visibility 跳过的行按实测高度占位,量到的就是真高度,不会在估计值和真值之间来回跳
+      const h = bookRef.current!.measured(key);
+      if (h !== undefined && kindRef.current.get(key) === "row") el.style.containIntrinsicSize = `auto ${Math.round(h)}px`;
+    }
+    for (const el of [...observed]) {
+      if (alive.has(el)) continue;
+      ro?.unobserve(el);
+      observed.delete(el);
+    }
+    keyElRef.current = map;
+    // 对话换了、消息被回退掉:丢掉不再出现的高度记录
+    const bk = bookRef.current!;
+    if (bk.size > 2 * kindRef.current.size + 200) bk.prune(new Set(kindRef.current.keys()));
+    settle();
+  });
+
+  /** 事件落在哪一条上:从事件目标往上找到滚动区的直接子元素 */
+  const entryKeyOf = (node: EventTarget | null): string | null => {
+    const box = messagesScrollRef.current;
+    let el: Node | null = node instanceof Node ? node : null;
+    while (el && el.parentNode !== box) el = el.parentNode;
+    return el instanceof Element ? (elKeyRef.current.get(el) ?? null) : null;
+  };
+  const touch = (e: React.SyntheticEvent) => {
+    const key = entryKeyOf(e.target);
+    if (key) pinnedRef.current = touchRecent(pinnedRef.current, key, PIN_CAP);
+  };
+
   return (
-    <div className="ai-messages" ref={messagesScrollRef} onScroll={onMessagesScroll}>
+    <div
+      className="ai-messages"
+      ref={messagesScrollRef}
+      onScroll={onMessagesScroll}
+      onPointerDown={touch}
+      onKeyDown={touch}
+      onFocus={(e) => {
+        focusKeyRef.current = entryKeyOf(e.target);
+      }}
+      onBlur={(e) => {
+        const next = e.relatedTarget;
+        if (!(next instanceof Node) || !messagesScrollRef.current?.contains(next)) focusKeyRef.current = null;
+      }}
+    >
       {messages.length === 0 ? (
         <div className="ai-empty-state">
           <button type="button" className="ai-empty-example" onClick={() => onPickExample("时间轴上现在有什么?")}>
@@ -308,56 +584,13 @@ export function MessageList(props: MessageListProps) {
           </button>
         </div>
       ) : (
-        // 每条消息返回一个数组而不是包一层 Fragment:前后要插时间行、编排块,
-        // key 各自独立,插进去不会让 MessageRow 换位置重挂(memo 和展开状态都保得住)
-        messages.map((m, i) => {
-          const hidden = inboundOnly.has(m.id) || followerIds.has(m.id);
-          const at = timeOf(m);
-          const stamp =
-            !hidden && m.role === "user" && at !== null && lastAt !== null && at - lastAt >= TIME_GAP_MS
-              ? <div key={`${m.id}:time`} className="ai-time-sep">{formatStamp(at)}</div>
-              : null;
-          // 不画出来的(收到的 Agent 消息、并进前面气泡的回复)也照样推进时间点,不然后面会多出时间分隔行
-          const end = typeof m.finishedAt === "number" ? m.finishedAt : at;
-          if (end !== null) lastAt = lastAt === null ? end : Math.max(lastAt, end);
-          // 编排块挂在「最后一条用户消息」后面;那条是收到的 Agent 消息、自己不画时也照样挂,编排进度和错误才看得到
-          const orch = i === lastUserIdx && orchestration ? <OrchestrationBlock key={`${m.id}:orch`} state={orchestration} /> : null;
-          if (inboundOnly.has(m.id)) {
-            const orphan = orphanNote.get(m.id);
-            return [
-              orphan ? (
-                <div key={`${m.id}:inbound`} className="ai-inbound-note">
-                  收到 {orphan} 条其他 Agent 的消息,等 Agent 开始处理
-                </div>
-              ) : null,
-              orch,
-            ];
-          }
-          // 并进前面某个气泡的那几轮:自己不画
-          if (followerIds.has(m.id)) return orch;
-          const followers = followersOf.get(m.id);
-          return [
-            stamp,
-            <MessageRow
-              key={m.id}
-              m={m}
-              view={view}
-              showThinking={showThinking}
-              installJobs={installJobs}
-              expanded={expanded}
-              openRuns={openRuns}
-              openKeys={keysFor(expanded, m.id)}
-              runKeys={keysFor(openRuns, m.id)}
-              on={rowHandlers}
-              rewind={rewind}
-              inbound={inboundFor.get(m.id)?.list}
-              inboundKey={[inboundFor.get(m.id)?.key ?? "", ...(followers ?? []).map((f) => inboundFor.get(f.id)?.key ?? "")].join("|")}
-              followers={followers}
-              followerInbound={followers?.map((f) => inboundFor.get(f.id)?.list)}
-            />,
-            orch,
-          ];
-        })
+        segments.map((s) =>
+          s.kind === "spacer" ? (
+            <div key={`spacer:${s.from}:`} className="ai-vspacer" data-pc-vspacer="" aria-hidden="true" style={{ height: s.height }} />
+          ) : (
+            entries[s.index].render()
+          ),
+        )
       )}
     </div>
   );

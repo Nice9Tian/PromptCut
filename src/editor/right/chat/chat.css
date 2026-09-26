@@ -480,6 +480,14 @@
   flex-direction: column;
   gap: 12px;
   background: var(--ui-bg-2, #1B1A21);
+  /* 滚动位置由 MessageList 自己锚(窗口化后上方占位的高度会换),关掉浏览器的滚动锚定,免得两边一起挪 */
+  overflow-anchor: none;
+}
+
+/* 窗口化的占位(MessageList、listWindow.ts):顶住没渲染的消息的高度。空 div 在 flex 列里会被压扁,不许它缩 */
+.ai-vspacer {
+  flex: none;
+  pointer-events: none;
 }
 
 /*
