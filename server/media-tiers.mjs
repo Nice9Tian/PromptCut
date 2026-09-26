@@ -429,6 +429,27 @@ export function createTierManager({ dir, lib, ffmpeg, queue = null, log = () => 
         remux: remuxInfo,
       };
     },
+    /**
+     * 打开项目时补转小版(设计稿第 9 节第 2 条):项目里缺 `tiers.small`、本地内容库里有这份原片的视频,
+     * 排进后台转码(不重封装 —— 哈希就是项目引用的那个,`.procp` 还原的素材同样)。
+     * 已有小版(文件还在)或确定没有视频流的不动;上次失败的再试一次。转好之后照常交给上传队列。
+     * `ext` 是库里那份文件的扩展名。回 `{ state, small? }`,同 `status`。
+     */
+    async backfill({ hash, ext, name = '' }) {
+      const h = String(hash || '').toLowerCase();
+      const e = String(ext || '').toLowerCase();
+      if (!HASH.test(h) || !isVideoExt(e)) return { state: 'skipped' };
+      let rec = items[h];
+      if (rec && rec.state === 'ready' && !(await exists(path.join(dir, `${rec.small}.${rec.smallExt || 'mp4'}`)))) rec = null;
+      if (rec && (rec.state === 'ready' || rec.state === 'none')) return this.status([h])[h];
+      if (!rec || rec.state === 'failed') {
+        rec = items[h] = { state: 'pending', name: String(name || ''), ext: e, backfill: true };
+        await persist();
+        say('tiers.backfill', { hash: h });
+      }
+      schedule(h);
+      return { state: 'pending' };
+    },
     /** 这些原片哈希的小版情况:`{ [hash]: { state, small? } }`;没登记过的是 `state: 'unknown'` */
     status(hashes) {
       const out = {};

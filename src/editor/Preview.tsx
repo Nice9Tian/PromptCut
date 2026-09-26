@@ -22,6 +22,7 @@ import "./preview/preview.css";
 import { atFrameGrid } from "../render/frameGrid";
 import { contentStartOf } from "./timeline/utils";
 import { startAssetTiers, tierHashes, useTierHashes } from "./media/assetTiers";
+import { startTierBackfill } from "./io/mediaUpload";
 import { deliverSnapshots, markBaselineReset, noteSettled, pendingDemotes, pickForSetTime, stopSnapshotFeed, streamPlanesAt, suppressedAt, syncSnapshotSubscription } from "./snapshotFeed";
 import { playingCatchUpTargets, runPlayingSwap, runSettleSwap, setSwapHost, swapInFlight } from "./stageSwap";
 import { demotedClips, onStageDemote } from "./demote";
@@ -54,6 +55,8 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
   // C6.6:两档素材的换档集合(预览挂着时每 2 秒问一次当前素材服务)
   const tierList = useTierHashes();
   useEffect(() => startAssetTiers(), []);
+  // C6.6 设计稿第 9 节第 2 条:打开项目时,缺素材小尺寸、本地有素材原尺寸的视频在后台补转
+  useEffect(() => startTierBackfill(), []);
   const t = useStore((s) => s.t);
   const playing = useStore((s) => s.playing);
   const playToken = useStore((s) => s.playToken);

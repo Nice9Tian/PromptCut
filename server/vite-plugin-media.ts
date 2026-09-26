@@ -766,6 +766,29 @@ export function mediaMiddleware(root: string) {
       }
     }
 
+    // POST /api/media/tiers/backfill { items: [{ hash, name? }] } —— 打开项目时补转小版(C6.6 设计稿第 9 节第 2 条):
+    // 本地内容库里有这份原片的视频排进后台转码,回 { ok, items: { [hash]: { state, small? } } };
+    // 本地没有原片的回 state: 'absent'(不为了转小版去拉原片)
+    if (req.method === "POST" && req.url.split("?")[0] === "/api/media/tiers/backfill") {
+      try {
+        const body = await readJsonBody(req);
+        const list = (Array.isArray(body?.items) ? body.items : []).slice(0, 200);
+        const service = await mediaTierService(root, { withQueue: process.env.PROMPTCUT_HEADLESS !== "1" });
+        const items: Record<string, unknown> = {};
+        for (const it of list) {
+          const hash = String(it?.hash || "").toLowerCase();
+          if (!isMediaHash(hash) || items[hash]) continue;
+          const file = await resolveHashFile(root, hash);
+          items[hash] = file
+            ? await service.manager.backfill({ hash, ext: extOfName(file), name: typeof it?.name === "string" ? it.name : "" })
+            : { state: "absent" };
+        }
+        return sendJson(res, 200, { ok: true, items });
+      } catch (err) {
+        return sendJson(res, 400, { ok: false, error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+
     // GET /api/media/tiers?hashes=a,b —— 这些原片的小版情况(C6.6):{ ok, items: { [原片]: { state, small? } } }。
     // state:pending(在转)、ready(small 是小版哈希)、failed、none(没有视频流)、unknown(本机没登记过)。
     // 页面导入后按它把小版哈希写进 project.media[i].tiers.small;这不是同步状态(传没传完只问素材服务的 chunks)

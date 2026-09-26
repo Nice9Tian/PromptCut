@@ -1,4 +1,5 @@
-import { actions, getState } from "../../store/project";
+import { actions, getState, subscribe } from "../../store/project";
+import { isViewOnly } from "./viewOnly";
 
 /**
  * 导入 = 先入库再引用(A1)。
@@ -176,4 +177,80 @@ export function watchSmallTier(mediaId: string, original: string): void {
     setTimeout(() => { void tick(); }, SMALL_POLL_MS);
   };
   setTimeout(() => { void tick(); }, SMALL_POLL_MS);
+}
+
+/* ---------------- 打开项目时补转小版(C6.6 设计稿第 9 节第 2 条) ---------------- */
+
+/** 这一页已经问过补转的原片哈希(同一会话里不重复问;小版在转的由 watchSmallTier 接着盯) */
+const backfillAsked = new Set<string>();
+
+/**
+ * 项目里缺 `tiers.small`、按哈希入库的视频:请编辑器进程补转(`POST /api/media/tiers/backfill`)。
+ * 本地内容库里有这份原片的才转(没有的回 `absent`,不为了转小版去拉原片),转好补写 `tiers.small`。
+ * 页面在小版好之前关了,下次打开再补。没有本机编辑器(在线浏览器模式)时请求失败,什么都不做。
+ * 回这次问了几份。
+ */
+export async function backfillSmallTiers(project = getState().project): Promise<number> {
+  if (isViewOnly()) return 0; // 只读页面不改项目
+  const want: { mediaId: string; hash: string; name: string }[] = [];
+  for (const m of project.media ?? []) {
+    if (m.kind !== "video" || m.pending || m.tiers?.small) continue;
+    const hash = String(m.tiers?.original ?? m.hash ?? "").toLowerCase();
+    if (!/^[0-9a-f]{64}$/.test(hash) || backfillAsked.has(hash)) continue;
+    backfillAsked.add(hash);
+    want.push({ mediaId: m.id, hash, name: m.name ?? "" });
+  }
+  if (!want.length) return 0;
+  let items: Record<string, { state?: string; small?: string }> = {};
+  try {
+    const res = await fetch("/api/media/tiers/backfill", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ items: want.map(({ hash, name }) => ({ hash, name })) }),
+    });
+    if (!res.ok) { for (const w of want) backfillAsked.delete(w.hash); return 0; }
+    items = (await res.json())?.items ?? {};
+  } catch {
+    for (const w of want) backfillAsked.delete(w.hash);
+    return 0;
+  }
+  for (const w of want) {
+    const it = items[w.hash];
+    if (it?.state === "ready" && typeof it.small === "string") writeSmallTier(w.mediaId, w.hash, it.small);
+    else if (it?.state === "pending") watchSmallTier(w.mediaId, w.hash);
+  }
+  return want.length;
+}
+
+/** 把小版哈希写进这条素材的 `tiers`(原片没换过才写);写法同 applyUploadedMedia 的说明 */
+function writeSmallTier(mediaId: string, original: string, small: string): void {
+  const fresh = getState().project.media.find((m) => m.id === mediaId);
+  if (!fresh || (fresh.tiers?.original ?? fresh.hash) !== original || fresh.tiers?.small) return;
+  fresh.tiers = { original, small };
+  actions.setMediaPath(mediaId, fresh.path ?? "");
+}
+
+/**
+ * 打开项目(以及素材表变了)时补转小版,回停止函数。预览挂上时调。
+ * 同一份原片一个页面会话里只问一次;素材表没变就不问。
+ */
+export function startTierBackfill(): () => void {
+  let lastMedia: unknown = null;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const check = () => {
+    const media = getState().project.media;
+    if (media === lastMedia) return;
+    lastMedia = media;
+    // 打开项目的那一阵先让路(测量、首帧),稍后再问
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => { timer = null; void backfillSmallTiers(); }, 1500);
+  };
+  const unsub = subscribe(check);
+  check();
+  return () => { unsub(); if (timer) clearTimeout(timer); };
+}
+
+/** 单测用 */
+export function resetTierBackfillForTest(): void {
+  backfillAsked.clear();
 }

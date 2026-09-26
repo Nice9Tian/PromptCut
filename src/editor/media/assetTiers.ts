@@ -8,6 +8,8 @@
  *   本机缓存落没落盘不作判据(`docs/semantics/mechanism/asset-service.md`「同步状态只问素材服务」)。
  * - **远程素材服务**:进入共享项目时由 `syncManager` 设(`connectSharedAssets`),同时告诉本机编辑器进程
  *   (`POST /api/media/remote`),读路由才会按需拉取、预取队列才会动。票据按时续签后再推一次。
+ * - **上传目标**:进入共享项目时把远程素材服务基址和一张 `rw` 素材票据交给编辑器进程的上传队列
+ *   (`POST /api/media/upload-queue/target`),剩 1/3 有效期时续签;离开时推 `{ base: null }`(设计稿第 9 节第 1 条)。
  * - **预取**:项目的素材表变了(打开项目、导入)且连着远程素材服务时,把 `prefetchOrder` 的清单交给编辑器进程。
  * - **导出前的拦截**:`exportGate` 问当前素材服务,时间轴上用到的原片哪些还没 `complete`。
  *
@@ -302,12 +304,92 @@ export async function connectSharedAssets(link: LinkLike, docBase: string): Prom
     base = pickAssetEndpoint(r.endpoints, docBase, typeof location === "undefined" ? "" : location.host);
   } catch { /* 取不到登记:留在本地 */ }
   setRemoteAssets(base ? { base, ticket: assetTicketSource(link) } : null);
+  stopUploadTarget?.();
+  stopUploadTarget = startUploadTarget(link, base);
   return base;
 }
 
 /** 离开共享项目:回到本地素材服务 */
 export function disconnectSharedAssets(): void {
   setRemoteAssets(null);
+  stopUploadTarget?.();
+  stopUploadTarget = startUploadTarget(null, null);
+}
+
+/* ---------------- 上传目标(设计稿第 9 节第 1 条) ---------------- */
+
+/**
+ * 编辑器进程的上传队列(`server/upload-queue.mjs`)要知道「当前连接的素材服务」和一张能写的票据,
+ * 它自己没有项目凭证,由页面给:进入共享项目时 `POST /api/media/upload-queue/target { base, ticket }`
+ * (`rw` 素材票据,经本页面的文档服务连接签),票据剩 1/3 有效期时续签再推一次;离开共享项目、
+ * 或本机就是主机(挑不到远程素材服务)时推 `{ base: null }`,队列回到「本机素材服务 = 空操作」。
+ * 没有本机编辑器(在线浏览器模式)时推送失败就算了。
+ */
+let stopUploadTarget: (() => void) | null = null;
+
+export interface UploadTargetDeps {
+  post?: (body: { base: string | null; ticket?: string | null }) => Promise<void>;
+  now?: () => number;
+  setTimer?: (fn: () => void, ms: number) => unknown;
+  clearTimer?: (t: unknown) => void;
+}
+
+async function postUploadTarget(body: { base: string | null; ticket?: string | null }): Promise<void> {
+  try {
+    await fetch("/api/media/upload-queue/target", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  } catch { /* 没有本机编辑器 */ }
+}
+
+/** 签不到票据时隔多久再试 */
+const UPLOAD_TICKET_RETRY_MS = 30_000;
+
+/**
+ * 把上传目标交给编辑器进程并按时续签,回停止函数(停止时推 `{ base: null }`)。
+ * `link` / `base` 为 null:只推一次 `{ base: null }`。
+ */
+export function startUploadTarget(link: LinkLike | null, base: string | null, deps: UploadTargetDeps = {}): () => void {
+  const post = deps.post ?? postUploadTarget;
+  const now = deps.now ?? Date.now;
+  const setTimer = deps.setTimer ?? ((fn: () => void, ms: number) => {
+    const t = setTimeout(fn, ms);
+    (t as { unref?: () => void }).unref?.(); // Node(单测)里不拖住进程;浏览器没有 unref
+    return t;
+  });
+  const clearTimer = deps.clearTimer ?? ((t: unknown) => clearTimeout(t as ReturnType<typeof setTimeout>));
+  let stopped = false;
+  let timer: unknown = null;
+  if (!link || !base) {
+    void post({ base: null });
+    return () => { /* 本来就是本机 */ };
+  }
+  const renew = async () => {
+    timer = null;
+    if (stopped) return;
+    const issued = now();
+    let ticket: string | null = null;
+    let exp = issued + ASSET_TICKET_TTL_MS;
+    try {
+      const r = await link.request({ type: "auth.ticket", kind: "asset", access: "rw" });
+      if (r.type === "auth.ticket.ok" && typeof r.ticket === "string") {
+        ticket = r.ticket;
+        exp = Number(r.exp) || exp;
+      }
+    } catch { /* 下面按签不到处理 */ }
+    if (stopped) return;
+    await post({ base, ticket });
+    if (stopped) return;
+    // 剩 1/3 有效期时续:从签发起过了 2/3 的寿命
+    const delay = ticket ? Math.max(1000, Math.floor((exp - issued) * 2 / 3)) : UPLOAD_TICKET_RETRY_MS;
+    timer = setTimer(() => { void renew(); }, delay);
+  };
+  void renew();
+  return () => {
+    if (stopped) return;
+    stopped = true;
+    if (timer !== null) clearTimer(timer);
+    timer = null;
+    void post({ base: null });
+  };
 }
 
 /** 探针与单测的观察口 */
@@ -324,4 +406,6 @@ export function resetAssetTiersForTest(): void {
   serviceGen++;
   lastPrefetchKey = "";
   listeners.clear();
+  stopUploadTarget?.();
+  stopUploadTarget = null;
 }
