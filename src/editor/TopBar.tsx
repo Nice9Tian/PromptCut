@@ -5,6 +5,8 @@ import { cancelExport, exportVideo, streamExportFile, revealExport, importProjec
 import { newProject, pickSaveTarget, serializeProc, writeProcToDisk, loadProc, forgetSaveTarget, PROC_EXT, PROC_FORMAT } from "./io/proc";
 import { PROCP_EXT, isProcpFile, loadProcpFile, packProcp } from "./io/procp";
 import { ExportDialog, type ExportState } from "./ExportDialog";
+import { exportGateNow } from "./media/assetTiers";
+import { awaitingUploaderMessage } from "../render/mediaTier";
 import { ensureActiveDraftId, saveDraft, setActiveDraftId } from "./io/drafts";
 import { Logo } from "../ui/Logo";
 import {
@@ -400,6 +402,13 @@ export function TopBar() {
    * 结束时给一个「打开产物目录」。
    */
   const exportProject = async () => {
+    // C6.6:按轮询到的集合先判一次(不发请求,不耽误下面「另存为」要的用户手势);
+    // 原片还没传完就不弹另存为,直接提示等待上传方。exportVideo 里还会再问一遍素材服务
+    const pending = exportGateNow(project);
+    if (pending && pending.length) {
+      setExportState({ phase: "error", done: 0, total: 1, target: "", message: awaitingUploaderMessage(pending) });
+      return;
+    }
     const suggested = `${name}.mp4`;
     let target: FileSystemFileHandle | null = null;
     try {

@@ -7,6 +7,8 @@ import { mediaUrlFromPath, restoreMediaUrls } from "./mediaUrls";
 import { dropPythonNodes, publishPythonDrop } from "./pythonDrop";
 import { adoptServerMedia, applyUploadedMedia, uploadMediaFile } from "./mediaUpload";
 import { prerenderBase } from "../../render/prerender";
+import { exportGate } from "../media/assetTiers";
+import { awaitingUploaderMessage } from "../../render/mediaTier";
 
 // 模块级变量存 File，供阶段 2 导出时使用
 const mediaFiles = new Map<string, File>();
@@ -332,6 +334,9 @@ export async function exportVideo(
   } = {},
 ): Promise<{ outDir: string; id: string }> {
   const p = JSON.parse(JSON.stringify(getState().project)) as Project;
+  // C6.6「导出只用原片」:原片在当前素材服务上还没 complete 的,导出前拦下,提示等待上传方,不拿小版代替
+  const missing = await exportGate(p);
+  if (missing.length) throw Object.assign(new Error(awaitingUploaderMessage(missing)), { code: "awaiting-uploader", missing });
   /*
    * 导出在**预渲染进程**上跑(它和渲染池共用槽位记账,导出期间暂停空闲预渲染,见 render-pool-state.mjs)。
    * 上传、提交、进度推送都直接发到它的源上:进度流要挂整整一趟导出,挤在编辑器自己的源上会占着连接。

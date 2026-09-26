@@ -21,6 +21,7 @@ import { isViewOnly } from "../io/viewOnly";
 import { SyncLink, type AnyMsg, type CloseInfo } from "./link";
 import { client, errorStatus, route, type Candidate, type SharedMode, type Where } from "./sharedApi";
 import { clipOfEntity, entityLabel, writerLabel, type DisplayNames, type Me } from "./labels";
+import { connectSharedAssets, disconnectSharedAssets } from "../media/assetTiers";
 
 /* ---------------- 界面状态 ---------------- */
 
@@ -433,6 +434,8 @@ function switchToLocal(project: Project, { load }: { load: boolean }): Project {
   if (load) link.ds.load(project);
   bind(link, "local", id, localWsUrl());
   patch({ shared: null, members: [], blocked: null });
+  // C6.6:回到本机空间 = 回到本地素材服务
+  disconnectSharedAssets();
   link.start();
   return link.ds.project;
 }
@@ -792,6 +795,8 @@ export async function enterShared(candidate: Candidate, cred: EnterCredentials):
         if (cred.as === "creator") rememberCreator(candidate.projectId, cred.username);
         link.send({ type: "shared.watch" });
         link.send({ type: "events.list", projectId: candidate.projectId });
+        // C6.6:这个共享项目的素材服务(服务地址登记里的 asset)当作当前连接的远程素材服务
+        void connectSharedAssets(link, candidate.base);
         resolve("open");
       },
       onClosed: (info) => {
