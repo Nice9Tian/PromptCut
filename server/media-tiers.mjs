@@ -397,6 +397,7 @@ export function createTierManager({ dir, lib, ffmpeg, queue = null, log = () => 
             const out = await adoptTemp(tmp, { ext, name: stored.name });
             if (!stored.deduped && out.hash !== stored.hash) { await fs.rm(stored.path, { force: true }); await lib.forget?.(stored.hash); }
             remuxed[stored.hash] = out.hash;
+            await persist();
             current = out;
             remuxInfo = { state: 'remuxed', from: stored.hash };
             say('tiers.remuxed', { from: stored.hash, to: out.hash });
