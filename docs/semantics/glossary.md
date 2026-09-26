@@ -31,6 +31,10 @@
 | 云端托管服务 | 常驻云端、所有多用户协作项目的公共入口，负责牵线（验证创建者机器的公网可达性；先验项目凭证与禁入表，通过才给主机地址）与中继；与云端文档服务、云端素材服务独立部署，不属于文档服务，不签发票据 | 二 | product/hosting.md |
 | 本地文档服务、云端文档服务 | 文档服务的两种部署：跑在创建者本机的，和跑在云端的 | 二 | product/document-service.md |
 | 本地素材服务、云端素材服务 | 素材服务的两种部署，同上。这两组词取代旧词「本地模式」「云端模式」「远程文档服务」「远程素材服务」 | 二 | product/document-service.md、product/asset-service.md |
+| 会话 | 文档服务与每一方之间的连接单位：消息双向有序、带序号、接收方确认；单次传输中断不结束会话 | 二 | product/document-service.md、mechanism/document-service.md |
+| 传输 | 会话的搬运方式：WebSocket 或 HTTP 长轮询，系统自动选择，业务模块与用户都不感知 | 二 | product/document-service.md、mechanism/document-service.md |
+| HTTP 长轮询 | 第二种传输：用普通 HTTP 请求发消息，收消息的请求挂在服务端，有消息或到时限再回；WebSocket 握手失败时自动转用 | 二 | product/document-service.md、mechanism/document-service.md |
+| 只能出网的节点 | 没有入站连接、出网只能经代理走 443 HTTPS 的机器（如云端容器）；永远是成员，不能当主机，加入放本机的项目只能走中继 | 二 | product/platforms.md |
 | 连接发现 | 文档服务把素材服务的地址下发给各方（已引入）；成员怎么找到主机见「连接路径」。文档服务只下发地址，不承担素材传输流量 | 三 | mechanism/document-service.md |
 | 渲染任务队列 | 文档服务在内存里托管的预渲染任务清单：只记状态和认领者，不测算、不分配 | 二 | product/document-service.md |
 | 渲染节点 | 从渲染任务队列认领并完成预渲染任务的地方：本机 PC、独立渲染主机、纯浏览器；按能力区分，不按平台名 | 二 | product/platforms.md |
