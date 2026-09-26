@@ -247,61 +247,40 @@ test("规范-实体:片段、序列、部件归片段、剪辑里的片段、效
 /* ---------------- V8 性能 ---------------- */
 
 /*
- * 计时按主线程的 CPU 时间,不按墙钟。
+ * 每批 40 次、取墙钟中位数(中位数挡掉单次的 GC 停顿);最多量 MAX_BATCHES 批,批间让出 100 ms,
+ * 有一批中位数达标就算过,达标立刻停(健康时只量一批)。
  *
- * V8 要钉的是「一次差异 / 一次应用本身要干多少活」:1000 个片段时主线程被它占住不超过 5 ms。
- * 全量测试是几十个进程并行跑的,墙钟里混进了「被操作系统挂起、等着轮到自己」的时间 ——
- * 那是调度器的事,不是这段代码的开销,机器越忙墙钟越长,门槛就变成了在测负载。
- * 主线程 CPU 时间只在这条线程真在跑的时候走,被挂起的那段不算,所以负载不改变它要验证的量;
- * 而代码真的变慢(算法退化、多拷了一遍)时它照样一比一地涨,门槛照样拦得住。
- *
- * Windows 上 CPU 时间按时钟节拍(约 15.6 ms)跳,单次调用量不出来,所以按批量:连着调用直到
- * 这条线程累计用掉 ≥ BATCH_CPU_MS 的 CPU,再除以次数得到每次的平均。平均把 GC 停顿也摊了进来,
- * 比原来的中位数只严不松。
- *
- * CPU 时间挡掉了调度,但挡不掉硬件层面的挤占:所有核都忙时睿频降下来、同一物理核上的另一个
- * 超线程分走执行单元,同样的活 CPU 时间也会变长(实测这台笔记本在别的会话把 CPU 吃到 85% 时,
- * 「整份深拷贝」那一项从空闲时约 2 ms 涨到 5 ms 出头;GC 在其中不到 1%)。这种挤占是一阵一阵的,
- * 所以最多量 MAX_BATCHES 批、批间让出 100 ms,**有一批达标就算过**,量到达标立刻停(健康时只量一批)。
+ * 全量测试是几十个进程并行跑的,同一台机器上别的会话也在吃 CPU:所有核都忙时睿频降下来、
+ * 同一物理核上的另一个超线程分走执行单元,同样的活会一阵一阵地变慢(实测这台笔记本在后台负载
+ * 70%~80% 时,「整份深拷贝」那一项同一进程里能从约 2 ms 跳到 4~6 ms,持续零点几秒到几秒)。
+ * 以前是连着量三批取最好,三批挤在半秒里,正好一起撞上一阵慢;现在把最多八批摊开在两三秒里。
+ * 判据(中位数 ≤ 5 ms)不变,前三批就是以前那三批,所以只会比以前更容易量到真实水平、不会更松:
  * 代码真退化时每一批都超,照样拦得住。
- * 墙钟中位数照旧算出来打日志,方便对照。
+ *
+ * 试过按主线程 CPU 时间(process.threadCpuUsage)计,不管用:机器没被占满时线程很少被挂起,
+ * CPU 时间约等于墙钟,慢是硬件层面的(降频、超线程),CPU 时间一样涨;交替对照 15 轮,
+ * 老写法挂 2 轮、CPU 时间写法挂 4 轮。详见 docs/reports/AGENT-flaky-timing.md。
  */
-const BATCH_CPU_MS = 150;
 const MAX_BATCHES = 8;
-const cpuNowMs = () => {
-  const u = process.threadCpuUsage ? process.threadCpuUsage() : process.cpuUsage();
-  return (u.user + u.system) / 1000;
-};
 
 async function timeIt(fn, limitMs, runs = 40) {
   for (let i = 0; i < 5; i++) fn();
-  const xs = [];
-  for (let i = 0; i < runs; i++) {
-    const t0 = performance.now();
-    fn();
-    xs.push(performance.now() - t0);
-  }
-  xs.sort((a, b) => a - b);
-  const wall = { median: xs[xs.length >> 1], p90: xs[Math.floor(xs.length * 0.9)] };
-
-  let cpu = Infinity;
+  let best = null;
   let batches = 0;
-  for (let batch = 0; batch < MAX_BATCHES && !(cpu <= limitMs); batch++) {
+  for (let batch = 0; batch < MAX_BATCHES && !(best && best.median <= limitMs); batch++) {
     if (batch > 0) await new Promise((r) => setTimeout(r, 100));
     batches++;
-    const c0 = cpuNowMs();
-    const deadline = performance.now() + 20000; // 兜底:CPU 时间不走(不该发生)时别死循环
-    let n = 0;
-    let used = 0;
-    do {
+    const xs = [];
+    for (let i = 0; i < runs; i++) {
+      const t0 = performance.now();
       fn();
-      n++;
-      used = cpuNowMs() - c0;
-    } while ((used < BATCH_CPU_MS || n < runs) && performance.now() < deadline);
-    assert.ok(used > 0, "主线程 CPU 时间没有走,量不出来");
-    cpu = Math.min(cpu, used / n);
+      xs.push(performance.now() - t0);
+    }
+    xs.sort((x, y) => x - y);
+    const t = { median: xs[xs.length >> 1], p90: xs[Math.floor(xs.length * 0.9)] };
+    if (!best || t.median < best.median) best = t;
   }
-  return { cpu, wall, batches };
+  return { ...best, batches };
 }
 
 test("V8-1000 个片段的项目,单次差异 ≤ 5 ms(拖动、改参数、删、加、换序列顺序、整份深拷贝)", async () => {
@@ -323,8 +302,8 @@ test("V8-1000 个片段的项目,单次差异 ≤ 5 ms(拖动、改参数、删�
     const d = diffProject(prev, next);
     assert.ok(deepEqual(apply(prev, d.ops), next), name);
     const t = await timeIt(() => diffProject(prev, next), 5);
-    report[name] = `cpu ${t.cpu.toFixed(3)} ms/次(量了 ${t.batches} 批), 墙钟 median ${t.wall.median.toFixed(3)} ms p90 ${t.wall.p90.toFixed(3)} ms, ops ${d.ops.length}`;
-    assert.ok(t.cpu <= 5, `${name}:${MAX_BATCHES} 批里最好的一批,每次差异平均也用掉主线程 CPU ${t.cpu.toFixed(2)} ms,超过 5 ms`);
+    report[name] = `median ${t.median.toFixed(3)} ms, p90 ${t.p90.toFixed(3)} ms(量了 ${t.batches} 批), ops ${d.ops.length}`;
+    assert.ok(t.median <= 5, `${name}:量了 ${t.batches} 批,最好的一批差异中位数也有 ${t.median.toFixed(2)} ms,超过 5 ms`);
   }
   console.log("V8 diffProject 1000 片段:", JSON.stringify(report, null, 1));
 });
@@ -334,6 +313,6 @@ test("V8-1000 个片段的项目,应用一次拖动的操作 ≤ 5 ms", async ()
   const prev = bigProject(r, 1000);
   const ops = [{ op: "set", path: "/tracks/@t-3/clips/@c-503/start", value: 1 }, { op: "set", path: "/tracks/@t-3/clips/@c-503/end", value: 2 }];
   const t = await timeIt(() => applyOps(prev, ops), 5);
-  console.log(`V8 applyOps 拖动:cpu ${t.cpu.toFixed(3)} ms/次, 墙钟 median ${t.wall.median.toFixed(3)} ms`);
-  assert.ok(t.cpu <= 5, `${MAX_BATCHES} 批里最好的一批,每次应用平均也用掉主线程 CPU ${t.cpu.toFixed(2)} ms,超过 5 ms`);
+  console.log(`V8 applyOps 拖动:median ${t.median.toFixed(3)} ms(量了 ${t.batches} 批)`);
+  assert.ok(t.median <= 5, `量了 ${t.batches} 批,最好的一批应用中位数也有 ${t.median.toFixed(2)} ms,超过 5 ms`);
 });
