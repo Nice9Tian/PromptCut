@@ -110,7 +110,7 @@ export interface Subjects {
 /**
  * 同一份素材的两档(A1 第 5 步:先小后大),值是各自的内容哈希。
  * `original` 就是 MediaAsset.hash;`small` 是 800×600 以内的 H.264 档。
- * 换档判据在 src/render/mediaTier.ts 的 playbackUrl(只看素材服务报 complete 的哈希);小版眼下还没人产(第 6 步)。
+ * 换档判据在 src/render/mediaTier.ts 的 playbackUrl(只看素材服务报 complete 的哈希)。小版由导入方本机生成(C6.6,server/media-tiers.mjs)。
  * 「这台设备放不放得了原片」不是项目级的事实,不在这里记,见 src/render/playability.ts。
  */
 export interface MediaTiers {
