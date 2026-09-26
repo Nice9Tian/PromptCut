@@ -29,6 +29,37 @@ fs.writeFileSync(PROC, JSON.stringify({ format: "promptcut-project", version: 1 
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/*
+ * 等「条件成立」,不等固定时长。
+ *
+ * 以前这里到处是 kill 之后 sleep(500):全量测试几十个进程并行时,500 ms 既可能不够
+ * (进程退出、句柄释放被负载拖慢),又凭空拉长了 pid 被系统回收的窗口 —— sleep 期间
+ * 事件循环会处理子进程的 exit、关掉我们手里的进程句柄,之后这个号就能分给别的新进程,
+ * 于是「死 pid」又被判成活的。
+ *
+ * waitUntil 先同步查一次再睡:taskkill 是同步跑完的,多数时候第一次就成立,中间不经过
+ * 事件循环,我们手里的句柄还开着,这个号没法被回收;不成立再每 50 ms 查一次,最多 10 s。
+ */
+async function waitUntil(cond, what, { timeout = 10000, every = 50 } = {}) {
+  const end = Date.now() + timeout;
+  while (!cond()) {
+    if (Date.now() > end) throw new Error(`等了 ${timeout} ms 仍未${what}`);
+    await sleep(every);
+  }
+}
+
+/** 这个 pid 在系统里已经不存在了(和 acquireLock 判活用的是同一个探法) */
+const pidGone = (pid) => {
+  try { process.kill(pid, 0); return false; } catch { return true; }
+};
+
+/** 锁文件没人用共享模式 0 握着了(能以 r+ 打开) */
+const lockOpenable = () => {
+  try { fs.closeSync(fs.openSync(LOCK, "r+")); return true; } catch { return false; }
+};
+
+const waitGone = (child) => waitUntil(() => pidGone(child.pid), `等到进程 ${child.pid} 退出`);
+
 /** 起一个子进程,用共享模式 0 握住锁文件,一直握到被杀 */
 function holder() {
   const script = `
@@ -98,8 +129,9 @@ test("持有者正常退出后,锁能被下一个拿到", async () => {
   const h = holder();
   await waitHeld(h);
   assert.throws(() => fs.writeFileSync(LOCK, "me", { flag: "wx" }), /EEXIST/, "持有期间抢不到");
+  const exited = new Promise((r) => h.once("exit", r));
   h.kill();
-  await sleep(300);
+  await exited; // 等它真退出、句柄交还,不猜要多久
   fs.unlinkSync(LOCK); // 正常退出这一路由调用方删锁
   fs.writeFileSync(LOCK, "next", { flag: "wx" });
   fs.unlinkSync(LOCK);
@@ -117,12 +149,10 @@ test("被内核句柄握着时:打不开、删不掉;强杀之后立刻放开", 
 
   // 3. 强杀持有者(进程没有机会做任何清理),内核立刻收走句柄
   kill(h);
-  let freed = false;
-  for (let i = 0; i < 40 && !freed; i++) {
-    await sleep(250);
-    try { fs.closeSync(fs.openSync(LOCK, "r+")); freed = true; } catch { /* 还握着 */ }
-  }
-  assert.ok(freed, "强杀之后内核该把句柄收走 —— 这正是 Node 那层做不到的");
+  await assert.doesNotReject(
+    waitUntil(lockOpenable, "放开句柄"),
+    "强杀之后内核该把句柄收走 —— 这正是 Node 那层做不到的",
+  );
   fs.unlinkSync(LOCK);
 });
 
@@ -133,7 +163,9 @@ test("锁的是旁路 .lock,.proc 本体始终可读可写", { skip: process.pla
   assert.doesNotThrow(() => fs.readFileSync(PROC, "utf8"), "本体该能读");
   assert.doesNotThrow(() => fs.appendFileSync(PROC, ""), "本体该能写");
   kill(h);
-  await sleep(500);
+  // 下一条要在同一个 .lock 上建空文件,得等内核真把句柄收走
+  await waitGone(h);
+  await waitUntil(lockOpenable, "放开句柄");
 });
 
 
@@ -173,7 +205,7 @@ test("持有者已经死了 → 接管;还活着 → 拿不到", async () => {
   assert.equal(busy.by, "pid");
 
   kill(other);
-  await sleep(500);
+  await waitGone(other);
   const took = state.acquireLock(PROC);
   assert.equal(took.ok, true);
   assert.equal(took.stolen, true);
@@ -186,7 +218,7 @@ test("并发接管同一个死锁:恰好一个赢(不是两个都以为自己独
   const dead = liveOtherPid();
   const deadPid = dead.pid;
   kill(dead);
-  await sleep(500);
+  await waitGone(dead);
   fs.writeFileSync(LOCK, JSON.stringify({ pid: deadPid, at: new Date().toISOString(), host: "promptcut" }));
 
   const child = path.join(TMP, "grab.mjs");
@@ -258,7 +290,7 @@ test("错开时序接管同一个死锁:仍然只有一个赢(不是两个都以
   const dead = liveOtherPid();
   const deadPid = dead.pid;
   kill(dead);
-  await sleep(500);
+  await waitGone(dead);
   fs.writeFileSync(LOCK, JSON.stringify({ pid: deadPid, at: "2020-01-01T00:00:00Z", host: "dead" }));
 
   // B 卡在「删旧锁」那一步;A 稍后启动,在这期间完整跑完
@@ -283,7 +315,7 @@ test("接管权的 claim 文件残留了(持有者被强杀)不会把项目永�
   const dead = liveOtherPid();
   const deadPid = dead.pid;
   kill(dead);
-  await sleep(500);
+  await waitGone(dead);
   fs.writeFileSync(LOCK, JSON.stringify({ pid: deadPid, at: "2020-01-01T00:00:00Z", host: "dead" }));
   // 伪造一个「接管到一半被强杀」留下的 claim
   fs.writeFileSync(LOCK + ".claim", JSON.stringify({ pid: deadPid, at: "2020-01-01T00:00:00Z" }));
