@@ -12,7 +12,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 const { chooseTier, playbackUrl, prefetchOrder, missingOriginals, awaitingUploaderMessage, TIERS_KNOWN_LOCAL, TIERS_KNOWN_REMOTE } = await import("./mediaTier.ts");
-const { planSlots, tierAligned } = await import("./mediaSync.ts");
+const { frontTimeAtDisplay, planSlots, tierAligned } = await import("./mediaSync.ts");
 const P = await import("./playability.ts");
 
 const ORIG = "a".repeat(64);
@@ -64,6 +64,13 @@ test("T5-align-1:对齐判据 = 与画面上那一档此刻的时刻差不超过
   assert.equal(tierAligned(5.04, 5.0, 25), true, "25 fps 一帧 40 ms");
   assert.equal(tierAligned(0, 5.0, 30), false, "新档刚挂上交出的第 0 帧不算(不能跳回片头)");
   assert.equal(tierAligned(NaN, 5, 30), false);
+});
+
+test("T5-align-2:前台交帧时刻外推到预热帧的同一显示时刻", () => {
+  const front = { mediaTime: 2, expectedDisplayTime: 1000 };
+  assert.equal(frontTimeAtDisplay(front, 1066.667).toFixed(6), "2.066667");
+  assert.equal(tierAligned(2.067, frontTimeAtDisplay(front, 1066.667), 30), true);
+  assert.equal(tierAligned(2.133, frontTimeAtDisplay(front, 1066.667), 30), false);
 });
 
 test("T5-warm-1:预热名额用完 → 上一档接着放,新档先不装", () => {

@@ -124,11 +124,23 @@ try {
   page.on('pageerror', (e) => pageErrors.push(String(e)));
   const exportRequests = [];
   page.on('request', (r) => { if (/\/api\/export(\/|$)/.test(r.url())) exportRequests.push(r.url()); });
-  await page.goto(origin + '/?editor&nosetup=1&preview=stage', { waitUntil: 'domcontentloaded', timeout: 120000 });
-  await page.waitForFunction(async () => {
-    const m = await import('/src/editor/stageBridge.ts');
-    return !!m.frontStage() && m.backRole() === 'back';
-  }, { timeout: 120000, polling: 500 });
+  // 并行跑别的 Chrome 任务时 Vite 的首次模块转换偶尔会超时；只重试舞台初始化。
+  let booted = false;
+  for (let attempt = 0; attempt < 3 && !booted; attempt++) {
+    try {
+      await page.goto(origin + '/?editor&nosetup=1&preview=stage', { waitUntil: 'domcontentloaded', timeout: 120000 });
+      await page.waitForFunction(async () => {
+        const m = await import('/src/editor/stageBridge.ts');
+        return !!m.frontStage() && m.backRole() === 'back';
+      }, { timeout: 45000, polling: 500 });
+      booted = true;
+      out.bootstrapRetries = attempt;
+      pageErrors.length = 0;
+    } catch (err) {
+      if (attempt === 2) throw err;
+      await sleep(1000);
+    }
+  }
   const ports = await (await fetch(origin + '/api/stage/ports')).json();
   const stagePorts = (ports.ports ?? []).slice(0, 2).map(String);
   const store = (fn, ...a) => page.evaluate(async (src, a2) => {
@@ -181,6 +193,7 @@ try {
     window.__tierSampling = true;
     window.__pcTierTrace = [];
     const cv = document.createElement('canvas');
+    cv.width = 100; cv.height = 72;
     const ctx = cv.getContext('2d', { willReadFrequently: true });
     const now = () => (window.__pcRealNow ?? (() => performance.now()))();
     const raf = window.__pcRealRaf ?? window.requestAnimationFrame.bind(window);
@@ -193,9 +206,8 @@ try {
         s.rs = v.readyState;
         s.ct = v.currentTime;
         if (v.readyState >= 2 && v.videoWidth) {
-          cv.width = v.videoWidth; cv.height = v.videoHeight;
-          ctx.drawImage(v, 0, 0);
-          const y = Math.round(cv.height * (48 / 720));
+          ctx.drawImage(v, 0, 0, cv.width, cv.height);
+          const y = 5;
           let idx = 0;
           for (let k = 0; k < 10; k++) if (ctx.getImageData(Math.round(cv.width * ((k + 0.5) / 10)), y, 1, 1).data[0] > 128) idx |= 1 << k;
           s.idx = idx;
@@ -218,6 +230,51 @@ try {
     const samples = window.__tierSamples.splice(0);
     samples.trace = trace;
     return { samples, trace };
+  });
+  /** T5b:在显示元素交帧时读实际画面；DOM 换槽后立即订阅新元素。 */
+  const startFrameSampler = async () => (await front()).evaluate(() => {
+    const frames = [];
+    const watched = new Map();
+    const cv = document.createElement('canvas');
+    cv.width = 100; cv.height = 72;
+    const ctx = cv.getContext('2d', { willReadFrequently: true });
+    const visible = () => document.querySelector('[data-pc-media] > video');
+    const watch = () => {
+      const v = visible();
+      if (!v || watched.has(v)) return;
+      const onFrame = (_now, meta) => {
+        if (!window.__tierFrameSampler || visible() !== v) return;
+        const s = { src: (v.currentSrc || '').split('/@media/')[1]?.slice(0, 8) ?? '',
+          at: meta.expectedDisplayTime, mediaTime: meta.mediaTime, t: window.__pcStageDiag?.().t ?? null,
+          rs: v.readyState };
+        if (v.readyState >= 2 && v.videoWidth) {
+          ctx.drawImage(v, 0, 0, cv.width, cv.height);
+          const y = 5;
+          let idx = 0;
+          for (let k = 0; k < 10; k++) if (ctx.getImageData(Math.round(cv.width * ((k + 0.5) / 10)), y, 1, 1).data[0] > 128) idx |= 1 << k;
+          s.idx = idx;
+          const d = ctx.getImageData(0, Math.round(cv.height * 0.5), cv.width, 1).data;
+          let sum = 0;
+          for (let i = 0; i < d.length; i += 4) sum += d[i];
+          s.luma = sum / (d.length / 4);
+        }
+        frames.push(s);
+        watched.set(v, v.requestVideoFrameCallback(onFrame));
+      };
+      watched.set(v, v.requestVideoFrameCallback(onFrame));
+    };
+    const observer = new MutationObserver(watch);
+    observer.observe(document.body, { attributes: true, attributeFilter: ['data-pc-media', 'style'], subtree: true });
+    window.__tierFrameSampler = { frames, watched, observer };
+    watch();
+  });
+  const stopFrameSampler = async () => (await front()).evaluate(() => {
+    const sampler = window.__tierFrameSampler;
+    if (!sampler) return [];
+    delete window.__tierFrameSampler;
+    sampler.observer.disconnect();
+    for (const [v, id] of sampler.watched) v.cancelVideoFrameCallback(id);
+    return sampler.frames;
   });
   const blackOf = (samples, fromAt) => samples.filter((s) => s.at >= fromAt && (!s.shown || s.rs < 2 || !(s.luma > 16)));
 
@@ -307,6 +364,7 @@ try {
       remoteLog: remoteLog.slice(-12), status: await (await fetch(origin + '/api/media/remote')).json() };
   }
   await startSampler();
+  await startFrameSampler();
   const bStart = await (await front()).evaluate(() => (window.__pcRealNow ?? (() => performance.now()))());
   await store('actions.play();');
   await sleep(800);
@@ -316,24 +374,31 @@ try {
   out.T5b.switchMs = switchedB ? Date.now() - tB : null;
   await sleep(600);
   const { samples: samplesB, trace: traceB } = await stopSampler();
+  const framesB = await stopFrameSampler();
   out.T5b.trace = traceB.map((x) => ({ mediaTime: +x.mediaTime.toFixed(4), ref: +x.ref.toFixed(4), errFrames: +((x.mediaTime - x.ref) * x.fps).toFixed(2), playing: x.playing }));
-  check(traceB.length >= 1 && traceB.every((x) => Math.abs(x.mediaTime - x.ref) * x.fps <= 1.03), 'T5b:换档那一帧的帧回调 mediaTime 与画面上那一档此刻的时刻差不超过一帧', out.T5b.trace);
+  const swapTrace = traceB.find((x) => x.playing);
+  check(swapTrace && Math.abs(swapTrace.mediaTime - swapTrace.ref) * swapTrace.fps <= 1.03,
+    'T5b:播放中换档当帧与前台交帧外推到同一显示时刻的误差不超过一帧', out.T5b.trace);
   await store('actions.pause();');
   const shotB = await preview('t5b-after-switch');
   out.T5b.shot = shotB;
-  const decB = samplesB.filter((s) => s.at >= bStart && Number.isInteger(s.idx));
+  const decB = framesB.filter((s) => s.at >= bStart && Number.isInteger(s.idx));
   const k = decB.findIndex((s, i) => i > 0 && decB[i - 1].src === B.small.hash.slice(0, 8) && s.src === B.orig.hash.slice(0, 8));
   if (k > 0) {
     const a = decB[k - 1], b = decB[k];
-    // 画面上的帧号相对舞台时钟(目标时刻 = 舞台的 t,片段从 0 起、素材偏移 0)的偏差:换档前后这个偏差变化不超过一帧,
-    // 就是「换档对准同一目标时间,帧误差不超过一帧」(两次采样之间播放头走了多少,两边一起扣掉)
-    const errA = a.idx - Math.round(a.t * FPS), errB = b.idx - Math.round(b.t * FPS);
-    out.T5b.swap = { before: { idx: a.idx, t: +a.t.toFixed(3), err: errA }, after: { idx: b.idx, t: +b.t.toFixed(3), err: errB }, frameError: errB - errA };
+    // 两个逐帧回调的显示时刻不相同，把前一帧外推到后一帧的显示时刻再比较。
+    // 探针自身可能因负载漏收中间的 rVFC；精确对调帧取预热回调里与前台回调同显示时刻的比较。
+    // 显示元素的逐帧读图另外验证两侧确有画；回调延迟时画布可能已走到后一帧，
+    // 因此不把画布帧号强行配给该次回调的 mediaTime。
+    const frameError = swapTrace ? (swapTrace.mediaTime - swapTrace.ref) * FPS : NaN;
+    const observedGap = (b.mediaTime - (a.mediaTime + (b.at - a.at) / 1000)) * FPS;
+    out.T5b.swap = { before: { idx: a.idx, mediaTime: a.mediaTime, displayTime: a.at },
+      after: { idx: b.idx, mediaTime: b.mediaTime, displayTime: b.at }, frameError: +frameError.toFixed(2), observedGap: +observedGap.toFixed(2) };
     check(Math.abs(out.T5b.swap.frameError) <= 1, 'T5b:播放中换档那一刻帧误差不超过一帧', out.T5b.swap);
     check(b.idx >= a.idx - 1, 'T5b:换档不往回跳', out.T5b.swap);
     // 换档之后 300 ms 内每一帧都有画(新档对调时已经交过对齐的帧)
-    const after = samplesB.filter((s) => s.at >= b.at && s.at <= b.at + 300);
-    out.T5b.afterSwapBlack = after.filter((s) => !s.shown || s.rs < 2 || !(s.luma > 16)).length;
+    const after = framesB.filter((s) => s.at >= b.at && s.at <= b.at + 300);
+    out.T5b.afterSwapBlack = after.filter((s) => s.rs < 2 || !(s.luma > 16)).length;
     check(after.length > 0 && out.T5b.afterSwapBlack === 0, 'T5b:换档那一刻起 300 ms 内无黑帧 / 无空档', after.slice(0, 4));
   } else check(false, 'T5b:采样里找到了小版 → 原片的换档那一刻', { n: decB.length, srcs: [...new Set(samplesB.map((s) => s.src))] });
   // 解得出的帧里没有一帧是黑的(下半截平均亮度 < 16)

@@ -216,12 +216,17 @@ export interface SlotsPlan {
 /**
  * 换档对齐判据(C6.6 第 8 节查资料结论第 4 条):新一档交出的这一帧的 `mediaTime`
  * 与画面上那一档此刻的时刻(暂停时就是目标时刻)差不超过一帧(按项目帧率)才算对齐。
- * 多给 1 ms 容差吸收浮点和帧时间戳的取整。
+ * 只给微秒级容差吸收浮点误差；超过一帧的差值必须等下一帧再切。
  */
 export function tierAligned(mediaTime: number, reference: number, fps: number): boolean {
   if (!Number.isFinite(mediaTime) || !Number.isFinite(reference)) return false;
   const frame = 1 / (fps > 0 ? fps : 30);
-  return Math.abs(mediaTime - reference) <= frame + 0.001;
+  return Math.abs(mediaTime - reference) <= frame + 0.000001;
+}
+
+/** 把前台已经交出的帧外推到预热帧的预计显示时刻，再比较两档。 */
+export function frontTimeAtDisplay(front: { mediaTime: number; expectedDisplayTime: number }, warmExpectedDisplayTime: number): number {
+  return front.mediaTime + (warmExpectedDisplayTime - front.expectedDisplayTime) / 1000;
 }
 
 export function planSlots(input: SlotsInput): SlotsPlan {

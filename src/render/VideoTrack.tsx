@@ -4,7 +4,7 @@ import { isImageMedia, type MediaAsset, type Project, type TrackClip } from "../
 import type { FilterDef } from "../kernel/filters.mjs";
 import { shouldMuteNativeAudio } from "../audio/cardAudio";
 import { driveMedia, filterOf, lastSeekAt, releaseMedia, targetTimeOf } from "./mediaDrive";
-import { planSlots, tierAligned, type SlotClip } from "./mediaSync";
+import { frontTimeAtDisplay, planSlots, tierAligned, type SlotClip } from "./mediaSync";
 import { chooseTier, hashFromUrl, playbackUrl } from "./mediaTier";
 import { playabilityVersion, subscribePlayability } from "./playability";
 
@@ -120,6 +120,7 @@ export function VideoTrack({
   const warmRef = useRef<number | null>(null);
   const activeRef = useRef<number | null>(null);
   const shownRef = useRef<number | null>(null);
+  const displayedFrames = useRef<Array<{ mediaTime: number; expectedDisplayTime: number; token: number } | null>>([null, null]);
   // 出画回调在渲染之外到达:暂停时没有播放循环推着重渲,得自己敲一下,显示才换得过去
   const [, bump] = useReducer((n: number) => n + 1, 0);
 
@@ -129,7 +130,24 @@ export function VideoTrack({
   const canWarm = warming.has(warmKey) || warming.size < MAX_WARMING;
   const curV = cur ? slotClipOf(cur.clip, cur.media, localHashes) : null;
   const nextV = next ? slotClipOf(next.clip, next.media, localHashes) : null;
-  const plan = planSlots({ slots: slots.current, shown: shownRef.current, cur: curV, next: nextV, t, playing, canWarm });
+  // 浏览器已解出可见帧、但本组件的首个回调还没到时，也要按「有上一档画面」规划换档。
+  const planningSlots = slots.current.map((s, i) => i === shownRef.current && (els[i].current?.readyState ?? 0) >= 2 ? { ...s, ready: true } : s);
+  if (shownRef.current !== null && curV && slots.current[shownRef.current].clip?.id === curV.id && slots.current[shownRef.current].clip?.url !== curV.url) {
+    const other = 1 - shownRef.current;
+    // 另一槽位可能早在原片尚未到齐时按普通素材出过画；只有本轮预热对齐产生的 ready 才能切换。
+    if (planningSlots[shownRef.current].ready && warmRef.current !== other && planningSlots[other].clip?.id === curV.id && planningSlots[other].clip?.url === curV.url) {
+      planningSlots[other] = { ...planningSlots[other], ready: false };
+    } else if (warmRef.current === other && planningSlots[other].ready && playing) {
+      // 帧回调到 React 提交之间前台还会继续走；提交时用两槽位最新的交帧再验一次。
+      const front = displayedFrames.current[shownRef.current];
+      const warm = displayedFrames.current[other];
+      if (!front || !warm || front.token !== slots.current[shownRef.current].token || warm.token !== slots.current[other].token ||
+        !tierAligned(warm.mediaTime, frontTimeAtDisplay(front, warm.expectedDisplayTime), project.fps || 30)) {
+        planningSlots[other] = { ...planningSlots[other], ready: false };
+      }
+    }
+  }
+  const plan = planSlots({ slots: planningSlots, shown: shownRef.current, cur: curV, next: nextV, t, playing, canWarm });
   // 换档对齐判据要的「此刻」:帧回调在渲染之外到达,读最新的
   const live = useRef({ t, playing, cur, fps: project.fps || 30, shown: plan.shown as number | null });
   live.current = { t, playing, cur, fps: project.fps || 30, shown: plan.shown };
@@ -157,19 +175,48 @@ export function VideoTrack({
     });
   };
 
+  // currentTime 是播放头的读数，不是已经交给合成器的帧。持续记录两槽位的交帧时刻，
+  // 预热回调到达时才有同一显示时刻的前台参照。
+  useLayoutEffect(() => {
+    const ids: Array<{ el: HTMLVideoElement; id: number }> = [];
+    for (let i = 0; i < 2; i++) {
+      const el = els[i].current;
+      if (!el) continue;
+      const onFrame: VideoFrameRequestCallback = (_now, meta) => {
+        displayedFrames.current[i] = { mediaTime: meta.mediaTime, expectedDisplayTime: meta.expectedDisplayTime, token: slots.current[i].token };
+        ids[i] = { el, id: el.requestVideoFrameCallback(onFrame) };
+      };
+      ids[i] = { el, id: el.requestVideoFrameCallback(onFrame) };
+    }
+    return () => { for (const entry of ids) if (entry) entry.el.cancelVideoFrameCallback(entry.id); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   useLayoutEffect(() => {
     // 换档预热的槽位:交出的帧要和画面上那一档对齐到一帧以内才算好(C6.6「帧误差不超过一帧」)——
     // 播放中比显示着的那一档此刻的时刻,暂停中比目标时刻。判的时候才看它是不是预热槽位(`warmRef`):
     // 一个槽位可能先按普通段装上(比如等待上传方时挂失败了)、后来才成了预热槽位
-    const aligned = (i: number, c: SlotClip, mediaTime: number) => {
+    const aligned = (i: number, c: SlotClip, mediaTime: number, expectedDisplayTime?: number) => {
       const now = live.current;
       if (!now.cur || now.cur.clip.id !== c.id) return false;
       const front = now.shown !== null && now.shown !== i ? els[now.shown].current : null;
-      const ref = now.playing && front && !front.paused ? front.currentTime : targetTimeOf(now.cur.clip, now.t);
+      const frontFrame = now.shown !== null ? displayedFrames.current[now.shown] : null;
+      const ref = now.playing
+        ? front && !front.paused && frontFrame && frontFrame.token === slots.current[now.shown!].token && expectedDisplayTime !== undefined
+          ? frontTimeAtDisplay(frontFrame, expectedDisplayTime) : NaN
+        : targetTimeOf(now.cur.clip, now.t);
       const ok = tierAligned(mediaTime, ref, now.fps);
+      if (!ok && now.playing && Number.isFinite(ref)) {
+        const warm = els[i].current;
+        const realNow = (window.__pcRealNow ?? performance.now.bind(performance))();
+        if (warm && !warm.seeking && realNow - (lastSeekAt.get(warm) ?? 0) > 120) {
+          warm.currentTime = ref;
+          lastSeekAt.set(warm, realNow);
+        }
+      }
       // 探针的观察口(`scripts/probes/tier-switch-probe.mjs`):数组时才记,和 __pcFallbackTrace 一个做法
       const trace = (window as unknown as { __pcTierTrace?: unknown[] }).__pcTierTrace;
-      if (ok && Array.isArray(trace)) trace.push({ clipId: c.id, url: c.url, mediaTime, ref, fps: now.fps, playing: now.playing });
+      if (ok && Array.isArray(trace)) trace.push({ clipId: c.id, url: c.url, mediaTime, ref, fps: now.fps, playing: now.playing, expectedDisplayTime, frontFrame });
       return ok;
     };
     // requestVideoFrameCallback:这一段真有一帧画到屏幕上了才算好(不是 seeked,那时帧未必已经交出去)
@@ -178,7 +225,11 @@ export function VideoTrack({
       const tok = ++s.token;
       const onFrame = (_now: number, meta: VideoFrameCallbackMetadata) => {
         if (s.token !== tok) return;
-        if (warmRef.current === i ? aligned(i, c, meta.mediaTime) : inClipRange(c, meta.mediaTime)) {
+        if (warmRef.current === i) {
+          const ok = aligned(i, c, meta.mediaTime, meta.expectedDisplayTime);
+          if (s.ready !== ok || ok) { s.ready = ok; bump(); }
+          el.requestVideoFrameCallback(onFrame);
+        } else if (inClipRange(c, meta.mediaTime)) {
           s.ready = true;
           bump();
           if (i === shownRef.current || i === activeRef.current) onMediaFrame?.(meta.mediaTime);
@@ -203,6 +254,7 @@ export function VideoTrack({
       s.clip = c;
       s.full = fullOf(i);
       s.ready = false;
+      displayedFrames.current[i] = null;
       // 冷却是给「同一段里的纠偏」的;换了一段就是新的开始,别让上一段留下的冷却挡住这一次对齐
       lastSeekAt.delete(el);
       arm(i, c, el);
@@ -226,8 +278,10 @@ export function VideoTrack({
         driveMedia(el, { target, playing, volume: shouldMuteNativeAudio(project, cur.clip, muted) ? 0 : cur.opacity * gain * (cur.clip.audioVolume ?? 1), scrubbing });
         slots.current[i].opacity = cur.opacity;
       } else if (i === plan.warm && cur) {
-        // 换档预热:静音、跟着播放头走(播放中也在走,对齐靠帧回调判),不出声
-        driveMedia(el, { target: targetTimeOf(cur.clip, t), playing, volume: 0, scrubbing });
+        // 播放中的前台解码帧可能落后舞台时钟；预热档直接跟前台走，避免初装时 seek 到未来。
+        const front = plan.shown !== null ? els[plan.shown].current : null;
+        driveMedia(el, { target: playing && front ? front.currentTime : targetTimeOf(cur.clip, t), playing, volume: 0, scrubbing });
+        if (playing && front && el.playbackRate !== front.playbackRate) el.playbackRate = front.playbackRate;
       } else {
         releaseMedia(el);
       }
