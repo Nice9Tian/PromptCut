@@ -25,12 +25,30 @@ export interface UploadedMedia {
   bytes: number;
   /** 库里本来就有同样内容 */
   deduped?: boolean;
+  /**
+   * C6.6 两档(只有视频有):`original` 就是 `hash`(缺 faststart 的已经重封装过,哈希是重封装后的),
+   * `small` 是小版哈希;小版还在本机后台转时是 null、`smallState` 是 pending,由 watchSmallTier 补上。
+   */
+  tiers?: { original: string; small: string | null };
+  /** 小版的状态:pending / ready / failed / none(没有视频流) */
+  smallState?: string;
+}
+
+/** 服务端回包里的两档字段 → UploadedMedia 的那两项 */
+function tiersOf(data: { tiers?: { original?: unknown; small?: unknown }; small?: unknown }): Pick<UploadedMedia, "tiers" | "smallState"> {
+  const t = data?.tiers;
+  if (!t || typeof t.original !== "string") return {};
+  return {
+    tiers: { original: t.original, small: typeof t.small === "string" ? t.small : null },
+    smallState: typeof data.small === "string" ? data.small : undefined,
+  };
 }
 
 /** 把一个 File 流进本地内容库,拿回它的内容哈希。失败给 null(调用方负责提示) */
 export async function uploadMediaFile(file: File): Promise<UploadedMedia | null> {
   try {
-    const res = await fetch(`/api/media/upload/${encodeURIComponent(file.name)}`, { method: "POST", body: file });
+    // tiers=1:视频在服务端做 faststart 判定(缺了就同容器重封装),并在后台生成小版(C6.6)
+    const res = await fetch(`/api/media/upload/${encodeURIComponent(file.name)}?tiers=1`, { method: "POST", body: file });
     if (!res.ok) {
       console.warn(`[io] 上传素材失败(HTTP ${res.status}): ${file.name}`);
       return null;
@@ -48,6 +66,7 @@ export async function uploadMediaFile(file: File): Promise<UploadedMedia | null>
       url: String(data.url || `/@media/${data.hash}`),
       bytes: Number(data.bytes) || file.size,
       deduped: !!data.deduped,
+      ...tiersOf(data),
     };
   } catch (err) {
     console.warn(`[io] 上传素材异常: ${file.name}`, err);
@@ -64,7 +83,7 @@ export async function uploadMediaFile(file: File): Promise<UploadedMedia | null>
  */
 export async function adoptServerMedia(filePath: string): Promise<UploadedMedia | null> {
   try {
-    const res = await fetch(`/api/media/adopt?path=${encodeURIComponent(filePath)}`, { method: "POST" });
+    const res = await fetch(`/api/media/adopt?path=${encodeURIComponent(filePath)}&tiers=1`, { method: "POST" });
     if (!res.ok) {
       console.warn(`[io] 补算素材哈希失败(HTTP ${res.status}): ${filePath}`);
       return null;
@@ -79,6 +98,7 @@ export async function adoptServerMedia(filePath: string): Promise<UploadedMedia 
       url: String(data.url || `/@media/${data.hash}`),
       bytes: Number(data.bytes) || 0,
       deduped: !!data.deduped,
+      ...tiersOf(data),
     };
   } catch (err) {
     console.warn(`[io] 补算素材哈希异常: ${filePath}`, err);
@@ -106,7 +126,54 @@ export function applyUploadedMedia(mediaId: string, up: UploadedMedia | null): v
     media.hash = up.hash;
     media.ext = up.ext || undefined;
     media.size = up.bytes || undefined;
+    // 两档(C6.6):项目里只记两个哈希,不记同步状态(传没传完只问素材服务的 chunks)
+    if (up.tiers) media.tiers = up.tiers.small ? { original: up.tiers.original, small: up.tiers.small } : { original: up.tiers.original };
   }
   media.pending = undefined;
   actions.setMediaPath(mediaId, up?.path ?? media.path ?? "");
+  if (up?.tiers && !up.tiers.small && up.smallState === "pending") watchSmallTier(mediaId, up.tiers.original);
+}
+
+/** 小版在本机后台转码,每隔这么久问一次 */
+const SMALL_POLL_MS = 2000;
+/** 最多问这么久 */
+const SMALL_POLL_LIMIT_MS = 6 * 60 * 60 * 1000;
+const watching = new Set<string>();
+
+/**
+ * 小版好了就把它的哈希写进 `project.media[i].tiers.small`(C6.6)。问的是本机的
+ * `GET /api/media/tiers?hashes=<原片>`(本机转码的登记,不是同步状态)。素材被删了、原片换了、
+ * 转码失败或确定没有小版就停。只在编辑器会话里跑:页面关了就不再问(小版照样在本机生成、照样上传,
+ * 只是这条素材的项目记录里没有 small,别的设备按「还没有小版时直接拉原片」处理)。
+ */
+export function watchSmallTier(mediaId: string, original: string): void {
+  const key = `${mediaId}:${original}`;
+  if (watching.has(key)) return;
+  watching.add(key);
+  const started = Date.now();
+  const stop = () => { watching.delete(key); };
+  const tick = async () => {
+    const media = getState().project.media.find((m) => m.id === mediaId);
+    if (!media || (media.tiers?.original ?? media.hash) !== original || media.tiers?.small || Date.now() - started > SMALL_POLL_LIMIT_MS) return stop();
+    let state: string | null = null;
+    let small: string | null = null;
+    try {
+      const res = await fetch(`/api/media/tiers?hashes=${original}`);
+      const data = res.ok ? await res.json() : null;
+      const item = data?.items?.[original];
+      state = typeof item?.state === "string" ? item.state : null;
+      small = typeof item?.small === "string" ? item.small : null;
+    } catch { /* 下一次再问 */ }
+    if (state === "ready" && small) {
+      const fresh = getState().project.media.find((m) => m.id === mediaId);
+      if (fresh && (fresh.tiers?.original ?? fresh.hash) === original) {
+        fresh.tiers = { original, small };
+        actions.setMediaPath(mediaId, fresh.path ?? "");
+      }
+      return stop();
+    }
+    if (state && state !== "pending") return stop();
+    setTimeout(() => { void tick(); }, SMALL_POLL_MS);
+  };
+  setTimeout(() => { void tick(); }, SMALL_POLL_MS);
 }

@@ -24,6 +24,7 @@ import path from 'node:path';
 import { atomic } from './frame-mov.mjs';
 import { rangeHas } from './snapshot-store.mjs';
 import { collectSnapshotResult, collectStreamResult, pushResult, manifestKindOf, manifestKeyOf, assertResultSize } from './artifact-transfer.mjs';
+import { sharedBandwidthGate } from './bandwidth-gate.mjs';
 
 /** 优先级:数字越小越先推 */
 export const PUSH_PRIORITY = Object.freeze({ normal: 0, low: 1, lowest: 2 });
@@ -125,11 +126,13 @@ export async function blockPriorityOf(pipeline, unit) {
  * @param {Function} [options.setTimeout]  同 `clock.setTimeout`
  * @param {Function} [options.clearTimeout]  同 `clock.clearTimeout`
  * @param {boolean} [options.attach]  建好后挂到 `pipeline.pushQueue`(管线的钩子只认这一个),缺省 true
+ * @param {any} [options.gate]  带宽闸(C6.6,`bandwidth-gate.mjs`),缺省本进程共用的那一个;`false` 不接。
+ *        产物从不等闸,只登记「在推」与「还有几段等着推」,让素材上传队列排在后面
  */
 export function createPushQueue({
   pipeline, client, content = null, dir, log = () => {}, concurrency = 2,
   backoff = PUSH_BACKOFF_MS, settleMs = 0, clock = null,
-  now: nowOpt, setTimeout: setTimeoutOpt, clearTimeout: clearTimeoutOpt, attach = true,
+  now: nowOpt, setTimeout: setTimeoutOpt, clearTimeout: clearTimeoutOpt, attach = true, gate: gateOpt,
 } = /** @type {any} */ ({})) {
   if (!pipeline) throw new TypeError('createPushQueue needs a pipeline');
   if (!client || typeof client.put !== 'function') throw new TypeError('createPushQueue needs an asset client');
@@ -159,6 +162,10 @@ export function createPushQueue({
   let lastError = null;
 
   const effective = item => Math.max(item.priority, unitFloor(item.unit), item.block ?? 0);
+
+  // 带宽闸(C6.6):登记「还有几段等着推」—— 在推的、等着轮到的、静置中的都算,退避中的不算(失败的段不挡素材)
+  const gate = gateOpt === false ? null : (gateOpt ?? sharedBandwidthGate());
+  let unregisterDemand = () => {};
 
   /* ---------------- 落盘 ---------------- */
 
@@ -273,7 +280,9 @@ export function createPushQueue({
   function run(item) {
     item.inflight = true;
     item.again = false;
+    const endGate = gate ? gate.beginArtifact() : () => {};
     const work = pushOne(item).finally(() => {
+      endGate();
       inflight.delete(work);
       item.inflight = false;
       schedule();
@@ -381,6 +390,15 @@ export function createPushQueue({
       if (running) return;
       running = true;
       stopped = false;
+      if (gate) {
+        unregisterDemand();
+        unregisterDemand = gate.artifactDemand(() => {
+          const t = now();
+          let n = 0;
+          for (const item of items.values()) if (item.inflight || item.nextAt <= t) n++;
+          return n;
+        });
+      }
       schedule();
     },
     /**
@@ -391,6 +409,8 @@ export function createPushQueue({
     async stop() {
       running = false;
       stopped = true;
+      unregisterDemand();
+      unregisterDemand = () => {};
       if (timer !== null) { clearTimer(timer); timer = null; timerAt = Infinity; }
       await persist();
       for (const resolve of waiters.splice(0)) resolve();

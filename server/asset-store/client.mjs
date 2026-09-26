@@ -10,6 +10,8 @@
  *   分片大小以服务端 `chunks` 回的 `chunkSize` 为准（`received` 是按它编号的），服务端没给才用选项里的 `chunkSize`。
  * - `get`：404 回 null；下载后校验 sha256，不符就抛（`code: 'hash-mismatch'`）。
  * - `has`：`chunks` 的 `complete`。
+ * - `putFile`（C6.6）：同 `put`，但从磁盘文件逐片读，不整件进内存；每片发出前可 `await` 一个闸（`beforeChunk`）。
+ * - `chunks`：原样回 `chunks` 的对账结果。
  * - 超时：每个请求（含读完回包）各自计时，缺省 30 s（`timeoutMs`），到点用 AbortController 中止；
  *   超时算网络错误，照常重试，重试用完抛出的错误带 `code: 'timeout'`（契约第 10 节第 5 条）。
  * - 重试：网络错误、超时和 5xx 重试，最多 `retries` 次，间隔 200 ms、400 ms、800 ms（再往后继续翻倍）。
@@ -221,6 +223,84 @@ export function createAssetClient({
       const rel = `${ns}/${hash}/complete`;
       ensureOk(`POST ${rel}`, await request('POST', rel));
       return { hash, size, uploaded: true };
+    },
+
+    /**
+     * 从磁盘上的文件分片上传(C6.6 素材上传队列用):不把整件读进内存,每次只读一片。
+     * 规则与 `put` 相同:先问 `chunks`,已 `complete` 就不传;只补 `received` 里缺的片;最后 `complete`。
+     * 分片大小以服务端 `chunks` 回的 `chunkSize` 为准。
+     *
+     * `hash` 由调用方给(本地内容库的键就是它,4 GB 的文件不用再算一遍);服务端 `complete` 时照样按 sha256 校验全件,
+     * 不符回 409 —— 这里抛出的错误带 `status: 409`。
+     * `beforeChunk(n)` 在每一片发出前 `await`,可以回一个函数,这一片发完(成功或失败)后调它 —— 带宽闸就接在这里。
+     *
+     * @param {'media' | 'snap' | 'px'} ns
+     * @param {string} filePath
+     * @param {{ hash: string, ext?: string, beforeChunk?: (n: number) => any }} options
+     * @returns {Promise<{ hash: string, size: number, uploaded: boolean, sent: number[] }>}
+     */
+    async putFile(ns, filePath, { hash, ext, beforeChunk } = /** @type {any} */ ({})) {
+      checkNs(ns);
+      const key = checkHash(hash);
+      const { open, stat } = await import('node:fs/promises');
+      const size = (await stat(filePath)).size;
+      if (size === 0) throw new RangeError('素材服务客户端：不能上传空内容（服务端要求 X-Media-Size 为正整数）');
+      let extName = '';
+      if (ext !== undefined && ext !== null && ext !== '') {
+        extName = String(ext).trim().toLowerCase().replace(/^\./, '');
+        if (!EXT.test(extName)) throw new TypeError(`素材服务客户端：扩展名不合法 ${JSON.stringify(ext)}`);
+      }
+      const st = await chunkState(ns, key);
+      if (st.complete) return { hash: key, size, uploaded: false, sent: [] };
+      if (st.size !== null && st.size !== size) {
+        const err = new Error(`素材服务 ${ns}/${key}：服务端登记的大小 ${st.size} 与本地文件 ${size} 不符`);
+        /** @type {any} */ (err).code = 'size-mismatch';
+        throw err;
+      }
+      const cs = st.chunkSize;
+      const count = Math.max(1, Math.ceil(size / cs));
+      const have = new Set(st.received);
+      const headers = { 'Content-Type': 'application/octet-stream', 'X-Media-Size': String(size) };
+      if (extName) headers['X-Media-Ext'] = extName;
+      const sent = [];
+      const fh = await open(filePath, 'r');
+      try {
+        for (let n = 0; n < count; n++) {
+          if (have.has(n)) continue;
+          const start = n * cs;
+          const length = Math.min(size, start + cs) - start;
+          const part = Buffer.alloc(length);
+          let read = 0;
+          while (read < length) {
+            const r = await fh.read(part, read, length - read, start + read);
+            if (r.bytesRead === 0) throw new Error(`素材服务客户端：读 ${filePath} 第 ${n} 片时文件变短了`);
+            read += r.bytesRead;
+          }
+          const release = typeof beforeChunk === 'function' ? await beforeChunk(n) : null;
+          try {
+            const rel = `${ns}/${key}/${n}`;
+            ensureOk(`PUT ${rel}`, await request('PUT', rel, { headers, body: part }));
+          } finally {
+            if (typeof release === 'function') release();
+          }
+          sent.push(n);
+        }
+      } finally {
+        await fh.close();
+      }
+      const rel = `${ns}/${key}/complete`;
+      ensureOk(`POST ${rel}`, await request('POST', rel));
+      return { hash: key, size, uploaded: true, sent };
+    },
+
+    /**
+     * 这一档在素材服务上的分片状态(`GET <ns>/<hash>/chunks`):`{ size, chunkSize, received, complete }`。
+     * @param {'media' | 'snap' | 'px'} ns
+     * @param {string} hash
+     */
+    async chunks(ns, hash) {
+      checkNs(ns);
+      return chunkState(ns, checkHash(hash));
     },
 
     /**
