@@ -88,6 +88,27 @@
 
 ---
 
+### 0.4 主会话开工清单（2026-09-27，笔记本接手起适用）
+
+主会话每次开工（接手、重启、换机）按本节走，开场指令只需指向本节。
+
+**先读**：`docs/semantics/developer_guide.md` 及它索引的 `guide_files/` 全部；本文第 0、4、6、7、10 节；`docs/reports/PAUSE-2026-09-26.md` 第 3 节（恢复顺序）；当前阶段的契约与设计稿（C6.6：`c66-design.md`；HT-a：`http-transport-contract.md` 开头与第 14、15 节，以及 `origin/claude/http-transport` 上的 `docs/reports/HANDOFF-http-transport.md` 第 7、8 节，其中「代理不支持 WebSocket」已被 2026-09-27 实测推翻）。
+
+**自检**（逐项把结果贴在对话里；令牌、密钥的值一律不打印；不过的项先报用户，不绕过）：
+1. 仓库在 main、与 origin/main 一致、工作区干净。
+2. 基线：类型检查零错误；全量测试零失败，记下总条数。
+3. 顾问可用：`/subagent-gpt` 与 `/subagent-agy` 各答一句最简单的问话。
+4. 子 Agent 定义在：`opus-dev`、`opus-dev-high`、`gpt-manager`、`agy-manager`。
+5. 凭证：SSH 私钥能免交互登录 `8.219.80.16`；`.env.cluster` 存在；`PROBE_MAIL_TOKEN` 已设且能读 `to-local`。位置记在 `docs/local.md`（不入库）。记下 `to-cloud`、`to-local` 当前最大 seq，只处理之后的消息。
+6. 阿里云：pm2 有 `promptcut-hosted`、`probe-coord`；nginx 有 `/coord`、`/hosted`、`/media`；UFW 与交接文档第 7 节一致；两个 `healthz` 回 200；外网匿名 WebSocket 升级回 401。
+7. 监听 8777、8778 的第二实例是否还在：只记录，不动（HT-a 自测与 M8 迁移演练用）。
+
+**接手动作**：把 `docs/reports/` 下已有的 `AGENT-*.md` 按 `multi_agent.md` 归档到 `docs/archive/agent-reports/`，单独一个提交。
+
+**开工第一件事**：经信箱让云端报到并复测（6.5 节 W-开工）；云端不在线就登记不等，直接按 PAUSE 第 3 节开始。
+
+**规矩都在**：改语义与停点见 `suggested_agent_behavior.md`「对齐」；授权范围、发给用户但不等、裁定权在终点之下见第 10 节；角色与对端不在线见第 6 节；release 见 `constraints.md` 与 `git_and_release.md`；顾问与回退梯次见 0.1、0.2 节；汇报与播报见 `suggested_agent_behavior.md`「汇报」和全局约定的 `task-announce`。
+
 ## 1. 现状（M4 与卡片级指纹锁之后）
 
 **已在 main**（`9a95ed8`）：
