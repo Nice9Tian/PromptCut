@@ -1139,7 +1139,9 @@ export default function vitePluginCards(): Plugin {
        * 页面没绑之前挂在本机空间(编辑器一起来就连)。预渲染进程与无头实例不同步(无头实例停用了文档服务)。
        */
       const syncEnabled = !isPrerender && process.env.PROMPTCUT_HEADLESS !== '1' && process.env.PROMPTCUT_CARD_SYNC !== '0';
-      const syncDir = path.join(server.config.root, '.pc-work', 'card-sync');
+      // 记账跟着改动层走:装机版的改动层在数据目录里(补丁整个覆盖 runtime/app 时不丢),记账也放那儿,两者才对得上
+      const overTop = overridesRoot();
+      const syncDir = overTop ? path.join(path.dirname(overTop), 'card-sync') : path.join(server.config.root, '.pc-work', 'card-sync');
       const editedFile = path.join(syncDir, 'edited.json');
       const readEdited = (): Set<string> => {
         try { return new Set((JSON.parse(fs.readFileSync(editedFile, 'utf8')) as unknown[]).filter((x): x is string => typeof x === 'string')); } catch { return new Set(); }
