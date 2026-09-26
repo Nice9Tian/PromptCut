@@ -21,6 +21,7 @@ import { isViewOnly } from "../io/viewOnly";
 import { SyncLink, type AnyMsg, type CloseInfo } from "./link";
 import { client, errorStatus, route, type Candidate, type SharedMode, type Where } from "./sharedApi";
 import { clipOfEntity, entityLabel, writerLabel, type DisplayNames, type Me } from "./labels";
+import { bindCardSync, noteProjectForCardSync } from "./cardSync";
 
 /* ---------------- 界面状态 ---------------- */
 
@@ -375,6 +376,22 @@ export async function issueAgentTicket(req: { reqId?: unknown; projectId?: unkno
   await fetch("/api/agent/ticket", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(reply) }).catch(() => undefined);
 }
 
+/**
+ * 卡片源码同步(C6.6 第 5 节,`cardSync.ts`):编辑器进程要 page 角色的连接票据时在本页面的共享项目连接上签;
+ * 提示走同一套气泡,写入身份按成员名单显示。
+ */
+const cardSyncHooks = {
+  ticket: async (projectId: string): Promise<string> => {
+    if (!cur || cur.kind !== "shared" || cur.docProjectId !== projectId) throw new Error("本页面没有连着这个共享项目");
+    const r = await cur.link.request({ type: "auth.ticket", kind: "conn", role: "page" });
+    if (r.type !== "auth.ticket.ok" || typeof r.ticket !== "string") throw new Error(String(r.reason ?? r.detail ?? r.type));
+    return r.ticket;
+  },
+  toast: (text: string, tone: Toast["tone"], ms?: number) => pushToast(text, tone, ms),
+  who: (actor: Record<string, unknown> | null | undefined) =>
+    actor ? writerLabel({ actor, session: typeof actor.session === "string" ? actor.session : undefined }, me(), displayNames()) : "别人",
+};
+
 /** 留在页面的 Agent 工具执行前记个位置,执行后取这期间本页面发出的提交(回包里带 opIds,server/agent/agent-side.mjs 用) */
 export function pageOpMark(): number | null {
   return cur ? cur.link.ds.opMark() : null;
@@ -392,14 +409,23 @@ function bind(link: SyncLink, kind: "local" | "shared", docProjectId: string, ur
     prev.unbind();
   }
   const unbind = bindStore(link.ds, { load: onLoad });
+  let seenProject: Project | null = null;
   const offs = [
     link.ds.on("status", () => refreshStatus()),
     link.ds.on("notice", onNotice),
+    // 卡片源码同步:项目用到的卡变了(时间轴上添了卡)再报一次(C6.6 第 5 节)
+    subscribe(() => {
+      const p = getState().project;
+      if (p === seenProject) return;
+      seenProject = p;
+      noteProjectForCardSync(p);
+    }),
   ];
   cur = { link, kind, docProjectId, url, unbind, offs };
   patch({ active: true, kind, members: kind === "local" ? [] : view.members, notice: null });
   refreshStatus();
   bindAgentSide(kind, docProjectId, url);
+  bindCardSync({ kind, projectId: docProjectId, url }, getState().project, cardSyncHooks);
   if (prev && prev.link !== link) retire(prev.link);
 }
 
