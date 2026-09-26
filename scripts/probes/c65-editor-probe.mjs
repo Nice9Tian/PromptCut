@@ -172,7 +172,7 @@ async function closeAiSetup(page) {
 }
 
 const P = (page, fn, ...args) => {
-  if (process.env.PROBE_TRACE) console.error('[eval]', page.url().slice(-40), String(fn).slice(0, 80).replace(/s+/g, ' '));
+  if (process.env.PROBE_TRACE) console.error('[eval]', page.url().slice(-40), String(fn).slice(0, 80).replace(/\s+/g, ' '));
   return page.evaluate(fn, ...args);
 };
 
