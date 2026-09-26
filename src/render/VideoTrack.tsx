@@ -116,6 +116,9 @@ export function VideoTrack({
   const slots = useRef<Slot[]>([emptySlot(), emptySlot()]);
   /** 每个槽位装的那一档上一次渲染时在素材服务上到齐没有(到齐的那一刻重载失败过的元素) */
   const completeSeen = useRef<boolean[]>([false, false]);
+  /** 上一次规划的预热槽位 / 播放槽位(帧回调在渲染之外到达,读这里) */
+  const warmRef = useRef<number | null>(null);
+  const activeRef = useRef<number | null>(null);
   const shownRef = useRef<number | null>(null);
   // 出画回调在渲染之外到达:暂停时没有播放循环推着重渲,得自己敲一下,显示才换得过去
   const [, bump] = useReducer((n: number) => n + 1, 0);
@@ -155,38 +158,54 @@ export function VideoTrack({
   };
 
   useLayoutEffect(() => {
+    // 换档预热的槽位:交出的帧要和画面上那一档对齐到一帧以内才算好(C6.6「帧误差不超过一帧」)——
+    // 播放中比显示着的那一档此刻的时刻,暂停中比目标时刻。判的时候才看它是不是预热槽位(`warmRef`):
+    // 一个槽位可能先按普通段装上(比如等待上传方时挂失败了)、后来才成了预热槽位
+    const aligned = (i: number, c: SlotClip, mediaTime: number) => {
+      const now = live.current;
+      if (!now.cur || now.cur.clip.id !== c.id) return false;
+      const front = now.shown !== null && now.shown !== i ? els[now.shown].current : null;
+      const ref = now.playing && front && !front.paused ? front.currentTime : targetTimeOf(now.cur.clip, now.t);
+      const ok = tierAligned(mediaTime, ref, now.fps);
+      // 探针的观察口(`scripts/probes/tier-switch-probe.mjs`):数组时才记,和 __pcFallbackTrace 一个做法
+      const trace = (window as unknown as { __pcTierTrace?: unknown[] }).__pcTierTrace;
+      if (ok && Array.isArray(trace)) trace.push({ clipId: c.id, url: c.url, mediaTime, ref, fps: now.fps, playing: now.playing });
+      return ok;
+    };
+    // requestVideoFrameCallback:这一段真有一帧画到屏幕上了才算好(不是 seeked,那时帧未必已经交出去)
+    const arm = (i: number, c: SlotClip, el: HTMLVideoElement) => {
+      const s = slots.current[i];
+      const tok = ++s.token;
+      const onFrame = (_now: number, meta: VideoFrameCallbackMetadata) => {
+        if (s.token !== tok) return;
+        if (warmRef.current === i ? aligned(i, c, meta.mediaTime) : inClipRange(c, meta.mediaTime)) {
+          s.ready = true;
+          bump();
+          if (i === shownRef.current || i === activeRef.current) onMediaFrame?.(meta.mediaTime);
+        } else el.requestVideoFrameCallback(onFrame);
+      };
+      el.requestVideoFrameCallback(onFrame);
+    };
+    const prevWarm = warmRef.current;
+    warmRef.current = plan.warm;
+    activeRef.current = plan.active;
     plan.load.forEach((c, i) => {
       const s = slots.current[i];
       const el = els[i].current;
+      if (!el || !c) return;
+      if (s.clip?.id === c.id && s.clip?.url === c.url) {
+        // 装着的东西没变、却刚成了预热槽位:之前按普通段判的「出过画」不算,按对齐重新判
+        if (i === plan.warm && prevWarm !== i) { s.ready = false; arm(i, c, el); }
+        return;
+      }
       // 同一片段换档(url 变了)也是换了一段:冷却清掉、重新等出画;播放位置由下面的 driveMedia 对齐回去
-      if (!el || !c || (s.clip?.id === c.id && s.clip?.url === c.url)) return;
       // 换了一段:之前的出画不算数了。src 由 React 在这之前换好(同一个文件就不换,解码器和缓冲接着用)
       s.clip = c;
       s.full = fullOf(i);
       s.ready = false;
       // 冷却是给「同一段里的纠偏」的;换了一段就是新的开始,别让上一段留下的冷却挡住这一次对齐
       lastSeekAt.delete(el);
-      const tok = ++s.token;
-      const warmSlot = i === plan.warm;
-      // 换档预热的槽位:交出的帧要和画面上那一档对齐到一帧以内才算好(C6.6「帧误差不超过一帧」)——
-      // 播放中比显示着的那一档此刻的时刻,暂停中比目标时刻
-      const aligned = (mediaTime: number) => {
-        const now = live.current;
-        if (!now.cur || now.cur.clip.id !== c.id) return false;
-        const front = now.shown !== null && now.shown !== i ? els[now.shown].current : null;
-        const ref = now.playing && front && !front.paused ? front.currentTime : targetTimeOf(now.cur.clip, now.t);
-        return tierAligned(mediaTime, ref, now.fps);
-      };
-      // requestVideoFrameCallback:这一段真有一帧画到屏幕上了才算好(不是 seeked,那时帧未必已经交出去)
-      const onFrame = (_now: number, meta: VideoFrameCallbackMetadata) => {
-        if (s.token !== tok) return;
-        if (warmSlot ? aligned(meta.mediaTime) : inClipRange(c, meta.mediaTime)) {
-          s.ready = true;
-          bump();
-          if (i === plan.shown || i === plan.active) onMediaFrame?.(meta.mediaTime);
-        } else el.requestVideoFrameCallback(onFrame);
-      };
-      el.requestVideoFrameCallback(onFrame);
+      arm(i, c, el);
       if (i === plan.preload) {
         // 备用槽位:停在下一段的起点。src 刚换时 readyState 还是 0,这一句会记成「元数据到了就 seek 过去」
         releaseMedia(el);
@@ -221,10 +240,15 @@ export function VideoTrack({
         el.load();
         s.ready = false;
         lastSeekAt.delete(el);
+        arm(i, s.clip, el);
       }
       completeSeen.current[i] = doneNow;
-      // 预热槽位不走这条兜底:它只认帧回调给的对齐(见上)
-      if (s.clip && !s.ready && i !== plan.warm && !el.seeking && el.readyState >= 2 && inClipRange(s.clip, el.currentTime)) {
+      // 预热槽位:暂停中停在原地、当前帧已解好(HAVE_CURRENT_DATA)且对齐,也算好(停在原地不会再交新帧,帧回调等不来);
+      // 播放中只认帧回调给的对齐
+      const settle = i === plan.warm
+        ? !playing && el.paused && aligned(i, s.clip ?? ({} as SlotClip), el.currentTime)
+        : !!s.clip && inClipRange(s.clip, el.currentTime);
+      if (s.clip && !s.ready && !el.seeking && el.readyState >= 2 && settle) {
         s.ready = true;
         bump();
         if (i === plan.shown || i === plan.active) onMediaFrame?.(el.currentTime);
@@ -300,7 +324,7 @@ export function VideoTrack({
       )}
       {awaiting && (
         <div key={`awaiting-${awaiting.clip.id}`} data-pc-media-awaiting="1" style={{ ...boxOf(awaiting.clip), pointerEvents: "none" }}>
-          <span style={{ position: "absolute", left: 8, bottom: 8, padding: "2px 8px", borderRadius: 999, background: "rgba(0,0,0,.45)", color: "rgba(255,255,255,.8)", fontSize: 12 }}>
+          <span style={{ position: "absolute", left: 16, bottom: 16, padding: "4px 16px", borderRadius: 999, background: "rgba(0,0,0,.45)", color: "rgba(255,255,255,.8)", fontSize: 28 }}>
             等待上传方
           </span>
         </div>
