@@ -400,7 +400,39 @@ test("V8B-7 刁钻值塞进随机项目的片段里,再深拷贝加刁钻改动,
   }
 });
 
-test("V8B-8 合计对拍组数", () => {
+test("V8B-8 手写的边角:只在不可枚举属性、重复 id、NaN、undefined 键、键序、原型上才分得出来的情形", () => {
+  const hidden = (o, k, v) => Object.defineProperty(o, k, { value: v, enumerable: false, writable: true, configurable: true });
+  // 都包在一个带 id 数组的元素里,这样才会走到「先判不出操作」那一步
+  const wrap = (v) => ({ list: [{ id: "outer", v }] });
+  const cases = [
+    // id 有重复(不是带 id 的数组)、逐个比都不出操作、但 deepEqual 为 false:旧实现整个 set
+    () => [[hidden({ id: "d", x: 1 }, "y", 2), { id: "d" }], [{ id: "d", x: 1, y: 2 }, { id: "d" }]],
+    // id 不可枚举且两边换了顺序:逐个比看不见 id,只有 id 对齐那一步拦得住
+    () => [[hidden({ v: 1 }, "id", "a"), hidden({ v: 1 }, "id", "b")], [hidden({ v: 1 }, "id", "b"), hidden({ v: 1 }, "id", "a")]],
+    () => [{ a: NaN }, { a: NaN }],
+    () => [{ a: 1, b: undefined }, { a: 1 }],
+    () => [{ a: 1, b: undefined }, { a: 1, c: 2 }],
+    () => [{ a: 1, b: 2 }, { b: 2, a: 1 }],
+    () => [{ a: 0 }, { a: -0 }],
+    () => [Object.assign(Object.create(null), { a: 1 }), { a: 1 }],
+    () => [[{ id: "a" }, { id: "b" }], [{ id: "b" }, { id: "a" }]],
+    () => [[{ id: "a" }, { id: "" }], [{ id: "a" }, { id: "" }]],
+    () => [[1, 2], [1, 2]],
+    () => [[1, 2], { 0: 1, 1: 2 }],
+    () => [new Date(0), new Date(1)],
+    () => [hidden({ a: 1 }, "b", 2), { a: 1, b: 2 }],
+    () => [{ a: 1, b: 2 }, hidden({ a: 1 }, "b", 2)],
+  ];
+  let n = 0;
+  for (const make of cases) {
+    const [a, b] = make();
+    check(`V8B-8 #${n} 直接`, a, b);
+    check(`V8B-8 #${n} 包一层`, wrap(a), wrap(b));
+    n++;
+  }
+});
+
+test("V8B-9 合计对拍组数", () => {
   assert.ok(checked >= 20000, `对拍组数不够:${checked}`);
   console.log(`V8B 对拍 ${checked} 组,两边逐条相同`);
 });
