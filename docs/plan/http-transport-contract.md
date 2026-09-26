@@ -304,8 +304,6 @@
 | `server/hosted/deploy.mjs`、`scripts/remote/docservice.mjs` | pm2 配置写开关；公网地址参数（第 12 节） |
 | 测试 | `1892c1f`、`da0ea0a`、`234e33e` 的三个测试文件按第 11 节改写；`fake-transport-kit.mjs` 保留并扩展 |
 
-`claude/coord-mailbox` 要跟着改（在它合入 main 之前，或合入后另起一个小提交）：
-- `MAIL_DEFAULTS.QUEUES` 加 `to-pc`、`from-pc`（主计划第 6 节）；
-- `MAIL_DEFAULTS.KINDS` 加 `status`，给上线、下线报到用〔裁：报到不是某条指令的回执，单列一种更好过滤〕；
+`claude/coord-mailbox` 只补说明，队列与消息种类不变（PC 与笔记本之间不走信箱，用 App 的跨会话消息，主计划第 6.4 节）：
 - 文件头注明：在 Claude Code 里等消息，用一条后台运行的 `wait` 命令，由它内部循环长轮询，不要让模型逐次轮询；
 - 阿里云上的 `probe-coord` 用新版本重启，`mail.jsonl` 原样保留，信箱令牌不变。
