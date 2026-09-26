@@ -1,7 +1,7 @@
 /**
  * 文档服务的组装层：HTTP 与 WebSocket 升级、建连鉴权、心跳、`/healthz`、诊断，以及旧接口 `mountRenderQueue` 的外观。
  *
- * 语义见 `docs/semantics/architecture/document-service.md`，契约见 `docs/plan/render-queue-contract.md` G.4、H.2、H.4。
+ * 语义见 `docs/semantics/product/document-service.md`，契约见 `docs/plan/render-queue-contract.md` G.4、H.2、H.4。
  * 文档服务是通用的文本 / JSON 分发中心：
  * - 传输在 `ws.mjs`；
  * - 通用核心在 `router.mjs`（连接登记、信封解析、按类型路由、模块挂载、频道、出站背压），不认识任何业务；
@@ -32,7 +32,7 @@ import { renderQueueModule, renderQueuePlaceholder, RENDER_QUEUE_MODULE } from '
 import { spacedModule } from './spaces.mjs';
 
 export const DOCSERVICE_DEFAULTS = Object.freeze({
-  /** 单条消息上限。这条连接只传小消息（document-service.md「职责」） */
+  /** 单条消息上限。这条连接只传小消息（product/document-service.md「职责」） */
   MAX_PAYLOAD: 1024 * 1024,
   MAX_CONNECTIONS: 256,
   /** 每隔这么久 ping 一次；上一轮的 ping 没等到 pong 就断开 */

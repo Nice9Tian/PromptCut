@@ -30,7 +30,7 @@ import { resolveGlRoute } from "../render/costDevice.mjs";
 
 /**
  * A1 的 `localHashes`:**当前连接的素材服务**报 `complete` 的哈希集合,换档判据只看它
- * (`src/render/mediaTier.ts` 的 playbackUrl;`docs/semantics/architecture/asset-storage.md`「同步状态只问素材服务」)。
+ * (`src/render/mediaTier.ts` 的 playbackUrl;`docs/semantics/mechanism/asset-service.md`「同步状态只问素材服务」)。
  * 来源 —— 主文档每 2 秒轮询 `GET media/<hash>/chunks` —— 在第 6 步(`docs/plan/cloud-task.md` A1「换档判据」),
  * 这里先留空集合:空集合 = 一律原片,舞台和主文档的声音都和接换档之前一样。
  */
@@ -1083,7 +1083,7 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
         * **2D 这一页在 3D 页下面常驻,只是藏起来,不卸载。**
         *
         * 以前是 `view === "3d" ? <3D/> : <2D/>`,切到 3D 就把舞台 iframe 连同主文档的音频层一起卸掉。
-        * 可播放头**跟随舞台**(docs/semantics/architecture/rendering.md「播放头跟随舞台」,K4:
+        * 可播放头**跟随舞台**(docs/semantics/product/rendering.md「播放头跟随舞台」,K4:
         * 非 legacy 下只有可见舞台的 `frame` 事件在推 `t`)—— 舞台没了,3D 页按播放就什么都不会动,
         * 声音也没了。现在舞台一直在跑,3D 页读的还是同一个 `t`,播放轴和声音和 2D 页一模一样。
         *

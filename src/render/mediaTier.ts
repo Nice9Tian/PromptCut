@@ -2,7 +2,7 @@ import type { MediaAsset } from "../kernel/project";
 import { playableOnThisHost, probePlayable } from "./playability";
 
 /**
- * 「这一刻该拿哪个地址去播」—— 素材的换档判据(`docs/semantics/architecture/asset-storage.md`「两档素材」「拉取」)。
+ * 「这一刻该拿哪个地址去播」—— 素材的换档判据(`docs/semantics/product/asset-service.md`「两档素材」「拉取」)。
  *
  * 放在 src/render/ 而不是 src/editor/ 是因为舞台 bundle(预览 / 预渲染 / 导出页)
  * 也要 import 它 —— 舞台够不着编辑器那一侧的任何模块。
@@ -17,7 +17,7 @@ import { playableOnThisHost, probePlayable } from "./playability";
  * # 规则
  *
  * `localHashes`(标识符沿用)= **当前连接的素材服务报 `complete` 的哈希集合**,判据只看它
- * (asset-storage.md「同步状态只问素材服务」);本机缓存落没落盘、项目文档里写了什么都不算数。
+ * (mechanism/asset-service.md「同步状态只问素材服务」);本机缓存落没落盘、项目文档里写了什么都不算数。
  *
  *   1. 集合为空 → 原片(`media.url`)。今天还没有集合的来源(第 6 步主文档每 2 秒轮询
  *      `GET media/<hash>/chunks`),所以今天的行为和改之前一样:每条路都拿 `media.url`。

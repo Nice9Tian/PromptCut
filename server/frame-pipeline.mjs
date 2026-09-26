@@ -420,7 +420,7 @@ export class FramePipeline {
    *
    * `interactive: false` 的实例(编辑器进程)**没有 Agent lane**:Agent 的查询(`see_frames` 的
    * agent 批、`layout`、`entityRects`、`/api/cards/dom`)只在预渲染进程里跑
-   * (`docs/semantics/architecture/rendering.md`「查询渲染与预渲染进程」)。编辑器进程里
+   * (`docs/semantics/mechanism/rendering.md`「查询渲染与预渲染进程」)。编辑器进程里
    * 走到这里就回 `503 NO_AGENT_LANE`,不在编辑器这一侧开 Chrome。
    */
   laneRefused(lane) {
@@ -619,7 +619,7 @@ export class FramePipeline {
     return { capture: this.captureCode() || undefined, cards };
   }
   async acquire(lane, project) {
-    // 只有后台那一趟在借预渲染间时给播放让路。`'queue'` lane 不在这里让路(M6c 集成裁定,语义 platforms.md
+    // 只有后台那一趟在借预渲染间时给播放让路。`'queue'` lane 不在这里让路(M6c 集成裁定,语义 product/platforms.md
     // 「手里在做的那一批做完为止」):到这里的队列任务已经认领在手,做完为止;不认领新的由本机节点的闲时门槛管
     // (`queue-idle.mjs`)。M5b 时这里连 `'queue'` 一起抛,认领在手的任务会被当成可重试失败放回去。
     if (lane === 'background' && (this.backgroundYielding || this.backgroundLeaseUntil > Date.now())) throw Object.assign(new Error('Background yielded to playback'), { cancelled: true });
@@ -2037,7 +2037,7 @@ export class FramePipeline {
     return skipped;
   }
   /**
-   * 延后的卡再判一次(契约 F.8 第 2 条;`rendering.md`:锁定方停下一段时间后本机接手)。
+   * 延后的卡再判一次(契约 F.8 第 2 条;`mechanism/rendering.md`:锁定方停下一段时间后本机接手)。
    *
    * 后台那一趟结束时仍有 `'defer'` 的卡(`controls`,按 `clipId` 记),就定一个一次性、`unref` 的计时器,
    * `cardLockIdleMs` 之后触发。触发时要同时满足:这一版的 `signal` 没 abort、还有会话的当前版本是这个
@@ -2100,7 +2100,7 @@ export class FramePipeline {
     return pass;
   }
   /**
-   * 页面测量时推过的帧存成共享快照(契约 F.3;语义 `rendering.md`「预渲染结果的复用」)。
+   * 页面测量时推过的帧存成共享快照(契约 F.3;语义 `mechanism/rendering.md`「预渲染结果的复用」)。
    * 路由 `PUT /api/frames/snapshot` 的全部判断在这里。`control` 是 entry 的 card plan 里那一项,
    * 路由已经确认它是审阅表 `independent` 的共享档卡。按顺序:
    *

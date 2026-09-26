@@ -23,7 +23,7 @@ const isInside = (file, dir) => {
  *   其余一律和页面一样走 HTTP,找页面的源要(/@media/<hash>、/api/media/file?path=… 都支持 Range,ffmpeg 能 seek)。
  * 页面的源在编辑器拉起的预渲染进程里就是预渲染进程,它把 /@media/*、/api/media/* 原样转给素材服务
  * (vite.prerender.config.ts 的 mediaRoutes);单独跑的脚本从 dev server 加载页面,那里的 /@media 就是素材服务本身。
- * 所以这里**不读本地内容库的目录**,也不认 m.path(docs/semantics/architecture/asset-storage.md「职责」:
+ * 所以这里**不读本地内容库的目录**,也不认 m.path(docs/semantics/product/asset-service.md「职责」:
  * 预渲染进程只经素材服务的接口读素材)。磁盘路径的白名单由素材服务那一侧守;
  * 这里 HTTP 只认页面同源的 —— project.json 是浏览器发来的,不能让它指使 ffmpeg 去读任意地址。
  */

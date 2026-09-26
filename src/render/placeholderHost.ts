@@ -1,5 +1,5 @@
 /**
- * 占位平面的**舞台一侧**(rendering.md「兜底顺序」;接口见 `placeholder/contract.ts`)。
+ * 占位平面的**舞台一侧**(product/rendering.md「兜底顺序」;接口见 `placeholder/contract.ts`)。
  *
  * 管四件事,都不碰 React、不 import 占位组件本身(组件由 `Stage.tsx` 引;B 交付后只换那一行 import):
  *
@@ -115,7 +115,7 @@ export function placeholderWanted(s: PlaceholderState): Map<string, PlaceholderR
 /* ------------------------------------------------------------------ 2b. 本机渲染不了的卡(unsupported) */
 
 /**
- * 在线浏览器模式(platforms.md):一期只支持内置卡片,用户卡和图卡在这台设备上渲染不了,
+ * 在线浏览器模式(product/platforms.md):一期只支持内置卡片,用户卡和图卡在这台设备上渲染不了,
  * 显示常驻的 `unsupported` 占位(电脑 + 离线图标、「需要本地 PC 渲染辅助」),不走兜底顺序、不显示沙漏。
  *
  * **在线浏览器模式本身还没有实现**(没有运行期的判据);现在只由舞台地址上的 `platform=browser` 显式打开

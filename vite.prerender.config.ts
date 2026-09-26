@@ -56,7 +56,7 @@ function corsForEditor(): Plugin {
 
 /**
  * 素材路由(`/@media/*`、`/api/asset/*`、`/api/media/*`):预渲染进程只经素材服务的 HTTP API 读素材
- * (`docs/semantics/architecture/asset-storage.md`「职责」),所以由编辑器那一端拉起时(给了
+ * (`docs/semantics/product/asset-service.md`「职责」),所以由编辑器那一端拉起时(给了
  * `PROMPTCUT_EDITOR_URL`,本地素材服务就在那个进程里)整条转发过去,自己不再读本地内容库。
  * 没给这个变量(脚本直接用这份配置起一台)时没有别处可转,仍挂本地的媒体插件。
  */

@@ -5,7 +5,7 @@
  *
  * 素材从哪儿读:**只经素材服务的 HTTP API**(`mediaSourceOf` → `asset-client.ts` 的 mediaHttpUrl),
  * ffmpeg 直接拿 http 地址当输入、自己按 Range 定位;这个进程不读本地内容库的目录
- * (`docs/semantics/architecture/asset-storage.md`「职责」)。`routes.ts` 的 `/api/vision/sheet` 也走这一条。
+ * (`docs/semantics/product/asset-service.md`「职责」)。`routes.ts` 的 `/api/vision/sheet` 也走这一条。
  */
 import { spawn, spawnSync } from "node:child_process";
 import os from "node:os";

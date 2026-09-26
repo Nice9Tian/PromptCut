@@ -3,7 +3,7 @@
  *
  * 素材服务等所在的一方把自己的地址上报（`service.announce`），需要它的渲染节点、客户端订阅
  * （`service.watch`）后收到全量列表（`service.endpoints`）；上报方撤回（`service.withdraw`）或断开超过宽限期后，
- * 地址随之撤回（语义 `docs/semantics/architecture/document-service.md`「连接发现」）。
+ * 地址随之撤回（语义 `docs/semantics/mechanism/document-service.md`「连接发现」）。
  *
  * 只交换地址：本模块不访问登记的 URL，不转发任何字节。推送一律是按订阅者 `kinds` 过滤后的全量，列表很小，不做增量。
  * 权限（`docs/plan/auth-contract.md` 第 10 节）：`service.announce` / `service.withdraw` 只给管理身份与 `local` 身份，

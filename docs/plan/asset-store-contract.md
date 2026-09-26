@@ -3,7 +3,7 @@
 主 Agent 定稿，2026-09-25（用户授权自动推进）。实现方与测试方**只照本文写**，互不看对方的代码。本文要改只能由主 Agent 改，并同时通知各方。
 
 - 计划：`docs/plan/Master-Execution-Plan.md` 第 5.2 节、第 7 节 C5
-- 语义：`docs/semantics/architecture/asset-storage.md`；`document-service.md`「连接发现」（素材服务地址下发已引入）
+- 语义：`docs/semantics/product/asset-service.md`；`mechanism/document-service.md`「连接发现」（素材服务地址下发已引入）
 - 现有契约：`server/asset-service.ts` 文件头（第 5 步的 HTTP API）。**本文不改那份 HTTP 契约的任何外部行为**，只在它下面加一层数据层，另加写入鉴权与地址登记。
 
 ## 0. 现状更正

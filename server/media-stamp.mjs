@@ -5,8 +5,8 @@ import path from 'node:path';
  * 帧管线的素材戳(`_frameSourceStamp`):`FramePipeline.entry()` 把它塞进每条素材记录,
  * `frameIdentity` 按它算整场景键 —— 素材的字节变了,键就得变,旧的帧库条目才不会被当成新的命中。
  *
- * **预渲染进程不直接读素材服务的存储目录**(`docs/semantics/architecture/asset-storage.md`「职责」
- * 第三条;`docs/semantics/architecture/rendering.md`「重管线:预渲染」)。以前这里按
+ * **预渲染进程不直接读素材服务的存储目录**(`docs/semantics/product/asset-service.md`「职责」
+ * 第三条;`docs/semantics/product/rendering.md`「重管线:预渲染」)。以前这里按
  * `card-media-path.mjs` 把 URL 换成本地路径再 `fs.stat`,用 `${size}:${mtimeMs}` 当戳;现在:
  *
  *   - **有内容哈希的**(`m.hash`,或 `url` 是 `/@media/<hash>[.ext]`):戳就是哈希。按哈希寻址的内容

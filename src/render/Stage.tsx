@@ -16,7 +16,7 @@ import { guardCompositing, shouldGuard } from "./capabilityGuard";
 import { ensurePlaneStyle } from "./planeStyle";
 import { renameSnapshotIds } from "./snapshotRename";
 import { GlPlane } from "./gl/GlPlane";
-/* 占位组件(rendering.md「兜底顺序」尽头;接口见 `placeholder/contract.ts`) */
+/* 占位组件(product/rendering.md「兜底顺序」尽头;接口见 `placeholder/contract.ts`) */
 import { PlaceholderPlane, PLACEHOLDER_CSS, maxAnimated } from "./placeholder";
 import { ensurePlaceholderStyle, geometryFor, isCatchingUpClip, PLACEHOLDER_SLOT_ATTR, placeholdersEnabled, setMaxAnimated, unsupportedHere } from "./placeholderHost";
 import { PLACEHOLDER_FIXED_ATTR, type PlaceholderReason } from "./placeholder/contract";
@@ -332,7 +332,7 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
               */}
               {unsupported ? (
                 /*
-                  本机渲染不了的卡(在线浏览器模式下的用户卡 / 图卡,platforms.md):卡片代码不跑,
+                  本机渲染不了的卡(在线浏览器模式下的用户卡 / 图卡,product/platforms.md):卡片代码不跑,
                   只挂常驻的 `unsupported` 占位(槽位带 `PLACEHOLDER_FIXED_ATTR`,显隐调度跳过它)。
                 */
                 <div {...{ [PLACEHOLDER_SLOT_ATTR]: "", [PLACEHOLDER_FIXED_ATTR]: "" }} style={{ position: "absolute", inset: 0 }}>
@@ -411,7 +411,7 @@ export function Stage({ timeline, t, directT = t, playToken, speed = 1, proxy, s
                   style={{ position: "absolute", left: 0, top: 0, width: "100%", height: "100%" }} />
               ) : null}
               {/*
-                占位平面(rendering.md「兜底顺序」;和快照 / 流平面同级,坐标、旋转、缩放、层级从包裹层继承)。
+                占位平面(product/rendering.md「兜底顺序」;和快照 / 流平面同级,坐标、旋转、缩放、层级从包裹层继承)。
                 槽位默认 `hidden`,`StageView` 每拍只切它的 `hidden`(contract 的 `setPlaceholderShown`),
                 不经 React 提交 —— `hidden` 这个 prop 恒为 true,React 不会把手动切过的值冲掉。
                 放在最后:同一包裹层里它盖在快照 / 流平面上面(显示它的时候那两样本来就没画面)。

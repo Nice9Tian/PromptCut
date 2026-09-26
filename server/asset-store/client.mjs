@@ -2,7 +2,7 @@
  * 素材服务的 HTTP 客户端（契约 `docs/plan/artifact-transfer-contract.md` 第 2 节）。
  *
  * 渲染节点、预渲染进程这些「像外部客户端一样」的角色经它按内容哈希推拉字节
- * （`docs/semantics/architecture/asset-storage.md`「职责」「预渲染的产物」）。
+ * （`docs/semantics/product/asset-service.md`「职责」「预渲染的产物」）。
  * 服务端的路由与规则见 `server/asset-service.ts` 文件头：`<base>/<ns>/<hash>…`，`<ns>` ∈ `media` | `snap` | `px`。
  * 只用 Node 内置模块（全局 `fetch`、`node:crypto`）。
  *
