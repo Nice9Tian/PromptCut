@@ -9,7 +9,8 @@
  * | 集群令牌 | 认，得到管理身份 | 一律不认 |
  *
  * 挂的模块：
- * - 渲染任务队列、项目版本、内容库：**按空间各起一份**（`spaces.mjs`）。`local` 空间的存储沿用 `dataDir` 本身
+ * - 渲染任务队列、项目、内容库、工具调用事件：**按空间各起一份**（`spaces.mjs`）。事件模块借同一空间的项目模块
+ *   广播（项目频道）、借内容模块写 `event-detail`，所以这三个按空间配成一组（`bundleForSpace`）；`local` 空间的存储沿用 `dataDir` 本身
  *   （本地文档服务是 `<root>/out/docservice`，独立模式是数据目录），共享项目的空间在 `<dataDir>/tenants/<projectId>/`；
  * - 服务地址登记（`endpoints`）：全服务一份，管理接口；
  * - 共享项目（`shared`）：成员列表、创建者操作、票据。
@@ -24,6 +25,7 @@ import { spacedModule, LOCAL_SPACE } from './spaces.mjs';
 import { endpointsModule } from './modules/endpoints.mjs';
 import { projectModule } from './modules/project.mjs';
 import { contentModule } from './modules/content.mjs';
+import { eventsModule } from './modules/events.mjs';
 import { sharedModule } from './modules/shared.mjs';
 import { createFileStore, createMemoryStore } from './store/index.mjs';
 import { createRenderQueue } from '../render-queue/index.mjs';
@@ -128,8 +130,21 @@ export function createSharedDocService({
 
   service.mountRenderQueue((space) => createRenderQueue({ now, send: service.send }));
   service.mount(endpointsModule());
-  service.mount(spacedModule({ create: (space) => projectModule({ store: storeForSpace(space) }) }));
-  service.mount(spacedModule({ create: (space) => contentModule({ store: storeForSpace(space) }) }));
+  /** 空间 → { project, content, events }：同一空间的三个实例配成一组，事件模块要借另外两个 */
+  const bundles = new Map();
+  function bundleForSpace(space) {
+    let b = bundles.get(space);
+    if (!b) {
+      const project = projectModule({ store: storeForSpace(space) });
+      const content = contentModule({ store: storeForSpace(space) });
+      b = { project, content, events: eventsModule({ project, content }) };
+      bundles.set(space, b);
+    }
+    return b;
+  }
+  service.mount(spacedModule({ create: (space) => bundleForSpace(space).project }));
+  service.mount(spacedModule({ create: (space) => bundleForSpace(space).content }));
+  service.mount(spacedModule({ create: (space) => bundleForSpace(space).events }));
   service.mount(sharedModule({
     store: storeOf,
     challenges: adminChallenges,
@@ -151,6 +166,7 @@ export function createSharedDocService({
       }
       service.dropSpace(space);
       spaceStores.delete(space);
+      bundles.delete(space);
       const dir = tenantDir(space);
       if (dir) fs.rmSync(dir, { recursive: true, force: true });
     },

@@ -9,6 +9,14 @@ import { TOOL_ROUTES } from "../mcp/routes.mjs";
 import { getState } from "../store/project";
 import { prerenderUrl } from "../render/prerender";
 import { flushDataMirror, startDataMirror } from "../render/dataMirror";
+import { issueAgentTicket, pageOpIdsSince, pageOpMark } from "../editor/sync/syncManager";
+import { trackJobs, trackResults } from "../mcp/common";
+
+/**
+ * Agent 服务端向页面要只读页面状态用的内部工具名(server/agent/agent-side.mjs 的 PAGE_STATE_TOOL)。
+ * 不在工具表里、Agent 看不到,所以不写成字面的分发分支(tool-schema.test.mjs 的对账只认声明过的工具)。
+ */
+const PAGE_STATE_TOOL = "__page_state";
 const TOOL_SPECS = RAW_TOOL_SPECS as { name: string; inputSchema?: { required?: string[] } }[];
 
 /**
@@ -392,6 +400,28 @@ export function connectMcpExecutor(getApi: () => EditorApi, onStatus?: (s: { con
           window.dispatchEvent(new CustomEvent("ai-chat-error", { detail: "另一个编辑台页面接管了 AI 连接" }));
           active = false;
         }
+      } else if (ev.type === "agent.ticket") {
+        // Agent 服务端要一张 agent 角色的连接票据(共享项目;server/vite-plugin-ai.ts 的 requestTicket)
+        void issueAgentTicket(ev);
+      } else if (ev.type === "call" && ev.tool === PAGE_STATE_TOOL) {
+        /*
+         * Agent 服务端向页面要一次只读的页面状态(c65-integ2 裁定:既读页面状态又写项目的工具改在服务端执行,
+         * 见 server/agent/agent-exec.mjs 的 PAGE_STATE_TOOLS):播放头、页面内存里 track_points 跑出来的轨迹。
+         * 只读,不改任何状态,不经 EditorApi。
+         */
+        const q = (ev.args ?? {}) as { keys?: string[]; args?: { mediaId?: unknown } };
+        const keys = Array.isArray(q.keys) ? q.keys : [];
+        const result: Record<string, unknown> = {};
+        if (keys.includes("t")) result.t = getState().t;
+        if (keys.includes("track")) {
+          const mediaId = typeof q.args?.mediaId === "string" ? q.args.mediaId : null;
+          result.track = mediaId ? { mediaId, result: trackResults.get(mediaId) ?? null, running: trackJobs.has(mediaId) } : null;
+        }
+        fetch("/api/mcp/result", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: ev.id, ok: true, result }),
+        }).catch(() => {});
       } else if (ev.type === "call") {
         const id = ev.id;
         const tool = ev.tool;
@@ -410,6 +440,8 @@ export function connectMcpExecutor(getApi: () => EditorApi, onStatus?: (s: { con
         let ok = true;
         let result: unknown;
         let error: string | undefined;
+        // 这次调用期间本页面发出的提交(留在页面的写工具):回包里带 opIds,Agent 服务端据此推进这个对话读到的版本
+        const opMark = pageOpMark();
 
         try {
           const missing = missingRequired(tool, args);
@@ -462,10 +494,11 @@ export function connectMcpExecutor(getApi: () => EditorApi, onStatus?: (s: { con
          */
         try { await flushDataMirror(); } catch { /* 推不上不影响这次结果;服务端没有新镜像时会退回经页面执行 */ }
 
+        const opIds = pageOpIdsSince(opMark);
         fetch("/api/mcp/result", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ id, ok, result, error })
+          body: JSON.stringify({ id, ok, result, error, ...(opIds.length ? { opIds } : {}) })
         }).catch(() => {});
 
         // 做成了一次时间轴动作 → 给 SKILL 悬浮窗刷一张预览(只在无头实例里生效,失败静默)

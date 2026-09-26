@@ -78,6 +78,8 @@ export function contentModule({ store = createMemoryStore(), now, maxBodyBytes =
   const principals = new Map();
   /** connId → 订阅的 kind（最后一次 watch 为准） */
   const watching = new Map();
+  /** 最近一次拿到的上下文：别的模块代为写入（`putFromModule`）时借它广播 */
+  let lastCtx = null;
 
   const clock = (ctx) => (typeof now === 'function' ? now() : ctx.now());
 
@@ -100,19 +102,17 @@ export function contentModule({ store = createMemoryStore(), now, maxBodyBytes =
     ctx.send(connId, message);
   }
 
-  function put(ctx, connId, msg, reqId) {
-    const kind = checkKind(msg.kind);
-    const key = checkKey(msg.key);
-    if (!('body' in msg) || msg.body === undefined) bad('缺少 body');
-    const session = checkSession(msg.session);
-    const text = JSON.stringify(msg.body);
+  /**
+   * 写一条（`content.put` 与 `putFromModule` 共用）：校验大小、落日志、改内存，返回回包字段与要广播的消息。
+   * 超过上限抛 TooLarge，什么都不落。
+   */
+  function write(ctx, kind, key, bodyIn, actor) {
+    const text = JSON.stringify(bodyIn);
     if (Buffer.byteLength(text, 'utf8') > maxBodyBytes) throw new TooLarge(`body 序列化后超过 ${maxBodyBytes} 字节`);
     const items = itemsOf(kind);
     const prev = items.get(key);
     const hash = sha256(text);
     const rev = REV_KINDS.has(kind) ? (prev?.rev ?? 0) + 1 : null;
-    const principal = principals.get(connId);
-    const actor = actorOf(principal, session);
     const at = clock(ctx);
     const body = JSON.parse(text);
     const record = withRev({ kind, key, hash }, kind, rev);
@@ -122,10 +122,20 @@ export function contentModule({ store = createMemoryStore(), now, maxBodyBytes =
     // 先落日志再改内存：落盘失败时状态不变，核心回 internal
     store.append(streamOf(kind), record);
     items.set(key, { body, hash, rev, actor, at });
-    reply(ctx, connId, withRev({ type: 'content.stored', kind, key, hash }, kind, rev), reqId);
     const changed = withRev({ type: 'content.changed', kind, key, hash }, kind, rev);
     changed.actor = actor;
     changed.previousActor = prev?.actor ?? null;
+    return { hash, rev, changed };
+  }
+
+  function put(ctx, connId, msg, reqId) {
+    const kind = checkKind(msg.kind);
+    const key = checkKey(msg.key);
+    if (!('body' in msg) || msg.body === undefined) bad('缺少 body');
+    const session = checkSession(msg.session);
+    const actor = actorOf(principals.get(connId), session);
+    const { hash, rev, changed } = write(ctx, kind, key, msg.body, actor);
+    reply(ctx, connId, withRev({ type: 'content.stored', kind, key, hash }, kind, rev), reqId);
     ctx.publish(channelOf(kind), changed, { coalesceKey: `content:${kind}:${key}` });
   }
 
@@ -169,6 +179,7 @@ export function contentModule({ store = createMemoryStore(), now, maxBodyBytes =
     channels: ['content'],
 
     connect(ctx, connId, principal) {
+      lastCtx = ctx;
       principals.set(connId, { ...principal });
     },
 
@@ -179,6 +190,7 @@ export function contentModule({ store = createMemoryStore(), now, maxBodyBytes =
     },
 
     handle(ctx, connId, msg) {
+      lastCtx = ctx;
       const reqId = isReqId(msg.reqId) ? msg.reqId : undefined;
       const fn = HANDLERS[msg.type];
       if (!fn) return reply(ctx, connId, { type: 'error', reason: 'unsupported', detail: '内容库不支持这种消息' }, reqId);
@@ -196,6 +208,28 @@ export function contentModule({ store = createMemoryStore(), now, maxBodyBytes =
         kinds: Object.fromEntries([...kinds.entries()].sort(([a], [b]) => byCodeUnit(a, b)).map(([kind, items]) => [kind, items.size])),
         watchers: watching.size,
       };
+    },
+
+    /**
+     * 同一空间里的别的模块代为写一条（C6.5 第 7 节：工具调用的完整参数进 `event-detail`）。
+     * `actor` 由调用方按它那条连接的 principal 算好（`actor.mjs`），这里不再核对。写完照常广播 `content.changed`。
+     * 校验不过抛 TypeError；超过上限抛错，`err.reason === 'too-large'`，什么都不落。
+     * @returns {{ kind: string, key: string, hash: string, rev?: number }}
+     */
+    putFromModule({ kind, key, body, actor } = {}) {
+      if (typeof kind !== 'string' || !CONTENT_KINDS.includes(kind)) throw new TypeError(`kind 只能是 ${CONTENT_KINDS.join(' / ')}`);
+      if (typeof key !== 'string' || key.length < 1 || key.length > CONTENT_DEFAULTS.MAX_KEY_LENGTH) throw new TypeError('key 必须是 1～512 个字符的字符串');
+      if (body === undefined) throw new TypeError('缺少 body');
+      const ctx = lastCtx ?? { now: () => Date.now(), publish: () => 0 };
+      let out;
+      try {
+        out = write(ctx, kind, key, body, actor ?? null);
+      } catch (err) {
+        if (err instanceof TooLarge) err.reason = 'too-large';
+        throw err;
+      }
+      ctx.publish(channelOf(kind), out.changed, { coalesceKey: `content:${kind}:${key}` });
+      return withRev({ kind, key, hash: out.hash }, kind, out.rev);
     },
   };
 }

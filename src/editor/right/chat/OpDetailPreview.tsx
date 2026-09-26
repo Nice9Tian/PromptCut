@@ -8,6 +8,7 @@ import { Gif, loadVisualRecord, peekVisualRecord, visualIdOf, type VisualRecord 
 import { usePrerenderBase, withBase } from "../../../render/prerender";
 import { KIND_LABEL, bareToolName, toolKind } from "./iconRuns";
 import "./agent.css";
+import { AgentUndoButton } from "../../sync/AgentUndoButton";
 
 /**
  * 操作详细预览控件:一个 Agent 气泡里**所有**详细内容都在这里展示,一个气泡只放一个。
@@ -809,6 +810,7 @@ function OpCard({ t }: { t: ToolCallInfo }): JSX.Element {
     <div className={`ai-opcard${t.ok === false ? " is-err" : ""}`} data-pc="op-card">
       <OpHead t={t} />
       {content}
+      {t.ok === true ? <AgentUndoButton callId={t.callId} /> : null}
     </div>
   );
 }

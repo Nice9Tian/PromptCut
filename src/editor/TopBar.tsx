@@ -29,6 +29,10 @@ import { SkinDialog } from "./SkinDialog";
 import { SkillDialog } from "./SkillDialog";
 import { applyCombine, summarizeCombine } from "./io/combineImport";
 import { isViewOnly } from "./io/viewOnly";
+import { SyncChips } from "./sync/SyncChips";
+import { NewSharedDialog, OpenSharedDialog } from "./sync/SharedDialogs";
+import { BackupsDialog } from "./sync/BackupsDialog";
+import { useSync, whenSaved } from "./sync/syncManager";
 import "../ui/toolbar.css";
 
 /** 顶栏宽度档位:宽档(全部展开)、中档(图标收缩)、窄档(折叠更多菜单) */
@@ -104,6 +108,23 @@ export function TopBar() {
   const [skinOpen, setSkinOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [skillOpen, setSkillOpen] = useState(false);
+  /** C6.5:共享项目的两个对话框与「本地备份…」 */
+  const [newSharedOpen, setNewSharedOpen] = useState(false);
+  const [openSharedOpen, setOpenSharedOpen] = useState(false);
+  const [backupsOpen, setBackupsOpen] = useState(false);
+  // 撤销提示条里点「项目设置」那一类实体会派发这个事件:打开项目设置对话框
+  useEffect(() => {
+    const open = () => setSettingsOpen(true);
+    window.addEventListener("pc-open-project-settings", open);
+    return () => window.removeEventListener("pc-open-project-settings", open);
+  }, []);
+  /**
+   * 撤销 / 重做按钮的禁用态:栈空时置灰。撤销栈的变化大多伴随项目变化(store 会通知);
+   * 一处都没撤成时项目不变、只出提示条,所以顺带订阅同步状态里的提示条。
+   */
+  const canUndo = useStore(() => actions.canUndo());
+  const canRedo = useStore(() => actions.canRedo());
+  useSync((v) => v.notice);
   const mergeInput = useRef<HTMLInputElement>(null);
   const [moreBtnRect, setMoreBtnRect] = useState<DOMRect | null>(null);
 
@@ -302,8 +323,11 @@ export function TopBar() {
   const saveProject = async () => {
     const fileName = `${name}${PROC_EXT}`;
     try {
-      const text = serializeProc();
-      const outcome = await writeProcToDisk(text, fileName);
+      // 挑好落点之后、写之前:等文档服务确认完所有本地修改(语义「页面只在拿到确认之后才写」),再序列化
+      const outcome = await writeProcToDisk(async () => {
+        await settledOrExplain();
+        return serializeProc();
+      }, fileName);
       if (outcome.kind === "cancelled") return;
       await saveDraft(ensureActiveDraftId());
       // 存完就不脏了,否则「首页」「新建项目」每次都要多问一句
@@ -314,6 +338,17 @@ export function TopBar() {
       }
     } catch (e) {
       alert(String((e as Error).message));
+    }
+  };
+
+  /**
+   * 等文档服务确认所有本地修改;超时(离线、连接慢、同步已暂停)就不写,告诉用户为什么。
+   */
+  const settledOrExplain = async () => {
+    try {
+      await whenSaved(10_000);
+    } catch {
+      throw new Error("还有修改没等到文档服务确认（可能离线、连接慢，或同步已暂停），这次没有保存。等连上、处理完再保存。");
     }
   };
 
@@ -335,6 +370,7 @@ export function TopBar() {
       return;
     }
     try {
+      await settledOrExplain();
       const blob = await packProcp();
       if (target) {
         const writable = await target.createWritable();
@@ -493,7 +529,7 @@ ${summarizeCombine(report)}
         case "open-skin": setSkinOpen(true); break;
         case "open-voice": openVoiceSettings(); break;
         case "merge-project": mergeInput.current?.click(); break;
-        case "shortcuts": alert("空格 播放/暂停\nCtrl/Cmd + Z 撤销\nCtrl/Cmd + Shift + Z 重做\nDelete 删除选中片段"); break;
+        case "shortcuts": alert("空格 播放/暂停\nCtrl/Cmd + Z 撤销\nCtrl/Cmd + Shift + Z 重做\nCtrl/Cmd + Y 重做\nDelete 删除选中片段"); break;
         case "about": alert("PromptCut\nAI 视频编辑器"); break;
       }
     };
@@ -540,8 +576,13 @@ ${summarizeCombine(report)}
 
       {/* A · 编辑控制:撤销与重做恒为纯图标态 */}
       <div className="pc-bar-group">
-        <Btn onClick={() => actions.undo()} label="撤销" icon={<IconUndo />} collapsed />
-        <Btn onClick={() => actions.redo()} label="重做" icon={<IconRedo />} collapsed />
+        {/* 禁用的按钮收不到悬停,提示挂在外面那层上(稿件:悬停提示含不可点时) */}
+        <span title="撤销 (Ctrl+Z) —— 只撤你自己在这个页面做的" data-pc="undo-btn">
+          <Btn onClick={() => actions.undo()} label="撤销" title="撤销 (Ctrl+Z) —— 只撤你自己在这个页面做的" icon={<IconUndo />} collapsed disabled={!canUndo} />
+        </span>
+        <span title="重做 (Ctrl+Shift+Z / Ctrl+Y) —— 恢复刚撤销的操作（有新操作后即失效）" data-pc="redo-btn">
+          <Btn onClick={() => actions.redo()} label="重做" title="重做 (Ctrl+Shift+Z / Ctrl+Y) —— 恢复刚撤销的操作（有新操作后即失效）" icon={<IconRedo />} collapsed disabled={!canRedo} />
+        </span>
       </div>
       <span className="pc-bar-sep" />
 
@@ -670,6 +711,19 @@ ${summarizeCombine(report)}
             <span className="pc-proj-text"><b>打包保存…</b><small>{PROCP_EXT} 连素材一起</small></span>
           </button>
           <div className="pc-proj-sep" role="separator" />
+          <button type="button" role="menuitem" className="pc-proj-item" data-pc="menu-new-shared" disabled={viewOnly} onClick={() => { setProjOpen(false); setNewSharedOpen(true); }}>
+            <IconNew />
+            <span className="pc-proj-text"><b>新建共享项目</b><small>和他人一起编辑</small></span>
+          </button>
+          <button type="button" role="menuitem" className="pc-proj-item" data-pc="menu-open-shared" disabled={viewOnly} onClick={() => { setProjOpen(false); setOpenSharedOpen(true); }}>
+            <IconOpen />
+            <span className="pc-proj-text"><b>打开共享项目</b><small>加入已有项目</small></span>
+          </button>
+          <button type="button" role="menuitem" className="pc-proj-item" data-pc="menu-backups" onClick={() => { setProjOpen(false); setBackupsOpen(true); }}>
+            <IconSave />
+            <span className="pc-proj-text"><b>本地备份…</b><small>被覆盖、离线丢弃的修改</small></span>
+          </button>
+          <div className="pc-proj-sep" role="separator" />
           <button type="button" role="menuitem" className="pc-proj-item" onClick={() => { setProjOpen(false); setSettingsOpen(true); }}>
             <IconSettings />
             <span className="pc-proj-text"><b>项目设置…</b><small>尺寸、帧率、主题</small></span>
@@ -679,6 +733,11 @@ ${summarizeCombine(report)}
       )}
 
       <span className="ml-auto" />
+
+      {/* C6.5:同步已暂停 / 离线 / 共享项目的成员按钮 */}
+      <div className="pc-bar-group">
+        <SyncChips />
+      </div>
 
       {/* 只读查看:告诉人这份是看的不是改的。真正拦住写盘的是服务端那道
           (server/vite-plugin-view-gate.ts),这里只是别让人白点一下才发现 */}
@@ -738,6 +797,9 @@ ${summarizeCombine(report)}
         hidden
         onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) void mergeFromFile(f); }}
       />
+      <NewSharedDialog open={newSharedOpen} onClose={() => setNewSharedOpen(false)} />
+      <OpenSharedDialog open={openSharedOpen} onClose={() => setOpenSharedOpen(false)} />
+      <BackupsDialog open={backupsOpen} onClose={() => setBackupsOpen(false)} />
       <ProjectSettingsDialog
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}

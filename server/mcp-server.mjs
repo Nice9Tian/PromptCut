@@ -148,7 +148,11 @@ function bridgeTimeoutMs(tool) {
   return (Number(def?.timeoutMs) || 60000) + 30000;
 }
 
-async function callBridge(tool, args) {
+/**
+ * callId:模型那一侧这次工具调用的 id。Claude Code 在 tools/call 的 `_meta["claudecode/toolUseId"]` 里带
+ * (c65-integ2 查过本机 claude.exe 里的这段);编辑器把它放进工具调用事件,页面 AI 栏按它对上聊天记录。
+ */
+async function callBridge(tool, args, callId) {
   const { port, hosts } = getTargets();
   for (const host of hosts) {
     try {
@@ -157,7 +161,7 @@ async function callBridge(tool, args) {
         headers: { 'Content-Type': 'application/json' },
         // 多 Agent 分页:这个 MCP 进程是哪一页的 Agent 起的(vite-plugin-ai 起 CLI 时塞的环境变量),
         // 编辑台拿它记「谁改了哪儿」;没有就不带
-        body: JSON.stringify({ tool, args, agent: process.env.PROMPTCUT_AGENT || undefined }),
+        body: JSON.stringify({ tool, args, agent: process.env.PROMPTCUT_AGENT || undefined, callId: callId || undefined }),
         signal: AbortSignal.timeout(bridgeTimeoutMs(tool)),
       });
       if (lastBridgeHost !== host) {
@@ -277,7 +281,9 @@ async function handleMessage(line) {
     
     let res;
     try {
-      res = await callBridge(tool, args);
+      const meta = req.params._meta;
+      const callId = meta && typeof meta === 'object' && typeof meta['claudecode/toolUseId'] === 'string' ? meta['claudecode/toolUseId'] : undefined;
+      res = await callBridge(tool, args, callId);
     } catch (e) {
       if (e.allRefused || isConnRefused(e)) {
         const p = e.port || getTargets().port;

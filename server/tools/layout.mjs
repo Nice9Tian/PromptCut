@@ -22,7 +22,7 @@ export const layoutTools = [
       },
       required: ["clipId"]
     },
-    side: "browser"
+    side: "agent"
   },
   {
     name: "set_rect",
@@ -38,7 +38,7 @@ export const layoutTools = [
       },
       required: ["clipId", "x1", "y1", "x2", "y2"]
     },
-    side: "browser"
+    side: "agent"
   },
   {
     name: "align",
@@ -53,7 +53,7 @@ export const layoutTools = [
       },
       required: ["clipId"]
     },
-    side: "browser"
+    side: "agent"
   },
   {
     name: "nudge",
@@ -68,7 +68,7 @@ export const layoutTools = [
       },
       required: ["clipId"]
     },
-    side: "browser"
+    side: "agent"
   },
   {
     name: "get_layout",
@@ -79,7 +79,7 @@ export const layoutTools = [
         clipId: { type: "string" }
       }
     },
-    side: "browser"
+    side: "agent"
   },
   {
     name: "set_camera3d",
@@ -106,6 +106,6 @@ export const layoutTools = [
         },
       },
     },
-    side: "browser",
+    side: "agent",
   }
 ];
