@@ -25,11 +25,12 @@ const BAKERY = path.join(SERVER, 'bakery');
  *
  *   - `bake-protocol.test.mjs` 测 `scripts/verify-bake-protocol.mjs` 这个命令行校验脚本;
  *   - `dev-server-junction.test.mjs` 测 `scripts/lib/dev-server.mjs` 的 media junction 只拆链接
- *     (拆错了删的是用户素材,所以要常驻基线)。
+ *     (拆错了删的是用户素材,所以要常驻基线);
+ *   - `probe-coord-mail.test.mjs` 测 `scripts/probes/probe-coord.mjs` 里两个 Agent 之间的 HTTP 信箱(鉴权与长轮询)。
  *
  * 多一条都要在这里显式写出来,加不进来就说明依赖方向真的破了。
  */
-const ALLOWED_SCRIPT_IMPORTERS = new Set(['server/test/bake-protocol.test.mjs', 'server/test/dev-server-junction.test.mjs']);
+const ALLOWED_SCRIPT_IMPORTERS = new Set(['server/test/bake-protocol.test.mjs', 'server/test/dev-server-junction.test.mjs', 'server/test/probe-coord-mail.test.mjs']);
 
 const CODE = /\.(mjs|mts|ts|tsx)$/;
 
