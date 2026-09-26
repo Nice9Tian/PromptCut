@@ -7,6 +7,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { overLimit } from './http-guard.mjs';
 import { stagePortsOf } from './stage-ports.mjs';
+import { createCallPairing } from './agent/call-pairing.mjs';
 /*
  * 必须静态 import:vite 打包配置时,别的插件静态引入的 prerender-client.mjs 被打进同一个包里,
  * 状态(预渲染的地址、就绪没有)在那一份上。这里要是换成 import(new URL(...)) 动态加载,拿到的是
@@ -124,6 +125,11 @@ export default function vitePluginAi(): Plugin {
   let nextCallId = 1;
   const pendingCalls = new Map<number, (result: any) => void>();
   const activeRuns = new Map<string, { abort: () => void, finished: boolean, provider?: string, fail?: (message: string) => void }>();
+  /**
+   * codex、agy 两路的 callId 配对(server/agent/call-pairing.mjs):runner 在输出流里看到工具调用就报到,
+   * /api/mcp/call 进来的同一次调用按 mcp-server.mjs 转来的线索认领,拿到和聊天记录里同一个 callId。
+   */
+  const callPairing = createCallPairing();
   /**
    * CLI 额度熔断(server/runners/quota.mjs):对话开始前 gate,结束后按新增字节记账、到线后台重查;
    * 重查发现超线就把同一路正在跑的对话全部掐掉。模块懒加载,和别的 runner 一样。
@@ -1078,6 +1084,8 @@ export default function vitePluginAi(): Plugin {
               setToolAccess: (list: string[] | null) => { loopToolLock = list ? new Set(list) : null; },
               toolProtocol: cfg.toolProtocol,
               mcp,
+              // codex、agy 在输出流里报到工具调用,/api/mcp/call 按线索认领同一个 callId(见上面 callPairing)
+              callPairing,
               // meta.callId:API 直连那条路的 tool_use id(server/harness/tools/index.mjs 传进来),事件带上它,AI 栏按它对上
               callTool: async (name: string, args: any, meta?: { callId?: string }) => await callToolInternal(name, args, agentId || undefined, typeof meta?.callId === 'string' ? meta.callId : undefined),
               onEvent: (ev: any) => {
@@ -1263,9 +1271,17 @@ export default function vitePluginAi(): Plugin {
         req.on('end', async () => {
           if (over) return;
           try {
-            const { tool, args, agent, callId } = JSON.parse(body);
+            const { tool, args, agent, callId, pair } = JSON.parse(body);
             // callId:Claude Code 经 MCP 的 _meta["claudecode/toolUseId"] 带来(server/mcp-server.mjs 转过来),事件带上它
-            const result = await callToolInternal(tool, args, typeof agent === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(agent) ? agent : undefined, typeof callId === 'string' && callId.length <= 128 ? callId : undefined);
+            let call: string | undefined = typeof callId === 'string' && callId.length <= 128 ? callId : undefined;
+            /*
+             * codex、agy 不带 callId,只带配对线索 pair: { scope, hint? }(mcp-server.mjs 的 pairingOf)。
+             * 只有绑了项目副本时事件才发出去,callId 才有用;没绑就不去等配对。配不上就不带,和以前一样。
+             */
+            if (!call && agentBinding && pair && typeof pair.scope === 'string' && pair.scope.length <= 160) {
+              call = await callPairing.claim(pair.scope, tool, args ?? {}, typeof pair.hint === 'string' && pair.hint.length <= 128 ? pair.hint : undefined);
+            }
+            const result = await callToolInternal(tool, args, typeof agent === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(agent) ? agent : undefined, call);
             sendJson(res, 200, { ok: true, result });
           } catch (e: any) {
             if (e.code === 'UNKNOWN_TOOL') {
