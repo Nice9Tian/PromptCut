@@ -28,9 +28,10 @@
 | 素材服务 | 字节的唯一读写入口，按内容哈希寻址，位置无关；取代旧名「素材存储」「素材云」 | `architecture.md`、architecture/asset-storage.md |
 | 成片渲染 | 把项目渲染成给人看的画面 | `architecture.md`、architecture/rendering.md |
 | 查询渲染 | 按 Agent 指定的时刻渲染画面，供 Agent 观察 | `architecture.md`、architecture/rendering.md |
-| 本地文档服务、远程文档服务 | 按所连文档服务的位置区分：跑在本机的，和部署在局域网其它机器或公网云端的 | architecture/document-service.md |
-| 本地素材服务、远程素材服务 | 按所连素材服务的位置区分，同上；与文档服务的位置可任意组合。这两组词取代旧词「本地模式」「云端模式」 | architecture/document-service.md、architecture/asset-storage.md |
-| 连接发现 | 两部分：素材服务地址的动态下发（已引入）；设备之间直连的信令（预留）。文档服务都只交换地址，不承担素材传输流量 | architecture/document-service.md |
+| 云端托管服务 | 常驻云端、所有多用户协作项目的公共入口，负责牵线（验证创建者机器的公网可达性、给成员发主机地址）与中继；与云端文档服务、云端素材服务独立部署，不属于文档服务，不签发票据 | product/hosting.md |
+| 本地文档服务、云端文档服务 | 文档服务的两种部署：跑在创建者本机的，和跑在云端的 | architecture/document-service.md |
+| 本地素材服务、云端素材服务 | 素材服务的两种部署，同上。这两组词取代旧词「本地模式」「云端模式」「远程文档服务」「远程素材服务」 | architecture/document-service.md、architecture/asset-storage.md |
+| 连接发现 | 文档服务把素材服务的地址下发给各方（已引入）；成员怎么找到主机见「连接路径」。文档服务只下发地址，不承担素材传输流量 | architecture/document-service.md |
 | 渲染任务队列 | 文档服务在内存里托管的预渲染任务清单：只记状态和认领者，不测算、不分配 | architecture/document-service.md |
 | 渲染节点 | 从渲染任务队列认领并完成预渲染任务的地方：本机 PC、独立渲染主机、纯浏览器；按能力区分，不按平台名 | architecture/platforms.md |
 | 认领 | 渲染节点从队列里取一个任务：比对状态再加锁一步完成，同一任务同时只有一个认领者；断开或超时后任务回到未认领 | architecture/document-service.md |
@@ -38,14 +39,17 @@
 | 环境指纹 | 渲染环境的标识（操作系统、GPU 基础类别、Chrome 主版本），并入预渲染结果的键；不同环境的结果不混用 | architecture/rendering.md |
 | 卡片级指纹锁 | 一张卡的同一种预渲染结果（快照或轨道流）只出自一种环境：最先产出的环境锁定这张卡，别的环境只能用自己的指纹另起一套键、从头接手 | architecture/rendering.md |
 | 桌面运行环境 | 带预渲染进程的桌面应用（或本机 dev server）所在的运行环境，和「在线浏览器模式」对举；可以连本地或远程的服务 | architecture/platforms.md |
-| 在线浏览器模式 | 只有页面、没有本机进程的运行形态 | architecture/platforms.md |
-| 低内存档 | 平板、手机等内存受限设备的运行档位 | architecture/platforms.md |
+| 在线浏览器模式 | 只有页面、没有本机进程的运行形态。入口是服务器地址加固定后缀（如 `/editor`），打开即是编辑器、不用安装，第一页是开始页；页面连同一台服务器上的文档服务和素材服务 | architecture/platforms.md |
+| 低内存档 | 平板、手机等内存受限设备的运行档位；一期只看和轻量修改，不做预渲染、不认领任务 | architecture/platforms.md |
 | 本地内容库 | 素材服务在某台设备上按哈希存字节的存储或缓存，不是绕过素材服务的直读通道 | architecture/asset-storage.md |
 | 小版、原片 | 同一素材的两档：800×600 以内的 H.264，和保持原编码的原文件 | architecture/asset-storage.md |
-| 共享项目 | 多人共用的项目，也是权限的隔离单位；分互联网模式、局域网模式，进入方式分自由进入、限定进入 | architecture/document-service.md、workflow/project.md |
+| 共享项目 | 系统术语，界面上叫「多用户协作」：勾上了「多用户协作」的项目，也是权限的隔离单位；放本机或云端，进入方式分自由进入、限定进入 | architecture/document-service.md、workflow/project.md |
+| 多用户协作 | 「共享项目」在界面上的叫法，也是项目设置里的勾选：勾上后项目由本地文档服务托管，并向云端托管服务登记，别人在开始页加入；随时可以取消 | workflow/project.md |
+| 邀请码 | 预填加入表单里项目名和项目密码的码（也可以是二维码），不是另一种加入方式；含项目密码，改项目密码后旧码失效 | workflow/project.md |
 | 自由进入、限定进入 | 共享项目的两种进入方式：凭项目名和项目密码进入并自报用户名；只允许创建者名单里的用户名加密码进入 | workflow/project.md |
-| 互联网模式、局域网模式 | 共享项目的两种部署：文档服务和素材服务托管在公网云端，成员连过去；创建者本机当主机，只在同一网段内能用 | architecture/document-service.md |
-| 局域网发现 | 局域网模式下，主机在本网段广播项目名和地址，成员据此找到它；不经文档服务 | architecture/document-service.md |
+| 本机、云端（项目放在哪） | 共享项目的两种部署：文档服务和素材服务都在创建者本机，或都在云端；谁都能选，可以随时搬。取代旧词「局域网模式」「互联网模式」 | architecture/document-service.md |
+| 连接路径 | 成员连本机项目主机的三条路，按顺序试：局域网直连、公网直连、云端托管服务中继；都是常规路径，中继最慢、受限速 | architecture/document-service.md |
+| 局域网发现 | 局域网直连这一路里，主机在本网段广播项目名和地址，成员据此找到它；不经云端 | architecture/document-service.md |
 | 设备名 | 软件按硬件信息给每台设备生成的名字；重名的成员显示时带上它 | workflow/project.md |
 
 ## 项目数据
