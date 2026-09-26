@@ -95,13 +95,49 @@ const browser = await puppeteer.launch({
   args: ['--window-position=-32000,-32000', '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1'],
 });
 
+/**
+ * 编辑器可以看了没有:卡片测量遮罩(`ProbeGate`,「正在测量卡片」)不在,且项目里有片段时时间轴上至少一个片段
+ * 真的排出来了(有宽高、在视口里)。回 { ready, gate, clips, visible }。
+ */
+const readyState = (page) => P(page, async () => {
+  const gate = document.querySelector('[data-pc="probe-gate"]');
+  const S = await import('/src/store/project.ts');
+  const clips = (S.getState().project?.tracks ?? []).reduce((n, t) => n + (t.clips?.length ?? 0), 0);
+  const vw = innerWidth, vh = innerHeight;
+  const visible = [...document.querySelectorAll('[data-clip-id]')].filter((el) => {
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0 && r.right > 0 && r.bottom > 0 && r.left < vw && r.top < vh;
+  }).length;
+  return { ready: !gate && (clips === 0 || visible > 0), gate: gate ? gate.innerText.replace(/s+/g, ' ').slice(0, 80) : null, clips, visible };
+});
+/**
+ * 等编辑器可以看:连续两次(间隔 300 ms)都 ready 才算,免得撞上测量一轮刚完、下一轮还没排上的空档。
+ * 慢机器上测量遮罩可能挂几十秒;超时不抛,回最后一次的状态由调用方判。
+ */
+async function waitEditorReady(page, ms) {
+  const t0 = Date.now();
+  let last = null, streak = 0;
+  for (;;) {
+    last = await readyState(page).catch((e) => ({ ready: false, error: String(e?.message ?? e).slice(0, 120) }));
+    streak = last.ready ? streak + 1 : 0;
+    if (streak >= 2) return { ...last, waitedMs: Date.now() - t0 };
+    if (Date.now() - t0 > ms) return { ...last, waitedMs: Date.now() - t0 };
+    await sleep(300);
+  }
+}
+/** 截图前没等到编辑器可以看的那几张(名字 + 状态);两种模式各自收尾时判失败 */
+const shotsNotReady = [];
+const SHOT_READY_MS = Number(arg('--shot-ready-timeout', '90')) * 1000;
+
 async function shot(page, name) {
   await page.bringToFront();
+  const ready = await waitEditorReady(page, SHOT_READY_MS);
+  if (!ready.ready) shotsNotReady.push({ name, ...ready });
   await sleep(150);
   await closeAiSetup(page);
   const file = path.join(outDir, `${name}.png`);
   await page.screenshot({ path: file });
-  console.log(JSON.stringify({ shot: file }));
+  console.log(JSON.stringify({ shot: file, ready: ready.ready, waitedMs: ready.waitedMs, ...(ready.ready ? {} : { gate: ready.gate, clips: ready.clips, visible: ready.visible }) }));
   return file;
 }
 
@@ -119,6 +155,10 @@ async function openEditor(query = '') {
   }
   await page.goto(`${origin}/?editor${query}`, { waitUntil: 'domcontentloaded' });
   await waitFor(() => page.evaluate(() => !!window.__pcSyncTest && window.__pcSyncTest.view().status === 'online'), 30_000, '页面同步接上');
+  // 打开项目时的卡片测量遮罩挡着整个编辑器(点、打字都落不下去),慢机器上能挂几十秒:等它退下、时间轴排出来
+  const ready = await waitEditorReady(page, Number(arg('--open-ready-timeout', '300')) * 1000);
+  if (!ready.ready) throw new Error(`编辑器打开后没等到可操作(测量遮罩/时间轴):${JSON.stringify(ready)}`);
+  say('editor.ready', { url: page.url(), waitedMs: ready.waitedMs, clips: ready.clips, visible: ready.visible });
   await sleep(800);
   await closeAiSetup(page);
   return page;
@@ -1019,6 +1059,8 @@ async function runCross() {
     await stopEditor().catch(() => {});
     if (res._coordServer) { await res._coordServer.close(); delete res._coordServer; }
   }
+  for (const s of shotsNotReady) fails.push(`shot-not-ready:${s.name}`);
+  if (shotsNotReady.length) res.shotsNotReady = shotsNotReady;
   res.fails = fails;
   res.ok = fails.length === 0;
   console.log(JSON.stringify(res));
@@ -1038,6 +1080,7 @@ else {
   } finally {
     await browser.close();
   }
+  check('shots-editor-ready', shotsNotReady.length === 0, shotsNotReady.length ? { notReady: shotsNotReady } : {});
   const failed = results.filter((r) => !r.ok);
   console.log(JSON.stringify({ summary: { total: results.length, passed: results.length - failed.length, failed: failed.map((f) => f.check) } }));
   process.exitCode = failed.length ? 1 : 0;
