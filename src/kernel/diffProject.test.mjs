@@ -246,6 +246,26 @@ test("规范-实体:片段、序列、部件归片段、剪辑里的片段、效
 
 /* ---------------- V8 性能 ---------------- */
 
+/*
+ * 计时按主线程的 CPU 时间,不按墙钟。
+ *
+ * V8 要钉的是「一次差异 / 一次应用本身要干多少活」:1000 个片段时主线程被它占住不超过 5 ms。
+ * 全量测试是几十个进程并行跑的,墙钟里混进了「被操作系统挂起、等着轮到自己」的时间 ——
+ * 那是调度器的事,不是这段代码的开销,机器越忙墙钟越长,门槛就变成了在测负载。
+ * 主线程 CPU 时间只在这条线程真在跑的时候走,被挂起的那段不算,所以负载不改变它要验证的量;
+ * 而代码真的变慢(算法退化、多拷了一遍)时它照样一比一地涨,门槛照样拦得住。
+ *
+ * Windows 上 CPU 时间按时钟节拍(约 15.6 ms)跳,单次调用量不出来,所以按批量:连着调用直到
+ * 这条线程累计用掉 ≥ BATCH_CPU_MS 的 CPU,再除以次数得到每次的平均。平均把 GC 停顿也摊了进来,
+ * 比原来的中位数只严不松。跑三批取最好的一批,挡掉偶发的一批被别的事(JIT 重编译之类)打断。
+ * 墙钟中位数照旧算出来打日志,方便对照。
+ */
+const BATCH_CPU_MS = 150;
+const cpuNowMs = () => {
+  const u = process.threadCpuUsage ? process.threadCpuUsage() : process.cpuUsage();
+  return (u.user + u.system) / 1000;
+};
+
 function timeIt(fn, runs = 40) {
   for (let i = 0; i < 5; i++) fn();
   const xs = [];
@@ -255,7 +275,23 @@ function timeIt(fn, runs = 40) {
     xs.push(performance.now() - t0);
   }
   xs.sort((a, b) => a - b);
-  return { median: xs[xs.length >> 1], p90: xs[Math.floor(xs.length * 0.9)], max: xs[xs.length - 1] };
+  const wall = { median: xs[xs.length >> 1], p90: xs[Math.floor(xs.length * 0.9)] };
+
+  let cpu = Infinity;
+  for (let batch = 0; batch < 3; batch++) {
+    const c0 = cpuNowMs();
+    const deadline = performance.now() + 20000; // 兜底:CPU 时间不走(不该发生)时别死循环
+    let n = 0;
+    let used = 0;
+    do {
+      fn();
+      n++;
+      used = cpuNowMs() - c0;
+    } while ((used < BATCH_CPU_MS || n < runs) && performance.now() < deadline);
+    assert.ok(used > 0, "主线程 CPU 时间没有走,量不出来");
+    cpu = Math.min(cpu, used / n);
+  }
+  return { cpu, wall };
 }
 
 test("V8-1000 个片段的项目,单次差异 ≤ 5 ms(拖动、改参数、删、加、换序列顺序、整份深拷贝)", () => {
@@ -276,10 +312,9 @@ test("V8-1000 个片段的项目,单次差异 ≤ 5 ms(拖动、改参数、删�
     const next = make();
     const d = diffProject(prev, next);
     assert.ok(deepEqual(apply(prev, d.ops), next), name);
-    // 全量测试是几十个进程并行跑的,CPU 被抢时单批会偏慢:跑三批取中位数最小的那批
-    const t = [0, 1, 2].map(() => timeIt(() => diffProject(prev, next))).sort((x, y) => x.median - y.median)[0];
-    report[name] = `median ${t.median.toFixed(3)} ms, p90 ${t.p90.toFixed(3)} ms, ops ${d.ops.length}`;
-    assert.ok(t.median <= 5, `${name}:差异中位数 ${t.median.toFixed(2)} ms 超过 5 ms`);
+    const t = timeIt(() => diffProject(prev, next));
+    report[name] = `cpu ${t.cpu.toFixed(3)} ms/次, 墙钟 median ${t.wall.median.toFixed(3)} ms p90 ${t.wall.p90.toFixed(3)} ms, ops ${d.ops.length}`;
+    assert.ok(t.cpu <= 5, `${name}:每次差异平均用掉主线程 CPU ${t.cpu.toFixed(2)} ms,超过 5 ms`);
   }
   console.log("V8 diffProject 1000 片段:", JSON.stringify(report, null, 1));
 });
@@ -289,6 +324,6 @@ test("V8-1000 个片段的项目,应用一次拖动的操作 ≤ 5 ms", () => {
   const prev = bigProject(r, 1000);
   const ops = [{ op: "set", path: "/tracks/@t-3/clips/@c-503/start", value: 1 }, { op: "set", path: "/tracks/@t-3/clips/@c-503/end", value: 2 }];
   const t = timeIt(() => applyOps(prev, ops));
-  console.log(`V8 applyOps 拖动:median ${t.median.toFixed(3)} ms`);
-  assert.ok(t.median <= 5);
+  console.log(`V8 applyOps 拖动:cpu ${t.cpu.toFixed(3)} ms/次, 墙钟 median ${t.wall.median.toFixed(3)} ms`);
+  assert.ok(t.cpu <= 5, `每次应用平均用掉主线程 CPU ${t.cpu.toFixed(2)} ms,超过 5 ms`);
 });
