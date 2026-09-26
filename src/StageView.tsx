@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from "react";
 import { flushSync } from "react-dom";
 import { Stage, type StreamPlaneGroup } from "./render/Stage";
 import { FrameScene } from "./render/FrameScene";
 import { flattenOverlay, type Project } from "./kernel/project";
 import { projectCardGraph } from "./kernel/cardGraph.mjs";
-import { getCard } from "./kernel/registry";
+import { cardsVersion, getCard, onCardsUpdated } from "./kernel/registry";
 import { installStageClock } from "./render/stageClock";
 import { cardMountedAt, mountFrameOf } from "./render/frameWindow.mjs";
 import { createAnimationPinner } from "./render/pinAnimations";
@@ -279,6 +279,11 @@ export default function StageView() {
    * (删片段不清 cardNodes),所以包 try —— 一张坏卡不能让整台舞台卸载。
    * 放在 `if (!project) return null` 之前:hooks 不能条件调用。
    */
+  /*
+   * 卡片代码换了(热更新在 `cards/index.ts` 接住、重装了整套卡片,C6.6 集成 3b):本组件不在热更新链上,
+   * 靠这个版本号重渲,卡片按新定义重新挂上;卡片图也按新定义重解。项目、时间、RPC 都不动。
+   */
+  const cardsGen = useSyncExternalStore(onCardsUpdated, cardsVersion, cardsVersion);
   const graph = useMemo(() => {
     if (!project) return undefined;
     try {
@@ -286,7 +291,8 @@ export default function StageView() {
     } catch {
       return undefined;
     }
-  }, [project]);
+    // cardsGen:卡片定义换了,图也要重解
+  }, [project, cardsGen]);
 
   useEffect(() => {
     document.documentElement.style.background = "transparent";

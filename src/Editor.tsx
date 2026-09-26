@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import "./cards";
 import { TopBar } from "./editor/TopBar";
 import { Preview } from "./editor/Preview";
@@ -8,8 +8,8 @@ import { RightPanel } from "./editor/right";
 import { TimelineView } from "./editor/timeline";
 import { ResizeHandle } from "./editor/ResizeHandle";
 import { actions, getState } from "./store/project";
-import { magicuiDemoClips } from "./cards/magicui";
-import { nativeDemoClips } from "./cards/native";
+import { magicuiDemoClips, nativeDemoClips } from "./cards/demoClips";
+import { cardsVersion, onCardsUpdated } from "./kernel/registry";
 import { useSkin } from "./skins/useSkin";
 import { useLayoutMode } from "./editor/layoutMode";
 import { useRailCollapsed, isRailCollapsed, subscribeRails, RAIL_W } from "./editor/sideRails";
@@ -77,6 +77,11 @@ function usePanelSize(key: string, initial: number, min: number) {
  */
 export default function Editor() {
   useSkin(); // mount data-skin
+  /*
+   * 卡片代码换了(新建 / 修改卡片的热更新在 `cards/index.ts` 接住,不再冒到本组件,C6.6 集成 3b):
+   * 订阅注册表的版本号重渲一次,卡片库列表等读注册表的界面跟着更新 —— 只重渲,不重跑任何 effect。
+   */
+  useSyncExternalStore(onCardsUpdated, cardsVersion, cardsVersion);
   const layoutMode = useLayoutMode();
   const leftCollapsed = useRailCollapsed("left");
   const rightCollapsed = useRailCollapsed("right");

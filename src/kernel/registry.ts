@@ -24,6 +24,33 @@ export function registerCards(defs: CardDef<any>[]) {
   }
 }
 
+/*
+ * 卡片代码换了的通知(C6.6 集成 3b)。`cards/index.ts` 是热更新的边界(它自己接住热更新、重装整套卡片),
+ * 热更新不再冒到 Editor、Preview、StageView 上 —— 那会让它们的 effect 在 Fast Refresh 里重跑,
+ * 把舞台的 RPC 客户端清掉。于是要看新卡的一方(舞台重渲、编辑器的卡片列表、探针重测)订阅这里。
+ * 本模块不在热更新链上(卡片改了它不重跑),订阅一直有效。
+ */
+let cardsGen = 0;
+const cardListeners = new Set<() => void>();
+
+/** `cards/index.ts` 热更新重装完整套卡片之后调 */
+export function noteCardsUpdated(): void {
+  cardsGen++;
+  for (const l of [...cardListeners]) {
+    try { l(); } catch (err) { console.warn("[registry] 卡片更新的订阅方出错", err); }
+  }
+}
+
+/** 卡片代码换过几次(本页面会话里);首次装载是 0 */
+export function cardsVersion(): number {
+  return cardsGen;
+}
+
+export function onCardsUpdated(cb: () => void): () => void {
+  cardListeners.add(cb);
+  return () => { cardListeners.delete(cb); };
+}
+
 /** 重新装载整套卡片前先清空,免得删掉的卡片文件在热更新后还赖在库里 */
 export function resetCards() {
   map.clear();

@@ -1,4 +1,4 @@
-import { registerCards, resetCards, allCards, setUserCardSources, getCard, userCardSources } from "../kernel/registry";
+import { registerCards, resetCards, allCards, setUserCardSources, getCard, userCardSources, noteCardsUpdated } from "../kernel/registry";
 import { configureCardAudio } from "../audio/cardAudio";
 import { cardSourceVersion } from "../render/cardSourceVersion.mjs";
 import { builtinCardSourceFiles } from "../render/cardSourceFiles.mjs";
@@ -58,3 +58,24 @@ configureCardAudio({
     return cyrb53(source);
   },
 });
+
+/*
+ * 热更新的边界(C6.6 集成 3b):卡片文件一改,热更新沿「卡片 → 本模块」冒上来,在这里接住 ——
+ * 本模块重跑一遍(上面从空重装整套卡片),不再往上冒到 Editor、Preview、StageView。
+ * 以前冒上去之后,它们的 effect 在 Fast Refresh 里重跑:Preview 的握手 effect 清掉了舞台的 RPC 客户端,
+ * 而舞台没重载、不会再发 `pc-stage-ready`,于是舞台停在旧画面,预览就此不再更新。
+ * 引用本模块的地方都只是 `import "./cards"` 取副作用,不拿绑定,所以接住之后无需通知它们换引用;
+ * 要看新卡的一方经注册表的 `onCardsUpdated` 订阅。通知放在这一批热更新全部落地之后
+ * (`vite:afterUpdate`),免得订阅方读到半截(卡片源码表 `cardSourceFiles.mjs` 同一批更新)。
+ */
+if (import.meta.hot) {
+  const data = import.meta.hot.data as { loaded?: boolean; changed?: boolean };
+  if (data.loaded) data.changed = true;
+  data.loaded = true;
+  import.meta.hot.accept();
+  import.meta.hot.on("vite:afterUpdate", () => {
+    if (!data.changed) return;
+    data.changed = false;
+    noteCardsUpdated();
+  });
+}

@@ -4,6 +4,7 @@ import { previewMode } from "./previewMode";
 import { setPlanProject } from "./planDispatch";
 import { onProbeProgress, probeProgress, requeueProbeRun, syncProbeRun, type ProbeProgress } from "./probeRunner";
 import { whenStageReady } from "./stageBridge";
+import { onCardsUpdated } from "../kernel/registry";
 import "./ProbeGate.css";
 
 /**
@@ -44,23 +45,19 @@ export function ProbeGate() {
   }, [enabled, project]);
 
   /*
-   * 卡片源码同步装上了别人改的卡(C6.6 第 5 节,`sync/cardSync.ts` 在热更新落地后发 `pc-cards-synced`):
-   * 项目没变、卡的代码变了,按当前项目重排一轮,身份键变了的卡补测。用页面事件而不是让 cardSync 直接引 probeRunner:
-   * 那样 syncManager 会成为每张卡的热更新祖先,改一张卡就被重跑、丢掉共享项目的连接。
+   * 卡片代码换了(C6.6 第 5 节「卡片代码变了要由页面显式触发重测」:同步装上别人改的卡,或本机改卡):
+   * 项目没变、卡的代码变了,按当前项目重排一轮,身份键变了的卡补测。
+   * 信号来自注册表的 `onCardsUpdated`(`cards/index.ts` 接住热更新、重装整套卡片之后发),
+   * 它在这一批热更新全部落地之后才发,卡片源码表已是新的。舞台不重载(集成 3b):RPC 客户端一直在,
+   * 这里仍等一下后台舞台就绪,免得页面刚打开、舞台还没握手时白排一轮。
    */
   useEffect(() => {
     if (!enabled) return;
     let active = true;
-    const on = () => {
-      // Preview 同一事件里先卸掉旧 RPC、重载两个 iframe。下一拍读取新的 ready Promise，
-      // 等后台舞台重新握手后才测，避免把工作发给已销毁的旧客户端。
-      setTimeout(() => {
-        if (!active) return;
-        void whenStageReady("back").then(() => { if (active) requeueProbeRun(getState().project); });
-      }, 0);
-    };
-    window.addEventListener("pc-cards-synced", on);
-    return () => { active = false; window.removeEventListener("pc-cards-synced", on); };
+    const off = onCardsUpdated(() => {
+      void whenStageReady("back").then(() => { if (active) requeueProbeRun(getState().project); });
+    });
+    return () => { active = false; off(); };
   }, [enabled]);
 
   if (!enabled || !p.running || !p.blocking) return null;

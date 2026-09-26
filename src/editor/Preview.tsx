@@ -393,28 +393,12 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
     };
   }, [glPortTo]);
 
-  // 卡片源码热更新会重挂主页面组件，却可能保留两个 iframe：旧舞台仍画旧代码，
-  // 旧 RPC 客户端已被 effect 清理。重载舞台让新代码和 pc-stage-ready 握手一起落地。
-  useEffect(() => {
-    const onCardsSynced = () => {
-      setStageClient("front", null);
-      setStageClient("back", null);
-      for (const id of STAGE_IDS) {
-        const frame = (id === "A" ? frameARef : frameBRef).current;
-        if (!frame) continue;
-        const client = rpcRef.current[id];
-        if (client) {
-          releaseStageClient(client);
-          client.dispose();
-          rpcRef.current[id] = null;
-          hostCapsRef.current[id] = null;
-        }
-        frame.src = frame.src;
-      }
-    };
-    window.addEventListener("pc-cards-synced", onCardsSynced);
-    return () => window.removeEventListener("pc-cards-synced", onCardsSynced);
-  }, []);
+  /*
+   * 卡片代码换了不重载舞台(C6.6 集成 3b)。以前改一张卡,热更新冒到本组件,Fast Refresh 重跑上面那个握手 effect,
+   * 清掉了舞台的 RPC 客户端,舞台停在旧画面,只好整页重载两个 iframe(`b25f482`)。现在热更新在 `cards/index.ts`
+   * 接住、不冒到这里;舞台自己也收到同一份热更新,在舞台里重装卡片并重渲(`StageView` 订阅 `onCardsUpdated`)。
+   * 舞台的热更新连接断过的话,vite 的客户端在重连时会整页重载舞台,不会一直停在旧代码上。
+   */
 
   /*
    * 项目选项切了 `glRoute`(R9 约束第 1 条):切到 `shared` 时给已经握过手的舞台补交端口;

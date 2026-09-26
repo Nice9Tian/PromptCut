@@ -88,6 +88,8 @@ const fails = [];
 const navigations = [];
 const consoleLog = [];
 const bHmrMessages = [];
+/** B 页面里舞台 iframe 的导航(重载)记下来:集成 3b 之后改卡不该重载舞台 */
+const stageNavs = [];
 const res = { runId: RUN, cardId: CARD_ID, docPort: DOC_PORT, ports: { a: A_PORT, b: B_PORT } };
 
 function viteBin() {
@@ -165,7 +167,10 @@ async function openEditor(browser, ed) {
   page.on('dialog', (d) => void d.dismiss());
   page.on('console', (m) => { consoleLog.push({ tag: ed.tag, at: Date.now(), type: m.type(), text: m.text().slice(0, 400) }); });
   // 主框架整页导航(刷新)记下来:卡换代码时页面应当热更新,不该整页刷新(刷新会离开共享项目)
-  page.on('framenavigated', (f) => { if (f === page.mainFrame()) navigations.push({ tag: ed.tag, at: Date.now(), url: f.url() }); });
+  page.on('framenavigated', (f) => {
+    if (f === page.mainFrame()) navigations.push({ tag: ed.tag, at: Date.now(), url: f.url() });
+    else if (ed.tag === 'b' && /[?&]stage=/.test(f.url())) stageNavs.push({ at: Date.now(), url: f.url() });
+  });
   await page.goto(`${ed.origin}/?editor`, { waitUntil: 'domcontentloaded' });
   await waitFor(() => P(page, () => !!window.__pcSyncTest && window.__pcSyncTest.view().status === 'online'), 120_000, `${ed.tag} 页面同步接上`);
   // 打开项目时的卡片测量遮罩:等它退下
@@ -310,6 +315,44 @@ try {
   res.stageV1 = !!stageBefore;
   await pageB.screenshot({ path: path.join(OUT, `${RUN}-b-1-before.png`) });
 
+  // ---------- 集成 3b:改卡前记下编辑器的一批 DOM 节点(重挂的话全换新)、关掉首启的 AI 助手对话框,
+  // 改卡后看它们还在不在、对话框有没有重新弹出;另起一路采样可见舞台上的 v1 / v2,量预览中断多久
+  await P(pageB, () => { for (const b of document.querySelectorAll('.ais-dialog .ais-btn')) if (b.textContent?.trim() === '关闭') b.click(); });
+  await sleep(300);
+  res.dialogBeforeEdit = await P(pageB, () => !!document.querySelector('.ais-dialog'));
+  await P(pageB, () => { window.__pcProbeNodes = [...document.querySelectorAll('#root *')].filter((_, i) => i % 40 === 0); });
+  await P(pageB, () => {
+    window.__pcIframeTrace = [];
+    const tick = () => {
+      const f = [...document.querySelectorAll('iframe')].filter((x) => /[?&]stage=/.test(x.src))
+        .map((x) => { const cs = getComputedStyle(x); return `${new URL(x.src).port}:${cs.visibility}:${cs.opacity}`; }).join('|');
+      const tr = window.__pcIframeTrace;
+      if (!tr.length || tr[tr.length - 1].f !== f) tr.push({ at: Date.now(), f });
+      if (tr.length < 500) requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  });
+  /** 可见舞台(不透明的那个 iframe)此刻画的是 v1、v2,还是都没有(断画 / 重载中) */
+  const visibleStageMark = async () => {
+    const port = await P(pageB, () => [...document.querySelectorAll('iframe')]
+      .filter((x) => /[?&]stage=/.test(x.src) && getComputedStyle(x).visibility !== 'hidden' && Number(getComputedStyle(x).opacity) > 0.5)
+      .map((x) => new URL(x.src).port)[0] ?? null).catch(() => null);
+    const f = port && pageB.frames().find((x) => x.url().includes(`:${port}/`) && /[?&]stage=/.test(x.url()));
+    if (!f) return null;
+    const text = await f.evaluate(() => document.body?.innerText ?? '').catch(() => null);
+    if (text === null) return null;
+    return text.includes(MARK('v2')) ? 'v2' : text.includes(MARK('v1')) ? 'v1' : '-';
+  };
+  const stageSamples = [];
+  let sampling = true;
+  const sampler = (async () => {
+    const s0 = Date.now();
+    while (sampling && Date.now() - s0 < 20_000) {
+      stageSamples.push({ at: Date.now(), m: await visibleStageMark() });
+      await sleep(10);
+    }
+  })();
+
   // ---------- 4. A 改卡(edit_card 的服务端)
   const t0 = Date.now();
   const edit = await fetch(`${A.origin}/api/cards/edit`, {
@@ -387,6 +430,27 @@ try {
   }
   const stageAt = await waitFor(async () => ((await stageHas(pageB, MARK('v2'))) ? Date.now() : null), 15_000, 'B 舞台画出 v2').catch(() => null);
   res.stageMs = stageAt ? stageAt - t0 : null;
+  sampling = false;
+  await sampler;
+  {
+    // 可见舞台:最后一次画 v1、第一次画 v2;之间(以及改卡之后任何时候)拿不到画面或两者都没有的时长
+    const after = stageSamples.filter((s) => s.at >= t0);
+    const firstV2 = after.find((s) => s.m === 'v2')?.at ?? null;
+    const lastV1 = [...after].reverse().find((s) => s.m === 'v1' && (firstV2 === null || s.at < firstV2))?.at ?? null;
+    let blank = 0;
+    for (let i = 1; i < after.length; i++) if (after[i - 1].m === null || after[i - 1].m === '-') blank += after[i].at - after[i - 1].at;
+    res.stageSwitch = {
+      firstV2Ms: firstV2 === null ? null : firstV2 - t0,
+      lastV1Ms: lastV1 === null ? null : lastV1 - t0,
+      gapMs: firstV2 !== null && lastV1 !== null ? firstV2 - lastV1 : null,
+      blankMs: blank,
+      samples: after.length,
+      stageReloads: stageNavs.filter((n) => n.at >= t0).length,
+    };
+    res.iframeStates = await P(pageB, () => window.__pcIframeTrace ?? []).then((xs) => xs.filter((x) => x.at >= t0 - 50).map((x) => ({ ms: x.at - t0, f: x.f })));
+  }
+  res.editorNodesKept = await P(pageB, () => { const n = window.__pcProbeNodes ?? []; return `${n.filter((e) => document.contains(e)).length}/${n.length}`; });
+  res.dialogAfterEdit = await P(pageB, () => !!document.querySelector('.ais-dialog'));
   await pageB.screenshot({ path: path.join(OUT, `${RUN}-b-2-after.png`) });
   res.navigationsAfterEdit = navigations.filter((n) => n.at >= t0).map((n) => ({ tag: n.tag, ms: n.at - t0 }));
   res.bHmrMessages = bHmrMessages.filter((m) => m.at >= t0).map((m) => ({ ...m, ms: m.at - t0, at: undefined }));
@@ -415,6 +479,11 @@ try {
   if (!(res.installMs !== null && res.installMs <= 5000)) fails.push(`installMs=${res.installMs}`);
   if (res.hmrMs === null) fails.push('b-page-no-hmr');
   if (res.remeasureMs === null) fails.push('b-no-remeasure');
+  else if (res.remeasureMs > 5000) fails.push(`remeasure-over-5s(${res.remeasureMs})`);
+  if (res.stageMs === null) fails.push('b-stage-not-v2');
+  { const [kept, all] = String(res.editorNodesKept).split('/').map(Number); if (!(all > 0 && kept === all)) fails.push(`b-editor-remounted(${res.editorNodesKept})`); }
+  if (res.dialogAfterEdit && !res.dialogBeforeEdit) fails.push('b-ai-dialog-reshown');
+  if (res.stageSwitch?.stageReloads) fails.push(`b-stage-reloaded(${res.stageSwitch.stageReloads})`);
   if (!(res.keyAfter && res.keyAfter !== res.keyBefore)) fails.push('b-identity-key-unchanged');
   if (!res.hostedHasV2) fails.push('hosted-not-v2');
   if (!(res.cardRev >= 2)) fails.push(`cardRev=${res.cardRev}`);
