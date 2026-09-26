@@ -21,6 +21,7 @@ import { fitView, frameOrigin, panBy, wheelZoomFactor, zoomAt, type View2D } fro
 import "./preview/preview.css";
 import { atFrameGrid } from "../render/frameGrid";
 import { contentStartOf } from "./timeline/utils";
+import { startAssetTiers, tierHashes, useTierHashes } from "./media/assetTiers";
 import { deliverSnapshots, markBaselineReset, noteSettled, pendingDemotes, pickForSetTime, stopSnapshotFeed, streamPlanesAt, suppressedAt, syncSnapshotSubscription } from "./snapshotFeed";
 import { playingCatchUpTargets, runPlayingSwap, runSettleSwap, setSwapHost, swapInFlight } from "./stageSwap";
 import { demotedClips, onStageDemote } from "./demote";
@@ -28,13 +29,12 @@ import { flushSync } from "react-dom";
 import { createSharedGl, type SharedGl } from "../render/gl/glParent";
 import { resolveGlRoute } from "../render/costDevice.mjs";
 
-/**
+/*
  * A1 的 `localHashes`:**当前连接的素材服务**报 `complete` 的哈希集合,换档判据只看它
- * (`src/render/mediaTier.ts` 的 playbackUrl;`docs/semantics/architecture/asset-storage.md`「同步状态只问素材服务」)。
- * 来源 —— 主文档每 2 秒轮询 `GET media/<hash>/chunks` —— 在第 6 步(`docs/plan/cloud-task.md` A1「换档判据」),
- * 这里先留空集合:空集合 = 一律原片,舞台和主文档的声音都和接换档之前一样。
+ * (`src/render/mediaTier.ts` 的 chooseTier;`docs/semantics/architecture/asset-storage.md`「同步状态只问素材服务」)。
+ * 来源是主文档每 2 秒轮询 `GET media/<hash>/chunks`(C6.6,`./media/assetTiers.ts`):
+ * 预览挂着时开轮询,集合变了就下发给两个舞台(`setLocalHashes`),主文档的声音层直接读。
  */
-const LOCAL_HASHES: readonly string[] = [];
 
 /**
  * 中央预览:视频层 + 动效渲染面,按容器缩放。播放循环也在这里(rAF 推进 store.t)。
@@ -51,6 +51,9 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
   const showMiniScrubber = chatLayout !== undefined ? chatLayout : layoutMode === "chat";
 
   const project = useStore((s) => s.project);
+  // C6.6:两档素材的换档集合(预览挂着时每 2 秒问一次当前素材服务)
+  const tierList = useTierHashes();
+  useEffect(() => startAssetTiers(), []);
   const t = useStore((s) => s.t);
   const playing = useStore((s) => s.playing);
   const playToken = useStore((s) => s.playToken);
@@ -533,7 +536,7 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
       // 2D 预览**不加 proxy=1**(见下面 iframe 那段注释),所以互换后重发的也是 false
       proxy: () => false,
       // A1 的换档:舞台的 VideoTrack / 像素映射素材按它选档(T1a 审查 #5);来源见 LOCAL_HASHES
-      localHashes: () => [...LOCAL_HASHES],
+      localHashes: () => [...tierHashes()],
     });
     return () => setSwapHost(null);
   }, [dual, swapRoles]);
@@ -914,6 +917,15 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
       void c.setMediaT(t).catch(() => {});
     }
   }, [dual, stageReady, t]);
+  // C6.6:换档集合变了就下发给两个舞台(E3:素材层两种角色一样)
+  useEffect(() => {
+    if (!dual || !stageReady) return;
+    for (const id of STAGE_IDS) {
+      const c = rpcRef.current[id];
+      if (!c) continue;
+      void c.setLocalHashes([...tierList]).catch(() => {});
+    }
+  }, [dual, stageReady, tierList]);
 
   // 画面层和声音层都由 MediaLayers 管:可以同时有多条画面(重叠+淡化=交叉溶解),音频段单独出声
 
@@ -1134,7 +1146,7 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
           <div style={{ transform: `scale(${scale})`, transformOrigin: "0 0", position: "absolute", left: 0, top: 0, ...themeStyle(project.themeId) }}>
             <div style={{ position: "relative", width: project.width, height: project.height }}>
               {/* K4 的 `mediaStalled`:舞台连着两拍来得比 40 ms 还慢时,音频跟着停一下 */}
-              <MediaLayers project={project} t={t} playing={playing && !mediaStalled} masterVolume={muted ? 0 : volume} audioOnly localHashes={LOCAL_HASHES} />
+              <MediaLayers project={project} t={t} playing={playing && !mediaStalled} masterVolume={muted ? 0 : volume} audioOnly localHashes={tierList} />
               <iframe
                 ref={frameRefOf.A}
                 data-pc="stage-frame"

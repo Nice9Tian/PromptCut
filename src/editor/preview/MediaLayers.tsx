@@ -67,8 +67,12 @@ function AudioLayer({ project, clip, media, volume, t, playing, scrubbing, audio
       releasePreviewAudio(el);
     };
   }, []);
-  // 主文档的声音也经换档判据(T1a 审查 #5);集合为空就是 media.url,和以前一样
-  return <audio ref={ref} src={nodeId ? (cardUrl ?? undefined) : media ? playbackUrl(media, localHashes) : undefined} preload="auto" hidden data-card-audio-state={nodeId ? cardState : undefined} data-card-audio-node={nodeId ?? undefined} />;
+  // 主文档的声音也经换档判据(T1a 审查 #5)。C6.6「音频先留在小版」:播放中换了档,声音先接着用上一档,
+  // 停下(暂停、拖动松开前的暂停态)再换 —— 两路声音不重叠、不爆音。上一档本来就没出声(挂失败了)时当场换。
+  const wanted = media ? playbackUrl(media, localHashes) : undefined;
+  const held = useRef<string | undefined>(undefined);
+  if (held.current === undefined || !playing || held.current === wanted || !media || ref.current?.error) held.current = wanted;
+  return <audio ref={ref} src={nodeId ? (cardUrl ?? undefined) : held.current} preload="auto" hidden data-card-audio-state={nodeId ? cardState : undefined} data-card-audio-node={nodeId ?? undefined} />;
 }
 
 
