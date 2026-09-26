@@ -1,6 +1,6 @@
 /**
  * 按需拉取与预取队列(`docs/plan/c66-design.md` 第 4 节;任务书 `docs/plan/cloud-task.md` A1「按需拉取」「预取队列」;
- * 语义 `docs/semantics/architecture/asset-storage.md`「拉取」「本地内容库」)。
+ * 语义 `docs/semantics/product/asset-service.md`「拉取」「本地内容库」)。
  *
  * 本地素材服务的读路由 `/@media/<hash>`(`vite-plugin-media.ts`)在本地内容库里找不到这个哈希时,
  * 交给这里:向**当前连接的远程素材服务** `GET <base>/media/<hash>` 流式拉取,**边落盘边按 Range 服务**,

@@ -1,5 +1,5 @@
 /**
- * 两档素材的生成(C6.6,`docs/plan/c66-design.md` 第 2 节与第 8 节查资料结论;语义 `asset-storage.md`「两档素材」)。
+ * 两档素材的生成(C6.6,`docs/plan/c66-design.md` 第 2 节与第 8 节查资料结论;语义 `docs/semantics/product/asset-service.md`「两档素材」)。
  *
  * 在**导入方本机的编辑器进程**里做,用 `findFfmpeg`;素材服务从不转码。只对视频做,图片、音频不生成小版。
  *

@@ -1,5 +1,5 @@
 /**
- * 素材上传队列(C6.6,`docs/plan/c66-design.md` 第 3 节;语义 `docs/semantics/architecture/asset-storage.md`「上传」)。
+ * 素材上传队列(C6.6,`docs/plan/c66-design.md` 第 3 节;语义 `docs/semantics/product/asset-service.md`「上传」)。
  *
  * 编辑器进程里一个持久队列,把本机导入的素材(两档:小版、原片)传到**当前连接的素材服务**:
  *   - **逐个素材**:队头那一个两档都在素材服务上 `complete` 了才出队,才轮到下一个。队头在退避时后面的也等着(严格按序)。

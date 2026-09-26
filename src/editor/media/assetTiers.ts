@@ -5,7 +5,7 @@
  *   换档判据(`src/render/mediaTier.ts` 的 `chooseTier`):舞台经 `setLocalHashes` 下发、主文档的声音层直接读。
  *   只问还没到顶档的那一档:原片到齐了这份素材就不再问;哈希不可变,问到齐的不会再变回去。
  *   连本地素材服务时问的是本机 `/api/asset`;进了共享项目问的是那个项目的远程素材服务(带只读素材票据)——
- *   本机缓存落没落盘不作判据(asset-storage.md「同步状态只问素材服务」)。
+ *   本机缓存落没落盘不作判据(`docs/semantics/mechanism/asset-service.md`「同步状态只问素材服务」)。
  * - **远程素材服务**:进入共享项目时由 `syncManager` 设(`connectSharedAssets`),同时告诉本机编辑器进程
  *   (`POST /api/media/remote`),读路由才会按需拉取、预取队列才会动。票据按时续签后再推一次。
  * - **预取**:项目的素材表变了(打开项目、导入)且连着远程素材服务时,把 `prefetchOrder` 的清单交给编辑器进程。
