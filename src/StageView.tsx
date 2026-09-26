@@ -1833,9 +1833,16 @@ export default function StageView() {
         commitPlanes();
         return { ok: true as const };
       },
-      /** A1 的本地素材哈希表。R3 只存,换档那条路在 A1 / L */
+      /**
+       * A1 的换档集合:当前连接的素材服务报 `complete` 的哈希(C6.6,父页每 2 秒轮询后下发)。
+       * 变了就当场重渲一次:暂停中也要换档(`VideoTrack` 的双缓冲)。
+       */
       async setLocalHashes(hashes) {
-        ref.current.localHashes = [...hashes];
+        const next = [...hashes];
+        const prev = ref.current.localHashes;
+        if (prev.length === next.length && prev.every((h, i) => h === next[i])) return { ok: true as const };
+        ref.current.localHashes = next;
+        commitPlanes();
         return { ok: true as const };
       },
       /**

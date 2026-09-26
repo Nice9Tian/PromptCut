@@ -189,6 +189,11 @@ export interface SlotsInput {
   next: SlotClip | null;
   t: number;
   playing: boolean;
+  /**
+   * 换档预热的名额还有没有(同一页面同时预热的层数有上限,`VideoTrack` 的 `MAX_WARMING`)。
+   * 缺省 true。没有名额时上一档接着放,不装新档,等下一次渲染再看。
+   */
+  canWarm?: boolean;
 }
 
 export interface SlotsPlan {
@@ -200,10 +205,27 @@ export interface SlotsPlan {
   preload: number | null;
   /** 这一帧显示哪个槽位 */
   shown: number | null;
+  /**
+   * 换档预热的槽位(C6.6 第 4 节「页面换档」):同一片段的新一档装在这里,静音、跟着播放头走,
+   * 由调用方确认它交出的帧与画面上那一档对齐到一帧以内(`tierAligned`)才标 ready;ready 了下一次
+   * 规划就把它换成 active + shown,一次提交里对调。没有换档时是 null。
+   */
+  warm: number | null;
+}
+
+/**
+ * 换档对齐判据(C6.6 第 8 节查资料结论第 4 条):新一档交出的这一帧的 `mediaTime`
+ * 与画面上那一档此刻的时刻(暂停时就是目标时刻)差不超过一帧(按项目帧率)才算对齐。
+ * 多给 1 ms 容差吸收浮点和帧时间戳的取整。
+ */
+export function tierAligned(mediaTime: number, reference: number, fps: number): boolean {
+  if (!Number.isFinite(mediaTime) || !Number.isFinite(reference)) return false;
+  const frame = 1 / (fps > 0 ? fps : 30);
+  return Math.abs(mediaTime - reference) <= frame + 0.001;
 }
 
 export function planSlots(input: SlotsInput): SlotsPlan {
-  const { slots, shown, cur, next, t, playing } = input;
+  const { slots, shown, cur, next, t, playing, canWarm = true } = input;
   const load = slots.map((s) => s.clip);
   // 认槽位要 id **和** url 都相同:同一片段换档(`mediaTier.ts` 的 playbackUrl 换了地址)就是新的一段,
   // 得重新装、重新等出画(A1「换档 = 槽位级的换段」);只比 id 的话新地址永远装不进去
@@ -212,6 +234,21 @@ export function planSlots(input: SlotsInput): SlotsPlan {
     const i = load.findIndex((c) => c?.url === url);
     return i < 0 ? null : i;
   };
+
+  // ⓪ 换档(C6.6):显示着的槽位装的正是这一段的上一档、而且已经出过画 —— 上一档接着当 active
+  //    (播放中继续走、暂停中停在原地),新档装进另一个槽位预热;新档对齐出画了(ready)才对调。
+  //    这样换档时画面一直有上一档顶着,不冻、不跳,播放位置不变。
+  if (cur && shown !== null && load[shown]?.id === cur.id && load[shown]?.url !== cur.url && slots[shown]?.ready) {
+    const other = 1 - shown;
+    const warmed = load[other]?.id === cur.id && load[other]?.url === cur.url;
+    if (warmed && slots[other]?.ready) {
+      // 对齐出画了:一次提交里对调,上一档这一拍起退下
+      return { load, active: other, preload: null, shown: other, warm: null };
+    }
+    if (!warmed && !canWarm) return { load, active: shown, preload: null, shown, warm: null };
+    load[other] = cur;
+    return { load, active: shown, preload: null, shown, warm: other };
+  }
 
   // ① 当前段放哪个槽位
   let active: number | null = null;
@@ -259,5 +296,5 @@ export function planSlots(input: SlotsInput): SlotsPlan {
     }
   }
 
-  return { load, active, preload, shown: show };
+  return { load, active, preload, shown: show, warm: null };
 }

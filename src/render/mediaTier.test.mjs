@@ -5,7 +5,7 @@
  * 钉的是 T1a 审查的三条:
  *   #3 小版还没传完、原片传完了 → 给原片;判据只看「素材服务报 complete 的哈希集合」;
  *   #4 可播性是**这台设备**的结论,存在本机缓存里,不看项目文档(MediaAsset 上写了什么都不算);
- *   集合为空 → 一律 `media.url`(今天还没有集合的来源,行为和接换档之前一样)。
+ *   集合为空(还没问过素材服务)→ 有小版给小版(C6.6 起;以前是一律 `media.url`)。
  */
 import "../testing/registerTs.mjs";
 import test from "node:test";
@@ -19,9 +19,10 @@ const SMALL = "b".repeat(64);
 const media = { url: `/@media/${ORIG}`, hash: ORIG, tiers: { original: ORIG, small: SMALL }, ext: "mov", kind: "video" };
 const never = () => { throw new Error("不该问可播性"); };
 
-test("集合为空:一律 media.url(今天的行为不变),不问可播性", () => {
-  assert.equal(playbackUrl(media, [], { playable: never }), `/@media/${ORIG}`);
-  assert.equal(playbackUrl(media, new Set(), { playable: never }), `/@media/${ORIG}`);
+test("集合为空(还没问过素材服务):有小版给小版、没有给原片,不问可播性(C6.6:第一帧不直接拉原片)", () => {
+  assert.equal(playbackUrl(media, [], { playable: never }), `/@media/${SMALL}`);
+  assert.equal(playbackUrl(media, new Set(), { playable: never }), `/@media/${SMALL}`);
+  assert.equal(playbackUrl({ ...media, tiers: { original: ORIG } }, [], { playable: never }), `/@media/${ORIG}`);
   // 迁移期没有哈希的老素材:原样
   assert.equal(playbackUrl({ url: "/api/media/file?path=C%3A%2Fa.mp4" }, [ORIG]), "/api/media/file?path=C%3A%2Fa.mp4");
   // 只有哈希、没有 url 的:拼哈希地址
@@ -80,7 +81,8 @@ test("cloudBase:哈希地址换成远程素材服务的绝对地址,别的地址
 });
 
 test("mimeForExt / hashFromUrl", () => {
-  assert.equal(mimeForExt("MOV"), "video/quicktime");
+  // C6.6:MOV 按 Chrome 实际用的 ISO BMFF 解复用器问(canPlayType("video/quicktime") 在 Chrome 恒回空串)
+  assert.equal(mimeForExt("MOV"), "video/mp4");
   assert.equal(mimeForExt("xyz"), null);
   assert.equal(hashFromUrl(`/@media/${ORIG}.mp4?x=1`), ORIG);
   assert.equal(hashFromUrl("/@media/name.mp4"), null);

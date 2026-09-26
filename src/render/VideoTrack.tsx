@@ -1,11 +1,12 @@
-import { useLayoutEffect, useReducer, useRef } from "react";
+import { useLayoutEffect, useReducer, useRef, useSyncExternalStore } from "react";
 import { frameCss } from "../kernel/layout";
 import { isImageMedia, type MediaAsset, type Project, type TrackClip } from "../kernel/project";
 import type { FilterDef } from "../kernel/filters.mjs";
 import { shouldMuteNativeAudio } from "../audio/cardAudio";
 import { driveMedia, filterOf, lastSeekAt, releaseMedia, targetTimeOf } from "./mediaDrive";
-import { planSlots, type SlotClip } from "./mediaSync";
-import { playbackUrl } from "./mediaTier";
+import { planSlots, tierAligned, type SlotClip } from "./mediaSync";
+import { chooseTier, hashFromUrl, playbackUrl } from "./mediaTier";
+import { playabilityVersion, subscribePlayability } from "./playability";
 
 /**
  * 一条序列的画面层(视频 / 图片)。E7 第 1 条:素材层搬进舞台,由 `FrameScene` 的 `live` 变体渲。
@@ -26,6 +27,13 @@ import { playbackUrl } from "./mediaTier";
  */
 
 const NO_HASHES: readonly string[] = [];
+
+/**
+ * 同一页面同时预热换档的层数上限(C6.6 第 8 节查资料结论第 4 条:两路同时解码占额外解码器与帧缓存,
+ * 1080p 一帧约 3.1 MB;只预热少数层,其余等名额)。按序列计,一条序列同时最多预热一个。
+ */
+export const MAX_WARMING = 2;
+const warming = new Set<object>();
 
 export interface VideoLayer {
   clip: TrackClip;
@@ -97,7 +105,8 @@ export function VideoTrack({
   onMediaFrame?: (mediaTime: number) => void;
   /**
    * 当前连接的素材服务报 `complete` 的哈希(A1 的 `localHashes`),换档判据只看它。
-   * 缺省空集合 = 一律原片(`media.url`)。来源(主文档每 2 秒轮询 `GET media/<hash>/chunks`)在第 6 步。
+   * 缺省空集合 = 还没问过素材服务(有小版挂小版)。来源:主文档每 2 秒轮询 `GET media/<hash>/chunks`
+   * (`src/editor/media/assetTiers.ts`),经 `setLocalHashes` 下发。
    */
   localHashes?: readonly string[];
 }) {
@@ -105,13 +114,23 @@ export function VideoTrack({
   const el1 = useRef<HTMLVideoElement>(null);
   const els = [el0, el1];
   const slots = useRef<Slot[]>([emptySlot(), emptySlot()]);
+  /** 每个槽位装的那一档上一次渲染时在素材服务上到齐没有(到齐的那一刻重载失败过的元素) */
+  const completeSeen = useRef<boolean[]>([false, false]);
   const shownRef = useRef<number | null>(null);
   // 出画回调在渲染之外到达:暂停时没有播放循环推着重渲,得自己敲一下,显示才换得过去
   const [, bump] = useReducer((n: number) => n + 1, 0);
 
+  // 可播性探出结论(`playability.ts`)时重渲一次:暂停中也当场换档
+  useSyncExternalStore(subscribePlayability, playabilityVersion, playabilityVersion);
+  const warmKey = useRef({}).current;
+  const canWarm = warming.has(warmKey) || warming.size < MAX_WARMING;
   const curV = cur ? slotClipOf(cur.clip, cur.media, localHashes) : null;
   const nextV = next ? slotClipOf(next.clip, next.media, localHashes) : null;
-  const plan = planSlots({ slots: slots.current, shown: shownRef.current, cur: curV, next: nextV, t, playing });
+  const plan = planSlots({ slots: slots.current, shown: shownRef.current, cur: curV, next: nextV, t, playing, canWarm });
+  // 换档对齐判据要的「此刻」:帧回调在渲染之外到达,读最新的
+  const live = useRef({ t, playing, cur, fps: project.fps || 30, shown: plan.shown as number | null });
+  live.current = { t, playing, cur, fps: project.fps || 30, shown: plan.shown };
+  const complete = new Set(localHashes);
   const fullOf = (i: number): TrackClip | null => {
     const id = plan.load[i]?.id;
     if (id && id === cur?.clip.id) return cur.clip;
@@ -148,10 +167,20 @@ export function VideoTrack({
       // 冷却是给「同一段里的纠偏」的;换了一段就是新的开始,别让上一段留下的冷却挡住这一次对齐
       lastSeekAt.delete(el);
       const tok = ++s.token;
+      const warmSlot = i === plan.warm;
+      // 换档预热的槽位:交出的帧要和画面上那一档对齐到一帧以内才算好(C6.6「帧误差不超过一帧」)——
+      // 播放中比显示着的那一档此刻的时刻,暂停中比目标时刻
+      const aligned = (mediaTime: number) => {
+        const now = live.current;
+        if (!now.cur || now.cur.clip.id !== c.id) return false;
+        const front = now.shown !== null && now.shown !== i ? els[now.shown].current : null;
+        const ref = now.playing && front && !front.paused ? front.currentTime : targetTimeOf(now.cur.clip, now.t);
+        return tierAligned(mediaTime, ref, now.fps);
+      };
       // requestVideoFrameCallback:这一段真有一帧画到屏幕上了才算好(不是 seeked,那时帧未必已经交出去)
       const onFrame = (_now: number, meta: VideoFrameCallbackMetadata) => {
         if (s.token !== tok) return;
-        if (inClipRange(c, meta.mediaTime)) {
+        if (warmSlot ? aligned(meta.mediaTime) : inClipRange(c, meta.mediaTime)) {
           s.ready = true;
           bump();
           if (i === plan.shown || i === plan.active) onMediaFrame?.(meta.mediaTime);
@@ -177,18 +206,33 @@ export function VideoTrack({
         if (Math.abs(el.currentTime - target) > 0.03) armFrame(el, i);
         driveMedia(el, { target, playing, volume: shouldMuteNativeAudio(project, cur.clip, muted) ? 0 : cur.opacity * gain * (cur.clip.audioVolume ?? 1), scrubbing });
         slots.current[i].opacity = cur.opacity;
+      } else if (i === plan.warm && cur) {
+        // 换档预热:静音、跟着播放头走(播放中也在走,对齐靠帧回调判),不出声
+        driveMedia(el, { target: targetTimeOf(cur.clip, t), playing, volume: 0, scrubbing });
       } else {
         releaseMedia(el);
       }
       // 兜底:同一个文件 seek 到原地这类情况不会有新帧交出来,rVFC 不回调;解码好了、时刻对得上也算好
       const s = slots.current[i];
-      if (s.clip && !s.ready && !el.seeking && el.readyState >= 2 && inClipRange(s.clip, el.currentTime)) {
+      // 素材服务上刚到齐的那一档:之前按它挂过、失败了(404:等待上传方)的元素重新加载一次
+      const h = s.clip ? hashFromUrl(s.clip.url) : null;
+      const doneNow = !!h && complete.has(h);
+      if (doneNow && !completeSeen.current[i] && s.clip && (el.error || el.networkState === 3)) {
+        el.load();
+        s.ready = false;
+        lastSeekAt.delete(el);
+      }
+      completeSeen.current[i] = doneNow;
+      // 预热槽位不走这条兜底:它只认帧回调给的对齐(见上)
+      if (s.clip && !s.ready && i !== plan.warm && !el.seeking && el.readyState >= 2 && inClipRange(s.clip, el.currentTime)) {
         s.ready = true;
         bump();
         if (i === plan.shown || i === plan.active) onMediaFrame?.(el.currentTime);
       }
     }
     shownRef.current = plan.shown;
+    if (plan.warm !== null) warming.add(warmKey);
+    else warming.delete(warmKey);
   });
 
   // 卸载时别留着定时器和「落定了再补」去碰已经不在的元素
@@ -198,7 +242,9 @@ export function VideoTrack({
     return () => {
       releaseMedia(a);
       releaseMedia(b);
+      warming.delete(warmKey);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   /*
@@ -212,6 +258,9 @@ export function VideoTrack({
   // 不挂空 src(空 src 会被当成页面地址,<img> 出裂图、<video> 报解码错)。
   // 传完 media.url 变成 /@media/<hash>,占位自动消失。
   const uploading = cur && cur.media.pending && !cur.media.url ? cur : null;
+  // C6.6:轮询回过、而这一层要挂的那一档在当前素材服务上还没到齐 —— 画面透明,角上提示「等待上传方」
+  // (A1「那一层透明并提示」;rendering.md「预览里任何一层都不无提示地透明」)
+  const awaiting = cur && !uploading && cur.media.url && chooseTier(cur.media, localHashes, { probe: false }).awaiting ? cur : null;
   return (
     <>
       {[0, 1].map((i) => {
@@ -236,7 +285,7 @@ export function VideoTrack({
         );
       })}
       {image && (
-        <div key={image.clip.id} data-pc-clip={image.clip.id} data-pc-media="" style={boxOf(image.clip)}>
+        <div key={`${image.clip.id}:${awaiting ? "wait" : "ok"}`} data-pc-clip={image.clip.id} data-pc-media="" style={boxOf(image.clip)}>
           <img src={playbackUrl(image.media, localHashes)} alt="" style={{ display: "block", width: "100%", height: "100%", objectFit: "cover", opacity: image.opacity, filter: filterOf(image.clip, filters, t) }} />
         </div>
       )}
@@ -247,6 +296,13 @@ export function VideoTrack({
           style={{ ...boxOf(uploading.clip), display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,.35)", color: "rgba(255,255,255,.72)", fontSize: 14 }}
         >
           上传中…
+        </div>
+      )}
+      {awaiting && (
+        <div key={`awaiting-${awaiting.clip.id}`} data-pc-media-awaiting="1" style={{ ...boxOf(awaiting.clip), pointerEvents: "none" }}>
+          <span style={{ position: "absolute", left: 8, bottom: 8, padding: "2px 8px", borderRadius: 999, background: "rgba(0,0,0,.45)", color: "rgba(255,255,255,.8)", fontSize: 12 }}>
+            等待上传方
+          </span>
         </div>
       )}
     </>
