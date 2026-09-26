@@ -12,6 +12,21 @@
 | `guide_files/multi_agent.md` | 用了子 Agent 之后的协议 |
 | `guide_files/git_and_release.md` | 提交、合并、构建、版本号 |
 
+## 语义的三级
+
+`docs/semantics/` 按级别分三层。判断一条内容属于哪一级，看改了它之后用户会不会看到不同：会看到不同的行为或能力，是二级；看不出区别，是三级。
+
+| 级 | 管什么 | 放在 |
+|---|---|---|
+| 一级：用户体验 | 用户怎么操作 | `user-workflow.md`、`workflow/` |
+| 二级：产品功能 | 系统对用户和其它角色承诺什么；改了用户会看到不同的行为或能力。决定架构形状或成本的决定也算二级，例如素材字节不走文档服务、票据由谁签发由谁核对 | `product/` |
+| 三级：具体机制 | 怎么做到；改了用户看不出区别。阈值、参数这类数字一律放在这一级 | `mechanism/` |
+
+- `product-purpose.md`、`architecture.md` 是三级之上的总纲，改它们按二级办。
+- 同名的 `product/<名>.md` 与 `mechanism/<名>.md` 是一对：机制从属于产品功能，冲突时以产品功能为准。一句话里前半是承诺、后半是机制的，拆成两句分放两本。没有机制内容的，不建 `mechanism/` 那一本。
+- `glossary.md` 每条注明级别。
+- 改语义按阶段走不同的流程，规则见 `guide_files/suggested_agent_behavior.md` 的「对齐」。
+
 ## 按任务读哪些语义
 
 不需要通读 `docs/semantics/`，按改动范围读下表里的文件（路径相对于 `docs/semantics/`）。拿不准改动属于哪一块时，读 `architecture.md` 的角色表判断。
