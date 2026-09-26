@@ -738,12 +738,15 @@ async function hostRead(base, projectId, cred, tag) {
   });
 }
 
-/** 页面的修改都得到文档服务确认(DocSync.whenSettled);回确认花的毫秒 */
-const whenSaved = (page) => P(page, async () => {
+/** 在同一次 evaluate 里改片段参数并等文档服务确认(DocSync.whenSettled);回从改到确认的毫秒(页面时钟) */
+const editAndSave = (page, id, params) => P(page, async (id, params) => {
+  const S = await import('/src/store/project.ts');
+  const M = await import('/src/editor/sync/syncManager.ts');
   const t0 = performance.now();
-  await (await import('/src/editor/sync/syncManager.ts')).whenSaved(10_000);
-  return Math.round(performance.now() - t0);
-});
+  S.actions.setClipParams(id, params);
+  await M.whenSaved(10_000);
+  return Math.round((performance.now() - t0) * 10) / 10;
+}, id, params);
 
 /**
  * 盯着页面 store:哪个片段的 params.text 变成 value。回 { at(本机时刻), clipId, flash(时间轴上有「别人的改动」描边) }。
@@ -863,8 +866,7 @@ async function runCreator(res, fails) {
   // ---------- 本页面改一处,交成员核对
   const ids = await clipIds(A);
   const target = ids.find((id) => id !== report.clipId) ?? ids[0];
-  await setParam(A, target, { text: creatorToken });
-  const commitMs = await whenSaved(A);
+  const commitMs = await editAndSave(A, target, { text: creatorToken });
   await coord.put('u2-creator-edit', { clipId: target, key: 'text', value: creatorToken, commitMs });
   res.creatorEdit = { clipId: target, value: creatorToken, commitMs };
   say('creator.edit-committed', res.creatorEdit);
@@ -971,8 +973,7 @@ async function runMember(res, fails) {
     if (!go) throw new Error('等创建者的「改」信号超时');
     const seenCreator = watchFor(B, go.creatorToken, 180_000, 'member-2-saw-creator-edit');
     const [clipId] = await clipIds(B);
-    await setParam(B, clipId, { text: go.memberToken });
-    const commitMs = await whenSaved(B);
+    const commitMs = await editAndSave(B, clipId, { text: go.memberToken });
     await coord.put('u2-member-edit', { clipId, key: 'text', value: go.memberToken, commitMs });
     res.memberEdit = { clipId, value: go.memberToken, commitMs };
     say('member.edit-committed', res.memberEdit);
