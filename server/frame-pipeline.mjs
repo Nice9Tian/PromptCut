@@ -1271,6 +1271,10 @@ export class FramePipeline {
       // 算 entry 的那一段里同一会话又来了更新的 preload:这个请求作废 —— 不认领,也不排后台活
       // (排了会把更新那一版刚开的后台代次掐掉)
       if (this.ready.stale(session, ticket, localRev)) return entry;
+      // 同一内容键可被新会话复用；旧会话的整帧 MOV / 视频仍可能占着后台队列。
+      // card plan 已在手时先按最新 costs 重算集合并撤掉判轻卡的旧层，
+      // 不让新会话的管线判定等整段视频结束后才生效。后台仍会按这份集合补缺帧。
+      if (entry.cardPlan?.length) this.adoptCardPlan(entry, entry.cardPlan);
       this.adoptSession(session, entry, localRev, ticket);
     }
     // 后台代次按会话分(两个标签页各自一代,不互相掐);缺省会话照旧按项目 id
@@ -1730,6 +1734,8 @@ export class FramePipeline {
    * Agent / 导出渲的别的版本一律丢弃。回写进了几个会话。
    */
   publishLayer(entry, control, tier, ranges) {
+    // 成本记录可能在旧后台批还在飞时把卡改判为轻；旧批不能把撤掉的层补回来。
+    if (!this.prerenderPicked(entry, control?.clipId)) return 0;
     const kind = kindOfTier(tier);
     const key = wireSnapshotKey(tier, entry?.key, control?.snapshotKey);
     if (!entry?.key || !kind || !key || !control?.clipId) return 0;
@@ -2007,7 +2013,7 @@ export class FramePipeline {
           // 自己的本地帧,和隔离工程的帧号一致(片段被平移到了 -phase),但仍以
           // 冻结结果里带的那个为准 —— 目录是按本地帧寻址的。
           onSnapshot: async (frame, html, items) => {
-            if (!target || signal?.aborted) return;
+            if (!target || signal?.aborted || !this.prerenderPicked(entry, control.clipId)) return;
             const own = (items || []).find(item => item.id === control.clipId);
             if (!own || !Number.isInteger(own.frame)) return;
             produced.push({ localFrame: own.frame, html: own.html });
@@ -2015,7 +2021,7 @@ export class FramePipeline {
         // 每批(4 帧)交一次(不是每帧):写帧文件、判体积、并 index.json 由快照库一步做(#9)。
         // A3c:超限的帧照常落盘,但不进就绪索引、不投递(诊断记在快照库里);R6-14:帧号记进
         // `oversize`,下一趟跳过。一个键几千帧时,读-改-写一个小 JSON 也比不上批量摊薄。
-        if (produced.length && !signal?.aborted) {
+        if (produced.length && !signal?.aborted && this.prerenderPicked(entry, control.clipId)) {
           index = await this.snapshots().commitSnapshots({ ...target, clipId: control.clipId, capabilities: control.capabilities, items: produced });
           // C3:这一层的区间长了就发一条全量 `layer`
           if (index.written.length) this.publishLayer(entry, control, tier, index.frames);
