@@ -85,6 +85,7 @@ const SCOPES = path.join(ROOT, 'src', 'cards', 'user', '_scopes.json');
 const scopesBefore = fs.existsSync(SCOPES) ? fs.readFileSync(SCOPES) : null;
 const procs = [];
 const fails = [];
+const navigations = [];
 const res = { runId: RUN, cardId: CARD_ID, docPort: DOC_PORT, ports: { a: A_PORT, b: B_PORT } };
 
 function viteBin() {
@@ -144,6 +145,8 @@ async function openEditor(browser, ed) {
   const page = await browser.newPage();
   page.on('pageerror', (e) => say('pageerror', { tag: ed.tag, message: String(e?.message ?? e).slice(0, 300) }));
   page.on('dialog', (d) => void d.dismiss());
+  // 主框架整页导航(刷新)记下来:卡换代码时页面应当热更新,不该整页刷新(刷新会离开共享项目)
+  page.on('framenavigated', (f) => { if (f === page.mainFrame()) navigations.push({ tag: ed.tag, at: Date.now(), url: f.url() }); });
   await page.goto(`${ed.origin}/?editor`, { waitUntil: 'domcontentloaded' });
   await waitFor(() => P(page, () => !!window.__pcSyncTest && window.__pcSyncTest.view().status === 'online'), 120_000, `${ed.tag} 页面同步接上`);
   // 打开项目时的卡片测量遮罩:等它退下
@@ -175,19 +178,22 @@ async function hostedCard(base, projectId, cred) {
   });
 }
 
-/** 页面里:这张卡的源码(注册表)、片段的身份键、探针进度 */
+/**
+ * 页面里:这张卡的源码(注册表)、片段的身份键、测量遮罩在不在。
+ * 注册表(kernel/registry.ts)不在卡片的热更新链上,热更新后仍是同一个实例、内容是新的;身份键用 costIdentity 按注册表里的
+ * 源码现算(清掉它的记忆化)。探针模块在热更新链上会被重跑,evaluate 里 import 到的是旧实例,所以不读它的进度,看遮罩。
+ */
 const pageCardState = (page, cardId, clipId) => P(page, async (cardId, clipId) => {
   const R = await import('/src/kernel/registry.ts');
   const I = await import('/src/editor/costIdentity.ts');
-  const PR = await import('/src/editor/probeRunner.ts');
   const S = await import('/src/store/project.ts');
   const u = R.userCardSources();
   const file = u.fileOf[cardId];
   const src = file ? u.files[file] ?? null : null;
   I.resetClipIdentityCache();
   const key = I.clipIdentityOf(S.getState().project).identityKeys[clipId] ?? null;
-  const prog = PR.probeProgress();
-  return { src, key, progress: { running: prog.running, card: prog.card, done: prog.done, total: prog.total } };
+  const gate = document.querySelector('[data-pc="probe-gate"]')?.innerText?.replace(/s+/g, ' ') ?? null;
+  return { src, key, gate };
 }, cardId, clipId);
 
 /** 舞台 iframe 里有没有画出这段文字 */
@@ -275,6 +281,8 @@ try {
     return s.projectId === shared.projectId && s.connected && s.records?.[CARD_REL] ? s : null;
   }, 20_000, 'B 对账到探针卡');
   say('b.bound', { record: bBound.records[CARD_REL] });
+  // 进入共享项目后的第一轮测量(挡界面的那一轮)先测完,再改卡
+  await waitFor(() => P(pageB, () => !document.querySelector('[data-pc="probe-gate"]')), 300_000, 'B 测量遮罩退下').catch(() => null);
   await sleep(1500);
   const before = await pageCardState(pageB, CARD_ID, clipId);
   res.keyBefore = before.key;
@@ -306,31 +314,35 @@ try {
     return s.src?.includes(MARK('v2')) ? Date.now() : null;
   }, 15_000, 'B 页面热更新').catch(() => null);
   res.hmrMs = hmr ? hmr - t0 : null;
-  // 重测:身份键变了,且探针为这张卡跑起来(进度里出现它),或成本表里出现新键的记录
+  // 重测:身份键(带源码版本)变了,且按现有规则重排了一轮——测量遮罩出现过,或成本表里有了新键的记录(测完)
   let remeasure = null;
+  let recordedAt = null;
   let keyAfter = null;
-  let sawProgress = false;
+  let gateSeen = null;
   const tr = Date.now();
-  while (Date.now() - tr < 30_000) {
+  while (Date.now() - tr < 60_000) {
     const s = await pageCardState(pageB, CARD_ID, clipId).catch(() => null);
     if (s) {
       keyAfter = s.key;
-      if (s.progress.running && s.progress.card === CARD_ID) sawProgress = true;
-      const changed = s.key && s.key !== res.keyBefore;
-      if (changed) {
+      if (s.gate && !gateSeen) gateSeen = { at: Date.now(), text: s.gate };
+      if (s.key && s.key !== res.keyBefore) {
+        if (!remeasure && gateSeen) remeasure = { at: gateSeen.at, via: 'gate' };
         const costs = await getJson(`${B.origin}/api/data/costs`).catch(() => null);
-        const recorded = (costs?.costs ?? []).some((r) => r.identityKey === s.key);
-        if (sawProgress || recorded) { remeasure = { at: Date.now(), recorded, sawProgress }; break; }
+        if ((costs?.costs ?? []).some((r) => r.identityKey === s.key)) { recordedAt = Date.now(); if (!remeasure) remeasure = { at: recordedAt, via: 'record' }; break; }
       }
     }
     await sleep(100);
   }
   res.keyAfter = keyAfter;
   res.remeasureMs = remeasure ? remeasure.at - t0 : null;
-  res.remeasure = remeasure ? { recorded: remeasure.recorded, sawProgress: remeasure.sawProgress } : null;
+  res.remeasureVia = remeasure?.via ?? null;
+  res.gate = gateSeen ? { ms: gateSeen.at - t0, text: gateSeen.text } : null;
+  res.newCostRecordMs = recordedAt ? recordedAt - t0 : null;
   const stageAt = await waitFor(async () => ((await stageHas(pageB, MARK('v2'))) ? Date.now() : null), 15_000, 'B 舞台画出 v2').catch(() => null);
   res.stageMs = stageAt ? stageAt - t0 : null;
   await pageB.screenshot({ path: path.join(OUT, `${RUN}-b-2-after.png`) });
+  res.navigationsAfterEdit = navigations.filter((n) => n.at >= t0).map((n) => ({ tag: n.tag, ms: n.at - t0 }));
+  res.bKindAfter = await P(pageB, () => window.__pcSyncTest?.view().kind ?? null).catch(() => null);
   res.shots = [`${RUN}-b-1-before.png`, `${RUN}-b-2-after.png`].map((f) => path.join(OUT, f));
 
   // 服务端与文件核对
@@ -349,11 +361,14 @@ try {
 
   if (!(res.installMs !== null && res.installMs <= 5000)) fails.push(`installMs=${res.installMs}`);
   if (res.hmrMs === null) fails.push('b-page-no-hmr');
-  if (!res.remeasure) fails.push('b-no-remeasure');
+  if (res.remeasureMs === null) fails.push('b-no-remeasure');
+  if (!(res.keyAfter && res.keyAfter !== res.keyBefore)) fails.push('b-identity-key-unchanged');
   if (!res.hostedHasV2) fails.push('hosted-not-v2');
   if (!(res.cardRev >= 2)) fails.push(`cardRev=${res.cardRev}`);
   if (!res.baseStillV1) fails.push('base-touched');
   if (!res.aOverrideV2) fails.push('a-override-not-v2');
+  if (res.navigationsAfterEdit.length) fails.push('page-reloaded');
+  if (res.bKindAfter !== 'shared') fails.push(`b-left-shared(${res.bKindAfter})`);
   if (!res.bOverrideV2) fails.push('b-override-not-v2');
   if (res.bRecord?.rev !== res.cardRev) fails.push('b-record-rev');
   if (!res.bNotices.some((n) => n.type === 'installed' && n.rev === res.cardRev)) fails.push('b-no-installed-notice');

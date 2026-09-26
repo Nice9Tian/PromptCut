@@ -58,7 +58,7 @@ import { pageEnvironment } from "./pageEnvironment.mjs";
 import type { CardCostRecord } from "../render/cardCostKey.mjs";
 import type { RenderAborted, RenderReply, SetTimeAborted, SetTimeReply, SnapshotCost, StageEvent, StageRpcClient } from "../render/stageRpc";
 import { mirrorKey } from "../render/dataMirror";
-import { clipIdentityOf, resetClipIdentityCache } from "./costIdentity";
+import { clipIdentityOf } from "./costIdentity";
 import { mergePlanCosts, setPlanCosts } from "./planDispatch";
 import { onStageEvent, pushProject, stageCapabilities, whenStageReady } from "./stageBridge";
 import { MAX_PROJECT_RESENDS, currentBackJob, renderAbortAction, runBackJob } from "./stageJobs";
@@ -461,19 +461,6 @@ export function syncProbeRun(project: Project | null): void {
   currentProject = project;
   generation++;
   if (!looping) void runLoop();
-}
-
-/**
- * 卡片代码换了而项目没变（C6.6 第 5 节：同步装上了别人改的卡）：`cardCostKey` 里的源码版本跟着变，
- * 但 `syncProbeRun` 按项目引用早退、`clipIdentityOf` 按项目引用记忆化，都看不出来。
- * 清掉身份缓存、按同一个项目重排一轮，新键没有记录的卡照现有规则补测（分派表在这一轮开头跟着重算）。
- */
-export function requeueProbeRun(): void {
-  resetClipIdentityCache();
-  const p = currentProject;
-  if (!p) return;
-  currentProject = null;
-  syncProbeRun(p);
 }
 
 async function runLoop(): Promise<void> {

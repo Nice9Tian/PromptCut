@@ -6,12 +6,16 @@
  *   (`POST /api/cards/sync/bind`);项目用到的卡变了(时间轴上添了卡)再报一次,新的用户卡 / 改过的内置卡会传上去;
  * - **票据**:共享项目里编辑器进程要一张 page 角色的连接票据(经 HMR 的 `pc:card-sync` `{ type: 'ticket' }`),
  *   页面在自己那条共享项目连接上签(`auth.ticket`),交回 `POST /api/cards/sync/ticket`;
- * - **提示**:装上了别人的版本、自己那份被覆盖(已备份)、覆盖了别人、装不上,都给气泡;
- *   装上之后等这次热更新落地,按现有规则重测(`probeRunner.requeueProbeRun`:身份键里的源码版本变了,没有记录的卡补测)。
+ * - **提示**:装上了别人的版本、自己那份被覆盖(已备份)、覆盖了别人、装不上,都给气泡。
+ *
+ * 装上之后的重测、重排预渲染不在这里做:编辑器进程照 edit_card 的做法热更新,卡片模块的热更新沿导入链一路重跑到
+ * `ProbeGate.tsx`(探针、身份键、分派表都在链上),按现有规则重排一轮,身份键里的源码版本变了的卡补测。
+ * **本模块不能静态引入那条链上的任何模块**(`probeRunner`、`costIdentity` 引了 `cardSourceFiles.mjs`,
+ * 它把 `src/cards/**` 的源码全 glob 进来):一旦引了,`syncManager` 也成了每张卡的热更新祖先,
+ * 改一张卡它就被重跑,页面的共享项目连接随之丢掉、退回本机空间(实测)。
  */
 import type { Project } from "../../kernel/project";
 import { usedCardIds, peekScopes } from "../cardScope";
-import { requeueProbeRun } from "../probeRunner";
 
 export interface CardSyncHooks {
   /** 给一张 page 角色的连接票据(共享项目才会被要);拿不到就抛 */
@@ -97,26 +101,11 @@ const nameOf = (key: unknown) => {
   return s.replace(/^src\//, "");
 };
 
-/** 装上之后等这次热更新落地再重测:HMR 的 `vite:afterUpdate` 来了就重排,最多等 3 s */
-let requeueTimer: ReturnType<typeof setTimeout> | null = null;
-let waitingUpdate = false;
-function requeueAfterUpdate() {
-  waitingUpdate = true;
-  if (requeueTimer) clearTimeout(requeueTimer);
-  requeueTimer = setTimeout(() => {
-    requeueTimer = null;
-    if (!waitingUpdate) return;
-    waitingUpdate = false;
-    requeueProbeRun();
-  }, 3000);
-}
-
 function onNotice(d: Record<string, unknown>) {
   const h = hooks;
   const file = nameOf(d.key);
   switch (d.type) {
     case "installed":
-      requeueAfterUpdate();
       if (!d.backup) h?.toast(`卡片 ${file} 已同步为 ${h.who(d.actor as Record<string, unknown>)} 的版本。`, "info", 5000);
       return;
     case "overwritten":
@@ -156,13 +145,5 @@ if (typeof window !== "undefined" && import.meta.hot) {
   import.meta.hot.on("pc:card-sync", (d: Record<string, unknown>) => {
     if (d?.type === "ticket") void onTicket(d);
     else if (d?.type === "notice") onNotice(d);
-  });
-  import.meta.hot.on("vite:afterUpdate", () => {
-    if (!waitingUpdate) return;
-    waitingUpdate = false;
-    if (requeueTimer) clearTimeout(requeueTimer);
-    requeueTimer = null;
-    // 热更新的模块刚换上,注册表里的源码随之更新;下一拍再重排,免得读到半截
-    setTimeout(() => requeueProbeRun(), 50);
   });
 }
