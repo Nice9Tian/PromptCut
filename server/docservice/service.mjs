@@ -3,7 +3,8 @@
  *
  * 语义见 `docs/semantics/architecture/document-service.md`，契约见 `docs/plan/render-queue-contract.md` G.4、H.2、H.4。
  * 文档服务是通用的文本 / JSON 分发中心：
- * - 传输在 `ws.mjs`；
+ * - 传输有两种：WebSocket 在 `ws.mjs`，HTTP 长轮询在 `http-transport.mjs`（`docs/plan/http-transport-contract.md`）；
+ *   两种并存，核心不知道有两种：这里按连接号分派 `write` / `buffered` / `close`，连接号同一个序列，`maxConnections` 共用；
  * - 通用核心在 `router.mjs`（连接登记、信封解析、按类型路由、模块挂载、频道、出站背压），不认识任何业务；
  *   这里把连接的写、积压字节数、关闭和 `drain` 事件接给它；
  * - 业务都是挂上来的模块（`modules/`）：渲染任务队列、服务地址登记，以后还可以挂与渲染无关的文本处理模块。
@@ -13,7 +14,8 @@
  * - **挂载模式**（传 `server`）：挂到宿主现成的 http 服务器上（本地文档服务挂进 vite）。不建服务器、不答任何 HTTP 请求，
  *   只在宿主上加一个 `upgrade` 监听，而且只接 `path` 这一条路径的升级，别的路径（vite 的 HMR 等）一概不碰；
  *   `listen()` 抛错（宿主负责监听），`close()` 只关自己的连接和计时器、摘掉自己的监听，不关宿主；
- *   `/healthz` 的内容由 `health()` 给出，宿主自己挂路由。
+ *   `/healthz` 的内容由 `health()` 给出，宿主自己挂路由。HTTP 长轮询的处理函数由 `handleLongPoll(req, res)` 交出，
+ *   宿主要用就自己接（vite 不接）。
  *
  * 项目版本号与内容库是挂上来的模块（`modules/project.mjs`、`modules/content.mjs`）；操作日志、锁还没有
  * （`docs/plan/cloud-task.md` 第 6 步）。
@@ -27,6 +29,7 @@ import { createServer } from 'node:http';
 import { acceptUpgrade, rejectUpgrade, CLOSE } from './ws.mjs';
 import { createRouter, CORE_DEFAULTS } from './router.mjs';
 import { PROTOCOL, offeredProtocols } from './auth.mjs';
+import { createHttpTransport } from './http-transport.mjs';
 import { QUEUE_DEFAULTS } from '../render-queue/constants.mjs';
 import { renderQueueModule, renderQueuePlaceholder, RENDER_QUEUE_MODULE } from './modules/render-queue.mjs';
 import { spacedModule } from './spaces.mjs';
@@ -84,6 +87,10 @@ function jsonLog(event, fields) {
  *   缺省只有服务地址登记 `service.`。别的消息回 `forbidden`（`docs/plan/auth-contract.md` 第 5 节）
  * @param {(req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse) => boolean} [options.http]
  *   独立模式：`/healthz` 之外的 HTTP 请求先交给它（共享项目端点），回 true 表示它处理了；挂载模式不用它
+ * @param {string[]} [options.httpCorsOrigins] HTTP 长轮询允许跨源的 Origin（契约 3.6），缺省空
+ * @param {number} [options.httpWaitMs] 长轮询挂起的 GET 最多等多久，缺省 25 s，上限 30 s
+ * @param {number} [options.httpIdleMs] 长轮询会话多久不活跃算过期，缺省 60 s
+ * @param {number} [options.httpTombstoneMs] 结束的长轮询会话留墓碑多久，缺省 2 分钟
  */
 export function createDocService(options = {}) {
   const {
@@ -104,6 +111,10 @@ export function createDocService(options = {}) {
     maxPendingBytes = CORE_DEFAULTS.MAX_PENDING_BYTES,
     now = Date.now,
     log = jsonLog,
+    httpCorsOrigins = [],
+    httpWaitMs,
+    httpIdleMs,
+    httpTombstoneMs,
   } = options;
 
   const startedAt = now();
@@ -114,17 +125,25 @@ export function createDocService(options = {}) {
   let seq = 0;
   let closing = false;
 
+  /** HTTP 长轮询的会话表；`router` 建好之后才建（它要核心的入口）。连接号不在 `sockets` 里就交给它 */
+  let http = null;
+
   const router = createRouter({
     now,
     log,
     write(connId, text) {
-      sockets.get(connId)?.ws.send(text);
+      const conn = sockets.get(connId);
+      if (conn) conn.ws.send(text);
+      else http?.write(connId, text);
     },
     buffered(connId) {
-      return sockets.get(connId)?.ws.bufferedAmount ?? 0;
+      const conn = sockets.get(connId);
+      return conn ? conn.ws.bufferedAmount : (http?.buffered(connId) ?? 0);
     },
     close(connId, code, reason) {
-      sockets.get(connId)?.ws.close(code, reason);
+      const conn = sockets.get(connId);
+      if (conn) conn.ws.close(code, reason);
+      else http?.close(connId, code, reason);
     },
     highWaterBytes,
     maxPendingBytes,
@@ -185,6 +204,43 @@ export function createDocService(options = {}) {
     if (mod.name === RENDER_QUEUE_MODULE) queueSlot.unmount = unmount;
   }
 
+  http = createHttpTransport({
+    prefix: path === '/' ? '' : path.replace(/\/+$/, ''),
+    protocol,
+    authenticate,
+    maxFrameBytes: maxPayload,
+    waitMs: httpWaitMs,
+    idleMs: httpIdleMs,
+    tombstoneMs: httpTombstoneMs,
+    corsOrigins: httpCorsOrigins,
+    now,
+    hooks: {
+      canOpen: () => (closing ? 'closing' : sockets.size + http.size() >= maxConnections ? 'full' : null),
+      nextConnId: () => `conn-${++seq}`,
+      opened(connId, principal, req) {
+        let remote = null;
+        try {
+          remote = remoteOf(req) ?? req?.socket?.remoteAddress ?? null;
+        } catch {
+          remote = req?.socket?.remoteAddress ?? null;
+        }
+        const p = normalizePrincipal(principal);
+        log('conn.open', { connId, remote, userId: p.userId, ...(p.role ? { role: p.role } : {}), transport: 'http' });
+        router.connect(connId, p, { remote, connectedAt: now() });
+      },
+      ended(connId, code, reason) {
+        router.disconnect(connId);
+        log('conn.close', { connId, code, reason, transport: 'http' });
+      },
+      timedOut(connId) {
+        log('conn.timeout', { connId, transport: 'http' });
+      },
+      dispatch: (connId, text) => router.dispatch(connId, text),
+      drained: (connId) => router.drained(connId),
+      log,
+    },
+  });
+
   const attached = hostServer !== undefined && hostServer !== null;
   if (attached && (typeof hostServer.on !== 'function' || typeof hostServer.off !== 'function')) {
     throw new TypeError('createDocService: server 必须是 http.Server');
@@ -198,6 +254,7 @@ export function createDocService(options = {}) {
       res.end(JSON.stringify(health()));
       return;
     }
+    if (http.handle(req, res)) return;
     if (typeof httpHandler === 'function') {
       let handled = false;
       try {
@@ -234,7 +291,7 @@ export function createDocService(options = {}) {
     socket.on('error', () => {});
     if (closing) return rejectUpgrade(socket, 503, 'Service Unavailable');
     if (!mine) return rejectUpgrade(socket, 404, 'Not Found');
-    if (sockets.size >= maxConnections) return rejectUpgrade(socket, 503, 'Service Unavailable');
+    if (sockets.size + http.size() >= maxConnections) return rejectUpgrade(socket, 503, 'Service Unavailable');
     let principal;
     try {
       principal = authenticate(req);
@@ -261,7 +318,7 @@ export function createDocService(options = {}) {
     const connId = `conn-${++seq}`;
     const conn = { ws, alive: true };
     sockets.set(connId, conn);
-    log('conn.open', { connId, remote, userId: principal.userId, ...(principal.role ? { role: principal.role } : {}) });
+    log('conn.open', { connId, remote, userId: principal.userId, ...(principal.role ? { role: principal.role } : {}), transport: 'ws' });
     ws.on('pong', () => { conn.alive = true; });
     // 底层排空：核心接着写积压的消息（H.2）
     ws.on('drain', () => router.drained(connId));
@@ -272,7 +329,7 @@ export function createDocService(options = {}) {
     ws.on('close', ({ code, reason }) => {
       sockets.delete(connId);
       router.disconnect(connId);
-      log('conn.close', { connId, code, reason });
+      log('conn.close', { connId, code, reason, transport: 'ws' });
     });
     router.connect(connId, principal, { remote, connectedAt: now() });
   }
@@ -286,6 +343,8 @@ export function createDocService(options = {}) {
       connections: core.connections,
       protocol,
       modules: core.modules,
+      // 组装层字段（不是核心字段）：两种传输各几条连接，ws + http = connections；后三个是累计数
+      transports: { ws: sockets.size, ...http.stats() },
     };
     for (const [k, v] of Object.entries(core)) {
       if (!Object.hasOwn(out, k)) out[k] = v;
@@ -296,13 +355,14 @@ export function createDocService(options = {}) {
   const heartbeat = setInterval(() => {
     for (const [connId, conn] of sockets) {
       if (!conn.alive) {
-        log('conn.timeout', { connId });
+        log('conn.timeout', { connId, transport: 'ws' });
         conn.ws.terminate();
         continue;
       }
       conn.alive = false;
       conn.ws.ping();
     }
+    http.sweep();
   }, heartbeatMs);
   heartbeat.unref?.();
 
@@ -330,6 +390,14 @@ export function createDocService(options = {}) {
 
     /** 与 `/healthz` 相同的对象；挂载模式下宿主拿它自己挂路由 */
     health,
+
+    /**
+     * HTTP 长轮询的处理函数（契约 `docs/plan/http-transport-contract.md` 第 3 节）：是 `<path>/lp/…` 的就接手并回 true，
+     * 别的回 false、什么都不动。独立模式已经接在自建服务器上；挂载模式由宿主决定接不接。
+     */
+    handleLongPoll(req, res) {
+      return http.handle(req, res);
+    },
 
     /**
      * 模块之外往连接上发消息（如 createRenderQueue 的 `send`）。连接已断就丢弃。
@@ -389,7 +457,7 @@ export function createDocService(options = {}) {
     /** 主动关闭一条连接（组装层与模块之外的调用方用）；连接不存在回 false */
     closeConn(connId, code, reason) {
       const conn = sockets.get(connId);
-      if (!conn) return false;
+      if (!conn) return http.close(connId, code, reason);
       conn.ws.close(code, reason);
       return true;
     },
@@ -423,7 +491,7 @@ export function createDocService(options = {}) {
       return {
         ...health(),
         channels: router.channels(),
-        conns: [...sockets.keys()].map((id) => router.describeConn(id)).filter(Boolean),
+        conns: [...sockets.keys(), ...http.connIds()].map((id) => router.describeConn(id)).filter(Boolean),
         modules: Object.fromEntries(router.modules().map((name) => {
           const mod = mounted.get(name)?.mod;
           return [name, mod?.describe?.() ?? null];
@@ -440,16 +508,18 @@ export function createDocService(options = {}) {
       closing = true;
       clearInterval(heartbeat);
       for (const record of mounted.values()) clearInterval(record.timer);
+      // 长轮询会话：挂着的 GET 立刻回 closed（带 Connection: close），会话注销
+      const httpGone = http.closeAll(CLOSE.GOING_AWAY, 'server shutting down');
       if (attached) {
         hostServer.off('upgrade', onUpgrade);
         const gone = [...sockets.values()].map(({ ws }) => new Promise((resolve) => ws.once('close', resolve)));
         for (const conn of sockets.values()) conn.ws.close(CLOSE.GOING_AWAY, 'server shutting down');
-        return Promise.all(gone).then(() => {});
+        return Promise.all([...gone, httpGone]).then(() => {});
       }
       for (const conn of sockets.values()) conn.ws.close(CLOSE.GOING_AWAY, 'server shutting down');
       const done = new Promise((resolve) => ownServer.close(() => resolve()));
       ownServer.closeIdleConnections();
-      return done;
+      return Promise.all([done, httpGone]).then(() => {});
     },
   };
 }
