@@ -108,7 +108,7 @@ const readyState = (page) => P(page, async () => {
     const r = el.getBoundingClientRect();
     return r.width > 0 && r.height > 0 && r.right > 0 && r.bottom > 0 && r.left < vw && r.top < vh;
   }).length;
-  return { ready: !gate && (clips === 0 || visible > 0), gate: gate ? gate.innerText.replace(/s+/g, ' ').slice(0, 80) : null, clips, visible };
+  return { ready: !gate && (clips === 0 || visible > 0), gate: gate ? gate.innerText.replace(/\s+/g, ' ').slice(0, 80) : null, clips, visible };
 });
 /**
  * 等编辑器可以看:连续两次(间隔 300 ms)都 ready 才算,免得撞上测量一轮刚完、下一轮还没排上的空档。
