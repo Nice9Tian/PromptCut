@@ -1,6 +1,6 @@
 // Facade for backward compatibility
 //
-// 每个工具的 `side`(C6.5 D1,`docs/plan/c65-design.md` 第 5 节;逐条的理由见 docs/reports/AGENT-c65-agent.md):
+// 每个工具的 `side`(C6.5 D1,`docs/plan/c65-design.md` 第 5 节;逐条的理由见 docs/archive/agent-reports/AGENT-c65-agent.md):
 //   - "agent":在 Agent 服务端(编辑器 vite 进程)执行。有项目副本(页面接上了文档服务,见 server/agent/)时,
 //              在副本上跑 src/mcp/handlers,算出操作以 Agent 对话的身份、带期望版本提交给文档服务;
 //              没有副本(页面还没接文档服务、无头实例停用了文档服务)时照旧经页面执行。

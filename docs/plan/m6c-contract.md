@@ -86,7 +86,7 @@ M6c 期间 C10、M7 还没开工，借用它们的端口段不冲突。
 
 ## 集成时的裁定（2026-09-26）
 
-主会话在集成分支 `claude/m6c-integ` 上定的细节，以及集成对账时按这些裁定核对、修改的实现（报告 `docs/reports/AGENT-m6c-integ.md`）。
+主会话在集成分支 `claude/m6c-integ` 上定的细节，以及集成对账时按这些裁定核对、修改的实现（报告 `docs/archive/agent-reports/AGENT-m6c-integ.md`）。
 
 - **X1 能力的两个字段**：裁定：节点同时报 `capabilities.streams` 与 `capabilities.transcode`，两者出自同一次编码器探测（`vite-plugin-frames.ts` 的 `nodeCapabilities`）；节点侧过滤保留原规则 2 的 transcode 一条，streams 一条同时生效；没有 `streams` 字段的节点回落 `transcode`。理由：不改 M5b 的规则 2，旧形状的节点与夹具照旧能过；探到编码器既是能产流也是能转码。（实现本来如此，没改；契约测试 MC-X1-filter 原断言「没报 streams 的不收」与此不符，按裁定改了那一条。）
 - **X1 的空档：切分方关着流**：裁定：发布方自己发布的 `plan` 完成时，若它的 `derived` 里一个流任务（id 以 `stream:` 开头）都没有，而本机能产流，这一版的流交还本机自动生产（不经队列），快照照旧走队列。理由：流任务由切分方按它自己的能力切出，切分方关着流时这一版一条流任务都没有；本机在队列模式下又不自动产流，流就丢了。本机自己产最稳：不需要发布方另造、另发布流任务（要复用切分、卡片锁与本地档闸的全套逻辑），也不依赖别的节点；流键是内容寻址的，万一之后又有队列任务来产同一段，只会走「已有跳过」。〔集成时加：`FramePipeline.releaseQueueStreams(entryKey)` 给 entry 标 `queueStreamsLocal`，`StreamProducer.queueOwned` 见此标记不再认为流归队列；`vite-plugin-frames.ts` 的发布记下 entry，收到自己那个 `plan` 的 `task.done` 时判一次；单测 X1-local-fallback。〕

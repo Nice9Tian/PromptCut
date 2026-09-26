@@ -173,7 +173,7 @@
 
 ## 11. 集成时的裁定（2026-09-26）
 
-`claude/sp-hosting`、`claude/sp-routing`、`claude/sp-tests` 集成对账时，主会话对歧义与实现偏差的裁定。每条是「裁定：理由」。实现已按此核对或改过（`claude/sp-integ`，改动清单见 `docs/reports/AGENT-sp-integ.md`）。
+`claude/sp-hosting`、`claude/sp-routing`、`claude/sp-tests` 集成对账时，主会话对歧义与实现偏差的裁定。每条是「裁定：理由」。实现已按此核对或改过（`claude/sp-integ`，改动清单见 `docs/archive/agent-reports/AGENT-sp-integ.md`）。
 
 - **数据目录**：`PROMPTCUT_DATA_DIR` 不存在就启动失败（`config.error { reason: 'data-dir' }`，退出码 1），服务不替用户建；部署脚本先建。理由：服务自己建会把写错的路径悄悄变成一个空实例，看起来正常、数据却不在该在的地方；部署脚本知道目标路径，由它建（`deploy-hosted` 已这样做）。
 - **`.layout`**：对不上时退出码 1、原因词 `layout`；文件内容 `{"v":1,"layout":"shard"|"flat"}`。理由：与其余失败即关的原因词一致；布局名按含义起，不带实现细节（原实现写的 `shard2` 已改成 `shard`，`/healthz` 同）。

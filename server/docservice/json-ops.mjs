@@ -1,6 +1,6 @@
 /**
  * 通用 JSON 路径操作引擎（C6.5 设计稿 `docs/plan/c65-design.md` 第 2 节；精确语义见 `docs/plan/c65-ops-spec.md`
- * 与报告 `docs/reports/AGENT-c65-docservice.md`）。
+ * 与报告 `docs/archive/agent-reports/AGENT-c65-docservice.md`）。
  *
  * 文档服务是通用的 JSON 分发中心，不认识任何业务结构：本文件只认 JSON 的对象、数组、标量，
  * 以及「数组里带 `id` 的对象按 `@<id>` 寻址」这一条通用约定。只用语言内置能力，不引用任何其它文件。

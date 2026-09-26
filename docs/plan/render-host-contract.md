@@ -70,7 +70,7 @@
 
 ## 6. 集成时的裁定（2026-09-26）
 
-主会话在集成分支 `claude/m6-integ2` 上定的细节，以及集成对账时按这些裁定改的实现（报告 `docs/reports/AGENT-m6-integ2.md`）。
+主会话在集成分支 `claude/m6-integ2` 上定的细节，以及集成对账时按这些裁定改的实现（报告 `docs/archive/agent-reports/AGENT-m6-integ2.md`）。
 
 - **`maxConcurrent` 写在哪**：裁定：可写在数组任意一项上，取各项最大值，缺省 1；`render-host --max-concurrent`（环境变量 `PROMPTCUT_HOST_MAX_CONCURRENT`）给了就优先。理由：数组没有放全局字段的地方，写在项上最不改 M6a 的配置形状。
 - **`maxConcurrent` 超过 4**：裁定：是配置错误，`code: 'bad-host-config'`，不截断；0、负数、小数、字符串同样报错。理由：静默压到 4 会让用户以为配了 9 路并发。〔集成时改：实现原来夹到 1～4、不合格的当没给，现改为 `hostMaxConcurrent` / `parseHostConfig` / `loadHostConfig` 一律报错，`createRenderHost` 收到超 4 的值也报错；RH1、RH4 按此改。〕
