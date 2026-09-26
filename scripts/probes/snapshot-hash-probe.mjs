@@ -37,7 +37,7 @@ const TIMEOUT_MS = Number(arg('--timeout-min', 20)) * 60_000;
 const KEEP = args.includes('--keep');
 /** 审阅表里 `independent`、`stateful` 的卡(共享档、进预渲染集合):SVG(lottie)、hud 卡、MagicUI 卡,外加两张 R6 探针卡
  *  (`r6-stateful` 带 `<style>` 与 Tailwind 类,`r6-canvas` 是画布卡)—— 改动之前正是这两张在两个进程之间只差 style 声明的先后
- *  (`docs/reports/AGENT-m5b-pipeline.md` 第 126 行)。
+ *  (`docs/archive/agent-reports/AGENT-m5b-pipeline.md` 第 126 行)。
  *  `direct` 的卡(如 caption-track)不产快照,不能放进来 */
 const DEFAULT_CARDS = ['ui-callout', 'entity-chips', 'focus-card', 'lottie-adrock', 'mu-animated-shiny-text',
   'r6-stateful', 'pin-board', 'punch-pill', 'quote-lockup', 'r6-canvas'];
