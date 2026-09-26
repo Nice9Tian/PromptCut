@@ -42,7 +42,9 @@ const within = (p, ms) => Promise.race([p, new Promise((r) => setTimeout(() => r
 
 // ------------------------------------------------------------------ T6 可播性
 
-test('C66-T6-02 canPlayType 回空 → 直接判放不了、记进本机缓存，不再试放首帧；MIME 按容器（mov → video/quicktime）', async () => {
+// 集成改动：MOV 的 canPlayType 按 video/mp4 问（设计稿第 9 节认可 c66-fetch 报告第 3 节第 1 条：Chrome 152 对
+// video/quicktime 恒回空串，按字面问会把 H.264 的 MOV 全判成放不了）；原断言是 /^video\/quicktime/。
+test('C66-T6-02 canPlayType 回空 → 直接判放不了、记进本机缓存，不再试放首帧；MIME 按容器（mov → video/mp4）', async () => {
   const p = play();
   dom.ctl.canPlay = '';
   const hash = H('1');
@@ -50,7 +52,7 @@ test('C66-T6-02 canPlayType 回空 → 直接判放不了、记进本机缓存�
   assert.equal(p.playableOnThisHost(hash), false, '结论记下');
   const el = dom.ctl.created[0];
   assert.ok(el, '要建一个 video 元素问 canPlayType');
-  assert.match(String(el.askedMime), /^video\/quicktime/, `mov 用 video/quicktime 问：${el.askedMime}`);
+  assert.match(String(el.askedMime), /^video\/mp4/, `mov 用 video/mp4 问：${el.askedMime}`);
   assert.ok(!dom.ctl.created.some((e) => e.src), '回空就不挂 src 试放');
 });
 

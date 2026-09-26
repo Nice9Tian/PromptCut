@@ -44,6 +44,24 @@
  *       - `stateFile`：「上次同步到的 cardRev 与内容哈希」的落盘处。
  *       实例方法：`saved({ key, body })`（保存后）、`open()`（打开共享项目：列、拉、订阅）、`close()`。
  *       卡片源码的 `body` 就是源码字符串；`key` 是仓库相对路径。
+ *
+ * # 集成对账（`claude/c66-integ`，报告 `docs/reports/AGENT-c66-integ.md` 第 2 节）
+ *
+ * 上面 K1～K5 是测试方写时的假设；实际模块名与形状不同的，由下面各 `load*` 适配成假设的形状，用例本身不动：
+ *   K1  `server/media-tiers.mjs`：`makeSmallVersion`（回 `{ ok }`，不抛）、`faststartState`（四态字符串）、
+ *       `remuxIfNeeded`（写到调用方给的 `output`）、`createTierManager`（在本地内容库里做导入：重封装、排小版、登记）。
+ *       `prepareTiers` 用一个临时内容库 + 真的 `createTierManager().prepareImport()` + `idle()` 拼出来。
+ *   K2  `server/upload-queue.mjs` 的 `createUploadQueue({ file, target, resolveFile })`：素材服务客户端由
+ *       `server/asset-store/client.mjs` 的 `createAssetClient({ base, fetch, chunkSize })` 建；档位是数组 `[{ tier, hash, ext }]`；
+ *       要 `start()` 才跑；本地文件经 `resolveFile(hash)` 找（本文件记下 enqueue 时给的路径）。
+ *   K3  没有 `server/export-gate.mjs`：拦截逻辑在 `src/render/mediaTier.ts` 的 `checkExportOriginals`（集成时补的，
+ *       页面与预渲染进程的 `/api/export` 共用）。
+ *   K4  `playability.ts` 探测时给离屏 `<video>` 设 `style`、挂进文档再 `remove()`、看 `videoWidth`：假 DOM 补了这几样。
+ *       MOV 按 `video/mp4` 问 `canPlayType`（设计稿第 9 节认可 c66-fetch 的做法），C66-T6-02 的 MIME 断言随之改。
+ *   K5  `server/card-sync.mjs` 的 `createCardSync({ stateDir, files: { read, changed, install, backup }, connect, notify })`，
+ *       经一条文档服务连接（`content.*` 消息）读写内容库：本文件用一个假端点把消息转给 `fakeContentService`。
+ *       「是不是用户卡或改过的内置卡」在真实系统里由调用方（`vite-plugin-cards.ts`）判，这里按 `scopeOf` 判；
+ *       覆盖提示是 `overwritten` 事件，映射成 `notify({ type: 'card-overwritten' })`。
  */
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
@@ -209,10 +227,51 @@ export async function makeSamples(dir) {
 export async function loadTiers() {
   const file = 'server/media-tiers.mjs';
   const mod = await importRepo(file);
-  const makeSmall = pick(mod, ['makeSmallTier', 'generateSmallTier', 'transcodeSmall', 'makeSmall'], file);
-  const hasFaststartFn = pick(mod, ['hasFaststart', 'isFaststart', 'detectFaststart'], file);
-  const ensureFaststartFn = pick(mod, ['ensureFaststart', 'remuxFaststart', 'faststartOriginal'], file);
-  const prepareFn = pick(mod, ['prepareTiers', 'prepareMediaTiers', 'makeTiers'], file);
+  // 集成对账（K1）：实际导出 makeSmallVersion / faststartState / remuxIfNeeded / createTierManager
+  const makeSmallVersion = pick(mod, ['makeSmallVersion'], file);
+  const faststartState = pick(mod, ['faststartState'], file);
+  const remuxIfNeeded = pick(mod, ['remuxIfNeeded'], file);
+  const createTierManager = pick(mod, ['createTierManager'], file);
+  const makeSmall = async ({ ffmpeg: f, input, output }) => {
+    const r = await makeSmallVersion({ ffmpeg: f, input, output });
+    if (!r?.ok) throw new Error(`makeSmallVersion 没生成小版：${r?.reason}`);
+    return r;
+  };
+  const hasFaststartFn = async (f) => {
+    const s = await faststartState(f);
+    return s === 'faststart' ? true : s === 'needs' ? false : null;
+  };
+  const ensureFaststartFn = async ({ ffmpeg: f, input, workDir }) => {
+    const ext = path.extname(input).slice(1).toLowerCase();
+    const output = path.join(workDir, `remux-${crypto.randomBytes(4).toString('hex')}.${ext}`);
+    const r = await remuxIfNeeded({ ffmpeg: f, input, ext, output });
+    return r.state === 'remuxed' ? { path: output, remuxed: true } : { path: input, remuxed: false };
+  };
+  const prepareFn = async ({ ffmpeg: f, input, workDir }) => {
+    // 临时本地内容库：把源文件按哈希放进去（同导入），再走真的 prepareImport + 后台小版
+    const dir = path.join(workDir, 'lib');
+    fs.mkdirSync(dir, { recursive: true });
+    const ext = path.extname(input).slice(1).toLowerCase();
+    const hash = sha256File(input);
+    const stored = path.join(dir, `${hash}.${ext}`);
+    fs.copyFileSync(input, stored);
+    const manager = createTierManager({
+      dir,
+      lib: {
+        hashFile: async (p) => sha256File(p),
+        writeIndex: async () => {},
+        forget: async () => {},
+        contentTypeForExt: (e) => (e === 'mp4' ? 'video/mp4' : 'application/octet-stream'),
+      },
+      ffmpeg: async () => f,
+    });
+    const out = await manager.prepareImport({ hash, ext, name: path.basename(input), path: stored, url: `/@media/${hash}`, deduped: false });
+    const original = { path: out.stored.path, hash: out.stored.hash };
+    if (!out.tiers) return { original };
+    await manager.idle();
+    const st = manager.status([original.hash])[original.hash];
+    return st?.small ? { original, small: { path: path.join(dir, `${st.small}.mp4`), hash: st.small } } : { original };
+  };
   return {
     mod,
     makeSmall: (opts) => makeSmall(opts),
@@ -236,18 +295,39 @@ export async function loadUploadQueue() {
   const file = 'server/upload-queue.mjs';
   const mod = await importRepo(file);
   const create = pick(mod, ['createUploadQueue', 'uploadQueue'], file);
-  return (opts) => {
-    const q = create(opts);
+  // 集成对账（K2）：真实队列要 target()（素材服务客户端）与 resolveFile(hash)，档位是数组，要 start()
+  const { createAssetClient } = await importRepo('server/asset-store/client.mjs');
+  return ({ file: qfile, base, fetch: f, ticket, chunkSize }) => {
+    const client = createAssetClient({
+      base, fetch: f, ...(chunkSize ? { chunkSize } : {}), ...(ticket ? { ticket: () => ticket } : {}), retries: 1, timeoutMs: 10_000,
+    });
+    const q = create({
+      file: qfile,
+      target: () => ({ client, base }),
+      resolveFile: (hash) => UPLOAD_FILES.get(String(hash).toLowerCase()) ?? null,
+    });
     assert.equal(typeof q?.enqueue, 'function', 'createUploadQueue 的实例要有 enqueue');
     assert.equal(typeof q?.drain, 'function', 'createUploadQueue 的实例要有 drain');
+    q.start();
     return {
       raw: q,
-      enqueue: (item) => q.enqueue(item),
+      enqueue: (item) => {
+        const tiers = [];
+        for (const tier of ['small', 'original']) {
+          const t = item?.tiers?.[tier];
+          if (!t) continue;
+          UPLOAD_FILES.set(String(t.hash).toLowerCase(), t.path);
+          tiers.push({ tier, hash: t.hash, ext: t.ext });
+        }
+        return q.enqueue({ name: item?.id ?? '', tiers });
+      },
       drain: () => q.drain(),
       close: async () => { await (q.close ?? q.stop)?.call(q); },
     };
   };
 }
+/** 上传队列找本地文件用：enqueue 时记下哈希 → 路径（同一测试进程里重启的新实例也要找得到） */
+const UPLOAD_FILES = new Map();
 
 /**
  * 记录每个请求的 fetch（同 `asset-client.test.mjs` 的写法）。`state.offline` 为真时一律抛网络错；
@@ -295,7 +375,9 @@ export function bytesOf(size, seed) {
 // ================================================================== K3 导出拦截
 
 export async function loadExportGate() {
-  const file = 'server/export-gate.mjs';
+  // 集成对账（K3）：拦截逻辑在 src/render/mediaTier.ts（页面与预渲染进程共用），不另建 server/export-gate.mjs
+  await import(pathToFileURL(path.join(ROOT, 'src', 'testing', 'registerTs.mjs')).href);
+  const file = 'src/render/mediaTier.ts';
   const mod = await importRepo(file);
   const check = pick(mod, ['checkExportOriginals', 'checkOriginals', 'exportGate'], file);
   return async ({ project, has }) => {
@@ -330,7 +412,9 @@ export function installFakeDom({ ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)
   const ctl = { canPlay: 'maybe', behavior: 'playable', created: [], timers: [], fireTimers: true };
   const nav = { userAgent: ua };
   class FakeVideo extends EventTarget {
-    constructor(tag) { super(); this.tagName = tag.toUpperCase(); this._src = ''; this.muted = false; this.preload = ''; this.readyState = 0; ctl.created.push(this); }
+    // 集成对账（K4）：playability.ts 会设 style、挂进文档后 remove()、看 videoWidth，假件补上这几样
+    constructor(tag) { super(); this.tagName = tag.toUpperCase(); this._src = ''; this.muted = false; this.preload = ''; this.readyState = 0; this.style = {}; this.videoWidth = 0; ctl.created.push(this); }
+    remove() {}
     canPlayType(mime) { this.askedMime = mime; return ctl.canPlay; }
     set src(v) {
       this._src = v;
@@ -339,6 +423,7 @@ export function installFakeDom({ ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)
       setTimeout(() => {
         if (b === 'playable') {
           this.readyState = 2;
+          this.videoWidth = 640;
           this.dispatchEvent(new Event('loadedmetadata'));
           this.dispatchEvent(new Event('loadeddata'));
           this.dispatchEvent(new Event('canplay'));
@@ -359,9 +444,9 @@ export function installFakeDom({ ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)
     }
     cancelVideoFrameCallback() {}
   }
-  const doc = { createElement: (tag) => new FakeVideo(tag), body: { appendChild() {}, removeChild() {} } };
+  const doc = { createElement: (tag) => new FakeVideo(tag), body: { appendChild() {}, removeChild() {} }, documentElement: { appendChild() {} } };
   const win = {
-    __pcRealSetTimeout: (fn, ms) => { ctl.timers.push(ms); return setTimeout(fn, ctl.fireTimers ? 20 : 2 ** 31 - 1); },
+    __pcRealSetTimeout: (fn, ms) => { ctl.timers.push(ms); return setTimeout(fn, ctl.fireTimers ? 200 : 2 ** 31 - 1); }, // 集成对账：20 → 200 ms，Windows 计时粒度约 15 ms，试放的两步 5 ms 计时会和 20 ms 的超时赛跑
     location: { origin: 'http://127.0.0.1:5199', href: 'http://127.0.0.1:5199/' },
     navigator: nav,
     localStorage: storage,
@@ -460,19 +545,84 @@ export async function loadCardSync() {
   const file = 'server/card-sync.mjs';
   const mod = await importRepo(file);
   const create = pick(mod, ['createCardSync', 'cardSync'], file);
+  // 集成对账（K5）：真实模块经文档服务连接收发 content.* 消息，本机文件经 files.* 读写；这里接到假内容库与假本机环境
   return ({ content, host }) => {
+    let backups = 0;
     const s = create({
-      content, readLocal: host.readLocal, install: host.install, backup: host.backup, notify: host.notify,
-      scopeOf: host.scopeOf, stateFile: host.stateFile,
+      stateDir: host.stateFile ? `${host.stateFile}.d` : null,
+      files: {
+        read: (rel) => host.readLocal(rel),
+        changed: (rel) => host.scopeOf(rel) !== 'builtin',
+        install: async (rel, body, meta) => { await host.install({ key: rel, body, rev: meta?.rev }); return { ok: true }; },
+        backup: async (rel, body) => { await host.backup({ key: rel, body }); return `backup/${++backups}/${rel}`; },
+      },
+      connect: () => fakeContentEndpoint(content),
+      notify: (e) => { if (e?.type === 'overwritten') host.notify({ type: 'card-overwritten', key: e.key, rev: e.rev }); },
     });
-    for (const n of ['saved', 'open']) assert.equal(typeof s?.[n], 'function', `createCardSync 的实例要有 ${n}`);
+    for (const n of ['saved', 'bind', 'idle']) assert.equal(typeof s?.[n], 'function', `createCardSync 的实例要有 ${n}`);
     return {
       raw: s,
-      /** 本机保存：先改本机文件，再告诉同步 */
-      save: async (key, body) => { host.local.set(key, body); await s.saved({ key, body }); },
-      open: () => s.open(),
-      close: async () => { await s.close?.(); },
+      /** 本机保存：先改本机文件，再告诉同步（未改的内置卡不算，调用方不报） */
+      save: async (key, body) => {
+        host.local.set(key, body);
+        if (host.scopeOf(key) !== 'builtin') s.saved(key);
+        await s.idle();
+      },
+      /** 打开共享项目：绑上、等连上、等对账做完 */
+      open: async () => {
+        s.bind({ projectId: 'p-c66', url: 'ws://fake-docservice.invalid/', protocols: () => [], local: false, keys: [] });
+        await waitFor(() => s.status().connected, { what: '假连接连上' });
+        await s.idle();
+      },
+      close: async () => { s.close(); },
     };
+  };
+}
+
+/**
+ * 假的文档服务端点（`render-node/ws-transport.mjs` 的 `createWsEndpoint` 形状），把 content.* 消息转给
+ * `fakeContentService` 的一个视图。消息与回包字段照 `server/docservice/modules/content.mjs`。
+ */
+function fakeContentEndpoint(view) {
+  const on = { message: [], open: [], close: [] };
+  let unwatch = null;
+  let closed = false;
+  const deliver = (msg) => { if (!closed) for (const cb of on.message) cb(structuredClone(msg)); };
+  setTimeout(() => { if (!closed) for (const cb of on.open) cb(); }, 0);
+  return {
+    onMessage: (cb) => { on.message.push(cb); },
+    onOpen: (cb) => { on.open.push(cb); },
+    onClose: (cb) => { on.close.push(cb); },
+    send(msg) {
+      if (closed) return false;
+      const { type, reqId, kind, key } = msg;
+      void (async () => {
+        if (type === 'content.watch') {
+          unwatch?.();
+          unwatch = view.watch('card-source', (evt) => deliver({
+            type: 'content.changed', kind: evt.kind, key: evt.key, hash: evt.hash, rev: evt.rev,
+            actor: null, previousActor: evt.previousActor ? { userId: evt.previousActor } : null,
+          }));
+          deliver({ type: 'content.watching', kinds: msg.kinds, reqId });
+        } else if (type === 'content.list') {
+          const r = await view.list(kind, msg.prefix ?? '');
+          deliver({ type: 'content.listing', kind, items: r.items, truncated: !!r.truncated, reqId });
+        } else if (type === 'content.get') {
+          const it = await view.get(kind, key);
+          deliver(it ? { type: 'content.item', kind, key, body: it.body, hash: it.hash, rev: it.rev, reqId } : { type: 'content.item', kind, key, missing: true, reqId });
+        } else if (type === 'content.put') {
+          const r = await view.put(kind, key, msg.body);
+          deliver({ type: 'content.stored', kind, key, hash: r.hash, rev: r.rev, reqId });
+        }
+      })();
+      return true;
+    },
+    close() {
+      if (closed) return;
+      closed = true;
+      unwatch?.();
+      for (const cb of on.close) cb({ code: 1000 });
+    },
   };
 }
 

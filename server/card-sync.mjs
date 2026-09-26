@@ -116,7 +116,7 @@ const sameActor = (a, b) => !!a && !!b && a.userId === b.userId && (a.deviceId ?
  * @param {object} o.files 文件操作（全部同步或返回 Promise 都行）：
  *   - `read(rel) → string | null`：本机此刻生效的内容（改动层优先），没有回 null；
  *   - `changed(rel) → boolean`：这个文件算不算「用户卡或改过的内置卡」（没记账的本机文件据此判断是不是自己改过的）；
- *   - `install(rel, source) → { ok: boolean, error?: string }`：装上服务上的版本（审查、写改动层、热更新、重测）；
+ *   - `install(rel, source, { rev }) → { ok: boolean, error?: string }`：装上服务上的版本（审查、写改动层、热更新、重测），`rev` 是这一版的 cardRev；
  *   - `backup(rel, content) → string`：覆盖前把本机那份存起来，回备份的相对路径。
  * @param {(o: { url: string, protocols: () => Promise<string[]> | string[] }) => object} [o.connect]
  *   建一个端点（`server/render-node/ws-transport.mjs` 的 `createWsEndpoint` 形状：send、onMessage、onOpen、onClose、close）；
@@ -332,7 +332,7 @@ export function createCardSync({
     }
     let res;
     try {
-      res = await files.install(rel, got.body);
+      res = await files.install(rel, got.body, { rev });
     } catch (err) {
       res = { ok: false, error: String(err?.message ?? err) };
     }

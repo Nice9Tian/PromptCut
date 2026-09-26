@@ -369,7 +369,19 @@ export async function exportVideo(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ project: p, frames, workers: (opts as { workers?: number | string }).workers })
   });
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) {
+    const text = await res.text();
+    // 预渲染进程那一道拦截(页面判过之后素材服务又变了):同样按「等待上传方」提示
+    if (res.status === 409) {
+      try {
+        const body = JSON.parse(text) as { code?: string; message?: string; missing?: unknown };
+        if (body.code === "awaiting-uploader") throw Object.assign(new Error(body.message || "等待上传方"), { code: "awaiting-uploader", missing: body.missing });
+      } catch (err) {
+        if ((err as { code?: string })?.code === "awaiting-uploader") throw err;
+      }
+    }
+    throw new Error(text);
+  }
 
   const { id, outDir } = await res.json();
   jobBase.set(id, base);

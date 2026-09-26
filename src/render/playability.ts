@@ -142,7 +142,7 @@ export function mimeForExt(ext: string | undefined | null): string | null {
 }
 
 export interface ProbeOptions {
-  /** 原片在远程素材服务上(超时 10 s);缺省按本地(5 s) */
+  /** 原片在远程素材服务上(超时 10 s);缺省按地址判:绝对 http(s) 地址算远程,其余按本地(5 s) */
   remote?: boolean;
   /** 直接指定超时(单测) */
   timeoutMs?: number;
@@ -164,7 +164,9 @@ export function probePlayable(hash: string, url: string, ext?: string, kind: "vi
     const el = document.createElement(isVideo ? "video" : "audio") as HTMLVideoElement;
     const mime = mimeForExt(ext);
     if (mime && el.canPlayType(mime) === "") { rememberPlayable(hash, false); return false; }
-    const timeoutMs = opts.timeoutMs ?? (opts.remote ? PROBE_TIMEOUT_REMOTE_MS : PROBE_TIMEOUT_LOCAL_MS);
+    // 「远端」:调用方标了(连着远程素材服务、经本地读路由按需拉取),或地址本身是绝对 http(s) 地址(设计稿第 9 节认可 c66-tests 的判据)
+    const remote = !!opts.remote || /^https?:\/\//i.test(url);
+    const timeoutMs = opts.timeoutMs ?? (remote ? PROBE_TIMEOUT_REMOTE_MS : PROBE_TIMEOUT_LOCAL_MS);
     const verdict = await new Promise<boolean | undefined>((resolve) => {
       // 舞台里的 clearTimeout 也是虚拟的、清不掉真计时器,所以靠这个旗标只认第一次
       let settled = false;

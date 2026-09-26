@@ -569,18 +569,6 @@ async function handleMediaUpload(req: Connect.IncomingMessage, res: ServerRespon
   }
 }
 
-async function readJsonBody(req: Connect.IncomingMessage, max = 16 * 1024): Promise<any> {
-  const parts: Buffer[] = [];
-  let size = 0;
-  for await (const chunk of req as unknown as AsyncIterable<Buffer>) {
-    size += chunk.length;
-    if (size > max) throw new Error("body too large");
-    parts.push(chunk);
-  }
-  const text = Buffer.concat(parts).toString("utf8");
-  return text ? JSON.parse(text) : {};
-}
-
 /* ------------------------------------------------------------------ *
  * GET /@media/<hash>/pcm —— 音频图卡的素材输入
  * ------------------------------------------------------------------ */

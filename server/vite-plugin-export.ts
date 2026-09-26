@@ -7,6 +7,7 @@ import { createReadStream } from "fs";
 import { spawn } from "child_process";
 import type { AddressInfo } from "net";
 import { exportBegin, exportEnd } from "./render-pool-state.mjs";
+import { exportOriginalsGate } from "./export-originals";
 
 interface ExportJob {
   id: string;
@@ -124,7 +125,16 @@ async function handleExportStart(req: Connect.IncomingMessage, res: ServerRespon
         noVideo = body.noVideo;
         workers = body.workers;
       }
-      
+
+      // C6.6:导出只用素材原尺寸。被片段引用的素材原尺寸在当前素材服务上没到齐就不出片(设计稿第 9 节第 3 条)
+      const gate = await exportOriginalsGate(project);
+      if (!gate.ok) {
+        res.statusCode = 409;
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ ok: false, error: "awaiting-uploader", code: "awaiting-uploader", message: gate.message, missing: gate.missing }));
+        return;
+      }
+
       const now = new Date();
       const id = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}-${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}${String(now.getSeconds()).padStart(2, "0")}`;
       const outDir = path.resolve(outRoot(root), `export-${id}`);

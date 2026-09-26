@@ -205,6 +205,31 @@ export function missingOriginals(project: Pick<Project, "tracks" | "media">, com
   return out;
 }
 
+export interface ExportGateResult {
+  ok: boolean;
+  /** 拦下时是 `awaiting-uploader` */
+  code?: "awaiting-uploader";
+  message?: string;
+  missing: MissingOriginal[];
+}
+
+/**
+ * 导出前的拦截,按「问一个哈希」的形状:`has(hash)` 回这份素材原尺寸在**当前素材服务**上 `complete` 没有
+ * (问不到按没有算)。只问被片段引用、带哈希的素材的原尺寸,不问小尺寸。
+ * 页面(`src/editor/media/assetTiers.ts`)与预渲染进程的 `/api/export`(`server/export-originals.ts`)共用这一条判据。
+ */
+export async function checkExportOriginals(
+  { project, has }: { project: Pick<Project, "tracks" | "media">; has: (hash: string) => boolean | Promise<boolean> },
+): Promise<ExportGateResult> {
+  const complete: string[] = [];
+  for (const m of missingOriginals(project, [])) {
+    try { if (await has(m.hash)) complete.push(m.hash); } catch { /* 问不到按没到齐算 */ }
+  }
+  const missing = missingOriginals(project, complete);
+  if (!missing.length) return { ok: true, missing: [] };
+  return { ok: false, code: "awaiting-uploader", message: awaitingUploaderMessage(missing), missing };
+}
+
 /** 「等待上传方」的提示文字(导出被拦时给用户看) */
 export function awaitingUploaderMessage(missing: readonly MissingOriginal[]): string {
   const names = missing.map((m) => m.name);
