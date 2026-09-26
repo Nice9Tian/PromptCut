@@ -1175,6 +1175,12 @@ Router = {
 - 入站必须是 JSON 对象、带字符串 `type`；
 - `reqId`（字符串，或有限的数字）可选，核心不解释它，只在核心自己回错误时带上；
 - 其余字段属于模块。
+- 〔2026-09-26 修订，`docs/plan/http-transport-contract.md` 第 3 节〕信封另有两个会话字段：
+  - `seq`：发送方在这个会话里的序号，从 1 起，两个方向各自编号；
+  - `ack`：发送方已按序收全的对方最大 `seq`，可选。
+  - 这两个字段由组装层的会话层读写：会话层在 `dispatch` 之前摘掉它们，在 `write` 之后补上。核心与模块都看不到。
+  - `seq`、`ack` 加进核心保留字段名，模块的消息不得用这两个名字；`type` 以 `session.` 开头的会话控制消息由会话层处理、不进核心，`session.` 加进保留前缀，模块不得认领。
+  - 不带会话项的旧客户端，消息里没有这两个字段，行为同修订前。
 
 **核心的错误回包**（`{ type: 'error', reason, detail, reqId? }`）：
 
@@ -1347,6 +1353,7 @@ WsEndpoint = {
   - `close()` 之后不再重连。
   - 401 在浏览器 API 里表现为连不上，同样按退避重连，退避封顶，不会高频打服务端。
 - **断线期间的消息一律丢弃**，不缓存重放。正确性靠两条保证：重连后的 `hello.resume` 与 `queue.snapshot`；以及 D.2 细任务开工前先查 `sink.has`。完成报告丢了，最坏是租约到期后被重做一次，走去重直接完成。
+  - 〔2026-09-26 修订，`docs/plan/http-transport-contract.md` 第 4.4 节〕讲会话的端点（`createDocEndpoint`）：会话保留期内传输断开时，`send` 不丢，进未确认缓冲，接续后按序补发；接续不触发 `onOpen`（另有 `onResume`），所以不重发 `hello.resume`。会话结束（过了保留期或被服务端关掉）之后，才照上面这条丢弃，重连建新会话，在 `onOpen` 里发 `hello.resume`。
 - **接 `local-node`**：由调用方负责，本模块不认识它。约定写法（e2e 探针就这么用）：
   ```js
   ep.onOpen(() => node.start(node.session.held().map(({ id, token }) => ({ id, token }))));

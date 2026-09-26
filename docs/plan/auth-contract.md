@@ -93,6 +93,7 @@
 | 集群令牌 | `promptcut.token.<令牌>`（M5 的格式） | 管理身份，只能用管理接口 |
 
 - **回环来源什么都不带**：得到本机身份 `{ userId: 'local', tenantId: 'local', scope: 'local', role: 'page' }`。本机未共享的项目都在 `local` 空间里，和 M5 的行为一样。
+  - 〔2026-09-26 修订〕`PROMPTCUT_TRUST_LOOPBACK=0` 时（部署在反向代理之后的托管端），回环来源不算本机：不带凭证回 401，本机声明不认。见 `docs/plan/http-transport-contract.md` 第 10 节。
 - **本机声明**：用于局域网主机上创建者自己的页面和预渲染进程加入本机托管的共享项目。
   - 身份为 `{ userId: 'local@<本机 deviceId>', tenantId: projectId, creator: true, role }`；
   - `deviceId` 与 `deviceName` 取服务启动时给的本机设备信息；
@@ -180,7 +181,7 @@
   - `kind: 'conn'` 用于同一设备再开别的角色的连接（例如页面替本机的预渲染进程要一张 `render` 票据）；
   - 本机 `local` 身份要不到票据（它不需要）。
 - **素材服务的读写**：
-  - **回环来源**：不需要票据，与现在相同。
+  - **回环来源**：不需要票据，与现在相同。`PROMPTCUT_TRUST_LOOPBACK=0` 时同样要票据（`docs/plan/http-transport-contract.md` 第 10 节）。
   - **其它来源**：
     - 写（分片上传、`complete`、`remove`）要 `Authorization: Bearer <k: 'asset', r: 'rw' 的票据>`；
     - 读（`GET` / `HEAD`，含 Range）要 `Authorization: Bearer <素材票据>`，或者查询串 `?t=<票据>`。查询串只认 `r: 'r'` 的票据，写入一律不认查询串。

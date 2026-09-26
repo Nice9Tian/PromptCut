@@ -163,10 +163,10 @@
 3. 失败即关另加两个原因词：`layout`（`assets/.layout` 对不上，或 `assets/` 有东西却没有标记）、
    `asset-public-url`（绑非回环而没设 `PROMPTCUT_ASSET_PUBLIC_URL`）；端口被占打 `config.error { reason: 'listen' }`。
 4. 数据目录本身必须已存在（不存在即 `data-dir`，服务不替人建）；`docservice/`、`assets/`、`secrets/`（0700）由服务建。
-5. 地址登记：有集群令牌时带令牌（管理身份），没有时以回环的本机身份登记（本机身份同样允许 `service.announce`）。
+5. 地址登记：有集群令牌时带令牌（管理身份），没有时以回环的本机身份登记（本机身份同样允许 `service.announce`）。〔2026-09-26 修订〕`PROMPTCUT_TRUST_LOOPBACK=0` 时只能带令牌，没有集群令牌就拒绝启动（`docs/plan/http-transport-contract.md` 第 10 节）。
 6. `assets/.layout` 的内容是 `{"v":1,"layout":"shard"}`（第 11 节裁定）；本机编辑器的原布局记作 `flat`（本机不写标记）。
 7. 磁盘满：`ENOSPC` / `EDQUOT` 回 507 的映射做在 `server/asset-service.ts`（分片与收尾两处），本机编辑器同样生效。
-8. 测试开关 `PROMPTCUT_TEST_NO_LOOPBACK_TRUST=1`：素材服务与管理接口不把本机回环当自己人，本机也能验票据读写。
+8. 〔2026-09-26 修订〕本机信任开关 `PROMPTCUT_TRUST_LOOPBACK`，取代原测试开关 `PROMPTCUT_TEST_NO_LOOPBACK_TRUST`（旧名删掉，不留兼容）。`0` 时文档服务握手、共享端点、素材服务、管理接口都不把回环当本机；缺省 `1`；`deploy-hosted` 给阿里云写 `0`。原测试开关只接到了素材服务与管理接口。详见 `docs/plan/http-transport-contract.md` 第 10 节。
 
 **部署脚本的补充**：`deploy-hosted` 另有 `--replace-docservice`（旧的 `promptcut-docservice` 还在 PM2 里时，缺省拒绝部署正式实例，退出码 3）、
 `--write-token`（把本机 `PROMPTCUT_CLUSTER_TOKEN` 经 ssh 标准输入写成 `secrets/cluster-token`，0600）；另加 `status-hosted`、`stage-hosted`。
