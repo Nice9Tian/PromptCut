@@ -95,10 +95,10 @@
 **先读**：`docs/semantics/developer_guide.md` 及它索引的 `guide_files/` 全部；本文第 0、4、6、7、10 节；`docs/reports/PAUSE-2026-09-26.md` 第 3 节（恢复顺序）；当前阶段的契约与设计稿（C6.6：`c66-design.md`；HT-a：`http-transport-contract.md` 开头与第 14、15 节，以及 `origin/claude/http-transport` 上的 `docs/reports/HANDOFF-http-transport.md` 第 7、8 节，其中「代理不支持 WebSocket」已被 2026-09-27 实测推翻）。
 
 **自检**（逐项把结果贴在对话里；令牌、密钥的值一律不打印；不过的项先报用户，不绕过）：
-1. 仓库在 main、与 origin/main 一致、工作区干净。
-2. 基线：类型检查零错误；全量测试零失败，记下总条数。
-3. 顾问可用：`/subagent-gpt` 与 `/subagent-agy` 各答一句最简单的问话。
-4. 子 Agent 定义在：`opus-dev`、`opus-dev-high`、`gpt-manager`、`agy-manager`。
+1. **子 Agent 技能先于一切**：`/subagent-gpt` 与 `/subagent-agy` 各答一句最简单的问话，确认 codex 与 agy 能跑；`~/.claude/agents` 下有 `opus-dev`、`opus-dev-high`、`gpt-manager`、`agy-manager` 四个定义，用 Agent 工具各派一个只回「ok」的空任务确认能起。任何一项不通，先报用户，不往下走。
+2. 仓库在 main、与 origin/main 一致、工作区干净。
+3. 基线：类型检查零错误；全量测试零失败，记下总条数。
+4. （并入第 1 项）
 5. 凭证：SSH 私钥能免交互登录 `8.219.80.16`；`.env.cluster` 存在；`PROBE_MAIL_TOKEN` 已设且能读 `to-local`。位置记在 `docs/local.md`（不入库）。记下 `to-cloud`、`to-local` 当前最大 seq，只处理之后的消息。
 6. 阿里云：pm2 有 `promptcut-hosted`、`probe-coord`；nginx 有 `/coord`、`/hosted`、`/media`；UFW 与交接文档第 7 节一致；两个 `healthz` 回 200；外网匿名 WebSocket 升级回 401。
 7. 监听 8777、8778 的第二实例是否还在：只记录，不动（HT-a 自测与 M8 迁移演练用）。
