@@ -167,5 +167,39 @@
 
 ## 13. 实现记录
 
-（实现进行中，逐条补充。）
+2026-09-26 实现（分支 `claude/http-transport`）。下面是契约没说清、由实现裁定的地方，以及与契约的出入。
+
+### 服务端（`server/docservice/http-transport.mjs`，`service.mjs` 只接线）
+
+- **端点前缀**：独立模式 `path` 不是 `/` 时端点在 `<path>/lp/…`，与 `httpBaseOf` 保留路径一致。挂载模式经 `service.handleLongPoll(req, res)` 交出处理函数（回 true 表示接手），vite 不接线。
+- **open 的判定顺序**：关停中或连接数满 503 → `X-Promptcut-Protocols` 缺失或第一项不是 `promptcut.v1` 400 → 读请求体（上限 4 KiB，超了 413）→ 再判一次 503 → `authenticate` → 401。先判连接数再鉴权，与 WebSocket 升级的顺序一致。
+- **交给 `authenticate` 的请求**：`Object.create(req)`，只换 `headers`（`sec-websocket-protocol` 换成 `X-Promptcut-Protocols` 的列表，客户端自带的 `Sec-WebSocket-Protocol` 被覆盖）；`socket`、`url`、`method` 都是原请求的。
+- **契约没写的回包**：`Authorization` 缺失或格式不对按未知 sid 回 404；`recv` 的 `ack` 超过已发出的最大序号回 400 `bad-ack`；`send` 的请求体不是 `{ seq, frames: string[] }` 回 400 `bad-request`；请求体整体超过「单帧上限 + 64 KiB」也回 413 并以 1009 关闭（契约只写了单帧超限）。
+- **注销延到下一轮事件循环**：会话关闭后，`router.disconnect` 与 `conn.close` 日志在 `setImmediate` 里做，和 WebSocket 的 `close` 事件一样是异步的——模块在 `handle` 里调 `ctx.close`（踢人 4003、删项目 4004）时不会重入 `disconnect`。这之间的 `write` 丢弃，与 WebSocket 发出关闭帧之后的 `send` 相同。
+- **墓碑的时机**：服务端关闭的会话，剩下的帧连同 `closed` 回完后转墓碑；客户端一直不来取的，关闭 `idleMs` 之后转墓碑。客户端自己 `POST /lp/close` 的立刻转墓碑（剩下的帧它不要了）。过期的会话直接转墓碑（`1006 timeout`），日志先 `conn.timeout` 后 `conn.close`，与 WebSocket 超时的两条一致。
+- **攒批**：挂着的 GET 被新帧叫醒时推迟到 `setImmediate` 再回，同一轮里核心连写的几条合成一次回包。
+- **关停**：`close()` 让挂着的 GET 立刻回 `closed: { 1001 }`，关停期间的回包带 `Connection: close`，免得 keep-alive 连接拖住 `server.close()`。
+- **`/healthz`**：`transports` 在合并模块字段之前放进去，模块同名字段不会覆盖它。`conn.open` / `conn.close` / `conn.timeout` 两种传输都带 `transport`（WebSocket 那边新加了这一个字段，现有测试不受影响）。
+- **部署清单**：`server/hosted/files.mjs` 整个目录拷 `server/docservice`，新文件自动带上，清单不用改；节点端的 `render-node/http-transport.mjs` 托管端用不到，不进清单。
+
+### 节点端（`server/render-node/http-transport.mjs`）
+
+- **计时器分两组**：`createHttpEndpoint` 的 `setTimeout` / `clearTimeout` 与 WebSocket 端点同义，只管重连退避；单次请求的超时、临时错误的重试间隔、`close()` 的期限另由 `httpTimers: { setTimeout, clearTimeout }` 注入（缺省全局计时器）。混成一组的话，测试手动触发退避时会误触发请求超时。另加了 `now`（重试期限按它算）与 `requestTimeoutMs`（缺省 `waitMs + 15 s` = 40 s）。
+- **日志事件名**：`createHttpEndpoint` 就是 `createWsEndpoint` 套上 `HttpWebSocket`，所以端点层的日志仍是 `ws.open`、`ws.close`、`ws.connect-failed`……，其中的 `url` 是换成 ws(s) 的写法；`HttpWebSocket` 自己另打 `http.retry`、`http.error`。`vite-plugin-frames.ts` 按事件名计数的逻辑因此不用改。
+- **错误的归类**：临时错误是网络错误或超时（状态 0）、408、429、5xx，在 `idleMs / 2` 内重试同一请求（`idleMs` 取 open 回包里服务端给的）。404 → `onClose { 1006 }`；410 → `onClose` 带墓碑里的 `code` / `reason`；413 → 1009；409、400、401 等按会话已坏 → 1006。
+- **`waitMs`**：客户端请求的挂起时长取自己的 `waitMs` 与服务端 open 回包里的 `waitMs` 中较小的。
+- **WebSocket 形状的细节**：CONNECTING 时 `send` 抛错；OPEN 以外的 `send` 丢弃；`close()` 先把已进队的帧发完再 `POST /lp/close`，最多等 5 s；CONNECTING 时 `close()` 报 1006（同浏览器），建连回来后顺手关掉服务端的会话；建连失败先 `error` 再 `close { 1006 }`，不带原因。
+- **分批**：一批的请求体按转义后的 JSON 长度计，不超过「单帧上限 + 64 KiB」；单帧本身超限时照发一帧，由服务端回 413。
+
+### 选用
+
+- `normalizeEntry` 的 `transport` 缺省 `'ws'`；`'ws'` 时 `url` 仍只收 ws(s)，`'http'` 时 ws(s)、http(s) 都收；别的值报 `bad-shared-config`。
+- `vite-plugin-frames.ts`：独立渲染主机的那一处按 `entry.transport` 选端点。另改了同文件 `hostAssetClient` 从文档服务地址推素材地址的一行：原来只把 `wss:` 推成 `https:`，`https:` 地址会被推成 `http:`，现在两者都推成 `https:`。
+- **没接的地方**：同文件里预渲染推送与本机队列节点（`resolveDocLink` 取 `PROMPTCUT_SHARED_CONFIG` 第一项的两处 `createWsEndpoint`）仍只走 WebSocket；第一项若写 `transport: 'http'` 加 `https://` 地址，那两处会因地址不是 ws(s) 而抛错。第 9 节只要求独立渲染主机一处，留给需要时再接。
+- 探针：`shared-project-probe.mjs` 的 creator 把自己的 `--transport` 写进成员配置；member 的 `--transport` 优先，其次成员配置里的，都没有是 ws。`render-queue-e2e.mjs` 的 `--transport http` 时 `--url` 也收 http(s)。
+
+### 验证记录
+
+- HT1、HT2：`server/test/docservice-http-transport.test.mjs` 17 条；HT3：`server/test/docservice-transport-equivalence.test.mjs` 3 条（两种传输逐条回包相同，只把认领令牌换成类型再比）；HT4：`server/test/render-node-http-transport.test.mjs` 10 条。共用件在 `server/test/fake-transport-kit.mjs`。
+- HT5（本机版）：本机起托管组合（`server/hosted/main.mjs`，绑 127.0.0.1、临时数据目录、随机高端口），`shared-project-probe --mode internet --role creator/member --transport http` 两边 `ok: true`：成员进入、快照、内容库、Bearer 与查询串两种票据读素材、认领并完成任务（6 个任务全部完成，成员做了 2 个）；`--transport ws` 再跑一遍也 `ok: true`。`render-queue-e2e --role both --transport http` 20 个任务全部完成、没有重复。经 nginx 与阿里云的 HT5、HT6 没做。
 
