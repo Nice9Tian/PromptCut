@@ -97,3 +97,31 @@ test('不传 dataRoot 时缺省是当前工作目录(从仓库根跑的脚本和
   const pipeline = new FramePipeline({ root: path.join(os.tmpdir(), 'pc-none', 'frame-library'), origin: () => '' });
   assert.equal(pipeline.dataRoot, process.cwd());
 });
+
+test('旧会话的整帧后台任务未结束时，新 preload 立即按新成本重算已有 card plan', async () => {
+  const saved = process.env.PROMPTCUT_DATA_DIR;
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-costs-preload-'));
+  process.env.PROMPTCUT_DATA_DIR = path.join(repo, 'data');
+  let unblock;
+  try {
+    const pipeline = new FramePipeline({ root: path.join(repo, 'frame-library'), origin: () => '', dataRoot: repo });
+    const entry = { key: 'same-content', project: { fps }, cardPlan: plan, anchorsReady: false };
+    pipeline.entry = async () => entry;
+    const waiting = new Promise(resolve => { unblock = resolve; });
+    pipeline.acquire = async () => { await waiting; throw new Error('后台渲染夹具停在 acquire'); };
+
+    pipeline.recordCardPlan(entry, plan);
+    assert.deepEqual([...entry.prerenderSet].sort(), ['a', 'b']);
+    await pipeline.preload(entry.project, { session: 'old', localRev: 1 });
+    upsertCosts(repo, costs);
+    await pipeline.preload(entry.project, { session: 'new', localRev: 1 });
+    assert.deepEqual([...entry.prerenderSet], ['b'], '新会话不能等旧后台视频结束才看到实测成本');
+    assert.equal(pipeline.ready.describe().find(s => s.session === 'new')?.entryKey, entry.key);
+    unblock();
+    await pipeline.background;
+  } finally {
+    unblock?.();
+    if (saved === undefined) delete process.env.PROMPTCUT_DATA_DIR; else process.env.PROMPTCUT_DATA_DIR = saved;
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
