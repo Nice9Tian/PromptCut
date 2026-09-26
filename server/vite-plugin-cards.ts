@@ -1015,17 +1015,23 @@ export function cardSyncKeys(root: string, cardIds: unknown, changed: (rel: stri
   return [...out].sort();
 }
 
-export default function vitePluginCards(): Plugin {
+/**
+ * 卡片改动层(card-overrides.mjs)的加载钩子:装机版里改过的卡 / 部件,加载时交出改动层那一份,
+ * 仓库里的原文件当只读底版。编辑器的 Vite 和预渲染的 Vite 都挂这个插件,所以两边看到的是同一份。
+ *
+ * 单独一个 `enforce: 'pre'` 的插件(C6.6 实测):`?raw` 的加载由 vite 自己的 `vite:asset` 插件答,它排在普通插件前面,
+ * 原来挂在主插件上的这个钩子对 `?raw` 从来没轮到过——注册表里的定制卡源码(打包 .proc、源码版本、身份键)读到的一直是底版,
+ * 改动层里的改动在画面上生效了,身份键却不变,探针不补测。挪到 pre 才先于它。
+ * 主插件不能整体改成 pre:它的接口中间件要排在 `/api/**` 同源守卫之后。
+ */
+function cardOverridesLoader(): Plugin {
   let projectRoot = process.cwd();
   return {
-    name: 'promptcut-cards',
+    name: 'promptcut-card-overrides',
+    enforce: 'pre',
     configResolved(config) {
       projectRoot = config.root;
     },
-    /*
-     * 卡片改动层(card-overrides.mjs):装机版里改过的卡 / 部件,加载时交出改动层那一份,
-     * 仓库里的原文件当只读底版。编辑器的 Vite 和预渲染的 Vite 都挂这个插件,所以两边看到的是同一份。
-     */
     load(id) {
       if (!overridesRoot()) return null;
       const file = id.split('?')[0];
@@ -1039,6 +1045,12 @@ export default function vitePluginCards(): Plugin {
       if (/[?&]raw\b/.test(id)) return `export default ${JSON.stringify(text)}`;
       return text;
     },
+  };
+}
+
+export default function vitePluginCards(): Plugin[] {
+  return [cardOverridesLoader(), {
+    name: 'promptcut-cards',
     configureServer(server: ViteDevServer) {
       const userDir = path.join(server.config.root, 'src', 'cards', 'user');
 
@@ -1788,5 +1800,5 @@ export default function vitePluginCards(): Plugin {
         });
       });
     },
-  };
+  }];
 }

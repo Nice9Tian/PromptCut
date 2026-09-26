@@ -86,6 +86,7 @@ const scopesBefore = fs.existsSync(SCOPES) ? fs.readFileSync(SCOPES) : null;
 const procs = [];
 const fails = [];
 const navigations = [];
+const consoleLog = [];
 const res = { runId: RUN, cardId: CARD_ID, docPort: DOC_PORT, ports: { a: A_PORT, b: B_PORT } };
 
 function viteBin() {
@@ -145,6 +146,7 @@ async function openEditor(browser, ed) {
   const page = await browser.newPage();
   page.on('pageerror', (e) => say('pageerror', { tag: ed.tag, message: String(e?.message ?? e).slice(0, 300) }));
   page.on('dialog', (d) => void d.dismiss());
+  page.on('console', (m) => { const t = m.text(); if (/[vite]|[cards]/.test(t)) consoleLog.push({ tag: ed.tag, at: Date.now(), text: t.slice(0, 300) }); });
   // 主框架整页导航(刷新)记下来:卡换代码时页面应当热更新,不该整页刷新(刷新会离开共享项目)
   page.on('framenavigated', (f) => { if (f === page.mainFrame()) navigations.push({ tag: ed.tag, at: Date.now(), url: f.url() }); });
   await page.goto(`${ed.origin}/?editor`, { waitUntil: 'domcontentloaded' });
@@ -314,6 +316,23 @@ try {
     return s.src?.includes(MARK('v2')) ? Date.now() : null;
   }, 15_000, 'B 页面热更新').catch(() => null);
   res.hmrMs = hmr ? hmr - t0 : null;
+  if (!hmr && process.env.PROBE_DEBUG) {
+    const d = await P(pageB, async (cardId, v1, v2) => {
+      try {
+        const R = await import('/src/kernel/registry.ts');
+        const u = R.userCardSources();
+        return {
+          fileOf: u.fileOf[cardId] ?? null,
+          files: Object.keys(u.files),
+          srcHas: Object.fromEntries(Object.entries(u.files).map(([k, v]) => [k, v.includes(v2) ? 'v2' : v.includes(v1) ? 'v1' : '?'])),
+          depHas: Object.fromEntries(Object.entries(u.dependencies).filter(([k]) => k.includes(cardId)).map(([k, v]) => [k, v.includes(v2) ? 'v2' : v.includes(v1) ? 'v1' : '?'])),
+          card: !!R.getCard(cardId),
+          raw: await fetch(`/src/cards/user/${cardId}.tsx?raw`).then((r) => r.text()).then((t) => (t.includes(v2) ? 'v2' : t.includes(v1) ? 'v1' : t.slice(0, 80))),
+        };
+      } catch (e) { return { error: String(e?.message ?? e) }; }
+    }, CARD_ID, MARK('v1'), MARK('v2')).catch((e) => ({ evalError: String(e?.message ?? e) }));
+    say('debug.registry', d);
+  }
   // 重测:身份键(带源码版本)变了,且按现有规则重排了一轮——测量遮罩出现过,或成本表里有了新键的记录(测完)
   let remeasure = null;
   let recordedAt = null;
@@ -342,6 +361,10 @@ try {
   res.stageMs = stageAt ? stageAt - t0 : null;
   await pageB.screenshot({ path: path.join(OUT, `${RUN}-b-2-after.png`) });
   res.navigationsAfterEdit = navigations.filter((n) => n.at >= t0).map((n) => ({ tag: n.tag, ms: n.at - t0 }));
+  if (process.env.PROBE_DEBUG) {
+    say('debug.console', { lines: consoleLog.filter((c) => c.at >= t0 - 2000) });
+    for (const ed of [A, B]) say('debug.server', { tag: ed.tag, lines: ed.proc.log.join('').split(/\r?\n/).filter((l) => /hmr|page reload|cards|error/i.test(l)).slice(-40) });
+  }
   res.bKindAfter = await P(pageB, () => window.__pcSyncTest?.view().kind ?? null).catch(() => null);
   res.shots = [`${RUN}-b-1-before.png`, `${RUN}-b-2-after.png`].map((f) => path.join(OUT, f));
 
