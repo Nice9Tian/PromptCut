@@ -34,6 +34,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
+import { createWsEndpoint } from './render-node/ws-transport.mjs';
 
 export const CARD_SOURCE = 'card-source';
 
@@ -117,15 +118,16 @@ const sameActor = (a, b) => !!a && !!b && a.userId === b.userId && (a.deviceId ?
  *   - `changed(rel) → boolean`：这个文件算不算「用户卡或改过的内置卡」（没记账的本机文件据此判断是不是自己改过的）；
  *   - `install(rel, source) → { ok: boolean, error?: string }`：装上服务上的版本（审查、写改动层、热更新、重测）；
  *   - `backup(rel, content) → string`：覆盖前把本机那份存起来，回备份的相对路径。
- * @param {(o: { url: string, protocols: () => Promise<string[]> | string[] }) => object} o.connect
- *   建一个端点（`server/render-node/ws-transport.mjs` 的 `createWsEndpoint` 形状：send、onMessage、onOpen、onClose、close）
+ * @param {(o: { url: string, protocols: () => Promise<string[]> | string[] }) => object} [o.connect]
+ *   建一个端点（`server/render-node/ws-transport.mjs` 的 `createWsEndpoint` 形状：send、onMessage、onOpen、onClose、close）；
+ *   缺省就用 `createWsEndpoint`（断线指数退避重连，每次重连前现取子协议）
  * @param {(event: object) => void} [o.notify] 覆盖提示、装上、被拒等事件（插件经 HMR 转给页面）
  * @param {(event: string, fields?: object) => void} [o.log]
  */
 export function createCardSync({
   stateDir = null,
   files,
-  connect,
+  connect = null,
   notify = () => {},
   log = () => {},
   session = `cards-${randomUUID().replace(/-/g, '').slice(0, 12)}`,
@@ -136,8 +138,9 @@ export function createCardSync({
   if (!files || typeof files.read !== 'function' || typeof files.install !== 'function' || typeof files.backup !== 'function') {
     throw new TypeError('createCardSync: files 要有 read、install、backup');
   }
-  if (typeof connect !== 'function') throw new TypeError('createCardSync: 要 connect');
   const say = (event, fields = {}) => { try { log(event, fields); } catch { /* 日志失败不影响同步 */ } };
+  if (connect !== null && typeof connect !== 'function') throw new TypeError('createCardSync: connect 要是函数');
+  const connectTo = connect ?? (({ url, protocols }) => createWsEndpoint({ url, protocols, log: (event, fields) => say(`ws.${event}`, fields) }));
   const changedOf = typeof files.changed === 'function' ? files.changed : () => true;
   const notices = [];
   const emit = (event) => {
@@ -154,7 +157,7 @@ export function createCardSync({
   function makeBinding({ projectId = null, url, protocols, local = false, keys = [] }) {
     const spaceId = spaceIdOf({ local, projectId });
     const ledger = createLedger(stateDir, spaceId);
-    const endpoint = connect({ url, protocols });
+    const endpoint = connectTo({ url, protocols });
     const binding = {
       spaceId, projectId, url, local, endpoint, ledger,
       keys: new Set((keys ?? []).filter(isSyncablePath)),

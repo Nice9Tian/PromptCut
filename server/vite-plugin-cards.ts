@@ -14,7 +14,6 @@ import {
   setCardHasher, emitCardSourceChange,
 } from './card-overrides.mjs';
 import { createCardSync, isSyncablePath } from './card-sync.mjs';
-import { createWsEndpoint } from './render-node/ws-transport.mjs';
 
 /* ────────────────────────────────────────────────────────────────────
  * 0.4 起:Agent 能读、能改**所有**卡片的原始源码(内置卡也算),但改不了 HTML。
@@ -1180,8 +1179,6 @@ export default function vitePluginCards(): Plugin {
       let syncProjectId: string | null = null;
       const cardSync = syncEnabled ? createCardSync({
         stateDir: syncDir,
-        connect: ({ url, protocols }: { url: string; protocols: () => Promise<string[]> | string[] }) =>
-          createWsEndpoint({ url, protocols, log: (event: string, fields: object) => syncLog(`ws.${event}`, fields) }),
         files: {
           read: (rel: string) => {
             try { return readEffective(server.config.root, path.join(server.config.root, rel)); } catch { return null; }
