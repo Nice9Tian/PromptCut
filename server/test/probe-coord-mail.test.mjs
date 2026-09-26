@@ -134,3 +134,26 @@ test('开了信箱时 KV 也要令牌；coordClient 带上令牌照常可用', a
     assert.deepEqual(await kv.get('k'), { v: 2 });
   });
 });
+
+test('MB10 kind: status 能写进信箱并按 seq 读回（云端报到用）', async () => {
+  await withCoord({ token: TOKEN }, async (c) => {
+    const mc = mailClient(c.url, TOKEN);
+    const s = await mc.send('to-local', { from: 'cloud', kind: 'status', body: { title: '云端会话', node: 'v24' } });
+    assert.equal(s.seq, 1);
+    const r = await mc.read('to-local', 0, 0);
+    assert.deepEqual(r.messages.map((m) => [m.seq, m.from, m.kind, m.ref, m.queue]), [[1, 'cloud', 'status', null, 'to-local']]);
+    assert.deepEqual(r.messages[0].body, { title: '云端会话', node: 'v24' });
+  });
+});
+
+test('MB11 未知的 kind 仍回 400 bad-kind，不写进队列', async () => {
+  await withCoord({ token: TOKEN }, async (c) => {
+    const post = (kind) => fetch(`${c.url}/mail/to-local`, { method: 'POST', headers: { 'X-Mail-Token': TOKEN }, body: JSON.stringify({ from: 'cloud', kind, body: 'x' }) });
+    for (const kind of ['report', 'STATUS', '', undefined]) {
+      const r = await post(kind);
+      assert.equal(r.status, 400);
+      assert.equal((await r.json()).error, 'bad-kind');
+    }
+    assert.equal((await mailClient(c.url, TOKEN).read('to-local', 0, 0)).last, 0);
+  });
+});
