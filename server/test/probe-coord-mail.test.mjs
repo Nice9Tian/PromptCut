@@ -106,12 +106,31 @@ test('给了文件就持久化，重启后 seq 接着编', async () => {
   }
 });
 
+test('没开信箱时 KV 不要令牌（本机与局域网探针照旧）', async () => {
+  await withCoord(undefined, async (c) => {
+    const kv = coordClient(c.url, '');
+    await kv.put('k', { v: 3 });
+    assert.deepEqual(await kv.get('k'), { v: 3 });
+  });
+});
+
 test('KV 照旧能用，healthz 带信箱摘要', async () => {
   await withCoord({ token: TOKEN }, async (c) => {
-    const kv = coordClient(c.url);
+    const kv = coordClient(c.url, TOKEN);
     await kv.put('k', { v: 1 });
     assert.deepEqual(await kv.get('k'), { v: 1 });
     const h = await (await fetch(`${c.url}/healthz`)).json();
     assert.deepEqual(h.mail, { 'to-cloud': { last: 0, waiting: 0 }, 'to-local': { last: 0, waiting: 0 } });
+  });
+});
+
+test('开了信箱时 KV 也要令牌；coordClient 带上令牌照常可用', async () => {
+  await withCoord({ token: TOKEN }, async (c) => {
+    assert.equal((await fetch(`${c.url}/kv/k?wait=0`)).status, 401);
+    assert.equal((await fetch(`${c.url}/kv/k`, { method: 'PUT', body: '{}' })).status, 401);
+    await assert.rejects(coordClient(c.url, '').put('k', { v: 1 }), /401/);
+    const kv = coordClient(c.url, TOKEN);
+    await kv.put('k', { v: 2 });
+    assert.deepEqual(await kv.get('k'), { v: 2 });
   });
 });

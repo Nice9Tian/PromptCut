@@ -12,6 +12,7 @@
  *
  * 另有两个 Agent 之间的 HTTP 信箱（`mail` 选项，见 `createMailbox`；与文档服务的传输无关）：
  *   POST /mail/<队列>、GET /mail/<队列>?after=<seq>&wait=<秒>，每个请求带 `X-Mail-Token`。
+ *   开了信箱时 `/kv/*` 也要同一个令牌（`coordClient` 自动从环境变量 `PROBE_MAIL_TOKEN` 取）；`/healthz` 不要。
  *
  * 命令行（令牌只从环境变量 `PROBE_MAIL_TOKEN` 取，不收命令行参数，免得进进程列表与历史）：
  *   node scripts/probes/probe-coord.mjs serve --port 8799 [--host 0.0.0.0] [--mail-file <文件>]
@@ -173,6 +174,7 @@ export function createMailbox({
   return {
     handle,
     append,
+    authorized,
     summary: () => Object.fromEntries([...state].map(([name, q]) => [name, { last: q.last, waiting: q.waiters.size }])),
     close() {
       for (const q of state.values()) for (const wake of [...q.waiters]) wake();
@@ -206,6 +208,8 @@ export function startCoordServer({ port, host = '127.0.0.1', extra, mail } = {})
       const m = /^\/kv\/([^/]+)$/.exec(url.pathname);
       if (m) {
         const key = decodeURIComponent(m[1]);
+        // 开了信箱（公网上的协调口）时 KV 也要同一个令牌：成员配置里有项目口令
+        if (mailbox && !mailbox.authorized(req)) return sendJson(res, 401, { ok: false, error: 'unauthorized' });
         if (!KEY_RE.test(key)) return sendJson(res, 400, { ok: false, error: 'bad-key' });
         if (req.method === 'PUT') {
           let value;
@@ -252,21 +256,23 @@ export function startCoordServer({ port, host = '127.0.0.1', extra, mail } = {})
 /**
  * 协调口的客户端（KV 那几条）。
  * @param {string} base 形如 `http://192.168.50.96:5409`
+ * @param {string} [token] 协调口开了信箱时 KV 要的 `X-Mail-Token`；缺省取环境变量 `PROBE_MAIL_TOKEN`，都没有就不带
  */
-export function coordClient(base) {
+export function coordClient(base, token = process.env.PROBE_MAIL_TOKEN) {
   const root = String(base).replace(/\/+$/, '');
+  const auth = token ? { 'X-Mail-Token': token } : {};
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const client = {
     base: root,
     async put(key, value) {
       const res = await fetch(`${root}/kv/${encodeURIComponent(key)}`, {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(value), signal: AbortSignal.timeout(15_000),
+        method: 'PUT', headers: { ...auth, 'Content-Type': 'application/json' }, body: JSON.stringify(value), signal: AbortSignal.timeout(15_000),
       });
       if (!res.ok) throw new Error(`协调口 PUT ${key} 回 ${res.status}`);
     },
     /** 取一次（最多等 waitMs）；没有回 null */
     async get(key, waitMs = 0) {
-      const res = await fetch(`${root}/kv/${encodeURIComponent(key)}?wait=${Math.max(0, waitMs)}`, { signal: AbortSignal.timeout(waitMs + 10_000) });
+      const res = await fetch(`${root}/kv/${encodeURIComponent(key)}?wait=${Math.max(0, waitMs)}`, { headers: auth, signal: AbortSignal.timeout(waitMs + 10_000) });
       if (res.status === 404) return null;
       if (!res.ok) throw new Error(`协调口 GET ${key} 回 ${res.status}`);
       return (await res.json()).value ?? null;
