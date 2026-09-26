@@ -73,7 +73,7 @@ worktree 保留：`.worktrees/coord-mailbox`、`.worktrees/http-transport`，等
   - `/hosted`、`/media` 用 `proxy_bind 172.19.0.47` 从内网地址连后端：托管端把回环来的请求当本机自己人，经 nginx 进来的若走 127.0.0.1 会被当成本机（2026-09-26 09:22～09:26Z 出现过约 4 分钟，已堵上并验证：匿名 WebSocket 升级被拒、匿名读素材 401）。代价：限速按来源地址算，经 nginx 的请求都算 172.19.0.47 一个来源。
   - 部署 HTTP 传输时 `/hosted` 还要补 `client_max_body_size 2m; proxy_buffering off;`（契约第 11 节）。
   - 临时路由 `/hosted-next`、`/media-next` 已在收尾时删除（见第 10 节）。
-- **pm2**：`promptcut-hosted`（正式实例，C6.5 代码，8787 / 8788）、`probe-coord`（协调口与信箱）、`pm2-logrotate`；第二实例 `promptcut-drill` 的去留见第 10 节。
+- **pm2**：`promptcut-hosted`（正式实例，C6.5 代码，8787 / 8788）、`probe-coord`（协调口与信箱）、`pm2-logrotate`；第二实例 `promptcut-drill` 还在跑，见第 10 节。
 - **UFW**：22、8787、8788、80、443；8799 已撤（协调口只听 127.0.0.1，只经 443 进来）。
 - **正式实例的 pm2 配置改过两个 PUBLIC_URL**（`/opt/promptcut-hosted/pm2.config.cjs`，备份 `pm2.config.cjs.bak-20260926`）：
   - `PROMPTCUT_DOCSERVICE_PUBLIC_URL`：`ws://8.219.80.16:8787` → `wss://8-219-80-16.sslip.io/hosted/`；
@@ -102,6 +102,15 @@ worktree 保留：`.worktrees/coord-mailbox`、`.worktrees/http-transport`，等
 | 攻坚（codex worktree 模式） | 没有走到 | — | 没有调用 |
 | 发散（Gemini） | 没有走到 | — | 没有调用 |
 
-## 10. 收尾记录
+## 10. 收尾记录（2026-09-26 10:33Z）
 
-见本文件之后的提交（收尾时补写）。
+- 本机挂着的 `to-local` 长轮询已停；`to-local` 最后一条是 seq 4，没有漏读。
+- nginx：删掉临时路由 `/hosted-next`、`/media-next` 并 reload（备份 `/root/nginx-promptcut.bak4`）；`/coord`、`/hosted`、`/media` 仍是 200。注意 `/hosted-next/…` 现在会被 `/hosted` 的前缀匹配吃进去、回 404，无害。
+- 探针项目：本会话建的 5 个都删了。删除要创建者证明，探针当时生成的口令没有留下，所以做法是停进程、删 `docservice/auth/projects/<id>.json` 与 `docservice/tenants/<id>/`、再起（与在线删除的 `st.remove` 加 `dropSpace` 等价；素材三个命名空间按哈希共用，没动）：
+  - 正式实例：`cloud-node-handshake`（`sp_mqwci777…`）、`https-selftest`（`sp_fooqntei…`）、`https-selftest2`（`sp_svy4jcvu…`）、`cloud-node-handshake-2`（`sp_6ajk3mji…`）；
+  - 第二实例：`ht5-next`（`sp_qst5zy42…`）。
+  - 正式实例上剩下的 `sp-probe-muhgn208-fc53f5`、`rhp-muhg3z5h` 是主线会话 SP / M6 阶段留下的，不是本会话建的，没动。
+- 正式实例因此重启一次；重启后对外宣告的仍是 `wss://8-219-80-16.sslip.io/hosted/` 与 `https://8-219-80-16.sslip.io/media/api/asset`。
+- 保留：`/coord`、`/hosted`、`/media` 三条路由，`probe-coord`，`promptcut-hosted`。
+- **第二实例 `promptcut-drill` 进程还在跑**（8777 / 8778，`/opt/promptcut-drill`、`/var/lib/promptcut/drill`，没有项目、没有路由、UFW 不放行，外面连不到）；pm2 没有 save，服务器重启后不会自己起来。这两个端口是 M8 迁移演练要用的，演练时 `deploy-hosted --instance drill` 会覆盖它；要提前清掉就 `pm2 delete promptcut-drill` 并删那两个目录。
+- 云端：`to-cloud` seq 5 告诉它本机会话交接中、继续长轮询、下一条指令来自笔记本会话。
