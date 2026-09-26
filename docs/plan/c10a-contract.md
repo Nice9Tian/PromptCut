@@ -16,8 +16,8 @@
   - `docs/plan/shared-project-contract.md`：托管组合；
   - `docs/plan/c66-design.md`：两档素材、上传队列、换档；
   - `docs/plan/http-transport-contract.md`：页面的 HTTP 回落，见本文第 10 节。
-- 查资料：codex（`gpt-6-sol` / `high`）的 `research-c10a.md`，摘要见第 13 节。
-- 交互稿：Gemini（`gemini-3.1-pro-high`）的 `gemini-c10a-ux.md`，核对结论见第 14 节。
+- 查资料：codex（`gpt-6-sol` / `high`）的原文 `docs/plan/c10a-research.md`，摘要见第 13 节。
+- 交互稿：Gemini（`gemini-3.1-pro-high`）的原稿 `docs/plan/c10a-ux-draft.md`，核对结论见第 14 节。
 - 代码现状：2026-09-27 按 main `bc2652f` 摸过，摘要见第 15 节。
 
 ## 1. 范围
@@ -297,7 +297,7 @@
   3. 保留不了的，走「粘贴邀请链接」那条路。
 - 部署与 nginx 改动、每次重启，逐次记进 `docs/reports/REPORT-C10a.md`。
 
-## 13. 查资料的结论（codex，`gpt-6-sol` / `high`；原文在 scratchpad 的 `research-c10a/research-c10a.md`）
+## 13. 查资料的结论（codex，`gpt-6-sol` / `high`；原文 `docs/plan/c10a-research.md`）
 
 | 题 | 结论 | 怎么用 |
 |---|---|---|
@@ -309,7 +309,7 @@
 | Q6 逐帧导出 | Safari 16.4 起有视频 WebCodecs，但 H.264 原尺寸编码与持续写文件没有统一保证；`mp4-muxer` 停维护，Mediabunny 是 MPL-2.0 | 采纳能力探测与限队列；自写封装器；不给 PNG 序列替代；iOS 时长上限写进报告 |
 | Q7 预渲染小尺寸 | 与素材小尺寸统一在 800×600 以内；HTML 重层要独立小位图；手机不消费流 | 采纳：第 9 节；格式定为 WebP |
 
-## 14. 交互稿核对（Gemini，原文在 scratchpad 的 `gemini-c10a-ux.md`）
+## 14. 交互稿核对（Gemini，原稿 `docs/plan/c10a-ux-draft.md`）
 
 Gemini 出稿的文案逐条核对了语义：用语一致，没有引入语义里没有的名词。下面三张表是定稿，实现照抄。与稿件不同之处已标出。
 
