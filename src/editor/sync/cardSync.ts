@@ -8,8 +8,9 @@
  *   页面在自己那条共享项目连接上签(`auth.ticket`),交回 `POST /api/cards/sync/ticket`;
  * - **提示**:装上了别人的版本、自己那份被覆盖(已备份)、覆盖了别人、装不上,都给气泡。
  *
- * 装上之后的重测、重排预渲染不在这里做:编辑器进程照 edit_card 的做法热更新,卡片模块的热更新沿导入链一路重跑到
- * `ProbeGate.tsx`(探针、身份键、分派表都在链上),按现有规则重排一轮,身份键里的源码版本变了的卡补测。
+ * 装上之后:编辑器进程照 edit_card 的做法热更新(页面换上新代码);热更新落地后本模块发页面事件 `pc-cards-synced`,
+ * `ProbeGate.tsx` 收到后按当前项目重排一轮探针(身份键里的源码版本变了的卡补测,分派表跟着重算)——
+ * 热更新虽然沿导入链重跑了探针模块,实测并不重排,所以要这一下。
  * **本模块不能静态引入那条链上的任何模块**(`probeRunner`、`costIdentity` 引了 `cardSourceFiles.mjs`,
  * 它把 `src/cards/**` 的源码全 glob 进来):一旦引了,`syncManager` 也成了每张卡的热更新祖先,
  * 改一张卡它就被重跑,页面的共享项目连接随之丢掉、退回本机空间(实测)。
@@ -96,6 +97,22 @@ export function noteProjectForCardSync(project: Project): void {
   void send(b, ids);
 }
 
+/** 装上之后等这次热更新落地(HMR 的 `vite:afterUpdate`,最多等 3 s)再请探针重排 */
+let settleTimer: ReturnType<typeof setTimeout> | null = null;
+let waitingUpdate = false;
+function afterSyncedInstall() {
+  waitingUpdate = true;
+  if (settleTimer) clearTimeout(settleTimer);
+  settleTimer = setTimeout(fireSynced, 3000);
+}
+function fireSynced() {
+  if (settleTimer) clearTimeout(settleTimer);
+  settleTimer = null;
+  if (!waitingUpdate) return;
+  waitingUpdate = false;
+  window.dispatchEvent(new Event("pc-cards-synced"));
+}
+
 const nameOf = (key: unknown) => {
   const s = String(key ?? "");
   return s.replace(/^src\//, "");
@@ -106,6 +123,7 @@ function onNotice(d: Record<string, unknown>) {
   const file = nameOf(d.key);
   switch (d.type) {
     case "installed":
+      afterSyncedInstall();
       if (!d.backup) h?.toast(`卡片 ${file} 已同步为 ${h.who(d.actor as Record<string, unknown>)} 的版本。`, "info", 5000);
       return;
     case "overwritten":
@@ -145,5 +163,9 @@ if (typeof window !== "undefined" && import.meta.hot) {
   import.meta.hot.on("pc:card-sync", (d: Record<string, unknown>) => {
     if (d?.type === "ticket") void onTicket(d);
     else if (d?.type === "notice") onNotice(d);
+  });
+  // 热更新的模块刚换上,注册表里的源码随之更新;下一拍再发,免得探针读到半截
+  import.meta.hot.on("vite:afterUpdate", () => {
+    if (waitingUpdate) setTimeout(fireSynced, 50);
   });
 }

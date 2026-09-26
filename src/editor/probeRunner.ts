@@ -58,7 +58,7 @@ import { pageEnvironment } from "./pageEnvironment.mjs";
 import type { CardCostRecord } from "../render/cardCostKey.mjs";
 import type { RenderAborted, RenderReply, SetTimeAborted, SetTimeReply, SnapshotCost, StageEvent, StageRpcClient } from "../render/stageRpc";
 import { mirrorKey } from "../render/dataMirror";
-import { clipIdentityOf } from "./costIdentity";
+import { clipIdentityOf, resetClipIdentityCache } from "./costIdentity";
 import { mergePlanCosts, setPlanCosts } from "./planDispatch";
 import { onStageEvent, pushProject, stageCapabilities, whenStageReady } from "./stageBridge";
 import { MAX_PROJECT_RESENDS, currentBackJob, renderAbortAction, runBackJob } from "./stageJobs";
@@ -461,6 +461,19 @@ export function syncProbeRun(project: Project | null): void {
   currentProject = project;
   generation++;
   if (!looping) void runLoop();
+}
+
+/**
+ * 卡片代码换了而项目没变(C6.6 第 5 节:同步装上了别人改的卡):`cardCostKey` 里的源码版本跟着变,
+ * 但 `syncProbeRun` 按项目引用早退、`clipIdentityOf` 按项目引用记忆化,都看不出来;
+ * 卡片模块的热更新虽然沿导入链重跑了本模块,实测并不会重排(C6.6 探针)。
+ * 这里清掉身份缓存、按当前项目重排一轮,身份键变了、没有记录的卡照现有规则补测(分派表在这一轮开头跟着重算)。
+ * 由 `ProbeGate.tsx` 在收到页面事件 `pc-cards-synced` 时调(`src/editor/sync/cardSync.ts` 发)。
+ */
+export function requeueProbeRun(project: Project | null): void {
+  resetClipIdentityCache();
+  currentProject = null;
+  syncProbeRun(project);
 }
 
 async function runLoop(): Promise<void> {

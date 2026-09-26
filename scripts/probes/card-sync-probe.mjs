@@ -146,7 +146,7 @@ async function openEditor(browser, ed) {
   const page = await browser.newPage();
   page.on('pageerror', (e) => say('pageerror', { tag: ed.tag, message: String(e?.message ?? e).slice(0, 300) }));
   page.on('dialog', (d) => void d.dismiss());
-  page.on('console', (m) => { const t = m.text(); if (/[vite]|[cards]/.test(t)) consoleLog.push({ tag: ed.tag, at: Date.now(), text: t.slice(0, 300) }); });
+  page.on('console', (m) => { consoleLog.push({ tag: ed.tag, at: Date.now(), type: m.type(), text: m.text().slice(0, 400) }); });
   // 主框架整页导航(刷新)记下来:卡换代码时页面应当热更新,不该整页刷新(刷新会离开共享项目)
   page.on('framenavigated', (f) => { if (f === page.mainFrame()) navigations.push({ tag: ed.tag, at: Date.now(), url: f.url() }); });
   await page.goto(`${ed.origin}/?editor`, { waitUntil: 'domcontentloaded' });
@@ -362,7 +362,7 @@ try {
   await pageB.screenshot({ path: path.join(OUT, `${RUN}-b-2-after.png`) });
   res.navigationsAfterEdit = navigations.filter((n) => n.at >= t0).map((n) => ({ tag: n.tag, ms: n.at - t0 }));
   if (process.env.PROBE_DEBUG) {
-    say('debug.console', { lines: consoleLog.filter((c) => c.at >= t0 - 2000) });
+    say('debug.console', { lines: consoleLog.filter((c) => c.at >= t0 - 2000 && c.tag === 'b' && !c.text.startsWith('[vite] hot updated')) });
     for (const ed of [A, B]) say('debug.server', { tag: ed.tag, lines: ed.proc.log.join('').split(/\r?\n/).filter((l) => /hmr|page reload|cards|error/i.test(l)).slice(-40) });
   }
   res.bKindAfter = await P(pageB, () => window.__pcSyncTest?.view().kind ?? null).catch(() => null);

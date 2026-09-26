@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
-import { useStore } from "../store/project";
+import { getState, useStore } from "../store/project";
 import { previewMode } from "./previewMode";
 import { setPlanProject } from "./planDispatch";
-import { onProbeProgress, probeProgress, syncProbeRun, type ProbeProgress } from "./probeRunner";
+import { onProbeProgress, probeProgress, requeueProbeRun, syncProbeRun, type ProbeProgress } from "./probeRunner";
 import "./ProbeGate.css";
 
 /**
@@ -41,6 +41,18 @@ export function ProbeGate() {
     setPlanProject(project);
     syncProbeRun(project);
   }, [enabled, project]);
+
+  /*
+   * 卡片源码同步装上了别人改的卡(C6.6 第 5 节,`sync/cardSync.ts` 在热更新落地后发 `pc-cards-synced`):
+   * 项目没变、卡的代码变了,按当前项目重排一轮,身份键变了的卡补测。用页面事件而不是让 cardSync 直接引 probeRunner:
+   * 那样 syncManager 会成为每张卡的热更新祖先,改一张卡就被重跑、丢掉共享项目的连接。
+   */
+  useEffect(() => {
+    if (!enabled) return;
+    const on = () => requeueProbeRun(getState().project);
+    window.addEventListener("pc-cards-synced", on);
+    return () => window.removeEventListener("pc-cards-synced", on);
+  }, [enabled]);
 
   if (!enabled || !p.running || !p.blocking) return null;
 
