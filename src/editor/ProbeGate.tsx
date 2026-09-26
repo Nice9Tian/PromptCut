@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
-import { useStore } from "../store/project";
+import { getState, useStore } from "../store/project";
 import { previewMode } from "./previewMode";
 import { setPlanProject } from "./planDispatch";
-import { onProbeProgress, probeProgress, syncProbeRun, type ProbeProgress } from "./probeRunner";
+import { onProbeProgress, probeProgress, requeueProbeRun, syncProbeRun, type ProbeProgress } from "./probeRunner";
+import { whenStageReady } from "./stageBridge";
 import "./ProbeGate.css";
 
 /**
@@ -41,6 +42,26 @@ export function ProbeGate() {
     setPlanProject(project);
     syncProbeRun(project);
   }, [enabled, project]);
+
+  /*
+   * 卡片源码同步装上了别人改的卡(C6.6 第 5 节,`sync/cardSync.ts` 在热更新落地后发 `pc-cards-synced`):
+   * 项目没变、卡的代码变了,按当前项目重排一轮,身份键变了的卡补测。用页面事件而不是让 cardSync 直接引 probeRunner:
+   * 那样 syncManager 会成为每张卡的热更新祖先,改一张卡就被重跑、丢掉共享项目的连接。
+   */
+  useEffect(() => {
+    if (!enabled) return;
+    let active = true;
+    const on = () => {
+      // Preview 同一事件里先卸掉旧 RPC、重载两个 iframe。下一拍读取新的 ready Promise，
+      // 等后台舞台重新握手后才测，避免把工作发给已销毁的旧客户端。
+      setTimeout(() => {
+        if (!active) return;
+        void whenStageReady("back").then(() => { if (active) requeueProbeRun(getState().project); });
+      }, 0);
+    };
+    window.addEventListener("pc-cards-synced", on);
+    return () => { active = false; window.removeEventListener("pc-cards-synced", on); };
+  }, [enabled]);
 
   if (!enabled || !p.running || !p.blocking) return null;
 
