@@ -1000,6 +1000,22 @@ export function installSyncedFile(opts: { root: string; historyDir: string; rel:
   return { ok: true, status: before === null ? 'written' : 'updated', abs, written };
 }
 
+/**
+ * 项目用到的卡 → 卡片源码同步要带上的文件(C6.6 第 5 节「范围」):每张卡的源码闭包(定义文件 + 用到的卡片 / 部件文件)里,
+ * `changed(rel)` 认为是「用户卡或改过的内置卡」的那些。未改的内置卡两端都有,不同步。
+ */
+export function cardSyncKeys(root: string, cardIds: unknown, changed: (rel: string) => boolean): string[] {
+  if (!Array.isArray(cardIds)) return [];
+  const out = new Set<string>();
+  for (const id of cardIds.slice(0, 500)) {
+    if (typeof id !== 'string' || !ID_RE.test(id)) continue;
+    const def = findCardFile(root, id);
+    if (!def) continue;
+    for (const f of importClosure(root, def)) if (isSyncablePath(f) && changed(f)) out.add(f);
+  }
+  return [...out].sort();
+}
+
 export default function vitePluginCards(): Plugin {
   let projectRoot = process.cwd();
   return {
@@ -1145,19 +1161,7 @@ export default function vitePluginCards(): Plugin {
         if (o && fs.existsSync(o)) return true;
         return readEdited().has(rel);
       };
-      /** 项目用到的卡 → 要带上的文件:每张卡的源码闭包里,属于用户卡或改过的内置卡的那些 */
-      const keysForCards = (cardIds: unknown): string[] => {
-        if (!Array.isArray(cardIds)) return [];
-        const root = server.config.root;
-        const out = new Set<string>();
-        for (const id of cardIds.slice(0, 500)) {
-          if (typeof id !== 'string' || !ID_RE.test(id)) continue;
-          const def = findCardFile(root, id);
-          if (!def) continue;
-          for (const f of importClosure(root, def)) if (isSyncablePath(f) && locallyChanged(f)) out.add(f);
-        }
-        return [...out].sort();
-      };
+      const keysForCards = (cardIds: unknown): string[] => cardSyncKeys(server.config.root, cardIds, locallyChanged);
       const syncLog = (event: string, fields: object = {}) => {
         try { console.info('[cards]', event, JSON.stringify(fields)); } catch { console.info('[cards]', event); }
       };
