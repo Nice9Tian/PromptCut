@@ -164,3 +164,8 @@
 
 - 阿里云：从本分支 `deploy-hosted`（注意 pm2 配置会重新生成：两个 `PUBLIC_URL` 要保持 `wss://8-219-80-16.sslip.io/hosted/` 与 `https://8-219-80-16.sslip.io/media/api/asset`），nginx `/hosted` 补 `client_max_body_size 2m; proxy_buffering off;`。
 - 云端节点经信箱（`to-cloud`）收第 3 版指令：`NODE_USE_ENV_PROXY=1` 下以 `--transport http` 作为成员接入；是否有 Chrome 由它自己探、写回 `cloud-env`，本机据此决定它当成员节点还是渲染节点。
+
+## 13. 实现记录
+
+（实现进行中，逐条补充。）
+
