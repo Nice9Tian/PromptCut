@@ -82,7 +82,7 @@
 
 **能力检测与退路。** `glHost` 先测 Worker 里能不能拿到 `OffscreenCanvas` 的 `webgl2` 上下文（判据已落地：`stageRpc.ts:322` 的 `offscreenGl`，Safari 17 以前不行、部分 WebView 不行），不能就退回今天的路——canvas 卡在舞台主线程自己画（M1 契约照用，`glHost` 在主线程建一个上下文顶替 Worker，import 同一张 `programs.ts`），探针照量、按实测分派，只是这类卡更容易判重；`beat` / `done` 协议不变（主线程同步画完就算 `done`）。
 
-**低内存档**（平板：Apple 芯片是统一内存、Safari 每标签页只给 1～2 GB）。判据也已落地（`stageRpc.ts:329`：`navigator.deviceMemory ≤ 4` 或 Safari）。此时纹理一律取素材的小分辨率档（A1 的 `tiers.small`，没有才取原片）、图集上限 2048²；路线 1 下 `back` 舞台不开 Worker（探针和补跑对 canvas 卡走主线程退路，`stepMs` 按退路量、和 `front` 的 Worker 口径不同，**所以低内存档默认走路线 2**）；路线 2 下 `back` 本来只收端口、不多开任何东西，探针和 `front` 同一个 Worker、同一口径。
+**低内存档**（平板：Apple 芯片是统一内存、Safari 每标签页只给 1～2 GB）。判据也已落地（`stageRpc.ts:329`：`navigator.deviceMemory ≤ 4` 或 Safari）。此时纹理一律取素材的小分辨率档（A1 的 `tiers.small`，没有才取素材原尺寸）、图集上限 2048²；路线 1 下 `back` 舞台不开 Worker（探针和补跑对 canvas 卡走主线程退路，`stepMs` 按退路量、和 `front` 的 Worker 口径不同，**所以低内存档默认走路线 2**）；路线 2 下 `back` 本来只收端口、不多开任何东西，探针和 `front` 同一个 Worker、同一口径。
 
 **写进 `costs` 的 `device`。** `offscreenGl` / `lowMemory` / 当前 `glRoute` 由 J4 的宿主能力表报给父页，并进 `device` 字段一起去重（`stepMs` 含 `beat → done` 往返，两条路线量级不同，切路线等于换机器、重探针）。**`glRoute` 要取生效路线**：`project.glRoute ?? (lowMemory ? 'shared' : 'perDocument')`。今天 `probe-card-costs.mjs:191` 只按 `caps.lowMemory` 算（`glRoute: caps.lowMemory ? 'shared' : 'perDocument'`），用户在项目选项里把桌面手切成 `shared` 时 `device` 不变、旧记录不会作废，和「切 `glRoute` 后重走 `ProbeGate`」的前提对不上。改法：离线探针用已有的 `--gl-route` 开关（`probe-card-costs.mjs:94` / `:433`）覆盖，页面侧的 `ProbeGate` 传生效路线。
 
