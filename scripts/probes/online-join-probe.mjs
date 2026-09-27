@@ -29,7 +29,8 @@ import os from 'node:os';
 import http from 'node:http';
 import net from 'node:net';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { startHostedCombo } from '../../server/hosted/combo.mjs';
@@ -50,6 +51,11 @@ const PROXY_PORT = Number(arg('--proxy-port', 5633));
 const DOC_PORT = Number(arg('--doc-port', 5634));
 const ASSET_PORT = Number(arg('--asset-port', 5635));
 const PHASES = new Set(arg('--phases', 'create,online,desktop,regen,cancel').split(','));
+/**
+ * `--with-video`(c10a-integ 补):创建者开启前先导一段带声音的视频;开启后等它的原尺寸传到托管端素材服务;
+ * 取消前把创建者本机内容库里的这一份删掉,取消后核对它从托管端拉回本机(字节与原片相同)。
+ */
+const WITH_VIDEO = argv.includes('--with-video');
 fs.mkdirSync(OUT, { recursive: true });
 
 const PROXY = `http://127.0.0.1:${PROXY_PORT}`;
@@ -156,7 +162,8 @@ function viteBin() {
 let editorProc = null;
 const editorLog = [];
 if (PHASES.has('create') || PHASES.has('desktop') || PHASES.has('regen') || PHASES.has('cancel')) {
-  const env = { ...process.env, PROMPTCUT_PUSH: '0', PROMPTCUT_DATA_DIR: editorData, PROMPTCUT_DEVICE_ID: 'c10a-web-probe-desktop-01', PROMPTCUT_DEVICE_NAME: 'ProbeDesk' };
+  // 产物目录(含本机素材内容库 out/media)也放进临时数据目录,不写 worktree 的 out/
+  const env = { ...process.env, PROMPTCUT_PUSH: '0', PROMPTCUT_DATA_DIR: editorData, PROMPTCUT_EXPORT_DIR: path.join(editorData, 'out'), PROMPTCUT_DEVICE_ID: 'c10a-web-probe-desktop-01', PROMPTCUT_DEVICE_NAME: 'ProbeDesk' };
   delete env.PROMPTCUT_LAN_HOST;
   editorProc = spawn(process.execPath, [viteBin(), '--port', String(DESKTOP_PORT), '--strictPort', '--host', '127.0.0.1'], { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, env });
   const keep = (c) => { editorLog.push(c.toString()); if (editorLog.length > 300) editorLog.shift(); };
@@ -280,6 +287,7 @@ async function phaseCreate() {
   await page.goto(`${DESKTOP}/?editor`, { waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => !!document.querySelector('.pc-proj-menu, [data-pc="probe-gate"], header, .pc-topbar') || document.readyState === 'complete', { timeout: 60_000 });
   await dismissAiSetup(page);
+  if (WITH_VIDEO) state.videos = [await importVideo(page, 'pre')];
   await page.evaluate(() => window.dispatchEvent(new Event('pc-open-project-settings')));
   await page.waitForSelector('[data-pc="collab-section"]', { visible: true, timeout: 20_000 });
   await typeInto(page, '#pc-proj-name', state.name);
@@ -301,6 +309,11 @@ async function phaseCreate() {
     return t && !t.includes('正在设置') ? t : null;
   }, 40_000, '开启结果');
   if (!check('create.enabled', status.includes('多用户协作已开启。'), { status })) say('create.console', { log: page.consoleLog.slice(-25), net: page.netErrors.slice(-20) });
+  if (WITH_VIDEO) {
+    // 已在共享项目里再导一段(C6.6 的上传路径);开启前那一段看开启时有没有跟着传上去
+    state.videos.push(await importVideo(page, 'post'));
+    state.uploaded = await waitUploaded(page, state.videos);
+  }
   const link = await page.waitForSelector('[data-pc="collab-invite-link"]', { timeout: 15_000 }).then(() => textOf(page, '[data-pc="collab-invite-link"]'));
   state.link = link.trim();
   check('create.link', state.link.startsWith(`${PROXY}/editor#invite=`) && /#invite=[A-Za-z0-9_-]{43}$/.test(state.link), { link: state.link.replace(/invite=.*/, 'invite=<43>') });
@@ -535,8 +548,69 @@ async function phaseRegen() {
   await n.close$();
 }
 
+/** 创建者本机内容库里有没有这些哈希(`GET /api/media/local`) */
+const localHas = (page, hash) => page.evaluate(async (h) => ((await (await fetch(`/api/media/local?hashes=${h}`, { cache: 'no-store' })).json()).hashes ?? []).includes(h), hash);
+
+/** 创建者本机内容库里这个哈希的文件(`out/media/<hash>.<ext>`),回路径或 null */
+const localFile = (hash) => {
+  const dir = path.join(editorData, 'out', 'media');
+  const n = fs.existsSync(dir) ? fs.readdirSync(dir).find((x) => x.toLowerCase().startsWith(hash)) : null;
+  return n ? path.join(dir, n) : null;
+};
+const sha256File = (f) => createHash('sha256').update(fs.readFileSync(f)).digest('hex');
+
+/**
+ * `--with-video`:ffmpeg 出一段 2 秒带声音的视频,经编辑器的导入接口导进创建者的项目。
+ * `tag` 区分开启前导入的(pre)与开启后、已在共享项目里导入的(post)。回 `{ tag, hash }`。
+ */
+async function importVideo(page, tag) {
+  const file = path.join(editorData, `probe-${tag}.mp4`);
+  const ff = spawnSync('ffmpeg', ['-y', '-v', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=1280x720:rate=30', '-f', 'lavfi', '-i', 'sine=frequency=330:sample_rate=48000',
+    '-t', '2', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest', '-metadata', `comment=${stamp}-${tag}`, file], { windowsHide: true });
+  if (ff.status !== 0) throw new Error(`ffmpeg 出样本失败:${String(ff.stderr).slice(-400)}`);
+  const name = `probe-${tag}-${stamp}.mp4`;
+  const got = await page.evaluate(async (b64, name) => {
+    const { getState } = await import('/src/store/project.ts');
+    const bin = atob(b64);
+    const arr = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+    const io = await import('/src/editor/io/index.ts');
+    await io.importVideoFiles([new File([arr], name, { type: 'video/mp4' })]);
+    const find = () => getState().project.media.find((x) => x.name === name);
+    for (let i = 0; i < 150 && (!find() || find().pending || !find().hash); i++) await new Promise((r) => setTimeout(r, 200));
+    const m = find();
+    return m ? { hash: m.tiers?.original ?? m.hash, url: m.url } : null;
+  }, fs.readFileSync(file).toString('base64'), name);
+  const hash = got?.hash ?? '';
+  const f = hash ? localFile(hash) : null;
+  // 本机内容库按内容寻址:库里那一份的 sha256 就是它的哈希(导入可能重封装过,不和样本文件比)
+  check(`video.${tag}.imported`, !!hash && !!f && sha256File(f) === hash, { got, file: f && path.basename(f) });
+  return { tag, hash };
+}
+
+/** 开启之后:等视频原尺寸传到托管端素材服务;回传上去了的那些 */
+async function waitUploaded(page, videos) {
+  const up = [];
+  for (const v of videos) {
+    if (!v.hash) continue;
+    const st = await waitFor(async () => (await combo.stores.media.stat(v.hash)) ?? null, 90_000, `${v.tag} 的原尺寸传到托管端`).catch((e) => ({ error: String(e.message) }));
+    check(`video.${v.tag}.uploaded-to-hosted`, !st?.error, { hash: v.hash.slice(0, 12), stat: st });
+    if (!st?.error) up.push(v);
+  }
+  const queue = await page.evaluate(async () => { try { return await (await fetch('/api/media/upload-queue', { cache: 'no-store' })).json(); } catch (e) { return { error: String(e) }; } });
+  say('video.upload-queue', { queue: JSON.stringify(queue).slice(0, 800) });
+  return up;
+}
+
 async function phaseCancel() {
   const page = state.creatorPage;
+  const pull = WITH_VIDEO ? (state.uploaded ?? []) : [];
+  for (const v of pull) {
+    // 删掉创建者本机内容库里的这一份,好让「取消」真的要从托管端拉回来
+    const f = localFile(v.hash);
+    if (f) fs.rmSync(f, { force: true });
+    check(`video.${v.tag}.local-removed`, !!f && !(await localHas(page, v.hash)), { removed: f && path.basename(f) });
+  }
   await page.evaluate(() => window.dispatchEvent(new Event('pc-open-project-settings')));
   await page.waitForSelector('[data-pc="collab-toggle"]', { visible: true, timeout: 15_000 });
   await page.click('[data-pc="collab-toggle"]');
@@ -545,13 +619,22 @@ async function phaseCancel() {
   const status = await waitFor(async () => {
     const t = await textOf(page, '[data-pc="collab-status"]');
     return t && !t.includes('正在把项目内容拉回本机') ? t : null;
-  }, 60_000, '取消结果');
+  }, 150_000, '取消结果');
   check('cancel.done', status.includes('多用户协作已关闭，内容已拉回本机。'), { status });
   await shot(page, 'cancel-1-done');
   const gone = await lookupProject({ base: DOC_DIRECT, name: state.name }).then(() => 200, (e) => e.status);
   check('cancel.hosted-deleted', gone === 404, { lookup: gone });
   const members = await page.$('[data-pc="members-button"]');
   check('cancel.back-to-local', !members);
+  if (WITH_VIDEO) {
+    const still = await page.evaluate(async () => (await import('/src/store/project.ts')).getState().project.media.map((m) => m.tiers?.original ?? m.hash));
+    for (const v of pull) {
+      const f = localFile(v.hash);
+      check(`video.${v.tag}.pulled-back`, (await localHas(page, v.hash)) && !!f && sha256File(f) === v.hash, { file: f && path.basename(f) });
+      check(`video.${v.tag}.still-referenced`, still.includes(v.hash));
+    }
+    check('video.some-pulled', pull.length > 0, { pulled: pull.map((v) => v.tag) });
+  }
 }
 
 /**
@@ -562,8 +645,8 @@ function staticScan() {
   const hits = new Map();
   const dir = path.join(DIST, 'assets');
   for (const f of fs.readdirSync(dir)) {
-    if (!/.(js|mjs|css|html)$/.test(f)) continue;
-    for (const m of fs.readFileSync(path.join(dir, f), 'utf8').matchAll(//api/[A-Za-z0-9_-/]*/g)) hits.set(m[0], (hits.get(m[0]) ?? 0) + 1);
+    if (!/\.(js|mjs|css|html)$/.test(f)) continue;
+    for (const m of fs.readFileSync(path.join(dir, f), 'utf8').matchAll(/\/api\/[A-Za-z0-9_\-/]*/g)) hits.set(m[0], (hits.get(m[0]) ?? 0) + 1);
   }
   say('online.static-scan', { distinct: hits.size, total: [...hits.values()].reduce((a, b) => a + b, 0), paths: [...hits.keys()].sort() });
 }
