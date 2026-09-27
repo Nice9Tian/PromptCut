@@ -1675,10 +1675,12 @@ export default function StageView() {
               if (!bake?.ready) return;
               const t0 = realNow();
               for (;;) {
-                await waitForFrameWork().catch(() => {});
+                // 等的时候照预渲染的 waitFrameReady 继续给拍(同一时刻,不推时间):靠 rAF 的异步装载要拍才能走完
+                const pause = () => new Promise<void>((r) => (window.__pcRealSetTimeout ?? window.setTimeout)(r, 4));
+                await Promise.race([waitForFrameWork().catch(() => {}), pause()]);
                 document.documentElement.getBoundingClientRect();
-                await document.fonts.ready;
-                await Promise.all([...document.images].filter((img) => img.getAttribute("src")).map((img) => img.decode().catch(() => {})));
+                await Promise.race([document.fonts.ready, pause()]);
+                await Promise.race([Promise.all([...document.images].filter((img) => img.getAttribute("src")).map((img) => img.decode().catch(() => {}))), pause()]);
                 if (!frameWorkStatus().length && document.fonts.status === "loaded") break;
                 if (realNow() - t0 > 5000) { readyStuck.push({ at: clock.now(), work: frameWorkStatus().map((w) => w.label).slice(0, 4), fonts: document.fonts.status }); break; }
                 clock.tick(clock.now());
