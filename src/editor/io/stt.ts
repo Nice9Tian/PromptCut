@@ -1,7 +1,7 @@
 import type { Transcript, TranscriptSegment } from "../../kernel/project";
 import { getMediaFile } from "./index";
 import { actions } from "../../store/project";
-import { onlinePage, ONLINE_UNSUPPORTED } from "../../online/pageFlag";
+import { onlinePage, onlineUnsupported } from "../../online/pageFlag";
 
 export interface SttEngineStatus {
   installed: boolean;
@@ -47,7 +47,7 @@ export interface SttStatus {
 /** 查询 STT 服务状态(Python 版本、引擎是否安装、可用模型等) */
 export async function sttStatus(): Promise<SttStatus> {
   // 在线浏览器模式没有本机语音识别(那要编辑器进程与内置 Python)
-  if (onlinePage()) throw new Error(ONLINE_UNSUPPORTED);
+  if (onlinePage()) throw new Error(onlineUnsupported("语音识别"));
   const res = await fetch("/api/stt/status");
   if (res.status === 503) {
     const data = await res.json().catch(() => ({}));

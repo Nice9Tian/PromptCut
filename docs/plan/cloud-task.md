@@ -8,7 +8,7 @@
 
 ## 读法
 
-- **步骤名的对应**：正文里的「第 1 / 2 / 2b / 3 步」都已落地（提交 `b5c65dc`）；「3b 步」「A2(8)」= R1（差异样式内联），已完成（`e67390e`）；「第 4 步」= `docs/archive/restructure_planning/r2-r7-task.md` 的 R2～R7，加 R8（轨道流）、R9（共享 WebGL 渲染器），**都还没做**。本文是「第 5～10 步」。正文提到 C、E、G、K、M 各节的地方，只需要知道它们是别的步骤的内容：**`streams` 开关在 R8 之前恒为关**，**canvas 卡在 R9 之前照旧在主线程自己画**。
+- **步骤名的对应**：正文里的「第 1 / 2 / 2b / 3 步」都已落地（提交 `b5c65dc`）；「3b 步」「A2(8)」= R1（差异样式内联），已完成（`e67390e`）；「第 4 步」= `docs/archive/restructure_planning/r2-r7-task.md` 的 R2～R7，加 R8（轨道流）、R9（共享 WebGL 渲染器），**都已合入 main**（R2～R7 见 `TODO.md`「已做步骤的遗留」；R8 `787f7d9`，R9 `eff2011`；2026-09-27 勘误，C10 契约第 19 节）。本文是「第 5～10 步」。正文提到 C、E、G、K、M 各节的地方，只需要知道它们是别的步骤的内容：正文里「`streams` 开关在 R8 之前恒为关」「canvas 卡在 R9 之前照旧在主线程自己画」这类写法是 R8、R9 合入之前的口径，现在轨道流与共享 WebGL 渲染器都已在代码里。
 - **本文的步骤依赖**：第 5 步依赖第 2 步已落地的素材键与路由，只建素材服务空壳与底层 API 契约；第 6 步依赖第 5 步的素材服务 API，以及 R1（快照格式与 `snapshotCode` 已定）、R6（A3a 的目录形状、C3 的就绪索引）——A1 的两档与换档、A5、A3b 整体都在第 6 步；第 7 步（B）依赖第 6 步的本机文档服务；第 7b 步（I）依赖 R7 的 `interactive` 参数、A7 的镜像插件和第 6 步的本机文档服务；原第 8 步（D3 的预渲染部分）已移出本计划，见分步表下的说明；第 9 步（F1 / F3 / F4）排在第 5、6 步之后；第 10 步（L）依赖 J 全部、A3b、K 全部，是最后一步。
 - **两个服务都位置无关、部署不设限**（2026-09-24，路线 B）：**素材服务**和**文档服务**都是后端进程，各自可以是用户机上的本地守护进程、局域网里的另一台机器（如 NAS），或公网云端，两者任意组合（例如文档服务在公网云端、素材服务在局域网 NAS 或本机）。页面、浏览器、Agent 只认服务 API，不认它跑在哪。按所连服务的位置说「本地文档服务」「远程文档服务」「本地素材服务」「远程素材服务」，这两组词取代旧词「本地模式」「云端模式」；不存在「两个服务同在本机或同在云端」的整体模式。正文里「云端」「本机」只用来说部署位置，协议两边完全一样。
 - **行号**：正文里的 `文件:行号` 是 **2026-09-22 在 `048074c` 上逐条打开核对过的**（少数几处明确标注「`b5c65dc` 的行号，仅作提示」）。这些文件之后还会被 R1～R9 动，**行号只作定位提示，以符号名和引用的代码原句为准**。引用的符号在当前代码里都 grep 得到；标「新」的是本任务要创建的。
@@ -59,7 +59,7 @@
 | **镜像插件** | 两个进程都挂 | `vite-plugin-mirror.ts:158`：按 `{session, localRev}` 存最近 8 版项目（`mirror-store.mjs`），接收两层 diff；三个端点 `/api/data/project` `:163`、`/api/data/diff` `:196`、`/api/data/playhead` `:223`；`ensureMirror:60`（`user` / `full` 模式缺哪版就按 `PROMPTCUT_EDITOR_URL` 回拉）、`repushMirror:121`（重启补推）。**Agent 的查询走它的整份推那条路**（I2） | 已落地 |
 | **在线浏览器模式** | 用户浏览器 | 只有页面、没有本机进程（`docs/semantics/product/platforms.md`「在线浏览器模式」）：文档走远程文档服务、素材打远程素材服务（云端，或放本机时的创建者本机，两者可以不在一处）、Agent 走 Agent 云端；后台 iframe 当预渲染者（L1），快照存 IndexedDB（L2）并照 A3b 推送到素材服务，素材服务里的快照直接进热舞台（L3），没有流（L4）；合并分发、在线重型控件服务、连接发现 / 信令只留接口（L5） | 不存在 |
 | **部署位置** | 泛指 | 部署位置，不是角色。**两个服务** = 文档服务（+ 内容库）+ 素材服务，各自独立选位置、任意组合：**本地文档服务** / **远程文档服务**，**本地素材服务** / **远程素材服务**（这两组词取代旧词「本地模式」「云端模式」；不存在「两个服务同在本机或同在云端」的整体模式）。连本地素材服务时素材照样入库、生成素材小尺寸、推送预渲染产物，只是 I/O 在本地、不出本机或局域网。切换所连接的服务是用户的显式操作，F4 负责。素材那一侧一律说「素材服务」，要强调位置时说「本地素材服务」「远程素材服务」。**Agent 云端** = Agent 服务端 + Agent 云端环境，只是两个服务的一个客户端 | 不存在 |
-| **连接发现 / 信令** `[DRAFT]` | 文档服务 | 预留接口，**只留接口、不实现**（`docs/semantics/mechanism/document-service.md`「连接发现」）：将来由文档服务在 B0 的那条 WebSocket 上交换本地端与移动端（或其它设备）之间的地址映射，帮它们建立直连（局域网或 P2P），之后字节在两端之间直接走素材服务的 HTTP API。**文档服务不承担素材传输流量**，不转发、不中继；成员直连不到主机时的中继是云端托管服务的职责，属于 `docs/plan/direct-connect-plan.md`（2026-09-26 改定）。消息占位见 L5 第 3 条 | 不存在 |
+| **连接发现 / 信令** `[DRAFT]` | 文档服务 | 预留接口，**只留接口、不实现**（`docs/semantics/mechanism/document-service.md`「连接发现」）：将来由文档服务在 B0 的那条 WebSocket 上交换本地端与移动端（或其它设备）之间的地址映射，帮它们建立直连（局域网或 P2P），之后字节在两端之间直接走素材服务的 HTTP API。**文档服务不承担素材传输流量**，不转发、不中继；成员直连不到主机时的中继是云端托管服务的职责，属于 `docs/plan/direct-connect-plan.md`（2026-09-26 改定）。~~消息占位见 L5 第 3 条~~〔2026-09-27：移出本计划，设备间直连信令归云端托管服务的牵线，见 `docs/plan/direct-connect-plan.md`；文档服务上不加 `peer.*`（C10 契约第 11 节）〕 | 不存在 |
 | **面向平台** | 全部 | 六个平台只有两种运行形态（`docs/semantics/product/platforms.md`，第 2～6 项共用在线浏览器模式的全部机制）：**桌面版 APP** = 桌面运行环境（本地、远程的服务都可连，可混合）；**桌面浏览器 / iPad 浏览器 / iPad APP / 手机浏览器 / 手机 APP** = 在线浏览器模式。APP 壳里没有 Node 也没有预渲染进程。**iPad APP 与手机 APP 的原生壳本任务先不做**，只保证在线浏览器模式的代码不依赖平台名。**Agent 端**（Agent 服务端 + 预渲染进程的 `agent` / `full` 模式）面向 Windows、Linux、Ubuntu，差异只在无头 Chrome 的启动参数与系统字体、ffmpeg 可用的编码器、路径与端口文件的形状，见 I0 | 新增 |
 
 ---
@@ -166,6 +166,8 @@ playbackUrl(
 ```
 
 同一共享键的清单被几端并发写时，**后写的赢，被覆盖的一方收到通知**，不加锁、不做按帧合并（文末决议 11）。
+
+> **现行键形（2026-09-27 勘误，C10 契约第 19 节）**：上面「`key` = 共享键 / `<entry.key>/<共享键>`」是第 6 步动工前的推演。落地后清单在内容库里的键是 **`<resultKey>:<from>-<to>`**（按段；`server/artifact-transfer.mjs` 的 `manifestKeyOf`），`resultKey = sha256(内容键 + "\n" + 环境指纹)`（M4：环境指纹进结果键）。同一张卡只由一种环境产：**卡片级指纹锁**（M4，锁键 `<kind>:<内容键>`，谁最先产出谁得锁，别的环境不能替锁定方产剩余帧），跨机复用靠这把锁（`Master-Execution-Plan.md` 第 1 节）。
 
 `pending`（`[DRAFT]`）取代原来的 `skipped`（原义「已产但故意不上云」随新规则作废）。下载端见到 `pending`：**有预渲染者的端**（桌面运行环境、在线浏览器模式的 L1）直接本地预渲染、**不等**；**没有渲染能力的端**那一层透明，等推送到了再补。
 
@@ -373,7 +375,7 @@ lane 名（`user` / `agent` / `background`，`frame-pipeline.mjs:90`）和模式
 
 编辑器分两种运行环境：**桌面运行环境**（桌面版或本机 dev server：有编辑器进程和预渲染进程）和**在线浏览器模式**（编辑器直接跑在用户浏览器里，只有页面）。在线浏览器模式请求不到预渲染进程：文档走远程文档服务（B0 的 WebSocket），素材打远程素材服务（A1 的跨源访问 + Range；可以是云端，或放本机时的创建者本机），Agent 走 Agent 云端（`agent` 模式的进程在服务器，I）；**预渲染者是后台 iframe**。宿主能力由 J4 的 `hostCapabilities` 报给父页（协议在 r2-r7），页面代码只按能力分支。
 
-- **L1 后台 iframe 当预渲染者（J4 的 `bake` 角色）。** `setRole('back', { job: 'bake' })`：后台舞台在闲时——探针队列空，且页面可见时用 `requestIdleCallback` 的窗口、不可见时按 E4 每 8 帧让出——按 C2 的优先级（锚帧先、播放头前方优先、其余逐帧）对预渲染集合（`plan.prerenderSet`）里的片段逐帧推，**每帧调页面协议 `window.__pcCreateSnapshot()` 生成本控件的 HTML 快照**（取回包的 `controls` 项），和 K1 探针同一套机器，只是不计时、持续跑。用户一操作（`setTime` / `play` / `setProject` 到达 `front`）就让路，空闲再续。产物按 A3a 的档位 / 键规则写进 L2 的库，并照 A3b 推送到素材服务（后台 iframe 也是预渲染者，产物同样无条件入库）。
+- **L1 后台 iframe 当预渲染者（J4 的 `bake` 角色）。**〔**并入 M7**（2026-09-27，C10 契约第 8 节）：语义写的是后台舞台「从文档服务的任务队列认领」快照任务，分布式队列设计 Q1 已定页面不移植键的计算，下面的自驱写法不做，M7 按队列认领实现。节拍按 C10 契约第 2 节（探针 P2）：**父页判空闲，舞台里用 `setTimeout` 逐帧推进；页面隐藏就停**——取代下文「可见时用 rIC 窗口、不可见时每 8 帧让出」。〕 `setRole('back', { job: 'bake' })`：后台舞台在闲时——探针队列空，且~~页面可见时用 `requestIdleCallback` 的窗口、不可见时按 E4 每 8 帧让出~~（已改为父页判空闲、舞台用 `setTimeout` 逐帧；页面隐藏就停）——按 C2 的优先级（锚帧先、播放头前方优先、其余逐帧）对预渲染集合（`plan.prerenderSet`）里的片段逐帧推，**每帧调页面协议 `window.__pcCreateSnapshot()` 生成本控件的 HTML 快照**（取回包的 `controls` 项），和 K1 探针同一套机器，只是不计时、持续跑。用户一操作（`setTime` / `play` / `setProject` 到达 `front`）就让路，空闲再续。产物按 A3a 的档位 / 键规则写进 L2 的库，并照 A3b 推送到素材服务（后台 iframe 也是预渲染者，产物同样无条件入库）。
 
 - **L2 页面内快照库（J3 的第二个实现 `IdbSnapshotSource`）。** IndexedDB 一库三表：
 
@@ -383,7 +385,7 @@ lane 名（`user` / `agent` / `background`，`frame-pipeline.mjs:90`）和模式
 
   `subscribeReady` **由 L2 的每一次写入触发**（不经 SSE），不管这次写入来自 L1 的后台 iframe 还是 L3 的云端下载；`fetchSnapshot` 读 IndexedDB。配额和 LRU 同 A3b；换项目不清库，按键命中就复用。
 
-- **L3 素材服务里的快照直接进热舞台。** 打开项目时按每张卡的键（共享档是共享键，本地档是 `<entry.key>/<共享键>`，`[DRAFT]`）查文档服务的快照清单（内容库的 `content.get { kind: 'snapshot-manifest' }`），缺的块从素材服务拉（A3b 的下载路）写进 L2、`ranges` 立即就绪——**别人预渲染过的 Motion 卡在这台浏览器上不用重新预渲染**。清单里 `pending` 的区间不等，直接交给 L1 本地产。L1 在这台浏览器上预渲染出的产物照 A3b 推送。
+- **L3 素材服务里的快照直接进热舞台。**〔**页面不算键，按层表**（2026-09-27，C10 契约第 5 节）：页面按渲染节点写的层表 `layers:<项目 id>` 找清单、按清单取块；层表对不上的层当没有预渲染结果。下面「按每张卡的键查清单」是早先的写法。〕 打开项目时按每张卡的键（共享档是共享键，本地档是 `<entry.key>/<共享键>`，`[DRAFT]`）查文档服务的快照清单（内容库的 `content.get { kind: 'snapshot-manifest' }`），缺的块从素材服务拉（A3b 的下载路）写进 L2、`ranges` 立即就绪——**别人预渲染过的 Motion 卡在这台浏览器上不用重新预渲染**。清单里 `pending` 的区间不等，直接交给 L1 本地产。L1 在这台浏览器上预渲染出的产物照 A3b 推送。
 
 - **L4 没有流。** 浏览器里没有 ffmpeg，重卡播放时贴不了流。**DOM 重卡和 canvas 重卡同一规则：按拍换 HTML 快照**（`.pc-snapshot` 平面的 `innerHTML` 每拍替换一次——这是「逐帧换快照播放」在本任务里唯一允许的地方，不受 C4 的 33 ms 节流；canvas 卡的快照里画布已经是 `<img>`）；**实测换帧成本装不下预算的重卡显示占位符**（2026-09-26 按语义 `product/platforms.md`「在线浏览器模式」、`product/rendering.md`「兜底顺序」改，原写「透明」）；暂停态照 K5 追到活渲（低内存档除外，见 L6）。
 
@@ -391,24 +393,22 @@ lane 名（`user` / `agent` / `background`，`frame-pipeline.mjs:90`）和模式
 
   **换帧成本进预算**：`planPipelines` 的 `opts.deadMs` 从标量放宽成 `number | ((identityKey: string) => number)`；浏览器模式传函数，背后是一张**只在本次会话生效的 `swapMs` 表**（不进 `costs`，因为它量的是这台机器这一次的 DOM 替换速度）。第一次播放前用常量 `SWAP_MS = 3` 估，播放中按 K6 的每拍每卡计时实测后替换。
 
-- **L5 只留接口**（`docs/semantics/product/platforms.md`「预留的接口」的三条）。
+- **L5 只留接口**（`docs/semantics/mechanism/platforms.md`「预留的接口」的三条；2026-09-27 勘误出处，C10 契约第 19 节）。
 
   1. **合并分发**：远程素材服务在 `PUT snap/<hash>` / `PUT px/<hash>`（A3b，`px` 是 `[DRAFT]`）之外加 `POST merge/<projectId>/<共享键>`——任何客户端把自己预渲染出的共享档块和清单片段推上去，素材服务按键合并去重、清单走文档服务按 `projectRev` 分发。**本任务只实现「上传自己的」，`merge` 端点回 `501`。**
-  2. **在线重型控件渲染服务**：接口形状 = `agent` 模式预渲染进程的 `see_frames` / `bake_card`，再加 `GET stream/<streamKey>/<segment>`。浏览器模式的 `streamPlayer.ts` 照 J3 的思路把取流抽成 `StreamSource` 接口：
+  2. **在线重型控件渲染服务**：接口形状 = `agent` 模式预渲染进程的 `see_frames` / `bake_card`，再加取轨道流分段。取流的抽象就是 R8 已有的 `StreamSource`（`src/render/streamPlayer.ts`；2026-09-27 按 R8 落地的方法名对齐，C10 契约第 11 节）：
 
      ```ts
      interface StreamSource {
-       subscribeIndex(session: string, localRev: number,
-                      onMessage: (m: StreamIndexMessage) => void): () => void;
-       fetchInit(streamKey: string, signal?: AbortSignal): Promise<ArrayBuffer>;      // init.mp4
-       fetchSegment(streamKey: string, segment: number,
-                    signal?: AbortSignal): Promise<ArrayBuffer>;                      // 一个 fMP4 分段
+       manifest(key: string, signal?: AbortSignal): Promise<StreamManifest>;        // 这条流的分段清单
+       init(key: string, id: string, signal?: AbortSignal): Promise<ArrayBuffer>;   // init.mp4
+       segment(key: string, file: string, signal?: AbortSignal): Promise<ArrayBuffer>; // 一个 fMP4 分段
      }
      ```
 
-     分段号就是 G2 的分段号（帧号 = 分段号 × 15 + 样本序号），签名比对由调用方按索引消息里的 `signature` 做（G6）。**本任务只实现本地 HTTP 那一份（R8），浏览器模式下没有实现**——拿不到 `StreamSource` 就走 L4。**这两个名字（`streamKey` 的拼法、索引消息的字段）要和 R8 最终定下来的索引与分段命名对齐**，R8 定了之后回来改这里。
+     `key` 是流的结果键（`streamKey`），`file` 是清单里分段的文件名；就绪经 C3 就绪索引里 `kind: 'stream'` 的层走（分段号为区间单位）。**本任务只实现本地 HTTP 那一份（R8 的 `HttpStreamSource`），浏览器模式下没有实现**——拿不到 `StreamSource` 就走 L4。在线服务将来实现同一个接口即可，不写代码。
 
-  3. **连接发现 / 信令** `[DRAFT]`（`docs/semantics/mechanism/document-service.md`「连接发现」；组件表「连接发现 / 信令」行）：文档服务在 B0 的那条 WebSocket 上预留两条消息——`peer.announce { deviceId, addrs: string[] }`（本端报出自己可被直连的素材服务地址）和 `peer.lookup { deviceId }` → `{ addrs: string[] }`（向文档服务要对端的地址映射）——供本地端与移动端（或其它设备）建立局域网或 P2P 直连；拿到地址后字节直接走对端素材服务的 HTTP API（A1，已允许跨源访问）。**文档服务不承担素材传输流量**，不转发、不中继字节；中继是云端托管服务的职责，属于 `docs/plan/direct-connect-plan.md`（2026-09-26 改定）。**本任务只留接口：两条消息一律回 `{ error: 'NOT_IMPLEMENTED' }`**；消息名和字段是占位，写代码时做最终 Review。
+  3. **设备间直连信令**：**移出本计划，见 `docs/plan/direct-connect-plan.md`**（2026-09-27，C10 契约第 11 节）。按语义，设备间的地址交换归云端托管服务的牵线（`docs/semantics/mechanism/platforms.md`「预留的接口」、`mechanism/document-service.md`），文档服务上不加 `peer.*` 消息，也不承担素材传输流量。~~原写法：文档服务在 B0 的 WebSocket 上预留 `peer.announce` / `peer.lookup` 两条消息、一律回 `NOT_IMPLEMENTED`。~~
 
 - **L6 低内存档（手机、iPad 浏览器）**（2026-09-26 第二轮加，语义 `product/platforms.md`「面向的平台」；落在主执行计划 C10a）。页面按宿主能力判为低内存档时：
   1. **看**：只看预渲染小尺寸与素材小尺寸，平时不拉原尺寸（素材原尺寸与预渲染原尺寸都不拉）。
@@ -420,7 +420,9 @@ lane 名（`user` / `agent` / `background`，`frame-pipeline.mjs:90`）和模式
 
 ### L 节验收
 
-纯浏览器（没有本机进程）打开一个含 3 张重 Motion 卡的共享项目：清单命中的卡立刻有快照、`ranges` 就绪；没命中的卡后台 iframe 在 30 秒内预渲染完 10 秒时间轴的锚帧，IndexedDB 里出现对应条目；播放时重卡按拍换快照、主文档 Long Task 为 0；关掉再开同一项目不重新预渲染（`costs` 表里是 `mode=build` 的记录）；`POST merge/...` 回 `501`；用户拖动期间后台 iframe 的预渲染让路（拖动 3 秒内不新增条目）。另加低内存档的断言（L6）：只拉两种小尺寸、不起后台 iframe、暂停不追活渲、逐帧导出用原尺寸。另加两条断言：**含用户卡 / 图卡的项目在时间轴上给出「该模式暂不支持自定义卡」的提示**，那些片段显示「电脑 + 离线」图标和「需要本地 PC 渲染辅助」、不透明（2026-09-26 按语义改，原写「透明」）；**素材输入的音频图卡报错「该模式暂不支持素材输入的音频图卡」**。
+纯浏览器（没有本机进程）打开一个含 3 张重 Motion 卡的共享项目：清单命中的卡立刻有快照、`ranges` 就绪；播放时重卡按拍换快照、主文档 Long Task 为 0；关掉再开同一项目不重新测量（`costs` 表里是 `mode=build` 的记录）；`POST merge/...` 回 `501`。另加低内存档的断言（L6）：只拉两种小尺寸、不起后台 iframe、停下时把当前一帧画出（有时限）、逐帧导出用原尺寸。另加一条断言：**含用户卡 / 图卡的项目在时间轴上给出「该模式暂不支持自定义卡」的提示**，那些片段显示「电脑 + 离线」图标和「需要本地 PC 渲染辅助」、不透明（2026-09-26 按语义改，原写「透明」），该层不取别人预渲染好的快照。
+
+（2026-09-27 按 C10 契约第 8、9 节改：「没命中的卡后台 iframe 在 30 秒内预渲染完 10 秒时间轴的锚帧，IndexedDB 里出现对应条目」「用户拖动期间后台 iframe 的预渲染让路（拖动 3 秒内不新增条目）」两条随 L1 **移到 M7**，改写为按队列认领的说法，见 `Master-Execution-Plan.md` 第 7 节 M7；「素材输入的音频图卡报错『该模式暂不支持素材输入的音频图卡』」**删去**：图卡一律显示上面的图标，不另报错。C10 的完整验收以 `c10-contract.md` 第 20 节为准。）
 
 ---
 
@@ -466,7 +468,7 @@ lane 名（`user` / `agent` / `background`，`frame-pipeline.mjs:90`）和模式
 - 单流时间分层做素材的渐进补全（H.264 没有；VP9 / AV1 的 temporal layer 只能经 WebCodecs 用、`<video>` 不认）。本任务的渐进就是两档换档。
 - 整件 `PUT media/<hash>`（上传一律分片）。
 - 素材字节或预渲染产物走文档服务的 WebSocket（大件一律素材服务，B0）；文档服务转发或中继素材字节（连接发现 / 信令只交换地址）。
-- 实现连接发现 / 信令、P2P 直连（L5 第 3 条只留接口）。
+- 实现连接发现 / 信令、P2P 直连（移出本计划，见 `docs/plan/direct-connect-plan.md`；2026-09-27）。
 - 连本地素材服务时跳过入库、跳过预渲染产物推送，或绕过素材服务 API 直接读写本地内容库；拿本机缓存判「是否传完」；在项目文档或 `.proc` 里记同步状态（`uploaded` 一类字段，唯一事实来源是当前连接的素材服务）；绕过文档服务擅自改 store；在没拿到最新操作的 ack 之前写 `.proc`。
 - 让文档服务写 `.proc`（成文和写盘都留在页面）。
 - `agent` 进程做后台预渲染、锚帧、轨道流（只接查询；两种部署的 `agent` 进程都只接收 Agent 服务端推来的整份项目，I2 的正路）。

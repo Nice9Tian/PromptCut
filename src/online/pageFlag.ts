@@ -16,5 +16,16 @@ export function markOnlinePage(): void {
   (globalThis as Record<string, unknown>)[KEY] = true;
 }
 
-/** 在线浏览器模式里置灰的入口用的说明(与 `TopBar.tsx` 的 `ONLINE_OFF` 同一句) */
-export const ONLINE_UNSUPPORTED = "在线浏览器模式暂不支持，请在桌面版里做";
+/**
+ * 在线浏览器模式里置灰的入口悬停时的说明(C10 契约第 10 节、第 17 节表 A):
+ * 「在线浏览器模式暂不支持{入口名}，请在电脑上的 PromptCut 里使用。」
+ * 入口名用用户在界面上看到的叫法(「导入媒体」「语音识别」「配音」……)。
+ */
+export const ONLINE_UNSUPPORTED_PREFIX = "在线浏览器模式暂不支持";
+export const ONLINE_UNSUPPORTED_SUFFIX = "，请在电脑上的 PromptCut 里使用。";
+export function onlineUnsupported(entry: string): string {
+  return `${ONLINE_UNSUPPORTED_PREFIX}${entry}${ONLINE_UNSUPPORTED_SUFFIX}`;
+}
+
+/** 时间轴上含用户卡或图卡的片段的徽标悬停文案(语义原文,`product/platforms.md`「在线浏览器模式」) */
+export const ONLINE_CUSTOM_CARD_TEXT = "该模式暂不支持自定义卡";

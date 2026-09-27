@@ -211,18 +211,22 @@ function mediaEntries(project: Project): { hash: string; file: string }[] {
 export async function packProcp(): Promise<Blob> {
   const { serializeProc } = await import("./proc.ts");
   const { getState } = await import("../../store/project.ts");
-  return packProcpFrom(serializeProc(), getState().project);
+  // 桌面:本地内容库的 /@media/<hash>;在线页面:远程素材服务上的原尺寸(带只读票据),还没就绪给 ""(跳过)
+  const { originalMediaUrl } = await import("../../render/mediaTier");
+  return packProcpFrom(serializeProc(), getState().project, (hash) => originalMediaUrl({ url: `/@media/${hash}`, hash }));
 }
 
 /**
  * 装包本体。和 store 分开是为了能单测(见 procp.test.mjs)—— 它只认一份编排文本
  * 和一份 Project,素材从 /@media/<hash> 取。
  */
-export async function packProcpFrom(procText: string, project: Project): Promise<Blob> {
+export async function packProcpFrom(procText: string, project: Project, urlOf: (hash: string) => string = (hash) => `/@media/${hash}`): Promise<Blob> {
   const entries: PackEntry[] = [{ name: PROC_ENTRY, blob: new Blob([procText], { type: "application/json" }) }];
   for (const { hash, file } of mediaEntries(project)) {
     try {
-      const res = await fetch(`/@media/${hash}`);
+      const url = urlOf(hash);
+      if (!url) { console.warn(`[procp] 素材服务还没就绪,跳过 ${hash}`); continue; }
+      const res = await fetch(url);
       if (!res.ok) { console.warn(`[procp] 本地内容库里没有 ${hash},跳过`); continue; }
       entries.push({ name: MEDIA_PREFIX + file, blob: await res.blob() });
     } catch (err) {

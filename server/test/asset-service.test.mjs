@@ -401,3 +401,19 @@ test('预检中间件:只答素材服务路由的 OPTIONS(媒体插件把它插�
   assert.equal(await run('OPTIONS', '/api/ai/config'), 'next');
   assert.equal(await run('GET', `/api/asset/media/${h}`), 'next');
 });
+
+test('预留的合并分发(C10 契约第 11 节):POST merge/<projectId>/<共享键> 回 501,只占位、不碰数据层', async () => {
+  const before = fs.readdirSync(media.mediaDir(projectRoot)).sort();
+  const r = await fetch(`${base}/merge/proj-1/${'ab'.repeat(32)}`, { method: 'POST', body: '{"any":"thing"}', headers: { 'Content-Type': 'application/json', Origin: 'http://192.168.1.50:8080' } });
+  assert.equal(r.status, 501);
+  assert.deepEqual(await r.json(), { ok: false, error: 'not-implemented' });
+  assert.equal(r.headers.get('access-control-allow-origin'), '*');
+  // projectId、共享键都不解析:任意形状照样 501
+  assert.equal((await fetch(`${base}/merge/${encodeURIComponent('不是项目')}/x`, { method: 'POST' })).status, 501);
+  // 别的方法 405;少一段不是这条路由
+  const g = await fetch(`${base}/merge/proj-1/k`);
+  assert.equal(g.status, 405);
+  assert.equal(g.headers.get('allow'), 'POST');
+  assert.notEqual((await fetch(`${base}/merge/proj-1`, { method: 'POST' })).status, 501);
+  assert.deepEqual(fs.readdirSync(media.mediaDir(projectRoot)).sort(), before, '没有写进内容库');
+});

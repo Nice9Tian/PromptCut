@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useState, useRef } from "react";
 import { createPortal } from "react-dom";
 
-export interface ContextMenuItem { label: string; onClick: () => void; danger?: boolean; disabled?: boolean; hint?: string }
+export interface ContextMenuItem { label: string; onClick: () => void; danger?: boolean; disabled?: boolean; hint?: string; /** 悬停说明(置灰的项说清为什么点不了) */ title?: string }
 
 export function ContextMenu({ x, y, items, onClose }: { x:number; y:number; items:ContextMenuItem[]; onClose:()=>void }) {
   const [pos, setPos] = useState({ left: x, top: y });
@@ -76,6 +76,7 @@ export function ContextMenu({ x, y, items, onClose }: { x:number; y:number; item
           role="menuitem"
           data-pc-item={item.label}
           disabled={item.disabled}
+          title={item.title}
           onClick={() => {
             if (item.disabled) return;
             onClose();

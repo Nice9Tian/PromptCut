@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { useStore, getState } from "../../store/project";
 import { importVideoFiles } from "../io";
+import { onlinePage, onlineUnsupported } from "../../online/pageFlag";
 
 export interface SpeakerPickerProps {
   open: boolean;
@@ -19,6 +20,10 @@ function fmtDuration(sec?: number): string {
 /**
  * 口播视频选择器弹窗:
  * 支持从现有素材库选取视频，或直接从本地上传并写入 clip 参数。
+ *
+ * 交出去的是素材的身份 `m.url`(`/@media/<hash>`,项目数据),不是取字节的地址:在线页面也照旧交它,
+ * 不能换成带票据的远程地址写进项目(票据会过期、别的成员用不了)。取字节时由消费方按档换地址。
+ * 在线浏览器模式没有页面侧上传(C10 契约第 10 节),「从本地文件导入」置灰。
  */
 export function SpeakerPicker({ open, onClose, onSelect }: SpeakerPickerProps) {
   const media = useStore((s) => s.project.media);
@@ -127,7 +132,9 @@ export function SpeakerPicker({ open, onClose, onSelect }: SpeakerPickerProps) {
           />
           <button
             type="button"
-            onClick={() => fileInputRef.current?.click()}
+            disabled={onlinePage()}
+            title={onlinePage() ? onlineUnsupported("导入媒体") : undefined}
+            onClick={() => { if (!onlinePage()) fileInputRef.current?.click(); }}
             className="w-full h-8 flex items-center justify-center gap-1.5 rounded border border-neutral-700 bg-neutral-800 hover:bg-neutral-700 text-xs text-neutral-200 transition-colors"
           >
             <span>+</span>

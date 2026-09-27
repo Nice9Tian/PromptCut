@@ -35,6 +35,8 @@ import { mirrorKey, pushWanted } from "../render/dataMirror";
 import type { Project, TrackClip } from "../kernel/project";
 import type { StageRole, StageRpcClient } from "../render/stageRpc";
 import { currentPlan } from "./planDispatch";
+import { getCard, userCardSources } from "../kernel/registry";
+import { needsLocalPc, onlineBrowserMode } from "../render/placeholderHost";
 import { planesWithinBudget, rangesHave, SEGMENT_FRAMES, streamPlanesFor, type StreamPlaneRequest } from "../render/streamPlayer";
 
 /** C4：换 DOM 每 rAF 至多一次、间隔 ≥ 33 ms */
@@ -295,6 +297,19 @@ function demoteReady(clipId: string, globalFrame: number, localFrame: number, co
   return false;
 }
 
+/**
+ * 在线浏览器模式下这台设备渲染不了的卡（用户卡、图卡；C10 契约第 9 节 + 第 18 节第 6 条）：
+ * 舞台上常驻「电脑 + 离线」图标（`placeholderHost` 的 `unsupportedHere`），**不贴别人预渲染好的快照**
+ * （`product/rendering.md`「兜底顺序」末条）。所以选帧与投递在这里把它们整个豁免：不进 `heavy`（不抑制）、
+ * 不选帧、不报缺口，快照来源也就不为它们取字节。判法与舞台同一个（`needsLocalPc`）；开关是
+ * `setOnlineBrowserMode`（在线页面的父页由 `Preview` 按 `ONLINE` 设）。桌面恒为 false，照旧。
+ */
+export function exemptOnline(clip: { cardId?: string }): boolean {
+  if (!onlineBrowserMode()) return false;
+  return needsLocalPc(clip.cardId, clip.cardId ? getCard(clip.cardId) : undefined,
+    (cardId) => Object.prototype.hasOwnProperty.call(userCardSources().fileOf, cardId));
+}
+
 /** 这一刻活跃的卡片段（口径同 `Stage` / `FrameScene` 的 live 路：含 LEAD） */
 function activeCardClips(project: Project, t: number): TrackClip[] {
   const out: TrackClip[] = [];
@@ -349,6 +364,7 @@ export function planFeed({ project, t, playing }: Playhead): FeedPlan {
   const clips: { clip: TrackClip; firstFrame: number; count: number }[] = [];
   for (const clip of activeCardClips(project, t)) {
     if (pipelineAt(plan, clip.id, t) !== "heavy") continue;
+    if (exemptOnline(clip)) continue; // 在线的用户卡、图卡:常驻图标,不选帧、不报缺口、不取字节
     const { firstFrame, count } = samplingOf(clip, fps);
     if (pendingDemote.has(clip.id)) {
       // K6：死素材就绪之前照常活渲，**不进 heavy**（也就不会被抑制、不会贴快照）
