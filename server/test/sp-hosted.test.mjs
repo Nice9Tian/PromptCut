@@ -2,7 +2,8 @@
  * SP 托管组合（契约 `docs/plan/shared-project-contract.md` 第 1 节；验收第 7 节 SP1、SP2 托管端部分、SP3、SP7）。
  * 跑：node --test server/test/sp-hosted.test.mjs
  *
- * 起 `server/hosted/main.mjs` 子进程，用本分支端口段 5490～5499 的固定端口（见 `sp-kit.mjs` 的 PORTS），用例串行。
+ * 起 `server/hosted/main.mjs` 子进程，端口每次向系统要空的（见 `sp-kit.mjs` 的 hostedPorts / hostedFor），用例串行；
+ * 同一台机器上并行跑几份也不会连到别人的实例。
  * 要「非回环来源」时连本机的局域网 IPv4（托管组合绑 0.0.0.0，对端地址就不是回环）；本机没有这种网卡时相关断言跳过。
  * 只照契约写，不看实现；契约没写死的地方见 `sp-kit.mjs` 文件头的假设。
  */
@@ -12,7 +13,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import {
-  PORTS, tmpDir, runHosted, hostedFor, exitWithin, docEnv, assetReq, uploadWhole, endpointsOf, assetUrls,
+  hostedPorts, tmpDir, runHosted, hostedFor, exitWithin, docEnv, assetReq, uploadWhole, endpointsOf, assetUrls,
   putSnapshot, getSnapshot, runProbe, lanIPv4, sha256hex, PROTOCOL,
 } from './sp-kit.mjs';
 import { createProject, join, joinStatus, proofFor, ask, ticketOf, members, bearer, flipSignature, adminOp, credential } from './auth-kit.mjs';
@@ -22,7 +23,8 @@ const LAN = lanIPv4();
 const T = { timeout: 90_000 };
 const SNAP_PROJECT = 'sp-project-main';
 
-const A = (t, extra = {}) => ({ docPort: PORTS.A_DOC, assetPort: PORTS.A_ASSET, dataDir: path.join(tmpDir(t, 'pc-sp-a-'), 'data'), ...extra });
+/** 一份托管组合的参数；不带端口，由 hostedFor 向系统要空端口 */
+const A = (t, extra = {}) => ({ dataDir: path.join(tmpDir(t, 'pc-sp-a-'), 'data'), ...extra });
 const mkdirData = (o) => { fs.mkdirSync(o.dataDir, { recursive: true }); return o; };
 
 /** 在一份托管组合里造一整套内容：项目快照、内容库、素材、预渲染产物，跑一轮发布、认领、完成 */
@@ -267,7 +269,7 @@ test('SPC1-4 数据目录布局：docservice/（auth/、tenants/<projectId>/）�
 
 test('SPC1-5 失败即关：数据目录不存在 → 退出码 1、config.error { reason: data-dir }；数据目录是个文件 → 同样', T, async (t) => {
   const base = tmpDir(t, 'pc-sp-dd-');
-  const missing = runHosted({ docPort: PORTS.A_DOC, assetPort: PORTS.A_ASSET, dataDir: path.join(base, 'no-such-dir') });
+  const missing = runHosted({ ...(await hostedPorts()), dataDir: path.join(base, 'no-such-dir') });
   t.after(() => missing.stop());
   const r1 = await exitWithin(missing, 10_000);
   assert.ok(!r1.timedOut, `数据目录不存在应失败即关；输出：${missing.output()}`);
@@ -277,7 +279,7 @@ test('SPC1-5 失败即关：数据目录不存在 → 退出码 1、config.error
 
   const file = path.join(base, 'data-is-a-file');
   fs.writeFileSync(file, 'x');
-  const notDir = runHosted({ docPort: PORTS.A_DOC, assetPort: PORTS.A_ASSET, dataDir: file });
+  const notDir = runHosted({ ...(await hostedPorts()), dataDir: file });
   t.after(() => notDir.stop());
   const r2 = await exitWithin(notDir, 10_000);
   assert.ok(!r2.timedOut, notDir.output());
@@ -323,7 +325,7 @@ test('SPC1-7 assets/.layout 启动时核对：与 shard 布局对不上就拒绝
   await again.stop();
 
   fs.writeFileSync(layoutFile, 'flat-layout-from-somewhere-else\n');
-  const bad = runHosted(o);
+  const bad = runHosted({ ...o, ...(await hostedPorts()) });
   t.after(() => bad.stop());
   const r = await exitWithin(bad, 10_000);
   assert.ok(!r.timedOut, `布局对不上应拒绝启动；输出：${bad.output()}`);
@@ -363,7 +365,7 @@ test('SPC7-1 迁移演练：拷数据目录到另一份实例、改地址后，�
   const aData = path.join(tmpDir(t, 'pc-sp-mig-a-'), 'data');
   const bData = path.join(tmpDir(t, 'pc-sp-mig-b-'), 'data');
   fs.mkdirSync(aData, { recursive: true });
-  const oA = { docPort: PORTS.A_DOC, assetPort: PORTS.A_ASSET, dataDir: aData, token };
+  const oA = { dataDir: aData, token };
   const a = await hostedFor(t, oA);
   const fx = await populate(a);
   await a.stop(); // 停写
@@ -373,8 +375,9 @@ test('SPC7-1 迁移演练：拷数据目录到另一份实例、改地址后，�
   assert.equal(countOf(bData), countOf(aData), '拷完文件数一致');
 
   const a2 = await hostedFor(t, oA); // 旧服务器保留只读
-  const B_PUBLIC = `http://127.0.0.1:${PORTS.B_ASSET}/api/asset`;
-  const b = await hostedFor(t, { docPort: PORTS.B_DOC, assetPort: PORTS.B_ASSET, dataDir: bData, token, assetPublicUrl: B_PUBLIC });
+  // 新实例登记的公网地址按它实际拿到的素材端口算
+  const b = await hostedFor(t, { dataDir: bData, token, assetPublicUrl: ({ assetPort }) => `http://127.0.0.1:${assetPort}/api/asset` });
+  const B_PUBLIC = b.assetPublicUrl;
 
   // 迁移核对探针（契约第 6 节）
   const probe = await runProbe(['--role', 'migrate-check', '--from', a2.docBase, '--to', b.docBase], { PROMPTCUT_CLUSTER_TOKEN: token });
@@ -414,7 +417,7 @@ test('SPC7-2 migrate-check 对着一份空实例：ok 为 false', T, async (t) =
   const oA = mkdirData(A(t, { token }));
   const a = await hostedFor(t, oA);
   await populate(a);
-  const c = await hostedFor(t, mkdirData({ docPort: PORTS.C_DOC, assetPort: PORTS.C_ASSET, dataDir: path.join(tmpDir(t, 'pc-sp-c-'), 'data'), token }));
+  const c = await hostedFor(t, mkdirData({ dataDir: path.join(tmpDir(t, 'pc-sp-c-'), 'data'), token }));
   const probe = await runProbe(['--role', 'migrate-check', '--from', a.docBase, '--to', c.docBase], { PROMPTCUT_CLUSTER_TOKEN: token });
   assert.ok(probe.json, `探针最后一行是 JSON：${probe.out.slice(-400)} ${probe.err.slice(-400)}`);
   assert.equal(probe.json.ok, false, '项目数对不上，不通过');

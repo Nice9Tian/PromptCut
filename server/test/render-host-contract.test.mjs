@@ -387,8 +387,11 @@ test('RHC11 多项目：两份配置 → 两条 render 连接、每条各一次 
 test('RHC12 node.hello：profile host、capabilities { userCards: true, graphCards: false }、codeVersions 只有本机 frameCode、envFingerprint 照给的', async (t) => {
   const { s, projects: [P] } = await sharedService(t);
   const rec = recordWebSocket(t);
-  await startHost(t, { entries: [hostEntry(s, P)], executor: createGateExecutor({ autoMs: 5 }), codeVersion: 'cv-rhc12', envFingerprint: 'fp-rhc12' });
-  const hello = await waitFor(() => rec.sentBy('render').find((x) => x.message.type === 'node.hello')?.message, 10000, 'node.hello');
+  const { logs } = await startHost(t, { entries: [hostEntry(s, P)], executor: createGateExecutor({ autoMs: 5 }), codeVersion: 'cv-rhc12', envFingerprint: 'fp-rhc12' });
+  // 「最终会发出 node.hello」：按 20 s 截止时间等（并行跑几份 npm test 时这里曾 10 s 没等到，原因未明），
+  // 等不到时把主机与连接层的日志带进报错。发出的 hello 内容的断言不变。
+  const hello = await waitFor(() => rec.sentBy('render').find((x) => x.message.type === 'node.hello')?.message, 20_000, 'node.hello')
+    .catch((err) => { throw new Error(`${err.message}；主机日志：${JSON.stringify(logs).slice(0, 3000)}；已记录的连接：${JSON.stringify(rec.sockets.map((x) => ({ url: x.url, r: x.proof?.r, sent: x.sent.length })))}`); });
   assert.equal(hello.profile, 'host');
   assert.deepEqual(hello.capabilities, { userCards: true, graphCards: false });
   assert.deepEqual(hello.codeVersions, ['cv-rhc12']);
