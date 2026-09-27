@@ -123,12 +123,15 @@ const TCP_PS1 = String.raw`
 $ErrorActionPreference = 'SilentlyContinue'
 $root = [int]$args[0]
 $procs = @(Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId, Name, CreationDate)
+$born = @{}
+foreach ($p in $procs) { $born[[int]$p.ProcessId] = $p.CreationDate }
 $ids = New-Object 'System.Collections.Generic.HashSet[int]'
 [void]$ids.Add($root)
 do {
   $added = $false
   foreach ($p in $procs) {
-    if ($ids.Contains([int]$p.ParentProcessId) -and -not $ids.Contains([int]$p.ProcessId)) { [void]$ids.Add([int]$p.ProcessId); $added = $true }
+    # 父进程 id 会被复用：只认比父进程晚起的（不然会把无关进程算进树里）
+    if ($ids.Contains([int]$p.ParentProcessId) -and -not $ids.Contains([int]$p.ProcessId) -and $p.CreationDate -ge $born[[int]$p.ParentProcessId]) { [void]$ids.Add([int]$p.ProcessId); $added = $true }
   }
 } while ($added)
 $names = @{}
@@ -253,9 +256,28 @@ async function runHost(out) {
     await put('host.ready', { port, envFingerprint: q0?.envFingerprint ?? null, codeVersion: q0?.codeVersion ?? null, at: Date.now() });
     out.envFingerprint = q0?.envFingerprint ?? null;
     say('host-ready', { port });
+    // 预渲染进程诊断里的事件只留最近几十条：每 3 s 收一次主机失败 / 丢租约的事件（只作记录，与出站判据无关）
+    const hostEvents = new Map();
+    let prerenderUrl = null;
+    let eventsTimer = null;
+    const pollEvents = async () => {
+      try {
+        prerenderUrl ??= (await json(`${editor}/api/prerender/info`, { timeoutMs: 5000 })).body?.url ?? null;
+        if (!prerenderUrl) return;
+        for (const e of (await json(`${prerenderUrl}/api/frames/diagnostics`, { timeoutMs: 10_000 })).body?.queue?.events ?? []) {
+          if (/^node\.(failed|lost)$/.test(String(e?.event ?? ''))) hostEvents.set(`${e.event}|${e.id}|${e.at}`, { event: e.event, id: e.id ?? null, at: e.at ?? null, error: String(e.error ?? '').slice(0, 200) });
+        }
+      } catch { /* 下一拍再试 */ }
+    };
+    const tickEvents = async () => { await pollEvents(); if (eventsTimer !== false) eventsTimer = setTimeout(tickEvents, 3000); };
+    void tickEvents();
 
     // 5. 等 plan
     const plan = await until(async () => (await c.get(K(run, 'plan'), 20_000).catch(() => null)) ?? ((await aborted()) ? { aborted: true } : null), Math.max(1000, deadline - Date.now()), 100);
+    clearTimeout(eventsTimer);
+    eventsTimer = false;
+    await pollEvents();
+    out.hostEvents = [...hostEvents.values()].slice(-10);
     if (!check('plan-received', !!plan && !plan.aborted, plan?.aborted ? 'creator abort' : undefined)) return;
     const n = (await queue())?.nodes?.[0] ?? {};
     Object.assign(out, { claimed: n.claimed ?? null, completed: n.completed ?? null, dedup: n.dedup ?? null, failed: n.failed ?? null, lost: n.lost ?? null,
