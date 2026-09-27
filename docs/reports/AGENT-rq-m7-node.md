@@ -37,6 +37,7 @@ M7（纯浏览器当渲染节点）的页面与舞台一侧，契约 `docs/plan/
    - 清单计划：`{"id":"plan:…@1#clips:…","ok":true,"node":"none"}`（页面还在测量、没当节点时照发），`{"id":"plan:…@4#clips:…","ok":true,"node":"ready"}`（报到完才发）；切分方认领第 4 版、`"derived"` 两条（浏览器指纹一份、切分方指纹一份）；第 1 版没有项目快照，切分方不可重试地失败（探针的替身行为）
    - 核对：内容库清单过 `manifestMatches`、结果键 = 内容键 × 浏览器指纹、30 帧原尺寸 + 30 帧小尺寸；素材服务上 30 块 `snap` 与 30 块 `px` 都 complete，取回的 HTML sha256 与清单一致；页面内快照库有 `snap/` 与 `px/` 块；切分方没做任何细任务；在线来源 `"aliveKeys":2,"deadKeys":1`（本页那份活着，切分方那份收到 `superseded`）；小尺寸第一帧 `{"bytes":2018,"riff":"RIFF","webp":"WEBP"}`；节点报到之后主文档长任务 0（只记不判，见下）
    - 第一次跑（run1）只挂在探针自己的一条判据上（把切分方对第 1 版 plan 的失败也算进「做了细任务」），改判据后第二次全过
+   - 第三次（run3，加了让路一段、宿主改了「测量落定按项目记住」、重出在线构建之后）退出码 0，`"ok":true,"fails":[]`。让路一段原样：生成快照第二张卡（2 秒 60 帧）做到第 2 帧后开始播放 → `"before":{"claims":2,"bakedFrames":32}`、`"released":{"released":{"yield-play":1},"claims":2,"bakedFrames":33}`（当前帧做完放回恰好一次）、2.5 s 后 `"during":{"claims":2,"bakedFrames":33}`（没再认领、没再生成）、停下后 `"after":{"claims":3,"completed":2,"bakedFrames":90,"failed":0}`（重新认领同一段只补缺的帧：30 + 60 = 90 帧，放回前做过的 3 帧没重做；不计失败）；第一段计数同 run2，主文档长任务 0
 6. **导出确定性与像素基线**：见文末「verify-determinism」一节。
 
 没跑的：M7-A4～A12 的验收剧本（A4 的 30 s、A12 的长任务是带耗时门槛的项，按 `verification.md`「性能基准机」在笔记本判）；W7 跨机；G0-R 由主会话在集成时做；探针 P1～P6 是 `claude/m7-probe` 的活。

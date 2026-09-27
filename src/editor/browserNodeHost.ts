@@ -541,7 +541,7 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
           frameMs: { p50: quantile(ms, 0.5), p95: quantile(ms, 0.95) },
           smallFrames: stage.small, smallMs: { p50: quantile(sm, 0.5), p95: quantile(sm, 0.95) },
         },
-        upload: { pushed: up.pushed, skipped: up.skipped, bytes: up.pushedBytes, failed: up.failed, reauth: up.reauth, lastError: up.lastError },
+        upload: { pushed: up.pushed, skipped: up.skipped, bytes: up.pushedBytes, failed: up.failed, reauth: up.reauth, recheck: up.recheck, lastError: up.lastError },
         manifests: { ...manifestStats },
         connection: { connected: !!ep?.connected, transport: ep?.stats().transport ?? null, ...conn },
         kept: [...kept.keys()],
