@@ -38,7 +38,8 @@
  *       - `src/editor/snapshotFeed.ts` 导出开关（名字取 `BEAT_SWITCH_NAMES` 之一），`开关(true)` 之后播放中的投递不受 33 ms 节流，
  *         暂停时仍受；`开关(false)`（桌面）照旧。门：`SWAP_MS` 出现。
  *   K4  层表（契约第 5 节）：`LAYER_FILES` 之一导出纯函数（名字取 `LAYER_REF_NAMES` 之一），`fn(table, clipId)`：
- *       层表形如 `{ layers: [{ clipId, resultKey, contentKey, envFingerprint, … }] }`（见 `layerEntry`，集成时按真形状改这里）；
+ *       层表形如 `{ v: 2, kind: 'layer-map', layers: [{ clipId, kind, key, resultKey, firstFrame, count, contentKey, envFingerprint, … }] }`
+ *       （`layerEntry` / `layerTable`，集成时已按 `layerMapOf` 的真形状改）；
  *       对得上回一个对象，至少带 `contentKey`、`envFingerprint`（与层表记录的相同）；对不上（缺内容键、缺指纹、层表坏、没这一层）回
  *       `null` / `undefined`，不抛。
  *   K5  两个舞台的运行配置（契约第 2 节）：`STAGE_FILES` 之一导出
@@ -51,7 +52,8 @@
  *       回的对象上 `measured({ projectId, projectRev })`（测量落定）、`changed({ projectId, projectRev })`（项目改了）、`dispose()`，
  *       名字各取候选之一（`PLAN_METHODS`）。防抖用全局的 `setTimeout`（测试用 `mock.timers` 推时间）。
  *       发出去的是渲染任务队列的 `task.publish`（`server/render-queue/messages.mjs` 的 `parseInbound` 认得），
- *       `tasks[0]` 是 `plan`，`resultKey` = `<projectId>@<projectRev>`。
+ *       `tasks[0]` 是 `plan`，`resultKey` 的 `#clips:` 之前那一段 = `<projectId>@<projectRev>`（集成对账：页面发清单计划，
+ *       工厂另收 `clips`，发布前先报到，见 `planFactoryDeps`）。
  *   K7  用户卡与图卡（契约第 9 节）：在线开关沿用 `src/render/placeholderHost.ts` 的 `setOnlineBrowserMode(true)`；
  *       用户卡 = `userCardSources().fileOf` 里有的卡，图卡 = 定义里 `card` 是函数（与 `unsupportedHere` 同一判法）；
  *       `snapshotFeed.ts` 的 `planFeed` 在在线时不给这两种选帧、不报缺口，`deliverSnapshots` 不为它们取字节。
@@ -330,11 +332,17 @@ export function layerGate() {
   const hit = findExport(LAYER_FILES, LAYER_REF_NAMES);
   return hit ? { ok: true, ...hit } : { ok: false, reason: skipReason(missingWhat(LAYER_FILES, LAYER_REF_NAMES)) };
 }
-/** 层表里的一层（K4；集成时按渲染节点写的真形状改这里） */
+/**
+ * 层表里的一层（K4）。集成对账（`claude/c10-integ`，2026-09-28）：按渲染节点写的真形状，即 `server/artifact-transfer.mjs` 的
+ * `layerMapOf`（层表 v 2，契约第 18 节第 3 条）：每层 `{ clipId, kind: 'html' | 'local', key, tier, resultKey, dirKey, entryKey,
+ * firstFrame, count, contentKey, envFingerprint }`；页面的 `parseLayerMap` 要 `kind`、`key`、`resultKey`、`firstFrame`、`count` 齐。
+ */
 export const layerEntry = ({ clipId, contentKey, envFingerprint, resultKey = `r-${clipId}` }) => ({
-  clipId, resultKey, contentKey, envFingerprint, from: 0, to: 299,
+  clipId, kind: 'html', key: `k-${clipId}`, tier: 'snapshot', resultKey, dirKey: resultKey, entryKey: null,
+  firstFrame: 0, count: 300, contentKey, envFingerprint,
 });
-export const layerTable = (layers) => ({ layers });
+/** 整张层表（K4）：`layerMapOf` 的外形，`v: 2` 与 `kind: 'layer-map'`（不认得的 `v` 或没有 `kind` 整张当没有） */
+export const layerTable = (layers) => ({ v: 2, kind: 'layer-map', projectId: 'proj-c10', entryKey: null, fps: 30, span: 60, at: 0, layers });
 
 /* ================================================================== K5 舞台 */
 
@@ -378,6 +386,41 @@ export const PLAN_METHODS = {
 export function planGate() {
   const hit = findExport(PLAN_FILES, PLAN_FACTORY_NAMES);
   return hit ? { ok: true, ...hit } : { ok: false, reason: skipReason(missingWhat(PLAN_FILES, PLAN_FACTORY_NAMES)) };
+}
+
+/*
+ * K6 集成对账（`claude/c10-integ`，2026-09-28；依据契约第 18 节第 9 条〔裁〕与 `AGENT-c10-browser.md` 的对账表）：
+ *   - 页面发的是「清单计划」：`plan`，`resultKey` = `<projectId>@<projectRev>#clips:<清单签名>`（不是裸的 `<projectId>@<projectRev>`）；
+ *     `parseInbound` 认得，`#clips:` 之前那一段仍是 `<projectId>@<projectRev>`。用例比结果键时比这一段（`planKeyBase`）。
+ *   - 发布器要知道页面判重的片段清单：工厂参数加 `clips: () => string[]`，清单空不发。测试给一份固定的清单（`PLAN_TEST_CLIPS`）。
+ *   - 发布前按渲染任务队列的协议先 `publisher.hello` 报到、等 `publisher.welcome`（`server/render-queue/queue.mjs`）。用例的假连接
+ *     只模拟 `task.publish` 的回包，所以这里包一层：报到消息照常交给假连接（断着就回 false，与假连接一致），回包由这一层给
+ *     `publisher.welcome`，假连接对报到的回包不往上传。`task.publish` 与它的回包原样经过，不改。
+ */
+export const PLAN_TEST_CLIPS = ['clip-h1', 'clip-h2'];
+const CLIPS_MARK = '#clips:';
+/** 结果键里 `#clips:` 之前的那一段（K6） */
+export const planKeyBase = (resultKey) => (typeof resultKey === 'string' && resultKey.includes(CLIPS_MARK) ? resultKey.slice(0, resultKey.indexOf(CLIPS_MARK)) : resultKey);
+
+/** 发布器工厂的参数（K6）：`endpoint` 包一层报到应答，另给片段清单 */
+export function planFactoryDeps({ endpoint, ...rest }) {
+  const handlers = [];
+  const helloIds = new Set();
+  endpoint.onMessage((m) => {
+    if (m && m.reqId !== undefined && helloIds.has(String(m.reqId))) return; // 假连接对报到的回包不往上传
+    for (const h of handlers) h(m);
+  });
+  const wrapped = {
+    send(msg) {
+      if (msg?.type !== 'publisher.hello') return endpoint.send(msg);
+      if (msg.reqId !== undefined) helloIds.add(String(msg.reqId));
+      if (!endpoint.send(msg)) return false;
+      queueMicrotask(() => { for (const h of handlers) h({ type: 'publisher.welcome', reqId: msg.reqId, publisherId: msg.publisherId }); });
+      return true;
+    },
+    onMessage(h) { handlers.push(h); return () => { const i = handlers.indexOf(h); if (i >= 0) handlers.splice(i, 1); }; },
+  };
+  return { ...rest, endpoint: wrapped, clips: () => PLAN_TEST_CLIPS };
 }
 
 /* ================================================================== K7 / K8 C10-UI */

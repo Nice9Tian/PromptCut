@@ -15,7 +15,7 @@
  */
 import test, { mock, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { planGate, importRepo, pickMethod, PLAN_METHODS } from './c10-kit.mjs';
+import { planGate, importRepo, pickMethod, PLAN_METHODS, planFactoryDeps, planKeyBase } from './c10-kit.mjs';
 import { parseInbound } from '../render-queue/messages.mjs';
 
 const gate = planGate();
@@ -49,7 +49,7 @@ function fakeEndpoint({ connected = true, reply = 'published' } = {}) {
 
 async function makePublisher(endpoint) {
   const mod = await importRepo(gate.file);
-  const pub = mod[gate.name]({ endpoint });
+  const pub = mod[gate.name](planFactoryDeps({ endpoint }));
   assert.ok(pub && typeof pub === 'object', `假设 K6：${gate.name}() 应回对象`);
   const m = {};
   for (const [k, names] of Object.entries(PLAN_METHODS)) {
@@ -76,7 +76,7 @@ function assertPlan(msg, n) {
   assert.equal(parsed.type, 'task.publish');
   const task = parsed.body.tasks?.[0] ?? msg.tasks[0];
   assert.equal(msg.tasks[0].kind, 'plan');
-  assert.equal(msg.tasks[0].resultKey, `${P}@${n}`);
+  assert.equal(planKeyBase(msg.tasks[0].resultKey), `${P}@${n}`);
   assert.equal(task.source?.projectRev ?? msg.tasks[0].source.projectRev, n);
 }
 
@@ -130,7 +130,7 @@ it('C10-PP-04 发过之后再改：重发', async () => {
   await flush();
   pub.changed(rev(3));
   await flush();
-  assert.deepEqual(ep.publishes().map((m) => m.tasks[0].resultKey), [`${P}@1`, `${P}@2`, `${P}@3`]);
+  assert.deepEqual(ep.publishes().map((m) => planKeyBase(m.tasks[0].resultKey)), [`${P}@1`, `${P}@2`, `${P}@3`]);
   pub.dispose();
 });
 
@@ -145,7 +145,7 @@ it('C10-PP-05 没人认领不报错：不抛、没有未处理的拒绝，之后
     ep.connected = true;
     assert.doesNotThrow(() => pub.changed(rev(2)));
     await flush(600_000);
-    assert.ok(ep.publishes().some((m) => m.tasks[0].resultKey === `${P}@2`), `${JSON.stringify(opts)}：之后的改动照常发`);
+    assert.ok(ep.publishes().some((m) => planKeyBase(m.tasks[0].resultKey) === `${P}@2`), `${JSON.stringify(opts)}：之后的改动照常发`);
     pub.dispose();
   }
   mock.timers.reset();

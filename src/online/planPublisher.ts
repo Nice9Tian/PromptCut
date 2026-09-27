@@ -170,7 +170,8 @@ export function createPlanPublisher(deps: PlanPublisherDeps): PlanPublisher {
       note({ at: now(), id: task.id, clips: clips.length, ok: false, error });
     } finally {
       busy = false;
-      if (again && !disposed) { again = false; schedule(); }
+      // 等回包期间防抖已到期的那一版(again):防抖已经等过了,马上发,不再多等一轮防抖
+      if (again && !disposed) { again = false; void publish(); }
     }
   };
 
