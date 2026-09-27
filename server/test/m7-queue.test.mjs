@@ -292,7 +292,7 @@ test('M7Q-D2-L4 做完了的锁 lockUndone 为 0', () => {
 
 test('M7Q-D9-Q5 同一个 nodeId 不能被别的 userId 报到（回 forbidden，原节点不受影响）', () => {
   const h = setup();
-  const out = h.node('evil', 'node-bw', { profile: 'pc', userId: 'u2', hello: { envFingerprint: B } });
+  const out = h.node('evil', 'node-bw', { profile: 'pc', userId: 'u2', watch: null, hello: { envFingerprint: B } });
   const err = out.one('evil', 'error');
   assert.equal(err.reason, 'forbidden');
   assert.equal(out.of('evil', 'node.welcome').length, 0);
