@@ -4,13 +4,19 @@
  *
  * 跑：
  *   node scripts/probes/render-queue-proxy.mjs --listen 127.0.0.1:8795 --target <host:port>
- *     [--delay-ms 200] [--loss 0.05] [--loss-hold-ms 200..1000] [--stall-after-ms N] [--cut-after-ms N]
+ *     [--delay-ms 200] [--loss 0.05] [--loss-hold-ms 200..1000] [--stall-after-ms N] [--cut-after-ms N] [--cut-once] [--stdin-control]
  *
  * - --delay-ms：每个数据块晚这么久再转发（两个方向各自计）。
  * - --loss p：每个数据块以概率 p 被「扣住」一段随机时长（--loss-hold-ms 的区间，缺省 200..1000）再发；
  *   其后的块排在它后面、保持顺序，模拟 TCP 重传带来的队头阻塞。从不真丢字节：丢了会破坏 WebSocket 帧。
  * - --stall-after-ms N：连接建立 N 毫秒后两个方向都停止转发（收到的字节只攒着），但不关连接，模拟半开。
  * - --cut-after-ms N：连接建立 N 毫秒后两头直接断开。
+ * - --cut-once：整个代理进程只切一次。和 --cut-after-ms 连用时，第一条「到点时还开着」的连接被切，之后的连接
+ *   （例如客户端接续会话时新开的那条）原样转发；到点前自己关掉的连接（如取挑战的短 HTTP 请求）不算那一次。
+ *   不给时行为同旧：每条连接到点都切（HT-a 的 W-HT-a 探针 `ht-w-probe.mjs` 用它，接续那一次不会再被切）。
+ * - --stdin-control：从标准输入按行读命令。`cut`：立刻切断此刻开着的全部连接（算一次切断，受 --cut-once 约束：
+ *   已经切过就只回一行 conn.cut-skip）。给按需切断用：探针等主机「已认领、还在做」时才切，连接建立的时刻对不上认领的时刻，
+ *   固定的 --cut-after-ms 定不准。标准输入关掉不影响转发。
  *
  * 每条连接关闭时往标准输出打一行 JSON 统计（event: conn.close）；Ctrl+C 结束时打一行汇总（event: summary）。
  * 本机测试用 8790～8799 的端口，不要用 5190～5192。
@@ -19,7 +25,7 @@
 import { createServer, connect } from 'node:net';
 
 const USAGE = `用法：node scripts/probes/render-queue-proxy.mjs --listen 127.0.0.1:8795 --target <host:port>
-  [--delay-ms 200] [--loss 0.05] [--loss-hold-ms 200..1000] [--stall-after-ms N] [--cut-after-ms N]`;
+  [--delay-ms 200] [--loss 0.05] [--loss-hold-ms 200..1000] [--stall-after-ms N] [--cut-after-ms N] [--cut-once] [--stdin-control]`;
 
 function usage(msg) {
   if (msg) console.error(msg);
@@ -28,10 +34,12 @@ function usage(msg) {
 }
 
 const VALUED = new Set(['--listen', '--target', '--delay-ms', '--loss', '--loss-hold-ms', '--stall-after-ms', '--cut-after-ms']);
+const FLAGS = new Set(['--cut-once', '--stdin-control']);
 const args = {};
 const argv = process.argv.slice(2);
 for (let i = 0; i < argv.length; i++) {
   const a = argv[i];
+  if (FLAGS.has(a)) { args[a.slice(2)] = true; continue; }
   if (!VALUED.has(a)) usage(`不认识的参数：${a}`);
   const v = argv[++i];
   if (v === undefined) usage(`${a} 缺值`);
@@ -68,9 +76,13 @@ if (args['loss-hold-ms'] !== undefined) {
 }
 const stallAfterMs = args['stall-after-ms'] === undefined ? null : num('stall-after-ms', 0);
 const cutAfterMs = args['cut-after-ms'] === undefined ? null : num('cut-after-ms', 0);
+const cutOnce = args['cut-once'] === true;
+const stdinControl = args['stdin-control'] === true;
+/** --cut-once：已经切过一次（之后到点的连接不再切） */
+let cutSpent = false;
 
 const out = (event, fields) => process.stdout.write(`${JSON.stringify({ t: new Date().toISOString(), event, ...fields })}\n`);
-const totals = { conns: 0, bytesUp: 0, bytesDown: 0, chunks: 0, held: 0, stalledConns: 0, cutConns: 0 };
+const totals = { conns: 0, bytesUp: 0, bytesDown: 0, chunks: 0, held: 0, stalledConns: 0, cutConns: 0, cutSkipped: 0 };
 const live = new Set();
 let seq = 0;
 
@@ -114,7 +126,7 @@ function pipeWithFaults(from, to, conn, dir) {
 const server = createServer((client) => {
   const id = ++seq;
   const startedAt = Date.now();
-  const conn = { id, bytesUp: 0, bytesDown: 0, chunks: 0, held: 0, stalled: false, cut: false };
+  const conn = { id, bytesUp: 0, bytesDown: 0, chunks: 0, held: 0, stalled: false, cut: false, close: null };
   totals.conns += 1;
   const upstream = connect(target.port, target.host);
   const timers = [];
@@ -145,6 +157,7 @@ const server = createServer((client) => {
       unsentUp: up.pending(), unsentDown: down.pending(),
     });
   };
+  conn.close = close;
   client.on('close', () => close('client-closed'));
   upstream.on('close', () => close('upstream-closed'));
 
@@ -159,9 +172,11 @@ const server = createServer((client) => {
   }
   if (cutAfterMs !== null) {
     timers.push(setTimeout(() => {
+      if (cutOnce && cutSpent) { totals.cutSkipped += 1; out('conn.cut-skip', { id, reason: 'cut-once' }); return; }
+      cutSpent = true;
       conn.cut = true;
       totals.cutConns += 1;
-      out('conn.cut', { id });
+      out('conn.cut', { id, by: 'timer' });
       close('cut');
     }, cutAfterMs));
   }
@@ -173,8 +188,33 @@ server.on('error', (err) => {
 });
 server.listen(listen.port, listen.host, () => {
   const a = server.address();
-  out('listen', { host: a.address, port: a.port, target: `${target.host}:${target.port}`, delayMs, loss, lossHoldMs: [holdMin, holdMax], stallAfterMs, cutAfterMs });
+  out('listen', { host: a.address, port: a.port, target: `${target.host}:${target.port}`, delayMs, loss, lossHoldMs: [holdMin, holdMax], stallAfterMs, cutAfterMs, cutOnce, stdinControl });
 });
+
+if (stdinControl) {
+  let pending = '';
+  process.stdin.setEncoding('utf8');
+  process.stdin.on('data', (chunk) => {
+    const lines = (pending + chunk).split('\n').map((line) => line.replace(/\r$/, ''));
+    pending = lines.pop() ?? '';
+    for (const raw of lines) {
+      const cmd = raw.trim();
+      if (!cmd) continue;
+      if (cmd !== 'cut') { out('control.unknown', { cmd: cmd.slice(0, 40) }); continue; }
+      if (cutOnce && cutSpent) { totals.cutSkipped += 1; out('conn.cut-skip', { reason: 'cut-once', open: live.size }); continue; }
+      const victims = [...live];
+      if (victims.length === 0) { out('conn.cut-skip', { reason: 'no-connection', open: 0 }); continue; }
+      cutSpent = true;
+      for (const conn of victims) {
+        conn.cut = true;
+        totals.cutConns += 1;
+        out('conn.cut', { id: conn.id, by: 'stdin' });
+        conn.close('cut');
+      }
+    }
+  });
+  process.stdin.on('error', () => {});
+}
 
 for (const sig of ['SIGINT', 'SIGTERM']) {
   process.on(sig, () => {
