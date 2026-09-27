@@ -1,4 +1,4 @@
-import { QUEUE_DEFAULTS } from '../render-queue/index.mjs';
+import { QUEUE_DEFAULTS } from '../render-queue/constants.mjs';
 import { filterClaimable } from './filter.mjs';
 import { pickCandidate } from './pick.mjs';
 

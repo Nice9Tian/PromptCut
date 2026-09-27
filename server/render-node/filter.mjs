@@ -20,7 +20,7 @@
  *
  * 纯函数,不改入参。
  */
-import { isListPlan } from '../render-queue/index.mjs';
+import { isListPlan } from '../render-queue/messages.mjs';
 
 /**
  * 各类节点的重度策略表。每一项的取值:
