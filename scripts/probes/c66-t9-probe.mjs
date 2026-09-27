@@ -8,6 +8,7 @@
  *        [--coord <协调口基址>]      缺省 https://8-219-80-16.sslip.io/coord
  *        [--run <本轮 id>]          各角色用同一个;creator 不给就自己生成并写进 KV `c66t9.latest`,另两个不给就从那里取
  *        [--port <编辑器端口>]       creator 缺省 5590、observer 5593、host 5596(每个编辑器另占 +1、+2 当舞台端口)
+ *        [--port-base <端口>]        只对 --role all:三个角色依次用 <端口>、+3、+6(各另占 +1、+2),代替上面三个缺省
  *        [--out <截图目录>]          缺省 <系统临时目录>/pc-c66t9-<run>/<角色>
  *        [--timeout-min 25] [--keep-temp]
  *
@@ -57,8 +58,11 @@
  *   (IPC);起来后写 `host.ready`;等 KV `plan`;核对:本主机认领数、完成数(`GET /api/frames/queue`),每个细任务
  *   恰好一次 task.done(creator 在 plan 里给的计数),每个快照细任务的清单都在托管端内容库、清单里的每个块都在托管端
  *   素材服务(`has`,带只读票据);经 IPC `shutdown` 正常退出(放回认领),记退出码。结果写 KV `host`。
- *   探针用户卡在本检出里没有时,先把 v1 写进 `src/cards/user/`(收尾删掉):帧代码指纹(`frame-code.mjs`)哈希整个 `src/`,
- *   少这一个文件,主机的代码版本就和创建者对不上,一个任务都认领不了(报告第 5 节)。
+ *   主机**不再**往本检出里预写探针用户卡(c66-host-cards):代码版本不含用户卡,用到用户卡的任务另标卡片代码身份,
+ *   主机经内容库 `card-source` 自己同步(`render-host-contract.md` 第 7 节)。另断言:主机的卡片同步记下了探针卡
+ *   (`GET /api/frames/queue` 的 `cardSync`);主机的代码版本与创建者的相同;创建者改卡之后(观察端走到那一步时)
+ *   主机 15 s 内装上 v2(记账 rev ≥ 2,生效内容带 v2 记号;本检出里原来有这张卡时 v2 在主机自己的改动层里,底版不动)。
+ *   本检出里原来没有这张卡(跨机)时,主机同步照现有装卡路径写进 `src/cards/user/`,收尾删掉。
  *
  * ## --role all(本机替身,主执行计划 6.8 节)
  *   同一台机器上各起一个子进程跑三个角色(端口 5590 / 5593 / 5596),汇总三行结果。
@@ -596,7 +600,7 @@ async function runCreator(out) {
       publishToSettledMs: Date.now() - tPublish,
     };
     try { fs.writeFileSync(path.join(OUT, 'creator-queue-diag.json'), JSON.stringify(await getJson(`${prerender}/api/frames/diagnostics`, 20_000), null, 1)); } catch { /* 取不到 */ }
-    await store.put('plan', plan);
+    await store.put('plan', { ...plan, creatorCodeVersion: q0?.codeVersion ?? null });
     out.plan = { planId: plan.planId, plans: plan.plans.length, tasks: plan.tasks, done: plan.done, failed: plan.failed.length, planDoneCount: plan.planDoneCount,
       pcCompleted: plan.pc.completed.length, pcDedup: plan.pc.dedup.length, pcPlanClaimed: plan.pc.planClaimed, publishToSettledMs: plan.publishToSettledMs, stats: plan.stats };
     check(plan.tasks > 0, '[creator] plan 切出了细任务', plan.tasks);
@@ -965,10 +969,10 @@ async function runHost(out) {
   let conn = null;
   try {
     cfg = await store.wait('config', '创建者的配置');
+    // 只为收尾:本检出里原来没有这张卡(跨机)时,主机的卡片同步会把它装进 src/cards/user/,跑完删掉。
+    // 不往检出里预写(c66-host-cards):主机靠卡片同步拿到它
     card = repoCard(cfg.card.rel);
     out.cardInRepoBefore = card.existedBefore;
-    // 帧代码指纹哈希整个 src/:探针用户卡要和创建者那边一样在(报告第 5 节)
-    if (!card.existedBefore) card.write(cfg.card.source);
     for (const p of [port, port + 1, port + 2]) if (!(await portFree(p))) throw new Error(`端口 ${p} 被占用`);
     const configFile = path.join(TMP, 'host-shared.json');
     fs.writeFileSync(configFile, JSON.stringify([{ url: cfg.ws, projectId: cfg.projectId, username: 'render-host', password: cfg.memberPassword, as: 'member', role: 'render',
@@ -997,6 +1001,18 @@ async function runHost(out) {
       codeVersion: ready.queue?.codeVersion?.slice?.(0, 12) ?? null };
     await store.put('host.ready', { at: Date.now(), port });
     say('host.ready', out.readyQueue);
+    const editorUrl = `http://127.0.0.1:${port}`;
+    const hostOverlay = path.join(TMP, 'data', 'data', 'card-overrides', cfg.card.rel);
+    const effective = () => { try { return fs.readFileSync(fs.existsSync(hostOverlay) ? hostOverlay : path.join(ROOT, cfg.card.rel), 'utf8'); } catch { return null; } };
+    const syncOf = async () => (await getJson(`${editorUrl}/api/frames/queue`, 30_000).catch(() => null))?.cardSync?.[0] ?? null;
+    // 主机经内容库 card-source 同步到了探针卡(记账里有它,rev ≥ 1)
+    const synced = await until('[host] 卡片同步记下了探针用户卡', async () => {
+      const cs = await syncOf();
+      return cs?.enabled && (cs.records?.[cfg.card.rel] ?? 0) >= 1 ? cs : null;
+    }, 60_000, 500);
+    out.cardSync = synced ? { connected: synced.connected, rev: synced.records?.[cfg.card.rel] ?? null, notices: (synced.notices ?? []).map((n) => n.type) } : null;
+    check(synced?.enabled === true, '[host] 主机开着卡片同步', synced);
+    check(effective()?.includes(cfg.card.v1), '[host] 主机上生效的探针卡是 v1', { overlay: fs.existsSync(hostOverlay) });
 
     const plan = await store.wait('plan', '创建者的 plan 落定', 20 * 60_000);
     const editor = `http://127.0.0.1:${port}`;
@@ -1006,6 +1022,8 @@ async function runHost(out) {
       lost: n.lost ?? null, connected: n.connected ?? null, assetBase: n.assetBase ?? null, codeVersion: q?.codeVersion?.slice?.(0, 12) ?? null });
     out.plan = { planId: plan.planId, tasks: plan.tasks, done: plan.done };
     check(out.profile === 'host', '[host] 诊断里 profile 是 host', out.profile);
+    out.creatorCodeVersion = plan.creatorCodeVersion?.slice?.(0, 12) ?? null;
+    check(!plan.creatorCodeVersion || q?.codeVersion === plan.creatorCodeVersion, '[host] 代码版本与创建者相同(用户卡不进代码版本)', { host: out.codeVersion, creator: out.creatorCodeVersion });
     check(out.claimed >= 1, '[host] 认领了创建者发布的细任务', out.claimed);
     check((out.completed ?? 0) + (out.dedup ?? 0) >= 1, '[host] 完成了细任务', { completed: out.completed, dedup: out.dedup });
     check(!out.failed, '[host] 没有失败的任务', out.failed);
@@ -1040,6 +1058,26 @@ async function runHost(out) {
     check(art.manifests > 0 && art.missingManifests.length === 0, '[host] 每个细任务的清单都在托管端内容库', art.missingManifests.slice(0, 5));
     check(art.blocks > 0 && art.missingBlocks.length === 0, '[host] 清单里的块都在托管端素材服务', art.missingBlocks.slice(0, 5));
 
+    // ---- 创建者改卡(v1 → v2)之后,主机按 content.watch 当场装上 v2。观察端没走到改卡那一步时(创建者不改)记为跳过
+    let edited = null;
+    const editEnd = Math.min(Date.now() + 20 * 60_000, deadline);
+    while (!edited && Date.now() < editEnd) {
+      edited = await store.get('edited', 5000).catch(() => null);
+      if (!edited && ((await store.get('observer', 0).catch(() => null)) || (await store.get('abort', 0).catch(() => null)))) break;
+    }
+    if (edited?.ok) {
+      const t0 = Date.now();
+      const v2 = await until('[host] 创建者改卡后主机装上 v2', async () => {
+        const cs = await syncOf();
+        return (cs?.records?.[cfg.card.rel] ?? 0) >= 2 && effective()?.includes(cfg.card.v2) ? cs : null;
+      }, 15_000, 200);
+      out.cardV2 = { ms: v2 ? Date.now() - t0 : null, rev: v2?.records?.[cfg.card.rel] ?? null, inOverlay: fs.existsSync(hostOverlay),
+        baseUntouched: card.existedBefore ? fs.readFileSync(path.join(ROOT, cfg.card.rel), 'utf8').includes(cfg.card.v1) : null };
+      if (card.existedBefore) check(out.cardV2.inOverlay && out.cardV2.baseUntouched, '[host] v2 装进主机自己的改动层,检出里的那份不动', out.cardV2);
+    } else {
+      out.cardV2 = { skipped: edited ? '创建者改卡失败' : '创建者没改卡(观察端没走到那一步)' };
+    }
+
     child.send({ type: 'shutdown' });
     out.exitCode = await exited(child, 60_000);
     out.released = exitLine?.released ?? null;
@@ -1066,7 +1104,9 @@ async function runAll(out) {
   const common = ['--hosted', HOSTED, '--coord', COORD, '--run', run, '--timeout-min', String(Number(arg('--timeout-min', 25))), ...(KEEP ? ['--keep-temp'] : [])];
   const roles = ['creator', 'observer', 'host'];
   const results = await Promise.all(roles.map((role) => new Promise((resolve) => {
-    const c = spawn(process.execPath, [SELF, '--role', role, '--port', String(DEFAULT_PORT[role]), '--out', path.join(outDir, role), ...common],
+    const base = arg('--port-base', null);
+    const port = base !== null ? Number(base) + { creator: 0, observer: 3, host: 6 }[role] : DEFAULT_PORT[role];
+    const c = spawn(process.execPath, [SELF, '--role', role, '--port', String(port), '--out', path.join(outDir, role), ...common],
       { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, env: process.env });
     let stdout = '';
     c.stdout.on('data', (d) => { stdout += d.toString(); });

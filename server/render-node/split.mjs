@@ -146,6 +146,16 @@ export function splitPlan({
     if (takesOver(lockKey)) return { fingerprint: envFingerprint, takeover: true };
     return { fingerprint: locked, takeover: false };
   };
+  /**
+   * 卡片代码要求(c66-host-cards,契约 B.4〔c66-host-cards 改〕):`cardSourceVersions` 是这一版用到的定制卡
+   * (用户卡、改动层里改过的卡)的代码身份。共享档只画这一张卡,只要它自己的;本地档与流画的是整个场景
+   * (本地档的内容键里有 entry.key,整场景键带着全部定制卡的身份),要全部。
+   */
+  const allCardSources = () => {
+    const out = {};
+    for (const [cardId, version] of Object.entries(cardSourceVersions ?? {})) if (typeof version === 'string' && version) out[cardId] = version;
+    return out;
+  };
   const out = [];
   const seen = new Set();
   const emit = task => {
@@ -174,7 +184,7 @@ export function splitPlan({
     const firstFrame = Number(control.sampling?.firstFrame);
     const requires = {
       envFingerprint: keying.fingerprint, codeVersion,
-      cardSources: cardVersion ? { [control.cardId]: cardVersion } : {},
+      cardSources: tier === 'local' ? allCardSources() : cardVersion ? { [control.cardId]: cardVersion } : {},
       transcode: false,
       userCards: !!isUserCard(control),
       graphCards: !!isGraphCard(control),
@@ -213,7 +223,7 @@ export function splitPlan({
         input: { clipId: topClipId, cardId: null, entryKey: null, contentKey },
         weight: { ...weight, frames: (to - from + 1) * SEGMENT_FRAMES },
         requires: gateLocalMedia({
-          envFingerprint: keying.fingerprint, codeVersion, cardSources: {},
+          envFingerprint: keying.fingerprint, codeVersion, cardSources: allCardSources(),
           transcode: true, userCards: false, graphCards: false, belowDependent: false,
           // M6c X1:只有报了 `capabilities.streams: true`(探到编码器)的节点能认领(filter.mjs 规则 2)
           capabilities: { streams: true },

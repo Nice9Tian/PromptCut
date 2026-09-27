@@ -6,6 +6,7 @@ import { probeBrowserEnvironment } from './bakery/environment.mjs';
 import { captureSnapshot } from './bakery/capture-snapshot.mjs';
 import { frameVideo } from './bakery/frame-video.mjs';
 import { frameIdentity, trackPrefixes } from './frame-identity.mjs';
+import { cardEntryCode } from './card-code.mjs';
 import { packFrames, unpackFrameArchive, createFrameArchive, packFrameCache, unpackFrameCache } from './frame-archive.mjs';
 import { MovFrameStore, PlaybackMovStore, atomic } from './frame-mov.mjs';
 import { FramePlayback } from './frame-playback.mjs';
@@ -180,7 +181,7 @@ export class FramePipeline {
    * `fingerprint`)。给了就不探测、直接用(测试,以及以后环境已知的独立渲染主机);不给就等第一个
    * 预渲染间开起来时探测一次(`ensureEnvironment`)。
    */
-  constructor({ root, origin, code = () => '', captureCode = () => undefined, interactive = true, playhead = NO_PLAYHEAD, mediaUrl = () => null, dataRoot = process.cwd(), environment = null, cardLockIdleMs = CARD_LOCK_IDLE_MS, pushQueue = null }) {
+  constructor({ root, origin, code = () => '', cardSources = () => ({}), captureCode = () => undefined, interactive = true, playhead = NO_PLAYHEAD, mediaUrl = () => null, dataRoot = process.cwd(), environment = null, cardLockIdleMs = CARD_LOCK_IDLE_MS, pushQueue = null }) {
     this.root = root;
     /**
      * C6.4 的推送队列(`artifact-push.mjs` 的 `createPushQueue`,它建好后自己挂到这里)。**只有它不是 null 时**
@@ -212,6 +213,12 @@ export class FramePipeline {
     this.dataRoot = dataRoot;
     this.origin = origin;
     this.code = code;
+    /**
+     * 这一版项目用到的定制卡(用户卡、改动层里改过的卡)的代码身份 `{ cardId: 身份 }`(c66-host-cards,`server/card-code.mjs`)。
+     * `code` 是全局代码版本、不再覆盖用户卡,整场景键在它后面接上这些身份(`cardEntryCode`);
+     * 队列切分时原样写进细任务的 `requires.cardSources`。缺省没有定制卡(测试、探针、脚本)。
+     */
+    this.cardSources = cardSources;
     this.captureCode = captureCode;
     this.interactive = interactive !== false;
     this.playhead = playhead;
@@ -530,10 +537,13 @@ export class FramePipeline {
       const stamp = await this.mediaStamper.stamp(media);
       return stamp === undefined ? media : { ...media, _frameSourceStamp: stamp };
     })) };
-    const code = this.code(project);
+    // 身份在这里算一次、记在 entry 上:整场景键与切分时的 requires.cardSources 必须出自同一次计算
+    let cardSources = {};
+    try { cardSources = this.cardSources(project) ?? {}; } catch { cardSources = {}; }
+    const code = cardEntryCode(this.code(project), cardSources);
     const key = frameIdentity(project, code);
     if (!this.entries.has(key)) {
-      const entry = { key, code, project: structuredClone(project), recordVersion: 0, html: new Map(), controls: new Map(), dir: path.join(this.root, key), status: 'idle', error: null };
+      const entry = { key, code, cardSources, project: structuredClone(project), recordVersion: 0, html: new Map(), controls: new Map(), dir: path.join(this.root, key), status: 'idle', error: null };
       // Controls are content addressed independently of the full-scene entry;
       // a project edit that invalidates the scene can still reuse an unchanged
       // card MOV from <pipeline-root>/controls/<control-key>.
@@ -2208,8 +2218,9 @@ export class FramePipeline {
       streams: streamSpecs.map(spec => ({ streamKey: spec.streamKey, contentKey: spec.contentKey, topClipId: spec.topClipId,
         firstSegment: spec.firstSegment, lastSegment: spec.lastSegment })),
       anchorFrames: anchorFrames(clips, fps).filter(frame => frame >= 0 && frame < count),
-      // 附件第 5 节:`codeVersion = frameCode(root)` 已经覆盖了全部卡片源码,这里留空
-      cardSourceVersions: {},
+      // c66-host-cards:全局代码版本(`frameCode`)不再覆盖用户卡与改动层;这一版用到的定制卡的代码身份
+      // 由切分写进 requires.cardSources(共享档只写这张卡的,本地档、流写全部),节点手里没有这份代码就不认领
+      cardSourceVersions: { ...(entry.cardSources ?? {}) },
       weightOf: control => ({ class: this.queueWeightClass(control), estMs: null }),
       isUserCard: control => String(sourceVersions[control?.cardId] ?? '').startsWith('user:'),
       isGraphCard: control => this.isGraphCardControl(control),
