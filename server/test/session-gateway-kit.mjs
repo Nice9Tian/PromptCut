@@ -12,10 +12,14 @@
  *     （`resumed: true`、`ack` 为已收全的客户端最大 seq）再按原 seq 补发；不在：结束过（墓碑）以 4410 关，否则 4404。
  *   - 序号与确认：两个方向照第 3.3 节；控制消息 `session.ack`、`session.close`；跳号 1002 `bad-seq`。
  *   - 传输断开：脱开，保留 `retainMs`，期满结束会话（关上游、立墓碑）。上游关了：会话以上游的关闭码结束。
+ *   - 不带会话项的旧客户端（契约第 3.6 节）：升级请求原样转给上游（TCP 直通）。
+ *   - 给了 `httpUpstream`：普通 HTTP 请求（共享项目的挑战、建项目）原样转给它，页面与探针可以把网关当文档服务地址用。
+ *   - `cutAll()`：从服务端这头掐断全部客户端传输（不发关闭帧）；`onForward(msg)`：每条转给上游的业务消息。
  *
  * 只引 Node 内置模块与 `../docservice/ws.mjs`；上游用 Node 内置的 `WebSocket`。
  */
 import http from 'node:http';
+import net from 'node:net';
 import { randomBytes } from 'node:crypto';
 import { acceptUpgrade, rejectUpgrade } from '../docservice/ws.mjs';
 
@@ -31,10 +35,10 @@ const SESSION_PREFIX = 'promptcut.session.';
  * @param {number} [o.ackEvery]
  * @param {(event: string, fields?: object) => void} [o.log]
  */
-export async function startSessionGateway({ upstream, retainMs = 60_000, ackDelayMs = 1000, ackEvery = 32, log = () => {}, port = 0, host = '127.0.0.1' } = {}) {
+export async function startSessionGateway({ upstream, httpUpstream = null, retainMs = 60_000, ackDelayMs = 1000, ackEvery = 32, log = () => {}, onForward = null, port = 0, host = '127.0.0.1' } = {}) {
   const sessions = new Map();
   const tombstones = new Map();
-  const stats = { opened: 0, resumed: 0, expired: 0, superseded: 0, badSeq: 0, fromClient: 0, toClient: 0 };
+  const stats = { opened: 0, resumed: 0, expired: 0, superseded: 0, badSeq: 0, fromClient: 0, toClient: 0, legacy: 0 };
   const upstreamOf = typeof upstream === 'function' ? upstream : () => upstream;
 
   function end(s, code, reason, { closeUpstream = true } = {}) {
@@ -106,6 +110,7 @@ export async function startSessionGateway({ upstream, retainMs = 60_000, ackDela
       s.inAck = msg.seq;
       const { seq: _s, ack: _a, ...body } = msg;
       stats.fromClient++;
+      try { onForward?.(body); } catch { /* 观察者出错不影响转发 */ }
       try { s.up.send(JSON.stringify(body)); } catch { /* 上游在关 */ }
       s.inUnacked++;
       if (s.inUnacked >= ackEvery) sendAck(s);
@@ -119,7 +124,17 @@ export async function startSessionGateway({ upstream, retainMs = 60_000, ackDela
     });
   }
 
-  const server = http.createServer((req, res) => { res.writeHead(404); res.end(); });
+  // 普通 HTTP 请求（共享项目的挑战、建项目等）：给了 `httpUpstream` 就原样转给它，否则 404
+  const server = http.createServer((req, res) => {
+    if (!httpUpstream) { res.writeHead(404); res.end(); return; }
+    const target = new URL(req.url ?? '/', httpUpstream);
+    const up = http.request({ host: target.hostname, port: target.port, method: req.method, path: `${target.pathname}${target.search}`, headers: { ...req.headers, host: target.host } }, (ur) => {
+      res.writeHead(ur.statusCode ?? 502, ur.headers);
+      ur.pipe(res);
+    });
+    up.on('error', () => { if (!res.headersSent) res.writeHead(502); res.end(); });
+    req.pipe(up);
+  });
   server.on('upgrade', (req, socket, head) => {
     socket.on('error', () => {});
     const items = String(req.headers['sec-websocket-protocol'] ?? '').split(',').map((p) => p.trim()).filter(Boolean);
@@ -147,7 +162,27 @@ export async function startSessionGateway({ upstream, retainMs = 60_000, ackDela
       attach(s, ws, true);
       return;
     }
-    if (!items.includes(SESSION_NEW)) { rejectUpgrade(socket, 400, 'Bad Request'); return; }
+    if (!items.includes(SESSION_NEW)) {
+      // 旧客户端（不带会话项，契约第 3.6 节）：原样转给上游，一条传输就是一个连接
+      const target = new URL(upstreamOf());
+      const up = net.connect(Number(target.port || 80), target.hostname);
+      up.on('error', () => socket.destroy());
+      up.on('connect', () => {
+        const lines = [`${req.method} ${target.pathname}${target.search} HTTP/1.1`];
+        for (let i = 0; i < req.rawHeaders.length; i += 2) {
+          const k = req.rawHeaders[i];
+          lines.push(`${k}: ${k.toLowerCase() === 'host' ? target.host : req.rawHeaders[i + 1]}`);
+        }
+        up.write(`${lines.join('\r\n')}\r\n\r\n`);
+        if (head?.length) up.write(head);
+        up.pipe(socket);
+        socket.pipe(up);
+      });
+      socket.on('close', () => up.destroy());
+      up.on('close', () => socket.destroy());
+      stats.legacy++;
+      return;
+    }
     const upItems = items.filter((p) => p !== SESSION_NEW);
     const up = new WebSocket(upstreamOf(), upItems);
     let settled = false;
@@ -187,6 +222,12 @@ export async function startSessionGateway({ upstream, retainMs = 60_000, ackDela
     url: `ws://${host}:${server.address().port}/`,
     stats,
     sessions,
+    /** 从服务端这头掐断全部客户端传输（不发关闭帧，模拟网络断）；会话脱开、保留 */
+    cutAll() {
+      let n = 0;
+      for (const s of sessions.values()) if (s.ws) { s.ws.terminate(); n += 1; }
+      return n;
+    },
     /** 服务端主动结束某个会话（测 4003 等） */
     endAll(code, reason) { for (const s of [...sessions.values()]) end(s, code, reason); },
     close() {
