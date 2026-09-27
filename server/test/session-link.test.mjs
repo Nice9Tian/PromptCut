@@ -221,3 +221,29 @@ test('SL-transport 传输取值：auto / ws 照认，http 在 HT-a 回未启用�
   assert.throws(() => wsUrlOf('ftp://h.test/'), TypeError);
   assert.equal(utf8Length('aé中😀'), 1 + 2 + 3 + 4);
 });
+
+test('SL-agent-link Agent 服务端的连接（doc-link）走会话：传输被掐断，在途请求照样拿到回包，连接不算断线', async (t) => {
+  const http = await import('node:http');
+  const { createSharedDocService } = await import('../docservice/shared-service.mjs');
+  const { createAgentLink } = await import('../agent/doc-link.mjs');
+  const server = http.createServer((req, res) => { res.statusCode = 404; res.end(); });
+  const built = createSharedDocService({ mode: 'lan', dataDir: null, store: null, server, path: '/docservice', isLoopback: () => true, localDevice: { deviceId: 'pc-test-device-0001', deviceName: 'test' }, log: () => {} });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(async () => { await built.service.close(); await new Promise((resolve) => server.close(resolve)); });
+  const gw = await startSessionGateway({ upstream: `ws://127.0.0.1:${server.address().port}/docservice` });
+  t.after(() => gw.close());
+  const proxy = await createTcpProxy({ target: gw.port });
+  t.after(() => proxy.close());
+  const logs = [];
+  const link = createAgentLink({ url: `ws://127.0.0.1:${proxy.port}/`, projectId: 'p-sl', protocolsFor: (n) => ['promptcut.v1', `promptcut.role.agent.${n}`], log: (event, fields) => logs.push({ event, ...fields }) });
+  t.after(() => link.close());
+  const conv = link.conversation(1);
+  await link.ready(5000);
+  proxy.cutAll();
+  const reply = await conv.request({ type: 'project.op', projectId: 'p-sl', opId: 'sl-op-1', session: 'agent-sl', ops: [{ op: 'set', path: '', value: { id: 'p-sl', tracks: [] } }] });
+  assert.equal(reply.type, 'project.op.ok', JSON.stringify(reply));
+  assert.ok(logs.some((l) => l.event === 'agent.link.resume'), `接续过：${JSON.stringify(logs.map((l) => l.event))}`);
+  assert.ok(!logs.some((l) => l.event === 'agent.link.close'), '没有断线');
+  assert.equal(gw.stats.opened, 1, '只建过一个会话');
+  assert.equal(link.describe().conversations[0].state, 'open');
+});
