@@ -686,16 +686,30 @@ try {
     /* ---------------------------------------------------------------- A10. 逐帧导出跨过票据时限 */
     const t10 = Date.now();
     const frames10 = Number(arg('--export-frames', SECONDS * FPS));
-    const exported = await P(member, async (n) => {
-      const t = performance.now();
-      const r = await window.__pcIo.exportVideoBrowser({ maxFrames: n, originals: true });
-      return { ms: performance.now() - t, frames: r.result?.frames ?? null, error: r.error ?? null, waits: r.waits, renewal: r.renewal ?? null, stats: r.result?.stats ?? null };
-    }, frames10);
+    /*
+     * 导出前核对要所有重卡的原尺寸齐(每段清单盖满);创建者此时可能还在补齐主重卡的后几段。
+     * 核对没过(提示「没有预渲染原尺寸」、导出被取消)就等 15 秒再导,至多 15 分钟;用最后那一次的结果判。
+     */
+    let exported = null;
+    let originalsWaits = 0;
+    const tWait = Date.now();
+    for (;;) {
+      exported = await P(member, async (n) => {
+        const t = performance.now();
+        const r = await window.__pcIo.exportVideoBrowser({ maxFrames: n, originals: true });
+        return { ms: performance.now() - t, frames: r.result?.frames ?? null, error: r.error ?? null, waits: r.waits, renewal: r.renewal ?? null, stats: r.result?.stats ?? null };
+      }, frames10);
+      const missing = exported?.frames == null && (exported?.waits ?? []).some((w) => /没有预渲染原尺寸/.test(String(w)));
+      if (!missing || Date.now() - tWait > 900_000) break;
+      originalsWaits++;
+      say('a10.wait-originals', { tries: originalsWaits, waits: exported.waits?.length ?? 0 });
+      await delay(15_000);
+    }
     check(exported?.frames === frames10, 'A10:逐帧导出照常完成', exported);
     check(exported && exported.ms > TTL_MS * 1.2, 'A10:导出时长跨过票据时限', { ms: exported?.ms, ttl: TTL_MS });
     check(exported?.renewal?.renewals >= 1, 'A10:导出途中提前续签了票据', exported?.renewal);
     if (VIDEO) check(exported?.stats?.ticketSwaps > 0, 'A10:素材地址的票据跟着换', exported?.stats);
-    out.steps.a10 = { ms: Date.now() - t10, ttlMs: TTL_MS, export: exported };
+    out.steps.a10 = { ms: Date.now() - t10, ttlMs: TTL_MS, originalsWaits, export: exported };
     say('a10.done', out.steps.a10);
   } else if (!ONLY_A4) {
     /* ---------------------------------------------------------------- A2. 关掉再开:不重测,已在 L2 的块不再请求 */
