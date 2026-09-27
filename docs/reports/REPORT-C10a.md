@@ -98,7 +98,7 @@
   - `ready-index-probe --port 5693` `ok: true`、`fails: []`；
   - `stream-produce-probe --group` PASS；
   - `preview-fallback-probe` 305 拍、透明拍数 0，`--page-preload` 282 拍、透明拍数 0，`fails` 都空；
-  - `stream-produce-probe`（不带 `--group`）只挂一条：「1080p 全幅流 15 帧分段编码 ≤ 300 ms」，实测 362 / 364 / 396 ms。在 main `2a3d763` 上同一台笔记本对照：355 / 362 / 397 ms，产出字节同为 428801。**判为机器相关**〔裁〕：300 ms 门槛是在 PC 上定的，笔记本 CPU 编 1080p 慢；集成分支与 main 一样，不是退化；该探针其余断言全过。PC 回来后在 PC 上复跑一次（第 5 节）。
+  - `stream-produce-probe`（不带 `--group`）只挂一条：「1080p 全幅流 15 帧分段编码 ≤ 300 ms」，实测 362 / 364 / 396 ms。在 main `2a3d763` 上同一台笔记本对照：355 / 362 / 397 ms，产出字节同为 428801。原判「机器相关」〔裁〕已被用户 2026-09-27 推翻：笔记本是性能基准机（`guide_files/verification.md`「性能基准机」），在笔记本上挂就是真挂。集成分支与 main 一样，说明这是早已存在的**性能缺陷**而非本次退化，不挡 C10a 合入，记为 M8 之前必修的维护项（`TODO.md`「已做步骤的遗留」）。
 
 ## 2.14 部署（阿里云，第三次）
 - 2026-09-27T13:40:24Z～13:41:37Z：从 `7a48f3c`（集成分支 worktree，干净）的在线构建（index.html + 84 个资源，index sha256 `565d8e6d…`），`deploy-hosted --save --editor dist-online --doc-public-url wss://8-219-80-16.sslip.io/hosted/ --asset-public-url https://8-219-80-16.sslip.io/media/api/asset`；先备份 pm2 配置为 `pm2.config.cjs.bak-20260927-c10a3`。部署退出码 0，`promptcut-hosted` 重载一次（restarts 7）；脚本里的回环 healthz 又是在进程监听前查的。
@@ -118,7 +118,7 @@
 | 项 | 结果 |
 |---|---|
 | G0 | 通过（第 2.13 节）：tsc 0；npm test 3286 / 3284 / 0 / 2，总条数不少于合入前 main 的 3121 加本阶段新增；桌面与在线构建成功 |
-| G0-R | 通过，只一条机器相关的编码耗时门槛除外〔裁〕（第 2.13 节）：导出确定性 1800/1800、与 main 基准逐像素相同、快照重放 PASS、ready-index 与 stream-produce --group 通过、preview-fallback 两种透明拍数 0 |
+| G0-R | 通过，只一条编码耗时门槛除外（第 2.13 节，早已存在的性能缺陷，用户定为待修、不豁免）：导出确定性 1800/1800、与 main 基准逐像素相同、快照重放 PASS、ready-index 与 stream-produce --group 通过、preview-fallback 两种透明拍数 0 |
 | 契约测试 | C10A 53 条全真跑全过（第 1 节集成）；第 17 节新增 C10A-L17 各条全过（第 2.12 节） |
 | 本机替身 demo | `c10a-demo-probe --local` 多轮全过（第 2.9、2.12 节） |
 | 外网 demo | 阿里云第 2 轮全过（第 2.15 节） |
@@ -140,5 +140,5 @@
   - 真手机扫码（iPhone 相机、微信各一次，契约第 12 节）；
   - iOS 逐帧导出的最长时长与体积；
   - 审〔裁〕：第 2.12 节（维持兜底画面的读法、direct 卡的过渡期限制）、第 2.13 节（编码耗时门槛判为机器相关）。
-- 待跨机复核：`stream-produce-probe` 的 1080p 编码耗时门槛在 PC 上复跑（PC 辅助节点下线期间登记不等）。
+- 待修（M8 之前的维护项，用户 2026-09-27 定）：`stream-produce-probe` 的「1080p 全幅流 15 帧分段编码 ≤ 300 ms」在笔记本上 355～397 ms；笔记本是性能基准机，不在 PC 上复跑豁免，要在笔记本上修到过线，或经用户确认后改门槛。
 - 遗留（进 C10 其余或 M8 之内）：direct 卡在低内存档过渡期播放时一直占位；第 3 步「新的小尺寸到手机」本机 157～304 s、外网 330.8 s，比早先慢（多了一张补渲的卡与一个补渲计划，没细查）；`c10a-demo-probe` 两处小毛病（第 2.9 节末）；在线页面仍直接用 `media.url` 的几处（交接文件第 4 节）。
