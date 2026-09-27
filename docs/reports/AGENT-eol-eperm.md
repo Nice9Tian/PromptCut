@@ -39,4 +39,26 @@
 
 ## 验证
 
-（见下一节，跑完后补。）
+代码提交 `d15e696`（报告提交不改代码）上跑：
+
+| 项 | 命令 | 结果 |
+|---|---|---|
+| 类型检查 | `npx tsc -b --force` | exit 0，零错误 |
+| 全量测试 | `npm test` | exit 0：3417 条，通过 3415，失败 0，跳过 2（cards-layout、skill-gate 两条显式开启的集成测试） |
+| 新增单测 | `node --test src/render/cardSourceVersion.test.mjs`、`server/test/raw-eol.test.mjs`、`server/test/costs.test.mjs` | 2 / 3 / 21 全过 |
+| 在线构建换行无关 | `vite build --mode online --outDir <临时目录>`：一次在本 worktree（CRLF 检出，1940 个文本文件 `w/crlf`），一次在新检出的 `.worktrees/eol-eperm-lf`（`-c core.autocrlf=false -c core.eol=lf`，1940 个 `w/lf`） | 两份产物 85 个文件（84 个 assets + index.html）sha256 **完全相同** |
+| 对照（修前） | 同样两种检出的 a038948（`.worktrees/eol-base-crlf`、`.worktrees/eol-base-lf`） | 8 个文件不同：7 个 JS 分块（index、Container、InteractivityPluginInstance、LinkInstance、MovePluginInstance、onlineExport、programs）+ index.html |
+| 导出确定性 | dev server 5630（本 worktree），`node scripts/verify-determinism.mjs --url "http://127.0.0.1:5630/?export=1"` | exit 0：1800 帧，相同 1800，不同 0 |
+| 与 PC 基准逐像素 | `compare-frames.mjs <pc-g0r-base/out/verify-a/frames> out/verify-a/frames` | total 1800，identical 1800，different 0，missing 0，extra 0 |
+
+中途发现：只改身份键与 `?raw` 之后，两份构建仍差 `index.html`（Vite 照原文抄换行，且拆入口 `<script>` 时在 `</body>` 前留一个 CR），于是插件加了 html 产物的换行统一（`2f8f980`、`d15e696`）。
+
+dev server（5630～5632）已结束。临时 worktree `.worktrees/eol-eperm-lf`、`.worktrees/eol-base-crlf`、`.worktrees/eol-base-lf`（都是分离头、无改动、无 junction）按「不删 worktree」保留，主会话可直接 `git worktree remove`。
+
+## 没做成的
+
+无。
+
+## 对任务书的更正建议
+
+- 任务书说「9 个分块哈希因身份键不同」：实际原因主要是 Vite `?raw` 把 CRLF 原文内嵌进分块（身份键是运行时算的，不进产物）；本次在 a038948 上对照测得 7 个 JS 分块 + index.html 不同。修法因此多了 `server/raw-eol.mjs` 这层。
