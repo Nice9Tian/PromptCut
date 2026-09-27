@@ -118,12 +118,13 @@ let modsP = null;
 /** 按需载入被测模块 */
 function mods() {
   modsP ??= (async () => {
-    const [client, shared, route, link, fp, messages, session, transfer] = await Promise.all([
+    const [client, shared, route, link, fp, messages, session, transfer, filter] = await Promise.all([
       import('../../server/auth/client.mjs'), import('../../server/auth/shared-config.mjs'), import('../../server/auth/route.mjs'),
       import('../../server/render-node/session-link.mjs'), import('../../server/render-node/fingerprint.mjs'),
       import('../../server/render-queue/messages.mjs'), import('../../server/render-node/session.mjs'), import('../../server/artifact-transfer.mjs'),
+      import('../../server/render-node/filter.mjs'),
     ]);
-    return { ...client, ...shared, ...route, ...link, ...fp, ...messages, ...session, ...transfer };
+    return { ...client, ...shared, ...route, ...link, ...fp, ...messages, ...session, ...transfer, ...filter };
   })();
   return modsP;
 }
@@ -654,6 +655,7 @@ async function runCreator(book, head) {
       else book.pending('D1-D2-D12', 'twin', '--no-twin');
     }
     book.judge('M7-A11', 'server-logs-describe', !scanLeaks(ctx).found, scanLeaks(ctx));
+    head.planDump = await dumpPlans(ctx);
     await kv.signal('creator.finished', {});
     await kv.done({});
     nodeResult = await kv.takeResult('node', deadline);
@@ -677,6 +679,7 @@ async function runCreator(book, head) {
       planOnly: planOnlyState(ctx), godPolls: god.polls, nodesSeen: [...god.nodes.values()].map((n) => ({ profile: n.profile, userId: n.userId?.replace(/@.*/, '@…'), fp: n.envFingerprint, claimsMax: n.claimsMax })) });
   } catch (error) {
     book.part('W7', 'creator-crash', 'fail', { error: errText(error), stack: String(error?.stack ?? '').split('\n').slice(0, 6).join(' | ') });
+    say('creator-crash', { error: errText(error), stack: String(error?.stack ?? '').split('\n').slice(0, 6).join(' | ') });
     await kv.abort(errText(error));
   } finally {
     for (const c of cleanups.reverse()) { try { await c(); } catch { /* 收尾出错不影响结论 */ } }
@@ -999,6 +1002,38 @@ async function twinChecks(ctx) {
   } finally {
     for (const c of closers.reverse()) { try { await c(); } catch { /* 忽略 */ } }
   }
+}
+
+/**
+ * 诊断：本项目全部计划任务的去向（主会话 2026-09-28 追问「低内存页的补渲计划为什么一直 open」）。
+ * 每个计划：清单种类（#clips / #backfill）、档、requires、状态、认领过它的节点；按 pc 节点的描述跑一遍节点侧过滤与挑选；
+ * pc 诊断里的认领记录、持有、闲时门槛、最近事件。全文写进 <out>/plan-dump.json，结果行里放摘要。
+ */
+async function dumpPlans(ctx) {
+  const M = await mods();
+  const { pickCandidate } = await import('../../server/render-node/pick.mjs');
+  const pcDiag = await ctx.editor?.e?.queue().catch(() => null);
+  const pcNode = { nodeId: pcDiag?.nodeId ?? ctx.pcNodeId, profile: 'pc', envFingerprint: ctx.pcFp, codeVersions: pcDiag?.codeVersion ? [pcDiag.codeVersion] : [], capabilities: {}, editing: false };
+  const shortUser = (u) => String(u ?? '').split('@')[0] || null;
+  const plans = [...ctx.watcher.bodies.values()].filter((t) => t.kind === 'plan' && Number(t.source?.projectRev) < 900_000).map((t) => {
+    const g = ctx.god.tasks.get(t.id);
+    return { id: t.id.replace(/^plan:[^@]+/, 'plan:<项目>'), kind: t.resultKey.includes('#backfill:') ? 'backfill' : t.resultKey.includes('#clips:') ? 'clips' : 'desktop', priority: t.priority,
+      user: shortUser(t.source?.userId), rev: t.source?.projectRev, clips: t.input?.clips ?? null, requires: { ...t.requires, codeVersion: t.requires?.codeVersion ? `${t.requires.codeVersion.slice(0, 8)}…` : undefined },
+      state: g?.state ?? null, attempts: g?.attempts ?? null, lastError: g?.lastError ?? null, states: (g?.states ?? []).map((x) => x.state),
+      claimedBy: (g?.claimedBy ?? []).map((c) => (c.nodeId === pcNode.nodeId ? 'pc' : c.nodeId.slice(0, 20))),
+      pcFilter: M.checkClaimable({ ...t, state: 'open' }, pcNode) };
+  });
+  const openForPc = [...ctx.watcher.bodies.values()].filter((t) => ctx.god.tasks.get(t.id)?.state === 'open' && (t.requires?.envFingerprint == null || t.requires.envFingerprint === ctx.pcFp));
+  const claimable = M.filterClaimable(openForPc.map((t) => ({ ...t, version: ctx.god.tasks.get(t.id)?.version ?? 1 })), pcNode);
+  const band = (t) => (t.priority === 'backfill' ? 'backfill' : 'normal');
+  const pcView = { openVisible: openForPc.length, claimable: claimable.length, claimableByBand: claimable.reduce((m, t) => ((m[band(t)] = (m[band(t)] ?? 0) + 1), m), {}),
+    claimableNormal: claimable.filter((t) => band(t) === 'normal').slice(0, 8).map((t) => ({ id: t.id.slice(0, 40), kind: t.kind, user: shortUser(t.source?.userId), clip: t.input?.clipId ?? null, lastError: ctx.god.tasks.get(t.id)?.lastError ?? null, attempts: ctx.god.tasks.get(t.id)?.attempts ?? null })),
+    wouldPick: (() => { const p = pickCandidate(claimable, { random: () => 0 }); return p ? { id: p.id.slice(0, 40), kind: p.kind, band: band(p) } : null; })() };
+  const pc = pcDiag ? { held: pcDiag.held, running: pcDiag.running, idle: pcDiag.idle, stats: pcDiag.stats, claims: (pcDiag.claims ?? []).slice(-12).map((c) => ({ id: String(c.id).slice(0, 40), priority: c.priority })),
+    events: (pcDiag.events ?? []).filter((e) => /claim|reject|plan|split|lock|fail|lost|release|yield/i.test(e.event)).slice(-30).map((e) => JSON.stringify(e).slice(0, 300)) } : null;
+  const full = { plans, pcView, pc, pcNode: { ...pcNode, codeVersions: pcNode.codeVersions.map((v) => `${v.slice(0, 8)}…`) } };
+  try { fs.writeFileSync(path.join(ctx.out, 'plan-dump.json'), JSON.stringify({ ...full, pcDiagRaw: pcDiag }, null, 1)); } catch { /* 写不了 */ }
+  return full;
 }
 
 /** D15 的「只切分、不认领细任务」开关生效没有：pc 认领过细任务就是没生效 */
@@ -1399,7 +1434,7 @@ async function runNode(book, head) {
     }
 
     // 等 creator 做完（twin、A10 这些要页面开着重发计划）
-    await kv.takeSignal('creator.finished', deadline);
+    await until(async () => (await kv.peekSignal('creator.finished')) ?? (await kv.aborted()), Math.max(1000, deadline - Date.now()), 1000);
 
     // A1 页面：整场收到 A 的任务消息条数（任何连接、三页）
     const aIds = new Set(a1d?.ids ?? []);
