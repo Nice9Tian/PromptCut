@@ -78,7 +78,8 @@ PC、高优先级、9 轮中位数,同一套滤镜链:
 - `verify-unified-frames --origin http://127.0.0.1:5670`:PASS。
 - `stream-produce-probe --group --origin http://127.0.0.1:5670`:退出码 0,`fails: []`。
 - `stream-produce-probe --origin http://127.0.0.1:5670`(不带 `--group`):修后 5 次全过(见第 4 节);修前 5 次都只挂耗时这一条。
-- `verify-determinism`、导出像素与 PC 基准对比:见第 8 节(跑完补)。
+- `verify-determinism --url "http://127.0.0.1:5670/?export=1"`:1800 帧,Identical 1800 / Different 0,退出码 0(导出 132.3 s)。
+- 导出像素与 PC 基准(`.worktrees/pc-g0r-base/out/verify-a/frames`)逐帧比:total 1800 / identical 1800 / different 0 / missing 0 / extra 0,退出码 0。
 
 ## 7. 给笔记本的测法
 
@@ -102,7 +103,6 @@ node -e "const j=require('./out/perf-encode-probe.json');const b=j.bench.find(x=
 ## 8. 没做成的、待定的
 
 - 笔记本复核:待做(本报告第 7 节)。
-- `verify-determinism` 与像素对比:见下方补记。
 - 需要主会话定的事见回复。
 
 ## 进度
@@ -110,5 +110,5 @@ node -e "const j=require('./out/perf-encode-probe.json');const b=j.bench.find(x=
 - [x] 量法与耗时拆分(PC)
 - [x] 修法
 - [x] 单测
-- [ ] 验证(determinism、像素对比在跑)
+- [x] 验证(PC;耗时门槛待笔记本复核)
 - [x] 给笔记本的测法
