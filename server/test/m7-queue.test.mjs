@@ -484,7 +484,7 @@ test('M7Q-D2-N2 idleLockTakeover：锁定方闲置超 30 s 且还没做完 → �
         ? { id: t.id, error: 'card-locked', lockedBy: B, ...lockInfo }
         : { id: t.id, state: 'open', version: 1, created: true }));
     };
-    const rig = splitterRig({ respond, cardPlan: [a], takeoverLocked: localNodeModule.idleLockTakeover() });
+    const rig = splitterRig({ respond, cardPlan: [a], takeoverLocked: localNodeModule.idleLockTakeover });
     rig.endpoint.deliver({ type: 'task.claimed', id: listPlan.id, token: 2, version: 2, leaseUntil: T0 + 30_000, task: planView });
     await flush();
     return rig.publishes();

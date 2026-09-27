@@ -168,6 +168,8 @@ export function splitPlan({
   usesLocalMedia = () => true,   // (control) => boolean;流任务传 { clipId: topClipId, kind: 'stream' }
   lane = 'normal',          // 'backfill':补渲计划任务切出的细任务,priority 一律标 'backfill'(c10a 契约第 17 节)
   browserFingerprints = [], // 本项目在线、同一用户的纯浏览器节点的指纹(M7 契约 D1):浏览器可做、没锁的卡另出这些指纹的一份
+  browser = null,           // 同上的另一种写法:`{ nodeId, envFingerprint }` 或它的数组(契约第 3.3 节的形状)。
+                            // 注意:切分方不读 `planTask.input.browser`(页面自报的),浏览器指纹以文档服务给的为准
 }) {
   /** 细任务的 priority:补渲档一律 'backfill';normal 档照旧按锚帧给整数名次 */
   const priorityOf = anchored => (lane === 'backfill' ? 'backfill' : anchored ? ANCHOR_PRIORITY : NORMAL_PRIORITY);
@@ -179,9 +181,11 @@ export function splitPlan({
   const lockOf = lockLookup(cardLocks);
   const takesOver = takeoverTest(takeover);
   /** 浏览器指纹:非空字符串、去重、不等于自己的指纹(相同就不必另出一份) */
-  const browserFps = [...new Set((Array.isArray(browserFingerprints) ? browserFingerprints : [])
-    .filter(fp => typeof fp === 'string' && fp !== '' && fp !== envFingerprint))];
-  const browserSet = new Set(browserFps);
+  const browserAlias = (Array.isArray(browser) ? browser : browser != null ? [browser] : []).map(b => b?.envFingerprint);
+  /** 浏览器指纹(非空字符串、去重);其中等于自己指纹的不另出一份,但自己那份同样要带页面生成快照的两项 */
+  const browserSet = new Set([...(Array.isArray(browserFingerprints) ? browserFingerprints : []), ...browserAlias]
+    .filter(fp => typeof fp === 'string' && fp !== ''));
+  const browserFps = [...browserSet].filter(fp => fp !== envFingerprint);
   const mediaOwner = typeof localMedia === 'string' && localMedia !== '' ? localMedia : null;
   /** 本地档能力闸(M6c X2):这一项的输入用到只在发布方本机的素材时,requires 加 `localMedia` */
   const gateLocalMedia = (requires, control) => {
@@ -247,7 +251,7 @@ export function splitPlan({
     const weight = weightOf(control);
     // M7 D1:这张卡出哪几份。没锁(或锁在自己的指纹上)、浏览器做得了时另出浏览器指纹的;锁在别处的照锁只出一份
     const eligible = browserSet.size > 0 && browserEligible({ tier, compositing, requires, weight });
-    const fingerprints = eligible && lockOf(lockKey) == null ? [keying.fingerprint, ...browserFps] : [keying.fingerprint];
+    const fingerprints = eligible && lockOf(lockKey) == null && keying.fingerprint === envFingerprint ? [keying.fingerprint, ...browserFps] : [keying.fingerprint];
     const dual = fingerprints.length > 1;
     for (const fingerprint of fingerprints) {
       const resultKey = resultKeyOf(contentKey, fingerprint);

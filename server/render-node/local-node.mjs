@@ -1,11 +1,13 @@
 import { createNodeSession } from './session.mjs';
 import { lockKeyOf, splitPlan } from './split.mjs';
-import { isListPlan, priorityBand } from '../render-queue/index.mjs';
+import { createTaskRunner, untilAborted } from './task-runner.mjs';
+import { isListPlan, priorityBand } from '../render-queue/messages.mjs';
+import { LOCK_IDLE_TAKEOVER_MS } from '../render-queue/constants.mjs';
 
 /**
  * 本机渲染节点的编排(分布式预渲染 M3,契约 `docs/plan/render-queue-contract.md` D 节)。
  *
- * 生产编排模块:把节点会话(`session.mjs`)、切分(`split.mjs`)和注入进来的三样东西串起来:
+ * 生产编排模块:把节点会话(`session.mjs`)、切分(`split.mjs`)、细任务编排(`task-runner.mjs`)和注入进来的三样东西串起来:
  *
  *   endpoint  到队列的一条连接(进程内是环回端点,M5 起是 WebSocket 适配层)
  *   executor  真正干活的:算计划、渲染一段
@@ -24,7 +26,12 @@ import { isListPlan, priorityBand } from '../render-queue/index.mjs';
  *           (带片段清单的计划任务:预渲染集合换成它的片段清单、不切流;补渲计划的细任务标 backfill,见 `listPlanOverrides`)
  *   细任务   sink.has 为真就直接 complete(dedup,带 sink.resultFor 的清单);否则 executor.render →
  *            sink.put → 收全才 complete(带 put 回的清单),没收全 fail(可重试)。
- *            sink 收到的 ref 带任务的 input 与 requires(契约 J.3)
+ *            sink 收到的 ref 带任务的 input 与 requires(契约 J.3)。这一段在同构的 `task-runner.mjs` 里
+ *            (M7 D11:页面的纯浏览器节点共用,不牵进 split.mjs 与 node:crypto),行为与原来相同
+ *   M7       plan 的认领回包带 `browserFingerprints`(D1)时交给切分,浏览器可做的卡另出一份;
+ *            切分完成后把最终发布成功的细任务交给 `executor.afterSplit`(可选,写层表 v 3,D12);
+ *            `takeoverLocked` 收到发布回包里锁的描述 `{ lockIdleMs, lockedByProfile, lockUndone }`(D2),
+ *            pc 与独立渲染主机传 `idleLockTakeover`
  *   出错     fail,`error.retryable === false` 才不可重试
  *
  * 发布必须先于完成:派生任务继承 plan 的用户与订阅者(契约 A.4 末段),条件是发布那一刻
@@ -88,6 +95,8 @@ import { isListPlan, priorityBand } from '../render-queue/index.mjs';
  * @property {(task: object, opts: { signal: AbortSignal, progress: (done: number) => void }) => Promise<unknown>} render
  *   渲染一段。task 是 TaskView;progress(done) 报进度;返回的 artifacts 不透明,原样交给 sink.put。
  *   抛出的错误带 `retryable === false` 时按不可重试处理,否则可重试
+ * @property {(planTask: object, info: { tasks: object[], derived: string[] }) => unknown} [afterSplit]
+ *   (M7 D12)切分完成、发布回包都回来之后调一次,`tasks` 是最终发布成功的细任务(TaskInput)。不等它,出错只记事件
  *
  * @typedef {object} SinkRef
  * @property {string} resultKey
@@ -125,10 +134,31 @@ const noop = () => {};
 /** 发布被 card-locked 拒绝后最多重来几轮(契约 F.7 第 5 条)。 */
 const RELOCK_ROUNDS = 2;
 
-/** `takeoverLocked`(布尔或 `(lockKey, lockedBy) => boolean`)→ 判定函数;只认 `=== true`。 */
+/**
+ * 锁闲置接手的判定(M7 契约 D2,第 13 节裁定):给 `createLocalNode({ takeoverLocked })` 用,pc 与独立渲染主机都传它。
+ * 发布回包说这张卡锁在别的环境上时:锁定方闲置**严格超过** 30 s(`lockIdleMs > LOCK_IDLE_TAKEOVER_MS`,与本机锁库
+ * `server/card-lock.mjs` 的 `CARD_LOCK_IDLE_MS` 同一个数),且锁定方这张卡还有没做完的(`lockUndone` 不是 0;
+ * 没带这一项按「不知道」算,不挡)才接手 —— 语义「还缺帧、而锁定方已经有一段时间没有再产出，就用自己的指纹接手整张卡」
+ * (`mechanism/rendering.md`)。回包里没有 `lockIdleMs`(旧队列)一律不接手。纯函数。
+ *
+ * @param {string} lockKey
+ * @param {string} lockedBy
+ * @param {{ lockIdleMs?: number, lockedByProfile?: string | null, lockUndone?: number }} [info]
+ * @returns {boolean}
+ */
+export function idleLockTakeover(lockKey, lockedBy, info = {}) {
+  const idle = info?.lockIdleMs;
+  if (typeof idle !== 'number' || !Number.isFinite(idle)) return false;
+  return idle > LOCK_IDLE_TAKEOVER_MS && info.lockUndone !== 0;
+}
+
+/**
+ * `takeoverLocked`(布尔或 `(lockKey, lockedBy, info) => boolean`)→ 判定函数;只认 `=== true`。
+ * `info` 是发布回包里这把锁的描述 `{ lockIdleMs, lockedByProfile, lockUndone }`(M7 D2;旧队列没有)。
+ */
 function takeoverLockedTest(takeoverLocked) {
   if (takeoverLocked === true) return () => true;
-  if (typeof takeoverLocked === 'function') return (lockKey, lockedBy) => takeoverLocked(lockKey, lockedBy) === true;
+  if (typeof takeoverLocked === 'function') return (lockKey, lockedBy, info) => takeoverLocked(lockKey, lockedBy, info) === true;
   return () => false;
 }
 
@@ -145,11 +175,6 @@ function mergedLocks(cardLocks, extra) {
   return out;
 }
 
-/** sink 回的清单 → 可展开进 `complete` 结果的对象;不是普通对象(null、缺省、数组)就什么都不加。 */
-function resultFields(result) {
-  return result != null && typeof result === 'object' && !Array.isArray(result) ? result : {};
-}
-
 /**
  * 带片段清单的计划任务:补渲计划(c10a 契约第 17 节,语义 `mechanism/rendering.md`「低内存档」)与在线页面的清单计划
  * (C10 契约第 7 节、第 18 节第 9 条)。清单里的片段当重卡算键 —— 预渲染集合换成清单(与本机的判重无关),
@@ -162,20 +187,11 @@ function listPlanOverrides(task) {
   return { prerenderSet: new Set(clips), streams: [], lane: priorityBand(task.priority) === 'backfill' ? 'backfill' : 'normal' };
 }
 
-/** 中止时抛出的标记:赛跑输给中止信号,不是执行器自己的错误。 */
-const ABORTED = Symbol('aborted');
-
-/** 等 promise 落定,或者等到中止信号,先到先算。信号已经中止就立即拒绝。 */
-function untilAborted(work, signal) {
-  if (signal.aborted) return Promise.reject(ABORTED);
-  let onAbort;
-  const aborted = new Promise((_, reject) => {
-    onAbort = () => reject(ABORTED);
-    signal.addEventListener('abort', onAbort, { once: true });
-  });
-  // 执行器可能同步抛出,也可能返回非 Promise 的值:统一包成 Promise
-  const settled = new Promise(resolve => resolve(work()));
-  return Promise.race([settled, aborted]).finally(() => signal.removeEventListener('abort', onAbort));
+/** 发布回包里一把锁的描述(M7 D2):没有的项不带 */
+function lockInfoOf(result) {
+  const info = {};
+  for (const k of ['lockIdleMs', 'lockedByProfile', 'lockUndone']) if (result?.[k] !== undefined) info[k] = result[k];
+  return info;
 }
 
 /**
@@ -193,8 +209,9 @@ function untilAborted(work, signal) {
  * @param {string} [options.codeVersion]  切分细任务时写进 requires.codeVersion
  * @param {Executor} options.executor
  * @param {Sink} options.sink
- * @param {boolean | ((lockKey: string, lockedBy: string) => boolean)} [options.takeoverLocked]
- *   发布被 card-locked 拒绝时要不要接手(契约 F.7):缺省 false,照锁定方的指纹重发
+ * @param {boolean | ((lockKey: string, lockedBy: string, info: object) => boolean)} [options.takeoverLocked]
+ *   发布被 card-locked 拒绝时要不要接手(契约 F.7):缺省 false,照锁定方的指纹重发;pc 与独立渲染主机传
+ *   `idleLockTakeover`(M7 D2)
  * @param {(event: object) => void} [options.onEvent]  诊断用
  * @returns {LocalNode}
  */
@@ -215,15 +232,10 @@ export function createLocalNode({
   takeoverLocked = false,
   onEvent = noop,
 }) {
-  /** 在跑表:id → 当前这一次执行 { id, token, kind, controller }。中止即移出 */
-  const active = new Map();
-  /** 还没落定的执行(含已中止、还在收尾的),供 `settled()` 等 */
-  const pending = new Set();
   /** 在等回包的发布:reqId → { run, message, resolve, reject } */
   const publishes = new Map();
   let publishSeq = 0;
   let attached = false;
-  let stopped = false;
   const takesOverLocked = takeoverLockedTest(takeoverLocked);
 
   // 诊断回调出错不能打断协议流程(它可能在消息处理器里被调到)
@@ -231,56 +243,19 @@ export function createLocalNode({
     try { onEvent(event); } catch { /* 诊断回调的异常吞掉 */ }
   };
 
+  // 细任务的编排在同构模块里(M7 D11);plan 的切分只在这里(要 split.mjs)
+  // eslint-disable-next-line prefer-const
+  let session;
+  const runner = createTaskRunner({ nodeId, session: () => session, executor, sink, emit, executePlan });
+  const { holding } = runner;
+
   // undefined 不传,让会话用它自己的缺省值
-  const sessionOptions = { nodeId, node, send: message => endpoint.send(message), now, constants, onTask, onLost };
+  const sessionOptions = { nodeId, node, send: message => endpoint.send(message), now, constants, onTask: runner.onTask, onLost: runner.onLost };
   if (random !== undefined) sessionOptions.random = random;
   if (isIdle !== undefined) sessionOptions.isIdle = isIdle;
   if (maxConcurrent !== undefined) sessionOptions.maxConcurrent = maxConcurrent;
   if (projects !== undefined) sessionOptions.projects = projects;
-  const session = createNodeSession(sessionOptions);
-
-  function abortRun(run, reason) {
-    if (active.get(run.id) === run) active.delete(run.id);
-    run.controller.abort(reason);
-  }
-
-  function abortAll(reason) {
-    for (const run of [...active.values()]) abortRun(run, reason);
-  }
-
-  /** 仍持有:见文件头。同步判定,判完到发消息之间不能 await。 */
-  function holding(run) {
-    if (stopped || run.controller.signal.aborted || active.get(run.id) !== run) return false;
-    return session.held().some(hold => hold.id === run.id && hold.token === run.token);
-  }
-
-  function onTask(task, { token }) {
-    const id = task?.id;
-    if (id == null) return;
-    // 同一 id 还挂着旧的执行:它的持有已经没了(否则会话不会再调 onTask),先中止
-    const previous = active.get(id);
-    if (previous) abortRun(previous, 'reclaimed');
-    const run = { id, token, kind: task.kind, controller: new AbortController() };
-    active.set(id, run);
-    // 开工先报一次进度 0:队列的停滞规则只在 done !== null 时生效,否则会话每拍用 null 续约,
-    // 执行器卡死又从不报进度时任务永远不会被回收(契约 D.2〔裁〕)
-    try {
-      session.progress(id, 0);
-    } catch {
-      // 连接已坏:后面的发送同样会失败,由执行里的异常处理收尾
-    }
-    const done = execute(run, task).then(() => {
-      if (active.get(id) === run) active.delete(id);
-      pending.delete(done);
-    });
-    pending.add(done);
-  }
-
-  function onLost(id, reason) {
-    const run = active.get(id);
-    if (run) abortRun(run, reason);
-    emit({ type: 'lost', id, reason });
-  }
+  session = createNodeSession(sessionOptions);
 
   /**
    * 发一条 `task.publish`(带本实例唯一的 reqId),等同一 reqId 的 `task.published` 回来,
@@ -301,12 +276,15 @@ export function createLocalNode({
 
   /**
    * 切分并发布派生任务,处理 card-locked 拒建(契约 F.7 第 5 条)。
-   * → `{ derived: 发布成功的 id, relocked: 重发过的锁键(升序), gaveUp: 最后仍被拒的锁键(升序) }`。
+   * → `{ derived: 发布成功的 id, published: 发布成功的细任务(TaskInput,层表按它写,M7 D12),
+   *      relocked: 重发过的锁键(升序), gaveUp: 最后仍被拒的锁键(升序) }`。
+   * 「发布成功」= 回包项没有 `error`、状态不是 failed。
    * 每次等回包之后仍持有才继续;不再持有时提前返回,由调用方丢弃。
    */
   async function publishDerived(run, base, ctxLocks) {
     const derived = [];
     const seen = new Set();
+    const published = new Map();   // id → TaskInput(最后一次发布成功的那一份)
     const relocked = new Set();
     const learned = new Map();   // 回包告诉我们的锁:lockKey → lockedBy,逐轮累加
     let gaveUp = [];
@@ -315,19 +293,20 @@ export function createLocalNode({
       const results = await publishAndWait(run, tasks);
       if (!holding(run)) break;
       const byId = new Map(tasks.map(t => [t.id, t]));
-      /** 这一轮被拒的:lockKey → lockedBy */
+      /** 这一轮被拒的:lockKey → { lockedBy, info } */
       const rejected = new Map();
       for (const r of Array.isArray(results) ? results : []) {
         if (r?.id == null) continue;
         if (r.error == null) {
           if (!seen.has(r.id)) { seen.add(r.id); derived.push(r.id); }
+          if (r.state !== 'failed' && byId.has(r.id)) published.set(r.id, byId.get(r.id));
           continue;
         }
         // limit 等其它错误:没建成,不进 derived,也不做锁处理(F.7 第 4 条)
         if (r.error !== 'card-locked') continue;
         const lockKey = lockKeyOf(byId.get(r.id));
         if (lockKey == null || typeof r.lockedBy !== 'string' || r.lockedBy === '') continue;
-        rejected.set(lockKey, r.lockedBy);
+        rejected.set(lockKey, { lockedBy: r.lockedBy, info: lockInfoOf(r) });
       }
       if (rejected.size === 0) break;
       for (const lockKey of rejected.keys()) relocked.add(lockKey);
@@ -335,96 +314,48 @@ export function createLocalNode({
         gaveUp = [...rejected.keys()].sort();
         break;
       }
-      for (const [lockKey, lockedBy] of rejected) learned.set(lockKey, lockedBy);
+      for (const [lockKey, { lockedBy }] of rejected) learned.set(lockKey, lockedBy);
       const cardLocks = mergedLocks(ctxLocks, learned);
-      const takeover = lockKey => rejected.has(lockKey) && takesOverLocked(lockKey, rejected.get(lockKey));
+      const takeover = lockKey => rejected.has(lockKey)
+        && takesOverLocked(lockKey, rejected.get(lockKey).lockedBy, rejected.get(lockKey).info);
       // 只重发这一轮被拒的锁键;其余任务已经发布过,不重复发
       tasks = splitPlan({ ...base, cardLocks, takeover }).filter(t => rejected.has(lockKeyOf(t)));
     }
-    return { derived, relocked: [...relocked].sort(), gaveUp };
+    return { derived, published: [...published.values()], relocked: [...relocked].sort(), gaveUp };
   }
 
-  /** 一次执行。从不拒绝:所有异常都在这里收掉。 */
-  async function execute(run, task) {
+  /** plan 任务:算计划 → 切分 → 发布(等回包)→ 交给执行器写层表 → complete。异常由 runner 收(fail) */
+  async function executePlan(run, task, ctx = {}) {
     const { id } = run;
     const { signal } = run.controller;
     const discard = () => emit({ type: 'discarded', id });
-    try {
-      if (task.kind === 'plan') {
-        const ctx = await untilAborted(() => executor.plan(task, { signal }), signal);
-        if (!holding(run)) return discard();
-        // ctx 放在前面:切分节点自己的指纹、plan 与代码版本一定生效(设计 2.1);
-        // ctx 带的 cardLocks / takeover 随展开原样传给切分(契约 F.2)
-        const base = { ...ctx, planTask: task, envFingerprint: node?.envFingerprint, codeVersion, constants, ...listPlanOverrides(task) };
-        const outcome = await publishDerived(run, base, ctx?.cardLocks);
-        if (!holding(run)) return discard();
-        const { derived, relocked, gaveUp } = outcome;
-        if (relocked.length > 0) emit({ type: 'plan-relocked', id, lockKeys: relocked, gaveUp });
-        session.complete(id, { ranges: null, derived });
-        emit({ type: 'plan-split', id, derived });
-        return;
-      }
-
-      const { resultKey, kind, range } = task;
-      // input / requires 原样带上:本地档的落盘键要用 input.entryKey、input.contentKey、
-      // requires.envFingerprint,canvasHeavy 取 input.canvasHeavy(C6.2 第 11 节第 2、3 条,J.3)
-      const ref = { resultKey, kind, tier: task.tier ?? null, range, input: task.input, requires: task.requires };
-      const ranges = [[range?.from, range?.to]];
-
-      const have = await untilAborted(() => sink.has({ ...ref }), signal);
-      if (!holding(run)) return discard();
-      if (have === true) {
-        // 去重完成也带清单,订阅方才拉得到(C6.4 第 3 节);sink 没有 resultFor 时照旧(D.2)
-        // resultFor 抛错算「没有清单」:照旧以去重方式完成,不让任务失败(契约 J.10)
-        let manifest = null;
-        if (typeof sink.resultFor === 'function') {
-          try {
-            manifest = await untilAborted(() => sink.resultFor({ ...ref }), signal);
-          } catch (error) {
-            if (error === ABORTED) throw error;
-            manifest = null;
-          }
-          if (!holding(run)) return discard();
-        }
-        session.complete(id, { ranges, dedup: true, ...resultFields(manifest) });
-        emit({ type: 'dedup', id });
-        return;
-      }
-
-      const progress = done => {
-        if (holding(run)) session.progress(id, done);
-      };
-      const artifacts = await untilAborted(() => executor.render(task, { signal, progress }), signal);
-      if (!holding(run)) return discard();
-
-      const r = await untilAborted(
-        () => sink.put({ ...ref, artifacts, meta: { taskId: id, nodeId, token: run.token } }),
-        signal,
-      );
-      if (!holding(run)) return discard();
-      if (r?.complete !== true) {
-        session.fail(id, 'sink-incomplete', true);
-        emit({ type: 'failed', id, error: 'sink-incomplete', retryable: true });
-        return;
-      }
-      // put 回的清单(C6.2 第 3 节)展开进 task.done 的 result(J.3)
-      session.complete(id, { ranges, ...resultFields(r.result) });
-      emit({ type: 'completed', id });
-    } catch (error) {
-      if (error === ABORTED || !holding(run)) return discard();
-      const message = String(error?.message ?? error);
-      const retryable = error?.retryable !== false;
+    const plan = await untilAborted(() => executor.plan(task, { signal }), signal);
+    if (!holding(run)) return discard();
+    // plan 放在前面:切分节点自己的指纹、plan 与代码版本一定生效(设计 2.1);
+    // plan 带的 cardLocks / takeover 随展开原样传给切分(契约 F.2)。
+    // M7 D1:认领回包带的浏览器指纹(文档服务上本项目在线、同一用户的纯浏览器节点)交给切分
+    const browserFingerprints = Array.isArray(ctx.browserFingerprints) ? ctx.browserFingerprints : [];
+    const base = { ...plan, planTask: task, envFingerprint: node?.envFingerprint, codeVersion, constants, browserFingerprints, ...listPlanOverrides(task) };
+    const outcome = await publishDerived(run, base, plan?.cardLocks);
+    if (!holding(run)) return discard();
+    const { derived, published, relocked, gaveUp } = outcome;
+    if (relocked.length > 0) emit({ type: 'plan-relocked', id, lockKeys: relocked, gaveUp });
+    // M7 D12:切分完成后写一次层表(每层的候选按最终出键),交给执行器;不等它、失败只记事件
+    if (typeof executor.afterSplit === 'function') {
       try {
-        session.fail(id, message, retryable);
-      } catch {
-        // 连发失败都做不到(连接已坏):持有已经从会话里移除,队列会按租约或断开回收
+        Promise.resolve(executor.afterSplit(task, { tasks: published, derived })).catch(error => {
+          emit({ type: 'after-split-failed', id, error: String(error?.message ?? error) });
+        });
+      } catch (error) {
+        emit({ type: 'after-split-failed', id, error: String(error?.message ?? error) });
       }
-      emit({ type: 'failed', id, error: message, retryable });
     }
+    session.complete(id, { ranges: null, derived });
+    emit({ type: 'plan-split', id, derived });
   }
 
   function handle(message) {
-    if (stopped) return;
+    if (runner.stopped()) return;
     session.receive(message);
     const waiter = message?.reqId != null ? publishes.get(message.reqId) : undefined;
     if (waiter && message.type === 'task.published') {
@@ -438,7 +369,7 @@ export function createLocalNode({
   }
 
   function start(resume = []) {
-    stopped = false;
+    runner.resume();
     if (!attached) {
       endpoint.onMessage(handle);
       attached = true;
@@ -446,7 +377,7 @@ export function createLocalNode({
     endpoint.send({ type: 'publisher.hello', publisherId });
     // 只接续本实例真在跑、令牌也对得上的认领:别的项没有执行去完成它,接续了只会一直续约、
     // 占住 maxConcurrent。新进程的实例在跑表是空的,等于不接续(契约 D.2〔裁〕)
-    const resumable = (resume ?? []).filter(entry => entry && active.get(entry.id)?.token === entry.token);
+    const resumable = (resume ?? []).filter(entry => entry && runner.tokenOf(entry.id) === entry.token);
     session.start(resumable);
     // 接续下来的 plan 若还在等发布回包:旧连接上的回包不会再来,按原 reqId 重发一次。
     // 发布是幂等的(已有的任务只合并订阅者),而且此刻 plan 仍由本节点认领,继承条件照样成立
@@ -456,18 +387,17 @@ export function createLocalNode({
   }
 
   function tick() {
-    if (stopped) return;
+    if (runner.stopped()) return;
     session.tick();
   }
 
   function yieldAll(reason = 'busy') {
-    abortAll(reason);
+    runner.abortAll(reason);
     return session.yieldAll(reason);
   }
 
   function stop() {
-    stopped = true;
-    abortAll('stopped');
+    runner.stop('stopped');
   }
 
   return {
@@ -475,8 +405,8 @@ export function createLocalNode({
     tick,
     yieldAll,
     stop,
-    running: () => [...active.keys()].sort(),
-    settled: async () => { await Promise.all([...pending]); },
+    running: runner.running,
+    settled: runner.settled,
     get session() { return session; },
   };
 }

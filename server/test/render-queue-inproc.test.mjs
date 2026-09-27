@@ -124,7 +124,10 @@ function planContextFor(salt = 'p1') {
     prerenderSet: new Set(['clip-title', 'clip-glass', 'clip-lower', 'clip-text']),
     streams: [{ streamKey: sha256(`stream:${salt}`), topClipId: 'clip-video', firstSegment: 0, lastSegment: 11 }],
     anchorFrames: [90],
-    cardSourceVersions: { particles: 'builtin:12', lowerThird: 'builtin:3' },
+    // 定制卡的代码身份：c66-host-cards 起只列用户卡与改动层里改过的卡，没改过的内置卡不在这里（由 codeVersion 覆盖）；
+    // 原来写的 { particles: 'builtin:12', lowerThird: 'builtin:3' } 是那之前的形状。M7 D1 起切分方只给「cardSources 为空」的
+    // 内置卡出浏览器那一份（写 input.compositing，纯浏览器的规则 7 要它），I5 的浏览器要靠它认领到本人的轻任务
+    cardSourceVersions: {},
     weightOf: c => ({ class: WEIGHTS[c.clipId] ?? 'medium', estMs: null }),
     isUserCard: () => false,
     isGraphCard: () => false,
