@@ -1,6 +1,6 @@
 # AGENT 报告：HT-a 集成（`claude/ht-integ`）
 
-状态：进行中（合并、对账、裁定已落实；验证进行中）。
+状态：完成，等主会话审查。合并、对账、主会话四条裁定已落实；第 3 节八项验证全部通过。
 
 HT-a 是 `docs/plan/http-transport-contract.md` 第 2 版文件头「2026-09-27 拆分」的前一段：文档服务的会话模型、序号确认、WebSocket 传输接会话层、本机信任开关。本分支把服务端（`claude/http-transport`）、客户端（`claude/ht-client`）、测试方（`claude/ht-tests`）三条分支与 main 合到一起，按主会话的裁定对账，并做集成验证。
 
@@ -61,7 +61,7 @@ HT-a 是 `docs/plan/http-transport-contract.md` 第 2 版文件头「2026-09-27 
 
 ### 3.1 类型检查
 
-`npx tsc -b --force`：退出码 0，零错误（合并与改动全部提交后，`b03823b` 上）。
+`npx tsc -b --force`：退出码 0，零错误（`b03823b` 上跑一次；最后一个代码提交 `de3dbed` 上再跑一次，同样零错误）。
 
 ### 3.2 HT 用例（63 条）与 `ht*.test.mjs` 连跑
 
@@ -113,3 +113,61 @@ HT7 的三条是探针自身的本机用例（不给 `--base` 退出码 2、本�
 对照：临时把 `session-link.mjs` 的这条判断改成 `if (false)`（不提交，跑完还原，`git status` 干净）再跑，同一步 30 s 内等不到这个提示，脚本以 error 结束。
 
 两遍跑下来 `summary: { total: 10, failed: [] }`。
+
+### 3.4 全量测试
+
+`npm test`（`de3dbed` 上，当时没有别的会话在跑全量测试）：退出码 0；**tests 3347、pass 3345、fail 0、cancelled 0、skipped 2**。跳过的两条正是显式开启的集成用例：`集成:/api/cards/layout 对真实项目返回整数框`、`SKILL 闸门:闸关之后无头实例的工具调用不落地`。
+
+第一次跑（`b03823b` 上）是 tests 3347、fail 4：`sp-hosted.test.mjs` 的 SPC1-2、SPC1-3、SPC2-1、SPC2-2 起托管组合时 `EADDRINUSE 5490`。当时另有两份别的会话的 `npm test` 在跑（`node --test-global-setup=… --test …`，不是本会话起的，没动）；`sp-kit.mjs` 用固定端口 5490～5499，两份全量测试重叠时互踩，是 `AGENT-bad-ports-concurrency.md` 里记过的已知问题，与 HT 无关。单跑 `sp-hosted.test.mjs` 12/12 过，别的会话跑完后全量重跑即上面的全过。
+
+### 3.5 C6.6 T9 本机替身（信任关闭）
+
+脚本拷自主会话的 `run-t9-local.sh`，放在 scratchpad 的 `ht-integ/run-t9-local.sh`：旧变量名改成 `PROMPTCUT_TRUST_LOOPBACK=0` 加现场生成的集群令牌（不打印）；托管组合与协调口的端口由系统分配（端口 0；--role all 的三个编辑器要 9 个端口 5620～5628，段里放不下另外三个）；`c66-t9-probe --role all --port-base 5620`。托管端启动行 `loopbackTrust: false`。
+
+结果（第二遍）：`probe exit 0`，顶层 `ok: true, fails: [], ms: 178427`。
+
+- creator：`ok true`；`plan { plans 1, tasks 8, done 8, failed 0, pcCompleted 3, publishToSettledMs 150079 }`；`edit { ok true }`、`cardRevAfterEdit 2`；上传 `firstCompleteMs { small 2959, original 47762 }`；
+- observer：`ok true`；`joinMs 437`；`firstShown { tier small, w 800 }`；换档 `swapMode covered`、`swapSamples { n 369, black 0 }`；`tierSequence` none → small（2456 ms）→ original（39258 ms）；
+- host：`ok true`；`claimed 5, completed 5, failed 0, lost 0`；`doneCounts { tasks 8, exactlyOnce 8, missing 0, duplicate 0 }`；`artifacts { manifests 8, missingManifests 0, blocks 35, missingBlocks [] }`；`cardV2 { rev 2, inOverlay true, baseUntouched true }`。
+- creator 的 `uploadQueue` 记了 1 次 401（原尺寸第 1 片，重试后传完）。主会话 scratchpad 里 `c66fix/` 下之前的 11 次 T9 结果都有同样一条，不是 HT 带来的。
+
+第一遍没过（`plan 没落定`、observer 截图超时），原因是我：跑到 06:36:15 时我在 worktree 里写报告并提交（`git add -A` 还把探针临时生成的 `src/cards/user/c66t9-*.tsx` 带进了提交，已 amend 去掉），同一秒两个编辑器页面都以 1001 离开（托管端 `session.detach … code 1001`）、重新载入后回了本机空间，计划因此落不定。第二遍全程不碰 worktree 即全过。教训：dev server 在跑时不往它的 worktree 里写文件、不提交。
+
+### 3.6 C10a 在线加入（信任关闭）
+
+`scripts/probes/online-join-probe.mjs` 原来起托管组合时不传本机信任，加了一处：环境变量 `PROMPTCUT_TRUST_LOOPBACK=0` 时给 `startHostedCombo` 传 `trustLoopback: false` 与集群令牌（取 `PROMPTCUT_CLUSTER_TOKEN`，没给就现场生成）（`de3dbed`）。在线构建 `npx vite build --mode online` 出到 scratchpad；端口 5620（编辑器，舞台 5621、5622）、代理 5623、文档服务 5624、素材服务 5625。
+
+`PROMPTCUT_TRUST_LOOPBACK=0 node scripts/probes/online-join-probe.mjs …`：`hosted.up … trustLoopback: false`；`summary { checks 44, ok 44, fail 0 }`，退出码 0。本底含 `3214f4c`。
+
+### 3.7 渲染队列冒烟
+
+本 worktree 的 vite dev server 5620（数据目录临时、`PROMPTCUT_PUSH=0`）：
+
+- `node scripts/probes/stream-produce-probe.mjs --origin http://127.0.0.1:5620`：**PASS**，`fails: []`，退出码 0；
+- 同上加 `--group`：**PASS**，`fails: []`，退出码 0。
+
+主计划说 HT 不跑 G0-R（导出确定性、快照重放一致），本次也没跑；`vite-plugin-frames.ts` 的三处改动只换了到文档服务的端点，冒烟覆盖到了预渲染管线本身。
+
+### 3.8 旧客户端行为不变
+
+`ht-legacy` 3/3 过；`HT2-legacy-compare` 过；现有测试一条期望没改，全量 0 失败。页面验证里托管端同时挂着 2 条旧客户端会话（素材服务的地址登记、编辑器进程的卡片同步），全程照常。`session-link-page.test.mjs` 的 SL-page-legacy（新页面对没有会话层的旧服务端）过。
+
+### 3.9 没跑的
+
+导出确定性、快照重放一致（G0-R）：按主计划 HT 不跑。HT7 阿里云外网三项、跨机 W-HT-a、部署：主会话做。
+
+## 4. 与语义不一致之处（只列出，没改语义，由主会话定）
+
+对照 `docs/semantics/product/document-service.md`、`docs/semantics/mechanism/document-service.md` 的「会话与传输」与「本机按真正的发起方判断」：
+
+1. **传输只有 WebSocket**：语义写「WebSocket 与 HTTP 长轮询并存」「由系统自动选择」，机制写「握手失败就转 HTTP 长轮询」。HT-a 按拆分只接 WebSocket，HTTP 是 HT-b。阶段性缺口，不是实现偏离；HT-b 做完前被代理挡住 WebSocket 的成员连不上。
+2. **不是每一方都讲会话**：语义说文档服务与「每一方」之间是一个会话、单次传输中断不结束会话。`server/card-sync.mjs`、管理接口的令牌连接（`asset-announce`）与几个探针仍是旧客户端，断一次就断线（主会话已裁定这次不接）。
+3. **本机信任靠开关**：语义说经同机反向代理转进来的请求按远端对待。实现是开关 `PROMPTCUT_TRUST_LOOPBACK`，缺省 `1`，只有部署脚本给阿里云写 `0`；用户自己在本机托管组合前挡反向代理时，缺省下仍把代理转进来的请求当本机。契约第 10 节就是这么定的，与语义字面有出入，要不要在语义里写明「由部署方关掉本机信任」请主会话定。
+4. 新客户端对旧服务端的退化（契约第 4.3 节第 7 条）语义里没有；只在服务端没升级时生效，不改变承诺，列出备查。
+
+## 5. 需要主会话决定的事
+
+1. 本分支是否合入 main（用户授权）。合入前请审第 17 节与本报告里的〔裁〕。
+2. `claude/c10a-integ` 在 `claude/http-transport` 合它之后又有 3 个提交（`171180d`、`5bc3eed`、`0dd86e9`）不在本分支；要不要在合入前补合。
+3. 第 4 节第 3 条（本机信任开关与语义字面）。
+4. `sp-kit.mjs` 的固定端口 5490～5499 在并行全量测试下互踩（第 3.4 节），要不要另立一项改成端口 0。
