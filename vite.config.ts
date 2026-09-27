@@ -27,6 +27,7 @@ import { audioPlugin } from "./server/vite-plugin-audio";
 import { stagePortsPlugin } from "./server/vite-plugin-stage-ports";
 import { docservicePlugin } from "./server/vite-plugin-docservice";
 import { rawEolPlugin } from "./server/raw-eol.mjs";
+import { onlineCatalogPlugin } from "./server/online-catalog.mjs";
 
 // 无头实例(scripts/headless.mjs)和用户手里那份 vite 跑在同一个项目根上,
 // 依赖预构建缓存分开放,免得两个进程同时写 node_modules/.vite 互相踩。
@@ -122,7 +123,10 @@ const desktopConfig: UserConfig = {
  *   卡片的改动层（`vite-plugin-cards` 的 pre 插件）是本机用户的定制，也不进在线构建；
  * - 桌面构建（`vite build`）与开发服务（`vite`）照旧走 `desktopConfig`，不受影响；
  * - `dist-online/` 由 `scripts/remote/docservice.mjs deploy-hosted --editor dist-online` 部署到托管端的 `<部署目录>/editor/`，
- *   nginx 在 `/editor` 下提供（契约第 2 节「nginx」）。
+ *   nginx 在 `/editor` 下提供（契约第 2 节「nginx」）；
+ * - 动效素材目录（`onlineCatalogPlugin`，`server/online-catalog.mjs`）：卡片参数里的 `/catalog/<kind>/<name>.json` 在桌面由开发服务器的中间件提供，
+ *   在线没有本机进程，构建时把 index.json 登记的 Lottie、粒子文件原样产出到 `dist-online/catalog/`，随 `editor/` 一起部署，
+ *   托管端 nginx 在编辑器页的源与两个舞台源的 `/catalog/` 下提供。地址不变，同一个项目桌面、在线都能开。
  */
 /*
  * C10 契约第 7 节(主会话 2026-09-28 的补充约束):在线页面发布的清单计划写 `requires.codeVersion`,由构建时按渲染节点同一套算法
@@ -134,7 +138,7 @@ const onlineConfig = async (): Promise<UserConfig> => {
   const codeVersion = frameCode(process.cwd());
   return {
     base: "/editor/",
-    plugins: [rawEolPlugin(), react({ exclude: REACT_REFRESH_EXCLUDE }), tailwindcss()],
+    plugins: [rawEolPlugin(), react({ exclude: REACT_REFRESH_EXCLUDE }), tailwindcss(), onlineCatalogPlugin(process.cwd())],
     define: { "import.meta.env.VITE_PC_ONLINE": JSON.stringify("1"), __PC_CODE_VERSION__: JSON.stringify(codeVersion) },
     build: { outDir: "dist-online", emptyOutDir: true },
   };
