@@ -383,6 +383,41 @@ try {
   // M7-A12(生成快照期间主文档长任务 0)只记不判:长任务受机器忙闲影响,带耗时门槛的项在笔记本判(verification.md「性能基准机」)
   out.steps.page = { longTasks: longTasks.length, worst: longTasks.sort((a, b) => b.ms - a.ms).slice(0, 3), errors: pageErrors.slice(0, 5), assetWrites: assetReqs.filter((a) => a.method === 'PUT').length };
   await shot(page, 'm7-node-after');
+
+  /* ---------------------------------------------------------------- 5. 让路(D8):生成快照中开始播放 → 当前帧做完放回一次;停下后恢复、做完 */
+  const clip2 = await P(page, () => {
+    const S = window.__pcStore;
+    const c = S.actions.addClipOnNewTrack({ index: 0, cardId: 'probe-slow-stepped', start: 0, duration: 2 });
+    S.actions.setClipParams(c.id, { burnMs: 40, label: 'm7-yield' });
+    S.actions.seek(1.5);
+    return c.id;
+  });
+  const baking = await until('第二张卡开始生成快照(做了至少 2 帧)', async () => {
+    const d = await nodeDiag(page);
+    const h = d?.holding?.[0];
+    return d?.state === 'baking' && h && h.done >= 2 && h.of === 60 ? d : null;
+  }, 300_000, 200);
+  const before = baking?.counters ?? null;
+  await P(page, () => { const S = window.__pcStore; S.actions.seek(0); S.actions.play(); });
+  const released = await until('播放开始后放回一次', async () => { const d = await nodeDiag(page); return (d?.counters?.released?.['yield-play'] ?? 0) >= 1 ? d : null; }, 60_000, 100);
+  await delay(2500);
+  const during = await nodeDiag(page);
+  await P(page, () => window.__pcStore.actions.pause());
+  const after = await until('停下后恢复认领、做完第二张卡', async () => { const d = await nodeDiag(page); return d?.counters?.completed >= 2 ? d : null; }, 600_000, 1000);
+  out.steps.yield = {
+    clip: clip2,
+    before: before && { claims: before.claims, bakedFrames: before.bakedFrames },
+    released: released && { released: released.counters.released, claims: released.counters.claims, bakedFrames: released.counters.bakedFrames },
+    during: during && { claims: during.counters.claims, bakedFrames: during.counters.bakedFrames, state: during.state, idle: during.idle },
+    after: after && { claims: after.counters.claims, completed: after.counters.completed, bakedFrames: after.counters.bakedFrames, failed: after.counters.failed },
+  };
+  check(released && released.counters.released['yield-play'] === 1, 'D8:播放开始后放回恰好一次(reason yield-play)', out.steps.yield.released);
+  check(released && before && released.counters.bakedFrames - before.bakedFrames <= 1, 'D8:放回之前至多再做完当前这一帧', out.steps.yield);
+  check(during && released && during.counters.claims === released.counters.claims && during.counters.bakedFrames === released.counters.bakedFrames,
+    'D8:播放期间不认领、不生成快照', out.steps.yield.during);
+  check(after && after.counters.failed === 0, '停下后恢复认领并做完(不计失败)', out.steps.yield.after);
+  // 重新认领同一段只补缺的帧:两段一共 30 + 60 帧,放回前做过的不重做
+  check(after && after.counters.bakedFrames === 90, '重新认领同一段只补缺的帧(两段共生成 90 帧)', out.steps.yield.after);
   try { chk.close(); } catch { /* 已关 */ }
   out.ok = fails.length === 0;
 } catch (e) {
