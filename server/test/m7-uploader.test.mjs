@@ -3,7 +3,7 @@
  * `asset-service.ts`,memory 存储)推 `snap` / `px` 块。
  *   - 对账 → 缺的分片 PUT(每片带大小与扩展名)→ complete,之后 `has` 为真;已有的跳过;
  *   - 写入凭 rw 票据,手里那张被拒(401)就强制换一张、这一步重试一次;
- * *   - 哈希对不上 complete 回 409,抛出(可重试)。
+ *   - 哈希对不上 complete 回 409,抛出(可重试)。
  * 跑:node --test server/test/m7-uploader.test.mjs
  */
 import crypto from 'node:crypto';
