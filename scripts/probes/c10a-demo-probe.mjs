@@ -609,12 +609,19 @@ try {
   const frames = await P(phone, () => [...document.querySelectorAll('iframe')].map((f) => f.getAttribute('src') || '').filter((s) => /[?&]stage=1/.test(s)));
   check(lowToast, '手机判为低内存档:出现表 C 的进入提示');
   check(frames.length === 1 && /[?&]preview=stage/.test(frames[0]), '手机只有一个同源舞台(live 变体)', frames);
-  const smallShown = await until('手机上重卡贴着预渲染小尺寸', async () => {
-    const f = phone.frames().find((x) => /[?&]stage=1/.test(x.url()));
-    return f ? f.evaluate(() => !!document.querySelector('img[data-pc-small-snapshot]')) : false;
+  /*
+   * 暂停着进来:c10a 契约第 17 节起低内存档停下时追当前一帧(重卡也画),画好之前贴预渲染小尺寸。
+   * 所以这里等的是「重卡有画面」:要么贴着小尺寸,要么已经被停下追一帧画成活渲(小尺寸在播放中另核)。
+   */
+  const smallShown = await until('手机上重卡有画面(贴预渲染小尺寸,或停下追一帧画出)', async () => {
+    const x = await stageSample(phone);
+    const w = x?.wraps?.find((y) => y.id === state.heavyClip);
+    if (w?.small) return 'small';
+    const drawn = x?.lowMemSettle?.drawn?.some((d) => d.clipId === state.heavyClip);
+    return w && drawn && !w.suppressed && !w.plane ? 'live' : null;
   }, 120_000, 1000);
   const phoneDiag = smallShown ? null : await stageDiag(phone);
-  check(smallShown, '手机上重卡显示预渲染小尺寸位图', phoneDiag ? '(见 steps.phone.diag)' : undefined);
+  check(smallShown, '手机上重卡有画面(贴预渲染小尺寸,或停下追一帧画出)', phoneDiag ? '(见 steps.phone.diag)' : smallShown);
   /*
    * c10a 契约第 17 节(1):低内存档全部按重卡 —— 播放时一律贴预渲染小尺寸、不活渲任何卡(轻卡也抑制;
    * 没有产物的层显示占位)。播放中采几次舞台的样子。
@@ -626,12 +633,22 @@ try {
    * c10a 契约第 17 节(2):停下追当前一帧 —— 暂停(再点到 2.5 秒)后,舞台在时限内把这一帧的所有卡活渲一次;
    * 到时限没画好的维持占位。等父页记下这一秒的结果,记下耗时。
    */
-  await P(phone, () => { const s = window.__pcStore; s.actions.pause(); s.actions.seek(2.5); });
-  const settle = await until('手机暂停后停下追一帧落定', () => P(phone, () => {
+  const settleAt = (sec) => until(`手机停下追一帧落定(${sec === null ? '暂停处' : `${sec} 秒`})`, () => P(phone, (want) => {
     const r = window.__pcPreviewDiag?.()?.lowMemSettle;
-    return r && Math.abs(r.sec - 2.5) < 1e-6 ? r : null;
-  }), 30_000, 200);
+    const t = window.__pcStore.getState().t;
+    const at = want === null ? t : want;
+    return r && r.ok && Math.abs(r.sec - at) < 1e-6 && Math.abs(t - at) < 1e-6 ? r : null;
+  }, sec), 30_000, 200);
+  // 暂停:停在舞台最后一拍,在那一秒追一帧
+  await P(phone, () => window.__pcStore.actions.pause());
+  const settlePause = await settleAt(null);
+  await shotStage(phone, '2-phone-stage-paused');
+  // 点时间轴到 2.5 秒:同样是停下,在 2.5 秒追一帧
+  await P(phone, () => window.__pcStore.actions.seek(2.5));
+  const settle = await settleAt(2.5);
   const afterSettle = await stageSample(phone);
+  await shotStage(phone, '2-phone-stage-settled');
+  check(settlePause, '暂停后停下追一帧落定', settlePause ? { sec: settlePause.sec, ms: settlePause.ms, drawn: settlePause.drawn.length, timedOut: settlePause.timedOut.length } : null);
   const playing = playSamples.filter((x) => x?.playing);
   check(playing.length >= 3, '手机播放中采到舞台的样子(至少 3 次)', { samples: playSamples.length, playing: playing.length });
   check(playing.every((x) => x.wraps.length > 0 && x.wraps.every((w) => w.suppressed) && x.lowMemLive.length === 0 && x.settling.length === 0),
@@ -652,6 +669,7 @@ try {
   state.lowmem = {
     play: { samples: playSamples.length, playing: playing.length, allSuppressed: playing.every((x) => x.wraps.every((w) => w.suppressed)) },
     settle: settle ? { ms: settle.ms, timeoutMs: settle.timeoutMs, drawn: settle.drawn.map((d) => ({ clip: d.clipId.slice(0, 8), ms: d.ms })), timedOut: settle.timedOut.map((id) => id.slice(0, 8)), skipped: settle.skipped.length } : null,
+    settlePause: settlePause ? { sec: settlePause.sec, ms: settlePause.ms, drawn: settlePause.drawn.length, timedOut: settlePause.timedOut.length } : null,
   };
   await delay(2000);
   const tier = { small: new Set([media.small]), original: new Set([media.original]) };
@@ -700,7 +718,7 @@ try {
     await delay(400);
     const x = await stageSample(phone);
     const w = x?.playing ? x.wraps.find((y) => y.id === state.lightClip) : null;
-    if (w?.small && w.suppressed) lightShown = { at: i };
+    if (w?.small && w.suppressed) { lightShown = { at: i }; await shotStage(phone, '2c-phone-stage-playing-backfilled'); }
   }
   await P(phone, () => { const s = window.__pcStore; s.actions.pause(); s.actions.seek(2.5); });
   check(lightShown, '手机播放中轻卡贴着补渲来的小尺寸');
@@ -995,6 +1013,18 @@ async function stageSample(page) {
     });
     return { playing: !!d.beatRunning, t: d.t, wraps, lowMemLive: d.lowMemLive ?? [], settling: d.settling ?? [], lowMemSettle: d.lowMemSettle ?? null };
   }).catch(() => null);
+}
+
+/** 手机舞台 iframe 的截图(页面截图在窄屏上看不到预览) */
+async function shotStage(page, name) {
+  const f = path.join(OUT, `${name}.png`);
+  try {
+    const el = await page.$('iframe[src*="stage=1"]');
+    if (!el) return null;
+    await el.evaluate((n) => n.scrollIntoView({ block: 'center' }));
+    await el.screenshot({ path: f });
+    return f;
+  } catch { return null; }
 }
 
 /** 手机舞台里重卡包裹层的样子(排障用) */
