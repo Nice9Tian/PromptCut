@@ -60,15 +60,17 @@
  *      托管端 `/healthz` 的 `sessions.resumed`;写 KV `host.holding`;
  *   4. 断开:`proxy` 往代理的标准输入写 `cut`(代理切断此刻开着的连接,之后一次也不再切 —— 接续那条原样转发);
  *      `external` 等 KV `cut.done`(等不到算失败);
- *   5. 等会话接续(`nodes[0].resumes` 增加,主机日志有 `docservice.session.resume`);读 `/healthz`;写 KV `host.resumed`;
+ *   5. 等会话接续(`nodes[0].resumes` 增加、`opens` 不变);读 `/healthz`;写 KV `host.resumed`;
  *   6. 等 KV `plan`,读主机的计数,经 IPC `shutdown` 正常退出(放回认领),结果写 KV `host`。
  *
  * ## 断言(`checks`)
  *   host:
  *     held-before-cut       断开前主机至少持有 1 个任务
- *     cut                   断开确实发生了(代理打了 conn.cut / 外部写了 cut.done),且主机端点记到了脱开(`docservice.session.detach`)
- *     session-resumed       断开后是会话接续:`resumes` 增加、日志有 `docservice.session.resume`
- *     not-new-session       没有建新会话:`opens` 不变,断开之后日志里没有 `docservice.session.open` / `docservice.session.close`
+ *     cut                   断开确实发生了(代理打了 conn.cut / 外部写了 cut.done)
+ *     session-resumed       断开后是会话接续:主机 `GET /api/frames/queue` 的 `resumes` 增加(端点每接续成功一次加一)
+ *     not-new-session       没有建新会话:`opens` 不变(主机端点的 `session.*` 日志打在预渲染进程控制台上、编辑器不转出来,
+ *                           所以不靠日志;日志里真有 `docservice.session.*` 时记进 detail 作旁证)
+ *     same-session-to-end   到全部任务落定时 `opens` 仍不变
  *     healthz-resumed       托管端 `/healthz` 的 `sessions.resumed` 增加
  *     no-lease-lost         主机的 `lost` 为 0(没有 `task.lease-lost`)
  *     not-released          主机退出前 `released` 为 0(持有的任务没被放回)
@@ -550,18 +552,22 @@ async function runHost(out) {
       const n = (await queue())?.nodes?.[0];
       return n && (n.resumes ?? 0) > out.resumesBefore ? n : null;
     }, RESUME_TIMEOUT_MS, 200);
+    // 主机端点的 `session.*` 日志打在预渲染进程的控制台上,编辑器只留它最后几十行、不转出来(`vite-plugin-prerender.ts`),
+    // 所以判据用 `GET /api/frames/queue` 的计数:`resumes`(端点每接续成功一次加一,接续之前必有一次脱开)与 `opens`
+    // (建成新会话的次数)。日志里要是真有这几行(将来转出来了),一并记下作旁证。
     const since = lines.slice(linesBeforeCut);
     const has = (ev) => since.some((l) => l.includes(`docservice.${ev} `) || l.includes(`docservice.${ev}"`));
+    const logged = { detach: has('session.detach'), resume: has('session.resume'), open: has('session.open'), close: has('session.close') };
     const sessionsAfter = await until(async () => {
       const s = await sessionsOf(cfg.hostedWs);
       return s && sessionsBefore && (s.resumed ?? 0) > (sessionsBefore.resumed ?? 0) ? s : null;
     }, 15_000, 500) ?? await sessionsOf(cfg.hostedWs);
     Object.assign(out, { cutMs: resumed ? Date.now() - cutAt : null, resumesAfter: resumed?.resumes ?? null, opensAfter: resumed?.opens ?? null,
       transportAfter: resumed?.transport ?? null, sessionsResumedAfter: sessionsAfter?.resumed ?? null });
-    check('cut', cutOk && has('session.detach'), { cutOk, detachLogged: has('session.detach'), proxy: CUT === 'proxy' ? proxyLines.filter((l) => /conn\.cut/.test(l)).slice(0, 3) : undefined });
-    check('session-resumed', !!resumed && has('session.resume'), { resumes: [out.resumesBefore, resumed?.resumes ?? null], resumeLogged: has('session.resume') });
-    check('not-new-session', !!resumed && resumed.opens === out.opensBefore && !has('session.open') && !has('session.close'),
-      { opens: [out.opensBefore, resumed?.opens ?? null], openLogged: has('session.open'), closeLogged: has('session.close') });
+    check('cut', cutOk, { cutOk, proxy: CUT === 'proxy' ? proxyLines.filter((l) => /conn\.cut/.test(l)).slice(0, 3) : undefined });
+    check('session-resumed', !!resumed, { resumes: [out.resumesBefore, resumed?.resumes ?? null], logged });
+    check('not-new-session', !!resumed && resumed.opens === out.opensBefore && !logged.open && !logged.close,
+      { opens: [out.opensBefore, resumed?.opens ?? null], connectFailed: resumed?.connectFailed ?? null, logged });
     check('healthz-resumed', (sessionsAfter?.resumed ?? 0) > (sessionsBefore?.resumed ?? Infinity), { before: sessionsBefore?.resumed ?? null, after: sessionsAfter?.resumed ?? null });
     await put('host.resumed', { at: Date.now(), resumes: resumed?.resumes ?? null });
 
@@ -574,6 +580,7 @@ async function runHost(out) {
       released: n.released ?? null, opens: n.opens ?? null, resumes: n.resumes ?? null, transportFinal: n.transport ?? null });
     check('no-lease-lost', n.lost === 0 && !lines.some((l) => /lease-lost/.test(l)), { lost: n.lost ?? null });
     check('not-released', n.released === 0, { released: n.released ?? null });
+    check('same-session-to-end', n.opens === out.opensBefore, { opens: [out.opensBefore, n.opens ?? null], resumes: n.resumes ?? null });
     const perHeld = pre.held.map((id) => {
       const w = plan.watched?.[id] ?? null;
       return { id, inPlan: plan.derived.includes(id), taken: w?.taken ?? null, reopened: w?.reopenedAfterTaken ?? null, closed: w?.closed ?? null,
