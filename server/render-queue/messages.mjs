@@ -51,6 +51,12 @@ export const BACKFILL_KEY_MARK = '#backfill:';
 const BACKFILL_SIG_RE = /^[0-9a-z]{1,32}$/;
 /** 补渲计划任务的片段清单上限 */
 export const BACKFILL_MAX_CLIPS = 1000;
+/**
+ * 清单计划(C10 契约第 7 节、第 18 节第 9 条〔裁〕):在线页面发布的 `plan`,带它自己判重的片段清单,`priority` 为 normal。
+ * 结果键 `<projectId>@<projectRev>#clips:<sig>`(签名与补渲同一个算法)。与补渲计划合称「带片段清单的计划任务」:
+ * `host` 也能认领、由认领的节点用自己的指纹切分(对 M6c X4 的修改,见 `queue.mjs`)。
+ */
+export const CLIPS_KEY_MARK = '#clips:';
 
 /**
  * 任务 id 由内容决定（设计第 2 节）：同一个结果只会有一个任务，重复发布才能幂等合并。
@@ -166,6 +172,11 @@ function parseTaskInput(v, i) {
       if (!BACKFILL_SIG_RE.test(resultKey.slice(base.length + BACKFILL_KEY_MARK.length))) bad(`${at}.resultKey 的补渲签名只能是 1～32 位小写字母与数字`);
       if (priority !== 'backfill') bad(`${at}.priority：补渲计划任务必须标 'backfill'`);
       input = { ...input, clips: backfillClips(input.clips, `${at}.input.clips`) };
+    } else if (resultKey.startsWith(`${base}${CLIPS_KEY_MARK}`)) {
+      // 清单计划（C10 契约第 18 节第 9 条）：带片段清单、normal 档；补渲档另用 #backfill: 的键
+      if (!BACKFILL_SIG_RE.test(resultKey.slice(base.length + CLIPS_KEY_MARK.length))) bad(`${at}.resultKey 的清单签名只能是 1～32 位小写字母与数字`);
+      if (priorityBand(priority) !== 'normal') bad(`${at}.priority：清单计划是 normal 档，补渲用 #backfill: 的键`);
+      input = { ...input, clips: backfillClips(input.clips, `${at}.input.clips`) };
     } else if (resultKey !== base) {
       bad(`${at}.resultKey 必须等于 source 的 projectId@projectRev`);
     }
@@ -206,6 +217,16 @@ export function isBackfillPlan(task) {
   return isObj(task) && task.kind === 'plan' && typeof task.resultKey === 'string' && task.resultKey.includes(BACKFILL_KEY_MARK);
 }
 
+/** 这是不是清单计划（在线页面发布的 normal 档 plan，C10 契约第 18 节第 9 条） */
+export function isClipsPlan(task) {
+  return isObj(task) && task.kind === 'plan' && typeof task.resultKey === 'string' && task.resultKey.includes(CLIPS_KEY_MARK);
+}
+
+/** 带片段清单的计划任务（补渲计划或清单计划）：`host` 能认领，认领的节点按清单切分 */
+export function isListPlan(task) {
+  return isBackfillPlan(task) || isClipsPlan(task);
+}
+
 /**
  * 片段清单的签名（补渲计划任务结果键的后缀）：升序去重后按 FNV-1a（32 位，两轮不同种子拼成 64 位）取 base36。
  * 同一份清单一定得到同一个键，页面与节点各算各的也对得上。纯函数，浏览器可以照抄。
@@ -231,6 +252,21 @@ export function backfillPlanTaskOf({ projectId, projectRev, clips }) {
     id: taskIdOf({ kind: 'plan', resultKey, range: null }), kind: 'plan', resultKey, range: null,
     source: { projectId, projectRev }, input: { clips: list }, weight: { class: 'medium', estMs: null, frames: null },
     requires: {}, priority: 'backfill',
+  };
+}
+
+/**
+ * 清单计划（C10 契约第 7 节、第 18 节第 9 条）：在线页面自己判重的片段清单，normal 档。
+ * `requires` 里不写 `envFingerprint`、不写 `preferNode`：任何能切分的节点（桌面版、独立渲染主机）都认领得了，
+ * 由认领的节点用自己的指纹切分；`codeVersion` 给了才写（版本不同的节点不认领）。
+ */
+export function clipsPlanTaskOf({ projectId, projectRev, clips, codeVersion }) {
+  const list = [...new Set(clips ?? [])].map(String).filter(Boolean).sort();
+  const resultKey = `${projectId}@${projectRev}${CLIPS_KEY_MARK}${backfillSig(list)}`;
+  return {
+    id: taskIdOf({ kind: 'plan', resultKey, range: null }), kind: 'plan', resultKey, range: null,
+    source: { projectId, projectRev }, input: { clips: list }, weight: { class: 'medium', estMs: null, frames: null },
+    requires: typeof codeVersion === 'string' && codeVersion ? { codeVersion } : {}, priority: 'normal',
   };
 }
 

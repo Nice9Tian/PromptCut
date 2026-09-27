@@ -25,7 +25,7 @@
 export { normalizeOs, gpuClassOf, chromeMajorOf, envFingerprintOf, describeEnvironment, resultKeyOf } from './fingerprint.mjs';
 export { DEFAULT_WEIGHT_POLICY, checkClaimable, filterClaimable } from './filter.mjs';
 export { rankCandidates, pickCandidate } from './pick.mjs';
-export { planTaskOf, splitPlan, backfillPlanTaskOf, isBackfillPlan } from './split.mjs';
+export { planTaskOf, splitPlan, backfillPlanTaskOf, isBackfillPlan, clipsPlanTaskOf, isClipsPlan, isListPlan } from './split.mjs';
 export { createNodeSession } from './session.mjs';
 export { createLocalNode } from './local-node.mjs';
 export { BACKOFF_DEFAULTS, createWsEndpoint } from './ws-transport.mjs';

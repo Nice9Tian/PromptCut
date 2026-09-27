@@ -22,7 +22,7 @@
  */
 import { resultKeyOf } from './render-node/fingerprint.mjs';
 import { snapshotTier } from './snapshot-tier.mjs';
-import { isBackfillPlan } from './render-queue/index.mjs';
+import { isListPlan } from './render-queue/index.mjs';
 
 /** 按版本缓存的上下文条数(附件第 3 节:LRU 约 4 条) */
 export const PLAN_CACHE_SIZE = 4;
@@ -86,8 +86,9 @@ export function createPrerenderExecutor({ pipeline, projects, prepareProject = p
   async function plan(planTask, { signal } = {}) {
     const { id } = versionOf(planTask);
     const { entry, context } = await contextFor(planTask, signal);
-    // c10a 契约第 17 节:补渲计划任务的片段清单记进管线(进预渲染集合、写进层表);切分由 local-node 按清单做
-    if (isBackfillPlan(planTask) && typeof pipeline.addBackfill === 'function') {
+    // c10a 契约第 17 节:补渲计划任务的片段清单记进管线(进预渲染集合、写进层表);切分由 local-node 按清单做。
+    // C10 契约第 18 节第 9 条:在线页面的清单计划同一条路(清单是页面自己判重的片段)
+    if (isListPlan(planTask) && typeof pipeline.addBackfill === 'function') {
       const added = pipeline.addBackfill(entry, planTask.input?.clips ?? []);
       say('executor.backfill', { version: id, clips: planTask.input?.clips?.length ?? 0, added });
     }
