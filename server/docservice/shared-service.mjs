@@ -9,7 +9,7 @@
  * | 集群令牌 | 认，得到管理身份 | 一律不认 |
  *
  * 挂的模块：
- * - 渲染任务队列、项目、内容库、工具调用事件：**按空间各起一份**（`spaces.mjs`）。事件模块借同一空间的项目模块
+ * - 渲染任务队列、项目、内容库、工具调用事件、成本记录（`modules/costs.mjs`）：**按空间各起一份**（`spaces.mjs`）。事件模块借同一空间的项目模块
  *   广播（项目频道）、借内容模块写 `event-detail`，所以这三个按空间配成一组（`bundleForSpace`）；`local` 空间的存储沿用 `dataDir` 本身
  *   （本地文档服务是 `<root>/out/docservice`，独立模式是数据目录），共享项目的空间在 `<dataDir>/tenants/<projectId>/`；
  * - 服务地址登记（`endpoints`）：全服务一份，管理接口；
@@ -31,6 +31,7 @@ import { spacedModule, LOCAL_SPACE } from './spaces.mjs';
 import { endpointsModule } from './modules/endpoints.mjs';
 import { projectModule } from './modules/project.mjs';
 import { contentModule } from './modules/content.mjs';
+import { costsModule } from './modules/costs.mjs';
 import { eventsModule } from './modules/events.mjs';
 import { sharedModule } from './modules/shared.mjs';
 import { createFileStore, createMemoryStore } from './store/index.mjs';
@@ -153,7 +154,8 @@ export function createSharedDocService({
     if (!b) {
       const project = projectModule({ store: storeForSpace(space) });
       const content = contentModule({ store: storeForSpace(space) });
-      b = { project, content, events: eventsModule({ project, content }) };
+      // 成本记录（C10 其余第 3 节）：和内容库共用这个空间的存储，按项目空间隔离
+      b = { project, content, events: eventsModule({ project, content }), costs: costsModule({ space, store: storeForSpace(space) }) };
       bundles.set(space, b);
     }
     return b;
@@ -161,6 +163,7 @@ export function createSharedDocService({
   service.mount(spacedModule({ create: (space) => bundleForSpace(space).project }));
   service.mount(spacedModule({ create: (space) => bundleForSpace(space).content }));
   service.mount(spacedModule({ create: (space) => bundleForSpace(space).events }));
+  service.mount(spacedModule({ create: (space) => bundleForSpace(space).costs }));
   service.mount(sharedModule({
     store: storeOf,
     challenges: adminChallenges,

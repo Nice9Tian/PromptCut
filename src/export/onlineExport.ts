@@ -8,7 +8,7 @@ import { actions, getState } from "../store/project";
 import { assetAuthHeaders, docRequest, exportGate, hasDocLink, remoteAssetBase } from "../editor/media/assetTiers";
 import { remoteMediaUrl, mediaTierPolicy } from "../render/mediaTier";
 import { activeOnlineSource } from "../render/snapshotSource";
-import { currentPlan } from "../editor/planDispatch";
+import { judgedPlan, planLowMemory } from "../editor/planDispatch";
 import { pushToast } from "../editor/sync/syncManager";
 import { MemorySink, type MuxSink } from "./mp4Mux";
 import { runBrowserExport } from "./browserExport";
@@ -47,13 +47,19 @@ function downloadBlob(blob: Blob, name: string) {
   setTimeout(() => URL.revokeObjectURL(a.href), 60_000);
 }
 
-/** 这个项目里页面自己判重的片段(还没有渲染节点的层表时,导出前核对按它算缺) */
+/**
+ * 这个项目里页面自己判重的片段(还没有渲染节点的层表时,导出前核对按它算缺)。按轻重判定的表(`judgedPlan`):
+ * 低内存档里是界限搜索的结果,不是显示用的「全部判重」。
+ */
 function heavyClipsOfPlan(p: Project): string[] {
-  const plan = currentPlan() as { prerenderSet?: Iterable<string> } | null;
+  const plan = judgedPlan() as { prerenderSet?: Iterable<string> } | null;
   const set = plan?.prerenderSet ? new Set(plan.prerenderSet) : null;
   if (!set) return [];
   return p.tracks.flatMap((tr) => tr.clips).map((c) => c.id).filter((id) => set.has(id));
 }
+
+/** 低内存档:只有判重的卡用预渲染原尺寸,判轻的卡本机逐帧渲(契约 `c10-contract.md` 第 18 节第 8 条);普通档不限 */
+const heavyOnlyOf = (p: Project) => () => (planLowMemory() ? heavyClipsOfPlan(p) : null);
 
 const originalsDeps = () => (hasDocLink() ? { request: docRequest, assetBase: remoteAssetBase, authHeaders: assetAuthHeaders } : null);
 
@@ -95,6 +101,7 @@ export async function exportVideoOnline(
       checkMediaOriginals: () => exportGate(p),
       originals: originalsDeps(),
       fallbackHeavy: () => heavyClipsOfPlan(p),
+      heavyOnly: heavyOnlyOf(p),
       // 导出只用素材原尺寸:原片地址换成远程素材服务的取回地址(只读票据走查询串,`<video>` 带不了头)
       mediaUrl: remote ? (url) => remoteMediaUrl(url, remote) : undefined,
     });
@@ -133,6 +140,7 @@ export async function exportVideoBrowserProbe(o: { maxFrames?: number; originals
     checkMediaOriginals: () => exportGate(p),
     originals: o.originals ? originalsDeps() : null,
     fallbackHeavy: () => heavyClipsOfPlan(p),
+    heavyOnly: heavyOnlyOf(p),
     mediaUrl: remote ? (url) => remoteMediaUrl(url, remote) : undefined,
     });
   } catch (e) {

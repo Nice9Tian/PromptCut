@@ -3,6 +3,8 @@
  *
  * - 哪些片段是重卡:渲染节点写进内容库的层表(`layers:<项目 id>`,`server/artifact-transfer.mjs` 的 `layerMapOf`);
  *   还没有层表时退回页面自己的分派表判重的片段(调用方给 `fallbackHeavy`),它们一律算缺。
+ * - 低内存档(语义 `product/platforms.md`「面向的平台」的导出):只有页面判重的卡用预渲染原尺寸,判轻的卡由本机逐帧渲 ——
+ *   调用方给 `onlyClips`(页面判重的片段),层表里不在其中的层不算重卡、不核对、不取。
  * - 就绪:每张重卡每一段清单(`<resultKey>:<from>-<to>`)的 `frames` 盖满整段。原尺寸只认 `frames`,
  *   `small`(小尺寸)不算 —— 两档的就绪分开记。
  * - 取用:清单里这一帧的哈希 → 素材服务 `GET snap/<hash>`(凭只读票据)。一次只取当前这一帧,用完不留。
@@ -31,7 +33,8 @@ function segmentsOf(layer: OnlineLayer, span: number): Array<[number, number]> {
 }
 
 /** 读层表与每一段清单,核对原尺寸是否齐全 */
-export async function loadOriginalsIndex(projectId: string | null, deps: OriginalsDeps, { fallbackHeavy = [] as readonly string[] } = {}): Promise<OriginalsIndex> {
+export async function loadOriginalsIndex(projectId: string | null, deps: OriginalsDeps, { fallbackHeavy = [] as readonly string[], onlyClips = null as readonly string[] | null } = {}): Promise<OriginalsIndex> {
+  const only = onlyClips ? new Set(onlyClips) : null;
   let map: LayerMap | null = null;
   if (projectId) {
     try {
@@ -40,12 +43,13 @@ export async function loadOriginalsIndex(projectId: string | null, deps: Origina
     } catch { map = null; }
   }
   if (!map) {
-    const missing = [...new Set(fallbackHeavy)];
+    const missing = [...new Set(fallbackHeavy)].filter((id) => !only || only.has(id));
     return { map: null, missing, hashAt: (clipId) => (missing.includes(clipId) ? null : undefined) };
   }
   const byClip = new Map<string, { layer: OnlineLayer; frames: Map<number, string> }>();
   const missing: string[] = [];
   for (const layer of map.layers) {
+    if (only && !only.has(layer.clipId)) continue;
     const frames = new Map<number, string>();
     let complete = true;
     for (const seg of segmentsOf(layer, map.span)) {

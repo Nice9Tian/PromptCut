@@ -38,8 +38,13 @@ import { resolveTuning } from './pipelineTuning.mjs';
  */
 export const DEAD_MS = 0.3;
 
-/** 低内存档(c10a 契约第 17 节「全部按重卡」):每张卡都钉死为重,不参加贪心 */
+/**
+ * 低内存档(语义 `product/platforms.md`「面向的平台」、`mechanism/rendering.md`「低内存档」):
+ * - 判重的卡钉死为重,不参加贪心;
+ * - 判轻的卡(界限搜索的结果,`opts.lowMemoryLight`)权重记 0、不受预算挤出 —— 低内存档的轻重是按卡判的,不按位置贪心。
+ */
 const LOW_MEMORY_WEIGHT = Object.freeze({ pinned: true, w: Infinity, tier: 'capped' });
+const LOW_MEMORY_LIGHT = Object.freeze({ pinned: false, w: 0, tier: 'lowmem-light' });
 
 /** 追帧上界（K2）：每拍除本拍那一帧外最多再多推 4 步本地时间，最多追 `2 × fps` 拍。 */
 export const CATCHUP_STEPS_PER_BEAT = 4;
@@ -142,7 +147,10 @@ export function clipWeight(record, frameMode, fps, tuningOrOverrides) {
  * @param {number} fps 项目帧率
  * @param {object} [opts] `deadMs`（只有 L4 换成实测换帧成本）、`tuning`（覆盖值或已解析的一份）、
  *   `identityKeys` / `frameModes`（片段 → 成本记录的索引，见 `clipCostIndex`）、
- *   `allHeavy`（低内存档不测、全部按重卡，c10a 契约第 17 节）
+ *   `lowMemoryLight`（低内存档界限搜索判轻的卡的 identityKey 集合；给了就不看成本记录与声明，
+ *   集合里的卡在每个位置都判轻、其余每个位置都判重，`src/render/boundarySearch.mjs`）、
+ *   `allHeavy`（每张卡在每个位置都判重。低内存档的显示用它：播放时一律不活渲、只贴预渲染小尺寸，
+ *   `src/editor/planDispatch.ts` 的 `currentPlan`；轻重判定本身看 `lowMemoryLight`）
  */
 export function planPipelines(project, costs, fps, opts = {}) {
   const rate = Math.max(1, Number(fps) || 30);
@@ -160,13 +168,19 @@ export function planPipelines(project, costs, fps, opts = {}) {
     if (record && typeof record.identityKey === 'string') byKey.set(record.identityKey, record);
   }
 
+  // 低内存档的判定(界限搜索的结果):判轻的卡的 identityKey
+  const lowLight = opts.allHeavy !== true && opts.lowMemoryLight != null ? new Set(opts.lowMemoryLight) : null;
+
   // 每张卡的权重算一次（各位置相同）
   const weights = new Map();
   for (const clip of clips) {
     const key = lookup(opts.identityKeys, clip.id);
     const record = typeof key === 'string' ? byKey.get(key) : undefined;
-    // 低内存档的过渡做法(c10a 契约第 17 节):不测,所有卡按重卡处理
-    weights.set(clip.id, opts.allHeavy === true ? LOW_MEMORY_WEIGHT : clipWeight(record, lookup(opts.frameModes, clip.id), rate, tuning));
+    let weight;
+    if (opts.allHeavy === true) weight = LOW_MEMORY_WEIGHT;
+    else if (lowLight) weight = typeof key === 'string' && lowLight.has(key) ? LOW_MEMORY_LIGHT : LOW_MEMORY_WEIGHT;
+    else weight = clipWeight(record, lookup(opts.frameModes, clip.id), rate, tuning);
+    weights.set(clip.id, weight);
   }
 
   // 分段边界 = 所有卡片入点出点的并集，去重升序
@@ -188,6 +202,8 @@ export function planPipelines(project, costs, fps, opts = {}) {
     const light = new Set();
     let sum = 0;
     for (const clip of candidates) {
+      // 低内存档按卡判轻重,判轻的不受预算挤出
+      if (lowLight) { light.add(clip.id); continue; }
       const next = sum + weights.get(clip.id).w;
       // 装进去之后还剩几张重卡：钉死的那些 + 还没装进轻管线的候选
       const heavyCount = pinnedCount + (candidates.length - light.size - 1);
