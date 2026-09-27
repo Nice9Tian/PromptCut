@@ -59,10 +59,58 @@ function asSet(list: HashList): ReadonlySet<string> {
   return list instanceof Set ? list as ReadonlySet<string> : new Set(list as readonly string[]);
 }
 
+/* ------------------------------------------------------------------ *
+ * 低内存档与在线浏览器模式(`docs/plan/c10a-contract.md` 第 8 节)
+ * ------------------------------------------------------------------ */
+
+/**
+ * 这一侧(主文档或舞台,各自一份)的取档策略。缺省 = 桌面运行环境,和 C6.6 一字不差。
+ *
+ * - `lowMemory`:低内存档。**素材只拉小尺寸**:有小尺寸就恒给小尺寸(轮询回过、它还没到齐时这一层等待上传方,
+ *   不去拉);没有小尺寸的素材这一层显示「等待上传方」角标与占位,**不拉原尺寸**(导出除外,导出不经这里)。
+ * - `remote`:在线浏览器模式下没有本机编辑器进程代理 `/@media/*`,按哈希寻址的地址换成远程素材服务的
+ *   `GET <base>/media/<hash>?t=<只读票据>`(`server/asset-service.ts`「凭票据读写」:查询串只认 `r` 票据)。
+ *   `<video>` / `<img>` 带不了 `Authorization` 头,所以票据走查询串。
+ *
+ * 舞台是另一个文档,它那一份由父页经 RPC `setMediaPolicy` 下发(`stageRpc.ts`)。
+ */
+export interface MediaTierPolicy {
+  lowMemory: boolean;
+  remote: { base: string; ticket: string | null } | null;
+}
+let policy: MediaTierPolicy = { lowMemory: false, remote: null };
+
+export function setMediaTierPolicy(next: Partial<MediaTierPolicy>): void {
+  const remote = next.remote === undefined ? policy.remote
+    : next.remote && next.remote.base ? { base: next.remote.base.replace(/\/+$/, ""), ticket: next.remote.ticket || null } : null;
+  policy = { lowMemory: next.lowMemory ?? policy.lowMemory, remote };
+}
+
+export function mediaTierPolicy(): MediaTierPolicy {
+  return policy;
+}
+
+const IMAGE_EXT = /^(png|jpe?g|gif|webp|avif|bmp|svg|tiff?|heic)$/i;
+/** 按 C6.6 设计本来就没有素材小尺寸这一档的素材:图片、音频 */
+function noSmallTierByDesign(media: TierMedia): boolean {
+  if (media.kind === "audio" || media.kind === "image") return true;
+  const ext = String(media.ext || "").replace(/^\./, "");
+  return IMAGE_EXT.test(ext);
+}
+
+/** 按哈希寻址的地址(`/@media/<hash>`)换成远程素材服务的取回地址;别的地址原样 */
+export function remoteMediaUrl(url: string, remote: MediaTierPolicy["remote"] = policy.remote): string {
+  if (!remote || !url) return url;
+  const hash = hashFromUrl(url);
+  if (!hash) return url;
+  const q = remote.ticket ? `?t=${encodeURIComponent(remote.ticket)}` : "";
+  return `${remote.base}/media/${hash}${q}`;
+}
+
 export function chooseTier(
   media: TierMedia,
   localHashes: HashList = [],
-  opts: { cloudBase?: string; playable?: (hash: string) => boolean | undefined; probe?: boolean } = {},
+  opts: { cloudBase?: string; playable?: (hash: string) => boolean | undefined; probe?: boolean; lowMemory?: boolean; remote?: MediaTierPolicy["remote"] } = {},
 ): TierChoice {
   const original = originalUrl(media);
   const complete = asSet(localHashes);
@@ -70,10 +118,27 @@ export function chooseTier(
   const smallHash = (media.tiers?.small || "").toLowerCase();
   const smallTier = !!smallHash && smallHash !== originalHash;
   const small = smallTier ? `/@media/${smallHash}` : null;
+  const remote = opts.remote !== undefined ? opts.remote : policy.remote;
   const pick = (tier: "small" | "original", awaiting: boolean): TierChoice => {
     const url = tier === "small" && small ? small : original;
-    return { url: withBase(url, opts.cloudBase), tier: url ? tier : "none", awaiting: awaiting && !!url && !!originalHash };
+    return { url: remoteMediaUrl(withBase(url, opts.cloudBase), remote), tier: url ? tier : "none", awaiting: awaiting && !!url && !!originalHash };
   };
+  /*
+   * 低内存档:素材只拉小尺寸(c10a 第 8 节)。按哈希寻址、而没有小尺寸这一档的素材一律不给地址、等待上传方;
+   * 有小尺寸:还没问过素材服务就先给它(先小后大的「小」),问过了而它没到齐就等,不回退到原尺寸。
+   * 迁移期没有哈希的老素材不经素材服务,原样给(它们本来就只有一份)。
+   */
+  if (opts.lowMemory ?? policy.lowMemory) {
+    if (!originalHash) return pick("original", false);
+    /*
+     * 图片、音频按 C6.6 设计不生成素材小尺寸(`c66-design.md`「只对视频做」)。照字面「没有小尺寸就等待上传方」
+     * 它们会永远等下去,所以只对视频执行「只拉小尺寸」,图片、音频照常给原尺寸〔偏离,见报告〕。
+     */
+    if (!smallTier && noSmallTierByDesign(media)) return pick("original", false);
+    if (!small) return { url: "", tier: "none", awaiting: true };
+    if (!complete.size || complete.has(smallHash)) return pick("small", false);
+    return { url: "", tier: "none", awaiting: true };
+  }
   // 0. 还没问过素材服务:先小后大
   if (!complete.size) return pick(small ? "small" : "original", false);
   const hasOriginal = !!originalHash && complete.has(originalHash);
@@ -83,8 +148,8 @@ export function chooseTier(
     const playable = (opts.playable ?? playableOnThisHost)(originalHash);
     if (playable === true) return pick("original", false);
     if (playable === undefined && opts.probe !== false && shouldProbe(originalHash)) {
-      void probePlayable(originalHash, withBase(original, opts.cloudBase), media.ext, media.kind === "audio" ? "audio" : "video",
-        { remote: !!opts.cloudBase || complete.has(TIERS_KNOWN_REMOTE) });
+      void probePlayable(originalHash, remoteMediaUrl(withBase(original, opts.cloudBase), remote), media.ext, media.kind === "audio" ? "audio" : "video",
+        { remote: !!opts.cloudBase || !!remote || complete.has(TIERS_KNOWN_REMOTE) });
     }
     return pick("small", false);
   }
@@ -95,7 +160,7 @@ export function chooseTier(
 export function playbackUrl(
   media: TierMedia,
   localHashes: HashList = [],
-  opts: { cloudBase?: string; playable?: (hash: string) => boolean | undefined; probe?: boolean } = {},
+  opts: { cloudBase?: string; playable?: (hash: string) => boolean | undefined; probe?: boolean; lowMemory?: boolean; remote?: MediaTierPolicy["remote"] } = {},
 ): string {
   return chooseTier(media, localHashes, opts).url;
 }

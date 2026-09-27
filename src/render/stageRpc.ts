@@ -17,6 +17,7 @@ import type { RectWithBounds, RectsWithBoundsOptions, StageHit } from "./solid";
 import type { ProjectPatch } from "./changedClips.mjs";
 import type { CardCostRecord } from "./cardCostKey.mjs";
 import type { StreamPlaneRequest } from "./streamPlayer";
+import { lowMemoryMode } from "../online/lowMemory.ts";
 
 export type { StreamPlaneRequest };
 
@@ -28,7 +29,10 @@ export interface HostCapabilities {
   prerender: boolean;
   /** Worker 里能拿到 OffscreenCanvas 的 webgl2 */
   offscreenGl: boolean;
-  /** navigator.deviceMemory ≤ 4 或 Safari */
+  /**
+   * 低内存档(`docs/plan/c10a-contract.md` 第 8 节,判定在 `src/online/lowMemory.ts`):只在在线模式里判,
+   * 桌面运行环境恒为 false。以前的判据「`deviceMemory <= 4` 或 Safari」已换掉。
+   */
   lowMemory: boolean;
   /**
    * 父页在 src 查询串里给的舞台 id(`A` / `B`)。**只是实例名,和角色无关**(E1):
@@ -472,12 +476,14 @@ export function postStageCards(stamp: number, parentOrigin = "*"): void {
   window.parent?.postMessage(msg, parentOrigin);
 }
 
-/** 舞台侧:按 J4 探测宿主能力。`prerender` 与 `stageId` 来自父页写在 src 查询串里的值 */
-export function detectHostCapabilities(): HostCapabilities {
+/**
+ * 舞台侧:按 J4 探测宿主能力。`prerender` 与 `stageId` 来自父页写在 src 查询串里的值。
+ * `online`:在线浏览器模式(`src/online/mode.ts` 的 `ONLINE`),由调用方传 —— 本文件不读编译期常量,单测里没有它。
+ */
+export function detectHostCapabilities({ online = false }: { online?: boolean } = {}): HostCapabilities {
   const q = new URLSearchParams(location.search);
   const ua = navigator.userAgent;
   const safari = /Safari\//.test(ua) && !/Chrome\/|Chromium\/|Edg\//.test(ua);
-  const mem = (navigator as Navigator & { deviceMemory?: number }).deviceMemory;
   let offscreenGl = false;
   try {
     // 主线程上的近似:Worker 里的 OffscreenCanvas webgl2 与主线程同源同能力(Safari 17 之前 Worker 里没有 WebGL)。
@@ -494,7 +500,8 @@ export function detectHostCapabilities(): HostCapabilities {
   return {
     prerender: q.get("prerender") === "1",
     offscreenGl,
-    lowMemory: (typeof mem === "number" && mem <= 4) || safari,
+    // c10a 第 8 节:只在在线模式里判(deviceMemory、粗指针 + 触点 + 屏幕长边,设备设置可覆盖);桌面恒为普通档
+    lowMemory: lowMemoryMode(online),
     // stageId **只是实例名,和角色无关**(E1):两个 iframe 是 `A` / `B`,谁是 front / back
     // 只经 setRole 定。缺省给 `A` 而不是 `front`,免得又把实例名读成角色名。
     stageId: q.get("id") || "A",
