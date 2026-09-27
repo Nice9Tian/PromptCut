@@ -22,7 +22,7 @@
  */
 import type { Project } from "../kernel/project";
 import type { CardCostRecord } from "../render/cardCostKey.mjs";
-import { planPipelines, type PipelinePlan } from "../render/pipelinePlan.mjs";
+import { clipWeight, planPipelines, type PipelinePlan } from "../render/pipelinePlan.mjs";
 import { resolveTuning, type PipelineTuning } from "../render/pipelineTuning.mjs";
 import type { StageRole } from "../render/stageRpc";
 import { wirePlan } from "../render/wirePlan";
@@ -38,6 +38,11 @@ let plan: PipelinePlan | null = null;
  * 播放时一律贴预渲染小尺寸,不活渲任何卡。只有在线页面判为低内存档时由 `Preview` 打开;普通档不变。
  */
 let allHeavy = false;
+/**
+ * L4(在线普通档,C10 契约第 6 节、第 18 节第 1 条):分派时每张重卡每拍的固定成本换成实测的换帧成本 `swapMs`
+ * (`planPipelines` 的 `opts.deadMs`),与播放时 `beatSwap.mjs` 的 `fitBeatSwaps` 同一个数。null = 桌面的 `DEAD_MS`。
+ */
+let deadMs: number | null = null;
 /** 上一次真的发出去的那份表的序列化结果，用来省掉「没变还发一遍」 */
 let sentWire = "";
 let scheduled = false;
@@ -62,7 +67,7 @@ function recompute(): void {
     return;
   }
   const { identityKeys, frameModes } = clipIdentityOf(project);
-  plan = planPipelines(project, costs, Math.max(1, project.fps || 30), { tuning, identityKeys, frameModes, ...(allHeavy ? { allHeavy: true } : {}) });
+  plan = planPipelines(project, costs, Math.max(1, project.fps || 30), { tuning, identityKeys, frameModes, ...(allHeavy ? { allHeavy: true } : {}), ...(deadMs !== null ? { deadMs } : {}) });
 }
 
 /**
@@ -133,6 +138,34 @@ export function setPlanAllHeavy(on: boolean): void {
   schedule();
 }
 
+/** L4:在线普通档把分派的每拍重卡成本换成实测换帧成本(`null` 回到桌面的 `DEAD_MS`)。变了才重算重发 */
+export function setPlanDeadMs(ms: number | null): void {
+  const next = ms !== null && Number.isFinite(ms) && ms >= 0 ? ms : null;
+  if (next === deadMs) return;
+  deadMs = next;
+  schedule();
+}
+
+/**
+ * 这一刻轻管线里活渲的卡每拍占了多少毫秒(C10 契约第 18 节第 1 条的「已占用」):当前位置 `light` 集合里每张卡的
+ * `clipWeight(...).w` 之和,口径与 `planPipelines` 的贪心同一份。不在任何位置(没有表、空白处)回 0。
+ */
+export function lightCostAt(t: number): number {
+  if (!plan || !project) return 0;
+  const seg = plan.segments.find((s) => t >= s.fromSec && t < s.toSec);
+  if (!seg || !seg.light.size) return 0;
+  const fps = Math.max(1, project.fps || 30);
+  const { identityKeys, frameModes } = clipIdentityOf(project);
+  const byKey = new Map(costs.map((r) => [r.identityKey, r]));
+  let sum = 0;
+  for (const clipId of seg.light) {
+    const key = identityKeys[clipId];
+    const w = clipWeight(key ? byKey.get(key) : undefined, frameModes[clipId], fps, tuning).w;
+    if (Number.isFinite(w)) sum += w;
+  }
+  return sum;
+}
+
 /** 此刻是不是「全部按重卡」 */
 export function planAllHeavy(): boolean {
   return allHeavy;
@@ -141,6 +174,7 @@ export function planAllHeavy(): boolean {
 /** 测试用 */
 export function resetPlanDispatch(): void {
   allHeavy = false;
+  deadMs = null;
   project = null;
   costs = [];
   tuning = resolveTuning(null);

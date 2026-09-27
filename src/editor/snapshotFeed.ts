@@ -34,7 +34,8 @@ import { pipelineAt } from "../render/pipelinePlan.mjs";
 import { mirrorKey, pushWanted } from "../render/dataMirror";
 import type { Project, TrackClip } from "../kernel/project";
 import type { StageRole, StageRpcClient } from "../render/stageRpc";
-import { currentPlan } from "./planDispatch";
+import { currentPlan, lightCostAt } from "./planDispatch";
+import { fitBeatSwaps, SWAP_MS } from "../render/beatSwap.mjs";
 import { planesWithinBudget, rangesHave, SEGMENT_FRAMES, streamPlanesFor, type StreamPlaneRequest } from "../render/streamPlayer";
 
 /** C4：换 DOM 每 rAF 至多一次、间隔 ≥ 33 ms */
@@ -224,6 +225,56 @@ function clearSettled(role: StageRole): void {
 function isSettled(role: StageRole, clipId: string): boolean {
   const base = baselines[role];
   return base.settledAll || base.settled.has(clipId);
+}
+
+/* --------------------------------------------------------------- 按拍换快照(L4) */
+
+/**
+ * 在线普通档的「按拍换快照」(C10 契约第 6 节〔裁:D8〕、第 18 节第 1 条)。开着时:
+ *   - 播放中的投递**不受** `SNAPSHOT_THROTTLE_MS` 的 33 ms 节流 —— 重层每拍换一次;节流只留给非播放时的投递;
+ *   - 每拍按 `fitBeatSwaps` 算装得下几个重层(`deadMs = max(0, B − 已占用)`,`floor(deadMs / swapMs)`),
+ *     按从上到下的层序取,装不下的重层这一拍摘掉快照,由舞台显示占位符(兜底顺序第 4 步)。
+ * 桌面(关着)一个字节不变。
+ */
+let beatSwap = false;
+let beatSwapMs = SWAP_MS;
+let lastBeatFit: { t: number; occupiedMs: number; deadMs: number; fit: number; swap: string[]; placeholder: string[] } | null = null;
+
+export function setBeatSwap(on: boolean, opts: { swapMs?: number } = {}): void {
+  beatSwap = !!on;
+  if (Number(opts.swapMs) > 0) beatSwapMs = Number(opts.swapMs);
+  if (!beatSwap) lastBeatFit = null;
+}
+
+/** 探针看:上一拍的换帧取舍 */
+export function beatSwapDebug() {
+  return { on: beatSwap, swapMs: beatSwapMs, last: lastBeatFit };
+}
+
+/** 这几张卡从上到下的顺序:轨道按项目里的先后(第一条在最上面),同一轨道里后面的片段盖在前面的上面 */
+export function topDownOrder(project: Project, clipIds: Iterable<string>): string[] {
+  const want = new Set(clipIds);
+  const out: string[] = [];
+  for (const tr of project.tracks) {
+    for (let i = tr.clips.length - 1; i >= 0; i--) {
+      const id = tr.clips[i].id;
+      if (want.has(id)) { out.push(id); want.delete(id); }
+    }
+  }
+  for (const id of want) out.push(id);
+  return out;
+}
+
+/** 播放中按拍的预算把装不下的重层从这一拍的选帧里拿掉(那一层落到占位符) */
+function applyBeatBudget(head: Playhead, picks: Map<string, Pick>): Map<string, Pick> {
+  if (!beatSwap || !head.playing || !picks.size) return picks;
+  const occupiedMs = lightCostAt(head.t);
+  const fit = fitBeatSwaps({ fps: head.project.fps || 30, occupiedMs, layers: topDownOrder(head.project, picks.keys()), swapMs: beatSwapMs });
+  lastBeatFit = { t: head.t, occupiedMs, deadMs: fit.deadMs, fit: fit.fit, swap: fit.swap, placeholder: fit.placeholder };
+  if (!fit.placeholder.length) return picks;
+  const out = new Map(picks);
+  for (const id of fit.placeholder) out.delete(id);
+  return out;
 }
 
 /* --------------------------------------------------------------- 选帧 */
@@ -546,9 +597,11 @@ export async function deliverSnapshots(stage: StageRpcClient, role: StageRole, h
   if (feed.wanted.length) pushWanted(feed.wanted);
   const base = baselines[role];
   const now = performance.now();
-  if (!base.needsReset && now - base.lastSentAt < SNAPSHOT_THROTTLE_MS) return 0;
+  // L4:在线普通档播放中每拍都换,不受 33 ms 节流(C10 契约第 6 节);暂停、拖动时照旧节流
+  const perBeat = beatSwap && head.playing;
+  if (!perBeat && !base.needsReset && now - base.lastSentAt < SNAPSHOT_THROTTLE_MS) return 0;
   const reset = base.needsReset;
-  const changes = diffAgainst(role, feed.picks, reset);
+  const changes = diffAgainst(role, applyBeatBudget(head, feed.picks), reset);
   if (!reset && !changes.length) return 0;
   const { patch, next } = packChanges(role, changes, reset);
   if (!reset && !Object.keys(patch).length) return 0;
@@ -607,6 +660,9 @@ export function suppressedAt(head: Playhead): string[] {
 /** 测试用 */
 export function resetSnapshotFeed(): void {
   stopSnapshotFeed();
+  beatSwap = false;
+  beatSwapMs = SWAP_MS;
+  lastBeatFit = null;
   anchorsFor = null;
   source = new HttpSnapshotSource();
 }
