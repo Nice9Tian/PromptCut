@@ -6,8 +6,8 @@
  * - 读邀请链接的 `#invite=`，放进内存后马上把 `#` 片段清掉（`invite.ts`）。
  */
 import { ONLINE } from "./mode";
-import { installApiGuard } from "./apiGuard";
+import { bootApiGuard } from "./apiGuard";
 import { captureInviteFromLocation } from "./invite";
 
-if (ONLINE) installApiGuard({ base: import.meta.env.BASE_URL });
+bootApiGuard(ONLINE, { base: import.meta.env.BASE_URL });
 captureInviteFromLocation();

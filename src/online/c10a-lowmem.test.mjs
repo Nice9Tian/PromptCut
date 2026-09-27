@@ -13,7 +13,7 @@ import { srcUrl } from "../testing/registerTs.mjs";
 import { test, mock } from "node:test";
 import assert from "node:assert/strict";
 import {
-  exists, skipIf, LOW_MEMORY_FILE, lowMemoryEnv, pickDecider, decideWith, installBrowserGlobals,
+  exists, skipIf, LOW_MEMORY_FILE, lowMemoryEnv, pickDecider, decideWith, installBrowserGlobals, hostCapabilitiesOf,
 } from "../../server/test/c10a-kit.mjs";
 
 const missing = !exists(LOW_MEMORY_FILE);
@@ -22,9 +22,10 @@ const it = (name, fn) => test(name, { skip }, fn);
 
 let decide = null;
 let stageRpc = null;
+let mod = null;
 if (!missing) {
   mock.module(srcUrl("online/mode.ts"), { exports: { ONLINE: true } });
-  const mod = await import(srcUrl("online/lowMemory.ts"));
+  mod = await import(srcUrl("online/lowMemory.ts"));
   const decider = pickDecider(mod);
   decide = (o) => decideWith(decider, lowMemoryEnv(o));
   stageRpc = await import(srcUrl("render/stageRpc.ts"));
@@ -103,7 +104,8 @@ it("C10A-LM-08 舞台的 hostCapabilities.lowMemory 用同一条判据（在线�
     const hadLocation = Object.getOwnPropertyDescriptor(globalThis, "location");
     Object.defineProperty(globalThis, "location", { value: { search: "?stage=1&id=A", origin: "http://x" }, configurable: true, writable: true });
     try {
-      const caps = stageRpc.detectHostCapabilities();
+      // 集成对账（K2）：online 由舞台页传入，判定按会话定一次
+      const caps = await hostCapabilitiesOf(stageRpc, mod);
       assert.equal(caps.lowMemory, want, JSON.stringify(o));
     } finally {
       if (hadLocation) Object.defineProperty(globalThis, "location", hadLocation);

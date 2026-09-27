@@ -13,7 +13,7 @@
 import { srcUrl } from "../testing/registerTs.mjs";
 import { test, mock, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { exists, skipIf, LOW_MEMORY_FILE, lowMemoryStubExports } from "../../server/test/c10a-kit.mjs";
+import { exists, skipIf, LOW_MEMORY_FILE, lowMemoryStubExports, lowMemorySwapHost } from "../../server/test/c10a-kit.mjs";
 
 const missing = !exists(LOW_MEMORY_FILE);
 const skip = skipIf(missing, `${LOW_MEMORY_FILE}（stageSwap 的低内存档闸随它来）`);
@@ -99,11 +99,12 @@ beforeEach(() => {
   identityKeys = {};
   front = fakeStage("A");
   back = fakeStage("B");
-  swap.setSwapHost({
+  // 集成对账（K3）：低内存档闸在 SwapHost.lowMemory() 上
+  swap.setSwapHost(lowMemorySwapHost({
     swapRoles() { log.push(["swapRoles"]); [front, back] = [back, front]; return { front, back }; },
     proxy: () => true,
     localHashes: () => ["h1"],
-  });
+  }));
 });
 
 /** 普通档下这两个场面一定会走补跑（与 stageSwap.test.mjs 的「暂停态互换」「播放态互换」同一组数据） */

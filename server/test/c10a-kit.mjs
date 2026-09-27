@@ -54,6 +54,18 @@
  *       在线构建的静态检查：产物里以 `/api/` 开头、后面紧跟地址的字面量（`apiLiterals`）为 0；守卫判前缀用的 `"/api/"` 不算。
  *   K7  单舞台（契约第 8.1 节）：仍由 `src/editor/previewMode.ts` 定开几个舞台——`ONLINE` 时 `dualStage()` 恒为 false，
  *       `stageSrc('A')` 是同源地址并带 `preview=stage`（舞台据此渲 live 变体）。探测：`src/online/lowMemory.ts` 存在。
+ *
+ * # 集成对账（`claude/c10a-integ`，2026-09-27；逐条理由见 `docs/reports/AGENT-c10a-integ.md`）
+ *
+ *   K1  与实现一致，未改。
+ *   K2  判定是 `lowMemoryMode(online, { probe, override, session })`（`online` 由调用方传，判定按会话定一次），
+ *       设备信息 `probeDevice(env)`；舞台 `detectHostCapabilities({ online })`。见 `pickDecider`、`hostCapabilitiesOf`。
+ *   K3  `mediaTier` 的 `opts.lowMemory` 与假设一致；`stageSwap` 的闸在 `SwapHost.lowMemory()`，见 `lowMemorySwapHost`。
+ *   K4  尺寸规则 `server/bakery/small-bitmap.mjs` 的 `smallSize({ projectWidth, projectHeight })`；清单 `small`、推 `px`
+ *       与假设一致；就绪索引不收小尺寸，两档分开记在清单里（导出前核对 `src/export/originals.ts` 只认 `frames`）。
+ *   K5  `src/export/mp4Mux.ts` 的 `Mp4Muxer` + `MemorySink`，构造时就要解码配置；见 `muxerAdapter`。
+ *   K6  `src/online/apiGuard.ts` 的 `bootApiGuard(online)`；静态检查改棘轮（`ONLINE_API_RATCHET_FILE`）。
+ *   K7  与实现一致，未改。
  */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -141,9 +153,8 @@ export function filesContaining(dir, needle) {
 // ================================================================== K2 低内存档判定
 
 export const LOW_MEMORY_FILE = 'src/online/lowMemory.ts';
-export const LOW_MEMORY_DECIDERS = [
-  'decideLowMemory', 'detectLowMemory', 'computeLowMemory', 'judgeLowMemory', 'lowMemoryFor', 'isLowMemoryDevice', 'resolveLowMemory',
-];
+/** 集成对账后（K2）：实现导出的是这三个。`lowMemoryMode(online, deps)` 是「本次会话是不是低内存档」，只在在线模式里判 */
+export const LOW_MEMORY_EXPORTS = ['lowMemoryMode', 'probeDevice', 'resetLowMemoryForTest'];
 
 /**
  * 判定用的环境桩。
@@ -199,10 +210,42 @@ export function installBrowserGlobals(env) {
   };
 }
 
-/** 从 `lowMemory.ts` 里取判定函数（K2）；取不到就断言失败并列出实际导出 */
+/**
+ * 从 `lowMemory.ts` 里取判定（K2，集成对账后）。
+ *
+ * 实现的形状：`lowMemoryMode(online, { probe, override, session })` 回布尔；`online` 由调用方传进来
+ * （实现不 import `mode.ts`，那个模块读 `import.meta.env`，Node 里没有），载入时判一次、同一会话不再改
+ * （改设置下次载入生效），所以每次判定前先 `resetLowMemoryForTest()`。设备信息由 `probeDevice(env)`
+ * 从仿浏览器的对象（`navigator` / `screen` / `matchMedia`）读；`env.override` 是设备设置「显示档」。
+ * `online` 取这个进程里 `src/online/mode.ts` 的 `ONLINE`（用例用 `mock.module` 换成了桩）。
+ */
 export function pickDecider(mod) {
-  for (const n of LOW_MEMORY_DECIDERS) if (typeof mod[n] === 'function') return mod[n];
-  assert.fail(`${LOW_MEMORY_FILE} 要导出 ${LOW_MEMORY_DECIDERS.join(' / ')} 之一；实际导出：${Object.keys(mod).join(', ') || '（无）'}`);
+  const lacking = LOW_MEMORY_EXPORTS.filter((n) => typeof mod[n] !== 'function');
+  if (lacking.length) assert.fail(`${LOW_MEMORY_FILE} 要导出 ${LOW_MEMORY_EXPORTS.join(' / ')}；缺 ${lacking.join(', ')}；实际导出：${Object.keys(mod).join(', ') || '（无）'}`);
+  return async (env) => {
+    const { ONLINE } = await import(new URL('../../src/online/mode.ts', import.meta.url).href);
+    mod.resetLowMemoryForTest();
+    try {
+      return mod.lowMemoryMode(ONLINE, { probe: mod.probeDevice(env), override: env.override ?? 'auto', session: null });
+    } finally {
+      mod.resetLowMemoryForTest();
+    }
+  };
+}
+
+/**
+ * 舞台的 `hostCapabilities`（K2，集成对账后）：`detectHostCapabilities({ online })`，`online` 由舞台页
+ * （`StageView.tsx`）按 `ONLINE` 传；判定按会话定一次，所以前后各清一次。
+ * 调用前由用例把桩装到全局（`installBrowserGlobals`）。
+ */
+export async function hostCapabilitiesOf(stageRpc, lowMemoryMod) {
+  const { ONLINE } = await import(new URL('../../src/online/mode.ts', import.meta.url).href);
+  lowMemoryMod.resetLowMemoryForTest();
+  try {
+    return stageRpc.detectHostCapabilities({ online: ONLINE });
+  } finally {
+    lowMemoryMod.resetLowMemoryForTest();
+  }
 }
 
 /** 跑一次判定：同时给参数与全局，回布尔 */
@@ -218,48 +261,57 @@ export async function decideWith(decider, env) {
   }
 }
 
-/** K3：`src/online/lowMemory.ts` 换成桩时导出的别名（都说「是低内存档」） */
+/**
+ * K3：`src/online/lowMemory.ts` 换成桩时的导出（集成对账后照实现的导出名，判定都说 `low`）。
+ * `stageSwap.ts` 并不从这个模块取档位（见 `lowMemorySwapHost`），桩只是免得被传递载入的模块读到真的判定。
+ */
 export function lowMemoryStubExports(low = true) {
   const f = () => low;
-  const out = { LOW_MEMORY: low, lowMemoryMode: low };
-  for (const n of ['isLowMemory', 'lowMemory', 'getLowMemory', 'lowMemoryActive', 'currentLowMemory', 'inLowMemory', 'useLowMemory', 'lowMemoryNow']) out[n] = f;
-  for (const n of LOW_MEMORY_DECIDERS) out[n] = f;
-  out.onLowMemoryChange = () => () => {};
-  out.subscribeLowMemory = () => () => {};
-  out.forceLowMemory = () => {};
-  out.demoteToLowMemory = () => {};
-  out.setLowMemoryForTest = () => {};
-  return out;
+  return {
+    lowMemoryMode: f, judgeLowMemory: f, downgradedThisSession: () => false,
+    probeDevice: () => ({ deviceMemory: undefined, coarsePointer: false, maxTouchPoints: 0, screenWidth: 0, screenHeight: 0 }),
+    readDisplayTier: () => 'auto', setDisplayTier: () => ({ notice: '' }),
+    onLowMemoryChange: () => () => {}, noteRuntimeTrouble: () => ({ downgradedNow: false, notice: null }), resetLowMemoryForTest: () => {},
+    LOW_MEMORY_DEVICE_GIB: 4, LOW_MEMORY_TOUCH_POINTS: 2, LOW_MEMORY_SCREEN_MAX: 1600, DECODE_FAILURES_TO_DOWNGRADE: 3,
+    DISPLAY_TIER_KEY: 'pc.device.displayTier', SESSION_DOWNGRADE_KEY: 'pc.session.lowMemory',
+    LOW_MEMORY_TEXT: { enter: '', downgraded: '', awaitingUploader: '等待上传方' }, TO_NORMAL_NOTICE: '', NEXT_LOAD_NOTICE: '',
+  };
+}
+
+/**
+ * K3（集成对账后）：`stageSwap.ts` 的低内存档闸在 `SwapHost.lowMemory()` 上（`Preview.tsx` 按本次会话的判定给），
+ * 不从 `lowMemory.ts` 取。用例的 `setSwapHost` 经这里补上 `lowMemory`。
+ */
+export function lowMemorySwapHost(host, low = true) {
+  return { ...host, lowMemory: () => low };
 }
 
 // ================================================================== K4 预渲染小尺寸
 
-export const SMALL_SIZE_FILES = [
-  'server/artifact-transfer.mjs', 'server/frame-pipeline.mjs', 'server/artifact-push.mjs', 'server/prerender-small.mjs',
-  'server/bakery/small.mjs', 'server/bakery/smallSize.mjs', 'server/bakery/prerender-small.mjs', 'server/bakery/rasterize-small.mjs',
-];
-export const SMALL_SIZE_NAMES = ['smallPrerenderSize', 'prerenderSmallSize', 'smallSize', 'smallSizeOf', 'fitSmall', 'smallDims', 'smallTierSize', 'smallBox'];
+/**
+ * 集成对账后（K4）：尺寸规则是 `server/bakery/small-bitmap.mjs` 的 `smallSize({ projectWidth, projectHeight, boxWidth?, boxHeight? })`，
+ * 回 `{ width, height }`。小位图画的是包裹层的框，框按同一个缩放比缩；不给框就是整幅，正是契约第 9 节的「项目画幅」。
+ */
+export const SMALL_SIZE_FILE = 'server/bakery/small-bitmap.mjs';
+export const SMALL_SIZE_NAME = 'smallSize';
 
-/** 找尺寸规则函数（K4）；回 `{ fn, file, name }`，导出了却载不进来回 `{ file, error }`，没有回 null。`server/bakery/` 下的 .mjs 也逐个看 */
+/** 找尺寸规则函数（K4）；回 `{ fn: (w, h) => size, file, name }`，导出了却载不进来回 `{ file, error }`，没有回 null */
 export async function findSmallSize() {
-  const files = [...SMALL_SIZE_FILES];
-  try {
-    for (const f of fs.readdirSync(repoPath('server/bakery'))) if (f.endsWith('.mjs') && !files.includes(`server/bakery/${f}`)) files.push(`server/bakery/${f}`);
-  } catch { /* 没有目录 */ }
-  for (const rel of files) {
-    if (!exists(rel)) continue;
-    const src = fs.readFileSync(repoPath(rel), 'utf8');
-    if (!SMALL_SIZE_NAMES.some((n) => src.includes(n))) continue; // 不 import 无关的重模块
-    let mod;
-    try { mod = await import(repoUrl(rel)); } catch (err) {
-      // 文本里导出了这个名字却载不进来：不当「缺失」静默跳过，交给用例报错
-      if (SMALL_SIZE_NAMES.some((n) => exportsName(src, n))) return { file: rel, error: err };
-      continue;
-    }
-    for (const n of SMALL_SIZE_NAMES) if (typeof mod[n] === 'function') return { fn: mod[n], file: rel, name: n };
+  if (!exists(SMALL_SIZE_FILE)) return null;
+  const src = fs.readFileSync(repoPath(SMALL_SIZE_FILE), 'utf8');
+  let mod;
+  try { mod = await import(repoUrl(SMALL_SIZE_FILE)); } catch (err) {
+    // 文本里导出了这个名字却载不进来：不当「缺失」静默跳过，交给用例报错
+    if (exportsName(src, SMALL_SIZE_NAME)) return { file: SMALL_SIZE_FILE, error: err };
+    return null;
   }
-  return null;
+  const f = mod[SMALL_SIZE_NAME];
+  if (typeof f !== 'function') return null;
+  return { fn: (w, h) => f({ projectWidth: w, projectHeight: h }), file: SMALL_SIZE_FILE, name: SMALL_SIZE_NAME };
 }
+
+/** 集成对账后（K4）：导出前核对与取用预渲染原尺寸的模块；它只认清单的 `frames`，`small` 不算 */
+export const ORIGINALS_FILE = 'src/export/originals.ts';
 
 /** 源码文本里有没有 `export … <name>`（粗筛：function / const / class / export { … }） */
 export function exportsName(src, name) {
@@ -275,32 +327,67 @@ export function sizeOf(r) {
 
 // ================================================================== K5 MP4 封装器
 
-export const MUXER_NAMES = ['Mp4Muxer', 'MP4Muxer', 'Muxer', 'createMp4Muxer', 'createMuxer', 'mp4Muxer'];
+/**
+ * 集成对账后（K5）：`src/export/mp4Mux.ts` 的 `Mp4Muxer` 与 `MemorySink`。实现的形状与用例假设的不同：
+ * - 构造时就要 `{ video: { codec: 'avc1.…', width, height, fps, avcC }, audio?: { codec: 'mp4a.40.2', sampleRate, channels, asc }, sink }`，
+ *   而 avcC / AudioSpecificConfig 要等第一个块的 `meta.decoderConfig.description` 才有；
+ * - `addVideoChunk(bytes, { timestampUs, key })`、`addAudioChunk(bytes, { timestampUs, durationUs })` 收拷出来的字节；
+ * - `finalize()` 回字节数，产物在 `MemorySink.bytes()`。
+ * 下面的适配器照 `browserExport.ts` 的做法：先攒块，等要的解码配置都到了再建封装器、按到达顺序补进去。
+ */
+export const MUXER_FILE = 'src/export/mp4Mux.ts';
+export const MUXER_NAMES = ['Mp4Muxer'];
 
-/** 在 `src/export/*.ts` 里找封装器（K5）；回 `{ make, file, name }`，导出了却载不进来回 `{ file, error }`，没有回 null */
+const chunkBytes = (chunk) => { const b = new Uint8Array(chunk.byteLength); chunk.copyTo(b); return b; };
+
+function muxerAdapter(mod, opts) {
+  const wantAudio = !!opts.audio;
+  const sink = new mod.MemorySink();
+  let real = null;
+  let video = null;
+  let audio = null;
+  const pending = [];
+  const feed = (e) => (e.kind === 'v'
+    ? real.addVideoChunk(e.data, { timestampUs: e.timestampUs, key: e.key })
+    : real.addAudioChunk(e.data, { timestampUs: e.timestampUs, durationUs: e.durationUs }));
+  const push = (e) => {
+    if (!real && video && (!wantAudio || audio)) {
+      real = new mod.Mp4Muxer({ video, audio, sink });
+      for (const p of pending.splice(0)) feed(p);
+    }
+    if (real) feed(e); else pending.push(e);
+  };
+  return {
+    target: sink,
+    addVideoChunk(chunk, meta) {
+      const d = meta?.decoderConfig;
+      if (d?.description && !video) video = { codec: d.codec, width: d.codedWidth ?? opts.video.width, height: d.codedHeight ?? opts.video.height, fps: opts.video.frameRate, avcC: new Uint8Array(d.description) };
+      push({ kind: 'v', data: chunkBytes(chunk), timestampUs: chunk.timestamp, key: chunk.type === 'key' });
+    },
+    addAudioChunk(chunk, meta) {
+      const d = meta?.decoderConfig;
+      if (d?.description && !audio) audio = { codec: d.codec, sampleRate: d.sampleRate ?? opts.audio.sampleRate, channels: d.numberOfChannels ?? opts.audio.numberOfChannels, asc: new Uint8Array(d.description) };
+      push({ kind: 'a', data: chunkBytes(chunk), timestampUs: chunk.timestamp, durationUs: chunk.duration });
+    },
+    async finalize() {
+      assert.ok(real, `封装器没建起来：视频解码配置 ${video ? '有' : '没有'}，音频 ${wantAudio ? (audio ? '有' : '没有') : '不要'}`);
+      await real.finalize();
+      return sink.bytes();
+    },
+  };
+}
+
+/** 找封装器（K5）；回 `{ make, file, name }`，导出了却载不进来回 `{ file, error }`，没有回 null */
 export async function findMuxer() {
-  const dir = repoPath('src/export');
-  if (!fs.existsSync(dir)) return null;
-  const files = fs.readdirSync(dir).filter((f) => /\.(m?ts|mjs)$/.test(f) && !f.endsWith('.d.ts') && !f.includes('.test.'));
-  // 名字里带 mux / mp4 的先看
-  files.sort((a, b) => Number(!/mux|mp4/i.test(a)) - Number(!/mux|mp4/i.test(b)));
-  for (const f of files) {
-    const rel = `src/export/${f}`;
-    const src = fs.readFileSync(repoPath(rel), 'utf8');
-    if (!MUXER_NAMES.some((n) => src.includes(n))) continue;
-    let mod;
-    try { mod = await import(repoUrl(rel)); } catch (err) {
-      if (MUXER_NAMES.some((n) => exportsName(src, n))) return { file: rel, error: err };
-      continue;
-    }
-    for (const n of MUXER_NAMES) {
-      const v = mod[n];
-      if (typeof v !== 'function') continue;
-      const isClass = /^class\b/.test(Function.prototype.toString.call(v));
-      return { file: rel, name: n, make: (opts) => (isClass ? new v(opts) : v(opts)) };
-    }
+  if (!exists(MUXER_FILE)) return null;
+  const src = fs.readFileSync(repoPath(MUXER_FILE), 'utf8');
+  let mod;
+  try { mod = await import(repoUrl(MUXER_FILE)); } catch (err) {
+    if (exportsName(src, 'Mp4Muxer')) return { file: MUXER_FILE, error: err };
+    return null;
   }
-  return null;
+  if (typeof mod.Mp4Muxer !== 'function' || typeof mod.MemorySink !== 'function') return null;
+  return { file: MUXER_FILE, name: 'Mp4Muxer', make: (opts) => muxerAdapter(mod, opts) };
 }
 
 /** 封装器的产物字节（K5） */
@@ -433,25 +520,43 @@ export function adtsToRaw(buf) {
 
 // ================================================================== K6 `/api` 守卫
 
-/** `src/online/` 下导出名含 guard 的函数（K6）；回 `{ fn, file, name }` 或 null。按文本先筛，再 import */
+/**
+ * 集成对账后（K6）：守卫在 `src/online/apiGuard.ts`。`installApiGuard()` 本身不看模式（调了就装）；
+ * 「只在 `ONLINE` 时装」的规则是 `bootApiGuard(online, options)`，`boot.ts` 按 `ONLINE` 调它。
+ * 这里照 `boot.ts` 的做法把这个进程里 `mode.ts` 的 `ONLINE`（用例已换成桩）传进去。
+ */
+export const API_GUARD_FILE = 'src/online/apiGuard.ts';
+
+/** 找守卫（K6）；回 `{ fn, file, name }` 或 null */
 export async function findApiGuard(importer) {
-  const dir = repoPath('src/online');
-  if (!fs.existsSync(dir)) return null;
-  const files = fs.readdirSync(dir).filter((f) => /\.ts$/.test(f) && !f.endsWith('.d.ts') && f !== 'mode.ts');
-  files.sort((a, b) => Number(!/guard|api/i.test(a)) - Number(!/guard|api/i.test(b)));
-  for (const f of files) {
-    const src = fs.readFileSync(path.join(dir, f), 'utf8');
-    const m = /export\s+(?:async\s+)?function\s+(\w*[Gg]uard\w*)|export\s+const\s+(\w*[Gg]uard\w*)\s*=/.exec(src);
-    if (!m) continue;
-    const name = m[1] ?? m[2];
-    const mod = await importer(`src/online/${f}`);
-    if (typeof mod[name] === 'function') return { fn: mod[name], file: `src/online/${f}`, name };
-  }
-  return null;
+  if (!exists(API_GUARD_FILE)) return null;
+  const mod = await importer(API_GUARD_FILE);
+  if (typeof mod.bootApiGuard !== 'function') return null;
+  const { ONLINE } = await importer('src/online/mode.ts');
+  return { fn: () => mod.bootApiGuard(ONLINE), file: API_GUARD_FILE, name: 'bootApiGuard' };
 }
 
 /** 目录下所有文件（递归） */
 export const walkFiles = (dir) => fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walkFiles(path.join(dir, e.name)) : [path.join(dir, e.name)]));
+
+/**
+ * 在线构建的 `/api/` 路径棘轮〔裁，主会话 2026-09-27〕：集成时产物里已有的 `/api/` 路径记在这份清单里，
+ * C10A-API-03 断言「产物里的 `/api/` 路径 ⊆ 清单」，新出现的判红。逐个置灰或换在线替代归 C10 其余，做掉一个就从清单删一个。
+ * 运行时守卫加网络记录里 0 个 `/api/` 请求照旧是验收（探针）。
+ */
+export const ONLINE_API_RATCHET_FILE = 'server/test/c10a-online-api-paths.json';
+
+/** 产物里 `/api/` 字面量归一成路径（取到第一个不是路径字符的地方：模板的 `${`、引号、查询串都截断）；回去重排序后的数组 */
+export function apiPaths(dir) {
+  const out = new Set();
+  for (const file of walkFiles(dir)) {
+    if (!/\.(m?js|html)$/.test(file)) continue;
+    const text = fs.readFileSync(file, 'utf8');
+    // 与 `apiLiterals` 同一个口径（引号或反引号后紧跟 `/api/` 再紧跟地址字符），只多取出路径
+    for (const m of text.matchAll(/["'`](\/api\/[A-Za-z0-9_$][A-Za-z0-9_\-./]*)/g)) out.add(m[1].replace(/\$.*$/, ''));
+  }
+  return [...out].sort();
+}
 
 /**
  * 构建产物里以 `/api/` 开头、后面紧跟地址的字面量（引号或反引号起头）；回 [{ file, at, context }]。

@@ -52,12 +52,20 @@ it("C10A-GT-01 低内存档：两档都到齐、原尺寸能放，也给小尺�
   assert.equal(T.playbackUrl(video, all, { playable: () => true }), `/@media/${ORIG}`);
 });
 
-it("C10A-GT-02 低内存档：只有原尺寸到齐、小尺寸没到，也不给原尺寸（停在小尺寸等上传方）", () => {
+/*
+ * 集成对账改了这一条：实现在「问过素材服务、小尺寸还没到齐」时不挂地址（`url: ''`、`tier: 'none'`、`awaiting: true`），
+ * 这一层显示占位与「等待上传方」角标，小尺寸到齐后地址从空变成小尺寸、重新挂上；而不是先挂一个素材服务上还没有的
+ * 小尺寸地址（会 404，还会被舞台记成视频解码失败）。不变的是本条要核的：一律不给原尺寸。还没问过素材服务时照旧先给小尺寸。
+ */
+it("C10A-GT-02 低内存档：只有原尺寸到齐、小尺寸没到，也不给原尺寸（这一层等上传方，不挂还没到的地址）", () => {
   const choice = T.chooseTier(video, [REMOTE, ORIG], LOW);
-  assert.equal(choice.url, `/@media/${SMALL}`);
-  assert.equal(choice.tier, "small");
-  assert.equal(T.chooseTier(video, [], LOW).url, `/@media/${SMALL}`, "还没问过素材服务");
-  assert.equal(T.chooseTier(video, [REMOTE], LOW).url, `/@media/${SMALL}`, "一档都没到");
+  assert.notEqual(choice.tier, "original");
+  assert.equal(choice.url.includes(ORIG), false, `地址里不能有原尺寸：${choice.url}`);
+  assert.equal(choice.awaiting, true, "这一层等待上传方");
+  assert.equal(T.chooseTier(video, [], LOW).url, `/@media/${SMALL}`, "还没问过素材服务：先给小尺寸");
+  const none = T.chooseTier(video, [REMOTE], LOW);
+  assert.equal(none.url.includes(ORIG), false, "一档都没到：不给原尺寸");
+  assert.equal(none.awaiting, true, "一档都没到：等待上传方");
 });
 
 it("C10A-GT-03 低内存档：没有小尺寸的视频不拉原尺寸，这一层等待上传方（占位 + 角标）", () => {

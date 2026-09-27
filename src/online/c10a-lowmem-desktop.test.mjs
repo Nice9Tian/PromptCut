@@ -8,7 +8,7 @@ import { srcUrl } from "../testing/registerTs.mjs";
 import { test, mock } from "node:test";
 import assert from "node:assert/strict";
 import {
-  exists, skipIf, LOW_MEMORY_FILE, lowMemoryEnv, pickDecider, decideWith, installBrowserGlobals,
+  exists, skipIf, LOW_MEMORY_FILE, lowMemoryEnv, pickDecider, decideWith, installBrowserGlobals, hostCapabilitiesOf,
 } from "../../server/test/c10a-kit.mjs";
 
 const missing = !exists(LOW_MEMORY_FILE);
@@ -16,9 +16,11 @@ const skip = skipIf(missing, LOW_MEMORY_FILE);
 
 let decider = null;
 let stageRpc = null;
+let mod = null;
 if (!missing) {
   mock.module(srcUrl("online/mode.ts"), { exports: { ONLINE: false } });
-  decider = pickDecider(await import(srcUrl("online/lowMemory.ts")));
+  mod = await import(srcUrl("online/lowMemory.ts"));
+  decider = pickDecider(mod);
   stageRpc = await import(srcUrl("render/stageRpc.ts"));
 }
 
@@ -33,7 +35,8 @@ test("C10A-LM-09 桌面运行环境（ONLINE = false）：判定恒为普通档�
     const had = Object.getOwnPropertyDescriptor(globalThis, "location");
     Object.defineProperty(globalThis, "location", { value: { search: "?stage=1&id=A", origin: "http://x" }, configurable: true, writable: true });
     try {
-      assert.equal(stageRpc.detectHostCapabilities().lowMemory, false, JSON.stringify(o));
+      // 集成对账（K2）：online 由舞台页传入
+      assert.equal((await hostCapabilitiesOf(stageRpc, mod)).lowMemory, false, JSON.stringify(o));
     } finally {
       if (had) Object.defineProperty(globalThis, "location", had);
       else delete globalThis.location;

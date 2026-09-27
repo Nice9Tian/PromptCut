@@ -12,7 +12,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash, randomBytes } from 'node:crypto';
-import { skipIf, findSmallSize, sizeOf, repoUrl } from './c10a-kit.mjs';
+import { skipIf, findSmallSize, sizeOf, repoUrl, ORIGINALS_FILE } from './c10a-kit.mjs';
 
 const found = await findSmallSize();
 if (found?.error) {
@@ -122,21 +122,33 @@ it('C10A-PS-06 去重看两档：清单列了小尺寸而素材服务上缺一�
 
 // ------------------------------------------------------------------ 就绪分开记
 
-it('C10A-PS-07 两档分开就绪：小尺寸是就绪索引里单独的一层，记了小尺寸不会让原尺寸（html）层就绪', async () => {
+/*
+ * 集成对账（K4）改写了这一条：实现把两档分开记在**清单**里（`frames` 只列原尺寸、`small` 另列），预渲染进程的就绪索引
+ * （`server/ready-index.mjs`，桌面页面的 SSE）根本不收小尺寸；在线页面按 `small` 表算小尺寸就绪，导出前核对
+ * （`src/export/originals.ts`）只认 `frames`。所以「小尺寸就绪不能当原尺寸就绪」在这两处核对，不在就绪索引里加一档。
+ */
+it('C10A-PS-07 两档分开就绪：清单里小尺寸盖满整段、原尺寸只有一半，导出前核对仍算缺原尺寸，缺的帧取不到原尺寸', async () => {
   const ready = await import(repoUrl('server/ready-index.mjs'));
-  const smallKind = ready.READY_KINDS.find((k) => /small/i.test(k));
-  assert.ok(smallKind, `READY_KINDS 里要有小尺寸那一档（K4）：${JSON.stringify(ready.READY_KINDS)}`);
-  const idx = ready.createReadyIndex();
-  const sent = [];
-  idx.subscribe((m) => sent.push(m));
-  idx.addFrames({ clipId: 'c1', kind: smallKind, key: 'K1', frames: [[0, 59]] });
-  const layers = idx.list();
-  assert.equal(layers.length, 1);
-  assert.equal(layers[0].kind, smallKind);
-  assert.equal(layers.some((l) => l.kind === 'html'), false, '只记了小尺寸：原尺寸层没有');
-  idx.addFrames({ clipId: 'c1', kind: 'html', key: 'K1', frames: [[0, 29]] });
-  const byKind = Object.fromEntries(idx.list().map((l) => [l.kind, l.ranges]));
-  assert.deepEqual(byKind.html, [[0, 29]], '原尺寸层只有自己记的区间');
-  assert.deepEqual(byKind[smallKind], [[0, 59]], '小尺寸层不被原尺寸覆盖');
-  assert.ok(sent.some((m) => m.type === 'layer' && m.kind === smallKind), '小尺寸层照常发全量 layer');
+  assert.equal(ready.READY_KINDS.some((k) => /small/i.test(k)), false, `就绪索引不收小尺寸：${JSON.stringify(ready.READY_KINDS)}`);
+  await import(repoUrl('src/testing/registerTs.mjs'));
+  const { loadOriginalsIndex } = await import(repoUrl(ORIGINALS_FILE));
+  const hex = (c) => c.repeat(64);
+  const frames = Array.from({ length: 30 }, (_, f) => [f, hex('a'), 10]); // 原尺寸只有 0～29
+  const small = Array.from({ length: 60 }, (_, f) => [f, hex('b'), 5]); // 小尺寸 0～59 盖满
+  const content = {
+    'layers:p1': { v: 1, kind: 'layer-map', projectId: 'p1', fps: 30, span: 60, layers: [{ clipId: 'c1', kind: 'html', key: 'K1', resultKey: 'R1', firstFrame: 100, count: 60 }] },
+    'R1:0-59': { v: 1, kind: 'snapshot', resultKey: 'R1', range: { from: 0, to: 59 }, frames, small },
+  };
+  const deps = {
+    request: async (m) => (m.type === 'content.get' && m.kind === 'snapshot-manifest' && content[m.key]
+      ? { type: 'content.item', kind: m.kind, key: m.key, body: content[m.key] } : { type: 'content.item', kind: m.kind, key: m.key, missing: true }),
+    assetBase: () => null,
+    authHeaders: async () => ({}),
+  };
+  const idx = await loadOriginalsIndex('p1', deps);
+  assert.deepEqual(idx.missing, ['c1'], '小尺寸盖满也不算原尺寸就绪');
+  assert.equal(idx.hashAt('c1', 100 + 10), hex('a'), '有原尺寸的帧取原尺寸');
+  assert.equal(idx.hashAt('c1', 100 + 40), null, '只有小尺寸的帧：原尺寸算缺，不拿小尺寸顶');
+  content['R1:0-59'] = { ...content['R1:0-59'], frames: Array.from({ length: 60 }, (_, f) => [f, hex('a'), 10]) };
+  assert.deepEqual((await loadOriginalsIndex('p1', deps)).missing, [], '原尺寸补齐之后才就绪');
 });

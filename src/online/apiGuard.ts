@@ -76,6 +76,14 @@ function deadEventSource(url: string): EventSource {
 
 type GuardWindow = Window & { __pcApiBlocked?: string[]; __pcApiGuard?: boolean };
 
+/**
+ * 启动时装不装守卫：只要 `online`（`mode.ts` 的 `ONLINE`，由 `boot.ts` 传进来）为真就装，在线的开发构建与生产构建都装，
+ * 不另设开关；桌面运行环境不装（C10a 契约第 16 节第 6 条）。回被拒地址的记录数组，没装回 null。
+ */
+export function bootApiGuard(online: boolean, options: ApiGuardOptions = {}): string[] | null {
+  return online ? installApiGuard(options) : null;
+}
+
 /** 装上守卫（幂等）。回被拒地址的记录数组（与 `window.__pcApiBlocked` 同一个） */
 export function installApiGuard(options: ApiGuardOptions = {}): string[] {
   const w = window as GuardWindow;
