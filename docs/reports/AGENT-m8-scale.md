@@ -169,7 +169,7 @@ K1（`--order lock-first`）两边退出码都是 0，coordinator 15 条检查�
 合并 main 之后重跑：`npx tsc -b --force` 退出码 0；`npm test` 退出码 0，tests 3467，pass 3465，fail 0，skipped 2；
 对照组 `--role all --case k1 --prefilter off` 退出码 0，`ok: true`，totals `{"claims":521,"claimed":100,"cardLocked":400,"openedMismatch":400,"deadClaimed":0}`。
 - `1b8a811` 探针：K1 判据照〔裁〕改（稳态 0、竞态 ≤ 节点总数、lock-first 竞态 0，窗口时长只记录），单测 M8S-5 同步
-- （本次：计划第 2.2 节〔裁〕与本报告第 6 节）
+- `3347909` 计划第 2.2 节〔裁〕与本报告第 6 节
 
 ## 6. 按〔裁〕改判据后的复跑（本机替身，原样结果行）
 
@@ -199,3 +199,5 @@ PASS coordinator:watcher-dead-never-taken {"deadTaken":[]}
 totals {"nodes":8,"claims":121,"claimed":100,"cardLockedRace":0,"cardLockedSteady":0,"openedMismatch":0,"hidden":0,"hiddenUnexpected":0,"deadClaimed":0,"cardLocked":0,"raceWindowMsMax":null}
 ```
 两轮的其余检查项（workers-ready、two-fingerprints、dead/live-published、locks-granted、worker-results、kv-no-401、project-deleted）全 PASS。
+
+改判据之后：`npx tsc -b --force` 退出码 0；`npm test` 退出码 0，tests 3467，pass 3465，fail 0，skipped 2；`node --test server/test/m8-scale.test.mjs` 10 条全过。
