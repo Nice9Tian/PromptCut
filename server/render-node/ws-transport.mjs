@@ -1,6 +1,10 @@
 /**
  * 节点到文档服务的 WebSocket 端点（分布式预渲染 M5a，契约 `docs/plan/render-queue-contract.md` G.7）。
  *
+ * HT-a 起（`docs/plan/http-transport-contract.md` 第 9 节）业务调用方改用 `session-link.mjs` 的 `createDocEndpoint`
+ * （会话：序号与确认、传输断了接续、不丢消息）；本模块留作「一条传输就是一个连接」的底座：管理接口的令牌连接
+ * （`asset-announce`）、只走一种传输的开发者强制与测试。
+ *
  * 满足 D.2 的 `endpoint` 形状（`send`、`onMessage`），可以直接交给 `createLocalNode`。
  * 另外负责：
  *   - 子协议（M6a，`docs/plan/auth-contract.md` 第 5、11 节）：

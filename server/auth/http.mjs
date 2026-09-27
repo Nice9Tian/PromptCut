@@ -19,6 +19,10 @@
  * - 托管端（`mode: 'hosted'`，独立模式）：任何来源都能建；同一来源每小时最多 10 个，整台服务最多 1000 个，超出 429；
  * - 局域网主机（`mode: 'lan'`，挂载模式）：只有本机回环来源能建，别的 403。
  *
+ * 回环来源（`isLoopback`）：局域网主机只让回环建项目；回环的挑战、邀请码失败不计入限速。本机信任关掉时
+ * （`PROMPTCUT_TRUST_LOOPBACK=0`，托管端在反向代理之后，`docs/plan/http-transport-contract.md` 第 10 节），
+ * 组装方（`createSharedDocService`）传进来的 `isLoopback` 一律回 false，回环与别的来源一样受限。
+ *
  * 名单外的用户名（以及 `as: 'creator'` 而不是创建者）回伪盐：`HMAC-SHA256(serverSecret, projectId + '\n' + username)`
  * 的前 16 字节，同一用户名每次都一样，形状与真盐相同。
  */

@@ -2,7 +2,7 @@ import path from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import type { Plugin } from "vite";
-import { apiPath, clientAddressOf, isLoopbackAddress } from "./http-guard.mjs";
+import { apiPath, clientAddressOf, isLoopbackAddress, isLocalOrigin, remoteTagOf } from "./http-guard.mjs";
 import { rejectUpgrade } from "./docservice/ws.mjs";
 
 /**
@@ -260,7 +260,8 @@ export function docservicePlugin(): Plugin {
         }
         const isLoopback = (req: IncomingMessage) => {
           const address = clientAddressOf(req);
-          return address !== null && isLoopbackAddress(address);
+          // 真正的发起方是本机:对端回环且转发头里每一跳都是回环(`auth/origin.mjs`,契约第 10 节)
+          return address !== null && isLocalOrigin(req, address);
         };
         const built = createSharedDocService({
           mode: "lan",
@@ -269,7 +270,7 @@ export function docservicePlugin(): Plugin {
           server: httpServer,
           path: WS_PATH,
           isLoopback,
-          remoteOf: (req: IncomingMessage) => clientAddressOf(req),
+          remoteOf: (req: IncomingMessage) => remoteTagOf(req, clientAddressOf(req)),
           localDevice: localDeviceInfo(),
           log,
           onCreate: () => lan.sync(),

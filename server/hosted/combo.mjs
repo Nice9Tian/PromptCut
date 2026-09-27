@@ -9,6 +9,10 @@
  *   票据核对与文档服务共用同一份凭证存储（进程内单例 `credentialStoreFor`，auth-contract 第 8 节「同进程共用」）。
  * - 素材服务起来后，经回环地址向本进程的文档服务登记公网地址（`service.announce { kind: 'asset' }`），
  *   有集群令牌就带令牌（管理身份），没有就以回环的本机身份登记（本机身份同样允许登记，auth-contract 第 10 节）。
+ * - **本机信任**（`trustLoopback`，环境变量 `PROMPTCUT_TRUST_LOOPBACK`，`docs/plan/http-transport-contract.md` 第 10 节）：
+ *   缺省把回环来源当本机。部署在反向代理（nginx）之后时代理转进来的请求也是回环，所以阿里云上关掉（`deploy-hosted` 写 0）。
+ *   关掉时四处都不认回环：文档服务握手、共享 HTTP 端点（这两处在 `createSharedDocService`）、素材服务（回环读写同样要票据）、
+ *   管理接口（只认集群令牌）。没有了回环本机身份，地址登记只能带集群令牌，所以关掉而没有令牌时拒绝启动（`cluster-token-required`）。
  * - 素材服务端口上另有两条管理接口（「迁移导出」，auth-contract 第 1 节的管理接口；只认集群令牌或本机回环）：
  *   - `GET /admin/inventory`：盘点——共享项目、各空间里每个项目的 `projectRev`、内容库条目数、项目快照数、
  *     三个命名空间的哈希清单与字节数。迁移前后各取一份对比（`shared-project-probe.mjs --role migrate-check`）；
@@ -18,7 +22,8 @@
  * 失败即关（启动时抛 `HostedConfigError`，`main.mjs` 打 `config.error { reason }` 退出码 1）：
  * - `data-dir`：数据目录不存在、不是目录或不可写；
  * - `layout`：`assets/.layout` 与分目录布局对不上，或者 `assets/` 里已有来历不明的东西而没有标记；
- * - `auth-store`：绑非回环地址而凭证存储打不开（沿用 auth-contract 第 10 节）。
+ * - `auth-store`：绑非回环地址而凭证存储打不开（沿用 auth-contract 第 10 节）；
+ * - `cluster-token-required`：关掉了本机信任而没有集群令牌（HT 契约第 10 节）。
  *
  * 磁盘满：`ENOSPC` / `EDQUOT` 由素材服务中间件回 507 `insufficient-storage`（见 `asset-service.ts` 文件头）。
  * 不挂预渲染进程，不起渲染节点。
@@ -31,7 +36,7 @@ import { registerTsResolve } from './ts-resolve.mjs';
 import { createSharedDocService } from '../docservice/shared-service.mjs';
 import { credentialStoreFor } from '../auth/store.mjs';
 import { createAssetTicketVerifier } from '../auth/asset-tickets.mjs';
-import { isLoopbackAddress } from '../auth/handshake.mjs';
+import { isLocalOrigin } from '../auth/origin.mjs';
 import { createFsStore, ensureLayoutSync, LAYOUTS } from '../asset-store/fs-store.mjs';
 import { normalizeHash } from '../asset-store/blob-store.mjs';
 import { startAssetAnnounce } from '../asset-announce.mjs';
@@ -184,8 +189,8 @@ function scanSpace(dir) {
  * @param {string} [options.clusterToken]  已校验过格式的集群令牌；不给则管理接口只认本机回环
  * @param {string} [options.assetPublicUrl]  登记给成员的素材服务地址；不给就按实际端口拼 `http://127.0.0.1:<port>/api/asset`
  * @param {string} [options.docPublicUrl]  记录与诊断；另取它的源拼邀请链接（C10a，`publicOriginOf`）
- * @param {boolean} [options.trustLoopback]  素材服务与管理接口是否把本机回环当自己人（缺省 true）；
- *   false 时回环来的请求也要票据 / 令牌（测试开关：本机也能验票据读写）
+ * @param {boolean} [options.trustLoopback]  是否把本机回环当本机（缺省 true）；false 时文档服务握手、共享端点、素材服务、
+ *   管理接口都按远端对待回环来的请求（部署在反向代理之后时必须 false），而且必须给 `clusterToken`
  * @param {{ deviceId: string, deviceName: string }} [options.localDevice]
  * @param {(ns: string, store: object) => object} [options.wrapStore]  测试用：包一层数据层（注入磁盘满等）
  * @param {(event: string, fields: object) => void} [options.log]
@@ -211,6 +216,8 @@ export async function startHostedCombo({
 } = /** @type {any} */ ({})) {
   const say = (event, fields = {}) => { try { log(event, fields); } catch { /* 日志出错不影响服务 */ } };
   const root = checkDataDir(dataDir);
+  const tokenGiven = typeof clusterToken === 'string' && clusterToken !== '';
+  if (trustLoopback === false && !tokenGiven) throw new HostedConfigError('cluster-token-required');
   const paths = hostedPaths(root);
   const loopbackBind = host === '127.0.0.1' || host === '::1' || host === 'localhost';
 
@@ -256,12 +263,13 @@ export async function startHostedCombo({
     stores[ns] = typeof wrapStore === 'function' ? wrapStore(ns, st) : st;
   }
 
-  const isLoopbackReq = (req) => trustLoopback && isLoopbackAddress(req?.socket?.remoteAddress);
+  // 本机：信任开关开着，且真正的发起方是本机（对端回环、转发头里每一跳都是回环，`auth/origin.mjs`）
+  const isLoopbackReq = (req) => trustLoopback !== false && isLocalOrigin(req);
   const tickets = createAssetTicketVerifier({ store: () => store, now });
   const assetMiddleware = assetService.assetServiceMiddleware(root, { stores, tickets, isTrusted: isLoopbackReq });
   const preflight = assetService.assetPreflightMiddleware();
 
-  const tokenDigest = typeof clusterToken === 'string' && clusterToken !== '' ? sha256(clusterToken) : null;
+  const tokenDigest = tokenGiven ? sha256(clusterToken) : null;
   /** 管理接口：本机回环（trustLoopback 时），或 `Authorization: Bearer <集群令牌>` */
   function adminAllowed(req) {
     if (isLoopbackReq(req)) return true;
@@ -275,6 +283,7 @@ export async function startHostedCombo({
     dataDir: paths.docservice,
     store,
     clusterToken,
+    trustLoopback: trustLoopback !== false,
     localDevice,
     linkOrigin: publicOriginOf(docPublicUrl),
     now,

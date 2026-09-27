@@ -21,6 +21,8 @@
  * - desktop：桌面版开始页的同一组件：手填、「我是创建者」、粘贴邀请链接三条；
  * - regen：创建者「作废并重新生成邀请码」（当场输创建者密码）→ 旧链接在在线页面上给「已失效」口径，新链接能进；
  * - cancel：创建者取消勾选 → 拉回本机、删掉云端项目（托管端 lookup 回 404），编辑器回到本机空间。
+ * 本机信任：环境变量 PROMPTCUT_TRUST_LOOPBACK=0 时托管组合关掉本机信任（同阿里云的部署），集群令牌取 PROMPTCUT_CLUSTER_TOKEN、
+ * 没给就现场生成（HT-a）。
  * 结果：每项一行 JSON `{ check, ok, … }`，最后一行 `{ summary }`；有失败退出码 1。截图写进 --out。
  */
 import puppeteer from 'puppeteer';
@@ -30,7 +32,7 @@ import http from 'node:http';
 import net from 'node:net';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { startHostedCombo } from '../../server/hosted/combo.mjs';
@@ -97,9 +99,14 @@ const combo = await startHostedCombo({
   host: '127.0.0.1',
   docPublicUrl: `ws://127.0.0.1:${PROXY_PORT}/hosted/`,
   assetPublicUrl: `${PROXY}/media/api/asset`,
+  // 本机信任（HT-a，`docs/plan/http-transport-contract.md` 第 10 节）：设了 PROMPTCUT_TRUST_LOOPBACK=0 就按阿里云的样子关掉，
+  // 这时必须有集群令牌：取 PROMPTCUT_CLUSTER_TOKEN，没给就现场生成一个（不打印）
+  ...(process.env.PROMPTCUT_TRUST_LOOPBACK === '0'
+    ? { trustLoopback: false, clusterToken: process.env.PROMPTCUT_CLUSTER_TOKEN || randomBytes(32).toString('base64url') }
+    : {}),
   log: () => {},
 });
-say('hosted.up', { docPort: combo.docPort, assetPort: combo.assetPort, dataDir });
+say('hosted.up', { docPort: combo.docPort, assetPort: combo.assetPort, dataDir, trustLoopback: process.env.PROMPTCUT_TRUST_LOOPBACK !== '0' });
 
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.woff2': 'font/woff2', '.woff': 'font/woff', '.ttf': 'font/ttf', '.svg': 'image/svg+xml', '.png': 'image/png', '.json': 'application/json', '.wasm': 'application/wasm' };
 const proxyLog = [];

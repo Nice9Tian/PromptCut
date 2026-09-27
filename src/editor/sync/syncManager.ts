@@ -681,6 +681,10 @@ if (typeof window !== "undefined" && import.meta.env?.DEV) {
   (window as unknown as { __pcSyncTest?: unknown }).__pcSyncTest = {
     /** 断网 ms 毫秒(离线对话框的验收) */
     drop: (ms: number) => cur?.link.dropFor(ms),
+    /** 只断一次传输(会话在保留期内接续;HT-a 的页面验收) */
+    cut: () => cur?.link.cutTransport() ?? false,
+    /** 当前会话的诊断:实际用的传输、接续次数、未确认字节、是否对着没有会话层的旧服务端 */
+    link: () => cur?.link.stats() ?? null,
     /** 交一条文档服务消息给页面(AI 栏「撤销这一步」:事件里的 opId 与 inverse 眼下由 c65-agent 那一路补) */
     inject: (msg: AnyMsg) => onSideMessage(msg),
     view: () => view,

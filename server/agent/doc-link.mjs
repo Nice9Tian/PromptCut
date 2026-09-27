@@ -11,9 +11,13 @@
  *   缺口超过 `gapTimeoutMs` 或应用失败就重新 `project.open`。
  * - 应用操作用文档服务同一份引擎（`../docservice/json-ops.mjs`），副本与文档服务的真身逐字节相同。
  *
- * 只依赖 Node 内置能力与本仓库的 `json-ops.mjs`；WebSocket 实现可注入（缺省用全局 `WebSocket`）。
+ * - 每条连接是一个**会话**（`../render-node/session-link.mjs` 的 `createDocEndpoint`，HT-a 契约 `docs/plan/http-transport-contract.md`
+ *   第 9 节）：传输断了在保留时限内接续，未确认的请求与回包都不丢，这里看不见；会话结束才算断线（请求失败、订阅连接重连）。
+ *
+ * 只依赖 Node 内置能力、本仓库的 `json-ops.mjs` 与 `session-link.mjs`；WebSocket 实现可注入（缺省用全局 `WebSocket`）。
  */
 import { applyOps } from '../docservice/json-ops.mjs';
+import { createDocEndpoint } from '../render-node/session-link.mjs';
 
 export const AGENT_LINK_DEFAULTS = Object.freeze({
   /** 一次请求（提交、事件、内容库）等回包的上限 */
@@ -268,16 +272,16 @@ export function createAgentLink({
     const conn = {
       n,
       state: 'idle',
-      ws: null,
+      /** 这条连接当前的会话端点（`createDocEndpoint`，一个端点只跑一个会话） */
+      ep: null,
       opening: null,
       waiters: new Map(),
       retry: 0,
       retryTimer: null,
       sendRaw(message) {
-        if (conn.state !== 'open' || !conn.ws) return false;
+        if (conn.state !== 'open' || !conn.ep) return false;
         try {
-          conn.ws.send(JSON.stringify(message));
-          return true;
+          return conn.ep.send(message) !== false;
         } catch {
           return false;
         }
@@ -299,17 +303,27 @@ export function createAgentLink({
           throw linkError('no-credential', `对话 ${n} 拿不到连接文档服务的凭证：${err?.message ?? err}`);
         }
         await new Promise((resolve, reject) => {
-          let ws;
+          // 一个会话一个端点（`renew: false`）：传输断了在会话层里接续，这里看不见；会话结束才算断线，
+          // 断线之后怎么重连（订阅连接退避重连、别的对话用到时再连）仍由本文件决定，与改用会话层之前相同
+          let ep;
           try {
-            ws = new WebSocketImpl(urlFor(n), protocols);
+            ep = createDocEndpoint({
+              url: urlFor(n),
+              protocols: () => protocols,
+              WebSocket: WebSocketImpl,
+              renew: false,
+              log: (event, fields) => {
+                if (event === 'session.detach' || event === 'session.resume') say(`agent.link.${event.slice('session.'.length)}`, { conversation: n, ...(fields.gapMs !== undefined ? { gapMs: fields.gapMs } : {}) });
+              },
+            });
           } catch (err) {
             reject(linkError('connect-failed', `连不上文档服务：${err?.message ?? err}`));
             return;
           }
-          conn.ws = ws;
+          conn.ep = ep;
           let opened = false;
-          ws.addEventListener('open', () => {
-            if (conn.ws !== ws) return;
+          ep.onOpen(() => {
+            if (conn.ep !== ep) return;
             opened = true;
             conn.state = 'open';
             conn.retry = 0;
@@ -317,10 +331,8 @@ export function createAgentLink({
             resolve();
             if (feedConv === n) openFeed();
           });
-          ws.addEventListener('message', (e) => {
-            if (conn.ws !== ws) return;
-            let msg;
-            try { msg = JSON.parse(typeof e.data === 'string' ? e.data : String(e.data)); } catch { return; }
+          ep.onMessage((msg) => {
+            if (conn.ep !== ep) return;
             if (!isObj(msg)) return;
             const waiter = msg.reqId !== undefined ? conn.waiters.get(msg.reqId) : undefined;
             if (waiter && waiter.accept(msg)) {
@@ -333,8 +345,9 @@ export function createAgentLink({
             emit(msg, n);
           });
           const down = () => {
-            if (conn.ws !== ws) return;
-            conn.ws = null;
+            if (conn.ep !== ep) return;
+            conn.ep = null;
+            try { ep.close(); } catch { /* 已经关了 */ }
             conn.state = 'idle';
             conn.opening = null;
             for (const [reqId, w] of conn.waiters) {
@@ -357,8 +370,9 @@ export function createAgentLink({
               conn.retryTimer.unref?.();
             }
           };
-          ws.addEventListener('close', down);
-          ws.addEventListener('error', down);
+          // 会话结束（服务端关、接续不上），或第一次就建不成（握手被拒、网络不通）
+          ep.onClose(down);
+          ep.onConnectFail(down);
         });
         conn.opening = null;
       })();
@@ -389,12 +403,12 @@ export function createAgentLink({
 
     conn.close = () => {
       clearTimeout(conn.retryTimer);
-      const ws = conn.ws;
-      conn.ws = null;
+      const ep = conn.ep;
+      conn.ep = null;
       conn.state = 'closed';
       for (const w of conn.waiters.values()) { clearTimeout(w.timer); w.reject(linkError('closed', '连接已关闭')); }
       conn.waiters.clear();
-      try { ws?.close(); } catch { /* 已经断了 */ }
+      try { ep?.close(); } catch { /* 已经断了 */ }
     };
     return conn;
   }

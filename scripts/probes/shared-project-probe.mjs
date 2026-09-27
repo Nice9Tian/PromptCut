@@ -56,6 +56,13 @@
  *   三个命名空间的哈希集合与字节数；再从新实例按哈希抽取至多 `--sample` 个（缺省 100，不足就全部），重算 sha256，
  *   相符比例必须 100%。全部通过才 `ok: true`。
  *
+ * ## 传输（creator、member）
+ *
+ *   到文档服务的连接是一个会话（`server/render-node/session-link.mjs` 的 `createDocEndpoint`，HT-a）。`--transport auto|ws`
+ *   是开发者强制参数：缺省自动（先读环境变量 `PROMPTCUT_TRANSPORT`，再缺省自动；HT-a 的自动就是 WebSocket），`ws`
+ *   只走 WebSocket，`http` 在 HT-a 未启用（退出码 2）。成员配置里没有传输字段。输出的 `session` 记实际用的传输、
+ *   接续次数、是否对着没有会话层的旧服务端。
+ *
  * 凭证（口令、K、票据）不打到输出里。
  */
 import fs from 'node:fs';
@@ -65,8 +72,8 @@ import { createHash, randomBytes } from 'node:crypto';
 import { startCoordServer, coordClient } from './probe-coord.mjs';
 
 const USAGE = `用法：
-  node scripts/probes/shared-project-probe.mjs --mode internet --role creator --hosted <url> (--coord-port <n> | --coord <url>) [--tasks 6]
-  node scripts/probes/shared-project-probe.mjs --mode internet --role member --hosted <url> --coord <url> [--expect-tasks 1]
+  node scripts/probes/shared-project-probe.mjs --mode internet --role creator --hosted <url> (--coord-port <n> | --coord <url>) [--tasks 6] [--transport auto|ws]
+  node scripts/probes/shared-project-probe.mjs --mode internet --role member --hosted <url> --coord <url> [--expect-tasks 1] [--transport auto|ws]
   node scripts/probes/shared-project-probe.mjs --role coord --port <n> [--host 127.0.0.1]
   node scripts/probes/shared-project-probe.mjs --role migrate-check --from <url> --to <url> [--data-dir <目录>] [--sample 100]
   node scripts/probes/shared-project-probe.mjs --mode lan --role creator|member ...（见 shared-project-lan.mjs）`;
@@ -150,6 +157,29 @@ function rpcOn(ep) {
       reject(new Error(`${message.type} 没发出去（连接不在）`));
     }
   });
+}
+
+/**
+ * `--transport`（开发者强制，契约 `docs/plan/http-transport-contract.md` 第 4.3 节第 6 条）：不给就不传，由
+ * `createDocEndpoint` 读 `PROMPTCUT_TRANSPORT`，再缺省自动；给了就照它（`ws` 只走 WebSocket；`http` 在 HT-a
+ * 未启用，按参数不对退出 2）。
+ */
+function transportOption(transportOf) {
+  const raw = arg('--transport', undefined);
+  if (raw === undefined) return {};
+  try {
+    return { transport: transportOf(raw, undefined) };
+  } catch (err) {
+    usage(`--transport ${raw}：${err?.message ?? err}`);
+    return {};
+  }
+}
+
+/** 输出里的会话诊断：实际用的传输、接续次数、是否对着没有会话层的旧服务端（不含会话号） */
+function sessionOf(ep) {
+  if (!ep || typeof ep.stats !== 'function') return null;
+  const s = ep.stats();
+  return { mode: s.mode ?? null, transport: s.transport ?? null, resumes: s.resumes ?? 0, fallbacks: s.fallbacks ?? 0, legacy: s.legacy === true, opens: s.opens ?? 0 };
 }
 
 function waitOpen(ep, ms = 15_000) {
@@ -261,8 +291,8 @@ async function runCreator() {
   const urls = docUrls(hosted);
   const deadline = started + TIMEOUT_MS;
 
-  const [{ createSharedProject }, { buildAuthProtocols }, { createWsEndpoint }, { watchServiceEndpoints }, { createLocalNode }, { createTicketSource }, { createAssetClient }] = await Promise.all([
-    mod('server/auth/route.mjs'), mod('server/auth/client.mjs'), mod('server/render-node/ws-transport.mjs'), mod('server/render-node/endpoint.mjs'),
+  const [{ createSharedProject }, { buildAuthProtocols }, { createDocEndpoint, transportOf }, { watchServiceEndpoints }, { createLocalNode }, { createTicketSource }, { createAssetClient }] = await Promise.all([
+    mod('server/auth/route.mjs'), mod('server/auth/client.mjs'), mod('server/render-node/session-link.mjs'), mod('server/render-node/endpoint.mjs'),
     mod('server/render-node/local-node.mjs'), mod('server/auth/ticket-source.mjs'), mod('server/asset-store/client.mjs'),
   ]);
 
@@ -274,6 +304,7 @@ async function runCreator() {
   const eps = [];
   let coordServer = null;
   const done = async (code) => {
+    result.session = sessionOf(eps[0]);
     await closeAll(eps);
     await coordServer?.close();
     finish(result, code);
@@ -314,7 +345,7 @@ async function runCreator() {
     base: urls.http, projectId: created.projectId, username: creator.username, deviceId, deviceName: 'sp-probe-creator', as: 'creator',
     ...(key ? { key } : { password: creator.password }), role: 'render', onKey: (k) => { key = k; },
   });
-  const ep = createWsEndpoint({ url: urls.ws, protocols, log: (event, fields) => log(`creator.${event}`, fields) });
+  const ep = createDocEndpoint({ url: urls.ws, protocols, ...transportOption(transportOf), log: (event, fields) => log(`creator.${event}`, fields) });
   eps.push(ep);
   const rpc = rpcOn(ep);
   if (!check(await waitOpen(ep), '创建者连上文档服务')) return done(2);
@@ -442,8 +473,8 @@ async function runMember() {
   const deadline = started + TIMEOUT_MS;
   const coord = coordClient(coordUrl);
 
-  const [{ normalizeEntry, sharedProtocols }, { createWsEndpoint }, { watchServiceEndpoints }, { createLocalNode }, { createTicketSource }, { createAssetClient }] = await Promise.all([
-    mod('server/auth/shared-config.mjs'), mod('server/render-node/ws-transport.mjs'), mod('server/render-node/endpoint.mjs'),
+  const [{ normalizeEntry, sharedProtocols }, { createDocEndpoint, transportOf }, { watchServiceEndpoints }, { createLocalNode }, { createTicketSource }, { createAssetClient }] = await Promise.all([
+    mod('server/auth/shared-config.mjs'), mod('server/render-node/session-link.mjs'), mod('server/render-node/endpoint.mjs'),
     mod('server/render-node/local-node.mjs'), mod('server/auth/ticket-source.mjs'), mod('server/asset-store/client.mjs'),
   ]);
 
@@ -454,6 +485,7 @@ async function runMember() {
   };
   const eps = [];
   const done = async (code) => {
+    result.session = sessionOf(eps[0]);
     await closeAll(eps);
     if (expectTasks > 0) {
       try { await coord.put('member-result', { ...result, fails, ok: fails.length === 0 }); } catch { /* 协调口已关 */ }
@@ -474,7 +506,7 @@ async function runMember() {
 
   // 进入：只凭项目凭证
   const enterStart = Date.now();
-  const ep = createWsEndpoint({ url: entry.url, protocols: sharedProtocols(entry, { role: 'render' }), log: (event, fields) => log(`member.${event}`, fields) });
+  const ep = createDocEndpoint({ url: entry.url, protocols: sharedProtocols(entry, { role: 'render' }), ...transportOption(transportOf), log: (event, fields) => log(`member.${event}`, fields) });
   eps.push(ep);
   const rpc = rpcOn(ep);
   const opened = await waitOpen(ep);

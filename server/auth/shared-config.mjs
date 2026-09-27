@@ -82,7 +82,8 @@ export function loadSharedConfig(env = process.env) {
 }
 
 /**
- * 一条配置 → 每次连之前调的 `protocols()`（交给 `createWsEndpoint`）。
+ * 一条配置 → 每次连之前调的 `protocols()`（交给 `createDocEndpoint`，每次建会话前调、接续时不调）。
+ * 配置里没有传输字段：传输由会话层自动选（`docs/plan/http-transport-contract.md` 第 4.3 节）。
  * 按名字给的项目，第一次调用时查一次 `projectId`；给口令的，第一次派生出 `K` 后缓存 `K`、丢掉口令。
  * @param {ReturnType<typeof normalizeEntry>} entry
  * @param {{ fetch?: typeof globalThis.fetch, role?: string }} [options] `role` 覆盖配置里的角色

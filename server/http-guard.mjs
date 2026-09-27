@@ -75,6 +75,9 @@ export function isAssetServicePath(url) {
  * 代理因此把真实对端写进 `STAGE_CLIENT_HEADER`(**覆盖**请求里自带的同名头)。这个头只在对端是回环时才信:
  * 局域网设备直连 vite 端口伪造它没用,对端地址本身就不是回环。
  */
+import { isLocalOrigin } from "./auth/origin.mjs";
+export { forwardedHops, isLocalOrigin, remoteTagOf } from "./auth/origin.mjs";
+
 export const STAGE_CLIENT_HEADER = "x-pc-stage-client";
 
 /** 回环地址:127.0.0.0/8、::1、IPv4 映射的 ::ffff:127.x */
@@ -94,10 +97,10 @@ export function clientAddressOf(req) {
   return remote;
 }
 
-/** 请求来自本机?(没有 socket 的进程内请求算本机) */
+/** 请求来自本机?(没有 socket 的进程内请求算本机;经反向代理转来的,按 `isLocalOrigin` 看转发头) */
 export function fromLocalClient(req) {
   const address = clientAddressOf(req);
-  return address === null || isLoopbackAddress(address);
+  return address === null || isLocalOrigin(req, address);
 }
 
 /** 除素材服务外的 `/api/**` 要不要对局域网开放 */

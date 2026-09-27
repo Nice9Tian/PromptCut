@@ -6,7 +6,7 @@
  * 跑：
  *   node scripts/probes/render-queue-e2e.mjs --url <ws://…> --role publisher|node|both
  *     [--tasks 50] [--project <id>] [--node-id <id>] [--task-ms 200] [--max-concurrent 2]
- *     [--exit-after-claim] [--announce <http-url>] [--watch-endpoints] [--timeout-ms 120000]
+ *     [--exit-after-claim] [--announce <http-url>] [--watch-endpoints] [--timeout-ms 120000] [--transport auto|ws]
  *
  * 凭证（M6a，`docs/plan/auth-contract.md` 第 5、11 节；集群令牌已退出数据面，本探针不再读它）：
  * - 设了环境变量 PROMPTCUT_SHARED_CONFIG（共享项目配置 JSON）：取第一项，凭项目证明进入，节点连接用 `render` 角色、
@@ -15,7 +15,7 @@
  * `--announce` 是管理接口（服务地址登记）：本机身份能登记，共享项目的成员会被拒（forbidden）。
  * 配置里的口令、派生密钥与证明都不打印。
  *
- * - node 角色：createLocalNode + createWsEndpoint；执行器按 --task-ms 睡眠，产物库用内存版
+ * - node 角色：createLocalNode + createDocEndpoint（会话，HT-a）；执行器按 --task-ms 睡眠，产物库用内存版
  *   （复用 server/test/ 的假件：探针不是生产代码）。同时 queue.watch：看到别人认领某任务（task.taken）的
  *   时刻 t1、自己认领到同一任务的时刻 t2，takeovers 记 t2 − t1（两个时刻都是本机时钟）。
  *   --exit-after-claim：第一次认领成功后立刻退出，退出码 3（测「干净断开」）。
@@ -29,14 +29,19 @@
  *
  * 输出：最后一行 JSON
  *   { ok, role, url, epochs, published, completed, duplicateDone, claims, claimsById,
- *     doneLatencyMs: { p50, p95 }, takeovers: [{ id, ms }], endpoints?, fails }
+ *     doneLatencyMs: { p50, p95 }, takeovers: [{ id, ms }], endpoints?, sessions, fails }
+ *   `sessions`：每条连接实际用的传输、接续次数、是否对着没有会话层的旧服务端（不含会话号）。
+ *
+ * 传输（契约 `docs/plan/http-transport-contract.md` 第 4.3 节第 6 条）：连接是一个会话（`createDocEndpoint`）。
+ * `--transport` 是开发者强制参数，不给时读环境变量 `PROMPTCUT_TRANSPORT`，再缺省自动（HT-a 的自动就是 WebSocket）；
+ * `ws` 只走 WebSocket；`http` 在 HT-a 未启用（退出码 2）。`--url` 收 ws(s):// 或 http(s)://。
  * 退出码：0 全过；1 有断言失败；2 连不上（或参数不对）；3 --exit-after-claim 的预期退出。
  */
 import { randomBytes } from 'node:crypto';
 
 const USAGE = `用法：node scripts/probes/render-queue-e2e.mjs --url <ws://…> --role publisher|node|both
   [--tasks 50] [--project <id>] [--node-id <id>] [--task-ms 200] [--max-concurrent 2]
-  [--exit-after-claim] [--announce <http-url>] [--watch-endpoints] [--timeout-ms 120000]
+  [--exit-after-claim] [--announce <http-url>] [--watch-endpoints] [--timeout-ms 120000] [--transport auto|ws]
 凭证从环境变量 PROMPTCUT_SHARED_CONFIG 指向的共享项目配置读；不设就是本机身份（只能连本机回环）。`;
 
 function usage(msg) {
@@ -46,7 +51,7 @@ function usage(msg) {
 }
 
 const FLAGS = new Set(['--exit-after-claim', '--watch-endpoints']);
-const VALUED = new Set(['--url', '--role', '--tasks', '--project', '--node-id', '--task-ms', '--max-concurrent', '--announce', '--timeout-ms']);
+const VALUED = new Set(['--url', '--role', '--tasks', '--project', '--node-id', '--task-ms', '--max-concurrent', '--announce', '--timeout-ms', '--transport']);
 
 function parseArgs(argv) {
   const out = {};
@@ -75,7 +80,7 @@ const intArg = (name, dflt, min = 0) => {
   return n;
 };
 const url = args.url;
-if (!/^wss?:\/\//.test(url)) usage('--url 要是 ws:// 或 wss://');
+if (!/^(wss?|https?):\/\//.test(url)) usage('--url 要是 ws(s):// 或 http(s)://');
 const role = args.role;
 const taskCount = intArg('tasks', 50, 1);
 const taskMs = intArg('task-ms', 200, 0);
@@ -101,13 +106,18 @@ if (args.announce !== undefined) {
 
 // 被测模块和假件按需动态引入：参数不对时只打用法，不因模块缺失而崩
 const here = new URL('.', import.meta.url);
-const [{ createWsEndpoint }, { watchServiceEndpoints }, { createLocalNode }, { createArtifactSink }, { createSleepExecutor, snapshotTaskInput }] = await Promise.all([
-  import(new URL('../../server/render-node/ws-transport.mjs', here)),
+const [{ createDocEndpoint, transportOf }, { watchServiceEndpoints }, { createLocalNode }, { createArtifactSink }, { createSleepExecutor, snapshotTaskInput }] = await Promise.all([
+  import(new URL('../../server/render-node/session-link.mjs', here)),
   import(new URL('../../server/render-node/endpoint.mjs', here)),
   import(new URL('../../server/render-node/local-node.mjs', here)),
   import(new URL('../../server/test/fake-artifact-sink.mjs', here)),
   import(new URL('../../server/test/fake-ws-kit.mjs', here)),
 ]);
+
+let transportOption = {};
+if (args.transport !== undefined) {
+  try { transportOption = { transport: transportOf(args.transport, undefined) }; } catch (error) { usage(`--transport ${args.transport}：${error?.message ?? error}`); }
+}
 
 const log = (event, fields = {}) => console.log(JSON.stringify({ t: new Date().toISOString(), event, ...fields }));
 const result = {
@@ -142,6 +152,10 @@ function finish(code) {
   if (code === undefined) code = result.fails.length === 0 ? 0 : 1;
   result.ok = code === 0;
   process.exitCode = code;
+  result.sessions = endpoints.map((ep) => {
+    const s = ep.stats();
+    return { mode: s.mode ?? null, transport: s.transport ?? null, resumes: s.resumes ?? 0, fallbacks: s.fallbacks ?? 0, legacy: s.legacy === true, opens: s.opens ?? 0 };
+  });
   // 先等连着的连接关干净（最多 CLOSE_WAIT_MS）再退出：关闭握手没完成就 process.exit，
   // Windows 上 libuv 会断言 UV_HANDLE_CLOSING 崩掉（对远端必现）
   closeEndpoints().then(() => {
@@ -167,7 +181,7 @@ function closeEndpoints() {
 function openEndpoint(label) {
   // 共享项目：节点连接是 render，发布方连接是 page（node.hello 只许 render 连接）
   const protocols = sharedEntry ? sharedProtocols(sharedEntry, { role: label === 'node' ? 'render' : 'page' }) : undefined;
-  const ep = createWsEndpoint({ url, ...(protocols ? { protocols } : {}), log: (event, fields) => log(`${label}.${event}`, fields) });
+  const ep = createDocEndpoint({ url, ...(protocols ? { protocols } : {}), ...transportOption, log: (event, fields) => log(`${label}.${event}`, fields) });
   endpoints.push(ep);
   ep.onOpen(() => log(`${label}.open`, { opens: ep.stats().opens }));
   ep.onClose((info) => log(`${label}.close`, info));

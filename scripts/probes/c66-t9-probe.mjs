@@ -86,7 +86,8 @@
  *
  * 本机自测:先起临时托管组合(只绑 127.0.0.1)与临时协调口,例如
  *   PROMPTCUT_DATA_DIR=<临时目录> PROMPTCUT_DOCSERVICE_HOST=127.0.0.1 PROMPTCUT_DOCSERVICE_PORT=8794 PROMPTCUT_ASSET_PORT=8795 \
- *     PROMPTCUT_TEST_NO_LOOPBACK_TRUST=1 node server/hosted/main.mjs
+ *     PROMPTCUT_TRUST_LOOPBACK=0 PROMPTCUT_CLUSTER_TOKEN=<32～256 个 base64url 字符> node server/hosted/main.mjs
+ *   （本机信任关掉时必须有集群令牌，`docs/plan/http-transport-contract.md` 第 10 节；令牌的生成方法见 server/docservice/main.mjs 文件头）
  *   PROBE_MAIL_TOKEN=<≥16 字符> node scripts/probes/probe-coord.mjs serve --port 8796
  *   PROBE_MAIL_TOKEN=<同上> node scripts/probes/c66-t9-probe.mjs --role all --hosted http://127.0.0.1:8794 --coord http://127.0.0.1:8796
  */

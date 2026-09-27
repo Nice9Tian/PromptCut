@@ -11,6 +11,8 @@
  *                                 本机（`local`）空间的项目版本日志、内容库在它下面，
  *                                 共享项目的空间在 `tenants/<projectId>/`，凭证存储在 `auth/`
  *   PROMPTCUT_DEVICE_ID / PROMPTCUT_DEVICE_NAME  本机设备信息（本机声明用，缺省按主机名生成）
+ *   PROMPTCUT_TRUST_LOOPBACK    本机信任（`docs/plan/http-transport-contract.md` 第 10 节）：1（缺省）回环来源算本机；
+ *                                 0 不算（握手与共享端点都按远端对待，部署在反向代理之后时用），此时必须有集群令牌
  *
  * 鉴权（`docs/plan/auth-contract.md` 第 5 节）：成员凭共享项目的证明或连接票据进入；回环来源什么都不带是本机身份；
  * 带对集群令牌的是管理身份，只能用管理接口。
@@ -18,6 +20,8 @@
  * 失败即关（第 10 节）：
  *   - 设了令牌但格式不对（要 32～256 个 base64url 字符）→ 打 `config.error { reason: 'bad-token-format' }`，退出码 1；
  *   - 绑非回环地址而凭证存储加载不了（数据目录不可写、`auth/` 读失败）→ `config.error { reason: 'auth-store' }`，退出码 1；
+ *   - `PROMPTCUT_TRUST_LOOPBACK` 不是 0 或 1 → `config.error { reason: 'trust-loopback' }`；是 0 而没设令牌 →
+ *     `config.error { reason: 'cluster-token-required' }`，退出码 1；
  *   - 没设令牌照常启动，管理接口（带令牌的握手）全部 401。
  *   只绑回环时凭证存储加载不了照常启动：只有本机身份能用，共享端点回 503。
  *
@@ -54,6 +58,10 @@ async function main() {
   const token = rawToken === '' ? undefined : rawToken;
 
   if (token !== undefined && !checkTokenFormat(token)) return configError('bad-token-format');
+  const rawTrust = process.env.PROMPTCUT_TRUST_LOOPBACK;
+  if (rawTrust !== undefined && rawTrust !== '' && rawTrust !== '0' && rawTrust !== '1') return configError('trust-loopback');
+  const trustLoopback = rawTrust !== '0';
+  if (!trustLoopback && token === undefined) return configError('cluster-token-required');
 
   const dataDir = process.env.PROMPTCUT_DOCSERVICE_DATA
     || path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../data');
@@ -71,6 +79,7 @@ async function main() {
     dataDir,
     store,
     clusterToken: token,
+    trustLoopback,
     localDevice: localDeviceInfo(),
     log,
   });
@@ -78,7 +87,7 @@ async function main() {
   const addr = await service.listen(port, host);
   log('listen', {
     host: addr.address, port: addr.port, node: process.version,
-    admin: token === undefined ? 'disabled' : 'token', authStore: store ? 'ok' : 'unavailable', dataDir,
+    admin: token === undefined ? 'disabled' : 'token', loopbackTrust: trustLoopback, authStore: store ? 'ok' : 'unavailable', dataDir,
   });
 
   let stopping = false;

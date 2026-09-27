@@ -3,9 +3,12 @@
  *
  * 语义见 `docs/semantics/product/document-service.md`，契约见 `docs/plan/render-queue-contract.md` G.4、H.2、H.4。
  * 文档服务是通用的文本 / JSON 分发中心：
- * - 传输在 `ws.mjs`；
+ * - 会话层在 `session.mjs`（`docs/plan/http-transport-contract.md` 第 3、4、7 节）：会话内的消息带序号、接收方确认，
+ *   传输断了在保留时限内接着传。核心的 `write` / `buffered` / `close` / `drained` 都接到它，核心只看见一条连接；
+ *   握手里不带会话项的旧客户端照旧（一条传输就是一个会话，第 3.6 节）；
+ * - 传输：WebSocket 在 `ws.mjs`，这里做升级、认会话项（建新会话 / 接续）、心跳。HTTP 长轮询（`http-transport.mjs`）
+ *   本阶段不接线（契约文件头「2026-09-27 拆分」，HT-b 再接）；
  * - 通用核心在 `router.mjs`（连接登记、信封解析、按类型路由、模块挂载、频道、出站背压），不认识任何业务；
- *   这里把连接的写、积压字节数、关闭和 `drain` 事件接给它；
  * - 业务都是挂上来的模块（`modules/`）：渲染任务队列、服务地址登记，以后还可以挂与渲染无关的文本处理模块。
  *
  * 两种挂法（`docs/plan/docservice-contract.md` 第 4 节），其余行为（鉴权、心跳、模块、频道、背压）完全相同：
@@ -27,6 +30,7 @@ import { createServer } from 'node:http';
 import { acceptUpgrade, rejectUpgrade, CLOSE } from './ws.mjs';
 import { createRouter, CORE_DEFAULTS } from './router.mjs';
 import { PROTOCOL, offeredProtocols } from './auth.mjs';
+import { createSessionLayer, parseSessionItem, SESSION_TYPE_PREFIX } from './session.mjs';
 import { QUEUE_DEFAULTS } from '../render-queue/constants.mjs';
 import { renderQueueModule, renderQueuePlaceholder, RENDER_QUEUE_MODULE } from './modules/render-queue.mjs';
 import { spacedModule } from './spaces.mjs';
@@ -84,6 +88,8 @@ function jsonLog(event, fields) {
  *   缺省只有服务地址登记 `service.`。别的消息回 `forbidden`（`docs/plan/auth-contract.md` 第 5 节）
  * @param {(req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse) => boolean} [options.http]
  *   独立模式：`/healthz` 之外的 HTTP 请求先交给它（共享项目端点），回 true 表示它处理了；挂载模式不用它
+ * @param {number} [options.retainMs] 会话的传输断开后保留多久，缺省 60 s（`http-transport-contract.md` 第 4.2 节）
+ * @param {number} [options.tombstoneMs] 结束的会话留墓碑多久（这段时间里拿它接续以 4410 关闭），缺省 2 分钟
  */
 export function createDocService(options = {}) {
   const {
@@ -104,28 +110,27 @@ export function createDocService(options = {}) {
     maxPendingBytes = CORE_DEFAULTS.MAX_PENDING_BYTES,
     now = Date.now,
     log = jsonLog,
+    retainMs,
+    tombstoneMs,
   } = options;
 
   const startedAt = now();
-  /** connId → { ws, alive }：传输与心跳的状态；连接身份在核心里 */
-  const sockets = new Map();
+  /** 挂着的 WebSocket 传输（心跳用）；连接身份在核心里，会话在会话层里 */
+  const wsTransports = new Set();
   /** 模块名 → { mod, timer }，按挂载顺序 */
   const mounted = new Map();
   let seq = 0;
   let closing = false;
 
+  /** 会话层；`router` 建好之后才建（它要核心的入口） */
+  let sessions = null;
+
   const router = createRouter({
     now,
     log,
-    write(connId, text) {
-      sockets.get(connId)?.ws.send(text);
-    },
-    buffered(connId) {
-      return sockets.get(connId)?.ws.bufferedAmount ?? 0;
-    },
-    close(connId, code, reason) {
-      sockets.get(connId)?.ws.close(code, reason);
-    },
+    write: (connId, text) => sessions.write(connId, text),
+    buffered: (connId) => sessions.buffered(connId),
+    close: (connId, code, reason) => { sessions.close(connId, code, reason); },
     highWaterBytes,
     maxPendingBytes,
     // 管理身份只能发管理接口的消息（契约 auth-contract 第 5 节）；别的身份不在这里判
@@ -150,8 +155,14 @@ export function createDocService(options = {}) {
     router.send(connId, message, opts);
   }
 
-  /** 挂一个模块：核心做冲突检查与 connect，这里按 `tickMs` 起计时器 */
+  /**
+   * 挂一个模块：`session.` 前缀是会话控制消息，核心保留，模块不得认领（契约第 3.2 节）；
+   * 核心做冲突检查与 connect，这里按 `tickMs` 起计时器
+   */
   function mount(mod) {
+    if (Array.isArray(mod?.types) && mod.types.some((t) => typeof t === 'string' && t.startsWith(SESSION_TYPE_PREFIX))) {
+      throw new Error(`模块 ${mod.name} 不能认领 ${SESSION_TYPE_PREFIX} 开头的类型：那是会话控制消息`);
+    }
     const unmountCore = router.mount(mod);
     let timer = null;
     if (autoTick && typeof mod.tick === 'function' && Number.isFinite(mod.tickMs) && mod.tickMs > 0) {
@@ -184,6 +195,8 @@ export function createDocService(options = {}) {
     const unmount = mount(mod);
     if (mod.name === RENDER_QUEUE_MODULE) queueSlot.unmount = unmount;
   }
+
+  sessions = createSessionLayer({ router, nextConnId: () => `conn-${++seq}`, now, log, retainMs, tombstoneMs });
 
   const attached = hostServer !== undefined && hostServer !== null;
   if (attached && (typeof hostServer.on !== 'function' || typeof hostServer.off !== 'function')) {
@@ -227,6 +240,13 @@ export function createDocService(options = {}) {
   /**
    * 独立模式：服务器是自己的，关停中一律 503，别的路径 404。
    * 挂载模式：别的路径一概不碰——不回包、不关 socket、不挂错误监听，留给宿主的其它 `upgrade` 监听（vite 的 HMR）。
+   *
+   * 会话项（`http-transport-contract.md` 第 4.1 节）：
+   * - 没有：旧客户端，照会话层出现之前的行为（第 3.6 节）；
+   * - `promptcut.session.new`：照常鉴权，建新会话，第一条出站是 `session.welcome`；
+   * - `promptcut.session.<sid>.<ack>`：接续，不再鉴权（会话号就是凭证）。接续失败先接受升级、紧接着以
+   *   4404（会话不存在）/ 4410（已结束）/ 1002（ack 越界，会话随之结束）关闭（第 16 节：客户端读不到握手的状态码）；
+   * - 写法不对、不止一项、接续项旁边还有鉴权项：400。
    */
   function onUpgrade(req, socket, head) {
     const mine = pathnameOf(req) === path;
@@ -234,7 +254,33 @@ export function createDocService(options = {}) {
     socket.on('error', () => {});
     if (closing) return rejectUpgrade(socket, 503, 'Service Unavailable');
     if (!mine) return rejectUpgrade(socket, 404, 'Not Found');
-    if (sockets.size >= maxConnections) return rejectUpgrade(socket, 503, 'Service Unavailable');
+    const offered = offeredProtocols(req);
+    const item = parseSessionItem(offered, protocol);
+    if (item.kind === 'bad') return rejectUpgrade(socket, 400, 'Bad Request');
+    // 只回显约定的子协议，客户端给的其它项（令牌、会话项）一律不回
+    const echo = offered.includes(protocol) ? protocol : undefined;
+    const remoteFor = (ws) => {
+      try {
+        return remoteOf(req) ?? ws.remoteAddress ?? null;
+      } catch {
+        return ws.remoteAddress ?? null;
+      }
+    };
+
+    if (item.kind === 'resume') {
+      const ws = acceptUpgrade(req, socket, head, { maxPayload, protocol: echo });
+      if (!ws) return;
+      const t = wsTransport(ws);
+      const r = sessions.resume({ sid: item.sid, ack: item.ack, transport: t });
+      if (!r.ok) {
+        ws.closeNow(r.code, r.reason);
+        return;
+      }
+      watch(r.connId, t, false);
+      return;
+    }
+
+    if (sessions.size() >= maxConnections) return rejectUpgrade(socket, 503, 'Service Unavailable');
     let principal;
     try {
       principal = authenticate(req);
@@ -242,39 +288,65 @@ export function createDocService(options = {}) {
       principal = null;
     }
     if (!principal || typeof principal.userId !== 'string') return rejectUpgrade(socket, 401, 'Unauthorized');
-    // 只回显约定的子协议，客户端给的其它项（包括令牌那一项）一律不回
-    const echo = offeredProtocols(req).includes(protocol) ? protocol : undefined;
     const ws = acceptUpgrade(req, socket, head, { maxPayload, protocol: echo });
     if (!ws) return;
-    let remote = null;
-    try {
-      remote = remoteOf(req) ?? ws.remoteAddress ?? null;
-    } catch {
-      remote = ws.remoteAddress ?? null;
+    const t = wsTransport(ws);
+    const p = normalizePrincipal(principal);
+    const remote = remoteFor(ws);
+    if (item.kind === 'new') {
+      // 先挂监听再建会话：建会话时就要经这条传输发 welcome，模块的 connect 也可能立刻发消息
+      const pending = { connId: null };
+      watchPending(pending, t, false);
+      pending.connId = sessions.openSession({ principal: p, remote, transport: t }).connId;
+      return;
     }
-    open(ws, normalizePrincipal(principal), remote);
+    const pending = { connId: null };
+    watchPending(pending, t, true);
+    pending.connId = sessions.openLegacy({ principal: p, remote, transport: t });
   }
 
   (attached ? hostServer : ownServer).on('upgrade', onUpgrade);
 
-  function open(ws, principal, remote) {
-    const connId = `conn-${++seq}`;
-    const conn = { ws, alive: true };
-    sockets.set(connId, conn);
-    log('conn.open', { connId, remote, userId: principal.userId, ...(principal.role ? { role: principal.role } : {}) });
-    ws.on('pong', () => { conn.alive = true; });
-    // 底层排空：核心接着写积压的消息（H.2）
-    ws.on('drain', () => router.drained(connId));
+  /** 把一条 WebSocket 包成会话层的传输；`alive` 给心跳用 */
+  function wsTransport(ws) {
+    return {
+      kind: 'ws',
+      ws,
+      alive: true,
+      connId: null,
+      legacy: false,
+      send: (text) => ws.send(text),
+      control: (obj) => ws.send(JSON.stringify(obj)),
+      close: (code, reason) => ws.close(code, reason),
+      get bufferedAmount() { return ws.bufferedAmount; },
+    };
+  }
+
+  /** 已知 connId 的传输（接续）：挂心跳与事件 */
+  function watch(connId, t, legacy) {
+    watchPending({ connId }, t, legacy);
+  }
+
+  /**
+   * 挂传输的事件：消息交会话层；关闭交会话层（旧客户端随之结束，讲会话的只脱开）；
+   * 旧客户端的底层排空让核心接着写积压的消息（H.2），讲会话的积压按确认算，由会话层叫核心。
+   * `holder.connId` 可以晚于挂监听才填上（建会话要先发 welcome）。
+   */
+  function watchPending(holder, t, legacy) {
+    const { ws } = t;
+    t.legacy = legacy;
+    wsTransports.add(t);
+    ws.on('pong', () => { t.alive = true; });
+    if (legacy) ws.on('drain', () => { if (holder.connId) router.drained(holder.connId); });
     ws.on('message', (text) => {
-      conn.alive = true;
-      router.dispatch(connId, text);
+      t.alive = true;
+      if (holder.connId) sessions.receive(holder.connId, text);
     });
     ws.on('close', ({ code, reason }) => {
-      sockets.delete(connId);
-      router.disconnect(connId);
-      log('conn.close', { connId, code, reason });
+      wsTransports.delete(t);
+      if (holder.connId) sessions.transportClosed(holder.connId, t, { code, reason, why: t.deadWhy });
     });
-    router.connect(connId, principal, { remote, connectedAt: now() });
+    Object.defineProperty(t, 'connId', { get: () => holder.connId, configurable: true });
   }
 
   function health() {
@@ -286,6 +358,8 @@ export function createDocService(options = {}) {
       connections: core.connections,
       protocol,
       modules: core.modules,
+      // 组装层字段（不是核心字段）：每条会话走哪种传输、是否脱开、是否旧客户端，及累计计数（契约第 8 节）
+      sessions: sessions.stats(),
     };
     for (const [k, v] of Object.entries(core)) {
       if (!Object.hasOwn(out, k)) out[k] = v;
@@ -293,16 +367,22 @@ export function createDocService(options = {}) {
     return out;
   }
 
+  /**
+   * 心跳：30 s 一轮 ping，上一轮没等到 pong 就关掉这条传输。旧客户端随之断线（打 `conn.timeout`），
+   * 讲会话的只脱开（第 5 节）。顺带清过期的墓碑。
+   */
   const heartbeat = setInterval(() => {
-    for (const [connId, conn] of sockets) {
-      if (!conn.alive) {
-        log('conn.timeout', { connId });
-        conn.ws.terminate();
+    for (const t of [...wsTransports]) {
+      if (!t.alive) {
+        if (t.legacy && t.connId) log('conn.timeout', { connId: t.connId, transport: 'ws' });
+        t.deadWhy = 'heartbeat';
+        t.ws.terminate();
         continue;
       }
-      conn.alive = false;
-      conn.ws.ping();
+      t.alive = false;
+      t.ws.ping();
     }
+    sessions.sweep();
   }, heartbeatMs);
   heartbeat.unref?.();
 
@@ -386,12 +466,9 @@ export function createDocService(options = {}) {
       };
     },
 
-    /** 主动关闭一条连接（组装层与模块之外的调用方用）；连接不存在回 false */
+    /** 主动关闭一条连接（组装层与模块之外的调用方用）：会话立刻结束、不保留；连接不存在回 false */
     closeConn(connId, code, reason) {
-      const conn = sockets.get(connId);
-      if (!conn) return false;
-      conn.ws.close(code, reason);
-      return true;
+      return sessions.close(connId, code, reason);
     },
 
     /**
@@ -423,7 +500,11 @@ export function createDocService(options = {}) {
       return {
         ...health(),
         channels: router.channels(),
-        conns: [...sockets.keys()].map((id) => router.describeConn(id)).filter(Boolean),
+        // 核心字段加组装层的会话字段（`transport`、`fallback`、`detached`、`resumes`，契约第 8 节）；脱开的会话也在
+        conns: sessions.connIds().map((id) => {
+          const d = router.describeConn(id);
+          return d ? { ...d, ...sessions.describeConn(id) } : null;
+        }).filter(Boolean),
         modules: Object.fromEntries(router.modules().map((name) => {
           const mod = mounted.get(name)?.mod;
           return [name, mod?.describe?.() ?? null];
@@ -440,16 +521,15 @@ export function createDocService(options = {}) {
       closing = true;
       clearInterval(heartbeat);
       for (const record of mounted.values()) clearInterval(record.timer);
+      // 会话一律以 1001 结束（脱开的也结束，不保留）；旧客户端关掉它的传输，等 close 事件注销
+      const gone = sessions.closeAll(CLOSE.GOING_AWAY, 'server shutting down');
       if (attached) {
         hostServer.off('upgrade', onUpgrade);
-        const gone = [...sockets.values()].map(({ ws }) => new Promise((resolve) => ws.once('close', resolve)));
-        for (const conn of sockets.values()) conn.ws.close(CLOSE.GOING_AWAY, 'server shutting down');
-        return Promise.all(gone).then(() => {});
+        return gone;
       }
-      for (const conn of sockets.values()) conn.ws.close(CLOSE.GOING_AWAY, 'server shutting down');
       const done = new Promise((resolve) => ownServer.close(() => resolve()));
       ownServer.closeIdleConnections();
-      return done;
+      return Promise.all([done, gone]).then(() => {});
     },
   };
 }
