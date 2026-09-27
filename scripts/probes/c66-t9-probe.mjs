@@ -842,36 +842,9 @@ async function runObserver(out) {
       if (!seq.length || seq[seq.length - 1].tier !== tier) seq.push({ ms: Date.now() - tJoin, tier, idx: l?.idx ?? null, w: l?.w ?? null, ct: Number.isFinite(l?.ct) ? Number(l.ct.toFixed(3)) : null });
       return tier;
     };
-    const firstShown = await until('[observer] 素材层第一次解出画面', async () => {
-      const l = await layer();
-      const tier = note(l);
-      return tier !== 'none' ? { tier, idx: l.idx, w: l.w } : null;
-    }, 180_000, 100);
-    out.firstShown = firstShown;
-    check(firstShown?.tier === 'small', '[observer] 素材层先以素材小尺寸出现', firstShown);
-    // 小尺寸停在 2.5 s:连续 3 次读到同一个帧号才算稳定;期间换到原尺寸就用换之前最后一个
-    let smallIdx = null;
-    let stable = 0;
-    let lastIdx = null;
-    let swappedEarly = false;
-    if (firstShown?.tier === 'small') {
-      await until('[observer] 素材小尺寸的帧号稳定', async () => {
-        const l = await layer();
-        const tier = note(l);
-        if (tier === 'original') { swappedEarly = true; return true; }
-        if (tier !== 'small') { stable = 0; return false; }
-        stable = l.idx === lastIdx ? stable + 1 : 1;
-        lastIdx = l.idx;
-        smallIdx = l.idx;
-        return stable >= 3;
-      }, 20_000, 100);
-      await page.screenshot({ path: path.join(OUT, `${run}-observer-1-small.png`) });
-    }
-    out.smallIdx = smallIdx;
-    out.smallStableBeforeSwap = !swappedEarly;
-    check(smallIdx !== null && Math.abs(smallIdx - EXPECT_IDX) <= 1, `[observer] 素材小尺寸停在 ${SEEK} s(帧号 ${EXPECT_IDX} ± 1)`, { smallIdx });
-    // 换档期间逐帧(rAF)采样显示着的那一层
-    const sampling = !swappedEarly && await (await front())?.evaluate(() => {
+    // 换档期间逐帧(rAF)采样显示着的那一层。素材原尺寸在托管端早已 complete 时,页面第一次问 chunks 就换档
+    // (小尺寸只显示一百多毫秒),所以在小尺寸第一次解出画面时就开始采样,不等它稳定
+    const startSampling = async () => (await front())?.evaluate(() => {
       window.__t9Samples = [];
       window.__t9Sampling = true;
       const cv = document.createElement('canvas');
@@ -903,6 +876,36 @@ async function runObserver(out) {
       raf(loop);
       return true;
     }).catch(() => false);
+    const firstShown = await until('[observer] 素材层第一次解出画面', async () => {
+      const l = await layer();
+      const tier = note(l);
+      return tier !== 'none' ? { tier, idx: l.idx, w: l.w } : null;
+    }, 180_000, 100);
+    out.firstShown = firstShown;
+    check(firstShown?.tier === 'small', '[observer] 素材层先以素材小尺寸出现', firstShown);
+    const samplingStarted = firstShown?.tier === 'small' ? startSampling() : Promise.resolve(false);
+    // 小尺寸停在 2.5 s:连续 3 次读到同一个帧号才算稳定;期间换到原尺寸就用换之前最后一个
+    let smallIdx = null;
+    let stable = 0;
+    let lastIdx = null;
+    let swappedEarly = false;
+    if (firstShown?.tier === 'small') {
+      await until('[observer] 素材小尺寸的帧号稳定', async () => {
+        const l = await layer();
+        const tier = note(l);
+        if (tier === 'original') { swappedEarly = true; return true; }
+        if (tier !== 'small') { stable = 0; return false; }
+        stable = l.idx === lastIdx ? stable + 1 : 1;
+        lastIdx = l.idx;
+        smallIdx = l.idx;
+        return stable >= 3;
+      }, 20_000, 100);
+      await page.screenshot({ path: path.join(OUT, `${run}-observer-1-small.png`) });
+    }
+    out.smallIdx = smallIdx;
+    out.smallStableBeforeSwap = !swappedEarly;
+    check(smallIdx !== null && Math.abs(smallIdx - EXPECT_IDX) <= 1, `[observer] 素材小尺寸停在 ${SEEK} s(帧号 ${EXPECT_IDX} ± 1)`, { smallIdx });
+    const sampling = await samplingStarted;
     const tSwapWait = Date.now();
     const orig = await until('[observer] 素材原尺寸到齐后换成原尺寸', async () => {
       const l = await layer();
