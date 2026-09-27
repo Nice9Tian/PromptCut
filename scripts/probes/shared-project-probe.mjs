@@ -824,7 +824,7 @@ async function seededLayers(docUrl, seed, { verifyBlobs = false, eps, labelPrefi
         if (got) break;
       }
       if (got && sha256(got) === h) ok += 1;
-      else if (!got) bad.push({ hash: h, missing: true });
+      else if (!got && !bad.some((b) => b.hash === h)) bad.push({ hash: h, missing: true });
     }
     row.verified = { total: all.size, ok, ratio: all.size ? ok / all.size : 1, bad: bad.slice(0, 5) };
     check(ok === all.size, `${label}：清单引用的块经数据面带票据全部取回、sha256 相符（${ok}/${all.size}）`, row.verified.bad);
