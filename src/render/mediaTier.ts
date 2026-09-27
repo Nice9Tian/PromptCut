@@ -86,7 +86,21 @@ let policy: MediaTierPolicy = { lowMemory: false, online: typeof import.meta.env
 export function setMediaTierPolicy(next: Partial<MediaTierPolicy>): void {
   const remote = next.remote === undefined ? policy.remote
     : next.remote && next.remote.base ? { base: next.remote.base.replace(/\/+$/, ""), ticket: next.remote.ticket || null } : null;
+  const prev = policy;
   policy = { lowMemory: next.lowMemory ?? policy.lowMemory, online: next.online ?? policy.online, remote };
+  if (prev.lowMemory === policy.lowMemory && prev.online === policy.online
+    && prev.remote?.base === policy.remote?.base && prev.remote?.ticket === policy.remote?.ticket) {
+    policy = prev; // 没变:不换对象、不通知(订阅方按对象身份判断)
+    return;
+  }
+  for (const l of [...policyListeners]) { try { l(); } catch { /* 一个订阅者坏了不影响别人 */ } }
+}
+
+const policyListeners = new Set<() => void>();
+/** 取档策略变了(在线页面的远程素材服务就绪、换票据、切低内存档)时通知;回退订。编辑界面里的素材预览靠它重画 */
+export function subscribeMediaTierPolicy(cb: () => void): () => void {
+  policyListeners.add(cb);
+  return () => { policyListeners.delete(cb); };
 }
 
 export function mediaTierPolicy(): MediaTierPolicy {
@@ -170,6 +184,21 @@ export function playbackUrl(
   opts: { cloudBase?: string; playable?: (hash: string) => boolean | undefined; probe?: boolean; lowMemory?: boolean; online?: boolean; remote?: MediaTierPolicy["remote"] } = {},
 ): string {
   return chooseTier(media, localHashes, opts).url;
+}
+
+/**
+ * 编辑界面里**给人看的素材预览**(素材库的缩略、时间轴与素材库的波形、转场卡的静帧)该拿哪个地址。
+ *
+ * - 桌面运行环境(`policy.online` 为假):原样 `media.url`,和以前一字不差。
+ * - 在线浏览器模式:没有本机编辑器进程,`/@media/*` 这条路由不存在(c10a 2026-09-27 阿里云演示里手机的两次
+ *   `404 /@media/<原尺寸哈希>` 就是素材库缩略的 `<video src>` 与时间轴波形的 `fetch` 拿 `media.url` 发的)。
+ *   这里按取档判据换成远程素材服务的地址:低内存档视频只给素材小尺寸(没有就给 "",不拉原尺寸);普通档是
+ *   「先小后大」里的小;远程地址还没就绪时给 ""。调用方拿到 "" 就不挂 src、不发请求。
+ *   不探可播性(`probe: false`):预览只是缩略,不值得为它去拉原尺寸的首帧。
+ */
+export function previewMediaUrl(media: TierMedia, p: MediaTierPolicy = policy): string {
+  if (!p.online) return media.url;
+  return chooseTier(media, [], { probe: false, lowMemory: p.lowMemory, online: true, remote: p.remote }).url;
 }
 
 /** 原片的地址:`media.url` 就是身份(`/@media/<original 哈希>`);没有 url 但有哈希的才拼一个 */

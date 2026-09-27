@@ -1587,6 +1587,51 @@ export class FramePipeline {
     return written;
   }
   /**
+   * 队列细任务「两档都推送成功才算完成」(c10a 第 9 节)的生成那一半:这一段里**已经有原尺寸、却没有小尺寸**的帧,
+   * 从帧库读回 HTML,记进待画的小尺寸(`scheduleSmallSnapshots`),由接下来的换页画掉(`flushPendingSmall`)。
+   *
+   * 这些帧从哪来:本进程还没配推送队列时产的(比如共享配置写好之前、预渲染进程重启之前先渲的锚帧和播放头那一批 ——
+   * 阿里云演示 2026-09-27 的 295/300 就是这样缺的 5 帧)、攒太多被丢掉的、上一次生成失败的、记下后进程退出没画的。
+   * 只按新产出的帧排小尺寸时,这些帧所在的段原尺寸齐了、小尺寸永远缺那几张。
+   * 回排了几帧。没开小尺寸(没配推送队列、`PROMPTCUT_SMALL_TIER=0`)或这张卡不产快照时回 0,不读任何文件。
+   */
+  async scheduleMissingSmall(entry, control, range) {
+    if (!this.smallTierEnabled() || !control?.snapshotKey || !range) return 0;
+    const tier = control.tier || snapshotTier(control.capabilities);
+    if (tier !== 'shared' && tier !== 'local') return 0;
+    const entryKey = tier === 'local' ? entry?.key : undefined;
+    if (tier === 'local' && !entryKey) return 0;
+    const target = { tier, entryKey, key: control.snapshotKey };
+    const store = this.snapshots();
+    const index = await store.snapshotIndex(target);
+    const dir = store.dir(target);
+    const last = Number.isInteger(control.count) ? Math.min(range.to, control.count - 1) : range.to;
+    const items = [];
+    for (let frame = Math.max(0, range.from); frame <= last; frame++) {
+      if (!rangeHas(index.frames, frame) && !rangeHas(index.oversize, frame)) continue;
+      if (await exists(path.join(dir, `${frame}${SMALL_SUFFIX}`))) continue;
+      let html;
+      try { html = await fs.readFile(path.join(dir, `${frame}.html`), 'utf8'); } catch { continue; }
+      items.push({ localFrame: frame, html });
+    }
+    if (!items.length) return 0;
+    const scheduled = this.scheduleSmallSnapshots({ tier, ...(entryKey ? { entryKey } : {}), key: control.snapshotKey, clipId: control.clipId, capabilities: control.capabilities, items });
+    return scheduled ? items.length : 0;
+  }
+  /**
+   * 队列细任务收尾:还有记下没画的小尺寸,就在这个预渲染间上换一次页把它们画掉(换页前的钩子 `flushSmallOn`),
+   * 并把页面恢复成干净的空项目(同 `acquire` 借出时的样子)。任务回来之后 sink 立刻列清单,不能把小尺寸留给
+   * 「下一次有人换页」—— 本地档那一趟、以及整段都已有原尺寸只差小尺寸的一段,之后可能再也没人换页。
+   * 没有待画的就什么都不做。
+   */
+  async flushPendingSmall(bakery, project, lane = 'queue') {
+    if (!bakery || !this.smallPending?.length || this.closed) return false;
+    await bakery.reset(project, this.emptyUrl(project), { deferCards: true });
+    await bakery.page.setViewport({ width: project.width, height: project.height, deviceScaleFactor: this.scaleForLane(lane) });
+    await bakery.client.send('Emulation.setDefaultBackgroundColorOverride', { color: { r: 0, g: 0, b: 0, a: 0 } });
+    return true;
+  }
+  /**
    * c10a 第 9 节「在线页面按清单拉取」:在线页面没有预渲染进程,算不出每张重卡的键(键里有渲染节点的环境指纹、
    * 快照代码的哈希)。渲染节点在认下一版 card plan 时把「片段 → 层的键、清单的结果键、采样窗口」写进内容库
    * (`artifact-transfer.mjs` 的 `layerMapOf`),页面按它逐段取清单、按清单的 `small` 表拉小位图。只在配了推送队列时写。
@@ -2394,6 +2439,8 @@ export class FramePipeline {
     if (control.cardLock?.foreign === true) throw locked();
     let done = 0;
     await this.runQueueTask(async lease => {
+      // c10a 第 9 节:这一段里已有原尺寸、缺小尺寸的帧先记下,借出预渲染间的换页、各批的换页会把它们画掉
+      try { await this.scheduleMissingSmall(entry, control, range); } catch { /* 读不了帧库:完成条件那一关会拦下 */ }
       const bakery = await lease(entry.project);
       await this.fillCardControls(entry, bakery, signal, [control], {
         range,
@@ -2402,6 +2449,7 @@ export class FramePipeline {
           try { progress?.(done); } catch { /* 进度回调出错不影响渲染 */ }
         },
       });
+      if (!signal?.aborted) await this.flushPendingSmall(bakery, entry.project);
     }, signal);
     if (signal?.aborted) throw Object.assign(new Error('Queue task cancelled'), { cancelled: true });
     if (control.cardLock?.foreign === true) throw locked();
@@ -2421,10 +2469,14 @@ export class FramePipeline {
       if (global / fps >= control.end - 1e-9) break;
       frames.push(global);
     }
-    if (frames.length) {
+    // c10a 第 9 节:已有原尺寸、缺小尺寸的帧也要在这一趟补上(见 `scheduleMissingSmall`)
+    let missingSmall = 0;
+    try { missingSmall = await this.scheduleMissingSmall(entry, control, range); } catch { /* 完成条件那一关会拦下 */ }
+    if (frames.length || missingSmall) {
       await this.runQueueTask(async lease => {
         const bakery = await lease(entry.project);
-        await this.renderLocalSnapshots(entry, frames, bakery, signal);
+        if (frames.length) await this.renderLocalSnapshots(entry, frames, bakery, signal);
+        if (!signal?.aborted) await this.flushPendingSmall(bakery, entry.project);
       }, signal);
     }
     if (signal?.aborted) throw Object.assign(new Error('Queue task cancelled'), { cancelled: true });

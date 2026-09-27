@@ -483,6 +483,18 @@ async function coversRange(pipeline, ref) {
   return false;
 }
 
+/**
+ * c10a 第 9 节「任务完成的条件:两档都推送成功」:快照清单里列着的每一帧原尺寸都另有一张小尺寸。
+ * 只在管线开着小尺寸时(`pipeline.smallTierEnabled()`:配了推送队列、没设 `PROMPTCUT_SMALL_TIER=0`)才要求;
+ * 流没有小尺寸(第 1 节),恒为真。
+ */
+export function smallComplete(result) {
+  if (result?.kind !== 'snapshot') return true;
+  const have = new Set(smallFramesOf(result).map(([f]) => f));
+  return (result.frames ?? []).every(([f]) => have.has(f));
+}
+const wantsSmall = (pipeline, ref) => ref?.kind === 'snapshot' && typeof pipeline?.smallTierEnabled === 'function' && pipeline.smallTierEnabled() === true;
+
 /** 清单是不是把 `range` 里每一帧 / 每个分段都列上了 */
 function resultComplete(result) {
   const { from, to } = result.range;
@@ -563,7 +575,17 @@ export function createAssetSink({ pipeline, client, content = null, log = () => 
   const collect = ref => (ref?.kind === 'snapshot' ? collectSnapshotResult(pipeline, ref) : collectStreamResult(pipeline, ref));
   return {
     async has(ref) {
-      try { if (await coversRange(pipeline, ref)) return true; } catch { /* 当本机没有 */ }
+      /*
+       * c10a 第 9 节:开着小尺寸时,本机帧库覆盖了整段、而这一段还缺小尺寸,就不算已有 —— 交给执行器补上小尺寸再推。
+       * 这时也不去查内容库:那里的清单多半是本机推送队列边渲边写的,原尺寸齐、小尺寸缺,认了它这一段就永远缺小尺寸。
+       */
+      try {
+        if (await coversRange(pipeline, ref)) {
+          if (!wantsSmall(pipeline, ref)) return true;
+          const { result } = await collect(ref);
+          return resultComplete(result) && smallComplete(result);
+        }
+      } catch { /* 当本机没有 */ }
       if (!content || typeof content.get !== 'function') return false;
       const kind = manifestKindOf(ref?.kind);
       const key = manifestKeyOf(ref);
@@ -584,7 +606,7 @@ export function createAssetSink({ pipeline, client, content = null, log = () => 
       try {
         if (await coversRange(pipeline, ref)) {
           const { result } = await collect(ref);
-          return resultComplete(result) ? result : null;
+          return resultComplete(result) && (!wantsSmall(pipeline, ref) || smallComplete(result)) ? result : null;
         }
       } catch { /* 退到记下的清单 */ }
       const key = manifestKeyOf(ref);
@@ -595,6 +617,12 @@ export function createAssetSink({ pipeline, client, content = null, log = () => 
         if (ref?.kind !== 'snapshot' && ref?.kind !== 'stream') return { complete: false };
         const collected = await collect(ref);
         if (!resultComplete(collected.result)) return { complete: false };
+        // c10a 第 9 节:两档都推送成功才算完成;缺小尺寸回 incomplete,节点按可重试失败交回,重做时补上
+        if (wantsSmall(pipeline, ref) && !smallComplete(collected.result)) {
+          safeLog(log, 'sink.small-incomplete', { resultKey: String(ref.resultKey ?? '').slice(0, 16), range: ref.range ?? null,
+            frames: collected.result.frames.length, small: smallFramesOf(collected.result).length });
+          return { complete: false };
+        }
         await pushResult(client, collected.result, collected.readBlob);
         if (content) await writeManifest(content, collected.result, log);
         return { complete: true, result: collected.result };

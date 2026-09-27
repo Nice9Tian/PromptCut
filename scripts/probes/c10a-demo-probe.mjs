@@ -24,7 +24,8 @@
  *      重放 preload);等两档素材上云、plan 切出的细任务全部落定、层表与清单(含小尺寸)写进内容库。
  *   1b. 创建者刷新页面:同一个标签页刷新之后回到刷新前打开的共享项目(同一份项目文档、仍是创建者)。
  *   2. 手机成员:Chrome 移动端仿真(手机视口、触屏、`deviceMemory: 4`)打开邀请链接,只填用户名加入;断言判为低内存档
- *      (进入提示、只有一个同源舞台)、网络记录里视频只有小尺寸、预渲染只有 `px/` 小位图、没有原尺寸与 `snap/`;截图。
+ *      (进入提示、只有一个同源舞台)、网络记录里视频只有小尺寸、预渲染只有 `px/` 小位图、没有原尺寸与 `snap/`,也没有任何
+ *      `/@media/…` 请求(有就记下发起方:元素链或调用栈;手机整段在第 4 步末再核一次);截图。第 1 步 plan 落定时重卡每帧两档都在。
  *   3. 在手机上改一处(重卡片段的参数换成已钉死的第二个版本):创建方的渲染节点认领重渲,新的预渲染小尺寸(新的 `px/` 哈希)
  *      回到手机页面;记下时长。
  *   4. 低内存档逐帧导出:先在手机上造一个缺原尺寸的素材片段,导出提示「等待上传方」、不出片;删掉它后导出 `--export-seconds` 秒,
@@ -355,10 +356,56 @@ async function newPage({ mobile = false } = {}) {
       viewport: { width: 412, height: 915, deviceScaleFactor: 2, isMobile: true, hasTouch: true, isLandscape: false },
     });
     await page.evaluateOnNewDocument(() => { Object.defineProperty(Navigator.prototype, 'deviceMemory', { configurable: true, get: () => 4 }); });
+    /*
+     * 在线页面不该有 `/@media/…` 请求(那是桌面编辑器进程的路由;低内存档也不取素材原尺寸):记下是谁发的 ——
+     * 媒体元素 / 图片的 src 由谁设(元素与它往上几层的 class)、fetch 的调用栈。同源舞台 iframe 里一样挂。
+     */
+    await page.evaluateOnNewDocument(() => {
+      const hits = (window.__pcMediaHits = []);
+      const isMedia = (v) => { try { return new URL(String(v), location.href).pathname.startsWith('/@media/'); } catch { return false; } };
+      const where = (el) => {
+        const chain = [];
+        for (let n = el; n && n.nodeType === 1 && chain.length < 8; n = n.parentElement) {
+          const pc = n.getAttribute('data-pc') || n.getAttribute('data-pc-media') || n.getAttribute('data-pc-clip');
+          chain.push(`${n.tagName.toLowerCase()}${n.className && typeof n.className === 'string' ? '.' + n.className.trim().split(/\s+/).slice(0, 3).join('.') : ''}${pc ? `[${pc}]` : ''}`);
+        }
+        return chain.join(' < ');
+      };
+      const note = (kind, url, el) => {
+        if (hits.length >= 20) return;
+        hits.push({ kind, path: new URL(String(url), location.href).pathname.slice(0, 90), frame: location.pathname + location.search.slice(0, 40), el: el ? where(el) : null,
+          stack: String(new Error().stack || '').split('\n').slice(2, 12).map((s) => s.trim()).join(' | ').slice(0, 1200) });
+      };
+      const origFetch = window.fetch;
+      window.fetch = function (input, init) {
+        const url = typeof input === 'string' ? input : input?.url;
+        if (url && isMedia(url)) note('fetch', url, null);
+        return origFetch.call(this, input, init);
+      };
+      for (const proto of [HTMLMediaElement.prototype, HTMLImageElement.prototype, HTMLSourceElement.prototype]) {
+        const d = Object.getOwnPropertyDescriptor(proto, 'src');
+        if (!d?.set) continue;
+        Object.defineProperty(proto, 'src', { ...d, set(v) { if (isMedia(v)) note(`${this.tagName.toLowerCase()}.src`, v, this); return d.set.call(this, v); } });
+      }
+      const setAttr = Element.prototype.setAttribute;
+      Element.prototype.setAttribute = function (name, value) {
+        if (String(name).toLowerCase() === 'src' && isMedia(value)) note(`${this.tagName.toLowerCase()}[src]`, value, this);
+        return setAttr.call(this, name, value);
+      };
+      const OrigXhrOpen = XMLHttpRequest.prototype.open;
+      XMLHttpRequest.prototype.open = function (method, url, ...rest) { if (isMedia(url)) note('xhr', url, null); return OrigXhrOpen.call(this, method, url, ...rest); };
+    });
+    page.relMedia = [];
     // 只记路径(查询串里有票据,不记)
     page.on('request', (r) => {
       let u;
       try { u = new URL(r.url()); } catch { return; }
+      if (u.pathname.startsWith('/@media/') && page.relMedia.length < 40) {
+        const init = r.initiator?.() ?? null;
+        const frames = init?.stack?.callFrames ?? [];
+        page.relMedia.push({ at: Date.now(), path: u.pathname.slice(0, 90), type: r.resourceType(), initiator: init?.type ?? null,
+          stack: frames.slice(0, 8).map((f) => `${f.functionName || '?'}@${String(f.url).split('/').pop()}:${f.lineNumber}:${f.columnNumber}`) });
+      }
       if (u.origin !== new URL(SITE).origin || !u.pathname.startsWith(ASSET_PREFIX)) return;
       const rest = u.pathname.slice(ASSET_PREFIX.length).split('/');
       page.assets.push({ at: Date.now(), method: r.method(), ns: rest[0], hash: rest[1] ?? '', sub: rest[2] ?? '' });
@@ -522,8 +569,11 @@ try {
   const layers = await until('层表列着重卡片段、清单带小尺寸、小位图在素材服务上', () => heavyLayer(), 300_000, 2000);
   state.layer0 = layers;
   check(layers?.smallCount > 0, '预渲染小尺寸推到素材服务', layers ? { key: layers.key.slice(0, 12), frames: layers.frames, small: layers.smallCount } : state.layerWhy);
+  // 契约第 9 节「任务完成的条件:两档都推送成功」:plan 落定时重卡每一帧都有小尺寸
+  check(layers && layers.frames === layers.count && layers.smallCount === layers.frames, 'plan 落定时重卡每帧两档都在(原尺寸帧数 = 层的帧数 = 小尺寸张数)',
+    layers ? { frames: layers.frames, count: layers.count, small: layers.smallCount, missingSmall: layers.missingSmall.slice(0, 20) } : null);
   out.steps.creator = { ms: Date.now() - t1, project: { name: projName, projectId: state.projectId }, media: { small: media.small.slice(0, 12), original: media.original.slice(0, 12) },
-    invite: redactInvite(state.link), plan: settled, prerenderRestarted: !!pre1, heavy: layers ? { key: layers.key.slice(0, 12), frames: layers.frames, small: layers.smallCount } : null };
+    invite: redactInvite(state.link), plan: settled, prerenderRestarted: !!pre1, heavy: layers ? { key: layers.key.slice(0, 12), frames: layers.frames, small: layers.smallCount, ...(layers.missingSmall.length ? { missingSmall: layers.missingSmall.slice(0, 20) } : {}) } : null };
   say('step1.done', out.steps.creator);
 
   /* ---------------------------------------------------------------- 1b. 创建者刷新页面,回到刷新前打开的共享项目 */
@@ -572,10 +622,13 @@ try {
   const sum2 = assetSummary(phone.assets, tier);
   check(sum2.mediaSmall > 0 && sum2.mediaOriginal === 0 && sum2.mediaOther === 0, '手机:视频只有小尺寸请求', sum2);
   check(sum2.px > 0 && sum2.snap === 0, '手机:预渲染只有 px/ 小位图、没有 snap/', sum2);
+  const rel2 = await relMediaOf(phone);
+  check(!rel2.requests.length, '手机:没有 /@media 请求(在线页面没有这条路由,低内存档也不取素材原尺寸)', rel2);
   const phoneShot = await shot(phone, '2-phone-lowmem');
   if (phoneDiag) say('phone.diag', phoneDiag);
   out.steps.phone = { ms: Date.now() - t2, lowMemoryToast: !!lowToast, stageFrames: frames.length, smallShown: !!smallShown, requests: sum2, shot: phoneShot,
     online: await P(phone, () => { try { const d = window.__pcOnlineSnapshots?.(); return d ? { layers: d.layers?.length ?? 0, smallFetches: d.smallFetches ?? null } : null; } catch { return null; } }),
+    relMedia: rel2.requests.length, ...(rel2.requests.length ? { relMediaDetail: rel2 } : {}),
     ...(phoneDiag ? { diag: phoneDiag } : {}) };
   say('step2.done', out.steps.phone);
   // 排障:--hold-min N 在这里停 N 分钟(配 --debug-port 从外面连上浏览器看)
@@ -609,7 +662,7 @@ try {
   }, 900_000, 1000);
   check(newPx, '手机收到重渲后的新小尺寸');
   // 整段重渲完:内容库里新键下每一段清单都在、小位图都在素材服务上
-  const layer1 = await until('重渲整段完成(新键下的清单与小位图齐全)', async () => { const l = await heavyLayer(); return l && l.key !== keyBefore ? l : null; }, 900_000, 2000);
+  const layer1 = await until('重渲整段完成(新键下每帧两档齐全)', async () => { const l = await heavyLayer(); return l && l.key !== keyBefore && l.frames === l.count && l.smallCount === l.frames ? l : null; }, 900_000, 2000);
   check(layer1, '层表里重卡片段换了新的键、整段重渲完成', { before: keyBefore?.slice(0, 12), after: layer1?.key?.slice(0, 12), why: layer1 ? undefined : state.layerWhy });
   await shot(phone, '3-phone-after-edit');
   out.steps.edit = { ms: Date.now() - t3, newKeyMs: newPx?.keyMs ?? null, newSmallMs: newPx?.first ?? null, newPxRequests: newPx?.count ?? 0, fullRerenderMs: layer1 ? Date.now() - t3 : null,
@@ -644,6 +697,8 @@ try {
     if (!exported?.result) { say('export.retry', { attempt, waits: exported?.waits?.slice(0, 2), error: exported?.error }); await delay(15_000); }
   }
   const sum4 = assetSummary(phone.assets.slice(exportMark), tier);
+  const rel4 = await relMediaOf(phone);
+  check(!rel4.requests.length, '手机整段(进入、改一处、导出):没有 /@media 请求', rel4);
   let probe4 = null;
   if (check(exported?.result, '逐帧导出出片', { waits: exported?.waits?.slice(0, 2), error: exported?.error })) {
     const mp4 = path.join(OUT, '4-lowmem-export.mp4');
@@ -797,6 +852,15 @@ async function waitPlanSettled(label, seen) {
   return r;
 }
 
+/** 手机页面上的 `/@media/…` 请求(请求记录 + 页面里挂的钩子记下的发起方:元素链或调用栈;各 frame 都收) */
+async function relMediaOf(page) {
+  const hits = [];
+  for (const f of page.frames()) {
+    try { hits.push(...((await f.evaluate(() => window.__pcMediaHits ?? [])) ?? [])); } catch { /* frame 走了 */ }
+  }
+  return { requests: page.relMedia ?? [], hits: hits.slice(0, 12) };
+}
+
 /** 手机舞台里重卡包裹层的样子(排障用) */
 async function stageDiag(page) {
   const f = page.frames().find((x) => /[?&]stage=1/.test(x.url()));
@@ -818,11 +882,14 @@ async function heavyLayer() {
   const span = Math.max(1, Number(reply.body.span) || 60);
   let frames = 0;
   const small = [];
+  const missingSmall = [];
   for (let from = 0; from < layer.count; from += span) {
     const to = Math.min(layer.count - 1, from + span - 1);
     const m = await conn.rpc({ type: 'content.get', kind: 'snapshot-manifest', key: `${layer.resultKey}:${from}-${to}` });
     if (m?.type !== 'content.item' || m.missing) { state.layerWhy = { segment: `${from}-${to}`, count: layer.count, span, reply: m?.type ?? null }; return null; }
     frames += (m.body?.frames ?? []).length;
+    const smallAt = new Set((m.body?.small ?? []).map((s) => s[0]));
+    for (const [f] of m.body?.frames ?? []) if (!smallAt.has(f)) missingSmall.push(f);
     for (const s of m.body?.small ?? []) small.push(s[1]);
   }
   if (!small.length) { state.layerWhy = { frames, small: 0 }; return null; }
@@ -830,5 +897,5 @@ async function heavyLayer() {
     const has = await conn.client.has('px', h).catch((e) => `error: ${String(e?.message ?? e).slice(0, 120)}`);
     if (has !== true) { state.layerWhy = { frames, small: small.length, pxHas: has }; return null; }
   }
-  return { key: layer.key, frames, smallCount: small.length };
+  return { key: layer.key, frames, count: layer.count, smallCount: small.length, missingSmall };
 }
