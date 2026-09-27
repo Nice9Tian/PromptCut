@@ -640,19 +640,19 @@ async function runCreator(out) {
     /** 观察端报小尺寸出画面并稳定(或它已交结果)之后续传,等原尺寸 complete、队列清空,再核对顺序与字节 */
     /** 两档从素材服务整个取回、核哈希(托管端;放本机时是局域网主机) */
     const checkHostedBytes = async () => {
-    // 整个取回再核哈希。原尺寸约 44 MB 只发一个请求,客户端缺省时限 30 s 含读完回包,托管端远时读不完
-    // (T9-X3 就是这样被判成不符);这里放宽到 10 分钟,取不回时记下错误原文,不和「字节不符」混在一起
-    const whole = conn.client('r', { timeoutMs: 600_000 });
-    out.hostedBytes = {};
-    for (const [tier, h] of [['small', smallHash], ['original', media.original]]) {
-      if (!h) continue;
-      const t0 = Date.now();
-      let bytes = null;
-      let error = null;
-      try { bytes = await whole.get('media', h); } catch (e) { error = { code: e?.code ?? null, message: String(e?.message ?? e).slice(0, 200) }; }
-      out.hostedBytes[tier] = { ms: Date.now() - t0, bytes: bytes ? bytes.length : null, error };
-      check(bytes && sha256(bytes) === h, `[creator] 托管端 ${tier} 字节与哈希相符`, out.hostedBytes[tier]);
-    }
+      // 整个取回再核哈希。原尺寸约 44 MB 只发一个请求,客户端缺省时限 30 s 含读完回包,托管端远时读不完
+      // (T9-X3 就是这样被判成不符);这里放宽到 10 分钟,取不回时记下错误原文,不和「字节不符」混在一起
+      const whole = conn.client('r', { timeoutMs: 600_000 });
+      out.hostedBytes = {};
+      for (const [tier, h] of [['small', smallHash], ['original', media.original]]) {
+        if (!h) continue;
+        const t0 = Date.now();
+        let bytes = null;
+        let error = null;
+        try { bytes = await whole.get('media', h); } catch (e) { error = { code: e?.code ?? null, message: String(e?.message ?? e).slice(0, 200) }; }
+        out.hostedBytes[tier] = { ms: Date.now() - t0, bytes: bytes ? bytes.length : null, error };
+        check(bytes && sha256(bytes) === h, `[creator] 托管端 ${tier} 字节与哈希相符`, out.hostedBytes[tier]);
+      }
     };
 
     const resumeUpload = async () => {
