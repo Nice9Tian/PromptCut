@@ -160,4 +160,9 @@ K1（`--order lock-first`）两边退出码都是 0，coordinator 15 条检查�
 - `67705c7` 文档：AGENT-m8-scale 报告起稿
 - `d37d611` 探针：m8-scale-probe 与纯逻辑单测（含 bakery-deps 名单一行）
 - `1a022cb` 探针：K1 加 `--order`、记竞态窗口时长
-- （本报告的定稿提交）
+- `1baed07` 文档：本报告定稿
+- `50abb7d` 合并 main（`0d114df`，main 已含 `278eeb9`；进来的是 tailwind 守门、m8-migrate 探针等，与本分支文件不重叠）
+- （本段补记的提交）
+
+合并 main 之后重跑：`npx tsc -b --force` 退出码 0；`npm test` 退出码 0，tests 3467，pass 3465，fail 0，skipped 2；
+对照组 `--role all --case k1 --prefilter off` 退出码 0，`ok: true`，totals `{"claims":521,"claimed":100,"cardLocked":400,"openedMismatch":400,"deadClaimed":0}`。
