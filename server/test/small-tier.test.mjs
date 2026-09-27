@@ -279,3 +279,142 @@ test('ST9 层表写进内容库:攒一下、后写的赢、内容相同不重写
   await queue.stop();
   p.pushQueue = null;
 });
+
+/* ------------------------------------------------------------------ 完成条件:两档都推送成功(阿里云 295/300,2026-09-27) */
+
+/** 一张共享档卡的 control(`scheduleMissingSmall` / `writeSmallSnapshots` 要的几项) */
+const controlOf = (key, count) => ({ clipId: 'c1', snapshotKey: key, tier: 'shared', capabilities: {}, count, appearance: { width: 1920, height: 1080 } });
+/** 把管线接上一个假推送队列(打开小尺寸),再把画小位图换成直接写假 WebP(单测不开 Chrome) */
+function withSmallTier(p) {
+  p.pushQueue = { enqueue: async () => {} };
+  const drawn = [];
+  p.writeSmallSnapshots = async (job) => {
+    const dir = p.snapshots().dir({ tier: job.tier, entryKey: job.entryKey, key: job.key });
+    for (const item of job.items) {
+      drawn.push(item.localFrame);
+      await fs.writeFile(path.join(dir, `${item.localFrame}${SMALL_SUFFIX}`), fakeWebp(800, 450, item.localFrame));
+    }
+    return job.items.length;
+  };
+  return drawn;
+}
+
+test('ST10 已有原尺寸、缺小尺寸的帧(先于推送队列渲的、画之前进程退了的)排进小尺寸,从帧库读回原 HTML;没开小尺寸不读', async () => {
+  const p = await makePipeline();
+  const key = 'e'.repeat(64);
+  const dir = await seed(p, key, [0, 1, 2, 3, 28, 29, 30, 31]);
+  // 这几帧有小尺寸:1、2、3;0 与 28～31 没有 —— 同阿里云那一轮(锚帧 0 与播放头那一批 28～31 渲在推送队列配上之前)
+  for (const f of [1, 2, 3]) await fs.writeFile(path.join(dir, `${f}${SMALL_SUFFIX}`), fakeWebp(800, 450, f));
+  const control = controlOf(key, 60);
+  const entry = { key: 'entry-e', project: { width: 1920, height: 1080, fps: 30 } };
+  assert.equal(await p.scheduleMissingSmall(entry, control, { from: 0, to: 59 }), 0, '没开小尺寸:不排');
+  assert.equal(p.smallPending?.length ?? 0, 0);
+  p.pushQueue = { enqueue: async () => {} };
+  assert.equal(await p.scheduleMissingSmall(entry, control, { from: 0, to: 59 }), 5);
+  assert.deepEqual(p.smallPending.flatMap((j) => j.items.map((i) => i.localFrame)), [0, 28, 29, 30, 31]);
+  assert.equal(p.smallPending[0].items[0].html, html(0), '从帧库读回原 HTML');
+  assert.equal(p.smallPending[0].key, key);
+  // 只看这一段:28～31 不在 [0, 3] 里
+  p.smallPending = [];
+  assert.equal(await p.scheduleMissingSmall(entry, control, { from: 0, to: 3 }), 1);
+  p.smallPending = [];
+  p.pushQueue = null;
+});
+
+test('ST11 队列细任务收尾:还有记下没画的小尺寸就换一次页画掉(换页前的钩子);没有就不换页', async () => {
+  const p = await makePipeline();
+  const drawn = withSmallTier(p);
+  const key = 'f'.repeat(64);
+  await seed(p, key, [0, 1]);
+  p.smallPending = []; // 写帧的钩子顺手记下的那一批不算:这里要的是「已有原尺寸、缺小尺寸」
+  const resets = [];
+  const bakery = {
+    page: { setViewport: async () => {} },
+    client: { send: async () => {} },
+    async reset(project, url) { resets.push(url); await this.beforeReset?.(this); },
+  };
+  bakery.beforeReset = (b) => p.flushSmallOn(b);
+  const project = { width: 1920, height: 1080, fps: 30, duration: 2, tracks: [], media: [] };
+  assert.equal(await p.flushPendingSmall(bakery, project), false, '没有待画的:不换页');
+  assert.equal(resets.length, 0);
+  await p.scheduleMissingSmall({ key: 'x', project }, controlOf(key, 2), { from: 0, to: 1 });
+  assert.equal(await p.flushPendingSmall(bakery, project), true);
+  assert.equal(resets.length, 1);
+  await p.whenSmallSettled();
+  assert.deepEqual(drawn, [0, 1]);
+  assert.equal(p.smallPending.length, 0);
+  p.pushQueue = null;
+});
+
+test('ST12 sink:开着小尺寸时缺一张小尺寸就不算完成(put 回 incomplete、has 回 false、不认内容库里缺小尺寸的清单);补齐后两档一起推', async () => {
+  const p = await makePipeline();
+  const key = '9'.repeat(64);
+  const dir = await seed(p, key, [0, 1, 2, 3]);
+  for (const f of [1, 2, 3]) await fs.writeFile(path.join(dir, `${f}${SMALL_SUFFIX}`), fakeWebp(800, 450, f));
+  const client = memClient();
+  const manifests = new Map();
+  const content = {
+    async get(kind, k) { return manifests.has(k) ? { body: manifests.get(k) } : null; },
+    async put(kind, k, body) { manifests.set(k, body); return { hash: 'h' }; },
+  };
+  const sink = T.createAssetSink({ pipeline: p, client, content });
+  const ref = task(key, 0, 3);
+  // 没开小尺寸(没配推送队列):和 C6.4 一样,原尺寸齐就完成
+  assert.equal(await sink.has(ref), true);
+  assert.equal((await sink.put(ref)).complete, true);
+  assert.equal(T.smallComplete((await sink.put(ref)).result), false, '这份清单确实缺帧 0 的小尺寸');
+  // 开着小尺寸:缺帧 0 的小尺寸 → 不算已有、不算完成(可重试),即使内容库里已有一份原尺寸齐的清单
+  p.pushQueue = { enqueue: async () => {} };
+  assert.ok(manifests.size, '内容库里已有上面那份(原尺寸齐、小尺寸缺)');
+  assert.equal(await sink.has(ref), false);
+  assert.equal(await sink.resultFor(ref), null);
+  assert.deepEqual(await sink.put(ref), { complete: false });
+  // 补上那一张:两档一起推,清单每帧都有小尺寸
+  await fs.writeFile(path.join(dir, `0${SMALL_SUFFIX}`), fakeWebp(800, 450, 0));
+  assert.equal(await sink.has(ref), true);
+  const done = await sink.put(ref);
+  assert.equal(done.complete, true);
+  assert.equal(T.smallComplete(done.result), true);
+  assert.deepEqual(done.result.small.map(([f]) => f), [0, 1, 2, 3]);
+  for (const [, hash] of done.result.small) assert.ok(await client.has('px', hash));
+  // 流没有小尺寸:恒算齐
+  assert.equal(T.smallComplete({ kind: 'stream', segments: {} }), true);
+  p.pushQueue = null;
+});
+
+test('ST13 队列细任务(共享档 / 本地档)这一段只差小尺寸时也补上:任务回来时每帧两档都在帧库里', async () => {
+  const p = await makePipeline();
+  const drawn = withSmallTier(p);
+  const project = { width: 1920, height: 1080, fps: 30, duration: 2, tracks: [], media: [] };
+  const resets = [];
+  const bakery = {
+    page: { setViewport: async () => {} },
+    client: { send: async () => {} },
+    async reset(_project, url) { resets.push(url); await this.beforeReset?.(this); },
+  };
+  bakery.beforeReset = (b) => p.flushSmallOn(b);
+  p.acquire = async () => bakery;
+  p.release = () => {};
+  // 原尺寸早就齐了(fillCardControls 什么都不渲、也不换页 —— 最坏的情形)
+  p.fillCardControls = async () => [];
+  const key = '7'.repeat(64);
+  const dir = await seed(p, key, [0, 1, 2, 3]);
+  p.smallPending = [];
+  await fs.writeFile(path.join(dir, `2${SMALL_SUFFIX}`), fakeWebp(800, 450, 2));
+  const control = controlOf(key, 4);
+  const entry = { key: 'entry-7', project, cardPlan: [control] };
+  await p.renderCardSnapshotRange(entry, control, { from: 0, to: 3 });
+  assert.deepEqual(drawn.sort((a, b) => a - b), [0, 1, 3]);
+  assert.equal(resets.length, 1, '收尾换一次页画掉');
+  const { result } = await T.collectSnapshotResult(p, task(key, 0, 3));
+  assert.equal(T.smallComplete(result), true);
+  // 本地档:一帧都不用渲,只差小尺寸,也借预渲染间补
+  drawn.length = 0;
+  const lkey = '6'.repeat(64);
+  await p.snapshots().commitSnapshots({ tier: 'local', entryKey: entry.key, key: lkey, clipId: 'c2', capabilities: {}, items: [0, 1].map((f) => ({ localFrame: f, html: html(f) })) });
+  p.smallPending = [];
+  const local = { clipId: 'c2', snapshotKey: lkey, tier: 'local', capabilities: {}, count: 2, sampling: { firstFrame: 0 }, end: 2, appearance: { width: 1920, height: 1080 } };
+  await p.renderSceneSnapshotRange({ ...entry, cardPlan: [local] }, local, { from: 0, to: 1 });
+  assert.deepEqual(drawn.sort((a, b) => a - b), [0, 1]);
+  p.pushQueue = null;
+});
