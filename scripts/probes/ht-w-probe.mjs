@@ -334,10 +334,16 @@ async function runCreator(out) {
     }, 240_000, 500);
     if (!check('creator-editor-ready', !!prerender, editorLines.slice(-6))) return;
     const diagnostics = async () => (await json(`${prerender}/api/frames/diagnostics`)).body ?? {};
-    const active = await until(async () => (await diagnostics()).queue?.active === true || null, 240_000, 1000);
+    // 本机节点报到:预渲染进程第一次打 /api/frames/* 才建管线、开 Chrome、起节点,机器忙时要几分钟;记下最后一次看到的状态备查
+    let lastQueue = null;
+    const active = await until(async () => {
+      try { const q = (await diagnostics()).queue ?? null; lastQueue = q ? { active: q.active, connected: q.connected, mode: q.mode, transport: q.transport ?? null } : { queue: null }; }
+      catch (error) { lastQueue = { error: String(error?.message ?? error).slice(0, 120) }; }
+      return lastQueue?.active === true || null;
+    }, 420_000, 1000);
     const d0 = await diagnostics();
     out.pc = { nodeId: d0.queue?.nodeId ?? null, envFingerprint: d0.queue?.envFingerprint ?? null, codeVersion: d0.queue?.codeVersion ?? null, transport: d0.queue?.transport ?? null };
-    if (!check('creator-node-active', !!active, editorLines.filter((l) => l.includes('[queue-node]')).slice(-8))) return;
+    if (!check('creator-node-active', !!active, { lastQueue, log: editorLines.filter((l) => l.includes('[queue-node]')).slice(-8) })) return;
 
     // 3. 旁观节点:只收不认领,记每个任务的认领 / 放回 / 关闭
     const seen = new Map();
@@ -422,6 +428,8 @@ async function runCreator(out) {
     say('error', { stack: String(error?.stack ?? error).slice(0, 1500) });
     await put('abort', { reason: String(error?.message ?? error).slice(0, 200), at: Date.now() });
   } finally {
+    // 提前收尾(断言没过就 return 的那些路)也告诉主机别再等
+    if (fails.length) await put('abort', { reason: `creator: ${fails[0].slice(0, 160)}`, at: Date.now() });
     watcher?.close();
     if (project && creatorPw) {
       let deleted = false;
