@@ -28,10 +28,11 @@ const BAKERY = path.join(SERVER, 'bakery');
  *     (拆错了删的是用户素材,所以要常驻基线);
  *   - `probe-coord-mail.test.mjs` 测 `scripts/probes/probe-coord.mjs` 里两个 Agent 之间的 HTTP 信箱(鉴权与长轮询);
  *   - `m8-kit.test.mjs` 测 `scripts/probes/m8/` 里 M8 探针公共件的判据、KV 约定与代理控制命令(M8 的验收判据靠它们,要常驻基线)。
+ *   - `m8-scale.test.mjs` 测 `scripts/probes/m8-scale-probe.mjs` 的任务表、节点账本与 K1 / K2 / I1 / I2 判据(M8 规模复测的判据靠它们)。
  *
  * 多一条都要在这里显式写出来,加不进来就说明依赖方向真的破了。
  */
-const ALLOWED_SCRIPT_IMPORTERS = new Set(['server/test/bake-protocol.test.mjs', 'server/test/dev-server-junction.test.mjs', 'server/test/probe-coord-mail.test.mjs', 'server/test/m8-kit.test.mjs']);
+const ALLOWED_SCRIPT_IMPORTERS = new Set(['server/test/bake-protocol.test.mjs', 'server/test/dev-server-junction.test.mjs', 'server/test/probe-coord-mail.test.mjs', 'server/test/m8-kit.test.mjs', 'server/test/m8-scale.test.mjs']);
 
 const CODE = /\.(mjs|mts|ts|tsx)$/;
 
