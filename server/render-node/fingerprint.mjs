@@ -76,6 +76,18 @@ export function chromeMajorOf(version) {
   return Number.isSafeInteger(major) ? major : 0;
 }
 
+/**
+ * 页面报上来的 UA 是不是 Chromium 内核(M7 契约 D14:一期只在 Chromium 内核的浏览器上当纯浏览器节点)。
+ * `chromeMajorOf` 对不带 `Chrome/` 的 UA 取第一个数,Firefox、Safari 都会得 5,指纹相撞、两种引擎的帧可能拼进同一层,
+ * 所以这类浏览器不当节点。认的是 `Chrome/<数>`、`Chromium/<数>`、`HeadlessChrome/<数>`(Edge、Opera 等 Chromium 系都带);
+ * iOS 上的 Chrome / Firefox / Edge(`CriOS`、`FxiOS`、`EdgiOS`)是 WebKit,不算。
+ */
+export function isChromiumUserAgent(userAgent) {
+  const ua = String(userAgent ?? '');
+  if (/\b(?:CriOS|FxiOS|EdgiOS)\//.test(ua) || /\bFirefox\//.test(ua)) return false;
+  return /\b(?:HeadlessChrome|Chrome|Chromium)\/\d+/.test(ua);
+}
+
 /** 环境指纹:16 位小写十六进制。三项任一缺失按 `''` / `0` 计。 */
 export function envFingerprintOf({ os, gpuClass, chromeMajor } = {}) {
   return sha256(`${os ?? ''}\n${gpuClass ?? ''}\n${chromeMajor ?? 0}`).slice(0, 16);

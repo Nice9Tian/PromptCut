@@ -21,9 +21,18 @@
  *   不带 `scope` 的旧式 principal（测试注入的 `authenticate`、M5 的匿名身份）不受限，行为与 M5 相同；
  * - 按空间起实例时由 `../spaces.mjs` 的外壳包一层，这里不认识空间；
  * - `claimsOf(connId)`：这条连接的节点此刻持有的认领数，成员列表的「渲染中」标签用。
+ *
+ * M7（`docs/plan/m7-contract.md` 第 13 节裁定）在 `node.hello` 交给队列之前：
+ * - D9 render 票据带 `owner: { kind: 'browser' }` 的连接（页面开的纯浏览器节点连接）：profile 固定为 `browser`，
+ *   自报别的一律回 `forbidden`；nodeId 已绑在别的 userId 上（队列的 `nodeUserOf`）回 `forbidden`，这条连接不记节点角色；
+ * - D10 `environment: { platform, userAgent, renderer, vendor }`（页面报的原始值，`src/editor/pageEnvironment.mjs`）由这里按
+ *   `describeEnvironment` 算指纹，写进交给队列的 `envFingerprint`（`node.welcome` 回给页面）：browser 归属的连接一律按它算、
+ *   自报的不作数，没报 environment 回 `bad-message`；别的连接只在没自报指纹时按它算；
+ * - D14 以 `browser` 报到、报了 environment 而 UA 不是 Chromium 内核：回 `error { reason: 'not-chromium' }`，不当节点。
  */
 import { QUEUE_DEFAULTS } from '../../render-queue/constants.mjs';
 import { parseInbound, makeMessage, prioritySummaryValue, NODE_TYPES, PUBLISHER_TYPES } from '../../render-queue/messages.mjs';
+import { describeEnvironment, isChromiumUserAgent } from '../../render-node/fingerprint.mjs';
 
 export const RENDER_QUEUE_MODULE = 'render-queue';
 
@@ -48,6 +57,60 @@ const NO_ROLES = () => ({ roles: [], publisherId: null, node: null });
 export function mayRegisterNode(principal) {
   if (!principal || principal.scope === undefined) return true;
   return principal.scope === 'local' || principal.role === 'render';
+}
+
+/** render 票据的归属是不是纯浏览器节点（M7 D9：页面签 render 票据时带 `owner: { kind: 'browser' }`） */
+export const isBrowserOwned = (principal) => principal?.owner?.kind === 'browser';
+
+/** 页面报的环境原始值每项的长度上限（UA、WebGL 串都远小于它） */
+const ENV_FIELD_MAX = 1024;
+const ENV_FIELDS = ['platform', 'userAgent', 'renderer', 'vendor'];
+
+/**
+ * `node.hello` 的 `environment`（M7 D10）：对象，四项可选、是字符串、各 ≤ 1024 字符；缺的按空串。
+ * 不对回 null。
+ */
+function environmentOf(v) {
+  if (!isObj(v)) return null;
+  const out = {};
+  for (const k of ENV_FIELDS) {
+    const x = v[k];
+    if (x === undefined || x === null) { out[k] = ''; continue; }
+    if (typeof x !== 'string' || x.length > ENV_FIELD_MAX) return null;
+    out[k] = x;
+  }
+  return out;
+}
+
+/**
+ * M7 D9、D10、D14：`node.hello` 交给队列之前在这里定 profile 与指纹。回 `{ msg }`（可能改写过 `envFingerprint`）或
+ * `{ error: { reason, detail } }`。
+ */
+function admitNodeHello(principal, msg, nodeUserOf) {
+  const browserOwned = isBrowserOwned(principal);
+  if (browserOwned && msg.profile !== 'browser') {
+    return { error: { reason: 'forbidden', detail: '纯浏览器节点的连接只能以 browser 报到' } };
+  }
+  let out = msg;
+  if (msg.environment !== undefined && msg.environment !== null) {
+    const env = environmentOf(msg.environment);
+    if (!env) return { error: { reason: 'bad-message', detail: 'environment 必须是 { platform, userAgent, renderer, vendor } 字符串' } };
+    if (msg.profile === 'browser' && !isChromiumUserAgent(env.userAgent)) {
+      return { error: { reason: 'not-chromium', detail: '一期只在 Chromium 内核的浏览器上当渲染节点' } };
+    }
+    const own = msg.envFingerprint;
+    if (browserOwned || own === undefined || own === null || own === '') {
+      const envFingerprint = describeEnvironment({ platform: env.platform, renderer: env.renderer, vendor: env.vendor, chromeVersion: env.userAgent }).fingerprint;
+      out = { ...msg, envFingerprint };
+    }
+  } else if (browserOwned) {
+    return { error: { reason: 'bad-message', detail: '纯浏览器节点要报 environment（页面的原始环境值），指纹由文档服务算' } };
+  }
+  const bound = typeof nodeUserOf === 'function' && typeof msg.nodeId === 'string' ? nodeUserOf(msg.nodeId) : null;
+  if (bound !== null && principal && bound !== principal.userId) {
+    return { error: { reason: 'forbidden', detail: '这个 nodeId 属于别的用户' } };
+  }
+  return { msg: out };
 }
 
 /** 队列模块认领的消息类型（按空间起实例的外壳也用它） */
@@ -272,6 +335,16 @@ export function renderQueueModule(q, { sweepMs = QUEUE_DEFAULTS.SWEEP_INTERVAL_M
       if (msg.type === 'node.hello' && !mayRegisterNode(conn?.principal)) {
         const reqId = isReqId(msg.reqId) ? msg.reqId : undefined;
         return reply(ctx, connId, 'error', { reason: 'forbidden', detail: '只有 render 角色的连接能报到为渲染节点' }, reqId);
+      }
+      if (msg.type === 'node.hello') {
+        // M7 D9 / D10 / D14：profile 与凭证绑定、指纹由这里按原始环境值算、非 Chromium 不当节点
+        const admitted = admitNodeHello(conn?.principal, msg, typeof q.nodeUserOf === 'function' ? q.nodeUserOf : null);
+        if (admitted.error) {
+          const reqId = isReqId(msg.reqId) ? msg.reqId : undefined;
+          ctx.log('role.node-refused', { connId, reason: admitted.error.reason, userId: conn?.principal?.userId ?? null });
+          return reply(ctx, connId, 'error', admitted.error, reqId);
+        }
+        msg = admitted.msg;
       }
       // hello 由队列回 welcome；这里只在消息合法时记下这条连接的角色（队列会用同一套校验）
       if (conn && (msg.type === 'node.hello' || msg.type === 'publisher.hello')) {
