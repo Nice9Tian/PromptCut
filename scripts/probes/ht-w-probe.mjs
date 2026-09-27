@@ -589,6 +589,14 @@ async function runHost(out) {
     out.perHeld = perHeld;
     check('held-single-claim', perHeld.every((h) => h.inPlan && h.taken !== null && h.taken <= 1 && h.reopened === 0 && h.closed.length === 1 && h.closed[0] === 'done' && h.done === 1 && !h.pcClaimed), perHeld);
 
+    // 主机失败过的任务(可重试的失败会被重新认领,不影响恰好一次;记下原因备查):预渲染进程诊断里最近的事件
+    try {
+      const info = (await json(`${editor}/api/prerender/info`, { timeoutMs: 5000 })).body;
+      const events = info?.url ? (await json(`${info.url}/api/frames/diagnostics`, { timeoutMs: 10_000 })).body?.queue?.events ?? [] : [];
+      out.failedEvents = events.filter((e) => /failed|lost|error/.test(String(e?.event ?? ''))).slice(-10)
+        .map((e) => ({ event: e.event, id: e.id ?? null, error: String(e.error ?? e.message ?? e.code ?? '').slice(0, 200) }));
+    } catch { /* 诊断读不到不影响结论 */ }
+
     // 7. 正常退出(放回认领)
     child.send({ type: 'shutdown' });
     out.exitCode = await exited(child, 60_000);
