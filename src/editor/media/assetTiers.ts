@@ -72,6 +72,24 @@ export function remoteAssetBase(): string | null {
   return remote?.base ?? null;
 }
 
+/** 当前远程素材服务的只读票据(在线页面给 `<video>` 的查询串、取预渲染小尺寸用;c10a 第 8、9 节);本地给 null */
+export async function remoteAssetTicket(): Promise<string | null> {
+  if (!remote?.ticket) return null;
+  try { return (await remote.ticket()) || null; } catch { return null; }
+}
+
+const remoteListeners = new Set<() => void>();
+/** 远程素材服务换了(进入 / 离开共享项目)时通知;回退订 */
+export function subscribeRemoteAssets(cb: () => void): () => void {
+  remoteListeners.add(cb);
+  return () => { remoteListeners.delete(cb); };
+}
+
+/** 带当前素材票据的请求头(`Authorization: Bearer`);本地素材服务给空对象 */
+export async function assetAuthHeaders(): Promise<Record<string, string>> {
+  return authHeaders();
+}
+
 async function authHeaders(): Promise<Record<string, string>> {
   if (!remote?.ticket) return {};
   try {
@@ -113,6 +131,7 @@ export function setRemoteAssets(next: RemoteAssets | null): void {
   known = false;
   publish();
   lastPrefetchKey = "";
+  for (const l of [...remoteListeners]) { try { l(); } catch { /* 一个订阅者坏了不影响别人 */ } }
   void pushRemoteToEditor().then(() => { kick(); });
 }
 

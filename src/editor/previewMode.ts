@@ -18,6 +18,8 @@
  * 开 live 变体,两个值互斥)。
  */
 
+import { ONLINE } from "../online/mode";
+
 /** 舞台实例名。**只是实例名,和角色无关**(E1):谁当 `front` 由 `setRole` 定 */
 export type StageId = "A" | "B";
 
@@ -67,7 +69,23 @@ export function stageOrigins(): Record<StageId, string> | null {
  * 少一个就退回 legacy 的同源单舞台 —— 宁可少一个后台舞台,也不能让编辑台开不出画面。
  */
 export function dualStage(): boolean {
+  // 在线浏览器模式只有一个同源舞台(c10a 第 8.1 节);静态构建里本来也没有舞台端口,这里再钉死一道
+  if (ONLINE) return false;
   return previewMode() === "stage" && stageOrigins() !== null;
+}
+
+/**
+ * 在线浏览器模式的**单舞台 live 预览**(`docs/plan/c10a-contract.md` 第 8.1 节):同源单舞台 A 按 live 变体渲
+ * (素材层画进舞台、六个平面生效,相当于双舞台里 `&preview=stage` 的那一份),A 就是可见舞台,没有 B。
+ * 普通档与低内存档都走它;`?preview=legacy` 在在线页面上不认(没有预渲染进程给整帧)。
+ */
+export function singleLiveStage(): boolean {
+  return ONLINE;
+}
+
+/** 可见舞台渲 live 变体(双舞台,或在线页面的单舞台):播放头跟舞台的 `frame`、快照 / 抑制经 RPC 投递 */
+export function liveStage(): boolean {
+  return dualStage() || singleLiveStage();
 }
 
 /**
@@ -86,7 +104,7 @@ export function dualStage(): boolean {
 export function stageSrc(id: StageId): string {
   const dual = dualStage();
   const origins = dual ? stageOrigins() : null;
-  const mode = dual ? "&preview=stage" : previewMode() === "legacy" ? "&preview=legacy" : "";
+  const mode = dual || singleLiveStage() ? "&preview=stage" : previewMode() === "legacy" ? "&preview=legacy" : "";
   // 在线浏览器模式还没有运行期判据,先由编辑页地址上的 `platform=browser` 显式打开、转给舞台(`unsupported` 占位)
   const platform = new URLSearchParams(location.search).get("platform") === "browser" ? "&platform=browser" : "";
   return `${origins ? origins[id] : ""}${location.pathname}?stage=1&id=${id}${mode}${platform}`;

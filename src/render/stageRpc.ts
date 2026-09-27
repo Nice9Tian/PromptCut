@@ -254,6 +254,11 @@ export interface StageRpcApi {
   setPlaying(on: boolean): Promise<{ ok: true }>;
   setMediaT(tSec: number): Promise<{ ok: true }>;
   setLocalHashes(hashes: string[]): Promise<{ ok: true }>;
+  /**
+   * c10a 第 8 节:舞台这一侧的取档策略(`mediaTier.ts` 的 `setMediaTierPolicy`)。父页握手后发一次,
+   * 票据续签、运行中改判低内存档时再发。缺省(不发)= 桌面运行环境。
+   */
+  setMediaPolicy(policy: StageMediaPolicy): Promise<{ ok: true }>;
   /** A3c:patch 是相对上次投递的增量,null = 摘掉;reset = 先清空全部再应用 */
   setSnapshots(patch: Record<string, string | null>, opts?: { reset?: boolean }): Promise<{ ok: true; bytes: number }>;
 }
@@ -322,7 +327,7 @@ export interface StageRpcClient extends StageRpcApi {
 }
 
 const METHODS: (keyof StageRpcApi)[] = ["setProject", "setTime", "render", "hitTest", "rectsWithBounds", "size", "setProxy", "setRole", "setPlan",
-  "play", "pause", "setSuppressed", "setStreamPlanes", "setScrubbing", "setPlaying", "setMediaT", "setLocalHashes", "setSnapshots"];
+  "play", "pause", "setSuppressed", "setStreamPlanes", "setScrubbing", "setPlaying", "setMediaT", "setLocalHashes", "setSnapshots", "setMediaPolicy"];
 
 /**
  * 有请求挂着时,每隔这么久看一眼目标窗口还在不在。
@@ -471,6 +476,25 @@ export interface StageCardsMessage {
   type: "pc-stage-cards";
   stamp: number;
 }
+/** `setMediaPolicy` 的实参:低内存档、在线浏览器模式的远程素材服务(基址与只读票据) */
+export interface StageMediaPolicy {
+  lowMemory: boolean;
+  remote: { base: string; ticket: string | null } | null;
+}
+
+/**
+ * 舞台侧:运行中出事了(c10a 第 8 节「运行中出现 webglcontextlost 或连续 3 次视频解码失败」)。
+ * 握手类消息,不是 `StageEvent`;父页据此改判低内存档、提示一次。`decode-ok` 用来清零连续失败的计数。
+ */
+export interface StageTroubleMessage {
+  type: "pc-stage-trouble";
+  kind: "webglcontextlost" | "decode-failure" | "decode-ok";
+}
+export function postStageTrouble(kind: StageTroubleMessage["kind"], parentOrigin = "*"): void {
+  const msg: StageTroubleMessage = { type: "pc-stage-trouble", kind };
+  window.parent?.postMessage(msg, parentOrigin);
+}
+
 export function postStageCards(stamp: number, parentOrigin = "*"): void {
   const msg: StageCardsMessage = { type: "pc-stage-cards", stamp };
   window.parent?.postMessage(msg, parentOrigin);

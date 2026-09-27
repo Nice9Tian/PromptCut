@@ -63,6 +63,16 @@ export interface SwapHost {
   proxy(): boolean;
   /** A1 的本地素材哈希表 */
   localHashes(): string[];
+  /**
+   * 低内存档(`docs/plan/c10a-contract.md` 第 8 节「不追活渲」):暂停后追到活渲的这几条路一律不走,
+   * 停在已有的预渲染小尺寸上。不给 = 普通档。
+   */
+  lowMemory?(): boolean;
+}
+
+/** 此刻是不是低内存档(宿主说了算;没有宿主 = 普通档) */
+export function swapBlockedByLowMemory(): boolean {
+  try { return host?.lowMemory?.() === true; } catch { return false; }
 }
 
 let host: SwapHost | null = null;
@@ -230,6 +240,8 @@ interface BackReady {
  * 排进 `stageJobs` 的 `catchup` 档 —— 探针整体让路，掐出来的 `'project'` 一律丢弃（E0 的例外）。
  */
 async function catchUpBack(project: Project, targetSec: number): Promise<BackReady | null> {
+  // 低内存档不追活渲、也没有后台舞台(c10a 第 8 节):一步都不排
+  if (swapBlockedByLowMemory()) return null;
   return await runBackJob("catchup", async (ctx) => {
     const back = ctx.stage;
     if (!back || back === frontStage()) return null;   // legacy 单舞台：没有后台可换
@@ -307,6 +319,8 @@ export async function runSettleSwap(t: number): Promise<boolean> {
    * 判重的 `vtOk = false` 卡就停在快照上。现在当前这一次完成或中止之后，
    * 按最后那一次的 `t` 再做一遍；中间被盖掉的那些本来就不用做。
    */
+  // 低内存档:暂停后不追到活渲,停在已有的预渲染小尺寸上(c10a 第 8 节)
+  if (swapBlockedByLowMemory()) return false;
   if (running) { pendingSettleT = t; return false; }
   running = true;
   try {
@@ -343,6 +357,7 @@ export async function runSettleSwap(t: number): Promise<boolean> {
  */
 export async function runPlayingSwap(pendingIds: readonly string[]): Promise<boolean> {
   if (running) return false;
+  if (swapBlockedByLowMemory()) return false;
   const project = getState().project;
   if (!pendingIds.length) return false;
   running = true;
