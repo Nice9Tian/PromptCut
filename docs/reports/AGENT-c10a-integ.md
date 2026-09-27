@@ -175,3 +175,89 @@
 4. 第 12 节「`/api` 守卫」的静态一条：改成第 16 节之后的棘轮口径（清单 `server/test/c10a-online-api-paths.json`，只许删、不许加）。
 5. 第 6 节「放云端」：补一句开启时已在项目里的素材原尺寸怎么上云（见第 6 节第 1 条的决定）。
 6. 第 2 节：注明 `mode.ts` 不许被 Node 单测会载的模块静态引用（守门 C10A-MODE-01）。
+
+## 8. 返工（主会话 2026-09-27 审过报告之后）
+
+主会话的裁定〔裁〕：GT-02、PS-07 的改法接受；`Shell.tsx` 在线开发服务认 `?editor` 接受；层表沿用现状接受；手机上的桌面布局不在 C10a 契约内，记进 C10 其余。下面两项在本分支修。
+
+### 8.1 开启「放云端」之前就在项目里的素材也上云（第 6 节第 1 条）
+
+- **编辑器进程**：新增 `POST /api/media/upload-queue/enqueue`（`server/vite-plugin-media.ts`），规则在 `server/upload-queue.mjs` 的 `enqueueLocalMedia`：
+  - 请求体 `{ items: [{ name?, original, small? }] }`，一个素材一项，也收 `{ hashes }`；
+  - 只收本地内容库里有的：原片本地没有就整个素材不进队，记进 `missing`；小版本地没有就只传原片，小版记进 `missing`；
+  - 进队照 C6.6 的队列规则：逐个素材、先小后大、两档都 complete 才出队，同一原片已在队里就合并档位；
+  - 当前连的是本机素材服务（队列空操作）时回 `local: true`，什么都不进；
+  - 回 `{ ok, queued, missing, bad, local }`。
+- **页面**：`assetTiers.ts` 新增 `whenUploadTargetReady` 与 `enqueueExistingMedia`。
+  - `startUploadTarget` 第一次带 rw 票据推成功，才算上传目标就绪；
+  - 请求体由 `existingMediaItems` 组：视频两档（`tiers.small`、`tiers.original`），图片、音频一档；
+  - `collab.ts` 的 `enableCollab` 在放云端开启、以创建者进入之后调它，不挡开启。
+  - 发请求的函数 `postEnqueue` 放在 `collab.ts`，写成 `ONLINE ? null : …`，在线构建里连同接口地址一起被剪掉。所以 `/api` 棘轮仍是 120 个。第一次把这个请求写在 `assetTiers.ts` 里时，C10A-API-03 判红，新出现的路径正是 `/api/media/upload-queue/enqueue`，棘轮起了作用。
+- **单测**：
+  - `server/test/upload-enqueue-existing.test.mjs` UQE-1～4：两档先小后大，图片一档；只收本地有的、缺的回报；`hashes` 与形状不对、合并档位；连本机时回 `local`；
+  - `src/editor/media/enqueueExisting.test.mjs` EQE-1～3：请求体；要等上传目标带票据就绪才发；等不到就不发；没有入队的口子（在线构建）就不做。
+- **探针**：`online-join-probe --with-video` 里 `video.pre.uploaded-to-hosted` 过了。上传队列 `enqueued: 2, done: 2, failures: 0`。取消时 pre、post 两段都从托管端拉回（`video.pre.pulled-back`、`video.post.pulled-back`，sha256 等于哈希）。
+
+### 8.2 在线页面不再露出被守卫拦下的 `/api` 报错
+
+- **做法**：新增 `src/online/pageFlag.ts`。
+  - 它是运行期标记 `onlinePage()`，由 `boot.ts` 在 `ONLINE` 时、别的模块求值之前设上；不读 `import.meta.env`，会被 Node 单测载入的模块可以引它（守门 C10A-MODE-01 仍过）。
+  - `cardScope.ts` 的单测不装解析钩子，所以那里带 `.ts` 扩展名引它。
+- **演示路径上一加载就打 `/api` 的入口，逐个处理**（返工前 `online-join-probe` 记下守卫拦了 10 个路径）：
+
+  | 被拦的路径 | 入口 | 在线时的处理 |
+  |---|---|---|
+  | `/api/ai/config`、`/api/ai/providers`、`/api/ai/setup`、`/api/chats/list` | AI 栏（`AiPanel` / `useAiChat`、对话记录） | **置灰**：`DockPages.tsx` 的 Agent 页换成说明「在线浏览器模式暂不支持 AI 助手，请在桌面版里用。」，不挂 `AiPanel`；`chatStore.listChats` 在线回空 |
+  | `/api/mcp/events` | `right/index.tsx` 连 Agent 工具通道（`connectMcpExecutor`） | 在线不连 |
+  | `/api/data/project`、`/api/data/playhead` | 项目镜像（`render/dataMirror.ts`） | `isMirrorPage()` 在线为假，不推 |
+  | `/api/cards/scopes` | 卡片归属表（`editor/cardScope.ts`；`mcp/common.ts` 模块一载入就调） | `loadScopes` 在线回空表，`setCardScope` 不发 |
+  | `/api/skill-mode` | Skill 模式轮询（`skill/skillMode.ts`，`ModeSwitch` / `SkillLock` 订阅） | 在线不问 |
+  | `/api/stt/status` | 语音识别状态（`DependencyPrompt` 一加载就问） | `sttStatus` 在线直接报「在线浏览器模式暂不支持」，不发；`DependencyPrompt` 本来就把失败当作不提示 |
+
+- **核对**：
+  - `online-join-probe` 新加的演示路径（在线构建、手机仿真、凭邀请链接进入）：`demo.played` t = 2.37；`demo.edited` 把一张卡的结尾从 2 收到 1.75；开导出，提示「还有 12 个重卡片段没有预渲染原尺寸，等渲染节点做完再导出。」。这是契约里的等待文案，不是报错。
+  - 四个阶段（进入、观看、改一处、导出）`window.__pcApiBlocked` 都为空（`demo.no-api-blocked`），页面文字里没有 `/api/`（`demo.no-api-text`）。
+  - 全部 7 个加入的在线页面合计也是 0 条（`online.no-api-blocked`，原来只报不判，改成判红的检查），网络记录里 `/api/` 请求 0 条。
+  - `lowmem-online-probe` 加了 G5：全程（进入、低内存档播放暂停、导出）守卫 0 条，页面文字里没有 `/api/`。
+  - 看过的截图：
+    - `lowmem-online/g5-phone-end.png`：右栏是置灰说明，原来那块红色「获取 /api/…」没了；
+    - `join-shots/demo-0-enter.png`、`demo-1-watch.png`、`demo-2-export.png`。
+- **演示路径之外还剩的入口**（交 C10 其余；与棘轮清单 `server/test/c10a-online-api-paths.json` 的 120 个路径对得上，按前缀计数）：
+  - 这些路径的调用代码仍在在线产物里，只是在线页面上的这条路径不去调它们；用户点到对应入口时，守卫照旧拦下，调用方的「连不上」分支接住。
+  - 按前缀：
+
+    | 前缀 | 个数 | 前缀 | 个数 |
+    |---|---|---|---|
+    | `/api/ai` | 19 | `/api/collect` | 11 |
+    | `/api/media` | 9 | `/api/cards` | 8 |
+    | `/api/web` | 8 | `/api/chats` | 7 |
+    | `/api/voice` | 7 | `/api/vision` | 6 |
+    | `/api/shots` | 5 | `/api/data` | 4 |
+    | `/api/frames` | 4 | `/api/skill` | 4 |
+    | `/api/skill-mode` | 4 | `/api/stt` | 4 |
+    | `/api/subject` | 4 | `/api/track` | 4 |
+    | `/api/mcp` | 2 | `/api/projects` | 2 |
+    | `/api/skill-lock` | 2 | `/api/agent` | 1 |
+    | `/api/asset` | 1 | `/api/audio` | 1 |
+    | `/api/export` | 1 | `/api/prerender` | 1 |
+    | `/api/ui-render` | 1 | | |
+
+  - 用户点得到的主要有：素材库「导入媒体」（`/api/media/upload/…`）、字幕面板的识别（`/api/stt/*`）、配音设置（`/api/voice/*`）、镜头检测、跟踪、主体检测（`/api/shots|track|subject/*`）、网页采集（`/api/collect/*`、`/api/web/*`）、建卡与改卡（`/api/cards/create|edit|install`）。
+  - 这些入口在在线页面上还没置灰（开头 AI 栏、镜像等的入口已处理）。
+
+### 8.3 验证（返工后）
+
+| 项 | 结果 |
+|---|---|
+| `npx tsc -b --force` | 退出码 0，输出 0 行 |
+| `npm test` | 退出码 0；tests 3210、pass 3209、fail 0、skipped 1（需要 5190 的那一条） |
+| C10A 契约测试 53 条 + C10A-MODE 2 条 | 全过 |
+| 在线构建 / 桌面构建 | 都是退出码 0；棘轮 120 / 120，新出现 0 |
+| `online-join-probe --with-video` | 退出码 0，55/55 |
+| `c10a-online-probe` | 退出码 0，15/15 |
+| `lowmem-online-probe` | 退出码 0，`fails: []`，`apiBlocked: []` |
+
+- 返工中途两次全量测试各有 1 条失败，都与本次改动无关，单独重跑都过：
+  - `server/test/skill-gate.test.mjs`：它探的是 5190，那一刻 5190 上若有 dev server 就会对着它跑，本次改动没碰它相关的代码；
+  - RHC10（`server/test/render-host-contract.test.mjs`，报「连接失败」）：同一文件单独连跑 3 次都是 20/20，在返工前的代码上跑也是 20/20。
+- 最后一次全量测试 0 失败。这两条记作偶发，交主会话看要不要给 codex。
