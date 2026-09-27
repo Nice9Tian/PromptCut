@@ -133,6 +133,9 @@
 | `claude/v8-diff-perf`（`opus-dev-high`） | `f126bf0` | `diffIdArray` 递归前廉价判「不出操作」，整份深拷贝项 2.0 → 0.70 ms；V8B 等价对拍 20330 组逐条相同；主会话逐分支核对 `noOpsBetween` 与 `diffValue`，重跑 tsc 0、npm test 2971/2970/0/1；笔记本复核【V-1】20/20，深拷贝项中位数 0.935～0.994 ms。flaky-timing 报告第 4 节的 a、c 两条搁置〔裁〕 |
 | `claude/runner-callid`（`opus-dev`） | `d2c66de` | codex、agy 两路的工具调用也带 `callId`（`server/agent/call-pairing.mjs`，宁可不配、不许配错）；真实跑 codex、agy 各一次，聊天记录里出现「撤销这步」；试合后 tsc 0、npm test 2982/2981/0/1；`c65-design.md` 第 7 节同步（`fa8adaa`） |
 | `claude/chat-list-window`（`opus-dev`） | `03945fa` | AI 栏聊天记录超过 150 条〔裁：原定 40〕时窗口化；顺带修掉滚动区子元素被 flex 压缩；探针 19/19（2000 条的会话消息节点 3～7 个、无长任务；main 同探针 7 项失败、176 个长任务）；试合后 tsc 0、npm test 2994/2993/0/1 |
+| `claude/skill-gate-optin`（`opus-dev`，C6.6 合入之后） | `6be10d9` | `skill-gate.test.mjs` 改为显式开启（`PROMPTCUT_BASE` 加 `PROMPTCUT_SKILL_DIR` 都给才跑），`npm test` 永不缺省连用户常驻的 5190、不碰用户的 SKILL 目录；自起 5680 真跑一遍通过；npm test 2994/2992/0/2（跳过的两条都是显式开启的集成用例），主计划 G0 的跳过数随之改为 ≤ 2（`c42d52c`）。缺省连 5190～5192 的手动脚本（`io-check`、`timeline-verify`、`catalog-notes` 等）只记下，见第 11 节 |
+| `claude/bad-ports-concurrency`（`opus-dev`） | `2e703da` | 全局准备每秒重试占住没占到的坏端口（先起的那份 `npm test` 结束放掉后由后起的补占），自检改为「名单里 19 个坏端口在回环上 `listen` 都得 `EADDRINUSE`」；两份并行第二轮与单跑两次都 3114/3112/0/2 |
+| `claude/test-parallel-safe`（`opus-dev`） | 本次合入 | SP 托管组合与局域网发现不再用固定端口；J5 按真时间推进假时钟；B1～B6 七处压着 CPU 会误判的计时改稳（门槛不变，只放宽等待上限或测量次数，每处原判据与新判据见其报告）；RHC12、T2-2 加固；最终提交上两份并行 3 轮、单跑 2 轮都 3117/3115/0/2，tsc 0 |
 
 release 每次都按 `git_and_release.md` 判过并快进（`8a5d6ff`、`f126bf0`、`d2c66de`、`03945fa`、`9236d44`）。另有别的会话在 main 上提交过 `46b8cd2`、`45cc902`（`docs/auto_long_work/` 会话提示词模板，纯文档）。
 
@@ -166,4 +169,4 @@ release 每次都按 `git_and_release.md` 判过并快进（`8a5d6ff`、`f126bf0
 
 - W-开工-2 先发出、后在对话里补列（6.3 节要求先列后发）；之后的 L-1、V-1、T9-X1 都先列后发。
 - C10a 三个分支在 C6.6 合入前就从 C6.6 集成分支拉出（排期裁定，第 5 节）。
-- 子 Agent 报告按 `multi_agent.md` 归档到 `docs/archive/agent-reports/`：C6.6 的十份（`AGENT-c66-*`）与同期维护分支的五份（`AGENT-coord-mailbox`、`AGENT-flaky-timing`、`AGENT-v8-diff-perf`、`AGENT-runner-callid`、`AGENT-chat-list-window`）；仍在用的契约与代码注释里的路径已改到归档位置。
+- 子 Agent 报告按 `multi_agent.md` 归档到 `docs/archive/agent-reports/`：C6.6 的十份（`AGENT-c66-*`）与同期维护分支的五份（`AGENT-coord-mailbox`、`AGENT-flaky-timing`、`AGENT-v8-diff-perf`、`AGENT-runner-callid`、`AGENT-chat-list-window`）；仍在用的契约与代码注释里的路径已改到归档位置。补记 T9-X2、T9-X3 时，又把 C6.6 合入之后的三份维护分支报告（`AGENT-skill-gate-optin`、`AGENT-bad-ports-concurrency`、`AGENT-test-parallel-safe`）一并归档。
