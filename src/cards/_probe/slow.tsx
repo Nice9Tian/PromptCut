@@ -55,3 +55,16 @@ export const probeSlowCard: CardDef<{ burnMs: number; label: string }> = {
   ],
   Component: ProbeSlowCard,
 };
+
+/**
+ * 同一张卡的推帧版(C10 本机验收,`scripts/probes/c10-browser-probe.mjs`):`direct` 卡在预渲染管线里不产快照,
+ * 渲染节点预渲染不了;在线普通档要验「重层贴节点预渲染好的原尺寸快照」,得有一张在哪台机器上都稳定判重、
+ * 又由渲染节点产快照的卡。画法与 `probe-slow` 相同(只画自己那一块,审阅表里 `independent`)。
+ */
+export const probeSlowSteppedCard: CardDef<{ burnMs: number; label: string }> = {
+  ...probeSlowCard,
+  id: "probe-slow-stepped",
+  name: "探针卡 · 可调成本(推帧)",
+  description: "probe-slow 的推帧版:每次渲染烧掉 burnMs 毫秒;渲染节点能为它产快照",
+  frameMode: "stateful",
+};

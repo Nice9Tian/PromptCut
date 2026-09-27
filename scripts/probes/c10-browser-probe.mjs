@@ -480,11 +480,11 @@ try {
     const S = await import('/src/store/project.ts');
     if (spec.mediaId) S.actions.addMediaClip(spec.mediaId, 0, { duration: spec.seconds });
     const light = S.actions.addClipOnNewTrack({ index: 0, cardId: 'chapter-bar', start: 0, duration: spec.seconds });
-    const main = S.actions.addClipOnNewTrack({ index: 0, cardId: 'probe-slow', start: 0, duration: spec.seconds });
+    const main = S.actions.addClipOnNewTrack({ index: 0, cardId: 'probe-slow-stepped', start: 0, duration: spec.seconds });
     S.actions.setClipParams(main.id, { burnMs: 40, label: 'main' });
     const extras = [];
     for (let i = 0; i < spec.extra; i++) {
-      const c = S.actions.addClipOnNewTrack({ index: 0, cardId: 'probe-slow', start: 0, duration: 1 });
+      const c = S.actions.addClipOnNewTrack({ index: 0, cardId: 'probe-slow-stepped', start: 0, duration: 1 });
       S.actions.setClipParams(c.id, { burnMs: 40, label: 'x' });
       extras.push(c.id);
     }
