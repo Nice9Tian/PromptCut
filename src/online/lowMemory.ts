@@ -44,7 +44,7 @@ export const SESSION_DOWNGRADE_KEY = "pc.session.lowMemory";
 
 /** 表 C 的文案(照抄,`docs/plan/c10a-contract.md` 第 14 节) */
 export const LOW_MEMORY_TEXT = {
-  enter: "当前是低内存档：只看预渲染小尺寸和素材小尺寸，这台设备不做预渲染、也不当渲染节点，暂停时不追精确画面；修改后由渲染节点重渲。",
+  enter: "当前是低内存档：播放时只看预渲染小尺寸和素材小尺寸；停下时再把这一帧画精确，可能要等几秒；这台设备不做预渲染、也不当渲染节点，修改后由渲染节点重渲。",
   downgraded: "这台设备内存吃紧，已改用低内存档。",
   awaitingUploader: "等待上传方",
 } as const;
