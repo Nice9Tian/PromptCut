@@ -8,7 +8,7 @@
  *        [--port 5660]            创建者桌面编辑器(另占 +1、+2 当舞台端口)
  *        [--proxy-port 5663] [--doc-port 5664] [--asset-port 5665]   只对 --local
  *        [--export-seconds 10] [--timeout-min 50] [--keep-temp]
- *        [--hold-min N] [--debug-port P]   排障:第 2 步之后停 N 分钟;浏览器开远程调试端口(本机替身用 5667)
+ *        [--hold-min N] [--hold-on-fail] [--debug-port P]   排障:第 2 步之后停 N 分钟(带 --hold-on-fail 时只在前两步有失败才停);浏览器开远程调试端口(本机替身用 5667)
  *
  * - `--site` 缺省 `https://8-219-80-16.sslip.io`:页面取 `<源>/editor`,文档服务 `<源>/hosted/`,素材服务 `<源>/media/api/asset`。
  * - `--local`:本机替身。起本机托管组合(只绑 127.0.0.1)与 nginx 形状的代理(`/editor` 给在线构建,`/hosted/`、`/media/` 反代),
@@ -530,7 +530,8 @@ try {
     const f = phone.frames().find((x) => /[?&]stage=1/.test(x.url()));
     return f ? f.evaluate(() => !!document.querySelector('img[data-pc-small-snapshot]')) : false;
   }, 120_000, 1000);
-  check(smallShown, '手机上重卡显示预渲染小尺寸位图', smallShown ? undefined : await stageDiag(phone));
+  const phoneDiag = smallShown ? null : await stageDiag(phone);
+  check(smallShown, '手机上重卡显示预渲染小尺寸位图', phoneDiag ? '(见 steps.phone.diag)' : undefined);
   await P(phone, () => { const s = window.__pcStore; s.actions.seek(0); s.actions.play(); });
   await delay(3000);
   await P(phone, () => { const s = window.__pcStore; s.actions.pause(); s.actions.seek(2.5); });
@@ -540,11 +541,13 @@ try {
   check(sum2.mediaSmall > 0 && sum2.mediaOriginal === 0 && sum2.mediaOther === 0, '手机:视频只有小尺寸请求', sum2);
   check(sum2.px > 0 && sum2.snap === 0, '手机:预渲染只有 px/ 小位图、没有 snap/', sum2);
   const phoneShot = await shot(phone, '2-phone-lowmem');
+  if (phoneDiag) say('phone.diag', phoneDiag);
   out.steps.phone = { ms: Date.now() - t2, lowMemoryToast: !!lowToast, stageFrames: frames.length, smallShown: !!smallShown, requests: sum2, shot: phoneShot,
-    online: await P(phone, () => { try { const d = window.__pcOnlineSnapshots?.(); return d ? { layers: d.layers?.length ?? 0, smallFetches: d.smallFetches ?? null } : null; } catch { return null; } }) };
+    online: await P(phone, () => { try { const d = window.__pcOnlineSnapshots?.(); return d ? { layers: d.layers?.length ?? 0, smallFetches: d.smallFetches ?? null } : null; } catch { return null; } }),
+    ...(phoneDiag ? { diag: phoneDiag } : {}) };
   say('step2.done', out.steps.phone);
   // 排障:--hold-min N 在这里停 N 分钟(配 --debug-port 从外面连上浏览器看)
-  if (Number(arg('--hold-min', 0)) > 0) { say('hold', { minutes: Number(arg('--hold-min', 0)) }); await delay(Number(arg('--hold-min', 0)) * 60_000); }
+  if (Number(arg('--hold-min', 0)) > 0 && (!argv.includes('--hold-on-fail') || fails.length)) { say('hold', { minutes: Number(arg('--hold-min', 0)) }); await delay(Number(arg('--hold-min', 0)) * 60_000); }
 
   /* ---------------------------------------------------------------- 3. 手机上改一处,渲染节点重渲,新的小尺寸回到手机 */
   const t3 = Date.now();
