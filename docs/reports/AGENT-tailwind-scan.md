@@ -66,3 +66,22 @@
 
 ## 验证
 
+在提交 `94fb419`（改后的 `src/index.css`）上跑：
+
+| 项 | 命令 | 结果 |
+|---|---|---|
+| 类型检查 | `npx tsc -b --force` | 退出码 0，零输出 |
+| 全量测试 | `npm test` | 退出码 0；tests 3121、pass 3119、fail 0、skipped 2 |
+| 导出确定性 | `node scripts/verify-determinism.mjs --url "http://127.0.0.1:5680/?export=1"`（工作区里起的 5680） | 退出码 0；1800/1800 相同 |
+| 导出像素与 main 基准 | `node <scratchpad>/compare-frames.mjs .worktrees/pc-main-g0r/out/verify-a/frames .worktrees/tailwind-scan/out/verify-a/frames` | 退出码 0；total 1800、identical 1800、different 0、missing 0、extra 0 |
+| 构建 | `npm run build`、`npx vite build --mode online` | 改前改后都退出码 0 |
+
+`verify-unified-frames` 和画面探针没跑：改动只减少 Tailwind 扫描的输入，产出 CSS 只少了界面不用的规则，导出像素已逐帧对过 main。
+
+收尾：5680 上自己起的 vite 已结束（5680～5682 无监听）；`dist/` 已删；探针写的 `out/tw-probe.txt` 在被忽略的 `out/` 里，留着无害；`docs/semantics/glossary.md` 等是原样重写，`git status` 干净。
+
+## 没做的与更正建议
+
+- 探针没入库。要长期防回归，可以把 scratchpad 里的 `tw-reload-probe.mjs` 收进 `scripts/probes/`（需要主会话把该路径加进文件清单）。
+- 今后在 `src/` 或 `server/` 里新增 `.md`、`.json` 以外的非模块文件（如 `.txt`、`.yaml`），改它仍会整页重载；需要时在 `src/index.css` 的排除表里补一行。
+- 任务书说「out/、dist/、data/、.worktrees/ 等」会被扫：实测这几处本来就因 git 忽略不在扫描里，`out/` 还被 watcher 忽略；真正引发重载的是 `docs/`、`server/` 与 `src/` 里的 `.md`、`tools/` 的 `.toml` 这类被 git 跟踪的非模块文件。排除表仍把它们写上，作兜底。
