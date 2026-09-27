@@ -653,7 +653,21 @@ function rememberEvent(e: Record<string, unknown>) {
   patch({ agentOpsVersion: view.agentOpsVersion + 1 });
 }
 
+/**
+ * 渲染任务队列推给本页(作为发布方)的完成通知(C10 契约第 7 节:页面订阅 `task.done`,并入层表与就绪)。
+ * 发布方自动订阅自己发布的 plan 与它切出的细任务;这里只转,不解释。
+ */
+const queueEventListeners = new Set<(msg: AnyMsg) => void>();
+export function subscribeQueueEvents(cb: (msg: AnyMsg) => void): () => void {
+  queueEventListeners.add(cb);
+  return () => { queueEventListeners.delete(cb); };
+}
+
 function onSideMessage(msg: AnyMsg) {
+  if (msg.type === "task.done" || msg.type === "task.failed") {
+    for (const l of [...queueEventListeners]) { try { l(msg); } catch { /* 订阅方坏了不影响别人 */ } }
+    return;
+  }
   switch (msg.type) {
     case "service.endpoints":
       receiveSharedAssetEndpoints(msg.endpoints);

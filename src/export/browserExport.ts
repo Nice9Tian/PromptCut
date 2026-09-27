@@ -45,6 +45,8 @@ export interface BrowserExportDeps {
   fallbackHeavy?: () => string[];
   /** 素材原尺寸的地址:在线页面换成远程素材服务 + 只读票据(`mediaTier.ts` 的 `remoteMediaUrl`) */
   mediaUrl?: (url: string) => string;
+  /** 当前的只读票据(导出途中续签,C10 契约第 12 节;`ticketRenewal.ts`):每一帧装素材前换进素材地址 */
+  freshTicket?: () => string | null;
   /** 导出页地址(缺省按当前页面拼) */
   exportUrl?: string;
   env?: EncoderEnv;
@@ -227,7 +229,7 @@ export async function runBrowserExport(deps: BrowserExportDeps): Promise<Browser
   const exportProject: Project = deps.mediaUrl
     ? { ...project, media: project.media.map((m) => ({ ...m, url: m.url ? deps.mediaUrl!(m.url) : m.url })) }
     : project;
-  const compositor = await ExportCompositor.open({ project: exportProject, exportUrl: deps.exportUrl, originals, signal: deps.signal });
+  const compositor = await ExportCompositor.open({ project: exportProject, exportUrl: deps.exportUrl, originals, signal: deps.signal, freshTicket: deps.freshTicket });
 
   let muxer: Mp4Muxer | null = null;
   let failure: unknown = null;

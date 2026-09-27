@@ -433,3 +433,18 @@ export async function openL2(opts: L2OpenOptions = {}): Promise<L2Store> {
   };
   return store;
 }
+
+/* ------------------------------------------------------------------ 本页的那一个库 */
+
+let shared: { lowMemory: boolean; store: Promise<L2Store> } | null = null;
+
+/**
+ * 本页的 L2(编辑器页只开一个;成本记录与预渲染块共用)。档变了(运行中改判低内存档)就按新档的上限重开。
+ */
+export function pageL2({ lowMemory }: { lowMemory: boolean }): Promise<L2Store> {
+  if (shared && shared.lowMemory === lowMemory) return shared.store;
+  const old = shared;
+  shared = { lowMemory, store: openL2({ lowMemory }) };
+  if (old) void old.store.then((s) => s.close(), () => {});
+  return shared.store;
+}

@@ -494,6 +494,16 @@ export class OnlineSnapshotSource implements SnapshotSource {
     this.kick();
   }
 
+  /**
+   * 队列报了 `task.done`(C10 契约第 7 节「页面订阅 task.done,并入层表与就绪」):不等下一轮轮询,马上重取层表、
+   * 还没满的清单也重取。
+   */
+  refresh(): void {
+    this.lastMapAt = -Infinity;
+    for (const st of this.manifests.values()) if (!st.full) st.fetchedAt = -Infinity;
+    this.kick();
+  }
+
   /** 播放头挪了:取这一窗口的清单,预取这一窗口可见重层的块 */
   focus(t: number, fps: number): void {
     this.playhead = { t: Number(t) || 0, fps: Math.max(1, Number(fps) || 30) };

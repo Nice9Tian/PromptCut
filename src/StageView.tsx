@@ -14,6 +14,7 @@ import { applyProjectPatch, type ProjectPatch } from "./render/changedClips.mjs"
 import {
   detectHostCapabilities,
   postStageEvent,
+  compressHtml,
   postStageReady,
   serveStageRpc,
   postStageCards,
@@ -1156,10 +1157,19 @@ export default function StageView() {
       const mountMs = mountSec * 1000;
       const frames = PROBE_BOOL_FRAMES;
       const stale = () => gen !== renderGen.current;
-      /** 帧间让出一个宏任务:让父页的 RPC 消息、iframe 自己的 resize 有机会进来(趟与趟之间用) */
-      const breathe = () => new Promise<void>((r) => (window.__pcRealSetTimeout ?? window.setTimeout)(r, 0));
+      /**
+       * 帧间让出一个宏任务:让父页的 RPC 消息、iframe 自己的 resize 有机会进来(趟与趟之间用)。
+       * 后台活停着时(C10 契约第 2 节)就在趟与趟之间等,不在一趟里面停(一趟的墙钟就是量的数)。
+       */
+      const breathe = async () => {
+        await new Promise<void>((r) => (window.__pcRealSetTimeout ?? window.setTimeout)(r, 0));
+        const g = backGate(stale);
+        if (g) await g;
+      };
 
       /* ---- 1. 基线趟:全局时钟推 8 帧 ---- */
+      { const g = backGate(stale); if (g) await g; }
+      if (stale()) return { aborted: true };
       remountClipAt(mountSec);
       let pushed = 0;
       const baseStarted = realNow();
@@ -1389,6 +1399,31 @@ export default function StageView() {
       }
     };
 
+    /*
+     * 后台活的开始 / 停止(C10 契约第 2 节):编辑器页判空闲,经 `setBackWork` 发来。停着时后台活在帧与帧之间等
+     * (不推、不丢),恢复了接着推;被新的 render / setProject 掐掉(`stale`)也不再等。桌面运行环境从不发它,永远开着。
+     */
+    const backWork = { on: true, waiters: new Set<() => void>() };
+    const backGate = (stale: () => boolean): Promise<void> | undefined => {
+      if (backWork.on || ref.current.role !== "back") return undefined;
+      return new Promise<void>((resolve) => {
+        const done = () => { backWork.waiters.delete(done); clearInterval(poll); resolve(); };
+        // 掐断(新的 render、setProject)或角色变了也要放行,不然 RPC 永不回包
+        const poll = (window.__pcRealSetInterval ?? window.setInterval.bind(window))(() => {
+          if (backWork.on || stale() || ref.current.role !== "back") done();
+        }, 50) as unknown as number;
+        backWork.waiters.add(done);
+      });
+    };
+    /** 在线舞台的探针帧压成 gzip 字节、随消息转移(C10 契约第 2 节「大块产出」);压不了照旧传字符串 */
+    const postProbeFrame = (clipId: string, localFrame: number, html: string) => {
+      if (!ONLINE) { postStageEvent({ type: "probe-frame", clipId, localFrame, html }); return; }
+      void compressHtml(html).then((gz) => {
+        if (gz) postStageEvent({ type: "probe-frame", clipId, localFrame, html: "", htmlGz: gz }, "*", [gz]);
+        else postStageEvent({ type: "probe-frame", clipId, localFrame, html });
+      });
+    };
+
     const api: StageRpcApi = {
       /**
        * 换项目文档。patch 复用 A7 的 changedClips 结构,合并时**保持未变片段的对象引用**
@@ -1460,6 +1495,8 @@ export default function StageView() {
          * (拖动发给 `front`、D4 的页面侧测量发给 `back`),所以闸门只挡 `probe`。
          */
         if (opts.probe && ref.current.role !== "back") return { aborted: true, reason: "role" as const };
+        // 后台活停着(C10 契约第 2 节):探针的这一帧等恢复了再量(等的时间不算进耗时)
+        if (opts.probe) { const g = backGate(() => ref.current.role !== "back"); if (g) await g; }
         const target = Math.max(0, Number(tSec) || 0);
         const started = realNow();
         const p = ref.current.project;
@@ -1606,13 +1643,26 @@ export default function StageView() {
         /* 快照趟:每帧三段的耗时。`snapshot` 是它们的累加,而成本记录要的是单帧稳健值 */
         const snapshotSteps: SnapshotCost[] = [];
         let frameStarted = 0;
+        /*
+         * 后台活停着的时间(C10 契约第 2 节):不算进探针的封顶与耗时。在线的后台舞台逐帧让一个宏任务(`setTimeout(0)`),
+         * 帧与帧之间查停止标志;桌面照旧每 8 帧让一次,从不停。
+         */
+        let pausedMs = 0;
+        const wall = () => realNow() - started - pausedMs;
+        const gate = () => {
+          const g = backGate(() => gen !== renderGen.current);
+          if (!g) return undefined;
+          const t0 = realNow();
+          return g.then(() => { pausedMs += realNow() - t0; });
+        };
         return await new Promise<RenderReply>((resolve) => {
           ref.current.pending = { gen, startedAt: started, frames: () => frames, resolve };
           void (async () => {
             await clock.advanceToAsync(target * 1000, {
               step: 1000 / fps,
               maxCatchUp: opts.maxCatchUp,
-              yieldEvery: 8,
+              yieldEvery: ONLINE ? 1 : 8,
+              gate,
               abort: () => {
                 if (gen !== renderGen.current) return true;
                 /*
@@ -1621,13 +1671,13 @@ export default function StageView() {
                  * 剩下的帧由父页按「首帧实测 + 其余帧中位数 × 剩余帧数」外推。
                  */
                 if (timing) {
-                  if (frames >= maxFrames || realNow() - started > PROBE_MAX_MS) {
+                  if (frames >= maxFrames || wall() > PROBE_MAX_MS) {
                     truncated = true;
                     return true;
                   }
                   return false;
                 }
-                if (probe && (frames >= maxFrames || realNow() - started > budgetMs)) {
+                if (probe && (frames >= maxFrames || wall() > budgetMs)) {
                   truncated = true;
                   return true;
                 }
@@ -1666,12 +1716,12 @@ export default function StageView() {
               snapshot.serializeMs += snap.timing.serializeMs;
               snapshotSteps.push({ inlineMs: snap.timing.inlineMs, rasterMs: snap.timing.rasterMs, serializeMs: snap.timing.serializeMs });
               for (const c of snap.controls) {
-                postStageEvent({ type: "probe-frame", clipId: c.id, localFrame: Math.round((ms / 1000 - clipStart(c.id)) * fps), html: c.html });
+                postProbeFrame(c.id, Math.round((ms / 1000 - clipStart(c.id)) * fps), c.html);
               }
             }
             if (gen !== renderGen.current) return; // 已被 abortPending 按 reason 回包
             ref.current.pending = null;
-            const elapsedMs = realNow() - started;
+            const elapsedMs = wall();
             if (truncated) {
               resolve({ aborted: true, reason: "timeout", elapsedMs, stepMs: stepOf(elapsedMs), frames, truncated: true, snapshot,
                 ...(timing ? { steps } : { snapshotSteps }) });
@@ -2017,6 +2067,11 @@ export default function StageView() {
        * A1 的换档集合:当前连接的素材服务报 `complete` 的哈希(C6.6,父页每 2 秒轮询后下发)。
        * 变了就当场重渲一次:暂停中也要换档(`VideoTrack` 的双缓冲)。
        */
+      async setBackWork(on) {
+        backWork.on = !!on;
+        if (backWork.on) for (const w of [...backWork.waiters]) w();
+        return { ok: true as const };
+      },
       async setMediaPolicy(next) {
         // 低内存档只会从普通改到低(运行中改判),不回头:舞台自己判出来的 true 不被父页的 false 盖掉
         setMediaTierPolicy({ lowMemory: caps.lowMemory || !!next?.lowMemory, remote: next?.remote ?? null });

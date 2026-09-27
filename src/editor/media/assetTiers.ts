@@ -33,7 +33,7 @@ export interface RemoteAssets {
   /** 远程素材服务的 API 基址,形如 `http://<ip>:<port>/api/asset` */
   base: string;
   /** 取一张只读素材票据;取不到给 null(那就不带,由素材服务回 401) */
-  ticket?: () => Promise<string | null>;
+  ticket?: (() => Promise<string | null>) & { info?: (opts?: { force?: boolean }) => Promise<{ ticket: string; exp: number } | null> };
 }
 
 const LOCAL_BASE = "/api/asset";
@@ -96,6 +96,16 @@ export function useTierHashes(): readonly string[] {
 /** 当前连的是不是远程素材服务(基址);本地给 null */
 export function remoteAssetBase(): string | null {
   return remote?.base ?? null;
+}
+
+/**
+ * 当前远程素材服务的只读票据连同过期时刻(C10 契约第 12 节:逐帧导出续签票据的 `fetchTicket`,`src/export/ticketRenewal.ts`)。
+ * `force`:不管手里那张还剩多久,换一张新的。本地素材服务、取不到给 null。
+ */
+export async function remoteAssetTicketInfo(force = false): Promise<{ ticket: string; exp: number } | null> {
+  const info = remote?.ticket?.info;
+  if (!info) return null;
+  try { return await info({ force }); } catch { return null; }
 }
 
 /** 当前远程素材服务的只读票据(在线页面给 `<video>` 的查询串、取预渲染小尺寸用;c10a 第 8、9 节);本地给 null */
@@ -307,21 +317,35 @@ interface LinkLike {
   request(msg: Record<string, unknown>, timeoutMs?: number): Promise<Record<string, unknown>>;
 }
 
-/** 按 `auth.ticket` 取只读素材票据,剩 1/3 有效期时换新的 */
-export function assetTicketSource(link: LinkLike, now: () => number = Date.now): () => Promise<string | null> {
-  let cur: { ticket: string; exp: number } | null = null;
-  let inflight: Promise<string | null> | null = null;
-  return async () => {
-    if (cur && cur.exp - now() > ASSET_TICKET_TTL_MS / 3) return cur.ticket;
+/**
+ * 按 `auth.ticket` 取只读素材票据,剩 1/3 有效期时换新的。「有效期」按这一张实际的寿命算(签发到过期),不写死 15 分钟:
+ * 测试里缩短了票据时限(C10 契约第 12 节的验收)时照样提前换。
+ * 回的函数带 `info({ force })`:连同过期时刻给出(逐帧导出的续签用,`src/export/ticketRenewal.ts`)。
+ */
+export function assetTicketSource(link: LinkLike, now: () => number = Date.now): (() => Promise<string | null>) & { info: (opts?: { force?: boolean }) => Promise<{ ticket: string; exp: number } | null> } {
+  let cur: { ticket: string; exp: number; issued: number } | null = null;
+  let inflight: Promise<{ ticket: string; exp: number } | null> | null = null;
+  const fresh = () => !!cur && cur.exp - now() > Math.min(ASSET_TICKET_TTL_MS, Math.max(0, cur.exp - cur.issued)) / 3;
+  const take = (): Promise<{ ticket: string; exp: number } | null> => {
     inflight ??= link.request({ type: "auth.ticket", kind: "asset", access: "r" }).then((r) => {
       if (r.type === "auth.ticket.ok" && typeof r.ticket === "string") {
-        cur = { ticket: r.ticket, exp: Number(r.exp) || now() + ASSET_TICKET_TTL_MS };
-        return cur.ticket;
+        const issued = now();
+        cur = { ticket: r.ticket, exp: Number(r.exp) || issued + ASSET_TICKET_TTL_MS, issued };
+        return { ticket: cur.ticket, exp: cur.exp };
       }
       return null;
     }, () => null).finally(() => { inflight = null; });
     return inflight;
   };
+  const get = async () => {
+    if (fresh()) return cur!.ticket;
+    return (await take())?.ticket ?? null;
+  };
+  get.info = async (opts: { force?: boolean } = {}) => {
+    if (!opts.force && fresh()) return { ticket: cur!.ticket, exp: cur!.exp };
+    return take();
+  };
+  return get;
 }
 
 /**
