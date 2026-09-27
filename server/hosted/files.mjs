@@ -20,13 +20,15 @@ export const HOSTED_DEPLOY_DIRS = Object.freeze([
   'server/render-queue',
 ]);
 
-/** 单个文件：素材服务中间件及其依赖、地址登记 */
+/** 单个文件：素材服务中间件及其依赖、地址登记、环境指纹 */
 export const HOSTED_DEPLOY_FILES = Object.freeze([
   'server/asset-service.ts',
   'server/vite-plugin-media.ts',
   'server/http-guard.mjs',
   'server/asset-announce.mjs',
   'server/render-node/ws-transport.mjs',
+  // 成本记录模块按原始环境算指纹（与预渲染结果键同一套归一规则，C10 其余第 3 节）
+  'server/render-node/fingerprint.mjs',
 ]);
 
 /** 暂存目录根上的 package.json 内容 */
