@@ -118,6 +118,8 @@ JSON 放不下注释，所以审阅结论和理由写在这里。**改 `capabili
 
 `probe` —— 一个绝对定位的文本 div，`independent`。
 
+`probe-slow` —— 可调成本的探针卡（每次渲染忙等 `burnMs` 毫秒），只画自己那一块绝对定位的色块，`independent`。C10 的本机验收（`scripts/probes/c10-browser-probe.mjs`）要一张在哪台机器上都稳定判重、又能由渲染节点预渲染的卡。
+
 ### 4.5 精选粒子卡（26 张，通配 `particles-*` 覆盖）
 
 `basic` `big` `bigBlend` `bubble` `colorAnimation` `fallingConfetti` `gradients` `groups` `lch`
