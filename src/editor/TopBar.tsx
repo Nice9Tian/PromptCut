@@ -524,7 +524,7 @@ export function TopBar() {
    * (曾经这里是拿当前项目当基线的 —— 那样「我有、对方没有」的每张卡都被判成对方删掉的,
    * 挑一份不相干的 .proc 会把整个项目清空替换。见 io/combineImport.ts。)
    */
-  const mergeFromFile = async (file: File) => {
+  const mergeFromFile = ONLINE_BUILD ? async (_file: File) => {} : async (file: File) => {
     try {
       const report = applyCombine(await file.text(), null);
       alert(`已把「${file.name}」合并到当前项目(记得保存):
@@ -674,10 +674,13 @@ ${summarizeCombine(report)}
             type="button"
             className="pc-btn"
             style={{ width: "100%", justifyContent: "flex-start" }}
-            title="挑一份 .proc,把它的改动三方合并进当前项目"
+            data-pc="menu-merge-skill"
+            // 在线页面:合并要把 .proc 里带的卡装进本机卡片目录(编辑器进程),在线做不成(C10 契约第 10 节〔裁〕),置灰
+            disabled={ONLINE_BUILD}
+            title={ONLINE_BUILD ? ONLINE_OFF("合并 Skill 结果") : "挑一份 .proc,把它的改动三方合并进当前项目"}
             onClick={() => {
               setMenuOpen(false);
-              mergeInput.current?.click();
+              if (!ONLINE_BUILD) mergeInput.current?.click();
             }}
           >
             <IconImport />
