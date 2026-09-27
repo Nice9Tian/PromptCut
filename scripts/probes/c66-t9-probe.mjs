@@ -12,6 +12,7 @@
  *        [--port-base <端口>]        只对 --role all,与 --port 同义(集成时两个分支各加了一种写法,都留着);两个都给时以它为准
  *        [--out <截图目录>]          缺省 <系统临时目录>/pc-c66t9-<run>/<角色>
  *        [--timeout-min 25] [--keep-temp]
+ *        [--observer-throttle <字节/秒>]  观察端页面加入后用 CDP 限速(舞台 iframe 一并限),复现原尺寸从远端慢慢拉;也可设环境变量 T9_OBSERVER_THROTTLE
  *
  * 环境变量:协调口开了信箱时 KV 要 `PROBE_MAIL_TOKEN`(`coordClient` 自动带,令牌不打印)。云端跑 host 另要
  * `NODE_USE_ENV_PROXY=1`、`PC_CHROME_ARGS=--no-sandbox`(脚本不管,原样传给子进程)。
@@ -109,6 +110,8 @@ const HOSTED = String(arg('--hosted', 'https://8-219-80-16.sslip.io/hosted')).re
 const COORD = String(arg('--coord', 'https://8-219-80-16.sslip.io/coord')).replace(/\/+$/, '');
 const TIMEOUT_MS = Number(arg('--timeout-min', 25)) * 60_000;
 const KEEP = argv.includes('--keep-temp');
+/** 观察端浏览器限速(字节 / 秒;0 = 不限):复现「原尺寸从远端慢慢拉」,CDP `Network.emulateNetworkConditions`,舞台 iframe 一并限 */
+const OBSERVER_THROTTLE = Math.max(0, Number(arg('--observer-throttle', process.env.T9_OBSERVER_THROTTLE ?? 0)) || 0);
 const DEFAULT_PORT = { creator: 5590, observer: 5593, host: 5596 };
 const FPS = 30;
 const SEEK = 2.5;
@@ -883,6 +886,10 @@ async function runObserver(out) {
       throw new Error('观察端没看到视频片段');
     }
     out.joinMs = Date.now() - tJoin;
+    if (OBSERVER_THROTTLE) {
+      await page.emulateNetworkConditions({ download: OBSERVER_THROTTLE, upload: OBSERVER_THROTTLE, latency: 20 });
+      out.throttle = { download: OBSERVER_THROTTLE, latency: 20 };
+    }
     out.projectTiers = clip.tiers;
     // 播放头的去向:seek 之前挂一个 store 订阅,记下之后每一次 t 的变化(带调用栈),排查「seek 到 2.5 s 却停在 0」
     await P(page, async (t) => {
@@ -938,6 +945,18 @@ async function runObserver(out) {
     const startSampling = async () => (await front())?.evaluate(() => {
       window.__t9Samples = [];
       window.__t9Sampling = true;
+      // 每个 <video> 出没出过帧(requestVideoFrameCallback):显示中的元素 readyState < 2 时,出过帧的通常还显示着上一帧
+      const presented = new WeakSet();
+      window.__t9Presented = presented;
+      const watch = (v) => {
+        if (v.__t9Watch) return;
+        v.__t9Watch = true;
+        const cb = () => { presented.add(v); v.requestVideoFrameCallback(cb); };
+        v.requestVideoFrameCallback(cb);
+        if (v.readyState >= 2) presented.add(v);
+      };
+      for (const v of document.querySelectorAll('video')) watch(v);
+      window.__t9LowRs = null;
       const cv = document.createElement('canvas');
       cv.width = 100; cv.height = 72;
       const ctx = cv.getContext('2d', { willReadFrequently: true });
@@ -945,11 +964,14 @@ async function runObserver(out) {
       const raf = window.__pcRealRaf ?? window.requestAnimationFrame.bind(window);
       const loop = () => {
         if (!window.__t9Sampling) return;
+        for (const x of document.querySelectorAll('video')) watch(x);
         const v = document.querySelector('[data-pc-media] > video');
-        const s = { at: now(), shown: !!v };
+        const s = { at: now(), epoch: performance.timeOrigin + now(), shown: !!v };
         if (v) {
           s.src = (v.currentSrc || '').split('/@media/')[1]?.slice(0, 8) ?? '';
           s.rs = v.readyState;
+          s.presented = presented.has(v);
+          window.__t9LowRs = v.readyState < 2 ? { since: window.__t9LowRs?.since ?? s.epoch } : null;
           if (v.readyState >= 2 && v.videoWidth) {
             ctx.drawImage(v, 0, 0, cv.width, cv.height);
             let idx = 0;
@@ -980,6 +1002,69 @@ async function runObserver(out) {
     check(cfg.pause && cfg.pause.originalComplete === false && resumedAtFirst === null, '[observer] 出第一帧时素材原尺寸还没 complete(创建方暂停着上传、还没续传)', out.originalAtFirstFrame);
     check(firstShown?.tier === 'small', '[observer] 素材层先以素材小尺寸出现', firstShown);
     const samplingStarted = firstShown?.tier === 'small' ? startSampling() : Promise.resolve(false);
+    // 诊断:两个舞台里每个 <video> 的事件、页面代码写 currentTime / 调 load() 的地方(带调用栈),写进 __t9MediaLog
+    const installMediaLog = async () => {
+      for (const f of stageFrames()) {
+        await f.evaluate(() => {
+          if (window.__t9MediaLog) return;
+          const log = [];
+          window.__t9MediaLog = log;
+          const epoch = () => performance.timeOrigin + (window.__pcRealNow ?? (() => performance.now()))();
+          const tag = (v) => ({ src: (v.currentSrc || v.getAttribute('src') || '').split('/@media/')[1]?.slice(0, 8) ?? '', rs: v.readyState, ct: Number(v.currentTime.toFixed(3)),
+            shown: !!v.parentElement?.hasAttribute('data-pc-media'), paused: v.paused, net: v.networkState });
+          const push = (e) => { if (log.length < 4000) log.push(e); };
+          const stack = () => (new Error().stack ?? '').split('\n').slice(2, 9).map((l) => l.trim().replace(/https?:\/\/[^/]+/g, '').replace(/\?[^:)]*:/g, ':'));
+          const desc = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'currentTime');
+          Object.defineProperty(HTMLMediaElement.prototype, 'currentTime', {
+            configurable: true, enumerable: desc.enumerable, get: desc.get,
+            set(v) { push({ at: epoch(), type: 'set-currentTime', to: v, ...tag(this), stack: stack() }); desc.set.call(this, v); },
+          });
+          const load = HTMLMediaElement.prototype.load;
+          HTMLMediaElement.prototype.load = function () { push({ at: epoch(), type: 'load()', ...tag(this), stack: stack() }); return load.call(this); };
+          // 换档对齐的帧回调(VideoTrack 的 __pcTierTrace 观察口,数组时才记):哪一刻判定「新档这一帧对齐了」
+          const trace = [];
+          trace.push = (...xs) => {
+            for (const x of xs) push({ at: epoch(), type: 'tier-aligned', src: String(x?.url ?? '').split('/@media/')[1]?.slice(0, 8) ?? '', mediaTime: x?.mediaTime, ref: x?.ref, playing: x?.playing });
+            return Array.prototype.push.apply(trace, xs);
+          };
+          window.__pcTierTrace = trace;
+          const events = ['seeking', 'seeked', 'waiting', 'emptied', 'loadstart', 'loadedmetadata', 'loadeddata', 'canplay', 'stalled', 'suspend', 'abort', 'error', 'play', 'pause'];
+          const hook = (v) => {
+            if (v.__t9Log) return;
+            v.__t9Log = true;
+            for (const type of events) v.addEventListener(type, () => push({ at: epoch(), type, ...tag(v) }));
+          };
+          for (const v of document.querySelectorAll('video')) hook(v);
+          new MutationObserver(() => { for (const v of document.querySelectorAll('video')) hook(v); }).observe(document.documentElement, { subtree: true, childList: true });
+          // readyState 的变化(事件里没有直接的「降到 1」):每个 rAF 看一眼
+          const raf = window.__pcRealRaf ?? window.requestAnimationFrame.bind(window);
+          const last = new WeakMap();
+          const tick = () => {
+            for (const v of document.querySelectorAll('video')) {
+              const k = `${v.readyState}|${v.parentElement?.hasAttribute('data-pc-media') ? 1 : 0}|${v.currentSrc}`;
+              if (last.get(v) !== k) { last.set(v, k); push({ at: epoch(), type: 'state', ...tag(v) }); }
+            }
+            raf(tick);
+          };
+          raf(tick);
+        }).catch(() => {});
+      }
+    };
+    await installMediaLog();
+    const collectMediaLogs = async () => {
+      const mediaLogs = [];
+      for (const f of stageFrames()) {
+        const l = await f.evaluate(() => window.__t9MediaLog ?? null).catch(() => null);
+        if (l) mediaLogs.push({ frame: /id=([AB])/.exec(f.url())?.[1] ?? '?', log: l });
+      }
+      try { fs.writeFileSync(path.join(OUT, 'observer-media-log.json'), JSON.stringify({ tJoin, frontId: await P(page, () => window.__pcPreviewDiag?.().frontId ?? null).catch(() => null), mediaLogs }, null, 1)); } catch { /* 写不了不影响结论 */ }
+      out.mediaEvents = mediaLogs.map((m) => ({ frame: m.frame, seeks: m.log.filter((e) => e.type === 'set-currentTime' && e.src === cfg.tiers.original.slice(0, 8)).map((e) => ({ at: Math.round(e.at - tJoin), to: e.to, from: e.ct, rs: e.rs, shown: e.shown, stack: e.stack.slice(0, 3) })),
+        loads: m.log.filter((e) => e.type === 'load()').map((e) => ({ at: Math.round(e.at - tJoin), src: e.src, stack: e.stack.slice(1, 2) })),
+        aligned: m.log.filter((e) => e.type === 'tier-aligned' && e.src === cfg.tiers.original.slice(0, 8)).slice(0, 2).map((e) => ({ at: Math.round(e.at - tJoin), mediaTime: e.mediaTime, ref: e.ref })),
+        seeked: m.log.filter((e) => e.type === 'seeked' && e.src === cfg.tiers.original.slice(0, 8) && e.ct > 1).map((e) => ({ at: Math.round(e.at - tJoin), shown: e.shown })),
+        shownAt: (m.log.find((e) => e.type === 'state' && e.src === cfg.tiers.original.slice(0, 8) && e.shown) ?? null) && ((e) => ({ at: Math.round(e.at - tJoin), rs: e.rs }))(m.log.find((e) => e.type === 'state' && e.src === cfg.tiers.original.slice(0, 8) && e.shown)),
+        drops: m.log.filter((e) => e.type === 'state' && e.src === cfg.tiers.original.slice(0, 8) && e.rs < 2).map((e) => ({ at: Math.round(e.at - tJoin), rs: e.rs, shown: e.shown, ct: e.ct })) }));
+    };
     // 小尺寸停在 2.5 s:连续 3 次读到同一个帧号才算稳定;期间换到原尺寸就用换之前最后一个
     let smallIdx = null;
     let stable = 0;
@@ -1008,6 +1093,35 @@ async function runObserver(out) {
     out.smallStableBeforeSwap = !swappedEarly;
     check(smallIdx !== null && Math.abs(smallIdx - EXPECT_IDX) <= 1, `[observer] 素材小尺寸停在 ${SEEK} s(帧号 ${EXPECT_IDX} ± 1)`, { smallIdx });
     const sampling = await samplingStarted;
+    // 显示中的元素 readyState < 2 时截合成后的舞台画面(视频区:条纹以下、卡片以上的一条),量亮度
+    const shots = [];
+    let shooting = !!sampling;
+    const stageRect = async () => {
+      const id = await P(page, () => window.__pcPreviewDiag?.().frontId ?? 'A').catch(() => 'A');
+      const h = await page.$(`iframe[src*="id=${id}"]`).catch(() => null);
+      return h ? h.boundingBox() : null;
+    };
+    const shotLoop = (async () => {
+      const { PNG } = await import('pngjs').catch(() => ({ PNG: null }));
+      while (shooting) {
+        const low = await (await front())?.evaluate(() => window.__t9LowRs).catch(() => null);
+        if (low) {
+          const r = await stageRect();
+          if (r && r.width > 10 && PNG) {
+            const clip = { x: r.x, y: r.y + r.height * 0.2, width: r.width, height: Math.max(2, r.height * 0.15) };
+            const at = Date.now();
+            const buf = await page.screenshot({ clip, type: 'png' }).catch(() => null);
+            if (buf) {
+              const img = PNG.sync.read(buf);
+              let sum = 0;
+              for (let i = 0; i < img.data.length; i += 4) sum += 0.299 * img.data[i] + 0.587 * img.data[i + 1] + 0.114 * img.data[i + 2];
+              shots.push({ at, done: Date.now(), luma: Math.round(sum / (img.data.length / 4)) });
+            }
+          }
+        }
+        await delay(40);
+      }
+    })();
     const tSwapWait = Date.now();
     const orig = await until('[observer] 素材原尺寸到齐后换成原尺寸', async () => {
       const l = await layer();
@@ -1033,7 +1147,25 @@ async function runObserver(out) {
         return n && n.total >= 10 && n.after >= 5 ? n : null;
       }, 5_000, 100);
       const samples = await (await front())?.evaluate(() => { window.__t9Sampling = false; return (window.__t9Samples ?? []).splice(0); }).catch(() => []) ?? [];
-      const black = samples.filter((s) => !s.shown || s.rs < 2 || !(s.luma > 16));
+      shooting = false;
+      await shotLoop;
+      // 黑帧:没有显示中的元素;显示中的元素解出的帧本身黑(亮度 ≤ 16);readyState < 2 时这个元素从没出过帧,
+      // 或那段时间里截到的合成画面黑(亮度 ≤ 16)。readyState < 2 但出过帧、截图不黑的(浏览器照样显示着上一帧)不算
+      const nearShot = (s) => shots.filter((x) => x.at - 400 <= s.epoch && s.epoch <= x.done + 400);
+      const lowRs = samples.filter((s) => s.shown && s.rs < 2);
+      const black = samples.filter((s) => {
+        if (!s.shown) return true;
+        if (s.rs >= 2) return !(s.luma > 16);
+        if (!s.presented) return true;
+        return nearShot(s).some((x) => x.luma <= 16);
+      });
+      out.lowReadyState = { samples: lowRs.length, presentedBefore: lowRs.filter((s) => s.presented).length, withShot: lowRs.filter((s) => nearShot(s).length).length,
+        shots: shots.length, shotLuma: shots.length ? [Math.min(...shots.map((x) => x.luma)), Math.max(...shots.map((x) => x.luma))] : null,
+        srcs: [...new Set(lowRs.map((s) => s.src))], windowsMs: (() => {
+          const w = [];
+          for (const x of lowRs) { const last = w.at(-1); if (last && x.epoch - last.to < 300) last.to = x.epoch; else w.push({ from: x.epoch, to: x.epoch }); }
+          return w.map((x) => ({ at: x.from - tJoin, ms: Math.round(x.to - x.from) }));
+        })() };
       const idxs = [...new Set(samples.filter((s) => Number.isInteger(s.idx)).map((s) => s.idx))];
       const firstOrig = samples.findIndex((s) => s.src === origKey);
       const coversSwap = firstOrig > 0 && samples.slice(0, firstOrig).some((s) => s.src === smallKey);
@@ -1096,6 +1228,8 @@ async function runObserver(out) {
     out.stageV1 = await stageHas(cfg.card.v1);
 
     // ---- 计时起点:拿到 editready 之后、写 observer.joined 之前(上界)
+    // 改卡会让舞台整页重载(日志随之清空):在那之前收媒体日志
+    await collectMediaLogs();
     await store.wait('editready', '创建者可以改卡');
     const t0 = Date.now();
     await store.put('observer.joined', { at: t0 });
@@ -1313,7 +1447,8 @@ async function runAll(out) {
   const run = arg('--run', null) ?? newRunId();
   out.run = run;
   const outDir = path.resolve(arg('--out', path.join(os.tmpdir(), `pc-c66t9-${run}`)));
-  const common = ['--hosted', HOSTED, '--coord', COORD, '--run', run, '--timeout-min', String(Number(arg('--timeout-min', 25))), ...(KEEP ? ['--keep-temp'] : [])];
+  const common = ['--hosted', HOSTED, '--coord', COORD, '--run', run, '--timeout-min', String(Number(arg('--timeout-min', 25))), ...(KEEP ? ['--keep-temp'] : []),
+    ...(OBSERVER_THROTTLE ? ['--observer-throttle', String(OBSERVER_THROTTLE)] : [])];
   const roles = ['creator', 'observer', 'host'];
   const basePort = Number(arg('--port', DEFAULT_PORT.creator));
   if (!Number.isInteger(basePort) || basePort < 1 || basePort + 8 > 65535) throw new Error('--port 需给三组连续编辑器端口留出 9 个端口');
