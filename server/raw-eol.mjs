@@ -37,7 +37,16 @@ export function rawEolPlugin() {
     enforce: 'pre',
     configResolved(config) { root = config.root; },
     // 入口页 index.html 同理:构建产物里的它照原文抄换行,CRLF 检出出来的 dist 就和 LF 的不同
+    // (Vite 拆掉入口 <script> 时还会在 </body> 前留下一个 CR,所以产物落盘前再统一一次)
     transformIndexHtml: { order: 'post', handler: (html) => normalizeEol(html) },
+    generateBundle: {
+      order: 'post',
+      handler(_options, bundle) {
+        for (const item of Object.values(bundle)) {
+          if (item.type === 'asset' && item.fileName.endsWith('.html') && typeof item.source === 'string') item.source = normalizeEol(item.source);
+        }
+      },
+    },
     load(id) {
       const file = rawEolTarget(root, id);
       if (!file) return null;
