@@ -10,7 +10,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createDocService } from '../docservice/service.mjs';
-import { createDocEndpoint, transportOf, wsUrlOf, httpUrlOf, utf8Length } from '../render-node/session-link.mjs';
+import { createDocEndpoint, transportOf, wsUrlOf, httpUrlOf, utf8Length, SESSION_DEFAULTS } from '../render-node/session-link.mjs';
 import { createTcpProxy, waitFor, sleep } from './fake-ws-kit.mjs';
 import { startSessionGateway } from './session-gateway-kit.mjs';
 
@@ -246,4 +246,47 @@ test('SL-agent-link Agent 服务端的连接（doc-link）走会话：传输被�
   assert.ok(!logs.some((l) => l.event === 'agent.link.close'), '没有断线');
   assert.equal(gw.stats.opened, 1, '只建过一个会话');
   assert.equal(link.describe().conversations[0].state, 'open');
+});
+
+/** 最小的假 WebSocket：测试手动触发 open / message，记下客户端发出的消息 */
+function fakeSocketClass() {
+  const sockets = [];
+  class FakeWs {
+    constructor(url, protocols) {
+      this.url = url; this.protocols = protocols; this.readyState = 0; this.sent = []; this.l = {};
+      sockets.push(this);
+    }
+    addEventListener(type, fn) { (this.l[type] ??= []).push(fn); }
+    emit(type, ev) { for (const fn of this.l[type] ?? []) fn(ev); }
+    send(text) { this.sent.push(JSON.parse(text)); }
+    close() { this.readyState = 3; }
+    open(welcome) { this.readyState = 1; this.emit('open', {}); this.emit('message', { data: JSON.stringify({ type: 'session.welcome', sid: 'S'.repeat(43), resumed: false, ack: 0, retainMs: 60_000, transport: 'ws', ...welcome }) }); }
+    push(msg) { this.emit('message', { data: JSON.stringify(msg) }); }
+    acks() { return this.sent.filter((m) => m.type === 'session.ack'); }
+  }
+  return { FakeWs, sockets };
+}
+
+test('SL-ack-bytes 收到的未确认原文满 64 KiB 就立刻单发 session.ack，不等 1 s（〔裁〕2026-09-27，两端同一条）', () => {
+  const { FakeWs, sockets } = fakeSocketClass();
+  const ep = createDocEndpoint({ url: 'ws://doc.test/', WebSocket: FakeWs, transport: 'ws', log: () => {}, legacyProbeMs: -1 });
+  try {
+    const got = [];
+    ep.onMessage((m) => got.push(m));
+    const s = sockets[0];
+    s.open();
+    const pad = 'p'.repeat(40 * 1024);
+    s.push({ type: 'x', seq: 1, pad });
+    assert.deepEqual(s.acks(), [], '40 KiB：还不到 64 KiB，不立刻确认');
+    s.push({ type: 'x', seq: 2, pad });
+    assert.deepEqual(s.acks(), [{ type: 'session.ack', ack: 2 }], '累计过 64 KiB：当场确认到 2');
+    s.push({ type: 'x', seq: 3, pad: 'q' });
+    assert.equal(s.acks().length, 1, '计数从确认处重新算：一条小消息不立刻确认');
+    for (let n = 4; n <= 34; n++) s.push({ type: 'x', seq: n });
+    assert.deepEqual(s.acks().at(-1), { type: 'session.ack', ack: 34 }, '满 32 条照旧立刻确认');
+    assert.equal(got.length, 34);
+    assert.deepEqual(SESSION_DEFAULTS.ackBytes, 64 * 1024);
+  } finally {
+    ep.close();
+  }
 });

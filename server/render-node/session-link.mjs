@@ -11,7 +11,8 @@
  *     `hello.resume`，页面在这里重新订阅）。
  *   - 序号与确认：出站业务消息带 `seq`（本会话里从 1 起），顺带 `ack`（已按序收全的服务端最大 `seq`）；入站按 `seq`
  *     收，摘掉 `seq` / `ack` 再交 `onMessage`，重发丢弃，跳号或越界的 `ack` 按会话已坏结束（1002）。没有顺带机会时，
- *     收满 `ackEvery` 条或 `ackDelayMs` 内单发 `{ type: 'session.ack', ack }`。`session.*` 控制消息不带 `seq`、不交上层。
+ *     收满 `ackEvery` 条（32）、或收下的消息原文满 `ackBytes`（64 KiB，〔裁〕2026-09-27）就立刻、否则 `ackDelayMs`（1 s）内
+ *     单发 `{ type: 'session.ack', ack }`。`session.*` 控制消息不带 `seq`、不交上层。
  *   - 传输断开只让会话**脱开**：未确认的出站留着，`send` 照收；按退避接续，接续的子协议只有
  *     `promptcut.v1` 与 `promptcut.session.<sid>.<ack>`（不再调 `protocols()`）。接续成功调 `onResume`（不调
  *     `onOpen`），按 `welcome.ack` 释放、其余按原 `seq` 依次补发。传输的断开与接续只进日志与 `stats()`。
@@ -50,6 +51,11 @@ export const SESSION_DEFAULTS = Object.freeze({
   ackEvery: 32,
   /** 收到消息后这么久内没有顺带的机会就单发 `session.ack`（第 3.3 节） */
   ackDelayMs: 1000,
+  /**
+   * 收到的还没确认的消息原文满这么多字节就立刻单发 `session.ack`（〔裁〕2026-09-27 主会话，两端同一条，契约第 17 节补）：
+   * 快照分片这类大消息只按条数与 1 s 确认的话，对方一秒内能攒下超过 1 MiB 未确认，把自己的会话以 1013 结束
+   */
+  ackBytes: 64 * 1024,
   /** 客户端未确认的出站字节上限，超了以 1013 结束会话（第 3.4 节） */
   maxPendingBytes: 1024 * 1024,
   /** welcome 没带 `retainMs` 时按这个算（第 4.2 节缺省） */
@@ -160,6 +166,7 @@ export function createDocEndpoint({
   maxPendingBytes = SESSION_DEFAULTS.maxPendingBytes,
   ackEvery = SESSION_DEFAULTS.ackEvery,
   ackDelayMs = SESSION_DEFAULTS.ackDelayMs,
+  ackBytes = SESSION_DEFAULTS.ackBytes,
   welcomeTimeoutMs = SESSION_DEFAULTS.welcomeTimeoutMs,
   legacyProbeMs = SESSION_DEFAULTS.legacyProbeMs,
   renew = true,
@@ -410,7 +417,7 @@ export function createDocEndpoint({
       return;
     }
     s.inAck = seq;
-    noteInbound(s);
+    noteInbound(s, utf8Length(data));
     const { seq: _seq, ack: _ack, ...body } = msg;
     emit(messageHandlers, body, 'message');
   }
@@ -419,7 +426,7 @@ export function createDocEndpoint({
     clearRecTimers(rec);
     rec.stage = 'attached';
     attempt = 0;
-    sess = { legacy: true, sid: null, retainMs: 0, outSeq: 0, outBuf: [], pendingBytes: 0, inAck: 0, inUnacked: 0, ackTimer: null, detachedAt: null };
+    sess = { legacy: true, sid: null, retainMs: 0, outSeq: 0, outBuf: [], pendingBytes: 0, inAck: 0, inUnacked: 0, inUnackedBytes: 0, ackTimer: null, detachedAt: null };
     counters.opens++;
     say('session.open', { transport: 'ws', legacy: true, protocol: typeof rec.socket.protocol === 'string' ? rec.socket.protocol : null });
     emit(openHandlers, undefined, 'open');
@@ -437,7 +444,7 @@ export function createDocEndpoint({
     if (rec.kind === 'new') {
       rec.stage = 'attached';
       attempt = 0;
-      sess = { legacy: false, sid, retainMs, outSeq: 0, outBuf: [], pendingBytes: 0, inAck: 0, inUnacked: 0, ackTimer: null, detachedAt: null };
+      sess = { legacy: false, sid, retainMs, outSeq: 0, outBuf: [], pendingBytes: 0, inAck: 0, inUnacked: 0, inUnackedBytes: 0, ackTimer: null, detachedAt: null };
       counters.opens++;
       say('session.open', { transport: 'ws', retainMs });
       emit(openHandlers, undefined, 'open');
@@ -455,6 +462,7 @@ export function createDocEndpoint({
     if (!onPeerAck(msg.ack ?? 0)) return;
     // 接续项里已带上本端的 ack
     s.inUnacked = 0;
+    s.inUnackedBytes = 0;
     clearAckTimer(s);
     const gapMs = s.detachedAt === null ? 0 : now() - s.detachedAt;
     s.detachedAt = null;
@@ -484,9 +492,11 @@ export function createDocEndpoint({
     return true;
   }
 
-  function noteInbound(s) {
+  /** 收下一条业务消息（`bytes` 是它的原文字节数）：满条数或满字节就立刻确认，否则 `ackDelayMs` 内确认 */
+  function noteInbound(s, bytes) {
     s.inUnacked++;
-    if (s.inUnacked >= ackEvery) {
+    s.inUnackedBytes += bytes;
+    if (s.inUnacked >= ackEvery || s.inUnackedBytes >= ackBytes) {
       sendAck(s);
       return;
     }
@@ -503,6 +513,7 @@ export function createDocEndpoint({
     if (sess !== s || !attached()) return;
     if (rawSend(cur, { type: 'session.ack', ack: s.inAck })) {
       s.inUnacked = 0;
+      s.inUnackedBytes = 0;
       clearAckTimer(s);
     }
   }
@@ -512,6 +523,7 @@ export function createDocEndpoint({
     const message = s.inAck > 0 ? { ...entry.body, ack: s.inAck } : entry.body;
     if (rawSend(cur, message) && s.inAck > 0) {
       s.inUnacked = 0;
+      s.inUnackedBytes = 0;
       clearAckTimer(s);
     }
   }
