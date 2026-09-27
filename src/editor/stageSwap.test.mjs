@@ -347,6 +347,55 @@ test("播放态:同时只跑一次;空列表不跑", async () => {
   assert.equal(await first, true);
 });
 
+test("播放态互换跑着时停下:停下那一次的暂停态第二路不丢,播放态收手后接着做(C10-A4)", async () => {
+  /*
+   * C10-A4 的根因(c10-browser-probe 实测):播放中一张 (b) 档 vtOk=false 的轻卡发起播放态互换,整场景补跑要十几秒;
+   * 这期间播放到头、用户点到 0.5 秒,两次 settle 都撞上 `running`,只记进 `pendingSettleT`。
+   * 以前只有暂停态那一路会消费它,播放态那一路收手时既不做也不交出去 —— 重层就停在快照上,直到下一次跳转。
+   */
+  Object.assign(state, { project: project([card("h", 0, 10), card("b", 0, 10)]), t: 1, playing: true });
+  plan = segments(["h"]);
+  withRecord("h", { vtOk: false });
+  withRecord("b", REC_B);
+  let open;
+  back.renderGate = new Promise((r) => { open = r; });
+  const playingSwap = runPlayingSwap(["b"]);
+  await new Promise((r) => setImmediate(r));
+  assert.equal(swapInFlight(), true);
+  // 播放到头(10 秒)、再点到 0.5 秒:都撞上正在跑的播放态互换
+  Object.assign(state, { t: 10, playing: false });
+  assert.equal(await runSettleSwap(10), false);
+  state.t = 0.5;
+  assert.equal(await runSettleSwap(0.5), false);
+  back.renderGate = null;
+  open();
+  assert.equal(await playingSwap, false, "播放已停:播放态这一次收手");
+  for (let i = 0; i < 50 && (swapInFlight() || !log.some((e) => e[0] === "swapRoles")); i++) await new Promise((r) => setImmediate(r));
+  const renders = log.filter((e) => e[1] === "render").map((e) => e[2]);
+  assert.deepEqual(renders, [33 / 30, 0.5], "收手之后按最后一次停下的 0.5 秒补跑");
+  assert.equal(log.filter((e) => e[0] === "swapRoles").length, 1, "补完互换成精确活渲");
+  assert.ok(log.some((e) => e[0] === "markAllSettled" && e[1] === "front"));
+  assert.equal(swapInFlight(), false);
+});
+
+test("播放态互换跑着时来的 settle,收手时又在播放了就不补(下一次停下自己会来)", async () => {
+  Object.assign(state, { project: project([card("h", 0, 10), card("b", 0, 10)]), t: 1, playing: true });
+  plan = segments(["h"]);
+  withRecord("h", { vtOk: false });
+  withRecord("b", REC_B);
+  let open;
+  back.renderGate = new Promise((r) => { open = r; });
+  const playingSwap = runPlayingSwap(["b"]);
+  await new Promise((r) => setImmediate(r));
+  assert.equal(await runSettleSwap(1), false);
+  back.renderGate = null;
+  open();
+  assert.equal(await playingSwap, true);
+  for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r));
+  assert.deepEqual(log.filter((e) => e[1] === "render").map((e) => e[2]), [33 / 30]);
+  assert.equal(swapInFlight(), false);
+});
+
 /* ---------------------------------------------------------------- c10a 第 8 节:低内存档不追活渲 */
 
 test("低内存档:暂停态、播放态的补跑与互换一步都不走(不排后台任务、不抑制、不换)", async () => {

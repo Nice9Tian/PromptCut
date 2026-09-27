@@ -5,6 +5,7 @@
  *        [--a10]                 只验 A10(逐帧导出跨过票据时限):托管端的素材票据时限缩短到 --ticket-ttl-ms
  *        [--ticket-ttl-ms 20000]
  *        [--no-video]            不导入视频(只验卡片)
+ *        [--only-a4]             只跑到 A4(播放、暂停追活渲)为止,跳过 A2 的重开与 A5(排障用)
  *        [--base-port 5420]      端口段:+0 编辑器页的源、+1 / +2 两个舞台的源、+3 文档服务、+4 素材服务、+5～+7 创建者编辑器与舞台端口
  *                                (A5 里创建者关掉之后,独立渲染主机用同一段)
  *
@@ -40,6 +41,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 const argv = process.argv.slice(2);
 const arg = (name, fallback) => (argv.includes(name) ? argv[argv.indexOf(name) + 1] : fallback);
 const A10 = argv.includes('--a10');
+const ONLY_A4 = argv.includes('--only-a4');
 const KEEP = argv.includes('--keep-temp');
 const VIDEO = !argv.includes('--no-video');
 const BASE = Number(arg('--base-port', 5420));
@@ -653,11 +655,12 @@ try {
   if (!settled) {
     const pdx = await previewDiag(member);
     out.steps.settleDiag = {
-      preview: { swapInFlight: pdx?.swapInFlight, swapLog: pdx?.swapLog, frontId: pdx?.frontId, feedSettled: pdx?.snapshotFeed?.settled, settledAll: pdx?.snapshotFeed?.settledAll, settledLog: pdx?.snapshotFeed?.settledLog, mounted: pdx?.snapshotFeed?.mounted?.length, heavy: pdx?.snapshotFeed?.heavy?.length },
+      preview: { swapInFlight: pdx?.swapInFlight, swapLog: pdx?.swapLog, swapTrace: pdx?.swapTrace, setTimeLog: pdx?.setTimeLog, setTimeError: pdx?.setTimeError, backWork: pdx?.backWork, frontId: pdx?.frontId, feedSettled: pdx?.snapshotFeed?.settled, settledAll: pdx?.snapshotFeed?.settledAll, settledLog: pdx?.snapshotFeed?.settledLog, mounted: pdx?.snapshotFeed?.mounted?.length, heavy: pdx?.snapshotFeed?.heavy?.length },
       stages: await Promise.all(member.frames().filter((f) => /[?&]stage=1/.test(f.url())).map((f) => f.evaluate(() => { const d = window.__pcStageDiag?.() ?? {}; return { id: new URLSearchParams(location.search).get('id'), role: d.role, job: d.job, t: d.t, settling: d.settling, suppressed: d.suppressed, snapshots: d.snapshots, catchUps: d.catchUps, beatRunning: d.beatRunning }; }).catch((e) => String(e)))),
       costs: await P(member, () => new Promise((resolve) => { const r = indexedDB.open('promptcut-l2'); r.onsuccess = () => { const q = r.result.transaction('costs').objectStore('costs').getAll(); q.onsuccess = () => { resolve(q.result.map((x) => ({ k: x.record?.identityKey?.slice(0, 10), step: x.record?.stepMs, capped: x.record?.capped, vtOk: x.record?.vtOk, seekOk: x.record?.seekOk, kind: x.record?.kind }))); r.result.close(); }; }; r.onerror = () => resolve(null); })).catch(() => null),
     };
   }
+  out.steps.settleTrace = (await previewDiag(member))?.swapTrace ?? null;
   await shot(member, 'a4-settled-live');
   await delay(3000);
   const stillLive = await stageSample(member);
@@ -694,7 +697,7 @@ try {
     if (VIDEO) check(exported?.stats?.ticketSwaps > 0, 'A10:素材地址的票据跟着换', exported?.stats);
     out.steps.a10 = { ms: Date.now() - t10, ttlMs: TTL_MS, export: exported };
     say('a10.done', out.steps.a10);
-  } else {
+  } else if (!ONLY_A4) {
     /* ---------------------------------------------------------------- A2. 关掉再开:不重测,已在 L2 的块不再请求 */
     const t2 = Date.now();
     await P(member, () => window.__pcStore.actions.seek(1));

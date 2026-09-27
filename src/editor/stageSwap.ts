@@ -75,6 +75,27 @@ const swapLog: { at: number; t: number; stale: number; ready: boolean; swapped: 
 export function stageSwapDebug() {
   return swapLog.slice();
 }
+/** 诊断:暂停态第二路每次进门、判据与出门的原因(C10-A4 排障;探针看) */
+const swapTrace: Record<string, unknown>[] = [];
+function trace(entry: Record<string, unknown>): void {
+  swapTrace.push({ at: Math.round(performance.now()), ...entry });
+  if (swapTrace.length > 40) swapTrace.shift();
+}
+export function stageSwapTrace() {
+  return swapTrace.slice();
+}
+/** 诊断:按卡说明 `staleOnBackCatchUp` 为什么收 / 不收它 */
+export function staleExplain(project: Project, t: number): Record<string, unknown>[] {
+  const plan = currentPlan();
+  const fps = Math.max(1, project.fps || 30);
+  const { identityKeys, frameModes } = clipIdentityOf(project);
+  return activeCardClips(project, t).map((clip) => {
+    const record = recordOf(project, clip.id);
+    let tier: string | undefined;
+    try { if (record) tier = clipWeight(record, frameModes[clip.id], fps, currentTuning()).tier; } catch { tier = "error"; }
+    return { id: clip.id.slice(0, 8), pipeline: pipelineAt(plan, clip.id, t) ?? null, key: identityKeys[clip.id]?.slice(0, 10) ?? null, record: !!record, vtOk: record?.vtOk, tier };
+  });
+}
 
 /** 此刻是不是低内存档(宿主说了算;没有宿主 = 普通档) */
 export function swapBlockedByLowMemory(): boolean {
@@ -88,6 +109,8 @@ export function setSwapHost(next: SwapHost | null): void {
 
 /** 正在跑的那一次（同时只能有一次：后台舞台只有一台） */
 let running = false;
+/** 诊断:占着 `running` 的是哪一路 */
+let runningKind: "settle" | "playing" | null = null;
 /** 上一次的预估补跑时长（K3(b) 第二次翻倍） */
 let lastGuessMs = 0;
 /** 第二路正在跑时又来的 settle：只记**最后**那一次，当前这次结束后补做（R5-15） */
@@ -248,14 +271,17 @@ interface BackReady {
 async function catchUpBack(project: Project, targetSec: number): Promise<BackReady | null> {
   // 低内存档不追活渲、也没有后台舞台(c10a 第 8 节):一步都不排
   if (swapBlockedByLowMemory()) return null;
+  trace({ op: "catchup-queued", t: targetSec });
   return await runBackJob("catchup", async (ctx) => {
     const back = ctx.stage;
+    trace({ op: "catchup-start", t: targetSec, back: !!back, sameAsFront: back === frontStage() });
     if (!back || back === frontStage()) return null;   // legacy 单舞台：没有后台可换
     // (1) 探针可能把它换成了缩水项目，整份重灌并更新 stageBridge 的基线
     await pushProject("back", project, { reset: true });
     if (ctx.signal.aborted) return null;
     // (2) 整场景从最早的 mountFrameOf 补到目标拍。不传 maxCatchUp 会被 6000 ms 削掉起点
     const reply = await back.render(targetSec, { jump: true, maxCatchUp: Infinity });
+    trace({ op: "catchup-rendered", t: targetSec, aborted: "aborted" in reply ? reply.aborted : false, reason: (reply as { reason?: string }).reason });
     if ("aborted" in reply && reply.aborted) return null;
     if (ctx.signal.aborted) return null;
     // (3) 素材层也到位（最多等 300 ms，超时照样换）
@@ -328,9 +354,10 @@ export async function runSettleSwap(t: number): Promise<boolean> {
    * 按最后那一次的 `t` 再做一遍；中间被盖掉的那些本来就不用做。
    */
   // 低内存档:暂停后不追到活渲,停在已有的预渲染小尺寸上(c10a 第 8 节)
-  if (swapBlockedByLowMemory()) return false;
-  if (running) { pendingSettleT = t; return false; }
+  if (swapBlockedByLowMemory()) { trace({ op: "settle", t, out: "lowmem" }); return false; }
+  if (running) { trace({ op: "settle", t, out: "running", runningKind }); pendingSettleT = t; return false; }
   running = true;
+  runningKind = "settle";
   try {
     let target = t;
     for (;;) {
@@ -338,6 +365,7 @@ export async function runSettleSwap(t: number): Promise<boolean> {
       let swapped = false;
       const project = getState().project;
       const stale = staleOnBackCatchUp(project, target).length;
+      trace({ op: "settle", t: target, stale, plan: !!currentPlan(), costs: currentCosts().length, ...(stale ? {} : { cards: staleExplain(project, target) }) });
       if (stale) {
         const ready = await catchUpBack(project, target);
         // 补跑期间用户又动了：这一次作废（下面那一轮按最新的 `t` 重来）
@@ -354,6 +382,7 @@ export async function runSettleSwap(t: number): Promise<boolean> {
     }
   } finally {
     running = false;
+    runningKind = null;
     pendingSettleT = null;
   }
 }
@@ -372,6 +401,8 @@ export async function runPlayingSwap(pendingIds: readonly string[]): Promise<boo
   const project = getState().project;
   if (!pendingIds.length) return false;
   running = true;
+  runningKind = "playing";
+  trace({ op: "playing", t: getState().t, ids: pendingIds.map((id) => id.slice(0, 8)) });
   // 等待期间这几张卡进 front 的 suppressed（藏子树、t 冻住 —— 没有平面时舞台显示占位符 T4）
   setExtraSuppressed(pendingIds);
   /**
@@ -424,15 +455,29 @@ export async function runPlayingSwap(pendingIds: readonly string[]): Promise<boo
     }
     return giveUp();
   } finally {
+    trace({ op: "playing-end", t: getState().t, gaveUp, pendingSettleT });
     running = false;
+    runningKind = null;
     // 放弃那一次**不清**：那张卡活渲出来的状态是错的，死素材就绪前留在 suppressed（R5-11）
     if (!gaveUp) setExtraSuppressed([]);
+    /*
+     * **跑着时来的暂停态 settle 交给暂停态那一路**(R5-15 的另一半;C10-A4)。
+     * 播放态互换的整场景补跑可能要十几秒(补到目标拍要把判重的慢卡一起推一遍),这期间播放到头、
+     * 用户点时间轴,`runSettleSwap` 都撞上 `running`、只记进 `pendingSettleT`。以前只有暂停态那一路
+     * 会消费它,这里收手时既不做也不交出去 —— 判重的 `vtOk = false` 卡就停在快照上,直到下一次跳转或播放,
+     * 违背「停下就精确」。收手时又在播放了就不补:下一次停下自己会再来一次。
+     */
+    const next = pendingSettleT;
+    pendingSettleT = null;
+    if (next !== null && !getState().playing) void runSettleSwap(next).catch(() => { /* 后台舞台正在换:下一次 setTime 会重来 */ });
   }
 }
 
 /** 测试用 */
 export function resetStageSwap(): void {
   running = false;
+  runningKind = null;
+  pendingSettleT = null;
   lastGuessMs = 0;
   host = null;
 }
