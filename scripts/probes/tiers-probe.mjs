@@ -154,7 +154,25 @@ try {
   const pageErrors = [];
   page.on('pageerror', (e) => pageErrors.push(String(e?.message ?? e).slice(0, 300)));
   await page.goto(`${A.origin}/?editor&nosetup=1`, { waitUntil: 'domcontentloaded' });
-  await until('[a] 页面与舞台起来、测量遮罩退下', () => page.evaluate(() => document.querySelectorAll('iframe').length >= 2 && !document.querySelector('[data-pc="probe-gate"]')), 300_000);
+  await until('[a] 页面与舞台起来', () => page.evaluate(() => document.querySelectorAll('iframe').length >= 2), 300_000);
+  // 测量遮罩在页面起来约 3 s 后才出现(docs/reports/AGENT-perf-t4.md「没做的与建议」第 3 条):只等「没有遮罩」
+  // 会在它出现之前就放行,测量和后面的静置、对照窗口叠在一起。所以先等测量开始(遮罩出现,或 probeRunner 报 running),
+  // 再等它结束(遮罩退下且不再 running)。项目里没有要测的卡时测量根本不开始:等满 GATE_APPEAR_MS 没见到就照常往下走。
+  const gateState = () => page.evaluate(async () => {
+    const gate = !!document.querySelector('[data-pc="probe-gate"]');
+    let running = false;
+    try { running = !!(await import('/src/editor/probeRunner.ts')).probeProgress().running; } catch { /* 取不到就只看遮罩 */ }
+    return { gate, running };
+  });
+  const GATE_APPEAR_MS = 30_000;
+  const gateSeen = await until('[a] 测量开始(遮罩出现)', async () => { const s = await gateState(); return s.gate || s.running ? s : null; }, GATE_APPEAR_MS, 100);
+  if (gateSeen) {
+    await until('[a] 测量结束、遮罩退下', async () => { const s = await gateState(); return !s.gate && !s.running; }, 300_000, 200);
+    out.probeGate = 'shown-then-gone';
+  } else {
+    if (fails.at(-1) === '超时:[a] 测量开始(遮罩出现)') fails.pop(); // 没见到遮罩不算失败:这个项目没有要测的卡
+    out.probeGate = 'never-shown';
+  }
   // 页面打开时把上传目标交回缺省({ base: null } → PROMPTCUT_ASSET_URL):目标仍是 R
   await delay(5000);
   const q1 = await (await fetch(`${A.origin}/api/media/upload-queue`)).json();
