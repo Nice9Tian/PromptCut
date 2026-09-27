@@ -25,8 +25,46 @@
  *   A10(--a10)逐帧导出跨过票据时限照常完成
  *
  * 不打印令牌、口令、邀请码原文。输出:过程写 stderr;stdout 最后一行一行 JSON `{ ok, fails, … }`。
+ *
+ * ## 对远端跑(外网模式):--site <源>
+ *
+ *   node scripts/probes/c10-browser-probe.mjs --site https://8-219-80-16.sslip.io [--run <本轮 id>] [--stage-origins <源1>,<源2>]
+ *        [--no-host] [--host-wait-min 15] [--timeout-min 120] [--coord <协调口基址>] [--out <目录>] [--base-port 5420]
+ *
+ *   - 不起本机托管组合与代理:页面取 `<源>/editor`,文档服务 `<源>/hosted/`,素材服务 `<源>/media/api/asset`;
+ *     两个舞台源缺省读 `<源>/editor/runtime-config.json` 的 `stageOrigins`(`deploy-hosted --stage-origins` 写的),读不到记一条失败、
+ *     退回按 `s1.<主机>`、`s2.<主机>` 核;`--stage-origins` 给了就以它为准(仍核 runtime-config 与它一致)。
+ *   - 创建者 = 本机桌面版 dev server(端口 +5～+7)连远端(同 c10a-demo-probe 的创建者);成员 = 本机无头 Chrome 普通档(桌面视口)。
+ *   - 判据与本机替身相同,只有一处不同:A1 的「播放 10 秒主文档长任务 0」在外网模式只报数、标「待笔记本复核」(PC 忙,耗时类判断在 PC 上不作数)。
+ *   - A5 的独立渲染主机来自外部(下一节):没有节点在线时改一处、页面发布清单计划、不报错照常核;之后把本轮的项目与凭证写进协调口 KV,
+ *     等外部主机报到(`--host-wait-min`,缺省 15 分钟),再等它认领并完成(至多 15 分钟)、页面取到它产的新快照(至多 10 分钟)。
+ *     时限内没有主机报到:A5 的后半记「待笔记本主机」(`steps.a5.pendingHost`),不算失败。`--no-host` 不写 KV、不等,直接记「待笔记本主机」。
+ *   - `--a10` 只对本机替身(要缩短托管端的票据时限)。
+ *
+ * ## 独立主机角色:--role host --run <id>(HT9 的跨机做法:在线页面发布带片段清单的 plan,独立渲染主机认领并完成)
+ *
+ *   node scripts/probes/c10-browser-probe.mjs --role host --run <id> [--coord <协调口基址>] [--port 5425] [--out <目录>]
+ *        [--timeout-min 120] [--test-fingerprint <16 位十六进制>] [--keep-temp]
+ *
+ *   - 从协调口 KV 读本轮的配置(`c10b.<run>.config`:文档服务地址、项目 id、成员口令),起 `scripts/render-host.mjs --config … --port …`
+ *     (IPC;编辑器另占 +1、+2),用成员身份、`role: 'render'` 连远端认领。起来后写 `host.ready`(nodeId、profile、环境指纹、代码版本、传输),
+ *     之后每 2 秒看一次自己的 `GET /api/frames/queue`,认领 / 完成数变了就写 `host.progress`;等到 `finish`(或 `abort`、超时)经 IPC 正常退出,
+ *     结果写 `host`。`--run latest`:取 `c10b.latest` 里本角色起来前 10 分钟之后写的那一轮。
+ *   - `--test-fingerprint`:给主机设 `PROMPTCUT_TEST_ENV_FINGERPRINT`(本机自测时让主机与页面的环境不同;跨机不用)。
+ *   - 环境变量 `PROBE_MAIL_TOKEN`:协调口开了信箱时 KV 要它(`coordClient` 自动带,不打印)。
+ *
+ *   PC 这边的 `--role creator`(外网模式的缺省;本机替身里给它表示 A5 也等外部主机,本机自测跨机协议用)在 A5 处按上一节等外部主机。
+ *   本机替身不给 --role(缺省 all):A5 照旧由探针自己起本机的独立渲染主机。
+ *
+ * ## KV 键(`c10b.<run>.<名>`)
+ *   config         creator → host:文档服务的 ws 地址、项目 id、成员口令、项目文档 id、主重卡片段 id、页面发布的计划 id(口令只进 KV 与主机临时目录里的配置文件)
+ *   host.ready     host → creator:起来了(nodeId、profile、envFingerprint、codeVersion、transport、机器平台)
+ *   host.progress  host → creator:认领、完成、失败数与传输(变了才写)
+ *   finish         creator → host:可以退出了(页面已取到新快照,或 creator 不等了)
+ *   abort          creator 出错收尾时写;host 看到就退出
+ *   host           host 的结果行
  */
-import { spawn, spawnSync } from 'node:child_process';
+import { fork, spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -46,25 +84,42 @@ const KEEP = argv.includes('--keep-temp');
 const VIDEO = !argv.includes('--no-video');
 const BASE = Number(arg('--base-port', 5420));
 const TTL_MS = Number(arg('--ticket-ttl-ms', 20_000));
-if (A10) process.env.PROMPTCUT_TEST_ASSET_TICKET_TTL_MS = String(TTL_MS);
+/** 外网模式:给了 --site 就对远端跑,不起本机托管组合与代理 */
+const SITE_ARG = arg('--site', null);
+const REMOTE = !!SITE_ARG;
+const ROLE = arg('--role', REMOTE ? 'creator' : 'all');
+if (!['all', 'creator', 'host'].includes(ROLE)) { process.stderr.write('--role 只认 all | creator | host\n'); process.exit(2); }
+if (REMOTE && ROLE === 'all') { process.stderr.write('外网模式没有 --role all:本机这边用 creator(缺省),独立主机在另一台机器上跑 --role host\n'); process.exit(2); }
+if (REMOTE && A10) { process.stderr.write('--a10 只对本机替身(要缩短托管端的票据时限)\n'); process.exit(2); }
+/** A5 的独立渲染主机来自外部(经协调口 KV):外网模式、或本机替身里给了 --role creator */
+const EXTERNAL_HOST = ROLE === 'creator';
+const NO_HOST = argv.includes('--no-host');
+const HOST_WAIT_MS = Number(arg('--host-wait-min', 15)) * 60_000;
+const COORD = String(arg('--coord', 'https://8-219-80-16.sslip.io/coord')).replace(/\/+$/, '');
+if (A10 && ROLE !== 'host') process.env.PROMPTCUT_TEST_ASSET_TICKET_TTL_MS = String(TTL_MS);
 const PORTS = { editor: BASE, stageA: BASE + 1, stageB: BASE + 2, doc: BASE + 3, asset: BASE + 4, node: BASE + 5 };
 const FPS = 30;
 const SECONDS = 10;
 const EXTRA_HEAVY = 8;
 const HOST_FP = '0c10b0e5f1a9e7d2';
-const RUN = `${Date.now().toString(36)}${randomBytes(2).toString('hex')}`;
-const SITE = `http://127.0.0.1:${PORTS.editor}`;
-const STAGE_ORIGINS = [`http://127.0.0.1:${PORTS.stageA}`, `http://127.0.0.1:${PORTS.stageB}`];
+const RUN_ARG = arg('--run', null);
+if (RUN_ARG && RUN_ARG !== 'latest' && !/^[A-Za-z0-9_-]{1,24}$/.test(RUN_ARG)) { process.stderr.write('--run 要 1～24 个 [A-Za-z0-9_-]\n'); process.exit(2); }
+const RUN = RUN_ARG && RUN_ARG !== 'latest' ? RUN_ARG : `${Date.now().toString(36)}${randomBytes(2).toString('hex')}`;
+const SITE = REMOTE ? String(SITE_ARG).replace(/\/+$/, '') : `http://127.0.0.1:${PORTS.editor}`;
+/** 两个舞台源:本机替身是 +1、+2 两个端口;外网模式在主流程开头按 --stage-origins / runtime-config.json 定 */
+let STAGE_ORIGINS = REMOTE ? [] : [`http://127.0.0.1:${PORTS.stageA}`, `http://127.0.0.1:${PORTS.stageB}`];
 const HOSTED = `${SITE}/hosted/`;
 const EDITOR = `${SITE}/editor`;
-const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-c10-browser-'));
+const TMP = fs.mkdtempSync(path.join(os.tmpdir(), ROLE === 'host' ? 'pc-c10-host-' : 'pc-c10-browser-'));
 const OUT = path.resolve(arg('--out', path.join(TMP, 'shots')));
 fs.mkdirSync(OUT, { recursive: true });
 const started = Date.now();
-const deadline = started + 60 * 60_000;
+const deadline = started + Number(arg('--timeout-min', REMOTE || ROLE !== 'all' ? 120 : 60)) * 60_000;
 
 const fails = [];
-const out = { ok: false, run: RUN, mode: A10 ? 'a10' : 'a1-a5', site: SITE, stageOrigins: STAGE_ORIGINS, out: OUT, steps: {} };
+const out = { ok: false, run: RUN, role: ROLE, mode: A10 ? 'a10' : 'a1-a5', target: REMOTE ? 'site' : 'local', site: SITE, stageOrigins: STAGE_ORIGINS, out: OUT, steps: {} };
+/** 待笔记本复核 / 待笔记本主机的项(不算失败,只记下) */
+const pending = [];
 const check = (cond, label, extra) => { if (!cond) fails.push(label + (extra === undefined ? '' : ` :: ${JSON.stringify(extra).slice(0, 500)}`)); return !!cond; };
 const say = (step, fields = {}) => process.stderr.write(`${JSON.stringify({ t: new Date().toISOString(), step, ...fields })}\n`);
 const codeOf = (link) => String(link ?? '').split('invite=')[1] ?? '';
@@ -264,6 +319,162 @@ async function stopHost() {
   host = null;
 }
 
+/**
+ * 主机诊断(`GET /api/frames/queue`)里给协调口与结果行的部分:只挑计数、身份与传输,不带凭证。
+ * `transport` 是实际用的传输('ws';脱开时 null),HT-a 没有 HTTP 回落(`fallbacks` 恒 0),回落原因看 `sessionLog`。
+ */
+function hostView(body, lines = []) {
+  if (!body) return null;
+  const nodes = (body.nodes ?? []).map((n) => ({
+    nodeId: n.nodeId ?? null, projectId: n.projectId ?? null, connected: n.connected ?? null,
+    claimed: n.claimed ?? 0, completed: n.completed ?? 0, dedup: n.dedup ?? 0, failed: n.failed ?? 0, lost: n.lost ?? 0, released: n.released ?? 0,
+    transport: typeof n.transport === 'string' || n.transport === null ? n.transport : (n.transport?.transport ?? null),
+    resumes: n.resumes ?? 0, legacy: n.legacy ?? null, opens: n.opens ?? null, connectFailed: n.connectFailed ?? null, assetBase: n.assetBase ?? null,
+  }));
+  // 会话层的日志(建成、脱开、接续、传输出错):只留事件名与几个不含凭证的字段
+  const sessionLog = [];
+  for (const line of lines) {
+    const m = /(session\.[a-z-]+)\s*(\{.*\})?/.exec(line);
+    if (!m) continue;
+    let f = {};
+    try { f = m[2] ? JSON.parse(m[2]) : {}; } catch { f = {}; }
+    sessionLog.push({ event: m[1], ...Object.fromEntries(Object.entries(f).filter(([k]) => ['transport', 'stage', 'message', 'legacy', 'retainMs', 'gapMs', 'reason', 'code'].includes(k)).map(([k, v]) => [k, String(v).slice(0, 160)])) });
+  }
+  return { profile: body.profile ?? null, envFingerprint: body.envFingerprint ?? null, codeVersion: typeof body.codeVersion === 'string' ? body.codeVersion.slice(0, 12) : null,
+    maxConcurrent: body.maxConcurrent ?? null, nodes, sessionLog: sessionLog.slice(-8) };
+}
+/** 认领了 plan(切出细任务)且至少做完一段:claimed 算上 plan 本身(与本机替身同一判据) */
+const hostDidWork = (view) => (view?.nodes ?? []).some((n) => (n.completed ?? 0) > 0 && (n.claimed ?? 0) > (n.completed ?? 0) - 1);
+
+/* ================================================================== 协调口 KV(外部主机) */
+
+const kvKey = (run, name) => `c10b.${run}.${name}`;
+async function kvOf(run) {
+  const { coordClient } = await import('./probe-coord.mjs');
+  const c = coordClient(COORD);
+  return {
+    put: (name, value) => c.put(kvKey(run, name), value),
+    get: (name, waitMs = 0) => c.get(kvKey(run, name), waitMs),
+    /** 等到 name 出现或到 endAt;协调口暂时连不上就退避重试;watchAbort 时 abort 出现就抛错 */
+    async wait(name, endAt, { watchAbort = false } = {}) {
+      let backoff = 500;
+      while (Date.now() < Math.min(endAt, deadline)) {
+        try {
+          const v = await c.get(kvKey(run, name), Math.max(1, Math.min(20_000, Math.min(endAt, deadline) - Date.now())));
+          if (v !== null) return v;
+          backoff = 500;
+        } catch { await delay(backoff); backoff = Math.min(backoff * 2, 10_000); }
+        if (watchAbort) {
+          const a = await c.get(kvKey(run, 'abort'), 0).catch(() => null);
+          if (a !== null) throw new Error(`creator 已中止:${String(a.reason ?? '').slice(0, 200)}`);
+        }
+      }
+      return null;
+    },
+    latest: () => c.get('c10b.latest', 0),
+    putLatest: (v) => c.put('c10b.latest', v),
+  };
+}
+
+/* ================================================================== --role host:外部独立渲染主机 */
+
+async function runHostRole() {
+  const port = Number(arg('--port', PORTS.node));
+  out.port = port;
+  let run = RUN;
+  let store = null;
+  let child = null;
+  const lines = [];
+  let exitLine = null;
+  try {
+    if (!RUN_ARG) throw new Error('--role host 要给 --run <id>(或 --run latest)');
+    if (RUN_ARG === 'latest') {
+      const c = await kvOf('x');
+      const since = started - 10 * 60_000;
+      for (;;) {
+        const v = await c.latest().catch(() => null);
+        if (v?.run && (v.at ?? 0) >= since) { run = v.run; break; }
+        if (Date.now() > deadline) throw new Error('KV 里没有本轮 id(c10b.latest)');
+        await delay(3000);
+      }
+    }
+    out.run = run;
+    store = await kvOf(run);
+    say('host.waiting-config', { run, coord: COORD });
+    const cfg = await store.wait('config', deadline, { watchAbort: true });
+    if (!cfg) throw new Error('等 KV config(创建者的配置)超时');
+    out.project = { projectId: cfg.projectId, hosted: cfg.hosted ?? null };
+    for (const p of [port, port + 1, port + 2]) if (!(await portFree(p))) throw new Error(`端口 ${p} 被占用`);
+    const configFile = path.join(TMP, 'host-shared.json');
+    fs.writeFileSync(configFile, JSON.stringify([{ url: cfg.ws, projectId: cfg.projectId, username: '渲染主机', password: cfg.memberPassword, as: 'member', role: 'render',
+      deviceId: `c10b-xhost-${run}`.padEnd(16, '0').slice(0, 40), deviceName: `c10-browser 外部独立渲染主机(${os.hostname()})` }]));
+    const env = { ...process.env };
+    for (const key of ['PROMPTCUT_DOCSERVICE_URL', 'PROMPTCUT_CLUSTER_TOKEN', 'PROMPTCUT_QUEUE_NODE', 'PROMPTCUT_SHARED_CONFIG', 'PROMPTCUT_TEST_CODE_VERSION', 'PROMPTCUT_TEST_ASSET_TICKET_TTL_MS', 'PROMPTCUT_TEST_ENV_FINGERPRINT']) delete env[key];
+    const testFp = arg('--test-fingerprint', null);
+    if (testFp) env.PROMPTCUT_TEST_ENV_FINGERPRINT = testFp;
+    out.testFingerprint = !!testFp;
+    child = fork(path.join(ROOT, 'scripts', 'render-host.mjs'), ['--config', configFile, '--port', String(port), '--data', path.join(TMP, 'data')],
+      { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe', 'ipc'], windowsHide: true });
+    const keep = (c) => {
+      for (const line of c.toString().split(/\r?\n/)) {
+        if (!line.trim()) continue;
+        lines.push(line); if (lines.length > 4000) lines.shift();
+        if (line.startsWith('[render-host] exit ')) { try { exitLine = JSON.parse(line.slice('[render-host] exit '.length)); } catch { /* 半行 */ } }
+      }
+    };
+    child.stdout.on('data', keep);
+    child.stderr.on('data', keep);
+    const ready = await new Promise((resolve) => {
+      const t = setTimeout(() => resolve(null), 360_000);
+      child.on('message', (m) => { if (m?.type === 'ready') { clearTimeout(t); resolve(m); } });
+      child.once('exit', () => { clearTimeout(t); resolve(null); });
+    });
+    if (!check(ready, '[host] render-host 起来了', lines.slice(-6))) throw new Error('render-host 没起来');
+    const origin = `http://127.0.0.1:${port}`;
+    const q0 = hostView(await getJson(`${origin}/api/frames/queue`, 30_000).catch(() => ready.queue), lines);
+    out.ready = q0;
+    await store.put('host.ready', { at: Date.now(), ...q0, platform: process.platform, arch: process.arch, node: process.version, testFingerprint: !!testFp });
+    say('host.ready', { profile: q0?.profile, envFingerprint: q0?.envFingerprint, nodeId: q0?.nodes?.[0]?.nodeId, transport: q0?.nodes?.[0]?.transport });
+    check(q0?.profile === 'host', '[host] 诊断里 profile 是 host', q0?.profile);
+    // 看自己的诊断,变了就写 host.progress;等 finish / abort / 超时
+    let lastSig = '';
+    let last = q0;
+    for (;;) {
+      const q = hostView(await getJson(`${origin}/api/frames/queue`, 30_000).catch(() => null), lines);
+      if (q) {
+        last = q;
+        const sig = JSON.stringify(q.nodes.map((n) => [n.claimed, n.completed, n.failed, n.transport, n.connected]));
+        if (sig !== lastSig) { lastSig = sig; await store.put('host.progress', { at: Date.now(), ...q }).catch(() => {}); say('host.progress', { nodes: q.nodes.map((n) => ({ claimed: n.claimed, completed: n.completed, failed: n.failed, transport: n.transport })) }); }
+      }
+      const fin = await store.get('finish', 2000).catch(() => null);
+      if (fin) { out.finish = { reason: fin.reason ?? null }; break; }
+      const ab = await store.get('abort', 0).catch(() => null);
+      if (ab) { out.finish = { reason: `abort:${String(ab.reason ?? '').slice(0, 200)}` }; break; }
+      if (Date.now() > deadline) { fails.push('[host] 超时:没等到 finish'); break; }
+      if (child.exitCode !== null) throw new Error(`render-host 中途退了(退出码 ${child.exitCode})`);
+    }
+    out.last = last;
+    out.didWork = hostDidWork(last);
+    child.send({ type: 'shutdown' });
+    out.exitCode = await new Promise((resolve) => { if (child.exitCode !== null) return resolve(child.exitCode); const t = setTimeout(() => resolve(null), 60_000); child.once('exit', (code) => { clearTimeout(t); resolve(code); }); });
+    out.released = exitLine?.released ?? null;
+    check(out.exitCode === 0, '[host] render-host 经 IPC 正常退出(退出码 0)', { exitCode: out.exitCode, tail: lines.slice(-4) });
+  } catch (e) {
+    fails.push(`[host] 出错:${String(e?.message ?? e).slice(0, 600)}`);
+  } finally {
+    if (child && child.exitCode === null) killTree(child.pid);
+    for (const p of [port, port + 1, port + 2]) { const pid = pidOnPort(p); if (pid && child) killTree(pid); }
+    try { fs.writeFileSync(path.join(OUT, 'render-host.log'), lines.join('\n')); } catch { /* 写不了 */ }
+    if (!KEEP) { for (const d of fs.readdirSync(TMP)) { const p = path.join(TMP, d); if (path.resolve(p) !== OUT) { try { fs.rmSync(p, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 }); } catch { /* 句柄没放 */ } } } }
+    out.ms = Date.now() - started;
+    out.fails = fails;
+    out.ok = fails.length === 0;
+    try { await store?.put('host', out); } catch (e) { fails.push(`[host] 结果交不回协调口:${e?.message ?? e}`); out.ok = false; }
+    console.log(JSON.stringify(out));
+    process.exit(out.ok ? 0 : 1);
+  }
+}
+
 /* ================================================================== 文档服务连接(Node 侧,创建者身份) */
 
 async function mods() {
@@ -437,12 +648,47 @@ function assetSummary(list) {
 
 /* ================================================================== 主流程 */
 
+if (ROLE === 'host') await runHostRole();
+
 const state = {};
 let M = null;
 let conn = null;
+/** 外部主机:KV(本轮)与收尾时要不要写 abort */
+let xstore = null;
+let xfinished = false;
+/** 外网模式:两个舞台源(--stage-origins 优先;否则 runtime-config.json;都没有就 s1./s2. 子域) */
+async function resolveStageOrigins() {
+  const given = arg('--stage-origins', null);
+  let cfg = null;
+  let why = null;
+  try {
+    const r = await fetch(`${SITE}/editor/runtime-config.json`, { signal: AbortSignal.timeout(15_000) });
+    const ct = r.headers.get('content-type') ?? '';
+    if (r.ok && /json/.test(ct)) cfg = await r.json(); else why = `status ${r.status} ${ct}`;
+  } catch (e) { why = String(e?.message ?? e); }
+  const fromCfg = Array.isArray(cfg?.stageOrigins) ? cfg.stageOrigins.map((o) => String(o).replace(/\/+$/, '')) : null;
+  const u = new URL(SITE);
+  const fallback = [`${u.protocol}//s1.${u.host}`, `${u.protocol}//s2.${u.host}`];
+  const list = given ? given.split(',').map((s) => s.trim().replace(/\/+$/, '')).filter(Boolean) : (fromCfg ?? fallback);
+  check(fromCfg?.length === 2, '外网:/editor/runtime-config.json 给出两个舞台源', { v: cfg?.v ?? null, stageOrigins: fromCfg, why });
+  if (given && fromCfg) check(fromCfg.length === list.length && fromCfg.every((o, i) => o === list[i]), '外网:runtime-config.json 的舞台源与 --stage-origins 一致', { runtime: fromCfg, given: list });
+  out.runtimeConfig = cfg ? { v: cfg.v ?? null, stageOrigins: fromCfg } : { missing: why };
+  return list;
+}
 try {
   M = await mods();
-  await startLocalSite();
+  if (REMOTE) {
+    STAGE_ORIGINS = await resolveStageOrigins();
+    out.stageOrigins = STAGE_ORIGINS;
+    say('site', { site: SITE, stageOrigins: STAGE_ORIGINS, role: ROLE, externalHost: EXTERNAL_HOST, noHost: NO_HOST });
+  } else {
+    await startLocalSite();
+  }
+  if (EXTERNAL_HOST && !NO_HOST) {
+    xstore = await kvOf(RUN);
+    await xstore.putLatest({ run: RUN, at: Date.now() }).catch((e) => fails.push(`协调口写不进 c10b.latest:${e?.message ?? e}`));
+    say('run', { run: RUN, coord: COORD, hint: `另一台机器:node scripts/probes/c10-browser-probe.mjs --role host --run ${RUN}` });
+  }
   const health = await getJson(`${SITE}/hosted/healthz`).catch((e) => ({ error: String(e?.message ?? e) }));
   if (!check(health?.ok, '托管端 /hosted/healthz', health)) throw new Error('托管端不通');
 
@@ -635,7 +881,9 @@ try {
   const beatAfter = (await previewDiag(member))?.beatSwap ?? {};
   const playing = samples.filter((s) => s.playing);
   const mainSigs = playing.filter((s) => s.t >= 1).map((s) => s.wraps.find((w) => w.id === state.main)).filter((w) => w?.suppressed && w.plane).map((w) => w.planeSig);
-  check(longTasks.length === 0, 'A1:播放 10 秒,主文档长任务 0', { count: longTasks.length, worst: longTasks.sort((a, b) => b.ms - a.ms).slice(0, 3) });
+  const worstLong = longTasks.slice().sort((a, b) => b.ms - a.ms).slice(0, 3);
+  if (REMOTE) pending.push({ item: 'A1:播放 10 秒,主文档长任务 0', status: '待笔记本复核', count: longTasks.length, worst: worstLong });
+  else check(longTasks.length === 0, 'A1:播放 10 秒,主文档长任务 0', { count: longTasks.length, worst: worstLong });
   check(playing.length >= 10, 'A1:播放中采到可见舞台的样子', { samples: samples.length, playing: playing.length });
   check(new Set(mainSigs).size >= 5, 'A1:重层按拍换快照(播放中主重卡的快照平面一直在换帧)', { distinct: new Set(mainSigs).size, of: mainSigs.length });
   const deliveries = (beatAfter.deliveries ?? 0) - (beatBefore.deliveries ?? 0);
@@ -758,23 +1006,63 @@ try {
     await delay(8000);
     const toasts = await P(member, () => [...document.querySelectorAll('[data-pc="toast"], .pc-toast')].map((t) => t.textContent)).catch(() => []);
     check(member.pageErrors.length === errorsBefore && !toasts.some((t) => /失败|出错|错误/.test(t ?? '')), 'A5:没有节点在线时不报错', { pageErrors: member.pageErrors.slice(errorsBefore), toasts });
-    // 独立渲染主机(host 档、测试指纹,与页面的环境不同)
-    const hostConfig = path.join(TMP, 'host.json');
-    fs.writeFileSync(hostConfig, JSON.stringify([{ url: M.wsBaseOf(HOSTED), projectId: state.projectId, username: '渲染主机', password: state.projectPassword,
-      as: 'member', role: 'render', deviceId: `c10b-host-${RUN}`.padEnd(16, '0'), deviceName: 'c10-browser 独立渲染主机' }]));
-    await startHost(hostConfig);
-    const claimed = await until('A5:独立渲染主机认领清单计划并切分完成', async () => {
-      const body = await hostQueue();
-      const nodes = body?.nodes ?? [];
-      // 认领了 plan(切出细任务)且至少做完一段:claimed 算上 plan 本身
-      return nodes.some((n) => (n.completed ?? 0) > 0 && (n.claimed ?? 0) > (n.completed ?? 0) - 1) ? { profile: body?.profile, nodes: nodes.map((n) => ({ nodeId: n.nodeId, claimed: n.claimed, completed: n.completed, failed: n.failed })), envFingerprint: body?.envFingerprint ?? null } : null;
-    }, 900_000, 2000);
-    check(claimed, 'A5:独立渲染主机(host 档)认领、切分、完成', claimed ?? hostLog.slice(-12));
-    check(claimed?.envFingerprint === HOST_FP && HOST_FP !== state.pageFp && HOST_FP !== state.creatorFp, 'A5:认领的节点与页面发布方环境不同(主机用测试指纹)', { host: claimed?.envFingerprint, page: state.pageFp, creator: state.creatorFp });
+    let claimed = null;
+    let hostFp = HOST_FP;
+    let hostPending = null;
+    if (!EXTERNAL_HOST) {
+      // 独立渲染主机(本机替身:host 档、测试指纹,与页面的环境不同)
+      const hostConfig = path.join(TMP, 'host.json');
+      fs.writeFileSync(hostConfig, JSON.stringify([{ url: M.wsBaseOf(HOSTED), projectId: state.projectId, username: '渲染主机', password: state.projectPassword,
+        as: 'member', role: 'render', deviceId: `c10b-host-${RUN}`.padEnd(16, '0'), deviceName: 'c10-browser 独立渲染主机' }]));
+      await startHost(hostConfig);
+      claimed = await until('A5:独立渲染主机认领清单计划并切分完成', async () => {
+        const v = hostView(await hostQueue(), hostLog);
+        return hostDidWork(v) ? v : null;
+      }, 900_000, 2000);
+      check(claimed, 'A5:独立渲染主机(host 档)认领、切分、完成', claimed ?? hostLog.slice(-12));
+      check(claimed?.envFingerprint === HOST_FP && HOST_FP !== state.pageFp && HOST_FP !== state.creatorFp, 'A5:认领的节点与页面发布方环境不同(主机用测试指纹)', { host: claimed?.envFingerprint, page: state.pageFp, creator: state.creatorFp });
+    } else if (NO_HOST) {
+      hostPending = '待笔记本主机(--no-host:没有等外部主机)';
+    } else {
+      // 外部独立渲染主机(另一台机器上的 --role host):本轮的项目与凭证写进 KV,等它报到、认领、完成
+      await xstore.put('config', { at: Date.now(), hosted: HOSTED, ws: M.wsBaseOf(HOSTED), projectId: state.projectId, memberPassword: state.projectPassword,
+        docId: state.docId, mainClip: state.main, planId: published?.id ?? null });
+      say('a5.waiting-external-host', { run: RUN, waitMin: HOST_WAIT_MS / 60_000 });
+      const tReady = Date.now();
+      const ready = await xstore.wait('host.ready', Date.now() + HOST_WAIT_MS);
+      if (!ready) {
+        hostPending = `待笔记本主机(${HOST_WAIT_MS / 60_000} 分钟内没有外部主机报到)`;
+      } else {
+        hostFp = ready.envFingerprint ?? null;
+        const readyMs = Date.now() - tReady;
+        say('a5.external-host-ready', { profile: ready.profile, envFingerprint: ready.envFingerprint, nodeId: ready.nodes?.[0]?.nodeId, transport: ready.nodes?.[0]?.transport, platform: ready.platform, readyMs });
+        const endClaim = Date.now() + 900_000;
+        // 时限:报到之后 15 分钟内认领并做完至少一段(与本机替身同一时限)
+        let lastProgress = null;
+        let early = null;
+        while (Date.now() < Math.min(endClaim, deadline)) {
+          const p = await xstore.get('host.progress', 10_000).catch(() => null);
+          if (p) lastProgress = p;
+          if (hostDidWork(lastProgress)) break;
+          const done = await xstore.get('host', 0).catch(() => null);
+          if (done) { lastProgress = done.last ?? lastProgress; early = { exitedEarly: true, fails: done.fails ?? [] }; break; }
+        }
+        claimed = hostDidWork(lastProgress) ? lastProgress : null;
+        check(claimed, 'A5:外部独立渲染主机(host 档)15 分钟内认领、切分、完成', { nodes: lastProgress?.nodes ?? null, ...(early ?? {}) });
+        check(ready.profile === 'host', 'A5:认领方是独立渲染主机(profile host)', { profile: ready.profile });
+        out.steps.a5host = { readyMs, platform: ready.platform ?? null, arch: ready.arch ?? null, testFingerprint: ready.testFingerprint ?? null, profile: ready.profile ?? null,
+          envFingerprint: ready.envFingerprint ?? null, codeVersion: ready.codeVersion ?? null, differsFromPage: hostFp !== state.pageFp, differsFromCreator: hostFp !== state.creatorFp };
+      }
+    }
+    if (hostPending) {
+      pending.push({ item: 'A5:独立渲染主机认领、切分、完成,页面取到新快照', status: hostPending });
+      out.steps.a5 = { ms: Date.now() - t5, published, pendingHost: hostPending };
+      say('a5.pending', out.steps.a5);
+    } else {
     const fresh = await until('A5:页面取到主机产的新快照(层换了新键、环境是主机的,snap/ 就绪)', async () => {
       const o = await onlineDiag(member);
       const l = o?.layers?.find((x) => x.clipId === state.main);
-      return l && l.resultKey !== keyBefore && l.envFingerprint === HOST_FP && l.ready > 0 ? l : null;
+      return l && l.resultKey !== keyBefore && l.envFingerprint === hostFp && l.ready > 0 ? l : null;
     }, 600_000, 2000);
     check(fresh, 'A5:页面取到新快照', fresh ?? (await onlineDiag(member))?.layers);
     await P(member, () => window.__pcStore.actions.seek(2));
@@ -789,13 +1077,28 @@ try {
     await P(member, () => window.__pcStore.actions.pause());
     const newHtml = await (await frontFrame(member))?.evaluate((id) => document.querySelector(`[data-pc-clip="${CSS.escape(id)}"] [data-pc-snapshot-plane]`)?.textContent ?? '', state.main).catch(() => '');
     check(newShown, 'A5:播放中主重卡贴着新快照', newShown);
-    out.steps.a5 = { ms: Date.now() - t5, published, host: claimed, newLayer: fresh ? { resultKey: fresh.resultKey.slice(0, 12), envFingerprint: fresh.envFingerprint, ready: fresh.ready } : null, shown: newShown, planeText: newHtml?.slice(0, 40) ?? null };
+    // 认领方:nodeId、profile、环境指纹、实际用的传输(外部主机的由它经 KV 报,本机替身的读它的诊断)
+    const claimant = claimed ? { profile: claimed.profile, envFingerprint: claimed.envFingerprint, codeVersion: claimed.codeVersion,
+      nodes: claimed.nodes.map((n) => ({ nodeId: n.nodeId, claimed: n.claimed, completed: n.completed, failed: n.failed, transport: n.transport, resumes: n.resumes, legacy: n.legacy, opens: n.opens, connectFailed: n.connectFailed })),
+      sessionLog: claimed.sessionLog } : null;
+    check(!claimant || claimant.nodes.some((n) => n.transport === 'ws'), 'A5:认领方经 WebSocket 连着文档服务(没有回落)', claimant?.nodes);
+    out.steps.a5 = { ms: Date.now() - t5, published, external: EXTERNAL_HOST, claimant, newLayer: fresh ? { resultKey: fresh.resultKey.slice(0, 12), envFingerprint: fresh.envFingerprint, ready: fresh.ready } : null, shown: newShown, planeText: newHtml?.slice(0, 40) ?? null };
+    if (xstore) {
+      await xstore.put('finish', { at: Date.now(), reason: fresh ? 'fresh' : 'gave-up' }).catch(() => {});
+      xfinished = true;
+      const hostResult = await xstore.wait('host', Date.now() + 120_000);
+      out.steps.a5.hostResult = hostResult ? { ok: hostResult.ok, fails: hostResult.fails, exitCode: hostResult.exitCode ?? null, released: hostResult.released ?? null, ms: hostResult.ms ?? null } : null;
+      check(hostResult?.ok, 'A5:外部主机的结果行 ok(正常退出、放回认领)', out.steps.a5.hostResult);
+    }
     say('a5.done', out.steps.a5);
+    }
   }
 } catch (e) {
   fails.push(`探针异常:${String(e?.stack ?? e).slice(0, 1200)}`);
   for (const [name, page] of [['creator', state.creator], ['member', state.member]]) if (page) await shot(page, `fatal-${name}`).catch(() => {});
 } finally {
+  if (xstore && !xfinished) await xstore.put('abort', { at: Date.now(), reason: fails.length ? fails[0].slice(0, 200) : 'creator 结束' }).catch(() => {});
+  out.pending = pending;
   if (state.member) out.memberDiag = { pageErrors: state.member.pageErrors?.slice(-8), consoleErrors: state.member.consoleErrors?.slice(-8) };
   let deleted = null;
   if (M && state.projectId && state.creatorCred) {
