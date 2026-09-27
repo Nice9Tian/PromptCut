@@ -219,6 +219,7 @@ async function openWatch({ entry, projects, nodeId }) {
 
 /** 推镜像 → preload；回 preload 的首个回包 */
 async function pushAndPreload(ed, session, project) {
+  await ed.prerender();
   const pushed = await postJson(`${ed.url}/api/data/project`, { session, localRev: 1, project });
   if (!pushed.ok) throw new Error(`项目推不进镜像：${JSON.stringify(pushed.body).slice(0, 200)}`);
   const pre = await ed.prerender();
@@ -235,6 +236,7 @@ async function queueBaseline(ed) {
     at: Date.now(),
     planIds: new Set((q.published ?? []).map((p) => p.planId)),
     applied: (q.stats?.applied ?? 0) + (q.stats?.applyErrors ?? 0),
+    applyErrors: q.stats?.applyErrors ?? 0,
     doneCounts: { ...(q.doneCounts ?? {}) },
     local: Object.fromEntries(['claimed', 'completed', 'dedup', 'failed'].map((k) => [k, new Set(q.local?.[k] ?? [])])),
   };
@@ -271,6 +273,7 @@ async function waitSettled(ed, { session, base, since = null, timeoutMs = TIMEOU
     pc: { claimed: inPlan(q.local?.claimed, 'claimed'), completed: inPlan(q.local?.completed, 'completed'), dedup: inPlan(q.local?.dedup, 'dedup'),
       planClaimed: (q.local?.claimed ?? []).includes(settled.planId) },
     stats: q.stats ?? null,
+    applyErrors: (q.stats?.applyErrors ?? 0) - (base.applyErrors ?? 0),
   };
 }
 
@@ -284,15 +287,17 @@ async function fetchArtifacts(entry, derived) {
   if (!conn) return { error: '连不上项目' };
   try {
     const assetUrl = await new Promise((resolve) => {
-      const t = setTimeout(() => { stop(); resolve(null); }, 20_000);
+      const t = setTimeout(() => { stop(); resolve(null); }, 8_000);
       const stop = watchServiceEndpoints(conn.ep, ['asset'], (list) => {
         const u = list.find((e) => e.kind === 'asset' && Array.isArray(e.urls) && e.urls.length)?.urls[0];
         if (u) { clearTimeout(t); stop(); resolve(u); }
       });
     });
-    if (!assetUrl) return { error: '没拿到素材服务地址' };
-    const client = createAssetClient({ base: assetUrl, ticket: createTicketSource(conn.ep, { access: 'r' }), timeoutMs: 120_000 });
-    const art = { assetUrl, manifests: 0, missingManifests: [], blocks: 0, bytes: 0, badBlocks: [] };
+    // 局域网主机不登记素材服务（只在设了 PROMPTCUT_DOCSERVICE_URL 时登记）：同 hostAssetClient，从文档服务地址推同一进程的素材服务
+    const derived = (() => { const u = new URL(entry.url); return `${/^(wss|https):/.test(u.protocol) ? 'https:' : 'http:'}//${u.host}/api/asset`; })();
+    const base = assetUrl ?? derived;
+    const client = createAssetClient({ base, ticket: createTicketSource(conn.ep, { access: 'r' }), timeoutMs: 120_000 });
+    const art = { assetUrl: base, announced: !!assetUrl, manifests: 0, missingManifests: [], blocks: 0, bytes: 0, badBlocks: [] };
     const seen = new Set();
     for (const id of derived) {
       const m = /^(snapshot|stream):(.+)$/.exec(id);
@@ -549,6 +554,7 @@ async function runCreator(r) {
 /** 公共判据：J-全完、J-恰一（一个 epoch）、J-纯层、各方完成数 */
 function judgeRound(ctx, round, results, { label, epochOf = () => ctx.watch.epochs.at(-1) ?? 'e0', nodes = null } = {}) {
   const { r } = ctx;
+  r.check(`${label}:manifests-applied`, round.applyErrors === 0, { applyErrors: round.applyErrors, applied: round.stats?.applied ?? null });
   const states = Object.fromEntries(round.derived.map((id, i) => [id, round.states[i]]));
   r.judge(`${label}:J-all-done`, judgeAllDone(round.derived, states));
   const events = [];
@@ -1094,6 +1100,22 @@ async function hostE3(r, kv, host, cfg, run, docUrl, keep, idsSeen) {
       ep.events.push({ at: Date.now(), ev: 'asset', urls: urls.length });
     });
   }
+  // 放本机：局域网主机不经 service.endpoints 登记素材服务，地址随局域网发现下发（通告里带 docservice 与 asset）。
+  // 重启期间每 2 s 查一次发现，记「查不到 → 又查到」的时刻（本机时钟）
+  const lan = { polls: 0, downAt: null, backAt: null, asset: null };
+  let lanPolling = cfg.place === 'lan';
+  const lanLoop = (async () => {
+    if (!lanPolling) return;
+    const { discoverLan } = await import('../../server/lan/discovery.mjs');
+    while (lanPolling) {
+      const d = await discoverLan({ name: cfg.name, timeoutMs: 1500 }).catch(() => ({ hosts: [] }));
+      lan.polls++;
+      const h = d.hosts.find((x) => x.projectId === cfg.projectId) ?? null;
+      if (!h && lan.downAt === null) lan.downAt = Date.now();
+      if (h && lan.downAt !== null && lan.backAt === null) { lan.backAt = Date.now(); lan.asset = h.asset ?? null; }
+      await delay(500);
+    }
+  })();
   const n0 = (await host.node()) ?? {};
   const holding = await until(async () => {
     const n = await host.node().catch(() => null);
@@ -1112,14 +1134,21 @@ async function hostE3(r, kv, host, cfg, run, docUrl, keep, idsSeen) {
     return null;
   }, Math.max(1000, deadline - Date.now()), 250);
   const reconnected = typeof reconnectedAt === 'number';
+  await until(() => (lan.backAt !== null || !lanPolling ? true : null), 60_000, 200);
+  lanPolling = false;
+  await lanLoop.catch(() => {});
   await waitKv(kv, 'done', { stopOn: ['abort'] });
-  // 重新下发：连接重开之后第一次见到非空的素材服务地址
+  // 重新下发：放云端看 service.endpoints（连接重开之后第一次见到非空的素材服务地址）；
+  // 放本机看局域网发现（节点重连之后多久又能从发现拿到主机与素材服务地址，早于重连记 0）
   const reopenAt = ep.events.filter((e) => e.ev === 'open').at(-1)?.at ?? null;
   const firstAsset = reopenAt ? ep.events.find((e) => e.ev === 'asset' && e.at >= reopenAt && e.urls > 0) : null;
   const withdrawn = ep.events.some((e) => e.ev === 'asset' && e.urls === 0) || ep.closes > 0;
   const completedAfter = reconnected ? [...idsSeen.completed].filter(([, x]) => x.at >= reconnectedAt).map(([id]) => id) : [];
-  r.set({ e3: { reconnected, reconnectedAt: reconnected ? reconnectedAt : null, completedAfter, heldAtRestart: holding?.held ?? null,
-    reannounceMs: firstAsset && reopenAt ? firstAsset.at - reopenAt : null,
+  const reannounceMs = cfg.place === 'lan'
+    ? (lan.backAt !== null && reconnected ? Math.max(0, lan.backAt - reconnectedAt) : null)
+    : (firstAsset && reopenAt ? firstAsset.at - reopenAt : null);
+  r.set({ e3: { reconnected, reconnectedAt: reconnected ? reconnectedAt : null, completedAfter, heldAtRestart: holding?.held ?? null, reannounceMs,
+    lanDiscovery: cfg.place === 'lan' ? { polls: lan.polls, downMs: lan.downAt && lan.backAt ? lan.backAt - lan.downAt : null, asset: lan.asset } : null,
     endpoints: { closes: ep.closes, opens: ep.opens, withdrawn, events: ep.events.slice(-12).map((e) => ({ ...e, at: e.at - (ep.events[0]?.at ?? e.at) })) } } });
 }
 
