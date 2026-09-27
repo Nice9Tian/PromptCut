@@ -155,6 +155,17 @@ export const measureEntityRects = page => page.evaluate(() => {
 /** C4:没接镜像插件时的播放头(`frameService` 会把真的那个注进来) */
 const NO_PLAYHEAD = () => /** @type {{ t: number, playing: boolean, wanted?: { clipId: string, frame: number }[] } | null} */ (null);
 
+/**
+ * 补渲登记(c10a 契约第 17 节)里一张卡的内容身份:共享档用内容键(与环境、锁定方无关),本地档再带上整场景的 entry.key。
+ * 没有快照键的卡不产快照,回 null。
+ */
+function backfillIdentity(entry, control) {
+  if (!control?.clipId || !control.snapshotKey) return null;
+  const tier = control.tier || snapshotTier(control.capabilities);
+  const content = control.contentKey ?? control.snapshotKey;
+  return `${control.clipId}\u0000${tier === 'local' ? `${entry?.key ?? ''}/${content}` : content}`;
+}
+
 export class FramePipeline {
   /**
    * `interactive`(D5):这个实例要不要为页面的交互帧请求养一对热 Chrome。
@@ -1115,6 +1126,64 @@ export class FramePipeline {
     if (!(set instanceof Set)) return true;
     return set.has(clipId);
   }
+  /**
+   * 轨道流只给**本机判重**的卡(`basePrerenderSet`,不含补渲进来的片段):低内存档不消费流(c10a 契约第 9 节),
+   * 为补渲进集合的轻卡产流只是白做。没有基础集合时退回 `prerenderPicked`。
+   */
+  streamPicked(entry, clipId) {
+    const base = entry?.basePrerenderSet;
+    if (!(base instanceof Set)) return this.prerenderPicked(entry, clipId);
+    return base.has(clipId);
+  }
+  /**
+   * 补渲(c10a 契约第 17 节,语义 `mechanism/rendering.md`「低内存档」):低内存档判重、素材服务里又没有产物的片段,
+   * 页面发布带片段清单的补渲计划任务;认领它的节点在这里把清单里的片段记成「这张卡的这一份内容要产」,
+   * 于是它们进这一版的预渲染集合(`prerenderPicked` 为真:细任务渲得出来、层表里列着它们,在线页面据此取小尺寸)。
+   *
+   * 按「项目 id → 片段 + 内容身份」记,不按 entry:同一版项目在本机可能有不止一个 entry(页面推来的、从文档服务取的),
+   * 谁写层表都要带上补渲的片段,不然两边轮流写,页面上它们时有时无。内容身份换了(这张卡改了参数)就不再算 ——
+   * 新内容没有产物,页面会再发一次补渲。只记在内存里,和队列一样随进程作废。
+   * 回新记下了几个片段。
+   */
+  addBackfill(entry, clipIds) {
+    const projectId = entry?.project?.id;
+    if (!projectId || !Array.isArray(entry.cardPlan)) return 0;
+    const want = new Set((clipIds ?? []).filter(id => typeof id === 'string' && id));
+    if (!want.size) return 0;
+    this._backfill ??= new Map();
+    let keys = this._backfill.get(projectId);
+    if (!keys) this._backfill.set(projectId, (keys = new Set()));
+    let added = 0;
+    for (const control of entry.cardPlan) {
+      if (!want.has(control?.clipId)) continue;
+      const id = backfillIdentity(entry, control);
+      if (id && !keys.has(id)) { keys.add(id); added++; }
+    }
+    if (!added) return 0;
+    for (const other of this.entries?.values?.() ?? []) {
+      if (other?.project?.id === projectId && Array.isArray(other.cardPlan)) this.applyBackfill(other);
+    }
+    this.publishLayerMap(entry);
+    return added;
+  }
+  /** 按补渲登记把片段并进这个 entry 的预渲染集合(`basePrerenderSet` ∪ 登记过、内容身份对得上的片段) */
+  applyBackfill(entry) {
+    const base = entry?.basePrerenderSet;
+    if (!(base instanceof Set)) return;
+    const keys = this._backfill?.get(entry.project?.id);
+    const extra = [];
+    if (keys?.size) {
+      for (const control of entry.cardPlan ?? []) {
+        if (!control?.clipId || base.has(control.clipId)) continue;
+        const id = backfillIdentity(entry, control);
+        if (id && keys.has(id)) extra.push(control.clipId);
+      }
+    }
+    const next = extra.length ? new Set([...base, ...extra].sort()) : base;
+    const cur = entry.prerenderSet;
+    if (cur instanceof Set && cur.size === next.size && [...next].every(id => cur.has(id))) return;
+    entry.prerenderSet = next;
+  }
   /** clipId → { tier, key }:整场景路冻出来的 control 子树该落到哪个档、哪个键。
    * 只有 `card-cache.mjs` 的 `plan` 手里有共享键(`cardSnapshotIdentity` 算的),
    * 所以这里认 `entry.cardPlan`(`preload` 里存下来的那份);拿不到就不写快照库。
@@ -1587,6 +1656,51 @@ export class FramePipeline {
     return written;
   }
   /**
+   * 队列细任务「两档都推送成功才算完成」(c10a 第 9 节)的生成那一半:这一段里**已经有原尺寸、却没有小尺寸**的帧,
+   * 从帧库读回 HTML,记进待画的小尺寸(`scheduleSmallSnapshots`),由接下来的换页画掉(`flushPendingSmall`)。
+   *
+   * 这些帧从哪来:本进程还没配推送队列时产的(比如共享配置写好之前、预渲染进程重启之前先渲的锚帧和播放头那一批 ——
+   * 阿里云演示 2026-09-27 的 295/300 就是这样缺的 5 帧)、攒太多被丢掉的、上一次生成失败的、记下后进程退出没画的。
+   * 只按新产出的帧排小尺寸时,这些帧所在的段原尺寸齐了、小尺寸永远缺那几张。
+   * 回排了几帧。没开小尺寸(没配推送队列、`PROMPTCUT_SMALL_TIER=0`)或这张卡不产快照时回 0,不读任何文件。
+   */
+  async scheduleMissingSmall(entry, control, range) {
+    if (!this.smallTierEnabled() || !control?.snapshotKey || !range) return 0;
+    const tier = control.tier || snapshotTier(control.capabilities);
+    if (tier !== 'shared' && tier !== 'local') return 0;
+    const entryKey = tier === 'local' ? entry?.key : undefined;
+    if (tier === 'local' && !entryKey) return 0;
+    const target = { tier, entryKey, key: control.snapshotKey };
+    const store = this.snapshots();
+    const index = await store.snapshotIndex(target);
+    const dir = store.dir(target);
+    const last = Number.isInteger(control.count) ? Math.min(range.to, control.count - 1) : range.to;
+    const items = [];
+    for (let frame = Math.max(0, range.from); frame <= last; frame++) {
+      if (!rangeHas(index.frames, frame) && !rangeHas(index.oversize, frame)) continue;
+      if (await exists(path.join(dir, `${frame}${SMALL_SUFFIX}`))) continue;
+      let html;
+      try { html = await fs.readFile(path.join(dir, `${frame}.html`), 'utf8'); } catch { continue; }
+      items.push({ localFrame: frame, html });
+    }
+    if (!items.length) return 0;
+    const scheduled = this.scheduleSmallSnapshots({ tier, ...(entryKey ? { entryKey } : {}), key: control.snapshotKey, clipId: control.clipId, capabilities: control.capabilities, items });
+    return scheduled ? items.length : 0;
+  }
+  /**
+   * 队列细任务收尾:还有记下没画的小尺寸,就在这个预渲染间上换一次页把它们画掉(换页前的钩子 `flushSmallOn`),
+   * 并把页面恢复成干净的空项目(同 `acquire` 借出时的样子)。任务回来之后 sink 立刻列清单,不能把小尺寸留给
+   * 「下一次有人换页」—— 本地档那一趟、以及整段都已有原尺寸只差小尺寸的一段,之后可能再也没人换页。
+   * 没有待画的就什么都不做。
+   */
+  async flushPendingSmall(bakery, project, lane = 'queue') {
+    if (!bakery || !this.smallPending?.length || this.closed) return false;
+    await bakery.reset(project, this.emptyUrl(project), { deferCards: true });
+    await bakery.page.setViewport({ width: project.width, height: project.height, deviceScaleFactor: this.scaleForLane(lane) });
+    await bakery.client.send('Emulation.setDefaultBackgroundColorOverride', { color: { r: 0, g: 0, b: 0, a: 0 } });
+    return true;
+  }
+  /**
    * c10a 第 9 节「在线页面按清单拉取」:在线页面没有预渲染进程,算不出每张重卡的键(键里有渲染节点的环境指纹、
    * 快照代码的哈希)。渲染节点在认下一版 card plan 时把「片段 → 层的键、清单的结果键、采样窗口」写进内容库
    * (`artifact-transfer.mjs` 的 `layerMapOf`),页面按它逐段取清单、按清单的 `small` 表拉小位图。只在配了推送队列时写。
@@ -1653,7 +1767,7 @@ export class FramePipeline {
     if (producer?.enabled) {
       let specs = [];
       try {
-        specs = planStreams(entry, { picked: clipId => this.prerenderPicked(entry, clipId), budget: producer.budget,
+        specs = planStreams(entry, { picked: clipId => this.streamPicked(entry, clipId), budget: producer.budget,
           codeVersion: `${STREAM_CODE_VERSION}:${this.captureCode?.() || ''}`, envFingerprint: this.envFingerprint });
       } catch { specs = []; }
       for (const spec of specs) {
@@ -1810,7 +1924,10 @@ export class FramePipeline {
     this.applyCardLocks(plan);
     entry.cardPlan = plan;
     // K2 / K6:真的按 planPipelines 的表算(costs / tuning 由编辑器进程转发过来、落在本机那一份)
-    entry.prerenderSet = prerenderSetOfPlan(plan, { fps: Number(entry.project?.fps) || 30, root: this.dataRoot });
+    entry.basePrerenderSet = prerenderSetOfPlan(plan, { fps: Number(entry.project?.fps) || 30, root: this.dataRoot });
+    entry.prerenderSet = entry.basePrerenderSet;
+    // c10a 契约第 17 节:补渲登记过的片段并进来(`addBackfill`)
+    this.applyBackfill(entry);
     return plan;
   }
   /**
@@ -2326,7 +2443,9 @@ export class FramePipeline {
     const streamSpecs = await this.queueStreamSpecs(entry);
     const context = {
       entryKey: entry.key,
-      prerenderSet: entry.prerenderSet instanceof Set ? new Set(entry.prerenderSet) : undefined,
+      // 普通计划只切本机判重的卡;补渲进集合的片段只由补渲计划任务切(标 backfill,排在本机判重的任务之后,c10a 契约第 17 节)
+      prerenderSet: entry.basePrerenderSet instanceof Set ? new Set(entry.basePrerenderSet)
+        : entry.prerenderSet instanceof Set ? new Set(entry.prerenderSet) : undefined,
       cardPlan,
       streams: streamSpecs.map(spec => ({ streamKey: spec.streamKey, contentKey: spec.contentKey, topClipId: spec.topClipId,
         firstSegment: spec.firstSegment, lastSegment: spec.lastSegment })),
@@ -2351,7 +2470,7 @@ export class FramePipeline {
     const producer = this.streamProducer();
     if (!producer?.enabled || !(await producer.capable())) return [];
     try {
-      return planStreams(entry, { picked: clipId => this.prerenderPicked(entry, clipId), budget: producer.budget,
+      return planStreams(entry, { picked: clipId => this.streamPicked(entry, clipId), budget: producer.budget,
         codeVersion: `${STREAM_CODE_VERSION}:${this.captureCode?.() || ''}`, envFingerprint: this.envFingerprint });
     } catch {
       return [];
@@ -2394,6 +2513,8 @@ export class FramePipeline {
     if (control.cardLock?.foreign === true) throw locked();
     let done = 0;
     await this.runQueueTask(async lease => {
+      // c10a 第 9 节:这一段里已有原尺寸、缺小尺寸的帧先记下,借出预渲染间的换页、各批的换页会把它们画掉
+      try { await this.scheduleMissingSmall(entry, control, range); } catch { /* 读不了帧库:完成条件那一关会拦下 */ }
       const bakery = await lease(entry.project);
       await this.fillCardControls(entry, bakery, signal, [control], {
         range,
@@ -2402,6 +2523,7 @@ export class FramePipeline {
           try { progress?.(done); } catch { /* 进度回调出错不影响渲染 */ }
         },
       });
+      if (!signal?.aborted) await this.flushPendingSmall(bakery, entry.project);
     }, signal);
     if (signal?.aborted) throw Object.assign(new Error('Queue task cancelled'), { cancelled: true });
     if (control.cardLock?.foreign === true) throw locked();
@@ -2421,10 +2543,14 @@ export class FramePipeline {
       if (global / fps >= control.end - 1e-9) break;
       frames.push(global);
     }
-    if (frames.length) {
+    // c10a 第 9 节:已有原尺寸、缺小尺寸的帧也要在这一趟补上(见 `scheduleMissingSmall`)
+    let missingSmall = 0;
+    try { missingSmall = await this.scheduleMissingSmall(entry, control, range); } catch { /* 完成条件那一关会拦下 */ }
+    if (frames.length || missingSmall) {
       await this.runQueueTask(async lease => {
         const bakery = await lease(entry.project);
-        await this.renderLocalSnapshots(entry, frames, bakery, signal);
+        if (frames.length) await this.renderLocalSnapshots(entry, frames, bakery, signal);
+        if (!signal?.aborted) await this.flushPendingSmall(bakery, entry.project);
       }, signal);
     }
     if (signal?.aborted) throw Object.assign(new Error('Queue task cancelled'), { cancelled: true });

@@ -23,8 +23,38 @@ export const NODE_TYPES = new Set(['queue.watch', 'task.claim', 'task.progress',
 export const PUBLISHER_TYPES = new Set(['task.publish', 'task.unsubscribe', 'card.lock']);
 
 /**
+ * 任务的优先级档（语义 `mechanism/document-service.md`「渲染任务队列」的「优先级」，c10a 契约第 17 节）：
+ * `priority` 取 `'normal'`（缺省，本机判重而发布的）或 `'backfill'`（为低内存档补渲）。
+ * 早先的整数 `priority`（锚帧段 50、其余 10，契约 A.4）照旧收，算 `normal` 档里的名次：
+ * 没带 `priority` 或带整数的旧客户端一律按 `normal` 处理。
+ */
+export const PRIORITY_BANDS = Object.freeze(['normal', 'backfill']);
+/** 这个 `priority` 落在哪一档：只有 `'backfill'` 是补渲档，其余（缺省、整数、`'normal'`）都是 `normal` */
+export function priorityBand(priority) {
+  return priority === 'backfill' ? 'backfill' : 'normal';
+}
+/** 档内名次：整数原样，其余 0（`normal` 档里整数大的先认领，契约 B.3） */
+export function priorityRank(priority) {
+  return Number.isSafeInteger(priority) ? priority : 0;
+}
+/**
+ * 摘要（契约 H.3 的 `topPriority`）用的数：整数原样、`'normal'` 算 0、`'backfill'` 算 -1 ——
+ * 摘要只比大小，补渲档排在任何 `normal` 之下。
+ */
+export function prioritySummaryValue(priority) {
+  if (Number.isSafeInteger(priority)) return priority;
+  return priority === 'backfill' ? -1 : 0;
+}
+
+/** 补渲计划任务（c10a 契约第 17 节）结果键的后缀：`<projectId>@<projectRev>#backfill:<sig>` */
+export const BACKFILL_KEY_MARK = '#backfill:';
+const BACKFILL_SIG_RE = /^[0-9a-z]{1,32}$/;
+/** 补渲计划任务的片段清单上限 */
+export const BACKFILL_MAX_CLIPS = 1000;
+
+/**
  * 任务 id 由内容决定（设计第 2 节）：同一个结果只会有一个任务，重复发布才能幂等合并。
- * `plan` 任务没有范围，id 就是 `plan:<projectId>@<projectRev>`。
+ * `plan` 任务没有范围，id 就是 `plan:<projectId>@<projectRev>`（补渲计划任务是 `plan:<projectId>@<projectRev>#backfill:<sig>`）。
  */
 export function taskIdOf({ kind, resultKey, range }) {
   if (kind === 'plan') return `plan:${resultKey}`;
@@ -126,9 +156,19 @@ function parseTaskInput(v, i) {
   const projectRev = int(v.source.projectRev, `${at}.source.projectRev`);
   const derivedFrom = optStr(v.source.derivedFrom, `${at}.source.derivedFrom`);
   let range = null;
+  const priority = parsePriority(v.priority, `${at}.priority`);
+  let input = absent(v.input) ? {} : plainObject(v.input, `${at}.input`);
   if (kind === 'plan') {
     if (!absent(v.range)) bad(`${at}.range：plan 任务没有范围，必须是 null`);
-    if (resultKey !== `${projectId}@${projectRev}`) bad(`${at}.resultKey 必须等于 source 的 projectId@projectRev`);
+    const base = `${projectId}@${projectRev}`;
+    if (resultKey.startsWith(`${base}${BACKFILL_KEY_MARK}`)) {
+      // 补渲计划任务（c10a 契约第 17 节）：带片段清单、标 backfill；不同的清单是不同的结果键
+      if (!BACKFILL_SIG_RE.test(resultKey.slice(base.length + BACKFILL_KEY_MARK.length))) bad(`${at}.resultKey 的补渲签名只能是 1～32 位小写字母与数字`);
+      if (priority !== 'backfill') bad(`${at}.priority：补渲计划任务必须标 'backfill'`);
+      input = { ...input, clips: backfillClips(input.clips, `${at}.input.clips`) };
+    } else if (resultKey !== base) {
+      bad(`${at}.resultKey 必须等于 source 的 projectId@projectRev`);
+    }
   } else {
     range = parseRange(v.range, `${at}.range`);
   }
@@ -140,10 +180,57 @@ function parseTaskInput(v, i) {
     id, kind, tier, resultKey, range,
     // source 里自报的 userId / tenantId / publisher / publishedAt 在这里就丢掉，由队列按连接填（A.4）
     source: { projectId, projectRev, derivedFrom },
-    input: absent(v.input) ? {} : plainObject(v.input, `${at}.input`),
+    input,
     weight: absent(v.weight) ? null : parseWeight(v.weight, `${at}.weight`),
     requires: absent(v.requires) ? {} : plainObject(v.requires, `${at}.requires`),
-    priority: absent(v.priority) ? 0 : int(v.priority, `${at}.priority`),
+    priority,
+  };
+}
+
+/** `priority`：缺省 0；整数原样（旧形状）；或 `'normal'` / `'backfill'`（c10a 契约第 17 节） */
+function parsePriority(v, name) {
+  if (absent(v)) return 0;
+  if (typeof v === 'string') return oneOf(v, new Set(PRIORITY_BANDS), name);
+  return int(v, name);
+}
+
+/** 补渲计划任务的片段清单：非空、去重、升序的非空字符串数组 */
+function backfillClips(v, name) {
+  if (!Array.isArray(v) || v.length === 0 || v.length > BACKFILL_MAX_CLIPS) bad(`${name} 必须是 1～${BACKFILL_MAX_CLIPS} 个片段 id`);
+  if (v.some((x) => typeof x !== 'string' || x === '')) bad(`${name} 的每一项都必须是非空字符串`);
+  return [...new Set(v)].sort();
+}
+
+/** 这是不是补渲计划任务（入站任务、TaskView、队列内部的任务都能传） */
+export function isBackfillPlan(task) {
+  return isObj(task) && task.kind === 'plan' && typeof task.resultKey === 'string' && task.resultKey.includes(BACKFILL_KEY_MARK);
+}
+
+/**
+ * 片段清单的签名（补渲计划任务结果键的后缀）：升序去重后按 FNV-1a（32 位，两轮不同种子拼成 64 位）取 base36。
+ * 同一份清单一定得到同一个键，页面与节点各算各的也对得上。纯函数，浏览器可以照抄。
+ */
+export function backfillSig(clips) {
+  const text = [...new Set(clips ?? [])].map(String).sort().join('\n');
+  const fnv = (seed) => {
+    let h = seed >>> 0;
+    for (let i = 0; i < text.length; i++) {
+      h ^= text.charCodeAt(i);
+      h = Math.imul(h, 0x01000193) >>> 0;
+    }
+    return h;
+  };
+  return fnv(0x811c9dc5).toString(36) + fnv(0x2f4a7c15).toString(36);
+}
+
+/** 补渲计划任务（c10a 契约第 17 节）：带片段清单的 `plan`，标 `priority: 'backfill'`，不带 `requires` */
+export function backfillPlanTaskOf({ projectId, projectRev, clips }) {
+  const list = [...new Set(clips ?? [])].map(String).filter(Boolean).sort();
+  const resultKey = `${projectId}@${projectRev}${BACKFILL_KEY_MARK}${backfillSig(list)}`;
+  return {
+    id: taskIdOf({ kind: 'plan', resultKey, range: null }), kind: 'plan', resultKey, range: null,
+    source: { projectId, projectRev }, input: { clips: list }, weight: { class: 'medium', estMs: null, frames: null },
+    requires: {}, priority: 'backfill',
   };
 }
 

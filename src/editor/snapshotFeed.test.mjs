@@ -26,7 +26,7 @@ mock.module(srcUrl("render/dataMirror.ts"), {
 const feed = await import(srcUrl("editor/snapshotFeed.ts"));
 const {
   planFeed, pickForSetTime, deliverSnapshots, noteSettled, markBaselineReset, markPendingDemote, pendingDemotes,
-  setExtraSuppressed, suppressedAt, setSnapshotSource, syncSnapshotSubscription, resetSnapshotFeed,
+  setExtraSuppressed, suppressedAt, setSnapshotSource, syncSnapshotSubscription, resetSnapshotFeed, setSnapshotArrive,
   MAX_WANTED, SNAPSHOT_THROTTLE_MS, SNAPSHOT_DELIVERY_MAX_BYTES,
 } = feed;
 
@@ -196,6 +196,22 @@ test("deliverSnapshots:33 ms 节流;不再判重的卡摘掉(null)", async () =>
   assert.equal(await deliverSnapshots(stage, "front", head), 0, "没变化:一条 RPC 都不发");
 });
 
+test("setSnapshotArrive:投递时缺的那一帧取到之后叫一次重投(在线页面不走 SSE 订阅,c10a)", async () => {
+  const p = project([card("h", 0, 10)]);
+  plan = heavyEverywhere("h");
+  src.push(layer("h", [[0, 100]]));
+  let arrived = 0;
+  setSnapshotArrive(() => { arrived++; });
+  const stage = fakeStage();
+  const head = { project: p, t: 1, playing: false };
+  assert.equal(await deliverSnapshots(stage, "front", head), 0, "手里还没有字节:先发起取");
+  await settle();
+  assert.equal(arrived, 1, "字节到了:叫宿主重投");
+  now += SNAPSHOT_THROTTLE_MS;
+  assert.equal(await deliverSnapshots(stage, "front", head), 1);
+  setSnapshotArrive(null);
+});
+
 test("deliverSnapshots:reset 不受节流,带 reset 并把该挂的整份重投", async () => {
   const p = project([card("h", 0, 10)]);
   plan = heavyEverywhere("h");
@@ -263,6 +279,22 @@ test("settled 把卡从基线里删掉:同一帧会重投", async () => {
   assert.deepEqual(Object.keys(pickForSetTime(head).snapshots), ["h"]);
 });
 
+/*
+ * c10a 契约第 17 节「停下追当前一帧」取代了原来的「低内存档不追活渲」:低内存档停下时舞台把当前这一帧追一次,
+ * 画好的层收 `settled`,和普通档一样暂停中不再盖回小尺寸;下一次 setTime / 播放照常选。
+ * (这条用例原来断言「低内存档忽略 settled、暂停时仍选小尺寸」,按新规则改。)
+ */
+test("低内存档停下追一帧画好的层(settled)暂停中不再选小尺寸;下一次 setTime 照常选", () => {
+  const p = project([card("h", 0, 10)]);
+  plan = heavyEverywhere("h");
+  src.push(layer("h", [[0, 100]]));
+  noteSettled("front", ["h"]);
+  assert.equal(planFeed({ project: p, t: 1, playing: false }).picks.size, 0);
+  assert.equal(planFeed({ project: p, t: 1, playing: false, lowMemory: true }).picks.size, 0);
+  pickForSetTime({ project: p, t: 1, playing: false, lowMemory: true });
+  assert.equal(planFeed({ project: p, t: 1, playing: false, lowMemory: true }).picks.size, 1);
+});
+
 /* ---------------------------------------------------------------- 抑制 */
 
 test("抑制集合只在播放中有,并上 K3(b) 的额外抑制", () => {
@@ -279,4 +311,16 @@ test("wanted 报给预渲染进程", () => {
   plan = heavyEverywhere("h");
   pickForSetTime({ project: project([card("h", 0, 10)]), t: 1, playing: false });
   assert.deepEqual(wantedPushed, [[{ clipId: "h", frame: 30 }]]);
+});
+
+test("低内存档:一层的就绪表有缺口(清单缺几帧小尺寸)时,有的帧照常选,缺的回溯同区间,段首缺才不选(占位)", () => {
+  const p = project([card("h", 0, 10)]);
+  plan = heavyEverywhere("h");
+  // 阿里云 2026-09-27 手机上的样子:第 0 帧与 28～31 缺小尺寸
+  src.push(layer("h", [[1, 27], [32, 119]]));
+  const at = (t) => planFeed({ project: p, t, playing: false, lowMemory: true }).picks.get("h")?.localFrame ?? null;
+  assert.equal(at(0), null, "段首缺:没有更早的可回溯");
+  assert.equal(at(5 / FPS), 5);
+  assert.equal(at(1), 27, "第 30 帧缺:回溯到 27");
+  assert.equal(at(3), 90);
 });

@@ -83,13 +83,13 @@ taskIdOf({ kind, resultKey, range })
   id: string,                    // 必须等于 taskIdOf(...)，否则整条消息 bad-message
   kind: 'plan' | 'snapshot' | 'stream',
   tier?: 'shared' | 'local',     // snapshot 必填；其余忽略
-  resultKey: string,             // 非空。plan 任务是 `${projectId}@${projectRev}`，且必须与 source 一致
+  resultKey: string,             // 非空。plan 任务是 `${projectId}@${projectRev}`，且必须与 source 一致；补渲计划任务是 `${projectId}@${projectRev}#backfill:<片段清单的签名>`（c10a 契约第 17 节）
   range: { unit: 'localFrame' | 'segment', from: int, to: int } | null,   // plan 为 null；其余必填，0 <= from <= to
   source: { projectId: string, projectRev: int, derivedFrom?: string | null },
   input?: object,                // 原样保存
   weight?: { class: 'light' | 'medium' | 'heavy', estMs?: number | null, frames?: number | null },
   requires?: object,             // 原样保存（envFingerprint、codeVersion、cardSources 等）
-  priority?: int,                // 缺省 0
+  priority?: int | 'normal' | 'backfill',   // 缺省 0。整数是 normal 档里的名次（旧形状，大的先）；'backfill' 是补渲档，排在整个 normal 档之后（c10a 契约第 17 节）
 }
 ```
 
@@ -352,7 +352,7 @@ export function filterClaimable(tasks, node) // → task[]（保持原顺序）
 ### B.3 `pick.mjs`（设计 4.3 末段、第 7 节「公平性」）
 
 ```js
-export function rankCandidates(tasks)                              // 新数组：priority 降序 → source.publishedAt 升序 → id 升序
+export function rankCandidates(tasks)                              // 新数组：优先级档（normal 先于 backfill）→ 档内整数 priority 降序 → source.publishedAt 升序 → id 升序；pickCandidate 只在排头那一档里挑
 export function pickCandidate(tasks, { k = 4, random = Math.random, lastProjectId = null } = {})   // → task | null
 ```
 
@@ -1620,7 +1620,7 @@ router.drained(connId)            // 组装层在底层 'drain' 时调
   { type: 'queue.summary', epoch, at, projects: [{ projectId, open, claimed, topPriority, openByFingerprint: { [fp]: n } }] }
   ```
   - 来源是 `q.describe()`；
-  - `topPriority` 是这个项目 `open` 任务的最高 `priority`，没有就是 `null`；
+  - `topPriority` 是这个项目 `open` 任务的最高 `priority`，没有就是 `null`；整数原样，`'normal'` 记 0，`'backfill'` 记 −1（c10a 契约第 17 节）；
   - `openByFingerprint` 按 `requires.envFingerprint` 分组，没有指纹的记在键 `''` 下；
   - `projects` 按 `projectId` 升序。
 - **推送**：每次 `tick` 算一遍，和上一次推出去的内容不同才 `publish` 到 `queue-summary:all`，带 `coalesceKey: 'queue-summary'`。所以每个扫描周期至多一条，慢连接上只留最新一条。

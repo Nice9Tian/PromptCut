@@ -6,7 +6,7 @@ import "../testing/registerTs.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 
-const { playbackUrl, chooseTier, setMediaTierPolicy, mediaTierPolicy, remoteMediaUrl, TIERS_KNOWN_REMOTE } = await import("./mediaTier.ts");
+const { playbackUrl, chooseTier, setMediaTierPolicy, mediaTierPolicy, remoteMediaUrl, TIERS_KNOWN_REMOTE, previewMediaUrl, subscribeMediaTierPolicy } = await import("./mediaTier.ts");
 
 const ORIG = "a".repeat(64);
 const SMALL = "b".repeat(64);
@@ -70,4 +70,43 @@ test("LMT7 在线浏览器模式:哈希地址换成远程素材服务的 media/<
     setMediaTierPolicy({ lowMemory: false, remote: null });
   }
   assert.equal(playbackUrl(video, []), `/@media/${SMALL}`, "桌面运行环境照旧走本机代理");
+});
+
+test("LMT8 在线页远程素材地址未就绪时不交给浏览器 /@media 哈希地址", () => {
+  try {
+    setMediaTierPolicy({ online: true, lowMemory: true, remote: null });
+    assert.deepEqual(chooseTier(video, []), { url: "", tier: "none", awaiting: true });
+    assert.deepEqual(chooseTier(image, []), { url: "", tier: "none", awaiting: true });
+    assert.equal(playbackUrl({ url: "blob:local" }, []), "blob:local");
+    setMediaTierPolicy({ remote: { base: "https://h.example/api/asset", ticket: "t" } });
+    assert.match(playbackUrl(video, []), /^https:\/\/h\.example\/api\/asset\/media\//);
+  } finally {
+    setMediaTierPolicy({ online: false, lowMemory: false, remote: null });
+  }
+});
+
+test("LMT9 编辑界面的素材预览(素材库缩略、波形):桌面原样 media.url;在线页不给 /@media,低内存档视频只给远程小尺寸;策略变了通知", () => {
+  let calls = 0;
+  const off = subscribeMediaTierPolicy(() => { calls++; });
+  try {
+    assert.equal(previewMediaUrl(video), `/@media/${ORIG}`, "桌面运行环境:一字不差");
+    setMediaTierPolicy({ online: true, lowMemory: true, remote: null });
+    assert.equal(calls, 1);
+    assert.equal(previewMediaUrl(video), "", "远程地址没就绪:不给地址(不发 /@media 请求)");
+    assert.equal(previewMediaUrl(image), "");
+    setMediaTierPolicy({ remote: { base: "https://h.example/api/asset", ticket: "t" } });
+    assert.equal(calls, 2);
+    setMediaTierPolicy({ remote: { base: "https://h.example/api/asset", ticket: "t" } });
+    assert.equal(calls, 2, "没变不通知");
+    assert.equal(previewMediaUrl(video), `https://h.example/api/asset/media/${SMALL}?t=t`, "低内存档:只给小尺寸");
+    assert.equal(previewMediaUrl(videoNoSmall), "", "低内存档没有小尺寸:不拉原尺寸");
+    assert.equal(previewMediaUrl(image), `https://h.example/api/asset/media/${ORIG}?t=t`, "图片只有一档");
+    setMediaTierPolicy({ lowMemory: false });
+    assert.equal(previewMediaUrl(video), `https://h.example/api/asset/media/${SMALL}?t=t`, "普通档:先小后大的小");
+    assert.equal(previewMediaUrl(videoNoSmall), `https://h.example/api/asset/media/${ORIG}?t=t`);
+    for (const m of [video, videoNoSmall, image, audio]) assert.ok(!previewMediaUrl(m).startsWith("/@media/"));
+  } finally {
+    setMediaTierPolicy({ online: false, lowMemory: false, remote: null });
+    off();
+  }
 });

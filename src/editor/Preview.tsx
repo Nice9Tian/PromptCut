@@ -16,7 +16,7 @@ import { ControlBar } from "./preview/ControlBar";
 import { ToolBar, ToolType } from "./preview/ToolBar";
 import { MiniScrubber } from "./preview/MiniScrubber";
 import { PreviewContextMenu } from "./preview/PreviewContextMenu";
-import { getCard } from "../kernel/registry";
+import { getCard, userCardSources } from "../kernel/registry";
 import { useLayoutMode } from "./layoutMode";
 import { fitView, frameOrigin, panBy, wheelZoomFactor, zoomAt, type View2D } from "./preview/viewport2d";
 import "./preview/preview.css";
@@ -24,7 +24,7 @@ import { atFrameGrid } from "../render/frameGrid";
 import { contentStartOf } from "./timeline/utils";
 import { startAssetTiers, tierHashes, useTierHashes } from "./media/assetTiers";
 import { startTierBackfill } from "./io/mediaUpload";
-import { currentReadyIndex, deliverSnapshots, markBaselineReset, noteSettled, pendingDemotes, pickForSetTime, setSnapshotSource, stopSnapshotFeed, streamPlanesAt, suppressedAt, syncSnapshotSubscription } from "./snapshotFeed";
+import { currentReadyIndex, deliverSnapshots, markBaselineReset, noteSettled, pendingDemotes, pickForSetTime, setSnapshotArrive, setSnapshotSource, snapshotFeedDebug, stopSnapshotFeed, streamPlanesAt, suppressedAt, syncSnapshotSubscription } from "./snapshotFeed";
 import { OnlineSnapshotSource, applyReadyMessage, setActiveOnlineSource } from "../render/snapshotSource";
 import { playingCatchUpTargets, runPlayingSwap, runSettleSwap, setSwapHost, swapInFlight } from "./stageSwap";
 import { demotedClips, onStageDemote } from "./demote";
@@ -35,7 +35,11 @@ import { ONLINE } from "../online/mode";
 import { LOW_MEMORY_TEXT, lowMemoryMode, noteRuntimeTrouble, readDisplayTier, setDisplayTier, type DisplayTier } from "../online/lowMemory";
 import { setMediaTierPolicy, type MediaTierPolicy } from "../render/mediaTier";
 import { assetAuthHeaders, docRequest, remoteAssetBase, remoteAssetTicket, setNoEditorProcess, subscribeRemoteAssets } from "./media/assetTiers";
-import { pushToast } from "./sync/syncManager";
+import { currentDocProjectId, currentSharedLink, pageSession, pushToast } from "./sync/syncManager";
+import { BACKFILL_CHECK_MS, BackfillPublisher, missingLayers } from "./lowMemoryBackfill";
+import { needsLocalPc } from "../render/placeholderHost";
+import { setPlanAllHeavy } from "./planDispatch";
+import { LOW_MEMORY_SETTLE_MS, type LowMemorySettleResult } from "../render/lowMemorySettle";
 
 /** 「进入项目时提示一次当前是低内存档」(c10a 第 8 节):一个页面会话只提示一次 */
 let lowMemoryNoticeShown = false;
@@ -210,7 +214,7 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
     const base = remoteAssetBase();
     let ticket: string | null = null;
     if (base) { try { ticket = await remoteAssetTicket(); } catch { ticket = null; } }
-    const policy: MediaTierPolicy = { lowMemory: lowMemRef.current, remote: base ? { base, ticket } : null };
+    const policy: MediaTierPolicy = { lowMemory: lowMemRef.current, online: true, remote: base ? { base, ticket } : null };
     setMediaTierPolicy(policy);
     for (const id of STAGE_IDS) {
       const c = rpcRef.current[id];
@@ -227,6 +231,14 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
     const timer = window.setInterval(() => { void pushMediaPolicy(); }, 5 * 60_000);
     return () => { off(); window.clearInterval(timer); };
   }, [lowMem, pushMediaPolicy]);
+  /*
+   * 低内存档的过渡做法(c10a 契约第 17 节「全部按重卡」):不测,所有卡按重卡处理 —— 播放时一律贴预渲染小尺寸,
+   * 不活渲任何卡;没有产物的层照兜底顺序显示占位符。普通档(电脑浏览器)不变。
+   */
+  useEffect(() => {
+    setPlanAllHeavy(ONLINE && lowMem);
+    return () => setPlanAllHeavy(false);
+  }, [lowMem]);
   /* 低内存档切到后台时停预览(契约第 13 节 Q2 的采纳:后台计时器、rAF 都不保证继续,回来时从停着的地方接) */
   useEffect(() => {
     if (!ONLINE || !lowMem) return;
@@ -573,7 +585,7 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
     if (!liveRef.current) return;
     const s = frontStage();
     if (!s) return;
-    const head = { project: getState().project, t: tRef.current, playing: playingRef.current };
+    const head = { project: getState().project, t: tRef.current, playing: playingRef.current, lowMemory: lowMemRef.current };
     /*
      * 抑制只在播放中有(C5 / K5:拖动和暂停下不抑制、改贴快照)。
      * **低内存档例外**(c10a 第 8 节「不追活渲」「缺小尺寸的重层显示占位」):暂停、拖动时重卡也抑制 ——
@@ -626,6 +638,8 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
     onlineSourceRef.current = src;
     setActiveOnlineSource(src);
     setSnapshotSource(src);
+    // 投递时缺的那一帧取到之后也要重投一次(暂停着的页面没有别的事件会再投)
+    setSnapshotArrive(() => { void pumpRef.current(); });
     src.onFetched = () => { void pumpRef.current(); };
     const off = src.subscribeReady("online", 0, (m) => {
       applyReadyMessage(currentReadyIndex(), m);
@@ -633,9 +647,26 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
     });
     src.setProject(getState().project.id || null);
     src.focus(tRef.current, getState().project.fps || 30);
+    const resume = () => {
+      if (document.visibilityState === "visible") src.focus(tRef.current, getState().project.fps || 30);
+    };
+    document.addEventListener("visibilitychange", resume);
+    /*
+     * 暂停着的在线页面没有帧事件会再投:每 5 秒带 reset 重投一次,对齐舞台的实际状态
+     * (投递记进基线之后 setTime 又换掉了快照、或 iframe 原地重载丢了已确认的投递)。
+     * 播放中每拍都在投,不用它。
+     */
+    const reconcile = window.setInterval(() => {
+      if (document.visibilityState === "visible" && !playingRef.current) {
+        markBaselineReset("front");
+        void pumpRef.current();
+      }
+    }, 5000);
     if (typeof window !== "undefined") (window as unknown as Record<string, unknown>).__pcOnlineSnapshots = () => src.debug();
     return () => {
       off();
+      document.removeEventListener("visibilitychange", resume);
+      window.clearInterval(reconcile);
       src.stop();
       onlineSourceRef.current = null;
       setActiveOnlineSource(null);
@@ -643,6 +674,37 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
     };
   }, [online]);
   useEffect(() => { onlineSourceRef.current?.setProject(project.id || null); }, [project.id]);
+
+  /*
+   * 低内存档的补渲(c10a 契约第 17 节):判重的层在素材服务里没有产物(不在渲染节点写的层表里)时,
+   * 向队列发布带片段清单的补渲计划任务(标 backfill)。同一批还在等的不重发;页面只发布,不认领。
+   * 用户卡、图卡不发(这台设备不显示它们)。经在线来源同一条文档服务连接发。
+   */
+  useEffect(() => {
+    if (!online || !lowMem) return;
+    const publisher = new BackfillPublisher({ request: docRequest, publisherId: `lowmem-${pageSession()}` });
+    let link: unknown = null;
+    const isUserCard = (cardId: string) => Object.prototype.hasOwnProperty.call(userCardSources().fileOf, cardId);
+    const check = () => {
+      const src = onlineSourceRef.current;
+      const layers = src?.layerClipIds() ?? null;
+      const shared = currentSharedLink();
+      if (!src || !layers || !shared) return;
+      // 连接换了(重连、换项目):重新报到,还缺的重发(队列只在内存里)
+      if (shared !== link) { link = shared; publisher.reset(); }
+      const missing = missingLayers({
+        project: getState().project,
+        layerClipIds: layers,
+        unsupported: (clip) => needsLocalPc(clip.cardId, clip.cardId ? getCard(clip.cardId) : undefined, isUserCard),
+      });
+      void publisher.sync({ projectId: currentDocProjectId() || null, projectRev: shared.ds.rev || null, missing });
+    };
+    const timer = window.setInterval(check, BACKFILL_CHECK_MS);
+    check();
+    const w = window as unknown as Record<string, unknown>;
+    w.__pcBackfill = () => publisher.debug();
+    return () => { window.clearInterval(timer); delete w.__pcBackfill; };
+  }, [online, lowMem]);
   useEffect(() => { onlineSourceRef.current?.focus(t, project.fps || 30); }, [t, project.fps]);
 
   /* 换了 iframe:那一份投递基线跟着作废,下一次带 `reset`(A3c) */
@@ -650,6 +712,11 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
     if (!live || !stageReady) return;
     markBaselineReset("front");
     suppressedRef.current = "";
+    /*
+     * 在线页面:预渲染小尺寸常常在舞台握手之前就取到了(取到时 `frontStage()` 还是空,那一次投递落空)。
+     * 暂停着的页面之后没有别的事件会再投,重卡就一直是占位 —— 舞台一握手就投一次(c10a-demo-probe 实测)。
+     */
+    if (onlineSourceRef.current) void pumpRef.current();
   }, [live, stageReady]);
 
   /*
@@ -713,6 +780,10 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
       pendingDemote: [...pendingDemotes()],
       demoted: [...demotedClips()],
       swapInFlight: swapInFlight(),
+      // 低内存档停下追一帧的上一次结果(c10a 契约第 17 节;c10a-demo-probe 读它)
+      lowMemory: lowMemRef.current,
+      lowMemSettle: lowMemSettleRef.current,
+      snapshotFeed: snapshotFeedDebug({ project: getState().project, t: tRef.current, playing: playingRef.current, lowMemory: lowMemRef.current }),
     });
     return () => { delete w.__pcPreviewDiag; };
   }, [live]);
@@ -768,6 +839,8 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
         actions.seek(e.sec);
         break;
       case "settled":
+        // 低内存档:只认这一次停下的那一秒(迟到的、上一次停下画好的不算 —— 舞台在新的跳转里已经把它们放回抑制)
+        if (lowMemRef.current && Math.abs(e.sec - tRef.current) > 1e-6) break;
         // K5:暂停态活渲就绪 —— 把这几张卡从投递基线里删掉(A3c),平面舞台自己摘了
         noteSettled("front", e.clipIds);
         break;
@@ -899,15 +972,18 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
        * 入点时,新挂载的组件和它的快照平面同帧出现、不闪初始态。手里没有的那几帧当场
        * 发起取字节(不等),由 `.pc-awaiting` 藏 500 ms 兜底。
        */
-      const feed = liveRef.current ? pickForSetTime({ project: getState().project, t: sec, playing: false })
+      const feed = liveRef.current ? pickForSetTime({ project: getState().project, t: sec, playing: false, lowMemory: lowMemRef.current })
         : { snapshots: {} as Record<string, string | null>, awaiting: [] as string[] };
+      // 低内存档的停下追一帧另走 `settleLowMemory`(下面),舞台的 K5 第一路不起
+      const { settle: _settle, ...stageOpts } = opts;
       await s.setTime(sec, {
-        ...opts,
+        ...(lowMemRef.current ? stageOpts : opts),
         ...(Object.keys(feed.snapshots).length ? { snapshots: feed.snapshots } : {}),
         ...(feed.awaiting.length ? { awaiting: feed.awaiting } : {}),
       });
     } catch {
       // iframe 正在换(detached):新的 ready 会重发
+      markBaselineReset("front");
       return;
     }
     void refreshRects();
@@ -917,7 +993,29 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
      * 补完互换成精确活渲。`vtOk` 的那些已经在可见舞台里自己追了(K5 第一路,舞台侧)。
      */
     if (dualRef.current && opts.settle && !lowMemRef.current) void runSettleSwap(sec).catch(() => { /* 后台舞台正在换:下一次 setTime 会重来 */ });
+    /*
+     * 低内存档停下追当前一帧(c10a 契约第 17 节,取代原来的「不追活渲」):暂停、点击或拖动松开、播放到头的这一次,
+     * 舞台在单舞台里把当前这一帧的所有卡活渲一次;画好之前照兜底顺序显示,画好的层替换上去,
+     * 到时限(`LOW_MEMORY_SETTLE_MS`)还没画好的维持占位符,直到下一次停下。
+     */
+    if (liveRef.current && opts.settle && lowMemRef.current) void settleLowMemoryAt(s, sec);
   }, [stage, refreshRects]);
+  /** 低内存档停下追一帧的代数(又停了一次 / 又动了:旧的结果不记)与上一次的结果(诊断) */
+  const lowMemSettleGenRef = useRef(0);
+  const lowMemSettleRef = useRef<(LowMemorySettleResult & { at: number }) | null>(null);
+  const settleLowMemoryAt = useCallback(async (s: StageRpcClient, sec: number): Promise<void> => {
+    const gen = ++lowMemSettleGenRef.current;
+    let result: LowMemorySettleResult;
+    try {
+      result = await s.settleLowMemory(sec, { timeoutMs: LOW_MEMORY_SETTLE_MS });
+    } catch {
+      result = { ok: false, reason: "rpc", sec, timeoutMs: LOW_MEMORY_SETTLE_MS, ms: 0, drawn: [], timedOut: [], skipped: [] };
+    }
+    if (gen !== lowMemSettleGenRef.current) return;
+    lowMemSettleRef.current = { ...result, at: Date.now() };
+    // 画好的层已经收到 `settled`(不再选小尺寸);再投一次,把基线对齐到舞台此刻的样子
+    void pumpRef.current();
+  }, []);
   /** K4 的起 / 停节拍只认 `playing`,所以那个 effect 读这一份、不把 `sendSetTime` 进依赖 */
   const sendSetTimeRef = useRef(sendSetTime);
   sendSetTimeRef.current = sendSetTime;
@@ -947,7 +1045,8 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
     const key = `${stageReady}|${t}|${playToken}|${live && scrubbing ? "scrub" : "settle"}`;
     if (key === lastRenderKey.current) return;
     lastRenderKey.current = key;
-    void sendSetTime(t, live && !scrubbingRef.current && !lowMemRef.current ? { settle: true } : {});
+    // 低内存档同样带 settle:停下时追当前一帧(c10a 契约第 17 节),拖动过程中不带
+    void sendSetTime(t, live && !scrubbingRef.current ? { settle: true } : {});
   }, [stageReady, live, playing, t, playToken, scrubbing, sendSetTime]);
 
   /* E6:播放中 `refreshRects` 改成定时器,一次往返、结果按序号丢过期的 */

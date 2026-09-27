@@ -22,7 +22,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import { QUEUE_DEFAULTS } from './constants.mjs';
-import { makeMessage, parseInbound, lockKeyOf, NODE_TYPES, PUBLISHER_TYPES } from './messages.mjs';
+import { makeMessage, parseInbound, lockKeyOf, priorityBand, prioritySummaryValue, NODE_TYPES, PUBLISHER_TYPES } from './messages.mjs';
 
 function resolveConstants(overrides) {
   const out = { ...QUEUE_DEFAULTS };
@@ -249,7 +249,9 @@ export function createRenderQueue(options = {}) {
       }
       if (t.state === 'claimed') { p.claimed += 1; continue; }
       p.open += 1;
-      if (p.topPriority === null || t.priority > p.topPriority) p.topPriority = t.priority;
+      // c10a 契约第 17 节:`priority` 可以是 'normal' / 'backfill',摘要只比数(补渲档算 -1)
+      const value = prioritySummaryValue(t.priority);
+      if (p.topPriority === null || value > p.topPriority) p.topPriority = value;
       const fp = t.requires && typeof t.requires.envFingerprint === 'string' ? t.requires.envFingerprint : '';
       p.fps.set(fp, (p.fps.get(fp) ?? 0) + 1);
     }
@@ -617,6 +619,18 @@ export function createRenderQueue(options = {}) {
   function mergeExisting(conn, task, input, after) {
     if (isActive(task.state)) {
       task.subscribers.add(conn.publisherId);
+      /*
+       * 优先级升级（语义 mechanism/document-service.md「优先级」，c10a 契约第 17 节）：同一个结果键已有任务就不另起；
+       * 已有的是 backfill 而这次按 normal 发布，升为 normal（取这次的 priority，整数名次也一并带上）。
+       * 不是状态转移，version 不变；还 open 的重发一条 task.opened，节点视图里的优先级跟着换。
+       */
+      if (priorityBand(task.priority) === 'backfill' && priorityBand(input.priority) === 'normal') {
+        task.priority = input.priority;
+        if (task.state === 'open') {
+          const view = viewOf(task);
+          after.push(() => broadcast(task, 'task.opened', { task: view }));
+        }
+      }
     } else if (task.state === 'done') {
       const fields = doneFields(task);
       after.push(() => emit(conn, 'task.done', fields));

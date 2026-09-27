@@ -243,7 +243,7 @@ try {
   check(snapshotView.px > 0, 'G2 拉了预渲染小尺寸 px/<hash>', snapshotView);
   check(snapshotView.snap === 0, 'G2 没拉预渲染原尺寸 snap/<hash>', snapshotView);
   check(snapshotView.tickets.every((t) => t === 'probe-ticket'), 'G2 每个请求都带只读票据', snapshotView.tickets);
-  const toast = await page.evaluate(() => document.body.innerText.includes('当前是低内存档：只看预渲染小尺寸和素材小尺寸'));
+  const toast = await page.evaluate(() => document.body.innerText.includes('当前是低内存档：播放时只看预渲染小尺寸和素材小尺寸'));
   check(toast, 'G1 进入提示照抄表 C');
   const online = await page.evaluate(() => window.__pcOnlineSnapshots?.());
   out.G2.onlineSource = online;

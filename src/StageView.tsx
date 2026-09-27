@@ -4,7 +4,7 @@ import { Stage, type StreamPlaneGroup } from "./render/Stage";
 import { FrameScene } from "./render/FrameScene";
 import { flattenOverlay, type Project } from "./kernel/project";
 import { projectCardGraph } from "./kernel/cardGraph.mjs";
-import { cardsStamp, cardsVersion, getCard, onCardsUpdated } from "./kernel/registry";
+import { cardsStamp, cardsVersion, getCard, onCardsUpdated, userCardSources } from "./kernel/registry";
 import { installStageClock } from "./render/stageClock";
 import { cardMountedAt, mountFrameOf } from "./render/frameWindow.mjs";
 import { createAnimationPinner } from "./render/pinAnimations";
@@ -37,6 +37,7 @@ import { StreamPlayer } from "./render/streamPlayer";
 import {
   applyPlaceholders, hideAllPlaceholders, noteInkBox, removePlaceholderStyle, PLACEHOLDER_SLOT_ATTR, placeholdersEnabled, placeholderWanted,
   resetPlaceholderGeometry, setCatchingUpClips, setOnlineBrowserMode, setPlaceholdersEnabled, setStreamBoxSource, shownPlaceholders, shownSince,
+  unsupportedHere,
 } from "./render/placeholderHost";
 
 /*
@@ -52,6 +53,8 @@ import { resolveGlRoute } from "./render/costDevice.mjs";
 import { themeStyle } from "./themes";
 import { ONLINE } from "./online/mode";
 import { setMediaTierPolicy } from "./render/mediaTier";
+import { clampSettleTimeout, runLowMemorySettle, settleKindOf, type DrawOutcome, type LowMemorySettleItem, type LowMemorySettleResult } from "./render/lowMemorySettle";
+import { clipFrameMode } from "./kernel/frameMode.mjs";
 import "./cards";
 
 /**
@@ -220,7 +223,20 @@ export default function StageView() {
      * 判「谁刚进入抑制」,就地 mutate 的话它看到的前后两份是同一个对象,永远判不出变化。
      */
     snapshots: new Map<string, string>() as ReadonlyMap<string, string>,
+    /**
+     * 实际生效的抑制集合 = 父页发来的(`parentSuppressed`)减去低内存档停下追一帧正在画 / 已画好的(`lowMemLive`)。
+     * 读抑制的地方(渲染、占位符、钉动画要跳过谁)一律读这一份;两份源头变了由 `applySuppressed` 重算。
+     */
     suppressed: new Set<string>() as ReadonlySet<string>,
+    /** 父页经 `setSuppressed` 发来的那一份(原样) */
+    parentSuppressed: new Set<string>() as ReadonlySet<string>,
+    /**
+     * 低内存档停下追当前一帧(c10a 契约第 17 节,`settleLowMemory`):正在画和已经画好的层。它们不再按父页的抑制藏起来;
+     * 下一次 `setTime` / `play` / `setRole` 清空(下一次播放回到只贴小尺寸)。画到时限没画好的从这里拿掉,回到抑制(占位)。
+     */
+    lowMemLive: new Set<string>() as ReadonlySet<string>,
+    /** 上一次停下追一帧的结果(诊断 `__pcStageDiag().lowMemSettle`) */
+    lowMemSettle: null as LowMemorySettleResult | null,
     streamPlanes: [] as readonly StreamPlaneGroup[],
     /** 这一帧的快照还没到、先藏着等的片段(E0 的 `setTime({ awaiting })`) */
     awaiting: new Set<string>() as ReadonlySet<string>,
@@ -371,7 +387,7 @@ export default function StageView() {
      */
     const caps = detectHostCapabilities({ online: ONLINE });
     // c10a 第 8 节:舞台自己判出来的低内存档先生效;远程素材服务的基址与票据等父页 `setMediaPolicy` 下发
-    setMediaTierPolicy({ lowMemory: caps.lowMemory });
+    setMediaTierPolicy({ lowMemory: caps.lowMemory, online: ONLINE });
     /*
      * c10a 第 8 节「运行中出现 webglcontextlost 或连续 3 次视频解码失败,本次会话改按低内存档」:只在在线模式里报。
      * 两种事件都不冒泡,在 document 上按捕获阶段接;判定与提示在父页(`src/online/lowMemory.ts`)。
@@ -672,6 +688,26 @@ export default function StageView() {
       return root ? clipWrapper(root, clipId) : null;
     };
 
+    /**
+     * 实际生效的抑制集合 = 父页发来的减去低内存档停下追一帧正在画 / 已画好的(`lowMemLive`)。
+     * 只改 `ref.current`,不提交;调用方随后的那次提交(`commitPlanes` / `flushSync`)一起生效。整份换新(`Stage` 按引用判)。
+     */
+    const applySuppressed = (): void => {
+      const parent = ref.current.parentSuppressed;
+      const live = ref.current.lowMemLive;
+      ref.current.suppressed = live.size ? new Set([...parent].filter((id) => !live.has(id))) : parent;
+    };
+    const setLowMemLive = (next: ReadonlySet<string>): void => {
+      ref.current.lowMemLive = next;
+      applySuppressed();
+    };
+    /** 下一次跳转 / 播放 / 转后台:停下追一帧画的层全部回到父页的抑制(只贴小尺寸)。回有没有变 */
+    const clearLowMemLive = (): boolean => {
+      if (!ref.current.lowMemLive.size) return false;
+      setLowMemLive(new Set());
+      return true;
+    };
+
     /** `settling` 表整份换一个(`Stage` 按引用判「谁刚变」) */
     const setSettlingAt = (clipId: string, stageMs: number | null): void => {
       const next = new Map(ref.current.settling);
@@ -725,10 +761,16 @@ export default function StageView() {
       gen: number;
       /** canvas 卡追到了、正在等这一拍的 `done`(R9 M3):等到之前不摘 `.pc-settling` */
       finishing?: boolean;
+      /** 收摊时叫(低内存档停下追一帧用:没追上的层在同一次提交里回到抑制) */
+      onEnd?: (caughtUp: boolean) => void;
     }
 
     /** 追帧被中止 / 追完:摘 `.pc-settling`,**把该片段留在 `snapshots` 里**(平面还挂着,不闪) */
     const endCatchUp = (task: CatchUpTask, caughtUp: boolean): void => {
+      // 先让调用方改完抑制集合(`lowMemLive`),和摘 `.pc-settling` 同一次提交:没追上的层不会露出一帧旧的活组件
+      const onEnd = task.onEnd;
+      task.onEnd = undefined;
+      try { onEnd?.(caughtUp); } catch { /* 收摊回调出错不影响收摊 */ }
       task.finishing = false;
       ref.current.catchUps.delete(task.clipId);
       setSettlingAt(task.clipId, null);
@@ -828,6 +870,60 @@ export default function StageView() {
       const task: CatchUpTask = { clipId, stageMs: mountMs, targetMs, stepMs: 1000 / fps, announce, gen: catchUpGen.current };
       ref.current.catchUps.set(clipId, task);
       return task;
+    };
+
+    /**
+     * 低内存档停下追一帧(c10a 契约第 17 节)的一层:把它从抑制里放出来、在 `.pc-settling` 下不可见地画到 `targetMs`
+     * (直接定位的一步到位,推帧卡从入点逐帧推),画好了撤兜底(`endCatchUp(true)`:摘快照、post `settled`)。
+     * 画的时候兜底照常显示(快照平面不受 `.pc-settling` 影响;没有快照时占位符的 T3 管)。
+     * 到 `deadline` 还没画好:这一层回到抑制(贴小尺寸或占位符),直到下一次停下。
+     */
+    const drawLowMemory = async (item: LowMemorySettleItem, deadline: number, targetMs: number, fps: number): Promise<DrawOutcome> => {
+      const { clipId } = item;
+      const gen = catchUpGen.current;
+      let ended: boolean | null = null;
+      let timedOut = false;
+      const onEnd = (caughtUp: boolean) => {
+        ended = caughtUp;
+        // 没画好(到时限 / 被打断)的层回到父页的抑制;画好的留在 lowMemLive 里,直到下一次跳转或播放
+        if (!caughtUp && ref.current.lowMemLive.has(clipId)) {
+          const rest = new Set(ref.current.lowMemLive);
+          rest.delete(clipId);
+          setLowMemLive(rest);
+        }
+      };
+      setLowMemLive(new Set([...ref.current.lowMemLive, clipId]));
+      let task: CatchUpTask | null = null;
+      if (item.kind === "catchup") {
+        // 推帧卡:重挂载定位配方 + 从入点逐帧推(同 K5 第一路),每 8 步让一次宏任务
+        task = startCatchUp(clipId, targetMs, fps, true);
+      }
+      if (!task) {
+        // 直接定位:不可见地钉到目标,一次提交画好
+        const old = ref.current.catchUps.get(clipId);
+        if (old) endCatchUp(old, false);
+        setSettlingAt(clipId, targetMs);
+        flushSync(() => bumpPlanes());
+        const wrap = wrapOf(clipId);
+        if (wrap) pinner.syncIn(wrap, targetMs);
+        task = { clipId, stageMs: targetMs, targetMs, stepMs: 1000 / fps, announce: true, gen };
+        ref.current.catchUps.set(clipId, task);
+      }
+      task.onEnd = onEnd;
+      const breathe = () => new Promise<void>((r) => realSetTimeout(r, 0));
+      for (;;) {
+        if (ended !== null) return ended ? "drawn" : timedOut ? "timeout" : "aborted";
+        if (task.gen !== catchUpGen.current) { endCatchUp(task, false); continue; }
+        if (realNow() >= deadline) {
+          timedOut = true;
+          endCatchUp(task, false);
+          continue;
+        }
+        // 追上那一步 canvas 卡要等这一拍的 `done`(`finishing`),等的时候照样看时限
+        advanceCatchUp(task, CATCHUP_YIELD_STEPS);
+        if (ended !== null) continue;
+        await breathe();
+      }
     };
 
     /** 全部中止(新的 `setTime` / `play` / `setProject` / `setRole` / `setSuppressed` 都走它) */
@@ -1379,6 +1475,8 @@ export default function StageView() {
         abortPending("superseded");
         // 新的 setTime 中止正在进行的第一路追帧(K5:五个 RPC 各递增一次)
         catchUpGen.current++;
+        // 低内存档:上一次停下画好的层回到抑制(拖动、跳转时只贴小尺寸;停下时父页再发 settleLowMemory)
+        clearLowMemLive();
         abortCatchUps();
         const fps = Math.max(1, p.fps || 30);
 
@@ -1671,6 +1769,8 @@ export default function StageView() {
           gl.release();
           ref.current.snapshots = new Map();
           ref.current.suppressed = new Set();
+          ref.current.parentSuppressed = new Set();
+          ref.current.lowMemLive = new Set();
           ref.current.streamPlanes = [];
           // 3. 停 `streamPlayer` 并 `close()` 全部 `VideoFrame`(R8)
           player.stop();
@@ -1739,7 +1839,10 @@ export default function StageView() {
         ref.current.beatPaused = false;
         // 按下播放同样中止第一路追帧(K5:五个 RPC 各递增一次)
         catchUpGen.current++;
+        // 低内存档:下一次播放回到只贴小尺寸(c10a 契约第 17 节)
+        const hadLive = clearLowMemLive();
         abortCatchUps();
+        if (hadLive) commitPlanes();
         void runBeatLoop(from);
         return { ok: true, stoppedAt: from };
       },
@@ -1791,8 +1894,10 @@ export default function StageView() {
        * 加上抑制 —— 两个类不会同帧共存。
        */
       async setSuppressed(clipIds) {
-        const next = new Set(clipIds);
-        ref.current.suppressed = next;
+        ref.current.parentSuppressed = new Set(clipIds);
+        // 低内存档停下追一帧正在画 / 画好的层不按父页的抑制藏(c10a 契约第 17 节);下面按生效的那一份判
+        applySuppressed();
+        const next = ref.current.suppressed;
         // T4:被抑制、这一刻判轻的卡在等后台补跑互换(占位符的 reason 用;显隐判据不看它)
         {
           const plan = ref.current.plan?.plan ?? null;
@@ -1818,6 +1923,46 @@ export default function StageView() {
         }
         commitPlanes();
         return { ok: true as const };
+      },
+      /**
+       * 低内存档停下追当前一帧(c10a 契约第 17 节;纯的部分在 `render/lowMemorySettle.ts`)。父页在暂停、点击或拖动松开、
+       * 播放到头的那次 `setTime` 之后发。当前这一帧的所有卡(重卡也画)按「直接定位的先、推帧卡要推的帧少的先」一层层活渲,
+       * 画好的层撤兜底、换上活渲;到 `timeoutMs` 还没画好的维持占位符。用户卡、图卡不追(`unsupported` 占位常驻)。
+       * 新的 `setTime` / `play` / `setProject` / `setRole` 递增 `catchUpGen`,这一次随之收摊、回 `ok: false`。
+       */
+      async settleLowMemory(tSec, opts = {}) {
+        const timeoutMs = clampSettleTimeout(opts?.timeoutMs);
+        const sec = Math.max(0, Number(tSec) || 0);
+        const empty = (reason: LowMemorySettleResult["reason"]): LowMemorySettleResult =>
+          ({ ok: false, reason, sec, timeoutMs, ms: 0, drawn: [], timedOut: [], skipped: [] });
+        if (ref.current.role !== "front") return empty("role");
+        const p = ref.current.project;
+        if (!p) return empty("no-project");
+        // 父页发它之前刚 setTime 过这一秒;对不上(又拨走了)、或者在播,就不追
+        if (ref.current.beatRunning || Math.abs(ref.current.t - sec) > 1e-6) return empty("superseded");
+        const fps = Math.max(1, p.fps || 30);
+        const targetMs = sec * 1000;
+        const targetFrame = Math.round(sec * fps);
+        const gen = catchUpGen.current;
+        const isUserCard = (cardId: string) => Object.prototype.hasOwnProperty.call(userCardSources().fileOf, cardId);
+        const items: LowMemorySettleItem[] = [];
+        for (const clip of cardClipsAt(sec)) {
+          const c = clip as { id: string; start: number; end: number; cardId?: string; parts?: unknown[]; params?: unknown };
+          const def = c.cardId ? getCard(c.cardId) : undefined;
+          const unsupported = unsupportedHere(c.cardId, def, isUserCard);
+          const mountFrame = mountFrameOf(clip, fps);
+          const frameMode = def ? clipFrameMode(c as never, def) : undefined;
+          const kind = settleKindOf({ unsupported, frameMode, mountFrame, targetFrame });
+          items.push({ clipId: c.id, kind, frames: Math.max(0, targetFrame - mountFrame) });
+        }
+        const result = await runLowMemorySettle({
+          sec, items, timeoutMs, now: realNow,
+          aborted: () => gen !== catchUpGen.current,
+          draw: (item, deadline) => drawLowMemory(item, deadline, targetMs, fps),
+        });
+        ref.current.lowMemSettle = result;
+        refreshPlaceholders();
+        return result;
       },
       /**
        * G1 的流平面分组;渲染位置在 `Stage`(包裹层里 / 舞台根下),解码与合成在 `streamPlayer`。
@@ -1932,6 +2077,9 @@ export default function StageView() {
       armedFrame: ref.current.beatArmed?.frame ?? null,
       settling: [...ref.current.settling.keys()],
       suppressed: [...ref.current.suppressed],
+      /** 低内存档停下追一帧:正在画 / 画好的层、上一次的结果(c10a 契约第 17 节) */
+      lowMemLive: [...ref.current.lowMemLive],
+      lowMemSettle: ref.current.lowMemSettle,
       snapshots: [...ref.current.snapshots.keys()],
       awaiting: [...ref.current.awaiting],
       remountGen: [...ref.current.remountGen.entries()],

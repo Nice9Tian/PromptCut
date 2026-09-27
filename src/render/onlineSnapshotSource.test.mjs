@@ -191,3 +191,73 @@ test('OS7 没连上文档服务 / 没有素材服务:不抛,只记错,下一轮�
   assert.ok(src.stats.errors >= 1);
   assert.equal(w.fetches.length, 0);
 });
+
+test('OS8 一次层表请求永久悬挂后仍能拉到新键', async () => {
+  const w = world();
+  w.layerMap([{ clipId: 'a', kind: 'html', key: 'K2', resultKey: 'R2', firstFrame: 0, count: 2 }]);
+  w.manifest('R2', 0, 1, [0, 1]);
+  let calls = 0;
+  const src = new OnlineSnapshotSource({ ...w.deps, request: (msg) => {
+    if (msg.key === 'layers:p1' && ++calls === 1) return new Promise(() => {});
+    return w.deps.request(msg);
+  }, requestTimeoutMs: 20 });
+  const index = new Map();
+  src.subscribeReady('s', 0, (m) => applyReadyMessage(index, m));
+  src.setProject('p1');
+  await Promise.race([src.tickNow(), new Promise((_, reject) => setTimeout(() => reject(new Error('轮询被悬挂请求卡住')), 100))]);
+  assert.equal(calls, 1);
+  await src.tickNow();
+  assert.equal(layerOf(index, 'a', 'html')?.key, 'K2');
+  src.stop();
+});
+
+test('OS9 一张小位图请求永久悬挂后释放队列并重取', async () => {
+  const w = world();
+  w.layerMap([{ clipId: 'a', kind: 'html', key: 'K', resultKey: 'R', firstFrame: 0, count: 1 }]);
+  w.manifest('R', 0, 0, [0]);
+  let calls = 0;
+  const src = new OnlineSnapshotSource({ ...w.deps, assetTimeoutMs: 20, fetch: (...args) => {
+    if (++calls === 1) return new Promise(() => {});
+    return w.deps.fetch(...args);
+  } });
+  src.setProject('p1');
+  await src.tickNow();
+  await new Promise((r) => setTimeout(r, 30));
+  assert.match(await src.fetchSnapshot('html', 'K', 0), /data:image\/webp;base64,/);
+  assert.equal(calls, 2);
+  src.stop();
+});
+
+test('OS10 清单缺几帧小尺寸(阿里云 2026-09-27:295/300,缺第 0 帧与 28～31):有的帧照常就绪、照常取;缺的那一帧同区间回溯,段首缺才占位', async () => {
+  const w = world();
+  w.layerMap([{ clipId: 'a', kind: 'html', key: 'K', resultKey: 'R', firstFrame: 0, count: 300 }]);
+  const all = (from, to) => Array.from({ length: to - from + 1 }, (_, i) => from + i);
+  w.manifest('R', 0, 59, all(0, 59).filter((f) => f !== 0 && (f < 28 || f > 31)));
+  w.manifest('R', 60, 119, all(60, 119));
+  const src = new OnlineSnapshotSource(w.deps);
+  const index = new Map();
+  src.subscribeReady('s', 0, (m) => applyReadyMessage(index, m));
+  src.setProject('p1');
+  src.focus(0, 30);
+  await src.tickNow();
+  const layer = layerOf(index, 'a', 'html');
+  assert.deepEqual(layer.ranges, [[1, 27], [32, 119]], '不满的那一段不整段丢:有小尺寸的帧都算就绪');
+  assert.equal(src.debug().layers[0].ready, 115, '同阿里云手机上的 ready 115');
+  const pick = (g) => pickLayerSnapshot({ layer, globalFrame: g, firstFrame: 0, count: 300, anchors: [0, 300] })?.localFrame ?? null;
+  assert.equal(pick(0), null, '段首那一帧缺:没有更早的可回溯,这一层按兜底顺序显示占位');
+  assert.equal(pick(5), 5, '有的帧照常贴');
+  assert.equal(pick(30), 27, '缺的那一帧回溯到同区间里最近的一帧');
+  assert.equal(pick(90), 90);
+  assert.match(await src.fetchSnapshot('html', 'K', 5), /data:image\/webp;base64,/);
+  await assert.rejects(src.fetchSnapshot('html', 'K', 0), /没有这一帧的预渲染小尺寸/);
+  // 渲染节点补上那几张之后(清单换成满的),下一轮就绪区间补齐,段首也贴得上
+  w.manifest('R', 0, 59, all(0, 59));
+  src.stop();
+  const later = new OnlineSnapshotSource({ ...w.deps });
+  const index2 = new Map();
+  later.subscribeReady('s', 0, (m) => applyReadyMessage(index2, m));
+  later.setProject('p1');
+  later.focus(0, 30);
+  await later.tickNow();
+  assert.deepEqual(layerOf(index2, 'a', 'html').ranges, [[0, 119]]);
+});
