@@ -350,13 +350,15 @@ try {
     return ids;
   }, { name: projName, card: SLOW_CARD, burns: BURNS });
   check(state.clips.length === CARDS, `放上 ${CARDS} 张 probe-slow`, state.clips.length);
-  let idleSince = null;
-  await until('创建者页面测量测完', async () => {
-    const idle = await P(creator, async () => { const R = await import('/src/editor/probeRunner.ts'); return !R.probeProgress().running && !document.querySelector('[data-pc="probe-gate"]'); }).catch(() => false);
-    if (!idle) { idleSince = null; return false; }
-    idleSince ??= Date.now();
-    return Date.now() - idleSince >= 2000;
-  }, 600_000, 300);
+  // 桌面版测完每张卡:本机成本记录里有项目里每个片段的卡片身份(探针在后台舞台补测新卡,不挡界面)
+  await until('创建者页面把每张卡都测完', () => P(creator, async () => {
+    const S = await import('/src/store/project.ts');
+    const I = await import('/src/editor/costIdentity.ts');
+    const D = await import('/src/editor/planDispatch.ts');
+    const keys = Object.values(I.clipIdentityOf(S.getState().project).identityKeys);
+    const have = new Set(D.currentCosts().filter((r) => Number.isFinite(r.stepMs)).map((r) => r.identityKey));
+    return keys.length > 0 && keys.every((k) => have.has(k));
+  }), 600_000, 500);
   const desk = await P(creator, async () => {
     const S = await import('/src/store/project.ts');
     const I = await import('/src/editor/costIdentity.ts');
