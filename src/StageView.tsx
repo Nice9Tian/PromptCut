@@ -1600,7 +1600,9 @@ export default function StageView() {
         const fps = Math.max(1, p.fps || 30);
         const budgetMs = (1000 / fps) * 0.7;
         // K1 的两趟(任务书 K1):`true` 按老调用方的意思等于快照趟
-        const probeMode = opts.probe === true ? "snapshot" : opts.probe || null;
+        const bake = opts.bake ?? null;
+        const bakeFrom = Math.max(0, Number(bake?.from) || 0);
+        const probeMode = bake ? "snapshot" : opts.probe === true ? "snapshot" : opts.probe || null;
         const probe = probeMode !== null;
         const timing = probeMode === "time";
         const maxFrames = opts.maxFrames ?? (timing ? PROBE_MAX_FRAMES : Infinity);
@@ -1664,6 +1666,8 @@ export default function StageView() {
         return await new Promise<RenderReply>((resolve) => {
           ref.current.pending = { gen, startedAt: started, frames: () => frames, resolve };
           void (async () => {
+            // M7 探针实验:挂载帧(本地第 0 帧)也生成快照(探针趟从挂载帧的下一帧起才有 afterFrame)
+            if (bake && opts.jump) { const ms0 = clock.now(); const g0 = glStrict(ms0 / 1000); if (g0) await g0; afterProbeFrame(ms0); }
             await clock.advanceToAsync(target * 1000, {
               step: 1000 / fps,
               maxCatchUp: opts.maxCatchUp,
@@ -1683,7 +1687,7 @@ export default function StageView() {
                   }
                   return false;
                 }
-                if (probe && (frames >= maxFrames || wall() > budgetMs)) {
+                if (probe && (frames >= maxFrames || (!bake && wall() > budgetMs))) {
                   truncated = true;
                   return true;
                 }
@@ -1715,6 +1719,11 @@ export default function StageView() {
               }
               const root = rootRef.current;
               if (!root) return;
+              // M7 探针实验:本地帧号小于 bake.from 的只推不生成快照(4 帧一批从头推)
+              if (bake && bakeFrom > 0) {
+                const own = (ref.current.project?.tracks ?? []).flatMap((tr) => (tr.hidden ? [] : tr.clips)).find((c) => c.cardId || c.nodeId);
+                if (own && Math.round((ms / 1000 - own.start) * fps) < bakeFrom) return;
+              }
               // 探针推过的帧直接存成死素材(K1):本地帧号按探针自己的步序算,不取 data-pc-local-frame
               const snap = createSnapshot(root);
               snapshot.inlineMs += snap.timing.inlineMs;

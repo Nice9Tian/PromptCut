@@ -206,6 +206,8 @@ export interface RenderOptions {
   probe?: true | ProbeMode;
   /** 封顶帧数。计时趟不给就用 `PROBE_MAX_FRAMES`。 */
   maxFrames?: number;
+  /** M7 探针实验(claude/m7-probe-exp):快照趟不按一拍预算截断、挂载帧也生成快照;本地帧号小于 `from` 的只推不生成 */
+  bake?: { from?: number };
 }
 
 export interface SetProjectOptions {
