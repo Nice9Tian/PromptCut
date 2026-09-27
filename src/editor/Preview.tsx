@@ -758,7 +758,7 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
    * 双舞台模式下由页面触发预渲染(公共 hook,legacy 那一路在 `UnifiedPreview` 里用同一份):
    * 编辑推送成功(`frameRequest` 先 `alignMirror`)且空闲(不在播放、不在拖动)时防抖发 `preload`,没就绪就接着问。
    */
-  usePrerenderPreload(project, { enabled: dual, idle: !playing && !scrubbing });
+  usePrerenderPreload(project, { enabled: dual, idle: !playing && !scrubbing, waitForProbe: true });
   const scrubbingRef = useRef(scrubbing);
   scrubbingRef.current = scrubbing;
   const lastRenderKey = useRef("");

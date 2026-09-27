@@ -454,12 +454,18 @@ async function probeCardOnce(
 let currentProject: Project | null = null;
 /** 项目变了就 +1：正在跑的那一轮据此收摊、按新项目重排 */
 let generation = 0;
+let settledGeneration = 0;
 let looping = false;
 /** 「打开项目的第一轮」过去了没有 —— 之后的补测不再挡界面 */
 let firstPassDone = false;
 
 const hasCardClip = (p: Project | null): boolean =>
   !!p?.tracks?.some((tr) => tr.clips?.some((c) => !!c.cardId || !!c.nodeId));
+
+/** The preload for this project can use the measured costs. */
+export function probeSettledFor(project: Project): boolean {
+  return currentProject === project && settledGeneration === generation;
+}
 
 /**
  * 项目变了叫一次（`ProbeGate` 在 effect 里叫）。同一个对象引用不重排 ——
@@ -535,11 +541,18 @@ async function runLoop(): Promise<void> {
       // 空项目 / 还没加载完时那一轮不算，否则真项目到位时遮罩就不出现了。
       if (hasCardClip(project)) firstPassDone = true;
       setProgress({ running: false, card: null });
-      if (gen === generation) break;
+      if (gen === generation) {
+        settledGeneration = gen;
+        // A zero-job pass never changes the visible progress, but preload still
+        // needs to hear that its project is ready.
+        setProgress({ running: false });
+        break;
+      }
     }
   } catch (err) {
     // 探针挂了不能把编辑器挡在遮罩后面：记一条诊断，放行
     console.error("[probeRunner] 探针这一轮出错", err);
+    settledGeneration = generation;
     setProgress({ running: false, card: null });
     firstPassDone = true;
   } finally {
@@ -579,6 +592,7 @@ async function probeCard(job: ProbeJob, tuning: PipelineTuning, device: string, 
 export function resetProbeRunner(): void {
   currentProject = null;
   generation = 0;
+  settledGeneration = 0;
   firstPassDone = false;
   snapshotEndpointMissing = false;
   progress = IDLE;
