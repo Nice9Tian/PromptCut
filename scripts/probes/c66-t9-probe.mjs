@@ -52,6 +52,9 @@
  *   - 素材层先以素材小尺寸出现:可见舞台里**显示着的** `<video>` 第一次解出画面时,来源是小尺寸哈希;
  *     播放头停在 2.5 s,读顶上条纹的帧号(tier-switch-probe 的读法),稳定后记下;素材原尺寸到齐后换成原尺寸,
  *     换档后同一时刻的帧号与换档前相差不超过一帧;换档期间逐帧(rAF)采样没有黑帧;
+ *     两档在加入前都已传完时页面第一次轮询就换档(「快换」:换档间隔短于一个采样间隔),小尺寸取不到稳定帧号就用它第一次
+ *     出画面时的帧号,采样也不要求落上小尺寸样本(先小后大由 firstShown 与之后的换档保证);否则(「覆盖」)采样须覆盖换档前后。
+ *     结果里 `swapMode` 记是哪一种;
  *   - 等第一轮测量测完,拿到 `editready` 后开始计时并写 `observer.joined`;creator 改卡之后 B 在 5 s 内装上 v2
  *     (`/api/cards/source`),并在 5 s 内重测(card-sync-probe 的判据:身份键变了,且测量遮罩出现过或成本表里有了新键的记录)。
  *     计时起点早于 creator 真正改卡(多算了一次 KV 往返与 creator 的反应时间),所以测出来的是上界;
@@ -906,6 +909,10 @@ async function runObserver(out) {
       }, 20_000, 100);
       await page.screenshot({ path: path.join(OUT, `${run}-observer-1-small.png`) });
     }
+    // 两档在观察端加入前都已传完时,页面挂上小尺寸、第一次轮询就换原尺寸(设计稿第 4 节),可能一个稳定样本都取不到:
+    // 这时用小尺寸第一次出画面时读到的帧号(firstShown.idx),误差照旧按「不超过一帧」判
+    out.smallIdxSource = smallIdx !== null ? (swappedEarly ? 'last-before-swap' : 'stable') : null;
+    if (smallIdx === null && firstShown?.tier === 'small' && Number.isInteger(firstShown.idx)) { smallIdx = firstShown.idx; out.smallIdxSource = 'firstShown'; }
     out.smallIdx = smallIdx;
     out.smallStableBeforeSwap = !swappedEarly;
     check(smallIdx !== null && Math.abs(smallIdx - EXPECT_IDX) <= 1, `[observer] 素材小尺寸停在 ${SEEK} s(帧号 ${EXPECT_IDX} ± 1)`, { smallIdx });
@@ -939,12 +946,27 @@ async function runObserver(out) {
       const idxs = [...new Set(samples.filter((s) => Number.isInteger(s.idx)).map((s) => s.idx))];
       const firstOrig = samples.findIndex((s) => s.src === origKey);
       const coversSwap = firstOrig > 0 && samples.slice(0, firstOrig).some((s) => s.src === smallKey);
+      // 换档间隔(轮询看到小尺寸 → 看到原尺寸)与采样间隔(相邻两个 rAF 样本的中位间隔)比:
+      // 短于一个采样间隔是「快换」,采样本来就可能一个小尺寸样本都落不上,不要求覆盖换档;否则「覆盖」,照旧要求覆盖
+      const gaps = samples.slice(1).map((x, i) => x.at - samples[i].at).sort((a, b) => a - b);
+      const sampleIntervalMs = gaps.length ? Math.round(gaps[Math.floor(gaps.length / 2)]) : null;
+      const seqSmall = seq.find((x) => x.tier === 'small');
+      const seqOrig = seq.find((x) => x.tier === 'original');
+      const swapGapMs = seqSmall && seqOrig ? seqOrig.ms - seqSmall.ms : null;
+      const mode = swapGapMs !== null && sampleIntervalMs !== null && swapGapMs < sampleIntervalMs ? 'fast' : 'covered';
+      out.swapMode = mode;
       out.swapSamples = { n: samples.length, black: black.length, idxSeen: idxs, srcs: [...new Set(samples.map((s) => s.src))], smallBeforeSwap: firstOrig > 0 ? firstOrig : 0,
-        spanMs: samples.length > 1 ? Math.round(samples.at(-1).at - samples[0].at) : 0, coversSwap };
-      check(samples.length >= 10 && coversSwap, '[observer] 逐帧采样覆盖了换档(先有小尺寸样本、后有原尺寸样本)', out.swapSamples);
+        spanMs: samples.length > 1 ? Math.round(samples.at(-1).at - samples[0].at) : 0, coversSwap, mode, swapGapMs, sampleIntervalMs };
+      check(samples.length >= 10, '[observer] 逐帧采样够数(≥ 10)', out.swapSamples);
+      if (mode === 'covered') check(coversSwap, '[observer] 逐帧采样覆盖了换档(先有小尺寸样本、后有原尺寸样本)', out.swapSamples);
+      // 快换时「先小后大」由 firstShown(小尺寸)与之后换成原尺寸那两条断言保证,这里不再要求样本覆盖
       check(black.length === 0, '[observer] 换档期间逐帧采样无黑帧 / 无空档', black.slice(0, 3));
       check(idxs.every((i) => Math.abs(i - EXPECT_IDX) <= 1), '[observer] 换档期间画面一直停在同一时刻', idxs);
-    } else out.swapSamples = null;
+    } else {
+      out.swapSamples = null;
+      out.swapMode = null;
+      check(false, '[observer] 逐帧采样没起来(换档期间的黑帧无从判)');
+    }
     out.playhead = await P(page, async () => { const S = await import('/src/store/project.ts'); return { t: S.getState().t, log: window.__t9TLog ?? null }; }).catch((e) => ({ error: String(e?.message ?? e) }));
     await page.screenshot({ path: path.join(OUT, `${run}-observer-2-original.png`) });
 
