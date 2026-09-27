@@ -181,6 +181,7 @@ export async function enableCollab(o: EnableOptions): Promise<{ ok: true; invite
     });
   } catch (e) {
     const { status, reason } = errorStatus(e);
+    console.warn("[collab] 建共享项目没成:", status, reason, (e as Error)?.message);
     if (status === 409 || reason === "name-taken") return { ok: false, error: "name-taken" };
     return { ok: false, error: o.where === "hosted" ? "unreachable" : "lan-failed" };
   }
@@ -189,7 +190,10 @@ export async function enableCollab(o: EnableOptions): Promise<{ ok: true; invite
     { where: made.where, base: made.base, projectId: made.projectId, name: made.name, mode: made.mode, ...(o.where === "lan" ? { hostDeviceName: device?.deviceName } : {}) },
     { as: "creator", username: o.creator.username, password: o.creator.password },
   );
-  if (!entered.ok) return { ok: false, error: o.where === "hosted" ? "unreachable" : "lan-failed" };
+  if (!entered.ok) {
+    console.warn("[collab] 以创建者身份进入没成:", entered.error);
+    return { ok: false, error: o.where === "hosted" ? "unreachable" : "lan-failed" };
+  }
   saveLocal({
     projectId: made.projectId,
     where: made.where,

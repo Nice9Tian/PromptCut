@@ -647,6 +647,9 @@ export async function startSync(): Promise<void> {
 
 /** `?join=` 打开的页面:内容以文档服务为准,演示卡之类的开场填充不要做 */
 export function isJoinPage(): boolean {
+  // C10a:从开始页「加入别人的项目」进来的(已经连着共享项目),以及在线页面(只能从加入进编辑器),
+  // 内容同样以文档服务为准:编辑器挂上时不塞演示卡,不然每个加入的人都往大家的项目里加一遍
+  if (ONLINE || cur?.kind === "shared") return true;
   try {
     return new URLSearchParams(location.search).has("join");
   } catch {

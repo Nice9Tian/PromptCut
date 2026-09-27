@@ -6,7 +6,9 @@
  * 在浏览器里就地拒掉，一个字节都不发出去，并记下来让漏网的调用在测试里暴露：
  *
  * - `fetch`：回一个被拒的 Promise（TypeError，调用方的「连不上」分支照常接住）；
- * - `EventSource`、`XMLHttpRequest.open`：抛 TypeError；
+ * - `EventSource`：给一个已关闭、随即发 `error` 事件的替身（不抛：调用方大多在 React 的 effect 里直接 new，
+ *   同步抛错会把整棵界面卸掉；连不上的 SSE 调用方本来就按 `error` 处理）；
+ * - `XMLHttpRequest`：`send` 不发请求，随即发 `error`、`loadend` 事件；
  * - `navigator.sendBeacon`：回 false。
  *
  * 每个被拒的地址记进 `window.__pcApiBlocked`（去掉查询串，最多 200 条），同一路径只在控制台警告一次。
@@ -48,6 +50,30 @@ export function apiPathOf(input: unknown, { href, base = "/" }: ApiGuardOptions 
 
 const MAX_RECORDS = 200;
 
+/** 被拦下的 SSE 的替身：readyState 已关闭，下一拍发一个 `error`，之后什么都不做 */
+function deadEventSource(url: string): EventSource {
+  const t = new EventTarget() as EventTarget & Record<string, unknown>;
+  Object.assign(t, {
+    url,
+    withCredentials: false,
+    readyState: 2,
+    CONNECTING: 0,
+    OPEN: 1,
+    CLOSED: 2,
+    onopen: null,
+    onmessage: null,
+    onerror: null,
+    close() {},
+  });
+  setTimeout(() => {
+    const ev = new Event("error");
+    t.dispatchEvent(ev);
+    const h = t.onerror as ((e: Event) => void) | null;
+    if (typeof h === "function") h.call(t, ev);
+  }, 0);
+  return t as unknown as EventSource;
+}
+
 type GuardWindow = Window & { __pcApiBlocked?: string[]; __pcApiGuard?: boolean };
 
 /** 装上守卫（幂等）。回被拒地址的记录数组（与 `window.__pcApiBlocked` 同一个） */
@@ -79,7 +105,10 @@ export function installApiGuard(options: ApiGuardOptions = {}): string[] {
     const Orig = window.EventSource;
     const Guarded = function (this: unknown, url: string | URL, init?: EventSourceInit) {
       const path = check(url);
-      if (path) throw refuse(path, "EventSource");
+      if (path) {
+        refuse(path, "EventSource");
+        return deadEventSource(String(url));
+      }
       return new Orig(url, init);
     } as unknown as typeof EventSource;
     Guarded.prototype = Orig.prototype;
@@ -88,12 +117,25 @@ export function installApiGuard(options: ApiGuardOptions = {}): string[] {
   }
 
   if (typeof window.XMLHttpRequest === "function") {
-    const open = window.XMLHttpRequest.prototype.open;
-    window.XMLHttpRequest.prototype.open = function (this: XMLHttpRequest, method: string, url: string | URL, ...rest: unknown[]) {
-      const path = check(url);
-      if (path) throw refuse(path, "XMLHttpRequest");
+    type Marked = XMLHttpRequest & { __pcBlocked?: string };
+    const proto = window.XMLHttpRequest.prototype;
+    const open = proto.open;
+    const send = proto.send;
+    proto.open = function (this: Marked, method: string, url: string | URL, ...rest: unknown[]) {
+      this.__pcBlocked = check(url) ?? undefined;
       return (open as (...a: unknown[]) => void).call(this, method, url, ...rest);
     } as typeof open;
+    proto.send = function (this: Marked, body?: Document | XMLHttpRequestBodyInit | null) {
+      if (this.__pcBlocked) {
+        refuse(this.__pcBlocked, "XMLHttpRequest");
+        setTimeout(() => {
+          this.dispatchEvent(new ProgressEvent("error"));
+          this.dispatchEvent(new ProgressEvent("loadend"));
+        }, 0);
+        return;
+      }
+      return send.call(this, body);
+    };
   }
 
   if (typeof navigator !== "undefined" && typeof navigator.sendBeacon === "function") {
