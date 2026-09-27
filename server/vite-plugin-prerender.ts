@@ -11,6 +11,7 @@ import { prerenderState, setPrerender } from "./prerender-client.mjs";
 import { repushMirror, replayReadySessions } from "./vite-plugin-mirror";
 import { stageOriginsOf } from "./stage-ports.mjs";
 import { listenSafe } from "./safe-port.mjs";
+import { createSessionLineForwarder } from "./render-node/session-diag.mjs";
 
 /**
  * 拉起并看护预渲染进程(docs/archive/topics/decoupling-plan.md 第 3 节「预渲染」,阶段 2)。
@@ -125,8 +126,17 @@ export function prerenderPlugin(): Plugin {
           os.setPriority(child.pid!, os.constants.priority.PRIORITY_BELOW_NORMAL);
         } catch { /* 设不了优先级不影响功能,只是少了一层保护 */ }
         const keep = (c: Buffer) => { tail.push(c.toString()); if (tail.length > 30) tail.shift(); };
+        /*
+         * 预渲染进程的输出只留尾巴给崩溃时报错用;其中队列节点与推送队列到文档服务的会话事件行
+         * (`[queue-node] docservice.session.*`,源头已按事件节流,见 `vite-plugin-frames.ts`)转进编辑器进程的日志,
+         * 混沌测试时从编辑器这一侧看得到「脱开、接续、重建」。行里没有会话号与凭证。
+         */
+        const forwardOut = createSessionLineForwarder((line: string) => console.info(`[prerender] ${line}`));
+        const forwardErr = createSessionLineForwarder((line: string) => console.info(`[prerender] ${line}`));
         child.stdout?.on("data", keep);
         child.stderr?.on("data", keep);
+        child.stdout?.on("data", forwardOut);
+        child.stderr?.on("data", forwardErr);
         setPrerender({ url, ready: false, error: null });
 
         const me = child;
