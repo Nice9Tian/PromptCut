@@ -108,7 +108,7 @@ export function VideoTrack({
   onMediaFrame?: (mediaTime: number) => void;
   /**
    * 当前连接的素材服务报 `complete` 的哈希(A1 的 `localHashes`),换档判据只看它。
-   * 缺省空集合 = 还没问过素材服务(有小版挂小版)。来源:主文档每 2 秒轮询 `GET media/<hash>/chunks`
+   * 缺省空集合 = 还没问过素材服务(有素材小尺寸挂素材小尺寸)。来源:主文档每 2 秒轮询 `GET media/<hash>/chunks`
    * (`src/editor/media/assetTiers.ts`),经 `setLocalHashes` 下发。
    */
   localHashes?: readonly string[];
@@ -137,7 +137,7 @@ export function VideoTrack({
   const planningSlots = slots.current.map((s, i) => i === shownRef.current && (els[i].current?.readyState ?? 0) >= 2 ? { ...s, ready: true } : s);
   if (shownRef.current !== null && curV && slots.current[shownRef.current].clip?.id === curV.id && slots.current[shownRef.current].clip?.url !== curV.url) {
     const other = 1 - shownRef.current;
-    // 另一槽位可能早在原片尚未到齐时按普通素材出过画；只有本轮预热对齐产生的 ready 才能切换。
+    // 另一槽位可能早在素材原尺寸尚未到齐时按普通素材出过画；只有本轮预热对齐产生的 ready 才能切换。
     if (planningSlots[shownRef.current].ready && warmRef.current !== other && planningSlots[other].clip?.id === curV.id && planningSlots[other].clip?.url === curV.url) {
       planningSlots[other] = { ...planningSlots[other], ready: false };
     } else if (warmRef.current === other && planningSlots[other].ready && playing) {

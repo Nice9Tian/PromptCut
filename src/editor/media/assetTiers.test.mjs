@@ -33,9 +33,9 @@ function fakeFetch(completeOn) {
 const realFetch = globalThis.fetch;
 test.afterEach(() => { globalThis.fetch = realFetch; T.resetAssetTiersForTest(); });
 
-test("T5-poll-1:只问还没到顶档的那一档:原片到齐的素材不再问;迁移期的不问", () => {
+test("T5-poll-1:只问还没到顶档的那一档:素材原尺寸到齐的素材不再问;迁移期的不问", () => {
   assert.deepEqual(T.hashesToAsk(project, new Set()), [h("1"), h("2"), h("3")]);
-  assert.deepEqual(T.hashesToAsk(project, new Set([h("2")])), [h("1"), h("3")], "小版到齐了只问原片");
+  assert.deepEqual(T.hashesToAsk(project, new Set([h("2")])), [h("1"), h("3")], "素材小尺寸到齐了只问素材原尺寸");
   assert.deepEqual(T.hashesToAsk(project, new Set([h("1"), h("3")])), [], "全到顶档就停");
 });
 
@@ -166,7 +166,7 @@ test("T5-shared-5:同一条连接重连后重新登记失败,已挑好的素材�
   }
 });
 
-test("T7-gate-2:导出前问当前素材服务:原片没到齐的列出来(小版到齐不算);都到齐了放行", async () => {
+test("T7-gate-2:导出前问当前素材服务:素材原尺寸没到齐的列出来(素材小尺寸到齐不算);都到齐了放行", async () => {
   fakeFetch((_u, hash) => hash === h("2") || hash === h("3"));
   const missing = await T.exportGate(project);
   assert.deepEqual(missing.map((m) => m.name), ["开场.mov"]);

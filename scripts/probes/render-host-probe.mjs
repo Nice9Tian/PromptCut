@@ -733,9 +733,10 @@ async function runAuthCheck() {
     check(out.rightPassword === 101, '对口令握手 101', out.rightPassword);
 
     // 素材票据:凭证明进入(page 角色)后 auth.ticket 取一张 rw 票据
-    const { createWsEndpoint } = await import('../../server/render-node/ws-transport.mjs');
+    const { createDocEndpoint } = await import('../../server/render-node/session-link.mjs');
     const { createTicketSource } = await import('../../server/auth/ticket-source.mjs');
-    const ep = createWsEndpoint({ url: entry.url, protocols: sharedProtocols(entry, { role: 'page' }) });
+    // 页面角色的连接是一个会话（HT-a，`createDocEndpoint`），与编辑器页面同一种连接
+    const ep = createDocEndpoint({ url: entry.url, protocols: sharedProtocols(entry, { role: 'page' }) });
     const { watchServiceEndpoints } = await import('../../server/render-node/endpoint.mjs');
     let announcedAsset = null;
     const stopWatch = watchServiceEndpoints(ep, ['asset'], (list) => {

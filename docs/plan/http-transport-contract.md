@@ -334,7 +334,7 @@ HT-a 由三条分支实现：服务端 `claude/http-transport`（报告 `docs/re
 
 1. **按字节确认**：收下的未确认消息原文满 64 KiB 立刻单发 `session.ack`，两端照做（第 3.3 节已写入）。服务端 `SESSION_DEFAULTS.ACK_BYTES`，客户端 `SESSION_DEFAULTS.ackBytes`；单测 `docservice-session-ack.test.mjs`、`session-link.test.mjs` 的 SL-ack-bytes。
 2. **4410 的上报**：用户看得到的行为不许因会话层而变。脱开期间会话因「连着时收到也不会重连」的码结束（4003 踢人或移出、4004 删项目），接续得到 4410、`reason` 里带原关闭码时，客户端按原关闭码与原原因报 `onClose`，不走 4410 的重建，上层与连着时收到该码一样（页面照样弹「项目已删除」）；`reason` 里没有原关闭码、或原关闭码属于会重连的那类（1000、1001、1002、1006、1013 等），才报 4410 并重建。实现：`session-link.mjs` 的 `FINAL_CLOSE`（与页面 `link.ts` 的 `FATAL_CLOSE` 一致）与 `closedCodeOf()`；节点侧与页面 `SyncLink` 共用。对 `renew` 缺省为真的节点端点，报出原关闭码之后照连着时一样按退避建新会话。单测：`session-link.test.mjs` 的 SL-4410-final、SL-4410-final-renew、SL-4410-renew、SL-4410-expired，`session-link-page.test.mjs` 的 SL-page-final、SL-page-4410-renew。
-3. **没接会话层的调用方**：`server/card-sync.mjs`（编辑器进程与主机的卡片源码同步）、`scripts/probes/shared-project-lan.mjs`、`scripts/probes/render-host-probe.mjs`、`scripts/probes/c66-t9-probe.mjs` 的页面连接、管理接口的令牌连接（`asset-announce`）仍用 `createWsEndpoint`，不在第 2、15 节的接入清单里，这次不接。它们对新服务端是旧客户端（第 3.6 节），行为不变，只是传输断一次就断线。列为 HT-b 条目下的后续项（`docs/plan/TODO.md`）。
+3. **没接会话层的调用方**：`server/card-sync.mjs`（编辑器进程与主机的卡片源码同步）、`scripts/probes/shared-project-lan.mjs`、`scripts/probes/render-host-probe.mjs`、`scripts/probes/c66-t9-probe.mjs` 的页面连接、管理接口的令牌连接（`asset-announce`）仍用 `createWsEndpoint`，不在第 2、15 节的接入清单里，这次不接。它们对新服务端是旧客户端（第 3.6 节），行为不变，只是传输断一次就断线。列为 HT-b 条目下的后续项（`docs/plan/TODO.md`）。**更新（2026-09-28，M8 计划 D9，分支 `claude/m8-session-legacy`）**：产品代码与两个探针已接会话层，余下保留旧客户端的探针与理由见第 17.6 节。
 4. **客户端的偏离接受**（第 17.2 节第 1～4 条）。
 5. **本机按真正的发起方判断**（第 10 节已写入）：对端回环且转发头每一跳都是回环才算本机，开关 `0` 时一律不算；只收紧不放宽。接到文档服务握手与共享端点（`shared-service.mjs` 的缺省 `isLoopback`、`remoteOf`，以及编辑器挂载的本地文档服务 `vite-plugin-docservice.ts`）、素材服务（托管组合的 `isTrusted`、编辑器里素材服务的缺省判据 `isLoopbackRequest`）、管理接口（托管组合 `adminAllowed`），另加编辑器 `/api` 守卫的 `fromLocalClient`。仓库里会给本机服务加转发头的一方核过：没有——vite 没配 `server.proxy`（无 `xfwd`）；舞台端口代理只写自己的 `x-pc-stage-client`（覆盖同名头），其余请求头原样转；测试与探针里仿 nginx 的前缀代理原样转发请求头、不加转发头；桌面壳（`desktop/src-tauri`）不做 HTTP 转发。所以桌面版的本机路径不受影响。单测 `server/test/local-origin.test.mjs`（直连回环算本机；回环套接字加外网 `X-Forwarded-For` 不算；全回环链算；`Forwarded`、`X-Real-IP` 同理；开关为 0 时都不算；三处在托管组合上逐一核对）。
 
@@ -375,3 +375,21 @@ HT-a 由三条分支实现：服务端 `claude/http-transport`（报告 `docs/re
 ### 17.5 验收记录
 
 见 `docs/reports/AGENT-ht-integ.md` 第 3 节。HT7（阿里云外网三项拒绝）、跨机 W-HT-a、部署由主会话做。
+
+### 17.6 旧客户端接会话层（M8 计划 D9，2026-09-28，`claude/m8-session-legacy`）
+
+第 17.1 节第 3 条列的调用方，按语义「每一方都按会话连」（`docs/semantics/product/document-service.md`、`mechanism/document-service.md`「会话与传输」）处理。报告 `docs/reports/AGENT-m8-session-legacy.md`。
+
+1. **已接（产品代码）**：
+   - `server/card-sync.mjs`：缺省端点改为 `createDocEndpoint`。传输断开只让会话脱开，接续时（`onResume`）不重订阅 `content.watch`、不重对账，脱开期间的 `content.put` 回包与别人的 `content.changed` 由会话层按序补齐、去重；会话结束（`onClose`）才算断线，建新会话（`onOpen`）时照旧重订阅、对账。建新会话才调 `protocols()`（共享项目向页面要一张票据），接续不调。`status()` 多 `resumes` 与 `link { transport, detached, detaches, resumes, legacy }`（`GET /api/cards/sync/status` 看得到）；端点日志以 `doc.session.*` 转进 `[cards]` 日志。
+   - 独立渲染主机的只读卡片同步（`vite-plugin-cards.ts` 的 `createHostCardSync`）本来借队列节点那条会话；包装层补转 `onResume` 与 `stats()`。
+   - `server/asset-announce.mjs`（编辑器的素材地址登记、托管组合的管理连接，令牌连接）：缺省端点改为 `createDocEndpoint`。登记挂在会话上，接续时不重发；会话结束后建新会话再登记一次。`vite-plugin-media.ts` 转出的日志从 `ws.open` / `ws.close` 换成 `session.open` / `close` / `detach` / `resume`。
+   - 对没有会话层的旧服务端，`createDocEndpoint` 退化（第 17.2 节第 1 条），上面几处行为与原来的 `createWsEndpoint` 相同。
+2. **已接（探针）**：`scripts/probes/shared-project-lan.mjs` 的成员节点连接、`scripts/probes/render-host-probe.mjs` auth-check 的页面连接、`scripts/probes/c10a-demo-probe.mjs` 贯穿整个演示的核对连接。`scripts/probes/card-sync-probe.mjs` 加 `--cut-b <端口>`：B 经 `render-queue-proxy.mjs --cut-once --stdin-control` 连托管组合，A 改卡前切一次 B 的全部连接，核对卡片同步不重建、接续、恰好装一次。
+3. **保留旧客户端（`createWsEndpoint`）**：
+   - `scripts/probes/c66-t9-probe.mjs` 的页面核对连接：M8 计划第 4 节把该文件分给 `claude/m8-e2e`，本分支不改，避免冲突；由那条分支顺手换（一行，照 `render-host-probe.mjs` 的写法）。
+   - `scripts/probes/shared-project-probe.mjs` 的 `migrate-check` 取素材地址用的令牌连接：该文件分给 `claude/m8-migrate`；且是连上、收一条 `service.endpoints` 就关的一次性连接，断一次重跑即可。
+   - `server/render-node/http-transport.mjs`：HT-b 的底座（第 17.3 节第 10 条），没有调用方。
+   - 测试：`ht-legacy.test.mjs`、`render-node-ws.test.mjs`、`auth-impl-client.test.mjs` 专门测旧客户端；`card-sync.test.mjs`、`host-card-code.test.mjs`、`render-host.test.mjs`、`fake-manifest-env.mjs`、`render-host-kit.mjs` 等把 `createWsEndpoint` 当注入的端点用，它们测的是业务规则而不是传输，旧客户端对新服务端仍被支持（第 3.6 节），不改。
+4. **单测**：`server/test/card-sync-session.test.mjs` CS-0～CS-3（缺省端点是会话、断一次后接续；看的一方断开期间的改卡通知接续后补到、恰好装一次、不重建不重取凭证；写的一方断开期间的保存补发、服务上版本号只加一；旧服务端上退化后按对账补上、恰好装一次）。
+5. **探针**（本机托管组合，`card-sync-probe.mjs --cut-b`，2026-09-28 PC）：切一次 B 的连接（代理记 3 条 `conn.cut`），B 的卡片同步 `opens` 1→1、`resumes` 0→1、`detaches` 1，这一版（rev 2）经改卡通知装上、恰好一次（通知里带写入者），`installMs` 655；同一探针对 main 上旧的 `card-sync.mjs` 跑：`opens` 1→2（断线后重建会话、重新要票据、靠对账补装，通知里没有写入者），判 `b-card-sync-reopened`、`b-card-sync-no-resume` 失败。

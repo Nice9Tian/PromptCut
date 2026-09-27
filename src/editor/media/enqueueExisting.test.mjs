@@ -11,7 +11,7 @@ const h = (c) => c.repeat(64);
 const flush = async () => { for (let i = 0; i < 4; i++) await new Promise((r) => setTimeout(r, 0)); };
 beforeEach(() => T.resetAssetTiersForTest());
 
-test("EQE-1 请求体:一个素材一项,视频两档、图片音频一档;没有哈希的不算;同一原片只列一次", () => {
+test("EQE-1 请求体:一个素材一项,视频两档、图片音频一档;没有哈希的不算;同一素材原尺寸只列一次", () => {
   const items = T.existingMediaItems([
     { name: "v.mp4", hash: h("a"), tiers: { original: h("a"), small: h("b") } },
     { name: "i.png", hash: h("c") },

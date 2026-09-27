@@ -25,7 +25,7 @@ node scripts/export-frames.mjs --url "http://127.0.0.1:5197/?export=1" --frames 
 | `--warm` | 预热帧数,默认 3 |
 | `--format png\|jpeg` / `--quality` | 默认 PNG(带 alpha,optimizeForSpeed:仍无损,只是压得快、文件大) |
 | `--static-skip` | 画面静止的帧复用上一张,每 10 帧强制真截一张比对 |
-| `--dom-cache` | 同时把每帧舞台冻结成 HTML 存到 `<out>/dom/`,供 `replay-frames.mjs` 乱序重截 |
+| `--dom-cache` | 同时把每帧舞台生成 HTML 快照 存到 `<out>/dom/`,供 `replay-frames.mjs` 乱序重截 |
 | `--workers N\|auto` | 分片并行,默认 `auto`（按 CPU/内存取 1~4）。每个分片独立 Chrome + ffmpeg 写入 `parts/*/overlay.mov`,完成后用 concat 无损合成；仍在安全卡片边界切段 |
 | `--media ffmpeg\|chrome` | 素材(视频 / 图片)怎么进成片。默认 `chrome`:预览、导出、`see_frames` 共用 Chrome FrameScene；`ffmpeg` 是兼容旁路，页面只渲卡片(`&cardsOnly=1`)，素材由 ffmpeg 合进 `preview.mp4`(`server/export-compose.mjs`) |
 | `--audio ffmpeg` | 声音不走 Chrome 混音(默认在 OfflineAudioContext 里混,带音频效果,和预览同一套节点图),改用 `server/bakery/mux-audio.mjs` 的 ffmpeg 滤镜图直接混,没有效果;对账用 |
@@ -79,7 +79,7 @@ node scripts/export-frames.mjs --url "http://127.0.0.1:5197/?export=1" --frames 
 | demo 全长 1800 帧 | 旧后端 107.7 ms/帧 → 这里 26.9 ms/帧;自己连导两趟 1800/1800 相同 |
 | demo 0~20 秒 + 粒子 + scene-3d,600 帧,新旧对账 | 587/600 相同;其余 13 帧是旧后端自己的偶发两态(它两趟之间也差这 13 帧) |
 | 分片 1 / 4 / 8 个进程 | 54.8s / 44.8s / 62.4s,三者两两 1800/1800 相同 —— 推进省不掉、多个软件光栅化进程互抢 CPU |
-| `--dom-cache` 300 帧 | 冻结约 +56 ms/帧,带粒子 / 三维画布时约 333 KB/帧(画布存成 PNG);乱序 vs 顺序重放 300/300 相同 |
+| `--dom-cache` 300 帧 | 生成快照约 +56 ms/帧,带粒子 / 三维画布时约 333 KB/帧(画布存成 PNG);乱序 vs 顺序重放 300/300 相同 |
 | 重放 vs 实时截图 | 不是逐字节相同(边缘有细小残差,旋转元素最明显),所以同一次交付只走一条路 |
 
 ## 测法

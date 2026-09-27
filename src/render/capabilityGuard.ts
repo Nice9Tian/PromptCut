@@ -12,7 +12,7 @@
  * 为什么只查 `backdrop-filter`：读像素的 API（getImageData / drawImage 别的图层）
  * 没法从 DOM 上量出来，只能靠源码审阅和 checkCardSource 挡。这里做的是便宜那一半。
  *
- * 开销：只在开发态跑一次（`shouldGuard`），导出 / 冻结快照那条路上一个字都不执行。
+ * 开销：只在开发态跑一次（`shouldGuard`），导出 / 生成快照那条路上一个字都不执行。
  */
 import { degradeCard, reviewedCard } from "../kernel/frameMode.mjs";
 
@@ -82,7 +82,7 @@ export function guardCompositing(
   return degraded;
 }
 
-/** 导出 / 预渲染 / 冻结快照那条路不跑：那里每一帧都算钱，而且画面已经定死了 */
+/** 导出 / 预渲染 / 生成快照那条路不跑：那里每一帧都算钱，而且画面已经定死了 */
 export function shouldGuard(): boolean {
   try {
     if (typeof document === "undefined") return false;

@@ -379,8 +379,8 @@ async function runMember(argv) {
   expect = Math.max(1, expect ?? 1);
   result.name = name;
 
-  const [{ discoverLan }, { findSharedProject, pickRoute, wsBaseOf }, { buildAuthProtocols }, { createWsEndpoint }, { createLocalNode }, { createArtifactSink }, { createSleepExecutor }] = await Promise.all([
-    mod('server/lan/discovery.mjs'), mod('server/auth/route.mjs'), mod('server/auth/client.mjs'), mod('server/render-node/ws-transport.mjs'),
+  const [{ discoverLan }, { findSharedProject, pickRoute, wsBaseOf }, { buildAuthProtocols }, { createDocEndpoint }, { createLocalNode }, { createArtifactSink }, { createSleepExecutor }] = await Promise.all([
+    mod('server/lan/discovery.mjs'), mod('server/auth/route.mjs'), mod('server/auth/client.mjs'), mod('server/render-node/session-link.mjs'),
     mod('server/render-node/local-node.mjs'), mod('server/test/fake-artifact-sink.mjs'), mod('server/test/fake-ws-kit.mjs'),
   ]);
 
@@ -443,7 +443,8 @@ async function runMember(argv) {
 
     // 5. 认领并完成
     const counts = { claims: 0, completed: 0, dedup: 0, failed: 0 };
-    const ep = createWsEndpoint({
+    // 节点连接是一个会话（HT-a，`session-link.mjs` 的 `createDocEndpoint`）：传输断开在保留期内接续，认领不掉
+    const ep = createDocEndpoint({
       url: wsUrl,
       protocols: () => buildAuthProtocols({ base: cand.base, projectId: cand.projectId, username: 'lan-member', deviceId, deviceName, as: 'member', password, role: 'render' }),
     });

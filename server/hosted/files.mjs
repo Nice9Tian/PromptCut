@@ -26,6 +26,8 @@ export const HOSTED_DEPLOY_FILES = Object.freeze([
   'server/vite-plugin-media.ts',
   'server/http-guard.mjs',
   'server/asset-announce.mjs',
+  // 地址登记的连接是一个会话（M8 计划 D9）：session-link.mjs，它再引 ws-transport.mjs 的退避与子协议常量
+  'server/render-node/session-link.mjs',
   'server/render-node/ws-transport.mjs',
   // 成本记录模块按原始环境算指纹（与预渲染结果键同一套归一规则，C10 其余第 3 节）
   'server/render-node/fingerprint.mjs',

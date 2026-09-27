@@ -55,7 +55,7 @@ const ASSET_PORT = Number(arg('--asset-port', 5635));
 const PHASES = new Set(arg('--phases', 'create,online,desktop,regen,cancel').split(','));
 /**
  * `--with-video`(c10a-integ 补):创建者开启前先导一段带声音的视频;开启后等它的原尺寸传到托管端素材服务;
- * 取消前把创建者本机内容库里的这一份删掉,取消后核对它从托管端拉回本机(字节与原片相同)。
+ * 取消前把创建者本机内容库里的这一份删掉,取消后核对它从托管端拉回本机(字节与素材原尺寸相同)。
  */
 const WITH_VIDEO = argv.includes('--with-video');
 fs.mkdirSync(OUT, { recursive: true });

@@ -26,6 +26,7 @@ import { voicePlugin } from "./server/vite-plugin-voice";
 import { audioPlugin } from "./server/vite-plugin-audio";
 import { stagePortsPlugin } from "./server/vite-plugin-stage-ports";
 import { docservicePlugin } from "./server/vite-plugin-docservice";
+import { rawEolPlugin } from "./server/raw-eol.mjs";
 
 // 无头实例(scripts/headless.mjs)和用户手里那份 vite 跑在同一个项目根上,
 // 依赖预构建缓存分开放,免得两个进程同时写 node_modules/.vite 互相踩。
@@ -81,7 +82,7 @@ const desktopConfig: UserConfig = {
   // stagePortsPlugin 排在 apiGuard 后面:它自己那条 /api/stage/ports 也该受同一道卡口管。
   // docservicePlugin(本地文档服务)总是注册;无头实例里它进入停用模式(不建文档服务、/docservice 回 503),
   // 因为无头实例是 Skill 的临时副本,不能自己发 projectRev。停用逻辑在插件里。
-  plugins: [lanHostPlugin(), apiGuardPlugin(), viewGatePlugin(), stagePortsPlugin(), react({ exclude: REACT_REFRESH_EXCLUDE }), tailwindcss(), exportPlugin(), mirrorPlugin(), costsPlugin(), framesPlugin(), vitePluginAi(), sttPlugin(), shotsPlugin(), trackPlugin(), subjectPlugin(), mediaPlugin(), chatsPlugin(), vitePluginCards(), projectsPlugin(), visionPlugin(), skillPlugin(), skillStatePlugin(), collectPlugin(), webPlugin(), prerenderPlugin(), voicePlugin(), audioPlugin(), docservicePlugin()],
+  plugins: [lanHostPlugin(), apiGuardPlugin(), viewGatePlugin(), stagePortsPlugin(), react({ exclude: REACT_REFRESH_EXCLUDE }), tailwindcss(), exportPlugin(), mirrorPlugin(), costsPlugin(), framesPlugin(), vitePluginAi(), sttPlugin(), shotsPlugin(), trackPlugin(), subjectPlugin(), mediaPlugin(), chatsPlugin(), vitePluginCards(), rawEolPlugin(), projectsPlugin(), visionPlugin(), skillPlugin(), skillStatePlugin(), collectPlugin(), webPlugin(), prerenderPlugin(), voicePlugin(), audioPlugin(), docservicePlugin()],
   server: headless
     ? {
         // 无头实例不要热更新:它是给 agent 跑的,源码一改就重载页面,重载期间工具全失败,
@@ -117,7 +118,7 @@ const desktopConfig: UserConfig = {
  * 在线构建（C10a 契约 `docs/plan/c10a-contract.md` 第 2 节〔裁〕）：`vite build --mode online` 产出 `dist-online/`，
  * `base: "/editor/"`，编译期常量 `import.meta.env.VITE_PC_ONLINE === "1"`（`src/online/mode.ts` 的 `ONLINE`）。
  *
- * - 只挂 React 与 Tailwind：上面那些插件都是编辑器进程的 `/api/**` 接口与开发期的中间件，在线页面没有编辑器进程；
+ * - 只挂换行统一（`raw-eol`）、React 与 Tailwind：上面那些插件都是编辑器进程的 `/api/**` 接口与开发期的中间件，在线页面没有编辑器进程；
  *   卡片的改动层（`vite-plugin-cards` 的 pre 插件）是本机用户的定制，也不进在线构建；
  * - 桌面构建（`vite build`）与开发服务（`vite`）照旧走 `desktopConfig`，不受影响；
  * - `dist-online/` 由 `scripts/remote/docservice.mjs deploy-hosted --editor dist-online` 部署到托管端的 `<部署目录>/editor/`，
@@ -133,7 +134,7 @@ const onlineConfig = async (): Promise<UserConfig> => {
   const codeVersion = frameCode(process.cwd());
   return {
     base: "/editor/",
-    plugins: [react({ exclude: REACT_REFRESH_EXCLUDE }), tailwindcss()],
+    plugins: [rawEolPlugin(), react({ exclude: REACT_REFRESH_EXCLUDE }), tailwindcss()],
     define: { "import.meta.env.VITE_PC_ONLINE": JSON.stringify("1"), __PC_CODE_VERSION__: JSON.stringify(codeVersion) },
     build: { outDir: "dist-online", emptyOutDir: true },
   };

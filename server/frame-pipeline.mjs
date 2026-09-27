@@ -76,7 +76,7 @@ export function frameContentBox(frame, stage) {
 }
 
 /**
- * D4(b) 回包的**纯计算**部分:片段分成「素材段(按 frameBox 算)」和「卡片(按冻结快照量)」,
+ * D4(b) 回包的**纯计算**部分:片段分成「素材段(按 frameBox 算)」和「卡片(按生成的快照量)」,
  * 再把量出来的实体框并回去。`measured` = `window.__pcSolid.rectsWithBounds` 的返回值,
  * 传 null 表示还没量(只要名单)。不传 `clipIds` 就是全部片段(卡片 + 素材段)。
  *
@@ -2257,7 +2257,7 @@ export class FramePipeline {
           // 隔离工程里目标片段是唯一可见输出,所以这一帧的 control 列表里认
           // `control.clipId` 那一条就是这张卡的子树。`data-pc-local-frame` 是卡片
           // 自己的本地帧,和隔离工程的帧号一致(片段被平移到了 -phase),但仍以
-          // 冻结结果里带的那个为准 —— 目录是按本地帧寻址的。
+          // 快照结果里带的那个为准 —— 目录是按本地帧寻址的。
           onSnapshot: async (frame, html, items) => {
             if (!target || signal?.aborted || !this.prerenderPicked(entry, control.clipId)) return;
             const own = (items || []).find(item => item.id === control.clipId);
@@ -2669,7 +2669,7 @@ export class FramePipeline {
    * `bakeFrames` 出这一帧并 `record`(下次就命中)。**MOV/PNG 命中不能短路** —— 实体框要 DOM,
    * 像素答不了;所以只看 `entry.html`,不看 `entry.mov`。
    *
-   * 量法:把冻结 HTML 注进 `#pc-frame-snapshot`(和 `rasterPrefix` 同一条 `captureSnapshot` 路),
+   * 量法:把快照 HTML 注进 `#pc-frame-snapshot`(和 `rasterPrefix` 同一条 `captureSnapshot` 路),
    * 在 `document.fonts.ready` 之后、`prepareFrameMedia` 之前对 `#pc-frame-snapshot [data-pc-scene]`
    * 调 `window.__pcSolid.rectsWithBounds({ pixels: 'none' })` —— 快照里 canvas 已经换成
    * 带 `data-pc-painted-box` 的 `<img>`,所以不用(也不能)读像素。`screenshot: false` 让这一趟
@@ -2708,7 +2708,7 @@ export class FramePipeline {
         await this.save(entry);
       }
       const html = entry.html?.get?.(frame);
-      if (typeof html !== 'string' || !html) throw new Error(`第 ${frame} 帧没有冻结快照，量不到实体框`);
+      if (typeof html !== 'string' || !html) throw new Error(`第 ${frame} 帧没有生成的快照，量不到实体框`);
       measured = await captureSnapshot(bakery, html, undefined, {
         screenshot: false,
         afterFonts: page => page.evaluate(ids => {

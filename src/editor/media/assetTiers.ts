@@ -3,7 +3,7 @@
  *
  * - **轮询**:每 2 秒向**当前连接的素材服务**问 `GET media/<hash>/chunks`,把报 `complete` 的哈希集合交给
  *   换档判据(`src/render/mediaTier.ts` 的 `chooseTier`):舞台经 `setLocalHashes` 下发、主文档的声音层直接读。
- *   只问还没到顶档的那一档:原片到齐了这份素材就不再问;哈希不可变,问到齐的不会再变回去。
+ *   只问还没到顶档的那一档:素材原尺寸到齐了这份素材就不再问;哈希不可变,问到齐的不会再变回去。
  *   连本地素材服务时问的是本机 `/api/asset`;进了共享项目问的是那个项目的远程素材服务(带只读素材票据)——
  *   本机缓存落没落盘不作判据(`docs/semantics/mechanism/asset-service.md`「同步状态只问素材服务」)。
  * - **远程素材服务**:进入共享项目时由 `syncManager` 设(`connectSharedAssets`),同时告诉本机编辑器进程
@@ -11,7 +11,7 @@
  * - **上传目标**:进入共享项目时把远程素材服务基址和一张 `rw` 素材票据交给编辑器进程的上传队列
  *   (`POST /api/media/upload-queue/target`),剩 1/3 有效期时续签;离开时推 `{ base: null }`(设计稿第 9 节第 1 条)。
  * - **预取**:项目的素材表变了(打开项目、导入)且连着远程素材服务时,把 `prefetchOrder` 的清单交给编辑器进程。
- * - **导出前的拦截**:`exportGate` 问当前素材服务,时间轴上用到的原片哪些还没 `complete`。
+ * - **导出前的拦截**:`exportGate` 问当前素材服务,时间轴上用到的素材原尺寸哪些还没 `complete`。
  *
  * 集合里带一个标记(`TIERS_KNOWN_LOCAL` / `TIERS_KNOWN_REMOTE`):「问过了、一个都没到齐」和「还没问过」分得开。
  */
@@ -224,7 +224,7 @@ export function subscribeRemoteAssetsHealth(cb: () => void): () => void {
   return () => { healthListeners.delete(cb); };
 }
 
-/** 这一轮要问的哈希:原片还没到齐的素材问原片,小版还没到齐的也问小版;全到顶档的不问 */
+/** 这一轮要问的哈希:素材原尺寸还没到齐的素材问素材原尺寸,素材小尺寸还没到齐的也问素材小尺寸;全到顶档的不问 */
 export function hashesToAsk(project: Pick<Project, "media">, done: ReadonlySet<string>): string[] {
   const ask: string[] = [];
   for (const m of project.media ?? []) {
@@ -245,7 +245,7 @@ export async function pollOnce(project: Pick<Project, "media"> = getState().proj
   const ask = hashesToAsk(project, complete);
   /*
    * 在线页面:素材全到齐之后这一轮本来什么都不问,也就看不出素材服务断没断。每 `HEALTH_EVERY` 轮
-   * 顺带问一张已经到齐的原片(一个很小的对账请求),只为顶栏的「连不上素材服务」。
+   * 顺带问一张已经到齐的素材原尺寸(一个很小的对账请求),只为顶栏的「连不上素材服务」。
    */
   if (!ask.length && noEditorProcess && remote && ++idleRounds % HEALTH_EVERY === 0) {
     const probe = (project.media ?? []).map(originalHashOf).find(Boolean);
@@ -332,7 +332,7 @@ export function startAssetTiers(): () => void {
 /* ---------------- 导出前的拦截 ---------------- */
 
 /**
- * 导出前问一遍当前素材服务:时间轴上用到的原片哪些还没 `complete`(A1「导出只用原片」「等待上传方」)。
+ * 导出前问一遍当前素材服务:时间轴上用到的素材原尺寸哪些还没 `complete`(A1「导出只用素材原尺寸」「等待上传方」)。
  * 空数组 = 可以导出。
  */
 export async function exportGate(project: Project): Promise<MissingOriginal[]> {
@@ -583,7 +583,7 @@ type ExistingMedia = { name?: string; hash?: string; tiers?: { original?: string
 
 /**
  * 项目里已有的素材 → 按哈希入队的请求体:一个素材一项,视频两档(`tiers.small`、`tiers.original`),
- * 图片、音频只有原片一档;没有哈希的(迁移期老素材、还在入库的)不算。同一原片只列一次。
+ * 图片、音频只有素材原尺寸一档;没有哈希的(迁移期老素材、还在入库的)不算。同一素材原尺寸只列一次。
  */
 export function existingMediaItems(media: readonly ExistingMedia[]): { name: string; original: string; small?: string }[] {
   const seen = new Set<string>();

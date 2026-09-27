@@ -19,7 +19,7 @@ function queueWith({ remote = true } = {}) {
   return createUploadQueue({ file: null, target: () => (remote ? { client, base: 'http://h/api/asset' } : null), resolveFile });
 }
 
-test('UQE-1 视频两档按先小后大进队,图片只有原片一档;扩展名取本地文件的', async () => {
+test('UQE-1 视频两档按先小后大进队,图片只有素材原尺寸一档;扩展名取本地文件的', async () => {
   const q = queueWith();
   const r = await enqueueLocalMedia(q, { items: [{ name: 'v.mp4', original: V_ORIG, small: V_SMALL }, { name: 'i.png', original: IMG }] }, resolveFile);
   assert.deepEqual(r, { queued: [V_ORIG, IMG], missing: [], bad: 0, local: false });
@@ -27,7 +27,7 @@ test('UQE-1 视频两档按先小后大进队,图片只有原片一档;扩展名
   assert.deepEqual(s.items.map((i) => [i.id, i.tiers]), [[V_ORIG, ['small', 'original']], [IMG, ['original']]]);
 });
 
-test('UQE-2 只收本地有的:原片没有 → 整个素材不进队、回报缺失;小版没有 → 只传原片、回报小版缺失', async () => {
+test('UQE-2 只收本地有的:素材原尺寸没有 → 整个素材不进队、回报缺失;素材小尺寸没有 → 只传素材原尺寸、回报素材小尺寸缺失', async () => {
   const q = queueWith();
   const r = await enqueueLocalMedia(q, { items: [{ original: GONE, small: V_SMALL }, { original: V_ORIG, small: GONE_SMALL }] }, resolveFile);
   assert.deepEqual(r.queued, [V_ORIG]);
@@ -35,7 +35,7 @@ test('UQE-2 只收本地有的:原片没有 → 整个素材不进队、回报�
   assert.deepEqual(q.stats().items.map((i) => [i.id, i.tiers]), [[V_ORIG, ['original']]]);
 });
 
-test('UQE-3 也收 { hashes }(每个当原片一档);形状不对的计 bad;同一原片再进队只合并档位', async () => {
+test('UQE-3 也收 { hashes }(每个当素材原尺寸一档);形状不对的计 bad;同一素材原尺寸再进队只合并档位', async () => {
   const q = queueWith();
   const r = await enqueueLocalMedia(q, { hashes: [V_ORIG, 'not-a-hash', IMG] }, resolveFile);
   assert.deepEqual(r, { queued: [V_ORIG, IMG], missing: [], bad: 1, local: false });
