@@ -61,12 +61,18 @@ const NODE_PENDING = '节点未就绪（等 rq-m7-node）';
 const TICKET_RE = /v1\.[A-Za-z0-9_-]{40,}\.[A-Za-z0-9_-]{30,}/;
 
 const { arg, flag } = argsOf();
-const ROLE = arg('--role', 'all');
+const ROLE = arg('--role', arg('--site') ? 'creator' : 'all');
 const say = sayer(PROBE, ROLE);
 const TIMEOUT_MS = Number(arg('--timeout-min', 45)) * 60_000;
 const deadline = Date.now() + TIMEOUT_MS;
 const NODE_WAIT_MS = Number(arg('--node-wait-s', 60)) * 1000;
 const A3_MS = Number(arg('--a3-seconds', 60)) * 1000;
+
+/** 等一个 KV 信号；对方中止（abort）就回 null，不干等到总时限 */
+async function waitSignal(kv, name) {
+  const v = await until(async () => (await kv.peekSignal(name)) ?? ((await kv.aborted()) ? { __aborted: true } : null), Math.max(1000, deadline - Date.now()), 1000);
+  return v?.__aborted ? null : v;
+}
 
 /* ================================================================== 验收项的账本 */
 
@@ -84,6 +90,11 @@ function createBook() {
       return status === 'pass';
     },
     judge(id, name, ok, detail) { return book.part(id, name, ok ? 'pass' : 'fail', detail); },
+    /** 带耗时门槛的判据：只有在性能基准机（笔记本，node 角色带 --timing-authoritative）上才判；别处只记录、标「待笔记本复核」 */
+    timed(id, name, ok, detail, authoritative) {
+      if (authoritative) return book.judge(id, name, ok, detail);
+      return book.part(id, name, 'pending', { reason: '待笔记本复核（这台机器上的计时只作参考）', referenceVerdict: ok ? 'pass' : 'fail', observed: detail });
+    },
     pending(id, name, reason, detail) { return book.part(id, name, 'pending', { reason, ...(detail === undefined ? {} : { observed: detail }) }); },
     merge(other) { for (const [id, it] of Object.entries(other ?? {})) for (const [name, p] of Object.entries(it.parts ?? {})) (items[id] ??= { parts: {} }).parts[name] = p; },
     summary() {
@@ -315,6 +326,76 @@ async function startSite({ out, bind, publicHost }) {
   };
 }
 
+
+/* ================================================================== 外网模式（--site）：站点、上帝视角、素材核对 */
+
+/**
+ * 外网模式的站点：不起本机托管组合与代理；页面 `<源>/editor`，文档服务 `<源>/hosted/`，素材服务 `<源>/media/api/asset`，
+ * 两个舞台源读 `<源>/editor/runtime-config.json`。托管端的日志与 describe() 看不到。
+ */
+async function remoteSite(origin) {
+  const site = origin.replace(/\/+$/, '');
+  const rc = await fetch(site + '/editor/runtime-config.json', { signal: AbortSignal.timeout(15_000) }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+  const stageOrigins = Array.isArray(rc?.stageOrigins) ? rc.stageOrigins : Object.values(rc?.stageOrigins ?? {});
+  say('site.remote', { site, stageOrigins });
+  return { site, stageOrigins, remote: true, combo: null, logs: [], urls: [], ws: site.replace(/^http/, 'ws') + '/hosted/', queues: () => ({ raw: null, list: [] }), stop: async () => {} };
+}
+
+/**
+ * 外网模式的上帝视角：没有进程内 describe()，只能从 pc 档旁观节点收到的消息拼（opened / taken / closed）。
+ * 认领者（nodeId）、attempts、lastError 拿不到（记 null）；锁按「最后一次被认领的那份任务的指纹」推断。
+ */
+function remoteGodView(watcher) {
+  const tasks = new Map();
+  const locks = new Map();
+  let seen = 0;
+  const poll = () => {
+    const ev = watcher.events;
+    for (; seen < ev.length; seen++) {
+      const e = ev[seen];
+      if (!e.id) continue;
+      let r = tasks.get(e.id);
+      if (!r) { r = { id: e.id, firstSeen: e.at, states: [], claimedBy: [], attempts: null, lastError: null, doneAt: null }; tasks.set(e.id, r); }
+      const body = watcher.bodies.get(e.id);
+      const state = e.type === 'task.opened' ? 'open' : e.type === 'task.taken' ? 'claimed' : e.type === 'task.closed' ? e.state : null;
+      if (!state || state === 'hidden') continue;
+      if (r.states.at(-1)?.state !== state) r.states.push({ state, at: e.at });
+      r.state = state;
+      if (body?.version !== undefined) r.version = body.version;
+      if (state === 'done' && !r.doneAt) r.doneAt = e.at;
+      if (state === 'claimed' && body?.input?.contentKey && body.kind !== 'plan') {
+        const lk = body.kind + ':' + body.input.contentKey;
+        const fp = body.requires?.envFingerprint ?? null;
+        const l = locks.get(lk) ?? { lockKey: lk, history: [], inferred: true };
+        if (l.history.at(-1)?.envFingerprint !== fp) l.history.push({ envFingerprint: fp, at: e.at });
+        l.envFingerprint = fp;
+        locks.set(lk, l);
+      }
+    }
+    // 旁观节点在快照里先收到、还没有事件的任务按 open 记
+    for (const [id, b] of watcher.bodies) if (!tasks.has(id)) tasks.set(id, { id, firstSeen: Date.now(), states: [{ state: 'open', at: Date.now() }], state: 'open', version: b.version, claimedBy: [], attempts: null, lastError: null, doneAt: null });
+  };
+  const timer = setInterval(poll, 250);
+  return { tasks, nodes: new Map(), locks, poll, remote: true, get polls() { return seen; }, browserNodes: () => [], lockOf: (k) => { poll(); return locks.get(k) ?? null; }, stop: () => clearInterval(timer) };
+}
+
+/** 素材服务上这一块齐没齐（GET <ns>/<hash>/chunks 的 complete）；读票据现签，只在内存里 */
+async function assetHasFactory(ctx) {
+  let ticket = null;
+  let ticketAt = 0;
+  const base = ctx.site.remote ? ctx.site.site + '/media/api/asset' : 'http://127.0.0.1:' + ctx.site.combo.assetPort + '/api/asset';
+  return async (ns, hash) => {
+    if (!ticket || Date.now() - ticketAt > 5 * 60_000) {
+      const r = await ctx.aConn.rpc({ type: 'auth.ticket', kind: 'asset', access: 'r' }).catch(() => null);
+      ticket = r?.ticket ?? null; ticketAt = Date.now();
+      if (ticket) ctx.secrets.add(ticket);
+    }
+    const res = await fetch(base + '/' + ns + '/' + hash + '/chunks', { headers: ticket ? { Authorization: 'Bearer ' + ticket } : {}, signal: AbortSignal.timeout(15_000) }).catch(() => null);
+    const j = res?.ok ? await res.json().catch(() => null) : null;
+    return j?.complete === true;
+  };
+}
+
 /* ================================================================== 文档服务连接（Node 侧） */
 
 /** 以某个身份（口令）开一条会话层连接 */
@@ -533,6 +614,7 @@ function startGodView(site) {
   return {
     tasks, nodes, locks, poll,
     get polls() { return polls; },
+    lockOf: (k) => locks.get(k) ?? null,
     browserNodes: () => [...nodes.values()].filter((n) => n.profile === 'browser'),
     stop: () => clearInterval(timer),
   };
@@ -568,7 +650,8 @@ async function runCreator(book, head) {
   fs.mkdirSync(out, { recursive: true });
   const bind = arg('--bind', '127.0.0.1');
   const publicHost = arg('--public-host', '127.0.0.1');
-  let coord = arg('--coord', null);
+  const REMOTE = arg('--site', null);
+  let coord = arg('--coord', REMOTE ? REMOTE.replace(/\/+$/, '') + '/coord' : null);
   let ownCoord = null;
   if (!coord) {
     ownCoord = await startCoord({ port: PORTS.coord, host: bind, mailToken: process.env.PROBE_MAIL_TOKEN || null });
@@ -585,7 +668,7 @@ async function runCreator(book, head) {
   let nodeResult = null;
   try {
     const M = await mods();
-    const site = await startSite({ out, bind, publicHost });
+    const site = REMOTE ? await remoteSite(REMOTE) : await startSite({ out, bind, publicHost });
     cleanups.push(() => site.stop());
     ctx.site = site;
     const t0 = Date.now();
@@ -629,12 +712,13 @@ async function runCreator(book, head) {
     say('editor.up', { envFingerprint: ed.q.envFingerprint, fpApplied, ms: Date.now() - t0 });
     ctx.pcNodeId = ed.q.nodeId ?? null;
 
-    const god = startGodView(site);
-    cleanups.push(() => god.stop());
-    ctx.god = god;
     const watcher = await startWatcher({ url: site.ws, projectId, cred: creator, run, log: say });
     cleanups.push(() => watcher.close());
     ctx.watcher = watcher;
+    const god = site.remote ? remoteGodView(watcher) : startGodView(site);
+    cleanups.push(() => god.stop());
+    ctx.god = god;
+    ctx.assetHas = await assetHasFactory(ctx);
 
     /* ---------------------------------------------------------------- 给 node 角色的配置 */
     const users = {
@@ -646,7 +730,8 @@ async function runCreator(book, head) {
     ctx.users = users;
     await kv.config({ run, site: site.site, stageOrigins: site.stageOrigins, projectName: name, projectId, projectPassword, users, pcFp: ctx.pcFp, at: Date.now(),
       a10: !flag('--no-a10') });
-    const ready = await kv.takeReady('node', deadline);
+    const ready = await until(async () => (await kv.get('ready.node', 0).catch(() => null)) ?? ((await kv.aborted()) ? { aborted: true } : null), Math.max(1000, deadline - Date.now()), 1000);
+    if (ready?.aborted) throw new Error('node 角色中止了（见 node-crash）');
     if (!ready) throw new Error('node 角色没报 ready');
     ctx.ready = ready;
     say('node.ready', { pageFp: ready.pageFp, isNode: ready.isNode ?? null });
@@ -654,11 +739,11 @@ async function runCreator(book, head) {
     /* ---------------------------------------------------------------- 服务端一侧的真判（替身） */
     await serverChecks(ctx);
 
-    const pn = await kv.takeSignal('page.node', deadline);
+    const pn = await waitSignal(kv, 'page.node');
     ctx.pageNode = pn;
     const isNode = !!pn?.isNode;
     // 页面播放 10 秒（A12）时不改项目，免得重灌打扰计时
-    await kv.takeSignal('node.play-done', deadline);
+    await waitSignal(kv, 'node.play-done');
 
     if (isNode) await pageServerSide(ctx);
     else {
@@ -666,7 +751,8 @@ async function runCreator(book, head) {
       if (!flag('--no-twin')) await twinChecks(ctx);
       else book.pending('D1-D2-D12', 'twin', '--no-twin');
     }
-    book.judge('M7-A11', 'server-logs-describe', !scanLeaks(ctx).found, scanLeaks(ctx));
+    if (ctx.site.remote) book.pending('M7-A11', 'server-logs-describe', '外网模式看不到托管端的日志与 describe()（在阿里云上另查）');
+    else book.judge('M7-A11', 'server-logs-describe', !scanLeaks(ctx).found, scanLeaks(ctx));
     head.planDump = await dumpPlans(ctx);
     await kv.signal('creator.finished', {});
     await kv.done({});
@@ -962,8 +1048,8 @@ async function twinChecks(ctx) {
       const stateOf = (id) => ({ state: god.tasks.get(id)?.state ?? null, lastError: god.tasks.get(id)?.lastError ?? null, attempts: god.tasks.get(id)?.attempts ?? null });
       const losers = loserIds.map(stateOf);
       const lockKey = `snapshot:${ts[0].input.contentKey}`;
-      book.judge('D1-D2-D12', `supersede-${clip}`, !!won && losers.length > 0 && losers.every((x) => x.state === 'failed' && /superseded/.test(String(x.lastError)) && x.attempts === 0),
-        { winner: won === 'pc' ? 'pc' : won ? 'twin' : null, losers: losers.slice(0, 6), lock: god.locks.get(lockKey)?.envFingerprint ?? null });
+      book.judge('D1-D2-D12', `supersede-${clip}`, !!won && losers.length > 0 && losers.every((x) => x.state === 'failed' && (god.remote || (/superseded/.test(String(x.lastError)) && x.attempts === 0))),
+        { winner: won === 'pc' ? 'pc' : won ? 'twin' : null, losers: losers.slice(0, 6), lock: god.lockOf(lockKey)?.envFingerprint ?? null });
 
       // D12：层表 v3，这一层带两个候选（切分方自己的在前），layerRefOf 按 alive 整份换
       const lm = await until(async () => {
@@ -994,13 +1080,13 @@ async function twinChecks(ctx) {
         twin.setMode('observe');
         const idleFrom = twin.grabbed.at;
         await sleepUntil(idleFrom + 33_000);
-        const lockBefore = god.locks.get(lockKey)?.envFingerprint ?? null;
+        const lockBefore = god.lockOf(lockKey)?.envFingerprint ?? null;
         // 改一处与这张卡无关的地方（轻卡的参数）→ 版本变了 → 页面防抖后重发清单计划 → 切分方重切
         ctx.rev = await touchLight(ctx.aConn, projectId, run);
-        const took = await until(() => (god.locks.get(lockKey)?.envFingerprint === ctx.pcFp ? god.locks.get(lockKey) : null), 180_000, 500);
+        const took = await until(() => (god.lockOf(lockKey)?.envFingerprint === ctx.pcFp ? god.lockOf(lockKey) : null), 180_000, 500);
         const twinLeft = twinCopy.map((t) => stateOf(t.id));
         book.judge('D1-D2-D12', `idle-takeover-${clip}`, !!took && twinLeft.every((x) => x.state === 'failed' || x.state === 'done'),
-          { lockBefore, lockAfter: god.locks.get(lockKey)?.envFingerprint ?? null, lockHistory: god.locks.get(lockKey)?.history ?? null, idleMs: Date.now() - idleFrom, twinCopy: twinLeft.slice(0, 6) });
+          { lockBefore, lockAfter: god.lockOf(lockKey)?.envFingerprint ?? null, lockHistory: god.lockOf(lockKey)?.history ?? null, idleMs: Date.now() - idleFrom, twinCopy: twinLeft.slice(0, 6) });
         break;
       }
       book.pending('D1-D2-D12', `idle-takeover-${clip}`, 'pc 先得了这张卡的锁，接手测不了（换下一张再试）', { winner: 'pc' });
@@ -1059,7 +1145,7 @@ async function pageServerSide(ctx) {
   const { book, god, watcher, kv, users, projectId } = ctx;
   const M = await mods();
   const userB1 = `${users.b1.username}@${users.b1.deviceId}`;
-  const pageNode = () => god.browserNodes().find((n) => n.userId === userB1) ?? null;
+  const pageNode = () => god.browserNodes().find((n) => n.userId === userB1) ?? (god.remote && ctx.pageNode?.nodeId ? { nodeId: ctx.pageNode.nodeId, profile: 'browser', envFingerprint: ctx.pageNode.envFingerprint, remoteInferred: true } : null);
   const pn = pageNode();
   const pageFp = pn?.envFingerprint ?? ctx.pageNode?.envFingerprint ?? null;
   book.judge('M7-A3', 'server-page-node-registered', !!pn && pn.profile === 'browser', { node: pn ? { profile: pn.profile, fp: pn.envFingerprint } : null });
@@ -1091,17 +1177,17 @@ async function pageServerSide(ctx) {
   const tF = Date.now();
   const pubF = await bPub.rpc({ type: 'task.publish', tasks: forbidden.map((x) => x.t) }).catch((e) => ({ error: errText(e) }));
   await delay(A3_MS);
+  await kv.signal('a3.forbidden', { ids: forbidden.map((x) => [x.tag, x.t.id]), from: tF, to: Date.now() });
   const claimedByPage = forbidden.filter((x) => (god.tasks.get(x.t.id)?.claimedBy ?? []).some((c) => c.nodeId === pn?.nodeId)).map((x) => x.tag);
-  book.judge('M7-A3', 'server-page-forbidden-claimed-0', claimedByPage.length === 0 && !pubF?.error, { seconds: Math.round((Date.now() - tF) / 1000), claimedByPage, publishErrors: (pubF?.results ?? []).filter((r) => r.error).length });
+  if (god.remote) book.pending('M7-A3', 'server-page-forbidden-claimed-0', '外网模式看不到认领者（由 node 角色的 page-forbidden-claimed-0 判）', { publishErrors: (pubF?.results ?? []).filter((r) => r.error).length });
+  else book.judge('M7-A3', 'server-page-forbidden-claimed-0', claimedByPage.length === 0 && !pubF?.error, { seconds: Math.round((Date.now() - tF) / 1000), claimedByPage, publishErrors: (pubF?.results ?? []).filter((r) => r.error).length });
   await bPub.close();
 
   /* ---- A4 服务端：三张重卡的锚帧段由纯浏览器认领并完成；清单、snap/、层表 */
-  const a4 = await kv.takeSignal('a4.page', deadline);
+  const a4 = await waitSignal(kv, 'a4.page');
   const browserTasks = [...watcher.bodies.values()].filter((t) => t.kind === 'snapshot' && ['h1', 'h2', 'h3'].includes(t.input?.clipId) && t.requires?.envFingerprint === pageFp);
   const anchors = browserTasks.filter((t) => t.priority === 50);
-  const inv = await ctx.site.combo.inventory().catch(() => null);
-  const snapHashes = new Set(inv?.assets?.snap?.hashes ?? []);
-  const pxHashes = new Set(inv?.assets?.px?.hashes ?? []);
+  const hasAll = async (ns, frames) => { for (const f of frames ?? []) if (!(await ctx.assetHas(ns, f[1]))) return false; return true; };
   const perClip = {};
   const manifests = [];
   for (const clip of ['h1', 'h2', 'h3']) {
@@ -1111,8 +1197,8 @@ async function pageServerSide(ctx) {
       const g = god.tasks.get(t.id);
       const man = await contentGet(ctx.aConn, `${t.resultKey}:${t.range.from}-${t.range.to}`);
       if (man) manifests.push({ t, man });
-      rows.push({ id: t.id.slice(0, 20), state: g?.state ?? null, byPage: (g?.claimedBy ?? []).some((c) => c.nodeId === pn?.nodeId), manifest: !!man,
-        snapAll: !!man && (man.frames ?? []).every((f) => snapHashes.has(f[1])), frames: man?.frames?.length ?? 0 });
+      rows.push({ id: t.id.slice(0, 20), state: g?.state ?? null, byPage: god.remote ? (a4?.completedIds ?? []).includes(t.id) : (g?.claimedBy ?? []).some((c) => c.nodeId === pn?.nodeId), manifest: !!man,
+        snapAll: !!man && (await hasAll('snap', man.frames)), frames: man?.frames?.length ?? 0 });
     }
     perClip[clip] = rows;
   }
@@ -1137,12 +1223,13 @@ async function pageServerSide(ctx) {
   book.judge('M7-A8', 'server-desktop-applied', (pcDiag?.stats?.applied ?? 0) > 0 && (pcDiag?.stats?.applyErrors ?? 0) === 0, { applied: pcDiag?.stats?.applied ?? null, fetched: pcDiag?.stats?.fetched ?? null, applyErrors: pcDiag?.stats?.applyErrors ?? null });
 
   /* ---- A9 服务端：浏览器产的每一帧都有 px/ 的 WebP */
-  const smallRows = manifests.map(({ t, man }) => ({ id: t.id.slice(0, 20), frames: man.frames?.length ?? 0, small: man.small?.length ?? 0, pxAll: (man.small ?? []).every((f) => pxHashes.has(f[1])) }));
+  const smallRows = [];
+  for (const { t, man } of manifests) smallRows.push({ id: t.id.slice(0, 20), frames: man.frames?.length ?? 0, small: man.small?.length ?? 0, pxAll: await hasAll('px', man.small) });
   book.judge('M7-A9', 'server-every-frame-has-px', smallRows.length > 0 && smallRows.every((r) => r.small === r.frames && r.pxAll), smallRows);
 
   /* ---- A10：宿主全开时谁先谁得卡；浏览器认领后关页、锁闲置 > 30 s、有人发布计划 → pc 接手整张卡 */
   if (flag('--no-a10')) { book.pending('M7-A10', 'server', '--no-a10'); return; }
-  const z = await kv.takeSignal('a10.page-closed', deadline);
+  const z = await waitSignal(kv, 'a10.page-closed');
   if (!z?.clip) { book.pending('M7-A10', 'server', 'node 角色没报「页面拿着一段后关掉」', z); return; }
   const lockKeyZ = [...watcher.bodies.values()].find((t) => t.input?.clipId === z.clip)?.input?.contentKey;
   await sleepUntil((z.at ?? Date.now()) + 33_000);
@@ -1151,11 +1238,11 @@ async function pageServerSide(ctx) {
   await ctx.editor.e.stop();
   ctx.editor = await ctx.startEditor(false);
   ctx.rev = await touchLight(ctx.aConn, projectId, ctx.run);
-  const took = await until(() => (god.locks.get(`snapshot:${lockKeyZ}`)?.envFingerprint === ctx.pcFp ? god.locks.get(`snapshot:${lockKeyZ}`) : null), 300_000, 1000);
-  book.judge('M7-A10', 'server-idle-takeover', !!took, { clip: z.clip, lockHistory: god.locks.get(`snapshot:${lockKeyZ}`)?.history ?? null, plans: [...watcher.bodies.values()].filter((t) => t.kind === 'plan').slice(-4).map((t) => ({ user: String(t.source?.userId ?? '').split('@')[0], rev: t.source?.projectRev, clips: t.input?.clips, state: god.tasks.get(t.id)?.state })) });
+  const took = await until(() => (god.lockOf(`snapshot:${lockKeyZ}`)?.envFingerprint === ctx.pcFp ? god.lockOf(`snapshot:${lockKeyZ}`) : null), 300_000, 1000);
+  book.judge('M7-A10', 'server-idle-takeover', !!took, { clip: z.clip, lockHistory: god.lockOf(`snapshot:${lockKeyZ}`)?.history ?? null, plans: [...watcher.bodies.values()].filter((t) => t.kind === 'plan').slice(-4).map((t) => ({ user: String(t.source?.userId ?? '').split('@')[0], rev: t.source?.projectRev, clips: t.input?.clips, state: god.tasks.get(t.id)?.state })) });
   // 再开 b2（B 的另一台设备，在线纯浏览器节点）后加两张新卡：宿主全开时两份任务谁先谁得卡、每张卡只出自一种环境
   await kv.signal('a10.took', { took: !!took, at: Date.now() });
-  await kv.takeSignal('a10.b2-ready', deadline);
+  await waitSignal(kv, 'a10.b2-ready');
   ctx.rev = await addCards(ctx.aConn, projectId, [['w1', 'probe-slow-stepped', { burnMs: 40, label: 'w1' }], ['w2', 'probe-slow-stepped', { burnMs: 40, label: 'w2' }]], ctx.run);
   const race = {};
   for (const clip of ['w1', 'w2']) {
@@ -1260,10 +1347,12 @@ async function tapPage(page, name) {
 async function launchBrowser(cfg) {
   const { default: puppeteer } = await import('puppeteer');
   const origins = [cfg.site, ...cfg.stageOrigins];
-  const loopback = origins.every((o) => /^http:\/\/(127\.0\.0\.1|localhost)(:|\/|$)/.test(o));
+  const loopback = origins.every((o) => /^https:\/\//.test(o) || /^http:\/\/(127\.0\.0\.1|localhost)(:|\/|$)/.test(o));
+  const exe = arg('--chrome', process.env.PUPPETEER_EXECUTABLE_PATH || null);
   return puppeteer.launch({
     headless: !flag('--headful'), protocolTimeout: 900_000, defaultViewport: { width: 1600, height: 1000 },
-    args: ['--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1', '--autoplay-policy=no-user-gesture-required', '--disable-gpu',
+    ...(exe ? { executablePath: exe } : {}),
+    args: [...(process.platform === 'linux' ? ['--no-sandbox', '--disable-dev-shm-usage'] : []), '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1', '--autoplay-policy=no-user-gesture-required', '--disable-gpu',
       ...(flag('--headful') ? [] : ['--window-position=-32000,-32000']),
       // 跨机（W7）时站点是局域网的 http：WebCrypto 等要安全上下文，按测试源放行（只放行这三个源）
       ...(loopback ? [] : [`--unsafely-treat-insecure-origin-as-secure=${origins.join(',')}`])],
@@ -1382,8 +1471,8 @@ async function hidePage(page) {
 }
 
 async function runNode(book, head) {
-  const coord = arg('--coord');
-  if (!coord) { book.part('W7', 'args', 'fail', { reason: 'node 要给 --coord' }); process.exitCode = 2; return; }
+  const coord = arg('--coord', arg('--site') ? arg('--site').replace(/\/+$/, '') + '/coord' : null);
+  if (!coord) { book.part('W7', 'args', 'fail', { reason: 'node 要给 --coord（或 --site，协调口取 <站点>/coord）' }); process.exitCode = 2; return; }
   const run = await resolveRun({ coord, prefix: PREFIX, run: arg('--run'), isCreator: false, newRun: newRunId, deadline, log: say });
   Object.assign(head, { run });
   const kv = roleKv({ coord, prefix: PREFIX, run, role: 'node', log: say });
@@ -1416,8 +1505,8 @@ async function runNode(book, head) {
     }
 
     // A1 页面：A 的任务消息 0 条（三页都算，任何连接）
-    const a1s = await kv.takeSignal('a1.start', deadline);
-    const a1d = await kv.takeSignal('a1.done', deadline);
+    const a1s = await waitSignal(kv, 'a1.start');
+    const a1d = await waitSignal(kv, 'a1.done');
     // A12：播放 10 秒（C10-A1 回归）：主文档长任务 0；期间认领 0 次。页面当节点时放到 A4 判完之后（播放会让路，打扰 A4 的 30 s）
     const playCheck = async () => {
       await P(b1.page, () => { const s = window.__pcStore; s.actions.seek(0); s.actions.play(); }).catch(() => {});
@@ -1426,7 +1515,7 @@ async function runNode(book, head) {
       await P(b1.page, () => window.__pcStore.actions.pause()).catch(() => {});
       const playLong = await longTasks(b1.page, tPlay);
       const playClaims = b1.tap.sent('task.claim', tPlay).filter((f) => f.at <= tPlay + 10_500).length;
-      book.judge('M7-A12', 'play-10s-longtasks-0', Array.isArray(playLong) && playLong.length === 0, { count: playLong?.length ?? null, worst: (playLong ?? []).sort((a, b) => b.ms - a.ms).slice(0, 3), authoritative });
+      book.timed('M7-A12', 'play-10s-longtasks-0', Array.isArray(playLong) && playLong.length === 0, { count: playLong?.length ?? null, worst: (playLong ?? []).sort((a, b) => b.ms - a.ms).slice(0, 3) }, authoritative);
       if (isNode) book.judge('M7-A12', 'play-10s-claims-0', playClaims === 0, { claims: playClaims, heldAtStart: null });
       else book.pending('M7-A12', 'play-10s-claims-0', NODE_PENDING, { claims: playClaims });
       await kv.signal('node.play-done', { at: Date.now() });
@@ -1485,6 +1574,7 @@ async function runNode(book, head) {
     head.pages = Object.fromEntries([b1, low, single].map((p) => [p.key, { gateSeen: p.gateSeen, conns: p.tap.conns.size, render: p.tap.renderConns().length, frames: p.tap.frames.length, pageErrors: p.page.pageErrors.slice(-5) }]));
   } catch (error) {
     book.part('W7', 'node-crash', 'fail', { error: errText(error), stack: String(error?.stack ?? '').split('\n').slice(0, 6).join(' | ') });
+    say('node-crash', { error: errText(error), stack: String(error?.stack ?? '').split('\n').slice(0, 6).join(' | ') });
     await kv.abort(errText(error));
   } finally {
     try { await browser?.close(); } catch { /* 已关 */ }
@@ -1511,7 +1601,7 @@ async function pageFlows({ book, kv, cfg, browser, b1, low, pageFp, authoritativ
       const t = claimedTask(f.id);
       if (!t || !heavy.includes(t.clipId)) continue;
       const isAnchor = anchorRule[t.clipId] === 'priority-50' ? t.priority === 50 : t.range?.from === 0;
-      if (isAnchor) (out[t.clipId] ??= []).push({ id: f.id.slice(0, 24), at: f.at, sinceGateMs: f.at - b1.gateLiftAt });
+      if (isAnchor) (out[t.clipId] ??= []).push({ id: f.id.slice(0, 24), fullId: f.id, at: f.at, sinceGateMs: f.at - b1.gateLiftAt });
     }
     return out;
   };
@@ -1521,15 +1611,16 @@ async function pageFlows({ book, kv, cfg, browser, b1, low, pageFp, authoritativ
   const l2 = await l2Snapshots(page);
   const a4 = { anchorRule, perClip: done, worstSinceGateMs: Number.isFinite(worst) ? worst : null, l2Snapshots: l2, authoritative, diag: await readNodeDiag(page) };
   book.judge('M7-A4', 'page-anchors-done', heavy.every((c) => done[c]?.length) && (l2 ?? 0) > 0, a4);
-  book.judge('M7-A4', 'page-within-30s', Number.isFinite(worst) && worst <= 30_000, { worstSinceGateMs: a4.worstSinceGateMs, authoritative, note: authoritative ? '笔记本判' : 'PC 上只作参考，以笔记本为准' });
+  book.timed('M7-A4', 'page-within-30s', Number.isFinite(worst) && worst <= 30_000, { worstSinceGateMs: a4.worstSinceGateMs }, authoritative);
   const od = await onlineDiag(page);
   book.judge('M7-A4', 'page-layer-env-browser', heavy.every((c) => od?.layers?.find((l) => l.clipId === c)?.envFingerprint === pageFp), (od?.layers ?? []).map((l) => ({ clip: l.clipId, fp: l.envFingerprint, ready: l.ready })));
-  await kv.signal('a4.page', { done: Object.fromEntries(Object.entries(done).map(([k, v]) => [k, v.length])), worstSinceGateMs: a4.worstSinceGateMs });
+  await kv.signal('a4.page', { done: Object.fromEntries(Object.entries(done).map(([k, v]) => [k, v.length])), worstSinceGateMs: a4.worstSinceGateMs,
+    completedIds: tap.sent('task.complete').map((f) => f.id) });
 
   // A12：生成快照期间主文档长任务 0（从遮罩撤下到三张卡的锚帧段做完）
   const bakeLong = await longTasks(page, b1.gateLiftAt);
   await playCheck();
-  book.judge('M7-A12', 'bake-longtasks-0', Array.isArray(bakeLong) && bakeLong.filter((x) => x.at <= b1.gateLiftAt + Math.max(30_000, a4.worstSinceGateMs ?? 0)).length === 0, { count: bakeLong?.length ?? null, worst: (bakeLong ?? []).sort((a, b) => b.ms - a.ms).slice(0, 3), authoritative });
+  book.timed('M7-A12', 'bake-longtasks-0', Array.isArray(bakeLong) && bakeLong.filter((x) => x.at <= b1.gateLiftAt + Math.max(30_000, a4.worstSinceGateMs ?? 0)).length === 0, { count: bakeLong?.length ?? null, worst: (bakeLong ?? []).sort((a, b) => b.ms - a.ms).slice(0, 3) }, authoritative);
 
   /* ---- 等本页拿着一段（生成快照中）：下面几条让路都要这个前提 */
   const holding = async (ms = 120_000) => until(async () => {
@@ -1558,7 +1649,7 @@ async function pageFlows({ book, kv, cfg, browser, b1, low, pageFp, authoritativ
       claimsWithin500ms: quietClaims, resumedAfterMs: resumed ? resumed.at - drag.endedAt : null, attemptsOnReclaim: reclaim?.task?.attempts ?? null, authoritative };
     book.judge('M7-A5', 'page-yield-on-drag', drag.ok && claimsDuring === 0 && doneDuring <= 1 && rel.length === 1 && (l2After ?? 0) - (l2Before ?? 0) <= 1, a5);
     book.judge('M7-A5', 'page-attempts-unchanged', reclaim ? (reclaim.task?.attempts ?? 0) === 0 : true, { attemptsOnReclaim: a5.attemptsOnReclaim, note: '放回不计失败（C2）；认领回包里的 attempts 由队列给' });
-    book.judge('M7-A5', 'page-resume-after-500ms', quietClaims === 0 && !!resumed, { claimsWithin500ms: quietClaims, resumedAfterMs: a5.resumedAfterMs, authoritative });
+    book.timed('M7-A5', 'page-resume-after-500ms', quietClaims === 0 && !!resumed, { claimsWithin500ms: quietClaims, resumedAfterMs: a5.resumedAfterMs }, authoritative);
   }
 
   /* ---- A6：播放同 A5；页面隐藏后立即放回、隐藏期间认领 0 次、回前台恢复；更急的后台活来了停在帧边界 */
@@ -1629,6 +1720,16 @@ async function pageFlows({ book, kv, cfg, browser, b1, low, pageFp, authoritativ
     book.judge('M7-A11', 'page-render-ticket-expiry', !!rebuilt, { offlineMs: 70_000, rebuilt, newRenderConns: tap.renderConns().filter((c) => c.createdAt > tOff).length });
   }
 
+  /* ---- A3 页面：creator 以本页的身份发布的禁收任务，本页整场认领 0 次（线上看 task.claim） */
+  const a3f = await waitSignal(kv, 'a3.forbidden');
+  if (!a3f?.ids?.length) book.pending('M7-A3', 'page-forbidden-claimed-0', 'creator 没发禁收任务清单');
+  else {
+    const claimedTags = a3f.ids.filter(([, id]) => tap.sent('task.claim').some((f) => f.id === id)).map(([tag]) => tag);
+    book.judge('M7-A3', 'page-forbidden-claimed-0', claimedTags.length === 0, { tasks: a3f.ids.length, seconds: Math.round(((a3f.to ?? 0) - (a3f.from ?? 0)) / 1000), claimedTags,
+      blocked: (await readNodeDiag(page)).counts?.blocked ?? null });
+  }
+  book.judge('M7-A3', 'page-light-medium-done', tap.sent('task.complete').length > 0, { completed: tap.sent('task.complete').length });
+
   /* ---- A10 页面：本页拿着一张新卡的一段时关掉；creator 等锁闲置 > 30 s、重启 pc（不只切分）、发计划 → pc 接手；b2 上整层换键 */
   if (!cfg.a10) { book.pending('M7-A10', 'page', '--no-a10'); return; }
   const tZ = Date.now();
@@ -1639,11 +1740,11 @@ async function pageFlows({ book, kv, cfg, browser, b1, low, pageFp, authoritativ
   await until(() => tap.sent('task.progress', zClaim.at).some((f) => f.id === zClaim.id), 30_000, 100);
   await b1.page.close();
   await kv.signal('a10.page-closed', { clip: zClaim.task.clipId, at: Date.now() });
-  await kv.takeSignal('a10.took', deadline);
+  await waitSignal(kv, 'a10.took');
   const b2 = await openMember(browser, cfg, 'b2');
   await until(() => b2.tap.nodeState().isNode, NODE_WAIT_MS, 250);
   await kv.signal('a10.b2-ready', { isNode: b2.tap.nodeState().isNode });
-  await kv.takeSignal('a10.server-done', deadline);
+  await waitSignal(kv, 'a10.server-done');
   const od2 = await onlineDiag(b2.page);
   const zl = od2?.layers?.find((l) => l.clipId === zClaim.task.clipId);
   book.judge('M7-A10', 'page-layer-switched', zl?.envFingerprint === cfg.pcFp, { clip: zClaim.task.clipId, fp: zl?.envFingerprint ?? null, pcFp: cfg.pcFp, ready: zl?.ready ?? null });
