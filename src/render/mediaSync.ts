@@ -213,6 +213,35 @@ export interface SlotsPlan {
   warm: number | null;
 }
 
+/** `HTMLMediaElement.NETWORK_NO_SOURCE`(纯函数这里不碰 DOM 常量) */
+const NETWORK_NO_SOURCE = 3;
+
+/**
+ * 素材服务上刚到齐的那一档:之前按它挂过、加载失败了(404:等待上传方)的元素要重新 `load()` 一次。
+ *
+ * **这一轮刚换上 src 的元素不算**(`freshSrc`):src 一换,浏览器的资源选择算法当场把 `networkState`
+ * 置成 `NETWORK_NO_SOURCE`,看上去和「挂失败了」一样,其实加载才刚开始。换档那一轮恰好就是这种情形
+ * (到齐 → 换档地址 → 预热槽位换 src 同一次提交),以前会紧跟着再 `load()` 一次,把刚发出的请求和
+ * 刚下的 seek 打断重来,慢网络下换档因此更晚(C6.6 T9-X2)。
+ */
+export function reloadOnComplete(input: {
+  /** 这个槽位装的那一档此刻在素材服务上到齐了 */
+  doneNow: boolean;
+  /** 上一次渲染时它就已经到齐了(到齐那一刻只判一次) */
+  seenBefore: boolean;
+  /** 槽位装着东西 */
+  hasClip: boolean;
+  /** src 是这一轮刚换上的 */
+  freshSrc: boolean;
+  /** 元素报了错(`el.error` 非空) */
+  error: boolean;
+  networkState: number;
+}): boolean {
+  const { doneNow, seenBefore, hasClip, freshSrc, error, networkState } = input;
+  if (!doneNow || seenBefore || !hasClip || freshSrc) return false;
+  return error || networkState === NETWORK_NO_SOURCE;
+}
+
 /**
  * 换档对齐判据(C6.6 第 8 节查资料结论第 4 条):新一档交出的这一帧的 `mediaTime`
  * 与画面上那一档此刻的时刻(暂停时就是目标时刻)差不超过一帧(按项目帧率)才算对齐。

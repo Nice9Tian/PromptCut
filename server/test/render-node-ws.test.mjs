@@ -434,10 +434,24 @@ test('T6 resolveDocservice：环境变量地址可用 → remote；不可用、�
   assert.deepEqual([r7.tried[0].ok, r7.tried[0].reason], [false, 'bad-url']);
 
   // 8. 探活超时 → 不可用，继续下一项
-  const t0 = Date.now();
-  const r8 = await run({ PROMPTCUT_DOCSERVICE_URL: ws(hang.port), PROMPTCUT_DOCSERVICE_PORT: String(good2.port) }, { timeoutMs: 1000 });
-  assert.equal(r8.mode, 'local');
-  assert.ok(Date.now() - t0 < 3000, `超时要按 timeoutMs：用了 ${Date.now() - t0} ms`);
+  // 慢的那个（hang）照旧用 1000 ms 超时、照旧要在 3 s 内判掉；只放宽「好的那个」（回环 good2）：机器忙时它的 /healthz
+  // 可能超过 1 s 才回（见上面 run 的注释），所以注入的 fetch 对 good2 不传探活的 abort 信号，让它不受 1 s 限制。
+  // hang 的请求原样带信号，计时只算 hang 这一次探活。
+  let hangMs = null;
+  const f8 = async (target, init = {}) => {
+    const port = new URL(target).port;
+    if (port === String(good2.port)) {
+      const { signal, ...rest } = init;
+      void signal;
+      return globalThis.fetch(target, rest);
+    }
+    const s = Date.now();
+    try { return await globalThis.fetch(target, init); } finally { if (port === String(hang.port)) hangMs = Date.now() - s; }
+  };
+  const r8 = await run({ PROMPTCUT_DOCSERVICE_URL: ws(hang.port), PROMPTCUT_DOCSERVICE_PORT: String(good2.port) }, { timeoutMs: 1000, fetch: f8 });
+  assert.deepEqual([r8.tried[0].ok, r8.tried[0].reason], [false, 'timeout'], `hang 按超时判掉：${JSON.stringify(r8.tried)}`);
+  assert.equal(r8.mode, 'local', '超时后继续试下一项');
+  assert.ok(hangMs !== null && hangMs < 3000, `超时要按 timeoutMs：hang 的探活用了 ${hangMs} ms`);
 
   // 9. /healthz 取在源站根上（G.11）
   const r9 = await run({ PROMPTCUT_DOCSERVICE_URL: ws(good.port, '/some/path'), PROMPTCUT_DOCSERVICE_PORT: String(dead) });

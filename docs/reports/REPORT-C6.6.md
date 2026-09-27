@@ -5,8 +5,8 @@
 ## 1. 结论
 
 - 本机项全部通过：G0（类型检查、全量测试、构建）、G0-R（导出确定性、导出像素与 main 零差异、快照重放一致、三个预渲染探针）、C6.6 自己的三个探针（`tiers-probe`、`tier-switch-probe`、`card-sync-probe`），以及 T9 的本机替身（`--role all` 连跑两次三方全过）。按主计划 6.8 节，本机项全过即合入。
-- 跨机 W-T9：笔记本当独立渲染主机**真跨机全过**（认领并完成 PC 发布的任务、经内容库同步装上本来没有的用户卡）；笔记本当观察端时卡片同步通过，「先小后大」这一条因探针场景（两档都传完才放观察端进来）没测到，探针已在改，改好后补做 T9-X2 并补进本报告（第 7 节）。
-- T9 本机替身暴露了四处问题，其中三处是产品缺陷、一处是**代码与语义冲突**（按语义改了代码，语义未改），都已修复并合入（第 4 节）。
+- 跨机 W-T9：**真跨机全过**（2026-09-27 补记）。笔记本当独立渲染主机三轮（T9-X1～X3）都过：认领并完成 PC 发布的任务、经内容库同步装上本来没有的用户卡。笔记本当观察端：T9-X1 因探针场景（两档都传完才放观察端进来）没测到「先小后大」；T9-X2 改场景（约 44 MB 原尺寸传到半路时放观察端进来）后先小后大、换档覆盖、帧号都过，只挂「换档期间有黑帧」，查出一处产品缺陷与一处探针判法问题（第 4 节第 5 条）；修好后 T9-X3 观察端与主机全过（第 7 节）。
+- T9 共暴露五处问题（本机替身四处、真跨机 T9-X2 一处），其中四处是产品缺陷、一处是**代码与语义冲突**（按语义改了代码，语义未改），都已修复并合入（第 4 节）。
 
 ## 2. 交付
 
@@ -19,7 +19,8 @@
 | 集成 | `claude/c66-integ` | 四次合并与冲突处理、c66-kit 对账、第 9 节补做三条（C66-I1～I3）、3b 根因修复、T4 断言、源码版本表记忆化 |
 | T8 攻坚 | `claude/c66-t8`（codex，`4e12ca9`） | 后台舞台探针测量跨任务边界生成快照，修掉约 16 s 的重测停顿 |
 | T9 探针 | `claude/c66-t9` | `scripts/probes/c66-t9-probe.mjs`（`--role creator / observer / host / all`） |
-| T9 暴露的修复 | `claude/c66-media-sync`、`claude/c66-host-cards`、`claude/c66-plan-timing`（codex）、`claude/c66-t9-fix` | 见第 4 节 |
+| T9 暴露的修复 | `claude/c66-media-sync`、`claude/c66-host-cards`、`claude/c66-plan-timing`（codex）、`claude/c66-t9-fix`（三轮，最后一轮 `19f1dec`） | 见第 4 节 |
+| T9 探针取回时限 | `claude/c66-t9-verify` | 创建方最后「整个取回两档、核哈希」改用 10 分钟时限，取不回时记错误原文（第 7 节 T9-X3） |
 
 ### 2.1 3b 的根因（更正 `PAUSE-2026-09-26.md` 第 4 节第 2 条与 `AGENT-c66-cards` 第 5 节）
 
@@ -37,7 +38,7 @@
 | T6 | 原尺寸不可播（ProRes）：预览停在小尺寸，导出用原尺寸 | `tier-switch-probe` 与契约测试过 |
 | T7 | 原尺寸没到时导出提示「等待上传方」、不出片 | `tier-switch-probe`：`awaiting-uploader`、导出请求 0；服务端 `/api/export` 拦截 C66-I3 过 |
 | T8 | A 改用户卡，B 5 s 内装上新版并重测；两端同改，后写的赢、先写的有备份与提示 | `card-sync-probe` ×3：remeasureMs 1976 / 1977 / 2007，断画 0，重载 0，编辑器 DOM 27/27，改卡后无跳转；契约测试 C66-T8 过 |
-| T9 | 跨机：创建方导入、生成小尺寸、预渲染，项目放云端；观察端先小后大、卡片源码自动装上；独立渲染主机认领并完成 | 本机替身连跑两次三方全过（第 3.2 节）；真跨机主机全过、观察端卡片同步过，「先小后大」待 T9-X2（第 7 节） |
+| T9 | 跨机：创建方导入、生成小尺寸、预渲染，项目放云端；观察端先小后大、卡片源码自动装上；独立渲染主机认领并完成 | 本机替身连跑两次三方全过（第 3.2 节）；真跨机 T9-X3 观察端、主机全过，创建方各步全过，只有探针最后「整个取回原尺寸核哈希」因单个请求 30 s 时限没读完而判不符——在阿里云上直接对存储文件算 sha256，两档都与哈希相符，探针已改（第 7 节） |
 | 通用 | G0 + G0-R；导出像素与 main 0 差异 | 第 3.1 节 |
 
 ### 3.1 基线与 G0-R（主会话在 PC 上跑）
@@ -73,6 +74,7 @@
 | 2 | 另一台机器上的独立渲染主机只要没有创建者的用户卡，一个任务也认领不了 | `server/frame-code.mjs` 的全局代码版本哈希整个 `src/`（含 `src/cards/user`） | 全局代码版本不含用户卡、换行统一；用到用户卡的任务在 `requires.cardSources` 标卡片代码身份，节点按本机有没有这份代码认领；独立渲染主机经内容库 `card-source` 同步用户卡（`claude/c66-host-cards`） | **代码与语义冲突**：语义 `product/platforms.md`「渲染节点」规定独立渲染主机「能认领：全部」，`mechanism/document-service.md` 规定任务标明要不要用户卡、节点按能力过滤。按语义改代码，语义未改。契约 `render-queue-contract.md` B.4、`render-host-contract.md` 第 3、4、7 节同步 |
 | 3 | 重卡片段的计划时而切 0 个任务、不重发；`sink-incomplete` 可重试任务无人做完 | 页面在测量落定前就发 preload；可重试任务重新开放后原节点立刻重领 | 测量完成后通知预渲染调度器、按测量后的集合重发；`sink-incomplete` 的原节点退避一个巡检周期（`claude/c66-plan-timing`，codex 攻坚） | 产品缺陷 |
 | 4 | 观察端播放头被冲回 0 | 成员加入、卡片同步装卡后舞台重载，暂停中的停止处理把新舞台的 0 写进播放头 | 真的发过播放才采用舞台回报的 `stoppedAt`（`Preview.tsx`，`claude/c66-t9-fix`） | 产品缺陷（用户看得见：暂停时舞台重载不再把播放头冲回 0） |
+| 5 | 真跨机 T9-X2：观察端换档期间逐帧采样 106 个「黑帧」，全是「显示中的原尺寸元素 `readyState` 1」 | ① Chrome 在 seek 期间先把目标帧交给合成器（`requestVideoFrameCallback` 回调）、缓冲够了才发 `seeked`；换档按设计以「真有一帧画到屏幕上」为准，所以对调时 `readyState` 仍是 1，截图显示的就是对齐的那一帧（亮度 130），探针把它当成了黑帧。② 查的时候另发现：素材服务上某一档刚到齐与预热槽位换上这一档的 src 恰在同一轮时，刚换上 src 的槽位因 `networkState` 本就是 `NETWORK_NO_SOURCE` 被多 `load()` 一次，打断刚发出的请求与 seek | ① 探针判黑改看真实画面：`readyState < 2` 时截合成后的舞台量亮度、并看元素此前出没出过帧；② 判据抽成纯函数 `reloadOnComplete`（`src/render/mediaSync.ts`），这一轮刚换上 src 的槽位不重载，`VideoTrack.tsx` 按槽位记 `fresh`，单测 3 条（`claude/c66-t9-fix` 第三轮，`287eca9`）；用 `--observer-throttle` 限速在本机复现与验收 | ① 探针判法；② 产品缺陷（换档时多一次加载等待，用户看得见的是换档变慢，不是黑帧） |
 
 另：重卡片段靠测量判重，`probe-typewriter` 闲机上追帧比 80 / 门槛 60 勉强判重、忙机上判轻，探针前提被机器负载左右。探针改用产品已有的人工钉死（`pinnedHeavy`）把重卡片段钉成重卡，轻重门槛与判定不变〔裁：T9 验的是跨机的素材与卡片同步和主机认领，不是轻重判定；「测量→判重→重发」由 codex 的单测覆盖；确定判重的探针卡记为以后的加固项〕。
 
@@ -101,6 +103,15 @@
   - creator（PC）：两档先小后大传到阿里云（small 1446 ms、original 1645 ms complete）；计划 8 任务 8 完成（PC 4、笔记本主机 4），发布到落定 156.3 s；改卡 72 ms、cardRev 2；项目已删。
   - host（笔记本）原样：`{"role":"host","run":"t9x10927a","port":5566,"cardInRepoBefore":false,"readyQueue":{"profile":"host","nodes":1,"maxConcurrent":2,"codeVersion":"707837925081"},"cardSync":{"connected":true,"rev":1,"notices":[]},"profile":"host","claimed":4,"completed":4,"dedup":0,"failed":0,"lost":0,"connected":true,"assetBase":"https://8-219-80-16.sslip.io/media/api/asset","codeVersion":"707837925081","plan":{"planId":"plan:p-mujbzhdu-9d1f7688@2","tasks":8,"done":8},"creatorCodeVersion":"707837925081","doneCounts":{"tasks":8,"exactlyOnce":8,"missing":0,"duplicate":0},"artifacts":{"manifests":8,"missingManifests":0,"blocks":25,"missingBlocks":[]},"cardV2":{"ms":3,"rev":2,"inOverlay":true,"baseUntouched":null},"exitCode":0,"released":0,"ms":180283,"fails":[],"ok":true}`
   - observer（笔记本）：卡片同步过（v1、v2 都装上，`installMs` 633、`remeasureMs` 1061，播放头 2.5）；「先小后大」没测到：`tierSequence` none(1389 ms) → original idx 0(2350 ms) → original idx 75(2481 ms)。原因是探针场景：测试视频约 100 KB，两档都传完才放观察端进来，原尺寸直接先到（合法行为：原尺寸已齐就给最好的画质）。探针改为「原尺寸传到半路时暂停上传队列（目标 `{ base: null }`）、放观察端进来、看到小尺寸后再恢复」，改好后发 T9-X2 补做。
+- 【T9-X2】（跨会话，先列后发）：笔记本检出 `7d90218`（node v24.19.0、Chrome 153.0.8010.53），observer 5563、host 5566，run `t9x20927b`，2026-09-27T05:06:17Z～05:10:17Z；PC 创建方同 run、端口 5590。场景改为：创建方导入约 44 MB 原尺寸（6 片），小尺寸传完就暂停上传，观察端看到小尺寸稳定（KV `observer.small`）后续传。
+  - creator（PC）：视频 44,611,416 字节；小尺寸 6514 ms complete，原尺寸 122,889 ms complete；暂停时正在传的那一片回 401（暂停清掉票据，队列记一次重试，续传时小尺寸一片不重发、原尺寸只补缺的片，属设计行为）；只因观察端失败判 `ok: false`。
+  - host（笔记本）：`ok: true`；认领 4、完成 4，恰好一次 8/8，代码版本 `27fcbf9f4dfd` 与创建方相同。
+  - observer（笔记本）：只挂「换档期间逐帧采样无黑帧」一条（106 个样本）；其余全过：首帧是小尺寸（帧号 75、800 宽），当时原尺寸 0/6 片、未 complete；小尺寸 13.6 s 出画面，原尺寸 109.2 s 换上（帧号 75、1920 宽）；换档覆盖（`covered`，采样 11,277 个）；卡片同步过。根因与修复见第 4 节第 5 条。
+- 【T9-X3】（跨会话，先列后发）：笔记本检出 `19f1dec`（main，含第 4 节第 5 条的修复；node v24.19.0、Chrome 153.0.8010.53），observer 5563、host 5566，run `t9x30927c`，2026-09-27T06:12:29Z～06:16:55Z；PC 创建方在 `.worktrees/merge-test`（同为 `19f1dec` 的干净检出）、端口 5590。
+  - observer（笔记本）：`ok: true`、`fails: []`。首帧小尺寸（帧号 75、800 宽），当时原尺寸 0/6 片、未 complete、创建方尚未续传；小尺寸 7.1 s 出画面、换档前稳定；原尺寸 109.5 s 换上（帧号 75、1920 宽），帧号误差 0；`covered`，采样 12,027 个、换档前小尺寸 11,986 个、**黑帧 0**；`lowReadyState`：37 个样本都此前出过帧、都有截图，3 张截图亮度都是 130，只出现在换档那一刻的一个 351 ms 窗口里（与第 4 节第 5 条的「seek 未完成前先出帧」一致）；媒体日志里 `load()` 两次：一次是原尺寸到齐时重载之前因「还在上传」失败过的元素（`VideoTrack` 唯一的 `load()` 调用点，刚换上 src 的槽位已排除），一次是可播性探测收尾；卡片 v1、v2 都装上，`installMs` 690、`remeasureMs` 1695；播放头一直 2.5；页面错误 0。
+  - host（笔记本）：`ok: true`、`fails: []`。认领 4、完成 4，恰好一次 8/8，清单 8、块 23 无缺；代码版本 `bc6acc7b6d5c` 与创建方相同；v2 4 ms 进改动层。
+  - creator（PC）：视频 44,272,711 字节（1920×1080、30 fps、6 s）；小尺寸 6887 ms complete 时暂停，原尺寸 0/6；观察端报小尺寸稳定后 24.9 s 续传，原尺寸在导入后 119.8 s complete（续传后约 88 s，PC 到新加坡的上行）；暂停那一片 401 → 重试一次，续传时小尺寸 0 片重发、原尺寸发 6 片；计划 8 任务 8 完成（PC 4、笔记本主机 4），发布到落定 136.0 s；改卡 63 ms、`cardRev` 2；项目已删。
+  - creator 判 `ok: false`，唯一一条是探针最后的「托管端 original 字节与哈希相符」。查实：这一步用素材服务客户端的 `get()` 在**一个请求**里取回整个 44 MB 原尺寸，客户端对单个请求（含读完回包）缺省限时 30 s、重试也各 30 s；T9-X2 那次在时限内读完，这次没读完，`.catch(() => null)` 把超时吞成了「不符」。当场在阿里云上对存储文件核对（只读）：`/var/lib/promptcut/hosted/assets/media/2f/2fcf0b4e….mp4` 44,272,711 字节、`sha256sum` = `2fcf0b4ec536513ecc0864f479634f9007dfed631923ee7a09a5430fb6725b1d`；小尺寸 `9a/9a5be842….mp4` 9,722,395 字节、`sha256sum` = `9a5be8428f19aec1dd649f4e890fdf8100cf4dd2807064269adbf6b3d768c6a8`，两档都与哈希相符；经 443 的取用路径由观察端显示原尺寸画面证实。探针改为这一步用 10 分钟时限、取不回时把错误原文记进 `hostedBytes`（`claude/c66-t9-verify`）。本机替身复跑时这一步取回两档 9,743,709 / 44,254,543 字节、249 / 1373 ms、核哈希通过；那一轮整体没过：机器满载（CPU 97%，同时有两份全量测试并行、HT-a 与 C10a 的验证在跑），「plan 切分完、细任务都落定」超时，三方随之中止，与本改动无关（同一提交在真跨机 T9-X3 里 136.0 s 落定）。
 
 ## 8. 顾问调用记录
 
@@ -122,12 +133,15 @@
 | `claude/v8-diff-perf`（`opus-dev-high`） | `f126bf0` | `diffIdArray` 递归前廉价判「不出操作」，整份深拷贝项 2.0 → 0.70 ms；V8B 等价对拍 20330 组逐条相同；主会话逐分支核对 `noOpsBetween` 与 `diffValue`，重跑 tsc 0、npm test 2971/2970/0/1；笔记本复核【V-1】20/20，深拷贝项中位数 0.935～0.994 ms。flaky-timing 报告第 4 节的 a、c 两条搁置〔裁〕 |
 | `claude/runner-callid`（`opus-dev`） | `d2c66de` | codex、agy 两路的工具调用也带 `callId`（`server/agent/call-pairing.mjs`，宁可不配、不许配错）；真实跑 codex、agy 各一次，聊天记录里出现「撤销这步」；试合后 tsc 0、npm test 2982/2981/0/1；`c65-design.md` 第 7 节同步（`fa8adaa`） |
 | `claude/chat-list-window`（`opus-dev`） | `03945fa` | AI 栏聊天记录超过 150 条〔裁：原定 40〕时窗口化；顺带修掉滚动区子元素被 flex 压缩；探针 19/19（2000 条的会话消息节点 3～7 个、无长任务；main 同探针 7 项失败、176 个长任务）；试合后 tsc 0、npm test 2994/2993/0/1 |
+| `claude/skill-gate-optin`（`opus-dev`，C6.6 合入之后） | `6be10d9` | `skill-gate.test.mjs` 改为显式开启（`PROMPTCUT_BASE` 加 `PROMPTCUT_SKILL_DIR` 都给才跑），`npm test` 永不缺省连用户常驻的 5190、不碰用户的 SKILL 目录；自起 5680 真跑一遍通过；npm test 2994/2992/0/2（跳过的两条都是显式开启的集成用例），主计划 G0 的跳过数随之改为 ≤ 2（`c42d52c`）。缺省连 5190～5192 的手动脚本（`io-check`、`timeline-verify`、`catalog-notes` 等）只记下，见第 11 节 |
+| `claude/bad-ports-concurrency`（`opus-dev`） | `2e703da` | 全局准备每秒重试占住没占到的坏端口（先起的那份 `npm test` 结束放掉后由后起的补占），自检改为「名单里 19 个坏端口在回环上 `listen` 都得 `EADDRINUSE`」；两份并行第二轮与单跑两次都 3114/3112/0/2 |
+| `claude/test-parallel-safe`（`opus-dev`） | 本次合入 | SP 托管组合与局域网发现不再用固定端口；J5 按真时间推进假时钟；B1～B6 七处压着 CPU 会误判的计时改稳（门槛不变，只放宽等待上限或测量次数，每处原判据与新判据见其报告）；RHC12、T2-2 加固；最终提交上两份并行 3 轮、单跑 2 轮都 3117/3115/0/2，tsc 0 |
 
 release 每次都按 `git_and_release.md` 判过并快进（`8a5d6ff`、`f126bf0`、`d2c66de`、`03945fa`、`9236d44`）。另有别的会话在 main 上提交过 `46b8cd2`、`45cc902`（`docs/auto_long_work/` 会话提示词模板，纯文档）。
 
 ## 10. 待跨机复核项
 
-- **T9-X2**：观察端在「原尺寸还在路上」时先小后大（探针改场景后，笔记本重跑 observer 与 host）。
+- **T9-X2**（观察端在「原尺寸还在路上」时先小后大）：已补做完，T9-X2 查出问题、T9-X3 全过（第 7 节）。
 - **云端当独立渲染主机**（覆盖原 HT9 的硬验收）：云端会话不在线（W-开工-2 无回执），登记不等；云端回来后补做。
 - **放本机版 T9**（辅助节点窗口项，不挡合入）：PC 当主机、笔记本经局域网直连加入。
 
@@ -155,4 +169,4 @@ release 每次都按 `git_and_release.md` 判过并快进（`8a5d6ff`、`f126bf0
 
 - W-开工-2 先发出、后在对话里补列（6.3 节要求先列后发）；之后的 L-1、V-1、T9-X1 都先列后发。
 - C10a 三个分支在 C6.6 合入前就从 C6.6 集成分支拉出（排期裁定，第 5 节）。
-- 子 Agent 报告按 `multi_agent.md` 归档到 `docs/archive/agent-reports/`：C6.6 的十份（`AGENT-c66-*`）与同期维护分支的五份（`AGENT-coord-mailbox`、`AGENT-flaky-timing`、`AGENT-v8-diff-perf`、`AGENT-runner-callid`、`AGENT-chat-list-window`）；仍在用的契约与代码注释里的路径已改到归档位置。
+- 子 Agent 报告按 `multi_agent.md` 归档到 `docs/archive/agent-reports/`：C6.6 的十份（`AGENT-c66-*`）与同期维护分支的五份（`AGENT-coord-mailbox`、`AGENT-flaky-timing`、`AGENT-v8-diff-perf`、`AGENT-runner-callid`、`AGENT-chat-list-window`）；仍在用的契约与代码注释里的路径已改到归档位置。补记 T9-X2、T9-X3 时，又把 C6.6 合入之后的三份维护分支报告（`AGENT-skill-gate-optin`、`AGENT-bad-ports-concurrency`、`AGENT-test-parallel-safe`）一并归档。
