@@ -53,6 +53,26 @@
  *   - `--test-fingerprint`:给主机设 `PROMPTCUT_TEST_ENV_FINGERPRINT`(本机自测时让主机与页面的环境不同;跨机不用)。
  *   - 环境变量 `PROBE_MAIL_TOKEN`:协调口开了信箱时 KV 要它(`coordClient` 自动带,不打印)。
  *
+ *   - 云端 Linux 另要 `NODE_USE_ENV_PROXY=1`、`PC_CHROME_ARGS=--no-sandbox`(原样传给子进程)。主机环境里没有 ffmpeg 照常起:
+ *     在线页面计划切出的是卡片快照任务(HTML 快照与 PNG 小尺寸,用 Chrome),不用 ffmpeg;轨道流(要 H.264 编码器)在
+ *     render-host 缺省关着(`PROMPTCUT_STREAMS=0`),开了也会按「探不到编码器」报 `streams: false`。结果行记 `ffmpeg`(找没找到)、
+ *     `capabilities`(节点报给队列的能力)、`ffmpegMentions`(主机日志里提到 ffmpeg / ENOENT 的行)。
+ *   - `--host-no-ffmpeg`(本机模拟云端):主机子进程的 PATH 去掉含 ffmpeg 的目录,Windows 上 `LOCALAPPDATA` 指到空目录。
+ *     `--role all` 与 `--role host` 都认。
+ *
+ * ## 持有任务时断一次传输:--cut proxy | external(照 ht-w-probe 的外部切断协议)
+ *
+ *   `--role host --cut external [--cut-wait-min 10] [--resume-timeout-s 90]`:主机手里有任务时写 KV `host.holding`
+ *   (持有的任务 id、opens、resumes、传输),等 KV `cut.done`(外部在服务器上掐掉这台主机到 443 的连接后写,任意 JSON),
+ *   之后判:`resumes` 恰好 +1(0 → 1)、`opens` 不变(接续不是重开)、托管端 `/healthz` 的 `sessions.resumed` 增加;
+ *   到最后 `opens` 仍不变、`released` 为 0。结果写 KV `host.cut`(creator 等它,之后才写 `finish`)。
+ *   `--cut proxy`:主机经本机 `render-queue-proxy.mjs --cut-once --stdin-control` 连文档服务,持有时往代理写 `cut`
+ *   (本机替身 `--role all --cut proxy` 用端口 +8;`--role host --cut proxy` 用 `--proxy-port`,缺省主机端口 +3,
+ *   https 的托管端要给 `--proxy-target <明文文档服务 host:port>`)。
+ *   creator 一侧(`--role all --cut proxy`,或主机的 host.ready 带着 cut):起旁观节点(成员、`role: 'render'`、`node.hello`
+ *   不带指纹、`queue.watch` 本项目,只收不认领)与成员页 WebSocket 入站帧的 task.done 计数(CDP;按 seq 去重),
+ *   判持有的任务 taken 1 / reopened 0 / done 1、页面恰好一次 task.done、页面收到的 task.done 没有重复;A5 照旧判。
+ *
  *   PC 这边的 `--role creator`(外网模式的缺省;本机替身里给它表示 A5 也等外部主机,本机自测跨机协议用)在 A5 处按上一节等外部主机。
  *   本机替身不给 --role(缺省 all):A5 照旧由探针自己起本机的独立渲染主机。
  *
@@ -60,6 +80,9 @@
  *   config         creator → host:文档服务的 ws 地址、项目 id、成员口令、项目文档 id、主重卡片段 id、页面发布的计划 id(口令只进 KV 与主机临时目录里的配置文件)
  *   host.ready     host → creator:起来了(nodeId、profile、envFingerprint、codeVersion、transport、机器平台)
  *   host.progress  host → creator:认领、完成、失败数与传输(变了才写)
+ *   host.holding   host → 外部与 creator:--cut 时主机此刻持有的任务(可以掐了)
+ *   cut.done       外部 → host:--cut external 时掐完线写
+ *   host.cut       host → creator:--cut 的结果(持有的任务、前后的 opens / resumes / sessions.resumed、判据)
  *   finish         creator → host:可以退出了(页面已取到新快照,或 creator 不等了)
  *   abort          creator 出错收尾时写;host 看到就退出
  *   host           host 的结果行
@@ -95,6 +118,15 @@ if (REMOTE && A10) { process.stderr.write('--a10 只对本机替身(要缩短托
 const EXTERNAL_HOST = ROLE === 'creator';
 const NO_HOST = argv.includes('--no-host');
 const HOST_WAIT_MS = Number(arg('--host-wait-min', 15)) * 60_000;
+/** 主机持有任务时断一次传输:proxy(本机代理切,本机替身自测)| external(外部掐线,等 KV cut.done);不给就不断 */
+const CUT = arg('--cut', null);
+if (CUT !== null && !['proxy', 'external'].includes(CUT)) { process.stderr.write('--cut 取 proxy 或 external\n'); process.exit(2); }
+if (CUT === 'external' && ROLE !== 'host') { process.stderr.write('--cut external 只对 --role host(外部掐线由主会话在服务器上做)\n'); process.exit(2); }
+if (CUT !== null && ROLE === 'creator') { process.stderr.write('--role creator 不收 --cut:断不断由主机那边定(host.ready 里带着)\n'); process.exit(2); }
+const CUT_WAIT_MS = Number(arg('--cut-wait-min', 10)) * 60_000;
+const RESUME_TIMEOUT_MS = Number(arg('--resume-timeout-s', 90)) * 1000;
+/** 主机子进程里去掉 ffmpeg(本机模拟云端没有 ffmpeg) */
+const HOST_NO_FFMPEG = argv.includes('--host-no-ffmpeg');
 const COORD = String(arg('--coord', 'https://8-219-80-16.sslip.io/coord')).replace(/\/+$/, '');
 if (A10 && ROLE !== 'host') process.env.PROMPTCUT_TEST_ASSET_TICKET_TTL_MS = String(TTL_MS);
 const PORTS = { editor: BASE, stageA: BASE + 1, stageB: BASE + 2, doc: BASE + 3, asset: BASE + 4, node: BASE + 5 };
@@ -299,6 +331,8 @@ async function startHost(config) {
   for (const p of [PORTS.node, PORTS.node + 1, PORTS.node + 2]) if (!(await portFree(p))) throw new Error(`端口 ${p} 被占用(主机)`);
   const env = { ...process.env, PROMPTCUT_TEST_ENV_FINGERPRINT: HOST_FP };
   delete env.PROMPTCUT_TEST_ASSET_TICKET_TTL_MS;
+  if (HOST_NO_FFMPEG) stripFfmpeg(env, TMP);
+  out.hostFfmpeg = ffmpegIn(env);
   const child = spawn(process.execPath, [path.join(ROOT, 'scripts', 'render-host.mjs'), '--config', config, '--port', String(PORTS.node), '--data', path.join(TMP, 'host')],
     { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe', 'ipc'], windowsHide: true, env });
   const keep = (c) => { for (const line of c.toString().split(/\r?\n/)) if (line) { hostLog.push(line); if (hostLog.length > 4000) hostLog.shift(); } };
@@ -346,6 +380,176 @@ function hostView(body, lines = []) {
 /** 认领了 plan(切出细任务)且至少做完一段:claimed 算上 plan 本身(与本机替身同一判据) */
 const hostDidWork = (view) => (view?.nodes ?? []).some((n) => (n.completed ?? 0) > 0 && (n.claimed ?? 0) > (n.completed ?? 0) - 1);
 
+/* ================================================================== 主机持有任务时断一次传输(--cut,照 ht-w-probe) */
+
+/**
+ * 主机子进程的环境里去掉 ffmpeg(`--host-no-ffmpeg`,本机模拟云端没有 ffmpeg):PATH 里含 ffmpeg 可执行文件的目录去掉,
+ * Windows 上 `LOCALAPPDATA` 指到空目录(`findFfmpeg` 的兜底路径在它下面)。
+ */
+function stripFfmpeg(env, dir) {
+  const sep = process.platform === 'win32' ? ';' : ':';
+  const exe = process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg';
+  const key = Object.keys(env).find((k) => k.toUpperCase() === 'PATH') ?? 'PATH';
+  env[key] = String(env[key] ?? '').split(sep).filter((d) => d && !fs.existsSync(path.join(d, exe))).join(sep);
+  if (process.platform === 'win32') { env.LOCALAPPDATA = path.join(dir, 'no-ffmpeg-localappdata'); fs.mkdirSync(env.LOCALAPPDATA, { recursive: true }); }
+  return env;
+}
+/** 在给定环境里 ffmpeg 找不找得到(与 `findFfmpeg` 同一个次序:先 PATH,Windows 再兜底路径) */
+function ffmpegIn(env) {
+  const r = spawnSync('ffmpeg', ['-version'], { env, encoding: 'utf8', windowsHide: true });
+  if (r.status === 0) return { found: true, via: 'PATH', version: String(r.stdout).split(/\r?\n/)[0].slice(0, 80) };
+  if (process.platform === 'win32') {
+    const fb = path.join(env.LOCALAPPDATA || '', 'Microsoft', 'WinGet', 'Packages', 'Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe', 'ffmpeg-9.0.1-full_build', 'bin', 'ffmpeg.exe');
+    if (fs.existsSync(fb)) return { found: true, via: 'winget-fallback' };
+  }
+  return { found: false };
+}
+/** 主机日志里的节点能力(`queue.started` 那一行的 `capabilities`)与提到 ffmpeg 的行 */
+function hostLogFacts(lines) {
+  let capabilities = null;
+  for (const l of lines) {
+    if (!l.includes('queue.started')) continue;
+    const m = /\{.*\}/.exec(l);
+    try { capabilities = JSON.parse(m?.[0] ?? 'null')?.capabilities ?? capabilities; } catch { /* 半行 */ }
+  }
+  return { capabilities, ffmpegMentions: lines.filter((l) => /ffmpeg|ffprobe|ENOENT/i.test(l)).slice(-6).map((l) => l.slice(0, 240)) };
+}
+/** 主机报给队列的节点能力:预渲染进程诊断里 `queue.started` 事件的 `capabilities`(render-host 不一定把那一行转出来) */
+async function hostCapabilities(origin) {
+  try {
+    const url = (await getJson(`${origin}/api/prerender/info`, 5000))?.url;
+    const events = (await getJson(`${url}/api/frames/diagnostics`, 20_000))?.queue?.events ?? [];
+    return events.filter((e) => e?.event === 'queue.started').at(-1)?.capabilities ?? null;
+  } catch { return null; }
+}
+/** 本机代理(`render-queue-proxy.mjs --cut-once --stdin-control`),回 { child, lines, url } */
+async function startCutProxy(listenPort, target) {
+  if (!(await portFree(listenPort))) throw new Error(`代理端口 ${listenPort} 被占用`);
+  const child = spawn(process.execPath, [path.join(ROOT, 'scripts', 'probes', 'render-queue-proxy.mjs'), '--listen', `127.0.0.1:${listenPort}`, '--target', target, '--cut-once', '--stdin-control'],
+    { cwd: ROOT, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+  const lines = [];
+  const keep = (c) => { for (const l of c.toString().split(/\r?\n/)) if (l) { lines.push(l); if (lines.length > 2000) lines.shift(); } };
+  child.stdout.on('data', keep);
+  child.stderr.on('data', keep);
+  const end = Date.now() + 10_000;
+  while (Date.now() < end && !lines.some((l) => l.includes('"event":"listen"'))) await delay(100);
+  if (!lines.some((l) => l.includes('"event":"listen"'))) throw new Error(`代理没起来:${lines.slice(-3).join(' | ')}`);
+  return { child, lines, url: `ws://127.0.0.1:${listenPort}/`, target };
+}
+async function stopCutProxy(p) {
+  if (!p?.child) return;
+  try { p.child.stdin.write('quit\n'); } catch { /* 已关 */ }
+  await Promise.race([new Promise((r) => p.child.once('exit', r)), delay(5000)]);
+  killTree(p.child.pid);
+}
+const sessionsOf = async (healthz) => { try { return (await getJson(healthz, 15_000))?.sessions ?? null; } catch { return null; } };
+
+/**
+ * 等主机手里有任务 → onHolding → doCut() → 等会话接续。判据(同 ht-w-probe):
+ *   cut              断开确实发生了;
+ *   session-resumed  主机 `resumes` 恰好 +1(0 → 1);
+ *   not-new-session  `opens` 不变(接续,不是重开);
+ *   healthz-resumed  托管端 `/healthz` 的 `sessions.resumed` 增加。
+ * 回 { held, before, after, checks }。checks 由调用方记进 fails。
+ */
+async function cutWhileHolding({ queue, healthz, onHolding, doCut, holdTimeoutMs = 900_000, resumeTimeoutMs = RESUME_TIMEOUT_MS }) {
+  const res = { held: [], checks: [] };
+  const add = (name, ok, detail) => res.checks.push({ name, ok: !!ok, detail });
+  let pre = null;
+  let firstHeldAt = null;
+  const end = Date.now() + holdTimeoutMs;
+  while (Date.now() < Math.min(end, deadline)) {
+    const n = (await queue())?.nodes?.[0];
+    // 先见到的多半是 plan(切分时持有);再等至多 2 分钟,等手里有细任务(快照段)时断,判据落在产出任务上。等不到就按手里的 plan 断
+    if (n && Array.isArray(n.held) && n.held.length > 0 && n.connected) {
+      pre ??= n;
+      firstHeldAt ??= Date.now();
+      if (n.held.some((id) => !String(id).startsWith('plan:'))) { pre = n; break; }
+      if (Date.now() - firstHeldAt > 120_000) break;
+    }
+    await delay(150);
+  }
+  if (!pre) { add('held-before-cut', false, { timeoutMs: holdTimeoutMs }); return res; }
+  add('held-before-cut', true, { held: pre.held });
+  const sessionsBefore = await sessionsOf(healthz);
+  const before = { held: pre.held, opens: pre.opens ?? null, resumes: pre.resumes ?? 0, transport: pre.transport ?? null, sessionsResumed: sessionsBefore?.resumed ?? null };
+  Object.assign(res, { held: pre.held, before });
+  await onHolding?.(before);
+  const cutAt = Date.now();
+  const cutOk = await doCut();
+  add('cut', cutOk, { cutOk });
+  let resumed = null;
+  const endR = Date.now() + resumeTimeoutMs;
+  while (Date.now() < Math.min(endR, deadline)) {
+    const n = (await queue())?.nodes?.[0];
+    if (n && (n.resumes ?? 0) > before.resumes) { resumed = n; break; }
+    await delay(200);
+  }
+  let sessionsAfter = null;
+  const endH = Date.now() + 15_000;
+  while (Date.now() < endH) {
+    sessionsAfter = await sessionsOf(healthz);
+    if ((sessionsAfter?.resumed ?? 0) > (sessionsBefore?.resumed ?? Infinity)) break;
+    await delay(500);
+  }
+  res.after = { resumes: resumed?.resumes ?? null, opens: resumed?.opens ?? null, transport: resumed?.transport ?? null, cutToResumeMs: resumed ? Date.now() - cutAt : null, sessionsResumed: sessionsAfter?.resumed ?? null };
+  add('session-resumed', resumed && resumed.resumes === before.resumes + 1, { resumes: [before.resumes, resumed?.resumes ?? null] });
+  add('not-new-session', resumed && resumed.opens === before.opens, { opens: [before.opens, resumed?.opens ?? null], connectFailed: resumed?.connectFailed ?? null });
+  add('healthz-resumed', (sessionsAfter?.resumed ?? 0) > (sessionsBefore?.resumed ?? Infinity), { before: sessionsBefore?.resumed ?? null, after: sessionsAfter?.resumed ?? null });
+  return res;
+}
+
+/**
+ * 旁观节点(--cut 时,creator 一侧):成员身份、`role: 'render'` 连项目,`node.hello`(不带指纹:前置过滤放行全部任务)后
+ * `queue.watch` 本项目,只收不认领,记每个任务的 task.taken / 认领后又 task.opened / task.closed。
+ */
+async function startWatcher(M, { projectId, password }) {
+  const c = await openConn(M, { url: M.wsBaseOf(HOSTED), projectId, username: '旁观节点', password, as: 'member', role: 'render' });
+  const seen = new Map();
+  const rec = (id) => { if (!seen.has(id)) seen.set(id, { taken: 0, reopenedAfterTaken: 0, closed: [] }); return seen.get(id); };
+  c.ep.onMessage((m) => {
+    if (m?.type === 'task.taken' && typeof m.id === 'string') rec(m.id).taken++;
+    else if (m?.type === 'task.opened' && typeof m.task?.id === 'string') { const r = rec(m.task.id); if (r.taken > 0) r.reopenedAfterTaken++; }
+    else if (m?.type === 'task.closed' && typeof m.id === 'string') rec(m.id).closed.push(m.state ?? null);
+  });
+  const hello = await c.rpc({ type: 'node.hello', nodeId: `c10b-watch-${RUN}`.slice(0, 64), profile: 'pc', codeVersions: [], capabilities: {}, maxConcurrent: 1 }).catch((e) => ({ type: 'error', reason: String(e?.message ?? e) }));
+  const watch = await c.rpc({ type: 'queue.watch', projects: [projectId] }).catch((e) => ({ type: 'error', reason: String(e?.message ?? e) }));
+  check(hello.type !== 'error' && watch.type === 'queue.snapshot', '--cut:旁观节点在看本项目的队列', { hello: hello.type, reason: hello.reason ?? watch.reason ?? null, watch: watch.type });
+  return { seen, close: c.close };
+}
+/** 成员页收到的 task.done(CDP 读页面 WebSocket 的入站帧;会话层的重发按 seq 去重,同一任务不同 seq 算两次) */
+async function countPageDone(page) {
+  const cdp = await page.createCDPSession();
+  await cdp.send('Network.enable');
+  const done = new Map();
+  cdp.on('Network.webSocketFrameReceived', (e) => {
+    const s = e?.response?.payloadData;
+    if (typeof s !== 'string' || !s.includes('task.done')) return;
+    let m;
+    try { m = JSON.parse(s); } catch { return; }
+    if (m?.type !== 'task.done' || typeof m.id !== 'string') return;
+    if (!done.has(m.id)) done.set(m.id, new Set());
+    done.get(m.id).add(m.seq ?? `frame-${done.get(m.id).size}`);
+  });
+  return { counts: () => Object.fromEntries([...done].map(([id, s]) => [id, s.size])), detach: () => cdp.detach().catch(() => {}) };
+}
+/** creator 一侧对持有的任务的判据:旁观节点看到认领恰好一次、之后没再 open、关闭一次且是 done;页面恰好一次 task.done */
+async function judgeHeld(held, watcher, pageDone) {
+  const end = Date.now() + 300_000;
+  while (Date.now() < Math.min(end, deadline)) {
+    if (held.every((id) => (watcher.seen.get(id)?.closed ?? []).length > 0 && (pageDone.counts()[id] ?? 0) > 0)) break;
+    await delay(1000);
+  }
+  await delay(1500);
+  const counts = pageDone.counts();
+  const perHeld = held.map((id) => { const w = watcher.seen.get(id) ?? { taken: 0, reopenedAfterTaken: 0, closed: [] }; return { id, taken: w.taken, reopened: w.reopenedAfterTaken, closed: w.closed, taskDone: counts[id] ?? 0 }; });
+  check(perHeld.length > 0 && perHeld.every((h) => h.taken === 1 && h.reopened === 0 && h.closed.length === 1 && h.closed[0] === 'done'), '--cut:持有的任务 taken 1 / reopened 0 / done 1', perHeld);
+  check(perHeld.length > 0 && perHeld.every((h) => h.taskDone === 1), '--cut:持有的任务恰好一次 task.done(页面收到)', perHeld.map((h) => ({ id: h.id, taskDone: h.taskDone })));
+  const multi = Object.entries(counts).filter(([, n]) => n > 1);
+  check(multi.length === 0, '--cut:页面收到的 task.done 没有重复的', Object.fromEntries(multi));
+  return { perHeld, pageTaskDone: { tasks: Object.keys(counts).length, allOne: multi.length === 0 } };
+}
+
 /* ================================================================== 协调口 KV(外部主机) */
 
 const kvKey = (run, name) => `c10b.${run}.${name}`;
@@ -386,6 +590,7 @@ async function runHostRole() {
   let child = null;
   const lines = [];
   let exitLine = null;
+  let proxyRef = null;
   try {
     if (!RUN_ARG) throw new Error('--role host 要给 --run <id>(或 --run latest)');
     if (RUN_ARG === 'latest') {
@@ -406,13 +611,27 @@ async function runHostRole() {
     out.project = { projectId: cfg.projectId, hosted: cfg.hosted ?? null };
     for (const p of [port, port + 1, port + 2]) if (!(await portFree(p))) throw new Error(`端口 ${p} 被占用`);
     const configFile = path.join(TMP, 'host-shared.json');
-    fs.writeFileSync(configFile, JSON.stringify([{ url: cfg.ws, projectId: cfg.projectId, username: '渲染主机', password: cfg.memberPassword, as: 'member', role: 'render',
+    // --cut proxy:经本机代理(端口 +3)连文档服务;https 的托管端要给 --proxy-target <明文文档服务 host:port>(代理不解 TLS)
+    let docUrl = cfg.ws;
+    if (CUT === 'proxy') {
+      let target = arg('--proxy-target', null);
+      if (!target) {
+        const u = new URL(cfg.ws);
+        if (u.protocol !== 'ws:') throw new Error('托管端是 wss 时 --cut proxy 要给 --proxy-target <明文文档服务 host:port>');
+        target = `${u.hostname}:${u.port || 80}`;
+      }
+      proxyRef = await startCutProxy(Number(arg('--proxy-port', port + 3)), target);
+      docUrl = proxyRef.url;
+    }
+    fs.writeFileSync(configFile, JSON.stringify([{ url: docUrl, projectId: cfg.projectId, username: '渲染主机', password: cfg.memberPassword, as: 'member', role: 'render',
       deviceId: `c10b-xhost-${run}`.padEnd(16, '0').slice(0, 40), deviceName: `c10-browser 外部独立渲染主机(${os.hostname()})` }]));
     const env = { ...process.env };
     for (const key of ['PROMPTCUT_DOCSERVICE_URL', 'PROMPTCUT_CLUSTER_TOKEN', 'PROMPTCUT_QUEUE_NODE', 'PROMPTCUT_SHARED_CONFIG', 'PROMPTCUT_TEST_CODE_VERSION', 'PROMPTCUT_TEST_ASSET_TICKET_TTL_MS', 'PROMPTCUT_TEST_ENV_FINGERPRINT']) delete env[key];
     const testFp = arg('--test-fingerprint', null);
     if (testFp) env.PROMPTCUT_TEST_ENV_FINGERPRINT = testFp;
     out.testFingerprint = !!testFp;
+    if (HOST_NO_FFMPEG) stripFfmpeg(env, TMP);
+    out.ffmpeg = ffmpegIn(env);
     child = fork(path.join(ROOT, 'scripts', 'render-host.mjs'), ['--config', configFile, '--port', String(port), '--data', path.join(TMP, 'data')],
       { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe', 'ipc'], windowsHide: true });
     const keep = (c) => {
@@ -433,9 +652,32 @@ async function runHostRole() {
     const origin = `http://127.0.0.1:${port}`;
     const q0 = hostView(await getJson(`${origin}/api/frames/queue`, 30_000).catch(() => ready.queue), lines);
     out.ready = q0;
-    await store.put('host.ready', { at: Date.now(), ...q0, platform: process.platform, arch: process.arch, node: process.version, testFingerprint: !!testFp });
+    const facts0 = hostLogFacts(lines);
+    await store.put('host.ready', { at: Date.now(), ...q0, platform: process.platform, arch: process.arch, node: process.version, testFingerprint: !!testFp,
+      ffmpeg: out.ffmpeg, capabilities: facts0.capabilities ?? await hostCapabilities(origin), cut: CUT, cutWaitMs: CUT_WAIT_MS, resumeTimeoutMs: RESUME_TIMEOUT_MS });
     say('host.ready', { profile: q0?.profile, envFingerprint: q0?.envFingerprint, nodeId: q0?.nodes?.[0]?.nodeId, transport: q0?.nodes?.[0]?.transport });
     check(q0?.profile === 'host', '[host] 诊断里 profile 是 host', q0?.profile);
+    // --cut:和下面的进度循环并行 —— 持有任务时写 host.holding,断一次(proxy 自己切;external 等 KV cut.done),等接续,结果写 host.cut
+    const queueOf = async () => getJson(`${origin}/api/frames/queue`, 10_000).catch(() => null);
+    const cutP = CUT ? cutWhileHolding({
+      queue: queueOf, healthz: cfg.healthz ?? `${String(cfg.hosted ?? '').replace(/\/+$/, '')}/healthz`,
+      onHolding: (before) => store.put('host.holding', { at: Date.now(), held: before.held, cut: CUT, opens: before.opens, resumes: before.resumes, transport: before.transport }).then(() => say('host.holding', { held: before.held })),
+      doCut: async () => {
+        if (CUT === 'proxy') {
+          proxyRef.child.stdin.write('cut\n');
+          const end = Date.now() + 10_000;
+          while (Date.now() < end) { if (proxyRef.lines.some((l) => l.includes('"event":"conn.cut"'))) return true; await delay(50); }
+          return false;
+        }
+        say('host.wait-cut-done', { key: kvKey(run, 'cut.done'), waitMin: CUT_WAIT_MS / 60_000 });
+        return !!(await store.wait('cut.done', Date.now() + CUT_WAIT_MS));
+      },
+    }).then(async (r) => {
+      out.cut = { held: r.held, before: r.before, after: r.after, checks: r.checks };
+      for (const c of r.checks) check(c.ok, `[host] --cut ${CUT}:${c.name}`, c.detail);
+      await store.put('host.cut', { at: Date.now(), cut: CUT, held: r.held, before: r.before, after: r.after, checks: r.checks }).catch(() => {});
+      return r;
+    }, async (e) => { fails.push(`[host] --cut 出错:${String(e?.message ?? e).slice(0, 300)}`); await store.put('host.cut', { at: Date.now(), cut: CUT, held: [], checks: [{ name: 'cut-error', ok: false, detail: String(e?.message ?? e).slice(0, 300) }] }).catch(() => {}); return null; }) : null;
     // 看自己的诊断,变了就写 host.progress;等 finish / abort / 超时
     let lastSig = '';
     let last = q0;
@@ -455,14 +697,27 @@ async function runHostRole() {
     }
     out.last = last;
     out.didWork = hostDidWork(last);
+    if (cutP) {
+      const r = await Promise.race([cutP, delay(5000).then(() => 'pending')]);
+      if (r === 'pending') fails.push('[host] --cut 还没做完就收到了 finish / abort');
+      else if (r?.before) {
+        const n = (await queueOf())?.nodes?.[0];
+        check(n && n.opens === r.before.opens, `[host] --cut ${CUT}:same-session-to-end(到最后 opens 仍不变)`, { opens: [r.before.opens, n?.opens ?? null], resumes: n?.resumes ?? null });
+        check(n && n.released === 0, `[host] --cut ${CUT}:not-released(持有的任务没被放回)`, { released: n?.released ?? null });
+      }
+    }
+    out.ffmpegMentions = hostLogFacts(lines).ffmpegMentions;
+    out.capabilities = await hostCapabilities(origin).catch(() => null);
     child.send({ type: 'shutdown' });
     out.exitCode = await new Promise((resolve) => { if (child.exitCode !== null) return resolve(child.exitCode); const t = setTimeout(() => resolve(null), 60_000); child.once('exit', (code) => { clearTimeout(t); resolve(code); }); });
     out.released = exitLine?.released ?? null;
     check(out.exitCode === 0, '[host] render-host 经 IPC 正常退出(退出码 0)', { exitCode: out.exitCode, tail: lines.slice(-4) });
+    if (out.ffmpeg && !out.ffmpeg.found) out.noFfmpegNote = '主机环境里没有 ffmpeg;照常起了、做了任务(看 didWork 与 ffmpegMentions)';
   } catch (e) {
     fails.push(`[host] 出错:${String(e?.message ?? e).slice(0, 600)}`);
   } finally {
     if (child && child.exitCode === null) killTree(child.pid);
+    await stopCutProxy(proxyRef).catch(() => {});
     for (const p of [port, port + 1, port + 2]) { const pid = pidOnPort(p); if (pid && child) killTree(pid); }
     try { fs.writeFileSync(path.join(OUT, 'render-host.log'), lines.join('\n')); } catch { /* 写不了 */ }
     if (!KEEP) { for (const d of fs.readdirSync(TMP)) { const p = path.join(TMP, d); if (path.resolve(p) !== OUT) { try { fs.rmSync(p, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 }); } catch { /* 句柄没放 */ } } } }
@@ -502,9 +757,9 @@ function rpcOn(ep) {
     if (!ep.send({ ...message, reqId })) { waiting.delete(reqId); clearTimeout(timer); reject(new Error(`${message.type} 没发出去`)); }
   });
 }
-async function openConn(M, { url, projectId, username, password, as }) {
-  const entry = M.normalizeEntry({ url, projectId, username, password, as, role: 'page', deviceId: `c10b-chk-${randomBytes(6).toString('hex')}`, deviceName: 'c10-browser-probe 核对' });
-  const ep = M.createWsEndpoint({ url: entry.url, protocols: M.sharedProtocols(entry, { role: 'page' }), log: () => {} });
+async function openConn(M, { url, projectId, username, password, as, role = 'page' }) {
+  const entry = M.normalizeEntry({ url, projectId, username, password, as, role, deviceId: `c10b-chk-${randomBytes(6).toString('hex')}`, deviceName: 'c10-browser-probe 核对' });
+  const ep = M.createWsEndpoint({ url: entry.url, protocols: M.sharedProtocols(entry, { role }), log: () => {} });
   const opened = await new Promise((resolve) => {
     if (ep.connected) return resolve(true);
     const t = setTimeout(() => resolve(false), 20_000);
@@ -656,6 +911,9 @@ let conn = null;
 /** 外部主机:KV(本轮)与收尾时要不要写 abort */
 let xstore = null;
 let xfinished = false;
+/** 收尾用:--cut 的旁观节点与本机代理 */
+let watcherRef = null;
+let cutProxyRef = null;
 /** 外网模式:两个舞台源(--stage-origins 优先;否则 runtime-config.json;都没有就 s1./s2. 子域) */
 async function resolveStageOrigins() {
   const given = arg('--stage-origins', null);
@@ -1018,25 +1276,56 @@ try {
     const toasts = await P(member, () => [...document.querySelectorAll('[data-pc="toast"], .pc-toast')].map((t) => t.textContent)).catch(() => []);
     check(member.pageErrors.length === errorsBefore && !toasts.some((t) => /失败|出错|错误/.test(t ?? '')), 'A5:没有节点在线时不报错', { pageErrors: member.pageErrors.slice(errorsBefore), toasts });
     let claimed = null;
+    /** --cut:本机代理、旁观节点、页面收到的 task.done、断开的结果(本机替身自己断;外部主机经 KV host.cut 报) */
+    let cutProxy = null;
+    let watcher = null;
+    let pageDone = null;
+    let cutResult = null;
     let hostFp = HOST_FP;
     let hostPending = null;
     if (!EXTERNAL_HOST) {
       // 独立渲染主机(本机替身:host 档、测试指纹,与页面的环境不同)
       const hostConfig = path.join(TMP, 'host.json');
-      fs.writeFileSync(hostConfig, JSON.stringify([{ url: M.wsBaseOf(HOSTED), projectId: state.projectId, username: '渲染主机', password: state.projectPassword,
+      // --cut proxy:主机经本机代理(+8)连文档服务的端口,持有任务时由代理切一次
+      if (CUT === 'proxy') {
+        cutProxy = await startCutProxy(BASE + 8, `127.0.0.1:${PORTS.doc}`);
+        cutProxyRef = cutProxy;
+        watcher = await startWatcher(M, { projectId: state.projectId, password: state.projectPassword });
+        watcherRef = watcher;
+        pageDone = await countPageDone(member);
+      }
+      fs.writeFileSync(hostConfig, JSON.stringify([{ url: cutProxy ? cutProxy.url : M.wsBaseOf(HOSTED), projectId: state.projectId, username: '渲染主机', password: state.projectPassword,
         as: 'member', role: 'render', deviceId: `c10b-host-${RUN}`.padEnd(16, '0'), deviceName: 'c10-browser 独立渲染主机' }]));
       await startHost(hostConfig);
+      const cutP = CUT === 'proxy' ? cutWhileHolding({
+        queue: hostQueue, healthz: `${SITE}/hosted/healthz`,
+        doCut: async () => {
+          cutProxy.child.stdin.write('cut\n');
+          const end = Date.now() + 10_000;
+          while (Date.now() < end) { if (cutProxy.lines.some((l) => l.includes('"event":"conn.cut"'))) return true; await delay(50); }
+          return false;
+        },
+      }) : null;
       claimed = await until('A5:独立渲染主机认领清单计划并切分完成', async () => {
         const v = hostView(await hostQueue(), hostLog);
         return hostDidWork(v) ? v : null;
       }, 900_000, 2000);
       check(claimed, 'A5:独立渲染主机(host 档)认领、切分、完成', claimed ?? hostLog.slice(-12));
       check(claimed?.envFingerprint === HOST_FP && HOST_FP !== state.pageFp && HOST_FP !== state.creatorFp, 'A5:认领的节点与页面发布方环境不同(主机用测试指纹)', { host: claimed?.envFingerprint, page: state.pageFp, creator: state.creatorFp });
+      if (cutP) {
+        cutResult = await cutP;
+        for (const c of cutResult.checks) check(c.ok, `--cut proxy:${c.name}`, c.detail);
+      }
+      out.hostFacts = { ...hostLogFacts(hostLog), capabilities: await hostCapabilities(host.origin) };
     } else if (NO_HOST) {
       hostPending = '待笔记本主机(--no-host:没有等外部主机)';
     } else {
       // 外部独立渲染主机(另一台机器上的 --role host):本轮的项目与凭证写进 KV,等它报到、认领、完成
-      await xstore.put('config', { at: Date.now(), hosted: HOSTED, ws: M.wsBaseOf(HOSTED), projectId: state.projectId, memberPassword: state.projectPassword,
+      // 旁观节点与页面 task.done 计数先起(主机认领之前),主机要是带 --cut,持有的任务按它们判
+      watcher = await startWatcher(M, { projectId: state.projectId, password: state.projectPassword });
+      watcherRef = watcher;
+      pageDone = await countPageDone(member);
+      await xstore.put('config', { at: Date.now(), hosted: HOSTED, healthz: `${SITE}/hosted/healthz`, ws: M.wsBaseOf(HOSTED), projectId: state.projectId, memberPassword: state.projectPassword,
         docId: state.docId, mainClip: state.main, planId: published?.id ?? null });
       say('a5.waiting-external-host', { run: RUN, waitMin: HOST_WAIT_MS / 60_000 });
       const tReady = Date.now();
@@ -1062,7 +1351,15 @@ try {
         check(claimed, 'A5:外部独立渲染主机(host 档)15 分钟内认领、切分、完成', { nodes: lastProgress?.nodes ?? null, ...(early ?? {}) });
         check(ready.profile === 'host', 'A5:认领方是独立渲染主机(profile host)', { profile: ready.profile });
         out.steps.a5host = { readyMs, platform: ready.platform ?? null, arch: ready.arch ?? null, testFingerprint: ready.testFingerprint ?? null, profile: ready.profile ?? null,
-          envFingerprint: ready.envFingerprint ?? null, codeVersion: ready.codeVersion ?? null, differsFromPage: hostFp !== state.pageFp, differsFromCreator: hostFp !== state.creatorFp };
+          envFingerprint: ready.envFingerprint ?? null, codeVersion: ready.codeVersion ?? null, differsFromPage: hostFp !== state.pageFp, differsFromCreator: hostFp !== state.creatorFp,
+          cut: ready.cut ?? null, ffmpeg: ready.ffmpeg ?? null, capabilities: ready.capabilities ?? null };
+        // 主机带 --cut:等它报断开的结果(持有 → 掐线 → 接续);时限 = 主机的等掐线时限 + 接续时限 + 5 分钟
+        if (ready.cut) {
+          const hc = await xstore.wait('host.cut', Date.now() + (ready.cutWaitMs ?? CUT_WAIT_MS) + (ready.resumeTimeoutMs ?? RESUME_TIMEOUT_MS) + 300_000);
+          cutResult = hc;
+          if (!hc) fails.push(`--cut ${ready.cut}:没等到主机的断开结果(KV host.cut)`);
+          else for (const c of hc.checks ?? []) check(c.ok, `--cut ${ready.cut}(主机):${c.name}`, c.detail);
+        }
       }
     }
     if (hostPending) {
@@ -1093,7 +1390,17 @@ try {
       nodes: claimed.nodes.map((n) => ({ nodeId: n.nodeId, claimed: n.claimed, completed: n.completed, failed: n.failed, transport: n.transport, resumes: n.resumes, legacy: n.legacy, opens: n.opens, connectFailed: n.connectFailed })),
       sessionLog: claimed.sessionLog } : null;
     check(!claimant || claimant.nodes.some((n) => n.transport === 'ws'), 'A5:认领方经 WebSocket 连着文档服务(没有回落)', claimant?.nodes);
-    out.steps.a5 = { ms: Date.now() - t5, published, external: EXTERNAL_HOST, claimant, newLayer: fresh ? { resultKey: fresh.resultKey.slice(0, 12), envFingerprint: fresh.envFingerprint, ready: fresh.ready } : null, shown: newShown, planeText: newHtml?.slice(0, 40) ?? null };
+    // --cut:持有的任务按旁观节点与页面收到的 task.done 判;本机替身另判「到最后 opens 仍不变」(外部主机自己判)
+    let cutJudge = null;
+    if (cutResult?.held?.length && watcher && pageDone) {
+      cutJudge = await judgeHeld(cutResult.held, watcher, pageDone);
+      if (!EXTERNAL_HOST) {
+        const n = (await hostQueue())?.nodes?.[0];
+        check(n && n.opens === cutResult.before?.opens, '--cut proxy:same-session-to-end(到最后 opens 仍不变)', { opens: [cutResult.before?.opens ?? null, n?.opens ?? null], resumes: n?.resumes ?? null, released: n?.released ?? null });
+        check(n && n.released === 0, '--cut proxy:not-released(持有的任务没被放回)', { released: n?.released ?? null });
+      }
+    }
+    out.steps.a5 = { ms: Date.now() - t5, published, external: EXTERNAL_HOST, claimant, cut: cutResult ? { held: cutResult.held, before: cutResult.before, after: cutResult.after, judge: cutJudge } : null, newLayer: fresh ? { resultKey: fresh.resultKey.slice(0, 12), envFingerprint: fresh.envFingerprint, ready: fresh.ready } : null, shown: newShown, planeText: newHtml?.slice(0, 40) ?? null };
     if (xstore) {
       await xstore.put('finish', { at: Date.now(), reason: fresh ? 'fresh' : 'gave-up' }).catch(() => {});
       xfinished = true;
@@ -1108,6 +1415,8 @@ try {
   fails.push(`探针异常:${String(e?.stack ?? e).slice(0, 1200)}`);
   for (const [name, page] of [['creator', state.creator], ['member', state.member]]) if (page) await shot(page, `fatal-${name}`).catch(() => {});
 } finally {
+  try { watcherRef?.close(); } catch { /* 已关 */ }
+  await stopCutProxy(cutProxyRef).catch(() => {});
   if (xstore && !xfinished) await xstore.put('abort', { at: Date.now(), reason: fails.length ? fails[0].slice(0, 200) : 'creator 结束' }).catch(() => {});
   out.pending = pending;
   if (state.member) out.memberDiag = { pageErrors: state.member.pageErrors?.slice(-8), consoleErrors: state.member.consoleErrors?.slice(-8) };
