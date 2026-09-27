@@ -10,7 +10,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  planSync, planSlots,
+  planSync, planSlots, reloadOnComplete,
   HARD_SEEK_SEC, SEEK_COOLDOWN_MS, IN_SYNC_SEC, MAX_RATE_SKEW, PAUSED_SEEK_SEC, SCRUB_SEEK_MIN_MS, PREROLL_SEC, NOT_READY_GRACE_SEC,
 } from "./mediaSync.ts";
 
@@ -328,4 +328,28 @@ test("地址不变时换档规则不介入:同一段照旧认原来的槽位", (
   assert.equal(p.active, 0);
   assert.equal(p.shown, 0);
   assert.equal(p.load[1], null);
+});
+
+/* ---------------- 到齐后重载(C6.6 T9-X2) ---------------- */
+
+const reload = (o) => reloadOnComplete({ doneNow: true, seenBefore: false, hasClip: true, freshSrc: false, error: false, networkState: 1, ...o });
+
+test("到齐那一刻:之前挂失败了的元素(报错,或 NETWORK_NO_SOURCE)重载一次", () => {
+  assert.equal(reload({ error: true, networkState: 3 }), true);
+  assert.equal(reload({ networkState: 3 }), true);
+  assert.equal(reload({ error: true }), true);
+});
+
+test("这一轮刚换上 src 的元素不重载:src 一换 networkState 当场就是 NO_SOURCE,再 load() 只会打断刚开始的加载", () => {
+  // 换档那一轮:原尺寸到齐 → 预热槽位换成原尺寸地址,同一次提交里 doneNow 翻真、src 刚换上
+  assert.equal(reload({ freshSrc: true, networkState: 3 }), false);
+  assert.equal(reload({ freshSrc: true, networkState: 3, error: true }), false);
+});
+
+test("没失败、没到齐、到齐早就看过、槽位空着:都不重载", () => {
+  assert.equal(reload({ networkState: 1 }), false);
+  assert.equal(reload({ networkState: 2 }), false);
+  assert.equal(reload({ doneNow: false, networkState: 3, error: true }), false);
+  assert.equal(reload({ seenBefore: true, networkState: 3, error: true }), false);
+  assert.equal(reload({ hasClip: false, networkState: 3, error: true }), false);
 });
