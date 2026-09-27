@@ -36,7 +36,9 @@
 
 ### 2.2 全量测试
 
-见第 2.4 节（跑完补数字）。
+`npm test` → 退出码 0：tests 3430，pass 3428，fail 0，skipped 2（两条都是既有的：`/api/cards/layout` 集成、SKILL 闸门集成，要自己起 dev server 才跑）。
+第一次跑挂了 1 条：依赖方向守门 `bakery-deps.test.mjs`「server/** 不 import scripts/」—— 新单测 import 了 `scripts/probes/m8/`。
+按该守门文件头写的做法把 `server/test/m8-kit.test.mjs` 加进例外名单（一行，单独提交 `c21881f`），重跑全过。**这一行越出了本分支的文件清单**，见第 3 节。
 
 ### 2.3 本机替身自检（原样结果）
 
@@ -92,9 +94,13 @@ PASS creator:queue-editor-stopped {"exitCode":1}                         （结�
 
 `node --test server/test/m8-kit.test.mjs`：19 条全过（tests 19，pass 19，fail 0）。
 
-全量 `npm test`：（跑完补）
+全量见第 2.2 节。最后一版代码上又跑了一轮自检（`--role all`，不带 --real-host / --queue-editor）：退出码 0，`ok: true`，`ms: 21455`，
+20 个任务从发布到全部完成 6413 ms；19 条 check 全过；旁观节点每个任务至多认领一次、放回 0 次；node-b 经代理 179 块里 14 块受扰、stall 3077 ms 后 resume，claimed 10、completed 10、lost 0。
 
-## 3. 没做的与原因
+## 3. 没做的与原因、越界
+
+- **越界一行**：`server/test/bakery-deps.test.mjs` 的例外名单加了 `server/test/m8-kit.test.mjs`（提交 `c21881f`）。不加，全量测试红一条；单测只能放在 `server/test/`（`npm test` 只收那里）。
+  主会话不同意的话：丢掉 `c21881f`，再把 `server/test/m8-kit.test.mjs` 移出 `npm test` 的范围（那样公共件就没有常驻基线的单测了）。
 
 - **E1～E6 的具体用例**：按任务书留给 `claude/m8-e2e`；公共件的接口已留好（第 5 节）。
 - **`blackout.ps1` 没真跑过**：改防火墙 / 网卡属改系统设置，子智能体不做；只跑了 `-DryRun` 与参数校验（坏地址 `evil;rm` → 退出码 2）。真跑前按计划 D1 由主会话在对话里列命令、确认笔记本权限模式；首次建议先跑 P-C1 预检。
@@ -110,4 +116,30 @@ PASS creator:queue-editor-stopped {"exitCode":1}                         （结�
 
 ## 5. 给 m8-e2e / m8-scale 的用法
 
-（同回复主会话的「用法说明」，此处从略；接口清单见各文件头。）
+```js
+import { placeParams, createResult, mergeRoleResults, judgeAllDone, judgeExactlyOnce, judgePureLayers, layerObservations,
+  judgeIdenticalBytes, judgeEachWorked, summarizeTimeline, takeoverMs, newRunId, fingerprintOf, fakeLayerTasks } from './m8/lib.mjs';
+import { roleKv, resolveRun } from './m8/kv.mjs';
+import { startHostedCombo, startCoord, startQueueEditor, startRenderHost, startProxy, runRole } from './m8/procs.mjs';
+import { createProbeProject, deleteProbeProject, sharedEntry, startWatcher, startFakeNode, startFakePublisher } from './m8/conn.mjs';
+import { startSampler } from './m8/resources.mjs';
+```
+
+- **部署**：`const P = placeParams(place, { hosted, coord, lanHost })`；项目配置的 `url` 用 `P.ws`，健康检查读 `P.healthz`，经代理时代理目标用 `P.docPlain`（阿里云是 `8.219.80.16:8787`）；放本机另有 `P.cloudHealthz`，用来判「全程不连阿里云」。
+- **角色与 KV**：creator 用 `resolveRun({ coord, prefix: 'm8e', run: arg('--run'), isCreator: true, newRun: newRunId, deadline })`，其它角色 `isCreator: false`；
+  `const kv = roleKv({ coord, prefix, run, role })`，然后 `kv.config()/takeConfig()`、`kv.ready()/takeReady(角色)`、`kv.signal('host.holding')/takeSignal()`、`kv.result(r.toJSON())/takeResult(角色)`、`kv.abort()/aborted()`、`kv.done()`。前缀 ≤ 16 字符，拼出的键超 64 字符直接抛错。
+- **结果行**：`const r = createResult({ probe, role, run, place, case })`；`r.check(名, ok, detail)`、`r.judge(名, judgeXxx(...))`；最后 `process.stdout.write(JSON.stringify(r.toJSON()) + '\n')`。`--role all` 用 `runRole(脚本, 角色, 参数)` 起子进程、`mergeRoleResults(head, results)` 汇总。
+- **三条共用判据**：J-全完 `judgeAllDone(ids, states)`；J-恰一 `judgeExactlyOnce(ids, doneEvents)`（发布方收到的每条 `task.done` 记 `{ id, epoch }`，`startFakePublisher` 已记好；真实发布方用编辑器诊断的 `doneCounts` 时每个 epoch 各算一份）；
+  J-纯层 `judgePureLayers(观察)`：真实渲染时由清单或层表逐层给 `{ layer, fingerprint, ref }`，假任务时用 `layerObservations(tasks, completedBy, nodeFingerprints)`；
+  产物逐字节相同 `judgeIdenticalBytes(键→字节或 sha256, 同左)`；三方各认领 ≥ 1 用 `judgeEachWorked({ 节点: 数 }, { total })`。
+- **旁观节点**：`startWatcher({ entry: sharedEntry({ url: P.ws, projectId, username, password, run, tag: 'watcher' }), projects: [队列项目 id], nodeId })`；
+  不给 `fingerprint` 就看得见全部任务；`summarizeTimeline(w.events(id))`；E2 的接手用时 `takeoverMs(w.events(id), stall 的时刻)`（≤ 37 000 判过）。
+- **进程**：本机替身 `startHostedCombo({ dir })`（端口 0）、`startCoord({ mailToken })`；桌面队列节点 `startQueueEditor({ port, dir, sharedConfig, fakeFingerprint, lanHost })` → `waitActive()`、`queue()`、`fingerprintApplied()`；
+  独立渲染主机 `startRenderHost({ port, dir, config, maxConcurrent, fakeFingerprint })` → `node()`、`shutdown()`、`stop()`。端口先过 `checkPorts`（传 `band` 核在自己的段里）。
+- **E2 / C1 第 3 种**：`const px = await startProxy({ listen: '127.0.0.1:<端口>', target: P.docPlain })`，节点的 `url` 用 `px.url`；持有任务时 `await px.stall()`（开着的和新来的连接都不转发，重连也接续不上），到点 `await px.resume()`；`px.stop()` 回汇总行。
+  C3：`startProxy({ …, stallProb: 0.1 })`，要断线再加 `closeProb`。
+- **E6**：`fakeFingerprint`（16 位小写十六进制，`fingerprintOf('seed')` 可造）给 `startRenderHost` / `startQueueEditor`；只在含 C10 集成的检出上生效，先 `fingerprintApplied()`。
+- **C1 第 1、2 种**：`scripts/probes/m8/blackout.ps1 -Mode firewall -Seconds 30 -Remote <地址> -Log <文件> -Detach`（先 `-DryRun` 核命令）。
+- **m8-scale（K1-X、I1-X）**：一个进程里循环 `startFakeNode({ entry, nodeId, fingerprint, projects, onMessage })` 开多个节点连接；`onMessage` 数「收到别的项目的消息」；`rec.rejected` 记 `task.claim-rejected`（数 `card-locked`）；
+  假任务 `fakeLayerTasks({ run, projectId, layers: [{ fingerprint, segments, extra }] })` 的 `extra` 给卡片锁需要的 `tier / input`；`takeoverLocked` 透传给节点（对照组）。阿里云资源用 `const s = startSampler({ everyMs: 15000 }); … await s.stop()`，回样本、峰值与网卡速率（要 `PROMPTCUT_REMOTE`）。
+- **自检当模板**：`scripts/probes/m8/kit-selftest.mjs` 就是 creator / node / all 三种角色的最小写法。
