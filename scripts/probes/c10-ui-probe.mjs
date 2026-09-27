@@ -230,7 +230,7 @@ try {
 
   /* 层表与段清单(替渲染节点写):用户卡与内置卡各一层,4 秒 = 两段,每帧一张小位图 */
   const node = await wsAsCreator();
-  const layerOf = (clipId) => ({ clipId, rk: randomBytes(32).toString('hex'), small: [] });
+  const layerOf = (clipId) => ({ clipId, rk: randomBytes(32).toString('hex'), ck: randomBytes(32).toString('hex'), small: [], full: [] });
   const layers = [layerOf(setup.u), layerOf(setup.b)];
   const count = 4 * setup.fps;
   for (const L of layers) {
@@ -238,7 +238,9 @@ try {
       const frames = [], small = [];
       for (let f = from; f <= to; f++) {
         const h = randomBytes(32).toString('hex');
-        frames.push([f, randomBytes(32).toString('hex'), 200]);
+        const fh = randomBytes(32).toString('hex');
+        frames.push([f, fh, 200]);
+        L.full.push(fh);
         small.push([f, h, 20]);
         L.small.push(h);
       }
@@ -246,18 +248,20 @@ try {
       check(r.type === 'content.stored', '写段清单', r);
     }
   }
-  const map = { v: 1, kind: 'layer-map', projectId: setup.projectId, fps: setup.fps, width: 1920, height: 1080, span: count / 2, at: Date.now(),
-    layers: layers.map((L) => ({ clipId: L.clipId, kind: 'html', key: L.rk, tier: 'shared', resultKey: L.rk, dirKey: L.rk, entryKey: null, firstFrame: 0, count })) };
+  // 层表 v 2(C10 契约第 18 节第 3 条):普通档只认带内容键与产出环境指纹的层,取原尺寸 snap/(不再取小尺寸 px/)
+  const map = { v: 2, kind: 'layer-map', projectId: setup.projectId, fps: setup.fps, width: 1920, height: 1080, span: count / 2, at: Date.now(),
+    layers: layers.map((L) => ({ clipId: L.clipId, kind: 'html', key: L.rk, tier: 'shared', resultKey: L.rk, dirKey: L.rk, entryKey: null, firstFrame: 0, count, contentKey: L.ck, envFingerprint: 'c10ui0probe0fp00' })) };
   const rm = await node.ask({ type: 'content.put', kind: 'snapshot-manifest', key: `layers:${setup.projectId}`, body: map });
   check(rm.type === 'content.stored', '写层表', rm);
   node.close();
 
   /* ============================================================ A6 用户卡 */
   await sleep(8000); // 层表每几秒轮询一次;预取按播放头前后 2 秒
-  const pxReq = (hashes) => px1.log.filter((r) => /\/media\/api\/asset\/px\//.test(r.p) && hashes.some((h) => r.p.endsWith(h))).length;
+  // 普通档取原尺寸 snap/(C10 第 5 节);用户卡那一层 snap/ 与 px/ 都不该有请求
+  const assetReq = (hashes) => px1.log.filter((r) => /\/media\/api\/asset\/(px|snap)\//.test(r.p) && hashes.some((h) => r.p.endsWith(h))).length;
   const a6 = {};
-  a6.pxUser = pxReq(layers[0].small);
-  a6.pxBuiltin = pxReq(layers[1].small);
+  a6.pxUser = assetReq([...layers[0].small, ...layers[0].full]);
+  a6.pxBuiltin = assetReq(layers[1].full);
   a6.online = await A.evaluate(() => window.__pcOnlineSnapshots?.() ?? null);
   const readyOf = (id) => a6.online?.layers?.find((l) => l.clipId === id)?.ready ?? null;
   a6.readyUser = readyOf(setup.u);
@@ -275,10 +279,11 @@ try {
   check(a6.badges.user && !a6.badges.builtin, 'A6 时间轴徽标只在用户卡片段上', a6.badges);
   check(a6.badges.title === TEXT.custom, 'A6 徽标悬停文案', a6.badges.title);
   check(a6.stage?.fixed >= 1 && /需要本地 PC 渲染辅助/.test(a6.stage?.text ?? ''), 'A6 舞台常驻「需要本地 PC 渲染辅助」', a6.stage);
-  check(a6.pxUser === 0, 'A6 用户卡那一层一个 px 请求都没有', a6.pxUser);
-  check(a6.pxBuiltin > 0, 'A6 对照:内置卡那一层照常预取 px', a6.pxBuiltin);
+  check(a6.pxUser === 0, 'A6 用户卡那一层一个快照请求(snap/、px/)都没有', a6.pxUser);
+  check(a6.pxBuiltin > 0, 'A6 对照:内置卡那一层照常预取原尺寸 snap/(取到了清单才会按清单里的哈希去取)', a6.pxBuiltin);
   check(a6.readyUser === 0, 'A6 用户卡那一层不取清单(就绪帧 0)', a6.readyUser);
-  check((a6.readyBuiltin ?? 0) > 0, 'A6 对照:内置卡那一层取到了清单', a6.readyBuiltin);
+  // 普通档的就绪 = 清单里有且块已写进 L2;替身没上传字节(snap/ 回 404),内置卡那一层就绪帧也是 0,这里只核它是在线来源认得的层
+  check(a6.readyBuiltin !== null, 'A6 对照:内置卡那一层是在线来源认得的层(层表 v 2)', a6.readyBuiltin);
   check(!(a6.feed?.picks ?? []).some((p) => p.clipId === setup.u), 'A6 选帧里没有用户卡', a6.feed);
   // 悬停出全文:鼠标移到徽标上(原生 title 提示),截图
   const badge = await A.$(`[data-clip-id="${setup.u}"] [data-pc="clip-custom-card"]`);
