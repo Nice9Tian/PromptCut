@@ -874,7 +874,8 @@ export async function enterShared(candidate: Candidate, cred: EnterCredentials):
         link.send({ type: "shared.watch" });
         link.send({ type: "events.list", projectId: candidate.projectId });
         // C6.6:这个共享项目的素材服务(服务地址登记里的 asset)当作当前连接的远程素材服务
-        void connectSharedAssets(link, candidate.base);
+        // 在线浏览器模式:素材服务与本页同源,也要认(c10a;assetTiers.pickAssetEndpoint)
+        void connectSharedAssets(link, candidate.base, { online: ONLINE });
         resolve("open");
       },
       onClosed: (info) => {

@@ -84,6 +84,13 @@ test("T5-shared-1:从服务地址登记里挑素材服务:优先和文档服务�
   assert.equal(T.pickAssetEndpoint(null, "http://x/", "h"), null);
 });
 
+test("T5-shared-1b:在线浏览器模式认同源的素材服务(页面、文档服务、素材服务同在托管端一个源下,c10a)", () => {
+  const eps = [{ kind: "asset", urls: ["https://8-219-80-16.sslip.io/media/api/asset"] }];
+  const doc = "https://8-219-80-16.sslip.io/hosted/";
+  assert.equal(T.pickAssetEndpoint(eps, doc, "8-219-80-16.sslip.io"), null, "桌面运行环境:同主机的算本机自己");
+  assert.equal(T.pickAssetEndpoint(eps, doc, "8-219-80-16.sslip.io", { online: true }), "https://8-219-80-16.sslip.io/media/api/asset");
+});
+
 test("T5-shared-2:素材票据经文档服务连接取,剩 1/3 有效期才换新的", async () => {
   let now = 0, n = 0;
   const link = { request: async (msg) => { n++; assert.deepEqual(msg, { type: "auth.ticket", kind: "asset", access: "r" }); return { type: "auth.ticket.ok", ticket: `t${n}`, exp: now + 15 * 60_000 }; } };

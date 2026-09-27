@@ -324,8 +324,12 @@ export function assetTicketSource(link: LinkLike, now: () => number = Date.now):
 /**
  * 从文档服务的服务地址登记(`service.watch`,kind `asset`)里挑这个共享项目的素材服务:
  * 优先和文档服务同一台主机的那一个;指向本页面自己的(本机就是主机)不算远程。
+ *
+ * 在线浏览器模式(`online`)不排除同主机的:在线页面、文档服务、素材服务都在托管端的同一个源下
+ * (nginx 的 `/editor`、`/hosted/`、`/media/`,c10a 契约第 2 节),同源的素材服务正是远端那一个,
+ * 本页面自己并没有素材服务。
  */
-export function pickAssetEndpoint(endpoints: unknown, docBase: string, selfHost: string): string | null {
+export function pickAssetEndpoint(endpoints: unknown, docBase: string, selfHost: string, { online = false }: { online?: boolean } = {}): string | null {
   const urls: string[] = [];
   for (const e of Array.isArray(endpoints) ? endpoints : []) {
     const rec = e as { kind?: unknown; urls?: unknown };
@@ -334,20 +338,21 @@ export function pickAssetEndpoint(endpoints: unknown, docBase: string, selfHost:
   }
   let docHost = "";
   try { docHost = new URL(docBase).hostname; } catch { /* 留空 */ }
-  const ok = urls.filter((u) => { try { return new URL(u).host !== selfHost; } catch { return false; } });
+  const ok = urls.filter((u) => { try { return online || new URL(u).host !== selfHost; } catch { return false; } });
   return ok.find((u) => { try { return new URL(u).hostname === docHost; } catch { return false; } }) ?? ok[0] ?? null;
 }
 
 /**
  * 进入共享项目后调:从服务地址登记里挑素材服务、设成当前远程素材服务。挑不到(本机就是主机、
  * 或主机没登记素材服务)就留在本地素材服务。回挑中的基址。
+ * `online`:在线浏览器模式(调用方按 `mode.ts` 的 `ONLINE` 给;本模块会被 Node 单测载入,不静态引 `mode.ts`)。
  */
-export async function connectSharedAssets(link: LinkLike, docBase: string): Promise<string | null> {
+export async function connectSharedAssets(link: LinkLike, docBase: string, { online = false }: { online?: boolean } = {}): Promise<string | null> {
   let base: string | null = null;
   docLink = link;
   try {
     const r = await link.request({ type: "service.watch", kinds: ["asset"] });
-    base = pickAssetEndpoint(r.endpoints, docBase, typeof location === "undefined" ? "" : location.host);
+    base = pickAssetEndpoint(r.endpoints, docBase, typeof location === "undefined" ? "" : location.host, { online });
   } catch { /* 取不到登记:留在本地 */ }
   setRemoteAssets(base ? { base, ticket: assetTicketSource(link) } : null);
   stopUploadTarget?.();
