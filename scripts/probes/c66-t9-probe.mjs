@@ -919,12 +919,26 @@ async function runObserver(out) {
     check(orig && orig.w === 1920, '[observer] 换档后显示的是 1920 宽的原尺寸', orig?.w);
     check(!seq.some((s, i) => i > 0 && s.tier === 'small' && seq.slice(0, i).some((x) => x.tier === 'original')), '[observer] 换到原尺寸之后没有退回小尺寸', seq);
     if (sampling) {
-      await delay(300);
-      const samples = await (await front())?.evaluate(() => { window.__t9Sampling = false; return window.__t9Samples.splice(0); }).catch(() => []) ?? [];
+      // 换档之后再采一段:舞台 iframe 在无头浏览器里负载重时每秒只画十来帧,固定等 300 ms 只够两三帧。
+      // 等到换档后的原尺寸样本至少 5 个、总样本至少 10 个(最多 5 s)
+      const smallKey = cfg.tiers.small.slice(0, 8);
+      const origKey = cfg.tiers.original.slice(0, 8);
+      await until('[observer] 换档前后的逐帧样本够数', async () => {
+        const n = await (await front())?.evaluate((k) => {
+          const s = window.__t9Samples ?? [];
+          return { total: s.length, after: s.filter((x) => x.src === k).length };
+        }, origKey).catch(() => null);
+        return n && n.total >= 10 && n.after >= 5 ? n : null;
+      }, 5_000, 100);
+      const samples = await (await front())?.evaluate(() => { window.__t9Sampling = false; return (window.__t9Samples ?? []).splice(0); }).catch(() => []) ?? [];
       const black = samples.filter((s) => !s.shown || s.rs < 2 || !(s.luma > 16));
       const idxs = [...new Set(samples.filter((s) => Number.isInteger(s.idx)).map((s) => s.idx))];
-      out.swapSamples = { n: samples.length, black: black.length, idxSeen: idxs, srcs: [...new Set(samples.map((s) => s.src))] };
-      check(samples.length > 10 && black.length === 0, '[observer] 换档期间逐帧采样无黑帧 / 无空档', black.slice(0, 3));
+      const firstOrig = samples.findIndex((s) => s.src === origKey);
+      const coversSwap = firstOrig > 0 && samples.slice(0, firstOrig).some((s) => s.src === smallKey);
+      out.swapSamples = { n: samples.length, black: black.length, idxSeen: idxs, srcs: [...new Set(samples.map((s) => s.src))], smallBeforeSwap: firstOrig > 0 ? firstOrig : 0,
+        spanMs: samples.length > 1 ? Math.round(samples.at(-1).at - samples[0].at) : 0, coversSwap };
+      check(samples.length >= 10 && coversSwap, '[observer] 逐帧采样覆盖了换档(先有小尺寸样本、后有原尺寸样本)', out.swapSamples);
+      check(black.length === 0, '[observer] 换档期间逐帧采样无黑帧 / 无空档', black.slice(0, 3));
       check(idxs.every((i) => Math.abs(i - EXPECT_IDX) <= 1), '[observer] 换档期间画面一直停在同一时刻', idxs);
     } else out.swapSamples = null;
     out.playhead = await P(page, async () => { const S = await import('/src/store/project.ts'); return { t: S.getState().t, log: window.__t9TLog ?? null }; }).catch((e) => ({ error: String(e?.message ?? e) }));
