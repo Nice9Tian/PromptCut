@@ -19,6 +19,8 @@ import {
   type UndoNoticeView,
 } from "./syncManager";
 import { clipOfEntity, entityLabel, writerLabel } from "./labels";
+import { ONLINE } from "../../online/mode";
+import { OFFLINE_UNSENT_TEXT, offlineUnsent } from "./onlineStatus";
 import { foldLine, NOTICE_FOLD_AT, undoNoticeTitle } from "../undoNotice";
 import "./sync.css";
 
@@ -123,6 +125,11 @@ function Toasts() {
       {toasts.map((t) => (
         <div key={t.id} className={`pc-toast${t.tone === "warn" ? " pc-toast--warn" : ""}`} role="status">
           <span>{t.text}</span>
+          {t.action ? (
+            <button type="button" className="pc-toast-action" data-pc={t.action.pc} onClick={t.action.run}>
+              {t.action.label}
+            </button>
+          ) : null}
           <button type="button" className="pc-undo-bar-close" aria-label="关闭" onClick={() => dismissToast(t.id)}>
             ×
           </button>
@@ -205,6 +212,30 @@ function BlockingDialog() {
   );
 }
 
+/**
+ * 在线页面离线且有未提交的改动(C10 契约第 10 节,表 A「常驻提示」):顶栏下方常驻一行提示,
+ * 同时挂浏览器原生的离开确认(`beforeunload`)。在线页面不把离线修改存进浏览器(F3 在线版推迟),关页面就丢。
+ */
+function OfflineUnsentNotice() {
+  const on = useSync((v) => offlineUnsent(v.status, v.unconfirmed));
+  useEffect(() => {
+    if (!on) return;
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = ""; // 旧浏览器要设它才弹原生的离开确认
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [on]);
+  if (!on) return null;
+  return createPortal(
+    <div className="pc-offline-unsent" role="status" data-pc="offline-unsent">
+      {OFFLINE_UNSENT_TEXT}
+    </div>,
+    document.body,
+  );
+}
+
 /** 挂在编辑器根上一次 */
 export function SyncOverlays() {
   const notice = useSync((v) => v.notice);
@@ -212,6 +243,7 @@ export function SyncOverlays() {
     <>
       {notice ? <UndoNoticeBar n={notice} /> : null}
       <Toasts />
+      {ONLINE ? <OfflineUnsentNotice /> : null}
       <OfflineDialog />
       <BlockingDialog />
     </>

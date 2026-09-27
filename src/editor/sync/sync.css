@@ -713,3 +713,54 @@
   max-height: min(92vh, 960px);
   overflow: auto;
 }
+
+/* 在线页面(C10 契约第 10 节):顶栏的状态措辞较长,限宽省略,悬停看全文 */
+.pc-sync-chip--online {
+  max-width: min(460px, 38vw);
+}
+.pc-sync-chip-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pc-sync-chip--recover {
+  color: var(--ui-accent);
+  cursor: default;
+}
+.pc-sync-chip--backups {
+  color: var(--ui-fg);
+}
+/* 气泡上的按钮(在线页面的「下载备份」) */
+.pc-toast-action {
+  flex: 0 0 auto;
+  align-self: center;
+  height: 24px;
+  padding: 0 10px;
+  border-radius: 12px;
+  border: 1px solid var(--ui-border-strong);
+  background: var(--ui-panel-2);
+  color: var(--ui-fg);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.pc-toast-action:hover {
+  background: var(--ui-float);
+}
+/* 离线且有未提交的改动:常驻提示,顶栏下方居中,不挡操作 */
+.pc-offline-unsent {
+  position: fixed;
+  top: 52px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 950;
+  max-width: calc(100vw - 32px);
+  padding: 6px 14px;
+  border-radius: 14px;
+  border: 1px solid var(--ui-warn, #e0a030);
+  background: var(--ui-panel);
+  color: var(--ui-warn, #e0a030);
+  font-size: 12.5px;
+  box-shadow: var(--ui-shadow, 0 6px 18px rgba(0, 0, 0, 0.35));
+  pointer-events: none;
+}

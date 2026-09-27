@@ -3,7 +3,9 @@ import { ClipVolumeDialog } from "./ClipVolumeDialog";
 import { useMemo, useState } from "react";
 import { useTimelineContext } from "./TimelineContext";
 import { actions, useStore, getState } from "../../store/project";
-import { getCard } from "../../kernel/registry";
+import { getCard, userCardSources } from "../../kernel/registry";
+import { unsupportedHere } from "../../render/placeholderHost";
+import { ONLINE_CUSTOM_CARD_TEXT } from "../../online/pageFlag";
 import { snapTime, isOccupied, getGap, xOfTime, formatTime, ROW_SIZE_H } from "./utils";
 import { ShotMarkers } from "./ShotMarkers";
 import { TrackClip, Track } from "../../kernel/project";
@@ -24,6 +26,9 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
   const isSelected = selection.includes(clip.id);
   const cardDef = clip.cardId ? getCard(clip.cardId) : null;
   const label = clip.cardId ? (cardDef ? cardDef.name : "未知卡片") : clip.label;
+  // 在线浏览器模式下这台设备渲染不了的卡(用户卡、图卡;C10 契约第 9 节):片段里挂个小徽标,悬停出全文。
+  // 片段照常可选中、移动、删除、改参数(只是个提示,不挡任何操作)
+  const customCard = !!cardDef && unsupportedHere(clip.cardId, cardDef, (id) => Object.prototype.hasOwnProperty.call(userCardSources().fileOf, id));
   // 按素材类型上色:文字 / 视频 / 转场… 各一档,一眼读得出片段是什么
   const trackKind = clipTrackKind(clip, (id) => getState().project.media.find((m) => m.id === id));
   // 这一段是不是「有画面的素材」:只有它能转成声音(卡片、图片、已经是声音的都不行)
@@ -256,6 +261,15 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
           <span className="pc-clip-link" title={lock.message}>
             <svg width="9" height="9" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
               <path d="M4.6 7.4L7.4 4.6M5 2.6l.9-.9a2.3 2.3 0 013.3 3.3l-.9.9M7 9.4l-.9.9a2.3 2.3 0 01-3.3-3.3l.9-.9" />
+            </svg>
+          </span>
+        )}
+
+        {customCard && (
+          <span className="pc-clip-custom" data-pc="clip-custom-card" title={ONLINE_CUSTOM_CARD_TEXT} aria-label={ONLINE_CUSTOM_CARD_TEXT}>
+            <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <rect x="1.5" y="2" width="9" height="6" rx="1" />
+              <path d="M4.5 10.5h3M6 8v2.5M1.5 1.5l9 8" />
             </svg>
           </span>
         )}
