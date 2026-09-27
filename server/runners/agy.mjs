@@ -1,6 +1,7 @@
 import { spawnCli, resolveExe, lineSplitter, probeVersion } from './index.mjs';
 import { execFileSync } from 'node:child_process';
 import { cliCommand, cliEnv } from './cli-runtime.mjs';
+import { pairingSession } from '../agent/call-pairing.mjs';
 
 function runAgy(exe, args, options) {
   const invocation = cliCommand(exe, args);
@@ -244,6 +245,15 @@ function _startRun(opts) {
     const mcpEnv = opts.mcp?.env || {};
     childController = spawnCli(exePath, args, { cwd: opts.cwd, env: { ...process.env, ...mcpEnv } }, opts.onEvent, 'Antigravity');
     let emitted = '';
+    /*
+     * callId:`agy:<对话 id>:<步号>`。agy 调 MCP 时在 tools/call 的 _meta 里带 conversation_id 和
+     * progressToken "<uuid>:<步号>",步号就是这里 step_update 的 step_index(续跑同一对话时接着涨,不会重号),
+     * mcp-server.mjs 按同样的写法拼出提示;这边经 opts.callPairing 报到,编辑器核对工具名和参数一致后配上
+     * (server/agent/call-pairing.mjs)。页面 AI 栏按它把文档服务的工具调用事件对上聊天记录里的这一条。
+     */
+    const pairing = pairingSession(opts.callPairing);
+    let convId = opts.sessionId || null;
+    childController.donePromise.then(() => pairing.close(), () => pairing.close());
 
     // 提示词从这里进去(见上面 args 的说明)。EPIPE 忽略:进程要是已经自己退了,
     // 真正的原因在 stderr / result 事件里,不该被一个写管道失败盖过去。
@@ -260,6 +270,8 @@ function _startRun(opts) {
       try {
         const ev = JSON.parse(line);
         if (ev.event === 'init' && ev.conversation_id) {
+          convId = ev.conversation_id;
+          pairing.open(`agy:${convId}`);
           childController.safeOnEvent({ type: 'session', sessionId: ev.conversation_id });
         } else if (ev.event === 'step_update' && ev.step_update) {
            const su = ev.step_update;
@@ -269,20 +281,29 @@ function _startRun(opts) {
               // 这一步到底是不是在调 PromptCut 的工具。agy 自己也有一大堆内建工具
               // (run_command / browser_* / …),它们不走 MCP,被拒的处理方式完全不同
               const isMcp = su.tool_name === 'call_mcp_tool';
+              const ours = isMcp && (tInput.ServerName === undefined || tInput.ServerName === 'promptcut');
               if (isMcp) {
                   tName = tInput.ToolName || 'call_mcp_tool';
                   tInput = tInput.Arguments || tInput;
               }
+              const conv = su.conversation_id || convId;
+              const callId = conv && Number.isInteger(su.step_index) ? `agy:${conv}:${su.step_index}` : undefined;
+              const call = callId ? { callId } : {};
+              if (callId && su.state !== 'ACTIVE') pairing.settle(callId);
 
               if (su.state === 'ACTIVE') {
-                 childController.safeOnEvent({ type: 'tool_call', name: tName, input: tInput });
+                 if (callId && ours) {
+                    pairing.open(`agy:${conv}`); // 没见到 init 时补开(已开的不重开)
+                    pairing.announce(`agy:${conv}`, tName, tInput, callId);
+                 }
+                 childController.safeOnEvent({ type: 'tool_call', name: tName, input: tInput, ...call });
               } else if (su.state === 'DONE') {
                  let outputStr = 'done';
                  if (su.tool_info?.output !== undefined) {
                      if (typeof su.tool_info.output === 'string') outputStr = su.tool_info.output;
                      else outputStr = JSON.stringify(su.tool_info.output);
                  }
-                 childController.safeOnEvent({ type: 'tool_result', name: tName, ok: true, summary: outputStr.substring(0, 300) });
+                 childController.safeOnEvent({ type: 'tool_result', name: tName, ok: true, summary: outputStr.substring(0, 300), ...call });
               } else if (su.state === 'ERROR') {
                  const msg = su.tool_info?.error?.message || '';
                  /*
@@ -321,10 +342,10 @@ function _startRun(opts) {
                     if (opts.onPermissionDenied) opts.onPermissionDenied();
                     childController.safeOnEvent({ type: 'status', text: `agy 拒绝了 MCP 工具调用。请打开 AI 设置（右栏齿轮），点『授权 PromptCut 工具』，然后重试。` });
                  } else if (denied) {
-                    childController.safeOnEvent({ type: 'tool_result', name: tName, ok: false, summary: `Antigravity 自己拒绝了这个工具(它的内建工具,不是 PromptCut 的):${msg}` });
+                    childController.safeOnEvent({ type: 'tool_result', name: tName, ok: false, summary: `Antigravity 自己拒绝了这个工具(它的内建工具,不是 PromptCut 的):${msg}`, ...call });
                     childController.safeOnEvent({ type: 'status', text: `Antigravity 拦下了它自己的 ${tName}——无人值守模式下没法弹窗征求同意。PromptCut 的工具不受影响,让它改用 PromptCut 的工具做同一件事即可。` });
                  } else {
-                    childController.safeOnEvent({ type: 'tool_result', name: tName, ok: false, summary: msg });
+                    childController.safeOnEvent({ type: 'tool_result', name: tName, ok: false, summary: msg, ...call });
                  }
               }
            } else {

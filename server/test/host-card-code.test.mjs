@@ -1,5 +1,5 @@
 /**
- * 独立渲染主机不再因用户卡分池(c66-host-cards;C6.6 T9 暴露的代码与语义冲突,报告 `docs/reports/AGENT-c66-host-cards.md`)。
+ * 独立渲染主机不再因用户卡分池(c66-host-cards;C6.6 T9 暴露的代码与语义冲突,报告 `docs/archive/agent-reports/AGENT-c66-host-cards.md`)。
  *
  * 语义:独立渲染主机「能认领:全部」(`product/platforms.md`「渲染节点」);每个任务标明要什么能力,节点按自身能力过滤
  * (`mechanism/document-service.md`「渲染任务队列」);用户卡与改过的卡的源码经内容库 `card-source` 同步,另一端自动装上

@@ -293,7 +293,7 @@ Gemini 稿（313 行，2026-09-26）提出的疑点，主会话裁定如下：
 **页面真接线**
 
 - 页面挂上 DocSync 后调 `/api/agent/bind`（本机 `local`，共享 `ticket`）；SSE 的 `agent.ticket` 由页面在自己的共享连接上签 `auth.ticket { kind: 'conn', role: 'agent', conversation }` 交回；留在页面的工具回包带这次调用期间本页面发出的提交 `opIds`：c65-agent 给了接口、c65-editor 没接，不接的话 Agent 写工具在真实页面里不生效。
-- 完成事件带 `opId`、`callId`、`inverse`、`rev`、`actor`；`callId` 是模型那一侧这次工具调用的 id（Claude Code 在 MCP `tools/call` 的 `_meta["claudecode/toolUseId"]` 里带，API 直连用 tool_use id），创建事件也带：AI 栏按它把事件对上聊天记录里的那次工具调用；codex、agy 那两路拿不到，只能在操作记录里撤。
+- 完成事件带 `opId`、`callId`、`inverse`、`rev`、`actor`；`callId` 是模型那一侧这次工具调用的 id（Claude Code 在 MCP `tools/call` 的 `_meta["claudecode/toolUseId"]` 里带，API 直连用 tool_use id），创建事件也带：AI 栏按它把事件对上聊天记录里的那次工具调用；codex、agy 两路的 `tools/call` 不带这个 id，由编辑器按配对线索补上（2026-09-27，`server/agent/call-pairing.mjs` 文件头）：codex 按 thread、工具名、参数配；agy 按对话 id 与步号拼出 id，再核对工具名和参数；宁可不配、不许配错，配不上的只能在操作记录里撤。
 - AI 栏按事件 id 更新记录：新增「Agent 操作记录」（`AgentEventLog.tsx`），创建、完成两条按 `eventId` 合成一条，只存摘要；列表行高固定、虚拟化（只渲染可见的十几行）。聊天记录本身沿用 `.ai-row` 的 `content-visibility` 与逐条 memo（已实测过 1200 次工具调用下每片段 13 ms），不另做窗口化：不论调用来自本页面的聊天、命令行、别的页面还是别人的 Agent，都得在 AI 栏里看得到、撤得了；聊天列表的渲染代价此前已解决。
 - 「撤销这一步」出现在操作记录与聊天操作卡上（写进了项目的那一条），不二次确认，撤成后变灰「已撤销」。
 

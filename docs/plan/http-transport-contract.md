@@ -309,3 +309,11 @@
 `claude/coord-mailbox` 只补说明，队列不变；消息种类随主计划第 6.4b 节加 `status`（2026-09-27，已合入 main `c637fbf` 并部署）。PC 与笔记本之间不走信箱，用 App 的跨会话消息（主计划第 6.4 节）：
 - 文件头注明：在 Claude Code 里等消息，用一条后台运行的 `wait` 命令，由它内部循环长轮询，不要让模型逐次轮询；
 - 阿里云上的 `probe-coord` 用新版本重启，`mail.jsonl` 原样保留，信箱令牌不变。
+
+## 16. 开工后的裁定（2026-09-27，PC 主会话）
+
+`claude/ht-tests` 按本契约写测试时提出，主会话裁定如下〔裁〕：
+
+1. **WebSocket 上的接续失败**（改第 4.1 节「WebSocket 在握手里回这两个状态码」）：浏览器与 Node 的 `WebSocket` 都读不到握手的状态码，客户端分不清「会话没了」与网络问题。改为服务端先接受升级、紧接着以 **4404**（会话不存在，对应 404 `no-session`）或 **4410**（会话已结束，对应 410 `session-closed`，`reason` 带原关闭码）关闭；客户端收到这两个关闭码就丢掉旧会话、报 `onClose`、重新建会话，不必等保留期满。HTTP（HT-b）仍按第 6 节回 404 / 410。
+2. **HT-a 的验收范围**：第 11 节 HT1、HT4 里 HTTP 的条目归 HT-b，HT-a 只验 WebSocket 那部分（主执行计划第 7 节 HT-a 同步写明）。
+3. `server/test/ht-kit.mjs` 顶部的假设 H1～H14（如选项名 `retainMs`、`/healthz.sessions` 对旧客户端的计数、`onOpen` 的时机）在集成时按实现对账，不改测试的判据。

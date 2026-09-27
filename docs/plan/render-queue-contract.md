@@ -442,7 +442,7 @@ export function splitPlan(args)                                        // → Ta
 
 输出顺序：先快照（按 `cardPlan` 顺序、段升序），后轨道流（按 `streams` 顺序、段升序）。同一个 `id` 只出现一次（先出现的留下）。
 
-**〔c66-host-cards 改，2026-09-27〕代码版本与卡片代码分开**（C6.6 T9 暴露的代码与语义冲突：独立渲染主机「能认领：全部」，原来只要缺一张与任务无关的用户卡就一个任务也认领不了。报告 `docs/reports/AGENT-c66-host-cards.md`）：
+**〔c66-host-cards 改，2026-09-27〕代码版本与卡片代码分开**（C6.6 T9 暴露的代码与语义冲突：独立渲染主机「能认领：全部」，原来只要缺一张与任务无关的用户卡就一个任务也认领不了。报告 `docs/archive/agent-reports/AGENT-c66-host-cards.md`）：
 
 - `codeVersion`（`frameCode(root)`）不再含 `src/cards/user/` 下除装载入口 `index.ts` 以外的文件；改动层本来就不在里面。哈希前换行统一成 LF（Windows、Linux 检出同一个版本）。
 - `cardSourceVersions` 由切分节点的管线给出（`planForQueue` 的 PlanContext，原来恒为 `{}`）：这一版项目用到的卡里，用户卡与闭包里有改动层文件的卡，`{ cardId: 身份 }`。身份 = 定义文件加它一路 import 到的卡片 / 部件文件，逐个记「仓库相对路径 + 生效内容的内容哈希（与内容库 `card-source` 同一算法）」，整体 sha256 取前 32 位（`vite-plugin-cards.ts` 的 `cardCodeIdentity`）。没改过的内置卡由 `codeVersion` 覆盖，不列。

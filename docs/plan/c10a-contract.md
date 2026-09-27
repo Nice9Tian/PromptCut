@@ -402,3 +402,16 @@ Gemini 出稿的文案逐条核对了语义：用语一致，没有引入语义�
 - **导出**：只有 `/api/export` 加 Chrome 加 ffmpeg 这一条，浏览器里没有独立导出。可复用 `renderMix.ts`、`exportClock.ts`、`proc.ts` 的另存为辅助。
 - **`hostCapabilities`**：`{ prerender, offscreenGl, lowMemory, stageId }`，其中 `lowMemory` 现在是 `deviceMemory <= 4` 或 Safari。
 - **二维码**：`server/qr.mjs` 已有，零依赖，可在浏览器跑。
+
+## 16. 开工后的裁定（2026-09-27，PC 主会话）
+
+`claude/c10a-tests` 按本契约写测试时提出的空白处，主会话裁定如下〔裁〕，已同时告知 `c10a-web`、`c10a-lowmem` 两个分支。三个分支都从 C6.6 集成分支 `claude/c66-integ` 的 `851ffe9` 拉出，与 C6.6 的 T9 重叠进行〔裁：排期，不跳过任何验收〕；C6.6 合入 main 后三个分支合并 main。
+
+1. **图片、音频在低内存档**：C6.6 只给视频生成素材小尺寸。低内存档对图片、音频用它们唯一的一档照常显示、出声；第 8 节「素材只拉小尺寸、没有就占位」只对视频生效。理由：语义「只看素材小尺寸」的本意是不拉重的原片，单档素材本来只有这一档；否则图片永远是占位、声音永远没有。
+2. **限速**：HTTP 端点被限速回 429，带 `Retry-After` 头（秒）和回包字段 `{ error: 'rate-limited', retryAfter }`；表 A 的秒数取它。
+3. **邀请码的形状**：`expiresAt` 是毫秒时间戳；`invite-status` 在 `shared.admin.ok` 里平铺 `{ op, active, expiresAt, maxUses, used, revokedAt }`。
+4. **限定进入的扣次**（改第 5 节「限定进入在兑换时就扣」）：`redeem` 只在用户名在名单里时才扣次数，回包不论在不在名单一律相同，不泄露名单。理由：兑换时不核对口令，拿到链接的人换设备名就能耗光次数。
+5. **格式不对的邀请码**：长度不是 43 或字符集不是 base64url，一律回 404 `invite-invalid`，并进「一个口径」，也计入限速。
+6. **`/api` 守卫**（改第 2 节「开发期加一个守卫」）：只要 `ONLINE` 为真就装，在线的开发构建与生产构建都装，不另设开关；桌面运行环境不装。
+7. **分层**：`src/online/` 属于 render 这一层，只引 kernel、render 与同目录，不引 editor、mcp、ai；`src/layering.test.mjs` 的禁引表加 `online` 一行。
+8. **单舞台**：`ONLINE` 时 `dualStage()` 恒为假（页面上有舞台端口表也一样），可见舞台 A 带 `preview=stage` 走 live 变体（第 8.1 节）。
