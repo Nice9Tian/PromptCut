@@ -193,7 +193,8 @@ async function mods() {
     import('../../server/render-node/ws-transport.mjs'), import('../../server/render-node/endpoint.mjs'),
     import('../../server/auth/ticket-source.mjs'), import('../../server/asset-store/client.mjs'),
   ]);
-  return { ...route, ...client, ...shared, ...ws, ...endpoint, ...ticket, ...asset };
+  // route 与 client 都导出 createSharedProject:要 route 的那个(按 where 分派)
+  return { ...client, ...route, ...shared, ...ws, ...endpoint, ...ticket, ...asset, createSharedProject: route.createSharedProject };
 }
 
 /** 请求 / 回包按 reqId 配对(同 shared-project-probe) */
