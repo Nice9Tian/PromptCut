@@ -49,12 +49,38 @@
 
 ## 验证
 
-（命令、原始结果见下；截图与产物在 scratchpad。）
+（截图与产物在主会话 scratchpad 的 `probe-online/`、`probe-small/`、`probe-compare2/`。）
 
-VERIFY_PLACEHOLDER
+| 项 | 命令 | 结果 |
+|---|---|---|
+| 类型检查 | `npx tsc -b --force` | 退出码 0,零错误 |
+| 全量测试 | `npm test` | 退出码 0;tests 3114,pass 3113,fail 0,skipped 1(`集成:/api/cards/layout 对真实项目返回整数框`,需要 5190 的那一条) |
+| 导出确定性 | `node scripts/verify-determinism.mjs --url "http://127.0.0.1:5640/?export=1"` | 退出码 0;Total Frames 1800,Identical 1800,Different 0(帧写在本 worktree 的 `out/verify-a|b`) |
+| 本分支单测 | 下面各文件 | 全过 |
+
+本分支新增 / 改的单测(都在 `npm test` 里):
+
+- `src/online/lowMemory.test.mjs` LM1～LM10:注入 `deviceMemory`、屏幕尺寸、触点数、`pointer` / `any-pointer` 的桩;覆盖值;桌面恒普通档;设置下次载入生效与切到普通的提示;`webglcontextlost` 一次改判、解码失败连续 3 次改判且中间成功清零、每会话只提示一次;表 C 原文。
+- `src/render/mediaTierLowMemory.test.mjs` LMT1～LMT7:低内存档只给小尺寸、小尺寸没到齐等待上传方不回退、没有小尺寸的视频不给地址、图片音频照常、普通档不变、模块级策略、在线远程地址带查询串票据。
+- `src/editor/stageSwap.test.mjs` 末条:低内存档下 `runSettleSwap` / `runPlayingSwap` 一条 RPC、一个后台任务都不发。
+- `server/test/small-tier.test.mjs` ST1～ST9:尺寸规则(16:9 → 800×450、9:16 → 337×600、不放大、框按同一缩放比)、WebP 头、清单两档分开(没有小位图时清单一字不差、只有小位图的帧不进任何表)、`small` 形状核对、两档推送(HTML 进 `snap`、WebP 进 `px`,推送不渲染)、完成条件(列清单前等小尺寸落定)、什么时候排(没配推送队列不排、拉来的不排、攒太多只留最新)、层表内容、层表写入(攒、后写的赢、相同不重写、失败退避重试)。
+- `src/render/onlineSnapshotSource.test.mjs` OS1～OS7:只取播放头前后 2 秒的段、就绪 = 有小位图的帧、选帧与本地模式同一条路、只拉 `px/<hash>` 且带票据、缓存命中、换键与撤层、没满的段 2 秒后再取、LRU 按字节、没连上不抛。
+- `src/export/mp4Mux.test.mjs` MX1～MX4(用 ffmpeg 造 H.264 / AAC 样本,ffprobe 核对):只有视频轨 90 帧 3 秒 320×240 `30/1`;视频 50 帧 + AAC 48 kHz 双声道,帧数与时长对得上;60 fps 竖屏 120 帧、关键帧 2 个;mdat 64 位长度回头补、MemorySink 拼接。
+- `src/export/yuv.test.mjs` YUV1～YUV3:BT.601 有限范围的纯色值;奇数宽高;与 ffmpeg `rgba → yuv420p` 逐字节比误差 ≤ 1。
+
+探针(端口段内,原始输出的关键数):
+
+- `node scripts/probes/lowmem-online-probe.mjs --origin http://127.0.0.1:5643`(在线模式 dev server,Chrome 移动端仿真 412×915、触屏、`deviceMemory: 4`;替身素材服务 5646)→ `ok: true, fails: []`:
+  - G1:`caps.lowMemory: true`;iframe 只有一个 `/?stage=1&id=A&preview=stage`;`(pointer: coarse)` 与 `(any-pointer: coarse)` 都为真;舞台里的取档策略 `lowMemory: true`;没有探针遮罩;没有 `/api/data/costs`、`/api/frames/*` 请求;进入提示照抄表 C。
+  - G2:请求记录 `smallA: 2, origA: 0, origB: 0, px: 2, snap: 0`,票据全是只读票据 —— **网络记录里只有素材小尺寸与预渲染小尺寸**;没有小尺寸的视频显示「等待上传方」;重卡包裹层 `pc-snapshot pc-suppressed`,贴着 800×450 的小位图。
+  - G3:播放 2 秒 `t0: 1 → t1: 2.87`;暂停后重卡仍 `pc-suppressed` 且贴小尺寸,`settling: []`(不追活渲)。
+  - G4:原尺寸没到齐时回「等待上传方:这些素材的原尺寸还没传完,导出只用素材原尺寸,传完后再导出 —— a.mp4」,取消后回「导出已取消」、不出片;到齐后导出 60 帧用时约 30 秒,ffprobe:`h264` 60 帧 2.000 s 1920×1080 + `aac` 94 帧 2.005 s;请求记录 `mediaOrig: 2, snap: 60, smallMedia: 0`(用的是素材原尺寸与预渲染原尺寸);第 30 帧重卡那一层中心像素 `[255, 0, 251]`(原尺寸快照的品红,不是活渲的药丸)。截图 `g2-phone.png`、导出帧 `export-f30.png` 看过:画面左上 960×540 是品红「原尺寸 30」,其余是素材原尺寸。
+- `node scripts/probes/small-tier-probe.mjs --origin http://127.0.0.1:5640`(本进程 FramePipeline + 真 Chrome,推送队列接内存替身)→ `ok: true, fails: []`:S1 60 帧 HTML 旁各有小位图、全部 400×225(框 960×540 × 800/1920)、带 alpha;S2 一段清单 `frames: 60, small: 60`,哈希对得上盘上文件,`snap` 与 `px/webp` 都在素材服务上;S3 层表 `layers:c10a-small-tier-probe` 列着这张卡;S4 关掉小尺寸再跑,`htmlDiff: 0, indexSame: true, keySame: true`,清单不带 `small`。小位图 `frame30.small.webp` 看过:药丸居中,边缘有外发光,透明底。
+- `node scripts/probes/lowmem-export-compare.mjs --origin http://127.0.0.1:5640 --frames 45`(浏览器逐帧导出 vs 桌面 `/api/export`,同一项目:一段带声音的视频 + 金句药丸 + 章节条)→ `ok: true`:两边都是 h264 45 帧 1.5 s + aac;缩到 960×540 逐帧比:**第 0 帧平均绝对误差 2.69、PSNR 32.7 dB;之后稳定在平均绝对误差约 7.4、PSNR 约 19～20 dB**。看过同一帧的两张图:素材层与颜色一致(改成自己换 I420 之后;改之前红色差 23 个色阶);差在两张卡的动画相位 —— 浏览器那一份的药丸与章节条比桌面「走得快」。原因与修法见「没做成的」第一条。浏览器导出 45 帧用时约 23.6 s(推帧 13.7 s、素材 4.7 s、快照 0.8 s、栅格化 0.25 s),桌面约 9.1 s。
 
 ## 没做成的及原因
 
+- **逐帧导出的动画相位漂移(需要主会话批一处越界)**:浏览器里的导出页不受 CDP 帧控制,Motion 的帧循环在模块求值时就抓走了**原始** `requestAnimationFrame`(`exportClock` 的包装够不着它),于是每个真实 vsync 都跑一拍;时间戳虽被钉住,Motion 每拍至少推进 1 ms,一帧要合成约 0.3 秒 ≈ 18 个 vsync,弹簧类动画就越走越快(实测第 0 帧 PSNR 32.7 dB,之后约 19～20 dB)。桌面导出没有这个问题(beginFrame 控制每一拍)。修法:在 `src/render/stageClockEntry.ts`(`main.tsx` 的第一个 import,赶在 Motion 之前)里对 `?export=1&rafControl=1` 装一个手动 rAF 队列、挂 `window.__pcBrowserBeginFrame()`,逐帧导出的合成器用它代替等真 rAF —— 约 15 行,只影响带这个参数的页面。该文件不在契约第 11 节我的清单里,所以没改,**请主会话决定是否放行**。
 - **PNG 快照的小尺寸**（契约第 9 节「PNG 快照：从原图等比缩一次」）：只写了 `renderPng`，没接进管线。PNG 缓存帧（X7 的 `pngs`）在 C10a 里没有消费方（在线页面只贴 HTML 快照的小尺寸），而它们落在 `controls/<key>/mov/frames/`，接进来要动 `MovFrameStore` 的目录与清单格式，超出「只多产一份小位图」的最小改动。建议随 C10 其余。
 - **iOS 上能导出的时长与体积**（契约第 11.1 节要求写进报告）：这台机器没有 iOS 设备，记为待用户项。另有已知风险：Safari 历来对画 foreignObject 的画布置污染位，若 iOS 上 `new VideoFrame(canvas)` 报 SecurityError，这条导出路在 iOS 上走不通（Android Chrome 与桌面 Chrome 实测通）。
 - **导出期间票据续签**：导出页里素材原尺寸的地址是开导出那一刻带的只读票据（15 分钟）；超过 15 分钟的导出中途会 401。10 秒 demo 不受影响；长片要在导出页里定期换地址，未做。
@@ -80,3 +106,23 @@ VERIFY_PLACEHOLDER
 - 契约第 9 节补一句「在线页面按渲染节点写进内容库的层表找每张重卡的清单」，并在内容库加 `layer-map` 类（见偏离第 1 条）。
 - 契约第 11.1 节「逐帧：合成一帧到复用的原尺寸画布」在浏览器里只能靠 `foreignObject` 栅格化 DOM（没有别的不污染画布的办法），建议写明这一点与它的限制：卡片自带的外部字体（KaTeX 等）会退回系统字体；Safari 可能污染画布（iOS 待实测）。
 - 契约第 9 节「生成」建议写明小位图画的是**包裹层的框**里的内容（与快照平面同一块地方），而不是整幅舞台；只有没设框的卡两者相同。
+
+## 文件边界
+
+契约第 11 节我那一行之外动过的文件,都是清单里文件的直接调用方或测试,列在这里供审:
+
+- `src/render/VideoTrack.tsx`、`src/editor/media/assetTiers.ts`:`mediaTier.ts` 的调用处(契约写「`mediaTier.ts` 及其调用处」)。
+- `src/layering.test.mjs`:主会话裁定允许,加 `online` 一行。
+- `src/editor/stageSwap.test.mjs`:给 `stageSwap.ts` 的改动加一条单测。
+- 新建:`src/export/onlineExport.ts`(`exportVideo` 在线分支的本体,放在 `src/export/*`)、`server/bakery/small-bitmap.mjs`、各单测与三支探针(`scripts/probes/lowmem-online-probe.mjs`、`small-tier-probe.mjs`、`lowmem-export-compare.mjs`,名字不带 `c10a-`,不与测试方的文件撞)。
+- 没动:`ProbeGate.tsx`、`snapshotFeed.ts`、`stageBridge.ts`、`syncManager.ts`、`TopBar.tsx`、`main.tsx`、`vite.config.ts`、`src/render/stageClockEntry.ts`、内容库模块。
+
+另:`src/online/mode.ts` 读 `import.meta.env`,Node 的单测里没有它 —— 凡是会被单测载入的模块(`stageRpc.ts`、`mediaTier.ts`、`lowMemory.ts`、`io/index.ts` 等)都不能静态 import 它;本分支在这些地方由调用方传 `online`,或按需 `await import`。集成时 c10a-web 也要守这一条(否则 `C65B-V7-01` 这类载入 `io/index.ts` 的测试会挂,本分支中途踩过)。
+
+## 需要主会话决定的事
+
+1. 是否放行改 `src/render/stageClockEntry.ts`(约 15 行)来消除逐帧导出的动画相位漂移(见「没做成的」第一条)。不放行的话,低内存档导出的卡片动画与桌面导出有相位差,误差如上。
+2. 层表放在 `snapshot-manifest` 类下(键 `layers:<项目 id>`)是权宜;是否在内容库加 `layer-map` 类(集成时改两处:`content.mjs` 的类别表、本分支的两个 `LAYER_MAP_PREFIX` 使用处)。
+3. 「偏离」第 2、4、5 条是否认可。
+4. c10a-web 那边要接的三根线(`TopBar` 的 `target` / `written`、在线时放开同源素材服务、在线进入共享项目时调 `connectSharedAssets`)。
+5. 合并方式:本分支从 `claude/c66-integ` 的 `851ffe9` 起;C6.6 合入 main 后等主会话通知再把 main 合进来(用合并,不 rebase)。
