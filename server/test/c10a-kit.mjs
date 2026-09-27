@@ -237,7 +237,7 @@ export const SMALL_SIZE_FILES = [
 ];
 export const SMALL_SIZE_NAMES = ['smallPrerenderSize', 'prerenderSmallSize', 'smallSize', 'smallSizeOf', 'fitSmall', 'smallDims', 'smallTierSize', 'smallBox'];
 
-/** 找尺寸规则函数（K4）；回 `{ fn, file, name }` 或 null。`server/bakery/` 下的 .mjs 也逐个看 */
+/** 找尺寸规则函数（K4）；回 `{ fn, file, name }`，导出了却载不进来回 `{ file, error }`，没有回 null。`server/bakery/` 下的 .mjs 也逐个看 */
 export async function findSmallSize() {
   const files = [...SMALL_SIZE_FILES];
   try {
@@ -248,10 +248,20 @@ export async function findSmallSize() {
     const src = fs.readFileSync(repoPath(rel), 'utf8');
     if (!SMALL_SIZE_NAMES.some((n) => src.includes(n))) continue; // 不 import 无关的重模块
     let mod;
-    try { mod = await import(repoUrl(rel)); } catch { continue; }
+    try { mod = await import(repoUrl(rel)); } catch (err) {
+      // 文本里导出了这个名字却载不进来：不当「缺失」静默跳过，交给用例报错
+      if (SMALL_SIZE_NAMES.some((n) => exportsName(src, n))) return { file: rel, error: err };
+      continue;
+    }
     for (const n of SMALL_SIZE_NAMES) if (typeof mod[n] === 'function') return { fn: mod[n], file: rel, name: n };
   }
   return null;
+}
+
+/** 源码文本里有没有 `export … <name>`（粗筛：function / const / class / export { … }） */
+export function exportsName(src, name) {
+  const re = new RegExp(String.raw`export\s+(?:async\s+)?(?:function\*?|const|let|class)\s+${name}\b|export\s*\{[^}]*\b${name}\b`);
+  return re.test(src);
 }
 
 /** 尺寸函数可能回 `{ width, height }` 或 `[w, h]` */
@@ -264,7 +274,7 @@ export function sizeOf(r) {
 
 export const MUXER_NAMES = ['Mp4Muxer', 'MP4Muxer', 'Muxer', 'createMp4Muxer', 'createMuxer', 'mp4Muxer'];
 
-/** 在 `src/export/*.ts` 里找封装器（K5）；回 `{ make, file, name }` 或 null */
+/** 在 `src/export/*.ts` 里找封装器（K5）；回 `{ make, file, name }`，导出了却载不进来回 `{ file, error }`，没有回 null */
 export async function findMuxer() {
   const dir = repoPath('src/export');
   if (!fs.existsSync(dir)) return null;
@@ -276,7 +286,10 @@ export async function findMuxer() {
     const src = fs.readFileSync(repoPath(rel), 'utf8');
     if (!MUXER_NAMES.some((n) => src.includes(n))) continue;
     let mod;
-    try { mod = await import(repoUrl(rel)); } catch { continue; }
+    try { mod = await import(repoUrl(rel)); } catch (err) {
+      if (MUXER_NAMES.some((n) => exportsName(src, n))) return { file: rel, error: err };
+      continue;
+    }
     for (const n of MUXER_NAMES) {
       const v = mod[n];
       if (typeof v !== 'function') continue;

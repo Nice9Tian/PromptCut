@@ -18,9 +18,12 @@ import {
 } from "../../server/test/c10a-kit.mjs";
 
 const muxer = await findMuxer();
+if (muxer?.error) {
+  test("C10A-MP4-00 封装器载得进 node", () => { assert.fail(`${muxer.file} 导出了封装器却载不进来：${muxer.error?.stack ?? muxer.error}`); });
+}
 const { findFfmpeg } = await import(repoUrl("server/bakery/ffmpeg.mjs"));
 const ffmpeg = await findFfmpeg().catch(() => null);
-const skip = skipIf(!muxer, "src/export/ 下的 MP4 封装器（K5）") || (ffmpeg ? false : "本机没有 ffmpeg");
+const skip = skipIf(!muxer?.make, "src/export/ 下的 MP4 封装器（K5）") || (ffmpeg ? false : "本机没有 ffmpeg");
 const it = (name, fn) => test(name, { skip }, fn);
 
 const DIR = tempDir("pc-c10a-mp4-");
