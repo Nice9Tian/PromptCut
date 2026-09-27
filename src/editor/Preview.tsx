@@ -24,7 +24,8 @@ import { atFrameGrid } from "../render/frameGrid";
 import { contentStartOf } from "./timeline/utils";
 import { startAssetTiers, tierHashes, useTierHashes } from "./media/assetTiers";
 import { startTierBackfill } from "./io/mediaUpload";
-import { deliverSnapshots, markBaselineReset, noteSettled, pendingDemotes, pickForSetTime, stopSnapshotFeed, streamPlanesAt, suppressedAt, syncSnapshotSubscription } from "./snapshotFeed";
+import { currentReadyIndex, deliverSnapshots, markBaselineReset, noteSettled, pendingDemotes, pickForSetTime, setSnapshotSource, stopSnapshotFeed, streamPlanesAt, suppressedAt, syncSnapshotSubscription } from "./snapshotFeed";
+import { OnlineSnapshotSource, applyReadyMessage, setActiveOnlineSource } from "../render/snapshotSource";
 import { playingCatchUpTargets, runPlayingSwap, runSettleSwap, setSwapHost, swapInFlight } from "./stageSwap";
 import { demotedClips, onStageDemote } from "./demote";
 import { flushSync } from "react-dom";
@@ -33,7 +34,7 @@ import { resolveGlRoute } from "../render/costDevice.mjs";
 import { ONLINE } from "../online/mode";
 import { LOW_MEMORY_TEXT, lowMemoryMode, noteRuntimeTrouble, readDisplayTier, setDisplayTier, type DisplayTier } from "../online/lowMemory";
 import { setMediaTierPolicy, type MediaTierPolicy } from "../render/mediaTier";
-import { remoteAssetBase, remoteAssetTicket, setNoEditorProcess, subscribeRemoteAssets } from "./media/assetTiers";
+import { assetAuthHeaders, docRequest, remoteAssetBase, remoteAssetTicket, setNoEditorProcess, subscribeRemoteAssets } from "./media/assetTiers";
 import { pushToast } from "./sync/syncManager";
 
 /** 「进入项目时提示一次当前是低内存档」(c10a 第 8 节):一个页面会话只提示一次 */
@@ -601,6 +602,38 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
     if (!dual) return;
     return () => stopSnapshotFeed();
   }, [dual]);
+
+  /*
+   * c10a 第 9 节「在线页面拉取」:在线页面没有预渲染进程,重层的画面是渲染节点推到素材服务的**预渲染小尺寸**。
+   * 快照来源换成在线实现(`snapshotSource.ts` 的 `OnlineSnapshotSource`:按内容库的层表与清单、凭只读票据取 `px/<hash>`),
+   * 它发的 C3 消息直接并进 `snapshotFeed` 的就绪索引 —— 选帧、兜底、投递那一整条消费路一行不改。
+   * 小位图到货后自己重投一次(`snapshotFeed` 的到货回调只在 SSE 那条路上挂)。
+   */
+  const onlineSourceRef = useRef<OnlineSnapshotSource | null>(null);
+  useEffect(() => {
+    if (!online) return;
+    const src = new OnlineSnapshotSource({ request: docRequest, assetBase: remoteAssetBase, authHeaders: assetAuthHeaders });
+    onlineSourceRef.current = src;
+    setActiveOnlineSource(src);
+    setSnapshotSource(src);
+    src.onFetched = () => { void pumpRef.current(); };
+    const off = src.subscribeReady("online", 0, (m) => {
+      applyReadyMessage(currentReadyIndex(), m);
+      if (m.type !== "done") void pumpRef.current();
+    });
+    src.setProject(getState().project.id || null);
+    src.focus(tRef.current, getState().project.fps || 30);
+    if (typeof window !== "undefined") (window as unknown as Record<string, unknown>).__pcOnlineSnapshots = () => src.debug();
+    return () => {
+      off();
+      src.stop();
+      onlineSourceRef.current = null;
+      setActiveOnlineSource(null);
+      stopSnapshotFeed();
+    };
+  }, [online]);
+  useEffect(() => { onlineSourceRef.current?.setProject(project.id || null); }, [project.id]);
+  useEffect(() => { onlineSourceRef.current?.focus(t, project.fps || 30); }, [t, project.fps]);
 
   /* 换了 iframe:那一份投递基线跟着作废,下一次带 `reset`(A3c) */
   useEffect(() => {
