@@ -15,8 +15,10 @@
  *   creator  `node scripts/probes/ht-w-probe.mjs --role creator --hosted <托管端> --coord <协调口> [--run <id>] [--port 5792]`
  *            建共享项目、起自己的编辑器队列节点（切分 plan、也做一部分细任务）、旁观节点、发布、汇总 J-全完 / J-恰一，收尾删项目。
  *   proxy    `node scripts/probes/m8/connect-proxy.mjs --listen 127.0.0.1:5798 [--log <文件>]`（主机那台机器上，另开一个终端）
- *   host     `node scripts/probes/m8-outbound-probe.mjs --role host --proxy http://127.0.0.1:5798 --hosted <托管端> --coord <协调口>
+ *   host     `node scripts/probes/m8-outbound-probe.mjs --role host --proxy http://127.0.0.1:5798 | env --hosted <托管端> --coord <协调口>
  *              [--run <id>] [--port 5795] [--host-concurrency 2] [--sample-s 5] [--out <目录>] [--timeout-min 25] [--keep-temp]`
+ *            `--proxy env`：用本进程已有的 HTTPS_PROXY / HTTP_PROXY（云端容器自带的出网代理）；那种代理没有 `/__status`，
+ *            proxy-reachable 与 proxy-covers-* 两条不做，只剩 TCP 旁证（对端只许是回环或代理自己的地址）。
  *   all      本机替身：同一台机器上起全部角色（见下）。
  *
  * ## --role host
@@ -35,8 +37,8 @@
  *   host-transport-ws     主机节点到文档服务的传输是 `ws`，不是旧服务端退化（`legacy`）
  *   proxy-covers-docservice  代理记到了到文档服务（`--hosted` 的 host:port）的连接，双向都有字节
  *   proxy-covers-asset    代理记到了到主机所用素材服务（诊断 `assetBase` 的 host:port）的连接，双向都有字节
- *   no-direct-tcp         （仅 Windows）每次采样里，主机进程树的 TCP 连接的对端只有回环 127.0.0.1 / ::1（含到代理的），
- *                         没有别的地址；并且至少一次看到进程树到代理端口的连接（证明采样看得见这棵树）
+ *   no-direct-tcp         （Windows、Linux）每次采样里，主机进程树的 TCP 连接的对端只有回环 127.0.0.1 / ::1 与代理自己的地址，
+ *                         没有别的；并且至少一次看到进程树到代理的连接（证明采样看得见这棵树）。Linux 用 /proc 找子孙、`ss -tanpH` 取连接
  *   render-host-exit      render-host 正常退出（退出码 0）
  *
  * ## --role all（本机替身）
@@ -50,7 +52,7 @@
  *   （分别取 creator 的 all-done、done-exactly-once：`task.done` 次数取自发布方编辑器诊断的 `doneCounts`）。
  *     node scripts/probes/m8-outbound-probe.mjs --role all [--out <目录>] [--seconds 8] [--clips 4] [--host-concurrency 2] [--timeout-min 25] [--keep-temp]
  *
- * ## 跨机（笔记本当主机，PC 当创建者，经阿里云）
+ * ## 跨机（经阿里云；两种主机：笔记本上的本机代理替身，或真「只能出网」的云端容器）
  *   两台都要 `PROBE_MAIL_TOKEN`（协调口信箱令牌），同一个 `--run`；两台检出同一提交（卡片代码版本要相同）。
  *   PC：   node scripts/probes/ht-w-probe.mjs --role creator --hosted https://8-219-80-16.sslip.io/hosted --coord https://8-219-80-16.sslip.io/coord --run <id> --port 5792
  *   笔记本，终端 1：node scripts/probes/m8/connect-proxy.mjs --listen 127.0.0.1:5798 --log <目录>/proxy.log
@@ -60,6 +62,9 @@
  *   （`PROMPTCUT_TEST_ENV_FINGERPRINT`，C10 集成）进了两台的检出，在两台的两个终端里设同一个值；在那之前，creator 改在笔记本
  *   上跑（第一个实例，`--port 5792`），PC 只看结果。阿里云上文档服务、素材服务、协调口同在 `8-219-80-16.sslip.io:443` 后面，
  *   代理记录按 host:port 分不开三者，proxy-covers-* 两条只证「都经代理」，分不出谁是谁（字节数仍在）。
+ *   云端容器当主机（真「只能出网」，容器已有 HTTPS_PROXY；另要 PC_CHROME_ARGS=--no-sandbox）：
+ *     node scripts/probes/m8-outbound-probe.mjs --role host --proxy env --hosted https://8-219-80-16.sslip.io/hosted  *       --coord https://8-219-80-16.sslip.io/coord --run <id>
+ *   指纹的限制同上（容器与 creator 那台的指纹几乎一定不同）。
  *
  * 输出：过程写 stderr；stdout 最后一行一行 JSON `{ probe, role, run, ok, checks, fails, … }`，`ok` 为假退出码 1，参数不对 2。
  * 口令、令牌不进 stdout / stderr；代理记录不含路径、查询串与请求头。
@@ -67,6 +72,7 @@
 import { spawn, fork, execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
+import dns from 'node:dns/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -142,8 +148,51 @@ $conns = @(Get-NetTCPConnection | Where-Object { $ids.Contains([int]$_.OwningPro
 [pscustomobject]@{ pids = $ids.Count; names = @($names.Values | Sort-Object -Unique); conns = $conns } | ConvertTo-Json -Compress -Depth 4
 `;
 
-/** 采一次 pid 为根的进程树的 TCP 连接；非 Windows 回 null */
+/** Linux：由 /proc 找子孙（同样只认比父进程晚起的），`ss -tanpH` 取连接 */
+function sampleTcpLinux(rootPid) {
+  return new Promise((resolve) => {
+    const procs = [];
+    try {
+      for (const d of fs.readdirSync('/proc')) {
+        if (!/^\d+$/.test(d)) continue;
+        try {
+          const stat = fs.readFileSync(`/proc/${d}/stat`, 'utf8');
+          const close = stat.lastIndexOf(')');
+          const name = stat.slice(stat.indexOf('(') + 1, close);
+          const f2 = stat.slice(close + 2).split(' ');
+          procs.push({ pid: Number(d), ppid: Number(f2[1]), start: Number(f2[19]), name });
+        } catch { /* 进程已退 */ }
+      }
+    } catch (e) { return resolve({ error: `proc: ${String(e.message ?? e).slice(0, 120)}` }); }
+    const born = new Map(procs.map((p) => [p.pid, p.start]));
+    const ids = new Set([rootPid]);
+    for (let added = true; added;) {
+      added = false;
+      for (const p of procs) if (ids.has(p.ppid) && !ids.has(p.pid) && p.start >= (born.get(p.ppid) ?? 0)) { ids.add(p.pid); added = true; }
+    }
+    const names = new Map(procs.filter((p) => ids.has(p.pid)).map((p) => [p.pid, p.name]));
+    execFile('ss', ['-tanpH'], { timeout: 30_000, maxBuffer: 16 * 1024 * 1024 }, (error, stdout) => {
+      if (error && !stdout) return resolve({ error: `ss: ${String(error.message ?? error).slice(0, 160)}` });
+      const conns = [];
+      const split = (a) => { const i = a.lastIndexOf(':'); return [a.slice(0, i).replace(/^\[|\]$/g, '').replace(/^::ffff:/, '').replace(/%.*$/, ''), Number(a.slice(i + 1))]; };
+      for (const line of String(stdout).split(/\n/)) {
+        const cols = line.trim().split(/\s+/);
+        if (cols.length < 6) continue;
+        const pids = [...line.matchAll(/pid=(\d+)/g)].map((m) => Number(m[1])).filter((p) => ids.has(p));
+        if (!pids.length) continue;
+        const [laddr, lport] = split(cols[3]);
+        const [raddr, rport] = split(cols[4]);
+        const state = cols[0] === 'LISTEN' ? 'Listen' : cols[0] === 'ESTAB' ? 'Established' : cols[0];
+        conns.push({ pid: pids[0], name: names.get(pids[0]) ?? null, state, laddr, lport, raddr, rport });
+      }
+      resolve({ at: Date.now(), pids: ids.size, names: [...new Set(names.values())], conns });
+    });
+  });
+}
+
+/** 采一次 pid 为根的进程树的 TCP 连接；Windows 与 Linux 以外回 null */
 function sampleTcp(rootPid, scriptFile) {
+  if (process.platform === 'linux') return sampleTcpLinux(rootPid);
   if (process.platform !== 'win32') return Promise.resolve(null);
   return new Promise((resolve) => {
     execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', scriptFile, String(rootPid)],
@@ -158,29 +207,42 @@ function sampleTcp(rootPid, scriptFile) {
   });
 }
 
-/** 一次采样里：直连（对端不是回环、状态不是监听）的连接、到代理的连接 */
-export function classifyTcp(sample, proxyPort) {
+/**
+ * 一次采样里：直连（状态不是监听、对端既不是回环也不是代理）的连接、到代理的连接。
+ * @param {Set<string>} proxyAddrs 代理的 `ip:port`（代理地址是主机名时解析出的全部地址）
+ */
+export function classifyTcp(sample, proxyAddrs) {
   const live = (sample?.conns ?? []).filter((c) => c.state !== 'Listen' && c.state !== 'Bound');
+  const isProxy = (c) => proxyAddrs.has(`${c.raddr}:${c.rport}`);
   return {
     total: live.length,
-    direct: live.filter((c) => !LOOPBACK.has(c.raddr)),
-    toProxy: live.filter((c) => LOOPBACK.has(c.raddr) && c.rport === proxyPort && c.state === 'Established').length,
+    direct: live.filter((c) => !LOOPBACK.has(c.raddr) && !isProxy(c)),
+    toProxy: live.filter((c) => isProxy(c) && c.state === 'Established').length,
   };
 }
+
+/** 代理地址去掉用户名口令（只留协议、主机、端口），给记录用 */
+const redactProxy = (url) => { try { const u = new URL(url); return `${u.protocol}//${u.host}`; } catch { return '(unparsable)'; } };
 
 /* ================================================================== host */
 
 async function runHost(out) {
   const HOSTED = arg('--hosted', null)?.replace(/\/+$/, '') ?? null;
   const COORD = arg('--coord', null)?.replace(/\/+$/, '') ?? null;
-  const PROXY = arg('--proxy', null)?.replace(/\/+$/, '') ?? null;
-  if (!HOSTED || !COORD || !PROXY) { fails.push('要给 --hosted、--coord 与 --proxy'); process.exitCode = 2; return; }
+  // --proxy env：用本进程已有的 HTTPS_PROXY / HTTP_PROXY（云端容器自带的出网代理），代理记录取不到，只做 TCP 旁证
+  const EXTERNAL = arg('--proxy', null) === 'env';
+  const envProxy = process.env.HTTPS_PROXY || process.env.https_proxy || process.env.HTTP_PROXY || process.env.http_proxy || null;
+  const PROXY = (EXTERNAL ? envProxy : arg('--proxy', null))?.replace(/\/+$/, '') ?? null;
+  if (!HOSTED || !COORD || !PROXY) { fails.push(EXTERNAL ? '--proxy env 要本进程已有 HTTPS_PROXY 或 HTTP_PROXY' : '要给 --hosted、--coord 与 --proxy'); process.exitCode = 2; return; }
 
   // 0. 没带代理环境变量：带上重新起自己（子孙进程都继承），本进程只转结果
   if (process.env.NODE_USE_ENV_PROXY !== '1' || process.env.M8_OUTBOUND_INNER !== '1') {
     const env = { ...process.env };
+    const keepNoProxy = EXTERNAL ? String(process.env.NO_PROXY || process.env.no_proxy || '') : '';
+    const noProxy = [...new Set([...keepNoProxy.split(',').map((x) => x.trim()).filter(Boolean), ...NO_PROXY.split(',')])].join(',');
+    const httpProxy = EXTERNAL ? (process.env.HTTP_PROXY || process.env.http_proxy || PROXY) : PROXY;
     for (const k of PROXY_ENV_KEYS) delete env[k];
-    Object.assign(env, { NODE_USE_ENV_PROXY: '1', HTTP_PROXY: PROXY, HTTPS_PROXY: PROXY, http_proxy: PROXY, https_proxy: PROXY, NO_PROXY, no_proxy: NO_PROXY, M8_OUTBOUND_INNER: '1' });
+    Object.assign(env, { NODE_USE_ENV_PROXY: '1', HTTP_PROXY: httpProxy, HTTPS_PROXY: PROXY, http_proxy: httpProxy, https_proxy: PROXY, NO_PROXY: noProxy, no_proxy: noProxy, M8_OUTBOUND_INNER: '1' });
     const child = spawn(process.execPath, [SELF, ...argv], { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'inherit'], windowsHide: true });
     let stdout = '';
     child.stdout.on('data', (d) => { stdout += d.toString(); });
@@ -201,9 +263,12 @@ async function runHost(out) {
   const OUT = path.resolve(arg('--out', path.join(os.tmpdir(), `pc-m8-outbound-${run}`, 'host')));
   fs.mkdirSync(OUT, { recursive: true });
   const port = Number(arg('--port', PORTS.host));
-  const proxyTarget = targetOfUrl(PROXY);
-  const proxyPort = Number(proxyTarget.slice(proxyTarget.lastIndexOf(':') + 1));
-  out.proxy = { url: PROXY };
+  const proxyUrl = new URL(PROXY);
+  const proxyPort = Number(proxyUrl.port || (proxyUrl.protocol === 'https:' ? 443 : 80));
+  const proxyHost = proxyUrl.hostname.replace(/^\[|\]$/g, '');
+  const proxyAddrs = new Set((await dns.lookup(proxyHost, { all: true }).catch(() => [{ address: proxyHost }])).map((a) => `${a.address.replace(/^::ffff:/, '')}:${proxyPort}`));
+  if (proxyHost === 'localhost') for (const a of ['127.0.0.1', '::1']) proxyAddrs.add(`${a}:${proxyPort}`);
+  out.proxy = { url: redactProxy(PROXY), external: EXTERNAL, addrs: [...proxyAddrs] };
   out.env = { NODE_USE_ENV_PROXY: process.env.NODE_USE_ENV_PROXY, NO_PROXY: process.env.NO_PROXY, node: process.version };
   const tcpScript = path.join(OUT, 'tcp-sample.ps1');
   fs.writeFileSync(tcpScript, TCP_PS1);
@@ -214,10 +279,13 @@ async function runHost(out) {
   const put = async (name, value) => { try { await c.put(K(run, name), value); } catch (error) { say('kv-put-failed', { name, message: String(error?.message ?? error) }); } };
   const aborted = async () => { try { return await c.get(K(run, 'abort'), 0); } catch { return null; } };
   try {
-    // 1. 代理在
-    const st0 = await json(`${PROXY}/__status`, { timeoutMs: 5000 }).catch((e) => ({ ok: false, body: String(e?.message ?? e) }));
-    if (!check('proxy-reachable', st0.ok, st0.ok ? { conns: st0.body?.conns ?? null } : st0.body)) return;
-    const baselineIds = new Set((st0.body?.records ?? []).map((r) => r.id));
+    // 1. 代理在（外部代理没有状态页，跳过）
+    let baselineIds = new Set();
+    if (!EXTERNAL) {
+      const st0 = await json(`${PROXY}/__status`, { timeoutMs: 5000 }).catch((e) => ({ ok: false, body: String(e?.message ?? e) }));
+      if (!check('proxy-reachable', st0.ok, st0.ok ? { conns: st0.body?.conns ?? null } : st0.body)) return;
+      baselineIds = new Set((st0.body?.records ?? []).map((r) => r.id));
+    }
 
     // 2. 配置
     const cfg = await c.take(K(run, 'config'), deadline);
@@ -243,7 +311,7 @@ async function runHost(out) {
       if (s) samples.push(s);
       if (sampler !== false) sampler = setTimeout(tick, SAMPLE_MS);
     };
-    if (process.platform === 'win32') sampler = setTimeout(tick, 1000);
+    if (process.platform === 'win32' || process.platform === 'linux') sampler = setTimeout(tick, 1000);
     const ready = await new Promise((resolve) => {
       const t = setTimeout(() => resolve(null), 300_000);
       child.on('message', (m) => { if (m?.type === 'ready') { clearTimeout(t); resolve(m); } });
@@ -291,7 +359,7 @@ async function runHost(out) {
     sampler = false;
     const last = await sampleTcp(process.pid, tcpScript);
     if (last) samples.push(last);
-    const st = await json(`${PROXY}/__status`, { timeoutMs: 5000 }).catch(() => null);
+    const st = EXTERNAL ? null : await json(`${PROXY}/__status`, { timeoutMs: 5000 }).catch(() => null);
     const recs = (st?.body?.records ?? []).filter((r) => !baselineIds.has(r.id));
     const byTarget = {};
     for (const r of recs) {
@@ -305,16 +373,19 @@ async function runHost(out) {
     const docTarget = targetOfUrl(cfg.hostedWs);
     const assetTarget = n.assetBase ? targetOfUrl(n.assetBase) : null;
     const covered = (t) => !!t && byTarget[t] && byTarget[t].conns > 0 && byTarget[t].up > 0 && byTarget[t].down > 0;
-    check('proxy-covers-docservice', covered(docTarget), { target: docTarget, seen: byTarget[docTarget] ?? null });
-    check('proxy-covers-asset', covered(assetTarget), { target: assetTarget, seen: assetTarget ? byTarget[assetTarget] ?? null : null });
+    if (EXTERNAL) out.proxy.records = 'unavailable: 外部代理，没有逐条记录；只做 TCP 旁证';
+    else {
+      check('proxy-covers-docservice', covered(docTarget), { target: docTarget, seen: byTarget[docTarget] ?? null });
+      check('proxy-covers-asset', covered(assetTarget), { target: assetTarget, seen: assetTarget ? byTarget[assetTarget] ?? null : null });
+    }
 
     // TCP 旁证
-    if (process.platform === 'win32') {
+    if (process.platform === 'win32' || process.platform === 'linux') {
       const good = samples.filter((s) => !s.error);
       const direct = [];
       let sawProxy = 0;
       for (const s of good) {
-        const k = classifyTcp(s, proxyPort);
+        const k = classifyTcp(s, proxyAddrs);
         sawProxy += k.toProxy;
         for (const d of k.direct) direct.push({ at: s.at, name: d.name, pid: d.pid, state: d.state, remote: `${d.raddr}:${d.rport}` });
       }
@@ -323,7 +394,7 @@ async function runHost(out) {
       check('no-direct-tcp', good.length >= 2 && direct.length === 0 && sawProxy > 0,
         { samples: good.length, toProxyTotal: sawProxy, direct: direct.slice(0, 10), sampleErrors: samples.filter((s) => s.error).slice(0, 2) });
     } else {
-      out.tcp = { skipped: 'not-windows' };
+      out.tcp = { skipped: `platform ${process.platform}` };
     }
 
     // 6. 正常退出
