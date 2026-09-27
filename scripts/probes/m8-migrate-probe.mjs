@@ -53,6 +53,7 @@
  *   整个数据目录拷到目标的数据目录，核两边文件数与总字节数 → 起目标 5762 / 5763（公网地址换成目标的）→
  *   `shared-project-probe.mjs --role migrate-check --from-inventory … --sample all --seed … --scan-dir …` → client（`--ui` 时带界面一段，
  *   编辑器 5766～5768）。端口可用 `--src-port`、`--dst-port`（各占两个连号）、`--editor-port` 改。`--keep` 不删临时目录。
+ *   `--tamper`：拷完后在目标数据目录里删一个快照块、改坏一个，证明核对与客户端会失败（自检用，期望退出码 1）。
  *
  * 只用 Node 内置模块、puppeteer（`--ui`）与仓库里的服务端模块。
  */
@@ -240,6 +241,7 @@ async function runNode({ link, tasks, render, sink, nodeId, timeoutMs }) {
   let resolveAll;
   const allDone = new Promise((resolve) => { resolveAll = resolve; });
   link.ep.onMessage((m) => {
+    if (m?.type === 'task.claimed' && ids.has(m.id)) counters.claimed += 1;
     if (m?.type === 'task.done' && ids.has(m.id)) {
       counters.doneMsgs += 1;
       if (!results.has(m.id)) results.set(m.id, m.result ?? null);
@@ -257,7 +259,6 @@ async function runNode({ link, tasks, render, sink, nodeId, timeoutMs }) {
     executor: { plan: async () => { throw Object.assign(new Error('探针不算计划'), { retryable: false }); }, render },
     sink,
     onEvent: (e) => {
-      if (e.type === 'claimed') counters.claimed += 1;
       if (e.type === 'completed') counters.completed += 1;
       if (e.type === 'dedup') counters.dedup += 1;
       if (e.type === 'failed') counters.failed += 1;
@@ -760,6 +761,24 @@ function dirStats(dir) {
   return { files, bytes };
 }
 
+/**
+ * `--tamper`（只用来证明探针不是空转）：拷完之后在目标的数据目录里删掉一个快照块、改坏另一个快照块的一个字节。
+ * 这时核对与客户端都应当失败（库存对不上、取回的 sha256 不符、那两段要重新渲染）。
+ */
+function tamper(dataDir) {
+  const files = [];
+  const walk = (d) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const p = path.join(d, e.name); if (e.isDirectory()) walk(p); else if (e.isFile()) files.push(p); } };
+  walk(path.join(dataDir, 'assets', 'snap'));
+  const blobs = files.filter((p) => /[0-9a-f]{64}/.test(path.basename(p))).sort();
+  if (blobs.length < 2) return { error: '快照块不足两个', blobs: blobs.length };
+  fs.rmSync(blobs[0]);
+  const buf = fs.readFileSync(blobs[1]);
+  buf[0] ^= 0xff;
+  fs.writeFileSync(blobs[1], buf);
+  log('local.tampered', { removed: path.basename(blobs[0]), corrupted: path.basename(blobs[1]) });
+  return { removed: path.basename(blobs[0]), corrupted: path.basename(blobs[1]) };
+}
+
 async function stepLocal() {
   const srcPort = intArg('--src-port', 5760, 1);
   const dstPort = intArg('--dst-port', 5762, 1);
@@ -804,6 +823,7 @@ async function stepLocal() {
     const b = dirStats(dstData);
     out.copy = { ms: Date.now() - t0, source: a, target: b };
     check(a.files === b.files && a.bytes === b.bytes, 'local：两边文件数与总字节数一致', out.copy);
+    if (has('--tamper')) out.tampered = tamper(dstData);
     mark('拷数据');
 
     // 5 + 6. 目标起来（公网地址换成目标的；令牌是拷过来的那一份）
