@@ -1020,6 +1020,13 @@ async function runObserver(out) {
           });
           const load = HTMLMediaElement.prototype.load;
           HTMLMediaElement.prototype.load = function () { push({ at: epoch(), type: 'load()', ...tag(this), stack: stack() }); return load.call(this); };
+          // 换档对齐的帧回调(VideoTrack 的 __pcTierTrace 观察口,数组时才记):哪一刻判定「新档这一帧对齐了」
+          const trace = [];
+          trace.push = (...xs) => {
+            for (const x of xs) push({ at: epoch(), type: 'tier-aligned', src: String(x?.url ?? '').split('/@media/')[1]?.slice(0, 8) ?? '', mediaTime: x?.mediaTime, ref: x?.ref, playing: x?.playing });
+            return Array.prototype.push.apply(trace, xs);
+          };
+          window.__pcTierTrace = trace;
           const events = ['seeking', 'seeked', 'waiting', 'emptied', 'loadstart', 'loadedmetadata', 'loadeddata', 'canplay', 'stalled', 'suspend', 'abort', 'error', 'play', 'pause'];
           const hook = (v) => {
             if (v.__t9Log) return;
@@ -1051,7 +1058,10 @@ async function runObserver(out) {
       }
       try { fs.writeFileSync(path.join(OUT, 'observer-media-log.json'), JSON.stringify({ tJoin, frontId: await P(page, () => window.__pcPreviewDiag?.().frontId ?? null).catch(() => null), mediaLogs }, null, 1)); } catch { /* 写不了不影响结论 */ }
       out.mediaEvents = mediaLogs.map((m) => ({ frame: m.frame, seeks: m.log.filter((e) => e.type === 'set-currentTime' && e.src === cfg.tiers.original.slice(0, 8)).map((e) => ({ at: Math.round(e.at - tJoin), to: e.to, from: e.ct, rs: e.rs, shown: e.shown, stack: e.stack.slice(0, 3) })),
-        loads: m.log.filter((e) => e.type === 'load()').length,
+        loads: m.log.filter((e) => e.type === 'load()').map((e) => ({ at: Math.round(e.at - tJoin), src: e.src, stack: e.stack.slice(1, 2) })),
+        aligned: m.log.filter((e) => e.type === 'tier-aligned' && e.src === cfg.tiers.original.slice(0, 8)).slice(0, 2).map((e) => ({ at: Math.round(e.at - tJoin), mediaTime: e.mediaTime, ref: e.ref })),
+        seeked: m.log.filter((e) => e.type === 'seeked' && e.src === cfg.tiers.original.slice(0, 8) && e.ct > 1).map((e) => ({ at: Math.round(e.at - tJoin), shown: e.shown })),
+        shownAt: (m.log.find((e) => e.type === 'state' && e.src === cfg.tiers.original.slice(0, 8) && e.shown) ?? null) && ((e) => ({ at: Math.round(e.at - tJoin), rs: e.rs }))(m.log.find((e) => e.type === 'state' && e.src === cfg.tiers.original.slice(0, 8) && e.shown)),
         drops: m.log.filter((e) => e.type === 'state' && e.src === cfg.tiers.original.slice(0, 8) && e.rs < 2).map((e) => ({ at: Math.round(e.at - tJoin), rs: e.rs, shown: e.shown, ct: e.ct })) }));
     };
     // 小尺寸停在 2.5 s:连续 3 次读到同一个帧号才算稳定;期间换到原尺寸就用换之前最后一个
