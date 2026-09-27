@@ -209,7 +209,19 @@ export function createDocEndpoint({
   const resumeHandlers = [];
   const closeHandlers = [];
   const connectFailHandlers = [];
-  const counters = { opens: 0, closes: 0, sent: 0, received: 0, dropped: 0, badFrames: 0, duplicates: 0, resumes: 0, detaches: 0, fallbacks: 0 };
+  /**
+   * 计数（`stats()` 原样给出，节点诊断从这里取，混沌测试靠它判「接续了几次、丢了几次、是否重建会话」）：
+   *   opens 建成的会话数（含重建）；renews 其中在前一个会话结束之后建的（重建）；resumes 接续成功；detaches 传输断开、
+   *   会话脱开；lost 接续被服务端拒（4404 / 4410）；expired 本端判出脱开超过保留期；connectFails 建新会话没成；
+   *   closes 会话结束；dropped 丢弃的出站消息（会话结束时未确认的、没有会话时 `send` 的）。
+   */
+  const counters = { opens: 0, closes: 0, sent: 0, received: 0, dropped: 0, badFrames: 0, duplicates: 0, resumes: 0, detaches: 0, fallbacks: 0,
+    renews: 0, lost: 0, expired: 0, connectFails: 0 };
+  /** 最后一次会话结束 `{ code, reason, at }` 与最后一次脱开 `{ code, at }`；reason 截到 120 字符（服务端的关闭原因不含凭证） */
+  let lastClose = null;
+  let lastDetach = null;
+  /** 有过会话（下一次建成的算重建） */
+  let hadSession = false;
 
   let closed = false;
   /**
@@ -271,6 +283,7 @@ export function createDocEndpoint({
     if (closed || cur !== null) return;
     if (sess && !sess.legacy) {
       if (now() - sess.detachedAt >= sess.retainMs) {
+        counters.expired++;
         say('session.expired', { retainMs: sess.retainMs });
         endSession(1006, 'retain-expired', { notify: false });
         return;
@@ -444,9 +457,18 @@ export function createDocEndpoint({
     rec.stage = 'attached';
     attempt = 0;
     sess = { legacy: true, sid: null, retainMs: 0, outSeq: 0, outBuf: [], pendingBytes: 0, inAck: 0, inUnacked: 0, inUnackedBytes: 0, ackTimer: null, detachedAt: null };
-    counters.opens++;
+    noteOpen();
     say('session.open', { transport: 'ws', legacy: true, protocol: typeof rec.socket.protocol === 'string' ? rec.socket.protocol : null });
     emit(openHandlers, undefined, 'open');
+  }
+
+  /** 建成一个会话：计数；回是不是重建 */
+  function noteOpen() {
+    counters.opens++;
+    const renewed = hadSession;
+    if (renewed) counters.renews++;
+    hadSession = true;
+    return renewed;
   }
 
   function onWelcome(rec, msg) {
@@ -462,8 +484,8 @@ export function createDocEndpoint({
       rec.stage = 'attached';
       attempt = 0;
       sess = { legacy: false, sid, retainMs, outSeq: 0, outBuf: [], pendingBytes: 0, inAck: 0, inUnacked: 0, inUnackedBytes: 0, ackTimer: null, detachedAt: null };
-      counters.opens++;
-      say('session.open', { transport: 'ws', retainMs });
+      const renewed = noteOpen();
+      say('session.open', { transport: 'ws', retainMs, ...(renewed ? { renew: true } : {}) });
       emit(openHandlers, undefined, 'open');
       return;
     }
@@ -560,6 +582,7 @@ export function createDocEndpoint({
         if (code === CLOSE_NO_SESSION || code === CLOSE_SESSION_ENDED) {
           // 脱开期间会话因「连着时收到也不会重连」的码结束（例如项目被删）：按原关闭码报，上层与连着时收到一样
           const orig = code === CLOSE_SESSION_ENDED ? closedCodeOf(reason) : null;
+          counters.lost++;
           if (orig && FINAL_CLOSE.has(orig.code)) {
             say('session.lost', { code, closedCode: orig.code });
             endSession(orig.code, orig.reason, { notify: false });
@@ -573,6 +596,7 @@ export function createDocEndpoint({
         scheduleRetry();
         return;
       }
+      counters.connectFails++;
       say('session.connect-failed', { code });
       fallbackAfter(rec, 'ws-error');
       newSessionFailed({ code, reason });
@@ -587,6 +611,7 @@ export function createDocEndpoint({
     if (rec.dropping || TRANSPORT_FAULT.has(code)) {
       s.detachedAt = now();
       counters.detaches++;
+      lastDetach = { code, at: s.detachedAt };
       say('session.detach', { code, pendingBytes: s.pendingBytes });
       scheduleRetry();
       return;
@@ -615,6 +640,7 @@ export function createDocEndpoint({
       try { rec.socket.close(1000, String(reason).slice(0, 100)); } catch { /* 已经在关 */ }
     }
     counters.closes++;
+    lastClose = { code, reason: String(reason ?? '').slice(0, 120), at: now() };
     say('session.close', { code, reason, legacy: s.legacy });
     emit(closeHandlers, { code, reason }, 'close');
     if (closed) return;
@@ -705,6 +731,7 @@ export function createDocEndpoint({
       clearAckTimer(s);
       counters.dropped += s.outBuf.length;
       counters.closes++;
+      lastClose = { code: 1000, reason: 'closed', at: now() };
       say('session.close', { code: 1000, reason: 'closed', legacy: s.legacy });
       emit(closeHandlers, { code: 1000, reason: 'closed' }, 'close');
     }
@@ -743,6 +770,8 @@ export function createDocEndpoint({
         pendingBytes: s ? s.pendingBytes : 0,
         legacy: !!s?.legacy,
         detached: !!(s && !s.legacy && s.detachedAt !== null),
+        lastClose: lastClose ? { ...lastClose } : null,
+        lastDetach: lastDetach ? { ...lastDetach } : null,
         mode,
       };
     },

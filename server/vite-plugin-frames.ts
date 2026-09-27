@@ -16,6 +16,7 @@ import { latestPlayhead, ensureMirror as ensureMirrorVersion, reportReadySession
 import { snapshotTier } from "./snapshot-store.mjs";
 import { readySessionOf } from "./ready-index.mjs";
 import { describeEnvironment } from "./render-node/fingerprint.mjs";
+import { sessionDiagOf, sessionLogger } from "./render-node/session-diag.mjs";
 import { mediaSourceOf } from "./vision/ffmpeg-frames";
 import { assetServiceOrigin, setMediaFallbackBases, setMediaFallbackTicket } from "./asset-client";
 import { renderProject } from "./render-project.mjs";
@@ -161,14 +162,13 @@ async function ticketFor(link: DocLink, endpoint: any) {
 }
 /**
  * 到文档服务的端点(`createDocEndpoint`,HT-a 契约 `docs/plan/http-transport-contract.md` 第 9 节)打的日志里,
- * 进预渲染进程控制台的几种:会话建成、结束、传输脱开与接续(传输的断开与接续只进日志与诊断,不打断队列)。
+ * 会话事件(建成、结束、脱开、接续、接续被拒、建不成等,`render-node/session-diag.mjs` 的 `SESSION_FORWARD_EVENTS`)
+ * 按事件节流后进预渲染进程的日志,行首 `[queue-node] docservice.session.*` / `[artifact-push] docservice.session.*`;
+ * 编辑器进程(`vite-plugin-prerender.ts`)把这几行转进自己的日志,独立渲染主机(`scripts/render-host.mjs`)照转
+ * `[queue-node]` 行。传输的断开与接续只进日志与诊断,不打断队列。
  */
-const SESSION_LOG_EVENTS = new Set(["session.open", "session.close", "session.detach", "session.resume"]);
-/** 诊断里的会话状态:实际用的传输(脱开时为 null)、接续次数、是否对着旧服务端退化 */
-const sessionDiag = (endpoint: any) => {
-  const st = typeof endpoint?.stats === "function" ? endpoint.stats() : null;
-  return st ? { transport: st.transport ?? null, resumes: st.resumes ?? 0, legacy: st.legacy === true } : {};
-};
+/** 诊断里的会话状态:实际用的传输(脱开时为 null)、接续次数、是否对着旧服务端退化,加会话计数 `session` */
+const sessionDiag = (endpoint: any) => sessionDiagOf(endpoint);
 /**
  * 推送队列认哪几种文档服务(契约 J.12):`remote`、`local` 总认;`editor` 只在显式要推送时认 ——
  * `PROMPTCUT_QUEUE_NODE=1` 或 `PROMPTCUT_PUSH=1`。
@@ -193,9 +193,8 @@ async function startArtifactPush(root: string, service: FramePipeline) {
   if (!pushModeAllowed(resolved.mode)) return pushLog("push.skip", { reason: "editor-docservice-not-enabled", mode: resolved.mode });
   if (services.get(root) !== service || (service as any).closed) return;
   const link = resolved as DocLink;
-  const endpoint = node.createDocEndpoint({ url: link.url, ...(link.protocols ? { protocols: link.protocols } : {}), log: (event: string, fields: object) => {
-    if (SESSION_LOG_EVENTS.has(event)) pushLog(`docservice.${event}`, fields);
-  } });
+  const endpoint = node.createDocEndpoint({ url: link.url, ...(link.protocols ? { protocols: link.protocols } : {}),
+    log: sessionLogger((event: string, fields: object) => pushLog(`docservice.${event}`, fields)) });
   const content = node.createContentClient(endpoint);
   const { createAssetClient }: any = await import("./asset-store/client.mjs");
   // J.13:按 D7 选推送的素材服务(环境变量 → 别的机器登记的 → 本机)
@@ -342,9 +341,8 @@ async function startQueueNode(root: string, service: FramePipeline) {
   const { createAssetSink, applyResult }: any = await import("./artifact-transfer.mjs");
   const { createAssetClient }: any = await import("./asset-store/client.mjs");
 
-  const endpoint = node.createDocEndpoint({ url: link.url, ...(link.protocols ? { protocols: link.protocols } : {}), log: (event: string, fields: object) => {
-    if (SESSION_LOG_EVENTS.has(event)) queueLog(`docservice.${event}`, fields);
-  } });
+  const endpoint = node.createDocEndpoint({ url: link.url, ...(link.protocols ? { protocols: link.protocols } : {}),
+    log: sessionLogger((event: string, fields: object) => queueLog(`docservice.${event}`, fields)) });
   const projects = node.createProjectClient(endpoint);
   const content = node.createContentClient(endpoint);
   // J.13:sink 推、task.done 拉,都用按 D7 选的素材服务
@@ -784,13 +782,12 @@ async function startHostNode(root: string, service: FramePipeline, node: any, or
     nodeIdOf: (_entry: any, index: number) => `${nodeIdBase}/p${index}`.slice(0, 128),
     connect: (entry: any, index: number) => {
       const rec: any = { projectId: entry.projectId ?? null, endpoint: null, assets: null, ticket: null, connectFailed: 0, opens: 0, cards: null };
+      // 连不上时每次退避都会打一行:按事件节流(`sessionLogger`),免得刷屏
+      const sessionLog = sessionLogger((event: string, fields: object) => queueLog(`docservice.${event}`, fields), { extra: { project: index, projectId: rec.projectId } });
       rec.endpoint = node.createDocEndpoint({ url: entry.url, protocols: sharedProtocols(entry, { role: "render" }), log: (event: string, fields: object) => {
         if (event === "session.connect-failed") rec.connectFailed++;
         if (event === "session.open") rec.opens++;
-        // 连不上时每次退避都会打一行,只在头几次打,免得刷屏
-        if (SESSION_LOG_EVENTS.has(event) || (event === "session.connect-failed" && rec.connectFailed <= 3)) {
-          queueLog(`docservice.${event}`, { project: index, projectId: rec.projectId, ...fields });
-        }
+        sessionLog(event, fields);
       } });
       const projects = node.createProjectClient(rec.endpoint);
       const content = node.createContentClient(rec.endpoint);
