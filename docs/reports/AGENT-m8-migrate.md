@@ -184,4 +184,10 @@ ssh "$PROMPTCUT_REMOTE" 'pm2 list'
 
 ## 7. 提交
 
-（收尾时补）
+- f2d297e 文档：报告（开工）
+- e7774ea 探针：`shared-project-probe` 加 inventory 与 migrate-check 的 --from-inventory / --sample all / --seed / --scan-dir；新写 `m8-migrate-probe`
+- a3ea334 探针：`--tamper` 自检；认领数按 `task.claimed` 计
+- ea2acfa 探针：数据面取回失败的块不重复记
+- e830afb 探针：`migrate-check` 的 `assetUrls` 保持原形（SP 测试依赖），登记地址另放 `registeredAssetTo`
+- f36f7a6 文档：报告正文
+- （本提交）文档：报告补提交列表
