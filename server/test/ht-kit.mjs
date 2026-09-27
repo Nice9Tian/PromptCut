@@ -18,13 +18,17 @@
  *       `authenticate`（会话号就是凭证，身份沿用建会话时的）。
  *   H4  建会话 / 接续成功后第一条出站消息 `{ type: 'session.welcome', sid, resumed, ack, retainMs, transport: 'ws' }`；
  *       `sid` 是 32 字节的 base64url（43 个字符，不带填充）。
- *   H5  接续失败在握手里回状态码：会话不存在 404，已结束（墓碑 2 分钟内）410（契约第 4.1 节）。
+ *   H5  接续失败（契约第 16 节第 1 条改了第 4.1 节）：服务端先接受升级（101），紧接着以关闭码告知——会话不存在
+ *       4404 `no-session`，已结束（墓碑 2 分钟内）4410 `session-closed <原关闭码>[ <原原因>]`。`resumeStatus` 把 4404
+ *       折算成 404、4410 折算成 410，握手就被拒的照回状态码，所以用例的判据（不存在 → 404、已结束 → 410）不变。
+ *       〔集成对账 2026-09-27：原写「在握手里回 404 / 410」，写于第 16 节之前，按实现改〕
  *   H6  关闭码与原因：跳号 / 越界 ack → 1002 `bad-seq`（第 3.5 节）；半开的旧连接被替换 → 4009 `superseded`（第 3.1 节）；
  *       背压 → 1013 `backpressure`（H.2 原样）。
  *   H7  `/healthz.sessions`（第 8 节）：键 `total ws http detached legacy opened resumed expired fallbacks list`；
  *       `list[i]` 恰好是 `connId transport fallback detached legacy` 五个键；脱开时 `transport: null`。
  *       测试按契约里的例子读：`total === list.length`，`ws` = list 里 `transport === 'ws'` 的条数（旧客户端也走 ws、也计入），
  *       `detached` = list 里 `detached` 的条数，`legacy` = list 里 `legacy` 的条数。第 1 版的 `transports` 字段不再有。
+ *       〔集成对账 2026-09-27：与实现一致；实现的 `opened` 连旧客户端一起累计（旧客户端也是会话）〕
  *   H8  `describe().conns[i]` 多 `transport`、`fallback`、`detached`、`resumes`（第 8 节）。
  *   H9  日志经 `createDocService` 的 `log(event, fields)` 出：`session.detach`、`session.resume { connId, transport, gapMs }`、
  *       保留期满 `conn.timeout`（第 4.2、8 节）；会话号不进任何日志。
@@ -39,6 +43,7 @@
  *       所以接续握不上时它分不出 404 / 410 与网络故障：**从脱开起过了 `welcome.retainMs` 还没接续上，就当会话已结束**，
  *       报 `onClose`，下一次重新建会话（重新调 `protocols()`）。实现若另有更快的办法（例如服务端先接受升级再以关闭码告知），
  *       这组用例照样通过：它们只要求「保留时限加几秒之内重建」。
+ *       〔集成对账 2026-09-27：实现两条都做——收到 4404 / 4410（H5）立刻重建；握不上时脱开超过 `welcome.retainMs` 也重建〕
  *   H12 端点的 `close()` 先发 `{ type: 'session.close', … }` 再关（第 4.2 节「主动结束」由客户端发起）。
  *   H13 本机信任开关（第 10 节）：`server/hosted/main.mjs` 读 `PROMPTCUT_TRUST_LOOPBACK`；`0` 而没有集群令牌时拒绝启动，
  *       打 `config.error { reason: 'cluster-token-required' }`、退出码 1。探测：`server/hosted/` 下的 `.mjs` 里出现
@@ -232,11 +237,21 @@ export async function openLegacy(env, { user = 'alice' } = {}) {
   return c;
 }
 
-/** 接续握手的状态码（H5）：只握手、不留连接 */
+/** 接续失败折算成的状态码（H5）：4404 → 404、4410 → 410、真接续上 → 101；握手就被拒的照回状态码。不留连接 */
 export async function resumeStatus(env, sid, ack = 0) {
-  const r = await rawHandshake(env.port, { protocols: [PROTOCOL, resumeItem(sid, ack)] });
-  r.sock.destroy();
-  return r.status;
+  const { rawWsClient } = await import('./fake-raw-ws.mjs');
+  let c;
+  try {
+    c = await rawWsClient(env.port, { protocols: [PROTOCOL, resumeItem(sid, ack)] });
+  } catch (err) {
+    const m = /HTTP\/1\.1 (\d{3})/.exec(String(err?.message));
+    return m ? Number(m[1]) : -1;
+  }
+  // 握手成功：等服务端的关闭帧（契约第 16 节第 1 条）；3 s 内没关就是真接续上了
+  const ended = await Promise.race([c.ended, new Promise((r) => { setTimeout(() => r(null), 3000).unref?.(); })]);
+  c.destroy();
+  const code = ended?.closeFrame?.code ?? c.closeFrame?.code;
+  return code === 4404 ? 404 : code === 4410 ? 410 : 101;
 }
 
 /** `/healthz.sessions` 的形状（H7），返回 sessions */
