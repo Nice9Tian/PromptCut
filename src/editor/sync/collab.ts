@@ -15,6 +15,7 @@ import { adminOp, enterShared, ensureDevice, expectSharedClose, getSyncView, lea
 import { errorStatus, route, type SharedMode, type Where } from "./sharedApi";
 import { getState } from "../../store/project";
 import { originalHashOf } from "../../render/mediaTier";
+import { enqueueExistingMedia } from "../media/assetTiers";
 import { ONLINE } from "../../online/mode";
 import { inviteLinkOf } from "../../online/invite";
 
@@ -205,6 +206,15 @@ export async function enableCollab(o: EnableOptions): Promise<{ ok: true; invite
     invite: null,
   });
   if (o.where !== "hosted") return { ok: true, invite: null };
+  /*
+   * 开启前就在项目里的素材也要上云(C10a 集成返工):等编辑器进程拿到托管端素材服务与 rw 票据(进入共享项目时
+   * connectSharedAssets 设的上传目标),再按哈希交给上传队列,之后照 C6.6 的队列规则逐个素材、先小后大地传。
+   * 不挡开启:传的进度由上传队列管,缺的(本机内容库里没有)记一笔。
+   */
+  void enqueueExistingMedia(getState().project.media ?? []).then((r) => {
+    if (!r) console.warn("[collab] 已有素材没交给上传队列(等不到上传目标,或没有本机编辑器)");
+    else if (r.missing.length) console.warn("[collab] 这些素材本机内容库里没有,传不上去:", r.missing);
+  });
   const inv = await createInvite(o.creator.password);
   // 项目已经建好、进去了；邀请码没签成只少了链接，设置里可以再点「作废并重新生成」
   return { ok: true, invite: inv.ok ? inv.invite : null };

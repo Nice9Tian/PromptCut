@@ -411,6 +411,7 @@ export function startUploadTarget(link: LinkLike | null, base: string | null, de
   const clearTimer = deps.clearTimer ?? ((t: unknown) => clearTimeout(t as ReturnType<typeof setTimeout>));
   let stopped = false;
   let timer: unknown = null;
+  setUploadTargetReady(null);
   if (!link || !base) {
     void post({ base: null });
     return () => { /* 本来就是本机 */ };
@@ -431,6 +432,7 @@ export function startUploadTarget(link: LinkLike | null, base: string | null, de
     if (stopped) return;
     await post({ base, ticket });
     if (stopped) return;
+    if (ticket) setUploadTargetReady(base);
     // 剩 1/3 有效期时续:从签发起过了 2/3 的寿命
     const delay = ticket ? Math.max(1000, Math.floor((exp - issued) * 2 / 3)) : UPLOAD_TICKET_RETRY_MS;
     timer = setTimer(() => { void renew(); }, delay);
@@ -441,8 +443,79 @@ export function startUploadTarget(link: LinkLike | null, base: string | null, de
     stopped = true;
     if (timer !== null) clearTimer(timer);
     timer = null;
+    setUploadTargetReady(null);
     void post({ base: null });
   };
+}
+
+/* ---------------- 开启「放云端」时把项目里已有的素材交给上传队列(C10a 集成返工) ---------------- */
+
+/** 编辑器进程已经拿到带 rw 票据的远程上传目标:那个基址;没有是 null */
+let uploadTargetReadyBase: string | null = null;
+const uploadTargetWaiters = new Set<(base: string) => void>();
+
+function setUploadTargetReady(base: string | null): void {
+  uploadTargetReadyBase = base;
+  if (!base) return;
+  for (const w of [...uploadTargetWaiters]) w(base);
+}
+
+/** 等编辑器进程拿到带 rw 票据的远程上传目标(`startUploadTarget` 第一次带票据推成功);超时回 null */
+export function whenUploadTargetReady(timeoutMs = 30_000): Promise<string | null> {
+  if (uploadTargetReadyBase) return Promise.resolve(uploadTargetReadyBase);
+  return new Promise((resolve) => {
+    const done = (base: string | null) => { uploadTargetWaiters.delete(onReady); clearTimeout(t); resolve(base); };
+    const onReady = (base: string) => done(base);
+    const t = setTimeout(() => done(null), timeoutMs);
+    (t as { unref?: () => void }).unref?.();
+    uploadTargetWaiters.add(onReady);
+  });
+}
+
+type ExistingMedia = { name?: string; hash?: string; tiers?: { original?: string; small?: string } | null };
+
+/**
+ * 项目里已有的素材 → 按哈希入队的请求体:一个素材一项,视频两档(`tiers.small`、`tiers.original`),
+ * 图片、音频只有原片一档;没有哈希的(迁移期老素材、还在入库的)不算。同一原片只列一次。
+ */
+export function existingMediaItems(media: readonly ExistingMedia[]): { name: string; original: string; small?: string }[] {
+  const seen = new Set<string>();
+  const out: { name: string; original: string; small?: string }[] = [];
+  for (const m of media) {
+    const original = String(m?.tiers?.original || m?.hash || "").toLowerCase();
+    if (!/^[0-9a-f]{64}$/.test(original) || seen.has(original)) continue;
+    seen.add(original);
+    const small = String(m?.tiers?.small || "").toLowerCase();
+    out.push({ name: String(m?.name ?? ""), original, ...(/^[0-9a-f]{64}$/.test(small) && small !== original ? { small } : {}) });
+  }
+  return out;
+}
+
+export interface EnqueueExistingResult { queued: string[]; missing: string[]; local?: boolean }
+
+/**
+ * 开启多用户协作「放云端」之后调:等编辑器进程拿到远程上传目标与 rw 票据,再把项目里已有的素材按哈希交给
+ * 上传队列(`POST /api/media/upload-queue/enqueue`,只收本地内容库里有的,缺的回 `missing`)。
+ * 之后照 C6.6 队列规则逐个素材、先小后大地传。没有本机编辑器(在线浏览器模式)、等不到目标时回 null。
+ */
+export async function enqueueExistingMedia(
+  media: readonly ExistingMedia[],
+  deps: { post?: (body: unknown) => Promise<EnqueueExistingResult | null>; timeoutMs?: number } = {},
+): Promise<EnqueueExistingResult | null> {
+  if (noEditorProcess && !deps.post) return null;
+  const items = existingMediaItems(media);
+  if (!items.length) return { queued: [], missing: [] };
+  if (!(await whenUploadTargetReady(deps.timeoutMs ?? 30_000))) return null;
+  const post = deps.post ?? (async (body: unknown) => {
+    try {
+      const r = await fetch("/api/media/upload-queue/enqueue", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      const j = (await r.json()) as { ok?: boolean } & EnqueueExistingResult;
+      return j?.ok ? { queued: j.queued ?? [], missing: j.missing ?? [], local: !!j.local } : null;
+    } catch {
+      return null;
+    }
+  });
+  return post({ items });
 }
 
 /** 探针与单测的观察口 */
@@ -452,6 +525,8 @@ export function assetTiersDebug() {
 
 /** 单测用 */
 export function resetAssetTiersForTest(): void {
+  uploadTargetReadyBase = null;
+  uploadTargetWaiters.clear();
   remote = null;
   complete = new Set();
   known = false;
