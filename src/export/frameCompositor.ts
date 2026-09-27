@@ -32,6 +32,9 @@ type ExportWindow = Window & typeof globalThis & {
   __pcHideFrameMedia?: () => void;
   __pcLoadProject?: (p: unknown, o?: unknown) => Promise<void>;
   __pcRealRaf?: (cb: FrameRequestCallback) => number;
+  __pcSetFrameWindow?: (clipIds: string[] | null, startTime: number, directTime?: number) => void;
+  __pcRestartCards?: () => void;
+  __pcResetAnims?: () => void;
 };
 
 export interface HeavyOriginals {
@@ -85,7 +88,7 @@ export class ExportCompositor {
     this.canvas = document.createElement("canvas");
     this.canvas.width = opts.project.width;
     this.canvas.height = opts.project.height;
-    this.ctx = this.canvas.getContext("2d", { alpha: false })!;
+    this.ctx = this.canvas.getContext("2d", { alpha: false, willReadFrequently: true })!;
     this.scratch = document.createElement("canvas");
   }
 
@@ -186,13 +189,32 @@ export class ExportCompositor {
     }
   }
 
-  /** 合成第 `frame` 帧到 `canvas`,回画布(同一张,下一帧会被覆盖) */
+  private warmed = -1;
+  /**
+   * 从 `startFrame` 起一趟连续出帧之前的预热(照 `bake.mjs` 的 `__pcSetFrameWindow` + `warmUpAt`):全部卡按活跃判据挂载、
+   * 时钟拨到起点、推 3 拍、重挂载卡片并清动画锚点、再推一拍。少了这一步,Motion 的弹簧等动画的锚点落在载入项目那一刻,
+   * 和桌面导出差出相位。
+   */
+  private async warmUp(startFrame: number, fps: number) {
+    const sec = startFrame / fps;
+    this.w.__pcSetFrameWindow?.(null, sec, sec);
+    for (let i = 0; i < 3; i++) { await this.stepTo(startFrame, fps); await this.raf(); }
+    this.w.__pcRestartCards?.();
+    this.w.__pcResetAnims?.();
+    await this.stepTo(startFrame, fps);
+    await this.raf();
+    this.w.__pcResetAnims?.();
+    this.warmed = startFrame;
+  }
+
+  /** 合成第 `frame` 帧到 `canvas`,回画布(同一张,下一帧会被覆盖)。帧号要从起点逐帧递增(和桌面导出一样顺推) */
   async frame(frame: number): Promise<HTMLCanvasElement> {
     this.throwIfAborted();
     const p = this.opts.project;
     const fps = Math.max(1, p.fps || 30);
     const doc = this.w.document;
     let t0 = performance.now();
+    if (this.warmed < 0) await this.warmUp(frame, fps);
     await this.stepTo(frame, fps);
     this.stats.stepMs += performance.now() - t0;
 

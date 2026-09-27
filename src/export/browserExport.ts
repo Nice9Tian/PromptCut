@@ -19,6 +19,7 @@ import { Mp4Muxer, type MuxSink } from "./mp4Mux";
 import { ExportCompositor } from "./frameCompositor";
 import { fetchOriginalHtml, loadOriginalsIndex, type OriginalsDeps, type OriginalsIndex } from "./originals";
 import { ONLINE_EXPORT_TEXT } from "./text";
+import { rgbaToI420 } from "./yuv";
 
 /** 编码队列上限(契约第 11.1 节) */
 export const MAX_ENCODE_QUEUE = 3;
@@ -267,12 +268,18 @@ export async function runBrowserExport(deps: BrowserExportDeps): Promise<Browser
 
   try {
     const keyEvery = Math.max(1, Math.round(KEYFRAME_SEC * fps));
+    // 原尺寸画布 → I420(BT.601 有限范围,和桌面导出同一个换算,见 `yuv.ts`);缓冲复用
+    let i420: Uint8Array | undefined;
+    const colorSpace = { primaries: "smpte170m", transfer: "smpte170m", matrix: "smpte170m", fullRange: false } as VideoColorSpaceInit;
     for (let i = 0; i < total; i++) {
       if (deps.signal.aborted) throw cancelled();
       if (failure) throw failure;
       const canvas = await compositor.frame(i);
       await waitQueue();
-      const frame = new VideoFrame(canvas, { timestamp: Math.round((i * 1e6) / fps), duration: Math.round(1e6 / fps) });
+      const pixels = canvas.getContext("2d")!.getImageData(0, 0, project.width, project.height).data;
+      i420 = rgbaToI420(pixels, project.width, project.height, i420);
+      const frame = new VideoFrame(i420, { format: "I420", codedWidth: project.width, codedHeight: project.height,
+        timestamp: Math.round((i * 1e6) / fps), duration: Math.round(1e6 / fps), colorSpace });
       try { encoder.encode(frame, { keyFrame: i % keyEvery === 0 }); } finally { frame.close(); }
       deps.onProgress?.(i + 1, total);
     }
