@@ -1,6 +1,6 @@
 # AGENT 报告：HT-a 集成（`claude/ht-integ`）
 
-状态：完成，等主会话审查。合并、对账、主会话四条裁定已落实；第 3 节八项验证全部通过。
+状态：第二轮完成，等主会话审查（先不合入 main：等 C10a 合入 main 后再合一次 main）。第一轮见第 1～5 节，第二轮（主会话回复之后）见第 6 节。
 
 HT-a 是 `docs/plan/http-transport-contract.md` 第 2 版文件头「2026-09-27 拆分」的前一段：文档服务的会话模型、序号确认、WebSocket 传输接会话层、本机信任开关。本分支把服务端（`claude/http-transport`）、客户端（`claude/ht-client`）、测试方（`claude/ht-tests`）三条分支与 main 合到一起，按主会话的裁定对账，并做集成验证。
 
@@ -162,12 +162,49 @@ HT7 的三条是探针自身的本机用例（不给 `--base` 退出码 2、本�
 
 1. **传输只有 WebSocket**：语义写「WebSocket 与 HTTP 长轮询并存」「由系统自动选择」，机制写「握手失败就转 HTTP 长轮询」。HT-a 按拆分只接 WebSocket，HTTP 是 HT-b。阶段性缺口，不是实现偏离；HT-b 做完前被代理挡住 WebSocket 的成员连不上。
 2. **不是每一方都讲会话**：语义说文档服务与「每一方」之间是一个会话、单次传输中断不结束会话。`server/card-sync.mjs`、管理接口的令牌连接（`asset-announce`）与几个探针仍是旧客户端，断一次就断线（主会话已裁定这次不接）。
-3. **本机信任靠开关**：语义说经同机反向代理转进来的请求按远端对待。实现是开关 `PROMPTCUT_TRUST_LOOPBACK`，缺省 `1`，只有部署脚本给阿里云写 `0`；用户自己在本机托管组合前挡反向代理时，缺省下仍把代理转进来的请求当本机。契约第 10 节就是这么定的，与语义字面有出入，要不要在语义里写明「由部署方关掉本机信任」请主会话定。
+3. **本机信任靠开关**（第二轮已按语义修代码，见第 6.2 节）：语义说经同机反向代理转进来的请求按远端对待。实现是开关 `PROMPTCUT_TRUST_LOOPBACK`，缺省 `1`，只有部署脚本给阿里云写 `0`；用户自己在本机托管组合前挡反向代理时，缺省下仍把代理转进来的请求当本机。契约第 10 节就是这么定的，与语义字面有出入，要不要在语义里写明「由部署方关掉本机信任」请主会话定。
 4. 新客户端对旧服务端的退化（契约第 4.3 节第 7 条）语义里没有；只在服务端没升级时生效，不改变承诺，列出备查。
 
 ## 5. 需要主会话决定的事
 
 1. 本分支是否合入 main（用户授权）。合入前请审第 17 节与本报告里的〔裁〕。
 2. `claude/c10a-integ` 在 `claude/http-transport` 合它之后又有 3 个提交（`171180d`、`5bc3eed`、`0dd86e9`）不在本分支；要不要在合入前补合。
-3. 第 4 节第 3 条（本机信任开关与语义字面）。
-4. `sp-kit.mjs` 的固定端口 5490～5499 在并行全量测试下互踩（第 3.4 节），要不要另立一项改成端口 0。
+3. 第 4 节第 3 条（本机信任开关与语义字面）。——第二轮已定并落实（第 6.2 节）。
+4. `sp-kit.mjs` 的固定端口 5490～5499 在并行全量测试下互踩（第 3.4 节），要不要另立一项改成端口 0。——main `1dad2b7` 的 `claude/test-parallel-safe` 已解决，第二轮合进来了。
+
+## 6. 第二轮（2026-09-27，主会话回复之后）
+
+主会话的回复：先不合入 main（C10a 先合入 main，之后再让本分支合一次 main，C10a 集成分支后来的三个提交随 main 进来）；现在先合一次 main `1dad2b7`；本机信任按语义补上〔裁〕；做完重跑。
+
+### 6.1 合并 main（`1dad2b7`）
+
+`442aa8b`，无冲突。里面有 `claude/test-parallel-safe`（`sp-kit.mjs` 改用系统分配端口），第 3.4 节的并行撞 5490 由它解决。
+
+### 6.2 本机按真正的发起方判断〔裁：2026-09-27 主会话〕
+
+语义 `product/document-service.md`「本机按真正的发起方判断」：经同机反向代理转来的请求不算本机。按语义改代码（语义不动）：
+
+- **判定**（新文件 `server/auth/origin.mjs`，只引自己；放在 `server/auth/` 是因为文档服务单独部署只带 docservice、auth、render-queue 三个目录）：`isLocalOrigin(req, address?)` = 对端地址是回环，且 `forwardedHops(req)`（`Forwarded` 的每个 `for=`，去引号、方括号与端口；`X-Forwarded-For` 的每一跳；`X-Real-IP`）每一跳都是回环。`for=unknown`、混淆名、主机名都不算回环。只收紧：对端不是回环的一律不算；开关 `0` 时调用方照旧一律不算。`remoteTagOf(req)`：对端回环而转发头说不是本机时，日志与限速用的来源记成 `proxied:<对端>`。`http-guard.mjs` 再导出这三个。
+- **接到哪里**：
+  - 文档服务握手与共享端点：`shared-service.mjs` 的缺省 `isLoopback` 改用 `isLocalOrigin`、缺省 `remoteOf` 改用 `remoteTagOf`（托管组合与单独部署的 `docservice/main.mjs` 都走缺省）；编辑器挂载的本地文档服务 `vite-plugin-docservice.ts` 同样改（仍先经 `clientAddressOf` 认舞台端口代理写进的真实对端）；
+  - 创建者操作的限速豁免（共享模块只拿得到来源地址）：经代理转来的来源已记成 `proxied:…`，不再被当本机；
+  - 素材服务：托管组合的 `isTrusted`、编辑器里素材服务的缺省判据 `isLoopbackRequest`（`asset-service.ts`）；
+  - 管理接口：托管组合的 `adminAllowed`（与素材服务共用 `isLoopbackReq`）；
+  - 另加编辑器 `/api` 守卫的 `fromLocalClient`（同一个「本机」概念，只收紧）。
+- **会给本机服务加转发头的一方**（逐个核过，桌面版本机路径不受影响）：vite 没配 `server.proxy`（没有 `xfwd`）；舞台端口代理（`vite-plugin-stage-ports.ts`）只写自己的 `x-pc-stage-client`（覆盖同名头），其余请求头原样转，不加转发头；测试与探针里仿 nginx 的前缀代理（`ht-kit`/HT5、`online-join-probe.mjs`、`c10a-online-probe.mjs`、`probe-coord.mjs`、我的 `page-verify.mjs`）原样转发请求头、不加转发头；桌面壳 `desktop/src-tauri` 不做 HTTP 转发；Agent 进程、预渲染进程、渲染主机直连本机服务。仓库里没有「本机组件带上全回环转发头」的情形；将来有，按「链上全是回环仍算本机」处理（已写进判定）。阿里云的 nginx 会加 `X-Forwarded-For`（`docs/plan/c10a-research.md` 的配置），那边开关本来就是 `0`。
+- **单测** `server/test/local-origin.test.mjs`（6 条）：转发头逐跳解析；直连回环算本机、回环加外网 `X-Forwarded-For` 不算、全回环链算、链上一跳外网不算、`Forwarded` 与 `X-Real-IP` 同理、对端不是回环时转发头写回环也不算；`proxied:` 来源；`/api` 守卫与素材服务缺省判据；托管组合（进程内，端口 0）上文档服务握手、素材读、管理接口三处在 7 种请求头下逐一核对（开关 1：直连 / 全回环链为 101、404、200，其余为 401、401、401；开关 0：全部 401）。变异检查：把判定里的转发头检查去掉，6 条里 4 条失败，恢复后全过。
+- **契约**：第 10 节写入这一条（另把「已知代价」补一句：转发头只用来收紧本机判断，不用来取真实来源）；第 17.1 节加第 5 条（接到哪里、核过的转发方、单测）。
+- 提交：`4a57814`（代码与单测）、`77a5b06`（契约）。
+
+### 6.3 重跑
+
+| 项 | 命令 | 结果 |
+|---|---|---|
+| 类型检查 | `npx tsc -b --force` | 退出码 0，零错误（`77a5b06` 上） |
+| 全量测试 | `npm test` | 退出码 0；**tests 3353、pass 3351、fail 0、cancelled 0、skipped 2**（跳过的是 cards-layout、skill-gate 两条显式开启的集成用例）。63 条 HT 用例全部真跑：legacy 3、HT1 22、HT2 5、HT3 1、HT4 22、HT5 2、HT6 5、HT7 3 |
+| HT 用例 | `node --test server/test/ht*.test.mjs` | tests 74、pass 74、fail 0、skipped 0 |
+| T9 本机替身（信任关闭） | scratchpad `ht-integ/run-t9-local.sh`（`PROMPTCUT_TRUST_LOOPBACK=0` + 现场生成的集群令牌） | `probe exit 0`，`ok: true, fails: []`；creator plan 8 任务 8 完成、`failed 0`，`cardRevAfterEdit 2`；observer `joinMs 376`、small → original、`swapMode covered`、`black 0`；host `claimed 5, completed 5, failed 0, lost 0`、`exactlyOnce 8/8`、`missingBlocks []`、`cardV2 rev 2`。上传那 1 次 401 与第 3.5 节同，之前各轮都有 |
+| C10a 在线加入（信任关闭） | `PROMPTCUT_TRUST_LOOPBACK=0 node scripts/probes/online-join-probe.mjs …`（端口 5620～5625） | `trustLoopback: false`；`summary { checks 44, ok 44, fail 0 }`，退出码 0 |
+
+这一轮跑 T9 与在线加入时没有碰 worktree；跑完 `git status` 干净，5620～5629 全空。
+
