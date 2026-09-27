@@ -29,3 +29,33 @@
 | 本机替身 all | `node scripts/probes/c10-browser-probe.mjs --dist <在线构建> --out <目录>` | 退出码 0，`ok: true`、`fails: []`，417 s；长任务 0、采样 67、主重卡不同帧 57、投递 270、占位 t=0.1 fit 7 deadMs 23.3；snap 338、px 0；L2 costs 4；重开不重测、refetched 0、l2Hits 3；A5 主机 `host:DESKTOP-GS40TCK:5425/p0` claimed 3 / completed 1、transport ws、新层指纹 0c10b0e5f1a9e7d2、ready 31、播放贴着 main-v2；项目已删、端口全放 |
 | 本机替身 creator + host（经阿里云协调口 KV，run `c10loc0928a`） | 同上加 `--role creator --run c10loc0928a`；另一进程 `--role host --run c10loc0928a --port 5425 --test-fingerprint 0c10b0e5f1a9e7d3` | 两边退出码 0、`ok: true`；主机报到 11 s；认领方 profile host、指纹 0c10b0e5f1a9e7d3（与页面、创建者都不同）、transport ws、resumes 0；新层 ready 31；主机退出码 0、released 1；结果与日志里没有令牌 |
 | 外网（阿里云） | 待主会话「开始外网」 | 见下 |
+
+## 第二轮（2026-09-28，主会话改由云端节点当外网一轮的独立主机）
+
+分支快进到 `297bc27`（C10 刷新提交），其上加了 `51519ed`、`a48b05b`。
+
+### 云端没有 ffmpeg，主机能不能做在线页面计划切出的任务
+
+- 在线页面发布的清单计划切出的是卡片快照段（`snapshot:<键>:<from>-<to>`，`server/prerender-executor.mjs` 走 `renderCardSnapshotRange` / `renderSceneSnapshotRange`），
+  产 HTML 快照与 PNG 小尺寸，用的是 Chrome，不调 ffmpeg；帧库里 MOV 副本（`writeMov`）起不来时只记 `writerError`，不影响快照结果。
+- 要 ffmpeg 的是轨道流任务（H.264 编码器）：`render-host` 缺省 `PROMPTCUT_STREAMS=0` 不开；开了也由 `StreamProducer.capable()` 探不到编码器
+  而报 `streams: false`（`nodeCapabilities`），队列不给它流任务。能力照实报，不用改产品代码。
+- 实测（本机模拟：主机子进程 PATH 去掉 ffmpeg 目录、`LOCALAPPDATA` 指空目录，`--host-no-ffmpeg`）：主机里 `ffmpeg` 找不到（`found: false`），
+  照常起、认领、切分、完成，报给队列的能力 `{ userCards: true, graphCards: false, transcode: false, streams: false }`，主机日志里没有提到 ffmpeg / ENOENT 的行。
+- 没在 Linux 上实跑（这台只有 Windows）；Linux 上 `findFfmpeg` 找不到时返回 Windows 兜底路径，只在上面两处被调，同样只影响 MOV 副本与流。
+
+### --cut proxy | external
+
+见文件头「持有任务时断一次传输」。判据：主机 `resumes` 0→1、`opens` 不变、`/healthz` 的 `sessions.resumed` 增加、到最后 `opens` 不变、`released` 0；
+creator 一侧旁观节点看持有的任务 taken 1 / reopened 0 / done 1，成员页恰好一次 task.done、没有重复的 task.done；A5 照旧。
+
+### 验证
+
+- `npx tsc -b --force`：退出码 0。`npm test`：tests 3624、pass 3622、fail 0、skipped 2，退出码 0。
+- 本机 `--role all --cut proxy --host-no-ffmpeg`（第一次）：退出码 0、`ok: true`，1344 s（CPU 100%，快照段一段 75～178 s）；持有的是 plan，接续 773 ms，判据全过。
+- 改成优先在持有细任务时断之后再跑一轮（`a48b05b`）：退出码 0、`ok: true`、`fails: []`，1088 s。
+  - A1～A4：长任务 0、主重卡不同帧 54、投递 270、占位出现；snap 330、px 0；重开 refetched 0、l2Hits 3。
+  - 持有 `snapshot:13f331bd…:0-59`；断前 opens 1 / resumes 0 / sessions.resumed 0，断后 resumes 1 / opens 1 / transport ws / 接续 767 ms / sessions.resumed 1；
+    会话日志 session.open → session.detach(1006) → session.resume(gapMs 592)。
+  - 持有的任务 taken 1、reopened 0、closed [done]、页面 task.done 1；页面收到的 task.done 无重复。
+  - A5：新层指纹 0c10b0e5f1a9e7d2、ready 60、播放中贴着 main-v2；主机 ffmpeg found false、能力 streams false。项目已删、端口全放。
