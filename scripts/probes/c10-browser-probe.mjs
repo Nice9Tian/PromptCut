@@ -647,8 +647,15 @@ try {
     const heavy = x.wraps.filter((w) => w.id === state.main || state.extras.includes(w.id));
     return heavy.length >= EXTRA_HEAVY + 1 && heavy.every((w) => !w.suppressed && !w.plane && !w.placeholder && !w.settling) ? x : null;
   }, 120_000, 500);
-  check(settled, 'A4:暂停后追到精确活渲(与桌面同判据:停下就撤兜底)', settled ? undefined : { preview: await previewDiag(member).then((d) => ({ swapInFlight: d?.swapInFlight, feed: d?.snapshotFeed, frontId: d?.frontId })),
-    stage: await (await frontFrame(member))?.evaluate(() => { const d = window.__pcStageDiag?.() ?? {}; return { role: d.role, t: d.t, settling: d.settling, suppressed: d.suppressed, snapshots: d.snapshots, catchUps: d.catchUps }; }).catch(() => null) });
+  check(settled, 'A4:暂停后追到精确活渲(与桌面同判据:停下就撤兜底)');
+  if (!settled) {
+    const pdx = await previewDiag(member);
+    out.steps.settleDiag = {
+      preview: { swapInFlight: pdx?.swapInFlight, frontId: pdx?.frontId, feedSettled: pdx?.snapshotFeed?.settled, mounted: pdx?.snapshotFeed?.mounted, heavy: pdx?.snapshotFeed?.heavy },
+      stages: await Promise.all(member.frames().filter((f) => /[?&]stage=1/.test(f.url())).map((f) => f.evaluate(() => { const d = window.__pcStageDiag?.() ?? {}; return { id: new URLSearchParams(location.search).get('id'), role: d.role, job: d.job, t: d.t, settling: d.settling, suppressed: d.suppressed, snapshots: d.snapshots, catchUps: d.catchUps, beatRunning: d.beatRunning }; }).catch((e) => String(e)))),
+      costs: await P(member, () => new Promise((resolve) => { const r = indexedDB.open('promptcut-l2'); r.onsuccess = () => { const q = r.result.transaction('costs').objectStore('costs').getAll(); q.onsuccess = () => { resolve(q.result.map((x) => ({ k: x.record?.identityKey?.slice(0, 10), step: x.record?.stepMs, capped: x.record?.capped, vtOk: x.record?.vtOk, seekOk: x.record?.seekOk, kind: x.record?.kind }))); r.result.close(); }; }; r.onerror = () => resolve(null); })).catch(() => null),
+    };
+  }
   await shot(member, 'a4-settled-live');
   await delay(3000);
   const stillLive = await stageSample(member);
