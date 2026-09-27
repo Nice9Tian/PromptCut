@@ -2,6 +2,15 @@ import puppeteer from 'puppeteer';
 import fs from 'fs';
 import path from 'path';
 
+// 地址必须显式给(--url <地址> 或环境变量 PROMPTCUT_BASE),不给就报用法退出:
+// 永不缺省连用户常驻的编辑器(5190～5192)。
+const urlArg = process.argv.indexOf('--url');
+const BASE = ((urlArg >= 0 ? process.argv[urlArg + 1] : '') || process.env.PROMPTCUT_BASE || '').replace(/\/+$/, '');
+if (!BASE || BASE.startsWith('--')) {
+  console.error('用法: node scripts/timeline-verify.mjs --url http://127.0.0.1:<自己起的 dev server 端口>\n  或设环境变量 PROMPTCUT_BASE。不给地址不跑:不缺省连用户常驻的编辑器。');
+  process.exit(2);
+}
+
 const OUT_DIR = path.join(process.cwd(), 'out', 'timeline');
 if (!fs.existsSync(OUT_DIR)) {
   fs.mkdirSync(OUT_DIR, { recursive: true });
@@ -25,8 +34,8 @@ async function run() {
   
   await page.setViewport({ width: 1280, height: 800 });
   
-  console.log('Navigating to http://127.0.0.1:5192/');
-  await page.goto('http://127.0.0.1:5192/');
+  console.log(`Navigating to ${BASE}/`);
+  await page.goto(`${BASE}/`);
   
   // dismiss AI dialog mask
   try {

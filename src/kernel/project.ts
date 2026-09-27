@@ -110,8 +110,8 @@ export interface Subjects {
 /**
  * 同一份素材的两档(A1 第 5 步:先小后大),值是各自的内容哈希。
  * `original` 就是 MediaAsset.hash;`small` 是 800×600 以内的 H.264 档。
- * 换档判据在 src/render/mediaTier.ts 的 playbackUrl(只看素材服务报 complete 的哈希)。小版由导入方本机生成(C6.6,server/media-tiers.mjs)。
- * 「这台设备放不放得了原片」不是项目级的事实,不在这里记,见 src/render/playability.ts。
+ * 换档判据在 src/render/mediaTier.ts 的 playbackUrl(只看素材服务报 complete 的哈希)。素材小尺寸由导入方本机生成(C6.6,server/media-tiers.mjs)。
+ * 「这台设备放不放得了素材原尺寸」不是项目级的事实,不在这里记,见 src/render/playability.ts。
  */
 export interface MediaTiers {
   small?: string;
@@ -148,7 +148,7 @@ export interface MediaAsset {
    * 只在编辑器会话内有意义,存盘再打开时由 restoreMediaUrls 清掉。
    */
   pending?: boolean;
-  /** A1:同一素材的两档(先小后大)。只有视频有;小版由导入方本机生成(C6.6),换档见 src/render/mediaTier.ts */
+  /** A1:同一素材的两档(先小后大)。只有视频有;素材小尺寸由导入方本机生成(C6.6),换档见 src/render/mediaTier.ts */
   tiers?: MediaTiers;
   duration?: number; // 秒
   width?: number;
@@ -455,7 +455,7 @@ export function videoLayersAt(
  *
  * 预览每切一段视频,原来是新建一个 <video> 再从文件中段 seek。素材每 5 秒一个关键帧,
  * 中段 seek 要先解出最多 150 帧才出画,切一次就黑/卡一两百毫秒;真实项目 88.7 秒里切了 25 次,
- * 而且同一个文件内部的切换在原片里**没有一次是连续的**,光复用播放器也省不掉那次 seek。
+ * 而且同一个文件内部的切换在源文件里**没有一次是连续的**,光复用播放器也省不掉那次 seek。
  * 所以预览每条序列备两个播放器,离下一段起点还有一点时间时就把它装进空着的那个、
  * seek 到起点停好(见 render/VideoTrack.tsx)—— 这里就是回答「下一段是谁」。
  *

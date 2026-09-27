@@ -37,7 +37,7 @@ export const media = {
     );
   },
   /**
-   * 改一条素材的若干字段(不进撤销栈):入库回包写回、小版后到补写 `tiers.small` 都走它。
+   * 改一条素材的若干字段(不进撤销栈):入库回包写回、素材小尺寸后到补写 `tiers.small` 都走它。
    * patch 里值为 undefined 的键整个删掉(比如入库后清掉会话内的 `pending` 占位)。
    * 一律拷一份新对象、新数组再 setProject,不原地改 store 里的对象:共享项目里 store 的项目
    * 就是 docsync 的本地副本,原地改过的字段 diffProject 看不出变化,改动就到不了文档服务。

@@ -337,7 +337,7 @@ export async function exportVideo(
   // `ONLINE` 按需取:`mode.ts` 读 `import.meta.env`,Node 单测里载入本模块时没有它
   if ((await import("../../online/mode")).ONLINE) return exportVideoOnline(opts);
   const p = JSON.parse(JSON.stringify(getState().project)) as Project;
-  // C6.6「导出只用原片」:原片在当前素材服务上还没 complete 的,导出前拦下,提示等待上传方,不拿小版代替
+  // C6.6「导出只用素材原尺寸」:素材原尺寸在当前素材服务上还没 complete 的,导出前拦下,提示等待上传方,不拿素材小尺寸代替
   const missing = await exportGate(p);
   if (missing.length) throw Object.assign(new Error(awaitingUploaderMessage(missing)), { code: "awaiting-uploader", missing });
   /*

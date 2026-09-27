@@ -41,7 +41,7 @@ const proj = (duration, clips, extra = {}) => ({ name: 'p', duration, tracks: [{
 
 test('DUR-1 settleDuration:跟内容走、截断保留、改了总时长按改后的推、只改名不碰、空项目保留、至少 1 s', async () => {
   const rules = await import('../../src/kernel/duration.ts').catch(() => null)
-    ?? (await createVite({ configFile: false, root: ROOT, logLevel: 'silent', server: { middlewareMode: true, hmr: false, watch: null }, appType: 'custom', optimizeDeps: { noDiscovery: true, include: [] } })
+    ?? (await createVite({ configFile: false, root: ROOT, logLevel: 'silent', server: { middlewareMode: true, hmr: false, ws: false, watch: null }, appType: 'custom', optimizeDeps: { noDiscovery: true, include: [] } })
       .then(async (v) => { try { return await v.ssrLoadModule('/src/kernel/duration.ts'); } finally { await v.close(); } }));
   const base = proj(5, [clip('a', 0, 5)]);
 
@@ -90,7 +90,7 @@ async function startEnv(t) {
   const built = createSharedDocService({ mode: 'lan', dataDir: null, store: null, server, path: '/docservice', isLoopback: () => true, localDevice: { deviceId: 'pc-test-device-0001', deviceName: 'test' }, log: () => {} });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const url = `ws://127.0.0.1:${server.address().port}/docservice`;
-  const vite = await createVite({ configFile: false, root: ROOT, logLevel: 'silent', server: { middlewareMode: true, hmr: false, watch: null }, appType: 'custom', optimizeDeps: { noDiscovery: true, include: [] } });
+  const vite = await createVite({ configFile: false, root: ROOT, logLevel: 'silent', server: { middlewareMode: true, hmr: false, ws: false, watch: null }, appType: 'custom', optimizeDeps: { noDiscovery: true, include: [] } });
   const closers = [];
   t.after(async () => {
     for (const c of closers.reverse()) { try { c(); } catch { /* 已关 */ } }

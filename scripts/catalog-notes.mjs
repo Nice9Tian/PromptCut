@@ -2,7 +2,7 @@
  * 给素材目录(server/catalog/{lottie,particles})生成「模型看图写的说明」的两步工具。
  *
  * 流程一共三步,中间那步靠外部模型,不在这个脚本里:
- *   1. node scripts/catalog-notes.mjs sheets --url http://127.0.0.1:5190/?export=1 [--out <dir>] [--only lottie:gatin,particles:snow]
+ *   1. node scripts/catalog-notes.mjs sheets --url http://127.0.0.1:<自己起的 dev server 端口>/?export=1 [--out <dir>] [--only lottie:gatin,particles:snow]
  *      每个素材在导出管线上预渲染一段(Lottie 3 秒、粒子 2 秒),按时间顺序抽 6 帧,横排拼成一张
  *      带序号和时间戳的长图(深底,粒子的白点看得见),写到 <out>/<kind>__<name>.png。
  *   2. 把 <out> 交给会看图的模型(用 subagent-agy 技能派 manager 跑 gemini-3.8-flash),
@@ -43,7 +43,13 @@ function parseArgs(argv) {
 }
 
 async function sheets(o) {
-  const url = o.url || 'http://127.0.0.1:5190/?export=1';
+  // 地址必须显式给(--url 或环境变量 PROMPTCUT_BASE),不缺省连用户常驻的编辑器(5190～5192)
+  const base = process.env.PROMPTCUT_BASE ? `${process.env.PROMPTCUT_BASE.replace(/\/+$/, '')}/?export=1` : '';
+  const url = typeof o.url === 'string' ? o.url : base;
+  if (!url) {
+    console.error('用法: node scripts/catalog-notes.mjs sheets --url <导出页URL>(或设环境变量 PROMPTCUT_BASE)\n不给地址不跑:不缺省连用户常驻的编辑器。');
+    process.exit(2);
+  }
   const out = path.resolve(o.out || path.join(ROOT, 'out', 'catalog-sheets'));
   const only = o.only ? new Set(String(o.only).split(',')) : null;
   fs.mkdirSync(out, { recursive: true });

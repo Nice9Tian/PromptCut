@@ -2,7 +2,7 @@
  * C6.6 两档素材在页面这一侧(`mediaUpload.ts`):项目里只记 `tiers` 两个哈希,不记同步状态(验收 T1 / T2 的项目那一半)。
  * 跑:node --test src/editor/io/mediaTiers.test.mjs
  *
- * 服务端(导入、小版、上传队列)在 server/test/media-tiers.test.mjs;这里只钉页面把回包写进项目的方式,以及 `.proc` 里的样子。
+ * 服务端(导入、素材小尺寸、上传队列)在 server/test/media-tiers.test.mjs;这里只钉页面把回包写进项目的方式,以及 `.proc` 里的样子。
  */
 import { srcUrl } from "../../testing/registerTs.mjs";
 import test from "node:test";
@@ -29,7 +29,7 @@ function assertNoSyncFields(obj, where) {
   walk(obj, "");
 }
 
-test("T2-page 导入回包写进项目:tiers 只有 original / small 两个哈希;小版后到时补上 small;项目与 .proc 里没有同步字段", async () => {
+test("T2-page 导入回包写进项目:tiers 只有 original / small 两个哈希;素材小尺寸后到时补上 small;项目与 .proc 里没有同步字段", async () => {
   actions.newProject("两档");
   const m = actions.addMedia({ kind: "video", name: "clip.mp4", url: "", pending: true });
   const realFetch = globalThis.fetch;
@@ -65,11 +65,11 @@ test("T2-page 导入回包写进项目:tiers 只有 original / small 两个哈�
   }
 });
 
-test("T1-page 不是视频(回包没有 tiers)就不写 tiers、不去问小版", () => {
+test("T1-page 不是视频(回包没有 tiers)就不写 tiers、不去问素材小尺寸", () => {
   actions.newProject("图片");
   const m = actions.addMedia({ kind: "image", name: "a.png", url: "", pending: true });
   const realFetch = globalThis.fetch;
-  globalThis.fetch = async () => { throw new Error("不该问小版"); };
+  globalThis.fetch = async () => { throw new Error("不该问素材小尺寸"); };
   try {
     applyUploadedMedia(m.id, { hash: SMALL, ext: "png", name: "a.png", url: `/@media/${SMALL}`, bytes: 10 });
     const media = getState().project.media.find((x) => x.id === m.id);

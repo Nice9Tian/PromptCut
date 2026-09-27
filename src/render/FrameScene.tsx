@@ -100,7 +100,7 @@ function PixelMappedMedia({ media, clip, t, project, style, def, live = false, p
    * 截图那一步才由 `__pcPrepareFrameMedia` 按 `data-pc-media-*` 把这一帧装回来。
    * live(舞台)路正相反 —— 素材是真的在放的,所以这时候才挂 `src` 并 `preload="auto"`。
    */
-  // live 的 src 经换档判据(`mediaTier.ts` 的 playbackUrl,T1a 审查 #5);`data-pc-media-src` 仍是 `media.url`(身份、原片)
+  // live 的 src 经换档判据(`mediaTier.ts` 的 playbackUrl,T1a 审查 #5);`data-pc-media-src` 仍是 `media.url`(身份、素材原尺寸)
   const srcOf = (m?: MediaAsset | null) => (live && m ? playbackUrl(m, localHashes) : undefined);
   const load = live ? "auto" : "none";
   return <>
@@ -167,7 +167,7 @@ export function FrameScene({
   /**
    * A1 的 `localHashes`:当前连接的素材服务报 `complete` 的哈希。**只有 live 路消费**(`VideoTrack` 与
    * 像素映射素材的 src 经 `mediaTier.ts` 的 playbackUrl 换档,T1a 审查 #5);placeholder 路(导出页 / legacy)
-   * 一律 `media.url`,传了也不改一个像素。集合为空 = 一律原片,和没接换档之前一样。
+   * 一律 `media.url`,传了也不改一个像素。集合为空 = 一律素材原尺寸,和没接换档之前一样。
    */
   localHashes?: readonly string[];
   /** live:后台舞台的素材层画出一帧了(K5 第 (4) 步的 `mediaReady`) */

@@ -1,19 +1,19 @@
 /**
- * 「这台设备放不放得了这份原片」—— **设备本地缓存**(T1a 审查 #4;C6.6 设计稿第 4 节「可播性」、第 8 节查资料结论)。
+ * 「这台设备放不放得了这份素材原尺寸」—— **设备本地缓存**(T1a 审查 #4;C6.6 设计稿第 4 节「可播性」、第 8 节查资料结论)。
  *
  * 能不能播取决于设备(浏览器、系统解码器、硬件),同一个项目在这台机器上放得了、在 iPad 上可能放不了,
  * 所以它**不是项目级的布尔值**:不写进项目文档、不进 `.proc`,`MediaAsset` 不加字段。
  * 结果只存在这台设备这个页面源里(内存 + `localStorage`,读写失败就只留内存)。
  *
- * **缓存键 = 原片哈希 + 浏览器主版本**:内容不可变,但浏览器升级后解码能力会变(查资料结论第 3 条),
+ * **缓存键 = 素材原尺寸哈希 + 浏览器主版本**:内容不可变,但浏览器升级后解码能力会变(查资料结论第 3 条),
  * 换了主版本就当没探过、重探一次。
  *
  * 探法:
  *   1. **按实际容器选 MIME** 问 `canPlayType`,回 `''` 就判 `false`(记下)。
  *      QuickTime(`.mov`)按 `video/mp4` 问:Chrome 的 `canPlayType('video/quicktime')` 恒回 `''`
  *      (Chrome 152 实测),可它用同一个 ISO BMFF 解复用器照样放 H.264 的 MOV —— 按字面 MIME 问,
- *      手机拍的 MOV 会全被判成放不了、永远停在小版。放不了的 MOV(ProRes、DNxHD)由第 2 步试放判出来。
- *   2. 否则**试放首帧**:离屏 `<video muted>` 挂原片,等到 `loadeddata`,再等 `requestVideoFrameCallback`
+ *      手机拍的 MOV 会全被判成放不了、永远停在素材小尺寸。放不了的 MOV(ProRes、DNxHD)由第 2 步试放判出来。
+ *   2. 否则**试放首帧**:离屏 `<video muted>` 挂素材原尺寸,等到 `loadeddata`,再等 `requestVideoFrameCallback`
  *      确认真有一帧交给合成器,才判 `true`;报 `error` 判 `false`(记下)。
  *   3. **超时**(本地素材服务 5 s、远程素材服务 10 s)记「未知」:不写缓存,过 `RETRY_UNKNOWN_MS` 再探。
  *      网络慢不等于放不了,不能把它永久记成 `false`。冷却期间离屏元素接着等:首帧迟到了就按迟到的结论记下并通知;
@@ -21,13 +21,13 @@
  *   4. 探测本身没法跑(没有 DOM)时不下结论(`undefined`),调用方按「不知道」处理。
  *
  * `playbackUrl`(`mediaTier.ts`)只读这里;要不要触发一次探测由它决定(只在真有两档可选时才探,
- * 不白白去拉原片的首帧)。探出结论时通知订阅方(`subscribePlayability`),暂停中的画面层也能当场换档。
+ * 不白白去拉素材原尺寸的首帧)。探出结论时通知订阅方(`subscribePlayability`),暂停中的画面层也能当场换档。
  */
 
 const STORAGE_PREFIX = "pc.playable.";
-/** 本地素材服务上的原片:首帧 5 s 内出不来就记「未知」 */
+/** 本地素材服务上的素材原尺寸:首帧 5 s 内出不来就记「未知」 */
 export const PROBE_TIMEOUT_LOCAL_MS = 5000;
-/** 远程素材服务上的原片(经本地读路由按需拉取,或直接打远程):10 s */
+/** 远程素材服务上的素材原尺寸(经本地读路由按需拉取,或直接打远程):10 s */
 export const PROBE_TIMEOUT_REMOTE_MS = 10000;
 /** 「未知」之后多久再探 */
 export const RETRY_UNKNOWN_MS = 30000;
@@ -143,14 +143,14 @@ export function mimeForExt(ext: string | undefined | null): string | null {
 }
 
 export interface ProbeOptions {
-  /** 原片在远程素材服务上(超时 10 s);缺省按地址判:绝对 http(s) 地址算远程,其余按本地(5 s) */
+  /** 素材原尺寸在远程素材服务上(超时 10 s);缺省按地址判:绝对 http(s) 地址算远程,其余按本地(5 s) */
   remote?: boolean;
   /** 直接指定超时(单测) */
   timeoutMs?: number;
 }
 
 /**
- * 探一次(同一个哈希同时只探一次)。`url` 是原片地址,`ext` 用来拼 MIME。
+ * 探一次(同一个哈希同时只探一次)。`url` 是素材原尺寸地址,`ext` 用来拼 MIME。
  * 回 `true` / `false`(已记进缓存),或 `undefined`(没有 DOM、超时:不记,稍后重探)。
  */
 export function probePlayable(hash: string, url: string, ext?: string, kind: "video" | "audio" = "video", opts: ProbeOptions = {}): Promise<boolean | undefined> {

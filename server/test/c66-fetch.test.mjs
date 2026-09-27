@@ -113,15 +113,15 @@ test('C66-T6-06 超时时限：本地地址 5 s，远端（绝对 http(s) 地址
   assert.ok(dom.ctl.timers.includes(10_000), `远端地址按 10000 ms 计时：${dom.ctl.timers}`);
 });
 
-test('C66-T6-07 本机判为放不了的原片：两档都 complete 时预览停在小版；换档判据不看项目文档', async () => {
+test('C66-T6-07 本机判为放不了的素材原尺寸：两档都 complete 时预览停在素材小尺寸；换档判据不看项目文档', async () => {
   const p = play();
   const { playbackUrl } = await loadMediaTier();
   const O = H('a'), S = H('b');
   const media = { url: `/@media/${O}`, hash: O, ext: 'mov', kind: 'video', tiers: { original: O, small: S } };
   p.rememberPlayable(O, false);
-  assert.equal(playbackUrl(media, [S, O], { probe: false }), `/@media/${S}`, '放不了：一直用小版');
+  assert.equal(playbackUrl(media, [S, O], { probe: false }), `/@media/${S}`, '放不了：一直用素材小尺寸');
   assert.equal(playbackUrl({ ...media, playable: true }, [S, O], { probe: false }), `/@media/${S}`, '项目文档里写什么都不算');
-  assert.equal(media.url, `/@media/${O}`, '导出用的 media.url 仍是原片');
+  assert.equal(media.url, `/@media/${O}`, '导出用的 media.url 仍是素材原尺寸');
 });
 
 // ------------------------------------------------------------------ T7 导出拦截
@@ -129,7 +129,7 @@ test('C66-T6-07 本机判为放不了的原片：两档都 complete 时预览停
 const harness = createAssetHarness();
 after(() => harness.cleanup());
 
-/** 三个素材：两个视频（两档）、一张图片（只有原片），都被片段引用 */
+/** 三个素材：两个视频（两档）、一张图片（只有素材原尺寸），都被片段引用 */
 function projectOf(h) {
   return {
     id: 'p-c66',
@@ -162,29 +162,29 @@ async function gateEnv(present) {
   return { check, srv, h, has, asked, project: projectOf(h) };
 }
 
-test('C66-T7-01 原片都 complete（小版一个没有）→ 放行；只问原片、不问小版', async () => {
+test('C66-T7-01 素材原尺寸都 complete（素材小尺寸一个没有）→ 放行；只问素材原尺寸、不问素材小尺寸', async () => {
   const env = await gateEnv(['o1', 'o2', 'o3']);
   const r = await env.check({ project: env.project, has: env.has });
-  assert.equal(r.ok, true, `原片齐了就放行：${JSON.stringify(r)}`);
-  assert.ok(!env.asked.includes(env.h.s1) && !env.asked.includes(env.h.s2), `导出只用原片，不该问小版：${env.asked.map((x) => x.slice(0, 6))}`);
+  assert.equal(r.ok, true, `素材原尺寸齐了就放行：${JSON.stringify(r)}`);
+  assert.ok(!env.asked.includes(env.h.s1) && !env.asked.includes(env.h.s2), `导出只用素材原尺寸，不该问素材小尺寸：${env.asked.map((x) => x.slice(0, 6))}`);
   await env.srv.close();
 });
 
-test('C66-T7-02 有原片没到（小版到了也不算）→ 拦下、提示「等待上传方」、列出缺的素材', async () => {
+test('C66-T7-02 有素材原尺寸没到（素材小尺寸到了也不算）→ 拦下、提示「等待上传方」、列出缺的素材', async () => {
   const env = await gateEnv(['o1', 's1', 's2', 'o3']);
   const r = await env.check({ project: env.project, has: env.has });
-  assert.equal(r.ok, false, '原片没到不出片');
+  assert.equal(r.ok, false, '素材原尺寸没到不出片');
   assert.match(String(r.message ?? ''), /等待上传方/, `提示里有「等待上传方」：${r.message}`);
-  assert.deepEqual(r.missingHashes, [env.h.o2], '缺的正是 m2 的原片');
+  assert.deepEqual(r.missingHashes, [env.h.o2], '缺的正是 m2 的素材原尺寸');
   assert.equal(r.missing[0].mediaId, 'm2', '缺的素材带 mediaId');
   await env.srv.close();
 });
 
-test('C66-T7-03 缺多个（含只有原片一档的图片）→ 全部列出', async () => {
+test('C66-T7-03 缺多个（含只有素材原尺寸一档的图片）→ 全部列出', async () => {
   const env = await gateEnv(['s1', 'o2', 's2']);
   const r = await env.check({ project: env.project, has: env.has });
   assert.equal(r.ok, false);
-  assert.deepEqual(r.missingHashes, [env.h.o1, env.h.o3].sort(), '缺 m1 的原片与 m3 的图片');
+  assert.deepEqual(r.missingHashes, [env.h.o1, env.h.o3].sort(), '缺 m1 的素材原尺寸与 m3 的图片');
   assert.deepEqual(r.missing.map((m) => m.mediaId).sort(), ['m1', 'm3']);
   await env.srv.close();
 });

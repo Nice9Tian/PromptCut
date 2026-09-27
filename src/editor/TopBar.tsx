@@ -408,7 +408,7 @@ export function TopBar() {
   const exportProject = async () => {
     const project = getState().project;
     // C6.6:按轮询到的集合先判一次(不发请求,不耽误下面「另存为」要的用户手势);
-    // 原片还没传完就不弹另存为,直接提示等待上传方。exportVideo 里还会再问一遍素材服务
+    // 素材原尺寸还没传完就不弹另存为,直接提示等待上传方。exportVideo 里还会再问一遍素材服务
     const pending = exportGateNow(project);
     if (pending && pending.length) {
       setExportState({ phase: "error", done: 0, total: 1, target: "", message: awaitingUploaderMessage(pending) });
