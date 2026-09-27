@@ -144,14 +144,17 @@ test('C66-I2-01 补转:不带 tiers 入库的视频(同 .procp 还原)→ backfi
   const origin = await listen(serviceHandler(root));
   const src = lateMoov('i2-late.mp4');
   // 不带 ?tiers=1:.procp 还原、配音等走的路,不做两档
-  const up = await (await fetch(`${origin}/api/media/upload/i2-late.mp4`, { method: 'POST', body: fs.readFileSync(src) })).json();
+  const upRes = await fetch(`${origin}/api/media/upload/i2-late.mp4`, { method: 'POST', body: fs.readFileSync(src) });
+  const upText = await upRes.text();
+  assert.equal(upRes.status, 200, upText.slice(0, 300));
+  const up = JSON.parse(upText);
   assert.equal(up.hash, sha256File(src), '不带 tiers 的入库不重封装');
   assert.equal(up.tiers, undefined);
   const missing = 'f'.repeat(64);
   const res = await postJson(`${origin}/api/media/tiers/backfill`, { items: [{ hash: up.hash, name: 'i2-late.mp4' }, { hash: missing }, { hash: 'nope' }] });
   assert.equal(res.status, 200);
   const body = await res.json();
-  assert.equal(body.items[up.hash].state, 'pending', '本地有素材原尺寸的视频:排进后台转码');
+  assert.equal(body.items[up.hash]?.state, 'pending', `本地有素材原尺寸的视频:排进后台转码 —— ${JSON.stringify(body)}`);
   assert.deepEqual(body.items[missing], { state: 'absent' }, '本地没有素材原尺寸:不转(不为了转小尺寸去拉原尺寸)');
   assert.equal(body.items.nope, undefined, '不是哈希的忽略');
   const service = await media.mediaTierService(root);
@@ -285,8 +288,9 @@ test('C66-I3-02 预渲染进程 POST /api/export:素材原尺寸没到齐回 409
   assert.equal(typeof handler, 'function');
   const origin = await listen((req, res) => handler(req, res, () => { res.statusCode = 404; res.end(); }));
   const res = await postJson(`${origin}/api/export`, { project: projectOf(), frames: '0-1' });
-  assert.equal(res.status, 409);
-  const body = await res.json();
+  const text = await res.text();
+  assert.equal(res.status, 409, `回包:${text.slice(0, 300)};编辑器进程被问过:${JSON.stringify(ed.asked)}`);
+  const body = JSON.parse(text);
   assert.equal(body.code, 'awaiting-uploader');
   assert.match(body.message, /等待上传方/);
   assert.deepEqual(body.missing.map((m) => m.mediaId), ['m1', 'm2']);
