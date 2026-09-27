@@ -15,6 +15,7 @@
  *   node scripts/probes/m7-bake-probe.mjs browser --dist <实验分支>/dist-online --out <dir>
  *        [--port-base 5710] [--heads headless|headful|both] [--rounds 2] [--layouts cross-oac,same] [--modes seq,batch4]
  *        [--dev-stage http://127.0.0.1:5715]   另跑一遍开发服务器的舞台(非在线构建)只做 seq,给 P2 分辨构建差异
+ *        [--ready]                              bake 带 `ready: true`(实验分支的就绪闸,照预渲染的 waitFrameReady);输出目录加 `-ready`
  *       起静态服务:+0 父页与在线构建(`/editor/`),+1、+2 两个舞台源(同一份在线构建),每个响应带 `Origin-Agent-Cluster: ?1`。
  *       父页(本脚本内联)开一个后台舞台 iframe(opacity 0 叠在原位),照 stageRpc 协议 `setRole('back')` →
  *       `setProject(隔离单卡工程, { reset })` → `render(末帧秒, { jump, bake })`;收 `probe-frame`(在线舞台是 gzip 字节),
@@ -25,7 +26,7 @@
  *       P2:每张卡逐帧比 desktop 与 browser-cross-oac-seq、seq 与 batch4、在线与开发舞台:逐字节(sha256)相同几帧;不同的用
  *       `compareSnapshotHtml`(样式数值 1e-6 容差)再判,记第一处差别;另把两边 HTML 各按桌面 `capture-snapshot` 的挂法截图比像素。
  *
- *   node scripts/probes/m7-bake-probe.mjs small --out <dir> [--frames 0,15,30,59]
+ *   node scripts/probes/m7-bake-probe.mjs small --out <dir> [--frames 0,15,30,59] [--variant browser-cross-oac-seq] [--css <在线构建目录>]
  *       P3:在舞台源的页面里把浏览器生成的每帧 HTML 按 `smallScale` 包进 SVG `foreignObject`、以 `data:` 地址画上画布、出 WebP(质量 0.8),
  *       记每帧耗时、`getImageData` / `toDataURL` 是否抛 SecurityError(画布污染);与桌面 CDP 截的 `<帧>.small.webp` 解码后逐像素比
  *       (平均绝对差、PSNR、差 > 16 的像素占比、alpha 差)。差图写到 <dir>/small/。
@@ -47,6 +48,8 @@ const CMD = process.argv[2] && !process.argv[2].startsWith('--') ? process.argv[
 const OUT = path.resolve(flagArg('out', path.join(os.tmpdir(), 'm7-bake-probe')));
 const BASE = Number(flagArg('port-base', '5710'));
 const log = (...a) => console.error(...a);
+// `--ready`:bake 带 `ready: true`(实验分支的就绪闸);输出目录名加 `-ready`
+const READY = process.argv.includes('--ready');
 const sha256 = (b) => crypto.createHash('sha256').update(b).digest('hex');
 fs.mkdirSync(OUT, { recursive: true });
 
@@ -106,7 +109,16 @@ async function runDesktop() {
   await fsp.rm(root, { recursive: true, force: true });
   await fsp.mkdir(root, { recursive: true });
   const { FramePipeline } = await import('../../server/frame-pipeline.mjs');
+  const { createPushQueue } = await import('../../server/artifact-push.mjs');
   const pipeline = new FramePipeline({ root, origin: () => origin, interactive: false, dataRoot: root });
+  // 小尺寸只在挂了推送队列时生成(frame-pipeline 的 smallTierEnabled):素材服务、内容库用内存替身(同 small-tier-probe.mjs)
+  const blobs = new Map(), items = new Map();
+  const asset = { async put(ns, bytes, { ext } = {}) { const hash = sha256(bytes); const id = `${ns}/${hash}`; const uploaded = !blobs.has(id); blobs.set(id, { bytes: Buffer.from(bytes), ext }); return { hash, uploaded }; },
+    async has(ns, hash) { return blobs.has(`${ns}/${hash}`); }, async get(ns, hash) { return blobs.get(`${ns}/${hash}`)?.bytes ?? null; } };
+  const content = { async put(kind, key, body) { items.set(`${kind}|${key}`, structuredClone(body)); return { hash: 'x' }; },
+    async get(kind, key) { const body = items.get(`${kind}|${key}`); return body === undefined ? null : { body: structuredClone(body), hash: 'x' }; }, async list() { return { items: [], truncated: false }; } };
+  const queue = createPushQueue({ pipeline, client: asset, content, dir: root, gate: false });
+  queue.start();
   const t0 = Date.now();
   const res = { origin, cards: {}, winLoad: winLoad() };
   const c0 = cpuTimes();
@@ -154,6 +166,7 @@ async function runDesktop() {
   } finally {
     res.cpu = cpuPct(c0, cpuTimes());
     res.ms = Date.now() - t0;
+    await queue.stop().catch(() => {});
     await pipeline.close().catch(() => {});
   }
   writeJson(path.join(OUT, 'desktop.json'), res);
@@ -237,11 +250,11 @@ async function bakeOne(page, { project, control, mode }) {
   const t0 = Date.now();
   const replies = [];
   if (mode === 'seq') {
-    replies.push(await page.evaluate((t) => window.__rpc('render', t, { jump: true, bake: {} }), secOf(last)));
+    replies.push(await page.evaluate((t, r) => window.__rpc('render', t, { jump: true, bake: { ready: r } }), secOf(last), READY));
   } else {
     for (let first = 0; first <= last; first += 4) {
       const to = Math.min(last, first + 3);
-      replies.push(await page.evaluate((t, from) => window.__rpc('render', t, { jump: true, bake: { from } }), secOf(to), first));
+      replies.push(await page.evaluate((t, from, r) => window.__rpc('render', t, { jump: true, bake: { from, ready: r } }), secOf(to), first, READY));
     }
   }
   const wallMs = Date.now() - t0;
@@ -259,6 +272,8 @@ async function bakeOne(page, { project, control, mode }) {
   const snapSteps = replies.flatMap((r) => r?.snapshotSteps ?? []);
   return {
     wallMs, cpu, frames: Object.keys(got).length, fps: +(Object.keys(got).length * 1000 / wallMs).toFixed(2),
+    readyWaitMs: Math.round(replies.reduce((n, r) => n + (r?.readyWaitMs || 0), 0)),
+    readyStuck: replies.flatMap((r) => r?.readyStuck ?? []).slice(0, 5), readyStuckCount: replies.reduce((n, r) => n + (r?.readyStuckCount || 0), 0),
     replies: replies.map((r) => ({ aborted: !!r?.aborted, reason: r?.reason, frames: r?.frames, elapsedMs: r?.elapsedMs && Math.round(r.elapsedMs), stepMs: r?.stepMs && Math.round(r.stepMs) })).slice(0, 3),
     rendersCalled: replies.length,
     snapshotMs: { inline: stats(snapSteps.map((s) => s.inlineMs)), raster: stats(snapSteps.map((s) => s.rasterMs)), serialize: stats(snapSteps.map((s) => s.serializeMs)) },
@@ -310,7 +325,7 @@ async function runBrowser() {
             const project = readJson(path.join(OUT, 'desktop', clipId, 'isolated.json'));
             const control = readJson(path.join(OUT, 'desktop', clipId, 'control.json'));
             const res = await bakeOne(page, { project, control, mode });
-            const dir = path.join(OUT, `browser-${layout}-${mode}${r > 1 || head !== 'headless' ? `-r${r}-${head}` : ''}`, clipId);
+            const dir = path.join(OUT, `browser-${layout}-${mode}${READY ? '-ready' : ''}${r > 1 || head !== 'headless' ? `-r${r}-${head}` : ''}`, clipId);
             fs.mkdirSync(dir, { recursive: true });
             for (const [n, x] of Object.entries(res.got)) if (x) fs.writeFileSync(path.join(dir, `${n}.html`), x.html);
             const row = { round: r, head, winLoad: wl, version, layout, mode, clipId, oopif: tg, caps: { measure: caps?.measure, lowMemory: caps?.lowMemory }, errors: errors.slice(0, 3), ...res, got: undefined, count: control.count };
@@ -368,6 +383,10 @@ async function rasterizer(browser, origin, width, height) {
   };
 }
 
+// 归一:去掉内联样式里的 CSS 自定义属性(在线构建压缩了 CSS,`--x: 0.4` 成了 `.4`)与 `will-change`(Motion 动画进行中才挂)
+const stripVars = (h) => h.replace(/--[A-Za-z0-9_-]+:[^;"]*;?/g, '');
+const stripWillChange = (h) => h.replace(/will-change:[^;"]*;?/g, '');
+
 async function runCompare() {
   const { compareSnapshotHtml } = await import('../../src/render/snapshotCompare.mjs');
   const variants = fs.readdirSync(OUT).filter((n) => n.startsWith('browser-') && fs.statSync(path.join(OUT, n)).isDirectory());
@@ -375,6 +394,7 @@ async function runCompare() {
   for (const v of variants) pairs.push(['desktop', v]);
   if (variants.includes('browser-cross-oac-seq') && variants.includes('browser-cross-oac-batch4')) pairs.push(['browser-cross-oac-seq', 'browser-cross-oac-batch4']);
   if (variants.includes('browser-cross-oac-seq') && variants.includes('browser-dev-seq')) pairs.push(['browser-dev-seq', 'browser-cross-oac-seq']);
+  if (variants.includes('browser-cross-oac-seq-ready') && variants.includes('browser-cross-oac-batch4-ready')) pairs.push(['browser-cross-oac-seq-ready', 'browser-cross-oac-batch4-ready']);
   const res = { pairs: {} };
   const firstDiffs = {};
   for (const [a, b] of pairs) {
@@ -384,22 +404,24 @@ async function runCompare() {
       const da = path.join(OUT, a, clipId), db = path.join(OUT, b, clipId);
       if (!fs.existsSync(da) || !fs.existsSync(db)) continue;
       const count = readJson(path.join(OUT, 'desktop', clipId, 'control.json')).count;
-      let same = 0, tolSame = 0, missA = 0, missB = 0; const reasons = {}; let first = null;
+      let same = 0, tolSame = 0, missA = 0, missB = 0, sameNoVars = 0, sameNoVarsWc = 0; const reasons = {}; let first = null;
       for (let n = 0; n < count; n++) {
         const fa = path.join(da, `${n}.html`), fb = path.join(db, `${n}.html`);
         const ha = fs.existsSync(fa) ? fs.readFileSync(fa, 'utf8') : null;
         const hb = fs.existsSync(fb) ? fs.readFileSync(fb, 'utf8') : null;
         if (ha === null) { missA++; continue; }
         if (hb === null) { missB++; continue; }
-        if (sha256(ha) === sha256(hb)) { same++; continue; }
+        if (sha256(ha) === sha256(hb)) { same++; sameNoVars++; sameNoVarsWc++; continue; }
+        if (stripVars(ha) === stripVars(hb)) sameNoVars++;
+        if (stripWillChange(stripVars(ha)) === stripWillChange(stripVars(hb))) sameNoVarsWc++;
         const c = compareSnapshotHtml(ha, hb);
         if (c.same) { tolSame++; continue; }
         const r = c.reason; reasons[r] = (reasons[r] || 0) + 1;
         if (!first) first = { frame: n, reason: c.reason, at: c.at, expected: String(c.expected ?? '').slice(0, 300), actual: String(c.actual ?? '').slice(0, 300), attr: c.attr, lenA: ha.length, lenB: hb.length };
       }
-      res.pairs[key][clipId] = { count, bytesSame: same, sameWithin1e6: tolSame, differ: count - same - tolSame - missA - missB, missA, missB, reasons };
+      res.pairs[key][clipId] = { count, bytesSame: same, sameIgnoringCssVars: sameNoVars, sameIgnoringCssVarsAndWillChange: sameNoVarsWc, sameWithin1e6: tolSame, differ: count - same - tolSame - missA - missB, missA, missB, reasons };
       if (first) firstDiffs[`${key} ${clipId}`] = first;
-      log(`${key.padEnd(52)} ${clipId.padEnd(15)} same ${same} tol ${tolSame} differ ${res.pairs[key][clipId].differ} miss ${missA}/${missB} ${JSON.stringify(reasons)}`);
+      log(`${key.padEnd(52)} ${clipId.padEnd(15)} same ${same} noVars ${sameNoVars} noVars+wc ${sameNoVarsWc} tol ${tolSame} differ ${res.pairs[key][clipId].differ} miss ${missA}/${missB} ${JSON.stringify(reasons)}`);
     }
   }
   res.firstDiffs = firstDiffs;
@@ -438,12 +460,17 @@ async function runCompare() {
 
 async function runSmall() {
   const variant = flagArg('variant', 'browser-cross-oac-seq');
+  // `--css <在线构建目录>`:把构建出的全局样式表(Tailwind 基础层 + 主题)整份放进 foreignObject 的 <style>。
+  // 快照只内联「与同标签基线不同」的非继承属性(snapshotStyleProps.mjs),基线靠重放页的全局样式;SVG 图像是独立文档,没有它就走 UA 默认
+  const cssDist = flagArg('css', null);
+  const css = cssDist ? fs.readdirSync(path.join(cssDist, 'assets')).filter((n) => n.endsWith('.css')).map((n) => fs.readFileSync(path.join(cssDist, 'assets', n), 'utf8')).join('\n') : '';
+  const tag = css ? '-css' : '';
   const frames = (flagArg('frames') || '0,15,30,59').split(',').map(Number);
   const { smallSize } = await import('../../server/bakery/small-bitmap.mjs');
   const handler = makeStaticHandler(path.join(ROOT, 'dist-online'));
   const servers = await Promise.all([serve(BASE, handler, '127.0.0.1'), serve(BASE + 2, handler, '127.0.0.1')]);
   const browser = await launch('headless');
-  const res = { variant, cards: {} };
+  const res = { variant, css: !!css, cssBytes: css.length, cards: {} };
   fs.mkdirSync(path.join(OUT, 'small'), { recursive: true });
   try {
     const page = await browser.newPage();
@@ -459,7 +486,7 @@ async function runSmall() {
         const fd = path.join(OUT, 'desktop', clipId, `${n}.small.webp`);
         if (!fs.existsSync(fh) || !fs.existsSync(fd)) continue;
         const html = fs.readFileSync(fh, 'utf8');
-        const out = await page.evaluate(async ({ html, w, h, bw, bh, s, desk }) => {
+        const out = await page.evaluate(async ({ html, w, h, bw, bh, s, desk, css }) => {
           const lt = []; const po = new PerformanceObserver((l) => { for (const e of l.getEntries()) lt.push(e.duration); }); po.observe({ type: 'longtask' });
           const t0 = performance.now();
           // HTML 片段 → XHTML(foreignObject 里要合法 XML):借 DOM 解析再用 XMLSerializer 输出
@@ -467,6 +494,7 @@ async function runSmall() {
           const div = document.createElementNS('http://www.w3.org/1999/xhtml', 'div');
           div.setAttribute('style', `position:absolute;left:0;top:0;width:${bw}px;height:${bh}px;transform:scale(${s});transform-origin:0 0;isolation:isolate;overflow:visible`);
           const plane = document.createElementNS('http://www.w3.org/1999/xhtml', 'div'); plane.setAttribute('style', 'position:absolute;inset:0'); plane.appendChild(tpl.content); div.appendChild(plane);
+          if (css) { const st = document.createElementNS('http://www.w3.org/1999/xhtml', 'style'); st.textContent = css; div.insertBefore(st, div.firstChild); }
           const xhtml = new XMLSerializer().serializeToString(div);
           const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}"><foreignObject x="0" y="0" width="${w}" height="${h}">${xhtml}</foreignObject></svg>`;
           const tSer = performance.now();
@@ -487,22 +515,24 @@ async function runSmall() {
           if (bb) {
             const bc = new OffscreenCanvas(bb.width, bb.height); const bg = bc.getContext('2d'); bg.drawImage(bb, 0, 0); const B = bg.getImageData(0, 0, bb.width, bb.height);
             if (B.width === D.width && B.height === D.height) {
-              let sum = 0, sq = 0, over = 0, maxd = 0, adiff = 0, opaqueA = 0, opaqueB = 0; const n = B.width * B.height;
+              let sum = 0, sq = 0, over = 0, maxd = 0, adiff = 0, opaqueA = 0, opaqueB = 0, pmSum = 0, pmOver = 0, pmMax = 0; const n = B.width * B.height;
               const dimg = new ImageData(B.width, B.height);
-              for (let i = 0; i < B.data.length; i += 4) { let m = 0; for (let k = 0; k < 4; k++) { const d = Math.abs(B.data[i + k] - D.data[i + k]); sum += d; sq += d * d; if (d > m) m = d; } if (m > 16) over++; if (m > maxd) maxd = m; adiff += Math.abs(B.data[i + 3] - D.data[i + 3]); if (D.data[i + 3] > 8) opaqueA++; if (B.data[i + 3] > 8) opaqueB++; dimg.data[i] = Math.min(255, m * 4); dimg.data[i + 1] = 0; dimg.data[i + 2] = 0; dimg.data[i + 3] = 255; }
+              for (let i = 0; i < B.data.length; i += 4) { let m = 0; for (let k = 0; k < 4; k++) { const d = Math.abs(B.data[i + k] - D.data[i + k]); sum += d; sq += d * d; if (d > m) m = d; } if (m > 16) over++; if (m > maxd) maxd = m; adiff += Math.abs(B.data[i + 3] - D.data[i + 3]);
+                // 预乘后的差(近乎透明的像素 RGB 没有意义,不该算进去)
+                let pm = Math.abs(B.data[i + 3] - D.data[i + 3]); for (let k = 0; k < 3; k++) pm = Math.max(pm, Math.abs(B.data[i + k] * B.data[i + 3] - D.data[i + k] * D.data[i + 3]) / 255); pmSum += pm; if (pm > 16) pmOver++; if (pm > pmMax) pmMax = pm; if (D.data[i + 3] > 8) opaqueA++; if (B.data[i + 3] > 8) opaqueB++; dimg.data[i] = Math.min(255, m * 4); dimg.data[i + 1] = 0; dimg.data[i + 2] = 0; dimg.data[i + 3] = 255; }
               const mse = sq / (n * 4);
               const oc = new OffscreenCanvas(B.width, B.height); oc.getContext('2d').putImageData(dimg, 0, 0);
               const diffPng = await oc.convertToBlob({ type: 'image/png' });
               const u8 = new Uint8Array(await diffPng.arrayBuffer()); let bin = ''; for (let k = 0; k < u8.length; k += 32768) bin += String.fromCharCode(...u8.subarray(k, k + 32768));
-              diff = { mad: +(sum / (n * 4)).toFixed(3), psnr: mse ? +(10 * Math.log10(65025 / mse)).toFixed(2) : Infinity, over16Pct: +(100 * over / n).toFixed(3), maxd, alphaMad: +(adiff / n).toFixed(3), coverageDesk: +(100 * opaqueA / n).toFixed(2), coverageFo: +(100 * opaqueB / n).toFixed(2), diffPng: btoa(bin) };
+              diff = { pmMad: +(pmSum / n).toFixed(3), pmOver16Pct: +(100 * pmOver / n).toFixed(3), pmMax: Math.round(pmMax), mad: +(sum / (n * 4)).toFixed(3), psnr: mse ? +(10 * Math.log10(65025 / mse)).toFixed(2) : Infinity, over16Pct: +(100 * over / n).toFixed(3), maxd, alphaMad: +(adiff / n).toFixed(3), coverageDesk: +(100 * opaqueA / n).toFixed(2), coverageFo: +(100 * opaqueB / n).toFixed(2), diffPng: btoa(bin) };
             } else diff = { size: [B.width, B.height, D.width, D.height] };
           }
           po.disconnect();
           const webp = blob ? new Uint8Array(await blob.arrayBuffer()) : null; let wb = ''; if (webp) for (let k = 0; k < webp.length; k += 32768) wb += String.fromCharCode(...webp.subarray(k, k + 32768));
           return { tainted, taintErr, loadErr, serializeMs: +(tSer - t0).toFixed(1), decodeMs: +(tDec - tSer).toFixed(1), drawEncodeMs: +(t1 - tDec).toFixed(1), totalMs: +(t1 - t0).toFixed(1), svgBytes: svg.length, webpBytes: webp ? webp.length : 0, deskSize: [deskBm.width, deskBm.height], longTasks: lt, diff, webp: wb ? btoa(wb) : null };
-        }, { html, w: size.width, h: size.height, bw: clip.frame?.w ?? PROJECT.width, bh: clip.frame?.h ?? PROJECT.height, s: size.scale, desk: fs.readFileSync(fd).toString('base64') });
-        if (out.webp) fs.writeFileSync(path.join(OUT, 'small', `${clipId}-${n}-fo.webp`), Buffer.from(out.webp, 'base64'));
-        if (out.diff?.diffPng) fs.writeFileSync(path.join(OUT, 'small', `${clipId}-${n}-diff.png`), Buffer.from(out.diff.diffPng, 'base64'));
+        }, { html, w: size.width, h: size.height, bw: clip.frame?.w ?? PROJECT.width, bh: clip.frame?.h ?? PROJECT.height, s: size.scale, desk: fs.readFileSync(fd).toString('base64'), css });
+        if (out.webp) fs.writeFileSync(path.join(OUT, 'small', `${clipId}-${n}-fo${tag}.webp`), Buffer.from(out.webp, 'base64'));
+        if (out.diff?.diffPng) fs.writeFileSync(path.join(OUT, 'small', `${clipId}-${n}-diff${tag}.png`), Buffer.from(out.diff.diffPng, 'base64'));
         fs.copyFileSync(fd, path.join(OUT, 'small', `${clipId}-${n}-cdp.webp`));
         delete out.webp; if (out.diff) delete out.diff.diffPng;
         rowsC[n] = out; lts.push(...out.longTasks);
@@ -511,7 +541,7 @@ async function runSmall() {
       res.cards[clipId] = { size, frames: rowsC };
     }
   } finally { await browser.close().catch(() => {}); await closeAll(servers); }
-  writeJson(path.join(OUT, 'small.json'), res);
+  writeJson(path.join(OUT, `small${tag}.json`), res);
   console.log(JSON.stringify(res));
 }
 
