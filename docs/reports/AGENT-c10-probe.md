@@ -101,3 +101,33 @@
 - **可见舞台不受后台舞台拖累**：c / e 下可见舞台的长任务 0、rAF p95 与基线相同。本次测的是两个舞台都跨源的布置；「可见舞台与父页同源、只有后台舞台跨源加 OAC」没单独测，按进程模型推断同样成立（后台在自己的进程里），实施时若采用要补一轮。
 - **父页写 L2 的代价在预算内但要留意**：一次性 `postMessage` 2 MB 字符串到父页，父页反序列化再 deflate，有头 9 例里出现过一次 66 ms 的 rAF 间隔（没有记成长任务）。建议舞台里先 deflate（`CompressionStream` 在舞台自己的进程里），再以可转移的 `ArrayBuffer` 交给父页，父页只写库。
 
+## P4 跨源舞台读素材
+
+### 做法
+
+起托管组合 `server/hosted/main.mjs`（文档服务 5428、素材服务 5429，只绑 127.0.0.1，数据目录用系统临时目录，跑完删掉），用 `server/asset-store/client.mjs` 传一段 2 s 的 320×180 H.264 mp4（ffmpeg testsrc，10815 B）和一张 128×128 png。舞台页放在父页（5420）的 iframe 里，URL 都带 `?t=probe-ticket`（形状同 C10a 的只读票据；这一轮素材服务信任本机回环，票据不核对，所以只测 CORS 这一层）。三种路：
+
+- **A** 舞台在 5424，直连素材服务 `127.0.0.1:5429/api/asset/media/<hash>`（素材服务自带 `Access-Control-Allow-Origin: *`，见 `server/asset-service.ts` 文件头「跨源」）；
+- **B** 舞台在 5424，经一个**去掉全部 `access-control-*` 头**的代理（5425）读，模拟「反代没配 CORS」；
+- **C** 舞台在 5426，同一个进程既发舞台页，又把 `/media/<hash>` 反代到素材服务的 `/api/asset/media/<hash>`，也去掉 CORS 头，模拟「子域也反代 /media、对舞台同源」。
+
+每条路测：`fetch` 带 `Range: bytes=0-1023`；`fetch` 带 `Authorization: Bearer`（会触发预检）；`<video>` 与 `<img>` 不带和带 `crossorigin="anonymous"`，加载后 `drawImage` 到 canvas 再 `toDataURL()`（快照的 canvas 换 `<img>` 就是这么做的）。另起一次 `PROMPTCUT_TEST_NO_LOOPBACK_TRUST=1`，用假票据看 401 能否被跨源读到。有头、无头结果完全相同。
+
+### 结果
+
+| 路 | fetch + Range | fetch + Bearer（预检） | `<video>` 无 crossorigin | `<video crossorigin>` | `<img>` 无 crossorigin | `<img crossorigin>` |
+|---|---|---|---|---|---|---|
+| A 跨源直连（有 ACAO:*） | 206，`bytes 0-1023/10815` | 206 | 能播，canvas **被污染**（`SecurityError`） | 能播，canvas 可读 | 能显示，canvas **被污染** | 能显示，canvas 可读 |
+| B 跨源、去掉 CORS 头 | `TypeError: Failed to fetch` | 失败 | 能播，canvas 被污染 | **加载失败**（media error 4） | 能显示，canvas 被污染 | **加载失败** |
+| C 同源前缀反代 /media（无 CORS 头） | 206 | 206，**没有预检** | 能播，canvas 可读 | 能播，canvas 可读 | canvas 可读 | canvas 可读 |
+| A，不信任回环 + 假票据 | 能读到 **401**（35 B 回包） | 能读到 401 | 失败（media error 4） | 失败 | — | — |
+
+代理计数：B 共 6 个请求（3 个带 Range，1 个 OPTIONS 预检）；C 共 6 个请求（4 个带 Range，0 个 OPTIONS）。
+
+### 结论
+
+- **舞台跨源直连素材服务要 CORS**：`fetch`（含 Range、含 Bearer 预检）靠素材服务现有的 `Access-Control-Allow-Origin: *` 才读得到；反代若把这组头吃掉就全断。401 也带着 ACAO，所以票据过期时页面能读到状态码去换票。
+- **CORS 之外还有一层画布污染**：跨源素材在元素上不带 `crossorigin` 时能显示、能播，但一画进 canvas 就被污染，`toDataURL()`、WebGL 取纹理都会抛 `SecurityError`。现在 `src/` 里的素材元素都不设 `crossOrigin`（在 `src` 里搜不到），桌面版舞台读的是同源 `/@media`，所以没暴露。在线若让舞台跨源直连素材服务，就得给所有素材元素加 `crossOrigin = "anonymous"`（且素材服务必须回 ACAO），否则画素材的 canvas 卡生成不了快照。
+- **子域也反代 /media（对舞台同源）时，CORS 与画布污染两件事都不用管**：C 路去掉了全部 CORS 头，Range、Bearer、元素、canvas 全部正常，而且 Bearer 不再有预检（少一个往返）。推荐线上这样部署：`s1.<主机>`、`s2.<主机>` 的 nginx 都把 `/media/`（或原路径 `/api/asset/media/`）反代到素材服务，舞台用相对地址。
+- 没测到：真实票据的签发与过期（本轮票据不核对，只证了 401 可读）；HTTPS 下的混合内容；nginx 本身（用 Node 代理模拟）。
+
