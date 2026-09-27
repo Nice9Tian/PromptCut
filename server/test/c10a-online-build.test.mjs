@@ -63,8 +63,9 @@ it('C10A-API-02 vite build --mode online 成功：base 是 /editor/，index.html
  * 〔裁，主会话 2026-09-27〕原断言「0 处」改成棘轮：集成时产物里已有的 `/api/` 路径进清单（`c10a-kit.mjs` 的
  * `ONLINE_API_RATCHET_FILE`），这里断言产物里的路径 ⊆ 清单，新出现的判红。这些路径在运行时都被守卫拦下
  * （`c10a-api-guard.test.mjs`、探针的网络记录 0 条）；逐个置灰或换在线替代归 C10 其余，做掉一个就从清单删一个。
+ * M8 遗留 L24（2026-09-28）起清单与产物须逐条一致：产物里已经没有的路径留在清单里同样判红，清单不会悄悄变宽。
  */
-it('C10A-API-03 在线构建的产物里的 /api/ 路径不超出棘轮清单（新出现的判红）', { timeout: 240_000 }, async (t) => {
+it('C10A-API-03 在线构建的产物里的 /api/ 路径与棘轮清单逐条一致（新出现的、清单里多余的都判红）', { timeout: 240_000 }, async () => {
   await buildOnline();
   const ratchet = JSON.parse(fs.readFileSync(repoPath(ONLINE_API_RATCHET_FILE), 'utf8'));
   const allowed = new Set(ratchet.paths);
@@ -73,7 +74,7 @@ it('C10A-API-03 在线构建的产物里的 /api/ 路径不超出棘轮清单（
   const hits = apiLiterals(onlineDir).filter((h) => fresh.some((p) => h.context.includes(p)));
   assert.deepEqual(fresh, [], `在线构建里新出现了 ${fresh.length} 个 /api/ 路径（清单 ${ONLINE_API_RATCHET_FILE} 之外）：${JSON.stringify(hits.slice(0, 10), null, 1)}`);
   const gone = ratchet.paths.filter((p) => !found.includes(p));
-  if (gone.length) t.diagnostic(`清单里有 ${gone.length} 个路径产物里已经没有了，可以从清单删掉：${gone.join(', ')}`);
+  assert.deepEqual(gone, [], `清单里有 ${gone.length} 个路径产物里已经没有了，从 ${ONLINE_API_RATCHET_FILE} 删掉：${gone.join(', ')}`);
 });
 
 it('C10A-API-04 桌面构建照旧：base 是 /，不受在线模式影响', { timeout: 240_000 }, async () => {
