@@ -7,10 +7,14 @@
  * 本模块只交换地址，不传字节。
  *
  * 接线在 `vite-plugin-media.ts` 的 `mediaPlugin()`：监听的不是回环、设了 `PROMPTCUT_DOCSERVICE_URL` 才惰性 import 本模块。
- * 令牌只交给 WebSocket 端点放进子协议（G.5），不进日志。只引 Node 内置模块和同仓库的 `ws-transport.mjs`。
+ * 令牌只交给端点放进子协议（G.5），不进日志。只引 Node 内置模块和同仓库的 `session-link.mjs`。
+ *
+ * 连接是一个会话（`render-node/session-link.mjs` 的 `createDocEndpoint`，HT-a 契约 `docs/plan/http-transport-contract.md` 第 9 节）：
+ * 传输断开在保留期内接续，登记挂在会话上不掉，接续时不重发；会话结束后建新会话（`onOpen`）时再登记一次。
+ * 对没有会话层的旧服务端退化为「一条传输一个会话」，行为与原来的 `createWsEndpoint` 相同。
  */
 import os from 'node:os';
-import { createWsEndpoint } from './render-node/ws-transport.mjs';
+import { createDocEndpoint } from './render-node/session-link.mjs';
 
 /** 私有网段的 IPv4：10/8、172.16/12、192.168/16 */
 function isPrivateIPv4(address) {
@@ -61,7 +65,7 @@ function defaultAnnouncerId() {
  * @param {string | null} [options.token]  集群令牌
  * @param {string} [options.announcerId]
  * @param {string[]} [options.urls]  `lanAssetUrls` 的结果；为空不登记
- * @param {(opts: { url: string, token?: string, log?: Function }) => any} [options.createEndpoint]  缺省 `createWsEndpoint`
+ * @param {(opts: { url: string, token?: string, log?: Function }) => any} [options.createEndpoint]  缺省 `createDocEndpoint`
  * @param {(event: string, fields: object) => void} [options.log]
  * @returns {{ stop(): void }}
  */
@@ -70,7 +74,7 @@ export function startAssetAnnounce({
   token,
   announcerId = defaultAnnouncerId(),
   urls,
-  createEndpoint = createWsEndpoint,
+  createEndpoint = createDocEndpoint,
   log = () => {},
 } = /** @type {any} */ ({})) {
   const noop = { stop() {} };

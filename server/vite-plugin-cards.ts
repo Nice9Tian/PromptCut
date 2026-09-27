@@ -1159,7 +1159,7 @@ export function createHostCardSync(opts: {
   dataDir: string;
   projectId: string;
   url: string;
-  endpoint: { send(m: object): unknown; onMessage(h: (m: any) => void): void; onOpen(h: () => void): void; onClose(h: (info: any) => void): void; connected?: boolean };
+  endpoint: { send(m: object): unknown; onMessage(h: (m: any) => void): void; onOpen(h: () => void): void; onClose(h: (info: any) => void): void; onResume?(h: () => void): void; stats?(): any; connected?: boolean };
   before?: () => void;
   log?: (event: string, fields?: object) => void;
 }): HostCardSync {
@@ -1173,6 +1173,9 @@ export function createHostCardSync(opts: {
       if (endpoint.connected === true) queueMicrotask(h);
     },
     onClose: (h: (info: any) => void) => endpoint.onClose(h),
+    // 会话端点(`createDocEndpoint`)的接续与诊断照转:接续只记数,诊断里看得到传输脱开与接续
+    onResume: (h: () => void) => endpoint.onResume?.(h),
+    stats: () => endpoint.stats?.() ?? null,
     close: () => { /* 连接归队列节点 */ },
   };
   const sync = createCardSync({
