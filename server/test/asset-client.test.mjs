@@ -213,7 +213,14 @@ test('L3 某片回 500 两次再成功：重试后成功；网络错同样重试
   const lockKit = await assetTicketKit();
   const locked = await harness.serve({ chunkSize: CHUNK, isTrusted: () => false, tickets: lockKit.tickets });
   const rec4 = recordingFetch();
-  const c4 = createAssetClient({ base: locked.base, fetch: rec4.fetch, chunkSize: CHUNK, retries: 3 });
+  // 「不等重试间隔」只看客户端自己花的时间：总耗时减去花在 fetch（真 HTTP 往返、服务端核票）里的时间。
+  // 机器忙时往返本身会慢，但那不是重试间隔；客户端若睡了第一次重试间隔（200 ms），这段时间至少 200 ms，照样拦得住。
+  let inFetchMs = 0;
+  const timedFetch = async (...args) => {
+    const s = Date.now();
+    try { return await rec4.fetch(...args); } finally { inFetchMs += Date.now() - s; }
+  };
+  const c4 = createAssetClient({ base: locked.base, fetch: timedFetch, chunkSize: CHUNK, retries: 3 });
   const t1 = Date.now();
   const err = await c4.put('snap', bytesOf(300, 12)).then(() => null, (e) => e);
   assert.ok(err instanceof Error, '4xx 抛出');
@@ -221,7 +228,8 @@ test('L3 某片回 500 两次再成功：重试后成功；网络错同样重试
   const own = Object.fromEntries(Object.getOwnPropertyNames(err).filter((k) => k !== 'stack' && k !== 'message' && k !== 'status').map((k) => [k, err[k]]));
   assert.match(JSON.stringify(own), /unauthorized/, `错误带回包：${JSON.stringify(own)}`);
   assert.equal(rec4.log.length, 1, '4xx 不重试');
-  assert.ok(Date.now() - t1 < 150, '4xx 不等重试间隔');
+  const ownMs = Date.now() - t1 - inFetchMs;
+  assert.ok(ownMs < 150, `4xx 不等重试间隔：fetch 之外客户端自己用了 ${ownMs} ms（fetch 里 ${inFetchMs} ms）`);
   // 只读票据写入：403 同样不重试（第一片 PUT 上）
   const rec4b = recordingFetch();
   const readOnly = lockKit.issue('r');
