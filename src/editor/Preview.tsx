@@ -639,11 +639,13 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
       if (document.visibilityState === "visible") src.focus(tRef.current, getState().project.fps || 30);
     };
     document.addEventListener("visibilitychange", resume);
-    // A paused phone has no frame events. Reconcile the actual stage periodically:
-    // setTime may have replaced a snapshot after its delivery was recorded in the
-    // baseline, and an acknowledged iframe update can still be lost on remount.
+    /*
+     * 暂停着的在线页面没有帧事件会再投:每 5 秒带 reset 重投一次,对齐舞台的实际状态
+     * (投递记进基线之后 setTime 又换掉了快照、或 iframe 原地重载丢了已确认的投递)。
+     * 播放中每拍都在投,不用它。
+     */
     const reconcile = window.setInterval(() => {
-      if (document.visibilityState === "visible") {
+      if (document.visibilityState === "visible" && !playingRef.current) {
         markBaselineReset("front");
         void pumpRef.current();
       }

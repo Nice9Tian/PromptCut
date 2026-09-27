@@ -352,6 +352,9 @@ export function pickAssetEndpoint(endpoints: unknown, docBase: string, selfHost:
  */
 export async function connectSharedAssets(link: LinkLike, docBase: string, { online = false }: { online?: boolean } = {}): Promise<string | null> {
   let base: string | null = null;
+  // 同一条连接重连后再调(重新订阅登记):已经挑好的素材服务不因一次失败退回本地,挑到同一个也不重设
+  const again = docLink === link && remote !== null;
+  let failed = false;
   const generation = ++discoveryGeneration;
   if (discoveryTimer !== null) clearTimeout(discoveryTimer);
   discoveryTimer = null;
@@ -360,8 +363,15 @@ export async function connectSharedAssets(link: LinkLike, docBase: string, { onl
   try {
     const r = await link.request({ type: "service.watch", kinds: ["asset"] });
     base = pickAssetEndpoint(r.endpoints, docBase, typeof location === "undefined" ? "" : location.host, { online });
-  } catch { /* 取不到登记:留在本地 */ }
+  } catch { failed = true; /* 取不到登记:留在本地 */ }
   if (generation !== discoveryGeneration || docLink !== link) return null;
+  if (again && remote && (failed || base === remote.base)) {
+    if (failed) discoveryTimer = setTimeout(() => {
+      discoveryTimer = null;
+      if (docLink === link) void connectSharedAssets(link, docBase, { online });
+    }, 2000);
+    return remote.base;
+  }
   setRemoteAssets(base ? { base, ticket: assetTicketSource(link) } : null);
   stopUploadTarget?.();
   stopUploadTarget = startUploadTarget(link, base);
