@@ -182,7 +182,14 @@ async function startEditor(label, port, env) {
     return fetch(`${origin}/`, { signal: AbortSignal.timeout(3000) }).then((r) => r.ok, () => false);
   }, 240_000, 500);
   if (!up) throw new Error(`编辑器 ${label} 没起来:${log.slice(-10).join(' | ').slice(0, 600)}`);
-  return { label, origin, port, child, log };
+  const ed = { label, origin, port, child, log };
+  editors.push(ed);
+  return ed;
+}
+const editors = [];
+/** 收尾时把编辑器输出(含预渲染进程)存到截图目录,排障用 */
+function saveEditorLogs(dir) {
+  for (const ed of editors) { try { fs.writeFileSync(path.join(dir, `${ed.label}-editor.log`), ed.log.join('\n')); } catch { /* 写不了不影响结论 */ } }
 }
 
 /* ------------------------------------------------------------------ 文档服务连接(Node 侧) */
@@ -475,26 +482,34 @@ async function runCreator(out) {
     }, path.basename(video)), 120_000, 300);
     if (!media) throw new Error('素材没入库');
     out.importMs = Date.now() - tImport;
-    // 边传边问托管端两档的 chunks:各自第一次 complete 的时刻
+    // 边传边问托管端两档的 chunks:各自第一次 complete 的时刻。小尺寸的哈希从编辑器的两档登记(`/api/media/tiers`)取,
+    // 转好就知道;另记「原尺寸已 complete 而小尺寸还没有」的次数(先小后大就应当是 0)
     const cli = conn.client('r');
     const firstComplete = { small: null, original: null };
     let smallHash = null;
+    let smallState = null;
+    let violations = 0;
+    let polls = 0;
     const tiersDone = await until('[creator] 素材小尺寸生成、两档都传到托管端', async () => {
       if (!smallHash) {
-        smallHash = await P(page, async (id) => (await import('/src/store/project.ts')).getState().project.media.find((x) => x.id === id)?.tiers?.small ?? null, media.id);
+        const t = await getJson(`${A.origin}/api/media/tiers?hashes=${media.original}`).catch(() => null);
+        smallState = t?.items?.[media.original]?.state ?? smallState;
+        smallHash = t?.items?.[media.original]?.small ?? null;
       }
-      for (const [tier, h] of [['small', smallHash], ['original', media.original]]) {
-        if (!h || firstComplete[tier]) continue;
-        const c = await cli.chunks('media', h).catch(() => null);
-        if (c?.complete) firstComplete[tier] = Date.now();
-      }
+      polls++;
+      const [cs, co] = await Promise.all([smallHash ? cli.chunks('media', smallHash).catch(() => null) : null, cli.chunks('media', media.original).catch(() => null)]);
+      const now = Date.now();
+      if (cs?.complete && !firstComplete.small) firstComplete.small = now;
+      if (co?.complete && !firstComplete.original) firstComplete.original = now;
+      if (co?.complete && !cs?.complete) violations++;
       return firstComplete.small && firstComplete.original;
-    }, 360_000, 150);
+    }, 360_000, 100);
+    const smallInProject = await until('[creator] 项目里写上 tiers.small', () => P(page, async (id) => (await import('/src/store/project.ts')).getState().project.media.find((x) => x.id === id)?.tiers?.small ?? null, media.id), 30_000, 300);
     out.tiers = { original: media.original, small: smallHash, remuxed: media.original !== sha256(videoBytes) };
-    out.firstCompleteMs = { small: firstComplete.small ? firstComplete.small - tImport : null, original: firstComplete.original ? firstComplete.original - tImport : null };
+    out.firstCompleteMs = { small: firstComplete.small ? firstComplete.small - tImport : null, original: firstComplete.original ? firstComplete.original - tImport : null, polls, originalBeforeSmall: violations };
     check(tiersDone, '[creator] 托管端两档都 complete', firstComplete);
-    check(smallHash && /^[0-9a-f]{64}$/.test(smallHash), '[creator] 项目里有 tiers.small', smallHash);
-    check(firstComplete.small && firstComplete.original && firstComplete.small <= firstComplete.original, '[creator] 托管端素材小尺寸先于原尺寸 complete', out.firstCompleteMs);
+    check(smallHash && /^[0-9a-f]{64}$/.test(smallHash) && smallInProject === smallHash, '[creator] 项目里有 tiers.small,与两档登记一致', { smallHash, smallInProject, smallState });
+    check(violations === 0 && firstComplete.small && firstComplete.original && firstComplete.small <= firstComplete.original, '[creator] 托管端素材小尺寸先于原尺寸 complete', out.firstCompleteMs);
     const drained = await until('[creator] 上传队列清空', async () => {
       const q = await getJson(`${A.origin}/api/media/upload-queue`);
       return q?.queue && q.queue.items.length === 0 && !q.queue.working ? q.queue : null;
@@ -636,6 +651,7 @@ async function runCreator(out) {
     }
     try { await conn?.close(); } catch { /* 已关 */ }
     try { await browser?.close(); } catch { /* 已关 */ }
+    saveEditorLogs(OUT);
     for (const c of children) { killTree(c); await exited(c); }
     card.cleanup(CARD_ID);
     if (!KEEP) { try { fs.rmSync(TMP, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 }); } catch { /* Windows 句柄没放 */ } } else out.temp = TMP;
@@ -687,8 +703,16 @@ async function runObserver(out) {
       if (!m) return null;
       const c = p.tracks.flatMap((t) => t.clips).find((x) => x.mediaId === m.id);
       return c ? { mediaId: m.id, clipId: c.id, tiers: m.tiers ?? null } : null;
-    }, cfg.tiers.original), 60_000, 200);
-    if (!clip) throw new Error('观察端没看到视频片段');
+    }, cfg.tiers.original), 120_000, 200);
+    if (!clip) {
+      out.debugProject = await P(page, async () => {
+        const S = await import('/src/store/project.ts');
+        const p = S.getState().project;
+        return { id: p.id, name: p.name, media: p.media.map((m) => ({ kind: m.kind, hash: m.hash?.slice(0, 12) ?? null, tiers: m.tiers ?? null, pending: !!m.pending })),
+          clips: p.tracks.flatMap((t) => t.clips).map((c) => c.cardId || `media:${c.mediaId}`), view: window.__pcSyncTest?.view() ?? null };
+      }).catch((e) => ({ error: String(e?.message ?? e) }));
+      throw new Error('观察端没看到视频片段');
+    }
     out.joinMs = Date.now() - tJoin;
     out.projectTiers = clip.tiers;
     await P(page, async (t) => { const S = await import('/src/store/project.ts'); S.actions.pause?.(); S.actions.seek(t); }, SEEK);
@@ -898,6 +922,7 @@ async function runObserver(out) {
     say('error', { stack: String(error?.stack ?? error).slice(0, 1500) });
   } finally {
     try { await browser?.close(); } catch { /* 已关 */ }
+    saveEditorLogs(OUT);
     for (const c of children) { killTree(c); await exited(c); }
     card?.cleanup(cfg?.card?.id ?? '');
     if (!KEEP) { try { fs.rmSync(TMP, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 }); } catch { /* Windows 句柄没放 */ } } else out.temp = TMP;
@@ -914,8 +939,11 @@ async function runHost(out) {
   const store = kv(run);
   const port = Number(arg('--port', DEFAULT_PORT.host));
   const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-c66t9-host-'));
+  const OUT = path.resolve(arg('--out', path.join(os.tmpdir(), `pc-c66t9-${run}`, 'host')));
+  fs.mkdirSync(OUT, { recursive: true });
   out.port = port;
   let child = null;
+  let lines = [];
   let card = null;
   let cfg = null;
   let conn = null;
@@ -933,7 +961,6 @@ async function runHost(out) {
     for (const key of ['PROMPTCUT_DOCSERVICE_URL', 'PROMPTCUT_CLUSTER_TOKEN', 'PROMPTCUT_QUEUE_NODE', 'PROMPTCUT_SHARED_CONFIG', 'PROMPTCUT_TEST_CODE_VERSION']) delete env[key];
     child = fork(path.join(ROOT, 'scripts', 'render-host.mjs'), ['--config', configFile, '--port', String(port), '--data', path.join(TMP, 'data')],
       { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe', 'ipc'], windowsHide: true });
-    const lines = [];
     let exitLine = null;
     const keep = (c) => {
       for (const line of c.toString().split('\n')) {
@@ -1007,6 +1034,7 @@ async function runHost(out) {
   } finally {
     try { await conn?.close(); } catch { /* 已关 */ }
     if (child && child.exitCode === null) { killTree(child); await exited(child); }
+    try { fs.writeFileSync(path.join(OUT, 'render-host.log'), lines.join('\n')); } catch { /* 写不了不影响结论 */ }
     card?.cleanup(cfg?.card?.id ?? '');
     if (!KEEP) { try { fs.rmSync(TMP, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 }); } catch { /* Windows 句柄没放 */ } } else out.temp = TMP;
     try { await store.put('host', { ...out, ok: fails.length === 0, fails }); } catch (e) { fails.push(`结果交不回协调口:${e?.message ?? e}`); }
