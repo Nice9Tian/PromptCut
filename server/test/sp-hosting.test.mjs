@@ -4,7 +4,8 @@
  *
  * - 组合在本进程里起（`server/hosted/combo.mjs`，端口 0，只绑回环）；失败即关的几条起 `server/hosted/main.mjs` 子进程，
  *   按退出码与 `config.error` 判；
- * - 「非回环来源」用 `trustLoopback: false` 模拟：素材服务与管理接口不再把本机回环当自己人（文档服务的握手本来就按证明判）；
+ * - 「非回环来源」用 `trustLoopback: false` 模拟（本机信任开关 `PROMPTCUT_TRUST_LOOPBACK=0`，`docs/plan/http-transport-contract.md`
+ *   第 10 节）：文档服务握手、共享端点、素材服务、管理接口都不再把本机回环当自己人；这时必须给集群令牌；
  * - migrate-check 起 `scripts/probes/shared-project-probe.mjs` 子进程。
  */
 import fs from 'node:fs';
@@ -426,7 +427,10 @@ function walk(dir) {
 
 test('SPH-SP3 一轮之后全部成员断开：新成员（重启前、重启后）取回的快照、内容库条目、素材、产物逐项一致，文件都在数据目录之下', async (t) => {
   const d = newDir('sp3');
-  let c = await combo(d, { trustLoopback: false });
+  // 本机信任关掉时必须有集群令牌（HT 契约第 10 节），没有就拒绝启动
+  const tok = token();
+  await assert.rejects(combo(d, { trustLoopback: false }), (err) => err?.reason === 'cluster-token-required');
+  let c = await combo(d, { trustLoopback: false, clusterToken: tok });
   const p = await newProject(c);
   const round = await oneRound(c, p);
   const invBefore = await c.inventory();
@@ -447,7 +451,7 @@ test('SPH-SP3 一轮之后全部成员断开：新成员（重启前、重启后
   }
   await newMemberCheck(c);
   await closeCombo(c);
-  c = await combo(d, { trustLoopback: false });
+  c = await combo(d, { trustLoopback: false, clusterToken: tok });
   t.after(() => closeCombo(c));
   await newMemberCheck(c);
   const invAfter = await c.inventory();
@@ -574,6 +578,7 @@ test('SPH-deploy-2 PM2 配置与远端脚本：两个实例的 app 名、端口�
   assert.equal(app.env.PROMPTCUT_DOCSERVICE_PUBLIC_URL, 'ws://203.0.113.5:8777');
   assert.equal(app.env.PROMPTCUT_DATA_DIR, drill.data);
   assert.ok(!('PROMPTCUT_CLUSTER_TOKEN' in app.env), 'PM2 配置里没有令牌');
+  assert.equal(app.env.PROMPTCUT_TRUST_LOOPBACK, '0', '托管端在 nginx 之后，关掉本机信任（HT 契约第 10、12 节）');
 
   const tok = token();
   const withSave = hostedDeployScript(main, { pm2Config: hostedPm2Config(main, 'h'), save: true, replaceDocservice: false, token: null });
@@ -581,6 +586,7 @@ test('SPH-deploy-2 PM2 配置与远端脚本：两个实例的 app 名、端口�
   assert.match(withSave, /^pm2 save$/m);
   assert.doesNotMatch(withSave, /ufw/i, '部署脚本不改防火墙');
   assert.match(withSave, /exit 3/, '旧的 promptcut-docservice 还在时停手');
+  assert.match(withSave, /cluster-token: absent[^\n]*exit 5/, '本机信任关掉时没有集群令牌，换进程之前停手');
   const noSave = hostedDeployScript(drill, { pm2Config: hostedPm2Config(drill, 'h'), save: false, replaceDocservice: false, token: tok });
   assert.doesNotMatch(noSave, /^pm2 save$/m);
   assert.ok(noSave.includes(tok), '--write-token 时令牌只在经标准输入交给远端的脚本里');

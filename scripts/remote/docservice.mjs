@@ -25,6 +25,9 @@
  *              数据目录 /var/lib/promptcut/drill，max_memory_restart 400M；
  *            - 数据目录与 secrets/ 不存在就建（0700）；已有的不动。集群令牌放在 <数据目录>/secrets/cluster-token（0600），
  *              随数据目录迁移，不进 PM2 配置。--write-token：把本机环境变量 PROMPTCUT_CLUSTER_TOKEN 经 ssh 标准输入写进这个文件；
+ *            - PM2 配置写 PROMPTCUT_TRUST_LOOPBACK=0（docs/plan/http-transport-contract.md 第 10、12 节：托管端在 nginx 之后，
+ *              代理转进来的请求看上去都是回环，关掉本机信任）。这时必须有集群令牌：远端没有 secrets/cluster-token、
+ *              也没给 --write-token 时部署脚本在换进程之前停手（退出码 5）；
  *            - 旧的独立文档服务（app promptcut-docservice）还在 PM2 里时拒绝部署缺省实例（退出码 3），
  *              加 --replace-docservice 才先 pm2 delete 它（它的部署目录与数据不动）；
  *            - --save：成功后 pm2 save。
