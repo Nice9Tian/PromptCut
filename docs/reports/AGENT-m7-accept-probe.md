@@ -78,7 +78,36 @@
 
 ## 本机结果
 
-（最后一轮原样结果见文末，跑完补。）
+命令：`node scripts/probes/m7-browser-probe.mjs --role all --out <scratchpad>/m7ap/run4`（缺省参数：A3 跑满 60 s、等页面当节点 60 s；自己做在线构建）。退出码 3（没有 fail、只有 pending），用时 237 s；跑完 5450～5459 上没有监听。
+
+结果行摘要（原样）：
+
+```
+{"ok":false,"fails":[],"exit":{"creator":3,"node":3},"ms":236969,
+ "planOnly":{"pcNodeId":"prerender:DESKTOP-GS40TCK:5453","fineClaimedByPc":3,"plansClaimedByPc":3,"applied":false},
+ "pageNode":{"isNode":false,"diag":{"available":false,"reason":"no-hook"}}}
+M7-A1      pending  server-B-other-user=pass, server-same-name-other-device=pass, page=pending
+M7-A2      pass     server-claim-other-user-forbidden=pass, server-own-plan-plan-profile=pass, server-d9-browser-as-pc-forbidden=pass
+M7-A3      pending  server-standin-forbidden-claimed-0=pass, server-standin-light-medium-done=pass, server=pending, page=pending
+M7-A4      pending  server=pending, page=pending
+M7-A5      pending  page=pending
+M7-A6      pending  page=pending
+M7-A7      pending  setup-single-stage=pass, no-render-connection=pending
+M7-A8      pending  server=pending, page=pending
+M7-A9      pending  server=pending, page=pending
+M7-A10     pending  server=pending, page=pending
+M7-A11     pending  server-logs-describe=pass, page-render-ticket-expiry=pending, echo-only-promptcut.v1=pass, render-echo-only-promptcut.v1=pending, ticket-not-in-url-or-page-diag=pass
+M7-A12     pending  play-10s-longtasks-0=pass, play-10s-claims-0=pending, bake-longtasks-0=pending
+W7         pending  cross-machine=pending, M7-A1=pending, M7-A2=pass, M7-A3=pending, A4-timing-on-laptop=pending
+D9         pass     browser-credential-as-pc-host=pass, nodeId-bound-to-userId=pass
+D10        pass     welcome-fingerprint=pass, self-reported-ignored=pass, browser-without-environment=pass
+D14        pass     non-chromium-refused=pass
+D1-D2-D12  pass     dual-split-h4=pass, supersede-h4=pass, layer-map-v3-h4=pass, idle-takeover-h4=pass
+```
+
+pending 的原因一律是「节点未就绪（等 rq-m7-node）」（页面没有 `__pcBrowserNode`、没发过 `node.hello`），另有 W7 的「本机替身，真跨机待复核」与「计时在笔记本判」。低内存档与单舞台页 render 连接 0、`node.hello` 0，但对照（普通档）也没当节点，所以 A7 记 pending。
+
+同一版代码的上一轮（run3）有一条 fail：`layer-map-v3-h4` 读到的层表候选是 twin 在前、pc 在后。查下来是这一轮页面发过两次清单计划，第二次切分时 h4 的锁已在 twin 上、只出了 twin 那份，切分方自己的指纹按 rq-m7-queue 的规则补在末尾——实现是对的，是探针判得太严，已改成先后只记不判（`52695e2`）。更早两轮暴露的探针自身问题（替身不带 userId、A 的假节点不分指纹、pc 忙着做细任务没空切分）都已修，见提交列表。
 
 ## 发现的缺口与对契约的更正建议
 
@@ -113,4 +142,14 @@ creator 的 stdout 最后一行是汇总（含 node 角色交回的各项）。�
 
 ## 提交列表
 
-（跑完补。）
+`git log --oneline --first-parent fdbeb60..HEAD`（新到旧）：
+
+```
+52695e2 探针:层表 v3 候选的先后不判(只记 firstIsSplitter),照 rq-m7-queue 的写入规则
+c4d0520 文档:AGENT-m7-accept-probe 报告正文(判据写法、适配假设、缺口、笔记本命令)
+cc613b5 探针:A 的假节点按指纹分组、替身节点带 userId(节点侧规则 0)、页面没当节点时替 pc 吃掉非双份细任务(代 D15 开关)、切分诊断带计划清单
+8a8b5ec 探针:m7-browser-probe 初版与页面诊断适配处 m7-node-adapter
+f918648 Merge branch 'claude/m8-kit' into claude/m7-accept-probe
+2b51508 文档:AGENT-m7-accept-probe 报告(开工)
+(本提交) 文档:报告补本机结果与提交列表
+```
