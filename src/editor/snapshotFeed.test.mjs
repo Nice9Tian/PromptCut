@@ -279,12 +279,19 @@ test("settled 把卡从基线里删掉:同一帧会重投", async () => {
   assert.deepEqual(Object.keys(pickForSetTime(head).snapshots), ["h"]);
 });
 
-test("低内存档忽略迟到的 settled，暂停时仍选预渲染小尺寸", () => {
+/*
+ * c10a 契约第 17 节「停下追当前一帧」取代了原来的「低内存档不追活渲」:低内存档停下时舞台把当前这一帧追一次,
+ * 画好的层收 `settled`,和普通档一样暂停中不再盖回小尺寸;下一次 setTime / 播放照常选。
+ * (这条用例原来断言「低内存档忽略 settled、暂停时仍选小尺寸」,按新规则改。)
+ */
+test("低内存档停下追一帧画好的层(settled)暂停中不再选小尺寸;下一次 setTime 照常选", () => {
   const p = project([card("h", 0, 10)]);
   plan = heavyEverywhere("h");
   src.push(layer("h", [[0, 100]]));
   noteSettled("front", ["h"]);
   assert.equal(planFeed({ project: p, t: 1, playing: false }).picks.size, 0);
+  assert.equal(planFeed({ project: p, t: 1, playing: false, lowMemory: true }).picks.size, 0);
+  pickForSetTime({ project: p, t: 1, playing: false, lowMemory: true });
   assert.equal(planFeed({ project: p, t: 1, playing: false, lowMemory: true }).picks.size, 1);
 });
 

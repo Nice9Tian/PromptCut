@@ -30,6 +30,11 @@ export interface PlanPipelinesOptions {
   identityKeys?: ClipIndex<string>;
   /** clipId → 声明的帧模式。只在这张卡没有成本记录时用：`direct` 视为轻，其余视为重。 */
   frameModes?: ClipIndex<string>;
+  /**
+   * 低内存档的过渡做法(c10a 契约第 17 节,语义 `mechanism/rendering.md`「低内存档」):不测,所有卡按重卡处理 ——
+   * 每张卡在每个位置都判重、整段进预渲染集合,不看成本记录与声明。只有在线页面的低内存档传 true。
+   */
+  allHeavy?: boolean;
 }
 
 export const DEAD_MS: number;

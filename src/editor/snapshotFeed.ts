@@ -313,7 +313,10 @@ export interface Playhead {
   t: number;
   /** 播放中才有抑制集合（C5 / K5：拖动和暂停下不抑制、改贴快照） */
   playing: boolean;
-  /** 低内存档不追暂停态活渲，不能让旧的 settled 事件关掉快照。 */
+  /**
+   * 低内存档(c10a 契约第 17 节):播放、拖动、暂停时判重的卡一律抑制(父页 `Preview` 的 `pumpFeed`);
+   * 停下时舞台把当前这一帧追一次(`settleLowMemory`),画好的层照普通档一样收 `settled`、不再盖回小尺寸。
+   */
   lowMemory?: boolean;
 }
 
@@ -335,7 +338,7 @@ export interface FeedPlan {
  * **每张重卡都照样选一帧快照**（根因 C：以前「有流就不选快照」，舞台那边流一 blank 整层就透明）——
  * 流覆盖着的标成海报（`poster`）垫在流下面，超预算的当「无流」（`over`），其余 `none`。
  */
-export function planFeed({ project, t, playing, lowMemory }: Playhead): FeedPlan {
+export function planFeed({ project, t, playing }: Playhead): FeedPlan {
   const plan = currentPlan();
   const fps = Math.max(1, project.fps || 30);
   const globalFrame = Math.max(0, Math.floor(t * fps + 1e-6));
@@ -374,8 +377,9 @@ export function planFeed({ project, t, playing, lowMemory }: Playhead): FeedPlan
     }
   }
   for (const { clip, firstFrame, count } of clips) {
-    // 根因 B:暂停态已经追到精确活渲的卡不再选快照(停下就撤兜底,直到下一次 setTime / 播放)
-    if (!playing && !lowMemory && isSettled("front", clip.id)) continue;
+    // 根因 B:暂停态已经追到精确活渲的卡不再选快照(停下就撤兜底,直到下一次 setTime / 播放)。
+    // 低内存档同样:停下追一帧画好的层(c10a 契约第 17 节,取代原来的「不追活渲」)
+    if (!playing && isSettled("front", clip.id)) continue;
     const tier: PickTier = covered.has(clip.id) ? "poster" : wantedStream.has(clip.id) ? "over" : "none";
     let picked: Pick | null = null;
     for (const kind of KIND_ORDER) {
