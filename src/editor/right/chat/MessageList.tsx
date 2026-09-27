@@ -244,6 +244,10 @@ export function MessageList(props: MessageListProps) {
    */
   const anchorRef = useRef<{ key: string; contentTop: number } | null>(null);
   const pinnedRef = useRef<string[]>([]);
+  /** 上一次落定(或滚动事件)时的内容高度与可视高度;隐藏期间清空 */
+  const lastMetricsRef = useRef<{ scrollHeight: number; clientHeight: number } | null>(null);
+  /** 上一次 settle 落定后的滚动位置:滚动事件报上来的还是这个位置,就是 settle 自己挪的回声 */
+  const settledTopRef = useRef(-1);
   const focusKeyRef = useRef<string | null>(null);
 
   const computeRange = (off: number[]) => {
@@ -273,8 +277,25 @@ export function MessageList(props: MessageListProps) {
   /** 布局变了之后、绘制之前:贴底的滚到底,不贴底的把锚挪回原处 */
   const settle = () => {
     const box = messagesScrollRef.current;
+    if (!box) return;
     // 分页不在前台(display:none)时量什么都是 0:不动,等它显示出来 ResizeObserver 再叫一次
-    if (!box || box.getClientRects().length === 0) return;
+    if (box.getClientRects().length === 0) {
+      lastMetricsRef.current = null;
+      return;
+    }
+    /*
+     * 「当时在不在底部」按变化之前的内容高度判断:用户刚滚到底(或刚往上翻)、滚动事件还没派发,
+     * 布局先变了(新进来的几条量出了真高度)——这时 stickRef 还是旧的表态。拿上一次的内容高度、可视高度
+     * 和此刻的滚动位置比,就是用户最后停在哪儿。刚从隐藏变可见时滚动位置被清零了,不算数,沿用 stickRef。
+     */
+    const prev = lastMetricsRef.current;
+    if (prev) {
+      const atPrevBottom = isAtBottom(prev.scrollHeight, box.scrollTop, prev.clientHeight);
+      // 内容变矮、滚动位置被浏览器夹回底部时,按旧高度算会「离底很远」:那也还是在底部
+      const atNowBottom = isAtBottom(box.scrollHeight, box.scrollTop, box.clientHeight);
+      if (stickRef.current) stickRef.current = atPrevBottom || atNowBottom;
+      else stickRef.current = atPrevBottom;
+    }
     if (stickRef.current) {
       box.scrollTop = box.scrollHeight;
     } else {
@@ -286,6 +307,8 @@ export function MessageList(props: MessageListProps) {
       }
     }
     viewRef.current = { scrollTop: box.scrollTop, clientHeight: box.clientHeight };
+    lastMetricsRef.current = { scrollHeight: box.scrollHeight, clientHeight: box.clientHeight };
+    settledTopRef.current = box.scrollTop;
     captureAnchor();
   };
   const settleRef = useRef(settle);
@@ -294,8 +317,10 @@ export function MessageList(props: MessageListProps) {
   const onMessagesScroll = () => {
     const el = messagesScrollRef.current;
     if (!el) return;
-    stickRef.current = isAtBottom(el.scrollHeight, el.scrollTop, el.clientHeight);
+    // 自己在 settle 里挪出来的滚动也会派发滚动事件,等它到的时候内容可能又长了一截:那不是用户的表态,不重判贴底
+    if (Math.abs(el.scrollTop - settledTopRef.current) >= 1) stickRef.current = isAtBottom(el.scrollHeight, el.scrollTop, el.clientHeight);
     viewRef.current = { scrollTop: el.scrollTop, clientHeight: el.clientHeight };
+    lastMetricsRef.current = { scrollHeight: el.scrollHeight, clientHeight: el.clientHeight };
     captureAnchor();
     const lay = layoutRef.current;
     if (!lay.windowed) return;
@@ -322,9 +347,9 @@ export function MessageList(props: MessageListProps) {
         const h = e.borderBoxSize?.[0]?.blockSize ?? e.target.getBoundingClientRect().height;
         if (bookRef.current!.set(key, kind, h)) changed = true;
       }
-      if (!changed) return;
+      // 有尺寸通知就说明布局动了(哪怕记账没变,比如占位值换成真高度而这个高度早就记过):先落定,再看要不要重算窗口
       settleRef.current();
-      bump();
+      if (changed) bump();
     });
     roRef.current = ro;
     if (messagesScrollRef.current) ro.observe(messagesScrollRef.current);

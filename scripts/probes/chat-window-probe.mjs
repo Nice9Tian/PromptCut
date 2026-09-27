@@ -7,7 +7,7 @@
  *   2. 用滚轮滚到顶、再滚回底:全程没有超过 50 ms 的长任务(PerformanceObserver 的 longtask),
  *      节点数全程不超过 60,滚到顶时第一条就是会话的第一条,滚回底时贴底;
  *   3. 焦点:让一个气泡里的按钮拿到焦点,滚远了它仍在文档里、仍是焦点;
- *   4. 贴底:打开「显示思考」(所有气泡变高)仍贴底;在底部发一条消息,假流输出期间每次采样都贴底;
+ *   4. 贴底:打开「显示思考」(所有气泡变高)仍贴底;在底部发一条消息,假流输出期间每次采样都在底部(≤ 40px)、结束时贴底(≤ 2px);
  *   5. 翻到中间再发一条消息:假流输出期间视口顶上那条的位置不动、不被拽回底部,流式中的那条始终渲染在 DOM 里。
  * 截图写进 `--out`(底部、顶部、中间、流式结束后)。
  *
@@ -345,7 +345,13 @@ try {
   await sendMsg('窗口化探针:在底部发一条');
   const bottomSamples = await sampleStream(async (s) => ({ fromBottom: s.fromBottom, lastNew: !seeded.has(s.lastId ?? '') }));
   const grew = new Set(bottomSamples.map((x) => x.scrollHeight)).size;
-  check('stream-at-bottom.stuck', bottomSamples.every((x) => x.fromBottom <= 2), {
+  // 采样本身会强制排版:content-visibility 刚把一行换成真高度、ResizeObserver 还没回调(它在同一帧绘制之前回调)时,
+  // 读到的离底距离会短暂地多出几像素。所以流式中每次采样按「在底部」的定义(≤ 40px,listWindow.ts 的 BOTTOM_SLACK)判,
+  // 流式结束后最后一次采样必须真正贴底(≤ 2px)
+  const lastBottom = bottomSamples[bottomSamples.length - 1];
+  check('stream-at-bottom.stuck', bottomSamples.every((x) => x.fromBottom <= 40) && lastBottom.fromBottom <= 2, {
+    last: lastBottom.fromBottom,
+    over2: bottomSamples.filter((x) => x.fromBottom > 2).length,
     samples: bottomSamples.length,
     heights: grew,
     worst: Math.max(...bottomSamples.map((x) => x.fromBottom)),
