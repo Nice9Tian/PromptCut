@@ -45,16 +45,22 @@ subscribe(() => {
   queueMicrotask(syncDurationNow);
 });
 
+/** 开始跟(可以叠加);返回停止的函数 */
+export function mountDurationSync(): () => void {
+  mounted++;
+  seen = null;
+  syncDurationNow();
+  let done = false;
+  return () => {
+    if (done) return;
+    done = true;
+    mounted--;
+  };
+}
+
 /** 时间轴挂着期间让总时长跟着内容走 */
 export function useDurationFollowsContent(): void {
-  useEffect(() => {
-    mounted++;
-    seen = null;
-    syncDurationNow();
-    return () => {
-      mounted--;
-    };
-  }, []);
+  useEffect(() => mountDurationSync(), []);
 }
 
 /** 测试用 */
