@@ -1363,12 +1363,13 @@ export default function vitePluginCards(): Plugin[] {
       /*
        * 改动层里「底版没有」的用户卡清单(`src/cards/userOverlay.ts`,由 cardOverridesLoader 生成):
        * 用户卡目录(底版或改动层)里多了、少了文件,清单变了就重载这个模块,热更新沿用户卡装载入口冒到 src/cards/index.ts 接住。
-       * 清单没变(改的是已有文件的内容)不重载:那条由上面 onSource 按文件走。
+       * 清单没变(改的是已有文件的内容,或多了少了的不是源码,如归属表)不重载:那条由上面 onSource 按文件走。
+       * 「清单」就按生成出来的模块正文比。
        */
-      let overlayListing = overridesRoot() ? overlayOnlyUserFiles(server.config.root).join('\n') : '';
+      let overlayListing = overridesRoot() ? userOverlayModuleCode(server.config.root) : '';
       const reloadUserOverlay = () => {
         if (!overridesRoot()) return;
-        const next = overlayOnlyUserFiles(server.config.root).join('\n');
+        const next = userOverlayModuleCode(server.config.root);
         if (next === overlayListing) return;
         overlayListing = next;
         const stub = path.join(server.config.root, USER_OVERLAY_MODULE).split(path.sep).join('/');
