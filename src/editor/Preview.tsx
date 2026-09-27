@@ -763,7 +763,8 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
       const byId = new Map(p.tracks.flatMap((tr) => tr.clips).map((c) => [c.id, c] as const));
       return [...plan.prerenderSet].filter((id) => {
         const clip = byId.get(id);
-        return !!clip && !needsLocalPc(clip.cardId, clip.cardId ? getCard(clip.cardId) : undefined, isUserCard);
+        // 只列卡片段(素材段不产快照),去掉这台设备显示不了的用户卡、图卡
+        return !!clip && !!clip.cardId && !needsLocalPc(clip.cardId, getCard(clip.cardId), isUserCard);
       });
     };
     const publisher = createPlanPublisher({ request: docRequest, publisherId: `page-${pageSession()}`, clips, codeVersion: CODE_VERSION });

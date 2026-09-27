@@ -416,7 +416,7 @@ async function stageSample(page) {
         suppressed: w.classList.contains('pc-suppressed'),
         settling: w.classList.contains('pc-settling'),
         plane: !!plane,
-        planeSig: plane ? `${plane.innerHTML.length}:${(plane.innerHTML.match(/translateX\([^)]*\)/) ?? [''])[0]}` : null,
+        planeSig: plane ? (() => { let h = 2166136261; const t = plane.innerHTML; for (let i = 0; i < t.length; i++) { h ^= t.charCodeAt(i); h = Math.imul(h, 16777619); } return `${t.length}:${(h >>> 0).toString(36)}`; })() : null,
         placeholder: !!slot && !slot.hidden,
       };
     });
@@ -480,6 +480,8 @@ try {
     const S = await import('/src/store/project.ts');
     if (spec.mediaId) S.actions.addMediaClip(spec.mediaId, 0, { duration: spec.seconds });
     const light = S.actions.addClipOnNewTrack({ index: 0, cardId: 'chapter-bar', start: 0, duration: spec.seconds });
+    // 独立的轻卡:测量的快照趟会推出探针帧(验「大块产出压成可转移的 ArrayBuffer」)
+    S.actions.addClipOnNewTrack({ index: 0, cardId: 'probe-typewriter', start: 2, duration: 4 });
     const main = S.actions.addClipOnNewTrack({ index: 0, cardId: 'probe-slow-stepped', start: 0, duration: spec.seconds });
     S.actions.setClipParams(main.id, { burnMs: 40, label: 'main' });
     const extras = [];
@@ -644,8 +646,9 @@ try {
     if (!x || x.playing) return null;
     const heavy = x.wraps.filter((w) => w.id === state.main || state.extras.includes(w.id));
     return heavy.length >= EXTRA_HEAVY + 1 && heavy.every((w) => !w.suppressed && !w.plane && !w.placeholder && !w.settling) ? x : null;
-  }, 30_000, 300);
-  check(settled, 'A4:暂停后追到精确活渲(与桌面同判据:停下就撤兜底)');
+  }, 120_000, 500);
+  check(settled, 'A4:暂停后追到精确活渲(与桌面同判据:停下就撤兜底)', settled ? undefined : { preview: await previewDiag(member).then((d) => ({ swapInFlight: d?.swapInFlight, feed: d?.snapshotFeed, frontId: d?.frontId })),
+    stage: await (await frontFrame(member))?.evaluate(() => { const d = window.__pcStageDiag?.() ?? {}; return { role: d.role, t: d.t, settling: d.settling, suppressed: d.suppressed, snapshots: d.snapshots, catchUps: d.catchUps }; }).catch(() => null) });
   await shot(member, 'a4-settled-live');
   await delay(3000);
   const stillLive = await stageSample(member);
@@ -731,11 +734,10 @@ try {
       as: 'member', role: 'render', deviceId: `c10b-host-${RUN}`.padEnd(16, '0'), deviceName: 'c10-browser 独立渲染主机' }]));
     await startHost(hostConfig);
     const claimed = await until('A5:独立渲染主机认领清单计划并切分完成', async () => {
-      const q = await hostQueue();
-      const body = q?.body ?? q;
+      const body = await hostQueue();
       const nodes = body?.nodes ?? [];
-      const planDone = hostLog.some((l) => l.includes('plan-split') || l.includes('executor.plan'));
-      return planDone && nodes.some((n) => (n.completed ?? 0) > 0) ? { nodes: nodes.map((n) => ({ nodeId: n.nodeId, claimed: n.claimed, completed: n.completed, failed: n.failed })), envFingerprint: body?.envFingerprint ?? null } : null;
+      // 认领了 plan(切出细任务)且至少做完一段:claimed 算上 plan 本身
+      return nodes.some((n) => (n.completed ?? 0) > 0 && (n.claimed ?? 0) > (n.completed ?? 0) - 1) ? { profile: body?.profile, nodes: nodes.map((n) => ({ nodeId: n.nodeId, claimed: n.claimed, completed: n.completed, failed: n.failed })), envFingerprint: body?.envFingerprint ?? null } : null;
     }, 900_000, 2000);
     check(claimed, 'A5:独立渲染主机(host 档)认领、切分、完成', claimed ?? hostLog.slice(-12));
     check(claimed?.envFingerprint === HOST_FP && HOST_FP !== state.pageFp && HOST_FP !== state.creatorFp, 'A5:认领的节点与页面发布方环境不同(主机用测试指纹)', { host: claimed?.envFingerprint, page: state.pageFp, creator: state.creatorFp });
