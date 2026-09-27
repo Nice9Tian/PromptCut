@@ -646,7 +646,9 @@ try {
 
   // A4:暂停后追到精确活渲,占位撤下后不再盖回
   await until('播放到头停下', () => P(member, () => !window.__pcStore.getState().playing), 20_000, 300);
+  const stopAt = await P(member, () => Math.round(performance.now()));
   await P(member, () => window.__pcStore.actions.seek(0.5));
+  const seekAt = await P(member, () => Math.round(performance.now()));
   const settled = await until('暂停后 0.5 秒处追到精确活渲(重层不抑制、没有快照平面、没有占位)', async () => {
     const x = await stageSample(member);
     if (!x || x.playing) return null;
@@ -665,6 +667,13 @@ try {
     };
   }
   out.steps.settleTrace = (await previewDiag(member))?.swapTrace ?? null;
+  {
+    // 「点停到精确活渲」:点到 0.5 秒(页面 performance.now)到 0.5 秒那次暂停态互换做完(swapLog 的 at)
+    const pdx = await previewDiag(member);
+    const done = (pdx?.swapLog ?? []).find((e) => Math.abs(e.t - 0.5) < 1e-6 && e.swapped && e.at >= seekAt);
+    out.steps.settleTiming = { stopAt, seekAt, swappedAt: done?.at ?? null, seekToPreciseMs: done ? done.at - seekAt : null, swapPlaying: pdx?.swapPlaying ?? null };
+    say('a4.timing', out.steps.settleTiming);
+  }
   await shot(member, 'a4-settled-live');
   await delay(3000);
   const stillLive = await stageSample(member);
