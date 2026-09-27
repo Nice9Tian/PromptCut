@@ -16,7 +16,7 @@ import { ControlBar } from "./preview/ControlBar";
 import { ToolBar, ToolType } from "./preview/ToolBar";
 import { MiniScrubber } from "./preview/MiniScrubber";
 import { PreviewContextMenu } from "./preview/PreviewContextMenu";
-import { getCard } from "../kernel/registry";
+import { getCard, userCardSources } from "../kernel/registry";
 import { useLayoutMode } from "./layoutMode";
 import { fitView, frameOrigin, panBy, wheelZoomFactor, zoomAt, type View2D } from "./preview/viewport2d";
 import "./preview/preview.css";
@@ -35,7 +35,9 @@ import { ONLINE } from "../online/mode";
 import { LOW_MEMORY_TEXT, lowMemoryMode, noteRuntimeTrouble, readDisplayTier, setDisplayTier, type DisplayTier } from "../online/lowMemory";
 import { setMediaTierPolicy, type MediaTierPolicy } from "../render/mediaTier";
 import { assetAuthHeaders, docRequest, remoteAssetBase, remoteAssetTicket, setNoEditorProcess, subscribeRemoteAssets } from "./media/assetTiers";
-import { pushToast } from "./sync/syncManager";
+import { currentDocProjectId, currentSharedLink, pageSession, pushToast } from "./sync/syncManager";
+import { BACKFILL_CHECK_MS, BackfillPublisher, missingLayers } from "./lowMemoryBackfill";
+import { needsLocalPc } from "../render/placeholderHost";
 import { setPlanAllHeavy } from "./planDispatch";
 import { LOW_MEMORY_SETTLE_MS, type LowMemorySettleResult } from "../render/lowMemorySettle";
 
@@ -672,6 +674,37 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
     };
   }, [online]);
   useEffect(() => { onlineSourceRef.current?.setProject(project.id || null); }, [project.id]);
+
+  /*
+   * 低内存档的补渲(c10a 契约第 17 节):判重的层在素材服务里没有产物(不在渲染节点写的层表里)时,
+   * 向队列发布带片段清单的补渲计划任务(标 backfill)。同一批还在等的不重发;页面只发布,不认领。
+   * 用户卡、图卡不发(这台设备不显示它们)。经在线来源同一条文档服务连接发。
+   */
+  useEffect(() => {
+    if (!online || !lowMem) return;
+    const publisher = new BackfillPublisher({ request: docRequest, publisherId: `lowmem-${pageSession()}` });
+    let link: unknown = null;
+    const isUserCard = (cardId: string) => Object.prototype.hasOwnProperty.call(userCardSources().fileOf, cardId);
+    const check = () => {
+      const src = onlineSourceRef.current;
+      const layers = src?.layerClipIds() ?? null;
+      const shared = currentSharedLink();
+      if (!src || !layers || !shared) return;
+      // 连接换了(重连、换项目):重新报到,还缺的重发(队列只在内存里)
+      if (shared !== link) { link = shared; publisher.reset(); }
+      const missing = missingLayers({
+        project: getState().project,
+        layerClipIds: layers,
+        unsupported: (clip) => needsLocalPc(clip.cardId, clip.cardId ? getCard(clip.cardId) : undefined, isUserCard),
+      });
+      void publisher.sync({ projectId: currentDocProjectId() || null, projectRev: shared.ds.rev || null, missing });
+    };
+    const timer = window.setInterval(check, BACKFILL_CHECK_MS);
+    check();
+    const w = window as unknown as Record<string, unknown>;
+    w.__pcBackfill = () => publisher.debug();
+    return () => { window.clearInterval(timer); delete w.__pcBackfill; };
+  }, [online, lowMem]);
   useEffect(() => { onlineSourceRef.current?.focus(t, project.fps || 30); }, [t, project.fps]);
 
   /* 换了 iframe:那一份投递基线跟着作废,下一次带 `reset`(A3c) */

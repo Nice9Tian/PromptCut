@@ -138,7 +138,20 @@ export function unsupportedHere(
   def: { card?: unknown; audio?: unknown } | undefined,
   isUserCard: (cardId: string) => boolean,
 ): boolean {
-  if (!onlineBrowser || !cardId) return false;
+  if (!onlineBrowser) return false;
+  return needsLocalPc(cardId, def, isUserCard);
+}
+
+/**
+ * 这张卡是不是只有本地 PC 渲染得了(用户卡、图卡),不看此刻的平台。在线页面的父页(不是舞台)判补渲时用它:
+ * 这些卡低内存档本来就不显示(常驻「需要本地 PC 渲染辅助」),不为它们发补渲任务(c10a 契约第 17 节)。
+ */
+export function needsLocalPc(
+  cardId: string | undefined,
+  def: { card?: unknown; audio?: unknown } | undefined,
+  isUserCard: (cardId: string) => boolean,
+): boolean {
+  if (!cardId) return false;
   if (isUserCard(cardId)) return true;
   return !!def && (typeof def.card === "function" || typeof def.audio === "function");
 }
