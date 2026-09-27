@@ -369,6 +369,17 @@ async function putProject(conn, projectId, doc, run) {
   return r.rev;
 }
 
+/**
+ * 在当前文档上做路径操作（不整份替换：页面自己加的片段要留着）。`addCards` 在最上面插新轨道，`touchLight` 改轻卡参数（只为让版本变、页面重发计划）
+ */
+async function opProject(conn, projectId, ops, run) {
+  const r = await conn.rpc({ type: 'project.op', projectId, opId: `m7ap-${run}-${Date.now().toString(36)}${randomBytes(2).toString('hex')}`, session: `m7ap-${run}`, ops }, 30_000);
+  if (r?.type !== 'project.op.ok') throw new Error(`project.op 回 ${r?.type} ${r?.reason ?? ''}`);
+  return r.rev;
+}
+const addCards = (conn, projectId, cards, run) => opProject(conn, projectId, cards.map(([id, cardId, params, start = 0, end = SECONDS]) => ({ op: 'insert', path: '/tracks', index: 0, value: { id: `t-${id}`, name: id, clips: [{ id, cardId, start, end, params }] } })), run);
+const touchLight = (conn, projectId, run) => opProject(conn, projectId, [{ op: 'set', path: '/tracks/@t-light/clips/@light/params', value: { title: `m7ap ${Date.now()}` } }], run);
+
 async function contentGet(conn, key) {
   const r = await conn.rpc({ type: 'content.get', kind: 'snapshot-manifest', key }, 20_000).catch(() => null);
   return r?.type === 'content.item' && !r.missing ? r.body ?? null : null;
@@ -610,6 +621,7 @@ async function runCreator(book, head) {
       const q = await e.waitActive();
       return { e, q };
     };
+    ctx.startEditor = startEditor;
     let ed = await startEditor(true);
     ctx.editor = ed;
     cleanups.push(() => ctx.editor?.e?.stop());
@@ -917,9 +929,7 @@ async function twinChecks(ctx) {
     for (const clip of ['h4', 'h5']) {
       twin.setGrab((t) => t.input?.clipId === clip);
       const extra = [[clip, 'probe-slow-stepped', { burnMs: 40, label: clip }]];
-      ctx.doc = projectDoc(projectId, [...(ctx.extraClips ?? []), ...extra]);
-      ctx.extraClips = [...(ctx.extraClips ?? []), ...extra];
-      ctx.rev = await putProject(ctx.aConn, projectId, ctx.doc, run);
+      ctx.rev = await addCards(ctx.aConn, projectId, extra, run);
       const tEdit = Date.now();
       const tasksOf = () => [...watcher.bodies.values()].filter((t) => t.kind === 'snapshot' && t.input?.clipId === clip);
       const split = await until(() => { const ts = tasksOf(); const fps = new Set(ts.map((t) => t.requires?.envFingerprint)); return fps.size >= 2 ? ts : null; }, 240_000, 500);
@@ -986,9 +996,7 @@ async function twinChecks(ctx) {
         await sleepUntil(idleFrom + 33_000);
         const lockBefore = god.locks.get(lockKey)?.envFingerprint ?? null;
         // 改一处与这张卡无关的地方（轻卡的参数）→ 版本变了 → 页面防抖后重发清单计划 → 切分方重切
-        ctx.doc = projectDoc(projectId, ctx.extraClips);
-        ctx.doc.tracks.find((t) => t.id === 't-light').clips[0].params = { title: `m7ap ${Date.now()}` };
-        ctx.rev = await putProject(ctx.aConn, projectId, ctx.doc, run);
+        ctx.rev = await touchLight(ctx.aConn, projectId, run);
         const took = await until(() => (god.locks.get(lockKey)?.envFingerprint === ctx.pcFp ? god.locks.get(lockKey) : null), 180_000, 500);
         const twinLeft = twinCopy.map((t) => stateOf(t.id));
         book.judge('D1-D2-D12', `idle-takeover-${clip}`, !!took && twinLeft.every((x) => x.state === 'failed' || x.state === 'done'),
@@ -1138,19 +1146,17 @@ async function pageServerSide(ctx) {
   if (!z?.clip) { book.pending('M7-A10', 'server', 'node 角色没报「页面拿着一段后关掉」', z); return; }
   const lockKeyZ = [...watcher.bodies.values()].find((t) => t.input?.clipId === z.clip)?.input?.contentKey;
   await sleepUntil((z.at ?? Date.now()) + 33_000);
+  // 宿主全开（重启 A 的编辑器、不设只切分）；这时本项目没有 B 的在线纯浏览器节点（b1 已关、b2 还没开），
+  // 改一处（轻卡参数）→ 还开着的页面（single：普通档单舞台，照发清单计划）重发计划 → pc 切分：z 的锁闲置超 30 s、没做完 → 接手
   await ctx.editor.e.stop();
-  ctx.editor = await (async () => {
-    const e = await startQueueEditor({ port: PORTS.editor, dir: path.join(ctx.out, 'editor'), sharedConfig: path.join(ctx.out, 'editor', 'shared.json'), fakeFingerprint: ctx.pcFp, band: BAND,
-      extraEnv: { PROMPTCUT_DEVICE_ID: deviceOf('pc', ctx.run), PROMPTCUT_DEVICE_NAME: 'm7ap A 的桌面' } });
-    return { e, q: await e.waitActive() };
-  })();
-  // 新加两张卡（宿主全开：两份任务谁先谁得卡）+ 改轻卡参数（让页面重发计划，Z 的锁已闲置）
-  ctx.extraClips = [...(ctx.extraClips ?? []), ['w1', 'probe-slow-stepped', { burnMs: 40, label: 'w1' }], ['w2', 'probe-slow-stepped', { burnMs: 40, label: 'w2' }]];
-  ctx.doc = projectDoc(projectId, ctx.extraClips);
-  ctx.rev = await putProject(ctx.aConn, projectId, ctx.doc, ctx.run);
-  await kv.signal('a10.round2', { at: Date.now() });
+  ctx.editor = await ctx.startEditor(false);
+  ctx.rev = await touchLight(ctx.aConn, projectId, ctx.run);
   const took = await until(() => (god.locks.get(`snapshot:${lockKeyZ}`)?.envFingerprint === ctx.pcFp ? god.locks.get(`snapshot:${lockKeyZ}`) : null), 300_000, 1000);
-  book.judge('M7-A10', 'server-idle-takeover', !!took, { clip: z.clip, lockHistory: god.locks.get(`snapshot:${lockKeyZ}`)?.history ?? null });
+  book.judge('M7-A10', 'server-idle-takeover', !!took, { clip: z.clip, lockHistory: god.locks.get(`snapshot:${lockKeyZ}`)?.history ?? null, plans: [...watcher.bodies.values()].filter((t) => t.kind === 'plan').slice(-4).map((t) => ({ user: String(t.source?.userId ?? '').split('@')[0], rev: t.source?.projectRev, clips: t.input?.clips, state: god.tasks.get(t.id)?.state })) });
+  // 再开 b2（B 的另一台设备，在线纯浏览器节点）后加两张新卡：宿主全开时两份任务谁先谁得卡、每张卡只出自一种环境
+  await kv.signal('a10.took', { took: !!took, at: Date.now() });
+  await kv.takeSignal('a10.b2-ready', deadline);
+  ctx.rev = await addCards(ctx.aConn, projectId, [['w1', 'probe-slow-stepped', { burnMs: 40, label: 'w1' }], ['w2', 'probe-slow-stepped', { burnMs: 40, label: 'w2' }]], ctx.run);
   const race = {};
   for (const clip of ['w1', 'w2']) {
     await until(() => [...watcher.bodies.values()].some((t) => t.input?.clipId === clip && god.tasks.get(t.id)?.state === 'done'), 300_000, 1000);
@@ -1412,19 +1418,22 @@ async function runNode(book, head) {
     // A1 页面：A 的任务消息 0 条（三页都算，任何连接）
     const a1s = await kv.takeSignal('a1.start', deadline);
     const a1d = await kv.takeSignal('a1.done', deadline);
-    // A12：播放 10 秒（C10-A1 回归）：主文档长任务 0；期间认领 0 次
-    await P(b1.page, () => { const s = window.__pcStore; s.actions.seek(0); s.actions.play(); }).catch(() => {});
-    const tPlay = Date.now();
-    await delay(10_500);
-    await P(b1.page, () => window.__pcStore.actions.pause()).catch(() => {});
-    const playLong = await longTasks(b1.page, tPlay);
-    const playClaims = b1.tap.sent('task.claim', tPlay).filter((f) => f.at <= tPlay + 10_500).length;
-    book.judge('M7-A12', 'play-10s-longtasks-0', Array.isArray(playLong) && playLong.length === 0, { count: playLong?.length ?? null, worst: (playLong ?? []).sort((a, b) => b.ms - a.ms).slice(0, 3), authoritative });
-    if (isNode) book.judge('M7-A12', 'play-10s-claims-0', playClaims === 0, { claims: playClaims });
-    else book.pending('M7-A12', 'play-10s-claims-0', NODE_PENDING, { claims: playClaims });
-    await kv.signal('node.play-done', { at: Date.now() });
+    // A12：播放 10 秒（C10-A1 回归）：主文档长任务 0；期间认领 0 次。页面当节点时放到 A4 判完之后（播放会让路，打扰 A4 的 30 s）
+    const playCheck = async () => {
+      await P(b1.page, () => { const s = window.__pcStore; s.actions.seek(0); s.actions.play(); }).catch(() => {});
+      const tPlay = Date.now();
+      await delay(10_500);
+      await P(b1.page, () => window.__pcStore.actions.pause()).catch(() => {});
+      const playLong = await longTasks(b1.page, tPlay);
+      const playClaims = b1.tap.sent('task.claim', tPlay).filter((f) => f.at <= tPlay + 10_500).length;
+      book.judge('M7-A12', 'play-10s-longtasks-0', Array.isArray(playLong) && playLong.length === 0, { count: playLong?.length ?? null, worst: (playLong ?? []).sort((a, b) => b.ms - a.ms).slice(0, 3), authoritative });
+      if (isNode) book.judge('M7-A12', 'play-10s-claims-0', playClaims === 0, { claims: playClaims, heldAtStart: null });
+      else book.pending('M7-A12', 'play-10s-claims-0', NODE_PENDING, { claims: playClaims });
+      await kv.signal('node.play-done', { at: Date.now() });
+    };
+    if (!isNode) await playCheck();
 
-    if (isNode) await pageFlows({ book, kv, cfg, browser, b1, low, single, pageFp, authoritative });
+    if (isNode) await pageFlows({ book, kv, cfg, browser, b1, low, single, pageFp, authoritative, playCheck });
     else {
       for (const id of ['M7-A4', 'M7-A5', 'M7-A6', 'M7-A9', 'M7-A10']) book.pending(id, 'page', NODE_PENDING, { diag: { available: diag0.available, reason: diag0.reason ?? null }, nodeHello: b1.tap.sent('node.hello').length });
       book.pending('M7-A12', 'bake-longtasks-0', NODE_PENDING);
@@ -1485,18 +1494,24 @@ async function runNode(book, head) {
 
 /* ---------------------------------------------------------------- 页面当了节点：A4、A5、A6、A9、A10、A11 过期、A12 生成快照 */
 
-async function pageFlows({ book, kv, cfg, browser, b1, low, pageFp, authoritative }) {
+async function pageFlows({ book, kv, cfg, browser, b1, low, pageFp, authoritative, playCheck }) {
   const tap = b1.tap;
   const page = b1.page;
   const heavy = ['h1', 'h2', 'h3'];
 
   /* ---- A4：从加载遮罩撤下起 30 秒内，三张卡的锚帧段都由本页认领并完成；页面内快照库有条目 */
   const claimedTask = (id) => tap.recv('task.claimed').find((f) => f.id === id)?.task ?? null;
+  // 锚帧段 = 认领回包里 priority 50 的段；这张卡认领到的段里一段 50 都没有（切分方没给锚帧）时退回第 0 段，结果里记 anchorRule
+  const anchorRule = {};
   const anchorDone = () => {
     const out = {};
+    const claimed = tap.recv('task.claimed').map((f) => ({ id: f.id, t: f.task })).filter((x) => x.t && heavy.includes(x.t.clipId));
+    for (const c of heavy) anchorRule[c] = claimed.some((x) => x.t.clipId === c && x.t.priority === 50) ? 'priority-50' : 'first-segment';
     for (const f of tap.sent('task.complete')) {
       const t = claimedTask(f.id);
-      if (t && heavy.includes(t.clipId) && t.priority === 50) (out[t.clipId] ??= []).push({ id: f.id, at: f.at, sinceGateMs: f.at - b1.gateLiftAt });
+      if (!t || !heavy.includes(t.clipId)) continue;
+      const isAnchor = anchorRule[t.clipId] === 'priority-50' ? t.priority === 50 : t.range?.from === 0;
+      if (isAnchor) (out[t.clipId] ??= []).push({ id: f.id.slice(0, 24), at: f.at, sinceGateMs: f.at - b1.gateLiftAt });
     }
     return out;
   };
@@ -1504,7 +1519,7 @@ async function pageFlows({ book, kv, cfg, browser, b1, low, pageFp, authoritativ
   const done = got ?? anchorDone();
   const worst = Math.max(...heavy.map((c) => Math.max(...(done[c] ?? [{ sinceGateMs: Infinity }]).map((x) => x.sinceGateMs))));
   const l2 = await l2Snapshots(page);
-  const a4 = { perClip: done, worstSinceGateMs: Number.isFinite(worst) ? worst : null, l2Snapshots: l2, authoritative, diag: await readNodeDiag(page) };
+  const a4 = { anchorRule, perClip: done, worstSinceGateMs: Number.isFinite(worst) ? worst : null, l2Snapshots: l2, authoritative, diag: await readNodeDiag(page) };
   book.judge('M7-A4', 'page-anchors-done', heavy.every((c) => done[c]?.length) && (l2 ?? 0) > 0, a4);
   book.judge('M7-A4', 'page-within-30s', Number.isFinite(worst) && worst <= 30_000, { worstSinceGateMs: a4.worstSinceGateMs, authoritative, note: authoritative ? '笔记本判' : 'PC 上只作参考，以笔记本为准' });
   const od = await onlineDiag(page);
@@ -1513,6 +1528,7 @@ async function pageFlows({ book, kv, cfg, browser, b1, low, pageFp, authoritativ
 
   // A12：生成快照期间主文档长任务 0（从遮罩撤下到三张卡的锚帧段做完）
   const bakeLong = await longTasks(page, b1.gateLiftAt);
+  await playCheck();
   book.judge('M7-A12', 'bake-longtasks-0', Array.isArray(bakeLong) && bakeLong.filter((x) => x.at <= b1.gateLiftAt + Math.max(30_000, a4.worstSinceGateMs ?? 0)).length === 0, { count: bakeLong?.length ?? null, worst: (bakeLong ?? []).sort((a, b) => b.ms - a.ms).slice(0, 3), authoritative });
 
   /* ---- 等本页拿着一段（生成快照中）：下面几条让路都要这个前提 */
@@ -1623,7 +1639,10 @@ async function pageFlows({ book, kv, cfg, browser, b1, low, pageFp, authoritativ
   await until(() => tap.sent('task.progress', zClaim.at).some((f) => f.id === zClaim.id), 30_000, 100);
   await b1.page.close();
   await kv.signal('a10.page-closed', { clip: zClaim.task.clipId, at: Date.now() });
+  await kv.takeSignal('a10.took', deadline);
   const b2 = await openMember(browser, cfg, 'b2');
+  await until(() => b2.tap.nodeState().isNode, NODE_WAIT_MS, 250);
+  await kv.signal('a10.b2-ready', { isNode: b2.tap.nodeState().isNode });
   await kv.takeSignal('a10.server-done', deadline);
   const od2 = await onlineDiag(b2.page);
   const zl = od2?.layers?.find((l) => l.clipId === zClaim.task.clipId);

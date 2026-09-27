@@ -14,8 +14,8 @@ export const ASSUMPTIONS = Object.freeze([
   'A-1 页面诊断钩子是编辑器页（顶层文档）上的 `window.__pcBrowserNode()`，同步回一个可结构化克隆的对象（契约第 7 节只给了名字）；没有这个函数 = 页面节点代码不在。改 `readNodeDiag`。',
   "A-2 `state` 取值 `off` / `idle` / `busy` / `baking`（契约第 7 节原文），另有 `reason`（字符串，说明为什么 off）；`nodeId`、`envFingerprint`、`codeVersion` 平铺在顶层。改 `normalizeNodeDiag`。",
   'A-3 持有的任务在 `held`（或 `tasks`、`holding`）：数组，元素是任务 id 字符串或带 `id` 的对象。改 `normalizeNodeDiag` 的 `heldOf`。',
-  'A-4 计数在 `counts`（或 `stats`，或平铺在顶层）：`claimed` `completed` `dedup` `failed` `lost` `bakeFrames` `chunksPushed` `chunksSkipped` `bytesPushed` `smallFrames`；放回按原因 `released: { yield, hidden, urgent, noSnapshot, … }`（也认 `releases`）。改 `normalizeNodeDiag` 的 `countsOf`。',
-  'A-5 每帧生成快照耗时的分位数在 `bakeMs: { p50, p95 }`（也认 `frameMs`、`bakeFrameMs`）；舞台里被门挡住的时长单记 `pausedMs`，不进耗时（契约第 7 节「舞台」）。改 `countsOf`。',
+  'A-4 〔对账后，rq-m7-node 9774eda 报告「诊断形状」一节〕计数在 `counters`：`claims completed dedup failed lost bakedFrames`；放回在 `counters.released`，键是线上原因原文（`yield-play` `yield-drag` `yield-urgent` `yield-hidden` `no-snapshot` `offline` `unsupported`），按 `releaseCauseOf` 归类；节点侧过滤挡掉的在 `counters.blocked`（「规则号:原因」）；推送在 `upload`：`pushed skipped bytes failed reauth recheck`；小尺寸帧数在 `stage.smallFrames`。旧的猜测名（`counts`、`stats`、平铺）仍兜底。改 `countsOf`。',
+  'A-5 〔对账后〕页面侧一帧（含推送）的耗时在 `counters.frameMs { n, p50, p95 }`；舞台侧在 `stage.frameMs`、`stage.pausedMs`（被门挡住的时长，不进耗时）。改 `countsOf`。',
   'A-6 最近一次错误在 `lastError`（字符串或 `{ message }`）。改 `normalizeNodeDiag`。',
   'A-7 舞台侧的生成快照诊断在舞台文档的 `window.__pcStageDiag().bake`（C10 已有 `__pcStageDiag`，`bake` 这一项是假设）：`{ frames, frameMs: { p50, p95 }, pausedMs }`。改 `readStageBakeDiag`。',
   "A-8 `task.release` 的放回原因（契约第 2 节、第 4.2 节只有 `no-snapshot` 一个写明了）：让路（拖动 / 播放）认 `yield` `busy` `interaction` `drag` `play`，页面隐藏认 `hidden` `visibility`，更急的后台活认 `urgent` `preempt` `measure` `catch-up`，取不到项目认 `no-snapshot`。认不出的记 `other`，判据里「放回 1 次」不看原因。改 `releaseCauseOf`。",
@@ -43,28 +43,37 @@ function heldOf(raw) {
 }
 
 function countsOf(raw) {
-  const c = pick(raw, 'counts', 'stats') ?? raw ?? {};
-  const rel = pick(c, 'released', 'releases') ?? {};
-  const ms = pick(c, 'bakeMs', 'frameMs', 'bakeFrameMs') ?? pick(raw, 'bakeMs', 'frameMs') ?? {};
+  const c = pick(raw, 'counters', 'counts', 'stats') ?? raw ?? {};
+  const up = pick(raw, 'upload') ?? c;
+  const st = pick(raw, 'stage') ?? {};
+  const relRaw = pick(c, 'released', 'releases') ?? {};
+  // 放回：键是线上原因原文（yield-play …），按 releaseCauseOf 归类；旧猜测的已归类键（yield、hidden …）原样认
+  const released = { yield: 0, hidden: 0, urgent: 0, noSnapshot: 0, other: 0, raw: typeof relRaw === 'object' ? { ...relRaw } : relRaw };
+  if (relRaw && typeof relRaw === 'object') {
+    for (const [k, v] of Object.entries(relRaw)) {
+      const cause = ['yield', 'hidden', 'urgent', 'noSnapshot'].includes(k) ? k : releaseCauseOf(k);
+      released[cause in released ? cause : 'other'] += Number(v) || 0;
+    }
+  }
+  released.total = released.yield + released.hidden + released.urgent + released.noSnapshot + released.other;
+  const ms = pick(c, 'frameMs', 'bakeMs', 'bakeFrameMs') ?? {};
+  const sms = pick(st, 'frameMs') ?? {};
   return {
-    claimed: num(pick(c, 'claimed', 'claims')),
+    claimed: num(pick(c, 'claims', 'claimed')),
     completed: num(pick(c, 'completed', 'done')),
     dedup: num(pick(c, 'dedup', 'deduped')),
     failed: num(pick(c, 'failed', 'failures')),
     lost: num(pick(c, 'lost', 'leaseLost')),
-    released: {
-      yield: num(pick(rel, 'yield', 'busy', 'interaction')),
-      hidden: num(pick(rel, 'hidden', 'visibility')),
-      urgent: num(pick(rel, 'urgent', 'preempt', 'measure')),
-      noSnapshot: num(pick(rel, 'noSnapshot', 'no-snapshot', 'noProject')),
-      total: typeof rel === 'number' ? rel : Object.values(rel).reduce((s, v) => s + (Number(v) || 0), 0),
-    },
-    bakeFrames: num(pick(c, 'bakeFrames', 'frames', 'framesBaked')),
-    bakeMs: { p50: num(pick(ms, 'p50')), p95: num(pick(ms, 'p95')) },
-    chunksPushed: num(pick(c, 'chunksPushed', 'pushed', 'uploaded')),
-    chunksSkipped: num(pick(c, 'chunksSkipped', 'skipped')),
-    bytesPushed: num(pick(c, 'bytesPushed', 'bytes')),
-    smallFrames: num(pick(c, 'smallFrames', 'small')),
+    released,
+    blocked: pick(c, 'blocked') ?? null,
+    bakeFrames: num(pick(c, 'bakedFrames', 'bakeFrames', 'frames')),
+    bakeMs: { n: num(pick(ms, 'n')), p50: num(pick(ms, 'p50')), p95: num(pick(ms, 'p95')) },
+    stageMs: { p50: num(pick(sms, 'p50')), p95: num(pick(sms, 'p95')), pausedMs: num(pick(st, 'pausedMs')) },
+    chunksPushed: num(pick(up, 'pushed', 'chunksPushed')),
+    chunksSkipped: num(pick(up, 'skipped', 'chunksSkipped')),
+    bytesPushed: num(pick(up, 'bytes', 'bytesPushed')),
+    uploadFailed: num(pick(up, 'failed')),
+    smallFrames: num(pick(st, 'smallFrames') ?? pick(c, 'smallFrames')),
   };
 }
 
