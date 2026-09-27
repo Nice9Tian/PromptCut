@@ -24,6 +24,12 @@ import { clipOfEntity, entityLabel, writerLabel, type DisplayNames, type Me } fr
 import { connectSharedAssets, disconnectSharedAssets, receiveSharedAssetEndpoints } from "../media/assetTiers";
 import { bindCardSync, noteProjectForCardSync } from "./cardSync";
 import { ONLINE } from "../../online/mode";
+
+/**
+ * 在线构建的编译期常量(写法与用意见 `src/online/pageFlag.ts` 的「在线构建剪枝」),值同 `ONLINE`。只用在剪枝处,
+ * 写成 `!ONLINE_BUILD && !ONLINE`:在线构建里整句折成 false,单测里把 `mode.ts` 换成在线桩时照旧按 `ONLINE` 走。
+ */
+const ONLINE_BUILD = typeof import.meta.env !== "undefined" && import.meta.env.VITE_PC_ONLINE === "1";
 import { loadBrowserDevice } from "../../online/device";
 import { createOnlineBackups, type OnlineBackups } from "./onlineBackups";
 import { nextRecovery, RECOVERED_SHOW_MS } from "./onlineStatus";
@@ -511,8 +517,8 @@ function bind(link: SyncLink, kind: "local" | "shared", docProjectId: string, ur
   cur = { link, kind, docProjectId, url, unbind, offs };
   patch({ active: true, kind, members: kind === "local" ? [] : view.members, notice: null });
   refreshStatus();
-  // Agent 服务端与卡片源码同步都在编辑器进程里;在线页面没有编辑器进程(C10a 第 2 节),不去绑
-  if (!ONLINE) {
+  // Agent 服务端与卡片源码同步都在编辑器进程里;在线页面没有编辑器进程(C10a 第 2 节),不去绑(在线构建里连同 /api/agent/bind、/api/cards/sync/bind 剪掉)
+  if (!ONLINE_BUILD && !ONLINE) {
     bindAgentSide(kind, docProjectId, url);
     bindCardSync({ kind, projectId: docProjectId, url }, getState().project, cardSyncHooks);
   }

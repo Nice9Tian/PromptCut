@@ -18,6 +18,8 @@
 import type { Project } from "../../kernel/project";
 import { usedCardIds, peekScopes } from "../cardScope";
 
+const ONLINE_BUILD = typeof import.meta.env !== "undefined" && import.meta.env.VITE_PC_ONLINE === "1";
+
 export interface CardSyncHooks {
   /** 给一张 page 角色的连接票据(共享项目才会被要);拿不到就抛 */
   ticket: (projectId: string) => Promise<string>;
@@ -88,6 +90,8 @@ export function bindCardSync(b: Binding, project: Project, h: CardSyncHooks): vo
 
 /** 项目变了:用到的卡有变化才再报一次(只在共享项目里有意义) */
 export function noteProjectForCardSync(project: Project): void {
+  // 在线页面不绑(`syncManager.ts`),current 恒为空;在线构建里连同 /api/cards/sync/bind 剪掉(M8 遗留 L24,写法见 `src/online/pageFlag.ts`)
+  if (ONLINE_BUILD) return;
   const b = current;
   if (!b || b.kind !== "shared") return;
   const ids = projectCardIds(project, b.projectId);
