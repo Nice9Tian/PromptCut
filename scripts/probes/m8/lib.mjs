@@ -342,10 +342,10 @@ export function takeoverMs(events, since) {
 
 /**
  * 一个探针进程的结果收集器。`check` 进 checks，不过的同时进 fails；`toJSON()` 出结果行。
- * @param {{ probe: string, role: string, run?: string | null, place?: string | null, case?: string | null }} head
+ * @param {{ probe: string, role: string, run?: string | null, place?: string | null, case?: string | null, startedAt?: number }} head  `startedAt` 缺省为现在（结果行的 ms 从它算）
  */
 export function createResult(head) {
-  const started = Date.now();
+  const started = head.startedAt ?? Date.now();
   const checks = [];
   const fails = [];
   const counts = {};
