@@ -777,10 +777,19 @@ try {
     const claims = (q.claims ?? []).filter((c) => c.at >= editAt && !c.id.startsWith('plan:'));
     const normal = claims.map((c, i) => [c, i]).filter(([c]) => c.priority !== 'backfill').map(([, i]) => i);
     const backfill = claims.map((c, i) => [c, i]).filter(([c]) => c.priority === 'backfill').map(([, i]) => i);
+    // 补渲切出的细任务里,认领时是 normal 档的(同一个结果键已有创建方的 normal 任务:不另起、按 normal 做)
+    const derivedClaims = (q.claims ?? []).filter((c) => derived.includes(c.id));
     return { claims: claims.length, normal: normal.length, backfill: backfill.length, lastNormal: normal.length ? Math.max(...normal) : null, firstBackfill: backfill.length ? Math.min(...backfill) : null,
-      seq: claims.map((c) => (c.priority === 'backfill' ? 'B' : 'N')).join('') };
+      seq: claims.map((c) => (c.priority === 'backfill' ? 'B' : 'N')).join(''), derived: derived.length, derivedNormal: derivedClaims.filter((c) => c.priority !== 'backfill').length };
   }, 900_000, 2000) : null;
-  check(order && order.normal > 0 && order.backfill > 0 && order.lastNormal < order.firstBackfill, '补渲细任务排在本机判重的任务之后(节点先做完 normal,再做 backfill)', order);
+  /*
+   * 两种结果都合乎「补渲排在后面」(mechanism/document-service.md「优先级」):
+   * - 补渲的细任务是新键:标 backfill,节点先做完 normal 再做它们;
+   * - 创建方这一版的 normal 计划也切到了新放的卡(它在创建方那边还没测、按声明判重),细任务同键:不另起、按 normal 做,
+   *   一张 backfill 都不出现(c10-cost 第 2 轮实测 `NNNNNNN`,第 1 轮 `NNNNNNNNBB`,取决于两边谁先发布)。
+   */
+  const orderOk = !!order && order.normal > 0 && (order.backfill > 0 ? order.lastNormal < order.firstBackfill : order.derivedNormal > 0);
+  check(orderOk, '补渲细任务排在本机判重的任务之后(节点先做完 normal,再做 backfill;同键已有 normal 任务时按 normal 做)', order);
   const extraSmall = state.extraClip ? await until('新放的轻卡的小尺寸回到手机', () => P(phone, (id) => {
     const l = (window.__pcOnlineSnapshots?.()?.layers ?? []).find((x) => x.clipId === id);
     return l && l.ready > 0 ? { ready: l.ready } : null;
