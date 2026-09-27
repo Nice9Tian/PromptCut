@@ -747,10 +747,10 @@
 .pc-toast-action:hover {
   background: var(--ui-float);
 }
-/* 离线且有未提交的改动:常驻提示,顶栏下方居中,不挡操作 */
+/* 离线且有未提交的改动:常驻提示,底部状态栏上方居中(顶栏高度随壳变,放顶上会盖住顶栏的状态措辞),不挡操作 */
 .pc-offline-unsent {
   position: fixed;
-  top: 52px;
+  bottom: 36px;
   left: 50%;
   transform: translateX(-50%);
   z-index: 950;

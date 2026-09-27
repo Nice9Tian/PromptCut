@@ -182,7 +182,7 @@ async function typeInto(page, sel, text) {
   if (text) await page.type(sel, text, { delay: 5 });
 }
 async function join(page, origin, username) {
-  await page.goto(`${origin}/editor`, { waitUntil: 'domcontentloaded' });
+  await page.goto(`${origin}/editor`, { waitUntil: 'domcontentloaded', timeout: 120_000 });
   await page.waitForSelector('[data-pc="join-form"]', { visible: true, timeout: 60_000 });
   await typeInto(page, '[data-pc="join-name"]', NAME);
   await typeInto(page, '[data-pc="join-username"]', username);
@@ -412,11 +412,14 @@ try {
   a7.backupRows = await A.evaluate(() => document.querySelectorAll('[data-pc="backups-dialog"] [data-pc="backup-row"]').length);
   await shot(A, 'a7-8-backups-panel');
   const dl3n = downloads().length;
+  // 同一页面第三次起的下载,Chrome 要用户点过「允许下载多个文件」,无头里给不了这个权限:面板里每个按钮是否真的发起了下载
+  // 看页面里 <a download> 的 click(和气泡上的「下载备份」同一个函数,那两次已经真的落了盘)
+  await A.evaluate(() => { window.__probeDl = []; const orig = HTMLAnchorElement.prototype.click; HTMLAnchorElement.prototype.click = function () { if (this.download) window.__probeDl.push({ name: this.download, blob: this.href.startsWith('blob:') }); return orig.call(this); }; });
   // 逐个真点(同一页面一口气触发多个下载会被浏览器的「多文件下载」拦下)
-  for (const h of await A.$('[data-pc="backups-dialog"] [data-pc="backup-download"]')) { await h.click(); await sleep(1500); }
-  await until('面板里逐个下载', () => downloads().length >= dl3n + a7.backupRows ? true : null, 10_000);
-  a7.panelDownloads = downloads().length - dl3n;
-  check(a7.backupRows >= 2 && a7.panelDownloads >= a7.backupRows, 'A7 同步面板列出全部备份、逐个下载', { chip: a7.backupsChip, rows: a7.backupRows, got: a7.panelDownloads });
+  for (const h of await A.$$('[data-pc="backups-dialog"] [data-pc="backup-download"]')) { await h.click(); await sleep(1500); }
+  await sleep(1000);
+  a7.panelDownloads = { started: await A.evaluate(() => window.__probeDl), landed: downloads().length - dl3n };
+  check(a7.backupRows >= 2 && a7.panelDownloads.started.length === a7.backupRows && a7.panelDownloads.started.every((d) => d.blob && /.json$/.test(d.name)), 'A7 同步面板列出全部备份、逐个下载', { chip: a7.backupsChip, rows: a7.backupRows, got: a7.panelDownloads });
   await A.evaluate(() => [...document.querySelectorAll('[data-pc="backups-dialog"] button')].find((b) => b.textContent?.trim() === '关闭')?.click());
   a7.storage = await A.evaluate(async () => ({ local: Object.keys(localStorage), session: Object.keys(sessionStorage), idb: (await indexedDB.databases?.())?.map((d) => d.name) ?? null }));
   const hasBackup = (keys) => (keys ?? []).some((k) => /backup|备份/i.test(k));
