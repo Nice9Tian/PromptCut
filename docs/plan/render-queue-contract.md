@@ -389,7 +389,7 @@ export function splitPlan(args)                                        // → Ta
   streams = [],             // [{ streamKey, topClipId, firstSegment, lastSegment }]，由调用方从 planStreams 取
   envFingerprint,
   codeVersion,
-  cardSourceVersions = {},  // Record<cardId, string>：这一版用的卡片源码版本
+  cardSourceVersions = {},  // Record<cardId, string>：这一版用到的定制卡（用户卡、改动层里改过的卡）的代码身份〔c66-host-cards 改，见本节末〕
   anchorFrames = [],        // 全局帧号（src/render/snapshotPick.mjs 的 anchorFrames 输出）
   weightOf = () => ({ class: 'heavy', estMs: null }),   // (control) => weight，调用方按 K1 成本算
   isUserCard = () => false, // (control) => boolean
@@ -417,7 +417,8 @@ export function splitPlan(args)                                        // → Ta
   weight: { ...weightOf(control), frames: to - from + 1 },
   requires: {
     envFingerprint, codeVersion,
-    cardSources: control.cardId && cardSourceVersions[control.cardId] ? { [control.cardId]: cardSourceVersions[control.cardId] } : {},
+    cardSources: tier === 'local' ? { ...cardSourceVersions }       // 〔c66-host-cards 改〕本地档画整个场景：要这一版全部定制卡
+      : control.cardId && cardSourceVersions[control.cardId] ? { [control.cardId]: cardSourceVersions[control.cardId] } : {},
     transcode: false,
     userCards: !!isUserCard(control),
     graphCards: !!isGraphCard(control),
@@ -436,10 +437,17 @@ export function splitPlan(args)                                        // → Ta
 - 任务字段：
   - `input: { clipId: topClipId, cardId: null, entryKey: null, contentKey: streamKey }`；
   - `weight: { ...weightOf({ clipId: topClipId }), frames: (to - from + 1) * 15 }`；
-  - `requires: { envFingerprint, codeVersion, cardSources: {}, transcode: true, userCards: false, graphCards: false, belowDependent: false }`；
+  - `requires: { envFingerprint, codeVersion, cardSources: { ...cardSourceVersions }, transcode: true, userCards: false, graphCards: false, belowDependent: false }`（`cardSources` 〔c66-host-cards 改〕，原为 `{}`）；
   - `priority: 10`。
 
 输出顺序：先快照（按 `cardPlan` 顺序、段升序），后轨道流（按 `streams` 顺序、段升序）。同一个 `id` 只出现一次（先出现的留下）。
+
+**〔c66-host-cards 改，2026-09-27〕代码版本与卡片代码分开**（C6.6 T9 暴露的代码与语义冲突：独立渲染主机「能认领：全部」，原来只要缺一张与任务无关的用户卡就一个任务也认领不了。报告 `docs/reports/AGENT-c66-host-cards.md`）：
+
+- `codeVersion`（`frameCode(root)`）不再含 `src/cards/user/` 下除装载入口 `index.ts` 以外的文件；改动层本来就不在里面。哈希前换行统一成 LF（Windows、Linux 检出同一个版本）。
+- `cardSourceVersions` 由切分节点的管线给出（`planForQueue` 的 PlanContext，原来恒为 `{}`）：这一版项目用到的卡里，用户卡与闭包里有改动层文件的卡，`{ cardId: 身份 }`。身份 = 定义文件加它一路 import 到的卡片 / 部件文件，逐个记「仓库相对路径 + 生效内容的内容哈希（与内容库 `card-source` 同一算法）」，整体 sha256 取前 32 位（`vite-plugin-cards.ts` 的 `cardCodeIdentity`）。没改过的内置卡由 `codeVersion` 覆盖，不列。
+- `requires.cardSources`：共享档只列这张卡自己的（原规则）；本地档与轨道流列全部（本地档的内容键含 `entry.key`，而 `entry.key` 的 `code` 段现在是 `codeVersion` 加本项目定制卡身份的摘要，见 `server/card-code.mjs` 的 `cardEntryCode`）。
+- 节点的 `cardSourceVersions`（B.2）是现取现算的视图：每一拍认领时按本机此刻的文件算这张卡的身份（任何卡都报，不分定制与否）。卡片源码刚变过的 1.5 s 内一张也不报（等 Vite 作废模块）。本机没有这份代码就按规则 1 `card-source` 不认领、不报错；经卡片同步装上之后下一拍就能认领。
 
 ### B.5 `session.mjs`（任务书 M2「节点会话状态机」）
 
