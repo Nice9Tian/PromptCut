@@ -615,3 +615,140 @@ test('M7Q-D11-G3 local-node 用 task-runner 编排细任务（桌面继续用它
   const text = fs.readFileSync(path.join(serverDir, 'render-node', 'local-node.mjs'), 'utf8');
   assert.match(text, /from '\.\/task-runner\.mjs'/);
 });
+
+/* ================================================================== 进程内：真队列 + 真切分方（pc 的 local-node） */
+
+/** 同步直连：队列的 send 按 connId 交给注册的收件函数 */
+function inproc() {
+  let t = T0;
+  const routes = new Map();
+  const log = [];
+  const q = createRenderQueue({ now: () => t, send: (connId, message) => { const m = JSON.parse(JSON.stringify(message)); log.push({ connId, m }); routes.get(connId)?.(m); } });
+  const endpointOf = (connId, principal) => {
+    q.connect(connId, principal);
+    return { send: (m) => q.handle(connId, JSON.parse(JSON.stringify(m))), onMessage: (h) => routes.set(connId, h) };
+  };
+  return { q, log, now: () => t, advance(ms) { t += ms; q.tick(); }, endpointOf, of: (connId, type) => log.filter((e) => e.connId === connId && e.m.type === type).map((e) => e.m) };
+}
+
+function pcSplitter(env, { cardPlan, afterSplit } = {}) {
+  const endpoint = env.endpointOf('pc', { userId: 'rig@pc', tenantId: 't1' });
+  const executor = {
+    plan: async () => ({ entryKey: 'entry-1', cardPlan, weightOf, anchorFrames: [] }),
+    render: async () => null,
+    ...(afterSplit ? { afterSplit } : {}),
+  };
+  // 细任务不让 pc 做（isIdle 只在视图里有 plan 时为真），浏览器那份与锁的走向由测试掌握
+  const local = createLocalNode({
+    nodeId: 'pc-1', node: { profile: 'pc', envFingerprint: P, codeVersions: [CV] }, endpoint, now: env.now, codeVersion: CV,
+    executor, sink: { has: async () => false, put: async () => ({ complete: true }) },
+    isIdle: () => local.session.known().some((t) => t.kind === 'plan'), takeoverLocked: localNodeModule.idleLockTakeover,
+  });
+  local.start();
+  return local;
+}
+
+function pageAndBrowser(env) {
+  const page = env.endpointOf('page', { userId: 'zoe@devA', tenantId: 't1' });
+  page.send({ type: 'publisher.hello', publisherId: 'pub-page' });
+  const br = env.endpointOf('br', { userId: 'zoe@devA', tenantId: 't1' });
+  br.send({ type: 'node.hello', nodeId: 'n-br', profile: 'browser', envFingerprint: B });
+  br.send({ type: 'queue.watch', projects: ['p1'] });
+  return { page, br };
+}
+
+test('M7Q-A10 进程内：浏览器认领一段后走掉；锁闲置超 30 s 后下一次切分，pc 带 takeover 接手整张卡，浏览器那份作废', async () => {
+  const env = inproc();
+  const a = control({ clipId: 'a', contentKey: 'ck-a', count: 120 });
+  const pc = pcSplitter(env, { cardPlan: [a] });
+  const { page, br } = pageAndBrowser(env);
+
+  const plan1 = clipsPlanTaskOf({ projectId: 'p1', projectRev: 1, clips: ['a'], codeVersion: CV });
+  page.send({ type: 'task.publish', tasks: [plan1] });
+  pc.tick();
+  await flush();
+  const claimed = env.of('pc', 'task.claimed').find((m) => m.id === plan1.id);
+  assert.deepEqual(claimed?.browserFingerprints, [B], '认领回包带同用户在线浏览器的指纹');
+  const d1 = env.q.describe();
+  const brTasks = d1.tasks.filter((t) => t.id.startsWith(`snapshot:${rk('ck-a', B)}`));
+  const pcTasks = d1.tasks.filter((t) => t.id.startsWith(`snapshot:${rk('ck-a', P)}`));
+  assert.equal(brTasks.length, 2, JSON.stringify(d1.tasks.map((t) => t.id)));
+  assert.equal(pcTasks.length, 2);
+
+  // 浏览器先认领第一段：锁到 B，切分方那份作废
+  br.send({ type: 'task.claim', id: brTasks[0].id, expectVersion: 1 });
+  assert.ok(env.of('br', 'task.claimed').some((m) => m.id === brTasks[0].id));
+  for (const t of pcTasks) assert.equal(env.q.describe().tasks.find((x) => x.id === t.id).lastError, 'superseded');
+
+  // 浏览器走掉：宽限期过后它那段回到 open；锁还在 B 上
+  env.q.disconnect('br');
+  env.advance(11_000);
+  env.advance(5_000);
+  assert.equal(env.q.describe().tasks.find((x) => x.id === brTasks[0].id).state, 'open');
+  // 离浏览器最后一次产出过了 30 s 以上，页面发布下一版计划
+  env.advance(20_000);
+  const plan2 = clipsPlanTaskOf({ projectId: 'p1', projectRev: 2, clips: ['a'], codeVersion: CV });
+  page.send({ type: 'task.publish', tasks: [plan2] });
+  pc.tick();
+  await flush();
+  const claimed2 = env.of('pc', 'task.claimed').find((m) => m.id === plan2.id);
+  assert.ok(claimed2, '第二版计划由 pc 认领');
+  assert.equal('browserFingerprints' in claimed2, false, '浏览器已不在线：只出自己那一份');
+  const d2 = env.q.describe();
+  assert.equal(d2.locks.find((l) => l.lockKey === 'snapshot:ck-a').envFingerprint, P, '锁转给了切分方');
+  for (const t of brTasks) assert.equal(d2.tasks.find((x) => x.id === t.id).lastError, 'superseded', `${t.id} 作废`);
+  for (const t of pcTasks) assert.equal(d2.tasks.find((x) => x.id === t.id).state, 'open', `${t.id} 重建`);
+  const results = env.log.filter((e) => e.connId === 'pc' && e.m.type === 'task.published').map((e) => e.m.results);
+  assert.ok(results.some((rs) => rs.some((r) => r.error === 'card-locked' && r.lockIdleMs > 30_000 && r.lockUndone > 0)), JSON.stringify(results));
+  pc.stop();
+  await pc.settled();
+});
+
+test('M7Q-A10b 进程内：锁在浏览器上但它还在产出（闲置不到 30 s）：切分方照锁出键，不接手', async () => {
+  const env = inproc();
+  const a = control({ clipId: 'a', contentKey: 'ck-a', count: 120 });
+  const pc = pcSplitter(env, { cardPlan: [a] });
+  const { page, br } = pageAndBrowser(env);
+  const plan1 = clipsPlanTaskOf({ projectId: 'p1', projectRev: 1, clips: ['a'], codeVersion: CV });
+  page.send({ type: 'task.publish', tasks: [plan1] });
+  pc.tick();
+  await flush();
+  const brId = env.q.describe().tasks.find((t) => t.id.startsWith(`snapshot:${rk('ck-a', B)}`)).id;
+  br.send({ type: 'task.claim', id: brId, expectVersion: 1 });
+  const token = env.of('br', 'task.claimed').find((m) => m.id === brId).token;
+  for (let i = 0; i < 5; i++) { env.advance(9_000); br.send({ type: 'task.progress', id: brId, token, done: i + 1 }); }
+  const plan2 = clipsPlanTaskOf({ projectId: 'p1', projectRev: 2, clips: ['a'], codeVersion: CV });
+  page.send({ type: 'task.publish', tasks: [plan2] });
+  pc.tick();
+  await flush();
+  const d = env.q.describe();
+  assert.ok(env.of('pc', 'task.claimed').some((m) => m.id === plan2.id), '第二版计划由 pc 认领、切分过');
+  assert.equal(d.locks.find((l) => l.lockKey === 'snapshot:ck-a').envFingerprint, B, '锁仍在浏览器上');
+  assert.equal(d.tasks.find((x) => x.id === brId).state, 'claimed', '浏览器手里那段不受影响');
+  pc.stop();
+  await pc.settled();
+});
+
+test('M7Q-D12-E1 执行器 afterSplit：记切分候选；带片段清单的 plan 在切分完成后写一次层表（主机用 publishLayerMap 选项）', async () => {
+  const { createPrerenderExecutor } = await import('../prerender-executor.mjs');
+  const a = control({ clipId: 'a', contentKey: 'ck-a', count: 30 });
+  const entry = entryWith([a]);
+  const recorded = [];
+  const written = [];
+  const pipeline = {
+    planForQueue: async () => ({ entry, context: { cardPlan: [a] } }),
+    recordSplitCandidates: (m) => recorded.push(m),
+    queueHandles: () => true,
+  };
+  const exec = createPrerenderExecutor({ pipeline, projects: { get: async () => ({ tracks: [], duration: 1 }) }, publishLayerMap: (e) => written.push(e.key) });
+  await exec.plan(listPlan);
+  assert.deepEqual(written, [], '切分之前不写层表');
+  const tasks = splitPlan(splitArgs({ cardPlan: [a], browserFingerprints: [B] }));
+  await exec.afterSplit(listPlan, { tasks });
+  assert.deepEqual([...recorded[0].entries()], [['ck-a', [P, B]]]);
+  assert.deepEqual(written, ['entry-1'], '切分完成后写一次');
+  // 不带片段清单的 plan：只记候选，不写层表
+  await exec.afterSplit(planTaskOf({ projectId: 'proj-m7', projectRev: 4 }), { tasks });
+  assert.equal(recorded.length, 2);
+  assert.deepEqual(written, ['entry-1']);
+});
