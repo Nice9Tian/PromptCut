@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { JSX } from "react";
 import { type LayoutMode, setLayoutMode, useLayoutMode } from "./layoutMode";
 import { closeSkillMode, subscribeSkill } from "../skill/skillMode";
+import { onlinePage, onlineUnsupported } from "../online/pageFlag";
 import "./ModeSwitch.css";
 
 /**
@@ -73,9 +74,12 @@ export function ModeSwitch(props: { onOpenSkill: () => void }): JSX.Element {
             type="button"
             className={`pc-modeswitch-item${on ? " is-on" : ""}`}
             aria-pressed={on}
-            disabled={busy}
+            // 在线浏览器模式:SKILL 要拉起桌面版的 AI 助手(C10 契约第 10 节),置灰
+            disabled={busy || (item.id === "skill" && !on && onlinePage())}
             title={
-              item.id === "skill"
+              item.id === "skill" && !on && onlinePage()
+                ? onlineUnsupported("SKILL 模式")
+                : item.id === "skill"
                 ? on
                   ? "当前为 SKILL 模式。点别的格子可以退出"
                   : "从「Skill 模式…」进入:要选驱动、建任务目录、拉起桌面 app"

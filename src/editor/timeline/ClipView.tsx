@@ -5,7 +5,7 @@ import { useTimelineContext } from "./TimelineContext";
 import { actions, useStore, getState } from "../../store/project";
 import { getCard, userCardSources } from "../../kernel/registry";
 import { unsupportedHere } from "../../render/placeholderHost";
-import { ONLINE_CUSTOM_CARD_TEXT } from "../../online/pageFlag";
+import { ONLINE_CUSTOM_CARD_TEXT, onlinePage, onlineUnsupported } from "../../online/pageFlag";
 import { snapTime, isOccupied, getGap, xOfTime, formatTime, ROW_SIZE_H } from "./utils";
 import { ShotMarkers } from "./ShotMarkers";
 import { TrackClip, Track } from "../../kernel/project";
@@ -309,6 +309,8 @@ export function ClipView({ clip, track }: { clip: TrackClip; track: Track }) {
               return [{
                 label: media.transcript ? `查看字幕(${media.transcript.segments.length} 段)` : "转写字幕",
                 action: () => requestCaptions(media.id),
+                // 在线浏览器模式没有语音识别(C10 契约第 10 节):只能转写的置灰,已有字幕的照常查看
+                ...(!media.transcript && onlinePage() ? { disabled: true, title: onlineUnsupported("语音识别") } : {}),
               }];
             })(),
             {

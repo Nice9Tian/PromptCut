@@ -201,6 +201,20 @@ export function previewMediaUrl(media: TierMedia, p: MediaTierPolicy = policy): 
   return chooseTier(media, [], { probe: false, lowMemory: p.lowMemory, online: true, remote: p.remote }).url;
 }
 
+/**
+ * 要**原尺寸**的地方(量素材尺寸、打包保存、卡片画进画布)该拿哪个地址(C10 第 10 节 / 交接文件第 4 节末条)。
+ * - 桌面运行环境:原样 `media.url`,和以前一字不差。
+ * - 在线浏览器模式:远程素材服务上的原尺寸(带只读票据);远程地址还没就绪给 ""(调用方不发请求)。
+ *   低内存档平时不拉原尺寸(`product/platforms.md`「面向的平台」),调用方自己决定要不要用它。
+ */
+export function originalMediaUrl(media: Pick<MediaAsset, "url" | "hash">, p: MediaTierPolicy = policy): string {
+  if (!p.online) return media.url;
+  const url = originalUrl(media);
+  if (!url) return "";
+  if (!p.remote) return hashFromUrl(url) ? "" : url;
+  return remoteMediaUrl(url, p.remote);
+}
+
 /** 原片的地址:`media.url` 就是身份(`/@media/<original 哈希>`);没有 url 但有哈希的才拼一个 */
 function originalUrl(media: Pick<MediaAsset, "url" | "hash">): string {
   if (media.url) return media.url;

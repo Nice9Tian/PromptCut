@@ -10,7 +10,7 @@ import { EffectsSection } from "../left/EffectsSection";
 import { EditSection } from "../left/EditSection";
 import { CaptionsSection } from "../left/CaptionsSection";
 import { AiPanel } from "../right/AiPanel";
-import { onlinePage } from "../../online/pageFlag";
+import { onlinePage, onlineUnsupported } from "../../online/pageFlag";
 import { ScriptPage } from "../right/chat/ScriptPage";
 import { AgentAttentionTracker } from "./agentAttention";
 import { DockPageContext } from "./dockSide";
@@ -34,7 +34,7 @@ const ScriptPageMemo = memo(ScriptPage);
 function OnlineAgentPlaceholder(_props: { tabId: string; active: boolean; mcpConnected: boolean }) {
   return (
     <div className="pc-online-agent-off" data-pc="online-agent-off" style={{ padding: 16, color: "var(--ui-text-dim, #888)", fontSize: 13, lineHeight: 1.6 }}>
-      在线浏览器模式暂不支持 AI 助手，请在桌面版里用。
+      {onlineUnsupported("AI 助手")}
     </div>
   );
 }
