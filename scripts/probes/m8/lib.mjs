@@ -249,6 +249,30 @@ export function layerObservations(tasks, completedBy, nodeFingerprints, layerOf 
   return obs;
 }
 
+/**
+ * 假细任务（不渲染，按 `render-queue-e2e.mjs` 的写法由假节点睡一会儿就完成）：每层一个结果键、切成若干段，
+ * 每段要求这一层的指纹（`requires.envFingerprint`），用来在不起 Chrome 的情况下证 J-全完、J-恰一、J-纯层。
+ * 形状同 `server/test/fake-ws-kit.mjs` 的 snapshotTaskInput（契约 A.4：id = `snapshot:<resultKey>:<from>-<to>`）。
+ * @param {{ run: string, projectId: string, layers: Array<{ fingerprint: string | null, segments: number }>, framesPerSegment?: number, projectRev?: number }} o
+ */
+export function fakeLayerTasks({ run, projectId, layers, framesPerSegment = 60, projectRev = 1 }) {
+  const tasks = [];
+  layers.forEach((layer, i) => {
+    const resultKey = `m8-${run}-L${i}`;
+    for (let s = 0; s < layer.segments; s++) {
+      const from = s * framesPerSegment;
+      const to = from + framesPerSegment - 1;
+      tasks.push({
+        id: `snapshot:${resultKey}:${from}-${to}`, kind: 'snapshot', tier: 'shared', resultKey,
+        range: { unit: 'localFrame', from, to }, source: { projectId, projectRev }, input: {},
+        weight: { class: 'light', estMs: null, frames: framesPerSegment },
+        requires: layer.fingerprint ? { envFingerprint: layer.fingerprint } : {}, priority: 0,
+      });
+    }
+  });
+  return tasks;
+}
+
 /** sha256（十六进制）；收 Buffer / Uint8Array / 字符串 */
 export const sha256Of = (data) => createHash('sha256').update(data).digest('hex');
 
