@@ -23,7 +23,7 @@ import fsSync from 'node:fs';
 import path from 'node:path';
 import { atomic } from './frame-mov.mjs';
 import { rangeHas } from './snapshot-store.mjs';
-import { collectSnapshotResult, collectStreamResult, pushResult, manifestKindOf, manifestKeyOf, assertResultSize } from './artifact-transfer.mjs';
+import { collectSnapshotResult, collectStreamResult, pushResult, manifestKindOf, manifestKeyOf, assertResultSize, layerMapKeyOf } from './artifact-transfer.mjs';
 import { sharedBandwidthGate } from './bandwidth-gate.mjs';
 
 /** 优先级:数字越小越先推 */
@@ -158,7 +158,7 @@ export function createPushQueue({
   let pumpQueued = false;
   const inflight = new Set();
   const waiters = [];
-  const counters = { enqueued: 0, merged: 0, pushed: 0, failures: 0, uploaded: 0, skipped: 0, manifests: 0, dropped: 0, restored: 0 };
+  const counters = { enqueued: 0, merged: 0, pushed: 0, failures: 0, uploaded: 0, skipped: 0, manifests: 0, dropped: 0, restored: 0, layerMaps: 0 };
   let lastError = null;
 
   const effective = item => Math.max(item.priority, unitFloor(item.unit), item.block ?? 0);
@@ -350,6 +350,47 @@ export function createPushQueue({
     settleWaiters();
   }
 
+  /* ---------------- c10a 第 9 节:给在线页面的层表 ---------------- */
+
+  /**
+   * 最新的一份层表(`artifact-transfer.mjs` 的 `layerMapOf`),后写的赢:攒 300 ms 再写,失败按同一张退避表重试,
+   * 期间来了更新的就只写更新的。和段清单同类(`snapshot-manifest`),键 `layers:<项目 id>`。内容相同(不算 `at`)就不重写。
+   */
+  let layerMap = null;
+  let layerMapTimer = null;
+  let layerMapAttempts = 0;
+  let layerMapWritten = '';
+  let layerMapFlying = false;
+  const layerMapSig = body => { try { const { at, ...rest } = body; void at; return JSON.stringify(rest); } catch { return ''; } };
+  const armLayerMap = ms => {
+    if (layerMapTimer !== null) clearTimer(layerMapTimer);
+    layerMapTimer = setTimer(() => { layerMapTimer = null; void flushLayerMap(); }, ms);
+    layerMapTimer?.unref?.();
+  };
+  async function flushLayerMap() {
+    if (layerMapFlying || !layerMap || stopped) return;
+    const job = layerMap;
+    const sig = `${job.key}
+${layerMapSig(job.body)}`;
+    if (sig === layerMapWritten) { if (layerMap === job) layerMap = null; return; }
+    layerMapFlying = true;
+    try {
+      await content.put('snapshot-manifest', job.key, job.body);
+      layerMapWritten = sig;
+      layerMapAttempts = 0;
+      counters.layerMaps++;
+      if (layerMap === job) layerMap = null;
+      say('push.layer-map', { key: job.key, layers: job.body?.layers?.length ?? 0 });
+    } catch (error) {
+      layerMapAttempts++;
+      say('push.layer-map-retry', { key: job.key, attempts: layerMapAttempts, message: String(error?.message ?? error) });
+      if (layerMap === job) armLayerMap(delays[Math.min(layerMapAttempts - 1, delays.length - 1)]);
+    } finally {
+      layerMapFlying = false;
+      if (layerMap && layerMap !== job) armLayerMap(0);
+    }
+  }
+
   /* ---------------- 对外 ---------------- */
 
   const queue = {
@@ -412,8 +453,20 @@ export function createPushQueue({
       unregisterDemand();
       unregisterDemand = () => {};
       if (timer !== null) { clearTimer(timer); timer = null; timerAt = Infinity; }
+      if (layerMapTimer !== null) { clearTimer(layerMapTimer); layerMapTimer = null; }
       await persist();
       for (const resolve of waiters.splice(0)) resolve();
+    },
+    /**
+     * c10a 第 9 节:写一份层表(后写的赢,攒 300 ms;见上)。没给内容库、项目没有 id 回 false。
+     * @returns {boolean}
+     */
+    putLayerMap(projectId, body) {
+      const key = layerMapKeyOf(projectId);
+      if (!content || typeof content.put !== 'function' || !key || !body) return false;
+      layerMap = { key, body };
+      armLayerMap(300);
+      return true;
     },
     /** 立即重排一次(测试或调用方拨快了时钟之后用) */
     poke() { schedule(); },

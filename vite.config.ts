@@ -1,7 +1,7 @@
 import { framesPlugin } from "./server/vite-plugin-frames";
 import { mirrorPlugin } from "./server/vite-plugin-mirror";
 import { costsPlugin } from "./server/vite-plugin-costs";
-import { defineConfig, type Plugin } from "vite";
+import { defineConfig, type Plugin, type UserConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { apiGuardPlugin } from "./server/vite-plugin-api-guard";
@@ -71,7 +71,7 @@ const fsDeny = [".env", ".env.*", "*.{crt,pem}", "**/.git/**", "**/out/cookies/*
  */
 const REACT_REFRESH_EXCLUDE = [/\/node_modules\//, /\/src\/cards\//, /\/src\/parts\//];
 
-export default defineConfig({
+const desktopConfig: UserConfig = {
   ...(headless ? { cacheDir: "node_modules/.vite-headless" } : {}),
   // 这两道卡口必须排在所有接口插件**前面**:中间件按 configureServer 的调用顺序注册,
   // 排在后面就等于没有。
@@ -111,4 +111,23 @@ export default defineConfig({
           ],
         },
       },
-});
+};
+
+/**
+ * 在线构建（C10a 契约 `docs/plan/c10a-contract.md` 第 2 节〔裁〕）：`vite build --mode online` 产出 `dist-online/`，
+ * `base: "/editor/"`，编译期常量 `import.meta.env.VITE_PC_ONLINE === "1"`（`src/online/mode.ts` 的 `ONLINE`）。
+ *
+ * - 只挂 React 与 Tailwind：上面那些插件都是编辑器进程的 `/api/**` 接口与开发期的中间件，在线页面没有编辑器进程；
+ *   卡片的改动层（`vite-plugin-cards` 的 pre 插件）是本机用户的定制，也不进在线构建；
+ * - 桌面构建（`vite build`）与开发服务（`vite`）照旧走 `desktopConfig`，不受影响；
+ * - `dist-online/` 由 `scripts/remote/docservice.mjs deploy-hosted --editor dist-online` 部署到托管端的 `<部署目录>/editor/`，
+ *   nginx 在 `/editor` 下提供（契约第 2 节「nginx」）。
+ */
+const onlineConfig: UserConfig = {
+  base: "/editor/",
+  plugins: [react({ exclude: REACT_REFRESH_EXCLUDE }), tailwindcss()],
+  define: { "import.meta.env.VITE_PC_ONLINE": JSON.stringify("1") },
+  build: { outDir: "dist-online", emptyOutDir: true },
+};
+
+export default defineConfig(({ mode }) => (mode === "online" ? onlineConfig : desktopConfig));

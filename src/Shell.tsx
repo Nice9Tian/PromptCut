@@ -7,6 +7,10 @@ import { openProcPath } from "./editor/io/openPath";
 import { installHeadlessHooks } from "./headless";
 import { WindowTitleBar } from "./ui/WindowTitleBar";
 import { useSkin } from "./skins/useSkin";
+import { ONLINE } from "./online/mode";
+import { peekCapturedInvite } from "./online/invite";
+import { forgetSharedResume, hasSharedResume, resumeShared } from "./editor/sync/syncManager";
+import { newProject } from "./editor/io/proc";
 
 /**
  * 开始页和编辑器之间的门。
@@ -19,12 +23,18 @@ import { useSkin } from "./skins/useSkin";
  *   `?draft=<id>`      打开某份草稿再进编辑器。无头实例用它开任务目录里的 project.proc;
  *   `?open=<路径>`     按磁盘路径打开一份 .proc(桌面壳双击文件时带过来),会先复制一份再读;
  *   `?headless=1`      装上 window.__pcHeadless,给 scripts/headless.mjs 的自动写回用。
+ *
+ * 在线浏览器模式(C10a 契约第 2 节)不认这几个参数:它们都要编辑器进程(草稿、磁盘路径、无头实例);
+ * 打开就是开始页,从「加入别人的项目」进编辑器。
  */
 export function Shell(): JSX.Element {
   // Keep the shared --ui-* palette mounted on the start page as well as the editor.
   // The title bar is outside both routes, so its colors stay synchronized.
   useSkin();
   const [inEditor, setInEditor] = useState(() => {
+    // 在线页面打开就是开始页;只有在线模式的**开发服务**(探针 lowmem-online-probe 用)认 `?editor`,
+    // 在线构建(vite build --mode online)里 DEV 为假,这一支被剪掉
+    if (ONLINE) return !!import.meta.env.DEV && new URLSearchParams(location.search).has("editor");
     try {
       return new URLSearchParams(location.search).has("editor");
     } catch {
@@ -35,13 +45,38 @@ export function Shell(): JSX.Element {
 
   // 顶栏的「回到首页」在 window 上派发这个事件,免得给 Editor 加一层 props
   useEffect(() => {
-    const back = () => setInEditor(false);
+    const back = () => {
+      // 回开始页之后再刷新就留在开始页
+      forgetSharedResume();
+      setInEditor(false);
+    };
     window.addEventListener("pc-go-home", back);
     return () => window.removeEventListener("pc-go-home", back);
   }, []);
 
+  /*
+   * 刷新之后回到刷新前打开的共享项目(C10a r2):这个标签页记着(syncManager 的 resumeShared)就照「加入别人的项目」
+   * 那样先换一份空项目、再进去,进去了直接进编辑器;没进去(离线、凭证失效)留在开始页。
+   * 打开的是邀请链接(`#invite=`)时以链接为准,不回旧项目。`?editor` 的页面由编辑器自己接(Editor.tsx)。
+   */
+  useEffect(() => {
+    if (inEditor || !hasSharedResume() || peekCapturedInvite()) return;
+    let live = true;
+    newProject("未命名");
+    void resumeShared().then((ok) => {
+      if (ok && live) {
+        setActiveDraftId(null);
+        setInEditor(true);
+      }
+    });
+    return () => { live = false; };
+    // 启动时只看一次
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // 启动参数只看一次
   useEffect(() => {
+    if (ONLINE) return;
     let q: URLSearchParams;
     try {
       q = new URLSearchParams(location.search);

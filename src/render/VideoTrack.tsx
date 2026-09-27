@@ -61,7 +61,10 @@ const emptySlot = (): Slot => ({ clip: null, full: null, ready: false, token: 0,
  */
 function slotClipOf(clip: TrackClip, media: MediaAsset, localHashes: readonly string[]): SlotClip | null {
   if (isImageMedia(media) || !media.url) return null;
-  return { id: clip.id, url: playbackUrl(media, localHashes), start: clip.start, end: clip.end, offset: clip.mediaOffset ?? 0 };
+  // 低内存档没有素材小尺寸的素材不给地址(c10a 第 8 节):不进槽位,这一层只挂「等待上传方」
+  const url = playbackUrl(media, localHashes);
+  if (!url) return null;
+  return { id: clip.id, url, start: clip.start, end: clip.end, offset: clip.mediaOffset ?? 0 };
 }
 
 /** 这个素材时刻属于这一段(前后放 0.1s:出画的帧时刻比目标早最多一帧) */
@@ -335,7 +338,7 @@ export function VideoTrack({
    * 以前素材层不认这个字段,于是给视频摆位置写进去了却一动不动,只有卡片才看得出效果。
    */
   const boxOf = (clip: TrackClip | null) => ({ position: "absolute" as const, overflow: "hidden" as const, ...frameCss(clip?.frame, stage) });
-  const image = cur && isImageMedia(cur.media) && cur.media.url ? cur : null;
+  const image = cur && isImageMedia(cur.media) && cur.media.url && playbackUrl(cur.media, localHashes) ? cur : null;
   // A1:入库(上传 + 边落盘边算哈希)还没完成的素材没有地址,这一层画「上传中」占位 ——
   // 不挂空 src(空 src 会被当成页面地址,<img> 出裂图、<video> 报解码错)。
   // 传完 media.url 变成 /@media/<hash>,占位自动消失。

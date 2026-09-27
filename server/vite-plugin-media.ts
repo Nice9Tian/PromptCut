@@ -806,10 +806,21 @@ export function mediaMiddleware(root: string) {
       }
     }
 
-    // GET /api/media/upload-queue —— 上传队列的状态(诊断、探针);POST …/target { base, ticket? } —— 换上传目标
+    // GET /api/media/upload-queue —— 上传队列的状态(诊断、探针);POST …/target { base, ticket? } —— 换上传目标;
+    // POST …/enqueue { items: [{ name?, original, small? }] } | { hashes } —— 按哈希把本地内容库里已有的素材进队
+    // (C10a:开启「放云端」时项目里已有的素材也要上云;只收本地有的,回 queued / missing,见 upload-queue.mjs 的 enqueueLocalMedia)
     if (req.url.startsWith("/api/media/upload-queue")) {
       try {
         const service = await mediaTierService(root, { withQueue: process.env.PROMPTCUT_HEADLESS !== "1" });
+        if (req.method === "POST" && req.url.split("?")[0] === "/api/media/upload-queue/enqueue") {
+          const body = await readJsonBody(req);
+          res.setHeader("Content-Type", "application/json");
+          if (!service.queue) return res.end(JSON.stringify({ ok: false, error: "no-queue" }));
+          const { enqueueLocalMedia }: any = await import("./upload-queue.mjs");
+          const r = await enqueueLocalMedia(service.queue, body, (hash: string) => resolveHashFile(root, hash));
+          tiersLog("upload.enqueue-existing", { queued: r.queued.length, missing: r.missing.length, bad: r.bad, local: r.local });
+          return res.end(JSON.stringify({ ok: true, ...r }));
+        }
         if (req.method === "GET" && req.url.split("?")[0] === "/api/media/upload-queue") {
           res.setHeader("Content-Type", "application/json");
           return res.end(JSON.stringify({ ok: true, target: service.target(), queue: service.queue ? service.queue.stats() : null }));

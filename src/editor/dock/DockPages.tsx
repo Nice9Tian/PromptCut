@@ -10,6 +10,7 @@ import { EffectsSection } from "../left/EffectsSection";
 import { EditSection } from "../left/EditSection";
 import { CaptionsSection } from "../left/CaptionsSection";
 import { AiPanel } from "../right/AiPanel";
+import { onlinePage } from "../../online/pageFlag";
 import { ScriptPage } from "../right/chat/ScriptPage";
 import { AgentAttentionTracker } from "./agentAttention";
 import { DockPageContext } from "./dockSide";
@@ -26,7 +27,18 @@ const EffectsPage = memo(EffectsSection);
 const EditPage = memo(EditSection);
 const CaptionsPage = memo(CaptionsSection);
 const ScriptPageMemo = memo(ScriptPage);
-const AgentPage = memo(AiPanel);
+/**
+ * 在线浏览器模式的 Agent 页:AI 助手要本机编辑器进程(模型配置、对话记录、工具执行都走它的 `/api/*`),
+ * 在线页面按契约第 2 节置灰,不挂 AiPanel、一个请求都不发。
+ */
+function OnlineAgentPlaceholder(_props: { tabId: string; active: boolean; mcpConnected: boolean }) {
+  return (
+    <div className="pc-online-agent-off" data-pc="online-agent-off" style={{ padding: 16, color: "var(--ui-text-dim, #888)", fontSize: 13, lineHeight: 1.6 }}>
+      在线浏览器模式暂不支持 AI 助手，请在桌面版里用。
+    </div>
+  );
+}
+const AgentPage = memo(onlinePage() ? OnlineAgentPlaceholder : AiPanel);
 
 const goImport = () => activateRailItem("library", { expand: true });
 

@@ -19,16 +19,40 @@ export function hostedInstance(name = 'main', env = process.env) {
   };
 }
 
-/** PM2 配置（写在远端部署目录里，仓库外）：fork 模式、1 个实例；环境里没有任何秘密 */
-export function hostedPm2Config(inst, publicHost) {
+/**
+ * 校验 `deploy-hosted` 的两个公网地址参数（C10a 契约第 3 节）：`--doc-public-url` 收 `ws(s)://` 或 `http(s)://`，
+ * `--asset-public-url` 收 `http(s)://`。不给回 undefined；给了但不对抛错（写错的地址不悄悄换成缺省值）。
+ */
+export function checkPublicUrl(value, kind) {
+  if (value === undefined || value === null) return undefined;
+  const text = String(value).trim();
+  let u;
+  try {
+    u = new URL(text);
+  } catch {
+    throw new Error(`--${kind}-public-url 不是合法的地址：${text}`);
+  }
+  const ok = kind === 'doc' ? ['ws:', 'wss:', 'http:', 'https:'] : ['http:', 'https:'];
+  if (!ok.includes(u.protocol)) throw new Error(`--${kind}-public-url 要以 ${ok.map((p) => `${p}//`).join(' / ')} 开头：${text}`);
+  return text;
+}
+
+/**
+ * PM2 配置（写在远端部署目录里，仓库外）：fork 模式、1 个实例；环境里没有任何秘密。
+ *
+ * 两个公网地址缺省按 `publicHost` 拼成 `ws://<主机>:<端口>`、`http://<主机>:<端口>/api/asset`；
+ * `urls.docPublicUrl` / `urls.assetPublicUrl`（`--doc-public-url` / `--asset-public-url`，C10a 契约第 3 节）给了就用给的，
+ * 阿里云上是 `wss://<域名>/hosted/`、`https://<域名>/media/api/asset`，重新部署不再被改回端口直连的地址。
+ */
+export function hostedPm2Config(inst, publicHost, urls = {}) {
   const env = {
     NODE_ENV: 'production',
     PROMPTCUT_DATA_DIR: inst.data,
     PROMPTCUT_DOCSERVICE_HOST: '0.0.0.0',
     PROMPTCUT_DOCSERVICE_PORT: String(inst.docPort),
     PROMPTCUT_ASSET_PORT: String(inst.assetPort),
-    PROMPTCUT_DOCSERVICE_PUBLIC_URL: `ws://${publicHost}:${inst.docPort}`,
-    PROMPTCUT_ASSET_PUBLIC_URL: `http://${publicHost}:${inst.assetPort}/api/asset`,
+    PROMPTCUT_DOCSERVICE_PUBLIC_URL: urls.docPublicUrl || `ws://${publicHost}:${inst.docPort}`,
+    PROMPTCUT_ASSET_PUBLIC_URL: urls.assetPublicUrl || `http://${publicHost}:${inst.assetPort}/api/asset`,
   };
   const app = {
     name: inst.app,
@@ -48,8 +72,41 @@ export function hostedPm2Config(inst, publicHost) {
 /** bash 单引号转义 */
 export const shq = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`;
 
-/** 经 ssh 标准输入交给远端 bash 的部署脚本。令牌（只在 --write-token 时有）只出现在这段文本里，已校验只含 base64url 字符 */
-export function hostedDeployScript(inst, { pm2Config, save, replaceDocservice, token }) {
+/**
+ * 在线构建（`--editor`，C10a 契约第 3 节）换上去的几行：本机已把 `dist-online/` 拷成 `<部署目录>/.incoming-editor`。
+ * - 旧版的 `assets/` 保留一代：上一代自己的文件清单在 `editor/.assets-own` 里，逐个补进新版的 `assets/`（新版已有的不盖），
+ *   正在用旧页面的人刷新前还取得到旧资源；再往前的几代不补，所以只留一代；
+ * - 新版自己的清单写成新的 `.assets-own`（在补进旧文件之前记）；
+ * - 整个目录换名换上去（先把旧的挪成 `editor.prev` 再删），nginx 不会读到拷了一半的目录。
+ * nginx 的 `/editor` 路由由主会话在服务器上手工加（契约第 2 节），这里不碰。
+ */
+export function editorSwapLines() {
+  return [
+    '# 在线构建：.incoming-editor 换成 editor/，旧版 assets/ 保留一代',
+    'if [ ! -f .incoming-editor/index.html ]; then echo ".incoming-editor 里没有 index.html" >&2; exit 4; fi',
+    'mkdir -p .incoming-editor/assets',
+    '( cd .incoming-editor/assets && find . -maxdepth 1 -type f -printf "%f\\n" | sort ) > .incoming-editor/.assets-own',
+    'if [ -f editor/.assets-own ] && [ -d editor/assets ]; then',
+    '  kept=0',
+    '  while IFS= read -r f; do',
+    '    [ -n "$f" ] || continue',
+    '    if [ -f "editor/assets/$f" ] && [ ! -e ".incoming-editor/assets/$f" ]; then cp -p "editor/assets/$f" ".incoming-editor/assets/$f"; kept=$((kept + 1)); fi',
+    '  done < editor/.assets-own',
+    '  echo "editor: 保留上一代 assets $kept 个"',
+    'fi',
+    'rm -rf editor.prev',
+    'if [ -d editor ]; then mv editor editor.prev; fi',
+    'mv .incoming-editor editor',
+    'rm -rf editor.prev',
+    'echo "editor: $(wc -l < editor/.assets-own) 个本代 assets，$(find editor/assets -maxdepth 1 -type f | wc -l) 个在位"',
+  ];
+}
+
+/**
+ * 经 ssh 标准输入交给远端 bash 的部署脚本。令牌（只在 --write-token 时有）只出现在这段文本里，已校验只含 base64url 字符。
+ * `editor: true`（`--editor`）时，本机已把在线构建拷到 `<部署目录>/.incoming-editor`，脚本把它换成 `editor/`（`editorSwapLines`）。
+ */
+export function hostedDeployScript(inst, { pm2Config, save, replaceDocservice, token, editor = false }) {
   const lines = [
     'set -euo pipefail',
     'set +x',
@@ -62,6 +119,7 @@ export function hostedDeployScript(inst, { pm2Config, save, replaceDocservice, t
     'if [ -d app ]; then mv app app.prev; fi',
     'mv .incoming app',
     'rm -rf app.prev',
+    ...(editor ? editorSwapLines() : []),
     '# 数据目录与 secrets/：没有就建（0700）；已有的内容不动',
     'umask 077',
     'mkdir -p "$DATA/secrets"',

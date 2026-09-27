@@ -41,6 +41,8 @@ import { planesWithinBudget, rangesHave, SEGMENT_FRAMES, streamPlanesFor, type S
 export const SNAPSHOT_THROTTLE_MS = 33;
 /** A3c：一次 `setSnapshots` 投递 ≤ 2 MB（回包的 `bytes` 是实测口子，超了就拆） */
 export const SNAPSHOT_DELIVERY_MAX_BYTES = 2 * 1024 * 1024;
+/** A lost iframe reply must not leave the delivery baseline committed forever. */
+export const SNAPSHOT_DELIVERY_TIMEOUT_MS = 8000;
 /** C4：一次最多报 8 条缺口给预渲染进程 */
 export const MAX_WANTED = 8;
 /**
@@ -121,9 +123,31 @@ export function setSnapshotSource(next: SnapshotSource): void {
   source = next;
 }
 
+/**
+ * 缺的那一帧取到之后叫谁重投(`fetchMissing` 的 `onArrive`)。双舞台由 `syncSnapshotSubscription` 顺带设;
+ * 在线页面不走那条订阅,由 `Preview` 在换上在线快照来源时设(c10a:不设的话,暂停着的页面上取到的字节
+ * 永远等不到下一次投递,重卡一直是占位)。传 null 撤掉。
+ */
+export function setSnapshotArrive(notify: (() => void) | null): void {
+  onArrive = notify;
+}
+
 /** 就绪索引此刻的样子（验收探针看） */
 export function currentReadyIndex(): ReadyIndex {
   return readyIndex;
+}
+
+/** Safe probe diagnostics for a paused online page; no snapshot bytes or tickets. */
+export function snapshotFeedDebug(head: Playhead) {
+  const planned = planFeed(head);
+  return {
+    ready: [...readyIndex].map(([clipId, kinds]) => ({ clipId, kinds: [...kinds].map(([kind, layer]) => ({ kind, key: layer.key.slice(0, 12), ranges: layer.ranges.length })) })),
+    heavy: planned.heavy,
+    picks: [...planned.picks].map(([clipId, pick]) => ({ clipId, key: pick.key.slice(0, 12), cached: have.has(pick.id), flying: flying.has(pick.id) })),
+    mounted: [...baselines.front.mounted].map(([clipId, pick]) => ({ clipId, key: pick.key.slice(0, 12) })),
+    reset: baselines.front.needsReset,
+    settled: [...baselines.front.settled],
+  };
 }
 
 /**
@@ -289,6 +313,11 @@ export interface Playhead {
   t: number;
   /** 播放中才有抑制集合（C5 / K5：拖动和暂停下不抑制、改贴快照） */
   playing: boolean;
+  /**
+   * 低内存档(c10a 契约第 17 节):播放、拖动、暂停时判重的卡一律抑制(父页 `Preview` 的 `pumpFeed`);
+   * 停下时舞台把当前这一帧追一次(`settleLowMemory`),画好的层照普通档一样收 `settled`、不再盖回小尺寸。
+   */
+  lowMemory?: boolean;
 }
 
 export interface FeedPlan {
@@ -348,7 +377,8 @@ export function planFeed({ project, t, playing }: Playhead): FeedPlan {
     }
   }
   for (const { clip, firstFrame, count } of clips) {
-    // 根因 B:暂停态已经追到精确活渲的卡不再选快照(停下就撤兜底,直到下一次 setTime / 播放)
+    // 根因 B:暂停态已经追到精确活渲的卡不再选快照(停下就撤兜底,直到下一次 setTime / 播放)。
+    // 低内存档同样:停下追一帧画好的层(c10a 契约第 17 节,取代原来的「不追活渲」)
     if (!playing && isSettled("front", clip.id)) continue;
     const tier: PickTier = covered.has(clip.id) ? "poster" : wantedStream.has(clip.id) ? "over" : "none";
     let picked: Pick | null = null;
@@ -526,11 +556,22 @@ export async function deliverSnapshots(stage: StageRpcClient, role: StageRole, h
   base.needsReset = false;
   base.lastSentAt = now;
   try {
-    await stage.setSnapshots(patch, reset ? { reset: true } : {});
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        stage.setSnapshots(patch, reset ? { reset: true } : {}),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error("snapshot delivery timed out")), SNAPSHOT_DELIVERY_TIMEOUT_MS);
+        }),
+      ]);
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
     return 1;
   } catch {
-    // iframe 正在换：基线跟着客户端作废，下一次带 reset
+    // iframe 正在换或回包丢失：作废基线，并主动安排下一次投递。
     base.needsReset = true;
+    setTimeout(() => onArrive?.(), 1000);
     return 0;
   }
 }

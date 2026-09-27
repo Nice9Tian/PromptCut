@@ -1,11 +1,14 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { MediaAsset, TrackClip } from "../../kernel/project";
+import { previewCacheKey, usePreviewMediaUrl } from "../media/previewUrl";
 
 type Wave = { peaks: number[]; duration: number };
 // Share decoding across all cuts of a source, keeping only compact peaks.
 const cache = new Map<string, Promise<Wave | null>>();
 export function loadWave(url: string): Promise<Wave | null> {
-  const existing = cache.get(url);
+  // 按去掉查询串的地址缓存:在线页面的地址带轮换的只读票据,换票据不该重下、重解一遍(桌面的 /@media 地址没有查询串)
+  const key = previewCacheKey(url);
+  const existing = cache.get(key);
   if (existing) return existing;
   const pending = (async () => {
     let context: AudioContext | undefined;
@@ -33,19 +36,25 @@ export function loadWave(url: string): Promise<Wave | null> {
       await context?.close();
     }
   })();
-  cache.set(url, pending);
+  cache.set(key, pending);
   if (cache.size > 32) cache.delete(cache.keys().next().value!);
   return pending;
 }
 
 export function AudioWaveform({ media, clip, width }: { media: MediaAsset; clip: TrackClip; width: number }) {
   const [wave, setWave] = useState<Wave | null>(null);
+  // 桌面是 media.url;在线浏览器模式经取档判据换成远程素材服务的地址(低内存档只给小尺寸),没就绪时是 "" 不取
+  const url = usePreviewMediaUrl(media);
+  const urlRef = useRef(url);
+  urlRef.current = url;
+  const key = previewCacheKey(url);
   useEffect(() => {
     let active = true;
     setWave(null);
-    void loadWave(media.url).then((result) => { if (active) setWave(result); });
+    if (!key) return () => { active = false; };
+    void loadWave(urlRef.current).then((result) => { if (active) setWave(result); });
     return () => { active = false; };
-  }, [media.url]);
+  }, [key]);
   if (!wave) return null;
   const count = Math.max(1, Math.min(1500, Math.ceil(width / 3)));
   const paths: string[] = [];

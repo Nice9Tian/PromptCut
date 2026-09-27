@@ -179,7 +179,7 @@ test('SPC6-2 覆盖顺序：界面上改过的值 > PROMPTCUT_HOSTED_URL > 缺�
 
 const SCAN_EXT = new Set(['.mjs', '.js', '.cjs', '.ts', '.tsx', '.jsx', '.json', '.py', '.ps1', '.sh', '.bat', '.cmd', '.html', '.css', '.yml', '.yaml', '.toml', '.ini', '.vue', '.svelte']);
 const EXCLUDE = [
-  /^docs\//, /^archive\//, /^\.claude\//, /(^|\/)node_modules\//, /^out\//, /^dist\//,
+  /^docs\//, /^archive\//, /^\.claude\//, /(^|\/)node_modules\//, /^out\//, /^dist\//, /^dist-online\//,
   /^server\/test\//, /\.test\.[cm]?[jt]sx?$/, /^scripts\/probes\//, /\.md$/,
 ];
 

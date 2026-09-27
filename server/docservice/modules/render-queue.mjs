@@ -23,7 +23,7 @@
  * - `claimsOf(connId)`：这条连接的节点此刻持有的认领数，成员列表的「渲染中」标签用。
  */
 import { QUEUE_DEFAULTS } from '../../render-queue/constants.mjs';
-import { parseInbound, makeMessage, NODE_TYPES, PUBLISHER_TYPES } from '../../render-queue/messages.mjs';
+import { parseInbound, makeMessage, prioritySummaryValue, NODE_TYPES, PUBLISHER_TYPES } from '../../render-queue/messages.mjs';
 
 export const RENDER_QUEUE_MODULE = 'render-queue';
 
@@ -221,7 +221,8 @@ export function renderQueueModule(q, { sweepMs = QUEUE_DEFAULTS.SWEEP_INTERVAL_M
     const parsed = parseInbound(msg);
     if (!parsed.ok) return q.handle(connId, msg);
     const pending = new Map();
-    for (const t of parsed.body.tasks) pending.set(t.id, { priority: t.priority, fp: fingerprintOf(t.requires) });
+    // c10a 契约第 17 节:`priority` 可以是 'normal' / 'backfill';摘要只比数(补渲档算 -1)
+    for (const t of parsed.body.tasks) pending.set(t.id, { priority: prioritySummaryValue(t.priority), fp: fingerprintOf(t.requires) });
     publishing = { connId, pending, seen: false };
     try {
       q.handle(connId, msg);

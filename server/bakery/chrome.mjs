@@ -354,6 +354,8 @@ export async function openBakery(opts = {}) {
      * `nextUrl` 换一个导出页地址再开 —— 常驻 worker 每趟渲的是不同的隔离项目,项目由页面自己去 fetch。
      */
     async reset(project, nextUrl, options = {}) {
+      // 换页之前的钩子(c10a 第 9 节:预渲染小尺寸在要扔掉的这一页上画);出错不挡换页
+      if (typeof bakery.beforeReset === 'function') { try { await bakery.beforeReset(bakery); } catch { /* 小尺寸失败不挡原尺寸 */ } }
       const old = bakery.page;
       const s = await newSession(browser, nextUrl || url);
       if (project) await s.loadProject(project, options);
@@ -387,6 +389,7 @@ export async function openBakery(opts = {}) {
     },
     /** 用备用页(没有就现开一个空项目页)换一趟新的,再把 project 灌进去 */
     async resetWith(project, emptyUrl) {
+      if (typeof bakery.beforeReset === 'function') { try { await bakery.beforeReset(bakery); } catch { /* 同上 */ } }
       const old = bakery.page;
       let s = null;
       if (bakery.spare) {

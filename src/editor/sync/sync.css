@@ -609,3 +609,107 @@
   padding: 0 8px;
   font-size: 12px;
 }
+
+/* ── C10a:开始页「加入别人的项目」(JoinForm.tsx) ───────────────── */
+.pc-join {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 460px;
+  padding: 16px;
+  border: 1px solid var(--ui-border, var(--hairline));
+  border-radius: 10px;
+  background: var(--ui-panel, var(--bg-panel));
+}
+.pc-join-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.pc-join-project {
+  font-size: 13px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: baseline;
+}
+.pc-join-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.pc-join-paste {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 10px;
+  border-top: 1px solid var(--ui-border, var(--hairline));
+}
+
+/* ── C10a:项目设置「多用户协作」(CollabSection.tsx) ─────────────── */
+.pc-collab {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 12px;
+  margin-top: 4px;
+  border-top: 1px solid var(--ui-border);
+}
+.pc-collab-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.pc-collab-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12.5px;
+}
+.pc-collab-row > .pc-collab-key {
+  min-width: 72px;
+  color: var(--ui-fg-muted);
+}
+.pc-collab-row code {
+  font-family: var(--ui-font-mono);
+  font-size: 12px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--ui-float);
+  word-break: break-all;
+}
+.pc-collab-qr {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+/* 二维码:黑白、不小于 240 CSS 像素(契约第 7 节);深色皮肤下也保持白底,扫得出来 */
+.pc-collab-qr-img {
+  width: 240px;
+  height: 240px;
+  flex: 0 0 auto;
+  background: #fff;
+  border-radius: 6px;
+}
+.pc-collab-qr-img svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.pc-collab-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+/* 项目设置对话框放下「多用户协作」一段后变高:加宽、限高、可滚动(类名加在 ProjectSettingsDialog.tsx) */
+.pc-dialog.pc-dialog--collab {
+  width: 460px;
+  max-width: calc(100vw - 24px);
+  max-height: min(92vh, 960px);
+  overflow: auto;
+}

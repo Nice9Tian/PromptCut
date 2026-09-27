@@ -17,6 +17,8 @@ import type { RectWithBounds, RectsWithBoundsOptions, StageHit } from "./solid";
 import type { ProjectPatch } from "./changedClips.mjs";
 import type { CardCostRecord } from "./cardCostKey.mjs";
 import type { StreamPlaneRequest } from "./streamPlayer";
+import { lowMemoryMode } from "../online/lowMemory.ts";
+import type { LowMemorySettleResult } from "./lowMemorySettle";
 
 export type { StreamPlaneRequest };
 
@@ -28,7 +30,10 @@ export interface HostCapabilities {
   prerender: boolean;
   /** Worker 里能拿到 OffscreenCanvas 的 webgl2 */
   offscreenGl: boolean;
-  /** navigator.deviceMemory ≤ 4 或 Safari */
+  /**
+   * 低内存档(`docs/plan/c10a-contract.md` 第 8 节,判定在 `src/online/lowMemory.ts`):只在在线模式里判,
+   * 桌面运行环境恒为 false。以前的判据「`deviceMemory <= 4` 或 Safari」已换掉。
+   */
   lowMemory: boolean;
   /**
    * 父页在 src 查询串里给的舞台 id(`A` / `B`)。**只是实例名,和角色无关**(E1):
@@ -250,8 +255,20 @@ export interface StageRpcApi {
   setPlaying(on: boolean): Promise<{ ok: true }>;
   setMediaT(tSec: number): Promise<{ ok: true }>;
   setLocalHashes(hashes: string[]): Promise<{ ok: true }>;
+  /**
+   * c10a 第 8 节:舞台这一侧的取档策略(`mediaTier.ts` 的 `setMediaTierPolicy`)。父页握手后发一次,
+   * 票据续签、运行中改判低内存档时再发。缺省(不发)= 桌面运行环境。
+   */
+  setMediaPolicy(policy: StageMediaPolicy): Promise<{ ok: true }>;
   /** A3c:patch 是相对上次投递的增量,null = 摘掉;reset = 先清空全部再应用 */
   setSnapshots(patch: Record<string, string | null>, opts?: { reset?: boolean }): Promise<{ ok: true; bytes: number }>;
+  /**
+   * 低内存档「停下追当前一帧」(c10a 契约第 17 节,`lowMemorySettle.ts`):暂停、点击或拖动松开、播放到头之后
+   * (`setTime` 之后)父页发它。舞台把当前这一帧的所有卡活渲一次(重卡也画),画好的层撤掉兜底、换上活渲;
+   * `timeoutMs`(缺省 5 秒)到了还没画好的层维持占位符。回包在全部画好或到时限之后才回。
+   * 新的 `setTime` / `play` / `setProject` / `setRole` 打断它(回 `ok: false, reason: 'superseded'`)。
+   */
+  settleLowMemory(tSec: number, opts?: { timeoutMs?: number }): Promise<LowMemorySettleResult>;
 }
 
 export type StageEvent =
@@ -318,18 +335,46 @@ export interface StageRpcClient extends StageRpcApi {
 }
 
 const METHODS: (keyof StageRpcApi)[] = ["setProject", "setTime", "render", "hitTest", "rectsWithBounds", "size", "setProxy", "setRole", "setPlan",
-  "play", "pause", "setSuppressed", "setStreamPlanes", "setScrubbing", "setPlaying", "setMediaT", "setLocalHashes", "setSnapshots"];
+  "play", "pause", "setSuppressed", "setStreamPlanes", "setScrubbing", "setPlaying", "setMediaT", "setLocalHashes", "setSnapshots", "setMediaPolicy",
+  "settleLowMemory"];
 
 /**
  * 有请求挂着时,每隔这么久看一眼目标窗口还在不在。
  *
  * **为什么要有它**:iframe 从 DOM 里拿掉之后,发给它的 `postMessage` 被浏览器**静默丢弃**,
- * 不抛错、也永远没有回包;而 `call()` 本身不设超时(`render` / 武装停的 `pause` 本来就可能等很久,
- * 一刀切的超时会误杀它们)。以前唯一的出路是等下一次 `pc-stage-ready` 来 `dispose()` ——
+ * 不抛错、也永远没有回包;而 `call()` 一般不设超时(`render` / 武装停的 `pause` 本来就可能等很久,
+ * 一刀切的超时会误杀它们;例外见 STAGE_UPDATE_TIMEOUT_MS)。以前唯一的出路是等下一次 `pc-stage-ready` 来 `dispose()` ——
  * 3D 页卸掉舞台 iframe 那一次,`play()` 就这样挂了一分钟,播放头纹丝不动。
  * 窗口关了就不可能再回包,所以按「关了」判比按时长判准:活着的慢请求一个都不误杀。
  */
 export const CLOSED_POLL_MS = 1000;
+/**
+ * 例外:`setSnapshots` 与不带 `probe` 的 `setTime` 在舞台里是同步做完的短更新,活着的窗口也可能丢回包
+ * (舞台 iframe 原地重载时 `contentWindow` 不变、`closed` 一直为假,新文档不认旧的请求号)。
+ * 这两种按时长判:过了这么久没回包就拒绝,由调用方作废投递基线后重投(C10a)。
+ * 带 `probe` 的 `setTime` 要等严格 beat 与任务边界,重卡在忙机器上可能很久,仍不设时限。
+ */
+export const STAGE_UPDATE_TIMEOUT_MS = 8000;
+/**
+ * 低内存档停下追一帧(`settleLowMemory`)自己带时限,舞台在时限之内一定回包;活着的窗口原地重载会丢回包,
+ * 所以父页这边按「它的时限 + 这么多」判超时。
+ */
+export const LOW_MEMORY_SETTLE_RPC_SLACK_MS = 3000;
+/** 这次调用按时长判超时的话,等多久(毫秒);不按时长判回 null */
+export function stageCallTimeoutMs(method: string, args: unknown[]): number | null {
+  if (method === "settleLowMemory") {
+    const ms = Number((args[1] as { timeoutMs?: unknown } | undefined)?.timeoutMs);
+    return (Number.isFinite(ms) && ms > 0 ? ms : 5000) + LOW_MEMORY_SETTLE_RPC_SLACK_MS;
+  }
+  return isShortStageUpdate(method, args) ? STAGE_UPDATE_TIMEOUT_MS : null;
+}
+/** 按时长判的调用(见 STAGE_UPDATE_TIMEOUT_MS) */
+export function isShortStageUpdate(method: string, args: unknown[]): boolean {
+  if (method === "setSnapshots") return true;
+  if (method !== "setTime") return false;
+  const opts = args[1] as { probe?: unknown } | undefined;
+  return !opts?.probe;
+}
 
 /**
  * 父页侧:给一个舞台 iframe 建一个 RPC 客户端。
@@ -338,7 +383,7 @@ export const CLOSED_POLL_MS = 1000;
 export function createStageRpc(target: Window, targetOrigin: string = location.origin): StageRpcClient {
   let nextId = 1;
   let disposed = false;
-  const pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void; method: string }>();
+  const pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void; method: string; timer?: ReturnType<typeof setTimeout> }>();
   const listeners = new Set<(e: StageEvent) => void>();
   const onMessage = (e: MessageEvent) => {
     if (e.source !== target) return;
@@ -347,6 +392,7 @@ export function createStageRpc(target: Window, targetOrigin: string = location.o
       const p = pending.get(d.id);
       if (!p) return;
       pending.delete(d.id);
+      if (p.timer) clearTimeout(p.timer);
       if (d.ok) p.resolve(d.result);
       else p.reject(new Error(d.error || `stage rpc ${p.method} failed`));
       return;
@@ -376,12 +422,18 @@ export function createStageRpc(target: Window, targetOrigin: string = location.o
         return;
       }
       const id = nextId++;
-      pending.set(id, { resolve, reject, method });
+      const waitMs = stageCallTimeoutMs(method, args);
+      const timer = waitMs !== null ? setTimeout(() => {
+        pending.delete(id);
+        reject(new Error(`stage rpc ${method}: timed out`));
+      }, waitMs) : undefined;
+      pending.set(id, { resolve, reject, method, timer });
       const msg: RpcRequest = { type: "pc-rpc", id, method, args };
       try {
         target.postMessage(msg, targetOrigin);
       } catch (err) {
         pending.delete(id);
+        if (timer) clearTimeout(timer);
         reject(err instanceof Error ? err : new Error(String(err)));
         return;
       }
@@ -401,6 +453,7 @@ export function createStageRpc(target: Window, targetOrigin: string = location.o
       window.removeEventListener("message", onMessage);
       for (const [id, p] of pending) {
         pending.delete(id);
+        if (p.timer) clearTimeout(p.timer);
         if (p.method === "render") p.resolve({ aborted: true, reason: "detached" });
         else p.reject(new Error("stage rpc: detached"));
       }
@@ -467,17 +520,38 @@ export interface StageCardsMessage {
   type: "pc-stage-cards";
   stamp: number;
 }
+/** `setMediaPolicy` 的实参:低内存档、在线浏览器模式的远程素材服务(基址与只读票据) */
+export interface StageMediaPolicy {
+  lowMemory: boolean;
+  remote: { base: string; ticket: string | null } | null;
+}
+
+/**
+ * 舞台侧:运行中出事了(c10a 第 8 节「运行中出现 webglcontextlost 或连续 3 次视频解码失败」)。
+ * 握手类消息,不是 `StageEvent`;父页据此改判低内存档、提示一次。`decode-ok` 用来清零连续失败的计数。
+ */
+export interface StageTroubleMessage {
+  type: "pc-stage-trouble";
+  kind: "webglcontextlost" | "decode-failure" | "decode-ok";
+}
+export function postStageTrouble(kind: StageTroubleMessage["kind"], parentOrigin = "*"): void {
+  const msg: StageTroubleMessage = { type: "pc-stage-trouble", kind };
+  window.parent?.postMessage(msg, parentOrigin);
+}
+
 export function postStageCards(stamp: number, parentOrigin = "*"): void {
   const msg: StageCardsMessage = { type: "pc-stage-cards", stamp };
   window.parent?.postMessage(msg, parentOrigin);
 }
 
-/** 舞台侧:按 J4 探测宿主能力。`prerender` 与 `stageId` 来自父页写在 src 查询串里的值 */
-export function detectHostCapabilities(): HostCapabilities {
+/**
+ * 舞台侧:按 J4 探测宿主能力。`prerender` 与 `stageId` 来自父页写在 src 查询串里的值。
+ * `online`:在线浏览器模式(`src/online/mode.ts` 的 `ONLINE`),由调用方传 —— 本文件不读编译期常量,单测里没有它。
+ */
+export function detectHostCapabilities({ online = false }: { online?: boolean } = {}): HostCapabilities {
   const q = new URLSearchParams(location.search);
   const ua = navigator.userAgent;
   const safari = /Safari\//.test(ua) && !/Chrome\/|Chromium\/|Edg\//.test(ua);
-  const mem = (navigator as Navigator & { deviceMemory?: number }).deviceMemory;
   let offscreenGl = false;
   try {
     // 主线程上的近似:Worker 里的 OffscreenCanvas webgl2 与主线程同源同能力(Safari 17 之前 Worker 里没有 WebGL)。
@@ -494,7 +568,8 @@ export function detectHostCapabilities(): HostCapabilities {
   return {
     prerender: q.get("prerender") === "1",
     offscreenGl,
-    lowMemory: (typeof mem === "number" && mem <= 4) || safari,
+    // c10a 第 8 节:只在在线模式里判(deviceMemory、粗指针 + 触点 + 屏幕长边,设备设置可覆盖);桌面恒为普通档
+    lowMemory: lowMemoryMode(online),
     // stageId **只是实例名,和角色无关**(E1):两个 iframe 是 `A` / `B`,谁是 front / back
     // 只经 setRole 定。缺省给 `A` 而不是 `front`,免得又把实例名读成角色名。
     stageId: q.get("id") || "A",

@@ -1,5 +1,7 @@
 node_modules
 dist
+# 在线构建(vite build --mode online,C10a):部署时拷到托管端 /editor/
+dist-online
 out
 /data/
 .DS_Store

@@ -12,6 +12,7 @@ import type { Project } from "../../kernel/project";
 import { actions, getState } from "../../store/project";
 import { currentDocProjectId, displayNames, me, pushToast } from "./syncManager";
 import { entityLabel, writerLabel } from "./labels";
+import { ONLINE } from "../../online/mode";
 import "./sync.css";
 
 interface Summary {
@@ -76,6 +77,7 @@ export function BackupsDialog({ open, onClose }: { open: boolean; onClose: () =>
     if (!open) return;
     setItems(null);
     setErr("");
+    if (ONLINE) return setItems([]); // 在线页面没有本地备份(入口已置灰,C10a)
     fetch("/api/project-backups", { cache: "no-store" })
       .then((r) => r.json())
       .then((j) => setItems(Array.isArray(j.backups) ? j.backups : []))
@@ -88,6 +90,7 @@ export function BackupsDialog({ open, onClose }: { open: boolean; onClose: () =>
   const rows: Row[] = (items ?? []).flatMap((b) => (b.kind === "overwritten" && b.entity ? [{ backup: b, entity: b.entity }] : b.entities.map((entity) => ({ backup: b, entity }))));
 
   const restore = async (row: Row) => {
+    if (ONLINE) return;
     try {
       const r = await fetch(`/api/project-backups/${encodeURIComponent(row.backup.id)}`, { cache: "no-store" });
       if (!r.ok) throw new Error(String(r.status));

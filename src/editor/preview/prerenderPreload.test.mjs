@@ -7,7 +7,7 @@ import "../../testing/registerTs.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-const { createPreloadScheduler, PRELOAD_DEBOUNCE_MS, PRELOAD_POLL_MS, PRELOAD_RETRY_MS } = await import("./prerenderPreload.ts");
+const { createPreloadScheduler, PRELOAD_DEBOUNCE_MS, PRELOAD_POLL_MS, PRELOAD_RETRY_MS, PRELOAD_REQUEST_TIMEOUT_MS } = await import("./prerenderPreload.ts");
 
 /** 假计时器:手动推进虚拟时间 */
 function fakeClock() {
@@ -132,4 +132,30 @@ test("dispose 之后什么都不发", async () => {
   await clock.advance(20000);
   assert.equal(calls.length, 0);
   assert.equal(clock.pending(), 0);
+});
+
+test("一次 preload 永久悬挂后会取消并重试，迟到回包不能覆盖新状态", async () => {
+  const clock = fakeClock();
+  const calls = [];
+  let finishOld;
+  const scheduler = createPreloadScheduler({
+    request: (signal) => {
+      calls.push(signal);
+      if (calls.length === 1) return new Promise((resolve) => { finishOld = resolve; });
+      return Promise.resolve({ status: "ready" });
+    },
+    setTimer: clock.setTimer,
+    clearTimer: clock.clearTimer,
+  });
+  scheduler.setIdle(true);
+  await clock.advance(PRELOAD_DEBOUNCE_MS);
+  assert.equal(calls.length, 1);
+  await clock.advance(PRELOAD_REQUEST_TIMEOUT_MS);
+  assert.equal(calls[0].aborted, true);
+  await clock.advance(PRELOAD_RETRY_MS);
+  assert.equal(calls.length, 2);
+  finishOld({ status: "html" });
+  await clock.advance(10_000);
+  assert.equal(calls.length, 2);
+  scheduler.dispose();
 });
