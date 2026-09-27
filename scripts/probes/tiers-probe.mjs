@@ -19,6 +19,12 @@
  *     `PerformanceObserver('longtask')` 在这段窗口里记到的 > 50 ms 长任务为 0(原始条目在 `t4.longtasks`)。
  *
  *   node scripts/probes/tiers-probe.mjs [--port-a 5560] [--port-r 5563] [--timeout-min 6] [--keep]
+ *                                       [--cpu-throttle <倍数>] [--trace <文件.json>]
+ *
+ * 只给剖析用的两个开关(缺省都不开,不改 T4 的判定):
+ *   --cpu-throttle N  T4 对照窗口开始前用 CDP `Emulation.setCPUThrottlingRate` 把页面压慢 N 倍(在快机器上模拟慢机器);
+ *   --trace 文件      从 T4 对照窗口开始到上传队列清空录一份 Chrome trace(含 V8 采样)写到该文件,
+ *                     DevTools 的 Performance 面板能打开,`scripts/probes/longtask-stacks.mjs` 能汇总长任务里的调用栈。
  *
  * 端口:每台编辑器另占「端口 +1」「端口 +2」当舞台端口,三个连号都要空着(A 5560～5562,R 5563～5565);
  * 编辑器自己拉起的预渲染进程由系统给空端口(`vite-plugin-prerender.ts`)。结束时只结束本探针起的进程树。
@@ -41,6 +47,8 @@ const PORT_A = Number(arg('--port-a', 5560));
 const PORT_R = Number(arg('--port-r', 5563));
 const TIMEOUT_MS = Number(arg('--timeout-min', 6)) * 60_000;
 const KEEP = args.includes('--keep');
+const CPU_THROTTLE = Number(arg('--cpu-throttle', 0));
+const TRACE_FILE = arg('--trace', null);
 const STAMP = Date.now().toString(36);
 const WORK = path.join(os.tmpdir(), `pc-tiers-probe-${STAMP}`);
 
@@ -151,6 +159,14 @@ try {
   await delay(5000);
   const q1 = await (await fetch(`${A.origin}/api/media/upload-queue`)).json();
   check(q1.target?.base === `http://127.0.0.1:${PORT_R}/api/asset`, '页面打开后 A 的上传目标仍是 R(null 回到缺省目标)', q1.target);
+  if (CPU_THROTTLE > 1) {
+    const cdp = await page.createCDPSession();
+    await cdp.send('Emulation.setCPUThrottlingRate', { rate: CPU_THROTTLE });
+    out.cpuThrottle = CPU_THROTTLE;
+  }
+  if (TRACE_FILE) {
+    await page.tracing.start({ path: path.resolve(TRACE_FILE), categories: ['devtools.timeline', 'disabled-by-default-devtools.timeline', 'v8.execute', 'disabled-by-default-v8.cpu_profiler', 'blink.user_timing', 'toplevel'] });
+  }
   await page.evaluate(() => {
     window.__pcLong = [];
     new PerformanceObserver((list) => {
@@ -176,6 +192,7 @@ try {
           else if (kind === 'params' && c?.cardId) S.actions.setClipParams(c.id, { text: `T4-${i}` });
           else if (c) S.actions.updateClip(c.id, { label: `T4 ${i}` });
           (window.__pcEditLog ??= []).push({ at: Math.round(performance.timeOrigin + t), kind, syncMs: Math.round(performance.now() - t) });
+          performance.mark(`pc:edit:${kind}`);
           window.__pcEdits++;
         } catch { window.__pcEditErrors++; }
         await new Promise((r) => setTimeout(r, 120));
@@ -186,6 +203,7 @@ try {
   const baseStart = Date.now();
   await delay(3000);
   const t4Start = Date.now();
+  await page.evaluate(() => performance.mark("pc:upload-window")).catch(() => {});
 
   // ---- 导入(与页面同一个请求) ----
   out.imports = [];
@@ -243,6 +261,7 @@ try {
     return j.queue && j.queue.items.length === 0 && !j.queue.working ? j : null;
   }, TIMEOUT_MS, 100);
   const t4End = Date.now();
+  if (TRACE_FILE) { await page.tracing.stop(); out.trace = path.resolve(TRACE_FILE); }
   const t4 = await page.evaluate(() => { window.__pcEditing = false; return { long: window.__pcLong, edits: window.__pcEdits, editErrors: window.__pcEditErrors, log: window.__pcEditLog ?? [] }; });
   // 每个长任务前面最近的一次编辑是哪一种(编辑本身慢,还是和编辑无关)
   const withEdit = (e) => { const prev = t4.log.filter((x) => x.at <= e.at + 1).at(-1); return { ...e, afterEdit: prev ? { kind: prev.kind, dtMs: e.at - prev.at, syncMs: prev.syncMs } : null }; };

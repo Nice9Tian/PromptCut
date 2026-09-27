@@ -8,6 +8,7 @@ import { TimelineProvider, useTimelineContext } from "./TimelineContext";
 import { TrackHeader } from "./TrackHeader";
 import { xOfTime, HEADER_W_MIN, HEADER_W_MAX, TAIL_SLACK_PX, contentEndOf } from "./utils";
 import { effectiveDuration } from "../../kernel/duration";
+import { useDurationFollowsContent } from "./durationSync";
 import { TrackRow } from "./TrackRow";
 import { Ruler, RULER_H } from "./Ruler";
 import { InsertZones } from "./InsertZones";
@@ -37,6 +38,10 @@ function TimelineInner() {
   // 新项目一开就是 30 秒,于是范围里总有一大截空的地方能播出黑屏,看起来还像
   // 有个「最短时长」的限制。现在改成:内容末尾就是范围的上界,手动拖短算截断
   // (允许),拖长会被夹回内容末尾。
+  //
+  // 平时在渲染之前就对好了(durationSync.ts:store 一变排一个微任务,排在 React 刷新渲染前面),
+  // 一次编辑只渲一遍;下面这个 effect 留着兜底,渲完还不对就照旧补一次。
+  useDurationFollowsContent();
   useEffect(() => {
     const target = effectiveDuration(contentEndOf(tracks), duration, durationManual);
     if (Math.abs(target - duration) > 1e-6) {
