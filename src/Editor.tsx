@@ -22,6 +22,7 @@ import { motion } from "motion/react";
 import { MediaMigrationDialog } from "./editor/MediaMigrationDialog";
 import { SyncOverlays } from "./editor/sync/SyncOverlays";
 import { isJoinPage, startSync } from "./editor/sync/syncManager";
+import { resumeSharedAfterReload } from "./editor/sync/collab";
 import { undoRedoKey } from "./editor/undoKeys";
 
 /** 拖杆宽度(px),和 ResizeHandle 里的 w-2 对应 */
@@ -155,7 +156,7 @@ export default function Editor() {
 
   useEffect(() => {
     // C6.5:页面用 WebSocket 接本机文档服务并挂上 store(src/editor/sync/syncManager.ts);无头实例、只读查看、连不上时不接
-    void startSync();
+    void startSync().then(() => resumeSharedAfterReload());
     const p = getState().project;
     // 无头实例(?headless=1,scripts/headless.mjs 开的页面)不塞演示卡:
     // 那会把一份空快照悄悄变成 10 张演示卡,合并回去时全算成 agent 新加的。

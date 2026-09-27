@@ -11,7 +11,7 @@
  *
  * 界面在 `CollabSection.tsx`；连接、进入、创建者操作在 `syncManager.ts`。
  */
-import { adminOp, enterShared, ensureDevice, expectSharedClose, getSyncView, leaveSharedToLocal, whenSaved, type AdminError } from "./syncManager";
+import { adminOp, enterShared, ensureDevice, expectSharedClose, getSyncView, leaveSharedToLocal, rememberSharedResume, sharedResumeProjectId, whenSaved, type AdminError } from "./syncManager";
 import { errorStatus, route, type SharedMode, type Where } from "./sharedApi";
 import { getState } from "../../store/project";
 import { originalHashOf } from "../../render/mediaTier";
@@ -33,6 +33,7 @@ export interface LocalCollab {
   where: Where;
   mode: SharedMode;
   name: string;
+  base?: string;
   creatorUsername: string;
   creatorPassword?: string;
   projectPassword?: string;
@@ -60,6 +61,19 @@ function writeAll(all: Record<string, LocalCollab>) {
 
 export function localCollab(projectId: string): LocalCollab | null {
   return readAll()[projectId] ?? null;
+}
+
+/** Restore the creator's shared document after a same-tab dev-server reload. */
+export async function resumeSharedAfterReload(): Promise<void> {
+  if (ONLINE) return;
+  const id = sharedResumeProjectId();
+  if (!id || getSyncView().shared?.projectId === id) return;
+  const saved = localCollab(id);
+  if (!saved?.creatorPassword || !saved.creatorUsername || !saved.base || saved.where !== "hosted") return;
+  await enterShared(
+    { projectId: id, where: saved.where, base: saved.base, name: saved.name, mode: saved.mode },
+    { as: "creator", username: saved.creatorUsername, password: saved.creatorPassword },
+  );
 }
 
 function saveLocal(rec: LocalCollab) {
@@ -200,11 +214,13 @@ export async function enableCollab(o: EnableOptions): Promise<{ ok: true; invite
     where: made.where,
     mode: made.mode,
     name: made.name,
+    base: made.base,
     creatorUsername: o.creator.username,
     creatorPassword: o.creator.password,
     ...(o.mode === "free" ? { projectPassword: o.projectPassword } : {}),
     invite: null,
   });
+  if (o.where === "hosted") rememberSharedResume(made.projectId);
   if (o.where !== "hosted") return { ok: true, invite: null };
   /*
    * 开启前就在项目里的素材也要上云(C10a 集成返工):等编辑器进程拿到托管端素材服务与 rw 票据(进入共享项目时

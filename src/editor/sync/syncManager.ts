@@ -21,7 +21,7 @@ import { isViewOnly } from "../io/viewOnly";
 import { SyncLink, type AnyMsg, type CloseInfo } from "./link";
 import { client, errorStatus, route, type Candidate, type SharedMode, type Where } from "./sharedApi";
 import { clipOfEntity, entityLabel, writerLabel, type DisplayNames, type Me } from "./labels";
-import { connectSharedAssets, disconnectSharedAssets } from "../media/assetTiers";
+import { connectSharedAssets, disconnectSharedAssets, receiveSharedAssetEndpoints } from "../media/assetTiers";
 import { bindCardSync, noteProjectForCardSync } from "./cardSync";
 import { ONLINE } from "../../online/mode";
 import { loadBrowserDevice } from "../../online/device";
@@ -507,7 +507,20 @@ function switchToLocal(project: Project, { load }: { load: boolean }): Project {
 function onLoad(project: Project): Project {
   if (ONLINE && !cur) return project;
   if (cur && cur.kind === "local" && project.id === cur.docProjectId) return cur.link.ds.load(project);
+  if (cur?.kind === "shared") clearSharedResume();
   return switchToLocal(project, { load: true });
+}
+
+/** Same-tab reloads of the development editor must return to the shared document. */
+const SHARED_RESUME_KEY = "pc.shared.resume";
+export function sharedResumeProjectId(): string | null {
+  try { return sessionStorage.getItem(SHARED_RESUME_KEY); } catch { return null; }
+}
+export function rememberSharedResume(projectId: string): void {
+  try { sessionStorage.setItem(SHARED_RESUME_KEY, projectId); } catch { /* storage disabled */ }
+}
+function clearSharedResume(): void {
+  try { sessionStorage.removeItem(SHARED_RESUME_KEY); } catch { /* storage disabled */ }
 }
 
 /* ---------------- 其余消息:成员、事件、通知 ---------------- */
@@ -587,6 +600,9 @@ function rememberEvent(e: Record<string, unknown>) {
 
 function onSideMessage(msg: AnyMsg) {
   switch (msg.type) {
+    case "service.endpoints":
+      receiveSharedAssetEndpoints(msg.endpoints);
+      return;
     case "shared.members.list":
       patch({ members: Array.isArray(msg.devices) ? (msg.devices as MemberRow[]) : [] });
       return;
@@ -649,7 +665,7 @@ export async function startSync(): Promise<void> {
 export function isJoinPage(): boolean {
   // C10a:从开始页「加入别人的项目」进来的(已经连着共享项目),以及在线页面(只能从加入进编辑器),
   // 内容同样以文档服务为准:编辑器挂上时不塞演示卡,不然每个加入的人都往大家的项目里加一遍
-  if (ONLINE || cur?.kind === "shared") return true;
+  if (ONLINE || cur?.kind === "shared" || sharedResumeProjectId()) return true;
   try {
     return new URLSearchParams(location.search).has("join");
   } catch {
@@ -860,6 +876,7 @@ export async function enterShared(candidate: Candidate, cred: EnterCredentials):
         if (settled) {
           // 重连上了:重新订阅成员变化
           link.send({ type: "shared.watch" });
+          void connectSharedAssets(link, candidate.base, { online: ONLINE });
           return;
         }
         settled = true;
@@ -922,6 +939,7 @@ export function expectSharedClose(on = true) {
  * 项目真身拉回本机)。在线页面没有本机空间,只是断开。
  */
 export function leaveSharedToLocal(project: Project = getState().project): Project {
+  clearSharedResume();
   patch({ shared: null, members: [], blocked: null });
   const out = switchToLocal(project, { load: true });
   expectedClose = null;
@@ -935,6 +953,7 @@ export function currentSharedLink(): SyncLink | null {
 
 /** 被踢 / 被移出 / 项目被删之后点「开始页」:回到本机空间,回开始页 */
 export function leaveBlocked() {
+  clearSharedResume();
   patch({ blocked: null, shared: null, members: [] });
   switchToLocal(getState().project, { load: false });
   window.dispatchEvent(new Event("pc-go-home"));

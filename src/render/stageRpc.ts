@@ -339,6 +339,8 @@ const METHODS: (keyof StageRpcApi)[] = ["setProject", "setTime", "render", "hitT
  * 窗口关了就不可能再回包,所以按「关了」判比按时长判准:活着的慢请求一个都不误杀。
  */
 export const CLOSED_POLL_MS = 1000;
+/** These short stage updates must recover even if a live iframe drops its reply. */
+export const STAGE_UPDATE_TIMEOUT_MS = 8000;
 
 /**
  * 父页侧:给一个舞台 iframe 建一个 RPC 客户端。
@@ -347,7 +349,7 @@ export const CLOSED_POLL_MS = 1000;
 export function createStageRpc(target: Window, targetOrigin: string = location.origin): StageRpcClient {
   let nextId = 1;
   let disposed = false;
-  const pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void; method: string }>();
+  const pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void; method: string; timer?: ReturnType<typeof setTimeout> }>();
   const listeners = new Set<(e: StageEvent) => void>();
   const onMessage = (e: MessageEvent) => {
     if (e.source !== target) return;
@@ -356,6 +358,7 @@ export function createStageRpc(target: Window, targetOrigin: string = location.o
       const p = pending.get(d.id);
       if (!p) return;
       pending.delete(d.id);
+      if (p.timer) clearTimeout(p.timer);
       if (d.ok) p.resolve(d.result);
       else p.reject(new Error(d.error || `stage rpc ${p.method} failed`));
       return;
@@ -385,12 +388,18 @@ export function createStageRpc(target: Window, targetOrigin: string = location.o
         return;
       }
       const id = nextId++;
-      pending.set(id, { resolve, reject, method });
+      const timeout = method === "setSnapshots" || method === "setTime";
+      const timer = timeout ? setTimeout(() => {
+        pending.delete(id);
+        reject(new Error(`stage rpc ${method}: timed out`));
+      }, STAGE_UPDATE_TIMEOUT_MS) : undefined;
+      pending.set(id, { resolve, reject, method, timer });
       const msg: RpcRequest = { type: "pc-rpc", id, method, args };
       try {
         target.postMessage(msg, targetOrigin);
       } catch (err) {
         pending.delete(id);
+        if (timer) clearTimeout(timer);
         reject(err instanceof Error ? err : new Error(String(err)));
         return;
       }
@@ -410,6 +419,7 @@ export function createStageRpc(target: Window, targetOrigin: string = location.o
       window.removeEventListener("message", onMessage);
       for (const [id, p] of pending) {
         pending.delete(id);
+        if (p.timer) clearTimeout(p.timer);
         if (p.method === "render") p.resolve({ aborted: true, reason: "detached" });
         else p.reject(new Error("stage rpc: detached"));
       }

@@ -24,7 +24,7 @@ export function usePrerenderPreload(project: Project, opts: { enabled: boolean; 
   useEffect(() => {
     if (!opts.enabled) return;
     const scheduler = createPreloadScheduler({
-      request: () => frameRequest("preload", projectRef.current, {}, undefined, { target: "prerender", lane: "background" }),
+      request: (signal) => frameRequest("preload", projectRef.current, {}, signal, { target: "prerender", lane: "background" }),
       onStatus: (status) => onStatusRef.current?.(status, projectRef.current),
       setTimer: (fn, ms) => setTimeout(fn, ms),
       clearTimer: (t) => clearTimeout(t as ReturnType<typeof setTimeout>),

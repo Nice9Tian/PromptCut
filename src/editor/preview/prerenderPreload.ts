@@ -18,6 +18,8 @@ export const PRELOAD_DEBOUNCE_MS = 800;
 export const PRELOAD_POLL_MS = 2000;
 /** 请求失败(预渲染进程重启等)之后隔多久重试 */
 export const PRELOAD_RETRY_MS = 4000;
+/** 一次后台请求不结算时释放单飞位；正常整段预渲染可能花数分钟 */
+export const PRELOAD_REQUEST_TIMEOUT_MS = 6 * 60_000;
 
 export interface PreloadStatus {
   status?: string;
@@ -26,7 +28,7 @@ export interface PreloadStatus {
 
 export interface PreloadDeps {
   /** 发一次 preload(调用方用 `frameRequest("preload", …, { target: "prerender", lane: "background" })`) */
-  request(): Promise<PreloadStatus>;
+  request(signal: AbortSignal): Promise<PreloadStatus>;
   /** 每次回包之后通知(legacy 预览拿它归档采样帧) */
   onStatus?(status: PreloadStatus): void;
   setTimer(fn: () => void, ms: number): unknown;
@@ -49,6 +51,9 @@ export function createPreloadScheduler(deps: PreloadDeps): PreloadScheduler {
   let inFlight = false;
   let disposed = false;
   let timer: unknown = null;
+  let requestGeneration = 0;
+  let activeAbort: AbortController | null = null;
+  let activeWatchdog: unknown = null;
 
   const clear = () => {
     if (timer !== null) deps.clearTimer(timer);
@@ -63,15 +68,36 @@ export function createPreloadScheduler(deps: PreloadDeps): PreloadScheduler {
     if (disposed || !idle || inFlight) return;
     inFlight = true;
     dirty = false;
+    const generation = ++requestGeneration;
+    const controller = new AbortController();
+    activeAbort = controller;
+    const watchdog = deps.setTimer(() => {
+      activeWatchdog = null;
+      if (disposed || generation !== requestGeneration) return;
+      requestGeneration++;
+      controller.abort();
+      activeAbort = null;
+      inFlight = false;
+      if (idle) arm(PRELOAD_RETRY_MS);
+    }, PRELOAD_REQUEST_TIMEOUT_MS);
+    activeWatchdog = watchdog;
     let status: PreloadStatus | null = null;
     try {
-      status = await deps.request();
+      status = await deps.request(controller.signal);
     } catch {
+      deps.clearTimer(watchdog);
+      if (activeWatchdog === watchdog) activeWatchdog = null;
+      if (generation !== requestGeneration) return;
       inFlight = false;
+      activeAbort = null;
       if (!disposed && idle) arm(PRELOAD_RETRY_MS);
       return;
     }
+    deps.clearTimer(watchdog);
+    if (activeWatchdog === watchdog) activeWatchdog = null;
+    if (generation !== requestGeneration) return;
     inFlight = false;
+    activeAbort = null;
     if (disposed) return;
     try { deps.onStatus?.(status); } catch { /* 通知方出错不影响调度 */ }
     done = status?.status === "ready";
@@ -98,6 +124,11 @@ export function createPreloadScheduler(deps: PreloadDeps): PreloadScheduler {
     },
     dispose() {
       disposed = true;
+      requestGeneration++;
+      activeAbort?.abort();
+      activeAbort = null;
+      if (activeWatchdog !== null) deps.clearTimer(activeWatchdog);
+      activeWatchdog = null;
       clear();
     },
   };

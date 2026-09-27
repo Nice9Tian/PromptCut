@@ -254,6 +254,10 @@ export interface OnlineSnapshotDeps {
   now?: () => number;
   setTimer?: (fn: () => void, ms: number) => unknown;
   clearTimer?: (t: unknown) => void;
+  /** 单次内容库请求的兜底超时；连接实现也应自行超时 */
+  requestTimeoutMs?: number;
+  /** 取单张小位图的兜底超时 */
+  assetTimeoutMs?: number;
 }
 
 /** 内容库回包里的层表;形状不对回 null */
@@ -529,12 +533,23 @@ export class OnlineSnapshotSource implements SnapshotSource {
     this.prefetchWindow();
   }
 
+  private request(msg: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const ms = this.deps.requestTimeoutMs ?? 12_000;
+    let timer: ReturnType<typeof setTimeout>;
+    return Promise.race([
+      this.deps.request(msg, ms),
+      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("内容库请求超时")), ms); }),
+    ]).finally(() => clearTimeout(timer));
+  }
+
   private async loadMap(): Promise<void> {
-    if (!this.projectId) return;
+    const projectId = this.projectId;
+    if (!projectId) return;
     let reply: Record<string, unknown>;
     try {
-      reply = await this.deps.request({ type: "content.get", kind: "snapshot-manifest", key: LAYER_MAP_PREFIX + this.projectId });
-    } catch { this.stats.errors++; return; }
+      reply = await this.request({ type: "content.get", kind: "snapshot-manifest", key: LAYER_MAP_PREFIX + projectId });
+    } catch { this.stats.errors++; this.lastMapAt = -Infinity; return; }
+    if (this.projectId !== projectId || this.stopped) return;
     this.stats.mapFetches++;
     if (reply?.type !== "content.item" || reply.missing) return;
     const map = parseLayerMap(reply.body);
@@ -586,7 +601,7 @@ export class OnlineSnapshotSource implements SnapshotSource {
     await Promise.all(wanted.map(async ({ seg, key }) => {
       this.manifestFlying.add(key);
       try {
-        const reply = await this.deps.request({ type: "content.get", kind: "snapshot-manifest", key });
+        const reply = await this.request({ type: "content.get", kind: "snapshot-manifest", key });
         this.stats.manifestFetches++;
         const prev = this.manifests.get(key);
         if (reply?.type !== "content.item" || reply.missing) {
@@ -610,7 +625,7 @@ export class OnlineSnapshotSource implements SnapshotSource {
         this.manifestFlying.delete(key);
       }
     }));
-    if (changed) this.publishLayers();
+    if (changed && this.map === map && !this.stopped) this.publishLayers();
   }
 
   /** 预取:这一窗口里当前可见的重层、有小位图的帧,离播放头近的先取 */
@@ -642,14 +657,33 @@ export class OnlineSnapshotSource implements SnapshotSource {
     const work = new Promise<string>((resolve, reject) => {
       this.queue.push(async () => {
         try {
-          const base = this.deps.assetBase();
-          if (!base) throw new Error("还没有远程素材服务");
-          const headers = await this.deps.authHeaders();
-          const f = this.deps.fetch ?? fetch;
-          const res = await f(`${base.replace(/\/+$/, "")}/px/${hash}`, { headers, signal, cache: "force-cache" });
-          if (!res.ok) throw Object.assign(new Error(`取不到小位图 ${hash}:${res.status}`), { status: res.status });
-          const bytes = new Uint8Array(await res.arrayBuffer());
-          const type = (res.headers.get("content-type") || "image/webp").split(";")[0].trim() || "image/webp";
+          const controller = new AbortController();
+          const abort = () => controller.abort();
+          signal?.addEventListener("abort", abort, { once: true });
+          if (signal?.aborted) abort();
+          const ms = this.deps.assetTimeoutMs ?? 15_000;
+          let deadline: ReturnType<typeof setTimeout> | null = null;
+          let bytes: Uint8Array;
+          let type: string;
+          try {
+            ({ bytes, type } = await Promise.race([
+              (async () => {
+                const base = this.deps.assetBase();
+                if (!base) throw new Error("还没有远程素材服务");
+                const headers = await this.deps.authHeaders();
+                const f = this.deps.fetch ?? fetch;
+                const res = await f(`${base.replace(/\/+$/, "")}/px/${hash}`, { headers, signal: controller.signal, cache: "force-cache" });
+                if (!res.ok) throw Object.assign(new Error(`取不到小位图 ${hash}:${res.status}`), { status: res.status });
+                const bytes = new Uint8Array(await res.arrayBuffer());
+                const type = (res.headers.get("content-type") || "image/webp").split(";")[0].trim() || "image/webp";
+                return { bytes, type };
+              })(),
+              new Promise<never>((_, reject) => { deadline = setTimeout(() => { controller.abort(); reject(new Error("小位图请求超时")); }, ms); }),
+            ]));
+          } finally {
+            if (deadline !== null) clearTimeout(deadline);
+            signal?.removeEventListener("abort", abort);
+          }
           const url = `data:${type};base64,${bytesToBase64(bytes)}`;
           this.cache.set(hash, url);
           this.stats.smallFetches++;

@@ -113,6 +113,33 @@ test("T5-shared-3:进共享项目 → 用 service.watch 里的素材服务;离�
   assert.equal(T.remoteAssetBase(), null);
 });
 
+test("T5-shared-4:在线页服务登记请求失败一次后重试，晚到的全量通知也能设地址", async () => {
+  fakeFetch(() => false);
+  const endpoint = { kind: "asset", urls: ["http://10.0.0.9:5460/api/asset"] };
+  let calls = 0;
+  const link = { request: async (msg) => {
+    if (msg.type !== "service.watch") return { type: "auth.ticket.ok", ticket: "t", exp: Date.now() + 900000 };
+    if (++calls === 1) throw new Error("暂时断线");
+    return { type: "service.endpoints", endpoints: [endpoint] };
+  } };
+  try {
+    assert.equal(await T.connectSharedAssets(link, "http://10.0.0.9:5460/", { online: true }), null);
+    assert.equal(T.remoteAssetBase(), null);
+    await new Promise((resolve, reject) => {
+      const end = Date.now() + 3500;
+      const check = () => T.remoteAssetBase() ? resolve() : Date.now() > end ? reject(new Error("没有重试服务登记")) : setTimeout(check, 20);
+      check();
+    });
+    assert.equal(T.remoteAssetBase(), endpoint.urls[0]);
+    T.receiveSharedAssetEndpoints([]);
+    assert.equal(T.remoteAssetBase(), null);
+    T.receiveSharedAssetEndpoints([endpoint]);
+    assert.equal(T.remoteAssetBase(), endpoint.urls[0]);
+  } finally {
+    T.disconnectSharedAssets();
+  }
+});
+
 test("T7-gate-2:导出前问当前素材服务:原片没到齐的列出来(小版到齐不算);都到齐了放行", async () => {
   fakeFetch((_u, hash) => hash === h("2") || hash === h("3"));
   const missing = await T.exportGate(project);

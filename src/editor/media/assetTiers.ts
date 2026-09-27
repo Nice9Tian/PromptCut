@@ -53,6 +53,9 @@ export function setNoEditorProcess(on: boolean): void {
  * 拉预渲染小尺寸,要在这条连接上 `content.get`(`src/render/snapshotSource.ts` 的在线实现经 `docRequest` 用它)。
  */
 let docLink: LinkLike | null = null;
+let sharedAssetContext: { link: LinkLike; docBase: string; online: boolean } | null = null;
+let discoveryTimer: ReturnType<typeof setTimeout> | null = null;
+let discoveryGeneration = 0;
 export function docRequest(msg: Record<string, unknown>, timeoutMs?: number): Promise<Record<string, unknown>> {
   if (!docLink) return Promise.reject(new Error("没连上文档服务"));
   return docLink.request(msg, timeoutMs);
@@ -349,19 +352,51 @@ export function pickAssetEndpoint(endpoints: unknown, docBase: string, selfHost:
  */
 export async function connectSharedAssets(link: LinkLike, docBase: string, { online = false }: { online?: boolean } = {}): Promise<string | null> {
   let base: string | null = null;
+  const generation = ++discoveryGeneration;
+  if (discoveryTimer !== null) clearTimeout(discoveryTimer);
+  discoveryTimer = null;
+  sharedAssetContext = { link, docBase, online };
   docLink = link;
   try {
     const r = await link.request({ type: "service.watch", kinds: ["asset"] });
     base = pickAssetEndpoint(r.endpoints, docBase, typeof location === "undefined" ? "" : location.host, { online });
   } catch { /* 取不到登记:留在本地 */ }
+  if (generation !== discoveryGeneration || docLink !== link) return null;
   setRemoteAssets(base ? { base, ticket: assetTicketSource(link) } : null);
   stopUploadTarget?.();
   stopUploadTarget = startUploadTarget(link, base);
+  // 在线页面没有本地素材服务：登记请求失败或服务尚未出现，都要继续找。
+  if (online && !base) discoveryTimer = setTimeout(() => {
+    discoveryTimer = null;
+    if (docLink === link) void connectSharedAssets(link, docBase, { online });
+  }, 2000);
   return base;
+}
+
+/** 文档服务的 service.watch 后续全量通知；素材服务晚登记也能接上。 */
+export function receiveSharedAssetEndpoints(endpoints: unknown): void {
+  const ctx = sharedAssetContext;
+  if (!ctx || docLink !== ctx.link) return;
+  const base = pickAssetEndpoint(endpoints, ctx.docBase, typeof location === "undefined" ? "" : location.host, { online: ctx.online });
+  if ((remote?.base ?? null) === base) return;
+  discoveryGeneration++;
+  if (discoveryTimer !== null) clearTimeout(discoveryTimer);
+  discoveryTimer = null;
+  setRemoteAssets(base ? { base, ticket: assetTicketSource(ctx.link) } : null);
+  stopUploadTarget?.();
+  stopUploadTarget = startUploadTarget(ctx.link, base);
+  if (ctx.online && !base) discoveryTimer = setTimeout(() => {
+    discoveryTimer = null;
+    if (docLink === ctx.link) void connectSharedAssets(ctx.link, ctx.docBase, { online: true });
+  }, 2000);
 }
 
 /** 离开共享项目:回到本地素材服务 */
 export function disconnectSharedAssets(): void {
+  discoveryGeneration++;
+  if (discoveryTimer !== null) clearTimeout(discoveryTimer);
+  discoveryTimer = null;
+  sharedAssetContext = null;
   docLink = null;
   setRemoteAssets(null);
   stopUploadTarget?.();

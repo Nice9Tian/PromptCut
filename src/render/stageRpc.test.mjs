@@ -143,3 +143,19 @@ test("窗口还开着的慢请求不被巡检误杀;回包到了照常 resolve",
     assert.deepEqual(settled, { ok: true, stoppedAt: 3 });
   });
 });
+
+test("活着的舞台丢了 setSnapshots 回包:有界失败,下一次仍能投递", async (t) => {
+  const { createStageRpc, STAGE_UPDATE_TIMEOUT_MS } = await import("./stageRpc.ts");
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  await withFakeWindow(async (win) => {
+    const target = fakeTarget();
+    const c = createStageRpc(target, "http://stage");
+    const lost = c.setSnapshots({ h: "old" });
+    t.mock.timers.tick(STAGE_UPDATE_TIMEOUT_MS);
+    await assert.rejects(lost, /timed out/);
+    const retry = c.setSnapshots({ h: "new" }, { reset: true });
+    win.deliver(target, { type: "pc-rpc-reply", id: target.sent.at(-1).id, ok: true, result: { ok: true, bytes: 3 } });
+    assert.deepEqual(await retry, { ok: true, bytes: 3 });
+    c.dispose();
+  });
+});
