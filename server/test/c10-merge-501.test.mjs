@@ -21,17 +21,19 @@ const gate = mergeGate();
 const it = (name, fn) => test(name, { skip: gate.ok ? false : gate.reason }, fn);
 
 let base = null;
+const cleanups = [];
+after(() => { for (const f of cleanups.splice(0)) f(); });
 async function serve() {
   if (base) return base;
   const { loadAsset } = await import('./auth-kit.mjs');
   const { asset, store } = await loadAsset();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-c10-merge-'));
-  after(() => fs.rmSync(root, { recursive: true, force: true }));
+  cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
   const media = store.createBlobStore({ kind: 'memory', chunkSize: 8 * 1024 * 1024 });
   const mw = asset.assetServiceMiddleware(root, { stores: { media }, tickets: null });
   const server = http.createServer((req, res) => { void mw(req, res, () => { res.statusCode = 404; res.end('no route'); }); });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
-  after(() => server.close());
+  cleanups.unshift(() => server.close());
   base = `http://127.0.0.1:${server.address().port}`;
   return base;
 }
