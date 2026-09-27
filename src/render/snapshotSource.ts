@@ -541,7 +541,50 @@ export class OnlineSnapshotSource implements SnapshotSource {
   private layers(): OnlineLayer[] {
     const map = this.map;
     if (!map) return [];
-    return map.layers.filter((l) => usableLayer(map, l, { lowMemory: this.lowMemory }));
+    return map.layers.map((l) => this.chosen(map, l)).filter((l) => usableLayer(map, l, { lowMemory: this.lowMemory }));
+  }
+
+  /*
+   * 层表 v 3 的候选(M7 契约 D12):哪一份活着由本页按队列推来的 `task.done`(活)与 `task.failed { error: 'superseded' }`
+   * (那一份作废了 —— 另一份活着,不是失败)认定。认定活着的候选优先;都没认定时取第一个没作废的;全作废或没有候选照旧用层上的。
+   * 选定之后整份换成那个候选(`layerRefOf` 的 `alive`,结果键、指纹、线上键同出一个候选)。
+   */
+  private aliveKeys = new Set<string>();
+  private deadKeys = new Set<string>();
+
+  private chosen(map: LayerMap, layer: OnlineLayer): OnlineLayer {
+    if (map.v < LAYER_MAP_V3 || !layer.candidates?.length) return layer;
+    const pick = layer.candidates.find((c) => this.aliveKeys.has(c.resultKey)) ?? layer.candidates.find((c) => !this.deadKeys.has(c.resultKey));
+    if (!pick || pick.resultKey === layer.resultKey) return layer;
+    return layerRefOf(map, layer.clipId, { lowMemory: this.lowMemory, alive: new Set([pick.resultKey]) }) ?? layer;
+  }
+
+  /**
+   * 队列推给本页(作为发布方)的 `task.done` / `task.failed`(M7 D12):完成的结果键认定活着,`superseded` 作废的那一份当死。
+   * 认定变了就马上重发各层(换了候选的层整层换键)。别的消息不理。
+   */
+  noteQueueEvent(msg: { type?: unknown; id?: unknown; resultKey?: unknown; error?: unknown }): void {
+    const id = typeof msg?.id === "string" ? msg.id : "";
+    const keyOf = () => {
+      if (typeof msg.resultKey === "string" && msg.resultKey) return msg.resultKey;
+      // 细任务 id:`<kind>:<resultKey>:<from>-<to>`
+      const m = /^(?:snapshot|stream):(.+):\d+-\d+$/.exec(id);
+      return m ? m[1] : null;
+    };
+    let changed = false;
+    if (msg?.type === "task.done") {
+      const key = keyOf();
+      if (key && !this.aliveKeys.has(key)) { this.aliveKeys.add(key); this.deadKeys.delete(key); changed = true; }
+    } else if (msg?.type === "task.failed" && msg.error === "superseded") {
+      const key = keyOf();
+      if (key && !this.deadKeys.has(key) && !this.aliveKeys.has(key)) { this.deadKeys.add(key); changed = true; }
+    }
+    if (changed) { this.publishLayers(); this.kick(); }
+  }
+
+  /** 本页自己产出并完成了这一段(纯浏览器节点):这个结果键活着 */
+  markAlive(resultKey: string): void {
+    this.noteQueueEvent({ type: "task.done", resultKey });
   }
 
   /** 看哪个项目(层表的键);换了项目就清表重来 */
@@ -628,7 +671,10 @@ export class OnlineSnapshotSource implements SnapshotSource {
       tier: this.tier,
       mapVersion: this.map?.v ?? null,
       store: !!this.store,
-      layers: usable.map((l) => ({ clipId: l.clipId, kind: l.kind, key: l.key, resultKey: l.resultKey, envFingerprint: l.envFingerprint ?? null, ready: this.readyFrames(l).length })),
+      layers: usable.map((l) => ({ clipId: l.clipId, kind: l.kind, key: l.key, resultKey: l.resultKey, envFingerprint: l.envFingerprint ?? null, ready: this.readyFrames(l).length,
+        candidates: l.candidates?.length ?? 0 })),
+      aliveKeys: this.aliveKeys.size,
+      deadKeys: this.deadKeys.size,
       skipped: (this.map?.layers ?? []).filter((l) => !usable.includes(l)).map((l) => l.clipId),
       manifests: this.manifests.size,
       cacheBytes: this.cache.total, cacheSize: this.cache.size, ...this.stats,
