@@ -389,6 +389,29 @@ try {
   check('stream-in-middle.nodes<=60', midSamples.every((x) => x.nodes <= MAX_NODES), { max: Math.max(...midSamples.map((x) => x.nodes)) });
   await page.screenshot({ path: path.join(OUT, '5-middle-after-stream.png') });
 
+  // ── 6. 短对话(不到窗口化门槛,全渲染):新开一页从空对话发三条,每条流式期间都贴底,没有占位 ──
+  const first = page;
+  page = await browser.newPage();
+  page.on('pageerror', (e) => pageErrors.push(String(e?.message ?? e)));
+  await page.goto(`${origin}/?editor&aimock=1&nosetup=1`, { waitUntil: 'domcontentloaded' });
+  await waitFor(() => page.$('.ai-messages .ai-empty-state'), 120_000, '新页面的空对话');
+  const smallSamples = [];
+  for (let k = 0; k < 3; k++) {
+    await sendMsg(`短对话第 ${k + 1} 条`);
+    smallSamples.push(...(await sampleStream(async (s) => ({ fromBottom: s.fromBottom, spacers: s.spacers, nodes: s.nodes }))));
+  }
+  const small = await listState(page);
+  // 假流的回复不交本轮小结,简洁模式下三轮回复并成一个气泡:3 条用户消息 + 1 个回复气泡
+  check('small.all-rendered-no-spacer', small.nodes === 4 && smallSamples.every((x) => x.spacers === 0), { nodes: small.nodes, spacers: small.spacers });
+  check('small.stuck', smallSamples.every((x) => x.fromBottom <= 40) && small.fromBottom <= 2, {
+    last: small.fromBottom,
+    worst: Math.max(...smallSamples.map((x) => x.fromBottom)),
+    scrollable: small.scrollHeight > small.clientHeight,
+  });
+  await page.screenshot({ path: path.join(OUT, '6-small-chat.png') });
+  await page.close();
+  page = first;
+
   check('page.no-errors', pageErrors.length === 0, { pageErrors: pageErrors.slice(0, 5) });
 } catch (err) {
   check('probe.crashed', false, { error: String(err?.stack ?? err) });
