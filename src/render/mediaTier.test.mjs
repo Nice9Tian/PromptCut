@@ -3,9 +3,9 @@
  * 跑:node --test src/render/mediaTier.test.mjs
  *
  * 钉的是 T1a 审查的三条:
- *   #3 小版还没传完、原片传完了 → 给原片;判据只看「素材服务报 complete 的哈希集合」;
+ *   #3 素材小尺寸还没传完、素材原尺寸传完了 → 给素材原尺寸;判据只看「素材服务报 complete 的哈希集合」;
  *   #4 可播性是**这台设备**的结论,存在本机缓存里,不看项目文档(MediaAsset 上写了什么都不算);
- *   集合为空(还没问过素材服务)→ 有小版给小版(C6.6 起;以前是一律 `media.url`)。
+ *   集合为空(还没问过素材服务)→ 有素材小尺寸给素材小尺寸(C6.6 起;以前是一律 `media.url`)。
  */
 import "../testing/registerTs.mjs";
 import test from "node:test";
@@ -19,7 +19,7 @@ const SMALL = "b".repeat(64);
 const media = { url: `/@media/${ORIG}`, hash: ORIG, tiers: { original: ORIG, small: SMALL }, ext: "mov", kind: "video" };
 const never = () => { throw new Error("不该问可播性"); };
 
-test("集合为空(还没问过素材服务):有小版给小版、没有给原片,不问可播性(C6.6:第一帧不直接拉原片)", () => {
+test("集合为空(还没问过素材服务):有素材小尺寸给素材小尺寸、没有给素材原尺寸,不问可播性(C6.6:第一帧不直接拉素材原尺寸)", () => {
   assert.equal(playbackUrl(media, [], { playable: never }), `/@media/${SMALL}`);
   assert.equal(playbackUrl(media, new Set(), { playable: never }), `/@media/${SMALL}`);
   assert.equal(playbackUrl({ ...media, tiers: { original: ORIG } }, [], { playable: never }), `/@media/${ORIG}`);
@@ -29,29 +29,29 @@ test("集合为空(还没问过素材服务):有小版给小版、没有给原�
   assert.equal(playbackUrl({ url: "", hash: ORIG }, []), `/@media/${ORIG}`);
 });
 
-test("#3:小版还没传完、原片传完了 → 原片", () => {
+test("#3:素材小尺寸还没传完、素材原尺寸传完了 → 素材原尺寸", () => {
   assert.equal(playbackUrl(media, [ORIG], { playable: () => true }), `/@media/${ORIG}`);
-  // 没有小版这一档的素材(浏览器里导入的只有原片)
+  // 没有素材小尺寸这一档的素材(浏览器里导入的只有素材原尺寸)
   const onlyOriginal = { ...media, tiers: { original: ORIG } };
   assert.equal(playbackUrl(onlyOriginal, [ORIG], { playable: never }), `/@media/${ORIG}`);
 });
 
-test("先小后大:只有小版传完 → 小版;两档都传完、这台设备放得了 → 原片", () => {
+test("先小后大:只有素材小尺寸传完 → 素材小尺寸;两档都传完、这台设备放得了 → 素材原尺寸", () => {
   assert.equal(playbackUrl(media, [SMALL], { playable: never }), `/@media/${SMALL}`);
   assert.equal(playbackUrl(media, [SMALL, ORIG], { playable: () => true }), `/@media/${ORIG}`);
 });
 
-test("两档都没传完 → 原片(还没有小版时直接拉原片)", () => {
+test("两档都没传完 → 素材原尺寸(还没有素材小尺寸时直接拉素材原尺寸)", () => {
   assert.equal(playbackUrl(media, ["c".repeat(64)], { playable: never }), `/@media/${ORIG}`);
 });
 
-test("#4:这台设备放不了原片 → 有小版就一直停在小版;小版没传完才回退到原片", () => {
+test("#4:这台设备放不了素材原尺寸 → 有素材小尺寸就一直停在素材小尺寸;素材小尺寸没传完才回退到素材原尺寸", () => {
   const no = () => false;
   assert.equal(playbackUrl(media, [SMALL, ORIG], { playable: no }), `/@media/${SMALL}`);
-  assert.equal(playbackUrl(media, [ORIG], { playable: no }), `/@media/${ORIG}`, "没有小版可给:强制回退到原片");
+  assert.equal(playbackUrl(media, [ORIG], { playable: no }), `/@media/${ORIG}`, "没有素材小尺寸可给:强制回退到素材原尺寸");
 });
 
-test("#4:可播性还不知道 → 先给小版;不探的选项下不触发探测", () => {
+test("#4:可播性还不知道 → 先给素材小尺寸;不探的选项下不触发探测", () => {
   assert.equal(playbackUrl(media, [SMALL, ORIG], { playable: () => undefined, probe: false }), `/@media/${SMALL}`);
 });
 

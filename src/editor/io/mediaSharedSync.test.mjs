@@ -2,7 +2,7 @@
  * 共享项目里导入的素材要传到文档服务(C6.6 T9 暴露的缺陷)。跑:node --test src/editor/io/mediaSharedSync.test.mjs
  *
  * 钉的是:store 接在 docsync 上时,入库回包写回素材表(hash / url / ext / size / tiers、清掉 pending)
- * 以及小版后到时补写 tiers.small,都要变成 project.op 传到文档服务,另一个页面会话(观察端)看得到;
+ * 以及素材小尺寸后到时补写 tiers.small,都要变成 project.op 传到文档服务,另一个页面会话(观察端)看得到;
  * 并且不许原地改 store 里的旧对象(docsync 的本地副本与 store 是同一份,原地改了 diffProject 就看不出变化)。
  */
 import { srcUrl } from "../../testing/registerTs.mjs";
@@ -45,7 +45,7 @@ async function waitFor(pred, ms = 8000) {
   while (!pred() && Date.now() - t0 < ms) await new Promise((r) => setTimeout(r, 50));
 }
 
-test("共享项目:入库回包与后到的小版都传到文档服务,观察端看得到;store 里的旧对象不被原地改", async () => {
+test("共享项目:入库回包与后到的素材小尺寸都传到文档服务,观察端看得到;store 里的旧对象不被原地改", async () => {
   const { svc, B, unbind } = share("共享导入");
   const realFetch = globalThis.fetch;
   let asked = 0;
@@ -84,10 +84,10 @@ test("共享项目:入库回包与后到的小版都传到文档服务,观察端
       assert.equal(got.pending, undefined, `${where} pending`);
     }
 
-    // 小版后到(watchSmallTier 每 2 s 问一次)
+    // 素材小尺寸后到(watchSmallTier 每 2 s 问一次)
     const beforeSmall = mediaOf(getState().project, m.id);
     await waitFor(() => !!mediaOf(getState().project, m.id)?.tiers?.small);
-    assert.deepEqual(beforeSmall.tiers, { original: ORIG }, "小版补写不原地改旧对象");
+    assert.deepEqual(beforeSmall.tiers, { original: ORIG }, "素材小尺寸补写不原地改旧对象");
     svc.drain();
     assert.deepEqual(mediaOf(svc.project, m.id).tiers, { original: ORIG, small: SMALL });
     assert.deepEqual(mediaOf(B.project, m.id).tiers, { original: ORIG, small: SMALL });
@@ -112,7 +112,7 @@ test("共享项目:入库失败时 pending 清掉也传到文档服务", () => {
   }
 });
 
-test("共享项目:打开项目时补转的小版(backfill 回 ready)也传到文档服务", async () => {
+test("共享项目:打开项目时补转的素材小尺寸(backfill 回 ready)也传到文档服务", async () => {
   const { svc, B, unbind } = share("共享补转");
   const realFetch = globalThis.fetch;
   globalThis.fetch = async (url, init) => {

@@ -158,7 +158,7 @@ JSON 放不下注释，所以审阅结论和理由写在这里。**改 `capabili
 量到 `backdrop-filter !== 'none'` 而审阅表说 `independent` 的，`console.warn` 并调
 `degradeCard(id)`。`cardCapabilities` 读这张降级表，本次会话内把它当 `belowDependent`。
 闸门在 `shouldGuard()`：只有 `import.meta.env.DEV`、且 URL 上没有 `export=` / `frames=` / `bake=` 才跑；
-每张卡一辈子只量一次（`resetGuardScans` 只给单测用）。导出、预渲染、冻结快照那条路上
+每张卡一辈子只量一次（`resetGuardScans` 只给单测用）。导出、预渲染、生成快照那条路上
 一个 `getComputedStyle` 都不会执行，逐像素基线不受影响。`Stage.tsx` 只多了一个 `ref`，DOM 一个字不变。
 
 ## 7. 不在这张表里的卡

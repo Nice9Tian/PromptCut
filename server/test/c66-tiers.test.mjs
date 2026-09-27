@@ -1,5 +1,5 @@
 /**
- * C6.6 两档生成（`docs/plan/c66-design.md` 第 2 节、第 8 节「小版命令」「faststart 判定」，验收 T1、T6 的生成一侧）。
+ * C6.6 两档生成（`docs/plan/c66-design.md` 第 2 节、第 8 节「素材小尺寸命令」「faststart 判定」，验收 T1、T6 的生成一侧）。
  * 跑：node --test server/test/c66-tiers.test.mjs
  *
  * 只照设计稿写，没看实现。被测模块的名字与形状是假设 K1（见 `c66-kit.mjs` 文件头）。
@@ -31,52 +31,52 @@ let seq = 0;
 const work = () => { const d = path.join(DIR, `w${++seq}`); fs.mkdirSync(d, { recursive: true }); return d; };
 const fpsOf = (s) => { const [a, b] = String(s || '0/1').split('/').map(Number); return b ? a / b : 0; };
 
-/** 小版的共同要求：≤ 800×600、偶数、H.264、yuv420p、mp4 容器、faststart */
+/** 素材小尺寸的共同要求：≤ 800×600、偶数、H.264、yuv420p、mp4 容器、faststart */
 function assertSmallBasics(p, file, what) {
-  assert.ok(p.video, `${what}：小版要有视频流`);
-  assert.equal(p.video.codec_name, 'h264', `${what}：小版是 H.264`);
-  assert.equal(p.video.pix_fmt, 'yuv420p', `${what}：小版是 yuv420p`);
+  assert.ok(p.video, `${what}：素材小尺寸要有视频流`);
+  assert.equal(p.video.codec_name, 'h264', `${what}：素材小尺寸是 H.264`);
+  assert.equal(p.video.pix_fmt, 'yuv420p', `${what}：素材小尺寸是 yuv420p`);
   const { width: w, height: h } = p.video;
-  assert.ok(w <= 800 && h <= 600, `${what}：小版 ${w}×${h} 要在 800×600 以内`);
+  assert.ok(w <= 800 && h <= 600, `${what}：素材小尺寸 ${w}×${h} 要在 800×600 以内`);
   assert.equal(w % 2, 0, `${what}：宽 ${w} 要是偶数`);
   assert.equal(h % 2, 0, `${what}：高 ${h} 要是偶数`);
-  assert.match(p.format.format_name, /mp4|mov/, `${what}：小版是 mp4 容器`);
-  assert.equal(boxFaststart(file), true, `${what}：小版带 faststart（moov 在 mdat 前）`);
+  assert.match(p.format.format_name, /mp4|mov/, `${what}：素材小尺寸是 mp4 容器`);
+  assert.equal(boxFaststart(file), true, `${what}：素材小尺寸带 faststart（moov 在 mdat 前）`);
 }
 
 async function small(input, what) {
   const tiers = await loadTiers();
   const output = path.join(work(), 'small.mp4');
   await tiers.makeSmall({ ffmpeg: await ffmpeg(), input, output });
-  assert.ok(fs.existsSync(output), `${what}：makeSmallTier 要把小版写到 output`);
+  assert.ok(fs.existsSync(output), `${what}：makeSmallTier 要把素材小尺寸写到 output`);
   const p = await probe(output);
   assertSmallBasics(p, output, what);
   return { p, output };
 }
 
-// ------------------------------------------------------------------ T1 小版参数
+// ------------------------------------------------------------------ T1 素材小尺寸参数
 
-test('C66-T1-01 1080p → 小版 ≤ 800×600 偶数、H.264 yuv420p、faststart、等比、帧率跟原片、AAC 约 64k', async () => {
+test('C66-T1-01 1080p → 素材小尺寸 ≤ 800×600 偶数、H.264 yuv420p、faststart、等比、帧率跟素材原尺寸、AAC 约 64k', async () => {
   const s = samples();
   const { p } = await small(s.hd, '1080p');
   const { width: w, height: h } = p.video;
   assert.ok(Math.abs(w / h - 16 / 9) < 0.02, `等比缩放：${w}×${h}`);
   assert.ok(w >= 796 || h >= 596, `缩到贴边（800×600 以内尽量大）：${w}×${h}`);
-  assert.ok(Math.abs(fpsOf(p.video.avg_frame_rate) - 30) < 0.5, `帧率跟原片 30：${p.video.avg_frame_rate}`);
-  assert.ok(p.audio, '源有音轨，小版要带音轨');
-  assert.equal(p.audio.codec_name, 'aac', '小版音轨是 AAC');
+  assert.ok(Math.abs(fpsOf(p.video.avg_frame_rate) - 30) < 0.5, `帧率跟素材原尺寸 30：${p.video.avg_frame_rate}`);
+  assert.ok(p.audio, '源有音轨，素材小尺寸要带音轨');
+  assert.equal(p.audio.codec_name, 'aac', '素材小尺寸音轨是 AAC');
   const br = Number(p.audio.bit_rate);
-  assert.ok(br > 0 && br <= 80_000, `小版音频码率约 64k：${br}`);
+  assert.ok(br > 0 && br <= 80_000, `素材小尺寸音频码率约 64k：${br}`);
 });
 
-test('C66-T1-02 120 fps、无音轨 → 小版帧率上限 60；没有音轨也能生成（-map 0:a:0?）', async () => {
+test('C66-T1-02 120 fps、无音轨 → 素材小尺寸帧率上限 60；没有音轨也能生成（-map 0:a:0?）', async () => {
   const s = samples();
   const { p, output } = await small(s.fps120, '120fps');
   const fps = fpsOf(p.video.avg_frame_rate);
   assert.ok(fps <= 61, `帧率上限 60（VFR 的平均帧率按时间戳算，留 1 帧余量）：${p.video.avg_frame_rate}`);
   const n = await videoPackets(output);
   assert.ok(n <= 62 && n >= 50, `1 s 的 120 fps 源抽到约 60 帧：${n}`);
-  assert.equal(p.audio, undefined, '源没音轨，小版也没有');
+  assert.equal(p.audio, undefined, '源没音轨，素材小尺寸也没有');
 });
 
 test('C66-T1-03 源已在 800×600 以内（640×360）→ 不放大', async () => {
@@ -86,21 +86,21 @@ test('C66-T1-03 源已在 800×600 以内（640×360）→ 不放大', async () 
   assert.equal(p.video.height, 360);
 });
 
-test('C66-T1-04 奇数尺寸 1001×777、yuv444p → 小版偶数尺寸、yuv420p、等比', async () => {
+test('C66-T1-04 奇数尺寸 1001×777、yuv444p → 素材小尺寸偶数尺寸、yuv420p、等比', async () => {
   const s = samples();
   const { p } = await small(s.odd, '1001x777');
   const { width: w, height: h } = p.video;
   assert.ok(Math.abs(w / h - 1001 / 777) < 0.02, `等比：${w}×${h}`);
 });
 
-test('C66-T1-05 显示旋转 90° 的 1080p → 旋转落进像素（-autorotate），小版是竖的、不再带旋转', async () => {
+test('C66-T1-05 显示旋转 90° 的 1080p → 旋转落进像素（-autorotate），素材小尺寸是竖的、不再带旋转', async () => {
   const s = samples();
   const { p } = await small(s.portrait, '旋转');
   const { width: w, height: h } = p.video;
   assert.ok(h > w, `竖画面：${w}×${h}`);
   assert.ok(Math.abs(w / h - 1080 / 1920) < 0.02, `等比：${w}×${h}`);
   const rot = (p.video.side_data_list ?? []).find((d) => 'rotation' in d)?.rotation ?? 0;
-  assert.equal(Number(rot) % 360, 0, `小版不再带显示旋转：${rot}`);
+  assert.equal(Number(rot) % 360, 0, `素材小尺寸不再带显示旋转：${rot}`);
 });
 
 // ------------------------------------------------------------------ T1 faststart 判定
@@ -141,7 +141,7 @@ test('C66-T1-07 faststart 判定是逐个跳读顶层 box：64 位 largesize、s
   assert.equal(await hasFaststart(f3), false, 'mdat 负载里的 "moov" 字样不算');
 });
 
-// ------------------------------------------------------------------ T1 原片：只重封装
+// ------------------------------------------------------------------ T1 素材原尺寸：只重封装
 
 test('C66-T1-08 ensureFaststart：已有 faststart 不动；晚置 moov 重封装成新文件（编码不变、源文件不动）；MKV 不处理', async () => {
   const s = samples();
@@ -165,13 +165,13 @@ test('C66-T1-08 ensureFaststart：已有 faststart 不动；晚置 moov 重封�
   assert.equal(c.remuxed, false);
 });
 
-test('C66-T1-09 重封装失败（ffmpeg 起不来 / 出错）→ 不抛，保留源文件当原片', async () => {
+test('C66-T1-09 重封装失败（ffmpeg 起不来 / 出错）→ 不抛，保留源文件当素材原尺寸', async () => {
   const s = samples();
   const { ensureFaststart } = await loadTiers();
   const before = sha256File(s.lateMoov);
   // 拿 node 当 ffmpeg：它不认 ffmpeg 的参数，必然非零退出
   const r = await ensureFaststart({ ffmpeg: process.execPath, input: s.lateMoov, workDir: work() });
-  assert.equal(path.resolve(r.path), path.resolve(s.lateMoov), '失败时原片就是源文件');
+  assert.equal(path.resolve(r.path), path.resolve(s.lateMoov), '失败时素材原尺寸就是源文件');
   assert.equal(r.remuxed, false);
   assert.equal(sha256File(s.lateMoov), before, '源文件不动');
   const r2 = await ensureFaststart({ ffmpeg: path.join(DIR, 'no-such-ffmpeg.exe'), input: s.lateMoov, workDir: work() });
@@ -180,56 +180,56 @@ test('C66-T1-09 重封装失败（ffmpeg 起不来 / 出错）→ 不抛，保�
 
 // ------------------------------------------------------------------ T1 整条：tiers 两个哈希
 
-test('C66-T1-10 prepareTiers（已 faststart 的 1080p）：原片就是源文件字节、小版另一哈希；两个哈希都是文件的 sha256', async () => {
+test('C66-T1-10 prepareTiers（已 faststart 的 1080p）：素材原尺寸就是源文件字节、素材小尺寸另一哈希；两个哈希都是文件的 sha256', async () => {
   const s = samples();
   const { prepare } = await loadTiers();
   const r = await prepare({ ffmpeg: await ffmpeg(), input: s.hd, kind: 'video', workDir: work() });
   assert.match(r.original.hash, HEX64);
   assert.equal(r.original.hash, sha256File(r.original.path), 'original.hash 是它文件的 sha256');
-  assert.equal(r.original.hash, sha256File(s.hd), '不转码、不需重封装：原片字节与源文件相同');
-  assert.ok(r.small, '视频要有小版');
+  assert.equal(r.original.hash, sha256File(s.hd), '不转码、不需重封装：素材原尺寸字节与源文件相同');
+  assert.ok(r.small, '视频要有素材小尺寸');
   assert.match(r.small.hash, HEX64);
   assert.equal(r.small.hash, sha256File(r.small.path), 'small.hash 是它文件的 sha256');
   assert.notEqual(r.small.hash, r.original.hash);
-  assertSmallBasics(await probe(r.small.path), r.small.path, 'prepareTiers 的小版');
+  assertSmallBasics(await probe(r.small.path), r.small.path, 'prepareTiers 的素材小尺寸');
   const keys = Object.keys(r).filter((k) => r[k] !== undefined).sort();
   assert.deepEqual(keys.filter((k) => !['original', 'small'].includes(k)), [], `回包只有两档，没有同步状态之类的字段：${keys}`);
 });
 
-test('C66-T1-11 prepareTiers（晚置 moov）：原片 = 重封装结果、按它的哈希；编码与源文件相同', async () => {
+test('C66-T1-11 prepareTiers（晚置 moov）：素材原尺寸 = 重封装结果、按它的哈希；编码与源文件相同', async () => {
   const s = samples();
   const { prepare } = await loadTiers();
   const r = await prepare({ ffmpeg: await ffmpeg(), input: s.lateMoov, kind: 'video', workDir: work() });
-  assert.notEqual(r.original.hash, sha256File(s.lateMoov), '重封装的结果算新的原片');
+  assert.notEqual(r.original.hash, sha256File(s.lateMoov), '重封装的结果算新的素材原尺寸');
   assert.equal(r.original.hash, sha256File(r.original.path));
   assert.equal(boxFaststart(r.original.path), true);
-  assert.deepEqual(await streamHashes(r.original.path), await streamHashes(s.lateMoov), '原片编码不变');
+  assert.deepEqual(await streamHashes(r.original.path), await streamHashes(s.lateMoov), '素材原尺寸编码不变');
   const [po, ps] = [await probe(r.original.path), await probe(s.lateMoov)];
-  for (const k of ['codec_name', 'profile', 'width', 'height', 'pix_fmt']) assert.equal(po.video[k], ps.video[k], `原片 ${k} 与源相同`);
-  assert.ok(r.small, '要有小版');
+  for (const k of ['codec_name', 'profile', 'width', 'height', 'pix_fmt']) assert.equal(po.video[k], ps.video[k], `素材原尺寸 ${k} 与源相同`);
+  assert.ok(r.small, '要有素材小尺寸');
 });
 
-test('C66-T1-12 只对视频做：图片、音频没有小版', async () => {
+test('C66-T1-12 只对视频做：图片、音频没有素材小尺寸', async () => {
   const s = samples();
   const { prepare } = await loadTiers();
   const f = await ffmpeg();
   const img = await prepare({ ffmpeg: f, input: s.png, kind: 'image', workDir: work() });
-  assert.equal(img.small, undefined, '图片不生成小版');
+  assert.equal(img.small, undefined, '图片不生成素材小尺寸');
   assert.equal(img.original.hash, sha256File(s.png), '图片原样入库');
   const aud = await prepare({ ffmpeg: f, input: s.m4a, kind: 'audio', workDir: work() });
-  assert.equal(aud.small, undefined, '音频不生成小版');
+  assert.equal(aud.small, undefined, '音频不生成素材小尺寸');
   assert.equal(aud.original.hash, sha256File(aud.original.path));
 });
 
 // ------------------------------------------------------------------ T6 生成一侧：ProRes
 
-test('C66-T6-01 ProRes MOV：原片不转码（仍是 ProRes、包数据相同），另有 H.264 小版', async () => {
+test('C66-T6-01 ProRes MOV：素材原尺寸不转码（仍是 ProRes、包数据相同），另有 H.264 素材小尺寸', async () => {
   const s = samples();
   const { prepare } = await loadTiers();
   const r = await prepare({ ffmpeg: await ffmpeg(), input: s.prores, kind: 'video', workDir: work() });
   const po = await probe(r.original.path);
-  assert.equal(po.video.codec_name, 'prores', '原片仍是 ProRes');
-  assert.deepEqual(await streamHashes(r.original.path), await streamHashes(s.prores), '原片编码不变');
-  assert.ok(r.small, '要有小版');
-  assertSmallBasics(await probe(r.small.path), r.small.path, 'ProRes 的小版');
+  assert.equal(po.video.codec_name, 'prores', '素材原尺寸仍是 ProRes');
+  assert.deepEqual(await streamHashes(r.original.path), await streamHashes(s.prores), '素材原尺寸编码不变');
+  assert.ok(r.small, '要有素材小尺寸');
+  assertSmallBasics(await probe(r.small.path), r.small.path, 'ProRes 的素材小尺寸');
 });

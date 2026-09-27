@@ -12,8 +12,8 @@
  *
  *   getAttribute("fill")   "url(#_r_0_)"
  *   getComputedStyle().fill "url(\"#_r_0_\")"      ← 相对形式,Chrome 不把页面 URL 补进去
- *   冻结后 outerHTML        style="fill: url(&quot;#_r_0_&quot;);"
- *   整棵 control 冻结后(516806 字节)出现过的 url(…#…) 形式只有两种:
+ *   生成快照后 outerHTML        style="fill: url(&quot;#_r_0_&quot;);"
+ *   整棵 control 生成快照后(516806 字节)出现过的 url(…#…) 形式只有两种:
  *       "url(#_r_0_)"  和  "url(&quot;#_r_0_&quot;)"
  *   整段里不含 &amp;;href="#…" 一处都没有;id 只有 " id=\"_r_0_\"" 一个
  *   收 id 的两条路径(浏览器 DOMParser / Node 正则扫描)在这份真快照上给出同一个集合

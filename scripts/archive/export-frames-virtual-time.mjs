@@ -135,7 +135,7 @@ async function newSession(browser, url) {
 }
 
 /**
- * 开一个「烘焙间」:起浏览器、装好拦截、导航到导出页、等页面就绪。
+ * 开一个「预渲染间」:起浏览器、装好拦截、导航到导出页、等页面就绪。
  *
  * 单独拆出来是为了让常驻进程复用同一个浏览器。现在 /api/export 每次都 spawn 一个新 node 子进程,
  * 实测这条路固定要 4.4 秒才开始出第一帧(node 启动 + 起 Chrome + goto + 字体首次布局);
@@ -191,7 +191,7 @@ export async function openBakery(opts = {}) {
      * 实测(1920x1080 / 30fps / 90 帧 / PNG,配合 exportClock 的 patchAnimate):
      *   - 复用连烘两趟:rank-bars 26 → 0 帧,odometer / ring-metric / type-shift 0 → 0 帧;
      *   - 复用烘的 vs 全新起浏览器烘的:rank-bars 四趟(2 新鲜 + 2 复用)两两 6/6 全 0 帧;
-     *   - staticSkip 开着的复用烘焙 vs 不开跳过的新鲜烘焙:rank-bars 0 帧。
+     *   - staticSkip 开着的复用预渲染 vs 不开跳过的新鲜预渲染:rank-bars 0 帧。
      * growth-curve 另有一类和复用无关的残差(每帧固定 23 个像素,新鲜 vs 新鲜同样发生),
      * 见文件头注释,别把它算在这条路上。
      *
@@ -231,7 +231,7 @@ export async function openBakery(opts = {}) {
  * 其余全部加起来 2ms。所以能动的只有截图那一块,而且**跳过一帧比换编码格式值钱得多**。
  *
  * opts:
- *   format/quality —— 'png' 带 alpha(导出交付物要),'jpeg' 不带(预览烘焙够用)。
+ *   format/quality —— 'png' 带 alpha(导出交付物要),'jpeg' 不带(给预览的预渲染够用)。
  *                     注意 JPEG 在真实卡片上只快两成:卡片大部分区域全透明,PNG 压透明区几乎免费。
  *                     合成的全屏不透明页面上是 200.9ms vs 49.3ms,那个四倍不能拿来预期。
  *   staticSkip     —— 画面静止的帧直接复用上一张,连截都不截,省掉整整 90.7ms。
@@ -300,7 +300,7 @@ export async function bakeFrames(bakery, opts = {}) {
     await client.send('Emulation.setDefaultBackgroundColorOverride', { color: { r: 0, g: 0, b: 0, a: 0 } });
   }
   const shotOpts = format === 'jpeg'
-    // 预览烘焙不需要 alpha —— 预览窗口看的就是合成结果
+    // 给预览的预渲染不需要 alpha —— 预览窗口看的就是合成结果
     ? { type: 'jpeg', quality }
     : { type: 'png' };
 

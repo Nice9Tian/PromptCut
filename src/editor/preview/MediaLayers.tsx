@@ -67,7 +67,7 @@ function AudioLayer({ project, clip, media, volume, t, playing, scrubbing, audio
       releasePreviewAudio(el);
     };
   }, []);
-  // 主文档的声音也经换档判据(T1a 审查 #5)。C6.6「音频先留在小版」:播放中换了档,声音先接着用上一档,
+  // 主文档的声音也经换档判据(T1a 审查 #5)。C6.6「音频先留在素材小尺寸」:播放中换了档,声音先接着用上一档,
   // 停下(暂停、拖动松开前的暂停态)再换 —— 两路声音不重叠、不爆音。上一档本来就没出声(挂失败了)时当场换。
   const wanted = media ? playbackUrl(media, localHashes) : undefined;
   const held = useRef<string | undefined>(undefined);
@@ -107,7 +107,7 @@ export function MediaLayers({
   audioOnly?: boolean;
   /**
    * 当前连接的素材服务报 `complete` 的哈希(A1 的 `localHashes`),声音层和画面层按它换档。
-   * 缺省空集合 = 一律原片。来源(每 2 秒轮询 `GET media/<hash>/chunks`)在第 6 步。
+   * 缺省空集合 = 一律素材原尺寸。来源(每 2 秒轮询 `GET media/<hash>/chunks`)在第 6 步。
    */
   localHashes?: readonly string[];
 }) {

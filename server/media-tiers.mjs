@@ -1,20 +1,20 @@
 /**
  * 两档素材的生成(C6.6,`docs/plan/c66-design.md` 第 2 节与第 8 节查资料结论;语义 `docs/semantics/product/asset-service.md`「两档素材」)。
  *
- * 在**导入方本机的编辑器进程**里做,用 `findFfmpeg`;素材服务从不转码。只对视频做,图片、音频不生成小版。
+ * 在**导入方本机的编辑器进程**里做,用 `findFfmpeg`;素材服务从不转码。只对视频做,图片、音频不生成素材小尺寸。
  *
- * # 原片:不转码,缺 faststart 才重封装
+ * # 素材原尺寸:不转码,缺 faststart 才重封装
  *
  * - 只看普通 MP4 / MOV(扩展名 `mp4` / `m4v` / `mov`):按 ISO BMFF 顶层 box 逐个跳读(`scanTopLevelBoxes`),
  *   比较首个 `moov` 与 `mdat` 的位置;`mdat` 在前才算缺 faststart。有 `moof` 的分片 MP4、box 长度不合法、
  *   找不到 `moov` / `mdat` 的一律不动。MKV、WebM、AVI 没有 `moov`,不需要。
  * - 重封装:`ffmpeg -i <源> -map 0 -c copy -movflags +faststart -f <mp4|mov> <临时文件>`,同容器;
  *   写完先校验(box 顺序已是 faststart、各流的类型与编码逐一相同、时长相差不超过 0.05 s),通过了才按**输出文件**的
- *   哈希入库,算作新的原片;任何一步失败都删掉临时文件、保留源文件当原片,并记下原因。不转码、不删轨。
+ *   哈希入库,算作新的素材原尺寸;任何一步失败都删掉临时文件、保留源文件当素材原尺寸,并记下原因。不转码、不删轨。
  * - 重封装前的那份文件是这次导入刚写进库的(不是去重命中的)就从库里删掉,免得库里留一份没人引用的;
  *   同时记下「源哈希 → 重封装后的哈希」,同一个文件再导入一次直接复用,不再跑一遍 ffmpeg。
  *
- * # 小版:本机转码
+ * # 素材小尺寸:本机转码
  *
  * 照第 8 节的命令(`smallVideoArgs`):
  *   - 保留 VFR 时间戳,`select` 只丢间隔不足 1/60 s 的帧(留 0.2 ms 的容差:时间戳换算成秒有舍入,
@@ -23,16 +23,16 @@
  *   - `-map 0:v:0 -map 0:a:0?`:容忍没有音轨;`-autorotate` 是 ffmpeg 的缺省,旋转落进像素;
  *   - H.264 `-preset veryfast -crf 26`,AAC 64k,`-movflags +faststart`;
  *   - HDR:只对标签完整的 BT.2020 + PQ(`smpte2084`)源走 `zscale` + `tonemap` 分支,输出标 BT.709;
- *     其余(含 HLG、无标签)照 SDR 走〔裁〕。本机 ffmpeg 没有 `zscale` / `tonemap` 时 PQ 源不生成小版(不拿普通
- *     8 bit 转换冒充 SDR 小版),只有原片一档。
+ *     其余(含 HLG、无标签)照 SDR 走〔裁〕。本机 ffmpeg 没有 `zscale` / `tonemap` 时 PQ 源不生成素材小尺寸(不拿普通
+ *     8 bit 转换冒充 SDR 素材小尺寸),只有素材原尺寸一档。
  * - 转码在后台、一次一个、低于正常的进程优先级,不挡导入的回包,也不挡编辑。
  *
  * # 登记与上传
  *
- * - 本机内容库里「原片 → 小版」的对应记在 `<素材目录>/tiers.json`(本机缓存,不进项目);项目里的记录
- *   `project.media[i].tiers = { small?, original }` 由页面写(导入回包带原片哈希,小版好了之后页面经
- *   `GET /api/media/tiers` 取到小版哈希再写进去)。同步状态不进项目。
- * - 小版好了(或确定没有小版)就把这个素材的两档交给上传队列(`upload-queue.mjs`):先小后大。
+ * - 本机内容库里「素材原尺寸 → 素材小尺寸」的对应记在 `<素材目录>/tiers.json`(本机缓存,不进项目);项目里的记录
+ *   `project.media[i].tiers = { small?, original }` 由页面写(导入回包带素材原尺寸哈希,素材小尺寸好了之后页面经
+ *   `GET /api/media/tiers` 取到素材小尺寸哈希再写进去)。同步状态不进项目。
+ * - 素材小尺寸好了(或确定没有素材小尺寸)就把这个素材的两档交给上传队列(`upload-queue.mjs`):先小后大。
  * - 进程重启:`tiers.json` 里还是 `pending` 的接着转。
  */
 import fsSync from 'node:fs';
@@ -156,7 +156,7 @@ export function isHdrPq(video) {
   return !!video && video.color_transfer === 'smpte2084' && video.color_primaries === 'bt2020';
 }
 
-/** 小版的视频滤镜串(传给 spawn 的一个参数,不经 shell) */
+/** 素材小尺寸的视频滤镜串(传给 spawn 的一个参数,不经 shell) */
 export function smallVideoFilter({ hdr = false, video = null } = {}) {
   const select = `select='isnan(prev_selected_t)+gte(t-prev_selected_t\\,1/${SMALL_MAX_FPS}-${SMALL_FPS_EPSILON})'`;
   const scale = `scale=w='min(iw\\,${SMALL_MAX_WIDTH})':h='min(ih\\,${SMALL_MAX_HEIGHT})':force_original_aspect_ratio=decrease:force_divisible_by=2:reset_sar=1`;
@@ -167,7 +167,7 @@ export function smallVideoFilter({ hdr = false, video = null } = {}) {
     + `tonemap=tonemap=hable:desat=0,zscale=p=bt709:t=bt709:m=bt709:r=tv,${scale},format=yuv420p`;
 }
 
-/** 小版的完整 ffmpeg 参数 */
+/** 素材小尺寸的完整 ffmpeg 参数 */
 export function smallVideoArgs(input, output, { hdr = false, video = null } = {}) {
   const args = ['-y', '-hide_banner', '-v', 'error', '-i', input, '-map', '0:v:0', '-map', '0:a:0?',
     '-vf', smallVideoFilter({ hdr, video }), '-fps_mode:v', 'vfr',
@@ -224,7 +224,7 @@ export async function remuxIfNeeded({ ffmpeg, ffprobe = ffprobeOf(ffmpeg), input
 }
 
 /**
- * 生成小版到 `output`。回 `{ ok: true, hdr, width, height }` 或 `{ ok: false, reason }`(`reason: 'no-video'` 表示没有视频流)。
+ * 生成素材小尺寸到 `output`。回 `{ ok: true, hdr, width, height }` 或 `{ ok: false, reason }`(`reason: 'no-video'` 表示没有视频流)。
  */
 export async function makeSmallVersion({ ffmpeg, ffprobe = ffprobeOf(ffmpeg), input, output, probe = null }) {
   const info = probe ?? await probeMedia(ffprobe, input);
@@ -264,7 +264,7 @@ const exists = async (file) => { try { await fs.stat(file); return true; } catch
 export function createTierManager({ dir, lib, ffmpeg, queue = null, log = () => {} }) {
   const file = path.join(dir, TIERS_FILE);
   const say = (event, fields = {}) => { try { log(event, fields); } catch { /* 日志出错不影响 */ } };
-  /** 原片哈希 → { state: 'pending' | 'ready' | 'failed' | 'none', small?, name?, ext?, reason? } */
+  /** 素材原尺寸哈希 → { state: 'pending' | 'ready' | 'failed' | 'none', small?, name?, ext?, reason? } */
   let items = {};
   /** 重封装前的哈希 → 重封装后的哈希 */
   let remuxed = {};
@@ -372,7 +372,7 @@ export function createTierManager({ dir, lib, ffmpeg, queue = null, log = () => 
     get file() { return file; },
     /**
      * 导入之后调(`stored` 是 `storeMediaStream` / `adoptMediaFile` 的结果)。视频:缺 faststart 就重封装(原地等它做完,
-     * 回包里的哈希就是重封装后的),再排小版;不是视频原样回。
+     * 回包里的哈希就是重封装后的),再排素材小尺寸;不是视频原样回。
      * 回 `{ stored, tiers: { original, small } | null, small: 'pending' | 'ready' | 'failed' | 'none' | null, remux }`。
      */
     async prepareImport(stored, { remux = true } = {}) {
@@ -419,7 +419,7 @@ export function createTierManager({ dir, lib, ffmpeg, queue = null, log = () => 
       } else if (rec.state === 'pending') {
         schedule(hash);
       } else {
-        // 小版早就有了(或确定没有):照样交给上传队列,远端已有的它会跳过
+        // 素材小尺寸早就有了(或确定没有):照样交给上传队列,远端已有的它会跳过
         await handToQueue(hash);
       }
       return {
@@ -430,9 +430,9 @@ export function createTierManager({ dir, lib, ffmpeg, queue = null, log = () => 
       };
     },
     /**
-     * 打开项目时补转小版(设计稿第 9 节第 2 条):项目里缺 `tiers.small`、本地内容库里有这份原片的视频,
+     * 打开项目时补转素材小尺寸(设计稿第 9 节第 2 条):项目里缺 `tiers.small`、本地内容库里有这份素材原尺寸的视频,
      * 排进后台转码(不重封装 —— 哈希就是项目引用的那个,`.procp` 还原的素材同样)。
-     * 已有小版(文件还在)或确定没有视频流的不动;上次失败的再试一次。转好之后照常交给上传队列。
+     * 已有素材小尺寸(文件还在)或确定没有视频流的不动;上次失败的再试一次。转好之后照常交给上传队列。
      * `ext` 是库里那份文件的扩展名。回 `{ state, small? }`,同 `status`。
      */
     async backfill({ hash, ext, name = '' }) {
@@ -450,7 +450,7 @@ export function createTierManager({ dir, lib, ffmpeg, queue = null, log = () => 
       schedule(h);
       return { state: 'pending' };
     },
-    /** 这些原片哈希的小版情况:`{ [hash]: { state, small? } }`;没登记过的是 `state: 'unknown'` */
+    /** 这些素材原尺寸哈希的素材小尺寸情况:`{ [hash]: { state, small? } }`;没登记过的是 `state: 'unknown'` */
     status(hashes) {
       const out = {};
       for (const raw of hashes ?? []) {

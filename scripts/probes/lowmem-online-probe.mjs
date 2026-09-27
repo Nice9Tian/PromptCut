@@ -15,7 +15,7 @@
  * 场景:
  *   G1 能力闸:只有一个同源舞台(没有 B)、带 `preview=stage`;舞台判出低内存档;没有探针遮罩、没有 `/api/data/costs`;进入提示照抄表 C。
  *   G2 只拉小尺寸:有小尺寸的视频只拉小尺寸;没有小尺寸的视频不拉、显示「等待上传方」;重卡贴 `px/<hash>` 的小位图;
- *      原尺寸(素材原片、`snap/`)一个请求都没有。
+ *      原尺寸(素材原尺寸、`snap/`)一个请求都没有。
  *   G3 播放 2 秒、暂停:播放头跟舞台走;暂停后重卡仍抑制、贴小尺寸,不起追帧(不追活渲)。
  *   G4 逐帧导出:素材原尺寸没到齐时提示「等待上传方」、不出片,可取消;到齐后导出 2 秒,ffprobe 核对帧数、时长、编码;
  *      请求记录里有素材原尺寸与 `snap/`(预渲染原尺寸);重卡那一层画的是原尺寸快照(品红「原尺寸」色块在画面里)。
@@ -68,7 +68,7 @@ async function makeFile(name, argv) {
   const bytes = await fs.readFile(file);
   return { file, bytes, hash: sha256(bytes) };
 }
-// 有小尺寸的视频:原片 1280×720 带声音,小尺寸 800×450
+// 有小尺寸的视频:素材原尺寸 1280×720 带声音,小尺寸 800×450
 const origA = await makeFile('a-orig.mp4', ['-f', 'lavfi', '-i', 'testsrc=size=1280x720:rate=30', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000',
   '-t', '4', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest']);
 const smallA = await makeFile('a-small.mp4', ['-i', origA.file, '-vf', 'scale=800:450', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac']);
@@ -309,7 +309,7 @@ try {
   const v = info.streams.find((s) => s.codec_type === 'video');
   const a = info.streams.find((s) => s.codec_type === 'audio');
   check(v?.codec_name === 'h264' && Number(v.nb_read_frames) === 60 && Math.abs(Number(v.duration) - 2) < 0.01 && v.width === 1920 && v.height === 1080, 'G4 ffprobe:h264、60 帧、2 秒、1920×1080', v);
-  check(a?.codec_name === 'aac', 'G4 有 AAC 音轨(原片带声音)', a ?? null);
+  check(a?.codec_name === 'aac', 'G4 有 AAC 音轨(素材原尺寸带声音)', a ?? null);
   check(out.G4.export.originals.mediaOrig > 0, 'G4 导出拉的是素材原尺寸', out.G4.export.originals);
   check(out.G4.export.originals.snap > 0, 'G4 导出用了预渲染原尺寸 snap/', out.G4.export.originals);
   // 第 30 帧:重卡那一层(画面中央 960×540 的框)是品红的原尺寸快照
