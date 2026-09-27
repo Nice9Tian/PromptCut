@@ -241,6 +241,8 @@ let beatSwapMs = SWAP_MS;
 /** 这一拍轻管线已占用的毫秒(宿主给:`planDispatch.ts` 的 `lightCostAt`);不给按 0 */
 let occupiedAt: (t: number) => number = () => 0;
 let lastBeatFit: { t: number; occupiedMs: number; deadMs: number; fit: number; swap: string[]; placeholder: string[] } | null = null;
+/** 探针看:播放中按拍投出去几次、其中几次在上一次投递之后不到 33 ms(节流会挡掉的那种) */
+const beatStats = { deliveries: 0, underThrottle: 0, placeholders: 0 };
 
 export function setBeatSwap(on: boolean, opts: { swapMs?: number; occupied?: (t: number) => number } = {}): void {
   beatSwap = !!on;
@@ -251,7 +253,7 @@ export function setBeatSwap(on: boolean, opts: { swapMs?: number; occupied?: (t:
 
 /** 探针看:上一拍的换帧取舍 */
 export function beatSwapDebug() {
-  return { on: beatSwap, swapMs: beatSwapMs, last: lastBeatFit };
+  return { on: beatSwap, swapMs: beatSwapMs, last: lastBeatFit, ...beatStats };
 }
 
 /** 这几张卡从上到下的顺序:轨道按项目里的先后(第一条在最上面),同一轨道里后面的片段盖在前面的上面 */
@@ -608,6 +610,11 @@ export async function deliverSnapshots(stage: StageRpcClient, role: StageRole, h
   if (!reset && !changes.length) return 0;
   const { patch, next } = packChanges(role, changes, reset);
   if (!reset && !Object.keys(patch).length) return 0;
+  if (perBeat) {
+    beatStats.deliveries++;
+    if (now - base.lastSentAt < SNAPSHOT_THROTTLE_MS) beatStats.underThrottle++;
+    if (lastBeatFit?.placeholder.length) beatStats.placeholders++;
+  }
   base.mounted = next;
   base.needsReset = false;
   base.lastSentAt = now;
@@ -667,6 +674,9 @@ export function resetSnapshotFeed(): void {
   beatSwapMs = SWAP_MS;
   occupiedAt = () => 0;
   lastBeatFit = null;
+  beatStats.deliveries = 0;
+  beatStats.underThrottle = 0;
+  beatStats.placeholders = 0;
   anchorsFor = null;
   source = new HttpSnapshotSource();
 }
