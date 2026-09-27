@@ -2,6 +2,7 @@
 import "./render/stageClockEntry";
 // 在线浏览器模式的 /api 守卫与读邀请码:必须在别的模块求值之前(C10a,见 online/boot.ts)
 import "./online/boot";
+import "./online/m7NodeProbe";
 import { createRoot } from "react-dom/client";
 import "./index.css";
 import "./skins/skins.css";
