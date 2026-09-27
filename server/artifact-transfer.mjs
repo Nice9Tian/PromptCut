@@ -175,8 +175,11 @@ export const LAYER_MAP_PREFIX = 'layers:';
 /**
  * 层表的版本。v 2(C10 契约第 5 节、第 18 节第 3 条):每层加 `contentKey`(共享档的内容键,与环境无关)与
  * `envFingerprint`(产出这一层的环境的指纹)。在线普通档只认 v 2 且两项齐的层;低内存档 v 1、v 2 都认(只用小尺寸那几项)。
+ * v 3(M7 契约 D12,第 13 节裁定):每层另带 `candidates: [{ envFingerprint, resultKey, key, dirKey }]` —— 切分方双份出键之后
+ * 一层可能有两套键(切分方自己的、纯浏览器的),哪一份活着由页面按 `task.done` 与清单认定;层上的 v 2 字段等于第一个候选,
+ * 读 v 2 的页面照旧能用(当作一个候选)。
  */
-export const LAYER_MAP_VERSION = 2;
+export const LAYER_MAP_VERSION = 3;
 export const layerMapKeyOf = projectId => (typeof projectId === 'string' && projectId ? LAYER_MAP_PREFIX + projectId : null);
 
 /**
@@ -188,8 +191,12 @@ export const layerMapKeyOf = projectId => (typeof projectId === 'string' && proj
  * 在线普通档按「没有预渲染结果」处理,低内存档照旧能用小尺寸。
  * 段与推送、与队列细任务同一种切法:本地帧 0 起每 `span` 帧一段,最后一段到 `count - 1`,清单键
  * `<resultKey>:<from>-<to>`。只列在预渲染集合里、产快照的卡(`picked` 由调用方给)。
+ *
+ * v 3 的候选(M7 D12):`candidatesOf(control)` 回这张卡最近一次切分实际出键的指纹(按发布顺序,`splitCandidatesOf` 收集),
+ * 共享档的候选 = 这些指纹,再补上这一层自己的指纹(没出现过的排在最后);层上的 v 2 字段取第一个候选。
+ * 不给 `candidatesOf` 或它回空时只有自己一个候选,与 v 2 相同。本地档只有自己一个候选(纯浏览器不做本地档)。
  */
-export function layerMapOf(entry, { picked = () => true, fingerprint = null, span = QUEUE_DEFAULTS.SNAPSHOT_SPAN, now = Date.now() } = {}) {
+export function layerMapOf(entry, { picked = () => true, fingerprint = null, span = QUEUE_DEFAULTS.SNAPSHOT_SPAN, now = Date.now(), candidatesOf = null } = {}) {
   const project = entry?.project ?? {};
   const layers = [];
   for (const control of entry?.cardPlan ?? []) {
@@ -209,14 +216,45 @@ export function layerMapOf(entry, { picked = () => true, fingerprint = null, spa
     const count = Number(control.count);
     if (!Number.isInteger(firstFrame) || !Number.isInteger(count) || count < 1) continue;
     const contentKey = typeof control.contentKey === 'string' && control.contentKey ? control.contentKey : null;
-    layers.push({ clipId: control.clipId, kind, key, tier, resultKey, dirKey: control.snapshotKey, entryKey: tier === 'local' ? entry.key : null, firstFrame, count,
-      contentKey, envFingerprint: fp });
+    const own = fp ? { envFingerprint: fp, resultKey, key, dirKey: control.snapshotKey } : null;
+    let candidates = own ? [own] : [];
+    if (tier === 'shared' && contentKey && typeof candidatesOf === 'function') {
+      let listed = [];
+      try { listed = candidatesOf(control) ?? []; } catch { listed = []; }
+      const fps = [...new Set([...(Array.isArray(listed) ? listed : []), ...(fp ? [fp] : [])].filter(x => typeof x === 'string' && x))];
+      candidates = fps.map(f => {
+        if (own && f === fp) return own;
+        const rk = resultKeyOf(contentKey, f);
+        return { envFingerprint: f, resultKey: rk, key: wireSnapshotKey('shared', entry.key, rk), dirKey: rk };
+      });
+    }
+    const primary = candidates[0] ?? { envFingerprint: fp, resultKey, key, dirKey: control.snapshotKey };
+    layers.push({ clipId: control.clipId, kind, key: primary.key, tier, resultKey: primary.resultKey, dirKey: primary.dirKey,
+      entryKey: tier === 'local' ? entry.key : null, firstFrame, count, contentKey, envFingerprint: primary.envFingerprint, candidates });
   }
   return {
     v: LAYER_MAP_VERSION, kind: 'layer-map', projectId: project.id ?? null, entryKey: entry?.key ?? null,
     fps: Number(project.fps) || 30, width: Number(project.width) || null, height: Number(project.height) || null,
     span, at: now, layers,
   };
+}
+
+/**
+ * 一次切分最终发布成功的细任务 → 每张共享档卡实际出键的指纹(M7 D12,写层表 v 3 的候选用):
+ * `Map<contentKey, envFingerprint[]>`,指纹按发布顺序(切分方自己的在前)。只收共享档快照、带内容键与指纹的任务。
+ */
+export function splitCandidatesOf(tasks) {
+  const out = new Map();
+  for (const t of Array.isArray(tasks) ? tasks : []) {
+    if (t?.kind !== 'snapshot' || t.tier !== 'shared') continue;
+    const ck = t.input?.contentKey;
+    const fp = t.requires?.envFingerprint;
+    if (typeof ck !== 'string' || !ck || typeof fp !== 'string' || !fp) continue;
+    const list = out.get(ck) ?? [];
+    if (!list.includes(fp)) list.push(fp);
+    out.set(ck, list);
+  }
+  return out;
 }
 
 /** `[from, to]` 闭区间:first .. last 每 span 一段,最后一段到 last(与 `render-node/split.mjs` 的 `spans` 同一个式子) */

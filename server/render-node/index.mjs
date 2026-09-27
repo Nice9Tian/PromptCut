@@ -27,7 +27,8 @@ export { DEFAULT_WEIGHT_POLICY, checkClaimable, filterClaimable } from './filter
 export { rankCandidates, pickCandidate } from './pick.mjs';
 export { planTaskOf, splitPlan, backfillPlanTaskOf, isBackfillPlan, clipsPlanTaskOf, isClipsPlan, isListPlan } from './split.mjs';
 export { createNodeSession } from './session.mjs';
-export { createLocalNode } from './local-node.mjs';
+export { createLocalNode, idleLockTakeover } from './local-node.mjs';
+export { createTaskRunner, untilAborted } from './task-runner.mjs';
 export { BACKOFF_DEFAULTS, createWsEndpoint } from './ws-transport.mjs';
 export { HTTP_CLIENT_DEFAULTS, createHttpEndpoint, HttpWebSocket, httpWebSocketClass } from './http-transport.mjs';
 export { SESSION_DEFAULTS, createDocEndpoint, transportOf, wsUrlOf, httpUrlOf } from './session-link.mjs';

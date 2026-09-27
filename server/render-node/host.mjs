@@ -44,7 +44,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { createLocalNode } from './local-node.mjs';
+import { createLocalNode, idleLockTakeover } from './local-node.mjs';
 import { normalizeEntry, SHARED_CONFIG_ENV } from '../auth/shared-config.mjs';
 import { localDeviceInfo } from '../auth/device.mjs';
 
@@ -238,6 +238,8 @@ export function createRenderHost({
       codeVersion: version,
       executor: m.executor,
       sink: m.sink,
+      // M7 D2:队列锁的锁定方闲置严格超 30 s、这张卡又没做完,切分时带 takeover 按本主机的指纹接手整张卡
+      takeoverLocked: idleLockTakeover,
       onEvent: (event) => {
         const type = event?.type;
         if (type === 'completed') m.stats.completed++;

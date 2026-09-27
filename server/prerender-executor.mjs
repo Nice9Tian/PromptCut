@@ -16,6 +16,10 @@
  *                    流任务(M6c X1):对回这一版的流(内容键、结果键、分段范围),交给 `renderStreamRange` 按段产出;
  *                    对不上同样抛 `plan-mismatch`;本机不能产流(开关关着、没有编码器)抛 `no-streams`(不可重试)。
  *                    回 `null`:产物在帧库 / 流库里,sink 自己读(`collectSnapshotResult` / `collectStreamResult`)。
+ *   afterSplit(planTask, { tasks })  (M7 契约 D12)local-node 切分完成、发布回包都回来之后调:按最终发布成功的细任务
+ *                    记下每张卡实际出键的指纹(`pipeline.recordSplitCandidates`),带片段清单的 plan 再写一次这一版的层表 v 3
+ *                    (候选按实际出键;独立渲染主机用 `publishLayerMap` 选项写,PC 用管线自己的推送队列写)。层表只在切分完成后写,
+ *                    不再在切分之前按本机视图写(D12 的时机)。
  *
  * M6c 起执行器不再有 `isIdle()`(J.4 原有):PC 节点的闲时门槛改为 `queue-idle.mjs`(X5),独立渲染主机本来就
  * 只看全局并发闸,这个判据已经没人用(集成裁定,`docs/plan/m6c-contract.md`「集成时的裁定」)。
@@ -23,6 +27,7 @@
 import { resultKeyOf } from './render-node/fingerprint.mjs';
 import { snapshotTier } from './snapshot-tier.mjs';
 import { isListPlan } from './render-queue/index.mjs';
+import { splitCandidatesOf } from './artifact-transfer.mjs';
 
 /** 按版本缓存的上下文条数(附件第 3 节:LRU 约 4 条) */
 export const PLAN_CACHE_SIZE = 4;
@@ -94,10 +99,7 @@ export function createPrerenderExecutor({ pipeline, projects, prepareProject = p
       const added = pipeline.addBackfill(entry, planTask.input?.clips ?? []);
       say('executor.backfill', { version: id, clips: planTask.input?.clips?.length ?? 0, added });
     }
-    // 在线页面按层表找清单(页面不算键):没有推送队列的节点(独立渲染主机)在这里写一份这一版的层表
-    if (isListPlan(planTask) && typeof publishLayerMap === 'function') {
-      try { publishLayerMap(entry); } catch (error) { say('executor.layer-map-failed', { version: id, message: String(error?.message ?? error) }); }
-    }
+    // 层表不在这里写:切分完成后按实际出键写(afterSplit,M7 D12)
     say('executor.plan', { version: id, entryKey: entry.key, controls: context.cardPlan.length, locks: context.cardLocks?.size ?? 0 });
     return context;
   }
@@ -182,5 +184,24 @@ export function createPrerenderExecutor({ pipeline, projects, prepareProject = p
     return null;
   }
 
-  return { plan, render, forget: () => cache.clear() };
+  /**
+   * M7 D12:切分完成后按实际出键写层表。`tasks` 是最终发布成功的细任务;记候选对所有 plan 都做(之后本机写的层表也按它列),
+   * 写层表只对带片段清单的 plan(在线页面按层表找清单)。失败只记日志。
+   */
+  async function afterSplit(planTask, { tasks = [] } = {}) {
+    const { id } = versionOf(planTask);
+    const candidates = splitCandidatesOf(tasks);
+    if (typeof pipeline.recordSplitCandidates === 'function') pipeline.recordSplitCandidates(candidates);
+    if (!isListPlan(planTask)) return;
+    try {
+      const { entry } = await contextFor(planTask);
+      if (typeof publishLayerMap === 'function') publishLayerMap(entry);
+      else if (typeof pipeline.publishLayerMap === 'function') pipeline.publishLayerMap(entry);
+      say('executor.layer-map', { version: id, cards: candidates.size, dual: [...candidates.values()].filter(fps => fps.length > 1).length });
+    } catch (error) {
+      say('executor.layer-map-failed', { version: id, message: String(error?.message ?? error) });
+    }
+  }
+
+  return { plan, render, afterSplit, forget: () => cache.clear() };
 }

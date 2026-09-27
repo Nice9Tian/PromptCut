@@ -166,6 +166,9 @@ function backfillIdentity(entry, control) {
   return `${control.clipId}\u0000${tier === 'local' ? `${entry?.key ?? ''}/${content}` : content}`;
 }
 
+/** 切分候选(M7 D12)最多记几张卡 */
+const SPLIT_CANDIDATES_MAX = 4096;
+
 export class FramePipeline {
   /**
    * `interactive`(D5):这个实例要不要为页面的交互帧请求养一对热 Chrome。
@@ -1719,9 +1722,33 @@ export class FramePipeline {
       const body = layerMapOf(entry, {
         picked: clipId => this.prerenderPicked(entry, clipId),
         fingerprint: this.envFingerprint,
+        candidatesOf: control => this.splitCandidatesFor(control?.contentKey),
       });
       return queue.putLayerMap(projectId, body);
     } catch { return false; }
+  }
+  /**
+   * M7 契约 D12:队列切分完成后记下每张共享档卡实际出键的指纹(`artifact-transfer.mjs` 的 `splitCandidatesOf`,
+   * 内容键 → 指纹表,切分方自己的在前),之后写层表(本机推送队列写的、独立渲染主机写的)都按它列候选。
+   * 后记的覆盖先记的;只在内存里,最多留 SPLIT_CANDIDATES_MAX 张卡(按记下的先后淘汰)。
+   */
+  recordSplitCandidates(candidates) {
+    if (!(candidates instanceof Map)) return 0;
+    this._splitCandidates ??= new Map();
+    let n = 0;
+    for (const [contentKey, fps] of candidates) {
+      if (typeof contentKey !== 'string' || !contentKey || !Array.isArray(fps) || !fps.length) continue;
+      this._splitCandidates.delete(contentKey);
+      this._splitCandidates.set(contentKey, [...fps]);
+      n++;
+    }
+    while (this._splitCandidates.size > SPLIT_CANDIDATES_MAX) this._splitCandidates.delete(this._splitCandidates.keys().next().value);
+    return n;
+  }
+  /** 这张卡(共享档内容键)最近一次切分实际出键的指纹;没记过回 null */
+  splitCandidatesFor(contentKey) {
+    const list = typeof contentKey === 'string' ? this._splitCandidates?.get(contentKey) : undefined;
+    return list ? [...list] : null;
   }
   enqueueStreamPush(spec, segment) {
     const queue = this.pushQueue;
