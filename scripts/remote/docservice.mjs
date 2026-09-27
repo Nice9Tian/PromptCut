@@ -15,6 +15,7 @@
  *
  * 托管组合（SP，契约 docs/plan/shared-project-contract.md 第 1、2 节；文件清单见 server/hosted/files.mjs 与契约第 10 节）：
  *   deploy-hosted [--instance drill] [--save] [--replace-docservice] [--write-token]
+ *                 [--editor <dist-online 目录>] [--doc-public-url <url>] [--asset-public-url <url>]
  *            在本机按清单拼暂存目录，整个拷到远端 <部署目录>/.incoming 再换成 <部署目录>/app；
  *            在部署目录里写 PM2 配置 <部署目录>/pm2.config.cjs（仓库外，不含任何秘密），pm2 startOrReload，
  *            最后查两个端口的 /healthz。**不改防火墙**：UFW 放行由主会话在服务器上手工加。
@@ -27,6 +28,12 @@
  *            - 旧的独立文档服务（app promptcut-docservice）还在 PM2 里时拒绝部署缺省实例（退出码 3），
  *              加 --replace-docservice 才先 pm2 delete 它（它的部署目录与数据不动）；
  *            - --save：成功后 pm2 save。
+ *            - --editor <目录>（C10a 契约第 3 节）：把在线构建（`npx vite build --mode online` 的 dist-online/）拷成
+ *              <部署目录>/.incoming-editor，远端再整体换名成 <部署目录>/editor/；旧版 assets/ 保留一代（server/hosted/deploy.mjs 的
+ *              editorSwapLines）。nginx 的 /editor 路由由主会话手工加；
+ *            - --doc-public-url / --asset-public-url（C10a 契约第 3 节）：写进 PM2 配置的两个公网地址（阿里云上是
+ *              wss://<域名>/hosted/ 与 https://<域名>/media/api/asset）；不给才按 PROMPTCUT_PUBLIC_HOST 拼 ws://…:8787、http://…:8788/api/asset。
+ *              文档服务公网地址的源也是邀请链接的源（<源>/editor#invite=…）。
  *            环境变量：PROMPTCUT_HOSTED_DIR、PROMPTCUT_HOSTED_DATA 覆盖部署目录与数据目录；
  *            PROMPTCUT_PUBLIC_HOST 是写进公网地址的主机名，缺省取 PROMPTCUT_REMOTE 里 @ 后面的部分。
  *   status-hosted [--instance drill]   PM2 里这个 app 的状态、两个端口的 /healthz、数据目录占用、UFW 里这两个端口的规则
@@ -43,7 +50,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import { checkTokenFormat } from '../../server/docservice/auth.mjs';
 import { stageHostedFiles } from '../../server/hosted/files.mjs';
-import { hostedInstance, hostedPm2Config, hostedDeployScript, shq } from '../../server/hosted/deploy.mjs';
+import { hostedInstance, hostedPm2Config, hostedDeployScript, checkPublicUrl, shq } from '../../server/hosted/deploy.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const target = process.env.PROMPTCUT_REMOTE;
@@ -189,9 +196,31 @@ function deploy() {
  * 托管组合（SP）：参数与远端脚本在 server/hosted/deploy.mjs
  * ------------------------------------------------------------------ */
 
+/** `--editor <目录>`：在线构建目录要有 index.html 与 assets/（`vite build --mode online` 的产物） */
+function editorDirOf(dirArg) {
+  if (dirArg === undefined) return null;
+  const abs = path.resolve(dirArg);
+  if (!fs.existsSync(path.join(abs, 'index.html')) || !fs.existsSync(path.join(abs, 'assets'))) {
+    throw new Error(`--editor ${abs} 不像在线构建（要有 index.html 与 assets/；先跑 npx vite build --mode online）`);
+  }
+  return abs;
+}
+
 function deployHosted() {
   const inst = hostedInstance(option('--instance', 'main'));
   const publicHost = process.env.PROMPTCUT_PUBLIC_HOST || String(target).split('@').pop();
+  let urls;
+  let editorDir;
+  try {
+    urls = {
+      docPublicUrl: checkPublicUrl(option('--doc-public-url'), 'doc'),
+      assetPublicUrl: checkPublicUrl(option('--asset-public-url'), 'asset'),
+    };
+    editorDir = editorDirOf(option('--editor'));
+  } catch (err) {
+    console.error(err.message);
+    return 1;
+  }
   let token = null;
   if (flag('--write-token')) {
     token = process.env.PROMPTCUT_CLUSTER_TOKEN ?? '';
@@ -209,7 +238,7 @@ function deployHosted() {
   const stage = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-hosted-stage-'));
   try {
     const files = stageHostedFiles(ROOT, path.join(stage, '.incoming'));
-    const prep = ssh(`mkdir -p ${shq(inst.dir)} && rm -rf ${shq(`${inst.dir}/.incoming`)}`);
+    const prep = ssh(`mkdir -p ${shq(inst.dir)} && rm -rf ${shq(`${inst.dir}/.incoming`)} ${shq(`${inst.dir}/.incoming-editor`)}`);
     if (prep.code !== 0) {
       console.error(prep.err);
       return 1;
@@ -218,14 +247,21 @@ function deployHosted() {
     // 相对路径 + cwd：Windows 的绝对路径带盘符冒号，scp 会把 C: 当成主机名
     const scp = spawnSync('scp', [...baseOpts, '-r', '-q', '.incoming', `${target}:${inst.dir}/`], { cwd: stage, stdio: 'inherit', timeout: 180_000 });
     if (scp.status !== 0) return scp.status ?? 1;
+    if (editorDir) {
+      // 在线构建：先拷成 .incoming-editor，远端脚本再整体换名（C10a 契约第 3 节）
+      console.log(`== scp 在线构建 ${editorDir} -> ${target}:${inst.dir}/.incoming-editor`);
+      const up = spawnSync('scp', [...baseOpts, '-r', '-q', path.basename(editorDir), `${target}:${inst.dir}/.incoming-editor`], { cwd: path.dirname(editorDir), stdio: 'inherit', timeout: 180_000 });
+      if (up.status !== 0) return up.status ?? 1;
+    }
   } finally {
     fs.rmSync(stage, { recursive: true, force: true });
   }
   return sshScript(hostedDeployScript(inst, {
-    pm2Config: hostedPm2Config(inst, publicHost),
+    pm2Config: hostedPm2Config(inst, publicHost, urls),
     save: flag('--save'),
     replaceDocservice: flag('--replace-docservice'),
     token,
+    editor: !!editorDir,
   }));
 }
 

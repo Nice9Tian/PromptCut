@@ -28,6 +28,11 @@ export interface Candidate {
   mode: SharedMode;
   hostDeviceName?: string;
   via?: "discover" | "manual";
+  /**
+   * WebSocket 地址（C10a）：凭源走 `/hosted/` 的候选（在线页面、粘贴的邀请链接）带上它，保留末尾斜杠
+   * （`src/online/invite.ts` 的 `hostedWsUrlOf`）；没有就按 `route.wsBaseOf(base)`。
+   */
+  ws?: string;
 }
 
 export interface FindResult {
@@ -67,6 +72,10 @@ interface ClientApi {
     onKey?: (key: string) => void;
   }): Promise<string[]>;
   lookupProject(o: { base: string; name: string }): Promise<{ projectId: string; name: string; mode: SharedMode }>;
+  /** C10a：凭邀请码查项目（不扣次数） */
+  resolveInvite(o: { base: string; code: string }): Promise<{ projectId: string; name: string; mode: SharedMode }>;
+  /** C10a：凭邀请码兑换；自由进入另回项目口令的 K */
+  redeemInvite(o: { base: string; code: string; username: string; deviceId: string }): Promise<{ projectId: string; name: string; mode: SharedMode; kdf?: Kdf; key?: string }>;
 }
 
 interface RouteApi {
@@ -100,11 +109,12 @@ export const client = clientMod as ClientApi;
 export const route = routeMod as RouteApi;
 export const hosted = hostedMod as HostedApi;
 
-/** 共享端点回的错误(`client.mjs` 的 callJson):带 HTTP 状态与原因词 */
-export function errorStatus(e: unknown): { status: number | null; reason: string | null } {
-  const err = e as { status?: unknown; reason?: unknown };
+/** 共享端点回的错误(`client.mjs` 的 callJson):带 HTTP 状态、原因词,429 另带冷却秒数(C10a) */
+export function errorStatus(e: unknown): { status: number | null; reason: string | null; retryAfter: number | null } {
+  const err = e as { status?: unknown; reason?: unknown; retryAfter?: unknown };
   return {
     status: typeof err?.status === "number" ? err.status : null,
     reason: typeof err?.reason === "string" ? err.reason : null,
+    retryAfter: typeof err?.retryAfter === "number" && err.retryAfter > 0 ? err.retryAfter : null,
   };
 }

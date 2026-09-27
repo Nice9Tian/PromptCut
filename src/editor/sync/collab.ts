@@ -1,0 +1,287 @@
+/**
+ * 项目设置「多用户协作」的动作（C10a 契约 `docs/plan/c10a-contract.md` 第 6 节；语义 `workflow/project.md`「多用户协作」）。
+ *
+ * - **开启**：放云端向托管端 `POST shared/create`（地址缺省是内置托管地址，可改，沿用 C6.5）→ 以创建者身份进入、把当前项目
+ *   以根替换写进去（`enterShared`，C6.5 的路径）→ `invite-create` → 界面显示邀请链接与二维码。放本机沿用 C6.5 的本机托管
+ *   （本机文档服务 `/docservice/shared/create`，要编辑器以局域网主机方式启动），不向云端登记、不出邀请链接。
+ * - **勾上时的缺省**：放本机、自由进入、创建者用户名取设备名；项目密码与创建者密码都自动生成（各 16 个字符）并存在本机〔裁，第 6 节〕。
+ * - **邀请码**：原文只在签发时回给创建者，存在他本机（`pc.shared.local`）；服务端不存原文，别的成员取不到〔裁，第 6 节〕。
+ * - **取消**：放云端的先把项目真身与被引用的素材原尺寸全部拉回本机（预渲染产物可以再生，不拉），再以创建者身份 `delete`，
+ *   本机项目回到 `local` 空间；中途失败就恢复为开启状态。放本机的停本机托管（删掉本机文档服务里的共享项目），回到 `local` 空间。
+ *
+ * 界面在 `CollabSection.tsx`；连接、进入、创建者操作在 `syncManager.ts`。
+ */
+import { adminOp, enterShared, ensureDevice, expectSharedClose, getSyncView, leaveSharedToLocal, whenSaved, type AdminError } from "./syncManager";
+import { errorStatus, route, type SharedMode, type Where } from "./sharedApi";
+import { getState } from "../../store/project";
+import { originalHashOf } from "../../render/mediaTier";
+import { ONLINE } from "../../online/mode";
+import { inviteLinkOf } from "../../online/invite";
+
+/* ---------------- 本机记下的东西 ---------------- */
+
+export interface InviteInfo {
+  link: string;
+  expiresAt: number;
+  maxUses: number | null;
+}
+
+/** 这台设备上以创建者身份开启过的协作项目：自动生成的两样密码、邀请链接（只有创建者本机有） */
+export interface LocalCollab {
+  projectId: string;
+  where: Where;
+  mode: SharedMode;
+  name: string;
+  creatorUsername: string;
+  creatorPassword?: string;
+  projectPassword?: string;
+  invite?: InviteInfo | null;
+}
+
+const LOCAL_KEY = "pc.shared.local";
+
+function readAll(): Record<string, LocalCollab> {
+  try {
+    const v = JSON.parse(localStorage.getItem(LOCAL_KEY) ?? "");
+    return v && typeof v === "object" ? (v as Record<string, LocalCollab>) : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeAll(all: Record<string, LocalCollab>) {
+  try {
+    localStorage.setItem(LOCAL_KEY, JSON.stringify(all));
+  } catch {
+    /* 存不了：只影响下次打开设置时能不能直接显示密码与链接 */
+  }
+}
+
+export function localCollab(projectId: string): LocalCollab | null {
+  return readAll()[projectId] ?? null;
+}
+
+function saveLocal(rec: LocalCollab) {
+  writeAll({ ...readAll(), [rec.projectId]: rec });
+}
+
+function dropLocal(projectId: string) {
+  const all = readAll();
+  delete all[projectId];
+  writeAll(all);
+}
+
+/* ---------------- 缺省值 ---------------- */
+
+const PW_ALPHABET = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+
+/** 自动生成的密码：16 个字符，去掉容易看错的 0 O 1 l I */
+export function generatePassword(length = 16): string {
+  const bytes = new Uint8Array(length * 2);
+  crypto.getRandomValues(bytes);
+  let out = "";
+  for (let i = 0; i < bytes.length && out.length < length; i++) {
+    // 拒绝采样，免得前几个字符概率偏高
+    if (bytes[i] >= 256 - (256 % PW_ALPHABET.length)) continue;
+    out += PW_ALPHABET[bytes[i] % PW_ALPHABET.length];
+  }
+  return out.length === length ? out : generatePassword(length);
+}
+
+/** 缺省的创建者用户名：设备名 */
+export async function defaultCreatorName(): Promise<string> {
+  const d = await ensureDevice();
+  return (d?.deviceName || "我").slice(0, 64);
+}
+
+/* ---------------- 邀请码 ---------------- */
+
+/** 邀请链接的源：服务端给的公网源 → 在线页面自己的源 → 文档服务地址的源 */
+function linkOriginOf(given: unknown, base: string): string {
+  if (typeof given === "string" && /^https?:\/\//.test(given)) return given;
+  if (ONLINE) return location.origin;
+  try {
+    return new URL(base).origin;
+  } catch {
+    return location.origin;
+  }
+}
+
+export type InviteResult = { ok: true; invite: InviteInfo } | { ok: false; error: AdminError };
+
+/** 签发（作废旧的、签发新的）：每次都要当场的创建者密码 */
+export async function createInvite(creatorPassword: string): Promise<InviteResult> {
+  const s = getSyncView().shared;
+  if (!s) return { ok: false, error: "offline" };
+  const r = await adminOp("invite-create", { password: creatorPassword });
+  if (!r.ok) return r;
+  const code = String(r.reply.code ?? "");
+  const invite: InviteInfo = {
+    link: inviteLinkOf(linkOriginOf(r.reply.linkOrigin, s.base), code),
+    expiresAt: Number(r.reply.expiresAt),
+    maxUses: typeof r.reply.maxUses === "number" ? r.reply.maxUses : null,
+  };
+  const prev = localCollab(s.projectId);
+  saveLocal({ ...(prev ?? { projectId: s.projectId, where: s.where, mode: s.mode, name: s.name, creatorUsername: s.username }), invite });
+  return { ok: true, invite };
+}
+
+export interface InviteStatus {
+  active: boolean;
+  expiresAt: number | null;
+  maxUses: number | null;
+  used: number;
+  revokedAt: number | null;
+}
+
+export async function fetchInviteStatus(creatorPassword: string): Promise<{ ok: true; status: InviteStatus } | { ok: false; error: AdminError }> {
+  const r = await adminOp("invite-status", { password: creatorPassword });
+  if (!r.ok) return r;
+  const m = r.reply;
+  return {
+    ok: true,
+    status: {
+      active: m.active === true,
+      expiresAt: typeof m.expiresAt === "number" ? m.expiresAt : null,
+      maxUses: typeof m.maxUses === "number" ? m.maxUses : null,
+      used: Number(m.used) || 0,
+      revokedAt: typeof m.revokedAt === "number" ? m.revokedAt : null,
+    },
+  };
+}
+
+/* ---------------- 开启 ---------------- */
+
+export interface EnableOptions {
+  where: Where;
+  mode: SharedMode;
+  name: string;
+  creator: { username: string; password: string };
+  /** 自由进入的项目密码 */
+  projectPassword?: string;
+  /** 限定进入的名单 */
+  list?: { username: string; password: string }[];
+  /** 托管地址（放云端）；不给按覆盖顺序取 */
+  hostedUrl?: string | null;
+}
+
+export type EnableError = "offline" | "unreachable" | "name-taken" | "lan-failed";
+
+export async function enableCollab(o: EnableOptions): Promise<{ ok: true; invite: InviteInfo | null } | { ok: false; error: EnableError }> {
+  if (o.where === "hosted" && typeof navigator !== "undefined" && navigator.onLine === false) return { ok: false, error: "offline" };
+  let made: Awaited<ReturnType<typeof route.createSharedProject>>;
+  try {
+    made = await route.createSharedProject({
+      where: o.where,
+      name: o.name,
+      mode: o.mode,
+      creator: o.creator,
+      ...(o.mode === "free" ? { password: o.projectPassword } : { list: o.list ?? [] }),
+      ...(o.where === "hosted" && o.hostedUrl ? { hostedUrl: o.hostedUrl } : {}),
+    });
+  } catch (e) {
+    const { status, reason } = errorStatus(e);
+    console.warn("[collab] 建共享项目没成:", status, reason, (e as Error)?.message);
+    if (status === 409 || reason === "name-taken") return { ok: false, error: "name-taken" };
+    return { ok: false, error: o.where === "hosted" ? "unreachable" : "lan-failed" };
+  }
+  const device = getSyncView().device;
+  const entered = await enterShared(
+    { where: made.where, base: made.base, projectId: made.projectId, name: made.name, mode: made.mode, ...(o.where === "lan" ? { hostDeviceName: device?.deviceName } : {}) },
+    { as: "creator", username: o.creator.username, password: o.creator.password },
+  );
+  if (!entered.ok) {
+    console.warn("[collab] 以创建者身份进入没成:", entered.error);
+    return { ok: false, error: o.where === "hosted" ? "unreachable" : "lan-failed" };
+  }
+  saveLocal({
+    projectId: made.projectId,
+    where: made.where,
+    mode: made.mode,
+    name: made.name,
+    creatorUsername: o.creator.username,
+    creatorPassword: o.creator.password,
+    ...(o.mode === "free" ? { projectPassword: o.projectPassword } : {}),
+    invite: null,
+  });
+  if (o.where !== "hosted") return { ok: true, invite: null };
+  const inv = await createInvite(o.creator.password);
+  // 项目已经建好、进去了；邀请码没签成只少了链接，设置里可以再点「作废并重新生成」
+  return { ok: true, invite: inv.ok ? inv.invite : null };
+}
+
+/* ---------------- 取消 ---------------- */
+
+export type DisableError = "forbidden" | "rate-limited" | "pull-failed" | "offline" | "online-page";
+
+/** 拉回素材原尺寸：交给编辑器进程的预取队列，轮询本地内容库直到到齐；一分钟没有进展算失败 */
+async function pullOriginals(hashes: string[], onProgress?: (done: number, total: number) => void): Promise<boolean> {
+  if (ONLINE) return false; // 在线页面没有本机素材库
+  if (!hashes.length) return true;
+  try {
+    const r = await fetch("/api/media/prefetch", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ items: hashes.map((hash) => ({ hash })) }) });
+    if (!r.ok) return false;
+  } catch {
+    return false;
+  }
+  let have = new Set<string>();
+  let lastProgress = Date.now();
+  for (;;) {
+    const got = new Set<string>();
+    for (let i = 0; i < hashes.length; i += 40) {
+      const part = hashes.slice(i, i + 40);
+      try {
+        const r = await fetch(`/api/media/local?hashes=${part.join(",")}`, { cache: "no-store" });
+        const j = (await r.json()) as { hashes?: string[] };
+        for (const h of j.hashes ?? []) got.add(h);
+      } catch {
+        /* 这一轮没问到：下轮再问 */
+      }
+    }
+    if (got.size > have.size) lastProgress = Date.now();
+    have = got;
+    onProgress?.(have.size, hashes.length);
+    if (have.size >= hashes.length) return true;
+    if (Date.now() - lastProgress > 60_000) return false;
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+}
+
+/**
+ * 取消多用户协作（创建者）：核对创建者密码 → 放云端的先把项目真身与素材原尺寸拉回本机 → `delete` → 回到本机空间。
+ * 失败时什么都没删，调用方把勾选恢复成开启。
+ */
+export async function disableCollab(creatorPassword: string, onProgress?: (done: number, total: number) => void): Promise<{ ok: true } | { ok: false; error: DisableError }> {
+  const s = getSyncView().shared;
+  if (!s) return { ok: false, error: "offline" };
+  if (ONLINE) return { ok: false, error: "online-page" };
+  // 先核对一次创建者密码（无副作用），免得白拉一趟
+  const check = await adminOp("list-bans", { password: creatorPassword });
+  if (!check.ok) return { ok: false, error: check.error === "rate-limited" ? "rate-limited" : check.error === "offline" ? "offline" : "forbidden" };
+  try {
+    await whenSaved(10_000);
+  } catch {
+    return { ok: false, error: "pull-failed" };
+  }
+  const project = structuredClone(getState().project);
+  if (s.where === "hosted") {
+    const hashes = [...new Set((project.media ?? []).map((m) => originalHashOf(m)).filter((h): h is string => !!h))];
+    if (!(await pullOriginals(hashes, onProgress))) return { ok: false, error: "pull-failed" };
+  }
+  expectSharedClose(true);
+  const del = await adminOp("delete", { key: check.key });
+  if (!del.ok) {
+    expectSharedClose(false);
+    return { ok: false, error: del.error === "rate-limited" ? "rate-limited" : del.error === "forbidden" ? "forbidden" : "pull-failed" };
+  }
+  dropLocal(s.projectId);
+  leaveSharedToLocal(project);
+  return { ok: true };
+}
+
+/** 创建者在成员浮层或设置里改了密码：本机记下的那份跟着换（这台设备上没开启过的不记） */
+export function rememberPasswords(projectId: string, p: { creatorPassword?: string; projectPassword?: string }) {
+  const prev = localCollab(projectId);
+  if (!prev) return;
+  saveLocal({ ...prev, ...p });
+}

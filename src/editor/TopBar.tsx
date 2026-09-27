@@ -32,10 +32,13 @@ import { SkillDialog } from "./SkillDialog";
 import { applyCombine, summarizeCombine } from "./io/combineImport";
 import { isViewOnly } from "./io/viewOnly";
 import { SyncChips } from "./sync/SyncChips";
-import { NewSharedDialog, OpenSharedDialog } from "./sync/SharedDialogs";
 import { BackupsDialog } from "./sync/BackupsDialog";
 import { useSync, whenSaved } from "./sync/syncManager";
+import { ONLINE } from "../online/mode";
 import "../ui/toolbar.css";
+
+/** 在线浏览器模式里置灰的项目菜单项:都要编辑器进程(草稿、另存、本地备份),C10a 不提供(契约第 2 节) */
+const ONLINE_OFF = "在线浏览器模式暂不支持，请在桌面版里做";
 
 /** 顶栏宽度档位:宽档(全部展开)、中档(图标收缩)、窄档(折叠更多菜单) */
 type BarTier = "wide" | "icon" | "narrow";
@@ -110,9 +113,10 @@ export function TopBar() {
   const [skinOpen, setSkinOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [skillOpen, setSkillOpen] = useState(false);
-  /** C6.5:共享项目的两个对话框与「本地备份…」 */
-  const [newSharedOpen, setNewSharedOpen] = useState(false);
-  const [openSharedOpen, setOpenSharedOpen] = useState(false);
+  /**
+   * 「本地备份…」。C6.5 的「新建共享项目」「打开共享项目」两项已删(C10a 契约第 6 节「旧入口」):
+   * 要和别人一起做,在项目设置里勾「多用户协作」;加入别人的项目在开始页。
+   */
   const [backupsOpen, setBackupsOpen] = useState(false);
   // 撤销提示条里点「项目设置」那一类实体会派发这个事件:打开项目设置对话框
   useEffect(() => {
@@ -688,11 +692,11 @@ ${summarizeCombine(report)}
             left: Math.max(8, Math.min(projRect?.left ?? 0, window.innerWidth - 248)),
           }}
         >
-          <button type="button" role="menuitem" className="pc-proj-item" onClick={() => { setProjOpen(false); createProject(); }}>
+          <button type="button" role="menuitem" className="pc-proj-item" disabled={ONLINE} title={ONLINE ? ONLINE_OFF : undefined} onClick={() => { setProjOpen(false); createProject(); }}>
             <IconNew />
             <span className="pc-proj-text"><b>新建项目</b><small>开一个空项目</small></span>
           </button>
-          <button type="button" role="menuitem" className="pc-proj-item" onClick={() => { setProjOpen(false); projectInput.current?.click(); }}>
+          <button type="button" role="menuitem" className="pc-proj-item" disabled={ONLINE} title={ONLINE ? ONLINE_OFF : undefined} onClick={() => { setProjOpen(false); projectInput.current?.click(); }}>
             <IconOpen />
             <span className="pc-proj-text"><b>打开项目…</b><small>{PROC_EXT} 项目文件</small></span>
           </button>
@@ -700,8 +704,8 @@ ${summarizeCombine(report)}
             type="button"
             role="menuitem"
             className="pc-proj-item"
-            disabled={viewOnly}
-            title={viewOnly ? "只读查看模式:改不了这个项目" : undefined}
+            disabled={viewOnly || ONLINE}
+            title={ONLINE ? ONLINE_OFF : viewOnly ? "只读查看模式:改不了这个项目" : undefined}
             onClick={() => { setProjOpen(false); void saveProject(); }}
           >
             <IconSave />
@@ -712,30 +716,22 @@ ${summarizeCombine(report)}
             type="button"
             role="menuitem"
             className="pc-proj-item"
-            disabled={viewOnly}
-            title={viewOnly ? "只读查看模式:改不了这个项目" : "编排和素材打成一个包,换台机器直接打开"}
+            disabled={viewOnly || ONLINE}
+            title={ONLINE ? ONLINE_OFF : viewOnly ? "只读查看模式:改不了这个项目" : "编排和素材打成一个包,换台机器直接打开"}
             onClick={() => { setProjOpen(false); void savePackedProject(); }}
           >
             <IconSave />
             <span className="pc-proj-text"><b>打包保存…</b><small>{PROCP_EXT} 连素材一起</small></span>
           </button>
           <div className="pc-proj-sep" role="separator" />
-          <button type="button" role="menuitem" className="pc-proj-item" data-pc="menu-new-shared" disabled={viewOnly} onClick={() => { setProjOpen(false); setNewSharedOpen(true); }}>
-            <IconNew />
-            <span className="pc-proj-text"><b>新建共享项目</b><small>和他人一起编辑</small></span>
-          </button>
-          <button type="button" role="menuitem" className="pc-proj-item" data-pc="menu-open-shared" disabled={viewOnly} onClick={() => { setProjOpen(false); setOpenSharedOpen(true); }}>
-            <IconOpen />
-            <span className="pc-proj-text"><b>打开共享项目</b><small>加入已有项目</small></span>
-          </button>
-          <button type="button" role="menuitem" className="pc-proj-item" data-pc="menu-backups" onClick={() => { setProjOpen(false); setBackupsOpen(true); }}>
+          <button type="button" role="menuitem" className="pc-proj-item" data-pc="menu-backups" disabled={ONLINE} title={ONLINE ? ONLINE_OFF : undefined} onClick={() => { setProjOpen(false); setBackupsOpen(true); }}>
             <IconSave />
             <span className="pc-proj-text"><b>本地备份…</b><small>被覆盖、离线丢弃的修改</small></span>
           </button>
           <div className="pc-proj-sep" role="separator" />
           <button type="button" role="menuitem" className="pc-proj-item" onClick={() => { setProjOpen(false); setSettingsOpen(true); }}>
             <IconSettings />
-            <span className="pc-proj-text"><b>项目设置…</b><small>尺寸、帧率、主题</small></span>
+            <span className="pc-proj-text"><b>项目设置…</b><small>尺寸、帧率、多用户协作</small></span>
           </button>
         </div>,
         document.body,
@@ -806,8 +802,6 @@ ${summarizeCombine(report)}
         hidden
         onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) void mergeFromFile(f); }}
       />
-      <NewSharedDialog open={newSharedOpen} onClose={() => setNewSharedOpen(false)} />
-      <OpenSharedDialog open={openSharedOpen} onClose={() => setOpenSharedOpen(false)} />
       <BackupsDialog open={backupsOpen} onClose={() => setBackupsOpen(false)} />
       <ProjectSettingsDialog
         open={settingsOpen}

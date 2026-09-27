@@ -104,6 +104,15 @@ export function openCredentialStore({ dir, now = Date.now, log = () => {} } = {}
   const records = new Map();
   /** 名字键 → projectId */
   const names = new Map();
+  /**
+   * 邀请码摘要 → projectId（C10a 契约第 5 节）。只记每个项目当前那一条邀请码的摘要：签发新的、删项目时跟着改；
+   * 作废的记录还在，由 `invite.mjs` 的 `inviteActive` 判失效。按摘要找项目，不必逐个项目算 HMAC。
+   */
+  const invites = new Map();
+  const indexInvite = (rec, prev) => {
+    if (prev?.invite?.digest && invites.get(prev.invite.digest) === prev.projectId) invites.delete(prev.invite.digest);
+    if (rec?.invite?.digest) invites.set(rec.invite.digest, rec.projectId);
+  };
   for (const entry of fs.readdirSync(projectsDir)) {
     if (!entry.endsWith('.json')) continue;
     const id = entry.slice(0, -5);
@@ -114,6 +123,7 @@ export function openCredentialStore({ dir, now = Date.now, log = () => {} } = {}
     }
     records.set(id, rec);
     names.set(nameKey(rec.name), id);
+    indexInvite(rec, null);
   }
   log('auth.store.open', { projects: records.size });
 
@@ -144,6 +154,12 @@ export function openCredentialStore({ dir, now = Date.now, log = () => {} } = {}
     },
 
     nameTaken: (name) => names.has(nameKey(name)),
+
+    /** 按邀请码摘要找项目（C10a）：内部用，不拷贝、只读；没有回 null */
+    peekByInviteDigest(digest) {
+      const id = typeof digest === 'string' ? invites.get(digest) : undefined;
+      return id ? records.get(id) ?? null : null;
+    },
 
     /**
      * 建一个项目。字段由调用方校验过；这里生成 projectId、ticketKey，代数从 1 起。名字被占用抛 `code: 'name-taken'`。
@@ -191,6 +207,7 @@ export function openCredentialStore({ dir, now = Date.now, log = () => {} } = {}
       draft.name = cur.name;
       persist(draft);
       records.set(projectId, draft);
+      indexInvite(draft, cur);
       return clone(draft);
     },
 
@@ -205,6 +222,7 @@ export function openCredentialStore({ dir, now = Date.now, log = () => {} } = {}
       }
       records.delete(projectId);
       names.delete(nameKey(rec.name));
+      indexInvite(null, rec); // 删项目：邀请码一并删除（C10a 第 5 节）
       return true;
     },
 

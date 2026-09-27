@@ -24,9 +24,23 @@ import {
 import { signTicket, userGeneration } from '../../auth/tickets.mjs';
 import { admissionOf, isLoopbackAddress } from '../../auth/handshake.mjs';
 import { parseList, isCred } from '../../auth/http.mjs';
+import { parseInviteOptions, issueInvite, inviteStatus } from '../../auth/invite.mjs';
 
 export const SHARED_MODULE = 'shared';
-export const ADMIN_OPS = Object.freeze(['set-password', 'set-list', 'kick', 'unban', 'delete', 'set-creator-password', 'list-bans']);
+export const ADMIN_OPS = Object.freeze([
+  'set-password', 'set-list', 'kick', 'unban', 'delete', 'set-creator-password', 'list-bans',
+  'invite-create', 'invite-revoke', 'invite-status',
+]);
+
+/**
+ * C10a 补的三种创建者操作(`docs/plan/c10a-contract.md` 第 5 节;规则与存储在 `../../auth/invite.mjs`):
+ * - `invite-create { expiresInSec?, maxUses? }`:作废旧的、签发新的(缺省 7 天、次数不限),回
+ *   `shared.admin.ok { op, code, expiresAt, maxUses }`,原文只在这一次回包里出现。另带 `linkOrigin`:托管端的公网源
+ *   (取 `PROMPTCUT_DOCSERVICE_PUBLIC_URL` 的源,组装层传进来;没设为 null),界面拼邀请链接 `<源>/editor#invite=<码>` 用;
+ * - `invite-revoke`:作废当前的,之后凭它加入一律失败;没有邀请码时照样回 ok;
+ * - `invite-status`:回 `{ op, active, expiresAt, maxUses, used, revokedAt }`,不含原文。
+ * 三种都不加代数、不断任何连接(作废邀请码不影响已经进来的人)。证明、限速与其余 op 相同。
+ */
 
 /**
  * C6.5 补的两种创建者操作(`docs/plan/c65-design.md` 第 9 节裁定、2026-09-26 主会话裁定):
@@ -74,6 +88,7 @@ export function sharedModule({
   claimsOf = () => 0,
   isLoopbackRemote = isLoopbackAddress,
   now,
+  linkOrigin = null,
 } = {}) {
   const storeOf = typeof store === 'function' ? store : () => store;
   /** connId → { principal, space, watching } */
@@ -302,6 +317,28 @@ export function sharedModule({
         });
         closeWhere(ctx, space, (p) => p.username === username && p.deviceId === deviceId, CLOSE_REMOVED, 'kicked');
         break;
+      }
+      case 'invite-create': {
+        const opts = parseInviteOptions(msg);
+        if (!opts) throw new Refused('bad-message', 'expiresInSec 要正整数秒，maxUses 要正整数或 null');
+        const { code, invite } = issueInvite(st.serverSecret, opts, clock(ctx));
+        // 整条换掉：旧摘要随之从索引里拿掉，旧链接立刻失效（store.mjs 的邀请码索引）
+        st.update(space, (d) => { d.invite = invite; });
+        ctx.log('shared.admin', { connId, projectId: space, op });
+        reply(ctx, connId, { type: 'shared.admin.ok', op, code, expiresAt: invite.expiresAt, maxUses: invite.maxUses, linkOrigin }, reqId);
+        return;
+      }
+      case 'invite-revoke': {
+        const at = clock(ctx);
+        if (rec.invite && (rec.invite.revokedAt === null || rec.invite.revokedAt === undefined)) {
+          st.update(space, (d) => { d.invite = { ...d.invite, revokedAt: at }; });
+        }
+        break;
+      }
+      case 'invite-status': {
+        ctx.log('shared.admin', { connId, projectId: space, op });
+        reply(ctx, connId, { type: 'shared.admin.ok', op, ...inviteStatus(rec.invite ?? null, clock(ctx)) }, reqId);
+        return;
       }
       case 'unban': {
         const { username, deviceId } = msg;
