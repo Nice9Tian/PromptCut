@@ -400,11 +400,21 @@ test('T2-2 重启续传:断网时停掉队列(留在 upload-queue.json 里),新�
   proxy.state.dropWhen = null;
   const q2 = make();
   assert.equal(q2.stats().restored, 1);
+  const logMark = proxy.state.log.length;
+  const eventMark = events.length;
   q2.start();
   await q2.drain();
   await q2.stop();
-  const tierDone = events.filter((e) => e.e === 'upload.tier-done' && e.hash === hash);
-  assert.deepEqual(tierDone.at(-1).sent, [2], '重启后只补第 2 片');
+  // 「重启后只补缺片」看 q2 整个过程发出的全部分片，而不只看最后一次 tier-done：客户端 retries 为 0，
+  // 机器忙时 q2 可能撞上一次连接抖动（代理刚销毁过套接字）而整项重试，第二遍原片已齐、tier-done 的 sent 是 []。
+  // 判据没放宽：q2 只要重发了第 0、1 片（或根本没发第 2 片），下面两条都会挂。
+  const tierDone = events.slice(eventMark).filter((e) => e.e === 'upload.tier-done' && e.hash === hash);
+  assert.ok(tierDone.length >= 1, '重启后原片传完');
+  assert.deepEqual([...new Set(tierDone.flatMap((e) => e.sent))].sort(), [2], `重启后只补第 2 片：${JSON.stringify(tierDone.map((e) => e.sent))}`);
+  const puts = proxy.state.log.slice(logMark)
+    .filter((x) => x.method === 'PUT' && x.path.startsWith(`/api/asset/media/${hash}/`))
+    .map((x) => Number(x.path.split('/').at(-1)));
+  assert.deepEqual([...new Set(puts)].sort(), [2], `重启后发往素材服务的原片分片只有第 2 片：${JSON.stringify(puts)}`);
   assert.equal((await chunksOf(`${remote}/api/asset`, hash)).complete, true);
   assert.equal((await chunksOf(`${remote}/api/asset`, smallHash)).complete, true);
   assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).items, []);
