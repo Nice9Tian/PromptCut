@@ -36,7 +36,7 @@ import { registerTsResolve } from './ts-resolve.mjs';
 import { createSharedDocService } from '../docservice/shared-service.mjs';
 import { credentialStoreFor } from '../auth/store.mjs';
 import { createAssetTicketVerifier } from '../auth/asset-tickets.mjs';
-import { isLoopbackAddress } from '../auth/handshake.mjs';
+import { isLocalOrigin } from '../auth/origin.mjs';
 import { createFsStore, ensureLayoutSync, LAYOUTS } from '../asset-store/fs-store.mjs';
 import { normalizeHash } from '../asset-store/blob-store.mjs';
 import { startAssetAnnounce } from '../asset-announce.mjs';
@@ -263,7 +263,8 @@ export async function startHostedCombo({
     stores[ns] = typeof wrapStore === 'function' ? wrapStore(ns, st) : st;
   }
 
-  const isLoopbackReq = (req) => trustLoopback !== false && isLoopbackAddress(req?.socket?.remoteAddress);
+  // 本机：信任开关开着，且真正的发起方是本机（对端回环、转发头里每一跳都是回环，`auth/origin.mjs`）
+  const isLoopbackReq = (req) => trustLoopback !== false && isLocalOrigin(req);
   const tickets = createAssetTicketVerifier({ store: () => store, now });
   const assetMiddleware = assetService.assetServiceMiddleware(root, { stores, tickets, isTrusted: isLoopbackReq });
   const preflight = assetService.assetPreflightMiddleware();

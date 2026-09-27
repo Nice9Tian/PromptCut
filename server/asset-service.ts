@@ -109,7 +109,7 @@ import type { Connect } from "vite";
 import type { IncomingMessage, ServerResponse } from "http";
 import type { Readable } from "stream";
 import path from "path";
-import { apiPath, isAssetServicePath, clientAddressOf, isLoopbackAddress } from "./http-guard.mjs";
+import { apiPath, isAssetServicePath, clientAddressOf, isLocalOrigin } from "./http-guard.mjs";
 import { createBlobStore, candidateFileResolver } from "./asset-store/index.mjs";
 import {
   mediaDir, isMediaHash, extOfName, contentTypeForExt, resolveHashFile, writeMediaIndex, parseRange,
@@ -381,10 +381,13 @@ async function serveBlob(req: IncomingMessage, res: ServerResponse, store: Asset
  * 凭票据读写
  * ------------------------------------------------------------------ */
 
-/** 缺省的「本机」判据:对端是回环地址。舞台端口的反向代理转来的请求按它写进的真实对端判(`clientAddressOf`) */
+/**
+ * 缺省的「本机」判据:对端是回环地址,且转发头里每一跳都是回环(经同机反向代理转来的不算,`auth/origin.mjs`)。
+ * 舞台端口的反向代理转来的请求按它写进的真实对端判(`clientAddressOf`)
+ */
 export function isLoopbackRequest(req: IncomingMessage): boolean {
   const address = clientAddressOf(req);
-  return address !== null && isLoopbackAddress(address);
+  return address !== null && isLocalOrigin(req, address);
 }
 
 /** 核对素材票据(`server/auth/asset-tickets.mjs`) */

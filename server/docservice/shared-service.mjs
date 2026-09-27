@@ -35,7 +35,8 @@ import { eventsModule } from './modules/events.mjs';
 import { sharedModule } from './modules/shared.mjs';
 import { createFileStore, createMemoryStore } from './store/index.mjs';
 import { createRenderQueue } from '../render-queue/index.mjs';
-import { createHandshakeAuth, isLoopbackAddress } from '../auth/handshake.mjs';
+import { createHandshakeAuth } from '../auth/handshake.mjs';
+import { isLocalOrigin, remoteTagOf } from '../auth/origin.mjs';
 import { createSharedHttp } from '../auth/http.mjs';
 import { createChallenges } from '../auth/challenges.mjs';
 import { createRateLimiter } from '../auth/rate-limit.mjs';
@@ -67,9 +68,11 @@ export function createSharedDocService({
   server,
   path: wsPath = '/docservice',
   clusterToken,
-  isLoopback: isLoopbackOption = (req) => isLoopbackAddress(req?.socket?.remoteAddress),
+  // 「本机」按真正的发起方判断：对端回环且转发头里每一跳都是回环（`auth/origin.mjs`，契约第 10 节）
+  isLoopback: isLoopbackOption = (req) => isLocalOrigin(req),
   trustLoopback = true,
-  remoteOf = (req) => req?.socket?.remoteAddress ?? null,
+  // 经反向代理转来的回环记成 `proxied:<对端>`：只凭来源地址判本机的地方（创建者操作的限速豁免）不再把它当本机
+  remoteOf = (req) => remoteTagOf(req),
   localDevice,
   now = Date.now,
   log,
