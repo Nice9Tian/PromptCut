@@ -103,3 +103,41 @@ test("连上文档服务:setProject 走 docsync,撤销按页面会话,别人的�
   assert.equal(core.history.length, 1);
   assert.equal(A.unconfirmed, 0);
 });
+
+test("AI 栏「撤销这步」(revertRemote)撤掉 Agent 加的轨道:store 里的项目当场换成撤后的那一份,不等下一次改动", () => {
+  const p0 = fresh("撤这步");
+  const svc = new MemDocService({ project: structuredClone(p0), rev: 1 });
+  let linkA;
+  const A = new DocSync(p0, { projectId: "P", session: "A", send: (m) => linkA.send(m) });
+  linkA = svc.connect("A", (m) => A.receive(m));
+  const unbind = bindStore(A);
+  A.connect();
+  let linkG;
+  const G = new DocSync(structuredClone(p0), { projectId: "P", session: "agent-1", send: (m) => linkG.send(m) });
+  linkG = svc.connect("agent-1", (m) => G.receive(m));
+  G.connect();
+  svc.drain();
+
+  // Agent 加了一条轨道
+  G.commit({ ...G.project, tracks: [...G.project.tracks, { id: "tAgent", name: "Agent 的轨道", clips: [] }] });
+  svc.drain();
+  const agentOp = svc.log[svc.log.length - 1].opId;
+  assert.ok(getState().project.tracks.some((t) => t.id === "tAgent"), "页面收到了 Agent 加的轨道");
+  const before = getState().project;
+
+  const r = A.revertRemote({ opId: agentOp });
+  assert.equal(r.done, true);
+  // 修前:DocSync 本地副本已撤,store 还停在撤之前(bindStore 把这次当成 setProject 的 commit 跳过了)
+  assert.equal(getState().project, A.project, "store 里就是 DocSync 撤后的那一份");
+  assert.notEqual(getState().project, before, "换了新对象,不是原地改");
+  assert.ok(!getState().project.tracks.some((t) => t.id === "tAgent"), "轨道当场从 store 里消失");
+  assert.ok(before.tracks.some((t) => t.id === "tAgent"), "撤之前那份对象没被原地改");
+  assert.equal(getState().dirty, true);
+  // 进了页面自己的撤销栈:Ctrl+Z 把 Agent 的轨道恢复回来,store 同样当场跟上
+  assert.equal(actions.canUndo(), true);
+  actions.undo();
+  assert.ok(getState().project.tracks.some((t) => t.id === "tAgent"));
+  svc.drain();
+  assert.equal(JSON.stringify(getState().project), JSON.stringify(svc.project));
+  unbind();
+});
