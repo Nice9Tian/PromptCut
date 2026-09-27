@@ -17,6 +17,12 @@
  *
  * 凭证存储在 `<dataDir>/auth/`（`../auth/store.mjs`），由调用方打开后传进来；传 null 表示没加载：
  * 共享端点回 503，凭证握手一律 401，回环本机身份照常。
+ *
+ * 本机信任（`trustLoopback`，环境变量 `PROMPTCUT_TRUST_LOOPBACK`，`docs/plan/http-transport-contract.md` 第 10 节）：
+ * 缺省把回环来源当本机。部署在反向代理之后时，代理转进来的请求在这里看也是回环（语义：「本机」按真正的发起方判断，
+ * `docs/semantics/mechanism/asset-service.md`），所以托管端传 false：这里的三处——文档服务握手（回环不带凭证 401、
+ * 本机声明不认）、共享 HTTP 端点（按非回环来源限速）、创建者操作的限速——都不再认回环。素材服务与管理接口在托管组合里
+ * （`server/hosted/combo.mjs`）按同一个开关办。
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -44,6 +50,7 @@ import { isProjectId } from '../auth/protocol.mjs';
  * @param {string} [options.path] 挂载模式的 WebSocket 路径（共享端点在它下面），缺省 `/docservice`
  * @param {string} [options.clusterToken] 集群令牌（只在 `hosted` 认）
  * @param {(req) => boolean} [options.isLoopback] 请求是不是本机回环来的；缺省按 socket 对端地址
+ * @param {boolean} [options.trustLoopback] 缺省 true；false 时回环来源不算本机（上面三处一律按远端对待），`isLoopback` 不再调
  * @param {(req) => string | null} [options.remoteOf] 来源地址；缺省 socket 对端地址
  * @param {{ deviceId: string, deviceName: string }} [options.localDevice] 本机声明用的本机设备
  * @param {() => number} [options.now] 注入时钟：挑战过期、限速、票据有效期都按它
@@ -60,7 +67,8 @@ export function createSharedDocService({
   server,
   path: wsPath = '/docservice',
   clusterToken,
-  isLoopback = (req) => isLoopbackAddress(req?.socket?.remoteAddress),
+  isLoopback: isLoopbackOption = (req) => isLoopbackAddress(req?.socket?.remoteAddress),
+  trustLoopback = true,
   remoteOf = (req) => req?.socket?.remoteAddress ?? null,
   localDevice,
   now = Date.now,
@@ -75,6 +83,8 @@ export function createSharedDocService({
 } = {}) {
   if (mode !== 'hosted' && mode !== 'lan') throw new TypeError("createSharedDocService: mode 只能是 'hosted' 或 'lan'");
   const say = typeof log === 'function' ? log : undefined;
+  // 本机信任关掉时，回环来源与别的来源一样对待（第 10 节）
+  const isLoopback = trustLoopback === false ? () => false : isLoopbackOption;
   const joinChallenges = createChallenges({ now, ttlMs: limits.challengeTtlMs });
   const adminChallenges = createChallenges({ now, ttlMs: limits.challengeTtlMs });
   const limiter = createRateLimiter({ now, windowMs: limits.rateWindowMs, maxFailures: limits.maxFailures, cooldownMs: limits.cooldownMs });

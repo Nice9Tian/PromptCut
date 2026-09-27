@@ -19,7 +19,10 @@
  *   PROMPTCUT_CLUSTER_TOKEN          集群令牌的回落来源：优先读 $PROMPTCUT_DATA_DIR/secrets/cluster-token。
  *                                    令牌只守管理接口（地址登记、迁移盘点），不给数据面任何权限
  *   PROMPTCUT_DEVICE_ID / PROMPTCUT_DEVICE_NAME  本机设备信息（本机声明用）
- *   PROMPTCUT_TEST_NO_LOOPBACK_TRUST=1  测试开关：素材服务与管理接口不再把本机回环当自己人，本机也要票据 / 令牌
+ *   PROMPTCUT_TRUST_LOOPBACK         本机信任（`docs/plan/http-transport-contract.md` 第 10 节）：1（缺省）回环来源算本机；
+ *                                    0 不算——文档服务握手、共享端点、素材服务、管理接口都按远端对待回环来的请求，也不豁免限速。
+ *                                    部署在反向代理之后时必须是 0（代理转进来的请求看上去都是回环）；deploy-hosted 写 0。
+ *                                    0 时必须有集群令牌（地址登记只能带令牌）
  *
  * 失败即关（打一行 `config.error { reason }`，同时写 stdout 与 stderr，退出码 1）：
  *   data-dir           数据目录没设、不存在、不是目录或不可写
@@ -28,6 +31,8 @@
  *   auth-store         绑非回环地址而凭证存储打不开（auth-contract 第 10 节）
  *   asset-public-url   绑非回环地址而没设 PROMPTCUT_ASSET_PUBLIC_URL，或它不是 http(s) 地址
  *   listen             端口被占等，监听失败
+ *   trust-loopback     PROMPTCUT_TRUST_LOOPBACK 不是 0 或 1
+ *   cluster-token-required  PROMPTCUT_TRUST_LOOPBACK=0 而没有集群令牌
  * 没有令牌照常启动：管理接口只认本机回环，带令牌的握手 401。
  *
  * 只依赖 Node 内置模块与仓库里的这些目录 / 文件（部署清单见契约第 10 节）：
@@ -85,6 +90,11 @@ async function main() {
   if (token !== undefined && !checkTokenFormat(token)) return configError('bad-token-format', { source: tokenInfo.source });
   if (tokenInfo.loose) log('secrets.mode', { warning: 'secrets/cluster-token 的权限比 0600 宽，建议 chmod 600' });
 
+  const rawTrust = env.PROMPTCUT_TRUST_LOOPBACK;
+  if (rawTrust !== undefined && rawTrust !== '' && rawTrust !== '0' && rawTrust !== '1') return configError('trust-loopback');
+  const trustLoopback = rawTrust !== '0';
+  if (!trustLoopback && token === undefined) return configError('cluster-token-required');
+
   const assetPublicUrl = env.PROMPTCUT_ASSET_PUBLIC_URL || undefined;
   if (assetPublicUrl !== undefined) {
     let ok = false;
@@ -104,7 +114,7 @@ async function main() {
       clusterToken: token,
       assetPublicUrl,
       docPublicUrl: env.PROMPTCUT_DOCSERVICE_PUBLIC_URL || undefined,
-      trustLoopback: env.PROMPTCUT_TEST_NO_LOOPBACK_TRUST !== '1',
+      trustLoopback,
       localDevice: localDeviceInfo(),
       log,
     });
@@ -122,7 +132,7 @@ async function main() {
     asset: { port: combo.assetPort, publicUrl: combo.assetPublicUrl, announced: combo.announced },
     admin: token === undefined ? 'loopback-only' : `token:${tokenInfo.source}`,
     authStore: combo.credentialStore ? 'ok' : 'unavailable',
-    loopbackTrust: env.PROMPTCUT_TEST_NO_LOOPBACK_TRUST !== '1',
+    loopbackTrust: trustLoopback,
   });
 
   let stopping = false;

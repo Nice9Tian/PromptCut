@@ -125,6 +125,16 @@ export class WsConnection extends EventEmitter {
     this.#closeTimer.unref?.();
   }
 
+  /**
+   * 发关闭帧后不等对端回关闭帧，写完就结束 TCP。给「刚握上就要告诉对方为什么关」的场合用（接续失败以 4404 / 4410 / 1002 关闭，
+   * `docs/plan/http-transport-contract.md` 第 16 节）：对端此时没有别的要说，不必占着连接等它回关闭帧
+   */
+  closeNow(code = CLOSE.NORMAL, reason = '') {
+    this.close(code, reason);
+    this.#dead = true;
+    if (!this.#socket.destroyed) this.#socket.end();
+  }
+
   /** 不走握手直接断开（心跳超时用） */
   terminate() {
     this.#socket.destroy();

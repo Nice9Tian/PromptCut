@@ -43,6 +43,9 @@ export function checkPublicUrl(value, kind) {
  * 两个公网地址缺省按 `publicHost` 拼成 `ws://<主机>:<端口>`、`http://<主机>:<端口>/api/asset`；
  * `urls.docPublicUrl` / `urls.assetPublicUrl`（`--doc-public-url` / `--asset-public-url`，C10a 契约第 3 节）给了就用给的，
  * 阿里云上是 `wss://<域名>/hosted/`、`https://<域名>/media/api/asset`，重新部署不再被改回端口直连的地址。
+ *
+ * `PROMPTCUT_TRUST_LOOPBACK=0`（`docs/plan/http-transport-contract.md` 第 10、12 节）：托管端在 nginx 之后，代理转进来的请求
+ * 看上去都是回环，所以正式实例与演练实例都关掉本机信任；这时必须有集群令牌（部署脚本查 `secrets/cluster-token`）。
  */
 export function hostedPm2Config(inst, publicHost, urls = {}) {
   const env = {
@@ -53,6 +56,7 @@ export function hostedPm2Config(inst, publicHost, urls = {}) {
     PROMPTCUT_ASSET_PORT: String(inst.assetPort),
     PROMPTCUT_DOCSERVICE_PUBLIC_URL: urls.docPublicUrl || `ws://${publicHost}:${inst.docPort}`,
     PROMPTCUT_ASSET_PUBLIC_URL: urls.assetPublicUrl || `http://${publicHost}:${inst.assetPort}/api/asset`,
+    PROMPTCUT_TRUST_LOOPBACK: '0',
   };
   const app = {
     name: inst.app,
@@ -133,7 +137,8 @@ export function hostedDeployScript(inst, { pm2Config, save, replaceDocservice, t
     );
   }
   lines.push(
-    'if [ -f "$DATA/secrets/cluster-token" ]; then chmod 600 "$DATA/secrets/cluster-token"; echo "cluster-token: present (0600)"; else echo "cluster-token: absent (管理接口只认本机回环)"; fi',
+    // PM2 配置写了 PROMPTCUT_TRUST_LOOPBACK=0：没有令牌 main.mjs 起不来（cluster-token-required），在换进程之前就停手
+    'if [ -f "$DATA/secrets/cluster-token" ]; then chmod 600 "$DATA/secrets/cluster-token"; echo "cluster-token: present (0600)"; else echo "cluster-token: absent；PROMPTCUT_TRUST_LOOPBACK=0 时没有集群令牌起不来，加 --write-token 写一份" >&2; exit 5; fi',
     'umask 022',
     'cat > "$DIR/pm2.config.cjs" <<\'PM2CONFIG\'',
     pm2Config.replace(/\n$/, ''),

@@ -6,7 +6,9 @@
  * 跑：
  *   node scripts/probes/render-queue-e2e.mjs --url <ws://…> --role publisher|node|both
  *     [--tasks 50] [--project <id>] [--node-id <id>] [--task-ms 200] [--max-concurrent 2]
- *     [--exit-after-claim] [--announce <http-url>] [--watch-endpoints] [--timeout-ms 120000]
+ *     [--exit-after-claim] [--announce <http-url>] [--watch-endpoints] [--timeout-ms 120000] [--transport ws|http]
+ *
+ * `--transport http`：连接走 HTTP 长轮询（`docs/plan/http-transport-contract.md`），`--url` 也可以写 http(s)://。缺省 ws。
  *
  * 凭证（M6a，`docs/plan/auth-contract.md` 第 5、11 节；集群令牌已退出数据面，本探针不再读它）：
  * - 设了环境变量 PROMPTCUT_SHARED_CONFIG（共享项目配置 JSON）：取第一项，凭项目证明进入，节点连接用 `render` 角色、
@@ -36,7 +38,7 @@ import { randomBytes } from 'node:crypto';
 
 const USAGE = `用法：node scripts/probes/render-queue-e2e.mjs --url <ws://…> --role publisher|node|both
   [--tasks 50] [--project <id>] [--node-id <id>] [--task-ms 200] [--max-concurrent 2]
-  [--exit-after-claim] [--announce <http-url>] [--watch-endpoints] [--timeout-ms 120000]
+  [--exit-after-claim] [--announce <http-url>] [--watch-endpoints] [--timeout-ms 120000] [--transport ws|http]
 凭证从环境变量 PROMPTCUT_SHARED_CONFIG 指向的共享项目配置读；不设就是本机身份（只能连本机回环）。`;
 
 function usage(msg) {
@@ -46,7 +48,7 @@ function usage(msg) {
 }
 
 const FLAGS = new Set(['--exit-after-claim', '--watch-endpoints']);
-const VALUED = new Set(['--url', '--role', '--tasks', '--project', '--node-id', '--task-ms', '--max-concurrent', '--announce', '--timeout-ms']);
+const VALUED = new Set(['--url', '--role', '--tasks', '--project', '--node-id', '--task-ms', '--max-concurrent', '--announce', '--timeout-ms', '--transport']);
 
 function parseArgs(argv) {
   const out = {};
@@ -75,7 +77,10 @@ const intArg = (name, dflt, min = 0) => {
   return n;
 };
 const url = args.url;
-if (!/^wss?:\/\//.test(url)) usage('--url 要是 ws:// 或 wss://');
+const transport = args.transport ?? 'ws';
+if (transport !== 'ws' && transport !== 'http') usage('--transport 只能是 ws 或 http');
+if (transport === 'ws' && !/^wss?:\/\//.test(url)) usage('--url 要是 ws:// 或 wss://');
+if (transport === 'http' && !/^(wss?|https?):\/\//.test(url)) usage('--transport http 时 --url 要是 ws(s):// 或 http(s)://');
 const role = args.role;
 const taskCount = intArg('tasks', 50, 1);
 const taskMs = intArg('task-ms', 200, 0);
@@ -101,8 +106,9 @@ if (args.announce !== undefined) {
 
 // 被测模块和假件按需动态引入：参数不对时只打用法，不因模块缺失而崩
 const here = new URL('.', import.meta.url);
-const [{ createWsEndpoint }, { watchServiceEndpoints }, { createLocalNode }, { createArtifactSink }, { createSleepExecutor, snapshotTaskInput }] = await Promise.all([
+const [{ createWsEndpoint }, { createHttpEndpoint }, { watchServiceEndpoints }, { createLocalNode }, { createArtifactSink }, { createSleepExecutor, snapshotTaskInput }] = await Promise.all([
   import(new URL('../../server/render-node/ws-transport.mjs', here)),
+  import(new URL('../../server/render-node/http-transport.mjs', here)),
   import(new URL('../../server/render-node/endpoint.mjs', here)),
   import(new URL('../../server/render-node/local-node.mjs', here)),
   import(new URL('../../server/test/fake-artifact-sink.mjs', here)),
@@ -111,7 +117,7 @@ const [{ createWsEndpoint }, { watchServiceEndpoints }, { createLocalNode }, { c
 
 const log = (event, fields = {}) => console.log(JSON.stringify({ t: new Date().toISOString(), event, ...fields }));
 const result = {
-  ok: false, role, url, epochs: [], published: 0, completed: 0, duplicateDone: 0,
+  ok: false, role, url, transport, epochs: [], published: 0, completed: 0, duplicateDone: 0,
   claims: 0, claimsById: {}, doneLatencyMs: { p50: null, p95: null }, takeovers: [], fails: [],
 };
 if (args['watch-endpoints']) result.endpoints = [];
@@ -167,7 +173,8 @@ function closeEndpoints() {
 function openEndpoint(label) {
   // 共享项目：节点连接是 render，发布方连接是 page（node.hello 只许 render 连接）
   const protocols = sharedEntry ? sharedProtocols(sharedEntry, { role: label === 'node' ? 'render' : 'page' }) : undefined;
-  const ep = createWsEndpoint({ url, ...(protocols ? { protocols } : {}), log: (event, fields) => log(`${label}.${event}`, fields) });
+  const createEndpoint = transport === 'http' ? createHttpEndpoint : createWsEndpoint;
+  const ep = createEndpoint({ url, ...(protocols ? { protocols } : {}), log: (event, fields) => log(`${label}.${event}`, fields) });
   endpoints.push(ep);
   ep.onOpen(() => log(`${label}.open`, { opens: ep.stats().opens }));
   ep.onClose((info) => log(`${label}.close`, info));
@@ -282,7 +289,7 @@ function runNode() {
 
 // ---------------------------------------------------------------- 主流程
 
-log('start', { role, url, runId, projectId, nodeId, tasks: taskCount, credential: sharedEntry ? 'shared-project' : 'none' });
+log('start', { role, url, transport, runId, projectId, nodeId, tasks: taskCount, credential: sharedEntry ? 'shared-project' : 'none' });
 const eps = [];
 if (role === 'publisher' || role === 'both') eps.push(runPublisher());
 if (role === 'node' || role === 'both') eps.push(runNode());
