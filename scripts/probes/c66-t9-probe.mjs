@@ -269,7 +269,7 @@ async function openConn(M, { url, projectId, username, password, as = 'member', 
     });
   });
   const rpc = rpcOn(ep);
-  const client = (access = 'r') => M.createAssetClient({ base: assetUrl, ticket: M.createTicketSource(ep, { access }) });
+  const client = (access = 'r', opts = {}) => M.createAssetClient({ base: assetUrl, ticket: M.createTicketSource(ep, { access }), ...opts });
   const close = async () => {
     const closed = ep.connected ? new Promise((r) => ep.onClose(r)) : Promise.resolve();
     try { ep.close(); } catch { /* 已关 */ }
@@ -624,10 +624,18 @@ async function runCreator(out) {
         && (last.length === 3 || JSON.stringify(last.slice(0, 2)) === JSON.stringify(['tier-start small', 'tier-done small'])),
         '[creator] 上传队列日志:先小后大(暂停前小尺寸传完、原尺寸没传完;续传后原尺寸传完出队)', order);
       check(sent.filter((x) => x.tier === 'small' && x.attempt > 1).every((x) => x.sent === 0), '[creator] 续传时小尺寸一片没重发', sent);
+      // 整个取回再核哈希。原尺寸约 44 MB 只发一个请求,客户端缺省时限 30 s 含读完回包,托管端远时读不完
+      // (T9-X3 就是这样被判成不符);这里放宽到 10 分钟,取不回时记下错误原文,不和「字节不符」混在一起
+      const whole = conn.client('r', { timeoutMs: 600_000 });
+      out.hostedBytes = {};
       for (const [tier, h] of [['small', smallHash], ['original', media.original]]) {
         if (!h) continue;
-        const bytes = await cli.get('media', h).catch(() => null);
-        check(bytes && sha256(bytes) === h, `[creator] 托管端 ${tier} 字节与哈希相符`);
+        const t0 = Date.now();
+        let bytes = null;
+        let error = null;
+        try { bytes = await whole.get('media', h); } catch (e) { error = { code: e?.code ?? null, message: String(e?.message ?? e).slice(0, 200) }; }
+        out.hostedBytes[tier] = { ms: Date.now() - t0, bytes: bytes ? bytes.length : null, error };
+        check(bytes && sha256(bytes) === h, `[creator] 托管端 ${tier} 字节与哈希相符`, out.hostedBytes[tier]);
       }
     };
 
