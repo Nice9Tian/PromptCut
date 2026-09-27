@@ -19,15 +19,16 @@ import { startSessionGateway, startLegacyFront } from './session-gateway-kit.mjs
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 
-async function startEnv(t, { gateway = true } = {}) {
+async function startEnv(t, { gateway = true, direct = false } = {}) {
   const server = http.createServer((req, res) => { res.statusCode = 404; res.end(); });
   const built = createSharedDocService({ mode: 'lan', dataDir: null, store: null, server, path: '/docservice', isLoopback: () => true, localDevice: { deviceId: 'pc-test-device-0001', deviceName: 'test' }, log: () => {} });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const docUrl = `ws://127.0.0.1:${server.address().port}/docservice`;
-  const gw = gateway ? await startSessionGateway({ upstream: docUrl }) : null;
+  // direct：服务端会话层已合入（HT-a 集成），页面经代理直连真服务，不挡网关
+  const gw = gateway && !direct ? await startSessionGateway({ upstream: docUrl }) : null;
   // 没有网关时挡一层「旧服务端」前端：去掉会话项，服务端把页面当旧客户端（服务端会话层合入前后都成立）
-  const front = gw ? null : await startLegacyFront({ upstream: docUrl });
-  const proxy = await createTcpProxy({ target: gw ? gw.port : front.port });
+  const front = gw || direct ? null : await startLegacyFront({ upstream: docUrl });
+  const proxy = await createTcpProxy({ target: gw ? gw.port : direct ? server.address().port : front.port });
   const vite = await createVite({ configFile: false, root: ROOT, logLevel: 'silent', server: { middlewareMode: true, hmr: false, watch: null }, appType: 'custom', optimizeDeps: { noDiscovery: true, include: [] } });
   const links = [];
   t.after(async () => {
@@ -41,7 +42,7 @@ async function startEnv(t, { gateway = true } = {}) {
   });
   const { SyncLink } = await vite.ssrLoadModule('/src/editor/sync/link.ts');
   const { createEmptyProject } = await vite.ssrLoadModule('/src/kernel/project.ts');
-  const url = `ws://127.0.0.1:${proxy.port}/`;
+  const url = `ws://127.0.0.1:${proxy.port}/${direct ? 'docservice' : ''}`;
 
   function page(projectId) {
     const initial = createEmptyProject('page-test');
@@ -74,7 +75,7 @@ async function startEnv(t, { gateway = true } = {}) {
     return st;
   }
 
-  return { gw, proxy, page, body };
+  return { gw, proxy, page, body, service: built.service };
 }
 
 /** 在当前项目上改一处：第 i 条轨道的名字 */
@@ -157,4 +158,65 @@ test('SL-page-legacy 对着没有会话层的旧服务端：页面照旧能同�
   edit(link, 2);
   const again = await link.ds.whenSettled({ timeoutMs: 5000 });
   assert.equal(again.rev, settled.rev + 1);
+});
+
+// 〔裁〕2026-09-27 主会话（契约第 17 节）：用户看得到的行为不许因会话层而变。脱开期间项目被删，接续得 4410、reason 里带
+// 原关闭码 4004：页面收到的 CloseInfo 与连着时收到 4004 相同（fatal、不重连），界面据它弹同一个「项目已删除」
+// （syncManager 的 blocked 只看 CloseInfo 的 code / reason / fatal）。
+
+/** 等服务端把这个页面的会话看成脱开，回它的 connId */
+async function detachedConn(env) {
+  let connId = null;
+  await waitFor(() => {
+    const c = env.service.describe().conns.find((x) => x.detached);
+    connId = c?.connId ?? null;
+    return connId !== null;
+  }, 3000, '服务端脱开');
+  return connId;
+}
+
+for (const [code, reason] of [[4004, 'deleted'], [4003, 'removed']]) {
+  test(`SL-page-final 脱开期间被 ${code} ${reason} 结束（真服务会话层）：页面收到的 CloseInfo 与连着时相同，不重连`, async (t) => {
+    const env = await startEnv(t, { direct: true });
+    const { link, events } = env.page(`p-page-final-${code}`);
+    await waitFor(() => link.ds.status === 'online', 8000, '页面同步接上');
+    edit(link, 1);
+    await link.ds.whenSettled({ timeoutMs: 5000 });
+    env.proxy.mode = 'reject';
+    env.proxy.cutAll();
+    const connId = await detachedConn(env);
+    assert.equal(env.service.closeConn(connId, code, reason), true, '服务端在脱开期间结束会话');
+    env.proxy.mode = 'pass';
+    await waitFor(() => events.closes.length === 1, 5000, '页面收到断线');
+    assert.deepEqual(events.closes, [{ code, reason, fatal: true, neverOpened: false }]);
+    await sleep(400);
+    assert.equal(events.opens, 1, '不重连');
+    assert.equal(link.connected, false);
+
+    // 对照：连着时收到同一个码
+    const live = env.page(`p-page-final-live-${code}`);
+    await waitFor(() => live.link.ds.status === 'online', 8000, '对照页面接上');
+    const liveConn = env.service.describe().conns.find((x) => !x.detached && !x.legacy && x.connId !== connId)?.connId;
+    assert.ok(liveConn);
+    env.service.closeConn(liveConn, code, reason);
+    await waitFor(() => live.events.closes.length === 1, 5000, '对照页面收到断线');
+    assert.deepEqual(live.events.closes, events.closes, '脱开期间与连着时，页面收到的相同');
+  });
+}
+
+test('SL-page-4410-renew 脱开期间服务端以 1001 关停结束会话：页面按会重连的一类处理（不 fatal），建新会话后照常同步', async (t) => {
+  const env = await startEnv(t, { direct: true });
+  const { link, events } = env.page('p-page-renew');
+  await waitFor(() => link.ds.status === 'online', 8000, '页面同步接上');
+  env.proxy.mode = 'reject';
+  env.proxy.cutAll();
+  const connId = await detachedConn(env);
+  env.service.closeConn(connId, 1001, 'shutdown');
+  env.proxy.mode = 'pass';
+  await waitFor(() => events.opens === 2, 5000, '建新会话');
+  assert.equal(events.closes.length, 1);
+  assert.equal(events.closes[0].code, 4410);
+  assert.equal(events.closes[0].fatal, false);
+  edit(link, 1);
+  await link.ds.whenSettled({ timeoutMs: 5000 });
 });

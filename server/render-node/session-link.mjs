@@ -19,6 +19,8 @@
  *   - 会话结束才调 `onClose { code, reason }`：服务端以非「传输故障」的关闭码关（4003、4004、1013、1001、1002 等）；
  *     接续被拒（服务端先接受升级再以 4404 会话不存在 / 4410 会话已结束关，契约第 16 节第 1 条）；脱开超过
  *     `welcome.retainMs` 还没接续上；本端发现跳号（1002）或未确认的出站超过 `maxPendingBytes`（1013）。
+ *     4410 的 `reason` 里带着原关闭码；原码属于「连着时收到也不会重连」的 `FINAL_CLOSE`（4003、4004）时，报给
+ *     `onClose` 的是原关闭码与原因（脱开期间项目被删，上层照样看到 4004），其余报 4410（〔裁〕2026-09-27，契约第 17 节）。
  *     结束后未确认的消息丢弃（计入 `stats().dropped`），之后 `send` 丢弃并计数，按退避重新取凭证建新会话。
  *   - `close()`：先发 `{ type: 'session.close', code: 1000, reason: 'closed' }` 再关传输，服务端立刻结束会话；不再重连。
  *
@@ -74,6 +76,21 @@ export const CLOSE_SESSION_ENDED = 4410;
  * 服务端结束了会话，不接续（第 4.2 节「服务端主动关」）。
  */
 const TRANSPORT_FAULT = new Set([1005, 1006, 1011, 1012, 1014, 1015]);
+/**
+ * 「连着时收到也不会重连」的关闭码：创建者操作的结果，4003 踢人 / 移出（`kicked` / `removed`）、4004 删项目（`deleted`），
+ * `auth-contract.md` 第 7 节；页面 `SyncLink` 的 `FATAL_CLOSE` 与它一致。脱开期间会话因这些码结束时，接续得到的 4410
+ * 按原关闭码报给上层、不重建，使上层与连着时收到该码一样（〔裁〕2026-09-27 主会话，契约第 17 节）。
+ */
+export const FINAL_CLOSE = new Set([4003, 4004]);
+
+/**
+ * 4410 的 `reason`（服务端写法 `session-closed <原关闭码>[ <原原因>]`，契约第 4.1 节）里取出原关闭码与原因；
+ * 不是这个写法回 null。
+ */
+export function closedCodeOf(reason) {
+  const m = /^session-closed (\d{4})(?: ([\s\S]*))?$/.exec(typeof reason === 'string' ? reason : '');
+  return m ? { code: Number(m[1]), reason: m[2] ?? '' } : null;
+}
 
 /** HT-b 用的降级原因（第 4.3 节第 5 条）；HT-a 不降级 */
 export const FALLBACK_REASONS = Object.freeze(['ws-error', 'ws-timeout', 'ws-closed']);
@@ -541,7 +558,14 @@ export function createDocEndpoint({
       // 这次握手没成
       if (rec.kind === 'resume') {
         if (code === CLOSE_NO_SESSION || code === CLOSE_SESSION_ENDED) {
-          say('session.lost', { code });
+          // 脱开期间会话因「连着时收到也不会重连」的码结束（例如项目被删）：按原关闭码报，上层与连着时收到一样
+          const orig = code === CLOSE_SESSION_ENDED ? closedCodeOf(reason) : null;
+          if (orig && FINAL_CLOSE.has(orig.code)) {
+            say('session.lost', { code, closedCode: orig.code });
+            endSession(orig.code, orig.reason, { notify: false });
+            return;
+          }
+          say('session.lost', { code, closedCode: orig ? orig.code : null });
           endSession(code, reason || (code === CLOSE_NO_SESSION ? 'no-session' : 'session-closed'), { notify: false });
           return;
         }

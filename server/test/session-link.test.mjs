@@ -10,7 +10,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createDocService } from '../docservice/service.mjs';
-import { createDocEndpoint, transportOf, wsUrlOf, httpUrlOf, utf8Length, SESSION_DEFAULTS } from '../render-node/session-link.mjs';
+import { createDocEndpoint, transportOf, wsUrlOf, httpUrlOf, utf8Length, SESSION_DEFAULTS, closedCodeOf, FINAL_CLOSE } from '../render-node/session-link.mjs';
 import { createTcpProxy, waitFor, sleep } from './fake-ws-kit.mjs';
 import { startSessionGateway, startLegacyFront } from './session-gateway-kit.mjs';
 
@@ -291,4 +291,104 @@ test('SL-ack-bytes 收到的未确认原文满 64 KiB 就立刻单发 session.ac
   } finally {
     ep.close();
   }
+});
+
+// ------------------------------------------------------------------ 4410 的上报（〔裁〕2026-09-27 主会话，契约第 17 节）
+// 用户看得到的行为不许因会话层而变：脱开期间会话因「连着时收到也不会重连」的码（4003 / 4004）结束，接续得到 4410 时，
+// 上层收到的是原关闭码，与连着时收到一样；原关闭码属于会重连的那类（或 reason 里没有原关闭码）才报 4410 并重建。
+
+/** 真服务（有会话层）前面挡一个 TCP 代理，端点经代理连 */
+async function realPair(t, { retainMs = 60_000, renew = true } = {}) {
+  const mod = slModule();
+  const service = createDocService({
+    log: () => {}, autoTick: false, modules: [mod], retainMs,
+    authenticate: () => ({ userId: 'u-sl', tenantId: 't-sl' }),
+  });
+  const { port } = await service.listen(0, '127.0.0.1');
+  t.after(() => service.close());
+  const proxy = await createTcpProxy({ target: port });
+  t.after(() => proxy.close());
+  const logs = [];
+  const ep = createDocEndpoint({
+    url: `ws://127.0.0.1:${proxy.port}/`, protocols: () => ['promptcut.v1'], backoff: BACKOFF, transport: 'ws', renew,
+    log: (event, fields) => logs.push({ event, ...fields }),
+  });
+  t.after(() => ep.close());
+  const ev = watch(ep);
+  await waitFor(() => ev.opens === 1, 3000, '建会话');
+  const health = async () => (await fetch(`http://127.0.0.1:${port}/healthz`)).json();
+  return { service, mod, port, proxy, ep, ev, logs, health };
+}
+
+/** 让会话脱开（代理拒绝新连接、掐断现有的），等服务端看到脱开 */
+async function detach(pair) {
+  pair.proxy.mode = 'reject';
+  pair.proxy.cutAll();
+  await waitFor(async () => (await pair.health()).sessions.detached === 1, 3000, '服务端脱开');
+}
+
+test('SL-closed-code 4410 的 reason 里取原关闭码：session-closed <码>[ <原因>]；别的写法回 null', () => {
+  assert.deepEqual(closedCodeOf('session-closed 4004 deleted'), { code: 4004, reason: 'deleted' });
+  assert.deepEqual(closedCodeOf('session-closed 4003 removed'), { code: 4003, reason: 'removed' });
+  assert.deepEqual(closedCodeOf('session-closed 1006 timeout'), { code: 1006, reason: 'timeout' });
+  assert.deepEqual(closedCodeOf('session-closed 1000'), { code: 1000, reason: '' });
+  assert.equal(closedCodeOf('session-closed'), null);
+  assert.equal(closedCodeOf('no-session'), null);
+  assert.equal(closedCodeOf(undefined), null);
+  assert.deepEqual([...FINAL_CLOSE].sort(), [4003, 4004]);
+});
+
+for (const [code, reason] of [[4004, 'deleted'], [4003, 'kicked'], [4003, 'removed']]) {
+  test(`SL-4410-final 脱开期间服务端以 ${code} ${reason} 结束会话：接续得 4410，上层收到的是 ${code} ${reason}，与连着时一样`, async (t) => {
+    const pair = await realPair(t, { renew: false });
+    const connId = pair.mod.connects[0];
+    await detach(pair);
+    assert.equal(pair.mod.ctx.close(connId, code, reason), true, '服务端关掉脱开中的会话');
+    await waitFor(() => pair.mod.disconnects.length === 1, 3000, '服务端断线');
+    pair.proxy.mode = 'pass';
+    await waitFor(() => pair.ev.closes.length === 1, 5000, 'onClose');
+    assert.deepEqual(pair.ev.closes, [{ code, reason }], '按原关闭码与原因报');
+    assert.equal(pair.ev.resumes, 0);
+    assert.ok(pair.logs.some((l) => l.event === 'session.lost' && l.code === 4410 && l.closedCode === code), '日志里记着 4410 与原码');
+    // 对照：连着时收到同一个码，上层看到的一样
+    const live = await realPair(t, { renew: false });
+    live.mod.ctx.close(live.mod.connects[0], code, reason);
+    await waitFor(() => live.ev.closes.length === 1, 3000, '连着时的 onClose');
+    assert.deepEqual(live.ev.closes, pair.ev.closes, '脱开期间与连着时，上层收到的相同');
+  });
+}
+
+test('SL-4410-final-renew 缺省 renew 的端点（节点）：脱开期间删项目，onClose { 4004 } 后与连着时一样按退避建新会话', async (t) => {
+  const pair = await realPair(t);
+  await detach(pair);
+  pair.mod.ctx.close(pair.mod.connects[0], 4004, 'deleted');
+  await waitFor(() => pair.mod.disconnects.length === 1, 3000, '服务端断线');
+  pair.proxy.mode = 'pass';
+  await waitFor(() => pair.ev.opens === 2, 5000, '新会话');
+  assert.deepEqual(pair.ev.closes, [{ code: 4004, reason: 'deleted' }]);
+});
+
+for (const [code, reason] of [[1013, 'backpressure'], [1001, 'shutdown'], [1000, '']]) {
+  test(`SL-4410-renew 脱开期间会话以会重连的 ${code} 结束：照报 4410 并重建`, async (t) => {
+    const pair = await realPair(t);
+    await detach(pair);
+    pair.mod.ctx.close(pair.mod.connects[0], code, reason);
+    await waitFor(() => pair.mod.disconnects.length === 1, 3000, '服务端断线');
+    pair.proxy.mode = 'pass';
+    await waitFor(() => pair.ev.opens === 2, 5000, '重建会话');
+    assert.equal(pair.ev.closes.length, 1);
+    assert.equal(pair.ev.closes[0].code, 4410);
+    assert.equal(closedCodeOf(pair.ev.closes[0].reason)?.code, code, `reason 里带原码：${pair.ev.closes[0].reason}`);
+  });
+}
+
+test('SL-4410-expired 保留期满：报 4410（墓碑 1006 timeout）或本端先判出期满（1006 retain-expired），都重建，不报 4003 / 4004', async (t) => {
+  const pair = await realPair(t, { retainMs: 300 });
+  await detach(pair);
+  await waitFor(() => pair.mod.disconnects.length === 1, 3000, '保留期满');
+  pair.proxy.mode = 'pass';
+  await waitFor(() => pair.ev.opens === 2, 5000, '重建会话');
+  assert.equal(pair.ev.closes.length, 1);
+  const c = pair.ev.closes[0];
+  assert.ok(c.code === 1006 || (c.code === 4410 && closedCodeOf(c.reason)?.code === 1006), JSON.stringify(c));
 });

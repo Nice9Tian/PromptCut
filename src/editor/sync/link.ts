@@ -10,7 +10,8 @@
  * - 分发:`project.*` 交给 DocSync;带 `reqId` 的回包交给等它的 `request()`;其余(`shared.*`、`events.*`、
  *   `error` 等)交给 `onMessage`。
  * - 关闭码 4003(`kicked` / `removed`)、4004(`deleted`)是创建者操作的结果(契约 `auth-contract.md` 第 7 节),
- *   不再重连,由 `onClosed` 告诉界面弹阻断弹窗。
+ *   不再重连,由 `onClosed` 告诉界面弹阻断弹窗。传输脱开期间会话因这两个码结束的,会话层把接续得到的 4410
+ *   还原成原关闭码报上来(`session-link.mjs` 的 `FINAL_CLOSE`,与本文件的 `FATAL_CLOSE` 一致),界面照样弹。
  *
  * 不认识 store,也不认识界面:浏览器与 Node(测试)通用,WebSocket 可以注入。
  */
