@@ -20,6 +20,8 @@
  *
  * ## KV 键(`c66t9.<run>.<名>`)
  *   config          creator → observer、host:托管地址、项目名与 id、成员口令、两档哈希、卡片 key、v1 / v2 记号、v1 源码……
+ *   observer.small  observer → creator:小尺寸出画面并稳定了(或没出小尺寸);creator 收到才续传原尺寸
+ *   resumed         creator → observer:续传的时刻(观察端出第一帧时它还不该在)
  *   host.ready      host → creator:主机起来了(creator 等它才加重卡片段、发布预渲染任务)
  *   plan            creator → host:这一版 plan 的细任务 id、每个任务收到 task.done 的次数、本机节点做了哪些
  *   editready       creator → observer:可以改卡了(plan 落定之后)
@@ -35,10 +37,15 @@
  *      `PROMPTCUT_SHARED_CONFIG` 指向以创建者身份、`role: 'render'` 连这个项目的配置 —— 预渲染进程是发布方的本机节点;
  *   3. 页面新建项目、放一个用户卡片段,以创建者身份进入共享项目(`syncManager.enterShared`);
  *      等页面把托管端素材服务交给上传队列(`GET /api/media/upload-queue` 的 `target.base`);
- *   4. ffmpeg 现场生成 1920×1080、30 fps、6 s、顶上一条 10 格帧号条纹的测试视频(moov 在尾),经素材库的文件输入
- *      (页面导入路径,`?tiers=1`)导入;等项目里 `tiers.small` 出现、上传队列清空;核对托管端两档的 `chunks`
- *      都 `complete`(边传边问,记各自第一次 complete 的时刻),编辑器日志里这个素材是先小后大;
- *   5. 写 KV `config`;等 host 报 `host.ready`;等页面测量空闲,按成本记录的「人工钉死」(`pinnedHeavy`)给重卡片段的身份
+ *   4. ffmpeg 现场生成 1920×1080、30 fps、6 s、顶上一条 10 格帧号条纹、条纹以下铺随机噪声、定码率 56 Mbit/s 的测试视频
+ *      (约 44 MB,按素材服务 8 MiB 一片至少 4 片;moov 在尾),经素材库的文件输入(页面导入路径,`?tiers=1`)导入;
+ *      小尺寸一在托管端 complete(编辑器日志的 `upload.tier-done` 或 `chunks`),就经编辑器进程的
+ *      `POST /api/media/upload-queue/target { base: null }` 暂停上传队列,核对原尺寸没 complete、1.5 s 后仍没 complete、
+ *      素材还在队里(正在传的那一片会回 401,队列记一次 `upload.retry`,不丢);
+ *   5. 写 KV `config`(带暂停的时刻与原尺寸已到的片数),放观察端进来;后台等观察端 KV `observer.small`(小尺寸出画面并稳定),
+ *      再驱动页面自己的 `startUploadTarget`(进入共享项目时 `connectSharedAssets` 调的那个,在同一条连接上签 rw 素材票据)
+ *      把上传目标交回编辑器进程,写 KV `resumed`;等原尺寸 complete、上传队列清空,核对日志先小后大、续传时小尺寸一片没重发、
+ *      托管端两档字节与哈希相符。与此同时:等 host 报 `host.ready`;等页面测量空闲,按成本记录的「人工钉死」(`pinnedHeavy`)给重卡片段的身份
  *      写一条记录(device 串取页面自己写过的用户卡记录上的那个),等预渲染进程也收到;再加重卡片段(16 秒 `probe-typewriter`,
  *      审阅过的独立推帧卡、共享档,参数带本轮的盐,结果键全新)。实测判重在机器忙闲之间会翻(见 AGENT-c66-t9-fix 报告),
  *      钉死之后两端都判重,预渲染集合里一定有它;
@@ -49,6 +56,8 @@
  * ## --role observer(笔记本辅助节点,或本机替身)
  *   从 KV 取配置;起编辑器 B,环境里删掉 `PROMPTCUT_QUEUE_NODE`、`PROMPTCUT_SHARED_CONFIG`(结果里记下两者为空,
  *   并记 B 的 `GET /api/frames/queue`);页面以成员身份进入;断言:
+ *   - 出第一帧时原尺寸还在路上:`config.pause` 说创建方暂停时原尺寸没 complete,且此刻 KV 里还没有 `resumed`;
+ *     小尺寸稳定(或没出小尺寸)后写 KV `observer.small`,创建方收到才续传;换档因此必属「覆盖」情形(断言 `swapMode`);
  *   - 素材层先以素材小尺寸出现:可见舞台里**显示着的** `<video>` 第一次解出画面时,来源是小尺寸哈希;
  *     播放头停在 2.5 s,读顶上条纹的帧号(tier-switch-probe 的读法),稳定后记下;素材原尺寸到齐后换成原尺寸,
  *     换档后同一时刻的帧号与换档前相差不超过一帧;换档期间逐帧(rAF)采样没有黑帧;
@@ -586,9 +595,11 @@ async function runCreator(out) {
       }, 120_000, 300);
       out.uploadQueue = drained ? { uploaded: drained.uploaded ?? null, failures: drained.failures ?? null,
         lastError: drained.lastError ? { code: drained.lastError.code ?? null, message: String(drained.lastError.message ?? '').slice(0, 120) } : null } : null;
-      // 编辑器日志里这个素材的上传顺序(暂停时正在传的那一档中断后会重来一次 tier-start,连着相同的只算一次)
+      // 编辑器日志里这个素材的上传顺序。暂停(上传目标置空,票据随之清掉)会让正在传的原尺寸那一片回 401,队列记一次
+      // `upload.retry`、素材留在队里;续传时这个素材从头再走一遍:小尺寸问 chunks 已齐、一片不发,原尺寸只补缺的片
       const short = (h) => (h === smallHash ? 'small' : h === media.original ? 'original' : h?.slice(0, 8));
       const order = [];
+      const sent = [];
       for (const line of A.log) {
         const m = /\[media-tiers\] (upload\.(?:tier-start|tier-done|item-done|retry)) (\{.*\})$/.exec(line);
         if (!m) continue;
@@ -596,11 +607,20 @@ async function runCreator(out) {
         try { f = JSON.parse(m[2]); } catch { continue; }
         if (f.id !== media.original) continue;
         order.push(m[1] === 'upload.item-done' ? 'item-done' : m[1] === 'upload.retry' ? 'retry' : `${m[1].slice(7)} ${short(f.hash)}`);
+        if (m[1] === 'upload.tier-done') sent.push({ tier: short(f.hash), attempt: order.filter((x) => x === 'retry').length + 1, sent: Array.isArray(f.sent) ? f.sent.length : null });
       }
       out.uploadOrder = order;
-      const collapsed = order.filter((x) => x !== 'retry').filter((x, i, a) => i === 0 || x !== a[i - 1]);
-      check(JSON.stringify(collapsed) === JSON.stringify(['tier-start small', 'tier-done small', 'tier-start original', 'tier-done original', 'item-done']),
-        '[creator] 上传队列日志:先小后大', order);
+      out.uploadSent = sent;
+      const attempts = [[]];
+      for (const x of order) { if (x === 'retry') attempts.push([]); else attempts.at(-1).push(x); }
+      const first = attempts[0];
+      const last = attempts.at(-1);
+      const lastNoSmall = last.filter((x) => !x.endsWith(' small'));
+      check(first[0] === 'tier-start small' && first[1] === 'tier-done small' && !first.includes('tier-done original')
+        && JSON.stringify(lastNoSmall) === JSON.stringify(['tier-start original', 'tier-done original', 'item-done'])
+        && (last.length === 3 || JSON.stringify(last.slice(0, 2)) === JSON.stringify(['tier-start small', 'tier-done small'])),
+        '[creator] 上传队列日志:先小后大(暂停前小尺寸传完、原尺寸没传完;续传后原尺寸传完出队)', order);
+      check(sent.filter((x) => x.tier === 'small' && x.attempt > 1).every((x) => x.sent === 0), '[creator] 续传时小尺寸一片没重发', sent);
       for (const [tier, h] of [['small', smallHash], ['original', media.original]]) {
         if (!h) continue;
         const bytes = await cli.get('media', h).catch(() => null);
