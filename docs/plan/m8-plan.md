@@ -82,11 +82,17 @@ M8 本身的探针分支（第 6 节）不依赖 C10、M7 合入，可以现在�
 
 | 编号 | 场景 | 谁跑 | 探针 | 命令形状 | 判据 | 证据 |
 |---|---|---|---|---|---|---|
-| K1-X | 两种指纹各 4 个节点（PC 4 个指纹 X、笔记本 4 个指纹 Y），200 个任务，一半的卡已被另一种指纹锁住；经阿里云主实例 | PC、笔记本各一半 | **要写** `m8-scale-probe.mjs --case k1`（假节点，按 `render-queue-e2e.mjs` 的写法，一个进程开多个节点连接，每个节点 `node.hello` 带给定指纹；锁用契约 F 节的卡片级指纹锁） | PC `--role coord+nodes --fingerprint X --nodes 4 --tasks 200 --lock-half`；笔记本 `--role nodes --fingerprint Y --nodes 4` | 稳态下 `card-locked` 拒绝 0 次，竞态窗口内 ≤ 认领总数的 1%；不匹配的节点收到已锁卡的 `task.opened` 0 条（K2 顺带）；结论与本机（M5b：过滤开 0、过滤关 400）一致 | 两边的拒绝计数、`task.opened` 计数；对照组数字（第 7 节 D4） |
-| I1-X | 20 个项目，每个项目 10 个节点只订阅本项目（PC 100 条连接、笔记本 100 条）；对项目 A 连续发布、认领、完成 500 次 | PC、笔记本各一半 | `m8-scale-probe.mjs --case i1`（20 个探针共享项目由 PC 以创建者建、跑完删掉） | PC `--role coord+nodes --projects 1-10`；笔记本 `--role nodes --projects 11-20` | 非 A 的节点收到 A 的消息 0 条；每条增量的实际投递次数等于能看见它的连接数（I2 顺带）；阿里云 RSS、CPU、带宽记进报告 | 每个节点收到的消息计数；阿里云资源采样 |
+| K1-X | 两种指纹各 4 个节点（PC 4 个指纹 X、笔记本 4 个指纹 Y），200 个任务，一半的卡已被另一种指纹锁住；经阿里云主实例。两种顺序各跑一轮：`--order join-first`（缺省，M5b 的顺序：节点报到后才发布死任务并锁卡）、`--order lock-first`（节点报到前就锁好） | PC、笔记本各一半 | `m8-scale-probe.mjs --case k1`（分支 `claude/m8-scale`；假节点，按 `render-queue-e2e.mjs` 的写法，一个进程开多个节点连接，每个节点 `node.hello` 带给定指纹；锁用契约 F 节的卡片级指纹锁） | PC `--role coord+nodes --place cloud --case k1 --workers pc,laptop --fingerprint X --nodes 4 --tasks 200 [--order lock-first]`；笔记本 `--role worker --place cloud --case k1 --name laptop --fingerprint Y --nodes 4`〔裁〕 | 〔裁〕稳态下 `card-locked` 拒绝 0 次（硬）；竞态窗口内的拒绝 ≤ 本轮节点总数（硬）；窗口时长只记录；`lock-first` 那一轮另要求稳态 0、竞态 0；不匹配的节点收到已锁卡的 `task.opened` 0 条（K2 顺带，计法见下）；结论与本机（M5b：过滤开 0、过滤关 400）一致 | 两边的拒绝计数（稳态 / 竞态分开）、窗口时长、`task.opened` 计数；对照组数字（第 7 节 D4） |
+| I1-X | 〔裁〕20 个**队列项目**（`i1p01`～`i1p20`），分在 `--spaces`（缺省 2）个探针共享项目里；每个项目 10 个节点只 watch 本项目（PC 100 条连接、笔记本 100 条）；对项目 A（`i1p01`）连续发布、认领、完成 500 次 | PC、笔记本各一半 | `m8-scale-probe.mjs --case i1`（`--spaces` 个探针共享项目由 PC 以创建者建、跑完删掉） | PC `--role coord+nodes --place cloud --case i1 --workers pc,laptop --projects 1-10 [--sample]`；笔记本 `--role worker --place cloud --case i1 --name laptop --projects 11-20`〔裁〕 | 非 A 的节点收到 A 的消息 0 条、任何任务消息 0 条；A 的每个任务 `task.closed(done)` 的实际投递次数等于 watch 了 A 的连接数，opened / taken 不超过（I2 顺带）；阿里云 RSS、CPU、带宽记进报告 | 每个节点收到的消息计数；阿里云资源采样 |
 
 - 两项都是真实多端的「连接分在两台机器上、经公网到阿里云」，不渲染；不带耗时门槛，PC 过即可。
 - 阿里云是 2 核 2 GiB：I1 的 200 条连接先在演练实例上跑一遍看内存，再上主实例（主执行计划第 9 节风险表）。
+- 〔裁〕2026-09-28 主会话，计划门槛、不涉及语义：
+  - **K1 竞态上限**。原文「稳态下 `card-locked` 拒绝 0 次，竞态窗口内 ≤ 认领总数的 1%」。为什么改：1% 来自 M5b 冻结时钟的单进程场景台（锁定前后不推进时钟，窗口是 0）；跨机有天然的传播窗口，节点收到死任务、还没收到撤回时 tick 就会认领一次。每个节点同时只有一条认领在路上，所以每阵锁变更最多被拒「节点数」次，而 200 个任务时认领总数约 130，1% 只容 1 次；本机替身实测 4 次、8 次、6 次，稳态都是 0，窗口最长 26～28 ms。改成：稳态拒绝 = 0（硬）；竞态窗口内拒绝 ≤ 本轮节点总数（硬，协议能保证的上界）；窗口时长只记录；两种顺序各跑一轮，`lock-first` 那一轮另要求稳态 0、竞态 0。「稳态」按节点自己的消息顺序切：收到第一条活任务的 `task.opened` 之后算稳态（不靠两台机器的时钟）。
+  - **K2 计法**。原文只说「不匹配的节点收到已锁卡的 `task.opened` 0 条」。跨机没有统一的「锁定之后」时刻，改成按节点自己的消息顺序判：活任务里锁指纹与节点不同的，收到就算；死任务在锁定之前的第一次可见不算，撤回之后再可见、或第二次可见才算。
+  - **I1 的项目**。原文「20 个探针共享项目由 PC 以创建者建」。为什么改：托管端同一来源地址每小时只许建 10 个共享项目（`server/auth/http.mjs` 的 `CREATE_PER_HOUR`，不动），20 个会回 429。改成：20 个队列项目分在 `--spaces` 个共享项目里，这正是 I1 的原始定义（按 watch 隔离），同时证共享项目之间的隔离。
+  - **命令形状**。原文的 `--role nodes` 改为探针实际的 `--role worker`（要 `--name`）；coordinator 要 `--workers pc,laptop`；`--lock-half` 是缺省，不必写。
+  - **D4 对照组**（第 7 节）：没有运行时开关；在 PC 本机用 `--role all --case k1 --prefilter off`，经模块加载钩子只在本机托管组合里把过滤缺省值改成关，不改生产代码。
 
 ### 2.3 异地接入托管（替代「笔记本在手机热点下」）
 
@@ -167,13 +173,13 @@ M8 本身的探针分支（第 6 节）不依赖 C10、M7 合入，可以现在�
 - **判据**（同 X7 加 E3）：两端重连后 epoch 变了；旧认领回 `lease-lost { reason: 'epoch' }`；发布方重新发布后全部完成；重启前已在素材服务里的任务直接完成、不重渲；在线页面恢复同步、没有丢改动（重启前页面的最后一次提交在重启后可读）；J-全完、J-恰一（按 epoch 计）、J-纯层。
 - **证据**：重启时刻与 `pm2 describe` 的重启次数；前后 epoch；各节点 `stats`；页面的同步状态记录。重启断开所有连接，时间与影响写进报告（主执行计划第 0.3 节）。
 
-#### C3 代理丢包 10%
+#### C3 代理扰动 10% 的数据块（原任务书叫「代理丢包 10%」）
 
-- **本机代理用哪个**：`scripts/probes/render-queue-proxy.mjs --loss 0.1`（任务书 E2「代理丢包」原本就指它）。它在 TCP 之上转发，**不真丢字节**（丢了会破坏 WebSocket 帧），而是把 10% 的数据块扣住 200～1000 ms 再按序发，模拟 TCP 重传造成的队头阻塞。
+- **本机代理用哪个**：`scripts/probes/render-queue-proxy.mjs --stall-prob 0.1`（旧名 `--loss` 仍认；任务书 E2「代理丢包」原本就指它）。它在 TCP 之上转发，**不真丢字节**（丢了会破坏 WebSocket 帧），而是把 10% 的数据块扣住 200～1000 ms 再按序发，模拟 TCP 重传造成的队头阻塞。
 - **谁跑**：笔记本（代理在笔记本上，主机经 `127.0.0.1:5596` → 阿里云 8787；放本机时 → PC 局域网主机）；PC 发布。
-- **命令形状**：`node scripts/probes/render-queue-proxy.mjs --listen 127.0.0.1:5596 --target 8.219.80.16:8787 --loss 0.1`；主机的共享项目配置 `url` 指向代理（同 `ht-w-probe.mjs --cut proxy` 的配法）。
+- **命令形状**：`node scripts/probes/render-queue-proxy.mjs --listen 127.0.0.1:5596 --target 8.219.80.16:8787 --stall-prob 0.1`；主机的共享项目配置 `url` 指向代理（同 `ht-w-probe.mjs --cut proxy` 的配法）。
 - **补充（可选）**：真正的内核层丢包，在阿里云上用 `tc qdisc … netem loss 10%`，只对 8787 / 8788 的出方向（加过滤，不碰 22 端口），并用 `timeout` 或一次性 `at` 任务保证到时自动删掉。先预检 `sch_netem` 模块在不在（P-C3，第 4 节）；不在就不做，只记差异。
-- **判据**：J-全完、J-恰一、J-纯层；任务不因丢包被误判失败（`attempts` 不异常增加）；记录总耗时与无丢包时的比值（只记录，不设门槛）。
+- **判据**：J-全完、J-恰一、J-纯层；任务不因数据块受扰被误判失败（`attempts` 不异常增加）；记录总耗时与不扰动时的比值（只记录，不设门槛）。
 - **证据**：代理的 `summary` 行（扣住的块数、时长）；探针结果行；若做了 netem，`tc -s qdisc` 的丢包计数。
 
 #### C4 放本机的项目的主机素材服务重启（必须 PC）
@@ -234,6 +240,11 @@ M8 本身的探针分支（第 6 节）不依赖 C10、M7 合入，可以现在�
 | `REPORT-C10a.md` 第 5 节 | 真手机扫码（iPhone 相机、微信）；iOS 逐帧导出的最长时长与体积 | 不能由会话替代，记待用户项（第 8.3 节）；可选：笔记本 Chrome 用手机视口加 CPU 节流跑 `c10a-demo-probe`（只作参考） | — |
 | `REPORT-M6.md` 第 2 节 | H5、H6、H9、H10 只有单进程测试 | 可选顺带：E1 放云端那一遍里加 `render-host-probe.mjs --role auth-check --rate-limit` 从笔记本跑（H4、H7、H8 的跨机部分） | 不是遗留，只是顺带再证 |
 | `HANDOFF-2026-09-28.md` 第 6 节 | 1080p 编码、`tiers-probe` T4 | 第 2.7 节 | — |
+| `REPORT-M5.md`（M5a 部分） | X6「物理断网后接手」当时用代理模拟断开，没有真断网 | C1（笔记本断网 30 s） | 总报告骨架查出的缺口，2026-09-28 补 |
+| 各阶段 | 两台真不同环境指纹的机器之间从没跨机测过（PC 与笔记本指纹相同） | E6（测试开关与纯浏览器节点两种，D12） | 真不同指纹的两台机器仍记待跨机复核；2026-09-28 补 |
+| `REPORT-M5.md`（M5b 部分、W4） | W4 要求的跨机 E1、E2、E6、K1 没有报告 | E1、E2、E6、K1-X | 2026-09-28 补 |
+| `HANDOFF-http-transport.md`、`REPORT-HT-a.md` 第 2 节 | HT 第一版 HT6：云端节点经 HTTP 加入并认领 | 归 HT-b（`TODO.md`），M8 不做 | HTTP 长轮询传输本身在 HT-b；2026-09-28 补 |
+| `REPORT-C6.6.md` | T9「改卡后 5 s 内重测」 | 第 2.7 节（笔记本判） | 2026-09-28 补来源 |
 
 ## 4. 要新写或改的探针（按依赖排序）
 
@@ -258,7 +269,7 @@ M8 本身的探针分支（第 6 节）不依赖 C10、M7 合入，可以现在�
 - **P-C1 查了资料、还要实测**（codex 检索微软文档）：新加的阻止规则不会当场拆掉已建立的连接；这条连接的下一个包触发重新授权，那时才被拦。长连接有心跳，所以第 1 种做法在一个心跳间隔内生效；空闲连接不保证。只加入站规则代替不了出站那一层的重新授权。笔记本上的实测仍按上表做，量「加规则到断流」的秒数。
 - **C3 的代理做法与资料一致**：用户态代理丢字节会打乱 WebSocket 帧，只能扣住再按序发、或按概率断开；报告里叫「10% 的数据块受扰」，不叫「10% 丢包」。真丢包用上一条的 netem。
 
-**可直接用于 M8 的现有探针**（不改）：`render-queue-e2e.mjs`（假任务的 E1、C2 的 epoch 重发）、`render-queue-proxy.mjs --loss`（C3）、`ht-w-probe.mjs --cut external`（C5-1）、`render-host-probe.mjs`（`--hosted`、`--lan`、`auth-check`）、`shared-project-probe.mjs --mode internet\|lan`（异地接入、SP4 回归）、`asset-lan-probe.mjs`（C4 之后）、`queue-mode-probe.mjs --lan --docservice-url --hold-min`（W4 形态的真实预渲染回归）、`probe-coord.mjs`（信箱与 KV，阿里云 `/coord`）、`ws-client-test.mjs`（握手冒烟）、`card-sync-probe.mjs`（卡片同步回归）、`stream-produce-probe.mjs`、`tiers-probe.mjs`、`tier-switch-probe.mjs`、`longtask-stacks.mjs`（第 2.7 节）、G0-R 的四个预渲染探针；C10 与 M7 交付的 `c10-browser-probe.mjs`（`--site`、`--role host` 由 `claude/c10-site` 加）、`c10-ui-probe`、`c10-cost-probe`、`lowmem-online-probe`、`small-tier-probe`、`c10a-demo-probe`、M7 的探针。
+**可直接用于 M8 的现有探针**（不改）：`render-queue-e2e.mjs`（假任务的 E1、C2 的 epoch 重发）、`render-queue-proxy.mjs --stall-prob`（C3）、`ht-w-probe.mjs --cut external`（C5-1）、`render-host-probe.mjs`（`--hosted`、`--lan`、`auth-check`）、`shared-project-probe.mjs --mode internet\|lan`（异地接入、SP4 回归）、`asset-lan-probe.mjs`（C4 之后）、`queue-mode-probe.mjs --lan --docservice-url --hold-min`（W4 形态的真实预渲染回归）、`probe-coord.mjs`（信箱与 KV，阿里云 `/coord`）、`ws-client-test.mjs`（握手冒烟）、`card-sync-probe.mjs`（卡片同步回归）、`stream-produce-probe.mjs`、`tiers-probe.mjs`、`tier-switch-probe.mjs`、`longtask-stacks.mjs`（第 2.7 节）、G0-R 的四个预渲染探针；C10 与 M7 交付的 `c10-browser-probe.mjs`（`--site`、`--role host` 由 `claude/c10-site` 加）、`c10-ui-probe`、`c10-cost-probe`、`lowmem-online-probe`、`small-tier-probe`、`c10a-demo-probe`、M7 的探针。
 
 **不用于 M8**：流与画面的原型探针（`stream-*`、`gl-*`、`pixelmap-*`、`backdrop-*`、`oac-probe` 等）、`snapshot-*`、`audio-determine-probe` —— 与多端联调无关。
 
