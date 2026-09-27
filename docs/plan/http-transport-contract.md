@@ -54,14 +54,15 @@
   - 等于「已收 + 1」：交给上层（服务端交 `router.dispatch`，客户端交 `onMessage`），已收加一；
   - 小于等于已收：是重发，丢弃；
   - 大于「已收 + 1」（跳号）：会话已坏，见第 3.5 节。
-- 确认随出站消息顺带（`ack` 字段）。收到的消息里还没确认的满 32 条，或 1 s 内没有顺带的机会，就单发一条 `{ type: 'session.ack', ack }`〔裁：取 Engine.IO、CometD 按批确认的做法，数字按消息小、频率不高定〕。
+- 确认随出站消息顺带（`ack` 字段）。收到的消息里还没确认的满 32 条，**或还没确认的消息原文满 64 KiB**，就立刻单发一条 `{ type: 'session.ack', ack }`；都不满时 1 s 内没有顺带的机会也单发〔裁：取 Engine.IO、CometD 按批确认的做法，数字按消息小、频率不高定〕。两端照同一条规则确认。
+  - 〔裁：2026-09-27 主会话，按字节确认〕只按条数与 1 s 确认会卡住大消息：`buffered` 是未确认字节（第 3.4 节），核心在它到高水位（64 KiB）后不再直接写，项目快照分片这类 64 KiB 级的消息每秒只能过一片左右；反方向客户端的未确认上限只有 1 MiB，对方 1 s 才确认一次时，一口气上传超过 1 MiB 就会结束自己的会话。服务端 `SESSION_DEFAULTS.ACK_BYTES`、客户端 `SESSION_DEFAULTS.ackBytes` 都是 64 KiB。
 - 发送方留着已发出、未确认的消息，按对方的 `ack` 释放。
 
 ### 3.4 背压
 
 - `buffered(connId)` = 这个会话里已写出、未确认的消息的字节数（已交给套接字的也算）。`drained(connId)`：`ack` 推进让它下降后调一次。
 - 高水位、`maxPendingBytes`、1013 `backpressure` 照 H.2 不变。传输断着的保留期里，未确认的字节一直涨，涨过 `maxPendingBytes` 同样以 1013 结束会话。合并键（H.3）照常，只对还没写出的消息生效。
-- 客户端方向：客户端留着未确认的出站消息，上限 1 MiB，超了就结束会话，报 `onClose { code: 1013 }`〔裁：与服务端的上限对称〕。
+- 客户端方向：客户端留着未确认的出站消息，上限 1 MiB，超了就结束会话，报 `onClose { code: 1013 }`〔裁：与服务端的上限对称〕。调用方可以按自己的突发量调这个上限（选项 `maxPendingBytes`）：页面是 32 MiB（第 17 节）。
 
 ### 3.5 出错
 
@@ -80,7 +81,10 @@
   - `promptcut.session.<sid>.<ack>`：接续。`ack` 是客户端已收全的服务端最大 `seq`（十进制）。接续项与鉴权项互斥，给了接续项就不能再给鉴权项；会话的身份就是建会话时的身份〔裁：会话号本身就是 bearer 凭证，再交一次证明要多耗一个一次性随机数，也多一次限速计数〕。
 - 回显照旧只回 `promptcut.v1`。
 - 建会话或接续成功后，服务端的第一条出站消息是 `{ type: 'session.welcome', sid, resumed, ack, retainMs, transport }`。其中 `ack` 是服务端已收全的客户端最大 `seq`，客户端据此补发。HTTP 的 `POST /lp/open` 回包带同样的字段（第 6.1 节）。
-- 接续失败：会话不存在回 404；已结束回 410，带 `code`、`reason`。WebSocket 在握手里回这两个状态码，HTTP 回 `404 { error: 'no-session' }`、`410 { error: 'session-closed', code, reason }`。客户端收到就丢掉旧会话，报 `onClose`，重新建会话（重新取一次性随机数）。
+- 接续失败：会话不存在、或已结束（墓碑还在）。
+  - **WebSocket**（第 16 节第 1 条）：服务端先接受升级（101），紧接着以 **4404** `no-session`（会话不存在）或 **4410** 关闭，关闭帧发出后不等对端。4410 的 `reason` 是 `session-closed <原关闭码>[ <原原因>]`（截到 123 字节），例如 `session-closed 4004 deleted`。接续项里的 `ack` 大于服务端发出过的最大 `seq`：以 1002 `bad-seq` 关闭，会话随之结束（第 3.5 节）。
+  - **HTTP**（HT-b）：`404 { error: 'no-session' }`、`410 { error: 'session-closed', code, reason }`。
+  - 客户端收到就丢掉旧会话，报 `onClose`，重新建会话（重新取一次性随机数）。例外：4410 的原关闭码是「连着时收到也不会重连」的 4003、4004 时，按原关闭码与原原因报 `onClose`、不走 4410 的重建，使上层与连着时收到该码一样（第 17 节〔裁〕）。
 
 ### 4.2 保留与结束
 
@@ -89,6 +93,7 @@
 - 死连接从出事到判为断线，最多是 30～90 s（心跳或 HTTP 空闲）加 60 s 保留，与 WebSocket 单靠心跳在同一量级（语义「会话与传输」）。
 - **主动结束**：客户端发 `{ type: 'session.close', code, reason }`（HTTP 是 `POST /lp/close`），服务端立刻 `router.disconnect`。主计划 X5「干净断开后接手 ≤ 17 s」按这一条算。
 - **服务端主动关**（踢人 4003、删项目 4004、背压 1013、关停 1001、跳号 1002）：会话立刻结束，不保留；客户端收到这些关闭码不接续。
+- **客户端怎么分**：只有 1005、1006、1011、1012、1014、1015（以及本端主动断传输）算传输故障，脱开后接续；其余关闭码（含 1000、4009）都当会话结束。被 4009 顶掉的一方不再接续，免得两个持有同一会话号的客户端来回抢。
 - **断线之后照旧**：订阅清空（核心在 `disconnect` 时做），队列按 G 节的规则回收租约，客户端重新交凭证建新会话，节点在新会话的 `onOpen` 里发 `hello.resume`。`hello.resume` 管租约，序号管消息，两者并存。
 
 ### 4.3 选传输（客户端）
@@ -102,11 +107,13 @@
    - 〔裁：浏览器与 Node 内置的 `WebSocket` 都读不到握手的状态码，分不清 401 与代理拒绝；沿用同一个随机数，就能让 HTTP 的回包来分辨，口令输错也不会被算成两次失败〕
 4. 两种都失败：按 G.7 的退避重来，下一次仍从 WebSocket 开始。
 5. **降级原因**：客户端在 HTTP 建连的请求头里带 `X-Promptcut-Fallback: <原因>`，原因取 `ws-error`（握手失败，客户端分不出细节时）、`ws-timeout`（10 s 没握上）、`ws-closed`（刚握上就被关）。原因里不含地址与凭证。服务端把它记进会话（第 8 节）；客户端打日志 `session.fallback { from: 'ws', to: 'http', reason }`。
-6. **开发者强制**：Node 进程读环境变量 `PROMPTCUT_TRANSPORT=ws|http`，探针用 `--transport ws|http`。设了就只用那一种，不降级。共享项目配置里没有 `transport` 字段（第 1 版加的删掉，见第 15 节）。
+6. **开发者强制**：Node 进程读环境变量 `PROMPTCUT_TRANSPORT=ws|http`，探针用 `--transport ws|http`。设了就只用那一种，不降级。共享项目配置里没有 `transport` 字段（第 1 版加的删掉，见第 15 节）。HT-a 里 `http` 未启用：`createDocEndpoint` 构造时抛 `code: 'transport-unavailable'`，探针退出码 2；缺省 `auto` 等同 `ws`。
+7. **旧服务端**（没有会话层）：握手成功后第一条消息不是 `session.welcome`，就退化为「一条传输一个会话」（消息不带 `seq`、`ack`，传输一断会话就结束，同 `createWsEndpoint`）。为了尽快分辨，握手后 250 ms 内一条消息都没收到就发一条 `{ type: 'session.ack', ack: 0 }` 探测：新服务端早已发了 welcome，旧服务端回 `error unsupported`（不交上层）。代价是对旧服务端建连多约 250 ms（第 17 节）。
 
 ### 4.4 端点的事件与断线期间的发送
 
-- `onOpen`：只在**建新会话**成功时调。节点在这里发 `hello.resume`，页面在这里重新订阅。
+- `onOpen`：只在**建新会话**成功时调，时机是收到 `session.welcome` 之后（不是 WebSocket 的 `open`）。节点在这里发 `hello.resume`，页面在这里重新订阅。
+- `connected`：会话在就为真，脱开、正在接续时也为真（这时 `send` 进缓冲）。第一次建会话之前的 `send` 丢弃并计入 `dropped`（同 `createWsEndpoint`）。
 - `onResume`：接续成功时调，不调 `onOpen`，所以接续后不重发 `hello.resume`。
 - `onClose { code, reason }`：会话结束时调。传输的断开与切换只进日志与 `stats()`。
 - 保留期内的 `send` 不丢：进客户端的未确认缓冲，接续后按序补发。会话结束后 `send` 才丢弃，计入 `stats().dropped`。这修订了 G.7「断线期间的消息一律丢弃」。
@@ -317,3 +324,52 @@
 1. **WebSocket 上的接续失败**（改第 4.1 节「WebSocket 在握手里回这两个状态码」）：浏览器与 Node 的 `WebSocket` 都读不到握手的状态码，客户端分不清「会话没了」与网络问题。改为服务端先接受升级、紧接着以 **4404**（会话不存在，对应 404 `no-session`）或 **4410**（会话已结束，对应 410 `session-closed`，`reason` 带原关闭码）关闭；客户端收到这两个关闭码就丢掉旧会话、报 `onClose`、重新建会话，不必等保留期满。HTTP（HT-b）仍按第 6 节回 404 / 410。
 2. **HT-a 的验收范围**：第 11 节 HT1、HT4 里 HTTP 的条目归 HT-b，HT-a 只验 WebSocket 那部分（主执行计划第 7 节 HT-a 同步写明）。
 3. `server/test/ht-kit.mjs` 顶部的假设 H1～H14（如选项名 `retainMs`、`/healthz.sessions` 对旧客户端的计数、`onOpen` 的时机）在集成时按实现对账，不改测试的判据。
+
+## 17. 实现记录（HT-a，2026-09-27 集成 `claude/ht-integ`）
+
+HT-a 由三条分支实现：服务端 `claude/http-transport`（报告 `docs/reports/AGENT-http-transport-ht-a.md`）、客户端 `claude/ht-client`（`docs/reports/AGENT-ht-client.md`）、测试方 `claude/ht-tests`（`docs/reports/AGENT-ht-tests.md`），在 `claude/ht-integ` 集成（`docs/reports/AGENT-ht-integ.md`）。本节记实现与本契约正文的出入、契约外的补充，以及主会话的裁定。正文已随之改的地方（第 3.3、3.4、4.1、4.2、4.3、4.4 节）在这里只列一行。
+
+### 17.1 主会话的裁定（2026-09-27）〔裁〕
+
+1. **按字节确认**：收下的未确认消息原文满 64 KiB 立刻单发 `session.ack`，两端照做（第 3.3 节已写入）。服务端 `SESSION_DEFAULTS.ACK_BYTES`，客户端 `SESSION_DEFAULTS.ackBytes`；单测 `docservice-session-ack.test.mjs`、`session-link.test.mjs` 的 SL-ack-bytes。
+2. **4410 的上报**：用户看得到的行为不许因会话层而变。脱开期间会话因「连着时收到也不会重连」的码结束（4003 踢人或移出、4004 删项目），接续得到 4410、`reason` 里带原关闭码时，客户端按原关闭码与原原因报 `onClose`，不走 4410 的重建，上层与连着时收到该码一样（页面照样弹「项目已删除」）；`reason` 里没有原关闭码、或原关闭码属于会重连的那类（1000、1001、1002、1006、1013 等），才报 4410 并重建。实现：`session-link.mjs` 的 `FINAL_CLOSE`（与页面 `link.ts` 的 `FATAL_CLOSE` 一致）与 `closedCodeOf()`；节点侧与页面 `SyncLink` 共用。对 `renew` 缺省为真的节点端点，报出原关闭码之后照连着时一样按退避建新会话。单测：`session-link.test.mjs` 的 SL-4410-final、SL-4410-final-renew、SL-4410-renew、SL-4410-expired，`session-link-page.test.mjs` 的 SL-page-final、SL-page-4410-renew。
+3. **没接会话层的调用方**：`server/card-sync.mjs`（编辑器进程与主机的卡片源码同步）、`scripts/probes/shared-project-lan.mjs`、`scripts/probes/render-host-probe.mjs`、`scripts/probes/c66-t9-probe.mjs` 的页面连接、管理接口的令牌连接（`asset-announce`）仍用 `createWsEndpoint`，不在第 2、15 节的接入清单里，这次不接。它们对新服务端是旧客户端（第 3.6 节），行为不变，只是传输断一次就断线。列为 HT-b 条目下的后续项（`docs/plan/TODO.md`）。
+4. **客户端的偏离接受**（第 17.2 节第 1～4 条）。
+
+### 17.2 客户端（`claude/ht-client`）与正文的出入、契约外的补充
+
+1. **旧服务端退化**（第 4.3 节第 7 条已写入）：握手后第一条不是 welcome 就退化成「一条传输一个会话」；250 ms 无消息发 `session.ack {ack:0}` 探测。〔裁：主会话接受〕
+2. **未确认上限**：页面 32 MiB（`link.ts` 的 `PAGE_MAX_PENDING_BYTES`），节点 1 MiB。页面的根替换分片上传（最多 64 片 × 128 Ki 字符）一口气发出几 MiB，第一条确认回来前就超过 1 MiB，会话被自己以 1013 结束、重建后重发、再超。〔裁：主会话接受〕
+3. **传输故障码**（第 4.2 节已写入）：只有 1005、1006、1011、1012、1014、1015 算传输故障会接续，其余（含 4009）当会话结束。〔裁：主会话接受〕
+4. **契约外的接口**：`onConnectFail(handler)`（建新会话没成时调，页面分辨口令错、doc-link 让 `open()` 失败）；`renew: false`（一个端点只跑一个会话，建新会话的节奏由调用方管：页面、doc-link）；`dropTransport()`（开发与测试：只断传输）；`welcomeTimeoutMs`（握手后 10 s 没 welcome 按握手失败）。另有调参选项 `maxPendingBytes`、`ackEvery`、`ackDelayMs`、`ackBytes`、`legacyProbeMs`，`stats()` 另有 `legacy`、`detached`、`mode`、`detaches`、`duplicates`。〔裁：主会话接受〕
+5. `connected` 在脱开期间仍为真；`onOpen` 在收到 welcome 之后；第一次建会话之前的 `send` 丢弃（第 4.4 节已写入）。
+6. `url` 收 `http(s)://` 时一律换成 WebSocket 地址；`PROMPTCUT_TRANSPORT=http` 在 HT-a 抛 `transport-unavailable`（第 4.3 节第 6 条已写入）。`fallbackAfter()`、`fetch`、`waitMs`、`httpUrlOf`、`FALLBACK_REASONS` 是给 HT-b 留的接口位置。
+7. 页面：`SyncLink` 一个端点一个会话（`renew: false`），传输断开时 DocSync 不离线、不重新 `project.open`、不重放，会话结束才 `ds.disconnect()`；`dropFor(ms)` 改为结束会话（离线对话框的验收仍用它），另有 `cutTransport()` 只断传输；开发钩子 `__pcSyncTest.cut()`、`__pcSyncTest.link()`。
+8. Agent 服务端 `doc-link.mjs`：每条对话连接一个会话（`renew: false`），传输中断在会话层接续，会话结束才算断线。
+9. 接入：`vite-plugin-frames.ts` 三处（预渲染推送、本机队列节点、独立渲染主机）改用 `createDocEndpoint`，第 1 版按 `entry.transport` 选端点的分支去掉；`hostAssetClient` 把 `https:` 文档服务地址推成 `https:` 素材地址保留（第 14 节）。`/api/frames/queue` 与队列诊断里每个节点多 `transport`、`resumes`、`legacy`。
+10. 探针 `shared-project-probe.mjs`、`render-queue-e2e.mjs`：`--transport auto|ws`，缺省自动；`http` 退出码 2。
+
+### 17.3 服务端（`claude/http-transport`）与正文的出入、契约外的补充
+
+1. **WebSocket 上的接续失败**按第 16 节第 1 条：先 101，再以 4404 / 4410 / 1002 关闭，关闭帧发出后不等对端（`ws.mjs` 的 `closeNow`）。4410 的 `reason` 格式 `session-closed <原关闭码>[ <原原因>]`（第 4.1 节已写入）。
+2. **接续项旁边多任何一项**（鉴权项、新会话项、第二个接续项）：握手 400。会话项写法不对同样 400。
+3. **选项名**：`createDocService` 新增 `retainMs`（缺省 60 000）、`tombstoneMs`（缺省 120 000）。第 1 版的 `httpCorsOrigins`、`httpWaitMs`、`httpIdleMs`、`httpTombstoneMs` 与 `handleLongPoll()` 删掉（HT-b 再接）。
+4. **`/healthz.sessions`**：旧客户端计入 `ws` 与 `legacy`，`opened` 连旧客户端一起累计（旧客户端也是会话）。`describe().conns[i]` 对旧客户端也有 `transport: 'ws'`、`detached: false`、`resumes: 0`。
+5. **日志**：另有 `session.fallback { connId, reason }`、`session.bad-seq { connId }`；`conn.open` 对旧客户端带 `legacy: true`。心跳超时对旧客户端照旧打 `conn.timeout`（断线），对讲会话的只脱开（`session.detach`）。
+6. **`maxConnections`** 按会话数算，含脱开的。`mount` 拒绝认领 `session.` 开头类型的模块。
+7. **本机信任开关**（第 10 节）：`createSharedDocService` 加 `trustLoopback`，`false` 时握手、共享 HTTP 端点、创建者操作限速三处的 `isLoopback` 一律回 false；托管组合把同一开关用于素材服务与管理接口，`trustLoopback: false` 而没有令牌抛 `cluster-token-required`。`server/hosted/main.mjs`、`server/docservice/main.mjs` 只认 `0` / `1`，别的值 `config.error trust-loopback`；`0` 无令牌 `config.error cluster-token-required`、退出码 1。
+8. **部署**：`hostedPm2Config` 的 env 写 `PROMPTCUT_TRUST_LOOPBACK: '0'`（正式、演练两个实例）；远端脚本在 `secrets/cluster-token` 不在时退出码 5、提示加 `--write-token`，在 `pm2 startOrReload` 之前停手。
+9. **HTTP 长轮询**（`server/docservice/http-transport.mjs`）：改到会话层下面，但不接线（HT-b 再接）。给 HT-b 定稿时写进第 6 节的：会话在、但当前挂的不是这条 HTTP 传输时 send / recv 回 `409 { error: 'superseded' }`（客户端经 `POST /lp/open` 接续）；第二个 POST 在途回 `409 { error: 'busy' }`；`bad-ack` 既回 400、会话也以 1002 结束。
+10. **节点端第 1 版 HTTP 客户端**（`server/render-node/http-transport.mjs`：`HttpWebSocket`、`createHttpEndpoint`）还是第 1 版协议，与改过的服务端不通；留作 HT-b 的底座，HT-a 里没有调用方，它的测试已删。第 14 节「节点端：错误归类」的改动留给 HT-b。
+
+### 17.4 测试方假设的对账（`server/test/ht-kit.mjs` 顶部 H1～H14，第 16 节第 3 条）
+
+- 只改了 kit 里的假设与折算，没有改用例的判据。
+- **H5**：原写「接续失败在握手里回 404 / 410」，写于第 16 节之前；`resumeStatus` 改为握手成功后读关闭帧，4404 折算 404、4410 折算 410，握手被拒的照回状态码。
+- **H7**：与实现一致，补注 `opened` 连旧客户端累计。**H11**：补注实现两条都做（收到 4404 / 4410 立刻重建；握不上时脱开超过 `welcome.retainMs` 也重建）。
+- 其余 H1～H4、H6、H8～H10、H12～H14 与实现一致。
+- 集成后 63 条 HT 用例（`ht-legacy`、`ht1`～`ht7`）全部真跑、不跳过。
+
+### 17.5 验收记录
+
+见 `docs/reports/AGENT-ht-integ.md` 第 3 节。HT7（阿里云外网三项拒绝）、跨机 W-HT-a、部署由主会话做。
