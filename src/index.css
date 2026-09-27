@@ -1,5 +1,30 @@
 @import "tailwindcss";
 
+/* Tailwind 自动扫描项目文件找类名。开发服务里，扫到的非模块文件（.md、.py、.json 等）一改，
+   @tailwindcss/vite 会不打日志地让所有打开的页面整页重载：会话写文档、提交报告时，用户常驻的
+   编辑器和正在跑的探针页面都会被重载（查证见 docs/reports 或其归档里的 AGENT-tailwind-scan.md）。
+   这里把不含界面类名的范围排除出扫描，路径相对于本文件。界面类名在 src/ 的组件、index.html
+   和 server/ 下的卡片源码（例如 server/catalog/magicui），这三处不能排除。 */
+@source not "../docs";
+@source not "../archive";
+@source not "../python";
+@source not "../desktop";
+@source not "../tools";
+@source not "../scripts";
+@source not "../server/test";
+@source not "../out";
+@source not "../dist";
+@source not "../data";
+@source not "../work";
+@source not "../.worktrees";
+@source not "../.claude";
+@source not "../**/*.md";
+@source not "../**/*.json";
+@source not "../proto.html";
+@source not "../*.bat";
+@source not "../.git";
+@source not "../.gitattributes";
+
 html, body, #root { height: 100%; margin: 0; background: #111; color: #eee; font-family: system-ui, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
 
 /* 拖面板时别让预览的 iframe 抢走鼠标(见 editor/ResizeHandle.tsx) */
