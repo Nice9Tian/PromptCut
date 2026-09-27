@@ -225,6 +225,14 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
     const timer = window.setInterval(() => { void pushMediaPolicy(); }, 5 * 60_000);
     return () => { off(); window.clearInterval(timer); };
   }, [lowMem, pushMediaPolicy]);
+  /* 低内存档切到后台时停预览(契约第 13 节 Q2 的采纳:后台计时器、rAF 都不保证继续,回来时从停着的地方接) */
+  useEffect(() => {
+    if (!ONLINE || !lowMem) return;
+    const onHide = () => { if (document.visibilityState === "hidden" && getState().playing) actions.pause(); };
+    document.addEventListener("visibilitychange", onHide);
+    window.addEventListener("pagehide", onHide);
+    return () => { document.removeEventListener("visibilitychange", onHide); window.removeEventListener("pagehide", onHide); };
+  }, [lowMem]);
   /* 进入项目时提示一次当前是低内存档、哪些能力受限(表 C 第 1 行) */
   useEffect(() => {
     if (!ONLINE || !lowMem || !stageReady || lowMemoryNoticeShown) return;
