@@ -42,9 +42,19 @@ mock.module(srcUrl("editor/stageBridge.ts"), {
     syncProject: async (role, project) => { log.push(["syncProject", role, project === state.project]); },
   },
 });
+/*
+ * 后台任务队列:和真的 `stageJobs` 一样**单飞、先来后到**(同一档 `catchup`)。以前这里并发地直接跑,
+ * 测不出「暂停态第二路排在播放态补跑后面、要等它让出队列」这件事。
+ */
+let jobChain = Promise.resolve();
 mock.module(srcUrl("editor/stageJobs.ts"), {
   exports: {
-    runBackJob: async (kind, run) => { log.push(["runBackJob", kind]); return run({ stage: back, signal: new AbortController().signal }); },
+    runBackJob: (kind, run) => {
+      log.push(["runBackJob", kind]);
+      const p = jobChain.then(() => run({ stage: back, signal: new AbortController().signal }));
+      jobChain = p.catch(() => {});
+      return p;
+    },
   },
 });
 mock.module(srcUrl("editor/planDispatch.ts"), {
@@ -112,6 +122,7 @@ const REC_A = { vtOk: false, stepMs: 2, catchUpMs: 10 };                   // (a
 let host;
 beforeEach(() => {
   resetStageSwap();
+  jobChain = Promise.resolve();
   log.length = 0;
   listeners.clear();
   plan = { segments: [] };
@@ -184,7 +195,60 @@ test("guessCatchUpMs:按播放位置估、封顶整段;没数就 1 秒", () => {
   assert.equal(guessCatchUpMs(p, ["b"], 1), 90);
   // 第 5 秒:150 帧 × 3 = 450,封顶在整段 200
   assert.equal(guessCatchUpMs(p, ["b"], 5), 200);
-  assert.equal(guessCatchUpMs(p, ["nobody"], 1), DEFAULT_CATCHUP_GUESS_MS);
+  // 场上没有一张卡有数:兜底 1 秒(以前拿一个不在场的 id 测;现在同场的卡也算进来,那样会把 b 的 90 加上)
+  assert.equal(guessCatchUpMs(project([card("x", 0, 10)]), ["x"], 1), DEFAULT_CATCHUP_GUESS_MS);
+});
+
+/* ---------------------------------------------------------------- 整场景估时(C10-A4 后续) */
+
+/** 判重的慢卡:单帧 40 ms(c10-browser-probe 的 probe-slow-stepped burnMs 40) */
+const REC_SLOW = { vtOk: false, stepMs: 40, stepMaxMs: 40 };
+
+test("guessCatchUpMs:后台是整场景补跑,同场判重的卡的推帧成本一起算(C10-A4 后续)", () => {
+  // 轻卡 b 在第 1 秒 = 30 帧 × 3 ms = 90;同场判重的 h 从 0 推到 1 秒 = 30 帧 × 40 ms = 1200
+  const p = project([card("b", 0, 10), card("h", 0, 10)]);
+  plan = segments(["h"]);
+  withRecord("b", REC_B);
+  withRecord("h", REC_SLOW);
+  assert.equal(guessCatchUpMs(p, ["b"], 1), 90 + 1200);
+  // 起推点是此刻活跃的卡里最早的入点:早已出场的卡、起推点之前的那段不算
+  const q = project([card("b", 0.5, 10), card("gone", 0, 0.4), card("late", 0.8, 10)]);
+  withRecord("gone", REC_SLOW);
+  withRecord("late", REC_SLOW);
+  // b 从 0.5 推到 1 = 15 帧 × 3 = 45;late 从 0.8 推到 1 = 6 帧 × 40 = 240;gone 在起推点 0.5 之前就出场了
+  assert.equal(Math.round(guessCatchUpMs(q, ["b"], 1)), 45 + 240);
+});
+
+test("播放态:同场的卡每帧加起来超过一拍(后台推帧比播放慢),追不上就不发起 —— 不抑制、不排后台任务", { timeout: 5000 }, async () => {
+  Object.assign(state, { project: project([card("b", 0, 10), card("h", 0, 10)]), t: 1, playing: true });
+  plan = segments(["h"]);
+  withRecord("b", REC_B);
+  withRecord("h", REC_SLOW);   // (2 + 40) ms × 30 fps = 1260 ms / 秒:推 1 秒时间线要 1.26 秒
+  assert.equal(await runPlayingSwap(["b"]), false);
+  assert.deepEqual(log, [], "一条 RPC、一个后台任务、一次额外抑制都没有");
+  assert.equal(swapInFlight(), false);
+  assert.equal(front.name, "A");
+});
+
+test("播放态:解出来的目标拍落在目标卡出场之后,也不发起", { timeout: 5000 }, async () => {
+  // rate = (2 + 20) × 30 = 660 ms/秒;积压 90 + 30 × 20 = 690 → 领先 690 / 0.34 ≈ 2029 ms → 目标 3.03 秒,b 在 1.2 秒就出场了
+  Object.assign(state, { project: project([card("b", 0, 1.2), card("h", 0, 10)]), t: 1, playing: true });
+  plan = segments(["h"]);
+  withRecord("b", REC_B);
+  withRecord("h", { vtOk: false, stepMs: 20, stepMaxMs: 20 });
+  assert.equal(await runPlayingSwap(["b"]), false);
+  assert.deepEqual(log, []);
+});
+
+test("播放态:目标拍的领先量含「边补边被可见舞台追」的那一截(积压 ÷ (1 − 速率))", { timeout: 5000 }, async () => {
+  // 同场一张 10 ms/帧的轻卡:速率 (2 + 10) × 30 = 360 ms/秒,积压 90 + 300 = 390 → 领先 390 / 0.64 ≈ 609 ms
+  Object.assign(state, { project: project([card("b", 0, 10), card("m", 0, 10)]), t: 1, playing: true });
+  plan = segments([]);
+  withRecord("b", REC_B);
+  withRecord("m", { vtOk: true, stepMs: 10, stepMaxMs: 10 });
+  assert.equal(await runPlayingSwap(["b"]), true);
+  // T = ceil((1 + 0.609) × 30) / 30 = 49 / 30(以前只按 b 自己的 90 ms 估:33 / 30,可见舞台先到、白补一趟)
+  assert.deepEqual(log.find((e) => e[1] === "render").slice(2), [49 / 30, { jump: true, maxCatchUp: Infinity }]);
 });
 
 /* ---------------------------------------------------------------- 暂停态互换 */
@@ -347,34 +411,99 @@ test("播放态:同时只跑一次;空列表不跑", async () => {
   assert.equal(await first, true);
 });
 
-test("播放态互换跑着时停下:停下那一次的暂停态第二路不丢,播放态收手后接着做(C10-A4)", async () => {
+/**
+ * 播放态互换的整场景补跑卡在后台舞台上(第一次 `render` 不回包,直到 `open()`),之后的 `render` 立刻回。
+ * 模拟 C10-A4 实测:补到目标拍要推十几秒。
+ */
+function gateFirstRender() {
+  let open;
+  const gate = new Promise((r) => { open = r; });
+  let n = 0;
+  const st = back;
+  st.render = async (sec, opts) => {
+    log.push([st.name, "render", sec, opts]);
+    if (n++ === 0) await gate;
+    return { ok: true };
+  };
+  return () => open();
+}
+
+test("停下时播放态补跑立即让路:暂停态第二路马上开始,不等它推完(C10-A4 后续)", { timeout: 5000 }, async () => {
   /*
-   * C10-A4 的根因(c10-browser-probe 实测):播放中一张 (b) 档 vtOk=false 的轻卡发起播放态互换,整场景补跑要十几秒;
-   * 这期间播放到头、用户点到 0.5 秒,两次 settle 都撞上 `running`,只记进 `pendingSettleT`。
-   * 以前只有暂停态那一路会消费它,播放态那一路收手时既不做也不交出去 —— 重层就停在快照上,直到下一次跳转。
+   * 以前(C10-A4 的修法):停下那一次撞上 `running`,只记进 `pendingSettleT`,等播放态那一次整场景补跑推完、
+   * 收手时才交给暂停态那一路 —— 实测白等约 1.5 秒(重的项目十几秒),停下到精确活渲 7～8 秒。
    */
   Object.assign(state, { project: project([card("h", 0, 10), card("b", 0, 10)]), t: 1, playing: true });
   plan = segments(["h"]);
   withRecord("h", { vtOk: false });
   withRecord("b", REC_B);
-  let open;
-  back.renderGate = new Promise((r) => { open = r; });
+  const open = gateFirstRender();
   const playingSwap = runPlayingSwap(["b"]);
   await new Promise((r) => setImmediate(r));
   assert.equal(swapInFlight(), true);
-  // 播放到头(10 秒)、再点到 0.5 秒:都撞上正在跑的播放态互换
-  Object.assign(state, { t: 10, playing: false });
-  assert.equal(await runSettleSwap(10), false);
-  state.t = 0.5;
-  assert.equal(await runSettleSwap(0.5), false);
-  back.renderGate = null;
-  open();
-  assert.equal(await playingSwap, false, "播放已停:播放态这一次收手");
-  for (let i = 0; i < 50 && (swapInFlight() || !log.some((e) => e[0] === "swapRoles")); i++) await new Promise((r) => setImmediate(r));
+  // 用户暂停在 0.5 秒:后台舞台还在推播放态那一次(gate 没开)
+  Object.assign(state, { t: 0.5, playing: false });
+  const settled = await Promise.race([runSettleSwap(0.5), new Promise((r) => setTimeout(() => r("timeout"), 1000))]);
+  assert.equal(settled, true, "不等播放态那一次推完,当场补跑到 0.5 秒并互换");
+  assert.equal(await playingSwap, false, "播放态那一次让路收手");
   const renders = log.filter((e) => e[1] === "render").map((e) => e[2]);
-  assert.deepEqual(renders, [33 / 30, 0.5], "收手之后按最后一次停下的 0.5 秒补跑");
-  assert.equal(log.filter((e) => e[0] === "swapRoles").length, 1, "补完互换成精确活渲");
+  assert.deepEqual(renders, [33 / 30, 0.5]);
+  assert.equal(log.filter((e) => e[0] === "swapRoles").length, 1, "只换一次:暂停态那一次");
   assert.ok(log.some((e) => e[0] === "markAllSettled" && e[1] === "front"));
+  assert.deepEqual(log.filter((e) => e[0] === "setExtraSuppressed").map((e) => e[1]), [["b"], []], "播放态的额外抑制照清");
+  assert.equal(swapInFlight(), false);
+  // 让路之后旧的那次 render 才回包:不再引出任何动作
+  const before = log.length;
+  open();
+  for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r));
+  assert.equal(log.length, before);
+  assert.equal(swapInFlight(), false);
+});
+
+test("停下时这一拍不用补跑:播放态补跑照样让路,并掐掉后台舞台上没人等的那次补跑", { timeout: 5000 }, async () => {
+  // 播放到头(10 秒):场上的卡都出场了,暂停态第二路无事可做 —— 但后台还在推播放态那一次,不能让它白推十几秒
+  Object.assign(state, { project: project([card("h", 0, 10), card("b", 0, 10)]), t: 1, playing: true });
+  plan = segments(["h"]);
+  withRecord("h", { vtOk: false });
+  withRecord("b", REC_B);
+  const open = gateFirstRender();
+  const playingSwap = runPlayingSwap(["b"]);
+  await new Promise((r) => setImmediate(r));
+  Object.assign(state, { t: 10, playing: false });
+  const settled = await Promise.race([runSettleSwap(10), new Promise((r) => setTimeout(() => r("timeout"), 1000))]);
+  assert.equal(settled, false, "没有要补跑的卡,不换");
+  assert.equal(await playingSwap, false);
+  const pushes = log.filter((e) => e[0] === "pushProject");
+  assert.equal(pushes.length, 2, "播放态补跑开始那一次 + 掐孤儿那一次");
+  assert.deepEqual(pushes[1].slice(1), ["back", true, { reset: true }], "整份重灌当前项目:舞台下一次让出时把在飞的 render 回成 'project'");
+  assert.equal(log.filter((e) => e[1] === "render").length, 1, "不为 10 秒补跑");
+  assert.equal(swap.stageSwapPlayingDebug().preemptCount, 1);
+  open();
+  for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r));
+  assert.equal(swap.stageSwapPlayingDebug().orphan, false, "旧的 render 落定之后不再算孤儿");
+  assert.equal(swapInFlight(), false);
+});
+
+test("进了互换那一步才停下:不抢(新 front 换到一半),收手后按停下那一拍补做(R5-15)", { timeout: 5000 }, async () => {
+  Object.assign(state, { project: project([card("h", 0, 10), card("b", 0, 10)]), t: 1, playing: true });
+  plan = segments(["h"]);
+  withRecord("h", { vtOk: false });
+  withRecord("b", REC_B);
+  // 互换穿戴时卡在新 front(B)的 setRole('front') 上
+  let open;
+  const gate = new Promise((r) => { open = r; });
+  const setRole = back.setRole;
+  back.setRole = async (...args) => { if (args[0] === "front") await gate; return setRole(...args); };
+  const playingSwap = runPlayingSwap(["b"]);
+  for (let i = 0; i < 50 && !log.some((e) => e[0] === "swapRoles"); i++) await new Promise((r) => setImmediate(r));
+  assert.ok(log.some((e) => e[0] === "swapRoles"), "已经在互换");
+  Object.assign(state, { t: 0.5, playing: false });
+  assert.equal(await runSettleSwap(0.5), false, "不抢:先记下");
+  open();
+  assert.equal(await playingSwap, true, "播放态那一次照常换完");
+  for (let i = 0; i < 50 && (swapInFlight() || log.filter((e) => e[0] === "swapRoles").length < 2); i++) await new Promise((r) => setImmediate(r));
+  assert.deepEqual(log.filter((e) => e[1] === "render").map((e) => e[2]), [33 / 30, 0.5], "收手之后按停下的 0.5 秒补跑");
+  assert.equal(log.filter((e) => e[0] === "swapRoles").length, 2);
   assert.equal(swapInFlight(), false);
 });
 
