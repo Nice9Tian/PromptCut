@@ -56,6 +56,8 @@ test('整场景:积压是场上每张卡从 max(入点, 起推点) 推到 t 的�
   assert.equal(backlogMs, 90 + 1800 + 600);
   assert.equal(ratePerSec, (3 + 60) * 30);
   assert.deepEqual(sceneCatchUpCost([], 1, 30), { backlogMs: 0, ratePerSec: 0 });
+  // 只有整段代价的卡:积压取整段,速率按整段均摊(10 秒 300 帧、1200 ms → 每帧 4 ms → 120 ms/秒)
+  assert.deepEqual(sceneCatchUpCost([{ start: 0, end: 10, record: { catchUpMs: 1200 } }], 1, 30), { backlogMs: 1200, ratePerSec: 120 });
 });
 
 test('领先量:积压 ÷ (1 − 速率 / 1000);后台推 1 秒时间线要 1 秒以上就追不上(null)', () => {

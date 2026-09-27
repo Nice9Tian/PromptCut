@@ -75,7 +75,13 @@ export function sceneCatchUpCost(entries, t, fps, activeAt = (e, sec) => sec >= 
     backlogMs += catchUpEstimateMs(e.record, (hi - lo) * f);
   }
   let ratePerSec = 0;
-  for (const e of active) ratePerSec += (Number(e.record?.stepMaxMs) || Number(e.record?.stepMs) || 0) * f;
+  for (const e of active) {
+    const clipFrames = (e.end - e.start) * f;
+    // 没有单帧数、只有整段代价的记录:按整段均摊到每帧(积压那一侧 catchUpEstimateMs 对它直接取整段)
+    const perFrame = Number(e.record?.stepMaxMs) || Number(e.record?.stepMs)
+      || (clipFrames > 0 ? (Number(e.record?.catchUpMs) || 0) / clipFrames : 0);
+    ratePerSec += perFrame * f;
+  }
   return { backlogMs, ratePerSec };
 }
 
