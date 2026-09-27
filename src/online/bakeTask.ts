@@ -1,19 +1,19 @@
 /**
  * 纯浏览器节点生成快照一段细任务要的纯函数(M7 契约第 4.3、4.5 节):
  *
- *   - `isolatedCardProject`:隔离单卡工程 —— 与桌面预渲染 `server/frame-pipeline.mjs` 的 `FramePipeline#isolatedCardProject`
- *     **同一变换**(单测对拍)。它要的 `start`、`end`、`count`、`sampling` 由切分方写在浏览器那一份的 `input.bake` 里,
+ *   - `bakeInputOf`:任务 → 隔离单卡工程(`isolatedCardProject`)要的参数。它要的 `start`、`end`、`count`、`sampling` 由切分方写在浏览器那一份的 `input.bake` 里,
  *     页面不算 `cardSampling`;片段 id 取 `input.clipId`。
  *   - `snapshotManifest`:全段齐后组的清单,形状同桌面 `server/artifact-transfer.mjs` 的 `collectSnapshotResult`
  *     (`v: 1`、`kind: 'snapshot'`、`tier: 'shared'`、`resultKey`、`dirKey = resultKey`、`entryKey: null`、`range`、`canvasHeavy`、
  *     `frames: [[本地帧, 哈希, 字节数]]`,有小尺寸就带 `small`);单测过桌面的 `manifestMatches`。
  *   - `manifestKey`:清单在内容库里的键 `<resultKey>:<from>-<to>`(同 `manifestKeyOf`)。
  *
- * 契约第 4.3 节原本建议把 `isolatedCardProject` 挪进页面与服务端共用的纯模块、桌面改引它(`claude/rq-m7-queue` 的活);
- * 在那之前页面这一份靠对拍单测守住「同一变换」。
+ * `isolatedCardProject` 已挪进页面与服务端共用的纯模块 `src/kernel/isolatedCard.mjs`,桌面 `FramePipeline#isolatedCardProject` 改引它(契约第 4.3 节)。
  *
  * 本模块属于 render 这一层(`src/online/`):不引 editor,不引 `mode.ts`。
  */
+
+import { isolatedCardProject } from "../kernel/isolatedCard.mjs";
 
 /** 清单的版本(同 `artifact-transfer.mjs` 的 `RESULT_VERSION`) */
 export const RESULT_VERSION = 1;
@@ -27,9 +27,6 @@ export interface BakeInput {
   count: number;
   sampling: { phase: { numerator: number | string; denominator: number | string }; [k: string]: unknown };
 }
-
-type AnyTrack = { id: string; clips?: { id: string; [k: string]: unknown }[]; [k: string]: unknown };
-type AnyProject = { fps?: number; tracks?: AnyTrack[]; [k: string]: unknown };
 
 /** 任务 → 隔离单卡工程要的参数;缺东西回 null(不猜) */
 export function bakeInputOf(task: { input?: Record<string, unknown> } | null | undefined): BakeInput | null {
@@ -45,37 +42,8 @@ export function bakeInputOf(task: { input?: Record<string, unknown> } | null | u
   return { clipId, start, end, count, sampling };
 }
 
-/**
- * 隔离单卡工程(桌面 `FramePipeline#isolatedCardProject` 的同一变换):目标片段平移到 `-phase` 起、是唯一可见输出;
- * 同轨的兄弟片段挪进一条隐藏的源轨(图卡输入还要能解到),别的轨一律隐藏、只作源。
- */
-export function isolatedCardProject<P extends AnyProject>(project: P, control: BakeInput): P {
-  const targetId = control.clipId;
-  const phase = Number(control.sampling.phase.numerator) / Number(control.sampling.phase.denominator);
-  const duration = control.end - control.start;
-  let found = false;
-  const tracks: AnyTrack[] = [];
-  const sourceTrackIds = new Set((project.tracks || []).map((track) => track.id));
-  for (const track of project.tracks || []) {
-    const target = (track.clips || []).find((clip) => clip.id === targetId);
-    if (target) {
-      found = true;
-      tracks.push({ ...structuredClone(track), hidden: false, sourceOnly: false,
-        clips: [{ ...structuredClone(target), start: -phase, end: duration - phase }] });
-      const siblings = (track.clips || []).filter((clip) => clip.id !== targetId);
-      if (siblings.length) {
-        let id = `__pc_source_${track.id}`; let suffix = 1;
-        while (sourceTrackIds.has(id)) id = `__pc_source_${track.id}_${suffix++}`;
-        sourceTrackIds.add(id);
-        tracks.push({ ...structuredClone(track), id, hidden: true, sourceOnly: true, clips: structuredClone(siblings) });
-      }
-      continue;
-    }
-    tracks.push({ ...structuredClone(track), hidden: true, sourceOnly: true });
-  }
-  if (!found) throw Object.assign(new Error(`Independent card clip is missing: ${targetId}`), { retryable: false });
-  return { ...structuredClone(project), duration: Math.max(duration, control.count / (Number(project.fps) || 30)), tracks, _cardRender: { mode: "final", frames: {}, missing: {} } };
-}
+/** 隔离单卡工程:桌面预渲染与本页共用的唯一一份(`src/kernel/isolatedCard.mjs`) */
+export { isolatedCardProject };
 
 /** 清单在内容库里的键:`<resultKey>:<from>-<to>`;缺东西回 null */
 export function manifestKey(ref: { resultKey?: unknown; range?: { from?: unknown; to?: unknown } | null } | null | undefined): string | null {

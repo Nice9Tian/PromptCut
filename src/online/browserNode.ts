@@ -2,7 +2,8 @@
  * 在线页面的纯浏览器渲染节点(M7 契约 `docs/plan/m7-contract.md` 第 2、4、5、7 节;第 13 节裁定 D6、D8、D10、D14、D16)。
  *
  * 本模块只有编排与判据,不碰舞台、网络、存储、界面:它们由宿主(`src/editor/browserNodeHost.ts`)经 `deps` 注入。
- * 节点会话(认领、续约、放回、丢认领)用渲染节点同一份状态机 `server/render-node/session.mjs`(D11:页面引它)。
+ * 节点会话(认领、续约、放回、丢认领)用渲染节点同一份状态机 `server/render-node/session.mjs`;细任务的执行规矩(先报 0、去重、
+ * 推完才完成、丢认领丢结果)用桌面同一份 `server/render-node/task-runner.mjs`(D11 (a));本页只在它的 `render` 里管帧与让路。
  *
  * # 当节点的条件(`browserNodeEligibility`,第 2 节)
  *
@@ -47,6 +48,8 @@
 import { createNodeSession as createNodeSessionUntyped } from "../../server/render-node/session.mjs";
 // @ts-expect-error 无类型声明的 .mjs(纯函数)
 import { checkClaimable as checkClaimableUntyped } from "../../server/render-node/filter.mjs";
+// @ts-expect-error 无类型声明的 .mjs(同构:细任务的执行规矩,桌面与页面共用,D11)
+import { createTaskRunner as createTaskRunnerUntyped, ABORTED as ABORTED_UNTYPED } from "../../server/render-node/task-runner.mjs";
 
 /* ------------------------------------------------------------------ 当节点的条件 */
 
@@ -200,8 +203,15 @@ type NodeSession = {
 const createNodeSession = createNodeSessionUntyped as (options: Record<string, unknown>) => NodeSession;
 const checkClaimable = checkClaimableUntyped as (task: unknown, node: unknown) => { ok: boolean; rule?: number; reason?: string };
 
-/** 中止标记:等待输给中止信号,不是执行器的错 */
-const ABORTED = Symbol("aborted");
+type TaskRunner = {
+  onTask(task: NodeTask, ctx: { token: number }): void;
+  onLost(id: string, reason: string): void;
+  stop(reason?: string): void;
+  tokenOf(id: string): number | null;
+};
+const createTaskRunner = createTaskRunnerUntyped as (options: Record<string, unknown>) => TaskRunner;
+/** 中止标记(与 task-runner 同一个:赛跑输给中止信号,不是执行器的错) */
+const ABORTED = ABORTED_UNTYPED as symbol;
 
 function untilAborted<T>(work: () => Promise<T> | T, signal: AbortSignal): Promise<T> {
   if (signal.aborted) return Promise.reject(ABORTED);
@@ -222,15 +232,19 @@ const FRAME_SAMPLES = 200;
 /** 已做的帧留几段(让路后重新认领同一段只补缺的帧) */
 const RETAINED_TASKS = 8;
 
+/** 本页这一侧对一次认领的记账(执行的规矩在 task-runner 里;这里只管帧、让路与诊断) */
 interface Run {
   task: NodeTask;
   token: number;
+  /** 中止舞台这次生成快照:跟着 runner 的中止信号,另在隐藏时由本页中止 */
   controller: AbortController;
   /** 在哪一步:查去重与取项目(`prep`)、等 `bakeFrame` 回来(`baking`)、帧间(`between`)、全段齐后组清单(`finishing`) */
   phase: "prep" | "baking" | "between" | "finishing";
   /** 要求让路的原因(做完当前帧就放回) */
   yieldCause: YieldCause | null;
   frames: Map<number, FrameRecord>;
+  /** 去重查到的清单(`sink.resultFor` 回它) */
+  found: Record<string, unknown> | null;
   ended: boolean;
 }
 
@@ -268,23 +282,8 @@ export function createBrowserNode(deps: BrowserNodeDeps): BrowserNode {
       m = { ...rest, profile: "browser", maxConcurrent: 1, environment: { ...deps.environment } };
     }
     if (m.type === "task.claim") counters.claims++;
-    const ok = deps.send(m);
-    return ok;
+    return deps.send(m);
   };
-
-  const session = createNodeSession({
-    nodeId: deps.nodeId,
-    node: nodeDesc,
-    send,
-    now: deps.now,
-    isIdle: () => !stopped && refused === null && welcomed && deps.isIdle(),
-    maxConcurrent: 1,
-    projects: [deps.projectId],
-    ...(deps.random ? { random: deps.random } : {}),
-    ...(deps.constants ? { constants: deps.constants } : {}),
-    onTask,
-    onLost,
-  });
 
   const holding = (r: Run) => !stopped && !r.ended && run === r && !r.controller.signal.aborted
     && session.held().some((h) => h.id === r.task.id && h.token === r.token);
@@ -298,11 +297,12 @@ export function createBrowserNode(deps: BrowserNodeDeps): BrowserNode {
 
   const keepFrames = (id: string, frames: Map<number, FrameRecord>) => {
     retained.delete(id);
+    if (!frames.size) return;
     retained.set(id, frames);
     while (retained.size > RETAINED_TASKS) retained.delete(retained.keys().next().value as string);
   };
 
-  /** 放回手里这一段(让路、取不到项目):不计失败 */
+  /** 放回手里这一段(让路、取不到项目):不计失败(C2)。放回之后 runner 判「不再持有」,丢掉这次执行 */
   const release = (r: Run, reason: string) => {
     if (!holding(r)) { endRun(r, "discarded"); return; }
     keepFrames(r.task.id, r.frames);
@@ -311,102 +311,143 @@ export function createBrowserNode(deps: BrowserNodeDeps): BrowserNode {
     endRun(r, `released:${reason}`);
   };
 
-  function onTask(task: NodeTask, { token }: { token: number }) {
-    if (!task || typeof task.id !== "string") return;
-    if (run) { run.controller.abort(); endRun(run, "replaced"); }
-    const r: Run = {
-      task, token, controller: new AbortController(), phase: "prep", yieldCause: null,
-      frames: new Map(retained.get(task.id) ?? []), ended: false,
-    };
-    run = r;
-    // 开工先报 0(第 4.1 节;照 local-node:停滞规则要覆盖卡死的执行器)
-    try { session.progress(task.id, 0); } catch { /* 连接坏了:后面的发送同样失败,由会话收尾 */ }
-    void execute(r);
-  }
-
-  function onLost(id: string, reason: string) {
-    counters.lost++;
+  const runOf = (ref: { resultKey?: unknown; range?: { from?: unknown; to?: unknown } | null }) => {
     const r = run;
-    if (!r || r.task.id !== id) return;
-    r.controller.abort();
-    keepFrames(id, r.frames);
-    endRun(r, `lost:${reason}`);
+    return r && r.task.resultKey === ref?.resultKey && r.task.range?.from === ref?.range?.from && r.task.range?.to === ref?.range?.to ? r : null;
+  };
+
+  /** 执行一段(task-runner 的 executor.render):取项目、逐帧生成快照、处理让路。回这一段的帧 */
+  async function render(task: NodeTask, { signal, progress }: { signal: AbortSignal; progress: (done: number) => void }): Promise<FrameRecord[] | null> {
+    const r = run && run.task.id === task.id ? run : null;
+    if (!r) throw ABORTED;
+    signal.addEventListener("abort", () => r.controller.abort(), { once: true });
+    const mine = r.controller.signal;
+    if (task.kind !== "snapshot" || !task.range) {
+      // 节点侧过滤只让快照任务进来;万一来了别的,放回、不做
+      release(r, "unsupported");
+      return null;
+    }
+    if (r.yieldCause) { release(r, `yield-${r.yieldCause}`); return null; }
+    // D6:任务的 projectRev 那一版;先用发布时留存的,没有再取快照,都没有就放回,不拿别的版本渲
+    const rev = Number(task.source?.projectRev);
+    let project: unknown = Number.isSafeInteger(rev) ? deps.keptProject(rev) : null;
+    if (!project && Number.isSafeInteger(rev)) {
+      project = await untilAborted(() => deps.fetchSnapshot(rev), mine).catch((e) => { if (e === ABORTED) throw e; return null; });
+      if (!holding(r)) return null;
+    }
+    if (!project) {
+      lastError = `取不到第 ${Number.isSafeInteger(rev) ? rev : "?"} 版项目`;
+      release(r, "no-snapshot");
+      return null;
+    }
+    const { from, to } = task.range;
+    for (let f = from; f <= to; f++) {
+      if (r.frames.has(f)) continue;
+      if (r.yieldCause) { release(r, `yield-${r.yieldCause}`); return null; }
+      if (!holding(r)) return null;
+      const t0 = deps.now();
+      r.phase = "baking";
+      let out: BakedFrame;
+      try {
+        out = await untilAborted(() => deps.bakeFrame({ task, project, localFrame: f, signal: mine }), mine);
+      } finally {
+        r.phase = "between";
+      }
+      if (!holding(r)) return null;
+      r.frames.set(f, { ...out, localFrame: f });
+      counters.bakedFrames++;
+      frameMs.push(Math.max(0, deps.now() - t0));
+      if (frameMs.length > FRAME_SAMPLES) frameMs.splice(0, frameMs.length - FRAME_SAMPLES);
+      progress(r.frames.size);
+    }
+    // 全段齐:此后即使被要求让路也收尾(这一批已做完,放回只会让下一个认领者重做)
+    r.phase = "finishing";
+    return [...r.frames.values()].sort((a, b) => a.localFrame - b.localFrame);
   }
 
-  async function execute(r: Run) {
-    const { task } = r;
-    const { signal } = r.controller;
-    const id = task.id;
-    try {
-      if (task.kind !== "snapshot" || !task.range) {
-        // 节点侧过滤只让快照任务进来;万一来了别的,放回、不做
-        release(r, "unsupported");
-        return;
-      }
-      const { from, to } = task.range;
-      const ranges = [[from, to]];
-      if (deps.lookupResult) {
-        const found = await untilAborted(() => deps.lookupResult!(task), signal).catch((e) => { if (e === ABORTED) throw e; return null; });
-        if (!holding(r)) return endRun(r, "discarded");
-        if (found) {
-          session.complete(id, { ranges, dedup: true, ...found });
-          counters.dedup++;
-          retained.delete(id);
-          endRun(r, "dedup");
-          return;
-        }
-      }
-      if (r.yieldCause) return release(r, `yield-${r.yieldCause}`);
-      // D6:任务的 projectRev 那一版;先用发布时留存的,没有再取快照,都没有就放回,不拿别的版本渲
-      const rev = Number(task.source?.projectRev);
-      let project: unknown = Number.isSafeInteger(rev) ? deps.keptProject(rev) : null;
-      if (!project && Number.isSafeInteger(rev)) {
-        project = await untilAborted(() => deps.fetchSnapshot(rev), signal).catch((e) => { if (e === ABORTED) throw e; return null; });
-        if (!holding(r)) return endRun(r, "discarded");
-      }
-      if (!project) {
-        lastError = `取不到第 ${Number.isSafeInteger(rev) ? rev : "?"} 版项目`;
-        return release(r, "no-snapshot");
-      }
-      for (let f = from; f <= to; f++) {
-        if (r.frames.has(f)) continue;
-        if (r.yieldCause) return release(r, `yield-${r.yieldCause}`);
-        if (!holding(r)) return endRun(r, "discarded");
-        const t0 = deps.now();
-        r.phase = "baking";
-        let out: BakedFrame;
-        try {
-          out = await untilAborted(() => deps.bakeFrame({ task, project, localFrame: f, signal }), signal);
-        } finally {
-          r.phase = "between";
-        }
-        if (!holding(r)) return endRun(r, "discarded");
-        r.frames.set(f, { ...out, localFrame: f });
-        counters.bakedFrames++;
-        frameMs.push(Math.max(0, deps.now() - t0));
-        if (frameMs.length > FRAME_SAMPLES) frameMs.splice(0, frameMs.length - FRAME_SAMPLES);
-        session.progress(id, r.frames.size);
-      }
-      // 全段齐:即使此刻被要求让路也收尾(这一批已做完,放回只会让下一个认领者重做)
-      r.phase = "finishing";
-      const frames = [...r.frames.values()].sort((a, b) => a.localFrame - b.localFrame);
-      const result = await untilAborted(() => deps.finishTask({ task, frames }), signal);
-      if (!holding(r)) return endRun(r, "discarded");
-      session.complete(id, { ranges, ...(result && typeof result === "object" && !Array.isArray(result) ? result : {}) });
-      counters.completed++;
-      retained.delete(id);
-      endRun(r, "completed");
-    } catch (error) {
-      if (error === ABORTED || !holding(r)) { endRun(r, "discarded"); return; }
-      const message = String((error as Error)?.message ?? error);
-      lastError = message;
-      const retryable = (error as { retryable?: boolean } | null)?.retryable !== false;
-      keepFrames(id, r.frames);
-      try { session.fail(id, message, retryable); } catch { /* 连接坏了:队列按租约回收 */ }
-      counters.failed++;
-      endRun(r, retryable ? "failed" : "failed-final");
+  const sink = {
+    /** 去重(第 4.1 节):内容库清单在、覆盖整段、块都在就直接完成 */
+    async has(ref: { resultKey: string; range: NodeTask["range"] }) {
+      const r = runOf(ref);
+      if (!r || !deps.lookupResult) return false;
+      const found = await untilAborted(() => deps.lookupResult!(r.task), r.controller.signal).catch((e) => { if (e === ABORTED) throw e; return null; });
+      r.found = found && typeof found === "object" ? found : null;
+      return !!r.found;
+    },
+    async resultFor(ref: { resultKey: string; range: NodeTask["range"] }) {
+      return runOf(ref)?.found ?? null;
+    },
+    /** 全段齐后组清单、写内容库(宿主的 finishTask);回的清单展开进 `task.complete` */
+    async put(entry: { resultKey: string; range: NodeTask["range"]; artifacts: FrameRecord[] | null }) {
+      const r = runOf(entry);
+      if (!r || !Array.isArray(entry.artifacts)) return { complete: false };
+      const result = await deps.finishTask({ task: r.task, frames: entry.artifacts });
+      return { complete: true, result };
+    },
+  };
+
+  /** task-runner 的诊断事件:收尾与计数 */
+  const onRunnerEvent = (e: { type: string; id: string; error?: string; retryable?: boolean }) => {
+    const r = run && run.task.id === e.id ? run : null;
+    switch (e.type) {
+      case "completed":
+        counters.completed++;
+        retained.delete(e.id);
+        if (r) endRun(r, "completed");
+        break;
+      case "dedup":
+        counters.dedup++;
+        retained.delete(e.id);
+        if (r) endRun(r, "dedup");
+        break;
+      case "failed":
+        counters.failed++;
+        lastError = e.error ?? lastError;
+        if (r) { keepFrames(e.id, r.frames); endRun(r, e.retryable === false ? "failed-final" : "failed"); }
+        break;
+      case "discarded":
+        if (r) { keepFrames(e.id, r.frames); endRun(r, "discarded"); }
+        break;
+      default:
+        break;
     }
-  }
+  };
+
+  const runner = createTaskRunner({
+    nodeId: deps.nodeId,
+    session: () => session,
+    executor: { render },
+    sink,
+    emit: (e: { type: string; id: string; error?: string; retryable?: boolean }) => { try { onRunnerEvent(e); } catch { /* 诊断出错不打断协议 */ } },
+  });
+
+  const session = createNodeSession({
+    nodeId: deps.nodeId,
+    node: nodeDesc,
+    send,
+    now: deps.now,
+    isIdle: () => !stopped && refused === null && welcomed && deps.isIdle(),
+    maxConcurrent: 1,
+    projects: [deps.projectId],
+    ...(deps.random ? { random: deps.random } : {}),
+    ...(deps.constants ? { constants: deps.constants } : {}),
+    onTask: (task: NodeTask, ctx: { token: number }) => {
+      if (!task || typeof task.id !== "string") return;
+      if (run) { run.controller.abort(); endRun(run, "replaced"); }
+      run = {
+        task, token: ctx.token, controller: new AbortController(), phase: "prep", yieldCause: null,
+        frames: new Map(retained.get(task.id) ?? []), found: null, ended: false,
+      };
+      // 开工先报 0、去重、执行、推送、完成的规矩在 task-runner(桌面与页面同一份,D11)
+      runner.onTask(task, ctx);
+    },
+    onLost: (id: string, reason: string) => {
+      counters.lost++;
+      runner.onLost(id, reason);
+      const r = run;
+      if (r && r.task.id === id) { r.controller.abort(); keepFrames(id, r.frames); endRun(r, `lost:${reason}`); }
+    },
+  });
 
   /** 被节点侧过滤挡掉的任务按原因记一次(诊断;服务端与节点侧都挡,页面不另判) */
   const noteBlocked = () => {
@@ -424,8 +465,8 @@ export function createBrowserNode(deps: BrowserNodeDeps): BrowserNode {
     start() {
       if (stopped || refused) return;
       welcomed = false;
-      // 新会话:带手里的认领去接续(HT-a 第 4.4 节;队列按令牌接续,对不上的回 lost)
-      session.start(session.held().map(({ id, token }) => ({ id, token })));
+      // 新会话:带手里、真在跑的认领去接续(HT-a 第 4.4 节;队列按令牌接续,对不上的回 lost)
+      session.start(session.held().filter((h) => runner.tokenOf(h.id) === h.token).map(({ id, token }) => ({ id, token })));
     },
     receive(message) {
       if (stopped || !message || typeof message !== "object") return;
@@ -479,6 +520,7 @@ export function createBrowserNode(deps: BrowserNodeDeps): BrowserNode {
       try { session.yieldAll("offline"); } catch { /* 连接已坏 */ }
       if (r) endRun(r, "released:offline");
       stopped = true;
+      runner.stop("offline");
     },
     debug() {
       const sorted = [...frameMs].sort((a, b) => a - b);

@@ -18,6 +18,7 @@ import { createMediaStamper } from './media-stamp.mjs';
 import { createHash } from 'node:crypto';
 import { isFullyTransparentPng } from './frame-validity.mjs';
 import { resolveFrameSize } from '../src/kernel/frameSize.mjs';
+import { isolatedCardProject } from '../src/kernel/isolatedCard.mjs';
 import { anchorFrames } from '../src/render/snapshotPick.mjs';
 import { StreamProducer, STREAM_POOL_DEFAULT, STREAM_POOL_MAX, STREAM_CODE_VERSION, planStreams } from './frame-stream.mjs';
 import { dirtyStreamLease } from './bakery/bake.mjs';
@@ -2628,38 +2629,9 @@ export class FramePipeline {
     }
     return count;
   }
+  /** 隔离单卡工程:与在线页面的纯浏览器节点共用 `src/kernel/isolatedCard.mjs`(M7 契约第 4.3 节),行为不变 */
   isolatedCardProject(project, control) {
-    const targetId = control.clipId;
-    const phase = Number(control.sampling.phase.numerator) / Number(control.sampling.phase.denominator);
-    const duration = control.end - control.start;
-    let found = false;
-    const tracks = [];
-    const sourceTrackIds = new Set((project.tracks || []).map(track => track.id));
-    for (const track of project.tracks || []) {
-      const target = (track.clips || []).find(clip => clip.id === targetId);
-      if (target) {
-        found = true;
-        // The target is the only visible output.  Siblings can nevertheless be
-        // raw graph inputs (especially multi-input 图卡), so retain
-        // them in a separate hidden source track rather than dropping them.
-        tracks.push({ ...structuredClone(track), hidden: false, sourceOnly: false,
-          clips: [{ ...structuredClone(target), start: -phase, end: duration - phase }] });
-        const siblings = (track.clips || []).filter(clip => clip.id !== targetId);
-        if (siblings.length) {
-          let id = `__pc_source_${track.id}`; let suffix = 1;
-          while (sourceTrackIds.has(id)) id = `__pc_source_${track.id}_${suffix++}`;
-          sourceTrackIds.add(id);
-          tracks.push({ ...structuredClone(track), id, hidden: true, sourceOnly: true, clips: structuredClone(siblings) });
-        }
-        continue;
-      }
-      // Keep original clips available to 图卡 source resolution without
-      // letting them paint.  The browser's source-only tracks are deliberately
-      // explicit rather than attempting to infer graph dependencies here.
-      tracks.push({ ...structuredClone(track), hidden: true, sourceOnly: true });
-    }
-    if (!found) throw new Error(`Independent card clip is missing: ${targetId}`);
-    return { ...structuredClone(project), duration: Math.max(duration, control.count / (Number(project.fps) || 30)), tracks, _cardRender: { mode: 'final', frames: {}, missing: {} } };
+    return isolatedCardProject(project, control);
   }
   prefixes(entry) {
     const prefixes = trackPrefixes(entry.project, entry.code);
