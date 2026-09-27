@@ -574,7 +574,10 @@ async function runCreator(out) {
       if (Date.now() - lastNewAt < 3000) return null; // 3 s 内没有新的一版才算
       return { planId: latest.planId, derived, states, plans: mine.map((p) => p.planId) };
     }, 600_000, 1000);
-    if (!settled) throw new Error('plan 没落定');
+    if (!settled) {
+      try { fs.writeFileSync(path.join(OUT, 'creator-queue-diag.json'), JSON.stringify(await getJson(`${prerender}/api/frames/diagnostics`, 20_000), null, 1)); } catch { /* 取不到 */ }
+      throw new Error('plan 没落定');
+    }
     await until('[creator] 清单拉取完', async () => {
       const s = (await diag())?.stats ?? {};
       return (s.applied ?? 0) + (s.applyErrors ?? 0) >= settled.derived.length || null;
@@ -592,6 +595,7 @@ async function runCreator(out) {
       stats: { applied: q1.stats?.applied ?? null, applyErrors: q1.stats?.applyErrors ?? null, fetched: q1.stats?.fetched ?? null },
       publishToSettledMs: Date.now() - tPublish,
     };
+    try { fs.writeFileSync(path.join(OUT, 'creator-queue-diag.json'), JSON.stringify(await getJson(`${prerender}/api/frames/diagnostics`, 20_000), null, 1)); } catch { /* 取不到 */ }
     await store.put('plan', plan);
     out.plan = { planId: plan.planId, plans: plan.plans.length, tasks: plan.tasks, done: plan.done, failed: plan.failed.length, planDoneCount: plan.planDoneCount,
       pcCompleted: plan.pc.completed.length, pcDedup: plan.pc.dedup.length, pcPlanClaimed: plan.pc.planClaimed, publishToSettledMs: plan.publishToSettledMs, stats: plan.stats };
