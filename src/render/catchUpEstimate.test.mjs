@@ -10,7 +10,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { catchUpEstimateMs } from './catchUpEstimate.mjs';
+import { catchUpEstimateMs, playingLeadMs, sceneCatchUpCost } from './catchUpEstimate.mjs';
 
 test('按位置估：frames × stepMaxMs', () => {
   // 60 秒、30 fps 的长 motion：整段 1800 帧 × 2 ms = 3600 ms;播放头在第 2 秒 = 60 帧
@@ -43,4 +43,24 @@ test('什么都没有回 0，交给调用方兜底', () => {
 
 test('随机访问卡（catchUpMs 为 0）不会凭空估出一个代价', () => {
   assert.equal(catchUpEstimateMs({ catchUpMs: 0, stepMs: 0 }, 300), 0);
+});
+
+test('整场景:积压是场上每张卡从 max(入点, 起推点) 推到 t 的和,速率是此刻活跃的卡单帧稳健耗时之和 × fps', () => {
+  const entries = [
+    { start: 0, end: 10, record: { stepMs: 2, stepMaxMs: 3, catchUpMs: 200 } },   // 30 帧 × 3 = 90
+    { start: 0, end: 10, record: { stepMs: 40, stepMaxMs: 60 } },                 // 30 帧 × 60 = 1800;速率按 stepMs 40
+    { start: 0, end: 0.5, record: { stepMs: 40 } },                               // 已出场:0～0.5 秒 15 帧 × 40 = 600,不进速率
+    { start: 0.5, end: 10, record: null },                                        // 没有记录:0
+  ];
+  const { backlogMs, ratePerSec } = sceneCatchUpCost(entries, 1, 30);
+  assert.equal(backlogMs, 90 + 1800 + 600);
+  assert.equal(ratePerSec, (2 + 40) * 30);
+  assert.deepEqual(sceneCatchUpCost([], 1, 30), { backlogMs: 0, ratePerSec: 0 });
+});
+
+test('领先量:积压 ÷ (1 − 速率 / 1000);后台推 1 秒时间线要 1 秒以上就追不上(null)', () => {
+  assert.equal(playingLeadMs(90, 0), 90);
+  assert.equal(playingLeadMs(390, 360), 390 / 0.64);
+  assert.equal(playingLeadMs(90, 1000), null);
+  assert.equal(playingLeadMs(90, 10800), null, 'C10-A4 探针那台戏:9 张 40 ms/帧的重卡');
 });

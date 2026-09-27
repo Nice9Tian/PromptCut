@@ -40,3 +40,57 @@ export function catchUpEstimateMs(record, frames) {
   if (byPosition <= 0) return whole;
   return whole > 0 ? Math.min(byPosition, whole) : byPosition;
 }
+
+/**
+ * **整场景**补跑的代价（K3(b) 播放态互换的估时）。
+ *
+ * 后台舞台补跑是 `render(T, { jump: true })`：此刻活跃的卡全部重挂载，时钟从它们里最早的入点起
+ * **整台戏**逐帧推到 `T`。后台舞台没有分派表，判重的卡在那里同样活渲 —— 所以要花的墙钟不是
+ * 那张轻卡自己的追帧代价，而是这段时间里场上每张卡各自推帧代价的**和**（C10-A4 实测：
+ * 一张 90 ms 的轻卡带着 9 张 40 ms/帧的重卡，补到 1.03 秒用了 11 秒）。
+ *
+ * @param {{ start: number, end: number, record?: object | null }[]} entries 场上的卡片段（不分轻重）
+ * @param {number} t 播放头此刻（秒）
+ * @param {number} fps
+ * @param {(entry: { start: number, end: number }, t: number) => boolean} [activeAt] 这一刻挂没挂载（缺省按入点、出点判）
+ * @returns {{ backlogMs: number, ratePerSec: number }}
+ *   - `backlogMs`：从起推点（此刻活跃的卡里最早的入点）推到 `t` 的墙钟。每张卡从 max(入点, 起推点)
+ *     推到 min(出点, t)，按 `catchUpEstimateMs` 估（和单卡同一个公式、同样封顶在整段代价上）；
+ *   - `ratePerSec`：`t` 之后每多推 1 秒时间线要多花的墙钟（毫秒）＝ Σ(此刻活跃的卡的单帧稳健耗时) × fps。
+ *     单帧取 p90 的 `stepMs`（没有才退回 `stepMaxMs`）：单次最大值只是诊断数，乘满一秒会把偶发卡顿放大几十倍。
+ */
+export function sceneCatchUpCost(entries, t, fps, activeAt = (e, sec) => sec >= e.start && sec < e.end) {
+  const f = Math.max(1, Number(fps) || 30);
+  const list = Array.isArray(entries) ? entries : [];
+  const active = list.filter((e) => activeAt(e, t));
+  if (!active.length) return { backlogMs: 0, ratePerSec: 0 };
+  const from = Math.min(...active.map((e) => e.start));
+  let backlogMs = 0;
+  for (const e of list) {
+    const lo = Math.max(e.start, from);
+    const hi = Math.min(e.end, t);
+    if (!(hi > lo)) continue;
+    backlogMs += catchUpEstimateMs(e.record, (hi - lo) * f);
+  }
+  let ratePerSec = 0;
+  for (const e of active) ratePerSec += (Number(e.record?.stepMs) || Number(e.record?.stepMaxMs) || 0) * f;
+  return { backlogMs, ratePerSec };
+}
+
+/**
+ * 播放态互换的目标拍要领先播放头多少毫秒；追不上回 `null`。
+ *
+ * 后台舞台先要补完 `backlogMs`，这期间可见舞台按 1 秒 / 秒往前走，后台每多推 1 秒时间线又要多花
+ * `ratePerSec` 毫秒。领先 L 要满足 L ＝ backlog ＋ rate × L / 1000，即 L ＝ backlog ÷ (1 − rate / 1000)。
+ * `rate ≥ 1000`（后台推 1 秒时间线就要 1 秒以上墙钟）时后台永远追不上可见舞台，没有这样的 L。
+ *
+ * @param {number} backlogMs
+ * @param {number} ratePerSec
+ * @returns {number | null}
+ */
+export function playingLeadMs(backlogMs, ratePerSec) {
+  const backlog = Math.max(0, Number(backlogMs) || 0);
+  const rate = Math.max(0, Number(ratePerSec) || 0);
+  if (rate >= 1000) return null;
+  return backlog / (1 - rate / 1000);
+}
