@@ -39,7 +39,10 @@ test("状态 → 措辞:断网、连不上文档服务、连不上素材服务�
 
 test("常驻提示:离线(含暂停)且有未提交的修改才挂", () => {
   assert.equal(st.offlineUnsent("offline", 2), true);
-  assert.equal(st.offlineUnsent("paused", 1), true);
+  assert.equal(st.offlineUnsent("paused", 1), false, "暂停时已连上,不说「当前离线」");
+  assert.equal(st.unsentAtRisk("paused", 1), true, "暂停时关页面照样丢,挂离开确认");
+  assert.equal(st.unsentAtRisk("offline", 1), true);
+  assert.equal(st.unsentAtRisk("online", 1), false);
   assert.equal(st.offlineUnsent("offline", 0), false);
   assert.equal(st.offlineUnsent("online", 3), false, "在线时未确认的提交正在飞,不算离线");
 });
@@ -62,6 +65,15 @@ test("恢复阶段:离线攒过修改 → 回来还有没确认的 = 恢复中 �
   q = st.nextRecovery(q, "offline", 0);
   q = st.nextRecovery(q, "online", 0);
   assert.equal(q.phase, null);
+  // 回来后第一条被拒 → 暂停 → 丢弃:不说「已全部提交」
+  let d = { phase: null, wasOffline: false, hadUnsent: false };
+  d = st.nextRecovery(d, "offline", 2);
+  d = st.nextRecovery(d, "connecting", 2);
+  assert.equal(d.phase, "recovering");
+  d = st.nextRecovery(d, "paused", 2);
+  assert.equal(d.phase, null);
+  d = st.nextRecovery(d, "online", 0);
+  assert.equal(d.phase, null, "丢弃之后不报恢复完成");
   // 刚回来就已经全确认了:直接恢复完成
   let r = { phase: null, wasOffline: false, hadUnsent: false };
   r = st.nextRecovery(r, "offline", 1);

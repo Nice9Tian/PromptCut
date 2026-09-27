@@ -20,7 +20,7 @@ import {
 } from "./syncManager";
 import { clipOfEntity, entityLabel, writerLabel } from "./labels";
 import { ONLINE } from "../../online/mode";
-import { OFFLINE_UNSENT_TEXT, offlineUnsent } from "./onlineStatus";
+import { OFFLINE_UNSENT_TEXT, offlineUnsent, unsentAtRisk } from "./onlineStatus";
 import { foldLine, NOTICE_FOLD_AT, undoNoticeTitle } from "../undoNotice";
 import "./sync.css";
 
@@ -218,15 +218,16 @@ function BlockingDialog() {
  */
 function OfflineUnsentNotice() {
   const on = useSync((v) => offlineUnsent(v.status, v.unconfirmed));
+  const atRisk = useSync((v) => unsentAtRisk(v.status, v.unconfirmed));
   useEffect(() => {
-    if (!on) return;
+    if (!atRisk) return;
     const onBeforeUnload = (e: BeforeUnloadEvent) => {
       e.preventDefault();
       e.returnValue = ""; // 旧浏览器要设它才弹原生的离开确认
     };
     window.addEventListener("beforeunload", onBeforeUnload);
     return () => window.removeEventListener("beforeunload", onBeforeUnload);
-  }, [on]);
+  }, [atRisk]);
   if (!on) return null;
   return createPortal(
     <div className="pc-offline-unsent" role="status" data-pc="offline-unsent">

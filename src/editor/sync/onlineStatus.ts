@@ -53,8 +53,13 @@ export function onlineStatusOf(s: OnlineStatusInput): OnlineStatusKind | null {
   return null;
 }
 
-/** 该不该挂常驻提示与离开确认:离线(含暂停)且手里有没提交的修改 */
+/** 该不该挂常驻提示(「当前离线…」):离线且手里有没提交的修改。暂停时已经连上了,不说「离线」 */
 export function offlineUnsent(status: SyncStatus, unconfirmed: number): boolean {
+  return status === "offline" && unconfirmed > 0;
+}
+
+/** 该不该挂浏览器原生的离开确认:离线或暂停(离线批次等用户决定)时手里有没提交的修改,关页面就丢 */
+export function unsentAtRisk(status: SyncStatus, unconfirmed: number): boolean {
   return (status === "offline" || status === "paused") && unconfirmed > 0;
 }
 
@@ -65,8 +70,9 @@ export function offlineUnsent(status: SyncStatus, unconfirmed: number): boolean 
  */
 export function nextRecovery(prev: { phase: "recovering" | "recovered" | null; wasOffline: boolean; hadUnsent: boolean },
   status: SyncStatus, unconfirmed: number): { phase: "recovering" | "recovered" | null; wasOffline: boolean; hadUnsent: boolean } {
-  const offline = status === "offline" || status === "paused";
-  if (offline) return { phase: null, wasOffline: true, hadUnsent: prev.hadUnsent || unconfirmed > 0 };
+  // 暂停(离线批次第一条被拒,C6.5):交给离线对话框;之后不论重放还是丢弃,都不再说「离线时的修改已全部提交」
+  if (status === "paused") return { phase: null, wasOffline: false, hadUnsent: false };
+  if (status === "offline") return { phase: null, wasOffline: true, hadUnsent: prev.hadUnsent || unconfirmed > 0 };
   if (prev.wasOffline) {
     // 刚回来:离线期间有攒着的修改才进恢复阶段
     if (!prev.hadUnsent) return { phase: null, wasOffline: false, hadUnsent: false };
