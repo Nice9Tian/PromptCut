@@ -41,16 +41,19 @@
 | 71d94be | 修：两处根因（见上）；HC2/HC3 断言改成新语义 |
 | ad68251 | 探针：`scripts/probes/card-overlay-probe.mjs` |
 | d21e33a | 修：清单模块按生成正文比对（归属表这类非源码文件增删不触发重载） |
+| (本提交) | 报告：补全验证 |
 
 ## 验证
 
 - **修前失败**（提交 2d17a53，修之前）：`node --test server/test/card-overlay.test.mjs` → 5 条 1 过 4 挂：CO1「覆盖重写之后生效的是新内容」、CO1b、CO2（`installSyncedFile` 写到了检出目录）、CO2b（`findCardFile` 回 null）；CO3（开发期）过。
 - **修后单测**：card-overlay、host-card-code、cards、card-sync、card-source、card-overrides 六个文件 87/87 过；CO4（清单模块与解析）也过。
 - **类型检查**：`npx tsc -b --force` 退出码 0，零错误。
-- **全量测试**：`npm test` 3416 条，3413 过、1 挂、2 跳过。挂的是 `server/test/artifact-push.test.mjs` 的 W4（「全部完成后文件里不留已完成的段」，推送队列的计时类用例，不碰卡片代码）；单独重跑该文件 3 次均 7/7 过，判为机器忙（十来个子智能体并行）时的偶发。跳过的 2 条是既有的集成用例（`/api/cards/layout`、SKILL 闸门，需 `PROMPTCUT_BASE`）。
+- **全量测试**：最终提交 d21e33a 上 `npm test` 退出码 0：3416 条，3414 过、0 挂、2 跳过（既有的集成用例 `/api/cards/layout`、SKILL 闸门，需 `PROMPTCUT_BASE`）。此前在 71d94be 上跑过一轮：3413 过、1 挂，挂的是 `server/test/artifact-push.test.mjs` 的 W4（推送队列的计时类用例，不碰卡片代码），单独重跑该文件 3 次均 7/7 过，判为机器忙时的偶发。
 - **card-sync-probe**（`--doc-port 5616 --asset-port 5617 --a-port 5610 --b-port 5613`）：`ok: true`，installMs 662、hmrMs 710、remeasureMs 1139，底版仍 v1、A/B 改动层 v2，fails 为空。
 - **card-overlay-probe**（新，端口 5610，三次均 `ok: true`）：起来时注册表里有改动层独有的卡 A（a1）和改过的卡 B（b1x）；create_card overwrite 把 B 改成 b2 后注册表 0.5～2.2 s 内变 b2、B 底版仍 b1；create_card 新卡 C 写进改动层、检出用户卡目录文件数 3→3、检出 `_scopes.json` 不变、改动层归属表有 C；注册表 0.3～0.4 s 认出 C；舞台 iframe（5611）画出 C 的记号；删掉改动层里的 A 后注册表里 A 消失；主框架整页刷新 0 次。看过的图：`out/card-overlay-probe/<run>-0-start.png`、`-2-after-create.png`（编辑器正常，改卡后无对话框、未重挂载）、`-3-stage.png`（加片段后的测量遮罩，属现有行为）。
-- **G0-R 导出确定性与像素对比**：见下节。
+- **G0-R 导出确定性**：worktree 起 vite（5610），`node scripts/verify-determinism.mjs --url "http://127.0.0.1:5610/?export=1"` 退出码 0，Total 1800、Identical 1800、Different 0。
+- **像素对比**：`compare-frames.mjs <pc-g0r-base/out/verify-a/frames> out/verify-a/frames` → total 1800、identical 1800、different 0、missing 0、extra 0。
+- 验证完已结束自己起的 dev server（5610 的进程树），5610～5612 无监听。
 
 ## 需要主会话定的事 / 更正建议
 
