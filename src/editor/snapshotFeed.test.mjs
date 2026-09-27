@@ -305,3 +305,15 @@ test("wanted 报给预渲染进程", () => {
   pickForSetTime({ project: project([card("h", 0, 10)]), t: 1, playing: false });
   assert.deepEqual(wantedPushed, [[{ clipId: "h", frame: 30 }]]);
 });
+
+test("低内存档:一层的就绪表有缺口(清单缺几帧小尺寸)时,有的帧照常选,缺的回溯同区间,段首缺才不选(占位)", () => {
+  const p = project([card("h", 0, 10)]);
+  plan = heavyEverywhere("h");
+  // 阿里云 2026-09-27 手机上的样子:第 0 帧与 28～31 缺小尺寸
+  src.push(layer("h", [[1, 27], [32, 119]]));
+  const at = (t) => planFeed({ project: p, t, playing: false, lowMemory: true }).picks.get("h")?.localFrame ?? null;
+  assert.equal(at(0), null, "段首缺:没有更早的可回溯");
+  assert.equal(at(5 / FPS), 5);
+  assert.equal(at(1), 27, "第 30 帧缺:回溯到 27");
+  assert.equal(at(3), 90);
+});
