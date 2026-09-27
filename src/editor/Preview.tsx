@@ -24,7 +24,7 @@ import { atFrameGrid } from "../render/frameGrid";
 import { contentStartOf } from "./timeline/utils";
 import { startAssetTiers, tierHashes, useTierHashes } from "./media/assetTiers";
 import { startTierBackfill } from "./io/mediaUpload";
-import { currentReadyIndex, deliverSnapshots, markBaselineReset, noteSettled, pendingDemotes, pickForSetTime, setSnapshotSource, stopSnapshotFeed, streamPlanesAt, suppressedAt, syncSnapshotSubscription } from "./snapshotFeed";
+import { currentReadyIndex, deliverSnapshots, markBaselineReset, noteSettled, pendingDemotes, pickForSetTime, setSnapshotArrive, setSnapshotSource, stopSnapshotFeed, streamPlanesAt, suppressedAt, syncSnapshotSubscription } from "./snapshotFeed";
 import { OnlineSnapshotSource, applyReadyMessage, setActiveOnlineSource } from "../render/snapshotSource";
 import { playingCatchUpTargets, runPlayingSwap, runSettleSwap, setSwapHost, swapInFlight } from "./stageSwap";
 import { demotedClips, onStageDemote } from "./demote";
@@ -626,6 +626,8 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
     onlineSourceRef.current = src;
     setActiveOnlineSource(src);
     setSnapshotSource(src);
+    // 投递时缺的那一帧取到之后也要重投一次(暂停着的页面没有别的事件会再投)
+    setSnapshotArrive(() => { void pumpRef.current(); });
     src.onFetched = () => { void pumpRef.current(); };
     const off = src.subscribeReady("online", 0, (m) => {
       applyReadyMessage(currentReadyIndex(), m);

@@ -329,6 +329,8 @@ async function newPage({ mobile = false } = {}) {
   page.pageErrors = [];
   page.on('pageerror', (e) => page.pageErrors.push(String(e?.message ?? e).slice(0, 200)));
   page.consoleErrors = [];
+  page.badResponses = [];
+  page.on('response', (res) => { if (res.status() >= 400 && page.badResponses.length < 40) { try { const u = new URL(res.url()); page.badResponses.push(`${res.status()} ${u.pathname.slice(0, 120)}`); } catch { /* 不是地址 */ } } });
   page.on('console', (m) => { if ((m.type() === 'error' || m.type() === 'warn') && page.consoleErrors.length < 40) page.consoleErrors.push(`${m.type()}: ${m.text()}`.slice(0, 240)); });
   page.assets = [];
   if (mobile) {
@@ -559,15 +561,22 @@ try {
     return S.getState().project.tracks.flatMap((t) => t.clips).find((c) => c.id === spec.id)?.params?.probeSalt === spec.salt;
   }, { id: heavyClip, salt: salts[1] }), 30_000, 300);
   check(creatorSaw, '修改经文档服务到了创建者');
-  const newPx = await until('新的预渲染小尺寸回到手机(新的 px/ 哈希)', async () => {
-    const fresh = phone.assets.filter((a) => a.ns === 'px' && a.method === 'GET' && !a.sub && !pxBefore.has(a.hash) && a.at > t3);
-    return fresh.length ? { first: fresh[0].at - t3, count: fresh.length } : null;
+  // 手机这边层表里重卡的键换了(渲染节点重渲、写了新层表),之后取到的 px/ 小位图是新的
+  const phoneKey = () => P(phone, (id) => (window.__pcOnlineSnapshots?.()?.layers ?? []).find((l) => l.clipId === id)?.key ?? null, heavyClip).catch(() => null);
+  const keyAtStart = await phoneKey();
+  let keyChangedAt = null;
+  const newPx = await until('新的预渲染小尺寸回到手机(新键下的 px/ 小位图)', async () => {
+    const k = await phoneKey();
+    if (!keyChangedAt && k && k !== keyAtStart) keyChangedAt = Date.now();
+    if (!keyChangedAt) return null;
+    const fresh = phone.assets.filter((a) => a.ns === 'px' && a.method === 'GET' && !a.sub && !pxBefore.has(a.hash) && a.at >= keyChangedAt - 1000);
+    return fresh.length ? { keyMs: keyChangedAt - t3, first: fresh[0].at - t3, count: fresh.length } : null;
   }, 900_000, 1000);
   const layer1 = await heavyLayer().catch(() => null);
   check(newPx, '手机收到重渲后的新小尺寸');
   check(layer1 && layer1.key !== keyBefore, '层表里重卡片段换了新的键', { before: keyBefore?.slice(0, 12), after: layer1?.key?.slice(0, 12) });
   await shot(phone, '3-phone-after-edit');
-  out.steps.edit = { ms: Date.now() - t3, newSmallMs: newPx?.first ?? null, newPxRequests: newPx?.count ?? 0, keyChanged: !!(layer1 && layer1.key !== keyBefore) };
+  out.steps.edit = { ms: Date.now() - t3, newKeyMs: newPx?.keyMs ?? null, newSmallMs: newPx?.first ?? null, newPxRequests: newPx?.count ?? 0, keyChanged: !!(layer1 && layer1.key !== keyBefore) };
   say('step3.done', out.steps.edit);
 
   /* ---------------------------------------------------------------- 4. 低内存档逐帧导出 */
@@ -749,7 +758,7 @@ async function stageDiag(page) {
       clips: [...document.querySelectorAll('[data-pc-clip]')].map((e) => e.getAttribute('data-pc-clip')).slice(0, 8) };
   }, state.heavyClip).catch((e) => ({ error: String(e?.message ?? e).slice(0, 120) })) : null;
   const online = await page.evaluate(() => { try { return window.__pcOnlineSnapshots?.() ?? null; } catch (e) { return { error: String(e) }; } }).catch(() => null);
-  return { consoleErrors: page.consoleErrors?.slice(-12), pageErrors: page.pageErrors?.slice(-5), preview: await page.evaluate(() => { try { return window.__pcPreviewDiag?.() ?? null; } catch { return null; } }).catch(() => null), heavyClip: state.heavyClip, frameUrl: f ? f.url().split('?')[0] : null, stage, online: online ? JSON.parse(JSON.stringify(online)) : null };
+  return { badResponses: page.badResponses?.slice(-12), consoleErrors: page.consoleErrors?.slice(-6), pageErrors: page.pageErrors?.slice(-5), preview: await page.evaluate(() => { try { return window.__pcPreviewDiag?.() ?? null; } catch { return null; } }).catch(() => null), heavyClip: state.heavyClip, frameUrl: f ? f.url().split('?')[0] : null, stage, online: online ? JSON.parse(JSON.stringify(online)) : null };
 }
 
 /** 内容库里重卡片段的层与它各段清单:键、帧数、小尺寸张数;小位图都在素材服务上才回。没到齐时把原因记进 state.layerWhy */

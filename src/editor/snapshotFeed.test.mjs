@@ -26,7 +26,7 @@ mock.module(srcUrl("render/dataMirror.ts"), {
 const feed = await import(srcUrl("editor/snapshotFeed.ts"));
 const {
   planFeed, pickForSetTime, deliverSnapshots, noteSettled, markBaselineReset, markPendingDemote, pendingDemotes,
-  setExtraSuppressed, suppressedAt, setSnapshotSource, syncSnapshotSubscription, resetSnapshotFeed,
+  setExtraSuppressed, suppressedAt, setSnapshotSource, syncSnapshotSubscription, resetSnapshotFeed, setSnapshotArrive,
   MAX_WANTED, SNAPSHOT_THROTTLE_MS, SNAPSHOT_DELIVERY_MAX_BYTES,
 } = feed;
 
@@ -194,6 +194,22 @@ test("deliverSnapshots:33 ms 节流;不再判重的卡摘掉(null)", async () =>
   assert.deepEqual(stage.calls.at(-1).patch, { h: null });
   now += SNAPSHOT_THROTTLE_MS;
   assert.equal(await deliverSnapshots(stage, "front", head), 0, "没变化:一条 RPC 都不发");
+});
+
+test("setSnapshotArrive:投递时缺的那一帧取到之后叫一次重投(在线页面不走 SSE 订阅,c10a)", async () => {
+  const p = project([card("h", 0, 10)]);
+  plan = heavyEverywhere("h");
+  src.push(layer("h", [[0, 100]]));
+  let arrived = 0;
+  setSnapshotArrive(() => { arrived++; });
+  const stage = fakeStage();
+  const head = { project: p, t: 1, playing: false };
+  assert.equal(await deliverSnapshots(stage, "front", head), 0, "手里还没有字节:先发起取");
+  await settle();
+  assert.equal(arrived, 1, "字节到了:叫宿主重投");
+  now += SNAPSHOT_THROTTLE_MS;
+  assert.equal(await deliverSnapshots(stage, "front", head), 1);
+  setSnapshotArrive(null);
 });
 
 test("deliverSnapshots:reset 不受节流,带 reset 并把该挂的整份重投", async () => {

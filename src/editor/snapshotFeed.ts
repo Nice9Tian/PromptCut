@@ -121,6 +121,15 @@ export function setSnapshotSource(next: SnapshotSource): void {
   source = next;
 }
 
+/**
+ * 缺的那一帧取到之后叫谁重投(`fetchMissing` 的 `onArrive`)。双舞台由 `syncSnapshotSubscription` 顺带设;
+ * 在线页面不走那条订阅,由 `Preview` 在换上在线快照来源时设(c10a:不设的话,暂停着的页面上取到的字节
+ * 永远等不到下一次投递,重卡一直是占位)。传 null 撤掉。
+ */
+export function setSnapshotArrive(notify: (() => void) | null): void {
+  onArrive = notify;
+}
+
 /** 就绪索引此刻的样子（验收探针看） */
 export function currentReadyIndex(): ReadyIndex {
   return readyIndex;
