@@ -192,7 +192,7 @@ test('INV-8 限量：同一 userId 不重复扣；满了一个口径 invite-inva
   assert.deepEqual([st.used, st.maxUses, st.active], [2, 2, false]);
 });
 
-test('INV-9 自由进入回 K，凭它握手进得去；限定进入不回 K', async (t) => {
+test('INV-9 自由进入回 K，凭它握手进得去；限定进入不回 K，名单外不扣次数', async (t) => {
   const env = await hostFor(t);
   const free = await createProject(env, { mode: 'free', password: 'free-pw' });
   const c1 = await creatorOf(env, free);
@@ -213,6 +213,14 @@ test('INV-9 自由进入回 K，凭它握手进得去；限定进入不回 K', a
   assert.equal(red2.status, 200, red2.text);
   assert.deepEqual(red2.json, { ok: true, projectId: restricted.projectId, name: restricted.name, mode: 'restricted' });
   assert.equal((await adminOp(c2, restricted, 'invite-status')).used, 1, '限定进入在兑换时就扣');
+  // 名单外的用户名：回包与名单内一模一样，不扣次数（主会话裁定：不泄露名单、不让人耗光次数）
+  const outsider = await redeem(env, inv2.code, { username: 'eve' });
+  assert.equal(outsider.status, 200, outsider.text);
+  assert.deepEqual(outsider.json, red2.json);
+  assert.equal((await adminOp(c2, restricted, 'invite-status')).used, 1, '名单外不扣');
+  const byCreator = await redeem(env, inv2.code, { username: restricted.creator.username });
+  assert.equal(byCreator.status, 200);
+  assert.equal((await adminOp(c2, restricted, 'invite-status')).used, 2, '创建者算名单的一员');
 });
 
 test('INV-10 禁入：被踢的 (用户名, 设备) 兑换回 401 banned；unban 后恢复', async (t) => {
@@ -231,7 +239,7 @@ test('INV-10 禁入：被踢的 (用户名, 设备) 兑换回 401 banned；unban
   assert.equal((await redeem(env, inv.code, { username: 'zoe', deviceId: dev.deviceId })).status, 200);
 });
 
-test('INV-11 限速：同一来源 5 次失败后 429 带 Retry-After 头；别的来源不受影响；回环不计数', async (t) => {
+test('INV-11 限速：同一来源 5 次失败后 429 带 Retry-After 头与 retryAfter；别的来源不受影响；回环不计数', async (t) => {
   const env = await hostFor(t);
   const proj = await createProject(env, { mode: 'free' });
   const creator = await creatorOf(env, proj);
@@ -244,7 +252,7 @@ test('INV-11 限速：同一来源 5 次失败后 429 带 Retry-After 头；别�
   assert.equal(blocked.json.error, 'rate-limited');
   const after = Number(blocked.headers.get('retry-after'));
   assert.ok(after > 0 && after <= 60, String(after));
-  assert.deepEqual(blocked.json, { ok: false, error: 'rate-limited' }, '回包体照契约原样');
+  assert.deepEqual(blocked.json, { ok: false, error: 'rate-limited', retryAfter: after }, '回包带秒数（主会话裁定）');
   assert.equal(blocked.headers.get('access-control-expose-headers'), 'Retry-After');
   assert.equal((await redeem(env, inv.code, { remote: src })).status, 429);
   assert.equal((await resolve(env, inv.code, '198.18.0.8')).status, 200, '另一来源');

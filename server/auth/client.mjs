@@ -119,6 +119,9 @@ async function callJson(fetchImpl, url, init) {
     const err = new Error(`共享端点 ${new URL(url).pathname} 回 ${res.status}${body?.error ? `：${body.error}` : ''}`);
     err.status = res.status;
     err.reason = body?.error ?? null;
+    // 429 的冷却秒数（C10a：回包的 `retryAfter`，没有再看 `Retry-After` 头；界面照表 A 写「请 {秒数} 秒后再试」）
+    const after = Number(body?.retryAfter ?? res.headers?.get?.('retry-after'));
+    err.retryAfter = Number.isFinite(after) && after > 0 ? after : null;
     throw err;
   }
   return body;
@@ -138,6 +141,28 @@ export async function requestChallenge({ base, projectId, username, deviceId, as
 export async function lookupProject({ base, name, fetch }) {
   const r = await callJson(fetch, `${httpBaseOf(base)}/shared/lookup?name=${encodeURIComponent(name)}`, { method: 'GET' });
   return { projectId: r.projectId, name: r.name, mode: r.mode };
+}
+
+/**
+ * `POST shared/invite/resolve`（C10a 契约第 5 节）：凭邀请码查项目，不扣次数。回 `{ projectId, name, mode }`；
+ * 失败抛 `callJson` 的错误（404 `invite-invalid`、429 `rate-limited`，带 `status`、`reason`、`retryAfter`）。
+ * 邀请码只在请求体里，不进地址。
+ */
+export async function resolveInvite({ base, code, fetch }) {
+  const r = await postJson(fetch, `${httpBaseOf(base)}/shared/invite/resolve`, { code });
+  return { projectId: r.projectId, name: r.name, mode: r.mode };
+}
+
+/**
+ * `POST shared/invite/redeem`（C10a 契约第 5 节）：凭邀请码兑换。自由进入回 `{ projectId, name, mode, kdf, key }`，
+ * `key` 就是项目口令的 `K`，交给 `buildAuthProtocols({ key })` 照常握手；限定进入回 `{ projectId, name, mode }`，
+ * 名单里的用户名和密码照填。失败：404 `invite-invalid`、401 `banned`、429 `rate-limited`。
+ */
+export async function redeemInvite({ base, code, username, deviceId, fetch }) {
+  const r = await postJson(fetch, `${httpBaseOf(base)}/shared/invite/redeem`, { code, username, deviceId });
+  const out = { projectId: r.projectId, name: r.name, mode: r.mode };
+  if (r.project && typeof r.project.key === 'string') Object.assign(out, { kdf: r.kdf, key: r.project.key });
+  return out;
 }
 
 /**
