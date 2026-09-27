@@ -50,7 +50,9 @@
  *   （127.0.0.1 上的 5790、5791 常被别的检出的预渲染进程随机占到，所以编辑器的三连号放在 5792 起，127.0.0.2 上的不受影响。）
  *   creator 不走代理、直连 127.0.0.2；主机经代理。两个角色的结果与代理汇总合成一行，另加 `J-all-done`、`J-exactly-once`
  *   （分别取 creator 的 all-done、done-exactly-once：`task.done` 次数取自发布方编辑器诊断的 `doneCounts`）。
- *     node scripts/probes/m8-outbound-probe.mjs --role all [--out <目录>] [--seconds 8] [--clips 4] [--host-concurrency 2] [--timeout-min 25] [--keep-temp]
+ *     node scripts/probes/m8-outbound-probe.mjs --role all [--out <目录>] [--seconds 8] [--clips 4] [--host-concurrency 2] [--timeout-min 25] [--keep-temp] [--proxy-env]
+ *   `--proxy-env`：主机角色改以 `--proxy env` 跑（代理地址只放在它的 HTTPS_PROXY / HTTP_PROXY 里，同云端容器）；此时主机不做
+ *   proxy-covers-*，代理覆盖看汇总行的 `proxySummary.byTarget`。
  *
  * ## 跨机（经阿里云；两种主机：笔记本上的本机代理替身，或真「只能出网」的云端容器）
  *   两台都要 `PROBE_MAIL_TOKEN`（协调口信箱令牌），同一个 `--run`；两台检出同一提交（卡片代码版本要相同）。
@@ -90,6 +92,7 @@ const arg = (name, fallback) => (argv.includes(name) ? argv[argv.indexOf(name) +
 const ROLE = arg('--role', null);
 const TIMEOUT_MS = Number(arg('--timeout-min', 25)) * 60_000;
 const KEEP = argv.includes('--keep-temp');
+const PROXY_ENV_MODE = argv.includes('--proxy-env');
 const SAMPLE_MS = Number(arg('--sample-s', 5)) * 1000;
 const BAND = [5790, 5799];
 const REMOTE_IP = '127.0.0.2';
@@ -470,8 +473,8 @@ async function runAll(out) {
     const common = ['--hosted', hostedUrl, '--coord', coordUrl, '--run', run, ...pass, ...(KEEP ? ['--keep-temp'] : [])];
     const cleanEnv = { ...process.env };
     for (const k of [...PROXY_ENV_KEYS, 'M8_OUTBOUND_INNER']) delete cleanEnv[k];
-    const runChild = (script, role, args) => new Promise((resolve) => {
-      const ch = spawn(process.execPath, [script, '--role', role, ...args], { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, env: cleanEnv });
+    const runChild = (script, role, args, env = cleanEnv) => new Promise((resolve) => {
+      const ch = spawn(process.execPath, [script, '--role', role, ...args], { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, env });
       let stdout = '';
       ch.stdout.on('data', (d) => { stdout += d.toString(); });
       ch.stderr.on('data', (d) => process.stderr.write(d));
@@ -479,7 +482,11 @@ async function runAll(out) {
     });
     const results = await Promise.all([
       runChild(HTW, 'creator', ['--port', String(PORTS.creator), '--out', path.join(outDir, 'creator'), ...common]),
-      runChild(SELF, 'host', ['--port', String(PORTS.host), '--proxy', `http://127.0.0.1:${PORTS.proxy}`, '--out', path.join(outDir, 'host'), ...common]),
+      // --proxy-env：主机按「云端容器」的样子跑（代理只在它的环境变量里，`--proxy env`），走的是那条路径
+      PROXY_ENV_MODE
+        ? runChild(SELF, 'host', ['--port', String(PORTS.host), '--proxy', 'env', '--out', path.join(outDir, 'host'), ...common],
+          { ...cleanEnv, HTTPS_PROXY: `http://127.0.0.1:${PORTS.proxy}`, HTTP_PROXY: `http://127.0.0.1:${PORTS.proxy}` })
+        : runChild(SELF, 'host', ['--port', String(PORTS.host), '--proxy', `http://127.0.0.1:${PORTS.proxy}`, '--out', path.join(outDir, 'host'), ...common]),
     ]);
     for (const r of results) {
       const line = r.line ?? { ok: false, fails: [`没有结果行（退出码 ${r.code}）`], checks: [] };
