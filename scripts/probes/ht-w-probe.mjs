@@ -72,7 +72,8 @@
  *                           所以不靠日志;日志里真有 `docservice.session.*` 时记进 detail 作旁证)
  *     same-session-to-end   到全部任务落定时 `opens` 仍不变
  *     healthz-resumed       托管端 `/healthz` 的 `sessions.resumed` 增加
- *     no-lease-lost         主机的 `lost` 为 0(没有 `task.lease-lost`)
+ *     held-no-lease-lost    断开时持有的任务没有 `lease-lost`;断开到接续后 35 s(租约 30 s + 扫描 5 s)内主机任何任务都没有 `lease-lost`。
+ *                           这段之外的 `lease-lost`(机器过忙、画面 120 s 不动按停滞回收之类)与传输无关,只记进 detail(`lostTotal`、`lostEvents`)
  *     not-released          主机退出前 `released` 为 0(持有的任务没被放回)
  *     held-single-claim     断开时持有的每个任务:旁观节点看到的认领至多一次、认领之后没有再 open(没被放回、没被别人重新认领),
  *                           结束时是 done;发布方本机节点没认领过它
@@ -524,6 +525,23 @@ async function runHost(out) {
     if (!check('render-host-ready', !!ready, lines.slice(-8))) return;
     const editor = `http://127.0.0.1:${port}`;
     const queue = async () => (await json(`${editor}/api/frames/queue`, { timeoutMs: 10_000 })).body;
+    // 预渲染进程诊断里的事件只留最近 80 条:每 3 s 收一次失败 / 丢租约的事件(带时刻),免得被冲掉
+    const hostEvents = new Map();
+    let prerenderUrl = null;
+    let eventsTimer = null;
+    const pollEvents = async () => {
+      try {
+        prerenderUrl ??= (await json(`${editor}/api/prerender/info`, { timeoutMs: 5000 })).body?.url ?? null;
+        if (!prerenderUrl) return;
+        const events = (await json(`${prerenderUrl}/api/frames/diagnostics`, { timeoutMs: 10_000 })).body?.queue?.events ?? [];
+        for (const e of events) {
+          if (!/^node\.(failed|lost)$/.test(String(e?.event ?? ''))) continue;
+          hostEvents.set(`${e.event}|${e.id}|${e.at}`, { event: e.event, id: e.id ?? null, at: e.at ?? null, error: String(e.error ?? '').slice(0, 200) });
+        }
+      } catch { /* 诊断读不到:下一拍再试 */ }
+    };
+    const tickEvents = async () => { await pollEvents(); if (eventsTimer !== false) eventsTimer = setTimeout(tickEvents, 3000); };
+    void tickEvents();
     const q0 = await queue();
     await c.put(K(run, 'host.ready'), { port, envFingerprint: q0?.envFingerprint ?? null, codeVersion: q0?.codeVersion ?? null, at: Date.now() });
     say('host-ready', { port, cut: CUT });
@@ -560,6 +578,7 @@ async function runHost(out) {
       const n = (await queue())?.nodes?.[0];
       return n && (n.resumes ?? 0) > out.resumesBefore ? n : null;
     }, RESUME_TIMEOUT_MS, 200);
+    const resumedAt = resumed ? Date.now() : null;
     // 主机端点的 `session.*` 日志打在预渲染进程的控制台上,编辑器只留它最后几十行、不转出来(`vite-plugin-prerender.ts`),
     // 所以判据用 `GET /api/frames/queue` 的计数:`resumes`(端点每接续成功一次加一,接续之前必有一次脱开)与 `opens`
     // (建成新会话的次数)。日志里要是真有这几行(将来转出来了),一并记下作旁证。
@@ -582,11 +601,19 @@ async function runHost(out) {
     // 6. 等 creator 的 plan,核对持有的任务
     say('wait-plan');
     const plan = await until(async () => (await c.get(K(run, 'plan'), 20_000)) ?? ((await aborted()) ? { aborted: true } : null), TIMEOUT_MS, 100);
+    clearTimeout(eventsTimer);
+    eventsTimer = false;
+    await pollEvents();
     if (!check('plan-received', !!plan && !plan.aborted)) return;
     const n = (await queue())?.nodes?.[0] ?? {};
     Object.assign(out, { claimed: n.claimed ?? null, completed: n.completed ?? null, dedup: n.dedup ?? null, failed: n.failed ?? null, lost: n.lost ?? null,
       released: n.released ?? null, opens: n.opens ?? null, resumes: n.resumes ?? null, transportFinal: n.transport ?? null });
-    check('no-lease-lost', n.lost === 0 && !lines.some((l) => /lease-lost/.test(l)), { lost: n.lost ?? null });
+    const lostEvents = [...hostEvents.values()].filter((e) => e.event === 'node.lost');
+    const windowEnd = (resumedAt ?? cutAt) + 35_000;
+    const lostHeld = lostEvents.filter((e) => pre.held.includes(e.id));
+    const lostNearCut = lostEvents.filter((e) => typeof e.at === 'number' && e.at >= cutAt - 1000 && e.at <= windowEnd);
+    check('held-no-lease-lost', lostHeld.length === 0 && lostNearCut.length === 0 && lostEvents.length === (n.lost ?? 0),
+      { lostTotal: n.lost ?? null, lostHeld, lostNearCut, lostEvents: lostEvents.slice(0, 5).map((e) => ({ ...e, sinceCutMs: typeof e.at === 'number' ? e.at - cutAt : null })) });
     check('not-released', n.released === 0, { released: n.released ?? null });
     check('same-session-to-end', n.opens === out.opensBefore, { opens: [out.opensBefore, n.opens ?? null], resumes: n.resumes ?? null });
     const perHeld = pre.held.map((id) => {
@@ -597,13 +624,8 @@ async function runHost(out) {
     out.perHeld = perHeld;
     check('held-single-claim', perHeld.every((h) => h.inPlan && h.taken !== null && h.taken <= 1 && h.reopened === 0 && h.closed.length === 1 && h.closed[0] === 'done' && h.done === 1 && !h.pcClaimed), perHeld);
 
-    // 主机失败过的任务(可重试的失败会被重新认领,不影响恰好一次;记下原因备查):预渲染进程诊断里最近的事件
-    try {
-      const info = (await json(`${editor}/api/prerender/info`, { timeoutMs: 5000 })).body;
-      const events = info?.url ? (await json(`${info.url}/api/frames/diagnostics`, { timeoutMs: 10_000 })).body?.queue?.events ?? [] : [];
-      out.failedEvents = events.filter((e) => /failed|lost|error/.test(String(e?.event ?? ''))).slice(-10)
-        .map((e) => ({ event: e.event, id: e.id ?? null, error: String(e.error ?? e.message ?? e.code ?? '').slice(0, 200) }));
-    } catch { /* 诊断读不到不影响结论 */ }
+    // 主机失败过的任务(可重试的失败会被重新认领,不影响恰好一次;记下原因备查)
+    out.failedEvents = [...hostEvents.values()].slice(-10).map((e) => ({ ...e, sinceCutMs: typeof e.at === 'number' ? e.at - cutAt : null }));
 
     // 7. 正常退出(放回认领)
     child.send({ type: 'shutdown' });
