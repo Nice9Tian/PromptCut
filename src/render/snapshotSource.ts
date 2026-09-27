@@ -258,6 +258,11 @@ export interface OnlineSnapshotDeps {
   requestTimeoutMs?: number;
   /** 取单张小位图的兜底超时 */
   assetTimeoutMs?: number;
+  /**
+   * 这一层不取(C10 契约第 9 节):在线浏览器模式下的用户卡、图卡常驻「需要本地 PC 渲染辅助」,不贴别人预渲染好的快照,
+   * 所以既不取它的清单也不预取它的字节。由父页按片段判(`snapshotFeed` 的 `exemptOnline`);不给就都取。
+   */
+  skipLayer?: (clipId: string) => boolean;
 }
 
 /** 内容库回包里的层表;形状不对回 null */
@@ -604,6 +609,7 @@ export class OnlineSnapshotSource implements SnapshotSource {
     const [lo, hi] = this.windowFrames();
     const wanted: { seg: [number, number]; key: string }[] = [];
     for (const layer of map.layers) {
+      if (this.deps.skipLayer?.(layer.clipId)) continue;
       for (const seg of segmentsInWindow(layer, map.span, lo, hi)) {
         const key = this.manifestKey(layer, seg);
         const st = this.manifests.get(key);
@@ -653,6 +659,7 @@ export class OnlineSnapshotSource implements SnapshotSource {
     const g = Math.max(0, Math.floor(this.playhead.t * (map.fps || this.playhead.fps) + 1e-6));
     const wanted: { hash: string; dist: number }[] = [];
     for (const layer of map.layers) {
+      if (this.deps.skipLayer?.(layer.clipId)) continue;
       const first = Math.max(lo, layer.firstFrame), last = Math.min(hi, layer.firstFrame + layer.count - 1);
       for (let gf = first; gf <= last; gf++) {
         const hash = this.smallHashOf(layer.kind, layer.key, gf - layer.firstFrame);

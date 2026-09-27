@@ -261,3 +261,22 @@ test('OS10 清单缺几帧小尺寸(阿里云 2026-09-27:295/300,缺第 0 帧与
   await later.tickNow();
   assert.deepEqual(layerOf(index2, 'a', 'html').ranges, [[0, 119]]);
 });
+
+test('C10 第 9 节:skipLayer 点名的层(在线的用户卡、图卡)不取清单、不预取字节;别的层照常', async () => {
+  const w = world();
+  w.layerMap([
+    { clipId: 'a', kind: 'html', key: 'K', resultKey: 'R', firstFrame: 0, count: 60 },
+    { clipId: 'u', kind: 'html', key: 'KU', resultKey: 'RU', firstFrame: 0, count: 60 },
+  ]);
+  w.manifest('R', 0, 59, [0, 1]);
+  w.manifest('RU', 0, 59, [0, 1], 7);
+  const src = new OnlineSnapshotSource({ ...w.deps, skipLayer: (clipId) => clipId === 'u' });
+  src.subscribeReady('s', 0, () => {});
+  src.setProject('p1');
+  src.focus(0, 30);
+  await src.tickNow();
+  await new Promise((r) => setTimeout(r, 5));
+  assert.ok(!w.requests.some((r) => r.key === 'RU:0-59'), '被豁免的层不取清单');
+  assert.ok(w.requests.some((r) => r.key === 'R:0-59'));
+  assert.equal(w.fetches.length, 2, '只预取内置卡那一层的两张');
+});

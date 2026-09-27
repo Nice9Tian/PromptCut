@@ -24,7 +24,7 @@ import { atFrameGrid } from "../render/frameGrid";
 import { contentStartOf } from "./timeline/utils";
 import { startAssetTiers, tierHashes, useTierHashes } from "./media/assetTiers";
 import { startTierBackfill } from "./io/mediaUpload";
-import { currentReadyIndex, deliverSnapshots, markBaselineReset, noteSettled, pendingDemotes, pickForSetTime, setSnapshotArrive, setSnapshotSource, snapshotFeedDebug, stopSnapshotFeed, streamPlanesAt, suppressedAt, syncSnapshotSubscription } from "./snapshotFeed";
+import { currentReadyIndex, deliverSnapshots, exemptOnline, markBaselineReset, noteSettled, pendingDemotes, pickForSetTime, setSnapshotArrive, setSnapshotSource, snapshotFeedDebug, stopSnapshotFeed, streamPlanesAt, suppressedAt, syncSnapshotSubscription } from "./snapshotFeed";
 import { OnlineSnapshotSource, applyReadyMessage, setActiveOnlineSource } from "../render/snapshotSource";
 import { playingCatchUpTargets, runPlayingSwap, runSettleSwap, setSwapHost, swapInFlight } from "./stageSwap";
 import { demotedClips, onStageDemote } from "./demote";
@@ -37,12 +37,19 @@ import { setMediaTierPolicy, type MediaTierPolicy } from "../render/mediaTier";
 import { assetAuthHeaders, docRequest, remoteAssetBase, remoteAssetTicket, setNoEditorProcess, subscribeRemoteAssets } from "./media/assetTiers";
 import { currentDocProjectId, currentSharedLink, pageSession, pushToast } from "./sync/syncManager";
 import { BACKFILL_CHECK_MS, BackfillPublisher, missingLayers } from "./lowMemoryBackfill";
-import { needsLocalPc } from "../render/placeholderHost";
+import { needsLocalPc, setOnlineBrowserMode } from "../render/placeholderHost";
 import { setPlanAllHeavy } from "./planDispatch";
 import { LOW_MEMORY_SETTLE_MS, type LowMemorySettleResult } from "../render/lowMemorySettle";
 
 /** 「进入项目时提示一次当前是低内存档」(c10a 第 8 节):一个页面会话只提示一次 */
 let lowMemoryNoticeShown = false;
+
+/*
+ * 父页的在线浏览器模式开关(C10 契约第 9 节):与舞台 `StageView` 同一个判据(在线构建,或编辑页地址上的
+ * `platform=browser`,后者经 `stageSrc` 转给舞台)。`snapshotFeed` 据它豁免用户卡、图卡的选帧与投递,
+ * 时间轴据它给这些片段挂「该模式暂不支持自定义卡」的徽标。
+ */
+try { setOnlineBrowserMode(ONLINE || new URLSearchParams(location.search).get("platform") === "browser"); } catch { /* 没有 location */ }
 
 /*
  * A1 的 `localHashes`:**当前连接的素材服务**报 `complete` 的哈希集合,换档判据只看它
@@ -634,7 +641,14 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
   const onlineSourceRef = useRef<OnlineSnapshotSource | null>(null);
   useEffect(() => {
     if (!online) return;
-    const src = new OnlineSnapshotSource({ request: docRequest, assetBase: remoteAssetBase, authHeaders: assetAuthHeaders });
+    const src = new OnlineSnapshotSource({
+      request: docRequest, assetBase: remoteAssetBase, authHeaders: assetAuthHeaders,
+      // 用户卡、图卡的层不取清单、不预取字节(C10 契约第 9 节,与选帧的豁免同一个判法)
+      skipLayer: (clipId) => {
+        for (const tr of getState().project.tracks) for (const c of tr.clips) if (c.id === clipId) return exemptOnline(c);
+        return false;
+      },
+    });
     onlineSourceRef.current = src;
     setActiveOnlineSource(src);
     setSnapshotSource(src);
