@@ -15,7 +15,7 @@ import { adminOp, enterShared, ensureDevice, expectSharedClose, getSyncView, lea
 import { errorStatus, route, type SharedMode, type Where } from "./sharedApi";
 import { getState } from "../../store/project";
 import { originalHashOf } from "../../render/mediaTier";
-import { enqueueExistingMedia } from "../media/assetTiers";
+import { enqueueExistingMedia, type EnqueueExistingResult } from "../media/assetTiers";
 import { ONLINE } from "../../online/mode";
 import { inviteLinkOf } from "../../online/invite";
 
@@ -211,7 +211,7 @@ export async function enableCollab(o: EnableOptions): Promise<{ ok: true; invite
    * connectSharedAssets 设的上传目标),再按哈希交给上传队列,之后照 C6.6 的队列规则逐个素材、先小后大地传。
    * 不挡开启:传的进度由上传队列管,缺的(本机内容库里没有)记一笔。
    */
-  void enqueueExistingMedia(getState().project.media ?? []).then((r) => {
+  void enqueueExistingMedia(getState().project.media ?? [], { post: postEnqueue }).then((r) => {
     if (!r) console.warn("[collab] 已有素材没交给上传队列(等不到上传目标,或没有本机编辑器)");
     else if (r.missing.length) console.warn("[collab] 这些素材本机内容库里没有,传不上去:", r.missing);
   });
@@ -219,6 +219,20 @@ export async function enableCollab(o: EnableOptions): Promise<{ ok: true; invite
   // 项目已经建好、进去了；邀请码没签成只少了链接，设置里可以再点「作废并重新生成」
   return { ok: true, invite: inv.ok ? inv.invite : null };
 }
+
+/**
+ * 编辑器进程的「按哈希入队」(`server/vite-plugin-media.ts`)。在线构建里 `ONLINE` 是常量 true,这一支连同接口地址被剪掉
+ * (在线页面没有编辑器进程;也不会走到放云端的开启,那在桌面版里做)。
+ */
+const postEnqueue = ONLINE ? null : async (body: unknown): Promise<EnqueueExistingResult | null> => {
+  try {
+    const r = await fetch("/api/media/upload-queue/enqueue", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const j = (await r.json()) as { ok?: boolean } & EnqueueExistingResult;
+    return j?.ok ? { queued: j.queued ?? [], missing: j.missing ?? [], local: !!j.local } : null;
+  } catch {
+    return null;
+  }
+};
 
 /* ---------------- 取消 ---------------- */
 

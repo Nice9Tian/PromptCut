@@ -354,6 +354,54 @@ const clipCount = (page) => page.evaluate(async () => {
   return (S.getState().project?.tracks ?? []).reduce((n, t) => n + (t.clips?.length ?? 0), 0);
 });
 
+/**
+ * 演示路径(C10a 集成返工,主会话:在线页面不许露出被守卫拦下的 `/api` 报错):凭邀请链接进来之后
+ * 观看(播放、暂停、拖动)、改一处片段、开导出;全程 `window.__pcApiBlocked` 为空,页面文字里没有 `/api/`。
+ * 在线构建里没有源码模块可 import,用页面挂出来的 `window.__pcStore`(时间轴)与 `window.__pcIo`。
+ */
+async function onlineDemo(page) {
+  const blockedNow = () => page.evaluate(() => [...(window.__pcApiBlocked ?? [])]);
+  const apiText = () => page.evaluate(() => (document.body.innerText.match(/[^\n]*\/api\/[^\n]*/g) ?? []).slice(0, 5));
+  await sleep(3000);
+  await shot(page, 'demo-0-enter');
+  const steps = {};
+  steps.enter = await blockedNow();
+  await page.evaluate(() => { const s = window.__pcStore; s.actions.seek(0); s.actions.play(); });
+  await sleep(2500);
+  await page.evaluate(() => window.__pcStore.actions.pause());
+  const t = await page.evaluate(() => window.__pcStore.getState().t);
+  check('demo.played', t > 1, { t });
+  for (const sec of [3, 0.5, 5, 1.5]) { await page.evaluate((x) => window.__pcStore.actions.seek(x), sec); await sleep(300); }
+  await sleep(1000);
+  await shot(page, 'demo-1-watch');
+  steps.watch = await blockedNow();
+  const moved = await page.evaluate(() => {
+    const s = window.__pcStore;
+    // 改一处:把一张卡片的结尾收短 0.25 秒(修边不会和相邻片段撞,挨个试到改得动的那一张)
+    for (const clip of s.getState().project.tracks.flatMap((tr) => tr.clips).filter((c) => c.cardId && c.end - c.start > 0.5)) {
+      s.actions.moveClip(clip.id, { end: clip.end - 0.25 });
+      const after = s.getState().project.tracks.flatMap((tr) => tr.clips).find((c) => c.id === clip.id);
+      if (after && Math.abs(after.end - clip.end) > 1e-6) return { id: clip.id, from: clip.end, to: after.end };
+    }
+    return null;
+  });
+  check('demo.edited', !!moved && Math.abs(moved.from - moved.to - 0.25) < 1e-6, moved);
+  await sleep(2000);
+  steps.edit = await blockedNow();
+  const exporting = page.evaluate(async () => {
+    try { await window.__pcIo.exportVideo({ onWaiting: (m) => { window.__pcDemoWaiting = m; } }); return 'done'; } catch (e) { return `error: ${String(e?.message ?? e).slice(0, 200)}`; }
+  }).catch((e) => `page: ${String(e?.message ?? e).slice(0, 120)}`);
+  await sleep(8000);
+  await shot(page, 'demo-2-export');
+  steps.export = await blockedNow();
+  const waiting = await page.evaluate(() => window.__pcDemoWaiting ?? null);
+  const result = await Promise.race([exporting, sleep(100).then(() => 'running')]);
+  say('demo.export', { waiting, result });
+  const text = await apiText();
+  check('demo.no-api-blocked', Object.values(steps).every((b) => b.length === 0), steps);
+  check('demo.no-api-text', text.length === 0, { text });
+}
+
 async function phaseOnline() {
   const clipsBefore = state.creatorPage ? await clipCount(state.creatorPage) : null;
   // 在线构建的静态检查：路由与缓存头（契约第 2、3 节核对项的本机版）
@@ -378,6 +426,7 @@ async function phaseOnline() {
     await typeInto(page, '[data-pc="join-username"]', '手机小王');
     await page.click('[data-pc="join-submit"]');
   });
+  await onlineDemo(p1);
   // 2. 手填，自由进入
   const p2 = await onlineJoin('online-2-manual-free', `${PROXY}/editor`, async (page) => {
     await typeInto(page, '[data-pc="join-name"]', state.name);
@@ -461,7 +510,8 @@ async function phaseOnline() {
   check('online.no-api-requests', api.length === 0, { count: api.length, sample: api.slice(0, 5) });
   const blocked = new Set();
   for (const p of pages) for (const b of await p.evaluate(() => window.__pcApiBlocked ?? [])) blocked.add(b);
-  say('online.api-blocked', { count: blocked.size, paths: [...blocked].sort() });
+  // 返工:这些入口在在线页面里已置灰或不发请求,守卫一条都不该拦到
+  check('online.no-api-blocked', blocked.size === 0, { count: blocked.size, paths: [...blocked].sort() });
   const errors = pages.flatMap((p) => p.consoleErrors);
   say('online.page-errors', { count: errors.length, sample: [...new Set(errors)].slice(0, 8) });
   for (const p of pages) await p.close$();

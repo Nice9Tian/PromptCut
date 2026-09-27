@@ -8,6 +8,9 @@
 import { ONLINE } from "./mode";
 import { bootApiGuard } from "./apiGuard";
 import { captureInviteFromLocation } from "./invite";
+import { markOnlinePage } from "./pageFlag";
 
+// 运行期标记先设:会被 Node 单测载入、不能静态引 mode.ts 的模块读它停掉 /api 调用(pageFlag.ts)
+if (ONLINE) markOnlinePage();
 bootApiGuard(ONLINE, { base: import.meta.env.BASE_URL });
 captureInviteFromLocation();

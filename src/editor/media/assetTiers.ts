@@ -495,27 +495,19 @@ export interface EnqueueExistingResult { queued: string[]; missing: string[]; lo
 
 /**
  * 开启多用户协作「放云端」之后调:等编辑器进程拿到远程上传目标与 rw 票据,再把项目里已有的素材按哈希交给
- * 上传队列(`POST /api/media/upload-queue/enqueue`,只收本地内容库里有的,缺的回 `missing`)。
+ * 上传队列(`deps.post` 发 `POST /api/media/upload-queue/enqueue`,只收本地内容库里有的,缺的回 `missing`)。
  * 之后照 C6.6 队列规则逐个素材、先小后大地传。没有本机编辑器(在线浏览器模式)、等不到目标时回 null。
+ * `post` 由调用方给(`collab.ts` 按编译期的 `ONLINE` 给,在线构建里连同接口地址一起被剪掉)。
  */
 export async function enqueueExistingMedia(
   media: readonly ExistingMedia[],
-  deps: { post?: (body: unknown) => Promise<EnqueueExistingResult | null>; timeoutMs?: number } = {},
+  deps: { post: ((body: unknown) => Promise<EnqueueExistingResult | null>) | null; timeoutMs?: number },
 ): Promise<EnqueueExistingResult | null> {
-  if (noEditorProcess && !deps.post) return null;
+  if (!deps.post) return null;
   const items = existingMediaItems(media);
   if (!items.length) return { queued: [], missing: [] };
   if (!(await whenUploadTargetReady(deps.timeoutMs ?? 30_000))) return null;
-  const post = deps.post ?? (async (body: unknown) => {
-    try {
-      const r = await fetch("/api/media/upload-queue/enqueue", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-      const j = (await r.json()) as { ok?: boolean } & EnqueueExistingResult;
-      return j?.ok ? { queued: j.queued ?? [], missing: j.missing ?? [], local: !!j.local } : null;
-    } catch {
-      return null;
-    }
-  });
-  return post({ items });
+  return deps.post({ items });
 }
 
 /** 探针与单测的观察口 */

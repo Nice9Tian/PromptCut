@@ -15,6 +15,7 @@
  * 报一句 INEFFECTIVE_DYNAMIC_IMPORT,并且在真要看包体积时误导人。
  */
 import * as combineImport from "../editor/io/combineImport";
+import { onlinePage } from "../online/pageFlag";
 
 export interface SkillState {
   active: boolean;
@@ -187,6 +188,8 @@ async function syncWithJobs(state: SkillState) {
 }
 
 async function poll() {
+  // 在线浏览器模式没有 Skill 模式(那要本机编辑器进程):不问
+  if (onlinePage()) return;
   try {
     const res = await fetch("/api/skill-mode");
     const data = await res.json();

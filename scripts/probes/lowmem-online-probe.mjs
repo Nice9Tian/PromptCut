@@ -320,6 +320,13 @@ try {
   out.G4.centerPixel = px;
   check(px[0] > 200 && px[1] < 60 && px[2] > 200, 'G4 重卡那一层画的是原尺寸快照(品红)', px);
   check(pageErrors.length === 0, '页面没有报错', pageErrors.slice(0, 5));
+  // C10a 集成返工:在线页面不许露出被守卫拦下的 /api 报错 —— 全程守卫一条都没拦到,页面文字里没有 /api/
+  const apiBlocked = await page.evaluate(() => [...(window.__pcApiBlocked ?? [])]);
+  const apiText = await page.evaluate(() => (document.body.innerText.match(/[^\n]*\/api\/[^\n]*/g) ?? []).slice(0, 5));
+  await page.screenshot({ path: path.join(OUT, 'g5-phone-end.png') });
+  out.apiBlocked = apiBlocked;
+  check(apiBlocked.length === 0, 'G5 全程没有被守卫拦下的 /api 请求', apiBlocked);
+  check(apiText.length === 0, 'G5 页面上没有 /api 报错', apiText);
   out.pageErrors = pageErrors.slice(0, 10);
 } catch (e) {
   fails.push('探针异常:' + (e?.stack || e));

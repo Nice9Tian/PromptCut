@@ -52,5 +52,6 @@ test("EQE-3 等不到上传目标(签不到 rw 票据)就不入队,回 null;没�
   assert.equal(r, null);
   assert.equal(bodies.length, 0);
   assert.deepEqual(await T.enqueueExistingMedia([], { post: async () => null, timeoutMs: 50 }), { queued: [], missing: [] });
+  assert.equal(await T.enqueueExistingMedia([{ hash: h("a") }], { post: null }), null, "没有入队的口子(在线构建):不做");
   stop();
 });
