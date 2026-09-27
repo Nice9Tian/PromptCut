@@ -38,6 +38,29 @@ export interface RemoteAssets {
 
 const LOCAL_BASE = "/api/asset";
 
+/**
+ * 在线浏览器模式(c10a 第 2 节「在线页面不请求 `/api/*`」):没有本机编辑器进程,也没有本地素材服务。
+ * 由 `Preview` 在挂上时按 `ONLINE` 设(本文件不读编译期常量,单测里没有它)。设了之后:
+ * 不再告诉编辑器进程远程素材服务 / 上传目标 / 预取清单,也不问本地素材服务(还没连上远程素材服务时不轮询)。
+ */
+let noEditorProcess = false;
+export function setNoEditorProcess(on: boolean): void {
+  noEditorProcess = !!on;
+}
+
+/**
+ * 当前共享项目的文档服务连接(`connectSharedAssets` 交进来的那一条)。c10a 第 9 节:在线页面按内容库的清单
+ * 拉预渲染小尺寸,要在这条连接上 `content.get`(`src/render/snapshotSource.ts` 的在线实现经 `docRequest` 用它)。
+ */
+let docLink: LinkLike | null = null;
+export function docRequest(msg: Record<string, unknown>, timeoutMs?: number): Promise<Record<string, unknown>> {
+  if (!docLink) return Promise.reject(new Error("没连上文档服务"));
+  return docLink.request(msg, timeoutMs);
+}
+export function hasDocLink(): boolean {
+  return !!docLink;
+}
+
 let remote: RemoteAssets | null = null;
 /** 当前素材服务上到齐的哈希(换了素材服务就清空) */
 let complete = new Set<string>();
@@ -72,6 +95,24 @@ export function remoteAssetBase(): string | null {
   return remote?.base ?? null;
 }
 
+/** 当前远程素材服务的只读票据(在线页面给 `<video>` 的查询串、取预渲染小尺寸用;c10a 第 8、9 节);本地给 null */
+export async function remoteAssetTicket(): Promise<string | null> {
+  if (!remote?.ticket) return null;
+  try { return (await remote.ticket()) || null; } catch { return null; }
+}
+
+const remoteListeners = new Set<() => void>();
+/** 远程素材服务换了(进入 / 离开共享项目)时通知;回退订 */
+export function subscribeRemoteAssets(cb: () => void): () => void {
+  remoteListeners.add(cb);
+  return () => { remoteListeners.delete(cb); };
+}
+
+/** 带当前素材票据的请求头(`Authorization: Bearer`);本地素材服务给空对象 */
+export async function assetAuthHeaders(): Promise<Record<string, string>> {
+  return authHeaders();
+}
+
 async function authHeaders(): Promise<Record<string, string>> {
   if (!remote?.ticket) return {};
   try {
@@ -85,6 +126,7 @@ async function authHeaders(): Promise<Record<string, string>> {
 let pushedTicket: string | null = null;
 /** 告诉本机编辑器进程(按需拉取与预取靠它);在线浏览器模式没有本机编辑器,失败就算了 */
 async function pushRemoteToEditor(): Promise<void> {
+  if (noEditorProcess) return;
   try {
     if (!remote) {
       pushedTicket = null;
@@ -113,6 +155,7 @@ export function setRemoteAssets(next: RemoteAssets | null): void {
   known = false;
   publish();
   lastPrefetchKey = "";
+  for (const l of [...remoteListeners]) { try { l(); } catch { /* 一个订阅者坏了不影响别人 */ } }
   void pushRemoteToEditor().then(() => { kick(); });
 }
 
@@ -153,6 +196,8 @@ export function hashesToAsk(project: Pick<Project, "media">, done: ReadonlySet<s
 
 /** 跑一轮轮询(导出前、切换素材服务后也直接调) */
 export async function pollOnce(project: Pick<Project, "media"> = getState().project): Promise<void> {
+  // 在线页面没有本地素材服务:还没连上远程素材服务就不问
+  if (noEditorProcess && !remote) return;
   const gen = serviceGen;
   const ask = hashesToAsk(project, complete);
   const got = ask.length ? await askComplete(ask) : new Set<string>();
@@ -166,7 +211,7 @@ export async function pollOnce(project: Pick<Project, "media"> = getState().proj
 
 let lastPrefetchKey = "";
 async function maybePrefetch(project: Project): Promise<void> {
-  if (!remote) return;
+  if (!remote || noEditorProcess) return;
   const items = prefetchOrder(project);
   const key = `${remote.base}|${items.map((i) => i.hash).join(",")}`;
   if (key === lastPrefetchKey) return;
@@ -299,6 +344,7 @@ export function pickAssetEndpoint(endpoints: unknown, docBase: string, selfHost:
  */
 export async function connectSharedAssets(link: LinkLike, docBase: string): Promise<string | null> {
   let base: string | null = null;
+  docLink = link;
   try {
     const r = await link.request({ type: "service.watch", kinds: ["asset"] });
     base = pickAssetEndpoint(r.endpoints, docBase, typeof location === "undefined" ? "" : location.host);
@@ -311,6 +357,7 @@ export async function connectSharedAssets(link: LinkLike, docBase: string): Prom
 
 /** 离开共享项目:回到本地素材服务 */
 export function disconnectSharedAssets(): void {
+  docLink = null;
   setRemoteAssets(null);
   stopUploadTarget?.();
   stopUploadTarget = startUploadTarget(null, null);
@@ -335,6 +382,7 @@ export interface UploadTargetDeps {
 }
 
 async function postUploadTarget(body: { base: string | null; ticket?: string | null }): Promise<void> {
+  if (noEditorProcess) return;
   try {
     await fetch("/api/media/upload-queue/target", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   } catch { /* 没有本机编辑器 */ }
@@ -408,4 +456,7 @@ export function resetAssetTiersForTest(): void {
   listeners.clear();
   stopUploadTarget?.();
   stopUploadTarget = null;
+  noEditorProcess = false;
+  docLink = null;
+  remoteListeners.clear();
 }

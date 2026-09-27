@@ -17,6 +17,7 @@ import {
   postStageReady,
   serveStageRpc,
   postStageCards,
+  postStageTrouble,
   type BackJob,
   type PlayReply,
   type ProbeBooleans,
@@ -42,13 +43,15 @@ import {
  * 在线浏览器模式(product/platforms.md)还没有运行期判据:先由舞台地址上的 `platform=browser` 显式打开,
  * 只影响 `unsupported` 占位(用户卡 / 图卡在这台设备上渲染不了)。编辑页的同名参数经 `stageSrc` 转发过来。
  */
-try { setOnlineBrowserMode(new URLSearchParams(location.search).get("platform") === "browser"); } catch { /* 没有 location:导出 / 单测 */ }
+try { setOnlineBrowserMode(ONLINE || new URLSearchParams(location.search).get("platform") === "browser"); } catch { /* 没有 location:导出 / 单测 */ }
 import { PLACEHOLDER_SHOW_DELAY_MS } from "./render/placeholder/contract";
 import { measureLocalContentBox, type CanvasPixels } from "./render/contentBox";
 import { createGlHost } from "./render/gl/glHost";
 import { glPlanes } from "./render/gl/planes";
 import { resolveGlRoute } from "./render/costDevice.mjs";
 import { themeStyle } from "./themes";
+import { ONLINE } from "./online/mode";
+import { setMediaTierPolicy } from "./render/mediaTier";
 import "./cards";
 
 /**
@@ -366,7 +369,23 @@ export default function StageView() {
      * 路线先按宿主能力的缺省建,收到项目后按 `project.glRoute` 的生效值改(`setProject`)。
      * 路线 2 的端口由父页在握手之后、任何 RPC 之前经 `{ type: 'gl-port' }` 交来(下面那个监听)。
      */
-    const caps = detectHostCapabilities();
+    const caps = detectHostCapabilities({ online: ONLINE });
+    // c10a 第 8 节:舞台自己判出来的低内存档先生效;远程素材服务的基址与票据等父页 `setMediaPolicy` 下发
+    setMediaTierPolicy({ lowMemory: caps.lowMemory });
+    /*
+     * c10a 第 8 节「运行中出现 webglcontextlost 或连续 3 次视频解码失败,本次会话改按低内存档」:只在在线模式里报。
+     * 两种事件都不冒泡,在 document 上按捕获阶段接;判定与提示在父页(`src/online/lowMemory.ts`)。
+     * OffscreenCanvas 在 Worker 里丢上下文不经这里(glHost 自己有退路),只接主线程画布的。
+     */
+    const onTrouble = (e: Event) => {
+      if (!ONLINE) return;
+      if (e.type === "webglcontextlost") { postStageTrouble("webglcontextlost"); return; }
+      const v = e.target as HTMLVideoElement | null;
+      if (!v || v.tagName !== "VIDEO") return;
+      if (e.type === "error" && v.error?.code === 3 /* MEDIA_ERR_DECODE */) postStageTrouble("decode-failure");
+      else if (e.type === "loadeddata") postStageTrouble("decode-ok");
+    };
+    if (ONLINE) for (const type of ["webglcontextlost", "error", "loadeddata"]) document.addEventListener(type, onTrouble, true);
     const gl = createGlHost({ stageId: caps.stageId, lowMemory: caps.lowMemory, route: resolveGlRoute(null, caps.lowMemory) });
     const onGlPort = (e: MessageEvent) => {
       if (e.source !== window.parent) return;
@@ -1853,6 +1872,12 @@ export default function StageView() {
        * A1 的换档集合:当前连接的素材服务报 `complete` 的哈希(C6.6,父页每 2 秒轮询后下发)。
        * 变了就当场重渲一次:暂停中也要换档(`VideoTrack` 的双缓冲)。
        */
+      async setMediaPolicy(next) {
+        // 低内存档只会从普通改到低(运行中改判),不回头:舞台自己判出来的 true 不被父页的 false 盖掉
+        setMediaTierPolicy({ lowMemory: caps.lowMemory || !!next?.lowMemory, remote: next?.remote ?? null });
+        commitPlanes();
+        return { ok: true as const };
+      },
       async setLocalHashes(hashes) {
         const next = [...hashes];
         const prev = ref.current.localHashes;
@@ -1932,6 +1957,7 @@ export default function StageView() {
       stopRpc();
       player.stop();
       window.removeEventListener("message", onGlPort);
+      if (ONLINE) for (const type of ["webglcontextlost", "error", "loadeddata"]) document.removeEventListener(type, onTrouble, true);
       gl.dispose();
       delete (window as unknown as Record<string, unknown>).__pcGlWorkerDiag;
       window.clearTimeout(ref.current.settle);

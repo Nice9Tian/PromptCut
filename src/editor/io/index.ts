@@ -331,8 +331,11 @@ export async function exportVideo(
     onProgress?: (done: number, total: number, stage?: "render" | "compose") => void;
     /** 拿到任务 id 就能取消了,所以在开跑那一刻先回给调用方 */
     onStart?: (id: string) => void;
-  } = {},
+  } & OnlineExportOptions = {},
 ): Promise<{ outDir: string; id: string }> {
+  // c10a 第 11.1 节:在线页面没有预渲染进程,在浏览器里逐帧导出。
+  // `ONLINE` 按需取:`mode.ts` 读 `import.meta.env`,Node 单测里载入本模块时没有它
+  if ((await import("../../online/mode")).ONLINE) return exportVideoOnline(opts);
   const p = JSON.parse(JSON.stringify(getState().project)) as Project;
   // C6.6「导出只用原片」:原片在当前素材服务上还没 complete 的,导出前拦下,提示等待上传方,不拿小版代替
   const missing = await exportGate(p);
@@ -430,6 +433,8 @@ function exportJobUrl(id: string, suffix = ""): string {
 
 /** 中止一次导出。渲染进程和它拉起的 Chrome / ffmpeg 都会被结束。 */
 export async function cancelExport(id: string): Promise<void> {
+  const online = onlineJobs.get(id);
+  if (online) { online.controller.abort(); return; }
   await fetch(exportJobUrl(id), { method: "DELETE" }).catch(() => {});
 }
 
@@ -440,6 +445,11 @@ export async function revealExport(id: string): Promise<void> {
 
 /** 取回某个产物(preview.mp4 / overlay.mov),用来写进用户选的位置 */
 export async function fetchExportFile(id: string, name: string): Promise<Blob> {
+  const online = onlineJobs.get(id);
+  if (online) {
+    if (!online.blob) throw new Error("这次导出已经直接写到选的文件里了");
+    return online.blob;
+  }
   const r = await fetch(exportJobUrl(id, `/file/${encodeURIComponent(name)}`));
   if (!r.ok) throw new Error(`取不到 ${name}:${await r.text()}`);
   return r.blob();
@@ -447,6 +457,12 @@ export async function fetchExportFile(id: string, name: string): Promise<Blob> {
 
 /** Stream a finished export directly into a File System Access writable. */
 export async function streamExportFile(id: string, name: string, writable: FileSystemWritableFileStream): Promise<void> {
+  const online = onlineJobs.get(id);
+  if (online) {
+    // 在线导出:已经直接写进选的文件的,这里什么都不用做;攒在内存里的,整块写过去
+    if (online.blob) await writable.write(online.blob);
+    return;
+  }
   const r = await fetch(exportJobUrl(id, `/file/${encodeURIComponent(name)}`));
   if (!r.ok) throw new Error(`取不到 ${name}:${await r.text()}`);
   if (!r.body) throw new Error(`取不到 ${name}:响应没有数据流`);
@@ -460,6 +476,18 @@ export async function streamExportFile(id: string, name: string, writable: FileS
   } finally { reader.releaseLock(); }
 }
 
+/* ------------------------------------------------------------------ *
+ * 在线页面的逐帧导出(`docs/plan/c10a-contract.md` 第 11.1 节):实现在 `src/export/onlineExport.ts`,这里按需载入
+ * (浏览器导出那一串在 Node 单测里载不进来;`mode.ts` 读 `import.meta.env`,单测里也没有)。任务表在这里,取消、取件按 id 找回来。
+ * ------------------------------------------------------------------ */
+
+export type { OnlineExportOptions } from "../../export/onlineExport";
+import type { OnlineExportOptions, OnlineJob } from "../../export/onlineExport";
+const onlineJobs = new Map<string, OnlineJob>();
+async function exportVideoOnline(opts: Parameters<typeof exportVideo>[0] & OnlineExportOptions): Promise<{ outDir: string; id: string; written?: boolean }> {
+  return (await import("../../export/onlineExport")).exportVideoOnline(opts ?? {}, onlineJobs);
+}
+
 declare global {
   interface Window {
     __pcIo?: Record<string, unknown>;
@@ -469,4 +497,7 @@ declare global {
 if (typeof window !== "undefined") {
   // 临时验证出口：puppeteer 无头验证时直接调用这四个函数（不用模拟 <input type=file>）。
   window.__pcIo = { importVideoFiles, importProjectFile, importSrtFile, parseSrt, exportProjectJson, exportVideo, setMediaTranscript: (mediaId: string, transcript: any) => actions.setMediaTranscript(mediaId, transcript) };
+  // c10a 探针(`scripts/probes/lowmem-export-probe.mjs`):在当前页面上跑一次浏览器逐帧导出,回产物字节(base64)与统计。
+  // 不经「另存为」、不下载;`originals: false` 时重卡照活渲(桌面运行环境没有渲染节点的层表)
+  window.__pcIo.exportVideoBrowser = async (o: { maxFrames?: number; originals?: boolean } = {}) => (await import("../../export/onlineExport")).exportVideoBrowserProbe(o);
 }

@@ -26,6 +26,8 @@ const SRC = path.dirname(fileURLToPath(import.meta.url));
 const FORBIDDEN = {
   kernel: ["render", "editor", "mcp", "ai", "store", "cards", "parts"],
   render: ["editor", "mcp", "ai"],
+  // c10a:在线浏览器模式的判定(`src/online/`)与 render 同层:只引 kernel、render 与同目录(主会话裁定)
+  online: ["editor", "mcp", "ai"],
 };
 
 /**
