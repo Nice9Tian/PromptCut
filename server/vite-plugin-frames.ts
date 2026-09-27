@@ -160,6 +160,16 @@ async function ticketFor(link: DocLink, endpoint: any) {
   return createTicketSource(endpoint, { access: "rw" });
 }
 /**
+ * 到文档服务的端点(`createDocEndpoint`,HT-a 契约 `docs/plan/http-transport-contract.md` 第 9 节)打的日志里,
+ * 进预渲染进程控制台的几种:会话建成、结束、传输脱开与接续(传输的断开与接续只进日志与诊断,不打断队列)。
+ */
+const SESSION_LOG_EVENTS = new Set(["session.open", "session.close", "session.detach", "session.resume"]);
+/** 诊断里的会话状态:实际用的传输(脱开时为 null)、接续次数、是否对着旧服务端退化 */
+const sessionDiag = (endpoint: any) => {
+  const st = typeof endpoint?.stats === "function" ? endpoint.stats() : null;
+  return st ? { transport: st.transport ?? null, resumes: st.resumes ?? 0, legacy: st.legacy === true } : {};
+};
+/**
  * 推送队列认哪几种文档服务(契约 J.12):`remote`、`local` 总认;`editor` 只在显式要推送时认 ——
  * `PROMPTCUT_QUEUE_NODE=1` 或 `PROMPTCUT_PUSH=1`。
  */
@@ -183,8 +193,8 @@ async function startArtifactPush(root: string, service: FramePipeline) {
   if (!pushModeAllowed(resolved.mode)) return pushLog("push.skip", { reason: "editor-docservice-not-enabled", mode: resolved.mode });
   if (services.get(root) !== service || (service as any).closed) return;
   const link = resolved as DocLink;
-  const endpoint = node.createWsEndpoint({ url: link.url, ...(link.protocols ? { protocols: link.protocols } : {}), log: (event: string, fields: object) => {
-    if (event === "ws.open" || event === "ws.close") pushLog(`docservice.${event}`, fields);
+  const endpoint = node.createDocEndpoint({ url: link.url, ...(link.protocols ? { protocols: link.protocols } : {}), log: (event: string, fields: object) => {
+    if (SESSION_LOG_EVENTS.has(event)) pushLog(`docservice.${event}`, fields);
   } });
   const content = node.createContentClient(endpoint);
   const { createAssetClient }: any = await import("./asset-store/client.mjs");
@@ -301,7 +311,7 @@ async function startQueueNode(root: string, service: FramePipeline) {
   const origin = assetServiceOrigin();
   if (!origin) return queueLog("queue.skip", { reason: "no-asset-service" });
   const node: any = await import("./render-node/index.mjs");
-  const missing = ["createProjectClient", "createContentClient", "createLocalNode", "createWsEndpoint", "planTaskOf", "watchServiceEndpoints"]
+  const missing = ["createProjectClient", "createContentClient", "createLocalNode", "createDocEndpoint", "planTaskOf", "watchServiceEndpoints"]
     .filter(name => typeof node[name] !== "function");
   if (missing.length) return queueLog("queue.skip", { reason: "render-node-exports-missing", missing });
   if (hostProfile()) return startHostNode(root, service, node, origin);
@@ -330,8 +340,8 @@ async function startQueueNode(root: string, service: FramePipeline) {
   const { createAssetSink, applyResult }: any = await import("./artifact-transfer.mjs");
   const { createAssetClient }: any = await import("./asset-store/client.mjs");
 
-  const endpoint = node.createWsEndpoint({ url: link.url, ...(link.protocols ? { protocols: link.protocols } : {}), log: (event: string, fields: object) => {
-    if (event === "ws.open" || event === "ws.close") queueLog(`docservice.${event}`, fields);
+  const endpoint = node.createDocEndpoint({ url: link.url, ...(link.protocols ? { protocols: link.protocols } : {}), log: (event: string, fields: object) => {
+    if (SESSION_LOG_EVENTS.has(event)) queueLog(`docservice.${event}`, fields);
   } });
   const projects = node.createProjectClient(endpoint);
   const content = node.createContentClient(endpoint);
@@ -591,7 +601,7 @@ async function startQueueNode(root: string, service: FramePipeline) {
     },
     describe() {
       return {
-        mode: resolved.mode, url: resolved.url, connected: endpoint.connected === true, active: handle.active(), nodeId, envFingerprint, assetBase: assets.base(),
+        mode: resolved.mode, url: resolved.url, connected: endpoint.connected === true, ...sessionDiag(endpoint), active: handle.active(), nodeId, envFingerprint, assetBase: assets.base(),
         codeVersion, running: localNode?.running?.() ?? [], held: localNode?.session?.held?.().map(({ id }: any) => id) ?? [],
         stats: { ...stats },
         // M6c X5:闲时门槛此刻的判定(null = 能认领)与第一次认领时 preload 的状态
@@ -608,7 +618,7 @@ async function startQueueNode(root: string, service: FramePipeline) {
     summary() {
       return {
         profile: "pc",
-        nodes: [{ projectId: link.projectId ?? "local", nodeId, connected: endpoint.connected === true, claimed: stats.claimed, completed: stats.completed,
+        nodes: [{ projectId: link.projectId ?? "local", nodeId, connected: endpoint.connected === true, ...sessionDiag(endpoint), claimed: stats.claimed, completed: stats.completed,
           dedup: stats.dedup, failed: stats.failed, lost: stats.lost }],
         codeVersion, envFingerprint, maxConcurrent: 1,
       };
@@ -762,13 +772,11 @@ async function startHostNode(root: string, service: FramePipeline, node: any, or
     nodeIdOf: (_entry: any, index: number) => `${nodeIdBase}/p${index}`.slice(0, 128),
     connect: (entry: any, index: number) => {
       const rec: any = { projectId: entry.projectId ?? null, endpoint: null, assets: null, ticket: null, connectFailed: 0, opens: 0, cards: null };
-      // 传输按配置项选(HTTP 长轮询给只放行 443 HTTPS 的节点,`docs/plan/http-transport-contract.md` 第 9 节);两者形状相同、日志事件同名
-      const createEndpoint = entry.transport === "http" ? node.createHttpEndpoint : node.createWsEndpoint;
-      rec.endpoint = createEndpoint({ url: entry.url, protocols: sharedProtocols(entry, { role: "render" }), log: (event: string, fields: object) => {
-        if (event === "ws.connect-failed") rec.connectFailed++;
-        if (event === "ws.open") rec.opens++;
+      rec.endpoint = node.createDocEndpoint({ url: entry.url, protocols: sharedProtocols(entry, { role: "render" }), log: (event: string, fields: object) => {
+        if (event === "session.connect-failed") rec.connectFailed++;
+        if (event === "session.open") rec.opens++;
         // 连不上时每次退避都会打一行,只在头几次打,免得刷屏
-        if (event === "ws.open" || event === "ws.close" || (event === "ws.connect-failed" && rec.connectFailed <= 3)) {
+        if (SESSION_LOG_EVENTS.has(event) || (event === "session.connect-failed" && rec.connectFailed <= 3)) {
           queueLog(`docservice.${event}`, { project: index, projectId: rec.projectId, ...fields });
         }
       } });
@@ -840,7 +848,7 @@ async function startHostNode(root: string, service: FramePipeline, node: any, or
 
   const summary = () => ({
     profile: "host",
-    nodes: host.nodes().map((n: any, i: number) => ({ ...n, opens: wired[i]?.opens ?? 0, connectFailed: wired[i]?.connectFailed ?? 0, assetBase: wired[i]?.assets.base() ?? null })),
+    nodes: host.nodes().map((n: any, i: number) => ({ ...n, opens: wired[i]?.opens ?? 0, connectFailed: wired[i]?.connectFailed ?? 0, ...sessionDiag(wired[i]?.endpoint), assetBase: wired[i]?.assets.base() ?? null })),
     codeVersion, envFingerprint, maxConcurrent: host.maxConcurrent,
     // c66-host-cards:每个项目的卡片同步(记账:仓库相对路径 → 装到的 cardRev)与卡片代码身份的状态
     cardSync: wired.map((rec) => hostCardSyncSummary(rec.projectId, rec.cards)),

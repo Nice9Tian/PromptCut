@@ -2,10 +2,9 @@
  * Node 进程怎么拿共享项目的凭证（契约 `docs/plan/auth-contract.md` 第 11 节）。
  *
  * 预渲染进程、独立主机、探针读环境变量 `PROMPTCUT_SHARED_CONFIG`，它指向一个 JSON 文件：
- *   `{ url, projectId, username, deviceId, deviceName, as, password | key, role, transport }`，
+ *   `{ url, projectId, username, deviceId, deviceName, as, password | key, role }`，
  * 也可以是这样的对象组成的数组（独立主机加入多个项目时）。
- * - `url`：文档服务地址（`ws://host:8787`、`ws://host:5190/docservice`）；`transport: 'http'` 时也可以写 `https://…`；
- * - `transport`：`'ws'`（缺省）或 `'http'`（HTTP 长轮询，只放行 443 HTTPS 的节点用，`docs/plan/http-transport-contract.md` 第 9 节）；
+ * - `url`：文档服务地址（`ws://host:8787`、`ws://host:5190/docservice`）；
  * - `projectId` 可以换成 `name`（按名字查一次 `shared/lookup`）；
  * - `deviceId` / `deviceName` 不给时用本机设备信息（`device.mjs`）；`as` 缺省 `member`；`role` 缺省 `render`；
  * - `password` 与 `key`（已派生的 `K`）给一个。给 `password` 时第一次连接派生出 `K` 后只缓存 `K`。
@@ -36,13 +35,9 @@ export function normalizeEntry(raw, device = localDeviceInfo()) {
   } catch {
     throw bad('url 不是合法地址');
   }
-  const transport = raw.transport ?? 'ws';
-  if (transport !== 'ws' && transport !== 'http') throw bad("transport 只能是 'ws' 或 'http'");
-  const schemes = transport === 'http' ? ['ws:', 'wss:', 'http:', 'https:'] : ['ws:', 'wss:'];
-  if (!schemes.includes(url.protocol)) throw bad(transport === 'http' ? 'url 必须是 ws(s):// 或 http(s)://' : 'url 必须是 ws:// 或 wss://');
+  if (!['ws:', 'wss:'].includes(url.protocol)) throw bad('url 必须是 ws:// 或 wss://');
   const out = {
     url: raw.url,
-    transport,
     projectId: raw.projectId ?? null,
     name: raw.name ?? null,
     username: raw.username,
@@ -87,7 +82,8 @@ export function loadSharedConfig(env = process.env) {
 }
 
 /**
- * 一条配置 → 每次连之前调的 `protocols()`（交给 `createWsEndpoint`）。
+ * 一条配置 → 每次连之前调的 `protocols()`（交给 `createDocEndpoint`，每次建会话前调、接续时不调）。
+ * 配置里没有传输字段：传输由会话层自动选（`docs/plan/http-transport-contract.md` 第 4.3 节）。
  * 按名字给的项目，第一次调用时查一次 `projectId`；给口令的，第一次派生出 `K` 后缓存 `K`、丢掉口令。
  * @param {ReturnType<typeof normalizeEntry>} entry
  * @param {{ fetch?: typeof globalThis.fetch, role?: string }} [options] `role` 覆盖配置里的角色

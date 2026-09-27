@@ -11,7 +11,7 @@
  *
  *   node scripts/probes/shared-project-probe.mjs --mode internet --role creator --hosted http://127.0.0.1:8790
  *        (--coord-port 8799 [--coord-host 127.0.0.1] | --coord <url>) [--name <项目名>] [--tasks 6] [--task-ms 600]
- *        [--creator-delay-ms 1000] [--media-kb 256] [--timeout-ms 180000] [--transport ws|http]
+ *        [--creator-delay-ms 1000] [--media-kb 256] [--timeout-ms 180000]
  *
  *   1. 在托管端建一个自由进入的共享项目（`POST shared/create`，口令随机生成）；
  *   2. 以创建者身份（`as: 'creator'`，`role: 'render'`，节点 profile `pc`）连文档服务：从 `service.endpoints` 拿素材服务地址，
@@ -22,20 +22,17 @@
  *      kind snapshot、tier shared；真正的 plan 切分要编辑器，这里不跑），自己的节点晚 `--creator-delay-ms` 才开始认领，
  *      保证成员先认领到；产物（每段一个小文件）带票据写进 `px`；等全部 `task.done`；
  *   5. 写 `creator-done`，等成员的结果（`member-result`），一起输出。
- *   `--transport http`：创建者到文档服务的连接走 HTTP 长轮询（`docs/plan/http-transport-contract.md`），
- *   成员配置里也写上 `transport: 'http'`（成员自己的 `--transport` 优先）。缺省 ws。
  *
  * ## --mode internet --role member --hosted <url> --coord <url>
  *
  *   node scripts/probes/shared-project-probe.mjs --mode internet --role member --hosted http://127.0.0.1:8790 --coord http://127.0.0.1:8799
- *        [--expect-tasks 1] [--task-ms 600] [--max-concurrent 2] [--timeout-ms 180000] [--transport ws|http]
+ *        [--expect-tasks 1] [--task-ms 600] [--max-concurrent 2] [--timeout-ms 180000]
  *
  *   不设集群令牌（设了就判失败），只凭协调口给的项目凭证进入（`role: 'render'`，节点 profile `host`）：
  *   从 `service.endpoints` 拿素材服务地址；读项目快照（逐片取回、核摘要）、内容库条目、带票据读素材
  *   （Bearer 与查询串只读票据各一次，Range）；不带票据读一次（回环被当自己人时记 `loopbackTrusted`，不判）；
  *   认领并完成至少 `--expect-tasks` 个任务（产物带 rw 票据写进 `px`）。`--expect-tasks 0` 只验进入与读取（迁移后抽查用）。
- *   `--hosted` 覆盖成员配置里的文档服务地址（迁移后连新地址）。`--transport` 写进成员配置的 `transport`，优先于配置里的
- *   （都没有就是 ws）；走 http 时素材、票据等其余逻辑不变，只有到文档服务的那条连接换成 HTTP 长轮询。
+ *   `--hosted` 覆盖成员配置里的文档服务地址（迁移后连新地址）。
  *
  * ## --role coord --port <n> [--host 127.0.0.1]
  *
@@ -59,6 +56,13 @@
  *   三个命名空间的哈希集合与字节数；再从新实例按哈希抽取至多 `--sample` 个（缺省 100，不足就全部），重算 sha256，
  *   相符比例必须 100%。全部通过才 `ok: true`。
  *
+ * ## 传输（creator、member）
+ *
+ *   到文档服务的连接是一个会话（`server/render-node/session-link.mjs` 的 `createDocEndpoint`，HT-a）。`--transport auto|ws`
+ *   是开发者强制参数：缺省自动（先读环境变量 `PROMPTCUT_TRANSPORT`，再缺省自动；HT-a 的自动就是 WebSocket），`ws`
+ *   只走 WebSocket，`http` 在 HT-a 未启用（退出码 2）。成员配置里没有传输字段。输出的 `session` 记实际用的传输、
+ *   接续次数、是否对着没有会话层的旧服务端。
+ *
  * 凭证（口令、K、票据）不打到输出里。
  */
 import fs from 'node:fs';
@@ -68,8 +72,8 @@ import { createHash, randomBytes } from 'node:crypto';
 import { startCoordServer, coordClient } from './probe-coord.mjs';
 
 const USAGE = `用法：
-  node scripts/probes/shared-project-probe.mjs --mode internet --role creator --hosted <url> (--coord-port <n> | --coord <url>) [--tasks 6] [--transport ws|http]
-  node scripts/probes/shared-project-probe.mjs --mode internet --role member --hosted <url> --coord <url> [--expect-tasks 1] [--transport ws|http]
+  node scripts/probes/shared-project-probe.mjs --mode internet --role creator --hosted <url> (--coord-port <n> | --coord <url>) [--tasks 6] [--transport auto|ws]
+  node scripts/probes/shared-project-probe.mjs --mode internet --role member --hosted <url> --coord <url> [--expect-tasks 1] [--transport auto|ws]
   node scripts/probes/shared-project-probe.mjs --role coord --port <n> [--host 127.0.0.1]
   node scripts/probes/shared-project-probe.mjs --role migrate-check --from <url> --to <url> [--data-dir <目录>] [--sample 100]
   node scripts/probes/shared-project-probe.mjs --mode lan --role creator|member ...（见 shared-project-lan.mjs）`;
@@ -101,13 +105,6 @@ const mod = (rel) => import(new URL(`../../${rel}`, here));
 const log = (event, fields = {}) => console.log(JSON.stringify({ t: new Date().toISOString(), event, ...fields }));
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const sha256 = (data) => createHash('sha256').update(data).digest('hex');
-
-/** `--transport ws|http`；没给回 null（成员用配置里的），给错了打用法退出 */
-function transportArg() {
-  const t = arg('--transport', null);
-  if (t !== null && t !== 'ws' && t !== 'http') usage('--transport 只能是 ws 或 http');
-  return t;
-}
 
 const fails = [];
 const check = (cond, label, extra) => {
@@ -160,6 +157,29 @@ function rpcOn(ep) {
       reject(new Error(`${message.type} 没发出去（连接不在）`));
     }
   });
+}
+
+/**
+ * `--transport`（开发者强制，契约 `docs/plan/http-transport-contract.md` 第 4.3 节第 6 条）：不给就不传，由
+ * `createDocEndpoint` 读 `PROMPTCUT_TRANSPORT`，再缺省自动；给了就照它（`ws` 只走 WebSocket；`http` 在 HT-a
+ * 未启用，按参数不对退出 2）。
+ */
+function transportOption(transportOf) {
+  const raw = arg('--transport', undefined);
+  if (raw === undefined) return {};
+  try {
+    return { transport: transportOf(raw, undefined) };
+  } catch (err) {
+    usage(`--transport ${raw}：${err?.message ?? err}`);
+    return {};
+  }
+}
+
+/** 输出里的会话诊断：实际用的传输、接续次数、是否对着没有会话层的旧服务端（不含会话号） */
+function sessionOf(ep) {
+  if (!ep || typeof ep.stats !== 'function') return null;
+  const s = ep.stats();
+  return { mode: s.mode ?? null, transport: s.transport ?? null, resumes: s.resumes ?? 0, fallbacks: s.fallbacks ?? 0, legacy: s.legacy === true, opens: s.opens ?? 0 };
 }
 
 function waitOpen(ep, ms = 15_000) {
@@ -268,24 +288,23 @@ async function runCreator() {
   const creatorDelayMs = intArg('--creator-delay-ms', 1000, 0);
   const mediaKb = intArg('--media-kb', 256, 1);
   const name = arg('--name', `sp-probe-${runId}`);
-  const transport = transportArg() ?? 'ws';
   const urls = docUrls(hosted);
   const deadline = started + TIMEOUT_MS;
 
-  const [{ createSharedProject }, { buildAuthProtocols }, { createWsEndpoint }, { createHttpEndpoint }, { watchServiceEndpoints }, { createLocalNode }, { createTicketSource }, { createAssetClient }] = await Promise.all([
-    mod('server/auth/route.mjs'), mod('server/auth/client.mjs'), mod('server/render-node/ws-transport.mjs'), mod('server/render-node/http-transport.mjs'),
-    mod('server/render-node/endpoint.mjs'), mod('server/render-node/local-node.mjs'), mod('server/auth/ticket-source.mjs'), mod('server/asset-store/client.mjs'),
+  const [{ createSharedProject }, { buildAuthProtocols }, { createDocEndpoint, transportOf }, { watchServiceEndpoints }, { createLocalNode }, { createTicketSource }, { createAssetClient }] = await Promise.all([
+    mod('server/auth/route.mjs'), mod('server/auth/client.mjs'), mod('server/render-node/session-link.mjs'), mod('server/render-node/endpoint.mjs'),
+    mod('server/render-node/local-node.mjs'), mod('server/auth/ticket-source.mjs'), mod('server/asset-store/client.mjs'),
   ]);
-  const createEndpoint = transport === 'http' ? createHttpEndpoint : createWsEndpoint;
 
   const result = {
-    ok: false, mode: 'internet', role: 'creator', transport, hosted: urls.http, runId, name, projectId: null, assetUrl: null,
+    ok: false, mode: 'internet', role: 'creator', hosted: urls.http, runId, name, projectId: null, assetUrl: null,
     snapshot: null, content: null, media: null,
     tasks: { published: 0, completed: 0, duplicateDone: 0, byCreatorNode: 0 }, artifactsWritten: 0, member: null, coord: null,
   };
   const eps = [];
   let coordServer = null;
   const done = async (code) => {
+    result.session = sessionOf(eps[0]);
     await closeAll(eps);
     await coordServer?.close();
     finish(result, code);
@@ -326,7 +345,7 @@ async function runCreator() {
     base: urls.http, projectId: created.projectId, username: creator.username, deviceId, deviceName: 'sp-probe-creator', as: 'creator',
     ...(key ? { key } : { password: creator.password }), role: 'render', onKey: (k) => { key = k; },
   });
-  const ep = createEndpoint({ url: urls.ws, protocols, log: (event, fields) => log(`creator.${event}`, fields) });
+  const ep = createDocEndpoint({ url: urls.ws, protocols, ...transportOption(transportOf), log: (event, fields) => log(`creator.${event}`, fields) });
   eps.push(ep);
   const rpc = rpcOn(ep);
   if (!check(await waitOpen(ep), '创建者连上文档服务')) return done(2);
@@ -377,7 +396,6 @@ async function runCreator() {
   const memberConfig = {
     url: urls.ws, projectId: created.projectId, username: `member-${randomBytes(3).toString('hex')}`, password: projectPassword,
     as: 'member', role: 'render', deviceId: `probe-member-${randomBytes(6).toString('hex')}`, deviceName: 'sp-probe-member',
-    transport,
   };
   await coord.put('member-config', {
     config: memberConfig,
@@ -454,20 +472,20 @@ async function runMember() {
   const maxConcurrent = intArg('--max-concurrent', 2, 1);
   const deadline = started + TIMEOUT_MS;
   const coord = coordClient(coordUrl);
-  const transportOverride = transportArg();
 
-  const [{ normalizeEntry, sharedProtocols }, { createWsEndpoint }, { createHttpEndpoint }, { watchServiceEndpoints }, { createLocalNode }, { createTicketSource }, { createAssetClient }] = await Promise.all([
-    mod('server/auth/shared-config.mjs'), mod('server/render-node/ws-transport.mjs'), mod('server/render-node/http-transport.mjs'), mod('server/render-node/endpoint.mjs'),
+  const [{ normalizeEntry, sharedProtocols }, { createDocEndpoint, transportOf }, { watchServiceEndpoints }, { createLocalNode }, { createTicketSource }, { createAssetClient }] = await Promise.all([
+    mod('server/auth/shared-config.mjs'), mod('server/render-node/session-link.mjs'), mod('server/render-node/endpoint.mjs'),
     mod('server/render-node/local-node.mjs'), mod('server/auth/ticket-source.mjs'), mod('server/asset-store/client.mjs'),
   ]);
 
   const result = {
-    ok: false, mode: 'internet', role: 'member', transport: null, hosted: null, projectId: null, clusterToken: process.env.PROMPTCUT_CLUSTER_TOKEN ? 'set' : 'unset',
+    ok: false, mode: 'internet', role: 'member', hosted: null, projectId: null, clusterToken: process.env.PROMPTCUT_CLUSTER_TOKEN ? 'set' : 'unset',
     enter: null, assetUrl: null, snapshot: null, content: null, media: null, ticket: null,
     claims: 0, taskDone: 0, artifactsWritten: 0, expectTasks,
   };
   const eps = [];
   const done = async (code) => {
+    result.session = sessionOf(eps[0]);
     await closeAll(eps);
     if (expectTasks > 0) {
       try { await coord.put('member-result', { ...result, fails, ok: fails.length === 0 }); } catch { /* 协调口已关 */ }
@@ -481,18 +499,14 @@ async function runMember() {
   const raw = { ...handoff.config };
   const hostedArg = arg('--hosted', null);
   if (hostedArg) raw.url = docUrls(hostedArg).ws;
-  // 成员自己的 --transport 写进配置，优先于配置里的
-  if (transportOverride) raw.transport = transportOverride;
   const entry = normalizeEntry(raw);
-  result.transport = entry.transport;
   result.hosted = docUrls(entry.url).http;
   result.projectId = entry.projectId;
   const expect = handoff.expect;
 
   // 进入：只凭项目凭证
   const enterStart = Date.now();
-  const createEndpoint = entry.transport === 'http' ? createHttpEndpoint : createWsEndpoint;
-  const ep = createEndpoint({ url: entry.url, protocols: sharedProtocols(entry, { role: 'render' }), log: (event, fields) => log(`member.${event}`, fields) });
+  const ep = createDocEndpoint({ url: entry.url, protocols: sharedProtocols(entry, { role: 'render' }), ...transportOption(transportOf), log: (event, fields) => log(`member.${event}`, fields) });
   eps.push(ep);
   const rpc = rpcOn(ep);
   const opened = await waitOpen(ep);
