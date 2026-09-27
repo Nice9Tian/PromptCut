@@ -271,7 +271,7 @@ async function agentSideReplica(createAgentSide, { projectId, url, callPage }, f
     import(pathToFileURL(path.join(ROOT, 'server/agent/ssr-host.mjs')).href),
     import(pathToFileURL(path.join(ROOT, 'server/mcp-tools.mjs')).href),
   ]);
-  const vite = await createServer({ configFile: false, root: ROOT, logLevel: 'silent', server: { middlewareMode: true, hmr: false, watch: null }, appType: 'custom', optimizeDeps: { noDiscovery: true, include: [] } });
+  const vite = await createServer({ configFile: false, root: ROOT, logLevel: 'silent', server: { middlewareMode: true, hmr: false, ws: false, watch: null }, appType: 'custom', optimizeDeps: { noDiscovery: true, include: [] } });
   const testConvOf = new Map();
   const side = createAgentSide({
     projectId,

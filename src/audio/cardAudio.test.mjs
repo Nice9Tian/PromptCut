@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createServer } from "vite";
 
 const withAudio = async (fn) => {
-  const server = await createServer({ configFile: false, server: { middlewareMode: true, hmr: false, watch: null }, appType: "custom", optimizeDeps: { noDiscovery: true, include: [] } });
+  const server = await createServer({ configFile: false, server: { middlewareMode: true, hmr: false, ws: false, watch: null }, appType: "custom", optimizeDeps: { noDiscovery: true, include: [] } });
   try { await fn(await server.ssrLoadModule("/src/audio/cardAudio.ts")); }
   finally { await server.close(); }
 };
