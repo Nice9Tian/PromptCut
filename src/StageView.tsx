@@ -1604,6 +1604,7 @@ export default function StageView() {
         const bake = opts.bake ?? null;
         const bakeFrom = Math.max(0, Number(bake?.from) || 0);
         let readyWaitMs = 0;
+        const readyStuck: { at: number; work: string[]; fonts: string }[] = [];
         const probeMode = bake ? "snapshot" : opts.probe === true ? "snapshot" : opts.probe || null;
         const probe = probeMode !== null;
         const timing = probeMode === "time";
@@ -1679,7 +1680,7 @@ export default function StageView() {
                 await document.fonts.ready;
                 await Promise.all([...document.images].filter((img) => img.getAttribute("src")).map((img) => img.decode().catch(() => {})));
                 if (!frameWorkStatus().length && document.fonts.status === "loaded") break;
-                if (realNow() - t0 > 20000) break;
+                if (realNow() - t0 > 5000) { readyStuck.push({ at: clock.now(), work: frameWorkStatus().map((w) => w.label).slice(0, 4), fonts: document.fonts.status }); break; }
                 clock.tick(clock.now());
                 await new Promise<void>((r) => (window.__pcRealSetTimeout ?? window.setTimeout)(r, 4));
               }
@@ -1779,7 +1780,7 @@ export default function StageView() {
                */
               measureInkBoxesNow();
             }
-            resolve({ remounted, caughtUpAtSec: clock.now() / 1000, elapsedMs, stepMs: stepOf(elapsedMs), ...(bake ? { readyWaitMs } : {}),
+            resolve({ remounted, caughtUpAtSec: clock.now() / 1000, elapsedMs, stepMs: stepOf(elapsedMs), ...(bake ? { readyWaitMs, readyStuck: readyStuck.slice(0, 5), readyStuckCount: readyStuck.length } : {}),
               ...(probe ? { frames, truncated: false, snapshot } : {}),
               ...(timing ? { steps } : probe ? { snapshotSteps } : {}) });
           })();
