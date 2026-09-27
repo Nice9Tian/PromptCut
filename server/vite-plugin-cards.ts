@@ -935,6 +935,83 @@ export function installBundledCards(opts: {
   return out;
 }
 
+export type CreateUserCardResult =
+  | { ok: false; code: number; body: Record<string, unknown> }
+  | {
+    ok: true;
+    /** 仓库里的那个文件(src/cards/user/<id>.tsx) */
+    target: string;
+    /** 实际写到的文件 */
+    written: string;
+    already: boolean;
+    translated: ReturnType<typeof translateCardSource>;
+    finalSource: string;
+    suggestedControls: ReturnType<typeof suggestControls>;
+  };
+
+/**
+ * create_card 的落盘部分(`/api/cards/create` 调;归属戳、热更新、同步上传留在接口里)。
+ * 已存在又没说 overwrite → 409;过不了翻译器 + 审查 → 400;其余写进用户卡目录。
+ */
+export function createUserCard(opts: { root: string; id: unknown; source: unknown; existingIds?: unknown; overwrite?: unknown }): CreateUserCardResult {
+  const { root, id, source, existingIds, overwrite } = opts;
+  if (typeof id !== 'string' || typeof source !== 'string') {
+    return { ok: false, code: 400, body: { ok: false, error: 'id 和 source 都必须是字符串' } };
+  }
+  const userDir = path.join(root, 'src', 'cards', 'user');
+  fs.mkdirSync(userDir, { recursive: true });
+  const target = path.join(userDir, `${id}.tsx`);
+  // id 已经过 kebab-case 白名单,这里再确认一次落点没跑出 user 目录
+  if (path.dirname(path.resolve(target)) !== path.resolve(userDir)) {
+    return { ok: false, code: 400, body: { ok: false, error: '非法的文件路径' } };
+  }
+
+  const already = fs.existsSync(target);
+  if (already && !overwrite) {
+    // 这句话出现的时机,正是模型「想改一张已有的卡」的那一刻 —— 全仓库
+    // 最该把它引到 edit_card 上的地方。原来这里写的是「传 overwrite: true」,
+    // 等于在决策点上教它整篇重写。
+    return {
+      ok: false,
+      code: 409,
+      body: {
+        ok: false,
+        error: `src/cards/user/${id}.tsx 已存在。要改它请用 get_card_source 读回源码、再用 edit_card 改那一处;确实要整张推倒重来才传 overwrite: true。`,
+      },
+    };
+  }
+
+  // 先过翻译器的机械一半(去 "use client"、@/lib/utils 指到本地),再审查。
+  // 翻译改过什么要回给调用方,不然模型手上的版本和落盘的对不上。
+  const translated = translateCardSource(source);
+  const finalSource = translated.source;
+  const check = checkCardSource(id, finalSource, Array.isArray(existingIds) && !already ? existingIds : [], {
+    vendored: translated.rewrites.length > 0,
+    mode: 'author',
+    before: '',
+  });
+  if (!check.ok) {
+    return {
+      ok: false,
+      code: 400,
+      body: {
+        ok: false,
+        error: check.errors.join('\n'),
+        errors: check.errors,
+        findings: check.findings ?? [],
+        rewrites: translated.rewrites,
+      },
+    };
+  }
+
+  // 上游 props 里有、controls 里没露出来的,列出来供模型决定要不要提成参数
+  const declared = new Set([...finalSource.matchAll(/\bkey:\s*["']([^"']+)["']/g)].map((m) => m[1]));
+  const suggestedControls = suggestControls(finalSource).filter((s) => !declared.has(s.key));
+
+  fs.writeFileSync(target, finalSource, 'utf8');
+  return { ok: true, target, written: target, already, translated, finalSource, suggestedControls };
+}
+
 /** 内置卡的 id(user 以外的定义目录里 `id: "..."` 的那些):装用户卡时撞名检查用 */
 export function builtinCardIds(root: string): string[] {
   const ids = new Set<string>();
@@ -1829,53 +1906,10 @@ export default function vitePluginCards(): Plugin[] {
           try {
             const input = JSON.parse(body || '{}');
             const { id, source, existingIds, overwrite, projectId } = input;
-            if (typeof id !== 'string' || typeof source !== 'string') {
-              return sendJson(res, 400, { ok: false, error: 'id 和 source 都必须是字符串' });
-            }
-
-            fs.mkdirSync(userDir, { recursive: true });
-            const target = path.join(userDir, `${id}.tsx`);
-            // id 已经过 kebab-case 白名单,这里再确认一次落点没跑出 user 目录
-            if (path.dirname(path.resolve(target)) !== path.resolve(userDir)) {
-              return sendJson(res, 400, { ok: false, error: '非法的文件路径' });
-            }
-
-            const already = fs.existsSync(target);
-            if (already && !overwrite) {
-              // 这句话出现的时机,正是模型「想改一张已有的卡」的那一刻 —— 全仓库
-              // 最该把它引到 edit_card 上的地方。原来这里写的是「传 overwrite: true」,
-              // 等于在决策点上教它整篇重写。
-              return sendJson(res, 409, {
-                ok: false,
-                error: `src/cards/user/${id}.tsx 已存在。要改它请用 get_card_source 读回源码、再用 edit_card 改那一处;确实要整张推倒重来才传 overwrite: true。`,
-              });
-            }
-
-            // 先过翻译器的机械一半(去 "use client"、@/lib/utils 指到本地),再审查。
-            // 翻译改过什么要回给调用方,不然模型手上的版本和落盘的对不上。
-            const translated = translateCardSource(source);
-            const finalSource = translated.source;
-            const check = checkCardSource(id, finalSource, Array.isArray(existingIds) && !already ? existingIds : [], {
-              vendored: translated.rewrites.length > 0,
-              mode: 'author',
-              before: '',
-            });
-            if (!check.ok) {
-              return sendJson(res, 400, {
-                ok: false,
-                error: check.errors.join('\n'),
-                errors: check.errors,
-                findings: check.findings ?? [],
-                rewrites: translated.rewrites,
-              });
-            }
-
-            // 上游 props 里有、controls 里没露出来的,列出来供模型决定要不要提成参数
-            const declared = new Set([...finalSource.matchAll(/\bkey:\s*["']([^"']+)["']/g)].map((m) => m[1]));
-            const suggestedControls = suggestControls(finalSource).filter((s) => !declared.has(s.key));
-
-            fs.writeFileSync(target, finalSource, 'utf8');
-            afterWrite(target, target);
+            const created = createUserCard({ root: server.config.root, id, source, existingIds, overwrite });
+            if (!created.ok) return sendJson(res, created.code, created.body);
+            const { target, written, already, translated, finalSource, suggestedControls } = created;
+            afterWrite(target, written);
             savedCardFile(`src/cards/user/${id}.tsx`);
 
             /*
