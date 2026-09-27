@@ -6,7 +6,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createPlanPublisher, clipsPlanTask, clipsSig, CLIPS_KEY_MARK } from "./planPublisher.ts";
+import { createPlanPublisher, clipsPlanTask, clipsSig, CLIPS_KEY_MARK, PLAN_DEBOUNCE_MS, BROWSER_NODE_WAIT_MS } from "./planPublisher.ts";
 import { clipsPlanTaskOf, backfillSig, CLIPS_KEY_MARK as SERVER_MARK, parseInbound } from "../../server/render-queue/messages.mjs";
 
 test("C10-PP-01 形状与队列侧 clipsPlanTaskOf 逐字段相同;入站校验收它", () => {
@@ -130,4 +130,82 @@ test("C10-PP-04 endpoint 形状:按 reqId 等回包,队列推来的 task.done �
   assert.equal(pub.debug().log[0].ok, true);
   for (const h of handlers) h({ type: "task.done", id: "plan:x" });
   assert.deepEqual(events, ["task.done"]);
+});
+
+/** 带虚拟时钟的计时器:`runFor(ms)` 按到期先后跑,时钟跟着走 */
+function clockTimers() {
+  let t = 0;
+  let q = [];
+  return {
+    now: () => t,
+    setTimer: (fn, ms) => { const h = { fn, at: t + ms }; q.push(h); return h; },
+    clearTimer: (h) => { q = q.filter((x) => x !== h); },
+    async runFor(ms) {
+      const end = t + ms;
+      for (;;) {
+        q.sort((a, b) => a.at - b.at);
+        const h = q[0];
+        if (!h || h.at > end) break;
+        q.shift();
+        t = h.at;
+        await h.fn();
+        for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 0));
+      }
+      t = end;
+    },
+  };
+}
+
+test("M7-PP-05 本页当纯浏览器节点:清单计划等节点报到完(拿到指纹)再发;报到完马上发;发之前交出这一版(D6 留存)", async () => {
+  const qd = fakeQueue();
+  const c = clockTimers();
+  let node = "pending";
+  const kept = [];
+  const pub = createPlanPublisher({ request: qd.request, clips: () => ["a"], codeVersion: "cv", setTimer: c.setTimer, clearTimer: c.clearTimer, now: c.now,
+    nodeReady: () => node, onPublish: (v) => kept.push(v) });
+  pub.measured({ projectId: "p", projectRev: 5 });
+  await c.runFor(PLAN_DEBOUNCE_MS + 1000);
+  assert.equal(qd.sent.filter((m) => m.type === "task.publish").length, 0, "节点还在报到:不发");
+  assert.ok(pub.debug().nodeWaitMs >= 1000, JSON.stringify(pub.debug()));
+  node = "ready";
+  pub.nodeChanged();
+  for (let i = 0; i < 10; i++) await new Promise((r) => setTimeout(r, 0));
+  const pubs = qd.sent.filter((m) => m.type === "task.publish");
+  assert.equal(pubs.length, 1, "报到完马上发,不再等下一轮");
+  assert.deepEqual(kept, [{ projectId: "p", projectRev: 5 }]);
+  const log = pub.debug().log.at(-1);
+  assert.equal(log.ok, true);
+  assert.equal(log.node, "ready");
+  assert.ok(log.waitedMs >= 1000 && log.waitedMs < BROWSER_NODE_WAIT_MS, JSON.stringify(log));
+  assert.deepEqual(pubs[0].tasks[0].input, { clips: ["a"] }, "计划不写浏览器意向(页面自报的不作数)");
+  pub.dispose();
+});
+
+test("M7-PP-06 节点一直没报到完:最多等 3 s,超时照发;本页不当节点时不等", async () => {
+  const qd = fakeQueue();
+  const c = clockTimers();
+  const pub = createPlanPublisher({ request: qd.request, clips: () => ["a"], setTimer: c.setTimer, clearTimer: c.clearTimer, now: c.now, nodeReady: () => "pending" });
+  pub.measured({ projectId: "p", projectRev: 1 });
+  await c.runFor(PLAN_DEBOUNCE_MS + BROWSER_NODE_WAIT_MS - 100);
+  assert.equal(qd.sent.filter((m) => m.type === "task.publish").length, 0, "3 s 之内不发");
+  await c.runFor(200);
+  assert.equal(qd.sent.filter((m) => m.type === "task.publish").length, 1, "到 3 s 照发");
+  assert.equal(pub.debug().log.at(-1).waitedMs, BROWSER_NODE_WAIT_MS);
+  assert.equal(pub.debug().nodeWaitMs, null);
+  // 下一版:节点还是没报到完,重新等(每一版各等一次)
+  pub.changed({ projectId: "p", projectRev: 2 });
+  await c.runFor(PLAN_DEBOUNCE_MS + 100);
+  assert.equal(qd.sent.filter((m) => m.type === "task.publish").length, 1);
+  await c.runFor(BROWSER_NODE_WAIT_MS);
+  assert.equal(qd.sent.filter((m) => m.type === "task.publish").length, 2);
+  pub.dispose();
+
+  const q2 = fakeQueue();
+  const c2 = clockTimers();
+  const none = createPlanPublisher({ request: q2.request, clips: () => ["a"], setTimer: c2.setTimer, clearTimer: c2.clearTimer, now: c2.now, nodeReady: () => "none" });
+  none.measured({ projectId: "p", projectRev: 1 });
+  await c2.runFor(PLAN_DEBOUNCE_MS);
+  assert.equal(q2.sent.filter((m) => m.type === "task.publish").length, 1, "不当节点:防抖到了就发");
+  assert.equal(none.debug().log.at(-1).waitedMs, undefined);
+  none.dispose();
 });
