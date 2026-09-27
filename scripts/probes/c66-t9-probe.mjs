@@ -7,8 +7,9 @@
  *        [--hosted <文档服务基址>]   缺省 https://8-219-80-16.sslip.io/hosted
  *        [--coord <协调口基址>]      缺省 https://8-219-80-16.sslip.io/coord
  *        [--run <本轮 id>]          各角色用同一个;creator 不给就自己生成并写进 KV `c66t9.latest`,另两个不给就从那里取
- *        [--port <编辑器端口>]       creator 缺省 5590、observer 5593、host 5596(每个编辑器另占 +1、+2 当舞台端口)
- *        [--port-base <端口>]        只对 --role all:三个角色依次用 <端口>、+3、+6(各另占 +1、+2),代替上面三个缺省
+ *        [--port <编辑器端口>]       单个角色:creator 缺省 5590、observer 5593、host 5596(每个编辑器另占 +1、+2 当舞台端口);
+ *                                   --role all:三个角色的端口起点(缺省 5590),三个角色依次用 <端口>、+3、+6
+ *        [--port-base <端口>]        只对 --role all,与 --port 同义(集成时两个分支各加了一种写法,都留着);两个都给时以它为准
  *        [--out <截图目录>]          缺省 <系统临时目录>/pc-c66t9-<run>/<角色>
  *        [--timeout-min 25] [--keep-temp]
  *
@@ -37,7 +38,10 @@
  *   4. ffmpeg 现场生成 1920×1080、30 fps、6 s、顶上一条 10 格帧号条纹的测试视频(moov 在尾),经素材库的文件输入
  *      (页面导入路径,`?tiers=1`)导入;等项目里 `tiers.small` 出现、上传队列清空;核对托管端两档的 `chunks`
  *      都 `complete`(边传边问,记各自第一次 complete 的时刻),编辑器日志里这个素材是先小后大;
- *   5. 写 KV `config`;等 host 报 `host.ready`;页面加一个重卡片段(`r6-canvas`,参数带本轮的盐,结果键全新);
+ *   5. 写 KV `config`;等 host 报 `host.ready`;等页面测量空闲,按成本记录的「人工钉死」(`pinnedHeavy`)给重卡片段的身份
+ *      写一条记录(device 串取页面自己写过的用户卡记录上的那个),等预渲染进程也收到;再加重卡片段(16 秒 `probe-typewriter`,
+ *      审阅过的独立推帧卡、共享档,参数带本轮的盐,结果键全新)。实测判重在机器忙闲之间会翻(见 AGENT-c66-t9-fix 报告),
+ *      钉死之后两端都判重,预渲染集合里一定有它;
  *      等页面触发的 preload 发布 plan、切出的细任务全部落定、清单拉完,写 KV `plan`、`editready`;
  *   6. 等观察端 `observer.joined`,把用户卡的记号从 v1 改成 v2(`/api/cards/edit`),写 KV `edited`;
  *   7. 等 observer、host 的结果,汇总;收尾:经创建者操作 `delete` 删掉托管端这个项目,结束自己起的进程树。
@@ -65,7 +69,7 @@
  *   本检出里原来没有这张卡(跨机)时,主机同步照现有装卡路径写进 `src/cards/user/`,收尾删掉。
  *
  * ## --role all(本机替身,主执行计划 6.8 节)
- *   同一台机器上各起一个子进程跑三个角色(端口 5590 / 5593 / 5596),汇总三行结果。
+ *   同一台机器上各起一个子进程跑三个角色(端口缺省 5590 / 5593 / 5596,起点用 --port 或 --port-base 改),汇总三行结果。
  *
  * 本机自测:先起临时托管组合(只绑 127.0.0.1)与临时协调口,例如
  *   PROMPTCUT_DATA_DIR=<临时目录> PROMPTCUT_DOCSERVICE_HOST=127.0.0.1 PROMPTCUT_DOCSERVICE_PORT=8794 PROMPTCUT_ASSET_PORT=8795 \
