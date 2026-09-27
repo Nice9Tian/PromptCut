@@ -36,6 +36,23 @@ export const media = {
       { undoable: false },
     );
   },
+  /**
+   * 改一条素材的若干字段(不进撤销栈):入库回包写回、小版后到补写 `tiers.small` 都走它。
+   * patch 里值为 undefined 的键整个删掉(比如入库后清掉会话内的 `pending` 占位)。
+   * 一律拷一份新对象、新数组再 setProject,不原地改 store 里的对象:共享项目里 store 的项目
+   * 就是 docsync 的本地副本,原地改过的字段 diffProject 看不出变化,改动就到不了文档服务。
+   */
+  updateMedia(mediaId: string, patch: Partial<Omit<MediaAsset, "id">>) {
+    const p = state.project;
+    const cur = p.media.find((m) => m.id === mediaId);
+    if (!cur) return;
+    const next: Record<string, unknown> = { ...cur };
+    for (const [k, v] of Object.entries(patch)) {
+      if (v === undefined) delete next[k];
+      else next[k] = v;
+    }
+    setProject({ ...p, media: p.media.map((m) => (m === cur ? (next as unknown as MediaAsset) : m)) }, { undoable: false });
+  },
   setMediaPath(mediaId: string, path: string) {
     const p = state.project;
     if (!p.media.some((m) => m.id === mediaId)) return;

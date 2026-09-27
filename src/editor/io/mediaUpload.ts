@@ -1,4 +1,5 @@
 import { actions, getState, subscribe } from "../../store/project";
+import type { MediaAsset } from "../../kernel/project";
 import { isViewOnly } from "./viewOnly";
 
 /**
@@ -110,10 +111,10 @@ export async function adoptServerMedia(filePath: string): Promise<UploadedMedia 
 /**
  * 入库结果写回素材表。
  *
- * store 里没有「改一条素材的任意字段」这种动作,而现在能改素材又不进撤销栈的只有
- * setMediaPath(撤销管的是时间轴,不该把「素材传完了」这件事也收进去)。所以这里
- * 先就地写进那条记录,再用 setMediaPath 把整张表重新发一遍(它会 `{...m, path}`
- * 拷一份新对象,刚写的字段一起带上),订阅方照常收到通知。
+ * 走 `actions.updateMedia`(不进撤销栈:撤销管的是时间轴,不该把「素材传完了」这件事也收进去),
+ * 拷一份新对象写回。**不许原地改** store 里那条记录:共享项目里 store 的项目就是 docsync 的
+ * 本地副本,原地改过的字段 diffProject 看不出变化,hash / tiers / pending 就到不了文档服务,
+ * 别的设备上这条素材永远是 pending(C6.6 T9 就是这么发现的)。
  *
  * 传失败时不退回 blob: —— 那种地址渲染进程和导出进程都打不开,留着只会在更远的
  * 地方炸(见 importAssets.ts 的说明)。素材留空地址、pending 落回 false,
@@ -122,16 +123,16 @@ export async function adoptServerMedia(filePath: string): Promise<UploadedMedia 
 export function applyUploadedMedia(mediaId: string, up: UploadedMedia | null): void {
   const media = getState().project.media.find((m) => m.id === mediaId);
   if (!media) return;
+  const patch: Partial<Omit<MediaAsset, "id">> = { pending: undefined, path: up?.path ?? media.path ?? "" };
   if (up) {
-    media.url = up.url;
-    media.hash = up.hash;
-    media.ext = up.ext || undefined;
-    media.size = up.bytes || undefined;
+    patch.url = up.url;
+    patch.hash = up.hash;
+    patch.ext = up.ext || undefined;
+    patch.size = up.bytes || undefined;
     // 两档(C6.6):项目里只记两个哈希,不记同步状态(传没传完只问素材服务的 chunks)
-    if (up.tiers) media.tiers = up.tiers.small ? { original: up.tiers.original, small: up.tiers.small } : { original: up.tiers.original };
+    if (up.tiers) patch.tiers = up.tiers.small ? { original: up.tiers.original, small: up.tiers.small } : { original: up.tiers.original };
   }
-  media.pending = undefined;
-  actions.setMediaPath(mediaId, up?.path ?? media.path ?? "");
+  actions.updateMedia(mediaId, patch);
   if (up?.tiers && !up.tiers.small && up.smallState === "pending") watchSmallTier(mediaId, up.tiers.original);
 }
 
@@ -166,11 +167,7 @@ export function watchSmallTier(mediaId: string, original: string): void {
       small = typeof item?.small === "string" ? item.small : null;
     } catch { /* 下一次再问 */ }
     if (state === "ready" && small) {
-      const fresh = getState().project.media.find((m) => m.id === mediaId);
-      if (fresh && (fresh.tiers?.original ?? fresh.hash) === original) {
-        fresh.tiers = { original, small };
-        actions.setMediaPath(mediaId, fresh.path ?? "");
-      }
+      writeSmallTier(mediaId, original, small);
       return stop();
     }
     if (state && state !== "pending") return stop();
@@ -226,8 +223,7 @@ export async function backfillSmallTiers(project = getState().project): Promise<
 function writeSmallTier(mediaId: string, original: string, small: string): void {
   const fresh = getState().project.media.find((m) => m.id === mediaId);
   if (!fresh || (fresh.tiers?.original ?? fresh.hash) !== original || fresh.tiers?.small) return;
-  fresh.tiers = { original, small };
-  actions.setMediaPath(mediaId, fresh.path ?? "");
+  actions.updateMedia(mediaId, { tiers: { original, small } });
 }
 
 /**
