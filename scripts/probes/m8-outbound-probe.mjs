@@ -12,11 +12,11 @@
  * 本脚本的 host 角色发现自己没带这些环境变量时，带上它们重新起自己（子孙进程都继承）。
  *
  * 角色（KV 沿用 `ht-w-probe.mjs` 的 `htw.<run>.*`，creator 就是 `ht-w-probe.mjs --role creator`，本脚本不另写）：
- *   creator  `node scripts/probes/ht-w-probe.mjs --role creator --hosted <托管端> --coord <协调口> [--run <id>] [--port 5790]`
+ *   creator  `node scripts/probes/ht-w-probe.mjs --role creator --hosted <托管端> --coord <协调口> [--run <id>] [--port 5792]`
  *            建共享项目、起自己的编辑器队列节点（切分 plan、也做一部分细任务）、旁观节点、发布、汇总 J-全完 / J-恰一，收尾删项目。
  *   proxy    `node scripts/probes/m8/connect-proxy.mjs --listen 127.0.0.1:5798 [--log <文件>]`（主机那台机器上，另开一个终端）
  *   host     `node scripts/probes/m8-outbound-probe.mjs --role host --proxy http://127.0.0.1:5798 --hosted <托管端> --coord <协调口>
- *              [--run <id>] [--port 5793] [--host-concurrency 2] [--sample-s 5] [--out <目录>] [--timeout-min 25] [--keep-temp]`
+ *              [--run <id>] [--port 5795] [--host-concurrency 2] [--sample-s 5] [--out <目录>] [--timeout-min 25] [--keep-temp]`
  *   all      本机替身：同一台机器上起全部角色（见下）。
  *
  * ## --role host
@@ -42,22 +42,23 @@
  * ## --role all（本机替身）
  *   「远端」一律放在 127.0.0.2 上：本机回环 127.0.0.1 在 `NO_PROXY` 里，127.0.0.2 不在，主机连它就必须经代理；
  *   进程树里出现对端是 127.0.0.2 的 TCP 连接就是直连。端口全在 5790～5799：
- *     5790～5792  creator 的编辑器（+舞台端口）        5793～5795  主机的编辑器（+舞台端口）
- *     5796 / 5797  托管组合的文档服务 / 素材服务（绑 127.0.0.2，信任关，素材服务登记地址 http://127.0.0.2:5797/api/asset）
+ *     5792～5794  creator 的编辑器（+舞台端口，`--creator-port`）  5795～5797  主机的编辑器（+舞台端口，`--host-port`）
+ *     5790 / 5791  托管组合的文档服务 / 素材服务（绑 127.0.0.2，信任关，素材服务登记地址 http://127.0.0.2:5791/api/asset）
  *     5798         出站代理（127.0.0.1，独立子进程）      5799        协调口（127.0.0.2，开信箱，令牌现场生成、不打印）
+ *   （127.0.0.1 上的 5790、5791 常被别的检出的预渲染进程随机占到，所以编辑器的三连号放在 5792 起，127.0.0.2 上的不受影响。）
  *   creator 不走代理、直连 127.0.0.2；主机经代理。两个角色的结果与代理汇总合成一行，另加 `J-all-done`、`J-exactly-once`
  *   （分别取 creator 的 all-done、done-exactly-once：`task.done` 次数取自发布方编辑器诊断的 `doneCounts`）。
  *     node scripts/probes/m8-outbound-probe.mjs --role all [--out <目录>] [--seconds 8] [--clips 4] [--host-concurrency 2] [--timeout-min 25] [--keep-temp]
  *
  * ## 跨机（笔记本当主机，PC 当创建者，经阿里云）
  *   两台都要 `PROBE_MAIL_TOKEN`（协调口信箱令牌），同一个 `--run`；两台检出同一提交（卡片代码版本要相同）。
- *   PC：   node scripts/probes/ht-w-probe.mjs --role creator --hosted https://8-219-80-16.sslip.io/hosted --coord https://8-219-80-16.sslip.io/coord --run <id> --port 5790
+ *   PC：   node scripts/probes/ht-w-probe.mjs --role creator --hosted https://8-219-80-16.sslip.io/hosted --coord https://8-219-80-16.sslip.io/coord --run <id> --port 5792
  *   笔记本，终端 1：node scripts/probes/m8/connect-proxy.mjs --listen 127.0.0.1:5798 --log <目录>/proxy.log
  *   笔记本，终端 2：node scripts/probes/m8-outbound-probe.mjs --role host --proxy http://127.0.0.1:5798 \
- *                     --hosted https://8-219-80-16.sslip.io/hosted --coord https://8-219-80-16.sslip.io/coord --run <id> --port 5793
+ *                     --hosted https://8-219-80-16.sslip.io/hosted --coord https://8-219-80-16.sslip.io/coord --run <id> --port 5795
  *   注意：ht-w 的 creator 要求主机的环境指纹与它的本机节点相同。PC 与笔记本的指纹不同时（多半如此），要等测试指纹开关
  *   （`PROMPTCUT_TEST_ENV_FINGERPRINT`，C10 集成）进了两台的检出，在两台的两个终端里设同一个值；在那之前，creator 改在笔记本
- *   上跑（第一个实例，`--port 5790`），PC 只看结果。阿里云上文档服务、素材服务、协调口同在 `8-219-80-16.sslip.io:443` 后面，
+ *   上跑（第一个实例，`--port 5792`），PC 只看结果。阿里云上文档服务、素材服务、协调口同在 `8-219-80-16.sslip.io:443` 后面，
  *   代理记录按 host:port 分不开三者，proxy-covers-* 两条只证「都经代理」，分不出谁是谁（字节数仍在）。
  *
  * 输出：过程写 stderr；stdout 最后一行一行 JSON `{ probe, role, run, ok, checks, fails, … }`，`ok` 为假退出码 1，参数不对 2。
@@ -86,7 +87,7 @@ const KEEP = argv.includes('--keep-temp');
 const SAMPLE_MS = Number(arg('--sample-s', 5)) * 1000;
 const BAND = [5790, 5799];
 const REMOTE_IP = '127.0.0.2';
-const PORTS = { creator: 5790, host: 5793, doc: 5796, asset: 5797, proxy: 5798, coord: 5799 };
+const PORTS = { creator: Number(arg('--creator-port', 5792)), host: Number(arg('--host-port', 5795)), doc: 5790, asset: 5791, proxy: 5798, coord: 5799 };
 const NO_PROXY = 'localhost,127.0.0.1,::1';
 const PROXY_ENV_KEYS = ['NODE_USE_ENV_PROXY', 'HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy', 'NO_PROXY', 'no_proxy'];
 const LOOPBACK = new Set(['127.0.0.1', '::1', '0.0.0.0', '::']);
