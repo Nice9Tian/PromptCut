@@ -1098,6 +1098,11 @@ export function currentSharedLink(): SyncLink | null {
   return cur && cur.kind === "shared" ? cur.link : null;
 }
 
+/** 当前共享项目连接的文档服务地址(纯浏览器节点的 render 连接连同一个地址,M7 契约第 5 节);没连共享项目回 null */
+export function currentSharedUrl(): string | null {
+  return cur && cur.kind === "shared" ? cur.url : null;
+}
+
 /** 被踢 / 被移出 / 项目被删之后点「开始页」:回到本机空间,回开始页 */
 export function leaveBlocked() {
   clearSharedResume();
