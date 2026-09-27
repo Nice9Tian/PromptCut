@@ -471,9 +471,12 @@ try {
     await (await front()).evaluate(() => {
       window.__tierEv = [];
       const now = () => (window.__pcRealNow ?? (() => performance.now()))();
-      const t0 = now();
-      const rec = (v, type) => window.__tierEv.push({ at: Math.round(now() - t0), type, src: (v.currentSrc || v.getAttribute('src') || '').split('/@media/')[1]?.slice(0, 8) ?? '', rs: v.readyState, ct: +v.currentTime.toFixed(3) });
+      window.__tierT0 = now();
+      const rec = (v, type) => window.__tierEv.push({ at: Math.round(now() - window.__tierT0), type, src: (v.currentSrc || v.getAttribute('src') || '').split('/@media/')[1]?.slice(0, 8) ?? '', rs: v.readyState, ct: +v.currentTime.toFixed(3) });
       for (const v of document.querySelectorAll('video')) {
+        // 槽位元素跨场景复用:每个元素只挂一次
+        if (v.__tierHooked) continue;
+        v.__tierHooked = true;
         for (const type of ['loadstart', 'loadedmetadata', 'loadeddata', 'seeking', 'seeked', 'emptied', 'error']) v.addEventListener(type, () => rec(v, type));
         const load = v.load.bind(v);
         v.load = () => { rec(v, 'load()'); return load(); };
