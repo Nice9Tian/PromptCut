@@ -414,6 +414,14 @@ function hostLogFacts(lines) {
   }
   return { capabilities, ffmpegMentions: lines.filter((l) => /ffmpeg|ffprobe|ENOENT/i.test(l)).slice(-6).map((l) => l.slice(0, 240)) };
 }
+/** 主机报给队列的节点能力:预渲染进程诊断里 `queue.started` 事件的 `capabilities`(render-host 不一定把那一行转出来) */
+async function hostCapabilities(origin) {
+  try {
+    const url = (await getJson(`${origin}/api/prerender/info`, 5000))?.url;
+    const events = (await getJson(`${url}/api/frames/diagnostics`, 20_000))?.queue?.events ?? [];
+    return events.filter((e) => e?.event === 'queue.started').at(-1)?.capabilities ?? null;
+  } catch { return null; }
+}
 /** 本机代理(`render-queue-proxy.mjs --cut-once --stdin-control`),回 { child, lines, url } */
 async function startCutProxy(listenPort, target) {
   if (!(await portFree(listenPort))) throw new Error(`代理端口 ${listenPort} 被占用`);
@@ -448,10 +456,17 @@ async function cutWhileHolding({ queue, healthz, onHolding, doCut, holdTimeoutMs
   const res = { held: [], checks: [] };
   const add = (name, ok, detail) => res.checks.push({ name, ok: !!ok, detail });
   let pre = null;
+  let firstHeldAt = null;
   const end = Date.now() + holdTimeoutMs;
   while (Date.now() < Math.min(end, deadline)) {
     const n = (await queue())?.nodes?.[0];
-    if (n && Array.isArray(n.held) && n.held.length > 0 && n.connected) { pre = n; break; }
+    // 先见到的多半是 plan(切分时持有);再等至多 2 分钟,等手里有细任务(快照段)时断,判据落在产出任务上。等不到就按手里的 plan 断
+    if (n && Array.isArray(n.held) && n.held.length > 0 && n.connected) {
+      pre ??= n;
+      firstHeldAt ??= Date.now();
+      if (n.held.some((id) => !String(id).startsWith('plan:'))) { pre = n; break; }
+      if (Date.now() - firstHeldAt > 120_000) break;
+    }
     await delay(150);
   }
   if (!pre) { add('held-before-cut', false, { timeoutMs: holdTimeoutMs }); return res; }
@@ -639,7 +654,7 @@ async function runHostRole() {
     out.ready = q0;
     const facts0 = hostLogFacts(lines);
     await store.put('host.ready', { at: Date.now(), ...q0, platform: process.platform, arch: process.arch, node: process.version, testFingerprint: !!testFp,
-      ffmpeg: out.ffmpeg, capabilities: facts0.capabilities, cut: CUT, cutWaitMs: CUT_WAIT_MS, resumeTimeoutMs: RESUME_TIMEOUT_MS });
+      ffmpeg: out.ffmpeg, capabilities: facts0.capabilities ?? await hostCapabilities(origin), cut: CUT, cutWaitMs: CUT_WAIT_MS, resumeTimeoutMs: RESUME_TIMEOUT_MS });
     say('host.ready', { profile: q0?.profile, envFingerprint: q0?.envFingerprint, nodeId: q0?.nodes?.[0]?.nodeId, transport: q0?.nodes?.[0]?.transport });
     check(q0?.profile === 'host', '[host] 诊断里 profile 是 host', q0?.profile);
     // --cut:和下面的进度循环并行 —— 持有任务时写 host.holding,断一次(proxy 自己切;external 等 KV cut.done),等接续,结果写 host.cut
@@ -691,7 +706,8 @@ async function runHostRole() {
         check(n && n.released === 0, `[host] --cut ${CUT}:not-released(持有的任务没被放回)`, { released: n?.released ?? null });
       }
     }
-    Object.assign(out, hostLogFacts(lines));
+    out.ffmpegMentions = hostLogFacts(lines).ffmpegMentions;
+    out.capabilities = await hostCapabilities(origin).catch(() => null);
     child.send({ type: 'shutdown' });
     out.exitCode = await new Promise((resolve) => { if (child.exitCode !== null) return resolve(child.exitCode); const t = setTimeout(() => resolve(null), 60_000); child.once('exit', (code) => { clearTimeout(t); resolve(code); }); });
     out.released = exitLine?.released ?? null;
@@ -1289,7 +1305,7 @@ try {
         cutResult = await cutP;
         for (const c of cutResult.checks) check(c.ok, `--cut proxy:${c.name}`, c.detail);
       }
-      out.hostFacts = hostLogFacts(hostLog);
+      out.hostFacts = { ...hostLogFacts(hostLog), capabilities: await hostCapabilities(host.origin) };
     } else if (NO_HOST) {
       hostPending = '待笔记本主机(--no-host:没有等外部主机)';
     } else {
