@@ -3,13 +3,13 @@
  * 跑：node --test server/test/sp-lan.test.mjs
  *
  * 契约只定参数，没定模块与函数：全部假设见 `sp-kit.mjs` 文件头 L0。本机单测用两个 dgram 套接字模拟（回环网卡注入、
- * 单播代替组播），端口用本分支段里的 5496 / 5497。跨机（真组播、定向广播、不同网段发现不到）在 W6 验。
+ * 单播代替组播），端口都由系统分配（主机绑 0，查询发往它实际绑到的端口），同一台机器上并行跑几份也不串。跨机（真组播、定向广播、不同网段发现不到）在 W6 验。
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import dgram from 'node:dgram';
 import { randomBytes } from 'node:crypto';
-import { loadLan, PORTS, LOOP_IFACE } from './sp-kit.mjs';
+import { loadLan, LOOP_IFACE } from './sp-kit.mjs';
 import { hostFor, createProject, join, waitFor } from './auth-kit.mjs';
 
 const json = (buf) => JSON.parse(Buffer.from(buf).toString('utf8'));
@@ -135,7 +135,7 @@ async function udpSocket(t, port = 0) {
 
 async function lanHostFor(t, { projects, docservicePort = 5173, assetPort = 5173 }) {
   const { createLanHost } = await loadLan();
-  const host = createLanHost({ port: PORTS.LAN_HOST, interfaces: [LOOP_IFACE], projects: () => projects, deviceName: 'Studio-PC', docservicePort, assetPort });
+  const host = createLanHost({ port: 0, interfaces: [LOOP_IFACE], projects: () => projects, deviceName: 'Studio-PC', docservicePort, assetPort });
   await host.start();
   t.after(() => host.stop());
   return host;
@@ -144,11 +144,11 @@ async function lanHostFor(t, { projects, docservicePort = 5173, assetPort = 5173
 test('SPC4-7 主机收到查询，单播回应答：nonce 原样、地址取收到查询的那块网卡、ttlMs 45000、包 ≤ 1 KiB', async (t) => {
   const { encodeQuery } = await loadLan();
   const proj = { projectId: 'sp_cccccccccccccccccccccccccc', name: 'lan-demo', mode: 'restricted' };
-  await lanHostFor(t, { projects: [proj], docservicePort: 5188, assetPort: 5188 });
-  const client = await udpSocket(t, PORTS.LAN_CLIENT);
+  const host = await lanHostFor(t, { projects: [proj], docservicePort: 5188, assetPort: 5188 });
+  const client = await udpSocket(t);
   const nonce = randomBytes(8).toString('hex');
   const got = new Promise((resolve) => client.on('message', (msg, rinfo) => resolve({ msg, rinfo })));
-  client.send(encodeQuery({ nonce, name: 'lan-demo' }), PORTS.LAN_HOST, '127.0.0.1');
+  client.send(encodeQuery({ nonce, name: 'lan-demo' }), host.port(), '127.0.0.1');
   const { msg, rinfo } = await Promise.race([got, new Promise((_, rej) => setTimeout(() => rej(new Error('5 s 内没收到应答')), 5000))]);
   assert.ok(msg.length <= 1024);
   assert.equal(rinfo.address, '127.0.0.1');
@@ -170,7 +170,7 @@ test('SPC4-8 discoverLan 经两个 dgram 套接字 5 s 内找到主机；名字�
   const { discoverLan } = await loadLan();
   const proj = { projectId: 'sp_dddddddddddddddddddddddddd', name: 'Found-Me', mode: 'free' };
   const host = await lanHostFor(t, { projects: [proj] });
-  const opts = { port: PORTS.LAN_HOST, interfaces: [LOOP_IFACE], targets: ['127.0.0.1'], timeoutMs: 3000 };
+  const opts = { port: host.port(), interfaces: [LOOP_IFACE], targets: ['127.0.0.1'], timeoutMs: 3000 };
   const t0 = Date.now();
   const found = await discoverLan({ name: 'Found-Me', ...opts });
   const ms = Date.now() - t0;
@@ -188,9 +188,9 @@ test('SPC4-9 发现与进入局域网主机期间，托管端的连接数不变'
   const hosted = await hostFor(t);
   const lanHost = await hostFor(t, { attached: true });
   const proj = await createProject(lanHost, { mode: 'free' });
-  await lanHostFor(t, { projects: [{ projectId: proj.projectId, name: proj.name, mode: 'free' }], docservicePort: lanHost.port, assetPort: lanHost.port });
+  const lan = await lanHostFor(t, { projects: [{ projectId: proj.projectId, name: proj.name, mode: 'free' }], docservicePort: lanHost.port, assetPort: lanHost.port });
   const before = hosted.service.describe().conns.length;
-  const found = await discoverLan({ name: proj.name, port: PORTS.LAN_HOST, interfaces: [LOOP_IFACE], targets: ['127.0.0.1'], timeoutMs: 3000 });
+  const found = await discoverLan({ name: proj.name, port: lan.port(), interfaces: [LOOP_IFACE], targets: ['127.0.0.1'], timeoutMs: 3000 });
   assert.equal(found.length, 1);
   assert.equal(found[0].docservice, `ws://127.0.0.1:${lanHost.port}/docservice`);
   const c = await join(lanHost, proj, { username: 'bob', remote: '192.168.1.70' });

@@ -13,8 +13,11 @@
  *   〔假设 H1〕文档服务是独立模式：WebSocket 在 `/`，HTTP 端点在 `/shared/…`（与 `server/docservice/main.mjs` 相同）。
  *   〔假设 H2〕素材服务的路径是 `/api/asset/<ns>/<hash>[/<n>|/complete|/chunks]`（与现有中间件相同；契约给的公网地址形如
  *             `http://…:8788/api/asset`）。
- *   〔假设 H3〕就绪判据：文档服务 `GET /shared/lookup?name=…` 回 404 JSON，素材服务 `GET /api/asset/media/<64 个 0>` 有 HTTP 回应。
- *             不依赖日志格式，所以用固定端口（本分支的端口段 5490～5499）。
+ *   〔假设 H3〕就绪判据：子进程自己打出 `listen` 事件行（两个端口都已监听），且文档服务 `GET /shared/lookup?name=…` 回 404 JSON、
+ *             素材服务 `GET /api/asset/media/<64 个 0>` 有 HTTP 回应。端口不固定：每次起子进程前由系统分配空端口（`hostedPorts()`：
+ *             listen(0) 拿到再放掉、传给子进程），同一台机器上并行跑几份 `npm test` 也不会连到别人的实例。认 `listen` 行是为了
+ *             排除「自己的子进程没占到端口、别人的进程恰好在答」。放掉到子进程占上之间被别人抢走时（子进程报 `config.error`
+ *             `listen`），`hostedFor` 换一对端口重起。
  *   〔假设 H4〕`.layout` 对不上时「拒绝启动」＝ 进程以非 0 退出码结束（契约只说拒绝启动，没写退出码与日志原因）。
  *   〔假设 H5〕`secrets/cluster-token` 文件内容是令牌本身，允许末尾换行。
  *   〔假设 H6〕素材服务登记用的 `kind` 是 `'asset'`（M5 的 `server/asset-announce.mjs` 就是这样登记的）。
@@ -56,30 +59,60 @@
  *     discoverLan({ name, port, interfaces, targets, timeoutMs }) → Promise<announce[]>
  *        targets 给了就只向这些地址单播查询（本机单测用，代替组播与定向广播）
  *
- * 只引 Node 内置模块与同目录的测试工具。
+ * 只引 Node 内置模块、同目录的测试工具与 `server/safe-port.mjs`（挑空端口时避开坏端口）。
  */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import net from 'node:net';
 import { spawn } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { wsClient, rawHandshake, sleep, waitFor } from './fake-ws-kit.mjs';
 import { ask, PROTOCOL } from './auth-kit.mjs';
+import { isUnsafePort } from '../safe-port.mjs';
 
 export const ROOT = path.resolve(fileURLToPath(import.meta.url), '..', '..', '..');
 export const HOSTED_MAIN = path.join(ROOT, 'server', 'hosted', 'main.mjs');
 export const PROBE = path.join(ROOT, 'scripts', 'probes', 'shared-project-probe.mjs');
 export const HOSTED_IP = '8.219.80.16';
 
-/** 本分支的端口段 5490～5499（契约第 8 节）。托管组合的子进程测试都在 sp-hosted.test.mjs 里串行用这几个 */
-export const PORTS = Object.freeze({
-  A_DOC: 5490, A_ASSET: 5491,
-  B_DOC: 5492, B_ASSET: 5493,
-  C_DOC: 5494, C_ASSET: 5495,
-  LAN_HOST: 5496, LAN_CLIENT: 5497,
-});
+// ------------------------------------------------------------------ 空端口
+// 不用固定端口：同一台机器上常有几份 `npm test` 并行（不同 worktree 的子 Agent），固定端口会连到别人的实例。
+
+/** 用户常驻的编辑器（5190）与它的舞台端口：动态端口段从 1024 起的机器上 listen(0) 也可能给到，不拿 */
+const RESERVED_PORTS = new Set([5190, 5191, 5192]);
+
+/**
+ * 向系统要 n 个互不相同的空闲 TCP 端口：逐个 listen(0) 且全部占着，记下端口后一起放掉。
+ * 有的机器把 TCP 动态端口段改到了从 1024 起，listen(0) 可能给到 fetch 拒连的坏端口（`safe-port.mjs`）或 5190～5192，
+ * 这些号占着不放、另要一个，直到凑够 n 个（最多多试 50 次）。
+ * `host` 与子进程绑的地址一致（托管组合缺省绑 0.0.0.0）。
+ */
+export async function freePorts(n, host = '0.0.0.0') {
+  const servers = [];
+  const good = [];
+  try {
+    for (let tries = 0; good.length < n; tries++) {
+      if (tries >= n + 50) throw new Error(`freePorts：试了 ${tries} 次仍凑不够 ${n} 个可用端口（${servers.map((s) => s.address()?.port).join(', ')}）`);
+      const srv = net.createServer();
+      servers.push(srv);
+      await new Promise((resolve, reject) => { srv.once('error', reject); srv.listen(0, host, resolve); });
+      const port = srv.address().port;
+      if (!isUnsafePort(port) && !RESERVED_PORTS.has(port)) good.push(port);
+    }
+    return good;
+  } finally {
+    await Promise.all(servers.map((s) => new Promise((resolve) => { if (s.listening) s.close(() => resolve()); else resolve(); })));
+  }
+}
+
+/** 托管组合要的一对端口 { docPort, assetPort } */
+export async function hostedPorts() {
+  const [docPort, assetPort] = await freePorts(2);
+  return { docPort, assetPort };
+}
 
 export const sha256hex = (buf) => createHash('sha256').update(buf).digest('hex');
 export const ZERO_HASH = '0'.repeat(64);
@@ -117,22 +150,28 @@ export function cleanEnv(extra = {}) {
 }
 
 /**
- * 起一份托管组合。不等就绪（`ready()` 另等）。
+ * 起一份托管组合。不等就绪（`ready()` 另等）。端口必须给（用 `hostedPorts()` 要）；要自动挑端口、被占就换，用 `hostedFor`。
  * @param {object} o
  * @param {number} o.docPort
  * @param {number} o.assetPort
  * @param {string} o.dataDir
  * @param {string} [o.token]         环境变量里的集群令牌
- * @param {string} [o.assetPublicUrl]
+ * @param {string | ((ports: { docPort: number, assetPort: number }) => string)} [o.assetPublicUrl]  给函数时按实际端口算
  * @param {string} [o.cwd]           子进程的工作目录（缺省一个空的临时目录，用来查「没往别处写」）
  * @param {Record<string,string>} [o.env]
  */
 export function runHosted({ docPort, assetPort, dataDir, token, assetPublicUrl, cwd, env = {} }) {
+  for (const [k, v] of [['docPort', docPort], ['assetPort', assetPort]]) {
+    if (!Number.isInteger(v) || v <= 0) throw new Error(`runHosted 要实际端口（${k} = ${v}）；用 hostedPorts() 要一对空端口`);
+  }
+  const publicUrl = typeof assetPublicUrl === 'function'
+    ? assetPublicUrl({ docPort, assetPort })
+    : (assetPublicUrl ?? `http://127.0.0.1:${assetPort}/api/asset`);
   const e = cleanEnv({
     PROMPTCUT_DOCSERVICE_PORT: String(docPort),
     PROMPTCUT_ASSET_PORT: String(assetPort),
     PROMPTCUT_DATA_DIR: dataDir,
-    PROMPTCUT_ASSET_PUBLIC_URL: assetPublicUrl ?? `http://127.0.0.1:${assetPort}/api/asset`,
+    PROMPTCUT_ASSET_PUBLIC_URL: publicUrl,
     PROMPTCUT_DOCSERVICE_PUBLIC_URL: `ws://127.0.0.1:${docPort}`,
     ...(token ? { PROMPTCUT_CLUSTER_TOKEN: token } : {}),
     ...env,
@@ -146,15 +185,18 @@ export function runHosted({ docPort, assetPort, dataDir, token, assetPublicUrl, 
     child.once('error', (err) => resolve({ code: null, signal: null, error: err }));
   });
   const run = {
-    child, docPort, assetPort, dataDir, exited,
+    child, docPort, assetPort, dataDir, exited, assetPublicUrl: publicUrl,
     output: () => out,
     lines: () => out.split('\n').map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean),
     docBase: `http://127.0.0.1:${docPort}`,
     assetBase: `http://127.0.0.1:${assetPort}/api/asset`,
-    /** 两个端口都能答 HTTP（假设 H3） */
+    /** 子进程报端口被占（`config.error` `listen`） */
+    addrInUse: () => run.lines().some((l) => l.event === 'config.error' && l.reason === 'listen'),
+    /** 自己的子进程打出了 listen 行，且两个端口都能答 HTTP（假设 H3） */
     async ready(ms = 15_000) {
       await waitFor(async () => {
         if (child.exitCode !== null) throw new Error(`托管组合提前退出（${child.exitCode}）：${out.slice(0, 1500)}`);
+        if (!run.lines().some((l) => l.event === 'listen')) return false;
         try {
           const a = await fetch(`http://127.0.0.1:${docPort}/shared/lookup?name=__sp_ready__`);
           await a.arrayBuffer();
@@ -174,12 +216,25 @@ export function runHosted({ docPort, assetPort, dataDir, token, assetPublicUrl, 
   return run;
 }
 
-/** 起一份并等就绪；用例结束时关掉 */
+/**
+ * 起一份并等就绪；用例结束时关掉。
+ * `o` 没给端口时向系统要一对空端口；子进程报端口被占（放掉到占上之间被别的进程抢了）就换一对再起，最多 5 次。
+ * 给了端口就只用那一对。不改 `o`：同一个 `o` 再起一次（重启）会拿到新端口，用例一律从返回的 run 取地址。
+ */
 export async function hostedFor(t, o) {
-  const run = runHosted(o);
-  t.after(() => run.stop());
-  await run.ready();
-  return run;
+  const fixed = o.docPort !== undefined || o.assetPort !== undefined;
+  for (let attempt = 1; ; attempt++) {
+    const run = runHosted({ ...o, ...(fixed ? {} : await hostedPorts()) });
+    t.after(() => run.stop());
+    try {
+      await run.ready();
+      return run;
+    } catch (err) {
+      if (fixed || attempt >= 5) throw err;
+      await exitWithin(run, 5_000);
+      if (!run.addrInUse()) throw err;
+    }
+  }
 }
 
 /** 等进程在 ms 内退出；没退就杀掉并回 { timedOut: true } */

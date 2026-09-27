@@ -94,6 +94,18 @@ function addRemote(size, seed, extra = {}) {
   return { hash, bytes };
 }
 const localFile = (hash) => media.resolveHashFile(projectRoot, hash);
+/**
+ * 等后台拉取把这个哈希收进本地内容库，按截止时间等（缺省 10 s），回文件路径；到时仍没有回 null（由调用方断言）。
+ * 原来是「最多 50 / 200 次 × 20 ms」的步数上限，机器忙时（几份 npm test 并行）后台收尾可能超过 1～4 s 而误判。
+ */
+async function waitLocal(hash, ms = 10_000) {
+  const deadline = Date.now() + ms;
+  for (;;) {
+    const f = await localFile(hash);
+    if (f || Date.now() >= deadline) return f;
+    await new Promise((res) => setTimeout(res, 20));
+  }
+}
 const setRemote = (body) => fetch(`${local}/api/media/remote`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
 
 beforeEach(() => { pull.resetPullStateForTest(); remoteHits.length = 0; });
@@ -114,7 +126,7 @@ test('T5-pull-2:连了远程 → 同一次请求拿到整件字节;拉完进本�
   const got = Buffer.from(await r.arrayBuffer());
   assert.equal(sha256(got), hash);
   // 拉取在后台收尾(校验、改名):等它进库
-  for (let i = 0; i < 50 && !(await localFile(hash)); i++) await new Promise((res) => setTimeout(res, 20));
+  await waitLocal(hash);
   const file = await localFile(hash);
   assert.ok(file && file.endsWith(`${hash}.mp4`), `进了本地内容库,扩展名按远程的 Content-Type:${file}`);
   assert.equal(fs.readFileSync(file).length, bytes.length);
@@ -140,13 +152,15 @@ test('T5-pull-3:边落盘边按 Range 服务 —— 远程还在慢慢传,已落
   const got = Buffer.from(await r.arrayBuffer());
   const ms = Date.now() - t0;
   assert.deepEqual(got, bytes.subarray(1000, 51000));
-  assert.ok(ms < 800, `前 50 KB 不等整件下完就答了(${ms} ms)`);
+  // 墙钟判据改成相对整件的：原来是 ms < 800（全件约 1.3 s，即约六成）。机器忙时两者一起变慢，按比例判；
+  // 再加上「这时整件还没进库」这条不看时间的证据。真退化成「等整件下完才答」时 ms ≥ fullMs，照样拦得住。
   assert.equal(await localFile(hash), null, '这时整件还没进库');
   // 同一个哈希的第二个请求挂在同一个拉取任务上,不再开一条
   const r2 = await fetch(`${local}/@media/${hash}`, { headers: { Range: 'bytes=0-99' } });
   assert.deepEqual(Buffer.from(await r2.arrayBuffer()), bytes.subarray(0, 100));
   assert.equal(remoteHits.filter((h) => h.url.endsWith(hash) && !h.range).length, 1, '同一哈希只拉一次');
-  for (let i = 0; i < 200 && !(await localFile(hash)); i++) await new Promise((res) => setTimeout(res, 20));
+  const fullMs = (await waitLocal(hash)) ? Date.now() - t0 : Infinity;
+  assert.ok(ms < fullMs * 0.6, `前 50 KB 在整件下完之前很早就答了：Range 回包 ${ms} ms，整件进库 ${fullMs} ms`);
   assert.ok(await localFile(hash), '拉完进库');
 });
 
@@ -189,10 +203,10 @@ test('T5-prefetch-1:预取按给的顺序一次拉一个、本地已有的跳过
   await setRemote({ base: REMOTE_BASE });
   // b 先按需拉进来:预取时跳过
   await (await fetch(`${local}/@media/${b.hash}`)).arrayBuffer();
-  for (let i = 0; i < 50 && !(await localFile(b.hash)); i++) await new Promise((res) => setTimeout(res, 20));
+  await waitLocal(b.hash);
   const r = await fetch(`${local}/api/media/prefetch`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ items: [{ hash: c.hash }, { hash: b.hash }, { hash: a.hash }, { hash: d.hash }] }) });
   assert.deepEqual(await r.json(), { ok: true, queued: 4 });
-  for (let i = 0; i < 200 && !(await localFile(d.hash)); i++) await new Promise((res) => setTimeout(res, 20));
+  await waitLocal(d.hash);
   const starts = pull.pullLog().filter((e) => e.event === 'pull.start' && e.by === 'prefetch').map((e) => e.hash);
   assert.deepEqual(starts, [c.hash, a.hash, d.hash], '按清单顺序、跳过本地已有的 b');
   for (const x of [a, c, d]) assert.ok(await localFile(x.hash));
