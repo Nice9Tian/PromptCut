@@ -36,6 +36,8 @@ export function rawEolPlugin() {
     name: 'promptcut-raw-eol',
     enforce: 'pre',
     configResolved(config) { root = config.root; },
+    // 入口页 index.html 同理:构建产物里的它照原文抄换行,CRLF 检出出来的 dist 就和 LF 的不同
+    transformIndexHtml: { order: 'post', handler: (html) => normalizeEol(html) },
     load(id) {
       const file = rawEolTarget(root, id);
       if (!file) return null;
