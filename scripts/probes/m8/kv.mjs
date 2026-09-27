@@ -87,10 +87,10 @@ export function kvClient(base, { token = process.env.PROBE_MAIL_TOKEN, log = () 
       if (!res.ok) throw Object.assign(new Error(`协调口 PUT ${key} 回 ${res.status}`), { status: res.status });
       await res.body?.cancel().catch(() => {});
     },
-    /** 取一次（最多等 waitMs）；没有回 null */
-    async get(key, waitMs = 0) {
+    /** 取一次（最多等 waitMs）；没有回 null。连不上时退避重试到 deadline（缺省 60 s 后） */
+    async get(key, waitMs = 0, deadline = Date.now() + waitMs + 60_000) {
       stats.gets += 1;
-      const res = await request('GET', key, { waitMs });
+      const res = await request('GET', key, { waitMs, deadline });
       if (res.status === 404) { await res.body?.cancel().catch(() => {}); return null; }
       if (!res.ok) throw Object.assign(new Error(`协调口 GET ${key} 回 ${res.status}`), { status: res.status });
       return (await res.json()).value ?? null;
@@ -100,7 +100,7 @@ export function kvClient(base, { token = process.env.PROBE_MAIL_TOKEN, log = () 
       while (Date.now() < deadline) {
         const wait = Math.max(1, Math.min(30_000, deadline - Date.now()));
         try {
-          const v = await client.get(key, wait);
+          const v = await client.get(key, wait, deadline);
           if (v !== null) return v;
         } catch (error) {
           if (error?.status === 401) throw error;
@@ -152,10 +152,10 @@ export function roleKv({ coord, prefix, run, role, log = () => {}, token }) {
 
 /**
  * 定本轮 id：给了就用；creator 没给就新生成并写 `<前缀>.latest`；别的角色没给就从 `<前缀>.latest` 取（maxAgeMs 内写的才认）。
- * @param {{ coord: string, prefix: string, run?: string | null, isCreator: boolean, newRun: () => string, deadline: number, maxAgeMs?: number, log?: Function }} o
+ * @param {{ coord: string, prefix: string, run?: string | null, isCreator: boolean, newRun: () => string, deadline: number, maxAgeMs?: number, log?: Function, token?: string }} o
  */
-export async function resolveRun({ coord, prefix, run = null, isCreator, newRun, deadline, maxAgeMs = 10 * 60_000, log }) {
-  const c = kvClient(coord, { log });
+export async function resolveRun({ coord, prefix, run = null, isCreator, newRun, deadline, maxAgeMs = 10 * 60_000, log, token }) {
+  const c = kvClient(coord, { log, ...(token === undefined ? {} : { token }) });
   const latest = kvKey(prefix, 'latest');
   if (isCreator) {
     const id = run ?? newRun();
@@ -164,7 +164,7 @@ export async function resolveRun({ coord, prefix, run = null, isCreator, newRun,
   }
   if (run) return run;
   while (Date.now() < deadline) {
-    const v = await c.get(latest, 10_000).catch(() => null);
+    const v = await c.get(latest, Math.min(10_000, Math.max(0, deadline - Date.now())), deadline).catch(() => null);
     if (v?.run && Date.now() - (v.at ?? 0) <= maxAgeMs) return v.run;
     await delay(500);
   }
