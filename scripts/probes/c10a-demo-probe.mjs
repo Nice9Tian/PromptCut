@@ -572,11 +572,13 @@ try {
     const fresh = phone.assets.filter((a) => a.ns === 'px' && a.method === 'GET' && !a.sub && !pxBefore.has(a.hash) && a.at >= keyChangedAt - 1000);
     return fresh.length ? { keyMs: keyChangedAt - t3, first: fresh[0].at - t3, count: fresh.length } : null;
   }, 900_000, 1000);
-  const layer1 = await heavyLayer().catch(() => null);
   check(newPx, '手机收到重渲后的新小尺寸');
-  check(layer1 && layer1.key !== keyBefore, '层表里重卡片段换了新的键', { before: keyBefore?.slice(0, 12), after: layer1?.key?.slice(0, 12) });
+  // 整段重渲完:内容库里新键下每一段清单都在、小位图都在素材服务上
+  const layer1 = await until('重渲整段完成(新键下的清单与小位图齐全)', async () => { const l = await heavyLayer(); return l && l.key !== keyBefore ? l : null; }, 900_000, 2000);
+  check(layer1, '层表里重卡片段换了新的键、整段重渲完成', { before: keyBefore?.slice(0, 12), after: layer1?.key?.slice(0, 12), why: layer1 ? undefined : state.layerWhy });
   await shot(phone, '3-phone-after-edit');
-  out.steps.edit = { ms: Date.now() - t3, newKeyMs: newPx?.keyMs ?? null, newSmallMs: newPx?.first ?? null, newPxRequests: newPx?.count ?? 0, keyChanged: !!(layer1 && layer1.key !== keyBefore) };
+  out.steps.edit = { ms: Date.now() - t3, newKeyMs: newPx?.keyMs ?? null, newSmallMs: newPx?.first ?? null, newPxRequests: newPx?.count ?? 0, fullRerenderMs: layer1 ? Date.now() - t3 : null,
+    keyChanged: !!layer1, newKey: layer1 ? { key: layer1.key.slice(0, 12), frames: layer1.frames, small: layer1.smallCount } : null };
   say('step3.done', out.steps.edit);
 
   /* ---------------------------------------------------------------- 4. 低内存档逐帧导出 */
