@@ -97,6 +97,8 @@ const DEFAULT_PORT = { creator: 5590, observer: 5593, host: 5596 };
 const FPS = 30;
 const SEEK = 2.5;
 const EXPECT_IDX = Math.round(SEEK * FPS);
+/** 重卡片段:审阅过的独立推帧卡(共享档),放卡前按成本记录的人工钉死写成重卡(见 runCreator 第 5 步) */
+const HEAVY = { cardId: 'probe-typewriter', seconds: 16 };
 const started = Date.now();
 const deadline = started + TIMEOUT_MS;
 
@@ -545,7 +547,7 @@ async function runCreator(out) {
       run, hosted: httpBase, ws: wsBase, projectId: shared.projectId, name: shared.name, mode: shared.mode, base: shared.base, memberPassword: projectPw,
       tiers: out.tiers, mediaName: path.basename(video), fps: FPS, seek: SEEK,
       card: { id: CARD_ID, rel: CARD_REL, v1: MARK('v1'), v2: MARK('v2'), source: cardSource(CARD_ID, MARK('v1')) },
-      heavy: { cardId: 'probe-typewriter', salt: `t9-${run}` }, at: Date.now(),
+      heavy: { cardId: HEAVY.cardId, seconds: HEAVY.seconds, salt: `t9-${run}` }, at: Date.now(),
     });
     say('config.put', { run });
     const hostReady = await store.wait('host.ready', '主机起来', 15 * 60_000);
@@ -556,14 +558,60 @@ async function runCreator(out) {
     }, 120_000, 500);
     if (!check(q0?.active, '[creator] 本机队列节点连着托管端并报到', q0 ? { active: q0.active, connected: q0.connected, url: q0.url } : null)) throw new Error('队列节点不在');
     const before = new Set((q0.published ?? []).map((p) => p.planId));
-    const heavyClip = await P(page, async (salt, seek) => {
+    // 重卡片段要不论机器忙闲都进预渲染集合。实测判重(K1/K2)只看成本记录,卡片声明(stateful)只在一条记录都没有时兜底;
+    // 16 秒 probe-typewriter 在空闲的本机测出来是 over-catchup(追帧比 ≈ 80,门槛 60),机器一忙 p90 抬高就掉到 catchup-b 判轻、
+    // 切不出任务(报告 AGENT-c66-t9-fix 第 1 节)。所以放卡前先按成本记录的「人工钉死」(`pinnedHeavy`,costs-store 的粘性旗标)
+    // 给这张卡的身份写一条记录:页面探针见到已有记录就不再测,两端的 planPipelines 都判 capped。不改轻重门槛与判定。
+    await waitProbeIdle(page, 'creator');
+    const pinSpec = { cardId: HEAVY.cardId, duration: HEAVY.seconds, salt: `t9-${run}`, userClip };
+    const pinKeys = await P(page, async (spec) => {
+      const S = await import('/src/store/project.ts');
+      const I = await import('/src/editor/costIdentity.ts');
+      const R = await import('/src/kernel/registry.ts');
+      const p = S.getState().project;
+      const def = R.getCard(spec.cardId);
+      // 与 addCardClip 同一个形状(参数写入时展开成全量);身份键不含 clipId 与位置(cardCostKey)
+      const clip = { id: 't9-pin', cardId: spec.cardId, start: 0, end: spec.duration, params: { ...(def?.defaults ?? {}), probeSalt: spec.salt } };
+      I.resetClipIdentityCache();
+      const synthetic = I.clipIdentityOf({ ...p, tracks: [...p.tracks, { id: 't9-pin-track', name: 'pin', clips: [clip] }] }).identityKeys;
+      I.resetClipIdentityCache();
+      const own = I.clipIdentityOf(S.getState().project).identityKeys;
+      return { heavy: synthetic['t9-pin'] ?? null, user: own[spec.userClip] ?? null };
+    }, pinSpec);
+    // 页面的 device 串(probeRunner 私有)从它自己写过的用户卡记录上取:探针按 (identityKey, device) 判「已测过」
+    const allCosts = (await getJson(`${A.origin}/api/data/costs`))?.costs ?? [];
+    const userRecord = allCosts.find((r) => r.identityKey === pinKeys.user) ?? null;
+    if (!check(pinKeys.heavy && userRecord?.device, '[creator] 算出重卡片段的成本身份、拿到页面的 device 串', { pinKeys, userRecord: !!userRecord })) throw new Error('钉不住重卡片段');
+    const pinRecord = { identityKey: pinKeys.heavy, device: userRecord.device, ...(userRecord.mode ? { mode: userRecord.mode } : {}), fps: FPS,
+      pinnedHeavy: true, measuredAt: Date.now(), note: 'c66-t9-probe 人工钉死' };
+    const pinPut = await fetch(`${A.origin}/api/data/costs`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ records: [pinRecord] }) })
+      .then((r) => r.json()).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
+    check(pinPut?.ok, '[creator] 写入重卡片段的钉死记录', pinPut);
+    // 编辑器进程转给预渲染进程是不等回复的:等预渲染那一份也有了再放卡(它按自己那份算预渲染集合)
+    const pinForwarded = await until('[creator] 预渲染进程收到钉死记录', async () => {
+      const c = (await getJson(`${prerender}/api/data/costs`, 5000))?.costs ?? [];
+      return c.some((r) => r.identityKey === pinKeys.heavy && r.pinnedHeavy === true) || null;
+    }, 30_000, 300);
+    const heavyClip = await P(page, async (spec, seek) => {
       const S = await import('/src/store/project.ts');
       const t = S.actions.addTrack('T9 重卡');
-      const c = S.actions.addCardClip('probe-typewriter', 0, { trackId: t.id, duration: 16, params: { probeSalt: salt } });
+      const c = S.actions.addCardClip(spec.cardId, 0, { trackId: t.id, duration: spec.duration, params: { probeSalt: spec.salt } });
       S.actions.seek(seek);
       return c?.id ?? null;
-    }, `t9-${run}`, SEEK);
+    }, pinSpec, SEEK);
     if (!heavyClip) throw new Error('没放上重卡片段');
+    // 放上的片段与钉死的身份是同一个;页面这边的判定(与预渲染进程同一个 planPipelines)
+    const heavyState = await P(page, async (clipId) => {
+      const S = await import('/src/store/project.ts');
+      const I = await import('/src/editor/costIdentity.ts');
+      I.resetClipIdentityCache();
+      const r = I.clipIdentityOf(S.getState().project);
+      return { key: r.identityKeys[clipId] ?? null, frameMode: r.frameModes[clipId] ?? null, compositing: r.capabilities.get(clipId)?.compositing ?? null };
+    }, heavyClip);
+    out.heavy = { cardId: HEAVY.cardId, seconds: HEAVY.seconds, clipId: heavyClip, identityKey: heavyState.key, pinned: heavyState.key === pinKeys.heavy,
+      forwarded: !!pinForwarded, frameMode: heavyState.frameMode, compositing: heavyState.compositing };
+    check(out.heavy.pinned, '[creator] 放上的重卡片段就是钉死的那个身份', { placed: heavyState.key, pinned: pinKeys.heavy });
+    check(heavyState.frameMode === 'stateful' && heavyState.compositing === 'independent', '[creator] 重卡片段是审阅过的独立推帧卡(共享档)', heavyState);
     const tPublish = Date.now();
     let lastNewAt = null;
     let lastNewCount = 0;
@@ -581,6 +629,13 @@ async function runCreator(out) {
       if (Date.now() - lastNewAt < 3000) return null; // 3 s 内没有新的一版才算
       return { planId: latest.planId, derived, states, plans: mine.map((p) => p.planId) };
     }, 600_000, 1000);
+    // 预渲染进程这一端怎么判的这张卡(最后一版 card plan 里它的 control:picked = 进了预渲染集合)
+    const heavyControl = async () => {
+      const d = await getJson(`${prerender}/api/frames/diagnostics`, 20_000).catch(() => null);
+      const c = (d?.plans ?? []).at(-1)?.controls?.find((x) => x.clipId === heavyClip) ?? null;
+      return c ? { picked: c.picked, tier: c.tier, frameMode: c.frameMode, costKey: c.costKey } : null;
+    };
+    out.heavy.control = await heavyControl();
     if (!settled) {
       try { fs.writeFileSync(path.join(OUT, 'creator-queue-diag.json'), JSON.stringify(await getJson(`${prerender}/api/frames/diagnostics`, 20_000), null, 1)); } catch { /* 取不到 */ }
       throw new Error('plan 没落定');
@@ -738,7 +793,24 @@ async function runObserver(out) {
     }
     out.joinMs = Date.now() - tJoin;
     out.projectTiers = clip.tiers;
-    await P(page, async (t) => { const S = await import('/src/store/project.ts'); S.actions.pause?.(); S.actions.seek(t); }, SEEK);
+    // 播放头的去向:seek 之前挂一个 store 订阅,记下之后每一次 t 的变化(带调用栈),排查「seek 到 2.5 s 却停在 0」
+    await P(page, async (t) => {
+      const S = await import('/src/store/project.ts');
+      const log = [];
+      window.__t9TLog = log;
+      let last = S.getState().t;
+      const t0 = performance.now();
+      window.__t9TOff?.();
+      window.__t9TOff = S.subscribe(() => {
+        const st = S.getState();
+        if (st.t === last) return;
+        last = st.t;
+        if (log.length < 50) log.push({ ms: Math.round(performance.now() - t0), t: st.t, cut: st.project.activeCutId ?? null, duration: st.project.duration,
+          stack: (new Error().stack ?? '').split('\n').slice(2, 12).map((l) => l.trim().replace(/https?:\/\/[^/]+/g, '').replace(/\?[^:]*:/g, ':')) });
+      });
+      S.actions.pause?.();
+      S.actions.seek(t);
+    }, SEEK);
 
     // ---- 素材层:先小后大(tier-switch-probe 的读法)
     const stageFrames = () => page.frames().filter((f) => /[?&]stage=1/.test(f.url()) && stagePorts.some((p) => f.url().includes(`:${p}/`)));
@@ -767,7 +839,7 @@ async function runObserver(out) {
     const seq = [];
     const note = (l) => {
       const tier = l?.shown && l.rs >= 2 && Number.isInteger(l.idx) ? tierOf(l.src) : 'none';
-      if (!seq.length || seq[seq.length - 1].tier !== tier) seq.push({ ms: Date.now() - tJoin, tier, idx: l?.idx ?? null, w: l?.w ?? null });
+      if (!seq.length || seq[seq.length - 1].tier !== tier) seq.push({ ms: Date.now() - tJoin, tier, idx: l?.idx ?? null, w: l?.w ?? null, ct: Number.isFinite(l?.ct) ? Number(l.ct.toFixed(3)) : null });
       return tier;
     };
     const firstShown = await until('[observer] 素材层第一次解出画面', async () => {
@@ -852,6 +924,7 @@ async function runObserver(out) {
       check(samples.length > 10 && black.length === 0, '[observer] 换档期间逐帧采样无黑帧 / 无空档', black.slice(0, 3));
       check(idxs.every((i) => Math.abs(i - EXPECT_IDX) <= 1), '[observer] 换档期间画面一直停在同一时刻', idxs);
     } else out.swapSamples = null;
+    out.playhead = await P(page, async () => { const S = await import('/src/store/project.ts'); return { t: S.getState().t, log: window.__t9TLog ?? null }; }).catch((e) => ({ error: String(e?.message ?? e) }));
     await page.screenshot({ path: path.join(OUT, `${run}-observer-2-original.png`) });
 
     // ---- 卡片源码:v1 已装上,第一轮测量测完
