@@ -140,10 +140,15 @@ class FakeMedia {
   fire(type) { this.l[type]?.(); }
 }
 function fakeDom({ canPlay = "maybe", behavior = (el) => el.fire("loadeddata"), frames = true } = {}) {
-  const env = { canPlay, behavior, frames, asked: [], removed: 0, timeouts: [] };
-  globalThis.document = { createElement: (tag) => new FakeMedia(tag, env), body: { appendChild() {} } };
+  const env = { canPlay, behavior, frames, asked: [], removed: 0, timeouts: [], retries: [], els: [] };
+  globalThis.document = { createElement: (tag) => { const el = new FakeMedia(tag, env); env.els.push(el); return el; }, body: { appendChild() {} } };
   globalThis.window = {
-    __pcRealSetTimeout: (fn, ms) => { env.timeouts.push(ms); return setTimeout(fn, Math.min(ms, 30)); },
+    // 「未知」冷却结束的那一下由用例手动触发(env.retries),不自己响:免得串到后面的用例里
+    __pcRealSetTimeout: (fn, ms) => {
+      env.timeouts.push(ms);
+      if (ms >= P.RETRY_UNKNOWN_MS) { env.retries.push(fn); return 0; }
+      return setTimeout(fn, Math.min(ms, 30));
+    },
     __pcRealNow: () => env.now ?? Date.now(),
   };
   return env;
@@ -194,7 +199,7 @@ test("T6-probe-4:超时记「未知」:不进缓存、冷却期内不重探、�
     env.now = 1_000_000;
     assert.equal(await P.probePlayable(ORIG, `/@media/${ORIG}`, "mp4"), undefined);
     assert.equal(await P.probePlayable(SMALL, `/@media/${SMALL}`, "mp4", "video", { remote: true }), undefined);
-    assert.deepEqual(env.timeouts, [P.PROBE_TIMEOUT_LOCAL_MS, P.PROBE_TIMEOUT_REMOTE_MS]);
+    assert.deepEqual(env.timeouts.filter((ms) => ms < P.RETRY_UNKNOWN_MS), [P.PROBE_TIMEOUT_LOCAL_MS, P.PROBE_TIMEOUT_REMOTE_MS]);
     assert.equal(P.playableOnThisHost(ORIG), undefined, "未知不记成放不了");
     assert.equal(P.shouldProbe(ORIG), false, "冷却中");
     env.now += P.RETRY_UNKNOWN_MS;
@@ -202,6 +207,42 @@ test("T6-probe-4:超时记「未知」:不进缓存、冷却期内不重探、�
     // 未知期间预览给小版
     assert.equal(playbackUrl(media, [TIERS_KNOWN_LOCAL, SMALL, ORIG], { probe: false }), `/@media/${SMALL}`);
   } finally { clearDom(); P.setBrowserMajorForTest(null); P.forgetPlayable(); }
+});
+
+test("T6-probe-4b:超时之后首帧才到(慢链路):按迟到的结论记下并通知订阅方,不等重探", async () => {
+  P.forgetPlayable(); P.setBrowserMajorForTest("152");
+  const env = fakeDom({ behavior: () => {} });
+  let n = 0;
+  const off = P.subscribePlayability(() => n++);
+  try {
+    assert.equal(await P.probePlayable(ORIG, `/@media/${ORIG}`, "mp4", "video", { remote: true }), undefined, "时限内没等到:未知");
+    assert.equal(env.removed, 0, "离屏元素留着接着等");
+    env.els[0].fire("loadeddata");
+    await new Promise((r) => setTimeout(r, 20));
+    assert.equal(P.playableOnThisHost(ORIG), true, "迟到的首帧照样算放得了");
+    assert.equal(n, 1, "记下即通知(暂停中的画面层当场换档)");
+    assert.equal(env.removed, 1, "有了结论就卸掉");
+    env.retries.forEach((fn) => fn());
+    assert.equal(n, 1, "冷却结束时已经有结论,不再多通知");
+  } finally { off(); clearDom(); P.setBrowserMajorForTest(null); P.forgetPlayable(); }
+});
+
+test("T6-probe-4c:冷却结束仍没有结论:卸掉离屏元素、主动通知订阅方重判(暂停着没有别的重渲染也会重探)", async () => {
+  P.forgetPlayable(); P.setBrowserMajorForTest("152");
+  const env = fakeDom({ behavior: () => {} });
+  let n = 0;
+  const off = P.subscribePlayability(() => n++);
+  try {
+    env.now = 2_000_000;
+    assert.equal(await P.probePlayable(ORIG, `/@media/${ORIG}`, "mp4", "video", { remote: true }), undefined);
+    assert.equal(P.shouldProbe(ORIG), false, "冷却中");
+    assert.equal(env.retries.length, 1);
+    env.retries[0](); // 冷却结束(真墙钟上的计时器);墙钟读数故意不往前拨:通知之后必须真能重探
+    assert.equal(env.removed, 1);
+    assert.equal(n, 1, "主动通知了一次");
+    assert.equal(P.shouldProbe(ORIG), true, "通知之后重判就会重探");
+    assert.equal(P.playableOnThisHost(ORIG), undefined, "仍是未知,不记成放不了");
+  } finally { off(); clearDom(); P.setBrowserMajorForTest(null); P.forgetPlayable(); }
 });
 
 test("T6-probe-5:缓存键带浏览器主版本:换了主版本就当没探过", () => {

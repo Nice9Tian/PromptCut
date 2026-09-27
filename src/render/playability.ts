@@ -16,7 +16,8 @@
  *   2. 否则**试放首帧**:离屏 `<video muted>` 挂原片,等到 `loadeddata`,再等 `requestVideoFrameCallback`
  *      确认真有一帧交给合成器,才判 `true`;报 `error` 判 `false`(记下)。
  *   3. **超时**(本地素材服务 5 s、远程素材服务 10 s)记「未知」:不写缓存,过 `RETRY_UNKNOWN_MS` 再探。
- *      网络慢不等于放不了,不能把它永久记成 `false`。
+ *      网络慢不等于放不了,不能把它永久记成 `false`。冷却期间离屏元素接着等:首帧迟到了就按迟到的结论记下并通知;
+ *      冷却结束仍没有结论,卸掉元素、通知订阅方重判(重探不搭别的重渲染的车,见 `probePlayable` 里的注释)。
  *   4. 探测本身没法跑(没有 DOM)时不下结论(`undefined`),调用方按「不知道」处理。
  *
  * `playbackUrl`(`mediaTier.ts`)只读这里;要不要触发一次探测由它决定(只在真有两档可选时才探,
@@ -168,17 +169,40 @@ export function probePlayable(hash: string, url: string, ext?: string, kind: "vi
     const remote = !!opts.remote || /^https?:\/\//i.test(url);
     const timeoutMs = opts.timeoutMs ?? (remote ? PROBE_TIMEOUT_REMOTE_MS : PROBE_TIMEOUT_LOCAL_MS);
     const verdict = await new Promise<boolean | undefined>((resolve) => {
-      // 舞台里的 clearTimeout 也是虚拟的、清不掉真计时器,所以靠这个旗标只认第一次
+      // 舞台里的 clearTimeout 也是虚拟的、清不掉真计时器,所以靠旗标:settled = 已经给调用方回过话,closed = 离屏元素已卸掉
       let settled = false;
-      const finish = (value: boolean | undefined) => {
-        if (settled) return;
-        settled = true;
+      let closed = false;
+      const close = () => {
+        if (closed) return;
+        closed = true;
         el.removeAttribute("src");
         try { el.load(); } catch { /* 已经卸掉 */ }
         el.remove();
-        resolve(value);
       };
-      realSetTimeout(() => finish(undefined), timeoutMs);
+      const finish = (value: boolean) => {
+        if (closed) return;
+        close();
+        if (!settled) { settled = true; resolve(value); return; }
+        // 超时之后才到的结论(慢链路上首帧晚到):照样记下,记下即通知订阅方 —— 暂停中的画面层当场换档
+        rememberPlayable(hash, value);
+      };
+      /*
+       * 超时 = 这一次没等到,记「未知」(文件头第 3 步)。离屏元素不卸,接着等到「未知」的冷却结束:
+       * 这期间首帧到了就是迟到的结论(上面 finish 的第二支)。冷却结束还没有结论才卸掉,并**主动通知**订阅方重判一次 ——
+       * 否则重探只能搭别的重渲染的车:暂停着、集合也不变时一直没有重渲染,画面就永远停在小尺寸
+       * (跨机 T9 `ht9a0927`,`docs/reports/AGENT-tier-reload-seek.md`)。
+       */
+      realSetTimeout(() => {
+        if (settled) return;
+        settled = true;
+        resolve(undefined);
+        realSetTimeout(() => {
+          if (closed) return;
+          close();
+          retryAt.delete(key);
+          changed();
+        }, RETRY_UNKNOWN_MS);
+      }, timeoutMs);
       el.muted = true;
       el.preload = "auto";
       el.setAttribute("aria-hidden", "true");

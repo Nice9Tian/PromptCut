@@ -117,7 +117,7 @@ export function VideoTrack({
   const el1 = useRef<HTMLVideoElement>(null);
   const els = [el0, el1];
   const slots = useRef<Slot[]>([emptySlot(), emptySlot()]);
-  /** 每个槽位装的那一档上一次渲染时在素材服务上到齐没有(到齐的那一刻重载失败过的元素) */
+  /** 每个槽位装的那一档到齐之后判过「要不要重载失败过的元素」没有(在用时才判;没到齐时清回 false) */
   const completeSeen = useRef<boolean[]>([false, false]);
   /** 上一次规划的预热槽位 / 播放槽位(帧回调在渲染之外到达,读这里) */
   const warmRef = useRef<number | null>(null);
@@ -274,6 +274,23 @@ export function VideoTrack({
     for (let i = 0; i < 2; i++) {
       const el = els[i].current;
       if (!el) continue;
+      const s = slots.current[i];
+      // 素材服务上刚到齐的那一档:之前按它挂过、失败了(404:等待上传方)的元素重新加载一次。
+      // 这一轮刚换上 src 的不算(`reloadOnComplete`):那时 networkState 本来就是 NO_SOURCE,再 load() 只会打断刚开始的加载。
+      // 闲着的槽位也不算:重载只会和可播性探测抢带宽;它没记成「判过」,轮到它播或预热时再重载。
+      // 重载放在驱动**之前**:load() 之后再下的定位才算数(之前下的,load() 之后留不留得住看浏览器)
+      const h = s.clip ? hashFromUrl(s.clip.url) : null;
+      const doneNow = !!h && complete.has(h);
+      const inUse = i === plan.active || i === plan.warm || i === plan.preload;
+      if (s.clip && reloadOnComplete({ doneNow, seenBefore: completeSeen.current[i], hasClip: true, freshSrc: fresh[i], error: !!el.error, networkState: el.networkState, inUse })) {
+        el.load();
+        s.ready = false;
+        lastSeekAt.delete(el);
+        arm(i, s.clip, el);
+        // 备用槽位不经 driveMedia:照换段时一样停回下一段的起点
+        if (i === plan.preload) el.currentTime = s.clip.offset;
+      }
+      completeSeen.current[i] = doneNow && (completeSeen.current[i] || fresh[i] || inUse);
       if (i === plan.active && cur) {
         // 画面淡下去的同时声音也跟着淡:交叉溶解时两段的声音不会重叠成双倍
         // An 音频图卡 node replaces this video's native soundtrack. The visual remains in
@@ -292,18 +309,6 @@ export function VideoTrack({
         releaseMedia(el);
       }
       // 兜底:同一个文件 seek 到原地这类情况不会有新帧交出来,rVFC 不回调;解码好了、时刻对得上也算好
-      const s = slots.current[i];
-      // 素材服务上刚到齐的那一档:之前按它挂过、失败了(404:等待上传方)的元素重新加载一次。
-      // 这一轮刚换上 src 的不算(`reloadOnComplete`):那时 networkState 本来就是 NO_SOURCE,再 load() 只会打断刚开始的加载
-      const h = s.clip ? hashFromUrl(s.clip.url) : null;
-      const doneNow = !!h && complete.has(h);
-      if (s.clip && reloadOnComplete({ doneNow, seenBefore: completeSeen.current[i], hasClip: true, freshSrc: fresh[i], error: !!el.error, networkState: el.networkState })) {
-        el.load();
-        s.ready = false;
-        lastSeekAt.delete(el);
-        arm(i, s.clip, el);
-      }
-      completeSeen.current[i] = doneNow;
       // 预热槽位:暂停中停在原地、当前帧已解好(HAVE_CURRENT_DATA)且对齐,也算好(停在原地不会再交新帧,帧回调等不来);
       // 播放中只认帧回调给的对齐
       const settle = i === plan.warm
