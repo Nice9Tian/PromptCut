@@ -142,12 +142,39 @@ export function mergeCosts(existing, incoming) {
   return { costs: [...byKey.values()], added, updated };
 }
 
+/**
+ * 改名遇到这几种错误时退避重试:Windows 上目标文件正被别的进程读着(编辑器与预渲染进程都读这份成本记录),
+ * `rename` 会偶发 EPERM / EBUSY / EACCES(T9 第 2 轮实测:创建方写钉死记录时 `EPERM: rename card-costs.json.*.tmp`)。
+ * 其它错误不重试。
+ */
+export const RENAME_RETRY_CODES = ['EPERM', 'EBUSY', 'EACCES'];
+/** 重试次数上限与每次的等待(毫秒,第 n 次重试等 n × 步长;上限合计约 0.9 s) */
+export const RENAME_RETRIES = 8;
+export const RENAME_BACKOFF_MS = 25;
+
+/** 同步短等:存储接口是同步的,只在改名重试时用 */
+function pause(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function renameWithRetry(tmp, file) {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      fs.renameSync(tmp, file);
+      return;
+    } catch (err) {
+      if (attempt >= RENAME_RETRIES || !RENAME_RETRY_CODES.includes(err?.code)) throw err;
+      pause(RENAME_BACKOFF_MS * (attempt + 1));
+    }
+  }
+}
+
 function writeAtomic(file, text) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const tmp = `${file}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
   fs.writeFileSync(tmp, text, 'utf8');
   try {
-    fs.renameSync(tmp, file);
+    renameWithRetry(tmp, file);
   } catch (err) {
     try { fs.rmSync(tmp, { force: true }); } catch { /* 临时文件删不掉不算失败 */ }
     throw err;
