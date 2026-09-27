@@ -10,7 +10,7 @@
  *   1. 读 canvas 的 2d 像素,数不透明像素(alpha > 0) —— 修前是 0(全透明),修后要 > 0;
  *   2. 跳到别处再跳回 T,再读一次像素哈希,和第一次比 —— 同一时刻两次画面逐像素相同;
  *   3. 拿另一个时刻 T2 的哈希,和 T 的不同 —— 画面确实随时间走;
- *   4. 截前台舞台 iframe 的图写进 --out(缺省 out/particles-paused/)。
+ *   4. 留图写进 --out(缺省 out/particles-paused/):canvas 原始像素(*-canvas.png,透明底)与前台舞台 iframe 截图(*-stage.png)。
  *
  * 输出 JSON 结论到 stdout;任何一条不过就以非零退出。
  */
@@ -106,13 +106,23 @@ try {
     return got ?? prev;
   };
 
+  /**
+   * 留图:canvas 原始像素存一张 PNG(透明底),再等编辑器的「正在测量卡片」遮罩退掉后截前台舞台 iframe 一张。
+   * 遮罩是 K1 成本测量(后台舞台逐帧推这张卡量耗时)期间盖在预览上的,不等它退掉截到的只是遮罩。
+   */
+  const shoot = async (name) => {
+    const f = await frontFrame();
+    if (!f) return;
+    const url = await f.evaluate(() => document.querySelector('.inset-0 > canvas')?.toDataURL('image/png') ?? null).catch(() => null);
+    if (url) await fs.writeFile(path.join(OUT, `${name}-canvas.png`), Buffer.from(url.split(',')[1], 'base64'));
+    await until(() => page.evaluate(() => !document.body.innerText.includes('正在测量卡片')), 90000, 500);
+    const el = await f.frameElement();
+    if (el) await el.screenshot({ path: path.join(OUT, `${name}-stage.png`) });
+  };
+
   const a = await seekAndRead(T);
   out.first = a;
-  const f = await frontFrame();
-  if (f) {
-    const el = await f.frameElement();
-    if (el) await el.screenshot({ path: path.join(OUT, `stage-t${T}.png`) });
-  }
+  await shoot(`t${T}-first`);
   check(!!a && a.w > 0, '粒子 canvas 在位', a);
   check(!!a && a.ink > 0, `t=${T}s 暂停时粒子画面非空(不透明像素 > 0)`, a);
 
@@ -123,6 +133,7 @@ try {
 
   const a2 = await seekAndRead(T);
   out.again = a2;
+  await shoot(`t${T}-again`);
   check(!!a && !!a2 && a.hash === a2.hash, `跳走再跳回 t=${T}s,两次画面逐像素相同`, { a: a?.hash, a2: a2?.hash });
   out.pageErrors = errors.slice(-5);
 } finally {
