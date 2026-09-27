@@ -93,7 +93,8 @@ async function adaptHostModule() {
         now: Date.now,
         nodeIdOf: (_entry, index) => `host:rhc/p${index}`,
         connect: (entry) => {
-          const endpoint = createWsEndpoint({ url: entry.url, protocols: sharedProtocols(entry, { role: 'render' }) });
+          // 连接层的事件（ws.open / ws.error / ws.connect-failed / ws.retry）也记进 logs，用例等不到报到时能看出卡在哪
+          const endpoint = createWsEndpoint({ url: entry.url, protocols: sharedProtocols(entry, { role: 'render' }), log });
           endpoints.push(endpoint);
           return { endpoint, executor, sink: sinkFor({ projectId: entry.projectId, entry, endpoint }) };
         },
