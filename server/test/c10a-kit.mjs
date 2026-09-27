@@ -51,6 +51,9 @@
  *   K6  `/api` 守卫（契约第 2 节）：`src/online/` 下某个 `.ts` 导出名字含 `guard`（不分大小写）的函数，调用后
  *       在 `ONLINE` 时让 `fetch('/api/…')` 抛错（同步抛或 reject 都算），别的地址照常转给原来的 `fetch`；
  *       `ONLINE` 为 false 时不拦。
+ *       在线构建的静态检查：产物里以 `/api/` 开头、后面紧跟地址的字面量（`apiLiterals`）为 0；守卫判前缀用的 `"/api/"` 不算。
+ *   K7  单舞台（契约第 8.1 节）：仍由 `src/editor/previewMode.ts` 定开几个舞台——`ONLINE` 时 `dualStage()` 恒为 false，
+ *       `stageSrc('A')` 是同源地址并带 `preview=stage`（舞台据此渲 live 变体）。探测：`src/online/lowMemory.ts` 存在。
  */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
