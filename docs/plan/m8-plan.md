@@ -252,6 +252,12 @@ M8 本身的探针分支（第 6 节）不依赖 C10、M7 合入，可以现在�
 | 9 | `m8-scale-probe.mjs` | 新写 | K1-X、I1-X：一个进程开多个假节点连接（`render-queue-e2e.mjs` 的写法），节点指纹可给定，按卡加锁，分两台机器跑、经协调口汇总 | 1 | `claude/m8-scale` |
 | 10 | `server/card-sync.mjs` 等旧客户端接会话层 | 改（生产代码） | `TODO.md` HT-b 后续项第 ①：卡片源码同步、`shared-project-lan.mjs`、`render-host-probe.mjs`、`c66-t9-probe.mjs` 的页面连接仍用旧 `createWsEndpoint`，断一次就断线；C1、C2、C5 会碰到卡片源码同步断线 | — | `claude/m8-session-legacy`（第 7 节 D9：是否在 M8 修） |
 
+**预检结果**（主会话 2026-09-28）：
+
+- **P-C3 已做**（SSH 只读命令）：阿里云内核 `6.8.0-63-generic`（Ubuntu 24.04.5）；`CONFIG_INET_DIAG_DESTROY=y`，`ss -K` 可用；`CONFIG_NET_SCH_NETEM=m`，模块文件 `sch_netem.ko.zst` 在，`tc` 在。C3 的内核层丢包可以做，C5 与 W-HT-a 的服务端掐连接可以用 `ss -K`。
+- **P-C1 查了资料、还要实测**（codex 检索微软文档）：新加的阻止规则不会当场拆掉已建立的连接；这条连接的下一个包触发重新授权，那时才被拦。长连接有心跳，所以第 1 种做法在一个心跳间隔内生效；空闲连接不保证。只加入站规则代替不了出站那一层的重新授权。笔记本上的实测仍按上表做，量「加规则到断流」的秒数。
+- **C3 的代理做法与资料一致**：用户态代理丢字节会打乱 WebSocket 帧，只能扣住再按序发、或按概率断开；报告里叫「10% 的数据块受扰」，不叫「10% 丢包」。真丢包用上一条的 netem。
+
 **可直接用于 M8 的现有探针**（不改）：`render-queue-e2e.mjs`（假任务的 E1、C2 的 epoch 重发）、`render-queue-proxy.mjs --loss`（C3）、`ht-w-probe.mjs --cut external`（C5-1）、`render-host-probe.mjs`（`--hosted`、`--lan`、`auth-check`）、`shared-project-probe.mjs --mode internet\|lan`（异地接入、SP4 回归）、`asset-lan-probe.mjs`（C4 之后）、`queue-mode-probe.mjs --lan --docservice-url --hold-min`（W4 形态的真实预渲染回归）、`probe-coord.mjs`（信箱与 KV，阿里云 `/coord`）、`ws-client-test.mjs`（握手冒烟）、`card-sync-probe.mjs`（卡片同步回归）、`stream-produce-probe.mjs`、`tiers-probe.mjs`、`tier-switch-probe.mjs`、`longtask-stacks.mjs`（第 2.7 节）、G0-R 的四个预渲染探针；C10 与 M7 交付的 `c10-browser-probe.mjs`（`--site`、`--role host` 由 `claude/c10-site` 加）、`c10-ui-probe`、`c10-cost-probe`、`lowmem-online-probe`、`small-tier-probe`、`c10a-demo-probe`、M7 的探针。
 
 **不用于 M8**：流与画面的原型探针（`stream-*`、`gl-*`、`pixelmap-*`、`backdrop-*`、`oac-probe` 等）、`snapshot-*`、`audio-determine-probe` —— 与多端联调无关。
