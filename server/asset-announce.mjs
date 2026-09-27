@@ -3,7 +3,7 @@
  *
  * 编辑器进程把本机素材服务的局域网地址报给文档服务（M5a 的服务地址登记模块，
  * `docs/plan/render-queue-contract.md` G.6），文档服务再下发给渲染节点和别的设备
- * （语义 `docs/semantics/architecture/document-service.md`「连接发现」：服务地址下发）。
+ * （语义 `docs/semantics/mechanism/document-service.md`「连接发现」：服务地址下发）。
  * 本模块只交换地址，不传字节。
  *
  * 接线在 `vite-plugin-media.ts` 的 `mediaPlugin()`：监听的不是回环、设了 `PROMPTCUT_DOCSERVICE_URL` 才惰性 import 本模块。

@@ -1,6 +1,6 @@
 # 独立渲染主机：契约（M6b）
 
-状态：**定稿**（2026-09-26，主会话）。依据：主执行计划第 7 节 M6、第 12 节 D9 第 10 条；语义 `docs/semantics/architecture/platforms.md`「渲染节点」；M6a 契约 `docs/plan/auth-contract.md`（凭证、角色、空间）。〔裁〕是主会话定的细节。
+状态：**定稿**（2026-09-26，主会话）。依据：主执行计划第 7 节 M6、第 12 节 D9 第 10 条；语义 `docs/semantics/product/platforms.md`「渲染节点」；M6a 契约 `docs/plan/auth-contract.md`（凭证、角色、空间）。〔裁〕是主会话定的细节。
 
 ## 1. 是什么
 
@@ -27,7 +27,8 @@
 - **`node.hello`**：
   - `profile: 'host'`；
   - `capabilities: { userCards: true, graphCards: false }`，与 PC 节点相同；
-  - `codeVersions: [本机 frameCode]`，一个主机实例只有一个代码版本〔裁：计划原文「按代码版本分 worker 池」落实为「每个实例一个版本，要多版本就起多个实例」，D6 本来就用两个实例〕；
+  - `codeVersions: [本机 frameCode]`，一个主机实例只有一个代码版本〔裁：计划原文「按代码版本分 worker 池」落实为「每个实例一个版本，要多版本就起多个实例」，D6 本来就用两个实例〕；`frameCode` 不含用户卡与改动层〔c66-host-cards 改，见第 7 节〕；
+  - 节点描述另带 `cardSourceVersions`（契约 render-queue B.2，只在节点侧过滤用，不进 `node.hello`）：本机此刻有的卡片代码身份〔c66-host-cards 加，见第 7 节〕；
   - `envFingerprint` 照本机探测结果。
 - **不认领 `plan`**：主机只认领 `snapshot` 细任务，`plan` 留给发布方自己的节点（第 11.2 节「`plan` 就近认领」的一部分）。流任务在 M6c 接入之后才认领。
 - **闲时门槛**：主机没有页面、没有播放，只要执行器有空位就认领。
@@ -40,7 +41,7 @@
 ## 4. 队列侧
 
 - 主机的 `render` 连接可以认领本空间里任何成员的细任务。
-- 节点侧过滤照旧：`requires.codeVersion` 不在 `codeVersions` 里就不认领；指纹不符不认领；卡片锁照 F 节。
+- 节点侧过滤照旧：`requires.codeVersion` 不在 `codeVersions` 里就不认领；指纹不符不认领；卡片锁照 F 节；`requires.cardSources` 里的卡本机没有这份代码就不认领〔c66-host-cards 加〕。
 - `profile: 'host'` 的节点收到 `plan` 任务时直接跳过，不发认领。
 
 ## 5. 探针与测试
@@ -53,7 +54,7 @@
   - 退出时让掉认领。
 - **探针** `scripts/probes/render-host-probe.mjs`：
   - `--role creator`：
-    - 起一个局域网模式的共享项目，用本机文档服务、素材服务；
+    - 起一个放本机的共享项目，用本机文档服务、素材服务；
     - 创建测试凭证，写出 host 配置文件；
     - 以本机节点身份发布一个项目的 `plan`。
   - `--role host --config <文件>`：起一个独立主机实例，等任务完成，输出一行 JSON：`{ ok, projectId, claimed, completed, codeVersion, envFingerprint, fails }`。
@@ -70,7 +71,7 @@
 
 ## 6. 集成时的裁定（2026-09-26）
 
-主会话在集成分支 `claude/m6-integ2` 上定的细节，以及集成对账时按这些裁定改的实现（报告 `docs/reports/AGENT-m6-integ2.md`）。
+主会话在集成分支 `claude/m6-integ2` 上定的细节，以及集成对账时按这些裁定改的实现（报告 `docs/archive/agent-reports/AGENT-m6-integ2.md`）。
 
 - **`maxConcurrent` 写在哪**：裁定：可写在数组任意一项上，取各项最大值，缺省 1；`render-host --max-concurrent`（环境变量 `PROMPTCUT_HOST_MAX_CONCURRENT`）给了就优先。理由：数组没有放全局字段的地方，写在项上最不改 M6a 的配置形状。
 - **`maxConcurrent` 超过 4**：裁定：是配置错误，`code: 'bad-host-config'`，不截断；0、负数、小数、字符串同样报错。理由：静默压到 4 会让用户以为配了 9 路并发。〔集成时改：实现原来夹到 1～4、不合格的当没给，现改为 `hostMaxConcurrent` / `parseHostConfig` / `loadHostConfig` 一律报错，`createRenderHost` 收到超 4 的值也报错；RH1、RH4 按此改。〕
@@ -79,8 +80,23 @@
   - 〔M6c 补注，2026-09-26〕后半句被 `m6c-contract.md` X4 推翻：`host`、`browser` 始终不认领 `plan`，队列侧现在对 `host` 认领 `plan` 回 `task.claim-rejected { reason: 'plan-profile' }`（窗口内外都是，排在 `taken` 之前）。节点侧规则 6 与会话层的跳过照旧保留，两层都挡。
 - **并发上限算什么**：裁定：计入正在认领中的（in-flight）——全部节点的「持有 + 在飞的认领」不超过 `maxConcurrent`。理由：两个项目的会话各有一条在飞认领时，只数持有会超上限。（实现本来如此，没改。）
 - **执行器共用到哪一层**：裁定：接受「每个项目一个执行器对象，共用一个 `FramePipeline` 与一个全局并发闸」。理由：执行器按 `projectId@projectRev` 缓存、经那个项目的连接取快照，不同共享项目里的编辑器项目 id 可能相同，共用一个对象会串；并发、渲染间、帧库仍是同一份。第 3 节「所有节点共用同一个预渲染执行器」按此理解。
-- **产物推到哪个素材服务**：裁定：接受「用文档服务下发的 `asset`；没有就用文档服务同 host 的 `/api/asset`；从不回落本机」。理由：局域网模式文档服务与素材服务同进程；推到主机自己的素材服务，发布方拉不到。
+- **产物推到哪个素材服务**：裁定：接受「用文档服务下发的 `asset`；没有就用文档服务同 host 的 `/api/asset`；从不回落本机」。理由：放本机时文档服务与素材服务同进程；推到主机自己的素材服务，发布方拉不到。
 - **子进程临时目录**：裁定：接受 `render-host.mjs` 把子进程 `TEMP` / `TMP` 指到自己的数据目录。理由：编辑器往系统临时目录写 `promptcut/port.json`，主机写公共那份会把同机用户编辑器的 AI 面板指错。
 - **主机配置的 `role`**：裁定（集成对账时按第 2 节的配置形状定）：某项给了 `role` 且不是 `render`，是配置错误 `bad-host-config`；不给按 `render`。理由：第 2 节形状写的是 `role: 'render'`，主机只开 `render` 连接，给别的角色多半是把页面用的配置拿错了。〔集成时改：实现原来接受任何合法角色、连接时一律改成 `render`。〕
 - **素材回退的票据**：裁定（集成对账时修）：主机的 J.6 素材回退按回退基址挑票据，用那台素材服务所属项目的票据；同一台服务上有几个项目时用配置里靠前的那个；基址不属于任何项目时不带票据。理由：票据只在签发它的素材服务上有效，原来一律用第一个项目的票据，读第二个项目的素材服务会 401。〔集成时改：`asset-client.ts` 的 `setMediaFallbackTicket` 回调改为每试一个基址调一次、参数是基址；`render-node/host.mjs` 新增 `fallbackTicketFor`；补单测 RH-fallback-ticket。〕
 - **`parseHostConfig`**：集成时在 `render-node/host.mjs` 补出（原来只有读环境变量的 `loadHostConfig`，解析逻辑现在由它承担，`loadHostConfig` 读文件后调它）。契约测试 RHC1～RHC4 直接测它。
+
+## 7. 用户卡与卡片同步（c66-host-cards，2026-09-27）
+
+C6.6 T9 暴露的代码与语义冲突：语义说独立渲染主机「能认领：全部」（`docs/semantics/product/platforms.md`「渲染节点」），节点按任务标明的能力自己过滤（`mechanism/document-service.md`「渲染任务队列」）；代码却把整个 `src/`（含 `src/cards/user`）算进代码版本，另一台机器上的主机只要没有创建者的用户卡（哪怕与任务无关）就一个任务也认领不了。按语义改的代码，语义不改。报告 `docs/archive/agent-reports/AGENT-c66-host-cards.md`。
+
+- **代码版本**：`frameCode` 不含用户卡（`src/cards/user/` 下除装载入口 `index.ts` 以外的文件），换行统一成 LF。多一张、少一张或改过一张用户卡的两台节点仍在同一个池。
+- **任务上的卡片代码**：用到用户卡或改过的卡的细任务在 `requires.cardSources` 里写那张卡的代码身份（render-queue 契约 B.4 末「c66-host-cards 改」）。节点的 `cardSourceVersions` 现取现算，本机没有这份代码就不认领（不报错）。
+- **主机的卡片同步**：每个项目的 `render` 连接上挂一条只读的卡片源码同步（`vite-plugin-cards.ts` 的 `createHostCardSync`，C6.6 设计稿第 5 节的「读」一半）：
+  - 连上后 `content.watch(['card-source'])`、`content.list`，把服务上的用户卡与改过的卡装到本机；别人改了卡按 `content.changed` 当场装；从不上传（主机不改卡）；
+  - 本机已有的文件写进主机自己的改动层（`<--data>/data/card-overrides/`），仓库里的原卡不动；本机没有的用户卡照现有装卡路径（`installBundledCards`）写进检出的 `src/cards/user/`〔裁：用户卡的装载入口按目录收卡，改动层里单独一份新卡装载不到；与桌面版同步、打开 .proc 装卡是同一条路〕；
+  - 记账、备份、装卡历史放在主机的数据目录（`<--data>/data/host-cards/`）；
+  - 装上之后这个进程的 Vite 文件监听作废模块、发卡片源码变更通知，节点清掉身份缓存，1.5 s 稳定期之后下一拍按新代码认领；执行器按「项目版本 + 卡片代码版次」缓存计划上下文，卡片代码一变就重算；
+  - 没有改动层（没设数据目录）或 `PROMPTCUT_CARD_SYNC=0` 时不同步（前者会直接改仓库文件）；
+  - 限制：一个主机实例加入几个项目时，各项目的卡装进同一个改动层，同一个文件在两个项目里版本不同时后装的盖掉先装的，另一个项目要那张卡的任务就不认领（不会渲错）。
+- **诊断**：`GET /api/frames/queue` 另带 `cardSync: [{ projectId, enabled, connected, opens, records: { 仓库相对路径: cardRev }, notices }]` 与 `cardCode: { epoch, settled }`。

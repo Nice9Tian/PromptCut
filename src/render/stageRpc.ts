@@ -17,6 +17,7 @@ import type { RectWithBounds, RectsWithBoundsOptions, StageHit } from "./solid";
 import type { ProjectPatch } from "./changedClips.mjs";
 import type { CardCostRecord } from "./cardCostKey.mjs";
 import type { StreamPlaneRequest } from "./streamPlayer";
+import { lowMemoryMode } from "../online/lowMemory.ts";
 
 export type { StreamPlaneRequest };
 
@@ -28,7 +29,10 @@ export interface HostCapabilities {
   prerender: boolean;
   /** Worker 里能拿到 OffscreenCanvas 的 webgl2 */
   offscreenGl: boolean;
-  /** navigator.deviceMemory ≤ 4 或 Safari */
+  /**
+   * 低内存档(`docs/plan/c10a-contract.md` 第 8 节,判定在 `src/online/lowMemory.ts`):只在在线模式里判,
+   * 桌面运行环境恒为 false。以前的判据「`deviceMemory <= 4` 或 Safari」已换掉。
+   */
   lowMemory: boolean;
   /**
    * 父页在 src 查询串里给的舞台 id(`A` / `B`)。**只是实例名,和角色无关**(E1):
@@ -250,6 +254,11 @@ export interface StageRpcApi {
   setPlaying(on: boolean): Promise<{ ok: true }>;
   setMediaT(tSec: number): Promise<{ ok: true }>;
   setLocalHashes(hashes: string[]): Promise<{ ok: true }>;
+  /**
+   * c10a 第 8 节:舞台这一侧的取档策略(`mediaTier.ts` 的 `setMediaTierPolicy`)。父页握手后发一次,
+   * 票据续签、运行中改判低内存档时再发。缺省(不发)= 桌面运行环境。
+   */
+  setMediaPolicy(policy: StageMediaPolicy): Promise<{ ok: true }>;
   /** A3c:patch 是相对上次投递的增量,null = 摘掉;reset = 先清空全部再应用 */
   setSnapshots(patch: Record<string, string | null>, opts?: { reset?: boolean }): Promise<{ ok: true; bytes: number }>;
 }
@@ -318,7 +327,7 @@ export interface StageRpcClient extends StageRpcApi {
 }
 
 const METHODS: (keyof StageRpcApi)[] = ["setProject", "setTime", "render", "hitTest", "rectsWithBounds", "size", "setProxy", "setRole", "setPlan",
-  "play", "pause", "setSuppressed", "setStreamPlanes", "setScrubbing", "setPlaying", "setMediaT", "setLocalHashes", "setSnapshots"];
+  "play", "pause", "setSuppressed", "setStreamPlanes", "setScrubbing", "setPlaying", "setMediaT", "setLocalHashes", "setSnapshots", "setMediaPolicy"];
 
 /**
  * 有请求挂着时,每隔这么久看一眼目标窗口还在不在。
@@ -459,12 +468,46 @@ export function postStageReady(hostCapabilities: HostCapabilities, parentOrigin 
   window.parent?.postMessage(msg, parentOrigin);
 }
 
-/** 舞台侧:按 J4 探测宿主能力。`prerender` 与 `stageId` 来自父页写在 src 查询串里的值 */
-export function detectHostCapabilities(): HostCapabilities {
+/**
+ * 舞台侧:卡片热更新接住、按新卡重渲之后告诉父页「换到 `stamp` 这一版了」(C6.6 集成 3b,`editor/stageCards.ts`)。
+ * 和 `pc-stage-ready` 一样是握手类消息,不是 `StageEvent`。
+ */
+export interface StageCardsMessage {
+  type: "pc-stage-cards";
+  stamp: number;
+}
+/** `setMediaPolicy` 的实参:低内存档、在线浏览器模式的远程素材服务(基址与只读票据) */
+export interface StageMediaPolicy {
+  lowMemory: boolean;
+  remote: { base: string; ticket: string | null } | null;
+}
+
+/**
+ * 舞台侧:运行中出事了(c10a 第 8 节「运行中出现 webglcontextlost 或连续 3 次视频解码失败」)。
+ * 握手类消息,不是 `StageEvent`;父页据此改判低内存档、提示一次。`decode-ok` 用来清零连续失败的计数。
+ */
+export interface StageTroubleMessage {
+  type: "pc-stage-trouble";
+  kind: "webglcontextlost" | "decode-failure" | "decode-ok";
+}
+export function postStageTrouble(kind: StageTroubleMessage["kind"], parentOrigin = "*"): void {
+  const msg: StageTroubleMessage = { type: "pc-stage-trouble", kind };
+  window.parent?.postMessage(msg, parentOrigin);
+}
+
+export function postStageCards(stamp: number, parentOrigin = "*"): void {
+  const msg: StageCardsMessage = { type: "pc-stage-cards", stamp };
+  window.parent?.postMessage(msg, parentOrigin);
+}
+
+/**
+ * 舞台侧:按 J4 探测宿主能力。`prerender` 与 `stageId` 来自父页写在 src 查询串里的值。
+ * `online`:在线浏览器模式(`src/online/mode.ts` 的 `ONLINE`),由调用方传 —— 本文件不读编译期常量,单测里没有它。
+ */
+export function detectHostCapabilities({ online = false }: { online?: boolean } = {}): HostCapabilities {
   const q = new URLSearchParams(location.search);
   const ua = navigator.userAgent;
   const safari = /Safari\//.test(ua) && !/Chrome\/|Chromium\/|Edg\//.test(ua);
-  const mem = (navigator as Navigator & { deviceMemory?: number }).deviceMemory;
   let offscreenGl = false;
   try {
     // 主线程上的近似:Worker 里的 OffscreenCanvas webgl2 与主线程同源同能力(Safari 17 之前 Worker 里没有 WebGL)。
@@ -481,7 +524,8 @@ export function detectHostCapabilities(): HostCapabilities {
   return {
     prerender: q.get("prerender") === "1",
     offscreenGl,
-    lowMemory: (typeof mem === "number" && mem <= 4) || safari,
+    // c10a 第 8 节:只在在线模式里判(deviceMemory、粗指针 + 触点 + 屏幕长边,设备设置可覆盖);桌面恒为普通档
+    lowMemory: lowMemoryMode(online),
     // stageId **只是实例名,和角色无关**(E1):两个 iframe 是 `A` / `B`,谁是 front / back
     // 只经 setRole 定。缺省给 `A` 而不是 `front`,免得又把实例名读成角色名。
     stageId: q.get("id") || "A",

@@ -603,7 +603,7 @@ function sourceFiles() {
   } catch {
     // 没有 git：自己走目录（跳过依赖、产物、文档）
     files = [];
-    const skip = new Set(['node_modules', '.git', '.worktrees', 'out', 'dist', 'target', 'docs', 'archive', 'planning', 'work', 'exports', '.pc-projects', '.pc-work', '.pc-chats']);
+    const skip = new Set(['node_modules', '.git', '.worktrees', 'out', 'dist', 'dist-online', 'target', 'docs', 'archive', 'planning', 'work', 'exports', '.pc-projects', '.pc-work', '.pc-chats']);
     const walk = (dir) => {
       for (const e of fs.readdirSync(path.join(ROOT, dir), { withFileTypes: true })) {
         const rel = dir ? `${dir}/${e.name}` : e.name;
@@ -616,6 +616,7 @@ function sourceFiles() {
     && !/^(docs|archive|planning)\//.test(f)
     && !/(^|\/)test\//.test(f) && !/\.test\.[cm]?[jt]sx?$/.test(f)
     && !f.startsWith('scripts/probes/')
+    && !f.startsWith('dist-online/') // 在线构建产物(C10a):打包进了缺省托管地址
     && !/(^|\/)node_modules\//.test(f));
 }
 

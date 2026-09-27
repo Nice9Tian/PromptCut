@@ -1,4 +1,6 @@
-import { actions, getState } from "../../store/project";
+import { actions, getState, subscribe } from "../../store/project";
+import type { MediaAsset } from "../../kernel/project";
+import { isViewOnly } from "./viewOnly";
 
 /**
  * 导入 = 先入库再引用(A1)。
@@ -25,12 +27,30 @@ export interface UploadedMedia {
   bytes: number;
   /** 库里本来就有同样内容 */
   deduped?: boolean;
+  /**
+   * C6.6 两档(只有视频有):`original` 就是 `hash`(缺 faststart 的已经重封装过,哈希是重封装后的),
+   * `small` 是小版哈希;小版还在本机后台转时是 null、`smallState` 是 pending,由 watchSmallTier 补上。
+   */
+  tiers?: { original: string; small: string | null };
+  /** 小版的状态:pending / ready / failed / none(没有视频流) */
+  smallState?: string;
+}
+
+/** 服务端回包里的两档字段 → UploadedMedia 的那两项 */
+function tiersOf(data: { tiers?: { original?: unknown; small?: unknown }; small?: unknown }): Pick<UploadedMedia, "tiers" | "smallState"> {
+  const t = data?.tiers;
+  if (!t || typeof t.original !== "string") return {};
+  return {
+    tiers: { original: t.original, small: typeof t.small === "string" ? t.small : null },
+    smallState: typeof data.small === "string" ? data.small : undefined,
+  };
 }
 
 /** 把一个 File 流进本地内容库,拿回它的内容哈希。失败给 null(调用方负责提示) */
 export async function uploadMediaFile(file: File): Promise<UploadedMedia | null> {
   try {
-    const res = await fetch(`/api/media/upload/${encodeURIComponent(file.name)}`, { method: "POST", body: file });
+    // tiers=1:视频在服务端做 faststart 判定(缺了就同容器重封装),并在后台生成小版(C6.6)
+    const res = await fetch(`/api/media/upload/${encodeURIComponent(file.name)}?tiers=1`, { method: "POST", body: file });
     if (!res.ok) {
       console.warn(`[io] 上传素材失败(HTTP ${res.status}): ${file.name}`);
       return null;
@@ -48,6 +68,7 @@ export async function uploadMediaFile(file: File): Promise<UploadedMedia | null>
       url: String(data.url || `/@media/${data.hash}`),
       bytes: Number(data.bytes) || file.size,
       deduped: !!data.deduped,
+      ...tiersOf(data),
     };
   } catch (err) {
     console.warn(`[io] 上传素材异常: ${file.name}`, err);
@@ -64,7 +85,7 @@ export async function uploadMediaFile(file: File): Promise<UploadedMedia | null>
  */
 export async function adoptServerMedia(filePath: string): Promise<UploadedMedia | null> {
   try {
-    const res = await fetch(`/api/media/adopt?path=${encodeURIComponent(filePath)}`, { method: "POST" });
+    const res = await fetch(`/api/media/adopt?path=${encodeURIComponent(filePath)}&tiers=1`, { method: "POST" });
     if (!res.ok) {
       console.warn(`[io] 补算素材哈希失败(HTTP ${res.status}): ${filePath}`);
       return null;
@@ -79,6 +100,7 @@ export async function adoptServerMedia(filePath: string): Promise<UploadedMedia 
       url: String(data.url || `/@media/${data.hash}`),
       bytes: Number(data.bytes) || 0,
       deduped: !!data.deduped,
+      ...tiersOf(data),
     };
   } catch (err) {
     console.warn(`[io] 补算素材哈希异常: ${filePath}`, err);
@@ -89,10 +111,10 @@ export async function adoptServerMedia(filePath: string): Promise<UploadedMedia 
 /**
  * 入库结果写回素材表。
  *
- * store 里没有「改一条素材的任意字段」这种动作,而现在能改素材又不进撤销栈的只有
- * setMediaPath(撤销管的是时间轴,不该把「素材传完了」这件事也收进去)。所以这里
- * 先就地写进那条记录,再用 setMediaPath 把整张表重新发一遍(它会 `{...m, path}`
- * 拷一份新对象,刚写的字段一起带上),订阅方照常收到通知。
+ * 走 `actions.updateMedia`(不进撤销栈:撤销管的是时间轴,不该把「素材传完了」这件事也收进去),
+ * 拷一份新对象写回。**不许原地改** store 里那条记录:共享项目里 store 的项目就是 docsync 的
+ * 本地副本,原地改过的字段 diffProject 看不出变化,hash / tiers / pending 就到不了文档服务,
+ * 别的设备上这条素材永远是 pending(C6.6 T9 就是这么发现的)。
  *
  * 传失败时不退回 blob: —— 那种地址渲染进程和导出进程都打不开,留着只会在更远的
  * 地方炸(见 importAssets.ts 的说明)。素材留空地址、pending 落回 false,
@@ -101,12 +123,130 @@ export async function adoptServerMedia(filePath: string): Promise<UploadedMedia 
 export function applyUploadedMedia(mediaId: string, up: UploadedMedia | null): void {
   const media = getState().project.media.find((m) => m.id === mediaId);
   if (!media) return;
+  const patch: Partial<Omit<MediaAsset, "id">> = { pending: undefined, path: up?.path ?? media.path ?? "" };
   if (up) {
-    media.url = up.url;
-    media.hash = up.hash;
-    media.ext = up.ext || undefined;
-    media.size = up.bytes || undefined;
+    patch.url = up.url;
+    patch.hash = up.hash;
+    patch.ext = up.ext || undefined;
+    patch.size = up.bytes || undefined;
+    // 两档(C6.6):项目里只记两个哈希,不记同步状态(传没传完只问素材服务的 chunks)
+    if (up.tiers) patch.tiers = up.tiers.small ? { original: up.tiers.original, small: up.tiers.small } : { original: up.tiers.original };
   }
-  media.pending = undefined;
-  actions.setMediaPath(mediaId, up?.path ?? media.path ?? "");
+  actions.updateMedia(mediaId, patch);
+  if (up?.tiers && !up.tiers.small && up.smallState === "pending") watchSmallTier(mediaId, up.tiers.original);
+}
+
+/** 小版在本机后台转码,每隔这么久问一次 */
+const SMALL_POLL_MS = 2000;
+/** 最多问这么久 */
+const SMALL_POLL_LIMIT_MS = 6 * 60 * 60 * 1000;
+const watching = new Set<string>();
+
+/**
+ * 小版好了就把它的哈希写进 `project.media[i].tiers.small`(C6.6)。问的是本机的
+ * `GET /api/media/tiers?hashes=<原片>`(本机转码的登记,不是同步状态)。素材被删了、原片换了、
+ * 转码失败或确定没有小版就停。只在编辑器会话里跑:页面关了就不再问(小版照样在本机生成、照样上传,
+ * 只是这条素材的项目记录里没有 small,别的设备按「还没有小版时直接拉原片」处理)。
+ */
+export function watchSmallTier(mediaId: string, original: string): void {
+  const key = `${mediaId}:${original}`;
+  if (watching.has(key)) return;
+  watching.add(key);
+  const started = Date.now();
+  const stop = () => { watching.delete(key); };
+  const tick = async () => {
+    const media = getState().project.media.find((m) => m.id === mediaId);
+    if (!media || (media.tiers?.original ?? media.hash) !== original || media.tiers?.small || Date.now() - started > SMALL_POLL_LIMIT_MS) return stop();
+    let state: string | null = null;
+    let small: string | null = null;
+    try {
+      const res = await fetch(`/api/media/tiers?hashes=${original}`);
+      const data = res.ok ? await res.json() : null;
+      const item = data?.items?.[original];
+      state = typeof item?.state === "string" ? item.state : null;
+      small = typeof item?.small === "string" ? item.small : null;
+    } catch { /* 下一次再问 */ }
+    if (state === "ready" && small) {
+      writeSmallTier(mediaId, original, small);
+      return stop();
+    }
+    if (state && state !== "pending") return stop();
+    setTimeout(() => { void tick(); }, SMALL_POLL_MS);
+  };
+  setTimeout(() => { void tick(); }, SMALL_POLL_MS);
+}
+
+/* ---------------- 打开项目时补转小版(C6.6 设计稿第 9 节第 2 条) ---------------- */
+
+/** 这一页已经问过补转的原片哈希(同一会话里不重复问;小版在转的由 watchSmallTier 接着盯) */
+const backfillAsked = new Set<string>();
+
+/**
+ * 项目里缺 `tiers.small`、按哈希入库的视频:请编辑器进程补转(`POST /api/media/tiers/backfill`)。
+ * 本地内容库里有这份原片的才转(没有的回 `absent`,不为了转小版去拉原片),转好补写 `tiers.small`。
+ * 页面在小版好之前关了,下次打开再补。没有本机编辑器(在线浏览器模式)时请求失败,什么都不做。
+ * 回这次问了几份。
+ */
+export async function backfillSmallTiers(project = getState().project): Promise<number> {
+  if (isViewOnly()) return 0; // 只读页面不改项目
+  const want: { mediaId: string; hash: string; name: string }[] = [];
+  for (const m of project.media ?? []) {
+    if (m.kind !== "video" || m.pending || m.tiers?.small) continue;
+    const hash = String(m.tiers?.original ?? m.hash ?? "").toLowerCase();
+    if (!/^[0-9a-f]{64}$/.test(hash) || backfillAsked.has(hash)) continue;
+    backfillAsked.add(hash);
+    want.push({ mediaId: m.id, hash, name: m.name ?? "" });
+  }
+  if (!want.length) return 0;
+  let items: Record<string, { state?: string; small?: string }> = {};
+  try {
+    const res = await fetch("/api/media/tiers/backfill", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ items: want.map(({ hash, name }) => ({ hash, name })) }),
+    });
+    if (!res.ok) { for (const w of want) backfillAsked.delete(w.hash); return 0; }
+    items = (await res.json())?.items ?? {};
+  } catch {
+    for (const w of want) backfillAsked.delete(w.hash);
+    return 0;
+  }
+  for (const w of want) {
+    const it = items[w.hash];
+    if (it?.state === "ready" && typeof it.small === "string") writeSmallTier(w.mediaId, w.hash, it.small);
+    else if (it?.state === "pending") watchSmallTier(w.mediaId, w.hash);
+  }
+  return want.length;
+}
+
+/** 把小版哈希写进这条素材的 `tiers`(原片没换过才写);写法同 applyUploadedMedia 的说明 */
+function writeSmallTier(mediaId: string, original: string, small: string): void {
+  const fresh = getState().project.media.find((m) => m.id === mediaId);
+  if (!fresh || (fresh.tiers?.original ?? fresh.hash) !== original || fresh.tiers?.small) return;
+  actions.updateMedia(mediaId, { tiers: { original, small } });
+}
+
+/**
+ * 打开项目(以及素材表变了)时补转小版,回停止函数。预览挂上时调。
+ * 同一份原片一个页面会话里只问一次;素材表没变就不问。
+ */
+export function startTierBackfill(): () => void {
+  let lastMedia: unknown = null;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const check = () => {
+    const media = getState().project.media;
+    if (media === lastMedia) return;
+    lastMedia = media;
+    // 打开项目的那一阵先让路(测量、首帧),稍后再问
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => { timer = null; void backfillSmallTiers(); }, 1500);
+  };
+  const unsub = subscribe(check);
+  check();
+  return () => { unsub(); if (timer) clearTimeout(timer); };
+}
+
+/** 单测用 */
+export function resetTierBackfillForTest(): void {
+  backfillAsked.clear();
 }

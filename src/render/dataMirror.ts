@@ -1,5 +1,6 @@
 import type { Project } from "../kernel/project";
 import { getState, subscribe } from "../store/project";
+import { onlinePage } from "../online/pageFlag";
 import { changedClips, projectHash, type ProjectPatch } from "./changedClips.mjs";
 
 /**
@@ -63,6 +64,8 @@ let started = false;
  * 推上去会把编辑页那一份盖掉。
  */
 function isMirrorPage(): boolean {
+  // 在线浏览器模式没有编辑器进程可镜像(C10a 契约第 2 节)
+  if (onlinePage()) return false;
   try {
     const p = new URLSearchParams(location.search);
     if (p.has("observe") || p.get("view")) return false;

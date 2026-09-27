@@ -1,8 +1,8 @@
 # 云端与文档服务任务书：素材服务、文档服务、改动竞态、Agent 查询进程、在线浏览器模式
 
-这份文件是原第 5～10 步（素材服务、本地 / 远程文档服务、改动上传的竞态、Agent 的只查询预渲染进程、迁移回滚离线、在线浏览器模式）的**协议全文**，自成一体：动工的人读 `docs/semantics/` 下的现行语义（入口是 `docs/semantics/developer_guide.md`；本文主要依据 `architecture.md`、`architecture/asset-storage.md`、`architecture/document-service.md`、`architecture/rendering.md`、`architecture/platforms.md`）、`docs/archive/restructure_planning/render_pipeline_restructure.md`（总览、实测数据、步骤依赖）和这一份就够，不需要再翻 `AGY-TASK-cloud-doc-and-write-race.md`。渲染管线那一半（C、D3～D5、E、G、K、M、F2、F5、J3、J4）在 `docs/archive/restructure_planning/r2-r7-task.md`，以及将要写的 `docs/plan/r8-streams-task.md`（轨道流 G）和 `docs/plan/r9-webgl-task.md`（共享 WebGL 渲染器 M）；本文只指路，不重复。
+这份文件是原第 5～10 步（素材服务、本地 / 远程文档服务、改动上传的竞态、Agent 的只查询预渲染进程、迁移回滚离线、在线浏览器模式）的**协议全文**，自成一体：动工的人读 `docs/semantics/` 下的现行语义（入口是 `docs/semantics/developer_guide.md`；本文主要依据 `architecture.md`、`product/asset-service.md`、`product/document-service.md`、`product/rendering.md`、`product/platforms.md`）、`docs/archive/restructure_planning/render_pipeline_restructure.md`（总览、实测数据、步骤依赖）和这一份就够，不需要再翻 `AGY-TASK-cloud-doc-and-write-race.md`。渲染管线那一半（C、D3～D5、E、G、K、M、F2、F5、J3、J4）在 `docs/archive/restructure_planning/r2-r7-task.md`，以及将要写的 `docs/plan/r8-streams-task.md`（轨道流 G）和 `docs/plan/r9-webgl-task.md`（共享 WebGL 渲染器 M）；本文只指路，不重复。
 
-**怎么来的**（2026-09-22）：正文各节取自任务书第 111 版的对应节，逐条折进了四样东西——第 75 轮分步审查里已采纳的处理意见（`docs/archive/restructure_planning/r75/fold-notes.md` 的 r75-07 / 08 / 09 / 10 四节，原文在同一目录的 `agy-r75-07.md`～`agy-r75-10.md`）、`docs/archive/restructure_planning/render_pipeline_restructure.md` 第 3 节与第 6 节的更正、2026-09-22 用户改过的 `docs/archive/user_pinned_goal.md` 架构 1（素材两档的上传 / 拉取顺序；该文件已归档、已被 `docs/semantics/` 取代，仅作历史参考，现行口径见 `docs/semantics/architecture/asset-storage.md`）、以及解耦重构之后的文件路径与符号名（`createSnapshot` 一族、`stepMs`、`mode=dev|build`）。
+**怎么来的**（2026-09-22）：正文各节取自任务书第 111 版的对应节，逐条折进了四样东西——第 75 轮分步审查里已采纳的处理意见（`docs/archive/restructure_planning/r75/fold-notes.md` 的 r75-07 / 08 / 09 / 10 四节，原文在同一目录的 `agy-r75-07.md`～`agy-r75-10.md`）、`docs/archive/restructure_planning/render_pipeline_restructure.md` 第 3 节与第 6 节的更正、2026-09-22 用户改过的 `docs/archive/user_pinned_goal.md` 架构 1（素材两档的上传 / 拉取顺序；该文件已归档、已被 `docs/semantics/` 取代，仅作历史参考，现行口径见 `docs/semantics/product/asset-service.md`）、以及解耦重构之后的文件路径与符号名（`createSnapshot` 一族、`stepMs`、`mode=dev|build`）。
 
 **还没做的事**：这份折叠稿**没有经过独立审查**。第 75 轮审的是折叠之前的第 111 版；折叠本身只有我自己核过锚点和措辞。第 5 步动工前应当让一位没参与折叠的审查者对着代码过一遍 A1 / A3b / I1 / I4 四节。2026-09-24 按用户定的「路线 B（全盘转向服务抽象）」改写过一遍（素材服务与文档服务位置无关、预渲染产物一律入库、`uploaded` 字段废除、A3b 挪到第 6 步、原第 8 步移交 R 系列、B 节补覆盖方回执），这次改写同样没有经过独立审查。同一天用户又定了最后一轮口径（允许局域网跨源访问、预留连接发现 / 信令接口、第 5 步只建素材服务空壳与底层 API 契约、A5 与 A3b 挪到第 6 步、A3b 的新协议标 `[DRAFT]`、Agent 进程与预渲染进程只经素材服务的 HTTP API、部署不设限、旧词「本地模式」「云端模式」改成本地 / 远程文档服务与本地 / 远程素材服务），正文已按它改，同样没有经过独立审查。原文末「需要定的问题」已由用户在 2026-09-24 定下，见文末「已定的决议」。
 
@@ -23,7 +23,7 @@
 | 步 | 做什么 | 读正文哪几节 | 单步验收 |
 |---|---|---|---|
 | **第 5 步 素材服务空壳与底层 API 契约** | 只做这一件基建：素材服务的服务进程或插件骨架（本地素材服务第一版是编辑器进程里的媒体插件按同一套 API 暴露；远程部署的实例本身不在本仓库，接口形状见组件表）、分片上传与拉取、`GET media/<hash>/chunks` 对账接口、按哈希寻址，允许局域网跨源访问。两档、上传队列、换档、推送优先级都不在这一步 | 组件表的「素材服务」「本地内容库」两行；A1 的「分步」「同步状态不进项目文档」「上传一律走分片」三段 | A1 验收里「第 5 步后」的条目：分片断点续传只补缺的分片、`complete` 校验通过才为真；按哈希取回正确 contentType 并支持 Range；局域网里另一台设备跨源访问本机素材服务成功；Agent 进程和预渲染进程读素材只经 HTTP API |
-| **第 6 步 文档服务、素材两档与产物入库** | D1、D2、D4 的服务端侧，含本机文档服务 `vite-plugin-docservice.ts`（WebSocket、操作日志落 `out/docservice/<projectId>.ndjson`、`projectRev` / `cardRev`、内容库）；**A1 的两档、上传队列、按需拉取、换档，A5 按卡计算推送优先级，A6 卡片源码同步，A3b 整节（产物块与清单在同一步生成、推送、下载）也在这一步**（A5 和 A3b 的推送队列一起做；A6、A3b 要内容库） | D1、D2、A1、A5、A6、A3b、A3a、组件表的「文档服务」「内容库」两行 | D 的验收条目；A1 验收里「第 6 步后」的条目（断网导入再联网只补缺的分片；小版先于原片到达另一台机器）；A5 的卡级推送优先级与审阅表逐卡一致；A3 的验收条目；**换一台机器 / 换一端打开同一项目，不用重新预渲染**（端到端：产物推送 → 清单写内容库 → 另一端取清单 → 按哈希拉块 → 就绪）；`.proc` 仍由页面在 ack 之后写 |
+| **第 6 步 文档服务、素材两档与产物入库** | D1、D2、D4 的服务端侧，含本机文档服务 `vite-plugin-docservice.ts`（WebSocket、操作日志落 `out/docservice/<projectId>.ndjson`、`projectRev` / `cardRev`、内容库）；**A1 的两档、上传队列、按需拉取、换档，A5 按卡计算推送优先级，A6 卡片源码同步，A3b 整节（产物块与清单在同一步生成、推送、下载）也在这一步**（A5 和 A3b 的推送队列一起做；A6、A3b 要内容库） | D1、D2、A1、A5、A6、A3b、A3a、组件表的「文档服务」「内容库」两行 | D 的验收条目；A1 验收里「第 6 步后」的条目（断网导入再联网只补缺的分片；素材小尺寸先于素材原尺寸到达另一台机器）；A5 的卡级推送优先级与审阅表逐卡一致；A3 的验收条目；**换一台机器 / 换一端打开同一项目，不用重新预渲染**（端到端：产物推送 → 清单写内容库 → 另一端取清单 → 按哈希拉块 → 就绪）；`.proc` 仍由页面在 ack 之后写 |
 | **第 7 步 改动竞态** | B0～B6，在本地文档服务上先验收，连远程文档服务只是换端点 | B 全节 | B 的验收条目 |
 | **第 7b 步 Agent 查询进程** | I0～I4：同一份预渲染代码带 `PROMPTCUT_PRERENDER_MODE=agent`；用户机缺省不单独起（本机有 Agent 时那一个进程以 `full` 跑、Agent 查询优先），`PROMPTCUT_PRERENDER_SPLIT=1` 才拆；Agent 云端环境里单独起 | I 全节 | I 节的两段验收（云端、本机） |
 | **第 9 步 迁移回滚离线** | F1（素材哈希迁移与两种缓存 GC）、F3（离线攒日志与重放）、F4（切换所连接的服务）。F2 回滚开关随 R7、F5 重启恢复随 R6，都在 r2-r7 | F 全节 | F 的验收条目 |
@@ -37,12 +37,12 @@
 
 ## 总规则：文档服务是所有修改的唯一入口；素材服务收下所有字节，含全部预渲染产物
 
-- **项目文档的真身在文档服务**（本地文档服务或远程文档服务，同一份协议），页面的 store 永远是副本，所有改动都经它排序、记版本、发通知、管锁。**素材的读写一律经素材服务的 API**（连本地素材服务时 I/O 在本地，但入库这一步不省；Agent 进程和预渲染进程也像外部客户端一样只经它的 HTTP API，绝不直接读素材目录）；无论怎么部署都**不跳过文档服务**（`docs/semantics/architecture/document-service.md`）。
-- **服务拆两块**（`docs/semantics/architecture.md` 的角色表，`architecture/document-service.md`、`architecture/asset-storage.md`）：**文档服务**是一条 WebSocket、小消息、快速响应（项目 JSON、`projectRev`、卡片源码的 `cardRev`、操作日志、写入身份、锁、通知、D2 的操作级事件），旁边挂内容库；**素材服务**是 HTTP blob 库、大文件大带宽，按 sha256 寻址、不可变（素材字节 `media/<hash>`、HTML 快照块 `snap/<hash>`、其余预渲染像素产物 `px/<hash>`）。两者都位置无关、各自选位置：本机守护进程、局域网 NAS 或公网云端，任意组合。**素材字节和预渲染产物永远不走文档服务的 WebSocket**；文档服务将来兼做连接发现 / 信令，也只交换地址、不转发字节（组件表「连接发现 / 信令」行）。
-- **预渲染产物一律入库**（`docs/semantics/architecture/asset-storage.md`「预渲染的产物」；2026-09-24 定，取代原来的「上云的只有代码和 HTML 快照，像素缓存永远只在本地」）：预渲染进程（以及在线浏览器模式里当预渲染者的后台 iframe）生成的**所有**产物——HTML 快照、PNG、MOV、轨道流——生成后**无条件推送到素材服务**，哪怕素材服务就在本机；清单写文档服务的内容库（A3b）。素材服务不仅存素材，还接收和分发所有像素产物。理由：局域网里没有渲染能力的弱设备（iPad 浏览器）要靠它预览，Agent 在没有渲染环境的地方审阅成片也要靠它。`canvasHeavy` 卡、图卡、`unknown` 卡、`belowDependent` 卡的产物同样入库，只是推送排在低优先级、可以延后（A5、A3b），不是不推。
+- **项目文档的真身在文档服务**（本地文档服务或远程文档服务，同一份协议），页面的 store 永远是副本，所有改动都经它排序、记版本、发通知、管锁。**素材的读写一律经素材服务的 API**（连本地素材服务时 I/O 在本地，但入库这一步不省；Agent 进程和预渲染进程也像外部客户端一样只经它的 HTTP API，绝不直接读素材目录）；无论怎么部署都**不跳过文档服务**（`docs/semantics/product/document-service.md`）。
+- **服务拆两块**（`docs/semantics/architecture.md` 的角色表，`product/document-service.md`、`product/asset-service.md`）：**文档服务**是一条 WebSocket、小消息、快速响应（项目 JSON、`projectRev`、卡片源码的 `cardRev`、操作日志、写入身份、锁、通知、D2 的操作级事件），旁边挂内容库；**素材服务**是 HTTP blob 库、大文件大带宽，按 sha256 寻址、不可变（素材字节 `media/<hash>`、HTML 快照块 `snap/<hash>`、其余预渲染像素产物 `px/<hash>`）。两者都位置无关、各自选位置：本机守护进程、局域网 NAS 或公网云端，任意组合。**素材字节和预渲染产物永远不走文档服务的 WebSocket**；文档服务将来兼做连接发现 / 信令，也只交换地址、不转发字节（组件表「连接发现 / 信令」行）。
+- **预渲染产物一律入库**（`docs/semantics/product/asset-service.md`「预渲染的产物」；2026-09-24 定，取代原来的「上云的只有代码和 HTML 快照，像素缓存永远只在本地」）：预渲染进程（以及在线浏览器模式里当预渲染者的后台 iframe）生成的**所有**产物——HTML 快照、PNG、MOV、轨道流——生成后**无条件推送到素材服务**，哪怕素材服务就在本机；清单写文档服务的内容库（A3b）。素材服务不仅存素材，还接收和分发所有像素产物。理由：局域网里没有渲染能力的弱设备（iPad 浏览器）要靠它预览，Agent 在没有渲染环境的地方审阅成片也要靠它。`canvasHeavy` 卡、图卡、`unknown` 卡、`belowDependent` 卡的产物同样入库，只是推送排在低优先级、可以延后（A5、A3b），不是不推。
 - **改动上传：最后写的赢，不做合并；但覆盖方和被覆盖方都必须知道**（B）。
 - **渲染永远在「看图的那一方」旁边、按「谁在看」分进程**：用户机上一个 `full` 进程两方都渲、Agent 优先（拆分时各一个，I4），Agent 云端环境的 `agent` 进程渲云端 Agent 看的（I1～I3）。**服务不渲染**：素材服务只存、只分发，不渲染、不转码；文档服务不存字节。
-- **两种运行环境**（和两个服务部署在哪正交）：**桌面运行环境**（桌面版或本机 dev server，有编辑器进程、预渲染进程；可以连本地的服务，也可以连远程的，两个服务可以一本地一远程）和**在线浏览器模式**（只有页面：两个服务都在别处——公网云端、局域网 NAS，或局域网里的桌面版，两者可以不在一处（`docs/semantics/architecture/platforms.md`「在线浏览器模式」）；Agent 走 Agent 云端、预渲染者是后台 iframe，L）。不论连哪里的服务，页面、舞台、预渲染、Agent 的代码路径都完全一样，只差两个服务的端点。**页面代码只按宿主能力表分支，不按平台名分支**（J4 的 `hostCapabilities`，见 r2-r7）。
+- **两种运行环境**（和两个服务部署在哪正交）：**桌面运行环境**（桌面版或本机 dev server，有编辑器进程、预渲染进程；可以连本地的服务，也可以连远程的，两个服务可以一本地一远程）和**在线浏览器模式**（只有页面：两个服务都在别处——公网云端、局域网 NAS，或局域网里的桌面版，两者可以不在一处（`docs/semantics/product/platforms.md`「在线浏览器模式」）；Agent 走 Agent 云端、预渲染者是后台 iframe，L）。不论连哪里的服务，页面、舞台、预渲染、Agent 的代码路径都完全一样，只差两个服务的端点。**页面代码只按宿主能力表分支，不按平台名分支**（J4 的 `hostCapabilities`，见 r2-r7）。
 
 ## 组件与术语（只留和本文有关的行）
 
@@ -54,13 +54,13 @@
 | **本地内容库** | 用户机 / Agent 云端环境 | 素材服务在本机的存储 / 缓存，按哈希存字节。连本地素材服务时：它的存储本身；连远程素材服务时：本机的缓存兼上传队列——本机导入的先落这里再上传，别处引用的按哈希从远程素材服务拉进来，作为缓存时不作「是否传完」的判据（A1）。页面、Agent 进程、预渲染进程都只经素材服务的 HTTP API 读写它，不绕过 API 去碰文件；**只有素材服务自己读写这个目录**。落点是 `out/media`（`vite-plugin-media.ts:17` 的 `outRoot`，`:67` 拼 `media/`），文件名 `<hash>.<ext>`（`:171` 的 `resolveHashFile`） | 已有（按哈希存已落地，`vite-plugin-media.ts:235` 的 `storeMediaStream` 边落盘边算 sha256） |
 | **Agent 服务端** | 云端或用户机，同一份代码，按部署位置选预渲染 base URL（I4(c)） | 对话记录、收件箱、向文档服务提交操作、向文档服务提交操作级事件（D2；由文档服务经那条 WebSocket 推给页面，**Agent 服务端不直接连页面**）、`get_layout`、`message_ignore`（B3）、`send_message`（B5） | 不存在（今天 `vite-plugin-ai.ts` 的服务端工具就在编辑器进程里） |
 | **Agent 云端环境** | 云端，与项目云端分开 | Agent 进程 + 自己的本地内容库（按哈希从素材服务拉，可用 `.procp` 预灌）+ 一个只查询预渲染进程；从文档服务拉项目和卡片源码，`see_frames` / `get_layout` / `inspect_card_dom` 打自己的预渲染进程；**`get_gif` 只写入 GIF 的 Spec，动图渲染必须交由 `user` 进程所在的节点执行**，云端 Agent 自己不渲（文末决议 12） | 不存在 |
-| **预渲染进程** | 用户机 / Agent 云端环境 | 同一份代码有 `user` / `agent` / `full` 三种模式（`docs/semantics/architecture/rendering.md`「查询渲染与预渲染进程」，I1）：`user` 只预渲染（锚帧、快照、轨道流），`agent` 只接 Agent 的查询、不预渲染，`full` 三条 lane 都建、Agent 查询优先。用户机上缺省一个进程：本机有 Agent 时 `full`，没有时 `user`；`PROMPTCUT_PRERENDER_SPLIT=1` 时拆成两个（I4(d)）。`/api/cards/layout` 只在 `agent` / `full` 模式挂，借 `agent` lane，`user` 模式回 `503 NO_AGENT_LANE`。`user` / `full` 的实例 spawn 时多传 `PROMPTCUT_EDITOR_URL`（`agent` 模式不传） | 已有（`agent` 模式和第二个进程不存在） |
-| **`.procp`** | 文件 | 离线交换包：zip，首条目 `project.proc`，其余 `media/<hash>.<ext>`。**只打包原片**（`tiers.original`）——小分辨率版是可再生的派生物，不进包。导入 = 经素材服务 API 解包入库（连本地素材服务时直接入库；连远程素材服务时先落本地内容库，再把远程素材服务没有的哈希排队上传）；导出 = 从素材服务取字节打包，本机缓存缺的先从远程素材服务拉。不再是素材字节的唯一通道 | 已落地（`procp.ts` 自写 zip） |
+| **预渲染进程** | 用户机 / Agent 云端环境 | 同一份代码有 `user` / `agent` / `full` 三种模式（`docs/semantics/mechanism/rendering.md`「查询渲染与预渲染进程」，I1）：`user` 只预渲染（锚帧、快照、轨道流），`agent` 只接 Agent 的查询、不预渲染，`full` 三条 lane 都建、Agent 查询优先。用户机上缺省一个进程：本机有 Agent 时 `full`，没有时 `user`；`PROMPTCUT_PRERENDER_SPLIT=1` 时拆成两个（I4(d)）。`/api/cards/layout` 只在 `agent` / `full` 模式挂，借 `agent` lane，`user` 模式回 `503 NO_AGENT_LANE`。`user` / `full` 的实例 spawn 时多传 `PROMPTCUT_EDITOR_URL`（`agent` 模式不传） | 已有（`agent` 模式和第二个进程不存在） |
+| **`.procp`** | 文件 | 离线交换包：zip，首条目 `project.proc`，其余 `media/<hash>.<ext>`。**只打包素材原尺寸**（`tiers.original`）——小分辨率版是可再生的派生物，不进包。导入 = 经素材服务 API 解包入库（连本地素材服务时直接入库；连远程素材服务时先落本地内容库，再把远程素材服务没有的哈希排队上传）；导出 = 从素材服务取字节打包，本机缓存缺的先从远程素材服务拉。不再是素材字节的唯一通道 | 已落地（`procp.ts` 自写 zip） |
 | **镜像插件** | 两个进程都挂 | `vite-plugin-mirror.ts:158`：按 `{session, localRev}` 存最近 8 版项目（`mirror-store.mjs`），接收两层 diff；三个端点 `/api/data/project` `:163`、`/api/data/diff` `:196`、`/api/data/playhead` `:223`；`ensureMirror:60`（`user` / `full` 模式缺哪版就按 `PROMPTCUT_EDITOR_URL` 回拉）、`repushMirror:121`（重启补推）。**Agent 的查询走它的整份推那条路**（I2） | 已落地 |
-| **在线浏览器模式** | 用户浏览器 | 只有页面、没有本机进程（`docs/semantics/architecture/platforms.md`「在线浏览器模式」）：文档走远程文档服务、素材打远程素材服务（公网云端、局域网 NAS 或局域网里的桌面版，两者可以不在一处）、Agent 走 Agent 云端；后台 iframe 当预渲染者（L1），快照存 IndexedDB（L2）并照 A3b 推送到素材服务，素材服务里的快照直接进热舞台（L3），没有流（L4）；合并分发、在线重型控件服务、连接发现 / 信令只留接口（L5） | 不存在 |
-| **部署位置** | 泛指 | 部署位置，不是角色。**两个服务** = 文档服务（+ 内容库）+ 素材服务，各自独立选位置、任意组合：**本地文档服务** / **远程文档服务**，**本地素材服务** / **远程素材服务**（这两组词取代旧词「本地模式」「云端模式」；不存在「两个服务同在本机或同在云端」的整体模式）。连本地素材服务时素材照样入库、生成小版、推送预渲染产物，只是 I/O 在本地、不出本机或局域网。切换所连接的服务是用户的显式操作，F4 负责。素材那一侧一律说「素材服务」，要强调位置时说「本地素材服务」「远程素材服务」。**Agent 云端** = Agent 服务端 + Agent 云端环境，只是两个服务的一个客户端 | 不存在 |
-| **连接发现 / 信令** `[DRAFT]` | 文档服务 | 预留接口，**只留接口、不实现**（`docs/semantics/architecture/document-service.md`「连接发现」）：将来由文档服务在 B0 的那条 WebSocket 上交换本地端与移动端（或其它设备）之间的地址映射，帮它们建立直连（局域网或 P2P），之后字节在两端之间直接走素材服务的 HTTP API。**文档服务绝不承担素材传输流量**，不转发、不中继。消息占位见 L5 第 3 条 | 不存在 |
-| **面向平台** | 全部 | 六个平台只有两种运行形态（`docs/semantics/architecture/platforms.md`，第 2～6 项共用在线浏览器模式的全部机制）：**桌面版 APP** = 桌面运行环境（本地、远程的服务都可连，可混合）；**桌面浏览器 / iPad 浏览器 / iPad APP / 手机浏览器 / 手机 APP** = 在线浏览器模式。APP 壳里没有 Node 也没有预渲染进程。**iPad APP 与手机 APP 的原生壳本任务先不做**，只保证在线浏览器模式的代码不依赖平台名。**Agent 端**（Agent 服务端 + 预渲染进程的 `agent` / `full` 模式）面向 Windows、Linux、Ubuntu，差异只在无头 Chrome 的启动参数与系统字体、ffmpeg 可用的编码器、路径与端口文件的形状，见 I0 | 新增 |
+| **在线浏览器模式** | 用户浏览器 | 只有页面、没有本机进程（`docs/semantics/product/platforms.md`「在线浏览器模式」）：文档走远程文档服务、素材打远程素材服务（云端，或放本机时的创建者本机，两者可以不在一处）、Agent 走 Agent 云端；后台 iframe 当预渲染者（L1），快照存 IndexedDB（L2）并照 A3b 推送到素材服务，素材服务里的快照直接进热舞台（L3），没有流（L4）；合并分发、在线重型控件服务、连接发现 / 信令只留接口（L5） | 不存在 |
+| **部署位置** | 泛指 | 部署位置，不是角色。**两个服务** = 文档服务（+ 内容库）+ 素材服务，各自独立选位置、任意组合：**本地文档服务** / **远程文档服务**，**本地素材服务** / **远程素材服务**（这两组词取代旧词「本地模式」「云端模式」；不存在「两个服务同在本机或同在云端」的整体模式）。连本地素材服务时素材照样入库、生成素材小尺寸、推送预渲染产物，只是 I/O 在本地、不出本机或局域网。切换所连接的服务是用户的显式操作，F4 负责。素材那一侧一律说「素材服务」，要强调位置时说「本地素材服务」「远程素材服务」。**Agent 云端** = Agent 服务端 + Agent 云端环境，只是两个服务的一个客户端 | 不存在 |
+| **连接发现 / 信令** `[DRAFT]` | 文档服务 | 预留接口，**只留接口、不实现**（`docs/semantics/mechanism/document-service.md`「连接发现」）：将来由文档服务在 B0 的那条 WebSocket 上交换本地端与移动端（或其它设备）之间的地址映射，帮它们建立直连（局域网或 P2P），之后字节在两端之间直接走素材服务的 HTTP API。**文档服务不承担素材传输流量**，不转发、不中继；成员直连不到主机时的中继是云端托管服务的职责，属于 `docs/plan/direct-connect-plan.md`（2026-09-26 改定）。消息占位见 L5 第 3 条 | 不存在 |
+| **面向平台** | 全部 | 六个平台只有两种运行形态（`docs/semantics/product/platforms.md`，第 2～6 项共用在线浏览器模式的全部机制）：**桌面版 APP** = 桌面运行环境（本地、远程的服务都可连，可混合）；**桌面浏览器 / iPad 浏览器 / iPad APP / 手机浏览器 / 手机 APP** = 在线浏览器模式。APP 壳里没有 Node 也没有预渲染进程。**iPad APP 与手机 APP 的原生壳本任务先不做**，只保证在线浏览器模式的代码不依赖平台名。**Agent 端**（Agent 服务端 + 预渲染进程的 `agent` / `full` 模式）面向 Windows、Linux、Ubuntu，差异只在无头 Chrome 的启动参数与系统字体、ffmpeg 可用的编码器、路径与端口文件的形状，见 I0 | 新增 |
 
 ---
 
@@ -72,7 +72,7 @@
 
 ### A1 素材入库、按需拉取、两档、分片（第 5 步建底层 API，其余在第 6 步；连本地、远程素材服务都做）
 
-**分步**（2026-09-24 定）：**第 5 步只做素材服务空壳与底层 API 契约**——服务进程或插件骨架、下面「上传一律走分片」一段的分片上传与 `GET media/<hash>` 拉取（Range）、`GET media/<hash>/chunks` 对账接口、按哈希寻址、跨源访问。「入库」「两档」「上传队列的顺序」「原片可不可播」「按需拉取」「预取队列」「换档」各段在第 6 步，和 A5、A3b 一起做。
+**分步**（2026-09-24 定）：**第 5 步只做素材服务空壳与底层 API 契约**——服务进程或插件骨架、下面「上传一律走分片」一段的分片上传与 `GET media/<hash>` 拉取（Range）、`GET media/<hash>/chunks` 对账接口、按哈希寻址、跨源访问。「入库」「两档」「上传队列的顺序」「素材原尺寸可不可播」「按需拉取」「预取队列」「换档」各段在第 6 步，和 A5、A3b 一起做。
 
 **入库。** 导入后经素材服务的 API 入库：连本地素材服务时直接写它（本地 I/O），连远程素材服务时先落本地内容库、再排队上传。**入库这一步连哪里都不省**，连本地素材服务时同样生成小分辨率版。
 
@@ -89,22 +89,22 @@
 
 上传后台、低优先级，不挡编辑；项目提交（B）不等上传完成。别的客户端引用到还没传完的哈希时，那一层透明并提示「等待上传方」。
 
-**两档，先小后大**（`docs/semantics/architecture/asset-storage.md`「两档素材」「上传」「拉取」，2026-09-22 定稿）：
+**两档，先小后大**（`docs/semantics/product/asset-service.md`「两档素材」「上传」「拉取」，2026-09-22 定稿）：
 
-1. **小分辨率版** = 等比缩到 800×600 以内的 H.264（`-preset veryfast -crf 26`，帧率跟原片、上限 60，AAC 64k，`-movflags +faststart`）；
-2. **原片**保持原编码，没有 faststart 的先 `-c copy -movflags +faststart` 重封装（moov 在前，Range 拖动不用整段下完）。**不转码原片**——转码会破坏「导出只用原片」和导出像素基线。
+1. **小分辨率版** = 等比缩到 800×600 以内的 H.264（`-preset veryfast -crf 26`，帧率跟素材原尺寸、上限 60，AAC 64k，`-movflags +faststart`）；
+2. **素材原尺寸**保持原编码，没有 faststart 的先 `-c copy -movflags +faststart` 重封装（moov 在前，Range 拖动不用整段下完）。**不转码素材原尺寸**——转码会破坏「导出只用素材原尺寸」和导出像素基线。
 
-两档都在**导入方本机**用 `findFfmpeg`（`server/bakery/ffmpeg.mjs`）生成，**素材服务不转码**（本地素材服务也不转，转码是导入方客户端的事）。桌面版自带 ffmpeg；在线浏览器模式没有本机 ffmpeg，**浏览器里导入的素材只有原片一档**（别人拉它时按 `docs/semantics/architecture/asset-storage.md`「还没有小版时直接拉原片」走；「桌面版发现云端缺小版就补转一份传上去」记在 `docs/plan/future_planning.md` 第 1 条，以后再做，本任务不做，也不在页面里用 WebCodecs 转）。
+两档都在**导入方本机**用 `findFfmpeg`（`server/bakery/ffmpeg.mjs`）生成，**素材服务不转码**（本地素材服务也不转，转码是导入方客户端的事）。桌面版自带 ffmpeg；在线浏览器模式没有本机 ffmpeg，**浏览器里导入的素材只有素材原尺寸一档**（别人拉它时按 `docs/semantics/product/asset-service.md`「还没有素材小尺寸时直接拉素材原尺寸」走；「桌面版发现云端缺素材小尺寸就补转一份传上去」记在 `docs/plan/future_planning.md` 第 1 条，以后再做，本任务不做，也不在页面里用 WebCodecs 转）。
 
-**上传队列的顺序**：**逐个素材，同一个素材先传小分辨率版、再传原素材，两档在素材服务上都 `complete` 才轮到下一个素材**。（第 111 版写的是「所有素材的小版先传、原片后传」，按 2026-09-22 用户定的口径改成这一条，现行语义见 `docs/semantics/architecture/asset-storage.md`「上传」。）
+**上传队列的顺序**：**逐个素材，同一个素材先传小分辨率版、再传原素材，两档在素材服务上都 `complete` 才轮到下一个素材**。（第 111 版写的是「所有素材的素材小尺寸先传、素材原尺寸后传」，按 2026-09-22 用户定的口径改成这一条，现行语义见 `docs/semantics/mechanism/asset-service.md`「上传」。）
 
-**原片可不可播。** 原片保持原编码，可能是浏览器放不了的格式（ProRes、DNxHD、10 bit HEVC 之类）。每台设备在本机探一次可播性，结论按内容哈希存进**设备本地缓存**（`src/render/playability.ts`），不写进项目文档、不进 `.proc`（文末决议 2）：
+**素材原尺寸可不可播。** 素材原尺寸保持原编码，可能是浏览器放不了的格式（ProRes、DNxHD、10 bit HEVC 之类）。每台设备在本机探一次可播性，结论按内容哈希存进**设备本地缓存**（`src/render/playability.ts`），不写进项目文档、不进 `.proc`（文末决议 2）：
 
 1. 先用 `HTMLMediaElement.canPlayType(<按容器和编码拼的 MIME>)` 探；回 `''` 就判 `false`。
-2. 回 `'maybe'` / `'probably'` 时再**试放首帧**：离屏 `<video muted>` 挂原片，等到 `loadeddata`（或 `requestVideoFrameCallback` 的第一帧）才判 `true`；报 `error` 或超时就判 `false`。
-3. **探不出或放不了**（任一步判 `false`，或探测本身没法跑）时：有小版就预览用小版、不换档；**没有小版时强制回退到原片**（哪怕可能放不了——这是唯一能给的东西，那一层按缺料处理）。
+2. 回 `'maybe'` / `'probably'` 时再**试放首帧**：离屏 `<video muted>` 挂素材原尺寸，等到 `loadeddata`（或 `requestVideoFrameCallback` 的第一帧）才判 `true`；报 `error` 或超时就判 `false`。
+3. **探不出或放不了**（任一步判 `false`，或探测本身没法跑）时：有素材小尺寸就预览用素材小尺寸、不换档；**没有素材小尺寸时强制回退到素材原尺寸**（哪怕可能放不了——这是唯一能给的东西，那一层按缺料处理）。
 
-本机缓存判为放不了（`false`）的素材，在这台设备上**预览永远停在小分辨率版、不换档**（前提是有小版），导出照旧只用原片；别的设备按它自己的本机缓存判，互不影响。
+本机缓存判为放不了（`false`）的素材，在这台设备上**预览永远停在小分辨率版、不换档**（前提是有素材小尺寸），导出照旧只用素材原尺寸；别的设备按它自己的本机缓存判，互不影响。
 
 **按需拉取。** 本地素材服务的读路由 `/@media/<hash>` 在本地内容库找不到时（只在连远程素材服务、本地内容库作缓存时发生；连本地素材服务时它就是真身），`vite-plugin-media.ts:508` 那条路由先向远程素材服务 `GET media/<hash>`（流式落盘到本地内容库、边落边按 Range 服务），远程也 404 才回 404。页面照常挂 `src`，同一次请求就拿到字节，没有「重挂」这一步；首字节到达前 `<video>` 只是在缓冲、那一层什么都不画，这就是它的「透明」。
 
@@ -124,13 +124,13 @@ playbackUrl(
 ): string  // 可播性不从 media 读:opts.playable 缺省读设备本地缓存(playability.ts)
 ```
 
-规则：`localHashes`（标识符沿用，含义改为「当前连接的素材服务报 `complete` 的哈希集合」）里有的最高档，返回 `/@media/<那一档的哈希>`；集合为空时 `tiers.small` 存在就返回小分辨率档、否则才返回原片档（`docs/semantics/architecture/asset-storage.md`「拉取」的先小后大，打开项目第一帧不能直接拉原片）；设备本地缓存判原片放不了（`false`）且有小版时永远返回小分辨率档，没有小版时回退到原片档；本机还没探过时先给小版、后台探一次，探出能放再换回原片。给了 `cloudBase` 就返回绝对地址（在线浏览器模式直接打远程素材服务，`localHashes` 同样来自对它的 `GET media/<hash>/chunks` 轮询，不看项目文档）。
+规则：`localHashes`（标识符沿用，含义改为「当前连接的素材服务报 `complete` 的哈希集合」）里有的最高档，返回 `/@media/<那一档的哈希>`；集合为空时 `tiers.small` 存在就返回小分辨率档、否则才返回素材原尺寸档（`docs/semantics/product/asset-service.md`「拉取」的先小后大，打开项目第一帧不能直接拉素材原尺寸）；设备本地缓存判素材原尺寸放不了（`false`）且有素材小尺寸时永远返回小分辨率档，没有素材小尺寸时回退到素材原尺寸档；本机还没探过时先给素材小尺寸、后台探一次，探出能放再换回素材原尺寸。给了 `cloudBase` 就返回绝对地址（在线浏览器模式直接打远程素材服务，`localHashes` 同样来自对它的 `GET media/<hash>/chunks` 轮询，不看项目文档）。
 
-**只有 live 路的 `VideoTrack`（R3 抽出来的那份，即今天 `MediaLayers.tsx` 的 `<video src>` / `<img src>`）从 `playbackUrl` 取 `src`**；`FrameScene` 的 `placeholder` 路、预渲染、导出、`see_frames` 一律用 `media.url`（原片）。`localHashes` 由主文档每 2 秒轮询当前连接的素材服务的 `GET media/<hash>/chunks` 得到，经 E0 新增的 `setLocalHashes(hashes: string[])` 下发给可见舞台，`FrameScene` 加 prop `localHashes` 透传给 `VideoTrack`；legacy 分支不下发。
+**只有 live 路的 `VideoTrack`（R3 抽出来的那份，即今天 `MediaLayers.tsx` 的 `<video src>` / `<img src>`）从 `playbackUrl` 取 `src`**；`FrameScene` 的 `placeholder` 路、预渲染、导出、`see_frames` 一律用 `media.url`（素材原尺寸）。`localHashes` 由主文档每 2 秒轮询当前连接的素材服务的 `GET media/<hash>/chunks` 得到，经 E0 新增的 `setLocalHashes(hashes: string[])` 下发给可见舞台，`FrameScene` 加 prop `localHashes` 透传给 `VideoTrack`；legacy 分支不下发。
 
-换段的接法（`mediaSync.ts` 的 `planSlots` 那条路，具体行号见 r2-r7 的 E7 与 R3 搬家清单）：`VideoTrack` 在喂 `planSlots` 之前把 `cur` / `next` 的 `url` 换成 `playbackUrl(...)` 的结果，`holding` 改成同时比 `id` 和 `url`，`sameUrl` 不动——**url 变了就是新段**，同一片段换档就等于换了一段；`MediaLayers` 里那个「`s.clip?.id === c.id` 就早退」的判断也改成同时比 `url`，于是 `lastSeekAt.delete(el)` 会跑、700 ms 冷却不会吞掉回跳。换段前记 `currentTime`，React 换好 `src` 后在 `loadedmetadata` seek 回去，不跳、不重头。导出侧原片没到就是「等待上传方」，**不拿小分辨率档代理导出**。
+换段的接法（`mediaSync.ts` 的 `planSlots` 那条路，具体行号见 r2-r7 的 E7 与 R3 搬家清单）：`VideoTrack` 在喂 `planSlots` 之前把 `cur` / `next` 的 `url` 换成 `playbackUrl(...)` 的结果，`holding` 改成同时比 `id` 和 `url`，`sameUrl` 不动——**url 变了就是新段**，同一片段换档就等于换了一段；`MediaLayers` 里那个「`s.clip?.id === c.id` 就早退」的判断也改成同时比 `url`，于是 `lastSeekAt.delete(el)` 会跑、700 ms 冷却不会吞掉回跳。换段前记 `currentTime`，React 换好 `src` 后在 `loadedmetadata` seek 回去，不跳、不重头。导出侧素材原尺寸没到就是「等待上传方」，**不拿小分辨率档代理导出**。
 
-**为什么不做单流时间分层**：H.264 没有时间分层；VP9 / AV1 的 temporal layer 只能经 WebCodecs 用、`<video>` 不认，补全等于整段重解。参考帧占一份编码一半到七成的字节，首播要等的量只比整片少一点，收益远小于换档。留到将来给原片档做补全（不做清单）。
+**为什么不做单流时间分层**：H.264 没有时间分层；VP9 / AV1 的 temporal layer 只能经 WebCodecs 用、`<video>` 不认，补全等于整段重解。参考帧占一份编码一半到七成的字节，首播要等的量只比整片少一点，收益远小于换档。留到将来给素材原尺寸档做补全（不做清单）。
 
 ### A3a 共享键与两档快照（只留「两档各自怎么入库」那半；键与目录形状已落地，其余在 R6）
 
@@ -191,7 +191,7 @@ PNG / MOV / 轨道流的清单走（`[DRAFT]`）`content.put { kind: 'render-man
 
 ## 目标 B：改动上传的竞态（第 7 步）
 
-原则：**最后写的赢，不做合并；但覆盖方和被覆盖方都必须知道**（`docs/semantics/architecture/document-service.md`「冲突」）。 前提是 D1（Agent 直接写文档服务）。在本地文档服务上先验收，连远程文档服务只是换端点。
+原则：**最后写的赢，不做合并；但覆盖方和被覆盖方都必须知道**（`docs/semantics/product/document-service.md`「冲突」）。 前提是 D1（Agent 直接写文档服务）。在本地文档服务上先验收，连远程文档服务只是换端点。
 
 - **B0 传输是一条 WebSocket。** 每个客户端（编辑页、Agent 服务端）到文档服务一条长连接（本地文档服务在编辑器进程里，远程文档服务在别处，协议相同）：提交操作 → 回 ack（新的 `projectRev` / `cardRev`，或拒绝原因）；别人的操作、B3 / B6 的通知、锁状态变更、D2 的操作级事件、内容库的三条消息都从这条连接走，**不轮询**。断线按 F3 攒本地日志、重连后按序提交。**素材字节和预渲染产物不走它**（素材服务，A1 / A3b）。
 
@@ -199,7 +199,7 @@ PNG / MOV / 轨道流的清单走（`[DRAFT]`）`content.put { kind: 'render-man
 
 - **B2 覆盖前备份。** 被覆盖方换成**文档服务上的最新版本**（当前连接的那个文档服务上的）之前，先把自己那份存成本地备份：卡级复用 `edit_card` 的备份机制——`vite-plugin-cards.ts:1197` 今天是 `isUserDef ? undefined : backupBeforeEdit(root, target, before)`（`backupBeforeEdit` 在 `:175`），**用户卡不备份，改成用户卡也备份**；项目级存被覆盖对象（片段、序列、效果或项目字段）在自己那一版的 JSON。**备份由接收方客户端在收到 B3 通知、换版本之前自己做**（页面存页面的，Agent 服务端存 Agent 的），路径由它自己补进气泡 / 收件箱条目——文档服务的通知里不带路径（它不知道各客户端的磁盘）。
 
-- **B3 覆盖双向告知，对象按最近参与者算**（`docs/semantics/architecture/document-service.md`「冲突」：覆盖方和被覆盖方都要知道）。**卡级**：每张卡记最近 10 个 `cardRev` 或 30 分钟内的写入者；**项目级**：每个被操作改到的对象（按操作的目标 id：片段、序列、效果、项目字段）同样记最近 10 个 `projectRev` 或 30 分钟内的写入者。新版本落地时：
+- **B3 覆盖双向告知，对象按最近参与者算**（`docs/semantics/product/document-service.md`「冲突」：覆盖方和被覆盖方都要知道）。**卡级**：每张卡记最近 10 个 `cardRev` 或 30 分钟内的写入者；**项目级**：每个被操作改到的对象（按操作的目标 id：片段、序列、效果、项目字段）同样记最近 10 个 `projectRev` 或 30 分钟内的写入者。新版本落地时：
 
   - **被覆盖方**：列表里除本次写入者外每人收通知（内容：覆盖方 `actor`、接收方最后写的版本、当前版本、相对那版的 diff 摘要；项目级另带目标 id），先按 B2 备份再换版本。
   - **覆盖方**：同一次写的 ack 里带回执 `overwrote: Array<{ actor: string; lastRev: number; target: string }>`——就是这次收到通知的那些人、各自被覆盖的是哪一版、哪个对象；空数组表示没覆盖任何人。页面把回执显示成气泡（「你覆盖了 Agent X 在 v5 的改动」），Agent 服务端把它**原样**放进工具结果。
@@ -259,7 +259,7 @@ F2（`?preview=legacy` 回滚）随 R7、F5（预渲染进程重启后的就绪�
 
   **换文档服务**（以本地 → 远程为例，反向同理）：项目整份推到目标文档服务后立刻改连它。目标没有这个 `projectId` 就新建，`projectRev` **沿用原文档服务的当前值、不归零**——本地文档服务从第 6 步起一直在记 `projectRev`，归零会让「本地 → 远程 → 本地」往返一圈版本号回退。目标已有同一 `projectId` 就带 `expectedVersion`（= 上次从它那里拉下来时记的 `projectRev`），不等就走 B2 备份 + 拒绝回包的 `since`（B4），由人决定覆盖还是另存为新项目。内容库里的卡片源码和产物清单随项目一起推过去。
 
-  **换素材服务**（以本地 → 远程为例）：原素材服务里已有的两档素材（已生成的小版不重转）按 A1 推到目标素材服务，预渲染产物按 A3b 推过去（清单在内容库，随文档服务走，不用改）；都在后台低优先级跑，传完前别的客户端看到的是「等待上传方」，是否传完只问目标素材服务。**远程 → 本地**：把项目引用的**原片**（远程有小版也一起拉；没有的由本机补转）拉进本地素材服务后改连它。
+  **换素材服务**（以本地 → 远程为例）：原素材服务里已有的两档素材（已生成的素材小尺寸不重转）按 A1 推到目标素材服务，预渲染产物按 A3b 推过去（清单在内容库，随文档服务走，不用改）；都在后台低优先级跑，传完前别的客户端看到的是「等待上传方」，是否传完只问目标素材服务。**远程 → 本地**：把项目引用的**素材原尺寸**（远程有素材小尺寸也一起拉；没有的由本机补转）拉进本地素材服务后改连它。
 
   编辑锁只覆盖「整份推送 + 改连 + `projectRev` 切换」那一小段，转码和上传期间照常编辑。
 
@@ -281,11 +281,11 @@ F2（`?preview=legacy` 回滚）随 R7、F5（预渲染进程重启后的就绪�
 
 3. **路径与端口**：`port.json`、`out/` 目录、`PROMPTCUT_EDITOR_URL` 用 `path.join` / `os.tmpdir()`，不写 Windows 形状；服务端不依赖 `runtime\app` 那份副本的布局。
 
-**验收**：同一项目在 Windows 和 Ubuntu 22.04 上跑 `agent` 模式的 `see_frames`，30 帧全部返回、无 `EACCES` / 字体缺失警告；两平台各自的像素基线通过；**`full` 模式在 Ubuntu 22.04 上也跑一遍**（`docs/semantics/architecture/platforms.md`「面向的平台」末条把 `full` 也算进 Agent 端）。
+**验收**：同一项目在 Windows 和 Ubuntu 22.04 上跑 `agent` 模式的 `see_frames`，30 帧全部返回、无 `EACCES` / 字体缺失警告；两平台各自的像素基线通过；**`full` 模式在 Ubuntu 22.04 上也跑一遍**（`docs/semantics/product/platforms.md`「面向的平台」末条把 `full` 也算进 Agent 端）。
 
 ### I1 模式开关
 
-`vite-plugin-prerender.ts` spawn 预渲染进程时传的环境变量（`:80-88`）再加 `PROMPTCUT_PRERENDER_MODE`，三种值（`docs/semantics/architecture/rendering.md`「查询渲染与预渲染进程」）：
+`vite-plugin-prerender.ts` spawn 预渲染进程时传的环境变量（`:80-88`）再加 `PROMPTCUT_PRERENDER_MODE`，三种值（`docs/semantics/mechanism/rendering.md`「查询渲染与预渲染进程」）：
 
 - **`user`**（只有交互编辑在本地）：只预渲染预渲染集合里的卡——锚帧、快照、轨道流；**不建 `agent` lane**，`/api/cards/layout` 回 `503 NO_AGENT_LANE`。
 - **`agent`**（只有 Agent 在本地或托管在服务器）：不预渲染、只查精确某帧，只建 `agent` lane。
@@ -324,7 +324,7 @@ lane 名（`user` / `agent` / `background`，`frame-pipeline.mjs:90`）和模式
 
 **本机**：Agent 进程和预渲染进程（不论拆不拆分）都像外部客户端一样，经当前连接的素材服务的 HTTP API（`/@media/<hash>`、`GET media/<hash>/chunks` 等）读写素材和产物，**绝不直接读素材服务的存储目录**，也不靠继承同一个导出目录去和编辑器共读它；拆分（I4(d)）时 `agent` 进程只是多一个 HTTP 客户端，拉起时告诉它当前连接的素材服务地址。用户的 `.procp` 经素材服务解包入库一次，两个进程都从素材服务取。`--procp` 只在云端用。
 
-**缺素材怎么回**：项目引用的哈希在当前连接的素材服务上还没传完时（上传方还没传完或离线），对应素材层画出来是透明，所以要靠回包告诉 Agent。**`missingMedia` 由服务端算**：遍历 `project.media[].hash`，逐个问当前连接的素材服务的 `GET media/<hash>/chunks`，原片那一档不是 `complete`（或 404）的进列表——**与哪一帧渲没渲到无关**，也不去 `stat` 本机目录。`server/vision/render.ts` 的 `renderFrames` 返回值从 `Map<number, FrameResult>` 改成 `{ frames: Map<number, FrameResult>, missingMedia: string[] }`，`missingMedia` 在函数开头算一次、**每个返回点都带上**；调用点逐处同步改，并 `grep "renderFrames("` 复核（`server/` 没有类型检查，漏一处要到运行期才炸）。工具回包原样带出；`get_layout` 照常（几何不依赖字节）。
+**缺素材怎么回**：项目引用的哈希在当前连接的素材服务上还没传完时（上传方还没传完或离线），对应素材层画出来是透明，所以要靠回包告诉 Agent。**`missingMedia` 由服务端算**：遍历 `project.media[].hash`，逐个问当前连接的素材服务的 `GET media/<hash>/chunks`，素材原尺寸那一档不是 `complete`（或 404）的进列表——**与哪一帧渲没渲到无关**，也不去 `stat` 本机目录。`server/vision/render.ts` 的 `renderFrames` 返回值从 `Map<number, FrameResult>` 改成 `{ frames: Map<number, FrameResult>, missingMedia: string[] }`，`missingMedia` 在函数开头算一次、**每个返回点都带上**；调用点逐处同步改，并 `grep "renderFrames("` 复核（`server/` 没有类型检查，漏一处要到运行期才炸）。工具回包原样带出；`get_layout` 照常（几何不依赖字节）。
 
 ### I4 本机：一个进程，Agent 优先；分进程降为可选开关
 
@@ -336,9 +336,9 @@ lane 名（`user` / `agent` / `background`，`frame-pipeline.mjs:90`）和模式
 
 正在跑的预渲染任务不被打断，所以**一个 Agent 请求最多等这个 Chrome 上一个预渲染任务跑完；因为这个 Chrome 只接锚帧和 `wanted` 单帧，等待上界 = 一帧**。其余 Chrome（`streamPool` 和 `background` 用的）按先来后到处理预渲染请求，不为 Agent 暂停。于是 Agent 任务永远不排在**排队中的**预渲染任务后面，Agent 的并发也永远占不满预渲染资源、用户永远等得到预渲染；**Agent 没活时这个 Chrome 也不空着**（接锚帧和 `wanted` 单帧）。
 
-（专用 Chrome 只接单帧任务是刻意的，就是为了保证这个等待上界——`docs/semantics/architecture/rendering.md`「Agent 优先只是插队」里的「不打断正在跑的任务」。解耦之后这条的落点是 `server/vision/worker-pool.ts` 的取任务逻辑。）
+（专用 Chrome 只接单帧任务是刻意的，就是为了保证这个等待上界——`docs/semantics/mechanism/rendering.md`「Agent 优先只是插队」里的「不打断正在跑的任务」。解耦之后这条的落点是 `server/vision/worker-pool.ts` 的取任务逻辑。）
 
-**(b2) AI 菜单的操作预览可以插在预渲染前面**（`docs/semantics/architecture/rendering.md`「AI 栏的操作预览可以插队」）。聊天气泡的操作详细预览控件（`OpDetailPreview.tsx`）点开一张操作动图 / 位图时发的 `GET /api/ai/visual/gif/<key>.gif`（`server/vision/routes.ts:198` 的 `ensureGif`，今天用户触发的那一支传优先级 0，`:249`）是**用户触发的请求**，要插到普通 Chrome 的预渲染队列最前面。
+**(b2) AI 菜单的操作预览可以插在预渲染前面**（`docs/semantics/product/rendering.md`「AI 栏的操作预览可以插队」）。聊天气泡的操作详细预览控件（`OpDetailPreview.tsx`）点开一张操作动图 / 位图时发的 `GET /api/ai/visual/gif/<key>.gif`（`server/vision/routes.ts:198` 的 `ensureGif`，今天用户触发的那一支传优先级 0，`:249`）是**用户触发的请求**，要插到普通 Chrome 的预渲染队列最前面。
 
 **落点不在 vision 的优先级队列**：`server/vision/render-queue.ts:115` 的 `enqueue` 和 `FramePipeline` 的 `background` 链、`fillCardControls` 的 4 帧批是**两个队列**，改它的优先级排不到预渲染批之前；而且 `ensureGif` 今天就跑在 Agent 专用 Chrome 上（`server/vision/render.ts:73` 写死 `lane: "agent"`）。改法两步：
 
@@ -347,13 +347,13 @@ lane 名（`user` / `agent` / `background`，`frame-pipeline.mjs:90`）和模式
 
 用户点开的操作预览走它；`agentIdle` 那个只接单帧是另一回事（它跑在 Agent 专用 Chrome 上、要保证 Agent 请求的等待上界是一帧）。它不用 Agent 的专用 Chrome，`user` 模式同样适用，`agent` 模式（云端）没有这个入口。**验收**：这张 GIF 的**第一帧**在当前批结束后立即开始渲染；插队期间 `fillCardControls` 的批次计数不回退、不重放。解耦之后这条的落点是 `server/vision/render-queue.ts` 的入队位置，和 (b) 的 worker-pool 改动互不牵连。
 
-**预渲染不服务用户的即时交互请求**（`docs/semantics/architecture/rendering.md`「重管线：预渲染」与「查询渲染与预渲染进程」末条）：用户点选、拖动、`get_layout` 页面侧的实体框都在页面自己的舞台上算（D4 页面侧走后台舞台的 `rectsWithBounds`），预渲染只在闲时完成用户的预渲染任务；**`/api/cards/layout` 只服务 Agent 的 `get_layout`**。
+**预渲染不服务用户的即时交互请求**（`docs/semantics/mechanism/rendering.md`「重管线：预渲染」与「查询渲染与预渲染进程」末条）：用户点选、拖动、`get_layout` 页面侧的实体框都在页面自己的舞台上算（D4 页面侧走后台舞台的 `rectsWithBounds`），预渲染只在闲时完成用户的预渲染任务；**`/api/cards/layout` 只服务 Agent 的 `get_layout`**。
 
 **(c) 路由。** `prerender-client.mjs:13` 的 `state` 按角色两份（`{ user, agent }`），单进程时两份指向同一个地址（`/api/prerender/info`（`vite-plugin-prerender.ts:58`）回包多一项 `agent: { url, ready, error }`，不拆分时 `agent.url` = `url`）。`setPrerender`（`:16`）/ `prerenderState`（`:21`）/ `whenPrerenderReady` / `prerenderPost` / `proxyToPrerender`（`:86`）各加一个角色参数：
 
 - **Agent 的路一律 `'agent'`**：`MIRRORED_TOOLS`（`vite-plugin-ai.ts:207`：`get_project` / `see_frames` / `get_gif` / `bake_card` / `inspect_card_dom`）经 `prerenderPost` 的那些调用、`:253` 的 `/api/ai/visual`、`vite-plugin-cards.ts:1303` 的 `proxyToPrerender`，**以及 `/api/cards/layout`**（它只服务 Agent 的 `get_layout`，和 D4、(b2) 末句一致）。
 - **用户的路一律 `'user'`**：帧、锚帧、轨道流。
-- **一条例外**（`docs/semantics/architecture/rendering.md`「AI 栏的操作预览可以插队」）：**用户点开的 `GET /api/ai/visual/gif/<key>.gif` 走 `'user'` 角色**（`lane: 'background'` 插队，(b2)）；**模型的 `get_gif` 工具调用在 `'agent'` 进程中仅写入 Spec，实际的动图渲染由 `user` 进程负责**。拆分模式下如果把这条路由整个划进 `'agent'`，用户点开的动图就会被塞进 Agent 专用 Chrome，和上面那条语义冲突。动图的像素渲染一律在用户本机的 `user` 进程，不累加给 Agent 进程（文末决议 12）。
+- **一条例外**（`docs/semantics/product/rendering.md`「AI 栏的操作预览可以插队」）：**用户点开的 `GET /api/ai/visual/gif/<key>.gif` 走 `'user'` 角色**（`lane: 'background'` 插队，(b2)）；**模型的 `get_gif` 工具调用在 `'agent'` 进程中仅写入 Spec，实际的动图渲染由 `user` 进程负责**。拆分模式下如果把这条路由整个划进 `'agent'`，用户点开的动图就会被塞进 Agent 专用 Chrome，和上面那条语义冲突。动图的像素渲染一律在用户本机的 `user` 进程，不累加给 Agent 进程（文末决议 12）。
 
 `prerender.ts` 的单份缓存（`base` / `checkedAt` / `asking` / `firstAsk`、`invalidatePrerenderBase`、`usePrerenderBase`）按角色各一份，`ask()` 从 `url` 和 `agent.url` 各取各的。这样**拆不拆分对调用方透明**。第 6 步把 `MIRRORED_TOOLS` 搬去 Agent 服务端之后：Agent 服务端在本机时 base URL 就是 `/api/prerender/info` 里的 `agent.url`，在云端时是 Agent 云端环境自己的 `agent` 进程；两条路的工具语义完全一样。
 
@@ -369,9 +369,9 @@ lane 名（`user` / `agent` / `background`，`frame-pipeline.mjs:90`）和模式
 
 ---
 
-## 目标 L：在线浏览器模式（`docs/semantics/architecture/platforms.md`「在线浏览器模式」；第 10 步）
+## 目标 L：在线浏览器模式（`docs/semantics/product/platforms.md`「在线浏览器模式」；第 10 步）
 
-编辑器分两种运行环境：**桌面运行环境**（桌面版或本机 dev server：有编辑器进程和预渲染进程）和**在线浏览器模式**（编辑器直接跑在用户浏览器里，只有页面）。在线浏览器模式请求不到预渲染进程：文档走远程文档服务（B0 的 WebSocket），素材打远程素材服务（A1 的跨源访问 + Range；可以是公网云端、局域网 NAS 或局域网里的桌面版），Agent 走 Agent 云端（`agent` 模式的进程在服务器，I）；**预渲染者是后台 iframe**。宿主能力由 J4 的 `hostCapabilities` 报给父页（协议在 r2-r7），页面代码只按能力分支。
+编辑器分两种运行环境：**桌面运行环境**（桌面版或本机 dev server：有编辑器进程和预渲染进程）和**在线浏览器模式**（编辑器直接跑在用户浏览器里，只有页面）。在线浏览器模式请求不到预渲染进程：文档走远程文档服务（B0 的 WebSocket），素材打远程素材服务（A1 的跨源访问 + Range；可以是云端，或放本机时的创建者本机），Agent 走 Agent 云端（`agent` 模式的进程在服务器，I）；**预渲染者是后台 iframe**。宿主能力由 J4 的 `hostCapabilities` 报给父页（协议在 r2-r7），页面代码只按能力分支。
 
 - **L1 后台 iframe 当预渲染者（J4 的 `bake` 角色）。** `setRole('back', { job: 'bake' })`：后台舞台在闲时——探针队列空，且页面可见时用 `requestIdleCallback` 的窗口、不可见时按 E4 每 8 帧让出——按 C2 的优先级（锚帧先、播放头前方优先、其余逐帧）对预渲染集合（`plan.prerenderSet`）里的片段逐帧推，**每帧调页面协议 `window.__pcCreateSnapshot()` 生成本控件的 HTML 快照**（取回包的 `controls` 项），和 K1 探针同一套机器，只是不计时、持续跑。用户一操作（`setTime` / `play` / `setProject` 到达 `front`）就让路，空闲再续。产物按 A3a 的档位 / 键规则写进 L2 的库，并照 A3b 推送到素材服务（后台 iframe 也是预渲染者，产物同样无条件入库）。
 
@@ -385,13 +385,13 @@ lane 名（`user` / `agent` / `background`，`frame-pipeline.mjs:90`）和模式
 
 - **L3 素材服务里的快照直接进热舞台。** 打开项目时按每张卡的键（共享档是共享键，本地档是 `<entry.key>/<共享键>`，`[DRAFT]`）查文档服务的快照清单（内容库的 `content.get { kind: 'snapshot-manifest' }`），缺的块从素材服务拉（A3b 的下载路）写进 L2、`ranges` 立即就绪——**别人预渲染过的 Motion 卡在这台浏览器上不用重新预渲染**。清单里 `pending` 的区间不等，直接交给 L1 本地产。L1 在这台浏览器上预渲染出的产物照 A3b 推送。
 
-- **L4 没有流。** 浏览器里没有 ffmpeg，重卡播放时贴不了流。**DOM 重卡和 canvas 重卡同一规则：按拍换 HTML 快照**（`.pc-snapshot` 平面的 `innerHTML` 每拍替换一次——这是「逐帧换快照播放」在本任务里唯一允许的地方，不受 C4 的 33 ms 节流；canvas 卡的快照里画布已经是 `<img>`）；**实测换帧成本装不下预算的重卡透明**；暂停态照 K5 追到活渲。
+- **L4 没有流。** 浏览器里没有 ffmpeg，重卡播放时贴不了流。**DOM 重卡和 canvas 重卡同一规则：按拍换 HTML 快照**（`.pc-snapshot` 平面的 `innerHTML` 每拍替换一次——这是「逐帧换快照播放」在本任务里唯一允许的地方，不受 C4 的 33 ms 节流；canvas 卡的快照里画布已经是 `<img>`）；**实测换帧成本装不下预算的重卡显示占位符**（2026-09-26 按语义 `product/platforms.md`「在线浏览器模式」、`product/rendering.md`「兜底顺序」改，原写「透明」）；暂停态照 K5 追到活渲（低内存档除外，见 L6）。
 
-  （第 111 版写的是「canvas 卡在浏览器模式下不按拍换快照、它是活渲的」，那和 `docs/semantics/architecture/rendering.md`「重管线：预渲染」的「播放和拖动时只贴预渲染结果；缺了就让该层透明」、`architecture/platforms.md`「在线浏览器模式」、不做清单都冲突，按 `docs/archive/restructure_planning/render_pipeline_restructure.md` 3.7 改成这一条。R9 之后 canvas 卡的主线程成本很小、多数位置判轻，这条实际只落在 `dom2d` 粒子卡和没有 Worker 退路的设备上。）
+  （第 111 版写的是「canvas 卡在浏览器模式下不按拍换快照、它是活渲的」，那和 `docs/semantics/product/rendering.md`「重管线：预渲染」的「播放和拖动时只贴预渲染结果；缺了就让该层透明」、`product/platforms.md`「在线浏览器模式」、不做清单都冲突，按 `docs/archive/restructure_planning/render_pipeline_restructure.md` 3.7 改成这一条。R9 之后 canvas 卡的主线程成本很小、多数位置判轻，这条实际只落在 `dom2d` 粒子卡和没有 Worker 退路的设备上。）
 
   **换帧成本进预算**：`planPipelines` 的 `opts.deadMs` 从标量放宽成 `number | ((identityKey: string) => number)`；浏览器模式传函数，背后是一张**只在本次会话生效的 `swapMs` 表**（不进 `costs`，因为它量的是这台机器这一次的 DOM 替换速度）。第一次播放前用常量 `SWAP_MS = 3` 估，播放中按 K6 的每拍每卡计时实测后替换。
 
-- **L5 只留接口**（`docs/semantics/architecture/platforms.md`「预留的接口」的三条）。
+- **L5 只留接口**（`docs/semantics/product/platforms.md`「预留的接口」的三条）。
 
   1. **合并分发**：远程素材服务在 `PUT snap/<hash>` / `PUT px/<hash>`（A3b，`px` 是 `[DRAFT]`）之外加 `POST merge/<projectId>/<共享键>`——任何客户端把自己预渲染出的共享档块和清单片段推上去，素材服务按键合并去重、清单走文档服务按 `projectRev` 分发。**本任务只实现「上传自己的」，`merge` 端点回 `501`。**
   2. **在线重型控件渲染服务**：接口形状 = `agent` 模式预渲染进程的 `see_frames` / `bake_card`，再加 `GET stream/<streamKey>/<segment>`。浏览器模式的 `streamPlayer.ts` 照 J3 的思路把取流抽成 `StreamSource` 接口：
@@ -408,20 +408,28 @@ lane 名（`user` / `agent` / `background`，`frame-pipeline.mjs:90`）和模式
 
      分段号就是 G2 的分段号（帧号 = 分段号 × 15 + 样本序号），签名比对由调用方按索引消息里的 `signature` 做（G6）。**本任务只实现本地 HTTP 那一份（R8），浏览器模式下没有实现**——拿不到 `StreamSource` 就走 L4。**这两个名字（`streamKey` 的拼法、索引消息的字段）要和 R8 最终定下来的索引与分段命名对齐**，R8 定了之后回来改这里。
 
-  3. **连接发现 / 信令** `[DRAFT]`（`docs/semantics/architecture/document-service.md`「连接发现」；组件表「连接发现 / 信令」行）：文档服务在 B0 的那条 WebSocket 上预留两条消息——`peer.announce { deviceId, addrs: string[] }`（本端报出自己可被直连的素材服务地址）和 `peer.lookup { deviceId }` → `{ addrs: string[] }`（向文档服务要对端的地址映射）——供本地端与移动端（或其它设备）建立局域网或 P2P 直连；拿到地址后字节直接走对端素材服务的 HTTP API（A1，已允许跨源访问）。**文档服务绝不承担素材传输流量**，不转发、不中继字节。**本任务只留接口：两条消息一律回 `{ error: 'NOT_IMPLEMENTED' }`**；消息名和字段是占位，写代码时做最终 Review。
+  3. **连接发现 / 信令** `[DRAFT]`（`docs/semantics/mechanism/document-service.md`「连接发现」；组件表「连接发现 / 信令」行）：文档服务在 B0 的那条 WebSocket 上预留两条消息——`peer.announce { deviceId, addrs: string[] }`（本端报出自己可被直连的素材服务地址）和 `peer.lookup { deviceId }` → `{ addrs: string[] }`（向文档服务要对端的地址映射）——供本地端与移动端（或其它设备）建立局域网或 P2P 直连；拿到地址后字节直接走对端素材服务的 HTTP API（A1，已允许跨源访问）。**文档服务不承担素材传输流量**，不转发、不中继字节；中继是云端托管服务的职责，属于 `docs/plan/direct-connect-plan.md`（2026-09-26 改定）。**本任务只留接口：两条消息一律回 `{ error: 'NOT_IMPLEMENTED' }`**；消息名和字段是占位，写代码时做最终 Review。
+
+- **L6 低内存档（手机、iPad 浏览器）**（2026-09-26 第二轮加，语义 `product/platforms.md`「面向的平台」；落在主执行计划 C10a）。页面按宿主能力判为低内存档时：
+  1. **看**：只看预渲染小尺寸与素材小尺寸，平时不拉原尺寸（素材原尺寸与预渲染原尺寸都不拉）。
+  2. **改**：只做轻量修改；修改后的重渲由渲染节点做，页面不做。
+  3. **不预渲染、不当渲染节点**：L1 的后台 iframe 不起；不认领任何任务。
+  4. **暂停时不自己追精确画面**：K5 的「暂停后追到活渲」对低内存档不做，停在已有的预渲染小尺寸上，为的是省电与流畅。
+  5. **导出**：允许，逐帧渲染、逐帧写出，慢但能出。导出沿用「只用原尺寸」：导出前拉素材原尺寸，没到齐时照 A1 提示等待上传方、不出片；重卡用已有的预渲染原尺寸，不重渲。
+  6. **L2 的库**：低内存档只存预渲染小尺寸；配额按设备另定（C10a 契约）。
 
 ### L 节验收
 
-纯浏览器（没有本机进程）打开一个含 3 张重 Motion 卡的共享项目：清单命中的卡立刻有快照、`ranges` 就绪；没命中的卡后台 iframe 在 30 秒内预渲染完 10 秒时间轴的锚帧，IndexedDB 里出现对应条目；播放时重卡按拍换快照、主文档 Long Task 为 0；关掉再开同一项目不重新预渲染（`costs` 表里是 `mode=build` 的记录）；`POST merge/...` 回 `501`；用户拖动期间后台 iframe 的预渲染让路（拖动 3 秒内不新增条目）。另加两条断言：**含用户卡 / 图卡的项目在时间轴上给出「该模式暂不支持自定义卡」的提示**，那些片段透明；**素材输入的音频图卡报错「该模式暂不支持素材输入的音频图卡」**。
+纯浏览器（没有本机进程）打开一个含 3 张重 Motion 卡的共享项目：清单命中的卡立刻有快照、`ranges` 就绪；没命中的卡后台 iframe 在 30 秒内预渲染完 10 秒时间轴的锚帧，IndexedDB 里出现对应条目；播放时重卡按拍换快照、主文档 Long Task 为 0；关掉再开同一项目不重新预渲染（`costs` 表里是 `mode=build` 的记录）；`POST merge/...` 回 `501`；用户拖动期间后台 iframe 的预渲染让路（拖动 3 秒内不新增条目）。另加低内存档的断言（L6）：只拉两种小尺寸、不起后台 iframe、暂停不追活渲、逐帧导出用原尺寸。另加两条断言：**含用户卡 / 图卡的项目在时间轴上给出「该模式暂不支持自定义卡」的提示**，那些片段显示「电脑 + 离线」图标和「需要本地 PC 渲染辅助」、不透明（2026-09-26 按语义改，原写「透明」）；**素材输入的音频图卡报错「该模式暂不支持素材输入的音频图卡」**。
 
 ---
 
 ## 约束
 
-- 项目文档真身在文档服务（本地文档服务在本机编辑器进程里，远程文档服务在别处）；页面的 store 永远是副本，所有改动经文档服务。素材的读写一律经素材服务的 API（连本地素材服务时入库也不省；Agent 进程和预渲染进程同样只走 HTTP API，绝不直接读素材目录）；无论怎么部署都不跳过文档服务（`docs/semantics/architecture/document-service.md`）。操作的生成：订阅 `project` 引用变化；每次变更一条操作；diff 两层（用 `changedClips`）；打开项目视为整份替换；`applyingRemote` 抑制回环。**撤销在客户端。**
+- 项目文档真身在文档服务（本地文档服务在本机编辑器进程里，远程文档服务在别处）；页面的 store 永远是副本，所有改动经文档服务。素材的读写一律经素材服务的 API（连本地素材服务时入库也不省；Agent 进程和预渲染进程同样只走 HTTP API，绝不直接读素材目录）；无论怎么部署都不跳过文档服务（`docs/semantics/product/document-service.md`）。操作的生成：订阅 `project` 引用变化；每次变更一条操作；diff 两层（用 `changedClips`）；打开项目视为整份替换；`applyingRemote` 抑制回环。**撤销在客户端。**
 - 渲染永远在「看图的那一方」旁边、按「谁在看」分进程（I）。**服务不渲染**（素材服务只存、只分发，本地远程都一样）；预渲染产物生成后无条件推送到素材服务（A3b），文档服务不存字节。
-- **素材的小分辨率档跟原片帧率、上限 60**（`>60` 的按 60 抽帧）。项目 `fps` 四档（24 / 25 / 30 / 60）可切、切换后全部 `costs` 和死素材作废并重走探针遮罩——这条完整口径在 `docs/archive/restructure_planning/r2-r7-task.md` 的「约束」，本文只用到「小分辨率档跟原片帧率」这一句。新项目默认 fps 沿用 `src/kernel/project.ts:334` 的 30。fps 下拉要加进 `ProjectSettingsDialog.tsx`（今天那里没有 fps 项）。
-- **不改导出像素基线**：导出和像素级检查**只用原片档**，原片没到就是「等待上传方」、不拿小分辨率档代理导出；预渲染、导出、`see_frames` 一律用 `media.url`，只有 live 路的 `VideoTrack` 走 `playbackUrl`。
+- **素材的小分辨率档跟素材原尺寸帧率、上限 60**（`>60` 的按 60 抽帧）。项目 `fps` 四档（24 / 25 / 30 / 60）可切、切换后全部 `costs` 和死素材作废并重走探针遮罩——这条完整口径在 `docs/archive/restructure_planning/r2-r7-task.md` 的「约束」，本文只用到「小分辨率档跟素材原尺寸帧率」这一句。新项目默认 fps 沿用 `src/kernel/project.ts:334` 的 30。fps 下拉要加进 `ProjectSettingsDialog.tsx`（今天那里没有 fps 项）。
+- **不改导出像素基线**：导出和像素级检查**只用素材原尺寸档**，素材原尺寸没到就是「等待上传方」、不拿小分辨率档代理导出；预渲染、导出、`see_frames` 一律用 `media.url`，只有 live 路的 `VideoTrack` 走 `playbackUrl`。
 - **Python 在本仓库只剩感知用途**：`python/promptcut_stt` / `promptcut_shots` / `promptcut_subject` / `promptcut_track` / `promptcut_collect` 五个离线工具包照旧，不动。Agent 在自己的环境里对 `see_frames` 拿到的图跑自定义分析代码属于 Agent 自己的工具箱，不在本仓库、不在本任务内。
 - **交互设计不在本任务范围**（现行语义：`docs/semantics/user-workflow.md` 的 SKILL 与后台运行、`docs/semantics/workflow/editing.md` 的界面风格；悬浮窗里迷你时间轴、「Agent 修改预览窗口」这些细节语义文件里还没有，只在已归档的 `docs/archive/user_pinned_goal.md`「交互设计」1～3，已归档，仅作历史参考），另开任务书；本任务只保证不堵路：桌面端 Agent 用自己的识别码走同一条 B3 通知 / 收件箱路，两侧菜单里按识别码展示；悬浮窗展开后的「Agent 修改预览窗口」就是 AI 菜单的操作预览（I4(b2) 的 `OpDetailPreview.tsx` 和插队的 GIF）；本任务不改任何样式文件、不新增与圆角 / Fluent 深色 / 青蓝酱紫主题冲突的固定配色。
 - 顺序见文首的分步表。
@@ -434,7 +442,7 @@ lane 名（`user` / `agent` / `background`，`frame-pipeline.mjs:90`）和模式
 
 - **混合部署**：文档服务连远程、素材服务连本地（或反过来）时，上面的编辑、入库、推送、B3 通知同样可用；文档服务那条连接上只有小消息，素材字节和预渲染产物一概不经文档服务。
 
-- **A1（第 2 步部分已落地；「第 5 步后」「第 6 步后」的条目未做）**：mtime 不同 `entry.key` 相同；导入 4 GB 视频主服务响应 ≤ 100 ms；`.procp` 去重且**只含原片**；`/@media/<64 位 hex>` 正确 contentType 并支持 Range；导入后 `project.media[].url` 无 `blob:`。第 5 步后：上传中断网再恢复，`GET media/<hash>/chunks` 报出已收分片、**只补缺的分片**、`POST media/<hash>/complete` 校验通过后 `complete` 才为真，校验不符回 409；局域网里另一台设备跨源访问本机素材服务成功；Agent 进程和预渲染进程读素材只经 HTTP API。第 6 步后：导入的素材在后台上传期间时间轴可继续编辑、主线程无长任务；另一台机器打开同一项目，素材层先透明、拉完自动出现；断网导入再联网，补传完成后素材服务对小版、原片两个哈希的 `GET media/<hash>/chunks` **分别**报 `complete: true`，项目文档和 `.proc` 里都没有任何同步状态字段；导入两小时 4 GB 素材，**小分辨率版先于原片到达另一台机器**（且上传队列是逐个素材、同一素材先小后大），它到达后素材层出现、再换到原片时 `currentTime` 不跳，原片到达前导出提示「等待上传方」；页面每 2 秒向当前连接的素材服务轮询 `GET media/<hash>/chunks`，`complete` 翻真后下一次轮询内换档；原片是浏览器放不了的编码（`canPlayType` 回空或首帧试放失败，设备本地缓存记为放不了）时有小版就预览一直停在小分辨率版、没有小版就回退到原片，导出仍用原片，项目文档和 `.proc` 里没有任何可播性字段；连本地素材服务时同样生成小版、同样经本地素材服务入库；连远程素材服务时本机缓存已落盘但远程还没 `complete` 的哈希不换档。
+- **A1（第 2 步部分已落地；「第 5 步后」「第 6 步后」的条目未做）**：mtime 不同 `entry.key` 相同；导入 4 GB 视频主服务响应 ≤ 100 ms；`.procp` 去重且**只含素材原尺寸**；`/@media/<64 位 hex>` 正确 contentType 并支持 Range；导入后 `project.media[].url` 无 `blob:`。第 5 步后：上传中断网再恢复，`GET media/<hash>/chunks` 报出已收分片、**只补缺的分片**、`POST media/<hash>/complete` 校验通过后 `complete` 才为真，校验不符回 409；局域网里另一台设备跨源访问本机素材服务成功；Agent 进程和预渲染进程读素材只经 HTTP API。第 6 步后：导入的素材在后台上传期间时间轴可继续编辑、主线程无长任务；另一台机器打开同一项目，素材层先透明、拉完自动出现；断网导入再联网，补传完成后素材服务对素材小尺寸、素材原尺寸两个哈希的 `GET media/<hash>/chunks` **分别**报 `complete: true`，项目文档和 `.proc` 里都没有任何同步状态字段；导入两小时 4 GB 素材，**小分辨率版先于素材原尺寸到达另一台机器**（且上传队列是逐个素材、同一素材先小后大），它到达后素材层出现、再换到素材原尺寸时 `currentTime` 不跳，素材原尺寸到达前导出提示「等待上传方」；页面每 2 秒向当前连接的素材服务轮询 `GET media/<hash>/chunks`，`complete` 翻真后下一次轮询内换档；素材原尺寸是浏览器放不了的编码（`canPlayType` 回空或首帧试放失败，设备本地缓存记为放不了）时有素材小尺寸就预览一直停在小分辨率版、没有素材小尺寸就回退到素材原尺寸，导出仍用素材原尺寸，项目文档和 `.proc` 里没有任何可播性字段；连本地素材服务时同样生成素材小尺寸、同样经本地素材服务入库；连远程素材服务时本机缓存已落盘但远程还没 `complete` 的哈希不换档。
 
 - **A3（键与目录形状已落地）**：共享键对 x / y、不透明度、motion、`clipId` 不敏感，对参数、源码版本、时长、相位、框宽高、画幅、parts、`snapshotCode`、审阅表内容敏感；毛玻璃卡和 `unknown` 卡有本地档快照，且照样推送到素材服务（低优先级）、清单键带 `entry.key`；超上限的那一帧不进就绪索引、不投递，但照样推送、清单标 `oversize`；PNG / MOV / 轨道流生成后都出现在素材服务里（`px/<hash>`）、`render-manifest` 可查；B 机（或同一局域网里的另一端）首次打开 A 机预渲染过的项目不起历史推进即显示 `independent` 卡（清单命中 → 块下载 → 落盘走 `snapshot-store` 的写入函数 → `index.json` 与磁盘一致 → C3 判就绪）；连本地素材服务时同样入库（推到本地素材服务）。
 
@@ -454,7 +462,7 @@ lane 名（`user` / `agent` / `background`，`frame-pipeline.mjs:90`）和模式
 - iPad APP、手机 APP 的原生壳（iOS / Android）；手机竖屏布局。
 - 字体随包分发。
 - Agent 的云端渲染池。
-- 素材服务转码（云端和本机实例都不转，小分辨率版一律由导入方客户端在本机转）；桌面版给「只有原片」的云端素材补转小版（记在 `docs/plan/future_planning.md` 第 1 条，以后再做）；在页面里用 WebCodecs 转码。
+- 素材服务转码（云端和本机实例都不转，小分辨率版一律由导入方客户端在本机转）；桌面版给「只有素材原尺寸」的云端素材补转素材小尺寸（记在 `docs/plan/future_planning.md` 第 1 条，以后再做）；在页面里用 WebCodecs 转码。
 - 单流时间分层做素材的渐进补全（H.264 没有；VP9 / AV1 的 temporal layer 只能经 WebCodecs 用、`<video>` 不认）。本任务的渐进就是两档换档。
 - 整件 `PUT media/<hash>`（上传一律分片）。
 - 素材字节或预渲染产物走文档服务的 WebSocket（大件一律素材服务，B0）；文档服务转发或中继素材字节（连接发现 / 信令只交换地址）。
@@ -465,7 +473,7 @@ lane 名（`user` / `agent` / `background`，`frame-pipeline.mjs:90`）和模式
 - Agent 云端环境把素材服务整个镜像下来（只按需拉项目引用的哈希，I3）。
 - 本机 Agent 改打 Agent 云端的预渲染；在 `user` 模式的进程上跑 Agent 查询（`user` 模式不建 `agent` lane，有本机 Agent 就用 `full`）。
 - Agent 进程或预渲染进程（任一模式、拆不拆分）绕过素材服务的 HTTP API 直接读写素材目录，或拷贝一份素材目录（I3）。
-- 把用户点开的 AI 菜单操作预览路由进 Agent 专用 Chrome（`docs/semantics/architecture/rendering.md`「AI 栏的操作预览可以插队」，I4(c) 的例外）。
+- 把用户点开的 AI 菜单操作预览路由进 Agent 专用 Chrome（`docs/semantics/product/rendering.md`「AI 栏的操作预览可以插队」，I4(c) 的例外）。
 - `get_layout` 走可见舞台；写工具返回 `contentBox`（协议在 r2-r7 的 D4）。
 - 逐帧换 HTML 快照的播放方式——**在线浏览器模式的 L4 是唯一例外**（没有流）；拖动中按 C4 换快照、播放中流缺分段时贴最近快照不算。
 - 在线浏览器模式做流、做合并分发、做在线重型控件渲染服务、做素材转码（L5 只留接口）。
@@ -494,7 +502,7 @@ lane 名（`user` / `agent` / `background`，`frame-pipeline.mjs:90`）和模式
 原来这里是动工前要定的 6 个问题，2026-09-24 由用户定下（同一天定的还有路线 B 本身：素材服务与文档服务位置无关、预渲染产物一律入库，见总规则）；第 7～10 条是同一天用户定的最后一轮口径。正文已按这些结论改好，这里只留结论。
 
 1. **A3b 和 A5 挪到第 6 步。** 快照块（payload）和清单（index）在同一步生成和推送，A5 的按卡推送优先级和推送队列一起做；第 6 步的验收要端到端验证「换一台机器 / 换一端打开，不用重新预渲染」。第 5 步只做「建立素材服务空壳与底层 API 契约」这一件基建：服务进程或插件骨架、分片上传与拉取、`chunks` 对账接口、按哈希寻址；A1 的两档、上传队列、换档随之在第 6 步。
-2. **可播性（playability）只是设备本地缓存，绝不写入项目状态。** 能不能播取决于设备（浏览器、系统解码器、硬件），不是项目级事实：不写进项目文档、不进 `.proc`，`MediaAsset` 不加 `playable` 字段——否则低配设备的解码失败会污染高配设备的状态。探法照旧是 `canPlayType` 加首帧试放，结论按内容哈希存在这台设备本地（`src/render/playability.ts`），换档判据 `playbackUrl` 只读这份本机缓存。探不出或放不了时，有小版就用小版；没有小版时强制回退到原片。原片保持原编码的读法以 `docs/semantics/architecture/asset-storage.md`「两档素材」为准（独立审查 T1a 第 4 条，用户 2026-09-24 裁定，取代原先「写 `media[i].playable`」的口径）。
+2. **可播性（playability）只是设备本地缓存，绝不写入项目状态。** 能不能播取决于设备（浏览器、系统解码器、硬件），不是项目级事实：不写进项目文档、不进 `.proc`，`MediaAsset` 不加 `playable` 字段——否则低配设备的解码失败会污染高配设备的状态。探法照旧是 `canPlayType` 加首帧试放，结论按内容哈希存在这台设备本地（`src/render/playability.ts`），换档判据 `playbackUrl` 只读这份本机缓存。探不出或放不了时，有素材小尺寸就用素材小尺寸；没有素材小尺寸时强制回退到素材原尺寸。素材原尺寸保持原编码的读法以 `docs/semantics/product/asset-service.md`「两档素材」为准（独立审查 T1a 第 4 条，用户 2026-09-24 裁定，取代原先「写 `media[i].playable`」的口径）。
 3. **`uploaded` 字段废除。** 不进项目文档，也不进 `.proc`，哪种部署都没有。它是同步状态，唯一事实来源是当前连接的素材服务（本机缓存不作判据），客户端经 `GET media/<hash>/chunks` 对账（A1 的换档判据与 `playbackUrl`——在线浏览器模式同样适用——以及 F1 的 GC 口径都已改成这样）。
 4. **`streamKey` 命名挂起。** `StreamSource` 的 `streamKey` 拼法、索引消息字段、A3b 里轨道流 `render-manifest` 的键，等 R8 定了再回来对齐。
 5. **L5 在线渲染服务挂起。** 只保留 `StreamSource` 抽象接口；鉴权、并发、计费等落地时再定。

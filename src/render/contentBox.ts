@@ -204,7 +204,7 @@ export function measureContentBox(stage: HTMLElement, canvasCache?: Map<HTMLCanv
   };
   for (const el of stage.querySelectorAll<HTMLElement>("*")) {
     if (el.tagName === "SCRIPT" || el.tagName === "STYLE") continue;
-    // 占位平面不是卡片画的东西(rendering.md「兜底顺序」):量它就把占位框当成了墨迹框
+    // 占位平面不是卡片画的东西(product/rendering.md「兜底顺序」):量它就把占位框当成了墨迹框
     if (isPlaceholderNode(el)) continue;
     // svg 内部的子元素不用逐个量,整棵 svg 一个框就够
     if (el.namespaceURI === "http://www.w3.org/2000/svg" && el.tagName !== "svg") continue;
@@ -367,7 +367,7 @@ export function measureInk(stage: HTMLElement, box: Box | null): Ink | null {
 
 /**
  * 和 `measureContentBox` 同一套量法,但结果换算到**包裹层自己的局部坐标**(未经旋转 / 缩放的布局像素),
- * 给占位平面摆框用(rendering.md「兜底顺序」:占位符在实体框上,继承包裹层的旋转和缩放)。
+ * 给占位平面摆框用(product/rendering.md「兜底顺序」:占位符在实体框上,继承包裹层的旋转和缩放)。
  *
  * `measureContentBox` 按「屏幕矩形 ÷ 缩放」换算,包裹层带旋转时那是外接矩形,摆回局部坐标就歪了。
  * 这里先还原成屏幕上的外接矩形,再按包裹层的旋转角和等比缩放反解:中心点逆旋转、宽高解一个 2×2 方程

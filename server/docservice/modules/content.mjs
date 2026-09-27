@@ -6,7 +6,7 @@
  * - `content.watch`：订阅 `content:<kind>` 频道，之后每次写入都收到 `content.changed`。
  *
  * `card-source` 这一类按键发 `rev`（就是 `cardRev`）：每次 `put` 加一，内容相同也加。其它 `kind` 没有 `rev`。
- * 同一键再写时后写的赢（语义 `docs/semantics/architecture/document-service.md`「冲突」），
+ * 同一键再写时后写的赢（语义 `docs/semantics/product/document-service.md`「冲突」），
  * 覆盖方看 `content.stored`，被覆盖方看频道里 `content.changed.previousActor`，两边都知道。
  *
  * 写入者身份取建连时的 principal，消息里自报的 `userId` 一律不认。

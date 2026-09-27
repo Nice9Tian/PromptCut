@@ -54,7 +54,7 @@ export function apiPath(url) {
  * 后面可带 `/chunks`、`/complete` 或分片号。`<ns>` 只认 `media`、`snap`、`px` 三个命名空间
  * (`docs/plan/artifact-transfer-contract.md` 第 1 节),别的都不算。
  *
- * 素材服务按语义必须允许跨源(`docs/semantics/architecture/asset-storage.md`「职责」),
+ * 素材服务按语义必须允许跨源(`docs/semantics/mechanism/asset-service.md`「职责」),
  * 所以 `/api/**` 的同源守卫对它豁免 —— **只豁免严格匹配这一条正则的路径**,判的是 apiPath
  * 归一化之后的形式,素材服务自己的中间件也用同一个函数认路由。两边认的是同一批路径,
  * 守卫放过去的请求一定落到素材服务手里,不会漏到别的 `/api` 处理函数上。

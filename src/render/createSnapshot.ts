@@ -89,7 +89,7 @@ const nowMs = (): number => (window.__pcRealNow ?? Date.now)();
 /**
  * 第一步:复制 DOM。返回 live 与克隆体一一对应的两个数组。
  *
- * **占位平面不进快照**(rendering.md「兜底顺序」:导出、预渲染、Agent 看到的画面永远没有它)。
+ * **占位平面不进快照**(product/rendering.md「兜底顺序」:导出、预渲染、Agent 看到的画面永远没有它)。
  * 它只挂在预览舞台上,但舞台页的 `__pcCreateSnapshot` 同样走这里 —— 克隆体里整棵摘掉,
  * 两个数组里对应的项一起剔除(保持一一对应),样式内联、栅格化、序列化都看不到它。
  */

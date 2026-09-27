@@ -18,12 +18,28 @@ const BAKERY_FILES = ['server/bakery/chrome.mjs', 'server/bakery/bake.mjs', 'ser
   'server/bakery/media.mjs', 'server/bakery/ffmpeg.mjs', 'server/bakery/export.mjs', 'server/bakery/audio-mix.mjs'];
 const CAPTURE_FILES = [...BAKERY_FILES, 'server/bakery/capture-frame.mjs', 'server/bakery/capture-snapshot.mjs', 'server/bakery/frame-media.mjs',
   'server/bakery/frame-ready.mjs', 'server/bakery/png-integrity.mjs'];
+/**
+ * 源码按文本哈希,换行先统一成 LF:仓库是 `text=auto`,Windows 检出是 CRLF、Linux 检出是 LF,
+ * 同一个提交在两种机器上不能算出两个代码版本(另一台机器上的独立渲染主机按代码版本分池、按快照键核对任务)。
+ */
+const textOf = (file) => fs.readFileSync(file, 'utf8').replace(/\r\n/g, '\n');
 const hashFiles = (hash, root, files) => {
   for (const file of files) {
     hash.update(file);
-    try { hash.update(fs.readFileSync(path.join(root, file))); } catch { hash.update('missing'); }
+    try { hash.update(textOf(path.join(root, file))); } catch { hash.update('missing'); }
   }
 };
+/**
+ * 用户卡目录里除了装载入口 `index.ts` 以外的一切(卡片文件、它们用到的文件、归属表 `_scopes.json`)
+ * 不进全局代码版本(C6.6 c66-host-cards):用户卡是项目的内容,不是渲染器的版本。两台节点多一张、少一张
+ * 或改过一张用户卡,仍是同一个代码版本、同一个池;用到用户卡(或改动层里改过的卡)的任务在
+ * `requires.cardSources` 里另标它要的那张卡的代码身份,节点手里有这份代码才认领(`server/card-code.mjs`)。
+ * 改动层(`card-overrides.mjs`)本来就不在这里:它在数据目录里,不在 `src/` 下。
+ */
+export function isUserCardSource(rel) {
+  const r = String(rel).replaceAll('\\', '/');
+  return r.startsWith('src/cards/user/') && r !== 'src/cards/user/index.ts';
+}
 export function invalidateFrameCode(root) { fingerprints.delete(root); captures.delete(root); snapshots.delete(root); }
 export function frameCode(root) {
   if (fingerprints.has(root)) return fingerprints.get(root);
@@ -31,8 +47,10 @@ export function frameCode(root) {
   function walk(dir) {
     for (const item of fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name < b.name ? -1 : 1)) {
       const file = path.join(dir, item.name);
+      const rel = path.relative(root, file).replaceAll('\\', '/');
+      if (isUserCardSource(rel)) continue;
       if (item.isDirectory()) walk(file);
-      else if (/\.(tsx?|mjs|css|json)$/.test(item.name)) { hash.update(path.relative(root, file).replaceAll('\\', '/')); hash.update(fs.readFileSync(file)); }
+      else if (/\.(tsx?|mjs|css|json)$/.test(item.name)) { hash.update(rel); hash.update(textOf(file)); }
     }
   }
   walk(path.join(root, 'src'));
@@ -63,7 +81,7 @@ export function captureCode(root) {
  * **这里只在快照代码自己拆文件时跟着加** —— 集合要恰好覆盖决定快照内容的那些文件。于是:
  *   - 改生成快照的代码 ⇒ 指纹变 ⇒ 共享键变 ⇒ 旧快照自然失效,不会被错误复用;
  *   - 不改 ⇒ 指纹不变 ⇒ 旧快照跨机器照常复用,搬家本身不作废任何快照。
- * 反例:直接用 `frameCode`(它哈希整个 src/ 加 frame-pipeline.mjs)的话,任何一次
+ * 反例:直接用 `frameCode`(它哈希整个 src/(用户卡除外)加 frame-pipeline.mjs)的话,任何一次
  * 无关的卡片改动都会把全世界的共享快照冲掉,共享档就没有意义了。
  *
  * 缺文件按 `hashFiles` 的老规矩记 `'missing'`:某个模块还没落地时指纹也是确定的。

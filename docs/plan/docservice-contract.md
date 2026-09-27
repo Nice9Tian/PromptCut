@@ -4,7 +4,7 @@
 
 - 计划：`docs/plan/Master-Execution-Plan.md` C6 一节 C6.3 行
 - 设计：`docs/plan/cloud-task.md` 组件表的「文档服务」「内容库」两行、D 节；独立审查 `docs/reports/REVIEW-c6-agy.md` 第 4 节子阶段 3、第 5 节第 4 条
-- 语义：`docs/semantics/architecture/document-service.md`「职责」「版本与身份」
+- 语义：`docs/semantics/product/document-service.md`「职责」「版本与身份」
 - 现有接口：`render-queue-contract.md` G 节（通用核心与模块）、H 节（频道与背压）
 
 ## 0. 范围与一处刻意的留白

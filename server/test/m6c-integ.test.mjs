@@ -1,7 +1,7 @@
 /**
  * M6c 集成时的裁定(`docs/plan/m6c-contract.md`「集成时的裁定(2026-09-26)」)补的单测:
  *   MI-yield-queue  播放让路期间,`'queue'` lane 的任务照常借预渲染间、做完为止;只有后台那一趟让路
- *                   (语义 platforms.md「手里在做的那一批做完为止」)
+ *                   (语义 product/platforms.md「手里在做的那一批做完为止」)
  *   MI-no-isIdle    执行器不再有 `isIdle`(PC 节点改用 `queue-idle.mjs` 的门槛,独立渲染主机本来就不用)
  * 跑:node --test server/test/m6c-integ.test.mjs
  *

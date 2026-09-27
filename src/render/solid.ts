@@ -176,7 +176,7 @@ export function hitTest(root: SceneRoot, x: number, y: number): StageHit | null 
       if (clipId) return { clipId, ...toStage(el.getBoundingClientRect(), origin) };
     }
     /*
-     * 占位符(rendering.md「兜底顺序」):点中它就算点中它所在的那张卡 —— 那张卡此刻正在加载,
+     * 占位符(product/rendering.md「兜底顺序」):点中它就算点中它所在的那张卡 —— 那张卡此刻正在加载,
      * 用户点的就是它;框取占位组件根元素的框。托着它的透明槽位(铺满包裹层)不算,照常穿过去。
      */
     const ph = el.closest(`[${PLACEHOLDER_ATTR}]`);

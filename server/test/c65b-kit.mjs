@@ -9,7 +9,7 @@
  * `src/store/docsync.ts` 的 `DocSync`、`c65-kit.mjs`、`auth-kit.mjs`）照现状用。
  *
  * 设计稿没写死的模块路径、函数名、字段名全部集中在本文件，集成时对账只改这里。
- * 每一处假设用「假设 B<n>」标出，报告 `docs/reports/AGENT-c65-tests2.md` 按同样的编号列出。
+ * 每一处假设用「假设 B<n>」标出，报告 `docs/archive/agent-reports/AGENT-c65-tests2.md` 按同样的编号列出。
  * 对多个候选名做探测的地方，探测顺序就是测试方猜的可能性顺序，对不上时加一个候选名即可。
  *
  *   B1  Agent 服务端的项目副本（设计稿第 5 节）：一个可在 Node 下直接驱动的工厂，候选模块

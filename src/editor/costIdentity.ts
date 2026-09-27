@@ -12,9 +12,9 @@
  */
 import type { Project } from "../kernel/project";
 import { projectCardGraph } from "../kernel/cardGraph.mjs";
-import { allCards, getCard, userCardSources } from "../kernel/registry";
+import { allCards, cardsRegistryGen, getCard, userCardSources } from "../kernel/registry";
 import { cardSourceVersion } from "../render/cardSourceVersion.mjs";
-import { builtinCardSourceFiles } from "../render/cardSourceFiles.mjs";
+import { builtinCardSourceFiles, cardSourceFilesVersion } from "../render/cardSourceFiles.mjs";
 import { clipCostIndex } from "../render/pipelinePlan.mjs";
 
 export interface ClipIdentity {
@@ -28,9 +28,20 @@ export interface ClipIdentity {
 
 const EMPTY: ClipIdentity = { identityKeys: {}, frameModes: {}, capabilities: new Map() };
 
+/*
+ * 源码版本表本身也记忆化(C6.6 集成,T4):它只取决于注册表里的卡、定制卡源码、卡片源码表,和项目无关。
+ * 以前每次项目变动(挪片段、改参数)都整张重算 —— 每张内置卡都要拿正则扫一遍全部源码文件找入口,
+ * 一次 40 ms 上下,加上别的就成了 > 50 ms 的长任务。三样任何一样换了(注册表重装、定制卡源码换了、
+ * 源码表热更新)就重算。
+ */
+let versionsMemo: { reg: number; files: number; user: unknown; out: Record<string, string> } | null = null;
+
 /** 源码版本，照 `ExportView.tsx` 的 `__pcCardPlan` 那份算法（user 卡带 dependencies） */
 export function sourceVersionsOf(): Record<string, string> {
   const user = userCardSources();
+  const reg = cardsRegistryGen();
+  const files = cardSourceFilesVersion();
+  if (versionsMemo && versionsMemo.reg === reg && versionsMemo.files === files && versionsMemo.user === user) return versionsMemo.out;
   const out: Record<string, string> = {};
   for (const card of allCards()) {
     const file = user.fileOf[card.id];
@@ -38,6 +49,7 @@ export function sourceVersionsOf(): Record<string, string> {
       ? `user:${cardSourceVersion(card, { ...builtinCardSourceFiles, ...user.dependencies }, `/src/cards/user/${file}.tsx`)}`
       : `builtin:${cardSourceVersion(card, builtinCardSourceFiles)}`;
   }
+  versionsMemo = { reg, files, user, out };
   return out;
 }
 
@@ -73,4 +85,5 @@ export function clipIdentityOf(project: Project | null): ClipIdentity {
 export function resetClipIdentityCache(): void {
   cachedProject = null;
   cached = EMPTY;
+  versionsMemo = null;
 }

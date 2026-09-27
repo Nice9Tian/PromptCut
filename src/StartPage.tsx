@@ -21,6 +21,8 @@ import { SttInstallProgress } from "./editor/right/SttInstallProgress";
 import { VoiceSettingsDialog } from "./voice/VoiceSettingsDialog";
 import { openVoiceSettings, useVoiceSettingsState } from "./ai/voiceSettingsStore";
 import { getVoiceConfig } from "./ai/voice";
+import { ONLINE } from "./online/mode";
+import { JoinForm } from "./editor/sync/JoinForm";
 
 /** 字节数写成人看的样子 */
 function humanSize(bytes: number): string {
@@ -49,8 +51,10 @@ function humanDate(iso: string): string {
 /**
  * 开始页面。进软件先看到这里,选了才进编辑器。
  *
- * 三块:开始创作、拓展功能、本地草稿。没有左侧栏,也没有那排圆形入口 ——
- * 这一版只把「新建 / 打开草稿 / 看拓展装没装」这三件事摆出来。
+ * 四块:开始创作、加入别人的项目、拓展功能、本地草稿。没有左侧栏,也没有那排圆形入口。
+ *
+ * 在线浏览器模式(C10a 契约第 2 节「首屏」):只有「加入别人的项目」—— 在线页面里新建项目、本机草稿、拓展功能
+ * 都要编辑器进程(`/api/*`),C10a 不提供(新建与草稿随 C10 其余)。
  */
 export function StartPage(props: { onEnterEditor: () => void }): JSX.Element {
   const { onEnterEditor } = props;
@@ -72,7 +76,7 @@ export function StartPage(props: { onEnterEditor: () => void }): JSX.Element {
     }
   }, []);
 
-  useEffect(() => { void refresh(); }, [refresh]);
+  useEffect(() => { if (!ONLINE) void refresh(); }, [refresh]);
 
   const startNew = () => {
     newProject("未命名");
@@ -121,6 +125,25 @@ export function StartPage(props: { onEnterEditor: () => void }): JSX.Element {
     }
   };
 
+  const joinSection = (
+    <section className="sp-section" data-pc="start-join">
+      <h2 className="sp-section-title">加入别人的项目</h2>
+      <JoinForm onJoined={onEnterEditor} />
+    </section>
+  );
+
+  if (ONLINE) {
+    return (
+      <div className="sp">
+        <header className="sp-bar">
+          <Logo size={22} />
+          <span className="sp-bar-spacer" />
+        </header>
+        <main className="sp-main">{joinSection}</main>
+      </div>
+    );
+  }
+
   return (
     <div className="sp">
       <header className="sp-bar">
@@ -138,6 +161,8 @@ export function StartPage(props: { onEnterEditor: () => void }): JSX.Element {
           <span className="sp-hero-text">开始创作</span>
           <span className="sp-hero-sub">新建一个空项目</span>
         </button>
+
+        {joinSection}
 
         <section className="sp-section">
           <h2 className="sp-section-title">拓展功能</h2>

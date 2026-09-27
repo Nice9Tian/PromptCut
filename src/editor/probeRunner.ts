@@ -58,9 +58,9 @@ import { pageEnvironment } from "./pageEnvironment.mjs";
 import type { CardCostRecord } from "../render/cardCostKey.mjs";
 import type { RenderAborted, RenderReply, SetTimeAborted, SetTimeReply, SnapshotCost, StageEvent, StageRpcClient } from "../render/stageRpc";
 import { mirrorKey } from "../render/dataMirror";
-import { clipIdentityOf } from "./costIdentity";
+import { clipIdentityOf, resetClipIdentityCache } from "./costIdentity";
 import { mergePlanCosts, setPlanCosts } from "./planDispatch";
-import { onStageEvent, pushProject, stageCapabilities, whenStageReady } from "./stageBridge";
+import { backStage, onStageEvent, pushProject, stageCapabilities, whenStageReady } from "./stageBridge";
 import { MAX_PROJECT_RESENDS, currentBackJob, renderAbortAction, runBackJob } from "./stageJobs";
 
 /* ------------------------------------------------------------------ 进度 */
@@ -123,12 +123,24 @@ const RUN_MODE: "dev" | "build" = import.meta.env.DEV ? "dev" : "build";
  * 本机身份（J4）。`lowMemory` / `offscreenGl` 取**舞台握手报上来的那一份** ——
  * 离线探针拿的也是它，主文档自己再探一遍会是第二份实现、会走偏。
  */
+/*
+ * GPU 渲染器串一个页面会话里不变:读一次记下(C6.6 集成,T4)。以前每排一轮都新建一个 WebGL 上下文去读、再还回去,
+ * 编辑时每改一次项目就多出几毫秒到十几毫秒。读成 `unknown`(上下文没建成)的不记,下次再读。
+ */
+let gpuRenderer: string | null = null;
+function gpuRendererOnce(): string {
+  if (gpuRenderer) return gpuRenderer;
+  const r = readGpuRenderer(document);
+  if (r !== "unknown") gpuRenderer = r;
+  return r;
+}
+
 function deviceStringOf(tuning: PipelineTuning): string {
   const caps = stageCapabilities("back");
   const lowMemory = !!caps?.lowMemory;
   return costDeviceString({
     ua: navigator.userAgent,
-    renderer: readGpuRenderer(document),
+    renderer: gpuRendererOnce(),
     lowMemory,
     offscreenGl: !!caps?.offscreenGl,
     // 生效路线(M2):项目选项优先,否则按低内存档。切了路线等于换机器,旧记录不命中、重探针
@@ -315,6 +327,7 @@ async function probeCardOnce(
 ): Promise<Attempt> {
   /** 中止回包按 E0 的五条规矩翻译成「这张卡怎么办」 */
   const onAbort = (r: RenderAborted): Attempt | null => {
+    if (r.reason === "role" && (stage !== backStage() || signal.aborted)) return { kind: "retry" };
     switch (renderAbortAction(r.reason, currentBackJob())) {
       case "ignore": return null;            // 'timeout'：长片段的正常路径，不是失败
       case "resend": return { kind: "retry" };
@@ -355,7 +368,11 @@ async function probeCardOnce(
     for (const n of frames) {
       if (stale() || signal.aborted) return { kind: "retry" };
       const r = await stage.setTime(n / job.fps, { probe: true });
-      if (isSetTimeAborted(r)) return { kind: "fail" };   // 只会是 'role'：角色闸门，重发也还是同一个角色
+      if (isSetTimeAborted(r)) {
+        // K5 可能在 setTime 往返期间互换前后台舞台；旧客户端此时成了 front。
+        // 只在舞台已经换人或被高优先级工作抢占时，从新 back 重试。
+        return stage !== backStage() || signal.aborted ? { kind: "retry" } : { kind: "fail" };
+      }
       // stepMs 是舞台在等那一次真 rAF **之前**取的，所以已经不含垂直同步（3.8 末条）
       steps.push(Number(r.stepMs) || 0);
       inline.push(Number(r.snapshot?.inlineMs) || 0);
@@ -437,12 +454,18 @@ async function probeCardOnce(
 let currentProject: Project | null = null;
 /** 项目变了就 +1：正在跑的那一轮据此收摊、按新项目重排 */
 let generation = 0;
+let settledGeneration = 0;
 let looping = false;
 /** 「打开项目的第一轮」过去了没有 —— 之后的补测不再挡界面 */
 let firstPassDone = false;
 
 const hasCardClip = (p: Project | null): boolean =>
   !!p?.tracks?.some((tr) => tr.clips?.some((c) => !!c.cardId || !!c.nodeId));
+
+/** The preload for this project can use the measured costs. */
+export function probeSettledFor(project: Project): boolean {
+  return currentProject === project && settledGeneration === generation;
+}
 
 /**
  * 项目变了叫一次（`ProbeGate` 在 effect 里叫）。同一个对象引用不重排 ——
@@ -461,6 +484,19 @@ export function syncProbeRun(project: Project | null): void {
   currentProject = project;
   generation++;
   if (!looping) void runLoop();
+}
+
+/**
+ * 卡片代码换了而项目没变(C6.6 第 5 节:同步装上了别人改的卡):`cardCostKey` 里的源码版本跟着变,
+ * 但 `syncProbeRun` 按项目引用早退、`clipIdentityOf` 按项目引用记忆化,都看不出来;
+ * 卡片模块的热更新虽然沿导入链重跑了本模块,实测并不会重排(C6.6 探针)。
+ * 这里清掉身份缓存、按当前项目重排一轮,身份键变了、没有记录的卡照现有规则补测(分派表在这一轮开头跟着重算)。
+ * 由 `ProbeGate.tsx` 在收到页面事件 `pc-cards-synced` 时调(`src/editor/sync/cardSync.ts` 发)。
+ */
+export function requeueProbeRun(project: Project | null): void {
+  resetClipIdentityCache();
+  currentProject = null;
+  syncProbeRun(project);
 }
 
 async function runLoop(): Promise<void> {
@@ -505,11 +541,18 @@ async function runLoop(): Promise<void> {
       // 空项目 / 还没加载完时那一轮不算，否则真项目到位时遮罩就不出现了。
       if (hasCardClip(project)) firstPassDone = true;
       setProgress({ running: false, card: null });
-      if (gen === generation) break;
+      if (gen === generation) {
+        settledGeneration = gen;
+        // A zero-job pass never changes the visible progress, but preload still
+        // needs to hear that its project is ready.
+        setProgress({ running: false });
+        break;
+      }
     }
   } catch (err) {
     // 探针挂了不能把编辑器挡在遮罩后面：记一条诊断，放行
     console.error("[probeRunner] 探针这一轮出错", err);
+    settledGeneration = generation;
     setProgress({ running: false, card: null });
     firstPassDone = true;
   } finally {
@@ -549,6 +592,7 @@ async function probeCard(job: ProbeJob, tuning: PipelineTuning, device: string, 
 export function resetProbeRunner(): void {
   currentProject = null;
   generation = 0;
+  settledGeneration = 0;
   firstPassDone = false;
   snapshotEndpointMissing = false;
   progress = IDLE;

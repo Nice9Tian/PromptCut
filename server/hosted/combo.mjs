@@ -183,7 +183,7 @@ function scanSpace(dir) {
  * @param {string} [options.host]  两个端口都绑它，缺省 `0.0.0.0`
  * @param {string} [options.clusterToken]  已校验过格式的集群令牌；不给则管理接口只认本机回环
  * @param {string} [options.assetPublicUrl]  登记给成员的素材服务地址；不给就按实际端口拼 `http://127.0.0.1:<port>/api/asset`
- * @param {string} [options.docPublicUrl]  只作记录与诊断
+ * @param {string} [options.docPublicUrl]  记录与诊断；另取它的源拼邀请链接（C10a，`publicOriginOf`）
  * @param {boolean} [options.trustLoopback]  素材服务与管理接口是否把本机回环当自己人（缺省 true）；
  *   false 时回环来的请求也要票据 / 令牌（测试开关：本机也能验票据读写）
  * @param {{ deviceId: string, deviceName: string }} [options.localDevice]
@@ -276,6 +276,7 @@ export async function startHostedCombo({
     store,
     clusterToken,
     localDevice,
+    linkOrigin: publicOriginOf(docPublicUrl),
     now,
     log: say,
     ...(limits ? { limits } : {}),
@@ -403,6 +404,22 @@ export async function startHostedCombo({
       await service.close();
     },
   };
+}
+
+/**
+ * 文档服务公网地址 → 邀请链接用的源（C10a 契约第 5 节「链接」）：`ws:` 换 `http:`、`wss:` 换 `https:`，只留源。
+ * `wss://8-219-80-16.sslip.io/hosted/` → `https://8-219-80-16.sslip.io`。没给或解析不了回 null。
+ */
+export function publicOriginOf(docPublicUrl) {
+  if (typeof docPublicUrl !== 'string' || docPublicUrl.trim() === '') return null;
+  try {
+    const u = new URL(docPublicUrl.trim());
+    const protocol = u.protocol === 'wss:' ? 'https:' : u.protocol === 'ws:' ? 'http:' : u.protocol;
+    if (protocol !== 'http:' && protocol !== 'https:') return null;
+    return `${protocol}//${u.host}`;
+  } catch {
+    return null;
+  }
 }
 
 /**

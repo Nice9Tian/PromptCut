@@ -1,0 +1,534 @@
+/**
+ * 页面这一侧的两档素材(`docs/plan/c66-design.md` 第 4 节;任务书 `docs/plan/cloud-task.md` A1「换档判据」):
+ *
+ * - **轮询**:每 2 秒向**当前连接的素材服务**问 `GET media/<hash>/chunks`,把报 `complete` 的哈希集合交给
+ *   换档判据(`src/render/mediaTier.ts` 的 `chooseTier`):舞台经 `setLocalHashes` 下发、主文档的声音层直接读。
+ *   只问还没到顶档的那一档:原片到齐了这份素材就不再问;哈希不可变,问到齐的不会再变回去。
+ *   连本地素材服务时问的是本机 `/api/asset`;进了共享项目问的是那个项目的远程素材服务(带只读素材票据)——
+ *   本机缓存落没落盘不作判据(`docs/semantics/mechanism/asset-service.md`「同步状态只问素材服务」)。
+ * - **远程素材服务**:进入共享项目时由 `syncManager` 设(`connectSharedAssets`),同时告诉本机编辑器进程
+ *   (`POST /api/media/remote`),读路由才会按需拉取、预取队列才会动。票据按时续签后再推一次。
+ * - **上传目标**:进入共享项目时把远程素材服务基址和一张 `rw` 素材票据交给编辑器进程的上传队列
+ *   (`POST /api/media/upload-queue/target`),剩 1/3 有效期时续签;离开时推 `{ base: null }`(设计稿第 9 节第 1 条)。
+ * - **预取**:项目的素材表变了(打开项目、导入)且连着远程素材服务时,把 `prefetchOrder` 的清单交给编辑器进程。
+ * - **导出前的拦截**:`exportGate` 问当前素材服务,时间轴上用到的原片哪些还没 `complete`。
+ *
+ * 集合里带一个标记(`TIERS_KNOWN_LOCAL` / `TIERS_KNOWN_REMOTE`):「问过了、一个都没到齐」和「还没问过」分得开。
+ */
+import { useSyncExternalStore } from "react";
+import type { Project } from "../../kernel/project";
+import { getState, subscribe } from "../../store/project";
+import {
+  TIERS_KNOWN_LOCAL, TIERS_KNOWN_REMOTE, missingOriginals, originalHashOf, prefetchOrder, smallHashOf, type MissingOriginal,
+} from "../../render/mediaTier";
+
+/** 轮询间隔(A1:每 2 秒) */
+export const POLL_MS = 2000;
+/** 同一轮里同时在飞的 `chunks` 请求数 */
+const POLL_CONCURRENCY = 4;
+/** 素材票据的有效期(`server/auth/protocol.mjs` 的 `TICKET_TTL.asset`);剩 1/3 时续签 */
+const ASSET_TICKET_TTL_MS = 15 * 60_000;
+
+export interface RemoteAssets {
+  /** 远程素材服务的 API 基址,形如 `http://<ip>:<port>/api/asset` */
+  base: string;
+  /** 取一张只读素材票据;取不到给 null(那就不带,由素材服务回 401) */
+  ticket?: () => Promise<string | null>;
+}
+
+const LOCAL_BASE = "/api/asset";
+
+/**
+ * 在线浏览器模式(c10a 第 2 节「在线页面不请求 `/api/*`」):没有本机编辑器进程,也没有本地素材服务。
+ * 由 `Preview` 在挂上时按 `ONLINE` 设(本文件不读编译期常量,单测里没有它)。设了之后:
+ * 不再告诉编辑器进程远程素材服务 / 上传目标 / 预取清单,也不问本地素材服务(还没连上远程素材服务时不轮询)。
+ */
+let noEditorProcess = false;
+export function setNoEditorProcess(on: boolean): void {
+  noEditorProcess = !!on;
+}
+
+/**
+ * 当前共享项目的文档服务连接(`connectSharedAssets` 交进来的那一条)。c10a 第 9 节:在线页面按内容库的清单
+ * 拉预渲染小尺寸,要在这条连接上 `content.get`(`src/render/snapshotSource.ts` 的在线实现经 `docRequest` 用它)。
+ */
+let docLink: LinkLike | null = null;
+export function docRequest(msg: Record<string, unknown>, timeoutMs?: number): Promise<Record<string, unknown>> {
+  if (!docLink) return Promise.reject(new Error("没连上文档服务"));
+  return docLink.request(msg, timeoutMs);
+}
+export function hasDocLink(): boolean {
+  return !!docLink;
+}
+
+let remote: RemoteAssets | null = null;
+/** 当前素材服务上到齐的哈希(换了素材服务就清空) */
+let complete = new Set<string>();
+let known = false;
+let snapshot: readonly string[] = [];
+let serviceGen = 0;
+const listeners = new Set<() => void>();
+
+function publish() {
+  const next = known ? [remote ? TIERS_KNOWN_REMOTE : TIERS_KNOWN_LOCAL, ...[...complete].sort()] : [];
+  if (next.length === snapshot.length && next.every((h, i) => h === snapshot[i])) return;
+  snapshot = next;
+  for (const l of [...listeners]) l();
+}
+
+/** 换档判据用的集合(带标记);还没问过是空数组 */
+export function tierHashes(): readonly string[] {
+  return snapshot;
+}
+
+export function subscribeTierHashes(cb: () => void): () => void {
+  listeners.add(cb);
+  return () => { listeners.delete(cb); };
+}
+
+export function useTierHashes(): readonly string[] {
+  return useSyncExternalStore(subscribeTierHashes, tierHashes, tierHashes);
+}
+
+/** 当前连的是不是远程素材服务(基址);本地给 null */
+export function remoteAssetBase(): string | null {
+  return remote?.base ?? null;
+}
+
+/** 当前远程素材服务的只读票据(在线页面给 `<video>` 的查询串、取预渲染小尺寸用;c10a 第 8、9 节);本地给 null */
+export async function remoteAssetTicket(): Promise<string | null> {
+  if (!remote?.ticket) return null;
+  try { return (await remote.ticket()) || null; } catch { return null; }
+}
+
+const remoteListeners = new Set<() => void>();
+/** 远程素材服务换了(进入 / 离开共享项目)时通知;回退订 */
+export function subscribeRemoteAssets(cb: () => void): () => void {
+  remoteListeners.add(cb);
+  return () => { remoteListeners.delete(cb); };
+}
+
+/** 带当前素材票据的请求头(`Authorization: Bearer`);本地素材服务给空对象 */
+export async function assetAuthHeaders(): Promise<Record<string, string>> {
+  return authHeaders();
+}
+
+async function authHeaders(): Promise<Record<string, string>> {
+  if (!remote?.ticket) return {};
+  try {
+    const t = await remote.ticket();
+    return t ? { Authorization: `Bearer ${t}` } : {};
+  } catch {
+    return {};
+  }
+}
+
+let pushedTicket: string | null = null;
+/** 告诉本机编辑器进程(按需拉取与预取靠它);在线浏览器模式没有本机编辑器,失败就算了 */
+async function pushRemoteToEditor(): Promise<void> {
+  if (noEditorProcess) return;
+  try {
+    if (!remote) {
+      pushedTicket = null;
+      await fetch("/api/media/remote", { method: "DELETE" });
+      return;
+    }
+    const auth = await authHeaders();
+    const ticket = auth.Authorization ? auth.Authorization.slice("Bearer ".length) : null;
+    pushedTicket = ticket;
+    await fetch("/api/media/remote", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ base: remote.base, ticket }) });
+  } catch { /* 没有本机编辑器 */ }
+}
+
+/**
+ * 设当前连接的远程素材服务;null = 回到本地素材服务。换了就清空集合、立刻重问一轮、重排预取。
+ */
+export function setRemoteAssets(next: RemoteAssets | null): void {
+  const base = next ? next.base.replace(/\/+$/, "") : null;
+  if ((remote?.base ?? null) === base) {
+    if (next && remote) remote.ticket = next.ticket;
+    return;
+  }
+  remote = next ? { ...next, base: base! } : null;
+  serviceGen++;
+  complete = new Set();
+  known = false;
+  publish();
+  lastPrefetchKey = "";
+  for (const l of [...remoteListeners]) { try { l(); } catch { /* 一个订阅者坏了不影响别人 */ } }
+  void pushRemoteToEditor().then(() => { kick(); });
+}
+
+/**
+ * 问当前素材服务:这些哈希里哪些 `complete`。问不到的算没到齐。
+ */
+export async function askComplete(hashes: readonly string[]): Promise<Set<string>> {
+  const base = remote?.base ?? LOCAL_BASE;
+  const headers = await authHeaders();
+  const out = new Set<string>();
+  const queue = [...new Set(hashes)];
+  const worker = async () => {
+    for (let h = queue.shift(); h; h = queue.shift()) {
+      try {
+        const r = await fetch(`${base}/media/${h}/chunks`, { headers, cache: "no-store" });
+        if (!r.ok) continue;
+        const body = await r.json();
+        if (body?.complete === true) out.add(h);
+      } catch { /* 算没到齐 */ }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(POLL_CONCURRENCY, queue.length) }, worker));
+  return out;
+}
+
+/** 这一轮要问的哈希:原片还没到齐的素材问原片,小版还没到齐的也问小版;全到顶档的不问 */
+export function hashesToAsk(project: Pick<Project, "media">, done: ReadonlySet<string>): string[] {
+  const ask: string[] = [];
+  for (const m of project.media ?? []) {
+    const o = originalHashOf(m);
+    if (!o || done.has(o)) continue;
+    ask.push(o);
+    const s = smallHashOf(m);
+    if (s && !done.has(s)) ask.push(s);
+  }
+  return [...new Set(ask)];
+}
+
+/** 跑一轮轮询(导出前、切换素材服务后也直接调) */
+export async function pollOnce(project: Pick<Project, "media"> = getState().project): Promise<void> {
+  // 在线页面没有本地素材服务:还没连上远程素材服务就不问
+  if (noEditorProcess && !remote) return;
+  const gen = serviceGen;
+  const ask = hashesToAsk(project, complete);
+  const got = ask.length ? await askComplete(ask) : new Set<string>();
+  if (gen !== serviceGen) return; // 这一轮问的是换掉之前的素材服务
+  for (const h of got) complete.add(h);
+  known = true;
+  publish();
+}
+
+/* ---------------- 预取 ---------------- */
+
+let lastPrefetchKey = "";
+async function maybePrefetch(project: Project): Promise<void> {
+  if (!remote || noEditorProcess) return;
+  const items = prefetchOrder(project);
+  const key = `${remote.base}|${items.map((i) => i.hash).join(",")}`;
+  if (key === lastPrefetchKey) return;
+  lastPrefetchKey = key;
+  try {
+    await fetch("/api/media/prefetch", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ items }) });
+  } catch { /* 没有本机编辑器 */ }
+}
+
+/* ---------------- 轮询循环 ---------------- */
+
+let timer: ReturnType<typeof setTimeout> | null = null;
+let running = 0;
+let polling = false;
+
+function kick() {
+  if (!running) return;
+  if (timer) clearTimeout(timer);
+  timer = null;
+  void loop();
+}
+
+async function loop() {
+  if (polling) return;
+  polling = true;
+  try {
+    const project = getState().project;
+    // 票据续签过:编辑器进程那份也换掉(它拿这张去按需拉取)
+    if (remote?.ticket) {
+      const auth = await authHeaders();
+      const t = auth.Authorization ? auth.Authorization.slice("Bearer ".length) : null;
+      if (t && t !== pushedTicket) await pushRemoteToEditor();
+    }
+    await pollOnce(project);
+    await maybePrefetch(project);
+  } finally {
+    polling = false;
+    if (running && !timer) timer = setTimeout(() => { timer = null; void loop(); }, POLL_MS);
+  }
+}
+
+/**
+ * 开始轮询(预览挂上时调),回停止函数。素材表换了(打开别的项目、导入)立刻问一轮,不等 2 秒。
+ * 可以重复调,引用计数。
+ */
+export function startAssetTiers(): () => void {
+  running++;
+  let lastMedia = getState().project.media;
+  const unsub = subscribe(() => {
+    const media = getState().project.media;
+    if (media === lastMedia) return;
+    lastMedia = media;
+    kick();
+  });
+  if (running === 1) {
+    // 页面重载过:编辑器进程那边可能还留着上一个页面设的远程素材服务,按本页面的状态对齐一次
+    void pushRemoteToEditor();
+    kick();
+  }
+  return () => {
+    unsub();
+    running = Math.max(0, running - 1);
+    if (!running && timer) { clearTimeout(timer); timer = null; }
+  };
+}
+
+/* ---------------- 导出前的拦截 ---------------- */
+
+/**
+ * 导出前问一遍当前素材服务:时间轴上用到的原片哪些还没 `complete`(A1「导出只用原片」「等待上传方」)。
+ * 空数组 = 可以导出。
+ */
+export async function exportGate(project: Project): Promise<MissingOriginal[]> {
+  const first = missingOriginals(project, []);
+  if (!first.length) return [];
+  const got = await askComplete(first.map((m) => m.hash));
+  for (const h of got) complete.add(h);
+  return missingOriginals(project, got);
+}
+
+/** 不发请求的快速判断:按轮询到的集合。还没问过给 null(不知道) */
+export function exportGateNow(project: Project): MissingOriginal[] | null {
+  if (!known) return null;
+  return missingOriginals(project, complete);
+}
+
+/* ---------------- 共享项目 ---------------- */
+
+interface LinkLike {
+  request(msg: Record<string, unknown>, timeoutMs?: number): Promise<Record<string, unknown>>;
+}
+
+/** 按 `auth.ticket` 取只读素材票据,剩 1/3 有效期时换新的 */
+export function assetTicketSource(link: LinkLike, now: () => number = Date.now): () => Promise<string | null> {
+  let cur: { ticket: string; exp: number } | null = null;
+  let inflight: Promise<string | null> | null = null;
+  return async () => {
+    if (cur && cur.exp - now() > ASSET_TICKET_TTL_MS / 3) return cur.ticket;
+    inflight ??= link.request({ type: "auth.ticket", kind: "asset", access: "r" }).then((r) => {
+      if (r.type === "auth.ticket.ok" && typeof r.ticket === "string") {
+        cur = { ticket: r.ticket, exp: Number(r.exp) || now() + ASSET_TICKET_TTL_MS };
+        return cur.ticket;
+      }
+      return null;
+    }, () => null).finally(() => { inflight = null; });
+    return inflight;
+  };
+}
+
+/**
+ * 从文档服务的服务地址登记(`service.watch`,kind `asset`)里挑这个共享项目的素材服务:
+ * 优先和文档服务同一台主机的那一个;指向本页面自己的(本机就是主机)不算远程。
+ *
+ * 在线浏览器模式(`online`)不排除同主机的:在线页面、文档服务、素材服务都在托管端的同一个源下
+ * (nginx 的 `/editor`、`/hosted/`、`/media/`,c10a 契约第 2 节),同源的素材服务正是远端那一个,
+ * 本页面自己并没有素材服务。
+ */
+export function pickAssetEndpoint(endpoints: unknown, docBase: string, selfHost: string, { online = false }: { online?: boolean } = {}): string | null {
+  const urls: string[] = [];
+  for (const e of Array.isArray(endpoints) ? endpoints : []) {
+    const rec = e as { kind?: unknown; urls?: unknown };
+    if (rec?.kind !== undefined && rec.kind !== "asset") continue;
+    for (const u of Array.isArray(rec?.urls) ? rec.urls : []) if (typeof u === "string") urls.push(u);
+  }
+  let docHost = "";
+  try { docHost = new URL(docBase).hostname; } catch { /* 留空 */ }
+  const ok = urls.filter((u) => { try { return online || new URL(u).host !== selfHost; } catch { return false; } });
+  return ok.find((u) => { try { return new URL(u).hostname === docHost; } catch { return false; } }) ?? ok[0] ?? null;
+}
+
+/**
+ * 进入共享项目后调:从服务地址登记里挑素材服务、设成当前远程素材服务。挑不到(本机就是主机、
+ * 或主机没登记素材服务)就留在本地素材服务。回挑中的基址。
+ * `online`:在线浏览器模式(调用方按 `mode.ts` 的 `ONLINE` 给;本模块会被 Node 单测载入,不静态引 `mode.ts`)。
+ */
+export async function connectSharedAssets(link: LinkLike, docBase: string, { online = false }: { online?: boolean } = {}): Promise<string | null> {
+  let base: string | null = null;
+  docLink = link;
+  try {
+    const r = await link.request({ type: "service.watch", kinds: ["asset"] });
+    base = pickAssetEndpoint(r.endpoints, docBase, typeof location === "undefined" ? "" : location.host, { online });
+  } catch { /* 取不到登记:留在本地 */ }
+  setRemoteAssets(base ? { base, ticket: assetTicketSource(link) } : null);
+  stopUploadTarget?.();
+  stopUploadTarget = startUploadTarget(link, base);
+  return base;
+}
+
+/** 离开共享项目:回到本地素材服务 */
+export function disconnectSharedAssets(): void {
+  docLink = null;
+  setRemoteAssets(null);
+  stopUploadTarget?.();
+  stopUploadTarget = startUploadTarget(null, null);
+}
+
+/* ---------------- 上传目标(设计稿第 9 节第 1 条) ---------------- */
+
+/**
+ * 编辑器进程的上传队列(`server/upload-queue.mjs`)要知道「当前连接的素材服务」和一张能写的票据,
+ * 它自己没有项目凭证,由页面给:进入共享项目时 `POST /api/media/upload-queue/target { base, ticket }`
+ * (`rw` 素材票据,经本页面的文档服务连接签),票据剩 1/3 有效期时续签再推一次;离开共享项目、
+ * 或本机就是主机(挑不到远程素材服务)时推 `{ base: null }`,队列回到「本机素材服务 = 空操作」。
+ * 没有本机编辑器(在线浏览器模式)时推送失败就算了。
+ */
+let stopUploadTarget: (() => void) | null = null;
+
+export interface UploadTargetDeps {
+  post?: (body: { base: string | null; ticket?: string | null }) => Promise<void>;
+  now?: () => number;
+  setTimer?: (fn: () => void, ms: number) => unknown;
+  clearTimer?: (t: unknown) => void;
+}
+
+async function postUploadTarget(body: { base: string | null; ticket?: string | null }): Promise<void> {
+  if (noEditorProcess) return;
+  try {
+    await fetch("/api/media/upload-queue/target", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  } catch { /* 没有本机编辑器 */ }
+}
+
+/** 签不到票据时隔多久再试 */
+const UPLOAD_TICKET_RETRY_MS = 30_000;
+
+/**
+ * 把上传目标交给编辑器进程并按时续签,回停止函数(停止时推 `{ base: null }`)。
+ * `link` / `base` 为 null:只推一次 `{ base: null }`。
+ */
+export function startUploadTarget(link: LinkLike | null, base: string | null, deps: UploadTargetDeps = {}): () => void {
+  const post = deps.post ?? postUploadTarget;
+  const now = deps.now ?? Date.now;
+  const setTimer = deps.setTimer ?? ((fn: () => void, ms: number) => {
+    const t = setTimeout(fn, ms);
+    (t as { unref?: () => void }).unref?.(); // Node(单测)里不拖住进程;浏览器没有 unref
+    return t;
+  });
+  const clearTimer = deps.clearTimer ?? ((t: unknown) => clearTimeout(t as ReturnType<typeof setTimeout>));
+  let stopped = false;
+  let timer: unknown = null;
+  setUploadTargetReady(null);
+  if (!link || !base) {
+    void post({ base: null });
+    return () => { /* 本来就是本机 */ };
+  }
+  const renew = async () => {
+    timer = null;
+    if (stopped) return;
+    const issued = now();
+    let ticket: string | null = null;
+    let exp = issued + ASSET_TICKET_TTL_MS;
+    try {
+      const r = await link.request({ type: "auth.ticket", kind: "asset", access: "rw" });
+      if (r.type === "auth.ticket.ok" && typeof r.ticket === "string") {
+        ticket = r.ticket;
+        exp = Number(r.exp) || exp;
+      }
+    } catch { /* 下面按签不到处理 */ }
+    if (stopped) return;
+    await post({ base, ticket });
+    if (stopped) return;
+    if (ticket) setUploadTargetReady(base);
+    // 剩 1/3 有效期时续:从签发起过了 2/3 的寿命
+    const delay = ticket ? Math.max(1000, Math.floor((exp - issued) * 2 / 3)) : UPLOAD_TICKET_RETRY_MS;
+    timer = setTimer(() => { void renew(); }, delay);
+  };
+  void renew();
+  return () => {
+    if (stopped) return;
+    stopped = true;
+    if (timer !== null) clearTimer(timer);
+    timer = null;
+    setUploadTargetReady(null);
+    void post({ base: null });
+  };
+}
+
+/* ---------------- 开启「放云端」时把项目里已有的素材交给上传队列(C10a 集成返工) ---------------- */
+
+/** 编辑器进程已经拿到带 rw 票据的远程上传目标:那个基址;没有是 null */
+let uploadTargetReadyBase: string | null = null;
+const uploadTargetWaiters = new Set<(base: string) => void>();
+
+function setUploadTargetReady(base: string | null): void {
+  uploadTargetReadyBase = base;
+  if (!base) return;
+  for (const w of [...uploadTargetWaiters]) w(base);
+}
+
+/** 等编辑器进程拿到带 rw 票据的远程上传目标(`startUploadTarget` 第一次带票据推成功);超时回 null */
+export function whenUploadTargetReady(timeoutMs = 30_000): Promise<string | null> {
+  if (uploadTargetReadyBase) return Promise.resolve(uploadTargetReadyBase);
+  return new Promise((resolve) => {
+    const done = (base: string | null) => { uploadTargetWaiters.delete(onReady); clearTimeout(t); resolve(base); };
+    const onReady = (base: string) => done(base);
+    const t = setTimeout(() => done(null), timeoutMs);
+    (t as { unref?: () => void }).unref?.();
+    uploadTargetWaiters.add(onReady);
+  });
+}
+
+type ExistingMedia = { name?: string; hash?: string; tiers?: { original?: string; small?: string } | null };
+
+/**
+ * 项目里已有的素材 → 按哈希入队的请求体:一个素材一项,视频两档(`tiers.small`、`tiers.original`),
+ * 图片、音频只有原片一档;没有哈希的(迁移期老素材、还在入库的)不算。同一原片只列一次。
+ */
+export function existingMediaItems(media: readonly ExistingMedia[]): { name: string; original: string; small?: string }[] {
+  const seen = new Set<string>();
+  const out: { name: string; original: string; small?: string }[] = [];
+  for (const m of media) {
+    const original = String(m?.tiers?.original || m?.hash || "").toLowerCase();
+    if (!/^[0-9a-f]{64}$/.test(original) || seen.has(original)) continue;
+    seen.add(original);
+    const small = String(m?.tiers?.small || "").toLowerCase();
+    out.push({ name: String(m?.name ?? ""), original, ...(/^[0-9a-f]{64}$/.test(small) && small !== original ? { small } : {}) });
+  }
+  return out;
+}
+
+export interface EnqueueExistingResult { queued: string[]; missing: string[]; local?: boolean }
+
+/**
+ * 开启多用户协作「放云端」之后调:等编辑器进程拿到远程上传目标与 rw 票据,再把项目里已有的素材按哈希交给
+ * 上传队列(`deps.post` 发 `POST /api/media/upload-queue/enqueue`,只收本地内容库里有的,缺的回 `missing`)。
+ * 之后照 C6.6 队列规则逐个素材、先小后大地传。没有本机编辑器(在线浏览器模式)、等不到目标时回 null。
+ * `post` 由调用方给(`collab.ts` 按编译期的 `ONLINE` 给,在线构建里连同接口地址一起被剪掉)。
+ */
+export async function enqueueExistingMedia(
+  media: readonly ExistingMedia[],
+  deps: { post: ((body: unknown) => Promise<EnqueueExistingResult | null>) | null; timeoutMs?: number },
+): Promise<EnqueueExistingResult | null> {
+  if (!deps.post) return null;
+  const items = existingMediaItems(media);
+  if (!items.length) return { queued: [], missing: [] };
+  if (!(await whenUploadTargetReady(deps.timeoutMs ?? 30_000))) return null;
+  return deps.post({ items });
+}
+
+/** 探针与单测的观察口 */
+export function assetTiersDebug() {
+  return { remote: remote?.base ?? null, known, complete: [...complete].sort(), snapshot: [...snapshot] };
+}
+
+/** 单测用 */
+export function resetAssetTiersForTest(): void {
+  uploadTargetReadyBase = null;
+  uploadTargetWaiters.clear();
+  remote = null;
+  complete = new Set();
+  known = false;
+  snapshot = [];
+  serviceGen++;
+  lastPrefetchKey = "";
+  listeners.clear();
+  stopUploadTarget?.();
+  stopUploadTarget = null;
+  noEditorProcess = false;
+  docLink = null;
+  remoteListeners.clear();
+}

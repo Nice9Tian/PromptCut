@@ -1,4 +1,5 @@
 import type { ChatMessage } from "./types";
+import { onlinePage } from "../online/pageFlag";
 
 export interface ChatSummary {
   id: string;
@@ -29,6 +30,7 @@ export function newChatId(): string {
 
 /** 获取会话概要列表（按更新时间倒序） */
 export async function listChats(q?: string): Promise<ChatSummary[]> {
+  if (onlinePage()) return []; // 在线浏览器模式没有本机对话记录
   try {
     const url = q ? `/api/chats/list?q=${encodeURIComponent(q)}` : "/api/chats/list";
     const res = await fetch(url);

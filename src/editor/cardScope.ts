@@ -1,4 +1,5 @@
 import type { CardDef } from "../kernel/types";
+import { onlinePage } from "../online/pageFlag.ts"; // 带扩展名:本模块的单测不装解析钩子,直接 import
 
 /**
  * 卡片库对 Agent 暴露多少 —— 三档,以及每一档能不能关掉。
@@ -90,6 +91,8 @@ let scopeCache: Record<string, ScopeEntry> | null = null;
 
 export async function loadScopes(force = false): Promise<Record<string, ScopeEntry>> {
   if (scopeCache && !force) return scopeCache;
+  // 在线浏览器模式没有编辑器进程,也就没有定制卡的归属表(用户卡在在线页面一期不渲染,契约第 1 节)
+  if (onlinePage()) return (scopeCache = {});
   try {
     const r = await fetch("/api/cards/scopes").then((x) => x.json());
     scopeCache = r?.ok ? (r.scopes ?? {}) : {};
@@ -111,6 +114,7 @@ export function invalidateScopes(): void {
  * 而 isCardVisible 恰恰是整个「定制卡跨项目泄露」的唯一修复点,最该有测试的就是它。
  */
 export async function setCardScope(cardId: string, scope: CardScope, projectId?: string | null): Promise<void> {
+  if (onlinePage()) return;
   await fetch("/api/cards/scopes", {
     method: "POST",
     headers: { "Content-Type": "application/json" },

@@ -2,7 +2,7 @@
 
 状态：**设计已审核通过**（2026-09-24），Q1～Q4 已定，见第 8 节。实现排在前置条件之后，另行下发指令再动工。
 
-语义依据：`docs/semantics/architecture/document-service.md`「渲染任务队列」、`platforms.md`「渲染节点」、`rendering.md`「重管线：预渲染」、`asset-storage.md`「预渲染的产物」。本文与语义冲突时以语义为准。
+语义依据：`docs/semantics/product/document-service.md`「渲染任务队列」、`product/platforms.md`「渲染节点」、`product/rendering.md`「重管线：预渲染」、`product/asset-service.md`「预渲染的产物」。本文与语义冲突时以语义为准。
 
 前置条件：文档服务本身还没实现（`docs/plan/cloud-task.md` 第 6 步 `vite-plugin-docservice.ts`，WebSocket、`projectRev`）。预渲染产物入素材服务（A3b）也还没做。本方案建在这两者之上，不单独落地。
 

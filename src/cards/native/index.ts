@@ -1,4 +1,4 @@
-import type { CardDef, Clip } from "../../kernel/types";
+import type { CardDef } from "../../kernel/types";
 import { odometer } from "./odometer";
 import { blurText } from "./blur-text";
 import { ringMetric } from "./ring-metric";
@@ -28,10 +28,4 @@ export const nativeCards: CardDef<any>[] = [
   ...timelineCards,
 ];
 
-export const nativeDemoClips: Clip[] = [
-  { id: "n1", cardId: "odometer", start: 10, end: 12, params: {} },
-  { id: "n2", cardId: "blur-text", start: 12, end: 14, params: {} },
-  { id: "n3", cardId: "ring-metric", start: 14, end: 16, params: {} },
-  { id: "n4", cardId: "checklist", start: 16, end: 18, params: {} },
-  { id: "n5", cardId: "step-timeline", start: 18, end: 20, params: {} }
-];
+export { nativeDemoClips } from "../demoClips";

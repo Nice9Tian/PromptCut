@@ -67,6 +67,16 @@ export function createRateLimiter({
       return started;
     },
 
+    /**
+     * 冷却还剩多少毫秒（不在冷却回 0）。C10a 补：邀请码端点与挑战的 429 回包带上秒数，界面照表 A 写
+     * 「请 {秒数} 秒后再试」（`docs/plan/c10a-contract.md` 第 14 节）。只读，不改计数。
+     */
+    retryAfterMs(remote) {
+      const entry = sources.get(keyOf(remote));
+      if (!entry) return 0;
+      return Math.max(0, entry.until - now());
+    },
+
     size: () => sources.size,
   };
 }

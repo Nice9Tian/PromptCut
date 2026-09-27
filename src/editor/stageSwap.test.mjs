@@ -346,3 +346,20 @@ test("播放态:同时只跑一次;空列表不跑", async () => {
   open();
   assert.equal(await first, true);
 });
+
+/* ---------------------------------------------------------------- c10a 第 8 节:低内存档不追活渲 */
+
+test("低内存档:暂停态、播放态的补跑与互换一步都不走(不排后台任务、不抑制、不换)", async () => {
+  host.lowMemory = () => true;
+  plan = segments(["h"]);
+  withRecord("h", { vtOk: false });
+  assert.equal(swap.swapBlockedByLowMemory(), true);
+  assert.equal(await runSettleSwap(1), false);
+  Object.assign(state, { project: project([card("b", 0, 10)]), t: 1, playing: true });
+  withRecord("b", REC_B);
+  assert.equal(await runPlayingSwap(["b"]), false);
+  assert.deepEqual(log, [], "一条 RPC、一个后台任务都没有");
+  assert.equal(front.name, "A");
+  host.lowMemory = () => false;
+  assert.equal(swap.swapBlockedByLowMemory(), false, "普通档照旧");
+});

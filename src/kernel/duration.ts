@@ -1,5 +1,5 @@
 /**
- * 项目总时长的规则(`docs/semantics/architecture/project-model.md`「总时长」):
+ * 项目总时长的规则(`docs/semantics/product/project-model.md`「总时长」):
  * 缺省等于内容末尾,跟着内容走;可以手动缩短(截断),不能拉长到内容末尾之后;
  * 空项目保留原值。
  *

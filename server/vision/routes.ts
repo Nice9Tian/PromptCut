@@ -110,7 +110,7 @@ export function registerPrerenderSide(server: ViteDevServer, root: string) {
        * 一个镜头一张 JPEG:从 start 到 end 等间隔抽 grid 帧(4 = 2×2,9 = 3×3),每格 480 宽,
        * ffmpeg 一趟做完(fps 滤镜取帧 + tile 拼格),不落中间帧。media 是项目里那条素材记录;
        * 字节只经素材服务的 HTTP 取(ffmpeg-frames.ts 的 mediaSourceOf),本进程不读本地内容库的目录
-       * (docs/semantics/architecture/asset-storage.md「职责」)。
+       * (docs/semantics/product/asset-service.md「职责」)。
        * 按素材内容哈希、区间、格数缓存在 out/sheets 下,翻页回看不重抽:按哈希寻址的内容不可变,哈希一样画面就一样。
        * 没有哈希的素材(迁移期按文件名存的、老 .proc 的绝对路径)同一个地址可能换过内容,不进缓存、每次现抽。
        */

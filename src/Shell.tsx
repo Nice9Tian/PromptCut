@@ -7,6 +7,7 @@ import { openProcPath } from "./editor/io/openPath";
 import { installHeadlessHooks } from "./headless";
 import { WindowTitleBar } from "./ui/WindowTitleBar";
 import { useSkin } from "./skins/useSkin";
+import { ONLINE } from "./online/mode";
 
 /**
  * 开始页和编辑器之间的门。
@@ -19,12 +20,18 @@ import { useSkin } from "./skins/useSkin";
  *   `?draft=<id>`      打开某份草稿再进编辑器。无头实例用它开任务目录里的 project.proc;
  *   `?open=<路径>`     按磁盘路径打开一份 .proc(桌面壳双击文件时带过来),会先复制一份再读;
  *   `?headless=1`      装上 window.__pcHeadless,给 scripts/headless.mjs 的自动写回用。
+ *
+ * 在线浏览器模式(C10a 契约第 2 节)不认这几个参数:它们都要编辑器进程(草稿、磁盘路径、无头实例);
+ * 打开就是开始页,从「加入别人的项目」进编辑器。
  */
 export function Shell(): JSX.Element {
   // Keep the shared --ui-* palette mounted on the start page as well as the editor.
   // The title bar is outside both routes, so its colors stay synchronized.
   useSkin();
   const [inEditor, setInEditor] = useState(() => {
+    // 在线页面打开就是开始页;只有在线模式的**开发服务**(探针 lowmem-online-probe 用)认 `?editor`,
+    // 在线构建(vite build --mode online)里 DEV 为假,这一支被剪掉
+    if (ONLINE) return !!import.meta.env.DEV && new URLSearchParams(location.search).has("editor");
     try {
       return new URLSearchParams(location.search).has("editor");
     } catch {
@@ -42,6 +49,7 @@ export function Shell(): JSX.Element {
 
   // 启动参数只看一次
   useEffect(() => {
+    if (ONLINE) return;
     let q: URLSearchParams;
     try {
       q = new URLSearchParams(location.search);

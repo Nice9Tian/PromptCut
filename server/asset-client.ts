@@ -1,6 +1,6 @@
 /**
  * 素材服务的客户端一侧:Agent 进程和预渲染进程**只经素材服务的 HTTP API** 取素材
- * (`docs/semantics/architecture/asset-storage.md`「职责」第三条),不读本地内容库的目录。
+ * (`docs/semantics/product/asset-service.md`「职责」第三条),不读本地内容库的目录。
  * 契约在 `asset-service.ts` 文件头。
  *
  * 这个模块**不 import vite-plugin-media / asset-service**:用它的一方只认地址,不认目录。

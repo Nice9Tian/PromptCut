@@ -3,7 +3,7 @@
  * 跑:node --experimental-test-module-mocks --test server/test/env-fingerprint-keys.test.mjs
  *
  * 只照契约 E 节(以及它引用的 B.1、B.4)、设计 `distributed-prerender-queue.md` 2.1 和
- * 语义 `rendering.md`「不同环境的结果不混用」写,不看实现。断言以契约为准。
+ * 语义 `mechanism/rendering.md`「不同环境的结果不混用」写,不看实现。断言以契约为准。
  *
  * 约定:
  *   - `resultKeyOf` 从 `server/render-node/fingerprint.mjs` 引(契约 E.3 要求生产代码也从那里引);

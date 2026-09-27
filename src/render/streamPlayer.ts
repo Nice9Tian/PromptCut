@@ -207,7 +207,7 @@ export function streamPlanesFor(
 }
 
 /**
- * 解码器预算(兜底顺序第 1、2 步的预算,rendering.md「兜底顺序」):这一拍**真的会建解码器**的那几条平面。
+ * 解码器预算(兜底顺序第 1、2 步的预算,mechanism/rendering.md「兜底顺序」):这一拍**真的会建解码器**的那几条平面。
  *
  * 只收有流键的(没有键的只占位、不解码),按传进来的顺序取前 `DECODER_BUDGET` 条 ——
  * 舞台的 `sync()` 和父页的 `streamPlanesAt` 用同一个函数,两边对「谁超预算」的判断一致:

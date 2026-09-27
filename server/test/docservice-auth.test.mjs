@@ -4,7 +4,7 @@
  * M6a（`docs/plan/auth-contract.md` 第 5、10 节）改过：集群令牌从数据面退出，带对令牌的连接是管理身份
  * `{ userId: 'admin', tenantId: null, scope: 'admin' }`，只能用管理接口（服务地址登记），发数据面消息回 `forbidden`；
  * 独立模式的失败即关条件由「非回环没设令牌」改为「非回环而凭证存储不可用」。改动逐条列在
- * `docs/reports/AGENT-m6-auth.md`「改过的旧测试」。
+ * `docs/archive/agent-reports/AGENT-m6-auth.md`「改过的旧测试」。
  * 跑：node --test server/test/docservice-auth.test.mjs
  *
  * 只照契约写，不看实现。令牌在测试里现生成（32 字节 base64url），不写死。

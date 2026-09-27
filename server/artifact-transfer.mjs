@@ -32,6 +32,9 @@ import { snapshotTier } from './snapshot-tier.mjs';
 import { MovFrameStore, signatureMatches } from './frame-mov.mjs';
 import { readRenderRecord } from './png-record.mjs';
 import { resultKeyOf } from './render-node/fingerprint.mjs';
+import { SMALL_SUFFIX } from './bakery/small-bitmap.mjs';
+import { kindOfTier, wireSnapshotKey } from './ready-index.mjs';
+import { QUEUE_DEFAULTS } from './render-queue/constants.mjs';
 
 /** 清单的版本(契约第 3 节的 `v`) */
 export const RESULT_VERSION = 1;
@@ -145,6 +148,8 @@ export function manifestMatches(body, ref) {
   if (body.range?.from !== ref?.range?.from || body.range?.to !== ref?.range?.to) return false;
   if (body.kind === 'snapshot') {
     if (!Array.isArray(body.frames)) return false;
+    // c10a 第 9 节:带 `small` 的,它的形状同 `frames`
+    if (body.small !== undefined && !(Array.isArray(body.small) && body.small.every(item => Array.isArray(item) && Number.isInteger(item[0]) && KEY_RE.test(String(item[1]))))) return false;
     return body.frames.every(item => Array.isArray(item) && Number.isInteger(item[0]) && KEY_RE.test(String(item[1])));
   }
   if (body.kind === 'stream') {
@@ -153,6 +158,56 @@ export function manifestMatches(body, ref) {
     return true;
   }
   return false;
+}
+
+/** 清单里预渲染小尺寸那一张表(`[[localFrame, hash, bytes], …]`);没有或形状不对回空数组 */
+export function smallFramesOf(result) {
+  if (!Array.isArray(result?.small)) return [];
+  return result.small.filter(item => Array.isArray(item) && Number.isInteger(item[0]) && KEY_RE.test(String(item[1])));
+}
+
+/* ======================================================================== *
+ * c10a 第 9 节:给在线页面的层表(内容库 `snapshot-manifest` 类的一条,键 `layers:<项目 id>`)
+ * ======================================================================== */
+
+/** 层表在内容库里的键前缀。它和段清单同类(`snapshot-manifest`),键里带冒号前缀,不会和 `<resultKey>:<from>-<to>` 撞 */
+export const LAYER_MAP_PREFIX = 'layers:';
+export const LAYER_MAP_VERSION = 1;
+export const layerMapKeyOf = projectId => (typeof projectId === 'string' && projectId ? LAYER_MAP_PREFIX + projectId : null);
+
+/**
+ * 一版 card plan 的层表:在线页面没有预渲染进程,算不出重卡的键(键里有渲染节点的环境指纹、快照代码的哈希),
+ * 由渲染节点按它认下的这一版写出来。每项:
+ *   `{ clipId, kind: 'html' | 'local', key(就绪索引线上的键), tier, resultKey(清单键的前半), dirKey, entryKey, firstFrame, count }`
+ * 段与推送、与队列细任务同一种切法:本地帧 0 起每 `span` 帧一段,最后一段到 `count - 1`,清单键
+ * `<resultKey>:<from>-<to>`。只列在预渲染集合里、产快照的卡(`picked` 由调用方给)。
+ */
+export function layerMapOf(entry, { picked = () => true, fingerprint = null, span = QUEUE_DEFAULTS.SNAPSHOT_SPAN, now = Date.now() } = {}) {
+  const project = entry?.project ?? {};
+  const layers = [];
+  for (const control of entry?.cardPlan ?? []) {
+    if (!control?.clipId || !control.snapshotKey || !picked(control.clipId)) continue;
+    const tier = control.tier || null;
+    const kind = kindOfTier(tier);
+    if (!kind) continue;
+    const key = wireSnapshotKey(tier, entry.key, control.snapshotKey);
+    if (!key) continue;
+    let resultKey = control.snapshotKey;
+    if (tier === 'local') {
+      const fp = control.envFingerprint ?? fingerprint;
+      if (!fp) continue;
+      resultKey = resultKeyOf(`${entry.key}/${control.contentKey ?? control.snapshotKey}`, fp);
+    }
+    const firstFrame = Number(control.sampling?.firstFrame);
+    const count = Number(control.count);
+    if (!Number.isInteger(firstFrame) || !Number.isInteger(count) || count < 1) continue;
+    layers.push({ clipId: control.clipId, kind, key, tier, resultKey, dirKey: control.snapshotKey, entryKey: tier === 'local' ? entry.key : null, firstFrame, count });
+  }
+  return {
+    v: LAYER_MAP_VERSION, kind: 'layer-map', projectId: project.id ?? null, entryKey: entry?.key ?? null,
+    fps: Number(project.fps) || 30, width: Number(project.width) || null, height: Number(project.height) || null,
+    span, at: now, layers,
+  };
 }
 
 /** `[from, to]` 闭区间:first .. last 每 span 一段,最后一段到 last(与 `render-node/split.mjs` 的 `spans` 同一个式子) */
@@ -193,6 +248,9 @@ export async function collectSnapshotResult(pipeline, task, opts = {}) {
   const loc = checkLocation(opts?.location, task?.tier) ?? snapshotLocation(task);
   if (!loc) throw fail(`认不出快照任务的落盘位置:${task?.resultKey}(本地档要 input.entryKey、input.contentKey、requires.envFingerprint)`, { code: 'unknown-location', retryable: false });
   const { from, to } = rangeOf(task);
+  // c10a 第 9 节:这一批的预渲染小尺寸可能还在生成(`frame-pipeline.mjs` 的 `writeSmallSnapshots`),等它落定再列清单 ——
+  // 两档一起推才算这一段做完。这里只是等,不渲染(没有在生成的就立刻往下走)
+  try { await pipeline.whenSmallSettled?.(); } catch { /* 小尺寸失败不挡原尺寸 */ }
   const store = pipeline.snapshots();
   const target = { tier: loc.tier, entryKey: loc.entryKey, key: loc.dirKey };
   const index = await store.snapshotIndex(target);
@@ -208,12 +266,27 @@ export async function collectSnapshotResult(pipeline, task, opts = {}) {
     frames.push([f, hash, buf.length]);
     files.set(hash, file);
   }
+  /*
+   * c10a 第 9 节:预渲染小尺寸的哈希表(`<localFrame>.small.webp`,WebP),与原尺寸的 `frames` 分开记 ——
+   * 小尺寸就绪不能当作原尺寸就绪。只列原尺寸也在这一段里的帧;一张都没有就不带这一项(清单与 C6.4 一字不差)。
+   */
+  const small = [];
+  for (const [f] of frames) {
+    const file = path.join(dir, `${f}${SMALL_SUFFIX}`);
+    let buf;
+    try { buf = await fs.readFile(file); } catch { continue; }
+    if (!buf.length) continue;
+    const hash = sha256(buf);
+    small.push([f, hash, buf.length]);
+    files.set(hash, file);
+  }
   let result = {
     v: RESULT_VERSION, kind: 'snapshot', tier: loc.tier,
     resultKey: task.resultKey, dirKey: loc.dirKey, entryKey: loc.tier === 'local' ? loc.entryKey : null,
     range: { from, to },
     canvasHeavy: canvasHeavyOf(task, opts),
     frames,
+    ...(small.length ? { small } : {}),
   };
   assertResultSize(result);
   // X7:这一段的 PNG 缓存帧。它只是给 legacy 整帧通道的附带件 —— 带上它会让清单超限时就不带,快照照常交付
@@ -353,6 +426,8 @@ function resultBlocks(result) {
   const out = new Map();
   if (result?.kind === 'snapshot') {
     for (const [, hash] of result.frames ?? []) out.set(hash, { ns: SNAP_NS, hash, ext: 'html' });
+    // c10a 第 9 节:预渲染小尺寸是像素产物,进 `px`
+    for (const [, hash] of smallFramesOf(result)) if (!out.has(hash)) out.set(hash, { ns: PX_NS, hash, ext: 'webp' });
     // X7:附带的 PNG 缓存帧是像素产物,进 `px`
     for (const item of validPngs(result)) for (const [, hash] of item.frames) if (!out.has(hash)) out.set(hash, { ns: PX_NS, hash, ext: 'png' });
   } else if (result?.kind === 'stream') {

@@ -2,7 +2,7 @@
  * 仅供测试与进程内集成，生产代码不得引用。
  *
  * 内存产物库（契约 `docs/plan/render-queue-contract.md` D.1 的 `sink`、D.3）。M5 起由素材服务实现，
- * 语义见 `asset-storage.md`「先推送、确认收全，再报完成」与设计 4.4「开工前先问素材服务这一段是不是已经有了」。
+ * 语义见 `mechanism/asset-service.md`「先推送、确认收全，再报完成」与设计 4.4「开工前先问素材服务这一段是不是已经有了」。
  *
  *   sink.has({ resultKey, kind, tier, range })                         → Promise<boolean>
  *   sink.put({ resultKey, kind, tier, range, artifacts, meta })        → Promise<{ complete: boolean }>

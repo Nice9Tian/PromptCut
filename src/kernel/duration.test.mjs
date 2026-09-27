@@ -1,7 +1,7 @@
 /**
  * 总时长规则的单测。跑:node --test src/kernel/duration.test.mjs
  *
- * 钉的是 project-model.md「总时长」那一条:缺省等于内容末尾、跟着内容走;
+ * 钉的是 product/project-model.md「总时长」那一条:缺省等于内容末尾、跟着内容走;
  * 可以手动截短,不能拉长到内容末尾之后;空项目保留原值。
  */
 import test from "node:test";

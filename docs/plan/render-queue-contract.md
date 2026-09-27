@@ -389,7 +389,7 @@ export function splitPlan(args)                                        // → Ta
   streams = [],             // [{ streamKey, topClipId, firstSegment, lastSegment }]，由调用方从 planStreams 取
   envFingerprint,
   codeVersion,
-  cardSourceVersions = {},  // Record<cardId, string>：这一版用的卡片源码版本
+  cardSourceVersions = {},  // Record<cardId, string>：这一版用到的定制卡（用户卡、改动层里改过的卡）的代码身份〔c66-host-cards 改，见本节末〕
   anchorFrames = [],        // 全局帧号（src/render/snapshotPick.mjs 的 anchorFrames 输出）
   weightOf = () => ({ class: 'heavy', estMs: null }),   // (control) => weight，调用方按 K1 成本算
   isUserCard = () => false, // (control) => boolean
@@ -417,7 +417,8 @@ export function splitPlan(args)                                        // → Ta
   weight: { ...weightOf(control), frames: to - from + 1 },
   requires: {
     envFingerprint, codeVersion,
-    cardSources: control.cardId && cardSourceVersions[control.cardId] ? { [control.cardId]: cardSourceVersions[control.cardId] } : {},
+    cardSources: tier === 'local' ? { ...cardSourceVersions }       // 〔c66-host-cards 改〕本地档画整个场景：要这一版全部定制卡
+      : control.cardId && cardSourceVersions[control.cardId] ? { [control.cardId]: cardSourceVersions[control.cardId] } : {},
     transcode: false,
     userCards: !!isUserCard(control),
     graphCards: !!isGraphCard(control),
@@ -436,10 +437,17 @@ export function splitPlan(args)                                        // → Ta
 - 任务字段：
   - `input: { clipId: topClipId, cardId: null, entryKey: null, contentKey: streamKey }`；
   - `weight: { ...weightOf({ clipId: topClipId }), frames: (to - from + 1) * 15 }`；
-  - `requires: { envFingerprint, codeVersion, cardSources: {}, transcode: true, userCards: false, graphCards: false, belowDependent: false }`；
+  - `requires: { envFingerprint, codeVersion, cardSources: { ...cardSourceVersions }, transcode: true, userCards: false, graphCards: false, belowDependent: false }`（`cardSources` 〔c66-host-cards 改〕，原为 `{}`）；
   - `priority: 10`。
 
 输出顺序：先快照（按 `cardPlan` 顺序、段升序），后轨道流（按 `streams` 顺序、段升序）。同一个 `id` 只出现一次（先出现的留下）。
+
+**〔c66-host-cards 改，2026-09-27〕代码版本与卡片代码分开**（C6.6 T9 暴露的代码与语义冲突：独立渲染主机「能认领：全部」，原来只要缺一张与任务无关的用户卡就一个任务也认领不了。报告 `docs/archive/agent-reports/AGENT-c66-host-cards.md`）：
+
+- `codeVersion`（`frameCode(root)`）不再含 `src/cards/user/` 下除装载入口 `index.ts` 以外的文件；改动层本来就不在里面。哈希前换行统一成 LF（Windows、Linux 检出同一个版本）。
+- `cardSourceVersions` 由切分节点的管线给出（`planForQueue` 的 PlanContext，原来恒为 `{}`）：这一版项目用到的卡里，用户卡与闭包里有改动层文件的卡，`{ cardId: 身份 }`。身份 = 定义文件加它一路 import 到的卡片 / 部件文件，逐个记「仓库相对路径 + 生效内容的内容哈希（与内容库 `card-source` 同一算法）」，整体 sha256 取前 32 位（`vite-plugin-cards.ts` 的 `cardCodeIdentity`）。没改过的内置卡由 `codeVersion` 覆盖，不列。
+- `requires.cardSources`：共享档只列这张卡自己的（原规则）；本地档与轨道流列全部（本地档的内容键含 `entry.key`，而 `entry.key` 的 `code` 段现在是 `codeVersion` 加本项目定制卡身份的摘要，见 `server/card-code.mjs` 的 `cardEntryCode`）。
+- 节点的 `cardSourceVersions`（B.2）是现取现算的视图：每一拍认领时按本机此刻的文件算这张卡的身份（任何卡都报，不分定制与否）。卡片源码刚变过的 1.5 s 内一张也不报（等 Vite 作废模块）。本机没有这份代码就按规则 1 `card-source` 不认领、不报错；经卡片同步装上之后下一拍就能认领。
 
 ### B.5 `session.mjs`（任务书 M2「节点会话状态机」）
 
@@ -552,7 +560,7 @@ executor.render(task, { signal, progress }) → Promise<artifacts>
 // 抛出的错误若带 retryable === false，按不可重试处理；否则可重试
 ```
 
-**产物库 `sink`**（M5 起由素材服务实现，设计 4.4、语义 `asset-storage.md`「先推送、确认收全，再报完成」）：
+**产物库 `sink`**（M5 起由素材服务实现，设计 4.4、语义 `mechanism/asset-service.md`「先推送、确认收全，再报完成」）：
 
 ```js
 // 一「段」的身份是 (resultKey, range.from, range.to)；kind、tier 只作记账，不参与身份
@@ -683,7 +691,7 @@ Endpoint = { connId, send(message), onMessage(handler), close(), closed }
 
 ## E. M4：环境指纹进结果键（本机预渲染进程）
 
-主 Agent 定稿，2026-09-24。依据：设计 `distributed-prerender-queue.md` 2.1、`rendering.md`「不同环境的结果不混用」、`TODO.md`「语义与代码的差距」的「渲染任务队列与渲染节点」一条。
+主 Agent 定稿，2026-09-24。依据：设计 `distributed-prerender-queue.md` 2.1、`mechanism/rendering.md`「不同环境的结果不混用」、`TODO.md`「语义与代码的差距」的「渲染任务队列与渲染节点」一条。
 
 **范围**：本机预渲染进程写盘、投递的全部预渲染键都乘上环境指纹，现有缓存整体换键一次。
 
@@ -820,7 +828,7 @@ export async function probeBrowserEnvironment({ browser, page }, { platform = pr
 
 ## F. 卡片级指纹锁（M4 补充：前端测量帧入库与队列认领）
 
-主 Agent 定稿，2026-09-24，按用户的「卡片级一致性锁定」决策。依据：`rendering.md`「不同环境的结果不混用」与「预渲染结果的复用」、设计 2.1「谁定指纹」。本节取代 E.6 的测量帧闸，其余 E 节不变。
+主 Agent 定稿，2026-09-24，按用户的「卡片级一致性锁定」决策。依据：`mechanism/rendering.md`「不同环境的结果不混用」与「预渲染结果的复用」、设计 2.1「谁定指纹」。本节取代 E.6 的测量帧闸，其余 E 节不变。
 
 **概念**：
 
@@ -1078,7 +1086,7 @@ export function cardLockDecision({ lock, ownFingerprint, complete, now, idleMs =
 | Node | `server/render-node/fingerprint.mjs`、`split.mjs`、`session.mjs`、`local-node.mjs`、`index.mjs` |
 | Pipeline | 新建 `server/card-lock.mjs`、`src/editor/pageEnvironment.mjs`（及类型声明）；改 `server/frame-pipeline.mjs`、`server/vite-plugin-frames.ts`、`src/editor/probeRunner.ts` |
 | Verification/Test | 新建上面四个测试文件；改受影响的既有测试 |
-| 主 Agent | 本节；`rendering.md`、`glossary.md`、设计 2.1、`TODO.md`、报告 |
+| 主 Agent | 本节；`product/rendering.md`、`glossary.md`、设计 2.1、`TODO.md`、报告 |
 
 ### F.7 定稿后的补充细则（2026-09-24，主 Agent 按实现方疑点裁定）
 
@@ -1109,7 +1117,7 @@ export function cardLockDecision({ lock, ownFingerprint, complete, now, idleMs =
 ### F.8 本机侧的补充细则（2026-09-24，主 Agent 按 Pipeline 实现方疑点裁定）
 
 1. **本机已有结果也得锁**：`fillCardControls` 走到一个共享档 control 时，锁库里没有它的锁，就用本机指纹得锁（`source: 'prerender'`），不管这张卡本机是不是已经齐了。否则换键前就已产齐、但没有锁文件的卡，会被页面的第一帧测量帧锁走，反而少了覆盖。页面在后台那一趟走到这张卡之前推来测量帧的，仍是页面先得锁。
-2. **延后的卡要再判**：`rendering.md` 说锁定方停下一段时间后要接手，所以延后不能停在「等下一次 preload」。
+2. **延后的卡要再判**：`mechanism/rendering.md` 说锁定方停下一段时间后要接手，所以延后不能停在「等下一次 preload」。
    - 一趟后台结束时仍有 `'defer'` 的卡，就定一个一次性计时器（`unref`），在 `cardLockIdleMs` 之后重判这些卡；
    - 计时器触发时，满足以下三条才把一小趟排进后台串行链：这一版的后台那一趟没被取消（它的 `signal` 没 abort）；还有会话的当前版本是这个 entry；这些卡仍在预渲染集合里。
    - 那一小趟只对这些卡跑 `fillCardControls`，同一个 `signal`、`'background'` lane 的预渲染间；
@@ -1125,7 +1133,7 @@ export function cardLockDecision({ lock, ownFingerprint, complete, now, idleMs =
 
 ## G. M5a：网络层、集群令牌与服务地址登记（文档服务通用化）
 
-主 Agent 定稿，2026-09-25（用户授权自动推进，未逐节审阅；有疑点按回退梯次处理）。依据：`docs/plan/Master-Execution-Plan.md` 第 5.4 节（文档服务通用化）、第 7 节 M5a、第 3 节 S1 / S3 / S4；语义 `document-service.md`「职责」「连接发现」（M5a 开工前按 S1 与定位改写）。
+主 Agent 定稿，2026-09-25（用户授权自动推进，未逐节审阅；有疑点按回退梯次处理）。依据：`docs/plan/Master-Execution-Plan.md` 第 5.4 节（文档服务通用化）、第 7 节 M5a、第 3 节 S1 / S3 / S4；语义 `product/document-service.md`「职责」「连接发现」（M5a 开工前按 S1 与定位改写）。
 
 **范围**：
 - 文档服务拆成「通用核心 + 模块」，渲染任务队列与服务地址登记各是一个模块；
@@ -1175,6 +1183,12 @@ Router = {
 - 入站必须是 JSON 对象、带字符串 `type`；
 - `reqId`（字符串，或有限的数字）可选，核心不解释它，只在核心自己回错误时带上；
 - 其余字段属于模块。
+- 〔2026-09-26 修订，`docs/plan/http-transport-contract.md` 第 3 节〕信封另有两个会话字段：
+  - `seq`：发送方在这个会话里的序号，从 1 起，两个方向各自编号；
+  - `ack`：发送方已按序收全的对方最大 `seq`，可选。
+  - 这两个字段由组装层的会话层读写：会话层在 `dispatch` 之前摘掉它们，在 `write` 之后补上。核心与模块都看不到。
+  - `seq`、`ack` 加进核心保留字段名，模块的消息不得用这两个名字；`type` 以 `session.` 开头的会话控制消息由会话层处理、不进核心，`session.` 加进保留前缀，模块不得认领。
+  - 不带会话项的旧客户端，消息里没有这两个字段，行为同修订前。
 
 **核心的错误回包**（`{ type: 'error', reason, detail, reqId? }`）：
 
@@ -1312,7 +1326,7 @@ ENDPOINT_DEFAULTS = { GRACE_MS: 10_000, MAX_ANNOUNCERS: 64, MAX_URLS: 8, MAX_MET
   - 登记所在的连接断开时，登记标为离线、记下时刻，但**仍然可见**；
   - `tick` 发现离线超过 `GRACE_MS`（严格大于）就删掉并推送；
   - 宽限期内同一 `(announcerId, kind)` 从新连接再登记：只改绑连接，不推送撤回；`urls` 变了才推送。
-- **只交换地址**：模块不访问登记的 URL，不转发任何字节（语义 `document-service.md`「连接发现」）。
+- **只交换地址**：模块不访问登记的 URL，不转发任何字节（语义 `mechanism/document-service.md`「连接发现」）。
 - **权限**：M5a 里任何通过鉴权的连接都能登记和订阅（S3：细粒度权限在 M6）。
 - `health()` 回 `{ endpoints: <登记数> }`；`describeConn` 不加字段。
 
@@ -1347,6 +1361,7 @@ WsEndpoint = {
   - `close()` 之后不再重连。
   - 401 在浏览器 API 里表现为连不上，同样按退避重连，退避封顶，不会高频打服务端。
 - **断线期间的消息一律丢弃**，不缓存重放。正确性靠两条保证：重连后的 `hello.resume` 与 `queue.snapshot`；以及 D.2 细任务开工前先查 `sink.has`。完成报告丢了，最坏是租约到期后被重做一次，走去重直接完成。
+  - 〔2026-09-26 修订，`docs/plan/http-transport-contract.md` 第 4.4 节〕讲会话的端点（`createDocEndpoint`）：会话保留期内传输断开时，`send` 不丢，进未确认缓冲，接续后按序补发；接续不触发 `onOpen`（另有 `onResume`），所以不重发 `hello.resume`。会话结束（过了保留期或被服务端关掉）之后，才照上面这条丢弃，重连建新会话，在 `onOpen` 里发 `hello.resume`。
 - **接 `local-node`**：由调用方负责，本模块不认识它。约定写法（e2e 探针就这么用）：
   ```js
   ep.onOpen(() => node.start(node.session.held().map(({ id, token }) => ({ id, token }))));
@@ -1686,7 +1701,7 @@ backpressureCloses,   // 累计因背压关闭的连接数
 
 ## I. M5b 队列部分：按节点指纹前置过滤（防锁风暴）
 
-主 Agent 定稿，2026-09-25（用户授权自动推进）。依据：`docs/plan/Master-Execution-Plan.md` 第 5.3 节；语义 `document-service.md`「渲染任务队列」的「指纹前置过滤（特例）」一条（`95f9aa7` 写入）；F 节（卡片级指纹锁）；H 节（合并键）。
+主 Agent 定稿，2026-09-25（用户授权自动推进）。依据：`docs/plan/Master-Execution-Plan.md` 第 5.3 节；语义 `mechanism/document-service.md`「渲染任务队列」的「指纹前置过滤（特例）」一条（`95f9aa7` 写入）；F 节（卡片级指纹锁）；H 节（合并键）。
 
 **范围**：
 - 队列本体的可见性前置过滤；
@@ -1804,7 +1819,7 @@ F.1 第 3a 步的 `card-locked` 拒绝原样保留，只兜住前置过滤与锁
 - `docs/plan/Master-Execution-Plan.md` 第 7 节 M5b，第 11 节（推迟项）；
 - 设计附件 `docs/plan/queue-executor-design.md`（下称「附件」）；
 - 前提契约：C6.2 `artifact-transfer-contract.md`、C6.3 `docservice-contract.md`、C6.4 `manifest-contract.md`，以及本文 I 节；
-- 语义：`document-service.md`「渲染任务队列」：节点按项目版本从文档服务取项目，按哈希从素材服务取素材。
+- 语义：`product/document-service.md`「渲染任务队列」：节点按项目版本从文档服务取项目，按哈希从素材服务取素材。
 
 ### J.0 范围，与三处按授权做的降级
 

@@ -19,7 +19,7 @@
  * 独立的 `setSnapshots` 投递。拖过一张 stateful 卡的入点时，缓存命中的那一份和 `t`
  * 在同一次 React 提交里生效（不闪初始态）；没命中的那一层由 `.pc-awaiting` 藏 500 ms。
  *
- * # 兜底顺序（rendering.md「兜底顺序」）
+ * # 兜底顺序（mechanism/rendering.md「兜底顺序」）
  *
  * 播放中被抑制的重卡按「满帧流 → 稀疏流 → 同区间最近快照 → 占位符」逐级退化。父页这一侧管两件事：
  * 流平面只发解码器预算放行的那几条（`planesWithinBudget`，和舞台同一个函数）；**每张重卡都照样
@@ -188,7 +188,7 @@ export function markAllSettled(role: StageRole): void {
 }
 
 /**
- * 「停下就撤兜底」(rendering.md「兜底顺序」末条):暂停态已经追到精确活渲的卡,暂停中不再盖回快照。
+ * 「停下就撤兜底」(product/rendering.md「兜底顺序」末条):暂停态已经追到精确活渲的卡,暂停中不再盖回快照。
  * 下一次 `setTime`(`pickForSetTime`)或播放时清空。
  */
 function clearSettled(role: StageRole): void {
@@ -250,7 +250,7 @@ function rangesCover(ranges: readonly (readonly number[])[] | undefined, from: n
 }
 
 /**
- * 「就绪」按当前播放位置判(rendering.md「降级」;根因 D):从当前位置起 `min(fps, 片段剩余帧数)` 帧
+ * 「就绪」按当前播放位置判(mechanism/rendering.md「降级」;根因 D):从当前位置起 `min(fps, 片段剩余帧数)` 帧
  * 都有预渲染结果覆盖 —— 流按分段(这几帧落在的每一段都在同一条流的就绪区间里,组流算成员),
  * 快照按帧。以前流表只要有**任意**一段就算就绪,当前段没料也切进抑制 → 透明。
  */
@@ -305,7 +305,7 @@ export interface FeedPlan {
 /**
  * 这一刻的投递计划。**纯算，不 fetch、不发 RPC**，所以验收探针可以单独看它。
  *
- * 兜底顺序（rendering.md「兜底顺序」）在父页这一侧：流平面只发解码器预算放行的那几条；
+ * 兜底顺序（mechanism/rendering.md「兜底顺序」）在父页这一侧：流平面只发解码器预算放行的那几条；
  * **每张重卡都照样选一帧快照**（根因 C：以前「有流就不选快照」，舞台那边流一 blank 整层就透明）——
  * 流覆盖着的标成海报（`poster`）垫在流下面，超预算的当「无流」（`over`），其余 `none`。
  */
@@ -432,7 +432,7 @@ function diffAgainst(role: StageRole, picks: Map<string, Pick>, reset = false): 
 }
 
 /**
- * 一次投递在 2 MB 内按优先级装(换帧预算,rendering.md「兜底顺序」):摘掉的不占字节、全装;
+ * 一次投递在 2 MB 内按优先级装(换帧预算,mechanism/rendering.md「兜底顺序」):摘掉的不占字节、全装;
  * 换上的按 `none` > `over` > `poster` 的顺序装,装不下的这一拍**保留上一张、不摘**,下一拍再来。
  * 单张就超 2 MB 的,包里第一张照装(不然永远投不出去;体积上限由预渲染进程先挡过一道)。
  */
@@ -537,7 +537,7 @@ export async function deliverSnapshots(stage: StageRpcClient, role: StageRole, h
 
 /**
  * K3(b)：播放中正在等后台补跑的 `vtOk = false` **轻卡**也要抑制（藏子树、`t` 冻住）。
- * 它没有流平面也没有快照 —— 等待期间舞台在它的位置上显示占位符（T4，rendering.md「兜底顺序」：
+ * 它没有流平面也没有快照 —— 等待期间舞台在它的位置上显示占位符（T4，product/rendering.md「兜底顺序」：
  * 「等后台舞台补跑后互换」也不透明），用户看不到它用错状态跳变。互换之后这份就清空。
  */
 let extraSuppressed: readonly string[] = [];

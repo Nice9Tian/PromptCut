@@ -133,6 +133,9 @@ const emptyStats = () => ({ claimed: 0, completed: 0, dedup: 0, failed: 0, lost:
  * @param {string} options.codeVersion  一个主机实例只有一个代码版本(契约第 3 节〔裁〕)
  * @param {number} [options.maxConcurrent]  并发总数,缺省 1,上限 4
  * @param {object} [options.capabilities]  缺省 `HOST_CAPABILITIES`
+ * @param {Record<string, string[]>} [options.cardSourceVersions]  本机此刻有的卡片代码身份(契约 B.2;c66-host-cards:
+ *   任务的 `requires.cardSources` 按它过滤,本机没有这份代码就不认领)。可以是现取现算的视图(`card-code.mjs` 的 `view`),
+ *   每一拍认领时读;缺省空(只认不要求卡片代码的任务)
  * @param {() => number} options.now
  * @param {() => number} [options.random]
  * @param {object} [options.constants]
@@ -146,6 +149,7 @@ export function createRenderHost({
   codeVersion,
   maxConcurrent = 1,
   capabilities = HOST_CAPABILITIES,
+  cardSourceVersions,
   now,
   random,
   constants,
@@ -222,7 +226,7 @@ export function createRenderHost({
     m.local?.stop();
     m.local = createLocalNode({
       nodeId: m.nodeId,
-      node: { profile: 'host', envFingerprint, codeVersions: [version], capabilities, maxConcurrent: cap },
+      node: { profile: 'host', envFingerprint, codeVersions: [version], capabilities, maxConcurrent: cap, ...(cardSourceVersions ? { cardSourceVersions } : {}) },
       endpoint: m.ep,
       now,
       ...(random ? { random } : {}),

@@ -2,7 +2,7 @@
  * 文档服务用的最小 WebSocket 服务端（RFC 6455），不引第三方依赖。
  *
  * 只做文档服务要的那一小块：握手、文本帧（含分片）、ping / pong、关闭握手。二进制帧一律拒收——
- * 这条连接只传小 JSON 消息，素材字节和预渲染产物走素材服务（`docs/semantics/architecture/document-service.md`「职责」）。
+ * 这条连接只传小 JSON 消息，素材字节和预渲染产物走素材服务（`docs/semantics/product/document-service.md`「职责」）。
  * 不支持扩展（permessage-deflate 等）：握手时不回 `Sec-WebSocket-Extensions`，客户端就不会用。
  */
 import { createHash } from 'node:crypto';

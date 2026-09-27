@@ -151,8 +151,10 @@ function bridgeTimeoutMs(tool) {
 /**
  * callId:模型那一侧这次工具调用的 id。Claude Code 在 tools/call 的 `_meta["claudecode/toolUseId"]` 里带
  * (c65-integ2 查过本机 claude.exe 里的这段);编辑器把它放进工具调用事件,页面 AI 栏按它对上聊天记录。
+ * pair:codex、agy 不带可用的 id,只带配对线索(见 pairingOf),编辑器拿它和 runner 报到的调用配对
+ * (server/agent/call-pairing.mjs)。
  */
-async function callBridge(tool, args, callId) {
+async function callBridge(tool, args, callId, pair) {
   const { port, hosts } = getTargets();
   for (const host of hosts) {
     try {
@@ -161,7 +163,7 @@ async function callBridge(tool, args, callId) {
         headers: { 'Content-Type': 'application/json' },
         // 多 Agent 分页:这个 MCP 进程是哪一页的 Agent 起的(vite-plugin-ai 起 CLI 时塞的环境变量),
         // 编辑台拿它记「谁改了哪儿」;没有就不带
-        body: JSON.stringify({ tool, args, agent: process.env.PROMPTCUT_AGENT || undefined, callId: callId || undefined }),
+        body: JSON.stringify({ tool, args, agent: process.env.PROMPTCUT_AGENT || undefined, callId: callId || undefined, pair: pair || undefined }),
         signal: AbortSignal.timeout(bridgeTimeoutMs(tool)),
       });
       if (lastBridgeHost !== host) {
@@ -189,6 +191,27 @@ async function callBridge(tool, args, callId) {
   e.allRefused = true;
   e.port = port;
   throw e;
+}
+
+/**
+ * codex、agy 在 tools/call 的 `_meta` 里带的配对线索(实测原文见 docs/archive/agent-reports/AGENT-runner-callid.md):
+ *   - codex:`threadId` 等于它输出流 thread.started 的 thread_id。它的 `_meta.callId`("exec-<uuid>")
+ *     输出流里没有,用不上;配对只能按(thread、工具名、参数);
+ *   - agy:`antigravity.google/conversation_id` 等于输出流的 conversation_id,`progressToken` 是
+ *     "<uuid>:<步号>",步号等于输出流 step_update 的 step_index —— 拼成和 agy runner 一样的 callId 当提示。
+ * 两者都不是就回 undefined(不配对)。scope、hint 的写法要和 runners/codex.mjs、runners/agy.mjs 一致。
+ */
+function pairingOf(meta) {
+  if (!meta || typeof meta !== 'object') return undefined;
+  const id = (v) => (typeof v === 'string' && /^[A-Za-z0-9_.:-]{1,100}$/.test(v) ? v : null);
+  const conv = id(meta['antigravity.google/conversation_id']);
+  if (conv) {
+    const step = typeof meta.progressToken === 'string' ? /:(\d{1,9})$/.exec(meta.progressToken) : null;
+    return { scope: `agy:${conv}`, ...(step ? { hint: `agy:${conv}:${Number(step[1])}` } : {}) };
+  }
+  const thread = id(meta.threadId) || id(meta['x-codex-turn-metadata']?.thread_id);
+  if (thread) return { scope: `codex:${thread}` };
+  return undefined;
 }
 
 function sendResponse(id, result) {
@@ -283,7 +306,7 @@ async function handleMessage(line) {
     try {
       const meta = req.params._meta;
       const callId = meta && typeof meta === 'object' && typeof meta['claudecode/toolUseId'] === 'string' ? meta['claudecode/toolUseId'] : undefined;
-      res = await callBridge(tool, args, callId);
+      res = await callBridge(tool, args, callId, callId ? undefined : pairingOf(meta));
     } catch (e) {
       if (e.allRefused || isConnRefused(e)) {
         const p = e.port || getTargets().port;

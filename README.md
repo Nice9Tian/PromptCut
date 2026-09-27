@@ -7,7 +7,7 @@ PromptCut 是一个 AI 视频剪辑工作台：用户用自然语言指挥 Agent
 | 想了解 | 看这里 |
 |---|---|
 | 产品为什么存在、要达到什么 | [docs/semantics/product-purpose.md](docs/semantics/product-purpose.md) |
-| 系统由哪几部分组成 | [docs/semantics/architecture.md](docs/semantics/architecture.md)，细节在 [architecture/](docs/semantics/architecture/) |
+| 系统由哪几部分组成 | [docs/semantics/architecture.md](docs/semantics/architecture.md)，产品功能在 [product/](docs/semantics/product/)，具体机制在 [mechanism/](docs/semantics/mechanism/) |
 | 用户怎么用 | [docs/semantics/user-workflow.md](docs/semantics/user-workflow.md)，细节在 [workflow/](docs/semantics/workflow/) |
 | 术语 | [docs/semantics/glossary.md](docs/semantics/glossary.md) |
 | 为什么这样设计 | [docs/rationale/](docs/rationale/) |

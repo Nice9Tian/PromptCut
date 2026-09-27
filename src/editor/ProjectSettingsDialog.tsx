@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { useBackdropClose } from "../ui/backdropClose";
 import { actions, useStore } from "../store/project";
 import "./ProjectSettingsDialog.css";
+import { CollabSection, type CollabHandle } from "./sync/CollabSection";
 
 export interface ProjectSettingsDialogProps {
   open: boolean;
@@ -49,7 +50,8 @@ function inferSettings(w: number, h: number): { ratio: AspectRatio; orientation:
 }
 
 /**
- * 项目设置对话框:配置视频画幅比例与方向,实时预览分辨率。
+ * 项目设置对话框:配置视频画幅比例与方向,实时预览分辨率;底下一段「多用户协作」(C10a 契约第 6 节,`sync/CollabSection.tsx`)。
+ * 多用户协作不写进项目文档:「确定」先写项目元数据,再交给那一段做它的开启 / 取消;它有动作在做时对话框留着显示进度与结果。
  */
 export function ProjectSettingsDialog({ open, onClose }: ProjectSettingsDialogProps) {
   const curW = useStore((s) => s.project.width);
@@ -67,10 +69,11 @@ export function ProjectSettingsDialog({ open, onClose }: ProjectSettingsDialogPr
   /** R9:canvas 卡的共享 WebGL 渲染器走哪条路线;空串 = 按宿主能力(低内存档 shared,否则 perDocument) */
   const [glRoute, setGlRoute] = useState<"" | "perDocument" | "shared">("");
   const durationInputRef = useRef<HTMLInputElement>(null);
+  const collabRef = useRef<CollabHandle>(null);
 
   const currentRes = RESOLUTION_MAP[ratio][orientation];
 
-  const handleConfirm = () => {
+  const handleConfirm = async () => {
     if (!durationInputRef.current?.reportValidity()) return;
     const requestedDuration = Number(duration);
     if (!Number.isFinite(requestedDuration) || requestedDuration < 1) return;
@@ -86,6 +89,8 @@ export function ProjectSettingsDialog({ open, onClose }: ProjectSettingsDialogPr
       glRoute: glRoute || undefined,
     });
     if (requestedDuration !== curDuration) actions.setDurationManual(requestedDuration);
+    // 多用户协作:勾上并保存 = 开启,取消勾选并保存 = 关闭;这一段在忙时对话框不关
+    if (await collabRef.current?.apply(name.trim() || "未命名")) return;
     onClose();
   };
 
@@ -117,12 +122,14 @@ export function ProjectSettingsDialog({ open, onClose }: ProjectSettingsDialogPr
   useEffect(() => {
     if (!open) return;
     const onKeyDown = (e: KeyboardEvent) => {
+      // 「多用户协作」里的输入框自己处理回车(作废并重新生成要输创建者密码),不当成整个对话框的「确定」
+      if ((e.target as HTMLElement | null)?.closest?.(".pc-collab")) return;
       if (e.key === "Escape") {
         e.preventDefault();
         cancelRef.current();
       } else if (e.key === "Enter") {
         e.preventDefault();
-        confirmRef.current();
+        void confirmRef.current();
       }
     };
     window.addEventListener("keydown", onKeyDown);
@@ -136,7 +143,7 @@ export function ProjectSettingsDialog({ open, onClose }: ProjectSettingsDialogPr
   return createPortal(
     <div className="pc-dialog-mask" {...backdrop}>
       <div
-        className="pc-dialog"
+        className="pc-dialog pc-dialog--collab"
         role="dialog"
         aria-modal="true"
         aria-labelledby="pc-dialog-title-settings"
@@ -244,6 +251,7 @@ export function ProjectSettingsDialog({ open, onClose }: ProjectSettingsDialogPr
               {currentRes.width} × {currentRes.height}
             </span>
           </div>
+          <CollabSection ref={collabRef} open={open} />
         </div>
         <div className="pc-dialog-foot">
           <button type="button" className="pc-btn" onClick={handleCancel}>
@@ -252,7 +260,7 @@ export function ProjectSettingsDialog({ open, onClose }: ProjectSettingsDialogPr
           <button
             type="button"
             className="pc-btn pc-btn--primary"
-            onClick={handleConfirm}
+            onClick={() => void handleConfirm()}
           >
             确定
           </button>

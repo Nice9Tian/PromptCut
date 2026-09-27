@@ -9,11 +9,12 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { adminOp, leaveBlocked, makeCredential, pushToast, useSync, type MemberRow } from "./syncManager";
+import { adminOp, getSyncView, leaveBlocked, makeCredential, pushToast, useSync, type MemberRow } from "./syncManager";
 import { ListEditor } from "./SharedDialogs";
+import { rememberPasswords } from "./collab";
 import "./sync.css";
 
-type Flow =
+export type Flow =
   | { kind: "password" }
   | { kind: "creator-password" }
   | { kind: "list" }
@@ -162,7 +163,7 @@ export function MembersButton() {
 
 type Verified = { key: string; bans: { username: string; deviceId: string }[]; list: string[] };
 
-function CreatorFlow({ flow, onClose }: { flow: Flow; onClose: () => void }) {
+export function CreatorFlow({ flow, onClose }: { flow: Flow; onClose: () => void }) {
   const [verified, setVerified] = useState<Verified | null>(null);
   if (!verified) return <VerifyDialog onClose={onClose} onOk={setVerified} />;
   switch (flow.kind) {
@@ -268,6 +269,9 @@ function PasswordDialog({ creator, v, onClose }: { creator: boolean; v: Verified
     const r = creator ? await adminOp("set-creator-password", { key: v.key }, { creator: cred }) : await adminOp("set-password", { key: v.key }, { project: cred });
     setBusy(false);
     if (!r.ok) return setErr(failText(r.error));
+    // 项目设置「多用户协作」里显示的是本机记下的密码(C10a):改了就跟着换
+    const pid = getSyncView().shared?.projectId;
+    if (pid) rememberPasswords(pid, creator ? { creatorPassword: a } : { projectPassword: a });
     pushToast(creator ? "创建者密码已修改，之后的项目管理要用新密码。" : "项目密码已修改。在线的人不受影响，下次进入要用新密码。", "info");
     onClose();
   };

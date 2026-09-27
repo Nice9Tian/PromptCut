@@ -117,6 +117,13 @@ export function contentTypeForFile(filePath: string): string {
   return contentTypeForExt(extOfName(filePath));
 }
 
+/** Content-Type → 扩展名(按上表反查,同一类型取表里第一个);认不出给空串。按需拉取落盘时用 */
+export function extForContentType(contentType: string): string {
+  const type = String(contentType || "").split(";")[0].trim().toLowerCase();
+  for (const [ext, t] of Object.entries(CONTENT_TYPES)) if (t === type) return ext;
+  return "";
+}
+
 export interface MediaIndexEntry {
   /** 本地内容库里的文件名(<hash>.<ext>) */
   file: string;
@@ -160,13 +167,25 @@ export async function writeMediaIndex(root: string, hash: string, entry: MediaIn
   }
 }
 
+/** 从索引里去掉一条(文件已经删了,比如重封装前的那份);没有这条就什么都不做 */
+export async function forgetMediaIndex(root: string, hash: string): Promise<void> {
+  const index = await readMediaIndex(root);
+  if (!(hash in index)) return;
+  delete index[hash];
+  try {
+    await fs.writeFile(indexPath(root), JSON.stringify({ version: 1, items: index }, null, 2));
+  } catch (err) {
+    console.warn("[media] 写索引失败", err);
+  }
+}
+
 async function exists(file: string): Promise<boolean> {
   try { await fs.stat(file); return true; } catch { return false; }
 }
 
 /**
  * 哈希 → 本地内容库里的文件。三条路:URL 自带扩展名 → 索引 → 扫目录(索引丢了还能救)。
- * 找不到返回 null(A1 第 5 步会在这里先去素材云端拉,再边落边服务)。
+ * 找不到返回 null(读路由接着交给按需拉取,见 server/media-pull.mjs)。
  */
 export async function resolveHashFile(root: string, hash: string, ext?: string): Promise<string | null> {
   const key = String(hash || "").toLowerCase();
@@ -192,6 +211,106 @@ export async function resolveHashFile(root: string, hash: string, ext?: string):
     }
   } catch { /* 目录还不存在 */ }
   return null;
+}
+
+/* ------------------------------------------------------------------ *
+ * 按需拉取与预取(C6.6 第 4 节,实现在 server/media-pull.mjs)
+ * ------------------------------------------------------------------ */
+
+/** 本地内容库给拉取模块的几样操作:它不认目录布局,只经这里落盘、入库 */
+function pullStore(root: string) {
+  const dir = mediaDir(root);
+  return {
+    dir,
+    resolve: (hash: string) => resolveHashFile(root, hash),
+    extForType: extForContentType,
+    async finalize(hash: string, tmp: string, ext: string, contentType: string): Promise<string> {
+      const file = ext ? `${hash}.${ext}` : hash;
+      const dest = path.join(dir, file);
+      if (await exists(dest)) {
+        await fs.rm(tmp, { force: true }).catch(() => {});
+      } else {
+        try {
+          await fs.rename(tmp, dest);
+        } catch {
+          // 改名被占着(Windows 上有读句柄没带共享删除):复制一份,临时文件稍后再删
+          await fs.copyFile(tmp, dest);
+          setTimeout(() => { void fs.rm(tmp, { force: true }).catch(() => {}); }, 5000).unref?.();
+        }
+      }
+      const stat = await fs.stat(dest);
+      await writeMediaIndex(root, hash, { file, name: file, ext, size: stat.size, contentType: contentType || contentTypeForExt(ext) });
+      return dest;
+    },
+  };
+}
+
+type PullModule = typeof import("./media-pull.mjs");
+/**
+ * 惰性取拉取模块:好几个单测把本文件单独转译到临时目录再 import,静态 import 兄弟模块会解析失败;
+ * 取不到就当没有按需拉取(和原来一样回 404)。
+ */
+async function pullModule(): Promise<PullModule | null> {
+  try { return await import("./media-pull.mjs"); } catch { return null; }
+}
+
+async function readJsonBody(req: Connect.IncomingMessage, max = 256 * 1024): Promise<any> {
+  const parts: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of req as unknown as AsyncIterable<Buffer>) {
+    size += chunk.length;
+    if (size > max) throw new Error("body too large");
+    parts.push(chunk);
+  }
+  const text = Buffer.concat(parts).toString("utf8");
+  return text ? JSON.parse(text) : {};
+}
+
+function sendJson(res: ServerResponse, status: number, body: unknown) {
+  res.statusCode = status;
+  res.setHeader("Content-Type", "application/json");
+  res.setHeader("Cache-Control", "no-store");
+  res.end(JSON.stringify(body));
+}
+
+/**
+ * 页面管的几条(同源,`/api/**` 守卫照旧):
+ * - `POST /api/media/remote { base, ticket }`:设当前连接的远程素材服务(null / DELETE 清掉);`GET` 看状态;
+ * - `POST /api/media/prefetch { items: [{ hash }] }`:换一份预取清单(有序);
+ * - `POST /api/media/originals { hashes }`:这些原片在当前素材服务上哪些还没 `complete`(导出前的拦截)。
+ */
+async function handlePullApi(req: Connect.IncomingMessage, res: ServerResponse, root: string): Promise<boolean> {
+  const url = String(req.url || "").split("?")[0];
+  if (url !== "/api/media/remote" && url !== "/api/media/prefetch" && url !== "/api/media/originals") return false;
+  const mod = await pullModule();
+  if (!mod) { sendJson(res, 501, { ok: false, error: "pull-unavailable" }); return true; }
+  try {
+    if (url === "/api/media/remote") {
+      if (req.method === "GET") { sendJson(res, 200, { ok: true, ...mod.pullStatus() }); return true; }
+      if (req.method === "DELETE") { mod.setRemoteAssetService(null); sendJson(res, 200, { ok: true, base: null }); return true; }
+      if (req.method === "POST") {
+        const body = await readJsonBody(req);
+        const base = body?.base ? mod.setRemoteAssetService({ base: String(body.base), ticket: typeof body.ticket === "string" ? body.ticket : null })?.base : mod.setRemoteAssetService(null);
+        sendJson(res, 200, { ok: true, base: base ?? null });
+        return true;
+      }
+    }
+    if (url === "/api/media/prefetch" && req.method === "POST") {
+      const body = await readJsonBody(req);
+      sendJson(res, 200, { ok: true, queued: mod.prefetch(Array.isArray(body?.items) ? body.items : [], pullStore(root)) });
+      return true;
+    }
+    if (url === "/api/media/originals" && req.method === "POST") {
+      const body = await readJsonBody(req);
+      const missing = await mod.incompleteOnService(Array.isArray(body?.hashes) ? body.hashes : [], pullStore(root));
+      sendJson(res, 200, { ok: true, remote: mod.remoteAssetBase(), missing });
+      return true;
+    }
+    sendJson(res, 405, { ok: false, error: "method" });
+  } catch (err) {
+    sendJson(res, 400, { ok: false, error: err instanceof Error ? err.message : String(err) });
+  }
+  return true;
 }
 
 /** 这些哈希里哪些已经完整落在本地内容库(A1 第 5 步的预取队列问的也是这条) */
@@ -300,6 +419,119 @@ export async function adoptMediaFile(root: string, filePath: string): Promise<St
   return { hash, ext, name, bytes: stat.size, path: dest, url: `/@media/${hash}`, contentType, deduped: had };
 }
 
+/* ------------------------------------------------------------------ *
+ * 两档素材与上传队列(C6.6,`docs/plan/c66-design.md` 第 2、3 节)
+ * ------------------------------------------------------------------ */
+
+/**
+ * 每个项目根一份:两档管理器(`media-tiers.mjs`)、上传队列(`upload-queue.mjs`)、当前连接的素材服务。
+ * 放在 globalThis 上:配置被打包过一次、模块可能有两份实例。
+ *
+ * **当前连接的素材服务**(上传队列的目标):
+ *   - 缺省是本机素材服务(就是这个插件)—— 导入已经是本地写入,上传队列是空操作;
+ *   - `PROMPTCUT_ASSET_URL`(形如 `http://192.168.50.96:5460/api/asset`,与预渲染进程推送用的是同一个变量)设了就是它;
+ *   - 页面(连着共享项目、知道远端素材服务与票据的那一方)经 `POST /api/media/upload-queue/target` 改它,
+ *     `{ base: null }` 换回缺省(设了 `PROMPTCUT_ASSET_URL` 就是它,否则本机)。票据由页面按时续上(素材票据 15 分钟,见 `docs/plan/auth-contract.md` 第 8 节)。
+ */
+type TierService = {
+  manager: any;
+  queue: any | null;
+  setTarget(target: { base: string | null; ticket?: string | null } | null): Promise<void>;
+  target(): { base: string } | null;
+};
+const TIERS_KEY = Symbol.for("promptcut.media-tiers.services");
+function tierServices(): Map<string, Promise<TierService>> {
+  const holder = globalThis as unknown as Record<symbol, Map<string, Promise<TierService>>>;
+  holder[TIERS_KEY] ??= new Map();
+  return holder[TIERS_KEY];
+}
+
+const tiersLog = (event: string, fields: object = {}) => {
+  try { console.info("[media-tiers]", event, JSON.stringify(fields)); } catch { console.info("[media-tiers]", event); }
+};
+
+/**
+ * 取(必要时建)这个根的两档服务。`withQueue: false` 只生成两档、不建上传队列(无头实例:它是临时副本,
+ * 不往共享服务写东西)。惰性 import:好几个单测把本文件单独转译到临时目录,静态 import 兄弟模块会解析失败。
+ */
+export function mediaTierService(root: string, { withQueue = true }: { withQueue?: boolean } = {}): Promise<TierService> {
+  const services = tierServices();
+  const key = path.resolve(root);
+  let pending = services.get(key);
+  if (pending) return pending;
+  pending = (async () => {
+    const tiersMod: any = await import("./media-tiers.mjs");
+    const { findFfmpeg }: any = await import("./bakery/ffmpeg.mjs");
+    let queue: any = null;
+    let current: { base: string; client: any } | null = null;
+    let ticketValue: string | null = null;
+    const setTargetImpl = async (next: { base: string | null; ticket?: string | null } | null) => {
+      const base = String(next?.base || "").trim().replace(/\/+$/, "");
+      if (typeof next?.ticket === "string" || next?.ticket === null) ticketValue = next?.ticket || null;
+      if (!base) { if (current) tiersLog("upload.target", { base: null }); current = null; return; }
+      if (current?.base === base) return;
+      const { createAssetClient }: any = await import("./asset-store/client.mjs");
+      // 票据只进 Authorization 头(客户端负责),这里不记
+      const client = createAssetClient({ base, ticket: () => ticketValue, timeoutMs: 120_000 });
+      current = { base, client };
+      tiersLog("upload.target", { base });
+    };
+    if (withQueue) {
+      const { createUploadQueue }: any = await import("./upload-queue.mjs");
+      const { sharedBandwidthGate, pushQueueFileProbe }: any = await import("./bandwidth-gate.mjs");
+      const gate = sharedBandwidthGate();
+      // 推送队列在预渲染进程里:读它落盘的队列文件判断「产物还在推」(`bandwidth-gate.mjs` 文件头)
+      gate.setExternal(pushQueueFileProbe(path.join(outRoot(root), "frame-library", "push-queue.json")));
+      queue = createUploadQueue({
+        file: path.join(outRoot(root), "upload-queue.json"),
+        target: () => current,
+        resolveFile: (hash: string) => resolveHashFile(root, hash),
+        gate,
+        log: tiersLog,
+      });
+    }
+    const envBase = String(process.env.PROMPTCUT_ASSET_URL || "").trim();
+    if (envBase) await setTargetImpl({ base: envBase });
+    await fs.mkdir(mediaDir(root), { recursive: true });
+    const manager = tiersMod.createTierManager({
+      dir: mediaDir(root),
+      lib: {
+        hashFile,
+        writeIndex: (hash: string, entry: MediaIndexEntry) => writeMediaIndex(root, hash, entry),
+        forget: (hash: string) => forgetMediaIndex(root, hash),
+        contentTypeForExt,
+      },
+      ffmpeg: findFfmpeg,
+      queue,
+      log: tiersLog,
+    });
+    return {
+      manager,
+      queue,
+      // `{ base: null }`(页面离开共享项目 / 本机就是主机)= 回到缺省目标:设了 PROMPTCUT_ASSET_URL 就是它,否则本机
+      setTarget: (next) => setTargetImpl(next?.base ? next : { base: envBase || null, ticket: null }),
+      target: () => (current ? { base: current.base } : null),
+    };
+  })();
+  services.set(key, pending);
+  pending.catch(() => services.delete(key));
+  return pending;
+}
+
+/** 导入(`?tiers=1`)之后:视频做重封装判定、排小版;回包字段 */
+async function prepareTiers(root: string, stored: StoredMedia) {
+  const service = await mediaTierService(root, { withQueue: process.env.PROMPTCUT_HEADLESS !== "1" });
+  const out = await service.manager.prepareImport(stored);
+  return out as { stored: StoredMedia; tiers: { original: string; small: string | null } | null; small: string | null; remux: any };
+}
+
+function wantsTiers(req: Connect.IncomingMessage): boolean {
+  try {
+    const v = new URL(req.url || "/", "http://promptcut.local").searchParams.get("tiers");
+    return v === "1" || v === "true";
+  } catch { return false; }
+}
+
 async function handleMediaUpload(req: Connect.IncomingMessage, res: ServerResponse, root: string) {
   const rawName = req.url?.split("?")[0].split("/").pop();
   if (!rawName) {
@@ -308,7 +540,18 @@ async function handleMediaUpload(req: Connect.IncomingMessage, res: ServerRespon
     return;
   }
   try {
-    const stored = await storeMediaStream(root, rawName, req as unknown as Readable);
+    let stored = await storeMediaStream(root, rawName, req as unknown as Readable);
+    let extra: Record<string, unknown> = {};
+    if (wantsTiers(req)) {
+      try {
+        const prepared = await prepareTiers(root, stored);
+        stored = prepared.stored;
+        if (prepared.tiers) extra = { tiers: prepared.tiers, small: prepared.small, remux: prepared.remux };
+      } catch (err) {
+        // 两档出了问题不挡导入:照原来的回包,只有原片一档
+        tiersLog("tiers.prepare-failed", { hash: stored.hash, message: err instanceof Error ? err.message : String(err) });
+      }
+    }
     res.setHeader("Content-Type", "application/json");
     res.end(JSON.stringify({
       ok: true,
@@ -319,6 +562,7 @@ async function handleMediaUpload(req: Connect.IncomingMessage, res: ServerRespon
       url: stored.url,
       bytes: stored.bytes,
       deduped: stored.deduped,
+      ...extra,
     }));
   } catch (err: unknown) {
     res.statusCode = 500;
@@ -493,7 +737,18 @@ export function mediaMiddleware(root: string) {
           res.statusCode = 403;
           return res.end("Media path is outside PromptCut media folders");
         }
-        const stored = await adoptMediaFile(root, file);
+        let stored = await adoptMediaFile(root, file);
+        let extra: Record<string, unknown> = {};
+        if (wantsTiers(req)) {
+          try {
+            // 硬链接进库的那份若要重封装:重封装的结果另存一份,库里那份照常删(原处的文件不动,素材收集还按原名引用它)
+            const prepared = await prepareTiers(root, stored);
+            stored = prepared.stored;
+            if (prepared.tiers) extra = { tiers: prepared.tiers, small: prepared.small, remux: prepared.remux };
+          } catch (err) {
+            tiersLog("tiers.prepare-failed", { hash: stored.hash, message: err instanceof Error ? err.message : String(err) });
+          }
+        }
         res.setHeader("Content-Type", "application/json");
         return res.end(JSON.stringify({
           ok: true,
@@ -504,11 +759,90 @@ export function mediaMiddleware(root: string) {
           url: stored.url,
           bytes: stored.bytes,
           deduped: stored.deduped,
+          ...extra,
         }));
       } catch (err: unknown) {
         res.statusCode = 500;
         return res.end(err instanceof Error ? err.message : String(err));
       }
+    }
+
+    // POST /api/media/tiers/backfill { items: [{ hash, name? }] } —— 打开项目时补转小版(C6.6 设计稿第 9 节第 2 条):
+    // 本地内容库里有这份原片的视频排进后台转码,回 { ok, items: { [hash]: { state, small? } } };
+    // 本地没有原片的回 state: 'absent'(不为了转小版去拉原片)
+    if (req.method === "POST" && req.url.split("?")[0] === "/api/media/tiers/backfill") {
+      try {
+        const body = await readJsonBody(req);
+        const list = (Array.isArray(body?.items) ? body.items : []).slice(0, 200);
+        const service = await mediaTierService(root, { withQueue: process.env.PROMPTCUT_HEADLESS !== "1" });
+        const items: Record<string, unknown> = {};
+        for (const it of list) {
+          const hash = String(it?.hash || "").toLowerCase();
+          if (!isMediaHash(hash) || items[hash]) continue;
+          const file = await resolveHashFile(root, hash);
+          items[hash] = file
+            ? await service.manager.backfill({ hash, ext: extOfName(file), name: typeof it?.name === "string" ? it.name : "" })
+            : { state: "absent" };
+        }
+        return sendJson(res, 200, { ok: true, items });
+      } catch (err) {
+        return sendJson(res, 400, { ok: false, error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+
+    // GET /api/media/tiers?hashes=a,b —— 这些原片的小版情况(C6.6):{ ok, items: { [原片]: { state, small? } } }。
+    // state:pending(在转)、ready(small 是小版哈希)、failed、none(没有视频流)、unknown(本机没登记过)。
+    // 页面导入后按它把小版哈希写进 project.media[i].tiers.small;这不是同步状态(传没传完只问素材服务的 chunks)
+    if (req.method === "GET" && req.url.startsWith("/api/media/tiers")) {
+      const query = new URL(req.url, "http://promptcut.local").searchParams;
+      const asked = (query.get("hashes") || "").split(",").map((h) => h.trim().toLowerCase()).filter(isMediaHash).slice(0, 200);
+      try {
+        const service = await mediaTierService(root, { withQueue: process.env.PROMPTCUT_HEADLESS !== "1" });
+        res.setHeader("Content-Type", "application/json");
+        return res.end(JSON.stringify({ ok: true, items: service.manager.status(asked) }));
+      } catch (err) {
+        res.statusCode = 500;
+        return res.end(err instanceof Error ? err.message : String(err));
+      }
+    }
+
+    // GET /api/media/upload-queue —— 上传队列的状态(诊断、探针);POST …/target { base, ticket? } —— 换上传目标;
+    // POST …/enqueue { items: [{ name?, original, small? }] } | { hashes } —— 按哈希把本地内容库里已有的素材进队
+    // (C10a:开启「放云端」时项目里已有的素材也要上云;只收本地有的,回 queued / missing,见 upload-queue.mjs 的 enqueueLocalMedia)
+    if (req.url.startsWith("/api/media/upload-queue")) {
+      try {
+        const service = await mediaTierService(root, { withQueue: process.env.PROMPTCUT_HEADLESS !== "1" });
+        if (req.method === "POST" && req.url.split("?")[0] === "/api/media/upload-queue/enqueue") {
+          const body = await readJsonBody(req);
+          res.setHeader("Content-Type", "application/json");
+          if (!service.queue) return res.end(JSON.stringify({ ok: false, error: "no-queue" }));
+          const { enqueueLocalMedia }: any = await import("./upload-queue.mjs");
+          const r = await enqueueLocalMedia(service.queue, body, (hash: string) => resolveHashFile(root, hash));
+          tiersLog("upload.enqueue-existing", { queued: r.queued.length, missing: r.missing.length, bad: r.bad, local: r.local });
+          return res.end(JSON.stringify({ ok: true, ...r }));
+        }
+        if (req.method === "GET" && req.url.split("?")[0] === "/api/media/upload-queue") {
+          res.setHeader("Content-Type", "application/json");
+          return res.end(JSON.stringify({ ok: true, target: service.target(), queue: service.queue ? service.queue.stats() : null }));
+        }
+        if (req.method === "POST" && req.url.split("?")[0] === "/api/media/upload-queue/target") {
+          const body = await readJsonBody(req);
+          const base = body?.base === null || body?.base === undefined ? null : String(body.base);
+          if (base !== null && !/^https?:\/\//i.test(base)) { res.statusCode = 400; return res.end("base must be http(s) or null"); }
+          const ticket = typeof body?.ticket === "string" ? body.ticket : null;
+          await service.setTarget({ base, ticket });
+          res.setHeader("Content-Type", "application/json");
+          return res.end(JSON.stringify({ ok: true }));
+        }
+      } catch (err) {
+        res.statusCode = 400;
+        return res.end(err instanceof Error ? err.message : String(err));
+      }
+    }
+
+    // C6.6:当前连接的远程素材服务、预取清单、导出前的原片检查
+    if (req.url.startsWith("/api/media/remote") || req.url.startsWith("/api/media/prefetch") || req.url.startsWith("/api/media/originals")) {
+      if (await handlePullApi(req, res, root)) return;
     }
 
     // GET /api/media/local?hashes=a,b —— 这些哈希里哪些已经在本地内容库
@@ -544,6 +878,9 @@ export function mediaMiddleware(root: string) {
         if (hashed) {
           const file = await resolveHashFile(root, hashed[1].toLowerCase(), hashed[2]);
           if (file) return serveFile(file, req, res);
+          // C6.6 按需拉取:本地内容库没有,就向当前连接的远程素材服务流式拉、边落盘边服务;没连远程才直接 404
+          const mod = await pullModule();
+          if (mod && await mod.pullThrough({ hash: hashed[1].toLowerCase(), req, res, store: pullStore(root), serveFile: (f: string) => serveFile(f, req, res) })) return;
           res.statusCode = 404;
           return res.end("Not found");
         }
@@ -571,6 +908,17 @@ export function mediaPlugin(): Plugin {
       const asset = assetServiceMiddleware(root);
       const handler = mediaMiddleware(root);
       server.middlewares.use((req, res, next) => { void asset(req, res, () => { void handler(req, res, next); }); });
+
+      // 两档素材与上传队列(C6.6):只在编辑器进程(ui)里跑。预渲染进程不导入素材;无头实例是临时副本,
+      // 和用户的编辑器共用同一个 out/,不接着转别人的小版、不起上传队列(它导入时照样生成小版,见 prepareTiers)。
+      const { isPrerender } = await import("./render-role.mjs");
+      if (!isPrerender && process.env.PROMPTCUT_HEADLESS !== "1") {
+        void mediaTierService(root).then((service) => {
+          service.manager.resume();
+          service.queue?.start();
+          server.httpServer?.once("close", () => { void service.queue?.stop(); });
+        }).catch((err) => tiersLog("tiers.start-failed", { message: err instanceof Error ? err.message : String(err) }));
+      }
 
       // 素材服务地址登记(C5 / D7,`docs/plan/asset-store-contract.md` 第 5 节):监听的不是回环、
       // 又设了 PROMPTCUT_DOCSERVICE_URL,才把本机素材服务的局域网地址报给文档服务。

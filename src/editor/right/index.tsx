@@ -11,11 +11,14 @@ import { CollectLoginDialog } from "./CollectLoginDialog";
 import { AgentBrowserFrame } from "./AgentBrowserFrame";
 
 import { editorApi } from "../../mcp/api";
+import { onlinePage } from "../../online/pageFlag";
 
 export function RightPanel() {
   const [mcpConnected, setMcpConnected] = useState(false);
 
   useEffect(() => {
+    // 在线浏览器模式没有编辑器进程:不连 Agent 的工具通道(C10a 契约第 2 节)
+    if (onlinePage()) return;
     const cleanup = connectMcpExecutor(() => editorApi, (s) => setMcpConnected(s.connected));
     return cleanup;
   }, []);

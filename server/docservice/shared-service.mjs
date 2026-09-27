@@ -69,6 +69,9 @@ export function createSharedDocService({
   service: serviceOptions = {},
   onCreate,
   onDelete,
+  // C10a 第 5 节：邀请链接用的公网源（取 `--doc-public-url` / `PROMPTCUT_DOCSERVICE_PUBLIC_URL` 的源，托管组合传进来）；
+  // `invite-create` 的回包带上它。没有就是 null，界面按自己连的地址拼
+  linkOrigin = null,
 } = {}) {
   if (mode !== 'hosted' && mode !== 'lan') throw new TypeError("createSharedDocService: mode 只能是 'hosted' 或 'lan'");
   const say = typeof log === 'function' ? log : undefined;
@@ -159,6 +162,7 @@ export function createSharedDocService({
       }
     },
     now,
+    linkOrigin,
     dropSpace(space) {
       // 先通知（记录已经删掉了）：清数据目录失败也不影响停止通告
       if (typeof onDelete === 'function') {

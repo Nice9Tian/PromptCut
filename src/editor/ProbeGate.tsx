@@ -1,8 +1,11 @@
 import { useEffect, useState } from "react";
-import { useStore } from "../store/project";
+import { getState, useStore } from "../store/project";
 import { previewMode } from "./previewMode";
 import { setPlanProject } from "./planDispatch";
-import { onProbeProgress, probeProgress, syncProbeRun, type ProbeProgress } from "./probeRunner";
+import { onProbeProgress, probeProgress, requeueProbeRun, syncProbeRun, type ProbeProgress } from "./probeRunner";
+import { whenStageReady } from "./stageBridge";
+import { cardsStamp, onCardsUpdated } from "../kernel/registry";
+import { whenStagesHaveCards } from "./stageCards";
 import "./ProbeGate.css";
 
 /**
@@ -41,6 +44,26 @@ export function ProbeGate() {
     setPlanProject(project);
     syncProbeRun(project);
   }, [enabled, project]);
+
+  /*
+   * 卡片代码换了(C6.6 第 5 节「卡片代码变了要由页面显式触发重测」:同步装上别人改的卡,或本机改卡):
+   * 项目没变、卡的代码变了,按当前项目重排一轮,身份键变了的卡补测。
+   * 信号来自注册表的 `onCardsUpdated`(`cards/index.ts` 接住热更新、重装整套卡片之后发),
+   * 它在这一批热更新全部落地之后才发,卡片源码表已是新的。舞台不重载(集成 3b):RPC 客户端一直在,
+   * 这里仍等一下后台舞台就绪,免得页面刚打开、舞台还没握手时白排一轮。
+   */
+  useEffect(() => {
+    if (!enabled) return;
+    let active = true;
+    const off = onCardsUpdated(() => {
+      // 先等两个舞台都换上这一版卡片(没换上的会被重载),再等后台舞台就绪,才排重测:
+      // 不然会在后台舞台还是旧卡、或正在换卡的当口测(测到旧代码,或那一轮被打断、等 RPC 超时)
+      void whenStagesHaveCards(cardsStamp())
+        .then(() => whenStageReady("back"))
+        .then(() => { if (active) requeueProbeRun(getState().project); });
+    });
+    return () => { active = false; off(); };
+  }, [enabled]);
 
   if (!enabled || !p.running || !p.blocking) return null;
 

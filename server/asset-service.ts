@@ -1,5 +1,5 @@
 /**
- * 素材服务:第一版的本地素材服务(`docs/semantics/architecture/asset-storage.md`;
+ * 素材服务:第一版的本地素材服务(`docs/semantics/product/asset-service.md`;
  * 任务书 `docs/plan/cloud-task.md` 第 5 步、A1「上传一律走分片」)。
  *
  * 它挂在编辑器进程的媒体插件里(`vite-plugin-media.ts` 的 mediaPlugin)。本模块只管 HTTP,
@@ -80,7 +80,7 @@
  * - 不带凭据(不用 cookie),所以用 `*`。`/api/**` 的同源守卫只对这一组路径豁免
  *   (`http-guard.mjs` 的 `isAssetServicePath`),其余 `/api/**` 照旧只认同源。
  *
- * ## 凭票据读写(M6a,`docs/plan/auth-contract.md` 第 8 节;语义 `asset-storage.md`「凭票据读写」)
+ * ## 凭票据读写(M6a,`docs/plan/auth-contract.md` 第 8 节;语义 `product/asset-service.md`「凭票据读写」)
  *
  * - **本机回环来源**(`isTrusted`,缺省按真实对端地址是不是回环):不需要票据,与原来相同。
  * - **其它来源**:
@@ -451,7 +451,7 @@ export function isAssetCorsPath(url: string | undefined): boolean {
 /**
  * 来源是不是回环或局域网地址:localhost / *.localhost / *.local、127.0.0.0/8、10/8、172.16/12、192.168/16、
  * 169.254/16、IPv6 的 ::1、fc00::/7、fe80::/10。素材服务要让局域网里的设备直接访问
- * (`docs/semantics/architecture/asset-storage.md`「职责」),没说要让公网网页访问本机 ——
+ * (`docs/semantics/product/asset-service.md`「职责」),没说要让公网网页访问本机 ——
  * 私有网络访问只放给这些来源,取最保守的一边。认不出的来源一律当公网。
  */
 export function isPrivateOrigin(origin: string | string[] | undefined): boolean {

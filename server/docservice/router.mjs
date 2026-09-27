@@ -3,7 +3,7 @@
  * 频道分发，以及每条连接的出站背压。
  *
  * 契约见 `docs/plan/` 下 M5a 契约的 G.2、G.3 与 C6.1 的 H.1、H.2、H.4（文件名含守门词，这里不写全）。
- * 文档服务是通用的文本 / JSON 分发中心（`docs/semantics/architecture/document-service.md`「职责」），
+ * 文档服务是通用的文本 / JSON 分发中心（`docs/semantics/product/document-service.md`「职责」），
  * 所以本文件不认识任何具体业务：不引用业务模块，也不按业务消息名写分支。业务都在组装层挂上来的模块里。
  * 频道前缀、合并键都是模块给的字符串，核心只做比较，不认识任何具体取值。
  *

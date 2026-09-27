@@ -4,7 +4,7 @@
 
 **依据**：
 - 主执行计划第 7 节 SP（D10 修订版）、第 12 节 D9；
-- 语义 `document-service.md`（「部署组合」「连接发现」「局域网发现（已引入）」「共享项目与权限」）、`asset-storage.md`（「凭票据读写」）；
+- 语义 `product/document-service.md`（「部署组合」「连接发现」「局域网发现（已引入）」「共享项目与权限」）、`product/asset-service.md`（「凭票据读写」）；
 - M6a 契约 `auth-contract.md`（含第 14 节集成裁定），M6b 契约 `render-host-contract.md`；
 - 局域网发现方案的唯一出处 `direct-connect-plan.md`「设计要点」第 4 条（本契约只定参数，不另写方案）；
 - 迁移流程 `hosting-migration.md`；
@@ -80,13 +80,13 @@
 | 包大小 | 单包 UTF-8 JSON ≤ 1 KiB，超出不发 |
 | 不做防伪 | 局域网发现只找地址；进入仍要项目凭证（M6a） |
 
-- **主机端**：局域网模式的共享项目建成后，编辑器进程开始广播与应答；项目删掉或编辑器退出时停。
+- **主机端**：放本机的共享项目建成后，编辑器进程开始广播与应答；项目删掉或编辑器退出时停。
 - **手填兜底**：`findSharedProject` 接受 `lan: { manual: ['http://192.168.x.y:port'] }`，直接对这些地址 `GET /docservice/shared/lookup?name=`。浏览器只能用这一路（C10）。
 - **网络变化**：网卡增减时（每 10 s 检查一次）重建成员资格。
 
 ## 5. 局域网主机的绑定
 
-- 编辑器（vite）以局域网主机身份运行时，文档服务与素材服务随编辑器绑 `0.0.0.0`。现在编辑器缺省绑回环，要显式开 `PROMPTCUT_LAN_HOST=1`，或者由 C6.5 的「新建共享项目（局域网模式）」在运行时打开。
+- 编辑器（vite）以局域网主机身份运行时，文档服务与素材服务随编辑器绑 `0.0.0.0`。现在编辑器缺省绑回环，要显式开 `PROMPTCUT_LAN_HOST=1`，或者由 C6.5 的旧入口「新建共享项目」选放本机时在运行时打开。
 - 管理接口只认回环（M6a 第 10 节，已实现）。
 - 绑非回环而凭证存储没加载，拒绝启动（M6a）。
 
@@ -102,7 +102,7 @@
   - 不设集群令牌，凭项目凭证进入；
   - 读项目快照、带票据读素材、以 `render` 角色认领并完成至少 1 个任务；
   - 输出各项结果与 `task.done` 计数。
-- **`--mode lan --role creator`**：起局域网主机（`PROMPTCUT_LAN_HOST=1`），建局域网模式项目，开始广播。
+- **`--mode lan --role creator`**：起局域网主机（`PROMPTCUT_LAN_HOST=1`），建放本机的项目，开始广播。
 - **`--mode lan --role member [--manual <url>]`**：发现（记录发现耗时）后进入，其余同上。
 - **`--role migrate-check --from <url> --to <url>`**：迁移前后对比。逐项核对项目数、`projectRev`、素材与产物的哈希抽查，全部通过才 `ok: true`。
 
@@ -117,7 +117,7 @@
 | SP5 | 单测覆盖四种候选组合 |
 | SP6 | 守门测试：源码里 `8.219.80.16` 只出现在 `hosted-default.mjs`（测试、文档、探针除外）；三种覆盖顺序的单测 |
 | SP7 | 本机两份托管组合（两个数据目录、两组端口），按 `hosting-migration.md` 拷数据目录后 `migrate-check` 通过 |
-| SP8 | 跨机 W6：局域网模式同 SP4；互联网模式按计划 SP8。托管端的磁盘占用、RSS、流量记进报告 |
+| SP8 | 跨机 W6：放本机（局域网直连）同 SP4；放云端按计划 SP8。托管端的磁盘占用、RSS、流量记进报告 |
 
 ## 8. 分支
 
@@ -163,17 +163,17 @@
 3. 失败即关另加两个原因词：`layout`（`assets/.layout` 对不上，或 `assets/` 有东西却没有标记）、
    `asset-public-url`（绑非回环而没设 `PROMPTCUT_ASSET_PUBLIC_URL`）；端口被占打 `config.error { reason: 'listen' }`。
 4. 数据目录本身必须已存在（不存在即 `data-dir`，服务不替人建）；`docservice/`、`assets/`、`secrets/`（0700）由服务建。
-5. 地址登记：有集群令牌时带令牌（管理身份），没有时以回环的本机身份登记（本机身份同样允许 `service.announce`）。
+5. 地址登记：有集群令牌时带令牌（管理身份），没有时以回环的本机身份登记（本机身份同样允许 `service.announce`）。〔2026-09-26 修订〕`PROMPTCUT_TRUST_LOOPBACK=0` 时只能带令牌，没有集群令牌就拒绝启动（`docs/plan/http-transport-contract.md` 第 10 节）。
 6. `assets/.layout` 的内容是 `{"v":1,"layout":"shard"}`（第 11 节裁定）；本机编辑器的原布局记作 `flat`（本机不写标记）。
 7. 磁盘满：`ENOSPC` / `EDQUOT` 回 507 的映射做在 `server/asset-service.ts`（分片与收尾两处），本机编辑器同样生效。
-8. 测试开关 `PROMPTCUT_TEST_NO_LOOPBACK_TRUST=1`：素材服务与管理接口不把本机回环当自己人，本机也能验票据读写。
+8. 〔2026-09-26 修订〕本机信任开关 `PROMPTCUT_TRUST_LOOPBACK`，取代原测试开关 `PROMPTCUT_TEST_NO_LOOPBACK_TRUST`（旧名删掉，不留兼容）。`0` 时文档服务握手、共享端点、素材服务、管理接口都不把回环当本机；缺省 `1`；`deploy-hosted` 给阿里云写 `0`。原测试开关只接到了素材服务与管理接口。详见 `docs/plan/http-transport-contract.md` 第 10 节。
 
 **部署脚本的补充**：`deploy-hosted` 另有 `--replace-docservice`（旧的 `promptcut-docservice` 还在 PM2 里时，缺省拒绝部署正式实例，退出码 3）、
 `--write-token`（把本机 `PROMPTCUT_CLUSTER_TOKEN` 经 ssh 标准输入写成 `secrets/cluster-token`，0600）；另加 `status-hosted`、`stage-hosted`。
 
 ## 11. 集成时的裁定（2026-09-26）
 
-`claude/sp-hosting`、`claude/sp-routing`、`claude/sp-tests` 集成对账时，主会话对歧义与实现偏差的裁定。每条是「裁定：理由」。实现已按此核对或改过（`claude/sp-integ`，改动清单见 `docs/reports/AGENT-sp-integ.md`）。
+`claude/sp-hosting`、`claude/sp-routing`、`claude/sp-tests` 集成对账时，主会话对歧义与实现偏差的裁定。每条是「裁定：理由」。实现已按此核对或改过（`claude/sp-integ`，改动清单见 `docs/archive/agent-reports/AGENT-sp-integ.md`）。
 
 - **数据目录**：`PROMPTCUT_DATA_DIR` 不存在就启动失败（`config.error { reason: 'data-dir' }`，退出码 1），服务不替用户建；部署脚本先建。理由：服务自己建会把写错的路径悄悄变成一个空实例，看起来正常、数据却不在该在的地方；部署脚本知道目标路径，由它建（`deploy-hosted` 已这样做）。
 - **`.layout`**：对不上时退出码 1、原因词 `layout`；文件内容 `{"v":1,"layout":"shard"|"flat"}`。理由：与其余失败即关的原因词一致；布局名按含义起，不带实现细节（原实现写的 `shard2` 已改成 `shard`，`/healthz` 同）。
@@ -186,5 +186,5 @@
 - **磁盘满**：`ENOSPC` / `EDQUOT` 映射成 507 `insufficient-storage` 做在素材服务的 HTTP 层（接受 `claude/sp-hosting` 改 `server/asset-service.ts` 的出错分支）。理由：数据层只抛错误码，状态码是 HTTP 层的事；本机编辑器同样受益，正常路径不变。
 - **凭证存储读不了**：只在 `PROMPTCUT_LAN_HOST=1` 时拒绝启动；`npm run dev` 绑 `0.0.0.0` 时只打 `config.error { reason: 'auth-store' }`，局域网来的一律 401。理由：不改开发环境的现有行为；明确要当局域网主机时才失败即关，其余情况局域网来的一律 401 已经安全。
 - **局域网广播与绑定**：是否广播按编辑器实际绑定的地址判断（只绑回环不广播）；`PROMPTCUT_LAN_HOST=1` 在 vite 插件的 `config` 钩子里压过命令行的 `--host`；运行时不能换绑定。理由：只绑回环时通告出去的地址别人连不上；桌面壳按 `--host 127.0.0.1` 拉起编辑器，写在 `server.host` 里会被命令行盖掉；vite 的 http 服务器不能在运行时换绑定地址。
-  - **遗留（C6.5）**：第 5 节「由 C6.5 的『新建共享项目（局域网模式）』在运行时打开」做不到，C6.5 要靠桌面壳带着 `PROMPTCUT_LAN_HOST=1` 重启编辑器。
-- **探针退出崩溃**：SP7 探针在结果行之后以 `0xC0000409` 退出，属于已知的 Windows 退出崩溃（有句柄还在关闭中就 `process.exit`，同 `render-queue-e2e.mjs` 的注释），保留规避：探针设 `process.exitCode` 后自然退出，10 s 兜底强退用 unref 的计时器。理由：崩溃发生在结果已写出之后，与被测行为无关；局域网模式的探针（`shared-project-lan.mjs`）也改成同样的退出方式。
+  - **遗留（C6.5）**：第 5 节「由 C6.5 的旧入口『新建共享项目』选放本机时在运行时打开」做不到，C6.5 要靠桌面壳带着 `PROMPTCUT_LAN_HOST=1` 重启编辑器。
+- **探针退出崩溃**：SP7 探针在结果行之后以 `0xC0000409` 退出，属于已知的 Windows 退出崩溃（有句柄还在关闭中就 `process.exit`，同 `render-queue-e2e.mjs` 的注释），保留规避：探针设 `process.exitCode` 后自然退出，10 s 兜底强退用 unref 的计时器。理由：崩溃发生在结果已写出之后，与被测行为无关；放本机那一路的探针（`shared-project-lan.mjs`）也改成同样的退出方式。

@@ -9,6 +9,7 @@
 - 每个子 Agent 一个 worktree、一个分支。
 - 给每个子 Agent 分配互不重叠的文件清单和端口段。端口按 10 个一段分，并避开用户常驻的 dev server 及其舞台端口。
 - 写清验收标准和报告要写什么。
+- 约定报告文件的路径：`docs/reports/AGENT-<分支名>.md`。阶段报告写完后，主 Agent 把这些 AGENT 报告归档到 `docs/archive/agent-reports/`，不留在 `docs/reports/`。
 
 ## 子 Agent 干活时
 

@@ -4,7 +4,7 @@
 
 - 计划：`docs/plan/Master-Execution-Plan.md` C6 一节的 C6.2 行
 - 设计：`docs/plan/cloud-task.md` A3b（本文把其中与任务结果有关的 `[DRAFT]` 定下来）；`docs/plan/distributed-prerender-queue.md` 第 6 节
-- 语义：`docs/semantics/architecture/asset-storage.md`「预渲染的产物」；`document-service.md`「渲染任务队列」的「完成」一条：节点先把产物推送到素材服务，再报完成；各方从素材服务取字节
+- 语义：`docs/semantics/product/asset-service.md`「预渲染的产物」；`mechanism/document-service.md`「渲染任务队列」的「完成」一条：节点先把产物推送到素材服务，再报完成；各方从素材服务取字节
 - 现有接口：`docs/plan/asset-store-contract.md`（C5 的 `BlobStore`）；`render-queue-contract.md` D.1（`sink`）、E.9（本地档键的换算）
 
 ## 0. 范围

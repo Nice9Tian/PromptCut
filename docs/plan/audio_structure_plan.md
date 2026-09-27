@@ -131,7 +131,7 @@
   - Worker 提前 2 秒算好 0.5 秒一块；
   - 用 `AudioBufferSourceNode.start(when)` 在精确时刻无缝拼接；
   - 后面依次接 `GainNode`（音量 × 淡入淡出曲线，复用 `kernel/audioPlan.mjs` 的 `fadeEnvelope`）和 `fxChain`。
-- **跟住 t**（`docs/semantics/architecture/rendering.md` 的「音频跟随时刻」）：
+- **跟住 t**（`docs/semantics/mechanism/rendering.md` 的「音频跟随时刻」）：
   - 引擎以舞台报来的 t 为准，把 t 换算成 `AudioContext` 的时刻来排块。
   - 停顿超过 40 ms 就 `ctx.suspend()`，恢复时从当前 t 重新排块。
   - 漂移小于 40 ms 不动；达到 40 ms，就在下一个块边界重排，用 5 ms 淡入淡出防咔哒。
