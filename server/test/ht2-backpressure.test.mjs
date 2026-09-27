@@ -74,18 +74,18 @@ test('HT2-detached 保留期内传输断着，服务端继续写：未确认字�
 });
 
 test('HT2-coalesce 合并键照常：未确认字节在高水位以上时进核心出站队列的同键消息只留最后一条；确认推进后写出（drained）', T, async (t) => {
-  const env = await startService({ highWaterBytes: 8 * KB, maxPendingBytes: 1024 * KB, retainMs: 60_000 });
+  const env = await startService({ highWaterBytes: 10 * KB, maxPendingBytes: 1024 * KB, retainMs: 60_000 });
   t.after(env.cleanup);
   const c = await openSession(env);
-  c.sendSeq({ type: 'ht.burst', count: 4, size: 4 * KB }); // 16 KiB 未确认，过了高水位
-  await waitFor(() => c.all.filter((m) => m.type === 'ht.blob').length === 4, 2000, '前四条写出');
+  c.sendSeq({ type: 'ht.burst', count: 3, size: 4 * KB }); // 前两条写出时还在 10 KiB 高水位以下，三条写完 12 KiB 未确认，过了高水位
+  await waitFor(() => c.all.filter((m) => m.type === 'ht.blob').length === 3, 2000, '前三条写出');
   c.sendSeq({ type: 'ht.burst', count: 5, size: 100, key: 'k' });
   await sleep(200);
-  assert.equal(c.all.filter((m) => m.type === 'ht.blob').length, 4, '高水位以上：同键的几条进队、还没写出');
+  assert.equal(c.all.filter((m) => m.type === 'ht.blob').length, 3, '高水位以上：同键的几条进队、还没写出');
   assert.equal((await env.health()).coalesced, 4, '五条同键合并掉四条');
   c.sendRaw({ type: 'session.ack', ack: c.ackOf() });
-  await waitFor(() => c.all.filter((m) => m.type === 'ht.blob').length === 5, 2000, '确认推进后写出剩下的一条');
+  await waitFor(() => c.all.filter((m) => m.type === 'ht.blob').length === 4, 2000, '确认推进后写出剩下的一条');
   const last = c.all.filter((m) => m.type === 'ht.blob').at(-1);
   assert.equal(last.i, 4, '留下的是最后一条');
-  assert.equal(last.seq, 5, `seq 在写出时编：${JSON.stringify({ i: last.i, seq: last.seq })}`);
+  assert.equal(last.seq, 4, `seq 在写出时编：${JSON.stringify({ i: last.i, seq: last.seq })}`);
 });
