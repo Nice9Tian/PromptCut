@@ -37,6 +37,8 @@ import { layerMapOf } from './artifact-transfer.mjs';
  */
 export const PUSH_SNAPSHOT_SPAN = QUEUE_DEFAULTS.SNAPSHOT_SPAN;
 export const PUSH_STREAM_SEGMENTS = QUEUE_DEFAULTS.STREAM_SEGMENTS;
+/** c10a 第 9 节:还没画成小位图的帧最多攒这么多(本进程好久没换页时只留最新的) */
+export const SMALL_PENDING_MAX = 480;
 /** 推送优先级(`artifact-push.mjs` 的 `PUSH_PRIORITY`):0 normal、1 low。这里不引那个模块,只用数 */
 const PUSH_NORMAL = 0, PUSH_LOW = 1;
 /** 换机取用时同时查几段清单 */
@@ -587,6 +589,8 @@ export class FramePipeline {
     try {
       // M4:第一个预渲染间开起来就定下本进程的环境指纹,之后算 card plan 才有键可产
       await this.ensureEnvironment(bakery);
+      // c10a 第 9 节:换页之前先把攒着的预渲染小尺寸在旧页上画完
+      bakery.beforeReset = b => this.flushSmallOn(b);
       await bakery.loadProject(project, { deferCards: true });
       await bakery.page.setViewport({ width: project.width, height: project.height, deviceScaleFactor: this.scaleForLane(lane) });
       await bakery.client.send('Emulation.setDefaultBackgroundColorOverride', { color: { r: 0, g: 0, b: 0, a: 0 } });
@@ -1491,14 +1495,14 @@ export class FramePipeline {
   /*
    * ---------------------------------------------------------------- 预渲染小尺寸(c10a 第 9 节)
    *
-   * 渲染节点产出一批 HTML 快照(`commitSnapshots` 写完)之后,在**同一个预渲染 Chrome** 里另开一个受帧控制的页面,
+   * 渲染节点产出一批 HTML 快照(`commitSnapshots` 写完)之后,在**同一个预渲染间**上(它换页之前、旧页空着的时候,`flushSmallOn`)
    * 把这一批的每一帧截成一张 WebP 小位图(`bakery/small-bitmap.mjs`:片段框里的内容,按项目画幅缩进 800×600),
    * 写在快照同目录的 `<localFrame>.small.webp`(`index.json` 与 `<localFrame>.html` 一字不动)。写完把这一批所在的段
    * 再进一次推送队列 —— 小位图随同一段推到素材服务(`px`),清单里带 `small` 表(`artifact-transfer.mjs`)。
    *
    * - 只在配了推送队列时做:小尺寸只给在线页面从素材服务拉,不连素材服务就没有消费方(离线照旧,一个字节不多写)。
-   * - 只借**已经开着**的预渲染 Chrome(背景 / 队列 / Agent 那几条 lane):本进程这会儿没有 Chrome 就不做,
-   *   不为小尺寸单独起浏览器 —— 推送队列本身从不开 Chrome、不渲染(C6.4)。
+   * - 只借**已经开着**的预渲染间(lane 的 `bakery`),在它换页前画:不为小尺寸单独起浏览器、也不另开页面 ——
+   *   推送队列本身从不开 Chrome、不渲染(C6.4)。
    * - 从素材服务拉来的帧(`adopted: true`)不做:别的节点产的,清单里本来就有它的小尺寸。
    * - 生成失败只记日志,不挡原尺寸:原尺寸照常入库、推送。
    * - `PROMPTCUT_SMALL_TIER=0` 关掉(排查用)。
@@ -1506,18 +1510,22 @@ export class FramePipeline {
   smallTierEnabled() {
     return !!this.pushQueue && process.env.PROMPTCUT_SMALL_TIER !== '0';
   }
-  /** 这一批要不要生成小尺寸;要就排进串行链(不等),回有没有排 */
+  /**
+   * 这一批要生成小尺寸:记下来(不等、不开 Chrome),等下一次有预渲染间要换页时在它**要扔掉的那一页**上画(`flushSmallOn`)。
+   * 为什么不当场另开一页:受帧控制(`--enable-begin-frame-control`)的 Chrome 里同时开第二个受控页面,实测把预渲染间
+   * 那一页的就绪等待卡死(「导出页 60 秒没就绪」);而预渲染间每一批开工前本来就要 `reset` 换一张新页,旧页这时空着。
+   * 回有没有记下。攒太多(本进程好久没换页)只留最新的 `SMALL_PENDING_MAX` 帧。
+   */
   scheduleSmallSnapshots(args) {
     if (!this.smallTierEnabled() || !args || args.adopted === true) return false;
     const { tier, key } = args;
     if ((tier !== 'shared' && tier !== 'local') || !key) return false;
     const items = (args.items ?? []).filter(item => Number.isInteger(item?.localFrame) && item.localFrame >= 0 && typeof item.html === 'string');
-    if (!items.length || !this.smallHost()) return false;
-    const job = { ...args, items };
-    this.smallChain = (this.smallChain || Promise.resolve()).then(() => this.writeSmallSnapshots(job)).catch(error => {
-      this.smallStats.failed++;
-      this.smallStats.lastError = String(error?.message ?? error);
-    });
+    if (!items.length) return false;
+    const pending = this.smallPending ??= [];
+    pending.push({ ...args, items });
+    let frames = pending.reduce((n, job) => n + job.items.length, 0);
+    while (frames > SMALL_PENDING_MAX && pending.length > 1) { frames -= pending.shift().items.length; this.smallStats.dropped++; }
     return true;
   }
   /** 正在生成的预渲染小尺寸都落定(`collectSnapshotResult` 列清单前等它;没有在生成的立刻兑现,不渲染) */
@@ -1525,29 +1533,27 @@ export class FramePipeline {
     return (this.smallChain ?? Promise.resolve()).catch(() => {});
   }
   get smallStats() {
-    return this._smallStats ??= { written: 0, skipped: 0, failed: 0, lastError: null };
+    return this._smallStats ??= { written: 0, skipped: 0, failed: 0, dropped: 0, lastError: null };
   }
-  /** 本进程此刻开着的一个预渲染 Chrome(借它的浏览器另开一页);没有回 null */
-  smallHost() {
-    for (const session of this.lanes.values()) if (session?.bakery?.browser && session.bakery.browser.connected !== false) return session.bakery;
-    return null;
-  }
-  /** 小尺寸的受控舞台:借开着的预渲染 Chrome 另开的一页,浏览器关了就换一个 */
-  async smallRenderer(project) {
-    const host = this.smallHost();
-    if (!host) return null;
-    const cur = this._small;
-    if (cur && cur.browser === host.browser && !cur.session.page.isClosed?.()) return cur.renderer;
-    await cur?.session.close?.().catch(() => {});
-    this._small = null;
-    const { openExtraSession } = await import('./bakery/chrome.mjs');
-    const session = await openExtraSession(host, this.emptyUrl(project));
-    this._small = { browser: host.browser, session, renderer: createSmallRenderer(session) };
-    return this._small.renderer;
+  /**
+   * 预渲染间要换页了(`chrome.mjs` 的 `reset` / `resetWith` 开头调 `beforeReset`):把记下的小尺寸在这一页上画完。
+   * 这一页马上就被关掉,在它上面改视口、藏根节点都不影响之后的渲染。
+   */
+  flushSmallOn(bakery) {
+    const jobs = this.smallPending?.splice(0) ?? [];
+    if (!jobs.length || this.closed || !this.smallTierEnabled()) return this.whenSmallSettled();
+    this.smallChain = (this.smallChain || Promise.resolve()).catch(() => {}).then(async () => {
+      const renderer = createSmallRenderer(bakery);
+      for (const job of jobs) {
+        try { await this.writeSmallSnapshots(job, renderer); }
+        catch (error) { this.smallStats.failed++; this.smallStats.lastError = String(error?.message ?? error); break; }
+      }
+    });
+    return this.smallChain;
   }
   /** 把这一批的小位图写到快照同目录;已经有的跳过。回写了几张 */
-  async writeSmallSnapshots(args) {
-    if (this.closed) return 0;
+  async writeSmallSnapshots(args, renderer) {
+    if (this.closed || !renderer) return 0;
     const { tier, key } = args;
     const entryKey = tier === 'local' ? args.entryKey : null;
     const control = this.controlForSnapshotKey(tier, entryKey, key);
@@ -1555,26 +1561,15 @@ export class FramePipeline {
     if (!control || !(width > 0) || !(height > 0)) { this.smallStats.skipped += args.items.length; return 0; }
     const box = resolveFrameSize(control.appearance?.frame, { width, height });
     const dir = this.snapshots().dir({ tier, entryKey, key });
-    const renderer = await this.smallRenderer({ width, height, fps: Number(control.fps) || 30 });
-    if (!renderer) { this.smallStats.skipped += args.items.length; return 0; }
     await fs.mkdir(dir, { recursive: true });
     let written = 0;
     for (const item of args.items) {
       if (this.closed) break;
       const file = path.join(dir, `${item.localFrame}${SMALL_SUFFIX}`);
       if (await exists(file)) continue;
-      try {
-        const webp = await renderer.renderHtml({ html: item.html, projectWidth: width, projectHeight: height, boxWidth: Number(box.w) || width, boxHeight: Number(box.h) || height });
-        await atomic(file, webp);
-        written++;
-      } catch (error) {
-        this.smallStats.failed++;
-        this.smallStats.lastError = String(error?.message ?? error);
-        // 受控舞台坏了(浏览器被关):下一批换一页重开
-        await this._small?.session.close?.().catch(() => {});
-        this._small = null;
-        break;
-      }
+      const webp = await renderer.renderHtml({ html: item.html, projectWidth: width, projectHeight: height, boxWidth: Number(box.w) || width, boxHeight: Number(box.h) || height });
+      await atomic(file, webp);
+      written++;
     }
     this.smallStats.written += written;
     // 小位图随同一段推(推送队列按段去重;正在推的段推完再推一遍)
@@ -2807,9 +2802,8 @@ export class FramePipeline {
     // C6.4:推送队列停止派新活(没推完的段留在队列文件里,下次起来接着推)
     if (this.pushQueue) { try { await this.pushQueue.stop?.(); } catch {} }
     // c10a 第 9 节:小尺寸那一页(浏览器随 lane 一起关)
+    this.smallPending = [];
     await this.smallChain?.catch(() => {});
-    await this._small?.session.close?.().catch(() => {});
-    this._small = null;
     await Promise.allSettled(this.streamSessions.splice(0).map(session => { clearTimeout(session.idleTimer); return session.bakery?.close(); }));
     await Promise.allSettled([...this.lanes.values()].map(session => { clearTimeout(session.timer); return session.bakery.close(); }));
     this.lanes.clear();

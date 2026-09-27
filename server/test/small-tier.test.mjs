@@ -175,18 +175,25 @@ test('ST6 完成条件:列清单前等正在生成的小尺寸落定,两档一�
 
 /* ------------------------------------------------------------------ 什么时候不生成 */
 
-test('ST7 不生成:没配推送队列、本进程没有开着的预渲染 Chrome、从素材服务拉来的帧 —— 都不排、不开 Chrome', async () => {
+test('ST7 什么时候排:没配推送队列不排;配了就记下、等预渲染间换页时再画(不开 Chrome);拉来的帧不排', async () => {
   const p = await makePipeline();
   const calls = bakeryCalls.length;
   const args = { tier: 'shared', key: 'd'.repeat(64), clipId: 'c1', items: [{ localFrame: 0, html: html(0) }] };
   assert.equal(p.scheduleSmallSnapshots(args), false, '没配推送队列');
   p.pushQueue = { enqueue: async () => {} };
   assert.equal(p.smallTierEnabled(), true);
-  assert.equal(p.scheduleSmallSnapshots(args), false, '没有开着的 Chrome:不为小尺寸单独起浏览器');
+  assert.equal(p.scheduleSmallSnapshots(args), true, '记下来');
+  assert.equal(p.smallPending.length, 1);
   assert.equal(p.scheduleSmallSnapshots({ ...args, adopted: true }), false, '拉来的帧');
+  // 攒太多只留最新的
+  for (let i = 0; i < 600; i++) p.scheduleSmallSnapshots({ ...args, items: [{ localFrame: i, html: html(i) }] });
+  assert.ok(p.smallPending.reduce((n, j) => n + j.items.length, 0) <= 480);
+  assert.ok(p.smallStats.dropped > 0);
+  p.smallPending = [];
   // commitSnapshots 的钩子照常进推送队列,但不开 Chrome
   await p.snapshots().commitSnapshots(args);
   assert.equal(bakeryCalls.length, calls, '一次 openBakery 都没有');
+  p.smallPending = [];
   const prev = process.env.PROMPTCUT_SMALL_TIER;
   process.env.PROMPTCUT_SMALL_TIER = '0';
   try { assert.equal(p.smallTierEnabled(), false); } finally { if (prev === undefined) delete process.env.PROMPTCUT_SMALL_TIER; else process.env.PROMPTCUT_SMALL_TIER = prev; }
