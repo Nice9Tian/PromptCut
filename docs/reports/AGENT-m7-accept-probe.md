@@ -1,7 +1,116 @@
 # AGENT-m7-accept-probe 报告
 
-分支 `claude/m7-accept-probe`，起点 `claude/rq-m7-queue` `fdbeb60`（C10 集成 + M7 服务端一侧 + 契约单测）。端口段 5450～5459。
+分支 `claude/m7-accept-probe`，起点 `claude/rq-m7-queue` `fdbeb60`（C10 集成 + M7 服务端一侧 + 契约单测），合进了 `claude/m8-kit`（`4b18d64`，m8 探针公共件）。端口段 5450～5459。
 
-任务：照 `docs/plan/m7-contract.md`（M7 = 纯浏览器节点；第 13 节主会话裁定为定论）写浏览器验收探针 `scripts/probes/m7-browser-probe.mjs`，第 10 节 M7-A1～A12 各一个检查、W7 跨机分 creator / node 两个角色。不看页面节点分支（`claude/rq-m7-node`）的实现。
+代号：M7 是「纯浏览器节点」阶段；M7-A1～A12、W7 是契约 `docs/plan/m7-contract.md` 第 10 节的验收编号（W7 = 跨机那一条）；D1～D18 是契约第 11 节的待定点、第 13 节主会话的裁定；E5 是「纯浏览器只见本人任务」，B2 是「纯浏览器只认领 light / medium 共享档快照」；L1 是云端任务书里「后台 iframe 当预渲染者」那一条（已并入 M7）。
 
-状态：开工。
+## 做了什么
+
+| 文件 | 内容 |
+|---|---|
+| `scripts/probes/m7-browser-probe.mjs` | 验收探针。角色 `creator`（用户 A：托管组合 + 三源代理 + 在线构建 + A 的桌面编辑器当 pc 节点 + 上帝视角）、`node`（成员 B：无头 Chromium 的普通档 b1、低内存档 low、退回单舞台 single，A10 另开 b2）、`all`（本机替身：协调口 + 两个角色各一个子进程）。协调口 KV 前缀 `m7ap`，键名照 `m8/kv.mjs` |
+| `scripts/probes/m7-node-adapter.mjs` | 页面节点诊断的唯一适配处（契约第 7 节没定形状的读法），假设清单 `ASSUMPTIONS` |
+
+判据的取证尽量不靠页面诊断：
+
+- **线上消息**：node 角色用 CDP 抓每页全部 WebSocket（握手子协议、回显、收发的业务消息）。连接的角色按握手里票据负载的 `r` / `o.kind` 认，接续的连接按会话号认回；票据与会话号只留内存，不输出。
+- **上帝视角**：creator 进程内起托管组合，轮询 `service.describe()`（任务状态史、认领过它的节点、锁、节点表），另有一个 pc 档旁观节点（A 的 render 连接，不带指纹、watch `'all'`）拿任务正文（`requires`、`input`、`priority`、`source.userId`）；清单、层表用 `content.get`，`snap/` `px/` 块用托管组合的 `inventory()`。
+- **替身节点**（服务端一侧现在就真判）：`server/render-node/session.mjs` + `filter.mjs`（页面按 D11 要用的同一份节点代码），经 `auth.ticket { kind: 'conn', role: 'render', owner: { kind: 'browser' } }` 签的票据连文档服务，`node.hello` 带 `environment` 原始值；Chrome 主版本取 901～907，指纹与真页面、pc 都不撞。
+- 页面诊断（`__pcBrowserNode()` 等）只作对照与补充。
+
+### 每条验收的判据写法
+
+| 编号 | 部分（`parts` 里的名字） | 判据 |
+|---|---|---|
+| M7-A1 | `server-B-other-user`、`server-same-name-other-device` | A（发布方 + 每种指纹一个 host 假节点）发布 10 个细任务（不带指纹的、带替身 sB / sS / 页面指纹的）并全部做完；B 的替身 sB、与 A 同名不同设备的替身 sS 在这期间收到 A 任务的 `queue.snapshot` / `task.opened` / `task.taken` / `task.closed` 0 条；旁观节点看得见这些任务（证明任务确实发出、只是被「只见本人」挡住） |
+| | `page` | 页面当了节点后：b1、low、single 三页任何连接上收到 A 任务 id 的消息 0 条（CDP） |
+| M7-A2 | `server-claim-other-user-forbidden` | sB 拿 A 的 open 细任务与 A 的计划任务 id 认领：一律 `task.claim-rejected { reason: 'forbidden' }`，不带 `state`、`version` |
+| | `server-own-plan-plan-profile` | sB 认领 B 自己发布的清单计划：`plan-profile` |
+| | `server-d9-browser-as-pc-forbidden` | 浏览器归属的 render 连接以 `pc` 报到：`error forbidden`，之后 `queue.watch` 回 `not-registered` |
+| | `page-hello-profile-browser` | 页面当节点时：它的 `node.hello` 是 `profile: 'browser'`、`maxConcurrent: 1`、带 `environment` |
+| M7-A3 | `server-standin-*` | 替身 sQ（work 模式）+ B 发布的本人任务：light 2、medium 2（应认领）；heavy、本地档、用户卡、图卡、改过源码的卡、非独立卡（D4）、流、plan（不应认领）；跑满 `--a3-seconds`（缺省 60 s）：禁收的认领 0 次（替身发出的 `task.claim` 与上帝视角的认领记录都数），light / medium 全部认领并完成 |
+| | `server-page-*` | 页面当节点时：以页面的身份（同用户名、同设备 id → 同一 userId）发布同样几类禁收任务（页面的指纹、页面的代码版本），60 s 内页面节点认领 0 次 |
+| M7-A4 | `page-anchors-done`、`page-within-30s`、`page-layer-env-browser` | 从 b1 的加载遮罩撤下起：三张重卡（`h1～h3`）的锚帧段（认领回包里 `priority: 50`）都由本页 `task.complete`，最慢一段距遮罩撤下 ≤ 30 s（计时：笔记本判）；页面内快照库 `snapshots` 表有条目；`__pcOnlineSnapshots().layers` 这三层的指纹 = 页面指纹 |
+| | `server-anchors-by-browser`、`server-layer-map-points-to-browser` | 这些锚帧段任务状态 done、认领者是页面节点、内容库有清单、清单里每帧的 `snap/` 块都在素材服务；层表 `layers:<项目>` 这三层的候选里有页面指纹 |
+| M7-A5 | `page-yield-on-drag`、`page-attempts-unchanged`、`page-resume-after-500ms` | 本页持有一段且在报进度时，在 `[data-pc="ruler"]` 上真鼠标连续拖 3 s：拖动期间 `task.claim` 0 条；这一段新的 `task.progress` ≤ 1；`task.release` 恰 1 次；快照库条数增加 ≤ 1；松手后 500 ms 内认领 0 条、之后恢复认领；再认领到同一段时回包的 `attempts` 为 0 |
+| M7-A6 | `play-yield` | 同 A5，换成播放 3 s |
+| | `hidden-release-now`、`hidden-no-claims-then-resume` | 同一窗口另开标签切过去（页面 `visibilityState` 变 hidden）：立即 `task.release`，放回之前不再报这一段的进度；隐藏期间认领 0；切回后恢复认领 |
+| | `urgent-stops-at-frame-boundary` | 生成快照中加一张新卡（后台舞台要测量它，比生成快照急）：30 s 内放回，放回前至多再报 1 帧 |
+| M7-A7 | `setup-single-stage` | single 页（拦掉 `runtime-config.json`）确实退回单舞台（`__pcPreviewDiag().dual === false`） |
+| | `no-render-connection` | 整场 low、single 两页：render 连接 0 条、`node.hello` 0 条；对照 = b1 当了节点。对照没当节点时记 pending（判据成立但没有对照） |
+| M7-A8 | `server-manifest-matches` | 页面产的每份清单过 `manifestMatches` |
+| | `server-one-env-per-layer` | 每张卡已完成的细任务只有一种指纹 |
+| | `server-exactly-once-done` | 旁观节点看到的每个任务的 `task.closed { state: 'done' }` 至多一次（作废的不算） |
+| | `server-desktop-applied` | A 的 pc 节点诊断 `queue.stats.applied > 0`、`applyErrors === 0`（桌面经 `applyResult` 取回） |
+| M7-A9 | `server-every-frame-has-px` | 页面产的清单 `small` 帧数 = `frames` 帧数，每个 `px/` 块都在素材服务 |
+| | `page-low-memory-shows-small` | low 页播放中：`__pcOnlineSnapshots().tier === 'small'`，三层的指纹 = 页面指纹、`ready > 0`，舞台里这三层不显示占位 |
+| M7-A10 | `page` / `server-idle-takeover` / `server-race-one-env-per-card` / `page-layer-switched` | b1 加一张新卡、认领到它的一段且报过进度后关掉 b1；creator 等锁闲置 > 33 s，重启 A 的编辑器（不设只切分开关，宿主全开），加两张新卡 w1、w2 并改一处让页面重发计划：z 卡的锁转到 pc 指纹；w1、w2 各自已完成的任务只有一种指纹；新开的 b2 上 z 层的指纹换成 pc 的 |
+| M7-A11 | `echo-only-promptcut.v1`、`render-echo-only-promptcut.v1` | 三页所有 101 握手的回显都是 `promptcut.v1`；render 连接单列 |
+| | `ticket-not-in-url-or-page-diag` | 页面发出的 WebSocket 地址、HTTP 地址里没有票据（按收到的票据原文与票据的样子 `v1.<负载>.<签名>` 两种比）；页面诊断（节点、预览、在线来源）里也没有 |
+| | `server-logs-describe` | 托管组合的全部日志行、`describe()`、代理收到的全部地址里没有票据 |
+| | `page-render-ticket-expiry` | render 连接建起 130 s 后（票据 2 分钟已过期）让页面断网 70 s（超过会话保留期 60 s，会话结束），恢复后页面重签 render 票据并收到新的 `node.welcome` |
+| M7-A12 | `play-10s-longtasks-0` | b1 播放 10 s：主文档长任务 0（C10-A1 回归；现在就真判） |
+| | `play-10s-claims-0` | 同一段时间 `task.claim` 0 条 |
+| | `bake-longtasks-0` | 从遮罩撤下到三张卡锚帧段做完：主文档长任务 0 |
+| W7 | `cross-machine`、`M7-A1`～`M7-A3`、`A4-timing-on-laptop` | 两个角色不在同一台机器上；A1～A3 的状态照抄；A4 的计时在带 `--timing-authoritative` 的 node 角色上判出 |
+| D9 / D10 / D14 | 见结果 | D9：浏览器凭证以 pc / host 报到 forbidden 且不登记；别的用户（浏览器凭证、A 的桌面凭证）拿 sB 的 nodeId 报到 forbidden，sB 照常可用。D10：welcome 回的指纹 = `describeEnvironment(原始值)`；自报的指纹不作数；浏览器凭证不报原始值回 `bad-message`。D14：Firefox、Safari、iOS Chrome（CriOS）回 `not-chromium`，之后 watch 回 `not-registered` |
+| D1-D2-D12 | `dual-split-*`、`supersede-*`、`layer-map-v3-*`、`idle-takeover-*` | 页面没当节点时，以页面（b1）的身份起替身 twin（它在线、watch 本项目），A 加一张新重卡 h4 → 页面测完重发清单计划 → 真的 pc 切分：h4 每段两份（pc 指纹、twin 指纹），都 `input.dual`，twin 那份带 `compositing: 'independent'` 与 `bake { start, end, count, sampling }`，两份的段与优先级一致，twin 那份的 `source.userId` 是页面的；先认领者得卡、另一份全部 `failed / superseded`、`attempts` 0；层表 v3 这一层两个候选（切分方自己的在前），层上字段 = 第一个候选，`layerRefOf(…, { alive })` 按活着的整份换；twin 认领一段后放回、闲置 > 33 s，改轻卡参数让页面重发计划 → 锁转到 pc 指纹、twin 那份全部作废 |
+
+### 适配函数的假设清单（`scripts/probes/m7-node-adapter.mjs` 的 `ASSUMPTIONS`，集成时只改那一处）
+
+- A-1 诊断钩子是编辑器页上的 `window.__pcBrowserNode()`，同步回可结构化克隆的对象；没有它 = 页面节点代码不在（`readNodeDiag`）。
+- A-2 `state` 取 `off` / `idle` / `busy` / `baking`，另有 `reason`；`nodeId`、`envFingerprint`、`codeVersion` 平铺在顶层（`normalizeNodeDiag`）。
+- A-3 持有的任务在 `held`（也认 `tasks`、`holding`），元素是 id 或带 `id` 的对象。
+- A-4 计数在 `counts`（也认 `stats` 或平铺）：`claimed` `completed` `dedup` `failed` `lost` `bakeFrames` `chunksPushed` `chunksSkipped` `bytesPushed` `smallFrames`；放回按原因 `released: { yield, hidden, urgent, noSnapshot }`。
+- A-5 每帧耗时分位数 `bakeMs: { p50, p95 }`；舞台被门挡住的时长单记 `pausedMs`。
+- A-6 最近一次错误 `lastError`（字符串或 `{ message }`）。
+- A-7 舞台侧 `window.__pcStageDiag().bake = { frames, frameMs: { p50, p95 }, pausedMs }`（`readStageBakeDiag`）。
+- A-8 `task.release` 的原因字符串（契约只写明 `no-snapshot`）：让路认 `yield` `busy` `interaction` `drag` `play`，隐藏认 `hidden` `visibility`，更急的活认 `urgent` `preempt` `measure` `catch-up`（`releaseCauseOf`）；判据里「放回 1 次」不看原因。
+- A-9 C10 已有的 `__pcPreviewDiag()`、`__pcOnlineSnapshots()`、`__pcPlanPublisher()` 形状不变。
+
+探针主体里另有三处依赖页面的行为（不是诊断形状，写在这里供集成时核对）：页面拿本机 `localStorage` 的 `pc.online.device` 当设备身份（C10a，已有）；时间轴标尺是 `[data-pc="ruler"]`；A6 的「更急的活」用 `window.__pcStore.actions.addClipOnNewTrack` 加一张卡触发后台测量。
+
+## 验证
+
+- `npx tsc -b --force`：退出码 0，零错误。
+- `npm test`：退出码 0；tests 3668、pass 3656、fail 0、cancelled 0、skipped 12、todo 0。跳过 12 = 原有 2 条 + 页面节点单测的门 10 条（与 rq-m7-queue 相同）；比 rq-m7-queue 多出的 20 条是合进来的 `m8-kit` 单测。
+- 探针本机替身：见下「本机结果」（机器上十来个子智能体并行，计时项只作参考）。
+
+## 本机结果
+
+（最后一轮原样结果见文末，跑完补。）
+
+## 发现的缺口与对契约的更正建议
+
+1. **D15 的「只切分、不认领细任务」开关服务端没有**：`PROMPTCUT_TEST_PLAN_ONLY` 在 `server/`、`src/`、`scripts/` 里都 grep 不到。探针照设，并在结果的 `planOnly` 里报它有没有生效（`applied: false` 即 pc 认领过细任务）。没有它，M7-A4 里 pc 会与页面抢同一张卡，页面多半一张也拿不到。页面没当节点时的 D1 检查用一个「吸收者」假节点（pc 指纹、host 档）替 pc 以空清单吃掉非双份细任务，代这个开关（只在探针里，不是生产行为）。建议：由 `claude/rq-m7-queue` 或集成时在 pc 节点（`vite-plugin-frames.ts` 的节点 `isIdle` / 过滤）上补这个测试开关。
+2. **页面节点的 `node.hello` 要带 `environment`，`createNodeSession` 的 `start()` 不带**：会话发的 `node.hello` 没有 `environment` 字段；浏览器归属的连接不报原始值回 `bad-message`。替身在 `send` 里补；页面节点分支要么同样包一层，要么给 `session.mjs` 加一项。
+3. **节点侧过滤规则 0 要 `node.userId`**：纯浏览器节点描述不带 `userId` 时，本人的任务也一律判 `other-user`、一个都不认领（本探针第一轮就这样：替身 0 认领）。页面节点分支组 `node` 描述时要带页面的 userId（`用户名@设备 id`）。
+4. 契约第 3.3 节「页面在 `input.browser` 写意向」已被 rq-m7-queue 改成「队列按在线浏览器节点给指纹」（它的报告「出入」第 1 条）；实测证实：同一用户的在线浏览器节点在 pc 认领计划时就在，切分方就出双份（本机结果 `dual-split-h4`）。探针照实现写。
+5. M7-A4 的夹具缺省用 `probe-slow-stepped`（内置、独立、每个新时刻烧 40 ms，任何机器上都判重），不是契约写的「Motion 卡」；Motion 卡（`punch-pill` 等）在快机器上会判轻、不产任务。`--a4-motion` 可换回 Motion 卡。建议契约 D15 的夹具改写成「3 张判重的独立内置卡」。
+6. 低内存档页面在 A 改项目后发布了一份只含新卡 `h4` 的清单计划（`B-low`，rev 2），一直 open 没人认领（本机结果 `dual-split-h4` 的 `plans`）。它是补渲计划还是普通清单计划没细查，记在这里给页面节点 / C10a 看。
+
+## 没做成的及原因
+
+- M7-A3～A12 的页面部分、M7-A1 的页面部分：页面节点（`claude/rq-m7-node`）没合入，页面不当节点，探针走到「页面没当节点」那一步报 `节点未就绪（等 rq-m7-node）`（pending，不算崩）。页面当节点那条路径的代码（`pageFlows`、`pageServerSide`）写了但没跑过，集成时第一轮大概率要调。
+- W7 真跨机：没连笔记本（主会话任务书限定本机替身）；`cross-machine` 记 pending。
+- A11 的「票据过期后重建」用 CDP 断网 70 s 让会话结束；CDP 的离线模拟会不会断开已有的 WebSocket 没实测（页面节点不在），集成时核对，不行就改成让托管组合结束那条会话。
+
+## 给笔记本跑计时项的命令
+
+PC（用户 A，creator；把 `<PC-IP>` 换成 PC 的局域网地址，笔记本要能访问 5450～5452、5456）：
+
+```
+node scripts/probes/m7-browser-probe.mjs --role creator --bind 0.0.0.0 --public-host <PC-IP>
+```
+
+笔记本（成员 B，node；计时以这里为准）：
+
+```
+node scripts/probes/m7-browser-probe.mjs --role node --coord http://<PC-IP>:5456 --timing-authoritative
+```
+
+creator 的 stdout 最后一行是汇总（含 node 角色交回的各项）。站点是局域网 http 时，node 角色自动给 Chrome 加 `--unsafely-treat-insecure-origin-as-secure`（只放行这三个源），WebCrypto 等要安全上下文的接口才可用。
+
+## 提交列表
+
+（跑完补。）
