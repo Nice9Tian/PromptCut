@@ -1043,6 +1043,17 @@ async function runObserver(out) {
       }
     };
     await installMediaLog();
+    const collectMediaLogs = async () => {
+      const mediaLogs = [];
+      for (const f of stageFrames()) {
+        const l = await f.evaluate(() => window.__t9MediaLog ?? null).catch(() => null);
+        if (l) mediaLogs.push({ frame: /id=([AB])/.exec(f.url())?.[1] ?? '?', log: l });
+      }
+      try { fs.writeFileSync(path.join(OUT, 'observer-media-log.json'), JSON.stringify({ tJoin, frontId: await P(page, () => window.__pcPreviewDiag?.().frontId ?? null).catch(() => null), mediaLogs }, null, 1)); } catch { /* 写不了不影响结论 */ }
+      out.mediaEvents = mediaLogs.map((m) => ({ frame: m.frame, seeks: m.log.filter((e) => e.type === 'set-currentTime' && e.src === cfg.tiers.original.slice(0, 8)).map((e) => ({ at: Math.round(e.at - tJoin), to: e.to, from: e.ct, rs: e.rs, shown: e.shown, stack: e.stack.slice(0, 3) })),
+        loads: m.log.filter((e) => e.type === 'load()').length,
+        drops: m.log.filter((e) => e.type === 'state' && e.src === cfg.tiers.original.slice(0, 8) && e.rs < 2).map((e) => ({ at: Math.round(e.at - tJoin), rs: e.rs, shown: e.shown, ct: e.ct })) }));
+    };
     // 小尺寸停在 2.5 s:连续 3 次读到同一个帧号才算稳定;期间换到原尺寸就用换之前最后一个
     let smallIdx = null;
     let stable = 0;
@@ -1127,15 +1138,6 @@ async function runObserver(out) {
       const samples = await (await front())?.evaluate(() => { window.__t9Sampling = false; return (window.__t9Samples ?? []).splice(0); }).catch(() => []) ?? [];
       shooting = false;
       await shotLoop;
-      const mediaLogs = [];
-      for (const f of stageFrames()) {
-        const l = await f.evaluate(() => window.__t9MediaLog ?? null).catch(() => null);
-        if (l) mediaLogs.push({ frame: /id=([AB])/.exec(f.url())?.[1] ?? '?', log: l });
-      }
-      try { fs.writeFileSync(path.join(OUT, 'observer-media-log.json'), JSON.stringify({ tJoin, frontId: await P(page, () => window.__pcPreviewDiag?.().frontId ?? null).catch(() => null), mediaLogs }, null, 1)); } catch { /* 写不了不影响结论 */ }
-      out.mediaEvents = mediaLogs.map((m) => ({ frame: m.frame, seeks: m.log.filter((e) => e.type === 'set-currentTime' && e.src === cfg.tiers.original.slice(0, 8)).map((e) => ({ at: Math.round(e.at - tJoin), to: e.to, from: e.ct, rs: e.rs, shown: e.shown, stack: e.stack.slice(0, 3) })),
-        loads: m.log.filter((e) => e.type === 'load()').length,
-        drops: m.log.filter((e) => e.type === 'state' && e.src === cfg.tiers.original.slice(0, 8) && e.rs < 2).map((e) => ({ at: Math.round(e.at - tJoin), rs: e.rs, shown: e.shown, ct: e.ct })) }));
       // 黑帧:没有显示中的元素;显示中的元素解出的帧本身黑(亮度 ≤ 16);readyState < 2 时这个元素从没出过帧,
       // 或那段时间里截到的合成画面黑(亮度 ≤ 16)。readyState < 2 但出过帧、截图不黑的(浏览器照样显示着上一帧)不算
       const nearShot = (s) => shots.filter((x) => x.at - 400 <= s.epoch && s.epoch <= x.done + 400);
@@ -1215,6 +1217,8 @@ async function runObserver(out) {
     out.stageV1 = await stageHas(cfg.card.v1);
 
     // ---- 计时起点:拿到 editready 之后、写 observer.joined 之前(上界)
+    // 改卡会让舞台整页重载(日志随之清空):在那之前收媒体日志
+    await collectMediaLogs();
     await store.wait('editready', '创建者可以改卡');
     const t0 = Date.now();
     await store.put('observer.joined', { at: t0 });
