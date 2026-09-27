@@ -6,6 +6,8 @@
  * | `POST shared/create` | 建项目，客户端交派生好的 `K`；201 / 400 / 403 / 409 / 429 |
  * | `GET shared/lookup?name=` | 按名字查项目 id；200 / 404 |
  * | `POST shared/challenge` | 取进入挑战；200 / 400 / 404 / 429 |
+ * | `POST shared/invite/resolve` | 凭邀请码查项目（C10a）：200 / 404 `invite-invalid` / 429 |
+ * | `POST shared/invite/redeem` | 凭邀请码兑换（C10a）：200 / 400 / 401 `banned` / 404 `invite-invalid` / 429 |
  *
  * 独立模式挂在文档服务自己的 http 服务器上（路径 `/shared/…`），挂载模式挂在 `<WS 路径>/shared/…`
  * （vite 里是 `/docservice/shared/…`）。本模块只认调用方给的前缀，其余路径一概不碰。
@@ -25,6 +27,7 @@ import {
   KEY_BYTES, SALT_BYTES, isProjectId, isProjectName, isUsername, isDeviceId, isB64Bytes, isKdf,
 } from './protocol.mjs';
 import { credentialFor } from './handshake.mjs';
+import { isInviteCode, inviteDigest, inviteActive, redeemOn } from './invite.mjs';
 
 export const SHARED_HTTP_DEFAULTS = Object.freeze({
   MAX_BODY: 64 * 1024,
@@ -243,7 +246,7 @@ export function createSharedHttp({
     const loopback = loopbackOf(req);
     if (!loopback && limiter.blocked(remote)) {
       req.resume();
-      return fail(res, 429, 'rate-limited');
+      return tooMany(res, remote);
     }
     const body = await jsonBody(req, res);
     if (body === undefined) return;
@@ -258,6 +261,73 @@ export function createSharedHttp({
     const salt = cred ? cred.salt : fakeSalt(st.serverSecret, projectId, username);
     const nonce = challenges.issue(['join', projectId, username, deviceId, as]);
     send(res, 200, { ok: true, nonce, salt, kdf: { ...rec.kdf }, mode: rec.mode });
+  }
+
+  /**
+   * 429 `rate-limited`，回包体照旧；C10a 另加 `Retry-After` 头（冷却还剩的秒数），并在 CORS 里放出这个头，
+   * 界面照契约第 14 节表 A 写「请 {秒数} 秒后再试」。不改回包体：契约测试按原样比对它。
+   */
+  function tooMany(res, remote) {
+    const sec = Math.max(1, Math.ceil(limiter.retryAfterMs?.(remote) / 1000 || 0));
+    if (!res.headersSent) {
+      res.setHeader('Retry-After', String(sec));
+      res.setHeader('Access-Control-Expose-Headers', 'Retry-After');
+    }
+    return fail(res, 429, 'rate-limited');
+  }
+
+  /**
+   * 邀请码的两个端点（C10a 契约第 5 节）：`POST shared/invite/resolve { code }`、`POST shared/invite/redeem { code, username, deviceId }`。
+   *
+   * - 未知、已作废、已过期、次数用完一律 404 `invite-invalid`（一个口径，不让人试探邀请码处在什么状态）；
+   * - 兑换时 `(username, deviceId)` 在禁入表里回 401 `banned`；
+   * - 两种失败都计入第 9 节的口令错误限速（回环来源不计，与挑战一致）；冷却期内回 429；
+   * - `resolve` 不扣次数；`redeem` 先核对再扣一次，同一 `userId` 再兑换不重复扣（`invite.mjs` 的 `redeemOn`）；
+   * - 自由进入的兑换回项目口令的 `K`（`kdf` 与 `project: { salt, key }`），客户端据此照常握手；限定进入不回 `K`；
+   * - 不记录请求体：日志里只有来源、项目号与结果，没有邀请码、用户名。
+   */
+  async function invite(req, res, st, which) {
+    const remote = remoteOf(req);
+    const loopback = loopbackOf(req);
+    if (!loopback && limiter.blocked(remote)) {
+      req.resume();
+      return tooMany(res, remote);
+    }
+    const body = await jsonBody(req, res);
+    if (body === undefined) return;
+    if (!isObj(body)) return fail(res, 400, 'bad-request');
+    if (which === 'redeem' && (!isUsername(body.username) || !isDeviceId(body.deviceId))) return fail(res, 400, 'bad-request');
+    const at = now();
+    const invalid = () => {
+      if (!loopback) limiter.fail(remote);
+      log('shared.invite.reject', { remote, route: which, reason: 'invite-invalid' });
+      return fail(res, 404, 'invite-invalid');
+    };
+    // 形状不对的邀请码也按「无效」回，同样计数：猜码的人从回包里分不出是格式错还是没有这个码
+    if (!isInviteCode(body.code)) return invalid();
+    const rec = st.peekByInviteDigest(inviteDigest(st.serverSecret, body.code));
+    if (!rec || !rec.invite) return invalid();
+    const base = { ok: true, projectId: rec.projectId, name: rec.name, mode: rec.mode };
+    if (which === 'resolve') {
+      if (!inviteActive(rec.invite, at)) return invalid();
+      return send(res, 200, base);
+    }
+    const { username, deviceId } = body;
+    const userId = `${username}@${deviceId}`;
+    // 先在副本上试一次：无效就不写盘；同一 userId 兑换过（again）也不写
+    const trial = redeemOn(structuredClone(rec.invite), userId, at);
+    if (trial === 'invalid') return invalid();
+    if ((rec.bans ?? []).some((b) => b.username === username && b.deviceId === deviceId)) {
+      if (!loopback) limiter.fail(remote);
+      log('shared.invite.reject', { remote, route: which, projectId: rec.projectId, reason: 'banned' });
+      return fail(res, 401, 'banned');
+    }
+    if (trial === 'ok') st.update(rec.projectId, (d) => { redeemOn(d.invite, userId, at); });
+    log('shared.invite.redeem', { remote, projectId: rec.projectId, counted: trial === 'ok' });
+    if (rec.mode === 'free' && rec.project) {
+      return send(res, 200, { ...base, kdf: { ...rec.kdf }, project: { salt: rec.project.salt, key: rec.project.key } });
+    }
+    return send(res, 200, base);
   }
 
   /**
@@ -302,6 +372,10 @@ export function createSharedHttp({
       if (route === 'challenge') {
         if (method !== 'POST') return fail(res, 405, 'method');
         return challenge(req, res, st);
+      }
+      if (route === 'invite/resolve' || route === 'invite/redeem') {
+        if (method !== 'POST') return fail(res, 405, 'method');
+        return invite(req, res, st, route.slice('invite/'.length));
       }
       req.resume();
       return fail(res, 404, 'not-found');
