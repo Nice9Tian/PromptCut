@@ -227,18 +227,23 @@ const NETWORK_NO_SOURCE = 3;
 export function reloadOnComplete(input: {
   /** 这个槽位装的那一档此刻在素材服务上到齐了 */
   doneNow: boolean;
-  /** 上一次渲染时它就已经到齐了(到齐那一刻只判一次) */
+  /** 到齐之后这个槽位已经判过了(在用时判过、或 src 是到齐后才换上的):到齐之后只判一次 */
   seenBefore: boolean;
   /** 槽位装着东西 */
   hasClip: boolean;
   /** src 是这一轮刚换上的 */
   freshSrc: boolean;
+  /**
+   * 槽位眼下在用(播当前段、换档预热、备下一段)。缺省 true。闲着的槽位不重载:重载只会和可播性探测抢带宽
+   * (跨机 T9 `ht9a0927`,`docs/reports/AGENT-tier-reload-seek.md`);调用方要保证轮到它用时还会再判一次。
+   */
+  inUse?: boolean;
   /** 元素报了错(`el.error` 非空) */
   error: boolean;
   networkState: number;
 }): boolean {
-  const { doneNow, seenBefore, hasClip, freshSrc, error, networkState } = input;
-  if (!doneNow || seenBefore || !hasClip || freshSrc) return false;
+  const { doneNow, seenBefore, hasClip, freshSrc, error, networkState, inUse = true } = input;
+  if (!doneNow || seenBefore || !hasClip || freshSrc || !inUse) return false;
   return error || networkState === NETWORK_NO_SOURCE;
 }
 

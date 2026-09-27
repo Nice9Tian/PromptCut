@@ -93,6 +93,16 @@ export function driveMedia(el: HTMLMediaElement | null, want: Want) {
       const w = wants.get(el);
       if (w) syncMediaEl(el, w);
     });
+    /*
+     * 元数据到了(换了 src、被 `load()` 重载、或元数据迟到)也拿最新目标再判一次。readyState 为 0 时设的
+     * currentTime 只是「默认起播位置」,`load()` 之后留不留得住看浏览器;暂停中之后可能再没有渲染来调 driveMedia,
+     * 不补这一下元素就停在 0(`docs/reports/AGENT-tier-reload-seek.md`)。浏览器已按默认起播位置 seek 过去时
+     * 这里读到 seeking / 已对齐,什么都不做。
+     */
+    el.addEventListener("loadedmetadata", () => {
+      const w = wants.get(el);
+      if (w) syncMediaEl(el, w);
+    });
   }
   syncMediaEl(el, want);
 }

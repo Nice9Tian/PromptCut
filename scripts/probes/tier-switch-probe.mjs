@@ -18,6 +18,14 @@
  *   T5b(播放中换档):小版在播,中途原片到齐;换档那一刻前后两帧的帧号跳变与时间差对得上(误差 ≤ 1 帧),无黑帧。
  *   T6 :原片是 ProRes:本机探出放不了(设备本地缓存记 0),两档都到齐也一直停在小版。
  *   T7 :原片没到齐时导出:`exportVideo` 拒绝、提示「等待上传方」,顶栏点导出弹出同样的提示,没有任何导出请求发出。
+ *   T5c(暂停中、原片慢到;`docs/reports/AGENT-tier-reload-seek.md`):同 T5a 的开头(先等待上传方、原片地址挂失败过),
+ *        原片报齐后远程先扣住字节 `--hold-ms`(回了头、不给字节),可播性探测因此超时(记「未知」);之后探针不再碰页面的
+ *        任何状态(播放头停着、集合不变),也必须换到原片。跨机 T9 `ht9a0927` 里观察端就是这样一直停在小版。
+ *   T5e(暂停中、可播性早有结论、预热槽位要重载):同 T5a 的开头,但本机早就记下「原片放得了」;原片报齐那一轮,
+ *        之前挂失败过的槽位直接成了预热槽位、又被 `load()` 重载 —— 重载会把刚下的定位清回 0;之后没有重渲染也必须
+ *        回到 2.5 s、交出对齐的一帧并换档。
+ *
+ *   `--only T5a,T5c` 只跑列出的场景(缺省全跑)。
  *
  * 输出:最后一行是一行 JSON(`ok`、各场景的关键数),截图在 `--out` 目录。
  * 帧号的读法:在可见舞台里对**显示着的**那个 `<video>` 做 `drawImage`,读顶上那条的 10 个格子。
@@ -38,6 +46,10 @@ const REMOTE_PORT = Number(flagArg('remote-port', '5575', args));
 const RUN = Date.now().toString(36) + crypto.randomBytes(3).toString('hex');
 const OUT = path.resolve(flagArg('out', null, args) || path.join(os.tmpdir(), `pc-tier-probe-${RUN}`));
 const FPS = 30;
+const ONLY = flagArg('only', null, args);
+const want = (scene) => !ONLY || ONLY.split(',').map((x) => x.trim()).includes(scene);
+/** T5c:原片报齐后远程扣住字节多久(要长过远端可播性探测的 10 s 时限,再留出轮询的 2 s) */
+const HOLD_MS = Number(flagArg('hold-ms', '16000', args));
 const fails = [];
 const notes = [];
 const check = (cond, label, extra) => { if (!cond) fails.push(label + (extra === undefined ? '' : ' :: ' + JSON.stringify(extra).slice(0, 400))); return !!cond; };
@@ -84,6 +96,13 @@ async function makePair(tag, { prores = false } = {}) {
 /* ------------------------------------------------------------------ 远程素材服务 */
 const remoteFiles = new Map(); // hash → { bytes, type, complete }
 const remoteLog = [];
+/** T5c:回了头、字节扣到 `holdUntil` 才给(慢链路上「原片还在路上」) */
+function later(f, req, res, body) {
+  if (req.method === 'HEAD') return res.end();
+  const wait = (f.holdUntil ?? 0) - Date.now();
+  if (wait > 0) setTimeout(() => res.end(body), wait);
+  else res.end(body);
+}
 const remote = http.createServer((req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Expose-Headers', 'Content-Range, Accept-Ranges, Content-Length, Content-Type');
@@ -104,17 +123,17 @@ const remote = http.createServer((req, res) => {
     const start = Number(range[1]);
     const end = range[2] ? Math.min(Number(range[2]), f.bytes.length - 1) : f.bytes.length - 1;
     res.writeHead(206, { 'Content-Type': f.type, 'Content-Length': end - start + 1, 'Content-Range': `bytes ${start}-${end}/${f.bytes.length}`, 'Accept-Ranges': 'bytes' });
-    return res.end(req.method === 'HEAD' ? undefined : f.bytes.subarray(start, end + 1));
+    return later(f, req, res, f.bytes.subarray(start, end + 1));
   }
   res.writeHead(200, { 'Content-Type': f.type, 'Content-Length': f.bytes.length, 'Accept-Ranges': 'bytes' });
-  res.end(req.method === 'HEAD' ? undefined : f.bytes);
+  later(f, req, res, f.bytes);
 });
 await new Promise((r) => remote.listen(REMOTE_PORT, '127.0.0.1', r));
 const REMOTE_BASE = `http://127.0.0.1:${REMOTE_PORT}/api/asset`;
-const publish = (x, complete) => remoteFiles.set(x.hash, { bytes: x.bytes, type: x.type, complete });
+const publish = (x, complete, holdUntil = 0) => remoteFiles.set(x.hash, { bytes: x.bytes, type: x.type, complete, holdUntil });
 
 /* ------------------------------------------------------------------ 页面 */
-const out = { ok: false, origin, run: RUN, out: OUT, T5a: {}, T5b: {}, T6: {}, T7: {} };
+const out = { ok: false, origin, run: RUN, out: OUT, T5a: {}, T5b: {}, T5c: {}, T5e: {}, T6: {}, T7: {} };
 const browser = await puppeteer.launch({ headless: true, protocolTimeout: 300000,
   args: ['--window-position=-32000,-32000', '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=1', '--autoplay-policy=no-user-gesture-required'] });
 try {
@@ -297,6 +316,7 @@ try {
     return { mediaId: m.id, clipId: c && c.id };`, name, pair.orig.hash, pair.small.hash, pair.orig.bytes.length, pair.ext);
 
   /* ============================================================ T5a:暂停中换档 */
+  if (want('T5a')) {
   const A = await makePair('a');
   publish(A.small, false);
   publish(A.orig, false);
@@ -352,7 +372,9 @@ try {
   out.T5a.shotOriginal = await preview('t5a-3-original');
   out.T5a.playable = await (await front()).evaluate((h) => Object.keys(localStorage).filter((k) => k.endsWith(h)).map((k) => [k.split('.').slice(0, 3).join('.'), localStorage.getItem(k)]), A.orig.hash);
 
+  }
   /* ============================================================ T5b:播放中换档 */
+  if (want('T5b')) {
   const B = await makePair('b');
   publish(B.small, true);
   publish(B.orig, false);
@@ -412,7 +434,90 @@ try {
   const errs = decB.map((s) => s.idx - Math.round(s.t * FPS));
   out.T5b.frameErrVsStage = { min: Math.min(...errs), max: Math.max(...errs) };
 
+  }
+  /**
+   * T5c / T5e 共用:暂停在 2.5 s,先「等待上传方」(原片地址挂过、失败了)→ 小版到齐、显示 → 原片报齐。
+   * 原片报齐之后探针**不再碰页面的任何状态**(不 seek、不改集合、不点东西),只看它自己能不能换到原片。
+   */
+  const pausedSwapAfterFailedOriginal = async (scene, tag, { holdMs = 0, cachePlayable = false, timeoutMs }) => {
+    const o = out[scene];
+    const X = await makePair(tag);
+    publish(X.small, false);
+    publish(X.orig, false);
+    await tiers('T.setRemoteAssets(null);');
+    const setup = await setupProject(X, `tier-${tag}-${RUN}`, false);
+    check(setup?.clipId, `${scene}:加上了视频片段`);
+    const awaiting = await until(`${scene}:先等待上传方(原片地址挂失败)`, async () => {
+      const l = await layer();
+      return l && l.awaiting && !(l.shown && l.rs >= 2) ? l : null;
+    }, 15000);
+    o.awaitingFirst = !!awaiting;
+    if (cachePlayable) {
+      // 本机早就探过「原片放得了」(两个舞台各是一个页面源,各记一份)
+      for (const f of stageFrames()) await f.evaluate(async (h) => { (await import('/src/render/playability.ts')).rememberPlayable(h, true); }, X.orig.hash);
+    }
+    publish(X.small, true);
+    await tiers(`T.setRemoteAssets({ base: args[0], ticket: async () => 'probe-ticket' });`, REMOTE_BASE);
+    const small = await until(`${scene}:小版出现`, async () => {
+      const l = await layer();
+      return l && l.shown && l.rs >= 2 && l.src.includes(X.small.hash) && Number.isInteger(l.idx) ? l : null;
+    }, 20000);
+    o.small = small ? { idx: small.idx } : null;
+    check(small && Math.abs(small.idx - 75) <= 1, `${scene}:小版停在 2.5 s(帧号 75 ± 1)`, small);
+    const els = () => [...document.querySelectorAll('video')].map((v) => ({ src: (v.currentSrc || v.getAttribute('src') || '').split('/@media/')[1]?.slice(0, 8) ?? '',
+      rs: v.readyState, net: v.networkState, err: v.error?.code ?? null, ct: +v.currentTime.toFixed(3), shown: getComputedStyle(v.parentElement).visibility === 'visible' }));
+    o.elsBefore = await (await front()).evaluate(els);
+    // 元素事件时间线(load() 调用、seeking / seeked),只记不判
+    await (await front()).evaluate(() => {
+      window.__tierEv = [];
+      const now = () => (window.__pcRealNow ?? (() => performance.now()))();
+      window.__tierT0 = now();
+      const rec = (v, type) => window.__tierEv.push({ at: Math.round(now() - window.__tierT0), type, src: (v.currentSrc || v.getAttribute('src') || '').split('/@media/')[1]?.slice(0, 8) ?? '', rs: v.readyState, ct: +v.currentTime.toFixed(3) });
+      for (const v of document.querySelectorAll('video')) {
+        // 槽位元素跨场景复用:每个元素只挂一次
+        if (v.__tierHooked) continue;
+        v.__tierHooked = true;
+        for (const type of ['loadstart', 'loadedmetadata', 'loadeddata', 'seeking', 'seeked', 'emptied', 'error']) v.addEventListener(type, () => rec(v, type));
+        const load = v.load.bind(v);
+        v.load = () => { rec(v, 'load()'); return load(); };
+      }
+    });
+    await startSampler();
+    const samplerStart = await (await front()).evaluate(() => (window.__pcRealNow ?? (() => performance.now()))());
+    const tOrig = Date.now();
+    publish(X.orig, true, holdMs ? tOrig + holdMs : 0);
+    const orig = await until(`${scene}:换到原片(原片报齐之后没有任何别的状态变化)`, async () => {
+      const l = await layer();
+      return l && l.shown && l.rs >= 2 && l.src.includes(X.orig.hash) && Number.isInteger(l.idx) ? l : null;
+    }, timeoutMs, 250);
+    o.switchMs = orig ? Date.now() - tOrig : null;
+    await sleep(300);
+    const { samples, trace } = await stopSampler();
+    o.trace = trace.map((x) => ({ mediaTime: +x.mediaTime.toFixed(4), ref: +x.ref.toFixed(4), errFrames: +((x.mediaTime - x.ref) * x.fps).toFixed(2), playing: x.playing }));
+    o.events = await (await front()).evaluate(() => (window.__tierEv ?? []).slice(0, 40));
+    o.elsAfter = await (await front()).evaluate(els);
+    o.playable = await (await front()).evaluate((h) => Object.keys(localStorage).filter((k) => k.endsWith(h)).map((k) => localStorage.getItem(k)), X.orig.hash);
+    o.original = orig ? { idx: orig.idx } : null;
+    check(orig && small && Math.abs(orig.idx - small.idx) <= 1, `${scene}:换档前后同一目标时刻的帧号相差不超过一帧`, { small: small?.idx, orig: orig?.idx });
+    check(!orig || (trace.length >= 1 && trace.every((x) => Math.abs(x.mediaTime - x.ref) * x.fps <= 1.03)), `${scene}:换档那一帧的帧回调 mediaTime 与目标差不超过一帧`, o.trace);
+    const black = blackOf(samples, samplerStart);
+    o.samples = samples.length;
+    o.black = black.length;
+    check(samples.length > 10 && black.length === 0, `${scene}:换档期间逐帧采样无黑帧 / 无空档`, black.slice(0, 3));
+    const idxs = [...new Set(samples.filter((s) => Number.isInteger(s.idx)).map((s) => s.idx))];
+    o.idxSeen = idxs;
+    check(idxs.every((i) => Math.abs(i - 75) <= 1), `${scene}:画面一直停在 2.5 s(帧号 75 ± 1)`, idxs);
+    o.shot = await preview(`${scene.toLowerCase()}-original`);
+  };
+
+  /* ============================================================ T5c:暂停中、原片慢到(可播性探测超时) */
+  if (want('T5c')) await pausedSwapAfterFailedOriginal('T5c', 'e', { holdMs: HOLD_MS, timeoutMs: HOLD_MS + 30000 });
+
+  /* ============================================================ T5e:暂停中、可播性早有结论、预热槽位重载 */
+  if (want('T5e')) await pausedSwapAfterFailedOriginal('T5e', 'f', { cachePlayable: true, timeoutMs: 20000 });
+
   /* ============================================================ T6:原片不可播(ProRes) */
+  if (want('T6')) {
   const C = await makePair('c', { prores: true });
   publish(C.small, true);
   publish(C.orig, true);
@@ -438,7 +543,9 @@ try {
   out.T6.exportGate = gateC;
   check(Array.isArray(gateC) && gateC.length === 0, 'T6:原片到齐了,导出不拦(导出只认原片)', gateC);
 
+  }
   /* ============================================================ T7:原片没到时导出 */
+  if (want('T7')) {
   const D = await makePair('d');
   publish(D.small, true);
   publish(D.orig, false);
@@ -468,6 +575,7 @@ try {
   out.T7.exportRequests = exportRequests.length;
   check(exportRequests.length === 0, 'T7:没有发出任何导出请求(不出片)', exportRequests);
 
+  }
   /* ============================================================ 收尾 */
   const status = await (await fetch(origin + '/api/media/remote')).json();
   out.remoteAuthSeen = remoteLog.some((e) => e.auth);

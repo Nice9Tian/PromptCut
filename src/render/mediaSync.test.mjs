@@ -353,3 +353,11 @@ test("没失败、没到齐、到齐早就看过、槽位空着:都不重载", (
   assert.equal(reload({ seenBefore: true, networkState: 3, error: true }), false);
   assert.equal(reload({ hasClip: false, networkState: 3, error: true }), false);
 });
+
+test("闲着的槽位(不播、不预热、不备下一段)到齐时不重载:重载只会和可播性探测抢带宽;轮到它用时再重载", () => {
+  // 跨机 T9 ht9a0927:闲着的原尺寸槽位被重载,和可播性探测同时拉原尺寸,慢链路上探测因此超时(AGENT-tier-reload-seek)
+  assert.equal(reload({ inUse: false, networkState: 3, error: true }), false);
+  assert.equal(reload({ inUse: true, networkState: 3, error: true }), true);
+  // 不给 inUse 按「在用」算(和以前一样)
+  assert.equal(reload({ networkState: 3, error: true }), true);
+});
