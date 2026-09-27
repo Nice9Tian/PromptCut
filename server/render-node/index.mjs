@@ -23,7 +23,7 @@
  * HT-a 的 `session-link.mjs` 也例外:用全局 `WebSocket` 与计时器(都可注入),在 Node 里缺省读 `PROMPTCUT_TRANSPORT`(选项可覆盖)。
  */
 export { normalizeOs, gpuClassOf, chromeMajorOf, envFingerprintOf, describeEnvironment, resultKeyOf, isChromiumUserAgent } from './fingerprint.mjs';
-export { DEFAULT_WEIGHT_POLICY, checkClaimable, filterClaimable } from './filter.mjs';
+export { DEFAULT_WEIGHT_POLICY, checkClaimable, filterClaimable, testPlanOnly } from './filter.mjs';
 export { rankCandidates, pickCandidate } from './pick.mjs';
 export { planTaskOf, splitPlan, backfillPlanTaskOf, isBackfillPlan, clipsPlanTaskOf, isClipsPlan, isListPlan } from './split.mjs';
 export { createNodeSession } from './session.mjs';

@@ -13,6 +13,10 @@ import type { BackJob, RenderAborted, StageRpcClient } from "../render/stageRpc.
  *   - **探针**(`probe`):K1 的实测。它是背景工作,随时可以从这张卡的头重排。
  * 优先级就是这个顺序:**补跑 > 页面侧测量 > 探针**。同一优先级按先来后到。
  *
+ * M7(契约第 4.3 节)加第四种、最不急的:**生成快照**(`bake`)—— 在线普通档的后台舞台兼做纯浏览器节点,
+ * 为认领到的快照任务逐帧生成快照(工作项就是 J4 早留的 `'bake'`)。它排在探针之后;更急的活排进来时照样收到 abort 通知,
+ * 由纯浏览器节点在当前帧做完后放回任务(D8)。
+ *
  * 每个活开工前先发 `setRole('back', { job })` 把后台舞台切到这个工作项上 ——
  * **E0 的「掐断后不重发」例外按工作项判、不按 `settling` 标志判**:`job: 'catchup'` 期间
  * 收到的 `{ aborted: true, reason: 'project' }` 一律丢弃(那份 `setProject` 正是这个活
@@ -29,9 +33,9 @@ import type { BackJob, RenderAborted, StageRpcClient } from "../render/stageRpc.
  */
 
 /** 队列里的活分三种,数字越小越急 */
-export type BackJobKind = "catchup" | "measure" | "probe";
+export type BackJobKind = "catchup" | "measure" | "probe" | "bake";
 
-const PRIORITY: Record<BackJobKind, number> = { catchup: 0, measure: 1, probe: 2 };
+const PRIORITY: Record<BackJobKind, number> = { catchup: 0, measure: 1, probe: 2, bake: 3 };
 
 /**
  * 队列里的三种活映射到 RPC 的工作项枚举(J4:`'probe' | 'catchup' | 'bake'`)。
@@ -42,7 +46,7 @@ const PRIORITY: Record<BackJobKind, number> = { catchup: 0, measure: 1, probe: 2
  * 掐出来的 `'project'` 不重发),没必要给舞台加第四个它分辨不出差别的枚举值。
  * 队列这一侧仍然分三档,因为**优先级**要分(补跑 > 测量)。
  */
-const RPC_JOB: Record<BackJobKind, BackJob> = { catchup: "catchup", measure: "catchup", probe: "probe" };
+const RPC_JOB: Record<BackJobKind, BackJob> = { catchup: "catchup", measure: "catchup", probe: "probe", bake: "bake" };
 
 /** `'project'` 掐断之后按当前目标重发的上限(E0:超过就报错、该片段按声明兜底分派) */
 export const MAX_PROJECT_RESENDS = 3;
@@ -118,6 +122,16 @@ export function currentBackJob(): BackJob | null {
 /** 排在前面的活有几个(含正在跑的那个);验收和调试看 */
 export function backJobQueueLength(): number {
   return queue.length + (running ? 1 : 0);
+}
+
+/**
+ * 比生成快照更急的活有几个(排着的加正在跑的,不算 `bake` 自己)。纯浏览器节点「闲」的判据之一(M7 契约第 2 节):
+ * 单飞队列里有补跑、测量、探针时不认领新任务。
+ */
+export function urgentBackJobs(): number {
+  let n = queue.filter((item) => item.kind !== "bake").length;
+  if (running && running.item.kind !== "bake") n++;
+  return n;
 }
 
 /** 取下一个该跑的:优先级最高的那一档里最早排进来的 */

@@ -14,6 +14,11 @@
  * - `source.userId` 由文档服务按页面连接的凭证填,发布方自报的不作数(现状)。
  * - 没有节点认领时 plan 等着,页面不报错(重层播放占位、暂停活渲)。
  * - 页面订阅 `task.done`(发布方自动订阅自己发布的 plan 与它切出的细任务),并入层表与就绪:宿主收到就让在线来源立刻重取层表。
+ * - 本页同时当纯浏览器节点时(M7 契约第 3.3 节,主会话 2026-09-28 裁定):这一版的清单计划等节点报到完、拿到 `node.welcome` 的指纹再发,
+ *   最多等 `BROWSER_NODE_WAIT_MS`(3 s,三级数字),超时照发。切分方认领计划时,队列按此刻在线、同一用户、watch 着本项目的浏览器节点
+ *   给指纹(`claude/rq-m7-queue`),先发计划就轮不到本页。计划本身不写浏览器意向(页面自报的不作数)。由 `nodeReady()` 判;
+ *   节点报到完时宿主调 `nodeChanged()`,等着的那一版马上发。
+ * - 每发一版之前调 `onPublish(version)`:宿主据此把这一版的已确认项目留在内存(M7 D6:执行细任务用任务的 `projectRev` 那一版)。
  *
  * 任务形状与队列侧 `server/render-queue/messages.mjs` 的 `clipsPlanTaskOf` 逐字段相同(单测对拍);这里照抄,页面构建不带服务端模块。
  * 本模块属于 render 这一层(`src/online/`):不引 editor。
@@ -23,6 +28,10 @@
 export const CLIPS_KEY_MARK = "#clips:";
 /** 防抖:连着改项目时只发最后一版 */
 export const PLAN_DEBOUNCE_MS = 800;
+/** 本页当纯浏览器节点时,清单计划等节点报到完(拿到指纹)最多这么久(M7 契约第 3.3 节;三级数字) */
+export const BROWSER_NODE_WAIT_MS = 3000;
+/** 等节点报到时多久再看一眼 */
+const NODE_WAIT_POLL_MS = 250;
 
 /** 片段清单的签名:与 `server/render-queue/messages.mjs` 的 `backfillSig` 同一个算法(FNV-1a 两轮,base36) */
 export function clipsSig(clips: readonly string[]): string {
@@ -81,6 +90,13 @@ export interface PlanPublisherDeps {
   setTimer?: (fn: () => void, ms: number) => unknown;
   clearTimer?: (t: unknown) => void;
   now?: () => number;
+  /**
+   * 本页的纯浏览器节点报到了没有(M7):`"none"` 本页不当节点(照旧发)、`"pending"` 正在报到(等,最多 `BROWSER_NODE_WAIT_MS`)、
+   * `"ready"` 拿到指纹了(发)。不给等于 `"none"`。
+   */
+  nodeReady?: () => "none" | "pending" | "ready";
+  /** 发这一版之前调(M7 D6:宿主留存这一版的已确认项目) */
+  onPublish?: (v: Version) => void;
 }
 
 export interface Version { projectId: string | null; projectRev: number | null }
@@ -92,8 +108,10 @@ export interface PlanPublisher {
   changed(v: Version): void;
   /** 连接换了(重连、换项目):重新报到,下一次照常发(队列只在内存里,重启后要重新发布) */
   reset(): void;
+  /** 本页的纯浏览器节点报到状态变了(M7):等着的那一版马上发 */
+  nodeChanged(): void;
   dispose(): void;
-  debug(): { measured: boolean; want: Version | null; last: string | null; helloOk: boolean; log: { at: number; id: string; clips: number; ok: boolean; error?: string; state?: string }[] };
+  debug(): { measured: boolean; want: Version | null; last: string | null; helloOk: boolean; nodeWaitMs: number | null; log: { at: number; id: string; clips: number; ok: boolean; error?: string; state?: string; waitedMs?: number; node?: string }[] };
 }
 
 /** endpoint → request:按 reqId 等回包 */
@@ -133,6 +151,8 @@ export function createPlanPublisher(deps: PlanPublisherDeps): PlanPublisher {
   let busy = false;
   let again = false;
   let disposed = false;
+  /** 从哪一刻起在等本页的节点报到(这一版还没发出去);null = 没在等 */
+  let waitSince: number | null = null;
   const log: ReturnType<PlanPublisher["debug"]>["log"] = [];
   const note = (e: (typeof log)[number]) => { log.push(e); if (log.length > 20) log.splice(0, log.length - 20); };
 
@@ -146,6 +166,19 @@ export function createPlanPublisher(deps: PlanPublisherDeps): PlanPublisher {
     if (!clips.length) return;
     const task = clipsPlanTask({ projectId, projectRev: projectRev as number, clips, codeVersion: deps.codeVersion ?? null });
     if (task.id === last) return;
+    // M7:本页当纯浏览器节点时先等它报到完(拿到指纹),最多 BROWSER_NODE_WAIT_MS,超时照发
+    const node = deps.nodeReady?.() ?? "none";
+    let waitedMs: number | undefined;
+    if (node === "pending") {
+      if (waitSince === null) waitSince = now();
+      const left = BROWSER_NODE_WAIT_MS - (now() - waitSince);
+      if (left > 0) {
+        if (timer !== null) clearTimer(timer);
+        timer = setTimer(() => { void publish(); }, Math.min(left, NODE_WAIT_POLL_MS));
+        return;
+      }
+    }
+    if (waitSince !== null) { waitedMs = now() - waitSince; waitSince = null; }
     busy = true;
     try {
       if (!helloOk) {
@@ -153,6 +186,7 @@ export function createPlanPublisher(deps: PlanPublisherDeps): PlanPublisher {
         if (hello?.type !== "publisher.welcome") throw new Error(`publisher.hello:${String(hello?.reason ?? hello?.type ?? "no-reply")}`);
         helloOk = true;
       }
+      try { deps.onPublish?.({ projectId, projectRev }); } catch { /* 宿主坏了不影响发布 */ }
       const reply = await request({ type: "task.publish", tasks: [task] });
       if (reply?.type !== "task.published") {
         helloOk = false;
@@ -162,7 +196,7 @@ export function createPlanPublisher(deps: PlanPublisherDeps): PlanPublisher {
       const r = results.find((x) => x?.id === task.id);
       if (!r || r.error) throw new Error(`task.publish:${r?.error ?? "no-result"}`);
       last = task.id;
-      note({ at: now(), id: task.id, clips: clips.length, ok: true, state: r.state });
+      note({ at: now(), id: task.id, clips: clips.length, ok: true, state: r.state, node, ...(waitedMs !== undefined ? { waitedMs } : {}) });
     } catch (e) {
       const error = String((e as Error)?.message ?? e);
       if (/连接断了|没连上|没有回应/.test(error)) helloOk = false;
@@ -185,12 +219,19 @@ export function createPlanPublisher(deps: PlanPublisherDeps): PlanPublisher {
     measured(v) { measuredOk = true; want = { ...v }; schedule(); },
     changed(v) { want = { ...v }; if (measuredOk) schedule(); },
     reset() { helloOk = false; last = null; if (measuredOk && want) schedule(); },
+    nodeChanged() {
+      // 在等节点报到的那一版:马上再判一次(报到完就发)
+      if (disposed || waitSince === null || busy) return;
+      if (timer !== null) clearTimer(timer);
+      timer = null;
+      void publish();
+    },
     dispose() {
       disposed = true;
       if (timer !== null) clearTimer(timer);
       timer = null;
       over?.stop();
     },
-    debug: () => ({ measured: measuredOk, want, last, helloOk, log: log.slice() }),
+    debug: () => ({ measured: measuredOk, want, last, helloOk, nodeWaitMs: waitSince === null ? null : now() - waitSince, log: log.slice() }),
   };
 }

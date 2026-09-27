@@ -352,6 +352,14 @@ export class DocSync {
     return this.confirmedRev;
   }
 
+  /**
+   * 文档服务确认过的那一版项目(`rev` 那一版;还没有回 null)。只读:纯浏览器节点发布清单计划时按版本号留存它
+   * (M7 契约 D6:执行细任务用任务的 `projectRev` 那一版),不改它。
+   */
+  get confirmedProject(): Project | null {
+    return this.confirmed;
+  }
+
   get status(): SyncStatus {
     if (this.paused) return "paused";
     if (!this.connected) return this.confirmed || this.offlineRev !== null ? "offline" : "idle";

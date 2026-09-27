@@ -129,15 +129,26 @@ function takeoverTest(takeover) {
 const BROWSER_WEIGHTS = new Set(['light', 'medium']);
 
 /**
- * 这张卡纯浏览器做不做得了(M7 契约 D1、D4):共享档、独立卡、不是用户卡图卡、没改过源码(`cardSources` 为空)、
- * light / medium、不用只在发布方本机的素材。`requires` 是这张卡自己那一份的 requires(已含 localMedia)。
+ * 纯浏览器不做的卡种(M7 探针 P1、P2 之后主会话裁定):Lottie 素材卡在浏览器里每帧生成快照约 0.77 s、每帧 570～660 KB,
+ * 超过 300 KB 的体积上限全被丢弃 —— 派给浏览器只会白干。按卡片 id 认(`lottie`、`lottie-*`)。
  */
-function browserEligible({ tier, compositing, requires, weight }) {
+export const BROWSER_EXCLUDED_CARD = /^lottie(?:-|$)/;
+
+/**
+ * 这张卡纯浏览器做不做得了(M7 契约 D1、D4):共享档、独立卡、不是用户卡图卡、没改过源码(`cardSources` 为空)、
+ * light / medium、不用只在发布方本机的素材;另外不是画布卡(`canvasHeavy`:逐帧顺推与桌面不等价)、不是 Lottie 素材卡、
+ * 调用方没标它的帧超体积上限(`control.snapshotOversize`,执行器按本机快照库里已记为超限的内容键给)。
+ * `requires` 是这张卡自己那一份的 requires(已含 localMedia)。
+ */
+function browserEligible({ tier, compositing, requires, weight, control }) {
   return tier === 'shared' && compositing === 'independent'
     && requires.userCards === false && requires.graphCards === false
     && Object.keys(requires.cardSources ?? {}).length === 0
     && !('localMedia' in requires)
-    && BROWSER_WEIGHTS.has(weight?.class);
+    && BROWSER_WEIGHTS.has(weight?.class)
+    && control?.capabilities?.canvasHeavy !== true
+    && !BROWSER_EXCLUDED_CARD.test(String(control?.cardId ?? ''))
+    && control?.snapshotOversize !== true;
 }
 
 /** 浏览器那一份要的隔离单卡工程参数(M7 契约第 4.3 节):页面照桌面 `isolatedCardProject` 的变换载入,不算 cardSampling */
@@ -250,7 +261,7 @@ export function splitPlan({
     gateLocalMedia(requires, control);
     const weight = weightOf(control);
     // M7 D1:这张卡出哪几份。没锁(或锁在自己的指纹上)、浏览器做得了时另出浏览器指纹的;锁在别处的照锁只出一份
-    const eligible = browserSet.size > 0 && browserEligible({ tier, compositing, requires, weight });
+    const eligible = browserSet.size > 0 && browserEligible({ tier, compositing, requires, weight, control });
     const fingerprints = eligible && lockOf(lockKey) == null && keying.fingerprint === envFingerprint ? [keying.fingerprint, ...browserFps] : [keying.fingerprint];
     const dual = fingerprints.length > 1;
     for (const fingerprint of fingerprints) {

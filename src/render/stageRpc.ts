@@ -215,6 +215,30 @@ export interface SetProjectOptions {
 export interface SetRoleOptions {
   job?: BackJob;
 }
+
+/**
+ * M7 生成快照的一帧(契约 `docs/plan/m7-contract.md` 第 4.3、4.4 节;D3 后台舞台里跑):父页先经 `pushProject('back', 隔离单卡工程, { reset })`
+ * 把隔离单卡工程灌进后台舞台,再逐帧发这条。舞台把这一帧推到、生成快照、取本控件的 HTML,算 sha256、压 gzip,
+ * 要小尺寸时按 `foreignObject` 栅格化成 WebP;字节经 `bake-frame` 事件随消息转移,回包只带摘要。
+ *
+ * 推帧口径:`mode: 'seq'`(缺省)—— 接着上一帧顺推,只有接不上时才从头推(探针 P2:对 DOM 独立卡与桌面 4 帧一批等价、便宜 4～7 倍);
+ * `mode: 'batch4'` —— 与桌面预渲染一致,批起点按 4 帧对齐,每批从头推(重挂载、从挂载帧推到这一帧)。
+ * 每帧生成快照前过就绪闸(控件异步活、字体、图片,同预渲染的 `waitFrameReady`),20 秒没就绪回 `not-ready`(这一段失败,不出空白帧)。帧间查后台活的停止标志(`setBackWork`),
+ * 被门挡住的时长单记(`pausedMs`),不算进耗时。
+ */
+export interface BakeFrameRequest {
+  /** 这一段的会话号(任务 id + 令牌),`bake-frame` 事件原样带回 */
+  session: string;
+  clipId: string;
+  /** 本地帧号(隔离单卡工程里就是全局帧号) */
+  localFrame: number;
+  mode?: "batch4" | "seq";
+  /** 要不要出预渲染小尺寸 */
+  small?: boolean;
+}
+export type BakeFrameReply =
+  | { ok: true; localFrame: number; hash: string; bytes: number; small: { hash: string; bytes: number } | null; ms: number; pausedMs: number; remounted: boolean; smallMs: number; readyMs: number }
+  | { ok: false; reason: "unsupported" | "role" | "no-project" | "no-clip" | "cancelled" | "lossy" | "no-control" | "frame-mismatch" | "small-failed" | "not-ready"; detail?: string };
 export interface SetRoleReply {
   ok: boolean;
   reason?: "unsupported";
@@ -283,6 +307,10 @@ export interface StageRpcApi {
    * 缺省(不发)= 开着(桌面运行环境)。
    */
   setBackWork(on: boolean): Promise<{ ok: true }>;
+  /** M7:生成快照的一帧(见 `BakeFrameRequest`);只在在线构建的后台舞台上做,别处回 `unsupported` */
+  bakeFrame(req: BakeFrameRequest): Promise<BakeFrameReply>;
+  /** M7:停掉正在推的那一帧(帧边界停;在飞的 `bakeFrame` 回 `cancelled`),清掉顺推的接续点 */
+  bakeCancel(): Promise<{ ok: true }>;
 }
 
 export type StageEvent =
@@ -302,9 +330,15 @@ export type StageEvent =
    * K1 探针推过的一帧。跨源的在线舞台(C10 契约第 2 节「大块产出压成可转移的 ArrayBuffer」)不直接传大字符串:
    * `html` 为空串,改在 `htmlGz` 里交 gzip 压过的字节(随 postMessage 转移,不拷贝),父页用 `probeFrameHtml` 解开。
    */
-  | { type: "probe-frame"; clipId: string; localFrame: number; html: string; htmlGz?: ArrayBuffer };
+  | { type: "probe-frame"; clipId: string; localFrame: number; html: string; htmlGz?: ArrayBuffer }
+  /**
+   * M7 生成快照的一帧(`bakeFrame` 的产出,契约第 4.3 节):`hash` 是原始 HTML 字节的 sha256(舞台里 WebCrypto 算),
+   * `htmlGz` 是 gzip 压过的 HTML(压不了时 `htmlRaw` 给原始字节),`small` 是预渲染小尺寸 WebP;字节都随消息转移。
+   */
+  | { type: "bake-frame"; session: string; clipId: string; localFrame: number; hash: string; bytes: number; htmlGz?: ArrayBuffer; htmlRaw?: ArrayBuffer;
+    small?: { hash: string; bytes: number; webp: ArrayBuffer } | null };
 
-export const STAGE_EVENT_TYPES = new Set<StageEvent["type"]>(["mediaReady", "frame", "ended", "settled", "probe", "demote", "probe-frame"]);
+export const STAGE_EVENT_TYPES = new Set<StageEvent["type"]>(["mediaReady", "frame", "ended", "settled", "probe", "demote", "probe-frame", "bake-frame"]);
 
 /**
  * 每种事件**只认哪个角色**发来的(E0 末条:父页按 `event.source` 过滤来源)。
@@ -354,7 +388,7 @@ export interface StageRpcClient extends StageRpcApi {
 
 const METHODS: (keyof StageRpcApi)[] = ["setProject", "setTime", "render", "hitTest", "rectsWithBounds", "size", "setProxy", "setRole", "setPlan",
   "play", "pause", "setSuppressed", "setStreamPlanes", "setScrubbing", "setPlaying", "setMediaT", "setLocalHashes", "setSnapshots", "setMediaPolicy",
-  "settleLowMemory", "setBackWork"];
+  "settleLowMemory", "setBackWork", "bakeFrame", "bakeCancel"];
 
 /**
  * 有请求挂着时,每隔这么久看一眼目标窗口还在不在。
@@ -378,8 +412,14 @@ export const STAGE_UPDATE_TIMEOUT_MS = 8000;
  * 所以父页这边按「它的时限 + 这么多」判超时。
  */
 export const LOW_MEMORY_SETTLE_RPC_SLACK_MS = 3000;
+/**
+ * M7 生成快照的一帧最长等多久回包:活着的窗口原地重载会丢回包(同 `STAGE_UPDATE_TIMEOUT_MS` 的理由),父页要能放手。
+ * 被后台活的门挡住的时间也算在内,所以给得宽;真超时按可重试失败交回。
+ */
+export const BAKE_FRAME_TIMEOUT_MS = 120_000;
 /** 这次调用按时长判超时的话,等多久(毫秒);不按时长判回 null */
 export function stageCallTimeoutMs(method: string, args: unknown[]): number | null {
+  if (method === "bakeFrame") return BAKE_FRAME_TIMEOUT_MS;
   if (method === "settleLowMemory") {
     const ms = Number((args[1] as { timeoutMs?: unknown } | undefined)?.timeoutMs);
     return (Number.isFinite(ms) && ms > 0 ? ms : 5000) + LOW_MEMORY_SETTLE_RPC_SLACK_MS;
