@@ -58,7 +58,7 @@ export const ENQUEUE_MAX_ITEMS = 2000;
  *
  * - `items`:`[{ name?, original, small? }]`,一个素材一项(视频两档:`small` 是 `tiers.small`、`original` 是 `tiers.original`;
  *   图片、音频只有一档,只给 `original`)。也收 `hashes: string[]`(每个当作只有素材原尺寸一档)。
- * - 只收本地有的:素材原尺寸本地没有 → 整个素材不进队,素材原尺寸哈希记进 `missing`;小版本地没有 → 只传素材原尺寸,素材小尺寸哈希记进 `missing`。
+ * - 只收本地有的:素材原尺寸本地没有 → 整个素材不进队,素材原尺寸哈希记进 `missing`;素材小尺寸本地没有 → 只传素材原尺寸,素材小尺寸哈希记进 `missing`。
  * - 进队照队列本来的规则:逐个素材、先小后大、两档都 complete 才出队;同一素材原尺寸已在队里就合并档位。
  * - 当前连的是本机素材服务(队列是空操作)时回 `local: true`,什么都不进。
  *

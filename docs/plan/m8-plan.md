@@ -82,24 +82,30 @@ M8 本身的探针分支（第 6 节）不依赖 C10、M7 合入，可以现在�
 
 | 编号 | 场景 | 谁跑 | 探针 | 命令形状 | 判据 | 证据 |
 |---|---|---|---|---|---|---|
-| K1-X | 两种指纹各 4 个节点（PC 4 个指纹 X、笔记本 4 个指纹 Y），200 个任务，一半的卡已被另一种指纹锁住；经阿里云主实例 | PC、笔记本各一半 | **要写** `m8-scale-probe.mjs --case k1`（假节点，按 `render-queue-e2e.mjs` 的写法，一个进程开多个节点连接，每个节点 `node.hello` 带给定指纹；锁用契约 F 节的卡片级指纹锁） | PC `--role coord+nodes --fingerprint X --nodes 4 --tasks 200 --lock-half`；笔记本 `--role nodes --fingerprint Y --nodes 4` | 稳态下 `card-locked` 拒绝 0 次，竞态窗口内 ≤ 认领总数的 1%；不匹配的节点收到已锁卡的 `task.opened` 0 条（K2 顺带）；结论与本机（M5b：过滤开 0、过滤关 400）一致 | 两边的拒绝计数、`task.opened` 计数；对照组数字（第 7 节 D4） |
-| I1-X | 20 个项目，每个项目 10 个节点只订阅本项目（PC 100 条连接、笔记本 100 条）；对项目 A 连续发布、认领、完成 500 次 | PC、笔记本各一半 | `m8-scale-probe.mjs --case i1`（20 个探针共享项目由 PC 以创建者建、跑完删掉） | PC `--role coord+nodes --projects 1-10`；笔记本 `--role nodes --projects 11-20` | 非 A 的节点收到 A 的消息 0 条；每条增量的实际投递次数等于能看见它的连接数（I2 顺带）；阿里云 RSS、CPU、带宽记进报告 | 每个节点收到的消息计数；阿里云资源采样 |
+| K1-X | 两种指纹各 4 个节点（PC 4 个指纹 X、笔记本 4 个指纹 Y），200 个任务，一半的卡已被另一种指纹锁住；经阿里云主实例。两种顺序各跑一轮：`--order join-first`（缺省，M5b 的顺序：节点报到后才发布死任务并锁卡）、`--order lock-first`（节点报到前就锁好） | PC、笔记本各一半 | `m8-scale-probe.mjs --case k1`（分支 `claude/m8-scale`；假节点，按 `render-queue-e2e.mjs` 的写法，一个进程开多个节点连接，每个节点 `node.hello` 带给定指纹；锁用契约 F 节的卡片级指纹锁） | PC `--role coord+nodes --place cloud --case k1 --workers pc,laptop --fingerprint X --nodes 4 --tasks 200 [--order lock-first]`；笔记本 `--role worker --place cloud --case k1 --name laptop --fingerprint Y --nodes 4`〔裁〕 | 〔裁〕稳态下 `card-locked` 拒绝 0 次（硬）；竞态窗口内的拒绝 ≤ 本轮节点总数（硬）；窗口时长只记录；`lock-first` 那一轮另要求稳态 0、竞态 0；不匹配的节点收到已锁卡的 `task.opened` 0 条（K2 顺带，计法见下）；结论与本机（M5b：过滤开 0、过滤关 400）一致 | 两边的拒绝计数（稳态 / 竞态分开）、窗口时长、`task.opened` 计数；对照组数字（第 7 节 D4） |
+| I1-X | 〔裁〕20 个**队列项目**（`i1p01`～`i1p20`），分在 `--spaces`（缺省 2）个探针共享项目里；每个项目 10 个节点只 watch 本项目（PC 100 条连接、笔记本 100 条）；对项目 A（`i1p01`）连续发布、认领、完成 500 次 | PC、笔记本各一半 | `m8-scale-probe.mjs --case i1`（`--spaces` 个探针共享项目由 PC 以创建者建、跑完删掉） | PC `--role coord+nodes --place cloud --case i1 --workers pc,laptop --projects 1-10 [--sample]`；笔记本 `--role worker --place cloud --case i1 --name laptop --projects 11-20`〔裁〕 | 非 A 的节点收到 A 的消息 0 条、任何任务消息 0 条；A 的每个任务 `task.closed(done)` 的实际投递次数等于 watch 了 A 的连接数，opened / taken 不超过（I2 顺带）；阿里云 RSS、CPU、带宽记进报告 | 每个节点收到的消息计数；阿里云资源采样 |
 
 - 两项都是真实多端的「连接分在两台机器上、经公网到阿里云」，不渲染；不带耗时门槛，PC 过即可。
 - 阿里云是 2 核 2 GiB：I1 的 200 条连接先在演练实例上跑一遍看内存，再上主实例（主执行计划第 9 节风险表）。
+- 〔裁〕2026-09-28 主会话，计划门槛、不涉及语义：
+  - **K1 竞态上限**。原文「稳态下 `card-locked` 拒绝 0 次，竞态窗口内 ≤ 认领总数的 1%」。为什么改：1% 来自 M5b 冻结时钟的单进程场景台（锁定前后不推进时钟，窗口是 0）；跨机有天然的传播窗口，节点收到死任务、还没收到撤回时 tick 就会认领一次。每个节点同时只有一条认领在路上，所以每阵锁变更最多被拒「节点数」次，而 200 个任务时认领总数约 130，1% 只容 1 次；本机替身实测 4 次、8 次、6 次，稳态都是 0，窗口最长 26～28 ms。改成：稳态拒绝 = 0（硬）；竞态窗口内拒绝 ≤ 本轮节点总数（硬，协议能保证的上界）；窗口时长只记录；两种顺序各跑一轮，`lock-first` 那一轮另要求稳态 0、竞态 0。「稳态」按节点自己的消息顺序切：收到第一条活任务的 `task.opened` 之后算稳态（不靠两台机器的时钟）。
+  - **K2 计法**。原文只说「不匹配的节点收到已锁卡的 `task.opened` 0 条」。跨机没有统一的「锁定之后」时刻，改成按节点自己的消息顺序判：活任务里锁指纹与节点不同的，收到就算；死任务在锁定之前的第一次可见不算，撤回之后再可见、或第二次可见才算。
+  - **I1 的项目**。原文「20 个探针共享项目由 PC 以创建者建」。为什么改：托管端同一来源地址每小时只许建 10 个共享项目（`server/auth/http.mjs` 的 `CREATE_PER_HOUR`，不动），20 个会回 429。改成：20 个队列项目分在 `--spaces` 个共享项目里，这正是 I1 的原始定义（按 watch 隔离），同时证共享项目之间的隔离。
+  - **命令形状**。原文的 `--role nodes` 改为探针实际的 `--role worker`（要 `--name`）；coordinator 要 `--workers pc,laptop`；`--lock-half` 是缺省，不必写。
+  - **D4 对照组**（第 7 节）：没有运行时开关；在 PC 本机用 `--role all --case k1 --prefilter off`，经模块加载钩子只在本机托管组合里把过滤缺省值改成关，不改生产代码。
 
 ### 2.3 异地接入托管（替代「笔记本在手机热点下」）
 
 - **原文**：笔记本在手机热点下，不设集群令牌，凭项目凭证进入托管项目，完成一轮发布、认领、完成，每个任务恰好一次 `task.done`，产物落在阿里云的素材服务上。
 - **为什么要替代**：切手机热点要人在笔记本旁（待用户项），按 `constraints.md`「新增费用要绕，不停」找不需人在场的路。SP 的 W6 已有先例：「互联网模式经公网连阿里云，不需要手机热点〔裁〕」（`REPORT-SP.md` 第 6 节）。
 - **替代做法**：笔记本**关掉局域网路径**、只经公网连阿里云：
-  1. 笔记本加两条临时的 Windows 防火墙规则，出入站都挡住 PC 的局域网地址，并挡住局域网发现的组播端口（UDP 54887）；跑完删掉（命令见第 2.6 节 C1 的防火墙做法，规则名统一带前缀 `PC-M8-`）；
+  1. 〔裁〕（2026-09-28 用户新约束 `constraints.md`「不动宿主机的网络」：模拟断线只在应用层做）：不改防火墙。成员端在应用层不走局域网：探针 `shared-project-probe.mjs --assert-no-lan`（不做局域网发现、连接候选只留公网地址），并用只读的 `Get-NetTCPConnection` 核对没有到 PC 局域网地址的连接。原写法「笔记本加两条临时防火墙规则」作废。
   2. 笔记本不设集群令牌（`shared-project-probe.mjs` 的 member 设了就判失败），凭项目凭证经 443 进入 `wss://8-219-80-16.sslip.io/hosted`；
   3. 完成一轮发布（PC）、认领与完成（笔记本主机）。
 - **谁跑**：PC 发布；笔记本当成员与主机。
 - **探针**：**现有** `shared-project-probe.mjs --mode internet`（creator / member，协调口用阿里云 `/coord`）跑假任务一轮；**现有** `render-host-probe.mjs --hosted` 或 `m8-e-probe.mjs --case e1` 跑真实渲染一轮。**要改**：member 加 `--assert-no-lan <PC 局域网地址>`：结束前核笔记本到 PC 局域网地址的 TCP 连接 0 条、3 s 内局域网发现结果 0 条，并记下托管端看到的来源地址（从 `/healthz` 或会话诊断）。
 - **判据**：原文判据全部成立；另加「全程没有局域网连接」「集群令牌 unset」。
-- **证据**：两个角色的结果行；防火墙规则加、删的命令与时间；`Get-NetTCPConnection` 的计数。
+- **证据**：两个角色的结果行；应用层开关的设置；`Get-NetTCPConnection`（只读）的计数。
 - **与原文的差异**（记为待用户项，第 8.3 节）：笔记本与 PC 在同一个家庭宽带后面，出口地址相同；没有经过手机运营商的 NAT、没有移动网络的时延、抖动与更小的 MTU；托管端的「按来源限速」看到的是同一个来源。建议同一轮再加一遍笔记本经 `render-queue-proxy.mjs --delay-ms 150 --loss 0.05` 连 8787 的「模拟移动网络」，只作补充、不替代真热点。
 
 ### 2.4 补做的待跨机复核（M8-X1～X4）
@@ -133,31 +139,14 @@ M8 本身的探针分支（第 6 节）不依赖 C10、M7 合入，可以现在�
 
 每一项下都满足 J-全完、J-恰一、J-纯层（主执行计划第 7 节 M8）。都在 E1 那种「有任务在跑」的负载下做，放云端与放本机能做的各做一遍。
 
-#### C1 笔记本断网 30 s（软件做法，不要人在场）
+#### C1 节点断网 30 s（应用层做法，不动宿主机网络）
 
-- **谁跑**：笔记本（受害方，执行断网脚本）；PC（creator、旁观节点，判接手与恢复）。
-- **时机**：笔记本主机持有任务时（探针写 KV `host.holding` 后）。
-- **做法**，三选一，建议按顺序试：
-  1. **防火墙规则**（首选：只切断到阿里云与 PC 的路，笔记本的会话自己连 Anthropic 的连接不受影响）：
-     ```powershell
-     New-NetFirewallRule -DisplayName PC-M8-Blackout-Out -Direction Outbound -Action Block -RemoteAddress 8.219.80.16,<PC 局域网地址>
-     New-NetFirewallRule -DisplayName PC-M8-Blackout-In  -Direction Inbound  -Action Block -RemoteAddress 8.219.80.16,<PC 局域网地址>
-     # 30 s 后
-     Remove-NetFirewallRule -DisplayName PC-M8-Blackout-Out, PC-M8-Blackout-In
-     ```
-     要管理员权限。**要先验证**：新加的阻止规则对已经建立的 TCP 连接是否立刻生效（Windows 筛选平台对已建立的流可能沿用旧判定）。预检探针 P-C1（第 4 节）量这一点，不生效就用第 2 种。
-  2. **关网卡**：
-     ```powershell
-     netsh interface set interface name="<网卡名>" admin=disabled
-     # 30 s 后
-     netsh interface set interface name="<网卡名>" admin=enabled
-     ```
-     要管理员权限；笔记本会话自己也会断 30 s，恢复靠脚本自己，不能靠会话下一条命令。
-  3. **不要管理员的兜底**：笔记本的主机经 `render-queue-proxy.mjs` 连文档服务，到点往代理写 `stall`、30 s 后写 `resume`（**要改**：代理加 `resume`）。只断应用那一层，与物理断网的差异写进报告。
-- **恢复保险**（第 1、2 种必须有）：断网脚本 `scripts/probes/m8/blackout.ps1`（**要写**）一次做完「断 → 等 30 s → 恢复」，在 `finally` 里恢复；另外在断之前先登记一个 90 s 后执行的一次性计划任务（`schtasks /Create /SC ONCE …`）做同样的恢复，恢复成功后删掉这个计划任务。脚本以分离进程启动（`Start-Process`），不依赖调用它的会话还在。每一步打带时刻的一行日志到文件，恢复后由会话读回。
-- **判据**：J-全完、J-恰一、J-纯层；断网期间笔记本持有的任务：租约到期后被 PC 接手（≤ 37 s），或断网短于会话保留期时会话接续、任务照常由笔记本完成——两种都认，报告写明是哪一种；恢复后笔记本用旧令牌 `complete` 的一律 `lease-lost`，不产生第二次 `task.done`；笔记本恢复后 60 s 内重新连上并继续取活。
-- **证据**：`blackout.ps1` 的日志（断、恢复的时刻，规则或网卡状态）；旁观节点的任务时间线；笔记本主机诊断的 `resumes` / `opens` / `lost`。
-- 这是改系统设置（防火墙或网卡），执行前主会话在对话里列出命令并确认笔记本会话的权限模式允许；做不了就用第 3 种并记差异（第 7 节 D1）。
+- 〔裁〕（2026-09-28 用户新约束 `constraints.md`「不动宿主机的网络」：模拟断线只在应用层做）：原来的「防火墙规则」「关网卡」两种做法作废，`scripts/probes/m8/blackout.ps1` 已从仓库删掉，D1 随之改定（第 7 节与末尾裁定表）。
+- **谁跑**：受害节点（笔记本回来前由云端当独立主机，或本机替身）；PC（creator、旁观节点，判接手与恢复）。
+- **时机**：受害节点持有任务时（探针写 KV `host.holding` 后）。
+- **做法**：受害节点经 `render-queue-proxy.mjs` 连文档服务，到点往代理写 `stall`（已有连接冻结，新连接也挂住，重连建不起来），30 s 后写 `resume`。放云端时也可以在阿里云上用 `ss -K` 断它那条 TCP（服务器侧断连接，约束允许），但它会立刻重连，只能模拟瞬断，30 s 的断网仍用代理。
+- **判据**：J-全完、J-恰一、J-纯层；断网期间受害节点持有的任务：租约到期后被别的节点接手（≤ 37 s），或断网短于会话保留期时会话接续、任务照常由它完成——两种都认，报告写明是哪一种；恢复后用旧令牌 `complete` 的一律 `lease-lost`，不产生第二次 `task.done`；恢复后 60 s 内重新连上并继续取活。
+- **证据**：代理的 `control.stall` / `control.resume` 时刻与 `stalledMs`；旁观节点的任务时间线；受害节点诊断的 `resumes` / `opens` / `lost`。
 
 #### C2 `pm2 restart` 阿里云托管组合
 
@@ -167,14 +156,14 @@ M8 本身的探针分支（第 6 节）不依赖 C10、M7 合入，可以现在�
 - **判据**（同 X7 加 E3）：两端重连后 epoch 变了；旧认领回 `lease-lost { reason: 'epoch' }`；发布方重新发布后全部完成；重启前已在素材服务里的任务直接完成、不重渲；在线页面恢复同步、没有丢改动（重启前页面的最后一次提交在重启后可读）；J-全完、J-恰一（按 epoch 计）、J-纯层。
 - **证据**：重启时刻与 `pm2 describe` 的重启次数；前后 epoch；各节点 `stats`；页面的同步状态记录。重启断开所有连接，时间与影响写进报告（主执行计划第 0.3 节）。
 
-#### C3 代理丢包 10%
+#### C3 代理扰动 10% 的数据块（原任务书叫「代理丢包 10%」）
 
-- **本机代理用哪个**：`scripts/probes/render-queue-proxy.mjs --loss 0.1`（任务书 E2「代理丢包」原本就指它）。它在 TCP 之上转发，**不真丢字节**（丢了会破坏 WebSocket 帧），而是把 10% 的数据块扣住 200～1000 ms 再按序发，模拟 TCP 重传造成的队头阻塞。
+- **本机代理用哪个**：`scripts/probes/render-queue-proxy.mjs --stall-prob 0.1`（旧名 `--loss` 仍认；任务书 E2「代理丢包」原本就指它）。它在 TCP 之上转发，**不真丢字节**（丢了会破坏 WebSocket 帧），而是把 10% 的数据块扣住 200～1000 ms 再按序发，模拟 TCP 重传造成的队头阻塞。
 - **谁跑**：笔记本（代理在笔记本上，主机经 `127.0.0.1:5596` → 阿里云 8787；放本机时 → PC 局域网主机）；PC 发布。
-- **命令形状**：`node scripts/probes/render-queue-proxy.mjs --listen 127.0.0.1:5596 --target 8.219.80.16:8787 --loss 0.1`；主机的共享项目配置 `url` 指向代理（同 `ht-w-probe.mjs --cut proxy` 的配法）。
-- **补充（可选）**：真正的内核层丢包，在阿里云上用 `tc qdisc … netem loss 10%`，只对 8787 / 8788 的出方向（加过滤，不碰 22 端口），并用 `timeout` 或一次性 `at` 任务保证到时自动删掉。先预检 `sch_netem` 模块在不在（P-C3，第 4 节）；不在就不做，只记差异。
-- **判据**：J-全完、J-恰一、J-纯层；任务不因丢包被误判失败（`attempts` 不异常增加）；记录总耗时与无丢包时的比值（只记录，不设门槛）。
-- **证据**：代理的 `summary` 行（扣住的块数、时长）；探针结果行；若做了 netem，`tc -s qdisc` 的丢包计数。
+- **命令形状**：`node scripts/probes/render-queue-proxy.mjs --listen 127.0.0.1:5596 --target 8.219.80.16:8787 --stall-prob 0.1`；主机的共享项目配置 `url` 指向代理（同 `ht-w-probe.mjs --cut proxy` 的配法）。
+- 〔裁〕（2026-09-28 用户新约束 `constraints.md`「不动宿主机的网络」：模拟断线只在应用层做）：不做阿里云上的内核层丢包（netem），只用代理的「数据块受扰」。
+- **判据**：J-全完、J-恰一、J-纯层；任务不因数据块受扰被误判失败（`attempts` 不异常增加）；记录总耗时与不扰动时的比值（只记录，不设门槛）。
+- **证据**：代理的 `summary` 行（扣住的块数、时长）；探针结果行。
 
 #### C4 放本机的项目的主机素材服务重启（必须 PC）
 
@@ -234,15 +223,20 @@ M8 本身的探针分支（第 6 节）不依赖 C10、M7 合入，可以现在�
 | `REPORT-C10a.md` 第 5 节 | 真手机扫码（iPhone 相机、微信）；iOS 逐帧导出的最长时长与体积 | 不能由会话替代，记待用户项（第 8.3 节）；可选：笔记本 Chrome 用手机视口加 CPU 节流跑 `c10a-demo-probe`（只作参考） | — |
 | `REPORT-M6.md` 第 2 节 | H5、H6、H9、H10 只有单进程测试 | 可选顺带：E1 放云端那一遍里加 `render-host-probe.mjs --role auth-check --rate-limit` 从笔记本跑（H4、H7、H8 的跨机部分） | 不是遗留，只是顺带再证 |
 | `HANDOFF-2026-09-28.md` 第 6 节 | 1080p 编码、`tiers-probe` T4 | 第 2.7 节 | — |
+| `REPORT-M5.md`（M5a 部分） | X6「物理断网后接手」当时用代理模拟断开，没有真断网 | C1（笔记本断网 30 s） | 总报告骨架查出的缺口，2026-09-28 补 |
+| 各阶段 | 两台真不同环境指纹的机器之间从没跨机测过（PC 与笔记本指纹相同） | E6（测试开关与纯浏览器节点两种，D12） | 真不同指纹的两台机器仍记待跨机复核；2026-09-28 补 |
+| `REPORT-M5.md`（M5b 部分、W4） | W4 要求的跨机 E1、E2、E6、K1 没有报告 | E1、E2、E6、K1-X | 2026-09-28 补 |
+| `HANDOFF-http-transport.md`、`REPORT-HT-a.md` 第 2 节 | HT 第一版 HT6：云端节点经 HTTP 加入并认领 | 归 HT-b（`TODO.md`），M8 不做 | HTTP 长轮询传输本身在 HT-b；2026-09-28 补 |
+| `REPORT-C6.6.md` | T9「改卡后 5 s 内重测」 | 第 2.7 节（笔记本判） | 2026-09-28 补来源 |
 
 ## 4. 要新写或改的探针（按依赖排序）
 
 | 序 | 探针 | 新写 / 改 | 内容 | 依赖 | 建议分支 |
 |---|---|---|---|---|---|
-| P-C1 | 预检：防火墙规则对已建立连接是否立刻生效；当前会话是否管理员 | 新写（一次性，放 scratchpad 不入库也可） | 笔记本上开一条到 PC 的长连接，加阻止规则，看 5 s 内是否断流；删规则 | — | 主会话下指令给笔记本，不开分支 |
+| P-C1 | 〔作废〕预检防火墙规则对已建立连接的生效时间 | — | 约束「不动宿主机的网络」后不再改防火墙，不做 | — | — |
 | P-C3 | 预检：阿里云上 `sch_netem` 在不在、`ss -K` 能否用 | 只读命令 | `modinfo sch_netem`、`ss -K` 对一条自建的连接试一次 | — | 主会话 SSH，不开分支 |
 | 1 | `scripts/probes/m8/lib.mjs` | 新写 | 共用件：旁观节点（记每个任务的认领、放回、完成，跨机）、J-恰一 / J-纯层的判定、协调口客户端（KV 写回 401 时带响应体记一行并重试一次，查 `HANDOFF-2026-09-28.md` 第 4 节那个 401）、阿里云资源采样（SSH 读 `pm2 jlist`、`free`、`/proc/net/dev`、`du`）、结果行格式 | — | `claude/m8-kit` |
-| 2 | `scripts/probes/m8/blackout.ps1` | 新写 | 第 2.6 节 C1 的三种做法，带恢复保险与日志；`-Mode firewall\|nic -Seconds 30 -Remote <地址列表> -Log <文件>` | P-C1 | `claude/m8-kit` |
+| 2 | 〔作废〕`scripts/probes/m8/blackout.ps1` | 已删 | 约束「不动宿主机的网络」；C1 改用代理 `stall` / `resume` | — | — |
 | 3 | `render-queue-proxy.mjs` | 改 | `--stdin-control` 加 `stall`、`resume`（按需半开与恢复） | — | `claude/m8-kit` |
 | 4 | `m8-e-probe.mjs` | 新写 | E1、E2、E3（C2 / C4）、E4、E6 的编排；`--place cloud\|lan`；角色 creator / host / watcher；`--fake-fingerprint`（设 `PROMPTCUT_TEST_ENV_FINGERPRINT`）、`--via-proxy`、`--burst`、`--keep` | 1、3；E6 要 C10 合入（测试开关在 C10 集成分支） | `claude/m8-e2e` |
 | 5 | `ht-w-probe.mjs` | 改 | `--place lan`（C5-2） | 1 | `claude/m8-e2e` |
@@ -255,10 +249,10 @@ M8 本身的探针分支（第 6 节）不依赖 C10、M7 合入，可以现在�
 **预检结果**（主会话 2026-09-28）：
 
 - **P-C3 已做**（SSH 只读命令）：阿里云内核 `6.8.0-63-generic`（Ubuntu 24.04.5）；`CONFIG_INET_DIAG_DESTROY=y`，`ss -K` 可用；`CONFIG_NET_SCH_NETEM=m`，模块文件 `sch_netem.ko.zst` 在，`tc` 在。C3 的内核层丢包可以做，C5 与 W-HT-a 的服务端掐连接可以用 `ss -K`。
-- **P-C1 查了资料、还要实测**（codex 检索微软文档）：新加的阻止规则不会当场拆掉已建立的连接；这条连接的下一个包触发重新授权，那时才被拦。长连接有心跳，所以第 1 种做法在一个心跳间隔内生效；空闲连接不保证。只加入站规则代替不了出站那一层的重新授权。笔记本上的实测仍按上表做，量「加规则到断流」的秒数。
+- **P-C1 〔作废，约束「不动宿主机的网络」〕查过的资料留作记录**（codex 检索微软文档）：新加的阻止规则不会当场拆掉已建立的连接；这条连接的下一个包触发重新授权，那时才被拦。长连接有心跳，所以第 1 种做法在一个心跳间隔内生效；空闲连接不保证。只加入站规则代替不了出站那一层的重新授权。笔记本上的实测仍按上表做，量「加规则到断流」的秒数。
 - **C3 的代理做法与资料一致**：用户态代理丢字节会打乱 WebSocket 帧，只能扣住再按序发、或按概率断开；报告里叫「10% 的数据块受扰」，不叫「10% 丢包」。真丢包用上一条的 netem。
 
-**可直接用于 M8 的现有探针**（不改）：`render-queue-e2e.mjs`（假任务的 E1、C2 的 epoch 重发）、`render-queue-proxy.mjs --loss`（C3）、`ht-w-probe.mjs --cut external`（C5-1）、`render-host-probe.mjs`（`--hosted`、`--lan`、`auth-check`）、`shared-project-probe.mjs --mode internet\|lan`（异地接入、SP4 回归）、`asset-lan-probe.mjs`（C4 之后）、`queue-mode-probe.mjs --lan --docservice-url --hold-min`（W4 形态的真实预渲染回归）、`probe-coord.mjs`（信箱与 KV，阿里云 `/coord`）、`ws-client-test.mjs`（握手冒烟）、`card-sync-probe.mjs`（卡片同步回归）、`stream-produce-probe.mjs`、`tiers-probe.mjs`、`tier-switch-probe.mjs`、`longtask-stacks.mjs`（第 2.7 节）、G0-R 的四个预渲染探针；C10 与 M7 交付的 `c10-browser-probe.mjs`（`--site`、`--role host` 由 `claude/c10-site` 加）、`c10-ui-probe`、`c10-cost-probe`、`lowmem-online-probe`、`small-tier-probe`、`c10a-demo-probe`、M7 的探针。
+**可直接用于 M8 的现有探针**（不改）：`render-queue-e2e.mjs`（假任务的 E1、C2 的 epoch 重发）、`render-queue-proxy.mjs --stall-prob`（C3）、`ht-w-probe.mjs --cut external`（C5-1）、`render-host-probe.mjs`（`--hosted`、`--lan`、`auth-check`）、`shared-project-probe.mjs --mode internet\|lan`（异地接入、SP4 回归）、`asset-lan-probe.mjs`（C4 之后）、`queue-mode-probe.mjs --lan --docservice-url --hold-min`（W4 形态的真实预渲染回归）、`probe-coord.mjs`（信箱与 KV，阿里云 `/coord`）、`ws-client-test.mjs`（握手冒烟）、`card-sync-probe.mjs`（卡片同步回归）、`stream-produce-probe.mjs`、`tiers-probe.mjs`、`tier-switch-probe.mjs`、`longtask-stacks.mjs`（第 2.7 节）、G0-R 的四个预渲染探针；C10 与 M7 交付的 `c10-browser-probe.mjs`（`--site`、`--role host` 由 `claude/c10-site` 加）、`c10-ui-probe`、`c10-cost-probe`、`lowmem-online-probe`、`small-tier-probe`、`c10a-demo-probe`、M7 的探针。
 
 **不用于 M8**：流与画面的原型探针（`stream-*`、`gl-*`、`pixelmap-*`、`backdrop-*`、`oac-probe` 等）、`snapshot-*`、`audio-determine-probe` —— 与多端联调无关。
 
@@ -302,7 +296,7 @@ M8 本身的探针分支（第 6 节）不依赖 C10、M7 合入，可以现在�
 
 | 分支 | Agent | 内容 | 端口段 | 依赖 |
 |---|---|---|---|---|
-| `claude/m8-kit` | `opus-dev` | 第 4 节第 1～3 项（共用件、断网脚本、代理 `stall` / `resume`） | 5730～5739 | P-C1 的结论 |
+| `claude/m8-kit` | `opus-dev` | 第 4 节第 1～3 项（共用件、代理 `stall` / `resume`；断网脚本已删） | 5730～5739 | — |
 | `claude/m8-e2e` | `opus-dev-high` | 第 4 节第 4～6 项（E 系列编排、`ht-w-probe` 与 `c66-t9-probe` 的放本机模式）；本机替身：PC 上两个编辑器、两个主机实例、本机托管组合 | 5740～5749 | `m8-kit`；E6 与 L3 要 C10 合入 |
 | `claude/m8-scale` | `opus-dev` | 第 4 节第 9 项（K1-X、I1-X） | 5750～5759 | `m8-kit` |
 | `claude/m8-migrate` | `opus-dev` | 第 4 节第 7、8 项；`hosting-migration.md` 补真实命令（演练做完后由主会话补数字） | 5760～5769 | — |
@@ -362,7 +356,7 @@ M8 本身的探针分支（第 6 节）不依赖 C10、M7 合入，可以现在�
 
 每条：问题、选项、建议与理由、牵涉的语义级别。
 
-**D1 笔记本断网用哪种做法**
+**D1 笔记本断网用哪种做法**〔2026-09-28 作废：约束「不动宿主机的网络」，改为代理 `stall` / `resume`，见第 2.6 节 C1〕
 - 问题：C1 要「断网 30 s」，但关网卡与加防火墙规则都要管理员权限、都算改系统设置；关网卡还会让笔记本会话自己断 30 s。
 - 选项：(a) 防火墙规则只挡到阿里云与 PC 的地址；(b) `netsh` 关网卡；(c) 代理层半开（不要管理员）。
 - 建议：先跑 P-C1；(a) 能立刻切断已建立的连接就用 (a)，否则 (b)，两者都要恢复保险；笔记本会话不是管理员或权限模式不允许时用 (c)，报告写明「应用层断开，不是物理断网」。理由：(a) 最接近「拔网线」（两端都是沉默的半开），又不伤笔记本会话；(c) 只能证应用层行为。执行前主会话在对话里列出命令、确认对端权限模式（主执行计划第 6.4b 节授权主会话指令对端改系统设置，但仍逐次列出）。
@@ -441,9 +435,7 @@ M8 本身的探针分支（第 6 节）不依赖 C10、M7 合入，可以现在�
 | 风险 | 影响 | 对策 |
 |---|---|---|
 | C2、迁移停主实例会断开所有在线成员 | 用户或演示在用时被打断 | 排在放云端项的最后；执行前在对话里报时刻；报告写时间与影响 |
-| 断网脚本恢复失败 | 笔记本长时间离线、会话失联 | 恢复保险（`finally` + 一次性计划任务）；首选只挡特定地址的防火墙做法 |
 | 阿里云 2 核 2 GiB，I1 的 200 条连接加真实产物 | 托管端内存顶满、`max_memory_restart` 触发重启 | 先在演练实例跑；全程采样资源；满了按回退梯次，不加配置（加配置是新增费用） |
-| netem 规则忘删 | 阿里云长期丢包 | 只对 8787 / 8788；`timeout` 或一次性 `at` 自动删；做完 `tc -s qdisc` 核对 |
 | 前置（C10、M7）拖延 | M8 跑不起来 | 探针分支与本机替身先做；维护分支并行 |
 | 笔记本上同时跑多项时负载高 | 带耗时门槛的项误判 | 耗时项单独在笔记本空闲时段跑，不与多端项同时 |
 
@@ -457,7 +449,6 @@ M8 本身的探针分支（第 6 节）不依赖 C10、M7 合入，可以现在�
 - 真热点下的异地接入（第 2.3 节差异）。
 - 真手机扫码（iPhone 相机、微信）；iOS 逐帧导出的最长时长与体积（`REPORT-C10a.md` 第 5 节）。
 - 若 PC 局域网主机要用新端口：Windows 防火墙入站放行（端口与 UDP 54887）。
-- 若 C1 要管理员权限而笔记本会话不是：由用户以管理员身份跑一次 `blackout.ps1`，或接受 D1 的 (c)。
 - 「只能出网的节点」一侧（D5）：是否在团队测试时补。
 - 审〔裁〕：本文定稿时主会话的裁定、各阶段未审的〔裁〕（`HANDOFF-2026-09-28.md` 第 8 节）。
 
@@ -467,7 +458,7 @@ M8 本身的探针分支（第 6 节）不依赖 C10、M7 合入，可以现在�
 
 | 待定点 | 裁定 |
 |---|---|
-| D1 笔记本断网的做法 | 用防火墙规则只挡到阿里云与 PC 的连接，带自动恢复保险；不行再退 `netsh` 关网卡。要管理员权限：用户已把改系统设置的指挥权交给主会话（主计划 6.4b 节），发给笔记本前先在对话里列出命令 |
+| D1 笔记本断网的做法 | 〔2026-09-28 作废（2026-09-28 用户新约束 `constraints.md`「不动宿主机的网络」：模拟断线只在应用层做）：改为受害节点经代理，`stall` 30 s 后 `resume`；服务器侧 `ss -K` 只做瞬断。〕原裁定：用防火墙规则只挡到阿里云与 PC 的连接，带自动恢复保险；不行再退 `netsh` 关网卡。要管理员权限：用户已把改系统设置的指挥权交给主会话（主计划 6.4b 节），发给笔记本前先在对话里列出命令 |
 | D2 主机素材服务重启 | 按重启整个局域网主机编辑器进程算 |
 | D3 「恰好一次」的口径 | 按 epoch 数（三级） |
 | D4 K1 过滤关的对照组 | 在 PC 本机跑 |
