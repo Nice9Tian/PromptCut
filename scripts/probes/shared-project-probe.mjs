@@ -964,7 +964,7 @@ async function runMigrateCheck() {
   const result = {
     ok: false, role: 'migrate-check', from: null, to: null, fromInventory: inventoryFile ? path.resolve(inventoryFile) : null, inventoryTakenAt: null,
     admin: token ? 'token' : 'loopback', tokenFrom, healthz: {}, assetUrls: {}, sharedProjects: null, spaces: null, revs: null, assets: {}, sample: null,
-    seeded: null, readyLayers: null,
+    registeredAssetTo: null, seeded: null, readyLayers: null,
   };
   const eps = [];
   const done = async (code) => { await closeAll(eps); finish(result, code); };
@@ -997,7 +997,7 @@ async function runMigrateCheck() {
   result.to = toSide.doc;
   result.healthz.to = toSide.healthz;
   result.assetUrls.to = toSide.inv?.assetPublicUrl ?? toSide.registeredAsset;
-  result.assetUrls.registeredTo = toSide.registeredAsset;
+  result.registeredAssetTo = toSide.registeredAsset;
   if (!a || !toSide.inv) return done();
   check(result.assetUrls.from !== result.assetUrls.to, '新实例登记的是自己的素材服务地址（与旧的不同）', result.assetUrls);
   if (toSide.registeredAsset) check(toSide.registeredAsset === toSide.inv.assetPublicUrl, '新实例 service.endpoints 里的素材地址就是它配置的公网地址', result.assetUrls);

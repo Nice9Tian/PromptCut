@@ -833,7 +833,7 @@ async function stepLocal() {
 
     // 6 + 7. 按库存核对
     const chk = await runProbe('shared-project-probe.mjs', ['--role', 'migrate-check', '--from-inventory', invFile, '--to', dst.doc, '--data-dir', dstData, '--seed', seedFile, '--scan-dir', dstData, '--sample', 'all']);
-    out.check = chk.result ? { ok: chk.result.ok, revs: chk.result.revs, assets: chk.result.assets, sample: chk.result.sample, seeded: chk.result.seeded, readyLayers: chk.result.readyLayers, assetUrls: chk.result.assetUrls, fails: chk.result.fails } : { code: chk.code };
+    out.check = chk.result ? { ok: chk.result.ok, revs: chk.result.revs, assets: chk.result.assets, sample: chk.result.sample, seeded: chk.result.seeded, readyLayers: chk.result.readyLayers, assetUrls: chk.result.assetUrls, registeredAssetTo: chk.result.registeredAssetTo, fails: chk.result.fails } : { code: chk.code };
     check(chk.code === 0 && chk.result?.ok, 'local：migrate-check --from-inventory 全过');
     mark('核对');
 
