@@ -433,7 +433,9 @@ export function TopBar() {
     });
 
     try {
-      const { outDir, id } = await exportVideo({
+      const { outDir, id, written } = await exportVideo({
+        // 在线浏览器模式(c10a 第 11.1 节)边编边写进这个落点,回 written: true;桌面那一路不看它
+        target,
         onStart: (jobId) => {
           exportIdRef.current = jobId;
           setExportState((st) => (st ? { ...st, id: jobId } : st));
@@ -442,8 +444,9 @@ export function TopBar() {
           setExportState((s) => (s && s.phase === "running" ? { ...s, done, total, stage } : s)),
       });
 
-      // 渲染完了才把成品搬到用户选的位置;没选就留在产物目录里
-      if (target) {
+      // 渲染完了才把成品搬到用户选的位置;没选就留在产物目录里。
+      // 已经边编边写进落点的(在线导出,written)不再搬:再 createWritable 会把写好的文件换成空的
+      if (target && !written) {
         const w = await target.createWritable();
         try {
           await streamExportFile(id, "preview.mp4", w);

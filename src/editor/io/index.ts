@@ -332,7 +332,7 @@ export async function exportVideo(
     /** 拿到任务 id 就能取消了,所以在开跑那一刻先回给调用方 */
     onStart?: (id: string) => void;
   } & OnlineExportOptions = {},
-): Promise<{ outDir: string; id: string }> {
+): Promise<{ outDir: string; id: string; written?: boolean }> {
   // c10a 第 11.1 节:在线页面没有预渲染进程,在浏览器里逐帧导出。
   // `ONLINE` 按需取:`mode.ts` 读 `import.meta.env`,Node 单测里载入本模块时没有它
   if ((await import("../../online/mode")).ONLINE) return exportVideoOnline(opts);
