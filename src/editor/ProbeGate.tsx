@@ -4,7 +4,8 @@ import { previewMode } from "./previewMode";
 import { setPlanProject } from "./planDispatch";
 import { onProbeProgress, probeProgress, requeueProbeRun, syncProbeRun, type ProbeProgress } from "./probeRunner";
 import { whenStageReady } from "./stageBridge";
-import { onCardsUpdated } from "../kernel/registry";
+import { cardsStamp, onCardsUpdated } from "../kernel/registry";
+import { whenStagesHaveCards } from "./stageCards";
 import "./ProbeGate.css";
 
 /**
@@ -55,7 +56,11 @@ export function ProbeGate() {
     if (!enabled) return;
     let active = true;
     const off = onCardsUpdated(() => {
-      void whenStageReady("back").then(() => { if (active) requeueProbeRun(getState().project); });
+      // 先等两个舞台都换上这一版卡片(没换上的会被重载),再等后台舞台就绪,才排重测:
+      // 不然会在后台舞台还是旧卡、或正在换卡的当口测(测到旧代码,或那一轮被打断、等 RPC 超时)
+      void whenStagesHaveCards(cardsStamp())
+        .then(() => whenStageReady("back"))
+        .then(() => { if (active) requeueProbeRun(getState().project); });
     });
     return () => { active = false; off(); };
   }, [enabled]);

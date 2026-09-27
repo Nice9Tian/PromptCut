@@ -73,9 +73,10 @@ if (import.meta.hot) {
   if (data.loaded) data.changed = true;
   data.loaded = true;
   import.meta.hot.accept();
-  import.meta.hot.on("vite:afterUpdate", () => {
+  import.meta.hot.on("vite:afterUpdate", (payload: { updates?: { timestamp?: number }[] }) => {
     if (!data.changed) return;
     data.changed = false;
-    noteCardsUpdated();
+    const stamp = Math.max(0, ...(payload?.updates ?? []).map((u) => Number(u.timestamp) || 0));
+    noteCardsUpdated(stamp || Date.now());
   });
 }

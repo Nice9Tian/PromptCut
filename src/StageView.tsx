@@ -4,7 +4,7 @@ import { Stage, type StreamPlaneGroup } from "./render/Stage";
 import { FrameScene } from "./render/FrameScene";
 import { flattenOverlay, type Project } from "./kernel/project";
 import { projectCardGraph } from "./kernel/cardGraph.mjs";
-import { cardsVersion, getCard, onCardsUpdated } from "./kernel/registry";
+import { cardsStamp, cardsVersion, getCard, onCardsUpdated } from "./kernel/registry";
 import { installStageClock } from "./render/stageClock";
 import { cardMountedAt, mountFrameOf } from "./render/frameWindow.mjs";
 import { createAnimationPinner } from "./render/pinAnimations";
@@ -16,6 +16,7 @@ import {
   postStageEvent,
   postStageReady,
   serveStageRpc,
+  postStageCards,
   type BackJob,
   type PlayReply,
   type ProbeBooleans,
@@ -284,6 +285,10 @@ export default function StageView() {
    * 靠这个版本号重渲,卡片按新定义重新挂上;卡片图也按新定义重解。项目、时间、RPC 都不动。
    */
   const cardsGen = useSyncExternalStore(onCardsUpdated, cardsVersion, cardsVersion);
+  // 按新卡重渲提交之后告诉父页换到了哪一版(父页等两个舞台都报到才排重测,`editor/stageCards.ts`)
+  useEffect(() => {
+    if (cardsGen > 0) postStageCards(cardsStamp());
+  }, [cardsGen]);
   const graph = useMemo(() => {
     if (!project) return undefined;
     try {

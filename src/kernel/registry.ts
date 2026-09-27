@@ -37,14 +37,24 @@ export function registerCards(defs: CardDef<any>[]) {
  * 本模块不在热更新链上(卡片改了它不重跑),订阅一直有效。
  */
 let cardsGen = 0;
+let cardsStampValue = 0;
 const cardListeners = new Set<() => void>();
 
-/** `cards/index.ts` 热更新重装完整套卡片之后调 */
-export function noteCardsUpdated(): void {
+/**
+ * `cards/index.ts` 热更新重装完整套卡片之后调。`stamp` 是这批热更新的时间戳(vite 推给各个页面的是同一个),
+ * 编辑器页面拿它核对两个舞台是不是也换到了这一版(`editor/stageCards.ts`)。
+ */
+export function noteCardsUpdated(stamp: number = Date.now()): void {
   cardsGen++;
+  cardsStampValue = Math.max(cardsStampValue, stamp);
   for (const l of [...cardListeners]) {
     try { l(); } catch (err) { console.warn("[registry] 卡片更新的订阅方出错", err); }
   }
+}
+
+/** 最近一次卡片热更新的时间戳;没换过是 0 */
+export function cardsStamp(): number {
+  return cardsStampValue;
 }
 
 /** 卡片代码换过几次(本页面会话里);首次装载是 0 */

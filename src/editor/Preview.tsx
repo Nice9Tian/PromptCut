@@ -10,6 +10,7 @@ import { findClip } from "../kernel/project";
 import { nudgeFrame } from "../kernel/layout";
 import { createStageRpc, type HostCapabilities, type StageRpcClient } from "../render/stageRpc";
 import { frontStage, onStageEvent, releaseStageClient, setStageClient, swapStageClients, syncProject } from "./stageBridge";
+import { bindStageCards, noteStageCards, noteStageFresh } from "./stageCards";
 import { INITIAL_ROLE_OF, STAGE_IDS, dualStage, stageSrc, stageTargetOrigin, type StageId } from "./previewMode";
 import { ControlBar } from "./preview/ControlBar";
 import { ToolBar, ToolType } from "./preview/ToolBar";
@@ -355,7 +356,13 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
   useEffect(() => {
     const frames: Record<StageId, React.RefObject<HTMLIFrameElement | null>> = { A: frameARef, B: frameBRef };
     const onMessage = (e: MessageEvent) => {
-      if ((e.data as { type?: string } | null)?.type !== "pc-stage-ready") return;
+      const type = (e.data as { type?: string } | null)?.type;
+      if (type === "pc-stage-cards") {
+        // 舞台按新卡重渲完了(C6.6 集成 3b,`stageCards.ts`)
+        for (const id of STAGE_IDS) if (e.source === frames[id].current?.contentWindow) noteStageCards(id, Number((e.data as { stamp?: number }).stamp) || 0);
+        return;
+      }
+      if (type !== "pc-stage-ready") return;
       for (const id of STAGE_IDS) {
         const win = frames[id].current?.contentWindow;
         if (!win || e.source !== win) continue;
@@ -365,6 +372,8 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
          * 把真正的可见舞台顶掉。
          */
         const role = frontIdRef.current === id ? "front" : "back";
+        // 新载入的舞台就是最新的卡片代码
+        noteStageFresh(id);
         rpcRef.current[id]?.dispose();
         const client = createStageRpc(win, stageTargetOrigin(id));
         rpcRef.current[id] = client;
@@ -394,11 +403,27 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
   }, [glPortTo]);
 
   /*
-   * 卡片代码换了不重载舞台(C6.6 集成 3b)。以前改一张卡,热更新冒到本组件,Fast Refresh 重跑上面那个握手 effect,
-   * 清掉了舞台的 RPC 客户端,舞台停在旧画面,只好整页重载两个 iframe(`b25f482`)。现在热更新在 `cards/index.ts`
-   * 接住、不冒到这里;舞台自己也收到同一份热更新,在舞台里重装卡片并重渲(`StageView` 订阅 `onCardsUpdated`)。
-   * 舞台的热更新连接断过的话,vite 的客户端在重连时会整页重载舞台,不会一直停在旧代码上。
+   * 卡片代码换了一般不重载舞台(C6.6 集成 3b)。以前改一张卡,热更新冒到本组件,Fast Refresh 重跑上面那个握手 effect,
+   * 清掉了舞台的 RPC 客户端,舞台停在旧画面,只好每次都整页重载两个 iframe(`b25f482`)。现在热更新在 `cards/index.ts`
+   * 接住、不冒到这里;舞台自己也收到同一份热更新,在舞台里重装卡片、重渲,然后发 `pc-stage-cards` 报到。
+   * 只有过了时限还没报到的舞台(代码确实过期)才在这里整页重载那一个(`stageCards.ts` 的 `whenStagesHaveCards`)。
    */
+  useEffect(() => {
+    const ids: StageId[] = dual ? [...STAGE_IDS] : ["A"];
+    return bindStageCards(ids, (id) => {
+      const frame = (id === "A" ? frameARef : frameBRef).current;
+      if (!frame) return;
+      const client = rpcRef.current[id];
+      if (client) {
+        releaseStageClient(client);
+        client.dispose();
+        rpcRef.current[id] = null;
+        hostCapsRef.current[id] = null;
+      }
+      console.warn(`[preview] 舞台 ${id} 没换上新的卡片代码,整页重载它`);
+      frame.src = frame.src;
+    });
+  }, [dual]);
 
   /*
    * 项目选项切了 `glRoute`(R9 约束第 1 条):切到 `shared` 时给已经握过手的舞台补交端口;

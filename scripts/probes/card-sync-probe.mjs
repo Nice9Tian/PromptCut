@@ -205,7 +205,7 @@ async function hostedCard(base, projectId, cred) {
 /**
  * 页面里:这张卡的源码(注册表)、片段的身份键、测量遮罩在不在。
  * 注册表(kernel/registry.ts)不在卡片的热更新链上,热更新后仍是同一个实例、内容是新的;身份键用 costIdentity 按注册表里的
- * 源码现算(清掉它的记忆化)。探针模块在热更新链上会被重跑,evaluate 里 import 到的是旧实例,所以不读它的进度,看遮罩。
+ * 源码现算(清掉它的记忆化)。重测看遮罩或成本表里的新记录(集成 3b 之后探针模块也不在热更新链上了,进度可以直接读)。
  */
 const pageCardState = (page, cardId, clipId) => P(page, async (cardId, clipId) => {
   const R = await import('/src/kernel/registry.ts');
@@ -305,9 +305,19 @@ try {
     return s.projectId === shared.projectId && s.connected && s.records?.[CARD_REL] ? s : null;
   }, 20_000, 'B 对账到探针卡');
   say('b.bound', { record: bBound.records[CARD_REL] });
-  // 进入共享项目后的第一轮测量(挡界面的那一轮)先测完,再改卡
-  await waitFor(() => P(pageB, () => !document.querySelector('[data-pc="probe-gate"]')), 300_000, 'B 测量遮罩退下').catch(() => null);
-  await sleep(1500);
+  // 进入共享项目后的第一轮测量(挡界面的那一轮)先测完,再改卡。
+  // 只看遮罩会抢跑:遮罩可能还没出来(集成时见过一次,改卡后才冒出这一轮的遮罩、测了 18 s)。
+  // 集成 3b 之后探针模块不在卡片的热更新链上,可以直接读它的进度:连续 1.5 s 没在测、也没有遮罩才算测完
+  let idleSince = null;
+  await waitFor(async () => {
+    const idle = await P(pageB, async () => {
+      const R = await import('/src/editor/probeRunner.ts');
+      return !R.probeProgress().running && !document.querySelector('[data-pc="probe-gate"]');
+    }).catch(() => false);
+    if (!idle) { idleSince = null; return false; }
+    idleSince ??= Date.now();
+    return Date.now() - idleSince >= 1500;
+  }, 300_000, 'B 第一轮测量测完').catch(() => null);
   const before = await pageCardState(pageB, CARD_ID, clipId);
   res.keyBefore = before.key;
   if (!before.src?.includes(MARK('v1'))) fails.push('b-page-not-v1-before');
@@ -399,7 +409,17 @@ try {
   let keyAfter = null;
   let gateSeen = null;
   const tr = Date.now();
+  const debugTimeline = [];
   while (Date.now() - tr < Number(process.env.PROBE_DEBUG_TIMEOUT ?? 60_000)) {
+    if (process.env.PROBE_DEBUG) {
+      const d = await P(pageB, async () => {
+        const R = await import('/src/editor/probeRunner.ts');
+        const J = await import('/src/editor/stageJobs.ts');
+        const p = R.probeProgress();
+        return `${p.running ? 'run' : 'idle'}${p.blocking ? '+block' : ''} ${p.done}/${p.total} ${p.card ?? '-'} job=${JSON.stringify(J.currentBackJob())} q=${J.backJobQueueLength()}`;
+      }).catch((e) => `err ${e?.message ?? e}`);
+      if (debugTimeline.at(-1)?.s !== d) debugTimeline.push({ ms: Date.now() - t0, s: d });
+    }
     const s = await pageCardState(pageB, CARD_ID, clipId).catch(() => null);
     if (s) {
       keyAfter = s.key;
@@ -413,6 +433,7 @@ try {
     await sleep(100);
   }
   res.keyAfter = keyAfter;
+  if (process.env.PROBE_DEBUG) res.debugTimeline = debugTimeline;
   res.remeasureMs = remeasure ? remeasure.at - t0 : null;
   res.remeasureVia = remeasure?.via ?? null;
   res.gate = gateSeen ? { ms: gateSeen.at - t0, text: gateSeen.text } : null;
