@@ -3,6 +3,13 @@ import type { MediaAsset } from "../../kernel/project";
 import { isViewOnly } from "./viewOnly";
 
 /**
+ * 在线构建的编译期常量(写法与用意见 `src/online/pageFlag.ts` 的「在线构建剪枝」)。在线浏览器模式没有本机内容库与转码:
+ * 导入媒体置灰(C10 契约第 10 节),小版补转也不跑(`Preview` 按 `ONLINE` 不起)。下面几个入口在在线构建里直接回空,
+ * 背后的 /api/media/upload、adopt、tiers 调用一起剪掉(M8 遗留 L24)。
+ */
+const ONLINE_BUILD = typeof import.meta.env !== "undefined" && import.meta.env.VITE_PC_ONLINE === "1";
+
+/**
  * 导入 = 先入库再引用(A1)。
  *
  * **为什么不在页面里算哈希**:素材键是文件内容的 sha256,4 GB 的视频在主线程上读一遍
@@ -48,6 +55,7 @@ function tiersOf(data: { tiers?: { original?: unknown; small?: unknown }; small?
 
 /** 把一个 File 流进本地内容库,拿回它的内容哈希。失败给 null(调用方负责提示) */
 export async function uploadMediaFile(file: File): Promise<UploadedMedia | null> {
+  if (ONLINE_BUILD) return null;
   try {
     // tiers=1:视频在服务端做 faststart 判定(缺了就同容器重封装),并在后台生成小版(C6.6)
     const res = await fetch(`/api/media/upload/${encodeURIComponent(file.name)}?tiers=1`, { method: "POST", body: file });
@@ -84,6 +92,7 @@ export async function uploadMediaFile(file: File): Promise<UploadedMedia | null>
  * 失败给 null,那条素材就按没有 hash 的迁移期素材走(仍然能按文件名播)。
  */
 export async function adoptServerMedia(filePath: string): Promise<UploadedMedia | null> {
+  if (ONLINE_BUILD) return null;
   try {
     const res = await fetch(`/api/media/adopt?path=${encodeURIComponent(filePath)}&tiers=1`, { method: "POST" });
     if (!res.ok) {
@@ -149,6 +158,7 @@ const watching = new Set<string>();
  * 只是这条素材的项目记录里没有 small,别的设备按「还没有小版时直接拉原片」处理)。
  */
 export function watchSmallTier(mediaId: string, original: string): void {
+  if (ONLINE_BUILD) return;
   const key = `${mediaId}:${original}`;
   if (watching.has(key)) return;
   watching.add(key);
@@ -188,7 +198,7 @@ const backfillAsked = new Set<string>();
  * 回这次问了几份。
  */
 export async function backfillSmallTiers(project = getState().project): Promise<number> {
-  if (isViewOnly()) return 0; // 只读页面不改项目
+  if (ONLINE_BUILD || isViewOnly()) return 0; // 在线页面没有本机转码;只读页面不改项目
   const want: { mediaId: string; hash: string; name: string }[] = [];
   for (const m of project.media ?? []) {
     if (m.kind !== "video" || m.pending || m.tiers?.small) continue;
@@ -231,6 +241,7 @@ function writeSmallTier(mediaId: string, original: string, small: string): void 
  * 同一份原片一个页面会话里只问一次;素材表没变就不问。
  */
 export function startTierBackfill(): () => void {
+  if (ONLINE_BUILD) return () => {};
   let lastMedia: unknown = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
   const check = () => {
