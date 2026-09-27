@@ -57,9 +57,61 @@ node scripts/probes/tier-switch-probe.mjs --origin http://127.0.0.1:5680 --remot
 
 ## 5. 提交
 
-（见下，边做边补）
+| 提交 | 内容 |
+|---|---|
+| `5f7c7fd` | 建本报告 |
+| `c63bf4d` | 探针：`tier-switch-probe` 加 T5c、T5e 与 `--only`（修前版本，用来复现） |
+| `92a5053` | 修：`playability.ts` 超时后迟到的结论照记、冷却结束主动通知；单测 T6-probe-4b/4c |
+| `3a335a9` | 修：`reloadOnComplete` 的 `inUse`、`VideoTrack` 重载挪到驱动之前、`mediaDrive` 在 `loadedmetadata` 再对齐；单测 `mediaDrive.test.mjs`（新）与 `mediaSync.test.mjs` 一条 |
+| `743ca6a` 起 | 报告 |
 
 ## 6. 验证
+
+全部在笔记本（性能基准机）上跑；同时有另外三个 C10 子 Agent 在跑，机器偏忙。
+
+### 6.1 修前挂、修后过
+
+| 项 | 修前 | 修后 |
+|---|---|---|
+| `tier-switch-probe --only T5a,T5c,T5e` | `ok: false`，T5c「换到原片」超时（46 s）、帧号只有小尺寸 75（见第 3 节） | `ok: true`：T5a 换档 1,945 ms；**T5c 16,475 ms**（字节扣 16 s，放行后约 0.4 s 换上：迟到的探测结论直接触发换档，没等 30 s 冷却）；T5e 2,146 ms；三者帧号 75→75、换档那一帧帧回调误差 0 帧、黑帧 0（采样 259 / 1,987 / 286 个） |
+| 单测 `tierSwitch.test.mjs` T6-probe-4b、4c | 2 条挂（`git show HEAD:playability.ts` 换回修前跑） | 21/21 过 |
+| 单测 `mediaDrive.test.mjs`（新，4 条） | 2 条挂（「暂停中重载后回到目标时刻」「播放中重载后对齐并起播」；另两条是不该动的情形，修前本来就对） | 4/4 过 |
+| 单测 `mediaSync.test.mjs`「闲着的槽位到齐时不重载」 | （新参数，修前没有） | 过 |
+
+T5c 修后的元素事件：闲着的原尺寸槽位在原尺寸报齐时**不再**被重载；16.1 s 字节放行、探测出结论后它才成了预热槽位、才 `load()`，随即 loadedmetadata → seeking → seeked(2.5) → loadeddata，换档。截图 `t5c-original.png` 看过：原尺寸画面，顶上帧号条纹读 75。
+
+### 6.2 `tier-switch-probe` 全量（修后，`3a335a9`）
+
+`ok: true`、`fails: []`。T5a 1,891 ms、黑帧 0、帧号 [75]；T5b 播放中换档帧误差 −0.22 帧、换档后 300 ms 无黑帧、解得出的帧无黑帧；T5c 16,463 ms、黑帧 0、[75]；T5e 2,168 ms、黑帧 0、[75]；T6 ProRes 缓存记 0、一直停在小版；T7 导出拒绝「等待上传方」、导出请求 0。
+
+### 6.3 G0 与 G0-R（`743ca6a`，与 `3a335a9` 代码相同，只差报告）
+
+跑法：主会话的 `run-g0-g0r.sh` 换成本段端口（dev server 5686，舞台 5687/5688；ready-index 5683）。
+
+| 项 | 结果 |
+|---|---|
+| `npx tsc -b --force` | exit 0（17 s） |
+| `npm test` | exit 0（117 s）：tests 3400、pass 3398、fail 0、skipped 2（`/api/cards/layout` 集成、SKILL 闸门集成，照旧） |
+| `npm run build` | exit 0 |
+| `npx vite build --mode online` | exit 0 |
+| 导出确定性 `verify-determinism` | exit 0：1800 帧、相同 1800、不同 0 |
+| 与 main 基准帧逐像素比较 | exit 0：1800/1800 相同，缺 0、多 0 |
+| `verify-unified-frames` | exit 0，PASS |
+| `ready-index-probe` | exit 0 |
+| `stream-produce-probe --group` | exit 0，PASS |
+| `stream-produce-probe`（不带 `--group`） | exit 1，只挂「1080p 全幅流 15 帧分段编码 ≤ 300 ms」（main 上本来就挂的已知性能缺陷），这一轮 p50 907 ms |
+| `preview-fallback-probe` / `--page-preload` | 都 exit 0，PASS |
+
+`stream-produce-probe` 不带 `--group` 与 main 同一时段对照（同一个 worktree、同一台 dev server 端口，只把四个改动文件在 `d70fce7` 与本分支之间来回换，交替跑两轮，00:55～01:00）：
+
+| 轮 | main `d70fce7` 编码 ms / p50 | 本分支 编码 ms / p50 |
+|---|---|---|
+| 1 | [483, 552, 595] / 552 | [471, 482, 541] / 482 |
+| 2 | [869, 1060, 1098] / 1060 | [469, 479, 509] / 479 |
+
+四次都只挂这一条；本分支不比 main 差（改动不在编码路径上，差别是机器负载的起伏）。
+
+### 6.4 T9 本机替身
 
 （进行中）
 
