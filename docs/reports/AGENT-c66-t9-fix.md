@@ -2,24 +2,110 @@
 
 分支 `claude/c66-t9-fix`(从 `claude/c66-integ` 的 `a735537` 建),worktree `.worktrees/c66-t9-fix`。
 
-任务:让 C6.6 的 T9 跨机探针(三个角色:创建方 creator、观察端 observer、渲染主机 host)在本机替身(`--role all`)上稳定通过。
+任务:让 C6.6 的 T9 跨机探针(`scripts/probes/c66-t9-probe.mjs`,三个角色:创建方 creator、观察端 observer、渲染主机 host)在本机替身(`--role all`,三个角色同机跑)上稳定通过。主会话在 `a735537` 上跑的一轮有两处失败:creator 的重卡片段计划没落定;observer 的播放头停在 0。
 
 ## 状态
 
-进行中。
+两处都查清并修掉;本机替身连跑 2 轮都 `ok: true`、三方 `fails: []`;类型检查零错误、全量测试失败 0。
 
 ## 1. 重卡片段的计划没落定
 
-(待查)
+### 查实
+
+- 主会话那一轮:第 2 版计划里重卡片段(16 秒 `probe-typewriter`)`picked: false`,预渲染集合只有视频片段,切出 0 个细任务。第 2 版是页面测量完之后发的(codex 的「测完补发」),所以这时成本记录已在,判轻是按记录判的,不是没测到。
+- 轻重怎么判(`src/render/pipelinePlan.mjs` 的 `clipWeight`、`server/prerender-set.mjs`):**有成本记录就只看记录**;卡片声明(`frameMode: 'stateful'`、`need_prerendering`)只在一条记录都没有时兜底(`declaredHeavy`)。与 `mechanism/rendering.md`「轻重靠实测,不靠声明」一致。另外 `direct` 卡的快照档是 `none`(`server/snapshot-tier.mjs`),判重也切不出快照任务,所以候选只能是审阅表里 `independent` 的推帧卡。
+- 本机空闲时实测(实验脚本在 scratchpad `c66fix/cost-exp.mjs`:起一个编辑器,放卡、等页面测量完、读 `/api/data/costs`、按 `clipWeight` 判):
+
+| 卡 | 长度 | stepMs | catchUpMs | seekOk | 判定 |
+|---|---|---|---|---|---|
+| probe-typewriter | 16 s | 0.3 | 96 / 96.5(两次) | false | **over-catchup,重** |
+| probe | 16 s | 0.4 / 0.5 | 146 / 164 | false | over-catchup,重 |
+| probe-typewriter | 30 s | 0.2 | 98 | false | over-catchup,重 |
+| r6-canvas | 6 s | 0.5 | 57.7 | true | seek,轻 |
+| r6-stateful | 16 s | 0.4 | 104 | true | seek,轻 |
+| probe-countdown | 16 s | 0.1 | 16.2 | false | catchup-a,轻 |
+| particles | 16 s | 1.2 | 425 | true | seek,轻 |
+
+- 结论:主会话的猜测(「空闲时是轻卡」)**不对**:空闲时 16 秒 `probe-typewriter` 判重,但离门槛很近。它走的是追帧上界这一档:`catchUpMs / (4 × stepMs)` 要大于 `2 × fps = 60`,实测 96 / 1.2 = 80。`stepMs` 取第 90 百分位,机器一忙,p90 相对中位数抬高,比值就掉到 60 以下,改判 catchup-b(轻)。主会话那一轮三个编辑器、主机和三个无头浏览器同时在跑,正是这种情况;codex 那 5 次通过同样靠运气。所以不是产品缺陷:计划按判轻的记录正确地没给它切任务,也没有理由重发。
+- 产品里与机器无关、一定判重的条件只有三种:`stepMs > B`(capped)、`demoted`(播放中降级)、`pinnedHeavy`(人工钉死,`server/costs-store.mjs` 的粘性旗标)。现有卡里没有一张审阅过的独立推帧卡能稳定做到 `stepMs > B`。
+
+### 改法(只改探针,不改轻重门槛与判定)
+
+creator 在放重卡片段之前:
+1. 等页面测量空闲;在页面里按 `clipIdentityOf` 算出这张片段(卡、参数、长度同 `addCardClip` 写入的形状)的成本身份键;页面的 device 串取它自己写过的用户卡记录上的那个。
+2. 经 `PUT /api/data/costs` 写一条 `{ identityKey, device, mode, pinnedHeavy: true }` 的记录,等预渲染进程那一份也有了(编辑器转发不等回复)。
+3. 再放片段,核对放上的片段身份键就是钉死的那个、它是 `stateful` + `independent`(共享档)。页面探针见到已有记录就不再测;两端的 `planPipelines` 都判 capped,预渲染集合里一定有它。
+
+探针另记下 `creator.heavy`:身份键、是否钉住、是否转发到位,以及预渲染进程最后一版 card plan 里这张片段的 control(`picked`、`tier`)。
 
 ## 2. 观察端播放头停在 0
 
-(待查)
+### 查实
+
+在观察端 seek 之前挂一个 store 订阅,记下之后每一次 `t` 的变化和调用栈。诊断轮(`run-a`)的记录:
+
+- `ms 1`:`t = 2.5`,来自探针的 `seek`;
+- `ms 2286`:`t = 0`,来自 `actions.tick`,调用点是 `src/editor/Preview.tsx` 里「`[dual, stageReady, playing]` 那个 effect 的暂停一支」:`s.pause()` 回的 `stoppedAt` 与 store 不同就 `actions.tick(stoppedAt)`。
+
+`stageReady` 是渲染面就绪的**代数**,每换一个新舞台(整页重载、热更新、iframe 重挂)就加 1。成员加入共享项目后卡片同步装上用户卡,舞台随之重载,effect 带着 `playing = false` 重跑,问新舞台停在哪儿:新舞台还停在 0,于是用户定好的播放头被冲回 0。所以不是探针 seek 得太早,是**产品缺陷**:暂停状态下换了舞台,不该拿新舞台的时刻改播放头。media-sync 报告里 ms3 的「播放头停在 0.00」是同一个原因。
+
+### 改法
+
+`src/editor/Preview.tsx`:加 `playedRef`,记「上一次收尾之后给舞台发过 play 没有」。收尾时只有真从播放停下来,才认舞台回的 `stoppedAt`;暂停中换舞台时以 store 的 `t` 为准,只把它发给新舞台(`sendSetTime(stoppedAt, { settle: true })` 照旧)。播放到头(`ended`)、播放中暂停、带着播放换 iframe 再暂停,这三种都是先发过 play,行为不变。
+
+修后两轮验收里观察端的 `t` 变化记录只有探针那一次 seek(`playheadChanges: 1`),播放头一直是 2.5。
+
+### 探针的连带修改:换档期间逐帧采样
+
+播放头留住以后,又暴露出逐帧采样的问题。素材原尺寸在托管端早已 complete,页面第一次问 chunks 就换档,小尺寸只显示一百多毫秒。原来要等小尺寸「连续 3 次读到同一帧号」才开始采样,所以要么根本不采,要么只采到换档后 300 ms 里的两三帧:`run1` 里 9 个样本,不到 10 个的门槛,而且全都不黑。舞台 iframe 在无头浏览器里负载重时每秒只画十来帧。现在改为小尺寸第一次解出画面就开始采样;换档之后等原尺寸样本 ≥ 5、总数 ≥ 10(最多 5 s)。判据拆成两条:采样覆盖了换档(先有小尺寸样本、后有原尺寸样本),以及无黑帧。黑帧判据本身没放宽。
 
 ## 3. 探针文件头
 
-(待改)
+- 第 5 步的重卡片段照实写成钉死的 16 秒 `probe-typewriter`,并写明为什么要钉死;
+- `--port`:单个角色时是该角色的编辑器端口;`--role all` 时是三个角色的端口起点(缺省 5590,依次 +3、+6)。`--port-base` 只对 `--role all`,与 `--port` 同义(集成时两个分支各加了一种写法,都留着),两个都给时以它为准。
 
 ## 验证
 
-(待跑)
+- `npx tsc -b --force`:退出码 0,零错误。
+- `npm test`:退出码 0;tests 3082,pass 3081,fail 0,skipped 1(`集成:/api/cards/layout 对真实项目返回整数框`,要 5190,按惯例跳过)。
+- T9 本机替身(`run-t9-local.sh` 的副本放在 scratchpad `c66fix/`:临时托管组合 8794 / 8795、协调口 8796、编辑器 5590 / 5593 / 5596),一次只跑一轮:
+
+| 轮 | 用的提交 | 结果 | 说明 |
+|---|---|---|---|
+| run-a(诊断) | `8c9dc41` | observer 失败 | 重卡钉死生效:8 个细任务,主机 5 个、PC 3 个;播放头记录定位到 `Preview.tsx` 的 `tick(0)` |
+| run1 | `619fc0f` | observer 失败 | 播放头留在 2.5,小尺寸与原尺寸帧号都是 75,无黑帧;采样只有 9 个,不够门槛 10(见上节) |
+| **acc1** | `69084ed` | **ok: true** | 180.5 s |
+| **acc2** | `69084ed` | **ok: true** | 185.1 s |
+
+两轮验收的要点:
+- creator:计划切出 8 个细任务,8 个都 `done`,每个恰好一次 task.done;发布方本机节点认领了计划;完成数 PC 4 + 主机 4(acc1)、PC 3 + 主机 5(acc2),合计 = 8;上传先小后大。
+- host:认领 4 / 5、完成 4 / 5、失败 0;8 份清单都在托管端内容库,块全在素材服务;卡片同步记下探针卡(rev 1);代码版本与 creator 相同(`707837925081`);改卡后 18 ms / 26 ms 装上 v2(rev 2,进主机自己的改动层,检出里那份不动);经 IPC 退出码 0。
+- observer:先小(800 宽,帧号 75)后大(1920 宽,帧号 75),误差 0 帧;逐帧采样 10 个样本覆盖换档、黑帧 0;改卡后 193 ms / 183 ms 装上 v2,1538 ms / 1555 ms 重测(新成本记录),均在 5 s 内。
+- 看过的图:`acc2` 观察端 `observer-2-original.png`(播放头 2.50 s,原尺寸条纹画面)与 `observer-3-v2.png`(卡片同步提示「已同步为 creator 的版本」,播放头 2.50 s);主会话那一轮的 `observer-1-small.png`(测量遮罩「正在测量卡片 2/2」)。
+
+### acc1 的 `probe.stdout`(原样)
+
+```json
+{"role":"all","run":"mujagh324b1c","creator":{"role":"creator","run":"mujagh324b1c","port":5590,"hosted":"http://127.0.0.1:8794","video":{"name":"t9-mujagh324b1c.mp4","bytes":103771,"sha":"514168ed5f45","size":"1920x1080","fps":30,"seconds":6},"projectId":"sp_szhs5kjdau7aipawix7lqewvrf","projectName":"c66t9-mujagh324b1c","userClip":"c-mujagm59-w","cardPushedRev":1,"assetUrl":"http://127.0.0.1:8795/api/asset","uploadTarget":"http://127.0.0.1:8795/api/asset","importMs":619,"tiers":{"original":"d0b6d1486d657125aa41617e164f28bc88dd3964c7fbdfef8e70df3601273289","small":"bfb70cce7267c0ec185db87ec90f3c1ee1da68864346f079ae23ec60d0098444","remuxed":true},"firstCompleteMs":{"small":870,"original":993,"polls":4,"originalBeforeSmall":0},"uploadQueue":{"uploaded":null,"lastError":null},"uploadOrder":["tier-start small","tier-done small","tier-start original","tier-done original","item-done"],"hostReady":{"at":1790481521154,"port":5596},"heavy":{"cardId":"probe-typewriter","seconds":16,"clipId":"c-mujagwwp-10","identityKey":"1a7065ba83d84e","pinned":true,"forwarded":true,"frameMode":"stateful","compositing":"independent","control":{"picked":true,"tier":"shared","frameMode":"stateful","costKey":"1a7065ba83d84e"}},"plan":{"planId":"plan:p-mujagm56-5c68aca7@2","plans":1,"tasks":8,"done":8,"failed":0,"planDoneCount":1,"pcCompleted":4,"pcDedup":0,"pcPlanClaimed":true,"publishToSettledMs":153157,"stats":{"applied":8,"applyErrors":0,"fetched":480}},"edit":{"ok":true,"ms":58,"backup":true},"cardRevAfterEdit":2,"observer":{"role":"observer","run":"mujagh324b1c","port":5593,"cardInRepoBefore":true,"env":{"PROMPTCUT_QUEUE_NODE":null,"PROMPTCUT_SHARED_CONFIG":null},"frameQueue":{"nodes":0,"starting":false,"profile":"pc"},"joinMs":316,"projectTiers":{"original":"d0b6d1486d657125aa41617e164f28bc88dd3964c7fbdfef8e70df3601273289","small":"bfb70cce7267c0ec185db87ec90f3c1ee1da68864346f079ae23ec60d0098444"},"firstShown":{"tier":"small","idx":75,"w":800},"smallIdx":75,"smallStableBeforeSwap":false,"swapWaitMs":10,"original":{"idx":75,"w":1920},"tierSequence":[{"ms":336,"tier":"none","idx":null,"w":null,"ct":null},{"ms":2443,"tier":"small","idx":75,"w":800,"ct":2.5},{"ms":2724,"tier":"original","idx":75,"w":1920,"ct":2.5}],"swapSamples":{"n":10,"black":0,"idxSeen":[75],"srcs":["bfb70cce","d0b6d148"],"smallBeforeSwap":2,"spanMs":902,"coversSwap":true},"playhead":{"t":2.5,"log":[{"ms":0,"t":2.5,"cut":"cut-1","duration":6,"stack":["at emit (/src/store/core.ts:33:29)","at set (/src/store/core.ts:40:2)","at Object.seek (/src/store/actions/playback.ts:6:3)","at pptr:evaluate;P%20(file%3A%2F%2F%2FC%3A%2FUsers%2Fadmin%2FDocuments%2FPromptCut%2F.worktrees%2Fc66-t9-fix%2Fscripts%2Fprobes%2Fc66-t9-probe.mjs%3A361%3A36):16:17"]}]},"keyBefore":"e24570aa8c0be","stageV1":true,"installMs":193,"hmrMs":1150,"keyAfter":"32407fd4c7fc6","remeasureMs":1538,"remeasureVia":"record","newCostRecordMs":1538,"stageMs":1539,"editedSeen":{"ms":78,"ok":true,"editMs":58},"bRecord":{"rev":2,"hash":"8250a82e209a15c89610712af202a98cff27a65218dfb7afabb38f1012fec72c","mine":false},"bNotices":[{"type":"installed","key":"src/cards/user/c66t9-mujagh324b1c.tsx","rev":2}],"bOverrideV2":true,"bKindAfter":"shared","shots":["C:\\Users\\admin\\AppData\\Local\\Temp\\claude\\C--Users-admin-Documents-PromptCut\\33960a81-c3e7-4589-8c3f-514fe979f675\\scratchpad\\c66fix\\acc1\\roles\\observer\\mujagh324b1c-observer-1-small.png","C:\\Users\\admin\\AppData\\Local\\Temp\\claude\\C--Users-admin-Documents-PromptCut\\33960a81-c3e7-4589-8c3f-514fe979f675\\scratchpad\\c66fix\\acc1\\roles\\observer\\mujagh324b1c-observer-2-original.png","C:\\Users\\admin\\AppData\\Local\\Temp\\claude\\C--Users-admin-Documents-PromptCut\\33960a81-c3e7-4589-8c3f-514fe979f675\\scratchpad\\c66fix\\acc1\\roles\\observer\\mujagh324b1c-observer-3-v2.png"],"pageErrors":[],"ok":true,"fails":[]},"host":{"role":"host","run":"mujagh324b1c","port":5596,"cardInRepoBefore":true,"readyQueue":{"profile":"host","nodes":1,"maxConcurrent":2,"codeVersion":"707837925081"},"cardSync":{"connected":true,"rev":1,"notices":[]},"profile":"host","claimed":4,"completed":4,"dedup":0,"failed":0,"lost":0,"connected":true,"assetBase":"http://127.0.0.1:8795/api/asset","codeVersion":"707837925081","plan":{"planId":"plan:p-mujagm56-5c68aca7@2","tasks":8,"done":8},"creatorCodeVersion":"707837925081","doneCounts":{"tasks":8,"exactlyOnce":8,"missing":0,"duplicate":0},"artifacts":{"manifests":8,"missingManifests":0,"blocks":39,"missingBlocks":[]},"cardV2":{"ms":18,"rev":2,"inOverlay":true,"baseUntouched":true},"exitCode":0,"released":0,"ok":true,"fails":[]},"completedByNode":{"pc":4,"host":4},"shots":["C:\\Users\\admin\\AppData\\Local\\Temp\\claude\\C--Users-admin-Documents-PromptCut\\33960a81-c3e7-4589-8c3f-514fe979f675\\scratchpad\\c66fix\\acc1\\roles\\creator\\mujagh324b1c-creator-1-published.png","C:\\Users\\admin\\AppData\\Local\\Temp\\claude\\C--Users-admin-Documents-PromptCut\\33960a81-c3e7-4589-8c3f-514fe979f675\\scratchpad\\c66fix\\acc1\\roles\\creator\\mujagh324b1c-creator-2-end.png"],"pageErrors":[],"deleted":true,"ms":179004,"fails":[],"ok":true},"observer":{"role":"observer","run":"mujagh324b1c","port":5593,"cardInRepoBefore":true,"env":{"PROMPTCUT_QUEUE_NODE":null,"PROMPTCUT_SHARED_CONFIG":null},"frameQueue":{"nodes":0,"starting":false,"profile":"pc"},"joinMs":316,"projectTiers":{"original":"d0b6d1486d657125aa41617e164f28bc88dd3964c7fbdfef8e70df3601273289","small":"bfb70cce7267c0ec185db87ec90f3c1ee1da68864346f079ae23ec60d0098444"},"firstShown":{"tier":"small","idx":75,"w":800},"smallIdx":75,"smallStableBeforeSwap":false,"swapWaitMs":10,"original":{"idx":75,"w":1920},"tierSequence":[{"ms":336,"tier":"none","idx":null,"w":null,"ct":null},{"ms":2443,"tier":"small","idx":75,"w":800,"ct":2.5},{"ms":2724,"tier":"original","idx":75,"w":1920,"ct":2.5}],"swapSamples":{"n":10,"black":0,"idxSeen":[75],"srcs":["bfb70cce","d0b6d148"],"smallBeforeSwap":2,"spanMs":902,"coversSwap":true},"playhead":{"t":2.5,"log":[{"ms":0,"t":2.5,"cut":"cut-1","duration":6,"stack":["at emit (/src/store/core.ts:33:29)","at set (/src/store/core.ts:40:2)","at Object.seek (/src/store/actions/playback.ts:6:3)","at pptr:evaluate;P%20(file%3A%2F%2F%2FC%3A%2FUsers%2Fadmin%2FDocuments%2FPromptCut%2F.worktrees%2Fc66-t9-fix%2Fscripts%2Fprobes%2Fc66-t9-probe.mjs%3A361%3A36):16:17"]}]},"keyBefore":"e24570aa8c0be","stageV1":true,"installMs":193,"hmrMs":1150,"keyAfter":"32407fd4c7fc6","remeasureMs":1538,"remeasureVia":"record","newCostRecordMs":1538,"stageMs":1539,"editedSeen":{"ms":78,"ok":true,"editMs":58},"bRecord":{"rev":2,"hash":"8250a82e209a15c89610712af202a98cff27a65218dfb7afabb38f1012fec72c","mine":false},"bNotices":[{"type":"installed","key":"src/cards/user/c66t9-mujagh324b1c.tsx","rev":2}],"bOverrideV2":true,"bKindAfter":"shared","shots":["C:\\Users\\admin\\AppData\\Local\\Temp\\claude\\C--Users-admin-Documents-PromptCut\\33960a81-c3e7-4589-8c3f-514fe979f675\\scratchpad\\c66fix\\acc1\\roles\\observer\\mujagh324b1c-observer-1-small.png","C:\\Users\\admin\\AppData\\Local\\Temp\\claude\\C--Users-admin-Documents-PromptCut\\33960a81-c3e7-4589-8c3f-514fe979f675\\scratchpad\\c66fix\\acc1\\roles\\observer\\mujagh324b1c-observer-2-original.png","C:\\Users\\admin\\AppData\\Local\\Temp\\claude\\C--Users-admin-Documents-PromptCut\\33960a81-c3e7-4589-8c3f-514fe979f675\\scratchpad\\c66fix\\acc1\\roles\\observer\\mujagh324b1c-observer-3-v2.png"],"pageErrors":[],"ms":177113,"fails":[],"ok":true},"host":{"role":"host","run":"mujagh324b1c","port":5596,"cardInRepoBefore":true,"readyQueue":{"profile":"host","nodes":1,"maxConcurrent":2,"codeVersion":"707837925081"},"cardSync":{"connected":true,"rev":1,"notices":[]},"profile":"host","claimed":4,"completed":4,"dedup":0,"failed":0,"lost":0,"connected":true,"assetBase":"http://127.0.0.1:8795/api/asset","codeVersion":"707837925081","plan":{"planId":"plan:p-mujagm56-5c68aca7@2","tasks":8,"done":8},"creatorCodeVersion":"707837925081","doneCounts":{"tasks":8,"exactlyOnce":8,"missing":0,"duplicate":0},"artifacts":{"manifests":8,"missingManifests":0,"blocks":39,"missingBlocks":[]},"cardV2":{"ms":18,"rev":2,"inOverlay":true,"baseUntouched":true},"exitCode":0,"released":0,"ms":175550,"fails":[],"ok":true},"ms":180538,"fails":[],"ok":true}
+```
+
+### acc2 的 `probe.stdout`(原样)
+
+```json
+{"role":"all","run":"mujakobyfbf1","creator":{"role":"creator","run":"mujakobyfbf1","port":5590,"hosted":"http://127.0.0.1:8794","video":{"name":"t9-mujakobyfbf1.mp4","bytes":103771,"sha":"c166c3e65307","size":"1920x1080","fps":30,"seconds":6},"projectId":"sp_qlihvofcieoocsrngyc22df5it","projectName":"c66t9-mujakobyfbf1","userClip":"c-mujakttp-w","cardPushedRev":1,"assetUrl":"http://127.0.0.1:8795/api/asset","uploadTarget":"http://127.0.0.1:8795/api/asset","importMs":617,"tiers":{"original":"43a008169d5d317fc32da79162969a4d398ddad7f481fa1e01f493580fc3f2a2","small":"cc74b8c04f77522d7ec66cab296a25671d7ad22f6bd5349ae18e34bd537773f3","remuxed":true},"firstCompleteMs":{"small":1096,"original":1198,"polls":6,"originalBeforeSmall":0},"uploadQueue":{"uploaded":null,"lastError":null},"uploadOrder":["tier-start small","tier-done small","tier-start original","tier-done original","item-done"],"hostReady":{"at":1790481720849,"port":5596},"heavy":{"cardId":"probe-typewriter","seconds":16,"clipId":"c-mujal6zx-10","identityKey":"5f591c2804686","pinned":true,"forwarded":true,"frameMode":"stateful","compositing":"independent","control":{"picked":true,"tier":"shared","frameMode":"stateful","costKey":"5f591c2804686"}},"plan":{"planId":"plan:p-mujakttm-c13060b1@2","plans":1,"tasks":8,"done":8,"failed":0,"planDoneCount":1,"pcCompleted":3,"pcDedup":0,"pcPlanClaimed":true,"publishToSettledMs":153979,"stats":{"applied":8,"applyErrors":0,"fetched":597}},"edit":{"ok":true,"ms":64,"backup":true},"cardRevAfterEdit":2,"observer":{"role":"observer","run":"mujakobyfbf1","port":5593,"cardInRepoBefore":true,"env":{"PROMPTCUT_QUEUE_NODE":null,"PROMPTCUT_SHARED_CONFIG":null},"frameQueue":{"nodes":0,"starting":false,"profile":"pc"},"joinMs":701,"projectTiers":{"original":"43a008169d5d317fc32da79162969a4d398ddad7f481fa1e01f493580fc3f2a2","small":"cc74b8c04f77522d7ec66cab296a25671d7ad22f6bd5349ae18e34bd537773f3"},"firstShown":{"tier":"small","idx":75,"w":800},"smallIdx":75,"smallStableBeforeSwap":false,"swapWaitMs":12,"original":{"idx":75,"w":1920},"tierSequence":[{"ms":714,"tier":"none","idx":null,"w":null,"ct":null},{"ms":3928,"tier":"small","idx":75,"w":800,"ct":2.5},{"ms":4065,"tier":"original","idx":75,"w":1920,"ct":2.5}],"swapSamples":{"n":10,"black":0,"idxSeen":[75],"srcs":["cc74b8c0","43a00816"],"smallBeforeSwap":1,"spanMs":904,"coversSwap":true},"playhead":{"t":2.5,"log":[{"ms":0,"t":2.5,"cut":"cut-1","duration":6,"stack":["at emit (/src/store/core.ts:33:29)","at set (/src/store/core.ts:40:2)","at Object.seek (/src/store/actions/playback.ts:6:3)","at pptr:evaluate;P%20(file%3A%2F%2F%2FC%3A%2FUsers%2Fadmin%2FDocuments%2FPromptCut%2F.worktrees%2Fc66-t9-fix%2Fscripts%2Fprobes%2Fc66-t9-probe.mjs%3A361%3A36):16:17"]}]},"keyBefore":"1cbca80390d7da","stageV1":true,"installMs":183,"hmrMs":1150,"keyAfter":"10d109e848f67e","remeasureMs":1555,"remeasureVia":"record","newCostRecordMs":1555,"stageMs":1556,"editedSeen":{"ms":71,"ok":true,"editMs":64},"bRecord":{"rev":2,"hash":"4c40e0895af3f4cf367a0e7429c8f2ff2d81be6365208d439fa8c607eca731a2","mine":false},"bNotices":[{"type":"installed","key":"src/cards/user/c66t9-mujakobyfbf1.tsx","rev":2}],"bOverrideV2":true,"bKindAfter":"shared","shots":["C:\\Users\\admin\\AppData\\Local\\Temp\\claude\\C--Users-admin-Documents-PromptCut\\33960a81-c3e7-4589-8c3f-514fe979f675\\scratchpad\\c66fix\\acc2\\roles\\observer\\mujakobyfbf1-observer-1-small.png","C:\\Users\\admin\\AppData\\Local\\Temp\\claude\\C--Users-admin-Documents-PromptCut\\33960a81-c3e7-4589-8c3f-514fe979f675\\scratchpad\\c66fix\\acc2\\roles\\observer\\mujakobyfbf1-observer-2-original.png","C:\\Users\\admin\\AppData\\Local\\Temp\\claude\\C--Users-admin-Documents-PromptCut\\33960a81-c3e7-4589-8c3f-514fe979f675\\scratchpad\\c66fix\\acc2\\roles\\observer\\mujakobyfbf1-observer-3-v2.png"],"pageErrors":[],"ok":true,"fails":[]},"host":{"role":"host","run":"mujakobyfbf1","port":5596,"cardInRepoBefore":true,"readyQueue":{"profile":"host","nodes":1,"maxConcurrent":2,"codeVersion":"707837925081"},"cardSync":{"connected":true,"rev":1,"notices":[]},"profile":"host","claimed":5,"completed":5,"dedup":0,"failed":0,"lost":0,"connected":true,"assetBase":"http://127.0.0.1:8795/api/asset","codeVersion":"707837925081","plan":{"planId":"plan:p-mujakttm-c13060b1@2","tasks":8,"done":8},"creatorCodeVersion":"707837925081","doneCounts":{"tasks":8,"exactlyOnce":8,"missing":0,"duplicate":0},"artifacts":{"manifests":8,"missingManifests":0,"blocks":30,"missingBlocks":[]},"cardV2":{"ms":26,"rev":2,"inOverlay":true,"baseUntouched":true},"exitCode":0,"released":0,"ok":true,"fails":[]},"completedByNode":{"pc":3,"host":5},"shots":["C:\\Users\\admin\\AppData\\Local\\Temp\\claude\\C--Users-admin-Documents-PromptCut\\33960a81-c3e7-4589-8c3f-514fe979f675\\scratchpad\\c66fix\\acc2\\roles\\creator\\mujakobyfbf1-creator-1-published.png","C:\\Users\\admin\\AppData\\Local\\Temp\\claude\\C--Users-admin-Documents-PromptCut\\33960a81-c3e7-4589-8c3f-514fe979f675\\scratchpad\\c66fix\\acc2\\roles\\creator\\mujakobyfbf1-creator-2-end.png"],"pageErrors":[],"deleted":true,"ms":183571,"fails":[],"ok":true},"observer":{"role":"observer","run":"mujakobyfbf1","port":5593,"cardInRepoBefore":true,"env":{"PROMPTCUT_QUEUE_NODE":null,"PROMPTCUT_SHARED_CONFIG":null},"frameQueue":{"nodes":0,"starting":false,"profile":"pc"},"joinMs":701,"projectTiers":{"original":"43a008169d5d317fc32da79162969a4d398ddad7f481fa1e01f493580fc3f2a2","small":"cc74b8c04f77522d7ec66cab296a25671d7ad22f6bd5349ae18e34bd537773f3"},"firstShown":{"tier":"small","idx":75,"w":800},"smallIdx":75,"smallStableBeforeSwap":false,"swapWaitMs":12,"original":{"idx":75,"w":1920},"tierSequence":[{"ms":714,"tier":"none","idx":null,"w":null,"ct":null},{"ms":3928,"tier":"small","idx":75,"w":800,"ct":2.5},{"ms":4065,"tier":"original","idx":75,"w":1920,"ct":2.5}],"swapSamples":{"n":10,"black":0,"idxSeen":[75],"srcs":["cc74b8c0","43a00816"],"smallBeforeSwap":1,"spanMs":904,"coversSwap":true},"playhead":{"t":2.5,"log":[{"ms":0,"t":2.5,"cut":"cut-1","duration":6,"stack":["at emit (/src/store/core.ts:33:29)","at set (/src/store/core.ts:40:2)","at Object.seek (/src/store/actions/playback.ts:6:3)","at pptr:evaluate;P%20(file%3A%2F%2F%2FC%3A%2FUsers%2Fadmin%2FDocuments%2FPromptCut%2F.worktrees%2Fc66-t9-fix%2Fscripts%2Fprobes%2Fc66-t9-probe.mjs%3A361%3A36):16:17"]}]},"keyBefore":"1cbca80390d7da","stageV1":true,"installMs":183,"hmrMs":1150,"keyAfter":"10d109e848f67e","remeasureMs":1555,"remeasureVia":"record","newCostRecordMs":1555,"stageMs":1556,"editedSeen":{"ms":71,"ok":true,"editMs":64},"bRecord":{"rev":2,"hash":"4c40e0895af3f4cf367a0e7429c8f2ff2d81be6365208d439fa8c607eca731a2","mine":false},"bNotices":[{"type":"installed","key":"src/cards/user/c66t9-mujakobyfbf1.tsx","rev":2}],"bOverrideV2":true,"bKindAfter":"shared","shots":["C:\\Users\\admin\\AppData\\Local\\Temp\\claude\\C--Users-admin-Documents-PromptCut\\33960a81-c3e7-4589-8c3f-514fe979f675\\scratchpad\\c66fix\\acc2\\roles\\observer\\mujakobyfbf1-observer-1-small.png","C:\\Users\\admin\\AppData\\Local\\Temp\\claude\\C--Users-admin-Documents-PromptCut\\33960a81-c3e7-4589-8c3f-514fe979f675\\scratchpad\\c66fix\\acc2\\roles\\observer\\mujakobyfbf1-observer-2-original.png","C:\\Users\\admin\\AppData\\Local\\Temp\\claude\\C--Users-admin-Documents-PromptCut\\33960a81-c3e7-4589-8c3f-514fe979f675\\scratchpad\\c66fix\\acc2\\roles\\observer\\mujakobyfbf1-observer-3-v2.png"],"pageErrors":[],"ms":181687,"fails":[],"ok":true},"host":{"role":"host","run":"mujakobyfbf1","port":5596,"cardInRepoBefore":true,"readyQueue":{"profile":"host","nodes":1,"maxConcurrent":2,"codeVersion":"707837925081"},"cardSync":{"connected":true,"rev":1,"notices":[]},"profile":"host","claimed":5,"completed":5,"dedup":0,"failed":0,"lost":0,"connected":true,"assetBase":"http://127.0.0.1:8795/api/asset","codeVersion":"707837925081","plan":{"planId":"plan:p-mujakttm-c13060b1@2","tasks":8,"done":8},"creatorCodeVersion":"707837925081","doneCounts":{"tasks":8,"exactlyOnce":8,"missing":0,"duplicate":0},"artifacts":{"manifests":8,"missingManifests":0,"blocks":30,"missingBlocks":[]},"cardV2":{"ms":26,"rev":2,"inOverlay":true,"baseUntouched":true},"exitCode":0,"released":0,"ms":180003,"fails":[],"ok":true},"ms":185092,"fails":[],"ok":true}
+```
+
+## 没做成的
+
+无。
+
+## 需要主会话决定的事
+
+1. **重卡片段用「人工钉死」是否可接受。** 这样做,T9 就不再覆盖「创建方页面实测判重 → 按测量结果重发计划」这条路。这条路有 codex 的单测(`render-queue-state.test.mjs` 等),实测判重在机器忙闲之间会翻,本来也验不稳。如果主会话要 T9 走实测判重,另一条确定的路是新增一张 `_probe` 推帧卡:每次渲染用 `__pcRealNow` 忙等 ≥ 30 ms(同 `probe-slow` 的做法,但 `frameMode: 'stateful'`),并在 `src/cards/capabilities.json` 里审成 `independent`,让 `stepMs > B`,在任何机器上都判 capped。那要动卡片和审阅表,不在这次的文件范围里,我没做。
+2. **`Preview.tsx` 的修改影响面**:改的是编辑器预览的播放头收尾逻辑,是用户看得见的行为(暂停中舞台重载后播放头不再跳回 0),属于修缺陷,不改语义。合并前建议主会话在编辑器里手动过一遍:播放 → 暂停、播到头、暂停中改用户卡触发舞台重载,看播放头。
+3. 探针文件头里 `--port` 与 `--port-base` 两种写法都留着;要不要去掉一种,由主会话定。
+
+## 对任务书或语义的更正建议
+
+- 任务书里「机器闲时这张卡测出来是轻卡」的猜测与实测不符:空闲时它判重,只是离门槛近(追帧比 80 对 60),机器一忙就翻成轻。
+- `mechanism/rendering.md` 没有提 `pinnedHeavy`(人工钉死)这面旗,它现在只在 `server/costs-store.mjs` 的注释里。它和 `demoted` 一样决定判重,建议补进三级语义「轻卡与重卡」一节。
