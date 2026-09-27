@@ -10,6 +10,9 @@
  *     <PROMPTCUT_DATA_DIR>/card-overrides/src/cards/...   (相对路径和原文件一一对应)
  *
  * 加载时优先用改动层(vite-plugin-cards 的 load 钩子),原文件当只读底版。补丁只换底版。
+ * 有改动层时检出目录一个文件都不写:本机原来没有的用户卡(create_card、打开 .proc、内容库同步)也只写进改动层,
+ * 用户卡装载入口经 `src/cards/userOverlay.ts` 收到它们(卡片插件在加载时列出、并替它们解析导入)。
+ * 独立渲染主机、桌面版都有改动层,所以两者都不写检出目录。
  * 开发期(没有 PROMPTCUT_DATA_DIR)照旧直接改仓库里的文件 —— 那时候改的就是源码本身。
  * `PROMPTCUT_CARD_OVERRIDES` 可以显式指定改动层目录(测试用)。
  *
@@ -63,6 +66,54 @@ export function effectivePath(root, abs) {
 /** 读生效内容 */
 export function readEffective(root, abs) {
   return fs.readFileSync(effectivePath(root, abs), "utf8");
+}
+
+/** 这个仓库文件生效时是不是一个文件:底版有,或改动层有(本机原来没有、只装进改动层的用户卡就是后一种) */
+export function effectiveIsFile(root, abs) {
+  try { return fs.statSync(effectivePath(root, abs)).isFile(); } catch { return false; }
+}
+
+/** 用户卡目录(相对仓库根) */
+export const USER_CARD_DIR = "src/cards/user";
+
+/**
+ * 用户卡目录一层里的文件名:底版与改动层取并集,升序。
+ * 有改动层时,本机原来没有的用户卡只写进改动层、不写检出目录(见文件头),所以按目录收卡的地方都要两边一起看。
+ */
+export function userCardDirEntries(root) {
+  const names = new Set();
+  const read = (dir) => {
+    try { for (const e of fs.readdirSync(dir, { withFileTypes: true })) if (e.isFile()) names.add(e.name); } catch { /* 目录不存在 */ }
+  };
+  read(path.join(root, USER_CARD_DIR));
+  const top = overridesRoot();
+  if (top) read(path.join(top, USER_CARD_DIR));
+  return [...names].sort();
+}
+
+/**
+ * 改动层里有、底版没有的用户卡目录文件(递归),相对用户卡目录、正斜杠、升序。
+ * 用户卡装载入口(`src/cards/user/index.ts`)按目录 glob 收卡,只看得见真实目录;这些文件由卡片插件另列给它
+ * (`src/cards/userOverlay.ts`)。没有改动层时是空表。
+ */
+export function overlayOnlyUserFiles(root) {
+  const top = overridesRoot();
+  if (!top) return [];
+  const base = path.join(top, USER_CARD_DIR);
+  const out = [];
+  const walk = (dir) => {
+    let items = [];
+    try { items = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of items) {
+      const file = path.join(dir, e.name);
+      if (e.isDirectory()) { walk(file); continue; }
+      if (!e.isFile()) continue;
+      const rel = path.relative(base, file).replace(/\\/g, "/");
+      if (!fs.existsSync(path.join(root, USER_CARD_DIR, rel))) out.push(rel);
+    }
+  };
+  walk(base);
+  return out.sort();
 }
 
 /**

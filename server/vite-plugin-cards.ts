@@ -11,6 +11,7 @@ import { isPrerender } from './render-role.mjs';
 import { proxyToPrerender } from './prerender-client.mjs';
 import {
   readEffective, writeCardFile, overridesRoot, overrideFileFor, repoFileForOverride,
+  effectiveIsFile, userCardDirEntries, overlayOnlyUserFiles,
   setCardHasher, setCardIdentifier, emitCardSourceChange,
 } from './card-overrides.mjs';
 import { createCardSync, isSyncablePath, sourceHash } from './card-sync.mjs';
@@ -46,7 +47,8 @@ export function isEditablePath(rel: string): boolean {
 /** 卡片 id → 定义它的源码文件(相对仓库根)。用户卡优先,其次内置卡;都没有返回 null */
 export function findCardFile(root: string, id: string): string | null {
   if (!/^[a-z][a-z0-9]*(-[a-z0-9]+)*$/.test(id)) return null;
-  if (fs.existsSync(path.join(root, 'src', 'cards', 'user', `${id}.tsx`))) return `src/cards/user/${id}.tsx`;
+  // 有改动层时,本机原来没有的用户卡只在改动层里(见 card-overrides.mjs 文件头)
+  if (effectiveIsFile(root, path.join(root, 'src', 'cards', 'user', `${id}.tsx`))) return `src/cards/user/${id}.tsx`;
   const re = new RegExp(`\\bid:\\s*["'\`]${id}["'\`]`);
   for (const dir of CARD_DEF_DIRS) {
     const abs = path.join(root, dir);
@@ -71,7 +73,7 @@ export function localImports(root: string, rel: string): string[] {
   for (const m of src.matchAll(re)) {
     const base = path.resolve(path.dirname(path.join(root, rel)), m[1] || m[2]);
     const hit = [base, `${base}.tsx`, `${base}.ts`, path.join(base, 'index.tsx'), path.join(base, 'index.ts')]
-      .find((c) => fs.existsSync(c) && fs.statSync(c).isFile());
+      .find((c) => effectiveIsFile(root, c));
     if (!hit) continue;
     const r = toRel(root, hit);
     if (isEditablePath(r) && !out.includes(r)) out.push(r);
@@ -91,8 +93,7 @@ export function importClosure(root: string, rel: string, limit = 60): string[] {
 /** 全部卡片定义文件(用户卡 + 内置卡),给「这个文件被几张卡共用」计数用 */
 function allCardFiles(root: string): string[] {
   const out: string[] = [];
-  const userDir = path.join(root, 'src', 'cards', 'user');
-  if (fs.existsSync(userDir)) for (const f of fs.readdirSync(userDir)) if (f.endsWith('.tsx')) out.push(`src/cards/user/${f}`);
+  for (const f of userCardDirEntries(root)) if (f.endsWith('.tsx')) out.push(`src/cards/user/${f}`);
   for (const dir of CARD_DEF_DIRS) {
     const abs = path.join(root, dir);
     if (!fs.existsSync(abs)) continue;
@@ -866,7 +867,8 @@ export interface CardInstallResult {
  *   - 和 create_card **同一道审查**(翻译器 + checkCardSource):.proc 可能是别人发来的,
  *     里面的源码会在编辑器里执行。不过审的那张不装,本机已有的版本原样留着;
  *   - existingIds 只该放**内置卡**的 id:同名内置卡是撞车,同名用户卡是「更新」;
- *   - 本机没有 → 写底版(glob 扫的是真实目录,只写改动层它看不见);
+ *   - 本机没有 → 经 writeCardFile 写:有改动层写改动层(检出目录一个文件都不写,装载入口经 userOverlay 收它),
+ *     没有改动层(开发期)写底版;
  *   - 本机有且一样 → 不动;
  *   - 本机有但不一样 → **以项目里存的为准**。打开一个项目看到的应该是它存下来的样子;
  *     本机旧版先按内容哈希备份到 historyDir(同一份只备一次),两个项目来回开不会越积越多。
@@ -909,14 +911,10 @@ export function installBundledCards(opts: {
       out.push({ id, status: 'rejected', error: '非法的文件路径' });
       continue;
     }
-    fs.mkdirSync(userDir, { recursive: true });
 
-    if (!fs.existsSync(abs)) {
-      fs.writeFileSync(abs, finalSource, 'utf8');
-      // 改动层里要是残留着同名的旧版,它会盖住刚写的底版 —— 一并换掉
-      const o = overrideFileFor(opts.root, abs);
-      if (o && fs.existsSync(o)) fs.writeFileSync(o, finalSource, 'utf8');
-      out.push({ id, status: 'written', abs, written: abs });
+    if (!effectiveIsFile(opts.root, abs)) {
+      const written = writeCardFile(opts.root, abs, finalSource);
+      out.push({ id, status: 'written', abs, written });
       continue;
     }
 
@@ -933,6 +931,86 @@ export function installBundledCards(opts: {
     out.push({ id, status: 'updated', backup: toRel(opts.root, backupAbs), abs, written });
   }
   return out;
+}
+
+export type CreateUserCardResult =
+  | { ok: false; code: number; body: Record<string, unknown> }
+  | {
+    ok: true;
+    /** 仓库里的那个文件(src/cards/user/<id>.tsx) */
+    target: string;
+    /** 实际写到的文件 */
+    written: string;
+    already: boolean;
+    translated: ReturnType<typeof translateCardSource>;
+    finalSource: string;
+    suggestedControls: ReturnType<typeof suggestControls>;
+  };
+
+/**
+ * create_card 的落盘部分(`/api/cards/create` 调;归属戳、热更新、同步上传留在接口里)。
+ * 已存在(生效的那一份,改动层优先)又没说 overwrite → 409;过不了翻译器 + 审查 → 400;其余经 writeCardFile 写:
+ * 有改动层写改动层(检出目录不写),没有改动层(开发期)写 `src/cards/user/`。
+ */
+export function createUserCard(opts: { root: string; id: unknown; source: unknown; existingIds?: unknown; overwrite?: unknown }): CreateUserCardResult {
+  const { root, id, source, existingIds, overwrite } = opts;
+  if (typeof id !== 'string' || typeof source !== 'string') {
+    return { ok: false, code: 400, body: { ok: false, error: 'id 和 source 都必须是字符串' } };
+  }
+  const userDir = path.join(root, 'src', 'cards', 'user');
+  const target = path.join(userDir, `${id}.tsx`);
+  // id 已经过 kebab-case 白名单,这里再确认一次落点没跑出 user 目录
+  if (path.dirname(path.resolve(target)) !== path.resolve(userDir)) {
+    return { ok: false, code: 400, body: { ok: false, error: '非法的文件路径' } };
+  }
+
+  // 已存在按生效的那一份判:有改动层时,本机原来没有的用户卡只在改动层里
+  const already = effectiveIsFile(root, target);
+  if (already && !overwrite) {
+    // 这句话出现的时机,正是模型「想改一张已有的卡」的那一刻 —— 全仓库
+    // 最该把它引到 edit_card 上的地方。原来这里写的是「传 overwrite: true」,
+    // 等于在决策点上教它整篇重写。
+    return {
+      ok: false,
+      code: 409,
+      body: {
+        ok: false,
+        error: `src/cards/user/${id}.tsx 已存在。要改它请用 get_card_source 读回源码、再用 edit_card 改那一处;确实要整张推倒重来才传 overwrite: true。`,
+      },
+    };
+  }
+
+  // 先过翻译器的机械一半(去 "use client"、@/lib/utils 指到本地),再审查。
+  // 翻译改过什么要回给调用方,不然模型手上的版本和落盘的对不上。
+  const translated = translateCardSource(source);
+  const finalSource = translated.source;
+  const check = checkCardSource(id, finalSource, Array.isArray(existingIds) && !already ? existingIds : [], {
+    vendored: translated.rewrites.length > 0,
+    mode: 'author',
+    before: '',
+  });
+  if (!check.ok) {
+    return {
+      ok: false,
+      code: 400,
+      body: {
+        ok: false,
+        error: check.errors.join('\n'),
+        errors: check.errors,
+        findings: check.findings ?? [],
+        rewrites: translated.rewrites,
+      },
+    };
+  }
+
+  // 上游 props 里有、controls 里没露出来的,列出来供模型决定要不要提成参数
+  const declared = new Set([...finalSource.matchAll(/\bkey:\s*["']([^"']+)["']/g)].map((m) => m[1]));
+  const suggestedControls = suggestControls(finalSource).filter((s) => !declared.has(s.key));
+
+  // 经 writeCardFile 写(改动层优先)。以前直接写底版:改动层里有这张卡的旧版(edit_card 改过、同步装过)时,
+  // 加载钩子交出的仍是改动层那一份,overwrite 的新内容被盖住;本机原来没有的卡还会写进检出目录。
+  const written = writeCardFile(root, target, finalSource);
+  return { ok: true, target, written, already, translated, finalSource, suggestedControls };
 }
 
 /** 内置卡的 id(user 以外的定义目录里 `id: "..."` 的那些):装用户卡时撞名检查用 */
@@ -967,7 +1045,7 @@ export interface SyncedInstallResult {
 /**
  * 装一个从内容库同步来的卡片文件(C6.6 第 5 节;`server/card-sync.mjs` 调)。和打开 .proc 装卡走同一条路:
  *   - 用户卡的定义文件(`src/cards/user/<id>.tsx`)交给 installBundledCards:同一道审查(翻译器 + checkCardSource),
- *     本机没有就写底版,有就写改动层(没有改动层的开发期写仓库文件,和 edit_card 一样);
+ *     一律经 writeCardFile 写:有改动层写改动层(本机没有的也是),没有改动层的开发期写仓库文件,和 edit_card 一样;
  *   - 其余文件(改过的内置卡、部件、用户卡用到的文件)走 edit_card 的那道检查(checkSourceEdit:语法、不许新加不跟帧走的写法、
  *     CardDef 导出和 id 不许动),再经 writeCardFile 写(改动层优先,不碰仓库里的原卡)。
  * 备份不在这里做:要不要备份由同步规则定(本机那份是不是自己的),见 card-sync.mjs。
@@ -1030,7 +1108,7 @@ export function cardCodeIdentity(root: string, id: string): { version: string; c
     const userDir = path.join(root, 'src', 'cards', 'user');
     const re = new RegExp(`\\bid:\\s*["'\`]${id}["'\`]`);
     try {
-      for (const f of fs.readdirSync(userDir).sort()) {
+      for (const f of userCardDirEntries(root)) {
         if (!f.endsWith('.tsx')) continue;
         let src = '';
         try { src = readEffective(root, path.join(userDir, f)); } catch { continue; }
@@ -1070,9 +1148,9 @@ export interface HostCardSync {
  * - 连接就用这个项目的 `render` 连接(队列节点那一条,`endpoint`),不另开:主机只凭配置里的项目凭证进入,
  *   没有页面替它签票据。解绑时不关这条连接(它归队列节点)。
  * - 只读(`readOnly`):主机不改卡,从不上传。
- * - 装卡走 `installSyncedFile`(和编辑器同步、打开 .proc 装卡同一条路):本机已有的文件写进改动层(`PROMPTCUT_DATA_DIR`
- *   下的 `card-overrides/`,`render-host.mjs` 指到 `--data` 里),仓库里的原卡不动;本机没有的用户卡照现有装卡路径
- *   写进 `src/cards/user/`(用户卡的装载入口按目录收卡,只认那里)。备份与装卡历史放在主机自己的数据目录。
+ * - 装卡走 `installSyncedFile`(和编辑器同步、打开 .proc 装卡同一条路):一律写进改动层(`PROMPTCUT_DATA_DIR`
+ *   下的 `card-overrides/`,`render-host.mjs` 指到 `--data` 里),本机原来没有的用户卡也是;检出目录一个文件都不写
+ *   (用户卡装载入口经 `src/cards/userOverlay.ts` 收到改动层里的卡)。备份与装卡历史放在主机自己的数据目录。
  * - 装卡之前调 `before()`(卡片代码身份的稳定期重新计时,见 `card-code.mjs`);装完不手动发变更通知,
  *   交给这个进程的 Vite 文件监听(它先作废模块、再发 `emitCardSourceChange`),节点据此清身份缓存,下一拍按新代码认领。
  */
@@ -1129,6 +1207,71 @@ export function createHostCardSync(opts: {
   };
 }
 
+/** 改动层里「底版没有」的用户卡清单模块(相对仓库根);磁盘上那份是空表,有改动层时加载钩子换成真实清单 */
+export const USER_OVERLAY_MODULE = 'src/cards/userOverlay.ts';
+
+/**
+ * 改动层里有、底版没有的卡片 / 部件文件的解析:底版没有这个文件,Vite 自己解析不到,这里把它解析成**仓库里对应的路径**
+ * (文件不存在),加载时由 load 钩子交出改动层那一份。模块 id 与底版文件同形,热更新、作废、`?raw` 都照改动层已有文件的老路走。
+ * 管三种写法:根相对(`/src/cards/user/x.tsx`,清单模块用)、相对导入(`./x`、`../x`,改动层里的卡互相引用)、绝对路径。
+ * 底版有(或没有改动层、不在卡片 / 部件目录下)回 null,交给 Vite。
+ */
+export function resolveOverlayOnly(root: string, source: string, importer?: string): string | null {
+  if (!overridesRoot() || typeof source !== 'string') return null;
+  const q = source.indexOf('?');
+  const bare = q >= 0 ? source.slice(0, q) : source;
+  const query = q >= 0 ? source.slice(q) : '';
+  let abs: string;
+  if (bare.startsWith('/src/')) abs = path.join(root, bare);
+  else if (bare.startsWith('./') || bare.startsWith('../')) {
+    if (!importer) return null;
+    abs = path.resolve(path.dirname(importer.split('?')[0]), bare);
+  } else if (path.isAbsolute(bare)) abs = path.resolve(bare);
+  else return null;
+  const rel = toRel(root, abs);
+  if (rel.startsWith('..') || !(rel.startsWith('src/cards/') || rel.startsWith('src/parts/'))) return null;
+  const isFile = (p: string) => { try { return fs.statSync(p).isFile(); } catch { return false; } };
+  for (const cand of [abs, `${abs}.tsx`, `${abs}.ts`, path.join(abs, 'index.tsx'), path.join(abs, 'index.ts')]) {
+    if (isFile(cand)) return null;
+    const o = overrideFileFor(root, cand);
+    if (o && isFile(o)) return cand.split(path.sep).join('/') + query;
+  }
+  return null;
+}
+
+/**
+ * 清单模块(`USER_OVERLAY_MODULE`)的内容:改动层里有、底版没有的用户卡文件,形状和 `src/cards/user/index.ts` 的三个 glob 一样
+ * (键是 `./<相对用户卡目录的路径>`):入口卡(一层的 .tsx)的模块与源码原文,以及全部源码文件的原文(缓存身份用)。
+ */
+export function userOverlayModuleCode(root: string): string {
+  const files: string[] = overlayOnlyUserFiles(root);
+  const lines: string[] = [];
+  const modules: string[] = [];
+  const raws: string[] = [];
+  const deps: string[] = [];
+  files.forEach((rel, i) => {
+    const entry = !rel.includes('/') && rel.endsWith('.tsx');
+    const dep = /\.(ts|tsx|mjs|css)$/.test(rel);
+    if (!entry && !dep) return;
+    const key = JSON.stringify(`./${rel}`);
+    lines.push(`import r${i} from ${JSON.stringify(`/src/cards/user/${rel}?raw`)};`);
+    if (entry) {
+      lines.push(`import * as m${i} from ${JSON.stringify(`/src/cards/user/${rel}`)};`);
+      modules.push(`${key}: m${i}`);
+      raws.push(`${key}: r${i}`);
+    }
+    deps.push(`${key}: r${i}`);
+  });
+  return [
+    '// 由 vite-plugin-cards 的 cardOverridesLoader 生成:改动层里有、底版没有的用户卡',
+    ...lines,
+    `export const overlayModules = { ${modules.join(', ')} };`,
+    `export const overlayRaws = { ${raws.join(', ')} };`,
+    `export const overlayDependencyRaws = { ${deps.join(', ')} };`,
+    '',
+  ].join('\n');
+}
+
 /**
  * 卡片改动层(card-overrides.mjs)的加载钩子:装机版里改过的卡 / 部件,加载时交出改动层那一份,
  * 仓库里的原文件当只读底版。编辑器的 Vite 和预渲染的 Vite 都挂这个插件,所以两边看到的是同一份。
@@ -1146,10 +1289,14 @@ function cardOverridesLoader(): Plugin {
     configResolved(config) {
       projectRoot = config.root;
     },
+    resolveId(source, importer) {
+      return resolveOverlayOnly(projectRoot, source, importer);
+    },
     load(id) {
       if (!overridesRoot()) return null;
       const file = id.split('?')[0];
       if (!path.isAbsolute(file)) return null;
+      if (!id.includes('?') && path.resolve(file) === path.resolve(projectRoot, USER_OVERLAY_MODULE)) return userOverlayModuleCode(projectRoot);
       const o = overrideFileFor(projectRoot, file);
       if (!o || !fs.existsSync(o)) return null;
       this.addWatchFile(o);
@@ -1213,6 +1360,31 @@ export default function vitePluginCards(): Plugin[] {
       server.watcher.on('change', onSource);
       server.watcher.on('add', onSource);
       server.watcher.on('unlink', onSource);
+
+      /*
+       * 改动层里「底版没有」的用户卡清单(`src/cards/userOverlay.ts`,由 cardOverridesLoader 生成):
+       * 用户卡目录(底版或改动层)里多了、少了文件,清单变了就重载这个模块,热更新沿用户卡装载入口冒到 src/cards/index.ts 接住。
+       * 清单没变(改的是已有文件的内容,或多了少了的不是源码,如归属表)不重载:那条由上面 onSource 按文件走。
+       * 「清单」就按生成出来的模块正文比。
+       */
+      let overlayListing = overridesRoot() ? userOverlayModuleCode(server.config.root) : '';
+      const reloadUserOverlay = () => {
+        if (!overridesRoot()) return;
+        const next = userOverlayModuleCode(server.config.root);
+        if (next === overlayListing) return;
+        overlayListing = next;
+        const stub = path.join(server.config.root, USER_OVERLAY_MODULE).split(path.sep).join('/');
+        for (const m of server.moduleGraph.getModulesByFile(stub) ?? []) {
+          server.moduleGraph.invalidateModule(m);
+          void server.reloadModule(m).catch(() => { /* 页面没开就没有要热更新的 */ });
+        }
+      };
+      const onUserDirSetChange = (file: string) => {
+        const repo = repoFileForOverride(server.config.root, file) ?? file;
+        if (toRel(server.config.root, repo).startsWith('src/cards/user/')) reloadUserOverlay();
+      };
+      server.watcher.on('add', onUserDirSetChange);
+      server.watcher.on('unlink', onUserDirSetChange);
       const top = overridesRoot();
       if (top) {
         try { fs.mkdirSync(top, { recursive: true }); server.watcher.add(top); } catch { /* 建不了就只是没有热更新 */ }
@@ -1231,14 +1403,18 @@ export default function vitePluginCards(): Plugin[] {
        *
        * 归属只记「谁建的」,**要不要共享是另一回事**(scope 字段),因为跨项目复用有时正是想要的
        * (自己的品牌卡下个片子还想用)。默认 project = 不共享,用户可以在聊天面板里改成共享。
+       *
+       * 和卡片文件一样走改动层(读生效的那一份,写经 writeCardFile):有改动层时检出目录一个文件都不写,
+       * 归属表和它登记的卡(本机原来没有的用户卡也只在改动层里)放在一起。改动层里还没有时读到的是检出里那份,
+       * 第一次写就连同原有条目一起写进改动层。
        */
       const scopeFile = path.join(server.config.root, 'src', 'cards', 'user', '_scopes.json');
       type CardScope = { scope: 'project' | 'custom'; projectId?: string; createdAt?: string };
       const readScopes = (): Record<string, CardScope> => {
-        try { return JSON.parse(fs.readFileSync(scopeFile, 'utf8')); } catch { return {}; }
+        try { return JSON.parse(readEffective(server.config.root, scopeFile)); } catch { return {}; }
       };
       const writeScopes = (m: Record<string, CardScope>) => {
-        try { fs.writeFileSync(scopeFile, JSON.stringify(m, null, 2), 'utf8'); } catch { /* 写不进去不该让建卡失败 */ }
+        try { writeCardFile(server.config.root, scopeFile, JSON.stringify(m, null, 2)); } catch { /* 写不进去不该让建卡失败 */ }
       };
 
       /** 写完一个卡片文件之后的热更新:写进改动层时 Vite 盯着的底版没变,手动作废、再按底版变了走一遍 */
@@ -1246,6 +1422,8 @@ export default function vitePluginCards(): Plugin[] {
         if (written && written !== abs) {
           for (const m of server.moduleGraph.getModulesByFile(abs.split(path.sep).join('/')) ?? []) server.moduleGraph.invalidateModule(m);
           server.watcher.emit('change', abs);
+          // 本机原来没有的用户卡只写进了改动层:装载入口的清单(userOverlay)跟着换,不等文件监听的 add
+          reloadUserOverlay();
         }
         emitCardSourceChange(abs);
         // 项目对象没有变；页面须在 HMR 落地后显式重排这张卡的测量。
@@ -1830,53 +2008,10 @@ export default function vitePluginCards(): Plugin[] {
           try {
             const input = JSON.parse(body || '{}');
             const { id, source, existingIds, overwrite, projectId } = input;
-            if (typeof id !== 'string' || typeof source !== 'string') {
-              return sendJson(res, 400, { ok: false, error: 'id 和 source 都必须是字符串' });
-            }
-
-            fs.mkdirSync(userDir, { recursive: true });
-            const target = path.join(userDir, `${id}.tsx`);
-            // id 已经过 kebab-case 白名单,这里再确认一次落点没跑出 user 目录
-            if (path.dirname(path.resolve(target)) !== path.resolve(userDir)) {
-              return sendJson(res, 400, { ok: false, error: '非法的文件路径' });
-            }
-
-            const already = fs.existsSync(target);
-            if (already && !overwrite) {
-              // 这句话出现的时机,正是模型「想改一张已有的卡」的那一刻 —— 全仓库
-              // 最该把它引到 edit_card 上的地方。原来这里写的是「传 overwrite: true」,
-              // 等于在决策点上教它整篇重写。
-              return sendJson(res, 409, {
-                ok: false,
-                error: `src/cards/user/${id}.tsx 已存在。要改它请用 get_card_source 读回源码、再用 edit_card 改那一处;确实要整张推倒重来才传 overwrite: true。`,
-              });
-            }
-
-            // 先过翻译器的机械一半(去 "use client"、@/lib/utils 指到本地),再审查。
-            // 翻译改过什么要回给调用方,不然模型手上的版本和落盘的对不上。
-            const translated = translateCardSource(source);
-            const finalSource = translated.source;
-            const check = checkCardSource(id, finalSource, Array.isArray(existingIds) && !already ? existingIds : [], {
-              vendored: translated.rewrites.length > 0,
-              mode: 'author',
-              before: '',
-            });
-            if (!check.ok) {
-              return sendJson(res, 400, {
-                ok: false,
-                error: check.errors.join('\n'),
-                errors: check.errors,
-                findings: check.findings ?? [],
-                rewrites: translated.rewrites,
-              });
-            }
-
-            // 上游 props 里有、controls 里没露出来的,列出来供模型决定要不要提成参数
-            const declared = new Set([...finalSource.matchAll(/\bkey:\s*["']([^"']+)["']/g)].map((m) => m[1]));
-            const suggestedControls = suggestControls(finalSource).filter((s) => !declared.has(s.key));
-
-            fs.writeFileSync(target, finalSource, 'utf8');
-            afterWrite(target, target);
+            const created = createUserCard({ root: server.config.root, id, source, existingIds, overwrite });
+            if (!created.ok) return sendJson(res, created.code, created.body);
+            const { target, written, already, translated, finalSource, suggestedControls } = created;
+            afterWrite(target, written);
             savedCardFile(`src/cards/user/${id}.tsx`);
 
             /*

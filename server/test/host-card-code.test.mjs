@@ -7,7 +7,8 @@
  *
  *   HC1  用户卡不同的两台节点仍在同一池:frameCode 不含 src/cards/user(除装载入口)、换行统一;改别的源码照样换版本
  *   HC2  任务要的卡本机没有就不认领(不报错);经 card-source 同步装上之后能认领,认领、完成走真队列
- *   HC3  改过的卡:同步来的新版装进主机自己的改动层、底版不动;身份跟着变,旧版任务不再认领、新版的能
+ *   HC3  改过的卡:同步来的新版装进主机自己的改动层;身份跟着变,旧版任务不再认领、新版的能
+ *        (本机原来没有的用户卡也只装进改动层,检出目录一个文件都不写:AGENT-card-overlay)
  *   HC4  同一张卡代码不同,产物不混用:整场景键、本地档 / 共享档结果键都不同;执行器上下文按卡片代码版次重算
  *   HC5  卡片代码身份的索引:刚变过的一段时间不报身份;算法没注入时不缓存
  *   HC6  主机的同步是只读的:本机那份和服务上不同,也从不往项目里写
@@ -230,7 +231,7 @@ function splitFor({ entryKey, versions, userSnapshotKey = 'sk-user' }) {
 
 /* ================================================================== HC2 + HC3 */
 
-test('HC2/HC3 任务要的卡本机没有就不认领;经 card-source 同步装上后能认领;改过的新版装进改动层、底版不动', { timeout: 30000 }, async (t) => {
+test('HC2/HC3 任务要的卡本机没有就不认领;经 card-source 同步装进改动层后能认领(检出目录不写);改过的新版也装进改动层', { timeout: 30000 }, async (t) => {
   const doc = await startDoc(t);
 
   // ---- 创建者:本检出里有用户卡 v1,传上内容库;这一版的切分
@@ -274,10 +275,14 @@ test('HC2/HC3 任务要的卡本机没有就不认领;经 card-source 同步装�
   let touched = 0;
   const sync = cards.createHostCardSync({ root: hostRoot, dataDir: hostData, projectId: 'proj-hc', url: doc.url('renderbox', 'render'), endpoint, before: () => { touched++; hostIndex.touch(); } });
   t.after(() => sync.close());
-  await waitFor(() => fs.existsSync(path.join(hostRoot, USER_KEY)), 5000, '主机装上 price-tag');
+  const overlayFile = path.join(overlay, USER_KEY);
+  const userDirBefore = fs.readdirSync(path.join(hostRoot, 'src', 'cards', 'user')).sort();
+  await waitFor(() => fs.existsSync(overlayFile), 5000, '主机装上 price-tag');
   await sync.idle();
   assert.equal(touched, 1, '装卡之前重新计稳定期');
-  assert.equal(fs.readFileSync(path.join(hostRoot, USER_KEY), 'utf8'), cardSource('v1'), '本机原来没有的用户卡照现有装卡路径写进用户卡目录');
+  assert.equal(fs.readFileSync(overlayFile, 'utf8'), cardSource('v1'), '本机原来没有的用户卡装进主机自己的改动层');
+  assert.equal(fs.existsSync(path.join(hostRoot, USER_KEY)), false, '检出目录不写');
+  assert.deepEqual(fs.readdirSync(path.join(hostRoot, 'src', 'cards', 'user')).sort(), userDirBefore);
   assert.equal(sync.status().records[USER_KEY].rev, 1);
   // Vite 的文件监听作废模块之后才发变更通知;这里直接清(onCardSourceChange 的订阅方做的就是这件事)
   hostIndex.invalidate();
@@ -287,12 +292,11 @@ test('HC2/HC3 任务要的卡本机没有就不认领;经 card-source 同步装�
   assert.deepEqual(env.claims().sort(), tasks1.map((x) => x.id).sort(), '装上之后下一拍就认领');
   for (const task of tasks1) assert.equal(env.done(task.id), 1, `${task.id} 恰好一次 task.done`);
 
-  // ---- HC3:创建者改卡 v2;主机按 content.watch 当场装进改动层,底版不动
+  // ---- HC3:创建者改卡 v2;主机按 content.watch 当场装进改动层,检出目录照旧不写
   await putCard(doc, USER_KEY, cardSource('v2'));
-  const overlayFile = path.join(overlay, USER_KEY);
   await waitFor(() => fs.existsSync(overlayFile) && fs.readFileSync(overlayFile, 'utf8') === cardSource('v2'), 5000, '主机把 v2 装进改动层');
   await sync.idle();
-  assert.equal(fs.readFileSync(path.join(hostRoot, USER_KEY), 'utf8'), cardSource('v1'), '检出里那份(底版)不动');
+  assert.equal(fs.existsSync(path.join(hostRoot, USER_KEY)), false, '检出目录照旧不写');
   assert.equal(sync.status().records[USER_KEY].rev, 2);
   hostIndex.invalidate();
   put(creator, USER_KEY, cardSource('v2'));
