@@ -1156,7 +1156,8 @@ function cardOverridesLoader(): Plugin {
       const text = fs.readFileSync(o, 'utf8');
       // `?raw` 要的是源码字符串(cards/user/index.ts 打包 .proc 用),不是模块本身。
       // 原样交出去的话,Vite 会把 TSX 源码当成这个 ?raw 模块的 JS 来跑。
-      if (/[?&]raw\b/.test(id)) return `export default ${JSON.stringify(text)}`;
+      // 换行统一成 LF(同 `raw-eol.mjs`):源码版本 / 身份键不随检出方式变
+      if (/[?&]raw\b/.test(id)) return `export default ${JSON.stringify(text.replace(/\r\n/g, "\n"))}`;
       return text;
     },
   };
