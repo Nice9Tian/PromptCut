@@ -76,9 +76,9 @@ async function runScenario(t, mode) {
   const rec = (label, value) => out.push([label, value]);
 
   // ---- render-queue：报到、发布
-  rec('node.welcome', pick(await N.rpc({ type: 'node.hello', nodeId: 'n1', profile: 'host' }), ['type', 'nodeId', 'resumed', 'lost']));
+  rec('node.welcome', pick(await N.rpc({ type: 'node.hello', nodeId: 'n1', profile: 'pc' }), ['type', 'nodeId', 'resumed', 'lost']));
   rec('queue.snapshot', (await N.rpc({ type: 'queue.watch', projects: 'all' })).tasks?.map((x) => x.id));
-  await B.rpc({ type: 'node.hello', nodeId: 'n2', profile: 'host' });
+  await B.rpc({ type: 'node.hello', nodeId: 'n2', profile: 'pc' });
   await B.rpc({ type: 'queue.watch', projects: 'all' });
   rec('publisher.welcome', pick(await A.rpc({ type: 'publisher.hello', publisherId: 'p1' }), ['type', 'publisherId']));
   const t1 = snapshotTaskInput({ resultKey: 'ht3-a', projectId: 'proj', projectRev: 1 });
