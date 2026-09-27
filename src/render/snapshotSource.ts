@@ -238,6 +238,20 @@ export interface OnlineLayer {
   contentKey?: string | null;
   /** 层表 v 2:产出这一层的环境的指纹;v 1 或取不到为 null */
   envFingerprint?: string | null;
+  /**
+   * 层表 v 3(M7 契约 D12):这一层的候选 —— 切分方自己的、纯浏览器的,各是一种环境出的一套键;层上的 `resultKey` /
+   * `envFingerprint` / `key` 就是第一个候选。哪一份活着由页面按 `task.done` 与清单认定(`layerRefOf` 的 `alive`)。
+   * v 2 没有这一项,当作一个候选(`layerCandidates`)。
+   */
+  candidates?: LayerCandidate[];
+}
+
+/** 层表 v 3 的一个候选(M7 契约 D12):一种环境出的一套键 */
+export interface LayerCandidate {
+  envFingerprint: string;
+  resultKey: string;
+  /** 就绪索引线上的键 */
+  key: string;
 }
 
 export interface LayerMap {
@@ -251,8 +265,10 @@ export interface LayerMap {
 
 /** 在线普通档认的层表版本(C10 契约第 18 节第 3 条);低内存档 v 1、v 2 都认 */
 export const LAYER_MAP_V2 = 2;
+/** 层表 v 3(M7 契约 D12):每层带候选;v 2 的字段照旧(等于第一个候选),旧读法照样能读 */
+export const LAYER_MAP_V3 = 3;
 /** 页面认得的层表版本;不认得的 `v` 整张当没有 */
-export const KNOWN_LAYER_MAP_VERSIONS = [1, 2] as const;
+export const KNOWN_LAYER_MAP_VERSIONS = [1, 2, 3] as const;
 
 export interface OnlineSnapshotDeps {
   /** 文档服务上的一次请求(`content.get`);没连上就抛 */
@@ -276,6 +292,29 @@ export interface OnlineSnapshotDeps {
   skipLayer?: (clipId: string) => boolean;
 }
 
+/** 层表 v 3 的候选表:只留三项都是非空字符串的,坏项跳过 */
+function candidatesOf(raw: unknown): LayerCandidate[] {
+  if (!Array.isArray(raw)) return [];
+  const out: LayerCandidate[] = [];
+  for (const c of raw as Record<string, unknown>[]) {
+    if (!c || typeof c !== "object") continue;
+    const { envFingerprint, resultKey, key } = c;
+    if (typeof envFingerprint !== "string" || !envFingerprint || typeof resultKey !== "string" || !resultKey || typeof key !== "string" || !key) continue;
+    out.push({ envFingerprint, resultKey, key });
+  }
+  return out;
+}
+
+/**
+ * 这一层的候选(M7 契约 D12):v 3 的 `candidates`;v 2(或 v 3 的层没写候选、候选全坏)当作一个候选 —— 层自己的键与指纹;
+ * v 1、缺指纹的层没有候选。
+ */
+export function layerCandidates(layer: OnlineLayer): LayerCandidate[] {
+  if (layer.candidates?.length) return layer.candidates.map((c) => ({ ...c }));
+  if (layer.envFingerprint && layer.resultKey && layer.key) return [{ envFingerprint: layer.envFingerprint, resultKey: layer.resultKey, key: layer.key }];
+  return [];
+}
+
 /** 内容库回包里的层表;形状不对回 null */
 export function parseLayerMap(body: unknown): LayerMap | null {
   const b = body as { v?: unknown; kind?: unknown; projectId?: unknown; fps?: unknown; span?: unknown; layers?: unknown } | null;
@@ -292,8 +331,10 @@ export function parseLayerMap(body: unknown): LayerMap | null {
     const firstFrame = Number(raw.firstFrame), count = Number(raw.count);
     if (typeof raw.clipId !== "string" || typeof raw.key !== "string" || typeof raw.resultKey !== "string") continue;
     if (!Number.isInteger(firstFrame) || firstFrame < 0 || !Number.isInteger(count) || count < 1) continue;
+    const candidates = v >= LAYER_MAP_V3 ? candidatesOf(raw.candidates) : [];
     layers.push({ clipId: raw.clipId, kind, key: raw.key, resultKey: raw.resultKey, firstFrame, count,
-      ...(v >= LAYER_MAP_V2 ? { contentKey: str(raw.contentKey), envFingerprint: str(raw.envFingerprint) } : {}) });
+      ...(v >= LAYER_MAP_V2 ? { contentKey: str(raw.contentKey), envFingerprint: str(raw.envFingerprint) } : {}),
+      ...(candidates.length ? { candidates } : {}) });
   }
   return { v, projectId: typeof b.projectId === "string" ? b.projectId : null, fps: Number(b.fps) || 30, span, layers };
 }
@@ -312,8 +353,12 @@ export function usableLayer(map: Pick<LayerMap, "v">, layer: OnlineLayer, { lowM
 /**
  * 层表里某个片段那一层(普通档口径):层表对得上回 `{ …, contentKey, envFingerprint }`;对不上(不认得的版本、v 1、
  * 缺内容键、缺指纹、没这一层、层表坏)回 null,不抛。`table` 收内容库回包的 body 或已解析的层表。
+ *
+ * 层表 v 3(M7 契约 D12):`opts.alive` 是页面认定活着的结果键(由 `task.done` 与清单得出)。候选里有活着的,
+ * 就整份换成那个候选(结果键、指纹、线上键同出一个候选,不混);没有 `alive` 或认不出时回层上的(第一个候选)。
+ * v 2 不看 `alive`。
  */
-export function layerRefOf(table: unknown, clipId: string, opts: { lowMemory?: boolean } = {}): OnlineLayer | null {
+export function layerRefOf(table: unknown, clipId: string, opts: { lowMemory?: boolean; alive?: ReadonlySet<string> } = {}): OnlineLayer | null {
   let map: LayerMap | null = null;
   try {
     map = table && typeof table === "object" && Array.isArray((table as LayerMap).layers) && (table as LayerMap).v !== undefined && typeof (table as { kind?: unknown }).kind !== "string"
@@ -321,7 +366,15 @@ export function layerRefOf(table: unknown, clipId: string, opts: { lowMemory?: b
   } catch { map = null; }
   if (!map) return null;
   const layer = map.layers.find((l) => l.clipId === clipId);
-  return layer && usableLayer(map, layer, opts) ? layer : null;
+  if (!layer) return null;
+  if (map.v >= LAYER_MAP_V3 && opts.alive && layer.candidates?.length) {
+    const pick = layer.candidates.find((c) => opts.alive!.has(c.resultKey));
+    if (pick) {
+      const chosen: OnlineLayer = { ...layer, resultKey: pick.resultKey, envFingerprint: pick.envFingerprint, key: pick.key };
+      return usableLayer(map, chosen, opts) ? chosen : null;
+    }
+  }
+  return usableLayer(map, layer, opts) ? layer : null;
 }
 
 /** 一层落在 `[fromGlobal, toGlobal]`(全局帧,闭区间)的那几段:本地帧 0 起每 `span` 帧一段、最后一段到 `count - 1` */

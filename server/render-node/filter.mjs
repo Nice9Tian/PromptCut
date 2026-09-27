@@ -17,6 +17,8 @@
  *   6  `plan` 任务要 Chrome 和服务端的 card-cache,纯浏览器不接;独立渲染主机(`host`)不接不带片段清单的 `plan` ——
  *      桌面 `plan` 留给发布方自己的节点(M6b,`docs/plan/render-host-contract.md` 第 3、4 节);带片段清单的 `plan`
  *      (在线页面的清单计划、低内存档的补渲计划)`host` 接,用自己的指纹切分(C10 契约第 18 节第 9 条,对 M6c X4 的修改)
+ *   7  纯浏览器的快照任务只收共享档(`tier: 'shared'`)的独立卡(`input.compositing === 'independent'`,切分方在浏览器那一份
+ *      里写):M7 契约第 3.2 节与 D4(桌面只把独立卡的页面测量帧当预渲染结果;本地档要整场景渲)。不只靠切分方把本地档记 heavy
  *
  * 纯函数,不改入参。
  */
@@ -54,7 +56,7 @@ function weightAllowed(rule, weightClass, task, node) {
   return false;
 }
 
-/** → `{ ok: true }` | `{ ok: false, rule: 0..6, reason }`。 */
+/** → `{ ok: true }` | `{ ok: false, rule: 0..7, reason }`。 */
 export function checkClaimable(task, node) {
   const requires = task?.requires ?? {};
   const capabilities = node?.capabilities ?? {};
@@ -105,6 +107,12 @@ export function checkClaimable(task, node) {
   // 6
   if (plan && browser) return reject(6, 'plan-on-browser');
   if (plan && host && !isListPlan(task)) return reject(6, 'plan-on-host');
+
+  // 7(M7 D4):纯浏览器只做共享档的独立卡
+  if (browser && task?.kind === 'snapshot') {
+    if (task.tier !== 'shared') return reject(7, 'tier');
+    if (task.input?.compositing !== 'independent') return reject(7, 'not-independent');
+  }
 
   return pass;
 }

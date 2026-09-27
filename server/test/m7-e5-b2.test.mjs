@@ -245,9 +245,8 @@ test('D4 纯浏览器只收独立卡：compositing 不是 independent 的 medium
   assert.equal(checkClaimable(mk('sourceDependent'), pc).ok, true, 'pc 不受 D4 影响');
 });
 
-test('契约与代码对不上（待主会话定）：第 3.2 节写纯浏览器只收 tier: shared，节点侧过滤不看 tier——标 medium 的本地档任务今天会被收', {
-  todo: '契约第 3.2 节「快照任务、tier: shared」不在 filter.mjs 规则 0～6 里；实际切分方给本地档记 heavy，规则 4 挡住了。要不要在节点侧加 tier 一条，由主会话定',
-}, () => {
+// 主会话裁定（2026-09-28，对测试方的问题 1）：节点侧 filter.mjs 补「纯浏览器只收 tier: shared」一条（规则 7），这条改成真跑
+test('D4 纯浏览器只收 tier: shared：标 medium 的本地档任务也不收（filter.mjs 规则 7）', gateOpts(filterIndependentGate()), () => {
   const node = BROWSER_NODE('zoe@devA');
   const t = snapTask({ contentKey: 'local-m', fp: FP, weight: 'medium', tier: 'local', input: { entryKey: 'e1', contentKey: 'e1/local-m' } });
   assert.equal(checkClaimable({ ...t, source: { ...t.source, userId: 'zoe@devA' } }, node).ok, false);
