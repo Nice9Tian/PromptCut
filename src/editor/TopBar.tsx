@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { actions, useStore } from "../store/project";
+import { actions, getState, useStore } from "../store/project";
 import { cancelExport, exportVideo, streamExportFile, revealExport, importProjectFile } from "./io";
 import { newProject, pickSaveTarget, serializeProc, writeProcToDisk, loadProc, forgetSaveTarget, PROC_EXT, PROC_FORMAT } from "./io/proc";
 import { PROCP_EXT, isProcpFile, loadProcpFile, packProcp } from "./io/procp";
@@ -167,7 +167,7 @@ export function TopBar() {
   const viewOnly = isViewOnly();
 
   const name = useStore((s) => s.project.name);
-  const project = useStore((s) => s.project);
+  // 不订阅整份项目:顶栏只在导出那一下要项目,当场 getState() 取;订阅了的话每挪一次片段顶栏整条重渲(tiers-probe T4)
   const dirty = useStore((s) => s.dirty);
   const projectInput = useRef<HTMLInputElement>(null);
 
@@ -407,6 +407,7 @@ export function TopBar() {
    * 结束时给一个「打开产物目录」。
    */
   const exportProject = async () => {
+    const project = getState().project;
     // C6.6:按轮询到的集合先判一次(不发请求,不耽误下面「另存为」要的用户手势);
     // 原片还没传完就不弹另存为,直接提示等待上传方。exportVideo 里还会再问一遍素材服务
     const pending = exportGateNow(project);
@@ -553,7 +554,7 @@ ${summarizeCombine(report)}
     };
     window.addEventListener("pc-titlebar-command", onCommand);
     return () => window.removeEventListener("pc-titlebar-command", onCommand);
-  }, [viewOnly, dirty, name, project]);
+  }, [viewOnly, dirty, name]);
 
   const toggleMoreMenu = () => {
     if (!menuOpen && moreBtnRef.current) {

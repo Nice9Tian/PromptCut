@@ -17,6 +17,8 @@ import { DockPageContext } from "./dockSide";
 import { pageNode, placePages, registerDockPark, releasePageNodes } from "./pageNodes";
 import { SECTION_IDS, agentItem, effectiveActive, sideOf, type ItemId, type SectionId } from "./railLayout";
 import { activateRailItem, useRailLayout } from "./railStore";
+import { useRailCollapsed } from "../sideRails";
+import { StoreHold } from "../../store/project";
 import "../left/left.css";
 import "./dock.css";
 
@@ -56,6 +58,7 @@ export function DockPages({ mcpConnected }: { mcpConnected: boolean }) {
   const layout = useRailLayout();
   const mode = useLayoutMode();
   const { tabs } = useAgentTabs();
+  const collapsed = { left: useRailCollapsed("left"), right: useRailCollapsed("right") };
 
   // 字幕分区聚焦哪份素材:时间轴 / 素材库右键「转写字幕」经 captionsBus 设进来
   const [captionMediaId, setCaptionMediaId] = useState<string | null>(null);
@@ -104,7 +107,17 @@ export function DockPages({ mcpConnected }: { mcpConnected: boolean }) {
   };
   const portal = (id: ItemId, content: ReactNode) =>
     createPortal(<DockPageContext.Provider value={id}>{content}</DockPageContext.Provider>, pageNode(id), id);
-  const section = (id: SectionId, content: ReactNode) => (sections.has(id) ? portal(id, content) : null);
+  /*
+   * 分区页常驻挂载,看不见时(没选中,或所在一侧收起着)包一层 StoreHold:不跟 store 的更新,
+   * 露出来的那一次提交里再按当时的 store 重读(store/core.ts 的 StoreHold)。以前每次编辑都把
+   * 看不见的特效库、节点图、字幕列表整棵重渲,挤在编辑那个同步任务里(tiers-probe T4)。
+   */
+  const hidden = (id: SectionId) => {
+    const side = sideOf(layout, id);
+    return !side || collapsed[side] || effectiveActive(layout, side, mode) !== id;
+  };
+  const section = (id: SectionId, content: ReactNode) =>
+    sections.has(id) ? portal(id, <StoreHold value={hidden(id)}>{content}</StoreHold>) : null;
 
   return (
     <>
