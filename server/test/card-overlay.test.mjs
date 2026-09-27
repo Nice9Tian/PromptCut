@@ -158,3 +158,43 @@ test('CO3 没有改动层(开发期):create_card 与内容库同步照旧写检�
     assert.equal(fs.existsSync(path.join(root, 'src/cards/user/coupon.tsx')), true);
   });
 });
+
+/* ================================================================== CO4 */
+
+test('CO4 用户卡装载入口看得见改动层里的卡:清单模块列出底版没有的文件,解析把它们落到仓库里对应的路径', () => {
+  const root = checkout('pc-co4-', { 'src/cards/user/in-base.tsx': cardSource('b') });
+  const overlay = tmp('pc-co4-overlay-');
+  put(overlay, USER_KEY, cardSource('v1', 'import { k } from "./lib/util";\n'));
+  put(overlay, 'src/cards/user/lib/util.ts', 'export const k = 1;\n');
+  put(overlay, 'src/cards/user/in-base.tsx', cardSource('b-edited'));
+  put(overlay, 'src/cards/user/_scopes.json', '{}');
+  const posix = (p) => p.split(path.sep).join('/');
+
+  // 没有改动层:清单是空表(磁盘上的 src/cards/userOverlay.ts),解析一律交给 Vite
+  withOverlay(null, () => {
+    assert.match(cards.userOverlayModuleCode(root), /export const overlayModules = \{  \};/);
+    assert.equal(cards.resolveOverlayOnly(root, '/src/cards/user/price-tag.tsx'), null);
+  });
+
+  withOverlay(overlay, () => {
+    const code = cards.userOverlayModuleCode(root);
+    // 底版有的(in-base)不列:glob 收它,加载钩子交出改动层那一份;归属表不是源码,不列
+    assert.doesNotMatch(code, /in-base|_scopes/);
+    assert.match(code, /import \* as m\d+ from "\/src\/cards\/user\/price-tag\.tsx";/);
+    assert.match(code, /import r\d+ from "\/src\/cards\/user\/price-tag\.tsx\?raw";/);
+    assert.match(code, /import r\d+ from "\/src\/cards\/user\/lib\/util\.ts\?raw";/);
+    assert.doesNotMatch(code, /import \* as m\d+ from "\/src\/cards\/user\/lib/, '子目录里的是被引用的实现,不当卡收');
+    assert.match(code, /overlayModules = \{ "\.\/price-tag\.tsx": m\d+ \}/);
+    assert.match(code, /overlayDependencyRaws = \{ "\.\/lib\/util\.ts": r\d+, "\.\/price-tag\.tsx": r\d+ \}/);
+
+    const card = posix(path.join(root, USER_KEY));
+    assert.equal(cards.resolveOverlayOnly(root, '/src/cards/user/price-tag.tsx'), card, '根相对');
+    assert.equal(cards.resolveOverlayOnly(root, '/src/cards/user/price-tag.tsx?raw'), `${card}?raw`, '查询串原样带上');
+    assert.equal(cards.resolveOverlayOnly(root, './lib/util', card), posix(path.join(root, 'src/cards/user/lib/util.ts')), '相对导入补扩展名');
+    assert.equal(cards.resolveOverlayOnly(root, card), card, '绝对路径');
+    assert.equal(cards.resolveOverlayOnly(root, '/src/cards/user/in-base.tsx'), null, '底版有的交给 Vite');
+    assert.equal(cards.resolveOverlayOnly(root, '/src/cards/user/nope.tsx'), null, '两边都没有的交给 Vite(照常报找不到)');
+    assert.equal(cards.resolveOverlayOnly(root, '../../kernel/types', card), null, '内核文件不归改动层');
+    assert.equal(cards.resolveOverlayOnly(root, 'motion/react', card), null, '包名交给 Vite');
+  });
+});
