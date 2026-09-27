@@ -52,6 +52,7 @@ import assert from 'node:assert/strict';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { spawn } from 'node:child_process';
 import { wsClient, rawHandshake, waitFor, sleep } from './fake-ws-kit.mjs';
 
 export { wsClient, rawHandshake, waitFor, sleep };
@@ -440,3 +441,38 @@ export async function makeEndpoint(overrides = {}) {
   ep.onMessage((m) => messages.push(m));
   return { ep, fake, fetch: fetchImpl, calls, opened, resumed, closes, messages };
 }
+
+// ================================================================== 托管组合子进程（HT6、HT7）
+
+/** 起 main.mjs：等 `listen` 行（回端口）或退出（回退出码与输出）。PROMPTCUT_* 只用这里给的 */
+export function runHostedMain(t, env) {
+  const base = { ...process.env };
+  for (const k of Object.keys(base)) if (k.startsWith('PROMPTCUT_')) delete base[k];
+  const child = spawn(process.execPath, [path.join(ROOT, 'server', 'hosted', 'main.mjs')], {
+    env: { ...base, PROMPTCUT_DOCSERVICE_HOST: '127.0.0.1', PROMPTCUT_DOCSERVICE_PORT: '0', PROMPTCUT_ASSET_PORT: '0', ...env },
+    stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
+  });
+  t.after(() => { try { child.kill(); } catch { /* 已退 */ } });
+  let out = '';
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve({ code: 'timeout', out }), 20_000);
+    const onData = (d) => {
+      out += d;
+      for (const line of out.split('\n')) {
+        if (!line.startsWith('{')) continue;
+        let j;
+        try { j = JSON.parse(line); } catch { continue; }
+        if (j.event === 'listen') {
+          clearTimeout(timer);
+          child.stdout.off('data', onData);
+          resolve({ code: null, out, child, doc: j.docservice?.port, asset: j.asset?.port, listen: j });
+          return;
+        }
+      }
+    };
+    child.stdout.on('data', onData);
+    child.stderr.on('data', (d) => { out += d; });
+    child.once('exit', (code) => { clearTimeout(timer); resolve({ code, out }); });
+  });
+}
+
