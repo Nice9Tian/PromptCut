@@ -128,7 +128,10 @@ async function stopAll() {
 async function startEditor(tag, port) {
   const overrides = path.join(TMP, tag, 'card-overrides');
   fs.mkdirSync(overrides, { recursive: true });
+  const dataDir = path.join(TMP, tag, 'data');
+  fs.mkdirSync(dataDir, { recursive: true });
   const p = start(`editor-${tag}`, [viteBin(), '--port', String(port), '--strictPort', '--host', '127.0.0.1'], {
+    PROMPTCUT_DATA_DIR: dataDir,
     PROMPTCUT_PUSH: '0',
     PROMPTCUT_LAN_HOST: '',
     PROMPTCUT_CARD_OVERRIDES: overrides,
@@ -447,6 +450,9 @@ try {
     }).catch((e) => ({ error: String(e?.message ?? e) }));
     res.debugFrames = await P(pageB, () => [...document.querySelectorAll('iframe')].map((f) => ({ src: f.src, connected: f.isConnected, size: [f.clientWidth, f.clientHeight] })));
     res.debugFrameUrls = pageB.frames().map((f) => f.url());
+    res.debugStageDiag = await Promise.all(pageB.frames().filter((f) => /[?&]stage=/.test(f.url())).map(async (f) => ({
+      url: f.url(), diag: await f.evaluate(() => window.__pcStageDiag?.() ?? null).catch((e) => ({ error: String(e?.message ?? e) })),
+    })));
     res.stageV1After = !!(await stageHas(pageB, MARK('v1')));
   }
   const stageAt = await waitFor(async () => ((await stageHas(pageB, MARK('v2'))) ? Date.now() : null), 15_000, 'B 舞台画出 v2').catch(() => null);
