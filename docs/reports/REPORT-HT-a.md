@@ -1,6 +1,6 @@
-> 草稿（2026-09-27 PC 主会话写，交接时带进仓库）：合入时补完、去掉 `.draft` 改名为 `REPORT-HT-a.md`，并归档对应的 AGENT 报告。文中 scratchpad 路径指 PC 本机，只作记录。
+> 2026-09-27 PC 主会话起草（交接时带进仓库），笔记本主会话在第三次修订后补完、合入（第 1.5 节与第 2～4 节）。文中 scratchpad 路径指写那一段时所在机器的本机，只作记录。
 
-# HT-a 阶段报告：文档服务的会话模型 + 序号确认（草稿）
+# HT-a 阶段报告：文档服务的会话模型 + 序号确认
 
 契约 `docs/plan/http-transport-contract.md` 第 2 版（2026-09-27 拆分为 HT-a / HT-b；第 16 节是开工后的裁定，`c1ac3ca`）。
 
@@ -30,8 +30,33 @@
   - 重跑：tsc 0；npm test 3353 / 3351 / 0 / 2，HT 63 条全真跑；`ht*.test.mjs` 74/74；T9 本机替身（信任关闭）`ok`、fails 空（plan 8/8、`cardRevAfterEdit` 2；观察端 `joinMs` 376、先小后大、`covered`、黑帧 0；主机认领 5 完成 5、恰好一次 8/8、无缺块）；`online-join-probe`（信任关闭，托管组合报 `trustLoopback: false`）44/44。
   - 与语义的出入剩三条（只有 WebSocket 属 HT-a / HT-b 拆分；`card-sync.mjs` 等旧客户端；服务端无会话层时的退化语义未写），本机信任一条已按语义修掉。
 
+## 1.5 合 main、部署、HT7（笔记本主会话，第三次修订后）
+- C10a 先合入 main（`d7a6fac`、`eb02779`），再由 `8481bd7` 把 main `eb02779` 合进 `claude/ht-integ`（C10a 的低内存档过渡做法与队列优先级档随之进来），无冲突。
+- G0（`8481bd7`）：`npx tsc -b --force` 0；`npm test` 3393 / 3391 / 0 / 2（跳过 cards-layout、skill-gate 两条显式开启）；`ht*.test.mjs` 74/74；`npm run build` 与 `vite build --mode online` 成功。HT 不动渲染路径，G0-R 不跑（主计划第 7 节 HT-a）。
+- 部署（阿里云）：2026-09-27T14:07:56Z～14:09:03Z，从 `8481bd7` 的在线构建（index.html + 84 个资源，index sha256 `ed807416…`）`deploy-hosted --save --editor dist-online --doc-public-url wss://8-219-80-16.sslip.io/hosted/ --asset-public-url https://8-219-80-16.sslip.io/media/api/asset`；先备份 pm2 配置为 `pm2.config.cjs.bak-20260927-ht`。集群令牌文件 present（0600），pm2 配置写入 `PROMPTCUT_TRUST_LOOPBACK=0`；`promptcut-hosted` 重载一次（restarts 8）。外网 `/hosted/healthz` 200、带 `sessions`；`/media/healthz` 200；`/editor` 的 index.html 与本地构建相同。
+- nginx：2026-09-27T14:09:54Z，`/hosted` 补 `client_max_body_size 2m; proxy_buffering off;`（契约第 12 节，HT-b 才用得上，一并加），备份 `/etc/nginx/sites-available/promptcut.bak-20260927-ht`，`nginx -t` 通过后 reload；`/hosted`、`/media`、`/coord` 的 healthz 与 `/editor` 都 200。
+- HT7（外网经 443，`ht7-probe --base https://8-219-80-16.sslip.io/hosted`）：匿名 WebSocket 升级 401、带错令牌升级 401、匿名读素材 401、不带令牌调管理接口 401、带错令牌调管理接口 401，`fails: []`。
+- 信任关闭下的 C10a 外网演示（2026-09-27T14:10:09Z～14:25:01Z，创建者从 `8481bd7` 起在 5660）：`ok: true`、`fails: []`。plan 5/5，重卡 300 帧、小尺寸 300；刷新后 3.1 s 回到共享项目；手机低内存档、只 1 个舞台、贴小尺寸，素材原尺寸请求 0、`/@media` 0，播放 6 次采样全抑制，停下 150 ms 画出当前帧；补渲 5 个细任务全完成，改一处后认领顺序 `NNNNNBBBBB`；导出 300 帧只用原尺寸（329）与 `snap/`（300）；作废后旧邀请被拒；桌面手填与粘贴都进；收尾删项目、`lookup` 404。
+
 ## 2. 验收
-（填）
+| 编号 | 结果 |
+|---|---|
+| G0 | 通过（第 1.5 节） |
+| HT1、HT2、HT4、HT6 | `ht*.test.mjs` 全真跑全过（HT1、HT4 只验 WebSocket 部分，契约第 16 节） |
+| HT3 | 只跑「只走 WebSocket」与「中途断开再接续」两种，通过 |
+| HT5 | 自动与强制 ws，通过（`ht5-probe` 用例） |
+| HT7 | 外网通过（第 1.5 节） |
+| HT8 | 归 HT-b（`TODO.md`） |
+| HT9 | 由 C6.6 T9 云端当独立渲染主机覆盖：**待跨机复核**。云端 2026-09-27 晚重新上线（信箱 `to-local` seq 7 报到），随后做 |
+| W-HT-a | **待跨机复核**：断线探针在写（`claude/ht-w-probe`），先本机替身（笔记本第二渲染主机实例经 `render-queue-proxy --cut-once`），再交云端 |
+| PC 窗口项 | PC 当第二渲染节点做断线接续：PC 辅助节点已下线，登记 |
+| 信任关闭下的演示 | 通过（第 1.5 节） |
 
 ## 3. 顾问调用记录
-（填；HT 第 1 版的查资料见契约第 13 节）
+- HT 第 1 版的查资料见契约第 13 节（codex，`gpt-6-sol` / `high`）。
+- HT-a 这一轮没有调 codex 或 Gemini：服务端、客户端、测试、集成都由 Opus 完成，问题在回退梯次第 1 级内解决。
+
+## 4. 待跨机复核项 / 待用户项
+- 待跨机复核：W-HT-a；HT9；PC 窗口项（见第 2 节）。
+- 待用户项：审〔裁〕——契约第 16、17 节（含「本机按真正的发起方判断」的实现、4410 按原码上报的规则、按字节确认）。
+- 与语义的出入（集成方列、主会话认可）：只有 WebSocket 传输（HT-a / HT-b 拆分，不算偏离）；`server/card-sync.mjs` 等仍用旧客户端的几处一次断线就断开（`TODO.md` HT-b 条目下的后续项）；服务端没有会话层时客户端怎么退化，语义没写。
