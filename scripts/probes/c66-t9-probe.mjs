@@ -567,7 +567,8 @@ async function runCreator(out) {
       if (mine.length !== lastNewCount) { lastNewCount = mine.length; lastNewAt = Date.now(); }
       const latest = mine[mine.length - 1];
       const derived = q.plans?.[latest.planId];
-      if (!Array.isArray(derived)) return null;
+      // 加重卡之前的那一版(比如写 tiers.small 触发的)可能也在基线之后发布,切不出细任务:只认切出了任务的最新一版
+      if (!Array.isArray(derived) || derived.length === 0) return null;
       const states = derived.map((id) => q.tasks?.[id]?.state ?? 'pending');
       if (!states.every((s) => s === 'done' || s === 'failed')) return null;
       if (Date.now() - lastNewAt < 3000) return null; // 3 s 内没有新的一版才算
