@@ -62,6 +62,7 @@ test('MI-no-isIdle:执行器只有 plan / render / forget,不再有 isIdle', () 
   const pipeline = new FramePipeline({ root: '.', origin: () => 'http://127.0.0.1:1' });
   try {
     const executor = createPrerenderExecutor({ pipeline, projects: { get: async () => null } });
-    assert.deepEqual(Object.keys(executor).sort(), ['forget', 'plan', 'render']);
+    // M7 契约 D12 加了 afterSplit(切分完成后写层表 v 3);isIdle 照旧没有
+    assert.deepEqual(Object.keys(executor).sort(), ['afterSplit', 'forget', 'plan', 'render']);
   } finally { void pipeline.close(); }
 });

@@ -103,7 +103,7 @@
   - `m` 按定长比较；
   - `r` 必须是三种角色之一；
   - `c` 在 `r: 'agent'` 时必填，是正整数；
-  - `o` 只在 `r: 'render'` 时可给，取 `{ kind: 'user' }` 或 `{ kind: 'agent', c: <对话号> }`；
+  - `o` 只在 `r: 'render'` 时可给，取 `{ kind: 'user' }`、`{ kind: 'agent', c: <对话号> }` 或 `{ kind: 'browser' }`（〔M7 D9〕在线页面自己当纯浏览器节点时签的 render 票据，见第 6 节「队列里的角色限制」）；
   - 名单或禁入表不允许时，一律 401。
 - **集群令牌不给数据面任何权限**：带令牌项的连接得到管理身份 `{ userId: 'admin', tenantId: null, scope: 'admin' }`，只能收发管理接口的消息。同一连接不能再带别的鉴权项。
 - **回显**：只回显 `promptcut.v1`。
@@ -132,6 +132,8 @@
 - **队列里的角色限制**：
   - `node.hello` 只允许 `role: 'render'` 的连接，以及 `local` 身份；别的回 `forbidden`。
   - 纯浏览器节点（`profile: 'browser'`）只见、只能认领 `source.userId` 等于自己 `userId` 的任务（与 M5 相同，只是 `userId` 现在带设备）。
+  - 〔M7 D9，`docs/plan/m7-contract.md` 第 13 节〕归属为 `{ kind: 'browser' }` 的 render 连接：`node.hello` 的 `profile` 固定为 `browser`，自报别的回 `forbidden`；必须带页面的原始环境值 `environment: { platform, userAgent, renderer, vendor }`（没带回 `bad-message`），指纹由队列模块按 `describeEnvironment` 算、自报的不作数，UA 不是 Chromium 内核回 `not-chromium`（D10、D14）。
+  - 〔M7 D9〕`nodeId` 绑到第一次用它报到的 `userId`：节点记录在期间（断开后宽限期内也在），别的 `userId`（不论归属）拿同一个 `nodeId` 报到回 `forbidden`，原节点不受影响。
   - 本机 PC 与独立主机能认领本空间里任何成员的任务。
 - **旧入口不变**：`mountRenderQueue(q)` 与 `createDocService({ modules })` 仍能挂单实例模块，供现有测试与只有 `local` 空间的场合用；按空间起实例的新入口另加。
 
@@ -169,7 +171,7 @@
   - 签名密钥就是项目记录里的 `ticketKey`，`kid` 是它的编号：记录可以另存 `oldTicketKeys: [{ kid, key, until }]`，供轮换期间核对旧票据。
   - 核对时，先对**收到的原始负载段**验签名，验过再解析 JSON；票据总长 ≤ 2048 字节；`exp - iat` 不得超过该类票据的有效期。
   - `k: 'asset'`：`r` 为 `'r'` 或 `'rw'`；
-  - `k: 'conn'`：`r` 为连接角色，另可带 `c`、`o`；
+  - `k: 'conn'`：`r` 为连接角色，另可带 `c`、`o`（`o` 的取值同第 5 节，含〔M7 D9〕`{ kind: 'browser' }`）；
   - `g` 是项目的代数，`ug` 是这个 `userId` 的代数；
   - `exp`、`iat` 是毫秒时间戳。
 - **有效期**：素材票据 15 分钟，连接票据 2 分钟〔裁〕。

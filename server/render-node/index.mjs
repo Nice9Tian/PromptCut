@@ -22,12 +22,13 @@
  * 只经注入的端点收发,不读文件系统。M5b 的 `project-client.mjs` 同样。
  * HT-a 的 `session-link.mjs` 也例外:用全局 `WebSocket` 与计时器(都可注入),在 Node 里缺省读 `PROMPTCUT_TRANSPORT`(选项可覆盖)。
  */
-export { normalizeOs, gpuClassOf, chromeMajorOf, envFingerprintOf, describeEnvironment, resultKeyOf } from './fingerprint.mjs';
+export { normalizeOs, gpuClassOf, chromeMajorOf, envFingerprintOf, describeEnvironment, resultKeyOf, isChromiumUserAgent } from './fingerprint.mjs';
 export { DEFAULT_WEIGHT_POLICY, checkClaimable, filterClaimable } from './filter.mjs';
 export { rankCandidates, pickCandidate } from './pick.mjs';
 export { planTaskOf, splitPlan, backfillPlanTaskOf, isBackfillPlan, clipsPlanTaskOf, isClipsPlan, isListPlan } from './split.mjs';
 export { createNodeSession } from './session.mjs';
-export { createLocalNode } from './local-node.mjs';
+export { createLocalNode, idleLockTakeover } from './local-node.mjs';
+export { createTaskRunner, untilAborted } from './task-runner.mjs';
 export { BACKOFF_DEFAULTS, createWsEndpoint } from './ws-transport.mjs';
 export { HTTP_CLIENT_DEFAULTS, createHttpEndpoint, HttpWebSocket, httpWebSocketClass } from './http-transport.mjs';
 export { SESSION_DEFAULTS, createDocEndpoint, transportOf, wsUrlOf, httpUrlOf } from './session-link.mjs';

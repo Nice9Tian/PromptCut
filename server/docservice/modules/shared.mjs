@@ -216,7 +216,7 @@ export function sharedModule({
       }
       if (msg.owner !== undefined && msg.owner !== null) {
         const owner = msg.role === 'render' ? normalizeOwner(msg.owner) : null;
-        if (!owner) throw new Refused('bad-message', "owner 只能给 render 连接，取 { kind: 'user' } 或 { kind: 'agent', c }");
+        if (!owner) throw new Refused('bad-message', "owner 只能给 render 连接，取 { kind: 'user' }、{ kind: 'agent', c } 或 { kind: 'browser' }");
         fields.o = owner;
       }
     } else {

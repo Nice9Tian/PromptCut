@@ -160,11 +160,15 @@ export const isRole = (v) => typeof v === 'string' && ROLES.includes(v);
 /** 对话号：正整数 */
 export const isConversation = (v) => Number.isSafeInteger(v) && v > 0;
 
-/** 归属：`{ kind: 'user' }` 或 `{ kind: 'agent', c: <对话号> }`；合格回规整后的对象，否则 null */
+/**
+ * 归属：`{ kind: 'user' }`、`{ kind: 'agent', c: <对话号> }`，或 `{ kind: 'browser' }`（M7 D9：在线页面自己当纯浏览器节点时签的
+ * render 票据；队列模块据此把 profile 固定为 browser）；合格回规整后的对象，否则 null
+ */
 export function normalizeOwner(v) {
   if (v === null || typeof v !== 'object' || Array.isArray(v)) return null;
   const keys = Object.keys(v);
   if (v.kind === 'user' && keys.length === 1) return { kind: 'user' };
+  if (v.kind === 'browser' && keys.length === 1) return { kind: 'browser' };
   if (v.kind === 'agent' && isConversation(v.c) && keys.length === 2) return { kind: 'agent', c: v.c };
   return null;
 }

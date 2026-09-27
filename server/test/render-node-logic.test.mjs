@@ -166,7 +166,8 @@ function taskView(over = {}) {
     id: 'snapshot:rk:0-59', kind: 'snapshot', tier: 'shared', resultKey: 'rk',
     range: { unit: 'localFrame', from: 0, to: 59 },
     source: clean({ userId: 'u1', tenantId: 't1', projectId: 'p1', projectRev: 1, publisher: { id: 'P' }, publishedAt: 1000, derivedFrom: null, ...source }),
-    input: {},
+    // M7 D4（filter.mjs 规则 7）：纯浏览器只收共享档的独立卡，切分方在浏览器那一份里写 input.compositing
+    input: { compositing: 'independent' },
     weight: clean({ class: 'medium', estMs: null, frames: 60, ...weight }),
     requires: clean({ envFingerprint: FP, codeVersion: CV, ...requires }),
     priority: 10, state: 'open', version: 1, attempts: 0,

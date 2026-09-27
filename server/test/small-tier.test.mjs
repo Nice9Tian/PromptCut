@@ -219,10 +219,11 @@ test('ST8 层表:列预渲染集合里产快照的卡,共享档结果键 = 共�
   assert.equal(body.span, 60);
   assert.equal(body.at, 123);
   assert.deepEqual(body.layers.map((l) => l.clipId), ['a', 'b']);
-  // C10 契约第 18 节第 3 条:层表 v 2,每层带 contentKey(共享档内容键,取不到为 null)与 envFingerprint
-  assert.equal(body.v, 2);
+  // C10 契约第 18 节第 3 条:层表 v 2,每层带 contentKey(共享档内容键,取不到为 null)与 envFingerprint;
+  // M7 契约 D12 升 v 3:另带候选表,没有切分记录时只有自己一个候选,等于层上的字段
+  assert.equal(body.v, 3);
   assert.deepEqual(body.layers[0], { clipId: 'a', kind: 'html', key: 'S'.repeat(8), tier: 'shared', resultKey: 'S'.repeat(8), dirKey: 'S'.repeat(8), entryKey: null, firstFrame: 30, count: 90,
-    contentKey: null, envFingerprint: fp });
+    contentKey: null, envFingerprint: fp, candidates: [{ envFingerprint: fp, resultKey: 'S'.repeat(8), key: 'S'.repeat(8), dirKey: 'S'.repeat(8) }] });
   assert.equal(body.layers[1].contentKey, 'ck-b');
   assert.equal(body.layers[1].envFingerprint, fp);
   assert.equal(body.layers[1].kind, 'local');

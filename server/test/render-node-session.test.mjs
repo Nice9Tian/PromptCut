@@ -35,7 +35,8 @@ function view(name, { projectId = 'p1', priority = 10, publishedAt = 1, version 
     id: `snapshot:${name}:0-59`, kind: 'snapshot', tier: 'shared', resultKey: name,
     range: { unit: 'localFrame', from: 0, to: 59 },
     source: { userId, tenantId: 't1', projectId, projectRev: 1, publisher: { id: 'P' }, publishedAt, derivedFrom: null },
-    input: {}, weight: { class: weight, estMs: null, frames: 60 },
+    // M7 D4（filter.mjs 规则 7）：纯浏览器只收共享档的独立卡，切分方在浏览器那一份里写 input.compositing
+    input: { compositing: 'independent' }, weight: { class: weight, estMs: null, frames: 60 },
     requires: { envFingerprint: FP, codeVersion: CV, ...requires },
     priority, state: 'open', version, attempts: 0,
   };

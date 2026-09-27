@@ -64,6 +64,8 @@ const published = (out, conn) => out.one(conn, 'task.published').results;
 const cardLock = (h, conn, fields) => h.handle(conn, { type: 'card.lock', ...fields });
 /** F.1：takeover 是 TaskInput 上的可选字段（逐个任务带），splitPlan 也是给每个任务加 takeover: true（F.2） */
 const tk = (tasks, v = true) => tasks.map(t => ({ ...t, takeover: v }));
+/** M7 契约 D2（`docs/plan/m7-contract.md` 第 13 节）给 card-locked 的回包加了 lockIdleMs / lockedByProfile / lockUndone；这里只比 F.7 定的那几项 */
+const f7 = r => { if (r == null) return r; const { lockIdleMs, lockedByProfile, lockUndone, ...rest } = r; return rest; };
 
 /* ================================================================== lockKeyOf */
 
@@ -413,8 +415,8 @@ test('Q5 不带 takeover、锁在别的指纹上时发布已存在的任务：�
 
   const same = snap('ck1', FP_A, 60), free = snap('ck2', FP_B, 0);
   let results = published(h.publish('q', [y1, y2, same, free]), 'q');
-  assert.deepEqual(results[0], { id: y1.id, state: 'open', version: 1, created: false, lockedBy: FP_A });
-  assert.deepEqual(results[1], { id: y2.id, state: 'open', version: 1, created: false, lockedBy: FP_A });
+  assert.deepEqual(f7(results[0]), { id: y1.id, state: 'open', version: 1, created: false, lockedBy: FP_A });
+  assert.deepEqual(f7(results[1]), { id: y2.id, state: 'open', version: 1, created: false, lockedBy: FP_A });
   assert.deepEqual(results[2], { id: same.id, state: 'open', version: 1, created: true }, '同指纹不带 lockedBy');
   assert.deepEqual(results[3], { id: free.id, state: 'open', version: 1, created: true }, '没锁的不带 lockedBy');
   assert.ok(h.task(y1.id).subscribers.includes('pub-q'), '照 A.7.1 合并：订阅者加入本发布方');
@@ -423,7 +425,7 @@ test('Q5 不带 takeover、锁在别的指纹上时发布已存在的任务：�
 
   // takeover: false 同不带
   results = published(h.publish('p', tk([y1], false)), 'p');
-  assert.deepEqual(results[0], { id: y1.id, state: 'open', version: 1, created: false, lockedBy: FP_A });
+  assert.deepEqual(f7(results[0]), { id: y1.id, state: 'open', version: 1, created: false, lockedBy: FP_A });
   assert.equal(lockOf(h, 'snapshot:ck1').envFingerprint, FP_A);
   // 合并进来的异指纹任务仍然认领不了
   assert.equal(h.claim('b', y1.id, 1).one('b', 'task.claim-rejected').reason, 'card-locked');
@@ -443,7 +445,7 @@ test('Q10 拒建：锁在别的指纹上、没带 takeover、表里没有同 id 
   const out = h.publish('q', [y1, other, same, y2], { reqId: 'r10' });
   const m = out.one('q', 'task.published');
   assert.equal(m.reqId, 'r10');
-  assert.deepEqual(m.results[0], { id: y1.id, error: 'card-locked', lockedBy: FP_A });
+  assert.deepEqual(f7(m.results[0]), { id: y1.id, error: 'card-locked', lockedBy: FP_A });
   assert.deepEqual(m.results[1], { id: other.id, state: 'open', version: 1, created: true }, '别的卡照常建');
   assert.deepEqual(m.results[2], { id: same.id, state: 'open', version: 1, created: true }, '同指纹照常建');
   assert.deepEqual(m.results[3], { id: y2.id, state: 'open', version: 1, created: true }, '流是另一把锁（stream:ck1，没锁）');
@@ -457,7 +459,7 @@ test('Q10 拒建：锁在别的指纹上、没带 takeover、表里没有同 id 
   // 锁上的指纹换了（被接手），lockedBy 跟着换
   cardLock(h, 'p', { kind: 'snapshot', contentKey: 'ck1', envFingerprint: FP_C, takeover: true });
   const again = published(h.publish('q', [y1]), 'q');
-  assert.deepEqual(again[0], { id: y1.id, error: 'card-locked', lockedBy: FP_C });
+  assert.deepEqual(f7(again[0]), { id: y1.id, error: 'card-locked', lockedBy: FP_C });
 });
 
 test('Q10 补充：因 limit 没建成的那一项不做任何锁处理（F.7 第 4 条）', () => {

@@ -444,6 +444,8 @@ async function startQueueNode(root: string, service: FramePipeline) {
       // cardSourceVersions:本机此刻有的卡片代码(现取现算的视图),任务的 requires.cardSources 按它过滤(c66-host-cards)
       node: { profile: "pc", envFingerprint, codeVersions: [codeVersion], capabilities, maxConcurrent: 1, cardSourceVersions: cardCode(root).view },
       endpoint, now: Date.now, isIdle: () => idleGate.idle(), maxConcurrent: 1, codeVersion, executor, sink,
+      // M7 D2:队列锁的锁定方闲置严格超 30 s、这张卡又没做完,切分时带 takeover 按本机指纹接手整张卡
+      takeoverLocked: node.idleLockTakeover,
       onEvent: (event: any) => {
         const id = event?.id;
         if (event?.type === "completed") { stats.completed++; remember(mine.completed, id); }
@@ -804,7 +806,9 @@ async function startHostNode(root: string, service: FramePipeline, node: any, or
       const publishLayerMap = (entry: any) => {
         const key = layerMapKeyOf(entry?.project?.id);
         if (!key || (service as any).pushQueue) return;
-        const body = layerMapOf(entry, { picked: (clipId: string) => (service as any).prerenderPicked(entry, clipId), fingerprint: (service as any).envFingerprint });
+        // M7 D12:层表 v 3 的候选按切分实际出键(管线 recordSplitCandidates 记的);执行器在切分完成后才调这里
+        const body = layerMapOf(entry, { picked: (clipId: string) => (service as any).prerenderPicked(entry, clipId), fingerprint: (service as any).envFingerprint,
+          candidatesOf: (control: any) => (service as any).splitCandidatesFor?.(control?.contentKey) ?? null });
         void content.put("snapshot-manifest", key, body).then(
           () => log("host.layer-map", { project: index, key: key.slice(0, 24), layers: body.layers.length }),
           (error: any) => log("host.layer-map-failed", { project: index, message: String(error?.message ?? error) }),

@@ -30,6 +30,8 @@ const sha256 = text => crypto.createHash('sha256').update(text, 'utf8').digest('
 const fpOf = (os, gpuClass, chromeMajor) => sha256(`${os}\n${gpuClass}\n${chromeMajor}`).slice(0, 16);
 const rkOf = (contentKey, fp) => sha256(`${contentKey}\n${fp}`);
 const sorted = list => [...list].sort();
+/** M7 契约 D2（`docs/plan/m7-contract.md` 第 13 节）给 card-locked 的回包加了 lockIdleMs / lockedByProfile / lockUndone；这里只比 F.7 定的那几项 */
+const f7 = r => { if (r == null) return r; const { lockIdleMs, lockedByProfile, lockUndone, ...rest } = r; return rest; };
 
 /* ================================================================== N1 */
 
@@ -653,7 +655,7 @@ test('N6 拒建后照锁指纹重发：只重发被拒的那张卡；plan 等到
   const r1 = reply(first.message.reqId), r2 = reply(second.message.reqId);
   assert.ok(r1 && r2, '两次发布都有回包');
   for (const t of titleA) {
-    assert.deepEqual(r1.message.results.find(r => r.id === t.id), { id: t.id, error: 'card-locked', lockedBy: FP_B });
+    assert.deepEqual(f7(r1.message.results.find(r => r.id === t.id)), { id: t.id, error: 'card-locked', lockedBy: FP_B });
   }
   assert.ok(r2.message.results.every(r => r.created === true && !('error' in r)));
 

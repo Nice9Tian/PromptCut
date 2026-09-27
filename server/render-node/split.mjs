@@ -42,6 +42,21 @@ import { resultKeyOf } from './fingerprint.mjs';
  * (发布方的 nodeId)和 `usesLocalMedia(control)`,判真的每个任务在 `requires` 里写 `localMedia`,
  * 只有那个节点能认领(节点侧过滤规则 1 与队列的前置过滤、认领检查一起守)。不给 `localMedia` 时任务形状不变。
  *
+ * # 纯浏览器可做的卡出两份(M7 契约 D1,第 3.3 节)
+ *
+ * 调用方给 `browserFingerprints`(文档服务上本项目在线、与 plan 同一用户的纯浏览器节点的指纹,由队列在 plan 的
+ * `task.claimed` 里给出,见 `render-queue/queue.mjs` 的 `browserFingerprintsFor`)时,**没被锁**的、纯浏览器做得了的卡
+ * (共享档、独立卡、内置卡片、`cardSources` 为空、重度 light / medium、不用只在发布方本机的素材)
+ * 除了照旧按自己的指纹出一份,再按每个浏览器指纹各出一份:
+ *
+ *   结果键 = 内容键 × 浏览器指纹,`requires.envFingerprint` = 浏览器指纹,其余 requires 相同;
+ *   两份都带 `input.dual: true`,都不带 `takeover`;浏览器那份另带 `input.compositing` 与 `input.bake`
+ *   (隔离单卡工程要的 `start`、`end`、`count`、`sampling`,页面不算 cardSampling)。
+ *
+ * 谁先认领这张卡的任一段谁得锁,队列在建锁时把另一份(`dual`、还 open 的异指纹任务)作废。
+ * 已锁的卡照旧按锁出一份(锁在浏览器指纹上时那一份同样带 bake / compositing);浏览器指纹与自己相同、
+ * 或没给浏览器指纹时,切分与原来完全相同。
+ *
  * 纯函数:不读环境变量、不做 I/O。
  */
 
@@ -110,6 +125,28 @@ function takeoverTest(takeover) {
   return () => false;
 }
 
+/** 纯浏览器能认领的重度(filter.mjs 的 `DEFAULT_WEIGHT_POLICY.browser`) */
+const BROWSER_WEIGHTS = new Set(['light', 'medium']);
+
+/**
+ * 这张卡纯浏览器做不做得了(M7 契约 D1、D4):共享档、独立卡、不是用户卡图卡、没改过源码(`cardSources` 为空)、
+ * light / medium、不用只在发布方本机的素材。`requires` 是这张卡自己那一份的 requires(已含 localMedia)。
+ */
+function browserEligible({ tier, compositing, requires, weight }) {
+  return tier === 'shared' && compositing === 'independent'
+    && requires.userCards === false && requires.graphCards === false
+    && Object.keys(requires.cardSources ?? {}).length === 0
+    && !('localMedia' in requires)
+    && BROWSER_WEIGHTS.has(weight?.class);
+}
+
+/** 浏览器那一份要的隔离单卡工程参数(M7 契约第 4.3 节):页面照桌面 `isolatedCardProject` 的变换载入,不算 cardSampling */
+function bakeInputOf(control) {
+  const out = { start: control.start, end: control.end, count: control.count };
+  if (control.sampling != null) out.sampling = structuredClone(control.sampling);
+  return out;
+}
+
 /** → TaskInput[]:先快照(按 cardPlan 顺序、段升序),后轨道流(按 streams 顺序、段升序);同一 id 只留第一个。 */
 export function splitPlan({
   planTask,
@@ -130,6 +167,9 @@ export function splitPlan({
   localMedia = null,        // 发布方的 nodeId(M6c X2):给了,且 usesLocalMedia 判真的任务写进 requires.localMedia
   usesLocalMedia = () => true,   // (control) => boolean;流任务传 { clipId: topClipId, kind: 'stream' }
   lane = 'normal',          // 'backfill':补渲计划任务切出的细任务,priority 一律标 'backfill'(c10a 契约第 17 节)
+  browserFingerprints = [], // 本项目在线、同一用户的纯浏览器节点的指纹(M7 契约 D1):浏览器可做、没锁的卡另出这些指纹的一份
+  browser = null,           // 同上的另一种写法:`{ nodeId, envFingerprint }` 或它的数组(契约第 3.3 节的形状)。
+                            // 注意:切分方不读 `planTask.input.browser`(页面自报的),浏览器指纹以文档服务给的为准
 }) {
   /** 细任务的 priority:补渲档一律 'backfill';normal 档照旧按锚帧给整数名次 */
   const priorityOf = anchored => (lane === 'backfill' ? 'backfill' : anchored ? ANCHOR_PRIORITY : NORMAL_PRIORITY);
@@ -140,6 +180,12 @@ export function splitPlan({
   const anchors = [...(anchorFrames ?? [])];
   const lockOf = lockLookup(cardLocks);
   const takesOver = takeoverTest(takeover);
+  /** 浏览器指纹:非空字符串、去重、不等于自己的指纹(相同就不必另出一份) */
+  const browserAlias = (Array.isArray(browser) ? browser : browser != null ? [browser] : []).map(b => b?.envFingerprint);
+  /** 浏览器指纹(非空字符串、去重);其中等于自己指纹的不另出一份,但自己那份同样要带页面生成快照的两项 */
+  const browserSet = new Set([...(Array.isArray(browserFingerprints) ? browserFingerprints : []), ...browserAlias]
+    .filter(fp => typeof fp === 'string' && fp !== ''));
+  const browserFps = [...browserSet].filter(fp => fp !== envFingerprint);
   const mediaOwner = typeof localMedia === 'string' && localMedia !== '' ? localMedia : null;
   /** 本地档能力闸(M6c X2):这一项的输入用到只在发布方本机的素材时,requires 加 `localMedia` */
   const gateLocalMedia = (requires, control) => {
@@ -184,12 +230,13 @@ export function splitPlan({
     if (tier === 'local' && (entryKey == null || entryKey === '')) continue;
     const baseKey = control.contentKey ?? snapshotKey;
     const contentKey = tier === 'shared' ? baseKey : `${entryKey}/${baseKey}`;
-    const keying = keyingOf(`snapshot:${contentKey}`);
-    const resultKey = resultKeyOf(contentKey, keying.fingerprint);
+    const lockKey = `snapshot:${contentKey}`;
+    const keying = keyingOf(lockKey);
     const cardId = control.cardId ?? null;
     // 决定清单的体积上限,推送与拉取两边要一致(C6.2 第 11 节第 2 条,J.3)
     const canvasHeavy = control.capabilities?.canvasHeavy === true;
     const cardVersion = control.cardId ? cardSourceVersions?.[control.cardId] : undefined;
+    const compositing = control.compositing ?? control.capabilities?.compositing;
     // 锚帧是全局帧号,换成这张卡的本地帧再比;没有 firstFrame 就判不了,一律按普通段
     const firstFrame = Number(control.sampling?.firstFrame);
     const requires = {
@@ -198,23 +245,38 @@ export function splitPlan({
       transcode: false,
       userCards: !!isUserCard(control),
       graphCards: !!isGraphCard(control),
-      belowDependent: (control.compositing ?? control.capabilities?.compositing) === 'belowDependent',
+      belowDependent: compositing === 'belowDependent',
     };
     gateLocalMedia(requires, control);
     const weight = weightOf(control);
-    for (const [from, to] of spans(0, Number(control.count) - 1, snapshotSpan)) {
-      const range = { unit: 'localFrame', from, to };
-      const anchored = anchors.some(a => from <= a - firstFrame && a - firstFrame <= to);
-      const task = {
-        id: taskIdOf({ kind: 'snapshot', resultKey, range }), kind: 'snapshot', tier, resultKey, range,
-        source: { projectId, projectRev, derivedFrom },
-        input: { clipId, cardId, entryKey: tier === 'local' ? entryKey : null, contentKey, canvasHeavy },
-        weight: { ...weight, frames: to - from + 1 },
-        requires: { ...requires, cardSources: { ...requires.cardSources } },
-        priority: priorityOf(anchored),
+    // M7 D1:这张卡出哪几份。没锁(或锁在自己的指纹上)、浏览器做得了时另出浏览器指纹的;锁在别处的照锁只出一份
+    const eligible = browserSet.size > 0 && browserEligible({ tier, compositing, requires, weight });
+    const fingerprints = eligible && lockOf(lockKey) == null && keying.fingerprint === envFingerprint ? [keying.fingerprint, ...browserFps] : [keying.fingerprint];
+    const dual = fingerprints.length > 1;
+    for (const fingerprint of fingerprints) {
+      const resultKey = resultKeyOf(contentKey, fingerprint);
+      // 浏览器那一份(或锁在浏览器指纹上、照锁出的那一份)带页面生成快照要的两项
+      const forBrowser = eligible && browserSet.has(fingerprint);
+      const inputOf = () => {
+        const input = { clipId, cardId, entryKey: tier === 'local' ? entryKey : null, contentKey, canvasHeavy };
+        if (dual) input.dual = true;
+        if (forBrowser) Object.assign(input, { compositing, bake: bakeInputOf(control) });
+        return input;
       };
-      if (keying.takeover) task.takeover = true;
-      emit(task);
+      for (const [from, to] of spans(0, Number(control.count) - 1, snapshotSpan)) {
+        const range = { unit: 'localFrame', from, to };
+        const anchored = anchors.some(a => from <= a - firstFrame && a - firstFrame <= to);
+        const task = {
+          id: taskIdOf({ kind: 'snapshot', resultKey, range }), kind: 'snapshot', tier, resultKey, range,
+          source: { projectId, projectRev, derivedFrom },
+          input: inputOf(),
+          weight: { ...weight, frames: to - from + 1 },
+          requires: { ...requires, envFingerprint: fingerprint, cardSources: { ...requires.cardSources } },
+          priority: priorityOf(anchored),
+        };
+        if (keying.takeover) task.takeover = true;
+        emit(task);
+      }
     }
   }
 

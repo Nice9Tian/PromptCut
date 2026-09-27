@@ -117,7 +117,8 @@ export function createNodeSession({
     const projectId = task?.source?.projectId ?? null;
     holds.set(id, { id, token, lastSentAt: now(), done: null, projectId });
     if (projectId != null) lastProjectId = projectId;
-    onTask(task, { token });
+    // M7 D1：plan 的认领回包带同用户在线纯浏览器节点的指纹，原样交给编排（切分方据此给浏览器可做的卡另出一份）
+    onTask(task, Array.isArray(message.browserFingerprints) ? { token, browserFingerprints: [...message.browserFingerprints] } : { token });
   }
 
   function onRejected(message) {

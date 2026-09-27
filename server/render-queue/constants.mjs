@@ -29,3 +29,11 @@ export const QUEUE_ENV = Object.freeze({
   PREFILTER: 'PROMPTCUT_QUEUE_PREFILTER', THROTTLE_REJECTS: 'PROMPTCUT_QUEUE_THROTTLE_REJECTS',
   PLAN_PREFER_MS: 'PROMPTCUT_QUEUE_PLAN_PREFER_MS',
 });
+
+/**
+ * 队列锁闲置多久切分方就可以接手（M7 契约 D2，第 13 节裁定）：严格超过这么久没有产出（认领、续约、完成），
+ * 锁定方这张卡又还没做完，pc 与独立渲染主机切分时带 takeover 按自己的指纹重发（`render-node/local-node.mjs` 的
+ * `idleLockTakeover`）。与本机锁库 `server/card-lock.mjs` 的 `CARD_LOCK_IDLE_MS` 同一个数（三级数字）；那边引了
+ * 文件系统，节点侧不能引，所以在这里另记一份，单测核对两边相等。不是 QUEUE_DEFAULTS 的一项：队列本体不用它。
+ */
+export const LOCK_IDLE_TAKEOVER_MS = 30_000;
