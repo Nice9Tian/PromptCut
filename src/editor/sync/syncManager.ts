@@ -23,6 +23,8 @@ import { client, errorStatus, route, type Candidate, type SharedMode, type Where
 import { clipOfEntity, entityLabel, writerLabel, type DisplayNames, type Me } from "./labels";
 import { connectSharedAssets, disconnectSharedAssets } from "../media/assetTiers";
 import { bindCardSync, noteProjectForCardSync } from "./cardSync";
+import { ONLINE } from "../../online/mode";
+import { loadBrowserDevice } from "../../online/device";
 
 /* ---------------- 界面状态 ---------------- */
 
@@ -228,8 +230,15 @@ function isLoopbackHost(host: string): boolean {
   return h === "localhost" || h === "::1" || /^127\./.test(h);
 }
 
-/** 设备信息:本机编辑器给的;纯浏览器用存在本地的随机 id 和浏览器名 */
+/**
+ * 设备信息:本机编辑器给的;纯浏览器(在线浏览器模式)用存在页面本地的随机 id 和「浏览器名 + 系统名 + 随机 4 位」
+ * (C10a 契约第 2 节,`src/online/device.ts`),不经 `/api/docservice/device`。
+ */
 async function loadDevice(): Promise<DeviceInfo | null> {
+  if (ONLINE) {
+    const d = loadBrowserDevice();
+    return { deviceId: d.deviceId, deviceName: d.deviceName, lanHost: false, localEditor: false };
+  }
   try {
     const r = await fetch("/api/docservice/device", { cache: "no-store" });
     if (!r.ok) return null;
@@ -244,6 +253,11 @@ async function loadDevice(): Promise<DeviceInfo | null> {
 /* ---------------- 本地备份 ---------------- */
 
 async function saveBackup(b: LocalBackup) {
+  // 本地备份存在编辑器进程的数据目录里;在线页面没有编辑器进程(C10a 第 2 节):照实告诉用户存不下来
+  if (ONLINE) {
+    pushToast("本地备份没存下来(在线页面没有本机),被覆盖的那一版找不回了。", "warn", 10_000);
+    return;
+  }
   const project = getState().project;
   const body =
     b.kind === "offline-discard"
@@ -363,6 +377,7 @@ function bindAgentSide(kind: "local" | "shared", docProjectId: string, url: stri
  * 在本页面这条共享项目的连接上签(身份与本页面相同),交回 POST /api/agent/ticket。
  */
 export async function issueAgentTicket(req: { reqId?: unknown; projectId?: unknown; conversation?: unknown }): Promise<void> {
+  if (ONLINE) return; // Agent 服务端在编辑器进程里,在线页面没有
   const reqId = typeof req.reqId === "string" ? req.reqId : null;
   if (!reqId) return;
   let reply: Record<string, unknown>;
@@ -425,9 +440,24 @@ function bind(link: SyncLink, kind: "local" | "shared", docProjectId: string, ur
   cur = { link, kind, docProjectId, url, unbind, offs };
   patch({ active: true, kind, members: kind === "local" ? [] : view.members, notice: null });
   refreshStatus();
-  bindAgentSide(kind, docProjectId, url);
-  bindCardSync({ kind, projectId: docProjectId, url }, getState().project, cardSyncHooks);
+  // Agent 服务端与卡片源码同步都在编辑器进程里;在线页面没有编辑器进程(C10a 第 2 节),不去绑
+  if (!ONLINE) {
+    bindAgentSide(kind, docProjectId, url);
+    bindCardSync({ kind, projectId: docProjectId, url }, getState().project, cardSyncHooks);
+  }
   if (prev && prev.link !== link) retire(prev.link);
+}
+
+/** 在线页面离开共享项目:没有本机文档服务可回,解开当前连接,store 回到快照栈(C10a) */
+function detach() {
+  const prev = cur;
+  cur = null;
+  if (prev) {
+    for (const off of prev.offs) off();
+    prev.unbind();
+    retire(prev.link);
+  }
+  patch({ active: false, kind: "off", status: "idle", paused: null, offlineOpen: false, notice: null });
 }
 
 /** 换下来的连接:等它手里没确认的提交落地(最多 5 s)再关 */
@@ -455,6 +485,13 @@ function newLocalLink(docProjectId: string, initial: Project): SyncLink {
 
 /** 切到本机空间里的这个项目;`load` 为真时把这份内容以根替换写进去(文件内容为准) */
 function switchToLocal(project: Project, { load }: { load: boolean }): Project {
+  if (ONLINE) {
+    // 在线页面没有本机空间:离开共享项目就是断开(C10a 第 2 节)
+    detach();
+    patch({ shared: null, members: [], blocked: null });
+    disconnectSharedAssets();
+    return project;
+  }
   const id = project.id || "untitled";
   const link = newLocalLink(id, project);
   if (load) link.ds.load(project);
@@ -468,6 +505,7 @@ function switchToLocal(project: Project, { load }: { load: boolean }): Project {
 
 /** store 的载入(loadProject)交到这里:同一个本机项目是根替换,别的项目换连接 */
 function onLoad(project: Project): Project {
+  if (ONLINE && !cur) return project;
   if (cur && cur.kind === "local" && project.id === cur.docProjectId) return cur.link.ds.load(project);
   return switchToLocal(project, { load: true });
 }
@@ -590,9 +628,13 @@ export async function startSync(): Promise<void> {
   started = true;
   const q = new URLSearchParams(location.search);
   if (q.has("headless") || isViewOnly()) return;
-  const device = await loadDevice();
+  const device = view.device ?? (await loadDevice());
   if (!device) return;
   patch({ device });
+  // 在线页面没有本机文档服务:只在从开始页进了共享项目之后才接(C10a 第 2 节)
+  if (ONLINE) return;
+  // 开始页上已经进了共享项目(「加入别人的项目」,C10a 第 4 节):不换回本机空间
+  if (cur) return;
   const join = q.get("join");
   if (join) {
     const link = newLocalLink(join, getState().project);
@@ -699,7 +741,12 @@ export interface EnterCredentials {
   as: "member" | "creator";
   username: string;
   password: string;
+  /** 已派生好的 K(C10a:凭邀请码兑换自由进入的项目时服务端回的项目口令 K);给了就不再按密码派生 */
+  key?: string;
 }
+
+/** 进入失败:原因,限速时另带服务端给的冷却秒数(C10a 表 A「请 {秒数} 秒后再试」) */
+export type EnterResult = { ok: true } | { ok: false; error: EnterError; retryAfter?: number | null };
 
 const KICKED_KEY = "pc.shared.kicked";
 const CREATORS_KEY = "pc.shared.creators";
@@ -745,24 +792,25 @@ function wasKicked(projectId: string, username: string): boolean {
   return !!readJson<Record<string, number>>(KICKED_KEY, {})[kickedKey(projectId, username)];
 }
 
-/** 当前连接上的创建者密钥:只活在一次创建者操作里(每次当场输密码) */
-function deviceOrThrow(): DeviceInfo {
-  if (!view.device) throw new Error("没连上本机编辑器");
-  return view.device;
+/**
+ * 设备信息:没取过就现取(开始页上还没进编辑器、`startSync` 没跑过时,「加入别人的项目」先要它)。
+ * 取不到回 null(桌面运行环境里编辑器进程没应答)。
+ */
+export async function ensureDevice(): Promise<DeviceInfo | null> {
+  if (view.device) return view.device;
+  const device = await loadDevice();
+  if (device) patch({ device });
+  return device;
 }
 
 /**
  * 进入共享项目:取挑战、凭证明连上;连上之后本页面改连这个项目的空间,项目内容以文档服务为准
  * (项目还空着时,DocSync 把当前这份以根替换写进去 —— 新建共享项目就是这样把当前项目带过去的)。
  */
-export async function enterShared(candidate: Candidate, cred: EnterCredentials): Promise<{ ok: true } | { ok: false; error: EnterError }> {
-  let device: DeviceInfo;
-  try {
-    device = deviceOrThrow();
-  } catch {
-    return { ok: false, error: "not-ready" };
-  }
-  let key: string | undefined;
+export async function enterShared(candidate: Candidate, cred: EnterCredentials): Promise<EnterResult> {
+  const device = await ensureDevice();
+  if (!device) return { ok: false, error: "not-ready" };
+  let key: string | undefined = cred.key;
   const make = () =>
     client.buildAuthProtocols({
       base: candidate.base,
@@ -782,15 +830,16 @@ export async function enterShared(candidate: Candidate, cred: EnterCredentials):
   try {
     first = await make();
   } catch (e) {
-    const { status } = errorStatus(e);
-    if (status === 429) return { ok: false, error: "rate-limited" };
+    const { status, retryAfter } = errorStatus(e);
+    if (status === 429) return { ok: false, error: "rate-limited", retryAfter };
     if (status === 404) return { ok: false, error: "no-project" };
     return { ok: false, error: "unreachable" };
   }
+  const wsUrl = candidate.ws ?? route.wsBaseOf(candidate.base);
   const outcome = await new Promise<"open" | CloseInfo>((resolve) => {
     let settled = false;
     const link = new SyncLink({
-      url: route.wsBaseOf(candidate.base),
+      url: wsUrl,
       protocols: () => {
         if (first) {
           const p = first;
@@ -811,7 +860,7 @@ export async function enterShared(candidate: Candidate, cred: EnterCredentials):
           return;
         }
         settled = true;
-        bind(link, "shared", candidate.projectId, route.wsBaseOf(candidate.base));
+        bind(link, "shared", candidate.projectId, wsUrl);
         patch({
           shared: { projectId: candidate.projectId, name: candidate.name, mode: candidate.mode, where: candidate.where, base: candidate.base, username: cred.username, creator: cred.as === "creator", hostDeviceName: candidate.hostDeviceName },
           members: [],
@@ -834,7 +883,8 @@ export async function enterShared(candidate: Candidate, cred: EnterCredentials):
           }
           return;
         }
-        if (info.fatal && cur?.link === link) {
+        // 自己删项目(取消多用户协作)时的 4004 是预料之中的,不弹阻断弹窗
+        if (info.fatal && cur?.link === link && expectedClose !== link) {
           const blocked: Blocked = info.code === 4004 ? "deleted" : info.reason === "removed" ? "removed" : "kicked";
           if (blocked === "kicked") rememberKicked(candidate.projectId, cred.username, true);
           patch({ blocked });
@@ -853,6 +903,30 @@ export async function enterShared(candidate: Candidate, cred: EnterCredentials):
   if (outcome === "open") return { ok: true };
   if (outcome.reason === "timeout") return { ok: false, error: "unreachable" };
   return { ok: false, error: wasKicked(candidate.projectId, cred.username) ? "kicked" : "auth" };
+}
+
+/** 自己要关掉的那条共享项目连接(取消多用户协作时删项目会收到 4004,不算被删) */
+let expectedClose: SyncLink | null = null;
+
+/** 接下来当前这条共享项目连接会被服务端关掉(自己删项目),不弹阻断弹窗 */
+export function expectSharedClose(on = true) {
+  expectedClose = on ? cur?.link ?? null : null;
+}
+
+/**
+ * 离开共享项目回到本机空间,并把 `project`(缺省当前这份)以根替换写进本机项目(C10a 第 6 节「取消勾选」:
+ * 项目真身拉回本机)。在线页面没有本机空间,只是断开。
+ */
+export function leaveSharedToLocal(project: Project = getState().project): Project {
+  patch({ shared: null, members: [], blocked: null });
+  const out = switchToLocal(project, { load: true });
+  expectedClose = null;
+  return out;
+}
+
+/** 当前是不是连着共享项目(项目设置「多用户协作」按它显示勾选状态) */
+export function currentSharedLink(): SyncLink | null {
+  return cur && cur.kind === "shared" ? cur.link : null;
 }
 
 /** 被踢 / 被移出 / 项目被删之后点「开始页」:回到本机空间,回开始页 */
