@@ -21,7 +21,7 @@
 // 用法：
 //   node scripts/probes/c10-stage-probe.mjs p1 [--rounds 3] [--heads both|headful|headless] [--modes busy,snap,snapidb]
 //                                              [--layouts a-same,b-port,...] [--n 500]
-//   node scripts/probes/c10-stage-probe.mjs p2 [--rounds 3] [--heads both]
+//   node scripts/probes/c10-stage-probe.mjs p2 [--rounds 3] [--heads both] [--places ...] [--hidden-places overlay-opacity0,translate-offscreen]
 //   node scripts/probes/c10-stage-probe.mjs p3 [--heads both] [--total-mib 256]
 //   node scripts/probes/c10-stage-probe.mjs p4 [--heads headless]
 //   node scripts/probes/c10-stage-probe.mjs calibrate [--n 500]      只量 createSnapshot 的单帧耗时
@@ -164,6 +164,10 @@ function cadence(kind, n) {
   if (kind === 'timeout16') (function f() { if (!alive()) return; c.count++; setTimeout(f, 16); })();
   if (kind === 'ric') (function f() { if (!alive()) return; requestIdleCallback(() => { if (!alive()) return; c.count++; f(); }); })();
   if (kind === 'ric1000') (function f() { if (!alive()) return; requestIdleCallback(() => { if (!alive()) return; c.count++; f(); }, { timeout: 1000 }); })();
+  // bakeT：每帧之间只让一次 setTimeout(0)，是「页面空闲时」能推的上限
+  if (kind === 'bakeT') { scene(n); (function f() { if (!alive()) return; setTimeout(() => { if (!alive()) return; const t = performance.now(); step(); PCSnap.createSnapshot(document.getElementById('scene')); c.work.push(performance.now() - t); c.count++; f(); }, 0); })(); }
+  // bakeRT：rIC（无超时）只当「此刻空闲」的门闸，门闸过了再用 setTimeout(0) 做一帧
+  if (kind === 'bakeRT') { scene(n); (function f() { if (!alive()) return; requestIdleCallback(() => setTimeout(() => { if (!alive()) return; const t = performance.now(); step(); PCSnap.createSnapshot(document.getElementById('scene')); c.work.push(performance.now() - t); c.count++; f(); }, 0)); })(); }
   if (kind === 'bake') { scene(n); (function f() { if (!alive()) return; requestIdleCallback((dl) => { if (!alive()) return; const t = performance.now(); step(); PCSnap.createSnapshot(document.getElementById('scene')); c.work.push(performance.now() - t); c.count++; f(); }, { timeout: 1000 }); })(); }
 }
 
@@ -380,18 +384,20 @@ async function runCalibrate() {
 /* ------------------------------------------------------------------ P2 */
 
 const PLACEMENTS = {
+  'onscreen-opacity1': { left: '0px', top: '0px', opacity: '1', transform: '', visibility: '', width: '640px', height: '360px' },
   'overlay-opacity0': { left: '0px', top: '0px', opacity: '0', transform: '', visibility: '', width: '640px', height: '360px' },
   'translate-offscreen': { left: '0px', top: '0px', opacity: '0', transform: 'translate(-5000px,0)', visibility: '', width: '640px', height: '360px' },
   'left-10000': { left: '-10000px', top: '0px', opacity: '1', transform: '', visibility: '', width: '640px', height: '360px' },
   'tiny-1px': { left: '0px', top: '0px', opacity: '0', transform: '', visibility: '', width: '1px', height: '1px' },
   'visibility-hidden': { left: '0px', top: '0px', opacity: '1', transform: '', visibility: 'hidden', width: '640px', height: '360px' },
 };
-const CADENCES = [['raf', 2500], ['timeout0', 2500], ['timeout16', 2500], ['ric', 3000], ['ric1000', 3000], ['bake', 5000, 50], ['bake', 5000, N_HEAVY]];
+const HIDDEN_PLACES = (flagArg('hidden-places') || 'overlay-opacity0,translate-offscreen').split(',');
+const CADENCES = [['raf', 2500], ['timeout0', 2500], ['timeout16', 2500], ['ric', 3000], ['ric1000', 3000], ['bake', 5000, 50], ['bake', 5000, N_HEAVY], ['bakeT', 4000, 50], ['bakeT', 4000, N_HEAVY], ['bakeRT', 4000, 50], ['bakeRT', 4000, N_HEAVY]];
 
 async function p2Measure(page, state) {
   const out = {};
   for (const [kind, ms, n] of CADENCES) {
-    const key = kind === 'bake' ? `bake-n${n}` : kind;
+    const key = kind.startsWith('bake') ? `${kind}-n${n}` : kind;
     const winMs = state === 'visible' ? ms : Math.max(ms, 6000);
     const c0 = cpuTimes();
     await page.evaluate((k, n) => window.__ask('bg', { cmd: 'cadence', kind: k, n }), kind, n);
@@ -426,6 +432,8 @@ async function runP2() {
             const states = [];
             // 可见
             states.push([`visible(${await page.evaluate(() => document.visibilityState)},fps${warm.fps})`, await p2Measure(page, 'visible')]);
+            // 页面不可见时各位置表现相同（冒烟实测），只对 --hidden-places 里的位置测
+            if (HIDDEN_PLACES.includes(place)) {
             // 切到另一个标签
             const other = await browser.newPage();
             await other.goto('about:blank');
@@ -446,6 +454,7 @@ async function runP2() {
               states.push([`minimized(${visMin})`, await p2Measure(page, 'hidden')]);
               await cdp.send('Browser.setWindowBounds', { windowId, bounds: { windowState: 'normal' } });
               await cdp.detach().catch(() => {});
+            }
             }
             for (const [st, m] of states) {
               const row = { round: r, head, winLoad: wl, place, state: st, m };
@@ -474,7 +483,7 @@ async function runP3() {
   const rows = [];
   CASE = { oac: true };
   try {
-    for (const head of HEADS) {
+    for (let r = 1; r <= ROUNDS; r++) for (const head of HEADS) {
       const wl = winLoad();
       const browser = await launch(head);
       try {
@@ -482,7 +491,7 @@ async function runP3() {
         const origin = `http://127.0.0.1:${PORT.parent}`;
         await page.goto(origin + '/', { waitUntil: 'load' });
         await page.evaluate((b) => window.__setup(null, b), `http://127.0.0.1:${PORT.s2}/stage?role=bg&n=10`);
-        const row = { head, winLoad: wl, version: await browser.version() };
+        const row = { round: r, head, winLoad: wl, version: await browser.version() };
         // 1. 写 / 读吞吐
         const c0 = cpuTimes();
         row.io = await page.evaluate(async (TOTAL) => {
@@ -525,7 +534,7 @@ async function runP3() {
             persisted0, persist, persistedAfter: await navigator.storage.persisted() };
         }, TOTAL);
         row.io.cpu = cpuPct(c0, cpuTimes());
-        log(`P3 ${head} io ${JSON.stringify(row.io)}`);
+        log(`P3 r${row.round} ${head} io ${JSON.stringify(row.io)}`);
 
         // 2. 配额压低：写到 QuotaExceededError，回收一批再试一次
         const cdp = await page.createCDPSession();
@@ -557,7 +566,7 @@ async function runP3() {
           return { quotaMiB: mib(estA.quota), usageBeforeMiB: mib(estA.usage), wroteBeforeErrorMiB: mib(bytes), error: err, usageAtErrorMiB: mib(estB.usage), deleted: { count: deleted.c, MiB: mib(deleted.b), ms: +delMs.toFixed(1) }, usageAfterDeleteMiB: mib(estC.usage), retry, moreAfterRetryMiB: mib(more), usageEndMiB: mib(estD.usage) };
         });
         await cdp.send('Storage.overrideQuotaForOrigin', { origin }).catch(() => {});
-        log(`P3 ${head} quota ${JSON.stringify(row.quota)}`);
+        log(`P3 r${row.round} ${head} quota ${JSON.stringify(row.quota)}`);
 
         // 3. 分区：跨源舞台看父页的库
         await page.evaluate(async () => { await new Promise((res) => { const r = indexedDB.open('c10probe-part', 1); r.onupgradeneeded = () => r.result.createObjectStore('s'); r.onsuccess = () => { const tx = r.result.transaction('s', 'readwrite'); tx.objectStore('s').put('x', 1); tx.oncomplete = () => { r.result.close(); res(); }; }; }); });
@@ -568,7 +577,7 @@ async function runP3() {
         await sleep(1500);
         const sameCount = await page.evaluate(() => window.__ask('bg', { cmd: 'idb-count', db: 'c10probe-part' }));
         row.partition = { crossOriginStage: crossCount, crossOriginEstimate: crossEst, sameOriginStage: sameCount };
-        log(`P3 ${head} partition ${JSON.stringify(row.partition)}`);
+        log(`P3 r${row.round} ${head} partition ${JSON.stringify(row.partition)}`);
         await page.evaluate(async () => { for (const n of ['c10probe-p3', 'c10probe-part', 'c10probe-p1']) await new Promise((r) => { const d = indexedDB.deleteDatabase(n); d.onsuccess = d.onerror = d.onblocked = r; }); });
 
         // 4. 隐身上下文
@@ -577,7 +586,7 @@ async function runP3() {
         await ip.goto(origin + '/', { waitUntil: 'load' });
         row.incognito = await ip.evaluate(async () => { const e = await navigator.storage.estimate(); return { quotaMiB: +(e.quota / 1048576).toFixed(1), usage: e.usage, persist: await navigator.storage.persist() }; });
         await ctx.close();
-        log(`P3 ${head} incognito ${JSON.stringify(row.incognito)}`);
+        log(`P3 r${row.round} ${head} incognito ${JSON.stringify(row.incognito)}`);
         rows.push(row);
         fs.writeFileSync(file, JSON.stringify(rows, null, 1));
       } finally { await browser.close().catch(() => {}); }
