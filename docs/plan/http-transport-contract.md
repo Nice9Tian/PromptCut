@@ -206,6 +206,7 @@
 
 - **取代** `PROMPTCUT_TEST_NO_LOOPBACK_TRUST`。旧名直接删，不留兼容。
 - 取值 `1`（回环来源算本机）或 `0`（不算）。缺省 `1`，本机开发、编辑器、本机起的托管组合都照旧。`deploy-hosted` 给阿里云生成的 pm2 配置写 `0`，正式实例与演练实例都写。
+- **「回环来源」按真正的发起方判断**〔裁：2026-09-27 主会话，按语义「本机」按真正的发起方判断改代码〕：`1` 时，套接字对端是回环，**而且**请求（HTTP 与 WebSocket 升级）里的转发头——`Forwarded` 的每个 `for=`、`X-Forwarded-For` 的每一跳、`X-Real-IP`——每一跳都是回环，才算本机；任何一跳不是回环（含 `for=unknown`、混淆名、主机名）就不算。只收紧、不放宽：对端不是回环的，转发头怎么写都不算本机；`0` 时照旧一律不算。链上全是回环（本机组件转本机）仍算本机。实现 `server/auth/origin.mjs` 的 `isLocalOrigin`，用在下面四处与编辑器的 `/api` 守卫（`http-guard.mjs` 的 `fromLocalClient`）；日志与限速用的来源在「对端回环而转发头说不是本机」时记成 `proxied:<对端>`（`remoteTagOf`），只凭来源地址判本机的地方（创建者操作的限速豁免）因此也不把它当本机。
 - `0` 时，下面四处一律不认回环为本机：
   1. **文档服务握手**：回环不带凭证不再得到本机身份，回 401；本机声明 `promptcut.tenant.*`、`promptcut.role.*` 不认；
   2. **共享 HTTP 端点**（`server/auth/http.mjs`）：按非回环来源处理，挑战与建项目照样受限速；
@@ -214,7 +215,7 @@
   回环也不再豁免限速。
 - **第 1 版之前的缺口**：旧开关只接到了素材服务与管理接口（`server/hosted/combo.mjs` 的 `isLoopbackReq`），没有传给 `createSharedDocService`，文档服务的握手与共享端点仍按套接字对端地址信任回环。阿里云上靠 nginx 的 `proxy_bind` 从内网地址连后端堵住了这个缺口（交接文档第 7 节）。本版要求开关接到上面四处。
 - 托管端自己的地址登记（素材服务向同机文档服务登记公网地址）一律带集群令牌。`0` 而没有集群令牌时拒绝启动，打 `config.error { reason: 'cluster-token-required' }`〔裁：`shared-project-contract.md` 第 10 节第 5 条原允许没令牌时以回环本机身份登记，`0` 下这条路不存在了〕。
-- 已知代价（不在本版解决）：反向代理之后，限速按来源地址算，经代理进来的请求都算成代理一个来源。
+- 已知代价（不在本版解决）：反向代理之后，限速按来源地址算，经代理进来的请求都算成代理一个来源（`1` 时记成 `proxied:<代理地址>`，与本机直连分开计）。转发头只用来收紧本机判断，不用来取真实来源：它可以伪造，取真实来源要先确定可信的代理，属「以后再做」那一项。
 
 ## 11. 验收
 
@@ -335,6 +336,7 @@ HT-a 由三条分支实现：服务端 `claude/http-transport`（报告 `docs/re
 2. **4410 的上报**：用户看得到的行为不许因会话层而变。脱开期间会话因「连着时收到也不会重连」的码结束（4003 踢人或移出、4004 删项目），接续得到 4410、`reason` 里带原关闭码时，客户端按原关闭码与原原因报 `onClose`，不走 4410 的重建，上层与连着时收到该码一样（页面照样弹「项目已删除」）；`reason` 里没有原关闭码、或原关闭码属于会重连的那类（1000、1001、1002、1006、1013 等），才报 4410 并重建。实现：`session-link.mjs` 的 `FINAL_CLOSE`（与页面 `link.ts` 的 `FATAL_CLOSE` 一致）与 `closedCodeOf()`；节点侧与页面 `SyncLink` 共用。对 `renew` 缺省为真的节点端点，报出原关闭码之后照连着时一样按退避建新会话。单测：`session-link.test.mjs` 的 SL-4410-final、SL-4410-final-renew、SL-4410-renew、SL-4410-expired，`session-link-page.test.mjs` 的 SL-page-final、SL-page-4410-renew。
 3. **没接会话层的调用方**：`server/card-sync.mjs`（编辑器进程与主机的卡片源码同步）、`scripts/probes/shared-project-lan.mjs`、`scripts/probes/render-host-probe.mjs`、`scripts/probes/c66-t9-probe.mjs` 的页面连接、管理接口的令牌连接（`asset-announce`）仍用 `createWsEndpoint`，不在第 2、15 节的接入清单里，这次不接。它们对新服务端是旧客户端（第 3.6 节），行为不变，只是传输断一次就断线。列为 HT-b 条目下的后续项（`docs/plan/TODO.md`）。
 4. **客户端的偏离接受**（第 17.2 节第 1～4 条）。
+5. **本机按真正的发起方判断**（第 10 节已写入）：对端回环且转发头每一跳都是回环才算本机，开关 `0` 时一律不算；只收紧不放宽。接到文档服务握手与共享端点（`shared-service.mjs` 的缺省 `isLoopback`、`remoteOf`，以及编辑器挂载的本地文档服务 `vite-plugin-docservice.ts`）、素材服务（托管组合的 `isTrusted`、编辑器里素材服务的缺省判据 `isLoopbackRequest`）、管理接口（托管组合 `adminAllowed`），另加编辑器 `/api` 守卫的 `fromLocalClient`。仓库里会给本机服务加转发头的一方核过：没有——vite 没配 `server.proxy`（无 `xfwd`）；舞台端口代理只写自己的 `x-pc-stage-client`（覆盖同名头），其余请求头原样转；测试与探针里仿 nginx 的前缀代理原样转发请求头、不加转发头；桌面壳（`desktop/src-tauri`）不做 HTTP 转发。所以桌面版的本机路径不受影响。单测 `server/test/local-origin.test.mjs`（直连回环算本机；回环套接字加外网 `X-Forwarded-For` 不算；全回环链算；`Forwarded`、`X-Real-IP` 同理；开关为 0 时都不算；三处在托管组合上逐一核对）。
 
 ### 17.2 客户端（`claude/ht-client`）与正文的出入、契约外的补充
 
