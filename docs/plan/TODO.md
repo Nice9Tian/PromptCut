@@ -24,6 +24,7 @@
 - **see_frames 回包附实体矩形**：原云端计划第 8 步，协议在 `docs/archive/restructure_planning/r2-r7-task.md` 的 D3，归 R 系列，可与云端计划并行推进。
 - **待用户定**：播放停顿期间要不要加音频看门狗，让音频立刻停。
 - **性能缺陷，M8 之前必修**（2026-09-27）：1080p 全幅流 15 帧分段编码在笔记本上 355～397 ms，门槛 300 ms（`stream-produce-probe`，C10a 报告第 2.13 节）。笔记本是性能基准机（`guide_files/verification.md`），在笔记本上修到过线，或经用户确认改门槛。
+- **维护项：在线构建剪掉置灰入口背后的调用**（C10 集成，2026-09-28）：在线页面上置灰的入口（导入媒体、语音识别、配音、改卡等，`docs/plan/c10-contract.md` 第 10 节）点了不发请求，但调用代码仍在在线构建的产物里，`/api` 棘轮清单（`server/test/c10a-online-api-paths.json`，120 条）因此一条没少。按编译期 `ONLINE` 把这些调用剪掉（做法同 `collab.ts`），让清单变短；清单只许减不许增。
 
 各步的详细状态见 `docs/archive/restructure_planning/hand_off.md`；独立复核的结论见 `docs/archive/restructure_planning/hunman_read.md`。
 

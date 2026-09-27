@@ -41,7 +41,7 @@ import { needsLocalPc, setOnlineBrowserMode } from "../render/placeholderHost";
 import { currentCosts, currentPlan, judgedPlan, lightCostAt, lowMemoryJudged, planLowMemoryLight, setPlanDeadMs, setPlanLowMemory, setPlanLowMemoryLight } from "./planDispatch";
 import { lowMemoryMeasuring, lowMemorySearchState, reclassify, runLowMemorySearch, type LowMemorySearchOutcome } from "./lowMemorySearch";
 import { LowMemoryGate } from "./LowMemoryGate";
-import { SHARED_COST_RELAY_MS, SharedCostRelay } from "./sharedCosts";
+import { SHARED_COST_RELAY_MS, SharedCostRelay, publishSharedCosts, toSharedInput, type SharedCostInput } from "./sharedCosts";
 import { clipIdentityOf } from "./costIdentity";
 import { pageEnvironment } from "./pageEnvironment.mjs";
 import { createMemoryCostStore, type CostStore } from "../render/boundarySearch.mjs";
@@ -54,7 +54,7 @@ import { createPlanPublisher } from "../online/planPublisher";
 import { CODE_VERSION } from "../online/buildInfo";
 import { backWorkDiag, startBackWorkGate } from "./backWorkGate";
 import { backStage } from "./stageBridge";
-import { onProbeProgress, probeFrameDiag, probeSettledFor, setCostBackend } from "./probeRunner";
+import { onCostRecords, onProbeProgress, probeFrameDiag, probeSettledFor, setCostBackend } from "./probeRunner";
 import { LOW_MEMORY_SETTLE_MS, type LowMemorySettleResult } from "../render/lowMemorySettle";
 
 /** 「进入项目时提示一次当前是低内存档」(c10a 第 8 节):一个页面会话只提示一次 */
@@ -67,6 +67,28 @@ let lowMemoryNoticeShown = false;
 let lowMemoryCostStore: CostStore = createMemoryCostStore();
 export function setLowMemoryCostStore(store: CostStore): void {
   lowMemoryCostStore = store;
+}
+
+/**
+ * 低内存档的本地复用接到页面内快照库 L2 的 `costs` 表(C10 集成:交接文件第 2.2 节第 3 条)。键形 `<identityKey>|<envFingerprint>`
+ * (`boundarySearch.mjs` 的 `localCostKey`),与普通档 K1 记录的键(`<identityKey>
+<device>`,`l2Costs.ts`)不相撞;
+ * 这些记录没有 `device`,普通档读 K1 记录时滤掉。L2 打不开(没有 IndexedDB、被浏览器拒)时退回页面内存。
+ */
+function l2LowMemoryCostStore(): CostStore {
+  const fallback = createMemoryCostStore();
+  const l2 = () => pageL2({ lowMemory: true }).catch(() => null);
+  return {
+    async getCost(key: string) {
+      const s = await l2();
+      return s ? s.getCost(key) : fallback.getCost(key);
+    },
+    async putCost(key: string, rec) {
+      const s = await l2();
+      if (s) await s.putCost(key, rec);
+      else fallback.putCost(key, rec);
+    },
+  };
 }
 
 /*
@@ -310,7 +332,20 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
   useEffect(() => {
     if (!ONLINE || lowMem) return;
     setCostBackend({ ...l2CostBackend(pageL2({ lowMemory: false })), forwardFrames: false });
-    return () => setCostBackend(null);
+    /*
+     * 测完写进文档服务(契约第 3 节、第 18 节第 7 条;交接文件第 2.2 节第 2 条):连着共享项目时,每测完一张卡当场转写一次。
+     * 下面的 `SharedCostRelay` 每 5 秒也会从分派表里补传(接上共享项目之前测过的、这里没发成的),两路都走也无害:
+     * 文档服务按测量时刻留最新。
+     */
+    const off = onCostRecords((records) => {
+      if (!hasDocLink() || !currentSharedLink()) return;
+      const projectId = currentDocProjectId();
+      if (!projectId) return;
+      const input = records.map((r) => toSharedInput(r)).filter((r): r is SharedCostInput => !!r);
+      if (!input.length) return;
+      void publishSharedCosts({ request: docRequest, projectId, environment: pageEnvironment(), records: input }).catch(() => undefined);
+    });
+    return () => { off(); setCostBackend(null); };
   }, [lowMem]);
   /* 低内存档切到后台时停预览(契约第 13 节 Q2 的采纳:后台计时器、rAF 都不保证继续,回来时从停着的地方接) */
   useEffect(() => {
@@ -862,6 +897,8 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
   const lowMemSearchRef = useRef<{ projectId: string; outcome: LowMemorySearchOutcome | null; running: boolean; waited: number } | null>(null);
   useEffect(() => {
     if (!online || !lowMem) return;
+    // 本地复用接 L2(要在第一次界限搜索之前接上,否则那一轮用页面内存)
+    setLowMemoryCostStore(l2LowMemoryCostStore());
     let disposed = false;
     const isUserCard = (cardId: string) => Object.prototype.hasOwnProperty.call(userCardSources().fileOf, cardId);
     const unsupported = (clip: { cardId?: string }) => needsLocalPc(clip.cardId, clip.cardId ? getCard(clip.cardId) : undefined, isUserCard);

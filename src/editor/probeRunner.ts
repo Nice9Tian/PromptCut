@@ -484,6 +484,8 @@ async function probeCardOnce(
       rasterMs: round(summary.rasterMs),
       serializeMs: round(summary.serializeMs),
       catchUpMs: round(summary.catchUpMs),
+      // 计时趟真实采到的帧数(共享成本记录要它;没有时转写按 `device` 串里的 stepN 记,见 `sharedCosts.ts` 的 `samplesOf`)
+      ...(summary.samples > 0 ? { samples: summary.samples } : {}),
       ...(capped ? { capped: true } : {}),
       kind,
       ...(typeof booleans.vtOk === "boolean" ? { vtOk: booleans.vtOk } : {}),
