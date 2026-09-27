@@ -20,22 +20,7 @@
 
 ## 提交
 
-```
-d92fd13 文档:AGENT-rq-m7-queue 报告(开工)
-87db46b 测试:M7 队列与凭证一侧的单测(修前 31 项失败)
-80c9e99 功能:切分对纯浏览器可做的卡按两种指纹各出一份(D1)
-d16fa27 功能:队列侧 M7(D1 D2 D9 D10)
-aeba51a 功能:队列模块在 node.hello 前按凭证定 profile、算指纹、非 Chromium、nodeId 绑定(D9 D10 D14)
-(session/filter import 那一提交)重构:session.mjs 与 filter.mjs 改从 constants / messages 取(D11、D1)
-(合并)合并 claude/rq-m7-tests(8f18461)
-90a7f8e 功能:filter 规则 7;页面读层表 v3;tier 那条 todo 改真跑
-fbefcac 重构:task-runner.mjs;local-node 改用它;idleLockTakeover;afterSplit
-38f87ac 功能:层表 v3 写入方;pc 与主机传 idleLockTakeover
-(测试)进程内的锁闲置接手与 afterSplit 时机
-(文档)auth-contract 第 5、6、8 节
-```
-
-（完整列表见文末「提交列表」，以 `git log --oneline 24c2c57..HEAD` 为准。）
+见文末「提交列表」。
 
 ## 验证
 
@@ -121,7 +106,9 @@ fbefcac 重构:task-runner.mjs;local-node 改用它;idleLockTakeover;afterSplit
 
 ## 探针
 
-见下（跑完补）。
+- `node scripts/probes/ready-index-probe.mjs --port 5720`（探针自己起 dev server，舞台 5721、5722）：退出码 0，`fails: []`。
+- `node scripts/probes/stream-produce-probe.mjs --origin http://127.0.0.1:5723 --group`（本 worktree 的 vite 起在 5723，舞台 5724、5725）：退出码 0，`fails: []`、`PASS`；组流三张卡、重启后 `producedAfterRestart: 0`。跑完只结束了自己起的那棵进程树（5723 的 vite 及其子进程）。
+- 两个探针都在 CPU 很忙时跑（十来个子 Agent 并行），没有带耗时门槛的判据。
 
 ## 需要主会话定的事
 
@@ -132,4 +119,21 @@ fbefcac 重构:task-runner.mjs;local-node 改用它;idleLockTakeover;afterSplit
 
 ## 提交列表
 
-（跑完探针后补全）
+`git log --oneline --first-parent 24c2c57..HEAD`（旧到新）：
+
+```
+d92fd13 文档:报告(开工)
+87db46b 测试:M7 单测(修前 31 项失败)
+80c9e99 功能:切分双份出键(D1)
+d16fa27 功能:队列侧 D1 D2 D9 D10
+aeba51a 功能:队列模块 D9 D10 D14、归属 browser
+8f177bd 重构:session.mjs / filter.mjs 的 import(D11)、会话传 browserFingerprints
+434441e 合并 claude/rq-m7-tests(8f18461)
+90a7f8e 功能:filter 规则 7;页面读层表 v3
+fbefcac 重构:task-runner.mjs、idleLockTakeover、afterSplit
+38f87ac 功能:层表 v3 写入方;pc 与主机传 idleLockTakeover
+23bd770 测试:进程内锁闲置接手、afterSplit 时机
+5243266 文档:auth-contract 第 5、6、8 节
+322bffe 文档:报告正文
+(本提交) 文档:报告补探针与提交列表
+```
