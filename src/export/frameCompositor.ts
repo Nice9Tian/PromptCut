@@ -32,6 +32,9 @@ type ExportWindow = Window & typeof globalThis & {
   __pcHideFrameMedia?: () => void;
   __pcLoadProject?: (p: unknown, o?: unknown) => Promise<void>;
   __pcRealRaf?: (cb: FrameRequestCallback) => number;
+  /** `?rafControl=1` 时由 `src/render/stageClockEntry.ts` 装:跑一轮排着的 rAF 回调(一拍),回跑了几个 */
+  __pcBrowserBeginFrame?: () => number;
+  __pcRafFallbacks?: number;
   __pcSetFrameWindow?: (clipIds: string[] | null, startTime: number, directTime?: number) => void;
   __pcRestartCards?: () => void;
   __pcResetAnims?: () => void;
@@ -57,19 +60,40 @@ export interface CompositorOptions {
 
 const EMPTY = (p: Project) => ({ width: p.width, height: p.height, fps: p.fps, duration: 1, tracks: [], media: [] });
 
-/** 同源导出页的地址:当前页面的路径 + `?export=1` + 空项目(项目随后经 `__pcLoadProject` 灌进去) */
+/**
+ * 同源导出页的地址:当前页面的路径 + `?export=1&rafControl=1` + 空项目(项目随后经 `__pcLoadProject` 灌进去)。
+ * `rafControl=1`:导出页的 rAF 由这里手动推(`src/render/stageClockEntry.ts`),一拍对应桌面导出的一次 beginFrame。
+ */
 export function exportPageUrl(project: Project, loc: Pick<Location, "origin" | "pathname"> = location): string {
   const timeline = "data:application/json," + encodeURIComponent(JSON.stringify(EMPTY(project)));
-  return `${loc.origin}${loc.pathname}?export=1&timeline=${encodeURIComponent(timeline)}`;
+  return `${loc.origin}${loc.pathname}?export=1&rafControl=1&timeline=${encodeURIComponent(timeline)}`;
 }
 
 /** 快照 HTML → 放进 SVG foreignObject 的 XHTML(外面包一层和舞台同尺寸的根) */
-export function sceneToSvg(nodes: Iterable<Node>, width: number, height: number): string {
+export function sceneToSvg(nodes: Iterable<Node>, width: number, height: number, css = ""): string {
   const ser = new XMLSerializer();
   let body = "";
   for (const n of nodes) body += ser.serializeToString(n);
+  const style = css ? `<style><![CDATA[${css.replace(/\]\]>/g, "]]]]><![CDATA[>")}]]></style>` : "";
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><foreignObject x="0" y="0" width="${width}" height="${height}">`
-    + `<div xmlns="http://www.w3.org/1999/xhtml" style="position:relative;width:${width}px;height:${height}px;overflow:hidden">${body}</div></foreignObject></svg>`;
+    + `<div xmlns="http://www.w3.org/1999/xhtml" style="position:relative;width:${width}px;height:${height}px;overflow:hidden">${style}${body}</div></foreignObject></svg>`;
+}
+
+/**
+ * 导出页的样式表全文(读得到规则的那些)。快照的样式内联按「和同标签基线比、相等就省」的口径
+ * (`src/render/snapshot/inlineStyles.ts`),基线含页面的全局样式(Tailwind 的 preflight:`box-sizing: border-box`、
+ * `margin: 0`、`border: 0 solid` 等),所以快照要挂在带同一套样式的页面里重放(舞台页就是这样)。
+ * SVG foreignObject 里没有页面样式,省掉的这些会退回浏览器缺省值 —— 实测 `box-sizing` 退回 `content-box`,
+ * 药丸、章节条的内边距被加在内联的宽高之外,整块变大。所以栅格化时把导出页的样式表一并放进去。
+ */
+export function pageCssText(doc: Document): string {
+  let out = "";
+  for (const sheet of Array.from(doc.styleSheets)) {
+    let rules: CSSRuleList;
+    try { rules = sheet.cssRules; } catch { continue; } // 跨源样式表读不到规则
+    for (const r of Array.from(rules)) out += r.cssText + "\n";
+  }
+  return out;
 }
 
 export class ExportCompositor {
@@ -79,7 +103,7 @@ export class ExportCompositor {
   private w: ExportWindow;
   private opts: CompositorOptions;
   private scratch: HTMLCanvasElement;
-  readonly stats = { frames: 0, stepMs: 0, snapshotMs: 0, mediaMs: 0, rasterMs: 0, heavyReplaced: 0, mediaFrames: 0 };
+  readonly stats = { frames: 0, stepMs: 0, snapshotMs: 0, mediaMs: 0, rasterMs: 0, heavyReplaced: 0, mediaFrames: 0, manualTicks: 0, rafFallbacks: 0 };
 
   private constructor(frameEl: HTMLIFrameElement, opts: CompositorOptions) {
     this.frameEl = frameEl;
@@ -129,8 +153,19 @@ export class ExportCompositor {
     if (this.opts.signal?.aborted) throw Object.assign(new Error("已取消"), { cancelled: true });
   }
 
-  /** 导出页里等一次真帧(浏览器里没有 CDP 的 beginFrame,rAF 就是那一拍) */
+  /**
+   * 导出页里推一拍。导出页带 `rafControl=1` 时手动跑一轮 rAF 回调,不等真 vsync —— Motion 的帧循环不会在合成期间自己多走;
+   * 没有手动推的口子(外部给的 exportUrl)时退回等一次真 rAF。
+   */
   private raf(): Promise<void> {
+    const begin = this.w.__pcBrowserBeginFrame;
+    if (typeof begin === "function") {
+      begin();
+      this.stats.manualTicks++;
+      this.stats.rafFallbacks = this.w.__pcRafFallbacks ?? 0;
+      // 回调里排的宏任务(React 调度器的 MessageChannel 等)让它落地,和等过一次真 rAF 之后的状态一致
+      return new Promise((resolve) => setTimeout(resolve, 0));
+    }
     const raf = this.w.__pcRealRaf ?? this.w.requestAnimationFrame.bind(this.w);
     return new Promise((resolve) => {
       let done = false;
@@ -190,6 +225,8 @@ export class ExportCompositor {
   }
 
   private warmed = -1;
+  /** 导出页的样式表全文,第一帧读一次(`pageCssText`) */
+  private css: string | null = null;
   /**
    * 从 `startFrame` 起一趟连续出帧之前的预热(照 `bake.mjs` 的 `__pcSetFrameWindow` + `warmUpAt`):全部卡按活跃判据挂载、
    * 时钟拨到起点、推 3 拍、重挂载卡片并清动画锚点、再推一拍。少了这一步,Motion 的弹簧等动画的锚点落在载入项目那一刻,
@@ -260,7 +297,8 @@ export class ExportCompositor {
 
     // 栅格化:整张快照 → SVG foreignObject(data 地址,不污染画布)→ 原尺寸画布
     t0 = performance.now();
-    const svg = sceneToSvg(tpl.content.childNodes, p.width, p.height);
+    this.css ??= pageCssText(doc);
+    const svg = sceneToSvg(tpl.content.childNodes, p.width, p.height, this.css);
     const img = new Image();
     img.decoding = "sync";
     img.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
