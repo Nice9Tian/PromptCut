@@ -17,7 +17,7 @@
 | 1 | 队列的 `profile: 'browser'` 与能力过滤 | 有 | `server/render-queue/messages.mjs:13`（`PROFILES` 含 browser）；`server/render-node/filter.mjs` 的 `DEFAULT_WEIGHT_POLICY.browser = ['light','medium']` 与规则 0～6（`checkClaimable`）；队列侧 `queue.mjs:702` browser 认领 plan 回 `plan-profile`、`:519` browser `watch 'all'` 回 forbidden；`server/docservice/modules/render-queue.mjs:196` browser 订阅摘要回 forbidden | `profile` 是 `node.hello` 自报的，`onNodeHello`（`queue.mjs:438-453`）照收，服务端不核对（D9） |
 | 2 | 按 userId 挡别人的任务（E5 两层） | 有 | 分发：`queue.mjs:107`（`canSee`）；认领：`queue.mjs:697-699`（回 `forbidden`，不带 state）；真凭证下「同名不同设备」已验：`server/test/auth-members.test.mjs:406` AU10；进程内：`render-queue-inproc` I5 | 没有「真页面当节点 + 第二成员」的端到端；同一 `nodeId` 的新连接直接取代旧连接，不看 userId（`queue.mjs:440-445`） |
 | 3 | light / medium 分级（B2） | 有（节点侧） | filter 规则 4；切分方给的重度 `server/frame-pipeline.mjs:2498-2504` `queueWeightClass`：本地档、canvasHeavy、belowDependent、unknown 记 heavy，其余 medium，没有 light；流任务走规则 2（要转码） | 无代码缺口。语义规定能力过滤由节点自己做，服务端不加 B2 闸（`product/document-service.md`「只记账，不分配」） |
-| 4 | 节点会话状态机能否在页面跑 | 部分 | `server/render-node/session.mjs` 本身纯逻辑，但第 1 行从 `../render-queue/index.mjs` 取常量，`index.mjs` 转出 `queue.mjs`，后者 `:23` 引 `node:crypto`；页面现在只直接引 `session-link.mjs`（`src/editor/sync/link.ts:21`）。`local-node.mjs` 经 `split.mjs` 引 `fingerprint.mjs:1`（`node:crypto`）；`content-client.mjs:15`、`server/asset-store/client.mjs:25` 同样引 `node:crypto` | 页面构建会不会因此失败：未证实。`session.mjs` 改从 `constants.mjs` 取常量（一行）即可去掉（D11） |
+| 4 | 节点会话状态机能否在页面跑 | 部分 | `server/render-node/session.mjs` 本身纯逻辑，但第 1 行从 `../render-queue/index.mjs` 取常量，`index.mjs` 转出 `queue.mjs`，后者 `:23` 引 `node:crypto`；页面现在只直接引 `session-link.mjs`（`src/editor/sync/link.ts:21`）。`local-node.mjs` 经 `split.mjs` 引 `fingerprint.mjs:1`（`node:crypto`）；`content-client.mjs:15`、`server/asset-store/client.mjs:25` 同样引 `node:crypto` | 页面构建会不会因此失败：未证实。`session.mjs` 改从 `constants.mjs` 取常量（一行）即可去掉（D11）。〔探针 P6 后更正：要改两处（另有 `filter.mjs`），风险是「在线构建不失败、开发服务器白屏」，见第 13 节「探针之后的更正」第 1 条〕 |
 | 5 | 页面拿认领用的凭证（子协议） | 有零件 | 页面连接上签 `auth.ticket { kind: 'conn', role: 'render' }` 服务端支持（`modules/shared.mjs:197-227`）；页面已这样签过 agent、page 票据（`src/editor/sync/syncManager.ts:386`、`:402`）；子协议 `promptcut.ticket.<票据>`（`server/auth/client.mjs:214` `ticketProtocols`；服务端 `handshake.mjs:195-198` 按 `kind: 'conn'` 核）；`node.hello` 只许 render 角色（`modules/render-queue.mjs:48` `mayRegisterNode`、`:274`）；连接票据 2 分钟（`auth-contract.md` 第 8 节）；会话层 `createDocEndpoint` 每建会话现取 `protocols()`（`http-transport-contract.md` 第 9 节） | 页面没有开 render 连接的代码 |
 | 6 | 后台舞台执行快照任务的执行器 | 部分（C10 分支） | 父页判空闲、经 RPC 开停：`c10-browser` `src/editor/backWorkGate.ts`、`StageView` 的 `backGate` 与 `setBackWork`；舞台逐帧 `setTimeout(0)`（`advanceToAsync` 的 `yieldEvery: ONLINE ? 1 : 8` 与 `gate`）；每控件快照 `createSnapshot` 的 `controls[].html`；大块产出压成可转移 `ArrayBuffer`（`compressHtml`、`probe-frame.htmlGz`）；后台活单飞队列 `src/editor/stageJobs.ts`，RPC 工作项早就留了 `'bake'`（`src/render/stageRpc.ts:26`，`stageJobs.ts:37` 注「J4」） | 没有生成快照 RPC：探针的快照趟受一拍预算截断、推的是整场景；桌面预渲染按隔离单卡工程、4 帧一批生成快照（`frame-pipeline.mjs:2220-2260`、`isolatedCardProject` `:2598-2630`），页面没有对应物。桌面只把**独立卡**的页面测量帧当预渲染结果（`server/vite-plugin-frames.ts:1205` `NOT_INDEPENDENT`） |
 | 7 | 产物推送（写票据） | 部分 | 写票据 `auth.ticket { kind: 'asset', access: 'rw' }` 页面签过（`src/editor/media/assetTiers.ts:471`，桌面转交编辑器进程上传）；素材服务分片接口（`server/asset-service.ts` 文件头：`GET <ns>/<hash>/chunks`、`PUT <ns>/<hash>/<n>`、`POST <ns>/<hash>/complete`，snap 同规则）；续签器 `c10-browser` `src/export/ticketRenewal.ts` | 在线页面不上传（C10 第 10 节）；Node 客户端 `asset-store/client.mjs` 进不了页面。要一个页面上传器 |
@@ -94,13 +94,13 @@
 - 建议队列在认领建锁时，把同锁键、异指纹、`input.dual` 为真、还是 `open` 的任务作废（`failed: superseded`，照 `takeoverLock` 的收尾，`queue.mjs:343-369`；不发 `lease-lost`，它们没人认领），免得死任务堆到 `MAX_TASKS_PER_PROJECT`。不带 `dual` 的任务行为不变。
 - 效果：宿主闲着就由它做，浏览器闲着也能抢，按卡分开，一层只出自一种环境；浏览器没认领就走了，切分方那一份照常接住。
 - 其余照旧：已锁在别的环境上的卡按锁出键（契约 F.2、F.7）。
-- 可选优化：独立卡在测量时推过的帧，环境、代码都与浏览器那一份相同，认领到时可以直接用，不重渲（语义「用上前端的算力」；要探针 P2 证明测量路与生成快照路出的帧相同）。
+- （原有一条「可选优化：复用测量时推过的帧」，已删：探针 P2 实测测量快照趟每张卡只产出 0～1 帧，见第 13 节「探针之后的更正」第 9 条。）
 
 ### 3.4 锁闲置接手（建议：D2）
 
 - 队列在 `card-locked` 的发布回包与认领回包里另带 `lockIdleMs`（此刻减 `touchedAt`）与 `lockedByProfile`。
 - pc、host 切分时：`lockIdleMs > CARD_LOCK_IDLE_MS`（30 s，与本机锁库同一个数，`server/card-lock.mjs`）就带 `takeover` 按自己的指纹重发（给 `local-node.mjs` 的 `takeoverLocked` 传判定函数）。
-- 建议续约（`task.progress`）也刷新 `touchedAt`：一段 60 帧的重卡在浏览器上要 8～15 s（C10 探针 P2：重场景每秒 4～8 帧），产出中不该被判闲置。
+- 建议续约（`task.progress`）也刷新 `touchedAt`：一段 60 帧的重卡在浏览器上要几秒到几十秒（M7 探针 P1 实测：每帧烧 40 ms 的推帧卡顺推约 3 s；Lottie 约 50 s 且每帧超 300 KB 被丢弃，这类卡不派给浏览器，见第 13 节「探针之后的更正」第 6 条），产出中不该被判闲置。
 - 限制：接手只在有人重新切分时发生（有页面或编辑器发布新计划）。没人发布时，锁在走掉的浏览器身上的卡一直缺。M7 接受并写进报告，M8 混沌项复测。
 
 ### 3.5 顺序与并发
@@ -126,7 +126,7 @@
 - `stageJobs` 加第四种活 `bake`，最不急：补跑 > 测量 > 探针 > 生成快照；RPC 工作项用早留的 `'bake'`。
 - 新 RPC `bake({ project, clipId, from, to, fps })`，舞台做：
   - 载入**隔离单卡工程**，与桌面 `isolatedCardProject` 同一变换。建议把这个函数挪进页面与服务端共用的纯模块，桌面改引它（G0-R 守住输出不变）；它要的 `start`、`end`、`count`、`sampling` 由切分方写在浏览器那一份的 `input.bake` 里，页面不算 `cardSampling`；
-  - 推帧口径与桌面一致：批起点按 4 帧对齐、每批从头推（`frame-pipeline.mjs:2231-2244`），或由探针 P2 证明逐帧顺推结果相同；
+  - 推帧口径：逐帧顺推（探针 P2 证明 DOM、Motion 独立卡与桌面 4 帧一批从头推等价、便宜 4～7 倍；画布卡不等价，不进浏览器）；每帧先过与 `waitFrameReady` 相同的就绪闸，超时这一段 `fail`，不出空白帧（第 13 节「探针之后的更正」第 2、3 条）；
   - 不受一拍预算截断；帧间查停止标志（`backGate`）；`setTimeout(0)` 逐帧；
   - 每帧生成快照，取本控件的 `html`；有读不出像素的画布（`lossy`）这一段 `fail`（不可重试，同 `server/bakery/bake.mjs:225`）；
   - 每帧发事件 `bake-frame { clipId, localFrame, hash, bytes, htmlGz, small? }`：`hash` 是原始 HTML 字节的 sha256（舞台里用 WebCrypto 算），`htmlGz` 随消息转移。
@@ -135,7 +135,7 @@
 ### 4.4 小尺寸（D5 建议选项 a）
 
 - 舞台把这一帧的 HTML 快照按 `smallScale`（等比缩进 800×600 以内，`small-bitmap.mjs`）包进 SVG `foreignObject`，以 `data:` 地址画上画布，出 WebP（质量 80，c10a 第 9 节）。原尺寸 HTML 不变。
-- 卡片自带的外部字体（如 KaTeX）在这条路上会退回系统字体（`frameCompositor.ts` 文件头）。差多少由探针 P3 量出，写进报告。
+- `foreignObject` 里必须内嵌页面的全局样式表（快照省略的属性靠它补）。外部字体在这条路上会退回系统字体，只影响用户卡（内置卡只用系统字体，用户卡不进浏览器）；带样式表之后内置卡与桌面 CDP 截的小位图差 ≤ 0.9% 像素（探针 P3，第 13 节「探针之后的更正」第 5 条）。
 
 ### 4.5 父页
 
@@ -352,3 +352,20 @@ G0 + G0-R（改了预渲染与快照路径）；桌面导出像素基线不变�
    - 修改后：「纯浏览器节点的环境指纹由文档服务按页面报来的原始值算，页面不自己算；一期只在 Chromium 内核的浏览器上当节点。」
 
 **开工顺序**：C10 合入 main 之后，先派第 8 节的可行性探针（`claude/m7-probe`，`opus-dev`，端口 5710～5719）答 P1～P6，按结果改本文再派实现三个分支（第 9 节）。
+
+### 探针之后的更正（〔裁〕，2026-09-28，PC 主会话；非语义）
+
+依据：`docs/reports/AGENT-m7-probe.md`（分支 `claude/m7-probe`）「对 M7 契约的更正建议」。主会话逐条裁定照做，页面侧由 `claude/rq-m7-node` 落实（下表「落实」列）。
+
+| # | 改哪里 | 更正 | 落实 |
+|---|---|---|---|
+| 1 | D11、第 0 节第 4 行 | 要改两处 import：`session.mjs` 改从 `constants.mjs`、`filter.mjs` 改从 `messages.mjs`（队列分支已改）。风险改述为「在线构建不失败（摇树），但开发服务器整页白屏」 | 守门测试 `src/pageNodeImports.test.mjs`：从 `src/main.tsx` 起顺着静态 import 走遍页面会载入的模块（`src/` 与 `server/`），出现 Node 内置模块就判红并给出引用链（变异验证：`session.mjs` 改回引 `index.mjs` 即红） |
+| 2 | D3、第 4.3 节 | 生成快照每一帧先等与 `waitFrameReady` 同样的就绪（控件异步活、字体、图片），等待期间照常 tick；超时（20 s）或控件报错就 `fail` 这一段，不出空白帧 | 舞台 `bakeFrame` 的就绪闸，不就绪回 `not-ready`，节点按可重试失败交回（同桌面 `waitFrameReady` 抛错） |
+| 3 | 第 4.3 节 | 用逐帧顺推（DOM、Motion 卡与桌面等价且便宜 4～7 倍）；`canvasHeavy` 卡顺推不等价，节点侧 `filter.mjs` 的纯浏览器规则再挡一次 | 缺省 `mode: 'seq'`；`filter.mjs` 规则 7 加 `canvas-heavy`；切分也不给浏览器另出画布卡那一份 |
+| 4 | D1 (d)、D10 | 在线构建关掉 CSS 压缩，再用 `m7-bake-probe` 的 compare 比在线构建与桌面；`will-change` 若仍有差异照实报，是否在快照序列化里去掉它另定（会让现有快照键一次性失效） | `vite.config.ts` 在线构建 `build.cssMinify: false`，另关 Tailwind 插件的构建期优化（`optimize: false`：Lightning CSS 不压缩也把 `0.4` 改写成 `.4`）。compare 结果见 `docs/reports/AGENT-rq-m7-node.md`：ticker、slow 60/60 逐字节相同；pill 46/60 相同，其余 14 帧只差 `will-change`（未动） |
+| 5 | D5、第 4.4 节 | 小尺寸必须内嵌页面的全局样式表；外部字体的顾虑改述为「只影响用户卡」 | `src/render/bakeSmall.ts` 把舞台页的样式表整份放进 `foreignObject` |
+| 6 | 第 3.4 节 | 「60 帧 8～15 s」换成实测（40 ms 推帧卡约 3 s；Lottie 约 50 s 且每帧超 300 KB 被丢弃）；切分方不把这类卡（Lottie 素材卡、预计帧超体积上限的）派给纯浏览器 | `split.mjs` 的浏览器可做判定挡掉 `lottie` / `lottie-*`、画布卡、执行器标了 `snapshotOversize` 的卡（只出切分方那一份） |
+| 7 | （M7 之外） | 在线构建与托管端没带 `/catalog/`，Lottie 素材卡在线是空白 | 主会话另派人修；修之前第 2 条的就绪闸把这些段 `fail` 掉（实测 `not-ready: 控件尚未就绪 (lottie): HTTP 404`） |
+| 8 | 第 4.5 节 | 上传器按哈希单飞；`complete` 回 `incomplete` 时先重查 chunks 再重试 | `src/online/snapUploader.ts` |
+| 9 | 第 3.3 节 | 删掉「复用测量帧」这项优化 | 已删 |
+| 10 | 第 2、5 节 | 冻结后恢复一律当重连；可选：监听 `freeze` 事件，再试一次 release | 宿主听 `freeze` 再尽力放回一次；`resume` 时结束这条 render 会话、马上重建、重新报到 |
