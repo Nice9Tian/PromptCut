@@ -167,13 +167,13 @@ M8 本身的探针分支（第 6 节）不依赖 C10、M7 合入，可以现在�
 - **判据**（同 X7 加 E3）：两端重连后 epoch 变了；旧认领回 `lease-lost { reason: 'epoch' }`；发布方重新发布后全部完成；重启前已在素材服务里的任务直接完成、不重渲；在线页面恢复同步、没有丢改动（重启前页面的最后一次提交在重启后可读）；J-全完、J-恰一（按 epoch 计）、J-纯层。
 - **证据**：重启时刻与 `pm2 describe` 的重启次数；前后 epoch；各节点 `stats`；页面的同步状态记录。重启断开所有连接，时间与影响写进报告（主执行计划第 0.3 节）。
 
-#### C3 代理丢包 10%
+#### C3 代理扰动 10% 的数据块（原任务书叫「代理丢包 10%」）
 
-- **本机代理用哪个**：`scripts/probes/render-queue-proxy.mjs --loss 0.1`（任务书 E2「代理丢包」原本就指它）。它在 TCP 之上转发，**不真丢字节**（丢了会破坏 WebSocket 帧），而是把 10% 的数据块扣住 200～1000 ms 再按序发，模拟 TCP 重传造成的队头阻塞。
+- **本机代理用哪个**：`scripts/probes/render-queue-proxy.mjs --stall-prob 0.1`（旧名 `--loss` 仍认；任务书 E2「代理丢包」原本就指它）。它在 TCP 之上转发，**不真丢字节**（丢了会破坏 WebSocket 帧），而是把 10% 的数据块扣住 200～1000 ms 再按序发，模拟 TCP 重传造成的队头阻塞。
 - **谁跑**：笔记本（代理在笔记本上，主机经 `127.0.0.1:5596` → 阿里云 8787；放本机时 → PC 局域网主机）；PC 发布。
-- **命令形状**：`node scripts/probes/render-queue-proxy.mjs --listen 127.0.0.1:5596 --target 8.219.80.16:8787 --loss 0.1`；主机的共享项目配置 `url` 指向代理（同 `ht-w-probe.mjs --cut proxy` 的配法）。
+- **命令形状**：`node scripts/probes/render-queue-proxy.mjs --listen 127.0.0.1:5596 --target 8.219.80.16:8787 --stall-prob 0.1`；主机的共享项目配置 `url` 指向代理（同 `ht-w-probe.mjs --cut proxy` 的配法）。
 - **补充（可选）**：真正的内核层丢包，在阿里云上用 `tc qdisc … netem loss 10%`，只对 8787 / 8788 的出方向（加过滤，不碰 22 端口），并用 `timeout` 或一次性 `at` 任务保证到时自动删掉。先预检 `sch_netem` 模块在不在（P-C3，第 4 节）；不在就不做，只记差异。
-- **判据**：J-全完、J-恰一、J-纯层；任务不因丢包被误判失败（`attempts` 不异常增加）；记录总耗时与无丢包时的比值（只记录，不设门槛）。
+- **判据**：J-全完、J-恰一、J-纯层；任务不因数据块受扰被误判失败（`attempts` 不异常增加）；记录总耗时与不扰动时的比值（只记录，不设门槛）。
 - **证据**：代理的 `summary` 行（扣住的块数、时长）；探针结果行；若做了 netem，`tc -s qdisc` 的丢包计数。
 
 #### C4 放本机的项目的主机素材服务重启（必须 PC）
@@ -234,6 +234,11 @@ M8 本身的探针分支（第 6 节）不依赖 C10、M7 合入，可以现在�
 | `REPORT-C10a.md` 第 5 节 | 真手机扫码（iPhone 相机、微信）；iOS 逐帧导出的最长时长与体积 | 不能由会话替代，记待用户项（第 8.3 节）；可选：笔记本 Chrome 用手机视口加 CPU 节流跑 `c10a-demo-probe`（只作参考） | — |
 | `REPORT-M6.md` 第 2 节 | H5、H6、H9、H10 只有单进程测试 | 可选顺带：E1 放云端那一遍里加 `render-host-probe.mjs --role auth-check --rate-limit` 从笔记本跑（H4、H7、H8 的跨机部分） | 不是遗留，只是顺带再证 |
 | `HANDOFF-2026-09-28.md` 第 6 节 | 1080p 编码、`tiers-probe` T4 | 第 2.7 节 | — |
+| `REPORT-M5.md`（M5a 部分） | X6「物理断网后接手」当时用代理模拟断开，没有真断网 | C1（笔记本断网 30 s） | 总报告骨架查出的缺口，2026-09-28 补 |
+| 各阶段 | 两台真不同环境指纹的机器之间从没跨机测过（PC 与笔记本指纹相同） | E6（测试开关与纯浏览器节点两种，D12） | 真不同指纹的两台机器仍记待跨机复核；2026-09-28 补 |
+| `REPORT-M5.md`（M5b 部分、W4） | W4 要求的跨机 E1、E2、E6、K1 没有报告 | E1、E2、E6、K1-X | 2026-09-28 补 |
+| `HANDOFF-http-transport.md`、`REPORT-HT-a.md` 第 2 节 | HT 第一版 HT6：云端节点经 HTTP 加入并认领 | 归 HT-b（`TODO.md`），M8 不做 | HTTP 长轮询传输本身在 HT-b；2026-09-28 补 |
+| `REPORT-C6.6.md` | T9「改卡后 5 s 内重测」 | 第 2.7 节（笔记本判） | 2026-09-28 补来源 |
 
 ## 4. 要新写或改的探针（按依赖排序）
 
@@ -258,7 +263,7 @@ M8 本身的探针分支（第 6 节）不依赖 C10、M7 合入，可以现在�
 - **P-C1 查了资料、还要实测**（codex 检索微软文档）：新加的阻止规则不会当场拆掉已建立的连接；这条连接的下一个包触发重新授权，那时才被拦。长连接有心跳，所以第 1 种做法在一个心跳间隔内生效；空闲连接不保证。只加入站规则代替不了出站那一层的重新授权。笔记本上的实测仍按上表做，量「加规则到断流」的秒数。
 - **C3 的代理做法与资料一致**：用户态代理丢字节会打乱 WebSocket 帧，只能扣住再按序发、或按概率断开；报告里叫「10% 的数据块受扰」，不叫「10% 丢包」。真丢包用上一条的 netem。
 
-**可直接用于 M8 的现有探针**（不改）：`render-queue-e2e.mjs`（假任务的 E1、C2 的 epoch 重发）、`render-queue-proxy.mjs --loss`（C3）、`ht-w-probe.mjs --cut external`（C5-1）、`render-host-probe.mjs`（`--hosted`、`--lan`、`auth-check`）、`shared-project-probe.mjs --mode internet\|lan`（异地接入、SP4 回归）、`asset-lan-probe.mjs`（C4 之后）、`queue-mode-probe.mjs --lan --docservice-url --hold-min`（W4 形态的真实预渲染回归）、`probe-coord.mjs`（信箱与 KV，阿里云 `/coord`）、`ws-client-test.mjs`（握手冒烟）、`card-sync-probe.mjs`（卡片同步回归）、`stream-produce-probe.mjs`、`tiers-probe.mjs`、`tier-switch-probe.mjs`、`longtask-stacks.mjs`（第 2.7 节）、G0-R 的四个预渲染探针；C10 与 M7 交付的 `c10-browser-probe.mjs`（`--site`、`--role host` 由 `claude/c10-site` 加）、`c10-ui-probe`、`c10-cost-probe`、`lowmem-online-probe`、`small-tier-probe`、`c10a-demo-probe`、M7 的探针。
+**可直接用于 M8 的现有探针**（不改）：`render-queue-e2e.mjs`（假任务的 E1、C2 的 epoch 重发）、`render-queue-proxy.mjs --stall-prob`（C3）、`ht-w-probe.mjs --cut external`（C5-1）、`render-host-probe.mjs`（`--hosted`、`--lan`、`auth-check`）、`shared-project-probe.mjs --mode internet\|lan`（异地接入、SP4 回归）、`asset-lan-probe.mjs`（C4 之后）、`queue-mode-probe.mjs --lan --docservice-url --hold-min`（W4 形态的真实预渲染回归）、`probe-coord.mjs`（信箱与 KV，阿里云 `/coord`）、`ws-client-test.mjs`（握手冒烟）、`card-sync-probe.mjs`（卡片同步回归）、`stream-produce-probe.mjs`、`tiers-probe.mjs`、`tier-switch-probe.mjs`、`longtask-stacks.mjs`（第 2.7 节）、G0-R 的四个预渲染探针；C10 与 M7 交付的 `c10-browser-probe.mjs`（`--site`、`--role host` 由 `claude/c10-site` 加）、`c10-ui-probe`、`c10-cost-probe`、`lowmem-online-probe`、`small-tier-probe`、`c10a-demo-probe`、M7 的探针。
 
 **不用于 M8**：流与画面的原型探针（`stream-*`、`gl-*`、`pixelmap-*`、`backdrop-*`、`oac-probe` 等）、`snapshot-*`、`audio-determine-probe` —— 与多端联调无关。
 
