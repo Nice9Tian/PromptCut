@@ -7,8 +7,15 @@ import { mediaUrlFromPath, restoreMediaUrls } from "./mediaUrls";
 import { dropPythonNodes, publishPythonDrop } from "./pythonDrop";
 import { adoptServerMedia, applyUploadedMedia, uploadMediaFile } from "./mediaUpload";
 import { prerenderBase } from "../../render/prerender";
-import { exportGate } from "../media/assetTiers";
-import { awaitingUploaderMessage } from "../../render/mediaTier";
+import { assetAuthHeaders, docRequest, exportGate, hasDocLink, remoteAssetBase } from "../media/assetTiers";
+import { awaitingUploaderMessage, remoteMediaUrl, mediaTierPolicy } from "../../render/mediaTier";
+import { ONLINE } from "../../online/mode";
+import { activeOnlineSource } from "../../render/snapshotSource";
+import { MemorySink, type MuxSink } from "../../export/mp4Mux";
+import { runBrowserExport } from "../../export/browserExport";
+import { ONLINE_EXPORT_TEXT } from "../../export/text";
+import { currentPlan } from "../planDispatch";
+import { pushToast } from "../sync/syncManager";
 
 // 模块级变量存 File，供阶段 2 导出时使用
 const mediaFiles = new Map<string, File>();
@@ -331,8 +338,10 @@ export async function exportVideo(
     onProgress?: (done: number, total: number, stage?: "render" | "compose") => void;
     /** 拿到任务 id 就能取消了,所以在开跑那一刻先回给调用方 */
     onStart?: (id: string) => void;
-  } = {},
+  } & OnlineExportOptions = {},
 ): Promise<{ outDir: string; id: string }> {
+  // c10a 第 11.1 节:在线页面没有预渲染进程,在浏览器里逐帧导出
+  if (ONLINE) return exportVideoOnline(opts);
   const p = JSON.parse(JSON.stringify(getState().project)) as Project;
   // C6.6「导出只用原片」:原片在当前素材服务上还没 complete 的,导出前拦下,提示等待上传方,不拿小版代替
   const missing = await exportGate(p);
@@ -430,6 +439,8 @@ function exportJobUrl(id: string, suffix = ""): string {
 
 /** 中止一次导出。渲染进程和它拉起的 Chrome / ffmpeg 都会被结束。 */
 export async function cancelExport(id: string): Promise<void> {
+  const online = onlineJobs.get(id);
+  if (online) { online.controller.abort(); return; }
   await fetch(exportJobUrl(id), { method: "DELETE" }).catch(() => {});
 }
 
@@ -440,6 +451,11 @@ export async function revealExport(id: string): Promise<void> {
 
 /** 取回某个产物(preview.mp4 / overlay.mov),用来写进用户选的位置 */
 export async function fetchExportFile(id: string, name: string): Promise<Blob> {
+  const online = onlineJobs.get(id);
+  if (online) {
+    if (!online.blob) throw new Error("这次导出已经直接写到选的文件里了");
+    return online.blob;
+  }
   const r = await fetch(exportJobUrl(id, `/file/${encodeURIComponent(name)}`));
   if (!r.ok) throw new Error(`取不到 ${name}:${await r.text()}`);
   return r.blob();
@@ -447,6 +463,12 @@ export async function fetchExportFile(id: string, name: string): Promise<Blob> {
 
 /** Stream a finished export directly into a File System Access writable. */
 export async function streamExportFile(id: string, name: string, writable: FileSystemWritableFileStream): Promise<void> {
+  const online = onlineJobs.get(id);
+  if (online) {
+    // 在线导出:已经直接写进选的文件的,这里什么都不用做;攒在内存里的,整块写过去
+    if (online.blob) await writable.write(online.blob);
+    return;
+  }
   const r = await fetch(exportJobUrl(id, `/file/${encodeURIComponent(name)}`));
   if (!r.ok) throw new Error(`取不到 ${name}:${await r.text()}`);
   if (!r.body) throw new Error(`取不到 ${name}:响应没有数据流`);
@@ -460,6 +482,108 @@ export async function streamExportFile(id: string, name: string, writable: FileS
   } finally { reader.releaseLock(); }
 }
 
+/* ------------------------------------------------------------------ *
+ * 在线页面的逐帧导出(`docs/plan/c10a-contract.md` 第 11.1 节;流水在 `src/export/browserExport.ts`)
+ * ------------------------------------------------------------------ */
+
+export interface OnlineExportOptions {
+  /**
+   * 「另存为」拿到的落点:给了就边编边按位置写进去(`showSaveFilePicker` 的流式写),回包带 `written: true`,
+   * 调用方**不要**再 `streamExportFile`(那会把刚写好的文件换成空的)。不给就攒在内存里,由 `streamExportFile` /
+   * `fetchExportFile` 取走;这个浏览器连「另存为」都没有(iOS)时攒成 Blob 直接下载。
+   */
+  target?: FileSystemFileHandle | null;
+  /** 导出前核对没过(素材原尺寸没传完、重卡缺预渲染原尺寸)时给用户看的话;null = 过了 */
+  onWaiting?: (message: string | null) => void;
+  /** 探针:只导前 n 帧 */
+  maxFrames?: number;
+}
+
+interface OnlineJob {
+  controller: AbortController;
+  blob: Blob | null;
+}
+/** 在线导出任务:取消、取件都按 id 找回来(和桌面的 `jobBase` 同一个口径) */
+const onlineJobs = new Map<string, OnlineJob>();
+let onlineSeq = 0;
+
+/** 这个浏览器有没有「另存为」(没有的是 iOS 这类,只能攒成 Blob 下载) */
+const canPickFile = () => typeof (globalThis as { showSaveFilePicker?: unknown }).showSaveFilePicker === "function";
+
+function downloadBlob(blob: Blob, name: string) {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 60_000);
+}
+
+/** 这个项目里页面自己判重的片段(还没有渲染节点的层表时,导出前核对按它算缺) */
+function heavyClipsOfPlan(p: Project): string[] {
+  const plan = currentPlan() as { prerenderSet?: Iterable<string> } | null;
+  const set = plan?.prerenderSet ? new Set(plan.prerenderSet) : null;
+  if (!set) return [];
+  return p.tracks.flatMap((tr) => tr.clips).map((c) => c.id).filter((id) => set.has(id));
+}
+
+async function exportVideoOnline(opts: {
+  onProgress?: (done: number, total: number, stage?: "render" | "compose") => void;
+  onStart?: (id: string) => void;
+} & OnlineExportOptions): Promise<{ outDir: string; id: string; written?: boolean }> {
+  const p = JSON.parse(JSON.stringify(getState().project)) as Project;
+  const id = `online-${Date.now().toString(36)}-${++onlineSeq}`;
+  const job: OnlineJob = { controller: new AbortController(), blob: null };
+  onlineJobs.set(id, job);
+  opts.onStart?.(id);
+  // 导出期间暂停预览,并释放小尺寸缓存(契约第 11.1 节)
+  if (getState().playing) actions.pause();
+  activeOnlineSource()?.clearCache();
+
+  const writable = opts.target ? await opts.target.createWritable() : null;
+  const memory = writable ? null : new MemorySink();
+  const sink: MuxSink = writable
+    ? { write: (data, position) => writable.write({ type: "write", position, data: data as unknown as BufferSource }) }
+    : memory!;
+  const remote = mediaTierPolicy().remote ?? (remoteAssetBase() ? { base: remoteAssetBase()!, ticket: null } : null);
+  const name = `${(p.name || "PromptCut").replace(/[\\/:*?"<>|]+/g, "_")}.mp4`;
+  let waitingShown = "";
+  try {
+    const result = await runBrowserExport({
+      project: p,
+      sink,
+      signal: job.controller.signal,
+      maxFrames: opts.maxFrames,
+      onProgress: (done, total) => opts.onProgress?.(done, total, "render"),
+      onWaiting: (message) => {
+        opts.onWaiting?.(message);
+        if (!opts.onWaiting && message && message !== waitingShown) pushToast(message, "warn", 8000);
+        waitingShown = message ?? "";
+      },
+      confirm: (message) => window.confirm(message),
+      notify: (message, tone) => pushToast(message, tone ?? "info"),
+      checkMediaOriginals: () => exportGate(p),
+      originals: hasDocLink() ? { request: docRequest, assetBase: remoteAssetBase, authHeaders: assetAuthHeaders } : null,
+      fallbackHeavy: () => heavyClipsOfPlan(p),
+      // 导出只用素材原尺寸:原片地址换成远程素材服务的取回地址(只读票据走查询串,`<video>` 带不了头)
+      mediaUrl: remote ? (url) => remoteMediaUrl(url, remote) : undefined,
+    });
+    if (writable) await writable.close();
+    else {
+      job.blob = memory!.blob();
+      if (!canPickFile()) downloadBlob(job.blob, name);
+    }
+    pushToast(`${ONLINE_EXPORT_TEXT.done}(${result.frames} 帧,${(result.bytes / 1024 / 1024).toFixed(1)} MB)`, "info");
+    return { outDir: "", id, written: !!writable };
+  } catch (e) {
+    try { await writable?.abort?.(); } catch { /* 已经关了 */ }
+    const err = e as Error & { cancelled?: boolean };
+    pushToast(err.cancelled ? ONLINE_EXPORT_TEXT.cancelled : ONLINE_EXPORT_TEXT.failed(err.message), err.cancelled ? "info" : "warn");
+    throw err.cancelled ? Object.assign(new Error(ONLINE_EXPORT_TEXT.cancelled), { cancelled: true }) : err;
+  }
+}
+
 declare global {
   interface Window {
     __pcIo?: Record<string, unknown>;
@@ -469,4 +593,24 @@ declare global {
 if (typeof window !== "undefined") {
   // 临时验证出口：puppeteer 无头验证时直接调用这四个函数（不用模拟 <input type=file>）。
   window.__pcIo = { importVideoFiles, importProjectFile, importSrtFile, parseSrt, exportProjectJson, exportVideo, setMediaTranscript: (mediaId: string, transcript: any) => actions.setMediaTranscript(mediaId, transcript) };
+  // c10a 探针(`scripts/probes/lowmem-export-probe.mjs`):在当前页面上跑一次浏览器逐帧导出,回产物字节(base64)与统计。
+  // 不经「另存为」、不下载;`originals: false` 时重卡照活渲(桌面运行环境没有渲染节点的层表)
+  window.__pcIo.exportVideoBrowser = async (o: { maxFrames?: number; originals?: boolean } = {}) => {
+    const p = JSON.parse(JSON.stringify(getState().project)) as Project;
+    const sink = new MemorySink();
+    const controller = new AbortController();
+    const waits: string[] = [];
+    const result = await runBrowserExport({
+      project: p, sink, signal: controller.signal, maxFrames: o.maxFrames,
+      onWaiting: (m) => { if (m) waits.push(m); if (waits.length > 3) controller.abort(); },
+      confirm: () => true, notify: () => {},
+      checkMediaOriginals: () => exportGate(p),
+      originals: o.originals && hasDocLink() ? { request: docRequest, assetBase: remoteAssetBase, authHeaders: assetAuthHeaders } : null,
+      fallbackHeavy: () => heavyClipsOfPlan(p),
+    });
+    const bytes = sink.bytes();
+    let bin = "";
+    for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+    return { result, waits, base64: btoa(bin) };
+  };
 }
