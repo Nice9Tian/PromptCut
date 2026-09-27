@@ -253,7 +253,8 @@ export function layerObservations(tasks, completedBy, nodeFingerprints, layerOf 
  * 假细任务（不渲染，按 `render-queue-e2e.mjs` 的写法由假节点睡一会儿就完成）：每层一个结果键、切成若干段，
  * 每段要求这一层的指纹（`requires.envFingerprint`），用来在不起 Chrome 的情况下证 J-全完、J-恰一、J-纯层。
  * 形状同 `server/test/fake-ws-kit.mjs` 的 snapshotTaskInput（契约 A.4：id = `snapshot:<resultKey>:<from>-<to>`）。
- * @param {{ run: string, projectId: string, layers: Array<{ fingerprint: string | null, segments: number }>, framesPerSegment?: number, projectRev?: number }} o
+ * @param {{ run: string, projectId: string, layers: Array<{ fingerprint: string | null, segments: number, extra?: object }>, framesPerSegment?: number, projectRev?: number }} o
+ *   `layer.extra` 浅合并进这一层的每个任务（例如 m8-scale 的卡片级指纹锁要 `tier: 'local'` 与 `input.entryKey / contentKey`，契约 F.1）
  */
 export function fakeLayerTasks({ run, projectId, layers, framesPerSegment = 60, projectRev = 1 }) {
   const tasks = [];
@@ -267,6 +268,7 @@ export function fakeLayerTasks({ run, projectId, layers, framesPerSegment = 60, 
         range: { unit: 'localFrame', from, to }, source: { projectId, projectRev }, input: {},
         weight: { class: 'light', estMs: null, frames: framesPerSegment },
         requires: layer.fingerprint ? { envFingerprint: layer.fingerprint } : {}, priority: 0,
+        ...(layer.extra ?? {}),
       });
     }
   });

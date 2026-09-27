@@ -165,17 +165,18 @@ export async function startWatcher({ entry, projects, nodeId, fingerprint = null
 
 /**
  * 假节点：`createLocalNode` + 睡 taskMs 的执行器 + 内存产物库（`server/test/` 的假件，探针不是生产代码）。
- * @param {{ entry: object, nodeId: string, fingerprint?: string | null, profile?: string, taskMs?: number, maxConcurrent?: number, projects: string[], log?: Function }} o
+ * @param {{ entry: object, nodeId: string, fingerprint?: string | null, profile?: string, taskMs?: number, maxConcurrent?: number, projects: string[], log?: Function, onMessage?: (m: object) => void, takeoverLocked?: boolean }} o
+ *   `onMessage` 收这条连接上的每条业务消息（I1-X 数「收到别的项目的消息」用）；`takeoverLocked` 透传给 createLocalNode（K1 对照组）
  * @returns 句柄：`claimed`、`completed`（id 列表）、`lost`、`failed`、`stats()`、`stop()`
  */
-export async function startFakeNode({ entry, nodeId, fingerprint = null, profile = 'host', taskMs = 200, maxConcurrent = 2, projects, log = () => {} }) {
+export async function startFakeNode({ entry, nodeId, fingerprint = null, profile = 'host', taskMs = 200, maxConcurrent = 2, projects, log = () => {}, onMessage = null, takeoverLocked = false }) {
   const M = await mods();
   const norm = M.normalizeEntry(entry);
   const ep = M.createDocEndpoint({ url: norm.url, protocols: M.sharedProtocols(norm, { role: 'render' }), log: (event, fields) => log(`node.${event}`, fields) });
-  const rec = { claimed: [], completed: [], dedup: [], lost: [], failed: [], opens: 0 };
+  const rec = { claimed: [], rejected: [], completed: [], dedup: [], lost: [], failed: [], opens: 0 };
   const node = M.createLocalNode({
     nodeId, node: { profile, ...(fingerprint ? { envFingerprint: fingerprint } : {}), codeVersions: [], capabilities: {} },
-    endpoint: ep, now: Date.now, maxConcurrent, projects,
+    endpoint: ep, now: Date.now, maxConcurrent, projects, takeoverLocked,
     executor: M.createSleepExecutor({ taskMs }), sink: M.createArtifactSink(),
     onEvent: (e) => {
       if (e.type === 'completed') rec.completed.push(e.id);
@@ -185,12 +186,16 @@ export async function startFakeNode({ entry, nodeId, fingerprint = null, profile
     },
   });
   ep.onOpen(() => { rec.opens += 1; node.start(node.session.held().map(({ id, token }) => ({ id, token }))); });
-  ep.onMessage((m) => { if (m?.type === 'task.claimed' && typeof m.id === 'string') rec.claimed.push(m.id); });
+  ep.onMessage((m) => {
+    if (m?.type === 'task.claimed' && typeof m.id === 'string') rec.claimed.push(m.id);
+    else if (m?.type === 'task.claim-rejected') rec.rejected.push({ id: m.id ?? null, reason: m.reason ?? null });
+    if (onMessage) { try { onMessage(m); } catch { /* 调用方的计数出错不影响节点 */ } }
+  });
   const timer = setInterval(() => { try { node.tick(); } catch (err) { log('node.tick-error', { message: String(err?.message ?? err) }); } }, 50);
   return {
     rec, claimed: rec.claimed, completed: rec.completed, dedup: rec.dedup, lost: rec.lost, failed: rec.failed, nodeId, fingerprint,
     held: () => node.session.held().map((h) => h.id),
-    stats: () => ({ ...ep.stats(), claimed: rec.claimed.length, completed: rec.completed.length, dedup: rec.dedup.length, lost: rec.lost.length, failed: rec.failed.length }),
+    stats: () => ({ ...ep.stats(), claimed: rec.claimed.length, rejected: rec.rejected.length, completed: rec.completed.length, dedup: rec.dedup.length, lost: rec.lost.length, failed: rec.failed.length }),
     async stop() { clearInterval(timer); try { node.stop?.(); } catch { /* 已停 */ } await closeEp(ep); },
   };
 }
