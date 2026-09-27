@@ -970,7 +970,10 @@ async function twinChecks(ctx) {
         pickTwin: pickTwin ? { fp: pickTwin.envFingerprint, rk: pickTwin.resultKey === twinRk } : null,
         pickPc: pickPc ? { fp: pickPc.envFingerprint, rk: pickPc.resultKey === pcRk } : null,
       };
-      book.judge('D1-D2-D12', `layer-map-v3-${clip}`, d12.v === 3 && cands.length >= 2 && cands[0]?.envFingerprint === ctx.pcFp && cands.some((c) => c.envFingerprint === twin.fp)
+      // 候选的先后不判：同一次切分两份都发时切分方自己的在前；锁已在浏览器那份上、只出了它的那一次切分，
+      // 切分方自己的指纹补在末尾（rq-m7-queue 报告「与契约的出入」第 6 条）。层表写几次、读到哪一次看时机，只记下来
+      d12.firstIsSplitter = cands[0]?.envFingerprint === ctx.pcFp;
+      book.judge('D1-D2-D12', `layer-map-v3-${clip}`, d12.v === 3 && cands.length >= 2 && cands.some((c) => c.envFingerprint === ctx.pcFp) && cands.some((c) => c.envFingerprint === twin.fp)
         && d12.topEqualsFirst && d12.pickTwin?.fp === twin.fp && d12.pickTwin.rk && d12.pickPc?.fp === ctx.pcFp && d12.pickPc.rk, d12);
 
       // D2：替身先得锁、放回、闲置 > 30 s 后有人发布新计划 → 切分方带 takeover 按自己的指纹接手整张卡，替身那份作废
