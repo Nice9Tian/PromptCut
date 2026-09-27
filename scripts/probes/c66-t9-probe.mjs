@@ -541,18 +541,21 @@ async function runCreator(out) {
       run, hosted: httpBase, ws: wsBase, projectId: shared.projectId, name: shared.name, mode: shared.mode, base: shared.base, memberPassword: projectPw,
       tiers: out.tiers, mediaName: path.basename(video), fps: FPS, seek: SEEK,
       card: { id: CARD_ID, rel: CARD_REL, v1: MARK('v1'), v2: MARK('v2'), source: cardSource(CARD_ID, MARK('v1')) },
-      heavy: { cardId: 'r6-canvas', salt: `t9-${run}` }, at: Date.now(),
+      heavy: { cardId: 'probe-typewriter', salt: `t9-${run}` }, at: Date.now(),
     });
     say('config.put', { run });
     const hostReady = await store.wait('host.ready', '主机起来', 15 * 60_000);
     out.hostReady = { at: hostReady.at ?? null, port: hostReady.port ?? null };
-    const q0 = await diag();
+    const q0 = await until('[creator] 本机队列节点报到', async () => {
+      const q = await diag();
+      return q?.active ? q : null;
+    }, 120_000, 500);
     if (!check(q0?.active, '[creator] 本机队列节点连着托管端并报到', q0 ? { active: q0.active, connected: q0.connected, url: q0.url } : null)) throw new Error('队列节点不在');
     const before = new Set((q0.published ?? []).map((p) => p.planId));
     const heavyClip = await P(page, async (salt, seek) => {
       const S = await import('/src/store/project.ts');
       const t = S.actions.addTrack('T9 重卡');
-      const c = S.actions.addCardClip('r6-canvas', 0, { trackId: t.id, duration: 6, params: { probeSalt: salt } });
+      const c = S.actions.addCardClip('probe-typewriter', 0, { trackId: t.id, duration: 16, params: { probeSalt: salt } });
       S.actions.seek(seek);
       return c?.id ?? null;
     }, `t9-${run}`, SEEK);
@@ -1065,8 +1068,10 @@ async function runAll(out) {
   const outDir = path.resolve(arg('--out', path.join(os.tmpdir(), `pc-c66t9-${run}`)));
   const common = ['--hosted', HOSTED, '--coord', COORD, '--run', run, '--timeout-min', String(Number(arg('--timeout-min', 25))), ...(KEEP ? ['--keep-temp'] : [])];
   const roles = ['creator', 'observer', 'host'];
+  const basePort = Number(arg('--port', DEFAULT_PORT.creator));
+  if (!Number.isInteger(basePort) || basePort < 1 || basePort + 8 > 65535) throw new Error('--port 需给三组连续编辑器端口留出 9 个端口');
   const results = await Promise.all(roles.map((role) => new Promise((resolve) => {
-    const c = spawn(process.execPath, [SELF, '--role', role, '--port', String(DEFAULT_PORT[role]), '--out', path.join(outDir, role), ...common],
+    const c = spawn(process.execPath, [SELF, '--role', role, '--port', String(basePort + roles.indexOf(role) * 3), '--out', path.join(outDir, role), ...common],
       { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, env: process.env });
     let stdout = '';
     c.stdout.on('data', (d) => { stdout += d.toString(); });
