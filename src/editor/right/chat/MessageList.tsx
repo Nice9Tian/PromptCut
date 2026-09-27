@@ -170,19 +170,30 @@ export interface MessageListProps {
 }
 
 /** 列表里的一条:消息气泡、时间分隔行、「收到其他 Agent 的消息」小字、编排折叠块。每条渲染出来恰好是滚动区的一个直接子元素 */
-type EntryKind = "row" | "time" | "note" | "orch";
+type EntryKind = "user" | "assistant" | "time" | "note" | "orch";
 interface Entry {
   key: string;
   kind: EntryKind;
   render: () => React.ReactElement;
 }
 
-/** 没量过的条先按这些高度估(行和 chat.css 里 contain-intrinsic-size 的 120px 一致);量过同类的之后按同类平均 */
-const DEFAULT_HEIGHTS: Record<EntryKind, number> = { row: 120, time: 20, note: 20, orch: 44 };
+/** 没量过的条先按这些高度估;同类量满几条后改按它们的平均值(HeightBook) */
+const DEFAULT_HEIGHTS: Record<EntryKind, number> = { user: 60, assistant: 200, time: 20, note: 20, orch: 44 };
 /** 最近点过、按过键的几条保持渲染,气泡自己的状态(翻到哪一页、确认层开着)不因滚远被卸载而丢 */
 const PIN_CAP = 8;
 /** 还没量到滚动区高度时(第一次渲染)按这么高算窗口 */
 const FALLBACK_VIEW_H = 800;
+/**
+ * 这一条的内容此刻真的排了版(没被 content-visibility: auto 跳过)。checkVisibility 只看祖先是否跳过内容,
+ * 所以问它的第一个子元素;老浏览器没有这个参数时当作排了。
+ */
+function visibleForLayout(el: Element): boolean {
+  const probe = el.firstElementChild;
+  if (!probe) return true;
+  const fn = (probe as Element & { checkVisibility?: (o?: { contentVisibilityAuto?: boolean }) => boolean }).checkVisibility;
+  return typeof fn === "function" ? fn.call(probe, { contentVisibilityAuto: true }) : true;
+}
+
 /** 上下余量:可视高度的一半,至少 300px */
 const overscanFor = (h: number) => Math.max(300, h / 2);
 
@@ -226,8 +237,12 @@ export function MessageList(props: MessageListProps) {
   const keyElRef = useRef(new Map<string, HTMLElement>());
   const observedRef = useRef(new Set<Element>());
   const roRef = useRef<ResizeObserver | null>(null);
-  /** 不贴底时的锚:视口顶上第一条,和它顶边离滚动区顶边的距离 */
-  const anchorRef = useRef<{ key: string; offset: number } | null>(null);
+  /**
+   * 不贴底时的锚:视口顶上第一条,和它顶边在滚动内容里的位置(离内容顶边多远,不随滚动变)。
+   * 按内容位置记而不是按离视口多远记:用户滚了一下、滚动事件还没到时布局先变了(ResizeObserver 先回调),
+   * 按视口距离挪回会把用户这一下滚动也一起撤掉。
+   */
+  const anchorRef = useRef<{ key: string; contentTop: number } | null>(null);
   const pinnedRef = useRef<string[]>([]);
   const focusKeyRef = useRef<string | null>(null);
 
@@ -240,13 +255,16 @@ export function MessageList(props: MessageListProps) {
     const box = messagesScrollRef.current;
     if (!box || box.getClientRects().length === 0) return;
     anchorRef.current = null;
-    const top = box.getBoundingClientRect().top;
+    const br = box.getBoundingClientRect();
+    const top = br.top;
     for (const key of shownRef.current) {
       const el = keyElRef.current.get(key);
       if (!el) continue;
       const r = el.getBoundingClientRect();
+      // 只认和视口有交集的:视口里只有占位时不锚(强制渲染的最后一条远在下面,拿它当锚会把视口拖着跑)
+      if (r.top >= br.bottom) return;
       if (r.bottom > top) {
-        anchorRef.current = { key, offset: r.top - top };
+        anchorRef.current = { key, contentTop: r.top - top + box.scrollTop };
         return;
       }
     }
@@ -263,7 +281,7 @@ export function MessageList(props: MessageListProps) {
       const a = anchorRef.current;
       const el = a ? keyElRef.current.get(a.key) : undefined;
       if (a && el) {
-        const d = el.getBoundingClientRect().top - box.getBoundingClientRect().top - a.offset;
+        const d = el.getBoundingClientRect().top - box.getBoundingClientRect().top + box.scrollTop - a.contentTop;
         if (Math.abs(d) > 0.5) box.scrollTop += d;
       }
     }
@@ -299,6 +317,8 @@ export function MessageList(props: MessageListProps) {
         const key = elKeyRef.current.get(e.target);
         const kind = key ? kindRef.current.get(key) : undefined;
         if (!key || !kind) continue;
+        // 被 content-visibility 跳过、还没真正排过版的行,量到的是 contain-intrinsic-size 的占位值,不是真高度:不记
+        if (!visibleForLayout(e.target)) continue;
         const h = e.borderBoxSize?.[0]?.blockSize ?? e.target.getBoundingClientRect().height;
         if (bookRef.current!.set(key, kind, h)) changed = true;
       }
@@ -449,7 +469,7 @@ export function MessageList(props: MessageListProps) {
       const followers = followersOf.get(m.id);
       entries.push({
         key: m.id,
-        kind: "row",
+        kind: m.role === "user" ? "user" : "assistant",
         render: () => (
           <MessageRow
             key={m.id}
@@ -530,7 +550,7 @@ export function MessageList(props: MessageListProps) {
       }
       // 滚出视口被 content-visibility 跳过的行按实测高度占位,量到的就是真高度,不会在估计值和真值之间来回跳
       const h = bookRef.current!.measured(key);
-      if (h !== undefined && kindRef.current.get(key) === "row") el.style.containIntrinsicSize = `auto ${Math.round(h)}px`;
+      if (h !== undefined && el.classList.contains("ai-row")) el.style.containIntrinsicSize = `auto ${Math.round(h)}px`;
     }
     for (const el of [...observed]) {
       if (alive.has(el)) continue;

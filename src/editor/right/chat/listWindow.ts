@@ -150,16 +150,23 @@ export function touchRecent(list: readonly string[], key: string, cap: number): 
 }
 
 /**
- * 高度记账:按条的 key 记实测高度,没量过的按同类已量过的平均值估(一类都没量过用缺省值)。
+ * 高度记账:按条的 key 记实测高度,没量过的按估计值。
+ *
+ * 估计值每类只定一次:同类量满 freezeAfter 条时取它们的平均值,之后不再变(之前用缺省值)。
+ * 不用一直跟着变的平均值:没量过的往往有上千条,平均值每动一点,它们的总高就跟着动几千像素,
+ * 滚动条忽长忽短,离底部的距离也跟着跳。定下来之后总高只在某条真的量到时变它自己那一点。
  */
 export class HeightBook {
   private readonly heights = new Map<string, number>();
   private readonly sums = new Map<string, { sum: number; count: number }>();
   private readonly kinds = new Map<string, string>();
   private readonly defaults: Record<string, number>;
+  private readonly frozen = new Map<string, number>();
+  private readonly freezeAfter: number;
 
-  constructor(defaults: Record<string, number>) {
+  constructor(defaults: Record<string, number>, freezeAfter = 3) {
     this.defaults = defaults;
+    this.freezeAfter = freezeAfter;
   }
 
   /** 记一次实测;高度变了(差超过半个像素)回 true */
@@ -189,8 +196,14 @@ export class HeightBook {
   }
 
   estimate(kind: string): number {
+    const f = this.frozen.get(kind);
+    if (f !== undefined) return f;
     const s = this.sums.get(kind);
-    if (s && s.count > 0) return s.sum / s.count;
+    if (s && s.count >= this.freezeAfter) {
+      const avg = s.sum / s.count;
+      this.frozen.set(kind, avg);
+      return avg;
+    }
     return this.defaults[kind] ?? 100;
   }
 

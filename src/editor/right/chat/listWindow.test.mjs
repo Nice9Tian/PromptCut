@@ -122,25 +122,31 @@ test("最近动过的几条:去重、新的放最后、超过上限丢最早的"
   assert.deepEqual(l, ["c", "a", "d"]);
 });
 
-test("高度记账:实测优先,没量过的按同类平均估,prune 后平均值跟着改", () => {
-  const book = new HeightBook({ row: 120, time: 20 });
-  assert.equal(book.get("x", "row"), 120);
-  assert.equal(book.set("a", "row", 100), true);
-  assert.equal(book.set("a", "row", 100.3), false); // 半像素以内不算变
-  assert.equal(book.set("b", "row", 300), true);
-  assert.equal(book.get("a", "row"), 100);
-  assert.equal(book.estimate("row"), 200);
-  assert.equal(book.get("x", "row"), 200);
-  assert.equal(book.get("t", "time"), 20);
-  // 同一条改了高度:平均值按新高度算
-  book.set("b", "row", 100);
-  assert.equal(book.estimate("row"), 100);
-  book.set("c", "row", 400);
-  book.prune(new Set(["c"]));
+test("高度记账:实测优先;估计值同类量满 freezeAfter 条时定成平均值,之后不再变", () => {
+  const book = new HeightBook({ user: 60, assistant: 200 }, 3);
+  assert.equal(book.get("x", "user"), 60);
+  assert.equal(book.set("a", "user", 100), true);
+  assert.equal(book.set("a", "user", 100.3), false); // 半像素以内不算变
+  assert.equal(book.set("b", "user", 300), true);
+  assert.equal(book.get("a", "user"), 100);
+  // 只量了 2 条:还用缺省值
+  assert.equal(book.estimate("user"), 60);
+  book.set("c", "user", 200);
+  // 量满 3 条:定成平均值 200
+  assert.equal(book.estimate("user"), 200);
+  assert.equal(book.get("x", "user"), 200);
+  // 之后再量、同一条改高度,估计值都不再变
+  book.set("d", "user", 1000);
+  book.set("a", "user", 10);
+  assert.equal(book.estimate("user"), 200);
+  // 别的类不受影响
+  assert.equal(book.get("t", "assistant"), 200);
+  assert.equal(book.get("t", "time"), 100);
+  book.prune(new Set(["d"]));
   assert.equal(book.size, 1);
-  assert.equal(book.estimate("row"), 400);
   assert.equal(book.measured("a"), undefined);
+  assert.equal(book.measured("d"), 1000);
   // 非法高度不记
-  assert.equal(book.set("z", "row", NaN), false);
-  assert.equal(book.set("z", "row", -1), false);
+  assert.equal(book.set("z", "user", NaN), false);
+  assert.equal(book.set("z", "user", -1), false);
 });

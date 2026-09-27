@@ -12,7 +12,9 @@
  * 截图写进 `--out`(底部、顶部、中间、流式结束后)。
  *
  * 用法:
- *   node scripts/probes/chat-window-probe.mjs [--port 5670] [--out out/chat-window-probe] [--origin http://127.0.0.1:N] [--keep]
+ *   node scripts/probes/chat-window-probe.mjs [--port 5670] [--out out/chat-window-probe] [--height 900] [--origin http://127.0.0.1:N] [--keep]
+ *
+ * - `--height`:浏览器视口高度(缺省 900,这时消息区只有两百来像素高);消息区越高同时渲染的条越多,节点数上限要在高视口下也成立。
  *
  * - 缺省自己在仓库根起编辑器(`vite --port <port> --strictPort --host 127.0.0.1`,另占 +1、+2 当舞台端口),
  *   会话目录、工作目录、数据目录、AI 配置都指到一个新建的临时目录(`PROMPTCUT_CHATS_DIR`、`PROMPTCUT_WORK_DIR`、
@@ -37,6 +39,7 @@ const arg = (name, dflt) => {
 const PORT = Number(arg('--port', 5670));
 const OUT = path.resolve(ROOT, arg('--out', 'out/chat-window-probe'));
 const KEEP = argv.includes('--keep');
+const VIEW_H = Number(arg('--height', 900));
 let origin = arg('--origin', null);
 fs.mkdirSync(OUT, { recursive: true });
 
@@ -198,38 +201,40 @@ const frames = (page, n = 2) =>
   );
 
 let browser = null;
+let page = null;
 try {
   if (!origin) await spawnEditor();
   else {
     const res = await fetch(`${origin}/api/chats/save`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: CHAT_ID, messages: makeMessages() }),
+      body: JSON.stringify({ id: CHAT_ID, title: '窗口化探针 2000 条', messages: makeMessages() }),
     });
     check('seed.via-api', res.ok, { status: res.status });
   }
 
   browser = await puppeteer.launch({
     headless: true,
-    defaultViewport: { width: 1440, height: 900 },
+    defaultViewport: { width: 1440, height: VIEW_H },
     args: ['--window-position=-32000,-32000', '--no-first-run', '--force-device-scale-factor=1'],
   });
-  const page = await browser.newPage();
+  page = await browser.newPage();
   const pageErrors = [];
   page.on('pageerror', (e) => pageErrors.push(String(e?.message ?? e)));
-  await page.goto(`${origin}/?editor&aimock=1`, { waitUntil: 'domcontentloaded' });
+  await page.goto(`${origin}/?editor&aimock=1&nosetup=1`, { waitUntil: 'domcontentloaded' });
   await waitFor(() => page.$('[data-pc="ai-history"]'), 120_000, 'AI 栏');
 
   // 从历史对话抽屉打开这个会话(真实用户路径)
-  await page.click('[data-pc="ai-history"]');
+  // 页面刚起来时可能还盖着测量遮罩,点不到就再点
   const item = await waitFor(async () => {
+    if (!(await page.$('.chat-history-drawer'))) await page.click('[data-pc="ai-history"]').catch(() => {});
     const items = await page.$$('.chat-drawer-item');
     for (const it of items) {
       const t = await it.evaluate((el) => el.textContent ?? '');
       if (t.includes('窗口化探针')) return it;
     }
     return null;
-  }, 20_000, '历史抽屉里的探针会话');
+  }, 60_000, '历史抽屉里的探针会话');
   await item.click();
   await waitFor(async () => ((await listState(page))?.nodes ?? 0) > 0, 20_000, '消息出现');
   await sleep(1500);
@@ -381,6 +386,7 @@ try {
   check('page.no-errors', pageErrors.length === 0, { pageErrors: pageErrors.slice(0, 5) });
 } catch (err) {
   check('probe.crashed', false, { error: String(err?.stack ?? err) });
+  if (page) await page.screenshot({ path: path.join(OUT, 'crash.png') }).catch(() => {});
 } finally {
   if (browser) await browser.close().catch(() => {});
   await stopEditor();
