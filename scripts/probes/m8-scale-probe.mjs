@@ -51,6 +51,8 @@
  * 参数：
  *   --case k1|i1  --place cloud|lan|local  [--hosted <文档服务 http(s) 基址>] [--coord <协调口>] [--lan-host ip:port] [--run <id>] [--timeout-min 10]
  *   K1：[--tasks 200] [--segments 5] [--nodes 4] [--fingerprint X|Y|<16 位十六进制>] [--task-ms 200] [--lock-half（缺省就是，写不写都一样）]
+ *       [--order join-first|lock-first]  join-first（缺省）= M5b 的顺序，节点报到后才发布死任务并锁卡，量竞态窗口；
+ *                                        lock-first = 节点报到前就发布死任务并锁卡，节点只见锁定之后的世界（纯稳态，没有竞态窗口）
  *   I1：[--tasks 500] [--batch 50] [--projects 1-10] [--projects-total 20] [--nodes-per-project 10] [--spaces 2] [--task-ms 50] [--sample]
  *   all：[--prefilter on|off] [--keep-temp] [--out <目录>]
  *
@@ -140,8 +142,10 @@ export function k1CardsOf(tasks, segments) {
  * K1 一个节点的账本：喂它这条连接上收到的每条业务消息（按到达顺序），最后 `tally()`。
  * @param {{ name: string, nodeFp: string, info: Record<string, { fp, lockFp, dead }> }} o
  */
-export function createK1Ledger({ name, nodeFp, info }) {
+export function createK1Ledger({ name, nodeFp, info, now = Date.now }) {
   let steady = false;               // 收到第一条活任务的 task.opened 之后
+  let firstDeadSeenAt = null;       // 本节点第一次看见本指纹的死任务（本机时钟）
+  let lastHiddenAt = null;          // 最后一条 hidden 撤回（本机时钟）；两者之差是本节点看到的竞态窗口
   const hidden = new Set();
   const visibleOnce = new Set();
   const claimedIds = [];
@@ -164,6 +168,7 @@ export function createK1Ledger({ name, nodeFp, info }) {
         if (mismatchSample.length < 5) mismatchSample.push(id);
       }
     }
+    if (i.dead && i.fp === nodeFp && firstDeadSeenAt === null) firstDeadSeenAt = now();
     visibleOnce.add(id);
   }
 
@@ -183,6 +188,7 @@ export function createK1Ledger({ name, nodeFp, info }) {
         case 'task.closed':
           if (m.state === 'hidden' && typeof m.id === 'string') {
             hidden.add(m.id);
+            lastHiddenAt = now();
             const i = info[m.id];
             // 过滤开时锁定那一步撤回的应当恰好是本指纹、锁在别的指纹上的死任务
             if (!i || !i.dead || i.fp !== nodeFp) hiddenUnexpected.push(m.id);
@@ -211,6 +217,7 @@ export function createK1Ledger({ name, nodeFp, info }) {
         cardLockedRace: rejected.race['card-locked'] ?? 0, cardLockedSteady: rejected.steady['card-locked'] ?? 0,
         openedMismatch, mismatchSample, hidden: hidden.size, hiddenUnexpected: hiddenUnexpected.slice(0, 5), hiddenUnexpectedCount: hiddenUnexpected.length,
         deadClaimed, liveOpened: live, sawSteady: steady,
+        raceWindowMs: firstDeadSeenAt !== null && lastHiddenAt !== null ? lastHiddenAt - firstDeadSeenAt : null,
       };
     },
   };
@@ -229,6 +236,8 @@ export function judgeK1({ prefilter, tallies, raceRatio = 0.01 }) {
     openedMismatch: sum('openedMismatch'), hidden: sum('hidden'), hiddenUnexpected: sum('hiddenUnexpectedCount'), deadClaimed: sum('deadClaimed'),
   };
   totals.cardLocked = totals.cardLockedRace + totals.cardLockedSteady;
+  const windows = tallies.map((t) => t.raceWindowMs).filter((v) => Number.isFinite(v));
+  totals.raceWindowMsMax = windows.length ? Math.max(...windows) : null;
   const nodesOk = tallies.length > 0;
   const k1 = prefilter
     ? { ok: nodesOk && totals.cardLockedSteady === 0 && totals.cardLockedRace <= totals.claims * raceRatio,
@@ -522,9 +531,23 @@ async function main() {
       if (CASE === 'k1') {
         const segments = num('--segments', 5);
         const cards = k1CardsOf(num('--tasks', 200), segments);
-        cfg = { ...common, queueProject: `m8sc-k1-${run}`, cards, segments, fps: FP, taskMs: num('--task-ms', 200) };
+        const order = arg('--order', 'join-first');
+        if (order !== 'join-first' && order !== 'lock-first') { r.fail('--order 取 join-first | lock-first'); process.exitCode = 2; return; }
+        cfg = { ...common, queueProject: `m8sc-k1-${run}`, cards, segments, fps: FP, taskMs: num('--task-ms', 200), order };
       } else {
         cfg = { ...common, projectsTotal: num('--projects-total', 20), aProject: i1ProjectId(1), taskMs: num('--task-ms', 50), tasks: num('--tasks', 500), batch: num('--batch', 50) };
+      }
+      const creatorEntry = (p, tag) => sharedEntry({ url: P.ws, projectId: p.projectId, username: 'creator', password: p.creatorPassword, as: 'creator', role: 'page', run, tag });
+      const memberEntry = (p, tag) => sharedEntry({ url: P.ws, projectId: p.projectId, username: 'member', password: p.projectPassword, run, tag });
+      let k1 = null;
+      if (CASE === 'k1') {
+        // 旁观节点（不带指纹：前置过滤对它不生效，看得见全部，只收不认领）与发布方先连上
+        const plan = k1Plan({ run, queueProject: cfg.queueProject, cards: cfg.cards, segments: cfg.segments, fpX: cfg.fps.X, fpY: cfg.fps.Y });
+        watcher = await startWatcher({ entry: memberEntry(projects[0], 'watcher'), projects: [cfg.queueProject], nodeId: `m8sc-watcher-${run}`, log: say });
+        publisher = await openPublisher({ entry: creatorEntry(projects[0], 'publisher'), publisherId: `m8sc-pub-${run}` });
+        k1 = { plan, byId: new Map(plan.tasks.map((t) => [t.id, t])), watcher, publisher, locked: false };
+        // lock-first：节点报到之前就发布死任务并锁卡（节点只见锁定之后的世界，没有竞态窗口）
+        if (cfg.order === 'lock-first' && !(await k1DeadAndLock(r, k1))) return;
       }
       await kv.config(cfg);
       say('config', { projects: r.extra.projectIds, case: CASE });
@@ -543,11 +566,8 @@ async function main() {
       }
       r.set({ healthzReady: await healthzOf(P) });
 
-      const creatorEntry = (p, tag) => sharedEntry({ url: P.ws, projectId: p.projectId, username: 'creator', password: p.creatorPassword, as: 'creator', role: 'page', run, tag });
-      const memberEntry = (p, tag) => sharedEntry({ url: P.ws, projectId: p.projectId, username: 'member', password: p.projectPassword, run, tag });
-
-      if (CASE === 'k1') await coordK1({ r, kv, cfg, readies, workers, project: projects[0], creatorEntry, memberEntry, set: (w, p) => { watcher = w; publisher = p; } });
-      else await coordI1({ r, kv, cfg, readies, workers, projects, creatorEntry, P, setPublisher: (p) => { publisher = p; } });
+      if (CASE === 'k1') await coordK1({ r, kv, cfg, readies, workers, k1 });
+      else await coordI1({ r, kv, cfg, readies, workers, projects, creatorEntry, setPublisher: (p) => { publisher = p; } });
       r.set({ healthzAfter: await healthzOf(P) });
     } catch (error) {
       r.fail(`coordinator 出错：${String(error?.message ?? error).slice(0, 600)}`);
@@ -570,20 +590,11 @@ async function main() {
     }
   }
 
-  async function coordK1({ r, kv, cfg, readies, workers, project, creatorEntry, memberEntry, set }) {
-    const plan = k1Plan({ run: cfg.run, queueProject: cfg.queueProject, cards: cfg.cards, segments: cfg.segments, fpX: cfg.fps.X, fpY: cfg.fps.Y });
-    const byId = new Map(plan.tasks.map((t) => [t.id, t]));
-    const fpsOfWorkers = Object.fromEntries(workers.map((w) => [w, readies[w].fingerprint]));
-    r.set({ tasks: plan.tasks.length, dead: plan.dead.length, live: plan.live.length, cards: cfg.cards, workerFingerprints: fpsOfWorkers });
-    r.check('two-fingerprints', new Set(Object.values(fpsOfWorkers)).size >= 2 && Object.values(fpsOfWorkers).every((f) => f === cfg.fps.X || f === cfg.fps.Y), fpsOfWorkers);
-
-    // 旁观节点（不带指纹：前置过滤对它不生效，看得见全部，只收不认领）
-    const watcher = await startWatcher({ entry: memberEntry(project, 'watcher'), projects: [cfg.queueProject], nodeId: `m8sc-watcher-${cfg.run}`, log: say });
-    const publisher = await openPublisher({ entry: creatorEntry(project, 'publisher'), publisherId: `m8sc-pub-${cfg.run}` });
-    set(watcher, publisher);
-
-    // 死任务 → 紧接着锁 20 张卡（不等回包）→ 等全部 card.locked → 活任务
+  /** 死任务 → 紧接着锁全部卡（不等回包）→ 等全部 card.locked；回是否都成 */
+  async function k1DeadAndLock(r, k1) {
+    const { plan, byId, publisher } = k1;
     const deadTasks = plan.dead.map((id) => byId.get(id));
+    const t0 = Date.now();
     const pubDead = publisher.publish(deadTasks);
     const lockReplies = Promise.all(plan.locks.map((l) => publisher.lock(l.contentKey, l.fp)));
     const deadResults = await pubDead;
@@ -591,8 +602,20 @@ async function main() {
     const deadErrors = deadResults.filter((x) => x.error);
     r.check('dead-published', deadErrors.length === 0 && deadResults.length === plan.dead.length, { n: deadResults.length, errors: deadErrors.slice(0, 3) });
     const notGranted = locked.filter((m) => m.type !== 'card.locked' || m.granted !== true);
-    if (!r.check('locks-granted', notGranted.length === 0 && locked.length === plan.locks.length, { n: locked.length, notGranted: notGranted.slice(0, 3) })) return;
-    await kv.signal('locked', { at: Date.now() });
+    r.set({ deadPublishToAllLockedMs: Date.now() - t0 });
+    k1.locked = r.check('locks-granted', notGranted.length === 0 && locked.length === plan.locks.length, { n: locked.length, notGranted: notGranted.slice(0, 3) });
+    return k1.locked;
+  }
+
+  async function coordK1({ r, kv, cfg, readies, workers, k1 }) {
+    const { plan, byId, watcher, publisher } = k1;
+    const fpsOfWorkers = Object.fromEntries(workers.map((w) => [w, readies[w].fingerprint]));
+    r.set({ tasks: plan.tasks.length, dead: plan.dead.length, live: plan.live.length, cards: cfg.cards, workerFingerprints: fpsOfWorkers });
+    r.check('two-fingerprints', new Set(Object.values(fpsOfWorkers)).size >= 2 && Object.values(fpsOfWorkers).every((f) => f === cfg.fps.X || f === cfg.fps.Y), fpsOfWorkers);
+
+    // join-first（缺省，M5b 的顺序）：节点都报到了，这时才发布死任务并锁卡 → 有竞态窗口
+    if (cfg.order === 'join-first' && !(await k1DeadAndLock(r, k1))) return;
+    if (!k1.locked) return;
     const liveTasks = plan.live.map((id) => byId.get(id));
     const t0 = Date.now();
     const liveResults = await publisher.publish(liveTasks);
@@ -636,7 +659,7 @@ async function main() {
       cardLockedRace: s('cardLockedRace'), cardLockedSteady: s('cardLockedSteady'), openedMismatch: s('openedMismatch'), hidden: s('hidden'), lost: s('lost'), failed: s('failed') };
   };
 
-  async function coordI1({ r, kv, cfg, readies, workers, projects, creatorEntry, P, setPublisher }) {
+  async function coordI1({ r, kv, cfg, readies, workers, projects, creatorEntry, setPublisher }) {
     const aProject = cfg.aProject;
     const aSpace = projects[i1SpaceOf(1, projects.length)];
     const served = workers.flatMap((w) => readies[w].projects ?? []);
@@ -689,7 +712,6 @@ async function main() {
     });
     r.count('doneEvents', publisher.doneEvents.length);
     r.check('kv-no-401', kv.client.stats.unauthorized === 0, kv.client.stats);
-    void P;
   }
 
   /* ---------------------------------------------------------------- worker */
@@ -795,7 +817,7 @@ async function main() {
       const run = newRunId();
       const common = ['--place', 'local', '--hosted', hosted.hosted, '--coord', coord.url, '--run', run, '--case', CASE, '--timeout-min', String(TIMEOUT_MS / 60_000)];
       const pass = (names) => names.flatMap((n) => (arg(n) !== null ? [n, arg(n)] : []));
-      const caseArgs = pass(['--tasks', '--segments', '--task-ms', '--batch', '--projects-total', '--spaces']);
+      const caseArgs = pass(['--tasks', '--segments', '--task-ms', '--batch', '--projects-total', '--spaces', '--order']);
       let roles;
       if (CASE === 'k1') {
         roles = [
@@ -839,7 +861,7 @@ async function main() {
     result = createResult({ probe: PROBE, role: 'coordinator', place: PLACE, case: CASE });
     const spawnWorker = ROLE === 'coord+nodes'
       ? (run) => {
-        const drop = new Set(['--role', '--run', '--workers', '--name', '--sample', '--prefilter']);
+        const drop = new Set(['--role', '--run', '--workers', '--name', '--sample', '--prefilter', '--order']);
         const rest = [];
         for (let i = 0; i < argv.length; i++) {
           if (drop.has(argv[i])) { if (argv[i] !== '--sample') i += 1; continue; }
