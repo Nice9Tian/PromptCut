@@ -26,8 +26,8 @@
  *   2. 手机成员:Chrome 移动端仿真(手机视口、触屏、`deviceMemory: 4`)打开邀请链接,只填用户名加入;断言判为低内存档
  *      (进入提示、只有一个同源舞台)、网络记录里视频只有小尺寸、预渲染只有 `px/` 小位图、没有原尺寸与 `snap/`,也没有任何
  *      `/@media/…` 请求(有就记下发起方:元素链或调用栈;手机整段在第 4 步末再核一次);截图。第 1 步 plan 落定时重卡每帧两档都在。
- *   3. 在手机上改一处(重卡片段的参数换成已钉死的第二个版本):创建方的渲染节点认领重渲,新的预渲染小尺寸(新的 `px/` 哈希)
- *      回到手机页面;记下时长。
+ *   3. 在手机上改一处(重卡片段的参数换成已钉死的第二个版本):创建方的渲染节点认领重渲,手机舞台换上新键下的预渲染小尺寸;
+ *      记下时长与时刻分解(`steps.edit.timeline`:plan 发布、认领、切分,各段认领 / 渲染 / 完成,手机层表、清单、贴上;L22)。
  *   4. 低内存档逐帧导出:先在手机上造一个缺原尺寸的素材片段,导出提示「等待上传方」、不出片;删掉它后导出 `--export-seconds` 秒,
  *      ffprobe 核对帧数、时长、编码;这一段的请求记录里用的是素材原尺寸与预渲染原尺寸(`snap/`)。
  *   5. 作废邀请码:创建者「作废并重新生成」,旧链接给表 A 的失效文案,新链接能进。
@@ -763,21 +763,32 @@ try {
     return c?.id ?? null;
   }, { light: LIGHT_CARD });
   check(state.extraClip, '手机上再放了一张轻卡(缺产物)');
-  // 手机这边层表里重卡的键换了(渲染节点重渲、写了新层表),之后取到的 px/ 小位图是新的
+  // 手机这边层表里重卡的键换了(渲染节点认下新一版、写了新层表)
   const phoneKey = () => P(phone, (id) => (window.__pcOnlineSnapshots?.()?.layers ?? []).find((l) => l.clipId === id)?.key ?? null, heavyClip).catch(() => null);
   const keyAtStart = await phoneKey();
   let keyChangedAt = null;
-  const newPx = await until('新的预渲染小尺寸回到手机(新键下的 px/ 小位图)', async () => {
+  // 整段重渲完:内容库里新键下每一段清单都在、小位图都在素材服务上。和下面「手机换上」并行等,各记各的时刻
+  // (L22:以前串在「手机收到新 px」之后等,整段重渲的时长被前一步拖长)
+  let layer1At = null;
+  const layer1P = until('重渲整段完成(新键下每帧两档齐全)', async () => { const l = await heavyLayer(); return l && l.key !== keyBefore && l.frames === l.count && l.smallCount === l.frames && l.missingSmall.length === 0 ? l : null; }, 900_000, 2000)
+    .then((l) => { layer1At = Date.now(); return l; });
+  /*
+   * L22:「新的小尺寸到手机」按手机舞台真的贴上新键下的小尺寸判(层表换了新键、就绪表里新键有帧、舞台贴着的正是新键的那一帧),
+   * 不再按「手机请求了以前没见过的 px/ 哈希」判:重卡改的 probeSalt 不影响画面,新键下的小位图与旧键逐字节相同、哈希相同,
+   * 手机缓存里已有,根本不会再请求;以前量到的「新 px」其实是同一步里新放的轻卡的补渲产物,排在全部普通任务之后。
+   * 旧量法的数仍记在 newPxMs(同一步里任意新哈希的 px/ 第一次请求的时刻)。
+   */
+  const newPx = await until('手机舞台换上新键下的预渲染小尺寸', async () => {
     const k = await phoneKey();
     if (!keyChangedAt && k && k !== keyAtStart) keyChangedAt = Date.now();
-    if (!keyChangedAt) return null;
-    const fresh = phone.assets.filter((a) => a.ns === 'px' && a.method === 'GET' && !a.sub && !pxBefore.has(a.hash) && a.at >= keyChangedAt - 1000);
-    return fresh.length ? { keyMs: keyChangedAt - t3, first: fresh[0].at - t3, count: fresh.length } : null;
-  }, 900_000, 1000);
-  check(newPx, '手机收到重渲后的新小尺寸');
-  // 整段重渲完:内容库里新键下每一段清单都在、小位图都在素材服务上
-  const layer1 = await until('重渲整段完成(新键下每帧两档齐全)', async () => { const l = await heavyLayer(); return l && l.key !== keyBefore && l.frames === l.count && l.smallCount === l.frames && l.missingSmall.length === 0 ? l : null; }, 900_000, 2000);
-  const layer1At = Date.now();
+    if (!keyChangedAt || !k) return null;
+    const mounted = await P(phone, (id) => window.__pcPreviewDiag?.()?.snapshotFeed?.mounted?.find((m) => m.clipId === id)?.key ?? null, heavyClip).catch(() => null);
+    if (!mounted || !k.startsWith(mounted)) return null;
+    const w = await stageSample(phone).then((x) => x?.wraps?.find((y) => y.id === heavyClip) ?? null, () => null);
+    return w?.small ? { keyMs: keyChangedAt - t3, first: Date.now() - t3 } : null;
+  }, 900_000, 500);
+  check(newPx, '手机舞台换上重渲后的新小尺寸(新键)');
+  const layer1 = await layer1P;
   check(layer1, '层表里重卡片段换了新的键、整段重渲完成', { before: keyBefore?.slice(0, 12), after: layer1?.key?.slice(0, 12), why: layer1 ? undefined : state.layerWhy });
   // 补渲排在后面:手机为新放的轻卡发的补渲做完,核对节点的认领先后
   const bf3 = state.extraClip ? await until('手机为新放的轻卡发出补渲任务', () => P(phone, (spec) => {
@@ -805,7 +816,9 @@ try {
   state.order = order;
   await shot(phone, '3-phone-after-edit');
   const timeline = await tl3.finish({ layer1, pxBefore, extraClip: state.extraClip, fullRerenderAt: layer1At });
-  out.steps.edit = { ms: Date.now() - t3, newKeyMs: newPx?.keyMs ?? null, newSmallMs: newPx?.first ?? null, newPxRequests: newPx?.count ?? 0, fullRerenderMs: layer1 ? layer1At - t3 : null,
+  const freshPx = phone.assets.filter((a) => a.ns === 'px' && a.method === 'GET' && !a.sub && !pxBefore.has(a.hash) && a.at >= t3);
+  out.steps.edit = { ms: Date.now() - t3, newKeyMs: newPx?.keyMs ?? null, newSmallMs: newPx?.first ?? null, newPxMs: freshPx.length ? freshPx[0].at - t3 : null, newPxRequests: freshPx.length,
+    fullRerenderMs: layer1 && layer1At ? layer1At - t3 : null,
     keyChanged: !!layer1, newKey: layer1 ? { key: layer1.key.slice(0, 12), frames: layer1.frames, small: layer1.smallCount } : null, backfillOrder: state.order, timeline };
   say('step3.done', out.steps.edit);
 
@@ -1066,7 +1079,12 @@ function startStep3Timeline({ t0, heavyClip, creatorSawAt }) {
   const phone = state.phone;
   const phoneTrack = [];
   const events = new Map();
+  const firstDone = new Map();
   let lastDiag = null;
+  const absorb = (q) => {
+    for (const e of q?.events ?? []) if (e.at >= t0 - 5000) events.set(`${e.at}|${e.event}|${e.id ?? ''}`, e);
+    for (const [id, x] of Object.entries(q?.tasks ?? {})) if (x?.at >= t0 && !firstDone.has(id)) firstDone.set(id, { state: x.state, at: x.at, error: x.error });
+  };
   let running = true;
   let lastSig = '';
   const loop = (async () => {
@@ -1090,10 +1108,7 @@ function startStep3Timeline({ t0, heavyClip, creatorSawAt }) {
       if (at - lastDiagAt >= 2000) {
         lastDiagAt = at;
         const q = await diag().catch(() => null);
-        if (q) {
-          lastDiag = q;
-          for (const e of q.events ?? []) if (e.at >= t0 - 5000) events.set(`${e.at}|${e.event}|${e.id ?? ''}`, e);
-        }
+        if (q) { lastDiag = q; absorb(q); }
       }
       await delay(Math.max(0, 1000 - (Date.now() - at)));
     }
@@ -1104,7 +1119,8 @@ function startStep3Timeline({ t0, heavyClip, creatorSawAt }) {
       running = false;
       await loop.catch(() => {});
       const q = (await diag().catch(() => null)) ?? lastDiag;
-      for (const e of q?.events ?? []) if (e.at >= t0 - 5000) events.set(`${e.at}|${e.event}|${e.id ?? ''}`, e);
+      absorb(q);
+      const doneOf = (id) => firstDone.get(id) ?? null;
       const missing = [];
       const newKey = layer1?.key?.slice(0, 12) ?? null;
       const resultKey = layer1?.resultKey ?? null;
@@ -1113,7 +1129,7 @@ function startStep3Timeline({ t0, heavyClip, creatorSawAt }) {
       const claims = (q?.claims ?? []).filter((c) => c.at >= t0 - 1000);
       const plans = pubs.map((p) => {
         const claim = claims.find((c) => c.id === p.planId);
-        const done = q?.tasks?.[p.planId];
+        const done = doneOf(p.planId);
         const derived = q?.plans?.[p.planId] ?? null;
         return { planId: p.planId.slice(0, 48), rev: p.projectRev, published: stamp(p.at), claimed: stamp(claim?.at), split: done?.state === 'done' ? stamp(done.at) : null,
           derived: Array.isArray(derived) ? derived.length : null };
@@ -1125,7 +1141,7 @@ function startStep3Timeline({ t0, heavyClip, creatorSawAt }) {
       const segs = heavyTasks.map((id) => {
         const m = /:(\d+)-(\d+)$/.exec(id);
         const claim = claims.find((c) => c.id === id);
-        const done = q?.tasks?.[id];
+        const done = doneOf(id);
         const r = renders.filter((e) => e.id === id).sort((a, b) => a.at - b.at).pop();
         return { range: m ? `${m[1]}-${m[2]}` : id.slice(-12), from: m ? Number(m[1]) : null, priority: claim?.priority ?? null, claimed: stamp(claim?.at),
           renderStart: r ? stamp(r.at - r.ms) : null, renderEnd: stamp(r?.at), renderMs: r?.ms ?? null, done: done?.state === 'done' ? stamp(done.at) : null,
@@ -1150,12 +1166,18 @@ function startStep3Timeline({ t0, heavyClip, creatorSawAt }) {
       const reused = [...heavySet].filter((h) => pxBefore.has(h)).length;
       if (!mountedAt) missing.push('phoneMounted:手机舞台一直没贴新键(暂停时低内存档停下追一帧画成活渲,不贴小尺寸;见 phoneTrack)');
       const phoneSeg = segs.find((x) => x.from !== null && phoneFrame !== null && x.from <= phoneFrame && phoneFrame < x.from + 60) ?? null;
+      const short = (id) => (id.startsWith('plan:') ? id.slice(0, 40) : `${id.split(':')[0]}:${(id.split(':')[1] ?? '').slice(0, 8)}:${id.split(':').pop()}`);
+      const queue = claims.map((c) => ({ id: short(c.id), priority: c.priority, claimMs: c.at - t0, doneMs: doneOf(c.id) ? doneOf(c.id).at - t0 : null,
+        state: doneOf(c.id)?.state ?? null, ...(doneOf(c.id)?.error ? { error: String(doneOf(c.id).error).slice(0, 120) } : {}),
+        renderMs: renders.filter((e) => e.id === c.id).pop()?.ms ?? null }));
+      const nodeEvents = [...events.values()].filter((e) => e.event !== 'executor.render' && e.at >= t0).sort((a, b) => a.at - b.at)
+        .map((e) => ({ ms: e.at - t0, event: e.event, ...(e.id ? { id: short(String(e.id)) } : {}), ...(e.error ? { error: String(e.error).slice(0, 120) } : {}) }));
       return {
         t0: stamp(t0), creatorSaw: stamp(creatorSawAt), plans, heavySegments: segs, phoneFrame, phoneSegment: phoneSeg?.range ?? null,
         phoneLayerMap: stamp(keyAt), phoneManifest: stamp(manifestAt), phoneReadyIndex: stamp(readyAt), phoneMounted: stamp(mountedAt),
         phoneNewPx: { heavyFirst: stamp(heavyNew[0]?.at), heavyCount: heavyNew.length, otherFirst: stamp(otherNew[0]?.at), otherCount: otherNew.length,
           heavyHashes: heavySet.size, heavyHashesAlreadyOnPhone: reused, extraClip: extraClip ? extraClip.slice(0, 8) : null },
-        fullRerender: stamp(fullRerenderAt), phoneTrack: phoneTrack.map((x) => ({ ms: x.at - t0, ...x, at: undefined })), missing,
+        fullRerender: stamp(fullRerenderAt), queue, nodeEvents, phoneTrack: phoneTrack.map((x) => ({ ms: x.at - t0, ...x, at: undefined })), missing,
       };
     },
   };
