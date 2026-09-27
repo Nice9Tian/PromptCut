@@ -49,7 +49,7 @@ const pushLog = (event: string, fields: object = {}) => {
 };
 
 /**
- * C6.4 第 4 节末段的接线(`docs/plan/manifest-contract.md`;方案写在 `docs/reports/AGENT-c6-4-pipeline.md`):
+ * C6.4 第 4 节末段的接线(`docs/plan/manifest-contract.md`;阶段报告 `docs/reports/REPORT-c6-4.md`):
  * 预渲染进程只在**同时**满足下面两条时才建推送队列,否则什么都不建,行为与现在相同 —— 这就是离线。
  *
  *   1. 能解析到素材服务的基址:`asset-client.ts` 的 `assetServiceOrigin()`(预渲染进程里就是 `PROMPTCUT_EDITOR_URL`),
