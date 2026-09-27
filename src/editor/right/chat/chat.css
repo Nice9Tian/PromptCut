@@ -501,6 +501,15 @@
   contain-intrinsic-size: auto 120px;
 }
 
+/*
+ * 滚动区是 flex 列,子元素缺省可以缩。被 content-visibility 跳过的行最小高度按尺寸约束算是 0,
+ * 内容一超出滚动区就会被压成几像素高,上面那个估计高度根本用不上(2000 条的历史实测滚动总高只有三万多像素,
+ * 打开历史会话贴不到底)。一律不许缩,每条都按自己的高度(或估计高度)排。
+ */
+.ai-messages > * {
+  flex-shrink: 0;
+}
+
 /* 一行 = 一条消息:Agent 靠左带头像,用户靠右不带 */
 .ai-row {
   display: flex;
