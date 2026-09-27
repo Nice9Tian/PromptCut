@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from "react";
 import { flushSync } from "react-dom";
 import { Stage, type StreamPlaneGroup } from "./render/Stage";
 import { FrameScene } from "./render/FrameScene";
 import { flattenOverlay, type Project } from "./kernel/project";
 import { projectCardGraph } from "./kernel/cardGraph.mjs";
-import { getCard } from "./kernel/registry";
+import { cardsStamp, cardsVersion, getCard, onCardsUpdated } from "./kernel/registry";
 import { installStageClock } from "./render/stageClock";
 import { cardMountedAt, mountFrameOf } from "./render/frameWindow.mjs";
 import { createAnimationPinner } from "./render/pinAnimations";
@@ -16,6 +16,7 @@ import {
   postStageEvent,
   postStageReady,
   serveStageRpc,
+  postStageCards,
   type BackJob,
   type PlayReply,
   type ProbeBooleans,
@@ -125,8 +126,12 @@ function layoutKeyOf(p: Project): string {
 
 /** 真墙钟:接管之后 performance.now 是舞台时间,量耗时要用 stageClock 留下的那份 */
 const realNow = () => (window.__pcRealNow ?? (() => Date.now()))();
-/** 等浏览器真画一帧(接管之后 requestAnimationFrame 进的是舞台队列) */
-const realRaf = () => new Promise<void>((r) => (window.__pcRealRaf ?? window.requestAnimationFrame)(() => r()));
+/** 探针只需跨一个真实任务边界让异步 DOM 更新落地；后台 iframe 的真实 rAF 可能被节流到每秒一次。 */
+const probeTaskBoundary = () => new Promise<void>((resolve) => {
+  const channel = new MessageChannel();
+  channel.port1.onmessage = () => { channel.port1.close(); channel.port2.close(); resolve(); };
+  channel.port2.postMessage(null);
+});
 /**
  * 等一次真帧,但**不许无限等**(K4 的节拍循环用)。
  *
@@ -279,6 +284,15 @@ export default function StageView() {
    * (删片段不清 cardNodes),所以包 try —— 一张坏卡不能让整台舞台卸载。
    * 放在 `if (!project) return null` 之前:hooks 不能条件调用。
    */
+  /*
+   * 卡片代码换了(热更新在 `cards/index.ts` 接住、重装了整套卡片,C6.6 集成 3b):本组件不在热更新链上,
+   * 靠这个版本号重渲,卡片按新定义重新挂上;卡片图也按新定义重解。项目、时间、RPC 都不动。
+   */
+  const cardsGen = useSyncExternalStore(onCardsUpdated, cardsVersion, cardsVersion);
+  // 按新卡重渲提交之后告诉父页换到了哪一版(父页等两个舞台都报到才排重测,`editor/stageCards.ts`)
+  useEffect(() => {
+    if (cardsGen > 0) postStageCards(cardsStamp());
+  }, [cardsGen]);
   const graph = useMemo(() => {
     if (!project) return undefined;
     try {
@@ -286,7 +300,8 @@ export default function StageView() {
     } catch {
       return undefined;
     }
-  }, [project]);
+    // cardsGen:卡片定义换了,图也要重解
+  }, [project, cardsGen]);
 
   useEffect(() => {
     document.documentElement.style.background = "transparent";
@@ -1316,7 +1331,7 @@ export default function StageView() {
        *   clock.set → flushSync(setT) → pinner.sync → settle。不递增 playToken,组件实例不变。
        * 唯一例外:往前且不到 CONTINUOUS_MAX 秒,按连续播放用 advanceTo 同步推几帧(≤ 30 步)。
        * 远跳或向后一律不 advanceTo(会同步空转几百次 tick)。
-       * probe: 一律走跳转路径(量的必须是单帧),等一次真 rAF、冻一次控件 HTML,回包带 elapsedMs。
+       * probe: 一律走跳转路径(量的必须是单帧),跨任务边界后生成控件快照,回包带 elapsedMs。
        *
        * **`snapshots` / `awaiting` 和 `t` 在同一次 React 提交里生效**(E0):拖过一张 stateful 卡的
        * 入点时,新挂载的组件和它的快照平面同帧出现,不闪初始态。所以这两样在 `flushSync(setT)`
@@ -1379,14 +1394,15 @@ export default function StageView() {
         }
         if (opts.probe) {
           /*
-           * K1 的四个数(任务书 3.8)。`stepMs` 在**等 rAF 之前**取 —— 那一次真 rAF 至少是一个
-           * 垂直同步(60 Hz 屏约 17 ms),计进去的话随机访问卡的成绩全是这个常数,
-           * 而它不属于活渲、也不属于生成快照的任何一段(3.8 末条点名要修的量法问题)。
+           * K1 的四个数(任务书 3.8)。`stepMs` 在任务边界之前取；异步提交和生成快照
+           * 的等待都不属于活渲单帧成本。
            */
           // canvas 卡的 `stepMs` 含 `beat → done` 往返(M4):两条路线量级不同,所以路线进 `device`
           const glDone = await (gl.beat({ strict: true, measure: true, t: target }) ?? undefined);
           const stepMs = realNow() - started;
-          await realRaf();
+          // 快照读 computed style 时会同步刷新样式；GL 位图已由严格 beat 等到。
+          // 真 rAF 在隐藏的后台舞台可能一秒才来一次，逐样本等待会把 16 帧拖成 16 秒。
+          await probeTaskBoundary();
           const root = rootRef.current;
           const snap = root ? createSnapshot(root).timing : { inlineMs: 0, rasterMs: 0, serializeMs: 0 };
           return { path: "set", elapsedMs: realNow() - started, stepMs,
@@ -1833,9 +1849,16 @@ export default function StageView() {
         commitPlanes();
         return { ok: true as const };
       },
-      /** A1 的本地素材哈希表。R3 只存,换档那条路在 A1 / L */
+      /**
+       * A1 的换档集合:当前连接的素材服务报 `complete` 的哈希(C6.6,父页每 2 秒轮询后下发)。
+       * 变了就当场重渲一次:暂停中也要换档(`VideoTrack` 的双缓冲)。
+       */
       async setLocalHashes(hashes) {
-        ref.current.localHashes = [...hashes];
+        const next = [...hashes];
+        const prev = ref.current.localHashes;
+        if (prev.length === next.length && prev.every((h, i) => h === next[i])) return { ok: true as const };
+        ref.current.localHashes = next;
+        commitPlanes();
         return { ok: true as const };
       },
       /**

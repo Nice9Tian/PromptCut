@@ -459,6 +459,19 @@ export function postStageReady(hostCapabilities: HostCapabilities, parentOrigin 
   window.parent?.postMessage(msg, parentOrigin);
 }
 
+/**
+ * 舞台侧:卡片热更新接住、按新卡重渲之后告诉父页「换到 `stamp` 这一版了」(C6.6 集成 3b,`editor/stageCards.ts`)。
+ * 和 `pc-stage-ready` 一样是握手类消息,不是 `StageEvent`。
+ */
+export interface StageCardsMessage {
+  type: "pc-stage-cards";
+  stamp: number;
+}
+export function postStageCards(stamp: number, parentOrigin = "*"): void {
+  const msg: StageCardsMessage = { type: "pc-stage-cards", stamp };
+  window.parent?.postMessage(msg, parentOrigin);
+}
+
 /** 舞台侧:按 J4 探测宿主能力。`prerender` 与 `stageId` 来自父页写在 src 查询串里的值 */
 export function detectHostCapabilities(): HostCapabilities {
   const q = new URLSearchParams(location.search);

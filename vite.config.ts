@@ -63,6 +63,14 @@ const lanHostPlugin = (): Plugin => ({
  */
 const fsDeny = [".env", ".env.*", "*.{crt,pem}", "**/.git/**", "**/out/cookies/**", "**/out/docservice/**"];
 
+/*
+ * 卡片、部件文件不做 Fast Refresh(C6.6 集成 3b)。它们导出的是卡片定义(对象),不是纯组件,
+ * Fast Refresh 本来就接不住:插件先把文件当成自接的边界,页面里校验不过再 invalidate,
+ * 于是每改一张卡,编辑器页面和两个舞台各自再触发一轮热更新(实测晚到 3 s),正好打断在跑的重测。
+ * 排除之后热更新直接沿导入链走到 `src/cards/index.ts`(它自己接住、重装整套卡片),一次就完。
+ */
+const REACT_REFRESH_EXCLUDE = [/\/node_modules\//, /\/src\/cards\//, /\/src\/parts\//];
+
 export default defineConfig({
   ...(headless ? { cacheDir: "node_modules/.vite-headless" } : {}),
   // 这两道卡口必须排在所有接口插件**前面**:中间件按 configureServer 的调用顺序注册,
@@ -73,7 +81,7 @@ export default defineConfig({
   // stagePortsPlugin 排在 apiGuard 后面:它自己那条 /api/stage/ports 也该受同一道卡口管。
   // docservicePlugin(本地文档服务)总是注册;无头实例里它进入停用模式(不建文档服务、/docservice 回 503),
   // 因为无头实例是 Skill 的临时副本,不能自己发 projectRev。停用逻辑在插件里。
-  plugins: [lanHostPlugin(), apiGuardPlugin(), viewGatePlugin(), stagePortsPlugin(), react(), tailwindcss(), exportPlugin(), mirrorPlugin(), costsPlugin(), framesPlugin(), vitePluginAi(), sttPlugin(), shotsPlugin(), trackPlugin(), subjectPlugin(), mediaPlugin(), chatsPlugin(), vitePluginCards(), projectsPlugin(), visionPlugin(), skillPlugin(), skillStatePlugin(), collectPlugin(), webPlugin(), prerenderPlugin(), voicePlugin(), audioPlugin(), docservicePlugin()],
+  plugins: [lanHostPlugin(), apiGuardPlugin(), viewGatePlugin(), stagePortsPlugin(), react({ exclude: REACT_REFRESH_EXCLUDE }), tailwindcss(), exportPlugin(), mirrorPlugin(), costsPlugin(), framesPlugin(), vitePluginAi(), sttPlugin(), shotsPlugin(), trackPlugin(), subjectPlugin(), mediaPlugin(), chatsPlugin(), vitePluginCards(), projectsPlugin(), visionPlugin(), skillPlugin(), skillStatePlugin(), collectPlugin(), webPlugin(), prerenderPlugin(), voicePlugin(), audioPlugin(), docservicePlugin()],
   server: headless
     ? {
         // 无头实例不要热更新:它是给 agent 跑的,源码一改就重载页面,重载期间工具全失败,

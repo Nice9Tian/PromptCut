@@ -20,8 +20,25 @@ import { mediaSourceOf } from "./vision/ffmpeg-frames";
 import { assetServiceOrigin, setMediaFallbackBases, setMediaFallbackTicket } from "./asset-client";
 import { renderProject } from "./render-project.mjs";
 import { resolvePublishVersion } from "./queue-publish.mjs";
+import { createCardCodeIndex } from "./card-code.mjs";
+import { cardCodeIdentityOf, onCardSourceChange, overridesRoot } from "./card-overrides.mjs";
 
 const services = new Map<string, FramePipeline>();
+/**
+ * 卡片代码身份(c66-host-cards,`server/card-code.mjs`):每个根一份。算法由卡片插件注入(`setCardIdentifier`),
+ * 卡片源码一变(Vite 已经作废了模块之后)整表清空。整场景键、队列切分的 `requires.cardSources`、节点的
+ * `cardSourceVersions` 都从这里取。
+ */
+const cardCodes = new Map<string, ReturnType<typeof createCardCodeIndex>>();
+function cardCode(root: string) {
+  let index = cardCodes.get(root);
+  if (!index) {
+    index = createCardCodeIndex({ identityOf: (cardId: string) => cardCodeIdentityOf(cardId) });
+    cardCodes.set(root, index);
+  }
+  return index;
+}
+onCardSourceChange(() => { for (const index of cardCodes.values()) index.invalidate(); });
 /** C6.4:每个帧库根上的推送队列怎么收尾(停队列、关文档服务连接);没建推送队列的根不在这里 */
 const pushTeardowns = new Map<string, () => Promise<void>>();
 
@@ -331,7 +348,7 @@ async function startQueueNode(root: string, service: FramePipeline) {
   };
   const log = (event: string, fields: object = {}) => { note(event, fields); if (!/^executor\.render$/.test(event)) queueLog(event, fields); };
   const sink = createAssetSink({ pipeline: service, client, content, log });
-  const baseExecutor = createPrerenderExecutor({ pipeline: service, projects, prepareProject: renderProject, log });
+  const baseExecutor = createPrerenderExecutor({ pipeline: service, projects, prepareProject: renderProject, log, codeStamp: () => cardCode(root).epoch });
   const host = String(os.hostname() || "host").replace(/[^A-Za-z0-9._:-]/g, "-");
   let editorPort = "";
   try { editorPort = new URL(origin).port; } catch { /* 没有端口就不带 */ }
@@ -407,7 +424,8 @@ async function startQueueNode(root: string, service: FramePipeline) {
     localNode?.stop();
     localNode = node.createLocalNode({
       nodeId,
-      node: { profile: "pc", envFingerprint, codeVersions: [codeVersion], capabilities, maxConcurrent: 1 },
+      // cardSourceVersions:本机此刻有的卡片代码(现取现算的视图),任务的 requires.cardSources 按它过滤(c66-host-cards)
+      node: { profile: "pc", envFingerprint, codeVersions: [codeVersion], capabilities, maxConcurrent: 1, cardSourceVersions: cardCode(root).view },
       endpoint, now: Date.now, isIdle: () => idleGate.idle(), maxConcurrent: 1, codeVersion, executor, sink,
       onEvent: (event: any) => {
         const id = event?.id;
@@ -713,6 +731,17 @@ async function startHostNode(root: string, service: FramePipeline, node: any, or
   };
   const log = (event: string, fields: object = {}) => { note(event, fields); if (!/^executor\.render$/.test(event)) queueLog(event, fields); };
 
+  /*
+   * c66-host-cards:主机加入共享项目时经内容库 `card-source` 拉下用户卡与改过的卡,装进它自己的改动层,别人改了卡按
+   * `content.watch` 当场同步(C6.6 设计稿第 5 节;`vite-plugin-cards.ts` 的 `createHostCardSync`,只读)。装上之后
+   * 卡片代码身份跟着变(`cardCode(root)`),要这张卡的任务下一拍就能认领。没有改动层(没设数据目录)时不同步:
+   * 那样会直接改仓库里的卡片文件。`PROMPTCUT_CARD_SYNC=0` 关掉。
+   */
+  const cardSyncOn = process.env.PROMPTCUT_CARD_SYNC !== "0" && !!overridesRoot();
+  const cardSyncDir = path.join(process.env.PROMPTCUT_DATA_DIR || path.join(root, ".pc-work"), "host-cards");
+  const { createHostCardSync }: any = cardSyncOn ? await import("./vite-plugin-cards") : {};
+  if (!cardSyncOn) queueLog("queue.card-sync-skip", { profile: "host", reason: process.env.PROMPTCUT_CARD_SYNC === "0" ? "disabled" : "no-overrides" });
+
   const override = String(process.env[TEST_CODE_VERSION_ENV] || "").trim() || null;
   let codeVersion: string = override ?? frameCode(root);
   const hostName = String(os.hostname() || "host").replace(/[^A-Za-z0-9._:-]/g, "-");
@@ -721,17 +750,18 @@ async function startHostNode(root: string, service: FramePipeline, node: any, or
   const nodeIdBase = `host:${hostName}${editorPort ? `:${editorPort}` : ""}`;
 
   /** 每项的连接记录:诊断用(连不上的次数、素材基址),退出时关 */
-  const wired: { projectId: string | null; endpoint: any; assets: any; ticket: any; connectFailed: number; opens: number }[] = [];
+  const wired: { projectId: string | null; endpoint: any; assets: any; ticket: any; connectFailed: number; opens: number; cards: any }[] = [];
   const host = hostMod.createRenderHost({
     entries: config.entries,
     maxConcurrent: config.maxConcurrent,
     envFingerprint,
     codeVersion,
     capabilities,
+    cardSourceVersions: cardCode(root).view,
     now: Date.now,
     nodeIdOf: (_entry: any, index: number) => `${nodeIdBase}/p${index}`.slice(0, 128),
     connect: (entry: any, index: number) => {
-      const rec: any = { projectId: entry.projectId ?? null, endpoint: null, assets: null, ticket: null, connectFailed: 0, opens: 0 };
+      const rec: any = { projectId: entry.projectId ?? null, endpoint: null, assets: null, ticket: null, connectFailed: 0, opens: 0, cards: null };
       rec.endpoint = node.createWsEndpoint({ url: entry.url, protocols: sharedProtocols(entry, { role: "render" }), log: (event: string, fields: object) => {
         if (event === "ws.connect-failed") rec.connectFailed++;
         if (event === "ws.open") rec.opens++;
@@ -745,7 +775,21 @@ async function startHostNode(root: string, service: FramePipeline, node: any, or
       rec.ticket = createTicketSource(rec.endpoint, { access: "rw" });
       rec.assets = hostAssetClient({ node, endpoint: rec.endpoint, docUrl: entry.url, origin, ticket: rec.ticket, createAssetClient, owner: `host:p${index}` });
       const sink = createAssetSink({ pipeline: service, client: rec.assets.client, content, log });
-      const executor = createPrerenderExecutor({ pipeline: service, projects, prepareProject: renderProject, log });
+      const executor = createPrerenderExecutor({ pipeline: service, projects, prepareProject: renderProject, log, codeStamp: () => cardCode(root).epoch });
+      if (createHostCardSync && rec.projectId) {
+        try {
+          rec.cards = createHostCardSync({
+            root, dataDir: cardSyncDir, projectId: rec.projectId, url: entry.url, endpoint: rec.endpoint,
+            before: () => cardCode(root).touch(),
+            log: (event: string, fields: object = {}) => {
+              note(event, { project: index, ...fields });
+              if (/installed|rejected|backup-failed|error|skip|put-failed/.test(event)) queueLog(event, { project: index, projectId: rec.projectId, ...fields });
+            },
+          });
+        } catch (error: any) {
+          queueLog("queue.card-sync-failed", { project: index, projectId: rec.projectId, message: String(error?.message ?? error) });
+        }
+      }
       wired.push(rec);
       return { endpoint: rec.endpoint, executor, sink };
     },
@@ -796,10 +840,13 @@ async function startHostNode(root: string, service: FramePipeline, node: any, or
     profile: "host",
     nodes: host.nodes().map((n: any, i: number) => ({ ...n, opens: wired[i]?.opens ?? 0, connectFailed: wired[i]?.connectFailed ?? 0, assetBase: wired[i]?.assets.base() ?? null })),
     codeVersion, envFingerprint, maxConcurrent: host.maxConcurrent,
+    // c66-host-cards:每个项目的卡片同步(记账:仓库相对路径 → 装到的 cardRev)与卡片代码身份的状态
+    cardSync: wired.map((rec) => hostCardSyncSummary(rec.projectId, rec.cards)),
+    cardCode: { epoch: cardCode(root).epoch, settled: cardCode(root).settled() },
   });
   const closeAll = async () => {
     clearInterval(timer);
-    for (const rec of wired) { rec.assets.stop(); try { rec.endpoint.close(); } catch { /* 已关 */ } }
+    for (const rec of wired) { try { rec.cards?.close(); } catch { /* 已关 */ } rec.assets.stop(); try { rec.endpoint.close(); } catch { /* 已关 */ } }
   };
   const handle: QueueNode = {
     active: () => false,
@@ -828,6 +875,15 @@ async function startHostNode(root: string, service: FramePipeline, node: any, or
   };
   queueNodes.set(root, handle);
 }
+/** 主机诊断里一个项目的卡片同步:连没连上、记账(仓库相对路径 → cardRev)、最近几条通知(装上、被拒) */
+function hostCardSyncSummary(projectId: string | null, cards: any) {
+  if (!cards) return { projectId, enabled: false };
+  let st: any = {};
+  try { st = cards.status() ?? {}; } catch { st = {}; }
+  const records = Object.fromEntries(Object.entries(st.records ?? {}).map(([rel, rec]: [string, any]) => [rel, rec?.rev ?? null]));
+  const notices = (Array.isArray(st.notices) ? st.notices : []).slice(-10).map((n: any) => ({ type: n?.type ?? null, key: n?.key ?? null, rev: n?.rev ?? null, at: n?.at ?? null, ...(n?.error ? { error: String(n.error).slice(0, 200) } : {}) }));
+  return { projectId, enabled: true, connected: st.connected === true, opens: st.opens ?? 0, records, notices };
+}
 function requestSignal(req: any, res: any) {
   const controller = new AbortController();
   const abort = () => controller.abort();
@@ -841,6 +897,8 @@ export function frameService(root: string, origin: string) {
   if (!service) {
     service = new FramePipeline({ root: path.join(process.env.PROMPTCUT_EXPORT_DIR || path.join(root, "out"), "frame-library"), origin: () => origin,
       code: () => frameCode(root), captureCode: () => captureCode(root),
+      // c66-host-cards:全局代码版本不含用户卡与改动层,这一版用到的定制卡的身份另算(整场景键、requires.cardSources)
+      cardSources: (project: any) => cardCode(root).projectVersions(project),
       // 成本记录和可调系数跟 vite-plugin-costs 同一个根(帧库目录不是它们的家)
       dataRoot: root,
       /*

@@ -38,6 +38,24 @@ const claimOk = (h, conn, id, v) => {
   return m;
 };
 
+test('可重试失败后先让另一节点接手，原节点仍能在退避后重试', () => {
+  const { h, id } = setup();
+  claimOk(h, 'a', id, 1);
+  h.fail('a', id, 2, { error: 'sink-incomplete', retryable: true });
+  const rejected = h.claim('a', id, 3).one('a', 'task.claim-rejected');
+  assert.equal(rejected.reason, 'retry-backoff');
+  assert.ok(rejected.retryInMs > 0);
+  claimOk(h, 'b', id, 3);
+  h.complete('b', id, 4);
+  assert.equal(h.task(id).state, 'done');
+
+  const second = setup();
+  claimOk(second.h, 'a', second.id, 1);
+  second.h.fail('a', second.id, 2, { error: 'sink-incomplete', retryable: true });
+  second.h.clock.set(T0 + 5_000);
+  claimOk(second.h, 'a', second.id, 3);
+});
+
 /* ============================================================ S-1 合法转移全集 */
 
 test('S-1 合法转移全集：open→claimed、claimed→open（release / 超时 / 停滞 / 宽限 / 可重试 fail / 没接续）、claimed→done、claimed→failed；其余转移一律不发生', () => {

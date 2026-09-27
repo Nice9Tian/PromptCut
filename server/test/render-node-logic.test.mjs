@@ -525,7 +525,8 @@ test('B.4 splitPlan：shared 与 local 档的内容键、结果键和完整任�
   const out = splitPlan(baseArgs({ cardPlan: [a, b], cardSourceVersions: { particles: 'builtin:12' } }));
   assert.equal(out.length, 2);
   assert.deepEqual(out[0], expectSnapshot({ ctl: a, tier: 'shared', from: 0, to: 59, priority: 10, cardSources: { particles: 'builtin:12' } }));
-  assert.deepEqual(out[1], expectSnapshot({ ctl: b, tier: 'local', from: 0, to: 59, priority: 10 }));
+  // 契约 B.4〔c66-host-cards 改〕:本地档画整个场景(内容键里有 entry.key),要这一版全部定制卡的代码
+  assert.deepEqual(out[1], expectSnapshot({ ctl: b, tier: 'local', from: 0, to: 59, priority: 10, cardSources: { particles: 'builtin:12' } }));
   // 逐项再核一次关键字段，失败时信息更直观
   assert.equal(out[0].input.contentKey, 'ska');
   assert.equal(out[0].resultKey, rkOf('ska', FP));
@@ -535,7 +536,7 @@ test('B.4 splitPlan：shared 与 local 档的内容键、结果键和完整任�
   assert.equal(out[1].input.entryKey, ENTRY);
   assert.equal(out[1].requires.belowDependent, true);
   assert.equal(out[0].requires.belowDependent, false);
-  assert.deepEqual(out[1].requires.cardSources, {}, 'glass 不在 cardSourceVersions 里');
+  assert.deepEqual(out[1].requires.cardSources, { particles: 'builtin:12' }, '本地档要这一版全部定制卡(glass 不在 cardSourceVersions 里,不列)');
 });
 
 test('B.4 splitPlan：resultKey 与 id 随环境指纹变化', () => {

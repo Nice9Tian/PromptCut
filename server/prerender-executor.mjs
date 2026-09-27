@@ -34,8 +34,10 @@ const fail = (code, message, retryable) => Object.assign(new Error(message), { c
  * @param {{ get(projectId: string, projectRev: number): Promise<object | null> }} options.projects  J.2 的项目客户端
  * @param {(project: any) => any} [options.prepareProject]  缺省原样;预渲染进程传 `renderProject`
  * @param {(event: string, fields?: object) => void} [options.log]
+ * @param {() => unknown} [options.codeStamp]  卡片代码的版次(c66-host-cards:`card-code.mjs` 的 `epoch`)。缓存按
+ *   「项目版本 + 版次」存:卡片代码变了(同步装上了新卡),同一版项目的上下文要按新代码重算,不然任务对回的还是旧的 control
  */
-export function createPrerenderExecutor({ pipeline, projects, prepareProject = project => project, log = () => {} }) {
+export function createPrerenderExecutor({ pipeline, projects, prepareProject = project => project, log = () => {}, codeStamp = () => '' }) {
   if (!pipeline) throw new Error('createPrerenderExecutor needs a pipeline');
   if (!projects || typeof projects.get !== 'function') throw new Error('createPrerenderExecutor needs a project client');
   /** `projectId@projectRev` → Promise<{ entry, context }>;Map 的插入顺序就是 LRU 顺序 */
@@ -53,7 +55,10 @@ export function createPrerenderExecutor({ pipeline, projects, prepareProject = p
 
   /** 取(或算)这一版的上下文。失败的不留在缓存里,下次重算 */
   function contextFor(task, signal) {
-    const { projectId, projectRev, id } = versionOf(task);
+    const { projectId, projectRev, id: version } = versionOf(task);
+    let stamp = '';
+    try { stamp = String(codeStamp() ?? ''); } catch { stamp = ''; }
+    const id = stamp ? `${version}#${stamp}` : version;
     const hit = cache.get(id);
     if (hit) {
       cache.delete(id);
@@ -63,11 +68,11 @@ export function createPrerenderExecutor({ pipeline, projects, prepareProject = p
     const work = (async () => {
       let json;
       try { json = await projects.get(projectId, projectRev); }
-      catch (error) { throw fail(error?.code === 'digest-mismatch' ? 'bad-snapshot' : 'no-snapshot', `取不到项目快照 ${id}:${error?.message || error}`, true); }
-      if (!json) throw fail('no-snapshot', `文档服务上没有项目快照 ${id}`, true);
+      catch (error) { throw fail(error?.code === 'digest-mismatch' ? 'bad-snapshot' : 'no-snapshot', `取不到项目快照 ${version}:${error?.message || error}`, true); }
+      if (!json) throw fail('no-snapshot', `文档服务上没有项目快照 ${version}`, true);
       const project = prepareProject(json);
       if (!Array.isArray(project?.tracks) || !Number.isFinite(project?.duration) || project.duration <= 0) {
-        throw fail('bad-snapshot', `项目快照 ${id} 不是能渲的项目`, false);
+        throw fail('bad-snapshot', `项目快照 ${version} 不是能渲的项目`, false);
       }
       return pipeline.planForQueue(project, { signal });
     })();

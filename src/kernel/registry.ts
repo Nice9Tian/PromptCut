@@ -2,6 +2,11 @@ import type { CardDef } from "./types";
 import { cardCapabilities } from "./frameMode.mjs";
 
 const map = new Map<string, CardDef<any>>();
+/** 注册表每变一次(注册、清空)加一:按「注册表里有哪些卡」记忆化的一方(源码版本表)拿它当键 */
+let registryGen = 0;
+export function cardsRegistryGen(): number {
+  return registryGen;
+}
 
 /**
  * 注册卡片。同一次调用里 id 撞车是真的写错了(两张卡抢一个 id),直接抛错;
@@ -11,6 +16,7 @@ const map = new Map<string, CardDef<any>>();
  * 要手动刷新才能恢复。
  */
 export function registerCards(defs: CardDef<any>[]) {
+  registryGen++;
   const seen = new Set<string>();
   for (const d of defs) {
     if (seen.has(d.id)) throw new Error(`card id 重复: ${d.id}`);
@@ -24,8 +30,46 @@ export function registerCards(defs: CardDef<any>[]) {
   }
 }
 
+/*
+ * 卡片代码换了的通知(C6.6 集成 3b)。`cards/index.ts` 是热更新的边界(它自己接住热更新、重装整套卡片),
+ * 热更新不再冒到 Editor、Preview、StageView 上 —— 那会让它们的 effect 在 Fast Refresh 里重跑,
+ * 把舞台的 RPC 客户端清掉。于是要看新卡的一方(舞台重渲、编辑器的卡片列表、探针重测)订阅这里。
+ * 本模块不在热更新链上(卡片改了它不重跑),订阅一直有效。
+ */
+let cardsGen = 0;
+let cardsStampValue = 0;
+const cardListeners = new Set<() => void>();
+
+/**
+ * `cards/index.ts` 热更新重装完整套卡片之后调。`stamp` 是这批热更新的时间戳(vite 推给各个页面的是同一个),
+ * 编辑器页面拿它核对两个舞台是不是也换到了这一版(`editor/stageCards.ts`)。
+ */
+export function noteCardsUpdated(stamp: number = Date.now()): void {
+  cardsGen++;
+  cardsStampValue = Math.max(cardsStampValue, stamp);
+  for (const l of [...cardListeners]) {
+    try { l(); } catch (err) { console.warn("[registry] 卡片更新的订阅方出错", err); }
+  }
+}
+
+/** 最近一次卡片热更新的时间戳;没换过是 0 */
+export function cardsStamp(): number {
+  return cardsStampValue;
+}
+
+/** 卡片代码换过几次(本页面会话里);首次装载是 0 */
+export function cardsVersion(): number {
+  return cardsGen;
+}
+
+export function onCardsUpdated(cb: () => void): () => void {
+  cardListeners.add(cb);
+  return () => { cardListeners.delete(cb); };
+}
+
 /** 重新装载整套卡片前先清空,免得删掉的卡片文件在热更新后还赖在库里 */
 export function resetCards() {
+  registryGen++;
   map.clear();
 }
 

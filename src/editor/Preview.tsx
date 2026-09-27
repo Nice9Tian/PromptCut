@@ -10,6 +10,7 @@ import { findClip } from "../kernel/project";
 import { nudgeFrame } from "../kernel/layout";
 import { createStageRpc, type HostCapabilities, type StageRpcClient } from "../render/stageRpc";
 import { frontStage, onStageEvent, releaseStageClient, setStageClient, swapStageClients, syncProject } from "./stageBridge";
+import { bindStageCards, noteStageCards, noteStageFresh } from "./stageCards";
 import { INITIAL_ROLE_OF, STAGE_IDS, dualStage, stageSrc, stageTargetOrigin, type StageId } from "./previewMode";
 import { ControlBar } from "./preview/ControlBar";
 import { ToolBar, ToolType } from "./preview/ToolBar";
@@ -21,6 +22,8 @@ import { fitView, frameOrigin, panBy, wheelZoomFactor, zoomAt, type View2D } fro
 import "./preview/preview.css";
 import { atFrameGrid } from "../render/frameGrid";
 import { contentStartOf } from "./timeline/utils";
+import { startAssetTiers, tierHashes, useTierHashes } from "./media/assetTiers";
+import { startTierBackfill } from "./io/mediaUpload";
 import { deliverSnapshots, markBaselineReset, noteSettled, pendingDemotes, pickForSetTime, stopSnapshotFeed, streamPlanesAt, suppressedAt, syncSnapshotSubscription } from "./snapshotFeed";
 import { playingCatchUpTargets, runPlayingSwap, runSettleSwap, setSwapHost, swapInFlight } from "./stageSwap";
 import { demotedClips, onStageDemote } from "./demote";
@@ -28,13 +31,12 @@ import { flushSync } from "react-dom";
 import { createSharedGl, type SharedGl } from "../render/gl/glParent";
 import { resolveGlRoute } from "../render/costDevice.mjs";
 
-/**
+/*
  * A1 的 `localHashes`:**当前连接的素材服务**报 `complete` 的哈希集合,换档判据只看它
- * (`src/render/mediaTier.ts` 的 playbackUrl;`docs/semantics/mechanism/asset-service.md`「同步状态只问素材服务」)。
- * 来源 —— 主文档每 2 秒轮询 `GET media/<hash>/chunks` —— 在第 6 步(`docs/plan/cloud-task.md` A1「换档判据」),
- * 这里先留空集合:空集合 = 一律原片,舞台和主文档的声音都和接换档之前一样。
+ * (`src/render/mediaTier.ts` 的 chooseTier;`docs/semantics/mechanism/asset-service.md`「同步状态只问素材服务」)。
+ * 来源是主文档每 2 秒轮询 `GET media/<hash>/chunks`(C6.6,`./media/assetTiers.ts`):
+ * 预览挂着时开轮询,集合变了就下发给两个舞台(`setLocalHashes`),主文档的声音层直接读。
  */
-const LOCAL_HASHES: readonly string[] = [];
 
 /**
  * 中央预览:视频层 + 动效渲染面,按容器缩放。播放循环也在这里(rAF 推进 store.t)。
@@ -51,6 +53,11 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
   const showMiniScrubber = chatLayout !== undefined ? chatLayout : layoutMode === "chat";
 
   const project = useStore((s) => s.project);
+  // C6.6:两档素材的换档集合(预览挂着时每 2 秒问一次当前素材服务)
+  const tierList = useTierHashes();
+  useEffect(() => startAssetTiers(), []);
+  // C6.6 设计稿第 9 节第 2 条:打开项目时,缺素材小尺寸、本地有素材原尺寸的视频在后台补转
+  useEffect(() => startTierBackfill(), []);
   const t = useStore((s) => s.t);
   const playing = useStore((s) => s.playing);
   const playToken = useStore((s) => s.playToken);
@@ -103,6 +110,8 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
   const [stageReady, setStageReady] = useState(0);
   const tRef = useRef(t);
   tRef.current = t;
+  /** 上一次收尾(pause)之后给舞台发过 play 没有:收尾时只有真停过播放才认舞台回的 `stoppedAt` */
+  const playedRef = useRef(false);
   const playingRef = useRef(playing);
   playingRef.current = playing;
 
@@ -349,7 +358,13 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
   useEffect(() => {
     const frames: Record<StageId, React.RefObject<HTMLIFrameElement | null>> = { A: frameARef, B: frameBRef };
     const onMessage = (e: MessageEvent) => {
-      if ((e.data as { type?: string } | null)?.type !== "pc-stage-ready") return;
+      const type = (e.data as { type?: string } | null)?.type;
+      if (type === "pc-stage-cards") {
+        // 舞台按新卡重渲完了(C6.6 集成 3b,`stageCards.ts`)
+        for (const id of STAGE_IDS) if (e.source === frames[id].current?.contentWindow) noteStageCards(id, Number((e.data as { stamp?: number }).stamp) || 0);
+        return;
+      }
+      if (type !== "pc-stage-ready") return;
       for (const id of STAGE_IDS) {
         const win = frames[id].current?.contentWindow;
         if (!win || e.source !== win) continue;
@@ -359,6 +374,8 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
          * 把真正的可见舞台顶掉。
          */
         const role = frontIdRef.current === id ? "front" : "back";
+        // 新载入的舞台就是最新的卡片代码
+        noteStageFresh(id);
         rpcRef.current[id]?.dispose();
         const client = createStageRpc(win, stageTargetOrigin(id));
         rpcRef.current[id] = client;
@@ -386,6 +403,29 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
       sharedGlRef.current = null;
     };
   }, [glPortTo]);
+
+  /*
+   * 卡片代码换了一般不重载舞台(C6.6 集成 3b)。以前改一张卡,热更新冒到本组件,Fast Refresh 重跑上面那个握手 effect,
+   * 清掉了舞台的 RPC 客户端,舞台停在旧画面,只好每次都整页重载两个 iframe(`b25f482`)。现在热更新在 `cards/index.ts`
+   * 接住、不冒到这里;舞台自己也收到同一份热更新,在舞台里重装卡片、重渲,然后发 `pc-stage-cards` 报到。
+   * 只有过了时限还没报到的舞台(代码确实过期)才在这里整页重载那一个(`stageCards.ts` 的 `whenStagesHaveCards`)。
+   */
+  useEffect(() => {
+    const ids: StageId[] = dual ? [...STAGE_IDS] : ["A"];
+    return bindStageCards(ids, (id) => {
+      const frame = (id === "A" ? frameARef : frameBRef).current;
+      if (!frame) return;
+      const client = rpcRef.current[id];
+      if (client) {
+        releaseStageClient(client);
+        client.dispose();
+        rpcRef.current[id] = null;
+        hostCapsRef.current[id] = null;
+      }
+      console.warn(`[preview] 舞台 ${id} 没换上新的卡片代码,整页重载它`);
+      frame.src = frame.src;
+    });
+  }, [dual]);
 
   /*
    * 项目选项切了 `glRoute`(R9 约束第 1 条):切到 `shared` 时给已经握过手的舞台补交端口;
@@ -533,7 +573,7 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
       // 2D 预览**不加 proxy=1**(见下面 iframe 那段注释),所以互换后重发的也是 false
       proxy: () => false,
       // A1 的换档:舞台的 VideoTrack / 像素映射素材按它选档(T1a 审查 #5);来源见 LOCAL_HASHES
-      localHashes: () => [...LOCAL_HASHES],
+      localHashes: () => [...tierHashes()],
     });
     return () => setSwapHost(null);
   }, [dual, swapRoles]);
@@ -720,7 +760,7 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
    * 双舞台模式下由页面触发预渲染(公共 hook,legacy 那一路在 `UnifiedPreview` 里用同一份):
    * 编辑推送成功(`frameRequest` 先 `alignMirror`)且空闲(不在播放、不在拖动)时防抖发 `preload`,没就绪就接着问。
    */
-  usePrerenderPreload(project, { enabled: dual, idle: !playing && !scrubbing });
+  usePrerenderPreload(project, { enabled: dual, idle: !playing && !scrubbing, waitForProbe: true });
   const scrubbingRef = useRef(scrubbing);
   scrubbingRef.current = scrubbing;
   const lastRenderKey = useRef("");
@@ -831,6 +871,7 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
     const s = stage();
     if (!s) return;
     if (playing) {
+      playedRef.current = true;
       lastFrameAtRef.current = 0;
       stalledRef.current = false;
       stallCountRef.current = 0;
@@ -869,9 +910,17 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
         stalledRef.current = false;
         setMediaStalled(false);
         let stoppedAt = tRef.current;
+        /*
+         * 只有「刚从播放停下来」才以舞台的 `stoppedAt` 为准。暂停中换了一个新的渲染面(`stageReady` +1:
+         * 卡片代码装上后舞台整页重载、热更新、iframe 重挂)也会走到这一支 —— 新舞台还停在 0,
+         * 照它改 store 就把用户定好的播放头冲回 0(C6.6 T9:成员加入共享项目、装上用户卡之后播放头从 2.5 s 回到 0)。
+         * 那时以 store 的 `t` 为准,只把它发给新舞台。
+         */
+        const fromPlay = playedRef.current;
+        playedRef.current = false;
         try {
           const reply = await s.pause();
-          if (reply.ok && typeof reply.stoppedAt === "number") stoppedAt = reply.stoppedAt;
+          if (fromPlay && reply.ok && typeof reply.stoppedAt === "number") stoppedAt = reply.stoppedAt;
         } catch { /* iframe 正在换 */ }
         if (!alive) return;
         if (Math.abs(getState().t - stoppedAt) > 1e-6) actions.tick(stoppedAt);
@@ -914,6 +963,15 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
       void c.setMediaT(t).catch(() => {});
     }
   }, [dual, stageReady, t]);
+  // C6.6:换档集合变了就下发给两个舞台(E3:素材层两种角色一样)
+  useEffect(() => {
+    if (!dual || !stageReady) return;
+    for (const id of STAGE_IDS) {
+      const c = rpcRef.current[id];
+      if (!c) continue;
+      void c.setLocalHashes([...tierList]).catch(() => {});
+    }
+  }, [dual, stageReady, tierList]);
 
   // 画面层和声音层都由 MediaLayers 管:可以同时有多条画面(重叠+淡化=交叉溶解),音频段单独出声
 
@@ -1134,7 +1192,7 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
           <div style={{ transform: `scale(${scale})`, transformOrigin: "0 0", position: "absolute", left: 0, top: 0, ...themeStyle(project.themeId) }}>
             <div style={{ position: "relative", width: project.width, height: project.height }}>
               {/* K4 的 `mediaStalled`:舞台连着两拍来得比 40 ms 还慢时,音频跟着停一下 */}
-              <MediaLayers project={project} t={t} playing={playing && !mediaStalled} masterVolume={muted ? 0 : volume} audioOnly localHashes={LOCAL_HASHES} />
+              <MediaLayers project={project} t={t} playing={playing && !mediaStalled} masterVolume={muted ? 0 : volume} audioOnly localHashes={tierList} />
               <iframe
                 ref={frameRefOf.A}
                 data-pc="stage-frame"
