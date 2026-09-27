@@ -421,9 +421,10 @@ async function runCreator(out) {
     const { findFfmpeg } = await import('../../server/bakery/ffmpeg.mjs');
     const ffmpeg = await findFfmpeg();
     const video = path.join(TMP, `t9-${run}.mp4`);
+    // 条纹以下铺随机噪声、定码率 56 Mbit/s:原尺寸约 44 MB,按素材服务 8 MiB 一片至少 4 片,续传时「原尺寸还在路上」有足够的窗口
     const ff = spawnSync(ffmpeg, ['-v', 'error', '-y', '-f', 'lavfi', '-i', `color=c=gray:s=1280x720:r=${FPS}:d=6`,
-      '-vf', "geq=lum='if(lt(Y,96),255*mod(floor(N/pow(2,floor(X/128))),2),96+64*sin(X/40+N/5))':cb=128:cr=128,scale=1920:1080:flags=neighbor",
-      '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '16', '-g', '60', '-pix_fmt', 'yuv420p', '-metadata', `comment=c66t9-${run}`, video], { encoding: 'utf8', windowsHide: true });
+      '-vf', "geq=lum='if(lt(Y,96),255*mod(floor(N/pow(2,floor(X/128))),2),40+176*random(1))':cb=128:cr=128,scale=1920:1080:flags=neighbor",
+      '-c:v', 'libx264', '-preset', 'veryfast', '-b:v', '56M', '-maxrate', '60M', '-bufsize', '60M', '-g', '60', '-pix_fmt', 'yuv420p', '-metadata', `comment=c66t9-${run}`, video], { encoding: 'utf8', windowsHide: true });
     if (ff.status !== 0) throw new Error(`ffmpeg 失败:${ff.stderr}`);
     const videoBytes = fs.readFileSync(video);
     out.video = { name: path.basename(video), bytes: videoBytes.length, sha: sha256(videoBytes).slice(0, 12), size: '1920x1080', fps: FPS, seconds: 6 };
@@ -465,6 +466,15 @@ async function runCreator(out) {
     }, CARD_ID, name);
     if (!userClip) throw new Error('没放上用户卡片段');
     out.userClip = userClip;
+    // 记下页面进入共享项目时拿来取素材服务登记的那条连接(connectSharedAssets 用它 service.watch),续传时用同一条连接签票据
+    await P(page, async () => {
+      const L = await import('/src/editor/sync/link.ts');
+      const proto = L.SyncLink.prototype;
+      if (proto.__t9Wrapped) return;
+      const orig = proto.request;
+      proto.request = function (msg, ...rest) { if (msg?.type === 'service.watch') window.__t9AssetLink = this; return orig.call(this, msg, ...rest); };
+      proto.__t9Wrapped = true;
+    });
     const entered = await P(page, async (candidate, cred) => (await import('/src/editor/sync/syncManager.ts')).enterShared(candidate, cred),
       { where: 'hosted', base: shared.base, projectId: shared.projectId, name: shared.name, mode: shared.mode }, { as: 'creator', username: 'creator', password: creatorPw });
     if (!entered?.ok) throw new Error(`创建者进不去共享项目:${JSON.stringify(entered)}`);
@@ -495,67 +505,120 @@ async function runCreator(out) {
     }, path.basename(video)), 120_000, 300);
     if (!media) throw new Error('素材没入库');
     out.importMs = Date.now() - tImport;
-    // 边传边问托管端两档的 chunks:各自第一次 complete 的时刻。小尺寸的哈希从编辑器的两档登记(`/api/media/tiers`)取,
-    // 转好就知道;另记「原尺寸已 complete 而小尺寸还没有」的次数(先小后大就应当是 0)
+    // 边传边盯(T9 要验「观察端加入时原尺寸还在路上」):小尺寸一在托管端 complete,就经编辑器进程的
+    // `POST /api/media/upload-queue/target { base: null }` 暂停上传队列(设计稿第 9 节第 1 条:目标为空时队列暂停、不丢),
+    // 核对原尺寸还没 complete 再放观察端进来;观察端报小尺寸出画面并稳定之后,由页面把上传目标重新交给编辑器进程,
+    // 原尺寸续传到 complete。小尺寸的哈希从编辑器的两档登记(`/api/media/tiers`)取;「小尺寸传完」按编辑器日志的
+    // `upload.tier-done`(比轮询 chunks 早)或 chunks 的 complete,谁先到算谁
     const cli = conn.client('r');
     const firstComplete = { small: null, original: null };
     let smallHash = null;
     let smallState = null;
-    let violations = 0;
     let polls = 0;
-    const tiersDone = await until('[creator] 素材小尺寸生成、两档都传到托管端', async () => {
+    const smallDoneInLog = () => A.log.some((line) => line.includes('[media-tiers] upload.tier-done') && line.includes('"tier":"small"') && line.includes(media.original));
+    const smallUp = await until('[creator] 素材小尺寸生成并传到托管端', async () => {
       if (!smallHash) {
         const t = await getJson(`${A.origin}/api/media/tiers?hashes=${media.original}`).catch(() => null);
         smallState = t?.items?.[media.original]?.state ?? smallState;
         smallHash = t?.items?.[media.original]?.small ?? null;
       }
       polls++;
-      const [cs, co] = await Promise.all([smallHash ? cli.chunks('media', smallHash).catch(() => null) : null, cli.chunks('media', media.original).catch(() => null)]);
-      const now = Date.now();
-      if (cs?.complete && !firstComplete.small) firstComplete.small = now;
-      if (co?.complete && !firstComplete.original) firstComplete.original = now;
-      if (co?.complete && !cs?.complete) violations++;
-      return firstComplete.small && firstComplete.original;
-    }, 360_000, 100);
+      if (!smallHash) return null;
+      if (smallDoneInLog()) return 'log';
+      return (await cli.chunks('media', smallHash).catch(() => null))?.complete ? 'chunks' : null;
+    }, 360_000, 20);
+    if (!smallUp) throw new Error('素材小尺寸没传到托管端');
+    const tPause = Date.now();
+    const pausePost = await postJson(`${A.origin}/api/media/upload-queue/target`, { base: null });
+    say('upload.paused', { via: smallUp });
+    const [cs0, co0] = await Promise.all([cli.chunks('media', smallHash).catch(() => null), cli.chunks('media', media.original).catch(() => null)]);
+    if (cs0?.complete) firstComplete.small = tPause;
+    const chunkSize = cs0?.chunkSize ?? null;
+    const originalSize = videoBytes.length;
+    const totalChunks = chunkSize ? Math.max(1, Math.ceil(originalSize / chunkSize)) : null;
+    out.pause = { at: tPause, sinceImportMs: tPause - tImport, via: smallUp, postStatus: pausePost.status, chunkSize, originalBytes: originalSize, originalChunks: totalChunks,
+      originalReceived: co0?.received?.length ?? 0, originalComplete: co0?.complete === true, smallComplete: cs0?.complete === true };
+    check(pausePost.status === 200 && pausePost.body?.ok !== false, '[creator] 暂停上传队列(上传目标置空)', pausePost);
+    check(out.pause.smallComplete, '[creator] 暂停时托管端素材小尺寸已 complete', out.pause);
+    check(!out.pause.originalComplete, '[creator] 暂停时托管端素材原尺寸还没 complete', out.pause);
+    check(totalChunks >= 4, '[creator] 素材原尺寸至少分 4 片', out.pause);
+    // 暂停之后队列里还留着这个素材(不丢),原尺寸不再往上走
+    await delay(1500);
+    const [co1, q1p] = await Promise.all([cli.chunks('media', media.original).catch(() => null), getJson(`${A.origin}/api/media/upload-queue`).catch(() => null)]);
+    out.pause.after1500ms = { originalReceived: co1?.received?.length ?? 0, originalComplete: co1?.complete === true, queued: q1p?.queue?.items?.length ?? null, target: q1p?.target ?? null };
+    check(!out.pause.after1500ms.originalComplete && out.pause.after1500ms.queued === 1 && !q1p?.target, '[creator] 暂停期间原尺寸停着、素材还在上传队列里', out.pause.after1500ms);
     const smallInProject = await until('[creator] 项目里写上 tiers.small', () => P(page, async (id) => (await import('/src/store/project.ts')).getState().project.media.find((x) => x.id === id)?.tiers?.small ?? null, media.id), 30_000, 300);
     out.tiers = { original: media.original, small: smallHash, remuxed: media.original !== sha256(videoBytes) };
-    out.firstCompleteMs = { small: firstComplete.small ? firstComplete.small - tImport : null, original: firstComplete.original ? firstComplete.original - tImport : null, polls, originalBeforeSmall: violations };
-    check(tiersDone, '[creator] 托管端两档都 complete', firstComplete);
     check(smallHash && /^[0-9a-f]{64}$/.test(smallHash) && smallInProject === smallHash, '[creator] 项目里有 tiers.small,与两档登记一致', { smallHash, smallInProject, smallState });
-    check(violations === 0 && firstComplete.small && firstComplete.original && firstComplete.small <= firstComplete.original, '[creator] 托管端素材小尺寸先于原尺寸 complete', out.firstCompleteMs);
-    const drained = await until('[creator] 上传队列清空', async () => {
-      const q = await getJson(`${A.origin}/api/media/upload-queue`);
-      return q?.queue && q.queue.items.length === 0 && !q.queue.working ? q.queue : null;
-    }, 120_000, 300);
-    out.uploadQueue = drained ? { uploaded: drained.uploaded ?? null, lastError: drained.lastError ?? null } : null;
-    // 编辑器日志里这个素材的上传顺序
-    const short = (h) => (h === smallHash ? 'small' : h === media.original ? 'original' : h?.slice(0, 8));
-    const order = [];
-    for (const line of A.log) {
-      const m = /\[media-tiers\] (upload\.(?:tier-start|tier-done|item-done)) (\{.*\})$/.exec(line);
-      if (!m) continue;
-      let f;
-      try { f = JSON.parse(m[2]); } catch { continue; }
-      if (f.id !== media.original) continue;
-      order.push(m[1] === 'upload.item-done' ? 'item-done' : `${m[1].slice(7)} ${short(f.hash)}`);
-    }
-    out.uploadOrder = order;
-    check(JSON.stringify(order) === JSON.stringify(['tier-start small', 'tier-done small', 'tier-start original', 'tier-done original', 'item-done']),
-      '[creator] 上传队列日志:先小后大', order);
-    // 托管端字节对得上
-    for (const [tier, h] of [['small', smallHash], ['original', media.original]]) {
-      if (!h) continue;
-      const bytes = await cli.get('media', h).catch(() => null);
-      check(bytes && sha256(bytes) === h, `[creator] 托管端 ${tier} 字节与哈希相符`);
-    }
+
+    /** 观察端报小尺寸出画面并稳定(或它已交结果)之后续传,等原尺寸 complete、队列清空,再核对顺序与字节 */
+    const resumeUpload = async () => {
+      let signal = null;
+      const end = Math.min(Date.now() + 15 * 60_000, deadline);
+      while (!signal && Date.now() < end) {
+        const small = await store.get('observer.small', 5000).catch(() => null);
+        if (small) { signal = 'observer.small'; break; }
+        if (await store.get('observer', 0).catch(() => null)) signal = 'observer-gone';
+      }
+      const tResume = Date.now();
+      const resumed = await P(page, async () => {
+        const T = await import('/src/editor/media/assetTiers.ts');
+        const link = window.__t9AssetLink;
+        const base = T.remoteAssetBase();
+        if (!link || !base) return { ok: false, link: !!link, base };
+        // 页面自己设上传目标的函数(进入共享项目时 connectSharedAssets 调的那个):在这条连接上签 rw 素材票据交给编辑器进程
+        window.__t9StopUpload = T.startUploadTarget(link, base);
+        return { ok: true, base };
+      }).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
+      await store.put('resumed', { at: tResume, signal });
+      say('upload.resumed', { signal });
+      out.resume = { at: tResume, signal, sincePauseMs: tResume - tPause, ok: resumed.ok, base: resumed.base ?? null };
+      check(signal === 'observer.small', '[creator] 观察端报了小尺寸出画面才续传', signal);
+      check(resumed.ok && String(resumed.base ?? '').replace(/\/+$/, '') === conn.assetUrl.replace(/\/+$/, ''), '[creator] 页面把上传目标重新交给编辑器进程', resumed);
+      const origDone = await until('[creator] 续传后素材原尺寸 complete', async () => ((await cli.chunks('media', media.original).catch(() => null))?.complete ? Date.now() : null), 300_000, 200);
+      if (origDone) firstComplete.original = origDone;
+      out.resume.originalCompleteMs = origDone ? origDone - tResume : null;
+      out.firstCompleteMs = { small: firstComplete.small ? firstComplete.small - tImport : null, original: firstComplete.original ? firstComplete.original - tImport : null, polls };
+      check(firstComplete.small && firstComplete.original, '[creator] 托管端两档都 complete', firstComplete);
+      const drained = await until('[creator] 上传队列清空', async () => {
+        const q = await getJson(`${A.origin}/api/media/upload-queue`);
+        return q?.queue && q.queue.items.length === 0 && !q.queue.working ? q.queue : null;
+      }, 120_000, 300);
+      out.uploadQueue = drained ? { uploaded: drained.uploaded ?? null, failures: drained.failures ?? null,
+        lastError: drained.lastError ? { code: drained.lastError.code ?? null, message: String(drained.lastError.message ?? '').slice(0, 120) } : null } : null;
+      // 编辑器日志里这个素材的上传顺序(暂停时正在传的那一档中断后会重来一次 tier-start,连着相同的只算一次)
+      const short = (h) => (h === smallHash ? 'small' : h === media.original ? 'original' : h?.slice(0, 8));
+      const order = [];
+      for (const line of A.log) {
+        const m = /\[media-tiers\] (upload\.(?:tier-start|tier-done|item-done|retry)) (\{.*\})$/.exec(line);
+        if (!m) continue;
+        let f;
+        try { f = JSON.parse(m[2]); } catch { continue; }
+        if (f.id !== media.original) continue;
+        order.push(m[1] === 'upload.item-done' ? 'item-done' : m[1] === 'upload.retry' ? 'retry' : `${m[1].slice(7)} ${short(f.hash)}`);
+      }
+      out.uploadOrder = order;
+      const collapsed = order.filter((x) => x !== 'retry').filter((x, i, a) => i === 0 || x !== a[i - 1]);
+      check(JSON.stringify(collapsed) === JSON.stringify(['tier-start small', 'tier-done small', 'tier-start original', 'tier-done original', 'item-done']),
+        '[creator] 上传队列日志:先小后大', order);
+      for (const [tier, h] of [['small', smallHash], ['original', media.original]]) {
+        if (!h) continue;
+        const bytes = await cli.get('media', h).catch(() => null);
+        check(bytes && sha256(bytes) === h, `[creator] 托管端 ${tier} 字节与哈希相符`);
+      }
+    };
 
     // ---- 5. KV config;等主机;加重卡片段,等 plan 落定
     await store.put('config', {
       run, hosted: httpBase, ws: wsBase, projectId: shared.projectId, name: shared.name, mode: shared.mode, base: shared.base, memberPassword: projectPw,
       tiers: out.tiers, mediaName: path.basename(video), fps: FPS, seek: SEEK,
       card: { id: CARD_ID, rel: CARD_REL, v1: MARK('v1'), v2: MARK('v2'), source: cardSource(CARD_ID, MARK('v1')) },
-      heavy: { cardId: HEAVY.cardId, seconds: HEAVY.seconds, salt: `t9-${run}` }, at: Date.now(),
+      heavy: { cardId: HEAVY.cardId, seconds: HEAVY.seconds, salt: `t9-${run}` },
+      pause: { at: out.pause.at, originalComplete: out.pause.originalComplete, originalReceived: out.pause.after1500ms.originalReceived, originalChunks: out.pause.originalChunks },
+      at: Date.now(),
     });
+    // 续传在后台等观察端的信号,与主机、重卡片段、plan 并行
+    const resumeTask = resumeUpload().catch((error) => { fails.push(`[creator] 续传出错:${String(error?.message ?? error).slice(0, 300)}`); });
     say('config.put', { run });
     const hostReady = await store.wait('host.ready', '主机起来', 15 * 60_000);
     out.hostReady = { at: hostReady.at ?? null, port: hostReady.port ?? null };
@@ -699,6 +762,7 @@ async function runCreator(out) {
     }
 
     // ---- 7. 汇总三方
+    await resumeTask;
     const [obs, host] = await Promise.all([
       store.wait('observer', '观察端结果', 15 * 60_000).catch((e) => ({ ok: false, fails: [String(e?.message ?? e)] })),
       store.wait('host', '主机结果', 15 * 60_000).catch((e) => ({ ok: false, fails: [String(e?.message ?? e)] })),
@@ -711,7 +775,7 @@ async function runCreator(out) {
     out.completedByNode = { pc: plan.pc.completed.length + plan.pc.dedup.length, host: hostDone };
     check(out.completedByNode.pc + out.completedByNode.host === plan.tasks, '各节点完成数之和 = 细任务数', { ...out.completedByNode, tasks: plan.tasks });
     await page.screenshot({ path: path.join(OUT, `${run}-creator-2-end.png`) });
-    out.shots = [path.join(OUT, `${run}-creator-1-published.png`), path.join(OUT, `${run}-creator-2-end.png`)];
+    out.shots = [path.join(OUT, `${run}-creator-1-published.png`), path.join(OUT, `${run}-creator-2-end.png`)].filter((f) => fs.existsSync(f));
     out.pageErrors = pageErrors.slice(0, 5);
   } catch (error) {
     fails.push(`creator 出错:${String(error?.message ?? error).slice(0, 600)}`);
@@ -889,6 +953,11 @@ async function runObserver(out) {
       return tier !== 'none' ? { tier, idx: l.idx, w: l.w } : null;
     }, 180_000, 100);
     out.firstShown = firstShown;
+    // 出第一帧时原尺寸还在路上:创建方在放观察端进来之前暂停了上传、核对过原尺寸没 complete,
+    // 而且要等本端报「小尺寸出画面并稳定」才续传 —— 此刻 KV 里还不该有 `resumed`
+    const resumedAtFirst = await store.get('resumed', 0).catch(() => undefined);
+    out.originalAtFirstFrame = { paused: cfg.pause ?? null, resumedBefore: resumedAtFirst === undefined ? 'unknown' : resumedAtFirst !== null };
+    check(cfg.pause && cfg.pause.originalComplete === false && resumedAtFirst === null, '[observer] 出第一帧时素材原尺寸还没 complete(创建方暂停着上传、还没续传)', out.originalAtFirstFrame);
     check(firstShown?.tier === 'small', '[observer] 素材层先以素材小尺寸出现', firstShown);
     const samplingStarted = firstShown?.tier === 'small' ? startSampling() : Promise.resolve(false);
     // 小尺寸停在 2.5 s:连续 3 次读到同一个帧号才算稳定;期间换到原尺寸就用换之前最后一个
@@ -907,8 +976,10 @@ async function runObserver(out) {
         smallIdx = l.idx;
         return stable >= 3;
       }, 20_000, 100);
-      await page.screenshot({ path: path.join(OUT, `${run}-observer-1-small.png`) });
+      if (!swappedEarly) await page.screenshot({ path: path.join(OUT, `${run}-observer-1-small.png`) });
     }
+    // 告诉创建方:小尺寸出画面并稳定了,可以续传原尺寸(没出小尺寸也照样报,免得创建方干等)
+    await store.put('observer.small', { at: Date.now(), tier: firstShown?.tier ?? null, idx: smallIdx, stable: firstShown?.tier === 'small' && !swappedEarly });
     // 两档在观察端加入前都已传完时,页面挂上小尺寸、第一次轮询就换原尺寸(设计稿第 4 节),可能一个稳定样本都取不到:
     // 这时用小尺寸第一次出画面时读到的帧号(firstShown.idx),误差照旧按「不超过一帧」判
     out.smallIdxSource = smallIdx !== null ? (swappedEarly ? 'last-before-swap' : 'stable') : null;
@@ -959,6 +1030,8 @@ async function runObserver(out) {
         spanMs: samples.length > 1 ? Math.round(samples.at(-1).at - samples[0].at) : 0, coversSwap, mode, swapGapMs, sampleIntervalMs };
       check(samples.length >= 10, '[observer] 逐帧采样够数(≥ 10)', out.swapSamples);
       if (mode === 'covered') check(coversSwap, '[observer] 逐帧采样覆盖了换档(先有小尺寸样本、后有原尺寸样本)', out.swapSamples);
+      // 创建方暂停着原尺寸、等本端报了小尺寸才续传,换档一定晚于小尺寸出画面好几个采样间隔
+      check(mode === 'covered', '[observer] 原尺寸加入时还在路上,换档属于「覆盖」情形', { mode, swapGapMs, sampleIntervalMs });
       // 快换时「先小后大」由 firstShown(小尺寸)与之后换成原尺寸那两条断言保证,这里不再要求样本覆盖
       check(black.length === 0, '[observer] 换档期间逐帧采样无黑帧 / 无空档', black.slice(0, 3));
       check(idxs.every((i) => Math.abs(i - EXPECT_IDX) <= 1), '[observer] 换档期间画面一直停在同一时刻', idxs);
@@ -1044,7 +1117,7 @@ async function runObserver(out) {
     out.bOverrideV2 = !!overrideSrc?.includes(cfg.card.v2);
     out.bKindAfter = await P(page, () => window.__pcSyncTest?.view().kind ?? null).catch(() => null);
     await page.screenshot({ path: path.join(OUT, `${run}-observer-3-v2.png`) });
-    out.shots = ['1-small', '2-original', '3-v2'].map((s) => path.join(OUT, `${run}-observer-${s}.png`));
+    out.shots = ['1-small', '2-original', '3-v2'].map((s) => path.join(OUT, `${run}-observer-${s}.png`)).filter((f) => fs.existsSync(f));
     out.pageErrors = pageErrors.slice(0, 5);
 
     check(out.installMs !== null && out.installMs <= 5000, `[observer] 5 s 内装上 v2(installMs=${out.installMs})`);
