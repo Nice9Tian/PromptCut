@@ -10,7 +10,7 @@ import { playEnter } from "../../enterMotion";
 import type { ViewMode } from "./viewPrefs";
 import type { InboundAgentMessage } from "../../../ai/types";
 import { reportsOf } from "../../../ai/progressReport";
-import { HeightBook, isAtBottom, planSegments, prefixOffsets, touchRecent, windowRange, WINDOW_MIN_ENTRIES, type Segment } from "./listWindow";
+import { HeightBook, isAtBottom, planSegments, prefixOffsets, shouldWindow, touchRecent, windowRange, type Segment } from "./listWindow";
 import "./chat.css";
 
 /**
@@ -200,7 +200,7 @@ const overscanFor = (h: number) => Math.max(300, h / 2);
 /**
  * 消息滚动区:贴底跟随、编排折叠块的插入位置、两轮之间的时间分隔、窗口化都在这里。
  *
- * 窗口化(C6.5 遗留):条数超过 WINDOW_MIN_ENTRIES 时只渲染可视区附近的几条(listWindow.ts),
+ * 窗口化(C6.5 遗留):条数超过 WINDOW_MIN_ENTRIES(150)时只渲染可视区附近的几条(listWindow.ts),
  * 上下没渲染的用占位 div 顶住滚动条。消息高度不固定:渲染出来的每条都挂 ResizeObserver,实测高度按 key 记在 HeightBook 里,
  * 没量过的按同类平均估。流式中的那条、最后一条、有焦点的、最近动过的几条不论在哪都渲染。
  *
@@ -526,7 +526,7 @@ export function MessageList(props: MessageListProps) {
   const n = entries.length;
   const book = bookRef.current;
   const off = prefixOffsets(entries.map((e) => book.get(e.key, e.kind)));
-  const windowed = n > WINDOW_MIN_ENTRIES;
+  const windowed = shouldWindow(n);
   let segments: Segment[];
   let range = { first: 0, last: n };
   if (windowed) {

@@ -13,8 +13,17 @@ export const LIST_GAP = 12;
 export const LIST_PAD = 12;
 /** 离底部不超过这么多 px 就算「在底部」,来了新内容接着贴底 */
 export const BOTTOM_SLACK = 40;
-/** 条数不超过这么多就全渲染:平常长度的对话和窗口化之前一模一样 */
-export const WINDOW_MIN_ENTRIES = 40;
+/**
+ * 条数不超过这么多就全渲染〔裁〕:平常长度的对话和窗口化之前一模一样,浏览器的页内查找(Ctrl+F)也照旧找得到每一条。
+ * 只有很长的历史才窗口化,那正是全渲染真卡的地方(2000 条实测每次滚动都有 50～109 ms 的长任务)。
+ * 原来定 40,主会话审查时提到 150:三级机制的改动不该让用户在平常长度的对话里看出区别。
+ */
+export const WINDOW_MIN_ENTRIES = 150;
+
+/** 这么多条要不要窗口化 */
+export function shouldWindow(n: number, min: number = WINDOW_MIN_ENTRIES): boolean {
+  return n > min;
+}
 /** 窗口里最多这么多条(不算强制渲染的):小气泡很密时余量也不会把节点数撑上去 */
 export const WINDOW_MAX_ENTRIES = 44;
 

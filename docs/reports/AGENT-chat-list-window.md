@@ -12,7 +12,7 @@
 |---|---|
 | `src/editor/right/chat/listWindow.ts`（新） | 纯函数：前缀偏移、可见区、窗口范围（余量 + 条数上限）、渲染计划（占位高度）、贴底判定、最近动过的几条、高度记账 `HeightBook` |
 | `src/editor/right/chat/listWindow.test.mjs`（新） | 上面这些的单测，11 条 |
-| `src/editor/right/chat/MessageList.tsx` | 列表摊平成一条条（Entry），超过 40 条时只渲染窗口里的，其余用占位 div；ResizeObserver 实测高度；自己锚滚动位置；贴底判定改为按变化前的内容高度 |
+| `src/editor/right/chat/MessageList.tsx` | 列表摊平成一条条（Entry），超过 150 条时只渲染窗口里的，其余用占位 div；ResizeObserver 实测高度；自己锚滚动位置；贴底判定改为按变化前的内容高度 |
 | `src/editor/right/chat/chat.css` | `.ai-messages` 加 `overflow-anchor: none`；新增 `.ai-vspacer`；`.ai-messages > *` 加 `flex-shrink: 0`（见第 5 节，顺手修的旧问题） |
 | `scripts/probes/chat-window-probe.mjs`（新） | 真浏览器探针 |
 
@@ -39,11 +39,11 @@
 | 15 | content-visibility 让滚出视口的行不排版（流式性能） | 保留；测量时跳过被它跳过的行（`checkVisibility({contentVisibilityAuto})`），滚出去的行按实测高度作占位 |
 | 16 | 「撤销这一步」、往上翻加载、搜索或定位到某条 | MessageList 里没有：「撤销这一步」在 `src/editor/sync/AgentEventLog.tsx`，不在本列表；没有分页加载和搜索定位。无需处理 |
 
-行为上唯一看得出的差别：浏览器的页内查找（Ctrl+F）找不到窗口外的消息文字。编辑器里没有自己的「在对话里搜索」，原来靠 content-visibility 时浏览器查找能找到；窗口化后找不到。条数不超过 40 时全渲染，这一点也不变。请主会话判断是否可以接受（见第 7 节）。
+**窗口化门槛：150 条〔裁〕。** 窗口化之后，浏览器的页内查找（Ctrl+F）找不到窗口外的消息文字。编辑器里没有自己的「在对话里搜索」，原来靠 content-visibility 时浏览器查找能找到。初版门槛是 40 条；主会话审查时裁定提到 150 条（`WINDOW_MIN_ENTRIES`），理由是三级机制的改动不该让用户看出区别。平常长度的对话照旧全部渲染，Ctrl+F 照旧可用；只有超过 150 条的很长历史才窗口化，那正是全渲染真卡的地方（2000 条实测每次滚动有 50～109 ms 的长任务）。超过 150 条时 Ctrl+F 找不到窗口外的文字，这是剩下的唯一差别。
 
 ## 3. 做法
 
-- 条数不超过 40（`WINDOW_MIN_ENTRIES`）时全渲染，平常长度的对话和原来一样。
+- 条数不超过 150（`WINDOW_MIN_ENTRIES`，〔裁〕，见第 2 节末）时全渲染，平常长度的对话和原来一样。
 - 超过时：可视区 + 上下各「可视高度一半、至少 300px」的余量，总共最多 44 条（不算强制渲染的）。其余每一段连续没渲染的用一个占位 div 顶住，高度等于它们的高度加上它们之间的 gap。
 - 高度：渲染出来的每一条挂 ResizeObserver，按 key 记实测高度；没量过的按估计值，估计值每类（用户、回复、时间行、小字、编排块）量满 3 条时定成平均值，之后不再变。不用一直跟着变的平均值，否则上千条未量过的总高会跟着来回跳几千像素。
 - 滚动：`overflow-anchor: none`，自己锚（见行为清单第 3 条）。任何尺寸通知都先落定（贴底或挪回锚点），发生在同一帧绘制之前。
@@ -85,6 +85,12 @@
 
 `out/chat-window-probe-900/` 下的 `1-open-bottom.png`、`2-top.png`（第一轮在顶上，头像、报告图标正常）、`3-after-stream-bottom.png`、`4-middle-before.png`、`5-middle-after-stream.png`（中间第 502 轮，没被拽走）、`6-small-chat.png`（短对话贴底，公式正常）；`out/chat-window-probe-1600/` 下同名的一组。`out/` 不入库。
 
+### 门槛改为 150 之后的复验
+
+- `node --test src/editor/right/chat/listWindow.test.mjs`：12 条（新增门槛一条），通过 12，失败 0。
+- `npx tsc -b --force`：退出码 0。
+- `node scripts/probes/chat-window-probe.mjs --port 5670 --height 900 --out out/chat-window-probe-900`：19/19 通过，退出码 0。打开后 3 个节点，滚上滚下最多 7 个节点，longtask 0 个；流式中最坏一次采样离底 21px，结束时 0；中间来新消息时锚点不动；短对话无占位、贴底。临时目录已删，5670～5679 没有残留监听。
+
 ## 5. 顺手修的旧问题（请主会话确认）
 
 `.ai-messages` 是 flex 列，子元素缺省可以缩。被 `content-visibility: auto` 跳过的行，最小高度按尺寸约束算是 0，内容一超出滚动区就被压成几像素。`contain-intrinsic-size: 120px` 这个估计高度根本没起作用。main 上 2000 条的历史滚动总高只有 31842px（实际约 29 万），打开历史会话贴不到底，就是这个原因。加了 `.ai-messages > * { flex-shrink: 0 }`。短对话里内容少于滚动区时不受影响；内容超出时，行不再被压缩。用户能看到的变化只有：滚动条长短正确了，长历史能贴到底。
@@ -95,6 +101,6 @@
 
 ## 7. 需要主会话决定或更正的
 
-1. **页内查找**（第 2 节末）：条数超过 40 时，窗口外的消息 Ctrl+F 找不到。要保留的话，可以把门槛调高，或者以后另做「在对话里搜索」。
-2. **第 5 节的 flex-shrink 修正**：属于行为改善，不是窗口化本身。要不要一并合入，由主会话定。
+1. **页内查找**：已由主会话裁定，门槛从 40 提到 150（第 2 节末）。以后若要超长历史也能查找，另做「在对话里搜索」。
+2. **第 5 节的 flex-shrink 修正**：主会话已接受，一并合入。
 3. 语义文档没改。本改动属三级机制，`docs/semantics/` 下没有写到聊天列表渲染方式的条目，也没有发现冲突。

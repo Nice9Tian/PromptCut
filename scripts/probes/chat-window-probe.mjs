@@ -389,7 +389,7 @@ try {
   check('stream-in-middle.nodes<=60', midSamples.every((x) => x.nodes <= MAX_NODES), { max: Math.max(...midSamples.map((x) => x.nodes)) });
   await page.screenshot({ path: path.join(OUT, '5-middle-after-stream.png') });
 
-  // ── 6. 短对话(不到窗口化门槛,全渲染):新开一页从空对话发三条,每条流式期间都贴底,没有占位 ──
+  // ── 6. 短对话(不到窗口化门槛 150 条,全渲染):新开一页从空对话发三条,每条流式期间都贴底,没有占位 ──
   const first = page;
   page = await browser.newPage();
   page.on('pageerror', (e) => pageErrors.push(String(e?.message ?? e)));

@@ -14,6 +14,8 @@ import {
   isAtBottom,
   touchRecent,
   HeightBook,
+  shouldWindow,
+  WINDOW_MIN_ENTRIES,
   LIST_GAP,
   LIST_PAD,
 } from "./listWindow.ts";
@@ -149,4 +151,13 @@ test("高度记账:实测优先;估计值同类量满 freezeAfter 条时定成�
   // 非法高度不记
   assert.equal(book.set("z", "user", NaN), false);
   assert.equal(book.set("z", "user", -1), false);
+});
+
+test("窗口化门槛:150 条以内全渲染(页内查找照旧可用),超过才窗口化", () => {
+  assert.equal(WINDOW_MIN_ENTRIES, 150);
+  assert.equal(shouldWindow(0), false);
+  assert.equal(shouldWindow(40), false);
+  assert.equal(shouldWindow(150), false);
+  assert.equal(shouldWindow(151), true);
+  assert.equal(shouldWindow(2000), true);
 });
