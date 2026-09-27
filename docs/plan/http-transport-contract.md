@@ -385,11 +385,11 @@ HT-a 由三条分支实现：服务端 `claude/http-transport`（报告 `docs/re
    - 独立渲染主机的只读卡片同步（`vite-plugin-cards.ts` 的 `createHostCardSync`）本来借队列节点那条会话；包装层补转 `onResume` 与 `stats()`。
    - `server/asset-announce.mjs`（编辑器的素材地址登记、托管组合的管理连接，令牌连接）：缺省端点改为 `createDocEndpoint`。登记挂在会话上，接续时不重发；会话结束后建新会话再登记一次。`vite-plugin-media.ts` 转出的日志从 `ws.open` / `ws.close` 换成 `session.open` / `close` / `detach` / `resume`。
    - 对没有会话层的旧服务端，`createDocEndpoint` 退化（第 17.2 节第 1 条），上面几处行为与原来的 `createWsEndpoint` 相同。
-2. **已接（探针）**：`scripts/probes/shared-project-lan.mjs` 的成员节点连接、`scripts/probes/render-host-probe.mjs` auth-check 的页面连接。`scripts/probes/card-sync-probe.mjs` 加 `--cut-b <端口>`：B 经 `render-queue-proxy.mjs --cut-once --stdin-control` 连托管组合，A 改卡前切一次 B 的全部连接，核对卡片同步不重建、接续、恰好装一次。
+2. **已接（探针）**：`scripts/probes/shared-project-lan.mjs` 的成员节点连接、`scripts/probes/render-host-probe.mjs` auth-check 的页面连接、`scripts/probes/c10a-demo-probe.mjs` 贯穿整个演示的核对连接。`scripts/probes/card-sync-probe.mjs` 加 `--cut-b <端口>`：B 经 `render-queue-proxy.mjs --cut-once --stdin-control` 连托管组合，A 改卡前切一次 B 的全部连接，核对卡片同步不重建、接续、恰好装一次。
 3. **保留旧客户端（`createWsEndpoint`）**：
    - `scripts/probes/c66-t9-probe.mjs` 的页面核对连接：M8 计划第 4 节把该文件分给 `claude/m8-e2e`，本分支不改，避免冲突；由那条分支顺手换（一行，照 `render-host-probe.mjs` 的写法）。
    - `scripts/probes/shared-project-probe.mjs` 的 `migrate-check` 取素材地址用的令牌连接：该文件分给 `claude/m8-migrate`；且是连上、收一条 `service.endpoints` 就关的一次性连接，断一次重跑即可。
-   - `scripts/probes/c10a-demo-probe.mjs` 的核对连接：一次性核对（对账后即关），失败按探针失败重跑，接续不带来可观察的区别。
    - `server/render-node/http-transport.mjs`：HT-b 的底座（第 17.3 节第 10 条），没有调用方。
    - 测试：`ht-legacy.test.mjs`、`render-node-ws.test.mjs`、`auth-impl-client.test.mjs` 专门测旧客户端；`card-sync.test.mjs`、`host-card-code.test.mjs`、`render-host.test.mjs`、`fake-manifest-env.mjs`、`render-host-kit.mjs` 等把 `createWsEndpoint` 当注入的端点用，它们测的是业务规则而不是传输，旧客户端对新服务端仍被支持（第 3.6 节），不改。
 4. **单测**：`server/test/card-sync-session.test.mjs` CS-0～CS-3（缺省端点是会话、断一次后接续；看的一方断开期间的改卡通知接续后补到、恰好装一次、不重建不重取凭证；写的一方断开期间的保存补发、服务上版本号只加一；旧服务端上退化后按对账补上、恰好装一次）。
+5. **探针**（本机托管组合，`card-sync-probe.mjs --cut-b`，2026-09-28 PC）：切一次 B 的连接（代理记 3 条 `conn.cut`），B 的卡片同步 `opens` 1→1、`resumes` 0→1、`detaches` 1，这一版（rev 2）经改卡通知装上、恰好一次（通知里带写入者），`installMs` 655；同一探针对 main 上旧的 `card-sync.mjs` 跑：`opens` 1→2（断线后重建会话、重新要票据、靠对账补装，通知里没有写入者），判 `b-card-sync-reopened`、`b-card-sync-no-resume` 失败。
