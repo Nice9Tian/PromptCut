@@ -24,7 +24,7 @@ import { atFrameGrid } from "../render/frameGrid";
 import { contentStartOf } from "./timeline/utils";
 import { startAssetTiers, tierHashes, useTierHashes } from "./media/assetTiers";
 import { startTierBackfill } from "./io/mediaUpload";
-import { currentReadyIndex, deliverSnapshots, markBaselineReset, noteSettled, pendingDemotes, pickForSetTime, setSnapshotArrive, setSnapshotSource, stopSnapshotFeed, streamPlanesAt, suppressedAt, syncSnapshotSubscription } from "./snapshotFeed";
+import { currentReadyIndex, deliverSnapshots, markBaselineReset, noteSettled, pendingDemotes, pickForSetTime, setSnapshotArrive, setSnapshotSource, snapshotFeedDebug, stopSnapshotFeed, streamPlanesAt, suppressedAt, syncSnapshotSubscription } from "./snapshotFeed";
 import { OnlineSnapshotSource, applyReadyMessage, setActiveOnlineSource } from "../render/snapshotSource";
 import { playingCatchUpTargets, runPlayingSwap, runSettleSwap, setSwapHost, swapInFlight } from "./stageSwap";
 import { demotedClips, onStageDemote } from "./demote";
@@ -210,7 +210,7 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
     const base = remoteAssetBase();
     let ticket: string | null = null;
     if (base) { try { ticket = await remoteAssetTicket(); } catch { ticket = null; } }
-    const policy: MediaTierPolicy = { lowMemory: lowMemRef.current, remote: base ? { base, ticket } : null };
+    const policy: MediaTierPolicy = { lowMemory: lowMemRef.current, online: true, remote: base ? { base, ticket } : null };
     setMediaTierPolicy(policy);
     for (const id of STAGE_IDS) {
       const c = rpcRef.current[id];
@@ -573,7 +573,7 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
     if (!liveRef.current) return;
     const s = frontStage();
     if (!s) return;
-    const head = { project: getState().project, t: tRef.current, playing: playingRef.current };
+    const head = { project: getState().project, t: tRef.current, playing: playingRef.current, lowMemory: lowMemRef.current };
     /*
      * 抑制只在播放中有(C5 / K5:拖动和暂停下不抑制、改贴快照)。
      * **低内存档例外**(c10a 第 8 节「不追活渲」「缺小尺寸的重层显示占位」):暂停、拖动时重卡也抑制 ——
@@ -635,9 +635,26 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
     });
     src.setProject(getState().project.id || null);
     src.focus(tRef.current, getState().project.fps || 30);
+    const resume = () => {
+      if (document.visibilityState === "visible") src.focus(tRef.current, getState().project.fps || 30);
+    };
+    document.addEventListener("visibilitychange", resume);
+    /*
+     * 暂停着的在线页面没有帧事件会再投:每 5 秒带 reset 重投一次,对齐舞台的实际状态
+     * (投递记进基线之后 setTime 又换掉了快照、或 iframe 原地重载丢了已确认的投递)。
+     * 播放中每拍都在投,不用它。
+     */
+    const reconcile = window.setInterval(() => {
+      if (document.visibilityState === "visible" && !playingRef.current) {
+        markBaselineReset("front");
+        void pumpRef.current();
+      }
+    }, 5000);
     if (typeof window !== "undefined") (window as unknown as Record<string, unknown>).__pcOnlineSnapshots = () => src.debug();
     return () => {
       off();
+      document.removeEventListener("visibilitychange", resume);
+      window.clearInterval(reconcile);
       src.stop();
       onlineSourceRef.current = null;
       setActiveOnlineSource(null);
@@ -720,6 +737,7 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
       pendingDemote: [...pendingDemotes()],
       demoted: [...demotedClips()],
       swapInFlight: swapInFlight(),
+      snapshotFeed: snapshotFeedDebug({ project: getState().project, t: tRef.current, playing: playingRef.current, lowMemory: lowMemRef.current }),
     });
     return () => { delete w.__pcPreviewDiag; };
   }, [live]);
@@ -906,7 +924,7 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
        * 入点时,新挂载的组件和它的快照平面同帧出现、不闪初始态。手里没有的那几帧当场
        * 发起取字节(不等),由 `.pc-awaiting` 藏 500 ms 兜底。
        */
-      const feed = liveRef.current ? pickForSetTime({ project: getState().project, t: sec, playing: false })
+      const feed = liveRef.current ? pickForSetTime({ project: getState().project, t: sec, playing: false, lowMemory: lowMemRef.current })
         : { snapshots: {} as Record<string, string | null>, awaiting: [] as string[] };
       await s.setTime(sec, {
         ...opts,
@@ -915,6 +933,7 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
       });
     } catch {
       // iframe 正在换(detached):新的 ready 会重发
+      markBaselineReset("front");
       return;
     }
     void refreshRects();

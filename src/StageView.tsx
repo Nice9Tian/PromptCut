@@ -371,7 +371,7 @@ export default function StageView() {
      */
     const caps = detectHostCapabilities({ online: ONLINE });
     // c10a 第 8 节:舞台自己判出来的低内存档先生效;远程素材服务的基址与票据等父页 `setMediaPolicy` 下发
-    setMediaTierPolicy({ lowMemory: caps.lowMemory });
+    setMediaTierPolicy({ lowMemory: caps.lowMemory, online: ONLINE });
     /*
      * c10a 第 8 节「运行中出现 webglcontextlost 或连续 3 次视频解码失败,本次会话改按低内存档」:只在在线模式里报。
      * 两种事件都不冒泡,在 document 上按捕获阶段接;判定与提示在父页(`src/online/lowMemory.ts`)。

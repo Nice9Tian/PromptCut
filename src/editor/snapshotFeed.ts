@@ -41,6 +41,8 @@ import { planesWithinBudget, rangesHave, SEGMENT_FRAMES, streamPlanesFor, type S
 export const SNAPSHOT_THROTTLE_MS = 33;
 /** A3c：一次 `setSnapshots` 投递 ≤ 2 MB（回包的 `bytes` 是实测口子，超了就拆） */
 export const SNAPSHOT_DELIVERY_MAX_BYTES = 2 * 1024 * 1024;
+/** A lost iframe reply must not leave the delivery baseline committed forever. */
+export const SNAPSHOT_DELIVERY_TIMEOUT_MS = 8000;
 /** C4：一次最多报 8 条缺口给预渲染进程 */
 export const MAX_WANTED = 8;
 /**
@@ -133,6 +135,19 @@ export function setSnapshotArrive(notify: (() => void) | null): void {
 /** 就绪索引此刻的样子（验收探针看） */
 export function currentReadyIndex(): ReadyIndex {
   return readyIndex;
+}
+
+/** Safe probe diagnostics for a paused online page; no snapshot bytes or tickets. */
+export function snapshotFeedDebug(head: Playhead) {
+  const planned = planFeed(head);
+  return {
+    ready: [...readyIndex].map(([clipId, kinds]) => ({ clipId, kinds: [...kinds].map(([kind, layer]) => ({ kind, key: layer.key.slice(0, 12), ranges: layer.ranges.length })) })),
+    heavy: planned.heavy,
+    picks: [...planned.picks].map(([clipId, pick]) => ({ clipId, key: pick.key.slice(0, 12), cached: have.has(pick.id), flying: flying.has(pick.id) })),
+    mounted: [...baselines.front.mounted].map(([clipId, pick]) => ({ clipId, key: pick.key.slice(0, 12) })),
+    reset: baselines.front.needsReset,
+    settled: [...baselines.front.settled],
+  };
 }
 
 /**
@@ -298,6 +313,8 @@ export interface Playhead {
   t: number;
   /** 播放中才有抑制集合（C5 / K5：拖动和暂停下不抑制、改贴快照） */
   playing: boolean;
+  /** 低内存档不追暂停态活渲，不能让旧的 settled 事件关掉快照。 */
+  lowMemory?: boolean;
 }
 
 export interface FeedPlan {
@@ -318,7 +335,7 @@ export interface FeedPlan {
  * **每张重卡都照样选一帧快照**（根因 C：以前「有流就不选快照」，舞台那边流一 blank 整层就透明）——
  * 流覆盖着的标成海报（`poster`）垫在流下面，超预算的当「无流」（`over`），其余 `none`。
  */
-export function planFeed({ project, t, playing }: Playhead): FeedPlan {
+export function planFeed({ project, t, playing, lowMemory }: Playhead): FeedPlan {
   const plan = currentPlan();
   const fps = Math.max(1, project.fps || 30);
   const globalFrame = Math.max(0, Math.floor(t * fps + 1e-6));
@@ -358,7 +375,7 @@ export function planFeed({ project, t, playing }: Playhead): FeedPlan {
   }
   for (const { clip, firstFrame, count } of clips) {
     // 根因 B:暂停态已经追到精确活渲的卡不再选快照(停下就撤兜底,直到下一次 setTime / 播放)
-    if (!playing && isSettled("front", clip.id)) continue;
+    if (!playing && !lowMemory && isSettled("front", clip.id)) continue;
     const tier: PickTier = covered.has(clip.id) ? "poster" : wantedStream.has(clip.id) ? "over" : "none";
     let picked: Pick | null = null;
     for (const kind of KIND_ORDER) {
@@ -535,11 +552,22 @@ export async function deliverSnapshots(stage: StageRpcClient, role: StageRole, h
   base.needsReset = false;
   base.lastSentAt = now;
   try {
-    await stage.setSnapshots(patch, reset ? { reset: true } : {});
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        stage.setSnapshots(patch, reset ? { reset: true } : {}),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error("snapshot delivery timed out")), SNAPSHOT_DELIVERY_TIMEOUT_MS);
+        }),
+      ]);
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
     return 1;
   } catch {
-    // iframe 正在换：基线跟着客户端作废，下一次带 reset
+    // iframe 正在换或回包丢失：作废基线，并主动安排下一次投递。
     base.needsReset = true;
+    setTimeout(() => onArrive?.(), 1000);
     return 0;
   }
 }

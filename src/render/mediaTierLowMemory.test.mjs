@@ -71,3 +71,16 @@ test("LMT7 在线浏览器模式:哈希地址换成远程素材服务的 media/<
   }
   assert.equal(playbackUrl(video, []), `/@media/${SMALL}`, "桌面运行环境照旧走本机代理");
 });
+
+test("LMT8 在线页远程素材地址未就绪时不交给浏览器 /@media 哈希地址", () => {
+  try {
+    setMediaTierPolicy({ online: true, lowMemory: true, remote: null });
+    assert.deepEqual(chooseTier(video, []), { url: "", tier: "none", awaiting: true });
+    assert.deepEqual(chooseTier(image, []), { url: "", tier: "none", awaiting: true });
+    assert.equal(playbackUrl({ url: "blob:local" }, []), "blob:local");
+    setMediaTierPolicy({ remote: { base: "https://h.example/api/asset", ticket: "t" } });
+    assert.match(playbackUrl(video, []), /^https:\/\/h\.example\/api\/asset\/media\//);
+  } finally {
+    setMediaTierPolicy({ online: false, lowMemory: false, remote: null });
+  }
+});

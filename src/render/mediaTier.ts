@@ -76,14 +76,17 @@ function asSet(list: HashList): ReadonlySet<string> {
  */
 export interface MediaTierPolicy {
   lowMemory: boolean;
+  /** 在线页面在远程地址就绪前不得请求本机的 /@media 路由 */
+  online: boolean;
   remote: { base: string; ticket: string | null } | null;
 }
-let policy: MediaTierPolicy = { lowMemory: false, remote: null };
+// Vite 的在线构建按完整属性名替换常量；Node 单测里 import.meta.env 不存在。
+let policy: MediaTierPolicy = { lowMemory: false, online: typeof import.meta.env !== "undefined" && import.meta.env.VITE_PC_ONLINE === "1", remote: null };
 
 export function setMediaTierPolicy(next: Partial<MediaTierPolicy>): void {
   const remote = next.remote === undefined ? policy.remote
     : next.remote && next.remote.base ? { base: next.remote.base.replace(/\/+$/, ""), ticket: next.remote.ticket || null } : null;
-  policy = { lowMemory: next.lowMemory ?? policy.lowMemory, remote };
+  policy = { lowMemory: next.lowMemory ?? policy.lowMemory, online: next.online ?? policy.online, remote };
 }
 
 export function mediaTierPolicy(): MediaTierPolicy {
@@ -110,7 +113,7 @@ export function remoteMediaUrl(url: string, remote: MediaTierPolicy["remote"] = 
 export function chooseTier(
   media: TierMedia,
   localHashes: HashList = [],
-  opts: { cloudBase?: string; playable?: (hash: string) => boolean | undefined; probe?: boolean; lowMemory?: boolean; remote?: MediaTierPolicy["remote"] } = {},
+  opts: { cloudBase?: string; playable?: (hash: string) => boolean | undefined; probe?: boolean; lowMemory?: boolean; online?: boolean; remote?: MediaTierPolicy["remote"] } = {},
 ): TierChoice {
   const original = originalUrl(media);
   const complete = asSet(localHashes);
@@ -121,6 +124,7 @@ export function chooseTier(
   const remote = opts.remote !== undefined ? opts.remote : policy.remote;
   const pick = (tier: "small" | "original", awaiting: boolean): TierChoice => {
     const url = tier === "small" && small ? small : original;
+    if ((opts.online ?? policy.online) && !remote && hashFromUrl(url)) return { url: "", tier: "none", awaiting: true };
     return { url: remoteMediaUrl(withBase(url, opts.cloudBase), remote), tier: url ? tier : "none", awaiting: awaiting && !!url && !!originalHash };
   };
   /*
@@ -147,7 +151,10 @@ export function chooseTier(
     if (!hasSmall) return pick("original", false);
     const playable = (opts.playable ?? playableOnThisHost)(originalHash);
     if (playable === true) return pick("original", false);
-    if (playable === undefined && opts.probe !== false && shouldProbe(originalHash)) {
+    // The playability probe is itself a fetch. Wait for the hosted asset address
+    // just as the visible media element does.
+    if (playable === undefined && opts.probe !== false && shouldProbe(originalHash)
+      && !((opts.online ?? policy.online) && !remote && hashFromUrl(original))) {
       void probePlayable(originalHash, remoteMediaUrl(withBase(original, opts.cloudBase), remote), media.ext, media.kind === "audio" ? "audio" : "video",
         { remote: !!opts.cloudBase || !!remote || complete.has(TIERS_KNOWN_REMOTE) });
     }
@@ -160,7 +167,7 @@ export function chooseTier(
 export function playbackUrl(
   media: TierMedia,
   localHashes: HashList = [],
-  opts: { cloudBase?: string; playable?: (hash: string) => boolean | undefined; probe?: boolean; lowMemory?: boolean; remote?: MediaTierPolicy["remote"] } = {},
+  opts: { cloudBase?: string; playable?: (hash: string) => boolean | undefined; probe?: boolean; lowMemory?: boolean; online?: boolean; remote?: MediaTierPolicy["remote"] } = {},
 ): string {
   return chooseTier(media, localHashes, opts).url;
 }

@@ -191,3 +191,39 @@ test('OS7 没连上文档服务 / 没有素材服务:不抛,只记错,下一轮�
   assert.ok(src.stats.errors >= 1);
   assert.equal(w.fetches.length, 0);
 });
+
+test('OS8 一次层表请求永久悬挂后仍能拉到新键', async () => {
+  const w = world();
+  w.layerMap([{ clipId: 'a', kind: 'html', key: 'K2', resultKey: 'R2', firstFrame: 0, count: 2 }]);
+  w.manifest('R2', 0, 1, [0, 1]);
+  let calls = 0;
+  const src = new OnlineSnapshotSource({ ...w.deps, request: (msg) => {
+    if (msg.key === 'layers:p1' && ++calls === 1) return new Promise(() => {});
+    return w.deps.request(msg);
+  }, requestTimeoutMs: 20 });
+  const index = new Map();
+  src.subscribeReady('s', 0, (m) => applyReadyMessage(index, m));
+  src.setProject('p1');
+  await Promise.race([src.tickNow(), new Promise((_, reject) => setTimeout(() => reject(new Error('轮询被悬挂请求卡住')), 100))]);
+  assert.equal(calls, 1);
+  await src.tickNow();
+  assert.equal(layerOf(index, 'a', 'html')?.key, 'K2');
+  src.stop();
+});
+
+test('OS9 一张小位图请求永久悬挂后释放队列并重取', async () => {
+  const w = world();
+  w.layerMap([{ clipId: 'a', kind: 'html', key: 'K', resultKey: 'R', firstFrame: 0, count: 1 }]);
+  w.manifest('R', 0, 0, [0]);
+  let calls = 0;
+  const src = new OnlineSnapshotSource({ ...w.deps, assetTimeoutMs: 20, fetch: (...args) => {
+    if (++calls === 1) return new Promise(() => {});
+    return w.deps.fetch(...args);
+  } });
+  src.setProject('p1');
+  await src.tickNow();
+  await new Promise((r) => setTimeout(r, 30));
+  assert.match(await src.fetchSnapshot('html', 'K', 0), /data:image\/webp;base64,/);
+  assert.equal(calls, 2);
+  src.stop();
+});

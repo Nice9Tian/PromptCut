@@ -8,6 +8,9 @@ import { installHeadlessHooks } from "./headless";
 import { WindowTitleBar } from "./ui/WindowTitleBar";
 import { useSkin } from "./skins/useSkin";
 import { ONLINE } from "./online/mode";
+import { peekCapturedInvite } from "./online/invite";
+import { forgetSharedResume, hasSharedResume, resumeShared } from "./editor/sync/syncManager";
+import { newProject } from "./editor/io/proc";
 
 /**
  * 开始页和编辑器之间的门。
@@ -42,9 +45,33 @@ export function Shell(): JSX.Element {
 
   // 顶栏的「回到首页」在 window 上派发这个事件,免得给 Editor 加一层 props
   useEffect(() => {
-    const back = () => setInEditor(false);
+    const back = () => {
+      // 回开始页之后再刷新就留在开始页
+      forgetSharedResume();
+      setInEditor(false);
+    };
     window.addEventListener("pc-go-home", back);
     return () => window.removeEventListener("pc-go-home", back);
+  }, []);
+
+  /*
+   * 刷新之后回到刷新前打开的共享项目(C10a r2):这个标签页记着(syncManager 的 resumeShared)就照「加入别人的项目」
+   * 那样先换一份空项目、再进去,进去了直接进编辑器;没进去(离线、凭证失效)留在开始页。
+   * 打开的是邀请链接(`#invite=`)时以链接为准,不回旧项目。`?editor` 的页面由编辑器自己接(Editor.tsx)。
+   */
+  useEffect(() => {
+    if (inEditor || !hasSharedResume() || peekCapturedInvite()) return;
+    let live = true;
+    newProject("未命名");
+    void resumeShared().then((ok) => {
+      if (ok && live) {
+        setActiveDraftId(null);
+        setInEditor(true);
+      }
+    });
+    return () => { live = false; };
+    // 启动时只看一次
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // 启动参数只看一次

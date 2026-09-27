@@ -21,7 +21,7 @@ import { isViewOnly } from "../io/viewOnly";
 import { SyncLink, type AnyMsg, type CloseInfo } from "./link";
 import { client, errorStatus, route, type Candidate, type SharedMode, type Where } from "./sharedApi";
 import { clipOfEntity, entityLabel, writerLabel, type DisplayNames, type Me } from "./labels";
-import { connectSharedAssets, disconnectSharedAssets } from "../media/assetTiers";
+import { connectSharedAssets, disconnectSharedAssets, receiveSharedAssetEndpoints } from "../media/assetTiers";
 import { bindCardSync, noteProjectForCardSync } from "./cardSync";
 import { ONLINE } from "../../online/mode";
 import { loadBrowserDevice } from "../../online/device";
@@ -507,7 +507,75 @@ function switchToLocal(project: Project, { load }: { load: boolean }): Project {
 function onLoad(project: Project): Project {
   if (ONLINE && !cur) return project;
   if (cur && cur.kind === "local" && project.id === cur.docProjectId) return cur.link.ds.load(project);
+  if (cur?.kind === "shared") clearSharedResume();
   return switchToLocal(project, { load: true });
+}
+
+/* ---------------- 刷新之后回到共享项目 ---------------- */
+
+/**
+ * 同一个标签页刷新(整页重载)之后,回到刷新前打开的共享项目(C10a r2;语义没写到,按「对用户最小意外」做,待定级)。
+ *
+ * - 存在 `sessionStorage`:只属于这个标签页,关掉标签页就没了;
+ * - 存进入用的候选(项目号、地址、名字、进入方式)、身份与用户名,以及派生出的 `K`
+ *   (`client.buildAuthProtocols` 的 `onKey`,「缓存 K,不缓存口令」);不存口令,也不存邀请码;
+ * - 主动离开(取消多用户协作、回开始页)、被踢、被移出、项目被删、换开别的项目时清掉;
+ * - 连不上(离线、限速、设备信息没取到)时留着,下次刷新再试;凭证不对、项目没了、被踢过就清掉。
+ */
+const SHARED_RESUME_KEY = "pc.shared.resume";
+
+interface SharedResume {
+  candidate: Candidate;
+  as: "member" | "creator";
+  username: string;
+  key: string;
+}
+
+function readSharedResume(): SharedResume | null {
+  let raw: string | null = null;
+  try { raw = sessionStorage.getItem(SHARED_RESUME_KEY); } catch { return null; }
+  if (!raw) return null;
+  try {
+    const r = JSON.parse(raw) as SharedResume;
+    const c = r?.candidate;
+    if (!c || typeof c.projectId !== "string" || typeof c.base !== "string" || typeof r.username !== "string" || typeof r.key !== "string" || !r.key) return null;
+    if (r.as !== "member" && r.as !== "creator") return null;
+    return r;
+  } catch {
+    return null;
+  }
+}
+
+function rememberSharedResume(r: SharedResume): void {
+  try { sessionStorage.setItem(SHARED_RESUME_KEY, JSON.stringify(r)); } catch { /* 存不了:刷新后回开始页 */ }
+}
+
+function clearSharedResume(): void {
+  try { sessionStorage.removeItem(SHARED_RESUME_KEY); } catch { /* 同上 */ }
+}
+
+/** 这个标签页刷新前开着共享项目(还没回去) */
+export function hasSharedResume(): boolean {
+  return readSharedResume() !== null;
+}
+
+/**
+ * 回到刷新前打开的共享项目。已经在这个项目里回 true;没有记录回 false。
+ * 调用方先把 store 换成一份空项目(同「加入别人的项目」),内容以文档服务为准。
+ */
+export async function resumeShared(): Promise<boolean> {
+  const r = readSharedResume();
+  if (!r) return false;
+  if (cur?.kind === "shared" && cur.docProjectId === r.candidate.projectId) return true;
+  const out = await enterShared(r.candidate, { as: r.as, username: r.username, password: "", key: r.key });
+  if (out.ok) return true;
+  if (out.error !== "unreachable" && out.error !== "not-ready" && out.error !== "rate-limited") clearSharedResume();
+  return false;
+}
+
+/** 回开始页(顶栏「回到首页」)之后再刷新,留在开始页:忘掉这条记录 */
+export function forgetSharedResume(): void {
+  clearSharedResume();
 }
 
 /* ---------------- 其余消息:成员、事件、通知 ---------------- */
@@ -587,6 +655,9 @@ function rememberEvent(e: Record<string, unknown>) {
 
 function onSideMessage(msg: AnyMsg) {
   switch (msg.type) {
+    case "service.endpoints":
+      receiveSharedAssetEndpoints(msg.endpoints);
+      return;
     case "shared.members.list":
       patch({ members: Array.isArray(msg.devices) ? (msg.devices as MemberRow[]) : [] });
       return;
@@ -649,7 +720,7 @@ export async function startSync(): Promise<void> {
 export function isJoinPage(): boolean {
   // C10a:从开始页「加入别人的项目」进来的(已经连着共享项目),以及在线页面(只能从加入进编辑器),
   // 内容同样以文档服务为准:编辑器挂上时不塞演示卡,不然每个加入的人都往大家的项目里加一遍
-  if (ONLINE || cur?.kind === "shared") return true;
+  if (ONLINE || cur?.kind === "shared" || hasSharedResume()) return true;
   try {
     return new URLSearchParams(location.search).has("join");
   } catch {
@@ -860,6 +931,7 @@ export async function enterShared(candidate: Candidate, cred: EnterCredentials):
         if (settled) {
           // 重连上了:重新订阅成员变化
           link.send({ type: "shared.watch" });
+          void connectSharedAssets(link, candidate.base, { online: ONLINE });
           return;
         }
         settled = true;
@@ -871,6 +943,8 @@ export async function enterShared(candidate: Candidate, cred: EnterCredentials):
         });
         rememberKicked(candidate.projectId, cred.username, false);
         if (cred.as === "creator") rememberCreator(candidate.projectId, cred.username);
+        // 同一个标签页刷新之后回到这里(只存派生出的 K,不存口令;见 resumeShared)
+        if (key) rememberSharedResume({ candidate, as: cred.as, username: cred.username, key });
         link.send({ type: "shared.watch" });
         link.send({ type: "events.list", projectId: candidate.projectId });
         // C6.6:这个共享项目的素材服务(服务地址登记里的 asset)当作当前连接的远程素材服务
@@ -891,6 +965,7 @@ export async function enterShared(candidate: Candidate, cred: EnterCredentials):
         if (info.fatal && cur?.link === link && expectedClose !== link) {
           const blocked: Blocked = info.code === 4004 ? "deleted" : info.reason === "removed" ? "removed" : "kicked";
           if (blocked === "kicked") rememberKicked(candidate.projectId, cred.username, true);
+          clearSharedResume();
           patch({ blocked });
         }
         refreshStatus();
@@ -922,6 +997,7 @@ export function expectSharedClose(on = true) {
  * 项目真身拉回本机)。在线页面没有本机空间,只是断开。
  */
 export function leaveSharedToLocal(project: Project = getState().project): Project {
+  clearSharedResume();
   patch({ shared: null, members: [], blocked: null });
   const out = switchToLocal(project, { load: true });
   expectedClose = null;
@@ -935,6 +1011,7 @@ export function currentSharedLink(): SyncLink | null {
 
 /** 被踢 / 被移出 / 项目被删之后点「开始页」:回到本机空间,回开始页 */
 export function leaveBlocked() {
+  clearSharedResume();
   patch({ blocked: null, shared: null, members: [] });
   switchToLocal(getState().project, { load: false });
   window.dispatchEvent(new Event("pc-go-home"));

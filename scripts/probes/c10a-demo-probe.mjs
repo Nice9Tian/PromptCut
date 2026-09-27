@@ -22,6 +22,7 @@
  *      再放重卡片段(`probe-typewriter`,审阅过的独立推帧卡、共享档);项目设置里勾「多用户协作」放云端,取邀请链接;
  *      之后写渲染用的共享配置(创建者身份、`role: 'render'`)、结束预渲染进程让编辑器照常重启它(重启后读到配置、连上项目,
  *      重放 preload);等两档素材上云、plan 切出的细任务全部落定、层表与清单(含小尺寸)写进内容库。
+ *   1b. 创建者刷新页面:同一个标签页刷新之后回到刷新前打开的共享项目(同一份项目文档、仍是创建者)。
  *   2. 手机成员:Chrome 移动端仿真(手机视口、触屏、`deviceMemory: 4`)打开邀请链接,只填用户名加入;断言判为低内存档
  *      (进入提示、只有一个同源舞台)、网络记录里视频只有小尺寸、预渲染只有 `px/` 小位图、没有原尺寸与 `snap/`;截图。
  *   3. 在手机上改一处(重卡片段的参数换成已钉死的第二个版本):创建方的渲染节点认领重渲,新的预渲染小尺寸(新的 `px/` 哈希)
@@ -31,6 +32,10 @@
  *   5. 作废邀请码:创建者「作废并重新生成」,旧链接给表 A 的失效文案,新链接能进。
  *   6. 桌面版开始页:同一项目用桌面版的加入表单进一次(手填、粘贴邀请链接两条)。
  *   7. 收尾:以创建者身份 `delete` 云端项目,结束自己起的进程,删临时目录。
+ *
+ * 注意:创建者的 dev server 跑在本工作区上。跑的期间不要改工作区里的文件 —— Tailwind v4 的 Vite 插件会把改动过的
+ * 非模块文件(连 docs 下的 .md 也算)当作类名来源,静默让所有页面整页重载。结果里 `creatorPage` 记着创建者页面的
+ * 每次顶层导航与意外重载次数。
  *
  * 输出:过程写 stderr(一行一条 JSON);stdout 最后一行是一行 JSON `{ ok, fails, … }`,`ok` 为假时退出码 1。
  */
@@ -333,6 +338,17 @@ async function newPage({ mobile = false } = {}) {
   page.on('response', (res) => { if (res.status() >= 400 && page.badResponses.length < 40) { try { const u = new URL(res.url()); page.badResponses.push(`${res.status()} ${u.pathname.slice(0, 120)}`); } catch { /* 不是地址 */ } } });
   page.on('console', (m) => { if ((m.type() === 'error' || m.type() === 'warn') && page.consoleErrors.length < 40) page.consoleErrors.push(`${m.type()}: ${m.text()}`.slice(0, 240)); });
   page.assets = [];
+  // 顶层导航(含整页重载)与 Vite 客户端消息:查「创建者页面中途整页重载」用;地址只记源与路径
+  page.navs = [];
+  page.on('framenavigated', (f) => {
+    if (f !== page.mainFrame()) return;
+    let where = '?';
+    try { const u = new URL(f.url()); where = `${u.origin}${u.pathname}`; } catch { /* 不是地址 */ }
+    page.navs.push({ at: new Date().toISOString(), url: where });
+    if (page.navs.length > 1) say('page.renavigated', { url: where, count: page.navs.length });
+  });
+  page.viteLog = [];
+  page.on('console', (m) => { const t = m.text(); if (t.startsWith('[vite]') && page.viteLog.length < 60) page.viteLog.push(`${new Date().toISOString()} ${t}`.slice(0, 240)); });
   if (mobile) {
     await page.emulate({
       userAgent: 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Mobile Safari/537.36',
@@ -509,6 +525,22 @@ try {
   out.steps.creator = { ms: Date.now() - t1, project: { name: projName, projectId: state.projectId }, media: { small: media.small.slice(0, 12), original: media.original.slice(0, 12) },
     invite: redactInvite(state.link), plan: settled, prerenderRestarted: !!pre1, heavy: layers ? { key: layers.key.slice(0, 12), frames: layers.frames, small: layers.smallCount } : null };
   say('step1.done', out.steps.creator);
+
+  /* ---------------------------------------------------------------- 1b. 创建者刷新页面,回到刷新前打开的共享项目 */
+  // 产品行为(C10a r2):同一个标签页刷新之后回到共享项目;回不去的话之后没人替改动重发计划,手机永远等不到新键
+  const t1b = Date.now();
+  state.creatorReloads = 1;
+  await creator.reload({ waitUntil: 'domcontentloaded', timeout: 180_000 });
+  const resumed = await until('创建者刷新后回到共享项目', () => P(creator, async (spec) => {
+    const Y = await import('/src/editor/sync/syncManager.ts');
+    const S = await import('/src/store/project.ts');
+    const v = Y.getSyncView();
+    const clip = S.getState().project.tracks.flatMap((t) => t.clips).find((c) => c.id === spec.clip);
+    return v.shared?.projectId === spec.projectId && v.shared.creator && clip && document.querySelectorAll('iframe').length >= 2 ? { docId: S.getState().project.id } : null;
+  }, { projectId: state.projectId, clip: heavyClip }), 120_000, 500);
+  check(resumed && resumed.docId === state.docId, '创建者刷新页面后回到刷新前的共享项目(同一份项目文档)', resumed);
+  out.steps.creatorReload = { ms: Date.now() - t1b, resumed: !!resumed };
+  say('step1b.done', out.steps.creatorReload);
 
   /* ---------------------------------------------------------------- 2. 手机成员 */
   const t2 = Date.now();
@@ -703,6 +735,17 @@ try {
     check(r?.type === 'shared.admin.ok' && gone === 404, '收尾:以创建者身份删掉云端项目', deleted);
   }
   try { conn?.close(); } catch { /* 已关 */ }
+  /*
+   * 创建者页面的顶层导航:第一次是探针自己的 goto,第 1b 步探针自己刷新一次,此外的都是「意外的整页重载」。
+   * 开发服务里最常见的来源是 Tailwind v4 的 Vite 插件:它自动扫描项目里的文件找类名,扫描到的非模块文件
+   * (docs 下的 .md 等)一改就静默发 full-reload(服务端日志里没有「page reload」)。所以跑探针期间不要改工作区里的文件。
+   * 产品上刷新后会回到共享项目(第 1b 步验的就是这个),意外重载只记下、不判失败。
+   */
+  if (state.creator) {
+    out.creatorPage = { navs: state.creator.navs, expected: 1 + (state.creatorReloads ?? 0), vite: state.creator.viteLog,
+      server: editorLog.filter((l) => /page reload|optimized dependencies|new dependencies|reloading|server restarted/i.test(l)).slice(0, 20).map((l) => l.slice(0, 240)) };
+    out.creatorPage.unexpectedReloads = Math.max(0, state.creator.navs.length - out.creatorPage.expected);
+  }
   try { await browser?.close(); } catch { /* 已关 */ }
   try { fs.writeFileSync(path.join(OUT, 'creator-editor.log'), editorLog.join('\n')); } catch { /* 写不了 */ }
   if (editor?.child?.pid) {

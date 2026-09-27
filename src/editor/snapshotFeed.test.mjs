@@ -279,6 +279,15 @@ test("settled 把卡从基线里删掉:同一帧会重投", async () => {
   assert.deepEqual(Object.keys(pickForSetTime(head).snapshots), ["h"]);
 });
 
+test("低内存档忽略迟到的 settled，暂停时仍选预渲染小尺寸", () => {
+  const p = project([card("h", 0, 10)]);
+  plan = heavyEverywhere("h");
+  src.push(layer("h", [[0, 100]]));
+  noteSettled("front", ["h"]);
+  assert.equal(planFeed({ project: p, t: 1, playing: false }).picks.size, 0);
+  assert.equal(planFeed({ project: p, t: 1, playing: false, lowMemory: true }).picks.size, 1);
+});
+
 /* ---------------------------------------------------------------- 抑制 */
 
 test("抑制集合只在播放中有,并上 K3(b) 的额外抑制", () => {
