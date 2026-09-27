@@ -3,7 +3,11 @@
  * 两个编辑器实例加入同一个共享项目(本机托管组合 `server/hosted/main.mjs`,代替阿里云),A 改卡,B 看到新代码生效。
  *
  * 用法(在仓库根或 worktree 根):
- *   node scripts/probes/card-sync-probe.mjs [--doc-port 8790] [--asset-port 8791] [--a-port 5580] [--b-port 5583] [--out <截图目录>] [--keep-temp]
+ *   node scripts/probes/card-sync-probe.mjs [--doc-port 8790] [--asset-port 8791] [--a-port 5580] [--b-port 5583] [--cut-b <代理端口>] [--out <截图目录>] [--keep-temp]
+ *
+ * --cut-b <端口>(M8 计划 D9,卡片源码同步接会话层):B 经 `render-queue-proxy.mjs --cut-once --stdin-control`(听在这个端口)
+ *   连托管组合,B 的页面连接与卡片同步连接都走它;A 改卡之前切一次 B 此刻开着的全部连接,A 紧接着改卡。另核对:
+ *   B 的卡片同步没有建新会话(opens 不变)、接续过(resumes 增加)、这一版恰好装一次;切前切后的计数写进结果的 `cut`。
  *
  * 做什么:
  *   1. 在临时目录起托管组合(文档服务 --doc-port、素材服务 --asset-port,只绑 127.0.0.1);
@@ -44,6 +48,7 @@ const DOC_PORT = Number(arg('--doc-port', '8790'));
 const ASSET_PORT = Number(arg('--asset-port', '8791'));
 const A_PORT = Number(arg('--a-port', '5580'));
 const B_PORT = Number(arg('--b-port', '5583'));
+const CUT_B_PORT = arg('--cut-b', null) === null ? null : Number(arg('--cut-b', null));
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const OUT = path.resolve(arg('--out', path.join(ROOT, 'out', 'card-sync-probe')));
 fs.mkdirSync(OUT, { recursive: true });
@@ -100,8 +105,8 @@ function viteBin() {
   return path.join(main.slice(0, at + 6), 'bin', 'vite.js');
 }
 
-function start(name, args, env) {
-  const child = spawn(process.execPath, args, { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, env: { ...process.env, ...env } });
+function start(name, args, env, { stdin = 'ignore' } = {}) {
+  const child = spawn(process.execPath, args, { cwd: ROOT, stdio: [stdin, 'pipe', 'pipe'], windowsHide: true, env: { ...process.env, ...env } });
   const log = [];
   const keep = (c) => { log.push(c.toString()); if (log.length > 400) log.shift(); };
   child.stdout.on('data', keep);
@@ -251,6 +256,16 @@ try {
     return fetch(`${hostedUrl}/healthz`, { signal: AbortSignal.timeout(2000) }).then((r) => r.ok, () => false);
   }, 30_000, '托管组合起来');
   say('hosted.ready', { hostedUrl });
+  // --cut-b:B 与托管组合之间插一层 TCP 代理,只切一次(按标准输入的 cut)
+  let cutProxy = null;
+  if (CUT_B_PORT !== null) {
+    cutProxy = start('cut-proxy', [path.join(ROOT, 'scripts', 'probes', 'render-queue-proxy.mjs'), '--listen', `127.0.0.1:${CUT_B_PORT}`, '--target', `127.0.0.1:${DOC_PORT}`, '--cut-once', '--stdin-control'], {}, { stdin: 'pipe' });
+    await waitFor(async () => {
+      if (cutProxy.child.exitCode !== null) throw new Error(`代理退出了:${cutProxy.log.join('').slice(-400)}`);
+      return fetch(`http://127.0.0.1:${CUT_B_PORT}/healthz`, { signal: AbortSignal.timeout(2000) }).then((r) => r.ok, () => false);
+    }, 15_000, '代理起来');
+    say('cut-proxy.ready', { port: CUT_B_PORT });
+  }
 
   // ---------- 2. 探针卡(底版)与两个编辑器
   fs.writeFileSync(CARD_ABS, cardSource('v1'));
@@ -286,10 +301,10 @@ try {
   });
   res.projectId = shared.projectId;
   const candidate = { where: 'hosted', base: shared.base, projectId: shared.projectId, name: shared.name, mode: shared.mode };
-  const enter = (page, cred) => P(page, async (candidate, cred) => {
+  const enter = (page, cred, cand = candidate) => P(page, async (candidate, cred) => {
     const M = await import('/src/editor/sync/syncManager.ts');
     return M.enterShared(candidate, cred);
-  }, candidate, cred);
+  }, cand, cred);
   const ea = await enter(pageA, { as: 'creator', username: 'alice', password: creatorPw });
   if (!ea?.ok) throw new Error(`A 进不去共享项目:${JSON.stringify(ea)}`);
   // A 把项目带进共享项目时,项目用到的探针卡(用户卡)传上内容库
@@ -299,7 +314,8 @@ try {
   }, 20_000, 'A 把探针卡传上内容库');
   say('a.pushed', { rev: aPushed.records[CARD_REL].rev, spaceId: aPushed.spaceId });
 
-  const eb = await enter(pageB, { as: 'member', username: 'bob', password: projectPw });
+  // --cut-b:B 经代理进入(页面连接与卡片同步连接都走代理)
+  const eb = await enter(pageB, { as: 'member', username: 'bob', password: projectPw }, CUT_B_PORT !== null ? { ...candidate, base: `http://127.0.0.1:${CUT_B_PORT}` } : candidate);
   if (!eb?.ok) throw new Error(`B 进不去共享项目:${JSON.stringify(eb)}`);
   await waitFor(() => P(pageB, async (clipId) => (await import('/src/store/project.ts')).getState().project.tracks.some((t) => t.clips.some((c) => c.id === clipId)), clipId), 20_000, 'B 看到探针卡的片段');
   await P(pageB, async () => (await import('/src/store/project.ts')).actions.seek(1));
@@ -366,7 +382,13 @@ try {
     }
   })();
 
-  // ---------- 4. A 改卡(edit_card 的服务端)
+  // ---------- 4. A 改卡(edit_card 的服务端);--cut-b 时先切一次 B 的传输,A 紧接着改卡(B 这时正在接续)
+  const pick = (s) => ({ connected: s.connected, opens: s.opens, resumes: s.resumes, link: s.link ?? null, installed: (s.notices ?? []).filter((n) => n.type === 'installed' && n.key === CARD_REL).map((n) => n.rev) });
+  if (cutProxy) {
+    res.cut = { before: pick(await getJson(`${B.origin}/api/cards/sync/status`)) };
+    cutProxy.child.stdin.write('cut\n');
+    say('cut-proxy.cut', {});
+  }
   const t0 = Date.now();
   const edit = await fetch(`${A.origin}/api/cards/edit`, {
     method: 'POST',
@@ -522,6 +544,14 @@ try {
   if (res.bRecord?.rev !== res.cardRev) fails.push('b-record-rev');
   if (!res.bNotices.some((n) => n.type === 'installed' && n.rev === res.cardRev)) fails.push('b-no-installed-notice');
   if (res.bNotices.some((n) => n.type === 'overwritten')) fails.push('b-unexpected-overwritten');
+  if (cutProxy) {
+    res.cut.after = pick(bStatus);
+    res.cut.proxyLog = cutProxy.log.join('').split(/\r?\n/).filter((l) => l.includes('conn.cut')).slice(0, 20);
+    if (!res.cut.proxyLog.some((l) => l.includes('"conn.cut"'))) fails.push('cut-not-done');
+    if (res.cut.after.opens !== res.cut.before.opens) fails.push(`b-card-sync-reopened(${res.cut.before.opens}->${res.cut.after.opens})`);
+    if (!(res.cut.after.resumes > res.cut.before.resumes)) fails.push('b-card-sync-no-resume');
+    if (res.cut.after.installed.filter((r) => r === res.cardRev).length !== 1) fails.push(`b-installed-count(${JSON.stringify(res.cut.after.installed)})`);
+  }
 } catch (err) {
   fails.push(`error:${String(err?.message ?? err)}`);
   say('error', { message: String(err?.stack ?? err).slice(0, 1200) });
