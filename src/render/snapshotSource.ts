@@ -417,6 +417,8 @@ export interface OnlineSourceOptions {
   store?: L2Like | Promise<L2Like | null> | null;
 }
 
+/** 等 L2 打开最多这么久(毫秒),打不开就照内存走 */
+export const STORE_WAIT_MS = 5000;
 /** 有 L2 时内存里只留这么多刚用过的(免得同一窗口里反复解码 / 反复读库) */
 export const ONLINE_HOT_CACHE_BYTES = 16 * 1024 * 1024;
 
@@ -445,6 +447,11 @@ export class OnlineSnapshotSource implements SnapshotSource {
   readonly tier: OnlineTier;
   private store: L2Like | null = null;
   private storeOff: (() => void) | null = null;
+  /**
+   * L2 还在打开时先别取:不然第一轮预取在库打开之前就发出去,关掉再开时已在库里的块又被请求一遍(C10-A2)。
+   * 最多等 `STORE_WAIT_MS`,打不开就照内存走。
+   */
+  private storeWait: Promise<unknown> | null = null;
   /** 原尺寸:每层(按结果键)已在 L2 里的本地帧(`ranges` 表的镜像) */
   private inStore = new Map<string, Set<number>>();
   private rangesLoaded = new Set<string>();
@@ -459,13 +466,13 @@ export class OnlineSnapshotSource implements SnapshotSource {
     this.tier = tier;
     this.cache = new ByteLru(store ? Math.min(maxBytes, ONLINE_HOT_CACHE_BYTES) : maxBytes);
     if (store) {
-      void Promise.resolve(store).then((s) => {
+      const opened = Promise.resolve(store).then((s) => {
         if (!s || this.stopped) return;
         this.store = s;
         this.storeOff = s.subscribeReady((e) => this.onStoreReady(e.layerKey, e.ranges));
         this.rangesLoaded.clear();
-        this.kick();
       }, () => { /* 打不开 L2:照内存走 */ });
+      this.storeWait = Promise.race([opened, new Promise((r) => setTimeout(r, STORE_WAIT_MS))]).then(() => { this.storeWait = null; });
     }
   }
 
@@ -522,6 +529,7 @@ export class OnlineSnapshotSource implements SnapshotSource {
   }
 
   async fetchSnapshot(kind: ReadyKind, key: string, localFrame: number, signal?: AbortSignal): Promise<string> {
+    if (this.storeWait) await this.storeWait;
     if (this.tier === "original") {
       const hit = this.frameOf(kind, key, localFrame);
       if (!hit) throw Object.assign(new Error(`没有这一帧的预渲染原尺寸:${kind}/${key}/${localFrame}`), { status: 404 });
@@ -716,6 +724,7 @@ export class OnlineSnapshotSource implements SnapshotSource {
   }
 
   private async tickOnce(): Promise<void> {
+    if (this.storeWait) await this.storeWait;
     const now = this.now();
     if (this.projectId && now - this.lastMapAt >= LAYER_MAP_POLL_MS) {
       this.lastMapAt = now;

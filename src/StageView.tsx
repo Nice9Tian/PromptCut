@@ -1415,14 +1415,20 @@ export default function StageView() {
         backWork.waiters.add(done);
       });
     };
-    /** 在线舞台的探针帧压成 gzip 字节、随消息转移(C10 契约第 2 节「大块产出」);压不了照旧传字符串 */
+    /**
+     * 在线舞台的探针帧压成 gzip 字节、随消息转移(C10 契约第 2 节「大块产出」);压不了照旧传字符串。
+     * 压缩是异步的:`render` 回包之前要等这些帧都发出去(父页收到回包就退订了,晚到的帧会丢)。
+     */
+    const probeFramePosts = new Set<Promise<void>>();
     const postProbeFrame = (clipId: string, localFrame: number, html: string) => {
       if (!ONLINE) { postStageEvent({ type: "probe-frame", clipId, localFrame, html }); return; }
-      void compressHtml(html).then((gz) => {
+      const job = compressHtml(html).then((gz) => {
         if (gz) postStageEvent({ type: "probe-frame", clipId, localFrame, html: "", htmlGz: gz }, "*", [gz]);
         else postStageEvent({ type: "probe-frame", clipId, localFrame, html });
-      });
+      }).finally(() => { probeFramePosts.delete(job); });
+      probeFramePosts.add(job);
     };
+    const flushProbeFrames = async () => { if (probeFramePosts.size) await Promise.allSettled([...probeFramePosts]); };
 
     const api: StageRpcApi = {
       /**
@@ -1720,6 +1726,9 @@ export default function StageView() {
               }
             }
             if (gen !== renderGen.current) return; // 已被 abortPending 按 reason 回包
+            // 在线舞台的探针帧压缩是异步的:回包之前等它们发完(等的时间不算进耗时)
+            if (probe && probeFramePosts.size) { const t0 = realNow(); await flushProbeFrames(); pausedMs += realNow() - t0; }
+            if (gen !== renderGen.current) return;
             ref.current.pending = null;
             const elapsedMs = wall();
             if (truncated) {

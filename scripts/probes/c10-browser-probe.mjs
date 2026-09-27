@@ -663,7 +663,8 @@ try {
     '第 2 节:跨源舞台用相对地址读自己源上反代的 /media', sum1.mediaByFrameOrigin);
   const o3 = await onlineDiag(member);
   check(o3?.layers?.length && o3.layers.every((l) => l.envFingerprint === state.creatorFp), 'A3:一层只出自一种环境(层表记录的那一种)', o3?.layers?.map((l) => ({ clip: l.clipId.slice(0, 6), fp: l.envFingerprint })));
-  out.steps.member = { ms: Date.now() - t1, stages: origins, iframeTargets, caps, requests: sum1, l2: costs1, pageFp: state.pageFp };
+  out.steps.member = { ms: Date.now() - t1, stages: origins, iframeTargets, caps, requests: sum1, l2: costs1, pageFp: state.pageFp,
+    publisher: await P(member, () => window.__pcPlanPublisher?.() ?? null).catch(() => null) };
   say('step1.done', out.steps.member);
 
   if (A10) {
@@ -718,7 +719,9 @@ try {
       const hit = d?.log?.filter((e) => e.ok).at(-1);
       return hit && d.log.filter((e) => e.ok).length >= 2 ? { ...hit, all: d.log.length } : null;
     }, 90_000, 500);
-    check(published && published.id.includes('#clips:') && published.state === 'open', 'A5:页面发布清单计划(plan:<项目>@<版本>#clips:…),没有节点时 open 等着', published);
+    const pubDiag = await P(member, () => window.__pcPlanPublisher?.() ?? null).catch(() => null);
+    check(published && published.id.includes('#clips:') && published.state === 'open', 'A5:页面发布清单计划(plan:<项目>@<版本>#clips:…),没有节点时 open 等着', published ?? pubDiag);
+    out.steps.publisher = pubDiag;
     await delay(8000);
     const toasts = await P(member, () => [...document.querySelectorAll('[data-pc="toast"], .pc-toast')].map((t) => t.textContent)).catch(() => []);
     check(member.pageErrors.length === errorsBefore && !toasts.some((t) => /失败|出错|错误/.test(t ?? '')), 'A5:没有节点在线时不报错', { pageErrors: member.pageErrors.slice(errorsBefore), toasts });
