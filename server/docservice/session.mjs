@@ -292,11 +292,13 @@ export function createSessionLayer({
     }
     const t = s.transport;
     s.transport = null;
+    // 还没被确认的帧交给要关的传输：长轮询在带 `closed` 之前先回完它们（第 6.3 节）；WebSocket 早已写出，不用
+    const rest = t && closeTransport && t.kind !== 'ws' ? s.frames.slice(s.head).map((f) => withSeq(f.text, f.seq, s.inSeq)) : [];
     s.frames = [];
     s.head = 0;
     s.unackedBytes = 0;
     if (t && closeTransport) {
-      try { t.close(code, reason); } catch { /* 已关 */ }
+      try { t.close(code, reason, rest); } catch { /* 已关 */ }
     }
     s.gone = new Promise((resolve) => {
       setImmediate(() => {
@@ -568,6 +570,14 @@ export function createSessionLayer({
       return s.inSeq;
     },
 
+    /** 客户端主动结束（长轮询的 `POST /lp/close`，同 `session.close`，第 4.2 节）；会话不在回 false */
+    end(connId, code, reason) {
+      const s = byConn.get(connId);
+      if (!s || s.ended || s.legacy) return false;
+      endSession(s, clientCloseCode(code), clipReason(reason));
+      return true;
+    },
+
     /** 服务端发出过的最大 seq */
     lastSeq(connId) {
       return byConn.get(connId)?.outSeq ?? 0;
@@ -590,6 +600,12 @@ export function createSessionLayer({
       }
       if (out.length > 0) markAcked(s);
       return out;
+    },
+
+    /** 有没有还没被确认的业务消息（长轮询判断 GET 要不要挂着） */
+    hasPending(connId) {
+      const s = byConn.get(connId);
+      return !!s && !s.ended && !s.legacy && s.head < s.frames.length;
     },
 
     /** 这个会话当前挂着的是不是这条传输 */

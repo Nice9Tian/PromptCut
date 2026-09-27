@@ -4,11 +4,15 @@
  * 文档服务两种传输（WebSocket 与 HTTP 长轮询，`docs/plan/http-transport-contract.md`）的测试共用件：
  *
  *   transportClient(kind, url, protocols?)  kind 为 'ws' 用 Node 内置 WebSocket，'http' 用 `HttpWebSocket`；
- *                                           回的对象与 fake-ws-kit 的 wsClient 同形（opened / closed / send / next / quiet / close）
+ *                                           回的对象与 fake-ws-kit 的 wsClient 同形（opened / closed / send / next / quiet / close）。
+ *                                           注意：`HttpWebSocket` 还是第 1 版的长轮询协议（批次号、`{ seq, data }` 外包），
+ *                                           与第 2 版的服务端（会话层下的 `docservice/http-transport.mjs`）不通，HT-b 改客户端时一并改
  *   authByProtocols(req)                    按子协议列表里的 `x-user.<名>`、`x-role.<角色>`、`x-conv.<号>`、`x-dev.<设备>` 定 principal；
  *                                           `x-user.deny` 拒绝。两种传输都经 `sec-websocket-protocol` 交给它
  *   protocolsOf({ user, role, conv, dev })  拼上面那种列表（第一项 promptcut.v1）
- *   lp(base)                                直接打长轮询端点的原始客户端：open / send / recv / close / options，回 { status, body, headers }
+ *   lp(base)                                直接打长轮询端点的原始客户端（契约第 2 版第 6 节）：open / send / recv / close / options，
+ *                                           回 { status, body, headers }。open 的列表里要自己带会话项
+ *   recvUntil(client, sid, match, opts)     反复 GET 收帧（帧是带 seq 的消息文本），直到 match 为真或带 closed
  *
  * 只引 Node 内置模块与被测的 `render-node/http-transport.mjs`。
  */
@@ -103,13 +107,14 @@ export function lp(base) {
   };
   const bearer = (sid) => ({ authorization: `Bearer ${sid}` });
   return {
-    open(protocols = ['promptcut.v1'], headers = {}) {
+    open(protocols = ['promptcut.v1', 'promptcut.session.new'], headers = {}) {
       const h = { ...headers };
       if (protocols !== null) h['x-promptcut-protocols'] = [].concat(protocols).join(', ');
       return call('POST', 'open', { headers: h, body: '{}' });
     },
-    send(sid, seq, frames) {
-      return call('POST', 'send', { headers: { ...bearer(sid), 'content-type': 'application/json' }, body: JSON.stringify({ seq, frames: frames.map((f) => (typeof f === 'string' ? f : JSON.stringify(f))) }) });
+    /** `frames`：对象（自己带 seq）或已序列化的文本 */
+    send(sid, frames) {
+      return call('POST', 'send', { headers: { ...bearer(sid), 'content-type': 'application/json' }, body: JSON.stringify({ frames: frames.map((f) => (typeof f === 'string' ? f : JSON.stringify(f))) }) });
     },
     sendRaw(sid, body) {
       return call('POST', 'send', { headers: { ...bearer(sid), 'content-type': 'application/json' }, body });
@@ -127,7 +132,7 @@ export function lp(base) {
   };
 }
 
-/** 收帧直到 match 为真（长轮询），回 { frames: 收到的消息对象, ack } */
+/** 收帧直到 match 为真（长轮询），回 { frames: 收到的消息对象（按 seq 去重）, ack } */
 export async function recvUntil(client, sid, match, { ack = 0, ms = 3000, wait = 500 } = {}) {
   const until = Date.now() + ms;
   const got = [];
@@ -135,9 +140,11 @@ export async function recvUntil(client, sid, match, { ack = 0, ms = 3000, wait =
   while (Date.now() < until) {
     const r = await client.recv(sid, last, wait);
     if (r.status !== 200) throw new Error(`recv ${r.status} ${JSON.stringify(r.body)}`);
-    for (const f of r.body.frames) {
-      last = Math.max(last, f.seq);
-      got.push(JSON.parse(f.data));
+    for (const text of r.body.frames) {
+      const m = JSON.parse(text);
+      if (!(m.seq > last)) continue;
+      last = m.seq;
+      got.push(m);
     }
     if (r.body.closed || got.some(match)) return { frames: got, ack: last, closed: r.body.closed };
   }
