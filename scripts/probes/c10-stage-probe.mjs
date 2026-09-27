@@ -124,9 +124,9 @@ const role = Q.get('role') || 'bg';
 let parts = [];
 const clip = document.getElementById('clip');
 let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
-function scene(n) {
+function scene(n, ids) {
   clip.textContent = ''; parts = [];
-  for (let i = 0; i < n; i++) { const d = document.createElement('div'); d.className = 'p'; d.textContent = i % 100; clip.appendChild(d);
+  for (let i = 0; i < n; i++) { const d = document.createElement('div'); d.className = 'p'; if (ids) d.id = 'p' + i; d.textContent = i % 100; clip.appendChild(d);
     parts.push({ el: d, x: rnd() * 600, y: rnd() * 340, vx: rnd() * 4 - 2, vy: rnd() * 4 - 2, h: rnd() * 360 }); }
 }
 let frame = 0;
@@ -184,7 +184,9 @@ addEventListener('message', (e) => {
   if (m.cmd === 'idb-count') { const req = indexedDB.open(m.db); req.onsuccess = () => { const db = req.result; if (!db.objectStoreNames.contains('s')) { reply({ count: 0, stores: [...db.objectStoreNames] }); db.close(); indexedDB.deleteDatabase(m.db); return; }
       const r2 = db.transaction('s').objectStore('s').count(); r2.onsuccess = () => { reply({ count: r2.result }); db.close(); }; }; req.onerror = () => reply({ error: String(req.error) }); }
   if (m.cmd === 'estimate') { (navigator.storage ? navigator.storage.estimate() : Promise.resolve(null)).then((x) => reply({ estimate: x, origin: location.origin, oac: window.originAgentCluster })); }
-  if (m.cmd === 'calib') { scene(m.n); const t = []; let bytes = 0; for (let i = 0; i < m.frames; i++) { step(); const t0 = performance.now(); const s = PCSnap.createSnapshot(document.getElementById('scene')); t.push(performance.now() - t0); bytes = s.controls[0].html.length; } reply({ t, bytes }); }
+  if (m.cmd === 'calib') { scene(m.n, m.ids); const t = []; let bytes = 0, html = ''; for (let i = 0; i < m.frames; i++) { step(); const t0 = performance.now(); const s = PCSnap.createSnapshot(document.getElementById('scene')); t.push(performance.now() - t0); bytes = s.controls[0].html.length; html = s.html; }
+    let h = 0x811c9dc5; for (let i = 0; i < html.length; i++) h = Math.imul(h ^ html.charCodeAt(i), 16777619);
+    reply({ t, bytes, sceneBytes: html.length, sceneHash: (h >>> 0).toString(16) }); }
 });
 parent.postMessage({ kind: 'ready', role, origin: location.origin }, '*');
 </script>`;
@@ -368,6 +370,9 @@ async function runP1() {
 /* ------------------------------------------------------------------ calibrate */
 
 async function runCalibrate() {
+  // --ids：每个粒子带 id（p0、p1…），量整场景 id 改名的代价；sceneHash 是最后一帧整场景 html 的 FNV-1a，
+  // 改动前后对照输出是否逐字节相同（docs/reports/AGENT-snapshot-ids.md）
+  const IDS = process.argv.includes('--ids');
   const SNAP = await buildSnap();
   const servers = await startStatic(SNAP);
   const browser = await launch('headless');
@@ -376,8 +381,8 @@ async function runCalibrate() {
     await page.goto(`http://127.0.0.1:${PORT.parent}/`);
     await page.evaluate((b) => window.__setup(null, b), `http://127.0.0.1:${PORT.s2}/stage?role=bg&n=10`);
     for (const n of (flagArg('ns') || `200,600,1000,1400,2000`).split(',').map(Number)) {
-      const r = await page.evaluate((n) => window.__ask('bg', { cmd: 'calib', n, frames: 8 }), n);
-      log(`n=${n} createSnapshot ms ${JSON.stringify(stats(r.t))} controlHtml=${r.bytes}B`);
+      const r = await page.evaluate((n, ids) => window.__ask('bg', { cmd: 'calib', n, frames: 8, ids }), n, IDS);
+      log(`n=${n}${IDS ? ' ids' : ''} createSnapshot ms ${JSON.stringify(stats(r.t))} controlHtml=${r.bytes}B sceneHtml=${r.sceneBytes}B sceneHash=${r.sceneHash}`);
     }
   } finally { await browser.close(); await closeAll(servers); }
 }
