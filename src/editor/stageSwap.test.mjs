@@ -223,7 +223,7 @@ test("播放态:同场的卡每帧加起来超过一拍(后台推帧比播放慢
   Object.assign(state, { project: project([card("b", 0, 10), card("h", 0, 10)]), t: 1, playing: true });
   plan = segments(["h"]);
   withRecord("b", REC_B);
-  withRecord("h", REC_SLOW);   // (2 + 40) ms × 30 fps = 1260 ms / 秒:推 1 秒时间线要 1.26 秒
+  withRecord("h", REC_SLOW);   // (3 + 40) ms × 30 fps = 1290 ms / 秒:推 1 秒时间线要 1.29 秒
   assert.equal(await runPlayingSwap(["b"]), false);
   assert.deepEqual(log, [], "一条 RPC、一个后台任务、一次额外抑制都没有");
   assert.equal(swapInFlight(), false);
@@ -231,7 +231,7 @@ test("播放态:同场的卡每帧加起来超过一拍(后台推帧比播放慢
 });
 
 test("播放态:解出来的目标拍落在目标卡出场之后,也不发起", { timeout: 5000 }, async () => {
-  // rate = (2 + 20) × 30 = 660 ms/秒;积压 90 + 30 × 20 = 690 → 领先 690 / 0.34 ≈ 2029 ms → 目标 3.03 秒,b 在 1.2 秒就出场了
+  // rate = (3 + 20) × 30 = 690 ms/秒;积压 90 + 30 × 20 = 690 → 领先 690 / 0.31 ≈ 2226 ms → 目标 3.23 秒,b 在 1.2 秒就出场了
   Object.assign(state, { project: project([card("b", 0, 1.2), card("h", 0, 10)]), t: 1, playing: true });
   plan = segments(["h"]);
   withRecord("b", REC_B);
@@ -241,14 +241,14 @@ test("播放态:解出来的目标拍落在目标卡出场之后,也不发起", 
 });
 
 test("播放态:目标拍的领先量含「边补边被可见舞台追」的那一截(积压 ÷ (1 − 速率))", { timeout: 5000 }, async () => {
-  // 同场一张 10 ms/帧的轻卡:速率 (2 + 10) × 30 = 360 ms/秒,积压 90 + 300 = 390 → 领先 390 / 0.64 ≈ 609 ms
+  // 同场一张 10 ms/帧的轻卡:速率 (3 + 10) × 30 = 390 ms/秒,积压 90 + 300 = 390 → 领先 390 / 0.61 ≈ 639 ms
   Object.assign(state, { project: project([card("b", 0, 10), card("m", 0, 10)]), t: 1, playing: true });
   plan = segments([]);
   withRecord("b", REC_B);
   withRecord("m", { vtOk: true, stepMs: 10, stepMaxMs: 10 });
   assert.equal(await runPlayingSwap(["b"]), true);
-  // T = ceil((1 + 0.609) × 30) / 30 = 49 / 30(以前只按 b 自己的 90 ms 估:33 / 30,可见舞台先到、白补一趟)
-  assert.deepEqual(log.find((e) => e[1] === "render").slice(2), [49 / 30, { jump: true, maxCatchUp: Infinity }]);
+  // T = ceil((1 + 0.639) × 30) / 30 = 50 / 30(以前只按 b 自己的 90 ms 估:33 / 30,可见舞台先到、白补一趟)
+  assert.deepEqual(log.find((e) => e[1] === "render").slice(2), [50 / 30, { jump: true, maxCatchUp: Infinity }]);
 });
 
 /* ---------------------------------------------------------------- 暂停态互换 */

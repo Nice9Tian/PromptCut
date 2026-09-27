@@ -45,16 +45,16 @@ test('随机访问卡（catchUpMs 为 0）不会凭空估出一个代价', () =>
   assert.equal(catchUpEstimateMs({ catchUpMs: 0, stepMs: 0 }, 300), 0);
 });
 
-test('整场景:积压是场上每张卡从 max(入点, 起推点) 推到 t 的和,速率是此刻活跃的卡单帧稳健耗时之和 × fps', () => {
+test('整场景:积压是场上每张卡从 max(入点, 起推点) 推到 t 的和,速率是此刻活跃的卡单帧代价(与积压同一个数)之和 × fps', () => {
   const entries = [
     { start: 0, end: 10, record: { stepMs: 2, stepMaxMs: 3, catchUpMs: 200 } },   // 30 帧 × 3 = 90
-    { start: 0, end: 10, record: { stepMs: 40, stepMaxMs: 60 } },                 // 30 帧 × 60 = 1800;速率按 stepMs 40
+    { start: 0, end: 10, record: { stepMs: 40, stepMaxMs: 60 } },                 // 30 帧 × 60 = 1800;速率同样按 stepMaxMs 60
     { start: 0, end: 0.5, record: { stepMs: 40 } },                               // 已出场:0～0.5 秒 15 帧 × 40 = 600,不进速率
     { start: 0.5, end: 10, record: null },                                        // 没有记录:0
   ];
   const { backlogMs, ratePerSec } = sceneCatchUpCost(entries, 1, 30);
   assert.equal(backlogMs, 90 + 1800 + 600);
-  assert.equal(ratePerSec, (2 + 40) * 30);
+  assert.equal(ratePerSec, (3 + 60) * 30);
   assert.deepEqual(sceneCatchUpCost([], 1, 30), { backlogMs: 0, ratePerSec: 0 });
 });
 

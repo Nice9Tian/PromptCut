@@ -56,8 +56,10 @@ export function catchUpEstimateMs(record, frames) {
  * @returns {{ backlogMs: number, ratePerSec: number }}
  *   - `backlogMs`：从起推点（此刻活跃的卡里最早的入点）推到 `t` 的墙钟。每张卡从 max(入点, 起推点)
  *     推到 min(出点, t)，按 `catchUpEstimateMs` 估（和单卡同一个公式、同样封顶在整段代价上）；
- *   - `ratePerSec`：`t` 之后每多推 1 秒时间线要多花的墙钟（毫秒）＝ Σ(此刻活跃的卡的单帧稳健耗时) × fps。
- *     单帧取 p90 的 `stepMs`（没有才退回 `stepMaxMs`）：单次最大值只是诊断数，乘满一秒会把偶发卡顿放大几十倍。
+ *   - `ratePerSec`：`t` 之后每多推 1 秒时间线要多花的墙钟（毫秒）＝ Σ(此刻活跃的卡的单帧代价) × fps。
+ *     单帧和积压用**同一个数**（`stepMaxMs`，没有才退回 `stepMs`），积压与速率才是同一把尺子。
+ *     实测（c10-browser-probe，PC）：按 `stepMaxMs` 估的积压 10982 ms 对上实测的 11 秒补跑；
+ *     按 p90 `stepMs` 算的速率只有实测推帧速度的约九分之一。
  */
 export function sceneCatchUpCost(entries, t, fps, activeAt = (e, sec) => sec >= e.start && sec < e.end) {
   const f = Math.max(1, Number(fps) || 30);
@@ -73,7 +75,7 @@ export function sceneCatchUpCost(entries, t, fps, activeAt = (e, sec) => sec >= 
     backlogMs += catchUpEstimateMs(e.record, (hi - lo) * f);
   }
   let ratePerSec = 0;
-  for (const e of active) ratePerSec += (Number(e.record?.stepMs) || Number(e.record?.stepMaxMs) || 0) * f;
+  for (const e of active) ratePerSec += (Number(e.record?.stepMaxMs) || Number(e.record?.stepMs) || 0) * f;
   return { backlogMs, ratePerSec };
 }
 
