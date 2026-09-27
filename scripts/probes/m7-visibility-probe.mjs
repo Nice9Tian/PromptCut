@@ -15,6 +15,7 @@
  *   tab       切到另一个标签(页面 hidden)`--tab-min` 分钟(过 5 分钟看 Chrome 的强化节流);
  *   minimize  窗口最小化 `--min-min` 分钟;
  *   freeze30 / freeze90  CDP `Page.setWebLifecycleState { state: 'frozen' }` 冻结 30 s / 90 s 再恢复(模拟 Chrome 冻结后台页)。
+ * 页面的连接断了就 0.5 s 后重连(发 `reopen`),好让后一种情形还有连接可看。
  * 每种情形算:隐藏到服务端收到 `release` 的延迟;隐藏期间续约的间隔(最大间隔是否超过 `LEASE_MS`);帧链每秒几次;
  * ping 有没有 pong(冻结时连接会不会被心跳判死);恢复后连接是否还在、积压的消息何时到。
  * 输出:过程写 stderr;最后一行 stdout 是一行 JSON,原始事件写 --out(缺省系统临时目录)下 m7-visibility-<时刻>.json。
@@ -41,12 +42,12 @@ const log = (...a) => console.error(...a);
 
 const PAGE = `<!doctype html><meta charset=utf-8><title>m7 visibility</title><body><div id=s></div><script>
 const t0 = performance.now();
-let ws, frames = 0, seq = 0;
+let ws, frames = 0, seq = 0, reopened = false;
 const send = (m) => { try { ws && ws.readyState === 1 && ws.send(JSON.stringify({ ...m, seq: ++seq, pageMs: Math.round(performance.now() - t0), vis: document.visibilityState })); } catch {} };
 function open() {
   ws = new WebSocket('ws://' + location.host + '/ws');
-  ws.onopen = () => send({ t: 'open' });
-  ws.onclose = (e) => { window.__closed = { code: e.code, at: performance.now() - t0 }; };
+  ws.onopen = () => send({ t: reopened ? 'reopen' : 'open', lastClose: window.__closed ?? null });
+  ws.onclose = (e) => { window.__closed = { code: e.code, at: performance.now() - t0 }; (window.__closes ||= []).push(window.__closed); setTimeout(() => { open(); reopened = true; }, 500); };
 }
 open();
 setInterval(() => send({ t: 'progress' }), 10000);
@@ -120,13 +121,15 @@ function summarize(name, a, b, hideAt) {
     progressCount: progress.length, progressGapMs: gaps, maxRenewGapMs: maxGap, leaseWouldExpire: maxGap > LEASE_MS,
     framesPerSec: { n: fps.length, min: Math.min(...fps), max: Math.max(...fps), median: fps.sort((x, y) => x - y)[Math.floor(fps.length / 2)] },
     pongs, pingsUnanswered: unanswered, serverCloses: closes.map((c) => ({ at: c.at, code: c.code })),
-    lifecycle: ev.filter((e) => ['vis', 'freeze', 'resume', 'pagehide', 'open'].includes(e.t)).map((e) => ({ t: e.t, at: e.at - hideAt, vis: e.vis })) };
+    lifecycle: ev.filter((e) => ['vis', 'freeze', 'resume', 'pagehide', 'open', 'reopen', 'srv-open', 'srv-close'].includes(e.t)).map((e) => ({ t: e.t, at: e.at - hideAt, vis: e.vis })) };
 }
 
 const results = [];
 for (const sc of SCEN) {
   await page.bringToFront();
   await sleep(12000);
+  const visBefore = await page.evaluate(() => document.visibilityState).catch(() => '?');
+  log(`[${sc}] before: ${visBefore}`);
   const a = now();
   if (sc === 'tab') {
     const other = await browser.newPage();
@@ -167,7 +170,9 @@ for (const sc of SCEN) {
     await sleep(15000);
     const row = summarize(sc, a, b, hideAt);
     row.frozenMs = ms;
-    row.closedInPage = await page.evaluate(() => window.__closed ?? null).catch((e) => String(e));
+    row.closedInPage = await page.evaluate(() => window.__closes ?? null).catch((e) => String(e));
+    // 恢复之后 15 s 里的事件(积压的消息、重连)
+    row.afterResume = events.filter((e) => e.at > b && e.at <= b + 15000 && e.t !== 'fps' && e.t !== 'srv-pong').map((e) => ({ t: e.t, at: e.at - b, pageMs: e.pageMs, code: e.code }));
     results.push(row);
   }
   log(JSON.stringify(results.at(-1)));

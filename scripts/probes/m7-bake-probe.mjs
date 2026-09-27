@@ -15,12 +15,13 @@
  *   node scripts/probes/m7-bake-probe.mjs browser --dist <实验分支>/dist-online --out <dir>
  *        [--port-base 5710] [--heads headless|headful|both] [--rounds 2] [--layouts cross-oac,same] [--modes seq,batch4]
  *        [--dev-stage http://127.0.0.1:5715]   另跑一遍开发服务器的舞台(非在线构建)只做 seq,给 P2 分辨构建差异
+ *        [--catalog]                            另把 server/catalog 挂在 /catalog/(在线构建没有它,Lottie 素材卡取不到动画 JSON)
  *        [--ready]                              bake 带 `ready: true`(实验分支的就绪闸,照预渲染的 waitFrameReady);输出目录加 `-ready`
  *       起静态服务:+0 父页与在线构建(`/editor/`),+1、+2 两个舞台源(同一份在线构建),每个响应带 `Origin-Agent-Cluster: ?1`。
  *       父页(本脚本内联)开一个后台舞台 iframe(opacity 0 叠在原位),照 stageRpc 协议 `setRole('back')` →
  *       `setProject(隔离单卡工程, { reset })` → `render(末帧秒, { jump, bake })`;收 `probe-frame`(在线舞台是 gzip 字节),
  *       父页里 DecompressionStream 解开、WebCrypto 算 sha256(契约 4.3 的做法,只是这里在父页算),记主文档 longtask 与 rAF 间隔。
- *       seq = 一趟从挂载帧顺推到末帧;batch4 = 照桌面 4 帧一批、每批从头推。每帧 HTML 写到 <dir>/browser-<layout>-<mode>/<clipId>/。
+ *       seq = 一趟从挂载帧顺推到末帧;batch4 = 照桌面 4 帧一批、每批从头推;probe = 产品现有的测量快照趟(`probe: 'snapshot'`,受一拍预算截断)。每帧 HTML 写到 <dir>/browser-<layout>-<mode>/<clipId>/。
  *
  *   node scripts/probes/m7-bake-probe.mjs compare --out <dir>
  *       P2:每张卡逐帧比 desktop 与 browser-cross-oac-seq、seq 与 batch4、在线与开发舞台:逐字节(sha256)相同几帧;不同的用
@@ -69,6 +70,8 @@ export const PROJECT = {
     { id: 'tr-slow', name: 'slow', hidden: false, clips: [{ id: 'clip-slow', kind: 'card', cardId: 'probe-slow-stepped', start: 0, end: SECONDS, params: { burnMs: 40, label: 'slow' } }] },
     // canvas 卡(tsParticles,Canvas 2D;审阅表 canvasHeavy)
     { id: 'tr-particles', name: 'particles', hidden: false, clips: [{ id: 'clip-particles', kind: 'card', cardId: 'particles', start: 0, end: SECONDS, params: { quantity: 80, seed: 7 } }] },
+    // 带异步装载的 DOM 卡(Lottie 的 SVG 渲染器,动画 JSON 异步取;审阅表 independent、非 canvas):看就绪闸
+    { id: 'tr-lottie', name: 'lottie', hidden: false, clips: [{ id: 'clip-lottie', kind: 'card', cardId: 'lottie-bodymovin', start: 0, end: SECONDS, params: {} }] },
   ],
 };
 const CLIPS = PROJECT.tracks.map((t) => t.clips[0].id);
@@ -227,11 +230,14 @@ function makeStaticHandler(dist) {
     res.setHeader('Cache-Control', 'no-store');
     if (u.pathname === '/probe-parent') { res.setHeader('Content-Type', 'text/html; charset=utf-8'); return res.end(PARENT_HTML); }
     if (u.pathname === '/probe-blank') { res.setHeader('Content-Type', 'text/html; charset=utf-8'); return res.end('<!doctype html><meta charset=utf-8><body style="margin:0">'); }
-    let p = u.pathname.startsWith('/editor/') ? u.pathname.slice('/editor/'.length) : null;
+    // `--catalog`:另把 server/catalog 挂在 /catalog/(开发服务器有,在线构建与托管端没有;Lottie 素材卡的动画 JSON 在这里)
+    const catalog = process.argv.includes('--catalog') && u.pathname.startsWith('/catalog/');
+    const base = catalog ? path.join(ROOT, 'server', 'catalog') : dist;
+    let p = catalog ? u.pathname.slice('/catalog/'.length) : u.pathname.startsWith('/editor/') ? u.pathname.slice('/editor/'.length) : null;
     if (p === null) { res.statusCode = 404; return res.end(); }
     if (!p) p = 'index.html';
-    const file = path.join(dist, decodeURIComponent(p));
-    if (!file.startsWith(dist) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) { res.statusCode = 404; return res.end(); }
+    const file = path.join(base, decodeURIComponent(p));
+    if (!file.startsWith(base) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) { res.statusCode = 404; return res.end(); }
     res.setHeader('Content-Type', TYPES[path.extname(file)] || 'application/octet-stream');
     res.end(fs.readFileSync(file));
   };
@@ -249,7 +255,10 @@ async function bakeOne(page, { project, control, mode }) {
   await page.evaluate(() => window.__recStart());
   const t0 = Date.now();
   const replies = [];
-  if (mode === 'seq') {
+  if (mode === 'probe') {
+    // 产品现有的测量快照趟(K1 `probe: 'snapshot'`,按一拍预算截断、挂载帧不生成):契约 3.3「测量时推过的帧可直接用」要它与生成快照路一致
+    replies.push(await page.evaluate((t) => window.__rpc('render', t, { jump: true, probe: 'snapshot' }), secOf(last)));
+  } else if (mode === 'seq') {
     replies.push(await page.evaluate((t, r) => window.__rpc('render', t, { jump: true, bake: { ready: r } }), secOf(last), READY));
   } else {
     for (let first = 0; first <= last; first += 4) {
@@ -325,7 +334,7 @@ async function runBrowser() {
             const project = readJson(path.join(OUT, 'desktop', clipId, 'isolated.json'));
             const control = readJson(path.join(OUT, 'desktop', clipId, 'control.json'));
             const res = await bakeOne(page, { project, control, mode });
-            const dir = path.join(OUT, `browser-${layout}-${mode}${READY ? '-ready' : ''}${r > 1 || head !== 'headless' ? `-r${r}-${head}` : ''}`, clipId);
+            const dir = path.join(OUT, `browser-${layout}-${mode}${READY ? '-ready' : ''}${process.argv.includes('--catalog') ? '-catalog' : ''}${r > 1 || head !== 'headless' ? `-r${r}-${head}` : ''}`, clipId);
             fs.mkdirSync(dir, { recursive: true });
             for (const [n, x] of Object.entries(res.got)) if (x) fs.writeFileSync(path.join(dir, `${n}.html`), x.html);
             const row = { round: r, head, winLoad: wl, version, layout, mode, clipId, oopif: tg, caps: { measure: caps?.measure, lowMemory: caps?.lowMemory }, errors: errors.slice(0, 3), ...res, got: undefined, count: control.count };
@@ -394,6 +403,7 @@ async function runCompare() {
   for (const v of variants) pairs.push(['desktop', v]);
   if (variants.includes('browser-cross-oac-seq') && variants.includes('browser-cross-oac-batch4')) pairs.push(['browser-cross-oac-seq', 'browser-cross-oac-batch4']);
   if (variants.includes('browser-cross-oac-seq') && variants.includes('browser-dev-seq')) pairs.push(['browser-dev-seq', 'browser-cross-oac-seq']);
+  if (variants.includes('browser-cross-oac-probe') && variants.includes('browser-cross-oac-seq-ready')) pairs.push(['browser-cross-oac-seq-ready', 'browser-cross-oac-probe']);
   if (variants.includes('browser-cross-oac-seq-ready') && variants.includes('browser-cross-oac-batch4-ready')) pairs.push(['browser-cross-oac-seq-ready', 'browser-cross-oac-batch4-ready']);
   const res = { pairs: {} };
   const firstDiffs = {};
@@ -438,7 +448,7 @@ async function runCompare() {
       const clip = PROJECT.tracks.flatMap((t) => t.clips).find((c) => c.id === clipId);
       const f = clip.frame; const box = f ? { x: f.x - f.w * f.anchor[0], y: f.y - f.h * f.anchor[1], w: f.w, h: f.h } : null;
       for (const n of frames) {
-        const fa = path.join(OUT, 'desktop', clipId, `${n}.html`), fb = path.join(OUT, 'browser-cross-oac-seq', clipId, `${n}.html`);
+        const fa = path.join(OUT, 'desktop', clipId, `${n}.html`), fb = path.join(OUT, flagArg('pix-variant', 'browser-cross-oac-seq'), clipId, `${n}.html`);
         if (!fs.existsSync(fa) || !fs.existsSync(fb)) continue;
         const pa = await rz.png(fs.readFileSync(fa, 'utf8'), box), pb = await rz.png(fs.readFileSync(fb, 'utf8'), box);
         fs.writeFileSync(path.join(OUT, 'pixels', `${clipId}-${n}-desktop.png`), pa);
