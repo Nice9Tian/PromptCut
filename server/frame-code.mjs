@@ -71,8 +71,8 @@ export function captureCode(root) {
  * (`__pcCreateSnapshot` 本体:样式内联、id 改名、canvas 换 img、按 data-pc-clip 切 control
  * 子树;搬家后是 `server/bakery/` 的那七个模块)和
  * `capture-snapshot.mjs`(把快照 HTML 塞回文档栅格化);再加页面侧的
- * `src/render/createSnapshot.ts` 及它调的三个模块(`snapshot/inlineStyles.ts` /
- * `snapshot/rasterizeCanvas.ts` / `snapshot/snapshotStyleProps.mjs`)和
+ * `src/render/createSnapshot.ts` 及它调的四个模块(`snapshot/inlineStyles.ts` /
+ * `snapshot/rasterizeCanvas.ts` / `snapshot/snapshotStyleProps.mjs` / `snapshot/renameSceneIds.ts`)和
  * `src/render/snapshotRename.ts`。
  * 其余 CAPTURE_FILES(capture-frame / frame-media / frame-ready / png-integrity)
  * 决定的是**截图**,不决定快照 HTML 的内容,不进这个指纹。
@@ -89,7 +89,7 @@ export function captureCode(root) {
 const SNAPSHOT_FILES = [...BAKERY_FILES, 'server/bakery/capture-snapshot.mjs',
   'src/render/createSnapshot.ts', 'src/render/snapshot/inlineStyles.ts',
   'src/render/snapshot/rasterizeCanvas.ts', 'src/render/snapshot/snapshotStyleProps.mjs',
-  'src/render/snapshotRename.ts'];
+  'src/render/snapshot/renameSceneIds.ts', 'src/render/snapshotRename.ts'];
 export function snapshotCode(root = APP_ROOT) {
   if (snapshots.has(root)) return snapshots.get(root);
   const hash = createHash('sha256');

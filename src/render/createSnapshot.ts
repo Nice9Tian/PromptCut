@@ -12,7 +12,7 @@
  *   `inlineDOMStyles` 读计算样式、按差异口径写进 `style`(`snapshot/inlineStyles.ts`)
  *   `rasterizeCanvas` 读像素、压成图片、写实体框(`snapshot/rasterizeCanvas.ts`)
  *   `stripMedia`      素材层只留占位属性
- *   `serializeScene`  相邻文本节点插注释、`outerHTML`、整场景的 id 改名、逐控件取包裹层 `innerHTML`
+ *   `serializeScene`  相邻文本节点插注释、`outerHTML`、整场景的 id 改名(`snapshot/renameSceneIds.ts`)、逐控件取包裹层 `innerHTML`
  *
  * 中间两步各自一个文件、**互不 import**:canvas 换 `<img>` 时要按 IMG 的基线另算一份
  * 样式串,那个衔接写在这里(`inlineDOMStyles` 交出 `styleAs`,转给 `rasterizeCanvas`)。
@@ -55,6 +55,7 @@
 
 import { inlineDOMStyles, HTML_NS } from "./snapshot/inlineStyles";
 import { rasterizeCanvas } from "./snapshot/rasterizeCanvas";
+import { renameSceneIds } from "./snapshot/renameSceneIds.ts";
 import { PLACEHOLDER_SELECTOR } from "./placeholderHost.ts";
 
 export interface ControlSnapshot {
@@ -148,18 +149,11 @@ function keepTextBoundaries(clone: Element): void {
 /** 第五步:`outerHTML` + 整场景的 id 改名 + 逐控件取包裹层 `innerHTML`。 */
 function serializeScene(root: Element, clone: Element): { html: string; controls: ControlSnapshot[] } {
   keepTextBoundaries(clone);
-  let html = clone.outerHTML;
+  // 顺序要紧(连环改名的结果取决于它):文档序去重,根元素的 id 排最后。改名见 `snapshot/renameSceneIds.ts`。
   const ids = new Set(
     [...root.querySelectorAll("[id]")].map((e) => e.id).concat(root.id ? [root.id] : []),
   );
-  const esc = (x: string) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  for (const id of ids) {
-    const e = esc(id);
-    html = html
-      .replace(new RegExp(`(\\sid=")${e}(")`, "g"), `$1${id}__r$2`)
-      .replace(new RegExp(`(url\\((?:&quot;|["'])?[^)"'&]*#)${e}((?:&quot;|["'])?\\))`, "g"), `$1${id}__r$2`)
-      .replace(new RegExp(`((?:xlink:)?href="#)${e}(")`, "g"), `$1${id}__r$2`);
-  }
+  const html = renameSceneIds(clone.outerHTML, ids);
   // `:not([data-pc-media])` 排除 FrameScene 的素材层 —— 它也带 data-pc-clip + data-pc-local-frame。
   const controls = [...clone.querySelectorAll("[data-pc-clip][data-pc-local-frame]:not([data-pc-media])")].map((el) => {
     const inner = el.cloneNode(true) as Element;

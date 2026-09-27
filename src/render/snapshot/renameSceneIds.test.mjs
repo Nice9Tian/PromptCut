@@ -124,6 +124,10 @@ test("夹具:growth-curve、SVG 渐变/滤镜/遮罩/标记/pattern/textPath、�
     ["chain-reversed", CHAIN, collect(scanIds(CHAIN).reverse())],
     ["weird", WEIRD, collect(scanIds(WEIRD).concat(WEIRD_IDS))],
     ["weird-only-extra", GROWTH, collect(scanIds(GROWTH).concat(["x y"]))],
+    // 两个反例:这类 id 改名后会毁掉别的 id 的命中位置,原写法的结果取决于先后,所以只能整趟退回原写法。
+    // g 在前时原写法先改了 g,再改 `url(` / `href=`;若按三趟查表,第一趟先改 `url(` 就把 `url("#g)` 拆了。
+    ["weird-order-paren", "<p> id=\"url(\"#g)</p>", new Set(["g", "url("])],
+    ["weird-order-equals", "<p> id=\"href=\"#g\"</p>", new Set(["g", "href="])],
     ["no-ids", GROWTH, new Set()],
     ["ids-not-in-html", GROWTH, new Set(["nope", "grad"])],
   ];
@@ -159,7 +163,7 @@ const PIECES = [' id="', 'id="', ' id=\'', 'href="#', 'xlink:href="#', 'href="',
 
 function randomCase(rnd) {
   const pick = (xs) => xs[Math.floor(rnd() * xs.length)];
-  const weird = rnd() < 0.15;
+  const weird = rnd() < 0.3;
   const pool = weird ? PLAIN_POOL.concat(WEIRD_POOL) : PLAIN_POOL;
   const idCount = 1 + Math.floor(rnd() * 8);
   const ids = [];
