@@ -159,3 +159,24 @@ test("活着的舞台丢了 setSnapshots 回包:有界失败,下一次仍能投�
     c.dispose();
   });
 });
+
+test("带 probe 的 setTime 不按时长判:重卡的 K1 测量很慢也不被误杀", async (t) => {
+  const { createStageRpc, STAGE_UPDATE_TIMEOUT_MS, isShortStageUpdate } = await import("./stageRpc.ts");
+  assert.equal(isShortStageUpdate("setTime", [1]), true);
+  assert.equal(isShortStageUpdate("setTime", [1, { probe: true }]), false);
+  assert.equal(isShortStageUpdate("render", [1]), false);
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  await withFakeWindow(async (win) => {
+    const target = fakeTarget();
+    const c = createStageRpc(target, "http://stage");
+    let settled = null;
+    const slow = c.setTime(0.5, { probe: true }).then((v) => { settled = v; }, (e) => { settled = e; });
+    t.mock.timers.tick(STAGE_UPDATE_TIMEOUT_MS * 4);
+    await new Promise((r) => setImmediate(r));
+    assert.equal(settled, null);
+    win.deliver(target, { type: "pc-rpc-reply", id: target.sent.at(-1).id, ok: true, result: { path: "set", stepMs: 30000 } });
+    await slow;
+    assert.deepEqual(settled, { path: "set", stepMs: 30000 });
+    c.dispose();
+  });
+});
