@@ -184,6 +184,8 @@ async function startSplitter({ projectId, creator, codeVersion }) {
       async plan(planTask) {
         const { projectId: pid, projectRev } = planTask.source;
         const project = await projects.get(pid, projectRev);
+        // 这一版在托管端没有快照(页面还没传上来):不可重试地失败,等页面下一版计划
+        if (!project) throw Object.assign(new Error(`第 ${projectRev} 版没有项目快照`), { retryable: false });
         const fps = Number(project.fps) || 30;
         const clips = new Set(planTask.input?.clips ?? []);
         const cardPlan = [];
@@ -294,6 +296,8 @@ try {
   check(ready?.eligibility?.ok, '当节点的条件成立(在线构建、普通档双舞台、Chromium、成员、测量落定)', ready?.eligibility);
   out.steps.ready = ready && { envFingerprint: ready.envFingerprint, codeVersion: ready.codeVersion?.slice(0, 12), nodeId: ready.nodeId, eligibility: ready.eligibility };
   say('node.ready', out.steps.ready ?? {});
+  // 从节点报到起算主文档长任务(契约 M7-A12:生成快照期间主文档长任务 0)
+  await P(page, () => { window.__pcLongTasks.length = 0; });
 
   /* ---------------------------------------------------------------- 3. 清单计划 → 切分 → 认领 → 完成 */
   const t0 = Date.now();
@@ -309,7 +313,12 @@ try {
   check(diag?.counters?.claims >= 1 && diag?.counters?.completed >= 1, '页面节点认领并完成至少一段', diag?.counters);
   check((diag?.upload?.pushed ?? 0) >= 2, '页面推了块(snap + px)', diag?.upload);
   check((diag?.stage?.smallFrames ?? 0) >= 1, '舞台出了小尺寸', diag?.stage);
-  check(!splitter.events.some((e) => e.type === 'completed' || e.type === 'failed'), '切分方一个细任务都没做(只切分)', splitter.events.filter((e) => e.type !== 'publish-result').slice(-10));
+  const fineByText = splitter.events.filter((e) => (e.type === 'completed' || e.type === 'failed' || e.type === 'dedup') && String(e.id).startsWith('snapshot:'));
+  check(fineByText.length === 0, '切分方一个细任务都没做(只切分)', fineByText.slice(-5));
+  // D12:本页完成的那一份认定活着,切分方那一份被作废(task.failed superseded 推给发布方)
+  const online = await P(page, () => { try { return JSON.parse(JSON.stringify(window.__pcOnlineSnapshots?.() ?? null)); } catch { return null; } }).catch(() => null);
+  out.steps.online = online && { aliveKeys: online.aliveKeys, deadKeys: online.deadKeys, layers: online.layers };
+  check((online?.aliveKeys ?? 0) >= 1 && (online?.deadKeys ?? 0) >= 1, '在线来源认定:浏览器那份活着、切分方那份作废(superseded)', out.steps.online);
 
   /* ---------------------------------------------------------------- 4. 内容库清单、素材服务上的块、页面内快照库 */
   const { normalizeEntry, sharedProtocols } = await import('../../server/auth/shared-config.mjs');
@@ -371,6 +380,7 @@ try {
     check(out.steps.smallFirst.riff === 'RIFF' && out.steps.smallFirst.webp === 'WEBP', '小尺寸是 WebP', out.steps.smallFirst);
   }
   const longTasks = await P(page, () => window.__pcLongTasks.slice()).catch(() => []);
+  // M7-A12(生成快照期间主文档长任务 0)只记不判:长任务受机器忙闲影响,带耗时门槛的项在笔记本判(verification.md「性能基准机」)
   out.steps.page = { longTasks: longTasks.length, worst: longTasks.sort((a, b) => b.ms - a.ms).slice(0, 3), errors: pageErrors.slice(0, 5), assetWrites: assetReqs.filter((a) => a.method === 'PUT').length };
   await shot(page, 'm7-node-after');
   try { chk.close(); } catch { /* 已关 */ }
