@@ -56,6 +56,7 @@ import { ONLINE } from "./online/mode";
 import { setMediaTierPolicy } from "./render/mediaTier";
 import { clampSettleTimeout, runLowMemorySettle, settleKindOf, type DrawOutcome, type LowMemorySettleItem, type LowMemorySettleResult } from "./render/lowMemorySettle";
 import { clipFrameMode } from "./kernel/frameMode.mjs";
+import { waitForFrameWork, frameWorkStatus } from "./kernel/frameReady";
 import "./cards";
 
 /**
@@ -1602,6 +1603,7 @@ export default function StageView() {
         // K1 的两趟(任务书 K1):`true` 按老调用方的意思等于快照趟
         const bake = opts.bake ?? null;
         const bakeFrom = Math.max(0, Number(bake?.from) || 0);
+        let readyWaitMs = 0;
         const probeMode = bake ? "snapshot" : opts.probe === true ? "snapshot" : opts.probe || null;
         const probe = probeMode !== null;
         const timing = probeMode === "time";
@@ -1667,7 +1669,23 @@ export default function StageView() {
           ref.current.pending = { gen, startedAt: started, frames: () => frames, resolve };
           void (async () => {
             // M7 探针实验:挂载帧(本地第 0 帧)也生成快照(探针趟从挂载帧的下一帧起才有 afterFrame)
-            if (bake && opts.jump) { const ms0 = clock.now(); const g0 = glStrict(ms0 / 1000); if (g0) await g0; afterProbeFrame(ms0); }
+            // M7 探针实验(就绪闸,bake.ready 为真时):照预渲染的 waitFrameReady —— 控件异步活、字体、图片都就绪才生成快照;等的时候只空跑同一时刻的拍,不推时间
+            const readyGate = async (): Promise<void> => {
+              if (!bake?.ready) return;
+              const t0 = realNow();
+              for (;;) {
+                await waitForFrameWork().catch(() => {});
+                document.documentElement.getBoundingClientRect();
+                await document.fonts.ready;
+                await Promise.all([...document.images].filter((img) => img.getAttribute("src")).map((img) => img.decode().catch(() => {})));
+                if (!frameWorkStatus().length && document.fonts.status === "loaded") break;
+                if (realNow() - t0 > 20000) break;
+                clock.tick(clock.now());
+                await new Promise<void>((r) => (window.__pcRealSetTimeout ?? window.setTimeout)(r, 4));
+              }
+              readyWaitMs += realNow() - t0;
+            };
+            if (bake && opts.jump) { await readyGate(); const ms0 = clock.now(); const g0 = glStrict(ms0 / 1000); if (g0) await g0; afterProbeFrame(ms0); }
             await clock.advanceToAsync(target * 1000, {
               step: 1000 / fps,
               maxCatchUp: opts.maxCatchUp,
@@ -1761,7 +1779,7 @@ export default function StageView() {
                */
               measureInkBoxesNow();
             }
-            resolve({ remounted, caughtUpAtSec: clock.now() / 1000, elapsedMs, stepMs: stepOf(elapsedMs),
+            resolve({ remounted, caughtUpAtSec: clock.now() / 1000, elapsedMs, stepMs: stepOf(elapsedMs), ...(bake ? { readyWaitMs } : {}),
               ...(probe ? { frames, truncated: false, snapshot } : {}),
               ...(timing ? { steps } : probe ? { snapshotSteps } : {}) });
           })();
