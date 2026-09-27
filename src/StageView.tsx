@@ -20,6 +20,7 @@ import {
   postStageCards,
   postStageTrouble,
   type BackJob,
+  type BakeFrameReply,
   type PlayReply,
   type ProbeBooleans,
   type RenderReply,
@@ -56,6 +57,9 @@ import { ONLINE } from "./online/mode";
 import { setMediaTierPolicy } from "./render/mediaTier";
 import { clampSettleTimeout, runLowMemorySettle, settleKindOf, type DrawOutcome, type LowMemorySettleItem, type LowMemorySettleResult } from "./render/lowMemorySettle";
 import { clipFrameMode } from "./kernel/frameMode.mjs";
+import { resolveFrameSize } from "./kernel/frameSize.mjs";
+import { frameWorkStatus, waitForFrameWork } from "./kernel/frameReady";
+import { renderSmallWebp } from "./render/bakeSmall";
 import "./cards";
 
 /**
@@ -1430,6 +1434,31 @@ export default function StageView() {
     };
     const flushProbeFrames = async () => { if (probeFramePosts.size) await Promise.allSettled([...probeFramePosts]); };
 
+    /*
+     * M7 生成快照(`bakeFrame`,契约第 4.3 节):代数(`bakeCancel`、新的一帧作废在飞的那一帧)与顺推的接续点
+     * (上一帧推到了哪一帧、在哪份项目上;项目换了对象就接不上,从头推)。
+     */
+    let bakeGen = 0;
+    let bakeCursor: { project: Project; clipId: string; frame: number } | null = null;
+    /** 就绪闸的上限(照预渲染 `waitFrameReady`:控件异步活、字体、图片都就绪才生成快照) */
+    const BAKE_READY_MAX_MS = 20_000;
+    const bakeReady = async (stale: () => boolean): Promise<void> => {
+      const t0 = realNow();
+      for (;;) {
+        await waitForFrameWork().catch(() => {});
+        document.documentElement.getBoundingClientRect();
+        await document.fonts.ready;
+        await Promise.all([...document.images].filter((img) => img.getAttribute("src")).map((img) => img.decode().catch(() => {})));
+        if (stale() || (!frameWorkStatus().length && document.fonts.status === "loaded")) return;
+        if (realNow() - t0 > BAKE_READY_MAX_MS) return;
+        // 等的时候只空跑同一时刻的拍,不推时间
+        clock?.tick(clock.now());
+        await new Promise<void>((r) => realSetTimeout(r, 4));
+      }
+    };
+    const sha256Hex = async (bytes: Uint8Array): Promise<string> =>
+      [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes as BufferSource))].map((b) => b.toString(16).padStart(2, "0")).join("");
+
     const api: StageRpcApi = {
       /**
        * 换项目文档。patch 复用 A7 的 changedClips 结构,合并时**保持未变片段的对象引用**
@@ -1808,7 +1837,8 @@ export default function StageView() {
        * `bake` 在本地模式不支持(预渲染者是预渲染进程),回 `unsupported`、不抛。
        */
       async setRole(role, opts = {}) {
-        if (role === "back" && opts.job === "bake") return { ok: false, reason: "unsupported" as const };
+        // `bake`:本地模式不支持(预渲染者是预渲染进程);在线构建的后台舞台兼做纯浏览器节点(M7 契约 D3)
+        if (role === "back" && opts.job === "bake" && !ONLINE) return { ok: false, reason: "unsupported" as const };
         /*
          * K5 (6):**从 `back` 转正**的舞台要报一次 `settled`(`clipIds` 为空数组)。
          *
@@ -2079,6 +2109,110 @@ export default function StageView() {
       async setBackWork(on) {
         backWork.on = !!on;
         if (backWork.on) for (const w of [...backWork.waiters]) w();
+        return { ok: true as const };
+      },
+      /**
+       * M7 生成快照的一帧(契约第 4.3、4.4 节;协议见 `stageRpc.ts` 的 `BakeFrameRequest`)。项目是父页经 `pushProject('back', …)`
+       * 灌进来的隔离单卡工程,目标片段是唯一可见输出,本地帧 n 就是全局帧 n。
+       *
+       * 推帧:`batch4`(缺省)批起点按 4 帧对齐、每批从头推(重挂载、从挂载帧推到这一帧,同桌面 `fillCardControls`);
+       * `seq` 接着上一帧顺推,接不上才从头推。帧与帧之间让一个宏任务、查后台活的停止标志(停着的时长记进 `pausedMs`,不算耗时);
+       * 不受一拍预算截断。到了这一帧先过就绪闸,再生成快照、取本控件的 HTML:有读不出像素的画布(`lossy`)回 `lossy`
+       * (父页按不可重试失败交回,同 `server/bakery/bake.mjs`)。
+       */
+      async bakeFrame(req) {
+        if (!ONLINE || !clock) return { ok: false, reason: "unsupported" } satisfies BakeFrameReply;
+        if (ref.current.role !== "back") return { ok: false, reason: "role" } satisfies BakeFrameReply;
+        const p = ref.current.project;
+        if (!p) return { ok: false, reason: "no-project" } satisfies BakeFrameReply;
+        const clip = p.tracks.filter((tr) => !tr.hidden).flatMap((tr) => tr.clips).find((c) => c.id === req.clipId);
+        if (!clip) return { ok: false, reason: "no-clip" } satisfies BakeFrameReply;
+        const fps = Math.max(1, p.fps || 30);
+        const n = Math.max(0, Math.floor(Number(req.localFrame) || 0));
+        const sec = n / fps;
+        const gen = ++bakeGen;
+        const started = realNow();
+        let pausedMs = 0;
+        const stale = () => gen !== bakeGen || ref.current.role !== "back" || ref.current.project !== p;
+        const cur = bakeCursor;
+        const continuing = !!cur && cur.project === p && cur.clipId === req.clipId && cur.frame === n - 1 && (req.mode === "seq" || n % 4 !== 0);
+        bakeCursor = null;
+        if (!continuing) {
+          // 从头推:别的在飞的补跑 / 探针作废(单飞队列本来就不会让它们并存,这里兜底)
+          renderGen.current++;
+          abortPending("superseded");
+          remountAt(sec, fps);
+        }
+        let lastMs = clock.now();
+        await clock.advanceToAsync(sec * 1000, {
+          step: 1000 / fps,
+          yieldEvery: 1,
+          gate: () => {
+            const g = backGate(stale);
+            if (!g) return undefined;
+            const t0 = realNow();
+            return g.then(() => { pausedMs += realNow() - t0; });
+          },
+          abort: stale,
+          onFrame: (ms) => { flushSync(() => setT(ms / 1000)); },
+          afterFrame: (ms) => {
+            lastMs = ms;
+            pinner.sync(ms, skipWrappers());
+            const g = glStrict(ms / 1000);
+            return g ? g.then(() => undefined) : undefined;
+          },
+        });
+        if (stale()) return { ok: false, reason: "cancelled" } satisfies BakeFrameReply;
+        if (Math.abs(lastMs - sec * 1000) > 1e-6 || !continuing) {
+          // 挂载帧本身(没推任何一步)或推完没落在这一帧上:补一次提交、钉动画、等 GL 位图
+          flushSync(() => setT(sec));
+          pinner.sync(sec * 1000, skipWrappers());
+          const g = glStrict(sec);
+          if (g) await g;
+        }
+        ref.current.t = sec;
+        const t0 = realNow();
+        await bakeReady(stale);
+        if (stale()) return { ok: false, reason: "cancelled" } satisfies BakeFrameReply;
+        const readyMs = realNow() - t0;
+        const root = rootRef.current;
+        const snap = createSnapshot(root);
+        if (snap.lossy) return { ok: false, reason: "lossy", detail: `${snap.lossy} 张读不出像素的画布` } satisfies BakeFrameReply;
+        const own = snap.controls.find((c) => c.id === req.clipId);
+        if (!own) return { ok: false, reason: "no-control" } satisfies BakeFrameReply;
+        if (own.frame !== n) return { ok: false, reason: "frame-mismatch", detail: `生成快照的本地帧是 ${own.frame},要的是 ${n}` } satisfies BakeFrameReply;
+        const bytes = new TextEncoder().encode(own.html);
+        const hash = await sha256Hex(bytes);
+        const gz = await compressHtml(own.html);
+        let small: { hash: string; bytes: number; webp: ArrayBuffer } | null = null;
+        let smallMs = 0;
+        if (req.small) {
+          const s0 = realNow();
+          const box = resolveFrameSize(clip.frame, p);
+          let webp: ArrayBuffer | null = null;
+          try {
+            webp = await renderSmallWebp({ html: own.html, projectWidth: p.width, projectHeight: p.height, boxWidth: Number(box.w) || p.width, boxHeight: Number(box.h) || p.height });
+          } catch (e) {
+            return { ok: false, reason: "small-failed", detail: String((e as Error)?.message ?? e).slice(0, 200) } satisfies BakeFrameReply;
+          }
+          if (!webp) return { ok: false, reason: "small-failed", detail: "浏览器出不了 WebP" } satisfies BakeFrameReply;
+          small = { hash: await sha256Hex(new Uint8Array(webp)), bytes: webp.byteLength, webp };
+          smallMs = realNow() - s0;
+        }
+        if (stale()) return { ok: false, reason: "cancelled" } satisfies BakeFrameReply;
+        const transfer: Transferable[] = [];
+        const event = { type: "bake-frame" as const, session: req.session, clipId: req.clipId, localFrame: n, hash, bytes: bytes.length,
+          ...(gz ? { htmlGz: gz } : { htmlRaw: bytes.buffer as ArrayBuffer }), small };
+        transfer.push(gz ?? (bytes.buffer as ArrayBuffer));
+        if (small) transfer.push(small.webp);
+        postStageEvent(event, "*", transfer);
+        bakeCursor = { project: p, clipId: req.clipId, frame: n };
+        return { ok: true, localFrame: n, hash, bytes: bytes.length, small: small ? { hash: small.hash, bytes: small.bytes } : null,
+          ms: realNow() - started - pausedMs, pausedMs, remounted: !continuing, smallMs, readyMs } satisfies BakeFrameReply;
+      },
+      async bakeCancel() {
+        bakeGen++;
+        bakeCursor = null;
         return { ok: true as const };
       },
       async setMediaPolicy(next) {
