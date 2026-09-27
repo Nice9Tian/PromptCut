@@ -122,14 +122,24 @@ export async function exportVideoBrowserProbe(o: { maxFrames?: number; originals
   const sink = new MemorySink();
   const controller = new AbortController();
   const waits: string[] = [];
-  const result = await runBrowserExport({
+  // 在线页面上(c10a-demo-probe):素材原尺寸同 exportVideoOnline 一样换成远程素材服务的取回地址;桌面运行环境没有远程时照旧
+  const remote = mediaTierPolicy().remote ?? (remoteAssetBase() ? { base: remoteAssetBase()!, ticket: null } : null);
+  let result: Awaited<ReturnType<typeof runBrowserExport>>;
+  try {
+    result = await runBrowserExport({
     project: p, sink, signal: controller.signal, maxFrames: o.maxFrames,
     onWaiting: (m) => { if (m) waits.push(m); if (waits.length > 3) controller.abort(); },
     confirm: () => true, notify: () => {},
     checkMediaOriginals: () => exportGate(p),
     originals: o.originals ? originalsDeps() : null,
     fallbackHeavy: () => heavyClipsOfPlan(p),
-  });
+    mediaUrl: remote ? (url) => remoteMediaUrl(url, remote) : undefined,
+    });
+  } catch (e) {
+    // 导出前核对一直没过(等待上传方等)时,把看到的提示交回去,探针要核对文案
+    const err = e as Error & { cancelled?: boolean };
+    return { result: null, waits, base64: "", error: String(err?.message ?? err), cancelled: !!err?.cancelled };
+  }
   const bytes = sink.bytes();
   let bin = "";
   for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));

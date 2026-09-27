@@ -650,6 +650,11 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
     if (!live || !stageReady) return;
     markBaselineReset("front");
     suppressedRef.current = "";
+    /*
+     * 在线页面:预渲染小尺寸常常在舞台握手之前就取到了(取到时 `frontStage()` 还是空,那一次投递落空)。
+     * 暂停着的页面之后没有别的事件会再投,重卡就一直是占位 —— 舞台一握手就投一次(c10a-demo-probe 实测)。
+     */
+    if (onlineSourceRef.current) void pumpRef.current();
   }, [live, stageReady]);
 
   /*
