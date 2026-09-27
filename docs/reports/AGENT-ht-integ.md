@@ -56,3 +56,60 @@ HT-a 是 `docs/plan/http-transport-contract.md` 第 2 版文件头「2026-09-27 
 ### 2.6 契约的改动
 
 第 3.3 节（按字节确认）、第 3.4 节（客户端上限可调，页面 32 MiB）、第 4.1 节（WebSocket 接续失败 4404 / 4410 / 1002 与 4410 的 `reason` 格式、4003 / 4004 的上报例外）、第 4.2 节（客户端怎么分传输故障、4009）、第 4.3 节第 6 条（HT-a 里 `http` 未启用）与新增第 7 条（旧服务端退化）、第 4.4 节（`onOpen` 时机、`connected`、第一次建会话前的 `send`），新增第 17 节「实现记录」。
+
+## 3. 验证
+
+### 3.1 类型检查
+
+`npx tsc -b --force`：退出码 0，零错误（合并与改动全部提交后，`b03823b` 上）。
+
+### 3.2 HT 用例（63 条）与 `ht*.test.mjs` 连跑
+
+各文件单跑（对账后）：
+
+| 文件 | 条数 | 过 | 跳过 |
+|---|---|---|---|
+| ht-legacy | 3 | 3 | 0 |
+| ht1-session | 22 | 22 | 0 |
+| ht2-backpressure | 5 | 5 | 0 |
+| ht3-equivalence | 1 | 1 | 0 |
+| ht4-client | 22 | 22 | 0 |
+| ht5-probe | 2 | 2 | 0 |
+| ht6-trust | 5 | 5 | 0 |
+| ht7-probe | 3 | 3 | 0 |
+| 合计 | 63 | 63 | 0 |
+
+HT7 的三条是探针自身的本机用例（不给 `--base` 退出码 2、本机托管组合信任关闭全过、信任回环时探针报失败）；阿里云上的 HT7 由主会话在部署后跑。
+
+`node --test server/test/ht*.test.mjs`（含前缀相同的 `http-guard.test.mjs` 11 条）连跑 3 遍：三遍都是 `tests 74 / pass 74 / fail 0 / cancelled 0 / skipped 0`，退出码 0。
+
+另：`session-link.test.mjs` 20 条连跑 3 遍全过；`session-link-page.test.mjs` 7 条全过；`docservice-session-ack.test.mjs` 1 条过。
+
+### 3.3 页面验证（真服务端会话层，不用网关桩）
+
+脚本在 scratchpad（`ht-integ/page-verify.mjs`，不入库），全部由它起、跑完关掉：
+
+- 托管组合 `server/hosted/main.mjs` 子进程：`PROMPTCUT_TRUST_LOOPBACK=0`、现场生成的集群令牌（不打印），文档服务 5623、素材服务 5624，只绑回环；启动行 `loopbackTrust: false`，素材服务地址登记 `via: cluster-token`；
+- 同形 nginx 的前缀代理 5625：`/hosted/*` → 文档服务、`/media/*` → 素材服务，HTTP 与升级都转；能只掐断页面的连接、能拒绝页面的新连接；解析页面→文档服务方向的 WebSocket 帧，数 `project.op` 与 opId；
+- 桌面编辑器：本 worktree 的 vite dev server 5620（舞台 5621、5622），数据目录临时、`PROMPTCUT_PUSH=0`；无头 Chrome（puppeteer）。
+
+步骤：开始页「加入别人的项目」填服务器地址 `http://127.0.0.1:5625/hosted`、项目名、用户名、项目密码 → 进入共享项目；以 `store.setProject`（界面同一条路）改 1 次、等确认；代理从服务端一侧掐断页面的传输，紧接着改 3 次；等接续；页面 `__pcSyncTest.cut()` 关掉 WebSocket，再改 2 次；等接续、全部确认。
+
+结果（第二遍，第一遍数字相同）：
+
+| 核对 | 结果 |
+|---|---|
+| 版本号 | `pageRev 7 = serverRev 7 = rev0 1 + 6 次` |
+| 转给文档服务的 `project.op` | 6 条、6 个不同 opId（没有重放） |
+| 页面项目与服务端项目 | 整份逐项相同（键排序后 JSON 相等）；轨道：序列 1、序列 2、序列 1、服务端断开期间 1～3、页面断开期间 1～2 |
+| 同步状态 | 全程只有 `online`（每 100 ms 采样） |
+| 页面端点 | `opens 1, resumes 2, detaches 2, closes 0, dropped 0, pendingBytes 0, transport 'ws', legacy false` |
+| 服务端 `/healthz.sessions` | `resumed` 0 → 2；`opened` 4 → 5（多的 1 是核对时创建者的旧式连接）；页面会话 `conn-2` 一直是同一个 |
+| 日志 | 托管端 `session.detach conn-2 1006` → `session.resume gapMs 521` → `session.detach 1000` → `session.resume gapMs 416` |
+
+截图：`1-after-edits.png`（编辑器右上「成员 1 人」，时间轴依次是序列 1、序列 2、序列 1、服务端断开…）。
+
+「脱开期间删项目」（第 2.3 节的裁定）：代理拒绝页面的新连接并掐断它的传输，等服务端 `/healthz` 显示页面会话脱开（`conn-2 detached: true, transport: null`）；创建者经代理做 `shared.admin delete`（回 `shared.admin.ok`）；托管端日志 `shared.delete` 后 `conn.close conn-2 4004 deleted`（会话在脱开中结束，立墓碑）；放行后页面接续得 4410，弹出与连着时相同的阻断弹窗「项目已被创建者删除。回开始页新建或打开别的项目。」（截图 `2-deleted-while-detached.png`）。
+对照：临时把 `session-link.mjs` 的这条判断改成 `if (false)`（不提交，跑完还原，`git status` 干净）再跑，同一步 30 s 内等不到这个提示，脚本以 error 结束。
+
+两遍跑下来 `summary: { total: 10, failed: [] }`。
