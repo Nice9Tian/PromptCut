@@ -312,7 +312,7 @@ async function stageSample(page) {
         unsupported: !!w.querySelector(':scope > [data-pc-placeholder-fixed]'),
       };
     });
-    return { playing: !!d.beatRunning, wraps, lowMemLive: d.lowMemLive ?? [] };
+    return { playing: !!d.beatRunning, wraps, lowMemLive: d.lowMemLive ?? [], role: d.role ?? null, job: d.job ?? null, stageSuppressed: d.suppressed ?? null };
   }).catch(() => null);
 }
 
@@ -450,6 +450,19 @@ try {
   const heavyClips = new Set(s.judgedHeavyClips);
   const lightClips = state.clips.filter((c) => keyLight.has(desk.keys[c.id])).map((c) => c.id);
   const bf = await until('手机为判重又缺产物的层发补渲', () => P(phone, () => { const d = window.__pcBackfill?.(); const hit = d?.log?.find((e) => !e.error); return hit ? { id: hit.id, clips: hit.clips, log: d.log.length } : null; }), 30_000, 500);
+  if (!bf) {
+    // 排障:补渲没发时记下在线来源、补渲发布器、舞台与分派的状态
+    out.steps.backfillDiag = await P(phone, () => {
+      const pick = (f) => { try { return f(); } catch (e) { return String(e); } };
+      const pd = pick(() => window.__pcPreviewDiag?.());
+      return {
+        online: pick(() => window.__pcOnlineSnapshots?.()),
+        backfill: pick(() => window.__pcBackfill?.()),
+        lowmem: pick(() => { const x = window.__pcLowMemSearch?.(); return x && { projectId: x.projectId, running: x.running, state: x.state, light: x.light?.length, judgedHeavyClips: x.judgedHeavyClips?.length }; }),
+        preview: pd && { frontId: pd.frontId, lowMemory: pd.lowMemory, heavy: pd.snapshotFeed?.heavy?.length, suppressed: pd.suppressed, plan: pd.plan && { heavy: pd.plan.prerenderSet?.length } },
+      };
+    }).catch((e) => String(e));
+  }
   check(bf && bf.clips.length > 0 && bf.clips.every((id) => heavyClips.has(id)), '补渲的片段清单都是判重的片段', { clips: bf?.clips?.length, heavy: heavyClips.size });
   check(bf && lightClips.every((id) => !bf.clips.includes(id)), '判轻的卡不发补渲', { light: lightClips.length });
   check(bf && [...heavyClips].every((id) => bf.clips.includes(id)), '判重又缺产物的层都进了补渲清单', { missing: [...heavyClips].filter((id) => !bf?.clips?.includes(id)).length });
@@ -467,6 +480,7 @@ try {
   const stageSampleOut = playing[0] ? { wraps: playing[0].wraps.length, light: playing[0].wraps.filter((w) => lightSet.has(w.id)).length } : null;
   out.steps.phone = {
     ms: Date.now() - t4, gateSeen, envFingerprint: o.envFingerprint, n, measurements: o.measurements, searchMeasurements: o.searchMeasurements, bound,
+    playSample: playing[0] ? { role: playing[0].role, job: playing[0].job, stageSuppressed: playing[0].stageSuppressed } : samples[0] ?? null,
     approxLog2Plus2: Number((Math.log2(n) + 2).toFixed(2)), boundary: o.boundary, threshold: o.threshold, elapsedMs: o.elapsedMs,
     trace: o.trace.map((x) => ({ i: x.index, ms: x.ms === null ? null : Number(x.ms.toFixed(2)), cached: x.cached })),
     byBurn, backfill: bf ? { clips: bf.clips.length, id: bf.id.slice(0, 48) } : null, playing: playing.length, stageSample: stageSampleOut,

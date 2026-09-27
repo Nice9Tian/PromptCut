@@ -30,7 +30,8 @@ export function ProbeGate() {
   // `?preview=stage` 才有后台舞台（E1）；缺省的 legacy 一个字都不受影响。
   // 在线普通档恢复（C10 契约第 3 节：打开项目在加载遮罩下测完；后台舞台握不上手、退回单舞台时探针等不到后台舞台，遮罩不出现）；
   // 低内存档不测（c10a 第 8 节：不开后台舞台、不跑 ProbeGate；界限搜索归 `claude/c10-cost`）
-  const enabled = previewMode() === "stage" && !(ONLINE && lowMemoryMode(true));
+  const staged = previewMode() === "stage";
+  const enabled = staged && !(ONLINE && lowMemoryMode(true));
   const [p, setP] = useState<ProbeProgress>(probeProgress);
 
   useEffect(() => {
@@ -43,11 +44,12 @@ export function ProbeGate() {
    * `syncProbeRun` 自己会早退，所以这个 effect 每次 project 变都跑一遍也不贵。
    */
   useEffect(() => {
-    if (!enabled) return;
-    // K2 的分派表也跟着项目走（E0 的 setPlan；`costs` / `tuning` 由 probeRunner 喂）
+    if (!staged) return;
+    // K2 的分派表也跟着项目走（E0 的 setPlan；`costs` / `tuning` 由 probeRunner 喂）。
+    // 低内存档不测，但分派表照样要有项目：显示表（全部判重）与界限搜索的判定表都靠它（C10 集成：只关测量，不关分派）
     setPlanProject(project);
-    syncProbeRun(project);
-  }, [enabled, project]);
+    if (enabled) syncProbeRun(project);
+  }, [staged, enabled, project]);
 
   /*
    * 卡片代码换了(C6.6 第 5 节「卡片代码变了要由页面显式触发重测」:同步装上别人改的卡,或本机改卡):
