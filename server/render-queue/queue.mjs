@@ -282,6 +282,7 @@ export function createRenderQueue(options = {}) {
    * 调用方好把自己的回包排在前面。返回处理后的状态：open / failed / removed。
    */
   function abandon(task, { lastError, retryable = true }) {
+    const failedNodeId = task.claim?.nodeId ?? null;
     task.attempts += 1;
     task.claim = null;
     task.lastError = lastError;
@@ -297,6 +298,10 @@ export function createRenderQueue(options = {}) {
       };
     }
     transition(task, 'open');
+    // Give another eligible node the first chance after a retryable failure.
+    // The former owner can try again after one sweep if no peer takes it.
+    task.retryNodeId = lastError === 'sink-incomplete' ? failedNodeId : null;
+    task.retryAfter = task.retryNodeId ? at + C.SWEEP_INTERVAL_MS : null;
     if (task.subscribers.size === 0) {
       // 没人要的任务回到 open 就直接删掉：留着只会被白做一遍
       removeTask(task);
@@ -686,6 +691,11 @@ export function createRenderQueue(options = {}) {
     if (task.state !== 'open') {
       return emit(conn, 'task.claim-rejected', { id, reason: 'taken', state: task.state, version: task.version }, reqId);
     }
+    if (task.retryNodeId === node.nodeId && at < task.retryAfter) {
+      return emit(conn, 'task.claim-rejected', {
+        id, reason: 'retry-backoff', state: 'open', version: task.version, retryInMs: task.retryAfter - at,
+      }, reqId);
+    }
     // X4：plan 就近认领。发布方写了 preferNode（它自己的节点）的 plan，发布后 PLAN_PREFER_MS 之内只给那个节点；
     // 窗口按 A.8 的口径用严格大于判过期。回 retryInMs，节点会话据此把这个候选搁到窗口过后，不必丢掉
     if (task.kind === 'plan') {
@@ -739,6 +749,8 @@ export function createRenderQueue(options = {}) {
       else lockNotify = changeLock(lockId.key, () => setLock(lockId.key, lockId.fp, 'claim'), task);
     }
     transition(task, 'claimed');
+    task.retryNodeId = null;
+    task.retryAfter = null;
     task.claim = {
       nodeId: node.nodeId, conn, token: task.version, claimedAt: at,
       leaseUntil: at + C.LEASE_MS, progress: { done: null, changedAt: at },

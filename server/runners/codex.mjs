@@ -2,6 +2,7 @@ import { cliEnv } from './cli-runtime.mjs';
 import { spawnCli, resolveExe, lineSplitter, probeVersion } from './index.mjs';
 import { execFileSync } from 'node:child_process';
 import { tools } from '../mcp-tools.mjs';
+import { pairingSession } from '../agent/call-pairing.mjs';
 
 /**
  * Codex 把「工具是否暴露」和「调用是否要审批」分成两个配置项。只注册 server 不会
@@ -163,6 +164,16 @@ function _startRun(opts) {
   let sentLength = 0;
   let threadId = null;
   let warnedConfig = false;
+  /*
+   * callId:codex 输出流里工具条目的 id 是 item_0、item_1 …,每起一次 codex(续跑也是)都从 0 数,
+   * 所以前面拼上这次运行的随机段。它经 tool_call / tool_result 发给页面,再经 opts.callPairing 报到,
+   * 让经 MCP 进来的同一次调用按(thread、工具名、参数)认领到同一个 id(server/agent/call-pairing.mjs)。
+   * 页面 AI 栏按它把文档服务的工具调用事件对上聊天记录里的这一条。
+   */
+  const runTag = Math.random().toString(36).slice(2, 10);
+  const pairing = pairingSession(opts.callPairing);
+  const callIdOf = (item) => (typeof item.id === 'string' && item.id ? `cx-${runTag}-${item.id}` : undefined);
+  const isOurs = (item) => item.server === undefined || item.server === 'promptcut';
 
   child.stderr.on('data', (data) => {
       const str = data.toString('utf8');
@@ -181,6 +192,7 @@ function _startRun(opts) {
       
       if (evType === 'thread.started' && ev.thread_id) {
          threadId = ev.thread_id;
+         pairing.open(`codex:${threadId}`);
          safeOnEvent({ type: 'session', sessionId: ev.thread_id });
       } else if (evType === 'turn.started') {
          safeOnEvent({ type: 'status', text: 'Codex 开始处理' });
@@ -195,17 +207,22 @@ function _startRun(opts) {
                     sentLength = txt.length;
                  }
              } else if (itemType === 'mcp_tool_call') {
+                 const callId = callIdOf(item);
+                 const call = callId ? { callId } : {};
                  if (evType === 'item.started') {
                      const name = item.tool ?? item.name ?? item.tool_name;
                      const input = item.arguments ?? item.input ?? {};
-                     safeOnEvent({ type: 'tool_call', name, input });
+                     // 先报到再发给页面:MCP 那边的认领可能紧跟着就到
+                     if (callId && threadId && isOurs(item)) pairing.announce(`codex:${threadId}`, name, input, callId);
+                     safeOnEvent({ type: 'tool_call', name, input, ...call });
                  } else if (evType === 'item.completed') {
                      const name = item.tool ?? item.name ?? item.tool_name;
                      const ok = !(item.error) && item.status !== 'failed';
                      if (!ok && looksDenied(item.error)) {
                          if (opts.onPermissionDenied) opts.onPermissionDenied();
                      }
-                     safeOnEvent({ type: 'tool_result', name, ok, summary: resultSummary(item) });
+                     if (callId) pairing.settle(callId);
+                     safeOnEvent({ type: 'tool_result', name, ok, summary: resultSummary(item), ...call });
                  }
              }
          }
@@ -234,6 +251,8 @@ function _startRun(opts) {
       }
     } catch {}
   }));
+
+  donePromise.then(() => pairing.close(), () => pairing.close());
 
   child.stdin.on('error', () => {});
   try {

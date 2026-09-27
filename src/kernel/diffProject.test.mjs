@@ -259,7 +259,7 @@ test("规范-实体:片段、序列、部件归片段、剪辑里的片段、效
  *
  * 试过按主线程 CPU 时间(process.threadCpuUsage)计,不管用:机器没被占满时线程很少被挂起,
  * CPU 时间约等于墙钟,慢是硬件层面的(降频、超线程),CPU 时间一样涨;交替对照 15 轮,
- * 老写法挂 2 轮、CPU 时间写法挂 4 轮。详见 docs/reports/AGENT-flaky-timing.md。
+ * 老写法挂 2 轮、CPU 时间写法挂 4 轮。详见 docs/archive/agent-reports/AGENT-flaky-timing.md。
  */
 const MAX_BATCHES = 8;
 

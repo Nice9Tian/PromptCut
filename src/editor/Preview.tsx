@@ -135,6 +135,8 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
   const [stageReady, setStageReady] = useState(0);
   const tRef = useRef(t);
   tRef.current = t;
+  /** 上一次收尾(pause)之后给舞台发过 play 没有:收尾时只有真停过播放才认舞台回的 `stoppedAt` */
+  const playedRef = useRef(false);
   const playingRef = useRef(playing);
   playingRef.current = playing;
 
@@ -877,7 +879,7 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
    * 双舞台模式下由页面触发预渲染(公共 hook,legacy 那一路在 `UnifiedPreview` 里用同一份):
    * 编辑推送成功(`frameRequest` 先 `alignMirror`)且空闲(不在播放、不在拖动)时防抖发 `preload`,没就绪就接着问。
    */
-  usePrerenderPreload(project, { enabled: dual, idle: !playing && !scrubbing });
+  usePrerenderPreload(project, { enabled: dual, idle: !playing && !scrubbing, waitForProbe: true });
   const scrubbingRef = useRef(scrubbing);
   scrubbingRef.current = scrubbing;
   const lastRenderKey = useRef("");
@@ -988,6 +990,7 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
     const s = stage();
     if (!s) return;
     if (playing) {
+      playedRef.current = true;
       lastFrameAtRef.current = 0;
       stalledRef.current = false;
       stallCountRef.current = 0;
@@ -1026,9 +1029,17 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
         stalledRef.current = false;
         setMediaStalled(false);
         let stoppedAt = tRef.current;
+        /*
+         * 只有「刚从播放停下来」才以舞台的 `stoppedAt` 为准。暂停中换了一个新的渲染面(`stageReady` +1:
+         * 卡片代码装上后舞台整页重载、热更新、iframe 重挂)也会走到这一支 —— 新舞台还停在 0,
+         * 照它改 store 就把用户定好的播放头冲回 0(C6.6 T9:成员加入共享项目、装上用户卡之后播放头从 2.5 s 回到 0)。
+         * 那时以 store 的 `t` 为准,只把它发给新舞台。
+         */
+        const fromPlay = playedRef.current;
+        playedRef.current = false;
         try {
           const reply = await s.pause();
-          if (reply.ok && typeof reply.stoppedAt === "number") stoppedAt = reply.stoppedAt;
+          if (fromPlay && reply.ok && typeof reply.stoppedAt === "number") stoppedAt = reply.stoppedAt;
         } catch { /* iframe 正在换 */ }
         if (!alive) return;
         if (Math.abs(getState().t - stoppedAt) > 1e-6) actions.tick(stoppedAt);
