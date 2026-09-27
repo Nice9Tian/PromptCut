@@ -244,7 +244,7 @@ const diag = async () => (await getJson(`${(await prerenderInfo()).url}/api/fram
 async function mods() {
   const [route, client, shared, ws, endpoint, ticket, asset] = await Promise.all([
     import('../../server/auth/route.mjs'), import('../../server/auth/client.mjs'), import('../../server/auth/shared-config.mjs'),
-    import('../../server/render-node/ws-transport.mjs'), import('../../server/render-node/endpoint.mjs'),
+    import('../../server/render-node/session-link.mjs'), import('../../server/render-node/endpoint.mjs'),
     import('../../server/auth/ticket-source.mjs'), import('../../server/asset-store/client.mjs'),
   ]);
   return { ...client, ...route, ...shared, ...ws, ...endpoint, ...ticket, ...asset, createSharedProject: route.createSharedProject };
@@ -268,7 +268,8 @@ function rpcOn(ep) {
 }
 async function openConn(M, { url, projectId, username, password, as }) {
   const entry = M.normalizeEntry({ url, projectId, username, password, as, role: 'page', deviceId: `c10ademo-chk-${randomBytes(6).toString('hex')}`, deviceName: 'c10a-demo-probe 核对' });
-  const ep = M.createWsEndpoint({ url: entry.url, protocols: M.sharedProtocols(entry, { role: 'page' }), log: () => {} });
+  // 核对连接贯穿整个演示:是一个会话(HT-a,`createDocEndpoint`),传输断一次在保留期内接续
+  const ep = M.createDocEndpoint({ url: entry.url, protocols: M.sharedProtocols(entry, { role: 'page' }), log: () => {} });
   const opened = await new Promise((resolve) => {
     if (ep.connected) return resolve(true);
     const t = setTimeout(() => resolve(false), 20_000);
