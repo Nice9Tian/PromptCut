@@ -92,11 +92,23 @@ async function precheck(deps: BrowserExportDeps): Promise<OriginalsIndex | null>
 interface EncodedAudio { chunks: { data: Uint8Array; timestampUs: number; durationUs: number }[]; asc: Uint8Array }
 
 /** 一段素材原尺寸按时间轴裁出来的那一截 → 48 kHz 立体声浮点 WAV(给 `renderMix` 当「裁好的 wav」) */
-async function sliceWav(url: string, offset: number, dur: number, signal: AbortSignal): Promise<ArrayBuffer> {
-  const res = await fetch(url, { signal });
-  if (!res.ok) throw new Error(`取不到声音 ${res.status}`);
+/**
+ * ISO-BMFF(mp4 / mov)文件里有没有声音轨:找 `hdlr` 盒的 handler_type 是不是 `soun`。
+ * 不是 ISO-BMFF 的回 null(不知道,照常解;解不出就让导出失败)。桌面导出用 ffprobe 做同一件事(`mux-audio.mjs` 的 `hasAudioStream`):
+ * 视频不一定有声轨,没有的不进混音。
+ */
+export function isoHasSoundTrack(bytes: Uint8Array): boolean | null {
+  if (bytes.length < 12 || String.fromCharCode(...bytes.subarray(4, 8)) !== "ftyp") return null;
+  for (let i = 4; i + 16 <= bytes.length; i++) {
+    if (bytes[i] !== 0x68 || bytes[i + 1] !== 0x64 || bytes[i + 2] !== 0x6c || bytes[i + 3] !== 0x72) continue; // "hdlr"
+    if (bytes[i + 12] === 0x73 && bytes[i + 13] === 0x6f && bytes[i + 14] === 0x75 && bytes[i + 15] === 0x6e) return true; // "soun"
+  }
+  return false;
+}
+
+async function sliceWav(source: ArrayBuffer, offset: number, dur: number): Promise<ArrayBuffer> {
   const ctx = new OfflineAudioContext(AUDIO_CHANNELS, 1, AUDIO_SAMPLE_RATE);
-  const decoded = await ctx.decodeAudioData(await res.arrayBuffer());
+  const decoded = await ctx.decodeAudioData(source.slice(0));
   const from = Math.max(0, Math.floor(offset * AUDIO_SAMPLE_RATE));
   const n = Math.max(1, Math.ceil(dur * AUDIO_SAMPLE_RATE));
   const chans = Array.from({ length: AUDIO_CHANNELS }, (_, c) => {
@@ -110,26 +122,44 @@ async function sliceWav(url: string, offset: number, dur: number, signal: AbortS
 
 async function encodeAudio(deps: BrowserExportDeps, durationSec: number): Promise<EncodedAudio | null> {
   const project = deps.project;
-  const entries = audioPlanOf(project).filter((e: { start: number }) => e.start < durationSec);
-  if (!entries.length) return null;
+  const all = audioPlanOf(project).filter((e: { start: number }) => e.start < durationSec);
+  if (!all.length) return null;
   const byId = new Map(project.media.map((m) => [m.id, m]));
-  const slices = new Map<string, { url: string; offset: number; dur: number }>();
+  // 每份素材原尺寸取一次(同一份被好几段引用时共用);没有声音轨的视频不进混音
+  const sources = new Map<string, ArrayBuffer>();
+  const entries: typeof all = [];
+  for (const e of all) {
+    const m = byId.get(e.mediaId);
+    if (!m) continue;
+    let bytes = sources.get(m.id);
+    if (!bytes) {
+      const res = await fetch(deps.mediaUrl ? deps.mediaUrl(m.url) : m.url, { signal: deps.signal });
+      if (!res.ok) throw new Error(`${m.name || m.id} 的声音取不到:HTTP ${res.status}`);
+      bytes = await res.arrayBuffer();
+      sources.set(m.id, bytes);
+    }
+    if (isoHasSoundTrack(new Uint8Array(bytes)) === false) continue;
+    entries.push(e);
+  }
+  if (!entries.length) return null;
+  const slices = new Map<string, { mediaId: string; offset: number; dur: number }>();
   const plan: MixPlan = {
     sampleRate: AUDIO_SAMPLE_RATE,
     duration: durationSec,
     clips: entries.map((e: { clipId: string; mediaId: string; start: number; dur: number; offset: number; volume: number; fadeIn: number; fadeOut: number; fx: MixPlan["clips"][number]["fx"] }, i: number) => {
       const m = byId.get(e.mediaId)!;
       const key = `pc-slice:${i}`;
-      slices.set(key, { url: deps.mediaUrl ? deps.mediaUrl(m.url) : m.url, offset: e.offset, dur: e.dur });
+      slices.set(key, { mediaId: m.id, offset: e.offset, dur: e.dur });
       return { clipId: e.clipId, url: key, start: e.start, dur: e.dur, volume: e.volume, fadeIn: e.fadeIn, fadeOut: e.fadeOut, fx: e.fx };
     }),
   };
   const fetchSlice = (async (input: RequestInfo | URL) => {
     const s = slices.get(String(input));
     if (!s) throw new Error(`不认识的声音 ${String(input)}`);
-    return new Response(await sliceWav(s.url, s.offset, s.dur, deps.signal));
+    return new Response(await sliceWav(sources.get(s.mediaId)!, s.offset, s.dur));
   }) as typeof fetch;
   const { buffer } = await renderMix(plan, fetchSlice);
+  sources.clear();
   if (deps.signal.aborted) throw cancelled();
 
   const chunks: EncodedAudio["chunks"] = [];
