@@ -155,6 +155,17 @@ export const measureEntityRects = page => page.evaluate(() => {
 /** C4:没接镜像插件时的播放头(`frameService` 会把真的那个注进来) */
 const NO_PLAYHEAD = () => /** @type {{ t: number, playing: boolean, wanted?: { clipId: string, frame: number }[] } | null} */ (null);
 
+/**
+ * 补渲登记(c10a 契约第 17 节)里一张卡的内容身份:共享档用内容键(与环境、锁定方无关),本地档再带上整场景的 entry.key。
+ * 没有快照键的卡不产快照,回 null。
+ */
+function backfillIdentity(entry, control) {
+  if (!control?.clipId || !control.snapshotKey) return null;
+  const tier = control.tier || snapshotTier(control.capabilities);
+  const content = control.contentKey ?? control.snapshotKey;
+  return `${control.clipId}\u0000${tier === 'local' ? `${entry?.key ?? ''}/${content}` : content}`;
+}
+
 export class FramePipeline {
   /**
    * `interactive`(D5):这个实例要不要为页面的交互帧请求养一对热 Chrome。
@@ -1115,6 +1126,64 @@ export class FramePipeline {
     if (!(set instanceof Set)) return true;
     return set.has(clipId);
   }
+  /**
+   * 轨道流只给**本机判重**的卡(`basePrerenderSet`,不含补渲进来的片段):低内存档不消费流(c10a 契约第 9 节),
+   * 为补渲进集合的轻卡产流只是白做。没有基础集合时退回 `prerenderPicked`。
+   */
+  streamPicked(entry, clipId) {
+    const base = entry?.basePrerenderSet;
+    if (!(base instanceof Set)) return this.prerenderPicked(entry, clipId);
+    return base.has(clipId);
+  }
+  /**
+   * 补渲(c10a 契约第 17 节,语义 `mechanism/rendering.md`「低内存档」):低内存档判重、素材服务里又没有产物的片段,
+   * 页面发布带片段清单的补渲计划任务;认领它的节点在这里把清单里的片段记成「这张卡的这一份内容要产」,
+   * 于是它们进这一版的预渲染集合(`prerenderPicked` 为真:细任务渲得出来、层表里列着它们,在线页面据此取小尺寸)。
+   *
+   * 按「项目 id → 片段 + 内容身份」记,不按 entry:同一版项目在本机可能有不止一个 entry(页面推来的、从文档服务取的),
+   * 谁写层表都要带上补渲的片段,不然两边轮流写,页面上它们时有时无。内容身份换了(这张卡改了参数)就不再算 ——
+   * 新内容没有产物,页面会再发一次补渲。只记在内存里,和队列一样随进程作废。
+   * 回新记下了几个片段。
+   */
+  addBackfill(entry, clipIds) {
+    const projectId = entry?.project?.id;
+    if (!projectId || !Array.isArray(entry.cardPlan)) return 0;
+    const want = new Set((clipIds ?? []).filter(id => typeof id === 'string' && id));
+    if (!want.size) return 0;
+    this._backfill ??= new Map();
+    let keys = this._backfill.get(projectId);
+    if (!keys) this._backfill.set(projectId, (keys = new Set()));
+    let added = 0;
+    for (const control of entry.cardPlan) {
+      if (!want.has(control?.clipId)) continue;
+      const id = backfillIdentity(entry, control);
+      if (id && !keys.has(id)) { keys.add(id); added++; }
+    }
+    if (!added) return 0;
+    for (const other of this.entries?.values?.() ?? []) {
+      if (other?.project?.id === projectId && Array.isArray(other.cardPlan)) this.applyBackfill(other);
+    }
+    this.publishLayerMap(entry);
+    return added;
+  }
+  /** 按补渲登记把片段并进这个 entry 的预渲染集合(`basePrerenderSet` ∪ 登记过、内容身份对得上的片段) */
+  applyBackfill(entry) {
+    const base = entry?.basePrerenderSet;
+    if (!(base instanceof Set)) return;
+    const keys = this._backfill?.get(entry.project?.id);
+    const extra = [];
+    if (keys?.size) {
+      for (const control of entry.cardPlan ?? []) {
+        if (!control?.clipId || base.has(control.clipId)) continue;
+        const id = backfillIdentity(entry, control);
+        if (id && keys.has(id)) extra.push(control.clipId);
+      }
+    }
+    const next = extra.length ? new Set([...base, ...extra].sort()) : base;
+    const cur = entry.prerenderSet;
+    if (cur instanceof Set && cur.size === next.size && [...next].every(id => cur.has(id))) return;
+    entry.prerenderSet = next;
+  }
   /** clipId → { tier, key }:整场景路冻出来的 control 子树该落到哪个档、哪个键。
    * 只有 `card-cache.mjs` 的 `plan` 手里有共享键(`cardSnapshotIdentity` 算的),
    * 所以这里认 `entry.cardPlan`(`preload` 里存下来的那份);拿不到就不写快照库。
@@ -1698,7 +1767,7 @@ export class FramePipeline {
     if (producer?.enabled) {
       let specs = [];
       try {
-        specs = planStreams(entry, { picked: clipId => this.prerenderPicked(entry, clipId), budget: producer.budget,
+        specs = planStreams(entry, { picked: clipId => this.streamPicked(entry, clipId), budget: producer.budget,
           codeVersion: `${STREAM_CODE_VERSION}:${this.captureCode?.() || ''}`, envFingerprint: this.envFingerprint });
       } catch { specs = []; }
       for (const spec of specs) {
@@ -1855,7 +1924,10 @@ export class FramePipeline {
     this.applyCardLocks(plan);
     entry.cardPlan = plan;
     // K2 / K6:真的按 planPipelines 的表算(costs / tuning 由编辑器进程转发过来、落在本机那一份)
-    entry.prerenderSet = prerenderSetOfPlan(plan, { fps: Number(entry.project?.fps) || 30, root: this.dataRoot });
+    entry.basePrerenderSet = prerenderSetOfPlan(plan, { fps: Number(entry.project?.fps) || 30, root: this.dataRoot });
+    entry.prerenderSet = entry.basePrerenderSet;
+    // c10a 契约第 17 节:补渲登记过的片段并进来(`addBackfill`)
+    this.applyBackfill(entry);
     return plan;
   }
   /**
@@ -2371,7 +2443,9 @@ export class FramePipeline {
     const streamSpecs = await this.queueStreamSpecs(entry);
     const context = {
       entryKey: entry.key,
-      prerenderSet: entry.prerenderSet instanceof Set ? new Set(entry.prerenderSet) : undefined,
+      // 普通计划只切本机判重的卡;补渲进集合的片段只由补渲计划任务切(标 backfill,排在本机判重的任务之后,c10a 契约第 17 节)
+      prerenderSet: entry.basePrerenderSet instanceof Set ? new Set(entry.basePrerenderSet)
+        : entry.prerenderSet instanceof Set ? new Set(entry.prerenderSet) : undefined,
       cardPlan,
       streams: streamSpecs.map(spec => ({ streamKey: spec.streamKey, contentKey: spec.contentKey, topClipId: spec.topClipId,
         firstSegment: spec.firstSegment, lastSegment: spec.lastSegment })),
@@ -2396,7 +2470,7 @@ export class FramePipeline {
     const producer = this.streamProducer();
     if (!producer?.enabled || !(await producer.capable())) return [];
     try {
-      return planStreams(entry, { picked: clipId => this.prerenderPicked(entry, clipId), budget: producer.budget,
+      return planStreams(entry, { picked: clipId => this.streamPicked(entry, clipId), budget: producer.budget,
         codeVersion: `${STREAM_CODE_VERSION}:${this.captureCode?.() || ''}`, envFingerprint: this.envFingerprint });
     } catch {
       return [];

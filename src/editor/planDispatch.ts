@@ -33,6 +33,11 @@ let project: Project | null = null;
 let costs: CardCostRecord[] = [];
 let tuning: PipelineTuning = resolveTuning(null);
 let plan: PipelinePlan | null = null;
+/**
+ * 低内存档(c10a 契约第 17 节「全部按重卡」,语义 `product/platforms.md`「面向的平台」的过渡期):不测,所有卡按重卡处理 ——
+ * 播放时一律贴预渲染小尺寸,不活渲任何卡。只有在线页面判为低内存档时由 `Preview` 打开;普通档不变。
+ */
+let allHeavy = false;
 /** 上一次真的发出去的那份表的序列化结果，用来省掉「没变还发一遍」 */
 let sentWire = "";
 let scheduled = false;
@@ -57,7 +62,7 @@ function recompute(): void {
     return;
   }
   const { identityKeys, frameModes } = clipIdentityOf(project);
-  plan = planPipelines(project, costs, Math.max(1, project.fps || 30), { tuning, identityKeys, frameModes });
+  plan = planPipelines(project, costs, Math.max(1, project.fps || 30), { tuning, identityKeys, frameModes, ...(allHeavy ? { allHeavy: true } : {}) });
 }
 
 /**
@@ -121,8 +126,21 @@ export function mergePlanCosts(records: readonly CardCostRecord[]): void {
   schedule();
 }
 
+/** 低内存档打开 / 关上「全部按重卡」(c10a 契约第 17 节)。变了才重算重发 */
+export function setPlanAllHeavy(on: boolean): void {
+  if (allHeavy === !!on) return;
+  allHeavy = !!on;
+  schedule();
+}
+
+/** 此刻是不是「全部按重卡」 */
+export function planAllHeavy(): boolean {
+  return allHeavy;
+}
+
 /** 测试用 */
 export function resetPlanDispatch(): void {
+  allHeavy = false;
   project = null;
   costs = [];
   tuning = resolveTuning(null);

@@ -38,6 +38,9 @@ import { resolveTuning } from './pipelineTuning.mjs';
  */
 export const DEAD_MS = 0.3;
 
+/** 低内存档(c10a 契约第 17 节「全部按重卡」):每张卡都钉死为重,不参加贪心 */
+const LOW_MEMORY_WEIGHT = Object.freeze({ pinned: true, w: Infinity, tier: 'capped' });
+
 /** 追帧上界（K2）：每拍除本拍那一帧外最多再多推 4 步本地时间，最多追 `2 × fps` 拍。 */
 export const CATCHUP_STEPS_PER_BEAT = 4;
 export const maxCatchUpBeats = (fps) => 2 * fps;
@@ -138,7 +141,8 @@ export function clipWeight(record, frameMode, fps, tuningOrOverrides) {
  * @param {any[]} costs K1 的成本记录（`GET /api/data/costs` 回的那一份，已按当前 device / mode 过滤）
  * @param {number} fps 项目帧率
  * @param {object} [opts] `deadMs`（只有 L4 换成实测换帧成本）、`tuning`（覆盖值或已解析的一份）、
- *   `identityKeys` / `frameModes`（片段 → 成本记录的索引，见 `clipCostIndex`）
+ *   `identityKeys` / `frameModes`（片段 → 成本记录的索引，见 `clipCostIndex`）、
+ *   `allHeavy`（低内存档不测、全部按重卡，c10a 契约第 17 节）
  */
 export function planPipelines(project, costs, fps, opts = {}) {
   const rate = Math.max(1, Number(fps) || 30);
@@ -161,7 +165,8 @@ export function planPipelines(project, costs, fps, opts = {}) {
   for (const clip of clips) {
     const key = lookup(opts.identityKeys, clip.id);
     const record = typeof key === 'string' ? byKey.get(key) : undefined;
-    weights.set(clip.id, clipWeight(record, lookup(opts.frameModes, clip.id), rate, tuning));
+    // 低内存档的过渡做法(c10a 契约第 17 节):不测,所有卡按重卡处理
+    weights.set(clip.id, opts.allHeavy === true ? LOW_MEMORY_WEIGHT : clipWeight(record, lookup(opts.frameModes, clip.id), rate, tuning));
   }
 
   // 分段边界 = 所有卡片入点出点的并集，去重升序

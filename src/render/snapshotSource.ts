@@ -371,6 +371,8 @@ export class OnlineSnapshotSource implements SnapshotSource {
   private active = 0;
   /** 取到一张新的小位图之后叫(宿主据此重投一次) */
   onFetched: (() => void) | null = null;
+  /** 层表取回来过没有(取到了,或者内容库回「没有这一项」);取之前判不了哪些层缺产物 */
+  private mapKnown = false;
   readonly stats = { mapFetches: 0, manifestFetches: 0, smallFetches: 0, smallBytes: 0, errors: 0 };
 
   constructor(deps: OnlineSnapshotDeps, { maxBytes = ONLINE_CACHE_MAX_BYTES }: { maxBytes?: number } = {}) {
@@ -387,6 +389,7 @@ export class OnlineSnapshotSource implements SnapshotSource {
     this.projectId = next;
     this.map = null;
     this.mapSig = "";
+    this.mapKnown = false;
     this.manifests.clear();
     this.emitted.clear();
     this.lastMapAt = -Infinity;
@@ -417,6 +420,15 @@ export class OnlineSnapshotSource implements SnapshotSource {
     const hit = this.cache.get(hash);
     if (hit !== undefined) return smallSnapshotHtml(hit);
     return smallSnapshotHtml(await this.fetchSmall(hash, signal));
+  }
+
+  /**
+   * 层表里列着的片段(c10a 契约第 17 节「补渲」按清单判产物:不在层表里的判重层,素材服务里就没有它的产物)。
+   * 层表还没取回来过回 null(判不了);内容库里没有层表回空集合(一层都没有)。
+   */
+  layerClipIds(): ReadonlySet<string> | null {
+    if (!this.mapKnown) return null;
+    return new Set((this.map?.layers ?? []).map((l) => l.clipId));
   }
 
   /** 导出前释放小尺寸缓存(契约第 11.1 节) */
@@ -551,9 +563,14 @@ export class OnlineSnapshotSource implements SnapshotSource {
     } catch { this.stats.errors++; this.lastMapAt = -Infinity; return; }
     if (this.projectId !== projectId || this.stopped) return;
     this.stats.mapFetches++;
-    if (reply?.type !== "content.item" || reply.missing) return;
+    if (reply?.type !== "content.item" || reply.missing) {
+      // 内容库明确回「没有」:渲染节点还没写过层表,这个项目一层产物都没有
+      if (reply?.type === "content.item") this.mapKnown = true;
+      return;
+    }
     const map = parseLayerMap(reply.body);
     if (!map) return;
+    this.mapKnown = true;
     const sig = JSON.stringify(map.layers) + `|${map.span}`;
     if (sig === this.mapSig) return;
     const prev = this.map;

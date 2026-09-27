@@ -228,6 +228,8 @@ const PUBLISH_TIMEOUT_MS = 10_000;
 const QUEUE_TICK_MS = 500;
 /** 诊断里留最近这么多条事件 */
 const QUEUE_LOG = 80;
+/** 诊断里认领先后的条数(`claims`,c10a 契约第 17 节的验收用) */
+const CLAIM_LOG = 400;
 /** 诊断里本机节点认领 / 完成的任务 id,每类最多留几个 */
 const MINE_MAX = 5000;
 
@@ -395,6 +397,11 @@ async function startQueueNode(root: string, service: FramePipeline) {
    * `claimed` 取自发给本连接的 `task.claimed`,其余取自 local-node 的 `onEvent`。每类最多留 MINE_MAX 个。
    */
   const mine = { claimed: new Set<string>(), completed: new Set<string>(), dedup: new Set<string>(), failed: new Set<string>() };
+  /**
+   * 认领的先后(c10a 契约第 17 节的验收:补渲细任务排在本机判重的任务之后):每条 `task.claimed` 记 id、时刻、优先级,
+   * 最多留 CLAIM_LOG 条。只给诊断与 c10a-demo-probe 看。
+   */
+  const claimLog: { id: string, at: number, priority: unknown }[] = [];
   const remember = (set: Set<string>, id: unknown) => {
     if (typeof id !== "string") return;
     set.delete(id); set.add(id);
@@ -446,6 +453,10 @@ async function startQueueNode(root: string, service: FramePipeline) {
   endpoint.onMessage((message: any) => {
     if (message?.type === "task.claimed") {
       stats.claimed++; remember(mine.claimed, message.id);
+      if (typeof message.id === "string") {
+        claimLog.push({ id: message.id, at: Date.now(), priority: message.task?.priority ?? null });
+        if (claimLog.length > CLAIM_LOG) claimLog.splice(0, claimLog.length - CLAIM_LOG);
+      }
       const which = typeof message.id === "string" && message.id.startsWith("plan:") ? "plan" : "fine";
       if (!firstClaims[which]) {
         firstClaims[which] = { id: message.id, at: Date.now(), preload: preloadStatuses() };
@@ -598,6 +609,7 @@ async function startQueueNode(root: string, service: FramePipeline) {
         idle: { reason: idleGate.reason(), lastInteractionAt: Number.isFinite(idleGate.lastInteractionAt) ? idleGate.lastInteractionAt : null },
         firstClaims: { ...firstClaims },
         local: { nodeId, claimed: [...mine.claimed], completed: [...mine.completed], dedup: [...mine.dedup], failed: [...mine.failed] },
+        claims: claimLog.slice(),
         published: [...published.values()],
         plans: Object.fromEntries(planDerived),
         tasks: Object.fromEntries(taskState),
