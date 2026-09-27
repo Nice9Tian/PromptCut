@@ -11,9 +11,9 @@ import { isPrerender } from './render-role.mjs';
 import { proxyToPrerender } from './prerender-client.mjs';
 import {
   readEffective, writeCardFile, overridesRoot, overrideFileFor, repoFileForOverride,
-  setCardHasher, emitCardSourceChange,
+  setCardHasher, setCardIdentifier, emitCardSourceChange,
 } from './card-overrides.mjs';
-import { createCardSync, isSyncablePath } from './card-sync.mjs';
+import { createCardSync, isSyncablePath, sourceHash } from './card-sync.mjs';
 
 /* ────────────────────────────────────────────────────────────────────
  * 0.4 起:Agent 能读、能改**所有**卡片的原始源码(内置卡也算),但改不了 HTML。
@@ -1016,6 +1016,120 @@ export function cardSyncKeys(root: string, cardIds: unknown, changed: (rel: stri
 }
 
 /**
+ * 一张卡的代码身份(c66-host-cards;用法见 `server/card-code.mjs` 文件头):定义文件加它一路 import 到的卡片 / 部件文件
+ * (`importClosure`),每个文件记「仓库相对路径 + 生效内容(改动层优先)的内容哈希」,再整体取 sha256 的前 32 位。
+ * 内容哈希和内容库同一算法(`card-sync.mjs` 的 `sourceHash`,换行先统一成 LF):同步过来的卡在两端算出同一个身份。
+ *
+ * `custom`:用户卡(定义或闭包里有 `src/cards/user/` 下的文件),或闭包里有改动层文件 —— 这些卡不在全局代码版本里,
+ * 任务要求与整场景键要单独带上它们的身份。找不到定义文件回 null。
+ */
+export function cardCodeIdentity(root: string, id: string): { version: string; custom: boolean; files: string[] } | null {
+  let def = findCardFile(root, id);
+  if (!def && /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/.test(id)) {
+    // 用户卡的文件名不一定等于 id(手放进来的文件):按定义里的 `id:` 找
+    const userDir = path.join(root, 'src', 'cards', 'user');
+    const re = new RegExp(`\\bid:\\s*["'\`]${id}["'\`]`);
+    try {
+      for (const f of fs.readdirSync(userDir).sort()) {
+        if (!f.endsWith('.tsx')) continue;
+        let src = '';
+        try { src = readEffective(root, path.join(userDir, f)); } catch { continue; }
+        if (re.test(src)) { def = `src/cards/user/${f}`; break; }
+      }
+    } catch { /* 没有用户卡目录 */ }
+  }
+  if (!def) return null;
+  const files = importClosure(root, def);
+  const sha = crypto.createHash('sha256');
+  let custom = false;
+  for (const rel of files) {
+    const abs = path.join(root, rel);
+    let text: string | null = null;
+    try { text = readEffective(root, abs); } catch { text = null; }
+    sha.update(`${rel}\n${text === null ? 'missing' : sourceHash(text)}\n`);
+    if (rel.startsWith('src/cards/user/')) custom = true;
+    else {
+      const o = overrideFileFor(root, abs);
+      if (o && fs.existsSync(o)) custom = true;
+    }
+  }
+  return { version: sha.digest('hex').slice(0, 32), custom, files };
+}
+
+/** 独立渲染主机的一条卡片同步(`createHostCardSync` 的结果) */
+export interface HostCardSync {
+  status(): Record<string, unknown>;
+  idle(): Promise<void>;
+  close(): void;
+}
+
+/**
+ * 独立渲染主机的卡片源码同步(c66-host-cards;C6.6 设计稿第 5 节「读」那一半):主机加入共享项目时经内容库
+ * `card-source` 拉下用户卡与改过的卡,装进它自己的改动层;别人改了卡按 `content.watch` 当场同步。
+ *
+ * - 连接就用这个项目的 `render` 连接(队列节点那一条,`endpoint`),不另开:主机只凭配置里的项目凭证进入,
+ *   没有页面替它签票据。解绑时不关这条连接(它归队列节点)。
+ * - 只读(`readOnly`):主机不改卡,从不上传。
+ * - 装卡走 `installSyncedFile`(和编辑器同步、打开 .proc 装卡同一条路):本机已有的文件写进改动层(`PROMPTCUT_DATA_DIR`
+ *   下的 `card-overrides/`,`render-host.mjs` 指到 `--data` 里),仓库里的原卡不动;本机没有的用户卡照现有装卡路径
+ *   写进 `src/cards/user/`(用户卡的装载入口按目录收卡,只认那里)。备份与装卡历史放在主机自己的数据目录。
+ * - 装卡之前调 `before()`(卡片代码身份的稳定期重新计时,见 `card-code.mjs`);装完不手动发变更通知,
+ *   交给这个进程的 Vite 文件监听(它先作废模块、再发 `emitCardSourceChange`),节点据此清身份缓存,下一拍按新代码认领。
+ */
+export function createHostCardSync(opts: {
+  root: string;
+  dataDir: string;
+  projectId: string;
+  url: string;
+  endpoint: { send(m: object): unknown; onMessage(h: (m: any) => void): void; onOpen(h: () => void): void; onClose(h: (info: any) => void): void; connected?: boolean };
+  before?: () => void;
+  log?: (event: string, fields?: object) => void;
+}): HostCardSync {
+  const { root, dataDir, endpoint } = opts;
+  const shared = {
+    send: (m: object) => endpoint.send(m),
+    onMessage: (h: (m: any) => void) => endpoint.onMessage(h),
+    onOpen: (h: () => void) => {
+      endpoint.onOpen(h);
+      // 同步挂上来时连接可能已经连上了:补一次「连上」,不然要等下一次重连才对账
+      if (endpoint.connected === true) queueMicrotask(h);
+    },
+    onClose: (h: (info: any) => void) => endpoint.onClose(h),
+    close: () => { /* 连接归队列节点 */ },
+  };
+  const sync = createCardSync({
+    stateDir: path.join(dataDir, 'card-sync'),
+    readOnly: true,
+    connect: () => shared,
+    files: {
+      read: (rel: string) => {
+        try { return readEffective(root, path.join(root, rel)); } catch { return null; }
+      },
+      changed: () => false,
+      backup: (rel: string, content: string) => {
+        const dir = path.join(dataDir, 'card-edits');
+        fs.mkdirSync(dir, { recursive: true });
+        const file = path.join(dir, `${new Date().toISOString().replace(/[:.]/g, '-')}__${rel.replace(/\//g, '__')}`);
+        fs.writeFileSync(file, content, 'utf8');
+        return file;
+      },
+      install: (rel: string, source: string) => {
+        try { opts.before?.(); } catch { /* 计时出错不挡装卡 */ }
+        const r = installSyncedFile({ root, historyDir: path.join(dataDir, 'card-history'), rel, source });
+        return { ok: r.ok, error: r.error };
+      },
+    },
+    log: opts.log,
+  });
+  sync.bind({ projectId: opts.projectId, url: opts.url, local: false, protocols: () => [] });
+  return {
+    status: () => sync.status(),
+    idle: () => sync.idle(),
+    close: () => sync.close(),
+  };
+}
+
+/**
  * 卡片改动层(card-overrides.mjs)的加载钩子:装机版里改过的卡 / 部件,加载时交出改动层那一份,
  * 仓库里的原文件当只读底版。编辑器的 Vite 和预渲染的 Vite 都挂这个插件,所以两边看到的是同一份。
  *
@@ -1059,6 +1173,8 @@ export default function vitePluginCards(): Plugin[] {
        * 按「定义文件 + 依赖闭包」的生效内容算;任何卡片 / 部件源码一变整表清空,下次用到再算。
        */
       const hashCache = new Map<string, string>();
+      // 卡片代码身份(c66-host-cards):帧管线的整场景键、队列切分的 requires.cardSources、节点的 cardSourceVersions 都用它
+      setCardIdentifier((cardId: string) => cardCodeIdentity(server.config.root, cardId));
       setCardHasher((cardId: string) => {
         const hit = hashCache.get(cardId);
         if (hit !== undefined) return hit;

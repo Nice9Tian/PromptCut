@@ -98,6 +98,22 @@ export function cardCodeHash(cardId) {
   try { return hasher(String(cardId)) || ""; } catch { return ""; }
 }
 
+let identifier = null;
+/**
+ * vite-plugin-cards 注入:cardId → 这张卡的代码身份 `{ version, custom }`(c66-host-cards,`server/card-code.mjs`)。
+ * 和 `setCardHasher` 同一个理由放在这里:帧管线要用,但不反向 import 卡片插件。
+ */
+export function setCardIdentifier(fn) {
+  identifier = typeof fn === 'function' ? fn : null;
+}
+
+/** 这张卡此刻的代码身份;找不到定义回 null,算法还没注入回 undefined(调用方不缓存) */
+export function cardCodeIdentityOf(cardId) {
+  if (!identifier) return undefined;
+  if (!cardId) return null;
+  try { return identifier(String(cardId)) ?? null; } catch { return null; }
+}
+
 const listeners = new Set();
 /** 卡片源码变了时通知(参数是变了的那个文件) */
 export function onCardSourceChange(fn) {

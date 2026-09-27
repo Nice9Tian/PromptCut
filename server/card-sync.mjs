@@ -123,6 +123,8 @@ const sameActor = (a, b) => !!a && !!b && a.userId === b.userId && (a.deviceId ?
  *   缺省就用 `createWsEndpoint`（断线指数退避重连，每次重连前现取子协议）
  * @param {(event: object) => void} [o.notify] 覆盖提示、装上、被拒等事件（插件经 HMR 转给页面）
  * @param {(event: string, fields?: object) => void} [o.log]
+ * @param {boolean} [o.readOnly]  只读(独立渲染主机用,c66-host-cards):只装服务上的版本,从不上传、不记待上传 ——
+ *   主机不改卡,本机那份和服务上不同只可能是别的项目装进来的,不能反过来写进这个项目
  */
 export function createCardSync({
   stateDir = null,
@@ -134,6 +136,7 @@ export function createCardSync({
   requestTimeoutMs = CARD_SYNC_DEFAULTS.requestTimeoutMs,
   retryMs = CARD_SYNC_DEFAULTS.retryMs,
   noticesKeep = CARD_SYNC_DEFAULTS.noticesKeep,
+  readOnly = false,
 } = {}) {
   if (!files || typeof files.read !== 'function' || typeof files.install !== 'function' || typeof files.backup !== 'function') {
     throw new TypeError('createCardSync: files 要有 read、install、backup');
@@ -259,7 +262,8 @@ export function createCardSync({
         await handleRemote(binding, item, { actor: null, previousActor: null, fromList: true });
       }
     }
-    // 待上传的，以及项目用到、服务上还没有的：传上去
+    // 待上传的，以及项目用到、服务上还没有的：传上去（只读的不传）
+    if (readOnly) return;
     const want = new Set(binding.ledger.pending());
     if (!binding.local) for (const k of binding.keys) if (!seen.has(k)) want.add(k);
     for (const rel of [...want].sort()) {
@@ -289,7 +293,7 @@ export function createCardSync({
     const { cur, curHash } = await hashOfLocal(rel);
     if (rec && rec.rev >= item.rev) {
       // 服务上不比本机记下的新：本机在那之后改过（且没在上传）就传上去
-      if (fromList && cur !== null && curHash !== rec.hash && !binding.ledger.isPending(rel)) {
+      if (!readOnly && fromList && cur !== null && curHash !== rec.hash && !binding.ledger.isPending(rel)) {
         binding.ledger.mark(rel);
       }
       return;
@@ -437,7 +441,7 @@ export function createCardSync({
       const next = new Set((keys ?? []).filter(isSyncablePath));
       const added = [...next].filter((k) => !binding.keys.has(k));
       binding.keys = next;
-      if (!added.length || binding.local || !binding.connected) return;
+      if (readOnly || !added.length || binding.local || !binding.connected) return;
       enqueue(binding, async () => {
         for (const rel of added.sort()) {
           if (binding.ledger.get(rel)) continue; // 同步过（服务上有）的由对账与变化处理
@@ -455,7 +459,7 @@ export function createCardSync({
      * 不在同步范围里的路径忽略；没绑时只记不传（下次绑上同一个空间时补传）。
      */
     saved(rel) {
-      if (!isSyncablePath(rel)) return false;
+      if (readOnly || !isSyncablePath(rel)) return false;
       const binding = b;
       if (!binding) return false;
       binding.ledger.mark(rel);
