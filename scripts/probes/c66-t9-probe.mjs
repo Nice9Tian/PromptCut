@@ -12,6 +12,7 @@
  *        [--port-base <端口>]        只对 --role all,与 --port 同义(集成时两个分支各加了一种写法,都留着);两个都给时以它为准
  *        [--out <截图目录>]          缺省 <系统临时目录>/pc-c66t9-<run>/<角色>
  *        [--timeout-min 25] [--keep-temp]
+ *        [--observer-throttle <字节/秒>]  观察端页面加入后用 CDP 限速(舞台 iframe 一并限),复现原尺寸从远端慢慢拉;也可设环境变量 T9_OBSERVER_THROTTLE
  *
  * 环境变量:协调口开了信箱时 KV 要 `PROBE_MAIL_TOKEN`(`coordClient` 自动带,令牌不打印)。云端跑 host 另要
  * `NODE_USE_ENV_PROXY=1`、`PC_CHROME_ARGS=--no-sandbox`(脚本不管,原样传给子进程)。
