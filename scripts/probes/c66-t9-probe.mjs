@@ -12,6 +12,7 @@
  *        [--port-base <端口>]        只对 --role all,与 --port 同义(集成时两个分支各加了一种写法,都留着);两个都给时以它为准
  *        [--out <截图目录>]          缺省 <系统临时目录>/pc-c66t9-<run>/<角色>
  *        [--timeout-min 25] [--keep-temp]
+ *        [--observer-throttle <字节/秒>]  观察端页面加入后用 CDP 限速(舞台 iframe 一并限),复现原尺寸从远端慢慢拉;也可设环境变量 T9_OBSERVER_THROTTLE
  *
  * 环境变量:协调口开了信箱时 KV 要 `PROBE_MAIL_TOKEN`(`coordClient` 自动带,令牌不打印)。云端跑 host 另要
  * `NODE_USE_ENV_PROXY=1`、`PC_CHROME_ARGS=--no-sandbox`(脚本不管,原样传给子进程)。
@@ -20,6 +21,8 @@
  *
  * ## KV 键(`c66t9.<run>.<名>`)
  *   config          creator → observer、host:托管地址、项目名与 id、成员口令、两档哈希、卡片 key、v1 / v2 记号、v1 源码……
+ *   observer.small  observer → creator:小尺寸出画面并稳定了(或没出小尺寸);creator 收到才续传原尺寸
+ *   resumed         creator → observer:续传的时刻(观察端出第一帧时它还不该在)
  *   host.ready      host → creator:主机起来了(creator 等它才加重卡片段、发布预渲染任务)
  *   plan            creator → host:这一版 plan 的细任务 id、每个任务收到 task.done 的次数、本机节点做了哪些
  *   editready       creator → observer:可以改卡了(plan 落定之后)
@@ -35,10 +38,15 @@
  *      `PROMPTCUT_SHARED_CONFIG` 指向以创建者身份、`role: 'render'` 连这个项目的配置 —— 预渲染进程是发布方的本机节点;
  *   3. 页面新建项目、放一个用户卡片段,以创建者身份进入共享项目(`syncManager.enterShared`);
  *      等页面把托管端素材服务交给上传队列(`GET /api/media/upload-queue` 的 `target.base`);
- *   4. ffmpeg 现场生成 1920×1080、30 fps、6 s、顶上一条 10 格帧号条纹的测试视频(moov 在尾),经素材库的文件输入
- *      (页面导入路径,`?tiers=1`)导入;等项目里 `tiers.small` 出现、上传队列清空;核对托管端两档的 `chunks`
- *      都 `complete`(边传边问,记各自第一次 complete 的时刻),编辑器日志里这个素材是先小后大;
- *   5. 写 KV `config`;等 host 报 `host.ready`;等页面测量空闲,按成本记录的「人工钉死」(`pinnedHeavy`)给重卡片段的身份
+ *   4. ffmpeg 现场生成 1920×1080、30 fps、6 s、顶上一条 10 格帧号条纹、条纹以下铺随机噪声、定码率 56 Mbit/s 的测试视频
+ *      (约 44 MB,按素材服务 8 MiB 一片至少 4 片;moov 在尾),经素材库的文件输入(页面导入路径,`?tiers=1`)导入;
+ *      小尺寸一在托管端 complete(编辑器日志的 `upload.tier-done` 或 `chunks`),就经编辑器进程的
+ *      `POST /api/media/upload-queue/target { base: null }` 暂停上传队列,核对原尺寸没 complete、1.5 s 后仍没 complete、
+ *      素材还在队里(正在传的那一片会回 401,队列记一次 `upload.retry`,不丢);
+ *   5. 写 KV `config`(带暂停的时刻与原尺寸已到的片数),放观察端进来;后台等观察端 KV `observer.small`(小尺寸出画面并稳定),
+ *      再驱动页面自己的 `startUploadTarget`(进入共享项目时 `connectSharedAssets` 调的那个,在同一条连接上签 rw 素材票据)
+ *      把上传目标交回编辑器进程,写 KV `resumed`;等原尺寸 complete、上传队列清空,核对日志先小后大、续传时小尺寸一片没重发、
+ *      托管端两档字节与哈希相符。与此同时:等 host 报 `host.ready`;等页面测量空闲,按成本记录的「人工钉死」(`pinnedHeavy`)给重卡片段的身份
  *      写一条记录(device 串取页面自己写过的用户卡记录上的那个),等预渲染进程也收到;再加重卡片段(16 秒 `probe-typewriter`,
  *      审阅过的独立推帧卡、共享档,参数带本轮的盐,结果键全新)。实测判重在机器忙闲之间会翻(见 AGENT-c66-t9-fix 报告),
  *      钉死之后两端都判重,预渲染集合里一定有它;
@@ -49,6 +57,8 @@
  * ## --role observer(笔记本辅助节点,或本机替身)
  *   从 KV 取配置;起编辑器 B,环境里删掉 `PROMPTCUT_QUEUE_NODE`、`PROMPTCUT_SHARED_CONFIG`(结果里记下两者为空,
  *   并记 B 的 `GET /api/frames/queue`);页面以成员身份进入;断言:
+ *   - 出第一帧时原尺寸还在路上:`config.pause` 说创建方暂停时原尺寸没 complete,且此刻 KV 里还没有 `resumed`;
+ *     小尺寸稳定(或没出小尺寸)后写 KV `observer.small`,创建方收到才续传;换档因此必属「覆盖」情形(断言 `swapMode`);
  *   - 素材层先以素材小尺寸出现:可见舞台里**显示着的** `<video>` 第一次解出画面时,来源是小尺寸哈希;
  *     播放头停在 2.5 s,读顶上条纹的帧号(tier-switch-probe 的读法),稳定后记下;素材原尺寸到齐后换成原尺寸,
  *     换档后同一时刻的帧号与换档前相差不超过一帧;换档期间逐帧(rAF)采样没有黑帧;
@@ -100,6 +110,8 @@ const HOSTED = String(arg('--hosted', 'https://8-219-80-16.sslip.io/hosted')).re
 const COORD = String(arg('--coord', 'https://8-219-80-16.sslip.io/coord')).replace(/\/+$/, '');
 const TIMEOUT_MS = Number(arg('--timeout-min', 25)) * 60_000;
 const KEEP = argv.includes('--keep-temp');
+/** 观察端浏览器限速(字节 / 秒;0 = 不限):复现「原尺寸从远端慢慢拉」,CDP `Network.emulateNetworkConditions`,舞台 iframe 一并限 */
+const OBSERVER_THROTTLE = Math.max(0, Number(arg('--observer-throttle', process.env.T9_OBSERVER_THROTTLE ?? 0)) || 0);
 const DEFAULT_PORT = { creator: 5590, observer: 5593, host: 5596 };
 const FPS = 30;
 const SEEK = 2.5;
@@ -257,7 +269,7 @@ async function openConn(M, { url, projectId, username, password, as = 'member', 
     });
   });
   const rpc = rpcOn(ep);
-  const client = (access = 'r') => M.createAssetClient({ base: assetUrl, ticket: M.createTicketSource(ep, { access }) });
+  const client = (access = 'r', opts = {}) => M.createAssetClient({ base: assetUrl, ticket: M.createTicketSource(ep, { access }), ...opts });
   const close = async () => {
     const closed = ep.connected ? new Promise((r) => ep.onClose(r)) : Promise.resolve();
     try { ep.close(); } catch { /* 已关 */ }
@@ -421,9 +433,10 @@ async function runCreator(out) {
     const { findFfmpeg } = await import('../../server/bakery/ffmpeg.mjs');
     const ffmpeg = await findFfmpeg();
     const video = path.join(TMP, `t9-${run}.mp4`);
+    // 条纹以下铺随机噪声、定码率 56 Mbit/s:原尺寸约 44 MB,按素材服务 8 MiB 一片至少 4 片,续传时「原尺寸还在路上」有足够的窗口
     const ff = spawnSync(ffmpeg, ['-v', 'error', '-y', '-f', 'lavfi', '-i', `color=c=gray:s=1280x720:r=${FPS}:d=6`,
-      '-vf', "geq=lum='if(lt(Y,96),255*mod(floor(N/pow(2,floor(X/128))),2),96+64*sin(X/40+N/5))':cb=128:cr=128,scale=1920:1080:flags=neighbor",
-      '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '16', '-g', '60', '-pix_fmt', 'yuv420p', '-metadata', `comment=c66t9-${run}`, video], { encoding: 'utf8', windowsHide: true });
+      '-vf', "geq=lum='if(lt(Y,96),255*mod(floor(N/pow(2,floor(X/128))),2),40+176*random(1))':cb=128:cr=128,scale=1920:1080:flags=neighbor",
+      '-c:v', 'libx264', '-preset', 'veryfast', '-b:v', '56M', '-maxrate', '60M', '-bufsize', '60M', '-g', '60', '-pix_fmt', 'yuv420p', '-metadata', `comment=c66t9-${run}`, video], { encoding: 'utf8', windowsHide: true });
     if (ff.status !== 0) throw new Error(`ffmpeg 失败:${ff.stderr}`);
     const videoBytes = fs.readFileSync(video);
     out.video = { name: path.basename(video), bytes: videoBytes.length, sha: sha256(videoBytes).slice(0, 12), size: '1920x1080', fps: FPS, seconds: 6 };
@@ -465,6 +478,15 @@ async function runCreator(out) {
     }, CARD_ID, name);
     if (!userClip) throw new Error('没放上用户卡片段');
     out.userClip = userClip;
+    // 记下页面进入共享项目时拿来取素材服务登记的那条连接(connectSharedAssets 用它 service.watch),续传时用同一条连接签票据
+    await P(page, async () => {
+      const L = await import('/src/editor/sync/link.ts');
+      const proto = L.SyncLink.prototype;
+      if (proto.__t9Wrapped) return;
+      const orig = proto.request;
+      proto.request = function (msg, ...rest) { if (msg?.type === 'service.watch') window.__t9AssetLink = this; return orig.call(this, msg, ...rest); };
+      proto.__t9Wrapped = true;
+    });
     const entered = await P(page, async (candidate, cred) => (await import('/src/editor/sync/syncManager.ts')).enterShared(candidate, cred),
       { where: 'hosted', base: shared.base, projectId: shared.projectId, name: shared.name, mode: shared.mode }, { as: 'creator', username: 'creator', password: creatorPw });
     if (!entered?.ok) throw new Error(`创建者进不去共享项目:${JSON.stringify(entered)}`);
@@ -495,67 +517,139 @@ async function runCreator(out) {
     }, path.basename(video)), 120_000, 300);
     if (!media) throw new Error('素材没入库');
     out.importMs = Date.now() - tImport;
-    // 边传边问托管端两档的 chunks:各自第一次 complete 的时刻。小尺寸的哈希从编辑器的两档登记(`/api/media/tiers`)取,
-    // 转好就知道;另记「原尺寸已 complete 而小尺寸还没有」的次数(先小后大就应当是 0)
+    // 边传边盯(T9 要验「观察端加入时原尺寸还在路上」):小尺寸一在托管端 complete,就经编辑器进程的
+    // `POST /api/media/upload-queue/target { base: null }` 暂停上传队列(设计稿第 9 节第 1 条:目标为空时队列暂停、不丢),
+    // 核对原尺寸还没 complete 再放观察端进来;观察端报小尺寸出画面并稳定之后,由页面把上传目标重新交给编辑器进程,
+    // 原尺寸续传到 complete。小尺寸的哈希从编辑器的两档登记(`/api/media/tiers`)取;「小尺寸传完」按编辑器日志的
+    // `upload.tier-done`(比轮询 chunks 早)或 chunks 的 complete,谁先到算谁
     const cli = conn.client('r');
     const firstComplete = { small: null, original: null };
     let smallHash = null;
     let smallState = null;
-    let violations = 0;
     let polls = 0;
-    const tiersDone = await until('[creator] 素材小尺寸生成、两档都传到托管端', async () => {
+    const smallDoneInLog = () => A.log.some((line) => line.includes('[media-tiers] upload.tier-done') && line.includes('"tier":"small"') && line.includes(media.original));
+    const smallUp = await until('[creator] 素材小尺寸生成并传到托管端', async () => {
       if (!smallHash) {
         const t = await getJson(`${A.origin}/api/media/tiers?hashes=${media.original}`).catch(() => null);
         smallState = t?.items?.[media.original]?.state ?? smallState;
         smallHash = t?.items?.[media.original]?.small ?? null;
       }
       polls++;
-      const [cs, co] = await Promise.all([smallHash ? cli.chunks('media', smallHash).catch(() => null) : null, cli.chunks('media', media.original).catch(() => null)]);
-      const now = Date.now();
-      if (cs?.complete && !firstComplete.small) firstComplete.small = now;
-      if (co?.complete && !firstComplete.original) firstComplete.original = now;
-      if (co?.complete && !cs?.complete) violations++;
-      return firstComplete.small && firstComplete.original;
-    }, 360_000, 100);
+      if (!smallHash) return null;
+      if (smallDoneInLog()) return 'log';
+      return (await cli.chunks('media', smallHash).catch(() => null))?.complete ? 'chunks' : null;
+    }, 360_000, 20);
+    if (!smallUp) throw new Error('素材小尺寸没传到托管端');
+    const tPause = Date.now();
+    const pausePost = await postJson(`${A.origin}/api/media/upload-queue/target`, { base: null });
+    say('upload.paused', { via: smallUp });
+    const [cs0, co0] = await Promise.all([cli.chunks('media', smallHash).catch(() => null), cli.chunks('media', media.original).catch(() => null)]);
+    if (cs0?.complete) firstComplete.small = tPause;
+    const chunkSize = cs0?.chunkSize ?? null;
+    const originalSize = videoBytes.length;
+    const totalChunks = chunkSize ? Math.max(1, Math.ceil(originalSize / chunkSize)) : null;
+    out.pause = { at: tPause, sinceImportMs: tPause - tImport, via: smallUp, postStatus: pausePost.status, chunkSize, originalBytes: originalSize, originalChunks: totalChunks,
+      originalReceived: co0?.received?.length ?? 0, originalComplete: co0?.complete === true, smallComplete: cs0?.complete === true };
+    check(pausePost.status === 200 && pausePost.body?.ok !== false, '[creator] 暂停上传队列(上传目标置空)', pausePost);
+    check(out.pause.smallComplete, '[creator] 暂停时托管端素材小尺寸已 complete', out.pause);
+    check(!out.pause.originalComplete, '[creator] 暂停时托管端素材原尺寸还没 complete', out.pause);
+    check(totalChunks >= 4, '[creator] 素材原尺寸至少分 4 片', out.pause);
+    // 暂停之后队列里还留着这个素材(不丢),原尺寸不再往上走
+    await delay(1500);
+    const [co1, q1p] = await Promise.all([cli.chunks('media', media.original).catch(() => null), getJson(`${A.origin}/api/media/upload-queue`).catch(() => null)]);
+    out.pause.after1500ms = { originalReceived: co1?.received?.length ?? 0, originalComplete: co1?.complete === true, queued: q1p?.queue?.items?.length ?? null, target: q1p?.target ?? null };
+    check(!out.pause.after1500ms.originalComplete && out.pause.after1500ms.queued === 1 && !q1p?.target, '[creator] 暂停期间原尺寸停着、素材还在上传队列里', out.pause.after1500ms);
     const smallInProject = await until('[creator] 项目里写上 tiers.small', () => P(page, async (id) => (await import('/src/store/project.ts')).getState().project.media.find((x) => x.id === id)?.tiers?.small ?? null, media.id), 30_000, 300);
     out.tiers = { original: media.original, small: smallHash, remuxed: media.original !== sha256(videoBytes) };
-    out.firstCompleteMs = { small: firstComplete.small ? firstComplete.small - tImport : null, original: firstComplete.original ? firstComplete.original - tImport : null, polls, originalBeforeSmall: violations };
-    check(tiersDone, '[creator] 托管端两档都 complete', firstComplete);
     check(smallHash && /^[0-9a-f]{64}$/.test(smallHash) && smallInProject === smallHash, '[creator] 项目里有 tiers.small,与两档登记一致', { smallHash, smallInProject, smallState });
-    check(violations === 0 && firstComplete.small && firstComplete.original && firstComplete.small <= firstComplete.original, '[creator] 托管端素材小尺寸先于原尺寸 complete', out.firstCompleteMs);
-    const drained = await until('[creator] 上传队列清空', async () => {
-      const q = await getJson(`${A.origin}/api/media/upload-queue`);
-      return q?.queue && q.queue.items.length === 0 && !q.queue.working ? q.queue : null;
-    }, 120_000, 300);
-    out.uploadQueue = drained ? { uploaded: drained.uploaded ?? null, lastError: drained.lastError ?? null } : null;
-    // 编辑器日志里这个素材的上传顺序
-    const short = (h) => (h === smallHash ? 'small' : h === media.original ? 'original' : h?.slice(0, 8));
-    const order = [];
-    for (const line of A.log) {
-      const m = /\[media-tiers\] (upload\.(?:tier-start|tier-done|item-done)) (\{.*\})$/.exec(line);
-      if (!m) continue;
-      let f;
-      try { f = JSON.parse(m[2]); } catch { continue; }
-      if (f.id !== media.original) continue;
-      order.push(m[1] === 'upload.item-done' ? 'item-done' : `${m[1].slice(7)} ${short(f.hash)}`);
-    }
-    out.uploadOrder = order;
-    check(JSON.stringify(order) === JSON.stringify(['tier-start small', 'tier-done small', 'tier-start original', 'tier-done original', 'item-done']),
-      '[creator] 上传队列日志:先小后大', order);
-    // 托管端字节对得上
-    for (const [tier, h] of [['small', smallHash], ['original', media.original]]) {
-      if (!h) continue;
-      const bytes = await cli.get('media', h).catch(() => null);
-      check(bytes && sha256(bytes) === h, `[creator] 托管端 ${tier} 字节与哈希相符`);
-    }
+
+    /** 观察端报小尺寸出画面并稳定(或它已交结果)之后续传,等原尺寸 complete、队列清空,再核对顺序与字节 */
+    const resumeUpload = async () => {
+      let signal = null;
+      const end = Math.min(Date.now() + 15 * 60_000, deadline);
+      while (!signal && Date.now() < end) {
+        const small = await store.get('observer.small', 5000).catch(() => null);
+        if (small) { signal = 'observer.small'; break; }
+        if (await store.get('observer', 0).catch(() => null)) signal = 'observer-gone';
+      }
+      const tResume = Date.now();
+      const resumed = await P(page, async () => {
+        const T = await import('/src/editor/media/assetTiers.ts');
+        const link = window.__t9AssetLink;
+        const base = T.remoteAssetBase();
+        if (!link || !base) return { ok: false, link: !!link, base };
+        // 页面自己设上传目标的函数(进入共享项目时 connectSharedAssets 调的那个):在这条连接上签 rw 素材票据交给编辑器进程
+        window.__t9StopUpload = T.startUploadTarget(link, base);
+        return { ok: true, base };
+      }).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
+      await store.put('resumed', { at: tResume, signal });
+      say('upload.resumed', { signal });
+      out.resume = { at: tResume, signal, sincePauseMs: tResume - tPause, ok: resumed.ok, base: resumed.base ?? null };
+      check(signal === 'observer.small', '[creator] 观察端报了小尺寸出画面才续传', signal);
+      check(resumed.ok && String(resumed.base ?? '').replace(/\/+$/, '') === conn.assetUrl.replace(/\/+$/, ''), '[creator] 页面把上传目标重新交给编辑器进程', resumed);
+      const origDone = await until('[creator] 续传后素材原尺寸 complete', async () => ((await cli.chunks('media', media.original).catch(() => null))?.complete ? Date.now() : null), 300_000, 200);
+      if (origDone) firstComplete.original = origDone;
+      out.resume.originalCompleteMs = origDone ? origDone - tResume : null;
+      out.firstCompleteMs = { small: firstComplete.small ? firstComplete.small - tImport : null, original: firstComplete.original ? firstComplete.original - tImport : null, polls };
+      check(firstComplete.small && firstComplete.original, '[creator] 托管端两档都 complete', firstComplete);
+      const drained = await until('[creator] 上传队列清空', async () => {
+        const q = await getJson(`${A.origin}/api/media/upload-queue`);
+        return q?.queue && q.queue.items.length === 0 && !q.queue.working ? q.queue : null;
+      }, 120_000, 300);
+      out.uploadQueue = drained ? { uploaded: drained.uploaded ?? null, failures: drained.failures ?? null,
+        lastError: drained.lastError ? { code: drained.lastError.code ?? null, message: String(drained.lastError.message ?? '').slice(0, 120) } : null } : null;
+      // 编辑器日志里这个素材的上传顺序。暂停(上传目标置空,票据随之清掉)会让正在传的原尺寸那一片回 401,队列记一次
+      // `upload.retry`、素材留在队里;续传时这个素材从头再走一遍:小尺寸问 chunks 已齐、一片不发,原尺寸只补缺的片
+      const short = (h) => (h === smallHash ? 'small' : h === media.original ? 'original' : h?.slice(0, 8));
+      const order = [];
+      const sent = [];
+      for (const line of A.log) {
+        const m = /\[media-tiers\] (upload\.(?:tier-start|tier-done|item-done|retry)) (\{.*\})$/.exec(line);
+        if (!m) continue;
+        let f;
+        try { f = JSON.parse(m[2]); } catch { continue; }
+        if (f.id !== media.original) continue;
+        order.push(m[1] === 'upload.item-done' ? 'item-done' : m[1] === 'upload.retry' ? 'retry' : `${m[1].slice(7)} ${short(f.hash)}`);
+        if (m[1] === 'upload.tier-done') sent.push({ tier: short(f.hash), attempt: order.filter((x) => x === 'retry').length + 1, sent: Array.isArray(f.sent) ? f.sent.length : null });
+      }
+      out.uploadOrder = order;
+      out.uploadSent = sent;
+      const attempts = [[]];
+      for (const x of order) { if (x === 'retry') attempts.push([]); else attempts.at(-1).push(x); }
+      const first = attempts[0];
+      const last = attempts.at(-1);
+      const lastNoSmall = last.filter((x) => !x.endsWith(' small'));
+      check(first[0] === 'tier-start small' && first[1] === 'tier-done small' && !first.includes('tier-done original')
+        && JSON.stringify(lastNoSmall) === JSON.stringify(['tier-start original', 'tier-done original', 'item-done'])
+        && (last.length === 3 || JSON.stringify(last.slice(0, 2)) === JSON.stringify(['tier-start small', 'tier-done small'])),
+        '[creator] 上传队列日志:先小后大(暂停前小尺寸传完、原尺寸没传完;续传后原尺寸传完出队)', order);
+      check(sent.filter((x) => x.tier === 'small' && x.attempt > 1).every((x) => x.sent === 0), '[creator] 续传时小尺寸一片没重发', sent);
+      // 整个取回再核哈希。原尺寸约 44 MB 只发一个请求,客户端缺省时限 30 s 含读完回包,托管端远时读不完
+      // (T9-X3 就是这样被判成不符);这里放宽到 10 分钟,取不回时记下错误原文,不和「字节不符」混在一起
+      const whole = conn.client('r', { timeoutMs: 600_000 });
+      out.hostedBytes = {};
+      for (const [tier, h] of [['small', smallHash], ['original', media.original]]) {
+        if (!h) continue;
+        const t0 = Date.now();
+        let bytes = null;
+        let error = null;
+        try { bytes = await whole.get('media', h); } catch (e) { error = { code: e?.code ?? null, message: String(e?.message ?? e).slice(0, 200) }; }
+        out.hostedBytes[tier] = { ms: Date.now() - t0, bytes: bytes ? bytes.length : null, error };
+        check(bytes && sha256(bytes) === h, `[creator] 托管端 ${tier} 字节与哈希相符`, out.hostedBytes[tier]);
+      }
+    };
 
     // ---- 5. KV config;等主机;加重卡片段,等 plan 落定
     await store.put('config', {
       run, hosted: httpBase, ws: wsBase, projectId: shared.projectId, name: shared.name, mode: shared.mode, base: shared.base, memberPassword: projectPw,
       tiers: out.tiers, mediaName: path.basename(video), fps: FPS, seek: SEEK,
       card: { id: CARD_ID, rel: CARD_REL, v1: MARK('v1'), v2: MARK('v2'), source: cardSource(CARD_ID, MARK('v1')) },
-      heavy: { cardId: HEAVY.cardId, seconds: HEAVY.seconds, salt: `t9-${run}` }, at: Date.now(),
+      heavy: { cardId: HEAVY.cardId, seconds: HEAVY.seconds, salt: `t9-${run}` },
+      pause: { at: out.pause.at, originalComplete: out.pause.originalComplete, originalReceived: out.pause.after1500ms.originalReceived, originalChunks: out.pause.originalChunks },
+      at: Date.now(),
     });
+    // 续传在后台等观察端的信号,与主机、重卡片段、plan 并行
+    const resumeTask = resumeUpload().catch((error) => { fails.push(`[creator] 续传出错:${String(error?.message ?? error).slice(0, 300)}`); });
     say('config.put', { run });
     const hostReady = await store.wait('host.ready', '主机起来', 15 * 60_000);
     out.hostReady = { at: hostReady.at ?? null, port: hostReady.port ?? null };
@@ -699,6 +793,7 @@ async function runCreator(out) {
     }
 
     // ---- 7. 汇总三方
+    await resumeTask;
     const [obs, host] = await Promise.all([
       store.wait('observer', '观察端结果', 15 * 60_000).catch((e) => ({ ok: false, fails: [String(e?.message ?? e)] })),
       store.wait('host', '主机结果', 15 * 60_000).catch((e) => ({ ok: false, fails: [String(e?.message ?? e)] })),
@@ -711,7 +806,7 @@ async function runCreator(out) {
     out.completedByNode = { pc: plan.pc.completed.length + plan.pc.dedup.length, host: hostDone };
     check(out.completedByNode.pc + out.completedByNode.host === plan.tasks, '各节点完成数之和 = 细任务数', { ...out.completedByNode, tasks: plan.tasks });
     await page.screenshot({ path: path.join(OUT, `${run}-creator-2-end.png`) });
-    out.shots = [path.join(OUT, `${run}-creator-1-published.png`), path.join(OUT, `${run}-creator-2-end.png`)];
+    out.shots = [path.join(OUT, `${run}-creator-1-published.png`), path.join(OUT, `${run}-creator-2-end.png`)].filter((f) => fs.existsSync(f));
     out.pageErrors = pageErrors.slice(0, 5);
   } catch (error) {
     fails.push(`creator 出错:${String(error?.message ?? error).slice(0, 600)}`);
@@ -799,6 +894,10 @@ async function runObserver(out) {
       throw new Error('观察端没看到视频片段');
     }
     out.joinMs = Date.now() - tJoin;
+    if (OBSERVER_THROTTLE) {
+      await page.emulateNetworkConditions({ download: OBSERVER_THROTTLE, upload: OBSERVER_THROTTLE, latency: 20 });
+      out.throttle = { download: OBSERVER_THROTTLE, latency: 20 };
+    }
     out.projectTiers = clip.tiers;
     // 播放头的去向:seek 之前挂一个 store 订阅,记下之后每一次 t 的变化(带调用栈),排查「seek 到 2.5 s 却停在 0」
     await P(page, async (t) => {
@@ -854,6 +953,18 @@ async function runObserver(out) {
     const startSampling = async () => (await front())?.evaluate(() => {
       window.__t9Samples = [];
       window.__t9Sampling = true;
+      // 每个 <video> 出没出过帧(requestVideoFrameCallback):显示中的元素 readyState < 2 时,出过帧的通常还显示着上一帧
+      const presented = new WeakSet();
+      window.__t9Presented = presented;
+      const watch = (v) => {
+        if (v.__t9Watch) return;
+        v.__t9Watch = true;
+        const cb = () => { presented.add(v); v.requestVideoFrameCallback(cb); };
+        v.requestVideoFrameCallback(cb);
+        if (v.readyState >= 2) presented.add(v);
+      };
+      for (const v of document.querySelectorAll('video')) watch(v);
+      window.__t9LowRs = null;
       const cv = document.createElement('canvas');
       cv.width = 100; cv.height = 72;
       const ctx = cv.getContext('2d', { willReadFrequently: true });
@@ -861,11 +972,14 @@ async function runObserver(out) {
       const raf = window.__pcRealRaf ?? window.requestAnimationFrame.bind(window);
       const loop = () => {
         if (!window.__t9Sampling) return;
+        for (const x of document.querySelectorAll('video')) watch(x);
         const v = document.querySelector('[data-pc-media] > video');
-        const s = { at: now(), shown: !!v };
+        const s = { at: now(), epoch: performance.timeOrigin + now(), shown: !!v };
         if (v) {
           s.src = (v.currentSrc || '').split('/@media/')[1]?.slice(0, 8) ?? '';
           s.rs = v.readyState;
+          s.presented = presented.has(v);
+          window.__t9LowRs = v.readyState < 2 ? { since: window.__t9LowRs?.since ?? s.epoch } : null;
           if (v.readyState >= 2 && v.videoWidth) {
             ctx.drawImage(v, 0, 0, cv.width, cv.height);
             let idx = 0;
@@ -889,8 +1003,76 @@ async function runObserver(out) {
       return tier !== 'none' ? { tier, idx: l.idx, w: l.w } : null;
     }, 180_000, 100);
     out.firstShown = firstShown;
+    // 出第一帧时原尺寸还在路上:创建方在放观察端进来之前暂停了上传、核对过原尺寸没 complete,
+    // 而且要等本端报「小尺寸出画面并稳定」才续传 —— 此刻 KV 里还不该有 `resumed`
+    const resumedAtFirst = await store.get('resumed', 0).catch(() => undefined);
+    out.originalAtFirstFrame = { paused: cfg.pause ?? null, resumedBefore: resumedAtFirst === undefined ? 'unknown' : resumedAtFirst !== null };
+    check(cfg.pause && cfg.pause.originalComplete === false && resumedAtFirst === null, '[observer] 出第一帧时素材原尺寸还没 complete(创建方暂停着上传、还没续传)', out.originalAtFirstFrame);
     check(firstShown?.tier === 'small', '[observer] 素材层先以素材小尺寸出现', firstShown);
     const samplingStarted = firstShown?.tier === 'small' ? startSampling() : Promise.resolve(false);
+    // 诊断:两个舞台里每个 <video> 的事件、页面代码写 currentTime / 调 load() 的地方(带调用栈),写进 __t9MediaLog
+    const installMediaLog = async () => {
+      for (const f of stageFrames()) {
+        await f.evaluate(() => {
+          if (window.__t9MediaLog) return;
+          const log = [];
+          window.__t9MediaLog = log;
+          const epoch = () => performance.timeOrigin + (window.__pcRealNow ?? (() => performance.now()))();
+          const tag = (v) => ({ src: (v.currentSrc || v.getAttribute('src') || '').split('/@media/')[1]?.slice(0, 8) ?? '', rs: v.readyState, ct: Number(v.currentTime.toFixed(3)),
+            shown: !!v.parentElement?.hasAttribute('data-pc-media'), paused: v.paused, net: v.networkState });
+          const push = (e) => { if (log.length < 4000) log.push(e); };
+          const stack = () => (new Error().stack ?? '').split('\n').slice(2, 9).map((l) => l.trim().replace(/https?:\/\/[^/]+/g, '').replace(/\?[^:)]*:/g, ':'));
+          const desc = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'currentTime');
+          Object.defineProperty(HTMLMediaElement.prototype, 'currentTime', {
+            configurable: true, enumerable: desc.enumerable, get: desc.get,
+            set(v) { push({ at: epoch(), type: 'set-currentTime', to: v, ...tag(this), stack: stack() }); desc.set.call(this, v); },
+          });
+          const load = HTMLMediaElement.prototype.load;
+          HTMLMediaElement.prototype.load = function () { push({ at: epoch(), type: 'load()', ...tag(this), stack: stack() }); return load.call(this); };
+          // 换档对齐的帧回调(VideoTrack 的 __pcTierTrace 观察口,数组时才记):哪一刻判定「新档这一帧对齐了」
+          const trace = [];
+          trace.push = (...xs) => {
+            for (const x of xs) push({ at: epoch(), type: 'tier-aligned', src: String(x?.url ?? '').split('/@media/')[1]?.slice(0, 8) ?? '', mediaTime: x?.mediaTime, ref: x?.ref, playing: x?.playing });
+            return Array.prototype.push.apply(trace, xs);
+          };
+          window.__pcTierTrace = trace;
+          const events = ['seeking', 'seeked', 'waiting', 'emptied', 'loadstart', 'loadedmetadata', 'loadeddata', 'canplay', 'stalled', 'suspend', 'abort', 'error', 'play', 'pause'];
+          const hook = (v) => {
+            if (v.__t9Log) return;
+            v.__t9Log = true;
+            for (const type of events) v.addEventListener(type, () => push({ at: epoch(), type, ...tag(v) }));
+          };
+          for (const v of document.querySelectorAll('video')) hook(v);
+          new MutationObserver(() => { for (const v of document.querySelectorAll('video')) hook(v); }).observe(document.documentElement, { subtree: true, childList: true });
+          // readyState 的变化(事件里没有直接的「降到 1」):每个 rAF 看一眼
+          const raf = window.__pcRealRaf ?? window.requestAnimationFrame.bind(window);
+          const last = new WeakMap();
+          const tick = () => {
+            for (const v of document.querySelectorAll('video')) {
+              const k = `${v.readyState}|${v.parentElement?.hasAttribute('data-pc-media') ? 1 : 0}|${v.currentSrc}`;
+              if (last.get(v) !== k) { last.set(v, k); push({ at: epoch(), type: 'state', ...tag(v) }); }
+            }
+            raf(tick);
+          };
+          raf(tick);
+        }).catch(() => {});
+      }
+    };
+    await installMediaLog();
+    const collectMediaLogs = async () => {
+      const mediaLogs = [];
+      for (const f of stageFrames()) {
+        const l = await f.evaluate(() => window.__t9MediaLog ?? null).catch(() => null);
+        if (l) mediaLogs.push({ frame: /id=([AB])/.exec(f.url())?.[1] ?? '?', log: l });
+      }
+      try { fs.writeFileSync(path.join(OUT, 'observer-media-log.json'), JSON.stringify({ tJoin, frontId: await P(page, () => window.__pcPreviewDiag?.().frontId ?? null).catch(() => null), mediaLogs }, null, 1)); } catch { /* 写不了不影响结论 */ }
+      out.mediaEvents = mediaLogs.map((m) => ({ frame: m.frame, seeks: m.log.filter((e) => e.type === 'set-currentTime' && e.src === cfg.tiers.original.slice(0, 8)).map((e) => ({ at: Math.round(e.at - tJoin), to: e.to, from: e.ct, rs: e.rs, shown: e.shown, stack: e.stack.slice(0, 3) })),
+        loads: m.log.filter((e) => e.type === 'load()').map((e) => ({ at: Math.round(e.at - tJoin), src: e.src, stack: e.stack.slice(1, 2) })),
+        aligned: m.log.filter((e) => e.type === 'tier-aligned' && e.src === cfg.tiers.original.slice(0, 8)).slice(0, 2).map((e) => ({ at: Math.round(e.at - tJoin), mediaTime: e.mediaTime, ref: e.ref })),
+        seeked: m.log.filter((e) => e.type === 'seeked' && e.src === cfg.tiers.original.slice(0, 8) && e.ct > 1).map((e) => ({ at: Math.round(e.at - tJoin), shown: e.shown })),
+        shownAt: (m.log.find((e) => e.type === 'state' && e.src === cfg.tiers.original.slice(0, 8) && e.shown) ?? null) && ((e) => ({ at: Math.round(e.at - tJoin), rs: e.rs }))(m.log.find((e) => e.type === 'state' && e.src === cfg.tiers.original.slice(0, 8) && e.shown)),
+        drops: m.log.filter((e) => e.type === 'state' && e.src === cfg.tiers.original.slice(0, 8) && e.rs < 2).map((e) => ({ at: Math.round(e.at - tJoin), rs: e.rs, shown: e.shown, ct: e.ct })) }));
+    };
     // 小尺寸停在 2.5 s:连续 3 次读到同一个帧号才算稳定;期间换到原尺寸就用换之前最后一个
     let smallIdx = null;
     let stable = 0;
@@ -907,8 +1089,10 @@ async function runObserver(out) {
         smallIdx = l.idx;
         return stable >= 3;
       }, 20_000, 100);
-      await page.screenshot({ path: path.join(OUT, `${run}-observer-1-small.png`) });
+      if (!swappedEarly) await page.screenshot({ path: path.join(OUT, `${run}-observer-1-small.png`) });
     }
+    // 告诉创建方:小尺寸出画面并稳定了,可以续传原尺寸(没出小尺寸也照样报,免得创建方干等)
+    await store.put('observer.small', { at: Date.now(), tier: firstShown?.tier ?? null, idx: smallIdx, stable: firstShown?.tier === 'small' && !swappedEarly });
     // 两档在观察端加入前都已传完时,页面挂上小尺寸、第一次轮询就换原尺寸(设计稿第 4 节),可能一个稳定样本都取不到:
     // 这时用小尺寸第一次出画面时读到的帧号(firstShown.idx),误差照旧按「不超过一帧」判
     out.smallIdxSource = smallIdx !== null ? (swappedEarly ? 'last-before-swap' : 'stable') : null;
@@ -917,6 +1101,35 @@ async function runObserver(out) {
     out.smallStableBeforeSwap = !swappedEarly;
     check(smallIdx !== null && Math.abs(smallIdx - EXPECT_IDX) <= 1, `[observer] 素材小尺寸停在 ${SEEK} s(帧号 ${EXPECT_IDX} ± 1)`, { smallIdx });
     const sampling = await samplingStarted;
+    // 显示中的元素 readyState < 2 时截合成后的舞台画面(视频区:条纹以下、卡片以上的一条),量亮度
+    const shots = [];
+    let shooting = !!sampling;
+    const stageRect = async () => {
+      const id = await P(page, () => window.__pcPreviewDiag?.().frontId ?? 'A').catch(() => 'A');
+      const h = await page.$(`iframe[src*="id=${id}"]`).catch(() => null);
+      return h ? h.boundingBox() : null;
+    };
+    const shotLoop = (async () => {
+      const { PNG } = await import('pngjs').catch(() => ({ PNG: null }));
+      while (shooting) {
+        const low = await (await front())?.evaluate(() => window.__t9LowRs).catch(() => null);
+        if (low) {
+          const r = await stageRect();
+          if (r && r.width > 10 && PNG) {
+            const clip = { x: r.x, y: r.y + r.height * 0.2, width: r.width, height: Math.max(2, r.height * 0.15) };
+            const at = Date.now();
+            const buf = await page.screenshot({ clip, type: 'png' }).catch(() => null);
+            if (buf) {
+              const img = PNG.sync.read(buf);
+              let sum = 0;
+              for (let i = 0; i < img.data.length; i += 4) sum += 0.299 * img.data[i] + 0.587 * img.data[i + 1] + 0.114 * img.data[i + 2];
+              shots.push({ at, done: Date.now(), luma: Math.round(sum / (img.data.length / 4)) });
+            }
+          }
+        }
+        await delay(40);
+      }
+    })();
     const tSwapWait = Date.now();
     const orig = await until('[observer] 素材原尺寸到齐后换成原尺寸', async () => {
       const l = await layer();
@@ -942,7 +1155,25 @@ async function runObserver(out) {
         return n && n.total >= 10 && n.after >= 5 ? n : null;
       }, 5_000, 100);
       const samples = await (await front())?.evaluate(() => { window.__t9Sampling = false; return (window.__t9Samples ?? []).splice(0); }).catch(() => []) ?? [];
-      const black = samples.filter((s) => !s.shown || s.rs < 2 || !(s.luma > 16));
+      shooting = false;
+      await shotLoop;
+      // 黑帧:没有显示中的元素;显示中的元素解出的帧本身黑(亮度 ≤ 16);readyState < 2 时这个元素从没出过帧,
+      // 或那段时间里截到的合成画面黑(亮度 ≤ 16)。readyState < 2 但出过帧、截图不黑的(浏览器照样显示着上一帧)不算
+      const nearShot = (s) => shots.filter((x) => x.at - 400 <= s.epoch && s.epoch <= x.done + 400);
+      const lowRs = samples.filter((s) => s.shown && s.rs < 2);
+      const black = samples.filter((s) => {
+        if (!s.shown) return true;
+        if (s.rs >= 2) return !(s.luma > 16);
+        if (!s.presented) return true;
+        return nearShot(s).some((x) => x.luma <= 16);
+      });
+      out.lowReadyState = { samples: lowRs.length, presentedBefore: lowRs.filter((s) => s.presented).length, withShot: lowRs.filter((s) => nearShot(s).length).length,
+        shots: shots.length, shotLuma: shots.length ? [Math.min(...shots.map((x) => x.luma)), Math.max(...shots.map((x) => x.luma))] : null,
+        srcs: [...new Set(lowRs.map((s) => s.src))], windowsMs: (() => {
+          const w = [];
+          for (const x of lowRs) { const last = w.at(-1); if (last && x.epoch - last.to < 300) last.to = x.epoch; else w.push({ from: x.epoch, to: x.epoch }); }
+          return w.map((x) => ({ at: x.from - tJoin, ms: Math.round(x.to - x.from) }));
+        })() };
       const idxs = [...new Set(samples.filter((s) => Number.isInteger(s.idx)).map((s) => s.idx))];
       const firstOrig = samples.findIndex((s) => s.src === origKey);
       const coversSwap = firstOrig > 0 && samples.slice(0, firstOrig).some((s) => s.src === smallKey);
@@ -959,6 +1190,8 @@ async function runObserver(out) {
         spanMs: samples.length > 1 ? Math.round(samples.at(-1).at - samples[0].at) : 0, coversSwap, mode, swapGapMs, sampleIntervalMs };
       check(samples.length >= 10, '[observer] 逐帧采样够数(≥ 10)', out.swapSamples);
       if (mode === 'covered') check(coversSwap, '[observer] 逐帧采样覆盖了换档(先有小尺寸样本、后有原尺寸样本)', out.swapSamples);
+      // 创建方暂停着原尺寸、等本端报了小尺寸才续传,换档一定晚于小尺寸出画面好几个采样间隔
+      check(mode === 'covered', '[observer] 原尺寸加入时还在路上,换档属于「覆盖」情形', { mode, swapGapMs, sampleIntervalMs });
       // 快换时「先小后大」由 firstShown(小尺寸)与之后换成原尺寸那两条断言保证,这里不再要求样本覆盖
       check(black.length === 0, '[observer] 换档期间逐帧采样无黑帧 / 无空档', black.slice(0, 3));
       check(idxs.every((i) => Math.abs(i - EXPECT_IDX) <= 1), '[observer] 换档期间画面一直停在同一时刻', idxs);
@@ -1003,6 +1236,8 @@ async function runObserver(out) {
     out.stageV1 = await stageHas(cfg.card.v1);
 
     // ---- 计时起点:拿到 editready 之后、写 observer.joined 之前(上界)
+    // 改卡会让舞台整页重载(日志随之清空):在那之前收媒体日志
+    await collectMediaLogs();
     await store.wait('editready', '创建者可以改卡');
     const t0 = Date.now();
     await store.put('observer.joined', { at: t0 });
@@ -1044,7 +1279,7 @@ async function runObserver(out) {
     out.bOverrideV2 = !!overrideSrc?.includes(cfg.card.v2);
     out.bKindAfter = await P(page, () => window.__pcSyncTest?.view().kind ?? null).catch(() => null);
     await page.screenshot({ path: path.join(OUT, `${run}-observer-3-v2.png`) });
-    out.shots = ['1-small', '2-original', '3-v2'].map((s) => path.join(OUT, `${run}-observer-${s}.png`));
+    out.shots = ['1-small', '2-original', '3-v2'].map((s) => path.join(OUT, `${run}-observer-${s}.png`)).filter((f) => fs.existsSync(f));
     out.pageErrors = pageErrors.slice(0, 5);
 
     check(out.installMs !== null && out.installMs <= 5000, `[observer] 5 s 内装上 v2(installMs=${out.installMs})`);
@@ -1220,7 +1455,8 @@ async function runAll(out) {
   const run = arg('--run', null) ?? newRunId();
   out.run = run;
   const outDir = path.resolve(arg('--out', path.join(os.tmpdir(), `pc-c66t9-${run}`)));
-  const common = ['--hosted', HOSTED, '--coord', COORD, '--run', run, '--timeout-min', String(Number(arg('--timeout-min', 25))), ...(KEEP ? ['--keep-temp'] : [])];
+  const common = ['--hosted', HOSTED, '--coord', COORD, '--run', run, '--timeout-min', String(Number(arg('--timeout-min', 25))), ...(KEEP ? ['--keep-temp'] : []),
+    ...(OBSERVER_THROTTLE ? ['--observer-throttle', String(OBSERVER_THROTTLE)] : [])];
   const roles = ['creator', 'observer', 'host'];
   const basePort = Number(arg('--port', DEFAULT_PORT.creator));
   if (!Number.isInteger(basePort) || basePort < 1 || basePort + 8 > 65535) throw new Error('--port 需给三组连续编辑器端口留出 9 个端口');

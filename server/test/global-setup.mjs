@@ -15,7 +15,12 @@
  * 实测 Windows 给 `listen(0)` 发号时会跳过这些已占用的号，不论调用方绑的是 127.0.0.1、::1、0.0.0.0、:: 还是缺省。
  * 绑不上（端口已经被别的程序占着）就跳过：别人占着，系统同样不会把它发给测试。
  *
- * 子进程从环境变量 `PROMPTCUT_TEST_BAD_PORTS_HELD` 知道占住了哪些（`bad-ports.test.mjs` 用它自检）。
+ * 并行跑多份 `npm test`（几个 worktree 同时跑）时，先起的那份占住了，后起的那份占不到；先起的那份收尾放掉之后，
+ * 后起的那份的测试文件就可能拿到这些号。所以运行期间每秒重试一次还没占到的（端口, 地址）对：谁先放手，
+ * 仍在跑的那份就接着占。定时器 `unref`，不拖住进程；`globalTeardown` 里停掉定时器、关掉全部监听。
+ *
+ * 子进程从环境变量 `PROMPTCUT_TEST_BAD_PORTS_HELD` 知道启动时本次占住了哪些（只作参考）。
+ * `bad-ports.test.mjs` 核对的是「名单里每个端口都 listen 不到」，不论谁占着。
  */
 import net from 'node:net';
 
@@ -29,30 +34,61 @@ export const FETCH_BAD_PORTS = Object.freeze([
 ]);
 
 const HOSTS = ['127.0.0.1', '::1'];
-const held = [];
+const TOTAL = FETCH_BAD_PORTS.length * HOSTS.length;
+const RETRY_MS = 1000;
+/** `${port}@${host}` → 占着它的监听 */
+const held = new Map();
+let retryTimer = null;
+let retrying = null;
 
 function hold(port, host) {
+  const key = `${port}@${host}`;
+  if (held.has(key)) return Promise.resolve(true);
   return new Promise((resolve) => {
     const server = net.createServer((socket) => socket.destroy());
     server.once('error', () => resolve(false));
     server.listen({ port, host, exclusive: true }, () => {
       server.unref();
-      held.push(server);
+      held.set(key, server);
       resolve(true);
     });
   });
 }
 
-export async function globalSetup() {
+/** 把还没占到的（端口, 地址）对都试一遍；返回至少一个地址占着的端口。 */
+async function holdAll() {
   const got = [];
   for (const port of FETCH_BAD_PORTS) {
     let any = false;
     for (const host of HOSTS) if (await hold(port, host)) any = true;
     if (any) got.push(port);
   }
+  return got;
+}
+
+function stopRetry() {
+  if (retryTimer) clearInterval(retryTimer);
+  retryTimer = null;
+}
+
+export async function globalSetup() {
+  const got = await holdAll();
   process.env.PROMPTCUT_TEST_BAD_PORTS_HELD = got.join(',');
+  if (held.size >= TOTAL) return;
+  retryTimer = setInterval(() => {
+    if (retrying) return;
+    retrying = holdAll().finally(() => {
+      retrying = null;
+      if (held.size >= TOTAL) stopRetry();
+    });
+  }, RETRY_MS);
+  retryTimer.unref();
 }
 
 export async function globalTeardown() {
-  await Promise.all(held.splice(0).map((server) => new Promise((resolve) => server.close(() => resolve()))));
+  stopRetry();
+  if (retrying) await retrying;
+  const servers = [...held.values()];
+  held.clear();
+  await Promise.all(servers.map((server) => new Promise((resolve) => server.close(() => resolve()))));
 }

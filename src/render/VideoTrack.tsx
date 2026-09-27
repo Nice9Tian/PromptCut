@@ -4,7 +4,7 @@ import { isImageMedia, type MediaAsset, type Project, type TrackClip } from "../
 import type { FilterDef } from "../kernel/filters.mjs";
 import { shouldMuteNativeAudio } from "../audio/cardAudio";
 import { driveMedia, filterOf, lastSeekAt, releaseMedia, targetTimeOf } from "./mediaDrive";
-import { frontTimeAtDisplay, planSlots, tierAligned, type SlotClip } from "./mediaSync";
+import { frontTimeAtDisplay, planSlots, reloadOnComplete, tierAligned, type SlotClip } from "./mediaSync";
 import { chooseTier, hashFromUrl, playbackUrl } from "./mediaTier";
 import { playabilityVersion, subscribePlayability } from "./playability";
 
@@ -243,6 +243,8 @@ export function VideoTrack({
     const prevWarm = warmRef.current;
     warmRef.current = plan.warm;
     activeRef.current = plan.active;
+    /** 这一轮换了装的东西(src 可能刚换上)的槽位 */
+    const fresh = [false, false];
     plan.load.forEach((c, i) => {
       const s = slots.current[i];
       const el = els[i].current;
@@ -257,6 +259,7 @@ export function VideoTrack({
       s.clip = c;
       s.full = fullOf(i);
       s.ready = false;
+      fresh[i] = true;
       displayedFrames.current[i] = null;
       // 冷却是给「同一段里的纠偏」的;换了一段就是新的开始,别让上一段留下的冷却挡住这一次对齐
       lastSeekAt.delete(el);
@@ -290,10 +293,11 @@ export function VideoTrack({
       }
       // 兜底:同一个文件 seek 到原地这类情况不会有新帧交出来,rVFC 不回调;解码好了、时刻对得上也算好
       const s = slots.current[i];
-      // 素材服务上刚到齐的那一档:之前按它挂过、失败了(404:等待上传方)的元素重新加载一次
+      // 素材服务上刚到齐的那一档:之前按它挂过、失败了(404:等待上传方)的元素重新加载一次。
+      // 这一轮刚换上 src 的不算(`reloadOnComplete`):那时 networkState 本来就是 NO_SOURCE,再 load() 只会打断刚开始的加载
       const h = s.clip ? hashFromUrl(s.clip.url) : null;
       const doneNow = !!h && complete.has(h);
-      if (doneNow && !completeSeen.current[i] && s.clip && (el.error || el.networkState === 3)) {
+      if (s.clip && reloadOnComplete({ doneNow, seenBefore: completeSeen.current[i], hasClip: true, freshSrc: fresh[i], error: !!el.error, networkState: el.networkState })) {
         el.load();
         s.ready = false;
         lastSeekAt.delete(el);

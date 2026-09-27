@@ -100,19 +100,35 @@ async function settle(rig) {
   throw new Error('消息往返不收敛');
 }
 
-/** 驱动到条件成立：flush → 节点 tick → queue.tick → 推进假时钟。真 sink 有真 I/O，每步另给一点真时间 */
-async function drive(rig, until, { maxSteps = 400, realMs = 0 } = {}) {
-  for (let step = 0; step < maxSteps; step++) {
+/**
+ * 驱动到条件成立：flush → 节点 tick → queue.tick → 推进假时钟。
+ *
+ * 纯内存（`realMs` 为 0）：每步把假时钟推 STEP_MS，最多 `maxSteps` 步。
+ * 带真 I/O（真 sink，`realMs` > 0）：每步先等 `realMs` 真时间，假时钟按这一步实际经过的真时间推进（至少 1 ms），
+ * 不按步数判失败，而是到 `realDeadlineMs` 这段真时间用完才判。这样机器忙时 I/O 慢，只是多走几步；
+ * 假时钟与真时间同步，租约（30 s）、停滞（120 s）这些按假时钟算的时限不会因为「步数多了」被提前触发。
+ */
+async function drive(rig, until, { maxSteps = 400, realMs = 0, realDeadlineMs = 20_000 } = {}) {
+  const t0 = Date.now();
+  let last = t0;
+  for (let step = 0; realMs ? Date.now() - t0 < realDeadlineMs : step < maxSteps; step++) {
     await settle(rig);
     rig.local.tick();
     await settle(rig);
     rig.queue.tick();
     await settle(rig);
     if (until()) return step;
-    if (realMs) await new Promise((resolve) => setTimeout(resolve, realMs));
-    rig.clock.advance(STEP_MS);
+    if (realMs) {
+      await new Promise((resolve) => setTimeout(resolve, realMs));
+      const now = Date.now();
+      rig.clock.advance(Math.max(1, now - last));
+      last = now;
+    } else {
+      rig.clock.advance(STEP_MS);
+    }
   }
-  assert.fail(`超过 ${maxSteps} 步仍未满足条件；queue.describe()：${JSON.stringify(rig.queue.describe()).slice(0, 2000)}\n节点事件：${JSON.stringify(rig.events).slice(0, 2000)}`);
+  const limit = realMs ? `${realDeadlineMs} ms 真时间` : `${maxSteps} 步`;
+  assert.fail(`超过 ${limit}仍未满足条件；queue.describe()：${JSON.stringify(rig.queue.describe()).slice(0, 2000)}\n节点事件：${JSON.stringify(rig.events).slice(0, 2000)}`);
 }
 
 function hygiene(rig) {
@@ -329,9 +345,9 @@ test('J5 真 sink（createAssetSink）：A 本机渲完走 put，task.done 带 C
   const contentB = await svc.another('node-b');
   const execB = { renders: [], async plan() { throw new Error('no plan'); }, async render(tk) { execB.renders.push(tk.id); return null; } };
   const sinkB = T.createAssetSink({ pipeline: B, client: svc.client, content: contentB });
-  // 内容库的清单在 A 的 put 回包之后才写完也允许：等它出现
+  // 内容库的清单在 A 的 put 回包之后才写完也允许：等它出现（按条件等，15 s 真时间封顶；机器忙时也够）
   const t0 = Date.now();
-  while (!(await contentB.get('snapshot-manifest', fx.manifestKey(view))) && Date.now() - t0 < 3000) await new Promise((r) => setTimeout(r, 20));
+  while (!(await contentB.get('snapshot-manifest', fx.manifestKey(view))) && Date.now() - t0 < 15_000) await new Promise((r) => setTimeout(r, 20));
   const rigB = createRig({ executor: execB, sink: sinkB, fp: fx.TASK_FP, cv: 'c' });
   rigB.publish([task]);
   await drive(rigB, () => rigB.doneCount(task.id) >= 1, { realMs: 5 });
