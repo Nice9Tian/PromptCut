@@ -391,7 +391,7 @@ async function startStandin({ url, pageConn, tag, env, secrets, projects, codeVe
   let grabPred = grab;
   const attempted = new Set();
   const session = M.createNodeSession({
-    nodeId, node: { profile: 'browser', envFingerprint: fp, codeVersions, capabilities: {} }, now: Date.now, maxConcurrent: 1, projects,
+    nodeId, node: { profile: 'browser', envFingerprint: fp, codeVersions, capabilities: {}, userId: pageConn.userId }, now: Date.now, maxConcurrent: 1, projects,
     isIdle: () => mode === 'work',
     send: (m) => {
       const out = m.type === 'node.hello' ? { ...m, environment: env } : m;
@@ -444,6 +444,36 @@ async function startStandin({ url, pageConn, tag, env, secrets, projects, codeVe
     setGrab(pred) { grabPred = pred; grabbed = null; mode = 'grab'; grabbing = true; },
     async stop() { clearInterval(timer); try { session.yieldAll('m7ap-stop'); } catch { /* 已停 */ } await render.close(); },
   };
+}
+
+/**
+ * 假干活节点（非浏览器、自报指纹，用来「做完」某些任务）：认领 `pick(task)` 为真的任务，progress(0) 后隔 workMs 以空清单完成。
+ * A 的一整轮（A1）用它；页面没当节点时，也用它替 pc 吃掉非双份的细任务（代 D15 的「只切分」开关，见 twinChecks）。
+ */
+async function startFakeWorker({ url, projectId, cred, as = 'creator', tag, run, fp = null, codeVersions = [], profile = 'host', pick = () => true, workMs = 150, log = () => {} }) {
+  const M = await mods();
+  const conn = await openConn({ url, projectId, username: cred.username, password: cred.password, as, role: 'render', device: deviceOf(tag, run), tag, log });
+  const done = [];
+  const session = M.createNodeSession({
+    nodeId: `m7ap-${tag}-${run}`, node: { profile, codeVersions, capabilities: {}, ...(fp ? { envFingerprint: fp } : {}) }, now: Date.now, maxConcurrent: 2, projects: [projectId],
+    send: (m) => conn.ep.send(m.type === 'node.hello' && fp ? { ...m, envFingerprint: fp } : m),
+    onTask: (task) => {
+      if (!pick(task)) { session.yieldAll('m7ap-not-mine'); return; }
+      session.progress(task.id, 0);
+      setTimeout(() => { if (session.complete(task.id, { v: 1, kind: 'snapshot', tier: task.tier ?? 'shared', resultKey: task.resultKey, dirKey: task.resultKey, entryKey: null, range: task.range, canvasHeavy: false, frames: [] })) done.push(task.id); }, workMs);
+    },
+    onLost: () => {},
+  });
+  // 只认领 pick 为真的：包一层会话的视图（filterClaimable 之前先筛）
+  const origKnown = session.known;
+  conn.ep.onMessage((m) => {
+    if (m?.type === 'queue.snapshot') m = { ...m, tasks: (m.tasks ?? []).filter(pick) };
+    else if (m?.type === 'task.opened' && m.task && !pick(m.task)) return;
+    session.receive(m);
+  });
+  session.start([]);
+  const timer = setInterval(() => { try { session.tick(); } catch { /* 忽略 */ } }, 50);
+  return { conn, session, done, known: origKnown, async stop() { clearInterval(timer); try { session.yieldAll('m7ap-stop'); } catch { /* 已停 */ } await conn.close(); } };
 }
 
 /* ================================================================== 上帝视角（creator） */
@@ -758,25 +788,20 @@ async function serverChecks(ctx) {
     const batch1 = [...mk('a1', 4, {}), ...mk('a1b', 2, { envFingerprint: sB.fp }), ...(sS ? mk('a1s', 2, { envFingerprint: sS.fp }) : []), ...(pageFp ? mk('a1p', 2, { envFingerprint: pageFp }) : [])];
     const aPlan = M.clipsPlanTaskOf({ projectId, projectRev: 900_000 + Math.floor(Math.random() * 1000), clips: ['m7ap-a-plan'], codeVersion: cv });
     // A 的假节点：host 档、不带指纹（看得见全部），codeVersion 同假任务；把第一批做完
-    const aWork = await openConn({ url, projectId, username: ctx.creator.username, password: ctx.creator.password, as: 'creator', role: 'render', device: deviceOf('Awork', run), tag: 'Awork', log: say });
-    closers.push(() => aWork.close());
-    const aSession = M.createNodeSession({
-      nodeId: `m7ap-Awork-${run}`, node: { profile: 'host', codeVersions: [cv], capabilities: {} }, now: Date.now, maxConcurrent: 2, projects: [projectId],
-      send: (m) => aWork.ep.send(m),
-      onTask: (task) => { aSession.progress(task.id, 0); setTimeout(() => aSession.complete(task.id, { v: 1, kind: 'snapshot', tier: 'shared', resultKey: task.resultKey, dirKey: task.resultKey, entryKey: null, range: task.range, canvasHeavy: false, frames: [] }), 150); },
-      onLost: () => {},
-    });
-    aWork.ep.onMessage((m) => aSession.receive(m));
-    aSession.start([]);
-    const aTimer = setInterval(() => { try { aSession.tick(); } catch { /* 忽略 */ } }, 50);
+    // A 的假节点：host 档，每种指纹一个（节点侧过滤规则 1 要指纹相同；不带指纹的节点只接不带指纹的任务），codeVersion 同假任务
+    const fpGroups = [...new Set(batch1.map((t) => t.requires.envFingerprint ?? null))];
+    const aWorkers = [];
+    for (const [i, fp] of fpGroups.entries()) {
+      const w = await startFakeWorker({ url, projectId, cred: ctx.creator, tag: `Awork${i}`, run, fp, codeVersions: [cv], pick: (t) => (t.requires?.envFingerprint ?? null) === fp && t.requires?.codeVersion === cv, log: say });
+      aWorkers.push(w);
+      closers.push(() => w.stop());
+    }
     const tA1 = Date.now();
     await kv.signal('a1.start', { at: tA1 });
     const pubRes = await aPub.rpc({ type: 'task.publish', tasks: batch1 });
     const aIds = new Set(batch1.map((t) => t.id));
     const allDone = await until(() => [...aIds].every((id) => ctx.god.tasks.get(id)?.state === 'done'), 90_000, 250);
-    clearInterval(aTimer);
-    try { aSession.yieldAll('m7ap-stop'); } catch { /* 已停 */ }
-    await aWork.close();
+    for (const w of aWorkers) await w.stop();
     // A 的计划任务（B 认领应回 forbidden）与第三批（A 的节点已停，任务保持 open，给 A2 认领用）
     const batch3 = mk('a3', 3, {});
     await aPub.rpc({ type: 'task.publish', tasks: [...batch3, aPlan] });
@@ -876,6 +901,14 @@ async function twinChecks(ctx) {
     say('twin.up', { fp: twin.fp, codeVersion: pageCv, welcome: twin.rec.welcome?.type ?? null });
     if (!twin.rec.welcome) { book.judge('D1-D2-D12', 'twin-hello', false, twin.rec.errors); return; }
     if (!pageCv) { book.pending('D1-D2-D12', 'dual-split', '没看到页面发布的清单计划（取不到页面的 codeVersion）', { plans: [...watcher.bodies.values()].filter((t) => t.kind === 'plan').length }); return; }
+    // 代 D15 的「只切分」开关（服务端还没有）：替 pc 以空清单吃掉非双份的细任务，pc 空着才能及时认领新计划去切分。
+    // 双份（input.dual）的一律不碰：它们是这里要判的「先认领者得卡」
+    const absorber = await startFakeWorker({ url: site.ws, projectId, cred: ctx.creator, tag: 'absorb', run, fp: ctx.pcFp, codeVersions: [pageCv],
+      pick: (t) => t.kind === 'snapshot' && t.requires?.envFingerprint === ctx.pcFp && t.input?.dual !== true && !['h4', 'h5'].includes(t.input?.clipId), log: say });
+    closers.push(() => absorber.stop());
+    const planList = () => [...watcher.bodies.values()].filter((t) => t.kind === 'plan' && t.source?.userId !== undefined && Number(t.source?.projectRev) < 900_000).map((t) => ({
+      rev: t.source?.projectRev, user: String(t.source?.userId ?? '').split('@')[0], clips: t.input?.clips ?? null, state: god.tasks.get(t.id)?.state ?? null,
+      claimedBy: (god.tasks.get(t.id)?.claimedBy ?? []).map((c) => (c.nodeId === ctx.pcNodeId ? 'pc' : c.nodeId.slice(0, 16))) }));
 
     // 加一张新重卡 h4，让页面测完、重发清单计划（此时本项目有同一用户的在线纯浏览器节点：替身）
     for (const clip of ['h4', 'h5']) {
@@ -902,9 +935,11 @@ async function twinChecks(ctx) {
         weights: [...new Set(ts.map((t) => t.weight?.class))],
       };
       if (!split) {
-        book.judge('D1-D2-D12', `dual-split-${clip}`, false, { ...d1, reason: '切分方没按两种指纹出键（等了 240 s）', planOnly: planOnlyState(ctx) });
+        book.judge('D1-D2-D12', `dual-split-${clip}`, false, { ...d1, reason: '切分方没按两种指纹出键（等了 240 s）', planOnly: planOnlyState(ctx), plans: planList().slice(-6), absorbed: absorber.done.length });
         continue;
       }
+      d1.plans = planList().slice(-3);
+      d1.absorbed = absorber.done.length;
       book.judge('D1-D2-D12', `dual-split-${clip}`, d1.allDual && d1.twinHasBake && d1.pcHasNoBake && d1.sameRanges && pcCopy.length > 0 && twinCopy.length > 0 && d1.userIdOfTwinCopy.every(Boolean), d1);
 
       // 建锁作废：先认领者得卡，另一份（open 的）进 failed / superseded
