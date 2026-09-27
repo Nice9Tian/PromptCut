@@ -2,7 +2,7 @@
  * codex、agy 两路的工具调用配对:让经 MCP 进来的调用拿到和聊天记录里那一条相同的 `callId`。
  *
  * Claude Code 在 MCP `tools/call` 的 `_meta["claudecode/toolUseId"]` 里直接带模型那一侧的 id,
- * 它的输出流里也是这个 id,两边天然对得上。codex、agy 不带(实测见 `docs/reports/AGENT-runner-callid.md`):
+ * 它的输出流里也是这个 id,两边天然对得上。codex、agy 不带(实测见 `docs/archive/agent-reports/AGENT-runner-callid.md`):
  *   - codex 的 `_meta` 有 `threadId`(= 输出流 `thread.started` 的 thread_id)和它自己的 `callId`("exec-<uuid>"),
  *     但输出流里工具条目的 id 是 `item_0`、`item_1` 这种,和 `_meta.callId` 对不上;
  *   - agy 的 `_meta` 有 `antigravity.google/conversation_id`(= 输出流的 conversation_id)和

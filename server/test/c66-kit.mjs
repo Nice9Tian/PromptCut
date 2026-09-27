@@ -5,7 +5,7 @@
  * 第 8 节，以及 `docs/plan/cloud-task.md` A1 验收；测试方没看实现（`claude/c66-tiers`、`c66-fetch`、`c66-cards`）。
  *
  * 设计稿没写死的模块路径、函数名、参数与回包形状全部集中在本文件，集成时对账只改这里。
- * 每一处假设用「假设 K<n>」标出，报告 `docs/reports/AGENT-c66-tests.md` 按同样的编号列出。
+ * 每一处假设用「假设 K<n>」标出，报告 `docs/archive/agent-reports/AGENT-c66-tests.md` 按同样的编号列出。
  *
  *   K1  两档生成：新模块 `server/media-tiers.mjs`（设计稿第 2 节没点名文件）导出
  *       - `makeSmallTier({ ffmpeg, input, output })`：把 `input` 转成小版写到 `output`（mp4），resolve 即完成；
@@ -45,7 +45,7 @@
  *       实例方法：`saved({ key, body })`（保存后）、`open()`（打开共享项目：列、拉、订阅）、`close()`。
  *       卡片源码的 `body` 就是源码字符串；`key` 是仓库相对路径。
  *
- * # 集成对账（`claude/c66-integ`，报告 `docs/reports/AGENT-c66-integ.md` 第 2 节）
+ * # 集成对账（`claude/c66-integ`，报告 `docs/archive/agent-reports/AGENT-c66-integ.md` 第 2 节）
  *
  * 上面 K1～K5 是测试方写时的假设；实际模块名与形状不同的，由下面各 `load*` 适配成假设的形状，用例本身不动：
  *   K1  `server/media-tiers.mjs`：`makeSmallVersion`（回 `{ ok }`，不抛）、`faststartState`（四态字符串）、

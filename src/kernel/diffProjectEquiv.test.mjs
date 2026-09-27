@@ -5,7 +5,7 @@
  * 元素递归之前加了一道「这一对肯定不出操作」的廉价判断(noOpsBetween)。要求是任何输入下输出与
  * 提速前逐字节相同。下面的 referenceDiffProject 是提速前(main 8a5d6ff)的原样实现,只去掉了类型,
  * 只放在测试里当参照;每组随机输入两边各算一遍,逐条比操作:op、path、index 相等,value 是同一个
- * 对象(===,连引用都一样),另外再比一遍 JSON。详见 docs/reports/AGENT-v8-diff-perf.md。
+ * 对象(===,连引用都一样),另外再比一遍 JSON。详见 docs/archive/agent-reports/AGENT-v8-diff-perf.md。
  */
 import test from "node:test";
 import assert from "node:assert/strict";

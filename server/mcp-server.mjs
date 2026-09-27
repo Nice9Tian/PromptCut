@@ -194,7 +194,7 @@ async function callBridge(tool, args, callId, pair) {
 }
 
 /**
- * codex、agy 在 tools/call 的 `_meta` 里带的配对线索(实测原文见 docs/reports/AGENT-runner-callid.md):
+ * codex、agy 在 tools/call 的 `_meta` 里带的配对线索(实测原文见 docs/archive/agent-reports/AGENT-runner-callid.md):
  *   - codex:`threadId` 等于它输出流 thread.started 的 thread_id。它的 `_meta.callId`("exec-<uuid>")
  *     输出流里没有,用不上;配对只能按(thread、工具名、参数);
  *   - agy:`antigravity.google/conversation_id` 等于输出流的 conversation_id,`progressToken` 是

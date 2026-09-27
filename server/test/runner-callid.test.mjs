@@ -5,7 +5,7 @@
  *   node --experimental-test-module-mocks --test server/test/runner-callid.test.mjs
  *
  * 夹具是 2026-09-27 在本机实录的输出流和 MCP 请求(codex-cli 0.156.1、agy 1.2.11,原文见
- * docs/reports/AGENT-runner-callid.md;里面没有凭证,用户目录换成了占位):
+ * docs/archive/agent-reports/AGENT-runner-callid.md;里面没有凭证,用户目录换成了占位):
  *   - codex 的 `_meta` 带 threadId(= 输出流 thread.started 的 thread_id)和它自己的 callId(输出流里没有);
  *     输出流工具条目的 id 是 item_0、item_1 —— 只能按(thread、工具名、参数)配对;
  *   - agy 的 `_meta` 带 conversation_id 和 progressToken "<uuid>:<步号>",步号 = 输出流的 step_index。

@@ -88,7 +88,7 @@
 
 ## 7. 用户卡与卡片同步（c66-host-cards，2026-09-27）
 
-C6.6 T9 暴露的代码与语义冲突：语义说独立渲染主机「能认领：全部」（`docs/semantics/product/platforms.md`「渲染节点」），节点按任务标明的能力自己过滤（`mechanism/document-service.md`「渲染任务队列」）；代码却把整个 `src/`（含 `src/cards/user`）算进代码版本，另一台机器上的主机只要没有创建者的用户卡（哪怕与任务无关）就一个任务也认领不了。按语义改的代码，语义不改。报告 `docs/reports/AGENT-c66-host-cards.md`。
+C6.6 T9 暴露的代码与语义冲突：语义说独立渲染主机「能认领：全部」（`docs/semantics/product/platforms.md`「渲染节点」），节点按任务标明的能力自己过滤（`mechanism/document-service.md`「渲染任务队列」）；代码却把整个 `src/`（含 `src/cards/user`）算进代码版本，另一台机器上的主机只要没有创建者的用户卡（哪怕与任务无关）就一个任务也认领不了。按语义改的代码，语义不改。报告 `docs/archive/agent-reports/AGENT-c66-host-cards.md`。
 
 - **代码版本**：`frameCode` 不含用户卡（`src/cards/user/` 下除装载入口 `index.ts` 以外的文件），换行统一成 LF。多一张、少一张或改过一张用户卡的两台节点仍在同一个池。
 - **任务上的卡片代码**：用到用户卡或改过的卡的细任务在 `requires.cardSources` 里写那张卡的代码身份（render-queue 契约 B.4 末「c66-host-cards 改」）。节点的 `cardSourceVersions` 现取现算，本机没有这份代码就不认领（不报错）。
