@@ -34,11 +34,11 @@ import { resolveGlRoute } from "../render/costDevice.mjs";
 import { ONLINE } from "../online/mode";
 import { LOW_MEMORY_TEXT, lowMemoryMode, noteRuntimeTrouble, readDisplayTier, setDisplayTier, type DisplayTier } from "../online/lowMemory";
 import { setMediaTierPolicy, type MediaTierPolicy } from "../render/mediaTier";
-import { assetAuthHeaders, docRequest, remoteAssetBase, remoteAssetTicket, setNoEditorProcess, subscribeRemoteAssets } from "./media/assetTiers";
+import { assetAuthHeaders, docRequest, remoteAssetBase, remoteAssetTicket, remoteAssetTicketInfo, setNoEditorProcess, subscribeRemoteAssets } from "./media/assetTiers";
 import { currentDocProjectId, currentSharedLink, pageSession, pushToast } from "./sync/syncManager";
 import { BACKFILL_CHECK_MS, BackfillPublisher, missingLayers } from "./lowMemoryBackfill";
 import { needsLocalPc } from "../render/placeholderHost";
-import { currentPlan, setPlanAllHeavy, setPlanDeadMs } from "./planDispatch";
+import { currentPlan, lightCostAt, setPlanAllHeavy, setPlanDeadMs } from "./planDispatch";
 import { beatSwapDebug, setBeatSwap } from "./snapshotFeed";
 import { SWAP_MS } from "../render/beatSwap.mjs";
 import { markStageHandshake, onlineStageState, stageAssetBase, subscribeOnlineStages, STAGE_HANDSHAKE_TIMEOUT_MS } from "../online/stageOrigins";
@@ -252,10 +252,20 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
   useEffect(() => {
     if (!ONLINE) return;
     void pushMediaPolicy();
-    // 远程素材服务换了(进入 / 离开共享项目)就重发;票据 15 分钟有效,每 5 分钟续一次
+    // 远程素材服务换了(进入 / 离开共享项目)就重发。票据按它自己的寿命续:剩一半就重发一次(15 分钟的票据约 7 分钟一次;
+    // 测试里缩短了票据时限时跟着变快 —— C10 契约第 12 节),至多 5 分钟一次
     const off = subscribeRemoteAssets(() => { void pushMediaPolicy(); });
-    const timer = window.setInterval(() => { void pushMediaPolicy(); }, 5 * 60_000);
-    return () => { off(); window.clearInterval(timer); };
+    let timer = 0;
+    let alive = true;
+    const loop = async () => {
+      if (!alive) return;
+      await pushMediaPolicy();
+      const info = await remoteAssetTicketInfo(false);
+      const left = info ? info.exp - Date.now() : 5 * 60_000;
+      if (alive) timer = window.setTimeout(() => { void loop(); }, Math.max(1000, Math.min(5 * 60_000, left / 2)));
+    };
+    timer = window.setTimeout(() => { void loop(); }, 1000);
+    return () => { alive = false; off(); window.clearTimeout(timer); };
   }, [lowMem, pushMediaPolicy]);
   /*
    * 低内存档的过渡做法(c10a 契约第 17 节「全部按重卡」):不测,所有卡按重卡处理 —— 播放时一律贴预渲染小尺寸,
@@ -271,7 +281,7 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
    */
   useEffect(() => {
     const on = ONLINE && !lowMem;
-    setBeatSwap(on, { swapMs: SWAP_MS });
+    setBeatSwap(on, { swapMs: SWAP_MS, occupied: lightCostAt });
     setPlanDeadMs(on ? SWAP_MS : null);
     return () => { setBeatSwap(false); setPlanDeadMs(null); };
   }, [lowMem]);

@@ -34,7 +34,7 @@ import { pipelineAt } from "../render/pipelinePlan.mjs";
 import { mirrorKey, pushWanted } from "../render/dataMirror";
 import type { Project, TrackClip } from "../kernel/project";
 import type { StageRole, StageRpcClient } from "../render/stageRpc";
-import { currentPlan, lightCostAt } from "./planDispatch";
+import { currentPlan } from "./planDispatch";
 import { fitBeatSwaps, SWAP_MS } from "../render/beatSwap.mjs";
 import { planesWithinBudget, rangesHave, SEGMENT_FRAMES, streamPlanesFor, type StreamPlaneRequest } from "../render/streamPlayer";
 
@@ -238,11 +238,14 @@ function isSettled(role: StageRole, clipId: string): boolean {
  */
 let beatSwap = false;
 let beatSwapMs = SWAP_MS;
+/** 这一拍轻管线已占用的毫秒(宿主给:`planDispatch.ts` 的 `lightCostAt`);不给按 0 */
+let occupiedAt: (t: number) => number = () => 0;
 let lastBeatFit: { t: number; occupiedMs: number; deadMs: number; fit: number; swap: string[]; placeholder: string[] } | null = null;
 
-export function setBeatSwap(on: boolean, opts: { swapMs?: number } = {}): void {
+export function setBeatSwap(on: boolean, opts: { swapMs?: number; occupied?: (t: number) => number } = {}): void {
   beatSwap = !!on;
   if (Number(opts.swapMs) > 0) beatSwapMs = Number(opts.swapMs);
+  if (opts.occupied) occupiedAt = opts.occupied;
   if (!beatSwap) lastBeatFit = null;
 }
 
@@ -268,7 +271,7 @@ export function topDownOrder(project: Project, clipIds: Iterable<string>): strin
 /** 播放中按拍的预算把装不下的重层从这一拍的选帧里拿掉(那一层落到占位符) */
 function applyBeatBudget(head: Playhead, picks: Map<string, Pick>): Map<string, Pick> {
   if (!beatSwap || !head.playing || !picks.size) return picks;
-  const occupiedMs = lightCostAt(head.t);
+  const occupiedMs = Math.max(0, Number(occupiedAt(head.t)) || 0);
   const fit = fitBeatSwaps({ fps: head.project.fps || 30, occupiedMs, layers: topDownOrder(head.project, picks.keys()), swapMs: beatSwapMs });
   lastBeatFit = { t: head.t, occupiedMs, deadMs: fit.deadMs, fit: fit.fit, swap: fit.swap, placeholder: fit.placeholder };
   if (!fit.placeholder.length) return picks;
@@ -662,6 +665,7 @@ export function resetSnapshotFeed(): void {
   stopSnapshotFeed();
   beatSwap = false;
   beatSwapMs = SWAP_MS;
+  occupiedAt = () => 0;
   lastBeatFit = null;
   anchorsFor = null;
   source = new HttpSnapshotSource();
