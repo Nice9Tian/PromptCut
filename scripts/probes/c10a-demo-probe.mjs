@@ -340,14 +340,22 @@ async function newPage({ mobile = false } = {}) {
   page.on('console', (m) => { if ((m.type() === 'error' || m.type() === 'warn') && page.consoleErrors.length < 40) page.consoleErrors.push(`${m.type()}: ${m.text()}`.slice(0, 240)); });
   page.assets = [];
   // 顶层导航(含整页重载)与 Vite 客户端消息:查「创建者页面中途整页重载」用;地址只记源与路径
+  // 只算真正的整页导航:puppeteer 的 'framenavigated' 对同页跳转(清掉 #invite 的 replaceState、改 hash)也发,
+  // 所以直接听 CDP:`Page.frameNavigated` 只在换文档时发,同页跳转走 `Page.navigatedWithinDocument`,另记 sameDocNavs 备查。
   page.navs = [];
-  page.on('framenavigated', (f) => {
-    if (f !== page.mainFrame()) return;
-    let where = '?';
-    try { const u = new URL(f.url()); where = `${u.origin}${u.pathname}`; } catch { /* 不是地址 */ }
+  page.sameDocNavs = 0;
+  const whereOf = (url) => { try { const u = new URL(url); return `${u.origin}${u.pathname}`; } catch { return '?'; } };
+  const navCdp = await page.createCDPSession();
+  await navCdp.send('Page.enable');
+  let topFrameId = null;
+  navCdp.on('Page.frameNavigated', ({ frame }) => {
+    if (frame.parentId) return;
+    topFrameId = frame.id;
+    const where = whereOf(frame.url);
     page.navs.push({ at: new Date().toISOString(), url: where });
     if (page.navs.length > 1) say('page.renavigated', { url: where, count: page.navs.length });
   });
+  navCdp.on('Page.navigatedWithinDocument', ({ frameId }) => { if (frameId === topFrameId) page.sameDocNavs++; });
   page.viteLog = [];
   page.on('console', (m) => { const t = m.text(); if (t.startsWith('[vite]') && page.viteLog.length < 60) page.viteLog.push(`${new Date().toISOString()} ${t}`.slice(0, 240)); });
   if (mobile) {
@@ -766,7 +774,7 @@ try {
   }, 900_000, 1000);
   check(newPx, '手机收到重渲后的新小尺寸');
   // 整段重渲完:内容库里新键下每一段清单都在、小位图都在素材服务上
-  const layer1 = await until('重渲整段完成(新键下每帧两档齐全)', async () => { const l = await heavyLayer(); return l && l.key !== keyBefore && l.frames === l.count && l.smallCount === l.frames ? l : null; }, 900_000, 2000);
+  const layer1 = await until('重渲整段完成(新键下每帧两档齐全)', async () => { const l = await heavyLayer(); return l && l.key !== keyBefore && l.frames === l.count && l.smallCount === l.frames && l.missingSmall.length === 0 ? l : null; }, 900_000, 2000);
   check(layer1, '层表里重卡片段换了新的键、整段重渲完成', { before: keyBefore?.slice(0, 12), after: layer1?.key?.slice(0, 12), why: layer1 ? undefined : state.layerWhy });
   // 补渲排在后面:手机为新放的轻卡发的补渲做完,核对节点的认领先后
   const bf3 = state.extraClip ? await until('手机为新放的轻卡发出补渲任务', () => P(phone, (spec) => {
@@ -926,7 +934,7 @@ try {
    * 产品上刷新后会回到共享项目(第 1b 步验的就是这个),意外重载只记下、不判失败。
    */
   if (state.creator) {
-    out.creatorPage = { navs: state.creator.navs, expected: 1 + (state.creatorReloads ?? 0), vite: state.creator.viteLog,
+    out.creatorPage = { navs: state.creator.navs, sameDocNavs: state.creator.sameDocNavs, expected: 1 + (state.creatorReloads ?? 0), vite: state.creator.viteLog,
       server: editorLog.filter((l) => /page reload|optimized dependencies|new dependencies|reloading|server restarted/i.test(l)).slice(0, 20).map((l) => l.slice(0, 240)) };
     out.creatorPage.unexpectedReloads = Math.max(0, state.creator.navs.length - out.creatorPage.expected);
   }
