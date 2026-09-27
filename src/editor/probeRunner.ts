@@ -123,12 +123,24 @@ const RUN_MODE: "dev" | "build" = import.meta.env.DEV ? "dev" : "build";
  * 本机身份（J4）。`lowMemory` / `offscreenGl` 取**舞台握手报上来的那一份** ——
  * 离线探针拿的也是它，主文档自己再探一遍会是第二份实现、会走偏。
  */
+/*
+ * GPU 渲染器串一个页面会话里不变:读一次记下(C6.6 集成,T4)。以前每排一轮都新建一个 WebGL 上下文去读、再还回去,
+ * 编辑时每改一次项目就多出几毫秒到十几毫秒。读成 `unknown`(上下文没建成)的不记,下次再读。
+ */
+let gpuRenderer: string | null = null;
+function gpuRendererOnce(): string {
+  if (gpuRenderer) return gpuRenderer;
+  const r = readGpuRenderer(document);
+  if (r !== "unknown") gpuRenderer = r;
+  return r;
+}
+
 function deviceStringOf(tuning: PipelineTuning): string {
   const caps = stageCapabilities("back");
   const lowMemory = !!caps?.lowMemory;
   return costDeviceString({
     ua: navigator.userAgent,
-    renderer: readGpuRenderer(document),
+    renderer: gpuRendererOnce(),
     lowMemory,
     offscreenGl: !!caps?.offscreenGl,
     // 生效路线(M2):项目选项优先,否则按低内存档。切了路线等于换机器,旧记录不命中、重探针
