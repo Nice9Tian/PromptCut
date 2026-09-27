@@ -574,6 +574,10 @@ try {
     r.onerror = () => resolve(null);
   })).catch(() => null);
   check(Array.isArray(costMode) && costMode.length && costMode.every((m) => m === 'build'), 'A2:成本记录 mode=build', costMode);
+  // 第 3 节 + 第 18 节第 7 条(集成接线):在线普通档测完的记录当场转写进文档服务(onCostRecords → publishSharedCosts)
+  const costPublish = await until('成员页测完的成本记录写进了文档服务', () => P(member, () => { const d = window.__pcCostPublish?.(); return d && d.ok > 0 ? d : null; }), 30_000, 500);
+  check(costPublish && costPublish.failed === 0 && costPublish.records >= costs1?.costs, '第 3 节:在线普通档测完写进文档服务(当场转写,没有失败)', { publish: costPublish, relay: await P(member, () => window.__pcSharedCosts?.() ?? null).catch(() => null) });
+  state.costPublish = costPublish;
 
   // A1:两个舞台同站跨源、带 OAC
   const d1 = await previewDiag(member);
@@ -678,7 +682,7 @@ try {
     '第 2 节:跨源舞台用相对地址读自己源上反代的 /media', sum1.mediaByFrameOrigin);
   const o3 = await onlineDiag(member);
   check(o3?.layers?.length && o3.layers.every((l) => l.envFingerprint === state.creatorFp), 'A3:一层只出自一种环境(层表记录的那一种)', o3?.layers?.map((l) => ({ clip: l.clipId.slice(0, 6), fp: l.envFingerprint })));
-  out.steps.member = { ms: Date.now() - t1, stages: origins, iframeTargets, caps, requests: sum1, l2: costs1, pageFp: state.pageFp,
+  out.steps.member = { ms: Date.now() - t1, stages: origins, iframeTargets, caps, requests: sum1, l2: costs1, pageFp: state.pageFp, costPublish: state.costPublish,
     publisher: await P(member, () => window.__pcPlanPublisher?.() ?? null).catch(() => null) };
   say('step1.done', out.steps.member);
 

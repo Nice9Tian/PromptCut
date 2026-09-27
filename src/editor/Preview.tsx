@@ -337,15 +337,21 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
      * 下面的 `SharedCostRelay` 每 5 秒也会从分派表里补传(接上共享项目之前测过的、这里没发成的),两路都走也无害:
      * 文档服务按测量时刻留最新。
      */
+    const diag = { calls: 0, ok: 0, failed: 0, records: 0, lastError: null as string | null };
     const off = onCostRecords((records) => {
       if (!hasDocLink() || !currentSharedLink()) return;
       const projectId = currentDocProjectId();
       if (!projectId) return;
       const input = records.map((r) => toSharedInput(r)).filter((r): r is SharedCostInput => !!r);
       if (!input.length) return;
-      void publishSharedCosts({ request: docRequest, projectId, environment: pageEnvironment(), records: input }).catch(() => undefined);
+      diag.calls++;
+      void publishSharedCosts({ request: docRequest, projectId, environment: pageEnvironment(), records: input })
+        .then((r) => { if (r.ok) { diag.ok++; diag.records += input.length; } else { diag.failed++; diag.lastError = r.error ?? null; } })
+        .catch((e) => { diag.failed++; diag.lastError = String(e); });
     });
-    return () => { off(); setCostBackend(null); };
+    const w = window as unknown as Record<string, unknown>;
+    w.__pcCostPublish = () => ({ ...diag });
+    return () => { off(); setCostBackend(null); delete w.__pcCostPublish; };
   }, [lowMem]);
   /* 低内存档切到后台时停预览(契约第 13 节 Q2 的采纳:后台计时器、rAF 都不保证继续,回来时从停着的地方接) */
   useEffect(() => {
