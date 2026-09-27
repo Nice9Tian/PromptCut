@@ -70,6 +70,12 @@ export interface SwapHost {
   lowMemory?(): boolean;
 }
 
+/** 诊断:最近几次暂停态第二路的结果(探针看) */
+const swapLog: { at: number; t: number; stale: number; ready: boolean; swapped: boolean; error?: string }[] = [];
+export function stageSwapDebug() {
+  return swapLog.slice();
+}
+
 /** 此刻是不是低内存档(宿主说了算;没有宿主 = 普通档) */
 export function swapBlockedByLowMemory(): boolean {
   try { return host?.lowMemory?.() === true; } catch { return false; }
@@ -262,6 +268,7 @@ async function catchUpBack(project: Project, targetSec: number): Promise<BackRea
 
 /** (4)(5)：互换并把新 `front` 该有的状态补齐 */
 async function swapAndDress(sec: number, playing: boolean): Promise<StageRpcClient | null> {
+  dressError = null;
   const oldFront = frontStage();
   const swapped = host?.swapRoles();
   if (!swapped?.front) return null;
@@ -304,9 +311,10 @@ async function swapAndDress(sec: number, playing: boolean): Promise<StageRpcClie
       await next.setScrubbing(false);
       await next.setProxy(host?.proxy() ?? false);
     }
-  } catch { /* iframe 正在换：下一次 setTime 会把状态重新摆一遍 */ }
+  } catch (e) { dressError = String((e as Error)?.message ?? e).slice(0, 160); /* iframe 正在换：下一次 setTime 会把状态重新摆一遍 */ }
   return next;
 }
+let dressError: string | null = null;
 
 /**
  * 暂停态的第二路（K5）：`setTime(t, { settle: true })` 之后，只要有一张判重卡是
@@ -329,12 +337,15 @@ export async function runSettleSwap(t: number): Promise<boolean> {
       pendingSettleT = null;
       let swapped = false;
       const project = getState().project;
-      if (staleOnBackCatchUp(project, target).length) {
+      const stale = staleOnBackCatchUp(project, target).length;
+      if (stale) {
         const ready = await catchUpBack(project, target);
         // 补跑期间用户又动了：这一次作废（下面那一轮按最新的 `t` 重来）
         if (ready && Math.abs(getState().t - target) <= 1e-6 && !getState().playing) {
           swapped = !!(await swapAndDress(target, false));
         }
+        swapLog.push({ at: Math.round(performance.now()), t: target, stale, ready: !!ready, swapped, ...(dressError ? { error: dressError } : {}) });
+        if (swapLog.length > 10) swapLog.shift();
       }
       const next = pendingSettleT;
       // 没有新请求、或新请求就是刚做完的这一拍：收工

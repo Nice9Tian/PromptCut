@@ -148,6 +148,8 @@ export function snapshotFeedDebug(head: Playhead) {
     mounted: [...baselines.front.mounted].map(([clipId, pick]) => ({ clipId, key: pick.key.slice(0, 12) })),
     reset: baselines.front.needsReset,
     settled: [...baselines.front.settled],
+    settledAll: baselines.front.settledAll,
+    settledLog: settledLog.slice(),
   };
 }
 
@@ -209,6 +211,7 @@ export function noteSettled(role: StageRole, clipIds: readonly string[]): void {
  * 暂停中不再给任何卡投快照,直到下一次 `setTime` / 播放。
  */
 export function markAllSettled(role: StageRole): void {
+  noteSettledLog("all", role, "");
   baselines[role].settledAll = true;
 }
 
@@ -216,7 +219,14 @@ export function markAllSettled(role: StageRole): void {
  * 「停下就撤兜底」(product/rendering.md「兜底顺序」末条):暂停态已经追到精确活渲的卡,暂停中不再盖回快照。
  * 下一次 `setTime`(`pickForSetTime`)或播放时清空。
  */
-function clearSettled(role: StageRole): void {
+/** 诊断:最近几次 settled 的清与设(谁、何时),探针排查「占位撤下后又盖回」用 */
+const settledLog: { at: number; op: string; role: StageRole; why: string }[] = [];
+function noteSettledLog(op: string, role: StageRole, why: string) {
+  settledLog.push({ at: Math.round(performance.now()), op, role, why });
+  if (settledLog.length > 30) settledLog.shift();
+}
+function clearSettled(role: StageRole, why = ""): void {
+  if (baselines[role].settled.size || baselines[role].settledAll) noteSettledLog("clear", role, why);
   const base = baselines[role];
   if (base.settled.size) base.settled = new Set();
   base.settledAll = false;
@@ -555,7 +565,7 @@ function packChanges(role: StageRole, changes: Change[], reset: boolean): { patc
  */
 export function pickForSetTime(head: Playhead): { snapshots: Record<string, string | null>; awaiting: string[] } {
   // 新的一次 setTime:上一次暂停态的 settled 作废(这一刻重新按兜底顺序选)
-  clearSettled("front");
+  clearSettled("front", `setTime ${head.t}`);
   const feed = planFeed(head);
   fetchMissing(feed.picks);
   if (feed.wanted.length) pushWanted(feed.wanted);
@@ -596,7 +606,7 @@ export function pickForSetTime(head: Playhead): { snapshots: Record<string, stri
  */
 export async function deliverSnapshots(stage: StageRpcClient, role: StageRole, head: Playhead): Promise<number> {
   // 播放中没有「停下就精确」这回事:settled 作废
-  if (head.playing) clearSettled(role);
+  if (head.playing) clearSettled(role, "playing");
   const feed = planFeed(head);
   fetchMissing(feed.picks, role);
   if (feed.wanted.length) pushWanted(feed.wanted);
