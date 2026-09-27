@@ -460,12 +460,24 @@ export async function runPlayingSwap(pendingIds: readonly string[]): Promise<boo
     runningKind = null;
     // 放弃那一次**不清**：那张卡活渲出来的状态是错的，死素材就绪前留在 suppressed（R5-11）
     if (!gaveUp) setExtraSuppressed([]);
+    /*
+     * **跑着时来的暂停态 settle 交给暂停态那一路**(R5-15 的另一半;C10-A4)。
+     * 播放态互换的整场景补跑可能要十几秒(补到目标拍要把判重的慢卡一起推一遍),这期间播放到头、
+     * 用户点时间轴,`runSettleSwap` 都撞上 `running`、只记进 `pendingSettleT`。以前只有暂停态那一路
+     * 会消费它,这里收手时既不做也不交出去 —— 判重的 `vtOk = false` 卡就停在快照上,直到下一次跳转或播放,
+     * 违背「停下就精确」。收手时又在播放了就不补:下一次停下自己会再来一次。
+     */
+    const next = pendingSettleT;
+    pendingSettleT = null;
+    if (next !== null && !getState().playing) void runSettleSwap(next).catch(() => { /* 后台舞台正在换:下一次 setTime 会重来 */ });
   }
 }
 
 /** 测试用 */
 export function resetStageSwap(): void {
   running = false;
+  runningKind = null;
+  pendingSettleT = null;
   lastGuessMs = 0;
   host = null;
 }
