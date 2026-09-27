@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 import { createServer as createVite } from 'vite';
 import { createSharedDocService } from '../docservice/shared-service.mjs';
 import { createTcpProxy, wsClient, waitFor, sleep } from './fake-ws-kit.mjs';
-import { startSessionGateway } from './session-gateway-kit.mjs';
+import { startSessionGateway, startLegacyFront } from './session-gateway-kit.mjs';
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 
@@ -25,20 +25,23 @@ async function startEnv(t, { gateway = true } = {}) {
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const docUrl = `ws://127.0.0.1:${server.address().port}/docservice`;
   const gw = gateway ? await startSessionGateway({ upstream: docUrl }) : null;
-  const proxy = await createTcpProxy({ target: gw ? gw.port : server.address().port });
+  // 没有网关时挡一层「旧服务端」前端：去掉会话项，服务端把页面当旧客户端（服务端会话层合入前后都成立）
+  const front = gw ? null : await startLegacyFront({ upstream: docUrl });
+  const proxy = await createTcpProxy({ target: gw ? gw.port : front.port });
   const vite = await createVite({ configFile: false, root: ROOT, logLevel: 'silent', server: { middlewareMode: true, hmr: false, watch: null }, appType: 'custom', optimizeDeps: { noDiscovery: true, include: [] } });
   const links = [];
   t.after(async () => {
     for (const l of links) l.stop();
     await proxy.close();
     await gw?.close();
+    await front?.close();
     await vite.close();
     await built.service.close();
     await new Promise((resolve) => server.close(resolve));
   });
   const { SyncLink } = await vite.ssrLoadModule('/src/editor/sync/link.ts');
   const { createEmptyProject } = await vite.ssrLoadModule('/src/kernel/project.ts');
-  const url = gw ? `ws://127.0.0.1:${proxy.port}/` : `ws://127.0.0.1:${proxy.port}/docservice`;
+  const url = `ws://127.0.0.1:${proxy.port}/`;
 
   function page(projectId) {
     const initial = createEmptyProject('page-test');

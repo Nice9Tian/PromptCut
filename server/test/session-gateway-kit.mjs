@@ -164,22 +164,7 @@ export async function startSessionGateway({ upstream, httpUpstream = null, retai
     }
     if (!items.includes(SESSION_NEW)) {
       // 旧客户端（不带会话项，契约第 3.6 节）：原样转给上游，一条传输就是一个连接
-      const target = new URL(upstreamOf());
-      const up = net.connect(Number(target.port || 80), target.hostname);
-      up.on('error', () => socket.destroy());
-      up.on('connect', () => {
-        const lines = [`${req.method} ${target.pathname}${target.search} HTTP/1.1`];
-        for (let i = 0; i < req.rawHeaders.length; i += 2) {
-          const k = req.rawHeaders[i];
-          lines.push(`${k}: ${k.toLowerCase() === 'host' ? target.host : req.rawHeaders[i + 1]}`);
-        }
-        up.write(`${lines.join('\r\n')}\r\n\r\n`);
-        if (head?.length) up.write(head);
-        up.pipe(socket);
-        socket.pipe(up);
-      });
-      socket.on('close', () => up.destroy());
-      up.on('close', () => socket.destroy());
+      pipeUpgrade(req, socket, head, new URL(upstreamOf()));
       stats.legacy++;
       return;
     }
@@ -232,6 +217,60 @@ export async function startSessionGateway({ upstream, httpUpstream = null, retai
     endAll(code, reason) { for (const s of [...sessions.values()]) end(s, code, reason); },
     close() {
       for (const s of [...sessions.values()]) end(s, 1001, 'server shutting down');
+      return new Promise((resolve) => { server.closeAllConnections?.(); server.close(() => resolve()); });
+    },
+  };
+}
+
+/**
+ * 把一个升级请求原样（TCP 直通）转给 `target`：路径换成 `target` 的，`Host` 换成它的；`protocols` 给了就改写
+ * `Sec-WebSocket-Protocol`。回这一对连接（`{ a, b }`），调用方可以记下来掐断。
+ */
+function pipeUpgrade(req, socket, head, target, protocols = null) {
+  const up = net.connect(Number(target.port || 80), target.hostname);
+  up.on('error', () => socket.destroy());
+  up.on('connect', () => {
+    const lines = [`${req.method} ${target.pathname}${target.search} HTTP/1.1`];
+    for (let i = 0; i < req.rawHeaders.length; i += 2) {
+      const k = req.rawHeaders[i];
+      const lower = k.toLowerCase();
+      if (lower === 'sec-websocket-protocol' && protocols) continue;
+      lines.push(`${k}: ${lower === 'host' ? target.host : req.rawHeaders[i + 1]}`);
+    }
+    if (protocols) lines.push(`Sec-WebSocket-Protocol: ${protocols.join(', ')}`);
+    up.write(`${lines.join('\r\n')}\r\n\r\n`);
+    if (head?.length) up.write(head);
+    up.pipe(socket);
+    socket.pipe(up);
+  });
+  socket.on('close', () => up.destroy());
+  up.on('close', () => socket.destroy());
+  return { a: socket, b: up };
+}
+
+/**
+ * 「旧服务端」前端：在（可能已经有会话层的）真文档服务前面去掉握手里的会话项再 TCP 直通，服务端于是把客户端
+ * 当作旧客户端（契约第 3.6 节），客户端也就看不到 `session.welcome`——用来测客户端对没有会话层的旧服务端的退化，
+ * 服务端会话层合入前后都成立。`cutAll()` 掐断现有连接（两头都断）。
+ */
+export async function startLegacyFront({ upstream, port = 0, host = '127.0.0.1' } = {}) {
+  const target = new URL(upstream);
+  const pairs = new Set();
+  const server = http.createServer((req, res) => { res.writeHead(404); res.end(); });
+  server.on('upgrade', (req, socket, head) => {
+    socket.on('error', () => {});
+    const items = String(req.headers['sec-websocket-protocol'] ?? '').split(',').map((p) => p.trim()).filter(Boolean);
+    const pair = pipeUpgrade(req, socket, head, target, items.filter((p) => !p.startsWith(SESSION_PREFIX)));
+    pairs.add(pair);
+    socket.on('close', () => pairs.delete(pair));
+  });
+  await new Promise((resolve) => server.listen(port, host, resolve));
+  return {
+    port: server.address().port,
+    url: `ws://${host}:${server.address().port}/`,
+    cutAll() { for (const p of pairs) { p.a.destroy(); p.b.destroy(); } pairs.clear(); },
+    close() {
+      for (const p of pairs) { p.a.destroy(); p.b.destroy(); }
       return new Promise((resolve) => { server.closeAllConnections?.(); server.close(() => resolve()); });
     },
   };

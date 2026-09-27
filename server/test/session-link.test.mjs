@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 import { createDocService } from '../docservice/service.mjs';
 import { createDocEndpoint, transportOf, wsUrlOf, httpUrlOf, utf8Length, SESSION_DEFAULTS } from '../render-node/session-link.mjs';
 import { createTcpProxy, waitFor, sleep } from './fake-ws-kit.mjs';
-import { startSessionGateway } from './session-gateway-kit.mjs';
+import { startSessionGateway, startLegacyFront } from './session-gateway-kit.mjs';
 
 const BACKOFF = { baseMs: 20, factor: 2, maxMs: 100, jitter: 0 };
 
@@ -164,7 +164,9 @@ test('SL-close close()：服务端立刻结束会话（上游断线），端点�
 
 test('SL-legacy 旧服务端（没有会话层）：退化为一条传输一个会话，收发照常，探测的 error 不交上层，断了报 onClose 再建', async (t) => {
   const doc = await startDoc(t);
-  const proxy = await createTcpProxy({ target: doc.port });
+  const front = await startLegacyFront({ upstream: doc.url });
+  t.after(() => front.close());
+  const proxy = await createTcpProxy({ target: front.port });
   t.after(() => proxy.close());
   const ep = createDocEndpoint({ url: `ws://127.0.0.1:${proxy.port}/`, backoff: BACKOFF, transport: 'ws', log: () => {} });
   t.after(() => ep.close());
