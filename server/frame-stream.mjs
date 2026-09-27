@@ -862,7 +862,8 @@ export class StreamProducer {
     if (!this.enabled || this.closed || !entry) return [];
     if (!this.routeAttached) { this.pendingEntry = entry; return []; }
     const specs = planStreams(entry, {
-      picked: clipId => this.pipeline.prerenderPicked(entry, clipId),
+      // c10a 契约第 17 节:补渲进集合的片段不产流(`streamPicked`);旧的管线替身没有它时退回 `prerenderPicked`
+      picked: clipId => (this.pipeline.streamPicked ?? this.pipeline.prerenderPicked).call(this.pipeline, entry, clipId),
       budget: this.budget,
       codeVersion: `${STREAM_CODE_VERSION}:${this.pipeline.captureCode?.() || ''}`,
       // M4:流键乘本进程预渲染 Chrome 的环境指纹(还没定下来时为 null,planStreams 回 [])

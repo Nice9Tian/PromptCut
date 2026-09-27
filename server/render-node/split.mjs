@@ -1,4 +1,4 @@
-import { QUEUE_DEFAULTS, taskIdOf, lockKeyOf } from '../render-queue/index.mjs';
+import { QUEUE_DEFAULTS, taskIdOf, lockKeyOf, backfillPlanTaskOf, isBackfillPlan } from '../render-queue/index.mjs';
 import { snapshotTier } from '../snapshot-tier.mjs';
 import { resultKeyOf } from './fingerprint.mjs';
 
@@ -69,6 +69,13 @@ export function planTaskOf({ projectId, projectRev, priority = 0, codeVersion, e
   };
 }
 
+/**
+ * 补渲计划任务(c10a 契约第 17 节,语义 `mechanism/rendering.md`「低内存档」):低内存档发现判重的层在素材服务里
+ * 没有产物时发布,带片段清单(`input.clips`),标 `priority: 'backfill'`。认领它的节点把清单里的片段当重卡算键、
+ * 切出细任务,细任务同样标 `backfill`(`splitPlan` 的 `lane`)。形状与校验在队列那边(`messages.mjs`)。
+ */
+export { backfillPlanTaskOf, isBackfillPlan };
+
 /** `[from, to]` 闭区间序列:first .. last 每 span 一段,最后一段到 last。 */
 function spans(first, last, span) {
   const out = [];
@@ -122,7 +129,10 @@ export function splitPlan({
   takeover = false,         // boolean | Set<lockKey> | (lockKey) => boolean
   localMedia = null,        // 发布方的 nodeId(M6c X2):给了,且 usesLocalMedia 判真的任务写进 requires.localMedia
   usesLocalMedia = () => true,   // (control) => boolean;流任务传 { clipId: topClipId, kind: 'stream' }
+  lane = 'normal',          // 'backfill':补渲计划任务切出的细任务,priority 一律标 'backfill'(c10a 契约第 17 节)
 }) {
+  /** 细任务的 priority:补渲档一律 'backfill';normal 档照旧按锚帧给整数名次 */
+  const priorityOf = anchored => (lane === 'backfill' ? 'backfill' : anchored ? ANCHOR_PRIORITY : NORMAL_PRIORITY);
   const snapshotSpan = stepOf(constants.SNAPSHOT_SPAN ?? QUEUE_DEFAULTS.SNAPSHOT_SPAN);
   const streamSegments = stepOf(constants.STREAM_SEGMENTS ?? QUEUE_DEFAULTS.STREAM_SEGMENTS);
   const { projectId, projectRev } = planTask?.source ?? {};
@@ -201,7 +211,7 @@ export function splitPlan({
         input: { clipId, cardId, entryKey: tier === 'local' ? entryKey : null, contentKey, canvasHeavy },
         weight: { ...weight, frames: to - from + 1 },
         requires: { ...requires, cardSources: { ...requires.cardSources } },
-        priority: anchored ? ANCHOR_PRIORITY : NORMAL_PRIORITY,
+        priority: priorityOf(anchored),
       };
       if (keying.takeover) task.takeover = true;
       emit(task);
@@ -228,7 +238,7 @@ export function splitPlan({
           // M6c X1:只有报了 `capabilities.streams: true`(探到编码器)的节点能认领(filter.mjs 规则 2)
           capabilities: { streams: true },
         }, { clipId: topClipId, kind: 'stream' }),
-        priority: NORMAL_PRIORITY,
+        priority: priorityOf(false),
       };
       if (keying.takeover) task.takeover = true;
       emit(task);
