@@ -21,5 +21,14 @@ if (kept) {
 export const builtinCardSourceFiles = kept ?? globbed;
 if (import.meta.hot) {
   import.meta.hot.data.files = builtinCardSourceFiles;
+  import.meta.hot.data.version = (import.meta.hot.data.version ?? -1) + 1;
   import.meta.hot.accept();
+}
+
+/**
+ * 源码表换过几次(首次装载 0,热更新重跑一次加一)。按源码表记忆化的一方(`costIdentity.ts` 的源码版本表)拿它当键。
+ * 读的是 `import.meta.hot.data`(同一模块的各次执行共用这一份),所以引用方手里旧实例的这个函数也读得到新值。
+ */
+export function cardSourceFilesVersion() {
+  return import.meta.hot?.data?.version ?? 0;
 }

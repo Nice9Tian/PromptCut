@@ -2,6 +2,11 @@ import type { CardDef } from "./types";
 import { cardCapabilities } from "./frameMode.mjs";
 
 const map = new Map<string, CardDef<any>>();
+/** 注册表每变一次(注册、清空)加一:按「注册表里有哪些卡」记忆化的一方(源码版本表)拿它当键 */
+let registryGen = 0;
+export function cardsRegistryGen(): number {
+  return registryGen;
+}
 
 /**
  * 注册卡片。同一次调用里 id 撞车是真的写错了(两张卡抢一个 id),直接抛错;
@@ -11,6 +16,7 @@ const map = new Map<string, CardDef<any>>();
  * 要手动刷新才能恢复。
  */
 export function registerCards(defs: CardDef<any>[]) {
+  registryGen++;
   const seen = new Set<string>();
   for (const d of defs) {
     if (seen.has(d.id)) throw new Error(`card id 重复: ${d.id}`);
@@ -53,6 +59,7 @@ export function onCardsUpdated(cb: () => void): () => void {
 
 /** 重新装载整套卡片前先清空,免得删掉的卡片文件在热更新后还赖在库里 */
 export function resetCards() {
+  registryGen++;
   map.clear();
 }
 

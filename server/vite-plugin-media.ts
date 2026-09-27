@@ -431,7 +431,7 @@ export async function adoptMediaFile(root: string, filePath: string): Promise<St
  *   - 缺省是本机素材服务(就是这个插件)—— 导入已经是本地写入,上传队列是空操作;
  *   - `PROMPTCUT_ASSET_URL`(形如 `http://192.168.50.96:5460/api/asset`,与预渲染进程推送用的是同一个变量)设了就是它;
  *   - 页面(连着共享项目、知道远端素材服务与票据的那一方)经 `POST /api/media/upload-queue/target` 改它,
- *     `{ base: null }` 换回本机。票据由页面按时续上(素材票据 15 分钟,见 `docs/plan/auth-contract.md` 第 8 节)。
+ *     `{ base: null }` 换回缺省(设了 `PROMPTCUT_ASSET_URL` 就是它,否则本机)。票据由页面按时续上(素材票据 15 分钟,见 `docs/plan/auth-contract.md` 第 8 节)。
  */
 type TierService = {
   manager: any;
@@ -508,7 +508,8 @@ export function mediaTierService(root: string, { withQueue = true }: { withQueue
     return {
       manager,
       queue,
-      setTarget: (next) => setTargetImpl(next),
+      // `{ base: null }`(页面离开共享项目 / 本机就是主机)= 回到缺省目标:设了 PROMPTCUT_ASSET_URL 就是它,否则本机
+      setTarget: (next) => setTargetImpl(next?.base ? next : { base: envBase || null, ticket: null }),
       target: () => (current ? { base: current.base } : null),
     };
   })();

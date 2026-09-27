@@ -118,6 +118,22 @@ test('C66-I1-01 POST /api/media/upload-queue/target { base, ticket } 换上传�
   assert.equal(r.status, 400, '只收 http(s) 基址');
 });
 
+test('C66-I1-05 设了 PROMPTCUT_ASSET_URL 时:页面给的远程目标优先,{ base: null } 回到环境变量给的目标(不是本机)', async () => {
+  const root = path.join(OUT, 'i1-env');
+  fs.mkdirSync(media.mediaDir(root), { recursive: true });
+  process.env.PROMPTCUT_ASSET_URL = 'http://192.168.9.9:5460/api/asset';
+  let service;
+  try { service = await media.mediaTierService(root); } finally { delete process.env.PROMPTCUT_ASSET_URL; }
+  after(() => service.queue?.stop());
+  const origin = await listen(serviceHandler(root));
+  const target = async () => (await (await fetch(`${origin}/api/media/upload-queue`)).json()).target;
+  assert.deepEqual(await target(), { base: 'http://192.168.9.9:5460/api/asset' });
+  await postJson(`${origin}/api/media/upload-queue/target`, { base: 'http://10.9.8.7:5460/api/asset', ticket: 't' });
+  assert.deepEqual(await target(), { base: 'http://10.9.8.7:5460/api/asset' });
+  await postJson(`${origin}/api/media/upload-queue/target`, { base: null });
+  assert.deepEqual(await target(), { base: 'http://192.168.9.9:5460/api/asset' }, '回到缺省目标');
+});
+
 /* ======================================================================== *
  * C66-I2 打开项目时补转素材小尺寸
  * ======================================================================== */
