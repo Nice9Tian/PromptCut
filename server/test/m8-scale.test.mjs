@@ -110,17 +110,22 @@ test('M8S-4 K1 账本（过滤关的样子）：看得见别的指纹的活任�
   assert.equal(t.hiddenUnexpectedCount, 1);
 });
 
-test('M8S-5 judgeK1：过滤开要求稳态 0、竞态 ≤ 1%、K2 0；过滤关要求拒绝与 K2 都 > 0（对照组）；死任务两种模式都不许被认领', () => {
+test('M8S-5 judgeK1：过滤开要求稳态 0、竞态 ≤ 节点数（lock-first 要 0）、K2 0；过滤关要求拒绝与 K2 都 > 0（对照组）；死任务两种模式都不许被认领', () => {
   const base = { claims: 200, claimed: 100, cardLockedRace: 0, cardLockedSteady: 0, openedMismatch: 0, hidden: 50, hiddenUnexpectedCount: 0, deadClaimed: 0 };
   let v = judgeK1({ prefilter: true, tallies: [base, base] });
   assert.equal(v.k1.ok, true);
   assert.equal(v.k2.ok, true);
   assert.equal(v.deadNeverClaimed.ok, true);
   assert.equal(v.totals.claims, 400);
-  v = judgeK1({ prefilter: true, tallies: [{ ...base, cardLockedRace: 4 }, base] });
-  assert.equal(v.k1.ok, true, '4 ≤ 400 × 1%');
-  v = judgeK1({ prefilter: true, tallies: [{ ...base, cardLockedRace: 5 }, base] });
-  assert.equal(v.k1.ok, false, '5 > 4');
+  v = judgeK1({ prefilter: true, tallies: [{ ...base, cardLockedRace: 1, raceWindowMsMax: 3, raceWindowMs: 26 }, { ...base, cardLockedRace: 1 }] });
+  assert.equal(v.k1.ok, true, '2 ≤ 2 个节点');
+  assert.equal(v.k1.raceLimit, 2);
+  assert.equal(v.k1.raceWindowMsMax, 26, '窗口时长只记录');
+  v = judgeK1({ prefilter: true, tallies: [{ ...base, cardLockedRace: 2 }, { ...base, cardLockedRace: 1 }] });
+  assert.equal(v.k1.ok, false, '3 > 2 个节点');
+  v = judgeK1({ prefilter: true, tallies: [{ ...base, cardLockedRace: 1 }, base], order: 'lock-first' });
+  assert.equal(v.k1.ok, false, 'lock-first 竞态也要 0');
+  assert.equal(judgeK1({ prefilter: true, tallies: [base, base], order: 'lock-first' }).k1.ok, true);
   v = judgeK1({ prefilter: true, tallies: [{ ...base, cardLockedSteady: 1 }, base] });
   assert.equal(v.k1.ok, false, '稳态一次也不许');
   v = judgeK1({ prefilter: true, tallies: [{ ...base, openedMismatch: 1 }] });

@@ -10,7 +10,9 @@
  *     （`server/test/render-queue-prefilter.test.mjs` runStorm）：节点全部报到 → 发布「会被别的指纹锁住」的 100 个死任务
  *     → 紧接着（不等回包）`card.lock` 20 张卡 → 等全部 card.locked → 发布与锁同指纹的 100 个活任务 → 跑到活任务全部完成。
  *     判据：
- *       K1  过滤开：稳态下 `card-locked` 拒绝 0 次；竞态窗口内的拒绝 ≤ 认领总数的 1%。
+ *       K1  过滤开（主会话〔裁〕2026-09-28 改过）：稳态下 `card-locked` 拒绝 0 次（硬）；竞态窗口内的拒绝 ≤ 本轮节点总数（硬，
+ *           每个节点同时只有一条认领在路上）；窗口时长只记录；--order lock-first 那一轮竞态窗口内也要 0。
+ *           原文「≤ 认领总数的 1%」来自 M5b 冻结时钟的单进程场景，跨机有天然的传播窗口，200 个任务时 1% 只容 1 次。
  *           「稳态」按节点自己的消息顺序定：收到第一条活任务的 task.opened 之后算稳态，之前算竞态窗口（不靠两台机器的时钟）。
  *           过滤关（D4 对照组，只在本机替身跑）：拒绝数作基数，要求 > 0（否则场景没意义）；M5b 本机的数是 400。
  *       K2  过滤开：不匹配的节点（节点指纹 ≠ 卡的锁指纹）收到已锁卡任务的 task.opened 0 条。
@@ -225,10 +227,13 @@ export function createK1Ledger({ name, nodeFp, info, now = Date.now }) {
 
 /**
  * K1 / K2 的判据（汇总所有节点的账本）。
- * @param {{ prefilter: boolean, tallies: Array<ReturnType<ReturnType<typeof createK1Ledger>['tally']>>, raceRatio?: number }} o
+ * 过滤开的判据（主会话〔裁〕2026-09-28，改计划原文「竞态窗口内 ≤ 认领总数的 1%」）：稳态拒绝 = 0（硬）；
+ * 竞态窗口内拒绝 ≤ 本轮节点总数（硬：每个节点同时只有一条认领在路上，这是协议能保证的上界；原 1% 来自 M5b 冻结时钟的
+ * 单进程场景，跨机有天然的传播窗口）；窗口时长只记录。lock-first 那一轮另要求竞态窗口内拒绝 = 0。
+ * @param {{ prefilter: boolean, tallies: Array<ReturnType<ReturnType<typeof createK1Ledger>['tally']>>, order?: 'join-first' | 'lock-first' }} o
  * @returns {{ k1, k2, deadNeverClaimed, totals }} 每个都是带 ok 的判据对象
  */
-export function judgeK1({ prefilter, tallies, raceRatio = 0.01 }) {
+export function judgeK1({ prefilter, tallies, order = 'join-first' }) {
   const sum = (f) => tallies.reduce((s, t) => s + (t[f] ?? 0), 0);
   const totals = {
     nodes: tallies.length, claims: sum('claims'), claimed: sum('claimed'),
@@ -240,8 +245,9 @@ export function judgeK1({ prefilter, tallies, raceRatio = 0.01 }) {
   totals.raceWindowMsMax = windows.length ? Math.max(...windows) : null;
   const nodesOk = tallies.length > 0;
   const k1 = prefilter
-    ? { ok: nodesOk && totals.cardLockedSteady === 0 && totals.cardLockedRace <= totals.claims * raceRatio,
-      mode: 'prefilter-on', steady: totals.cardLockedSteady, race: totals.cardLockedRace, claims: totals.claims, raceLimit: Math.floor(totals.claims * raceRatio) }
+    ? { ok: nodesOk && totals.cardLockedSteady === 0 && totals.cardLockedRace <= (order === 'lock-first' ? 0 : tallies.length),
+      mode: 'prefilter-on', order, steady: totals.cardLockedSteady, race: totals.cardLockedRace, raceLimit: order === 'lock-first' ? 0 : tallies.length,
+      claims: totals.claims, raceWindowMsMax: totals.raceWindowMsMax }
     : { ok: nodesOk && totals.cardLocked > 0, mode: 'prefilter-off (control)', cardLocked: totals.cardLocked, steady: totals.cardLockedSteady, race: totals.cardLockedRace, claims: totals.claims };
   const k2 = prefilter
     ? { ok: nodesOk && totals.openedMismatch === 0, mode: 'prefilter-on', openedMismatch: totals.openedMismatch, hiddenUnexpected: totals.hiddenUnexpected }
@@ -636,7 +642,7 @@ async function main() {
       nodeFps[t.name] = t.fp;
       for (const id of t.completed ?? []) completedBy[id] ??= t.name;
     }
-    const v = judgeK1({ prefilter: cfg.prefilter, tallies });
+    const v = judgeK1({ prefilter: cfg.prefilter, tallies, order: cfg.order });
     r.judge('K1-card-locked', v.k1);
     r.judge('K2-opened-mismatch', v.k2);
     r.judge('K1-dead-never-claimed', v.deadNeverClaimed);
