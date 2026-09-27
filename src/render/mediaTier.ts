@@ -234,5 +234,6 @@ export async function checkExportOriginals(
 export function awaitingUploaderMessage(missing: readonly MissingOriginal[]): string {
   const names = missing.map((m) => m.name);
   const shown = names.slice(0, 5).join("、") + (names.length > 5 ? ` 等 ${names.length} 个` : "");
-  return `等待上传方:这些素材的原片还没传完,导出只用原片,传完后再导出 —— ${shown}`;
+  // 用词照 glossary.md「素材原尺寸、素材小尺寸」(取代旧词「原片」「小版」);界面上的字用新词,代码注释暂未统一
+  return `等待上传方:这些素材的原尺寸还没传完,导出只用素材原尺寸,传完后再导出 —— ${shown}`;
 }
