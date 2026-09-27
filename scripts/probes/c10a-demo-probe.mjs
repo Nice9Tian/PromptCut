@@ -333,6 +333,17 @@ async function newPage({ mobile = false } = {}) {
   page.on('response', (res) => { if (res.status() >= 400 && page.badResponses.length < 40) { try { const u = new URL(res.url()); page.badResponses.push(`${res.status()} ${u.pathname.slice(0, 120)}`); } catch { /* 不是地址 */ } } });
   page.on('console', (m) => { if ((m.type() === 'error' || m.type() === 'warn') && page.consoleErrors.length < 40) page.consoleErrors.push(`${m.type()}: ${m.text()}`.slice(0, 240)); });
   page.assets = [];
+  // 顶层导航(含整页重载)与 Vite 客户端消息:查「创建者页面中途整页重载」用;地址只记源与路径
+  page.navs = [];
+  page.on('framenavigated', (f) => {
+    if (f !== page.mainFrame()) return;
+    let where = '?';
+    try { const u = new URL(f.url()); where = `${u.origin}${u.pathname}`; } catch { /* 不是地址 */ }
+    page.navs.push({ at: new Date().toISOString(), url: where });
+    if (page.navs.length > 1) say('page.renavigated', { url: where, count: page.navs.length });
+  });
+  page.viteLog = [];
+  page.on('console', (m) => { const t = m.text(); if (t.startsWith('[vite]') && page.viteLog.length < 60) page.viteLog.push(`${new Date().toISOString()} ${t}`.slice(0, 240)); });
   if (mobile) {
     await page.emulate({
       userAgent: 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Mobile Safari/537.36',
@@ -703,6 +714,12 @@ try {
     check(r?.type === 'shared.admin.ok' && gone === 404, '收尾:以创建者身份删掉云端项目', deleted);
   }
   try { conn?.close(); } catch { /* 已关 */ }
+  // 创建者页面的顶层导航:第一次是探针自己的 goto,之后每一次都是整页重载或跳走
+  if (state.creator) {
+    out.creatorPage = { navs: state.creator.navs, vite: state.creator.viteLog,
+      server: editorLog.filter((l) => /page reload|optimized dependencies|new dependencies|reloading|server restarted/i.test(l)).slice(0, 20).map((l) => l.slice(0, 240)) };
+    check(state.creator.navs.length <= 1, '创建者页面没有中途整页重载', out.creatorPage);
+  }
   try { await browser?.close(); } catch { /* 已关 */ }
   try { fs.writeFileSync(path.join(OUT, 'creator-editor.log'), editorLog.join('\n')); } catch { /* 写不了 */ }
   if (editor?.child?.pid) {
