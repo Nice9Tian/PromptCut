@@ -910,6 +910,8 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
       demoted: [...demotedClips()],
       swapInFlight: swapInFlight(),
       swapLog: stageSwapDebug(),
+      setTimeLog: setTimeLogRef.current.slice(),
+      setTimeError: setTimeErrorRef.current,
       // 低内存档停下追一帧的上一次结果(c10a 契约第 17 节;c10a-demo-probe 读它)
       lowMemory: lowMemRef.current,
       lowMemSettle: lowMemSettleRef.current,
@@ -1090,6 +1092,9 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
    * 编辑推送成功(`frameRequest` 先 `alignMirror`)且空闲(不在播放、不在拖动)时防抖发 `preload`,没就绪就接着问。
    */
   usePrerenderPreload(project, { enabled: dual && !ONLINE, idle: !playing && !scrubbing, waitForProbe: true });
+  /** 诊断:最近几次 setTime 与上一次失败(探针排查暂停后没追到活渲用) */
+  const setTimeLogRef = useRef<{ at: number; sec: number; settle: boolean }[]>([]);
+  const setTimeErrorRef = useRef<{ at: number; sec: number; error: string } | null>(null);
   const scrubbingRef = useRef(scrubbing);
   scrubbingRef.current = scrubbing;
   const lastRenderKey = useRef("");
@@ -1100,6 +1105,8 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
    * **拖动过程中不带**(E3)。
    */
   const sendSetTime = useCallback(async (sec: number, opts: { settle?: true } = {}) => {
+    setTimeLogRef.current.push({ at: Math.round(performance.now()), sec, settle: !!opts.settle });
+    if (setTimeLogRef.current.length > 12) setTimeLogRef.current.shift();
     const s = stage();
     if (!s) return;
     try {
@@ -1118,8 +1125,9 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
         ...(Object.keys(feed.snapshots).length ? { snapshots: feed.snapshots } : {}),
         ...(feed.awaiting.length ? { awaiting: feed.awaiting } : {}),
       });
-    } catch {
+    } catch (e) {
       // iframe 正在换(detached):新的 ready 会重发
+      setTimeErrorRef.current = { at: Math.round(performance.now()), sec, error: String((e as Error)?.message ?? e).slice(0, 120) };
       markBaselineReset("front");
       return;
     }

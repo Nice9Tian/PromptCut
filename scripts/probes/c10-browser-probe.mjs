@@ -648,6 +648,8 @@ try {
     return heavy.length >= EXTRA_HEAVY + 1 && heavy.every((w) => !w.suppressed && !w.plane && !w.placeholder && !w.settling) ? x : null;
   }, 120_000, 500);
   check(settled, 'A4:暂停后追到精确活渲(与桌面同判据:停下就撤兜底)');
+  // 排障:--hold-min N 在这里停 N 分钟,浏览器的调试地址写在 stderr(puppeteer.connect 连上去看)
+  if (Number(arg('--hold-min', 0)) > 0) { say('hold', { minutes: Number(arg('--hold-min', 0)), ws: browser.wsEndpoint() }); await delay(Number(arg('--hold-min', 0)) * 60_000); }
   if (!settled) {
     const pdx = await previewDiag(member);
     out.steps.settleDiag = {
