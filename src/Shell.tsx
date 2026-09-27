@@ -29,7 +29,9 @@ export function Shell(): JSX.Element {
   // The title bar is outside both routes, so its colors stay synchronized.
   useSkin();
   const [inEditor, setInEditor] = useState(() => {
-    if (ONLINE) return false;
+    // 在线页面打开就是开始页;只有在线模式的**开发服务**(探针 lowmem-online-probe 用)认 `?editor`,
+    // 在线构建(vite build --mode online)里 DEV 为假,这一支被剪掉
+    if (ONLINE) return !!import.meta.env.DEV && new URLSearchParams(location.search).has("editor");
     try {
       return new URLSearchParams(location.search).has("editor");
     } catch {
