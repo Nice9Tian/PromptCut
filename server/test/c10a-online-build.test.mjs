@@ -170,3 +170,38 @@ it('C10-TITLEBAR-01 在线构建里标题栏菜单的桌面项置灰、点了不
   assert.equal(desk.props.includes('onlineUnsupported'), false, `桌面产物里不该有在线的悬停说明:${desk.props}`);
   assert.ok(bundleText(desktopDir).includes('desktop_titlebar_command'), '桌面产物里桌面壳命令照旧');
 });
+
+/*
+ * C10-CATALOG-01 在线构建带上动效素材目录（`server/online-catalog.mjs`）：卡片参数里的 `/catalog/<kind>/<name>.json` 在桌面由开发服务器的
+ * 中间件提供，在线由构建产出到 `dist-online/catalog/`、托管端 nginx 在 `/catalog/` 下提供。产物里的文件与 index.json 登记的条目一一对应
+ * （不多不少、逐字节相同），登记的 url 就是产物里的路径；index.json 本身不产出（页面在构建时 import 它，运行时不读）。
+ * 桌面构建照旧不带 catalog/（桌面由中间件按 index.json 放行）。
+ */
+const CATALOG_KINDS = ['lottie', 'particles'];
+const catalogIndex = (kind) => JSON.parse(fs.readFileSync(repoPath(`server/catalog/${kind}/index.json`), 'utf8'));
+const listFiles = (dir) => (fs.existsSync(dir) ? fs.readdirSync(dir, { recursive: true, withFileTypes: true }).filter((d) => d.isFile()).map((d) => path.relative(dir, path.join(d.parentPath ?? d.path, d.name)).split(path.sep).join('/')).sort() : []);
+
+it('C10-CATALOG-01 在线构建的 catalog/ 与 index.json 登记的 Lottie、粒子条目一一对应、逐字节相同', { timeout: 240_000 }, async () => {
+  await buildOnline();
+  const want = [];
+  for (const kind of CATALOG_KINDS) {
+    const items = catalogIndex(kind).items;
+    assert.ok(items.length > 0, `${kind}/index.json 没有条目`);
+    for (const it of items) {
+      assert.equal(it.url, `/catalog/${kind}/${it.name}.json`, `${kind}/${it.name} 登记的 url 与产物路径不一致`);
+      want.push(`${kind}/${it.name}.json`);
+    }
+  }
+  const got = listFiles(path.join(onlineDir, 'catalog'));
+  assert.deepEqual(got, [...want].sort(), 'dist-online/catalog/ 里的文件应与 index.json 登记的条目一一对应');
+  for (const rel of want) {
+    const a = fs.readFileSync(path.join(onlineDir, 'catalog', rel));
+    const b = fs.readFileSync(repoPath(`server/catalog/${rel}`));
+    assert.ok(a.equals(b), `catalog/${rel} 与 server/catalog/${rel} 不是逐字节相同`);
+  }
+});
+
+it('C10-CATALOG-02 桌面构建照旧不带 catalog/（桌面由开发服务器的 /catalog 中间件提供）', { timeout: 240_000 }, async () => {
+  await buildDesktop();
+  assert.equal(fs.existsSync(path.join(desktopDir, 'catalog')), false);
+});
