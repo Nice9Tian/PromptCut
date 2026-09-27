@@ -135,7 +135,7 @@ export function createNodeSession({
       if (task && Number.isInteger(message.version)) open.set(id, { ...task, version: message.version });
       return;
     }
-    if (reason === 'preferred') {
+    if (reason === 'preferred' || reason === 'retry-backoff') {
       // M6c X4:plan 还在发布方的独占窗口里。候选不删,搁到窗口过后;窗口过后任何指纹符合的 pc 都能认领
       const wait = Number(message.retryInMs);
       deferred.set(id, now() + (Number.isFinite(wait) && wait >= 0 ? wait : settings.SWEEP_INTERVAL_MS));
