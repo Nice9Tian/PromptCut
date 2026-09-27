@@ -1440,6 +1440,13 @@ export default function StageView() {
      */
     let bakeGen = 0;
     let bakeCursor: { project: Project; clipId: string; frame: number } | null = null;
+    /**
+     * 舞台这一侧的生成快照诊断(契约第 7 节「舞台」,`__pcStageDiag().bake`):逐帧耗时(不含被门挡住的时长)、
+     * 被门挡住的时长单记、从头推的次数、没成的原因计数。
+     */
+    const bakeStats = { frames: 0, ms: [] as number[], pausedMs: 0, remounts: 0, smallMs: [] as number[], errors: {} as Record<string, number> };
+    const bakeFail = <R extends { ok: false; reason: string }>(r: R): R => { bakeStats.errors[r.reason] = (bakeStats.errors[r.reason] ?? 0) + 1; return r; };
+    const q = (xs: number[], p: number) => { if (!xs.length) return null; const s = [...xs].sort((a, b) => a - b); return Math.round(s[Math.min(s.length - 1, Math.floor(p * s.length))] * 10) / 10; };
     /** 就绪闸的上限(照预渲染 `waitFrameReady`:控件异步活、字体、图片都就绪才生成快照) */
     const BAKE_READY_MAX_MS = 20_000;
     /**
@@ -2190,14 +2197,14 @@ export default function StageView() {
         const t0 = realNow();
         const ready = await bakeReady(stale);
         if (stale()) return { ok: false, reason: "cancelled" } satisfies BakeFrameReply;
-        if (!ready.ok) return { ok: false, reason: "not-ready", detail: ready.detail.slice(0, 300) } satisfies BakeFrameReply;
+        if (!ready.ok) return bakeFail({ ok: false, reason: "not-ready", detail: ready.detail.slice(0, 300) } satisfies BakeFrameReply);
         const readyMs = realNow() - t0;
         const root = rootRef.current;
         const snap = createSnapshot(root);
-        if (snap.lossy) return { ok: false, reason: "lossy", detail: `${snap.lossy} 张读不出像素的画布` } satisfies BakeFrameReply;
+        if (snap.lossy) return bakeFail({ ok: false, reason: "lossy", detail: `${snap.lossy} 张读不出像素的画布` } satisfies BakeFrameReply);
         const own = snap.controls.find((c) => c.id === req.clipId);
-        if (!own) return { ok: false, reason: "no-control" } satisfies BakeFrameReply;
-        if (own.frame !== n) return { ok: false, reason: "frame-mismatch", detail: `生成快照的本地帧是 ${own.frame},要的是 ${n}` } satisfies BakeFrameReply;
+        if (!own) return bakeFail({ ok: false, reason: "no-control" } satisfies BakeFrameReply);
+        if (own.frame !== n) return bakeFail({ ok: false, reason: "frame-mismatch", detail: `生成快照的本地帧是 ${own.frame},要的是 ${n}` } satisfies BakeFrameReply);
         const bytes = new TextEncoder().encode(own.html);
         const hash = await sha256Hex(bytes);
         const gz = await compressHtml(own.html);
@@ -2224,6 +2231,12 @@ export default function StageView() {
         if (small) transfer.push(small.webp);
         postStageEvent(event, "*", transfer);
         bakeCursor = { project: p, clipId: req.clipId, frame: n };
+        bakeStats.frames++;
+        bakeStats.ms.push(realNow() - started - pausedMs);
+        bakeStats.pausedMs += pausedMs;
+        if (!continuing) bakeStats.remounts++;
+        if (req.small) bakeStats.smallMs.push(smallMs);
+        if (bakeStats.ms.length > 200) { bakeStats.ms.splice(0, bakeStats.ms.length - 200); bakeStats.smallMs.splice(0, Math.max(0, bakeStats.smallMs.length - 200)); }
         return { ok: true, localFrame: n, hash, bytes: bytes.length, small: small ? { hash: small.hash, bytes: small.bytes } : null,
           ms: realNow() - started - pausedMs, pausedMs, remounted: !continuing, smallMs, readyMs } satisfies BakeFrameReply;
       },
@@ -2311,6 +2324,12 @@ export default function StageView() {
       gl: gl.diag(),
       /** 兜底顺序尽头:此刻显示着占位符的卡 */
       placeholders: [...shownPlaceholders()],
+      /** M7 生成快照(契约第 7 节「舞台」):逐帧耗时不含被门挡住的时长,后者单记 */
+      bake: {
+        frames: bakeStats.frames, frameMs: { p50: q(bakeStats.ms, 0.5), p95: q(bakeStats.ms, 0.95) }, pausedMs: Math.round(bakeStats.pausedMs),
+        remounts: bakeStats.remounts, smallMs: { p50: q(bakeStats.smallMs, 0.5), p95: q(bakeStats.smallMs, 0.95) }, errors: { ...bakeStats.errors },
+        cursor: bakeCursor ? { clipId: bakeCursor.clipId, frame: bakeCursor.frame } : null,
+      },
     });
     // 探针用:问 Worker 要它那一侧的诊断(上下文数、纹理上传次数、图集尺寸)
     (window as unknown as Record<string, unknown>).__pcGlWorkerDiag = () => gl.workerDiag();

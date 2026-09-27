@@ -1,7 +1,8 @@
 /**
  * M7 探针之后主会话裁定的两条节点规则(`docs/plan/m7-contract.md` 第 13 节「探针之后的更正」):
  *   - 节点侧过滤:纯浏览器不收画布卡(`input.canvasHeavy`,逐帧顺推与桌面不等价),规则 7;
- *   - 切分:Lottie 素材卡、画布卡、执行器标了帧超体积上限的卡,不给浏览器另出一份(照旧只出切分方自己那一份)。
+ *   - 切分:Lottie 素材卡、画布卡、执行器标了帧超体积上限的卡,不给浏览器另出一份(照旧只出切分方自己那一份);
+ *   - 仅供测试的「只切分」(契约 D15):`PROMPTCUT_TEST_PLAN_ONLY=1` 时 pc 节点只认领 plan、不认领细任务(规则 8)。
  * 跑:node --test server/test/m7-node-rules.test.mjs
  */
 import test from 'node:test';
@@ -43,4 +44,19 @@ test('M7-NR-02 切分:Lottie 素材卡、画布卡、标了超体积的卡不给
   for (const t of tasks.filter((x) => x.input.clipId !== 'a')) assert.equal(t.input.dual, undefined, '只有一份时不带 dual');
   assert.equal(BROWSER_EXCLUDED_CARD.test('lottie-adrock'), true);
   assert.equal(BROWSER_EXCLUDED_CARD.test('lottiefoo'), false);
+});
+
+test('M7-NR-03 仅供测试的「只切分」(D15):PROMPTCUT_TEST_PLAN_ONLY=1 时 pc 节点只认领 plan,不认领细任务(规则 8);没设照旧', async () => {
+  const { testPlanOnly } = await import('../render-node/filter.mjs');
+  const index = await import('../render-node/index.mjs');
+  assert.equal(index.testPlanOnly, testPlanOnly, 'index.mjs 转出(vite-plugin-frames 从这里取)');
+  assert.equal(testPlanOnly({}), false);
+  assert.equal(testPlanOnly({ PROMPTCUT_TEST_PLAN_ONLY: '0' }), false);
+  assert.equal(testPlanOnly({ PROMPTCUT_TEST_PLAN_ONLY: '1' }), true);
+  const pc = { profile: 'pc', nodeId: 'pc-1', envFingerprint: 'bbbbbbbbbbbbbbbb', codeVersions: ['cv'], capabilities: {}, planOnly: true };
+  const plan = { id: 'plan:p@1#clips:x', kind: 'plan', resultKey: 'p@1#clips:x', range: null, source: { projectId: 'p', projectRev: 1 }, input: { clips: ['c'] }, weight: { class: 'medium' }, requires: { codeVersion: 'cv' } };
+  assert.deepEqual(checkClaimable(plan, pc), { ok: true }, '只切分的节点照样认领 plan');
+  assert.deepEqual(checkClaimable(task(), pc), { ok: false, rule: 8, reason: 'plan-only' });
+  const { planOnly: _p, ...normal } = pc;
+  assert.deepEqual(checkClaimable(task(), normal), { ok: true }, '没设就照旧认领细任务');
 });

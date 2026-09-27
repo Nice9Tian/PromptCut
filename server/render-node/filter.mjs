@@ -20,6 +20,8 @@
  *   7  纯浏览器的快照任务只收共享档(`tier: 'shared'`)的独立卡(`input.compositing === 'independent'`,切分方在浏览器那一份
  *      里写):M7 契约第 3.2 节与 D4(桌面只把独立卡的页面测量帧当预渲染结果;本地档要整场景渲)。不只靠切分方把本地档记 heavy。
  *      画布卡(`input.canvasHeavy`)也不收:浏览器逐帧顺推生成快照,画布卡与桌面 4 帧一批的结果不等价(M7 探针 P2,主会话裁定)
+ *   8  仅供测试(M7 契约 D15):节点描述带 `planOnly: true` 时只认领 `plan`、不认领细任务 —— 验收时切分方只切分,
+ *      不和纯浏览器抢同一批卡。只在测试环境变量 `PROMPTCUT_TEST_PLAN_ONLY=1` 时由调用方设(`testPlanOnly`),生产不设
  *
  * 纯函数,不改入参。
  */
@@ -57,7 +59,7 @@ function weightAllowed(rule, weightClass, task, node) {
   return false;
 }
 
-/** → `{ ok: true }` | `{ ok: false, rule: 0..7, reason }`。 */
+/** → `{ ok: true }` | `{ ok: false, rule: 0..8, reason }`。 */
 export function checkClaimable(task, node) {
   const requires = task?.requires ?? {};
   const capabilities = node?.capabilities ?? {};
@@ -116,7 +118,18 @@ export function checkClaimable(task, node) {
     if (task.input?.canvasHeavy === true) return reject(7, 'canvas-heavy');
   }
 
+  // 8(M7 D15,仅供测试):只切分、不认领细任务
+  if (node?.planOnly === true && !plan) return reject(8, 'plan-only');
+
   return pass;
+}
+
+/**
+ * 仅供测试(M7 契约 D15):测试环境变量 `PROMPTCUT_TEST_PLAN_ONLY` 为 `1` 时回 true,调用方据此给节点描述带 `planOnly: true`
+ * (规则 8)。照 `PROMPTCUT_TEST_ENV_FINGERPRINT` 的写法:只在这个变量存在时生效,生产环境不设。纯函数,环境变量由调用方传。
+ */
+export function testPlanOnly(env) {
+  return String(env?.PROMPTCUT_TEST_PLAN_ONLY ?? '') === '1';
 }
 
 /** 过滤出本节点能认领的任务,保持原顺序。 */

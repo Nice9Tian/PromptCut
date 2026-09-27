@@ -434,6 +434,9 @@ async function startQueueNode(root: string, service: FramePipeline) {
   };
 
   let codeVersion: string = frameCode(root);
+  /** 仅供测试(M7 契约 D15):只切分、不认领细任务 */
+  const testPlanOnly: boolean = typeof node.testPlanOnly === "function" && node.testPlanOnly(process.env) === true;
+  if (testPlanOnly) log("queue.test-plan-only", { nodeId });
   let localNode: any = null;
   let started = false;
   let closed = false;
@@ -442,7 +445,9 @@ async function startQueueNode(root: string, service: FramePipeline) {
     localNode = node.createLocalNode({
       nodeId,
       // cardSourceVersions:本机此刻有的卡片代码(现取现算的视图),任务的 requires.cardSources 按它过滤(c66-host-cards)
-      node: { profile: "pc", envFingerprint, codeVersions: [codeVersion], capabilities, maxConcurrent: 1, cardSourceVersions: cardCode(root).view },
+      node: { profile: "pc", envFingerprint, codeVersions: [codeVersion], capabilities, maxConcurrent: 1, cardSourceVersions: cardCode(root).view,
+        // 仅供测试(M7 契约 D15):PROMPTCUT_TEST_PLAN_ONLY=1 时只认领 plan、不认领细任务(节点侧过滤规则 8),验收时不和纯浏览器抢卡;生产不设
+        ...(testPlanOnly ? { planOnly: true } : {}) },
       endpoint, now: Date.now, isIdle: () => idleGate.idle(), maxConcurrent: 1, codeVersion, executor, sink,
       // M7 D2:队列锁的锁定方闲置严格超 30 s、这张卡又没做完,切分时带 takeover 按本机指纹接手整张卡
       takeoverLocked: node.idleLockTakeover,
