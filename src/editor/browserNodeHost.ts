@@ -477,11 +477,18 @@ export function startBrowserNodeHost(deps: BrowserNodeHostDeps): () => void {
     setReady("none");
   }
 
+  /**
+   * 打开项目的那一轮测量落定过的项目(第 2 节「打开项目的测量已落定(加载遮罩撤下)」)。之后新加的卡在后台舞台里补测时
+   * 不下线 —— 那是单飞队列里更急的活,由 `isIdle()` 让它先行,不必结束会话再重连。
+   */
+  const measuredProjects = new Set<string>();
   const loop = () => {
     if (stopped) return;
-    const input = deps.eligibility();
-    eligibility = browserNodeEligibility(input);
     const projectId = deps.projectId();
+    const raw = deps.eligibility();
+    if (raw.measured && projectId) measuredProjects.add(projectId);
+    const input = projectId && measuredProjects.has(projectId) ? { ...raw, measured: true } : raw;
+    eligibility = browserNodeEligibility(input);
     if (fatal || !eligibility.ok || !projectId) {
       if (node) teardown(fatal ?? eligibility.reason ?? "no-project");
       return;
