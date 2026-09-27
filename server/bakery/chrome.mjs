@@ -407,3 +407,13 @@ export async function openBakery(opts = {}) {
 }
 
 export { DEFAULT_URL };
+
+/**
+ * 在一个已经开着的预渲染间的浏览器里另开一个受帧控制的页面(c10a 第 9 节:预渲染小尺寸的受控舞台)。
+ * 不另起浏览器进程;回的对象和预渲染间一样有 `page` / `client` / `beginFrame` / `waitNet`,另加 `close()` 只关这一页。
+ */
+export async function openExtraSession(bakery, url) {
+  if (!bakery?.browser) throw new Error('openExtraSession:预渲染间没有浏览器');
+  const session = await newSession(bakery.browser, url);
+  return { ...session, browser: bakery.browser, close: () => session.page.close().catch(() => {}) };
+}

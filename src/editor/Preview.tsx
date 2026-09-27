@@ -33,7 +33,7 @@ import { resolveGlRoute } from "../render/costDevice.mjs";
 import { ONLINE } from "../online/mode";
 import { LOW_MEMORY_TEXT, lowMemoryMode, noteRuntimeTrouble, readDisplayTier, setDisplayTier, type DisplayTier } from "../online/lowMemory";
 import { setMediaTierPolicy, type MediaTierPolicy } from "../render/mediaTier";
-import { remoteAssetBase, remoteAssetTicket, subscribeRemoteAssets } from "./media/assetTiers";
+import { remoteAssetBase, remoteAssetTicket, setNoEditorProcess, subscribeRemoteAssets } from "./media/assetTiers";
 import { pushToast } from "./sync/syncManager";
 
 /** 「进入项目时提示一次当前是低内存档」(c10a 第 8 节):一个页面会话只提示一次 */
@@ -63,9 +63,11 @@ export function Preview({ chatLayout }: { chatLayout?: boolean }) {
   const project = useStore((s) => s.project);
   // C6.6:两档素材的换档集合(预览挂着时每 2 秒问一次当前素材服务)
   const tierList = useTierHashes();
-  useEffect(() => startAssetTiers(), []);
+  // 在线页面没有本机编辑器进程与本地素材服务(c10a 第 2 节:不请求 `/api/*`),先告诉轮询再开
+  useEffect(() => { setNoEditorProcess(ONLINE); return startAssetTiers(); }, []);
   // C6.6 设计稿第 9 节第 2 条:打开项目时,缺素材小尺寸、本地有素材原尺寸的视频在后台补转
-  useEffect(() => startTierBackfill(), []);
+  // 在线页面没有本机转码(C6.6 的补转走编辑器进程),不补
+  useEffect(() => (ONLINE ? undefined : startTierBackfill()), []);
   const t = useStore((s) => s.t);
   const playing = useStore((s) => s.playing);
   const playToken = useStore((s) => s.playToken);
