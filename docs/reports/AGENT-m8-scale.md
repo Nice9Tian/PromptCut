@@ -141,13 +141,15 @@ K1（`--order lock-first`）两边退出码都是 0，coordinator 15 条检查�
 
 ## 4. 与计划不一致之处、更正建议
 
+第 1～5 条主会话已逐条〔裁〕接受（第 1 条按裁定改了判据），已写进本分支的 `docs/plan/m8-plan.md` 第 2.2 节（原文、为什么改、改成什么）。
+
 1. **K1 的「竞态窗口 ≤ 认领总数的 1%」在计划的规模下结构上过不了**。按 M5b 的顺序（节点先报到，再发布死任务并锁卡），真实连接上会有竞态窗口（本机测到最长 26 ms）：节点收到死任务的 `task.opened` 后、收到 hidden 撤回之前，只要 tick 了就会认领一次，然后被 `card-locked` 拒绝。
    每个节点同时只有一条在飞的认领，所以每阵锁变更最多被拒「节点数」次（8）。而 200 个任务的场景里认领总数只有 120～130，1% 只容得下 1 次。两轮实测分别是 4 次和 8 次，稳态都是 0，K2 都是 0。
    M5b 的场景台在锁定前后不推进时钟，所以窗口是 0。这不是队列的毛病。建议主会话二选一：
    - (a) K1-X 以 `--order lock-first` 判「稳态 0」，`join-first` 那一遍只记竞态窗口的拒绝数与窗口时长，不判 1%；
    - (b) 把竞态上限改成「≤ 节点数」，或者加大任务数（竞态拒绝不随任务数增长）。
 
-   探针现在照计划原文判，所以 `join-first` 会报 FAIL。
+   **主会话已〔裁〕（2026-09-28）**：K1 改为稳态拒绝 = 0（硬）、竞态窗口内拒绝 ≤ 本轮节点总数（硬）、窗口时长只记录，两种顺序都跑，`lock-first` 另要求竞态 0。探针（`1b8a811`）与计划第 2.2 节已照改，结果见第 6 节。
 2. **D4 对照组**：没有运行时开关，所以没有走计划里的 (a)「演练实例以过滤关的开关起」。按裁定在 PC 本机跑，用加载钩子关过滤，不改生产代码。以后要在演练实例上跑对照组，得先在 `shared-service.mjs` 读 `PROMPTCUT_QUEUE_PREFILTER`（改生产代码，不在本分支范围）。
 3. **I1-X「20 个探针共享项目」做不到**：托管模式下同一来源地址每小时只许建 10 个共享项目（`server/auth/http.mjs` 的 `CREATE_PER_HOUR: 10`），PC 在一小时里建 20 个会回 429。
    探针改成：20 个**队列项目**（这正是 I1 的原始定义，按 watch 隔离），分在 `--spaces`（缺省 2）个共享项目里，同时证 watch 隔离与空间隔离。每轮只建 2 个共享项目，K1 每轮建 1 个。建议计划第 2.2 节照此改写。
@@ -166,3 +168,34 @@ K1（`--order lock-first`）两边退出码都是 0，coordinator 15 条检查�
 
 合并 main 之后重跑：`npx tsc -b --force` 退出码 0；`npm test` 退出码 0，tests 3467，pass 3465，fail 0，skipped 2；
 对照组 `--role all --case k1 --prefilter off` 退出码 0，`ok: true`，totals `{"claims":521,"claimed":100,"cardLocked":400,"openedMismatch":400,"deadClaimed":0}`。
+- `1b8a811` 探针：K1 判据照〔裁〕改（稳态 0、竞态 ≤ 节点总数、lock-first 竞态 0，窗口时长只记录），单测 M8S-5 同步
+- （本次：计划第 2.2 节〔裁〕与本报告第 6 节）
+
+## 6. 按〔裁〕改判据后的复跑（本机替身，原样结果行）
+
+`--role all --case k1`（join-first）：退出码 0。
+```
+{"ok":true,"run":"mukca0vi4247","fails":[],"ms":9162}
+PASS coordinator:K1-card-locked {"mode":"prefilter-on","order":"join-first","steady":0,"race":6,"raceLimit":8,"claims":131,"raceWindowMsMax":28}
+PASS coordinator:K2-opened-mismatch {"mode":"prefilter-on","openedMismatch":0,"hiddenUnexpected":0}
+PASS coordinator:K1-dead-never-claimed {"deadClaimed":0}
+PASS coordinator:J-all-done {"total":100,"done":100,"notDone":[]}
+PASS coordinator:J-exactly-once {"total":100,"epochs":["40e6b420-add5-4f4b-b87c-239bd1f4d886"],"dup":[],"missing":[],"stray":0}
+PASS coordinator:J-pure-layers {"layers":20,"observed":200,"unknown":0,"mixed":[]}
+PASS coordinator:watcher-dead-never-taken {"deadTaken":[]}
+totals {"nodes":8,"claims":131,"claimed":100,"cardLockedRace":6,"cardLockedSteady":0,"openedMismatch":0,"hidden":400,"hiddenUnexpected":0,"deadClaimed":0,"cardLocked":6,"raceWindowMsMax":28}
+```
+
+`--role all --case k1 --order lock-first`：退出码 0。
+```
+{"ok":true,"run":"mukca8hg84b6","fails":[],"ms":8646}
+PASS coordinator:K1-card-locked {"mode":"prefilter-on","order":"lock-first","steady":0,"race":0,"raceLimit":0,"claims":121,"raceWindowMsMax":null}
+PASS coordinator:K2-opened-mismatch {"mode":"prefilter-on","openedMismatch":0,"hiddenUnexpected":0}
+PASS coordinator:K1-dead-never-claimed {"deadClaimed":0}
+PASS coordinator:J-all-done {"total":100,"done":100,"notDone":[]}
+PASS coordinator:J-exactly-once {"total":100,"epochs":["27660aad-d191-4949-9444-17b5b788297d"],"dup":[],"missing":[],"stray":0}
+PASS coordinator:J-pure-layers {"layers":20,"observed":200,"unknown":0,"mixed":[]}
+PASS coordinator:watcher-dead-never-taken {"deadTaken":[]}
+totals {"nodes":8,"claims":121,"claimed":100,"cardLockedRace":0,"cardLockedSteady":0,"openedMismatch":0,"hidden":0,"hiddenUnexpected":0,"deadClaimed":0,"cardLocked":0,"raceWindowMsMax":null}
+```
+两轮的其余检查项（workers-ready、two-fingerprints、dead/live-published、locks-granted、worker-results、kv-no-401、project-deleted）全 PASS。
